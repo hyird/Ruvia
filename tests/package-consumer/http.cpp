@@ -952,6 +952,37 @@ static_assert(!ExposesAnyRvalueHttpProtocolPlanBorrow<
     ruvia::detail::ResponseStreamCommitPlan>);
 
 template <typename T>
+concept ExposesAnyRvalueHttpOperationPayloadBorrow =
+    requires(T&& value) { std::move(value).request(); } ||
+    requires(T&& value) { std::move(value).response(); } ||
+    requires(const T&& value) { std::move(value).response(); } ||
+    requires(T&& value) { std::move(value).bodyPlan(); } ||
+    requires(T&& value) { std::move(value).plan(); } ||
+    requires(T&& value) { std::move(value).contentPlan(); } ||
+    requires(T&& value) { std::move(value).responseHeadPlan(); } ||
+    requires(T&& value) { std::move(value).commitPlan(); } ||
+    requires(T&& value) { std::move(value).negotiation(); };
+
+static_assert(!ExposesAnyRvalueHttpOperationPayloadBorrow<
+    ruvia::Http1ParsedRequest>);
+static_assert(!ExposesAnyRvalueHttpOperationPayloadBorrow<
+    ruvia::Http1ParsedClientResponseHead>);
+static_assert(!ExposesAnyRvalueHttpOperationPayloadBorrow<
+    ruvia::PreparedHttp1ClientRequest>);
+static_assert(!ExposesAnyRvalueHttpOperationPayloadBorrow<
+    ruvia::detail::ResponseStreamHead>);
+static_assert(!ExposesAnyRvalueHttpOperationPayloadBorrow<
+    ruvia::detail::PreparedHttp1ResponseStream>);
+static_assert(!ExposesAnyRvalueHttpOperationPayloadBorrow<
+    ruvia::detail::Http2SubmittedWebSocketHandshake>);
+static_assert(!ExposesAnyRvalueHttpOperationPayloadBorrow<
+    ruvia::detail::HttpWebSocketServerHandshake>);
+static_assert(!ExposesAnyRvalueHttpOperationPayloadBorrow<
+    ruvia::detail::Http2SubmittedBufferedResponseHead>);
+static_assert(!ExposesAnyRvalueHttpOperationPayloadBorrow<
+    ruvia::detail::Http2SubmittedStreamingResponseHead>);
+
+template <typename T>
 concept HasStaleHttp2StreamRemoteContentForwarders = requires(
     const T& stream) {
     stream.hasContentLength();

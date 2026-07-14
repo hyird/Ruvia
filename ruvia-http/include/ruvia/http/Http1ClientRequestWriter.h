@@ -273,9 +273,12 @@ public:
         return head_;
     }
 
-    [[nodiscard]] constexpr const Http1ClientRequestContentPlan& contentPlan() const noexcept {
+    [[nodiscard]] constexpr const Http1ClientRequestContentPlan&
+    contentPlan() const & noexcept {
         return contentPlan_;
     }
+    [[nodiscard]] constexpr const Http1ClientRequestContentPlan&
+    contentPlan() const && = delete;
 
 private:
     friend struct detail::Http1ClientRequestPrepareResultAccess;

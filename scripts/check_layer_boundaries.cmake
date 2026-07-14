@@ -9208,6 +9208,86 @@ if(EXISTS "${HTTP_PROTOCOL_PLAN_RANGE}" AND
     endif()
 endif()
 
+set(HTTP_OPERATION_PAYLOAD_REQUEST
+    "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/Http1RequestParser.h")
+set(HTTP_OPERATION_PAYLOAD_CLIENT_RESPONSE
+    "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/Http1ClientResponseParser.h")
+set(HTTP_OPERATION_PAYLOAD_CLIENT_REQUEST
+    "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/Http1ClientRequestWriter.h")
+set(HTTP_OPERATION_PAYLOAD_H1
+    "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/detail/http1/Http1ServerSemantics.h")
+set(HTTP_OPERATION_PAYLOAD_STREAM
+    "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/detail/server/HttpResponseStreamHead.h")
+set(HTTP_OPERATION_PAYLOAD_H2
+    "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/detail/http2/Http2Connection.h")
+set(HTTP_OPERATION_PAYLOAD_WEBSOCKET
+    "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/detail/websocket/HttpWebSocketServerHandshake.h")
+if(EXISTS "${HTTP_OPERATION_PAYLOAD_REQUEST}" AND
+   EXISTS "${HTTP_OPERATION_PAYLOAD_CLIENT_RESPONSE}" AND
+   EXISTS "${HTTP_OPERATION_PAYLOAD_CLIENT_REQUEST}" AND
+   EXISTS "${HTTP_OPERATION_PAYLOAD_H1}" AND
+   EXISTS "${HTTP_OPERATION_PAYLOAD_STREAM}" AND
+   EXISTS "${HTTP_OPERATION_PAYLOAD_H2}" AND
+   EXISTS "${HTTP_OPERATION_PAYLOAD_WEBSOCKET}" AND
+   EXISTS "${HTTP_PACKAGE_CONSUMER}")
+    file(READ "${HTTP_OPERATION_PAYLOAD_REQUEST}" http_operation_payload_request)
+    file(READ "${HTTP_OPERATION_PAYLOAD_CLIENT_RESPONSE}"
+        http_operation_payload_client_response)
+    file(READ "${HTTP_OPERATION_PAYLOAD_CLIENT_REQUEST}"
+        http_operation_payload_client_request)
+    file(READ "${HTTP_OPERATION_PAYLOAD_H1}" http_operation_payload_h1)
+    file(READ "${HTTP_OPERATION_PAYLOAD_STREAM}" http_operation_payload_stream)
+    file(READ "${HTTP_OPERATION_PAYLOAD_H2}" http_operation_payload_h2)
+    file(READ "${HTTP_OPERATION_PAYLOAD_WEBSOCKET}"
+        http_operation_payload_websocket)
+    file(READ "${HTTP_PACKAGE_CONSUMER}" http_operation_payload_consumer)
+    if(NOT http_operation_payload_request MATCHES
+           "request[(][)] const [&] noexcept" OR
+       NOT http_operation_payload_request MATCHES
+           "request[(][)] const && = delete" OR
+       NOT http_operation_payload_request MATCHES
+           "bodyPlan[(][)] const && = delete" OR
+       NOT http_operation_payload_client_response MATCHES
+           "response[(][)] const [&] noexcept" OR
+       NOT http_operation_payload_client_response MATCHES
+           "plan[(][)] const && = delete" OR
+       NOT http_operation_payload_client_request MATCHES
+           "contentPlan[(][)] const [&] noexcept" OR
+       NOT http_operation_payload_client_request MATCHES
+           "contentPlan[(][)] const && = delete" OR
+       NOT http_operation_payload_stream MATCHES
+           "response[(][)] [&] noexcept" OR
+       NOT http_operation_payload_stream MATCHES
+           "response[(][)] && = delete" OR
+       NOT http_operation_payload_stream MATCHES
+           "response[(][)] const && = delete" OR
+       NOT http_operation_payload_stream MATCHES
+           "commitPlan[(][)] const && = delete" OR
+       NOT http_operation_payload_h1 MATCHES
+           "response[(][)] [&] noexcept" OR
+       NOT http_operation_payload_h1 MATCHES
+           "responseHeadPlan[(][)] const && = delete" OR
+       NOT http_operation_payload_h1 MATCHES
+           "commitPlan[(][)] const && = delete" OR
+       NOT http_operation_payload_h2 MATCHES
+           "negotiation[(][)] const [&] noexcept" OR
+       NOT http_operation_payload_h2 MATCHES
+           "negotiation[(][)] const && = delete" OR
+       NOT http_operation_payload_h2 MATCHES
+           "plan[(][)] const [&] noexcept" OR
+       NOT http_operation_payload_h2 MATCHES
+           "plan[(][)] const && = delete" OR
+       NOT http_operation_payload_websocket MATCHES
+           "negotiation[(][)] const [&] noexcept" OR
+       NOT http_operation_payload_websocket MATCHES
+           "negotiation[(][)] const && = delete" OR
+       NOT http_operation_payload_consumer MATCHES
+           "ExposesAnyRvalueHttpOperationPayloadBorrow")
+        boundary_error("HTTP operation payloads lend owned state from temporary values"
+            "parsed, prepared, and submitted payloads must expose owned request, response, plan, and negotiation objects only from live lvalues")
+    endif()
+endif()
+
 set(BOUNDARY_DOCS "${RUVIA_ROOT}/README.md" "${RUVIA_ROOT}/AGENTS.md")
 check_files_no_match("docs reference the deleted coroutine h2 server session"
     "${RULE_DELETED_H2_SESSION}" ${BOUNDARY_DOCS})

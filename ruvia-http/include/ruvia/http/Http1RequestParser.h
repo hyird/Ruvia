@@ -50,13 +50,15 @@ private:
 // alive and unmoved.
 class Http1ParsedRequest final {
 public:
-    [[nodiscard]] const HttpRequest& request() const noexcept {
+    [[nodiscard]] const HttpRequest& request() const & noexcept {
         return request_;
     }
+    [[nodiscard]] const HttpRequest& request() const && = delete;
 
-    [[nodiscard]] const detail::Http1RequestBodyPlan& bodyPlan() const noexcept {
+    [[nodiscard]] const detail::Http1RequestBodyPlan& bodyPlan() const & noexcept {
         return bodyPlan_;
     }
+    [[nodiscard]] const detail::Http1RequestBodyPlan& bodyPlan() const && = delete;
 
     // Exact wire bytes after the header section and before the next message.
     // For Content-Length this is the payload. For chunked framing it retains

@@ -259,21 +259,27 @@ class PreparedHttp1ResponseStreamResult;
 // bytes to the authoritative connection disposition.
 class PreparedHttp1ResponseStream final {
 public:
-    [[nodiscard]] HttpResponse& response() noexcept {
+    [[nodiscard]] HttpResponse& response() & noexcept {
         return head_.response();
     }
+    [[nodiscard]] HttpResponse& response() && = delete;
 
-    [[nodiscard]] const HttpResponse& response() const noexcept {
+    [[nodiscard]] const HttpResponse& response() const & noexcept {
         return head_.response();
     }
+    [[nodiscard]] const HttpResponse& response() const && = delete;
 
-    [[nodiscard]] const Http1ResponseHeadPlan& responseHeadPlan() const noexcept {
+    [[nodiscard]] const Http1ResponseHeadPlan&
+    responseHeadPlan() const & noexcept {
         return responseHeadPlan_;
     }
+    [[nodiscard]] const Http1ResponseHeadPlan&
+    responseHeadPlan() const && = delete;
 
-    [[nodiscard]] const ResponseStreamCommitPlan& commitPlan() const noexcept {
+    [[nodiscard]] const ResponseStreamCommitPlan& commitPlan() const & noexcept {
         return head_.commitPlan();
     }
+    [[nodiscard]] const ResponseStreamCommitPlan& commitPlan() const && = delete;
 
     [[nodiscard]] Http1ServerConnectionPlan connectionPlan() const noexcept {
         return connectionPlan_;

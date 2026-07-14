@@ -274,17 +274,19 @@ public:
     Http1ParsedClientResponseHead(Http1ParsedClientResponseHead&&) noexcept = default;
     Http1ParsedClientResponseHead& operator=(Http1ParsedClientResponseHead&&) = delete;
 
-    [[nodiscard]] const HttpClientResponse& response() const noexcept {
+    [[nodiscard]] const HttpClientResponse& response() const & noexcept {
         return response_;
     }
+    [[nodiscard]] const HttpClientResponse& response() const && = delete;
 
     [[nodiscard]] HttpClientResponse takeResponse() && noexcept {
         return std::move(response_);
     }
 
-    [[nodiscard]] const Http1ClientResponsePlan& plan() const noexcept {
+    [[nodiscard]] const Http1ClientResponsePlan& plan() const & noexcept {
         return plan_;
     }
+    [[nodiscard]] const Http1ClientResponsePlan& plan() const && = delete;
 
     [[nodiscard]] constexpr std::size_t consumedBytes() const noexcept {
         return consumedBytes_;

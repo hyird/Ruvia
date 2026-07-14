@@ -47,6 +47,10 @@ concept HasAnyRvalueHttp1ClientRequestPrepareAccessor =
     requires(T&& result) { std::move(result).prepared(); } ||
     requires(T&& result) { std::move(result).failure(); };
 
+template <typename T>
+concept HasRvaluePreparedHttp1ClientRequestContentPlan =
+    requires(T&& prepared) { std::move(prepared).contentPlan(); };
+
 static_assert(!HasAnyRvalueHttp1ClientRequestPrepareAccessor<
     ruvia::Http1ClientRequestPrepareResult>);
 static_assert(!HasAnyRvalueHttpClientRequestContentAccessor<
@@ -55,6 +59,8 @@ static_assert(!HasAnyRvalueHttp1ClientRequestWirePolicyAccessor<
     ruvia::Http1ClientRequestWirePolicy>);
 static_assert(!HasAnyRvalueHttp1ClientRequestContentPlanAccessor<
     ruvia::Http1ClientRequestContentPlan>);
+static_assert(!HasRvaluePreparedHttp1ClientRequestContentPlan<
+    ruvia::PreparedHttp1ClientRequest>);
 
 template <typename T>
 concept HasRequestContentMode = requires(const T& content) {

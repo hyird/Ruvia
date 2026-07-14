@@ -260,6 +260,69 @@ if(NOT _installed_http_protocol_plan_range_text MATCHES
         "installed HTTP protocol plans expose internal storage from temporary owners")
 endif()
 
+set(_installed_http_operation_payload_request
+    "${_install_prefix}/include/ruvia/http/Http1RequestParser.h")
+set(_installed_http_operation_payload_client_response
+    "${_install_prefix}/include/ruvia/http/Http1ClientResponseParser.h")
+set(_installed_http_operation_payload_client_request
+    "${_install_prefix}/include/ruvia/http/Http1ClientRequestWriter.h")
+set(_installed_http_operation_payload_h1
+    "${_install_prefix}/include/ruvia/http/detail/http1/Http1ServerSemantics.h")
+set(_installed_http_operation_payload_stream
+    "${_install_prefix}/include/ruvia/http/detail/server/HttpResponseStreamHead.h")
+set(_installed_http_operation_payload_h2
+    "${_install_prefix}/include/ruvia/http/detail/http2/Http2Connection.h")
+set(_installed_http_operation_payload_websocket
+    "${_install_prefix}/include/ruvia/http/detail/websocket/HttpWebSocketServerHandshake.h")
+foreach(_installed_http_operation_payload_path IN ITEMS
+        "${_installed_http_operation_payload_request}"
+        "${_installed_http_operation_payload_client_response}"
+        "${_installed_http_operation_payload_client_request}"
+        "${_installed_http_operation_payload_h1}"
+        "${_installed_http_operation_payload_stream}"
+        "${_installed_http_operation_payload_h2}"
+        "${_installed_http_operation_payload_websocket}")
+    if(NOT EXISTS "${_installed_http_operation_payload_path}")
+        message(FATAL_ERROR
+            "installed HTTP package is missing an operation-payload lifetime contract")
+    endif()
+endforeach()
+file(READ "${_installed_http_operation_payload_request}"
+    _installed_http_operation_payload_request_text)
+file(READ "${_installed_http_operation_payload_client_response}"
+    _installed_http_operation_payload_client_response_text)
+file(READ "${_installed_http_operation_payload_client_request}"
+    _installed_http_operation_payload_client_request_text)
+file(READ "${_installed_http_operation_payload_h1}"
+    _installed_http_operation_payload_h1_text)
+file(READ "${_installed_http_operation_payload_stream}"
+    _installed_http_operation_payload_stream_text)
+file(READ "${_installed_http_operation_payload_h2}"
+    _installed_http_operation_payload_h2_text)
+file(READ "${_installed_http_operation_payload_websocket}"
+    _installed_http_operation_payload_websocket_text)
+if(NOT _installed_http_operation_payload_request_text MATCHES
+       "bodyPlan[(][)] const && = delete" OR
+   NOT _installed_http_operation_payload_client_response_text MATCHES
+       "plan[(][)] const && = delete" OR
+   NOT _installed_http_operation_payload_client_request_text MATCHES
+       "contentPlan[(][)] const && = delete" OR
+   NOT _installed_http_operation_payload_stream_text MATCHES
+       "response[(][)] && = delete" OR
+   NOT _installed_http_operation_payload_stream_text MATCHES
+       "commitPlan[(][)] const && = delete" OR
+   NOT _installed_http_operation_payload_h1_text MATCHES
+       "responseHeadPlan[(][)] const && = delete" OR
+   NOT _installed_http_operation_payload_h2_text MATCHES
+       "negotiation[(][)] const && = delete" OR
+   NOT _installed_http_operation_payload_h2_text MATCHES
+       "plan[(][)] const && = delete" OR
+   NOT _installed_http_operation_payload_websocket_text MATCHES
+       "negotiation[(][)] const && = delete")
+    message(FATAL_ERROR
+        "installed HTTP operation payloads expose owned state from temporary values")
+endif()
+
 set(_removed_http2_frame_umbrella
     "${_install_prefix}/include/ruvia/http/detail/http2/Http2Frame.h")
 if(EXISTS "${_removed_http2_frame_umbrella}")
@@ -2735,7 +2798,7 @@ if(NOT _installed_http1_response_head_plan MATCHES
    NOT _installed_http1_server_semantics MATCHES
        "Http1ResponseHeadPlan responseHeadPlan_" OR
    NOT _installed_http1_server_semantics MATCHES
-       "const Http1ResponseHeadPlan& responseHeadPlan[(][)] const noexcept" OR
+       "responseHeadPlan[(][)] const [&] noexcept" OR
    NOT _installed_http1_server_semantics MATCHES
        "class Http1FinalResponseCommit final" OR
    NOT _installed_http1_server_semantics MATCHES

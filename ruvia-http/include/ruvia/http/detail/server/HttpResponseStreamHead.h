@@ -136,17 +136,20 @@ public:
         : response_(std::move(response)),
           commitPlan_(std::move(commitPlan)) {}
 
-    [[nodiscard]] HttpResponse& response() noexcept {
+    [[nodiscard]] HttpResponse& response() & noexcept {
         return response_;
     }
+    [[nodiscard]] HttpResponse& response() && = delete;
 
-    [[nodiscard]] const HttpResponse& response() const noexcept {
+    [[nodiscard]] const HttpResponse& response() const & noexcept {
         return response_;
     }
+    [[nodiscard]] const HttpResponse& response() const && = delete;
 
-    [[nodiscard]] const ResponseStreamCommitPlan& commitPlan() const noexcept {
+    [[nodiscard]] const ResponseStreamCommitPlan& commitPlan() const & noexcept {
         return commitPlan_;
     }
+    [[nodiscard]] const ResponseStreamCommitPlan& commitPlan() const && = delete;
 
 private:
     HttpResponse response_;

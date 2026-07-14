@@ -108,9 +108,12 @@ class Http2WebSocketHandshakeSubmitResult;
 
 class Http2SubmittedWebSocketHandshake final {
 public:
-    [[nodiscard]] const WebSocketServerNegotiation& negotiation() const noexcept {
+    [[nodiscard]] const WebSocketServerNegotiation&
+    negotiation() const & noexcept {
         return negotiation_;
     }
+    [[nodiscard]] const WebSocketServerNegotiation&
+    negotiation() const && = delete;
 
 private:
     friend class Http2WebSocketHandshakeSubmitResult;
@@ -331,9 +334,10 @@ class Http2ResponseHeadSubmitResult;
 template <typename Plan>
 class Http2SubmittedResponseHead final {
 public:
-    [[nodiscard]] const Plan& plan() const noexcept {
+    [[nodiscard]] const Plan& plan() const & noexcept {
         return plan_;
     }
+    [[nodiscard]] const Plan& plan() const && = delete;
 
 private:
     template <typename>

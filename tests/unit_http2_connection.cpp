@@ -55,6 +55,18 @@ using ruvia::detail::ResponseTrailerIntent;
 using ruvia::detail::HpackDecoder;
 using ruvia::detail::HpackEncoder;
 
+template <typename T>
+concept HasRvalueHttp2SubmittedPayloadBorrow =
+    requires(T&& submitted) { std::move(submitted).plan(); } ||
+    requires(T&& submitted) { std::move(submitted).negotiation(); };
+
+static_assert(!HasRvalueHttp2SubmittedPayloadBorrow<
+    Http2SubmittedBufferedResponseHead>);
+static_assert(!HasRvalueHttp2SubmittedPayloadBorrow<
+    Http2SubmittedStreamingResponseHead>);
+static_assert(!HasRvalueHttp2SubmittedPayloadBorrow<
+    ruvia::detail::Http2SubmittedWebSocketHandshake>);
+
 ruvia::detail::HttpResponseTrailerSection validatedTrailers(
     std::span<const ruvia::HttpHeaderView> fields) {
     const auto result = ruvia::detail::httpResponseTrailerSection(fields);

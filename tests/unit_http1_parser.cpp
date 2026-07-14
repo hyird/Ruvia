@@ -29,8 +29,15 @@ concept HasAnyRvalueHttp1RequestParseAccessor =
     requires(T&& result) { std::move(result).parsed(); } ||
     requires(T&& result) { std::move(result).failure(); };
 
+template <typename T>
+concept HasAnyRvalueHttp1ParsedRequestBorrow =
+    requires(T&& parsed) { std::move(parsed).request(); } ||
+    requires(T&& parsed) { std::move(parsed).bodyPlan(); };
+
 static_assert(!HasAnyRvalueHttp1RequestParseAccessor<
     ruvia::Http1RequestParseResult>);
+static_assert(!HasAnyRvalueHttp1ParsedRequestBorrow<
+    ruvia::Http1ParsedRequest>);
 
 const ruvia::detail::Http1KnownLengthRequestBody& requireKnownLength(
     const ruvia::detail::Http1RequestBodyPlan& plan) {

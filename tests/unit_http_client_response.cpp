@@ -50,10 +50,17 @@ concept HasAnyRvalueHttp1ClientResponsePlanAccessor =
     requires(T&& plan) { std::move(plan).connectTunnel(); } ||
     requires(T&& plan) { std::move(plan).protocolUpgrade(); };
 
+template <typename T>
+concept HasAnyRvalueHttp1ParsedClientResponseBorrow =
+    requires(T&& parsed) { std::move(parsed).response(); } ||
+    requires(T&& parsed) { std::move(parsed).plan(); };
+
 static_assert(!HasAnyRvalueHttp1ClientResponseParseAccessor<
     Http1ClientResponseParseResult>);
 static_assert(!HasAnyRvalueHttp1ClientResponsePlanAccessor<
     ruvia::Http1ClientResponsePlan>);
+static_assert(!HasAnyRvalueHttp1ParsedClientResponseBorrow<
+    Http1ParsedClientResponseHead>);
 
 template <typename Access>
 concept CanMutateHttpClientResponseStatus = requires(
@@ -919,10 +926,10 @@ RUVIA_TEST(http_client_successful_connect_transitions_to_tunnel) {
 }
 
 RUVIA_TEST(http_client_head_method_is_case_sensitive) {
-    RUVIA_CHECK(
-        parseHead("HEAD", "HTTP/1.1 200 OK").plan().withoutContent() != nullptr);
-    RUVIA_CHECK(
-        parseHead("head", "HTTP/1.1 200 OK").plan().closeDelimited() != nullptr);
+    const auto head = parseHead("HEAD", "HTTP/1.1 200 OK");
+    const auto lowercase = parseHead("head", "HTTP/1.1 200 OK");
+    RUVIA_CHECK(head.plan().withoutContent() != nullptr);
+    RUVIA_CHECK(lowercase.plan().closeDelimited() != nullptr);
 }
 
 RUVIA_TEST(http_client_content_encoding_has_one_authoritative_path) {

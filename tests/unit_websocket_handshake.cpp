@@ -1,7 +1,9 @@
 #include "test_harness.h"
 
+#include <concepts>
 #include <string>
 #include <string_view>
+#include <utility>
 
 #include "ruvia/http/detail/http1/Http1ServerRequestParser.h"
 #include "ruvia/http/detail/websocket/HttpWebSocketUtils.h"
@@ -15,6 +17,13 @@ using ruvia::detail::Http1ServerRequestParser;
 using ruvia::detail::chooseWebSocketSubprotocol;
 using ruvia::detail::isValidWebSocketRequest;
 using ruvia::detail::webSocketProtocolOffered;
+
+template <typename T>
+concept HasRvalueWebSocketHandshakeNegotiation =
+    requires(T&& handshake) { std::move(handshake).negotiation(); };
+
+static_assert(!HasRvalueWebSocketHandshakeNegotiation<
+    ruvia::detail::HttpWebSocketServerHandshake>);
 
 HttpRequest parseRequest(std::string_view rawRequest) {
     Http1ServerRequestParser parser;

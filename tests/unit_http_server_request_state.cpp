@@ -1,5 +1,6 @@
 #include "test_harness.h"
 
+#include <concepts>
 #include <cstddef>
 #include <cstdint>
 #include <memory_resource>
@@ -37,6 +38,18 @@ using ruvia::detail::ResponseStreamKind;
 using ruvia::detail::ResponseStreamTrailerFraming;
 using ruvia::detail::HttpServerExpectationAction;
 using ruvia::detail::ResponseHeadBuffer;
+
+template <typename T>
+concept HasAnyRvaluePreparedResponseStreamBorrow =
+    requires(T&& prepared) { std::move(prepared).response(); } ||
+    requires(const T&& prepared) { std::move(prepared).response(); } ||
+    requires(T&& prepared) { std::move(prepared).responseHeadPlan(); } ||
+    requires(T&& prepared) { std::move(prepared).commitPlan(); };
+
+static_assert(!HasAnyRvaluePreparedResponseStreamBorrow<
+    ruvia::detail::ResponseStreamHead>);
+static_assert(!HasAnyRvaluePreparedResponseStreamBorrow<
+    ruvia::detail::PreparedHttp1ResponseStream>);
 
 ruvia::detail::PreparedHttp1ResponseStream prepareStream(
     ruvia::HttpResponse response,
