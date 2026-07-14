@@ -1037,6 +1037,8 @@ if(EXISTS "${WEB_ROUTE_MODES}" AND EXISTS "${WEB_ROUTE_LIMITS}" AND
            "routes[.]dispatchWebSocket" OR
        NOT web_route_http2_session MATCHES
            "makeCallableRef<void, Context&>" OR
+       NOT web_route_websocket_session MATCHES
+           "ContextWebSocketBinding webSocketBinding" OR
        web_route_websocket_session MATCHES
            "dispatchWebSocket|const RouteTable&")
         boundary_error("WebSocket middleware no longer owns the upgrade boundary"
@@ -1340,7 +1342,9 @@ if(EXISTS "${WEB_CONTEXT_CAPABILITIES}" AND
        NOT web_context_router_dispatch MATCHES
            "services[.]responseOutput[(][)][.]responseStream[(][)]" OR
        NOT web_context_internal MATCHES
-           "ContextResponseOutput::webSocket[(]webSocket[)]" OR
+           "class ContextWebSocketBinding final" OR
+       NOT web_context_internal MATCHES
+           "restoreResponseOutput" OR
        NOT web_context_lazy_body_route MATCHES "withLazyRequestBody" OR
        NOT web_context_stream_body_route MATCHES
            "withStreamingRequestBody" OR

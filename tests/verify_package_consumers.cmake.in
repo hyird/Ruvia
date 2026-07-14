@@ -2794,6 +2794,13 @@ if(_built_components_csv MATCHES "(^|,)web(,|$)")
         _installed_server_session_entry)
     file(READ "${_installed_http1_session_path}"
         _installed_http1_session)
+    if(NOT _installed_context_internal MATCHES
+           "class ContextWebSocketBinding final" OR
+       NOT _installed_context_internal MATCHES
+           "restoreResponseOutput")
+        message(FATAL_ERROR
+            "installed Context does not scope the borrowed WebSocket capability")
+    endif()
     if(NOT _installed_conn_info MATCHES
            "class PlainConnectionTransport final" OR
        NOT _installed_conn_info MATCHES
@@ -2932,6 +2939,8 @@ if(_built_components_csv MATCHES "(^|,)web(,|$)")
        _installed_route_http2_session MATCHES "RequestDispatcher" OR
        _installed_route_response_stream_dispatch MATCHES
            "RequestDispatcher" OR
+       NOT _installed_route_websocket_session MATCHES
+           "ContextWebSocketBinding webSocketBinding" OR
        _installed_http1_websocket_route MATCHES "RequestDispatcher")
         message(FATAL_ERROR
             "installed Web runtimes do not dispatch through the concrete RouteTable")

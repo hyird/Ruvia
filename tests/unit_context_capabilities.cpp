@@ -17,6 +17,7 @@
 #include <memory_resource>
 #include <optional>
 #include <span>
+#include <stdexcept>
 #include <string>
 #include <string_view>
 #include <type_traits>
@@ -309,10 +310,43 @@ RUVIA_TEST(context_copies_typed_capabilities_into_public_facades) {
     auto webSocketContext = ruvia::detail::ContextAccess::make(
         memory,
         request);
-    ruvia::detail::ContextAccess::bindWebSocket(
-        webSocketContext,
-        webSocket);
-    RUVIA_CHECK(&webSocketContext.webSocket() == &webSocket);
+    {
+        ruvia::detail::ContextWebSocketBinding binding(
+            webSocketContext,
+            webSocket);
+        RUVIA_CHECK(&webSocketContext.webSocket() == &webSocket);
+    }
+    bool unavailableAfterScope = false;
+    try {
+        (void)webSocketContext.webSocket();
+    } catch (const std::logic_error&) {
+        unavailableAfterScope = true;
+    }
+    RUVIA_CHECK(unavailableAfterScope);
+}
+
+RUVIA_TEST(context_websocket_binding_restores_capability_during_unwind) {
+    ruvia::WorkerMemory worker;
+    ruvia::RequestMemory memory(worker);
+    auto request = makeRequest(memory.resource());
+    auto context = ruvia::detail::ContextAccess::make(memory, request);
+    auto webSocket = ruvia::detail::WebSocketAccess::make(
+        nullptr, &readWebSocket, &writeWebSocket, &closeWebSocket);
+
+    try {
+        ruvia::detail::ContextWebSocketBinding binding(context, webSocket);
+        RUVIA_CHECK(&context.webSocket() == &webSocket);
+        throw std::runtime_error("leave websocket scope");
+    } catch (const std::runtime_error&) {
+    }
+
+    bool unavailableAfterUnwind = false;
+    try {
+        (void)context.webSocket();
+    } catch (const std::logic_error&) {
+        unavailableAfterUnwind = true;
+    }
+    RUVIA_CHECK(unavailableAfterUnwind);
 }
 
 RUVIA_TEST(context_request_exposes_matched_route_path) {

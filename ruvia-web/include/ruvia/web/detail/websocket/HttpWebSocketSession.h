@@ -59,7 +59,7 @@ Task<void> runWebSocketSession(
     const CallableRef<void, Context&>& handler,
     Context& context) {
     auto webSocket = makeWebSocketFacade(connection);
-    ContextAccess::bindWebSocket(context, webSocket);
+    ContextWebSocketBinding webSocketBinding(context, webSocket);
 
     scannerEntry.setPhase(ConnectionScanner::Phase::kLongLived);
     std::exception_ptr exception;

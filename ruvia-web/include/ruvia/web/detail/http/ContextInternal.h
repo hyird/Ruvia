@@ -51,6 +51,8 @@ inline Context::Context(
 
 namespace ruvia::detail {
 
+class ContextWebSocketBinding;
+
 struct ContextAccess final {
     [[nodiscard]] static Context make(
         RequestMemory& memory,
@@ -128,10 +130,6 @@ struct ContextAccess final {
         context.storeResponse(std::move(response));
     }
 
-    static void bindWebSocket(Context& context, WebSocket& webSocket) noexcept {
-        context.responseOutput_ = ContextResponseOutput::webSocket(webSocket);
-    }
-
     [[nodiscard]] static HttpResponse& responseStorage(Context& context) {
         return context.responseStorage();
     }
@@ -188,6 +186,48 @@ struct ContextAccess final {
         }
         return false;
     }
+
+private:
+    friend class ContextWebSocketBinding;
+
+    [[nodiscard]] static ContextResponseOutput bindWebSocket(
+        Context& context,
+        WebSocket& webSocket) noexcept {
+        auto previous = context.responseOutput_;
+        context.responseOutput_ = ContextResponseOutput::webSocket(webSocket);
+        return previous;
+    }
+
+    static void restoreResponseOutput(
+        Context& context,
+        ContextResponseOutput output) noexcept {
+        context.responseOutput_ = output;
+    }
+};
+
+// The facade borrowed by Context is valid only while the established session
+// owns its connection. Restoring the previous output capability on every exit
+// prevents onion middleware post-processing from observing a dangling facade.
+class ContextWebSocketBinding final {
+public:
+    ContextWebSocketBinding(
+        Context& context,
+        WebSocket& webSocket) noexcept
+        : context_(&context),
+          previous_(ContextAccess::bindWebSocket(context, webSocket)) {}
+
+    ContextWebSocketBinding(const ContextWebSocketBinding&) = delete;
+    ContextWebSocketBinding& operator=(const ContextWebSocketBinding&) = delete;
+    ContextWebSocketBinding(ContextWebSocketBinding&&) = delete;
+    ContextWebSocketBinding& operator=(ContextWebSocketBinding&&) = delete;
+
+    ~ContextWebSocketBinding() {
+        ContextAccess::restoreResponseOutput(*context_, previous_);
+    }
+
+private:
+    Context* context_;
+    ContextResponseOutput previous_;
 };
 
 }  // namespace ruvia::detail

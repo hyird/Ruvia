@@ -30,6 +30,7 @@
 #include "ruvia/web/detail/router/RouterInternal.h"
 #include "ruvia/web/detail/router/RouteResolution.h"
 #include "ruvia/web/detail/router/RouteTable.h"
+#include "ruvia/web/detail/websocket/WebSocketInternal.h"
 
 namespace {
 
@@ -496,6 +497,21 @@ public:
     }
 };
 
+bool g_webSocketUnavailableAfterNext = false;
+
+class ChainMwProbeWebSocketAfterNext final
+    : public ruvia::Middleware<ChainMwProbeWebSocketAfterNext> {
+public:
+    ruvia::Task<void> handle(ruvia::Context& context, ruvia::Next& next) {
+        co_await next();
+        try {
+            (void)context.webSocket();
+        } catch (const std::logic_error&) {
+            g_webSocketUnavailableAfterNext = true;
+        }
+    }
+};
+
 // Throws before calling next(): the chain is short-circuited and the exception
 // must be mapped to an error response (never escaping the dispatch).
 class ChainMwThrows final : public ruvia::Middleware<ChainMwThrows> {
@@ -657,12 +673,26 @@ EmptyStreamDispatchObservation dispatchEmptyStreamWith(
 
 struct WebSocketDispatchObservation final {
     bool terminalInvoked{false};
+    bool capabilityAvailableInTerminal{false};
     bool buffered{false};
     std::string bufferedBody;
 };
 
-ruvia::Task<void> webSocketTerminal(void* target, ruvia::Context&) {
-    *static_cast<bool*>(target) = true;
+struct WebSocketTerminalTarget final {
+    WebSocketDispatchObservation* observation;
+    ruvia::WebSocket* webSocket;
+};
+
+ruvia::Task<void> webSocketTerminal(
+    void* target,
+    ruvia::Context& context) {
+    auto& terminal = *static_cast<WebSocketTerminalTarget*>(target);
+    terminal.observation->terminalInvoked = true;
+    ruvia::detail::ContextWebSocketBinding binding(
+        context,
+        *terminal.webSocket);
+    terminal.observation->capabilityAvailableInTerminal =
+        &context.webSocket() == terminal.webSocket;
     g_chainOrder.push_back(0);
     co_return;
 }
@@ -697,8 +727,14 @@ WebSocketDispatchObservation dispatchWebSocketWith(
     }
 
     WebSocketDispatchObservation observation;
+    auto webSocket = ruvia::detail::WebSocketAccess::make(
+        nullptr,
+        nullptr,
+        nullptr,
+        nullptr);
+    WebSocketTerminalTarget terminalTarget{&observation, &webSocket};
     const auto terminal = ruvia::detail::RouteStreamHandler(
-        &observation.terminalInvoked,
+        &terminalTarget,
         &webSocketTerminal);
     asio::io_context context(1);
     auto future = asio::co_spawn(
@@ -880,8 +916,22 @@ RUVIA_TEST(websocket_middleware_wraps_upgrade_and_session_terminal) {
         ruvia::detail::makeMiddlewareDescriptor<ChainMwA>();
     const auto observation = dispatchWebSocketWith(middleware);
     RUVIA_CHECK(observation.terminalInvoked);
+    RUVIA_CHECK(observation.capabilityAvailableInTerminal);
     RUVIA_CHECK(!observation.buffered);
     const std::vector<int> expected{1, 0, -1};
+    RUVIA_CHECK(g_chainOrder == expected);
+}
+
+RUVIA_TEST(websocket_capability_expires_before_middleware_post_processing) {
+    g_chainOrder.clear();
+    g_webSocketUnavailableAfterNext = false;
+    const auto middleware = ruvia::detail::makeMiddlewareDescriptor<
+        ChainMwProbeWebSocketAfterNext>();
+    const auto observation = dispatchWebSocketWith(middleware);
+    RUVIA_CHECK(observation.terminalInvoked);
+    RUVIA_CHECK(observation.capabilityAvailableInTerminal);
+    RUVIA_CHECK(g_webSocketUnavailableAfterNext);
+    const std::vector<int> expected{0};
     RUVIA_CHECK(g_chainOrder == expected);
 }
 
