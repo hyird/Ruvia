@@ -3,6 +3,7 @@
 #include <cstdint>
 #include <optional>
 #include <string_view>
+#include <type_traits>
 
 #include "ruvia/http/detail/HeaderTokenUtils.h"
 
@@ -77,5 +78,8 @@ private:
 
     std::uint8_t flags_{0};
 };
+
+static_assert(std::is_trivially_copyable_v<HttpRequestExpectations>);
+static_assert(sizeof(HttpRequestExpectations) <= 1);
 
 }  // namespace ruvia::detail

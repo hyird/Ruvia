@@ -96,10 +96,9 @@ public:
         return chunked() != nullptr;
     }
 
-    [[nodiscard]] const HttpRequestExpectations& expectations() const & noexcept {
+    [[nodiscard]] HttpRequestExpectations expectations() const noexcept {
         return expectations_;
     }
-    [[nodiscard]] const HttpRequestExpectations& expectations() const && = delete;
 
     [[nodiscard]] std::optional<HttpServerExpectationAction>
     expectationAction() const noexcept {

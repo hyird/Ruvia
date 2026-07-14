@@ -5778,9 +5778,13 @@ else()
        NOT http2_local_content_state MATCHES "kNotStarted" OR
        NOT http2_local_content_state MATCHES "if [(]unset[(][)] != nullptr[)]" OR
        NOT http2_stream_state MATCHES
-           "const Http2LocalContentState& localContent[(][)] const noexcept")
+           "const Http2LocalContentState& localContent[(][)] const noexcept" OR
+       NOT http2_stream_state MATCHES
+           "HttpRequestExpectations requestExpectations[(][)] const noexcept" OR
+       http2_stream_state MATCHES
+           "const HttpRequestExpectations& requestExpectations")
         boundary_error("HTTP/2 local content accounting lost its discriminated state"
-            "unset, forbidden, unbounded, and known-length must be exclusive and only known-length may own a declared length")
+            "unset, forbidden, unbounded, and known-length must be exclusive, only known-length may own a declared length, and cheap request expectation facts must remain value-semantic")
     endif()
 endif()
 if(EXISTS "${HTTP2_STALE_BODY_ACCOUNTING}")
@@ -9587,11 +9591,20 @@ set(HTTP_PROTOCOL_PLAN_CONTROL
     "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/detail/server/HttpFinalResponseControlPlan.h")
 set(HTTP_PROTOCOL_PLAN_STREAM
     "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/detail/server/HttpResponseStreamHead.h")
+set(HTTP_PROTOCOL_REQUEST_FACTS
+    "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/detail/HttpExpectations.h")
+set(HTTP_PROTOCOL_CONNECTION_FACTS
+    "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/detail/HttpConnectionFields.h")
+set(HTTP_PROTOCOL_CLIENT_REQUEST_CONTEXT
+    "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/Http1ClientRequestWriter.h")
 check_files_no_match("response write policy must remain a small value fact"
     "const[ \t]+auto&[ \t]+policy[ \t]*=[ \t]*bodyPlan[.]policy[(][)]"
     "${RUVIA_ROOT}/ruvia-http/src/server/HttpResponseHead.cpp"
     "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/detail/server/HttpResponseStreamHead.h"
     "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/detail/http2/Http2ResponseHeadPlan.h")
+check_files_no_match("request and connection facts must remain value semantic"
+    "const[ \t]+auto&[ \t]+(responseOptions|upgradeProtocols)[ \t]*=[ \t]*http1Control[.](connectionOptions|upgradeProtocols)[(][)]"
+    "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/detail/http1/Http1ServerSemantics.h")
 if(EXISTS "${HTTP_PROTOCOL_PLAN_RANGE}" AND
    EXISTS "${HTTP_PROTOCOL_PLAN_SEMANTICS}" AND
    EXISTS "${HTTP_PROTOCOL_PLAN_WRITE}" AND
@@ -9602,6 +9615,9 @@ if(EXISTS "${HTTP_PROTOCOL_PLAN_RANGE}" AND
    EXISTS "${HTTP_PROTOCOL_PLAN_H2_RESPONSE}" AND
    EXISTS "${HTTP_PROTOCOL_PLAN_CONTROL}" AND
    EXISTS "${HTTP_PROTOCOL_PLAN_STREAM}" AND
+   EXISTS "${HTTP_PROTOCOL_REQUEST_FACTS}" AND
+   EXISTS "${HTTP_PROTOCOL_CONNECTION_FACTS}" AND
+   EXISTS "${HTTP_PROTOCOL_CLIENT_REQUEST_CONTEXT}" AND
    EXISTS "${HTTP_PACKAGE_CONSUMER}")
     file(READ "${HTTP_PROTOCOL_PLAN_RANGE}" http_protocol_plan_range)
     file(READ "${HTTP_PROTOCOL_PLAN_SEMANTICS}" http_protocol_plan_semantics)
@@ -9613,6 +9629,10 @@ if(EXISTS "${HTTP_PROTOCOL_PLAN_RANGE}" AND
     file(READ "${HTTP_PROTOCOL_PLAN_H2_RESPONSE}" http_protocol_plan_h2_response)
     file(READ "${HTTP_PROTOCOL_PLAN_CONTROL}" http_protocol_plan_control)
     file(READ "${HTTP_PROTOCOL_PLAN_STREAM}" http_protocol_plan_stream)
+    file(READ "${HTTP_PROTOCOL_REQUEST_FACTS}" http_protocol_request_facts)
+    file(READ "${HTTP_PROTOCOL_CONNECTION_FACTS}" http_protocol_connection_facts)
+    file(READ "${HTTP_PROTOCOL_CLIENT_REQUEST_CONTEXT}"
+        http_protocol_client_request_context)
     file(READ "${HTTP_PACKAGE_CONSUMER}" http_protocol_plan_consumer)
     if(NOT http_protocol_plan_range MATCHES
            "ignored[(][)] const [&] noexcept" OR
@@ -9637,7 +9657,13 @@ if(EXISTS "${HTTP_PROTOCOL_PLAN_RANGE}" AND
        NOT http_protocol_plan_h1_request MATCHES
            "withoutBody[(][)] const [&] noexcept" OR
        NOT http_protocol_plan_h1_request MATCHES
-           "expectations[(][)] const && = delete" OR
+           "HttpRequestExpectations[ \t]+expectations[(][)] const noexcept" OR
+       http_protocol_plan_h1_request MATCHES
+           "const[ \t]+HttpRequestExpectations[ \t]*&[ \t]+expectations" OR
+       NOT http_protocol_request_facts MATCHES
+           "is_trivially_copyable_v<HttpRequestExpectations>" OR
+       NOT http_protocol_request_facts MATCHES
+           "sizeof[(]HttpRequestExpectations[)] <= 1" OR
        NOT http_protocol_plan_h1_response MATCHES
            "buffered[(][)] const [&] noexcept" OR
        NOT http_protocol_plan_h1_response MATCHES
@@ -9659,9 +9685,19 @@ if(EXISTS "${HTTP_PROTOCOL_PLAN_RANGE}" AND
        NOT http_protocol_plan_control MATCHES
            "http2[(][)] const && = delete" OR
        NOT http_protocol_plan_control MATCHES
-           "connectionOptions[(][)] const && = delete" OR
+           "HttpConnectionOptions[ \t\r\n]+connectionOptions[(][)] const noexcept" OR
        NOT http_protocol_plan_control MATCHES
-           "upgradeProtocols[(][)] const && = delete" OR
+           "HttpUpgradeProtocols[ \t\r\n]+upgradeProtocols[(][)] const noexcept" OR
+       NOT http_protocol_client_request_context MATCHES
+           "HttpConnectionOptions[ \t]+connectionOptions[(][)] const noexcept" OR
+       NOT http_protocol_connection_facts MATCHES
+           "is_trivially_copyable_v<HttpConnectionOptions>" OR
+       NOT http_protocol_connection_facts MATCHES
+           "sizeof[(]HttpConnectionOptions[)] <= 2" OR
+       NOT http_protocol_connection_facts MATCHES
+           "is_trivially_copyable_v<HttpUpgradeProtocols>" OR
+       NOT http_protocol_connection_facts MATCHES
+           "sizeof[(]HttpUpgradeProtocols[)] <= 2" OR
        NOT http_protocol_plan_stream MATCHES
            "bodyPlan[(][)] const [&] noexcept" OR
        NOT http_protocol_plan_stream MATCHES

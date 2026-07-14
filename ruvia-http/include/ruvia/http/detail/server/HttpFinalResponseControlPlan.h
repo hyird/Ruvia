@@ -24,19 +24,15 @@ class HttpFinalResponseControlPlanResult;
 
 class Http1FinalResponseControl final {
 public:
-    [[nodiscard]] const HttpConnectionOptions&
-    connectionOptions() const & noexcept {
+    [[nodiscard]] HttpConnectionOptions
+    connectionOptions() const noexcept {
         return connectionOptions_;
     }
-    [[nodiscard]] const HttpConnectionOptions&
-    connectionOptions() const && = delete;
 
-    [[nodiscard]] const HttpUpgradeProtocols&
-    upgradeProtocols() const & noexcept {
+    [[nodiscard]] HttpUpgradeProtocols
+    upgradeProtocols() const noexcept {
         return upgradeProtocols_;
     }
-    [[nodiscard]] const HttpUpgradeProtocols&
-    upgradeProtocols() const && = delete;
 
 private:
     friend class HttpFinalResponseControlPlanResult;

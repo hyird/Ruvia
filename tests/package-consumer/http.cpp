@@ -753,10 +753,15 @@ concept HasFinalResponseControlProtocolAlternatives = requires(
 
 template <typename T>
 concept HasHttp1FinalResponseControlFields = requires(const T& plan) {
-    { plan.connectionOptions() } -> std::same_as<const
-        ruvia::detail::HttpConnectionOptions&>;
-    { plan.upgradeProtocols() } -> std::same_as<const
-        ruvia::detail::HttpUpgradeProtocols&>;
+    { plan.connectionOptions() } ->
+        std::same_as<ruvia::detail::HttpConnectionOptions>;
+    { plan.upgradeProtocols() } ->
+        std::same_as<ruvia::detail::HttpUpgradeProtocols>;
+} && requires(const T&& plan) {
+    { std::move(plan).connectionOptions() } ->
+        std::same_as<ruvia::detail::HttpConnectionOptions>;
+    { std::move(plan).upgradeProtocols() } ->
+        std::same_as<ruvia::detail::HttpUpgradeProtocols>;
 };
 
 template <typename T>
@@ -934,9 +939,6 @@ concept ExposesAnyRvalueHttpProtocolPlanBorrow =
     requires(T&& value) { std::move(value).http2(); } ||
     requires(T&& value) { std::move(value).contentSemantics(); } ||
     requires(T&& value) { std::move(value).bodyPlan(); } ||
-    requires(T&& value) { std::move(value).expectations(); } ||
-    requires(T&& value) { std::move(value).connectionOptions(); } ||
-    requires(T&& value) { std::move(value).upgradeProtocols(); } ||
     requires(T&& value) { std::move(value).writePlan(); } ||
     requires(T&& value) { std::move(value).headPlan(); };
 
@@ -1688,8 +1690,24 @@ static_assert(!HasHttp1RequestPlanContentLength<
     ruvia::detail::Http1ChunkedRequestBody>);
 static_assert(HasHttp1RequestPlanTransferCodings<
     ruvia::detail::Http1ChunkedRequestBody>);
+static_assert(std::same_as<
+    decltype(std::declval<const ruvia::detail::Http1RequestBodyPlan&>()
+        .expectations()),
+    ruvia::detail::HttpRequestExpectations>);
+static_assert(std::same_as<
+    decltype(std::declval<const ruvia::detail::Http1RequestBodyPlan&&>()
+        .expectations()),
+    ruvia::detail::HttpRequestExpectations>);
 static_assert(!HasHttp1RequestPlanTransferCodings<
     ruvia::detail::Http1KnownLengthRequestBody>);
+static_assert(std::same_as<
+    decltype(std::declval<const ruvia::detail::Http1ClientRequestContext&>()
+        .connectionOptions()),
+    ruvia::detail::HttpConnectionOptions>);
+static_assert(std::same_as<
+    decltype(std::declval<const ruvia::detail::Http1ClientRequestContext&&>()
+        .connectionOptions()),
+    ruvia::detail::HttpConnectionOptions>);
 static_assert(!HasPublicHttp1RequestBodyPlanFactories<
     ruvia::detail::Http1RequestBodyPlan>);
 static_assert(!std::default_initializable<ruvia::detail::Http1RequestBodyPlan>);

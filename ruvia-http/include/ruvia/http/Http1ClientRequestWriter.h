@@ -106,7 +106,7 @@ public:
         return closePolicy_;
     }
 
-    [[nodiscard]] constexpr const HttpConnectionOptions& connectionOptions() const noexcept {
+    [[nodiscard]] constexpr HttpConnectionOptions connectionOptions() const noexcept {
         return connectionOptions_;
     }
 

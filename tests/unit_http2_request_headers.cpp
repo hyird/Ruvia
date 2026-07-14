@@ -1,5 +1,6 @@
 #include "test_harness.h"
 
+#include <concepts>
 #include <cstddef>
 #include <cstdint>
 #include <memory_resource>
@@ -12,6 +13,7 @@ namespace {
 
 using ruvia::detail::Http2HeaderDecodeContext;
 using ruvia::detail::Http2StreamState;
+using ruvia::detail::HttpRequestExpectations;
 using ruvia::detail::HttpServerExpectationAction;
 using ruvia::detail::http2AccumulateHeaderListBytes;
 using ruvia::detail::http2OnDecodedInitialHeader;
@@ -20,6 +22,14 @@ using ruvia::detail::http2OnDecodedTrailer;
 std::pmr::memory_resource* res() noexcept {
     return std::pmr::new_delete_resource();
 }
+
+template <typename T>
+concept HasValueSemanticRequestExpectations = requires(const T& value, const T&& temporary) {
+    { value.requestExpectations() } -> std::same_as<HttpRequestExpectations>;
+    { temporary.requestExpectations() } -> std::same_as<HttpRequestExpectations>;
+};
+
+static_assert(HasValueSemanticRequestExpectations<Http2StreamState>);
 
 }  // namespace
 

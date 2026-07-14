@@ -3,6 +3,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <string_view>
+#include <type_traits>
 
 #include "ruvia/http/HttpHeader.h"
 #include "ruvia/http/detail/AsciiCase.h"
@@ -116,6 +117,9 @@ private:
     bool fieldPresent_{false};
 };
 
+static_assert(std::is_trivially_copyable_v<HttpConnectionOptions>);
+static_assert(sizeof(HttpConnectionOptions) <= 2);
+
 struct HttpUpgradeProtocol final {
     std::string_view name;
     std::string_view version;
@@ -205,5 +209,8 @@ private:
     bool fieldPresent_{false};
     bool hasProtocol_{false};
 };
+
+static_assert(std::is_trivially_copyable_v<HttpUpgradeProtocols>);
+static_assert(sizeof(HttpUpgradeProtocols) <= 2);
 
 }  // namespace ruvia::detail

@@ -277,7 +277,7 @@ public:
         expectations_.parseField(value);
     }
 
-    [[nodiscard]] const HttpRequestExpectations& requestExpectations() const noexcept {
+    [[nodiscard]] HttpRequestExpectations requestExpectations() const noexcept {
         return expectations_;
     }
 

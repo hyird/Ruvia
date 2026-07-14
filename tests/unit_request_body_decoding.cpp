@@ -299,6 +299,17 @@ concept HasRequestTransferCodings = requires(const T& value) {
 };
 
 template <typename T>
+concept HasValueSemanticRequestExpectations =
+    requires(const T& value) {
+        { value.expectations() } ->
+            std::same_as<ruvia::detail::HttpRequestExpectations>;
+    } &&
+    requires(const T&& value) {
+        { std::move(value).expectations() } ->
+            std::same_as<ruvia::detail::HttpRequestExpectations>;
+    };
+
+template <typename T>
 concept HasPublicRequestBodyPlanFactories = requires {
     T::makeWithoutBody();
     T::makeKnownLength(std::size_t{});
@@ -336,6 +347,7 @@ static_assert(!HasRequestTransferCodings<Http1RequestBodyPlan>);
 static_assert(HasRequestContentLength<ruvia::detail::Http1KnownLengthRequestBody>);
 static_assert(!HasRequestContentLength<ruvia::detail::Http1ChunkedRequestBody>);
 static_assert(HasRequestTransferCodings<ruvia::detail::Http1ChunkedRequestBody>);
+static_assert(HasValueSemanticRequestExpectations<Http1RequestBodyPlan>);
 static_assert(!HasRequestTransferCodings<
     ruvia::detail::Http1KnownLengthRequestBody>);
 static_assert(std::same_as<

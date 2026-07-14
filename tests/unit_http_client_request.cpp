@@ -25,6 +25,15 @@ using ruvia::HttpClientRequest;
 using ruvia::HttpClientRequestContent;
 using ruvia::HttpOrigin;
 
+static_assert(std::same_as<
+    decltype(std::declval<const ruvia::detail::Http1ClientRequestContext&>()
+        .connectionOptions()),
+    ruvia::detail::HttpConnectionOptions>);
+static_assert(std::same_as<
+    decltype(std::declval<const ruvia::detail::Http1ClientRequestContext&&>()
+        .connectionOptions()),
+    ruvia::detail::HttpConnectionOptions>);
+
 template <typename T>
 concept HasAnyRvalueHttpClientRequestContentAccessor =
     requires(T&& content) { std::move(content).withoutContent(); } ||

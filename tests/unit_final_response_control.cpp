@@ -27,6 +27,22 @@ static_assert(!std::default_initializable<Http2FinalResponseControl>);
 static_assert(!std::default_initializable<HttpFinalResponseControlPlan>);
 static_assert(!std::default_initializable<HttpFinalResponseControlPlanFailure>);
 static_assert(!std::default_initializable<HttpFinalResponseControlPlanResult>);
+static_assert(std::same_as<
+    decltype(std::declval<const Http1FinalResponseControl&>()
+        .connectionOptions()),
+    ruvia::detail::HttpConnectionOptions>);
+static_assert(std::same_as<
+    decltype(std::declval<const Http1FinalResponseControl&&>()
+        .connectionOptions()),
+    ruvia::detail::HttpConnectionOptions>);
+static_assert(std::same_as<
+    decltype(std::declval<const Http1FinalResponseControl&>()
+        .upgradeProtocols()),
+    ruvia::detail::HttpUpgradeProtocols>);
+static_assert(std::same_as<
+    decltype(std::declval<const Http1FinalResponseControl&&>()
+        .upgradeProtocols()),
+    ruvia::detail::HttpUpgradeProtocols>);
 
 bool isFailure(
     const HttpResponse& response,
