@@ -360,7 +360,7 @@ prepareHttp1ResponseStreamHead(
         plan.requestMethod(),
         response.status(),
         trailerIntent);
-    const auto& bodyPlan = commitPlan.bodyPlan();
+    const auto bodyPlan = commitPlan.bodyPlan();
     // HTTP/1.0 cannot delimit an open-ended response stream without closing the
     // connection, but a response whose method/status forbids payload is already
     // self-delimited. Make this decision at head commit, when the response status is

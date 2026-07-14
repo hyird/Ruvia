@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <type_traits>
 
 #include "ruvia/http/HttpKnownMethod.h"
 #include "ruvia/http/detail/HttpResponseBodyAccess.h"
@@ -30,19 +31,17 @@ public:
 
     [[nodiscard]] bool bodySuppressed() const noexcept {
         return !policy_.bodyAllowed() ||
-            semantics_.withContent() == nullptr;
+            !semantics_.withContent();
     }
 
-    [[nodiscard]] const HttpResponseContentSemantics&
-    contentSemantics() const & noexcept {
+    [[nodiscard]] HttpResponseContentSemantics
+    contentSemantics() const noexcept {
         return semantics_;
     }
-    [[nodiscard]] const HttpResponseContentSemantics&
-    contentSemantics() const && = delete;
 
     [[nodiscard]] std::uint64_t bufferedRepresentationLength(
         const HttpResponse& response) const noexcept {
-        if (!statusAllowsBody() || semantics_.connectTunnel() != nullptr) {
+        if (!statusAllowsBody() || semantics_.connectTunnel()) {
             return 0;
         }
         return static_cast<std::uint64_t>(responseBody(response).size());
@@ -68,6 +67,9 @@ private:
     HttpResponseContentSemantics semantics_;
 };
 
+static_assert(std::is_trivially_copyable_v<HttpResponseBodyPlan>);
+static_assert(sizeof(HttpResponseBodyPlan) <= 12);
+
 [[nodiscard]] inline HttpResponseBodyPlan httpResponseBodyPlan(
     HttpKnownMethod requestMethod,
     std::uint16_t statusCode) noexcept {
@@ -89,10 +91,9 @@ public:
         return bodyPlan_.responseStatus();
     }
 
-    [[nodiscard]] const HttpResponseBodyPlan& bodyPlan() const & noexcept {
+    [[nodiscard]] HttpResponseBodyPlan bodyPlan() const noexcept {
         return bodyPlan_;
     }
-    [[nodiscard]] const HttpResponseBodyPlan& bodyPlan() const && = delete;
 
     [[nodiscard]] ResponseWritePolicy policy() const noexcept {
         return bodyPlan_.policy();

@@ -105,7 +105,7 @@ void appendResponseHead(
     const HttpResponse& response,
     ResponseHeadBuffer& head,
     const Http1ResponseHeadPlan& plan) {
-    const auto& bodyPlan = plan.bodyPlan();
+    const auto bodyPlan = plan.bodyPlan();
     if (response.status() != bodyPlan.responseStatus()) {
         throw std::invalid_argument(
             "HTTP/1 response plan status does not match response");

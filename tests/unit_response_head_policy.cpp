@@ -3,6 +3,7 @@
 #include <concepts>
 #include <cstdint>
 #include <memory_resource>
+#include <type_traits>
 #include <utility>
 
 #include "ruvia/http/detail/http1/Http1ResponseHeadPlan.h"
@@ -13,6 +14,16 @@
 namespace {
 
 using ruvia::detail::responseWritePolicy;
+
+template <typename T>
+concept HasValueSemanticResponseBodyPlan = requires(
+    const T& plan,
+    const T&& temporary) {
+    { plan.bodyPlan() } ->
+        std::same_as<ruvia::detail::HttpResponseBodyPlan>;
+    { temporary.bodyPlan() } ->
+        std::same_as<ruvia::detail::HttpResponseBodyPlan>;
+};
 
 static_assert(!std::default_initializable<
     ruvia::detail::Http1ResponseHeadPlan>);
@@ -50,6 +61,13 @@ static_assert(HasValueSemanticResponseWritePolicy<
     ruvia::detail::HttpResponseBodyPlan>);
 static_assert(HasValueSemanticResponseWritePolicy<
     ruvia::detail::HttpBufferedResponseWritePlan>);
+static_assert(HasValueSemanticResponseBodyPlan<
+    ruvia::detail::HttpBufferedResponseWritePlan>);
+static_assert(HasValueSemanticResponseBodyPlan<
+    ruvia::detail::Http1ResponseHeadPlan>);
+static_assert(std::is_trivially_copyable_v<
+    ruvia::detail::HttpResponseBodyPlan>);
+static_assert(sizeof(ruvia::detail::HttpResponseBodyPlan) <= 12);
 
 }  // namespace
 
@@ -73,7 +91,7 @@ RUVIA_TEST(response_write_plan_unifies_method_status_and_body_size) {
         std::uint16_t{200});
     RUVIA_CHECK(getPlan.statusAllowsBody());
     RUVIA_CHECK(
-        getPlan.bodyPlan().contentSemantics().withContent() != nullptr);
+        getPlan.bodyPlan().contentSemantics().withContent());
     RUVIA_CHECK(!getPlan.bodySuppressed());
     RUVIA_CHECK(getPlan.sendBody());
     RUVIA_CHECK_EQ(getPlan.contentLength(), static_cast<std::uint64_t>(5));
@@ -83,7 +101,7 @@ RUVIA_TEST(response_write_plan_unifies_method_status_and_body_size) {
     RUVIA_CHECK_EQ(headPlan.responseStatus(), std::uint16_t{200});
     RUVIA_CHECK(headPlan.bodyPlan().statusAllowsBody());
     RUVIA_CHECK(
-        headPlan.bodyPlan().contentSemantics().withoutContent() != nullptr);
+        headPlan.bodyPlan().contentSemantics().withoutContent());
     RUVIA_CHECK(headPlan.bodySuppressed());
     RUVIA_CHECK(!headPlan.sendBody());
     RUVIA_CHECK_EQ(headPlan.contentLength(), static_cast<std::uint64_t>(5));
@@ -94,7 +112,7 @@ RUVIA_TEST(response_write_plan_unifies_method_status_and_body_size) {
     RUVIA_CHECK_EQ(noContentPlan.responseStatus(), std::uint16_t{204});
     RUVIA_CHECK(!noContentPlan.bodyPlan().statusAllowsBody());
     RUVIA_CHECK(noContentPlan.bodyPlan()
-        .contentSemantics().withoutContent() != nullptr);
+        .contentSemantics().withoutContent());
     RUVIA_CHECK(noContentPlan.bodySuppressed());
     RUVIA_CHECK(!noContentPlan.sendBody());
     RUVIA_CHECK_EQ(noContentPlan.contentLength(), static_cast<std::uint64_t>(0));
@@ -104,7 +122,7 @@ RUVIA_TEST(response_write_plan_unifies_method_status_and_body_size) {
         ruvia::HttpKnownMethod::kGet, response);
     RUVIA_CHECK(!resetContentPlan.bodyPlan().statusAllowsBody());
     RUVIA_CHECK(resetContentPlan.bodyPlan()
-        .contentSemantics().withContent() != nullptr);
+        .contentSemantics().withContent());
     RUVIA_CHECK(resetContentPlan.bodySuppressed());
     RUVIA_CHECK(!resetContentPlan.sendBody());
     RUVIA_CHECK_EQ(resetContentPlan.contentLength(), static_cast<std::uint64_t>(0));
@@ -114,7 +132,7 @@ RUVIA_TEST(response_write_plan_unifies_method_status_and_body_size) {
         ruvia::HttpKnownMethod::kConnect, response);
     RUVIA_CHECK(connectPlan.statusAllowsBody());
     RUVIA_CHECK(connectPlan.bodyPlan()
-        .contentSemantics().connectTunnel() != nullptr);
+        .contentSemantics().connectTunnel());
     RUVIA_CHECK(connectPlan.bodySuppressed());
     RUVIA_CHECK(!connectPlan.sendBody());
     RUVIA_CHECK_EQ(connectPlan.contentLength(), static_cast<std::uint64_t>(0));
@@ -216,7 +234,7 @@ RUVIA_TEST(http1_response_head_framing_is_an_exclusive_plan) {
     RUVIA_CHECK(closeDelimited.chunkedStream() == nullptr);
     RUVIA_CHECK(closeDelimited.closeDelimitedStream() != nullptr);
     RUVIA_CHECK(
-        closeDelimited.bodyPlan().contentSemantics().withContent() != nullptr);
+        closeDelimited.bodyPlan().contentSemantics().withContent());
     RUVIA_CHECK_EQ(
         buffered.buffered()->contentLength(),
         std::uint64_t{5});

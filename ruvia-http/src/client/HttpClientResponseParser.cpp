@@ -279,7 +279,7 @@ using ResponsePlanningResult = std::variant<
     const auto contentSemantics = detail::httpResponseContentSemantics(
         request.method(), output.statusCode);
     const bool framingFieldsApply =
-        contentSemantics.withContent() != nullptr;
+        contentSemantics.withContent();
 
     auto remaining = firstLineEnd == std::string_view::npos
         ? std::string_view{}
@@ -381,14 +381,14 @@ using ResponsePlanningResult = std::variant<
     if (continueGated) {
         if (response.statusCode == 100) {
             requestContentSignal = Http1ClientRequestContentSignal::kContinue;
-        } else if (contentSemantics.protocolSwitch() != nullptr ||
+        } else if (contentSemantics.protocolSwitch() ||
                    response.statusCode >= 200) {
             requestContentSignal =
                 Http1ClientRequestContentSignal::kExchangeComplete;
         }
     }
 
-    if (contentSemantics.protocolSwitch() != nullptr) {
+    if (contentSemantics.protocolSwitch()) {
         if (response.protocolVersion != HttpProtocolVersion::kHttp11 ||
             response.contentLengthFieldPresent ||
             response.sawTransferEncoding ||
@@ -403,17 +403,17 @@ using ResponsePlanningResult = std::variant<
         return detail::Http1ClientResponsePlanAccess::protocolUpgrade(
             requestContentSignal);
     }
-    if (contentSemantics.informational() != nullptr) {
+    if (contentSemantics.informational()) {
         return detail::Http1ClientResponsePlanAccess::informational(
             requestContentSignal);
     }
-    if (contentSemantics.connectTunnel() != nullptr) {
+    if (contentSemantics.connectTunnel()) {
         return detail::Http1ClientResponsePlanAccess::connectTunnel(
             requestContentSignal);
     }
 
     const auto persistence = responsePersistence(request, response);
-    if (contentSemantics.withoutContent() != nullptr) {
+    if (contentSemantics.withoutContent()) {
         return detail::Http1ClientResponsePlanAccess::withoutContent(
             persistence,
             requestContentSignal);

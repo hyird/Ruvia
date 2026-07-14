@@ -117,7 +117,7 @@ bool http2OnDecodedResponseHeader(void* target, std::string_view name, std::stri
     const auto responseContentSemantics = httpResponseContentSemantics(
         stream.requestKnownMethod(), *context->status);
     const bool successfulConnect =
-        responseContentSemantics.connectTunnel() != nullptr;
+        responseContentSemantics.connectTunnel();
     if (kind == RequestHeaderKind::kContentLength && successfulConnect) {
         // RFC 9110 9.3.6: a client ignores Content-Length on a successful CONNECT
         // response. It describes neither HTTP content nor the following tunnel DATA.
@@ -175,12 +175,12 @@ HeaderDecodeStatus Http2Connection::decodeResponseHeaderBlock(Http2StreamState& 
     }
     const auto contentSemantics = httpResponseContentSemantics(
         stream.requestKnownMethod(), *context.status);
-    if (contentSemantics.withoutContent() != nullptr &&
+    if (contentSemantics.withoutContent() &&
         !stream.selectRemoteContentMetadataOnly()) {
         return HeaderDecodeStatus::kProtocolError;
     }
     if (stream.tunnel().pending() != nullptr) {
-        if (contentSemantics.connectTunnel() != nullptr) {
+        if (contentSemantics.connectTunnel()) {
             if (!stream.acceptConnect()) {
                 return HeaderDecodeStatus::kProtocolError;
             }

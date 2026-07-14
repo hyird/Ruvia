@@ -46,10 +46,22 @@ concept HasAnyRvaluePreparedResponseStreamBorrow =
     requires(T&& prepared) { std::move(prepared).responseHeadPlan(); } ||
     requires(T&& prepared) { std::move(prepared).commitPlan(); };
 
+template <typename T>
+concept HasValueSemanticResponseBodyPlan = requires(
+    const T& plan,
+    const T&& temporary) {
+    { plan.bodyPlan() } ->
+        std::same_as<ruvia::detail::HttpResponseBodyPlan>;
+    { temporary.bodyPlan() } ->
+        std::same_as<ruvia::detail::HttpResponseBodyPlan>;
+};
+
 static_assert(!HasAnyRvaluePreparedResponseStreamBorrow<
     ruvia::detail::ResponseStreamHead>);
 static_assert(!HasAnyRvaluePreparedResponseStreamBorrow<
     ruvia::detail::PreparedHttp1ResponseStream>);
+static_assert(HasValueSemanticResponseBodyPlan<
+    ruvia::detail::ResponseStreamCommitPlan>);
 
 ruvia::detail::PreparedHttp1ResponseStream prepareStream(
     ruvia::HttpResponse response,

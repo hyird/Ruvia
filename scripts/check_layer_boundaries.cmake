@@ -5565,7 +5565,15 @@ else()
            "class HttpResponseWithContent final" OR
        NOT http_response_content_semantics MATCHES "using State = std::variant" OR
        NOT http_response_content_semantics MATCHES
-           "std::get_if<HttpResponseWithoutContent>" OR
+           "std::holds_alternative<HttpResponseWithoutContent>" OR
+       NOT http_response_content_semantics MATCHES
+           "bool informational[(][)] const noexcept" OR
+       NOT http_response_content_semantics MATCHES
+           "bool withContent[(][)] const noexcept" OR
+       NOT http_response_content_semantics MATCHES
+           "is_trivially_copyable_v<HttpResponseContentSemantics>" OR
+       NOT http_response_content_semantics MATCHES
+           "sizeof[(]HttpResponseContentSemantics[)] <= 2" OR
        NOT http_response_content_semantics MATCHES
            "httpResponseContentSemantics" OR
        NOT http1_shared_response_semantics MATCHES
@@ -5575,10 +5583,18 @@ else()
        NOT http_response_write_plan MATCHES
            "HttpResponseContentSemantics semantics_" OR
        NOT http_response_write_plan MATCHES
-           "semantics_[.]withContent[(][)] == nullptr" OR
+           "HttpResponseContentSemantics[ \t\r\n]+contentSemantics[(][)] const noexcept" OR
+       NOT http_response_write_plan MATCHES
+           "HttpResponseBodyPlan bodyPlan[(][)] const noexcept" OR
+       NOT http_response_write_plan MATCHES
+           "is_trivially_copyable_v<HttpResponseBodyPlan>" OR
+       NOT http_response_write_plan MATCHES
+           "sizeof[(]HttpResponseBodyPlan[)] <= 12" OR
+       NOT http_response_write_plan MATCHES
+           "!semantics_[.]withContent[(][)]" OR
        http_response_write_plan MATCHES "bodySuppressed_")
         boundary_error("response content semantics split by protocol direction"
-            "informational, switch, CONNECT, without-content, and with-content alternatives must drive H1 client, H2 client, and server body plans")
+            "informational, switch, CONNECT, without-content, and with-content alternatives must drive H1 client, H2 client, and server body plans as cheap value facts")
     endif()
 endif()
 if(NOT EXISTS "${HTTP2_LOCAL_SEND_STATE}" OR
@@ -6225,13 +6241,15 @@ else()
        NOT http_response_content_semantics_test MATCHES
            "HttpKnownMethod::kGet, 205" OR
        NOT http_response_content_semantics_package_test MATCHES
-           "HasHttpResponseContentAlternatives" OR
+           "HasValueSemanticHttpResponseContentFacts" OR
+       NOT http_response_content_semantics_package_test MATCHES
+           "is_trivially_copyable_v<[\r\n \t]*ruvia::detail::HttpResponseContentSemantics>" OR
        NOT http_response_content_semantics_package_test MATCHES
            "!std::default_initializable<[\r\n \t]*ruvia::detail::HttpResponseContentSemantics>" OR
        NOT http_response_content_semantics_package_test MATCHES
            "httpResponseContentSemantics")
         boundary_error("shared response-content semantics ownership is under-tested"
-            "method/status precedence, case sensitivity, CONNECT, no-content, and installed alternatives must remain explicit")
+            "method/status precedence, case sensitivity, CONNECT, no-content, and installed value facts must remain explicit")
     endif()
 endif()
 if(NOT EXISTS "${HTTP2_PEER_SETTINGS_TEST}")
@@ -9602,6 +9620,12 @@ check_files_no_match("response write policy must remain a small value fact"
     "${RUVIA_ROOT}/ruvia-http/src/server/HttpResponseHead.cpp"
     "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/detail/server/HttpResponseStreamHead.h"
     "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/detail/http2/Http2ResponseHeadPlan.h")
+check_files_no_match("response body facts must remain value semantic"
+    "const[ \t]+auto&[ \t]+bodyPlan[ \t]*=[ \t]*(commitPlan|plan|writePlan)[.]bodyPlan[(][)]"
+    "${RUVIA_ROOT}/ruvia-http/src/server/HttpResponseHead.cpp"
+    "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/detail/http1/Http1ServerSemantics.h"
+    "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/detail/server/HttpResponseStreamHead.h"
+    "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/detail/http2/Http2ResponseHeadPlan.h")
 check_files_no_match("request and connection facts must remain value semantic"
     "const[ \t]+auto&[ \t]+(responseOptions|upgradeProtocols)[ \t]*=[ \t]*http1Control[.](connectionOptions|upgradeProtocols)[(][)]"
     "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/detail/http1/Http1ServerSemantics.h")
@@ -9639,9 +9663,13 @@ if(EXISTS "${HTTP_PROTOCOL_PLAN_RANGE}" AND
        NOT http_protocol_plan_range MATCHES
            "resolved[(][)] const && = delete" OR
        NOT http_protocol_plan_semantics MATCHES
-           "informational[(][)] const [&] noexcept" OR
+           "bool informational[(][)] const noexcept" OR
        NOT http_protocol_plan_semantics MATCHES
-           "withContent[(][)] const && = delete" OR
+           "bool withContent[(][)] const noexcept" OR
+       NOT http_protocol_plan_semantics MATCHES
+           "is_trivially_copyable_v<HttpResponseContentSemantics>" OR
+       NOT http_protocol_plan_semantics MATCHES
+           "sizeof[(]HttpResponseContentSemantics[)] <= 2" OR
        NOT http_protocol_plan_write MATCHES
            "ResponseWritePolicy[ \t]+policy[(][)] const noexcept" OR
        http_protocol_plan_write MATCHES
@@ -9651,9 +9679,13 @@ if(EXISTS "${HTTP_PROTOCOL_PLAN_RANGE}" AND
        NOT http_protocol_plan_policy MATCHES
            "sizeof[(]ResponseWritePolicy[)] <= 4" OR
        NOT http_protocol_plan_write MATCHES
-           "contentSemantics[(][)] const && = delete" OR
+           "HttpResponseContentSemantics[ \t\r\n]+contentSemantics[(][)] const noexcept" OR
        NOT http_protocol_plan_write MATCHES
-           "bodyPlan[(][)] const && = delete" OR
+           "HttpResponseBodyPlan bodyPlan[(][)] const noexcept" OR
+       NOT http_protocol_plan_write MATCHES
+           "is_trivially_copyable_v<HttpResponseBodyPlan>" OR
+       NOT http_protocol_plan_write MATCHES
+           "sizeof[(]HttpResponseBodyPlan[)] <= 12" OR
        NOT http_protocol_plan_h1_request MATCHES
            "withoutBody[(][)] const [&] noexcept" OR
        NOT http_protocol_plan_h1_request MATCHES
@@ -9669,6 +9701,8 @@ if(EXISTS "${HTTP_PROTOCOL_PLAN_RANGE}" AND
        NOT http_protocol_plan_h1_response MATCHES
            "closeDelimitedStream[(][)] const && = delete" OR
        NOT http_protocol_plan_h1_response MATCHES
+           "HttpResponseBodyPlan bodyPlan[(][)] const noexcept" OR
+       NOT http_protocol_plan_h1_response MATCHES
            "writePlan[(][)] const && = delete" OR
        NOT http_protocol_plan_h1_response MATCHES
            "headPlan[(][)] const && = delete" OR
@@ -9680,6 +9714,8 @@ if(EXISTS "${HTTP_PROTOCOL_PLAN_RANGE}" AND
            "canonicalContentLength[(][)] const [&] noexcept" OR
        NOT http_protocol_plan_h2_response MATCHES
            "forbiddenContentLength[(][)] const && = delete" OR
+       NOT http_protocol_plan_h2_response MATCHES
+           "HttpResponseBodyPlan bodyPlan[(][)] const noexcept" OR
        NOT http_protocol_plan_control MATCHES
            "http1[(][)] const [&] noexcept" OR
        NOT http_protocol_plan_control MATCHES
@@ -9699,15 +9735,17 @@ if(EXISTS "${HTTP_PROTOCOL_PLAN_RANGE}" AND
        NOT http_protocol_connection_facts MATCHES
            "sizeof[(]HttpUpgradeProtocols[)] <= 2" OR
        NOT http_protocol_plan_stream MATCHES
-           "bodyPlan[(][)] const [&] noexcept" OR
-       NOT http_protocol_plan_stream MATCHES
-           "bodyPlan[(][)] const && = delete" OR
+           "HttpResponseBodyPlan bodyPlan[(][)] const noexcept" OR
        NOT http_protocol_plan_consumer MATCHES
            "ExposesAnyRvalueHttpProtocolPlanBorrow" OR
        NOT http_protocol_plan_consumer MATCHES
-           "HasValueSemanticResponseWritePolicy")
-        boundary_error("HTTP protocol plans lend internal storage from temporary owners"
-            "immutable byte-range, content, HTTP/1, HTTP/2, control, and stream plans must expose borrowed pointers/references only from live lvalues")
+           "HasValueSemanticResponseWritePolicy" OR
+       NOT http_protocol_plan_consumer MATCHES
+           "HasValueSemanticHttpResponseContentFacts" OR
+       NOT http_protocol_plan_consumer MATCHES
+           "HasValueSemanticResponseBodyPlan")
+        boundary_error("HTTP protocol plan fact ownership is inconsistent"
+            "payload alternatives may borrow only from live lvalues, while cheap response semantics, body plans, request facts, and connection facts must propagate by value")
     endif()
 endif()
 

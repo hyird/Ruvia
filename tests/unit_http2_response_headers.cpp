@@ -1,5 +1,6 @@
 #include "test_harness.h"
 
+#include <concepts>
 #include <cstddef>
 #include <memory_resource>
 #include <span>
@@ -29,6 +30,14 @@ using ruvia::detail::Http2StreamState;
 
 static_assert(!std::is_default_constructible_v<Http2ResponseHeadPlan>);
 static_assert(!std::is_default_constructible_v<Http2ResponseHeadPlanResult>);
+static_assert(requires(
+    const Http2ResponseHeadPlan& plan,
+    const Http2ResponseHeadPlan&& temporary) {
+    { plan.bodyPlan() } ->
+        std::same_as<ruvia::detail::HttpResponseBodyPlan>;
+    { temporary.bodyPlan() } ->
+        std::same_as<ruvia::detail::HttpResponseBodyPlan>;
+});
 
 enum class ResponseHeadMode : std::uint8_t {
     kBuffered,
@@ -241,7 +250,7 @@ RUVIA_TEST(http2_response_head_content_length_plan_is_exclusive) {
         return;
     }
     RUVIA_CHECK(
-        connectPlan->bodyPlan().contentSemantics().connectTunnel() != nullptr);
+        connectPlan->bodyPlan().contentSemantics().connectTunnel());
     RUVIA_CHECK(connectPlan->forbiddenContentLength() != nullptr);
 
     const auto invalidConnectPlan =

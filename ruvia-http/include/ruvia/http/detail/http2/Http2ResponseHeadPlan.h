@@ -73,10 +73,9 @@ class Http2ResponseHeadPlanResult;
 
 class Http2ResponseHeadPlan final {
 public:
-    [[nodiscard]] const HttpResponseBodyPlan& bodyPlan() const & noexcept {
+    [[nodiscard]] HttpResponseBodyPlan bodyPlan() const noexcept {
         return bodyPlan_;
     }
-    [[nodiscard]] const HttpResponseBodyPlan& bodyPlan() const && = delete;
 
     [[nodiscard]] const Http2CanonicalResponseContentLength*
     canonicalContentLength() const & noexcept {
@@ -222,7 +221,7 @@ private:
 http2BufferedResponseHeadPlan(
     const HttpBufferedResponseWritePlan& writePlan,
     const HttpResponse& response) noexcept {
-    const auto& bodyPlan = writePlan.bodyPlan();
+    const auto bodyPlan = writePlan.bodyPlan();
     if (writePlan.responseStatus() != response.status()) {
         return Http2ResponseHeadPlanResult::failure(
             Http2ResponseHeadPlanError::kResponseStatusMismatch);
@@ -262,7 +261,7 @@ http2StreamingResponseHeadPlan(
 [[nodiscard]] inline Http2ResponseHeadPlanResult
 http2ConnectResponseHeadPlan(
     const HttpResponseBodyPlan& bodyPlan) noexcept {
-    return bodyPlan.contentSemantics().connectTunnel() != nullptr
+    return bodyPlan.contentSemantics().connectTunnel()
         ? Http2ResponseHeadPlanResult::forbidden(bodyPlan)
         : Http2ResponseHeadPlanResult::failure(
               Http2ResponseHeadPlanError::kConnectTunnelRequired);

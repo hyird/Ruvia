@@ -252,9 +252,21 @@ file(READ "${_installed_http_protocol_client_request_context}"
 if(NOT _installed_http_protocol_plan_range_text MATCHES
        "resolved[(][)] const && = delete" OR
    NOT _installed_http_protocol_plan_semantics_text MATCHES
-       "withContent[(][)] const && = delete" OR
+       "bool informational[(][)] const noexcept" OR
+   NOT _installed_http_protocol_plan_semantics_text MATCHES
+       "bool withContent[(][)] const noexcept" OR
+   NOT _installed_http_protocol_plan_semantics_text MATCHES
+       "is_trivially_copyable_v<HttpResponseContentSemantics>" OR
+   NOT _installed_http_protocol_plan_semantics_text MATCHES
+       "sizeof[(]HttpResponseContentSemantics[)] <= 2" OR
    NOT _installed_http_protocol_plan_write_text MATCHES
-       "contentSemantics[(][)] const && = delete" OR
+       "HttpResponseContentSemantics[ \t\r\n]+contentSemantics[(][)] const noexcept" OR
+   NOT _installed_http_protocol_plan_write_text MATCHES
+       "HttpResponseBodyPlan bodyPlan[(][)] const noexcept" OR
+   NOT _installed_http_protocol_plan_write_text MATCHES
+       "is_trivially_copyable_v<HttpResponseBodyPlan>" OR
+   NOT _installed_http_protocol_plan_write_text MATCHES
+       "sizeof[(]HttpResponseBodyPlan[)] <= 12" OR
    NOT _installed_http_protocol_plan_h1_request_text MATCHES
        "HttpRequestExpectations[ \t]+expectations[(][)] const noexcept" OR
    NOT _installed_http_protocol_request_facts_text MATCHES
@@ -262,9 +274,13 @@ if(NOT _installed_http_protocol_plan_range_text MATCHES
    NOT _installed_http_protocol_request_facts_text MATCHES
        "sizeof[(]HttpRequestExpectations[)] <= 1" OR
    NOT _installed_http_protocol_plan_h1_response_text MATCHES
+       "HttpResponseBodyPlan bodyPlan[(][)] const noexcept" OR
+   NOT _installed_http_protocol_plan_h1_response_text MATCHES
        "headPlan[(][)] const && = delete" OR
    NOT _installed_http_protocol_plan_h2_request_text MATCHES
        "streamingContent[(][)] const && = delete" OR
+   NOT _installed_http_protocol_plan_h2_response_text MATCHES
+       "HttpResponseBodyPlan bodyPlan[(][)] const noexcept" OR
    NOT _installed_http_protocol_plan_h2_response_text MATCHES
        "forbiddenContentLength[(][)] const && = delete" OR
    NOT _installed_http_protocol_plan_control_text MATCHES
@@ -284,9 +300,9 @@ if(NOT _installed_http_protocol_plan_range_text MATCHES
    NOT _installed_http_protocol_connection_facts_text MATCHES
        "sizeof[(]HttpUpgradeProtocols[)] <= 2" OR
    NOT _installed_http_protocol_plan_stream_text MATCHES
-       "bodyPlan[(][)] const && = delete")
+       "HttpResponseBodyPlan bodyPlan[(][)] const noexcept")
     message(FATAL_ERROR
-        "installed HTTP protocol plans expose internal storage from temporary owners")
+        "installed HTTP protocol plan fact ownership is inconsistent")
 endif()
 
 set(_installed_http_operation_payload_request
@@ -372,6 +388,8 @@ file(READ "${_installed_http1_response_stream_path}"
     _installed_http1_response_stream)
 if(NOT _installed_response_stream_commit MATCHES
        "std::uint16_t responseStatus[(][)] const noexcept" OR
+   NOT _installed_response_stream_commit MATCHES
+       "HttpResponseBodyPlan bodyPlan[(][)] const noexcept" OR
    NOT _installed_response_stream_commit MATCHES
        "ResponseStreamFraming framing[(][)] const noexcept" OR
    NOT _installed_response_stream_commit MATCHES
@@ -3045,6 +3063,16 @@ if(NOT _installed_response_content_semantics MATCHES
        "class HttpResponseWithContent final" OR
    NOT _installed_response_content_semantics MATCHES "using State = std::variant" OR
    NOT _installed_response_content_semantics MATCHES
+       "std::holds_alternative<HttpResponseWithoutContent>" OR
+   NOT _installed_response_content_semantics MATCHES
+       "bool informational[(][)] const noexcept" OR
+   NOT _installed_response_content_semantics MATCHES
+       "bool withContent[(][)] const noexcept" OR
+   NOT _installed_response_content_semantics MATCHES
+       "is_trivially_copyable_v<HttpResponseContentSemantics>" OR
+   NOT _installed_response_content_semantics MATCHES
+       "sizeof[(]HttpResponseContentSemantics[)] <= 2" OR
+   NOT _installed_response_content_semantics MATCHES
        "httpResponseContentSemantics" OR
    NOT _installed_response_write_plan MATCHES
        "HttpResponseContentSemantics semantics_" OR
@@ -3058,10 +3086,18 @@ if(NOT _installed_response_content_semantics MATCHES
        "bufferedRepresentationLength" OR
    NOT _installed_response_write_plan MATCHES
        "return bodyPlan_[.]responseStatus[(][)]" OR
+   NOT _installed_response_write_plan MATCHES
+       "HttpResponseContentSemantics[ \t\r\n]+contentSemantics[(][)] const noexcept" OR
+   NOT _installed_response_write_plan MATCHES
+       "HttpResponseBodyPlan bodyPlan[(][)] const noexcept" OR
+   NOT _installed_response_write_plan MATCHES
+       "is_trivially_copyable_v<HttpResponseBodyPlan>" OR
+   NOT _installed_response_write_plan MATCHES
+       "sizeof[(]HttpResponseBodyPlan[)] <= 12" OR
    _installed_response_write_plan MATCHES
        "httpBufferedResponseWritePlan[ \t\r\n]*[(][ \t\r\n]*const[ \t]+HttpResponseBodyPlan[&]" OR
    NOT _installed_response_write_plan MATCHES
-       "semantics_[.]withContent[(][)] == nullptr" OR
+       "!semantics_[.]withContent[(][)]" OR
    NOT _installed_response_write_plan MATCHES
        "ResponseWritePolicy[ \t]+policy[(][)] const noexcept" OR
    _installed_response_write_plan MATCHES
@@ -3111,6 +3147,8 @@ if(NOT _installed_http1_response_head_plan MATCHES
        "std::get_if<Http1CloseDelimitedResponseStreamHead>" OR
    NOT _installed_http1_response_head_plan MATCHES
        "HttpResponseBodyPlan bodyPlan_" OR
+   NOT _installed_http1_response_head_plan MATCHES
+       "HttpResponseBodyPlan bodyPlan[(][)] const noexcept" OR
    NOT _installed_http1_response_head_plan MATCHES
        "std::uint64_t contentLength_" OR
    NOT _installed_http1_response_head_plan MATCHES
@@ -3208,6 +3246,8 @@ if(NOT _installed_http2_response_head_plan MATCHES
        "class Http2ForbiddenResponseContentLength final" OR
    NOT _installed_http2_response_head_plan MATCHES
        "class Http2ResponseHeadPlan final" OR
+   NOT _installed_http2_response_head_plan MATCHES
+       "HttpResponseBodyPlan bodyPlan[(][)] const noexcept" OR
    NOT _installed_http2_response_head_plan MATCHES
        "using ContentLength = std::variant" OR
    NOT _installed_http2_response_head_plan MATCHES

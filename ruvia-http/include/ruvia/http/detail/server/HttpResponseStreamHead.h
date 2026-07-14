@@ -65,10 +65,9 @@ public:
         return framing_;
     }
 
-    [[nodiscard]] const HttpResponseBodyPlan& bodyPlan() const & noexcept {
+    [[nodiscard]] HttpResponseBodyPlan bodyPlan() const noexcept {
         return bodyPlan_;
     }
-    [[nodiscard]] const HttpResponseBodyPlan& bodyPlan() const && = delete;
 
     [[nodiscard]] ResponseStreamTrailerFraming trailerFraming() const noexcept {
         return trailerFraming_;
@@ -165,7 +164,7 @@ private:
             "response stream commit plan status does not match response");
     }
     const auto framing = commitPlan.framing();
-    const auto& bodyPlan = commitPlan.bodyPlan();
+    const auto bodyPlan = commitPlan.bodyPlan();
     const auto policy = bodyPlan.policy();
     const bool writerOwnsHttp1Chunked =
         framing == ResponseStreamFraming::kHttp1Chunked &&

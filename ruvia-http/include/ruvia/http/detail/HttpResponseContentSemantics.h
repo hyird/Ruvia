@@ -2,6 +2,7 @@
 
 #include <cstdint>
 #include <string_view>
+#include <type_traits>
 #include <variant>
 
 #include "ruvia/http/HttpKnownMethod.h"
@@ -52,40 +53,25 @@ private:
 // content and a response that is defined to have no content at all.
 class HttpResponseContentSemantics final {
 public:
-    [[nodiscard]] constexpr const HttpInformationalResponseContent*
-    informational() const & noexcept {
-        return std::get_if<HttpInformationalResponseContent>(&state_);
+    [[nodiscard]] constexpr bool informational() const noexcept {
+        return std::holds_alternative<HttpInformationalResponseContent>(state_);
     }
-    [[nodiscard]] constexpr const HttpInformationalResponseContent*
-    informational() const && = delete;
 
-    [[nodiscard]] constexpr const HttpProtocolSwitchResponseContent*
-    protocolSwitch() const & noexcept {
-        return std::get_if<HttpProtocolSwitchResponseContent>(&state_);
+    [[nodiscard]] constexpr bool protocolSwitch() const noexcept {
+        return std::holds_alternative<HttpProtocolSwitchResponseContent>(state_);
     }
-    [[nodiscard]] constexpr const HttpProtocolSwitchResponseContent*
-    protocolSwitch() const && = delete;
 
-    [[nodiscard]] constexpr const HttpConnectTunnelResponseContent*
-    connectTunnel() const & noexcept {
-        return std::get_if<HttpConnectTunnelResponseContent>(&state_);
+    [[nodiscard]] constexpr bool connectTunnel() const noexcept {
+        return std::holds_alternative<HttpConnectTunnelResponseContent>(state_);
     }
-    [[nodiscard]] constexpr const HttpConnectTunnelResponseContent*
-    connectTunnel() const && = delete;
 
-    [[nodiscard]] constexpr const HttpResponseWithoutContent*
-    withoutContent() const & noexcept {
-        return std::get_if<HttpResponseWithoutContent>(&state_);
+    [[nodiscard]] constexpr bool withoutContent() const noexcept {
+        return std::holds_alternative<HttpResponseWithoutContent>(state_);
     }
-    [[nodiscard]] constexpr const HttpResponseWithoutContent*
-    withoutContent() const && = delete;
 
-    [[nodiscard]] constexpr const HttpResponseWithContent*
-    withContent() const & noexcept {
-        return std::get_if<HttpResponseWithContent>(&state_);
+    [[nodiscard]] constexpr bool withContent() const noexcept {
+        return std::holds_alternative<HttpResponseWithContent>(state_);
     }
-    [[nodiscard]] constexpr const HttpResponseWithContent*
-    withContent() const && = delete;
 
 private:
     friend constexpr HttpResponseContentSemantics httpResponseContentSemantics(
@@ -123,6 +109,9 @@ private:
 
     State state_;
 };
+
+static_assert(std::is_trivially_copyable_v<HttpResponseContentSemantics>);
+static_assert(sizeof(HttpResponseContentSemantics) <= 2);
 
 [[nodiscard]] constexpr HttpResponseContentSemantics
 httpResponseContentSemantics(

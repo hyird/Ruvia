@@ -75,10 +75,9 @@ public:
     [[nodiscard]] constexpr const Http1CloseDelimitedResponseStreamHead*
     closeDelimitedStream() const && = delete;
 
-    [[nodiscard]] constexpr const HttpResponseBodyPlan& bodyPlan() const & noexcept {
+    [[nodiscard]] constexpr HttpResponseBodyPlan bodyPlan() const noexcept {
         return bodyPlan_;
     }
-    [[nodiscard]] constexpr const HttpResponseBodyPlan& bodyPlan() const && = delete;
 
     [[nodiscard]] constexpr HttpProtocolVersion
     protocolVersion() const noexcept {
