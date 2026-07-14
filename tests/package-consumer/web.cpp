@@ -348,6 +348,7 @@ concept ExposesAnyRvalueWebExecutionBorrow =
     requires(T&& value) {
         requires std::is_pointer_v<decltype(std::move(value).completed())>;
     } ||
+    requires(T&& value) { std::move(value).committed(); } ||
     requires(T&& value) { std::move(value).peerAbortedBeforeCommit(); } ||
     requires(T&& value) { std::move(value).peerAbortedAfterCommit(); } ||
     requires(T&& value) { std::move(value).failedBeforeCommit(); } ||
@@ -1101,12 +1102,20 @@ static_assert(!HasLegacySharedStreamResponse<
     ruvia::detail::ResponseStreamDispatchResult>);
 static_assert(std::same_as<
     decltype(std::declval<const ruvia::detail::
-        ResponseStreamDispatchResult&>().completed()),
-    const ruvia::detail::ResponseStreamCompleted*>);
+        ResponseStreamDispatchResult&>().committed()),
+    const ruvia::detail::ResponseStreamCommitted*>);
 static_assert(std::same_as<
     decltype(std::declval<const ruvia::detail::
         ResponseStreamDispatchResult&>().peerAbortedBeforeCommit()),
     const ruvia::detail::ResponseStreamPeerAbortedBeforeCommit*>);
+static_assert(std::same_as<
+    decltype(std::declval<const ruvia::detail::
+        ResponseStreamCommitted&>().outcome()),
+    ruvia::detail::ResponseStreamCommittedOutcome>);
+static_assert(std::same_as<
+    decltype(std::declval<const ruvia::detail::
+        ResponseStreamBuffered&>().failed()),
+    bool>);
 static_assert(std::same_as<
     decltype(std::declval<const ruvia::detail::ResponseStreamState&>()
                  .commitPlan()),

@@ -433,45 +433,28 @@ Task<void> runHttp2SansIoSession(
                         auto* s = connection.stream(streamId);
                         return s == nullptr || s->isAborted();
                     });
-                if (const auto* failed = result.failedAfterCommit()) {
-                    (void)connection.submitReset(
-                        streamId,
-                        Http2ErrorCode::kInternalError);
-                    wakeWriter();
-                    recordHttpAccess(
-                        options.accessLog,
-                        request,
-                        remoteAddress,
-                        failed->status(),
-                        requestStart);
-                    co_return;
-                }
                 if (result.peerAbortedBeforeCommit() != nullptr) {
                     // No final response head existed, so there is no HTTP status to
                     // report through the response-completion access-log callback.
                     co_return;
                 }
-                if (const auto* peer = result.peerAbortedAfterCommit()) {
+                if (const auto* committed = result.committed()) {
+                    if (committed->outcome() ==
+                        ResponseStreamCommittedOutcome::kFailed) {
+                        (void)connection.submitReset(
+                            streamId,
+                            Http2ErrorCode::kInternalError);
+                        wakeWriter();
+                    }
                     recordHttpAccess(
                         options.accessLog,
                         request,
                         remoteAddress,
-                        peer->status(),
+                        committed->status(),
                         requestStart);
                     co_return;
                 }
-                if (const auto* completed = result.completed()) {
-                    recordHttpAccess(
-                        options.accessLog,
-                        request,
-                        remoteAddress,
-                        completed->status(),
-                        requestStart);
-                    co_return;
-                }
-                if (auto* failed = result.failedBeforeCommit()) {
-                    response = std::move(*failed).takeResponse();
-                } else if (auto* buffered = result.buffered()) {
+                if (auto* buffered = result.buffered()) {
                     response = std::move(*buffered).takeResponse();
                 } else {
                     throw std::logic_error(

@@ -74,19 +74,37 @@ template <typename Sink>
         &responseStreamAbortedThunk<Sink>);
 }
 
-class ResponseStreamCompleted final {
+enum class ResponseStreamCommittedOutcome : std::uint8_t {
+    kCompleted,
+    kPeerAborted,
+    kFailed
+};
+
+// Once the final head is committed, every terminal outcome owns the same wire
+// fact: its exact status. The outcome only tells the protocol driver whether it
+// must recover the transport before returning.
+class ResponseStreamCommitted final {
 public:
     [[nodiscard]] constexpr std::uint16_t status() const noexcept {
         return status_;
     }
 
+    [[nodiscard]] constexpr ResponseStreamCommittedOutcome
+    outcome() const noexcept {
+        return outcome_;
+    }
+
 private:
     friend class ResponseStreamDispatchResult;
 
-    explicit constexpr ResponseStreamCompleted(std::uint16_t status) noexcept
-        : status_(status) {}
+    constexpr ResponseStreamCommitted(
+        std::uint16_t status,
+        ResponseStreamCommittedOutcome outcome) noexcept
+        : status_(status),
+          outcome_(outcome) {}
 
     std::uint16_t status_;
+    ResponseStreamCommittedOutcome outcome_;
 };
 
 class ResponseStreamPeerAbortedBeforeCommit final {
@@ -96,40 +114,12 @@ private:
     constexpr ResponseStreamPeerAbortedBeforeCommit() noexcept = default;
 };
 
-class ResponseStreamPeerAbortedAfterCommit final {
-public:
-    [[nodiscard]] constexpr std::uint16_t status() const noexcept {
-        return status_;
-    }
-
-private:
-    friend class ResponseStreamDispatchResult;
-
-    explicit constexpr ResponseStreamPeerAbortedAfterCommit(
-        std::uint16_t status) noexcept
-        : status_(status) {}
-
-    std::uint16_t status_;
-};
-
-class ResponseStreamFailedAfterCommit final {
-public:
-    [[nodiscard]] constexpr std::uint16_t status() const noexcept {
-        return status_;
-    }
-
-private:
-    friend class ResponseStreamDispatchResult;
-
-    explicit constexpr ResponseStreamFailedAfterCommit(
-        std::uint16_t status) noexcept
-        : status_(status) {}
-
-    std::uint16_t status_;
-};
-
 class ResponseStreamBuffered final {
 public:
+    [[nodiscard]] constexpr bool failed() const noexcept {
+        return failed_;
+    }
+
     [[nodiscard]] HttpResponse takeResponse() && noexcept {
         return std::move(response_);
     }
@@ -137,35 +127,26 @@ public:
 private:
     friend class ResponseStreamDispatchResult;
 
-    explicit ResponseStreamBuffered(HttpResponse response) noexcept
-        : response_(std::move(response)) {}
+    ResponseStreamBuffered(
+        HttpResponse response,
+        bool failed) noexcept
+        : response_(std::move(response)),
+          failed_(failed) {}
 
     HttpResponse response_;
+    bool failed_;
 };
 
-class ResponseStreamFailedBeforeCommit final {
-public:
-    [[nodiscard]] HttpResponse takeResponse() && noexcept {
-        return std::move(response_);
-    }
-
-private:
-    friend class ResponseStreamDispatchResult;
-
-    explicit ResponseStreamFailedBeforeCommit(HttpResponse response) noexcept
-        : response_(std::move(response)) {}
-
-    HttpResponse response_;
-};
-
-// Every terminal stream-dispatch state owns exactly the payload valid for that
-// state. In particular, a committed state carries the exact status from the
-// protocol commit plan, while a pre-commit peer abort owns no fictitious response.
+// The primary alternatives follow the commit boundary because it determines
+// which payload exists: committed outcomes own a status, buffered outcomes own
+// a response, and a pre-commit peer abort owns neither.
 class ResponseStreamDispatchResult final {
 public:
-    [[nodiscard]] static ResponseStreamDispatchResult makeCompleted(
-        std::uint16_t status) noexcept {
-        return ResponseStreamDispatchResult(ResponseStreamCompleted(status));
+    [[nodiscard]] static ResponseStreamDispatchResult makeCommitted(
+        std::uint16_t status,
+        ResponseStreamCommittedOutcome outcome) noexcept {
+        return ResponseStreamDispatchResult(
+            ResponseStreamCommitted(status, outcome));
     }
 
     [[nodiscard]] static ResponseStreamDispatchResult
@@ -174,34 +155,19 @@ public:
             ResponseStreamPeerAbortedBeforeCommit{});
     }
 
-    [[nodiscard]] static ResponseStreamDispatchResult
-    makePeerAbortedAfterCommit(std::uint16_t status) noexcept {
-        return ResponseStreamDispatchResult(
-            ResponseStreamPeerAbortedAfterCommit(status));
-    }
-
-    [[nodiscard]] static ResponseStreamDispatchResult makeFailedAfterCommit(
-        std::uint16_t status) noexcept {
-        return ResponseStreamDispatchResult(
-            ResponseStreamFailedAfterCommit(status));
-    }
-
     [[nodiscard]] static ResponseStreamDispatchResult makeBuffered(
-        HttpResponse response) noexcept {
+        HttpResponse response,
+        bool failed) noexcept {
         return ResponseStreamDispatchResult(
-            ResponseStreamBuffered(std::move(response)));
+            ResponseStreamBuffered(std::move(response), failed));
     }
 
-    [[nodiscard]] static ResponseStreamDispatchResult makeFailedBeforeCommit(
-        HttpResponse response) noexcept {
-        return ResponseStreamDispatchResult(
-            ResponseStreamFailedBeforeCommit(std::move(response)));
+    [[nodiscard]] const ResponseStreamCommitted*
+    committed() const & noexcept {
+        return std::get_if<ResponseStreamCommitted>(&value_);
     }
-
-    [[nodiscard]] const ResponseStreamCompleted* completed() const & noexcept {
-        return std::get_if<ResponseStreamCompleted>(&value_);
-    }
-    [[nodiscard]] const ResponseStreamCompleted* completed() const && = delete;
+    [[nodiscard]] const ResponseStreamCommitted*
+    committed() const && = delete;
 
     [[nodiscard]] const ResponseStreamPeerAbortedBeforeCommit*
     peerAbortedBeforeCommit() const & noexcept {
@@ -209,20 +175,6 @@ public:
     }
     [[nodiscard]] const ResponseStreamPeerAbortedBeforeCommit*
     peerAbortedBeforeCommit() const && = delete;
-
-    [[nodiscard]] const ResponseStreamPeerAbortedAfterCommit*
-    peerAbortedAfterCommit() const & noexcept {
-        return std::get_if<ResponseStreamPeerAbortedAfterCommit>(&value_);
-    }
-    [[nodiscard]] const ResponseStreamPeerAbortedAfterCommit*
-    peerAbortedAfterCommit() const && = delete;
-
-    [[nodiscard]] const ResponseStreamFailedAfterCommit*
-    failedAfterCommit() const & noexcept {
-        return std::get_if<ResponseStreamFailedAfterCommit>(&value_);
-    }
-    [[nodiscard]] const ResponseStreamFailedAfterCommit*
-    failedAfterCommit() const && = delete;
 
     [[nodiscard]] const ResponseStreamBuffered* buffered() const & noexcept {
         return std::get_if<ResponseStreamBuffered>(&value_);
@@ -234,28 +186,11 @@ public:
     }
     [[nodiscard]] ResponseStreamBuffered* buffered() && = delete;
 
-    [[nodiscard]] const ResponseStreamFailedBeforeCommit*
-    failedBeforeCommit() const & noexcept {
-        return std::get_if<ResponseStreamFailedBeforeCommit>(&value_);
-    }
-    [[nodiscard]] const ResponseStreamFailedBeforeCommit*
-    failedBeforeCommit() const && = delete;
-
-    [[nodiscard]] ResponseStreamFailedBeforeCommit*
-    failedBeforeCommit() & noexcept {
-        return std::get_if<ResponseStreamFailedBeforeCommit>(&value_);
-    }
-    [[nodiscard]] ResponseStreamFailedBeforeCommit*
-    failedBeforeCommit() && = delete;
-
 private:
     using Value = std::variant<
-        ResponseStreamCompleted,
+        ResponseStreamCommitted,
         ResponseStreamPeerAbortedBeforeCommit,
-        ResponseStreamPeerAbortedAfterCommit,
-        ResponseStreamFailedAfterCommit,
-        ResponseStreamBuffered,
-        ResponseStreamFailedBeforeCommit>;
+        ResponseStreamBuffered>;
 
     template <typename Alternative>
     explicit ResponseStreamDispatchResult(Alternative alternative) noexcept
@@ -302,16 +237,18 @@ Task<ResponseStreamDispatchResult> dispatchResponseStreamWith(
                 co_return ResponseStreamDispatchResult::
                     makePeerAbortedBeforeCommit();
             }
-            co_return ResponseStreamDispatchResult::makePeerAbortedAfterCommit(
-                committedResponseStreamStatus(sink));
+            co_return ResponseStreamDispatchResult::makeCommitted(
+                committedResponseStreamStatus(sink),
+                ResponseStreamCommittedOutcome::kPeerAborted);
         }
         if (result.handled() != nullptr) {
             if (!sink.committed()) {
                 throw std::logic_error(
                     "handled response stream has no committed protocol plan");
             }
-            co_return ResponseStreamDispatchResult::makeCompleted(
-                committedResponseStreamStatus(sink));
+            co_return ResponseStreamDispatchResult::makeCommitted(
+                committedResponseStreamStatus(sink),
+                ResponseStreamCommittedOutcome::kCompleted);
         }
         if (sink.committed()) {
             throw std::logic_error(
@@ -323,7 +260,8 @@ Task<ResponseStreamDispatchResult> dispatchResponseStreamWith(
                 "stream route returned no terminal alternative");
         }
         co_return ResponseStreamDispatchResult::makeBuffered(
-            std::move(*buffered));
+            std::move(*buffered),
+            false);
     } catch (...) {
         exception = std::current_exception();
     }
@@ -337,17 +275,20 @@ Task<ResponseStreamDispatchResult> dispatchResponseStreamWith(
             co_return ResponseStreamDispatchResult::
                 makePeerAbortedBeforeCommit();
         }
-        co_return ResponseStreamDispatchResult::makePeerAbortedAfterCommit(
-            committedResponseStreamStatus(sink));
+        co_return ResponseStreamDispatchResult::makeCommitted(
+            committedResponseStreamStatus(sink),
+            ResponseStreamCommittedOutcome::kPeerAborted);
     }
     if (sink.committed()) {
-        co_return ResponseStreamDispatchResult::makeFailedAfterCommit(
-            committedResponseStreamStatus(sink));
+        co_return ResponseStreamDispatchResult::makeCommitted(
+            committedResponseStreamStatus(sink),
+            ResponseStreamCommittedOutcome::kFailed);
     }
     auto response = co_await routes.handleException(
         request, requestMemory, exception, services);
-    co_return ResponseStreamDispatchResult::makeFailedBeforeCommit(
-        std::move(response));
+    co_return ResponseStreamDispatchResult::makeBuffered(
+        std::move(response),
+        true);
 }
 
 }  // namespace ruvia::detail

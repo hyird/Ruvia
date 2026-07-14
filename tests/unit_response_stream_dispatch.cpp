@@ -36,6 +36,7 @@ using ruvia::Task;
 using ruvia::detail::ControllerMiddlewareDescriptor;
 using ruvia::detail::HttpRequestAccess;
 using ruvia::detail::ResponseStreamCommitPlan;
+using ruvia::detail::ResponseStreamCommittedOutcome;
 using ruvia::detail::ResponseStreamDispatchResult;
 using ruvia::detail::ResponseStreamFraming;
 using ruvia::detail::ResponseStreamKind;
@@ -54,12 +55,9 @@ concept HasLegacySharedResponseTake = requires(Result& result) {
 
 template <typename Result>
 concept HasAnyRvalueResponseStreamDispatchBorrow =
-    requires(Result&& value) { std::move(value).completed(); } ||
+    requires(Result&& value) { std::move(value).committed(); } ||
     requires(Result&& value) { std::move(value).peerAbortedBeforeCommit(); } ||
-    requires(Result&& value) { std::move(value).peerAbortedAfterCommit(); } ||
-    requires(Result&& value) { std::move(value).failedAfterCommit(); } ||
-    requires(Result&& value) { std::move(value).buffered(); } ||
-    requires(Result&& value) { std::move(value).failedBeforeCommit(); };
+    requires(Result&& value) { std::move(value).buffered(); };
 
 static_assert(!std::default_initializable<ResponseStreamDispatchResult>);
 static_assert(!HasAnyRvalueResponseStreamDispatchBorrow<
@@ -67,8 +65,8 @@ static_assert(!HasAnyRvalueResponseStreamDispatchBorrow<
 static_assert(!HasLegacyStreamedPredicate<ResponseStreamDispatchResult>);
 static_assert(!HasLegacySharedResponseTake<ResponseStreamDispatchResult>);
 static_assert(std::same_as<
-    decltype(std::declval<const ResponseStreamDispatchResult&>().completed()),
-    const ruvia::detail::ResponseStreamCompleted*>);
+    decltype(std::declval<const ResponseStreamDispatchResult&>().committed()),
+    const ruvia::detail::ResponseStreamCommitted*>);
 static_assert(std::same_as<
     decltype(std::declval<const ResponseStreamDispatchResult&>()
                  .peerAbortedBeforeCommit()),
@@ -239,9 +237,14 @@ RUVIA_TEST(response_stream_dispatch_preserves_exact_committed_status) {
     auto result = dispatchStream(
         RouteStreamHandler(&status, &streamWithStatus),
         false);
-    const auto* completed = result.completed();
-    RUVIA_CHECK(completed != nullptr);
-    RUVIA_CHECK_EQ(completed->status(), status);
+    const auto* committed = result.committed();
+    RUVIA_CHECK(committed != nullptr);
+    if (committed != nullptr) {
+        RUVIA_CHECK_EQ(committed->status(), status);
+        RUVIA_CHECK(
+            committed->outcome() ==
+            ResponseStreamCommittedOutcome::kCompleted);
+    }
     RUVIA_CHECK(result.buffered() == nullptr);
 }
 
@@ -251,8 +254,7 @@ RUVIA_TEST(response_stream_dispatch_distinguishes_precommit_peer_abort) {
         RouteStreamHandler(&status, &streamWithoutCommit),
         true);
     RUVIA_CHECK(result.peerAbortedBeforeCommit() != nullptr);
-    RUVIA_CHECK(result.peerAbortedAfterCommit() == nullptr);
-    RUVIA_CHECK(result.completed() == nullptr);
+    RUVIA_CHECK(result.committed() == nullptr);
 }
 
 RUVIA_TEST(response_stream_dispatch_distinguishes_committed_peer_abort) {
@@ -260,9 +262,14 @@ RUVIA_TEST(response_stream_dispatch_distinguishes_committed_peer_abort) {
     auto result = dispatchStream(
         RouteStreamHandler(&status, &streamWithStatus),
         true);
-    const auto* peer = result.peerAbortedAfterCommit();
-    RUVIA_CHECK(peer != nullptr);
-    RUVIA_CHECK_EQ(peer->status(), status);
+    const auto* committed = result.committed();
+    RUVIA_CHECK(committed != nullptr);
+    if (committed != nullptr) {
+        RUVIA_CHECK_EQ(committed->status(), status);
+        RUVIA_CHECK(
+            committed->outcome() ==
+            ResponseStreamCommittedOutcome::kPeerAborted);
+    }
     RUVIA_CHECK(result.peerAbortedBeforeCommit() == nullptr);
 }
 
@@ -271,15 +278,15 @@ RUVIA_TEST(response_stream_dispatch_end_commits_bodyless_status) {
     auto result = dispatchStream(
         RouteStreamHandler(&status, &streamWithoutCommit),
         false);
-    const auto* completed = result.completed();
-    RUVIA_CHECK(completed != nullptr);
+    const auto* committed = result.committed();
+    RUVIA_CHECK(committed != nullptr);
     RUVIA_CHECK(result.peerAbortedBeforeCommit() == nullptr);
-    RUVIA_CHECK(result.peerAbortedAfterCommit() == nullptr);
-    RUVIA_CHECK(result.failedAfterCommit() == nullptr);
     RUVIA_CHECK(result.buffered() == nullptr);
-    RUVIA_CHECK(result.failedBeforeCommit() == nullptr);
-    if (completed != nullptr) {
-        RUVIA_CHECK_EQ(completed->status(), status);
+    if (committed != nullptr) {
+        RUVIA_CHECK_EQ(committed->status(), status);
+        RUVIA_CHECK(
+            committed->outcome() ==
+            ResponseStreamCommittedOutcome::kCompleted);
     }
 }
 
@@ -288,8 +295,30 @@ RUVIA_TEST(response_stream_dispatch_preserves_committed_failure_status) {
     auto result = dispatchStream(
         RouteStreamHandler(&status, &failAfterCommit),
         false);
-    const auto* failed = result.failedAfterCommit();
-    RUVIA_CHECK(failed != nullptr);
-    RUVIA_CHECK_EQ(failed->status(), status);
-    RUVIA_CHECK(result.failedBeforeCommit() == nullptr);
+    const auto* committed = result.committed();
+    RUVIA_CHECK(committed != nullptr);
+    if (committed != nullptr) {
+        RUVIA_CHECK_EQ(committed->status(), status);
+        RUVIA_CHECK(
+            committed->outcome() ==
+            ResponseStreamCommittedOutcome::kFailed);
+    }
+}
+
+RUVIA_TEST(response_stream_dispatch_groups_precommit_failure_with_response) {
+    HttpResponse response(std::pmr::get_default_resource());
+    response.status(502);
+    auto result = ResponseStreamDispatchResult::makeBuffered(
+        std::move(response),
+        true);
+
+    auto* buffered = result.buffered();
+    RUVIA_CHECK(buffered != nullptr);
+    RUVIA_CHECK(result.committed() == nullptr);
+    RUVIA_CHECK(result.peerAbortedBeforeCommit() == nullptr);
+    if (buffered != nullptr) {
+        RUVIA_CHECK(buffered->failed());
+        const auto recovered = std::move(*buffered).takeResponse();
+        RUVIA_CHECK_EQ(recovered.status(), std::uint16_t{502});
+    }
 }
