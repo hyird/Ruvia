@@ -35,10 +35,25 @@ concept HasAnyRvalueHttpClientRedirectTargetAccessor =
     requires(T&& result) { std::move(result).target(); } ||
     requires(T&& result) { std::move(result).failure(); };
 
+template <typename T>
+concept ExposesRvalueHttpClientRedirectTargetView =
+    requires(T&& target) { std::move(target).value(); };
+
+template <typename T>
+concept AcceptsTemporaryHttpClientResponseHeaderLookup =
+    requires(T&& response) {
+        lookupUniqueHttpClientResponseHeader(
+            std::move(response), std::string_view{});
+    };
+
 static_assert(!HasAnyRvalueHttpClientHeaderLookupAccessor<
     ruvia::HttpClientResponseHeaderLookupResult>);
 static_assert(!HasAnyRvalueHttpClientRedirectTargetAccessor<
     ruvia::HttpClientRedirectTargetResult>);
+static_assert(!ExposesRvalueHttpClientRedirectTargetView<
+    ruvia::HttpClientRedirectTarget>);
+static_assert(!AcceptsTemporaryHttpClientResponseHeaderLookup<
+    ruvia::HttpClientResponse>);
 
 template <typename T>
 concept HasHeaderValue = requires(const T& value) {

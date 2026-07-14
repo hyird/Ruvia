@@ -118,6 +118,10 @@ private:
 lookupUniqueHttpClientResponseHeader(
     const HttpClientResponse& response,
     std::string_view name) noexcept;
+[[nodiscard]] HttpClientResponseHeaderLookupResult
+lookupUniqueHttpClientResponseHeader(
+    const HttpClientResponse&& response,
+    std::string_view name) = delete;
 
 enum class HttpClientRedirectContentDisposition : std::uint8_t {
     kPreserve,
@@ -183,9 +187,10 @@ public:
     HttpClientRedirectTarget(HttpClientRedirectTarget&&) noexcept = default;
     HttpClientRedirectTarget& operator=(HttpClientRedirectTarget&&) = delete;
 
-    [[nodiscard]] std::string_view value() const noexcept {
+    [[nodiscard]] std::string_view value() const & noexcept {
         return std::string_view(value_.data(), value_.size());
     }
+    [[nodiscard]] std::string_view value() const && = delete;
 
 private:
     friend class HttpClientRedirectTargetResult;

@@ -1752,6 +1752,21 @@ concept HasAnyRvalueHttpClientRedirectTargetAccessor =
     requires(T&& result) { std::move(result).failure(); };
 
 template <typename T>
+concept ExposesAnyRvalueHttpClientOwnedView =
+    requires(T&& value) { std::move(value).name(); } ||
+    requires(T&& value) { std::move(value).value(); } ||
+    requires(T&& value) { std::move(value).headers(); } ||
+    requires(T&& value) { std::move(value).body(); } ||
+    requires(T&& value) { std::move(value).transferCodings(); };
+
+template <typename T>
+concept AcceptsTemporaryHttpClientResponseHeaderLookup =
+    requires(T&& response) {
+        ruvia::lookupUniqueHttpClientResponseHeader(
+            std::move(response), std::string_view{});
+    };
+
+template <typename T>
 concept HasHttp1ClientResponseMode = requires(const T& plan) {
     plan.mode();
 };
@@ -2430,6 +2445,16 @@ static_assert(!std::default_initializable<
 static_assert(std::move_constructible<ruvia::HttpClientResponse>);
 static_assert(!std::assignable_from<
     ruvia::HttpClientResponse&, ruvia::HttpClientResponse&&>);
+static_assert(!ExposesAnyRvalueHttpClientOwnedView<
+    ruvia::HttpClientResponseHeader>);
+static_assert(!ExposesAnyRvalueHttpClientOwnedView<
+    ruvia::HttpClientResponse>);
+static_assert(!ExposesAnyRvalueHttpClientOwnedView<
+    ruvia::Http1ClientChunkedResponse>);
+static_assert(!ExposesAnyRvalueHttpClientOwnedView<
+    ruvia::Http1ClientCloseDelimitedResponse>);
+static_assert(!AcceptsTemporaryHttpClientResponseHeaderLookup<
+    ruvia::HttpClientResponse>);
 static_assert(std::move_constructible<ruvia::Http1ParsedClientResponseHead>);
 static_assert(!std::assignable_from<
     ruvia::Http1ParsedClientResponseHead&,
@@ -2482,6 +2507,8 @@ static_assert(!std::assignable_from<
     ruvia::HttpClientRedirectTargetResult&&>);
 static_assert(!HasAnyRvalueHttpClientRedirectTargetAccessor<
     ruvia::HttpClientRedirectTargetResult>);
+static_assert(!ExposesAnyRvalueHttpClientOwnedView<
+    ruvia::HttpClientRedirectTarget>);
 static_assert(std::move_constructible<ruvia::HttpClientRedirectTarget>);
 static_assert(!std::assignable_from<
     ruvia::HttpClientRedirectTarget&,

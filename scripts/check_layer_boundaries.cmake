@@ -7498,10 +7498,22 @@ file(READ "${RUVIA_ROOT}/tests/package-consumer/http.cpp"
     public_http_value_package_contract)
 file(READ "${RUVIA_ROOT}/examples/api_surface.cpp"
     public_http_value_api_surface)
+file(READ "${RUVIA_ROOT}/tests/unit_http_client_response.cpp"
+    public_http_client_response_owned_view_test)
+file(READ "${RUVIA_ROOT}/tests/unit_http_client_redirect.cpp"
+    public_http_client_redirect_owned_view_test)
 if(NOT public_http_client_value_api MATCHES
        "withoutContent[(][)] const &&[ \\t]*=[ \\t]*delete" OR
    NOT public_http_client_value_api MATCHES
        "borrowedBytes[(][)] const &&[ \\t]*=[ \\t]*delete" OR
+   NOT public_http_client_value_api MATCHES
+       "name[(][)] const [&] noexcept" OR
+   NOT public_http_client_value_api MATCHES
+       "value[(][)] const &&[ \\t]*=[ \\t]*delete" OR
+   NOT public_http_client_value_api MATCHES
+       "headers[(][)] const [&] noexcept" OR
+   NOT public_http_client_value_api MATCHES
+       "body[(][)] const &&[ \\t]*=[ \\t]*delete" OR
    NOT public_http_client_redirect_value_api MATCHES
        "absent[(][)] const &&[ \\t]*=[ \\t]*delete" OR
    NOT public_http_client_redirect_value_api MATCHES
@@ -7512,6 +7524,10 @@ if(NOT public_http_client_value_api MATCHES
        "target[(][)] const &&[ \\t]*=[ \\t]*delete" OR
    NOT public_http_client_redirect_value_api MATCHES
        "failure[(][)] const &&[ \\t]*=[ \\t]*delete" OR
+   NOT public_http_client_redirect_value_api MATCHES
+       "value[(][)] const [&] noexcept" OR
+   NOT public_http_client_redirect_value_api MATCHES
+       "lookupUniqueHttpClientResponseHeader[\r\n \t]*[(][\r\n \t]*const HttpClientResponse&&" OR
    NOT public_http1_client_request_value_api MATCHES
        "noExpectation[(][)] const &&[ \\t]*=[ \\t]*delete" OR
    NOT public_http1_client_request_value_api MATCHES
@@ -7536,6 +7552,10 @@ if(NOT public_http_client_value_api MATCHES
        "connectTunnel[(][)] const &&[ \\t]*=[ \\t]*delete" OR
    NOT public_http1_client_response_value_api MATCHES
        "protocolUpgrade[(][)] const &&[ \\t]*=[ \\t]*delete" OR
+   NOT public_http1_client_response_value_api MATCHES
+       "transferCodings[(][)] const [&] noexcept" OR
+   NOT public_http1_client_response_value_api MATCHES
+       "transferCodings[(][)] const &&[ \\t]*=[ \\t]*delete" OR
    NOT public_protocol_byte_limit_api MATCHES
        "std::optional<std::size_t> maximum[(][)] const noexcept" OR
    public_protocol_byte_limit_api MATCHES
@@ -7553,6 +7573,10 @@ if(NOT public_http_client_value_api MATCHES
    NOT public_http_value_package_contract MATCHES
        "!HasAnyRvalueHttpClientRedirectTargetAccessor" OR
    NOT public_http_value_package_contract MATCHES
+       "ExposesAnyRvalueHttpClientOwnedView" OR
+   NOT public_http_value_package_contract MATCHES
+       "AcceptsTemporaryHttpClientResponseHeaderLookup" OR
+   NOT public_http_value_package_contract MATCHES
        "std::optional<std::size_t>" OR
    NOT public_http_value_api_surface MATCHES
        "!HasAnyRvalueHttpClientRequestContentAccessor" OR
@@ -7565,9 +7589,22 @@ if(NOT public_http_client_value_api MATCHES
    NOT public_http_value_api_surface MATCHES
        "!HasAnyRvalueHttpClientHeaderLookupAccessor" OR
    NOT public_http_value_api_surface MATCHES
-       "!HasAnyRvalueHttpClientRedirectTargetAccessor")
-    boundary_error("public HTTP value alternatives regained temporary pointer access"
-        "top-level variant alternatives must require a live lvalue owner, while optional byte limits return values instead of nullable member pointers")
+       "!HasAnyRvalueHttpClientRedirectTargetAccessor" OR
+   NOT public_http_value_api_surface MATCHES
+       "ExposesAnyRvalueHttpClientOwnedView" OR
+   NOT public_http_value_api_surface MATCHES
+       "AcceptsTemporaryHttpClientResponseHeaderLookup")
+    boundary_error("public HTTP client values regained temporary borrow access"
+        "owning responses, headers, redirect targets, framing tables, and top-level alternatives must lend storage only from live lvalues")
+endif()
+if(NOT public_http_client_response_owned_view_test MATCHES
+       "ExposesAnyRvalueHttpClientOwnedView" OR
+   NOT public_http_client_redirect_owned_view_test MATCHES
+       "ExposesRvalueHttpClientRedirectTargetView" OR
+   NOT public_http_client_redirect_owned_view_test MATCHES
+       "AcceptsTemporaryHttpClientResponseHeaderLookup")
+    boundary_error("HTTP client owned-view lifetime coverage is incomplete"
+        "response, framing, redirect, and temporary lookup contracts require direct unit guards")
 endif()
 if(NOT EXISTS "${HTTP_CONTENT_LENGTH_STATE}")
     boundary_error("shared Content-Length state is missing"

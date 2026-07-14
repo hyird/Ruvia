@@ -668,6 +668,13 @@ if(NOT _installed_http1_client_response_parser_content MATCHES
        "consumedBytes")
     message(FATAL_ERROR "installed HTTP/1 client response parser lost its discriminated public contract")
 endif()
+if(NOT _installed_http1_client_response_parser_content MATCHES
+       "transferCodings[(][)] const [&] noexcept" OR
+   NOT _installed_http1_client_response_parser_content MATCHES
+       "transferCodings[(][)] const && = delete")
+    message(FATAL_ERROR
+        "installed HTTP/1 client framing exposes transfer codings from temporary owners")
+endif()
 if(_installed_http1_client_response_parser_content MATCHES
        "Http1ClientRequestContentSignal::kNone" OR
    _installed_http1_client_response_parser_content MATCHES
@@ -1423,6 +1430,17 @@ if(NOT _installed_http_client MATCHES "enum class HttpScheme" OR
        "make[(][ \t\r\n]*std::uint16_t status" OR
    _installed_http_client_access MATCHES "setStatus[(]")
     message(FATAL_ERROR "installed outbound client model lost its typed sans-I/O API")
+endif()
+if(NOT _installed_http_client MATCHES
+       "name[(][)] const [&] noexcept" OR
+   NOT _installed_http_client MATCHES
+       "value[(][)] const && = delete" OR
+   NOT _installed_http_client MATCHES
+       "headers[(][)] const [&] noexcept" OR
+   NOT _installed_http_client MATCHES
+       "body[(][)] const && = delete")
+    message(FATAL_ERROR
+        "installed outbound client response exposes views from temporary owners")
 endif()
 if(_installed_http_client MATCHES "HttpClientRequestContentMode" OR
    _installed_http_client MATCHES "HttpClientRequestContentMode[ \t]+mode_" OR
@@ -3267,6 +3285,15 @@ if(_installed_http_client_redirect MATCHES
    NOT _installed_http_client_redirect MATCHES "kInvalidAuthority" OR
    _installed_http_client_redirect MATCHES "httpClientAuthorityMatchesOrigin")
     message(FATAL_ERROR "installed redirect helper lost its public discriminated contract")
+endif()
+if(NOT _installed_http_client_redirect MATCHES
+       "value[(][)] const [&] noexcept" OR
+   NOT _installed_http_client_redirect MATCHES
+       "value[(][)] const && = delete" OR
+   NOT _installed_http_client_redirect MATCHES
+       "lookupUniqueHttpClientResponseHeader[\r\n \t]*[(][\r\n \t]*const HttpClientResponse&&")
+    message(FATAL_ERROR
+        "installed redirect helper accepts temporary response owners or exposes temporary target storage")
 endif()
 file(READ "${_install_prefix}/include/ruvia/http/MultipartParser.h"
     _installed_multipart_parser)

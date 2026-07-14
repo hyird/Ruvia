@@ -96,13 +96,15 @@ private:
 
 class HttpClientResponseHeader final {
 public:
-    [[nodiscard]] std::string_view name() const noexcept {
+    [[nodiscard]] std::string_view name() const & noexcept {
         return std::string_view(name_.data(), name_.size());
     }
+    [[nodiscard]] std::string_view name() const && = delete;
 
-    [[nodiscard]] std::string_view value() const noexcept {
+    [[nodiscard]] std::string_view value() const & noexcept {
         return std::string_view(value_.data(), value_.size());
     }
+    [[nodiscard]] std::string_view value() const && = delete;
 
 private:
     friend struct detail::HttpClientResponseHeaderAccess;
@@ -289,13 +291,17 @@ public:
         return protocolVersion_;
     }
 
-    [[nodiscard]] std::span<const HttpClientResponseHeader> headers() const noexcept {
+    [[nodiscard]] std::span<const HttpClientResponseHeader>
+    headers() const & noexcept {
         return std::span<const HttpClientResponseHeader>(headers_.data(), headers_.size());
     }
+    [[nodiscard]] std::span<const HttpClientResponseHeader>
+    headers() const && = delete;
 
-    [[nodiscard]] std::string_view body() const noexcept {
+    [[nodiscard]] std::string_view body() const & noexcept {
         return std::string_view(body_.data(), body_.size());
     }
+    [[nodiscard]] std::string_view body() const && = delete;
 
 private:
     friend struct detail::HttpClientResponseAccess;

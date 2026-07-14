@@ -270,6 +270,23 @@ concept HasResponsePersistence = requires(const T& value) {
     value.persistence();
 };
 
+template <typename T>
+concept ExposesAnyRvalueHttpClientOwnedView =
+    requires(T&& value) { std::move(value).name(); } ||
+    requires(T&& value) { std::move(value).value(); } ||
+    requires(T&& value) { std::move(value).headers(); } ||
+    requires(T&& value) { std::move(value).body(); } ||
+    requires(T&& value) { std::move(value).transferCodings(); };
+
+static_assert(!ExposesAnyRvalueHttpClientOwnedView<
+    ruvia::HttpClientResponseHeader>);
+static_assert(!ExposesAnyRvalueHttpClientOwnedView<
+    ruvia::HttpClientResponse>);
+static_assert(!ExposesAnyRvalueHttpClientOwnedView<
+    ruvia::Http1ClientChunkedResponse>);
+static_assert(!ExposesAnyRvalueHttpClientOwnedView<
+    ruvia::Http1ClientCloseDelimitedResponse>);
+
 static_assert(!std::is_default_constructible_v<ruvia::Http1ClientResponsePlan>);
 static_assert(!std::is_default_constructible_v<
     ruvia::Http1ClientInformationalResponse>);

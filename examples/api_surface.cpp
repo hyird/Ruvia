@@ -956,6 +956,14 @@ concept HasHttpClientResponseHeaderValueGetter = requires(const T& header) {
 };
 
 template <typename T>
+concept ExposesAnyRvalueHttpClientOwnedView =
+    requires(T&& value) { std::move(value).name(); } ||
+    requires(T&& value) { std::move(value).value(); } ||
+    requires(T&& value) { std::move(value).headers(); } ||
+    requires(T&& value) { std::move(value).body(); } ||
+    requires(T&& value) { std::move(value).transferCodings(); };
+
+template <typename T>
 concept HasCompleteType = requires {
     sizeof(T);
 };
@@ -1813,6 +1821,13 @@ concept HasAnyRvalueHttpClientRedirectTargetAccessor =
     requires(T&& result) { std::move(result).failure(); };
 
 template <typename T>
+concept AcceptsTemporaryHttpClientResponseHeaderLookup =
+    requires(T&& response) {
+        ruvia::lookupUniqueHttpClientResponseHeader(
+            std::move(response), std::string_view{});
+    };
+
+template <typename T>
 concept HasHttpClientRedirectError = requires(const T& result) {
     { result.error() } ->
         std::same_as<ruvia::HttpClientRedirectTargetError>;
@@ -2178,6 +2193,10 @@ static_assert(!HasHttpClientResponseHeaderNameField<ruvia::HttpClientResponseHea
 static_assert(HasHttpClientResponseHeaderNameGetter<ruvia::HttpClientResponseHeader>);
 static_assert(!HasHttpClientResponseHeaderValueField<ruvia::HttpClientResponseHeader>);
 static_assert(HasHttpClientResponseHeaderValueGetter<ruvia::HttpClientResponseHeader>);
+static_assert(!ExposesAnyRvalueHttpClientOwnedView<
+    ruvia::HttpClientResponseHeader>);
+static_assert(!ExposesAnyRvalueHttpClientOwnedView<
+    ruvia::HttpClientResponse>);
 static_assert(!HasCompleteType<ruvia::detail::HttpClientResponseHeaderAccess>);
 static_assert(!HasCompleteType<ruvia::detail::HttpClientResponseAccess>);
 static_assert(!HasCompleteType<ruvia::detail::Http1RequestParseResultAccess>);
@@ -2533,6 +2552,12 @@ static_assert(!std::default_initializable<
     ruvia::Http1ClientProtocolUpgrade>);
 static_assert(!HasStaleHttp1ClientHeadOffset<
     ruvia::Http1ParsedClientResponseHead>);
+static_assert(!ExposesAnyRvalueHttpClientOwnedView<
+    ruvia::Http1ClientChunkedResponse>);
+static_assert(!ExposesAnyRvalueHttpClientOwnedView<
+    ruvia::Http1ClientCloseDelimitedResponse>);
+static_assert(!AcceptsTemporaryHttpClientResponseHeaderLookup<
+    ruvia::HttpClientResponse>);
 static_assert(std::same_as<
     decltype(ruvia::lookupUniqueHttpClientResponseHeader(
         std::declval<const ruvia::HttpClientResponse&>(),
@@ -2573,6 +2598,8 @@ static_assert(HasHttpClientRedirectTargetAccessors<
     ruvia::HttpClientRedirectTargetResult>);
 static_assert(!HasAnyRvalueHttpClientRedirectTargetAccessor<
     ruvia::HttpClientRedirectTargetResult>);
+static_assert(!ExposesAnyRvalueHttpClientOwnedView<
+    ruvia::HttpClientRedirectTarget>);
 static_assert(!HasHttpClientRedirectError<
     ruvia::HttpClientRedirectTarget>);
 static_assert(HasHttpClientRedirectError<
