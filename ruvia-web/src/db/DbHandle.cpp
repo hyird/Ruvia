@@ -277,13 +277,4 @@ void DbTransaction::reset() noexcept {
     active_ = false;
 }
 
-void DbTransaction::release() noexcept {
-    if (active_ && client_ != nullptr) {
-        client_->finishTransaction(slot_);
-    }
-    client_ = nullptr;
-    slot_ = 0;
-    active_ = false;
-}
-
 }  // namespace ruvia

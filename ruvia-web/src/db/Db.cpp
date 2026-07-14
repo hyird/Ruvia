@@ -300,8 +300,4 @@ void detail::MariaDbPool::abortTransaction(std::size_t slot) noexcept {
     releaseSlot(slot);
 }
 
-void detail::MariaDbPool::finishTransaction(std::size_t slot) noexcept {
-    releaseSlot(slot);
-}
-
 }  // namespace ruvia

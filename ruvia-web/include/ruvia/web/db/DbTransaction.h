@@ -39,7 +39,6 @@ private:
     Task<QueryResult> executePrepared(std::pmr::string sql, std::pmr::vector<DbValue> params);
     [[nodiscard]] QueryResult mountResult(QueryResult result) const;
     void reset() noexcept;
-    void release() noexcept;
 
     detail::MariaDbPool* client_{nullptr};
     std::size_t slot_{0};

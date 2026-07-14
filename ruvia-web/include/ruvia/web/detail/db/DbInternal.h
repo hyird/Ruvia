@@ -160,7 +160,6 @@ private:
     Task<void> commitTransaction(std::size_t slot, std::pmr::memory_resource* resource);
     Task<void> rollbackTransaction(std::size_t slot, std::pmr::memory_resource* resource);
     void abortTransaction(std::size_t slot) noexcept;
-    void finishTransaction(std::size_t slot) noexcept;
 
     asio::io_context& ioContext_;
     DbConfig config_;
