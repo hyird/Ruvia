@@ -258,13 +258,9 @@ file(READ "${_installed_http_protocol_client_request_context}"
 if(NOT _installed_http_protocol_plan_range_text MATCHES
        "resolved[(][)] const && = delete" OR
    NOT _installed_http_protocol_plan_semantics_text MATCHES
-       "bool informational[(][)] const noexcept" OR
-   NOT _installed_http_protocol_plan_semantics_text MATCHES
-       "bool withContent[(][)] const noexcept" OR
-   NOT _installed_http_protocol_plan_semantics_text MATCHES
-       "is_trivially_copyable_v<HttpResponseContentSemantics>" OR
-   NOT _installed_http_protocol_plan_semantics_text MATCHES
-       "sizeof[(]HttpResponseContentSemantics[)] <= 2" OR
+       "enum class HttpResponseContentSemantics : std::uint8_t" OR
+   _installed_http_protocol_plan_semantics_text MATCHES
+       "std::variant|std::holds_alternative|bool withContent[(]" OR
    NOT _installed_http_protocol_plan_write_text MATCHES
        "HttpResponseContentSemantics[ \t\r\n]+contentSemantics[(][)] const noexcept" OR
    NOT _installed_http_protocol_plan_write_text MATCHES
@@ -3083,26 +3079,14 @@ file(READ "${_installed_response_write_plan_path}"
 file(READ "${_installed_response_head_policy_path}"
     _installed_response_head_policy)
 if(NOT _installed_response_content_semantics MATCHES
-       "class HttpInformationalResponseContent final" OR
-   NOT _installed_response_content_semantics MATCHES
-       "class HttpProtocolSwitchResponseContent final" OR
-   NOT _installed_response_content_semantics MATCHES
-       "class HttpConnectTunnelResponseContent final" OR
-   NOT _installed_response_content_semantics MATCHES
-       "class HttpResponseWithoutContent final" OR
-   NOT _installed_response_content_semantics MATCHES
-       "class HttpResponseWithContent final" OR
-   NOT _installed_response_content_semantics MATCHES "using State = std::variant" OR
-   NOT _installed_response_content_semantics MATCHES
-       "std::holds_alternative<HttpResponseWithoutContent>" OR
-   NOT _installed_response_content_semantics MATCHES
-       "bool informational[(][)] const noexcept" OR
-   NOT _installed_response_content_semantics MATCHES
-       "bool withContent[(][)] const noexcept" OR
-   NOT _installed_response_content_semantics MATCHES
-       "is_trivially_copyable_v<HttpResponseContentSemantics>" OR
-   NOT _installed_response_content_semantics MATCHES
-       "sizeof[(]HttpResponseContentSemantics[)] <= 2" OR
+       "enum class HttpResponseContentSemantics : std::uint8_t" OR
+   NOT _installed_response_content_semantics MATCHES "kInformational" OR
+   NOT _installed_response_content_semantics MATCHES "kProtocolSwitch" OR
+   NOT _installed_response_content_semantics MATCHES "kConnectTunnel" OR
+   NOT _installed_response_content_semantics MATCHES "kWithoutContent" OR
+   NOT _installed_response_content_semantics MATCHES "kWithContent" OR
+   _installed_response_content_semantics MATCHES
+       "std::variant|std::holds_alternative|HttpInformationalResponseContent|bool withContent[(]" OR
    NOT _installed_response_content_semantics MATCHES
        "httpResponseContentSemantics" OR
    NOT _installed_response_write_plan MATCHES
@@ -3128,7 +3112,7 @@ if(NOT _installed_response_content_semantics MATCHES
    _installed_response_write_plan MATCHES
        "httpBufferedResponseWritePlan[ \t\r\n]*[(][ \t\r\n]*const[ \t]+HttpResponseBodyPlan[&]" OR
    NOT _installed_response_write_plan MATCHES
-       "!semantics_[.]withContent[(][)]" OR
+       "semantics_ != HttpResponseContentSemantics::kWithContent" OR
    NOT _installed_response_write_plan MATCHES
        "ResponseWritePolicy[ \t]+policy[(][)] const noexcept" OR
    _installed_response_write_plan MATCHES

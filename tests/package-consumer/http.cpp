@@ -911,22 +911,6 @@ concept HasStaleHttp2RemoteCheckAcceptSplit = requires(T& content) {
 };
 
 template <typename T>
-concept HasValueSemanticHttpResponseContentFacts = requires(
-    const T& semantics,
-    const T&& temporary) {
-    { semantics.informational() } -> std::same_as<bool>;
-    { semantics.protocolSwitch() } -> std::same_as<bool>;
-    { semantics.connectTunnel() } -> std::same_as<bool>;
-    { semantics.withoutContent() } -> std::same_as<bool>;
-    { semantics.withContent() } -> std::same_as<bool>;
-    { temporary.informational() } -> std::same_as<bool>;
-    { temporary.protocolSwitch() } -> std::same_as<bool>;
-    { temporary.connectTunnel() } -> std::same_as<bool>;
-    { temporary.withoutContent() } -> std::same_as<bool>;
-    { temporary.withContent() } -> std::same_as<bool>;
-};
-
-template <typename T>
 concept HasValueSemanticResponseContentSemantics = requires(
     const T& plan,
     const T&& temporary) {
@@ -970,7 +954,7 @@ concept ExposesAnyRvalueHttpProtocolPlanBorrow =
 
 static_assert(!ExposesAnyRvalueHttpProtocolPlanBorrow<
     ruvia::detail::HttpByteRangeResolution>);
-static_assert(HasValueSemanticHttpResponseContentFacts<
+static_assert(std::is_enum_v<
     ruvia::detail::HttpResponseContentSemantics>);
 static_assert(HasValueSemanticResponseContentSemantics<
     ruvia::detail::HttpResponseBodyPlan>);
@@ -1535,26 +1519,12 @@ static_assert(std::same_as<
     decltype(std::declval<const ruvia::detail::Http2StreamState&>()
         .remoteContent()),
     const ruvia::detail::Http2RemoteContentState&>);
-static_assert(HasValueSemanticHttpResponseContentFacts<
+static_assert(std::is_enum_v<
     ruvia::detail::HttpResponseContentSemantics>);
-static_assert(std::is_trivially_copyable_v<
-    ruvia::detail::HttpResponseContentSemantics>);
-static_assert(sizeof(ruvia::detail::HttpResponseContentSemantics) <= 2);
+static_assert(sizeof(ruvia::detail::HttpResponseContentSemantics) == 1);
 static_assert(std::is_trivially_copyable_v<
     ruvia::detail::HttpResponseBodyPlan>);
 static_assert(sizeof(ruvia::detail::HttpResponseBodyPlan) <= 12);
-static_assert(!std::default_initializable<
-    ruvia::detail::HttpResponseContentSemantics>);
-static_assert(!std::default_initializable<
-    ruvia::detail::HttpInformationalResponseContent>);
-static_assert(!std::default_initializable<
-    ruvia::detail::HttpProtocolSwitchResponseContent>);
-static_assert(!std::default_initializable<
-    ruvia::detail::HttpConnectTunnelResponseContent>);
-static_assert(!std::default_initializable<
-    ruvia::detail::HttpResponseWithoutContent>);
-static_assert(!std::default_initializable<
-    ruvia::detail::HttpResponseWithContent>);
 static_assert(HasHttp2TunnelAlternatives<
     ruvia::detail::Http2TunnelState>);
 static_assert(!HasStaleHttp2TunnelKindPhase<
@@ -2862,9 +2832,10 @@ int main() {
         ruvia::HttpKnownMethod::kHead, 200);
     const auto tunnelSemantics = ruvia::detail::httpResponseContentSemantics(
         ruvia::HttpKnownMethod::kConnect, 200);
-    if (!headSemantics.withoutContent() ||
-        headSemantics.withContent() ||
-        !tunnelSemantics.connectTunnel()) {
+    if (headSemantics !=
+            ruvia::detail::HttpResponseContentSemantics::kWithoutContent ||
+        tunnelSemantics !=
+            ruvia::detail::HttpResponseContentSemantics::kConnectTunnel) {
         return 36;
     }
 

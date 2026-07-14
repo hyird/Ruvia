@@ -31,7 +31,7 @@ public:
 
     [[nodiscard]] bool bodySuppressed() const noexcept {
         return !policy_.bodyAllowed() ||
-            !semantics_.withContent();
+            semantics_ != HttpResponseContentSemantics::kWithContent;
     }
 
     [[nodiscard]] HttpResponseContentSemantics
@@ -41,7 +41,8 @@ public:
 
     [[nodiscard]] std::uint64_t bufferedRepresentationLength(
         const HttpResponse& response) const noexcept {
-        if (!statusAllowsBody() || semantics_.connectTunnel()) {
+        if (!statusAllowsBody() ||
+            semantics_ == HttpResponseContentSemantics::kConnectTunnel) {
             return 0;
         }
         return static_cast<std::uint64_t>(responseBody(response).size());

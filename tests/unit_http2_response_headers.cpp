@@ -246,7 +246,8 @@ RUVIA_TEST(http2_response_head_content_length_plan_is_exclusive) {
         return;
     }
     RUVIA_CHECK(
-        connectPlan->bodyPlan().contentSemantics().connectTunnel());
+        connectPlan->bodyPlan().contentSemantics() ==
+        ruvia::detail::HttpResponseContentSemantics::kConnectTunnel);
     RUVIA_CHECK(connectPlan->forbiddenContentLength() != nullptr);
 
     const auto invalidConnectPlan =

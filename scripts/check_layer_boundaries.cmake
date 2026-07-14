@@ -5605,26 +5605,14 @@ else()
         http1_shared_response_semantics)
     read_http2_connection_implementation(http2_shared_response_semantics)
     if(NOT http_response_content_semantics MATCHES
-           "class HttpInformationalResponseContent final" OR
-       NOT http_response_content_semantics MATCHES
-           "class HttpProtocolSwitchResponseContent final" OR
-       NOT http_response_content_semantics MATCHES
-           "class HttpConnectTunnelResponseContent final" OR
-       NOT http_response_content_semantics MATCHES
-           "class HttpResponseWithoutContent final" OR
-       NOT http_response_content_semantics MATCHES
-           "class HttpResponseWithContent final" OR
-       NOT http_response_content_semantics MATCHES "using State = std::variant" OR
-       NOT http_response_content_semantics MATCHES
-           "std::holds_alternative<HttpResponseWithoutContent>" OR
-       NOT http_response_content_semantics MATCHES
-           "bool informational[(][)] const noexcept" OR
-       NOT http_response_content_semantics MATCHES
-           "bool withContent[(][)] const noexcept" OR
-       NOT http_response_content_semantics MATCHES
-           "is_trivially_copyable_v<HttpResponseContentSemantics>" OR
-       NOT http_response_content_semantics MATCHES
-           "sizeof[(]HttpResponseContentSemantics[)] <= 2" OR
+           "enum class HttpResponseContentSemantics : std::uint8_t" OR
+       NOT http_response_content_semantics MATCHES "kInformational" OR
+       NOT http_response_content_semantics MATCHES "kProtocolSwitch" OR
+       NOT http_response_content_semantics MATCHES "kConnectTunnel" OR
+       NOT http_response_content_semantics MATCHES "kWithoutContent" OR
+       NOT http_response_content_semantics MATCHES "kWithContent" OR
+       http_response_content_semantics MATCHES
+           "std::variant|std::holds_alternative|HttpInformationalResponseContent|bool withContent[(]" OR
        NOT http_response_content_semantics MATCHES
            "httpResponseContentSemantics" OR
        NOT http1_shared_response_semantics MATCHES
@@ -5642,7 +5630,7 @@ else()
        NOT http_response_write_plan MATCHES
            "sizeof[(]HttpResponseBodyPlan[)] <= 12" OR
        NOT http_response_write_plan MATCHES
-           "!semantics_[.]withContent[(][)]" OR
+           "semantics_[ 	]*!=[ 	]*HttpResponseContentSemantics::kWithContent" OR
        http_response_write_plan MATCHES "bodySuppressed_")
         boundary_error("response content semantics split by protocol direction"
             "informational, switch, CONNECT, without-content, and with-content alternatives must drive H1 client, H2 client, and server body plans as cheap value facts")
@@ -6292,11 +6280,9 @@ else()
        NOT http_response_content_semantics_test MATCHES
            "HttpKnownMethod::kGet, 205" OR
        NOT http_response_content_semantics_package_test MATCHES
-           "HasValueSemanticHttpResponseContentFacts" OR
+           "is_enum_v<[\r\n \t]*ruvia::detail::HttpResponseContentSemantics>" OR
        NOT http_response_content_semantics_package_test MATCHES
-           "is_trivially_copyable_v<[\r\n \t]*ruvia::detail::HttpResponseContentSemantics>" OR
-       NOT http_response_content_semantics_package_test MATCHES
-           "!std::default_initializable<[\r\n \t]*ruvia::detail::HttpResponseContentSemantics>" OR
+           "sizeof[(]ruvia::detail::HttpResponseContentSemantics[)] == 1" OR
        NOT http_response_content_semantics_package_test MATCHES
            "httpResponseContentSemantics")
         boundary_error("shared response-content semantics ownership is under-tested"
@@ -9730,13 +9716,9 @@ if(EXISTS "${HTTP_PROTOCOL_PLAN_RANGE}" AND
        NOT http_protocol_plan_range MATCHES
            "resolved[(][)] const && = delete" OR
        NOT http_protocol_plan_semantics MATCHES
-           "bool informational[(][)] const noexcept" OR
-       NOT http_protocol_plan_semantics MATCHES
-           "bool withContent[(][)] const noexcept" OR
-       NOT http_protocol_plan_semantics MATCHES
-           "is_trivially_copyable_v<HttpResponseContentSemantics>" OR
-       NOT http_protocol_plan_semantics MATCHES
-           "sizeof[(]HttpResponseContentSemantics[)] <= 2" OR
+           "enum class HttpResponseContentSemantics : std::uint8_t" OR
+       http_protocol_plan_semantics MATCHES
+           "std::variant|std::holds_alternative|bool withContent[(]" OR
        NOT http_protocol_plan_write MATCHES
            "ResponseWritePolicy[ \t]+policy[(][)] const noexcept" OR
        http_protocol_plan_write MATCHES
@@ -9820,7 +9802,7 @@ if(EXISTS "${HTTP_PROTOCOL_PLAN_RANGE}" AND
        NOT http_protocol_plan_consumer MATCHES
            "HasValueSemanticResponseWritePolicy" OR
        NOT http_protocol_plan_consumer MATCHES
-           "HasValueSemanticHttpResponseContentFacts" OR
+           "is_enum_v<[\r\n \t]*ruvia::detail::HttpResponseContentSemantics>" OR
        NOT http_protocol_plan_consumer MATCHES
            "HasValueSemanticResponseBodyPlan")
         boundary_error("HTTP protocol plan fact ownership is inconsistent"

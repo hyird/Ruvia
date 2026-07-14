@@ -279,7 +279,8 @@ using ResponsePlanningResult = std::variant<
     const auto contentSemantics = detail::httpResponseContentSemantics(
         request.method(), output.statusCode);
     const bool framingFieldsApply =
-        contentSemantics.withContent();
+        contentSemantics ==
+        detail::HttpResponseContentSemantics::kWithContent;
 
     auto remaining = firstLineEnd == std::string_view::npos
         ? std::string_view{}
@@ -381,14 +382,16 @@ using ResponsePlanningResult = std::variant<
     if (continueGated) {
         if (response.statusCode == 100) {
             requestContentSignal = Http1ClientRequestContentSignal::kContinue;
-        } else if (contentSemantics.protocolSwitch() ||
+        } else if (contentSemantics ==
+                       detail::HttpResponseContentSemantics::kProtocolSwitch ||
                    response.statusCode >= 200) {
             requestContentSignal =
                 Http1ClientRequestContentSignal::kExchangeComplete;
         }
     }
 
-    if (contentSemantics.protocolSwitch()) {
+    if (contentSemantics ==
+        detail::HttpResponseContentSemantics::kProtocolSwitch) {
         if (response.protocolVersion != HttpProtocolVersion::kHttp11 ||
             response.contentLengthFieldPresent ||
             response.sawTransferEncoding ||
@@ -403,17 +406,20 @@ using ResponsePlanningResult = std::variant<
         return detail::Http1ClientResponsePlanAccess::protocolUpgrade(
             requestContentSignal);
     }
-    if (contentSemantics.informational()) {
+    if (contentSemantics ==
+        detail::HttpResponseContentSemantics::kInformational) {
         return detail::Http1ClientResponsePlanAccess::informational(
             requestContentSignal);
     }
-    if (contentSemantics.connectTunnel()) {
+    if (contentSemantics ==
+        detail::HttpResponseContentSemantics::kConnectTunnel) {
         return detail::Http1ClientResponsePlanAccess::connectTunnel(
             requestContentSignal);
     }
 
     const auto persistence = responsePersistence(request, response);
-    if (contentSemantics.withoutContent()) {
+    if (contentSemantics ==
+        detail::HttpResponseContentSemantics::kWithoutContent) {
         return detail::Http1ClientResponsePlanAccess::withoutContent(
             persistence,
             requestContentSignal);

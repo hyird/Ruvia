@@ -261,7 +261,8 @@ http2StreamingResponseHeadPlan(
 [[nodiscard]] inline Http2ResponseHeadPlanResult
 http2ConnectResponseHeadPlan(
     const HttpResponseBodyPlan& bodyPlan) noexcept {
-    return bodyPlan.contentSemantics().connectTunnel()
+    return bodyPlan.contentSemantics() ==
+            HttpResponseContentSemantics::kConnectTunnel
         ? Http2ResponseHeadPlanResult::forbidden(bodyPlan)
         : Http2ResponseHeadPlanResult::failure(
               Http2ResponseHeadPlanError::kConnectTunnelRequired);
