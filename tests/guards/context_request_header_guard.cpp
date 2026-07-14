@@ -19,6 +19,32 @@ concept HasRawRequestCloneType = requires {
     typename Request::RawRequestClone;
 };
 
+template <typename Field>
+concept ExposesAnyRvalueRequestFormFieldBorrow =
+    requires { std::declval<const Field&&>().name(); } ||
+    requires { std::declval<const Field&&>().value(); } ||
+    requires { std::declval<const Field&&>().filename(); } ||
+    requires { std::declval<const Field&&>().contentType(); } ||
+    requires { std::declval<const Field&&>().path(); } ||
+    requires { std::declval<const Field&&>().blob(); };
+
+template <typename Entry>
+concept ExposesRvalueRequestFormEntryFields = requires {
+    std::declval<const Entry&&>().fields();
+};
+
+template <typename Form>
+concept ExposesAnyRvalueRequestFormDataBorrow =
+    requires { std::declval<const Form&&>().fields(); } ||
+    requires { std::declval<const Form&&>().groups(); } ||
+    requires { std::declval<const Form&&>().get(std::string_view{}); } ||
+    requires { std::declval<const Form&&>().object(std::string_view{}); };
+
+template <typename Object>
+concept ExposesRvalueRequestFormObjectGroups = requires {
+    std::declval<const Object&&>().groups();
+};
+
 static_assert(sizeof(ruvia::ContextRequest) == sizeof(void*));
 static_assert(std::same_as<
     decltype(std::declval<const ruvia::ContextRequest&>().method()),
@@ -29,6 +55,14 @@ static_assert(std::same_as<
 static_assert(!HasRawRequestEscape<ruvia::ContextRequest>);
 static_assert(!HasRequestCloneMethod<ruvia::ContextRequest>);
 static_assert(!HasRawRequestCloneType<ruvia::ContextRequest>);
+static_assert(!ExposesAnyRvalueRequestFormFieldBorrow<
+    ruvia::ContextRequest::RequestFormField>);
+static_assert(!ExposesRvalueRequestFormEntryFields<
+    ruvia::ContextRequest::RequestFormData::Entry>);
+static_assert(!ExposesAnyRvalueRequestFormDataBorrow<
+    ruvia::ContextRequest::RequestFormData>);
+static_assert(!ExposesRvalueRequestFormObjectGroups<
+    ruvia::ContextRequest::RequestFormData::Object>);
 
 int main() {
     using Method = std::string_view (ruvia::ContextRequest::*)() const noexcept;

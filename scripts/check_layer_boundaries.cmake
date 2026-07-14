@@ -4672,6 +4672,62 @@ else()
             "RequestFormField, Entry, RequestFormData, and Object must be move-construct-only; parser construction must use RequestFormDataAccess")
     endif()
 endif()
+set(WEB_CONTEXT_REQUEST_PACKAGE_CONSUMER
+    "${RUVIA_ROOT}/tests/package-consumer/web.cpp")
+set(WEB_CONTEXT_REQUEST_API_SURFACE
+    "${RUVIA_ROOT}/examples/api_surface.cpp")
+if(NOT EXISTS "${WEB_CONTEXT_REQUEST_HEADER}" OR
+   NOT EXISTS "${WEB_CONTEXT_REQUEST_GUARD}" OR
+   NOT EXISTS "${WEB_CONTEXT_REQUEST_PACKAGE_CONSUMER}" OR
+   NOT EXISTS "${WEB_CONTEXT_REQUEST_API_SURFACE}")
+    boundary_error("Request form borrow-lifetime coverage is incomplete"
+        "the public header, standalone guard, package consumer, and API surface are required")
+else()
+    file(READ "${WEB_CONTEXT_REQUEST_HEADER}"
+        web_request_form_lifetime_contract)
+    file(READ "${WEB_CONTEXT_REQUEST_GUARD}"
+        web_request_form_lifetime_guard)
+    file(READ "${WEB_CONTEXT_REQUEST_PACKAGE_CONSUMER}"
+        web_request_form_lifetime_package_consumer)
+    file(READ "${WEB_CONTEXT_REQUEST_API_SURFACE}"
+        web_request_form_lifetime_api_surface)
+    if(NOT web_request_form_lifetime_contract MATCHES
+           "name[(][)] const &[ 	]+noexcept" OR
+       NOT web_request_form_lifetime_contract MATCHES
+           "name[(][)] const &&[ 	]*=[ 	]*delete" OR
+       NOT web_request_form_lifetime_contract MATCHES
+           "blob[(][)] const &[ 	]+noexcept" OR
+       NOT web_request_form_lifetime_contract MATCHES
+           "blob[(][)] const &&[ 	]*=[ 	]*delete" OR
+       NOT web_request_form_lifetime_contract MATCHES
+           "fields[(][)] const &&[ 	]*=[ 	]*delete" OR
+       NOT web_request_form_lifetime_contract MATCHES
+           "groups[(][)] const &&[ 	]*=[ 	]*delete" OR
+       NOT web_request_form_lifetime_contract MATCHES
+           "Value[ 	]+get[(]std::string_view[)][ 	]+const &&[ 	]*=[ 	]*delete" OR
+       NOT web_request_form_lifetime_contract MATCHES
+           "Object[ 	]+object[(]std::string_view[)][ 	]+const &&[ 	]*=[ 	]*delete")
+        boundary_error("Request form owning values regained temporary borrow access"
+            "RequestFormField, Entry, RequestFormData, and Object must expose borrowed data only from stable lvalues")
+    endif()
+    foreach(web_request_form_lifetime_coverage IN ITEMS
+            "${web_request_form_lifetime_guard}"
+            "${web_request_form_lifetime_package_consumer}"
+            "${web_request_form_lifetime_api_surface}")
+        if(NOT web_request_form_lifetime_coverage MATCHES
+               "static_assert[(]!ExposesAnyRvalueRequestFormFieldBorrow" OR
+           NOT web_request_form_lifetime_coverage MATCHES
+               "static_assert[(]!ExposesRvalueRequestFormEntryFields" OR
+           NOT web_request_form_lifetime_coverage MATCHES
+               "static_assert[(]!ExposesAnyRvalueRequestFormDataBorrow" OR
+           NOT web_request_form_lifetime_coverage MATCHES
+               "static_assert[(]!ExposesRvalueRequestFormObjectGroups")
+            boundary_error("Request form temporary-borrow regression coverage is incomplete"
+                "standalone, installed-package, and API-surface consumers must reject every owning rvalue borrow")
+            break()
+        endif()
+    endforeach()
+endif()
 if(EXISTS "${WEB_CONTEXT_HEADER}" AND
    EXISTS "${WEB_CONTEXT_REQUEST_HEADER}" AND
    EXISTS "${WEB_VALIDATION_TARGET_HEADER}")

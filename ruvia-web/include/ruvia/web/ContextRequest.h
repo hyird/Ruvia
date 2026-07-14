@@ -109,25 +109,30 @@ public:
         RequestFormField(RequestFormField&&) noexcept = default;
         RequestFormField& operator=(RequestFormField&&) = delete;
 
-        [[nodiscard]] std::string_view name() const noexcept {
+        [[nodiscard]] std::string_view name() const & noexcept {
             return std::string_view(name_.data(), name_.size());
         }
+        [[nodiscard]] std::string_view name() const && = delete;
 
-        [[nodiscard]] std::string_view value() const noexcept {
+        [[nodiscard]] std::string_view value() const & noexcept {
             return std::string_view(value_.data(), value_.size());
         }
+        [[nodiscard]] std::string_view value() const && = delete;
 
-        [[nodiscard]] std::string_view filename() const noexcept {
+        [[nodiscard]] std::string_view filename() const & noexcept {
             return std::string_view(filename_.data(), filename_.size());
         }
+        [[nodiscard]] std::string_view filename() const && = delete;
 
-        [[nodiscard]] std::string_view contentType() const noexcept {
+        [[nodiscard]] std::string_view contentType() const & noexcept {
             return std::string_view(contentType_.data(), contentType_.size());
         }
+        [[nodiscard]] std::string_view contentType() const && = delete;
 
-        [[nodiscard]] std::span<const std::pmr::string> path() const noexcept {
+        [[nodiscard]] std::span<const std::pmr::string> path() const & noexcept {
             return std::span<const std::pmr::string>(path_.data(), path_.size());
         }
+        [[nodiscard]] std::span<const std::pmr::string> path() const && = delete;
 
         [[nodiscard]] bool file() const noexcept {
             return file_;
@@ -137,13 +142,14 @@ public:
             return array_;
         }
 
-        [[nodiscard]] RequestBlob blob() const noexcept {
+        [[nodiscard]] RequestBlob blob() const & noexcept {
             return RequestBlob(
                 std::span<const std::byte>(
                     reinterpret_cast<const std::byte*>(value_.data()),
                     value_.size()),
                 std::string_view(contentType_.data(), contentType_.size()));
         }
+        [[nodiscard]] RequestBlob blob() const && = delete;
 
     private:
         friend struct detail::RequestFormFieldAccess;
@@ -195,9 +201,13 @@ public:
                 return fields_.back();
             }
 
-            [[nodiscard]] std::span<const RequestFormField* const> fields() const noexcept {
-                return std::span<const RequestFormField* const>(fields_.data(), fields_.size());
+            [[nodiscard]] std::span<const RequestFormField* const>
+            fields() const & noexcept {
+                return std::span<const RequestFormField* const>(
+                    fields_.data(), fields_.size());
             }
+            [[nodiscard]] std::span<const RequestFormField* const>
+            fields() const && = delete;
 
             [[nodiscard]] std::size_t size() const noexcept {
                 return fields_.size();
@@ -323,9 +333,10 @@ public:
                 return formEntry == nullptr ? 0 : formEntry->size();
             }
 
-            [[nodiscard]] std::span<const Entry> groups() const noexcept {
+            [[nodiscard]] std::span<const Entry> groups() const & noexcept {
                 return std::span<const Entry>(entries_.data(), entries_.size());
             }
+            [[nodiscard]] std::span<const Entry> groups() const && = delete;
 
             [[nodiscard]] Object object(std::string_view name) const;
 
@@ -376,21 +387,25 @@ public:
         RequestFormData(RequestFormData&&) noexcept = default;
         RequestFormData& operator=(RequestFormData&&) = delete;
 
-        [[nodiscard]] std::span<const RequestFormField> fields() const noexcept {
+        [[nodiscard]] std::span<const RequestFormField> fields() const & noexcept {
             return fields_;
         }
+        [[nodiscard]] std::span<const RequestFormField> fields() const && = delete;
 
-        [[nodiscard]] std::span<const Entry> groups() const noexcept {
+        [[nodiscard]] std::span<const Entry> groups() const & noexcept {
             return entries_;
         }
+        [[nodiscard]] std::span<const Entry> groups() const && = delete;
 
-        [[nodiscard]] Value get(std::string_view name) const noexcept {
+        [[nodiscard]] Value get(std::string_view name) const & noexcept {
             return Value(findEntry(name));
         }
+        [[nodiscard]] Value get(std::string_view) const && = delete;
 
-        [[nodiscard]] Object object(std::string_view dotPath) const {
+        [[nodiscard]] Object object(std::string_view dotPath) const & {
             return Object(*this, dotPath);
         }
+        [[nodiscard]] Object object(std::string_view) const && = delete;
 
         [[nodiscard]] std::size_t count(std::string_view name) const noexcept {
             const auto* formEntry = findEntry(name);

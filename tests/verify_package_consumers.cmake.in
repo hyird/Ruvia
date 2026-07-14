@@ -2290,6 +2290,25 @@ if(_built_components_csv MATCHES "(^|,)web(,|$)")
         _installed_context_request_header)
     file(READ "${_installed_validation_target_path}"
         _installed_validation_target)
+    if(NOT _installed_context_request_header MATCHES
+           "name[(][)] const &[ 	]+noexcept" OR
+       NOT _installed_context_request_header MATCHES
+           "name[(][)] const &&[ 	]*=[ 	]*delete" OR
+       NOT _installed_context_request_header MATCHES
+           "blob[(][)] const &[ 	]+noexcept" OR
+       NOT _installed_context_request_header MATCHES
+           "blob[(][)] const &&[ 	]*=[ 	]*delete" OR
+       NOT _installed_context_request_header MATCHES
+           "fields[(][)] const &&[ 	]*=[ 	]*delete" OR
+       NOT _installed_context_request_header MATCHES
+           "groups[(][)] const &&[ 	]*=[ 	]*delete" OR
+       NOT _installed_context_request_header MATCHES
+           "Value[ 	]+get[(]std::string_view[)][ 	]+const &&[ 	]*=[ 	]*delete" OR
+       NOT _installed_context_request_header MATCHES
+           "Object[ 	]+object[(]std::string_view[)][ 	]+const &&[ 	]*=[ 	]*delete")
+        message(FATAL_ERROR
+            "installed RequestFormData API restored temporary owning-value borrows")
+    endif()
     if(NOT _installed_context_header MATCHES
            "ruvia/web/detail/http/Context[.]inl" OR
        NOT _installed_context_header MATCHES

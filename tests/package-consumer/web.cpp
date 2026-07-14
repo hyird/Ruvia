@@ -410,6 +410,32 @@ concept HasFormAtLookup = requires(const Form& form) {
     form.at(std::string_view{});
 };
 
+template <typename Field>
+concept ExposesAnyRvalueRequestFormFieldBorrow =
+    requires { std::declval<const Field&&>().name(); } ||
+    requires { std::declval<const Field&&>().value(); } ||
+    requires { std::declval<const Field&&>().filename(); } ||
+    requires { std::declval<const Field&&>().contentType(); } ||
+    requires { std::declval<const Field&&>().path(); } ||
+    requires { std::declval<const Field&&>().blob(); };
+
+template <typename Entry>
+concept ExposesRvalueRequestFormEntryFields = requires {
+    std::declval<const Entry&&>().fields();
+};
+
+template <typename Form>
+concept ExposesAnyRvalueRequestFormDataBorrow =
+    requires { std::declval<const Form&&>().fields(); } ||
+    requires { std::declval<const Form&&>().groups(); } ||
+    requires { std::declval<const Form&&>().get(std::string_view{}); } ||
+    requires { std::declval<const Form&&>().object(std::string_view{}); };
+
+template <typename Object>
+concept ExposesRvalueRequestFormObjectGroups = requires {
+    std::declval<const Object&&>().groups();
+};
+
 template <typename Request>
 concept HasRequestCloneMethod = requires(const Request& request) {
     request.clone();
@@ -864,6 +890,8 @@ static_assert(!std::is_constructible_v<
 static_assert(!std::is_copy_constructible_v<ruvia::ContextRequest::RequestFormField>);
 static_assert(std::is_move_constructible_v<ruvia::ContextRequest::RequestFormField>);
 static_assert(!std::is_move_assignable_v<ruvia::ContextRequest::RequestFormField>);
+static_assert(!ExposesAnyRvalueRequestFormFieldBorrow<
+    ruvia::ContextRequest::RequestFormField>);
 static_assert(!std::is_copy_constructible_v<
     ruvia::ContextRequest::RequestFormData::Entry>);
 static_assert(!std::is_copy_assignable_v<
@@ -872,10 +900,14 @@ static_assert(std::is_move_constructible_v<
     ruvia::ContextRequest::RequestFormData::Entry>);
 static_assert(!std::is_move_assignable_v<
     ruvia::ContextRequest::RequestFormData::Entry>);
+static_assert(!ExposesRvalueRequestFormEntryFields<
+    ruvia::ContextRequest::RequestFormData::Entry>);
 static_assert(!std::is_copy_constructible_v<ruvia::ContextRequest::RequestFormData>);
 static_assert(!std::is_copy_assignable_v<ruvia::ContextRequest::RequestFormData>);
 static_assert(std::is_move_constructible_v<ruvia::ContextRequest::RequestFormData>);
 static_assert(!std::is_move_assignable_v<ruvia::ContextRequest::RequestFormData>);
+static_assert(!ExposesAnyRvalueRequestFormDataBorrow<
+    ruvia::ContextRequest::RequestFormData>);
 static_assert(!std::is_constructible_v<
     ruvia::ContextRequest::RequestFormData,
     std::pmr::memory_resource*>);
@@ -887,6 +919,8 @@ static_assert(!std::is_copy_constructible_v<
 static_assert(std::is_move_constructible_v<
     ruvia::ContextRequest::RequestFormData::Object>);
 static_assert(!std::is_move_assignable_v<
+    ruvia::ContextRequest::RequestFormData::Object>);
+static_assert(!ExposesRvalueRequestFormObjectGroups<
     ruvia::ContextRequest::RequestFormData::Object>);
 static_assert(!std::is_constructible_v<
     ruvia::ContextRequest::RequestFormData::Object,

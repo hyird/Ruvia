@@ -370,6 +370,20 @@ concept HasFormFieldCanonicalAccessors = requires(const T& field) {
 };
 
 template <typename T>
+concept ExposesAnyRvalueRequestFormFieldBorrow =
+    requires { std::declval<const T&&>().name(); } ||
+    requires { std::declval<const T&&>().value(); } ||
+    requires { std::declval<const T&&>().filename(); } ||
+    requires { std::declval<const T&&>().contentType(); } ||
+    requires { std::declval<const T&&>().path(); } ||
+    requires { std::declval<const T&&>().blob(); };
+
+template <typename T>
+concept ExposesRvalueRequestFormEntryFields = requires {
+    std::declval<const T&&>().fields();
+};
+
+template <typename T>
 concept HasFormFieldTextAlias = requires(const T& field) {
     field.text();
 };
@@ -497,6 +511,13 @@ concept HasFormDataCanonicalAccessors = requires(const T& form) {
 };
 
 template <typename T>
+concept ExposesAnyRvalueRequestFormDataBorrow =
+    requires { std::declval<const T&&>().fields(); } ||
+    requires { std::declval<const T&&>().groups(); } ||
+    requires { std::declval<const T&&>().get(std::string_view{}); } ||
+    requires { std::declval<const T&&>().object(std::string_view{}); };
+
+template <typename T>
 concept HasFormAtLookup = requires(const T& form) {
     form.at(std::string_view{});
 };
@@ -546,6 +567,11 @@ concept HasFormObjectCanonicalAccessors = requires(const T& object) {
     { object.groups() } -> std::same_as<std::span<const ruvia::ContextRequest::RequestFormData::Entry>>;
     { object.get(std::string_view{}) } -> std::same_as<ruvia::ContextRequest::RequestFormData::Value>;
     { object.count(std::string_view{}) } -> std::same_as<std::size_t>;
+};
+
+template <typename T>
+concept ExposesRvalueRequestFormObjectGroups = requires {
+    std::declval<const T&&>().groups();
 };
 
 template <typename T>
@@ -2000,6 +2026,8 @@ static_assert(!HasFormFieldBooleanMethodAliases<ruvia::ContextRequest::RequestFo
 static_assert(!HasFormFieldPublicFields<ruvia::ContextRequest::RequestFormField>);
 #endif
 static_assert(HasFormFieldCanonicalAccessors<ruvia::ContextRequest::RequestFormField>);
+static_assert(!ExposesAnyRvalueRequestFormFieldBorrow<
+    ruvia::ContextRequest::RequestFormField>);
 static_assert(!std::is_constructible_v<
     ruvia::ContextRequest::RequestFormField,
     std::pmr::memory_resource*,
@@ -2043,6 +2071,10 @@ static_assert(!HasFormDataEntryLookup<ruvia::ContextRequest::RequestFormData>);
 static_assert(!HasFormDataPathAliases<ruvia::ContextRequest::RequestFormData>);
 static_assert(!HasFormAtLookup<ruvia::ContextRequest::RequestFormData>);
 static_assert(HasFormDataCanonicalAccessors<ruvia::ContextRequest::RequestFormData>);
+static_assert(!ExposesRvalueRequestFormEntryFields<
+    ruvia::ContextRequest::RequestFormData::Entry>);
+static_assert(!ExposesAnyRvalueRequestFormDataBorrow<
+    ruvia::ContextRequest::RequestFormData>);
 static_assert(noexcept(std::declval<const ruvia::ContextRequest::RequestFormData&>().get(std::string_view{})));
 static_assert(!HasFormObjectGetAllAlias<ruvia::ContextRequest::RequestFormData::Object>);
 static_assert(!HasFormObjectKeysAllocator<ruvia::ContextRequest::RequestFormData::Object>);
@@ -2052,6 +2084,8 @@ static_assert(!HasFormObjectValueAlias<ruvia::ContextRequest::RequestFormData::O
 static_assert(!HasFormObjectHasAlias<ruvia::ContextRequest::RequestFormData::Object>);
 static_assert(!HasFormObjectNamedValuesAllocator<ruvia::ContextRequest::RequestFormData::Object>);
 static_assert(HasFormObjectCanonicalAccessors<ruvia::ContextRequest::RequestFormData::Object>);
+static_assert(!ExposesRvalueRequestFormObjectGroups<
+    ruvia::ContextRequest::RequestFormData::Object>);
 static_assert(!HasFormAtLookup<ruvia::ContextRequest::RequestFormData::Object>);
 static_assert(noexcept(std::declval<const ruvia::ContextRequest::RequestFormData::Object&>().get(std::string_view{})));
 static_assert(!std::is_default_constructible_v<ruvia::JsonValue>);
