@@ -110,7 +110,7 @@ void assignExceptionError(OwnedHttpErrorInfo& errorInfo, std::exception_ptr exce
         errorInfo.assign(error.info());
     } catch (const detail::UnsupportedRequestContentCoding& error) {
         errorInfo.assign(HttpErrorInfo(
-            error.status(),
+            detail::HttpUnsupportedContentCoding::status(),
             "unsupported_content_coding",
             error.what()));
     } catch (const HttpError& error) {

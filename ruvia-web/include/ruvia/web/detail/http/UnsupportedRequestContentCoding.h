@@ -2,7 +2,6 @@
 
 #include "ruvia/http/detail/HttpContentCoding.h"
 
-#include <cstdint>
 #include <exception>
 
 namespace ruvia::detail {
@@ -13,19 +12,11 @@ namespace ruvia::detail {
 class UnsupportedRequestContentCoding final : public std::exception {
 public:
     explicit UnsupportedRequestContentCoding(
-        const HttpUnsupportedContentCoding&) noexcept
-        : status_(HttpUnsupportedContentCoding::status()) {}
-
-    [[nodiscard]] std::uint16_t status() const noexcept {
-        return status_;
-    }
+        const HttpUnsupportedContentCoding&) noexcept {}
 
     [[nodiscard]] const char* what() const noexcept override {
         return "request Content-Encoding is not supported";
     }
-
-private:
-    std::uint16_t status_;
 };
 
 }  // namespace ruvia::detail

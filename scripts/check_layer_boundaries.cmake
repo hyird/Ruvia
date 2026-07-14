@@ -2373,15 +2373,30 @@ set(WEB_RESPONSE_COMPRESSION_SOURCE
     "${RUVIA_ROOT}/ruvia-web/src/server/HttpResponseCompression.cpp")
 set(WEB_RESPONSE_COMPRESSION_TEST
     "${RUVIA_ROOT}/tests/unit_response_compression.cpp")
+set(WEB_UNSUPPORTED_CONTENT_CODING_SIGNAL
+    "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/http/UnsupportedRequestContentCoding.h")
+set(WEB_ROUTER_DISPATCH_SOURCE
+    "${RUVIA_ROOT}/ruvia-web/src/router/RouterDispatch.cpp")
+set(WEB_ROUTER_DISPATCH_TEST
+    "${RUVIA_ROOT}/tests/unit_routing.cpp")
 if(EXISTS "${HTTP_CONTENT_CODING_CONTRACT}" AND
    EXISTS "${WEB_RESPONSE_COMPRESSION_SOURCE}" AND
-   EXISTS "${WEB_RESPONSE_COMPRESSION_TEST}")
+   EXISTS "${WEB_RESPONSE_COMPRESSION_TEST}" AND
+   EXISTS "${WEB_UNSUPPORTED_CONTENT_CODING_SIGNAL}" AND
+   EXISTS "${WEB_ROUTER_DISPATCH_SOURCE}" AND
+   EXISTS "${WEB_ROUTER_DISPATCH_TEST}")
     file(READ "${HTTP_CONTENT_CODING_CONTRACT}"
         http_content_coding_contract)
     file(READ "${WEB_RESPONSE_COMPRESSION_SOURCE}"
         web_response_compression_source)
     file(READ "${WEB_RESPONSE_COMPRESSION_TEST}"
         web_response_compression_test)
+    file(READ "${WEB_UNSUPPORTED_CONTENT_CODING_SIGNAL}"
+        web_unsupported_content_coding_signal)
+    file(READ "${WEB_ROUTER_DISPATCH_SOURCE}"
+        web_router_dispatch_source)
+    file(READ "${WEB_ROUTER_DISPATCH_TEST}"
+        web_router_dispatch_test)
     if(http_content_coding_contract MATCHES
            "HttpContentCoding::kNone" OR
        NOT http_content_coding_contract MATCHES
@@ -2410,6 +2425,15 @@ if(EXISTS "${HTTP_CONTENT_CODING_CONTRACT}" AND
            "responseBody[(]response[)][.]ownedBytes[(][)]")
         boundary_error("HTTP response compression lost encoded-byte ownership"
             "the HTTP encoder must return one owning alternative and Web must move it into HttpResponse")
+    endif()
+    if(web_unsupported_content_coding_signal MATCHES
+           "status_|HttpUnsupportedContentCoding::status|std::uint16_t[ \t]+status" OR
+       NOT web_router_dispatch_source MATCHES
+           "HttpUnsupportedContentCoding::status[(][)]" OR
+       NOT web_router_dispatch_test MATCHES
+           "dispatch_rejects_unsupported_request_content_coding_with_advertisement")
+        boundary_error("unsupported content-coding status must remain protocol-owned"
+            "the Web signal must carry no status copy and Router dispatch must map the protocol status while preserving its 415/Accept-Encoding behavior test")
     endif()
 endif()
 if(EXISTS
