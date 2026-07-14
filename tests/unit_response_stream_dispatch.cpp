@@ -52,7 +52,18 @@ concept HasLegacySharedResponseTake = requires(Result& result) {
     { result.takeResponse() } -> std::same_as<HttpResponse>;
 };
 
+template <typename Result>
+concept HasAnyRvalueResponseStreamDispatchBorrow =
+    requires(Result&& value) { std::move(value).completed(); } ||
+    requires(Result&& value) { std::move(value).peerAbortedBeforeCommit(); } ||
+    requires(Result&& value) { std::move(value).peerAbortedAfterCommit(); } ||
+    requires(Result&& value) { std::move(value).failedAfterCommit(); } ||
+    requires(Result&& value) { std::move(value).buffered(); } ||
+    requires(Result&& value) { std::move(value).failedBeforeCommit(); };
+
 static_assert(!std::default_initializable<ResponseStreamDispatchResult>);
+static_assert(!HasAnyRvalueResponseStreamDispatchBorrow<
+    ResponseStreamDispatchResult>);
 static_assert(!HasLegacyStreamedPredicate<ResponseStreamDispatchResult>);
 static_assert(!HasLegacySharedResponseTake<ResponseStreamDispatchResult>);
 static_assert(std::same_as<

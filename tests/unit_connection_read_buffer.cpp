@@ -44,8 +44,21 @@ concept HasConsumedBytes = requires(const Alternative& value) {
     { value.consumedBytes() } -> std::same_as<std::size_t>;
 };
 
+template <typename Result>
+concept HasAnyRvalueRequestCompletionBorrow =
+    requires(Result&& value) { std::move(value).discarded(); } ||
+    requires(Result&& value) { std::move(value).compaction(); } ||
+    requires(Result&& value) { std::move(value).restored(); } ||
+    requires(Result&& value) { std::move(value).bufferedResponse(); } ||
+    requires(Result&& value) { std::move(value).committedStream(); } ||
+    requires(Result&& value) { std::move(value).bufferCompletion(); };
+
 static_assert(!std::default_initializable<Http1RequestBufferCompletion>);
 static_assert(!std::default_initializable<Http1SessionRequestCompletion>);
+static_assert(!HasAnyRvalueRequestCompletionBorrow<
+    Http1RequestBufferCompletion>);
+static_assert(!HasAnyRvalueRequestCompletionBorrow<
+    Http1SessionRequestCompletion>);
 static_assert(!std::default_initializable<Http1RequestBufferDiscarded>);
 static_assert(!std::constructible_from<
     Http1RequestBufferCompaction,

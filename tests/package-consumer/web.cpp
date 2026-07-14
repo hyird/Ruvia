@@ -211,6 +211,31 @@ concept HasLooseRouteResolutionAccessors = requires(
     resolution.allowedMethods();
 };
 
+template <typename T>
+concept ExposesAnyRvalueWebExecutionBorrow =
+    requires(T&& value) { std::move(value).values(); } ||
+    requires(T&& value) { std::move(value).match(); } ||
+    requires(T&& value) { std::move(value).resolved(); } ||
+    requires(T&& value) { std::move(value).methodNotAllowed(); } ||
+    requires(T&& value) { std::move(value).notFound(); } ||
+    requires(T&& value) { std::move(value).handled(); } ||
+    requires(T&& value) { std::move(value).buffered(); } ||
+    requires(T&& value) { std::move(value).bufferedResponse(); } ||
+    requires(T&& value) { std::move(value).sessionFinished(); } ||
+    requires(T&& value) { std::move(value).completion(); } ||
+    requires(T&& value) { std::move(value).completed(); } ||
+    requires(T&& value) { std::move(value).peerAbortedBeforeCommit(); } ||
+    requires(T&& value) { std::move(value).peerAbortedAfterCommit(); } ||
+    requires(T&& value) { std::move(value).failedBeforeCommit(); } ||
+    requires(T&& value) { std::move(value).failedAfterCommit(); } ||
+    requires(T&& value) { std::move(value).unavailable(); } ||
+    requires(T&& value) { std::move(value).failed(); } ||
+    requires(T&& value) { std::move(value).discarded(); } ||
+    requires(T&& value) { std::move(value).compaction(); } ||
+    requires(T&& value) { std::move(value).restored(); } ||
+    requires(T&& value) { std::move(value).committedStream(); } ||
+    requires(T&& value) { std::move(value).bufferCompletion(); };
+
 template <typename Entry>
 concept HasStaticRootEntryFoundFlag = requires(const Entry& entry) {
     entry.found();
@@ -1090,6 +1115,28 @@ static_assert(!HasDirectHttp2BodyModeSelection<
     ruvia::detail::Http2RequestBodyRuntime>);
 static_assert(!HasLooseRouteResolutionAccessors<
     ruvia::detail::RouteResolution>);
+static_assert(!ExposesAnyRvalueWebExecutionBorrow<ruvia::detail::RouteMatch>);
+static_assert(!ExposesAnyRvalueWebExecutionBorrow<ruvia::detail::ResolvedRoute>);
+static_assert(!ExposesAnyRvalueWebExecutionBorrow<
+    ruvia::detail::RouteResolution>);
+static_assert(!ExposesAnyRvalueWebExecutionBorrow<
+    ruvia::detail::StreamDispatchResult>);
+static_assert(!ExposesAnyRvalueWebExecutionBorrow<
+    ruvia::detail::ResponseStreamDispatchResult>);
+static_assert(!ExposesAnyRvalueWebExecutionBorrow<
+    ruvia::detail::Http1BufferedResponseWriteResult>);
+static_assert(!ExposesAnyRvalueWebExecutionBorrow<
+    ruvia::detail::Http2BufferedResponseWriteResult>);
+static_assert(!ExposesAnyRvalueWebExecutionBorrow<
+    ruvia::detail::HttpFileZeroCopyResult>);
+static_assert(!ExposesAnyRvalueWebExecutionBorrow<
+    ruvia::detail::Http1RequestBufferCompletion>);
+static_assert(!ExposesAnyRvalueWebExecutionBorrow<
+    ruvia::detail::Http1SessionRequestCompletion>);
+static_assert(!ExposesAnyRvalueWebExecutionBorrow<
+    ruvia::detail::HttpWebSocketBufferedResponse>);
+static_assert(!ExposesAnyRvalueWebExecutionBorrow<
+    ruvia::detail::HttpWebSocketRouteResult>);
 static_assert(!HasSplitContextCapabilityAccessors<
     ruvia::detail::ContextServices>);
 static_assert(!HasLegacyContextBodyRefinement<

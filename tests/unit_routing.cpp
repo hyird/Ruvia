@@ -172,8 +172,9 @@ struct Router final {
     void finalize() { impl.finalize(); }
 
     bool matches(std::string_view p) {
-        return impl.routeTable().resolve(
-            HttpKnownMethod::kGet, p).resolved() != nullptr;
+        const auto resolution = impl.routeTable().resolve(
+            HttpKnownMethod::kGet, p);
+        return resolution.resolved() != nullptr;
     }
 
     std::string_view routePathOf(std::string_view p) {
@@ -383,9 +384,9 @@ RUVIA_TEST(routing_options_only_resource_is_405_not_404) {
                  bit(HttpKnownMethod::kOptions)) != 0);
 
     // The explicit OPTIONS route still handles an OPTIONS request to that path.
-    RUVIA_CHECK(r.impl.routeTable()
-        .resolve(HttpKnownMethod::kOptions, "/preflight")
-        .resolved() != nullptr);
+    const auto preflight = r.impl.routeTable().resolve(
+        HttpKnownMethod::kOptions, "/preflight");
+    RUVIA_CHECK(preflight.resolved() != nullptr);
 }
 
 RUVIA_TEST(routing_options_asterisk_not_captured_by_wildcard_route) {
@@ -397,14 +398,14 @@ RUVIA_TEST(routing_options_asterisk_not_captured_by_wildcard_route) {
     addRoute(r.impl, HttpKnownMethod::kGet, "/*");
     r.finalize();
 
-    RUVIA_CHECK(r.impl.routeTable()
-        .resolve(HttpKnownMethod::kOptions, "*")
-        .notFound() != nullptr);
+    const auto asterisk = r.impl.routeTable().resolve(
+        HttpKnownMethod::kOptions, "*");
+    RUVIA_CHECK(asterisk.notFound() != nullptr);
 
     // A normal path still matches the catch-all: the short-circuit is only for "*".
-    RUVIA_CHECK(r.impl.routeTable()
-        .resolve(HttpKnownMethod::kOptions, "/anything")
-        .resolved() != nullptr);
+    const auto wildcard = r.impl.routeTable().resolve(
+        HttpKnownMethod::kOptions, "/anything");
+    RUVIA_CHECK(wildcard.resolved() != nullptr);
 }
 
 RUVIA_TEST(routing_rejects_duplicate_route_registration) {

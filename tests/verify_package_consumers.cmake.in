@@ -1920,7 +1920,7 @@ if(_built_components_csv MATCHES "(^|,)web(,|$)")
        NOT _installed_http1_request_completion MATCHES
            "connectionPlan[(][)] const noexcept" OR
        NOT _installed_http1_request_completion MATCHES
-           "bufferCompletion[(][)] const noexcept" OR
+           "bufferCompletion[(][)] const [&] noexcept" OR
        NOT _installed_http1_body_completion MATCHES
            "Task<Http1SessionRequestCompletion> completeFailedHttpBodyRoute" OR
        NOT _installed_http1_stream_session MATCHES
@@ -1936,9 +1936,9 @@ if(_built_components_csv MATCHES "(^|,)web(,|$)")
        NOT _installed_http1_websocket_route MATCHES
            "class HttpWebSocketRouteResult final" OR
        NOT _installed_http1_websocket_route MATCHES
-           "bufferedResponse[(][)] const noexcept" OR
+           "bufferedResponse[(][)] const [&] noexcept" OR
        NOT _installed_http1_websocket_route MATCHES
-           "sessionFinished[(][)] const noexcept" OR
+           "sessionFinished[(][)] const [&] noexcept" OR
        NOT _installed_http1_stream_session MATCHES
            "std::optional<Http1SessionRequestCompletion> requestCompletion" OR
        NOT _installed_http1_stream_session MATCHES

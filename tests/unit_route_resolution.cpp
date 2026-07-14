@@ -32,7 +32,25 @@ concept HasLooseRouteResolutionAccessors = requires(const T& value) {
     value.allowedMethods();
 };
 
+template <typename T>
+concept HasAnyRvalueRouteResolutionBorrow =
+    requires(T&& value) { std::move(value).values(); } ||
+    requires(T&& value) { std::move(value).match(); } ||
+    requires(T&& value) { std::move(value).resolved(); } ||
+    requires(T&& value) { std::move(value).methodNotAllowed(); } ||
+    requires(T&& value) { std::move(value).notFound(); };
+
+template <typename T>
+concept HasAnyRvalueStreamDispatchBorrow =
+    requires(T&& value) { std::move(value).handled(); } ||
+    requires(T&& value) { std::move(value).buffered(); };
+
 static_assert(!HasLooseRouteResolutionAccessors<RouteResolution>);
+static_assert(!HasAnyRvalueRouteResolutionBorrow<RouteMatch>);
+static_assert(!HasAnyRvalueRouteResolutionBorrow<ruvia::detail::ResolvedRoute>);
+static_assert(!HasAnyRvalueRouteResolutionBorrow<RouteResolution>);
+static_assert(!HasAnyRvalueStreamDispatchBorrow<
+    ruvia::detail::StreamDispatchResult>);
 static_assert(!std::default_initializable<RouteEndpoint>);
 static_assert(!std::copy_constructible<RouteEndpoint>);
 static_assert(std::move_constructible<RouteEndpoint>);

@@ -198,42 +198,55 @@ public:
             ResponseStreamFailedBeforeCommit(std::move(response)));
     }
 
-    [[nodiscard]] const ResponseStreamCompleted* completed() const noexcept {
+    [[nodiscard]] const ResponseStreamCompleted* completed() const & noexcept {
         return std::get_if<ResponseStreamCompleted>(&value_);
     }
+    [[nodiscard]] const ResponseStreamCompleted* completed() const && = delete;
 
     [[nodiscard]] const ResponseStreamPeerAbortedBeforeCommit*
-    peerAbortedBeforeCommit() const noexcept {
+    peerAbortedBeforeCommit() const & noexcept {
         return std::get_if<ResponseStreamPeerAbortedBeforeCommit>(&value_);
     }
+    [[nodiscard]] const ResponseStreamPeerAbortedBeforeCommit*
+    peerAbortedBeforeCommit() const && = delete;
 
     [[nodiscard]] const ResponseStreamPeerAbortedAfterCommit*
-    peerAbortedAfterCommit() const noexcept {
+    peerAbortedAfterCommit() const & noexcept {
         return std::get_if<ResponseStreamPeerAbortedAfterCommit>(&value_);
     }
+    [[nodiscard]] const ResponseStreamPeerAbortedAfterCommit*
+    peerAbortedAfterCommit() const && = delete;
 
     [[nodiscard]] const ResponseStreamFailedAfterCommit*
-    failedAfterCommit() const noexcept {
+    failedAfterCommit() const & noexcept {
         return std::get_if<ResponseStreamFailedAfterCommit>(&value_);
     }
+    [[nodiscard]] const ResponseStreamFailedAfterCommit*
+    failedAfterCommit() const && = delete;
 
-    [[nodiscard]] const ResponseStreamBuffered* buffered() const noexcept {
+    [[nodiscard]] const ResponseStreamBuffered* buffered() const & noexcept {
         return std::get_if<ResponseStreamBuffered>(&value_);
     }
+    [[nodiscard]] const ResponseStreamBuffered* buffered() const && = delete;
 
-    [[nodiscard]] ResponseStreamBuffered* buffered() noexcept {
+    [[nodiscard]] ResponseStreamBuffered* buffered() & noexcept {
         return std::get_if<ResponseStreamBuffered>(&value_);
     }
+    [[nodiscard]] ResponseStreamBuffered* buffered() && = delete;
 
     [[nodiscard]] const ResponseStreamFailedBeforeCommit*
-    failedBeforeCommit() const noexcept {
+    failedBeforeCommit() const & noexcept {
         return std::get_if<ResponseStreamFailedBeforeCommit>(&value_);
     }
+    [[nodiscard]] const ResponseStreamFailedBeforeCommit*
+    failedBeforeCommit() const && = delete;
 
     [[nodiscard]] ResponseStreamFailedBeforeCommit*
-    failedBeforeCommit() noexcept {
+    failedBeforeCommit() & noexcept {
         return std::get_if<ResponseStreamFailedBeforeCommit>(&value_);
     }
+    [[nodiscard]] ResponseStreamFailedBeforeCommit*
+    failedBeforeCommit() && = delete;
 
 private:
     using Value = std::variant<

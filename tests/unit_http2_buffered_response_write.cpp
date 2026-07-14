@@ -18,7 +18,17 @@ concept HasSubmitError = requires(const Alternative& value) {
         std::same_as<ruvia::detail::Http2ResponseHeadSubmitError>;
 };
 
+template <typename Result>
+concept HasAnyRvalueHttp2WriteBorrow =
+    requires(Result&& value) { std::move(value).completed(); } ||
+    requires(Result&& value) { std::move(value).peerAbortedBeforeCommit(); } ||
+    requires(Result&& value) { std::move(value).peerAbortedAfterCommit(); } ||
+    requires(Result&& value) { std::move(value).failedBeforeCommit(); } ||
+    requires(Result&& value) { std::move(value).failedAfterCommit(); };
+
 static_assert(!std::default_initializable<
+    ruvia::detail::Http2BufferedResponseWriteResult>);
+static_assert(!HasAnyRvalueHttp2WriteBorrow<
     ruvia::detail::Http2BufferedResponseWriteResult>);
 static_assert(HasStatus<
     ruvia::detail::Http2BufferedResponseWriteCompleted>);

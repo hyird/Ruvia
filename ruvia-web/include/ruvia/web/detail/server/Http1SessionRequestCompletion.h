@@ -50,19 +50,25 @@ private:
 class Http1RequestBufferCompletion final {
 public:
     [[nodiscard]] constexpr const Http1RequestBufferDiscarded*
-    discarded() const noexcept {
+    discarded() const & noexcept {
         return std::get_if<Http1RequestBufferDiscarded>(&value_);
     }
+    [[nodiscard]] constexpr const Http1RequestBufferDiscarded*
+    discarded() const && = delete;
 
     [[nodiscard]] constexpr const Http1RequestBufferCompaction*
-    compaction() const noexcept {
+    compaction() const & noexcept {
         return std::get_if<Http1RequestBufferCompaction>(&value_);
     }
+    [[nodiscard]] constexpr const Http1RequestBufferCompaction*
+    compaction() const && = delete;
 
     [[nodiscard]] constexpr const Http1RequestBufferRestored*
-    restored() const noexcept {
+    restored() const & noexcept {
         return std::get_if<Http1RequestBufferRestored>(&value_);
     }
+    [[nodiscard]] constexpr const Http1RequestBufferRestored*
+    restored() const && = delete;
 
 private:
     friend class Http1SessionRequestCompletion;
@@ -158,14 +164,18 @@ public:
     }
 
     [[nodiscard]] constexpr const Http1BufferedResponseReady*
-    bufferedResponse() const noexcept {
+    bufferedResponse() const & noexcept {
         return std::get_if<Http1BufferedResponseReady>(&value_);
     }
+    [[nodiscard]] constexpr const Http1BufferedResponseReady*
+    bufferedResponse() const && = delete;
 
     [[nodiscard]] constexpr const Http1CommittedStreamResponse*
-    committedStream() const noexcept {
+    committedStream() const & noexcept {
         return std::get_if<Http1CommittedStreamResponse>(&value_);
     }
+    [[nodiscard]] constexpr const Http1CommittedStreamResponse*
+    committedStream() const && = delete;
 
     [[nodiscard]] constexpr Http1ServerConnectionPlan
     connectionPlan() const noexcept {
@@ -173,9 +183,11 @@ public:
     }
 
     [[nodiscard]] constexpr const Http1RequestBufferCompletion&
-    bufferCompletion() const noexcept {
+    bufferCompletion() const & noexcept {
         return bufferCompletion_;
     }
+    [[nodiscard]] constexpr const Http1RequestBufferCompletion&
+    bufferCompletion() const && = delete;
 
 private:
     using Value = std::variant<

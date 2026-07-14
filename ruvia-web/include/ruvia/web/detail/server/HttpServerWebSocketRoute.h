@@ -25,9 +25,11 @@ namespace ruvia::detail {
 class HttpWebSocketBufferedResponse final {
 public:
     [[nodiscard]] const Http1SessionRequestCompletion&
-    completion() const noexcept {
+    completion() const & noexcept {
         return completion_;
     }
+    [[nodiscard]] const Http1SessionRequestCompletion&
+    completion() const && = delete;
 
 private:
     friend class HttpWebSocketRouteResult;
@@ -61,14 +63,18 @@ public:
     }
 
     [[nodiscard]] const HttpWebSocketBufferedResponse*
-    bufferedResponse() const noexcept {
+    bufferedResponse() const & noexcept {
         return std::get_if<HttpWebSocketBufferedResponse>(&value_);
     }
+    [[nodiscard]] const HttpWebSocketBufferedResponse*
+    bufferedResponse() const && = delete;
 
     [[nodiscard]] const HttpWebSocketSessionFinished*
-    sessionFinished() const noexcept {
+    sessionFinished() const & noexcept {
         return std::get_if<HttpWebSocketSessionFinished>(&value_);
     }
+    [[nodiscard]] const HttpWebSocketSessionFinished*
+    sessionFinished() const && = delete;
 
 private:
     using Value = std::variant<

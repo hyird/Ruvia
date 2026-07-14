@@ -129,31 +129,41 @@ public:
     }
 
     [[nodiscard]] constexpr const Http2BufferedResponseWriteCompleted*
-    completed() const noexcept {
+    completed() const & noexcept {
         return std::get_if<Http2BufferedResponseWriteCompleted>(&value_);
     }
+    [[nodiscard]] constexpr const Http2BufferedResponseWriteCompleted*
+    completed() const && = delete;
 
     [[nodiscard]] constexpr const Http2BufferedResponseWritePeerAbortedBeforeCommit*
-    peerAbortedBeforeCommit() const noexcept {
+    peerAbortedBeforeCommit() const & noexcept {
         return std::get_if<Http2BufferedResponseWritePeerAbortedBeforeCommit>(
             &value_);
     }
+    [[nodiscard]] constexpr const Http2BufferedResponseWritePeerAbortedBeforeCommit*
+    peerAbortedBeforeCommit() const && = delete;
 
     [[nodiscard]] constexpr const Http2BufferedResponseWritePeerAbortedAfterCommit*
-    peerAbortedAfterCommit() const noexcept {
+    peerAbortedAfterCommit() const & noexcept {
         return std::get_if<Http2BufferedResponseWritePeerAbortedAfterCommit>(
             &value_);
     }
+    [[nodiscard]] constexpr const Http2BufferedResponseWritePeerAbortedAfterCommit*
+    peerAbortedAfterCommit() const && = delete;
 
     [[nodiscard]] constexpr const Http2BufferedResponseWriteFailedBeforeCommit*
-    failedBeforeCommit() const noexcept {
+    failedBeforeCommit() const & noexcept {
         return std::get_if<Http2BufferedResponseWriteFailedBeforeCommit>(&value_);
     }
+    [[nodiscard]] constexpr const Http2BufferedResponseWriteFailedBeforeCommit*
+    failedBeforeCommit() const && = delete;
 
     [[nodiscard]] constexpr const Http2BufferedResponseWriteFailedAfterCommit*
-    failedAfterCommit() const noexcept {
+    failedAfterCommit() const & noexcept {
         return std::get_if<Http2BufferedResponseWriteFailedAfterCommit>(&value_);
     }
+    [[nodiscard]] constexpr const Http2BufferedResponseWriteFailedAfterCommit*
+    failedAfterCommit() const && = delete;
 
 private:
     using Value = std::variant<

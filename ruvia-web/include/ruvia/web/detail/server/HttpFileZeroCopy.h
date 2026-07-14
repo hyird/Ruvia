@@ -35,18 +35,23 @@ private:
 class HttpFileZeroCopyResult final {
 public:
     [[nodiscard]] const HttpFileZeroCopyCompleted* completed()
-        const noexcept {
+        const & noexcept {
         return std::get_if<HttpFileZeroCopyCompleted>(&value_);
     }
+    [[nodiscard]] const HttpFileZeroCopyCompleted* completed()
+        const && = delete;
 
     [[nodiscard]] const HttpFileZeroCopyUnavailable* unavailable()
-        const noexcept {
+        const & noexcept {
         return std::get_if<HttpFileZeroCopyUnavailable>(&value_);
     }
+    [[nodiscard]] const HttpFileZeroCopyUnavailable* unavailable()
+        const && = delete;
 
-    [[nodiscard]] const HttpFileZeroCopyFailed* failed() const noexcept {
+    [[nodiscard]] const HttpFileZeroCopyFailed* failed() const & noexcept {
         return std::get_if<HttpFileZeroCopyFailed>(&value_);
     }
+    [[nodiscard]] const HttpFileZeroCopyFailed* failed() const && = delete;
 
 private:
     friend Task<HttpFileZeroCopyResult> writeFileZeroCopy(

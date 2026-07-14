@@ -3598,7 +3598,7 @@ if(EXISTS "${HTTP_RESPONSE_STREAM_COMMIT_PLAN}" AND
        NOT web_http1_session_request_completion MATCHES
            "connectionPlan[(][)] const noexcept" OR
        NOT web_http1_session_request_completion MATCHES
-           "bufferCompletion[(][)] const noexcept" OR
+           "bufferCompletion[(][)] const [&] noexcept" OR
        NOT web_http1_stream_session MATCHES
            "std::optional<Http1SessionRequestCompletion> requestCompletion" OR
        NOT web_http1_stream_session MATCHES
@@ -9299,6 +9299,111 @@ if(EXISTS "${HTTP_OPERATION_PAYLOAD_REQUEST}" AND
            "ExposesAnyRvalueHttpOperationPayloadBorrow")
         boundary_error("HTTP operation payloads lend owned state from temporary values"
             "parsed, prepared, and submitted payloads must expose owned request, response, plan, and negotiation objects only from live lvalues")
+    endif()
+endif()
+
+set(WEB_EXECUTION_ROUTE_RESOLUTION
+    "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/router/RouteResolution.h")
+set(WEB_EXECUTION_ROUTE_DISPATCH
+    "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/router/RouteStreamResult.h")
+set(WEB_EXECUTION_STREAM_DISPATCH
+    "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/server/HttpResponseStreamDispatch.h")
+set(WEB_EXECUTION_WEBSOCKET_ROUTE
+    "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/server/HttpServerWebSocketRoute.h")
+set(WEB_EXECUTION_HTTP1_WRITE
+    "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/server/Http1BufferedResponseWrite.h")
+set(WEB_EXECUTION_HTTP2_WRITE
+    "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/server/Http2BufferedResponseWrite.h")
+set(WEB_EXECUTION_ZERO_COPY
+    "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/server/HttpFileZeroCopy.h")
+set(WEB_EXECUTION_REQUEST_COMPLETION
+    "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/server/Http1SessionRequestCompletion.h")
+set(WEB_EXECUTION_PACKAGE_CONSUMER
+    "${RUVIA_ROOT}/tests/package-consumer/web.cpp")
+foreach(web_execution_contract IN ITEMS
+        "${WEB_EXECUTION_ROUTE_RESOLUTION}"
+        "${WEB_EXECUTION_ROUTE_DISPATCH}"
+        "${WEB_EXECUTION_STREAM_DISPATCH}"
+        "${WEB_EXECUTION_WEBSOCKET_ROUTE}"
+        "${WEB_EXECUTION_HTTP1_WRITE}"
+        "${WEB_EXECUTION_HTTP2_WRITE}"
+        "${WEB_EXECUTION_ZERO_COPY}"
+        "${WEB_EXECUTION_REQUEST_COMPLETION}"
+        "${WEB_EXECUTION_PACKAGE_CONSUMER}")
+    if(NOT EXISTS "${web_execution_contract}")
+        file(RELATIVE_PATH relative "${RUVIA_ROOT}"
+            "${web_execution_contract}")
+        boundary_error("Web execution result lifetime contract is incomplete"
+            "${relative} is required")
+    endif()
+endforeach()
+if(EXISTS "${WEB_EXECUTION_ROUTE_RESOLUTION}" AND
+   EXISTS "${WEB_EXECUTION_ROUTE_DISPATCH}" AND
+   EXISTS "${WEB_EXECUTION_STREAM_DISPATCH}" AND
+   EXISTS "${WEB_EXECUTION_WEBSOCKET_ROUTE}" AND
+   EXISTS "${WEB_EXECUTION_HTTP1_WRITE}" AND
+   EXISTS "${WEB_EXECUTION_HTTP2_WRITE}" AND
+   EXISTS "${WEB_EXECUTION_ZERO_COPY}" AND
+   EXISTS "${WEB_EXECUTION_REQUEST_COMPLETION}" AND
+   EXISTS "${WEB_EXECUTION_PACKAGE_CONSUMER}")
+    file(READ "${WEB_EXECUTION_ROUTE_RESOLUTION}"
+        web_execution_route_resolution)
+    file(READ "${WEB_EXECUTION_ROUTE_DISPATCH}"
+        web_execution_route_dispatch)
+    file(READ "${WEB_EXECUTION_STREAM_DISPATCH}"
+        web_execution_stream_dispatch)
+    file(READ "${WEB_EXECUTION_WEBSOCKET_ROUTE}"
+        web_execution_websocket_route)
+    file(READ "${WEB_EXECUTION_HTTP1_WRITE}"
+        web_execution_http1_write)
+    file(READ "${WEB_EXECUTION_HTTP2_WRITE}"
+        web_execution_http2_write)
+    file(READ "${WEB_EXECUTION_ZERO_COPY}"
+        web_execution_zero_copy)
+    file(READ "${WEB_EXECUTION_REQUEST_COMPLETION}"
+        web_execution_request_completion)
+    file(READ "${WEB_EXECUTION_PACKAGE_CONSUMER}"
+        web_execution_package_consumer)
+    if(NOT web_execution_route_resolution MATCHES
+           "values[(][)] const [&] noexcept" OR
+       NOT web_execution_route_resolution MATCHES
+           "match[(][)] const && = delete" OR
+       NOT web_execution_route_resolution MATCHES
+           "resolved[(][)] const [&] noexcept" OR
+       NOT web_execution_route_resolution MATCHES
+           "notFound[(][)] const && = delete" OR
+       NOT web_execution_route_dispatch MATCHES
+           "handled[(][)] const [&] noexcept" OR
+       NOT web_execution_route_dispatch MATCHES
+           "buffered[(][)] const && = delete" OR
+       NOT web_execution_stream_dispatch MATCHES
+           "completed[(][)] const [&] noexcept" OR
+       NOT web_execution_stream_dispatch MATCHES
+           "failedBeforeCommit[(][)] && = delete" OR
+       NOT web_execution_websocket_route MATCHES
+           "bufferedResponse[(][)] const [&] noexcept" OR
+       NOT web_execution_websocket_route MATCHES
+           "sessionFinished[(][)] const && = delete" OR
+       NOT web_execution_http1_write MATCHES
+           "completed[(][)] const [&] noexcept" OR
+       NOT web_execution_http1_write MATCHES
+           "failedAfterCommit[(][)] const && = delete" OR
+       NOT web_execution_http2_write MATCHES
+           "completed[(][)] const [&] noexcept" OR
+       NOT web_execution_http2_write MATCHES
+           "peerAbortedBeforeCommit[(][)] const && = delete" OR
+       NOT web_execution_zero_copy MATCHES
+           "failed[(][)] const [&] noexcept" OR
+       NOT web_execution_zero_copy MATCHES
+           "unavailable[(][)][ \t\r\n]+const && = delete" OR
+       NOT web_execution_request_completion MATCHES
+           "compaction[(][)] const [&] noexcept" OR
+       NOT web_execution_request_completion MATCHES
+           "bufferCompletion[(][)] const && = delete" OR
+       NOT web_execution_package_consumer MATCHES
+           "ExposesAnyRvalueWebExecutionBorrow")
+        boundary_error("Web execution results expose payloads from temporary owners"
+            "routing, streaming, WebSocket, buffered-write, file, and request-completion results must lend alternatives only from live lvalues")
     endif()
 endif()
 

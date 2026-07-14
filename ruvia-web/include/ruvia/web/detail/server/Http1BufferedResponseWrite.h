@@ -73,21 +73,27 @@ private:
 class Http1BufferedResponseWriteResult final {
 public:
     [[nodiscard]] const Http1BufferedResponseWriteCompleted*
-    completed() const noexcept {
+    completed() const & noexcept {
         return std::get_if<Http1BufferedResponseWriteCompleted>(&value_);
     }
+    [[nodiscard]] const Http1BufferedResponseWriteCompleted*
+    completed() const && = delete;
 
     [[nodiscard]] const Http1BufferedResponseWriteFailedBeforeCommit*
-    failedBeforeCommit() const noexcept {
+    failedBeforeCommit() const & noexcept {
         return std::get_if<Http1BufferedResponseWriteFailedBeforeCommit>(
             &value_);
     }
+    [[nodiscard]] const Http1BufferedResponseWriteFailedBeforeCommit*
+    failedBeforeCommit() const && = delete;
 
     [[nodiscard]] const Http1BufferedResponseWriteFailedAfterCommit*
-    failedAfterCommit() const noexcept {
+    failedAfterCommit() const & noexcept {
         return std::get_if<Http1BufferedResponseWriteFailedAfterCommit>(
             &value_);
     }
+    [[nodiscard]] const Http1BufferedResponseWriteFailedAfterCommit*
+    failedAfterCommit() const && = delete;
 
 private:
     friend Http1BufferedResponseWriteResult

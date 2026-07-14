@@ -75,7 +75,17 @@ concept HasError = requires(const Alternative& alternative) {
     { alternative.error() } -> std::same_as<const std::error_code&>;
 };
 
+template <typename Result>
+concept HasAnyRvalueHttp1WriteBorrow =
+    requires(Result&& value) { std::move(value).completed(); } ||
+    requires(Result&& value) { std::move(value).failedBeforeCommit(); } ||
+    requires(Result&& value) { std::move(value).failedAfterCommit(); } ||
+    requires(Result&& value) { std::move(value).unavailable(); } ||
+    requires(Result&& value) { std::move(value).failed(); };
+
 static_assert(!std::is_default_constructible_v<
+    Http1BufferedResponseWriteResult>);
+static_assert(!HasAnyRvalueHttp1WriteBorrow<
     Http1BufferedResponseWriteResult>);
 static_assert(!HasStatus<Http1BufferedResponseWriteResult>);
 static_assert(!HasError<Http1BufferedResponseWriteResult>);
@@ -84,6 +94,7 @@ static_assert(HasError<Http1BufferedResponseWriteFailedBeforeCommit>);
 static_assert(HasStatus<Http1BufferedResponseWriteFailedAfterCommit>);
 static_assert(HasError<Http1BufferedResponseWriteFailedAfterCommit>);
 static_assert(!std::is_default_constructible_v<HttpFileZeroCopyResult>);
+static_assert(!HasAnyRvalueHttp1WriteBorrow<HttpFileZeroCopyResult>);
 static_assert(!HasError<HttpFileZeroCopyResult>);
 static_assert(!HasError<HttpFileZeroCopyCompleted>);
 static_assert(!HasError<HttpFileZeroCopyUnavailable>);

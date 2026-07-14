@@ -68,17 +68,22 @@ public:
             StreamRouteBufferedResponse(std::move(response)));
     }
 
-    [[nodiscard]] const StreamRouteHandled* handled() const noexcept {
+    [[nodiscard]] const StreamRouteHandled* handled() const & noexcept {
         return std::get_if<StreamRouteHandled>(&value_);
     }
+    [[nodiscard]] const StreamRouteHandled* handled() const && = delete;
 
-    [[nodiscard]] const StreamRouteBufferedResponse* buffered() const noexcept {
+    [[nodiscard]] const StreamRouteBufferedResponse*
+    buffered() const & noexcept {
         return std::get_if<StreamRouteBufferedResponse>(&value_);
     }
+    [[nodiscard]] const StreamRouteBufferedResponse*
+    buffered() const && = delete;
 
-    [[nodiscard]] StreamRouteBufferedResponse* buffered() noexcept {
+    [[nodiscard]] StreamRouteBufferedResponse* buffered() & noexcept {
         return std::get_if<StreamRouteBufferedResponse>(&value_);
     }
+    [[nodiscard]] StreamRouteBufferedResponse* buffered() && = delete;
 
 private:
     using Value = std::variant<
