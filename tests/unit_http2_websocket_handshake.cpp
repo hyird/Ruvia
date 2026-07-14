@@ -154,7 +154,8 @@ RUVIA_TEST(http2_websocket_handshake_does_not_invent_server_product) {
 
     Collector fields;
     HpackDecoder decoder(std::pmr::get_default_resource());
-    RUVIA_CHECK(decoder.decode(block, &fields, &collect).decoded() != nullptr);
+    const auto decodeResult = decoder.decode(block, &fields, &collect);
+    RUVIA_CHECK(decodeResult.decoded() != nullptr);
     RUVIA_CHECK(hasHeader(fields, ":status", "200"));
     RUVIA_CHECK(hasHeader(fields, "sec-websocket-protocol", "chat"));
     RUVIA_CHECK(hasHeader(

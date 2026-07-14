@@ -124,6 +124,19 @@ concept ExposesRvalueContentCoding = requires(const T&& result) {
 };
 
 template <typename T>
+concept ExposesAnyRvalueWebSocketFrameReadAccessor =
+    requires(T&& result) { std::move(result).needInput(); } ||
+    requires(T&& result) { std::move(result).frame(); } ||
+    requires(T&& result) { std::move(result).failure(); };
+
+template <typename T>
+concept ExposesAnyRvalueWebSocketInboundAccessor =
+    requires(T&& result) { std::move(result).continueReading(); } ||
+    requires(T&& result) { std::move(result).controlFrame(); } ||
+    requires(T&& result) { std::move(result).message(); } ||
+    requires(T&& result) { std::move(result).failure(); };
+
+template <typename T>
 concept ExposesRvalueUnsupportedContentCoding = requires(const T&& result) {
     std::move(result).unsupported();
 };
@@ -627,6 +640,23 @@ concept HasAnyRvalueMultipartPollAccessor =
     requires(T&& result) { std::move(result).needInput(); } ||
     requires(T&& result) { std::move(result).part(); } ||
     requires(T&& result) { std::move(result).done(); } ||
+    requires(T&& result) { std::move(result).failure(); };
+
+template <typename T>
+concept HasAnyRvalueMultipartDelimiterAccessor =
+    requires(T&& result) { std::move(result).noMatch(); } ||
+    requires(T&& result) { std::move(result).needInput(); } ||
+    requires(T&& result) { std::move(result).part(); } ||
+    requires(T&& result) { std::move(result).close(); };
+
+template <typename T>
+concept HasAnyRvalueMultipartPartHeaderAccessor =
+    requires(T&& result) { std::move(result).headers(); } ||
+    requires(T&& result) { std::move(result).failure(); };
+
+template <typename T>
+concept HasAnyRvalueMultipartBoundaryAccessor =
+    requires(T&& result) { std::move(result).boundary(); } ||
     requires(T&& result) { std::move(result).failure(); };
 
 template <typename T>
@@ -1229,6 +1259,10 @@ static_assert(std::same_as<
     decltype(std::declval<const ruvia::detail::HpackDecodeResult&>()
         .failure()),
     const ruvia::detail::HpackDecodeFailure*>);
+static_assert(!ExposesRvalueDecodedContent<
+    ruvia::detail::HpackDecodeResult>);
+static_assert(!ExposesRvalueDecodeFailure<
+    ruvia::detail::HpackDecodeResult>);
 static_assert(!std::default_initializable<
     ruvia::Http1RequestParseFailure>);
 static_assert(std::same_as<
@@ -2005,6 +2039,10 @@ static_assert(std::same_as<
     decltype(std::declval<const ruvia::detail::
         WebSocketClosePayloadEncodeResult&>().failure()),
     const ruvia::detail::WebSocketClosePayloadEncodeFailure*>);
+static_assert(!ExposesRvalueEncodedContent<
+    ruvia::detail::WebSocketClosePayloadEncodeResult>);
+static_assert(!ExposesRvalueEncodeFailure<
+    ruvia::detail::WebSocketClosePayloadEncodeResult>);
 static_assert(std::same_as<
     decltype(std::declval<const ruvia::detail::
         WebSocketEncodedClosePayload&>().bytes()),
@@ -2045,6 +2083,8 @@ static_assert(!HasWsCleanEofAllowedField<
     ruvia::detail::WebSocketFrameReadResult>);
 static_assert(!HasWsProtocolFailure<
     ruvia::detail::WebSocketFrameReadResult>);
+static_assert(!ExposesAnyRvalueWebSocketFrameReadAccessor<
+    ruvia::detail::WebSocketFrameReadResult>);
 static_assert(HasWsProtocolFailure<
     ruvia::detail::WebSocketFrameReadFailure>);
 static_assert(!std::default_initializable<
@@ -2068,6 +2108,8 @@ static_assert(std::same_as<
 static_assert(!HasWsInboundActionAccessor<
     ruvia::detail::WebSocketInboundResult>);
 static_assert(!HasWsProtocolFailure<
+    ruvia::detail::WebSocketInboundResult>);
+static_assert(!ExposesAnyRvalueWebSocketInboundAccessor<
     ruvia::detail::WebSocketInboundResult>);
 static_assert(HasWsProtocolFailure<
     ruvia::detail::WebSocketInboundFailure>);
@@ -2170,6 +2212,8 @@ static_assert(!std::default_initializable<
     ruvia::detail::HttpMultipartDelimiterResult>);
 static_assert(!HasMultipartStatus<
     ruvia::detail::HttpMultipartDelimiterResult>);
+static_assert(!HasAnyRvalueMultipartDelimiterAccessor<
+    ruvia::detail::HttpMultipartDelimiterResult>);
 static_assert(!HasMultipartOffset<
     ruvia::detail::HttpMultipartDelimiterNoMatch>);
 static_assert(HasMultipartOffset<
@@ -2184,7 +2228,11 @@ static_assert(!std::default_initializable<
     ruvia::detail::HttpMultipartBoundaryParseResult>);
 static_assert(!HasMultipartStatus<
     ruvia::detail::HttpMultipartBoundaryParseResult>);
+static_assert(!HasAnyRvalueMultipartBoundaryAccessor<
+    ruvia::detail::HttpMultipartBoundaryParseResult>);
 static_assert(!std::default_initializable<
+    ruvia::detail::HttpMultipartPartHeaderParseResult>);
+static_assert(!HasAnyRvalueMultipartPartHeaderAccessor<
     ruvia::detail::HttpMultipartPartHeaderParseResult>);
 static_assert(std::same_as<
     decltype(ruvia::lookupUniqueHttpClientResponseHeader(

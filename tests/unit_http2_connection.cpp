@@ -1848,10 +1848,11 @@ RUVIA_TEST(http2_connection_request_content_alternatives_own_wire_framing) {
 
         RequestContentLengthObservation observation;
         HpackDecoder decoder(&resource);
-        RUVIA_CHECK(decoder.decode(
+        const auto decodeResult = decoder.decode(
             out.substr(9, frame.length),
             &observation,
-            &observeRequestContentLength).decoded() != nullptr);
+            &observeRequestContentLength);
+        RUVIA_CHECK(decodeResult.decoded() != nullptr);
         if (expectedContentLength.empty()) {
             RUVIA_CHECK_EQ(observation.count, static_cast<std::size_t>(0));
         } else {

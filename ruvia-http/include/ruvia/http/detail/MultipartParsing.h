@@ -105,24 +105,28 @@ private:
 class HttpMultipartDelimiterResult final {
 public:
     [[nodiscard]] constexpr const HttpMultipartDelimiterNoMatch*
-    noMatch() const noexcept {
+    noMatch() const & noexcept {
         return std::get_if<HttpMultipartDelimiterNoMatch>(&value_);
     }
+    const HttpMultipartDelimiterNoMatch* noMatch() const && = delete;
 
     [[nodiscard]] constexpr const HttpMultipartDelimiterNeedInput*
-    needInput() const noexcept {
+    needInput() const & noexcept {
         return std::get_if<HttpMultipartDelimiterNeedInput>(&value_);
     }
+    const HttpMultipartDelimiterNeedInput* needInput() const && = delete;
 
     [[nodiscard]] constexpr const HttpMultipartPartDelimiter*
-    part() const noexcept {
+    part() const & noexcept {
         return std::get_if<HttpMultipartPartDelimiter>(&value_);
     }
+    const HttpMultipartPartDelimiter* part() const && = delete;
 
     [[nodiscard]] constexpr const HttpMultipartCloseDelimiter*
-    close() const noexcept {
+    close() const & noexcept {
         return std::get_if<HttpMultipartCloseDelimiter>(&value_);
     }
+    const HttpMultipartCloseDelimiter* close() const && = delete;
 
 private:
     friend HttpMultipartDelimiterResult httpMatchMultipartDelimiterLine(
@@ -403,14 +407,16 @@ private:
 class HttpMultipartPartHeaderParseResult final {
 public:
     [[nodiscard]] constexpr const HttpMultipartPartHeaders*
-    headers() const noexcept {
+    headers() const & noexcept {
         return std::get_if<HttpMultipartPartHeaders>(&value_);
     }
+    const HttpMultipartPartHeaders* headers() const && = delete;
 
     [[nodiscard]] constexpr const HttpMultipartPartHeaderParseFailure*
-    failure() const noexcept {
+    failure() const & noexcept {
         return std::get_if<HttpMultipartPartHeaderParseFailure>(&value_);
     }
+    const HttpMultipartPartHeaderParseFailure* failure() const && = delete;
 
 private:
     friend HttpMultipartPartHeaderParseResult httpParseMultipartPartHeaders(
@@ -466,14 +472,17 @@ private:
 
 class HttpMultipartBoundaryParseResult final {
 public:
-    [[nodiscard]] constexpr const MultipartBoundary* boundary() const noexcept {
+    [[nodiscard]] constexpr const MultipartBoundary*
+    boundary() const & noexcept {
         return std::get_if<MultipartBoundary>(&value_);
     }
+    const MultipartBoundary* boundary() const && = delete;
 
     [[nodiscard]] constexpr const HttpMultipartBoundaryParseFailure*
-    failure() const noexcept {
+    failure() const & noexcept {
         return std::get_if<HttpMultipartBoundaryParseFailure>(&value_);
     }
+    const HttpMultipartBoundaryParseFailure* failure() const && = delete;
 
 private:
     friend HttpMultipartBoundaryParseResult httpParseMultipartBoundary(std::string_view);

@@ -45,13 +45,15 @@ private:
 
 class HpackDecodeResult final {
 public:
-    [[nodiscard]] constexpr const HpackDecoded* decoded() const noexcept {
+    [[nodiscard]] constexpr const HpackDecoded* decoded() const & noexcept {
         return std::get_if<HpackDecoded>(&state_);
     }
+    [[nodiscard]] constexpr const HpackDecoded* decoded() const && = delete;
 
-    [[nodiscard]] constexpr const HpackDecodeFailure* failure() const noexcept {
+    [[nodiscard]] constexpr const HpackDecodeFailure* failure() const & noexcept {
         return std::get_if<HpackDecodeFailure>(&state_);
     }
+    [[nodiscard]] constexpr const HpackDecodeFailure* failure() const && = delete;
 
 private:
     friend class HpackDecoder;

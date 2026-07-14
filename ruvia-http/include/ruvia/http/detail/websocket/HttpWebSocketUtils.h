@@ -278,14 +278,18 @@ private:
 class WebSocketClosePayloadEncodeResult final {
 public:
     [[nodiscard]] constexpr const WebSocketEncodedClosePayload* encoded()
-        const noexcept {
+        const & noexcept {
         return std::get_if<WebSocketEncodedClosePayload>(&value_);
     }
+    [[nodiscard]] constexpr const WebSocketEncodedClosePayload* encoded()
+        const && = delete;
 
     [[nodiscard]] constexpr const WebSocketClosePayloadEncodeFailure* failure()
-        const noexcept {
+        const & noexcept {
         return std::get_if<WebSocketClosePayloadEncodeFailure>(&value_);
     }
+    [[nodiscard]] constexpr const WebSocketClosePayloadEncodeFailure* failure()
+        const && = delete;
 
 private:
     friend WebSocketClosePayloadEncodeResult encodeWebSocketClosePayload(
@@ -403,24 +407,32 @@ private:
 class WebSocketInboundResult final {
 public:
     [[nodiscard]] constexpr const WebSocketInboundContinue*
-    continueReading() const noexcept {
+    continueReading() const & noexcept {
         return std::get_if<WebSocketInboundContinue>(&value_);
     }
+    [[nodiscard]] constexpr const WebSocketInboundContinue*
+    continueReading() const && = delete;
 
     [[nodiscard]] constexpr const WebSocketInboundControlFrame*
-    controlFrame() const noexcept {
+    controlFrame() const & noexcept {
         return std::get_if<WebSocketInboundControlFrame>(&value_);
     }
+    [[nodiscard]] constexpr const WebSocketInboundControlFrame*
+    controlFrame() const && = delete;
 
     [[nodiscard]] constexpr const WebSocketInboundMessage*
-    message() const noexcept {
+    message() const & noexcept {
         return std::get_if<WebSocketInboundMessage>(&value_);
     }
+    [[nodiscard]] constexpr const WebSocketInboundMessage*
+    message() const && = delete;
 
     [[nodiscard]] constexpr const WebSocketInboundFailure*
-    failure() const noexcept {
+    failure() const & noexcept {
         return std::get_if<WebSocketInboundFailure>(&value_);
     }
+    [[nodiscard]] constexpr const WebSocketInboundFailure*
+    failure() const && = delete;
 
 private:
     friend class WebSocketInboundAssembler;
@@ -588,19 +600,25 @@ private:
 class WebSocketFrameReadResult final {
 public:
     [[nodiscard]] constexpr const WebSocketFrameNeedInput*
-    needInput() const noexcept {
+    needInput() const & noexcept {
         return std::get_if<WebSocketFrameNeedInput>(&value_);
     }
+    [[nodiscard]] constexpr const WebSocketFrameNeedInput*
+    needInput() const && = delete;
 
     [[nodiscard]] constexpr const WebSocketFrameView*
-    frame() const noexcept {
+    frame() const & noexcept {
         return std::get_if<WebSocketFrameView>(&value_);
     }
+    [[nodiscard]] constexpr const WebSocketFrameView*
+    frame() const && = delete;
 
     [[nodiscard]] constexpr const WebSocketFrameReadFailure*
-    failure() const noexcept {
+    failure() const & noexcept {
         return std::get_if<WebSocketFrameReadFailure>(&value_);
     }
+    [[nodiscard]] constexpr const WebSocketFrameReadFailure*
+    failure() const && = delete;
 
 private:
     friend WebSocketFrameReadResult webSocketTryReadFrame(

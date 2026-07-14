@@ -1,5 +1,6 @@
 #include "test_harness.h"
 
+#include <concepts>
 #include <cstdint>
 #include <initializer_list>
 #include <memory_resource>
@@ -14,7 +15,15 @@ namespace {
 
 using ruvia::detail::HpackDecoder;
 using ruvia::detail::HpackDecodeError;
+using ruvia::detail::HpackDecodeResult;
 using ruvia::detail::HpackEncoder;
+
+template <typename T>
+concept HasAnyRvalueHpackDecodeAccessor =
+    requires(T&& result) { std::move(result).decoded(); } ||
+    requires(T&& result) { std::move(result).failure(); };
+
+static_assert(!HasAnyRvalueHpackDecodeAccessor<HpackDecodeResult>);
 
 struct Collector final {
     std::vector<std::pair<std::string, std::string>> headers;
@@ -37,7 +46,8 @@ std::string bytes(std::initializer_list<int> values) {
 // Decode an HPACK block into (name, value) pairs; returns whether it succeeded.
 bool decodeBlock(std::string_view block, Collector& out) {
     HpackDecoder decoder(std::pmr::get_default_resource());
-    return decoder.decode(block, &out, &collect).decoded() != nullptr;
+    const auto result = decoder.decode(block, &out, &collect);
+    return result.decoded() != nullptr;
 }
 
 }  // namespace
@@ -300,16 +310,21 @@ RUVIA_TEST(hpack_size_update_to_zero_evicts_dynamic_table) {
     add += static_cast<char>(0x0C);  // value length 12
     add += "custom-value";
     Collector added;
-    RUVIA_CHECK(decoder.decode(add, &added, &collect).decoded() != nullptr);
+    const auto addResult = decoder.decode(add, &added, &collect);
+    RUVIA_CHECK(addResult.decoded() != nullptr);
 
     // Index 62 (static 61 + newest dynamic) resolves to the entry just added.
     Collector referenced;
-    RUVIA_CHECK(decoder.decode(bytes({0xBE}), &referenced, &collect).decoded() != nullptr);
+    const auto referencedResult =
+        decoder.decode(bytes({0xBE}), &referenced, &collect);
+    RUVIA_CHECK(referencedResult.decoded() != nullptr);
     RUVIA_CHECK_EQ(referenced.headers.size(), std::size_t{1});
 
     // A size update to 0 (0x20) must evict every dynamic entry (RFC 7541 4.3).
     Collector evicted;
-    RUVIA_CHECK(decoder.decode(bytes({0x20}), &evicted, &collect).decoded() != nullptr);
+    const auto evictionResult =
+        decoder.decode(bytes({0x20}), &evicted, &collect);
+    RUVIA_CHECK(evictionResult.decoded() != nullptr);
 
     // The evicted entry is no longer in the table: index 62 is now out of range.
     Collector dangling;

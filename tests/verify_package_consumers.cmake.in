@@ -819,6 +819,10 @@ if(NOT _installed_ws_inbound MATCHES
        "std::get_if<WebSocketEncodedClosePayload>" OR
    NOT _installed_ws_inbound MATCHES
        "std::get_if<WebSocketClosePayloadEncodeFailure>" OR
+   NOT _installed_ws_inbound MATCHES
+       "encoded[(][)][ \t\r\n]+const [&] noexcept" OR
+   NOT _installed_ws_inbound MATCHES
+       "encoded[(][)][ \t\r\n]+const && = delete" OR
    _installed_ws_inbound MATCHES "using WebSocketClosePayload" OR
    _installed_ws_inbound MATCHES
        "encodeWebSocketClosePayload[(][^)]*WebSocketClosePayload&")
@@ -933,7 +937,19 @@ if(NOT _installed_ws_inbound MATCHES
        "std::get_if<WebSocketInboundMessage>" OR
    NOT _installed_ws_inbound MATCHES
        "std::get_if<WebSocketInboundFailure>" OR
-   NOT _installed_ws_inbound MATCHES "webSocketClosePayloadFailure")
+   NOT _installed_ws_inbound MATCHES "webSocketClosePayloadFailure" OR
+   NOT _installed_ws_inbound MATCHES
+       "needInput[(][)] const [&] noexcept" OR
+   NOT _installed_ws_inbound MATCHES
+       "frame[(][)] const [&] noexcept" OR
+   NOT _installed_ws_inbound MATCHES
+       "continueReading[(][)] const [&] noexcept" OR
+   NOT _installed_ws_inbound MATCHES
+       "controlFrame[(][)] const [&] noexcept" OR
+   NOT _installed_ws_inbound MATCHES
+       "needInput[(][)] const && = delete" OR
+   NOT _installed_ws_inbound MATCHES
+       "continueReading[(][)] const && = delete")
     message(FATAL_ERROR "installed WebSocket core lost its typed inbound result contract")
 endif()
 if(_installed_ws_inbound MATCHES "WebSocketProtocolError" OR
@@ -2792,9 +2808,13 @@ if(_installed_http2_hpack MATCHES "HpackError|HpackDecodeError::kNone" OR
    NOT _installed_http2_hpack MATCHES "class HpackDecodeResult final" OR
    NOT _installed_http2_hpack MATCHES "std::variant<HpackDecoded" OR
    NOT _installed_http2_hpack MATCHES
-       "const HpackDecoded[*] decoded[(][)] const noexcept" OR
+       "const HpackDecoded[*] decoded[(][)] const [&] noexcept" OR
    NOT _installed_http2_hpack MATCHES
-       "const HpackDecodeFailure[*] failure[(][)] const noexcept")
+       "const HpackDecodeFailure[*] failure[(][)] const [&] noexcept" OR
+   NOT _installed_http2_hpack MATCHES
+       "decoded[(][)] const && = delete" OR
+   NOT _installed_http2_hpack MATCHES
+       "failure[(][)] const && = delete")
     message(FATAL_ERROR "installed HPACK decode result lost its discriminated success/failure contract")
 endif()
 set(_installed_http2_remote_receive_path

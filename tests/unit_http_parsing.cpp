@@ -263,9 +263,9 @@ RUVIA_TEST(multipart_boundary_line_requires_delimiter_terminator) {
     }
     // A close delimiter ("--abc--") is a valid terminator too.
     const std::string_view closing = "--abc--\r\n";
-    RUVIA_CHECK(
-        httpFindInitialMultipartDelimiter(
-            closing, ruvia::MultipartBoundary("abc"), true).close() != nullptr);
+    const auto closeMatch = httpFindInitialMultipartDelimiter(
+        closing, ruvia::MultipartBoundary("abc"), true);
+    RUVIA_CHECK(closeMatch.close() != nullptr);
 }
 
 // --- zstd request-body decode: truncation must be rejected ---------------

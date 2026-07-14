@@ -2092,7 +2092,19 @@ if(NOT multipart_protocol_helpers MATCHES "class HttpMultipartDelimiterNoMatch f
    NOT multipart_protocol_helpers MATCHES "class HttpMultipartPartHeaderParseResult final" OR
    NOT multipart_protocol_helpers MATCHES "using Value = std::variant" OR
    NOT multipart_protocol_helpers MATCHES "httpMatchMultipartDelimiterLine" OR
-   NOT multipart_protocol_helpers MATCHES "std::get_if<HttpMultipartDelimiterNeedInput>")
+   NOT multipart_protocol_helpers MATCHES "std::get_if<HttpMultipartDelimiterNeedInput>" OR
+   NOT multipart_protocol_helpers MATCHES
+       "noMatch[(][)] const &&[ \\t]*=[ \\t]*delete" OR
+   NOT multipart_protocol_helpers MATCHES
+       "needInput[(][)] const &&[ \\t]*=[ \\t]*delete" OR
+   NOT multipart_protocol_helpers MATCHES
+       "part[(][)] const &&[ \\t]*=[ \\t]*delete" OR
+   NOT multipart_protocol_helpers MATCHES
+       "close[(][)] const &&[ \\t]*=[ \\t]*delete" OR
+   NOT multipart_protocol_helpers MATCHES
+       "headers[(][)] const &&[ \\t]*=[ \\t]*delete" OR
+   NOT multipart_protocol_helpers MATCHES
+       "boundary[(][)] const &&[ \\t]*=[ \\t]*delete")
     boundary_error("multipart delimiter and Content-Type decisions escaped the HTTP core"
         "ruvia-http must own discriminated boundary/header extraction and an input-aware shared delimiter scanner")
 endif()
@@ -2171,6 +2183,18 @@ if(NOT multipart_unit_test MATCHES "multipart_parser_commits_an_eof_close_only_a
    NOT multipart_package_consumer MATCHES "repeatedMultipartFailure" OR
    NOT multipart_package_consumer MATCHES "failedMultipartParser[.]feed" OR
    NOT multipart_package_consumer MATCHES "HttpMultipartDelimiterResult" OR
+   NOT multipart_unit_test MATCHES
+       "!HasAnyRvalueMultipartDelimiterAccessor" OR
+   NOT multipart_unit_test MATCHES
+       "!HasAnyRvalueMultipartPartHeaderAccessor" OR
+   NOT multipart_unit_test MATCHES
+       "!HasAnyRvalueMultipartBoundaryAccessor" OR
+   NOT multipart_package_consumer MATCHES
+       "!HasAnyRvalueMultipartDelimiterAccessor" OR
+   NOT multipart_package_consumer MATCHES
+       "!HasAnyRvalueMultipartPartHeaderAccessor" OR
+   NOT multipart_package_consumer MATCHES
+       "!HasAnyRvalueMultipartBoundaryAccessor" OR
    NOT multipart_api_surface MATCHES "HasMultipartPollResultAccessors<ruvia::MultipartPollResult>" OR
    NOT multipart_package_consumer MATCHES
        "!HasAnyRvalueMultipartPollAccessor<ruvia::MultipartPollResult>" OR
@@ -8313,6 +8337,9 @@ if(EXISTS "${WS_PROTOCOL_HEADER}" AND EXISTS "${WS_EVENT_HEADER}" AND
            "std::get_if<WebSocketEncodedClosePayload>" OR
        NOT ws_inbound MATCHES
            "std::get_if<WebSocketClosePayloadEncodeFailure>" OR
+       NOT ws_inbound MATCHES "encoded[(][)][ \t\r\n]+const [&] noexcept" OR
+       NOT ws_inbound MATCHES "failure[(][)][ \t\r\n]+const [&] noexcept" OR
+       NOT ws_inbound MATCHES "encoded[(][)][ \t\r\n]+const && = delete" OR
        ws_inbound MATCHES "using WebSocketClosePayload" OR
        ws_validation_source MATCHES
            "throw[ \\t]+std::invalid_argument")
@@ -8349,6 +8376,13 @@ if(EXISTS "${WS_PROTOCOL_HEADER}" AND EXISTS "${WS_EVENT_HEADER}" AND
        NOT ws_inbound MATCHES "std::get_if<WebSocketInboundControlFrame>" OR
        NOT ws_inbound MATCHES "std::get_if<WebSocketInboundMessage>" OR
        NOT ws_inbound MATCHES "std::get_if<WebSocketInboundFailure>" OR
+       NOT ws_inbound MATCHES "needInput[(][)] const [&] noexcept" OR
+       NOT ws_inbound MATCHES "frame[(][)] const [&] noexcept" OR
+       NOT ws_inbound MATCHES "continueReading[(][)] const [&] noexcept" OR
+       NOT ws_inbound MATCHES "controlFrame[(][)] const [&] noexcept" OR
+       NOT ws_inbound MATCHES "message[(][)] const [&] noexcept" OR
+       NOT ws_inbound MATCHES "needInput[(][)] const && = delete" OR
+       NOT ws_inbound MATCHES "continueReading[(][)] const && = delete" OR
        NOT ws_inbound MATCHES "webSocketClosePayloadFailure" OR
        NOT ws_protocol_source MATCHES "read[.]failure[(][)]" OR
        NOT ws_protocol_source MATCHES "inbound[.]failure[(][)]" OR
@@ -8503,6 +8537,12 @@ if(EXISTS "${WS_FRAME_RESULT_TEST}" AND
            "webSocketClosePayloadFailure" OR
        NOT ws_close_result_test MATCHES
            "WebSocketProtocolFailure::kInvalidPayloadData" OR
+       NOT ws_close_result_test MATCHES
+           "HasAnyRvalueClosePayloadAccessor" OR
+       NOT ws_frame_result_test MATCHES
+           "HasAnyRvalueFrameReadAccessor" OR
+       NOT ws_assembler_result_test MATCHES
+           "HasAnyRvalueInboundAccessor" OR
        NOT ws_inbound_package_consumer MATCHES
            "WebSocketFrameReadResult" OR
        NOT ws_inbound_package_consumer MATCHES
@@ -8956,12 +8996,18 @@ if(EXISTS "${HTTP2_HPACK}" AND
        NOT http2_hpack MATCHES "class HpackDecodeFailure final" OR
        NOT http2_hpack MATCHES "class HpackDecodeResult final" OR
        NOT http2_hpack MATCHES "std::variant<HpackDecoded" OR
+       NOT http2_hpack MATCHES "decoded[(][)] const [&] noexcept" OR
+       NOT http2_hpack MATCHES "failure[(][)] const [&] noexcept" OR
+       NOT http2_hpack MATCHES "decoded[(][)] const && = delete" OR
+       NOT http2_hpack MATCHES "failure[(][)] const && = delete" OR
        NOT http2_hpack MATCHES "using StepResult = std::optional" OR
        NOT http2_hpack_header_decode MATCHES
            "result[.]failure[(][)][-][>]error[(][)]" OR
        NOT http2_hpack_test MATCHES
            "hpack_integer_overflow_is_rejected" OR
        NOT http2_hpack_test MATCHES "failure[-][>]error[(][)]" OR
+       NOT http2_hpack_test MATCHES
+           "HasAnyRvalueHpackDecodeAccessor" OR
        NOT http2_hpack_consumer MATCHES
            "!std::default_initializable<[^>]*HpackDecodeResult" OR
        NOT http2_hpack_package_verify MATCHES

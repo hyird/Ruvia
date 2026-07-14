@@ -41,6 +41,23 @@ concept HasAnyRvalueMultipartPollAccessor =
     requires(T&& result) { std::move(result).done(); } ||
     requires(T&& result) { std::move(result).failure(); };
 
+template <typename T>
+concept HasAnyRvalueMultipartDelimiterAccessor =
+    requires(T&& result) { std::move(result).noMatch(); } ||
+    requires(T&& result) { std::move(result).needInput(); } ||
+    requires(T&& result) { std::move(result).part(); } ||
+    requires(T&& result) { std::move(result).close(); };
+
+template <typename T>
+concept HasAnyRvalueMultipartPartHeaderAccessor =
+    requires(T&& result) { std::move(result).headers(); } ||
+    requires(T&& result) { std::move(result).failure(); };
+
+template <typename T>
+concept HasAnyRvalueMultipartBoundaryAccessor =
+    requires(T&& result) { std::move(result).boundary(); } ||
+    requires(T&& result) { std::move(result).failure(); };
+
 static_assert(std::same_as<
     decltype(std::declval<ruvia::MultipartParser&>().poll()),
     ruvia::MultipartPollResult>);
@@ -75,6 +92,8 @@ static_assert(!std::default_initializable<
     ruvia::detail::HttpMultipartDelimiterResult>);
 static_assert(!HasMultipartStatus<
     ruvia::detail::HttpMultipartDelimiterResult>);
+static_assert(!HasAnyRvalueMultipartDelimiterAccessor<
+    ruvia::detail::HttpMultipartDelimiterResult>);
 static_assert(!HasMultipartOffset<
     ruvia::detail::HttpMultipartDelimiterNoMatch>);
 static_assert(HasMultipartOffset<
@@ -90,10 +109,14 @@ static_assert(!std::default_initializable<
     ruvia::detail::HttpMultipartBoundaryParseResult>);
 static_assert(!HasMultipartStatus<
     ruvia::detail::HttpMultipartBoundaryParseResult>);
+static_assert(!HasAnyRvalueMultipartBoundaryAccessor<
+    ruvia::detail::HttpMultipartBoundaryParseResult>);
 static_assert(!HasMultipartError<ruvia::MultipartBoundary>);
 static_assert(HasMultipartError<
     ruvia::detail::HttpMultipartBoundaryParseFailure>);
 static_assert(!std::default_initializable<
+    ruvia::detail::HttpMultipartPartHeaderParseResult>);
+static_assert(!HasAnyRvalueMultipartPartHeaderAccessor<
     ruvia::detail::HttpMultipartPartHeaderParseResult>);
 static_assert(!HasMultipartError<
     ruvia::detail::HttpMultipartPartHeaders>);
@@ -142,28 +165,28 @@ RUVIA_TEST(multipart_boundary_prefix_of_longer_token_is_not_a_delimiter) {
 RUVIA_TEST(multipart_boundary_close_delimiter_still_matches) {
     using ruvia::detail::httpMatchMultipartDelimiterLine;
     const auto boundary = ruvia::MultipartBoundary("abc");
-    RUVIA_CHECK(
-        httpMatchMultipartDelimiterLine("--abc--\r\n", boundary, false)
-            .close() != nullptr);
-    RUVIA_CHECK(
-        httpMatchMultipartDelimiterLine("--abc\r\nrest", boundary, false)
-            .part() != nullptr);
+    const auto close = httpMatchMultipartDelimiterLine(
+        "--abc--\r\n", boundary, false);
+    RUVIA_CHECK(close.close() != nullptr);
+    const auto part = httpMatchMultipartDelimiterLine(
+        "--abc\r\nrest", boundary, false);
+    RUVIA_CHECK(part.part() != nullptr);
 
     // RFC 2046 transport-padding is accepted on both delimiter forms.
-    RUVIA_CHECK(
-        httpMatchMultipartDelimiterLine("--abc \t\r\n", boundary, false)
-            .part() != nullptr);
-    RUVIA_CHECK(
-        httpMatchMultipartDelimiterLine("--abc-- \t\r\n", boundary, false)
-            .close() != nullptr);
+    const auto paddedPart = httpMatchMultipartDelimiterLine(
+        "--abc \t\r\n", boundary, false);
+    RUVIA_CHECK(paddedPart.part() != nullptr);
+    const auto paddedClose = httpMatchMultipartDelimiterLine(
+        "--abc-- \t\r\n", boundary, false);
+    RUVIA_CHECK(paddedClose.close() != nullptr);
 
     // A close delimiter at the current chunk edge is ambiguous until EOF.
-    RUVIA_CHECK(
-        httpMatchMultipartDelimiterLine("--abc--", boundary, false)
-            .needInput() != nullptr);
-    RUVIA_CHECK(
-        httpMatchMultipartDelimiterLine("--abc--", boundary, true)
-            .close() != nullptr);
+    const auto ambiguousClose = httpMatchMultipartDelimiterLine(
+        "--abc--", boundary, false);
+    RUVIA_CHECK(ambiguousClose.needInput() != nullptr);
+    const auto eofClose = httpMatchMultipartDelimiterLine(
+        "--abc--", boundary, true);
+    RUVIA_CHECK(eofClose.close() != nullptr);
 }
 
 RUVIA_TEST(multipart_boundary_value_enforces_rfc2046_grammar) {

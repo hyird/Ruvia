@@ -70,6 +70,13 @@ concept HasInboundContentEncoding = requires(const T& result) {
         std::same_as<WebSocketInboundContentEncoding>;
 };
 
+template <typename T>
+concept HasAnyRvalueInboundAccessor =
+    requires(T&& result) { std::move(result).continueReading(); } ||
+    requires(T&& result) { std::move(result).controlFrame(); } ||
+    requires(T&& result) { std::move(result).message(); } ||
+    requires(T&& result) { std::move(result).failure(); };
+
 static_assert(!std::default_initializable<WebSocketInboundResult>);
 static_assert(std::same_as<
     decltype(std::declval<const WebSocketInboundResult&>().continueReading()),
@@ -85,6 +92,7 @@ static_assert(std::same_as<
     const ruvia::detail::WebSocketInboundFailure*>);
 static_assert(!HasInboundAction<WebSocketInboundResult>);
 static_assert(!HasInboundError<WebSocketInboundResult>);
+static_assert(!HasAnyRvalueInboundAccessor<WebSocketInboundResult>);
 static_assert(HasInboundOpcode<ruvia::detail::WebSocketInboundControlFrame>);
 static_assert(!HasInboundContentEncoding<
     ruvia::detail::WebSocketInboundControlFrame>);

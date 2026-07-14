@@ -55,6 +55,12 @@ concept HasFrameReadError = requires(const T& result) {
     { result.error() } -> std::same_as<WebSocketProtocolFailure>;
 };
 
+template <typename T>
+concept HasAnyRvalueFrameReadAccessor =
+    requires(T&& result) { std::move(result).needInput(); } ||
+    requires(T&& result) { std::move(result).frame(); } ||
+    requires(T&& result) { std::move(result).failure(); };
+
 static_assert(!std::default_initializable<WebSocketFrameReadResult>);
 static_assert(std::same_as<
     decltype(std::declval<const WebSocketFrameReadResult&>().needInput()),
@@ -70,6 +76,7 @@ static_assert(!HasFrameReadStatusAccessor<WebSocketFrameReadResult>);
 static_assert(!HasRequiredBytesField<WebSocketFrameReadResult>);
 static_assert(!HasCleanEofAllowedField<WebSocketFrameReadResult>);
 static_assert(!HasFrameReadError<WebSocketFrameReadResult>);
+static_assert(!HasAnyRvalueFrameReadAccessor<WebSocketFrameReadResult>);
 static_assert(HasFrameReadError<ruvia::detail::WebSocketFrameReadFailure>);
 
 std::pmr::string maskedFrame(
