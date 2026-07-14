@@ -6,6 +6,7 @@
 #include "ruvia/http/detail/HttpResponseHeaderAccess.h"
 #include "ruvia/http/detail/HttpResponseHeaderState.h"
 #include "ruvia/http/detail/AsciiCase.h"
+#include "ruvia/http/detail/CookieValidation.h"
 #include "ruvia/http/detail/SetCookiePlan.h"
 #include "ruvia/http/detail/Hex.h"
 #include "ruvia/web/detail/http/HttpErrorResponse.h"
@@ -218,6 +219,23 @@ void Context::header(std::string_view name, std::nullopt_t) {
 
 namespace {
 
+// The signature must bind the name the client sends back in Cookie, which is
+// the wire name: an enum prefix becomes part of that name at serialization, so
+// signing the bare name would make the prefixed cookie unverifiable on read.
+[[nodiscard]] std::string_view signedCookieWireName(
+    std::pmr::string& storage,
+    std::string_view name,
+    const ruvia::CookieOptions& options) {
+    if (!options.prefix) {
+        return name;
+    }
+    const auto prefix = ruvia::detail::cookiePrefixText(*options.prefix);
+    storage.reserve(prefix.size() + name.size());
+    storage.append(prefix.data(), prefix.size());
+    storage.append(name.data(), name.size());
+    return storage;
+}
+
 [[nodiscard]] std::pmr::string composeSignedCookieValue(
     std::pmr::memory_resource* resource,
     std::string_view name,
@@ -259,7 +277,15 @@ void Context::setSignedCookie(
     std::string_view value,
     std::string_view secret,
     const CookieOptions& options) {
-    setCookie(name, composeSignedCookieValue(resource(), name, value, secret), options);
+    std::pmr::string wireName(resource());
+    setCookie(
+        name,
+        composeSignedCookieValue(
+            resource(),
+            signedCookieWireName(wireName, name, options),
+            value,
+            secret),
+        options);
 }
 
 std::pmr::string Context::generateCookie(
@@ -280,7 +306,15 @@ std::pmr::string Context::generateSignedCookie(
     std::string_view value,
     std::string_view secret,
     const CookieOptions& options) const {
-    return generateCookie(name, composeSignedCookieValue(resource(), name, value, secret), options);
+    std::pmr::string wireName(resource());
+    return generateCookie(
+        name,
+        composeSignedCookieValue(
+            resource(),
+            signedCookieWireName(wireName, name, options),
+            value,
+            secret),
+        options);
 }
 
 std::optional<std::string_view> Context::deleteCookie(std::string_view name, CookieOptions options) {
