@@ -15,7 +15,7 @@ namespace ruvia::detail {
 
 [[nodiscard]] std::runtime_error mysqlError(const st_mysql& connection, std::string_view operation);
 
-void freeStoredResult(st_mysql_res* result) noexcept;
+void freeStoredResult(void* result) noexcept;
 
 [[nodiscard]] std::pmr::string interpolateSql(
     st_mysql& connection,

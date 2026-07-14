@@ -143,6 +143,10 @@ Task<void> runHttp2SansIoSession(
     bool writeFailed = false;
     bool writerDone = false;  // writer coroutine has fully exited (level-triggered join)
     bool initialInputRetained = false;
+    // keepaliveRequests parity with h1's Http1RequestSequence: after this many
+    // request heads the connection drains (GOAWAY NO_ERROR) instead of serving
+    // new streams forever.
+    std::size_t acceptedRequestHeads = 0;
 
     const auto wakeWriter = [&writeSignal]() noexcept {
         asio::error_code ignored;
@@ -641,6 +645,15 @@ Task<void> runHttp2SansIoSession(
             }
             if (const auto* messageHead = event->messageHead()) {
                 const auto streamId = messageHead->streamId();
+                ++acceptedRequestHeads;
+                if (!connection.draining() &&
+                    options.keepaliveRequests.has_value() &&
+                    acceptedRequestHeads >= *options.keepaliveRequests) {
+                    // This request still runs; the GOAWAY covers every stream
+                    // at or below it, so the peer reopens on a new connection.
+                    connection.beginDrain();
+                    wakeWriter();
+                }
                 auto* streamState = connection.stream(streamId);
                 if (streamState == nullptr) {
                     continue;

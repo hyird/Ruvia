@@ -46,19 +46,32 @@ set(RUVIA_WEB_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/src/router/RouterRegistration.cpp
 )
 
+if(RUVIA_ENABLE_MARIADB OR RUVIA_ENABLE_POSTGRESQL)
+    list(APPEND RUVIA_WEB_SOURCES
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/db/DbHandle.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/db/DbMigration.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/db/DbPoolScheduler.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/db/DbRegistry.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/db/DbSlotSocket.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/db/DbTypes.cpp)
+endif()
+
 if(RUVIA_ENABLE_MARIADB)
     list(APPEND RUVIA_WEB_SOURCES
         ${CMAKE_CURRENT_SOURCE_DIR}/src/db/Db.cpp
-        ${CMAKE_CURRENT_SOURCE_DIR}/src/db/DbHandle.cpp
-        ${CMAKE_CURRENT_SOURCE_DIR}/src/db/DbMigration.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/src/db/DbMysqlRuntime.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/src/db/DbPoolIo.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/src/db/DbPoolLifecycle.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/src/db/DbPoolSlots.cpp
-        ${CMAKE_CURRENT_SOURCE_DIR}/src/db/DbRegistry.cpp
-        ${CMAKE_CURRENT_SOURCE_DIR}/src/db/DbSlotSocket.cpp
-        ${CMAKE_CURRENT_SOURCE_DIR}/src/db/DbSql.cpp
-        ${CMAKE_CURRENT_SOURCE_DIR}/src/db/DbTypes.cpp)
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/db/DbSql.cpp)
+endif()
+
+if(RUVIA_ENABLE_POSTGRESQL)
+    list(APPEND RUVIA_WEB_SOURCES
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/db/DbPostgreSql.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/db/PgDb.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/db/PgPoolIo.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/db/PgPoolLifecycle.cpp)
 endif()
 
 if(RUVIA_ENABLE_REDIS)
@@ -121,6 +134,15 @@ if(RUVIA_ENABLE_MARIADB)
     target_link_libraries(ruvia-web PUBLIC unofficial::libmariadb)
 endif()
 
+if(RUVIA_ENABLE_POSTGRESQL)
+    target_compile_definitions(ruvia-web PUBLIC RUVIA_ENABLE_POSTGRESQL)
+    target_link_libraries(ruvia-web PUBLIC PostgreSQL::PostgreSQL)
+endif()
+
+if(RUVIA_ENABLE_MARIADB OR RUVIA_ENABLE_POSTGRESQL)
+    target_compile_definitions(ruvia-web PUBLIC RUVIA_ENABLE_DATABASE)
+endif()
+
 if(RUVIA_ENABLE_REDIS)
     target_compile_definitions(ruvia-web PUBLIC RUVIA_ENABLE_REDIS)
     target_link_libraries(ruvia-web PUBLIC hiredis::hiredis)
@@ -168,7 +190,7 @@ ruvia_install_public_headers(web
     include/ruvia/web/Router.h
 )
 
-if(RUVIA_ENABLE_MARIADB)
+if(RUVIA_ENABLE_MARIADB OR RUVIA_ENABLE_POSTGRESQL)
     ruvia_install_public_header_tree(web include/ruvia/web/db)
 endif()
 

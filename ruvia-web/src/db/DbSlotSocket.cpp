@@ -4,15 +4,15 @@
 
 namespace ruvia::detail {
 
-SlotSocket::SlotSocket(asio::io_context& ioContext)
+DbSlotSocket::DbSlotSocket(asio::io_context& ioContext)
 #if defined(_WIN32)
     : socket(ioContext) {}
 #else
     : descriptor(ioContext) {}
 #endif
 
-bool SlotSocket::ensureAssigned(my_socket fd) noexcept {
-    if (fd == static_cast<my_socket>(MARIADB_INVALID_SOCKET)) {
+bool DbSlotSocket::ensureAssigned(NativeSocket fd) noexcept {
+    if (fd == kInvalidSocket) {
         return false;
     }
     std::error_code ec;
@@ -23,7 +23,10 @@ bool SlotSocket::ensureAssigned(my_socket fd) noexcept {
         }
         (void)socket.release(ec);
     }
-    socket.assign(asio::ip::tcp::v4(), fd, ec);
+    socket.assign(
+        asio::ip::tcp::v4(),
+        static_cast<asio::ip::tcp::socket::native_handle_type>(fd),
+        ec);
 #else
     if (descriptor.is_open()) {
         if (native == fd) {
@@ -34,14 +37,14 @@ bool SlotSocket::ensureAssigned(my_socket fd) noexcept {
     descriptor.assign(fd, ec);
 #endif
     if (ec) {
-        native = static_cast<my_socket>(MARIADB_INVALID_SOCKET);
+        native = kInvalidSocket;
         return false;
     }
     native = fd;
     return true;
 }
 
-void SlotSocket::cancel() noexcept {
+void DbSlotSocket::cancel() noexcept {
     std::error_code ignored;
 #if defined(_WIN32)
     socket.cancel(ignored);
@@ -50,7 +53,7 @@ void SlotSocket::cancel() noexcept {
 #endif
 }
 
-void SlotSocket::release() noexcept {
+void DbSlotSocket::release() noexcept {
     std::error_code ignored;
     (void)ignored;
 #if defined(_WIN32)
@@ -62,7 +65,7 @@ void SlotSocket::release() noexcept {
         (void)descriptor.release();
     }
 #endif
-    native = static_cast<my_socket>(MARIADB_INVALID_SOCKET);
+    native = kInvalidSocket;
 }
 
 }  // namespace ruvia::detail

@@ -39,6 +39,7 @@ struct HttpServerOptions final {
         std::pmr::string privateKeyFile;
         std::pmr::string privateKeyPassword;
         std::pmr::string verifyFile;
+        bool requireClientCertificate{false};
         std::pmr::vector<SniCertificate> sniCertificates;
     };
 

@@ -57,14 +57,16 @@ RUVIA_TEST(utf8_rejects_invalid_sequences) {
 }
 
 RUVIA_TEST(websocket_close_code_validity) {
-    // RFC 6455 §7.4.1: codes an endpoint may send.
-    for (const int code : {1000, 1001, 1002, 1003, 1007, 1008, 1009, 1010, 1011}) {
+    // RFC 6455 §7.4.1 plus the IANA-registered 1012-1014
+    // (service restart / try again later / bad gateway).
+    for (const int code :
+         {1000, 1001, 1002, 1003, 1007, 1008, 1009, 1010, 1011, 1012, 1013, 1014}) {
         RUVIA_CHECK(closeCodeValid(code));
     }
     RUVIA_CHECK(closeCodeValid(3000));  // registered range
     RUVIA_CHECK(closeCodeValid(4999));  // private range
     // Reserved or out-of-range codes must be rejected.
-    for (const int code : {0, 999, 1004, 1005, 1006, 1012, 1015, 1016, 2999, 5000, 65535}) {
+    for (const int code : {0, 999, 1004, 1005, 1006, 1015, 1016, 2999, 5000, 65535}) {
         RUVIA_CHECK(!closeCodeValid(code));
     }
 }

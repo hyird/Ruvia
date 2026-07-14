@@ -38,11 +38,17 @@ App& App::useTls(TlsConfig config) {
                 throw std::invalid_argument("TLS private key file must not be empty");
             }
 
+            if (config.requireClientCertificate && config.verifyFile.empty()) {
+                throw std::invalid_argument(
+                    "TLS requireClientCertificate needs a verifyFile CA bundle");
+            }
+
             state.options.tls.enabled = true;
             assignTlsFileName(state.options.tls.certificateChainFile, config.certificateChainFile);
             assignTlsFileName(state.options.tls.privateKeyFile, config.privateKeyFile);
             state.options.tls.privateKeyPassword = std::move(config.privateKeyPassword);
             assignTlsFileName(state.options.tls.verifyFile, config.verifyFile);
+            state.options.tls.requireClientCertificate = config.requireClientCertificate;
         });
 }
 

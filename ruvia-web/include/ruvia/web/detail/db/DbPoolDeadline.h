@@ -1,16 +1,15 @@
 #pragma once
 
-#include "ruvia/web/detail/db/DbInternal.h"
-
 #include <chrono>
 #include <optional>
 
-namespace ruvia {
+namespace ruvia::detail {
 
-struct detail::MariaDbPool::OperationDeadline final {
+class DbOperationDeadline final {
+public:
     std::optional<std::chrono::steady_clock::time_point> deadline;
 
-    explicit OperationDeadline(
+    explicit DbOperationDeadline(
         std::optional<std::chrono::milliseconds> timeout) noexcept {
         if (timeout.has_value()) {
             deadline = std::chrono::steady_clock::now() + *timeout;
@@ -29,4 +28,4 @@ struct detail::MariaDbPool::OperationDeadline final {
     }
 };
 
-}  // namespace ruvia
+}  // namespace ruvia::detail

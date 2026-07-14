@@ -155,12 +155,31 @@ if(RUVIA_ENABLE_REDIS)
     )
 endif()
 
-# The DB SQL-interpolation suite links interpolateSql (and libmariadb's escaper).
+# The backend-neutral API suite is present for either database driver.
+if(RUVIA_ENABLE_MARIADB OR RUVIA_ENABLE_POSTGRESQL)
+    target_sources(ruvia_unit_tests PRIVATE unit_db_api_surface.cpp)
+endif()
+
+# Driver-specific parameter encoding is tested against the same library that
+# performs it; neither suite pulls the other backend into a single-driver build.
 if(RUVIA_ENABLE_MARIADB)
-    target_sources(ruvia_unit_tests PRIVATE
-        unit_db_api_surface.cpp
-        unit_db_sql.cpp
-    )
+    target_sources(ruvia_unit_tests PRIVATE unit_db_sql.cpp)
+endif()
+if(RUVIA_ENABLE_POSTGRESQL)
+    target_sources(ruvia_unit_tests PRIVATE unit_db_postgresql.cpp)
+endif()
+
+if(RUVIA_ENABLE_POSTGRESQL_INTEGRATION_TESTS)
+    add_executable(ruvia_postgresql_integration postgresql_integration.cpp)
+    target_link_libraries(ruvia_postgresql_integration PRIVATE ruvia::web)
+    if(MSVC)
+        target_compile_options(ruvia_postgresql_integration PRIVATE /bigobj /FS)
+    endif()
+    add_test(NAME ruvia_postgresql_integration COMMAND ruvia_postgresql_integration)
+    set_tests_properties(ruvia_postgresql_integration PROPERTIES
+        LABELS "database;postgresql;integration"
+        RUN_SERIAL TRUE
+        TIMEOUT 60)
 endif()
 
 target_link_libraries(ruvia_unit_tests PRIVATE ruvia::web)
@@ -243,6 +262,11 @@ ruvia_add_internal_guard(ruvia_guard_http2_stream_table guards/http2_stream_tabl
 ruvia_add_internal_guard(ruvia_guard_context_response_state guards/context_response_state_guard.cpp)
 ruvia_add_internal_guard(ruvia_guard_context_request_header guards/context_request_header_guard.cpp)
 ruvia_add_internal_guard(ruvia_guard_cookie_api guards/cookie_api_guard.cpp)
+
+add_executable(ruvia_server_shutdown_drain server_shutdown_drain.cpp)
+target_link_libraries(ruvia_server_shutdown_drain PRIVATE ruvia::web)
+add_test(NAME ruvia_server_shutdown_drain COMMAND ruvia_server_shutdown_drain)
+set_tests_properties(ruvia_server_shutdown_drain PROPERTIES TIMEOUT 90)
 endif()
 
 configure_file(

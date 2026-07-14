@@ -56,7 +56,7 @@
 #ifdef RUVIA_ENABLE_JWT
 #include <ruvia/web/auth/Jwt.h>
 #endif
-#ifdef RUVIA_ENABLE_MARIADB
+#ifdef RUVIA_ENABLE_DATABASE
 #include <ruvia/web/db/Db.h>
 #endif
 #ifdef RUVIA_ENABLE_REDIS
@@ -72,7 +72,7 @@ static_assert(std::same_as<
     std::optional<std::chrono::seconds>>);
 #endif
 
-#ifdef RUVIA_ENABLE_MARIADB
+#ifdef RUVIA_ENABLE_DATABASE
 static_assert(std::same_as<
     decltype(ruvia::DbConfig{}.connectTimeout),
     std::optional<std::chrono::milliseconds>>);
@@ -82,6 +82,8 @@ static_assert(std::same_as<
 static_assert(std::same_as<
     decltype(ruvia::DbConfig{}.acquireTimeout),
     std::optional<std::chrono::milliseconds>>);
+static_assert(std::same_as<decltype(ruvia::DbConfig::mariaDb()), ruvia::DbConfig>);
+static_assert(std::same_as<decltype(ruvia::DbConfig::postgreSql()), ruvia::DbConfig>);
 #endif
 
 #ifdef RUVIA_ENABLE_REDIS

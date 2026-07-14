@@ -44,7 +44,7 @@ struct AppState final {
     HttpNotFoundHandler notFoundHandler{nullptr};
     std::pmr::vector<AppHook> onStartHooks{appResource()};
     std::pmr::vector<AppHook> onStopHooks{appResource()};
-#ifdef RUVIA_ENABLE_MARIADB
+#ifdef RUVIA_ENABLE_DATABASE
     std::pmr::vector<DbDefinition> databases{appResource()};
 #endif
 #ifdef RUVIA_ENABLE_REDIS

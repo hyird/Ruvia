@@ -83,7 +83,6 @@ private:
     std::size_t pendingCompactUntil_{0};
     std::size_t deliveredBytes_{0};
     bool finished_{false};
-    bool transferFinished_{false};
     bool continueSent_{false};
 };
 

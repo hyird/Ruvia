@@ -34,7 +34,6 @@ Task<std::optional<std::string_view>> StreamBodyReader<Stream>::readChunked() {
             co_return bodyChunk->bytes();
         }
         if (result.complete() != nullptr) {
-            markFinished();
             compactPending();
             co_return std::nullopt;
         }
@@ -53,7 +52,11 @@ Task<std::optional<std::string_view>> StreamBodyReader<Stream>::readChunked() {
 template <typename Stream>
 Task<std::optional<std::string_view>> StreamBodyReader<Stream>::readTransferDecodedChunked() {
     if (transferDecoder_ == nullptr) {
-        co_return co_await readChunked();
+        auto chunk = co_await readChunked();
+        if (!chunk) {
+            markFinished();
+        }
+        co_return chunk;
     }
 
     if (transferOutput_.empty()) {
@@ -86,7 +89,7 @@ Task<std::optional<std::string_view>> StreamBodyReader<Stream>::readTransferDeco
         auto chunk = co_await readChunked();
         if (!chunk) {
             requireCompleteTransferCoding(*transferDecoder_);
-            transferFinished_ = true;
+            markFinished();
             co_return std::nullopt;
         }
         transferInput_ = *chunk;

@@ -354,6 +354,8 @@ public:
     // Copies input into parser-owned PMR storage. finishInput() is required when
     // the enclosing HTTP body ends so a close delimiter ending exactly at EOF
     // can be distinguished from a delimiter line split across input chunks.
+    // A protocol failure is terminal: later poll() calls repeat the exact error
+    // and feed() rejects further bytes.
     void feed(std::string_view chunk);
     void finishInput() noexcept;
 
@@ -373,12 +375,14 @@ private:
         std::pmr::memory_resource* resource,
         CompleteInputTag);
 
-    enum class State {
+    enum class ProgressState : std::uint8_t {
         kBoundary,
         kHeaders,
         kBody,
         kDone
     };
+
+    using State = std::variant<ProgressState, MultipartParseError>;
 
     enum class StepStatus : std::uint8_t {
         kNeedInput,
@@ -399,6 +403,8 @@ private:
     void compactPending();
     [[nodiscard]] static MultipartParseError stepError(
         StepStatus status) noexcept;
+    [[nodiscard]] MultipartPollResult fail(
+        MultipartParseError error) noexcept;
     [[nodiscard]] StepStatus processBoundary();
     [[nodiscard]] StepStatus processHeaders();
     [[nodiscard]] MultipartStreamPart makePart(std::string_view body, bool partEnd);
@@ -413,7 +419,7 @@ private:
     std::string_view currentContentTypeView_;
     std::string_view borrowedInput_;
     bool borrowedInputMode_{false};
-    State state_{State::kBoundary};
+    State state_{ProgressState::kBoundary};
     std::size_t bufferOffset_{0};
     std::size_t pendingEraseBytes_{0};
     bool nextChunkIsFirst_{false};

@@ -137,19 +137,20 @@ RUVIA_TEST(db_interpolate_sql_requires_matching_placeholder_count) {
 RUVIA_TEST(db_migration_table_name_rejects_injection) {
     using ruvia::detail::isValidMigrationTableName;
     // Valid SQL identifiers: letters, digits, underscores.
-    RUVIA_CHECK(isValidMigrationTableName("ruvia_schema_migrations"));
-    RUVIA_CHECK(isValidMigrationTableName("t1"));
-    RUVIA_CHECK(isValidMigrationTableName("_private"));
-    RUVIA_CHECK(isValidMigrationTableName("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"));
+    constexpr auto driver = ruvia::DbDriver::kMariaDb;
+    RUVIA_CHECK(isValidMigrationTableName("ruvia_schema_migrations", driver));
+    RUVIA_CHECK(isValidMigrationTableName("t1", driver));
+    RUVIA_CHECK(isValidMigrationTableName("_private", driver));
+    RUVIA_CHECK(isValidMigrationTableName("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", driver));
     // The name is a non-parameterizable identifier, so anything that could break
     // out of the backtick quoting or restructure the SQL is rejected.
-    RUVIA_CHECK(!isValidMigrationTableName(""));
-    RUVIA_CHECK(!isValidMigrationTableName("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"));
-    RUVIA_CHECK(!isValidMigrationTableName("has space"));
-    RUVIA_CHECK(!isValidMigrationTableName("has-hyphen"));
-    RUVIA_CHECK(!isValidMigrationTableName("a.b"));
-    RUVIA_CHECK(!isValidMigrationTableName("quote'"));
-    RUVIA_CHECK(!isValidMigrationTableName("tbl`; DROP TABLE users;--"));
+    RUVIA_CHECK(!isValidMigrationTableName("", driver));
+    RUVIA_CHECK(!isValidMigrationTableName("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", driver));
+    RUVIA_CHECK(!isValidMigrationTableName("has space", driver));
+    RUVIA_CHECK(!isValidMigrationTableName("has-hyphen", driver));
+    RUVIA_CHECK(!isValidMigrationTableName("a.b", driver));
+    RUVIA_CHECK(!isValidMigrationTableName("quote'", driver));
+    RUVIA_CHECK(!isValidMigrationTableName("tbl`; DROP TABLE users;--", driver));
 }
 
 RUVIA_TEST(db_migration_list_validation_enforces_integrity) {

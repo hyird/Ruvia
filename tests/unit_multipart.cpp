@@ -478,8 +478,17 @@ RUVIA_TEST(multipart_complete_body_parser_shares_incremental_limits) {
         ruvia::MultipartBoundary("BOUNDARY"),
         std::pmr::get_default_resource());
     incremental.feed(oversizedPreamble);
-    incremental.finishInput();
     const auto streamed = incremental.poll();
     RUVIA_CHECK(streamed.failure() != nullptr);
     RUVIA_CHECK(streamed.failure()->error() == complete.failure()->error());
+    const auto repeated = incremental.poll();
+    RUVIA_CHECK(repeated.failure() != nullptr);
+    RUVIA_CHECK(repeated.failure()->error() == complete.failure()->error());
+    bool feedAfterFailureThrew = false;
+    try {
+        incremental.feed("--BOUNDARY--");
+    } catch (const std::logic_error&) {
+        feedAfterFailureThrew = true;
+    }
+    RUVIA_CHECK(feedAfterFailureThrew);
 }

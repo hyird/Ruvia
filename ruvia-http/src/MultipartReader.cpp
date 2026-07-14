@@ -123,8 +123,11 @@ void MultipartParser::compactPending() {
 }
 
 void MultipartParser::feed(std::string_view chunk) {
-    if (borrowedInputMode_ || inputFinished_ || state_ == State::kDone) {
-        throw std::logic_error("multipart parser cannot accept input after completion");
+    const auto* progress = std::get_if<ProgressState>(&state_);
+    if (borrowedInputMode_ || inputFinished_ || progress == nullptr ||
+        *progress == ProgressState::kDone) {
+        throw std::logic_error(
+            "multipart parser cannot accept input in a terminal state");
     }
     compactConsumedPrefix();
     buffer_.append(chunk.data(), chunk.size());
@@ -154,15 +157,25 @@ MultipartParseError MultipartParser::stepError(StepStatus status) noexcept {
     return MultipartParseError::kInvalidDelimiter;
 }
 
+MultipartPollResult MultipartParser::fail(
+    MultipartParseError error) noexcept {
+    auto result = MultipartPollResult::makeFailure(error);
+    state_ = error;
+    return result;
+}
+
 MultipartPollResult MultipartParser::poll() {
+    if (const auto* failure = std::get_if<MultipartParseError>(&state_)) {
+        return MultipartPollResult::makeFailure(*failure);
+    }
     for (;;) {
         compactPending();
-        switch (state_) {
-            case State::kBoundary: {
+        switch (std::get<ProgressState>(state_)) {
+            case ProgressState::kBoundary: {
                 const auto status = processBoundary();
                 if (status == StepStatus::kNeedInput) {
                     if (inputFinished_) {
-                        return MultipartPollResult::makeFailure(
+                        return fail(
                             MultipartParseError::kIncompleteBody);
                     }
                     return MultipartPollResult::makeNeedInput();
@@ -171,33 +184,33 @@ MultipartPollResult MultipartParser::poll() {
                     return MultipartPollResult::makeDone();
                 }
                 if (status != StepStatus::kContinue) {
-                    return MultipartPollResult::makeFailure(stepError(status));
+                    return fail(stepError(status));
                 }
                 break;
             }
-            case State::kHeaders: {
+            case ProgressState::kHeaders: {
                 const auto status = processHeaders();
                 if (status == StepStatus::kNeedInput) {
                     if (inputFinished_) {
-                        return MultipartPollResult::makeFailure(
+                        return fail(
                             MultipartParseError::kIncompleteBody);
                     }
                     return MultipartPollResult::makeNeedInput();
                 }
                 if (status != StepStatus::kContinue) {
-                    return MultipartPollResult::makeFailure(stepError(status));
+                    return fail(stepError(status));
                 }
                 break;
             }
-            case State::kBody: {
+            case ProgressState::kBody: {
                 auto result = readBodyChunk();
                 if (result.needInput() != nullptr && inputFinished_) {
-                    return MultipartPollResult::makeFailure(
+                    return fail(
                         MultipartParseError::kIncompleteBody);
                 }
                 return result;
             }
-            case State::kDone:
+            case ProgressState::kDone:
                 return MultipartPollResult::makeDone();
         }
     }
@@ -237,12 +250,12 @@ MultipartParser::StepStatus MultipartParser::processBoundary() {
         }
         if (const auto* part = delimiter.part()) {
             consume(part->lineBytes());
-            state_ = State::kHeaders;
+            state_ = ProgressState::kHeaders;
             return StepStatus::kContinue;
         }
         if (const auto* close = delimiter.close()) {
             consume(close->lineBytes());
-            state_ = State::kDone;
+            state_ = ProgressState::kDone;
             return StepStatus::kDone;
         }
         return StepStatus::kInvalidDelimiter;
@@ -298,7 +311,7 @@ MultipartParser::StepStatus MultipartParser::processHeaders() {
         }
         consume(headersEnd + 4);
         nextChunkIsFirst_ = true;
-        state_ = State::kBody;
+        state_ = ProgressState::kBody;
         return StepStatus::kContinue;
     }
 }
@@ -330,14 +343,14 @@ MultipartPollResult MultipartParser::readBodyChunk() {
                 : closeDelimiter->offset();
             auto part = makePart(buffer.substr(0, delimiterOffset), true);
             pendingEraseBytes_ = delimiterOffset;
-            state_ = State::kBoundary;
+            state_ = ProgressState::kBoundary;
             return MultipartPollResult::makePart(part);
         }
         if (const auto* needInput = delimiter.needInput()) {
             constexpr std::size_t kMaxMultipartDelimiterLineBytes = 64 * 1024;
             if (buffer.size() - needInput->offset() >
                 kMaxMultipartDelimiterLineBytes) {
-                return MultipartPollResult::makeFailure(
+                return fail(
                     MultipartParseError::kDelimiterLineTooLarge);
             }
             if (needInput->offset() > 0) {

@@ -69,9 +69,19 @@ private:
         kStopped,
     };
 
+    // RAII notify for the graceful-drain path, held across a session's whole
+    // coroutine body. A nested type (rather than a session-local struct) gives it
+    // linkage so it does not taint the coroutine frame with a no-linkage subobject,
+    // while still reaching the private maybeFinishDrain.
+    struct SessionDrainGuard final {
+        HttpServer* server;
+        ~SessionDrainGuard() { server->maybeFinishDrain(); }
+    };
+
     void configureAcceptor();
     void configureTlsContext();
     void stopOnContext(bool honorGracePeriod = true) noexcept;
+    void maybeFinishDrain() noexcept;
     void forceCloseAll() noexcept;
     void resetStartupState();
     void completeStartup(std::exception_ptr exception = nullptr) noexcept;
@@ -118,6 +128,9 @@ private:
     // coroutines use workerRunning_, which is mutated only on this io_context.
     std::atomic<LifecycleState> lifecycleState_{LifecycleState::kFresh};
     bool workerRunning_{false};
+    // True while stopOnContext() is holding the force-close behind drainTimer_.
+    // Mutated only on this io_context.
+    bool drainPending_{false};
     std::jthread workerThread_;
 
     std::mutex startupMutex_;
