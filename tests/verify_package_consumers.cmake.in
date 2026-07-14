@@ -2308,17 +2308,15 @@ if(_built_components_csv MATCHES "(^|,)web(,|$)")
             "installed Web package retained the stale HTTP/2 buffered dispatch API")
     endif()
     if(NOT _installed_http2_buffered_response_result MATCHES
-           "Http2BufferedResponseWriteCompleted" OR
+           "class Http2BufferedResponseWriteResult final" OR
        NOT _installed_http2_buffered_response_result MATCHES
-           "Http2BufferedResponseWritePeerAbortedBeforeCommit" OR
+           "std::optional<std::uint16_t>" OR
        NOT _installed_http2_buffered_response_result MATCHES
-           "Http2BufferedResponseWritePeerAbortedAfterCommit" OR
+           "committedStatus[(][)] const noexcept" OR
        NOT _installed_http2_buffered_response_result MATCHES
-           "Http2BufferedResponseWriteFailedBeforeCommit" OR
+           "is_trivially_copyable_v<Http2BufferedResponseWriteResult>" OR
        NOT _installed_http2_buffered_response_result MATCHES
-           "Http2BufferedResponseWriteFailedAfterCommit" OR
-       NOT _installed_http2_buffered_response_result MATCHES
-           "using Value = std::variant" OR
+           "sizeof[(]Http2BufferedResponseWriteResult[)] <= 4" OR
        NOT _installed_http2_buffered_response_result MATCHES
            "class Http2BufferedResponseWriter final" OR
        NOT _installed_http2_buffered_response_result MATCHES
@@ -2336,7 +2334,9 @@ if(_built_components_csv MATCHES "(^|,)web(,|$)")
        _installed_http2_stream_session MATCHES
            "[(]void[)][ \t]*prepareBufferedHttpResponse" OR
        NOT _installed_http2_stream_session MATCHES
-           "result[.]peerAbortedBeforeCommit[(][)]" OR
+           "result[.]committedStatus[(][)]" OR
+       _installed_http2_buffered_response_result MATCHES
+           "Http2BufferedResponseWriteCompleted|Http2BufferedResponseWritePeerAborted|Http2BufferedResponseWriteFailed|std::variant|peerAbortedBeforeCommit[(]|peerAbortedAfterCommit[(]|failedBeforeCommit[(]|failedAfterCommit[(]|completed[(]" OR
        _installed_http2_stream_session MATCHES
            "response[.]status[(][)][ \t\r\n]*,[ \t\r\n]*requestStart" OR
        _installed_http2_stream_session MATCHES

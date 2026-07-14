@@ -4371,15 +4371,15 @@ if(EXISTS "${HTTP_BUFFERED_RESPONSE_WRITE_PLAN}" AND
     endif()
 
     if(NOT buffered_response_h2_result MATCHES
-           "Http2BufferedResponseWritePeerAbortedBeforeCommit" OR
+           "class Http2BufferedResponseWriteResult final" OR
        NOT buffered_response_h2_result MATCHES
-           "Http2BufferedResponseWritePeerAbortedAfterCommit" OR
+           "std::optional<std::uint16_t>" OR
        NOT buffered_response_h2_result MATCHES
-           "Http2BufferedResponseWriteFailedBeforeCommit" OR
+           "committedStatus[(][)] const noexcept" OR
        NOT buffered_response_h2_result MATCHES
-           "Http2BufferedResponseWriteFailedAfterCommit" OR
+           "is_trivially_copyable_v<Http2BufferedResponseWriteResult>" OR
        NOT buffered_response_h2_result MATCHES
-           "std::variant" OR
+           "sizeof[(]Http2BufferedResponseWriteResult[)] <= 4" OR
        NOT buffered_response_h2_result MATCHES
            "class Http2BufferedResponseWriter final" OR
        NOT buffered_response_h2_result MATCHES
@@ -4389,6 +4389,10 @@ if(EXISTS "${HTTP_BUFFERED_RESPONSE_WRITE_PLAN}" AND
        NOT buffered_response_h2_writer_source MATCHES
            "const auto committedStatus = submittedHead[-][>]responseStatus[(][)]" OR
        NOT buffered_response_h2_writer_source MATCHES
+           "Http2BufferedResponseWriteResult::committed" OR
+       NOT buffered_response_h2_writer_source MATCHES
+           "Http2BufferedResponseWriteResult::uncommitted" OR
+       NOT buffered_response_h2_writer_source MATCHES
            "openResponseFileInput" OR
        NOT buffered_response_h2_session MATCHES
            "prepareBufferedHttpResponse" OR
@@ -4397,11 +4401,13 @@ if(EXISTS "${HTTP_BUFFERED_RESPONSE_WRITE_PLAN}" AND
        NOT buffered_response_h2_session MATCHES
            "bufferedResponseWriter[.]write" OR
        NOT buffered_response_h2_session MATCHES
-           "result[.]peerAbortedBeforeCommit[(][)]" OR
+           "result[.]committedStatus[(][)]" OR
+       buffered_response_h2_result MATCHES
+           "Http2BufferedResponseWriteCompleted|Http2BufferedResponseWritePeerAborted|Http2BufferedResponseWriteFailed|std::variant|peerAbortedBeforeCommit[(]|peerAbortedAfterCommit[(]|failedBeforeCommit[(]|failedAfterCommit[(]|completed[(]" OR
        buffered_response_h2_session MATCHES
            "openResponseFileInput|Http2BufferedDataSubmitResult|auto submitResponse")
         boundary_error("HTTP/2 buffered completion restored a loose status/result path"
-            "the non-template writer must own file/data flow while the session consumes exclusive pre/post-commit outcomes")
+            "the non-template writer must own file/data recovery while the session consumes only its optional committed status")
     endif()
 
     if(NOT buffered_response_h1_result MATCHES
@@ -4457,7 +4463,7 @@ if(EXISTS "${HTTP_BUFFERED_RESPONSE_WRITE_PLAN}" AND
        NOT buffered_response_h2_plan_test MATCHES
            "http2_response_head_rejects_representation_plan_mismatch" OR
        NOT buffered_response_h2_result_test MATCHES
-           "http2_buffered_response_write_result_owns_only_committed_status" OR
+           "http2_buffered_response_write_result_is_only_committed_status" OR
        NOT buffered_response_h2_runtime_test MATCHES
            "sansio_driver_h2_buffered_access_uses_only_committed_plan_status" OR
        NOT buffered_response_h2_connection_test MATCHES
@@ -9983,9 +9989,7 @@ if(EXISTS "${WEB_EXECUTION_ROUTE_RESOLUTION}" AND
        NOT web_execution_http1_write MATCHES
            "failedAfterCommit[(][)] const && = delete" OR
        NOT web_execution_http2_write MATCHES
-           "completed[(][)] const [&] noexcept" OR
-       NOT web_execution_http2_write MATCHES
-           "peerAbortedBeforeCommit[(][)] const && = delete" OR
+           "committedStatus[(][)] const noexcept" OR
        NOT web_execution_zero_copy MATCHES
            "failed[(][)] const [&] noexcept" OR
        NOT web_execution_zero_copy MATCHES

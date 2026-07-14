@@ -494,39 +494,15 @@ Task<void> runHttp2SansIoSession(
             streamId,
             response,
             writePlan);
-        if (const auto* completed = result.completed()) {
+        if (const auto committedStatus = result.committedStatus()) {
             recordHttpAccess(
                 options.accessLog,
                 request,
                 remoteAddress,
-                completed->status(),
+                *committedStatus,
                 requestStart);
-            co_return;
         }
-        if (const auto* peer = result.peerAbortedAfterCommit()) {
-            recordHttpAccess(
-                options.accessLog,
-                request,
-                remoteAddress,
-                peer->status(),
-                requestStart);
-            co_return;
-        }
-        if (const auto* failed = result.failedAfterCommit()) {
-            recordHttpAccess(
-                options.accessLog,
-                request,
-                remoteAddress,
-                failed->status(),
-                requestStart);
-            co_return;
-        }
-        if (result.peerAbortedBeforeCommit() != nullptr ||
-            result.failedBeforeCommit() != nullptr) {
-            co_return;
-        }
-        throw std::logic_error(
-            "buffered HTTP/2 dispatch returned no terminal alternative");
+        co_return;
     };
 
     // One concurrent handler: admission already owns the table's dispatch lease.

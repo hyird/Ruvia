@@ -742,12 +742,6 @@ concept HasConsumedBytes = requires(const Alternative& value) {
 };
 
 template <typename Alternative>
-concept HasResponseSubmitError = requires(const Alternative& value) {
-    { value.error() } ->
-        std::same_as<ruvia::detail::Http2ResponseHeadSubmitError>;
-};
-
-template <typename Alternative>
 concept HasResponseWriteError = requires(const Alternative& value) {
     { value.error() } ->
         std::same_as<const std::error_code&>;
@@ -1190,25 +1184,12 @@ static_assert(!std::default_initializable<
     ruvia::detail::Http2BufferedResponseWriteResult>);
 static_assert(std::same_as<
     decltype(std::declval<const ruvia::detail::
-        Http2BufferedResponseWriteResult&>().completed()),
-    const ruvia::detail::Http2BufferedResponseWriteCompleted*>);
-static_assert(std::same_as<
-    decltype(std::declval<const ruvia::detail::
-        Http2BufferedResponseWriteResult&>()
-        .peerAbortedBeforeCommit()),
-    const ruvia::detail::Http2BufferedResponseWritePeerAbortedBeforeCommit*>);
-static_assert(HasResponseStatus<
-    ruvia::detail::Http2BufferedResponseWriteCompleted>);
-static_assert(HasResponseStatus<
-    ruvia::detail::Http2BufferedResponseWritePeerAbortedAfterCommit>);
-static_assert(HasResponseStatus<
-    ruvia::detail::Http2BufferedResponseWriteFailedAfterCommit>);
-static_assert(!HasResponseStatus<
-    ruvia::detail::Http2BufferedResponseWritePeerAbortedBeforeCommit>);
-static_assert(!HasResponseStatus<
-    ruvia::detail::Http2BufferedResponseWriteFailedBeforeCommit>);
-static_assert(HasResponseSubmitError<
-    ruvia::detail::Http2BufferedResponseWriteFailedBeforeCommit>);
+        Http2BufferedResponseWriteResult&>().committedStatus()),
+    std::optional<std::uint16_t>>);
+static_assert(std::is_trivially_copyable_v<
+    ruvia::detail::Http2BufferedResponseWriteResult>);
+static_assert(sizeof(
+    ruvia::detail::Http2BufferedResponseWriteResult) <= 4);
 static_assert(!std::default_initializable<
     ruvia::detail::Http1SessionRequestCompletion>);
 static_assert(!std::default_initializable<
