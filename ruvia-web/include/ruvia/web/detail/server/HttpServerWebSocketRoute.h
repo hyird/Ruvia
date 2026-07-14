@@ -17,63 +17,15 @@
 #include "ruvia/core/memory/MemoryPool.h"
 
 #include <string_view>
-#include <utility>
-#include <variant>
+#include <optional>
 
 namespace ruvia::detail {
 
-class HttpWebSocketSessionFinished final {
-private:
-    friend class HttpWebSocketRouteResult;
-
-    constexpr HttpWebSocketSessionFinished() noexcept = default;
-};
-
 // A rejected upgrade returns the exact HTTP/1 request completion that the
 // session must write and clean up. A successful upgrade transfers transport
-// ownership to the WebSocket session and returns only its finished marker.
-class HttpWebSocketRouteResult final {
-public:
-    [[nodiscard]] static HttpWebSocketRouteResult makeRequestCompletion(
-        Http1SessionRequestCompletion completion) noexcept {
-        return HttpWebSocketRouteResult(
-            std::move(completion));
-    }
-
-    [[nodiscard]] static HttpWebSocketRouteResult
-    makeSessionFinished() noexcept {
-        return HttpWebSocketRouteResult(
-            HttpWebSocketSessionFinished{});
-    }
-
-    [[nodiscard]] const Http1SessionRequestCompletion*
-    requestCompletion() const & noexcept {
-        return std::get_if<Http1SessionRequestCompletion>(&value_);
-    }
-    [[nodiscard]] const Http1SessionRequestCompletion*
-    requestCompletion() const && = delete;
-
-    [[nodiscard]] const HttpWebSocketSessionFinished*
-    sessionFinished() const & noexcept {
-        return std::get_if<HttpWebSocketSessionFinished>(&value_);
-    }
-    [[nodiscard]] const HttpWebSocketSessionFinished*
-    sessionFinished() const && = delete;
-
-private:
-    using Value = std::variant<
-        Http1SessionRequestCompletion,
-        HttpWebSocketSessionFinished>;
-
-    template <typename Alternative>
-    explicit HttpWebSocketRouteResult(Alternative alternative) noexcept
-        : value_(std::move(alternative)) {}
-
-    Value value_;
-};
-
+// ownership to the WebSocket session, so no HTTP request completion remains.
 template <typename Stream>
-Task<HttpWebSocketRouteResult> dispatchHttpWebSocketRoute(
+Task<std::optional<Http1SessionRequestCompletion>> dispatchHttpWebSocketRoute(
     Stream& stream,
     WorkerMemory& memory,
     ConnectionScanner::Entry& scannerEntry,
@@ -94,9 +46,8 @@ Task<HttpWebSocketRouteResult> dispatchHttpWebSocketRoute(
             baseRouteServices);
         const auto connectionPlan = requireHttp1FinalResponseCommit(
             response, parsed.connectionPlan.requireClose());
-        co_return HttpWebSocketRouteResult::makeRequestCompletion(
-            Http1SessionRequestCompletion::makeBufferedClosing(
-                connectionPlan));
+        co_return Http1SessionRequestCompletion::makeBufferedClosing(
+            connectionPlan);
     }
     const auto& webSocketEndpoint =
         *resolved.route().endpoint().webSocket();
@@ -106,7 +57,7 @@ Task<HttpWebSocketRouteResult> dispatchHttpWebSocketRoute(
     if (!(co_await writeWebSocketHandshake(
             stream,
             handshake))) {
-        co_return HttpWebSocketRouteResult::makeSessionFinished();
+        co_return std::nullopt;
     }
 
     SocketWebSocketConnection<Stream> webSocketConnection(
@@ -125,7 +76,7 @@ Task<HttpWebSocketRouteResult> dispatchHttpWebSocketRoute(
         resolved,
         requestMemory,
         baseRouteServices);
-    co_return HttpWebSocketRouteResult::makeSessionFinished();
+    co_return std::nullopt;
 }
 
 }  // namespace ruvia::detail

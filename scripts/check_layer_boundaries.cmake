@@ -3947,7 +3947,7 @@ if(EXISTS "${HTTP_RESPONSE_STREAM_COMMIT_PLAN}" AND
        NOT response_stream_web_package_consumer MATCHES
            "Http1RequestBufferCompaction" OR
        NOT response_stream_web_package_consumer MATCHES
-           "HttpWebSocketRouteResult")
+           "dispatchHttpWebSocketRoute")
         boundary_error("response-stream status propagation lacks regression coverage"
             "unit and installed-package checks must pin exact status and exclusive terminal alternatives")
     endif()
@@ -10015,13 +10015,9 @@ if(EXISTS "${WEB_EXECUTION_ROUTE_RESOLUTION}" AND
        NOT web_execution_stream_dispatch MATCHES
            "buffered[(][)] && = delete" OR
        NOT web_execution_websocket_route MATCHES
-           "requestCompletion[(][)] const [&] noexcept" OR
-       NOT web_execution_websocket_route MATCHES
-           "std::variant<[ \t\r\n]*Http1SessionRequestCompletion,[ \t\r\n]*HttpWebSocketSessionFinished>" OR
-       NOT web_execution_websocket_route MATCHES
-           "sessionFinished[(][)] const && = delete" OR
+           "Task<std::optional<Http1SessionRequestCompletion>> dispatchHttpWebSocketRoute" OR
        web_execution_websocket_route MATCHES
-           "class HttpWebSocketBufferedResponse final|bufferedResponse[(][)] const [&] noexcept" OR
+           "HttpWebSocketRouteResult|HttpWebSocketSessionFinished|std::variant|requestCompletion[(]|sessionFinished[(]|class HttpWebSocketBufferedResponse final|bufferedResponse[(][)] const [&] noexcept" OR
        NOT web_execution_http1_write MATCHES
            "completed[(][)] const noexcept" OR
        NOT web_execution_http1_write MATCHES

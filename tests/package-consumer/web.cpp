@@ -342,8 +342,6 @@ concept ExposesAnyRvalueWebExecutionBorrow =
     requires(T&& value) { std::move(value).handled(); } ||
     requires(T&& value) { std::move(value).buffered(); } ||
     requires(T&& value) { std::move(value).bufferedResponse(); } ||
-    requires(T&& value) { std::move(value).requestCompletion(); } ||
-    requires(T&& value) { std::move(value).sessionFinished(); } ||
     requires(T&& value) { std::move(value).completion(); } ||
     requires(T&& value) {
         requires std::is_pointer_v<decltype(std::move(value).completed())>;
@@ -1241,16 +1239,21 @@ static_assert(!HasConsumedBytes<
     ruvia::detail::Http1RequestBufferDiscarded>);
 static_assert(!HasConsumedBytes<
     ruvia::detail::Http1RequestBufferRestored>);
-static_assert(!std::default_initializable<
-    ruvia::detail::HttpWebSocketRouteResult>);
 static_assert(std::same_as<
-    decltype(std::declval<const ruvia::detail::
-        HttpWebSocketRouteResult&>().requestCompletion()),
-    const ruvia::detail::Http1SessionRequestCompletion*>);
-static_assert(std::same_as<
-    decltype(std::declval<const ruvia::detail::
-        HttpWebSocketRouteResult&>().sessionFinished()),
-    const ruvia::detail::HttpWebSocketSessionFinished*>);
+    decltype(ruvia::detail::dispatchHttpWebSocketRoute(
+        std::declval<asio::ip::tcp::socket&>(),
+        std::declval<ruvia::WorkerMemory&>(),
+        std::declval<ruvia::detail::ConnectionScanner::Entry&>(),
+        std::declval<const ruvia::detail::Http1ServerRequestParseState&>(),
+        std::declval<const ruvia::detail::ResolvedRoute&>(),
+        std::declval<const ruvia::detail::RouteTable&>(),
+        std::declval<ruvia::RequestMemory&>(),
+        std::declval<ruvia::detail::ContextServices>(),
+        std::declval<const ruvia::detail::HttpServerOptions&>(),
+        std::declval<std::string_view>(),
+        std::declval<ruvia::HttpResponse&>())),
+    ruvia::Task<std::optional<
+        ruvia::detail::Http1SessionRequestCompletion>>>);
 static_assert(std::is_same_v<
     decltype(std::declval<ruvia::detail::Http2RequestBodyRuntime&>().store(
         std::declval<std::string_view>(),
@@ -1280,8 +1283,6 @@ static_assert(!ExposesAnyRvalueWebExecutionBorrow<
     ruvia::detail::Http1RequestBufferCompletion>);
 static_assert(!ExposesAnyRvalueWebExecutionBorrow<
     ruvia::detail::Http1SessionRequestCompletion>);
-static_assert(!ExposesAnyRvalueWebExecutionBorrow<
-    ruvia::detail::HttpWebSocketRouteResult>);
 static_assert(!HasSplitContextCapabilityAccessors<
     ruvia::detail::ContextServices>);
 static_assert(!HasLegacyContextBodyRefinement<

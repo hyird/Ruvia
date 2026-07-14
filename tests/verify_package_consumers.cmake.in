@@ -2240,23 +2240,15 @@ if(_built_components_csv MATCHES "(^|,)web(,|$)")
        NOT _installed_http1_stream_body_route MATCHES
            "Task<Http1SessionRequestCompletion> dispatchHttpStreamBodyRoute" OR
        NOT _installed_http1_websocket_route MATCHES
-           "class HttpWebSocketSessionFinished final" OR
-       NOT _installed_http1_websocket_route MATCHES
-           "class HttpWebSocketRouteResult final" OR
-       NOT _installed_http1_websocket_route MATCHES
-           "std::variant<[ \t\r\n]*Http1SessionRequestCompletion,[ \t\r\n]*HttpWebSocketSessionFinished>" OR
-       NOT _installed_http1_websocket_route MATCHES
-           "requestCompletion[(][)] const [&] noexcept" OR
-       NOT _installed_http1_websocket_route MATCHES
-           "sessionFinished[(][)] const [&] noexcept" OR
+           "Task<std::optional<Http1SessionRequestCompletion>> dispatchHttpWebSocketRoute" OR
        _installed_http1_websocket_route MATCHES
-           "class HttpWebSocketBufferedResponse final|bufferedResponse[(][)] const [&] noexcept" OR
+           "HttpWebSocketRouteResult|HttpWebSocketSessionFinished|std::variant|requestCompletion[(]|sessionFinished[(]|class HttpWebSocketBufferedResponse final|bufferedResponse[(][)] const [&] noexcept" OR
        NOT _installed_http1_stream_session MATCHES
            "std::optional<Http1SessionRequestCompletion> requestCompletion" OR
        NOT _installed_http1_stream_session MATCHES
-           "webSocketResult[.]requestCompletion[(][)]" OR
+           "webSocketCompletion[.]has_value[(][)]" OR
        _installed_http1_stream_session MATCHES
-           "webSocketResult[.]bufferedResponse[(][)]|buffered->completion[(][)]" OR
+           "webSocketResult|[.]requestCompletion[(][)]|[.]sessionFinished[(][)]|[.]bufferedResponse[(][)]|buffered->completion[(][)]" OR
        NOT _installed_http1_stream_session MATCHES
            "committed->status[(][)]" OR
        NOT _installed_http1_stream_session MATCHES
@@ -2283,7 +2275,7 @@ if(_built_components_csv MATCHES "(^|,)web(,|$)")
        _installed_http1_stream_body_route MATCHES
            "Task<void>[ 	]+dispatchHttpStreamBodyRoute" OR
        _installed_http1_websocket_route MATCHES
-           "enum class[ 	]+HttpWebSocketRouteResult|HttpWebSocketRouteResult::k")
+           "HttpWebSocketRouteResult|HttpWebSocketSessionFinished")
         message(FATAL_ERROR
             "installed Web package restored split HTTP/1 request completion state")
     endif()

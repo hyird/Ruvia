@@ -212,7 +212,7 @@ Task<void> HttpServer::handleStreamSession(
                     const auto pendingFrames = std::string_view(
                         readBuffer.data() + requestHead->headerBytes(),
                         usedBytes - requestHead->headerBytes());
-                    const auto webSocketResult = co_await dispatchHttpWebSocketRoute(
+                    auto webSocketCompletion = co_await dispatchHttpWebSocketRoute(
                         stream,
                         memory_,
                         scannerEntry,
@@ -224,15 +224,12 @@ Task<void> HttpServer::handleStreamSession(
                         options_,
                         pendingFrames,
                         response);
-                    if (const auto* completion =
-                            webSocketResult.requestCompletion()) {
-                        requestCompletion.emplace(*completion);
-                        break;
-                    }
-                    if (webSocketResult.sessionFinished() != nullptr) {
+                    if (!webSocketCompletion.has_value()) {
                         co_return;
                     }
-                    std::terminate();
+                    requestCompletion.emplace(
+                        std::move(*webSocketCompletion));
+                    break;
                 }
 
                 if (endpoint.responseStream() != nullptr) {
