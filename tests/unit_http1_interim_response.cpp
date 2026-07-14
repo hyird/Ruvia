@@ -27,7 +27,14 @@ concept HasAnyRvalueHttp1InterimResponsePrepareAccessor =
     requires(T&& result) { std::move(result).prepared(); } ||
     requires(T&& result) { std::move(result).failure(); };
 
+template <typename T>
+concept HasResultKindDiscriminator = requires(const T& result) {
+    result.kind();
+};
+
 static_assert(!HasAnyRvalueHttp1InterimResponsePrepareAccessor<
+    ruvia::Http1InterimResponsePrepareResult>);
+static_assert(!HasResultKindDiscriminator<
     ruvia::Http1InterimResponsePrepareResult>);
 
 [[nodiscard]] bool unchanged(

@@ -18,7 +18,6 @@ namespace {
 
 using ruvia::Http1ClientRequestClosePolicy;
 using ruvia::Http1ClientRequestPrepareError;
-using ruvia::Http1ClientRequestPrepareKind;
 using ruvia::Http1ClientRequestWirePolicy;
 using ruvia::Http1ClientRequestWriter;
 using ruvia::HttpClientRequest;
@@ -167,7 +166,6 @@ RUVIA_TEST(http1_client_request_writer_emits_one_canonical_scatter_gather_plan) 
         request,
         Http1ClientRequestWirePolicy::expectContinue());
     const auto* prepared = fixture.result.prepared();
-    RUVIA_CHECK(fixture.result.kind() == Http1ClientRequestPrepareKind::kPrepared);
     RUVIA_CHECK(prepared != nullptr);
     if (prepared == nullptr) {
         return;
@@ -459,8 +457,6 @@ RUVIA_TEST(http1_client_request_writer_returns_exact_buffer_requirement_without_
     small.fill('z');
     const auto tooSmall = Http1ClientRequestWriter().prepare(
         HttpOrigin::https("example.test"), request, small);
-    RUVIA_CHECK(
-        tooSmall.kind() == Http1ClientRequestPrepareKind::kBufferTooSmall);
     RUVIA_CHECK(tooSmall.bufferTooSmall() != nullptr);
     RUVIA_CHECK(std::ranges::all_of(small, [](char value) { return value == 'z'; }));
 

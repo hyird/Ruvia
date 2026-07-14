@@ -16,7 +16,6 @@
 namespace {
 
 using ruvia::HttpKnownMethod;
-using ruvia::Http1RequestParseKind;
 using ruvia::HttpParseError;
 using ruvia::HttpProtocolVersion;
 using ruvia::detail::Http1ServerRequestParser;
@@ -72,7 +71,6 @@ RUVIA_TEST(http1_public_parse_outcome_exposes_only_its_active_alternative) {
     const auto needMore = publicParser.parse(
         "GET / HTTP/1.1\r\nHost: example.com\r\n");
     const auto* needMoreState = needMore.needMore();
-    RUVIA_CHECK(needMore.kind() == Http1RequestParseKind::kNeedMore);
     RUVIA_CHECK(needMoreState != nullptr);
     if (needMoreState != nullptr) {
         RUVIA_CHECK(!needMoreState->requiredTotalBytes().has_value());
@@ -82,7 +80,6 @@ RUVIA_TEST(http1_public_parse_outcome_exposes_only_its_active_alternative) {
 
     const auto failure = publicParser.parse("GET / HTTP/1.1\r\n\r\n");
     const auto* failureState = failure.failure();
-    RUVIA_CHECK(failure.kind() == Http1RequestParseKind::kFailure);
     RUVIA_CHECK(failure.needMore() == nullptr);
     RUVIA_CHECK(failure.parsed() == nullptr);
     RUVIA_CHECK(failureState != nullptr);
@@ -98,7 +95,6 @@ RUVIA_TEST(http1_public_parse_need_more_separates_required_size_from_consumption
         "Content-Length: 5\r\n\r\nhe";
     const auto result = publicParser.parse(partial);
     const auto* needMore = result.needMore();
-    RUVIA_CHECK(result.kind() == Http1RequestParseKind::kNeedMore);
     RUVIA_CHECK(needMore != nullptr);
     if (needMore != nullptr) {
         RUVIA_CHECK(needMore->requiredTotalBytes().has_value());
@@ -121,7 +117,6 @@ RUVIA_TEST(http1_public_parse_success_retains_the_exact_framed_body) {
         "GET /next HTTP/1.1\r\nHost: example.com\r\n\r\n";
     const auto fixedResult = publicParser.parse(contentLengthPipeline);
     const auto* fixed = fixedResult.parsed();
-    RUVIA_CHECK(fixedResult.kind() == Http1RequestParseKind::kParsed);
     RUVIA_CHECK(fixed != nullptr);
     if (fixed != nullptr) {
         RUVIA_CHECK_EQ(fixed->request().path(), std::string_view("/fixed"));
@@ -141,7 +136,6 @@ RUVIA_TEST(http1_public_parse_success_retains_the_exact_framed_body) {
         "GET /next HTTP/1.1\r\nHost: example.com\r\n\r\n";
     const auto chunkedResult = publicParser.parse(chunkedPipeline);
     const auto* chunked = chunkedResult.parsed();
-    RUVIA_CHECK(chunkedResult.kind() == Http1RequestParseKind::kParsed);
     RUVIA_CHECK(chunked != nullptr);
     if (chunked != nullptr) {
         RUVIA_CHECK(chunked->bodyPlan().chunked() != nullptr);

@@ -730,6 +730,11 @@ concept HasAnyRvalueHttp1InterimResponsePrepareAccessor =
     requires(T&& result) { std::move(result).failure(); };
 
 template <typename T>
+concept HasResultKindDiscriminator = requires(const T& result) {
+    result.kind();
+};
+
+template <typename T>
 concept HasStaleHttp1ServerParseScalars =
     requires(const T& state) { state.phase(); } ||
     requires(const T& state) { state.headerBytes; } ||
@@ -2509,11 +2514,19 @@ static_assert(!std::assignable_from<
     ruvia::Http1ClientResponseParseResult&&>);
 static_assert(!HasAnyRvalueHttp1RequestParseAccessor<
     ruvia::Http1RequestParseResult>);
+static_assert(!HasResultKindDiscriminator<
+    ruvia::Http1RequestParseResult>);
 static_assert(!HasAnyRvalueHttp1ClientResponseParseAccessor<
+    ruvia::Http1ClientResponseParseResult>);
+static_assert(!HasResultKindDiscriminator<
     ruvia::Http1ClientResponseParseResult>);
 static_assert(!HasAnyRvalueHttp1ClientRequestPrepareAccessor<
     ruvia::Http1ClientRequestPrepareResult>);
+static_assert(!HasResultKindDiscriminator<
+    ruvia::Http1ClientRequestPrepareResult>);
 static_assert(!HasAnyRvalueHttp1InterimResponsePrepareAccessor<
+    ruvia::Http1InterimResponsePrepareResult>);
+static_assert(!HasResultKindDiscriminator<
     ruvia::Http1InterimResponsePrepareResult>);
 static_assert(!HasAnyRvalueHttpClientRequestContentAccessor<
     ruvia::HttpClientRequestContent>);

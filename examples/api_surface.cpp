@@ -1682,7 +1682,6 @@ concept HasStaleHttpParseTupleAccessors = requires(const T& result) {
 
 template <typename T>
 concept HasHttp1DiscriminatedParseAccessors = requires(const T& result) {
-    { result.kind() } -> std::same_as<ruvia::Http1RequestParseKind>;
     { result.needMore() } -> std::same_as<const ruvia::Http1RequestNeedMore*>;
     { result.parsed() } -> std::same_as<const ruvia::Http1ParsedRequest*>;
     { result.failure() } -> std::same_as<const ruvia::Http1RequestParseFailure*>;
@@ -1732,7 +1731,6 @@ concept HasPublicHttp1RequestBodyPlanFactories = requires {
 
 template <typename T>
 concept HasHttp1ClientDiscriminatedParseAccessors = requires(const T& result) {
-    { result.kind() } -> std::same_as<ruvia::Http1ClientResponseParseKind>;
     { result.needMore() } ->
         std::same_as<const ruvia::Http1ClientResponseNeedMore*>;
     { result.parsed() } ->
@@ -1750,13 +1748,17 @@ concept HasAnyRvalueHttp1ClientResponseParseAccessor =
 
 template <typename T>
 concept HasHttp1ClientRequestPrepareAccessors = requires(const T& result) {
-    { result.kind() } -> std::same_as<ruvia::Http1ClientRequestPrepareKind>;
     { result.bufferTooSmall() } ->
         std::same_as<const ruvia::Http1ClientRequestBufferTooSmall*>;
     { result.prepared() } ->
         std::same_as<const ruvia::PreparedHttp1ClientRequest*>;
     { result.failure() } ->
         std::same_as<const ruvia::Http1ClientRequestPrepareFailure*>;
+};
+
+template <typename T>
+concept HasResultKindDiscriminator = requires(const T& result) {
+    result.kind();
 };
 
 template <typename T>
@@ -2568,6 +2570,7 @@ static_assert(!std::is_default_constructible_v<ruvia::Http1RequestParseResult>);
 static_assert(!std::is_default_constructible_v<ruvia::Http1ParsedRequest>);
 static_assert(!HasStaleHttpParseTupleAccessors<ruvia::Http1RequestParseResult>);
 static_assert(HasHttp1DiscriminatedParseAccessors<ruvia::Http1RequestParseResult>);
+static_assert(!HasResultKindDiscriminator<ruvia::Http1RequestParseResult>);
 static_assert(!HasAnyRvalueHttp1RequestParseAccessor<
     ruvia::Http1RequestParseResult>);
 static_assert(HasHttp1RequestBodyPlanAlternatives<
@@ -2603,6 +2606,8 @@ static_assert(!std::is_default_constructible_v<
     ruvia::Http1ClientRequestPrepareResult>);
 static_assert(HasHttp1ClientRequestPrepareAccessors<
     ruvia::Http1ClientRequestPrepareResult>);
+static_assert(!HasResultKindDiscriminator<
+    ruvia::Http1ClientRequestPrepareResult>);
 static_assert(!HasAnyRvalueHttp1ClientRequestPrepareAccessor<
     ruvia::Http1ClientRequestPrepareResult>);
 static_assert(HasHttp1ClientPreparedContentPlan<
@@ -2634,6 +2639,8 @@ static_assert(!std::is_move_assignable_v<ruvia::Http1ClientResponseParseResult>)
 static_assert(std::is_move_constructible_v<ruvia::Http1ParsedClientResponseHead>);
 static_assert(!std::is_move_assignable_v<ruvia::Http1ParsedClientResponseHead>);
 static_assert(HasHttp1ClientDiscriminatedParseAccessors<
+    ruvia::Http1ClientResponseParseResult>);
+static_assert(!HasResultKindDiscriminator<
     ruvia::Http1ClientResponseParseResult>);
 static_assert(!HasAnyRvalueHttp1ClientResponseParseAccessor<
     ruvia::Http1ClientResponseParseResult>);

@@ -106,27 +106,13 @@ private:
     HttpParseError error_;
 };
 
-enum class Http1RequestParseKind : std::uint8_t {
-    kNeedMore,
-    kParsed,
-    kFailure,
-};
-
-// A discriminated parse outcome. Request data exists only in kParsed, an
-// error exists only in kFailure, and input sizing exists only in kNeedMore.
+// A discriminated parse outcome. Request data exists only in Http1ParsedRequest,
+// an error exists only in Http1RequestParseFailure, and input sizing exists only
+// in Http1RequestNeedMore.
 // Callers therefore cannot read a default request after an error or mistake a
 // required buffer size for bytes already consumed.
 class Http1RequestParseResult final {
 public:
-    [[nodiscard]] Http1RequestParseKind kind() const noexcept {
-        if (std::holds_alternative<Http1ParsedRequest>(state_)) {
-            return Http1RequestParseKind::kParsed;
-        }
-        return std::holds_alternative<Http1RequestParseFailure>(state_)
-            ? Http1RequestParseKind::kFailure
-            : Http1RequestParseKind::kNeedMore;
-    }
-
     [[nodiscard]] const Http1RequestNeedMore* needMore() const & noexcept {
         return std::get_if<Http1RequestNeedMore>(&state_);
     }

@@ -26,7 +26,6 @@ using ruvia::Http1ClientRequestContentSignal;
 using ruvia::Http1ClientRequestWirePolicy;
 using ruvia::Http1ClientResponsePersistence;
 using ruvia::Http1ClientResponseParseError;
-using ruvia::Http1ClientResponseParseKind;
 using ruvia::Http1ClientResponseParseResult;
 using ruvia::Http1ClientResponseParser;
 using ruvia::Http1ParsedClientResponseHead;
@@ -1118,7 +1117,6 @@ RUVIA_TEST(http_client_rejects_malformed_status_and_length_fields) {
 RUVIA_TEST(http_client_response_parser_need_more_is_distinct) {
     const auto result = parseWire(
         "GET", "HTTP/1.1 200 OK\r\nContent-Length: 5\r\n");
-    RUVIA_CHECK(result.kind() == Http1ClientResponseParseKind::kNeedMore);
     RUVIA_CHECK(result.needMore() != nullptr);
     RUVIA_CHECK(result.parsed() == nullptr);
     RUVIA_CHECK(result.failure() == nullptr);
@@ -1131,7 +1129,6 @@ RUVIA_TEST(http_client_response_parser_owns_exact_head_boundary) {
     const auto expectedConsumed = wire.find("\r\n\r\n") + 4;
     auto result = parseWire("GET", wire);
     auto* parsed = result.parsed();
-    RUVIA_CHECK(result.kind() == Http1ClientResponseParseKind::kParsed);
     RUVIA_CHECK(parsed != nullptr);
     if (parsed == nullptr) {
         return;
@@ -1165,7 +1162,6 @@ RUVIA_TEST(http_client_response_parser_failure_is_typed_and_allocation_free) {
 
     auto failureParser = Http1ClientResponseParser(*prepared, &counting);
     const auto failure = failureParser.parse("HTTP/2 200 OK\r\n\r\n");
-    RUVIA_CHECK(failure.kind() == Http1ClientResponseParseKind::kFailure);
     RUVIA_CHECK(failure.failure() != nullptr);
     RUVIA_CHECK(
         failure.failure()->error() ==
@@ -1177,7 +1173,6 @@ RUVIA_TEST(http_client_response_parser_failure_is_typed_and_allocation_free) {
         "HTTP/1.1 200 OK\r\n"
         "X-Requires-Ownership: a-long-enough-value-to-require-storage\r\n"
         "Content-Length: 0\r\n\r\n");
-    RUVIA_CHECK(success.kind() == Http1ClientResponseParseKind::kParsed);
     RUVIA_CHECK(success.parsed() != nullptr);
     RUVIA_CHECK(counting.allocationCount() > 0);
 }
@@ -1185,7 +1180,6 @@ RUVIA_TEST(http_client_response_parser_failure_is_typed_and_allocation_free) {
 RUVIA_TEST(http_client_response_parser_enforces_the_complete_head_limit) {
     std::string oversized(ruvia::kMaxHttpHeaderBytes, 'x');
     const auto result = parseWire("GET", oversized);
-    RUVIA_CHECK(result.kind() == Http1ClientResponseParseKind::kFailure);
     RUVIA_CHECK(result.failure() != nullptr);
     RUVIA_CHECK(
         result.failure()->error() ==

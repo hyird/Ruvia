@@ -313,23 +313,8 @@ private:
     Http1ClientRequestPrepareError error_;
 };
 
-enum class Http1ClientRequestPrepareKind : std::uint8_t {
-    kBufferTooSmall,
-    kPrepared,
-    kFailure,
-};
-
 class Http1ClientRequestPrepareResult final {
 public:
-    [[nodiscard]] constexpr Http1ClientRequestPrepareKind kind() const noexcept {
-        if (std::holds_alternative<PreparedHttp1ClientRequest>(state_)) {
-            return Http1ClientRequestPrepareKind::kPrepared;
-        }
-        return std::holds_alternative<Http1ClientRequestPrepareFailure>(state_)
-            ? Http1ClientRequestPrepareKind::kFailure
-            : Http1ClientRequestPrepareKind::kBufferTooSmall;
-    }
-
     [[nodiscard]] constexpr const Http1ClientRequestBufferTooSmall*
     bufferTooSmall() const & noexcept {
         return std::get_if<Http1ClientRequestBufferTooSmall>(&state_);

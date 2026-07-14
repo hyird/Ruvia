@@ -324,27 +324,12 @@ private:
     Http1ClientResponseParseError error_;
 };
 
-enum class Http1ClientResponseParseKind : std::uint8_t {
-    kNeedMore,
-    kParsed,
-    kFailure
-};
-
 class Http1ClientResponseParseResult final {
 public:
     Http1ClientResponseParseResult(const Http1ClientResponseParseResult&) = delete;
     Http1ClientResponseParseResult& operator=(const Http1ClientResponseParseResult&) = delete;
     Http1ClientResponseParseResult(Http1ClientResponseParseResult&&) noexcept = default;
     Http1ClientResponseParseResult& operator=(Http1ClientResponseParseResult&&) = delete;
-
-    [[nodiscard]] Http1ClientResponseParseKind kind() const noexcept {
-        if (std::holds_alternative<Http1ParsedClientResponseHead>(state_)) {
-            return Http1ClientResponseParseKind::kParsed;
-        }
-        return std::holds_alternative<Http1ClientResponseParseFailure>(state_)
-            ? Http1ClientResponseParseKind::kFailure
-            : Http1ClientResponseParseKind::kNeedMore;
-    }
 
     [[nodiscard]] const Http1ClientResponseNeedMore* needMore() const & noexcept {
         return std::get_if<Http1ClientResponseNeedMore>(&state_);

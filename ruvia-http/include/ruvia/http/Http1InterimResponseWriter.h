@@ -90,23 +90,8 @@ private:
     Http1InterimResponsePrepareError error_;
 };
 
-enum class Http1InterimResponsePrepareKind : std::uint8_t {
-    kBufferTooSmall,
-    kPrepared,
-    kFailure,
-};
-
 class Http1InterimResponsePrepareResult final {
 public:
-    [[nodiscard]] constexpr Http1InterimResponsePrepareKind kind() const noexcept {
-        if (std::holds_alternative<PreparedHttp1InterimResponse>(state_)) {
-            return Http1InterimResponsePrepareKind::kPrepared;
-        }
-        return std::holds_alternative<Http1InterimResponsePrepareFailure>(state_)
-            ? Http1InterimResponsePrepareKind::kFailure
-            : Http1InterimResponsePrepareKind::kBufferTooSmall;
-    }
-
     [[nodiscard]] constexpr const Http1InterimResponseBufferTooSmall*
     bufferTooSmall() const & noexcept {
         return std::get_if<Http1InterimResponseBufferTooSmall>(&state_);

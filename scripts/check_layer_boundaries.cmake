@@ -7679,6 +7679,12 @@ set(HTTP1_CLIENT_RESPONSE_PARSER_HEADER
     "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/Http1ClientResponseParser.h")
 set(HTTP1_CLIENT_RESPONSE_PARSER
     "${RUVIA_ROOT}/ruvia-http/src/client/HttpClientResponseParser.cpp")
+check_files_no_match("HTTP/1 typed results must use one variant discriminator"
+    "Http1(RequestParse|ClientResponseParse|ClientRequestPrepare|InterimResponsePrepare)Kind"
+    "${PUBLIC_HTTP1_REQUEST_PARSER}"
+    "${HTTP1_CLIENT_REQUEST_WRITER_HEADER}"
+    "${HTTP1_CLIENT_RESPONSE_PARSER_HEADER}"
+    "${HTTP1_INTERIM_RESPONSE_WRITER}")
 set(HTTP_CONTENT_LENGTH_STATE
     "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/detail/HttpContentLength.h")
 set(HTTP_TRANSFER_ENCODING_STATE
