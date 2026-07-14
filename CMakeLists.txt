@@ -96,7 +96,7 @@ if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
     unset(_ruvia_vcpkg_features)
 endif()
 
-project(ruvia VERSION 0.1.0 LANGUAGES CXX)
+project(ruvia VERSION 0.1.1 LANGUAGES CXX)
 
 if(RUVIA_BUILD_FUZZERS AND NOT CMAKE_CXX_COMPILER_ID MATCHES "Clang")
     message(FATAL_ERROR "RUVIA_BUILD_FUZZERS=ON requires Clang with libFuzzer")
