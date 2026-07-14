@@ -406,13 +406,13 @@ Task<void> HttpServer::handleStreamSession(
         const auto connectionPlan = requestCompletion->connectionPlan();
         if (requestCompletion->bufferedResponse() != nullptr) {
             scannerEntry.setPhase(ConnectionScanner::Phase::kWriting);
-            const auto responsePreparation = prepareBufferedHttpResponse(
+            const auto writePlan = prepareBufferedHttpResponse(
                 parsed.request,
                 parsed.responseCoding,
                 response,
                 options_);
             const auto responsePlan = http1BufferedResponsePlan(
-                responsePreparation.writePlan(),
+                writePlan,
                 connectionPlan);
             const auto writeResult = co_await writeResponse(
                 stream,

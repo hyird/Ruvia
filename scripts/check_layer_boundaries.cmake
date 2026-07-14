@@ -4173,6 +4173,8 @@ set(WEB_HTTP1_BUFFERED_RESPONSE_WRITER
     "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/server/HttpResponseWriter.h")
 set(WEB_HTTP1_BUFFERED_RESPONSE_SESSION
     "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/server/HttpServerStreamSession.inl")
+set(WEB_BUFFERED_RESPONSE_PREPARATION
+    "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/server/HttpBufferedResponse.h")
 set(BUFFERED_RESPONSE_PLAN_TEST
     "${RUVIA_ROOT}/tests/unit_response_head_policy.cpp")
 set(BUFFERED_RESPONSE_H1_TEST
@@ -4206,6 +4208,7 @@ foreach(buffered_response_status_contract IN ITEMS
         "${WEB_HTTP1_BUFFERED_RESPONSE_RESULT}"
         "${WEB_HTTP1_BUFFERED_RESPONSE_WRITER}"
         "${WEB_HTTP1_BUFFERED_RESPONSE_SESSION}"
+        "${WEB_BUFFERED_RESPONSE_PREPARATION}"
         "${BUFFERED_RESPONSE_PLAN_TEST}"
         "${BUFFERED_RESPONSE_H1_TEST}"
         "${BUFFERED_RESPONSE_H1_RESULT_TEST}"
@@ -4235,6 +4238,7 @@ if(EXISTS "${HTTP_BUFFERED_RESPONSE_WRITE_PLAN}" AND
    EXISTS "${WEB_HTTP1_BUFFERED_RESPONSE_RESULT}" AND
    EXISTS "${WEB_HTTP1_BUFFERED_RESPONSE_WRITER}" AND
    EXISTS "${WEB_HTTP1_BUFFERED_RESPONSE_SESSION}" AND
+   EXISTS "${WEB_BUFFERED_RESPONSE_PREPARATION}" AND
    EXISTS "${BUFFERED_RESPONSE_PLAN_TEST}" AND
    EXISTS "${BUFFERED_RESPONSE_H1_TEST}" AND
    EXISTS "${BUFFERED_RESPONSE_H1_RESULT_TEST}" AND
@@ -4269,6 +4273,8 @@ if(EXISTS "${HTTP_BUFFERED_RESPONSE_WRITE_PLAN}" AND
         buffered_response_h1_writer)
     file(READ "${WEB_HTTP1_BUFFERED_RESPONSE_SESSION}"
         buffered_response_h1_session)
+    file(READ "${WEB_BUFFERED_RESPONSE_PREPARATION}"
+        buffered_response_preparation)
     file(READ "${BUFFERED_RESPONSE_PLAN_TEST}"
         buffered_response_plan_test)
     file(READ "${BUFFERED_RESPONSE_H1_TEST}"
@@ -4290,7 +4296,11 @@ if(EXISTS "${HTTP_BUFFERED_RESPONSE_WRITE_PLAN}" AND
     file(READ "${BUFFERED_RESPONSE_PACKAGE_VERIFY}"
         buffered_response_package_verify)
 
-    if(NOT buffered_response_write_plan MATCHES
+    if(NOT buffered_response_preparation MATCHES
+           "HttpBufferedResponseWritePlan prepareBufferedHttpResponse" OR
+       buffered_response_preparation MATCHES
+           "class HttpBufferedResponsePreparation" OR
+       NOT buffered_response_write_plan MATCHES
            "std::uint16_t responseStatus[(][)] const noexcept" OR
        NOT buffered_response_write_plan MATCHES
            "return bodyPlan_[.]responseStatus[(][)]" OR
@@ -4333,9 +4343,11 @@ if(EXISTS "${HTTP_BUFFERED_RESPONSE_WRITE_PLAN}" AND
        buffered_response_h2_connection_source MATCHES
            "auto[ \t]+writePlan[ \t]*=[ \t\r\n]*httpBufferedResponseWritePlan" OR
        NOT buffered_response_h2_session MATCHES
-           "const auto responsePreparation = prepareBufferedHttpResponse" OR
+           "const auto writePlan = prepareBufferedHttpResponse" OR
+       buffered_response_h2_session MATCHES
+           "responsePreparation|[.]writePlan[(][)]" OR
        NOT buffered_response_h2_session MATCHES
-           "responsePreparation[.]writePlan[(][)]")
+           "bufferedResponseWriter[.]write[\r\n \t]*[(][\r\n \t]*streamId[\r\n \t]*,[\r\n \t]*response[\r\n \t]*,[\r\n \t]*writePlan")
         boundary_error("HTTP/2 buffered submission stopped consuming the prepared response plan"
             "Web preparation must flow into core submission and method/status/representation drift must fail transactionally")
     endif()
@@ -4448,6 +4460,10 @@ if(EXISTS "${HTTP_BUFFERED_RESPONSE_WRITE_PLAN}" AND
            "Http1BufferedResponseWriteResult" OR
        NOT buffered_response_web_package_consumer MATCHES
            "HttpFileZeroCopyResult" OR
+       NOT buffered_response_web_package_consumer MATCHES
+           "prepareBufferedHttpResponse" OR
+       NOT buffered_response_web_package_consumer MATCHES
+           "HttpBufferedResponseWritePlan" OR
        NOT buffered_response_package_verify MATCHES
            "installed buffered response status ownership" OR
        NOT buffered_response_package_verify MATCHES
@@ -4648,7 +4664,11 @@ if(EXISTS "${HTTP1_RESPONSE_HEAD_PLAN}" AND
     endif()
     if(NOT web_response_session MATCHES "http1BufferedResponsePlan" OR
        NOT web_response_session MATCHES
-           "responsePreparation[.]writePlan[(][)]" OR
+           "const auto writePlan = prepareBufferedHttpResponse" OR
+       web_response_session MATCHES
+           "responsePreparation|[.]writePlan[(][)]" OR
+       NOT web_response_session MATCHES
+           "http1BufferedResponsePlan[\r\n \t]*[(][\r\n \t]*writePlan" OR
        NOT web_response_session MATCHES "connectionPlan")
         list(APPEND http1_response_head_missing
             "web-buffered-composition")

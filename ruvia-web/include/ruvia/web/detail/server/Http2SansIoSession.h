@@ -486,14 +486,14 @@ Task<void> runHttp2SansIoSession(
         // All valid buffered branches converge here. Preparation moves any
         // compressed representation into the response itself, and the exact
         // post-transformation plan is submitted without re-planning.
-        const auto responsePreparation = prepareBufferedHttpResponse(
+        const auto writePlan = prepareBufferedHttpResponse(
             request,
             response,
             options);
         const auto result = co_await bufferedResponseWriter.write(
             streamId,
             response,
-            responsePreparation.writePlan());
+            writePlan);
         if (const auto* completed = result.completed()) {
             recordHttpAccess(
                 options.accessLog,

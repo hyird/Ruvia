@@ -221,11 +221,14 @@ RUVIA_TEST(buffered_response_absent_policies_skip_cors_and_compression) {
     options.compression.reset();
     RUVIA_CHECK(!options.cors.has_value());
 
-    (void)ruvia::detail::prepareBufferedHttpResponse(
+    const auto writePlan = ruvia::detail::prepareBufferedHttpResponse(
         parsed.request,
         HttpContentCoding::kGzip,
         response,
         options);
+    RUVIA_CHECK(writePlan.matchesResponse(response));
+    RUVIA_CHECK(
+        writePlan.requestMethod() == ruvia::HttpKnownMethod::kGet);
     RUVIA_CHECK(response.header("Access-Control-Allow-Origin").empty());
     RUVIA_CHECK(response.header("Content-Encoding").empty());
     RUVIA_CHECK(response.header("Vary").empty());

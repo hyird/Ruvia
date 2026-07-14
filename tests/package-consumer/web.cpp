@@ -51,6 +51,7 @@
 #include <ruvia/web/detail/server/HttpResponseStreamDispatch.h>
 #include <ruvia/web/detail/server/HttpResponseStreamState.h>
 #include <ruvia/web/detail/server/HttpResponseCompression.h>
+#include <ruvia/web/detail/server/HttpBufferedResponse.h>
 #include <ruvia/web/detail/server/HttpServerResponseStreamRoute.h>
 #include <ruvia/web/detail/server/HttpServerWebSocketRoute.h>
 #include <ruvia/http/detail/HttpResponseBodyAccess.h>
@@ -71,6 +72,12 @@ static_assert(!std::is_move_constructible_v<ruvia::MultipartReader>);
 static_assert(!std::is_move_assignable_v<ruvia::MultipartReader>);
 static_assert(std::is_move_constructible_v<ruvia::RequestNameValueList>);
 static_assert(!std::is_move_assignable_v<ruvia::RequestNameValueList>);
+static_assert(std::same_as<
+    decltype(ruvia::detail::prepareBufferedHttpResponse(
+        std::declval<const ruvia::HttpRequest&>(),
+        std::declval<ruvia::HttpResponse&>(),
+        std::declval<const ruvia::detail::HttpServerOptions&>())),
+    ruvia::detail::HttpBufferedResponseWritePlan>);
 
 template <typename T>
 concept ExposesAnyRvalueEnvBorrow =

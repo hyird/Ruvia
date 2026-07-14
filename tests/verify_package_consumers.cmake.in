@@ -2141,6 +2141,16 @@ if(_built_components_csv MATCHES "(^|,)web(,|$)")
            "void[ \t\r\n]+applyResponseCompression" OR
        NOT _installed_buffered_response_preparation MATCHES
            "applyResponseCompression" OR
+       NOT _installed_buffered_response_preparation MATCHES
+           "HttpBufferedResponseWritePlan prepareBufferedHttpResponse" OR
+       _installed_buffered_response_preparation MATCHES
+           "class HttpBufferedResponsePreparation" OR
+       NOT _installed_http1_stream_session MATCHES
+           "const auto writePlan = prepareBufferedHttpResponse" OR
+       _installed_http1_stream_session MATCHES
+           "responsePreparation|responsePreparation[.]writePlan[(][)]" OR
+       NOT _installed_http1_stream_session MATCHES
+           "http1BufferedResponsePlan[\r\n \t]*[(][\r\n \t]*writePlan" OR
        _installed_response_compression MATCHES
            "compressResponseBodyIfAccepted|compressionScratch" OR
        _installed_buffered_response_preparation MATCHES
@@ -2301,9 +2311,11 @@ if(_built_components_csv MATCHES "(^|,)web(,|$)")
        NOT _installed_http2_buffered_response_result MATCHES
            "Task<Http2BufferedResponseWriteResult> write" OR
        NOT _installed_http2_stream_session MATCHES
-           "const auto responsePreparation = prepareBufferedHttpResponse" OR
+           "const auto writePlan = prepareBufferedHttpResponse" OR
+       _installed_http2_stream_session MATCHES
+           "responsePreparation|[.]writePlan[(][)]" OR
        NOT _installed_http2_stream_session MATCHES
-           "responsePreparation[.]writePlan[(][)]" OR
+           "bufferedResponseWriter[.]write[\r\n \t]*[(][\r\n \t]*streamId[\r\n \t]*,[\r\n \t]*response[\r\n \t]*,[\r\n \t]*writePlan" OR
        NOT _installed_http2_stream_session MATCHES
            "Http2BufferedResponseWriter bufferedResponseWriter" OR
        NOT _installed_http2_stream_session MATCHES
