@@ -218,7 +218,7 @@ Router/error handler 不得设置 `Connection: close` 或接收 `closeConnection
 
 - `RUVIA_BUILD_CORE`、`RUVIA_BUILD_HTTP`、`RUVIA_BUILD_WEB` 默认均为 `ON`。
 - `RUVIA_BUILD_WEB=ON` 要求 core 与 HTTP 同时启用；core-only/http-only 不得查找或安装未选组件依赖。
-- MariaDB、Redis、JWT 是严格 feature：`RUVIA_ENABLE_MARIADB`、`RUVIA_ENABLE_REDIS`、`RUVIA_ENABLE_JWT`。
+- MariaDB、PostgreSQL、Redis、JWT 是严格 feature：`RUVIA_ENABLE_MARIADB`、`RUVIA_ENABLE_POSTGRESQL`、`RUVIA_ENABLE_REDIS`、`RUVIA_ENABLE_JWT`。
 - outbound HTTP client 只保留在 `ruvia-http` 的 sans-I/O API；`ruvia-web` 不提供 client socket/TLS runtime、连接池、`fetch`、`proxy` 或反向代理集成。
 - 安装包暴露 `ruvia::core`、`ruvia::http`、`ruvia::web`，不暴露历史别名。
 - 下游按需请求 `web`、`core` 或 `http` component；消费示例只放在 README。

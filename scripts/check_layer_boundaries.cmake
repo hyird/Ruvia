@@ -7351,9 +7351,8 @@ endif()
 
 set(POOL_WAITER_HEADER
     "${RUVIA_ROOT}/ruvia-core/include/ruvia/core/detail/PoolWaiterQueue.h")
-set(POOL_WAITER_DB_SLOTS "${RUVIA_ROOT}/ruvia-web/src/db/DbPoolSlots.cpp")
-set(POOL_WAITER_DB_LIFECYCLE
-    "${RUVIA_ROOT}/ruvia-web/src/db/DbPoolLifecycle.cpp")
+set(POOL_WAITER_DB_SCHEDULER
+    "${RUVIA_ROOT}/ruvia-web/src/db/DbPoolScheduler.cpp")
 set(POOL_WAITER_REDIS_SLOTS
     "${RUVIA_ROOT}/ruvia-web/src/redis/RedisPoolSlots.cpp")
 set(POOL_WAITER_REDIS_LIFECYCLE
@@ -7363,8 +7362,7 @@ set(POOL_WAITER_PACKAGE_CONSUMER
     "${RUVIA_ROOT}/tests/package-consumer/core.cpp")
 foreach(required IN ITEMS
     "${POOL_WAITER_HEADER}"
-    "${POOL_WAITER_DB_SLOTS}"
-    "${POOL_WAITER_DB_LIFECYCLE}"
+    "${POOL_WAITER_DB_SCHEDULER}"
     "${POOL_WAITER_REDIS_SLOTS}"
     "${POOL_WAITER_REDIS_LIFECYCLE}"
     "${POOL_WAITER_TEST}"
@@ -7374,15 +7372,13 @@ foreach(required IN ITEMS
     endif()
 endforeach()
 if(EXISTS "${POOL_WAITER_HEADER}" AND
-   EXISTS "${POOL_WAITER_DB_SLOTS}" AND
-   EXISTS "${POOL_WAITER_DB_LIFECYCLE}" AND
+   EXISTS "${POOL_WAITER_DB_SCHEDULER}" AND
    EXISTS "${POOL_WAITER_REDIS_SLOTS}" AND
    EXISTS "${POOL_WAITER_REDIS_LIFECYCLE}" AND
    EXISTS "${POOL_WAITER_TEST}" AND
    EXISTS "${POOL_WAITER_PACKAGE_CONSUMER}")
     file(READ "${POOL_WAITER_HEADER}" pool_waiter_header)
-    file(READ "${POOL_WAITER_DB_SLOTS}" pool_waiter_db_slots)
-    file(READ "${POOL_WAITER_DB_LIFECYCLE}" pool_waiter_db_lifecycle)
+    file(READ "${POOL_WAITER_DB_SCHEDULER}" pool_waiter_db_scheduler)
     file(READ "${POOL_WAITER_REDIS_SLOTS}" pool_waiter_redis_slots)
     file(READ "${POOL_WAITER_REDIS_LIFECYCLE}"
         pool_waiter_redis_lifecycle)
@@ -7412,17 +7408,17 @@ if(EXISTS "${POOL_WAITER_HEADER}" AND
         boundary_error("pool waiter lost its discriminated await result"
             "pending must remain optional; acquired, timeout, and closure must be exclusive completion alternatives, and closeAll must commit its entire queue before resuming")
     endif()
-    if(NOT pool_waiter_db_slots MATCHES
+    if(NOT pool_waiter_db_scheduler MATCHES
            "const auto& result = co_await waiter" OR
-       NOT pool_waiter_db_slots MATCHES "result[.]timedOut[(][)]" OR
-       NOT pool_waiter_db_slots MATCHES "result[.]closed[(][)]" OR
-       NOT pool_waiter_db_slots MATCHES "result[.]acquired[(][)]" OR
+       NOT pool_waiter_db_scheduler MATCHES "result[.]timedOut[(][)]" OR
+       NOT pool_waiter_db_scheduler MATCHES "result[.]closed[(][)]" OR
+       NOT pool_waiter_db_scheduler MATCHES "result[.]acquired[(][)]" OR
        NOT pool_waiter_redis_slots MATCHES
            "const auto& result = co_await waiter" OR
        NOT pool_waiter_redis_slots MATCHES "result[.]timedOut[(][)]" OR
        NOT pool_waiter_redis_slots MATCHES "result[.]closed[(][)]" OR
        NOT pool_waiter_redis_slots MATCHES "result[.]acquired[(][)]" OR
-       NOT pool_waiter_db_lifecycle MATCHES "waiters_[.]closeAll[(][)]" OR
+       NOT pool_waiter_db_scheduler MATCHES "waiters_[.]closeAll[(][)]" OR
        NOT pool_waiter_redis_lifecycle MATCHES "waiters_[.]closeAll[(][)]")
         boundary_error("DB/Redis pool waits stopped consuming one core completion"
             "both integrations must co_await PoolWaiter and map only its typed timeout, closed, or acquired outcome")

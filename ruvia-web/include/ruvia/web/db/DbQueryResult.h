@@ -2,6 +2,7 @@
 
 #include "ruvia/core/Task.h"
 #include "ruvia/web/db/DbTypes.h"
+#include "ruvia/web/detail/db/DbBackend.h"
 #include "ruvia/core/memory/PmrResource.h"
 
 #include <cstddef>
@@ -31,7 +32,7 @@ public:
     [[nodiscard]] std::uint64_t lastInsertId() const noexcept;
 
 private:
-    friend class detail::MariaDbPool;
+    friend struct detail::DbResultAccess;
     friend class DbHandle;
     friend class DbTransaction;
 
@@ -43,8 +44,8 @@ private:
     std::uint64_t affectedRows_{0};
     std::uint64_t lastInsertId_{0};
     const QueryResult* mounted_{nullptr};
-    st_mysql_res* rawResult_{nullptr};
-    void (*releaseRawResult_)(st_mysql_res*) noexcept{nullptr};
+    void* rawResult_{nullptr};
+    void (*releaseRawResult_)(void*) noexcept{nullptr};
 };
 
 class DbStreamResult final {
@@ -61,16 +62,18 @@ public:
 
 private:
     friend class detail::MariaDbPool;
+    friend class detail::PostgreSqlPool;
 
     DbStreamResult(
-        detail::MariaDbPool& client,
+        detail::DbPoolRef client,
         std::size_t slot,
         void* result,
-        std::pmr::memory_resource* resource) noexcept;
+        std::pmr::memory_resource* resource,
+        bool active = true) noexcept;
     void reset() noexcept;
     void release() noexcept;
 
-    detail::MariaDbPool* client_{nullptr};
+    detail::DbPoolRef client_{};
     std::size_t slot_{0};
     void* result_{nullptr};
     std::pmr::memory_resource* resource_{nullptr};

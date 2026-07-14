@@ -163,7 +163,7 @@ void App::run() {
                     endpoint,
                     routeTable,
                     std::span<const detail::DbDefinition>{
-#ifdef RUVIA_ENABLE_MARIADB
+#ifdef RUVIA_ENABLE_DATABASE
                         state.databases
 #endif
                     },

@@ -6,30 +6,33 @@
 #else
 #include <asio/posix/stream_descriptor.hpp>
 #endif
-#include <mysql/mysql.h>
+
+#include <cstdint>
+#include <limits>
 
 namespace ruvia::detail {
 
-// Persistent ASIO wrapper around a single MariaDB connection socket.
+// Persistent ASIO wrapper around a database driver's native connection socket.
 //
-// MariaDB hands us a native socket via mysql_get_socket(); we need ASIO to wait
-// for readiness on it. On Windows the IOCP backend permanently associates a
-// socket handle with the completion port when assign() is called, and release()
-// cannot undo that association. Re-assigning the same fd on every wait therefore
-// fails the second time (ERROR_INVALID_PARAMETER) and breaks the connection.
-// To stay portable we assign the socket exactly once per connection here and
-// reuse it for every subsequent wait.
-struct SlotSocket final {
-    explicit SlotSocket(asio::io_context& ioContext);
+// MariaDB and libpq retain ownership while ASIO waits for readiness. On Windows
+// the IOCP backend permanently associates a handle with the completion port,
+// so the wrapper is assigned once per native socket and reused across waits.
+struct DbSlotSocket final {
+    explicit DbSlotSocket(asio::io_context& ioContext);
 
 #if defined(_WIN32)
+    using NativeSocket = std::uintptr_t;
     asio::ip::tcp::socket socket;
+    static constexpr NativeSocket kInvalidSocket =
+        std::numeric_limits<NativeSocket>::max();
 #else
+    using NativeSocket = asio::posix::stream_descriptor::native_handle_type;
     asio::posix::stream_descriptor descriptor;
+    static constexpr NativeSocket kInvalidSocket = -1;
 #endif
-    my_socket native{static_cast<my_socket>(MARIADB_INVALID_SOCKET)};
+    NativeSocket native{kInvalidSocket};
 
-    [[nodiscard]] bool ensureAssigned(my_socket fd) noexcept;
+    [[nodiscard]] bool ensureAssigned(NativeSocket fd) noexcept;
     void cancel() noexcept;
     void release() noexcept;
 };
