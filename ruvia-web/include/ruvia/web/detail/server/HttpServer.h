@@ -69,6 +69,15 @@ private:
         kStopped,
     };
 
+    // RAII notify for the graceful-drain path, held across a session's whole
+    // coroutine body. A nested type (rather than a session-local struct) gives it
+    // linkage so it does not taint the coroutine frame with a no-linkage subobject,
+    // while still reaching the private maybeFinishDrain.
+    struct SessionDrainGuard final {
+        HttpServer* server;
+        ~SessionDrainGuard() { server->maybeFinishDrain(); }
+    };
+
     void configureAcceptor();
     void configureTlsContext();
     void stopOnContext(bool honorGracePeriod = true) noexcept;
