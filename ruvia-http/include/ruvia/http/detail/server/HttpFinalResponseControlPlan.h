@@ -100,14 +100,17 @@ private:
 // valid HTTP/2 plan cannot be mistaken for the parsed HTTP/1 field contract.
 class HttpFinalResponseControlPlanResult final {
 public:
-    [[nodiscard]] const HttpFinalResponseControlPlan* plan() const noexcept {
+    [[nodiscard]] const HttpFinalResponseControlPlan* plan() const & noexcept {
         return std::get_if<HttpFinalResponseControlPlan>(&value_);
     }
+    [[nodiscard]] const HttpFinalResponseControlPlan* plan() const && = delete;
 
     [[nodiscard]] const HttpFinalResponseControlPlanFailure*
-    failure() const noexcept {
+    failure() const & noexcept {
         return std::get_if<HttpFinalResponseControlPlanFailure>(&value_);
     }
+    [[nodiscard]] const HttpFinalResponseControlPlanFailure*
+    failure() const && = delete;
 
 private:
     friend HttpFinalResponseControlPlanResult httpFinalResponseControlPlan(

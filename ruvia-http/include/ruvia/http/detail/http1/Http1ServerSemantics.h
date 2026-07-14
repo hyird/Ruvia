@@ -157,14 +157,17 @@ private:
 // so callers cannot observe a half-committed response after a protocol failure.
 class Http1FinalResponseCommitResult final {
 public:
-    [[nodiscard]] const Http1FinalResponseCommit* committed() const noexcept {
+    [[nodiscard]] const Http1FinalResponseCommit* committed() const & noexcept {
         return std::get_if<Http1FinalResponseCommit>(&value_);
     }
+    [[nodiscard]] const Http1FinalResponseCommit* committed() const && = delete;
 
     [[nodiscard]] const Http1FinalResponseCommitFailure*
-    failure() const noexcept {
+    failure() const & noexcept {
         return std::get_if<Http1FinalResponseCommitFailure>(&value_);
     }
+    [[nodiscard]] const Http1FinalResponseCommitFailure*
+    failure() const && = delete;
 
 private:
     friend Http1FinalResponseCommitResult http1CommitFinalResponse(
@@ -299,18 +302,24 @@ private:
 
 class PreparedHttp1ResponseStreamResult final {
 public:
-    [[nodiscard]] const PreparedHttp1ResponseStream* prepared() const noexcept {
+    [[nodiscard]] const PreparedHttp1ResponseStream*
+    prepared() const & noexcept {
         return std::get_if<PreparedHttp1ResponseStream>(&value_);
     }
+    [[nodiscard]] const PreparedHttp1ResponseStream*
+    prepared() const && = delete;
 
-    [[nodiscard]] PreparedHttp1ResponseStream* prepared() noexcept {
+    [[nodiscard]] PreparedHttp1ResponseStream* prepared() & noexcept {
         return std::get_if<PreparedHttp1ResponseStream>(&value_);
     }
+    [[nodiscard]] PreparedHttp1ResponseStream* prepared() && = delete;
 
     [[nodiscard]] const Http1FinalResponseCommitFailure*
-    failure() const noexcept {
+    failure() const & noexcept {
         return std::get_if<Http1FinalResponseCommitFailure>(&value_);
     }
+    [[nodiscard]] const Http1FinalResponseCommitFailure*
+    failure() const && = delete;
 
     [[nodiscard]] PreparedHttp1ResponseStream takePrepared() && {
         return std::move(std::get<PreparedHttp1ResponseStream>(value_));

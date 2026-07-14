@@ -145,14 +145,18 @@ private:
 class Http2WebSocketHandshakeSubmitResult final {
 public:
     [[nodiscard]] const Http2SubmittedWebSocketHandshake*
-    submitted() const noexcept {
+    submitted() const & noexcept {
         return std::get_if<Http2SubmittedWebSocketHandshake>(&value_);
     }
+    [[nodiscard]] const Http2SubmittedWebSocketHandshake*
+    submitted() const && = delete;
 
     [[nodiscard]] const Http2WebSocketHandshakeSubmitFailure*
-    failure() const noexcept {
+    failure() const & noexcept {
         return std::get_if<Http2WebSocketHandshakeSubmitFailure>(&value_);
     }
+    [[nodiscard]] const Http2WebSocketHandshakeSubmitFailure*
+    failure() const && = delete;
 
 private:
     friend class Http2Connection;
@@ -240,14 +244,18 @@ private:
 class Http2RequestHeadSubmitResult final {
 public:
     [[nodiscard]] constexpr const Http2SubmittedRequestHead*
-    submitted() const noexcept {
+    submitted() const & noexcept {
         return std::get_if<Http2SubmittedRequestHead>(&value_);
     }
+    [[nodiscard]] constexpr const Http2SubmittedRequestHead*
+    submitted() const && = delete;
 
     [[nodiscard]] constexpr const Http2RequestHeadSubmitFailure*
-    failure() const noexcept {
+    failure() const & noexcept {
         return std::get_if<Http2RequestHeadSubmitFailure>(&value_);
     }
+    [[nodiscard]] constexpr const Http2RequestHeadSubmitFailure*
+    failure() const && = delete;
 
 private:
     friend class Http2Connection;
@@ -362,14 +370,17 @@ class Http2ResponseHeadSubmitResult final {
 public:
     using Submitted = Http2SubmittedResponseHead<Plan>;
 
-    [[nodiscard]] const Submitted* submitted() const noexcept {
+    [[nodiscard]] const Submitted* submitted() const & noexcept {
         return std::get_if<Submitted>(&value_);
     }
+    [[nodiscard]] const Submitted* submitted() const && = delete;
 
     [[nodiscard]] constexpr const Http2ResponseHeadSubmitFailure*
-    failure() const noexcept {
+    failure() const & noexcept {
         return std::get_if<Http2ResponseHeadSubmitFailure>(&value_);
     }
+    [[nodiscard]] constexpr const Http2ResponseHeadSubmitFailure*
+    failure() const && = delete;
 
 private:
     friend class Http2Connection;

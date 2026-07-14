@@ -1,7 +1,9 @@
 #include "test_harness.h"
 
 #include <array>
+#include <concepts>
 #include <string_view>
+#include <utility>
 
 #include "ruvia/http/detail/server/HttpResponseTrailers.h"
 
@@ -12,6 +14,15 @@ using ruvia::detail::isValidResponseTrailerName;
 using ruvia::detail::isValidResponseTrailerValue;
 using ruvia::detail::responseTrailerFieldValid;
 using ruvia::detail::httpResponseTrailerSection;
+using ruvia::detail::HttpResponseTrailerSectionResult;
+
+template <typename T>
+concept HasAnyRvalueTrailerSectionAccessor =
+    requires(T&& result) { std::move(result).section(); } ||
+    requires(T&& result) { std::move(result).failure(); };
+
+static_assert(!HasAnyRvalueTrailerSectionAccessor<
+    HttpResponseTrailerSectionResult>);
 
 }  // namespace
 
@@ -116,5 +127,6 @@ RUVIA_TEST(response_trailer_section_validation_is_all_fields_or_none) {
     RUVIA_CHECK(mixedResult.failure() != nullptr);
     // An empty field sequence is the valid absence of a trailer section; the
     // submission API reports kEmpty separately when asked to submit one.
-    RUVIA_CHECK(httpResponseTrailerSection({}).section() != nullptr);
+    const auto emptyResult = httpResponseTrailerSection({});
+    RUVIA_CHECK(emptyResult.section() != nullptr);
 }

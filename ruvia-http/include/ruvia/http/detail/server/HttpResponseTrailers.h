@@ -173,14 +173,17 @@ private:
 
 class HttpResponseTrailerSectionResult final {
 public:
-    [[nodiscard]] const HttpResponseTrailerSection* section() const noexcept {
+    [[nodiscard]] const HttpResponseTrailerSection* section() const & noexcept {
         return std::get_if<HttpResponseTrailerSection>(&value_);
     }
+    [[nodiscard]] const HttpResponseTrailerSection* section() const && = delete;
 
     [[nodiscard]] const HttpResponseTrailerSectionFailure*
-    failure() const noexcept {
+    failure() const & noexcept {
         return std::get_if<HttpResponseTrailerSectionFailure>(&value_);
     }
+    [[nodiscard]] const HttpResponseTrailerSectionFailure*
+    failure() const && = delete;
 
 private:
     friend HttpResponseTrailerSectionResult httpResponseTrailerSection(

@@ -249,16 +249,15 @@ RUVIA_TEST(sansio_driver_h2_get_round_trip) {
                         response.body("pong");
                         const auto* stream = c.stream(streamId);
                         RUVIA_CHECK(stream != nullptr);
-                        RUVIA_CHECK(
-                            c.submitResponseHead(
-                                streamId,
-                                response,
-                                ruvia::detail::httpBufferedResponseWritePlan(
-                                    stream == nullptr
-                                        ? ruvia::HttpKnownMethod::kUnknown
-                                        : stream->requestKnownMethod(),
-                                    response)).submitted() !=
-                            nullptr);
+                        const auto submittedHead = c.submitResponseHead(
+                            streamId,
+                            response,
+                            ruvia::detail::httpBufferedResponseWritePlan(
+                                stream == nullptr
+                                    ? ruvia::HttpKnownMethod::kUnknown
+                                    : stream->requestKnownMethod(),
+                                response));
+                        RUVIA_CHECK(submittedHead.submitted() != nullptr);
                         RUVIA_CHECK(c.submitData(
                             streamId, "pong", Http2EndStream::kEndStream) ==
                             Http2DataSubmitStatus::kAccepted);

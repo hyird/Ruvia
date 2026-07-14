@@ -6344,8 +6344,10 @@ if(EXISTS "${HTTP2_CONNECTION_HEADER}")
        NOT http2_connection_header MATCHES "[(]streamId_ [&] 1U[)] == 0" OR
        NOT http2_connection_header MATCHES
            "std::variant<[ \t\r\n]*Http2SubmittedRequestHead,[ \t\r\n]*Http2RequestHeadSubmitFailure" OR
-       NOT http2_connection_header MATCHES "submitted[(][)] const noexcept" OR
-       NOT http2_connection_header MATCHES "failure[(][)] const noexcept" OR
+       NOT http2_connection_header MATCHES
+           "Http2SubmittedRequestHead[*][ \t\r\n]+submitted[(][)] const [&] noexcept" OR
+       NOT http2_connection_header MATCHES
+           "Http2RequestHeadSubmitFailure[*][ \t\r\n]+failure[(][)] const [&] noexcept" OR
        NOT http2_connection_header MATCHES "kPeerStreamLimitReached" OR
        http2_connection_header MATCHES "submitRequestHead")
         boundary_error("HTTP/2 client request API restored an ambiguous framing entry"
@@ -9050,6 +9052,68 @@ check_files_no_match("HPACK decode result recovered an error sentinel"
     "${HTTP2_HPACK}"
     "${HTTP2_HPACK_HEADER_DECODE}"
     ${HTTP2_HPACK_SOURCES})
+
+set(HTTP_OPERATION_RESULT_H1
+    "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/detail/http1/Http1ServerSemantics.h")
+set(HTTP_OPERATION_RESULT_H2_CONNECTION
+    "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/detail/http2/Http2Connection.h")
+set(HTTP_OPERATION_RESULT_H2_PEER
+    "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/detail/http2/Http2PeerSettings.h")
+set(HTTP_OPERATION_RESULT_H2_PLAN
+    "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/detail/http2/Http2ResponseHeadPlan.h")
+set(HTTP_OPERATION_RESULT_CONTROL
+    "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/detail/server/HttpFinalResponseControlPlan.h")
+set(HTTP_OPERATION_RESULT_TRAILERS
+    "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/detail/server/HttpResponseTrailers.h")
+if(EXISTS "${HTTP_OPERATION_RESULT_H1}" AND
+   EXISTS "${HTTP_OPERATION_RESULT_H2_CONNECTION}" AND
+   EXISTS "${HTTP_OPERATION_RESULT_H2_PEER}" AND
+   EXISTS "${HTTP_OPERATION_RESULT_H2_PLAN}" AND
+   EXISTS "${HTTP_OPERATION_RESULT_CONTROL}" AND
+   EXISTS "${HTTP_OPERATION_RESULT_TRAILERS}" AND
+   EXISTS "${HTTP_PACKAGE_CONSUMER}")
+    file(READ "${HTTP_OPERATION_RESULT_H1}" http_operation_result_h1)
+    file(READ "${HTTP_OPERATION_RESULT_H2_CONNECTION}"
+        http_operation_result_h2_connection)
+    file(READ "${HTTP_OPERATION_RESULT_H2_PEER}" http_operation_result_h2_peer)
+    file(READ "${HTTP_OPERATION_RESULT_H2_PLAN}" http_operation_result_h2_plan)
+    file(READ "${HTTP_OPERATION_RESULT_CONTROL}" http_operation_result_control)
+    file(READ "${HTTP_OPERATION_RESULT_TRAILERS}" http_operation_result_trailers)
+    file(READ "${HTTP_PACKAGE_CONSUMER}" http_operation_result_consumer)
+    if(NOT http_operation_result_h1 MATCHES
+           "committed[(][)] const [&] noexcept" OR
+       NOT http_operation_result_h1 MATCHES
+           "prepared[(][)] const [&] noexcept" OR
+       NOT http_operation_result_h1 MATCHES
+           "prepared[(][)] [&] noexcept" OR
+       NOT http_operation_result_h1 MATCHES
+           "committed[(][)] const && = delete" OR
+       NOT http_operation_result_h2_connection MATCHES
+           "Http2SubmittedWebSocketHandshake[*][ \t\r\n]+submitted[(][)] const [&] noexcept" OR
+       NOT http_operation_result_h2_connection MATCHES
+           "Http2SubmittedRequestHead[*][ \t\r\n]+submitted[(][)] const [&] noexcept" OR
+       NOT http_operation_result_h2_connection MATCHES
+           "const Submitted[*] submitted[(][)] const [&] noexcept" OR
+       NOT http_operation_result_h2_connection MATCHES
+           "submitted[(][)] const && = delete" OR
+       NOT http_operation_result_h2_peer MATCHES
+           "applied[(][)] const [&] noexcept" OR
+       NOT http_operation_result_h2_peer MATCHES
+           "initialWindowChange[(][)] const && = delete" OR
+       NOT http_operation_result_h2_plan MATCHES
+           "plan[(][)] const [&] noexcept" OR
+       NOT http_operation_result_control MATCHES
+           "plan[(][)] const [&] noexcept" OR
+       NOT http_operation_result_trailers MATCHES
+           "section[(][)] const [&] noexcept" OR
+       NOT http_operation_result_trailers MATCHES
+           "section[(][)] const && = delete" OR
+       NOT http_operation_result_consumer MATCHES
+           "ExposesAnyRvalueHttpOperationResultAccessor")
+        boundary_error("HTTP operation results expose alternatives from temporary owners"
+            "HTTP/1 commit, HTTP/2 submission/settings/planning, final control, and trailer results must lend alternative pointers only from live lvalue result owners")
+    endif()
+endif()
 
 set(BOUNDARY_DOCS "${RUVIA_ROOT}/README.md" "${RUVIA_ROOT}/AGENTS.md")
 check_files_no_match("docs reference the deleted coroutine h2 server session"

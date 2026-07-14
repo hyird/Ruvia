@@ -123,13 +123,17 @@ private:
 
 class Http2ResponseHeadPlanResult final {
 public:
-    [[nodiscard]] const Http2ResponseHeadPlan* plan() const noexcept {
+    [[nodiscard]] const Http2ResponseHeadPlan* plan() const & noexcept {
         return std::get_if<Http2ResponseHeadPlan>(&value_);
     }
+    [[nodiscard]] const Http2ResponseHeadPlan* plan() const && = delete;
 
-    [[nodiscard]] const Http2ResponseHeadPlanFailure* failure() const noexcept {
+    [[nodiscard]] const Http2ResponseHeadPlanFailure*
+    failure() const & noexcept {
         return std::get_if<Http2ResponseHeadPlanFailure>(&value_);
     }
+    [[nodiscard]] const Http2ResponseHeadPlanFailure*
+    failure() const && = delete;
 
 private:
     friend Http2ResponseHeadPlanResult http2BufferedResponseHeadPlan(

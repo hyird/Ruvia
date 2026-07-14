@@ -116,6 +116,73 @@ if(_built_components_csv MATCHES "(^|,)core(,|$)")
 endif()
 
 if(_built_components_csv MATCHES "(^|,)http(,|$)")
+set(_installed_http_operation_h1
+    "${_install_prefix}/include/ruvia/http/detail/http1/Http1ServerSemantics.h")
+set(_installed_http_operation_h2_connection
+    "${_install_prefix}/include/ruvia/http/detail/http2/Http2Connection.h")
+set(_installed_http_operation_h2_peer
+    "${_install_prefix}/include/ruvia/http/detail/http2/Http2PeerSettings.h")
+set(_installed_http_operation_h2_plan
+    "${_install_prefix}/include/ruvia/http/detail/http2/Http2ResponseHeadPlan.h")
+set(_installed_http_operation_control
+    "${_install_prefix}/include/ruvia/http/detail/server/HttpFinalResponseControlPlan.h")
+set(_installed_http_operation_trailers
+    "${_install_prefix}/include/ruvia/http/detail/server/HttpResponseTrailers.h")
+foreach(_installed_http_operation_path IN ITEMS
+        "${_installed_http_operation_h1}"
+        "${_installed_http_operation_h2_connection}"
+        "${_installed_http_operation_h2_peer}"
+        "${_installed_http_operation_h2_plan}"
+        "${_installed_http_operation_control}"
+        "${_installed_http_operation_trailers}")
+    if(NOT EXISTS "${_installed_http_operation_path}")
+        message(FATAL_ERROR
+            "installed HTTP package is missing an operation-result lifetime contract")
+    endif()
+endforeach()
+file(READ "${_installed_http_operation_h1}" _installed_http_operation_h1_text)
+file(READ "${_installed_http_operation_h2_connection}"
+    _installed_http_operation_h2_connection_text)
+file(READ "${_installed_http_operation_h2_peer}"
+    _installed_http_operation_h2_peer_text)
+file(READ "${_installed_http_operation_h2_plan}"
+    _installed_http_operation_h2_plan_text)
+file(READ "${_installed_http_operation_control}"
+    _installed_http_operation_control_text)
+file(READ "${_installed_http_operation_trailers}"
+    _installed_http_operation_trailers_text)
+if(NOT _installed_http_operation_h1_text MATCHES
+       "committed[(][)] const [&] noexcept" OR
+   NOT _installed_http_operation_h1_text MATCHES
+       "prepared[(][)] const [&] noexcept" OR
+   NOT _installed_http_operation_h1_text MATCHES
+       "prepared[(][)] [&] noexcept" OR
+   NOT _installed_http_operation_h1_text MATCHES
+       "committed[(][)] const && = delete" OR
+   NOT _installed_http_operation_h2_connection_text MATCHES
+       "Http2SubmittedWebSocketHandshake[*][ \t\r\n]+submitted[(][)] const [&] noexcept" OR
+   NOT _installed_http_operation_h2_connection_text MATCHES
+       "Http2SubmittedRequestHead[*][ \t\r\n]+submitted[(][)] const [&] noexcept" OR
+   NOT _installed_http_operation_h2_connection_text MATCHES
+       "const Submitted[*] submitted[(][)] const [&] noexcept" OR
+   NOT _installed_http_operation_h2_connection_text MATCHES
+       "submitted[(][)] const && = delete" OR
+   NOT _installed_http_operation_h2_peer_text MATCHES
+       "applied[(][)] const [&] noexcept" OR
+   NOT _installed_http_operation_h2_peer_text MATCHES
+       "initialWindowChange[(][)] const && = delete" OR
+   NOT _installed_http_operation_h2_plan_text MATCHES
+       "plan[(][)] const [&] noexcept" OR
+   NOT _installed_http_operation_control_text MATCHES
+       "plan[(][)] const [&] noexcept" OR
+   NOT _installed_http_operation_trailers_text MATCHES
+       "section[(][)] const [&] noexcept" OR
+   NOT _installed_http_operation_trailers_text MATCHES
+       "section[(][)] const && = delete")
+    message(FATAL_ERROR
+        "installed HTTP operation results expose alternatives from temporary owners")
+endif()
+
 set(_removed_http2_frame_umbrella
     "${_install_prefix}/include/ruvia/http/detail/http2/Http2Frame.h")
 if(EXISTS "${_removed_http2_frame_umbrella}")

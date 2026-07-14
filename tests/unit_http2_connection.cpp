@@ -3630,9 +3630,10 @@ RUVIA_TEST(http2_connection_goaway_last_stream_id_is_monotonic) {
     Http2Connection client(&resource, Http2Role::kClient);
     handshake(client);
     for (const std::string_view path : {"/one", "/two", "/three"}) {
-        RUVIA_CHECK(client.submitRegularRequestHead(
+        const auto submitted = client.submitRegularRequestHead(
             "GET", "https", "example.test", path, {},
-            Http2RequestContent::none()).submitted() != nullptr);
+            Http2RequestContent::none());
+        RUVIA_CHECK(submitted.submitted() != nullptr);
     }
     client.consumeOutput(client.pendingOutput().size());
 

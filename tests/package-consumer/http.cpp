@@ -137,6 +137,38 @@ concept ExposesAnyRvalueWebSocketInboundAccessor =
     requires(T&& result) { std::move(result).failure(); };
 
 template <typename T>
+concept ExposesAnyRvalueHttpOperationResultAccessor =
+    requires(T&& result) { std::move(result).committed(); } ||
+    requires(T&& result) { std::move(result).prepared(); } ||
+    requires(T&& result) { std::move(result).submitted(); } ||
+    requires(T&& result) { std::move(result).applied(); } ||
+    requires(T&& result) { std::move(result).initialWindowChange(); } ||
+    requires(T&& result) { std::move(result).plan(); } ||
+    requires(T&& result) { std::move(result).section(); } ||
+    requires(T&& result) { std::move(result).failure(); };
+
+static_assert(!ExposesAnyRvalueHttpOperationResultAccessor<
+    ruvia::detail::Http1FinalResponseCommitResult>);
+static_assert(!ExposesAnyRvalueHttpOperationResultAccessor<
+    ruvia::detail::PreparedHttp1ResponseStreamResult>);
+static_assert(!ExposesAnyRvalueHttpOperationResultAccessor<
+    ruvia::detail::Http2WebSocketHandshakeSubmitResult>);
+static_assert(!ExposesAnyRvalueHttpOperationResultAccessor<
+    ruvia::detail::Http2RequestHeadSubmitResult>);
+static_assert(!ExposesAnyRvalueHttpOperationResultAccessor<
+    ruvia::detail::Http2BufferedResponseHeadSubmitResult>);
+static_assert(!ExposesAnyRvalueHttpOperationResultAccessor<
+    ruvia::detail::Http2StreamingResponseHeadSubmitResult>);
+static_assert(!ExposesAnyRvalueHttpOperationResultAccessor<
+    ruvia::detail::Http2PeerSettingApplyResult>);
+static_assert(!ExposesAnyRvalueHttpOperationResultAccessor<
+    ruvia::detail::Http2ResponseHeadPlanResult>);
+static_assert(!ExposesAnyRvalueHttpOperationResultAccessor<
+    ruvia::detail::HttpFinalResponseControlPlanResult>);
+static_assert(!ExposesAnyRvalueHttpOperationResultAccessor<
+    ruvia::detail::HttpResponseTrailerSectionResult>);
+
+template <typename T>
 concept ExposesRvalueUnsupportedContentCoding = requires(const T&& result) {
     std::move(result).unsupported();
 };

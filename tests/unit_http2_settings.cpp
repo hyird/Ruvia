@@ -20,8 +20,10 @@ using ruvia::detail::http2SettingsPayloadSizeValid;
 
 RUVIA_TEST(http2_settings_enable_push) {
     Http2PeerSettings settings(Http2Role::kServer);
-    RUVIA_CHECK(settings.apply(Http2SettingId::kEnablePush, 0).applied() != nullptr);
-    RUVIA_CHECK(settings.apply(Http2SettingId::kEnablePush, 1).applied() != nullptr);
+    const auto disabled = settings.apply(Http2SettingId::kEnablePush, 0);
+    RUVIA_CHECK(disabled.applied() != nullptr);
+    const auto enabled = settings.apply(Http2SettingId::kEnablePush, 1);
+    RUVIA_CHECK(enabled.applied() != nullptr);
     // Only 0 or 1 are legal (RFC 9113 Section 6.5.2).
     const auto invalid = settings.apply(Http2SettingId::kEnablePush, 2);
     RUVIA_CHECK(invalid.failure() != nullptr);
@@ -47,8 +49,10 @@ RUVIA_TEST(http2_settings_initial_window_size) {
 
 RUVIA_TEST(http2_settings_max_frame_size_bounds) {
     Http2PeerSettings settings(Http2Role::kServer);
-    RUVIA_CHECK(settings.apply(Http2SettingId::kMaxFrameSize, 16384).applied() != nullptr);  // minimum
-    RUVIA_CHECK(settings.apply(Http2SettingId::kMaxFrameSize, 16777215).applied() != nullptr);  // maximum
+    const auto minimum = settings.apply(Http2SettingId::kMaxFrameSize, 16384);
+    RUVIA_CHECK(minimum.applied() != nullptr);
+    const auto maximum = settings.apply(Http2SettingId::kMaxFrameSize, 16777215);
+    RUVIA_CHECK(maximum.applied() != nullptr);
     RUVIA_CHECK_EQ(settings.maxFrameSize(), std::uint32_t{16777215});
     const auto below = settings.apply(Http2SettingId::kMaxFrameSize, 16383);
     RUVIA_CHECK(below.failure() != nullptr);  // below the range
@@ -61,7 +65,9 @@ RUVIA_TEST(http2_settings_max_frame_size_bounds) {
 RUVIA_TEST(http2_settings_unknown_ignored_and_payload_size) {
     Http2PeerSettings settings(Http2Role::kServer);
     // An unknown setting identifier must be ignored (RFC 9113 Section 6.5.2).
-    RUVIA_CHECK(settings.apply(static_cast<Http2SettingId>(0xABCD), 999).applied() != nullptr);
+    const auto unknown =
+        settings.apply(static_cast<Http2SettingId>(0xABCD), 999);
+    RUVIA_CHECK(unknown.applied() != nullptr);
     // A SETTINGS payload length must be a multiple of six.
     RUVIA_CHECK(http2SettingsPayloadSizeValid(std::string_view()));       // empty
     RUVIA_CHECK(http2SettingsPayloadSizeValid(std::string(12, 'x')));     // two entries
@@ -72,7 +78,9 @@ RUVIA_TEST(http2_settings_unknown_ignored_and_payload_size) {
 RUVIA_TEST(http2_settings_enable_connect_protocol) {
     Http2PeerSettings settings(Http2Role::kServer);
     RUVIA_CHECK(!settings.enableConnectProtocol());
-    RUVIA_CHECK(settings.apply(Http2SettingId::kEnableConnectProtocol, 1).applied() != nullptr);
+    const auto enabled =
+        settings.apply(Http2SettingId::kEnableConnectProtocol, 1);
+    RUVIA_CHECK(enabled.applied() != nullptr);
     RUVIA_CHECK(settings.enableConnectProtocol());
     // Once enabled it must not be turned off (RFC 8441).
     const auto disabled = settings.apply(Http2SettingId::kEnableConnectProtocol, 0);
