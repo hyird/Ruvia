@@ -219,10 +219,10 @@ void Context::header(std::string_view name, std::nullopt_t) {
 
 namespace {
 
-// The signature must bind the name the client sends back in Cookie, which is
-// the wire name: an enum prefix becomes part of that name at serialization, so
-// signing the bare name would make the prefixed cookie unverifiable on read.
-[[nodiscard]] std::string_view signedCookieWireName(
+// The name the client sends back in Cookie is the wire name: an enum prefix
+// becomes part of the name at serialization. Request-side lookups and the MAC
+// of a signed cookie must both use it; the bare name never reaches the client.
+[[nodiscard]] std::string_view cookieWireName(
     std::pmr::string& storage,
     std::string_view name,
     const ruvia::CookieOptions& options) {
@@ -282,7 +282,7 @@ void Context::setSignedCookie(
         name,
         composeSignedCookieValue(
             resource(),
-            signedCookieWireName(wireName, name, options),
+            cookieWireName(wireName, name, options),
             value,
             secret),
         options);
@@ -311,14 +311,15 @@ std::pmr::string Context::generateSignedCookie(
         name,
         composeSignedCookieValue(
             resource(),
-            signedCookieWireName(wireName, name, options),
+            cookieWireName(wireName, name, options),
             value,
             secret),
         options);
 }
 
 std::optional<std::string_view> Context::deleteCookie(std::string_view name, CookieOptions options) {
-    auto deleted = req().cookie(name);
+    std::pmr::string wireName(resource());
+    auto deleted = req().cookie(cookieWireName(wireName, name, options));
     options.maxAge = std::chrono::seconds(0);
     setCookie(name, "", options);
     return deleted;

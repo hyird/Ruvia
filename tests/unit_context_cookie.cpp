@@ -630,3 +630,27 @@ RUVIA_TEST(context_signed_cookie_with_prefix_verifies_round_trip) {
     RUVIA_CHECK(bareVerified.has_value());
     RUVIA_CHECK_EQ(*bareVerified, std::string_view("user-2"));
 }
+
+// deleteCookie reports the value being deleted. A prefixed cookie lives in the
+// request under its wire name, so the lookup has to use it -- the bare-name
+// lookup always came back empty for prefixed cookies.
+RUVIA_TEST(context_delete_cookie_with_prefix_returns_previous_value) {
+    WorkerMemory worker;
+    HttpRequest request = HttpRequestAccess::make();
+    HttpRequestAccess::reset(request);
+    RUVIA_CHECK(HttpRequestAccess::addHeader(
+        request,
+        HttpHeaderView{"Cookie", "__Host-session=user-1"},
+        HttpRequestAccess::knownHeaderSlot(RequestKnownHeader::kCookie)));
+    RequestMemory requestMemory(worker);
+    HttpRequestAccess::setResource(request, requestMemory.resource());
+    auto context = ContextAccess::make(requestMemory, request);
+
+    ruvia::CookieOptions options;
+    options.prefix = ruvia::CookiePrefix::kHost;
+    options.secure = true;
+    options.path = "/";
+    const auto previous = context.deleteCookie("session", options);
+    RUVIA_CHECK(previous.has_value());
+    RUVIA_CHECK_EQ(*previous, std::string_view("user-1"));
+}
