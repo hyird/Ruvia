@@ -1964,6 +1964,11 @@ concept HasDotenvResultCanonicalReadAccessors = requires(const T& result) {
 };
 
 template <typename T>
+concept ExposesAnyRvalueEnvBorrow =
+    requires { std::declval<const T&&>().get("NAME"); } ||
+    requires { std::declval<const T&&>().template get<std::string_view>("NAME"); };
+
+template <typename T>
 concept HasContextRenderPipeline = requires(T& context) {
     typename T::RenderOptions;
     typename T::Renderer;
@@ -2737,6 +2742,7 @@ static_assert(!std::is_default_constructible_v<ruvia::DotenvResult>);
 static_assert(!HasDotenvResultPublicFields<ruvia::DotenvResult>);
 #endif
 static_assert(HasDotenvResultCanonicalReadAccessors<ruvia::DotenvResult>);
+static_assert(!ExposesAnyRvalueEnvBorrow<ruvia::Env>);
 static_assert(!HasContextRenderPipeline<ruvia::Context>);
 static_assert(std::is_same_v<
     decltype(std::declval<ruvia::Context&>().status(204)),

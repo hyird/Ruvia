@@ -18,6 +18,7 @@
 #include <ruvia/web/ConnInfo.h>
 #include <ruvia/web/ContextRequest.h>
 #include <ruvia/web/Controller.h>
+#include <ruvia/web/Dotenv.h>
 #include <ruvia/web/Error.h>
 #include <ruvia/web/ServerConfig.h>
 #include <ruvia/web/detail/server/HttpServerOptions.h>
@@ -70,6 +71,13 @@ static_assert(!std::is_move_constructible_v<ruvia::MultipartReader>);
 static_assert(!std::is_move_assignable_v<ruvia::MultipartReader>);
 static_assert(std::is_move_constructible_v<ruvia::RequestNameValueList>);
 static_assert(!std::is_move_assignable_v<ruvia::RequestNameValueList>);
+
+template <typename T>
+concept ExposesAnyRvalueEnvBorrow =
+    requires { std::declval<const T&&>().get("NAME"); } ||
+    requires { std::declval<const T&&>().template get<std::string_view>("NAME"); };
+
+static_assert(!ExposesAnyRvalueEnvBorrow<ruvia::Env>);
 
 template <typename T>
 concept ExposesAnyRvalueRequestNameValueListBorrow =

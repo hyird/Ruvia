@@ -3586,6 +3586,45 @@ check_files_no_match("Env PImpl deleter must not escape the Env private contract
     "EnvStateDeleter"
     "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/Dotenv.h"
     "${RUVIA_ROOT}/ruvia-web/src/app/Dotenv.cpp")
+set(WEB_ENV_CONTRACT
+    "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/Dotenv.h")
+set(WEB_ENV_SOURCE
+    "${RUVIA_ROOT}/ruvia-web/src/app/Dotenv.cpp")
+set(WEB_ENV_TEST
+    "${RUVIA_ROOT}/tests/unit_dotenv_parser.cpp")
+if(EXISTS "${WEB_ENV_CONTRACT}" AND
+   EXISTS "${WEB_ENV_SOURCE}" AND
+   EXISTS "${WEB_ENV_TEST}" AND
+   EXISTS "${WEB_MODEL_API_SURFACE}" AND
+   EXISTS "${WEB_JSON_PACKAGE_CONSUMER}")
+    file(READ "${WEB_ENV_CONTRACT}" web_env_contract)
+    file(READ "${WEB_ENV_SOURCE}" web_env_source)
+    file(READ "${WEB_ENV_TEST}" web_env_test)
+    if(NOT web_env_contract MATCHES
+           "get[(][ \t\r\n]*std::string_view name[)] const &[ \t]+noexcept" OR
+       NOT web_env_contract MATCHES
+           "get[(][ \t\r\n]*std::string_view[)] const &&[ \t]*=[ \t]*delete" OR
+       NOT web_env_contract MATCHES
+           "remove_cvref_t<T>>[ \t\r\n]+get[(]" OR
+       NOT web_env_source MATCHES
+           "Env::get[(][ \t\r\n]*std::string_view name[)] const &[ \t]+noexcept")
+        boundary_error("Env regained temporary owning-value borrowing"
+            "both raw and typed get overloads must require a stable Env lvalue")
+    endif()
+    foreach(web_env_lifetime_coverage IN ITEMS
+            "${web_env_test}"
+            "${web_model_api_surface}"
+            "${web_json_package_consumer}")
+        if(NOT web_env_lifetime_coverage MATCHES
+               "ExposesAnyRvalueEnvBorrow" OR
+           NOT web_env_lifetime_coverage MATCHES
+               "static_assert[(]!ExposesAnyRvalueEnvBorrow<ruvia::Env>[)]")
+            boundary_error("Env temporary-borrow coverage is incomplete"
+                "direct, API-surface, and installed-package probes must reject rvalue get")
+            break()
+        endif()
+    endforeach()
+endif()
 check_files_no_match("StaticRoot PImpl deleter must not escape the StaticRoot private contract"
     "StaticRootStateDeleter"
     "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/StaticFiles.h"

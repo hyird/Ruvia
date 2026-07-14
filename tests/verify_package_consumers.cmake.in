@@ -1658,6 +1658,8 @@ if(_built_components_csv MATCHES "(^|,)web(,|$)")
         "${_install_prefix}/include/ruvia/web/Error.h")
     set(_installed_request_fields_path
         "${_install_prefix}/include/ruvia/web/RequestFields.h")
+    set(_installed_dotenv_path
+        "${_install_prefix}/include/ruvia/web/Dotenv.h")
     set(_installed_stale_request_object_visitors_path
         "${_install_prefix}/include/ruvia/web/detail/model/RequestObjectVisitors.h")
     if(NOT EXISTS "${_installed_json_string_path}" OR
@@ -1673,6 +1675,7 @@ if(_built_components_csv MATCHES "(^|,)web(,|$)")
        NOT EXISTS "${_installed_validation_path}" OR
        NOT EXISTS "${_installed_error_path}" OR
        NOT EXISTS "${_installed_request_fields_path}" OR
+       NOT EXISTS "${_installed_dotenv_path}" OR
        EXISTS "${_installed_stale_request_object_visitors_path}")
         message(FATAL_ERROR
             "installed Web model parsing headers are incomplete or stale")
@@ -1703,6 +1706,17 @@ if(_built_components_csv MATCHES "(^|,)web(,|$)")
         _installed_error_contract)
     file(READ "${_installed_request_fields_path}"
         _installed_request_fields_contract)
+    file(READ "${_installed_dotenv_path}"
+        _installed_dotenv_contract)
+    if(NOT _installed_dotenv_contract MATCHES
+           "get[(][ \t\r\n]*std::string_view name[)] const &[ \t]+noexcept" OR
+       NOT _installed_dotenv_contract MATCHES
+           "get[(][ \t\r\n]*std::string_view[)] const &&[ \t]*=[ \t]*delete" OR
+       NOT _installed_dotenv_contract MATCHES
+           "remove_cvref_t<T>>[ \t\r\n]+get[(]")
+        message(FATAL_ERROR
+            "installed Env restored temporary owning-value borrowing")
+    endif()
     if(NOT _installed_request_fields_contract MATCHES
            "begin[(][)] const &[ 	]+noexcept" OR
        NOT _installed_request_fields_contract MATCHES
