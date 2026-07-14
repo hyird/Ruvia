@@ -122,7 +122,7 @@ class Http1FinalResponseCommitResult;
 
 class Http1FinalResponseCommitFailure final {
 public:
-    [[nodiscard]] HttpFinalResponseControlPlanError error() const noexcept {
+    [[nodiscard]] Http1FinalResponseControlPlanError error() const noexcept {
         return error_;
     }
 
@@ -130,10 +130,10 @@ private:
     friend class Http1FinalResponseCommitResult;
 
     explicit Http1FinalResponseCommitFailure(
-        HttpFinalResponseControlPlanError error) noexcept
+        Http1FinalResponseControlPlanError error) noexcept
         : error_(error) {}
 
-    HttpFinalResponseControlPlanError error_;
+    Http1FinalResponseControlPlanError error_;
 };
 
 // A final response commit directly owns the authoritative connection contract
@@ -174,7 +174,7 @@ private:
     }
 
     [[nodiscard]] static Http1FinalResponseCommitResult failure(
-        HttpFinalResponseControlPlanError error) noexcept {
+        Http1FinalResponseControlPlanError error) noexcept {
         return Http1FinalResponseCommitResult(
             Http1FinalResponseCommitFailure(error));
     }
@@ -190,15 +190,11 @@ private:
 [[nodiscard]] inline Http1FinalResponseCommitResult http1CommitFinalResponse(
     HttpResponse& response,
     Http1ServerConnectionPlan plan) {
-    const auto controlResult = httpFinalResponseControlPlan(
-        response,
-        plan.protocolVersion());
+    const auto controlResult = http1FinalResponseControlPlan(response);
     if (const auto* failure = controlResult.failure()) {
         return Http1FinalResponseCommitResult::failure(failure->error());
     }
-    // Http1ServerConnectionPlan can only retain HTTP/1.0 or HTTP/1.1, so the
-    // shared control planner must produce its HTTP/1 alternative here.
-    const auto& http1Control = *controlResult.http1();
+    const auto& http1Control = *controlResult.control();
     const auto responseOptions = http1Control.connectionOptions();
     const auto upgradeProtocols = http1Control.upgradeProtocols();
     const bool preserveUpgrade = upgradeProtocols.hasField();

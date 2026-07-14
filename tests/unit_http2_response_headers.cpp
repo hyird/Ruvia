@@ -62,10 +62,9 @@ bool appendBufferedResponseHeaders(
         ruvia::detail::httpBufferedResponseWritePlan(method, response),
         response);
     const auto* plan = planResult.plan();
-    const auto controlResult = ruvia::detail::httpFinalResponseControlPlan(
-        response,
-        ruvia::HttpProtocolVersion::kHttp2);
-    const auto* http2Control = controlResult.http2();
+    const auto controlResult =
+        ruvia::detail::http2FinalResponseControlPlan(response);
+    const auto* http2Control = controlResult.control();
     if (plan == nullptr || http2Control == nullptr) {
         return false;
     }
@@ -96,10 +95,8 @@ bool decodeResponseHeaders(
             response);
         const auto* plan = planResult.plan();
         const auto controlResult =
-            ruvia::detail::httpFinalResponseControlPlan(
-                response,
-                ruvia::HttpProtocolVersion::kHttp2);
-        const auto* http2Control = controlResult.http2();
+            ruvia::detail::http2FinalResponseControlPlan(response);
+        const auto* http2Control = controlResult.control();
         if (plan == nullptr || http2Control == nullptr) {
             return false;
         }

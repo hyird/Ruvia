@@ -348,7 +348,7 @@ RUVIA_TEST(http1_protocol_finalizer_rejects_upgrade_required_without_protocol) {
     RUVIA_CHECK(result.failure() != nullptr);
     RUVIA_CHECK(
         result.failure()->error() ==
-        ruvia::detail::HttpFinalResponseControlPlanError::kUpgradeRequired);
+        ruvia::detail::Http1FinalResponseControlPlanError::kUpgradeRequired);
     RUVIA_CHECK(missingUpgrade.header("Connection").empty());
 }
 
@@ -369,7 +369,7 @@ RUVIA_TEST(http1_stream_prepare_preserves_typed_final_commit_failure) {
     RUVIA_CHECK(result.failure() != nullptr);
     RUVIA_CHECK(
         result.failure()->error() ==
-        ruvia::detail::HttpFinalResponseControlPlanError::kUpgradeRequired);
+        ruvia::detail::Http1FinalResponseControlPlanError::kUpgradeRequired);
 }
 
 RUVIA_TEST(http1_buffered_request_limit_closes_the_typed_connection_plan) {

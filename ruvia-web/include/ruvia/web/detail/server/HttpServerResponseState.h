@@ -13,24 +13,17 @@
 namespace ruvia::detail {
 
 [[noreturn]] inline void throwHttp1FinalResponseCommitFailure(
-    HttpFinalResponseControlPlanError error) {
+    Http1FinalResponseControlPlanError error) {
     switch (error) {
-        case HttpFinalResponseControlPlanError::kInvalidStatus:
+        case Http1FinalResponseControlPlanError::kInvalidStatus:
             throw std::invalid_argument("invalid final HTTP response status");
-        case HttpFinalResponseControlPlanError::kInvalidConnectionField:
+        case Http1FinalResponseControlPlanError::kInvalidConnectionField:
             throw std::invalid_argument("invalid HTTP Connection header");
-        case HttpFinalResponseControlPlanError::kInvalidUpgradeField:
+        case Http1FinalResponseControlPlanError::kInvalidUpgradeField:
             throw std::invalid_argument("invalid HTTP Upgrade header");
-        case HttpFinalResponseControlPlanError::kUpgradeRequired:
+        case Http1FinalResponseControlPlanError::kUpgradeRequired:
             throw std::invalid_argument(
                 "426 response requires an Upgrade protocol");
-        case HttpFinalResponseControlPlanError::kUpgradeUnavailable:
-            throw std::invalid_argument(
-                "Upgrade is unavailable for this HTTP version");
-        case HttpFinalResponseControlPlanError::
-                kConnectionSpecificFieldForbidden:
-            throw std::invalid_argument(
-                "connection-specific field is unavailable for this HTTP version");
     }
     throw std::logic_error("unknown HTTP final response commit failure");
 }
