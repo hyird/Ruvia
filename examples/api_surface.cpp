@@ -639,6 +639,36 @@ concept HasModelPublicFieldStateHook = requires(const T& model) {
     model.template ruviaFieldState<"message">();
 };
 
+template <typename T>
+concept ExposesAnyRvalueModelStringBorrow =
+    requires { std::declval<const T&&>().view(); } ||
+    requires { std::declval<const T&&>().data(); } ||
+    requires {
+        static_cast<std::string_view>(std::declval<const T&&>());
+    };
+
+template <typename T>
+concept ExposesRvalueFixedStringView = requires {
+    std::declval<const T&&>().view();
+};
+
+template <typename T>
+concept ExposesAnyRvalueModelListBorrow =
+    requires { std::declval<const T&&>()[std::size_t{}]; } ||
+    requires { std::declval<const T&&>().front(); } ||
+    requires { std::declval<const T&&>().begin(); } ||
+    requires { std::declval<const T&&>().end(); } ||
+    requires { std::declval<T&&>().emplace(1); } ||
+    requires {
+        std::declval<T&&>().emplaceMove(typename T::value_type{});
+    };
+
+template <typename T>
+concept ExposesAnyRvalueGeneratedMessageMember =
+    requires { std::declval<const T&&>().message(); } ||
+    requires { std::declval<T&&>().messageEnsure(); } ||
+    requires { std::declval<T&&>().message(std::string_view{}); };
+
 struct ModelBodyDuckProbe final {
     static int ruviaParseJsonBody(std::string_view, std::pmr::memory_resource*);
     static int ruviaParseFormBody(std::string_view, std::pmr::memory_resource*);
@@ -2117,6 +2147,11 @@ static_assert(!HasModelPublicFormFieldsHook<ClonePayload>);
 static_assert(!HasModelNonConstMessageGetter<ClonePayload>);
 static_assert(!HasModelPublicJsonWriterHooks<ClonePayload>);
 static_assert(!HasModelPublicFieldStateHook<ClonePayload>);
+static_assert(!ExposesAnyRvalueModelStringBorrow<ruvia::String>);
+static_assert(!ExposesRvalueFixedStringView<ruvia::FixedString<6>>);
+static_assert(!ExposesAnyRvalueModelListBorrow<ruvia::List<ruvia::Int32>>);
+static_assert(!ExposesAnyRvalueGeneratedMessageMember<ClonePayload>);
+static_assert(!ExposesAnyRvalueGeneratedMessageMember<SurfaceJsonResponse>);
 static_assert(std::is_base_of_v<ruvia::detail::RequestModelSchemaTag, ClonePayload>);
 static_assert(ruvia::JsonBody<ClonePayload>::value);
 static_assert(!ruvia::detail::isResponseModel<ClonePayload>);

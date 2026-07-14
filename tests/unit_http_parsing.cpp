@@ -84,12 +84,20 @@ RUVIA_RESPONSE_MODEL(AccessorSurfaceResponse,
     RUVIA_FIELD(message, ruvia::String)
 );
 
+template <typename T>
+concept ExposesAnyRvalueGeneratedMessageMember =
+    requires { std::declval<const T&&>().message(); } ||
+    requires { std::declval<T&&>().messageEnsure(); } ||
+    requires { std::declval<T&&>().message(std::string_view{}); };
+
 static_assert(std::same_as<
     std::remove_cvref_t<decltype(std::declval<AccessorSurfaceRequest&>().message())>,
     std::optional<ruvia::String>>);
 static_assert(std::same_as<
     std::remove_cvref_t<decltype(std::declval<const AccessorSurfaceRequest&>().message())>,
     std::optional<ruvia::String>>);
+static_assert(!ExposesAnyRvalueGeneratedMessageMember<AccessorSurfaceRequest>);
+static_assert(!ExposesAnyRvalueGeneratedMessageMember<AccessorSurfaceResponse>);
 
 std::optional<std::string> zstdRoundTrip(std::string_view plain, std::size_t truncateBy) {
     const std::size_t bound = ZSTD_compressBound(plain.size());

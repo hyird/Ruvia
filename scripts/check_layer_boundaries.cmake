@@ -2871,6 +2871,83 @@ if(EXISTS "${WEB_MODEL_MACROS_CONTRACT}" AND
             "request parsing and validation state must remain separate from response JSON writing")
     endif()
 endif()
+if(EXISTS "${WEB_MODEL_TYPES_CONTRACT}" AND
+   EXISTS "${WEB_MODEL_FIELD_OPS_CONTRACT}" AND
+   EXISTS "${WEB_MODEL_STRING_TEST}" AND
+   EXISTS "${WEB_MODEL_LIST_TEST}" AND
+   EXISTS "${WEB_MODEL_MATERIALIZATION_TEST}" AND
+   EXISTS "${WEB_MODEL_API_SURFACE}" AND
+   EXISTS "${WEB_JSON_PACKAGE_CONSUMER}")
+    if(NOT web_model_types_contract MATCHES
+           "view[(][)] const &[ 	]+noexcept" OR
+       NOT web_model_types_contract MATCHES
+           "view[(][)] const &&[ 	]*=[ 	]*delete" OR
+       NOT web_model_types_contract MATCHES
+           "data[(][)] const &[ 	]+noexcept" OR
+       NOT web_model_types_contract MATCHES
+           "data[(][)] const &&[ 	]*=[ 	]*delete" OR
+       NOT web_model_types_contract MATCHES
+           "operator[ 	]+std::string_view[(][)] const &[ 	]+noexcept" OR
+       NOT web_model_types_contract MATCHES
+           "operator[ 	]+std::string_view[(][)] const &&[ 	]*=[ 	]*delete" OR
+       NOT web_model_types_contract MATCHES
+           "front[(][)] const &&[ 	]*=[ 	]*delete" OR
+       NOT web_model_types_contract MATCHES
+           "void[ 	]+begin[(][)] const &&[ 	]*=[ 	]*delete" OR
+       NOT web_model_types_contract MATCHES
+           "void[ 	]+end[(][)] const &&[ 	]*=[ 	]*delete" OR
+       NOT web_model_types_contract MATCHES
+           "emplace[(]Args&&[.][.][.][ 	]+args[)][ 	]+&" OR
+       NOT web_model_types_contract MATCHES
+           "emplaceMove[(]T&&[ 	]+value[)][ 	]+&")
+        boundary_error("model owning values regained temporary borrow access"
+            "FixedString, String, and List must expose storage-backed views, pointers, references, iterators, and inserted elements only from stable lvalues")
+    endif()
+    if(NOT web_model_field_ops_contract MATCHES
+           "field[(][)] const &[ 	]*[{]" OR
+       NOT web_model_field_ops_contract MATCHES
+           "field[(][)] const &&[ 	]*=[ 	]*delete" OR
+       NOT web_model_field_ops_contract MATCHES
+           "field##Ensure[(][)][ 	]+&[ 	]*[{]" OR
+       NOT web_model_field_ops_contract MATCHES
+           "field##Ensure[(][)][ 	]+&&[ 	]*=[ 	]*delete" OR
+       NOT web_model_field_ops_contract MATCHES
+           "field[(]RuviaFieldValueT&&[ 	]+value[)][ 	]+&[ 	]*[{]" OR
+       NOT web_model_field_ops_contract MATCHES
+           "field[(]RuviaFieldValueT&&[)][ 	]+&&[ 	]*=[ 	]*delete")
+        boundary_error("generated models regained temporary member references"
+            "request and response field getters, ensure access, and chain setters must share the stable-lvalue contract")
+    endif()
+    foreach(model_owning_lifetime_coverage IN ITEMS
+            "${web_model_string_test}"
+            "${web_model_list_test}"
+            "${web_model_materialization_test}"
+            "${web_model_api_surface}"
+            "${web_json_package_consumer}")
+        if(model_owning_lifetime_coverage MATCHES
+               "ExposesAnyRvalueModelStringBorrow" OR
+           model_owning_lifetime_coverage MATCHES
+               "ExposesAnyRvalueModelListBorrow" OR
+           model_owning_lifetime_coverage MATCHES
+               "ExposesAnyRvalueGenerated(Message|Name)Member")
+            if(NOT model_owning_lifetime_coverage MATCHES
+                   "static_assert[(]!Exposes")
+                boundary_error("model temporary-borrow regression coverage is incomplete"
+                    "unit, API-surface, and installed-package probes must assert rejection")
+                break()
+            endif()
+        endif()
+    endforeach()
+    if(NOT web_model_string_test MATCHES
+           "static_assert[(]!ExposesRvalueFixedStringView" OR
+       NOT web_model_api_surface MATCHES
+           "static_assert[(]!ExposesRvalueFixedStringView" OR
+       NOT web_json_package_consumer MATCHES
+           "static_assert[(]!ExposesRvalueFixedStringView")
+        boundary_error("FixedString temporary-view coverage is incomplete"
+            "direct, API-surface, and installed-package consumers must reject it")
+    endif()
+endif()
 set(HTTP_URL_ENCODING_CONTRACT
     "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/UrlEncoding.h")
 set(WEB_FORM_DECODING_CONTRACT

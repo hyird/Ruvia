@@ -98,9 +98,10 @@ struct FixedString {
         }
     }
 
-    [[nodiscard]] constexpr std::string_view view() const noexcept {
+    [[nodiscard]] constexpr std::string_view view() const & noexcept {
         return std::string_view(value, N - 1);
     }
+    [[nodiscard]] constexpr std::string_view view() const && = delete;
 };
 
 template <std::size_t N>
@@ -154,17 +155,19 @@ public:
         return *this;
     }
 
-    [[nodiscard]] std::string_view view() const noexcept {
+    [[nodiscard]] std::string_view view() const & noexcept {
         if (const auto* borrowed = std::get_if<std::string_view>(&storage_)) {
             return *borrowed;
         }
         const auto& owned = std::get<std::pmr::string>(storage_);
         return std::string_view(owned.data(), owned.size());
     }
+    [[nodiscard]] std::string_view view() const && = delete;
 
-    [[nodiscard]] const char* data() const noexcept {
+    [[nodiscard]] const char* data() const & noexcept {
         return view().data();
     }
+    [[nodiscard]] const char* data() const && = delete;
 
     [[nodiscard]] std::size_t size() const noexcept {
         return view().size();
@@ -174,9 +177,10 @@ public:
         return view().empty();
     }
 
-    operator std::string_view() const noexcept {
+    operator std::string_view() const & noexcept {
         return view();
     }
+    operator std::string_view() const && = delete;
 
     [[nodiscard]] std::pmr::memory_resource* resource() const noexcept {
         return resource_;
@@ -308,21 +312,25 @@ public:
         return items_.size();
     }
 
-    [[nodiscard]] const T& operator[](std::size_t index) const noexcept {
+    [[nodiscard]] const T& operator[](std::size_t index) const & noexcept {
         return *items_[index];
     }
+    [[nodiscard]] const T& operator[](std::size_t) const && = delete;
 
-    [[nodiscard]] const T& front() const noexcept {
+    [[nodiscard]] const T& front() const & noexcept {
         return *items_.front();
     }
+    [[nodiscard]] const T& front() const && = delete;
 
-    [[nodiscard]] auto begin() const noexcept {
+    [[nodiscard]] auto begin() const & noexcept {
         return Iterator(items_.begin());
     }
+    void begin() const && = delete;
 
-    [[nodiscard]] auto end() const noexcept {
+    [[nodiscard]] auto end() const & noexcept {
         return Iterator(items_.end());
     }
+    void end() const && = delete;
 
     void clear() noexcept {
         for (auto* value : items_) {
@@ -335,7 +343,7 @@ public:
     }
 
     template <typename... Args>
-    T& emplace(Args&&... args) {
+    T& emplace(Args&&... args) & {
         T* value = nullptr;
         if constexpr (sizeof...(Args) == 0 && std::constructible_from<T, std::pmr::memory_resource*>) {
             value = detail::constructPmrObject<T>(
@@ -357,7 +365,7 @@ public:
         return *value;
     }
 
-    T& emplaceMove(T&& value) {
+    T& emplaceMove(T&& value) & {
         return emplace(std::move(value));
     }
 

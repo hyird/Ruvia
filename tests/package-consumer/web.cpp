@@ -536,6 +536,36 @@ concept HasGeneratedModelPublicFieldStateHook = requires(const T& model) {
     model.template ruviaFieldState<"name">();
 };
 
+template <typename T>
+concept ExposesAnyRvalueModelStringBorrow =
+    requires { std::declval<const T&&>().view(); } ||
+    requires { std::declval<const T&&>().data(); } ||
+    requires {
+        static_cast<std::string_view>(std::declval<const T&&>());
+    };
+
+template <typename T>
+concept ExposesRvalueFixedStringView = requires {
+    std::declval<const T&&>().view();
+};
+
+template <typename T>
+concept ExposesAnyRvalueModelListBorrow =
+    requires { std::declval<const T&&>()[std::size_t{}]; } ||
+    requires { std::declval<const T&&>().front(); } ||
+    requires { std::declval<const T&&>().begin(); } ||
+    requires { std::declval<const T&&>().end(); } ||
+    requires { std::declval<T&&>().emplace(1); } ||
+    requires {
+        std::declval<T&&>().emplaceMove(typename T::value_type{});
+    };
+
+template <typename T>
+concept ExposesAnyRvalueGeneratedNameMember =
+    requires { std::declval<const T&&>().name(); } ||
+    requires { std::declval<T&&>().nameEnsure(); } ||
+    requires { std::declval<T&&>().name(std::string_view{}); };
+
 struct InstalledModelBodyDuckProbe final {
     static int ruviaParseJsonBody(std::string_view, std::pmr::memory_resource*);
     static int ruviaParseFormBody(std::string_view, std::pmr::memory_resource*);
@@ -563,6 +593,11 @@ static_assert(!HasGeneratedModelPublicFormFieldsHook<InstalledPackageRequest>);
 static_assert(!HasGeneratedModelNonConstNameGetter<InstalledPackageRequest>);
 static_assert(!HasGeneratedModelPublicJsonWriterHooks<InstalledPackageRequest>);
 static_assert(!HasGeneratedModelPublicFieldStateHook<InstalledPackageRequest>);
+static_assert(!ExposesAnyRvalueModelStringBorrow<ruvia::String>);
+static_assert(!ExposesRvalueFixedStringView<ruvia::FixedString<6>>);
+static_assert(!ExposesAnyRvalueModelListBorrow<ruvia::List<ruvia::Int32>>);
+static_assert(!ExposesAnyRvalueGeneratedNameMember<InstalledPackageRequest>);
+static_assert(!ExposesAnyRvalueGeneratedNameMember<InstalledPackageResponse>);
 static_assert(std::is_base_of_v<
     ruvia::detail::RequestModelSchemaTag,
     InstalledPackageRequest>);

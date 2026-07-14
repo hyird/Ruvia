@@ -1735,6 +1735,46 @@ if(_built_components_csv MATCHES "(^|,)web(,|$)")
         message(FATAL_ERROR
             "installed model String restored parallel or copyable storage")
     endif()
+    if(NOT _installed_model_types_contract MATCHES
+           "view[(][)] const &[ 	]+noexcept" OR
+       NOT _installed_model_types_contract MATCHES
+           "view[(][)] const &&[ 	]*=[ 	]*delete" OR
+       NOT _installed_model_types_contract MATCHES
+           "data[(][)] const &[ 	]+noexcept" OR
+       NOT _installed_model_types_contract MATCHES
+           "data[(][)] const &&[ 	]*=[ 	]*delete" OR
+       NOT _installed_model_types_contract MATCHES
+           "operator[ 	]+std::string_view[(][)] const &[ 	]+noexcept" OR
+       NOT _installed_model_types_contract MATCHES
+           "operator[ 	]+std::string_view[(][)] const &&[ 	]*=[ 	]*delete" OR
+       NOT _installed_model_types_contract MATCHES
+           "front[(][)] const &&[ 	]*=[ 	]*delete" OR
+       NOT _installed_model_types_contract MATCHES
+           "void[ 	]+begin[(][)] const &&[ 	]*=[ 	]*delete" OR
+       NOT _installed_model_types_contract MATCHES
+           "void[ 	]+end[(][)] const &&[ 	]*=[ 	]*delete" OR
+       NOT _installed_model_types_contract MATCHES
+           "emplace[(]Args&&[.][.][.][ 	]+args[)][ 	]+&" OR
+       NOT _installed_model_types_contract MATCHES
+           "emplaceMove[(]T&&[ 	]+value[)][ 	]+&")
+        message(FATAL_ERROR
+            "installed model values restored temporary storage borrows")
+    endif()
+    if(NOT _installed_model_field_ops_contract MATCHES
+           "field[(][)] const &[ 	]*[{]" OR
+       NOT _installed_model_field_ops_contract MATCHES
+           "field[(][)] const &&[ 	]*=[ 	]*delete" OR
+       NOT _installed_model_field_ops_contract MATCHES
+           "field##Ensure[(][)][ 	]+&[ 	]*[{]" OR
+       NOT _installed_model_field_ops_contract MATCHES
+           "field##Ensure[(][)][ 	]+&&[ 	]*=[ 	]*delete" OR
+       NOT _installed_model_field_ops_contract MATCHES
+           "field[(]RuviaFieldValueT&&[ 	]+value[)][ 	]+&[ 	]*[{]" OR
+       NOT _installed_model_field_ops_contract MATCHES
+           "field[(]RuviaFieldValueT&&[)][ 	]+&&[ 	]*=[ 	]*delete")
+        message(FATAL_ERROR
+            "installed generated models restored temporary member references")
+    endif()
     if(NOT _installed_form_parser_contract MATCHES
            "enum[ \t]+class[ \t]+FormValueEncoding" OR
        NOT _installed_form_parser_contract MATCHES
