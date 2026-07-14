@@ -43,17 +43,11 @@ template <typename Connection>
         &webSocketAbortThunk<Connection>);
 }
 
-// Shared run loop for an established WebSocket session, transport-agnostic.
-// Both the HTTP/1.1 and HTTP/2 routes build a WebSocketConnection<Transport>,
-// then hand it here: this wires the WebSocket facade, dispatches the user
-// handler, and closes cleanly (1000) on success or abnormally (1011) on an
-// unhandled exception, then drains any background heartbeat writes. Keeping the
-// post-handshake chain in one place keeps the two transports identical and the
-// graceful close (RFC 6455 Sections 5.5.1 and 7.1) consistent across both. close()
-// is idempotent through the protocol core's typed close phase, so a handler that
-// closes itself is fine.
+// The terminal handler borrows an established connection, but does not close it:
+// onion middleware post-processing still belongs to the same WebSocket request
+// and must be able to turn its own failure into the session's 1011 outcome.
 template <typename Transport>
-Task<void> runWebSocketSession(
+Task<void> invokeWebSocketHandler(
     WebSocketConnection<Transport>& connection,
     ConnectionScanner::Entry& scannerEntry,
     const CallableRef<void, Context&>& handler,
@@ -62,12 +56,16 @@ Task<void> runWebSocketSession(
     ContextWebSocketBinding webSocketBinding(context, webSocket);
 
     scannerEntry.setPhase(ConnectionScanner::Phase::kLongLived);
-    std::exception_ptr exception;
-    try {
-        co_await handler(context);
-    } catch (...) {
-        exception = std::current_exception();
-    }
+    co_await handler(context);
+}
+
+// HTTP/1 and HTTP/2 retain the connection until the complete route middleware
+// chain finishes, then converge here. close() is idempotent through the protocol
+// core's typed close phase, so a handler that already closed itself is safe.
+template <typename Transport>
+Task<void> finishWebSocketSession(
+    WebSocketConnection<Transport>& connection,
+    std::exception_ptr exception) {
     try {
         if (exception != nullptr) {
             co_await connection.close(1011, "internal server error");

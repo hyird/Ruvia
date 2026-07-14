@@ -2939,8 +2939,18 @@ if(_built_components_csv MATCHES "(^|,)web(,|$)")
        _installed_route_http2_session MATCHES "RequestDispatcher" OR
        _installed_route_response_stream_dispatch MATCHES
            "RequestDispatcher" OR
+       NOT _installed_http1_websocket_route MATCHES
+           "finishWebSocketSession" OR
+       NOT _installed_route_http2_session MATCHES
+           "finishWebSocketSession" OR
+       NOT _installed_route_websocket_session MATCHES
+           "Task<void> invokeWebSocketHandler" OR
+       NOT _installed_route_websocket_session MATCHES
+           "Task<void> finishWebSocketSession" OR
        NOT _installed_route_websocket_session MATCHES
            "ContextWebSocketBinding webSocketBinding" OR
+       _installed_route_websocket_session MATCHES
+           "runWebSocketSession" OR
        _installed_http1_websocket_route MATCHES "RequestDispatcher")
         message(FATAL_ERROR
             "installed Web runtimes do not dispatch through the concrete RouteTable")

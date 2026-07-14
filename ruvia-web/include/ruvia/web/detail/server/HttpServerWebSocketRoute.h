@@ -16,8 +16,9 @@
 #include "ruvia/http/HttpResponse.h"
 #include "ruvia/core/memory/MemoryPool.h"
 
-#include <string_view>
+#include <exception>
 #include <optional>
+#include <string_view>
 
 namespace ruvia::detail {
 
@@ -51,6 +52,8 @@ Task<std::optional<Http1SessionRequestCompletion>> dispatchHttpWebSocketRoute(
     }
     const auto& webSocketEndpoint =
         *resolved.route().endpoint().webSocket();
+    using Connection = SocketWebSocketConnection<Stream>;
+    std::optional<Connection> webSocketConnection;
     auto upgradeAndRun = [&](Context& context) -> Task<void> {
         const auto handshake = makeHttpWebSocketServerHandshake(
             parsed.request,
@@ -58,7 +61,7 @@ Task<std::optional<Http1SessionRequestCompletion>> dispatchHttpWebSocketRoute(
         if (!(co_await writeWebSocketHandshake(stream, handshake))) {
             co_return;
         }
-        SocketWebSocketConnection<Stream> webSocketConnection(
+        webSocketConnection.emplace(
             WebSocketSocketTransport<Stream>{stream},
             scannerEntry,
             webSocketEndpoint.lifecycle(),
@@ -66,19 +69,32 @@ Task<std::optional<Http1SessionRequestCompletion>> dispatchHttpWebSocketRoute(
             memory.resource(),
             pendingFrames,
             handshake.negotiation().deflate());
-        co_await runWebSocketSession(
-            webSocketConnection,
+        co_await invokeWebSocketHandler(
+            *webSocketConnection,
             scannerEntry,
             webSocketEndpoint.handler(),
             context);
     };
     const auto terminal = makeCallableRef<void, Context&>(upgradeAndRun);
-    auto buffered = co_await routes.dispatchWebSocket(
-        parsed.request,
-        resolved,
-        requestMemory,
-        terminal,
-        baseRouteServices);
+    std::optional<HttpResponse> buffered;
+    std::exception_ptr exception;
+    try {
+        buffered = co_await routes.dispatchWebSocket(
+            parsed.request,
+            resolved,
+            requestMemory,
+            terminal,
+            baseRouteServices);
+    } catch (...) {
+        exception = std::current_exception();
+    }
+    if (webSocketConnection.has_value()) {
+        co_await finishWebSocketSession(*webSocketConnection, exception);
+        co_return std::nullopt;
+    }
+    if (exception != nullptr) {
+        std::rethrow_exception(exception);
+    }
     if (buffered.has_value()) {
         response = std::move(*buffered);
         const auto connectionPlan = requireHttp1FinalResponseCommit(

@@ -1037,10 +1037,18 @@ if(EXISTS "${WEB_ROUTE_MODES}" AND EXISTS "${WEB_ROUTE_LIMITS}" AND
            "routes[.]dispatchWebSocket" OR
        NOT web_route_http2_session MATCHES
            "makeCallableRef<void, Context&>" OR
+       NOT web_route_http1_websocket MATCHES
+           "finishWebSocketSession" OR
+       NOT web_route_http2_session MATCHES
+           "finishWebSocketSession" OR
+       NOT web_route_websocket_session MATCHES
+           "Task<void> invokeWebSocketHandler" OR
+       NOT web_route_websocket_session MATCHES
+           "Task<void> finishWebSocketSession" OR
        NOT web_route_websocket_session MATCHES
            "ContextWebSocketBinding webSocketBinding" OR
        web_route_websocket_session MATCHES
-           "dispatchWebSocket|const RouteTable&")
+           "dispatchWebSocket|const RouteTable&|runWebSocketSession")
         boundary_error("WebSocket middleware no longer owns the upgrade boundary"
             "HTTP/1 and HTTP/2 must dispatch middleware around a terminal upgrade/session action so short-circuit responses remain HTTP")
     endif()

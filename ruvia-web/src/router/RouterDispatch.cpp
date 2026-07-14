@@ -228,8 +228,8 @@ Task<std::optional<HttpResponse>> detail::RouteTable::dispatchStreamRoute(
     std::exception_ptr exception;
     try {
         if (!route.hasMiddleware()) {
-            co_await handler(context);
             middlewareChain.markHandlerInvoked();
+            co_await handler(context);
         } else {
             co_await invokeStreamMiddlewareAt(
                 route,
@@ -256,7 +256,7 @@ Task<std::optional<HttpResponse>> detail::RouteTable::dispatchStreamRoute(
     }
 
     if (exception != nullptr) {
-        if (webSocketRoute ||
+        if ((webSocketRoute && middlewareChain.handlerInvoked()) ||
             (responseStreamOutput != nullptr &&
              detail::StreamingAccess::committed(responseStreamOutput->writer()))) {
             std::rethrow_exception(exception);

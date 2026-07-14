@@ -142,8 +142,8 @@ Task<void> detail::RouteTable::invokeStreamMiddlewareAt(
     StreamMiddlewareChainState& chain,
     const RouteStreamHandler& handler) const {
     if (index >= route.middlewareCount()) {
-        co_await handler(context);
         chain.markHandlerInvoked();
+        co_await handler(context);
         co_return;
     }
 

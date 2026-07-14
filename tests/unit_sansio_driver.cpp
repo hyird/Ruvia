@@ -145,7 +145,7 @@ ruvia::Task<void> wsEchoHandler(void*, ruvia::Context& ctx) {
     }
 }
 
-// Returns without waiting for peer input so runWebSocketSession initiates the
+// Returns without waiting for peer input so session finalization initiates the
 // server side of the closing handshake.
 ruvia::Task<void> wsServerCloseHandler(void*, ruvia::Context&) {
     co_return;
@@ -604,7 +604,7 @@ RUVIA_TEST(sansio_driver_h2_concurrent_streams_multiplex) {
 // client opens a tunnel to a registered WebSocket echo route, sends a masked text
 // frame as HTTP/2 DATA, and must get the unmasked echo back; a client Close is then
 // answered with the server's Close carrying END_STREAM. Proves the per-stream inbound
-// pipe + Http2SansIoWsTransport + the shared runWebSocketSession over the core.
+// pipe + Http2SansIoWsTransport + the shared session finalization over the core.
 RUVIA_TEST(sansio_driver_h2_websocket_echo) {
     asio::io_context io;
     tcp::acceptor acceptor(io, tcp::endpoint(asio::ip::make_address("127.0.0.1"), 0));

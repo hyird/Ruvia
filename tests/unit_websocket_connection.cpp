@@ -16,6 +16,7 @@
 #include "ruvia/http/ProtocolByteLimit.h"
 #include "ruvia/http/detail/websocket/HttpWebSocketPermessageDeflate.h"
 #include "ruvia/web/detail/websocket/HttpWebSocketSocketTransport.h"
+#include "ruvia/web/detail/websocket/HttpWebSocketSession.h"
 #include "ruvia/core/detail/AsioAwait.h"
 #include "ruvia/core/memory/MemoryPool.h"
 
@@ -34,6 +35,7 @@ using ruvia::detail::WsTransportDisposition;
 struct RecordingTransportState final {
     bool aborted{false};
     std::size_t writes{0};
+    std::string lastNonEmptyBytes;
     WsTransportDisposition lastDisposition{WsTransportDisposition::kKeepOpen};
 };
 
@@ -51,9 +53,12 @@ public:
     }
 
     [[nodiscard]] ruvia::Task<std::error_code> writeBytes(
-        std::string_view,
+        std::string_view bytes,
         WsTransportDisposition disposition) {
         ++state_->writes;
+        if (!bytes.empty()) {
+            state_->lastNonEmptyBytes.assign(bytes);
+        }
         state_->lastDisposition = disposition;
         co_return std::error_code{};
     }
@@ -110,6 +115,42 @@ asio::awaitable<std::string> readShortServerFrame(tcp::socket& socket) {
 }
 
 }  // namespace
+
+RUVIA_TEST(websocket_session_finish_maps_chain_failure_to_1011) {
+    asio::io_context io;
+    RecordingTransportState state;
+    ConnectionScanner::Entry scannerEntry;
+    ruvia::WorkerMemory memory;
+    WebSocketConnection<RecordingTransport> connection(
+        RecordingTransport(io, state),
+        scannerEntry,
+        {},
+        ruvia::ProtocolByteLimit::limited(1024),
+        memory.resource());
+
+    auto future = asio::co_spawn(
+        io,
+        ruvia::detail::taskAsAwaitable(
+            ruvia::detail::finishWebSocketSession(
+                connection,
+                std::make_exception_ptr(
+                    std::runtime_error("middleware post failed")))),
+        asio::use_future);
+    io.run();
+    future.get();
+
+    RUVIA_CHECK_EQ(state.writes, std::size_t{2});
+    RUVIA_CHECK(state.lastNonEmptyBytes.size() >= 4);
+    if (state.lastNonEmptyBytes.size() >= 4) {
+        const auto high = static_cast<unsigned char>(state.lastNonEmptyBytes[2]);
+        const auto low = static_cast<unsigned char>(state.lastNonEmptyBytes[3]);
+        RUVIA_CHECK_EQ(
+            static_cast<std::uint16_t>((high << 8U) | low),
+            std::uint16_t{1011});
+    }
+    RUVIA_CHECK(state.lastDisposition == WsTransportDisposition::kEndTransport);
+    RUVIA_CHECK(!state.aborted);
+}
 
 // Periodic liveness failure aborts the WebSocket transport itself and returns false
 // to ConnectionScanner. For an RFC 8441 adapter that means RST_STREAM(CANCEL), so one

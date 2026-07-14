@@ -512,6 +512,15 @@ public:
     }
 };
 
+class ChainMwThrowsAfterNext final
+    : public ruvia::Middleware<ChainMwThrowsAfterNext> {
+public:
+    ruvia::Task<void> handle(ruvia::Context&, ruvia::Next& next) {
+        co_await next();
+        throw std::runtime_error("middleware post failed");
+    }
+};
+
 // Throws before calling next(): the chain is short-circuited and the exception
 // must be mapped to an error response (never escaping the dispatch).
 class ChainMwThrows final : public ruvia::Middleware<ChainMwThrows> {
@@ -910,6 +919,17 @@ RUVIA_TEST(websocket_middleware_short_circuits_before_upgrade_terminal) {
     RUVIA_CHECK(g_chainOrder == expected);
 }
 
+RUVIA_TEST(websocket_middleware_pre_upgrade_failure_stays_http_buffered) {
+    const auto middleware =
+        ruvia::detail::makeMiddlewareDescriptor<ChainMwThrows>();
+    const auto observation = dispatchWebSocketWith(middleware);
+    RUVIA_CHECK(!observation.terminalInvoked);
+    RUVIA_CHECK(observation.buffered);
+    RUVIA_CHECK(
+        observation.bufferedBody.find("\"code\":\"mw_rejected\"") !=
+        std::string::npos);
+}
+
 RUVIA_TEST(websocket_middleware_wraps_upgrade_and_session_terminal) {
     g_chainOrder.clear();
     const auto middleware =
@@ -933,6 +953,18 @@ RUVIA_TEST(websocket_capability_expires_before_middleware_post_processing) {
     RUVIA_CHECK(g_webSocketUnavailableAfterNext);
     const std::vector<int> expected{0};
     RUVIA_CHECK(g_chainOrder == expected);
+}
+
+RUVIA_TEST(websocket_middleware_post_failure_escapes_for_session_close) {
+    const auto middleware = ruvia::detail::makeMiddlewareDescriptor<
+        ChainMwThrowsAfterNext>();
+    bool threw = false;
+    try {
+        (void)dispatchWebSocketWith(middleware);
+    } catch (const std::runtime_error&) {
+        threw = true;
+    }
+    RUVIA_CHECK(threw);
 }
 
 RUVIA_TEST(middleware_chain_maps_middleware_exception_to_error_response) {

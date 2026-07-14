@@ -361,6 +361,10 @@ Task<void> runHttp2SansIoSession(
                 : resolved->route().endpoint().responseStream();
             if (webSocketEndpoint != nullptr) {
                 if (http2IsValidWebSocketRequest(*streamState, request)) {
+                    using WsTransport =
+                        Http2SansIoWsTransport<decltype(executor)>;
+                    using WsConnection = WebSocketConnection<WsTransport>;
+                    std::optional<WsConnection> webSocketConnection;
                     auto upgradeAndRun = [&](Context& context) -> Task<void> {
                         // HTTP/1 and RFC 8441 consume the same immutable
                         // negotiation only after middleware reaches the handler.
@@ -379,9 +383,7 @@ Task<void> runHttp2SansIoSession(
                         wakeWriter();
                         // Each Extended-CONNECT tunnel registers its OWN
                         // heartbeat slot on the connection scanner entry.
-                        using WsTransport =
-                            Http2SansIoWsTransport<decltype(executor)>;
-                        WebSocketConnection<WsTransport> webSocketConnection(
+                        webSocketConnection.emplace(
                             WsTransport(
                                 connection,
                                 streamId,
@@ -394,22 +396,37 @@ Task<void> runHttp2SansIoSession(
                             ProtocolByteLimit::limited(
                                 options.maxWebSocketMessageBytes),
                             requestMemory.resource(),
-                            /*initialBytes=*/{},
+                            /*initialBytes=*/std::string_view{},
                             submittedHandshake->deflate());
-                        co_await runWebSocketSession(
-                            webSocketConnection,
+                        co_await invokeWebSocketHandler(
+                            *webSocketConnection,
                             scannerEntry,
                             webSocketEndpoint->handler(),
                             context);
                     };
                     const auto terminal =
                         makeCallableRef<void, Context&>(upgradeAndRun);
-                    auto buffered = co_await routes.dispatchWebSocket(
-                        request,
-                        *resolved,
-                        requestMemory,
-                        terminal,
-                        dispatchServices);
+                    std::optional<HttpResponse> buffered;
+                    std::exception_ptr exception;
+                    try {
+                        buffered = co_await routes.dispatchWebSocket(
+                            request,
+                            *resolved,
+                            requestMemory,
+                            terminal,
+                            dispatchServices);
+                    } catch (...) {
+                        exception = std::current_exception();
+                    }
+                    if (webSocketConnection.has_value()) {
+                        co_await finishWebSocketSession(
+                            *webSocketConnection,
+                            exception);
+                        co_return;
+                    }
+                    if (exception != nullptr) {
+                        std::rethrow_exception(exception);
+                    }
                     if (!buffered.has_value()) {
                         co_return;
                     }
