@@ -4395,7 +4395,7 @@ if(EXISTS "${HTTP_BUFFERED_RESPONSE_WRITE_PLAN}" AND
        NOT buffered_response_h1_result MATCHES
            "using Value = std::variant" OR
        NOT buffered_response_h1_result MATCHES
-           "plan[.]writePlan[(][)][.]responseStatus[(][)]" OR
+           "plan[.]responseStatus[(][)]" OR
        NOT buffered_response_h1_writer MATCHES
            "Task<Http1BufferedResponseWriteResult> writeResponseWithScratch" OR
        NOT buffered_response_h1_writer MATCHES
@@ -4628,6 +4628,11 @@ if(EXISTS "${HTTP1_RESPONSE_HEAD_PLAN}" AND
             "std::uint64_t contentLength_"
             "HttpProtocolVersion protocolVersion_"
             "class Http1BufferedResponsePlan final"
+            "std::uint16_t responseStatus[(][)] const noexcept"
+            "std::uint64_t contentLength[(][)] const noexcept"
+            "bool sendBody[(][)] const noexcept"
+            "is_trivially_copyable_v<Http1BufferedResponsePlan>"
+            "sizeof[(]Http1BufferedResponsePlan[)] == sizeof[(]Http1ResponseHeadPlan[)]"
             "http1BufferedResponsePlan")
         if(NOT http1_response_head_plan MATCHES "${http1_head_probe}")
             list(APPEND http1_response_head_missing
@@ -5205,7 +5210,9 @@ if(EXISTS "${RESPONSE_HEAD_REASON_PHRASE_TEST}" AND
        NOT http1_response_head_package_test MATCHES
            "HasHttp1ProtocolVersion" OR
        NOT http1_response_head_package_test MATCHES
-           "HasHttp1BufferedPlanComposition" OR
+           "HasHttp1BufferedPlanContract" OR
+       NOT http1_response_head_package_test MATCHES
+           "!HasStaleHttp1BufferedWritePlanForwarder" OR
        NOT http1_response_head_package_test MATCHES
            "!HasStaleHttp1ResponseSignal" OR
        NOT http1_response_head_package_test MATCHES
@@ -9723,7 +9730,19 @@ if(EXISTS "${HTTP_PROTOCOL_PLAN_RANGE}" AND
        NOT http_protocol_plan_h1_response MATCHES
            "HttpResponseBodyPlan bodyPlan[(][)] const noexcept" OR
        NOT http_protocol_plan_h1_response MATCHES
-           "writePlan[(][)] const && = delete" OR
+           "std::uint16_t responseStatus[(][)] const noexcept" OR
+       NOT http_protocol_plan_h1_response MATCHES
+           "std::uint64_t contentLength[(][)] const noexcept" OR
+       NOT http_protocol_plan_h1_response MATCHES
+           "bool sendBody[(][)] const noexcept" OR
+       NOT http_protocol_plan_h1_response MATCHES
+           "is_trivially_copyable_v<Http1BufferedResponsePlan>" OR
+       NOT http_protocol_plan_h1_response MATCHES
+           "sizeof[(]Http1BufferedResponsePlan[)] == sizeof[(]Http1ResponseHeadPlan[)]" OR
+       http_protocol_plan_h1_response MATCHES
+           "HttpBufferedResponseWritePlan writePlan_" OR
+       http_protocol_plan_h1_response MATCHES
+           "writePlan[(][)] const [&] noexcept" OR
        NOT http_protocol_plan_h1_response MATCHES
            "headPlan[(][)] const && = delete" OR
        NOT http_protocol_plan_h2_request MATCHES

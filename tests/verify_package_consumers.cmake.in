@@ -2358,7 +2358,7 @@ if(_built_components_csv MATCHES "(^|,)web(,|$)")
        NOT _installed_http1_buffered_response_result MATCHES
            "using Value = std::variant" OR
        NOT _installed_http1_buffered_response_result MATCHES
-           "plan[.]writePlan[(][)][.]responseStatus[(][)]" OR
+           "plan[.]responseStatus[(][)]" OR
        NOT _installed_http1_buffered_response_writer MATCHES
            "Task<Http1BufferedResponseWriteResult> writeResponseWithScratch" OR
        NOT _installed_http1_buffered_response_writer MATCHES
@@ -3167,6 +3167,20 @@ if(NOT _installed_http1_response_head_plan MATCHES
        "HttpProtocolVersion protocolVersion_" OR
    NOT _installed_http1_response_head_plan MATCHES
        "class Http1BufferedResponsePlan final" OR
+   NOT _installed_http1_response_head_plan MATCHES
+       "std::uint16_t responseStatus[(][)] const noexcept" OR
+   NOT _installed_http1_response_head_plan MATCHES
+       "std::uint64_t contentLength[(][)] const noexcept" OR
+   NOT _installed_http1_response_head_plan MATCHES
+       "bool sendBody[(][)] const noexcept" OR
+   NOT _installed_http1_response_head_plan MATCHES
+       "is_trivially_copyable_v<Http1BufferedResponsePlan>" OR
+   NOT _installed_http1_response_head_plan MATCHES
+       "sizeof[(]Http1BufferedResponsePlan[)] == sizeof[(]Http1ResponseHeadPlan[)]" OR
+   _installed_http1_response_head_plan MATCHES
+       "HttpBufferedResponseWritePlan writePlan_" OR
+   _installed_http1_response_head_plan MATCHES
+       "writePlan[(][)] const [&] noexcept" OR
    NOT _installed_http1_response_head_plan MATCHES
        "http1BufferedResponsePlan" OR
    _installed_http1_response_head_plan MATCHES

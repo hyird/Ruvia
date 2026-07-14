@@ -641,11 +641,19 @@ concept HasHttp1BufferedContentLength = requires(const T& buffered) {
 };
 
 template <typename T>
-concept HasHttp1BufferedPlanComposition = requires(const T& plan) {
-    { plan.writePlan() } -> std::same_as<const
-        ruvia::detail::HttpBufferedResponseWritePlan&>;
+concept HasHttp1BufferedPlanContract = requires(const T& plan) {
+    { plan.bodyPlan() } ->
+        std::same_as<ruvia::detail::HttpResponseBodyPlan>;
+    { plan.responseStatus() } -> std::same_as<std::uint16_t>;
+    { plan.contentLength() } -> std::same_as<std::uint64_t>;
+    { plan.sendBody() } -> std::same_as<bool>;
     { plan.headPlan() } -> std::same_as<const
         ruvia::detail::Http1ResponseHeadPlan&>;
+};
+
+template <typename T>
+concept HasStaleHttp1BufferedWritePlanForwarder = requires(const T& plan) {
+    plan.writePlan();
 };
 
 template <typename T>
@@ -1323,8 +1331,15 @@ static_assert(HasHttp1ProtocolVersion<
     ruvia::detail::Http1ResponseHeadPlan>);
 static_assert(HasHttp1BufferedContentLength<
     ruvia::detail::Http1BufferedResponseHead>);
-static_assert(HasHttp1BufferedPlanComposition<
+static_assert(HasHttp1BufferedPlanContract<
     ruvia::detail::Http1BufferedResponsePlan>);
+static_assert(!HasStaleHttp1BufferedWritePlanForwarder<
+    ruvia::detail::Http1BufferedResponsePlan>);
+static_assert(std::is_trivially_copyable_v<
+    ruvia::detail::Http1BufferedResponsePlan>);
+static_assert(
+    sizeof(ruvia::detail::Http1BufferedResponsePlan) ==
+    sizeof(ruvia::detail::Http1ResponseHeadPlan));
 static_assert(!HasStaleHttp1ResponseSignal<
     ruvia::detail::Http1ServerConnectionPlan>);
 static_assert(!HasStaleHttp1ResponseHeadScalar<
@@ -3233,7 +3248,9 @@ int main() {
     const auto& bufferedHeadPlan = bufferedResponsePlan.headPlan();
     if (bufferedHeadPlan.buffered() == nullptr ||
         bufferedHeadPlan.buffered()->contentLength() != 4 ||
-        bufferedResponsePlan.writePlan().contentLength() != 4 ||
+        bufferedResponsePlan.contentLength() != 4 ||
+        bufferedResponsePlan.responseStatus() != 200 ||
+        bufferedResponsePlan.sendBody() ||
         bufferedHeadPlan.protocolVersion() !=
             ruvia::HttpProtocolVersion::kHttp11 ||
         bufferedHeadPlan.chunkedStream() != nullptr ||

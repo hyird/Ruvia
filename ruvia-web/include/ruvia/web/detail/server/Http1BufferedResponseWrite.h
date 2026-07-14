@@ -144,7 +144,7 @@ classifyHttp1BufferedResponseWrite(
     std::size_t responseHeadBytes,
     std::error_code error,
     std::size_t bytesTransferred) noexcept {
-    const auto status = plan.writePlan().responseStatus();
+    const auto status = plan.responseStatus();
     if (!error) {
         if (responseHeadBytes == 0 ||
             bytesTransferred < responseHeadBytes) {

@@ -178,7 +178,7 @@ RUVIA_TEST(http1_buffered_response_plan_owns_request_version_and_length) {
             connectionPlan);
         RUVIA_CHECK_EQ(
             responsePlan.headPlan().buffered()->contentLength(),
-            responsePlan.writePlan().contentLength());
+            responsePlan.contentLength());
         return std::pair(
             emitHead(response, responsePlan.headPlan()),
             responsePlan.headPlan().protocolVersion());
@@ -215,7 +215,7 @@ RUVIA_TEST(http1_response_head_rejects_status_plan_mismatch) {
     RUVIA_CHECK(throwsInvalid([&] {
         (void)emitHead(response, plan.headPlan());
     }));
-    RUVIA_CHECK_EQ(plan.writePlan().responseStatus(), std::uint16_t{207});
+    RUVIA_CHECK_EQ(plan.responseStatus(), std::uint16_t{207});
     RUVIA_CHECK_EQ(
         plan.headPlan().bodyPlan().responseStatus(),
         std::uint16_t{207});
@@ -235,7 +235,7 @@ RUVIA_TEST(http1_response_head_rejects_representation_plan_mismatch) {
     RUVIA_CHECK(throwsInvalid([&] {
         (void)emitHead(response, plan.headPlan());
     }));
-    RUVIA_CHECK_EQ(plan.writePlan().contentLength(), std::uint64_t{3});
+    RUVIA_CHECK_EQ(plan.contentLength(), std::uint64_t{3});
 }
 
 RUVIA_TEST(http1_protocol_finalizer_returns_the_authoritative_reuse_verdict) {

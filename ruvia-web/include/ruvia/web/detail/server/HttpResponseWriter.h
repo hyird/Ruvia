@@ -59,7 +59,6 @@ Task<Http1BufferedResponseWriteResult> writeResponseWithScratch(
     std::pmr::string* fileChunkBuffer,
     const HttpResponse& response,
     const Http1BufferedResponsePlan& responsePlan) {
-    const auto& writePlan = responsePlan.writePlan();
     head.reset();
     appendResponseHead(
         response,
@@ -82,7 +81,7 @@ Task<Http1BufferedResponseWriteResult> writeResponseWithScratch(
                 ec,
                 bytesTransferred);
         }
-        if (!writePlan.sendBody()) {
+        if (!responsePlan.sendBody()) {
             co_return classifyHttp1BufferedResponseWrite(
                 responsePlan,
                 responseHeadBytes,
@@ -128,7 +127,7 @@ Task<Http1BufferedResponseWriteResult> writeResponseWithScratch(
     constexpr bool kPlainTcpStream = std::is_same_v<
         std::remove_cvref_t<Stream>,
         asio::ip::tcp::socket>;
-    auto body = writePlan.sendBody()
+    auto body = responsePlan.sendBody()
         ? responseContent.bytes()
         : std::string_view{};
     if (!body.empty() && head.canAppendOnStack(body.size())) {

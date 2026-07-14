@@ -46,6 +46,19 @@ concept AcceptsLooseBufferedResponseBodyPlan = requires(
 static_assert(!AcceptsLooseBufferedResponseBodyPlan<
     ruvia::detail::HttpResponseBodyPlan>);
 
+template <typename T>
+concept HasStaleHttp1BufferedWritePlanForwarder = requires(const T& plan) {
+    plan.writePlan();
+};
+
+static_assert(!HasStaleHttp1BufferedWritePlanForwarder<
+    ruvia::detail::Http1BufferedResponsePlan>);
+static_assert(std::is_trivially_copyable_v<
+    ruvia::detail::Http1BufferedResponsePlan>);
+static_assert(
+    sizeof(ruvia::detail::Http1BufferedResponsePlan) ==
+    sizeof(ruvia::detail::Http1ResponseHeadPlan));
+
 template <typename Plan>
 concept HasValueSemanticResponseWritePolicy =
     requires(const Plan& plan) {
@@ -238,10 +251,15 @@ RUVIA_TEST(http1_response_head_framing_is_an_exclusive_plan) {
     RUVIA_CHECK_EQ(
         buffered.buffered()->contentLength(),
         std::uint64_t{5});
+    RUVIA_CHECK_EQ(combined.contentLength(), std::uint64_t{5});
+    RUVIA_CHECK_EQ(combined.responseStatus(), std::uint16_t{200});
+    RUVIA_CHECK(combined.sendBody());
+    RUVIA_CHECK(
+        combined.bodyPlan().requestMethod() == ruvia::HttpKnownMethod::kGet);
     RUVIA_CHECK(
         buffered.protocolVersion() == ruvia::HttpProtocolVersion::kHttp11);
 
     RUVIA_CHECK_EQ(
-        combined.writePlan().contentLength(),
+        combined.contentLength(),
         combined.headPlan().buffered()->contentLength());
 }
