@@ -224,9 +224,9 @@ Task<void> HttpServer::handleStreamSession(
                         options_,
                         pendingFrames,
                         response);
-                    if (const auto* buffered =
-                            webSocketResult.bufferedResponse()) {
-                        requestCompletion.emplace(buffered->completion());
+                    if (const auto* completion =
+                            webSocketResult.requestCompletion()) {
+                        requestCompletion.emplace(*completion);
                         break;
                     }
                     if (webSocketResult.sessionFinished() != nullptr) {

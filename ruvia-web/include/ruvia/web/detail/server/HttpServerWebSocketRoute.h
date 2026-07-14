@@ -22,25 +22,6 @@
 
 namespace ruvia::detail {
 
-class HttpWebSocketBufferedResponse final {
-public:
-    [[nodiscard]] const Http1SessionRequestCompletion&
-    completion() const & noexcept {
-        return completion_;
-    }
-    [[nodiscard]] const Http1SessionRequestCompletion&
-    completion() const && = delete;
-
-private:
-    friend class HttpWebSocketRouteResult;
-
-    explicit HttpWebSocketBufferedResponse(
-        Http1SessionRequestCompletion completion) noexcept
-        : completion_(std::move(completion)) {}
-
-    Http1SessionRequestCompletion completion_;
-};
-
 class HttpWebSocketSessionFinished final {
 private:
     friend class HttpWebSocketRouteResult;
@@ -48,12 +29,15 @@ private:
     constexpr HttpWebSocketSessionFinished() noexcept = default;
 };
 
+// A rejected upgrade returns the exact HTTP/1 request completion that the
+// session must write and clean up. A successful upgrade transfers transport
+// ownership to the WebSocket session and returns only its finished marker.
 class HttpWebSocketRouteResult final {
 public:
-    [[nodiscard]] static HttpWebSocketRouteResult makeBuffered(
+    [[nodiscard]] static HttpWebSocketRouteResult makeRequestCompletion(
         Http1SessionRequestCompletion completion) noexcept {
         return HttpWebSocketRouteResult(
-            HttpWebSocketBufferedResponse(std::move(completion)));
+            std::move(completion));
     }
 
     [[nodiscard]] static HttpWebSocketRouteResult
@@ -62,12 +46,12 @@ public:
             HttpWebSocketSessionFinished{});
     }
 
-    [[nodiscard]] const HttpWebSocketBufferedResponse*
-    bufferedResponse() const & noexcept {
-        return std::get_if<HttpWebSocketBufferedResponse>(&value_);
+    [[nodiscard]] const Http1SessionRequestCompletion*
+    requestCompletion() const & noexcept {
+        return std::get_if<Http1SessionRequestCompletion>(&value_);
     }
-    [[nodiscard]] const HttpWebSocketBufferedResponse*
-    bufferedResponse() const && = delete;
+    [[nodiscard]] const Http1SessionRequestCompletion*
+    requestCompletion() const && = delete;
 
     [[nodiscard]] const HttpWebSocketSessionFinished*
     sessionFinished() const & noexcept {
@@ -78,7 +62,7 @@ public:
 
 private:
     using Value = std::variant<
-        HttpWebSocketBufferedResponse,
+        Http1SessionRequestCompletion,
         HttpWebSocketSessionFinished>;
 
     template <typename Alternative>
@@ -110,7 +94,7 @@ Task<HttpWebSocketRouteResult> dispatchHttpWebSocketRoute(
             baseRouteServices);
         const auto connectionPlan = requireHttp1FinalResponseCommit(
             response, parsed.connectionPlan.requireClose());
-        co_return HttpWebSocketRouteResult::makeBuffered(
+        co_return HttpWebSocketRouteResult::makeRequestCompletion(
             Http1SessionRequestCompletion::makeBufferedClosing(
                 connectionPlan));
     }
