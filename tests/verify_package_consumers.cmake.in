@@ -706,6 +706,61 @@ if(EXISTS "${_installed_redis_set_options_path}")
            "RedisSetExpiration[(][)] noexcept = default")
         message(FATAL_ERROR "installed Redis SET options restored nested absence sentinels")
     endif()
+    if(NOT _installed_redis_set_options MATCHES
+           "duration[(][)] const [&] noexcept" OR
+       NOT _installed_redis_set_options MATCHES
+           "duration[(][)] const && = delete" OR
+       NOT _installed_redis_set_options MATCHES
+           "key[(][)] const && = delete" OR
+       NOT _installed_redis_set_options MATCHES
+           "entries[(][)] const && = delete" OR
+       NOT _installed_redis_set_options MATCHES
+           "message[(][)] const [&] noexcept" OR
+       NOT _installed_redis_set_options MATCHES
+           "string[(][)] const && = delete" OR
+       NOT _installed_redis_set_options MATCHES
+           "array[(][)] const && = delete")
+        message(FATAL_ERROR
+            "installed Redis owning values expose views from temporary owners")
+    endif()
+endif()
+set(_installed_db_types_path
+    "${_install_prefix}/include/ruvia/web/db/DbTypes.h")
+set(_installed_db_result_path
+    "${_install_prefix}/include/ruvia/web/db/DbQueryResult.h")
+set(_installed_db_migration_path
+    "${_install_prefix}/include/ruvia/web/db/DbMigration.h")
+if(EXISTS "${_installed_db_types_path}" OR
+   EXISTS "${_installed_db_result_path}" OR
+   EXISTS "${_installed_db_migration_path}")
+    if(NOT EXISTS "${_installed_db_types_path}" OR
+       NOT EXISTS "${_installed_db_result_path}" OR
+       NOT EXISTS "${_installed_db_migration_path}")
+        message(FATAL_ERROR
+            "installed database component has an incomplete owned-view contract")
+    endif()
+    file(READ "${_installed_db_types_path}" _installed_db_types)
+    file(READ "${_installed_db_result_path}" _installed_db_result)
+    file(READ "${_installed_db_migration_path}" _installed_db_migration)
+    if(NOT _installed_db_types MATCHES
+           "text[(][)] const [&] noexcept" OR
+       NOT _installed_db_types MATCHES
+           "text[(][)] const && = delete" OR
+       NOT _installed_db_types MATCHES
+           "operator[[]][(][^)]*[)] const && = delete" OR
+       NOT _installed_db_types MATCHES
+           "begin[(][)] const && = delete" OR
+       NOT _installed_db_result MATCHES
+           "rows[(][)] const [&] noexcept" OR
+       NOT _installed_db_result MATCHES
+           "rows[(][)] const && = delete" OR
+       NOT _installed_db_migration MATCHES
+           "applied[(][)] const [&] noexcept" OR
+       NOT _installed_db_migration MATCHES
+           "skipped[(][)] const && = delete")
+        message(FATAL_ERROR
+            "installed database owning values expose views from temporary owners")
+    endif()
 endif()
 file(READ
     "${_install_prefix}/include/ruvia/http/detail/HttpExpectations.h"

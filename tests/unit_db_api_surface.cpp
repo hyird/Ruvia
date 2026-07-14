@@ -56,6 +56,22 @@ static_assert(std::is_move_constructible_v<ruvia::DbTransaction>);
 static_assert(!std::is_move_assignable_v<ruvia::DbTransaction>);
 
 template <typename T>
+concept ExposesAnyRvalueDbOwnedView =
+    requires(T&& value) { std::move(value).text(); } ||
+    requires(T&& value) { std::move(value)[std::size_t{}]; } ||
+    requires(T&& value) { std::move(value).begin(); } ||
+    requires(T&& value) { std::move(value).end(); } ||
+    requires(T&& value) { std::move(value).rows(); } ||
+    requires(T&& value) { std::move(value).applied(); } ||
+    requires(T&& value) { std::move(value).skipped(); };
+
+static_assert(!ExposesAnyRvalueDbOwnedView<ruvia::DbValue>);
+static_assert(!ExposesAnyRvalueDbOwnedView<ruvia::DbField>);
+static_assert(!ExposesAnyRvalueDbOwnedView<ruvia::DbRow>);
+static_assert(!ExposesAnyRvalueDbOwnedView<ruvia::QueryResult>);
+static_assert(!ExposesAnyRvalueDbOwnedView<ruvia::DbMigrationReport>);
+
+template <typename T>
 concept HasDbHandleDefaultParams = requires(const T& handle) {
     handle.query(std::string_view{});
     handle.execute(std::string_view{});

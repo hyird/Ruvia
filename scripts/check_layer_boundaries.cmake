@@ -9407,6 +9407,105 @@ if(EXISTS "${WEB_EXECUTION_ROUTE_RESOLUTION}" AND
     endif()
 endif()
 
+set(WEB_DB_OWNED_VIEW_TYPES
+    "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/db/DbTypes.h")
+set(WEB_DB_OWNED_VIEW_RESULT
+    "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/db/DbQueryResult.h")
+set(WEB_DB_OWNED_VIEW_MIGRATION
+    "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/db/DbMigration.h")
+set(WEB_DB_OWNED_VIEW_SOURCE
+    "${RUVIA_ROOT}/ruvia-web/src/db/DbTypes.cpp")
+set(WEB_DB_OWNED_VIEW_TEST
+    "${RUVIA_ROOT}/tests/unit_db_api_surface.cpp")
+set(WEB_REDIS_OWNED_VIEW_TYPES
+    "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/redis/RedisTypes.h")
+set(WEB_REDIS_OWNED_VIEW_SOURCE
+    "${RUVIA_ROOT}/ruvia-web/src/redis/RedisTypes.cpp")
+set(WEB_REDIS_OWNED_VIEW_TEST
+    "${RUVIA_ROOT}/tests/unit_redis_api_surface.cpp")
+set(WEB_INTEGRATION_OWNED_VIEW_CONSUMER
+    "${RUVIA_ROOT}/tests/package-consumer/web.cpp")
+foreach(integration_owned_view_contract IN ITEMS
+        "${WEB_DB_OWNED_VIEW_TYPES}"
+        "${WEB_DB_OWNED_VIEW_RESULT}"
+        "${WEB_DB_OWNED_VIEW_MIGRATION}"
+        "${WEB_DB_OWNED_VIEW_SOURCE}"
+        "${WEB_DB_OWNED_VIEW_TEST}"
+        "${WEB_REDIS_OWNED_VIEW_TYPES}"
+        "${WEB_REDIS_OWNED_VIEW_SOURCE}"
+        "${WEB_REDIS_OWNED_VIEW_TEST}"
+        "${WEB_INTEGRATION_OWNED_VIEW_CONSUMER}")
+    if(NOT EXISTS "${integration_owned_view_contract}")
+        file(RELATIVE_PATH relative "${RUVIA_ROOT}"
+            "${integration_owned_view_contract}")
+        boundary_error("integration owned-view lifetime contract is incomplete"
+            "${relative} is required")
+    endif()
+endforeach()
+if(EXISTS "${WEB_DB_OWNED_VIEW_TYPES}" AND
+   EXISTS "${WEB_DB_OWNED_VIEW_RESULT}" AND
+   EXISTS "${WEB_DB_OWNED_VIEW_MIGRATION}" AND
+   EXISTS "${WEB_DB_OWNED_VIEW_SOURCE}" AND
+   EXISTS "${WEB_DB_OWNED_VIEW_TEST}" AND
+   EXISTS "${WEB_REDIS_OWNED_VIEW_TYPES}" AND
+   EXISTS "${WEB_REDIS_OWNED_VIEW_SOURCE}" AND
+   EXISTS "${WEB_REDIS_OWNED_VIEW_TEST}" AND
+   EXISTS "${WEB_INTEGRATION_OWNED_VIEW_CONSUMER}")
+    file(READ "${WEB_DB_OWNED_VIEW_TYPES}" web_db_owned_view_types)
+    file(READ "${WEB_DB_OWNED_VIEW_RESULT}" web_db_owned_view_result)
+    file(READ "${WEB_DB_OWNED_VIEW_MIGRATION}" web_db_owned_view_migration)
+    file(READ "${WEB_DB_OWNED_VIEW_SOURCE}" web_db_owned_view_source)
+    file(READ "${WEB_DB_OWNED_VIEW_TEST}" web_db_owned_view_test)
+    file(READ "${WEB_REDIS_OWNED_VIEW_TYPES}" web_redis_owned_view_types)
+    file(READ "${WEB_REDIS_OWNED_VIEW_SOURCE}" web_redis_owned_view_source)
+    file(READ "${WEB_REDIS_OWNED_VIEW_TEST}" web_redis_owned_view_test)
+    file(READ "${WEB_INTEGRATION_OWNED_VIEW_CONSUMER}"
+        web_integration_owned_view_consumer)
+    if(NOT web_db_owned_view_types MATCHES
+           "text[(][)] const [&] noexcept" OR
+       NOT web_db_owned_view_types MATCHES
+           "text[(][)] const && = delete" OR
+       NOT web_db_owned_view_types MATCHES
+           "operator[[]][(][^)]*[)] const && = delete" OR
+       NOT web_db_owned_view_types MATCHES
+           "begin[(][)] const && = delete" OR
+       NOT web_db_owned_view_result MATCHES
+           "rows[(][)] const [&] noexcept" OR
+       NOT web_db_owned_view_result MATCHES
+           "rows[(][)] const && = delete" OR
+       NOT web_db_owned_view_migration MATCHES
+           "applied[(][)] const [&] noexcept" OR
+       NOT web_db_owned_view_migration MATCHES
+           "skipped[(][)] const && = delete" OR
+       NOT web_db_owned_view_source MATCHES
+           "DbValue::text[(][)] const [&] noexcept" OR
+       NOT web_db_owned_view_test MATCHES
+           "ExposesAnyRvalueDbOwnedView" OR
+       NOT web_redis_owned_view_types MATCHES
+           "duration[(][)] const [&] noexcept" OR
+       NOT web_redis_owned_view_types MATCHES
+           "key[(][)] const && = delete" OR
+       NOT web_redis_owned_view_types MATCHES
+           "entries[(][)] const && = delete" OR
+       NOT web_redis_owned_view_types MATCHES
+           "message[(][)] const [&] noexcept" OR
+       NOT web_redis_owned_view_types MATCHES
+           "string[(][)] const && = delete" OR
+       NOT web_redis_owned_view_types MATCHES
+           "array[(][)] const && = delete" OR
+       NOT web_redis_owned_view_source MATCHES
+           "RedisValue::array[(][)] const [&]" OR
+       NOT web_redis_owned_view_test MATCHES
+           "ExposesAnyRvalueRedisOwnedView" OR
+       NOT web_integration_owned_view_consumer MATCHES
+           "ExposesAnyRvalueDbOwnedView" OR
+       NOT web_integration_owned_view_consumer MATCHES
+           "ExposesAnyRvalueRedisOwnedView")
+        boundary_error("DB or Redis owning values expose views from temporary owners"
+            "optional integration strings, rows, arrays, scan results, and migration reports must lend owner-backed storage only from live lvalues")
+    endif()
+endif()
+
 set(BOUNDARY_DOCS "${RUVIA_ROOT}/README.md" "${RUVIA_ROOT}/AGENTS.md")
 check_files_no_match("docs reference the deleted coroutine h2 server session"
     "${RULE_DELETED_H2_SESSION}" ${BOUNDARY_DOCS})

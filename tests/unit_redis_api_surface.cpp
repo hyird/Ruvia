@@ -50,6 +50,26 @@ static_assert(std::is_move_assignable_v<ruvia::RedisValue>);
 static_assert(!std::is_nothrow_move_assignable_v<ruvia::RedisValue>);
 
 template <typename T>
+concept ExposesAnyRvalueRedisOwnedView =
+    requires(T&& value) { std::move(value).duration(); } ||
+    requires(T&& value) { std::move(value).key(); } ||
+    requires(T&& value) { std::move(value).value(); } ||
+    requires(T&& value) { std::move(value).values(); } ||
+    requires(T&& value) { std::move(value).entries(); } ||
+    requires(T&& value) { std::move(value).message(); } ||
+    requires(T&& value) { std::move(value).string(); } ||
+    requires(T&& value) { std::move(value).array(); };
+
+static_assert(!ExposesAnyRvalueRedisOwnedView<ruvia::RedisSetExpiration>);
+static_assert(!ExposesAnyRvalueRedisOwnedView<ruvia::RedisKeyValue>);
+static_assert(!ExposesAnyRvalueRedisOwnedView<ruvia::RedisScoredValue>);
+static_assert(!ExposesAnyRvalueRedisOwnedView<ruvia::RedisScanResult>);
+static_assert(!ExposesAnyRvalueRedisOwnedView<ruvia::RedisHashScanResult>);
+static_assert(!ExposesAnyRvalueRedisOwnedView<ruvia::RedisZScanResult>);
+static_assert(!ExposesAnyRvalueRedisOwnedView<ruvia::RedisError>);
+static_assert(!ExposesAnyRvalueRedisOwnedView<ruvia::RedisValue>);
+
+template <typename T>
 concept HasRedisHandleSpanArgs = requires(
     const T& handle,
     std::span<const std::string_view> keys,

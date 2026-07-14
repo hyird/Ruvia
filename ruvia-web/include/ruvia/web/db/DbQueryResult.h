@@ -24,7 +24,8 @@ public:
     QueryResult& operator=(QueryResult&&) = delete;
     ~QueryResult();
 
-    [[nodiscard]] std::span<const DbRow> rows() const noexcept;
+    [[nodiscard]] std::span<const DbRow> rows() const & noexcept;
+    [[nodiscard]] std::span<const DbRow> rows() const && = delete;
     [[nodiscard]] std::uint64_t affectedRows() const noexcept;
     [[nodiscard]] std::uint64_t lastInsertId() const noexcept;
 

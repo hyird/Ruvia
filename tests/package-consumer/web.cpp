@@ -80,6 +80,16 @@ static_assert(std::same_as<
 #endif
 
 #ifdef RUVIA_ENABLE_DATABASE
+template <typename T>
+concept ExposesAnyRvalueDbOwnedView =
+    requires(T&& value) { std::move(value).text(); } ||
+    requires(T&& value) { std::move(value)[std::size_t{}]; } ||
+    requires(T&& value) { std::move(value).begin(); } ||
+    requires(T&& value) { std::move(value).end(); } ||
+    requires(T&& value) { std::move(value).rows(); } ||
+    requires(T&& value) { std::move(value).applied(); } ||
+    requires(T&& value) { std::move(value).skipped(); };
+
 static_assert(std::is_move_assignable_v<ruvia::DbField>);
 static_assert(!std::is_nothrow_move_assignable_v<ruvia::DbField>);
 static_assert(std::is_move_assignable_v<ruvia::DbRow>);
@@ -103,9 +113,25 @@ static_assert(std::same_as<
     std::optional<std::chrono::milliseconds>>);
 static_assert(std::same_as<decltype(ruvia::DbConfig::mariaDb()), ruvia::DbConfig>);
 static_assert(std::same_as<decltype(ruvia::DbConfig::postgreSql()), ruvia::DbConfig>);
+static_assert(!ExposesAnyRvalueDbOwnedView<ruvia::DbValue>);
+static_assert(!ExposesAnyRvalueDbOwnedView<ruvia::DbField>);
+static_assert(!ExposesAnyRvalueDbOwnedView<ruvia::DbRow>);
+static_assert(!ExposesAnyRvalueDbOwnedView<ruvia::QueryResult>);
+static_assert(!ExposesAnyRvalueDbOwnedView<ruvia::DbMigrationReport>);
 #endif
 
 #ifdef RUVIA_ENABLE_REDIS
+template <typename T>
+concept ExposesAnyRvalueRedisOwnedView =
+    requires(T&& value) { std::move(value).duration(); } ||
+    requires(T&& value) { std::move(value).key(); } ||
+    requires(T&& value) { std::move(value).value(); } ||
+    requires(T&& value) { std::move(value).values(); } ||
+    requires(T&& value) { std::move(value).entries(); } ||
+    requires(T&& value) { std::move(value).message(); } ||
+    requires(T&& value) { std::move(value).string(); } ||
+    requires(T&& value) { std::move(value).array(); };
+
 static_assert(std::is_move_assignable_v<ruvia::RedisKeyValue>);
 static_assert(!std::is_nothrow_move_assignable_v<ruvia::RedisKeyValue>);
 static_assert(std::is_move_assignable_v<ruvia::RedisScoredValue>);
@@ -127,6 +153,14 @@ static_assert(std::same_as<
 static_assert(std::same_as<
     decltype(ruvia::RedisScanOptions{}.count),
     std::optional<std::uint64_t>>);
+static_assert(!ExposesAnyRvalueRedisOwnedView<ruvia::RedisSetExpiration>);
+static_assert(!ExposesAnyRvalueRedisOwnedView<ruvia::RedisKeyValue>);
+static_assert(!ExposesAnyRvalueRedisOwnedView<ruvia::RedisScoredValue>);
+static_assert(!ExposesAnyRvalueRedisOwnedView<ruvia::RedisScanResult>);
+static_assert(!ExposesAnyRvalueRedisOwnedView<ruvia::RedisHashScanResult>);
+static_assert(!ExposesAnyRvalueRedisOwnedView<ruvia::RedisZScanResult>);
+static_assert(!ExposesAnyRvalueRedisOwnedView<ruvia::RedisError>);
+static_assert(!ExposesAnyRvalueRedisOwnedView<ruvia::RedisValue>);
 #endif
 
 template <typename T>

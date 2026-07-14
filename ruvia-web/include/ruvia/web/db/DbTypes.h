@@ -101,7 +101,8 @@ public:
     DbValue(T value) : type_(DbValueType::kDouble), doubleValue_(static_cast<double>(value)) {}
 
     [[nodiscard]] DbValueType type() const noexcept;
-    [[nodiscard]] std::string_view text() const noexcept;
+    [[nodiscard]] std::string_view text() const & noexcept;
+    [[nodiscard]] std::string_view text() const && = delete;
     [[nodiscard]] std::int64_t signedValue() const noexcept;
     [[nodiscard]] std::uint64_t unsignedValue() const noexcept;
     [[nodiscard]] double doubleValue() const noexcept;
@@ -131,7 +132,8 @@ public:
     DbField& operator=(const DbField&) = delete;
 
     [[nodiscard]] bool isNull() const noexcept;
-    [[nodiscard]] std::string_view text() const noexcept;
+    [[nodiscard]] std::string_view text() const & noexcept;
+    [[nodiscard]] std::string_view text() const && = delete;
 
 private:
     friend struct detail::DbResultAccess;
@@ -161,9 +163,14 @@ public:
 
     [[nodiscard]] bool empty() const noexcept;
     [[nodiscard]] std::size_t size() const noexcept;
-    [[nodiscard]] const DbField& operator[](std::size_t index) const noexcept;
-    [[nodiscard]] const DbField* begin() const noexcept;
-    [[nodiscard]] const DbField* end() const noexcept;
+    [[nodiscard]] const DbField& operator[](
+        std::size_t index) const & noexcept;
+    [[nodiscard]] const DbField& operator[](
+        std::size_t index) const && = delete;
+    [[nodiscard]] const DbField* begin() const & noexcept;
+    [[nodiscard]] const DbField* begin() const && = delete;
+    [[nodiscard]] const DbField* end() const & noexcept;
+    [[nodiscard]] const DbField* end() const && = delete;
 
 private:
     friend struct detail::DbResultAccess;

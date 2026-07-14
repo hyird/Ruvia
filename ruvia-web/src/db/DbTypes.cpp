@@ -30,7 +30,7 @@ DbValueType DbValue::type() const noexcept {
     return type_;
 }
 
-std::string_view DbValue::text() const noexcept {
+std::string_view DbValue::text() const & noexcept {
     if (ownsText_) {
         return ownedText_;
     }
@@ -99,7 +99,7 @@ bool DbField::isNull() const noexcept {
     return isNull_;
 }
 
-std::string_view DbField::text() const noexcept {
+std::string_view DbField::text() const & noexcept {
     return valueView_;
 }
 
@@ -146,15 +146,15 @@ std::size_t DbRow::size() const noexcept {
     return size_;
 }
 
-const DbField& DbRow::operator[](std::size_t index) const noexcept {
+const DbField& DbRow::operator[](std::size_t index) const & noexcept {
     return fields_[index];
 }
 
-const DbField* DbRow::begin() const noexcept {
+const DbField* DbRow::begin() const & noexcept {
     return fields_;
 }
 
-const DbField* DbRow::end() const noexcept {
+const DbField* DbRow::end() const & noexcept {
     return fields_ + size_;
 }
 
@@ -186,7 +186,7 @@ QueryResult::~QueryResult() {
     }
 }
 
-std::span<const DbRow> QueryResult::rows() const noexcept {
+std::span<const DbRow> QueryResult::rows() const & noexcept {
     return std::span<const DbRow>(rows_.data(), rows_.size());
 }
 
@@ -205,11 +205,13 @@ DbMigrationReport::DbMigrationReport(detail::ResolvedPmrResourceTag, std::pmr::m
     : applied_(resource),
       skipped_(resource) {}
 
-std::span<const std::pmr::string> DbMigrationReport::applied() const noexcept {
+std::span<const std::pmr::string>
+DbMigrationReport::applied() const & noexcept {
     return std::span<const std::pmr::string>(applied_.data(), applied_.size());
 }
 
-std::span<const std::pmr::string> DbMigrationReport::skipped() const noexcept {
+std::span<const std::pmr::string>
+DbMigrationReport::skipped() const & noexcept {
     return std::span<const std::pmr::string>(skipped_.data(), skipped_.size());
 }
 
