@@ -31,6 +31,8 @@ using ruvia::detail::Http2EventKind;
 using ruvia::detail::Http2FeedResult;
 using ruvia::detail::Http2FinishSubmitStatus;
 using ruvia::detail::Http2FrameType;
+using ruvia::detail::Http2WebSocketHandshakeSubmitFailure;
+using ruvia::detail::Http2WebSocketHandshakeSubmitResult;
 using ruvia::detail::Http2LocalContentKnownLength;
 using ruvia::detail::Http2LocalContentState;
 using ruvia::detail::Http2LocalSendState;
@@ -52,14 +54,6 @@ using ruvia::detail::ResponseStreamTrailerFraming;
 using ruvia::detail::ResponseTrailerIntent;
 using ruvia::detail::HpackDecoder;
 using ruvia::detail::HpackEncoder;
-
-template <typename T>
-concept HasRvalueHttp2SubmittedPayloadBorrow =
-    requires(T&& submitted) { std::move(submitted).plan(); } ||
-    requires(T&& submitted) { std::move(submitted).negotiation(); };
-
-static_assert(!HasRvalueHttp2SubmittedPayloadBorrow<
-    ruvia::detail::Http2SubmittedWebSocketHandshake>);
 
 ruvia::detail::HttpResponseTrailerSection validatedTrailers(
     std::span<const ruvia::HttpHeaderView> fields) {
@@ -232,6 +226,16 @@ static_assert(std::same_as<
 static_assert(std::is_enum_v<Http2FeedResult>);
 static_assert(!HasFeedStatusField<Http2FeedResult>);
 static_assert(!HasFeedConsumedField<Http2FeedResult>);
+static_assert(!std::default_initializable<
+    Http2WebSocketHandshakeSubmitResult>);
+static_assert(std::same_as<
+    decltype(std::declval<
+        const Http2WebSocketHandshakeSubmitResult&>().submitted()),
+    const ruvia::detail::WebSocketServerNegotiation*>);
+static_assert(std::same_as<
+    decltype(std::declval<
+        const Http2WebSocketHandshakeSubmitResult&>().failure()),
+    const Http2WebSocketHandshakeSubmitFailure*>);
 static_assert(!std::default_initializable<Http2RequestHeadSubmitResult>);
 static_assert(std::same_as<
     decltype(std::declval<const Http2RequestHeadSubmitResult&>().submitted()),
@@ -3035,7 +3039,7 @@ RUVIA_TEST(http2_connection_websocket_tunnel_handshake_and_data) {
     RUVIA_CHECK(handshakeResult.submitted() != nullptr);
     RUVIA_CHECK(handshakeResult.failure() == nullptr);
     RUVIA_CHECK(
-        handshakeResult.submitted()->negotiation().subprotocol() == "chat");
+        handshakeResult.submitted()->subprotocol() == "chat");
 
     const auto duplicateHandshakeResult =
         conn.submitWebSocketHandshake(1, negotiation);

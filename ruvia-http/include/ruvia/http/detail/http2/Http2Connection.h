@@ -106,25 +106,6 @@ enum class Http2WebSocketHandshakeSubmitError : std::uint8_t {
 
 class Http2WebSocketHandshakeSubmitResult;
 
-class Http2SubmittedWebSocketHandshake final {
-public:
-    [[nodiscard]] const WebSocketServerNegotiation&
-    negotiation() const & noexcept {
-        return negotiation_;
-    }
-    [[nodiscard]] const WebSocketServerNegotiation&
-    negotiation() const && = delete;
-
-private:
-    friend class Http2WebSocketHandshakeSubmitResult;
-
-    explicit Http2SubmittedWebSocketHandshake(
-        WebSocketServerNegotiation negotiation) noexcept
-        : negotiation_(negotiation) {}
-
-    WebSocketServerNegotiation negotiation_;
-};
-
 class Http2WebSocketHandshakeSubmitFailure final {
 public:
     [[nodiscard]] constexpr Http2WebSocketHandshakeSubmitError
@@ -142,16 +123,16 @@ private:
     Http2WebSocketHandshakeSubmitError error_;
 };
 
-// Only the submitted alternative owns the exact negotiation encoded in the 200
-// response. The runtime must configure WsConnection from that committed value,
-// never from a separately recomputed compression/subprotocol tuple.
+// The successful alternative directly owns the exact negotiation encoded in
+// the 200 response. The runtime must configure WsConnection from that committed
+// value, never from a separately recomputed compression/subprotocol tuple.
 class Http2WebSocketHandshakeSubmitResult final {
 public:
-    [[nodiscard]] const Http2SubmittedWebSocketHandshake*
+    [[nodiscard]] const WebSocketServerNegotiation*
     submitted() const & noexcept {
-        return std::get_if<Http2SubmittedWebSocketHandshake>(&value_);
+        return std::get_if<WebSocketServerNegotiation>(&value_);
     }
-    [[nodiscard]] const Http2SubmittedWebSocketHandshake*
+    [[nodiscard]] const WebSocketServerNegotiation*
     submitted() const && = delete;
 
     [[nodiscard]] const Http2WebSocketHandshakeSubmitFailure*
@@ -165,7 +146,7 @@ private:
     friend class Http2Connection;
 
     using Value = std::variant<
-        Http2SubmittedWebSocketHandshake,
+        WebSocketServerNegotiation,
         Http2WebSocketHandshakeSubmitFailure>;
 
     template <typename Alternative>
@@ -176,7 +157,7 @@ private:
     [[nodiscard]] static Http2WebSocketHandshakeSubmitResult
     makeSubmitted(WebSocketServerNegotiation negotiation) noexcept {
         return Http2WebSocketHandshakeSubmitResult(
-            Http2SubmittedWebSocketHandshake(negotiation));
+            negotiation);
     }
 
     [[nodiscard]] static Http2WebSocketHandshakeSubmitResult

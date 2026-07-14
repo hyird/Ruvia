@@ -160,7 +160,7 @@ if(NOT _installed_http_operation_h1_text MATCHES
    NOT _installed_http_operation_h1_text MATCHES
        "committed[(][)] const && = delete" OR
    NOT _installed_http_operation_h2_connection_text MATCHES
-       "Http2SubmittedWebSocketHandshake[*][ \t\r\n]+submitted[(][)] const [&] noexcept" OR
+       "WebSocketServerNegotiation[*][ \t\r\n]+submitted[(][)] const [&] noexcept" OR
    NOT _installed_http_operation_h2_connection_text MATCHES
        "Http2SubmittedRequestHead[*][ \t\r\n]+submitted[(][)] const [&] noexcept" OR
    NOT _installed_http_operation_h2_connection_text MATCHES
@@ -321,8 +321,6 @@ set(_installed_http_operation_payload_h1
     "${_install_prefix}/include/ruvia/http/detail/http1/Http1ServerSemantics.h")
 set(_installed_http_operation_payload_stream
     "${_install_prefix}/include/ruvia/http/detail/server/HttpResponseStreamHead.h")
-set(_installed_http_operation_payload_h2
-    "${_install_prefix}/include/ruvia/http/detail/http2/Http2Connection.h")
 set(_installed_http_operation_payload_websocket
     "${_install_prefix}/include/ruvia/http/detail/websocket/HttpWebSocketServerHandshake.h")
 foreach(_installed_http_operation_payload_path IN ITEMS
@@ -331,7 +329,6 @@ foreach(_installed_http_operation_payload_path IN ITEMS
         "${_installed_http_operation_payload_client_request}"
         "${_installed_http_operation_payload_h1}"
         "${_installed_http_operation_payload_stream}"
-        "${_installed_http_operation_payload_h2}"
         "${_installed_http_operation_payload_websocket}")
     if(NOT EXISTS "${_installed_http_operation_payload_path}")
         message(FATAL_ERROR
@@ -348,8 +345,6 @@ file(READ "${_installed_http_operation_payload_h1}"
     _installed_http_operation_payload_h1_text)
 file(READ "${_installed_http_operation_payload_stream}"
     _installed_http_operation_payload_stream_text)
-file(READ "${_installed_http_operation_payload_h2}"
-    _installed_http_operation_payload_h2_text)
 file(READ "${_installed_http_operation_payload_websocket}"
     _installed_http_operation_payload_websocket_text)
 if(NOT _installed_http_operation_payload_request_text MATCHES
@@ -364,8 +359,6 @@ if(NOT _installed_http_operation_payload_request_text MATCHES
        "commitPlan[(][)] const && = delete" OR
    NOT _installed_http_operation_payload_h1_text MATCHES
        "responseHeadPlan[(][)] const && = delete" OR
-   NOT _installed_http_operation_payload_h2_text MATCHES
-       "negotiation[(][)] const && = delete" OR
    NOT _installed_http_operation_payload_websocket_text MATCHES
        "negotiation[(][)] const && = delete")
     message(FATAL_ERROR
@@ -1290,13 +1283,13 @@ if(NOT _installed_ws_deflate_negotiation MATCHES
    NOT _installed_ws_h2_handshake MATCHES
        "const WebSocketServerNegotiation& negotiation" OR
    NOT _installed_http2_connection MATCHES
-       "class Http2SubmittedWebSocketHandshake final" OR
-   NOT _installed_http2_connection MATCHES
        "class Http2WebSocketHandshakeSubmitFailure final" OR
    NOT _installed_http2_connection MATCHES
        "class Http2WebSocketHandshakeSubmitResult final" OR
    NOT _installed_http2_connection MATCHES
-       "std::get_if<Http2SubmittedWebSocketHandshake>" OR
+       "std::variant<[ \t\r\n]*WebSocketServerNegotiation,[ \t\r\n]*Http2WebSocketHandshakeSubmitFailure>" OR
+   NOT _installed_http2_connection MATCHES
+       "std::get_if<WebSocketServerNegotiation>" OR
    NOT _installed_http2_connection MATCHES
        "WebSocketServerNegotiation negotiation" OR
    NOT _installed_ws_connection MATCHES
@@ -1312,7 +1305,7 @@ if(_installed_ws_deflate_negotiation MATCHES
    _installed_ws_h2_handshake MATCHES
        "http2EncodeWebSocketHandshakeHeaders[ \t\r\n]*[(][^)]*std::string_view" OR
    _installed_http2_connection MATCHES
-       "submitWebSocketHandshake[ \t\r\n]*[(][^)]*std::string_view" OR
+       "class Http2SubmittedWebSocketHandshake final|std::get_if<Http2SubmittedWebSocketHandshake>|submitWebSocketHandshake[ \t\r\n]*[(][^)]*std::string_view" OR
    _installed_ws_connection MATCHES "bool[ \t]+permessageDeflate")
     message(FATAL_ERROR
         "installed WebSocket handshake restored split negotiation state")
@@ -2696,7 +2689,9 @@ if(_built_components_csv MATCHES "(^|,)web(,|$)")
        NOT _installed_route_http2_session MATCHES
            "handshakeResult[.]submitted[(][)]" OR
        NOT _installed_route_http2_session MATCHES
-           "submittedHandshake->negotiation[(][)][.]deflate[(][)]")
+           "submittedHandshake->deflate[(][)]" OR
+       _installed_route_http2_session MATCHES
+           "submittedHandshake->negotiation[(][)]")
         message(FATAL_ERROR
             "installed Web runtime lost the committed WebSocket negotiation handoff")
     endif()

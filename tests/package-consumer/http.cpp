@@ -1014,8 +1014,6 @@ static_assert(!ExposesAnyRvalueHttpOperationPayloadBorrow<
 static_assert(!ExposesAnyRvalueHttpOperationPayloadBorrow<
     ruvia::detail::PreparedHttp1ResponseStream>);
 static_assert(!ExposesAnyRvalueHttpOperationPayloadBorrow<
-    ruvia::detail::Http2SubmittedWebSocketHandshake>);
-static_assert(!ExposesAnyRvalueHttpOperationPayloadBorrow<
     ruvia::detail::HttpWebSocketServerHandshake>);
 
 template <typename T>
@@ -2206,22 +2204,17 @@ static_assert(!std::default_initializable<
 static_assert(std::same_as<
     decltype(std::declval<const ruvia::detail::
         Http2WebSocketHandshakeSubmitResult&>().submitted()),
-    const ruvia::detail::Http2SubmittedWebSocketHandshake*>);
+    const ruvia::detail::WebSocketServerNegotiation*>);
 static_assert(std::same_as<
     decltype(std::declval<const ruvia::detail::
         Http2WebSocketHandshakeSubmitResult&>().failure()),
     const ruvia::detail::Http2WebSocketHandshakeSubmitFailure*>);
-static_assert(HasWebSocketNegotiationAccessor<
-    ruvia::detail::Http2SubmittedWebSocketHandshake>);
-static_assert(!HasWebSocketHandshakeErrorAccessor<
-    ruvia::detail::Http2SubmittedWebSocketHandshake>);
+static_assert(!HasWebSocketNegotiationAccessor<
+    ruvia::detail::Http2WebSocketHandshakeSubmitResult>);
 static_assert(HasWebSocketHandshakeErrorAccessor<
     ruvia::detail::Http2WebSocketHandshakeSubmitFailure>);
 static_assert(!HasWebSocketNegotiationAccessor<
     ruvia::detail::Http2WebSocketHandshakeSubmitFailure>);
-static_assert(!std::constructible_from<
-    ruvia::detail::Http2SubmittedWebSocketHandshake,
-    ruvia::detail::WebSocketServerNegotiation>);
 static_assert(!std::constructible_from<
     ruvia::detail::Http2WebSocketHandshakeSubmitFailure,
     ruvia::detail::Http2WebSocketHandshakeSubmitError>);

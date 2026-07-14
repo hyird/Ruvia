@@ -394,7 +394,7 @@ Task<void> runHttp2SansIoSession(
                             options.maxWebSocketMessageBytes),
                         requestMemory.resource(),
                         /*initialBytes=*/{},
-                        submittedHandshake->negotiation().deflate());
+                        submittedHandshake->deflate());
                     co_await runWebSocketSession(
                         webSocketConnection,
                         scannerEntry,

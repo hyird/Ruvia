@@ -8698,15 +8698,17 @@ if(EXISTS "${WS_DEFLATE_NEGOTIATION_HEADER}" AND
        NOT ws_h2_handshake MATCHES
            "const WebSocketServerNegotiation& negotiation" OR
        NOT ws_h2_connection MATCHES
-           "class Http2SubmittedWebSocketHandshake final" OR
-       NOT ws_h2_connection MATCHES
            "class Http2WebSocketHandshakeSubmitFailure final" OR
        NOT ws_h2_connection MATCHES
            "class Http2WebSocketHandshakeSubmitResult final" OR
        NOT ws_h2_connection MATCHES
-           "std::get_if<Http2SubmittedWebSocketHandshake>" OR
+           "std::variant<[ \t\r\n]*WebSocketServerNegotiation,[ \t\r\n]*Http2WebSocketHandshakeSubmitFailure>" OR
+       NOT ws_h2_connection MATCHES
+           "std::get_if<WebSocketServerNegotiation>" OR
        NOT ws_h2_connection MATCHES
            "WebSocketServerNegotiation negotiation" OR
+       ws_h2_connection MATCHES
+           "class Http2SubmittedWebSocketHandshake final|std::get_if<Http2SubmittedWebSocketHandshake>" OR
        NOT ws_h1_writer MATCHES
            "const HttpWebSocketServerHandshake& handshake" OR
        NOT ws_h1_route MATCHES "makeHttpWebSocketServerHandshake" OR
@@ -8715,7 +8717,9 @@ if(EXISTS "${WS_DEFLATE_NEGOTIATION_HEADER}" AND
        NOT ws_h2_route MATCHES "makeWebSocketServerNegotiation" OR
        NOT ws_h2_route MATCHES "handshakeResult[.]submitted[(][)]" OR
        NOT ws_h2_route MATCHES
-           "submittedHandshake->negotiation[(][)][.]deflate[(][)]")
+           "submittedHandshake->deflate[(][)]" OR
+       ws_h2_route MATCHES
+           "submittedHandshake->negotiation[(][)]")
         boundary_error("WebSocket server negotiation lost its single committed value"
             "HTTP/1 and RFC 8441 response metadata plus WsConnection compression must consume the same immutable negotiation")
     endif()
@@ -9586,7 +9590,7 @@ if(EXISTS "${HTTP_OPERATION_RESULT_H1}" AND
        NOT http_operation_result_h1 MATCHES
            "committed[(][)] const && = delete" OR
        NOT http_operation_result_h2_connection MATCHES
-           "Http2SubmittedWebSocketHandshake[*][ \t\r\n]+submitted[(][)] const [&] noexcept" OR
+           "WebSocketServerNegotiation[*][ \t\r\n]+submitted[(][)] const [&] noexcept" OR
        NOT http_operation_result_h2_connection MATCHES
            "Http2SubmittedRequestHead[*][ \t\r\n]+submitted[(][)] const [&] noexcept" OR
        NOT http_operation_result_h2_connection MATCHES
@@ -9796,8 +9800,6 @@ set(HTTP_OPERATION_PAYLOAD_H1
     "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/detail/http1/Http1ServerSemantics.h")
 set(HTTP_OPERATION_PAYLOAD_STREAM
     "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/detail/server/HttpResponseStreamHead.h")
-set(HTTP_OPERATION_PAYLOAD_H2
-    "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/detail/http2/Http2Connection.h")
 set(HTTP_OPERATION_PAYLOAD_WEBSOCKET
     "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/detail/websocket/HttpWebSocketServerHandshake.h")
 if(EXISTS "${HTTP_OPERATION_PAYLOAD_REQUEST}" AND
@@ -9805,7 +9807,6 @@ if(EXISTS "${HTTP_OPERATION_PAYLOAD_REQUEST}" AND
    EXISTS "${HTTP_OPERATION_PAYLOAD_CLIENT_REQUEST}" AND
    EXISTS "${HTTP_OPERATION_PAYLOAD_H1}" AND
    EXISTS "${HTTP_OPERATION_PAYLOAD_STREAM}" AND
-   EXISTS "${HTTP_OPERATION_PAYLOAD_H2}" AND
    EXISTS "${HTTP_OPERATION_PAYLOAD_WEBSOCKET}" AND
    EXISTS "${HTTP_PACKAGE_CONSUMER}")
     file(READ "${HTTP_OPERATION_PAYLOAD_REQUEST}" http_operation_payload_request)
@@ -9815,7 +9816,6 @@ if(EXISTS "${HTTP_OPERATION_PAYLOAD_REQUEST}" AND
         http_operation_payload_client_request)
     file(READ "${HTTP_OPERATION_PAYLOAD_H1}" http_operation_payload_h1)
     file(READ "${HTTP_OPERATION_PAYLOAD_STREAM}" http_operation_payload_stream)
-    file(READ "${HTTP_OPERATION_PAYLOAD_H2}" http_operation_payload_h2)
     file(READ "${HTTP_OPERATION_PAYLOAD_WEBSOCKET}"
         http_operation_payload_websocket)
     file(READ "${HTTP_PACKAGE_CONSUMER}" http_operation_payload_consumer)
@@ -9847,10 +9847,6 @@ if(EXISTS "${HTTP_OPERATION_PAYLOAD_REQUEST}" AND
            "responseHeadPlan[(][)] const && = delete" OR
        NOT http_operation_payload_h1 MATCHES
            "commitPlan[(][)] const && = delete" OR
-       NOT http_operation_payload_h2 MATCHES
-           "negotiation[(][)] const [&] noexcept" OR
-       NOT http_operation_payload_h2 MATCHES
-           "negotiation[(][)] const && = delete" OR
        NOT http_operation_payload_websocket MATCHES
            "negotiation[(][)] const [&] noexcept" OR
        NOT http_operation_payload_websocket MATCHES
