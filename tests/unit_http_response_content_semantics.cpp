@@ -2,6 +2,7 @@
 
 #include <concepts>
 #include <type_traits>
+#include <utility>
 
 #include "ruvia/http/detail/HttpResponseContentSemantics.h"
 
@@ -16,7 +17,17 @@ using ruvia::detail::HttpResponseWithContent;
 using ruvia::detail::HttpResponseWithoutContent;
 using ruvia::detail::httpResponseContentSemantics;
 
+template <typename T>
+concept HasAnyRvalueResponseContentSemanticsAccessor =
+    requires(T&& value) { std::move(value).informational(); } ||
+    requires(T&& value) { std::move(value).protocolSwitch(); } ||
+    requires(T&& value) { std::move(value).connectTunnel(); } ||
+    requires(T&& value) { std::move(value).withoutContent(); } ||
+    requires(T&& value) { std::move(value).withContent(); };
+
 static_assert(!std::default_initializable<HttpResponseContentSemantics>);
+static_assert(!HasAnyRvalueResponseContentSemanticsAccessor<
+    HttpResponseContentSemantics>);
 static_assert(!std::default_initializable<HttpInformationalResponseContent>);
 static_assert(!std::default_initializable<HttpProtocolSwitchResponseContent>);
 static_assert(!std::default_initializable<HttpConnectTunnelResponseContent>);
@@ -71,12 +82,12 @@ RUVIA_TEST(response_content_semantics_owns_method_status_precedence) {
 }
 
 RUVIA_TEST(response_content_semantics_preserves_case_sensitive_method_tokens) {
-    RUVIA_CHECK(httpResponseContentSemantics("HEAD", 200)
-        .withoutContent() != nullptr);
-    RUVIA_CHECK(httpResponseContentSemantics("head", 200)
-        .withContent() != nullptr);
-    RUVIA_CHECK(httpResponseContentSemantics("CONNECT", 200)
-        .connectTunnel() != nullptr);
-    RUVIA_CHECK(httpResponseContentSemantics("connect", 200)
-        .withContent() != nullptr);
+    const auto head = httpResponseContentSemantics("HEAD", 200);
+    const auto lowerHead = httpResponseContentSemantics("head", 200);
+    const auto connect = httpResponseContentSemantics("CONNECT", 200);
+    const auto lowerConnect = httpResponseContentSemantics("connect", 200);
+    RUVIA_CHECK(head.withoutContent() != nullptr);
+    RUVIA_CHECK(lowerHead.withContent() != nullptr);
+    RUVIA_CHECK(connect.connectTunnel() != nullptr);
+    RUVIA_CHECK(lowerConnect.withContent() != nullptr);
 }

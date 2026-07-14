@@ -73,33 +73,42 @@ class Http2ResponseHeadPlanResult;
 
 class Http2ResponseHeadPlan final {
 public:
-    [[nodiscard]] const HttpResponseBodyPlan& bodyPlan() const noexcept {
+    [[nodiscard]] const HttpResponseBodyPlan& bodyPlan() const & noexcept {
         return bodyPlan_;
     }
+    [[nodiscard]] const HttpResponseBodyPlan& bodyPlan() const && = delete;
 
     [[nodiscard]] const Http2CanonicalResponseContentLength*
-    canonicalContentLength() const noexcept {
+    canonicalContentLength() const & noexcept {
         return std::get_if<Http2CanonicalResponseContentLength>(
             &contentLength_);
     }
+    [[nodiscard]] const Http2CanonicalResponseContentLength*
+    canonicalContentLength() const && = delete;
 
     [[nodiscard]] const Http2ExplicitResponseContentLength*
-    explicitContentLength() const noexcept {
+    explicitContentLength() const & noexcept {
         return std::get_if<Http2ExplicitResponseContentLength>(
             &contentLength_);
     }
+    [[nodiscard]] const Http2ExplicitResponseContentLength*
+    explicitContentLength() const && = delete;
 
     [[nodiscard]] const Http2AbsentResponseContentLength*
-    absentContentLength() const noexcept {
+    absentContentLength() const & noexcept {
         return std::get_if<Http2AbsentResponseContentLength>(
             &contentLength_);
     }
+    [[nodiscard]] const Http2AbsentResponseContentLength*
+    absentContentLength() const && = delete;
 
     [[nodiscard]] const Http2ForbiddenResponseContentLength*
-    forbiddenContentLength() const noexcept {
+    forbiddenContentLength() const & noexcept {
         return std::get_if<Http2ForbiddenResponseContentLength>(
             &contentLength_);
     }
+    [[nodiscard]] const Http2ForbiddenResponseContentLength*
+    forbiddenContentLength() const && = delete;
 
 private:
     friend class Http2ResponseHeadPlanResult;

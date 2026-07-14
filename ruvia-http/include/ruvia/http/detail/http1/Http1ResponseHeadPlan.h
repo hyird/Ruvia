@@ -55,23 +55,30 @@ private:
 class Http1ResponseHeadPlan final {
 public:
     [[nodiscard]] constexpr const Http1BufferedResponseHead*
-    buffered() const noexcept {
+    buffered() const & noexcept {
         return std::get_if<Http1BufferedResponseHead>(&framing_);
     }
+    [[nodiscard]] constexpr const Http1BufferedResponseHead*
+    buffered() const && = delete;
 
     [[nodiscard]] constexpr const Http1ChunkedResponseStreamHead*
-    chunkedStream() const noexcept {
+    chunkedStream() const & noexcept {
         return std::get_if<Http1ChunkedResponseStreamHead>(&framing_);
     }
+    [[nodiscard]] constexpr const Http1ChunkedResponseStreamHead*
+    chunkedStream() const && = delete;
 
     [[nodiscard]] constexpr const Http1CloseDelimitedResponseStreamHead*
-    closeDelimitedStream() const noexcept {
+    closeDelimitedStream() const & noexcept {
         return std::get_if<Http1CloseDelimitedResponseStreamHead>(&framing_);
     }
+    [[nodiscard]] constexpr const Http1CloseDelimitedResponseStreamHead*
+    closeDelimitedStream() const && = delete;
 
-    [[nodiscard]] constexpr const HttpResponseBodyPlan& bodyPlan() const noexcept {
+    [[nodiscard]] constexpr const HttpResponseBodyPlan& bodyPlan() const & noexcept {
         return bodyPlan_;
     }
+    [[nodiscard]] constexpr const HttpResponseBodyPlan& bodyPlan() const && = delete;
 
     [[nodiscard]] constexpr HttpProtocolVersion
     protocolVersion() const noexcept {
@@ -145,14 +152,18 @@ http1CloseDelimitedResponseStreamHeadPlan(
 class Http1BufferedResponsePlan final {
 public:
     [[nodiscard]] const HttpBufferedResponseWritePlan&
-    writePlan() const noexcept {
+    writePlan() const & noexcept {
         return writePlan_;
     }
+    [[nodiscard]] const HttpBufferedResponseWritePlan&
+    writePlan() const && = delete;
 
     [[nodiscard]] constexpr const Http1ResponseHeadPlan&
-    headPlan() const noexcept {
+    headPlan() const & noexcept {
         return headPlan_;
     }
+    [[nodiscard]] constexpr const Http1ResponseHeadPlan&
+    headPlan() const && = delete;
 
 private:
     friend Http1BufferedResponsePlan http1BufferedResponsePlan(

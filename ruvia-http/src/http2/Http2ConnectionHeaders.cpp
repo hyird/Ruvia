@@ -114,10 +114,10 @@ bool http2OnDecodedResponseHeader(void* target, std::string_view name, std::stri
         return true;  // interim head: validate only, never stored
     }
     const auto kind = classifyRequestHeader(name);
+    const auto responseContentSemantics = httpResponseContentSemantics(
+        stream.requestKnownMethod(), *context->status);
     const bool successfulConnect =
-        httpResponseContentSemantics(
-            stream.requestKnownMethod(), *context->status)
-            .connectTunnel() != nullptr;
+        responseContentSemantics.connectTunnel() != nullptr;
     if (kind == RequestHeaderKind::kContentLength && successfulConnect) {
         // RFC 9110 9.3.6: a client ignores Content-Length on a successful CONNECT
         // response. It describes neither HTTP content nor the following tunnel DATA.

@@ -9115,6 +9115,99 @@ if(EXISTS "${HTTP_OPERATION_RESULT_H1}" AND
     endif()
 endif()
 
+set(HTTP_PROTOCOL_PLAN_RANGE
+    "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/detail/HttpByteRange.h")
+set(HTTP_PROTOCOL_PLAN_SEMANTICS
+    "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/detail/HttpResponseContentSemantics.h")
+set(HTTP_PROTOCOL_PLAN_WRITE
+    "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/detail/server/HttpResponseWritePlan.h")
+set(HTTP_PROTOCOL_PLAN_H1_REQUEST
+    "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/detail/http1/Http1RequestBodyPlan.h")
+set(HTTP_PROTOCOL_PLAN_H1_RESPONSE
+    "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/detail/http1/Http1ResponseHeadPlan.h")
+set(HTTP_PROTOCOL_PLAN_H2_REQUEST
+    "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/detail/http2/Http2RequestContent.h")
+set(HTTP_PROTOCOL_PLAN_H2_RESPONSE
+    "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/detail/http2/Http2ResponseHeadPlan.h")
+set(HTTP_PROTOCOL_PLAN_CONTROL
+    "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/detail/server/HttpFinalResponseControlPlan.h")
+set(HTTP_PROTOCOL_PLAN_STREAM
+    "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/detail/server/HttpResponseStreamHead.h")
+if(EXISTS "${HTTP_PROTOCOL_PLAN_RANGE}" AND
+   EXISTS "${HTTP_PROTOCOL_PLAN_SEMANTICS}" AND
+   EXISTS "${HTTP_PROTOCOL_PLAN_WRITE}" AND
+   EXISTS "${HTTP_PROTOCOL_PLAN_H1_REQUEST}" AND
+   EXISTS "${HTTP_PROTOCOL_PLAN_H1_RESPONSE}" AND
+   EXISTS "${HTTP_PROTOCOL_PLAN_H2_REQUEST}" AND
+   EXISTS "${HTTP_PROTOCOL_PLAN_H2_RESPONSE}" AND
+   EXISTS "${HTTP_PROTOCOL_PLAN_CONTROL}" AND
+   EXISTS "${HTTP_PROTOCOL_PLAN_STREAM}" AND
+   EXISTS "${HTTP_PACKAGE_CONSUMER}")
+    file(READ "${HTTP_PROTOCOL_PLAN_RANGE}" http_protocol_plan_range)
+    file(READ "${HTTP_PROTOCOL_PLAN_SEMANTICS}" http_protocol_plan_semantics)
+    file(READ "${HTTP_PROTOCOL_PLAN_WRITE}" http_protocol_plan_write)
+    file(READ "${HTTP_PROTOCOL_PLAN_H1_REQUEST}" http_protocol_plan_h1_request)
+    file(READ "${HTTP_PROTOCOL_PLAN_H1_RESPONSE}" http_protocol_plan_h1_response)
+    file(READ "${HTTP_PROTOCOL_PLAN_H2_REQUEST}" http_protocol_plan_h2_request)
+    file(READ "${HTTP_PROTOCOL_PLAN_H2_RESPONSE}" http_protocol_plan_h2_response)
+    file(READ "${HTTP_PROTOCOL_PLAN_CONTROL}" http_protocol_plan_control)
+    file(READ "${HTTP_PROTOCOL_PLAN_STREAM}" http_protocol_plan_stream)
+    file(READ "${HTTP_PACKAGE_CONSUMER}" http_protocol_plan_consumer)
+    if(NOT http_protocol_plan_range MATCHES
+           "ignored[(][)] const [&] noexcept" OR
+       NOT http_protocol_plan_range MATCHES
+           "resolved[(][)] const && = delete" OR
+       NOT http_protocol_plan_semantics MATCHES
+           "informational[(][)] const [&] noexcept" OR
+       NOT http_protocol_plan_semantics MATCHES
+           "withContent[(][)] const && = delete" OR
+       NOT http_protocol_plan_write MATCHES
+           "policy[(][)] const [&] noexcept" OR
+       NOT http_protocol_plan_write MATCHES
+           "contentSemantics[(][)] const && = delete" OR
+       NOT http_protocol_plan_write MATCHES
+           "bodyPlan[(][)] const && = delete" OR
+       NOT http_protocol_plan_h1_request MATCHES
+           "withoutBody[(][)] const [&] noexcept" OR
+       NOT http_protocol_plan_h1_request MATCHES
+           "expectations[(][)] const && = delete" OR
+       NOT http_protocol_plan_h1_request MATCHES
+           "transferCodings[(][)] const && = delete" OR
+       NOT http_protocol_plan_h1_response MATCHES
+           "buffered[(][)] const [&] noexcept" OR
+       NOT http_protocol_plan_h1_response MATCHES
+           "closeDelimitedStream[(][)] const && = delete" OR
+       NOT http_protocol_plan_h1_response MATCHES
+           "writePlan[(][)] const && = delete" OR
+       NOT http_protocol_plan_h1_response MATCHES
+           "headPlan[(][)] const && = delete" OR
+       NOT http_protocol_plan_h2_request MATCHES
+           "withoutContent[(][)] const [&] noexcept" OR
+       NOT http_protocol_plan_h2_request MATCHES
+           "streamingContent[(][)] const && = delete" OR
+       NOT http_protocol_plan_h2_response MATCHES
+           "canonicalContentLength[(][)] const [&] noexcept" OR
+       NOT http_protocol_plan_h2_response MATCHES
+           "forbiddenContentLength[(][)] const && = delete" OR
+       NOT http_protocol_plan_control MATCHES
+           "http1[(][)] const [&] noexcept" OR
+       NOT http_protocol_plan_control MATCHES
+           "http2[(][)] const && = delete" OR
+       NOT http_protocol_plan_control MATCHES
+           "connectionOptions[(][)] const && = delete" OR
+       NOT http_protocol_plan_control MATCHES
+           "upgradeProtocols[(][)] const && = delete" OR
+       NOT http_protocol_plan_stream MATCHES
+           "bodyPlan[(][)] const [&] noexcept" OR
+       NOT http_protocol_plan_stream MATCHES
+           "bodyPlan[(][)] const && = delete" OR
+       NOT http_protocol_plan_consumer MATCHES
+           "ExposesAnyRvalueHttpProtocolPlanBorrow")
+        boundary_error("HTTP protocol plans lend internal storage from temporary owners"
+            "immutable byte-range, content, HTTP/1, HTTP/2, control, and stream plans must expose borrowed pointers/references only from live lvalues")
+    endif()
+endif()
+
 set(BOUNDARY_DOCS "${RUVIA_ROOT}/README.md" "${RUVIA_ROOT}/AGENTS.md")
 check_files_no_match("docs reference the deleted coroutine h2 server session"
     "${RULE_DELETED_H2_SESSION}" ${BOUNDARY_DOCS})

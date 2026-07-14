@@ -25,14 +25,18 @@ class HttpFinalResponseControlPlanResult;
 class Http1FinalResponseControl final {
 public:
     [[nodiscard]] const HttpConnectionOptions&
-    connectionOptions() const noexcept {
+    connectionOptions() const & noexcept {
         return connectionOptions_;
     }
+    [[nodiscard]] const HttpConnectionOptions&
+    connectionOptions() const && = delete;
 
     [[nodiscard]] const HttpUpgradeProtocols&
-    upgradeProtocols() const noexcept {
+    upgradeProtocols() const & noexcept {
         return upgradeProtocols_;
     }
+    [[nodiscard]] const HttpUpgradeProtocols&
+    upgradeProtocols() const && = delete;
 
 private:
     friend class HttpFinalResponseControlPlanResult;
@@ -56,13 +60,15 @@ private:
 
 class HttpFinalResponseControlPlan final {
 public:
-    [[nodiscard]] const Http1FinalResponseControl* http1() const noexcept {
+    [[nodiscard]] const Http1FinalResponseControl* http1() const & noexcept {
         return std::get_if<Http1FinalResponseControl>(&protocol_);
     }
+    [[nodiscard]] const Http1FinalResponseControl* http1() const && = delete;
 
-    [[nodiscard]] const Http2FinalResponseControl* http2() const noexcept {
+    [[nodiscard]] const Http2FinalResponseControl* http2() const & noexcept {
         return std::get_if<Http2FinalResponseControl>(&protocol_);
     }
+    [[nodiscard]] const Http2FinalResponseControl* http2() const && = delete;
 
 private:
     friend class HttpFinalResponseControlPlanResult;

@@ -65,9 +65,10 @@ public:
         return framing_;
     }
 
-    [[nodiscard]] const HttpResponseBodyPlan& bodyPlan() const noexcept {
+    [[nodiscard]] const HttpResponseBodyPlan& bodyPlan() const & noexcept {
         return bodyPlan_;
     }
+    [[nodiscard]] const HttpResponseBodyPlan& bodyPlan() const && = delete;
 
     [[nodiscard]] ResponseStreamTrailerFraming trailerFraming() const noexcept {
         return trailerFraming_;

@@ -46,9 +46,11 @@ private:
 class Http1ChunkedRequestBody final {
 public:
     [[nodiscard]] constexpr const HttpTransferCodings&
-    transferCodings() const noexcept {
+    transferCodings() const & noexcept {
         return transferCodings_;
     }
+    [[nodiscard]] constexpr const HttpTransferCodings&
+    transferCodings() const && = delete;
 
 private:
     friend class Http1RequestBodyPlan;
@@ -67,19 +69,25 @@ private:
 class Http1RequestBodyPlan final {
 public:
     [[nodiscard]] constexpr const Http1RequestWithoutBody*
-    withoutBody() const noexcept {
+    withoutBody() const & noexcept {
         return std::get_if<Http1RequestWithoutBody>(&framing_);
     }
+    [[nodiscard]] constexpr const Http1RequestWithoutBody*
+    withoutBody() const && = delete;
 
     [[nodiscard]] constexpr const Http1KnownLengthRequestBody*
-    knownLength() const noexcept {
+    knownLength() const & noexcept {
         return std::get_if<Http1KnownLengthRequestBody>(&framing_);
     }
+    [[nodiscard]] constexpr const Http1KnownLengthRequestBody*
+    knownLength() const && = delete;
 
     [[nodiscard]] constexpr const Http1ChunkedRequestBody*
-    chunked() const noexcept {
+    chunked() const & noexcept {
         return std::get_if<Http1ChunkedRequestBody>(&framing_);
     }
+    [[nodiscard]] constexpr const Http1ChunkedRequestBody*
+    chunked() const && = delete;
 
     // Chunked framing requires consuming the terminating zero chunk even when
     // the decoded content is empty.
@@ -90,9 +98,10 @@ public:
         return chunked() != nullptr;
     }
 
-    [[nodiscard]] const HttpRequestExpectations& expectations() const noexcept {
+    [[nodiscard]] const HttpRequestExpectations& expectations() const & noexcept {
         return expectations_;
     }
+    [[nodiscard]] const HttpRequestExpectations& expectations() const && = delete;
 
     [[nodiscard]] std::optional<HttpServerExpectationAction>
     expectationAction() const noexcept {

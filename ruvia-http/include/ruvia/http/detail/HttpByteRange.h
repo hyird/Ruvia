@@ -69,18 +69,22 @@ private:
 // No status can be paired with default offset/length coordinates.
 class HttpByteRangeResolution final {
 public:
-    [[nodiscard]] constexpr const HttpByteRangeIgnored* ignored() const noexcept {
+    [[nodiscard]] constexpr const HttpByteRangeIgnored* ignored() const & noexcept {
         return std::get_if<HttpByteRangeIgnored>(&value_);
     }
+    [[nodiscard]] constexpr const HttpByteRangeIgnored* ignored() const && = delete;
 
     [[nodiscard]] constexpr const HttpByteRangeUnsatisfiable*
-    unsatisfiable() const noexcept {
+    unsatisfiable() const & noexcept {
         return std::get_if<HttpByteRangeUnsatisfiable>(&value_);
     }
+    [[nodiscard]] constexpr const HttpByteRangeUnsatisfiable*
+    unsatisfiable() const && = delete;
 
-    [[nodiscard]] constexpr const HttpResolvedByteRange* resolved() const noexcept {
+    [[nodiscard]] constexpr const HttpResolvedByteRange* resolved() const & noexcept {
         return std::get_if<HttpResolvedByteRange>(&value_);
     }
+    [[nodiscard]] constexpr const HttpResolvedByteRange* resolved() const && = delete;
 
 private:
     friend HttpByteRangeResolution resolveHttpByteRange(

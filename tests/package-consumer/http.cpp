@@ -891,6 +891,67 @@ concept HasHttpResponseContentAlternatives = requires(const T& semantics) {
 };
 
 template <typename T>
+concept ExposesAnyRvalueHttpProtocolPlanBorrow =
+    requires(T&& value) { std::move(value).ignored(); } ||
+    requires(T&& value) { std::move(value).unsatisfiable(); } ||
+    requires(T&& value) { std::move(value).resolved(); } ||
+    requires(T&& value) { std::move(value).informational(); } ||
+    requires(T&& value) { std::move(value).protocolSwitch(); } ||
+    requires(T&& value) { std::move(value).connectTunnel(); } ||
+    requires(T&& value) { std::move(value).withoutContent(); } ||
+    requires(T&& value) { std::move(value).withContent(); } ||
+    requires(T&& value) { std::move(value).withoutBody(); } ||
+    requires(T&& value) { std::move(value).knownLength(); } ||
+    requires(T&& value) { std::move(value).chunked(); } ||
+    requires(T&& value) { std::move(value).buffered(); } ||
+    requires(T&& value) { std::move(value).chunkedStream(); } ||
+    requires(T&& value) { std::move(value).closeDelimitedStream(); } ||
+    requires(T&& value) { std::move(value).knownLengthContent(); } ||
+    requires(T&& value) { std::move(value).streamingContent(); } ||
+    requires(T&& value) { std::move(value).canonicalContentLength(); } ||
+    requires(T&& value) { std::move(value).explicitContentLength(); } ||
+    requires(T&& value) { std::move(value).absentContentLength(); } ||
+    requires(T&& value) { std::move(value).forbiddenContentLength(); } ||
+    requires(T&& value) { std::move(value).http1(); } ||
+    requires(T&& value) { std::move(value).http2(); } ||
+    requires(T&& value) { std::move(value).policy(); } ||
+    requires(T&& value) { std::move(value).contentSemantics(); } ||
+    requires(T&& value) { std::move(value).bodyPlan(); } ||
+    requires(T&& value) { std::move(value).expectations(); } ||
+    requires(T&& value) { std::move(value).transferCodings(); } ||
+    requires(T&& value) { std::move(value).connectionOptions(); } ||
+    requires(T&& value) { std::move(value).upgradeProtocols(); } ||
+    requires(T&& value) { std::move(value).writePlan(); } ||
+    requires(T&& value) { std::move(value).headPlan(); };
+
+static_assert(!ExposesAnyRvalueHttpProtocolPlanBorrow<
+    ruvia::detail::HttpByteRangeResolution>);
+static_assert(!ExposesAnyRvalueHttpProtocolPlanBorrow<
+    ruvia::detail::HttpResponseContentSemantics>);
+static_assert(!ExposesAnyRvalueHttpProtocolPlanBorrow<
+    ruvia::detail::HttpResponseBodyPlan>);
+static_assert(!ExposesAnyRvalueHttpProtocolPlanBorrow<
+    ruvia::detail::HttpBufferedResponseWritePlan>);
+static_assert(!ExposesAnyRvalueHttpProtocolPlanBorrow<
+    ruvia::detail::Http1RequestBodyPlan>);
+static_assert(!ExposesAnyRvalueHttpProtocolPlanBorrow<
+    ruvia::detail::Http1ChunkedRequestBody>);
+static_assert(!ExposesAnyRvalueHttpProtocolPlanBorrow<
+    ruvia::detail::Http1ResponseHeadPlan>);
+static_assert(!ExposesAnyRvalueHttpProtocolPlanBorrow<
+    ruvia::detail::Http1BufferedResponsePlan>);
+static_assert(!ExposesAnyRvalueHttpProtocolPlanBorrow<
+    ruvia::detail::Http2RequestContent>);
+static_assert(!ExposesAnyRvalueHttpProtocolPlanBorrow<
+    ruvia::detail::Http2ResponseHeadPlan>);
+static_assert(!ExposesAnyRvalueHttpProtocolPlanBorrow<
+    ruvia::detail::HttpFinalResponseControlPlan>);
+static_assert(!ExposesAnyRvalueHttpProtocolPlanBorrow<
+    ruvia::detail::Http1FinalResponseControl>);
+static_assert(!ExposesAnyRvalueHttpProtocolPlanBorrow<
+    ruvia::detail::ResponseStreamCommitPlan>);
+
+template <typename T>
 concept HasStaleHttp2StreamRemoteContentForwarders = requires(
     const T& stream) {
     stream.hasContentLength();

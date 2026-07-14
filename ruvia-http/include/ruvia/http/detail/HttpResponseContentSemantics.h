@@ -53,29 +53,39 @@ private:
 class HttpResponseContentSemantics final {
 public:
     [[nodiscard]] constexpr const HttpInformationalResponseContent*
-    informational() const noexcept {
+    informational() const & noexcept {
         return std::get_if<HttpInformationalResponseContent>(&state_);
     }
+    [[nodiscard]] constexpr const HttpInformationalResponseContent*
+    informational() const && = delete;
 
     [[nodiscard]] constexpr const HttpProtocolSwitchResponseContent*
-    protocolSwitch() const noexcept {
+    protocolSwitch() const & noexcept {
         return std::get_if<HttpProtocolSwitchResponseContent>(&state_);
     }
+    [[nodiscard]] constexpr const HttpProtocolSwitchResponseContent*
+    protocolSwitch() const && = delete;
 
     [[nodiscard]] constexpr const HttpConnectTunnelResponseContent*
-    connectTunnel() const noexcept {
+    connectTunnel() const & noexcept {
         return std::get_if<HttpConnectTunnelResponseContent>(&state_);
     }
+    [[nodiscard]] constexpr const HttpConnectTunnelResponseContent*
+    connectTunnel() const && = delete;
 
     [[nodiscard]] constexpr const HttpResponseWithoutContent*
-    withoutContent() const noexcept {
+    withoutContent() const & noexcept {
         return std::get_if<HttpResponseWithoutContent>(&state_);
     }
+    [[nodiscard]] constexpr const HttpResponseWithoutContent*
+    withoutContent() const && = delete;
 
     [[nodiscard]] constexpr const HttpResponseWithContent*
-    withContent() const noexcept {
+    withContent() const & noexcept {
         return std::get_if<HttpResponseWithContent>(&state_);
     }
+    [[nodiscard]] constexpr const HttpResponseWithContent*
+    withContent() const && = delete;
 
 private:
     friend constexpr HttpResponseContentSemantics httpResponseContentSemantics(

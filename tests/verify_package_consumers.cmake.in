@@ -183,6 +183,83 @@ if(NOT _installed_http_operation_h1_text MATCHES
         "installed HTTP operation results expose alternatives from temporary owners")
 endif()
 
+set(_installed_http_protocol_plan_range
+    "${_install_prefix}/include/ruvia/http/detail/HttpByteRange.h")
+set(_installed_http_protocol_plan_semantics
+    "${_install_prefix}/include/ruvia/http/detail/HttpResponseContentSemantics.h")
+set(_installed_http_protocol_plan_write
+    "${_install_prefix}/include/ruvia/http/detail/server/HttpResponseWritePlan.h")
+set(_installed_http_protocol_plan_h1_request
+    "${_install_prefix}/include/ruvia/http/detail/http1/Http1RequestBodyPlan.h")
+set(_installed_http_protocol_plan_h1_response
+    "${_install_prefix}/include/ruvia/http/detail/http1/Http1ResponseHeadPlan.h")
+set(_installed_http_protocol_plan_h2_request
+    "${_install_prefix}/include/ruvia/http/detail/http2/Http2RequestContent.h")
+set(_installed_http_protocol_plan_h2_response
+    "${_install_prefix}/include/ruvia/http/detail/http2/Http2ResponseHeadPlan.h")
+set(_installed_http_protocol_plan_control
+    "${_install_prefix}/include/ruvia/http/detail/server/HttpFinalResponseControlPlan.h")
+set(_installed_http_protocol_plan_stream
+    "${_install_prefix}/include/ruvia/http/detail/server/HttpResponseStreamHead.h")
+foreach(_installed_http_protocol_plan_path IN ITEMS
+        "${_installed_http_protocol_plan_range}"
+        "${_installed_http_protocol_plan_semantics}"
+        "${_installed_http_protocol_plan_write}"
+        "${_installed_http_protocol_plan_h1_request}"
+        "${_installed_http_protocol_plan_h1_response}"
+        "${_installed_http_protocol_plan_h2_request}"
+        "${_installed_http_protocol_plan_h2_response}"
+        "${_installed_http_protocol_plan_control}"
+        "${_installed_http_protocol_plan_stream}")
+    if(NOT EXISTS "${_installed_http_protocol_plan_path}")
+        message(FATAL_ERROR
+            "installed HTTP package is missing a protocol-plan lifetime contract")
+    endif()
+endforeach()
+file(READ "${_installed_http_protocol_plan_range}"
+    _installed_http_protocol_plan_range_text)
+file(READ "${_installed_http_protocol_plan_semantics}"
+    _installed_http_protocol_plan_semantics_text)
+file(READ "${_installed_http_protocol_plan_write}"
+    _installed_http_protocol_plan_write_text)
+file(READ "${_installed_http_protocol_plan_h1_request}"
+    _installed_http_protocol_plan_h1_request_text)
+file(READ "${_installed_http_protocol_plan_h1_response}"
+    _installed_http_protocol_plan_h1_response_text)
+file(READ "${_installed_http_protocol_plan_h2_request}"
+    _installed_http_protocol_plan_h2_request_text)
+file(READ "${_installed_http_protocol_plan_h2_response}"
+    _installed_http_protocol_plan_h2_response_text)
+file(READ "${_installed_http_protocol_plan_control}"
+    _installed_http_protocol_plan_control_text)
+file(READ "${_installed_http_protocol_plan_stream}"
+    _installed_http_protocol_plan_stream_text)
+if(NOT _installed_http_protocol_plan_range_text MATCHES
+       "resolved[(][)] const && = delete" OR
+   NOT _installed_http_protocol_plan_semantics_text MATCHES
+       "withContent[(][)] const && = delete" OR
+   NOT _installed_http_protocol_plan_write_text MATCHES
+       "contentSemantics[(][)] const && = delete" OR
+   NOT _installed_http_protocol_plan_h1_request_text MATCHES
+       "expectations[(][)] const && = delete" OR
+   NOT _installed_http_protocol_plan_h1_request_text MATCHES
+       "transferCodings[(][)] const && = delete" OR
+   NOT _installed_http_protocol_plan_h1_response_text MATCHES
+       "headPlan[(][)] const && = delete" OR
+   NOT _installed_http_protocol_plan_h2_request_text MATCHES
+       "streamingContent[(][)] const && = delete" OR
+   NOT _installed_http_protocol_plan_h2_response_text MATCHES
+       "forbiddenContentLength[(][)] const && = delete" OR
+   NOT _installed_http_protocol_plan_control_text MATCHES
+       "http2[(][)] const && = delete" OR
+   NOT _installed_http_protocol_plan_control_text MATCHES
+       "upgradeProtocols[(][)] const && = delete" OR
+   NOT _installed_http_protocol_plan_stream_text MATCHES
+       "bodyPlan[(][)] const && = delete")
+    message(FATAL_ERROR
+        "installed HTTP protocol plans expose internal storage from temporary owners")
+endif()
+
 set(_removed_http2_frame_umbrella
     "${_install_prefix}/include/ruvia/http/detail/http2/Http2Frame.h")
 if(EXISTS "${_removed_http2_frame_umbrella}")
