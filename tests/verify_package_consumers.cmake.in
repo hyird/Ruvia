@@ -762,6 +762,30 @@ if(EXISTS "${_installed_db_types_path}" OR
             "installed database owning values expose views from temporary owners")
     endif()
 endif()
+set(_installed_jwt_path
+    "${_install_prefix}/include/ruvia/web/auth/Jwt.h")
+if(EXISTS "${_installed_jwt_path}")
+    file(READ "${_installed_jwt_path}" _installed_jwt)
+    if(NOT _installed_jwt MATCHES
+           "name[(][)] const [&] noexcept" OR
+       NOT _installed_jwt MATCHES
+           "value[(][)] const && = delete" OR
+       NOT _installed_jwt MATCHES
+           "issuer[(][)] const [&] noexcept" OR
+       NOT _installed_jwt MATCHES
+           "subject[(][)] const && = delete" OR
+       NOT _installed_jwt MATCHES
+           "audience[(][)] const && = delete" OR
+       NOT _installed_jwt MATCHES
+           "id[(][)] const && = delete" OR
+       NOT _installed_jwt MATCHES
+           "claims[(][)] const [&] noexcept" OR
+       NOT _installed_jwt MATCHES
+           "claim[ \t\r\n]*[(][^)]*std::string_view[^)]*[)][ \t\r\n]*const && = delete")
+        message(FATAL_ERROR
+            "installed JWT owning values expose views from temporary owners")
+    endif()
+endif()
 file(READ
     "${_install_prefix}/include/ruvia/http/detail/HttpExpectations.h"
     _installed_http_expectations)

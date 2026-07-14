@@ -30,9 +30,9 @@ JwtPayload::JwtPayload(std::pmr::memory_resource* resource)
       id_(issuer_.get_allocator().resource()),
       claims_(issuer_.get_allocator().resource()) {}
 
-std::string_view JwtPayload::issuer() const noexcept { return issuer_; }
-std::string_view JwtPayload::subject() const noexcept { return subject_; }
-std::string_view JwtPayload::audience() const noexcept {
+std::string_view JwtPayload::issuer() const & noexcept { return issuer_; }
+std::string_view JwtPayload::subject() const & noexcept { return subject_; }
+std::string_view JwtPayload::audience() const & noexcept {
     return audiences_.empty() ? std::string_view{} : std::string_view(audiences_.front());
 }
 bool JwtPayload::hasAudience(std::string_view audience) const noexcept {
@@ -43,13 +43,16 @@ bool JwtPayload::hasAudience(std::string_view audience) const noexcept {
     }
     return false;
 }
-std::string_view JwtPayload::id() const noexcept { return id_; }
+std::string_view JwtPayload::id() const & noexcept { return id_; }
 std::optional<std::chrono::system_clock::time_point> JwtPayload::expiresAt() const noexcept { return expiresAt_; }
 std::optional<std::chrono::system_clock::time_point> JwtPayload::notBefore() const noexcept { return notBefore_; }
 std::optional<std::chrono::system_clock::time_point> JwtPayload::issuedAt() const noexcept { return issuedAt_; }
-std::span<const JwtClaim> JwtPayload::claims() const noexcept { return {claims_.data(), claims_.size()}; }
+std::span<const JwtClaim> JwtPayload::claims() const & noexcept {
+    return {claims_.data(), claims_.size()};
+}
 
-std::optional<std::string_view> JwtPayload::claim(std::string_view name) const noexcept {
+std::optional<std::string_view>
+JwtPayload::claim(std::string_view name) const & noexcept {
     for (const auto& item : claims_) {
         if (item.name() == name) {
             return item.value();

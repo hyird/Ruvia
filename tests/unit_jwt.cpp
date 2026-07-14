@@ -7,6 +7,7 @@
 #include <string>
 #include <string_view>
 #include <type_traits>
+#include <utility>
 
 #include "ruvia/web/auth/Jwt.h"
 #include "ruvia/web/detail/auth/JwtInternal.h"
@@ -28,6 +29,20 @@ static_assert(std::is_same_v<
 static_assert(std::is_same_v<
     decltype(JwtSignOptions{}.notBeforeDelay),
     std::optional<std::chrono::seconds>>);
+
+template <typename T>
+concept ExposesAnyRvalueJwtOwnedView =
+    requires(T&& value) { std::move(value).name(); } ||
+    requires(T&& value) { std::move(value).value(); } ||
+    requires(T&& value) { std::move(value).issuer(); } ||
+    requires(T&& value) { std::move(value).subject(); } ||
+    requires(T&& value) { std::move(value).audience(); } ||
+    requires(T&& value) { std::move(value).id(); } ||
+    requires(T&& value) { std::move(value).claims(); } ||
+    requires(T&& value) { std::move(value).claim(std::string_view{}); };
+
+static_assert(!ExposesAnyRvalueJwtOwnedView<ruvia::JwtClaim>);
+static_assert(!ExposesAnyRvalueJwtOwnedView<ruvia::JwtPayload>);
 
 JwtSignOptions signOptions(std::string_view secret) {
     JwtSignOptions options;
@@ -212,7 +227,8 @@ RUVIA_TEST(jwt_verify_enforces_time_claims) {
     RUVIA_CHECK(throwsOn([&] { (void)jwtVerify(tokenNoExp, verifyOptions("secret")); }));
     auto allowNoExp = verifyOptions("secret");
     allowNoExp.requireExpiration = false;
-    RUVIA_CHECK_EQ(jwtVerify(tokenNoExp, allowNoExp).subject(), std::string_view("user-1"));
+    const auto noExpPayload = jwtVerify(tokenNoExp, allowNoExp);
+    RUVIA_CHECK_EQ(noExpPayload.subject(), std::string_view("user-1"));
 
     auto expiresNow = signOptions("secret");
     expiresNow.expiresIn = std::chrono::seconds(0);
@@ -234,7 +250,8 @@ RUVIA_TEST(jwt_verify_enforces_time_claims) {
     RUVIA_CHECK(throwsOn([&] { (void)jwtVerify(tokenFuture, verifyOptions("secret")); }));
     auto lenient = verifyOptions("secret");
     lenient.leeway = std::chrono::seconds{7200};
-    RUVIA_CHECK_EQ(jwtVerify(tokenFuture, lenient).subject(), std::string_view("user-1"));
+    const auto futurePayload = jwtVerify(tokenFuture, lenient);
+    RUVIA_CHECK_EQ(futurePayload.subject(), std::string_view("user-1"));
 }
 
 RUVIA_TEST(jwt_time_options_reject_negative_offsets) {
@@ -261,7 +278,8 @@ RUVIA_TEST(jwt_verify_enforces_registered_claims) {
     auto ok = verifyOptions("secret");
     ok.issuer.assign("ruvia");
     ok.audience.assign("api");
-    RUVIA_CHECK_EQ(jwtVerify(token, ok).audience(), std::string_view("api"));
+    const auto verified = jwtVerify(token, ok);
+    RUVIA_CHECK_EQ(verified.audience(), std::string_view("api"));
 
     // A wrong expected issuer is rejected.
     auto badIssuer = verifyOptions("secret");
@@ -282,7 +300,8 @@ RUVIA_TEST(jwt_verify_supports_audience_array) {
 
     auto forApi = verifyOptions("secret");
     forApi.audience.assign("api");
-    RUVIA_CHECK_EQ(jwtVerify(multi, forApi).subject(), std::string_view("u"));
+    const auto apiPayload = jwtVerify(multi, forApi);
+    RUVIA_CHECK_EQ(apiPayload.subject(), std::string_view("u"));
     auto forWeb = verifyOptions("secret");
     forWeb.audience.assign("web");
     RUVIA_CHECK(jwtVerify(multi, forWeb).hasAudience("web"));
@@ -327,7 +346,8 @@ RUVIA_TEST(jwt_verify_supports_audience_array) {
         "secret", R"({"sub":"u","exp":4102444800,"aud":"api"})");
     auto wantApiSingle = verifyOptions("secret");
     wantApiSingle.audience.assign("api");
-    RUVIA_CHECK_EQ(jwtVerify(single, wantApiSingle).audience(), std::string_view("api"));
+    const auto singlePayload = jwtVerify(single, wantApiSingle);
+    RUVIA_CHECK_EQ(singlePayload.audience(), std::string_view("api"));
     auto wantOtherSingle = verifyOptions("secret");
     wantOtherSingle.audience.assign("other");
     RUVIA_CHECK(throwsOn([&] { (void)jwtVerify(single, wantOtherSingle); }));
@@ -339,12 +359,14 @@ RUVIA_TEST(jwt_epoch_seconds_saturates_instead_of_overflowing) {
     // claims); jwtFromEpochSeconds must saturate instead. A huge exp then reads as
     // far-future (not expired) and a huge nbf as far-future (not yet valid).
     const auto farExp = signedTokenWithPayload("secret", R"({"sub":"u","exp":99999999999})");
-    RUVIA_CHECK_EQ(jwtVerify(farExp, verifyOptions("secret")).subject(), std::string_view("u"));
+    const auto farExpPayload = jwtVerify(farExp, verifyOptions("secret"));
+    RUVIA_CHECK_EQ(farExpPayload.subject(), std::string_view("u"));
 
     // int64 max must not overflow the saturating conversion either.
     const auto maxExp = signedTokenWithPayload(
         "secret", R"({"sub":"u","exp":9223372036854775807})");
-    RUVIA_CHECK_EQ(jwtVerify(maxExp, verifyOptions("secret")).subject(), std::string_view("u"));
+    const auto maxExpPayload = jwtVerify(maxExp, verifyOptions("secret"));
+    RUVIA_CHECK_EQ(maxExpPayload.subject(), std::string_view("u"));
 
     using Clock = std::chrono::system_clock;
     RUVIA_CHECK(
@@ -387,7 +409,8 @@ RUVIA_TEST(jwt_verify_rejects_expired_token) {
     RUVIA_CHECK(throwsOn([&] { (void)jwtVerify(recentlyExpired, verifyOptions("secret")); }));
     auto lenient = verifyOptions("secret");
     lenient.leeway = std::chrono::seconds{3600};
-    RUVIA_CHECK_EQ(jwtVerify(recentlyExpired, lenient).subject(), std::string_view("user-1"));
+    const auto recentlyExpiredPayload = jwtVerify(recentlyExpired, lenient);
+    RUVIA_CHECK_EQ(recentlyExpiredPayload.subject(), std::string_view("user-1"));
 }
 
 RUVIA_TEST(jwt_exp_nbf_boundaries_follow_rfc7519) {
@@ -417,10 +440,12 @@ RUVIA_TEST(jwt_decode_unverified_reads_claims_without_authenticating) {
     // for a token whose signature has been corrupted, while jwtVerify rejects the
     // same token. Callers must never treat the unverified payload as trusted.
     const auto token = sign(signOptions("secret"));
-    RUVIA_CHECK_EQ(ruvia::jwtDecodeUnverified(token).subject(), std::string_view("user-1"));
+    const auto decoded = ruvia::jwtDecodeUnverified(token);
+    RUVIA_CHECK_EQ(decoded.subject(), std::string_view("user-1"));
 
     std::string forged = token.substr(0, token.rfind('.') + 1) + "corruptedsignature";
-    RUVIA_CHECK_EQ(ruvia::jwtDecodeUnverified(forged).subject(), std::string_view("user-1"));
+    const auto decodedForged = ruvia::jwtDecodeUnverified(forged);
+    RUVIA_CHECK_EQ(decodedForged.subject(), std::string_view("user-1"));
     RUVIA_CHECK(throwsOn([&] { (void)jwtVerify(forged, verifyOptions("secret")); }));
 }
 

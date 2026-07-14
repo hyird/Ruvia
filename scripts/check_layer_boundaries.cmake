@@ -8855,6 +8855,51 @@ if(EXISTS "${WEB_JWT_JSON}" AND EXISTS "${WEB_JWT_TEST}")
     endif()
 endif()
 
+set(WEB_JWT_PUBLIC "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/auth/Jwt.h")
+set(WEB_JWT_SOURCE "${RUVIA_ROOT}/ruvia-web/src/auth/Jwt.cpp")
+set(WEB_JWT_CONSUMER "${RUVIA_ROOT}/tests/package-consumer/web.cpp")
+foreach(jwt_owned_view_contract IN ITEMS
+        "${WEB_JWT_PUBLIC}"
+        "${WEB_JWT_SOURCE}"
+        "${WEB_JWT_TEST}"
+        "${WEB_JWT_CONSUMER}")
+    if(NOT EXISTS "${jwt_owned_view_contract}")
+        file(RELATIVE_PATH relative "${RUVIA_ROOT}"
+            "${jwt_owned_view_contract}")
+        boundary_error("JWT owned-view lifetime contract is incomplete"
+            "${relative} is required")
+    endif()
+endforeach()
+if(EXISTS "${WEB_JWT_PUBLIC}" AND
+   EXISTS "${WEB_JWT_SOURCE}" AND
+   EXISTS "${WEB_JWT_TEST}" AND
+   EXISTS "${WEB_JWT_CONSUMER}")
+    file(READ "${WEB_JWT_PUBLIC}" web_jwt_public)
+    file(READ "${WEB_JWT_SOURCE}" web_jwt_source)
+    file(READ "${WEB_JWT_TEST}" web_jwt_owned_view_test)
+    file(READ "${WEB_JWT_CONSUMER}" web_jwt_owned_view_consumer)
+    if(NOT web_jwt_public MATCHES "name[(][)] const [&] noexcept" OR
+       NOT web_jwt_public MATCHES "value[(][)] const && = delete" OR
+       NOT web_jwt_public MATCHES "issuer[(][)] const [&] noexcept" OR
+       NOT web_jwt_public MATCHES "subject[(][)] const && = delete" OR
+       NOT web_jwt_public MATCHES "audience[(][)] const && = delete" OR
+       NOT web_jwt_public MATCHES "id[(][)] const && = delete" OR
+       NOT web_jwt_public MATCHES "claims[(][)] const [&] noexcept" OR
+       NOT web_jwt_public MATCHES
+           "claim[ \t\r\n]*[(][^)]*std::string_view[^)]*[)][ \t\r\n]*const && = delete" OR
+       NOT web_jwt_source MATCHES "JwtPayload::issuer[(][)] const [&] noexcept" OR
+       NOT web_jwt_source MATCHES "JwtPayload::claims[(][)] const [&] noexcept" OR
+       NOT web_jwt_source MATCHES
+           "JwtPayload::claim[(][^)]*std::string_view[^)]*[)] const [&] noexcept" OR
+       NOT web_jwt_owned_view_test MATCHES
+           "ExposesAnyRvalueJwtOwnedView" OR
+       NOT web_jwt_owned_view_consumer MATCHES
+           "ExposesAnyRvalueJwtOwnedView")
+        boundary_error("JWT owning values expose views from temporary owners"
+            "claims and decoded payloads must lend owner-backed strings and spans only from live lvalues")
+    endif()
+endif()
+
 set(HTTP2_CLEARTEXT_DRIVER
     "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/server/HttpServerCleartextHttp2.h")
 set(HTTP2_SANSIO_SESSION

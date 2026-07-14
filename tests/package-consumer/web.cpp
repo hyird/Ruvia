@@ -71,12 +71,25 @@ static_assert(std::is_move_constructible_v<ruvia::RequestNameValueList>);
 static_assert(!std::is_move_assignable_v<ruvia::RequestNameValueList>);
 
 #ifdef RUVIA_ENABLE_JWT
+template <typename T>
+concept ExposesAnyRvalueJwtOwnedView =
+    requires(T&& value) { std::move(value).name(); } ||
+    requires(T&& value) { std::move(value).value(); } ||
+    requires(T&& value) { std::move(value).issuer(); } ||
+    requires(T&& value) { std::move(value).subject(); } ||
+    requires(T&& value) { std::move(value).audience(); } ||
+    requires(T&& value) { std::move(value).id(); } ||
+    requires(T&& value) { std::move(value).claims(); } ||
+    requires(T&& value) { std::move(value).claim(std::string_view{}); };
+
 static_assert(std::same_as<
     decltype(ruvia::JwtSignOptions{}.expiresIn),
     std::optional<std::chrono::seconds>>);
 static_assert(std::same_as<
     decltype(ruvia::JwtSignOptions{}.notBeforeDelay),
     std::optional<std::chrono::seconds>>);
+static_assert(!ExposesAnyRvalueJwtOwnedView<ruvia::JwtClaim>);
+static_assert(!ExposesAnyRvalueJwtOwnedView<ruvia::JwtPayload>);
 #endif
 
 #ifdef RUVIA_ENABLE_DATABASE
