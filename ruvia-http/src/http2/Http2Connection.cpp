@@ -34,6 +34,14 @@ constexpr std::uint32_t kHttp2MaxUndrainedPings = 1000;
 // the same output drains; a peer legitimately re-tuning SETTINGS mid-connection sends only
 // a handful and never trips.
 constexpr std::uint32_t kHttp2MaxUndrainedSettings = 1000;
+// Closed-stream RST flood: DATA aimed at a non-live, non-idle stream is answered with an
+// RST_STREAM(STREAM_CLOSED) into the outbound buffer, and a peer can keep aiming DATA at
+// the same already-closed id forever. Same undrained-output-accumulation family as the
+// PING/SETTINGS floods. Reset on the same output drains, so legitimate in-flight DATA that
+// arrives after we closed a stream (bounded by the flow-control window and flushed as
+// output drains) never accumulates to the limit; only a peer that both floods and refuses
+// to read our output trips.
+constexpr std::uint32_t kHttp2MaxUndrainedClosedStreamResets = 1000;
 
 }  // namespace
 
@@ -70,6 +78,7 @@ Http2OutputConsumeStatus Http2Connection::consumeOutput(
     if (status == Http2OutputConsumeStatus::kDrained) {
         consecutivePings_ = 0;  // outbound (incl. PING ACKs) fully flushed
         consecutiveSettings_ = 0;  // outbound (incl. SETTINGS ACKs) fully flushed
+        consecutiveClosedStreamResets_ = 0;  // outbound (incl. those RSTs) fully flushed
     }
     return status;
 }
@@ -77,6 +86,7 @@ Http2OutputConsumeStatus Http2Connection::consumeOutput(
 void Http2Connection::takeOutput(std::pmr::string& into) {
     consecutivePings_ = 0;  // outbound (incl. PING ACKs) is being flushed
     consecutiveSettings_ = 0;  // outbound (incl. SETTINGS ACKs) is being flushed
+    consecutiveClosedStreamResets_ = 0;  // outbound (incl. those RSTs) is being flushed
     output_.take(into);
 }
 
@@ -743,6 +753,13 @@ bool Http2Connection::processData(const Http2FrameHeader& header, std::string_vi
             return true;
         }
         if (!isIdleStreamId(header.streamId)) {
+            // A peer can aim DATA at the same already-closed stream forever; each answer
+            // is an RST_STREAM appended to output. Bound them like the PING/SETTINGS
+            // floods so an unread peer cannot grow output without limit.
+            if (++consecutiveClosedStreamResets_ > kHttp2MaxUndrainedClosedStreamResets) {
+                appendGoaway(Http2ErrorCode::kEnhanceYourCalm, "excessive closed-stream DATA");
+                return false;
+            }
             output_.appendRstStream(header.streamId, Http2ErrorCode::kStreamClosed);
             releaseDroppedDataConnectionWindow(flowBytes);
             return true;

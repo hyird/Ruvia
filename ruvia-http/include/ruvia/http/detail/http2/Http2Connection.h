@@ -784,6 +784,7 @@ private:
     std::uint32_t completedResponses_{0};  // streams finished without reset (refills budget)
     std::uint32_t consecutivePings_{0};    // inbound PINGs since output was last drained
     std::uint32_t consecutiveSettings_{0}; // inbound non-ACK SETTINGS since output drained
+    std::uint32_t consecutiveClosedStreamResets_{0};  // closed-stream DATA RSTs since drain
 };
 
 }  // namespace ruvia::detail

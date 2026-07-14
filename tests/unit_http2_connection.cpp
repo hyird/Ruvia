@@ -4317,6 +4317,68 @@ RUVIA_TEST(http2_connection_drained_settings_never_trip) {
     }
 }
 
+namespace {
+// Open stream 1 and let the peer RST it, leaving it a tracked closed (non-idle,
+// non-GOAWAY) stream that answers further DATA with RST_STREAM.
+void openThenPeerReset(Http2Connection& conn, std::pmr::memory_resource* resource) {
+    std::pmr::string block(resource);
+    encodeGetRequest(block);
+    const auto head = headersFrame(
+        resource, 1,
+        ruvia::detail::kHttp2FlagEndHeaders | ruvia::detail::kHttp2FlagEndStream,
+        std::string_view(block.data(), block.size()));
+    (void)conn.feed(std::string_view(head.data(), head.size()));
+    while (conn.nextEvent().has_value()) {
+    }
+    char rst[9 + 4];
+    ruvia::detail::http2EncodeFrameHeader(rst, 4, Http2FrameType::kRstStream, 0, 1);
+    ruvia::detail::http2Write32(rst + 9, 0);
+    (void)conn.feed(std::string_view(rst, sizeof(rst)));
+    while (conn.nextEvent().has_value()) {
+    }
+    conn.consumeOutput(conn.pendingOutput().size());  // flush + reset the flood budgets
+}
+}  // namespace
+
+// A peer that keeps aiming DATA at the SAME already-closed stream forces an RST_STREAM
+// into the outbound buffer each time. Without draining, that grows output unboundedly;
+// the closed-stream RST budget cuts the peer off with GOAWAY(ENHANCE_YOUR_CALM).
+RUVIA_TEST(http2_connection_closed_stream_data_flood_trips_enhance_your_calm) {
+    std::pmr::monotonic_buffer_resource resource;
+    Http2Connection conn(&resource);
+    handshake(conn);
+    openThenPeerReset(conn, &resource);
+
+    // Empty DATA (zero flow bytes) isolates the RST amplification from flow control.
+    const auto data = dataFrame(&resource, 1, 0, {});
+    bool tripped = false;
+    for (int i = 0; i < 1200 && !tripped; ++i) {
+        tripped = conn.feed(std::string_view(data.data(), data.size())) ==
+                  ruvia::detail::Http2FeedResult::kProtocolFailure;
+    }
+    RUVIA_CHECK(tripped);
+    RUVIA_CHECK(conn.connectionError().has_value());
+    RUVIA_CHECK_EQ(firstGoawayError(conn.pendingOutput()), kEnhanceYourCalm);
+}
+
+// The same closed-stream DATA, but with output drained each round (as the real writer
+// does), models legitimate in-flight DATA arriving after a close: the RSTs flush and the
+// budget resets, so it never trips however long the peer keeps sending.
+RUVIA_TEST(http2_connection_drained_closed_stream_data_never_trips) {
+    std::pmr::monotonic_buffer_resource resource;
+    Http2Connection conn(&resource);
+    handshake(conn);
+    openThenPeerReset(conn, &resource);
+
+    const auto data = dataFrame(&resource, 1, 0, {});
+    for (int i = 0; i < 5000; ++i) {
+        const auto r = conn.feed(std::string_view(data.data(), data.size()));
+        RUVIA_CHECK(r != ruvia::detail::Http2FeedResult::kProtocolFailure);
+        conn.consumeOutput(conn.pendingOutput().size());  // flush RST -> resets budget
+        RUVIA_CHECK(!conn.connectionError().has_value());
+    }
+}
+
 // A rapid-reset flood (open a stream, RST it, repeat -- never letting a response finish)
 // is cut off with GOAWAY(ENHANCE_YOUR_CALM); the 128-stream cap alone never trips because
 // each RST immediately frees the slot (CVE-2023-44487).
