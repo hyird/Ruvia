@@ -27,7 +27,15 @@ struct TlsConfig final {
     std::filesystem::path certificateChainFile;
     std::filesystem::path privateKeyFile;
     std::pmr::string privateKeyPassword;
+    // A CA bundle used to verify a client certificate when one is presented. On
+    // its own this enables OPTIONAL mutual TLS: a client with no certificate is
+    // still accepted (its identity is surfaced empty via getConnInfo), while a
+    // presented-but-untrusted certificate fails the handshake.
     std::filesystem::path verifyFile;
+    // Require the client to present a certificate that verifyFile trusts, failing
+    // the TLS handshake otherwise (mandatory mutual TLS). Has no effect without
+    // verifyFile. Defaults false to preserve the optional-mTLS behavior above.
+    bool requireClientCertificate{false};
 };
 
 // Canonical startup values shared by App setters and every worker's server

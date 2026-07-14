@@ -1,5 +1,7 @@
 #include "ruvia/web/detail/server/HttpServer.h"
 
+#include "ruvia/web/detail/server/HttpServerTlsVerify.h"
+
 #include <asio/co_spawn.hpp>
 #include <asio/detached.hpp>
 #include <asio/post.hpp>
@@ -312,7 +314,8 @@ void HttpServer::configureTlsContext() {
         usePrivateKeyFile(context, privateKeyFile);
         if (!options_.tls.verifyFile.empty()) {
             loadVerifyFile(context, options_.tls.verifyFile);
-            context.set_verify_mode(asio::ssl::verify_peer);
+            context.set_verify_mode(
+                httpServerTlsVerifyMode(options_.tls.requireClientCertificate));
         }
     };
 

@@ -28,6 +28,14 @@ Task<void> detail::MariaDbPool::connectUnlocked(ConnectionSlot& slot) {
         slot.waitSocket = detail::makePmrObject<detail::DbSlotSocket>(resource_, ioContext_);
         constexpr std::size_t kMysqlAsyncStackBytes = 1024 * 1024;
         (void)mysql_options(slot.connection, MYSQL_OPT_NONBLOCK, &kMysqlAsyncStackBytes);
+        // Pin the connection charset before connecting. mysql_real_escape_string --
+        // the interpolateSql injection defense -- escapes according to the
+        // connection charset, and is bypassable on multibyte charsets where a valid
+        // character can end in 0x5C (GBK/Big5/SJIS, the classic backslash-swallowing
+        // injection). utf8mb4 keeps 0x5C meaning only backslash, so escaping stays
+        // safe regardless of the server or client library default, and it carries
+        // full Unicode. Set here (not via SET NAMES) so it also governs the handshake.
+        (void)mysql_options(slot.connection, MYSQL_SET_CHARSET_NAME, "utf8mb4");
         detail::setMysqlTimeout(*slot.connection, MYSQL_OPT_CONNECT_TIMEOUT, config_.connectTimeout);
         detail::setMysqlTimeout(*slot.connection, MYSQL_OPT_READ_TIMEOUT, config_.readTimeout);
         detail::setMysqlTimeout(*slot.connection, MYSQL_OPT_WRITE_TIMEOUT, config_.writeTimeout);
