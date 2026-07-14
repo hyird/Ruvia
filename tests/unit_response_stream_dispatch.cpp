@@ -36,6 +36,7 @@ using ruvia::Task;
 using ruvia::detail::ControllerMiddlewareDescriptor;
 using ruvia::detail::HttpRequestAccess;
 using ruvia::detail::ResponseStreamCommitPlan;
+using ruvia::detail::ResponseStreamBufferedOutcome;
 using ruvia::detail::ResponseStreamCommittedOutcome;
 using ruvia::detail::ResponseStreamDispatchResult;
 using ruvia::detail::ResponseStreamFraming;
@@ -54,6 +55,11 @@ concept HasLegacySharedResponseTake = requires(Result& result) {
 };
 
 template <typename Result>
+concept HasLegacyBufferedFailureFlag = requires(const Result& result) {
+    { result.failed() } -> std::same_as<bool>;
+};
+
+template <typename Result>
 concept HasAnyRvalueResponseStreamDispatchBorrow =
     requires(Result&& value) { std::move(value).committed(); } ||
     requires(Result&& value) { std::move(value).peerAbortedBeforeCommit(); } ||
@@ -64,6 +70,12 @@ static_assert(!HasAnyRvalueResponseStreamDispatchBorrow<
     ResponseStreamDispatchResult>);
 static_assert(!HasLegacyStreamedPredicate<ResponseStreamDispatchResult>);
 static_assert(!HasLegacySharedResponseTake<ResponseStreamDispatchResult>);
+static_assert(!HasLegacyBufferedFailureFlag<
+    ruvia::detail::ResponseStreamBuffered>);
+static_assert(std::same_as<
+    decltype(std::declval<const ruvia::detail::ResponseStreamBuffered&>()
+                 .outcome()),
+    ResponseStreamBufferedOutcome>);
 static_assert(std::same_as<
     decltype(std::declval<const ResponseStreamDispatchResult&>().committed()),
     const ruvia::detail::ResponseStreamCommitted*>);
@@ -305,19 +317,21 @@ RUVIA_TEST(response_stream_dispatch_preserves_committed_failure_status) {
     }
 }
 
-RUVIA_TEST(response_stream_dispatch_groups_precommit_failure_with_response) {
+RUVIA_TEST(response_stream_dispatch_types_precommit_failure_response) {
     HttpResponse response(std::pmr::get_default_resource());
     response.status(502);
     auto result = ResponseStreamDispatchResult::makeBuffered(
         std::move(response),
-        true);
+        ResponseStreamBufferedOutcome::kRecoveredFailure);
 
     auto* buffered = result.buffered();
     RUVIA_CHECK(buffered != nullptr);
     RUVIA_CHECK(result.committed() == nullptr);
     RUVIA_CHECK(result.peerAbortedBeforeCommit() == nullptr);
     if (buffered != nullptr) {
-        RUVIA_CHECK(buffered->failed());
+        RUVIA_CHECK(
+            buffered->outcome() ==
+            ResponseStreamBufferedOutcome::kRecoveredFailure);
         const auto recovered = std::move(*buffered).takeResponse();
         RUVIA_CHECK_EQ(recovered.status(), std::uint16_t{502});
     }

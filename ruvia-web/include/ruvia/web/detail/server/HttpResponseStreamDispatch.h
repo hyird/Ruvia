@@ -114,10 +114,16 @@ private:
     constexpr ResponseStreamPeerAbortedBeforeCommit() noexcept = default;
 };
 
+enum class ResponseStreamBufferedOutcome : std::uint8_t {
+    kRouteResult,
+    kRecoveredFailure
+};
+
 class ResponseStreamBuffered final {
 public:
-    [[nodiscard]] constexpr bool failed() const noexcept {
-        return failed_;
+    [[nodiscard]] constexpr ResponseStreamBufferedOutcome
+    outcome() const noexcept {
+        return outcome_;
     }
 
     [[nodiscard]] HttpResponse takeResponse() && noexcept {
@@ -129,12 +135,12 @@ private:
 
     ResponseStreamBuffered(
         HttpResponse response,
-        bool failed) noexcept
+        ResponseStreamBufferedOutcome outcome) noexcept
         : response_(std::move(response)),
-          failed_(failed) {}
+          outcome_(outcome) {}
 
     HttpResponse response_;
-    bool failed_;
+    ResponseStreamBufferedOutcome outcome_;
 };
 
 // The primary alternatives follow the commit boundary because it determines
@@ -157,9 +163,9 @@ public:
 
     [[nodiscard]] static ResponseStreamDispatchResult makeBuffered(
         HttpResponse response,
-        bool failed) noexcept {
+        ResponseStreamBufferedOutcome outcome) noexcept {
         return ResponseStreamDispatchResult(
-            ResponseStreamBuffered(std::move(response), failed));
+            ResponseStreamBuffered(std::move(response), outcome));
     }
 
     [[nodiscard]] const ResponseStreamCommitted*
@@ -256,7 +262,7 @@ Task<ResponseStreamDispatchResult> dispatchResponseStreamWith(
         }
         co_return ResponseStreamDispatchResult::makeBuffered(
             std::move(*result),
-            false);
+            ResponseStreamBufferedOutcome::kRouteResult);
     } catch (...) {
         exception = std::current_exception();
     }
@@ -283,7 +289,7 @@ Task<ResponseStreamDispatchResult> dispatchResponseStreamWith(
         request, requestMemory, exception, services);
     co_return ResponseStreamDispatchResult::makeBuffered(
         std::move(response),
-        true);
+        ResponseStreamBufferedOutcome::kRecoveredFailure);
 }
 
 }  // namespace ruvia::detail

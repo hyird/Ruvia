@@ -1098,8 +1098,8 @@ static_assert(std::same_as<
     ruvia::detail::ResponseStreamCommittedOutcome>);
 static_assert(std::same_as<
     decltype(std::declval<const ruvia::detail::
-        ResponseStreamBuffered&>().failed()),
-    bool>);
+        ResponseStreamBuffered&>().outcome()),
+    ruvia::detail::ResponseStreamBufferedOutcome>);
 static_assert(std::same_as<
     decltype(std::declval<const ruvia::detail::ResponseStreamState&>()
                  .commitPlan()),

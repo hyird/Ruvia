@@ -3895,6 +3895,10 @@ if(EXISTS "${HTTP_RESPONSE_STREAM_COMMIT_PLAN}" AND
        NOT web_response_stream_dispatch_result MATCHES
            "class ResponseStreamBuffered final" OR
        NOT web_response_stream_dispatch_result MATCHES
+           "enum class ResponseStreamBufferedOutcome" OR
+       NOT web_response_stream_dispatch_result MATCHES
+           "ResponseStreamBufferedOutcome[ \t\r\n]+outcome[(][)] const noexcept" OR
+       web_response_stream_dispatch_result MATCHES
            "bool failed[(][)] const noexcept" OR
        NOT web_response_stream_dispatch_result MATCHES
            "committedResponseStreamStatus" OR
@@ -3913,7 +3917,7 @@ if(EXISTS "${HTTP_RESPONSE_STREAM_COMMIT_PLAN}" AND
        NOT web_http1_response_stream_route MATCHES
            "committed->outcome[(][)]")
         boundary_error("Web response-stream outcomes restored a status/payload tuple"
-            "handled, buffered, committed, pre-commit abort, and committed failure must remain exclusive alternatives")
+            "handled, buffered, committed, and pre-commit abort outcomes must remain discriminated; buffered exception recovery must not cross into HTTP/1 as a boolean")
     endif()
 
     if(NOT web_http1_session_request_completion MATCHES
@@ -3969,7 +3973,9 @@ if(EXISTS "${HTTP_RESPONSE_STREAM_COMMIT_PLAN}" AND
        NOT response_stream_status_test MATCHES
            "response_stream_dispatch_preserves_committed_failure_status" OR
        NOT response_stream_status_test MATCHES
-           "response_stream_dispatch_groups_precommit_failure_with_response" OR
+           "response_stream_dispatch_types_precommit_failure_response" OR
+       NOT response_stream_status_test MATCHES
+           "ResponseStreamBufferedOutcome::kRecoveredFailure" OR
        NOT http1_session_completion_test MATCHES
            "http1_session_request_completion_owns_wire_and_buffer_outcome" OR
        NOT http1_session_completion_test MATCHES

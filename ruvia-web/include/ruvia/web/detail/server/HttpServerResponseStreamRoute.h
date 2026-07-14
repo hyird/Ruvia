@@ -64,10 +64,11 @@ Task<Http1SessionRequestCompletion> dispatchHttpResponseStreamRoute(
             "HTTP/1 response stream reported an impossible peer-abort predicate");
     }
     if (auto* buffered = result.buffered()) {
-        const auto failed = buffered->failed();
+        const auto bufferedOutcome = buffered->outcome();
         response = std::move(*buffered).takeResponse();
         scannerEntry.touch();
-        if (failed) {
+        if (bufferedOutcome ==
+            ResponseStreamBufferedOutcome::kRecoveredFailure) {
             connectionPlan = requireHttp1FinalResponseCommit(
                 response,
                 streamPlan.requestConnectionPlan().requireClose());
