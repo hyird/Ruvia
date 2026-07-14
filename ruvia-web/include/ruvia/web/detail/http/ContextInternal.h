@@ -30,6 +30,7 @@ inline Context::Context(
     : memory_(memory),
       request_(request),
       connInfo_(services.connInfo()),
+      worker_(services.worker()),
       routePath_(routePath),
       routeMethod_(routeMethod),
       paramNames_(paramNames),

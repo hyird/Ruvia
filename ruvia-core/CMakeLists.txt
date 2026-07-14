@@ -2,6 +2,11 @@ add_library(ruvia-core
     ${CMAKE_CURRENT_SOURCE_DIR}/src/MemoryPool.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/MimallocOverride.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/ConnectionScanner.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/Runtime.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/TaskScope.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/Timer.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/WorkerDispatcher.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/WorkerHandle.cpp
 )
 add_library(ruvia::core ALIAS ruvia-core)
 
@@ -25,6 +30,12 @@ ruvia_install_target(ruvia-core core)
 ruvia_install_public_headers(core
     include/ruvia/core/version.h
     include/ruvia/core/Task.h
+    include/ruvia/core/Channel.h
+    include/ruvia/core/OneShot.h
+    include/ruvia/core/TaskScope.h
+    include/ruvia/core/Timer.h
+    include/ruvia/core/Runtime.h
+    include/ruvia/core/WorkerHandle.h
     include/ruvia/core/memory/MemoryPool.h
     include/ruvia/core/memory/PmrObject.h
     include/ruvia/core/memory/PmrResource.h

@@ -7,8 +7,7 @@ void WebSocketConnection<Transport>::completeBackgroundWrite() noexcept {
     if (backgroundWriteCount_ > 0) {
         --backgroundWriteCount_;
     }
-    std::error_code ignored;
-    backgroundWriteTimer_.cancel(ignored);
+    backgroundWriteSignal_.notify();
 }
 
 template <typename Transport>

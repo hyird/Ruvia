@@ -4,6 +4,7 @@
 #include "ruvia/web/ErrorHandlers.h"
 #include "ruvia/web/detail/http/ContextCapabilities.h"
 #include "ruvia/http/HttpLimits.h"
+#include "ruvia/core/WorkerHandle.h"
 
 #include <cstddef>
 #include <string>
@@ -25,11 +26,13 @@ public:
         RedisRegistry* redis,
         RateLimiter* rateLimiter = nullptr,
         std::size_t maxDecodedBodyBytes =
-            kDefaultMaxBufferedBodyBytes) noexcept
+            kDefaultMaxBufferedBodyBytes,
+        const WorkerHandle* worker = nullptr) noexcept
         : db_(db),
           redis_(redis),
           rateLimiter_(rateLimiter),
           maxDecodedBodyBytes_(maxDecodedBodyBytes),
+          worker_(worker),
           connInfo_(ConnInfo::plain({})) {}
 
     [[nodiscard]] DbRegistry* db() const noexcept {
@@ -46,6 +49,10 @@ public:
 
     [[nodiscard]] constexpr std::size_t maxDecodedBodyBytes() const noexcept {
         return maxDecodedBodyBytes_;
+    }
+
+    [[nodiscard]] const WorkerHandle* worker() const noexcept {
+        return worker_;
     }
 
     [[nodiscard]] HttpErrorHandler errorHandler() const noexcept {
@@ -146,6 +153,7 @@ private:
     RedisRegistry* redis_{nullptr};
     RateLimiter* rateLimiter_{nullptr};
     std::size_t maxDecodedBodyBytes_{kDefaultMaxBufferedBodyBytes};
+    const WorkerHandle* worker_{nullptr};
     HttpErrorHandler errorHandler_{nullptr};
     HttpNotFoundHandler notFoundHandler_{nullptr};
 

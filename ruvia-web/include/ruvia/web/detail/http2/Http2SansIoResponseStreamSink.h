@@ -24,8 +24,6 @@
 #include <string_view>
 #include <system_error>
 
-#include <asio/steady_timer.hpp>
-
 #include "ruvia/http/detail/http2/Http2Connection.h"
 #include "ruvia/http/detail/server/HttpResponseTrailers.h"
 #include "ruvia/web/detail/http2/Http2SansIoStreamRuntime.h"
@@ -33,6 +31,8 @@
 #include "ruvia/web/detail/server/HttpResponseStreamState.h"
 #include "ruvia/core/detail/AsioAwait.h"
 #include "ruvia/core/Task.h"
+#include "ruvia/core/Timer.h"
+#include "ruvia/core/detail/WorkerSignal.h"
 #include "ruvia/http/detail/PmrString.h"
 
 namespace ruvia {
@@ -50,13 +50,15 @@ public:
         ResponseStreamKind kind,
         std::pmr::memory_resource* resource,
         Executor executor,
-        asio::steady_timer& writeSignal,
+        WorkerHandle worker,
+        WorkerSignal& writeSignal,
         Http2SansIoStreamSignal& streamSignal) noexcept
         : connection_(connection),
           streamId_(streamId),
           kind_(kind),
           scratch_(resource),
-          executor_(executor),
+          executor_(std::move(executor)),
+          worker_(std::move(worker)),
           writeSignal_(writeSignal),
           streamSignal_(streamSignal) {}
 
@@ -116,13 +118,7 @@ public:
     }
 
     Task<void> sleep(std::chrono::milliseconds duration) {
-        asio::steady_timer timer(executor_, duration);
-        const auto ec = co_await asyncError([&timer](auto handler) mutable {
-            timer.async_wait(std::move(handler));
-        });
-        if (ec) {
-            throw std::system_error(ec);
-        }
+        co_await sleepFor(worker_, duration);
     }
 
     Task<void> end(std::span<const HttpHeaderView> trailers) {
@@ -202,8 +198,7 @@ private:
     // this, output produced between inbound frames sits in the core's buffer until
     // the peer happens to send something (SSE over a quiet connection stalls).
     void wakeWriter() noexcept {
-        asio::error_code ignored;
-        writeSignal_.cancel(ignored);
+        writeSignal_.notify();
     }
 
     // Park until the reader reports the window-blocked remainder drained. A spurious
@@ -229,7 +224,8 @@ private:
     ResponseStreamState state_;
     std::pmr::string scratch_;
     Executor executor_;
-    asio::steady_timer& writeSignal_;
+    WorkerHandle worker_;
+    WorkerSignal& writeSignal_;
     Http2SansIoStreamSignal& streamSignal_;
 };
 

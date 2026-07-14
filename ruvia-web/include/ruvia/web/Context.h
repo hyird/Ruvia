@@ -16,6 +16,7 @@
 #include <vector>
 
 #include "ruvia/core/Task.h"
+#include "ruvia/core/WorkerHandle.h"
 #include "ruvia/http/Cookies.h"
 #include "ruvia/http/HttpHeader.h"
 #include "ruvia/http/HttpKnownMethod.h"
@@ -217,6 +218,10 @@ public:
 
     [[nodiscard]] std::exception_ptr error() const noexcept {
         return error_;
+    }
+
+    [[nodiscard]] WorkerHandle worker() const noexcept {
+        return worker_ == nullptr ? WorkerHandle{} : *worker_;
     }
 
     // Server-side session blob (persisted by a SessionMiddleware via Redis; the
@@ -731,6 +736,7 @@ private:
     RequestMemory& memory_;
     const HttpRequest& request_;
     ConnInfo connInfo_;
+    const WorkerHandle* worker_{nullptr};
     std::string_view routePath_;
     HttpKnownMethod routeMethod_{HttpKnownMethod::kUnknown};
     const std::string_view* paramNames_{nullptr};

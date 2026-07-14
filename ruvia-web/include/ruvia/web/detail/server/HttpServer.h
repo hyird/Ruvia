@@ -4,7 +4,6 @@
 #include <asio/io_context.hpp>
 #include <asio/ip/tcp.hpp>
 #include <asio/ssl/context.hpp>
-#include <asio/steady_timer.hpp>
 #include <condition_variable>
 #include <cstdint>
 #include <exception>
@@ -20,6 +19,8 @@
 #include <vector>
 
 #include "ruvia/core/Task.h"
+#include "ruvia/core/WorkerHandle.h"
+#include "ruvia/core/detail/WorkerTimer.h"
 #include "ruvia/core/memory/MemoryPool.h"
 #include "ruvia/core/detail/ConnectionScanner.h"
 #include "ruvia/http/HttpRequest.h"
@@ -35,6 +36,7 @@ namespace ruvia::detail {
 
 class ContextServices;
 class RouteTable;
+class WorkerDispatcher;
 
 using SniContextStore = std::pmr::vector<asio::ssl::context>;
 using SniContextLookup = std::pmr::vector<std::pair<std::pmr::string, asio::ssl::context*>>;
@@ -61,6 +63,7 @@ public:
     void stop();
     void join();
     [[nodiscard]] asio::ip::tcp::endpoint localEndpoint() const;
+    [[nodiscard]] WorkerHandle worker() const noexcept { return workerHandle_; }
 private:
     enum class LifecycleState : std::uint8_t {
         kFresh,
@@ -106,8 +109,10 @@ private:
         RequestMemory& memory) const;
 
     asio::io_context ioContext_;
+    std::shared_ptr<WorkerDispatcher> workerDispatcher_;
+    WorkerHandle workerHandle_;
     asio::ip::tcp::acceptor acceptor_;
-    asio::steady_timer drainTimer_;
+    WorkerTimerRegistration drainTimer_;
     std::optional<asio::ssl::context> tlsContext_;
     asio::ip::tcp::endpoint endpoint_;
     const RouteTable& routes_;

@@ -24,15 +24,14 @@ Http2BufferedResponseWriter::Http2BufferedResponseWriter(
     Http2Connection& connection,
     Http2SansIoStreamRuntimeTable& streamRuntimes,
     WorkerMemory& worker,
-    asio::steady_timer& writeSignal) noexcept
+    WorkerSignal& writeSignal) noexcept
     : connection_(&connection),
       streamRuntimes_(&streamRuntimes),
       worker_(&worker),
       writeSignal_(&writeSignal) {}
 
 void Http2BufferedResponseWriter::wakeWriter() noexcept {
-    asio::error_code ignored;
-    writeSignal_->cancel(ignored);
+    writeSignal_->notify();
 }
 
 Task<bool> Http2BufferedResponseWriter::awaitSendWindow(

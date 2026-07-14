@@ -11,6 +11,7 @@
 #include "ruvia/web/detail/server/HttpResponseStreamState.h"
 #include "ruvia/web/detail/server/HttpServerResponseState.h"
 #include "ruvia/core/Task.h"
+#include "ruvia/core/Timer.h"
 #include "ruvia/web/Context.h"
 #include "ruvia/http/detail/PmrString.h"
 #include "ruvia/core/memory/MemoryPool.h"
@@ -38,6 +39,7 @@ public:
         WorkerMemory& memory,
         ResponseHeadBuffer& head,
         ScannerEntry& scannerEntry,
+        WorkerHandle worker,
         ResponseStreamKind kind,
         Http1ResponseStreamPlan plan) noexcept
         : stream_(stream),
@@ -45,6 +47,7 @@ public:
           scratch_(memory.resource()),
           trailers_(memory.resource()),
           scannerEntry_(scannerEntry),
+          worker_(std::move(worker)),
           kind_(kind),
           plan_(plan),
           connectionPlan_(plan.requestConnectionPlan().requireClose()) {}
@@ -126,13 +129,7 @@ private:
     }
 
     Task<void> sleep(std::chrono::milliseconds duration) {
-        asio::steady_timer timer(stream_.get_executor(), duration);
-        const auto ec = co_await asyncError([&timer](auto handler) mutable {
-            timer.async_wait(std::move(handler));
-        });
-        if (ec) {
-            throw std::system_error(ec);
-        }
+        co_await sleepFor(worker_, duration);
         scannerEntry_.touch();
     }
 
@@ -227,6 +224,7 @@ private:
     std::pmr::string scratch_;
     std::pmr::string trailers_;
     ScannerEntry& scannerEntry_;
+    WorkerHandle worker_;
     ResponseStreamKind kind_;
     Http1ResponseStreamPlan plan_;
     Http1ServerConnectionPlan connectionPlan_;

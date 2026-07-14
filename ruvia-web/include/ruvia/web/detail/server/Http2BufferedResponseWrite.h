@@ -6,7 +6,7 @@
 #include <utility>
 #include <variant>
 
-#include <asio/steady_timer.hpp>
+#include "ruvia/core/detail/WorkerSignal.h"
 
 #include "ruvia/core/Task.h"
 #include "ruvia/http/detail/http2/Http2Connection.h"
@@ -181,7 +181,7 @@ public:
         Http2Connection& connection,
         Http2SansIoStreamRuntimeTable& streamRuntimes,
         WorkerMemory& worker,
-        asio::steady_timer& writeSignal) noexcept;
+        WorkerSignal& writeSignal) noexcept;
 
     [[nodiscard]] Task<Http2BufferedResponseWriteResult> write(
         std::uint32_t streamId,
@@ -205,7 +205,7 @@ private:
     Http2Connection* connection_;
     Http2SansIoStreamRuntimeTable* streamRuntimes_;
     WorkerMemory* worker_;
-    asio::steady_timer* writeSignal_;
+    WorkerSignal* writeSignal_;
 };
 
 }  // namespace ruvia::detail

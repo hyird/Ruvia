@@ -87,6 +87,20 @@ const Env& App::env() const noexcept {
     return state_->env;
 }
 
+std::vector<WorkerHandle> App::workers() const {
+    auto& state = *state_;
+    std::lock_guard lock(state.mutex);
+    std::vector<WorkerHandle> result;
+    if (!state.runtime) {
+        return result;
+    }
+    result.reserve(state.runtime->workers.size());
+    for (const auto& worker : state.runtime->workers) {
+        result.push_back(worker->worker());
+    }
+    return result;
+}
+
 void App::run() {
     auto& state = *state_;
     auto* runtimeResource = detail::appResource();

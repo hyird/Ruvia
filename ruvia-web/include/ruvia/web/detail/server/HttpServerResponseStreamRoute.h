@@ -45,6 +45,7 @@ Task<Http1SessionRequestCompletion> dispatchHttpResponseStreamRoute(
         memory,
         responseHead,
         scannerEntry,
+        *baseRouteServices.worker(),
         endpoint.kind(),
         streamPlan);
 

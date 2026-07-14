@@ -17,7 +17,7 @@
 #include <string_view>
 #include <system_error>
 
-#include <asio/steady_timer.hpp>
+#include "ruvia/core/detail/WorkerSignal.h"
 
 #include "ruvia/http/detail/http2/Http2Connection.h"
 #include "ruvia/http/detail/websocket/WsConnection.h"
@@ -39,7 +39,7 @@ public:
         std::uint32_t streamId,
         Http2SansIoBodyQueue& bodyQueue,
         Http2SansIoStreamSignal& signal,
-        asio::steady_timer& writeSignal,
+        WorkerSignal& writeSignal,
         Executor executor) noexcept
         : connection_(connection),
           streamId_(streamId),
@@ -129,8 +129,7 @@ public:
 
 private:
     void wakeWriter() noexcept {
-        asio::error_code ignored;
-        writeSignal_.cancel(ignored);
+        writeSignal_.notify();
     }
 
     void releaseCreditIfDrained() {
@@ -145,7 +144,7 @@ private:
     std::uint32_t streamId_;
     Http2SansIoBodyQueue& bodyQueue_;
     Http2SansIoStreamSignal& signal_;
-    asio::steady_timer& writeSignal_;
+    WorkerSignal& writeSignal_;
     Executor executor_;
 };
 
@@ -159,7 +158,7 @@ public:
         std::uint32_t streamId,
         Http2SansIoBodyQueue& bodyQueue,
         Http2SansIoStreamSignal& signal,
-        asio::steady_timer& writeSignal) noexcept
+        WorkerSignal& writeSignal) noexcept
         : connection_(connection),
           streamId_(streamId),
           bodyQueue_(bodyQueue),
@@ -175,8 +174,7 @@ public:
             if (const auto chunk = bodyQueue_.pop(); !chunk.empty()) {
                 if (bodyQueue_.empty()) {
                     connection_.releaseReceivedData(streamId_);
-                    asio::error_code ignored;
-                    writeSignal_.cancel(ignored);
+                    writeSignal_.notify();
                 }
                 co_return chunk;
             }
@@ -196,7 +194,7 @@ private:
     std::uint32_t streamId_;
     Http2SansIoBodyQueue& bodyQueue_;
     Http2SansIoStreamSignal& signal_;
-    asio::steady_timer& writeSignal_;
+    WorkerSignal& writeSignal_;
 };
 
 }  // namespace ruvia::detail

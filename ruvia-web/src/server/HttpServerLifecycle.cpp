@@ -1,4 +1,5 @@
 #include "ruvia/web/detail/server/HttpServer.h"
+#include "ruvia/core/detail/WorkerDispatcher.h"
 
 #include "ruvia/web/detail/server/HttpServerTlsVerify.h"
 
@@ -162,8 +163,9 @@ HttpServer::HttpServer(
     // limited to stop()'s asio::post, which UNSAFE_IO keeps locked. Only the
     // reactor's per-descriptor I/O locking is elided.
     : ioContext_(ASIO_CONCURRENCY_HINT_UNSAFE_IO),
+      workerDispatcher_(std::make_shared<WorkerDispatcher>(ioContext_, 1024)),
+      workerHandle_(WorkerHandleAccess::make(workerDispatcher_)),
       acceptor_(ioContext_),
-      drainTimer_(ioContext_),
       endpoint_(std::move(endpoint)),
       routes_(routes),
       sniContexts_(memory_.resource()),
@@ -172,7 +174,7 @@ HttpServer::HttpServer(
       databases_(ioContext_, memory_.resource(), databases),
       redis_(ioContext_, memory_.resource(), redis),
       rateLimiter_(options_.rateLimit, memory_.resource()),
-      connectionScanner_(ioContext_.get_executor(), makeConnectionScannerOptions(options_)),
+      connectionScanner_(workerHandle_, makeConnectionScannerOptions(options_)),
       workSetPool_(memory_) {
     if (databases_.hasAnyTimeout()) {
         connectionScanner_.setWorkerScanner(&databases_, [](void* target) noexcept {
@@ -203,7 +205,6 @@ void HttpServer::start() {
         resetStartupState();
         configureAcceptor();
         configureTlsContext();
-        connectionScanner_.start();
         asio::co_spawn(
             ioContext_,
             taskAsAwaitable(runWorker()),
@@ -230,6 +231,7 @@ void HttpServer::stop() {
         return;
     }
 
+    workerDispatcher_->close();
     asio::post(ioContext_, [this] { stopOnContext(); });
 }
 
@@ -340,6 +342,7 @@ void HttpServer::configureTlsContext() {
 }
 
 void HttpServer::stopOnContext(bool honorGracePeriod) noexcept {
+    workerDispatcher_->close();
     workerRunning_ = false;
     std::error_code ignored;
     acceptor_.cancel(ignored);
@@ -355,9 +358,11 @@ void HttpServer::stopOnContext(bool honorGracePeriod) noexcept {
     if (honorGracePeriod && options_.shutdownGracePeriod.count() > 0 &&
         activeConnectionCount_ != 0) {
         drainPending_ = true;
-        drainTimer_.expires_after(options_.shutdownGracePeriod);
-        drainTimer_.async_wait([this](const std::error_code& ec) {
-            if (drainPending_ && ec != asio::error::operation_aborted) {
+        drainTimer_ = WorkerHandleAccess::scheduleTimer(
+            workerHandle_,
+            std::chrono::steady_clock::now() + options_.shutdownGracePeriod,
+            [this](bool cancelled) {
+            if (drainPending_ && !cancelled) {
                 drainPending_ = false;
                 forceCloseAll();
             }
@@ -383,6 +388,7 @@ void HttpServer::forceCloseAll() noexcept {
     connectionScanner_.closeAll();
     databases_.closeNow();
     redis_.closeNow();
+    workerDispatcher_->stopTimers();
 }
 
 void HttpServer::resetStartupState() {
@@ -430,6 +436,7 @@ void HttpServer::runIoContext() noexcept {
 
 Task<void> HttpServer::runWorker() {
     try {
+        connectionScanner_.start();
         if (!databases_.empty()) {
             co_await databases_.connect();
         }

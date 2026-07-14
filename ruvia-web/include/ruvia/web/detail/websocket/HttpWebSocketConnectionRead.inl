@@ -4,6 +4,7 @@ namespace ruvia::detail {
 
 template <typename Transport>
 Task<std::optional<WebSocketMessage>> WebSocketConnection<Transport>::read() {
+    ReadGuard readGuard(*this);
     for (;;) {
         // poll() can queue an automatic Pong/Close. Keep that mutation mutually
         // exclusive with an in-flight application/heartbeat write so the core's

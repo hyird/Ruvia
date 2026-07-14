@@ -23,6 +23,34 @@ outbound HTTP client provide their own I/O runtime and drive its sans-I/O client
 APIs; `ruvia-web` intentionally does not provide `fetch`, proxy, connection-pool,
 or client TLS runtime APIs.
 
+## Core Runtime
+
+`ruvia::Runtime` creates application-owned workers. `WorkerHandle::post()` is a
+bounded, thread-safe queue-in-loop API; it does not expose the underlying Asio
+executor:
+
+```cpp
+#include <ruvia/core/Runtime.h>
+
+ruvia::Runtime runtime({.workerCount = 4, .mailboxCapacity = 1024});
+runtime.start();
+
+auto worker = runtime.workerFor("device-42");
+if (worker.post([] { /* runs on the selected worker */ }) !=
+    ruvia::PostResult::kAccepted) {
+    // Apply application backpressure or shutdown handling.
+}
+
+runtime.stop();
+runtime.join();
+```
+
+Web handlers obtain their current worker with `Context::worker()`. Background
+components can obtain the Web worker set from `App::workers()` after startup and
+post owning data back to the worker before using worker-affine DB or Redis APIs.
+`TaskScope`, worker-bound `sleepFor`, bounded `Channel`, and `OneShot` are also
+provided by `ruvia::core`; their deadlines share the worker's single timer queue.
+
 ## Requirements
 
 - CMake 3.24 or newer.

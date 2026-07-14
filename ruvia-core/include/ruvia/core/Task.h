@@ -7,6 +7,8 @@
 
 namespace ruvia {
 
+class TaskScope;
+
 template <typename T = void>
 class [[nodiscard]] Task {
 public:
@@ -48,6 +50,7 @@ private:
     friend class detail::TaskCompletionState;
     template <typename U, typename CompletionToken>
     friend auto detail::asyncStartTask(Task<U>&&, CompletionToken&&);
+    friend class TaskScope;
 
     explicit Task(handle_type handle) noexcept : handle_(handle) {}
 
@@ -108,6 +111,7 @@ private:
     friend class detail::TaskCompletionState;
     template <typename U, typename CompletionToken>
     friend auto detail::asyncStartTask(Task<U>&&, CompletionToken&&);
+    friend class TaskScope;
 
     explicit Task(handle_type handle) noexcept : handle_(handle) {}
 

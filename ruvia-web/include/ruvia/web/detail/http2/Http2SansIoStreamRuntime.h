@@ -1,6 +1,7 @@
 #pragma once
 
 #include <array>
+#include <concepts>
 #include <cstddef>
 #include <cstdint>
 #include <memory>
@@ -9,11 +10,11 @@
 #include <string>
 #include <string_view>
 #include <utility>
+#include <type_traits>
 #include <vector>
 
-#include <asio/steady_timer.hpp>
-
 #include "ruvia/core/detail/AsioAwait.h"
+#include "ruvia/core/detail/WorkerSignal.h"
 #include "ruvia/core/Task.h"
 #include "ruvia/core/memory/PmrObject.h"
 #include "ruvia/core/memory/PmrResource.h"
@@ -32,15 +33,16 @@ inline constexpr std::size_t kHttp2WebRetainedBodyChunkCapacity = 16;
 // readiness after wakeup, so cancellation is only a level-change notification.
 class Http2SansIoStreamSignal final {
 public:
+    explicit Http2SansIoStreamSignal(WorkerHandle worker)
+        : signal_(std::move(worker)) {}
+
     template <typename Executor>
-    explicit Http2SansIoStreamSignal(const Executor& executor)
-        : timer_(executor) {
-        timer_.expires_at((asio::steady_timer::time_point::max)());
-    }
+        requires (!std::same_as<std::remove_cvref_t<Executor>, WorkerHandle>)
+    explicit Http2SansIoStreamSignal(Executor&& executor)
+        : signal_(std::forward<Executor>(executor)) {}
 
     void wake() noexcept {
-        asio::error_code ignored;
-        timer_.cancel(ignored);
+        signal_.notify();
     }
 
     void end() noexcept {
@@ -56,13 +58,11 @@ public:
         if (ended_) {
             co_return;
         }
-        (void)co_await asyncError([this](auto handler) mutable {
-            timer_.async_wait(std::move(handler));
-        });
+        co_await signal_.wait();
     }
 
 private:
-    asio::steady_timer timer_;
+    WorkerSignal signal_;
     bool ended_{false};
 };
 
@@ -292,13 +292,21 @@ public:
 private:
     friend class Http2SansIoStreamRuntimeTable;
 
-    template <typename Executor>
     [[nodiscard]] Http2SansIoStreamSignal* beginDispatch(
-        const Executor& executor) {
+        WorkerHandle worker) {
         if (dispatchSignal_ || !routeResolution_ || !body_.modeSelected()) {
             return nullptr;
         }
-        dispatchSignal_.emplace(executor);
+        dispatchSignal_.emplace(std::move(worker));
+        return &*dispatchSignal_;
+    }
+
+    template <typename Executor>
+    [[nodiscard]] Http2SansIoStreamSignal* beginDispatch(Executor&& executor) {
+        if (dispatchSignal_ || !routeResolution_ || !body_.modeSelected()) {
+            return nullptr;
+        }
+        dispatchSignal_.emplace(std::forward<Executor>(executor));
         return &*dispatchSignal_;
     }
 
@@ -373,15 +381,29 @@ public:
         return result;
     }
 
-    template <typename Executor>
     [[nodiscard]] Http2SansIoStreamSignal* beginDispatch(
         std::uint32_t streamId,
-        const Executor& executor) {
+        WorkerHandle worker) {
         auto* runtime = find(streamId);
         if (runtime == nullptr) {
             return nullptr;
         }
-        auto* signal = runtime->beginDispatch(executor);
+        auto* signal = runtime->beginDispatch(std::move(worker));
+        if (signal != nullptr) {
+            ++dispatchedCount_;
+        }
+        return signal;
+    }
+
+    template <typename Executor>
+    [[nodiscard]] Http2SansIoStreamSignal* beginDispatch(
+        std::uint32_t streamId,
+        Executor&& executor) {
+        auto* runtime = find(streamId);
+        if (runtime == nullptr) {
+            return nullptr;
+        }
+        auto* signal = runtime->beginDispatch(std::forward<Executor>(executor));
         if (signal != nullptr) {
             ++dispatchedCount_;
         }

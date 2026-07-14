@@ -14,6 +14,7 @@ namespace ruvia {
 
 template <typename T>
 class Task;
+class TaskScope;
 
 namespace detail {
 
@@ -120,6 +121,7 @@ private:
     friend class TaskAwaiter;
     template <typename, typename>
     friend class TaskCompletionState;
+    friend class ruvia::TaskScope;
     friend struct TaskFinalAwaiter;
 
     void setContinuation(std::coroutine_handle<> continuation) noexcept {
@@ -196,6 +198,7 @@ private:
     friend class TaskAwaiter;
     template <typename, typename>
     friend class TaskCompletionState;
+    friend class ruvia::TaskScope;
     friend struct TaskFinalAwaiter;
 
     void setContinuation(std::coroutine_handle<> continuation) noexcept {

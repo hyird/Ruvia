@@ -37,7 +37,7 @@
 #include <asio/detached.hpp>
 #include <asio/recycling_allocator.hpp>
 #include <asio/ip/tcp.hpp>
-#include <asio/steady_timer.hpp>
+#include "ruvia/core/detail/WorkerSignal.h"
 
 #include "ruvia/http/detail/HttpRequestInternal.h"
 #include "ruvia/web/detail/http/ContextServices.h"
@@ -138,7 +138,7 @@ Task<void> runHttp2SansIoSession(
 
     Http2Connection connection(worker.resource(), Http2Role::kServer);
 
-    asio::steady_timer writeSignal(executor);
+    WorkerSignal writeSignal(baseServices.worker(), executor);
     bool stopping = false;  // reader has finished (EOF/error/connection error)
     bool writeFailed = false;
     bool writerDone = false;  // writer coroutine has fully exited (level-triggered join)
@@ -149,8 +149,7 @@ Task<void> runHttp2SansIoSession(
     std::size_t acceptedRequestHeads = 0;
 
     const auto wakeWriter = [&writeSignal]() noexcept {
-        asio::error_code ignored;
-        writeSignal.cancel(ignored);  // wakes async_wait with operation_aborted
+        writeSignal.notify();
     };
 
     // One stable Web runtime owns every per-stream application concern: route
@@ -241,11 +240,7 @@ Task<void> runHttp2SansIoSession(
             if (stopping && streamRuntimes.dispatchedCount() == 0) {
                 co_return;  // nothing left to write and no more will be produced
             }
-            writeSignal.expires_at((asio::steady_timer::time_point::max)());
-            const auto waitEc = co_await asyncError([&writeSignal](auto handler) mutable {
-                writeSignal.async_wait(std::move(handler));
-            });
-            (void)waitEc;
+            co_await writeSignal.wait();
         }
     };
 
@@ -421,7 +416,12 @@ Task<void> runHttp2SansIoSession(
                     streamId,
                     responseStreamEndpoint->kind(),
                     requestMemory.resource(),
-                    executor, writeSignal, *streamSignal);
+                    executor,
+                    baseServices.worker() == nullptr
+                        ? WorkerHandle{}
+                        : *baseServices.worker(),
+                    writeSignal,
+                    *streamSignal);
                 auto result = co_await dispatchResponseStreamWith(
                     sink,
                     routes,
@@ -583,7 +583,10 @@ Task<void> runHttp2SansIoSession(
     // file or a stream body blocks on the send window exactly like a streaming route,
     // and without a signal its blocked submit could never be woken (truncation + hang).
     const auto admitStream = [&](std::uint32_t streamId) {
-        if (streamRuntimes.beginDispatch(streamId, executor) == nullptr) {
+        auto* signal = baseServices.worker() != nullptr
+            ? streamRuntimes.beginDispatch(streamId, *baseServices.worker())
+            : streamRuntimes.beginDispatch(streamId, executor);
+        if (signal == nullptr) {
             return false;
         }
         connection.pinStream(streamId);
@@ -838,19 +841,17 @@ Task<void> runHttp2SansIoSession(
     connection.beginConnection();
 
     // Spawn the writer; it runs concurrently with the reader below. The join below is
-    // LEVEL-triggered on writerDone, not on the timer cancel alone: steady_timer::cancel
-    // only aborts an already-registered wait, so if the writer finishes before the
+    // LEVEL-triggered on writerDone, not on signal notification alone: notification
+    // before a waiter exists must still make a late join return immediately, so if the writer finishes before the
     // reader reaches the join (common on an abrupt peer RST, where the write error
     // surfaces first), a cancel-only latch would be a no-op and the join would sleep
     // until time_point::max() forever. The bool makes a late join return immediately.
-    asio::steady_timer writerFinished(executor);
-    writerFinished.expires_at((asio::steady_timer::time_point::max)());
+    WorkerSignal writerFinished(baseServices.worker(), executor);
     asio::co_spawn(
         executor, taskAsAwaitable(writerLoop()),
         [&writerFinished, &writerDone](std::exception_ptr) noexcept {
             writerDone = true;
-            asio::error_code ignored;
-            writerFinished.cancel(ignored);
+            writerFinished.notify();
         });
 
     // Establish the feed contract: drain any startup events before initial input.
@@ -918,10 +919,7 @@ Task<void> runHttp2SansIoSession(
     stopping = true;
     wakeWriter();
     while (!writerDone) {
-        const auto waitEc = co_await asyncError([&writerFinished](auto handler) mutable {
-            writerFinished.async_wait(std::move(handler));
-        });
-        (void)waitEc;
+        co_await writerFinished.wait();
     }
     co_return;
 }

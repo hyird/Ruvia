@@ -2,7 +2,6 @@
 
 #include "ruvia/core/detail/SocketUtils.h"
 
-#include <asio/error.hpp>
 #include <chrono>
 #include <stdexcept>
 #include <utility>
@@ -107,8 +106,8 @@ ConnectionScanner::Guard::~Guard() {
     }
 }
 
-ConnectionScanner::ConnectionScanner(asio::any_io_executor executor, ConnectionScannerOptions options)
-    : timer_(std::move(executor)), options_(std::move(options)), cachedNowMs_(steadyNowMs()) {
+ConnectionScanner::ConnectionScanner(WorkerHandle worker, ConnectionScannerOptions options)
+    : worker_(std::move(worker)), options_(std::move(options)), cachedNowMs_(steadyNowMs()) {
     if (options_.scanInterval.count() <= 0) {
         throw std::invalid_argument(
             "connection scanner interval must be greater than zero");
@@ -139,10 +138,7 @@ void ConnectionScanner::start() {
 
 void ConnectionScanner::stop() noexcept {
     running_ = false;
-    try {
-        timer_.cancel();
-    } catch (...) {
-    }
+    timer_.cancel();
 }
 
 void ConnectionScanner::setWorkerScanner(void* target, void (*scan)(void*) noexcept) noexcept {
@@ -210,9 +206,10 @@ void ConnectionScanner::schedule() {
         return;
     }
 
-    timer_.expires_after(options_.scanInterval);
-    timer_.async_wait([this](const std::error_code& ec) {
-        if (ec || !running_) {
+    timer_ = WorkerHandleAccess::scheduleTimer(
+        worker_, std::chrono::steady_clock::now() + options_.scanInterval,
+        [this](bool cancelled) {
+        if (cancelled || !running_) {
             return;
         }
 

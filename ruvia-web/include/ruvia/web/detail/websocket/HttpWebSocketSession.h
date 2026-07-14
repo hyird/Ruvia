@@ -28,12 +28,18 @@ Task<void> webSocketCloseThunk(void* target, std::uint16_t code, std::string_vie
 }
 
 template <typename Connection>
+void webSocketAbortThunk(void* target) noexcept {
+    static_cast<Connection*>(target)->abort();
+}
+
+template <typename Connection>
 [[nodiscard]] WebSocket makeWebSocketFacade(Connection& connection) noexcept {
     return WebSocketAccess::make(
         &connection,
         &webSocketReadThunk<Connection>,
         &webSocketWriteThunk<Connection>,
-        &webSocketCloseThunk<Connection>);
+        &webSocketCloseThunk<Connection>,
+        &webSocketAbortThunk<Connection>);
 }
 
 // Shared run loop for an established WebSocket session, transport-agnostic.

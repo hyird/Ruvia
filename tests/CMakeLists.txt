@@ -222,6 +222,27 @@ if(RUVIA_BUILD_CORE)
     add_executable(ruvia_connection_scanner_lifetime connection_scanner_lifetime.cpp)
     target_link_libraries(ruvia_connection_scanner_lifetime PRIVATE ruvia::core)
     add_test(NAME ruvia_connection_scanner_lifetime COMMAND ruvia_connection_scanner_lifetime)
+
+    add_executable(ruvia_runtime_worker runtime_worker.cpp)
+    target_link_libraries(ruvia_runtime_worker PRIVATE ruvia::core)
+    add_test(NAME ruvia_runtime_worker COMMAND ruvia_runtime_worker)
+
+    add_executable(ruvia_task_scope task_scope.cpp)
+    target_link_libraries(ruvia_task_scope PRIVATE ruvia::core)
+    add_test(NAME ruvia_task_scope COMMAND ruvia_task_scope)
+
+    add_executable(ruvia_channel channel.cpp)
+    target_link_libraries(ruvia_channel PRIVATE ruvia::core)
+    add_test(NAME ruvia_channel COMMAND ruvia_channel)
+
+    add_executable(ruvia_one_shot one_shot.cpp)
+    target_link_libraries(ruvia_one_shot PRIVATE ruvia::core)
+    add_test(NAME ruvia_one_shot COMMAND ruvia_one_shot)
+
+    add_executable(ruvia_worker_timer worker_timer.cpp)
+    target_link_libraries(ruvia_worker_timer PRIVATE ruvia::core)
+    add_test(NAME ruvia_worker_timer COMMAND ruvia_worker_timer)
+
 endif()
 
 if(RUVIA_BUILD_HTTP)

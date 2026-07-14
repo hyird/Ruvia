@@ -7,6 +7,7 @@
 #include <memory>
 #include <optional>
 #include <string_view>
+#include <vector>
 
 #include "ruvia/web/AppHook.h"
 #include "ruvia/web/Dotenv.h"
@@ -14,6 +15,7 @@
 #include "ruvia/web/ErrorHandlers.h"
 #include "ruvia/web/ServerConfig.h"
 #include "ruvia/core/memory/MemoryPool.h"
+#include "ruvia/core/WorkerHandle.h"
 
 #ifdef RUVIA_ENABLE_DATABASE
 #include "ruvia/web/db/Db.h"
@@ -78,6 +80,7 @@ public:
 #endif
     void run();
     void stop();
+    [[nodiscard]] std::vector<WorkerHandle> workers() const;
 
 private:
     struct StateDeleter final {

@@ -82,6 +82,7 @@ public:
     Task<void> ping(std::string_view payload = {});
 
     Task<void> close(std::uint16_t code = 1000, std::string_view reason = {});
+    void abort() noexcept;
 
 private:
     friend struct detail::WebSocketAccess;
@@ -89,9 +90,10 @@ private:
     using Read = Task<std::optional<WebSocketMessage>> (*)(void*);
     using Write = Task<void> (*)(void*, WebSocketOpcode, std::string_view);
     using Close = Task<void> (*)(void*, std::uint16_t, std::string_view);
+    using Abort = void (*)(void*) noexcept;
 
-    constexpr WebSocket(void* target, Read read, Write write, Close close) noexcept
-        : target_(target), read_(read), write_(write), close_(close) {}
+    constexpr WebSocket(void* target, Read read, Write write, Close close, Abort abort) noexcept
+        : target_(target), read_(read), write_(write), close_(close), abort_(abort) {}
 
     Task<void> write(WebSocketOpcode opcode, std::string_view payload);
 
@@ -99,6 +101,7 @@ private:
     Read read_;
     Write write_;
     Close close_;
+    Abort abort_;
 };
 
 }  // namespace ruvia

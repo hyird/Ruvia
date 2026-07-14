@@ -51,7 +51,13 @@ Task<void> WebSocketConnection<Transport>::close(std::uint16_t code, std::string
     // aborts this transport). The core suppresses application messages in this
     // phase while still validating frames and handling control traffic.
     if (awaitPeerClose) {
-        (void)co_await read();
+        if (readActive_) {
+            while (readActive_) {
+                co_await readerDoneSignal_.wait();
+            }
+        } else {
+            (void)co_await read();
+        }
     }
 }
 
@@ -59,9 +65,7 @@ template <typename Transport>
 Task<void> WebSocketConnection<Transport>::detachAndDrainBackgroundWrites() {
     scannerEntry_.clearPeriodicCheck(this);
     while (backgroundWriteCount_ > 0) {
-        (void)co_await asyncError([this](auto handler) mutable {
-            backgroundWriteTimer_.async_wait(std::move(handler));
-        });
+        co_await backgroundWriteSignal_.wait();
     }
     abortTransport();
 }
@@ -69,26 +73,20 @@ Task<void> WebSocketConnection<Transport>::detachAndDrainBackgroundWrites() {
 template <typename Transport>
 Task<void> WebSocketConnection<Transport>::waitForHeartbeatWrite() {
     while (heartbeatWriteActive_) {
-        (void)co_await asyncError([this](auto handler) mutable {
-            backgroundWriteTimer_.async_wait(std::move(handler));
-        });
+        co_await backgroundWriteSignal_.wait();
     }
 }
 
 template <typename Transport>
 Task<void> WebSocketConnection<Transport>::waitForWriteIdle() {
     while (writeActive_) {
-        backgroundWriteTimer_.expires_at((asio::steady_timer::time_point::max)());
-        (void)co_await asyncError([this](auto handler) mutable {
-            backgroundWriteTimer_.async_wait(std::move(handler));
-        });
+        co_await backgroundWriteSignal_.wait();
     }
 }
 
 template <typename Transport>
 void WebSocketConnection<Transport>::notifyWriteIdle() noexcept {
-    std::error_code ignored;
-    backgroundWriteTimer_.cancel(ignored);
+    backgroundWriteSignal_.notify();
 }
 
 template <typename Transport>

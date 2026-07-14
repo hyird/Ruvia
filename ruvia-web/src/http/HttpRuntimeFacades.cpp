@@ -93,6 +93,10 @@ Task<void> WebSocket::close(std::uint16_t code, std::string_view reason) {
     return close_(target_, code, reason);
 }
 
+void WebSocket::abort() noexcept {
+    abort_(target_);
+}
+
 Task<void> WebSocket::write(WebSocketOpcode opcode, std::string_view payload) {
     return write_(target_, opcode, payload);
 }

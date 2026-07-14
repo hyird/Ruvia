@@ -17,6 +17,7 @@
 #include "ruvia/http/detail/websocket/WsConnection.h"
 #include "ruvia/web/detail/websocket/HttpWebSocketLiveness.h"
 #include "ruvia/core/detail/AsioAwait.h"
+#include "ruvia/core/detail/WorkerSignal.h"
 #include "ruvia/http/HttpLimits.h"
 #include "ruvia/core/Task.h"
 #include "ruvia/web/WebSocket.h"
@@ -50,8 +51,8 @@ public:
           lifecycleOptions_(lifecycleOptions),
           buffer_(pmrResourceOrDefault(resource)),
           protocol_(buffer_, messageLimit, deflate),
-          backgroundWriteTimer_(transport_.executor()) {
-        backgroundWriteTimer_.expires_at((asio::steady_timer::time_point::max)());
+          backgroundWriteSignal_(transport_.executor()),
+          readerDoneSignal_(transport_.executor()) {
         buffer_.append(initialBytes.data(), initialBytes.size());
         scannerEntry_.setPeriodicCheck(this, &WebSocketConnection::heartbeatTickThunk);
     }
@@ -70,9 +71,31 @@ public:
     [[nodiscard]] Task<std::optional<WebSocketMessage>> read();
     Task<void> write(WebSocketOpcode opcode, std::string_view payload);
     Task<void> close(std::uint16_t code, std::string_view reason);
+    void abort() noexcept { abortTransport(); }
     Task<void> detachAndDrainBackgroundWrites();
 
 private:
+    class ReadGuard final {
+    public:
+        explicit ReadGuard(WebSocketConnection& connection) : connection_(connection) {
+            if (connection_.readActive_) {
+                throw std::logic_error("concurrent websocket reads are not supported");
+            }
+            connection_.readActive_ = true;
+        }
+
+        ~ReadGuard() {
+            connection_.readActive_ = false;
+            connection_.readerDoneSignal_.notify();
+        }
+
+        ReadGuard(const ReadGuard&) = delete;
+        ReadGuard& operator=(const ReadGuard&) = delete;
+
+    private:
+        WebSocketConnection& connection_;
+    };
+
     void completeBackgroundWrite() noexcept;
     bool heartbeatTick(std::int64_t now) noexcept;
     Task<void> writeHeartbeatPing();
@@ -90,9 +113,11 @@ private:
     WebSocketLifecycleOptions lifecycleOptions_{};
     std::pmr::string buffer_;
     WsConnection protocol_;
-    asio::steady_timer backgroundWriteTimer_;
+    WorkerSignal backgroundWriteSignal_;
+    WorkerSignal readerDoneSignal_;
     std::size_t backgroundWriteCount_{0};
     bool writeActive_{false};
+    bool readActive_{false};
     bool heartbeatWriteActive_{false};
     bool awaitingPong_{false};
     std::int64_t heartbeatPingSentMs_{0};

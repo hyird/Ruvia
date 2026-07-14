@@ -5,9 +5,10 @@
 #include <cstddef>
 #include <cstdint>
 #include <optional>
-#include <asio/any_io_executor.hpp>
 #include <asio/ip/tcp.hpp>
-#include <asio/steady_timer.hpp>
+
+#include <ruvia/core/WorkerHandle.h>
+#include <ruvia/core/detail/WorkerTimer.h>
 
 namespace ruvia::detail {
 
@@ -79,7 +80,7 @@ public:
         Entry* entry_;
     };
 
-    ConnectionScanner(asio::any_io_executor executor, ConnectionScannerOptions options);
+    ConnectionScanner(WorkerHandle worker, ConnectionScannerOptions options);
     ~ConnectionScanner() noexcept;
 
     void start();
@@ -97,7 +98,8 @@ private:
     void scan() noexcept;
     [[nodiscard]] bool isTimedOut(const Entry& entry, std::int64_t now) const noexcept;
 
-    asio::steady_timer timer_;
+    WorkerHandle worker_;
+    WorkerTimerRegistration timer_;
     ConnectionScannerOptions options_;
     std::int64_t cachedNowMs_{0};
     Entry sentinel_{};
