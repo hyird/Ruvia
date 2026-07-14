@@ -368,9 +368,7 @@ Http2BufferedResponseHeadSubmitResult Http2Connection::submitResponseHead(
     const auto controlResult = httpFinalResponseControlPlan(
         response,
         HttpProtocolVersion::kHttp2);
-    const auto* controlPlan = controlResult.plan();
-    const auto* http2Control =
-        controlPlan == nullptr ? nullptr : controlPlan->http2();
+    const auto* http2Control = controlResult.http2();
     if (http2Control == nullptr) {
         return Http2BufferedResponseHeadSubmitResult::makeFailure(
             Http2ResponseHeadSubmitError::kInvalidMessage);
@@ -442,9 +440,7 @@ Http2StreamingResponseHeadSubmitResult Http2Connection::submitStreamingResponseH
     const auto controlResult = httpFinalResponseControlPlan(
         head,
         HttpProtocolVersion::kHttp2);
-    const auto* controlPlan = controlResult.plan();
-    const auto* http2Control =
-        controlPlan == nullptr ? nullptr : controlPlan->http2();
+    const auto* http2Control = controlResult.http2();
     if (http2Control == nullptr) {
         return Http2StreamingResponseHeadSubmitResult::makeFailure(
             Http2ResponseHeadSubmitError::kInvalidMessage);
@@ -630,9 +626,7 @@ Http2SubmitStatus Http2Connection::submitConnectResponseHead(
     const auto controlResult = httpFinalResponseControlPlan(
         response,
         HttpProtocolVersion::kHttp2);
-    const auto* controlPlan = controlResult.plan();
-    const auto* http2Control =
-        controlPlan == nullptr ? nullptr : controlPlan->http2();
+    const auto* http2Control = controlResult.http2();
     if (http2Control == nullptr) {
         return Http2SubmitStatus::kInvalidMessage;
     }

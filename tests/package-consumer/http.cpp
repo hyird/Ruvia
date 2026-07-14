@@ -744,19 +744,12 @@ concept HasStalePreparedStreamPolicy = requires(const T& prepared) {
 template <typename T>
 concept HasFinalResponseControlResultAlternatives = requires(
     const T& result) {
-    { result.plan() } -> std::same_as<const
-        ruvia::detail::HttpFinalResponseControlPlan*>;
+    { result.http1() } -> std::same_as<const
+        ruvia::detail::Http1FinalResponseControl*>;
+    { result.http2() } -> std::same_as<const
+        ruvia::detail::Http2FinalResponseControl*>;
     { result.failure() } -> std::same_as<const
         ruvia::detail::HttpFinalResponseControlPlanFailure*>;
-};
-
-template <typename T>
-concept HasFinalResponseControlProtocolAlternatives = requires(
-    const T& plan) {
-    { plan.http1() } -> std::same_as<const
-        ruvia::detail::Http1FinalResponseControl*>;
-    { plan.http2() } -> std::same_as<const
-        ruvia::detail::Http2FinalResponseControl*>;
 };
 
 template <typename T>
@@ -992,7 +985,7 @@ static_assert(!ExposesAnyRvalueHttpProtocolPlanBorrow<
 static_assert(!ExposesAnyRvalueHttpProtocolPlanBorrow<
     ruvia::detail::Http2ResponseHeadPlan>);
 static_assert(!ExposesAnyRvalueHttpProtocolPlanBorrow<
-    ruvia::detail::HttpFinalResponseControlPlan>);
+    ruvia::detail::HttpFinalResponseControlPlanResult>);
 static_assert(!ExposesAnyRvalueHttpProtocolPlanBorrow<
     ruvia::detail::Http1FinalResponseControl>);
 static_assert(!ExposesAnyRvalueHttpProtocolPlanBorrow<
@@ -1357,8 +1350,6 @@ static_assert(!HasStalePreparedStreamPolicy<
 
 static_assert(HasFinalResponseControlResultAlternatives<
     ruvia::detail::HttpFinalResponseControlPlanResult>);
-static_assert(HasFinalResponseControlProtocolAlternatives<
-    ruvia::detail::HttpFinalResponseControlPlan>);
 static_assert(HasHttp1FinalResponseControlFields<
     ruvia::detail::Http1FinalResponseControl>);
 static_assert(!HasHttp1FinalResponseControlFields<
@@ -1366,13 +1357,11 @@ static_assert(!HasHttp1FinalResponseControlFields<
 static_assert(!HasStaleFinalResponseControlStatus<
     ruvia::detail::HttpFinalResponseControlPlanResult>);
 static_assert(!HasStaleTopLevelUpgradeProtocols<
-    ruvia::detail::HttpFinalResponseControlPlan>);
+    ruvia::detail::HttpFinalResponseControlPlanResult>);
 static_assert(!std::default_initializable<
     ruvia::detail::Http1FinalResponseControl>);
 static_assert(!std::default_initializable<
     ruvia::detail::Http2FinalResponseControl>);
-static_assert(!std::default_initializable<
-    ruvia::detail::HttpFinalResponseControlPlan>);
 static_assert(!std::default_initializable<
     ruvia::detail::HttpFinalResponseControlPlanFailure>);
 static_assert(!std::default_initializable<
@@ -3243,14 +3232,11 @@ int main() {
         ruvia::detail::httpFinalResponseControlPlan(
             http1ControlResponse,
             ruvia::HttpProtocolVersion::kHttp11);
-    const auto* http1ControlPlan = http1ControlResult.plan();
-    const auto* http1Control = http1ControlPlan == nullptr
-        ? nullptr
-        : http1ControlPlan->http1();
+    const auto* http1Control = http1ControlResult.http1();
     if (http1Control == nullptr || http1ControlResult.failure() != nullptr ||
         !http1Control->connectionOptions().upgrade() ||
         !http1Control->upgradeProtocols().hasProtocol() ||
-        http1ControlPlan->http2() != nullptr) {
+        http1ControlResult.http2() != nullptr) {
         return 45;
     }
 
@@ -3258,9 +3244,8 @@ int main() {
         ruvia::detail::httpFinalResponseControlPlan(
             response,
             ruvia::HttpProtocolVersion::kHttp2);
-    if (http2ControlResult.plan() == nullptr ||
-        http2ControlResult.plan()->http1() != nullptr ||
-        http2ControlResult.plan()->http2() == nullptr ||
+    if (http2ControlResult.http1() != nullptr ||
+        http2ControlResult.http2() == nullptr ||
         http2ControlResult.failure() != nullptr) {
         return 46;
     }
@@ -3271,7 +3256,8 @@ int main() {
         ruvia::detail::httpFinalResponseControlPlan(
             forbiddenHttp2Control,
             ruvia::HttpProtocolVersion::kHttp2);
-    if (forbiddenHttp2ControlResult.plan() != nullptr ||
+    if (forbiddenHttp2ControlResult.http1() != nullptr ||
+        forbiddenHttp2ControlResult.http2() != nullptr ||
         forbiddenHttp2ControlResult.failure() == nullptr ||
         forbiddenHttp2ControlResult.failure()->error() !=
             ruvia::detail::HttpFinalResponseControlPlanError::

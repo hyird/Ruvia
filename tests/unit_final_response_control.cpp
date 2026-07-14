@@ -16,7 +16,6 @@ using ruvia::HttpProtocolVersion;
 using ruvia::HttpResponse;
 using ruvia::detail::Http1FinalResponseControl;
 using ruvia::detail::Http2FinalResponseControl;
-using ruvia::detail::HttpFinalResponseControlPlan;
 using ruvia::detail::HttpFinalResponseControlPlanError;
 using ruvia::detail::HttpFinalResponseControlPlanFailure;
 using ruvia::detail::HttpFinalResponseControlPlanResult;
@@ -24,7 +23,6 @@ using ruvia::detail::httpFinalResponseControlPlan;
 
 static_assert(!std::default_initializable<Http1FinalResponseControl>);
 static_assert(!std::default_initializable<Http2FinalResponseControl>);
-static_assert(!std::default_initializable<HttpFinalResponseControlPlan>);
 static_assert(!std::default_initializable<HttpFinalResponseControlPlanFailure>);
 static_assert(!std::default_initializable<HttpFinalResponseControlPlanResult>);
 static_assert(std::same_as<
@@ -49,7 +47,8 @@ bool isFailure(
     HttpProtocolVersion version,
     HttpFinalResponseControlPlanError error) {
     const auto result = httpFinalResponseControlPlan(response, version);
-    return result.plan() == nullptr &&
+    return result.http1() == nullptr &&
+        result.http2() == nullptr &&
         result.failure() != nullptr &&
         result.failure()->error() == error;
 }
@@ -69,7 +68,7 @@ void addUncheckedHeader(
 
 }  // namespace
 
-RUVIA_TEST(final_response_control_plan_owns_exact_protocol_alternative) {
+RUVIA_TEST(final_response_control_result_owns_exact_protocol_alternative) {
     HttpResponse http1(std::pmr::get_default_resource());
     http1.header("Connection", "close");
     http1.header(
@@ -82,17 +81,14 @@ RUVIA_TEST(final_response_control_plan_owns_exact_protocol_alternative) {
         http1,
         HttpProtocolVersion::kHttp11);
     RUVIA_CHECK(http1Result.failure() == nullptr);
-    RUVIA_CHECK(http1Result.plan() != nullptr);
-    if (http1Result.plan() != nullptr) {
-        const auto* control = http1Result.plan()->http1();
-        RUVIA_CHECK(control != nullptr);
-        RUVIA_CHECK(http1Result.plan()->http2() == nullptr);
-        if (control != nullptr) {
-            RUVIA_CHECK(control->connectionOptions().close());
-            RUVIA_CHECK(control->connectionOptions().upgrade());
-            RUVIA_CHECK(control->upgradeProtocols().hasField());
-            RUVIA_CHECK(control->upgradeProtocols().hasProtocol());
-        }
+    const auto* http1Control = http1Result.http1();
+    RUVIA_CHECK(http1Control != nullptr);
+    RUVIA_CHECK(http1Result.http2() == nullptr);
+    if (http1Control != nullptr) {
+        RUVIA_CHECK(http1Control->connectionOptions().close());
+        RUVIA_CHECK(http1Control->connectionOptions().upgrade());
+        RUVIA_CHECK(http1Control->upgradeProtocols().hasField());
+        RUVIA_CHECK(http1Control->upgradeProtocols().hasProtocol());
     }
 
     HttpResponse http2(std::pmr::get_default_resource());
@@ -101,14 +97,11 @@ RUVIA_TEST(final_response_control_plan_owns_exact_protocol_alternative) {
         http2,
         HttpProtocolVersion::kHttp2);
     RUVIA_CHECK(http2Result.failure() == nullptr);
-    RUVIA_CHECK(http2Result.plan() != nullptr);
-    if (http2Result.plan() != nullptr) {
-        RUVIA_CHECK(http2Result.plan()->http1() == nullptr);
-        RUVIA_CHECK(http2Result.plan()->http2() != nullptr);
-    }
+    RUVIA_CHECK(http2Result.http1() == nullptr);
+    RUVIA_CHECK(http2Result.http2() != nullptr);
 }
 
-RUVIA_TEST(final_response_control_failure_never_exposes_a_default_plan) {
+RUVIA_TEST(final_response_control_failure_never_exposes_protocol_alternative) {
     HttpResponse invalidConnection(std::pmr::get_default_resource());
     addUncheckedHeader(invalidConnection, "Connection", ", close");
     RUVIA_CHECK(isFailure(

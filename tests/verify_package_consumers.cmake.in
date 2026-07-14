@@ -174,7 +174,13 @@ if(NOT _installed_http_operation_h1_text MATCHES
    NOT _installed_http_operation_h2_plan_text MATCHES
        "plan[(][)] const [&] noexcept" OR
    NOT _installed_http_operation_control_text MATCHES
-       "plan[(][)] const [&] noexcept" OR
+       "http1[(][)] const [&] noexcept" OR
+   NOT _installed_http_operation_control_text MATCHES
+       "http1[(][)] const && = delete" OR
+   NOT _installed_http_operation_control_text MATCHES
+       "http2[(][)] const [&] noexcept" OR
+   NOT _installed_http_operation_control_text MATCHES
+       "http2[(][)] const && = delete" OR
    NOT _installed_http_operation_trailers_text MATCHES
        "section[(][)] const [&] noexcept" OR
    NOT _installed_http_operation_trailers_text MATCHES
@@ -3225,24 +3231,24 @@ if(NOT _installed_final_response_control_plan MATCHES
    NOT _installed_final_response_control_plan MATCHES
        "class Http2FinalResponseControl final" OR
    NOT _installed_final_response_control_plan MATCHES
-       "class HttpFinalResponseControlPlan final" OR
-   NOT _installed_final_response_control_plan MATCHES
-       "using Protocol = std::variant" OR
-   NOT _installed_final_response_control_plan MATCHES
        "class HttpFinalResponseControlPlanFailure final" OR
    NOT _installed_final_response_control_plan MATCHES
        "class HttpFinalResponseControlPlanResult final" OR
    NOT _installed_final_response_control_plan MATCHES
        "using Value = std::variant" OR
    NOT _installed_final_response_control_plan MATCHES
-       "std::get_if<HttpFinalResponseControlPlan>" OR
+       "std::variant<[ \t\r\n]*Http1FinalResponseControl,[ \t\r\n]*Http2FinalResponseControl,[ \t\r\n]*HttpFinalResponseControlPlanFailure>" OR
+   NOT _installed_final_response_control_plan MATCHES
+       "std::get_if<Http1FinalResponseControl>" OR
+   NOT _installed_final_response_control_plan MATCHES
+       "std::get_if<Http2FinalResponseControl>" OR
    NOT _installed_final_response_control_plan MATCHES
        "kConnectionSpecificFieldForbidden" OR
    NOT _installed_final_response_control_plan MATCHES
        "http2IsForbiddenResponseConnectionField" OR
    _installed_final_response_control_plan MATCHES
-       "HttpFinalResponseControlStatus")
-    message(FATAL_ERROR "installed final-response control API restored status/default-payload state or lost protocol alternatives")
+       "class HttpFinalResponseControlPlan final|using Protocol = std::variant|std::get_if<HttpFinalResponseControlPlan>|plan[(][)] const [&] noexcept|HttpFinalResponseControlStatus")
+    message(FATAL_ERROR "installed final-response control API restored nested/status state or lost direct protocol alternatives")
 endif()
 set(_installed_http2_response_head_plan_path
     "${_install_prefix}/include/ruvia/http/detail/http2/Http2ResponseHeadPlan.h")

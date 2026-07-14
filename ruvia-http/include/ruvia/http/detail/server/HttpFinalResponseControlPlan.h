@@ -54,32 +54,6 @@ private:
     constexpr Http2FinalResponseControl() noexcept = default;
 };
 
-class HttpFinalResponseControlPlan final {
-public:
-    [[nodiscard]] const Http1FinalResponseControl* http1() const & noexcept {
-        return std::get_if<Http1FinalResponseControl>(&protocol_);
-    }
-    [[nodiscard]] const Http1FinalResponseControl* http1() const && = delete;
-
-    [[nodiscard]] const Http2FinalResponseControl* http2() const & noexcept {
-        return std::get_if<Http2FinalResponseControl>(&protocol_);
-    }
-    [[nodiscard]] const Http2FinalResponseControl* http2() const && = delete;
-
-private:
-    friend class HttpFinalResponseControlPlanResult;
-
-    using Protocol = std::variant<
-        Http1FinalResponseControl,
-        Http2FinalResponseControl>;
-
-    template <typename Alternative>
-    explicit HttpFinalResponseControlPlan(Alternative alternative) noexcept
-        : protocol_(alternative) {}
-
-    Protocol protocol_;
-};
-
 class HttpFinalResponseControlPlanFailure final {
 public:
     [[nodiscard]] constexpr HttpFinalResponseControlPlanError
@@ -97,15 +71,22 @@ private:
     HttpFinalResponseControlPlanError error_;
 };
 
-// A final response either has one complete protocol-specific control plan or
-// one failure. A failure cannot expose default Connection/Upgrade state, and a
-// valid HTTP/2 plan cannot be mistaken for the parsed HTTP/1 field contract.
+// A final response has exactly one protocol-specific control alternative or one
+// failure. Keeping those alternatives in this single discriminator avoids a
+// redundant success-plan variant and makes every caller select HTTP/1 or HTTP/2
+// before protocol state can be mutated. A failure cannot expose default
+// Connection/Upgrade state.
 class HttpFinalResponseControlPlanResult final {
 public:
-    [[nodiscard]] const HttpFinalResponseControlPlan* plan() const & noexcept {
-        return std::get_if<HttpFinalResponseControlPlan>(&value_);
+    [[nodiscard]] const Http1FinalResponseControl* http1() const & noexcept {
+        return std::get_if<Http1FinalResponseControl>(&value_);
     }
-    [[nodiscard]] const HttpFinalResponseControlPlan* plan() const && = delete;
+    [[nodiscard]] const Http1FinalResponseControl* http1() const && = delete;
+
+    [[nodiscard]] const Http2FinalResponseControl* http2() const & noexcept {
+        return std::get_if<Http2FinalResponseControl>(&value_);
+    }
+    [[nodiscard]] const Http2FinalResponseControl* http2() const && = delete;
 
     [[nodiscard]] const HttpFinalResponseControlPlanFailure*
     failure() const & noexcept {
@@ -119,7 +100,8 @@ private:
         const HttpResponse&, HttpProtocolVersion) noexcept;
 
     using Value = std::variant<
-        HttpFinalResponseControlPlan,
+        Http1FinalResponseControl,
+        Http2FinalResponseControl,
         HttpFinalResponseControlPlanFailure>;
 
     template <typename Alternative>
@@ -127,23 +109,21 @@ private:
         Alternative alternative) noexcept
         : value_(alternative) {}
 
-    [[nodiscard]] static HttpFinalResponseControlPlanResult http1(
+    [[nodiscard]] static HttpFinalResponseControlPlanResult makeHttp1(
         HttpConnectionOptions connectionOptions,
         HttpUpgradeProtocols upgradeProtocols) noexcept {
         return HttpFinalResponseControlPlanResult(
-            HttpFinalResponseControlPlan(
-                Http1FinalResponseControl(
-                    connectionOptions,
-                    upgradeProtocols)));
+            Http1FinalResponseControl(
+                connectionOptions,
+                upgradeProtocols));
     }
 
-    [[nodiscard]] static HttpFinalResponseControlPlanResult http2() noexcept {
+    [[nodiscard]] static HttpFinalResponseControlPlanResult makeHttp2() noexcept {
         return HttpFinalResponseControlPlanResult(
-            HttpFinalResponseControlPlan(
-                Http2FinalResponseControl{}));
+            Http2FinalResponseControl{});
     }
 
-    [[nodiscard]] static HttpFinalResponseControlPlanResult failure(
+    [[nodiscard]] static HttpFinalResponseControlPlanResult makeFailure(
         HttpFinalResponseControlPlanError error) noexcept {
         return HttpFinalResponseControlPlanResult(
             HttpFinalResponseControlPlanFailure(error));
@@ -163,23 +143,23 @@ httpFinalResponseControlPlan(
     HttpProtocolVersion protocolVersion) noexcept {
     const auto statusCode = response.status();
     if (!httpFinalStatusCodeValid(statusCode)) {
-        return HttpFinalResponseControlPlanResult::failure(
+        return HttpFinalResponseControlPlanResult::makeFailure(
             HttpFinalResponseControlPlanError::kInvalidStatus);
     }
 
     if (protocolVersion == HttpProtocolVersion::kHttp2) {
         if (statusCode == 426) {
-            return HttpFinalResponseControlPlanResult::failure(
+            return HttpFinalResponseControlPlanResult::makeFailure(
                 HttpFinalResponseControlPlanError::kUpgradeUnavailable);
         }
         for (const auto& header : response.headers()) {
             if (http2IsForbiddenResponseConnectionField(header.name())) {
-                return HttpFinalResponseControlPlanResult::failure(
+                return HttpFinalResponseControlPlanResult::makeFailure(
                     HttpFinalResponseControlPlanError::
                         kConnectionSpecificFieldForbidden);
             }
         }
-        return HttpFinalResponseControlPlanResult::http2();
+        return HttpFinalResponseControlPlanResult::makeHttp2();
     }
 
     HttpConnectionOptions connectionOptions;
@@ -190,7 +170,7 @@ httpFinalResponseControlPlan(
                     header.value(),
                     HttpFieldListRole::kSender) !=
                 HttpFieldListParseStatus::kOk) {
-                return HttpFinalResponseControlPlanResult::failure(
+                return HttpFinalResponseControlPlanResult::makeFailure(
                     HttpFinalResponseControlPlanError::
                         kInvalidConnectionField);
             }
@@ -203,17 +183,17 @@ httpFinalResponseControlPlan(
                     [](const HttpUpgradeProtocol&) noexcept {
                         return true;
                     }) != HttpFieldListParseStatus::kOk) {
-                return HttpFinalResponseControlPlanResult::failure(
+                return HttpFinalResponseControlPlanResult::makeFailure(
                     HttpFinalResponseControlPlanError::
                         kInvalidUpgradeField);
             }
         }
     }
     if (statusCode == 426 && !upgradeProtocols.hasProtocol()) {
-        return HttpFinalResponseControlPlanResult::failure(
+        return HttpFinalResponseControlPlanResult::makeFailure(
             HttpFinalResponseControlPlanError::kUpgradeRequired);
     }
-    return HttpFinalResponseControlPlanResult::http1(
+    return HttpFinalResponseControlPlanResult::makeHttp1(
         connectionOptions,
         upgradeProtocols);
 }

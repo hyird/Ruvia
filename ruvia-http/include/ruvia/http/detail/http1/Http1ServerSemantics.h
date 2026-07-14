@@ -210,10 +210,9 @@ private:
     if (const auto* failure = controlResult.failure()) {
         return Http1FinalResponseCommitResult::failure(failure->error());
     }
-    const auto* controlPlan = controlResult.plan();
     // Http1ServerConnectionPlan can only retain HTTP/1.0 or HTTP/1.1, so the
     // shared control planner must produce its HTTP/1 alternative here.
-    const auto& http1Control = *controlPlan->http1();
+    const auto& http1Control = *controlResult.http1();
     const auto responseOptions = http1Control.connectionOptions();
     const auto upgradeProtocols = http1Control.upgradeProtocols();
     const bool preserveUpgrade = upgradeProtocols.hasField();

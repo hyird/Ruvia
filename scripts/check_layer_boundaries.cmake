@@ -5304,17 +5304,17 @@ else()
        NOT http_final_response_control_plan MATCHES
            "class Http2FinalResponseControl final" OR
        NOT http_final_response_control_plan MATCHES
-           "class HttpFinalResponseControlPlan final" OR
-       NOT http_final_response_control_plan MATCHES
-           "using Protocol = std::variant" OR
-       NOT http_final_response_control_plan MATCHES
            "class HttpFinalResponseControlPlanFailure final" OR
        NOT http_final_response_control_plan MATCHES
            "class HttpFinalResponseControlPlanResult final" OR
        NOT http_final_response_control_plan MATCHES
            "using Value = std::variant" OR
        NOT http_final_response_control_plan MATCHES
-           "std::get_if<HttpFinalResponseControlPlan>" OR
+           "std::variant<[ \t\r\n]*Http1FinalResponseControl,[ \t\r\n]*Http2FinalResponseControl,[ \t\r\n]*HttpFinalResponseControlPlanFailure>" OR
+       NOT http_final_response_control_plan MATCHES
+           "std::get_if<Http1FinalResponseControl>" OR
+       NOT http_final_response_control_plan MATCHES
+           "std::get_if<Http2FinalResponseControl>" OR
        NOT http_final_response_control_plan MATCHES "statusCode == 426" OR
        NOT http_final_response_control_plan MATCHES "kUpgradeUnavailable" OR
        NOT http_final_response_control_plan MATCHES
@@ -5327,6 +5327,8 @@ else()
        http2_response_headers MATCHES
            "http2ResponseConnectionHeaderForbidden" OR
        http_final_response_control_plan MATCHES
+           "class HttpFinalResponseControlPlan final|using Protocol = std::variant|std::get_if<HttpFinalResponseControlPlan>|plan[(][)] const [&] noexcept" OR
+       http_final_response_control_plan MATCHES
            "${RULE_STALE_FINAL_RESPONSE_CONTROL_TUPLE}")
         boundary_error("final response status/Upgrade paths have diverged"
             "one discriminated result must own exact H1/H2 alternatives, typed failure, parsed H1 fields, and RFC 9113 connection-field rejection before encoding")
@@ -5334,19 +5336,19 @@ else()
     if(NOT http1_server_semantics MATCHES "class Http1FinalResponseCommitResult final" OR
        NOT http1_server_semantics MATCHES "using Value = std::variant" OR
        NOT http1_server_semantics MATCHES "controlResult[.]failure[(][)]" OR
-       NOT http1_server_semantics MATCHES "controlResult[.]plan[(][)]" OR
-       NOT http1_server_semantics MATCHES "controlPlan->http1[(][)]" OR
+       NOT http1_server_semantics MATCHES "controlResult[.]http1[(][)]" OR
        NOT http1_server_semantics MATCHES "connectionOptions[(][)]" OR
        NOT http1_server_semantics MATCHES "upgradeProtocols[(][)]" OR
-       http1_server_semantics MATCHES "http1ResponseConnectionOptions")
-        boundary_error("HTTP/1 final response control was reparsed or flattened"
+       http1_server_semantics MATCHES "controlResult[.]plan[(][)]|controlPlan->http1[(][)]|http1ResponseConnectionOptions")
+        boundary_error("HTTP/1 final response control was reparsed or reduced to scalars"
             "the typed commit must retain failures and consume the H1 alternative's already parsed Connection and Upgrade states")
     endif()
     string(REGEX MATCHALL "httpFinalResponseControlPlan[(]"
         http2_final_control_calls "${http2_connection_source}")
     list(LENGTH http2_final_control_calls http2_final_control_call_count)
     if(http2_final_control_call_count LESS 3 OR
-       NOT http2_connection_source MATCHES "controlPlan->http2[(][)]" OR
+       NOT http2_connection_source MATCHES "controlResult[.]http2[(][)]" OR
+       http2_connection_source MATCHES "controlResult[.]plan[(][)]|controlPlan->http2[(][)]" OR
        NOT http2_connection_source MATCHES
            "submitConnectResponseHead[^(]*[(]")
         boundary_error("HTTP/2 final response paths bypassed shared control planning"
@@ -5391,9 +5393,9 @@ if(EXISTS "${FINAL_RESPONSE_CONTROL_TEST}" AND
     file(READ "${HTTP_FINAL_CONTROL_PACKAGE_TEST}"
         http_final_control_package_test)
     if(NOT final_response_control_test MATCHES
-           "final_response_control_plan_owns_exact_protocol_alternative" OR
+           "final_response_control_result_owns_exact_protocol_alternative" OR
        NOT final_response_control_test MATCHES
-           "final_response_control_failure_never_exposes_a_default_plan" OR
+           "final_response_control_failure_never_exposes_protocol_alternative" OR
        NOT final_response_control_test MATCHES
            "final_response_control_rejects_every_http2_connection_specific_field" OR
        NOT http2_final_response_header_test MATCHES
@@ -5403,8 +5405,6 @@ if(EXISTS "${FINAL_RESPONSE_CONTROL_TEST}" AND
        NOT http2_connect_response_test MATCHES "invalidConnection" OR
        NOT http_final_control_package_test MATCHES
            "HasFinalResponseControlResultAlternatives" OR
-       NOT http_final_control_package_test MATCHES
-           "HasFinalResponseControlProtocolAlternatives" OR
        NOT http_final_control_package_test MATCHES
            "!HasStaleFinalResponseControlStatus")
         boundary_error("final-response control coverage is incomplete"
@@ -9600,7 +9600,9 @@ if(EXISTS "${HTTP_OPERATION_RESULT_H1}" AND
        NOT http_operation_result_h2_plan MATCHES
            "plan[(][)] const [&] noexcept" OR
        NOT http_operation_result_control MATCHES
-           "plan[(][)] const [&] noexcept" OR
+           "http1[(][)] const [&] noexcept" OR
+       NOT http_operation_result_control MATCHES
+           "http2[(][)] const && = delete" OR
        NOT http_operation_result_trailers MATCHES
            "section[(][)] const [&] noexcept" OR
        NOT http_operation_result_trailers MATCHES
