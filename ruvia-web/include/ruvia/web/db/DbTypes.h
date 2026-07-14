@@ -16,7 +16,13 @@ namespace ruvia {
 class RequestMemory;
 class DbValue;
 
+enum class DbDriver : std::uint8_t {
+    kMariaDb,
+    kPostgreSql,
+};
+
 struct DbConfig {
+    DbDriver driver{DbDriver::kMariaDb};
     // Host name or unbracketed address only; keep the port in port.
     std::pmr::string host{"127.0.0.1"};
     // Must be non-zero.
@@ -32,6 +38,17 @@ struct DbConfig {
     std::optional<std::chrono::milliseconds> writeTimeout;
     std::optional<std::chrono::milliseconds> queryTimeout;
     std::optional<std::chrono::milliseconds> acquireTimeout;
+
+    [[nodiscard]] static DbConfig mariaDb() {
+        return DbConfig{};
+    }
+
+    [[nodiscard]] static DbConfig postgreSql() {
+        DbConfig config;
+        config.driver = DbDriver::kPostgreSql;
+        config.port = 5432;
+        return config;
+    }
 };
 
 namespace detail {
@@ -42,9 +59,11 @@ struct DbDefinition final {
 };
 
 class MariaDbPool;
+class PostgreSqlPool;
 class DbRegistry;
 class DbMigrationRunner;
 struct DbValueAccess;
+struct DbResultAccess;
 
 }  // namespace detail
 
@@ -115,7 +134,7 @@ public:
     [[nodiscard]] std::string_view text() const noexcept;
 
 private:
-    friend class detail::MariaDbPool;
+    friend struct detail::DbResultAccess;
 
     struct BorrowedTag final {};
 
@@ -147,7 +166,7 @@ public:
     [[nodiscard]] const DbField* end() const noexcept;
 
 private:
-    friend class detail::MariaDbPool;
+    friend struct detail::DbResultAccess;
 
     explicit DbRow(std::pmr::memory_resource* resource = nullptr);
     DbRow(const DbField* fields, std::size_t size, std::pmr::memory_resource* resource);

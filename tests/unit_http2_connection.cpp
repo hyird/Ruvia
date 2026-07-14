@@ -4277,6 +4277,108 @@ RUVIA_TEST(http2_connection_drained_pings_never_trip) {
     }
 }
 
+// A peer that floods non-ACK SETTINGS without ever letting us flush the echoed ACKs is
+// cut off with GOAWAY(ENHANCE_YOUR_CALM) instead of accumulating unbounded ACK bytes
+// (CVE-2019-9515 SETTINGS flood -- the sibling of the PING flood above).
+RUVIA_TEST(http2_connection_settings_flood_trips_enhance_your_calm) {
+    std::pmr::monotonic_buffer_resource resource;
+    Http2Connection conn(&resource);
+    handshake(conn);
+
+    char settings[9];
+    ruvia::detail::http2EncodeFrameHeader(settings, 0, Http2FrameType::kSettings, 0, 0);
+
+    bool tripped = false;
+    for (int i = 0; i < 1200 && !tripped; ++i) {
+        // Deliberately do NOT drain output between frames, so the un-drained SETTINGS
+        // budget accumulates (consumeOutput would reset it -- see the drained test below).
+        tripped = conn.feed(std::string_view(settings, sizeof(settings))) ==
+                  ruvia::detail::Http2FeedResult::kProtocolFailure;
+    }
+    RUVIA_CHECK(tripped);
+    RUVIA_CHECK(conn.connectionError().has_value());
+    RUVIA_CHECK_EQ(firstGoawayError(conn.pendingOutput()), kEnhanceYourCalm);
+}
+
+// Healthy SETTINGS re-tuning (ACKs drained each round) never trips, however many.
+RUVIA_TEST(http2_connection_drained_settings_never_trip) {
+    std::pmr::monotonic_buffer_resource resource;
+    Http2Connection conn(&resource);
+    handshake(conn);
+
+    char settings[9];
+    ruvia::detail::http2EncodeFrameHeader(settings, 0, Http2FrameType::kSettings, 0, 0);
+
+    for (int i = 0; i < 5000; ++i) {
+        const auto r = conn.feed(std::string_view(settings, sizeof(settings)));
+        RUVIA_CHECK(r == ruvia::detail::Http2FeedResult::kAccepted);
+        conn.consumeOutput(conn.pendingOutput().size());  // flush ACK -> resets budget
+        RUVIA_CHECK(!conn.connectionError().has_value());
+    }
+}
+
+namespace {
+// Open stream 1 and let the peer RST it, leaving it a tracked closed (non-idle,
+// non-GOAWAY) stream that answers further DATA with RST_STREAM.
+void openThenPeerReset(Http2Connection& conn, std::pmr::memory_resource* resource) {
+    std::pmr::string block(resource);
+    encodeGetRequest(block);
+    const auto head = headersFrame(
+        resource, 1,
+        ruvia::detail::kHttp2FlagEndHeaders | ruvia::detail::kHttp2FlagEndStream,
+        std::string_view(block.data(), block.size()));
+    (void)conn.feed(std::string_view(head.data(), head.size()));
+    while (conn.nextEvent().has_value()) {
+    }
+    char rst[9 + 4];
+    ruvia::detail::http2EncodeFrameHeader(rst, 4, Http2FrameType::kRstStream, 0, 1);
+    ruvia::detail::http2Write32(rst + 9, 0);
+    (void)conn.feed(std::string_view(rst, sizeof(rst)));
+    while (conn.nextEvent().has_value()) {
+    }
+    conn.consumeOutput(conn.pendingOutput().size());  // flush + reset the flood budgets
+}
+}  // namespace
+
+// A peer that keeps aiming DATA at the SAME already-closed stream forces an RST_STREAM
+// into the outbound buffer each time. Without draining, that grows output unboundedly;
+// the closed-stream RST budget cuts the peer off with GOAWAY(ENHANCE_YOUR_CALM).
+RUVIA_TEST(http2_connection_closed_stream_data_flood_trips_enhance_your_calm) {
+    std::pmr::monotonic_buffer_resource resource;
+    Http2Connection conn(&resource);
+    handshake(conn);
+    openThenPeerReset(conn, &resource);
+
+    // Empty DATA (zero flow bytes) isolates the RST amplification from flow control.
+    const auto data = dataFrame(&resource, 1, 0, {});
+    bool tripped = false;
+    for (int i = 0; i < 1200 && !tripped; ++i) {
+        tripped = conn.feed(std::string_view(data.data(), data.size())) ==
+                  ruvia::detail::Http2FeedResult::kProtocolFailure;
+    }
+    RUVIA_CHECK(tripped);
+    RUVIA_CHECK(conn.connectionError().has_value());
+    RUVIA_CHECK_EQ(firstGoawayError(conn.pendingOutput()), kEnhanceYourCalm);
+}
+
+// The same closed-stream DATA, but with output drained each round (as the real writer
+// does), models legitimate in-flight DATA arriving after a close: the RSTs flush and the
+// budget resets, so it never trips however long the peer keeps sending.
+RUVIA_TEST(http2_connection_drained_closed_stream_data_never_trips) {
+    std::pmr::monotonic_buffer_resource resource;
+    Http2Connection conn(&resource);
+    handshake(conn);
+    openThenPeerReset(conn, &resource);
+
+    const auto data = dataFrame(&resource, 1, 0, {});
+    for (int i = 0; i < 5000; ++i) {
+        const auto r = conn.feed(std::string_view(data.data(), data.size()));
+        RUVIA_CHECK(r != ruvia::detail::Http2FeedResult::kProtocolFailure);
+        conn.consumeOutput(conn.pendingOutput().size());  // flush RST -> resets budget
+        RUVIA_CHECK(!conn.connectionError().has_value());
+    }
+}
+
 // A rapid-reset flood (open a stream, RST it, repeat -- never letting a response finish)
 // is cut off with GOAWAY(ENHANCE_YOUR_CALM); the 128-stream cap alone never trips because
 // each RST immediately frees the slot (CVE-2023-44487).
@@ -4318,4 +4420,72 @@ RUVIA_TEST(http2_connection_rapid_reset_flood_trips_enhance_your_calm) {
     RUVIA_CHECK(tripped);
     RUVIA_CHECK(conn.connectionError().has_value());
     RUVIA_CHECK_EQ(firstGoawayError(conn.pendingOutput()), kEnhanceYourCalm);
+}
+
+// A HEADERS without END_HEADERS followed by an endless stream of EMPTY CONTINUATION
+// frames keeps the field block "in progress" forever: empty frames add no bytes,
+// so the accumulated-block size cap never trips. The CONTINUATION frame-count
+// budget cuts the peer off with GOAWAY(ENHANCE_YOUR_CALM) (RFC 9113 §6.10,
+// CVE-2024-27316).
+RUVIA_TEST(http2_connection_continuation_flood_trips_enhance_your_calm) {
+    std::pmr::monotonic_buffer_resource resource;
+    Http2Connection conn(&resource);
+    handshake(conn);
+
+    std::pmr::string block(&resource);
+    encodeGetRequest(block);
+    // Open the block WITHOUT END_HEADERS so CONTINUATION frames are expected.
+    const auto head = headersFrame(
+        &resource, 1, 0, std::string_view(block.data(), block.size()));
+    RUVIA_CHECK(conn.feed(std::string_view(head.data(), head.size())) !=
+        ruvia::detail::Http2FeedResult::kProtocolFailure);
+
+    const auto empty = continuationFrame(&resource, 1, 0, {});
+    bool tripped = false;
+    for (std::uint32_t i = 0;
+         i < ruvia::detail::kHttp2MaxContinuationFrames + 2 && !tripped;
+         ++i) {
+        tripped = conn.feed(std::string_view(empty.data(), empty.size())) ==
+            ruvia::detail::Http2FeedResult::kProtocolFailure;
+    }
+    RUVIA_CHECK(tripped);
+    RUVIA_CHECK(conn.connectionError().has_value());
+    RUVIA_CHECK_EQ(firstGoawayError(conn.pendingOutput()), kEnhanceYourCalm);
+}
+
+// A well-formed head split across a few CONTINUATION frames completes normally: the
+// budget is generous enough that legitimate fragmentation never trips it.
+RUVIA_TEST(http2_connection_fragmented_headers_within_budget_complete) {
+    std::pmr::monotonic_buffer_resource resource;
+    Http2Connection conn(&resource);
+    handshake(conn);
+
+    std::pmr::string block(&resource);
+    encodeGetRequest(block);
+    const std::string_view whole(block.data(), block.size());
+    const auto q = whole.size() / 4;
+    const auto head = headersFrame(&resource, 1, 0, whole.substr(0, q));
+    RUVIA_CHECK(conn.feed(std::string_view(head.data(), head.size())) !=
+        ruvia::detail::Http2FeedResult::kProtocolFailure);
+    const auto c1 = continuationFrame(&resource, 1, 0, whole.substr(q, q));
+    const auto c2 = continuationFrame(&resource, 1, 0, whole.substr(2 * q, q));
+    const auto c3 = continuationFrame(
+        &resource, 1,
+        ruvia::detail::kHttp2FlagEndHeaders | ruvia::detail::kHttp2FlagEndStream,
+        whole.substr(3 * q));
+    RUVIA_CHECK(conn.feed(std::string_view(c1.data(), c1.size())) !=
+        ruvia::detail::Http2FeedResult::kProtocolFailure);
+    RUVIA_CHECK(conn.feed(std::string_view(c2.data(), c2.size())) !=
+        ruvia::detail::Http2FeedResult::kProtocolFailure);
+    RUVIA_CHECK(conn.feed(std::string_view(c3.data(), c3.size())) !=
+        ruvia::detail::Http2FeedResult::kProtocolFailure);
+    RUVIA_CHECK(!conn.connectionError().has_value());
+
+    bool sawHead = false;
+    while (const auto event = conn.nextEvent()) {
+        if (event->messageHead() != nullptr) {
+            sawHead = true;
+        }
+    }
+    RUVIA_CHECK(sawHead);
 }

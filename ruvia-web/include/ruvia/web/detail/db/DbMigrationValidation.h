@@ -10,12 +10,14 @@
 namespace ruvia::detail {
 
 // A migration table name is a SQL identifier that cannot be parameterized, so it
-// is restricted to MariaDB's 64-character identifier limit and [A-Za-z0-9_]
-// before being backtick-quoted -- the sole defense against SQL injection via a
-// misconfigured table name.
-[[nodiscard]] inline bool isValidMigrationTableName(std::string_view name) noexcept {
-    constexpr std::size_t kMaxMariaDbIdentifierBytes = 64;
-    if (name.empty() || name.size() > kMaxMariaDbIdentifierBytes) {
+// is restricted to the selected backend's identifier byte limit and
+// [A-Za-z0-9_] before being quoted -- the sole defense against SQL injection
+// via a misconfigured table name.
+[[nodiscard]] inline bool isValidMigrationTableName(
+    std::string_view name,
+    DbDriver driver) noexcept {
+    const auto maxBytes = driver == DbDriver::kPostgreSql ? 63U : 64U;
+    if (name.empty() || name.size() > maxBytes) {
         return false;
     }
     for (const auto ch : name) {

@@ -1,6 +1,6 @@
 {
   "name": "ruvia",
-  "version-string": "0.1.0",
+  "version-string": "0.1.1",
   "default-features": [
     "runtime",
     "protocol",
@@ -45,6 +45,12 @@
       "description": "Build MariaDB-compatible database APIs.",
       "dependencies": [
         "libmariadb"
+      ]
+    },
+    "postgresql": {
+      "description": "Build PostgreSQL database APIs.",
+      "dependencies": [
+        "libpq"
       ]
     },
     "redis": {

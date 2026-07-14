@@ -573,3 +573,84 @@ RUVIA_TEST(context_generate_cookie_serializes_all_attributes) {
         std::string_view("__Secure-sess=xyz; Path=/app; Domain=example.com; "
                          "Expires=Fri, 13 Feb 2009 23:31:30 GMT; Secure; SameSite=None"));
 }
+
+// A prefixed signed cookie reaches the client under its wire name
+// ("__Host-session"), so that is the only name the read side can pass back.
+// The signature therefore has to bind the wire name: signing the bare name
+// made every prefixed signed cookie unverifiable.
+RUVIA_TEST(context_signed_cookie_with_prefix_verifies_round_trip) {
+    WorkerMemory worker;
+    HttpRequest writeRequest = HttpRequestAccess::make();
+    HttpRequestAccess::reset(writeRequest);
+    RequestMemory writeMemory(worker);
+    HttpRequestAccess::setResource(writeRequest, writeMemory.resource());
+    auto writeContext = ContextAccess::make(writeMemory, writeRequest);
+
+    ruvia::CookieOptions options;
+    options.prefix = ruvia::CookiePrefix::kHost;
+    options.secure = true;
+    options.path = "/";
+    const auto setCookie = writeContext.generateSignedCookie(
+        "session", "user-1", "secret", options);
+    const std::string_view line(setCookie.data(), setCookie.size());
+    const auto pair = line.substr(0, line.find(';'));
+    RUVIA_CHECK(pair.starts_with("__Host-session="));
+
+    // Present the cookie exactly as a browser sends it back.
+    HttpRequest readRequest = HttpRequestAccess::make();
+    HttpRequestAccess::reset(readRequest);
+    const std::string cookieField(pair);
+    RUVIA_CHECK(HttpRequestAccess::addHeader(
+        readRequest,
+        HttpHeaderView{"Cookie", cookieField},
+        HttpRequestAccess::knownHeaderSlot(RequestKnownHeader::kCookie)));
+    RequestMemory readMemory(worker);
+    HttpRequestAccess::setResource(readRequest, readMemory.resource());
+    auto readContext = ContextAccess::make(readMemory, readRequest);
+
+    const auto verified = readContext.req().signedCookie("__Host-session", "secret");
+    RUVIA_CHECK(verified.has_value());
+    RUVIA_CHECK_EQ(*verified, std::string_view("user-1"));
+
+    // An unprefixed signed cookie keeps verifying under its own name.
+    const auto bare = writeContext.generateSignedCookie(
+        "plain", "user-2", "secret", ruvia::CookieOptions{});
+    const std::string_view bareLine(bare.data(), bare.size());
+    const std::string bareField(bareLine.substr(0, bareLine.find(';')));
+    HttpRequest bareRequest = HttpRequestAccess::make();
+    HttpRequestAccess::reset(bareRequest);
+    RUVIA_CHECK(HttpRequestAccess::addHeader(
+        bareRequest,
+        HttpHeaderView{"Cookie", bareField},
+        HttpRequestAccess::knownHeaderSlot(RequestKnownHeader::kCookie)));
+    RequestMemory bareMemory(worker);
+    HttpRequestAccess::setResource(bareRequest, bareMemory.resource());
+    auto bareContext = ContextAccess::make(bareMemory, bareRequest);
+    const auto bareVerified = bareContext.req().signedCookie("plain", "secret");
+    RUVIA_CHECK(bareVerified.has_value());
+    RUVIA_CHECK_EQ(*bareVerified, std::string_view("user-2"));
+}
+
+// deleteCookie reports the value being deleted. A prefixed cookie lives in the
+// request under its wire name, so the lookup has to use it -- the bare-name
+// lookup always came back empty for prefixed cookies.
+RUVIA_TEST(context_delete_cookie_with_prefix_returns_previous_value) {
+    WorkerMemory worker;
+    HttpRequest request = HttpRequestAccess::make();
+    HttpRequestAccess::reset(request);
+    RUVIA_CHECK(HttpRequestAccess::addHeader(
+        request,
+        HttpHeaderView{"Cookie", "__Host-session=user-1"},
+        HttpRequestAccess::knownHeaderSlot(RequestKnownHeader::kCookie)));
+    RequestMemory requestMemory(worker);
+    HttpRequestAccess::setResource(request, requestMemory.resource());
+    auto context = ContextAccess::make(requestMemory, request);
+
+    ruvia::CookieOptions options;
+    options.prefix = ruvia::CookiePrefix::kHost;
+    options.secure = true;
+    options.path = "/";
+    const auto previous = context.deleteCookie("session", options);
+    RUVIA_CHECK(previous.has_value());
+    RUVIA_CHECK_EQ(*previous, std::string_view("user-1"));
+}

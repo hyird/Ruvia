@@ -95,8 +95,8 @@ std::runtime_error mysqlError(const st_mysql& connection, std::string_view opera
     return std::runtime_error(error.c_str());
 }
 
-void freeStoredResult(st_mysql_res* result) noexcept {
-    mysql_free_result(result);
+void freeStoredResult(void* result) noexcept {
+    mysql_free_result(static_cast<st_mysql_res*>(result));
 }
 
 std::pmr::string interpolateSql(

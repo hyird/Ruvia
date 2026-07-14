@@ -2299,3 +2299,143 @@ RUVIA_TEST(sansio_driver_h2_two_concurrent_ws_tunnels) {
     RUVIA_CHECK(echo1.size() == 5 && echo1.substr(2) == "one");     // FIN|text len3 "one"
     RUVIA_CHECK(echo3.size() == 7 && echo3.substr(2) == "three");   // FIN|text len5 "three"
 }
+
+// nginx keepalive_requests parity on h2 (the h1 side runs Http1RequestSequence):
+// after the configured number of request heads the session drains -- GOAWAY
+// (NO_ERROR) advertising the last accepted stream, the in-flight request still
+// completes, and a stream opened above the advertised id is refused.
+RUVIA_TEST(sansio_driver_h2_keepalive_requests_drains_connection) {
+    asio::io_context io;
+    tcp::acceptor acceptor(io, tcp::endpoint(asio::ip::make_address("127.0.0.1"), 0));
+    const std::uint16_t port = acceptor.local_endpoint().port();
+    bool sawGoawayNoError = false;
+    bool sawResponseEnd = false;
+    bool sawRefusedStream = false;
+
+    asio::co_spawn(
+        io,
+        [&]() -> asio::awaitable<void> {
+            auto sock = co_await acceptor.async_accept(asio::use_awaitable);
+            ruvia::WorkerMemory worker;
+            ruvia::Router router;
+            auto& impl = ruvia::detail::RouterImpl::from(router);
+            impl.registerRoute(
+                ruvia::HttpKnownMethod::kGet,
+                std::pmr::string("/ping", std::pmr::get_default_resource()),
+                ruvia::detail::RouteHandler(nullptr, &echoHandler),
+                ruvia::detail::RequestBodyMode::kBuffered,
+                std::span<const ruvia::detail::ControllerMiddlewareDescriptor>{},
+                std::span<const ruvia::detail::ControllerMiddlewareDescriptor>{});
+            impl.finalize();
+            ruvia::test::Http2SansIoSessionFixture fixture;
+            fixture.options.keepaliveRequests = 1;
+            co_await ruvia::detail::taskAsAwaitable(ruvia::detail::runHttp2SansIoSession(
+                sock,
+                impl.routeTable(),
+                worker,
+                fixture.context(
+                    ruvia::detail::ContextServices{}.withPlainTransport("127.0.0.1"))));
+        },
+        asio::detached);
+
+    asio::co_spawn(
+        io,
+        [&]() -> asio::awaitable<void> {
+            tcp::socket sock(io);
+            co_await sock.async_connect(
+                tcp::endpoint(asio::ip::make_address("127.0.0.1"), port), asio::use_awaitable);
+
+            auto writeAll = [&sock](std::string_view bytes) -> asio::awaitable<bool> {
+                auto [ec, n] = co_await asio::async_write(
+                    sock, asio::buffer(bytes.data(), bytes.size()), asio::as_tuple(asio::use_awaitable));
+                (void)n;
+                co_return !ec;
+            };
+            auto readExact = [&sock](void* data, std::size_t size) -> asio::awaitable<bool> {
+                auto [ec, n] = co_await asio::async_read(
+                    sock, asio::buffer(data, size), asio::as_tuple(asio::use_awaitable));
+                co_return !ec && n == size;
+            };
+            auto readFrameInto = [&readExact](
+                ruvia::detail::Http2FrameHeader& header,
+                std::string& payload) -> asio::awaitable<bool> {
+                char headerBytes[ruvia::detail::kHttp2FrameHeaderBytes];
+                if (!co_await readExact(headerBytes, sizeof(headerBytes))) {
+                    co_return false;
+                }
+                header = ruvia::detail::http2ParseFrameHeader(
+                    std::string_view(headerBytes, sizeof(headerBytes)));
+                payload.assign(header.length, '\0');
+                if (header.length != 0 &&
+                    !co_await readExact(payload.data(), payload.size())) {
+                    co_return false;
+                }
+                co_return true;
+            };
+            auto sendGet = [&writeAll](std::uint32_t streamId) -> asio::awaitable<bool> {
+                std::pmr::string headerBlock(std::pmr::get_default_resource());
+                HpackEncoder::encodeHeader(headerBlock, ":method", "GET");
+                HpackEncoder::encodeHeader(headerBlock, ":path", "/ping");
+                HpackEncoder::encodeHeader(headerBlock, ":scheme", "http");
+                HpackEncoder::encodeHeader(headerBlock, ":authority", "localhost");
+                co_return co_await writeAll(frame(
+                    0x1 /*HEADERS*/,
+                    ruvia::detail::kHttp2FlagEndStream | ruvia::detail::kHttp2FlagEndHeaders,
+                    streamId,
+                    std::string_view(headerBlock.data(), headerBlock.size())));
+            };
+
+            if (!co_await writeAll(kClientPreface) ||
+                !co_await writeAll(frame(0x4 /*SETTINGS*/, 0, 0, {})) ||
+                !co_await sendGet(1)) {
+                co_return;
+            }
+
+            ruvia::detail::Http2FrameHeader header{};
+            std::string payload;
+            while (!sawGoawayNoError || !sawResponseEnd) {
+                if (!co_await readFrameInto(header, payload)) {
+                    co_return;
+                }
+                if (header.type == static_cast<std::uint8_t>(Http2FrameType::kGoaway) &&
+                    header.streamId == 0 &&
+                    payload.size() >= 8) {
+                    const auto* bytes = reinterpret_cast<const unsigned char*>(payload.data());
+                    const auto lastStreamId = ruvia::detail::http2Read31(bytes);
+                    const auto errorCode = ruvia::detail::http2Read32(bytes + 4);
+                    sawGoawayNoError = lastStreamId == 1 && errorCode == 0;
+                    continue;
+                }
+                if (header.streamId == 1 &&
+                    (header.flags & ruvia::detail::kHttp2FlagEndStream) != 0) {
+                    sawResponseEnd = true;
+                }
+            }
+
+            // The drained connection must refuse a stream above the advertised id.
+            if (!co_await sendGet(3)) {
+                co_return;
+            }
+            while (!sawRefusedStream) {
+                if (!co_await readFrameInto(header, payload)) {
+                    co_return;
+                }
+                if (header.type == static_cast<std::uint8_t>(Http2FrameType::kRstStream) &&
+                    header.streamId == 3 &&
+                    payload.size() == 4) {
+                    const auto* bytes = reinterpret_cast<const unsigned char*>(payload.data());
+                    sawRefusedStream = ruvia::detail::http2Read32(bytes) ==
+                        static_cast<std::uint32_t>(ruvia::detail::Http2ErrorCode::kRefusedStream);
+                }
+            }
+
+            asio::error_code ignored;
+            sock.shutdown(tcp::socket::shutdown_both, ignored);
+        },
+        asio::detached);
+
+    io.run();
+    RUVIA_CHECK(sawGoawayNoError);
+    RUVIA_CHECK(sawResponseEnd);
+    RUVIA_CHECK(sawRefusedStream);
+}
