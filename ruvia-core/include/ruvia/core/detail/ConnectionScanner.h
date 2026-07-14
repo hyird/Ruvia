@@ -25,6 +25,8 @@ struct ConnectionScannerOptions final {
 
 class ConnectionScanner final {
 public:
+    using PeriodicCheck = bool (*)(void*, std::int64_t) noexcept;
+
     enum class Phase {
         kIdle,
         kReadingInitial,
@@ -33,23 +35,66 @@ public:
         kWriting
     };
 
+    class Entry;
+
+    // Intrusive registration: the checked object owns the node, so one
+    // multiplexed connection can carry any number of stream-local checks
+    // without a scanner allocation or an arbitrary fixed slot limit.
+    class PeriodicCheckRegistration final {
+    public:
+        PeriodicCheckRegistration() noexcept = default;
+        ~PeriodicCheckRegistration() noexcept;
+
+        PeriodicCheckRegistration(const PeriodicCheckRegistration&) = delete;
+        PeriodicCheckRegistration& operator=(
+            const PeriodicCheckRegistration&) = delete;
+        PeriodicCheckRegistration(PeriodicCheckRegistration&&) = delete;
+        PeriodicCheckRegistration& operator=(
+            PeriodicCheckRegistration&&) = delete;
+
+        void reset() noexcept;
+
+    private:
+        friend class ConnectionScanner;
+        friend class Entry;
+
+        Entry* entry_{nullptr};
+        PeriodicCheckRegistration* prev_{nullptr};
+        PeriodicCheckRegistration* next_{nullptr};
+        void* target_{nullptr};
+        PeriodicCheck tick_{nullptr};
+    };
+
     class Entry final {
     public:
-        using PeriodicCheck = bool (*)(void*, std::int64_t) noexcept;
+        Entry() noexcept = default;
+        ~Entry() noexcept;
+
+        Entry(const Entry&) = delete;
+        Entry& operator=(const Entry&) = delete;
+        Entry(Entry&&) = delete;
+        Entry& operator=(Entry&&) = delete;
 
         void touch() noexcept;
         void setPhase(Phase nextPhase) noexcept;
         [[nodiscard]] std::int64_t lastActiveMs() const noexcept;
-        void setPeriodicCheck(void* target, PeriodicCheck tick) noexcept;
-        void clearPeriodicCheck(void* target) noexcept;
+        void registerPeriodicCheck(
+            PeriodicCheckRegistration& registration,
+            void* target,
+            PeriodicCheck tick) noexcept;
 
     private:
         friend class ConnectionScanner;
+        friend class PeriodicCheckRegistration;
 
         [[nodiscard]] bool linked() const noexcept;
         [[nodiscard]] bool tickLongLived(std::int64_t now) noexcept;
+        void removePeriodicCheck(
+            PeriodicCheckRegistration& registration) noexcept;
+        void detachPeriodicChecks() noexcept;
 
         asio::ip::tcp::socket* socket_{nullptr};
+        ConnectionScanner* scanner_{nullptr};
         Entry* prev_{nullptr};
         Entry* next_{nullptr};
         // Coarse timestamp source owned by the scanner; refreshed once per scan
@@ -57,15 +102,11 @@ public:
         const std::int64_t* nowMs_{nullptr};
         std::int64_t lastActiveMs_{0};
         Phase phase_{Phase::kIdle};
-        // Periodic connection-local liveness checks. A multiplexed runtime can
-        // register several independent checks without allocating or sharing state
-        // across workers. Failure of any check closes the owning connection.
-        static constexpr std::size_t kMaxPeriodicChecks = 8;
-        struct PeriodicCheckSlot final {
-            void* target{nullptr};
-            PeriodicCheck tick{nullptr};
-        };
-        std::array<PeriodicCheckSlot, kMaxPeriodicChecks> periodicChecks_{};
+        PeriodicCheckRegistration* periodicChecks_{nullptr};
+        // The next node to visit while tickLongLived() is active. Unlinking a
+        // different registration from inside a callback advances this cursor,
+        // so RAII teardown cannot leave iteration pointing at freed storage.
+        PeriodicCheckRegistration* periodicScanNext_{nullptr};
     };
 
     class Guard final {
@@ -93,7 +134,9 @@ public:
 private:
     static void detachEntry(Entry& entry) noexcept;
     void detachAllEntries() noexcept;
-    [[nodiscard]] bool hasAnyTimeout() const noexcept;
+    void periodicCheckAdded() noexcept;
+    void periodicCheckRemoved() noexcept;
+    [[nodiscard]] bool hasScanningWork() const noexcept;
     void schedule();
     void scan() noexcept;
     [[nodiscard]] bool isTimedOut(const Entry& entry, std::int64_t now) const noexcept;
@@ -109,6 +152,7 @@ private:
     };
     std::array<WorkerScanner, 5> workerScanners_{};
     std::size_t workerScannerCount_{0};
+    std::size_t periodicCheckCount_{0};
     bool running_{false};
 };
 

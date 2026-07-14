@@ -1,4 +1,7 @@
+#include <array>
 #include <chrono>
+#include <cstddef>
+#include <cstdint>
 #include <memory>
 #include <optional>
 #include <stdexcept>
@@ -9,6 +12,31 @@
 
 #include "ruvia/core/detail/ConnectionScanner.h"
 #include "ruvia/core/detail/WorkerDispatcher.h"
+
+namespace {
+
+struct PeriodicProbe final {
+    std::size_t ticks{0};
+
+    static bool tick(void* target, std::int64_t) noexcept {
+        ++static_cast<PeriodicProbe*>(target)->ticks;
+        return false;
+    }
+};
+
+struct PeriodicResetProbe final {
+    ruvia::detail::ConnectionScanner::PeriodicCheckRegistration* registration;
+    std::size_t ticks{0};
+
+    static bool tick(void* target, std::int64_t) noexcept {
+        auto& probe = *static_cast<PeriodicResetProbe*>(target);
+        ++probe.ticks;
+        probe.registration->reset();
+        return false;
+    }
+};
+
+}  // namespace
 
 int main() {
     asio::io_context ioContext;
@@ -84,4 +112,75 @@ int main() {
     secondEntry.setPhase(ruvia::detail::ConnectionScanner::Phase::kWriting);
     firstGuard.reset();
     secondGuard.reset();
+
+    // Multiplexed protocols can own more long-lived streams than the old fixed
+    // eight-slot scanner table. Every checked object supplies its own intrusive
+    // node, so registration remains allocation-free without silently dropping
+    // the ninth stream.
+    ioContext.restart();
+    {
+        auto options = ruvia::detail::ConnectionScannerOptions{};
+        options.scanInterval = std::chrono::milliseconds(1);
+        ruvia::detail::ConnectionScanner scanner(worker, std::move(options));
+        ruvia::detail::ConnectionScanner::Entry entry;
+        ruvia::detail::ConnectionScanner::Guard guard(&scanner, entry, socket);
+        std::array<PeriodicProbe, 12> probes{};
+        std::array<
+            ruvia::detail::ConnectionScanner::PeriodicCheckRegistration,
+            12> registrations{};
+        PeriodicResetProbe resetProbe{&registrations[5]};
+        ruvia::detail::ConnectionScanner::PeriodicCheckRegistration
+            resetRegistration;
+        if (dispatcher->post([&] {
+                // start() initially has no work. Registrations added afterward
+                // must become visible without any coarse timeout being enabled.
+                scanner.start();
+                for (std::size_t i = 0; i < registrations.size(); ++i) {
+                    entry.registerPeriodicCheck(
+                        registrations[i],
+                        &probes[i],
+                        &PeriodicProbe::tick);
+                }
+                entry.registerPeriodicCheck(
+                    resetRegistration,
+                    &resetProbe,
+                    &PeriodicResetProbe::tick);
+                entry.setPhase(
+                    ruvia::detail::ConnectionScanner::Phase::kLongLived);
+            }) !=
+            ruvia::PostResult::kAccepted) {
+            return 6;
+        }
+        ioContext.run_for(std::chrono::milliseconds(10));
+        if (dispatcher->post([&scanner] { scanner.stop(); }) !=
+            ruvia::PostResult::kAccepted) {
+            return 7;
+        }
+        if (ioContext.stopped()) {
+            ioContext.restart();
+        }
+        ioContext.run_for(std::chrono::milliseconds(5));
+        for (std::size_t i = 0; i < probes.size(); ++i) {
+            if ((i == 5 && probes[i].ticks != 0) ||
+                (i != 5 && probes[i].ticks == 0)) {
+                return 8;
+            }
+        }
+        if (resetProbe.ticks == 0) {
+            return 9;
+        }
+    }
+
+    // Entry teardown invalidates registrations that happen to outlive it;
+    // their own RAII reset must then be harmless.
+    ruvia::detail::ConnectionScanner::PeriodicCheckRegistration registration;
+    PeriodicProbe probe;
+    {
+        ruvia::detail::ConnectionScanner::Entry entry;
+        entry.registerPeriodicCheck(
+            registration,
+            &probe,
+            &PeriodicProbe::tick);
+    }
+    registration.reset();
 }

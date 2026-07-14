@@ -113,6 +113,26 @@ if(_built_components_csv MATCHES "(^|,)core(,|$)")
         message(FATAL_ERROR
             "installed pool waiter restored parallel completion state or a close sentinel")
     endif()
+
+    set(_installed_connection_scanner_path
+        "${_install_prefix}/include/ruvia/core/detail/ConnectionScanner.h")
+    if(NOT EXISTS "${_installed_connection_scanner_path}")
+        message(FATAL_ERROR
+            "installed core package is missing ConnectionScanner")
+    endif()
+    file(READ "${_installed_connection_scanner_path}"
+        _installed_connection_scanner)
+    if(NOT _installed_connection_scanner MATCHES
+           "class PeriodicCheckRegistration final" OR
+       NOT _installed_connection_scanner MATCHES
+           "void registerPeriodicCheck" OR
+       NOT _installed_connection_scanner MATCHES
+           "PeriodicCheckRegistration[*][ \t]+periodicChecks_" OR
+       _installed_connection_scanner MATCHES
+           "kMaxPeriodicChecks|PeriodicCheckSlot")
+        message(FATAL_ERROR
+            "installed connection scanner regained a fixed periodic-check ceiling")
+    endif()
 endif()
 
 if(_built_components_csv MATCHES "(^|,)http(,|$)")

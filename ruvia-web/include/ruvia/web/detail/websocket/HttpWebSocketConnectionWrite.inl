@@ -63,7 +63,7 @@ Task<void> WebSocketConnection<Transport>::close(std::uint16_t code, std::string
 
 template <typename Transport>
 Task<void> WebSocketConnection<Transport>::detachAndDrainBackgroundWrites() {
-    scannerEntry_.clearPeriodicCheck(this);
+    periodicCheck_.reset();
     while (backgroundWriteCount_ > 0) {
         co_await backgroundWriteSignal_.wait();
     }

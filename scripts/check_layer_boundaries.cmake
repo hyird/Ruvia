@@ -8550,6 +8550,44 @@ if(EXISTS "${CONNECTION_TIMEOUT_CORE_MODEL}" AND
     endif()
 endif()
 
+set(CONNECTION_PERIODIC_TEST
+    "${RUVIA_ROOT}/tests/connection_scanner_lifetime.cpp")
+set(CONNECTION_PERIODIC_WS
+    "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/websocket/HttpWebSocketConnection.h")
+if(EXISTS "${CONNECTION_TIMEOUT_CORE_MODEL}" AND
+   EXISTS "${CONNECTION_TIMEOUT_CORE_RUNTIME}" AND
+   EXISTS "${CONNECTION_PERIODIC_TEST}" AND
+   EXISTS "${CONNECTION_PERIODIC_WS}" AND
+   EXISTS "${CONNECTION_TIMEOUT_CORE_PACKAGE}")
+    file(READ "${CONNECTION_PERIODIC_TEST}" connection_periodic_test)
+    file(READ "${CONNECTION_PERIODIC_WS}" connection_periodic_ws)
+    if(NOT connection_timeout_core_model MATCHES
+           "class PeriodicCheckRegistration final" OR
+       NOT connection_timeout_core_model MATCHES
+           "void registerPeriodicCheck" OR
+       NOT connection_timeout_core_runtime MATCHES
+           "registration[.]reset[(][)]" OR
+       NOT connection_timeout_core_runtime MATCHES
+           "void ConnectionScanner::periodicCheckAdded" OR
+       NOT connection_timeout_core_runtime MATCHES
+           "periodicCheckCount_[ \t]*!=[ \t]*0" OR
+       NOT connection_timeout_core_runtime MATCHES
+           "if [(]hasScanningWork[(][)][)]" OR
+       NOT connection_periodic_ws MATCHES
+           "ConnectionScanner::PeriodicCheckRegistration[ \t]+periodicCheck_" OR
+       NOT connection_periodic_test MATCHES
+           "PeriodicCheckRegistration,[ \t\r\n]+12> registrations" OR
+       NOT connection_timeout_core_package MATCHES
+           "using ScannerRegistration" OR
+       connection_timeout_core_model MATCHES
+           "kMaxPeriodicChecks|PeriodicCheckSlot" OR
+       connection_timeout_core_runtime MATCHES
+           "No free slot|first free")
+        boundary_error("connection liveness checks regained a fixed slot ceiling"
+            "multiplexed stream checks must own intrusive RAII registrations so the scanner stays allocation-free without silently dropping streams")
+    endif()
+endif()
+
 set(POOL_WAITER_HEADER
     "${RUVIA_ROOT}/ruvia-core/include/ruvia/core/detail/PoolWaiterQueue.h")
 set(POOL_WAITER_DB_SCHEDULER

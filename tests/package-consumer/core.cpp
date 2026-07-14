@@ -63,6 +63,13 @@ concept HasConnectionTimeoutMillisecondSentinels = requires(Options& options) {
     options.writeTimeoutMs;
 };
 
+template <typename Entry>
+concept HasTargetOnlyPeriodicCheck = requires(Entry& entry, void* target) {
+    entry.setPeriodicCheck(
+        target,
+        static_cast<ruvia::detail::ConnectionScanner::PeriodicCheck>(nullptr));
+};
+
 template <typename T>
 concept HasPublicWorkerWaitFields = requires(T& result) {
     result.status;
@@ -136,6 +143,20 @@ static_assert(std::same_as<
 static_assert(std::same_as<
               decltype(ruvia::detail::ConnectionScannerOptions{}.writeTimeout),
               std::optional<std::chrono::milliseconds>>);
+using ScannerRegistration =
+    ruvia::detail::ConnectionScanner::PeriodicCheckRegistration;
+static_assert(std::default_initializable<ScannerRegistration>);
+static_assert(!std::movable<ScannerRegistration>);
+static_assert(!HasTargetOnlyPeriodicCheck<
+              ruvia::detail::ConnectionScanner::Entry>);
+static_assert(std::same_as<
+    decltype(std::declval<ruvia::detail::ConnectionScanner::Entry&>()
+                 .registerPeriodicCheck(
+                     std::declval<ScannerRegistration&>(),
+                     nullptr,
+                     static_cast<
+                         ruvia::detail::ConnectionScanner::PeriodicCheck>(nullptr))),
+    void>);
 
 static_assert(!std::default_initializable<ruvia::detail::PoolWaiter>);
 static_assert(std::constructible_from<

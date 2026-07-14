@@ -31,6 +31,20 @@ void validateScannerTimeout(
 
 }  // namespace
 
+ConnectionScanner::PeriodicCheckRegistration::~PeriodicCheckRegistration() noexcept {
+    reset();
+}
+
+void ConnectionScanner::PeriodicCheckRegistration::reset() noexcept {
+    if (entry_ != nullptr) {
+        entry_->removePeriodicCheck(*this);
+    }
+}
+
+ConnectionScanner::Entry::~Entry() noexcept {
+    detachPeriodicChecks();
+}
+
 void ConnectionScanner::Entry::touch() noexcept {
     if (nowMs_ != nullptr) {
         lastActiveMs_ = *nowMs_;
@@ -49,32 +63,64 @@ std::int64_t ConnectionScanner::Entry::lastActiveMs() const noexcept {
     return lastActiveMs_;
 }
 
-void ConnectionScanner::Entry::setPeriodicCheck(void* target, PeriodicCheck tick) noexcept {
-    // Reuse the slot already holding this target (re-register), else the first free one.
-    PeriodicCheckSlot* free = nullptr;
-    for (auto& slot : periodicChecks_) {
-        if (slot.target == target) {
-            slot.tick = tick;
-            return;
-        }
-        if (free == nullptr && slot.target == nullptr) {
-            free = &slot;
-        }
+void ConnectionScanner::Entry::registerPeriodicCheck(
+    PeriodicCheckRegistration& registration,
+    void* target,
+    PeriodicCheck tick) noexcept {
+    registration.reset();
+    if (target == nullptr || tick == nullptr) {
+        return;
     }
-    if (free != nullptr) {
-        free->target = target;
-        free->tick = tick;
+
+    registration.entry_ = this;
+    registration.target_ = target;
+    registration.tick_ = tick;
+    registration.next_ = periodicChecks_;
+    if (periodicChecks_ != nullptr) {
+        periodicChecks_->prev_ = &registration;
     }
-    // No free slot: the caller keeps its own fallback liveness behavior.
+    periodicChecks_ = &registration;
+    if (scanner_ != nullptr) {
+        scanner_->periodicCheckAdded();
+    }
 }
 
-void ConnectionScanner::Entry::clearPeriodicCheck(void* target) noexcept {
-    for (auto& slot : periodicChecks_) {
-        if (slot.target == target) {
-            slot.target = nullptr;
-            slot.tick = nullptr;
-            return;
-        }
+void ConnectionScanner::Entry::removePeriodicCheck(
+    PeriodicCheckRegistration& registration) noexcept {
+    if (registration.entry_ != this) {
+        return;
+    }
+    if (registration.prev_ != nullptr) {
+        registration.prev_->next_ = registration.next_;
+    } else {
+        periodicChecks_ = registration.next_;
+    }
+    if (registration.next_ != nullptr) {
+        registration.next_->prev_ = registration.prev_;
+    }
+    if (periodicScanNext_ == &registration) {
+        periodicScanNext_ = registration.next_;
+    }
+    if (scanner_ != nullptr) {
+        scanner_->periodicCheckRemoved();
+    }
+    registration.entry_ = nullptr;
+    registration.prev_ = nullptr;
+    registration.next_ = nullptr;
+    registration.target_ = nullptr;
+    registration.tick_ = nullptr;
+}
+
+void ConnectionScanner::Entry::detachPeriodicChecks() noexcept {
+    periodicScanNext_ = nullptr;
+    while (periodicChecks_ != nullptr) {
+        auto* registration = periodicChecks_;
+        periodicChecks_ = registration->next_;
+        registration->entry_ = nullptr;
+        registration->prev_ = nullptr;
+        registration->next_ = nullptr;
+        registration->target_ = nullptr;
+        registration->tick_ = nullptr;
     }
 }
 
@@ -85,8 +131,13 @@ bool ConnectionScanner::Entry::linked() const noexcept {
 bool ConnectionScanner::Entry::tickLongLived(std::int64_t now) noexcept {
     // Run every registered check; any failure closes the owning connection.
     bool shouldClose = false;
-    for (auto& slot : periodicChecks_) {
-        if (slot.tick != nullptr && slot.target != nullptr && slot.tick(slot.target, now)) {
+    periodicScanNext_ = periodicChecks_;
+    while (periodicScanNext_ != nullptr) {
+        auto* registration = periodicScanNext_;
+        periodicScanNext_ = registration->next_;
+        if (registration->tick_ != nullptr &&
+            registration->target_ != nullptr &&
+            registration->tick_(registration->target_, now)) {
             shouldClose = true;
         }
     }
@@ -128,10 +179,12 @@ ConnectionScanner::~ConnectionScanner() noexcept {
 }
 
 void ConnectionScanner::start() {
-    if ((!hasAnyTimeout() && workerScannerCount_ == 0) || running_) {
+    if (running_) {
         return;
     }
-
+    // Registrations can appear after startup. Keep one coarse worker timer
+    // armed, but schedule() skips the connection-list walk while no timeout,
+    // worker scanner, or periodic registration exists.
     running_ = true;
     schedule();
 }
@@ -150,6 +203,7 @@ void ConnectionScanner::setWorkerScanner(void* target, void (*scan)(void*) noexc
 
 void ConnectionScanner::registerEntry(Entry& entry, asio::ip::tcp::socket& socket) noexcept {
     entry.socket_ = &socket;
+    entry.scanner_ = this;
     entry.nowMs_ = &cachedNowMs_;
     entry.touch();
     entry.phase_ = Phase::kIdle;
@@ -157,6 +211,11 @@ void ConnectionScanner::registerEntry(Entry& entry, asio::ip::tcp::socket& socke
     entry.prev_ = &sentinel_;
     sentinel_.next_->prev_ = &entry;
     sentinel_.next_ = &entry;
+    for (auto* registration = entry.periodicChecks_;
+         registration != nullptr;
+         registration = registration->next_) {
+        periodicCheckAdded();
+    }
 }
 
 void ConnectionScanner::unregisterEntry(Entry& entry) noexcept {
@@ -174,7 +233,8 @@ void ConnectionScanner::detachEntry(Entry& entry) noexcept {
     entry.next_ = nullptr;
     entry.socket_ = nullptr;
     entry.nowMs_ = nullptr;
-    entry.periodicChecks_ = {};
+    entry.detachPeriodicChecks();
+    entry.scanner_ = nullptr;
 }
 
 void ConnectionScanner::detachAllEntries() noexcept {
@@ -194,11 +254,23 @@ void ConnectionScanner::closeAll() noexcept {
     }
 }
 
-bool ConnectionScanner::hasAnyTimeout() const noexcept {
+void ConnectionScanner::periodicCheckAdded() noexcept {
+    ++periodicCheckCount_;
+}
+
+void ConnectionScanner::periodicCheckRemoved() noexcept {
+    if (periodicCheckCount_ > 0) {
+        --periodicCheckCount_;
+    }
+}
+
+bool ConnectionScanner::hasScanningWork() const noexcept {
     return options_.idleTimeout.has_value() ||
         options_.initialReadTimeout.has_value() ||
         options_.payloadReadTimeout.has_value() ||
-        options_.writeTimeout.has_value();
+        options_.writeTimeout.has_value() ||
+        workerScannerCount_ != 0 ||
+        periodicCheckCount_ != 0;
 }
 
 void ConnectionScanner::schedule() {
@@ -213,7 +285,9 @@ void ConnectionScanner::schedule() {
             return;
         }
 
-        scan();
+        if (hasScanningWork()) {
+            scan();
+        }
         schedule();
     });
 }

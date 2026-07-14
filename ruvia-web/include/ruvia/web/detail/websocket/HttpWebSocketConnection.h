@@ -54,12 +54,13 @@ public:
           backgroundWriteSignal_(transport_.executor()),
           readerDoneSignal_(transport_.executor()) {
         buffer_.append(initialBytes.data(), initialBytes.size());
-        scannerEntry_.setPeriodicCheck(this, &WebSocketConnection::heartbeatTickThunk);
+        scannerEntry_.registerPeriodicCheck(
+            periodicCheck_,
+            this,
+            &WebSocketConnection::heartbeatTickThunk);
     }
 
-    ~WebSocketConnection() {
-        scannerEntry_.clearPeriodicCheck(this);
-    }
+    ~WebSocketConnection() = default;
 
     WebSocketConnection(const WebSocketConnection&) = delete;
     WebSocketConnection& operator=(const WebSocketConnection&) = delete;
@@ -122,6 +123,9 @@ private:
     bool awaitingPong_{false};
     std::int64_t heartbeatPingSentMs_{0};
     std::int64_t localCloseStartedMs_{-1};
+    // Declared last so destruction unregisters before any callback target state
+    // starts to disappear.
+    ConnectionScanner::PeriodicCheckRegistration periodicCheck_;
 };
 
 }  // namespace ruvia::detail
