@@ -5843,9 +5843,19 @@ else()
        NOT http2_event_header MATCHES "class Http2RequestUnprocessedEvent final" OR
        NOT http2_event_header MATCHES "class Http2GoawayEvent final" OR
        NOT http2_event_header MATCHES "lastStreamId[(][)] const" OR
-       NOT http2_event_header MATCHES "std::get_if<Http2StreamClosedEvent>")
+       NOT http2_event_header MATCHES "std::get_if<Http2StreamClosedEvent>" OR
+       NOT http2_event_header MATCHES
+           "messageHead[(][)] const [&] noexcept" OR
+       NOT http2_event_header MATCHES
+           "messageBodyChunk[(][)] const && = delete" OR
+       NOT http2_event_header MATCHES
+           "streamClosed[(][)] const [&] noexcept" OR
+       NOT http2_event_header MATCHES
+           "goaway[(][)] const && = delete" OR
+       NOT http2_event_header MATCHES
+           "peerGoaway[(][)] const && = delete")
         boundary_error("HTTP/2 event payloads lost their discriminated contract"
-            "every materialized event must have one typed payload, with close and GOAWAY metadata on their actual owners")
+            "every materialized event must have one typed payload, lend alternatives only from live lvalues, and keep close/GOAWAY metadata on their actual owners")
     endif()
 endif()
 
@@ -8386,9 +8396,13 @@ if(EXISTS "${WS_PROTOCOL_HEADER}" AND EXISTS "${WS_EVENT_HEADER}" AND
        NOT ws_event MATCHES "std::string_view reason" OR
        NOT ws_event MATCHES "class WsProtocolErrorEvent final" OR
        NOT ws_event MATCHES "class WsTransportEndEvent final" OR
-       NOT ws_event MATCHES "std::get_if<WsCloseEvent>")
+       NOT ws_event MATCHES "std::get_if<WsCloseEvent>" OR
+       NOT ws_event MATCHES "message[(][)] const [&] noexcept" OR
+       NOT ws_event MATCHES "message[(][)] const && = delete" OR
+       NOT ws_event MATCHES "protocolError[(][)] const && = delete" OR
+       NOT ws_event MATCHES "transportEnd[(][)] const && = delete")
         boundary_error("WebSocket event payloads lost their discriminated contract"
-            "need-input must be optional and every materialized message, control, close, failure, or terminal event must own only its valid fields")
+            "need-input must be optional and every materialized message, control, close, failure, or terminal event must own only its valid fields and lend alternatives only from live lvalues")
     endif()
     if(NOT ws_inbound MATCHES "enum class WebSocketProtocolFailure" OR
        NOT ws_inbound MATCHES "class WebSocketFrameNeedInput final" OR

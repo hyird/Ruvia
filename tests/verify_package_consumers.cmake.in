@@ -976,7 +976,15 @@ if(NOT _installed_http2_connection MATCHES
    NOT _installed_http2_event MATCHES "class Http2RequestUnprocessedEvent final" OR
    NOT _installed_http2_event MATCHES "class Http2GoawayEvent final" OR
    NOT _installed_http2_event MATCHES "lastStreamId[(][)] const" OR
-   NOT _installed_http2_event MATCHES "std::get_if<Http2StreamClosedEvent>")
+   NOT _installed_http2_event MATCHES "std::get_if<Http2StreamClosedEvent>" OR
+   NOT _installed_http2_event MATCHES
+       "messageHead[(][)] const [&] noexcept" OR
+   NOT _installed_http2_event MATCHES
+       "messageBodyChunk[(][)] const && = delete" OR
+   NOT _installed_http2_event MATCHES
+       "goaway[(][)] const && = delete" OR
+   NOT _installed_http2_event MATCHES
+       "peerGoaway[(][)] const && = delete")
     message(FATAL_ERROR "installed HTTP/2 core lost its optional discriminated event contract")
 endif()
 if(_installed_http2_event MATCHES "struct[ \t]+Http2Event[ \t]+final" OR
@@ -1008,7 +1016,11 @@ if(NOT _installed_ws_connection MATCHES
    NOT _installed_ws_event MATCHES "class WsCloseEvent final" OR
    NOT _installed_ws_event MATCHES "std::string_view reason" OR
    NOT _installed_ws_event MATCHES "class WsProtocolErrorEvent final" OR
-   NOT _installed_ws_event MATCHES "class WsTransportEndEvent final")
+   NOT _installed_ws_event MATCHES "class WsTransportEndEvent final" OR
+   NOT _installed_ws_event MATCHES "message[(][)] const [&] noexcept" OR
+   NOT _installed_ws_event MATCHES "message[(][)] const && = delete" OR
+   NOT _installed_ws_event MATCHES "protocolError[(][)] const && = delete" OR
+   NOT _installed_ws_event MATCHES "transportEnd[(][)] const && = delete")
     message(FATAL_ERROR "installed WebSocket core lost its optional discriminated event contract")
 endif()
 if(_installed_ws_event MATCHES "struct[ \t]+WsEvent[ \t]+final" OR

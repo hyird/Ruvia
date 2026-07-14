@@ -84,6 +84,24 @@ concept HasHttp2EventError = requires(const T& event) {
 };
 
 template <typename T>
+concept ExposesAnyRvalueSansIoEventBorrow =
+    requires(T&& event) { std::move(event).messageHead(); } ||
+    requires(T&& event) { std::move(event).messageBodyChunk(); } ||
+    requires(T&& event) { std::move(event).messageEnd(); } ||
+    requires(T&& event) { std::move(event).tunnelData(); } ||
+    requires(T&& event) { std::move(event).tunnelEnd(); } ||
+    requires(T&& event) { std::move(event).streamClosed(); } ||
+    requires(T&& event) { std::move(event).requestUnprocessed(); } ||
+    requires(T&& event) { std::move(event).goaway(); } ||
+    requires(T&& event) { std::move(event).peerGoaway(); } ||
+    requires(T&& event) { std::move(event).message(); } ||
+    requires(T&& event) { std::move(event).ping(); } ||
+    requires(T&& event) { std::move(event).pong(); } ||
+    requires(T&& event) { std::move(event).close(); } ||
+    requires(T&& event) { std::move(event).protocolError(); } ||
+    requires(T&& event) { std::move(event).transportEnd(); };
+
+template <typename T>
 concept HasSharedCacheFreshnessPolicy = requires(const T& directives) {
     directives.sharedFreshnessLifetime();
 };
@@ -1762,6 +1780,9 @@ static_assert(std::same_as<
     decltype(std::declval<ruvia::detail::Http2Connection&>().nextEvent()),
     std::optional<ruvia::detail::Http2Event>>);
 static_assert(!std::default_initializable<ruvia::detail::Http2Event>);
+static_assert(!ExposesAnyRvalueSansIoEventBorrow<ruvia::detail::Http2Event>);
+static_assert(!ExposesAnyRvalueSansIoEventBorrow<
+    ruvia::detail::Http2GoawayEvent>);
 static_assert(std::same_as<
     decltype(std::declval<const ruvia::detail::Http2Event&>().streamClosed()),
     const ruvia::detail::Http2StreamClosedEvent*>);
@@ -2174,6 +2195,7 @@ static_assert(std::same_as<
 static_assert(!std::default_initializable<
     ruvia::detail::WebSocketClosePayloadEncodeResult>);
 static_assert(!std::default_initializable<ruvia::detail::WsEvent>);
+static_assert(!ExposesAnyRvalueSansIoEventBorrow<ruvia::detail::WsEvent>);
 static_assert(std::same_as<
     decltype(std::declval<const ruvia::detail::WsEvent&>().message()),
     const ruvia::detail::WsMessageEvent*>);

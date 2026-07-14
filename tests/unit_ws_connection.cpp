@@ -38,6 +38,17 @@ concept HasLooseWsEventFields = requires(T& event) {
 };
 
 template <typename T>
+concept HasAnyRvalueWsEventBorrow =
+    requires(T&& event) { std::move(event).message(); } ||
+    requires(T&& event) { std::move(event).ping(); } ||
+    requires(T&& event) { std::move(event).pong(); } ||
+    requires(T&& event) { std::move(event).close(); } ||
+    requires(T&& event) { std::move(event).protocolError(); } ||
+    requires(T&& event) { std::move(event).transportEnd(); };
+
+static_assert(!HasAnyRvalueWsEventBorrow<WsEvent>);
+
+template <typename T>
 concept HasWsCloseCode = requires(const T& event) {
     { event.closeCode() } -> std::same_as<std::uint16_t>;
 };

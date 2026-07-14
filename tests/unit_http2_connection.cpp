@@ -85,6 +85,21 @@ concept HasLooseHttp2EventFields = requires(T& event) {
 };
 
 template <typename T>
+concept HasAnyRvalueHttp2EventBorrow =
+    requires(T&& event) { std::move(event).messageHead(); } ||
+    requires(T&& event) { std::move(event).messageBodyChunk(); } ||
+    requires(T&& event) { std::move(event).messageEnd(); } ||
+    requires(T&& event) { std::move(event).tunnelData(); } ||
+    requires(T&& event) { std::move(event).tunnelEnd(); } ||
+    requires(T&& event) { std::move(event).streamClosed(); } ||
+    requires(T&& event) { std::move(event).requestUnprocessed(); } ||
+    requires(T&& event) { std::move(event).goaway(); } ||
+    requires(T&& event) { std::move(event).peerGoaway(); };
+
+static_assert(!HasAnyRvalueHttp2EventBorrow<Http2Event>);
+static_assert(!HasAnyRvalueHttp2EventBorrow<ruvia::detail::Http2GoawayEvent>);
+
+template <typename T>
 concept HasHttp2EventError = requires(const T& event) {
     { event.error() } -> std::same_as<Http2ErrorCode>;
 };
@@ -1465,11 +1480,13 @@ RUVIA_TEST(http2_connection_same_feed_data_credit_waits_for_owner_batch_release)
         ruvia::detail::Http2FeedResult::kAccepted);
     RUVIA_CHECK(conn.nextEvent().value().kind() ==
         Http2EventKind::kMessageHead);
+    const auto firstChunk = conn.nextEvent().value();
     RUVIA_CHECK_EQ(
-        conn.nextEvent().value().messageBodyChunk()->bytes(),
+        firstChunk.messageBodyChunk()->bytes(),
         std::string_view("one"));
+    const auto secondChunk = conn.nextEvent().value();
     RUVIA_CHECK_EQ(
-        conn.nextEvent().value().messageBodyChunk()->bytes(),
+        secondChunk.messageBodyChunk()->bytes(),
         std::string_view("two"));
     RUVIA_CHECK(!conn.nextEvent().has_value());
     RUVIA_CHECK(conn.pendingOutput().empty());
