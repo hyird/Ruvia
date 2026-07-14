@@ -154,7 +154,7 @@ bool isValidWebSocketRequest(const HttpRequest& request) noexcept {
 
 bool isValidWebSocketCloseCode(std::uint16_t code) noexcept {
     if (code == 1000 || code == 1001 || code == 1002 || code == 1003 ||
-        code == 1007 || code == 1008 || code == 1009 || code == 1010 || code == 1011) {
+        (code >= 1007 && code <= 1014)) {
         return true;
     }
     return code >= 3000 && code <= 4999;
