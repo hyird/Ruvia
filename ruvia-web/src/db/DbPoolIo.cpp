@@ -1,3 +1,4 @@
+#include "ruvia/web/detail/db/DbInternal.h"
 #include "ruvia/web/detail/db/DbPoolDeadline.h"
 #include "ruvia/web/detail/db/DbMysqlRuntime.h"
 #include "ruvia/web/detail/db/DbSlotSocket.h"
@@ -24,7 +25,7 @@ Task<void> detail::MariaDbPool::connectUnlocked(ConnectionSlot& slot) {
             throw std::runtime_error("mysql_init failed");
         }
         slot.connection = connection;
-        slot.waitSocket = detail::makePmrObject<detail::SlotSocket>(resource_, ioContext_);
+        slot.waitSocket = detail::makePmrObject<detail::DbSlotSocket>(resource_, ioContext_);
         constexpr std::size_t kMysqlAsyncStackBytes = 1024 * 1024;
         (void)mysql_options(slot.connection, MYSQL_OPT_NONBLOCK, &kMysqlAsyncStackBytes);
         // Pin the connection charset before connecting. mysql_real_escape_string --
@@ -43,7 +44,7 @@ Task<void> detail::MariaDbPool::connectUnlocked(ConnectionSlot& slot) {
     auto& connection = *slot.connection;
     constexpr auto clientFlags = 0UL;
     MYSQL* connected = nullptr;
-    OperationDeadline deadline(config_.connectTimeout);
+    DbOperationDeadline deadline(config_.connectTimeout);
     int status = mysql_real_connect_start(
         &connected,
         &connection,
@@ -74,7 +75,7 @@ Task<void> detail::MariaDbPool::connectUnlocked(ConnectionSlot& slot) {
 Task<void> detail::MariaDbPool::runMysqlQuery(
     ConnectionSlot& slot,
     std::string_view sql,
-    const OperationDeadline& deadline) {
+    const DbOperationDeadline& deadline) {
     auto& connection = *slot.connection;
     int queryResult = 0;
     int status = mysql_real_query_start(
@@ -96,7 +97,7 @@ Task<void> detail::MariaDbPool::runMysqlQuery(
 
 Task<st_mysql_res*> detail::MariaDbPool::storeMysqlResult(
     ConnectionSlot& slot,
-    const OperationDeadline& deadline) {
+    const DbOperationDeadline& deadline) {
     auto& connection = *slot.connection;
     MYSQL_RES* result = nullptr;
     int status = mysql_store_result_start(&result, &connection);
@@ -112,7 +113,7 @@ Task<st_mysql_res*> detail::MariaDbPool::storeMysqlResult(
 Task<int> detail::MariaDbPool::waitForMysql(
     ConnectionSlot& slot,
     int status,
-    const OperationDeadline& deadline) {
+    const DbOperationDeadline& deadline) {
     auto& connection = *slot.connection;
     const auto timeout = deadline.remaining();
     if (timeout.has_value() && timeout->count() <= 0) {
@@ -158,14 +159,16 @@ Task<int> detail::MariaDbPool::waitForMysql(
         co_return MYSQL_WAIT_TIMEOUT;
     }
 
-    if (slot.waitSocket == nullptr || !slot.waitSocket->ensureAssigned(native)) {
+    if (slot.waitSocket == nullptr ||
+        !slot.waitSocket->ensureAssigned(
+            static_cast<detail::DbSlotSocket::NativeSocket>(native))) {
         co_return MYSQL_WAIT_EXCEPT;
     }
 
     setSlotDeadline(slot, timeoutMs, ConnectionSlot::DeadlineKind::kSocket);
     struct SocketWaitAwaiter final {
         ConnectionSlot& slot;
-        detail::SlotSocket& slotSocket;
+        detail::DbSlotSocket& slotSocket;
         int status;
         std::coroutine_handle<> continuation{};
         int result{MYSQL_WAIT_TIMEOUT};

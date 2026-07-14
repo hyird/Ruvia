@@ -47,6 +47,12 @@
         "libmariadb"
       ]
     },
+    "postgresql": {
+      "description": "Build PostgreSQL database APIs.",
+      "dependencies": [
+        "libpq"
+      ]
+    },
     "redis": {
       "description": "Build Redis client APIs.",
       "dependencies": [

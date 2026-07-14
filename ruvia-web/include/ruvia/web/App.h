@@ -15,7 +15,7 @@
 #include "ruvia/web/ServerConfig.h"
 #include "ruvia/core/memory/MemoryPool.h"
 
-#ifdef RUVIA_ENABLE_MARIADB
+#ifdef RUVIA_ENABLE_DATABASE
 #include "ruvia/web/db/Db.h"
 #endif
 
@@ -68,7 +68,7 @@ public:
     App& onAccess(AccessLogCallback callback);
     App& onStart(AppHook hook);
     App& onStop(AppHook hook);
-#ifdef RUVIA_ENABLE_MARIADB
+#ifdef RUVIA_ENABLE_DATABASE
     App& useDb(DbConfig config);
     App& useDb(std::string_view alias, DbConfig config);
 #endif

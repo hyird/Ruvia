@@ -22,14 +22,15 @@ detail::MariaDbPool::MariaDbPool(asio::io_context& ioContext, DbConfig config, s
       config_(std::move(config)),
       resource_(detail::pmrResourceOrDefault(resource)),
       slots_(resource_),
-      freeSlots_(resource_) {
+      scheduler_(config_.poolSize, resource_) {
     detail::validateDbConfig(config_);
+    if (config_.driver != DbDriver::kMariaDb) {
+        throw std::invalid_argument("MariaDB pool requires the MariaDB driver");
+    }
     const auto poolSize = config_.poolSize;
     slots_.reserve(poolSize);
-    freeSlots_.reserve(poolSize);
     for (std::size_t i = 0; i < poolSize; ++i) {
         slots_.emplace_back(resource_);
-        freeSlots_.push_back(i);
     }
 }
 
@@ -44,11 +45,9 @@ Task<void> detail::MariaDbPool::connect() {
 }
 
 void detail::MariaDbPool::closeNow() noexcept {
-    if (closing_) {
+    if (!scheduler_.close()) {
         return;
     }
-    closing_ = true;
-    waiters_.closeAll();
     for (auto& slot : slots_) {
         closeSlot(slot);
     }
@@ -56,7 +55,7 @@ void detail::MariaDbPool::closeNow() noexcept {
 
 void detail::MariaDbPool::scanDeadlines(std::chrono::steady_clock::time_point now) noexcept {
     if (config_.acquireTimeout.has_value()) {
-        waiters_.expireDeadlines(now);
+        scheduler_.scanDeadlines(now);
     }
 
     for (auto& slot : slots_) {

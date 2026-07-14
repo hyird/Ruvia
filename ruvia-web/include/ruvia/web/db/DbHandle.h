@@ -1,6 +1,7 @@
 #pragma once
 
 #include "ruvia/web/db/DbTransaction.h"
+#include "ruvia/web/detail/db/DbBackend.h"
 
 #include <initializer_list>
 #include <memory_resource>
@@ -28,14 +29,14 @@ private:
     friend class detail::DbRegistry;
 
     DbHandle(
-        detail::MariaDbPool& client,
+        detail::DbPoolRef client,
         std::pmr::memory_resource* resource,
         RequestMemory* requestMemory = nullptr) noexcept;
     Task<QueryResult> executePrepared(std::pmr::string sql, std::pmr::vector<DbValue> params) const;
     Task<DbStreamResult> queryStreamPrepared(std::pmr::string sql, std::pmr::vector<DbValue> params) const;
     [[nodiscard]] QueryResult mountResult(QueryResult result) const;
 
-    detail::MariaDbPool& client_;
+    detail::DbPoolRef client_;
     std::pmr::memory_resource* resource_;
     RequestMemory* requestMemory_{nullptr};
 };

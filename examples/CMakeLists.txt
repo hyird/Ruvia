@@ -24,7 +24,7 @@ if(RUVIA_ENABLE_JWT)
     ruvia_add_example(ruvia_example_auth_jwt auth_jwt.cpp)
 endif()
 
-if(RUVIA_ENABLE_MARIADB)
+if(RUVIA_ENABLE_MARIADB OR RUVIA_ENABLE_POSTGRESQL)
     ruvia_add_example(ruvia_example_database database.cpp)
 endif()
 

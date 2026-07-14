@@ -30,9 +30,10 @@ public:
 
 private:
     friend class detail::MariaDbPool;
+    friend class detail::PostgreSqlPool;
 
     DbTransaction(
-        detail::MariaDbPool& client,
+        detail::DbPoolRef client,
         std::size_t slot,
         std::pmr::memory_resource* resource,
         RequestMemory* requestMemory = nullptr) noexcept;
@@ -40,7 +41,7 @@ private:
     [[nodiscard]] QueryResult mountResult(QueryResult result) const;
     void reset() noexcept;
 
-    detail::MariaDbPool* client_{nullptr};
+    detail::DbPoolRef client_{};
     std::size_t slot_{0};
     std::pmr::memory_resource* resource_{nullptr};
     RequestMemory* requestMemory_{nullptr};

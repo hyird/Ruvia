@@ -2936,6 +2936,11 @@ if(NOT _installed_multipart_parser MATCHES "class MultipartBoundary final" OR
 endif()
 endif()
 
+set(_ruvia_toolchain_file [==[@CMAKE_TOOLCHAIN_FILE@]==])
+if(NOT _ruvia_toolchain_file STREQUAL "")
+    file(TO_CMAKE_PATH "${_ruvia_toolchain_file}" _ruvia_toolchain_file)
+endif()
+
 function(ruvia_verify_package_consumer
     name prefix components visible_components available_components optional_components
     expect_configure_failure)
@@ -2960,8 +2965,8 @@ function(ruvia_verify_package_consumer
     if(NOT "@CMAKE_GENERATOR_TOOLSET@" STREQUAL "")
         list(APPEND _configure_command -T "@CMAKE_GENERATOR_TOOLSET@")
     endif()
-    if(NOT "@CMAKE_TOOLCHAIN_FILE@" STREQUAL "")
-        list(APPEND _configure_command "-DCMAKE_TOOLCHAIN_FILE=@CMAKE_TOOLCHAIN_FILE@")
+    if(NOT _ruvia_toolchain_file STREQUAL "")
+        list(APPEND _configure_command "-DCMAKE_TOOLCHAIN_FILE=${_ruvia_toolchain_file}")
     endif()
     if(NOT "@VCPKG_TARGET_TRIPLET@" STREQUAL "")
         list(APPEND _configure_command "-DVCPKG_TARGET_TRIPLET=@VCPKG_TARGET_TRIPLET@")

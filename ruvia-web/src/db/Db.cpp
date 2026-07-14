@@ -2,6 +2,7 @@
 #include "ruvia/web/detail/db/DbPoolDeadline.h"
 #include "ruvia/web/detail/db/DbSql.h"
 #include "ruvia/web/detail/db/DbUtils.h"
+#include "ruvia/web/detail/db/DbResultAccess.h"
 
 #include <mysql/mysql.h>
 
@@ -48,7 +49,7 @@ Task<DbStreamResult> detail::MariaDbPool::stream(
             co_await connectUnlocked(slot);
         }
 
-        OperationDeadline deadline(config_.queryTimeout);
+        DbOperationDeadline deadline(config_.queryTimeout);
         std::pmr::string interpolatedSql(detail::pmrResourceOrDefault(resource));
         if (!params.empty()) {
             interpolatedSql = interpolateSql(
@@ -66,10 +67,10 @@ Task<DbStreamResult> detail::MariaDbPool::stream(
                 throw mysqlError(*slot.connection, "mysql_use_result");
             }
             releaseSlot(slotIndex);
-            co_return DbStreamResult(*this, slotIndex, nullptr, resource);
+            co_return DbStreamResult(DbPoolRef{this}, slotIndex, nullptr, resource, false);
         }
 
-        co_return DbStreamResult(*this, slotIndex, rawResult, resource);
+        co_return DbStreamResult(DbPoolRef{this}, slotIndex, rawResult, resource);
     } catch (...) {
         closeSlot(slots_[slotIndex]);
         releaseSlot(slotIndex);
@@ -87,7 +88,7 @@ Task<std::optional<DbRow>> detail::MariaDbPool::readStreamRow(
 
     auto* rawResult = static_cast<MYSQL_RES*>(result);
     try {
-        OperationDeadline deadline(config_.queryTimeout);
+        DbOperationDeadline deadline(config_.queryTimeout);
         MYSQL_ROW row = nullptr;
         int status = mysql_fetch_row_start(&row, rawResult);
         while (status != 0) {
@@ -104,16 +105,18 @@ Task<std::optional<DbRow>> detail::MariaDbPool::readStreamRow(
 
         const auto fieldCount = static_cast<std::size_t>(mysql_num_fields(rawResult));
         const auto* lengths = mysql_fetch_lengths(rawResult);
-        DbRow outputRow(resource);
-        outputRow.ownedFields_.reserve(fieldCount);
+        auto outputRow = DbResultAccess::ownedRow(resource);
+        auto& outputFields = DbResultAccess::ownedFields(outputRow);
+        outputFields.reserve(fieldCount);
         for (std::size_t i = 0; i < fieldCount; ++i) {
             if (row[i] == nullptr) {
-                outputRow.ownedFields_.push_back(DbField(nullptr, resource));
+                outputFields.push_back(DbResultAccess::nullField(resource));
                 continue;
             }
-            outputRow.ownedFields_.push_back(DbField(std::string_view(row[i], lengths[i]), resource));
+            outputFields.push_back(
+                DbResultAccess::ownedField(std::string_view(row[i], lengths[i]), resource));
         }
-        outputRow.refreshView();
+        DbResultAccess::refresh(outputRow);
         co_return outputRow;
     } catch (...) {
         closeSlot(slots_[slot]);
@@ -132,7 +135,7 @@ Task<void> detail::MariaDbPool::closeStream(
 
     auto* rawResult = static_cast<MYSQL_RES*>(result);
     try {
-        OperationDeadline deadline(config_.queryTimeout);
+        DbOperationDeadline deadline(config_.queryTimeout);
         int status = mysql_free_result_start(rawResult);
         while (status != 0) {
             status = mysql_free_result_cont(
@@ -187,7 +190,7 @@ Task<QueryResult> detail::MariaDbPool::executeOnSlot(
     if (!slot.connected) {
         co_await connectUnlocked(slot);
     }
-    OperationDeadline deadline(config_.queryTimeout);
+    DbOperationDeadline deadline(config_.queryTimeout);
 
     std::pmr::string interpolatedSql(detail::pmrResourceOrDefault(resource));
     if (!params.empty()) {
@@ -202,9 +205,13 @@ Task<QueryResult> detail::MariaDbPool::executeOnSlot(
     auto& connection = *slot.connection;
     co_await runMysqlQuery(slot, sql, deadline);
 
-    QueryResult result(resource);
-    result.affectedRows_ = static_cast<std::uint64_t>(mysql_affected_rows(&connection));
-    result.lastInsertId_ = static_cast<std::uint64_t>(mysql_insert_id(&connection));
+    auto result = DbResultAccess::makeResult(resource);
+    DbResultAccess::setAffectedRows(
+        result,
+        static_cast<std::uint64_t>(mysql_affected_rows(&connection)));
+    DbResultAccess::setLastInsertId(
+        result,
+        static_cast<std::uint64_t>(mysql_insert_id(&connection)));
 
     auto* rawResult = co_await storeMysqlResult(slot, deadline);
     if (rawResult == nullptr) {
@@ -214,23 +221,26 @@ Task<QueryResult> detail::MariaDbPool::executeOnSlot(
         co_return result;
     }
 
-    result.rawResult_ = rawResult;
-    result.releaseRawResult_ = &freeStoredResult;
+    DbResultAccess::retainRawResult(result, rawResult, &freeStoredResult);
     const auto fieldCount = static_cast<std::size_t>(mysql_num_fields(rawResult));
     const auto rowCount = static_cast<std::size_t>(mysql_num_rows(rawResult));
-    result.rows_.reserve(rowCount);
-    result.fields_.reserve(rowCount * fieldCount);
+    auto& resultRows = DbResultAccess::rows(result);
+    auto& resultFields = DbResultAccess::fields(result);
+    resultRows.reserve(rowCount);
+    resultFields.reserve(rowCount * fieldCount);
     while (auto* row = mysql_fetch_row(rawResult)) {
         const auto* lengths = mysql_fetch_lengths(rawResult);
-        const auto rowStart = result.fields_.size();
+        const auto rowStart = resultFields.size();
         for (std::size_t i = 0; i < fieldCount; ++i) {
             if (row[i] == nullptr) {
-                result.fields_.push_back(DbField(nullptr, resource));
+                resultFields.push_back(DbResultAccess::nullField(resource));
                 continue;
             }
-            result.fields_.push_back(DbField::borrowed(std::string_view(row[i], lengths[i]), resource));
+            resultFields.push_back(
+                DbResultAccess::borrowedField(std::string_view(row[i], lengths[i]), resource));
         }
-        result.rows_.push_back(DbRow(result.fields_.data() + rowStart, fieldCount, resource));
+        resultRows.push_back(
+            DbResultAccess::borrowedRow(resultFields.data() + rowStart, fieldCount, resource));
     }
 
     co_return result;
@@ -260,7 +270,7 @@ Task<DbTransaction> detail::MariaDbPool::beginTransaction(
         throw;
     }
 
-    co_return DbTransaction(*this, slotIndex, resource, requestMemory);
+    co_return DbTransaction(DbPoolRef{this}, slotIndex, resource, requestMemory);
 }
 
 Task<void> detail::MariaDbPool::commitTransaction(std::size_t slot, std::pmr::memory_resource* resource) {
