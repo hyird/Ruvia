@@ -1024,10 +1024,6 @@ static_assert(!ExposesAnyRvalueHttpOperationPayloadBorrow<
     ruvia::detail::Http2SubmittedWebSocketHandshake>);
 static_assert(!ExposesAnyRvalueHttpOperationPayloadBorrow<
     ruvia::detail::HttpWebSocketServerHandshake>);
-static_assert(!ExposesAnyRvalueHttpOperationPayloadBorrow<
-    ruvia::detail::Http2SubmittedBufferedResponseHead>);
-static_assert(!ExposesAnyRvalueHttpOperationPayloadBorrow<
-    ruvia::detail::Http2SubmittedStreamingResponseHead>);
 
 template <typename T>
 concept HasStaleHttp2StreamRemoteContentForwarders = requires(
@@ -2089,11 +2085,11 @@ static_assert(!std::default_initializable<
 static_assert(std::same_as<
     decltype(std::declval<const ruvia::detail::
         Http2BufferedResponseHeadSubmitResult&>().submitted()),
-    const ruvia::detail::Http2SubmittedBufferedResponseHead*>);
+    const ruvia::detail::HttpBufferedResponseWritePlan*>);
 static_assert(std::same_as<
     decltype(std::declval<const ruvia::detail::
         Http2StreamingResponseHeadSubmitResult&>().submitted()),
-    const ruvia::detail::Http2SubmittedStreamingResponseHead*>);
+    const ruvia::detail::ResponseStreamCommitPlan*>);
 static_assert(std::same_as<
     decltype(std::declval<const ruvia::detail::
         Http2BufferedResponseHeadSubmitResult&>().failure()),
@@ -2106,14 +2102,6 @@ static_assert(!HasResponseHeadPlanAccessor<
     ruvia::detail::Http2BufferedResponseHeadSubmitResult>);
 static_assert(!HasResponseHeadErrorAccessor<
     ruvia::detail::Http2BufferedResponseHeadSubmitResult>);
-static_assert(std::same_as<
-    decltype(std::declval<const ruvia::detail::
-        Http2SubmittedBufferedResponseHead&>().plan()),
-    const ruvia::detail::HttpBufferedResponseWritePlan&>);
-static_assert(std::same_as<
-    decltype(std::declval<const ruvia::detail::
-        Http2SubmittedStreamingResponseHead&>().plan()),
-    const ruvia::detail::ResponseStreamCommitPlan&>);
 using ResponseStreamCommitPlanner =
     ruvia::detail::ResponseStreamCommitPlan (*)(
         ruvia::detail::ResponseStreamFraming,
@@ -2172,20 +2160,10 @@ static_assert(!AcceptsLooseResponseStreamBodyPlan<
     ruvia::detail::HttpResponseBodyPlan>);
 static_assert(!AcceptsLooseBufferedResponseBodyPlan<
     ruvia::detail::HttpResponseBodyPlan>);
-static_assert(HasResponseHeadPlanAccessor<
-    ruvia::detail::Http2SubmittedBufferedResponseHead>);
-static_assert(!HasResponseHeadErrorAccessor<
-    ruvia::detail::Http2SubmittedBufferedResponseHead>);
 static_assert(HasResponseHeadErrorAccessor<
     ruvia::detail::Http2ResponseHeadSubmitFailure>);
 static_assert(!HasResponseHeadPlanAccessor<
     ruvia::detail::Http2ResponseHeadSubmitFailure>);
-static_assert(!std::constructible_from<
-    ruvia::detail::Http2SubmittedBufferedResponseHead,
-    ruvia::detail::HttpBufferedResponseWritePlan>);
-static_assert(!std::constructible_from<
-    ruvia::detail::Http2SubmittedStreamingResponseHead,
-    ruvia::detail::ResponseStreamCommitPlan>);
 static_assert(!std::constructible_from<
     ruvia::detail::Http2ResponseHeadSubmitFailure,
     ruvia::detail::Http2ResponseHeadSubmitError>);

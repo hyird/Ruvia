@@ -43,9 +43,7 @@ using ruvia::detail::Http2BufferedResponseHeadSubmitResult;
 using ruvia::detail::Http2ResponseHeadSubmitError;
 using ruvia::detail::Http2ResponseHeadSubmitFailure;
 using ruvia::detail::Http2StreamingResponseHeadSubmitResult;
-using ruvia::detail::Http2SubmittedBufferedResponseHead;
 using ruvia::detail::Http2SubmittedRequestHead;
-using ruvia::detail::Http2SubmittedStreamingResponseHead;
 using ruvia::detail::Http2SubmitStatus;
 using ruvia::detail::Http2StreamState;
 using ruvia::detail::Http2TunnelState;
@@ -60,10 +58,6 @@ concept HasRvalueHttp2SubmittedPayloadBorrow =
     requires(T&& submitted) { std::move(submitted).plan(); } ||
     requires(T&& submitted) { std::move(submitted).negotiation(); };
 
-static_assert(!HasRvalueHttp2SubmittedPayloadBorrow<
-    Http2SubmittedBufferedResponseHead>);
-static_assert(!HasRvalueHttp2SubmittedPayloadBorrow<
-    Http2SubmittedStreamingResponseHead>);
 static_assert(!HasRvalueHttp2SubmittedPayloadBorrow<
     ruvia::detail::Http2SubmittedWebSocketHandshake>);
 
@@ -260,11 +254,11 @@ static_assert(!std::default_initializable<
 static_assert(std::same_as<
     decltype(std::declval<
         const Http2BufferedResponseHeadSubmitResult&>().submitted()),
-    const Http2SubmittedBufferedResponseHead*>);
+    const ruvia::detail::HttpBufferedResponseWritePlan*>);
 static_assert(std::same_as<
     decltype(std::declval<
         const Http2StreamingResponseHeadSubmitResult&>().submitted()),
-    const Http2SubmittedStreamingResponseHead*>);
+    const ruvia::detail::ResponseStreamCommitPlan*>);
 static_assert(std::same_as<
     decltype(std::declval<
         const Http2BufferedResponseHeadSubmitResult&>().failure()),
@@ -281,22 +275,10 @@ static_assert(!HasResponseHeadPlanAccessor<
     Http2BufferedResponseHeadSubmitResult>);
 static_assert(!HasResponseHeadErrorAccessor<
     Http2BufferedResponseHeadSubmitResult>);
-static_assert(HasResponseHeadPlanAccessor<
-    Http2SubmittedBufferedResponseHead>);
-static_assert(HasResponseHeadPlanAccessor<
-    Http2SubmittedStreamingResponseHead>);
-static_assert(!HasResponseHeadErrorAccessor<
-    Http2SubmittedBufferedResponseHead>);
 static_assert(HasResponseHeadErrorAccessor<
     Http2ResponseHeadSubmitFailure>);
 static_assert(!HasResponseHeadPlanAccessor<
     Http2ResponseHeadSubmitFailure>);
-static_assert(!std::constructible_from<
-    Http2SubmittedBufferedResponseHead,
-    ruvia::detail::HttpBufferedResponseWritePlan>);
-static_assert(!std::constructible_from<
-    Http2SubmittedStreamingResponseHead,
-    ruvia::detail::ResponseStreamCommitPlan>);
 static_assert(!std::constructible_from<
     Http2ResponseHeadSubmitFailure,
     Http2ResponseHeadSubmitError>);
@@ -358,7 +340,7 @@ Http2BufferedResponseHeadSubmitResult submitBufferedResponseHead(
 template <typename Result>
 const auto& submittedResponsePlan(const Result& result) {
     if (const auto* submitted = result.submitted()) {
-        return submitted->plan();
+        return *submitted;
     }
     throw std::runtime_error("HTTP/2 response head was not submitted");
 }
@@ -1689,7 +1671,7 @@ RUVIA_TEST(http2_connection_response_head_submit_result_is_discriminated) {
     RUVIA_CHECK(submitted.submitted() != nullptr);
     RUVIA_CHECK(submitted.failure() == nullptr);
     RUVIA_CHECK_EQ(
-        submitted.submitted()->plan().contentLength(),
+        submitted.submitted()->contentLength(),
         std::uint64_t{2});
 
     Http2Connection streaming(&resource);

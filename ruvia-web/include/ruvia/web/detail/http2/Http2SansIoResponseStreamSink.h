@@ -190,7 +190,7 @@ private:
             throw std::logic_error(
                 "invalid HTTP/2 response stream head state");
         }
-        state_.markCommitted(submittedHead->plan());
+        state_.markCommitted(*submittedHead);
         wakeWriter();
     }
 

@@ -118,9 +118,8 @@ Http2BufferedResponseWriter::write(
     }
 
     wakeWriter();
-    const auto& committedPlan = submittedHead->plan();
-    const auto committedStatus = committedPlan.responseStatus();
-    if (!committedPlan.sendBody()) {
+    const auto committedStatus = submittedHead->responseStatus();
+    if (!submittedHead->sendBody()) {
         co_return Http2BufferedResponseWriteResult::makeCompleted(
             committedStatus);
     }

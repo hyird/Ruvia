@@ -4369,7 +4369,7 @@ if(EXISTS "${HTTP_BUFFERED_RESPONSE_WRITE_PLAN}" AND
        NOT buffered_response_h2_writer_source MATCHES
            "Task<Http2BufferedResponseWriteResult>" OR
        NOT buffered_response_h2_writer_source MATCHES
-           "const auto committedStatus = committedPlan[.]responseStatus[(][)]" OR
+           "const auto committedStatus = submittedHead[-][>]responseStatus[(][)]" OR
        NOT buffered_response_h2_writer_source MATCHES
            "openResponseFileInput" OR
        NOT buffered_response_h2_session MATCHES
@@ -5503,11 +5503,11 @@ set(WEB_H2_BUFFERED_WRITER
     "${RUVIA_ROOT}/ruvia-web/src/server/Http2BufferedResponseWrite.cpp")
 if(EXISTS "${WEB_H2_BUFFERED_WRITER}")
     file(READ "${WEB_H2_BUFFERED_WRITER}" web_h2_buffered_writer)
-    if(NOT web_h2_buffered_writer MATCHES "committedPlan[.]sendBody" OR
+    if(NOT web_h2_buffered_writer MATCHES "submittedHead[-][>]sendBody" OR
        NOT web_h2_buffered_writer MATCHES "headResult[.]submitted[(][)]" OR
        NOT web_h2_buffered_writer MATCHES "headResult[.]failure[(][)][-][>]error[(][)]" OR
        NOT web_h2_buffered_writer MATCHES "Http2ResponseHeadSubmitError::kClosed" OR
-       NOT web_h2_buffered_writer MATCHES "submittedHead[-][>]plan[(][)]" OR
+       web_h2_buffered_writer MATCHES "submittedHead[-][>]plan[(][)]" OR
        NOT web_h2_buffered_writer MATCHES "Http2ErrorCode::kInternalError")
         boundary_error("ruvia-web HTTP/2 runtime bypasses the HTTP-owned send-body verdict"
             "Http2BufferedResponseWrite.cpp must consume only a submitted plan and terminate typed final-head failures")
@@ -5522,7 +5522,7 @@ if(EXISTS "${WEB_H2_STREAM_SINK}")
        NOT web_h2_stream_sink MATCHES "headResult[.]failure[(][)][-][>]error[(][)]" OR
        NOT web_h2_stream_sink MATCHES "Http2ResponseHeadSubmitError::kClosed" OR
        NOT web_h2_stream_sink MATCHES
-           "markCommitted[(]submittedHead[-][>]plan[(][)][)]")
+           "markCommitted[(][*]submittedHead[)]")
         boundary_error("ruvia-web HTTP/2 streaming sink bypasses the submitted-head plan"
             "the sink must distinguish typed failure before committing the successful streaming plan")
     endif()
@@ -6683,9 +6683,9 @@ if(EXISTS "${HTTP2_EVENT_TEST}" AND EXISTS "${HTTP_PACKAGE_CONSUMER}")
     if(NOT http2_event_test MATCHES
            "http2_connection_response_head_submit_result_is_discriminated" OR
        NOT http2_event_test MATCHES
-           "Http2SubmittedBufferedResponseHead" OR
+           "const ruvia::detail::HttpBufferedResponseWritePlan[*]" OR
        NOT http2_event_test MATCHES
-           "Http2SubmittedStreamingResponseHead" OR
+           "const ruvia::detail::ResponseStreamCommitPlan[*]" OR
        NOT http2_event_test MATCHES
            "Http2ResponseHeadSubmitFailure" OR
        NOT http2_event_test MATCHES
@@ -6701,9 +6701,9 @@ if(EXISTS "${HTTP2_EVENT_TEST}" AND EXISTS "${HTTP_PACKAGE_CONSUMER}")
        NOT http_package_consumer MATCHES
            "Http2StreamingResponseHeadSubmitResult" OR
        NOT http_package_consumer MATCHES
-           "Http2SubmittedBufferedResponseHead" OR
+           "const ruvia::detail::HttpBufferedResponseWritePlan[*]" OR
        NOT http_package_consumer MATCHES
-           "Http2SubmittedStreamingResponseHead" OR
+           "const ruvia::detail::ResponseStreamCommitPlan[*]" OR
        NOT http_package_consumer MATCHES
            "Http2ResponseHeadSubmitFailure" OR
        NOT http_package_consumer MATCHES
@@ -6744,26 +6744,22 @@ if(EXISTS "${HTTP2_CONNECTION_HEADER}")
     if(NOT http2_connection_header MATCHES
            "enum class Http2ResponseHeadSubmitError" OR
        NOT http2_connection_header MATCHES
-           "class Http2SubmittedResponseHead final" OR
-       NOT http2_connection_header MATCHES
            "class Http2ResponseHeadSubmitFailure final" OR
        NOT http2_connection_header MATCHES
            "class Http2ResponseHeadSubmitResult final" OR
        NOT http2_connection_header MATCHES
-           "std::variant<Submitted, Http2ResponseHeadSubmitFailure>" OR
-       NOT http2_connection_header MATCHES "std::get_if<Submitted>" OR
+           "std::variant<Plan, Http2ResponseHeadSubmitFailure>" OR
+       NOT http2_connection_header MATCHES "std::get_if<Plan>" OR
        NOT http2_connection_header MATCHES
            "std::get_if<Http2ResponseHeadSubmitFailure>" OR
        NOT http2_connection_header MATCHES
            "Http2BufferedResponseHeadSubmitResult" OR
        NOT http2_connection_header MATCHES
            "Http2StreamingResponseHeadSubmitResult" OR
-       NOT http2_connection_header MATCHES
-           "Http2SubmittedBufferedResponseHead" OR
-       NOT http2_connection_header MATCHES
-           "Http2SubmittedStreamingResponseHead")
+       http2_connection_header MATCHES
+           "Http2SubmittedResponseHead|Http2SubmittedBufferedResponseHead|Http2SubmittedStreamingResponseHead")
         boundary_error("HTTP/2 final response-head result lost exclusive ownership"
-            "only submitted heads may expose buffered/streaming plans and only failures may expose their typed error")
+            "the successful variant must directly own its buffered/streaming plan and only failures may expose their typed error")
     endif()
     if(NOT http2_connection_header MATCHES "submitConnectRequestHead" OR
        NOT http2_connection_header MATCHES "submitExtendedConnectRequestHead" OR
@@ -9594,7 +9590,7 @@ if(EXISTS "${HTTP_OPERATION_RESULT_H1}" AND
        NOT http_operation_result_h2_connection MATCHES
            "Http2SubmittedRequestHead[*][ \t\r\n]+submitted[(][)] const [&] noexcept" OR
        NOT http_operation_result_h2_connection MATCHES
-           "const Submitted[*] submitted[(][)] const [&] noexcept" OR
+           "const Plan[*] submitted[(][)] const [&] noexcept" OR
        NOT http_operation_result_h2_connection MATCHES
            "submitted[(][)] const && = delete" OR
        NOT http_operation_result_h2_peer MATCHES
@@ -9853,10 +9849,6 @@ if(EXISTS "${HTTP_OPERATION_PAYLOAD_REQUEST}" AND
            "negotiation[(][)] const [&] noexcept" OR
        NOT http_operation_payload_h2 MATCHES
            "negotiation[(][)] const && = delete" OR
-       NOT http_operation_payload_h2 MATCHES
-           "plan[(][)] const [&] noexcept" OR
-       NOT http_operation_payload_h2 MATCHES
-           "plan[(][)] const && = delete" OR
        NOT http_operation_payload_websocket MATCHES
            "negotiation[(][)] const [&] noexcept" OR
        NOT http_operation_payload_websocket MATCHES
@@ -9864,7 +9856,7 @@ if(EXISTS "${HTTP_OPERATION_PAYLOAD_REQUEST}" AND
        NOT http_operation_payload_consumer MATCHES
            "ExposesAnyRvalueHttpOperationPayloadBorrow")
         boundary_error("HTTP operation payloads lend owned state from temporary values"
-            "parsed, prepared, and submitted payloads must expose owned request, response, plan, and negotiation objects only from live lvalues")
+            "parsed and prepared payloads must expose owned request, response, and negotiation objects only from live lvalues")
     endif()
 endif()
 

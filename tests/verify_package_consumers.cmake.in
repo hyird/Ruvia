@@ -164,7 +164,7 @@ if(NOT _installed_http_operation_h1_text MATCHES
    NOT _installed_http_operation_h2_connection_text MATCHES
        "Http2SubmittedRequestHead[*][ \t\r\n]+submitted[(][)] const [&] noexcept" OR
    NOT _installed_http_operation_h2_connection_text MATCHES
-       "const Submitted[*] submitted[(][)] const [&] noexcept" OR
+       "const Plan[*] submitted[(][)] const [&] noexcept" OR
    NOT _installed_http_operation_h2_connection_text MATCHES
        "submitted[(][)] const && = delete" OR
    NOT _installed_http_operation_h2_peer_text MATCHES
@@ -360,8 +360,6 @@ if(NOT _installed_http_operation_payload_request_text MATCHES
        "responseHeadPlan[(][)] const && = delete" OR
    NOT _installed_http_operation_payload_h2_text MATCHES
        "negotiation[(][)] const && = delete" OR
-   NOT _installed_http_operation_payload_h2_text MATCHES
-       "plan[(][)] const && = delete" OR
    NOT _installed_http_operation_payload_websocket_text MATCHES
        "negotiation[(][)] const && = delete")
     message(FATAL_ERROR
@@ -1097,20 +1095,14 @@ endif()
 if(NOT _installed_http2_connection MATCHES
        "enum class Http2ResponseHeadSubmitError" OR
    NOT _installed_http2_connection MATCHES
-       "class Http2SubmittedResponseHead final" OR
-   NOT _installed_http2_connection MATCHES
        "class Http2ResponseHeadSubmitFailure final" OR
    NOT _installed_http2_connection MATCHES
        "class Http2ResponseHeadSubmitResult final" OR
    NOT _installed_http2_connection MATCHES
-       "std::variant<Submitted, Http2ResponseHeadSubmitFailure>" OR
-   NOT _installed_http2_connection MATCHES "std::get_if<Submitted>" OR
+       "std::variant<Plan, Http2ResponseHeadSubmitFailure>" OR
+   NOT _installed_http2_connection MATCHES "std::get_if<Plan>" OR
    NOT _installed_http2_connection MATCHES
        "std::get_if<Http2ResponseHeadSubmitFailure>" OR
-   NOT _installed_http2_connection MATCHES
-       "Http2SubmittedBufferedResponseHead" OR
-   NOT _installed_http2_connection MATCHES
-       "Http2SubmittedStreamingResponseHead" OR
    NOT _installed_http2_connection MATCHES
        "Http2BufferedResponseHeadSubmitResult" OR
    NOT _installed_http2_connection MATCHES
@@ -1119,6 +1111,8 @@ if(NOT _installed_http2_connection MATCHES
        "kResponsePlanMismatch" OR
    NOT _installed_http2_connection MATCHES
        "HttpBufferedResponseWritePlan writePlan" OR
+   _installed_http2_connection MATCHES
+       "Http2SubmittedResponseHead|Http2SubmittedBufferedResponseHead|Http2SubmittedStreamingResponseHead" OR
    _installed_http2_connection MATCHES
        "submitResponseHead[ \t\r\n]*[(][ \t\r\n]*std::uint32_t[ \t]+streamId[ \t]*,[ \t\r\n]*const HttpResponse&[ \t]+response[ \t\r\n]*[)]")
     message(FATAL_ERROR "installed HTTP/2 core lost its discriminated response-head submission result")

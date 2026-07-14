@@ -328,27 +328,6 @@ enum class Http2ResponseHeadSubmitError : std::uint8_t {
     kInvalidMessage,
 };
 
-template <typename Plan>
-class Http2ResponseHeadSubmitResult;
-
-template <typename Plan>
-class Http2SubmittedResponseHead final {
-public:
-    [[nodiscard]] const Plan& plan() const & noexcept {
-        return plan_;
-    }
-    [[nodiscard]] const Plan& plan() const && = delete;
-
-private:
-    template <typename>
-    friend class Http2ResponseHeadSubmitResult;
-
-    explicit Http2SubmittedResponseHead(Plan plan)
-        : plan_(std::move(plan)) {}
-
-    Plan plan_;
-};
-
 class Http2ResponseHeadSubmitFailure final {
 public:
     [[nodiscard]] constexpr Http2ResponseHeadSubmitError error() const noexcept {
@@ -366,18 +345,16 @@ private:
     Http2ResponseHeadSubmitError error_;
 };
 
-// Only submitted() owns the plan that now governs DATA/END_STREAM. A failure
-// owns only its refusal reason, so callers cannot observe body metadata from a
-// rejected HEADERS transaction or forget to check a parallel status first.
+// The successful alternative directly owns the plan that now governs
+// DATA/END_STREAM. A failure owns only its refusal reason, so callers cannot
+// observe body metadata from a rejected transaction or forget a parallel status.
 template <typename Plan>
 class Http2ResponseHeadSubmitResult final {
 public:
-    using Submitted = Http2SubmittedResponseHead<Plan>;
-
-    [[nodiscard]] const Submitted* submitted() const & noexcept {
-        return std::get_if<Submitted>(&value_);
+    [[nodiscard]] const Plan* submitted() const & noexcept {
+        return std::get_if<Plan>(&value_);
     }
-    [[nodiscard]] const Submitted* submitted() const && = delete;
+    [[nodiscard]] const Plan* submitted() const && = delete;
 
     [[nodiscard]] constexpr const Http2ResponseHeadSubmitFailure*
     failure() const & noexcept {
@@ -389,7 +366,7 @@ public:
 private:
     friend class Http2Connection;
 
-    using Value = std::variant<Submitted, Http2ResponseHeadSubmitFailure>;
+    using Value = std::variant<Plan, Http2ResponseHeadSubmitFailure>;
 
     template <typename Alternative>
     explicit Http2ResponseHeadSubmitResult(Alternative alternative)
@@ -398,7 +375,7 @@ private:
     [[nodiscard]] static Http2ResponseHeadSubmitResult
     makeSubmitted(Plan plan) {
         return Http2ResponseHeadSubmitResult(
-            Submitted(std::move(plan)));
+            std::move(plan));
     }
 
     [[nodiscard]] static Http2ResponseHeadSubmitResult
@@ -410,10 +387,6 @@ private:
     Value value_;
 };
 
-using Http2SubmittedBufferedResponseHead =
-    Http2SubmittedResponseHead<HttpBufferedResponseWritePlan>;
-using Http2SubmittedStreamingResponseHead =
-    Http2SubmittedResponseHead<ResponseStreamCommitPlan>;
 using Http2BufferedResponseHeadSubmitResult =
     Http2ResponseHeadSubmitResult<HttpBufferedResponseWritePlan>;
 using Http2StreamingResponseHeadSubmitResult =
