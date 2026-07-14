@@ -312,10 +312,6 @@ public:
     [[nodiscard]] const Http1FinalResponseCommitFailure*
     failure() const && = delete;
 
-    [[nodiscard]] PreparedHttp1ResponseStream takePrepared() && {
-        return std::move(std::get<PreparedHttp1ResponseStream>(value_));
-    }
-
 private:
     friend PreparedHttp1ResponseStreamResult prepareHttp1ResponseStreamHead(
         HttpResponse,

@@ -47,6 +47,11 @@ concept HasAnyRvaluePreparedResponseStreamBorrow =
     requires(T&& prepared) { std::move(prepared).commitPlan(); };
 
 template <typename T>
+concept HasUncheckedPreparedStreamExtraction = requires(T&& result) {
+    std::move(result).takePrepared();
+};
+
+template <typename T>
 concept HasValueSemanticResponseBodyPlan = requires(
     const T& plan,
     const T&& temporary) {
@@ -60,6 +65,8 @@ static_assert(!HasAnyRvaluePreparedResponseStreamBorrow<
     ruvia::detail::ResponseStreamHead>);
 static_assert(!HasAnyRvaluePreparedResponseStreamBorrow<
     ruvia::detail::PreparedHttp1ResponseStream>);
+static_assert(!HasUncheckedPreparedStreamExtraction<
+    ruvia::detail::PreparedHttp1ResponseStreamResult>);
 static_assert(HasValueSemanticResponseBodyPlan<
     ruvia::detail::ResponseStreamCommitPlan>);
 
@@ -70,10 +77,11 @@ ruvia::detail::PreparedHttp1ResponseStream prepareStream(
     ResponseTrailerIntent trailerIntent) {
     auto result = ruvia::detail::prepareHttp1ResponseStreamHead(
         std::move(response), kind, plan, trailerIntent);
-    if (result.failure() != nullptr || result.prepared() == nullptr) {
+    auto* prepared = result.prepared();
+    if (result.failure() != nullptr || prepared == nullptr) {
         throw std::logic_error("expected prepared HTTP/1 response stream");
     }
-    return std::move(result).takePrepared();
+    return std::move(*prepared);
 }
 
 std::string withHttpsPort(std::string_view base, std::uint16_t port) {

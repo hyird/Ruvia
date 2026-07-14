@@ -113,10 +113,11 @@ ruvia::detail::PreparedHttp1ResponseStream prepareStream(
     ruvia::detail::ResponseTrailerIntent trailerIntent) {
     auto result = ruvia::detail::prepareHttp1ResponseStreamHead(
         std::move(response), kind, plan, trailerIntent);
-    if (result.failure() != nullptr || result.prepared() == nullptr) {
+    auto* prepared = result.prepared();
+    if (result.failure() != nullptr || prepared == nullptr) {
         throw std::logic_error("expected prepared HTTP/1 response stream");
     }
-    return std::move(result).takePrepared();
+    return std::move(*prepared);
 }
 
 template <typename Fn>

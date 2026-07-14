@@ -3213,6 +3213,7 @@ if(NOT _installed_http1_response_head_plan MATCHES
        "std::get_if<Http1ServerConnectionPlan>" OR
    NOT _installed_http1_server_semantics MATCHES
        "class PreparedHttp1ResponseStreamResult final" OR
+   _installed_http1_server_semantics MATCHES "takePrepared[(][)]" OR
    NOT _installed_http1_server_semantics MATCHES
        "http1CommitFinalResponse" OR
    _installed_http1_server_semantics MATCHES

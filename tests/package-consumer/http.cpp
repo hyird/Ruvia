@@ -793,6 +793,11 @@ concept HasPreparedHttp1StreamAlternatives = requires(const T& result) {
 };
 
 template <typename T>
+concept HasUncheckedPreparedHttp1StreamExtraction = requires(T&& result) {
+    std::move(result).takePrepared();
+};
+
+template <typename T>
 concept HasHttp2ResponseHeadContentLengthAlternatives = requires(
     const T& plan) {
     { plan.canonicalContentLength() } -> std::same_as<const
@@ -1367,6 +1372,8 @@ static_assert(!std::default_initializable<
 static_assert(HasHttp1FinalCommitAlternatives<
     ruvia::detail::Http1FinalResponseCommitResult>);
 static_assert(HasPreparedHttp1StreamAlternatives<
+    ruvia::detail::PreparedHttp1ResponseStreamResult>);
+static_assert(!HasUncheckedPreparedHttp1StreamExtraction<
     ruvia::detail::PreparedHttp1ResponseStreamResult>);
 static_assert(!std::default_initializable<
     ruvia::detail::Http1FinalResponseCommitFailure>);

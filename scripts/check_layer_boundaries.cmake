@@ -7080,6 +7080,7 @@ if(EXISTS "${HTTP1_SERVER_SEMANTICS}")
        NOT http1_server_semantics MATCHES
            "std::get_if<Http1ServerConnectionPlan>" OR
        NOT http1_server_semantics MATCHES "class PreparedHttp1ResponseStreamResult final" OR
+       http1_server_semantics MATCHES "takePrepared[(][)]" OR
        NOT http1_server_semantics MATCHES "http1CommitFinalResponse" OR
        NOT http1_server_semantics MATCHES "std::nullopt" OR
        NOT http1_server_semantics MATCHES "bodyPlan\\.bodySuppressed\\(\\)" OR
@@ -7119,6 +7120,8 @@ if(EXISTS "${WEB_HTTP1_FINAL_RESPONSE_COMMIT}" AND
        NOT web_http1_final_response_commit MATCHES
            "http1CommitFinalResponse" OR
        NOT web_http1_stream_sink MATCHES "prepareResult[.]failure[(][)]" OR
+       NOT web_http1_stream_sink MATCHES "prepareResult[.]prepared[(][)]" OR
+       NOT web_http1_stream_sink MATCHES "std::move[(][*]prepared[)]" OR
        NOT web_http1_stream_sink MATCHES
            "throwHttp1FinalResponseCommitFailure")
         boundary_error("Web bypassed the typed HTTP/1 final response commit"

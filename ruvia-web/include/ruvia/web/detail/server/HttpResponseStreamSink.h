@@ -102,7 +102,12 @@ private:
         if (const auto* failure = prepareResult.failure()) {
             throwHttp1FinalResponseCommitFailure(failure->error());
         }
-        auto streamHead = std::move(prepareResult).takePrepared();
+        auto* prepared = prepareResult.prepared();
+        if (prepared == nullptr) {
+            throw std::logic_error(
+                "HTTP/1 stream preparation returned no terminal alternative");
+        }
+        auto streamHead = std::move(*prepared);
         if (trailerIntent == ResponseTrailerIntent::kPresent &&
             streamHead.commitPlan().trailerFraming() !=
                 ResponseStreamTrailerFraming::kHttp1Chunked) {
