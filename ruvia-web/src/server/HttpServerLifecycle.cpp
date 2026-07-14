@@ -189,14 +189,20 @@ HttpServer::HttpServer(
       connectionScanner_(workerHandle_, makeConnectionScannerOptions(options_)),
       workSetPool_(memory_) {
     if (databases_.hasAnyTimeout()) {
-        connectionScanner_.setWorkerScanner(&databases_, [](void* target) noexcept {
-            static_cast<DbRegistry*>(target)->scanDeadlines();
-        });
+        connectionScanner_.registerWorkerMaintenance(
+            databaseDeadlineCheck_,
+            &databases_,
+            [](void* target) noexcept {
+                static_cast<DbRegistry*>(target)->scanDeadlines();
+            });
     }
     if (redis_.hasAnyTimeout()) {
-        connectionScanner_.setWorkerScanner(&redis_, [](void* target) noexcept {
-            static_cast<RedisRegistry*>(target)->scanDeadlines();
-        });
+        connectionScanner_.registerWorkerMaintenance(
+            redisDeadlineCheck_,
+            &redis_,
+            [](void* target) noexcept {
+                static_cast<RedisRegistry*>(target)->scanDeadlines();
+            });
     }
 }
 

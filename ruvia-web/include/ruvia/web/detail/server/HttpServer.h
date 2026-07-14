@@ -131,6 +131,8 @@ private:
     std::shared_ptr<WebWorkerDispatch> webWorkerDispatch_;
     RateLimiter rateLimiter_;
     ConnectionScanner connectionScanner_;
+    ConnectionScanner::WorkerMaintenanceRegistration databaseDeadlineCheck_;
+    ConnectionScanner::WorkerMaintenanceRegistration redisDeadlineCheck_;
     ConnectionWorkSetPool workSetPool_;
     std::size_t activeConnectionCount_{0};
 

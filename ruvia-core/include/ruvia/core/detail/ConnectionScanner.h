@@ -1,6 +1,5 @@
 #pragma once
 
-#include <array>
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
@@ -26,6 +25,7 @@ struct ConnectionScannerOptions final {
 class ConnectionScanner final {
 public:
     using PeriodicCheck = bool (*)(void*, std::int64_t) noexcept;
+    using WorkerMaintenanceCheck = void (*)(void*) noexcept;
 
     enum class Phase {
         kIdle,
@@ -36,6 +36,35 @@ public:
     };
 
     class Entry;
+
+    // Startup-owned worker maintenance hooks (for example product resource
+    // deadline scans) use caller-owned intrusive nodes. This keeps the core
+    // generic, allocation-free, and free of a fixed registration ceiling.
+    class WorkerMaintenanceRegistration final {
+    public:
+        WorkerMaintenanceRegistration() noexcept = default;
+        ~WorkerMaintenanceRegistration() noexcept;
+
+        WorkerMaintenanceRegistration(
+            const WorkerMaintenanceRegistration&) = delete;
+        WorkerMaintenanceRegistration& operator=(
+            const WorkerMaintenanceRegistration&) = delete;
+        WorkerMaintenanceRegistration(
+            WorkerMaintenanceRegistration&&) = delete;
+        WorkerMaintenanceRegistration& operator=(
+            WorkerMaintenanceRegistration&&) = delete;
+
+        void reset() noexcept;
+
+    private:
+        friend class ConnectionScanner;
+
+        ConnectionScanner* scanner_{nullptr};
+        WorkerMaintenanceRegistration* prev_{nullptr};
+        WorkerMaintenanceRegistration* next_{nullptr};
+        void* target_{nullptr};
+        WorkerMaintenanceCheck check_{nullptr};
+    };
 
     // Intrusive registration: the checked object owns the node, so one
     // multiplexed connection can carry any number of stream-local checks
@@ -126,7 +155,10 @@ public:
 
     void start();
     void stop() noexcept;
-    void setWorkerScanner(void* target, void (*scan)(void*) noexcept) noexcept;
+    void registerWorkerMaintenance(
+        WorkerMaintenanceRegistration& registration,
+        void* target,
+        WorkerMaintenanceCheck check) noexcept;
     void registerEntry(Entry& entry, asio::ip::tcp::socket& socket) noexcept;
     void unregisterEntry(Entry& entry) noexcept;
     void closeAll() noexcept;
@@ -136,6 +168,9 @@ private:
     void detachAllEntries() noexcept;
     void periodicCheckAdded() noexcept;
     void periodicCheckRemoved() noexcept;
+    void removeWorkerMaintenance(
+        WorkerMaintenanceRegistration& registration) noexcept;
+    void detachWorkerMaintenance() noexcept;
     [[nodiscard]] bool hasScanningWork() const noexcept;
     void schedule();
     void scan() noexcept;
@@ -146,12 +181,8 @@ private:
     ConnectionScannerOptions options_;
     std::int64_t cachedNowMs_{0};
     Entry sentinel_{};
-    struct WorkerScanner final {
-        void* target{nullptr};
-        void (*scan)(void*) noexcept{nullptr};
-    };
-    std::array<WorkerScanner, 5> workerScanners_{};
-    std::size_t workerScannerCount_{0};
+    WorkerMaintenanceRegistration* workerMaintenance_{nullptr};
+    WorkerMaintenanceRegistration* workerMaintenanceScanNext_{nullptr};
     std::size_t periodicCheckCount_{0};
     bool running_{false};
 };

@@ -128,10 +128,16 @@ if(_built_components_csv MATCHES "(^|,)core(,|$)")
            "void registerPeriodicCheck" OR
        NOT _installed_connection_scanner MATCHES
            "PeriodicCheckRegistration[*][ \t]+periodicChecks_" OR
+       NOT _installed_connection_scanner MATCHES
+           "class WorkerMaintenanceRegistration final" OR
+       NOT _installed_connection_scanner MATCHES
+           "void registerWorkerMaintenance" OR
+       NOT _installed_connection_scanner MATCHES
+           "WorkerMaintenanceRegistration[*][ \t]+workerMaintenance_" OR
        _installed_connection_scanner MATCHES
-           "kMaxPeriodicChecks|PeriodicCheckSlot")
+           "kMaxPeriodicChecks|PeriodicCheckSlot|workerScanners_|setWorkerScanner")
         message(FATAL_ERROR
-            "installed connection scanner regained a fixed periodic-check ceiling")
+            "installed connection scanner regained a fixed check ceiling")
     endif()
 endif()
 

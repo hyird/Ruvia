@@ -31,6 +31,17 @@ void validateScannerTimeout(
 
 }  // namespace
 
+ConnectionScanner::WorkerMaintenanceRegistration::
+~WorkerMaintenanceRegistration() noexcept {
+    reset();
+}
+
+void ConnectionScanner::WorkerMaintenanceRegistration::reset() noexcept {
+    if (scanner_ != nullptr) {
+        scanner_->removeWorkerMaintenance(*this);
+    }
+}
+
 ConnectionScanner::PeriodicCheckRegistration::~PeriodicCheckRegistration() noexcept {
     reset();
 }
@@ -114,13 +125,7 @@ void ConnectionScanner::Entry::removePeriodicCheck(
 void ConnectionScanner::Entry::detachPeriodicChecks() noexcept {
     periodicScanNext_ = nullptr;
     while (periodicChecks_ != nullptr) {
-        auto* registration = periodicChecks_;
-        periodicChecks_ = registration->next_;
-        registration->entry_ = nullptr;
-        registration->prev_ = nullptr;
-        registration->next_ = nullptr;
-        registration->target_ = nullptr;
-        registration->tick_ = nullptr;
+        periodicChecks_->reset();
     }
 }
 
@@ -176,6 +181,7 @@ ConnectionScanner::~ConnectionScanner() noexcept {
     // Entries and their guards may be owned by longer-lived connection objects.
     // Remove every scanner-owned pointer before the sentinel and timestamp die.
     detachAllEntries();
+    detachWorkerMaintenance();
 }
 
 void ConnectionScanner::start() {
@@ -184,7 +190,7 @@ void ConnectionScanner::start() {
     }
     // Registrations can appear after startup. Keep one coarse worker timer
     // armed, but schedule() skips the connection-list walk while no timeout,
-    // worker scanner, or periodic registration exists.
+    // worker maintenance check, or periodic registration exists.
     running_ = true;
     schedule();
 }
@@ -194,11 +200,22 @@ void ConnectionScanner::stop() noexcept {
     timer_.cancel();
 }
 
-void ConnectionScanner::setWorkerScanner(void* target, void (*scan)(void*) noexcept) noexcept {
-    if (scan == nullptr || workerScannerCount_ >= workerScanners_.size()) {
+void ConnectionScanner::registerWorkerMaintenance(
+    WorkerMaintenanceRegistration& registration,
+    void* target,
+    WorkerMaintenanceCheck check) noexcept {
+    registration.reset();
+    if (target == nullptr || check == nullptr) {
         return;
     }
-    workerScanners_[workerScannerCount_++] = WorkerScanner{target, scan};
+    registration.scanner_ = this;
+    registration.target_ = target;
+    registration.check_ = check;
+    registration.next_ = workerMaintenance_;
+    if (workerMaintenance_ != nullptr) {
+        workerMaintenance_->prev_ = &registration;
+    }
+    workerMaintenance_ = &registration;
 }
 
 void ConnectionScanner::registerEntry(Entry& entry, asio::ip::tcp::socket& socket) noexcept {
@@ -264,12 +281,48 @@ void ConnectionScanner::periodicCheckRemoved() noexcept {
     }
 }
 
+void ConnectionScanner::removeWorkerMaintenance(
+    WorkerMaintenanceRegistration& registration) noexcept {
+    if (registration.scanner_ != this) {
+        return;
+    }
+    if (registration.prev_ != nullptr) {
+        registration.prev_->next_ = registration.next_;
+    } else {
+        workerMaintenance_ = registration.next_;
+    }
+    if (registration.next_ != nullptr) {
+        registration.next_->prev_ = registration.prev_;
+    }
+    if (workerMaintenanceScanNext_ == &registration) {
+        workerMaintenanceScanNext_ = registration.next_;
+    }
+    registration.scanner_ = nullptr;
+    registration.prev_ = nullptr;
+    registration.next_ = nullptr;
+    registration.target_ = nullptr;
+    registration.check_ = nullptr;
+}
+
+void ConnectionScanner::detachWorkerMaintenance() noexcept {
+    workerMaintenanceScanNext_ = nullptr;
+    while (workerMaintenance_ != nullptr) {
+        auto* registration = workerMaintenance_;
+        workerMaintenance_ = registration->next_;
+        registration->scanner_ = nullptr;
+        registration->prev_ = nullptr;
+        registration->next_ = nullptr;
+        registration->target_ = nullptr;
+        registration->check_ = nullptr;
+    }
+}
+
 bool ConnectionScanner::hasScanningWork() const noexcept {
     return options_.idleTimeout.has_value() ||
         options_.initialReadTimeout.has_value() ||
         options_.payloadReadTimeout.has_value() ||
         options_.writeTimeout.has_value() ||
-        workerScannerCount_ != 0 ||
+        workerMaintenance_ != nullptr ||
         periodicCheckCount_ != 0;
 }
 
@@ -295,8 +348,11 @@ void ConnectionScanner::schedule() {
 void ConnectionScanner::scan() noexcept {
     const auto now = steadyNowMs();
     cachedNowMs_ = now;
-    for (std::size_t i = 0; i < workerScannerCount_; ++i) {
-        workerScanners_[i].scan(workerScanners_[i].target);
+    workerMaintenanceScanNext_ = workerMaintenance_;
+    while (workerMaintenanceScanNext_ != nullptr) {
+        auto* registration = workerMaintenanceScanNext_;
+        workerMaintenanceScanNext_ = registration->next_;
+        registration->check_(registration->target_);
     }
     auto* current = sentinel_.next_;
     while (current != &sentinel_) {

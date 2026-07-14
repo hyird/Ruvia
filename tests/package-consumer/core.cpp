@@ -70,6 +70,11 @@ concept HasTargetOnlyPeriodicCheck = requires(Entry& entry, void* target) {
         static_cast<ruvia::detail::ConnectionScanner::PeriodicCheck>(nullptr));
 };
 
+template <typename Scanner>
+concept HasTargetOnlyWorkerScanner = requires(Scanner& scanner, void* target) {
+    scanner.setWorkerScanner(target, static_cast<void (*)(void*) noexcept>(nullptr));
+};
+
 template <typename T>
 concept HasPublicWorkerWaitFields = requires(T& result) {
     result.status;
@@ -156,6 +161,21 @@ static_assert(std::same_as<
                      nullptr,
                      static_cast<
                          ruvia::detail::ConnectionScanner::PeriodicCheck>(nullptr))),
+    void>);
+using WorkerMaintenanceRegistration =
+    ruvia::detail::ConnectionScanner::WorkerMaintenanceRegistration;
+static_assert(std::default_initializable<WorkerMaintenanceRegistration>);
+static_assert(!std::movable<WorkerMaintenanceRegistration>);
+static_assert(!HasTargetOnlyWorkerScanner<
+              ruvia::detail::ConnectionScanner>);
+static_assert(std::same_as<
+    decltype(std::declval<ruvia::detail::ConnectionScanner&>()
+                 .registerWorkerMaintenance(
+                     std::declval<WorkerMaintenanceRegistration&>(),
+                     nullptr,
+                     static_cast<
+                         ruvia::detail::ConnectionScanner::
+                             WorkerMaintenanceCheck>(nullptr))),
     void>);
 
 static_assert(!std::default_initializable<ruvia::detail::PoolWaiter>);

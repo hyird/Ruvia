@@ -36,6 +36,26 @@ struct PeriodicResetProbe final {
     }
 };
 
+struct WorkerMaintenanceProbe final {
+    std::size_t ticks{0};
+
+    static void check(void* target) noexcept {
+        ++static_cast<WorkerMaintenanceProbe*>(target)->ticks;
+    }
+};
+
+struct WorkerMaintenanceResetProbe final {
+    ruvia::detail::ConnectionScanner::WorkerMaintenanceRegistration*
+        registration;
+    std::size_t ticks{0};
+
+    static void check(void* target) noexcept {
+        auto& probe = *static_cast<WorkerMaintenanceResetProbe*>(target);
+        ++probe.ticks;
+        probe.registration->reset();
+    }
+};
+
 }  // namespace
 
 int main() {
@@ -128,9 +148,17 @@ int main() {
         std::array<
             ruvia::detail::ConnectionScanner::PeriodicCheckRegistration,
             12> registrations{};
-        PeriodicResetProbe resetProbe{&registrations[5]};
+        PeriodicResetProbe resetProbe{&registrations[11]};
         ruvia::detail::ConnectionScanner::PeriodicCheckRegistration
             resetRegistration;
+        std::array<WorkerMaintenanceProbe, 8> workerProbes{};
+        std::array<
+            ruvia::detail::ConnectionScanner::WorkerMaintenanceRegistration,
+            8> workerRegistrations{};
+        WorkerMaintenanceResetProbe workerResetProbe{
+            &workerRegistrations[7]};
+        ruvia::detail::ConnectionScanner::WorkerMaintenanceRegistration
+            workerResetRegistration;
         if (dispatcher->post([&] {
                 // start() initially has no work. Registrations added afterward
                 // must become visible without any coarse timeout being enabled.
@@ -145,6 +173,16 @@ int main() {
                     resetRegistration,
                     &resetProbe,
                     &PeriodicResetProbe::tick);
+                for (std::size_t i = 0; i < workerRegistrations.size(); ++i) {
+                    scanner.registerWorkerMaintenance(
+                        workerRegistrations[i],
+                        &workerProbes[i],
+                        &WorkerMaintenanceProbe::check);
+                }
+                scanner.registerWorkerMaintenance(
+                    workerResetRegistration,
+                    &workerResetProbe,
+                    &WorkerMaintenanceResetProbe::check);
                 entry.setPhase(
                     ruvia::detail::ConnectionScanner::Phase::kLongLived);
             }) !=
@@ -161,13 +199,22 @@ int main() {
         }
         ioContext.run_for(std::chrono::milliseconds(5));
         for (std::size_t i = 0; i < probes.size(); ++i) {
-            if ((i == 5 && probes[i].ticks != 0) ||
-                (i != 5 && probes[i].ticks == 0)) {
+            if ((i == 11 && probes[i].ticks != 0) ||
+                (i != 11 && probes[i].ticks == 0)) {
                 return 8;
             }
         }
         if (resetProbe.ticks == 0) {
             return 9;
+        }
+        for (std::size_t i = 0; i < workerProbes.size(); ++i) {
+            if ((i == 7 && workerProbes[i].ticks != 0) ||
+                (i != 7 && workerProbes[i].ticks == 0)) {
+                return 10;
+            }
+        }
+        if (workerResetProbe.ticks == 0) {
+            return 11;
         }
     }
 
@@ -183,4 +230,19 @@ int main() {
             &PeriodicProbe::tick);
     }
     registration.reset();
+
+    // Scanner teardown likewise invalidates startup-owned maintenance nodes.
+    ruvia::detail::ConnectionScanner::WorkerMaintenanceRegistration
+        maintenanceRegistration;
+    WorkerMaintenanceProbe maintenanceProbe;
+    {
+        ruvia::detail::ConnectionScanner scanner(
+            worker,
+            ruvia::detail::ConnectionScannerOptions{});
+        scanner.registerWorkerMaintenance(
+            maintenanceRegistration,
+            &maintenanceProbe,
+            &WorkerMaintenanceProbe::check);
+    }
+    maintenanceRegistration.reset();
 }

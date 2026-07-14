@@ -8554,13 +8554,23 @@ set(CONNECTION_PERIODIC_TEST
     "${RUVIA_ROOT}/tests/connection_scanner_lifetime.cpp")
 set(CONNECTION_PERIODIC_WS
     "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/websocket/HttpWebSocketConnection.h")
+set(CONNECTION_MAINTENANCE_SERVER_HEADER
+    "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/server/HttpServer.h")
+set(CONNECTION_MAINTENANCE_SERVER_RUNTIME
+    "${RUVIA_ROOT}/ruvia-web/src/server/HttpServerLifecycle.cpp")
 if(EXISTS "${CONNECTION_TIMEOUT_CORE_MODEL}" AND
    EXISTS "${CONNECTION_TIMEOUT_CORE_RUNTIME}" AND
    EXISTS "${CONNECTION_PERIODIC_TEST}" AND
    EXISTS "${CONNECTION_PERIODIC_WS}" AND
+   EXISTS "${CONNECTION_MAINTENANCE_SERVER_HEADER}" AND
+   EXISTS "${CONNECTION_MAINTENANCE_SERVER_RUNTIME}" AND
    EXISTS "${CONNECTION_TIMEOUT_CORE_PACKAGE}")
     file(READ "${CONNECTION_PERIODIC_TEST}" connection_periodic_test)
     file(READ "${CONNECTION_PERIODIC_WS}" connection_periodic_ws)
+    file(READ "${CONNECTION_MAINTENANCE_SERVER_HEADER}"
+        connection_maintenance_server_header)
+    file(READ "${CONNECTION_MAINTENANCE_SERVER_RUNTIME}"
+        connection_maintenance_server_runtime)
     if(NOT connection_timeout_core_model MATCHES
            "class PeriodicCheckRegistration final" OR
        NOT connection_timeout_core_model MATCHES
@@ -8579,12 +8589,30 @@ if(EXISTS "${CONNECTION_TIMEOUT_CORE_MODEL}" AND
            "PeriodicCheckRegistration,[ \t\r\n]+12> registrations" OR
        NOT connection_timeout_core_package MATCHES
            "using ScannerRegistration" OR
+       NOT connection_timeout_core_model MATCHES
+           "class WorkerMaintenanceRegistration final" OR
+       NOT connection_timeout_core_model MATCHES
+           "void registerWorkerMaintenance" OR
+       NOT connection_timeout_core_runtime MATCHES
+           "void ConnectionScanner::removeWorkerMaintenance" OR
+       NOT connection_periodic_test MATCHES
+           "WorkerMaintenanceRegistration,[ \t\r\n]+8> workerRegistrations" OR
+       NOT connection_timeout_core_package MATCHES
+           "using WorkerMaintenanceRegistration" OR
+       NOT connection_maintenance_server_header MATCHES
+           "WorkerMaintenanceRegistration[ \t]+databaseDeadlineCheck_" OR
+       NOT connection_maintenance_server_header MATCHES
+           "WorkerMaintenanceRegistration[ \t]+redisDeadlineCheck_" OR
+       NOT connection_maintenance_server_runtime MATCHES
+           "registerWorkerMaintenance" OR
        connection_timeout_core_model MATCHES
            "kMaxPeriodicChecks|PeriodicCheckSlot" OR
        connection_timeout_core_runtime MATCHES
-           "No free slot|first free")
-        boundary_error("connection liveness checks regained a fixed slot ceiling"
-            "multiplexed stream checks must own intrusive RAII registrations so the scanner stays allocation-free without silently dropping streams")
+           "No free slot|first free" OR
+       connection_timeout_core_model MATCHES
+           "workerScanners_|WorkerScanner[ \t]+final|setWorkerScanner")
+        boundary_error("worker scanning regained a fixed registration ceiling"
+            "stream liveness and worker maintenance checks must own intrusive RAII registrations so the scanner stays allocation-free without silently dropping work")
     endif()
 endif()
 
