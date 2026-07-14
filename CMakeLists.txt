@@ -20,8 +20,10 @@ option(RUVIA_BUILD_TESTS "Build Ruvia unit tests" OFF)
 option(RUVIA_BUILD_BENCHMARKS "Build Ruvia protocol hot-path benchmarks" OFF)
 option(RUVIA_BUILD_FUZZERS "Build Clang libFuzzer protocol targets" OFF)
 option(RUVIA_ENABLE_HTTP2_CONFORMANCE_TESTS "Run RFC 9113 wire conformance tests against a Ruvia h2c server" OFF)
+option(RUVIA_ENABLE_POSTGRESQL_INTEGRATION_TESTS "Run tests against a live PostgreSQL server" OFF)
 
 option(RUVIA_ENABLE_MARIADB "Build MariaDB-compatible database support" OFF)
+option(RUVIA_ENABLE_POSTGRESQL "Build PostgreSQL database support" OFF)
 option(RUVIA_ENABLE_REDIS "Build Redis support" OFF)
 option(RUVIA_ENABLE_JWT "Build JWT helper support" OFF)
 
@@ -32,9 +34,9 @@ if(RUVIA_BUILD_WEB AND (NOT RUVIA_BUILD_CORE OR NOT RUVIA_BUILD_HTTP))
     message(FATAL_ERROR "RUVIA_BUILD_WEB=ON requires RUVIA_BUILD_CORE=ON and RUVIA_BUILD_HTTP=ON")
 endif()
 if(NOT RUVIA_BUILD_WEB AND
-   (RUVIA_ENABLE_MARIADB OR RUVIA_ENABLE_REDIS OR RUVIA_ENABLE_JWT))
+   (RUVIA_ENABLE_MARIADB OR RUVIA_ENABLE_POSTGRESQL OR RUVIA_ENABLE_REDIS OR RUVIA_ENABLE_JWT))
     message(FATAL_ERROR
-        "RUVIA_ENABLE_MARIADB/REDIS/JWT require RUVIA_BUILD_WEB=ON")
+        "RUVIA_ENABLE_MARIADB/POSTGRESQL/REDIS/JWT require RUVIA_BUILD_WEB=ON")
 endif()
 if(RUVIA_BUILD_EXAMPLES AND NOT RUVIA_BUILD_WEB)
     message(FATAL_ERROR "RUVIA_BUILD_EXAMPLES=ON requires RUVIA_BUILD_WEB=ON")
@@ -49,13 +51,18 @@ if(RUVIA_ENABLE_HTTP2_CONFORMANCE_TESTS AND (NOT RUVIA_BUILD_TESTS OR NOT RUVIA_
     message(FATAL_ERROR
         "RUVIA_ENABLE_HTTP2_CONFORMANCE_TESTS=ON requires RUVIA_BUILD_TESTS=ON and RUVIA_BUILD_WEB=ON")
 endif()
+if(RUVIA_ENABLE_POSTGRESQL_INTEGRATION_TESTS AND
+   (NOT RUVIA_BUILD_TESTS OR NOT RUVIA_ENABLE_POSTGRESQL))
+    message(FATAL_ERROR
+        "RUVIA_ENABLE_POSTGRESQL_INTEGRATION_TESTS=ON requires RUVIA_BUILD_TESTS=ON and RUVIA_ENABLE_POSTGRESQL=ON")
+endif()
 
 # Keep manifest-mode dependency installation aligned with the selected targets.
 # These values must be finalized before project(), when the vcpkg toolchain runs.
 if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
     set(_ruvia_vcpkg_features ${VCPKG_MANIFEST_FEATURES})
     list(REMOVE_ITEM _ruvia_vcpkg_features
-        core http web runtime protocol framework mariadb redis jwt http-client)
+        core http web runtime protocol framework mariadb postgresql redis jwt http-client)
     if(RUVIA_BUILD_CORE)
         list(APPEND _ruvia_vcpkg_features runtime)
     endif()
@@ -67,6 +74,9 @@ if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
     endif()
     if(RUVIA_ENABLE_MARIADB)
         list(APPEND _ruvia_vcpkg_features mariadb)
+    endif()
+    if(RUVIA_ENABLE_POSTGRESQL)
+        list(APPEND _ruvia_vcpkg_features postgresql)
     endif()
     if(RUVIA_ENABLE_REDIS)
         list(APPEND _ruvia_vcpkg_features redis)
@@ -86,7 +96,7 @@ if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
     unset(_ruvia_vcpkg_features)
 endif()
 
-project(ruvia VERSION 0.1.0 LANGUAGES CXX)
+project(ruvia VERSION 0.1.1 LANGUAGES CXX)
 
 if(RUVIA_BUILD_FUZZERS AND NOT CMAKE_CXX_COMPILER_ID MATCHES "Clang")
     message(FATAL_ERROR "RUVIA_BUILD_FUZZERS=ON requires Clang with libFuzzer")
@@ -131,6 +141,10 @@ if(RUVIA_ENABLE_MARIADB)
     find_package(unofficial-libmariadb CONFIG REQUIRED)
 endif()
 
+if(RUVIA_ENABLE_POSTGRESQL)
+    find_package(PostgreSQL REQUIRED)
+endif()
+
 if(RUVIA_ENABLE_REDIS)
     find_package(hiredis CONFIG REQUIRED)
 endif()
@@ -152,6 +166,9 @@ endfunction()
 
 if(RUVIA_ENABLE_MARIADB)
     ruvia_deduplicate_link_interface(unofficial::libmariadb)
+endif()
+if(RUVIA_ENABLE_POSTGRESQL)
+    ruvia_deduplicate_link_interface(PostgreSQL::PostgreSQL)
 endif()
 
 function(ruvia_configure_library target)
@@ -378,6 +395,7 @@ set(_ruvia_config [=[
 include(CMakeFindDependencyMacro)
 
 set(RUVIA_ENABLE_MARIADB @RUVIA_ENABLE_MARIADB@)
+set(RUVIA_ENABLE_POSTGRESQL @RUVIA_ENABLE_POSTGRESQL@)
 set(RUVIA_ENABLE_REDIS @RUVIA_ENABLE_REDIS@)
 set(RUVIA_ENABLE_JWT @RUVIA_ENABLE_JWT@)
 
@@ -454,6 +472,10 @@ endif()
 
 if(_ruvia_needs_web AND RUVIA_ENABLE_MARIADB)
     find_dependency(unofficial-libmariadb CONFIG)
+endif()
+
+if(_ruvia_needs_web AND RUVIA_ENABLE_POSTGRESQL)
+    find_dependency(PostgreSQL)
 endif()
 
 if(_ruvia_needs_web AND RUVIA_ENABLE_REDIS)

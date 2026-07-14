@@ -1,7 +1,9 @@
 #pragma once
 
+#include <algorithm>
 #include <cstddef>
 #include <cstdint>
+#include <limits>
 #include <string>
 #include <string_view>
 
@@ -53,18 +55,33 @@ public:
         if (!deflateOk_ || deflateReset(&deflate_) != Z_OK) {
             return false;
         }
-        deflate_.next_in = reinterpret_cast<Bytef*>(const_cast<char*>(input.data()));
-        deflate_.avail_in = static_cast<uInt>(input.size());
+        // Messages can exceed zlib's 32-bit avail_in, so supply the input in
+        // windows instead of truncating the size.
+        deflate_.avail_in = 0;
+        std::size_t supplied = 0;
         char buffer[4096];
         for (;;) {
+            if (deflate_.avail_in == 0 && supplied < input.size()) {
+                const auto count = static_cast<uInt>(std::min<std::size_t>(
+                    input.size() - supplied,
+                    (std::numeric_limits<uInt>::max)()));
+                deflate_.next_in = reinterpret_cast<Bytef*>(
+                    const_cast<char*>(input.data() + supplied));
+                deflate_.avail_in = count;
+                supplied += count;
+            }
             deflate_.next_out = reinterpret_cast<Bytef*>(buffer);
             deflate_.avail_out = sizeof(buffer);
-            const int status = deflate(&deflate_, Z_SYNC_FLUSH);
+            const int status = deflate(
+                &deflate_,
+                supplied == input.size() ? Z_SYNC_FLUSH : Z_NO_FLUSH);
             if (status != Z_OK && status != Z_BUF_ERROR) {
                 return false;
             }
             out.append(buffer, sizeof(buffer) - deflate_.avail_out);
-            if (deflate_.avail_out != 0) {
+            if (deflate_.avail_out != 0 &&
+                deflate_.avail_in == 0 &&
+                supplied == input.size()) {
                 break;
             }
         }
@@ -106,10 +123,21 @@ private:
         std::size_t size,
         std::pmr::string& out,
         ProtocolByteLimit messageLimit) {
-        inflate_.next_in = reinterpret_cast<Bytef*>(const_cast<char*>(data));
-        inflate_.avail_in = static_cast<uInt>(size);
+        // Messages can exceed zlib's 32-bit avail_in, so supply the input in
+        // windows instead of truncating the size.
+        inflate_.avail_in = 0;
+        std::size_t supplied = 0;
         char buffer[8192];
         for (;;) {
+            if (inflate_.avail_in == 0 && supplied < size) {
+                const auto count = static_cast<uInt>(std::min<std::size_t>(
+                    size - supplied,
+                    (std::numeric_limits<uInt>::max)()));
+                inflate_.next_in = reinterpret_cast<Bytef*>(
+                    const_cast<char*>(data + supplied));
+                inflate_.avail_in = count;
+                supplied += count;
+            }
             inflate_.next_out = reinterpret_cast<Bytef*>(buffer);
             inflate_.avail_out = sizeof(buffer);
             const int status = inflate(&inflate_, Z_NO_FLUSH);
@@ -121,7 +149,10 @@ private:
                 return WebSocketInflateResult::kTooLarge;
             }
             out.append(buffer, produced);
-            if (inflate_.avail_out != 0) {
+            if (status == Z_STREAM_END ||
+                (inflate_.avail_out != 0 &&
+                 inflate_.avail_in == 0 &&
+                 supplied == size)) {
                 break;
             }
         }

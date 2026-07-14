@@ -669,6 +669,13 @@ private:
         }
         length = readWebSocketUint16(buffer.data() + offset + headerSize);
         headerSize += 2;
+        // RFC 6455 §5.2: the minimal number of length bytes MUST be used, so a
+        // value <126 may not use the 16-bit form (e.g. 126,0,124 for a 124-byte
+        // payload). A conformant peer never emits this; reject the non-minimal frame.
+        if (length < 126) {
+            return WebSocketFrameReadResult::makeFailure(
+                WebSocketProtocolFailure::kProtocolError);
+        }
     } else if (length == 127) {
         if (available < headerSize + 8) {
             return WebSocketFrameReadResult::makeNeedInput();
@@ -678,6 +685,12 @@ private:
                 WebSocketProtocolFailure::kProtocolError);
         }
         headerSize += 8;
+        // RFC 6455 §5.2 minimal-length rule: a value fitting the 16-bit form may
+        // not use the 64-bit form.
+        if (length <= 0xFFFFU) {
+            return WebSocketFrameReadResult::makeFailure(
+                WebSocketProtocolFailure::kProtocolError);
+        }
     }
 
     if (isInvalidWebSocketControlFrame(frameStart, length)) {

@@ -6,6 +6,7 @@
 #include <optional>
 #include <span>
 #include <stdexcept>
+#include <string>
 #include <string_view>
 #include <type_traits>
 #include <utility>
@@ -1982,7 +1983,7 @@ static_assert(!std::default_initializable<
 static_assert(std::same_as<
     decltype(std::declval<ruvia::detail::TransferCodingDecoder&>()
         .finishInput()),
-    ruvia::detail::TransferCodingFinishStatus>);
+    ruvia::detail::TransferCodingDecodeResult>);
 static_assert(HasConsumedBytes<
     ruvia::detail::TransferCodingDecodeNeedInput>);
 static_assert(HasConsumedBytes<
@@ -2507,6 +2508,25 @@ int main() {
     multipartParser.finishInput();
     if (multipartParser.poll().done() == nullptr) {
         return 19;
+    }
+    ruvia::MultipartParser failedMultipartParser(
+        ruvia::MultipartBoundary("x"),
+        std::pmr::get_default_resource());
+    failedMultipartParser.feed(std::string(64 * 1024 + 1, 'p'));
+    const auto multipartFailure = failedMultipartParser.poll();
+    const auto repeatedMultipartFailure = failedMultipartParser.poll();
+    if (multipartFailure.failure() == nullptr ||
+        repeatedMultipartFailure.failure() == nullptr ||
+        multipartFailure.failure()->error() !=
+            ruvia::MultipartParseError::kPreambleTooLarge ||
+        repeatedMultipartFailure.failure()->error() !=
+            multipartFailure.failure()->error()) {
+        return 72;
+    }
+    try {
+        failedMultipartParser.feed("--x--");
+        return 73;
+    } catch (const std::logic_error&) {
     }
     constexpr std::string_view chunkedRequest =
         "POST / HTTP/1.1\r\nHost: example.test\r\n"

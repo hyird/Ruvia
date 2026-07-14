@@ -543,6 +543,14 @@ bool Http2Connection::processContinuation(const Http2FrameHeader& header, std::s
         appendGoaway(Http2ErrorCode::kProtocolError, "invalid CONTINUATION");
         return false;
     }
+    // Bound the CONTINUATION count per header block. Empty CONTINUATION frames add
+    // no bytes and so never trip the accumulated-block size cap; without this an
+    // endless stream of them keeps the block "in progress" forever (RFC 9113 §6.10,
+    // CVE-2024-27316 CONTINUATION flood).
+    if (!headerContinuation_.recordContinuationFrame()) {
+        appendGoaway(Http2ErrorCode::kEnhanceYourCalm, "CONTINUATION flood");
+        return false;
+    }
     const auto kind = headerContinuation_.kind();
     Http2StreamState* stream = nullptr;
     if (kind == Http2HeaderBlockKind::kDiscarded) {

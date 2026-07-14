@@ -138,11 +138,6 @@ private:
     Value value_;
 };
 
-enum class TransferCodingFinishStatus : std::uint8_t {
-    kComplete,
-    kIncomplete,
-};
-
 class TransferCodingDecoder final {
 public:
     TransferCodingDecoder(
@@ -157,7 +152,9 @@ public:
     [[nodiscard]] TransferCodingDecodeResult decode(
         std::string_view input,
         std::span<char> output) noexcept;
-    [[nodiscard]] TransferCodingFinishStatus finishInput() noexcept;
+    // EOF is a decoder step, not a second status channel. It returns the same
+    // exclusive complete/failure result as decode(), with zero consumed bytes.
+    [[nodiscard]] TransferCodingDecodeResult finishInput() noexcept;
 
 private:
     struct InflateStep {
@@ -165,6 +162,10 @@ private:
         std::size_t produced{0};
         int status{Z_OK};
     };
+
+    struct Active final {};
+    struct Complete final {};
+    using State = std::variant<Active, Complete, TransferCodingDecodeError>;
 
     [[nodiscard]] InflateStep inflateStep(
         std::string_view input,
@@ -191,9 +192,7 @@ private:
     void cleanup() noexcept;
     z_stream stream_{};
     bool initialized_{false};
-    bool ended_{false};
-    bool failed_{false};
-    TransferCodingDecodeError failure_{TransferCodingDecodeError::kInvalidContent};
+    State state_{Active{}};
     std::pmr::memory_resource* resource_{nullptr};
     ProtocolByteLimit bodyLimit_;
     std::size_t decodedBytes_{0};

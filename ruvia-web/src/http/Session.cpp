@@ -58,6 +58,12 @@ Task<void> SessionMiddleware::handle(Context& c, Next& next) {
             }
             detail::SessionAccess::setId(c, detail::generateCsrfToken(idBuffer));
             id = detail::SessionAccess::id(c);
+            if (id.empty()) {
+                // CSPRNG failure: fail closed. Persisting under the empty id
+                // would store every such session at the shared key "sess:",
+                // and the client could never present a valid sid for it anyway.
+                co_return;
+            }
             const auto connection = getConnInfo(c);
             // The session id is only known after the handler ran, so the
             // cookie goes straight onto the already-built response rather

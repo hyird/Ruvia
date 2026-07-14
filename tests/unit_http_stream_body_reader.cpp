@@ -216,3 +216,15 @@ RUVIA_TEST(http1_transfer_coding_failure_maps_once_for_both_read_surfaces) {
             ruvia::detail::Http1RequestBodyConsumption::kIncomplete);
     }
 }
+
+RUVIA_TEST(http1_transfer_coding_eof_commits_only_the_complete_decode_pipeline) {
+    auto incomplete = gzipCompress("truncated transfer coding");
+    incomplete.resize(incomplete.size() - 4);
+    const auto initial = chunked(incomplete);
+    for (const bool streaming : {false, true}) {
+        const auto observation = readTransferBody(initial, streaming);
+        RUVIA_CHECK_EQ(observation.errorStatus, std::uint16_t{400});
+        RUVIA_CHECK(observation.consumption ==
+            ruvia::detail::Http1RequestBodyConsumption::kIncomplete);
+    }
+}

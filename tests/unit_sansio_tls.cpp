@@ -25,6 +25,7 @@
 #include <string_view>
 
 #include "ruvia/http/detail/http2/Http2FrameCodec.h"
+#include "ruvia/web/detail/server/HttpServerTlsVerify.h"
 #include "ruvia/http/detail/http2/Http2Hpack.h"
 #include "ruvia/web/detail/server/HttpServerAlpn.h"
 #include "ruvia/web/detail/server/Http2SansIoSession.h"
@@ -249,4 +250,17 @@ RUVIA_TEST(sansio_tls_alpn_h2_round_trip) {
     RUVIA_CHECK(connectionObservation.clientCertificateEmpty);
     RUVIA_CHECK(
         connectionObservation.remoteAddress == std::string_view("127.0.0.1"));
+}
+
+// Optional mutual TLS verifies a presented certificate but admits a client that
+// presents none; requireClientCertificate adds fail-if-no-peer-cert so a missing
+// certificate fails the handshake (mandatory mutual TLS).
+RUVIA_TEST(http_server_tls_verify_mode_optional_vs_mandatory) {
+    const auto optional = ruvia::detail::httpServerTlsVerifyMode(false);
+    RUVIA_CHECK(optional == asio::ssl::verify_peer);
+    RUVIA_CHECK((optional & asio::ssl::verify_fail_if_no_peer_cert) == 0);
+
+    const auto mandatory = ruvia::detail::httpServerTlsVerifyMode(true);
+    RUVIA_CHECK((mandatory & asio::ssl::verify_peer) != 0);
+    RUVIA_CHECK((mandatory & asio::ssl::verify_fail_if_no_peer_cert) != 0);
 }

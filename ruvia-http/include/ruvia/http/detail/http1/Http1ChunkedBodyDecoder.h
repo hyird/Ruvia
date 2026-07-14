@@ -177,10 +177,14 @@ public:
 
     [[nodiscard]] Http1ChunkDecodeResult decode(
         std::string_view available) {
+        if (const auto* failure =
+                std::get_if<Http1ChunkDecodeError>(&state_)) {
+            return Http1ChunkDecodeResult::makeFailure(0, *failure);
+        }
         std::size_t cursor = 0;
         for (;;) {
-            switch (state_) {
-                case State::kSizeLine: {
+            switch (std::get<ProgressState>(state_)) {
+                case ProgressState::kSizeLine: {
                     const auto lineEnd = available.find("\r\n", cursor);
                     if (lineEnd == std::string_view::npos) {
                         if (available.size() - cursor >= kMaxHttpHeaderBytes) {
@@ -204,7 +208,7 @@ public:
                     }
                     cursor = lineEnd + 2;
                     if (chunkSize == 0) {
-                        state_ = State::kTrailers;
+                        state_ = ProgressState::kTrailers;
                         trailerSearchOffset_ = 0;
                     } else {
                         if (bodyLimit_.additionExceeds(
@@ -215,11 +219,11 @@ public:
                         }
                         decodedBytes_ += chunkSize;
                         remaining_ = chunkSize;
-                        state_ = State::kBody;
+                        state_ = ProgressState::kBody;
                     }
                     break;
                 }
-                case State::kBody: {
+                case ProgressState::kBody: {
                     if (cursor == available.size()) {
                         return Http1ChunkDecodeResult::makeNeedMore(cursor);
                     }
@@ -235,14 +239,14 @@ public:
                                 return fail(cursor, *error);
                             }
                             cursor += 2;
-                            state_ = State::kSizeLine;
+                            state_ = ProgressState::kSizeLine;
                         } else {
-                            state_ = State::kDelimiter;
+                            state_ = ProgressState::kDelimiter;
                         }
                     }
                     return Http1ChunkDecodeResult::makeBodyChunk(cursor, body);
                 }
-                case State::kDelimiter:
+                case ProgressState::kDelimiter:
                     if (available.size() - cursor < 2) {
                         return Http1ChunkDecodeResult::makeNeedMore(cursor);
                     }
@@ -251,15 +255,15 @@ public:
                         return fail(cursor, *error);
                     }
                     cursor += 2;
-                    state_ = State::kSizeLine;
+                    state_ = ProgressState::kSizeLine;
                     break;
-                case State::kTrailers: {
+                case ProgressState::kTrailers: {
                     const auto trailers = available.substr(cursor);
                     if (trailers.starts_with("\r\n")) {
                         if (const auto error = accountFraming(2)) {
                             return fail(cursor, *error);
                         }
-                        state_ = State::kComplete;
+                        state_ = ProgressState::kComplete;
                         return Http1ChunkDecodeResult::makeComplete(cursor + 2);
                     }
                     const auto trailerEnd = trailers.find(
@@ -285,28 +289,29 @@ public:
                     if (const auto error = accountFraming(trailerBytes)) {
                         return fail(cursor, *error);
                     }
-                    state_ = State::kComplete;
+                    state_ = ProgressState::kComplete;
                     return Http1ChunkDecodeResult::makeComplete(
                         cursor + trailerBytes);
                 }
-                case State::kComplete:
+                case ProgressState::kComplete:
                     return Http1ChunkDecodeResult::makeComplete(cursor);
-                case State::kFailed:
-                    return Http1ChunkDecodeResult::makeFailure(
-                        cursor, failure_);
             }
         }
     }
 
 private:
-    enum class State : std::uint8_t {
+    enum class ProgressState : std::uint8_t {
         kSizeLine,
         kBody,
         kDelimiter,
         kTrailers,
         kComplete,
-        kFailed,
     };
+
+    // Progress and terminal failure are mutually exclusive. Keeping the exact
+    // failure in the state value makes repeated decode() calls stable without
+    // a kFailed marker plus a separately combinable error side channel.
+    using State = std::variant<ProgressState, Http1ChunkDecodeError>;
 
     [[nodiscard]] std::optional<Http1ChunkDecodeError> accountFraming(
         std::size_t bytes) noexcept {
@@ -328,18 +333,16 @@ private:
     [[nodiscard]] Http1ChunkDecodeResult fail(
         std::size_t consumedBytes,
         Http1ChunkDecodeError error) noexcept {
-        state_ = State::kFailed;
-        failure_ = error;
+        state_ = error;
         return Http1ChunkDecodeResult::makeFailure(consumedBytes, error);
     }
 
     ProtocolByteLimit bodyLimit_;
-    State state_{State::kSizeLine};
+    State state_{ProgressState::kSizeLine};
     std::size_t trailerSearchOffset_{0};
     std::size_t remaining_{0};
     std::size_t decodedBytes_{0};
     std::size_t encodedOverheadBytes_{0};
-    Http1ChunkDecodeError failure_{Http1ChunkDecodeError::kInvalidFraming};
 };
 
 }  // namespace ruvia::detail

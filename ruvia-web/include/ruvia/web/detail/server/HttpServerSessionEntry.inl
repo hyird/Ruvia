@@ -1,5 +1,9 @@
 Task<void> HttpServer::handleSession(TcpSocket socket) {
     try {
+        // Destroyed after connectionCount below, i.e. once this session has
+        // left the count, so a shutdown waiting on the grace period can
+        // force-close the moment the last session finishes.
+        SessionDrainGuard drainNotify{this};
         ConnectionCountGuard connectionCount(activeConnectionCount_);
         std::pmr::string remoteAddress(memory_.allocator<char>());
         std::error_code remoteEc;

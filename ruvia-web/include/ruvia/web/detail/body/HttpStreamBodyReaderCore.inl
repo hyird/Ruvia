@@ -25,7 +25,7 @@ namespace ruvia::detail {
 
 inline void requireCompleteTransferCoding(
     TransferCodingDecoder& decoder) {
-    if (decoder.finishInput() != TransferCodingFinishStatus::kComplete) {
+    if (decoder.finishInput().complete() == nullptr) {
         throw HttpProtocolError(400, "incomplete transfer-coding body");
     }
 }
@@ -75,7 +75,7 @@ StreamBodyReader<Stream>::~StreamBodyReader() {
 
 template <typename Stream>
 Http1RequestBodyConsumption StreamBodyReader<Stream>::consumption() const noexcept {
-    return finished_ && (transferDecoder_ == nullptr || transferFinished_)
+    return finished_
         ? Http1RequestBodyConsumption::kComplete
         : Http1RequestBodyConsumption::kIncomplete;
 }
@@ -129,8 +129,8 @@ Task<std::string_view> StreamBodyReader<Stream>::readAll(std::pmr::string& body)
     }
     if (transferDecoder_ != nullptr) {
         requireCompleteTransferCoding(*transferDecoder_);
-        transferFinished_ = true;
     }
+    markFinished();
     co_return std::string_view(body.data(), body.size());
 }
 

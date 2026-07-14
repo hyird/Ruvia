@@ -60,7 +60,6 @@ using ruvia::detail::TransferCodingDecodeFailure;
 using ruvia::detail::TransferCodingDecodeNeedInput;
 using ruvia::detail::TransferCodingDecodeOutput;
 using ruvia::detail::TransferCodingDecodeResult;
-using ruvia::detail::TransferCodingFinishStatus;
 using ruvia::detail::decodeHttpContent;
 using ruvia::detail::encodeHttpContent;
 using ruvia::detail::httpContentCodingFromFieldValue;
@@ -728,7 +727,7 @@ RUVIA_TEST(transfer_coding_decoder_gzip_round_trip) {
     const std::string gz = gzipCompress(plain);
     std::pmr::string output(resource);
     RUVIA_CHECK(!appendTransferDecoded(decoder, gz, output).has_value());
-    RUVIA_CHECK(decoder.finishInput() == TransferCodingFinishStatus::kComplete);
+    RUVIA_CHECK(decoder.finishInput().complete() != nullptr);
     RUVIA_CHECK_EQ(std::string_view(output.data(), output.size()), std::string_view(plain));
 }
 
@@ -779,8 +778,7 @@ RUVIA_TEST(transfer_coded_chunked_request_plan_drives_decode_order) {
         pending.remove_prefix(result.consumedBytes());
     }
     RUVIA_CHECK(complete);
-    RUVIA_CHECK(
-        transfer.finishInput() == TransferCodingFinishStatus::kComplete);
+    RUVIA_CHECK(transfer.finishInput().complete() != nullptr);
     RUVIA_CHECK_EQ(
         std::string_view(output.data(), output.size()),
         std::string_view(plain));
@@ -802,6 +800,13 @@ RUVIA_TEST(transfer_coding_decoder_rejects_bomb) {
     RUVIA_CHECK(error.has_value());
     RUVIA_CHECK(*error ==
         TransferCodingDecodeError::kDecodedSizeExceeded);
+    const auto finish = decoder.finishInput();
+    RUVIA_CHECK(finish.failure() != nullptr);
+    if (finish.failure() != nullptr) {
+        RUVIA_CHECK(
+            finish.failure()->error() ==
+            TransferCodingDecodeError::kDecodedSizeExceeded);
+    }
 }
 
 RUVIA_TEST(transfer_coding_decoder_reports_typed_wire_failures) {
@@ -826,8 +831,20 @@ RUVIA_TEST(transfer_coding_decoder_reports_typed_wire_failures) {
     std::pmr::string ignored(resource);
     RUVIA_CHECK(!appendTransferDecoded(
         incomplete, truncated, ignored).has_value());
-    RUVIA_CHECK(
-        incomplete.finishInput() == TransferCodingFinishStatus::kIncomplete);
+    const auto incompleteFinish = incomplete.finishInput();
+    RUVIA_CHECK(incompleteFinish.failure() != nullptr);
+    if (incompleteFinish.failure() != nullptr) {
+        RUVIA_CHECK(
+            incompleteFinish.failure()->error() ==
+            TransferCodingDecodeError::kInvalidContent);
+    }
+    const auto repeatedFinish = incomplete.finishInput();
+    RUVIA_CHECK(repeatedFinish.failure() != nullptr);
+    if (repeatedFinish.failure() != nullptr) {
+        RUVIA_CHECK(
+            repeatedFinish.failure()->error() ==
+            TransferCodingDecodeError::kInvalidContent);
+    }
 
     std::string trailing = gzipCompress("complete");
     trailing.push_back('x');

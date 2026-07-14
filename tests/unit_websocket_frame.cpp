@@ -282,3 +282,63 @@ RUVIA_TEST(ws_frame_reader_reports_typed_wire_failures) {
         closeFailure.failure()->error() ==
         WebSocketProtocolFailure::kInvalidPayloadData);
 }
+
+// RFC 6455 §5.2: the length MUST be encoded in the minimal number of bytes. A frame
+// using the 16-bit form for a length <126, or the 64-bit form for a length <=65535,
+// is a protocol error. A conformant peer never emits these; reject them.
+RUVIA_TEST(ws_frame_reader_rejects_non_minimal_length_encoding) {
+    constexpr std::array<unsigned char, 4> mask{0x12, 0x34, 0x56, 0x78};
+    const auto maskedBody = [&mask](std::pmr::string& out, std::string_view body) {
+        for (const auto byte : mask) {
+            out.push_back(static_cast<char>(byte));
+        }
+        for (std::size_t i = 0; i < body.size(); ++i) {
+            out.push_back(static_cast<char>(
+                static_cast<unsigned char>(body[i]) ^ mask[i & 3U]));
+        }
+    };
+    const auto readsAsProtocolError = [](std::pmr::string& frame) {
+        std::size_t offset = 0;
+        std::size_t pendingCompactUntil = 0;
+        const auto result = webSocketTryReadFrame(
+            frame, offset, pendingCompactUntil,
+            ProtocolByteLimit::limited(1U << 20), false);
+        return result.failure() != nullptr &&
+            result.failure()->error() == WebSocketProtocolFailure::kProtocolError;
+    };
+
+    // 16-bit form (126) carrying a 2-byte payload -- should have used the 7-bit form.
+    std::pmr::string wide16(std::pmr::get_default_resource());
+    wide16.push_back(static_cast<char>(0x82));       // FIN + binary
+    wide16.push_back(static_cast<char>(0x80U | 126U));  // masked, 16-bit length marker
+    wide16.push_back(0x00);
+    wide16.push_back(0x02);                           // length = 2 (non-minimal)
+    maskedBody(wide16, "hi");
+    RUVIA_CHECK(readsAsProtocolError(wide16));
+
+    // 64-bit form (127) carrying a 2-byte payload -- should have used the 7-bit form.
+    std::pmr::string wide64(std::pmr::get_default_resource());
+    wide64.push_back(static_cast<char>(0x82));
+    wide64.push_back(static_cast<char>(0x80U | 127U));  // masked, 64-bit length marker
+    for (int i = 0; i < 7; ++i) {
+        wide64.push_back(0x00);
+    }
+    wide64.push_back(0x02);                            // length = 2 (non-minimal)
+    maskedBody(wide64, "hi");
+    RUVIA_CHECK(readsAsProtocolError(wide64));
+
+    // Boundary: a genuinely 126-byte payload legitimately uses the 16-bit form.
+    std::pmr::string minimal16(std::pmr::get_default_resource());
+    minimal16.push_back(static_cast<char>(0x82));
+    minimal16.push_back(static_cast<char>(0x80U | 126U));
+    minimal16.push_back(0x00);
+    minimal16.push_back(0x7E);                         // length = 126 (minimal)
+    maskedBody(minimal16, std::string(126, 'x'));
+    std::size_t offset = 0;
+    std::size_t pendingCompactUntil = 0;
+    const auto ok = webSocketTryReadFrame(
+        minimal16, offset, pendingCompactUntil,
+        ProtocolByteLimit::limited(1U << 20), false);
+    RUVIA_CHECK(ok.frame() != nullptr);
+    RUVIA_CHECK_EQ(ok.frame()->payload.size(), std::size_t{126});
+}

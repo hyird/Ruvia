@@ -13,7 +13,7 @@ These examples are built when `RUVIA_BUILD_EXAMPLES` is enabled and double as co
 | `ruvia_example_ops` | `ops.cpp` | Security headers middleware, route-level per-IP rate limiting, and health/readiness response helpers wired through controller macros. |
 | `ruvia_example_middleware_next` | `middleware_next.cpp` | Middleware value `Next` and one-shot `co_await next()` signature coverage. |
 | `ruvia_example_auth_jwt` | `auth_jwt.cpp` | JWT signing, verification, bearer-token middleware and protected routes. Built only with `RUVIA_ENABLE_JWT=ON`. |
-| `ruvia_example_database` | `database.cpp` | DB configuration, query, execute, streaming query, transaction and optional migration. Built only with `RUVIA_ENABLE_MARIADB=ON`. |
+| `ruvia_example_database` | `database.cpp` | Unified MariaDB/PostgreSQL configuration, query, execute, streaming query, transaction and optional migration. Built with either database feature. |
 | `ruvia_example_redis` | `redis.cpp` | Redis configuration, aliases, strings, hashes, lists, sets, sorted sets, scans, scripts, blocking pops, pipelines and transactions. Built only with `RUVIA_ENABLE_REDIS=ON`. |
 | `ruvia_example_runtime_config` | `runtime_config.cpp` | Dotenv, global middleware, memory pool, timeouts, limits, compression and optional TLS. |
 
@@ -30,10 +30,14 @@ Build feature examples by enabling the matching feature flags, for example:
 cmake -S . -B build `
   -DRUVIA_BUILD_EXAMPLES=ON `
   -DRUVIA_ENABLE_MARIADB=ON `
+  -DRUVIA_ENABLE_POSTGRESQL=ON `
   -DRUVIA_ENABLE_REDIS=ON `
   -DRUVIA_ENABLE_JWT=ON
 cmake --build build --config Debug
 ```
+
+The database example defaults to MariaDB. Set `RUVIA_DB_DRIVER=postgresql` to
+select PostgreSQL; the default port then changes from `3306` to `5432`.
 
 The default project build keeps examples disabled:
 

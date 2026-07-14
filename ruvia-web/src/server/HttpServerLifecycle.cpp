@@ -1,5 +1,7 @@
 #include "ruvia/web/detail/server/HttpServer.h"
 
+#include "ruvia/web/detail/server/HttpServerTlsVerify.h"
+
 #include <asio/co_spawn.hpp>
 #include <asio/detached.hpp>
 #include <asio/post.hpp>
@@ -312,7 +314,8 @@ void HttpServer::configureTlsContext() {
         usePrivateKeyFile(context, privateKeyFile);
         if (!options_.tls.verifyFile.empty()) {
             loadVerifyFile(context, options_.tls.verifyFile);
-            context.set_verify_mode(asio::ssl::verify_peer);
+            context.set_verify_mode(
+                httpServerTlsVerifyMode(options_.tls.requireClientCertificate));
         }
     };
 
@@ -349,15 +352,30 @@ void HttpServer::stopOnContext(bool honorGracePeriod) noexcept {
     // triggered by a startup failure or a worker crash (honorGracePeriod=false)
     // has no in-flight requests to drain -- honoring the grace period there would
     // only stall the failure report (and the worker join) for the full period.
-    if (honorGracePeriod && options_.shutdownGracePeriod.count() > 0) {
+    if (honorGracePeriod && options_.shutdownGracePeriod.count() > 0 &&
+        activeConnectionCount_ != 0) {
+        drainPending_ = true;
         drainTimer_.expires_after(options_.shutdownGracePeriod);
         drainTimer_.async_wait([this](const std::error_code& ec) {
-            if (ec != asio::error::operation_aborted) {
+            if (drainPending_ && ec != asio::error::operation_aborted) {
+                drainPending_ = false;
                 forceCloseAll();
             }
         });
         return;
     }
+    forceCloseAll();
+}
+
+void HttpServer::maybeFinishDrain() noexcept {
+    if (!drainPending_ || activeConnectionCount_ != 0) {
+        return;
+    }
+    // Every session finished before the grace period elapsed. Release the
+    // timer now: a pending wait would hold the io_context (and the worker
+    // join) for the full remaining period.
+    drainPending_ = false;
+    drainTimer_.cancel();
     forceCloseAll();
 }
 

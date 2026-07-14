@@ -1,6 +1,6 @@
 #include "ruvia/web/detail/app/AppConfigMutation.h"
 
-#ifdef RUVIA_ENABLE_MARIADB
+#ifdef RUVIA_ENABLE_DATABASE
 #include "ruvia/web/detail/db/DbConfigValidation.h"
 #endif
 #ifdef RUVIA_ENABLE_REDIS
@@ -32,7 +32,7 @@ void upsertDefinition(
 
 }  // namespace
 
-#ifdef RUVIA_ENABLE_MARIADB
+#ifdef RUVIA_ENABLE_DATABASE
 App& App::useDb(DbConfig config) {
     return useDb("default", std::move(config));
 }

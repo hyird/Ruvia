@@ -46,7 +46,7 @@ class Context;
 class Env;
 class StaticRoot;
 
-#ifdef RUVIA_ENABLE_MARIADB
+#ifdef RUVIA_ENABLE_DATABASE
 class DbHandle;
 #endif
 #ifdef RUVIA_ENABLE_REDIS
@@ -253,7 +253,7 @@ public:
 
     [[nodiscard]] const Env& env() const noexcept;
 
-#ifdef RUVIA_ENABLE_MARIADB
+#ifdef RUVIA_ENABLE_DATABASE
     [[nodiscard]] DbHandle db() const;
     [[nodiscard]] DbHandle db(std::string_view alias) const;
 #endif

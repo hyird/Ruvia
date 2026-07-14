@@ -243,9 +243,9 @@ if(NOT _installed_transfer_decoder_contract MATCHES
    NOT _installed_transfer_decoder_contract MATCHES
        "std::span<char> output" OR
    NOT _installed_transfer_decoder_contract MATCHES
-       "enum class TransferCodingFinishStatus" OR
-   NOT _installed_transfer_decoder_contract MATCHES
-       "TransferCodingFinishStatus finishInput" OR
+       "TransferCodingDecodeResult finishInput" OR
+   _installed_transfer_decoder_contract MATCHES
+       "TransferCodingFinishStatus|bool[ \t]+(ended_|failed_)|TransferCodingDecodeError[ \t]+failure_" OR
    _installed_transfer_decoder_contract MATCHES
        "decodeAppend[(]|produce[(]|setInput[(]|finished[(]|empty[(]")
     message(FATAL_ERROR
@@ -316,6 +316,8 @@ if(NOT _installed_http1_chunk_decoder_content MATCHES
    NOT _installed_http1_chunk_decoder_content MATCHES
        "using Value = std::variant" OR
    NOT _installed_http1_chunk_decoder_content MATCHES
+       "using State = std::variant<ProgressState, Http1ChunkDecodeError>" OR
+   NOT _installed_http1_chunk_decoder_content MATCHES
        "std::size_t consumedBytes[(][)] const" OR
    NOT _installed_http1_chunk_decoder_content MATCHES
        "std::string_view bytes[(][)] const" OR
@@ -323,6 +325,8 @@ if(NOT _installed_http1_chunk_decoder_content MATCHES
        "std::get_if<Http1ChunkDecodeBodyChunk>" OR
    NOT _installed_http1_chunk_decoder_content MATCHES
        "std::get_if<Http1ChunkDecodeFailure>" OR
+   _installed_http1_chunk_decoder_content MATCHES
+       "State::kFailed|Http1ChunkDecodeError[ \t]+failure_" OR
    _installed_http1_chunk_decoder_content MATCHES
        "class Http1ChunkDecoder")
     message(FATAL_ERROR "installed HTTP/1 streaming chunk decoder lost its discriminated result contract")
@@ -2911,10 +2915,14 @@ if(NOT _installed_multipart_parser MATCHES "class MultipartBoundary final" OR
    NOT _installed_multipart_parser MATCHES "class MultipartBodyParseResult final" OR
    NOT _installed_multipart_parser MATCHES "MultipartBodyParseResult parseMultipartBody" OR
    NOT _installed_multipart_parser MATCHES "using Value = std::variant" OR
+   NOT _installed_multipart_parser MATCHES
+       "using State = std::variant<ProgressState, MultipartParseError>" OR
    NOT _installed_multipart_parser MATCHES "std::get_if<MultipartStreamPart>" OR
    NOT _installed_multipart_parser MATCHES "std::get_if<MultipartPollFailure>" OR
    NOT _installed_multipart_parser MATCHES "multipartParseErrorMessage" OR
    NOT _installed_multipart_parser MATCHES "void finishInput[(][)] noexcept" OR
+   _installed_multipart_parser MATCHES
+       "enum class[ \t]+State[ \t\r\n]*[{]" OR
    NOT _installed_multipart_parsing MATCHES "class HttpMultipartDelimiterNoMatch final" OR
    NOT _installed_multipart_parsing MATCHES "class HttpMultipartDelimiterNeedInput final" OR
    NOT _installed_multipart_parsing MATCHES "class HttpMultipartPartDelimiter final" OR
@@ -2926,6 +2934,11 @@ if(NOT _installed_multipart_parser MATCHES "class MultipartBoundary final" OR
    NOT _installed_multipart_parsing MATCHES "class HttpMultipartPartHeaderParseResult final")
     message(FATAL_ERROR "installed multipart parser lost its discriminated boundary/input lifecycle API")
 endif()
+endif()
+
+set(_ruvia_toolchain_file [==[@CMAKE_TOOLCHAIN_FILE@]==])
+if(NOT _ruvia_toolchain_file STREQUAL "")
+    file(TO_CMAKE_PATH "${_ruvia_toolchain_file}" _ruvia_toolchain_file)
 endif()
 
 function(ruvia_verify_package_consumer
@@ -2952,8 +2965,8 @@ function(ruvia_verify_package_consumer
     if(NOT "@CMAKE_GENERATOR_TOOLSET@" STREQUAL "")
         list(APPEND _configure_command -T "@CMAKE_GENERATOR_TOOLSET@")
     endif()
-    if(NOT "@CMAKE_TOOLCHAIN_FILE@" STREQUAL "")
-        list(APPEND _configure_command "-DCMAKE_TOOLCHAIN_FILE=@CMAKE_TOOLCHAIN_FILE@")
+    if(NOT _ruvia_toolchain_file STREQUAL "")
+        list(APPEND _configure_command "-DCMAKE_TOOLCHAIN_FILE=${_ruvia_toolchain_file}")
     endif()
     if(NOT "@VCPKG_TARGET_TRIPLET@" STREQUAL "")
         list(APPEND _configure_command "-DVCPKG_TARGET_TRIPLET=@VCPKG_TARGET_TRIPLET@")

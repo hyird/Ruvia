@@ -866,7 +866,7 @@ concept HasRuntimeHttpClientMutation = requires(
     value.removeHttpClient("upstream");
 };
 
-#ifdef RUVIA_ENABLE_MARIADB
+#ifdef RUVIA_ENABLE_DATABASE
 template <typename T>
 concept HasDbHandleDefaultParams = requires(const T& handle) {
     handle.query(std::string_view{});
@@ -2161,7 +2161,7 @@ static_assert(!HasHttpClientResponseHeadersField<ruvia::HttpClientResponse>);
 static_assert(HasHttpClientResponseHeadersGetter<ruvia::HttpClientResponse>);
 static_assert(!HasHttpClientResponseBodyField<ruvia::HttpClientResponse>);
 static_assert(HasHttpClientResponseBodyGetter<ruvia::HttpClientResponse>);
-#ifdef RUVIA_ENABLE_MARIADB
+#ifdef RUVIA_ENABLE_DATABASE
 static_assert(HasDbHandleDefaultParams<ruvia::DbHandle>);
 static_assert(!HasDbHandleInitializerListParams<ruvia::DbHandle>);
 static_assert(HasDbTransactionDefaultParams<ruvia::DbTransaction>);

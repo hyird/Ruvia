@@ -30,7 +30,7 @@ or client TLS runtime APIs.
 - vcpkg.
 - Component dependencies: core uses Asio and mimalloc; HTTP uses zlib, Brotli,
   and zstd; Web adds OpenSSL.
-- Optional vcpkg features: MariaDB, Redis, and JWT.
+- Optional vcpkg features: MariaDB, PostgreSQL, Redis, and JWT.
 
 On Windows, CMake defaults the vcpkg triplet to `x64-windows-static` unless the
 caller already selected one.
@@ -69,10 +69,29 @@ ctest --test-dir build -C Debug --output-on-failure
 | `RUVIA_BUILD_BENCHMARKS` | `OFF` | Build Release-oriented HTTP hot-path benchmarks; requires HTTP. |
 | `RUVIA_BUILD_FUZZERS` | `OFF` | Build the HTTP/1, HTTP/2, and HPACK Clang/libFuzzer targets with UBSan; requires HTTP. |
 | `RUVIA_ENABLE_HTTP2_CONFORMANCE_TESTS` | `OFF` | Add the repository-owned RFC 9113 wire conformance suite against a real Ruvia h2c server; requires tests, Web, and Python 3. |
+| `RUVIA_ENABLE_POSTGRESQL_INTEGRATION_TESTS` | `OFF` | Add live PostgreSQL driver tests; requires tests and PostgreSQL support. |
 | `RUVIA_BUILD_EXAMPLES` | `OFF` | Build examples; requires Web. |
 | `RUVIA_ENABLE_MARIADB` | `OFF` | Enable MariaDB integration in Web. |
+| `RUVIA_ENABLE_POSTGRESQL` | `OFF` | Enable PostgreSQL integration in Web. |
 | `RUVIA_ENABLE_REDIS` | `OFF` | Enable Redis integration in Web. |
 | `RUVIA_ENABLE_JWT` | `OFF` | Enable JWT integration in Web. |
+
+### Database drivers
+
+MariaDB and PostgreSQL use the same `DbHandle`, result, streaming, transaction,
+pool and migration APIs. Select the driver when constructing its configuration:
+
+```cpp
+auto config = ruvia::DbConfig::postgreSql(); // port 5432
+config.username = "app";
+config.password = "secret";
+config.database = "app";
+app.useDb(std::move(config));
+```
+
+Enable its matching CMake feature first. PostgreSQL parameters use `$1`, `$2`,
+and so on; MariaDB parameters use `?`. For generated PostgreSQL keys, use
+`INSERT ... RETURNING id` and read the returned row.
 
 ### Protocol conformance and fuzzing
 

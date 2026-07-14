@@ -276,10 +276,14 @@ if(EXISTS "${HTTP1_CHUNK_DECODER}" AND EXISTS "${HTTP1_CHUNK_SCANNER}")
        NOT http1_chunk_decoder MATCHES "enum class Http1ChunkDecodeError" OR
        NOT http1_chunk_decoder MATCHES "class Http1ChunkDecodeFailure final" OR
        NOT http1_chunk_decoder MATCHES "using Value = std::variant" OR
+       NOT http1_chunk_decoder MATCHES
+           "using State = std::variant<ProgressState, Http1ChunkDecodeError>" OR
        NOT http1_chunk_decoder MATCHES "std::size_t consumedBytes[(][)] const" OR
        NOT http1_chunk_decoder MATCHES "std::string_view bytes[(][)] const" OR
        NOT http1_chunk_decoder MATCHES "std::get_if<Http1ChunkDecodeBodyChunk>" OR
        NOT http1_chunk_decoder MATCHES "std::get_if<Http1ChunkDecodeFailure>" OR
+       http1_chunk_decoder MATCHES
+           "${RULE_STALE_CHUNK_DECODER_FAILURE_SPLIT}" OR
        http1_chunk_decoder MATCHES "class Http1ChunkDecoder" OR
        http1_chunk_decoder MATCHES
            "throw[ \t]+(std::invalid_argument|HttpProtocolError)")
@@ -1821,13 +1825,17 @@ if(NOT multipart_public_api MATCHES "class MultipartBoundary final" OR
    NOT multipart_public_api MATCHES "class MultipartBodyParseFailure final" OR
    NOT multipart_public_api MATCHES "class MultipartBodyParseResult final" OR
    NOT multipart_public_api MATCHES "using Value = std::variant" OR
+   NOT multipart_public_api MATCHES
+       "using State = std::variant<ProgressState, MultipartParseError>" OR
    NOT multipart_public_api MATCHES "std::get_if<MultipartStreamPart>" OR
    NOT multipart_public_api MATCHES "std::get_if<MultipartPollFailure>" OR
    NOT multipart_public_api MATCHES "multipartParseErrorMessage" OR
    NOT multipart_public_api MATCHES "MultipartParser[(]MultipartBoundary boundary" OR
    NOT multipart_public_api MATCHES "void feed[(]std::string_view chunk[)]" OR
    NOT multipart_public_api MATCHES "void finishInput[(][)] noexcept" OR
-   NOT multipart_public_api MATCHES "MultipartBodyParseResult parseMultipartBody")
+   NOT multipart_public_api MATCHES "MultipartBodyParseResult parseMultipartBody" OR
+   multipart_public_api MATCHES
+       "${RULE_STALE_MULTIPART_NONTERMINAL_FAILURE}")
     boundary_error("multipart public API lost its typed sans-I/O contract"
         "MultipartParser.h must validate boundary ownership once and expose discriminated phase/need-input/part/done results")
 endif()
@@ -1862,6 +1870,12 @@ else()
            "throw[ \\t]+std::invalid_argument" OR
        NOT multipart_incremental_implementation MATCHES
            "MultipartPollResult::makeFailure" OR
+       NOT multipart_parser_implementation MATCHES
+           "MultipartPollResult MultipartParser::fail" OR
+       NOT multipart_parser_implementation MATCHES
+           "state_ = error" OR
+       NOT multipart_parser_implementation MATCHES
+           "std::get_if<MultipartParseError>[(]&state_[)]" OR
        NOT multipart_parser_implementation MATCHES
            "multipartParseErrorMessage" OR
        multipart_parser_implementation MATCHES
@@ -1909,9 +1923,13 @@ if(NOT multipart_unit_test MATCHES "multipart_parser_commits_an_eof_close_only_a
    NOT multipart_unit_test MATCHES "ruvia::MultipartBodyParseResult" OR
    NOT multipart_unit_test MATCHES "multipart_complete_body_parser_rejects_malformed_body" OR
    NOT multipart_unit_test MATCHES "multipart_complete_body_parser_shares_incremental_limits" OR
+   NOT multipart_unit_test MATCHES "feedAfterFailureThrew" OR
+   NOT multipart_unit_test MATCHES "const auto repeated = incremental[.]poll[(][)]" OR
    NOT multipart_unit_test MATCHES "HasMultipartLineBytes" OR
    NOT multipart_package_consumer MATCHES "ruvia::MultipartPollResult" OR
    NOT multipart_package_consumer MATCHES "ruvia::MultipartBodyParseResult" OR
+   NOT multipart_package_consumer MATCHES "repeatedMultipartFailure" OR
+   NOT multipart_package_consumer MATCHES "failedMultipartParser[.]feed" OR
    NOT multipart_package_consumer MATCHES "HttpMultipartDelimiterResult" OR
    NOT multipart_api_surface MATCHES "HasMultipartPollResultAccessors<ruvia::MultipartPollResult>")
     boundary_error("typed multipart result ownership is insufficiently tested"
@@ -5881,6 +5899,12 @@ endif()
 
 set(WEB_HTTP2_STREAM_RUNTIME
     "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/http2/Http2SansIoStreamRuntime.h")
+
+check_files_no_match("stream request-body completion must commit once after the full decode pipeline"
+    "${RULE_STALE_STREAM_BODY_COMPLETION_SPLIT}"
+    "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/body/HttpStreamBodyReader.h"
+    "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/body/HttpStreamBodyReaderCore.inl"
+    "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/body/HttpStreamBodyReaderChunked.inl")
 set(WEB_HTTP2_WS_TRANSPORT
     "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/http2/Http2SansIoWsTransport.h")
 set(WEB_HTTP2_RESPONSE_STREAM_SINK
@@ -7327,9 +7351,8 @@ endif()
 
 set(POOL_WAITER_HEADER
     "${RUVIA_ROOT}/ruvia-core/include/ruvia/core/detail/PoolWaiterQueue.h")
-set(POOL_WAITER_DB_SLOTS "${RUVIA_ROOT}/ruvia-web/src/db/DbPoolSlots.cpp")
-set(POOL_WAITER_DB_LIFECYCLE
-    "${RUVIA_ROOT}/ruvia-web/src/db/DbPoolLifecycle.cpp")
+set(POOL_WAITER_DB_SCHEDULER
+    "${RUVIA_ROOT}/ruvia-web/src/db/DbPoolScheduler.cpp")
 set(POOL_WAITER_REDIS_SLOTS
     "${RUVIA_ROOT}/ruvia-web/src/redis/RedisPoolSlots.cpp")
 set(POOL_WAITER_REDIS_LIFECYCLE
@@ -7339,8 +7362,7 @@ set(POOL_WAITER_PACKAGE_CONSUMER
     "${RUVIA_ROOT}/tests/package-consumer/core.cpp")
 foreach(required IN ITEMS
     "${POOL_WAITER_HEADER}"
-    "${POOL_WAITER_DB_SLOTS}"
-    "${POOL_WAITER_DB_LIFECYCLE}"
+    "${POOL_WAITER_DB_SCHEDULER}"
     "${POOL_WAITER_REDIS_SLOTS}"
     "${POOL_WAITER_REDIS_LIFECYCLE}"
     "${POOL_WAITER_TEST}"
@@ -7350,15 +7372,13 @@ foreach(required IN ITEMS
     endif()
 endforeach()
 if(EXISTS "${POOL_WAITER_HEADER}" AND
-   EXISTS "${POOL_WAITER_DB_SLOTS}" AND
-   EXISTS "${POOL_WAITER_DB_LIFECYCLE}" AND
+   EXISTS "${POOL_WAITER_DB_SCHEDULER}" AND
    EXISTS "${POOL_WAITER_REDIS_SLOTS}" AND
    EXISTS "${POOL_WAITER_REDIS_LIFECYCLE}" AND
    EXISTS "${POOL_WAITER_TEST}" AND
    EXISTS "${POOL_WAITER_PACKAGE_CONSUMER}")
     file(READ "${POOL_WAITER_HEADER}" pool_waiter_header)
-    file(READ "${POOL_WAITER_DB_SLOTS}" pool_waiter_db_slots)
-    file(READ "${POOL_WAITER_DB_LIFECYCLE}" pool_waiter_db_lifecycle)
+    file(READ "${POOL_WAITER_DB_SCHEDULER}" pool_waiter_db_scheduler)
     file(READ "${POOL_WAITER_REDIS_SLOTS}" pool_waiter_redis_slots)
     file(READ "${POOL_WAITER_REDIS_LIFECYCLE}"
         pool_waiter_redis_lifecycle)
@@ -7388,17 +7408,17 @@ if(EXISTS "${POOL_WAITER_HEADER}" AND
         boundary_error("pool waiter lost its discriminated await result"
             "pending must remain optional; acquired, timeout, and closure must be exclusive completion alternatives, and closeAll must commit its entire queue before resuming")
     endif()
-    if(NOT pool_waiter_db_slots MATCHES
+    if(NOT pool_waiter_db_scheduler MATCHES
            "const auto& result = co_await waiter" OR
-       NOT pool_waiter_db_slots MATCHES "result[.]timedOut[(][)]" OR
-       NOT pool_waiter_db_slots MATCHES "result[.]closed[(][)]" OR
-       NOT pool_waiter_db_slots MATCHES "result[.]acquired[(][)]" OR
+       NOT pool_waiter_db_scheduler MATCHES "result[.]timedOut[(][)]" OR
+       NOT pool_waiter_db_scheduler MATCHES "result[.]closed[(][)]" OR
+       NOT pool_waiter_db_scheduler MATCHES "result[.]acquired[(][)]" OR
        NOT pool_waiter_redis_slots MATCHES
            "const auto& result = co_await waiter" OR
        NOT pool_waiter_redis_slots MATCHES "result[.]timedOut[(][)]" OR
        NOT pool_waiter_redis_slots MATCHES "result[.]closed[(][)]" OR
        NOT pool_waiter_redis_slots MATCHES "result[.]acquired[(][)]" OR
-       NOT pool_waiter_db_lifecycle MATCHES "waiters_[.]closeAll[(][)]" OR
+       NOT pool_waiter_db_scheduler MATCHES "waiters_[.]closeAll[(][)]" OR
        NOT pool_waiter_redis_lifecycle MATCHES "waiters_[.]closeAll[(][)]")
         boundary_error("DB/Redis pool waits stopped consuming one core completion"
             "both integrations must co_await PoolWaiter and map only its typed timeout, closed, or acquired outcome")
@@ -7980,6 +8000,7 @@ if(EXISTS "${HTTP1_CHUNK_WEB_DRIVER}" AND
            "chunked_body_decoder_handles_single_byte_input_fragmentation" OR
        NOT http1_chunk_decoder_test MATCHES
            "chunked_body_decoder_reports_typed_size_and_limit_failures" OR
+       NOT http1_chunk_decoder_test MATCHES "repeatedInvalid" OR
        NOT http1_chunk_decoder_test MATCHES
            "HasChunkBytes<Http1ChunkDecodeBodyChunk>" OR
        NOT http1_chunk_scanner_test MATCHES
@@ -8039,9 +8060,13 @@ if(EXISTS "${HTTP_TRANSFER_DECODER}" AND
            "TransferCodingDecodeResult decode" OR
        NOT transfer_decoder MATCHES "std::span<char> output" OR
        NOT transfer_decoder MATCHES
-           "enum class TransferCodingFinishStatus" OR
+           "TransferCodingDecodeResult finishInput" OR
        NOT transfer_decoder MATCHES
-           "TransferCodingFinishStatus finishInput" OR
+           "using State = std::variant<Active, Complete, TransferCodingDecodeError>" OR
+       transfer_decoder MATCHES
+           "${RULE_STALE_TRANSFER_CODING_TERMINAL_SPLIT}" OR
+       transfer_decoder_source MATCHES
+           "${RULE_STALE_TRANSFER_CODING_TERMINAL_SPLIT}" OR
        transfer_decoder MATCHES
            "decodeAppend[(]|produce[(]|setInput[(]|finished[(]|empty[(]" OR
        transfer_decoder_source MATCHES
@@ -8066,10 +8091,14 @@ if(EXISTS "${HTTP_TRANSFER_DECODER}" AND
            "transfer_coding_decoder_reports_typed_wire_failures" OR
        NOT transfer_decoder_test MATCHES
            "TransferCodingDecodeResult" OR
+       NOT transfer_decoder_test MATCHES
+           "repeatedFinish[.]failure[(]" OR
        NOT body_reader_test MATCHES
            "http1_transfer_coding_uses_one_decoder_for_streaming_and_buffered_reads" OR
        NOT body_reader_test MATCHES
            "http1_transfer_coding_failure_maps_once_for_both_read_surfaces" OR
+       NOT body_reader_test MATCHES
+           "http1_transfer_coding_eof_commits_only_the_complete_decode_pipeline" OR
        NOT transfer_package_consumer MATCHES
            "TransferCodingDecodeResult")
         boundary_error("typed transfer-coding chain is insufficiently tested"
