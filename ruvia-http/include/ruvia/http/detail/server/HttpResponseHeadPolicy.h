@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <type_traits>
 
 #include "ruvia/http/detail/HttpResponseHeaderBits.h"
 
@@ -56,6 +57,9 @@ private:
     bool explicitContentLengthAllowed_{true};
     bool transferEncodingAllowed_{true};
 };
+
+static_assert(std::is_trivially_copyable_v<ResponseWritePolicy>);
+static_assert(sizeof(ResponseWritePolicy) <= 4);
 
 [[nodiscard]] inline ResponseWritePolicy responseWritePolicy(std::uint16_t statusCode) noexcept {
     if (statusCode >= 100 && statusCode < 200) {

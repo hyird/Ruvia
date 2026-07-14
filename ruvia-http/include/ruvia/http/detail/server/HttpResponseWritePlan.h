@@ -20,10 +20,9 @@ public:
         return responseStatus_;
     }
 
-    [[nodiscard]] const ResponseWritePolicy& policy() const & noexcept {
+    [[nodiscard]] ResponseWritePolicy policy() const noexcept {
         return policy_;
     }
-    [[nodiscard]] const ResponseWritePolicy& policy() const && = delete;
 
     [[nodiscard]] bool statusAllowsBody() const noexcept {
         return policy_.bodyAllowed();
@@ -95,10 +94,9 @@ public:
     }
     [[nodiscard]] const HttpResponseBodyPlan& bodyPlan() const && = delete;
 
-    [[nodiscard]] const ResponseWritePolicy& policy() const & noexcept {
+    [[nodiscard]] ResponseWritePolicy policy() const noexcept {
         return bodyPlan_.policy();
     }
-    [[nodiscard]] const ResponseWritePolicy& policy() const && = delete;
 
     [[nodiscard]] bool bodySuppressed() const noexcept {
         return bodyPlan_.bodySuppressed();

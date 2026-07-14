@@ -166,7 +166,7 @@ private:
     }
     const auto framing = commitPlan.framing();
     const auto& bodyPlan = commitPlan.bodyPlan();
-    const auto& policy = bodyPlan.policy();
+    const auto policy = bodyPlan.policy();
     const bool writerOwnsHttp1Chunked =
         framing == ResponseStreamFraming::kHttp1Chunked &&
         policy.transferEncodingAllowed();

@@ -3,6 +3,7 @@
 #include <concepts>
 #include <cstdint>
 #include <memory_resource>
+#include <utility>
 
 #include "ruvia/http/detail/http1/Http1ResponseHeadPlan.h"
 #include "ruvia/http/detail/server/HttpResponseWritePlan.h"
@@ -33,6 +34,22 @@ concept AcceptsLooseBufferedResponseBodyPlan = requires(
 
 static_assert(!AcceptsLooseBufferedResponseBodyPlan<
     ruvia::detail::HttpResponseBodyPlan>);
+
+template <typename Plan>
+concept HasValueSemanticResponseWritePolicy =
+    requires(const Plan& plan) {
+        { plan.policy() } ->
+            std::same_as<ruvia::detail::ResponseWritePolicy>;
+    } &&
+    requires(const Plan&& plan) {
+        { std::move(plan).policy() } ->
+            std::same_as<ruvia::detail::ResponseWritePolicy>;
+    };
+
+static_assert(HasValueSemanticResponseWritePolicy<
+    ruvia::detail::HttpResponseBodyPlan>);
+static_assert(HasValueSemanticResponseWritePolicy<
+    ruvia::detail::HttpBufferedResponseWritePlan>);
 
 }  // namespace
 

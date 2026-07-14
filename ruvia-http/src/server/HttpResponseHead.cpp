@@ -118,7 +118,7 @@ void appendResponseHead(
             "HTTP/1 response plan representation does not match response");
     }
     const auto responseStatus = bodyPlan.responseStatus();
-    const auto& policy = bodyPlan.policy();
+    const auto policy = bodyPlan.policy();
     const bool emitChunkedTransferEncoding =
         plan.chunkedStream() != nullptr && policy.transferEncodingAllowed();
     const bool autoContentLengthOwnedByWriter =

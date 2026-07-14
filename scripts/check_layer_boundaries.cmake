@@ -9573,6 +9573,8 @@ set(HTTP_PROTOCOL_PLAN_SEMANTICS
     "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/detail/HttpResponseContentSemantics.h")
 set(HTTP_PROTOCOL_PLAN_WRITE
     "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/detail/server/HttpResponseWritePlan.h")
+set(HTTP_PROTOCOL_PLAN_POLICY
+    "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/detail/server/HttpResponseHeadPolicy.h")
 set(HTTP_PROTOCOL_PLAN_H1_REQUEST
     "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/detail/http1/Http1RequestBodyPlan.h")
 set(HTTP_PROTOCOL_PLAN_H1_RESPONSE
@@ -9585,9 +9587,15 @@ set(HTTP_PROTOCOL_PLAN_CONTROL
     "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/detail/server/HttpFinalResponseControlPlan.h")
 set(HTTP_PROTOCOL_PLAN_STREAM
     "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/detail/server/HttpResponseStreamHead.h")
+check_files_no_match("response write policy must remain a small value fact"
+    "const[ \t]+auto&[ \t]+policy[ \t]*=[ \t]*bodyPlan[.]policy[(][)]"
+    "${RUVIA_ROOT}/ruvia-http/src/server/HttpResponseHead.cpp"
+    "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/detail/server/HttpResponseStreamHead.h"
+    "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/detail/http2/Http2ResponseHeadPlan.h")
 if(EXISTS "${HTTP_PROTOCOL_PLAN_RANGE}" AND
    EXISTS "${HTTP_PROTOCOL_PLAN_SEMANTICS}" AND
    EXISTS "${HTTP_PROTOCOL_PLAN_WRITE}" AND
+   EXISTS "${HTTP_PROTOCOL_PLAN_POLICY}" AND
    EXISTS "${HTTP_PROTOCOL_PLAN_H1_REQUEST}" AND
    EXISTS "${HTTP_PROTOCOL_PLAN_H1_RESPONSE}" AND
    EXISTS "${HTTP_PROTOCOL_PLAN_H2_REQUEST}" AND
@@ -9598,6 +9606,7 @@ if(EXISTS "${HTTP_PROTOCOL_PLAN_RANGE}" AND
     file(READ "${HTTP_PROTOCOL_PLAN_RANGE}" http_protocol_plan_range)
     file(READ "${HTTP_PROTOCOL_PLAN_SEMANTICS}" http_protocol_plan_semantics)
     file(READ "${HTTP_PROTOCOL_PLAN_WRITE}" http_protocol_plan_write)
+    file(READ "${HTTP_PROTOCOL_PLAN_POLICY}" http_protocol_plan_policy)
     file(READ "${HTTP_PROTOCOL_PLAN_H1_REQUEST}" http_protocol_plan_h1_request)
     file(READ "${HTTP_PROTOCOL_PLAN_H1_RESPONSE}" http_protocol_plan_h1_response)
     file(READ "${HTTP_PROTOCOL_PLAN_H2_REQUEST}" http_protocol_plan_h2_request)
@@ -9614,7 +9623,13 @@ if(EXISTS "${HTTP_PROTOCOL_PLAN_RANGE}" AND
        NOT http_protocol_plan_semantics MATCHES
            "withContent[(][)] const && = delete" OR
        NOT http_protocol_plan_write MATCHES
-           "policy[(][)] const [&] noexcept" OR
+           "ResponseWritePolicy[ \t]+policy[(][)] const noexcept" OR
+       http_protocol_plan_write MATCHES
+           "const[ \t]+ResponseWritePolicy[ \t]*&[ \t]+policy" OR
+       NOT http_protocol_plan_policy MATCHES
+           "is_trivially_copyable_v<ResponseWritePolicy>" OR
+       NOT http_protocol_plan_policy MATCHES
+           "sizeof[(]ResponseWritePolicy[)] <= 4" OR
        NOT http_protocol_plan_write MATCHES
            "contentSemantics[(][)] const && = delete" OR
        NOT http_protocol_plan_write MATCHES
@@ -9652,7 +9667,9 @@ if(EXISTS "${HTTP_PROTOCOL_PLAN_RANGE}" AND
        NOT http_protocol_plan_stream MATCHES
            "bodyPlan[(][)] const && = delete" OR
        NOT http_protocol_plan_consumer MATCHES
-           "ExposesAnyRvalueHttpProtocolPlanBorrow")
+           "ExposesAnyRvalueHttpProtocolPlanBorrow" OR
+       NOT http_protocol_plan_consumer MATCHES
+           "HasValueSemanticResponseWritePolicy")
         boundary_error("HTTP protocol plans lend internal storage from temporary owners"
             "immutable byte-range, content, HTTP/1, HTTP/2, control, and stream plans must expose borrowed pointers/references only from live lvalues")
     endif()

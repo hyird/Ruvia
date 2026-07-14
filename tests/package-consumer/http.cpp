@@ -932,7 +932,6 @@ concept ExposesAnyRvalueHttpProtocolPlanBorrow =
     requires(T&& value) { std::move(value).forbiddenContentLength(); } ||
     requires(T&& value) { std::move(value).http1(); } ||
     requires(T&& value) { std::move(value).http2(); } ||
-    requires(T&& value) { std::move(value).policy(); } ||
     requires(T&& value) { std::move(value).contentSemantics(); } ||
     requires(T&& value) { std::move(value).bodyPlan(); } ||
     requires(T&& value) { std::move(value).expectations(); } ||
@@ -2095,6 +2094,20 @@ static_assert(std::same_as<
     decltype(std::declval<const ruvia::detail::HttpBufferedResponseWritePlan&>()
                  .responseStatus()),
     std::uint16_t>);
+template <typename Plan>
+concept HasValueSemanticResponseWritePolicy =
+    requires(const Plan& plan) {
+        { plan.policy() } ->
+            std::same_as<ruvia::detail::ResponseWritePolicy>;
+    } &&
+    requires(const Plan&& plan) {
+        { std::move(plan).policy() } ->
+            std::same_as<ruvia::detail::ResponseWritePolicy>;
+    };
+static_assert(HasValueSemanticResponseWritePolicy<
+    ruvia::detail::HttpResponseBodyPlan>);
+static_assert(HasValueSemanticResponseWritePolicy<
+    ruvia::detail::HttpBufferedResponseWritePlan>);
 static_assert(!AcceptsLooseResponseStreamBodyPlan<
     ruvia::detail::HttpResponseBodyPlan>);
 static_assert(!AcceptsLooseBufferedResponseBodyPlan<

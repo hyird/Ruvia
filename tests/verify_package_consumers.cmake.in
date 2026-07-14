@@ -2985,14 +2985,19 @@ set(_installed_response_content_semantics_path
     "${_install_prefix}/include/ruvia/http/detail/HttpResponseContentSemantics.h")
 set(_installed_response_write_plan_path
     "${_install_prefix}/include/ruvia/http/detail/server/HttpResponseWritePlan.h")
+set(_installed_response_head_policy_path
+    "${_install_prefix}/include/ruvia/http/detail/server/HttpResponseHeadPolicy.h")
 if(NOT EXISTS "${_installed_response_content_semantics_path}" OR
-   NOT EXISTS "${_installed_response_write_plan_path}")
+   NOT EXISTS "${_installed_response_write_plan_path}" OR
+   NOT EXISTS "${_installed_response_head_policy_path}")
     message(FATAL_ERROR "installed shared response-content semantics contract is missing")
 endif()
 file(READ "${_installed_response_content_semantics_path}"
     _installed_response_content_semantics)
 file(READ "${_installed_response_write_plan_path}"
     _installed_response_write_plan)
+file(READ "${_installed_response_head_policy_path}"
+    _installed_response_head_policy)
 if(NOT _installed_response_content_semantics MATCHES
        "class HttpInformationalResponseContent final" OR
    NOT _installed_response_content_semantics MATCHES
@@ -3022,6 +3027,14 @@ if(NOT _installed_response_content_semantics MATCHES
        "httpBufferedResponseWritePlan[ \t\r\n]*[(][ \t\r\n]*const[ \t]+HttpResponseBodyPlan[&]" OR
    NOT _installed_response_write_plan MATCHES
        "semantics_[.]withContent[(][)] == nullptr" OR
+   NOT _installed_response_write_plan MATCHES
+       "ResponseWritePolicy[ \t]+policy[(][)] const noexcept" OR
+   _installed_response_write_plan MATCHES
+       "const[ \t]+ResponseWritePolicy[ \t]*&[ \t]+policy" OR
+   NOT _installed_response_head_policy MATCHES
+       "is_trivially_copyable_v<ResponseWritePolicy>" OR
+   NOT _installed_response_head_policy MATCHES
+       "sizeof[(]ResponseWritePolicy[)] <= 4" OR
    _installed_response_write_plan MATCHES "bodySuppressed_")
     message(FATAL_ERROR "installed response writers and parsers lost their shared content semantics")
 endif()
@@ -3102,7 +3115,7 @@ if(NOT _installed_http1_response_head_plan MATCHES
    _installed_http1_server_semantics MATCHES
        "http1FinalizeResponseConnection|throw std::invalid_argument" OR
    _installed_http1_server_semantics MATCHES
-       "const ResponseWritePolicy& policy[(][)] const noexcept" OR
+       "ResponseWritePolicy[ \t]*&[ \t]+policy[(][)]" OR
    _installed_response_head MATCHES
        "suppressAutoContentLength|ResponseWritePolicy[ \t]+policy")
     message(FATAL_ERROR "installed HTTP/1 response-head API restored scalar framing or lost its exclusive plan")

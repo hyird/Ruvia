@@ -231,7 +231,7 @@ http2BufferedResponseHeadPlan(
         return Http2ResponseHeadPlanResult::failure(
             Http2ResponseHeadPlanError::kResponseRepresentationMismatch);
     }
-    const auto& policy = bodyPlan.policy();
+    const auto policy = bodyPlan.policy();
     if (policy.autoContentLengthAllowed()) {
         return Http2ResponseHeadPlanResult::canonical(
             bodyPlan,
@@ -250,7 +250,7 @@ http2StreamingResponseHeadPlan(
         return Http2ResponseHeadPlanResult::failure(
             Http2ResponseHeadPlanError::kResponseStatusMismatch);
     }
-    const auto& policy = bodyPlan.policy();
+    const auto policy = bodyPlan.policy();
     if (policy.autoContentLengthAllowed() && !policy.bodyAllowed()) {
         return Http2ResponseHeadPlanResult::canonical(bodyPlan, 0);
     }
