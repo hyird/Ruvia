@@ -243,6 +243,11 @@ ruvia_add_internal_guard(ruvia_guard_http2_stream_table guards/http2_stream_tabl
 ruvia_add_internal_guard(ruvia_guard_context_response_state guards/context_response_state_guard.cpp)
 ruvia_add_internal_guard(ruvia_guard_context_request_header guards/context_request_header_guard.cpp)
 ruvia_add_internal_guard(ruvia_guard_cookie_api guards/cookie_api_guard.cpp)
+
+add_executable(ruvia_server_shutdown_drain server_shutdown_drain.cpp)
+target_link_libraries(ruvia_server_shutdown_drain PRIVATE ruvia::web)
+add_test(NAME ruvia_server_shutdown_drain COMMAND ruvia_server_shutdown_drain)
+set_tests_properties(ruvia_server_shutdown_drain PROPERTIES TIMEOUT 90)
 endif()
 
 configure_file(
