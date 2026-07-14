@@ -2948,6 +2948,112 @@ if(EXISTS "${WEB_MODEL_TYPES_CONTRACT}" AND
             "direct, API-surface, and installed-package consumers must reject it")
     endif()
 endif()
+set(WEB_DIAGNOSTIC_ERROR_CONTRACT
+    "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/Error.h")
+set(WEB_DIAGNOSTIC_ERROR_SOURCE
+    "${RUVIA_ROOT}/ruvia-web/src/http/Error.cpp")
+set(WEB_DIAGNOSTIC_VALIDATOR_TEST
+    "${RUVIA_ROOT}/tests/unit_validator.cpp")
+set(WEB_DIAGNOSTIC_ERROR_TEST
+    "${RUVIA_ROOT}/tests/unit_error.cpp")
+set(WEB_DIAGNOSTIC_REQUEST_GUARD
+    "${RUVIA_ROOT}/tests/guards/context_request_header_guard.cpp")
+if(EXISTS "${WEB_REQUEST_FIELDS}" AND
+   EXISTS "${WEB_MODEL_VALIDATION_CONTRACT}" AND
+   EXISTS "${WEB_DIAGNOSTIC_ERROR_CONTRACT}" AND
+   EXISTS "${WEB_DIAGNOSTIC_ERROR_SOURCE}" AND
+   EXISTS "${WEB_DIAGNOSTIC_VALIDATOR_TEST}" AND
+   EXISTS "${WEB_DIAGNOSTIC_ERROR_TEST}" AND
+   EXISTS "${WEB_DIAGNOSTIC_REQUEST_GUARD}" AND
+   EXISTS "${WEB_MODEL_API_SURFACE}" AND
+   EXISTS "${WEB_JSON_PACKAGE_CONSUMER}")
+    file(READ "${WEB_REQUEST_FIELDS}"
+        web_diagnostic_request_fields)
+    file(READ "${WEB_MODEL_VALIDATION_CONTRACT}"
+        web_diagnostic_validation_contract)
+    file(READ "${WEB_DIAGNOSTIC_ERROR_CONTRACT}"
+        web_diagnostic_error_contract)
+    file(READ "${WEB_DIAGNOSTIC_ERROR_SOURCE}"
+        web_diagnostic_error_source)
+    file(READ "${WEB_DIAGNOSTIC_VALIDATOR_TEST}"
+        web_diagnostic_validator_test)
+    file(READ "${WEB_DIAGNOSTIC_ERROR_TEST}"
+        web_diagnostic_error_test)
+    file(READ "${WEB_DIAGNOSTIC_REQUEST_GUARD}"
+        web_diagnostic_request_guard)
+    if(NOT web_diagnostic_request_fields MATCHES
+           "begin[(][)] const &[ 	]+noexcept" OR
+       NOT web_diagnostic_request_fields MATCHES
+           "begin[(][)] const &&[ 	]*=[ 	]*delete" OR
+       NOT web_diagnostic_request_fields MATCHES
+           "cbegin[(][)] const &&[ 	]*=[ 	]*delete" OR
+       NOT web_diagnostic_request_fields MATCHES
+           "end[(][)] const &&[ 	]*=[ 	]*delete" OR
+       NOT web_diagnostic_request_fields MATCHES
+           "cend[(][)] const &&[ 	]*=[ 	]*delete" OR
+       NOT web_diagnostic_request_fields MATCHES
+           "data[(][)] const &&[ 	]*=[ 	]*delete" OR
+       NOT web_diagnostic_request_fields MATCHES
+           "entries[(][)] const &[ 	]+noexcept" OR
+       NOT web_diagnostic_request_fields MATCHES
+           "entries[(][)] const &&[ 	]*=[ 	]*delete")
+        boundary_error("request field collections regained temporary container borrows"
+            "RequestNameValueList iterators, pointers, references, and spans must require a stable list lvalue")
+    endif()
+    if(NOT web_diagnostic_validation_contract MATCHES
+           "field[(][)] const &[ 	]+noexcept" OR
+       NOT web_diagnostic_validation_contract MATCHES
+           "field[(][)] const &&[ 	]*=[ 	]*delete" OR
+       NOT web_diagnostic_validation_contract MATCHES
+           "code[(][)] const &&[ 	]*=[ 	]*delete" OR
+       NOT web_diagnostic_validation_contract MATCHES
+           "message[(][)] const &&[ 	]*=[ 	]*delete" OR
+       NOT web_diagnostic_validation_contract MATCHES
+           "issues[(][)] const &[ 	]+noexcept" OR
+       NOT web_diagnostic_validation_contract MATCHES
+           "issues[(][)] const &&[ 	]*=[ 	]*delete" OR
+       NOT web_diagnostic_validation_contract MATCHES
+           "info[(][)] const &[ 	]+noexcept" OR
+       NOT web_diagnostic_validation_contract MATCHES
+           "info[(][)] const &&[ 	]*=[ 	]*delete" OR
+       NOT web_diagnostic_validation_contract MATCHES
+           "message = \"is required\"[)][ 	]+&" OR
+       NOT web_diagnostic_validation_contract MATCHES
+           "message = \"is too short\"[)][ 	]+&" OR
+       NOT web_diagnostic_validation_contract MATCHES
+           "message = \"is too long\"[)][ 	]+&" OR
+       NOT web_diagnostic_validation_contract MATCHES
+           "message = \"is out of range\"[)][ 	]+&" OR
+       NOT web_diagnostic_validation_contract MATCHES
+           "message = \"is not allowed\"[)][ 	]+&")
+        boundary_error("validation owning values regained temporary borrows or self references"
+            "issues, error metadata, and Validator mutation must share one stable-lvalue contract")
+    endif()
+    if(NOT web_diagnostic_error_contract MATCHES
+           "HttpErrorInfo[ 	]+info[(][)] const &[ 	]+noexcept" OR
+       NOT web_diagnostic_error_contract MATCHES
+           "HttpErrorInfo[ 	]+info[(][)] const &&[ 	]*=[ 	]*delete" OR
+       NOT web_diagnostic_error_source MATCHES
+           "HttpError::info[(][)] const &[ 	]+noexcept")
+        boundary_error("HttpError regained temporary metadata borrowing"
+            "the borrowed HttpErrorInfo projection must require a stable exception lvalue")
+    endif()
+    foreach(web_diagnostic_lifetime_coverage IN ITEMS
+            "${web_diagnostic_validator_test}"
+            "${web_diagnostic_error_test}"
+            "${web_diagnostic_request_guard}"
+            "${web_model_api_surface}"
+            "${web_json_package_consumer}")
+        if(web_diagnostic_lifetime_coverage MATCHES
+               "ExposesAnyRvalue(RequestNameValueList|ValidationIssue|ValidationError)|ExposesRvalue(ValidatorIssues|HttpErrorInfo)|AcceptsAnyRvalueValidatorMutation" AND
+           NOT web_diagnostic_lifetime_coverage MATCHES
+               "static_assert[(]!Exposes|static_assert[(]!Accepts")
+            boundary_error("Web diagnostic temporary-borrow coverage is incomplete"
+                "direct, standalone, API-surface, and installed-package probes must assert rejection")
+            break()
+        endif()
+    endforeach()
+endif()
 set(HTTP_URL_ENCODING_CONTRACT
     "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/UrlEncoding.h")
 set(WEB_FORM_DECODING_CONTRACT

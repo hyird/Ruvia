@@ -1246,6 +1246,56 @@ concept HasRequestNameValueListCanonicalAccessors = requires(const T& list) {
 };
 
 template <typename T>
+concept ExposesAnyRvalueRequestNameValueListBorrow =
+    requires { std::declval<const T&&>().begin(); } ||
+    requires { std::declval<const T&&>().cbegin(); } ||
+    requires { std::declval<const T&&>().end(); } ||
+    requires { std::declval<const T&&>().cend(); } ||
+    requires { std::declval<const T&&>().data(); } ||
+    requires { std::declval<const T&&>()[std::size_t{}]; } ||
+    requires { std::declval<const T&&>().entries(); };
+
+template <typename T>
+concept ExposesAnyRvalueValidationIssueBorrow =
+    requires { std::declval<const T&&>().field(); } ||
+    requires { std::declval<const T&&>().code(); } ||
+    requires { std::declval<const T&&>().message(); };
+
+template <typename T>
+concept ExposesAnyRvalueValidationErrorBorrow =
+    requires { std::declval<const T&&>().issues(); } ||
+    requires { std::declval<const T&&>().info(); };
+
+template <typename T>
+concept ExposesRvalueValidatorIssues = requires {
+    std::declval<const T&&>().issues();
+};
+
+template <typename T>
+concept AcceptsAnyRvalueValidatorMutation =
+    requires { std::declval<T&&>().add("field", "code", "message"); } ||
+    requires(const std::optional<std::string>& value) {
+        std::declval<T&&>().required(value, "field");
+    } ||
+    requires(const std::optional<std::string>& value) {
+        std::declval<T&&>().minLength(value, "field", std::size_t{1});
+    } ||
+    requires(const std::optional<std::string>& value) {
+        std::declval<T&&>().maxLength(value, "field", std::size_t{1});
+    } ||
+    requires(const std::optional<int>& value) {
+        std::declval<T&&>().range(value, "field", 0, 1);
+    } ||
+    requires(const std::optional<std::string>& value) {
+        std::declval<T&&>().oneOf(value, "field", {"value"});
+    };
+
+template <typename T>
+concept ExposesRvalueHttpErrorInfo = requires {
+    std::declval<const T&&>().info();
+};
+
+template <typename T>
 concept HasAppErrorHandlerSetterAlias = requires(T& app) {
     app.setErrorHandler(static_cast<ruvia::HttpErrorHandler>(nullptr));
 };
@@ -2357,6 +2407,8 @@ static_assert(!HasRequestNameValueListMutableAccess<ruvia::RequestNameValueList>
 static_assert(!HasRequestNameValueListMutableIteratorAlias<ruvia::RequestNameValueList>);
 static_assert(std::is_pointer_v<ruvia::RequestNameValueList::const_iterator>);
 static_assert(HasRequestNameValueListCanonicalAccessors<ruvia::RequestNameValueList>);
+static_assert(!ExposesAnyRvalueRequestNameValueListBorrow<
+    ruvia::RequestNameValueList>);
 static_assert(!HasAppErrorHandlerSetterAlias<ruvia::App>);
 static_assert(!HasAppNotFoundHandlerSetterAlias<ruvia::App>);
 static_assert(!HasAppSetRateLimitAlias<ruvia::App>);
@@ -2492,6 +2544,11 @@ static_assert(!std::is_constructible_v<
 static_assert(!HasValidationIssuePublicFields<ruvia::ValidationIssue>);
 #endif
 static_assert(HasValidationIssueCanonicalReadAccessors<ruvia::ValidationIssue>);
+static_assert(!ExposesAnyRvalueValidationIssueBorrow<ruvia::ValidationIssue>);
+static_assert(!ExposesAnyRvalueValidationErrorBorrow<ruvia::ValidationError>);
+static_assert(!ExposesRvalueValidatorIssues<ruvia::Validator>);
+static_assert(!AcceptsAnyRvalueValidatorMutation<ruvia::Validator>);
+static_assert(!ExposesRvalueHttpErrorInfo<ruvia::HttpError>);
 static_assert(!HasHttpErrorInfoPublicFields<ruvia::HttpErrorInfo>);
 static_assert(HasHttpErrorInfoCanonicalReadAccessors<ruvia::HttpErrorInfo>);
 static_assert(!HasCompleteType<ruvia::detail::RouteRateLimitResult>);

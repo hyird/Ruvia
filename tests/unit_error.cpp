@@ -3,6 +3,7 @@
 #include <cstdint>
 #include <string>
 #include <string_view>
+#include <utility>
 
 #include "ruvia/http/HttpProtocolError.h"
 #include "ruvia/http/HttpStatus.h"
@@ -16,6 +17,13 @@ using ruvia::HttpProtocolError;
 using ruvia::httpReasonPhrase;
 
 }  // namespace
+
+template <typename T>
+concept ExposesRvalueHttpErrorInfo = requires {
+    std::declval<const T&&>().info();
+};
+
+static_assert(!ExposesRvalueHttpErrorInfo<ruvia::HttpError>);
 
 RUVIA_TEST(http_reason_phrase_is_conventional_http1_presentation) {
     RUVIA_CHECK_EQ(httpReasonPhrase(200), std::string_view("OK"));

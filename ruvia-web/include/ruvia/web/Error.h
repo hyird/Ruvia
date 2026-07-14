@@ -66,7 +66,8 @@ public:
     HttpError& operator=(HttpError&&) noexcept = default;
 
     [[nodiscard]] const char* what() const noexcept override;
-    [[nodiscard]] HttpErrorInfo info() const noexcept;
+    [[nodiscard]] HttpErrorInfo info() const & noexcept;
+    [[nodiscard]] HttpErrorInfo info() const && = delete;
 
 private:
     std::uint16_t status_{500};

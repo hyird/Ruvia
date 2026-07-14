@@ -6,6 +6,7 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <utility>
 
 #include "ruvia/web/Error.h"
 #include "ruvia/web/Validation.h"
@@ -16,6 +17,46 @@ namespace {
 using ruvia::Validator;
 
 }  // namespace
+
+template <typename T>
+concept ExposesAnyRvalueValidationIssueBorrow =
+    requires { std::declval<const T&&>().field(); } ||
+    requires { std::declval<const T&&>().code(); } ||
+    requires { std::declval<const T&&>().message(); };
+
+template <typename T>
+concept ExposesAnyRvalueValidationErrorBorrow =
+    requires { std::declval<const T&&>().issues(); } ||
+    requires { std::declval<const T&&>().info(); };
+
+template <typename T>
+concept ExposesRvalueValidatorIssues = requires {
+    std::declval<const T&&>().issues();
+};
+
+template <typename T>
+concept AcceptsAnyRvalueValidatorMutation =
+    requires { std::declval<T&&>().add("field", "code", "message"); } ||
+    requires(const std::optional<std::string>& value) {
+        std::declval<T&&>().required(value, "field");
+    } ||
+    requires(const std::optional<std::string>& value) {
+        std::declval<T&&>().minLength(value, "field", std::size_t{1});
+    } ||
+    requires(const std::optional<std::string>& value) {
+        std::declval<T&&>().maxLength(value, "field", std::size_t{1});
+    } ||
+    requires(const std::optional<int>& value) {
+        std::declval<T&&>().range(value, "field", 0, 1);
+    } ||
+    requires(const std::optional<std::string>& value) {
+        std::declval<T&&>().oneOf(value, "field", {"value"});
+    };
+
+static_assert(!ExposesAnyRvalueValidationIssueBorrow<ruvia::ValidationIssue>);
+static_assert(!ExposesAnyRvalueValidationErrorBorrow<ruvia::ValidationError>);
+static_assert(!ExposesRvalueValidatorIssues<ruvia::Validator>);
+static_assert(!AcceptsAnyRvalueValidatorMutation<ruvia::Validator>);
 
 RUVIA_TEST(validator_required_flags_absent_values) {
     Validator v;

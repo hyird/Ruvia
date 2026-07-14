@@ -1654,6 +1654,10 @@ if(_built_components_csv MATCHES "(^|,)web(,|$)")
         "${_install_prefix}/include/ruvia/web/detail/model/Rules.h")
     set(_installed_validation_path
         "${_install_prefix}/include/ruvia/web/Validation.h")
+    set(_installed_error_path
+        "${_install_prefix}/include/ruvia/web/Error.h")
+    set(_installed_request_fields_path
+        "${_install_prefix}/include/ruvia/web/RequestFields.h")
     set(_installed_stale_request_object_visitors_path
         "${_install_prefix}/include/ruvia/web/detail/model/RequestObjectVisitors.h")
     if(NOT EXISTS "${_installed_json_string_path}" OR
@@ -1667,6 +1671,8 @@ if(_built_components_csv MATCHES "(^|,)web(,|$)")
        NOT EXISTS "${_installed_model_json_writer_path}" OR
        NOT EXISTS "${_installed_model_rules_path}" OR
        NOT EXISTS "${_installed_validation_path}" OR
+       NOT EXISTS "${_installed_error_path}" OR
+       NOT EXISTS "${_installed_request_fields_path}" OR
        EXISTS "${_installed_stale_request_object_visitors_path}")
         message(FATAL_ERROR
             "installed Web model parsing headers are incomplete or stale")
@@ -1693,6 +1699,55 @@ if(_built_components_csv MATCHES "(^|,)web(,|$)")
         _installed_model_rules_contract)
     file(READ "${_installed_validation_path}"
         _installed_validation_contract)
+    file(READ "${_installed_error_path}"
+        _installed_error_contract)
+    file(READ "${_installed_request_fields_path}"
+        _installed_request_fields_contract)
+    if(NOT _installed_request_fields_contract MATCHES
+           "begin[(][)] const &[ 	]+noexcept" OR
+       NOT _installed_request_fields_contract MATCHES
+           "begin[(][)] const &&[ 	]*=[ 	]*delete" OR
+       NOT _installed_request_fields_contract MATCHES
+           "cbegin[(][)] const &&[ 	]*=[ 	]*delete" OR
+       NOT _installed_request_fields_contract MATCHES
+           "end[(][)] const &&[ 	]*=[ 	]*delete" OR
+       NOT _installed_request_fields_contract MATCHES
+           "cend[(][)] const &&[ 	]*=[ 	]*delete" OR
+       NOT _installed_request_fields_contract MATCHES
+           "data[(][)] const &&[ 	]*=[ 	]*delete" OR
+       NOT _installed_request_fields_contract MATCHES
+           "entries[(][)] const &[ 	]+noexcept" OR
+       NOT _installed_request_fields_contract MATCHES
+           "entries[(][)] const &&[ 	]*=[ 	]*delete")
+        message(FATAL_ERROR
+            "installed RequestNameValueList restored temporary container borrows")
+    endif()
+    if(NOT _installed_validation_contract MATCHES
+           "field[(][)] const &[ 	]+noexcept" OR
+       NOT _installed_validation_contract MATCHES
+           "field[(][)] const &&[ 	]*=[ 	]*delete" OR
+       NOT _installed_validation_contract MATCHES
+           "issues[(][)] const &[ 	]+noexcept" OR
+       NOT _installed_validation_contract MATCHES
+           "issues[(][)] const &&[ 	]*=[ 	]*delete" OR
+       NOT _installed_validation_contract MATCHES
+           "info[(][)] const &[ 	]+noexcept" OR
+       NOT _installed_validation_contract MATCHES
+           "info[(][)] const &&[ 	]*=[ 	]*delete" OR
+       NOT _installed_validation_contract MATCHES
+           "message = \"is required\"[)][ 	]+&" OR
+       NOT _installed_validation_contract MATCHES
+           "message = \"is not allowed\"[)][ 	]+&")
+        message(FATAL_ERROR
+            "installed validation API restored temporary owning-value access")
+    endif()
+    if(NOT _installed_error_contract MATCHES
+           "HttpErrorInfo[ 	]+info[(][)] const &[ 	]+noexcept" OR
+       NOT _installed_error_contract MATCHES
+           "HttpErrorInfo[ 	]+info[(][)] const &&[ 	]*=[ 	]*delete")
+        message(FATAL_ERROR
+            "installed HttpError restored temporary metadata borrowing")
+    endif()
     if(NOT _installed_json_string_contract MATCHES
            "std::optional<std::pmr::string>[ \t\r\n]+decodeJsonString" OR
        NOT _installed_json_string_contract MATCHES

@@ -45,6 +45,16 @@ concept ExposesRvalueRequestFormObjectGroups = requires {
     std::declval<const Object&&>().groups();
 };
 
+template <typename List>
+concept ExposesAnyRvalueRequestNameValueListBorrow =
+    requires { std::declval<const List&&>().begin(); } ||
+    requires { std::declval<const List&&>().cbegin(); } ||
+    requires { std::declval<const List&&>().end(); } ||
+    requires { std::declval<const List&&>().cend(); } ||
+    requires { std::declval<const List&&>().data(); } ||
+    requires { std::declval<const List&&>()[std::size_t{}]; } ||
+    requires { std::declval<const List&&>().entries(); };
+
 static_assert(sizeof(ruvia::ContextRequest) == sizeof(void*));
 static_assert(std::same_as<
     decltype(std::declval<const ruvia::ContextRequest&>().method()),
@@ -63,6 +73,8 @@ static_assert(!ExposesAnyRvalueRequestFormDataBorrow<
     ruvia::ContextRequest::RequestFormData>);
 static_assert(!ExposesRvalueRequestFormObjectGroups<
     ruvia::ContextRequest::RequestFormData::Object>);
+static_assert(!ExposesAnyRvalueRequestNameValueListBorrow<
+    ruvia::RequestNameValueList>);
 
 int main() {
     using Method = std::string_view (ruvia::ContextRequest::*)() const noexcept;
