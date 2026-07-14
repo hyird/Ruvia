@@ -1184,7 +1184,37 @@ concept HasStaleHttp2RemoveReset = requires(T& table) {
 
 using HttpResponseBodySetter = void (ruvia::HttpResponse::*)(std::string_view);
 using HttpResponseHeadersGetter = const ruvia::HttpResponseHeaders& (
-    ruvia::HttpResponse::*)() const noexcept;
+    ruvia::HttpResponse::*)() const & noexcept;
+
+template <typename T>
+concept ExposesAnyRvalueResponseView =
+    requires(T&& value) { std::move(value).headers(); } ||
+    requires(T&& value) { std::move(value).header(std::string_view{}); } ||
+    requires(T&& value) { std::move(value).begin(); } ||
+    requires(T&& value) { std::move(value).end(); } ||
+    requires(T&& value) { std::move(value).cbegin(); } ||
+    requires(T&& value) { std::move(value).cend(); };
+
+template <typename T>
+concept ExposesAnyRvalueResponseBodyBorrow =
+    requires(T&& value) { std::move(value).empty(); } ||
+    requires(T&& value) { std::move(value).borrowedBytes(); } ||
+    requires(T&& value) { std::move(value).staticBytes(); } ||
+    requires(T&& value) { std::move(value).ownedBytes(); } ||
+    requires(T&& value) { std::move(value).ownedFile(); } ||
+    requires(T&& value) { std::move(value).borrowedFile(); } ||
+    requires(T&& value) { std::move(value).bytes(); } ||
+    requires(T&& value) { std::move(value).file(); } ||
+    requires(T&& value) { std::move(value).nativePathCStr(); };
+
+template <typename T>
+concept ExposesRvalueResponseBodyAccess =
+    requires(T&& response) {
+        ruvia::detail::responseBody(std::move(response));
+    } ||
+    requires(T&& response) {
+        ruvia::detail::HttpResponseBodyAccess::body(std::move(response));
+    };
 
 static_assert(!HasLegacyResponseBodyCopy<ruvia::HttpResponse>);
 static_assert(!HasLegacyResponseBodyView<ruvia::HttpResponse>);
@@ -1196,12 +1226,22 @@ static_assert(std::same_as<
     decltype(static_cast<HttpResponseBodySetter>(&ruvia::HttpResponse::body)),
     HttpResponseBodySetter>);
 static_assert(std::same_as<
-    decltype(&ruvia::HttpResponse::headers),
+    decltype(static_cast<HttpResponseHeadersGetter>(
+        &ruvia::HttpResponse::headers)),
     HttpResponseHeadersGetter>);
 static_assert(!std::default_initializable<ruvia::HttpResponseHeaders>);
 static_assert(!std::constructible_from<
     ruvia::HttpResponseHeaders,
     std::pmr::memory_resource*>);
+static_assert(!ExposesAnyRvalueResponseView<ruvia::HttpResponse>);
+static_assert(!ExposesAnyRvalueResponseView<ruvia::HttpResponseHeaders>);
+static_assert(!ExposesAnyRvalueResponseBodyBorrow<
+    ruvia::detail::HttpResponseBody>);
+static_assert(!ExposesAnyRvalueResponseBodyBorrow<
+    ruvia::detail::HttpOwnedResponseBytes>);
+static_assert(!ExposesAnyRvalueResponseBodyBorrow<
+    ruvia::detail::HttpOwnedResponseFile>);
+static_assert(!ExposesRvalueResponseBodyAccess<ruvia::HttpResponse>);
 static_assert(!HasSharedCacheFreshnessPolicy<ruvia::CacheControl>);
 static_assert(std::same_as<
     decltype(ruvia::CacheControl::sMaxAge),

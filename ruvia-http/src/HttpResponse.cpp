@@ -42,7 +42,7 @@ std::uint16_t HttpResponse::status() const noexcept {
     return statusCode_;
 }
 
-const HttpResponseHeaders& HttpResponse::headers() const noexcept {
+const HttpResponseHeaders& HttpResponse::headers() const & noexcept {
     return headers_;
 }
 

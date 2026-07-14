@@ -2761,9 +2761,34 @@ if(NOT _installed_response_body_storage MATCHES
    NOT _installed_response_body_storage MATCHES
        "std::get_if<HttpBorrowedResponseFile>" OR
    NOT _installed_response_body_storage MATCHES
-       "std::optional<ResponseFileBody> file[(][)] const noexcept")
+       "std::optional<ResponseFileBody> file[(][)] const [&] noexcept")
     message(FATAL_ERROR
         "installed HttpResponse body lost its exclusive storage alternatives")
+endif()
+if(NOT _installed_response_model MATCHES
+       "headers[(][)] const [&] noexcept" OR
+   NOT _installed_response_model MATCHES
+       "headers[(][)] const && = delete" OR
+   NOT _installed_response_model MATCHES
+       "header[ \t\r\n]*[(][^)]*std::string_view[^)]*[)][ \t\r\n]*const && = delete" OR
+   NOT _installed_response_model MATCHES
+       "begin[(][)] const [&] noexcept" OR
+   NOT _installed_response_model MATCHES
+       "cend[(][)] const && = delete" OR
+   NOT _installed_response_body_storage MATCHES
+       "empty[(][)] const [&] noexcept" OR
+   NOT _installed_response_body_storage MATCHES
+       "ownedBytes[(][)] const && = delete" OR
+   NOT _installed_response_body_storage MATCHES
+       "file[(][)] const && = delete" OR
+   NOT _installed_response_body_storage MATCHES
+       "nativePathCStr[(][)] const && = delete" OR
+   NOT _installed_response_body_access MATCHES
+       "static const HttpResponseBody& body[ \t\r\n]*[(][ \t\r\n]*const HttpResponse&&[^)]*[)][ \t\r\n]*= delete" OR
+   NOT _installed_response_body_access MATCHES
+       "responseBody[ \t\r\n]*[(][ \t\r\n]*const HttpResponse&&[^)]*[)][ \t\r\n]*= delete")
+    message(FATAL_ERROR
+        "installed HttpResponse owning state exposes borrows from temporary owners")
 endif()
 if(_installed_response_model MATCHES
        "BodyKind|bodyKind_|fileBody_" OR

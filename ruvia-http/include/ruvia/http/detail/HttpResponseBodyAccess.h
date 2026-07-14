@@ -29,6 +29,8 @@ struct HttpResponseBodyAccess final {
         const HttpResponse& response) noexcept {
         return response.body_;
     }
+    [[nodiscard]] static const HttpResponseBody& body(
+        const HttpResponse&& response) = delete;
 };
 
 inline void setResponseBodyBorrowedView(HttpResponse& response, std::string_view value) noexcept {
@@ -51,5 +53,7 @@ inline void materializeResponseBody(HttpResponse& response) {
     const HttpResponse& response) noexcept {
     return HttpResponseBodyAccess::body(response);
 }
+[[nodiscard]] const HttpResponseBody& responseBody(
+    const HttpResponse&& response) = delete;
 
 }  // namespace ruvia::detail

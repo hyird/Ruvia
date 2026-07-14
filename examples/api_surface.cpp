@@ -760,7 +760,7 @@ concept HasResponseStatusGetter = requires(const T& response) {
 };
 
 using ResponseHeadersGetter = const ruvia::HttpResponseHeaders& (
-    ruvia::HttpResponse::*)() const noexcept;
+    ruvia::HttpResponse::*)() const & noexcept;
 
 template <typename T>
 concept HasResponseSetBodyOwnedAlias = requires(T& response, std::pmr::string body) {
@@ -2108,7 +2108,8 @@ static_assert(!HasResponseReasonPhraseSetter<ruvia::HttpResponse>);
 static_assert(!HasResponseStatusCodeAlias<ruvia::HttpResponse>);
 static_assert(HasResponseStatusGetter<ruvia::HttpResponse>);
 static_assert(std::same_as<
-    decltype(&ruvia::HttpResponse::headers),
+    decltype(static_cast<ResponseHeadersGetter>(
+        &ruvia::HttpResponse::headers)),
     ResponseHeadersGetter>);
 static_assert(!std::default_initializable<ruvia::HttpResponseHeaders>);
 static_assert(!std::constructible_from<

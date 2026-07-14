@@ -176,7 +176,8 @@ std::string_view HttpResponse::knownHeaderValue(std::uint32_t bit) const noexcep
     return header == nullptr ? std::string_view{} : header->value();
 }
 
-std::string_view HttpResponse::header(std::string_view name) const noexcept {
+std::string_view
+HttpResponse::header(std::string_view name) const & noexcept {
     if (const auto* const found = findHeaderForRead(name, detail::classifyResponseHeaderName(name))) {
         return found->value();
     }

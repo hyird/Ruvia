@@ -9,6 +9,7 @@
 #include <string>
 #include <string_view>
 #include <type_traits>
+#include <utility>
 #include <vector>
 
 #include "ruvia/http/HttpInterimResponse.h"
@@ -29,6 +30,18 @@ static_assert(!std::is_copy_constructible_v<HttpResponse>);
 static_assert(!std::is_copy_assignable_v<HttpResponse>);
 static_assert(std::is_nothrow_move_constructible_v<HttpResponse>);
 static_assert(std::is_nothrow_move_assignable_v<HttpResponse>);
+
+template <typename T>
+concept ExposesAnyRvalueResponseView =
+    requires(T&& value) { std::move(value).headers(); } ||
+    requires(T&& value) { std::move(value).header(std::string_view{}); } ||
+    requires(T&& value) { std::move(value).begin(); } ||
+    requires(T&& value) { std::move(value).end(); } ||
+    requires(T&& value) { std::move(value).cbegin(); } ||
+    requires(T&& value) { std::move(value).cend(); };
+
+static_assert(!ExposesAnyRvalueResponseView<ruvia::HttpResponse>);
+static_assert(!ExposesAnyRvalueResponseView<ruvia::HttpResponseHeaders>);
 
 class CountingMemoryResource final : public std::pmr::memory_resource {
 public:

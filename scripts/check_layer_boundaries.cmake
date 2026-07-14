@@ -3078,6 +3078,8 @@ set(HTTP_RESPONSE_FILE_ACCESS
     "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/detail/HttpResponseFileAccess.h")
 set(HTTP_RESPONSE_STORAGE_SOURCE
     "${RUVIA_ROOT}/ruvia-http/src/HttpResponse.cpp")
+set(HTTP_RESPONSE_HEADER_SOURCE
+    "${RUVIA_ROOT}/ruvia-http/src/HttpResponseHeaderOps.cpp")
 set(HTTP_RESPONSE_WRITE_PLAN
     "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/detail/server/HttpResponseWritePlan.h")
 set(HTTP_RESPONSE_H2_CONNECTION
@@ -3090,6 +3092,8 @@ set(WEB_RESPONSE_H2_WRITER
     "${RUVIA_ROOT}/ruvia-web/src/server/Http2BufferedResponseWrite.cpp")
 set(HTTP_RESPONSE_BODY_TEST
     "${RUVIA_ROOT}/tests/unit_http_response_body.cpp")
+set(HTTP_RESPONSE_PUBLIC_TEST
+    "${RUVIA_ROOT}/tests/unit_http_response.cpp")
 set(HTTP_RESPONSE_PACKAGE_CONSUMER
     "${RUVIA_ROOT}/tests/package-consumer/http.cpp")
 foreach(response_body_contract_file IN ITEMS
@@ -3099,12 +3103,14 @@ foreach(response_body_contract_file IN ITEMS
         "${HTTP_RESPONSE_BODY_ACCESS}"
         "${HTTP_RESPONSE_FILE_ACCESS}"
         "${HTTP_RESPONSE_STORAGE_SOURCE}"
+        "${HTTP_RESPONSE_HEADER_SOURCE}"
         "${HTTP_RESPONSE_WRITE_PLAN}"
         "${HTTP_RESPONSE_H2_CONNECTION}"
         "${WEB_BUFFERED_RESPONSE_WRITER}"
         "${WEB_RESPONSE_COMPRESSION}"
         "${WEB_RESPONSE_H2_WRITER}"
         "${HTTP_RESPONSE_BODY_TEST}"
+        "${HTTP_RESPONSE_PUBLIC_TEST}"
         "${HTTP_RESPONSE_PACKAGE_CONSUMER}")
     if(NOT EXISTS "${response_body_contract_file}")
         file(RELATIVE_PATH relative "${RUVIA_ROOT}"
@@ -3119,12 +3125,14 @@ if(EXISTS "${HTTP_RESPONSE_BODY_STORAGE}" AND
    EXISTS "${HTTP_RESPONSE_BODY_ACCESS}" AND
    EXISTS "${HTTP_RESPONSE_FILE_ACCESS}" AND
    EXISTS "${HTTP_RESPONSE_STORAGE_SOURCE}" AND
+   EXISTS "${HTTP_RESPONSE_HEADER_SOURCE}" AND
    EXISTS "${HTTP_RESPONSE_WRITE_PLAN}" AND
    EXISTS "${HTTP_RESPONSE_H2_CONNECTION}" AND
    EXISTS "${WEB_BUFFERED_RESPONSE_WRITER}" AND
    EXISTS "${WEB_RESPONSE_COMPRESSION}" AND
    EXISTS "${WEB_RESPONSE_H2_WRITER}" AND
    EXISTS "${HTTP_RESPONSE_BODY_TEST}" AND
+   EXISTS "${HTTP_RESPONSE_PUBLIC_TEST}" AND
    EXISTS "${HTTP_RESPONSE_PACKAGE_CONSUMER}")
     file(READ "${HTTP_RESPONSE_BODY_STORAGE}" http_response_body_storage)
     file(READ "${HTTP_RESPONSE_FILE_BODY_VIEW}" http_response_file_body_view)
@@ -3132,12 +3140,14 @@ if(EXISTS "${HTTP_RESPONSE_BODY_STORAGE}" AND
     file(READ "${HTTP_RESPONSE_BODY_ACCESS}" http_response_body_access)
     file(READ "${HTTP_RESPONSE_FILE_ACCESS}" http_response_file_access)
     file(READ "${HTTP_RESPONSE_STORAGE_SOURCE}" http_response_storage_source)
+    file(READ "${HTTP_RESPONSE_HEADER_SOURCE}" http_response_header_source)
     file(READ "${HTTP_RESPONSE_WRITE_PLAN}" http_response_storage_write_plan)
     read_http2_connection_implementation(http_response_storage_h2)
     file(READ "${WEB_BUFFERED_RESPONSE_WRITER}" web_buffered_response_writer)
     file(READ "${WEB_RESPONSE_COMPRESSION}" web_response_compression)
     file(READ "${WEB_RESPONSE_H2_WRITER}" web_response_h2_writer)
     file(READ "${HTTP_RESPONSE_BODY_TEST}" http_response_body_test)
+    file(READ "${HTTP_RESPONSE_PUBLIC_TEST}" http_response_public_test)
     file(READ "${HTTP_RESPONSE_PACKAGE_CONSUMER}"
         http_response_package_consumer)
     if(NOT http_response_body_storage MATCHES
@@ -3168,9 +3178,50 @@ if(EXISTS "${HTTP_RESPONSE_BODY_STORAGE}" AND
        NOT http_response_body_storage MATCHES
            "std::get_if<HttpBorrowedResponseFile>" OR
        NOT http_response_body_storage MATCHES
-           "std::optional<ResponseFileBody> file[(][)] const noexcept")
+           "std::optional<ResponseFileBody> file[(][)] const [&] noexcept")
         boundary_error("HttpResponse body lost its exclusive storage alternatives"
             "empty, borrowed/static/owned bytes, and owned/borrowed files must remain one discriminated value")
+    endif()
+    if(NOT http_response_storage_model MATCHES
+           "headers[(][)] const [&] noexcept" OR
+       NOT http_response_storage_model MATCHES
+           "headers[(][)] const && = delete" OR
+       NOT http_response_storage_model MATCHES
+           "header[ \t\r\n]*[(][^)]*std::string_view[^)]*[)][ \t\r\n]*const && = delete" OR
+       NOT http_response_storage_model MATCHES
+           "begin[(][)] const [&] noexcept" OR
+       NOT http_response_storage_model MATCHES
+           "cend[(][)] const && = delete" OR
+       NOT http_response_storage_source MATCHES
+           "HttpResponse::headers[(][)] const [&] noexcept" OR
+       NOT http_response_header_source MATCHES
+           "HttpResponse::header[(][^)]*std::string_view[^)]*[)] const [&] noexcept" OR
+       NOT http_response_body_storage MATCHES
+           "empty[(][)] const [&] noexcept" OR
+       NOT http_response_body_storage MATCHES
+           "ownedBytes[(][)] const && = delete" OR
+       NOT http_response_body_storage MATCHES
+           "file[(][)] const && = delete" OR
+       NOT http_response_body_storage MATCHES
+           "nativePathCStr[(][)] const && = delete" OR
+       NOT http_response_body_access MATCHES
+           "static const HttpResponseBody& body[ \t\r\n]*[(][ \t\r\n]*const HttpResponse&&[^)]*[)][ \t\r\n]*= delete" OR
+       NOT http_response_body_access MATCHES
+           "responseBody[ \t\r\n]*[(][ \t\r\n]*const HttpResponse&&[^)]*[)][ \t\r\n]*= delete" OR
+       NOT http_response_public_test MATCHES
+           "ExposesAnyRvalueResponseView" OR
+       NOT http_response_body_test MATCHES
+           "ExposesAnyRvalueResponseBodyBorrow" OR
+       NOT http_response_body_test MATCHES
+           "ExposesRvalueResponseBodyAccess" OR
+       NOT http_response_package_consumer MATCHES
+           "ExposesAnyRvalueResponseView" OR
+       NOT http_response_package_consumer MATCHES
+           "ExposesAnyRvalueResponseBodyBorrow" OR
+       NOT http_response_package_consumer MATCHES
+           "ExposesRvalueResponseBodyAccess")
+        boundary_error("HttpResponse owning state exposes borrows from temporary owners"
+            "headers, body alternatives, owned bytes/files, and responseBody access must require a live lvalue response")
     endif()
     if(http_response_storage_model MATCHES
            "${RULE_STALE_RESPONSE_BODY_STORAGE_SPLIT}" OR

@@ -48,6 +48,32 @@ static_assert(!std::is_default_constructible_v<
 static_assert(!std::is_default_constructible_v<
     ruvia::detail::ResponseFileBody>);
 
+template <typename T>
+concept ExposesAnyRvalueResponseBodyBorrow =
+    requires(T&& value) { std::move(value).empty(); } ||
+    requires(T&& value) { std::move(value).borrowedBytes(); } ||
+    requires(T&& value) { std::move(value).staticBytes(); } ||
+    requires(T&& value) { std::move(value).ownedBytes(); } ||
+    requires(T&& value) { std::move(value).ownedFile(); } ||
+    requires(T&& value) { std::move(value).borrowedFile(); } ||
+    requires(T&& value) { std::move(value).bytes(); } ||
+    requires(T&& value) { std::move(value).file(); } ||
+    requires(T&& value) { std::move(value).nativePathCStr(); };
+
+template <typename T>
+concept ExposesRvalueResponseBodyAccess =
+    requires(T&& response) { responseBody(std::move(response)); } ||
+    requires(T&& response) {
+        ruvia::detail::HttpResponseBodyAccess::body(std::move(response));
+    };
+
+static_assert(!ExposesAnyRvalueResponseBodyBorrow<HttpResponseBody>);
+static_assert(!ExposesAnyRvalueResponseBodyBorrow<
+    ruvia::detail::HttpOwnedResponseBytes>);
+static_assert(!ExposesAnyRvalueResponseBodyBorrow<
+    ruvia::detail::HttpOwnedResponseFile>);
+static_assert(!ExposesRvalueResponseBodyAccess<HttpResponse>);
+
 [[nodiscard]] std::size_t activeAlternativeCount(
     const HttpResponseBody& body) noexcept {
     return static_cast<std::size_t>(body.empty() != nullptr) +
