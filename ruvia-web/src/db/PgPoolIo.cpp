@@ -35,14 +35,21 @@ Task<void> PostgreSqlPool::connectUnlocked(ConnectionSlot& slot) {
     }
     if (slot.connection == nullptr) {
         const auto port = formatPort(config_.port);
-        const std::array<const char*, 6> keywords{
-            "host", "port", "user", "password", "dbname", nullptr};
-        const std::array<const char*, 6> values{
+        // Pin the client encoding to UTF-8. Ruvia's strings are UTF-8 throughout,
+        // and query parameters are sent in text format; without this the connection
+        // inherits the server/database default encoding, so non-ASCII parameters and
+        // result text would be misinterpreted on a non-UTF-8 database (e.g. LATIN1,
+        // SQL_ASCII). libpq accepts client_encoding as a connection keyword.
+        const std::array<const char*, 7> keywords{
+            "host", "port", "user", "password", "dbname",
+            "client_encoding", nullptr};
+        const std::array<const char*, 7> values{
             config_.host.c_str(),
             port.data(),
             config_.username.c_str(),
             config_.password.c_str(),
             config_.database.c_str(),
+            "UTF8",
             nullptr};
         slot.connection = PQconnectStartParams(keywords.data(), values.data(), 0);
         if (slot.connection == nullptr) {
