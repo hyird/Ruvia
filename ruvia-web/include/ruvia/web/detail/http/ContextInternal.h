@@ -128,6 +128,10 @@ struct ContextAccess final {
         context.storeResponse(std::move(response));
     }
 
+    static void bindWebSocket(Context& context, WebSocket& webSocket) noexcept {
+        context.responseOutput_ = ContextResponseOutput::webSocket(webSocket);
+    }
+
     [[nodiscard]] static HttpResponse& responseStorage(Context& context) {
         return context.responseStorage();
     }

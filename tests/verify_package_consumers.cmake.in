@@ -2284,6 +2284,21 @@ if(_built_components_csv MATCHES "(^|,)web(,|$)")
         message(FATAL_ERROR
             "installed Web package restored split HTTP/1 request completion state")
     endif()
+    if(NOT _installed_http1_websocket_route MATCHES
+           "auto upgradeAndRun" OR
+       NOT _installed_http1_websocket_route MATCHES
+           "routes[.]dispatchWebSocket" OR
+       NOT _installed_http1_websocket_route MATCHES
+           "makeCallableRef<void, Context&>" OR
+       NOT _installed_http2_stream_session MATCHES
+           "auto upgradeAndRun" OR
+       NOT _installed_http2_stream_session MATCHES
+           "routes[.]dispatchWebSocket" OR
+       NOT _installed_http2_stream_session MATCHES
+           "makeCallableRef<void, Context&>")
+        message(FATAL_ERROR
+            "installed Web package upgrades WebSocket before route middleware reaches its terminal handler")
+    endif()
     if(NOT _installed_http2_response_stream_sink MATCHES
            "finishResponse[^(]*[(][ \t\r\n]*streamId_,[ \t\r\n]*trailerSection[)]" OR
        NOT _installed_http2_response_stream_sink MATCHES
@@ -2628,7 +2643,7 @@ if(_built_components_csv MATCHES "(^|,)web(,|$)")
             "installed Context capabilities lost their exclusive alternatives")
     endif()
     if(_installed_context_services MATCHES
-           "withBodyReader|withBodyLoader|BodyReader[ \t]*[*][ \t]*bodyReader_|RequestBodyLoader[ \t]*[*][ \t]*bodyLoader_|WebSocket[ \t]*[*][ \t]*webSocket_|ResponseStreamWriter[ \t]*[*][ \t]*responseStream_" OR
+           "withBodyReader|withBodyLoader|withWebSocket|BodyReader[ \t]*[*][ \t]*bodyReader_|RequestBodyLoader[ \t]*[*][ \t]*bodyLoader_|WebSocket[ \t]*[*][ \t]*webSocket_|ResponseStreamWriter[ \t]*[*][ \t]*responseStream_" OR
        _installed_context_header MATCHES
            "BodyReader[ \t]*[*][ \t]*bodyReader_|RequestBodyLoader[ \t]*[*][ \t]*bodyLoader_|WebSocket[ \t]*[*][ \t]*webSocket_|ResponseStreamWriter[ \t]*[*][ \t]*responseStream_" OR
        NOT _installed_context_services MATCHES
@@ -2804,7 +2819,9 @@ if(_built_components_csv MATCHES "(^|,)web(,|$)")
        NOT _installed_context_services MATCHES "ConnInfo connInfo_" OR
        NOT _installed_context_header MATCHES "ConnInfo connInfo_" OR
        NOT _installed_context_internal MATCHES
-           "connInfo_[(]services[.]connInfo[(][)][)]")
+           "connInfo_[(]services[.]connInfo[(][)][)]" OR
+       NOT _installed_context_internal MATCHES
+           "ContextResponseOutput::webSocket[(]webSocket[)]")
         message(FATAL_ERROR
             "installed Web package restored split connection metadata")
     endif()
@@ -2910,12 +2927,12 @@ if(_built_components_csv MATCHES "(^|,)web(,|$)")
            "const RouteTable& routes" OR
        NOT _installed_route_response_stream_dispatch MATCHES
            "const RouteTable& routes" OR
-       NOT _installed_route_websocket_session MATCHES
+       NOT _installed_http1_websocket_route MATCHES
            "const RouteTable& routes" OR
        _installed_route_http2_session MATCHES "RequestDispatcher" OR
        _installed_route_response_stream_dispatch MATCHES
            "RequestDispatcher" OR
-       _installed_route_websocket_session MATCHES "RequestDispatcher")
+       _installed_http1_websocket_route MATCHES "RequestDispatcher")
         message(FATAL_ERROR
             "installed Web runtimes do not dispatch through the concrete RouteTable")
     endif()

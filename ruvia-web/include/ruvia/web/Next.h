@@ -11,6 +11,8 @@ namespace ruvia {
 class Context;
 
 namespace detail {
+template <typename Result, typename... Args>
+class CallableRef;
 struct NextAccess;
 class RouteEntry;
 class RouteTable;
@@ -26,6 +28,7 @@ struct NextState final {
     const RouteEntry* route{nullptr};
     Context* context{nullptr};
     StreamMiddlewareChainState* streamChain{nullptr};
+    const CallableRef<void, Context&>* streamHandler{nullptr};
     Control* control{nullptr};
     std::size_t index{0};
     bool repeated{false};

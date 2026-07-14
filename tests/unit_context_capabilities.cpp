@@ -265,12 +265,13 @@ RUVIA_TEST(context_response_output_has_one_active_alternative) {
     RUVIA_CHECK(
         &streaming.responseOutput().responseStream()->writer() == &writer);
 
-    const auto webSocketServices = streaming.withWebSocket(webSocket);
-    RUVIA_CHECK(webSocketServices.responseOutput().buffered() == nullptr);
-    RUVIA_CHECK(webSocketServices.responseOutput().responseStream() == nullptr);
-    RUVIA_CHECK(webSocketServices.responseOutput().webSocket() != nullptr);
+    const auto webSocketOutput =
+        ruvia::detail::ContextResponseOutput::webSocket(webSocket);
+    RUVIA_CHECK(webSocketOutput.buffered() == nullptr);
+    RUVIA_CHECK(webSocketOutput.responseStream() == nullptr);
+    RUVIA_CHECK(webSocketOutput.webSocket() != nullptr);
     RUVIA_CHECK(
-        &webSocketServices.responseOutput().webSocket()->webSocket() ==
+        &webSocketOutput.webSocket()->webSocket() ==
         &webSocket);
 
     RUVIA_CHECK(base.responseOutput().buffered() != nullptr);
@@ -307,8 +308,10 @@ RUVIA_TEST(context_copies_typed_capabilities_into_public_facades) {
         nullptr, &readWebSocket, &writeWebSocket, &closeWebSocket);
     auto webSocketContext = ruvia::detail::ContextAccess::make(
         memory,
-        request,
-        ruvia::detail::ContextServices{}.withWebSocket(webSocket));
+        request);
+    ruvia::detail::ContextAccess::bindWebSocket(
+        webSocketContext,
+        webSocket);
     RUVIA_CHECK(&webSocketContext.webSocket() == &webSocket);
 }
 

@@ -366,11 +366,11 @@ public:
         RequestMemory& memory,
         ResponseStreamWriter& responseStream,
         ContextServices services = {}) const;
-    Task<void> dispatchWebSocket(
+    Task<std::optional<HttpResponse>> dispatchWebSocket(
         const HttpRequest& request,
         const ResolvedRoute& route,
         RequestMemory& memory,
-        WebSocket& webSocket,
+        const RouteStreamHandler& handler,
         ContextServices services = {}) const;
 
 private:
@@ -498,12 +498,14 @@ private:
         const HttpRequest& request,
         const ResolvedRoute& route,
         RequestMemory& memory,
+        const RouteStreamHandler& handler,
         ContextServices services) const;
     [[nodiscard]] Task<void> invokeStreamMiddlewareAt(
         const RouteEntry& route,
         std::size_t index,
         Context& context,
-        StreamMiddlewareChainState& chain) const;
+        StreamMiddlewareChainState& chain,
+        const RouteStreamHandler& handler) const;
     [[nodiscard]] static Task<void> invokeStreamMiddlewareContinuation(NextState state);
     [[nodiscard]] Task<void> storeMiddlewareExceptionResponse(
         Context& context,

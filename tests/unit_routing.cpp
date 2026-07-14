@@ -9,6 +9,7 @@
 #include <chrono>
 #include <exception>
 #include <memory_resource>
+#include <optional>
 #include <span>
 #include <stdexcept>
 #include <string>
@@ -654,6 +655,71 @@ EmptyStreamDispatchObservation dispatchEmptyStreamWith(
     return observation;
 }
 
+struct WebSocketDispatchObservation final {
+    bool terminalInvoked{false};
+    bool buffered{false};
+    std::string bufferedBody;
+};
+
+ruvia::Task<void> webSocketTerminal(void* target, ruvia::Context&) {
+    *static_cast<bool*>(target) = true;
+    g_chainOrder.push_back(0);
+    co_return;
+}
+
+WebSocketDispatchObservation dispatchWebSocketWith(
+    const ControllerMiddlewareDescriptor& middleware) {
+    ruvia::Router router;
+    auto& impl = ruvia::detail::RouterImpl::from(router);
+    impl.registerWebSocketRoute(
+        HttpKnownMethod::kGet,
+        path("/ws-middleware"),
+        ruvia::detail::RouteStreamHandler(nullptr, &dummyStreamHandler),
+        std::span<const ControllerMiddlewareDescriptor>{},
+        std::span<const ControllerMiddlewareDescriptor>(&middleware, 1),
+        {});
+    impl.finalize();
+    const auto& table = impl.routeTable();
+
+    ruvia::WorkerMemory worker;
+    ruvia::RequestMemory memory(worker);
+    auto request = ruvia::detail::HttpRequestAccess::make();
+    ruvia::detail::HttpRequestAccess::reset(request);
+    ruvia::detail::HttpRequestAccess::setMethod(request, "GET");
+    ruvia::detail::HttpRequestAccess::setPath(request, "/ws-middleware");
+    ruvia::detail::HttpRequestAccess::setResource(request, memory.resource());
+    const auto resolution = table.resolve(
+        HttpKnownMethod::kGet,
+        "/ws-middleware");
+    const auto* resolved = resolution.resolved();
+    if (resolved == nullptr) {
+        throw std::logic_error("websocket middleware test route did not resolve");
+    }
+
+    WebSocketDispatchObservation observation;
+    const auto terminal = ruvia::detail::RouteStreamHandler(
+        &observation.terminalInvoked,
+        &webSocketTerminal);
+    asio::io_context context(1);
+    auto future = asio::co_spawn(
+        context,
+        ruvia::detail::taskAsAwaitable(table.dispatchWebSocket(
+            request,
+            *resolved,
+            memory,
+            terminal,
+            {})),
+        asio::use_future);
+    context.run();
+    auto response = future.get();
+    if (response.has_value()) {
+        observation.buffered = true;
+        const auto body = ruvia::detail::responseBody(*response).bytes();
+        observation.bufferedBody.assign(body.data(), body.size());
+    }
+    return observation;
+}
+
 // Writes a chunk (committing the stream) then throws mid-body.
 ruvia::Task<void> streamCommitThenThrow(void*, ruvia::Context& context) {
     co_await context.stream().write("partial");
@@ -794,6 +860,29 @@ RUVIA_TEST(stream_route_uncommitted_handler_allows_middleware_override) {
     RUVIA_CHECK(!observation.ended);
     RUVIA_CHECK(!observation.committed);
     RUVIA_CHECK_EQ(observation.bufferedBody, std::string("override"));
+}
+
+RUVIA_TEST(websocket_middleware_short_circuits_before_upgrade_terminal) {
+    g_chainOrder.clear();
+    const auto middleware =
+        ruvia::detail::makeMiddlewareDescriptor<ChainMwStop>();
+    const auto observation = dispatchWebSocketWith(middleware);
+    RUVIA_CHECK(!observation.terminalInvoked);
+    RUVIA_CHECK(observation.buffered);
+    RUVIA_CHECK_EQ(observation.bufferedBody, std::string("stopped"));
+    const std::vector<int> expected{9};
+    RUVIA_CHECK(g_chainOrder == expected);
+}
+
+RUVIA_TEST(websocket_middleware_wraps_upgrade_and_session_terminal) {
+    g_chainOrder.clear();
+    const auto middleware =
+        ruvia::detail::makeMiddlewareDescriptor<ChainMwA>();
+    const auto observation = dispatchWebSocketWith(middleware);
+    RUVIA_CHECK(observation.terminalInvoked);
+    RUVIA_CHECK(!observation.buffered);
+    const std::vector<int> expected{1, 0, -1};
+    RUVIA_CHECK(g_chainOrder == expected);
 }
 
 RUVIA_TEST(middleware_chain_maps_middleware_exception_to_error_response) {

@@ -361,48 +361,60 @@ Task<void> runHttp2SansIoSession(
                 : resolved->route().endpoint().responseStream();
             if (webSocketEndpoint != nullptr) {
                 if (http2IsValidWebSocketRequest(*streamState, request)) {
-                    // HTTP/1 and RFC 8441 consume the same immutable negotiation;
-                    // the committed result then configures the frame core exactly.
-                    const auto negotiation = makeWebSocketServerNegotiation(
-                        request,
-                        webSocketEndpoint->subprotocols());
-                    const auto handshakeResult = connection.submitWebSocketHandshake(
-                        streamId,
-                        negotiation);
-                    const auto* submittedHandshake =
-                        handshakeResult.submitted();
-                    if (submittedHandshake == nullptr) {
-                        co_return;
-                    }
-                    wakeWriter();  // flush the 200 before the first tunnel read suspends
-                    // Each Extended-CONNECT tunnel registers its OWN heartbeat on the
-                    // connection's scanner entry (Entry holds a small set of heartbeat
-                    // slots, not one), so concurrent tunnels on this h2 connection do not
-                    // clobber each other's server-initiated pings.
-                    using WsTransport = Http2SansIoWsTransport<decltype(executor)>;
-                    WebSocketConnection<WsTransport> webSocketConnection(
-                        WsTransport(
-                            connection,
-                            streamId,
-                            streamRuntime->body().queue(),
-                            *streamSignal,
-                            writeSignal,
-                            executor),
-                        scannerEntry,
-                        webSocketEndpoint->lifecycle(),
-                        ProtocolByteLimit::limited(
-                            options.maxWebSocketMessageBytes),
-                        requestMemory.resource(),
-                        /*initialBytes=*/{},
-                        submittedHandshake->deflate());
-                    co_await runWebSocketSession(
-                        webSocketConnection,
-                        scannerEntry,
-                        routes,
+                    auto upgradeAndRun = [&](Context& context) -> Task<void> {
+                        // HTTP/1 and RFC 8441 consume the same immutable
+                        // negotiation only after middleware reaches the handler.
+                        const auto negotiation = makeWebSocketServerNegotiation(
+                            request,
+                            webSocketEndpoint->subprotocols());
+                        const auto handshakeResult =
+                            connection.submitWebSocketHandshake(
+                                streamId,
+                                negotiation);
+                        const auto* submittedHandshake =
+                            handshakeResult.submitted();
+                        if (submittedHandshake == nullptr) {
+                            co_return;
+                        }
+                        wakeWriter();
+                        // Each Extended-CONNECT tunnel registers its OWN
+                        // heartbeat slot on the connection scanner entry.
+                        using WsTransport =
+                            Http2SansIoWsTransport<decltype(executor)>;
+                        WebSocketConnection<WsTransport> webSocketConnection(
+                            WsTransport(
+                                connection,
+                                streamId,
+                                streamRuntime->body().queue(),
+                                *streamSignal,
+                                writeSignal,
+                                executor),
+                            scannerEntry,
+                            webSocketEndpoint->lifecycle(),
+                            ProtocolByteLimit::limited(
+                                options.maxWebSocketMessageBytes),
+                            requestMemory.resource(),
+                            /*initialBytes=*/{},
+                            submittedHandshake->deflate());
+                        co_await runWebSocketSession(
+                            webSocketConnection,
+                            scannerEntry,
+                            webSocketEndpoint->handler(),
+                            context);
+                    };
+                    const auto terminal =
+                        makeCallableRef<void, Context&>(upgradeAndRun);
+                    auto buffered = co_await routes.dispatchWebSocket(
                         request,
                         *resolved,
-                        requestMemory, baseServices);
-                    co_return;  // tunnel handled on the wire; no buffered tail (parity)
+                        requestMemory,
+                        terminal,
+                        dispatchServices);
+                    if (!buffered.has_value()) {
+                        co_return;
+                    }
+                    response = std::move(*buffered);
+                    break;
                 }
                 response = co_await routes.handleError(
                     request, requestMemory,

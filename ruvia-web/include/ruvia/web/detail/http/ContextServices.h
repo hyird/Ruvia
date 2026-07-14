@@ -97,12 +97,6 @@ public:
         return services;
     }
 
-    [[nodiscard]] ContextServices withWebSocket(WebSocket& value) const noexcept {
-        auto services = *this;
-        services.responseOutput_ = ContextResponseOutput::webSocket(value);
-        return services;
-    }
-
     [[nodiscard]] ContextServices withErrorHandler(HttpErrorHandler value) const noexcept {
         auto services = *this;
         services.errorHandler_ = value;

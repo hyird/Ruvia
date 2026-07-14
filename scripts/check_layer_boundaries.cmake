@@ -895,6 +895,8 @@ set(WEB_ROUTE_RESPONSE_STREAM_DISPATCH
     "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/server/HttpResponseStreamDispatch.h")
 set(WEB_ROUTE_WEBSOCKET_SESSION
     "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/websocket/HttpWebSocketSession.h")
+set(WEB_ROUTE_HTTP1_WEBSOCKET
+    "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/server/HttpServerWebSocketRoute.h")
 set(WEB_STALE_STREAM_KIND_ADAPTER
     "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/server/HttpResponseStreamKindAdapter.h")
 set(WEB_ROUTE_RESOLUTION_TEST
@@ -908,6 +910,7 @@ foreach(route_contract_file IN ITEMS
         "${WEB_ROUTE_HTTP2_SESSION}"
         "${WEB_ROUTE_RESPONSE_STREAM_DISPATCH}"
         "${WEB_ROUTE_WEBSOCKET_SESSION}"
+        "${WEB_ROUTE_HTTP1_WEBSOCKET}"
         "${WEB_ROUTE_RESOLUTION_TEST}")
     if(NOT EXISTS "${route_contract_file}")
         file(RELATIVE_PATH relative "${RUVIA_ROOT}" "${route_contract_file}")
@@ -933,6 +936,7 @@ if(EXISTS "${WEB_ROUTE_MODES}" AND EXISTS "${WEB_ROUTE_LIMITS}" AND
    EXISTS "${WEB_CONTROLLER_MACROS}" AND EXISTS "${WEB_ROUTE_HTTP2_SESSION}" AND
    EXISTS "${WEB_ROUTE_RESPONSE_STREAM_DISPATCH}" AND
    EXISTS "${WEB_ROUTE_WEBSOCKET_SESSION}" AND
+   EXISTS "${WEB_ROUTE_HTTP1_WEBSOCKET}" AND
    EXISTS "${WEB_ROUTE_RESOLUTION_TEST}")
     file(READ "${WEB_ROUTE_MODES}" web_route_modes)
     file(READ "${WEB_ROUTE_LIMITS}" web_route_limits)
@@ -944,6 +948,8 @@ if(EXISTS "${WEB_ROUTE_MODES}" AND EXISTS "${WEB_ROUTE_LIMITS}" AND
         web_route_response_stream_dispatch)
     file(READ "${WEB_ROUTE_WEBSOCKET_SESSION}"
         web_route_websocket_session)
+    file(READ "${WEB_ROUTE_HTTP1_WEBSOCKET}"
+        web_route_http1_websocket)
     file(READ "${WEB_ROUTE_RESOLUTION_TEST}" web_route_resolution_test)
     if(NOT web_route_modes MATCHES "enum class RequestBodyMode" OR
        web_route_modes MATCHES "kMaxRouteParams" OR
@@ -1011,9 +1017,30 @@ if(EXISTS "${WEB_ROUTE_MODES}" AND EXISTS "${WEB_ROUTE_LIMITS}" AND
     if(NOT web_route_http2_session MATCHES "const RouteTable& routes" OR
        NOT web_route_response_stream_dispatch MATCHES
            "const RouteTable& routes" OR
-       NOT web_route_websocket_session MATCHES "const RouteTable& routes")
+       NOT web_route_http1_websocket MATCHES "const RouteTable& routes")
         boundary_error("Web runtime bypasses the concrete RouteTable dispatch chain"
             "HTTP/2, response streaming, and WebSocket sessions must receive the startup-frozen RouteTable directly")
+    endif()
+    if(NOT web_route_http1_websocket MATCHES
+           "auto upgradeAndRun" OR
+       NOT web_route_http1_websocket MATCHES
+           "Context& context" OR
+       NOT web_route_http1_websocket MATCHES
+           "routes[.]dispatchWebSocket" OR
+       NOT web_route_http1_websocket MATCHES
+           "makeCallableRef<void, Context&>" OR
+       NOT web_route_http2_session MATCHES
+           "auto upgradeAndRun" OR
+       NOT web_route_http2_session MATCHES
+           "Context& context" OR
+       NOT web_route_http2_session MATCHES
+           "routes[.]dispatchWebSocket" OR
+       NOT web_route_http2_session MATCHES
+           "makeCallableRef<void, Context&>" OR
+       web_route_websocket_session MATCHES
+           "dispatchWebSocket|const RouteTable&")
+        boundary_error("WebSocket middleware no longer owns the upgrade boundary"
+            "HTTP/1 and HTTP/2 must dispatch middleware around a terminal upgrade/session action so short-circuit responses remain HTTP")
     endif()
     if(NOT web_controller_macros MATCHES
            "RuviaControllerAccess::addResponseStreamRoute" OR
@@ -1280,6 +1307,7 @@ if(EXISTS "${WEB_CONTEXT_CAPABILITIES}" AND
     endif()
     if(web_context_services MATCHES
            "${RULE_STALE_CONTEXT_CAPABILITY_SPLIT}" OR
+       web_context_services MATCHES "withWebSocket" OR
        web_context_header MATCHES
            "${RULE_STALE_CONTEXT_CAPABILITY_SPLIT}" OR
        web_context_internal MATCHES
@@ -1311,8 +1339,8 @@ if(EXISTS "${WEB_CONTEXT_CAPABILITIES}" AND
            "responseOutput_[.]webSocket[(][)]" OR
        NOT web_context_router_dispatch MATCHES
            "services[.]responseOutput[(][)][.]responseStream[(][)]" OR
-       NOT web_context_router_dispatch MATCHES
-           "services[.]responseOutput[(][)][.]webSocket[(][)]" OR
+       NOT web_context_internal MATCHES
+           "ContextResponseOutput::webSocket[(]webSocket[)]" OR
        NOT web_context_lazy_body_route MATCHES "withLazyRequestBody" OR
        NOT web_context_stream_body_route MATCHES
            "withStreamingRequestBody" OR
@@ -3837,7 +3865,7 @@ if(EXISTS "${HTTP_RESPONSE_STREAM_COMMIT_PLAN}" AND
     if(NOT web_route_table MATCHES
            "Task<std::optional<HttpResponse>> dispatchResponseStream" OR
        NOT web_route_table MATCHES
-           "Task<void> dispatchWebSocket" OR
+           "Task<std::optional<HttpResponse>> dispatchWebSocket" OR
        web_route_table MATCHES
            "StreamDispatchResult|StreamRouteHandled" OR
        NOT web_route_stream_dispatch_source MATCHES

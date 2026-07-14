@@ -4,7 +4,8 @@
 
 #include "ruvia/web/detail/websocket/HttpWebSocketConnection.h"
 #include "ruvia/core/detail/ConnectionScanner.h"
-#include "ruvia/web/detail/router/RouteTable.h"
+#include "ruvia/web/detail/http/ContextInternal.h"
+#include "ruvia/web/detail/CallableRef.h"
 #include "ruvia/web/detail/websocket/WebSocketInternal.h"
 #include "ruvia/core/Task.h"
 #include "ruvia/http/HttpRequest.h"
@@ -55,18 +56,15 @@ template <typename Transport>
 Task<void> runWebSocketSession(
     WebSocketConnection<Transport>& connection,
     ConnectionScanner::Entry& scannerEntry,
-    const RouteTable& routes,
-    const HttpRequest& request,
-    const ResolvedRoute& route,
-    RequestMemory& requestMemory,
-    ContextServices services) {
+    const CallableRef<void, Context&>& handler,
+    Context& context) {
     auto webSocket = makeWebSocketFacade(connection);
+    ContextAccess::bindWebSocket(context, webSocket);
 
     scannerEntry.setPhase(ConnectionScanner::Phase::kLongLived);
     std::exception_ptr exception;
     try {
-        co_await routes.dispatchWebSocket(
-            request, route, requestMemory, webSocket, services);
+        co_await handler(context);
     } catch (...) {
         exception = std::current_exception();
     }
