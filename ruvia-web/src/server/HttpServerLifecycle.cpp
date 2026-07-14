@@ -1,5 +1,7 @@
 #include "ruvia/web/detail/server/HttpServer.h"
 
+#include "ruvia/web/detail/server/HttpServerTlsVerify.h"
+
 #include <asio/co_spawn.hpp>
 #include <asio/detached.hpp>
 #include <asio/post.hpp>
@@ -312,15 +314,8 @@ void HttpServer::configureTlsContext() {
         usePrivateKeyFile(context, privateKeyFile);
         if (!options_.tls.verifyFile.empty()) {
             loadVerifyFile(context, options_.tls.verifyFile);
-            // verify_peer alone validates a presented client certificate but still
-            // admits a client that presents none. Add fail-if-no-peer-cert for
-            // mandatory mutual TLS so a missing certificate fails the handshake
-            // rather than silently arriving as an unauthenticated request.
-            auto verifyMode = asio::ssl::verify_peer;
-            if (options_.tls.requireClientCertificate) {
-                verifyMode |= asio::ssl::verify_fail_if_no_peer_cert;
-            }
-            context.set_verify_mode(verifyMode);
+            context.set_verify_mode(
+                httpServerTlsVerifyMode(options_.tls.requireClientCertificate));
         }
     };
 
