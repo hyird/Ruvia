@@ -51,6 +51,10 @@ static_assert(!HasAnyRvalueRouteResolutionBorrow<ruvia::detail::ResolvedRoute>);
 static_assert(!HasAnyRvalueRouteResolutionBorrow<RouteResolution>);
 static_assert(!HasAnyRvalueStreamDispatchBorrow<
     ruvia::detail::StreamDispatchResult>);
+static_assert(std::same_as<
+    decltype(std::declval<const ruvia::detail::StreamDispatchResult&>()
+                 .buffered()),
+    const ruvia::HttpResponse*>);
 static_assert(!std::default_initializable<RouteEndpoint>);
 static_assert(!std::copy_constructible<RouteEndpoint>);
 static_assert(std::move_constructible<RouteEndpoint>);

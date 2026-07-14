@@ -38,21 +38,6 @@ private:
     constexpr StreamRouteHandled() noexcept = default;
 };
 
-class StreamRouteBufferedResponse final {
-public:
-    [[nodiscard]] HttpResponse takeResponse() && noexcept {
-        return std::move(response_);
-    }
-
-private:
-    friend class StreamDispatchResult;
-
-    explicit StreamRouteBufferedResponse(HttpResponse response) noexcept
-        : response_(std::move(response)) {}
-
-    HttpResponse response_;
-};
-
 // A stream route either handled its output on the bound writer/WebSocket or owns
 // one buffered fallback response. No dummy HttpResponse exists in the handled
 // alternative, so middleware cannot create an outcome/response mismatch.
@@ -64,8 +49,7 @@ public:
 
     [[nodiscard]] static StreamDispatchResult makeBuffered(
         HttpResponse response) noexcept {
-        return StreamDispatchResult(
-            StreamRouteBufferedResponse(std::move(response)));
+        return StreamDispatchResult(std::move(response));
     }
 
     [[nodiscard]] const StreamRouteHandled* handled() const & noexcept {
@@ -73,22 +57,20 @@ public:
     }
     [[nodiscard]] const StreamRouteHandled* handled() const && = delete;
 
-    [[nodiscard]] const StreamRouteBufferedResponse*
-    buffered() const & noexcept {
-        return std::get_if<StreamRouteBufferedResponse>(&value_);
+    [[nodiscard]] const HttpResponse* buffered() const & noexcept {
+        return std::get_if<HttpResponse>(&value_);
     }
-    [[nodiscard]] const StreamRouteBufferedResponse*
-    buffered() const && = delete;
+    [[nodiscard]] const HttpResponse* buffered() const && = delete;
 
-    [[nodiscard]] StreamRouteBufferedResponse* buffered() & noexcept {
-        return std::get_if<StreamRouteBufferedResponse>(&value_);
+    [[nodiscard]] HttpResponse* buffered() & noexcept {
+        return std::get_if<HttpResponse>(&value_);
     }
-    [[nodiscard]] StreamRouteBufferedResponse* buffered() && = delete;
+    [[nodiscard]] HttpResponse* buffered() && = delete;
 
 private:
     using Value = std::variant<
         StreamRouteHandled,
-        StreamRouteBufferedResponse>;
+        HttpResponse>;
 
     template <typename Alternative>
     explicit StreamDispatchResult(Alternative alternative) noexcept

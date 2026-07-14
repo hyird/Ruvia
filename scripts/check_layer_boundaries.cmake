@@ -3842,10 +3842,10 @@ if(EXISTS "${HTTP_RESPONSE_STREAM_COMMIT_PLAN}" AND
 
     if(NOT web_route_stream_result MATCHES
            "StreamRouteHandled" OR
-       NOT web_route_stream_result MATCHES
+       web_route_stream_result MATCHES
            "StreamRouteBufferedResponse" OR
        NOT web_route_stream_result MATCHES
-           "std::variant" OR
+           "std::get_if<HttpResponse>" OR
        NOT web_route_stream_dispatch_source MATCHES
            "responseStreamOutput->writer[(][)][.]end[(][)]" OR
        NOT web_route_stream_dispatch_source MATCHES

@@ -1096,7 +1096,7 @@ static_assert(std::same_as<
 static_assert(std::same_as<
     decltype(std::declval<const ruvia::detail::StreamDispatchResult&>()
                  .buffered()),
-    const ruvia::detail::StreamRouteBufferedResponse*>);
+    const ruvia::HttpResponse*>);
 static_assert(!std::default_initializable<
     ruvia::detail::ResponseStreamDispatchResult>);
 static_assert(!HasLegacyStreamedPredicate<

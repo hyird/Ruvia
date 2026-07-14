@@ -636,7 +636,7 @@ EmptyStreamDispatchObservation dispatchEmptyStreamWith(
                 observation.handled = result.handled() != nullptr;
                 if (auto* buffered = result.buffered()) {
                     observation.buffered = true;
-                    auto response = std::move(*buffered).takeResponse();
+                    auto response = std::move(*buffered);
                     const auto body =
                         ruvia::detail::responseBody(response).bytes();
                     observation.bufferedBody.assign(

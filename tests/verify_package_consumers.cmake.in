@@ -2162,7 +2162,8 @@ if(_built_components_csv MATCHES "(^|,)web(,|$)")
        _installed_response_stream_state MATCHES "trailerFraming_" OR
        _installed_http1_stream_session MATCHES "responseStreamDispatched" OR
        NOT _installed_route_stream_result MATCHES "StreamRouteHandled" OR
-       NOT _installed_route_stream_result MATCHES "StreamRouteBufferedResponse" OR
+       _installed_route_stream_result MATCHES "StreamRouteBufferedResponse" OR
+       NOT _installed_route_stream_result MATCHES "std::get_if<HttpResponse>" OR
        NOT _installed_response_stream_dispatch MATCHES
            "ResponseStreamPeerAbortedBeforeCommit" OR
        NOT _installed_response_stream_dispatch MATCHES

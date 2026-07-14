@@ -323,7 +323,7 @@ Task<ResponseStreamDispatchResult> dispatchResponseStreamWith(
                 "stream route returned no terminal alternative");
         }
         co_return ResponseStreamDispatchResult::makeBuffered(
-            std::move(*buffered).takeResponse());
+            std::move(*buffered));
     } catch (...) {
         exception = std::current_exception();
     }
