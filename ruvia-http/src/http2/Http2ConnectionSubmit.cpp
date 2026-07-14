@@ -478,9 +478,9 @@ Http2StreamingResponseHeadSubmitResult Http2Connection::submitStreamingResponseH
         : Http2EndStream::kKeepOpen;
     if (headPlan->bodyPlan().bodySuppressed()) {
         stream->beginLocalContentForbidden();
-    } else if (const auto* explicitLength =
-                   headPlan->explicitContentLength()) {
-        stream->beginLocalContentKnownLength(explicitLength->value());
+    } else if (const auto contentLength =
+                   headPlan->streamingContentLength()) {
+        stream->beginLocalContentKnownLength(*contentLength);
     } else {
         stream->beginLocalContentUnbounded();
     }

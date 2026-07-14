@@ -284,7 +284,11 @@ if(NOT _installed_http_protocol_plan_range_text MATCHES
    NOT _installed_http_protocol_plan_h2_response_text MATCHES
        "HttpResponseBodyPlan bodyPlan[(][)] const noexcept" OR
    NOT _installed_http_protocol_plan_h2_response_text MATCHES
-       "forbiddenContentLength[(][)] const && = delete" OR
+       "streamingContentLength[(][)] const noexcept" OR
+   NOT _installed_http_protocol_plan_h2_response_text MATCHES
+       "is_trivially_copyable_v<Http2ResponseHeadPlan>" OR
+   NOT _installed_http_protocol_plan_h2_response_text MATCHES
+       "sizeof[(]Http2ResponseHeadPlan[)] <= 24" OR
    NOT _installed_http_protocol_plan_control_text MATCHES
        "http2[(][)] const && = delete" OR
    NOT _installed_http_protocol_plan_control_text MATCHES
@@ -3269,19 +3273,21 @@ file(READ "${_installed_http2_response_head_plan_path}"
 file(READ "${_installed_http2_response_headers_path}"
     _installed_http2_response_headers)
 if(NOT _installed_http2_response_head_plan MATCHES
-       "class Http2CanonicalResponseContentLength final" OR
-   NOT _installed_http2_response_head_plan MATCHES
-       "class Http2ExplicitResponseContentLength final" OR
-   NOT _installed_http2_response_head_plan MATCHES
-       "class Http2AbsentResponseContentLength final" OR
-   NOT _installed_http2_response_head_plan MATCHES
-       "class Http2ForbiddenResponseContentLength final" OR
-   NOT _installed_http2_response_head_plan MATCHES
        "class Http2ResponseHeadPlan final" OR
    NOT _installed_http2_response_head_plan MATCHES
        "HttpResponseBodyPlan bodyPlan[(][)] const noexcept" OR
    NOT _installed_http2_response_head_plan MATCHES
-       "using ContentLength = std::variant" OR
+       "std::optional<std::uint64_t>" OR
+   NOT _installed_http2_response_head_plan MATCHES
+       "contentLength[(][)] const noexcept" OR
+   NOT _installed_http2_response_head_plan MATCHES
+       "streamingContentLength[(][)] const noexcept" OR
+   NOT _installed_http2_response_head_plan MATCHES
+       "enum class ContentLengthMode : std::uint8_t" OR
+   NOT _installed_http2_response_head_plan MATCHES
+       "is_trivially_copyable_v<Http2ResponseHeadPlan>" OR
+   NOT _installed_http2_response_head_plan MATCHES
+       "sizeof[(]Http2ResponseHeadPlan[)] <= 24" OR
    NOT _installed_http2_response_head_plan MATCHES
        "class Http2ResponseHeadPlanResult final" OR
    NOT _installed_http2_response_head_plan MATCHES
@@ -3304,6 +3310,10 @@ if(NOT _installed_http2_response_head_plan MATCHES
        "plan[.]bodyPlan[(][)][.]responseStatus[(][)]" OR
    NOT _installed_http2_response_headers MATCHES
        "const Http2FinalResponseControl& control" OR
+   NOT _installed_http2_response_headers MATCHES
+       "plan[.]contentLength[(][)]" OR
+   _installed_http2_response_head_plan MATCHES
+       "Http2CanonicalResponseContentLength|Http2ExplicitResponseContentLength|Http2AbsentResponseContentLength|Http2ForbiddenResponseContentLength|using ContentLength = std::variant|canonicalContentLength[(]|explicitContentLength[(]|absentContentLength[(]|forbiddenContentLength[(]" OR
    _installed_http2_response_headers MATCHES
        "http2ResponseConnectionHeaderForbidden" OR
    _installed_http2_response_headers MATCHES

@@ -203,9 +203,8 @@ inline void appendHttp2ResponseHeaders(
     for (const auto& header : response.headers()) {
         const auto knownBit = responseHeaderKnownBit(header);
         if (knownBit == kResponseHeaderContentLength) {
-            // Content-Length is emitted only from the prepared plan below. This
-            // makes canonical buffered length, validated explicit metadata,
-            // streaming absence, and forbidden content mutually exclusive.
+            // Content-Length is emitted only from the prepared plan below, so
+            // HPACK cannot reinterpret raw application framing independently.
             continue;
         }
         appendHttp2EncodedResponseHeader(
@@ -233,10 +232,8 @@ inline void appendHttp2ResponseHeaders(
                 std::string_view(buffer.data(), static_cast<std::size_t>(ptr - buffer.data())));
         }
     };
-    if (const auto* canonical = plan.canonicalContentLength()) {
-        emitContentLength(canonical->value());
-    } else if (const auto* explicitLength = plan.explicitContentLength()) {
-        emitContentLength(explicitLength->value());
+    if (const auto contentLength = plan.contentLength()) {
+        emitContentLength(*contentLength);
     }
 }
 

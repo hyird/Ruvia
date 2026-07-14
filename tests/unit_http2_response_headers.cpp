@@ -3,6 +3,7 @@
 #include <concepts>
 #include <cstddef>
 #include <memory_resource>
+#include <optional>
 #include <span>
 #include <string>
 #include <string_view>
@@ -150,7 +151,7 @@ bool hasHeaderName(const Collector& headers, std::string_view name) {
 
 }  // namespace
 
-RUVIA_TEST(http2_response_head_content_length_plan_is_exclusive) {
+RUVIA_TEST(http2_response_head_content_length_plan_drives_execution) {
     HttpResponse buffered(std::pmr::get_default_resource());
     buffered.body("hello");
     const auto bufferedPlanResult =
@@ -164,17 +165,10 @@ RUVIA_TEST(http2_response_head_content_length_plan_is_exclusive) {
     if (bufferedPlan == nullptr) {
         return;
     }
-    const auto* canonicalLength = bufferedPlan->canonicalContentLength();
-    RUVIA_CHECK(canonicalLength != nullptr);
-    if (canonicalLength == nullptr) {
-        return;
-    }
     RUVIA_CHECK_EQ(
-        canonicalLength->value(),
-        std::uint64_t{5});
-    RUVIA_CHECK(bufferedPlan->explicitContentLength() == nullptr);
-    RUVIA_CHECK(bufferedPlan->absentContentLength() == nullptr);
-    RUVIA_CHECK(bufferedPlan->forbiddenContentLength() == nullptr);
+        bufferedPlan->contentLength(),
+        std::optional<std::uint64_t>{5});
+    RUVIA_CHECK(!bufferedPlan->streamingContentLength().has_value());
 
     HttpResponse streaming(std::pmr::get_default_resource());
     const auto streamingBodyPlan = ruvia::detail::httpResponseBodyPlan(
@@ -189,10 +183,8 @@ RUVIA_TEST(http2_response_head_content_length_plan_is_exclusive) {
     if (streamingPlan == nullptr) {
         return;
     }
-    RUVIA_CHECK(streamingPlan->canonicalContentLength() == nullptr);
-    RUVIA_CHECK(streamingPlan->explicitContentLength() == nullptr);
-    RUVIA_CHECK(streamingPlan->absentContentLength() != nullptr);
-    RUVIA_CHECK(streamingPlan->forbiddenContentLength() == nullptr);
+    RUVIA_CHECK(!streamingPlan->contentLength().has_value());
+    RUVIA_CHECK(!streamingPlan->streamingContentLength().has_value());
 
     streaming.header("Content-Length", "0005");
     const auto explicitPlanResult =
@@ -204,17 +196,12 @@ RUVIA_TEST(http2_response_head_content_length_plan_is_exclusive) {
     if (explicitPlan == nullptr) {
         return;
     }
-    RUVIA_CHECK(explicitPlan->canonicalContentLength() == nullptr);
-    const auto* explicitLength = explicitPlan->explicitContentLength();
-    RUVIA_CHECK(explicitLength != nullptr);
-    if (explicitLength == nullptr) {
-        return;
-    }
     RUVIA_CHECK_EQ(
-        explicitLength->value(),
-        std::uint64_t{5});
-    RUVIA_CHECK(explicitPlan->absentContentLength() == nullptr);
-    RUVIA_CHECK(explicitPlan->forbiddenContentLength() == nullptr);
+        explicitPlan->contentLength(),
+        std::optional<std::uint64_t>{5});
+    RUVIA_CHECK_EQ(
+        explicitPlan->streamingContentLength(),
+        std::optional<std::uint64_t>{5});
 
     HttpResponse noContent(std::pmr::get_default_resource());
     noContent.status(204);
@@ -230,10 +217,8 @@ RUVIA_TEST(http2_response_head_content_length_plan_is_exclusive) {
     if (forbiddenPlan == nullptr) {
         return;
     }
-    RUVIA_CHECK(forbiddenPlan->canonicalContentLength() == nullptr);
-    RUVIA_CHECK(forbiddenPlan->explicitContentLength() == nullptr);
-    RUVIA_CHECK(forbiddenPlan->absentContentLength() == nullptr);
-    RUVIA_CHECK(forbiddenPlan->forbiddenContentLength() != nullptr);
+    RUVIA_CHECK(!forbiddenPlan->contentLength().has_value());
+    RUVIA_CHECK(!forbiddenPlan->streamingContentLength().has_value());
 
     const auto connectPlanResult =
         ruvia::detail::http2ConnectResponseHeadPlan(
@@ -248,7 +233,8 @@ RUVIA_TEST(http2_response_head_content_length_plan_is_exclusive) {
     RUVIA_CHECK(
         connectPlan->bodyPlan().contentSemantics() ==
         ruvia::detail::HttpResponseContentSemantics::kConnectTunnel);
-    RUVIA_CHECK(connectPlan->forbiddenContentLength() != nullptr);
+    RUVIA_CHECK(!connectPlan->contentLength().has_value());
+    RUVIA_CHECK(!connectPlan->streamingContentLength().has_value());
 
     const auto invalidConnectPlan =
         ruvia::detail::http2ConnectResponseHeadPlan(streamingBodyPlan);

@@ -803,21 +803,12 @@ concept HasUncheckedPreparedHttp1StreamExtraction = requires(T&& result) {
 };
 
 template <typename T>
-concept HasHttp2ResponseHeadContentLengthAlternatives = requires(
+concept HasHttp2ResponseHeadExecutionPlan = requires(
     const T& plan) {
-    { plan.canonicalContentLength() } -> std::same_as<const
-        ruvia::detail::Http2CanonicalResponseContentLength*>;
-    { plan.explicitContentLength() } -> std::same_as<const
-        ruvia::detail::Http2ExplicitResponseContentLength*>;
-    { plan.absentContentLength() } -> std::same_as<const
-        ruvia::detail::Http2AbsentResponseContentLength*>;
-    { plan.forbiddenContentLength() } -> std::same_as<const
-        ruvia::detail::Http2ForbiddenResponseContentLength*>;
-};
-
-template <typename T>
-concept HasHttp2ResponseContentLengthValue = requires(const T& length) {
-    { length.value() } -> std::same_as<std::uint64_t>;
+    { plan.contentLength() } ->
+        std::same_as<std::optional<std::uint64_t>>;
+    { plan.streamingContentLength() } ->
+        std::same_as<std::optional<std::uint64_t>>;
 };
 
 template <typename T>
@@ -943,10 +934,6 @@ concept ExposesAnyRvalueHttpProtocolPlanBorrow =
     requires(T&& value) { std::move(value).closeDelimitedStream(); } ||
     requires(T&& value) { std::move(value).knownLengthContent(); } ||
     requires(T&& value) { std::move(value).streamingContent(); } ||
-    requires(T&& value) { std::move(value).canonicalContentLength(); } ||
-    requires(T&& value) { std::move(value).explicitContentLength(); } ||
-    requires(T&& value) { std::move(value).absentContentLength(); } ||
-    requires(T&& value) { std::move(value).forbiddenContentLength(); } ||
     requires(T&& value) { std::move(value).http1(); } ||
     requires(T&& value) { std::move(value).http2(); } ||
     requires(T&& value) { std::move(value).writePlan(); } ||
@@ -1371,21 +1358,15 @@ static_assert(!std::default_initializable<
 static_assert(!std::default_initializable<
     ruvia::detail::PreparedHttp1ResponseStreamResult>);
 
-static_assert(HasHttp2ResponseHeadContentLengthAlternatives<
+static_assert(HasHttp2ResponseHeadExecutionPlan<
     ruvia::detail::Http2ResponseHeadPlan>);
 static_assert(!std::default_initializable<
     ruvia::detail::Http2ResponseHeadPlan>);
+static_assert(std::is_trivially_copyable_v<
+    ruvia::detail::Http2ResponseHeadPlan>);
+static_assert(sizeof(ruvia::detail::Http2ResponseHeadPlan) <= 24);
 static_assert(!std::default_initializable<
     ruvia::detail::Http2ResponseHeadPlanResult>);
-static_assert(HasHttp2ResponseContentLengthValue<
-    ruvia::detail::Http2CanonicalResponseContentLength>);
-static_assert(HasHttp2ResponseContentLengthValue<
-    ruvia::detail::Http2ExplicitResponseContentLength>);
-static_assert(!HasHttp2ResponseContentLengthValue<
-    ruvia::detail::Http2AbsentResponseContentLength>);
-static_assert(!HasHttp2ResponseContentLengthValue<
-    ruvia::detail::Http2ForbiddenResponseContentLength>);
-
 static_assert(HasHttp2RequestContentAlternatives<
     ruvia::detail::Http2RequestContent>);
 static_assert(!HasStaleHttp2ContentMode<
@@ -3252,11 +3233,9 @@ int main() {
     const auto* h2BufferedHead = h2BufferedHeadResult.plan();
     if (h2BufferedHead == nullptr ||
         h2BufferedHeadResult.failure() != nullptr ||
-        h2BufferedHead->canonicalContentLength() == nullptr ||
-        h2BufferedHead->canonicalContentLength()->value() != 4 ||
-        h2BufferedHead->explicitContentLength() != nullptr ||
-        h2BufferedHead->absentContentLength() != nullptr ||
-        h2BufferedHead->forbiddenContentLength() != nullptr) {
+        h2BufferedHead->contentLength() !=
+            std::optional<std::uint64_t>{4} ||
+        h2BufferedHead->streamingContentLength().has_value()) {
         return 42;
     }
 
@@ -3272,11 +3251,10 @@ int main() {
     const auto* h2StreamingHead = h2StreamingHeadResult.plan();
     if (h2StreamingHead == nullptr ||
         h2StreamingHeadResult.failure() != nullptr ||
-        h2StreamingHead->canonicalContentLength() != nullptr ||
-        h2StreamingHead->explicitContentLength() == nullptr ||
-        h2StreamingHead->explicitContentLength()->value() != 4 ||
-        h2StreamingHead->absentContentLength() != nullptr ||
-        h2StreamingHead->forbiddenContentLength() != nullptr) {
+        h2StreamingHead->contentLength() !=
+            std::optional<std::uint64_t>{4} ||
+        h2StreamingHead->streamingContentLength() !=
+            std::optional<std::uint64_t>{4}) {
         return 43;
     }
 

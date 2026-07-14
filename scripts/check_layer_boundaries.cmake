@@ -4759,16 +4759,13 @@ else()
     read_http2_connection_implementation(http2_response_head_connection)
     set(http2_response_head_missing)
     foreach(http2_head_probe IN ITEMS
-            "class Http2CanonicalResponseContentLength final"
-            "class Http2ExplicitResponseContentLength final"
-            "class Http2AbsentResponseContentLength final"
-            "class Http2ForbiddenResponseContentLength final"
             "class Http2ResponseHeadPlan final"
-            "using ContentLength = std::variant"
-            "std::get_if<Http2CanonicalResponseContentLength>"
-            "std::get_if<Http2ExplicitResponseContentLength>"
-            "std::get_if<Http2AbsentResponseContentLength>"
-            "std::get_if<Http2ForbiddenResponseContentLength>"
+            "std::optional<std::uint64_t>"
+            "contentLength[(][)] const noexcept"
+            "streamingContentLength[(][)] const noexcept"
+            "enum class ContentLengthMode : std::uint8_t"
+            "is_trivially_copyable_v<Http2ResponseHeadPlan>"
+            "sizeof[(]Http2ResponseHeadPlan[)] <= 24"
             "class Http2ResponseHeadPlanResult final"
             "std::get_if<Http2ResponseHeadPlan>"
             "HttpResponseBodyPlan bodyPlan_"
@@ -4783,8 +4780,7 @@ else()
     foreach(http2_encoder_probe IN ITEMS
             "const Http2ResponseHeadPlan& plan"
             "knownBit == kResponseHeaderContentLength"
-            "plan[.]canonicalContentLength[(][)]"
-            "plan[.]explicitContentLength[(][)]")
+            "plan[.]contentLength[(][)]")
         if(NOT http2_response_head_encoder MATCHES
                "${http2_encoder_probe}")
             list(APPEND http2_response_head_missing
@@ -4795,14 +4791,16 @@ else()
             "http2BufferedResponseHeadPlan"
             "http2StreamingResponseHeadPlan"
             "http2ConnectResponseHeadPlan"
-            "headPlan->explicitContentLength[(][)]")
+            "headPlan->streamingContentLength[(][)]")
         if(NOT http2_response_head_connection MATCHES
                "${http2_connection_probe}")
             list(APPEND http2_response_head_missing
                 "connection:${http2_connection_probe}")
         endif()
     endforeach()
-    if(http2_response_head_encoder MATCHES
+    if(http2_response_head_plan MATCHES
+           "Http2CanonicalResponseContentLength|Http2ExplicitResponseContentLength|Http2AbsentResponseContentLength|Http2ForbiddenResponseContentLength|using ContentLength = std::variant|canonicalContentLength[(]|explicitContentLength[(]|absentContentLength[(]|forbiddenContentLength[(]" OR
+       http2_response_head_encoder MATCHES
            "Http2ExplicitContentLengthStatus|http2ExplicitResponseContentLength|emitAutoContentLength|std::uint64_t[ 	]+autoContentLength" OR
        http2_response_head_connection MATCHES
            "Http2ExplicitContentLengthStatus|http2ExplicitResponseContentLength|emitAutoContentLength")
@@ -4812,7 +4810,7 @@ else()
         string(JOIN ", " http2_response_head_missing_text
             ${http2_response_head_missing})
         boundary_error("HTTP/2 response-head Content-Length escaped its exclusive plan"
-            "canonical, explicit, absent, and forbidden ownership must be exclusive; HPACK and DATA accounting consume the same plan; missing ${http2_response_head_missing_text}")
+            "HPACK field emission and streaming DATA accounting must consume the same direct execution plan without marker variants; missing ${http2_response_head_missing_text}")
     endif()
 endif()
 set(HTTP_STATUS_HEADER
@@ -5262,7 +5260,7 @@ if(EXISTS "${HTTP2_RESPONSE_HEAD_PLAN_TEST}" AND
     file(READ "${HTTP_PACKAGE_CONSUMER}"
         http2_response_head_package_test)
     if(NOT http2_response_head_plan_test MATCHES
-           "http2_response_head_content_length_plan_is_exclusive" OR
+           "http2_response_head_content_length_plan_drives_execution" OR
        NOT http2_response_head_plan_test MATCHES
            "http2_response_headers_canonicalize_valid_explicit_content_length_once" OR
        NOT http2_response_head_plan_test MATCHES
@@ -5272,9 +5270,7 @@ if(EXISTS "${HTTP2_RESPONSE_HEAD_PLAN_TEST}" AND
        NOT http2_response_head_connection_test MATCHES
            "http2_connection_streaming_content_length_finish_and_trailers_are_exact" OR
        NOT http2_response_head_package_test MATCHES
-           "HasHttp2ResponseHeadContentLengthAlternatives" OR
-       NOT http2_response_head_package_test MATCHES
-           "HasHttp2ResponseContentLengthValue" OR
+           "HasHttp2ResponseHeadExecutionPlan" OR
        NOT http2_response_head_package_test MATCHES
            "!std::default_initializable<[ \t\r\n]*ruvia::detail::Http2ResponseHeadPlan>" OR
        NOT http2_response_head_package_test MATCHES
@@ -5292,7 +5288,7 @@ if(EXISTS "${HTTP_RESPONSE_HEAD_SOURCE}" AND EXISTS "${HTTP2_RESPONSE_HEADERS}")
     file(READ "${HTTP_RESPONSE_HEAD_SOURCE}" http_response_head_source)
     file(READ "${HTTP2_RESPONSE_HEADERS}" http2_response_headers)
     if(NOT http_response_head_source MATCHES "canonicalContentLength" OR
-       NOT http2_response_headers MATCHES "canonicalContentLength")
+       NOT http2_response_headers MATCHES "plan[.]contentLength[(][)]")
         boundary_error("205 zero-length canonicalization is incomplete across protocols"
             "HTTP/1 and HTTP/2 writers must replace application framing with length zero")
     endif()
@@ -9772,9 +9768,13 @@ if(EXISTS "${HTTP_PROTOCOL_PLAN_RANGE}" AND
        NOT http_protocol_plan_h2_request MATCHES
            "streamingContent[(][)] const && = delete" OR
        NOT http_protocol_plan_h2_response MATCHES
-           "canonicalContentLength[(][)] const [&] noexcept" OR
+           "contentLength[(][)] const noexcept" OR
        NOT http_protocol_plan_h2_response MATCHES
-           "forbiddenContentLength[(][)] const && = delete" OR
+           "streamingContentLength[(][)] const noexcept" OR
+       NOT http_protocol_plan_h2_response MATCHES
+           "is_trivially_copyable_v<Http2ResponseHeadPlan>" OR
+       NOT http_protocol_plan_h2_response MATCHES
+           "sizeof[(]Http2ResponseHeadPlan[)] <= 24" OR
        NOT http_protocol_plan_h2_response MATCHES
            "HttpResponseBodyPlan bodyPlan[(][)] const noexcept" OR
        NOT http_protocol_plan_control MATCHES
