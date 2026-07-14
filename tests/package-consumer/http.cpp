@@ -779,7 +779,7 @@ concept HasStaleTopLevelUpgradeProtocols = requires(const T& plan) {
 template <typename T>
 concept HasHttp1FinalCommitAlternatives = requires(const T& result) {
     { result.committed() } -> std::same_as<const
-        ruvia::detail::Http1FinalResponseCommit*>;
+        ruvia::detail::Http1ServerConnectionPlan*>;
     { result.failure() } -> std::same_as<const
         ruvia::detail::Http1FinalResponseCommitFailure*>;
 };
@@ -1368,8 +1368,6 @@ static_assert(HasHttp1FinalCommitAlternatives<
     ruvia::detail::Http1FinalResponseCommitResult>);
 static_assert(HasPreparedHttp1StreamAlternatives<
     ruvia::detail::PreparedHttp1ResponseStreamResult>);
-static_assert(!std::default_initializable<
-    ruvia::detail::Http1FinalResponseCommit>);
 static_assert(!std::default_initializable<
     ruvia::detail::Http1FinalResponseCommitFailure>);
 static_assert(!std::default_initializable<

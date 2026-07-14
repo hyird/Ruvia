@@ -42,7 +42,7 @@ namespace ruvia::detail {
     if (const auto* failure = result.failure()) {
         throwHttp1FinalResponseCommitFailure(failure->error());
     }
-    return result.committed()->connectionPlan();
+    return *result.committed();
 }
 
 // Sets Retry-After to the rate-limit window rounded up to whole seconds (min 1).

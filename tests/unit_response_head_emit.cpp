@@ -1,5 +1,6 @@
 #include "test_harness.h"
 
+#include <concepts>
 #include <cstddef>
 #include <memory_resource>
 #include <optional>
@@ -19,12 +20,19 @@ namespace {
 using ruvia::HttpResponse;
 using ruvia::HttpKnownMethod;
 using ruvia::detail::Http1ResponseHeadPlan;
+using ruvia::detail::Http1FinalResponseCommitResult;
+using ruvia::detail::Http1ServerConnectionPlan;
 using ruvia::detail::ResponseHeadBuffer;
 using ruvia::detail::appendResponseHead;
 using ruvia::detail::http1BufferedResponsePlan;
 using ruvia::detail::http1ChunkedResponseStreamHeadPlan;
 using ruvia::detail::http1CloseDelimitedResponseStreamHeadPlan;
 using ruvia::detail::httpResponseBodyPlan;
+
+static_assert(std::same_as<
+    decltype(std::declval<
+        const Http1FinalResponseCommitResult&>().committed()),
+    const Http1ServerConnectionPlan*>);
 
 ruvia::detail::Http1ServerConnectionPlan connectionPlanFor(
     ruvia::HttpProtocolVersion protocolVersion) {
@@ -95,7 +103,7 @@ ruvia::detail::Http1ServerConnectionPlan commitResponse(
     if (result.failure() != nullptr || result.committed() == nullptr) {
         throw std::logic_error("expected successful HTTP/1 final response commit");
     }
-    return result.committed()->connectionPlan();
+    return *result.committed();
 }
 
 ruvia::detail::PreparedHttp1ResponseStream prepareStream(

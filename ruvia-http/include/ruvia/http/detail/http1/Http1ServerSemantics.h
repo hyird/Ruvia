@@ -120,22 +120,6 @@ inline void http1MarkConnectionClose(
 
 class Http1FinalResponseCommitResult;
 
-class Http1FinalResponseCommit final {
-public:
-    [[nodiscard]] Http1ServerConnectionPlan connectionPlan() const noexcept {
-        return connectionPlan_;
-    }
-
-private:
-    friend class Http1FinalResponseCommitResult;
-
-    explicit Http1FinalResponseCommit(
-        Http1ServerConnectionPlan connectionPlan) noexcept
-        : connectionPlan_(connectionPlan) {}
-
-    Http1ServerConnectionPlan connectionPlan_;
-};
-
 class Http1FinalResponseCommitFailure final {
 public:
     [[nodiscard]] HttpFinalResponseControlPlanError error() const noexcept {
@@ -152,15 +136,18 @@ private:
     HttpFinalResponseControlPlanError error_;
 };
 
-// A final response commit either owns the authoritative connection contract or
-// one typed message failure. Validation completes before Connection is mutated,
-// so callers cannot observe a half-committed response after a protocol failure.
+// A final response commit directly owns the authoritative connection contract
+// or one typed message failure. Validation completes before Connection is
+// mutated, so callers cannot observe a half-committed response after a protocol
+// failure or unwrap a second success container.
 class Http1FinalResponseCommitResult final {
 public:
-    [[nodiscard]] const Http1FinalResponseCommit* committed() const & noexcept {
-        return std::get_if<Http1FinalResponseCommit>(&value_);
+    [[nodiscard]] const Http1ServerConnectionPlan*
+    committed() const & noexcept {
+        return std::get_if<Http1ServerConnectionPlan>(&value_);
     }
-    [[nodiscard]] const Http1FinalResponseCommit* committed() const && = delete;
+    [[nodiscard]] const Http1ServerConnectionPlan*
+    committed() const && = delete;
 
     [[nodiscard]] const Http1FinalResponseCommitFailure*
     failure() const & noexcept {
@@ -174,7 +161,7 @@ private:
         HttpResponse&, Http1ServerConnectionPlan);
 
     using Value = std::variant<
-        Http1FinalResponseCommit,
+        Http1ServerConnectionPlan,
         Http1FinalResponseCommitFailure>;
 
     template <typename Alternative>
@@ -183,8 +170,7 @@ private:
 
     [[nodiscard]] static Http1FinalResponseCommitResult committed(
         Http1ServerConnectionPlan connectionPlan) noexcept {
-        return Http1FinalResponseCommitResult(
-            Http1FinalResponseCommit(connectionPlan));
+        return Http1FinalResponseCommitResult(connectionPlan);
     }
 
     [[nodiscard]] static Http1FinalResponseCommitResult failure(
@@ -377,8 +363,7 @@ prepareHttp1ResponseStreamHead(
     if (const auto* failure = commitResult.failure()) {
         return PreparedHttp1ResponseStreamResult(*failure);
     }
-    const auto connectionPlan =
-        commitResult.committed()->connectionPlan();
+    const auto connectionPlan = *commitResult.committed();
     auto head = prepareResponseStreamHead(
         std::move(response), kind, std::move(commitPlan));
     const auto responseHeadPlan =

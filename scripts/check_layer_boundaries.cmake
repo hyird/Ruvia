@@ -7049,14 +7049,19 @@ if(EXISTS "${HTTP1_SERVER_SEMANTICS}")
     if(NOT http1_server_semantics MATCHES "Http1RequestBodyConsumption" OR
        NOT http1_server_semantics MATCHES "Http1ServerConnectionPlan requestConnectionPlan" OR
        NOT http1_server_semantics MATCHES "Http1ServerClosePolicy closePolicy" OR
-       NOT http1_server_semantics MATCHES "class Http1FinalResponseCommit final" OR
        NOT http1_server_semantics MATCHES "class Http1FinalResponseCommitFailure final" OR
        NOT http1_server_semantics MATCHES "class Http1FinalResponseCommitResult final" OR
+       NOT http1_server_semantics MATCHES
+           "std::variant<[ \t\r\n]*Http1ServerConnectionPlan,[ \t\r\n]*Http1FinalResponseCommitFailure>" OR
+       NOT http1_server_semantics MATCHES
+           "std::get_if<Http1ServerConnectionPlan>" OR
        NOT http1_server_semantics MATCHES "class PreparedHttp1ResponseStreamResult final" OR
        NOT http1_server_semantics MATCHES "http1CommitFinalResponse" OR
        NOT http1_server_semantics MATCHES "std::nullopt" OR
        NOT http1_server_semantics MATCHES "bodyPlan\\.bodySuppressed\\(\\)" OR
-       NOT http1_server_semantics MATCHES "plan[.]protocolVersion[(][)]")
+       NOT http1_server_semantics MATCHES "plan[.]protocolVersion[(][)]" OR
+       http1_server_semantics MATCHES
+           "class Http1FinalResponseCommit final|committed[(][)]->connectionPlan[(][)]")
         boundary_error("HTTP/1 connection lifecycle lost its commit-time typed plan"
             "request version, shared final-control result, runtime policy, response body semantics, status-line bytes, and socket disposition must share one typed path")
     endif()
