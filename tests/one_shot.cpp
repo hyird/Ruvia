@@ -8,12 +8,22 @@
 #include <asio/io_context.hpp>
 
 #include <chrono>
+#include <concepts>
 #include <memory>
 #include <type_traits>
+#include <utility>
+
+template <typename T>
+concept HasAnyRvalueWorkerWaitAccessor =
+    requires(T&& result) { std::move(result).value(); } ||
+    requires(T&& result) { std::move(result).closed(); } ||
+    requires(T&& result) { std::move(result).workerStopping(); } ||
+    requires(T&& result) { std::move(result).timedOut(); };
 
 static_assert(!std::is_default_constructible_v<ruvia::OneShotReceiver<int>>);
 static_assert(std::is_move_constructible_v<ruvia::OneShotReceiver<int>>);
 static_assert(!std::is_move_assignable_v<ruvia::OneShotReceiver<int>>);
+static_assert(!HasAnyRvalueWorkerWaitAccessor<ruvia::WorkerWaitResult<int>>);
 
 namespace {
 

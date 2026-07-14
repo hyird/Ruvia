@@ -44,28 +44,33 @@ private:
 template <typename T>
 class WorkerWaitResult final {
 public:
-    [[nodiscard]] const T* value() const noexcept {
+    [[nodiscard]] const T* value() const & noexcept {
         const auto* result =
             std::get_if<detail::WorkerWaitValue<T>>(&result_);
         return result == nullptr ? nullptr : &result->value_;
     }
+    [[nodiscard]] const T* value() const && = delete;
 
-    [[nodiscard]] T* value() noexcept {
+    [[nodiscard]] T* value() & noexcept {
         auto* result = std::get_if<detail::WorkerWaitValue<T>>(&result_);
         return result == nullptr ? nullptr : &result->value_;
     }
+    [[nodiscard]] T* value() && = delete;
 
-    [[nodiscard]] const WorkerWaitClosed* closed() const noexcept {
+    [[nodiscard]] const WorkerWaitClosed* closed() const & noexcept {
         return std::get_if<WorkerWaitClosed>(&result_);
     }
+    [[nodiscard]] const WorkerWaitClosed* closed() const && = delete;
 
-    [[nodiscard]] const WorkerWaitStopping* workerStopping() const noexcept {
+    [[nodiscard]] const WorkerWaitStopping* workerStopping() const & noexcept {
         return std::get_if<WorkerWaitStopping>(&result_);
     }
+    [[nodiscard]] const WorkerWaitStopping* workerStopping() const && = delete;
 
-    [[nodiscard]] const WorkerWaitTimedOut* timedOut() const noexcept {
+    [[nodiscard]] const WorkerWaitTimedOut* timedOut() const & noexcept {
         return std::get_if<WorkerWaitTimedOut>(&result_);
     }
+    [[nodiscard]] const WorkerWaitTimedOut* timedOut() const && = delete;
 
 private:
     friend struct detail::WorkerWaitResultAccess;

@@ -24,8 +24,15 @@ using Clock = std::chrono::steady_clock;
 // A far-future deadline so a waiter never expires during a resume/close test.
 constexpr Clock::time_point kNever = Clock::time_point::max();
 
+template <typename T>
+concept HasAnyRvaluePoolWaiterAccessor =
+    requires(T&& result) { std::move(result).acquired(); } ||
+    requires(T&& result) { std::move(result).timedOut(); } ||
+    requires(T&& result) { std::move(result).closed(); };
+
 static_assert(!std::default_initializable<PoolWaiter>);
 static_assert(!std::default_initializable<PoolWaiterResult>);
+static_assert(!HasAnyRvaluePoolWaiterAccessor<PoolWaiterResult>);
 static_assert(std::same_as<
     decltype(std::declval<const PoolWaiterResult&>().acquired()),
     const PoolWaiterAcquired*>);

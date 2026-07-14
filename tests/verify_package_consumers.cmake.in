@@ -35,6 +35,30 @@ if(_built_components_csv MATCHES "(^|,)core(,|$)" AND
 endif()
 
 if(_built_components_csv MATCHES "(^|,)core(,|$)")
+    set(_installed_worker_wait_result_path
+        "${_install_prefix}/include/ruvia/core/WorkerWaitResult.h")
+    if(NOT EXISTS "${_installed_worker_wait_result_path}")
+        message(FATAL_ERROR
+            "installed core package is missing WorkerWaitResult")
+    endif()
+    file(READ "${_installed_worker_wait_result_path}"
+        _installed_worker_wait_result)
+    if(NOT _installed_worker_wait_result MATCHES
+           "value[(][)] const [&] noexcept" OR
+       NOT _installed_worker_wait_result MATCHES
+           "value[(][)] [&] noexcept" OR
+       NOT _installed_worker_wait_result MATCHES
+           "value[(][)] const && = delete" OR
+       NOT _installed_worker_wait_result MATCHES
+           "value[(][)] && = delete" OR
+       NOT _installed_worker_wait_result MATCHES
+           "closed[(][)] const [&] noexcept" OR
+       NOT _installed_worker_wait_result MATCHES
+           "timedOut[(][)] const && = delete")
+        message(FATAL_ERROR
+            "installed WorkerWaitResult exposes alternatives from temporary owners")
+    endif()
+
     set(_installed_pool_waiter_path
         "${_install_prefix}/include/ruvia/core/detail/PoolWaiterQueue.h")
     if(NOT EXISTS "${_installed_pool_waiter_path}")
@@ -57,6 +81,14 @@ if(_built_components_csv MATCHES "(^|,)core(,|$)")
            "std::get_if<PoolWaiterTimedOut>" OR
        NOT _installed_pool_waiter MATCHES
            "std::get_if<PoolWaiterClosed>" OR
+       NOT _installed_pool_waiter MATCHES
+           "acquired[(][)] const [&] noexcept" OR
+       NOT _installed_pool_waiter MATCHES
+           "timedOut[(][)] const [&] noexcept" OR
+       NOT _installed_pool_waiter MATCHES
+           "closed[(][)] const [&] noexcept" OR
+       NOT _installed_pool_waiter MATCHES
+           "acquired[(][)] const && = delete" OR
        NOT _installed_pool_waiter MATCHES
            "std::optional<PoolWaiterResult> result_" OR
        NOT _installed_pool_waiter MATCHES

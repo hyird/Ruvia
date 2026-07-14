@@ -45,17 +45,26 @@ private:
 // slot index; timeout and pool closure can never expose a plausible sentinel.
 class PoolWaiterResult final {
 public:
-    [[nodiscard]] constexpr const PoolWaiterAcquired* acquired() const noexcept {
+    [[nodiscard]] constexpr const PoolWaiterAcquired*
+    acquired() const & noexcept {
         return std::get_if<PoolWaiterAcquired>(&value_);
     }
+    [[nodiscard]] constexpr const PoolWaiterAcquired*
+    acquired() const && = delete;
 
-    [[nodiscard]] constexpr const PoolWaiterTimedOut* timedOut() const noexcept {
+    [[nodiscard]] constexpr const PoolWaiterTimedOut*
+    timedOut() const & noexcept {
         return std::get_if<PoolWaiterTimedOut>(&value_);
     }
+    [[nodiscard]] constexpr const PoolWaiterTimedOut*
+    timedOut() const && = delete;
 
-    [[nodiscard]] constexpr const PoolWaiterClosed* closed() const noexcept {
+    [[nodiscard]] constexpr const PoolWaiterClosed*
+    closed() const & noexcept {
         return std::get_if<PoolWaiterClosed>(&value_);
     }
+    [[nodiscard]] constexpr const PoolWaiterClosed*
+    closed() const && = delete;
 
 private:
     friend class PoolWaiter;

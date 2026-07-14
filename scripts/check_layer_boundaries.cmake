@@ -158,6 +158,8 @@ file(READ "${RUVIA_ROOT}/ruvia-core/include/ruvia/core/OneShot.h"
     core_one_shot_contract)
 file(READ "${RUVIA_ROOT}/ruvia-core/include/ruvia/core/Task.h"
     core_task_contract)
+file(READ "${RUVIA_ROOT}/ruvia-core/include/ruvia/core/WorkerWaitResult.h"
+    core_worker_wait_result_contract)
 file(READ "${RUVIA_ROOT}/tests/package-consumer/core.cpp"
     core_linear_receiver_package_contract)
 if(NOT core_channel_contract MATCHES
@@ -180,6 +182,23 @@ if(NOT core_channel_contract MATCHES
        "!std::assignable_from<ruvia::Task<int>&, ruvia::Task<int>&&>")
     boundary_error("core linear async owners regained invalid default states or destructive reassignment"
         "receivers must be factory-created and Task/receiver handles must be move-construct-only so assignment cannot orphan endpoints or destroy live coroutine frames")
+endif()
+if(NOT core_worker_wait_result_contract MATCHES
+       "value[(][)] const [&] noexcept" OR
+   NOT core_worker_wait_result_contract MATCHES
+       "value[(][)] [&] noexcept" OR
+   NOT core_worker_wait_result_contract MATCHES
+       "value[(][)] const && = delete" OR
+   NOT core_worker_wait_result_contract MATCHES
+       "value[(][)] && = delete" OR
+   NOT core_worker_wait_result_contract MATCHES
+       "closed[(][)] const [&] noexcept" OR
+   NOT core_worker_wait_result_contract MATCHES
+       "workerStopping[(][)] const && = delete" OR
+   NOT core_linear_receiver_package_contract MATCHES
+       "HasAnyRvalueWorkerWaitAccessor")
+    boundary_error("worker wait results expose alternatives from temporary owners"
+        "Channel and OneShot completion payload pointers must remain valid only while their lvalue WorkerWaitResult owner lives")
 endif()
 
 function(check_files_no_lower_match label regex)
@@ -8000,6 +8019,14 @@ if(EXISTS "${POOL_WAITER_HEADER}" AND
        NOT pool_waiter_header MATCHES "std::get_if<PoolWaiterTimedOut>" OR
        NOT pool_waiter_header MATCHES "std::get_if<PoolWaiterClosed>" OR
        NOT pool_waiter_header MATCHES
+           "acquired[(][)] const [&] noexcept" OR
+       NOT pool_waiter_header MATCHES
+           "timedOut[(][)] const [&] noexcept" OR
+       NOT pool_waiter_header MATCHES
+           "closed[(][)] const [&] noexcept" OR
+       NOT pool_waiter_header MATCHES
+           "acquired[(][)] const && = delete" OR
+       NOT pool_waiter_header MATCHES
            "std::optional<PoolWaiterResult> result_" OR
        NOT pool_waiter_header MATCHES "bool await_ready[(][)] const noexcept" OR
        NOT pool_waiter_header MATCHES
@@ -8042,6 +8069,8 @@ if(EXISTS "${POOL_WAITER_HEADER}" AND
            "AcceptsPoolCloseSentinel" OR
        NOT pool_waiter_package_consumer MATCHES
            "HasParallelPoolWaiterResultAccessor" OR
+       NOT pool_waiter_package_consumer MATCHES
+           "HasAnyRvaluePoolWaiterAccessor" OR
        NOT pool_waiter_package_consumer MATCHES
            "PoolWaiterResult")
         boundary_error("typed pool waiter completion is insufficiently pinned"

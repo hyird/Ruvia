@@ -69,7 +69,22 @@ concept HasPublicWorkerWaitFields = requires(T& result) {
     result.value;
 };
 
+template <typename T>
+concept HasAnyRvalueWorkerWaitAccessor =
+    requires(T&& result) { std::move(result).value(); } ||
+    requires(T&& result) { std::move(result).closed(); } ||
+    requires(T&& result) { std::move(result).workerStopping(); } ||
+    requires(T&& result) { std::move(result).timedOut(); };
+
+template <typename T>
+concept HasAnyRvaluePoolWaiterAccessor =
+    requires(T&& result) { std::move(result).acquired(); } ||
+    requires(T&& result) { std::move(result).timedOut(); } ||
+    requires(T&& result) { std::move(result).closed(); };
+
 static_assert(!HasPublicWorkerWaitFields<ruvia::WorkerWaitResult<int>>);
+static_assert(!HasAnyRvalueWorkerWaitAccessor<
+    ruvia::WorkerWaitResult<int>>);
 static_assert(!std::default_initializable<ruvia::WorkerWaitResult<int>>);
 static_assert(!std::default_initializable<ruvia::WorkerWaitClosed>);
 static_assert(!std::default_initializable<ruvia::WorkerWaitStopping>);
@@ -144,6 +159,8 @@ static_assert(std::same_as<
                  .closed()),
     const ruvia::detail::PoolWaiterClosed*>);
 static_assert(!HasPoolWaiterIndex<ruvia::detail::PoolWaiterResult>);
+static_assert(!HasAnyRvaluePoolWaiterAccessor<
+    ruvia::detail::PoolWaiterResult>);
 static_assert(HasPoolWaiterIndex<ruvia::detail::PoolWaiterAcquired>);
 static_assert(!HasPoolWaiterIndex<ruvia::detail::PoolWaiterTimedOut>);
 static_assert(!HasPoolWaiterIndex<ruvia::detail::PoolWaiterClosed>);
