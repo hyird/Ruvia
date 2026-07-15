@@ -3295,7 +3295,7 @@ if(_built_components_csv MATCHES "(^|,)web(,|$)")
        NOT _installed_route_http2_session MATCHES
            "ConnectionScanner::Entry& scannerEntry" OR
        NOT _installed_route_http2_session MATCHES
-           "const bool& workerRunning" OR
+           "const HttpServerWorkerState& workerState" OR
        NOT _installed_route_http2_session MATCHES
            "Http2SansIoSessionContext session" OR
        NOT _installed_route_http2_session MATCHES

@@ -34,13 +34,13 @@ Task<void> HttpServer::acceptLoop() {
             // Transient: fd exhaustion, ECONNABORTED, EINTR, ENOBUFS, ENOMEM,
             // etc. A single bad accept must not stop the worker forever.
             co_await sleepFor(workerHandle_, std::chrono::milliseconds(50));
-            if (!workerRunning_) {
+            if (!httpServerWorkerRunning(workerState_)) {
                 co_return;
             }
             continue;
         }
 
-        if (!workerRunning_) {
+        if (!httpServerWorkerRunning(workerState_)) {
             closeSocket(socket);
             co_return;
         }

@@ -70,6 +70,7 @@
 #include "ruvia/http/HttpResponse.h"
 #include "ruvia/http/detail/PmrString.h"
 #include "ruvia/web/detail/server/HttpServerOptions.h"
+#include "ruvia/web/detail/server/HttpServerWorkerState.h"
 #include "ruvia/core/memory/MemoryPool.h"
 
 namespace ruvia::detail {
@@ -83,11 +84,11 @@ public:
         ContextServices services,
         const HttpServerOptions& options,
         ConnectionScanner::Entry& scannerEntry,
-        const bool& workerRunning) noexcept
+        const HttpServerWorkerState& workerState) noexcept
         : services_(services),
           options_(&options),
           scannerEntry_(&scannerEntry),
-          workerRunning_(&workerRunning) {}
+          workerState_(&workerState) {}
 
     [[nodiscard]] const HttpServerOptions& options() const noexcept {
         return *options_;
@@ -98,7 +99,7 @@ public:
     }
 
     [[nodiscard]] bool workerRunning() const noexcept {
-        return *workerRunning_;
+        return httpServerWorkerRunning(*workerState_);
     }
 
     [[nodiscard]] const ContextServices& services() const noexcept {
@@ -109,7 +110,7 @@ private:
     ContextServices services_;
     const HttpServerOptions* options_;
     ConnectionScanner::Entry* scannerEntry_;
-    const bool* workerRunning_;
+    const HttpServerWorkerState* workerState_;
 };
 
 [[nodiscard]] inline ConnectionScanner::Phase http2SansIoInactivityPhase(

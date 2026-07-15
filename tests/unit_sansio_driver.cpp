@@ -192,19 +192,19 @@ RUVIA_TEST(sansio_driver_h2_inactivity_phase_counts_predispatch_runtime) {
 RUVIA_TEST(sansio_driver_h2_session_context_owns_complete_wiring) {
     ruvia::detail::HttpServerOptions options;
     ruvia::detail::ConnectionScanner::Entry scannerEntry;
-    bool workerRunning = true;
+    auto workerState = ruvia::detail::HttpServerWorkerState::kRunning;
     const ruvia::detail::Http2SansIoSessionContext session(
         ruvia::detail::ContextServices{}.withTlsTransport(
             "192.0.2.1",
             "CN=test-client"),
         options,
         scannerEntry,
-        workerRunning);
+        workerState);
 
     RUVIA_CHECK(&session.options() == &options);
     RUVIA_CHECK(&session.scannerEntry() == &scannerEntry);
     RUVIA_CHECK(session.workerRunning());
-    workerRunning = false;
+    workerState = ruvia::detail::HttpServerWorkerState::kDraining;
     RUVIA_CHECK(!session.workerRunning());
     const auto& services = session.services();
     RUVIA_CHECK(

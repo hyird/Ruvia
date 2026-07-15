@@ -1,11 +1,9 @@
 #pragma once
 
-#include <atomic>
 #include <asio/io_context.hpp>
 #include <asio/ip/tcp.hpp>
 #include <asio/ssl/context.hpp>
 #include <condition_variable>
-#include <cstdint>
 #include <exception>
 #include <memory>
 #include <memory_resource>
@@ -21,6 +19,7 @@
 #include "ruvia/core/Task.h"
 #include "ruvia/core/WorkerHandle.h"
 #include "ruvia/core/detail/WorkerTimer.h"
+#include "ruvia/core/detail/RuntimeLifecycle.h"
 #include "ruvia/core/memory/MemoryPool.h"
 #include "ruvia/core/detail/ConnectionScanner.h"
 #include "ruvia/web/WebWorker.h"
@@ -29,6 +28,7 @@
 #include "ruvia/web/detail/server/HttpConnectionState.h"
 #include "ruvia/web/detail/server/RateLimiter.h"
 #include "ruvia/web/detail/server/HttpServerOptions.h"
+#include "ruvia/web/detail/server/HttpServerWorkerState.h"
 #include "ruvia/web/detail/db/DbInternal.h"
 #include "ruvia/web/detail/redis/RedisInternal.h"
 #include "ruvia/web/detail/server/RateLimitDecision.h"
@@ -68,13 +68,6 @@ public:
     [[nodiscard]] WorkerHandle worker() const noexcept { return workerHandle_; }
     [[nodiscard]] WebWorkerHandle webWorker() const;
 private:
-    enum class LifecycleState : std::uint8_t {
-        kFresh,
-        kRunning,
-        kStopping,
-        kStopped,
-    };
-
     // RAII notify for the graceful-drain path, held across a session's whole
     // coroutine body. A nested type (rather than a session-local struct) gives it
     // linkage so it does not taint the coroutine frame with a no-linkage subobject,
@@ -87,6 +80,7 @@ private:
     void configureAcceptor();
     void configureTlsContext();
     void stopOnContext(bool honorGracePeriod = true) noexcept;
+    void finishStopOnContext() noexcept;
     void maybeFinishDrain() noexcept;
     void forceCloseAll() noexcept;
     void failWorker(std::exception_ptr failure) noexcept;
@@ -136,13 +130,10 @@ private:
     ConnectionWorkSetPool workSetPool_;
     std::size_t activeConnectionCount_{0};
 
-    // lifecycleState_ is touched by external start/stop callers. All request
-    // coroutines use workerRunning_, which is mutated only on this io_context.
-    std::atomic<LifecycleState> lifecycleState_{LifecycleState::kFresh};
-    bool workerRunning_{false};
-    // True while stopOnContext() is holding the force-close behind drainTimer_.
-    // Mutated only on this io_context.
-    bool drainPending_{false};
+    // lifecycle_ is touched by external start/stop callers. Request coroutines
+    // observe workerState_, which is mutated only on this io_context.
+    RuntimeLifecycle lifecycle_;
+    HttpServerWorkerState workerState_{HttpServerWorkerState::kFresh};
     std::jthread workerThread_;
 
     std::mutex startupMutex_;

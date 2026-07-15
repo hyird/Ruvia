@@ -1358,7 +1358,7 @@ static_assert(std::is_nothrow_constructible_v<
     ruvia::detail::ContextServices,
     const ruvia::detail::HttpServerOptions&,
     ruvia::detail::ConnectionScanner::Entry&,
-    const bool&>);
+    const ruvia::detail::HttpServerWorkerState&>);
 static_assert(std::is_same_v<
     decltype(std::declval<const ruvia::ConnInfo&>().plain()),
     const ruvia::PlainConnectionTransport*>);

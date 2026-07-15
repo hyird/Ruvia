@@ -693,12 +693,18 @@ set(WEB_HTTP2_SESSION
     "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/server/Http2SansIoSession.h")
 set(WEB_CLEARTEXT_HTTP2_SESSION
     "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/server/HttpServerCleartextHttp2.h")
+set(WEB_HTTP_SERVER_WORKER_STATE
+    "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/server/HttpServerWorkerState.h")
+set(WEB_HTTP_SERVER_SHUTDOWN_TEST
+    "${RUVIA_ROOT}/tests/server_shutdown_drain.cpp")
 foreach(worker_lifecycle_file IN ITEMS
         "${WEB_HTTP_SERVER_LIFECYCLE}"
         "${WEB_HTTP_SERVER_ACCEPT}"
         "${WEB_HTTP1_STREAM_SESSION}"
         "${WEB_HTTP2_SESSION}"
-        "${WEB_CLEARTEXT_HTTP2_SESSION}")
+        "${WEB_CLEARTEXT_HTTP2_SESSION}"
+        "${WEB_HTTP_SERVER_WORKER_STATE}"
+        "${WEB_HTTP_SERVER_SHUTDOWN_TEST}")
     if(NOT EXISTS "${worker_lifecycle_file}")
         file(RELATIVE_PATH relative "${RUVIA_ROOT}" "${worker_lifecycle_file}")
         boundary_error("Worker-local shutdown chain is incomplete"
@@ -726,14 +732,24 @@ endif()
 if(EXISTS "${WEB_HTTP_SERVER}" AND EXISTS "${WEB_HTTP_SERVER_LIFECYCLE}")
     file(READ "${WEB_HTTP_SERVER}" web_http_server_lifecycle_model)
     file(READ "${WEB_HTTP_SERVER_LIFECYCLE}" web_http_server_lifecycle)
-    if(NOT web_http_server_lifecycle_model MATCHES "enum class LifecycleState" OR
+    file(READ "${WEB_HTTP_SERVER_WORKER_STATE}" web_http_server_worker_state)
+    file(READ "${WEB_HTTP_SERVER_SHUTDOWN_TEST}" web_http_server_shutdown_test)
+    if(NOT web_http_server_lifecycle_model MATCHES
+           "RuntimeLifecycle[ \t]+lifecycle_" OR
        NOT web_http_server_lifecycle_model MATCHES
-           "std::atomic[<]LifecycleState[>][ \t]+lifecycleState_" OR
-       NOT web_http_server_lifecycle_model MATCHES "bool[ \t]+workerRunning_" OR
+           "HttpServerWorkerState[ \t]+workerState_" OR
+       web_http_server_lifecycle_model MATCHES
+           "bool[ \t]+(workerRunning_|drainPending_)" OR
+       NOT web_http_server_worker_state MATCHES
+           "kRunning,[ \t\r\n]+kDraining,[ \t\r\n]+kStopped" OR
        NOT web_http_server_lifecycle MATCHES "asio::post[(]ioContext_" OR
-       NOT web_http_server_lifecycle MATCHES "workerRunning_[ \t]*=[ \t]*false")
+       NOT web_http_server_lifecycle MATCHES
+           "HttpServer::~HttpServer[(][)][ \t\r\n]*[{][ \t\r\n]*stop[(][)][;][ \t\r\n]*try[ \t\r\n]*[{][ \t\r\n]*join[(][)]" OR
+       NOT web_http_server_lifecycle MATCHES "finishStopOnContext[(][)]" OR
+       NOT web_http_server_shutdown_test MATCHES
+           "worker failed during graceful stop")
         boundary_error("HttpServer shutdown bypasses its worker mailbox"
-            "external lifecycle state must post shutdown; request sessions use workerRunning_ only")
+            "external callers must use the core monotonic lifecycle and post shutdown; the worker must distinguish running, draining, and stopped so failure can override an already-posted graceful stop")
     endif()
 endif()
 file(GLOB_RECURSE EDGE_REFERENCE_SOURCE LIST_DIRECTORIES FALSE
@@ -7319,7 +7335,7 @@ else()
        NOT web_http2_session MATCHES
            "ConnectionScanner::Entry& scannerEntry" OR
        NOT web_http2_session MATCHES
-           "const bool& workerRunning" OR
+           "const HttpServerWorkerState& workerState" OR
        NOT web_http2_session MATCHES
            "const ContextServices& services[(][)]" OR
        NOT web_http2_session MATCHES

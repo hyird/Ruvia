@@ -208,16 +208,17 @@ HttpServer::HttpServer(
 
 HttpServer::~HttpServer() {
     stop();
+    try {
+        join();
+    } catch (...) {
+    }
 }
 
 void HttpServer::start() {
-    auto expected = LifecycleState::kFresh;
-    if (!lifecycleState_.compare_exchange_strong(
-            expected,
-            LifecycleState::kRunning)) {
+    if (!lifecycle_.start()) {
         throw std::logic_error("http server worker cannot be restarted");
     }
-    workerRunning_ = true;
+    workerState_ = HttpServerWorkerState::kRunning;
 
     try {
         resetStartupState();
@@ -230,22 +231,19 @@ void HttpServer::start() {
         workerThread_ = std::jthread([this] { runIoContext(); });
         waitForStartupReady();
     } catch (...) {
-        lifecycleState_.store(LifecycleState::kStopped, std::memory_order_relaxed);
+        (void)lifecycle_.requestStop();
         if (workerThread_.joinable()) {
             workerThread_.join();
         } else {
-            workerRunning_ = false;
             stopOnContext(/*honorGracePeriod=*/false);
         }
+        lifecycle_.completeStop();
         throw;
     }
 }
 
 void HttpServer::stop() {
-    auto expected = LifecycleState::kRunning;
-    if (!lifecycleState_.compare_exchange_strong(
-            expected,
-            LifecycleState::kStopping)) {
+    if (!lifecycle_.requestStop()) {
         return;
     }
 
@@ -258,6 +256,7 @@ void HttpServer::join() {
     if (workerThread_.joinable()) {
         workerThread_.join();
     }
+    lifecycle_.completeStop();
     std::exception_ptr failure;
     {
         std::lock_guard lock(startupMutex_);
@@ -373,15 +372,23 @@ void HttpServer::configureTlsContext() {
 }
 
 void HttpServer::stopOnContext(bool honorGracePeriod) noexcept {
+    if (!httpServerWorkerRunning(workerState_)) {
+        if (!honorGracePeriod &&
+            workerState_ == HttpServerWorkerState::kDraining) {
+            finishStopOnContext();
+        }
+        return;
+    }
+
+    workerState_ = HttpServerWorkerState::kDraining;
     webWorkerDispatch_->close();
     workerDispatcher_->close();
-    workerRunning_ = false;
     std::error_code ignored;
     acceptor_.cancel(ignored);
     acceptor_.close(ignored);
     connectionScanner_.stop();
 
-    // workerRunning_ is now false, so sessions close after their current
+    // workerState_ is now draining, so sessions close after their current
     // request. With a grace period, hold the force-close for that long so
     // in-flight requests can finish; otherwise close immediately. A teardown
     // triggered by a startup failure or a worker crash (honorGracePeriod=false)
@@ -389,30 +396,42 @@ void HttpServer::stopOnContext(bool honorGracePeriod) noexcept {
     // only stall the failure report (and the worker join) for the full period.
     if (honorGracePeriod && options_.shutdownGracePeriod.count() > 0 &&
         (activeConnectionCount_ != 0 || webWorkerDispatch_->outstanding() != 0)) {
-        drainPending_ = true;
-        drainTimer_ = WorkerHandleAccess::scheduleTimer(
-            workerHandle_,
-            std::chrono::steady_clock::now() + options_.shutdownGracePeriod,
-            [this](WorkerTimerOutcome outcome) {
-            if (drainPending_ && outcome == WorkerTimerOutcome::kExpired) {
-                drainPending_ = false;
-                forceCloseAll();
-            }
-        });
-        return;
+        try {
+            drainTimer_ = WorkerHandleAccess::scheduleTimer(
+                workerHandle_,
+                std::chrono::steady_clock::now() + options_.shutdownGracePeriod,
+                [this](WorkerTimerOutcome outcome) {
+                    if (workerState_ == HttpServerWorkerState::kDraining &&
+                        outcome == WorkerTimerOutcome::kExpired) {
+                        finishStopOnContext();
+                    }
+                });
+            return;
+        } catch (...) {
+            // Shutdown must remain noexcept even if the one-shot drain timer
+            // cannot allocate or the timer queue is already stopping.
+        }
     }
-    forceCloseAll();
+    finishStopOnContext();
 }
 
 void HttpServer::maybeFinishDrain() noexcept {
-    if (!drainPending_ || activeConnectionCount_ != 0 ||
+    if (workerState_ != HttpServerWorkerState::kDraining ||
+        activeConnectionCount_ != 0 ||
         webWorkerDispatch_->outstanding() != 0) {
         return;
     }
     // Every session finished before the grace period elapsed. Release the
     // timer now: a pending wait would hold the io_context (and the worker
     // join) for the full remaining period.
-    drainPending_ = false;
+    finishStopOnContext();
+}
+
+void HttpServer::finishStopOnContext() noexcept {
+    if (workerState_ == HttpServerWorkerState::kStopped) {
+        return;
+    }
+    workerState_ = HttpServerWorkerState::kStopped;
     drainTimer_.cancel();
     forceCloseAll();
 }
@@ -442,7 +461,7 @@ void HttpServer::failWorker(std::exception_ptr failure) noexcept {
         }
         workerException_ = failure;
     }
-    lifecycleState_.store(LifecycleState::kStopping, std::memory_order_relaxed);
+    (void)lifecycle_.requestStop();
     options_.workerFailure.notify(failure);
     stopOnContext(/*honorGracePeriod=*/false);
 }
@@ -475,11 +494,13 @@ void HttpServer::runIoContext() noexcept {
         const auto failure = std::current_exception();
         completeStartup(failure);
         failWorker(failure);
+        lifecycle_.completeStop();
+        workerState_ = HttpServerWorkerState::kStopped;
         return;
     }
 
-    lifecycleState_.store(LifecycleState::kStopped, std::memory_order_relaxed);
-    workerRunning_ = false;
+    lifecycle_.completeStop();
+    workerState_ = HttpServerWorkerState::kStopped;
     completeStartup(std::make_exception_ptr(
         std::runtime_error("http server worker stopped before startup completed")));
 }

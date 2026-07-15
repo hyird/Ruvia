@@ -50,7 +50,7 @@ Task<void> HttpServer::handleStreamSession(
                     });
                 const auto idleEc = idleCompletion.errorCode();
                 const auto idleBytes = idleCompletion.result();
-                if (idleEc || !workerRunning_) {
+                if (idleEc || !httpServerWorkerRunning(workerState_)) {
                     co_return;
                 }
                 idleReadBytes = idleBytes;
@@ -105,7 +105,7 @@ Task<void> HttpServer::handleStreamSession(
                         baseRouteServices,
                         readBuffer,
                         usedBytes,
-                        workerRunning_);
+                        workerState_);
                     if (h2Result == CleartextHttp2DispatchResult::kSessionFinished) {
                         co_return;
                     }
@@ -447,7 +447,7 @@ Task<void> HttpServer::handleStreamSession(
 
         if (connectionPlan.disposition() ==
                 Http1ConnectionDisposition::kClose ||
-            !workerRunning_) {
+            !httpServerWorkerRunning(workerState_)) {
             co_return;
         }
         applyReusableHttp1RequestBufferCompletion(

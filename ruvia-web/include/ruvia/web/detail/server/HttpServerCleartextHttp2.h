@@ -92,7 +92,7 @@ Task<void> runHttp2ServerSession(
     const HttpServerOptions& options,
     ConnectionScanner::Entry& scannerEntry,
     ContextServices services,
-    const bool& workerRunning,
+    const HttpServerWorkerState& workerState,
     std::string_view initialBytes = {}) {
     (void)socket;  // the sans-I/O session needs only the (possibly TLS) stream
     co_await runHttp2SansIoSession(
@@ -103,7 +103,7 @@ Task<void> runHttp2ServerSession(
             services,
             options,
             scannerEntry,
-            workerRunning),
+            workerState),
         initialBytes);
 }
 
@@ -118,7 +118,7 @@ Task<CleartextHttp2DispatchResult> dispatchCleartextHttp2Preface(
     const ContextServices& services,
     std::pmr::string& readBuffer,
     std::size_t& usedBytes,
-    const bool& workerRunning) {
+    const HttpServerWorkerState& workerState) {
     const auto current = std::string_view(readBuffer.data(), usedBytes);
     switch (probeCleartextHttp2Preface(current, options.autoHttps.enabled)) {
     case CleartextHttp2Probe::kHttp1:
@@ -132,7 +132,7 @@ Task<CleartextHttp2DispatchResult> dispatchCleartextHttp2Preface(
             options,
             scannerEntry,
             services,
-            workerRunning,
+            workerState,
             current);
         co_return CleartextHttp2DispatchResult::kSessionFinished;
     case CleartextHttp2Probe::kNeedMorePreface: {

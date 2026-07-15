@@ -1,11 +1,15 @@
 // A configured shutdownGracePeriod must delay force-close only while sessions
 // are still draining. Case 1: stopping an idle server joins immediately.
 // Case 2: the force-close fires as soon as the last session ends, not after
-// the full grace period. Both cases fail by exceeding the generous bound.
+// the full grace period. Case 3: worker failure overrides an already-posted
+// graceful stop. Each case must finish within the generous bound.
 
+#include <atomic>
 #include <chrono>
 #include <cstdio>
+#include <future>
 #include <memory_resource>
+#include <stdexcept>
 #include <string_view>
 #include <thread>
 
@@ -94,6 +98,63 @@ int main() {
         if (std::chrono::steady_clock::now() - begin >= kJoinBound) {
             std::fputs("drained shutdown waited on the grace period\n", stderr);
             return 2;
+        }
+    }
+
+    {
+        // Case 3: a worker failure may race with the already-posted graceful
+        // stop. The forced failure path must make the later graceful callback
+        // a no-op instead of trying to arm a timer after timers were stopped.
+        ruvia::detail::RouteTable routes(resource);
+        ruvia::detail::HttpServer server(
+            asio::ip::tcp::endpoint(asio::ip::make_address("127.0.0.1"), 0),
+            routes,
+            {},
+            gracefulOptions());
+        server.start();
+
+        asio::io_context clientContext;
+        asio::ip::tcp::socket client(clientContext);
+        client.connect(server.localEndpoint());
+        constexpr std::string_view request =
+            "GET / HTTP/1.1\r\nHost: localhost\r\n\r\n";
+        asio::write(client, asio::buffer(request));
+        asio::streambuf response;
+        asio::read_until(client, response, "\r\n\r\n");
+
+        std::promise<void> workerEntered;
+        auto workerEnteredFuture = workerEntered.get_future();
+        std::atomic_bool releaseWorker{false};
+        if (server.webWorker().post(
+                [&](ruvia::WebWorkerContext&) -> ruvia::Task<void> {
+                    workerEntered.set_value();
+                    while (!releaseWorker.load(std::memory_order_acquire)) {
+                        std::this_thread::yield();
+                    }
+                    throw std::runtime_error("worker failed during graceful stop");
+                    co_return;
+                }) != ruvia::PostResult::kAccepted) {
+            return 3;
+        }
+
+        workerEnteredFuture.wait();
+        server.stop();
+        releaseWorker.store(true, std::memory_order_release);
+        const auto begin = std::chrono::steady_clock::now();
+        bool sawWorkerFailure = false;
+        try {
+            server.join();
+        } catch (const std::runtime_error& error) {
+            sawWorkerFailure = std::string_view(error.what()) ==
+                "worker failed during graceful stop";
+        }
+
+        std::error_code ignored;
+        client.close(ignored);
+        if (!sawWorkerFailure ||
+            std::chrono::steady_clock::now() - begin >= kJoinBound) {
+            std::fputs("worker failure did not override graceful shutdown\n", stderr);
+            return 4;
         }
     }
 

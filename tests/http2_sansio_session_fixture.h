@@ -18,12 +18,13 @@ public:
             services,
             options,
             scannerEntry,
-            workerRunning);
+            workerState);
     }
 
     detail::HttpServerOptions options;
     detail::ConnectionScanner::Entry scannerEntry;
-    bool workerRunning{true};
+    detail::HttpServerWorkerState workerState{
+        detail::HttpServerWorkerState::kRunning};
 };
 
 template <typename Stream>
