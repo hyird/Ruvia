@@ -523,6 +523,11 @@ concept HasTransferDecodeError = requires(const T& result) {
 };
 
 template <typename T>
+concept HasProtocolError = requires(const T& result) {
+    result.protocolError();
+};
+
+template <typename T>
 concept HasChunkScanError = requires(const T& result) {
     { result.error() } -> std::same_as<ruvia::detail::HttpChunkScanError>;
 };
@@ -2471,6 +2476,11 @@ static_assert(std::same_as<
     decltype(std::declval<const ruvia::detail::Http1ChunkDecodeResult&>()
         .failure()),
     const ruvia::detail::Http1ChunkDecodeFailure*>);
+static_assert(HasProtocolError<ruvia::detail::Http1ChunkDecodeFailure>);
+static_assert(std::same_as<
+    decltype(std::declval<const ruvia::detail::Http1ChunkDecodeFailure&>()
+        .protocolError()),
+    ruvia::HttpProtocolError>);
 static_assert(std::same_as<
     decltype(std::declval<ruvia::detail::TransferCodingDecoder&>().decode(
         std::string_view{}, std::span<char>{})),
@@ -2495,8 +2505,14 @@ static_assert(HasTransferOutputBytes<
     ruvia::detail::TransferCodingDecodeOutput>);
 static_assert(!HasTransferOutputBytes<
     ruvia::detail::TransferCodingDecodeFailure>);
-static_assert(HasTransferDecodeError<
+static_assert(!HasTransferDecodeError<
     ruvia::detail::TransferCodingDecodeFailure>);
+static_assert(HasProtocolError<
+    ruvia::detail::TransferCodingDecodeFailure>);
+static_assert(std::same_as<
+    decltype(std::declval<const ruvia::detail::TransferCodingDecodeFailure&>()
+        .protocolError()),
+    std::optional<ruvia::HttpProtocolError>>);
 static_assert(std::same_as<
     decltype(ruvia::detail::scanHttpChunkedBody(std::string_view{})),
     ruvia::detail::HttpChunkScanResult>);
@@ -2997,7 +3013,7 @@ int main() {
     const auto* continueHead = continueResult.parsed();
     if (continueHead == nullptr ||
         continueHead->plan().informational() == nullptr ||
-        continueHead->response().protocolVersion() !=
+        continueHead->head().protocolVersion() !=
             ruvia::HttpProtocolVersion::kHttp11 ||
         continueHead->plan().requestContentSignal() !=
             ruvia::Http1ClientRequestContentSignal::kContinue) {

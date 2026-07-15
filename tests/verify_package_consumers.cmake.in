@@ -878,6 +878,10 @@ if(NOT _installed_transfer_decoder_contract MATCHES
    NOT _installed_transfer_decoder_contract MATCHES
        "class TransferCodingDecodeFailure final" OR
    NOT _installed_transfer_decoder_contract MATCHES
+       "std::optional<HttpProtocolError>" OR
+   NOT _installed_transfer_decoder_contract MATCHES
+       "protocolError[(][)] const noexcept" OR
+   NOT _installed_transfer_decoder_contract MATCHES
        "class TransferCodingDecodeResult final" OR
    NOT _installed_transfer_decoder_contract MATCHES
        "TransferCodingDecodeResult decode" OR
@@ -886,7 +890,7 @@ if(NOT _installed_transfer_decoder_contract MATCHES
    NOT _installed_transfer_decoder_contract MATCHES
        "TransferCodingDecodeResult finishInput" OR
    _installed_transfer_decoder_contract MATCHES
-       "TransferCodingFinishStatus|bool[ \t]+(ended_|failed_)|TransferCodingDecodeError[ \t]+failure_" OR
+       "TransferCodingFinishStatus|bool[ \t]+(ended_|failed_)|TransferCodingDecodeError[ \t]+failure_|TransferCodingDecodeError[ \t]+error[(][)] const" OR
    _installed_transfer_decoder_contract MATCHES
        "decodeAppend[(]|produce[(]|setInput[(]|finished[(]|empty[(]")
     message(FATAL_ERROR
@@ -955,6 +959,8 @@ if(NOT _installed_http1_chunk_decoder_content MATCHES
    NOT _installed_http1_chunk_decoder_content MATCHES
        "class Http1ChunkDecodeFailure final" OR
    NOT _installed_http1_chunk_decoder_content MATCHES
+       "HttpProtocolError protocolError[(][)] const noexcept" OR
+   NOT _installed_http1_chunk_decoder_content MATCHES
        "using Value = std::variant" OR
    NOT _installed_http1_chunk_decoder_content MATCHES
        "using State = std::variant<ProgressState, Http1ChunkDecodeError>" OR
@@ -967,7 +973,7 @@ if(NOT _installed_http1_chunk_decoder_content MATCHES
    NOT _installed_http1_chunk_decoder_content MATCHES
        "std::get_if<Http1ChunkDecodeFailure>" OR
    _installed_http1_chunk_decoder_content MATCHES
-       "State::kFailed|Http1ChunkDecodeError[ \t]+failure_" OR
+       "State::kFailed|Http1ChunkDecodeError[ \t]+failure_|Http1ChunkDecodeError[ \t]+error[(][)] const" OR
    _installed_http1_chunk_decoder_content MATCHES
        "class Http1ChunkDecoder")
     message(FATAL_ERROR "installed HTTP/1 streaming chunk decoder lost its discriminated result contract")

@@ -17,7 +17,6 @@ namespace {
 using ruvia::ProtocolByteLimit;
 using ruvia::detail::Http1ChunkDecodeBodyChunk;
 using ruvia::detail::Http1ChunkDecodeComplete;
-using ruvia::detail::Http1ChunkDecodeError;
 using ruvia::detail::Http1ChunkDecodeFailure;
 
 static_assert(std::same_as<
@@ -51,6 +50,11 @@ concept HasAnyRvalueHttp1ChunkDecodeAccessor =
     requires(T&& result) { std::move(result).complete(); } ||
     requires(T&& result) { std::move(result).failure(); };
 
+template <typename T>
+concept HasRawDecodeError = requires(const T& result) {
+    result.error();
+};
+
 static_assert(std::same_as<
     decltype(std::declval<Http1ChunkedBodyDecoder&>().decode({})),
     Http1ChunkDecodeResult>);
@@ -65,6 +69,10 @@ static_assert(!HasChunkBytes<Http1ChunkDecodeNeedMore>);
 static_assert(HasChunkBytes<Http1ChunkDecodeBodyChunk>);
 static_assert(!HasChunkBytes<Http1ChunkDecodeComplete>);
 static_assert(!HasChunkBytes<Http1ChunkDecodeFailure>);
+static_assert(!HasRawDecodeError<Http1ChunkDecodeFailure>);
+static_assert(std::same_as<
+    decltype(std::declval<const Http1ChunkDecodeFailure&>().protocolError()),
+    ruvia::HttpProtocolError>);
 
 }  // namespace
 
@@ -98,19 +106,18 @@ RUVIA_TEST(chunked_body_decoder_reports_typed_size_and_limit_failures) {
     Http1ChunkedBodyDecoder invalid(ProtocolByteLimit::unlimited());
     const auto invalidResult = invalid.decode("xyz\r\n");
     RUVIA_CHECK(invalidResult.failure() != nullptr);
-    RUVIA_CHECK(invalidResult.failure()->error() ==
-        Http1ChunkDecodeError::kInvalidFraming);
+    RUVIA_CHECK_EQ(invalidResult.failure()->protocolError().status(), 400);
+    RUVIA_CHECK_EQ(std::string_view(invalidResult.failure()->protocolError().what()),
+        std::string_view("invalid chunked request body"));
     const auto repeatedInvalid = invalid.decode("0\r\n\r\n");
     RUVIA_CHECK(repeatedInvalid.failure() != nullptr);
-    RUVIA_CHECK(repeatedInvalid.failure()->error() ==
-        Http1ChunkDecodeError::kInvalidFraming);
+    RUVIA_CHECK_EQ(repeatedInvalid.failure()->protocolError().status(), 400);
     RUVIA_CHECK_EQ(repeatedInvalid.consumedBytes(), std::size_t{0});
 
     Http1ChunkedBodyDecoder singleLimit(ProtocolByteLimit::limited(10));
     const auto singleLimitResult = singleLimit.decode("b\r\n");
     RUVIA_CHECK(singleLimitResult.failure() != nullptr);
-    RUVIA_CHECK(singleLimitResult.failure()->error() ==
-        Http1ChunkDecodeError::kBodyTooLarge);
+    RUVIA_CHECK_EQ(singleLimitResult.failure()->protocolError().status(), 413);
 
     Http1ChunkedBodyDecoder accumulated(ProtocolByteLimit::limited(10));
     const std::string_view wire = "8\r\n12345678\r\n5\r\nabcde\r\n0\r\n\r\n";
@@ -118,14 +125,12 @@ RUVIA_TEST(chunked_body_decoder_reports_typed_size_and_limit_failures) {
     RUVIA_CHECK(first.bodyChunk() != nullptr);
     const auto second = accumulated.decode(wire.substr(first.consumedBytes()));
     RUVIA_CHECK(second.failure() != nullptr);
-    RUVIA_CHECK(second.failure()->error() ==
-        Http1ChunkDecodeError::kBodyTooLarge);
+    RUVIA_CHECK_EQ(second.failure()->protocolError().status(), 413);
 
     Http1ChunkedBodyDecoder framing(ProtocolByteLimit::limited(4));
     const auto framingResult = framing.decode("0\r\n\r\n");
     RUVIA_CHECK(framingResult.failure() != nullptr);
-    RUVIA_CHECK(framingResult.failure()->error() ==
-        Http1ChunkDecodeError::kFramingTooLarge);
+    RUVIA_CHECK_EQ(framingResult.failure()->protocolError().status(), 413);
 }
 
 RUVIA_TEST(chunked_body_decoder_emits_zero_copy_chunks_and_preserves_pipeline) {
@@ -191,13 +196,11 @@ RUVIA_TEST(chunked_body_decoder_rejects_bad_delimiter_and_trailer) {
     Http1ChunkedBodyDecoder delimiter(ProtocolByteLimit::limited(1024));
     const auto badDelimiter = delimiter.decode("1\r\nxXY");
     RUVIA_CHECK(badDelimiter.failure() != nullptr);
-    RUVIA_CHECK(badDelimiter.failure()->error() ==
-        Http1ChunkDecodeError::kInvalidFraming);
+    RUVIA_CHECK_EQ(badDelimiter.failure()->protocolError().status(), 400);
 
     Http1ChunkedBodyDecoder trailer(ProtocolByteLimit::limited(1024));
     const auto badTrailer = trailer.decode(
         "0\r\nContent-Length: 1\r\n\r\n");
     RUVIA_CHECK(badTrailer.failure() != nullptr);
-    RUVIA_CHECK(badTrailer.failure()->error() ==
-        Http1ChunkDecodeError::kInvalidFraming);
+    RUVIA_CHECK_EQ(badTrailer.failure()->protocolError().status(), 400);
 }

@@ -269,9 +269,10 @@ private:
 // protocol-switch decision has been parsed.
 class PreparedHttp1ClientRequest final {
 public:
-    [[nodiscard]] constexpr std::string_view head() const noexcept {
+    [[nodiscard]] constexpr std::string_view head() const & noexcept {
         return head_;
     }
+    [[nodiscard]] constexpr std::string_view head() const && = delete;
 
     [[nodiscard]] constexpr const Http1ClientRequestContentPlan&
     contentPlan() const & noexcept {

@@ -1,11 +1,13 @@
 #pragma once
 
 #include "ruvia/http/detail/HttpTransferCoding.h"
+#include "ruvia/http/HttpProtocolError.h"
 #include "ruvia/http/ProtocolByteLimit.h"
 
 #include <cstddef>
 #include <cstdint>
 #include <memory_resource>
+#include <optional>
 #include <span>
 #include <string_view>
 #include <utility>
@@ -80,8 +82,19 @@ public:
         return consumedBytes_;
     }
 
-    [[nodiscard]] constexpr TransferCodingDecodeError error() const noexcept {
-        return error_;
+    [[nodiscard]] std::optional<HttpProtocolError>
+    protocolError() const noexcept {
+        switch (error_) {
+            case TransferCodingDecodeError::kInvalidContent:
+                return HttpProtocolError(
+                    400, "invalid transfer-coding body");
+            case TransferCodingDecodeError::kDecodedSizeExceeded:
+                return HttpProtocolError(
+                    413, "request body is too large");
+            case TransferCodingDecodeError::kDecoderFailure:
+                return std::nullopt;
+        }
+        return std::nullopt;
     }
 
 private:

@@ -55,7 +55,6 @@ using ruvia::detail::HttpServerExpectationAction;
 using ruvia::detail::HttpTransferCoding;
 using ruvia::detail::HttpTransferCodings;
 using ruvia::detail::TransferCodingDecoder;
-using ruvia::detail::TransferCodingDecodeError;
 using ruvia::detail::TransferCodingDecodeFailure;
 using ruvia::detail::TransferCodingDecodeNeedInput;
 using ruvia::detail::TransferCodingDecodeOutput;
@@ -82,6 +81,17 @@ concept HasAnyRvalueTransferCodingDecodeAccessor =
 static_assert(!HasAnyRvalueTransferCodingDecodeAccessor<
     TransferCodingDecodeResult>);
 
+template <typename T>
+concept HasRawTransferDecodeError = requires(const T& result) {
+    result.error();
+};
+
+static_assert(!HasRawTransferDecodeError<TransferCodingDecodeFailure>);
+static_assert(std::same_as<
+    decltype(std::declval<const TransferCodingDecodeFailure&>()
+        .protocolError()),
+    std::optional<ruvia::HttpProtocolError>>);
+
 std::string gzipCompress(std::string_view data) {
     z_stream stream{};
     if (deflateInit2(&stream, Z_BEST_COMPRESSION, Z_DEFLATED, 15 + 16, 8, Z_DEFAULT_STRATEGY) != Z_OK) {
@@ -102,7 +112,12 @@ std::string gzipCompress(std::string_view data) {
     return out;
 }
 
-std::optional<TransferCodingDecodeError> appendTransferDecoded(
+struct TransferDecodeObservation final {
+    bool failed{false};
+    std::optional<ruvia::HttpProtocolError> protocolError;
+};
+
+TransferDecodeObservation appendTransferDecoded(
     TransferCodingDecoder& decoder,
     std::string_view input,
     std::pmr::string& output) {
@@ -115,9 +130,9 @@ std::optional<TransferCodingDecodeError> appendTransferDecoded(
             continue;
         }
         if (const auto* failure = result.failure()) {
-            return failure->error();
+            return {true, failure->protocolError()};
         }
-        return std::nullopt;
+        return {};
     }
 }
 
@@ -750,7 +765,7 @@ RUVIA_TEST(transfer_coding_decoder_gzip_round_trip) {
     const std::string plain = "transfer-encoding gzip body content, repeated repeated repeated";
     const std::string gz = gzipCompress(plain);
     std::pmr::string output(resource);
-    RUVIA_CHECK(!appendTransferDecoded(decoder, gz, output).has_value());
+    RUVIA_CHECK(!appendTransferDecoded(decoder, gz, output).failed);
     const auto finishResult = decoder.finishInput();
     RUVIA_CHECK(finishResult.complete() != nullptr);
     RUVIA_CHECK_EQ(std::string_view(output.data(), output.size()), std::string_view(plain));
@@ -796,7 +811,7 @@ RUVIA_TEST(transfer_coded_chunked_request_plan_drives_decode_order) {
         }
         if (const auto* bodyChunk = result.bodyChunk()) {
             RUVIA_CHECK(!appendTransferDecoded(
-                transfer, bodyChunk->bytes(), output).has_value());
+                transfer, bodyChunk->bytes(), output).failed);
         } else if (result.complete() != nullptr) {
             complete = true;
         }
@@ -823,15 +838,14 @@ RUVIA_TEST(transfer_coding_decoder_rejects_bomb) {
     const std::string gz = gzipCompress(big);
     std::pmr::string output(resource);
     const auto error = appendTransferDecoded(decoder, gz, output);
-    RUVIA_CHECK(error.has_value());
-    RUVIA_CHECK(*error ==
-        TransferCodingDecodeError::kDecodedSizeExceeded);
+    RUVIA_CHECK(error.failed);
+    RUVIA_CHECK(error.protocolError.has_value());
+    RUVIA_CHECK_EQ(error.protocolError->status(), 413);
     const auto finish = decoder.finishInput();
     RUVIA_CHECK(finish.failure() != nullptr);
     if (finish.failure() != nullptr) {
         RUVIA_CHECK(
-            finish.failure()->error() ==
-            TransferCodingDecodeError::kDecodedSizeExceeded);
+            finish.failure()->protocolError()->status() == 413);
     }
 }
 
@@ -845,8 +859,8 @@ RUVIA_TEST(transfer_coding_decoder_reports_typed_wire_failures) {
         ProtocolByteLimit::limited(1024));
     const auto invalidResult = invalid.decode("not-gzip", window);
     RUVIA_CHECK(invalidResult.failure() != nullptr);
-    RUVIA_CHECK(invalidResult.failure()->error() ==
-        TransferCodingDecodeError::kInvalidContent);
+    RUVIA_CHECK_EQ(
+        invalidResult.failure()->protocolError()->status(), 400);
 
     std::string truncated = gzipCompress("truncated");
     truncated.resize(truncated.size() - 4);
@@ -856,20 +870,18 @@ RUVIA_TEST(transfer_coding_decoder_reports_typed_wire_failures) {
         ProtocolByteLimit::limited(1024));
     std::pmr::string ignored(resource);
     RUVIA_CHECK(!appendTransferDecoded(
-        incomplete, truncated, ignored).has_value());
+        incomplete, truncated, ignored).failed);
     const auto incompleteFinish = incomplete.finishInput();
     RUVIA_CHECK(incompleteFinish.failure() != nullptr);
     if (incompleteFinish.failure() != nullptr) {
         RUVIA_CHECK(
-            incompleteFinish.failure()->error() ==
-            TransferCodingDecodeError::kInvalidContent);
+            incompleteFinish.failure()->protocolError()->status() == 400);
     }
     const auto repeatedFinish = incomplete.finishInput();
     RUVIA_CHECK(repeatedFinish.failure() != nullptr);
     if (repeatedFinish.failure() != nullptr) {
         RUVIA_CHECK(
-            repeatedFinish.failure()->error() ==
-            TransferCodingDecodeError::kInvalidContent);
+            repeatedFinish.failure()->protocolError()->status() == 400);
     }
 
     std::string trailing = gzipCompress("complete");
@@ -880,7 +892,7 @@ RUVIA_TEST(transfer_coding_decoder_reports_typed_wire_failures) {
         ProtocolByteLimit::limited(1024));
     const auto trailingError = appendTransferDecoded(
         extra, trailing, ignored);
-    RUVIA_CHECK(trailingError.has_value());
-    RUVIA_CHECK(*trailingError ==
-        TransferCodingDecodeError::kInvalidContent);
+    RUVIA_CHECK(trailingError.failed);
+    RUVIA_CHECK(trailingError.protocolError.has_value());
+    RUVIA_CHECK_EQ(trailingError.protocolError->status(), 400);
 }

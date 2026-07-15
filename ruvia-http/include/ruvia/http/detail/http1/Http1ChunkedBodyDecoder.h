@@ -9,6 +9,7 @@
 #include <variant>
 
 #include "ruvia/http/HttpLimits.h"
+#include "ruvia/http/HttpProtocolError.h"
 #include "ruvia/http/ProtocolByteLimit.h"
 #include "ruvia/http/detail/parser/HttpChunkParser.h"
 
@@ -80,8 +81,17 @@ public:
         return consumedBytes_;
     }
 
-    [[nodiscard]] constexpr Http1ChunkDecodeError error() const noexcept {
-        return error_;
+    [[nodiscard]] HttpProtocolError protocolError() const noexcept {
+        switch (error_) {
+            case Http1ChunkDecodeError::kInvalidFraming:
+                return HttpProtocolError(400, "invalid chunked request body");
+            case Http1ChunkDecodeError::kBodyTooLarge:
+                return HttpProtocolError(413, "request body is too large");
+            case Http1ChunkDecodeError::kFramingTooLarge:
+                return HttpProtocolError(
+                    413, "request body framing is too large");
+        }
+        return HttpProtocolError(400, "invalid chunked request body");
     }
 
 private:

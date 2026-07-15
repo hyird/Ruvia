@@ -11,14 +11,9 @@ namespace ruvia::detail {
 }
 
 [[noreturn]] inline void throwTransferCodingDecodeFailure(
-    TransferCodingDecodeError error) {
-    switch (error) {
-        case TransferCodingDecodeError::kInvalidContent:
-            throw HttpProtocolError(400, "invalid transfer-coding body");
-        case TransferCodingDecodeError::kDecodedSizeExceeded:
-            throwRequestBodyTooLarge();
-        case TransferCodingDecodeError::kDecoderFailure:
-            throw std::runtime_error("transfer-coding decoder failure");
+    const TransferCodingDecodeFailure& failure) {
+    if (auto protocolError = failure.protocolError()) {
+        throw *protocolError;
     }
     throw std::runtime_error("transfer-coding decoder failure");
 }
@@ -155,7 +150,7 @@ void StreamBodyReader<Stream>::decodeTransferAppend(
         }
         target.resize(oldSize);
         if (const auto* failure = result.failure()) {
-            throwTransferCodingDecodeFailure(failure->error());
+            throwTransferCodingDecodeFailure(*failure);
         }
         if (result.complete() != nullptr) {
             return;

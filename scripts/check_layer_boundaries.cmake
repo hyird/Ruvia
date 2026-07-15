@@ -9884,10 +9884,13 @@ endif()
 
 set(HTTP1_CHUNK_WEB_DRIVER
     "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/body/HttpStreamBodyReaderChunked.inl")
+set(HTTP1_CHUNK_DECODER
+    "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/detail/http1/Http1ChunkedBodyDecoder.h")
 set(HTTP1_CHUNK_DECODER_TEST "${RUVIA_ROOT}/tests/unit_chunk_decoder.cpp")
 set(HTTP1_CHUNK_SCANNER_TEST "${RUVIA_ROOT}/tests/unit_http_parsing.cpp")
 set(HTTP1_CHUNK_PACKAGE_CONSUMER "${RUVIA_ROOT}/tests/package-consumer/http.cpp")
 foreach(http1_chunk_driver_contract IN ITEMS
+        "${HTTP1_CHUNK_DECODER}"
         "${HTTP1_CHUNK_WEB_DRIVER}"
         "${HTTP1_CHUNK_DECODER_TEST}"
         "${HTTP1_CHUNK_SCANNER_TEST}"
@@ -9899,23 +9902,28 @@ foreach(http1_chunk_driver_contract IN ITEMS
             "${relative} is required")
     endif()
 endforeach()
-if(EXISTS "${HTTP1_CHUNK_WEB_DRIVER}" AND
+if(EXISTS "${HTTP1_CHUNK_DECODER}" AND
+   EXISTS "${HTTP1_CHUNK_WEB_DRIVER}" AND
    EXISTS "${HTTP1_CHUNK_DECODER_TEST}" AND
    EXISTS "${HTTP1_CHUNK_SCANNER_TEST}" AND
    EXISTS "${HTTP1_CHUNK_PACKAGE_CONSUMER}")
+    file(READ "${HTTP1_CHUNK_DECODER}" http1_chunk_decoder)
     file(READ "${HTTP1_CHUNK_WEB_DRIVER}" http1_chunk_web_driver)
     file(READ "${HTTP1_CHUNK_DECODER_TEST}" http1_chunk_decoder_test)
     file(READ "${HTTP1_CHUNK_SCANNER_TEST}" http1_chunk_scanner_test)
     file(READ "${HTTP1_CHUNK_PACKAGE_CONSUMER}" http1_chunk_package_consumer)
-    if(NOT http1_chunk_web_driver MATCHES "result[.]consumedBytes[(][)]" OR
+    if(NOT http1_chunk_decoder MATCHES "HttpProtocolError protocolError[(][)] const noexcept" OR
+       http1_chunk_decoder MATCHES "Http1ChunkDecodeError error[(][)] const" OR
+       NOT http1_chunk_web_driver MATCHES "result[.]consumedBytes[(][)]" OR
        NOT http1_chunk_web_driver MATCHES "result[.]bodyChunk[(][)]" OR
        NOT http1_chunk_web_driver MATCHES "result[.]complete[(][)]" OR
        NOT http1_chunk_web_driver MATCHES "result[.]needMore[(][)]" OR
        NOT http1_chunk_web_driver MATCHES "result[.]failure[(][)]" OR
-       NOT http1_chunk_web_driver MATCHES
-           "throwHttp1ChunkDecodeFailure")
+       NOT http1_chunk_web_driver MATCHES "failure->protocolError[(][)]" OR
+       http1_chunk_web_driver MATCHES
+           "Http1ChunkDecodeError|throwHttp1ChunkDecodeFailure")
         boundary_error("ruvia-web bypasses the typed HTTP/1 chunk decoder result"
-            "the runtime must drive consumed/body/complete/need-more accessors without reconstructing protocol state")
+            "HTTP must own failure status while Web only drives the typed result")
     endif()
     if(NOT http1_chunk_decoder_test MATCHES
            "chunked_body_decoder_emits_zero_copy_chunks_and_preserves_pipeline" OR
@@ -9926,6 +9934,10 @@ if(EXISTS "${HTTP1_CHUNK_WEB_DRIVER}" AND
        NOT http1_chunk_decoder_test MATCHES "repeatedInvalid" OR
        NOT http1_chunk_decoder_test MATCHES
            "HasChunkBytes<Http1ChunkDecodeBodyChunk>" OR
+       NOT http1_chunk_decoder_test MATCHES
+           "!HasRawDecodeError<Http1ChunkDecodeFailure>" OR
+       NOT http1_chunk_decoder_test MATCHES
+           "protocolError[(][)][.]status[(][)]" OR
        NOT http1_chunk_scanner_test MATCHES
            "chunk_scan_result_is_discriminated" OR
        NOT http1_chunk_scanner_test MATCHES
@@ -9935,13 +9947,15 @@ if(EXISTS "${HTTP1_CHUNK_WEB_DRIVER}" AND
        NOT http1_chunk_package_consumer MATCHES
            "Http1ChunkDecodeFailure" OR
        NOT http1_chunk_package_consumer MATCHES
+           "HasProtocolError<ruvia::detail::Http1ChunkDecodeFailure>" OR
+       NOT http1_chunk_package_consumer MATCHES
            "!HasAnyRvalueHttp1ChunkDecodeAccessor" OR
        NOT http1_chunk_package_consumer MATCHES
            "!HasAnyRvalueHttpChunkScanAccessor" OR
        NOT http1_chunk_package_consumer MATCHES
            "HasConsumedBytes<ruvia::detail::HttpChunkScanComplete>")
         boundary_error("typed HTTP/1 chunk result ownership is insufficiently tested"
-            "unit and installed-consumer contracts must pin fragmentation, pipeline preservation, and alternative-specific fields")
+            "unit and installed-consumer contracts must pin protocol status ownership, fragmentation, and pipeline preservation")
     endif()
 endif()
 
@@ -9982,6 +9996,12 @@ if(EXISTS "${HTTP_TRANSFER_DECODER}" AND
        NOT transfer_decoder MATCHES
            "class TransferCodingDecodeFailure final" OR
        NOT transfer_decoder MATCHES
+           "std::optional<HttpProtocolError>" OR
+       NOT transfer_decoder MATCHES
+           "protocolError[(][)] const noexcept" OR
+       transfer_decoder MATCHES
+           "TransferCodingDecodeError error[(][)] const" OR
+       NOT transfer_decoder MATCHES
            "class TransferCodingDecodeResult final" OR
        NOT transfer_decoder MATCHES
            "TransferCodingDecodeResult decode" OR
@@ -10016,7 +10036,11 @@ if(EXISTS "${HTTP_TRANSFER_DECODER}" AND
        NOT body_reader_core MATCHES
            "throwTransferCodingDecodeFailure" OR
        NOT body_reader_core MATCHES
+           "failure[.]protocolError[(][)]" OR
+       NOT body_reader_core MATCHES
            "requireCompleteTransferCoding" OR
+       body_reader_core MATCHES "TransferCodingDecodeError::" OR
+       body_reader_chunked MATCHES "TransferCodingDecodeError::" OR
        body_reader_core MATCHES "decodeAppend[(]" OR
        body_reader_chunked MATCHES "produce[(]|setInput[(]")
         boundary_error("Web request body reader bypasses the typed transfer decoder"
@@ -10028,6 +10052,10 @@ if(EXISTS "${HTTP_TRANSFER_DECODER}" AND
            "TransferCodingDecodeResult" OR
        NOT transfer_decoder_test MATCHES
            "repeatedFinish[.]failure[(]" OR
+       NOT transfer_decoder_test MATCHES
+           "!HasRawTransferDecodeError<TransferCodingDecodeFailure>" OR
+       NOT transfer_decoder_test MATCHES
+           "protocolError[(][)]->status[(][)]" OR
        NOT body_reader_test MATCHES
            "http1_transfer_coding_uses_one_decoder_for_streaming_and_buffered_reads" OR
        NOT body_reader_test MATCHES
@@ -10037,9 +10065,13 @@ if(EXISTS "${HTTP_TRANSFER_DECODER}" AND
        NOT transfer_package_consumer MATCHES
            "TransferCodingDecodeResult" OR
        NOT transfer_package_consumer MATCHES
+           "HasProtocolError.*TransferCodingDecodeFailure" OR
+       NOT transfer_package_consumer MATCHES
+           "!HasTransferDecodeError" OR
+       NOT transfer_package_consumer MATCHES
            "!HasAnyRvalueTransferCodingDecodeAccessor")
         boundary_error("typed transfer-coding chain is insufficiently tested"
-            "core alternatives, both Web read surfaces, failure mapping, and installed consumers must stay pinned")
+            "HTTP status ownership, both Web read surfaces, and installed consumers must stay pinned")
     endif()
 endif()
 
