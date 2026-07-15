@@ -340,7 +340,11 @@ template <typename ApplyResponseState>
     const auto method = request.knownMethod();
     const auto methodPlan = detail::httpConditionalMethodPlan(method);
     const auto conditional = fileConditionalHeaders(request);
-    if (enableValidators && methodPlan.evaluatesPreconditions) {
+    // Response validator generation is optional, but request preconditions are
+    // method semantics. In particular, If-Match / If-None-Match "*" test the
+    // existence of this current representation without needing an ETag, and
+    // date conditions can use the file metadata without emitting Last-Modified.
+    if (methodPlan.evaluatesPreconditions) {
         const auto etagConditions = fileEtagConditions(request, etag);
         if (etagConditions.ifMatch.present &&
             !etagConditions.ifMatch.matches()) {

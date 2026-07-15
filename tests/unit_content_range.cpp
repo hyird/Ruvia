@@ -695,7 +695,7 @@ RUVIA_TEST(static_file_clamps_future_last_modified_and_rejects_it_for_if_range) 
     fs::remove_all(dir);
 }
 
-RUVIA_TEST(static_file_ignores_range_with_if_range_when_validators_disabled) {
+RUVIA_TEST(static_file_without_response_validators_still_enforces_preconditions) {
     namespace fs = std::filesystem;
     using ruvia::HttpHeaderView;
     using ruvia::StaticRoot;
@@ -744,6 +744,82 @@ RUVIA_TEST(static_file_ignores_range_with_if_range_when_validators_disabled) {
     // (Gating the If-Range check on enableValidators skipped it and returned 206.)
     RUVIA_CHECK_EQ(serve("\"stale-etag\""), std::uint16_t{200});
     RUVIA_CHECK_EQ(serve("Wed, 21 Oct 2015 07:28:00 GMT"), std::uint16_t{200});
+
+    struct ConditionalResult final {
+        std::uint16_t status;
+        bool hasEtag;
+        bool hasLastModified;
+    };
+    const auto serveConditional = [&root](
+        std::string_view method,
+        std::optional<RequestKnownHeader> slot,
+        std::string_view name,
+        std::string_view value) {
+        ruvia::WorkerMemory worker;
+        ruvia::RequestMemory memory(worker);
+        ruvia::HttpRequest request = HttpRequestAccess::make();
+        HttpRequestAccess::reset(request);
+        HttpRequestAccess::setMethod(request, method);
+        HttpRequestAccess::setResource(request, memory.resource());
+        if (slot.has_value()) {
+            HttpRequestAccess::addHeader(
+                request,
+                HttpHeaderView{name, value},
+                HttpRequestAccess::knownHeaderSlot(*slot));
+        }
+        auto context = ContextAccess::make(memory, request);
+        try {
+            const auto response = context.staticFile(
+                root, "data.txt", "text/plain");
+            return ConditionalResult{
+                response.status(),
+                response.header("ETag").has_value(),
+                response.header("Last-Modified").has_value()};
+        } catch (const ruvia::HttpError& error) {
+            return ConditionalResult{error.info().status(), false, false};
+        }
+    };
+
+    const auto plain = serveConditional("GET", std::nullopt, {}, {});
+    RUVIA_CHECK_EQ(plain.status, std::uint16_t{200});
+    RUVIA_CHECK(!plain.hasEtag);
+    RUVIA_CHECK(!plain.hasLastModified);
+
+    // Disabling response validator fields does not disable request
+    // preconditions. Wildcard conditions test whether a current representation
+    // exists and therefore require no ETag at all; date conditions use the
+    // origin's file metadata even when Last-Modified is not emitted.
+    const auto getExisting = serveConditional(
+        "GET", RequestKnownHeader::kIfNoneMatch, "If-None-Match", "*");
+    RUVIA_CHECK_EQ(getExisting.status, std::uint16_t{304});
+    RUVIA_CHECK(!getExisting.hasEtag);
+    RUVIA_CHECK(!getExisting.hasLastModified);
+    RUVIA_CHECK_EQ(
+        serveConditional(
+            "POST", RequestKnownHeader::kIfNoneMatch, "If-None-Match", "*").status,
+        std::uint16_t{412});
+    RUVIA_CHECK_EQ(
+        serveConditional(
+            "POST", RequestKnownHeader::kIfMatch, "If-Match", "*").status,
+        std::uint16_t{200});
+    RUVIA_CHECK_EQ(
+        serveConditional(
+            "POST", RequestKnownHeader::kIfMatch, "If-Match", "\"stale\"").status,
+        std::uint16_t{412});
+    RUVIA_CHECK_EQ(
+        serveConditional(
+            "POST",
+            RequestKnownHeader::kIfUnmodifiedSince,
+            "If-Unmodified-Since",
+            "Thu, 01 Jan 1970 00:00:00 GMT").status,
+        std::uint16_t{412});
+    RUVIA_CHECK_EQ(
+        serveConditional(
+            "GET",
+            RequestKnownHeader::kIfModifiedSince,
+            "If-Modified-Since",
+            "Fri, 31 Dec 9999 23:59:59 GMT").status,
+        std::uint16_t{304});
 
     fs::remove_all(dir);
 }
