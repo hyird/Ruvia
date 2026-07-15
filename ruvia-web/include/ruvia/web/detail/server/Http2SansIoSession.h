@@ -463,9 +463,8 @@ Task<void> runHttp2SansIoSession(
                     // report through the response-completion access-log callback.
                     co_return;
                 }
-                if (const auto* committed = result.committed()) {
-                    if (committed->outcome() ==
-                        ResponseStreamCommittedOutcome::kFailed) {
+                if (const auto committedStatus = result.committedStatus()) {
+                    if (result.failedAfterCommit() != nullptr) {
                         (void)connection.submitReset(
                             streamId,
                             Http2ErrorCode::kInternalError);
@@ -475,12 +474,14 @@ Task<void> runHttp2SansIoSession(
                         options.accessLog,
                         request,
                         remoteAddress,
-                        committed->status(),
+                        *committedStatus,
                         requestStart);
                     co_return;
                 }
-                if (auto* buffered = result.buffered()) {
-                    response = std::move(*buffered).takeResponse();
+                if (auto* routeResponse = result.routeResponse()) {
+                    response = std::move(*routeResponse).takeResponse();
+                } else if (auto* recovered = result.recoveredFailure()) {
+                    response = std::move(*recovered).takeResponse();
                 } else {
                     throw std::logic_error(
                         "response stream dispatch returned no HTTP/2 terminal alternative");

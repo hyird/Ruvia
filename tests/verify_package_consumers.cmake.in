@@ -2254,21 +2254,25 @@ if(_built_components_csv MATCHES "(^|,)web(,|$)")
        NOT _installed_response_stream_dispatch MATCHES
            "ResponseStreamPeerAbortedBeforeCommit" OR
        NOT _installed_response_stream_dispatch MATCHES
-           "enum class ResponseStreamCommittedOutcome" OR
+           "class ResponseStreamCompleted final" OR
        NOT _installed_response_stream_dispatch MATCHES
-           "class ResponseStreamCommitted final" OR
+           "class ResponseStreamPeerAbortedAfterCommit final" OR
        NOT _installed_response_stream_dispatch MATCHES
-           "class ResponseStreamBuffered final" OR
+           "class ResponseStreamFailedAfterCommit final" OR
        NOT _installed_response_stream_dispatch MATCHES
-           "enum class ResponseStreamBufferedOutcome" OR
+           "class ResponseStreamRouteResponse final" OR
        NOT _installed_response_stream_dispatch MATCHES
-           "ResponseStreamBufferedOutcome[ \t\r\n]+outcome[(][)] const noexcept" OR
+           "class ResponseStreamRecoveredFailure final" OR
+       NOT _installed_response_stream_dispatch MATCHES
+           "committedStatus[(][)] const noexcept" OR
+       NOT _installed_response_stream_dispatch MATCHES
+           "routeResponse[(][)] [&] noexcept" OR
+       NOT _installed_response_stream_dispatch MATCHES
+           "recoveredFailure[(][)] [&] noexcept" OR
        _installed_response_stream_dispatch MATCHES
-           "bool failed[(][)] const noexcept" OR
+           "ResponseStreamCommittedOutcome|ResponseStreamBufferedOutcome|class ResponseStreamCommitted final|class ResponseStreamBuffered final|makeCommitted[(]|makeBuffered[(]|bool failed[(][)] const noexcept" OR
        NOT _installed_response_stream_dispatch MATCHES
            "committedResponseStreamStatus" OR
-       _installed_response_stream_dispatch MATCHES
-           "ResponseStreamCompleted|ResponseStreamPeerAbortedAfterCommit|ResponseStreamFailedAfterCommit|ResponseStreamFailedBeforeCommit|peerAbortedAfterCommit[(]|failedAfterCommit[(]|failedBeforeCommit[(]|completed[(][)][ \t\r\n]+const [&]" OR
        NOT _installed_response_stream_state MATCHES
            "std::optional<CommittedState> committed_" OR
        NOT _installed_http1_stream_route MATCHES
@@ -2332,9 +2336,9 @@ if(_built_components_csv MATCHES "(^|,)web(,|$)")
        NOT _installed_http1_stream_session MATCHES
            "applyReusableHttp1RequestBufferCompletion" OR
        NOT _installed_http2_stream_session MATCHES
-           "committed->status[(][)]" OR
+           "result[.]committedStatus[(][)]" OR
        NOT _installed_http2_stream_session MATCHES
-           "committed->outcome[(][)]")
+           "result[.]failedAfterCommit[(][)]")
         message(FATAL_ERROR
             "installed Web package restored reconstructed response-stream status")
     endif()

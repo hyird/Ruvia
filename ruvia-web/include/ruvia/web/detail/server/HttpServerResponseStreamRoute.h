@@ -63,18 +63,18 @@ Task<Http1SessionRequestCompletion> dispatchHttpResponseStreamRoute(
         throw std::logic_error(
             "HTTP/1 response stream reported an impossible peer-abort predicate");
     }
-    if (auto* buffered = result.buffered()) {
-        const auto bufferedOutcome = buffered->outcome();
-        response = std::move(*buffered).takeResponse();
+    if (auto* recovered = result.recoveredFailure()) {
+        response = std::move(*recovered).takeResponse();
         scannerEntry.touch();
-        if (bufferedOutcome ==
-            ResponseStreamBufferedOutcome::kRecoveredFailure) {
-            connectionPlan = requireHttp1FinalResponseCommit(
-                response,
-                streamPlan.requestConnectionPlan().requireClose());
-            co_return Http1SessionRequestCompletion::makeBufferedClosing(
-                connectionPlan);
-        }
+        connectionPlan = requireHttp1FinalResponseCommit(
+            response,
+            streamPlan.requestConnectionPlan().requireClose());
+        co_return Http1SessionRequestCompletion::makeBufferedClosing(
+            connectionPlan);
+    }
+    if (auto* routeResponse = result.routeResponse()) {
+        response = std::move(*routeResponse).takeResponse();
+        scannerEntry.touch();
         connectionPlan = finalizeBufferedRouteResponse(
             response,
             connectionPlan,
@@ -84,22 +84,21 @@ Task<Http1SessionRequestCompletion> dispatchHttpResponseStreamRoute(
             requestHead.headerBytes());
     }
 
-    const auto* committed = result.committed();
-    if (committed == nullptr) {
+    const auto committedStatus = result.committedStatus();
+    if (!committedStatus.has_value()) {
         throw std::logic_error(
             "response stream dispatch returned no H1 terminal alternative");
     }
 
     connectionPlan = responseSink.connectionPlan();
-    if (committed->outcome() ==
-        ResponseStreamCommittedOutcome::kCompleted) {
+    if (result.completed() != nullptr) {
         requestSequence.completeCommittedResponse(connectionPlan);
     } else {
         connectionPlan = connectionPlan.requireClose();
     }
     co_return Http1SessionRequestCompletion::makeCommittedStream(
         connectionPlan,
-        committed->status(),
+        *committedStatus,
         requestHead.headerBytes());
 }
 

@@ -3889,21 +3889,25 @@ if(EXISTS "${HTTP_RESPONSE_STREAM_COMMIT_PLAN}" AND
        NOT web_response_stream_dispatch_result MATCHES
            "ResponseStreamPeerAbortedBeforeCommit" OR
        NOT web_response_stream_dispatch_result MATCHES
-           "enum class ResponseStreamCommittedOutcome" OR
+           "class ResponseStreamCompleted final" OR
        NOT web_response_stream_dispatch_result MATCHES
-           "class ResponseStreamCommitted final" OR
+           "class ResponseStreamPeerAbortedAfterCommit final" OR
        NOT web_response_stream_dispatch_result MATCHES
-           "class ResponseStreamBuffered final" OR
+           "class ResponseStreamFailedAfterCommit final" OR
        NOT web_response_stream_dispatch_result MATCHES
-           "enum class ResponseStreamBufferedOutcome" OR
+           "class ResponseStreamRouteResponse final" OR
        NOT web_response_stream_dispatch_result MATCHES
-           "ResponseStreamBufferedOutcome[ \t\r\n]+outcome[(][)] const noexcept" OR
+           "class ResponseStreamRecoveredFailure final" OR
+       NOT web_response_stream_dispatch_result MATCHES
+           "committedStatus[(][)] const noexcept" OR
+       NOT web_response_stream_dispatch_result MATCHES
+           "routeResponse[(][)] [&] noexcept" OR
+       NOT web_response_stream_dispatch_result MATCHES
+           "recoveredFailure[(][)] [&] noexcept" OR
        web_response_stream_dispatch_result MATCHES
-           "bool failed[(][)] const noexcept" OR
+           "ResponseStreamCommittedOutcome|ResponseStreamBufferedOutcome|class ResponseStreamCommitted final|class ResponseStreamBuffered final|makeCommitted[(]|makeBuffered[(]|bool failed[(][)] const noexcept" OR
        NOT web_response_stream_dispatch_result MATCHES
            "committedResponseStreamStatus" OR
-       web_response_stream_dispatch_result MATCHES
-           "ResponseStreamCompleted|ResponseStreamPeerAbortedAfterCommit|ResponseStreamFailedAfterCommit|ResponseStreamFailedBeforeCommit|peerAbortedAfterCommit[(]|failedAfterCommit[(]|failedBeforeCommit[(]|completed[(][)][ \t\r\n]+const [&]" OR
        NOT web_response_stream_state MATCHES
            "std::optional<CommittedState> committed_" OR
        NOT web_response_stream_state MATCHES
@@ -3913,11 +3917,15 @@ if(EXISTS "${HTTP_RESPONSE_STREAM_COMMIT_PLAN}" AND
        NOT web_http1_response_stream_route MATCHES
            "makeCommittedStream" OR
        NOT web_http1_response_stream_route MATCHES
-           "committed->status[(][)]" OR
+           "result[.]committedStatus[(][)]" OR
        NOT web_http1_response_stream_route MATCHES
-           "committed->outcome[(][)]")
-        boundary_error("Web response-stream outcomes restored a status/payload tuple"
-            "handled, buffered, committed, and pre-commit abort outcomes must remain discriminated; buffered exception recovery must not cross into HTTP/1 as a boolean")
+           "result[.]completed[(][)]" OR
+       NOT web_http1_response_stream_route MATCHES
+           "result[.]routeResponse[(][)]" OR
+       NOT web_http1_response_stream_route MATCHES
+           "result[.]recoveredFailure[(][)]")
+        boundary_error("Web response-stream outcomes restored nested discriminators"
+            "each terminal must remain one variant alternative; HTTP/1 and HTTP/2 must consume the exact terminal without reconstructing status or recovery state")
     endif()
 
     if(NOT web_http1_session_request_completion MATCHES
@@ -3953,9 +3961,9 @@ if(EXISTS "${HTTP_RESPONSE_STREAM_COMMIT_PLAN}" AND
        NOT web_http1_stream_session MATCHES
            "Http1ConnectionDisposition::kClose" OR
        NOT web_http2_stream_session MATCHES
-           "committed->status[(][)]" OR
+           "result[.]committedStatus[(][)]" OR
        NOT web_http2_stream_session MATCHES
-           "committed->outcome[(][)]" OR
+           "result[.]failedAfterCommit[(][)]" OR
        web_http2_stream_session MATCHES
            "completed streamed response [(]status 200[)]")
         boundary_error("server runtime re-derived streamed access-log status"
@@ -3975,7 +3983,7 @@ if(EXISTS "${HTTP_RESPONSE_STREAM_COMMIT_PLAN}" AND
        NOT response_stream_status_test MATCHES
            "response_stream_dispatch_types_precommit_failure_response" OR
        NOT response_stream_status_test MATCHES
-           "ResponseStreamBufferedOutcome::kRecoveredFailure" OR
+           "makeRecoveredFailure" OR
        NOT http1_session_completion_test MATCHES
            "http1_session_request_completion_owns_wire_and_buffer_outcome" OR
        NOT http1_session_completion_test MATCHES
@@ -10190,9 +10198,11 @@ if(EXISTS "${WEB_EXECUTION_ROUTE_RESOLUTION}" AND
        NOT web_execution_route_resolution MATCHES
            "notFound[(][)] const && = delete" OR
        NOT web_execution_stream_dispatch MATCHES
-           "committed[(][)] const [&] noexcept" OR
+           "completed[(][)] const [&] noexcept" OR
        NOT web_execution_stream_dispatch MATCHES
-           "buffered[(][)] && = delete" OR
+           "routeResponse[(][)] && = delete" OR
+       NOT web_execution_stream_dispatch MATCHES
+           "recoveredFailure[(][)] && = delete" OR
        NOT web_execution_websocket_route MATCHES
            "Task<std::optional<Http1SessionRequestCompletion>> dispatchHttpWebSocketRoute" OR
        web_execution_websocket_route MATCHES

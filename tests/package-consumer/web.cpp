@@ -351,6 +351,8 @@ concept ExposesAnyRvalueWebExecutionBorrow =
     requires(T&& value) { std::move(value).peerAbortedAfterCommit(); } ||
     requires(T&& value) { std::move(value).failedBeforeCommit(); } ||
     requires(T&& value) { std::move(value).failedAfterCommit(); } ||
+    requires(T&& value) { std::move(value).routeResponse(); } ||
+    requires(T&& value) { std::move(value).recoveredFailure(); } ||
     requires(T&& value) { std::move(value).unavailable(); } ||
     requires(T&& value) { std::move(value).failed(); } ||
     requires(T&& value) { std::move(value).discarded(); } ||
@@ -1086,20 +1088,32 @@ static_assert(!HasLegacySharedStreamResponse<
     ruvia::detail::ResponseStreamDispatchResult>);
 static_assert(std::same_as<
     decltype(std::declval<const ruvia::detail::
-        ResponseStreamDispatchResult&>().committed()),
-    const ruvia::detail::ResponseStreamCommitted*>);
+        ResponseStreamDispatchResult&>().completed()),
+    const ruvia::detail::ResponseStreamCompleted*>);
 static_assert(std::same_as<
     decltype(std::declval<const ruvia::detail::
         ResponseStreamDispatchResult&>().peerAbortedBeforeCommit()),
     const ruvia::detail::ResponseStreamPeerAbortedBeforeCommit*>);
 static_assert(std::same_as<
     decltype(std::declval<const ruvia::detail::
-        ResponseStreamCommitted&>().outcome()),
-    ruvia::detail::ResponseStreamCommittedOutcome>);
+        ResponseStreamDispatchResult&>().peerAbortedAfterCommit()),
+    const ruvia::detail::ResponseStreamPeerAbortedAfterCommit*>);
 static_assert(std::same_as<
     decltype(std::declval<const ruvia::detail::
-        ResponseStreamBuffered&>().outcome()),
-    ruvia::detail::ResponseStreamBufferedOutcome>);
+        ResponseStreamDispatchResult&>().failedAfterCommit()),
+    const ruvia::detail::ResponseStreamFailedAfterCommit*>);
+static_assert(std::same_as<
+    decltype(std::declval<ruvia::detail::
+        ResponseStreamDispatchResult&>().routeResponse()),
+    ruvia::detail::ResponseStreamRouteResponse*>);
+static_assert(std::same_as<
+    decltype(std::declval<ruvia::detail::
+        ResponseStreamDispatchResult&>().recoveredFailure()),
+    ruvia::detail::ResponseStreamRecoveredFailure*>);
+static_assert(std::same_as<
+    decltype(std::declval<const ruvia::detail::
+        ResponseStreamDispatchResult&>().committedStatus()),
+    std::optional<std::uint16_t>>);
 static_assert(std::same_as<
     decltype(std::declval<const ruvia::detail::ResponseStreamState&>()
                  .commitPlan()),
