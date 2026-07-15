@@ -1988,6 +1988,30 @@ if(_installed_http2_request_content MATCHES "Http2RequestContentMode" OR
        "std::get_if<Http2StreamingRequestContent>")
     message(FATAL_ERROR "installed HTTP/2 request-content contract lost exclusive alternatives")
 endif()
+set(_installed_http2_request_builder_path
+    "${_install_prefix}/include/ruvia/http/detail/http2/Http2RequestBuilder.h")
+if(NOT EXISTS "${_installed_http2_request_builder_path}")
+    message(FATAL_ERROR "installed HTTP/2 request-build contract is missing")
+endif()
+file(READ "${_installed_http2_request_builder_path}"
+    _installed_http2_request_builder)
+if(NOT _installed_http2_request_builder MATCHES
+       "class Http2RequestBuilt final" OR
+   NOT _installed_http2_request_builder MATCHES
+       "class Http2RequestBuildFailure final" OR
+   NOT _installed_http2_request_builder MATCHES
+       "class Http2RequestBuildResult final" OR
+   NOT _installed_http2_request_builder MATCHES
+       "using Value = std::variant<Http2RequestBuilt, Http2RequestBuildFailure>" OR
+   NOT _installed_http2_request_builder MATCHES
+       "HttpProtocolError protocolError[(][)] const noexcept" OR
+   NOT _installed_http2_request_builder MATCHES
+       "Http2RequestBuildResult build" OR
+   _installed_http2_request_builder MATCHES
+       "static bool build")
+    message(FATAL_ERROR
+        "installed HTTP/2 request builder lost its discriminated protocol failure")
+endif()
 set(_installed_http2_local_content_path
     "${_install_prefix}/include/ruvia/http/detail/http2/Http2LocalContentState.h")
 set(_installed_http2_stream_state_path
@@ -3246,6 +3270,8 @@ if(_built_components_csv MATCHES "(^|,)web(,|$)")
         "${_install_prefix}/include/ruvia/web/detail/router/RouteTable.h")
     set(_installed_route_http2_session_path
         "${_install_prefix}/include/ruvia/web/detail/server/Http2SansIoSession.h")
+    set(_installed_http_protocol_error_info_path
+        "${_install_prefix}/include/ruvia/web/detail/http/HttpProtocolErrorInfo.h")
     set(_installed_http2_server_entry_path
         "${_install_prefix}/include/ruvia/web/detail/server/HttpServerCleartextHttp2.h")
     set(_installed_route_response_stream_dispatch_path
@@ -3268,6 +3294,7 @@ if(_built_components_csv MATCHES "(^|,)web(,|$)")
             "${_installed_route_resolution_path}"
             "${_installed_route_table_path}"
             "${_installed_route_http2_session_path}"
+            "${_installed_http_protocol_error_info_path}"
             "${_installed_http2_server_entry_path}"
             "${_installed_route_response_stream_dispatch_path}"
             "${_installed_route_websocket_session_path}"
@@ -3298,6 +3325,8 @@ if(_built_components_csv MATCHES "(^|,)web(,|$)")
     file(READ "${_installed_route_table_path}" _installed_route_table)
     file(READ "${_installed_route_http2_session_path}"
         _installed_route_http2_session)
+    file(READ "${_installed_http_protocol_error_info_path}"
+        _installed_http_protocol_error_info)
     file(READ "${_installed_http2_server_entry_path}"
         _installed_http2_server_entry)
     file(READ "${_installed_route_response_stream_dispatch_path}"
@@ -3310,6 +3339,21 @@ if(_built_components_csv MATCHES "(^|,)web(,|$)")
         _installed_ws_runtime_connection)
     file(READ "${_installed_ws_h1_route_path}"
         _installed_ws_h1_route)
+    if(NOT _installed_http_protocol_error_info MATCHES
+           "copyHttpProtocolErrorInfo" OR
+       NOT _installed_http_protocol_error_info MATCHES
+           "resource->allocate" OR
+       NOT _installed_route_http2_session MATCHES
+           "requestBuild[.]failure[(][)]" OR
+       NOT _installed_route_http2_session MATCHES
+           "failure->protocolError[(][)]" OR
+       NOT _installed_route_http2_session MATCHES
+           "copyHttpProtocolErrorInfo" OR
+       _installed_route_http2_session MATCHES
+           "invalid http2 request headers")
+        message(FATAL_ERROR
+            "installed Web HTTP/2 runtime bypasses the HTTP-owned request-build failure")
+    endif()
     if(NOT _installed_ws_handshake_writer MATCHES
            "const HttpWebSocketServerHandshake& handshake" OR
        NOT _installed_ws_runtime_connection MATCHES

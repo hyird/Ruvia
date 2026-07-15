@@ -55,6 +55,7 @@
 #include <ruvia/http/detail/http2/Http2PeerSettings.h>
 #include <ruvia/http/detail/http2/Http2RemoteContentState.h>
 #include <ruvia/http/detail/http2/Http2RemoteReceiveState.h>
+#include <ruvia/http/detail/http2/Http2RequestBuilder.h>
 #include <ruvia/http/detail/http2/Http2ResponseHeadPlan.h>
 #include <ruvia/http/detail/http2/Http2StreamHeaderBlocks.h>
 #include <ruvia/http/detail/http2/Http2StreamState.h>
@@ -132,6 +133,11 @@ template <typename T>
 concept HasRawContentDecodeError = requires(const T& result) {
     result.error();
 };
+
+template <typename T>
+concept ExposesRvalueHttp2RequestBuildAlternative =
+    requires(const T&& result) { std::move(result).built(); } ||
+    requires(const T&& result) { std::move(result).failure(); };
 
 template <typename T>
 concept ExposesRvalueEncodedContent = requires(T&& result) {
@@ -1810,6 +1816,28 @@ static_assert(HasOptionalHttpServerExpectationAction<
     ruvia::detail::Http1RequestBodyPlan>);
 static_assert(HasOptionalHttpServerExpectationAction<
     ruvia::detail::Http2StreamState>);
+static_assert(!std::default_initializable<
+    ruvia::detail::Http2RequestBuildResult>);
+static_assert(!std::default_initializable<
+    ruvia::detail::Http2RequestBuilt>);
+static_assert(!std::default_initializable<
+    ruvia::detail::Http2RequestBuildFailure>);
+static_assert(!ExposesRvalueHttp2RequestBuildAlternative<
+    ruvia::detail::Http2RequestBuildResult>);
+static_assert(!HasRawContentDecodeError<
+    ruvia::detail::Http2RequestBuildFailure>);
+static_assert(std::same_as<
+    decltype(std::declval<const ruvia::detail::Http2RequestBuildResult&>()
+        .built()),
+    const ruvia::detail::Http2RequestBuilt*>);
+static_assert(std::same_as<
+    decltype(std::declval<const ruvia::detail::Http2RequestBuildResult&>()
+        .failure()),
+    const ruvia::detail::Http2RequestBuildFailure*>);
+static_assert(std::same_as<
+    decltype(std::declval<const ruvia::detail::Http2RequestBuildFailure&>()
+        .protocolError()),
+    ruvia::HttpProtocolError>);
 static_assert(std::is_enum_v<
     ruvia::detail::Http1ClientRequestContentPhase>);
 static_assert(sizeof(ruvia::detail::Http1ClientRequestContentPhase) == 1);

@@ -1,11 +1,14 @@
 #pragma once
 
 #include <cstddef>
+#include <cstdint>
 #include <memory_resource>
 #include <string_view>
+#include <variant>
 
 #include "ruvia/http/HttpHeader.h"
 #include "ruvia/http/HttpKnownMethod.h"
+#include "ruvia/http/HttpProtocolError.h"
 #include "ruvia/http/HttpProtocolVersion.h"
 #include "ruvia/http/detail/HttpRequestInternal.h"
 #include "ruvia/http/detail/http2/Http2StreamState.h"
@@ -14,6 +17,88 @@
 #include "ruvia/http/HttpRequest.h"
 
 namespace ruvia::detail {
+
+class Http2RequestBuilder;
+
+class Http2RequestBuilt final {
+private:
+    friend class Http2RequestBuildResult;
+
+    constexpr Http2RequestBuilt() noexcept = default;
+};
+
+class Http2RequestBuildFailure final {
+public:
+    [[nodiscard]] HttpProtocolError protocolError() const noexcept {
+        switch (kind_) {
+            case Kind::kMissingMethod:
+                return HttpProtocolError(400, "missing HTTP/2 :method");
+            case Kind::kMissingTarget:
+                return HttpProtocolError(400, "missing HTTP/2 request target");
+            case Kind::kInvalidTarget:
+                return HttpProtocolError(400, "invalid HTTP/2 request target");
+            case Kind::kTooManyHeaders:
+                return HttpProtocolError(431, "too many HTTP/2 request headers");
+        }
+        return HttpProtocolError(400, "invalid HTTP/2 request");
+    }
+
+private:
+    friend class Http2RequestBuildResult;
+    friend class Http2RequestBuilder;
+
+    enum class Kind : std::uint8_t {
+        kMissingMethod,
+        kMissingTarget,
+        kInvalidTarget,
+        kTooManyHeaders
+    };
+
+    explicit constexpr Http2RequestBuildFailure(Kind kind) noexcept
+        : kind_(kind) {}
+
+    Kind kind_;
+};
+
+// Building the runtime-facing HttpRequest either completes the whole borrowed
+// message view or returns one HTTP-owned protocol failure. The private failure
+// kind prevents runtimes from reconstructing status/message mappings.
+class Http2RequestBuildResult final {
+public:
+    [[nodiscard]] constexpr const Http2RequestBuilt* built() const & noexcept {
+        return std::get_if<Http2RequestBuilt>(&value_);
+    }
+    const Http2RequestBuilt* built() const && = delete;
+
+    [[nodiscard]] constexpr const Http2RequestBuildFailure*
+    failure() const & noexcept {
+        return std::get_if<Http2RequestBuildFailure>(&value_);
+    }
+    const Http2RequestBuildFailure* failure() const && = delete;
+
+private:
+    friend class Http2RequestBuilder;
+
+    using Value = std::variant<Http2RequestBuilt, Http2RequestBuildFailure>;
+
+    explicit constexpr Http2RequestBuildResult(Http2RequestBuilt built) noexcept
+        : value_(built) {}
+
+    explicit constexpr Http2RequestBuildResult(
+        Http2RequestBuildFailure failure) noexcept
+        : value_(failure) {}
+
+    [[nodiscard]] static constexpr Http2RequestBuildResult makeBuilt() noexcept {
+        return Http2RequestBuildResult(Http2RequestBuilt());
+    }
+
+    [[nodiscard]] static constexpr Http2RequestBuildResult makeFailure(
+        Http2RequestBuildFailure::Kind kind) noexcept {
+        return Http2RequestBuildResult(Http2RequestBuildFailure(kind));
+    }
+
+    Value value_;
+};
 
 class Http2RequestBuilder final {
 public:
@@ -38,7 +123,7 @@ public:
         return splitRequestTarget(requestTarget(stream)).path;
     }
 
-    static bool build(
+    [[nodiscard]] static Http2RequestBuildResult build(
         Http2StreamState& stream,
         HttpRequest& request,
         std::pmr::memory_resource* resource,
@@ -47,11 +132,13 @@ public:
         HttpRequestAccess::setResource(request, resource);
         const auto method = stream.requestMethod();
         if (method.empty()) {
-            return false;
+            return Http2RequestBuildResult::makeFailure(
+                Http2RequestBuildFailure::Kind::kMissingMethod);
         }
         const auto target = requestTarget(stream);
         if (target.empty()) {
-            return false;
+            return Http2RequestBuildResult::makeFailure(
+                Http2RequestBuildFailure::Kind::kMissingTarget);
         }
         const auto* pending = stream.tunnel().pending();
         const bool standardConnect = pending != nullptr &&
@@ -70,7 +157,8 @@ public:
                 ? HttpKnownMethod::kGet
                 : stream.requestKnownMethod();
             if (!parseRequestTarget(targetMethod, target, targetView)) {
-                return false;
+                return Http2RequestBuildResult::makeFailure(
+                    Http2RequestBuildFailure::Kind::kInvalidTarget);
             }
             targetParts = RequestTargetParts{.path = targetView.path, .queryString = targetView.query};
         }
@@ -86,21 +174,24 @@ public:
         for (std::size_t i = 0; i < stream.requestHeaderCount(); ++i) {
             const auto header = stream.requestHeaderAt(i);
             if (!addHeader(request, header.name, header.value, header.kind)) {
-                return false;
+                return Http2RequestBuildResult::makeFailure(
+                    Http2RequestBuildFailure::Kind::kTooManyHeaders);
             }
         }
         const auto authority = stream.requestAuthority();
         if (!stream.hasHost() && !authority.empty()) {
             if (!addHeader(request, "host", authority, RequestHeaderKind::kHost)) {
-                return false;
+                return Http2RequestBuildResult::makeFailure(
+                    Http2RequestBuildFailure::Kind::kTooManyHeaders);
             }
         }
         if (stream.hasCookie()) {
             if (!addHeader(request, "cookie", stream.requestCookie(), RequestHeaderKind::kCookie)) {
-                return false;
+                return Http2RequestBuildResult::makeFailure(
+                    Http2RequestBuildFailure::Kind::kTooManyHeaders);
             }
         }
-        return true;
+        return Http2RequestBuildResult::makeBuilt();
     }
 
 private:

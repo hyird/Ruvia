@@ -46,6 +46,7 @@
 #include "ruvia/web/detail/body/HttpRequestBodyFacade.h"
 #include "ruvia/http/detail/http2/Http2Connection.h"
 #include "ruvia/http/detail/http2/Http2RequestBuilder.h"
+#include "ruvia/web/detail/http/HttpProtocolErrorInfo.h"
 #include "ruvia/web/detail/http2/Http2SansIoResponseStreamSink.h"
 #include "ruvia/web/detail/http2/Http2SansIoStreamRuntime.h"
 #include "ruvia/web/detail/http2/Http2SansIoWsTransport.h"
@@ -287,16 +288,19 @@ Task<void> runHttp2SansIoSession(
             co_return;
         }
         HttpRequest request = HttpRequestAccess::make();
-        if (!Http2RequestBuilder::build(
+        const auto requestBuild = Http2RequestBuilder::build(
                 *streamState,
                 request,
                 requestMemory.resource(),
                 bufferedBody == nullptr
                     ? std::string_view{}
-                    : bufferedBody->bytes())) {
+                    : bufferedBody->bytes());
+        if (const auto* failure = requestBuild.failure()) {
             auto response = co_await routes.handleError(
                 request, requestMemory,
-                HttpErrorInfo(400, {}, "invalid http2 request headers"),
+                copyHttpProtocolErrorInfo(
+                    requestMemory.resource(),
+                    failure->protocolError()),
                 baseServices);
             (void)co_await bufferedResponseWriter.write(
                 streamId,

@@ -7616,6 +7616,46 @@ if(EXISTS "${HTTP2_REQUEST_BUILDER}")
     endif()
 endif()
 
+set(WEB_HTTP_PROTOCOL_ERROR_INFO
+    "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/http/HttpProtocolErrorInfo.h")
+set(WEB_HTTP2_REQUEST_BUILD_SESSION
+    "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/server/Http2SansIoSession.h")
+if(NOT EXISTS "${HTTP2_REQUEST_BUILDER}" OR
+   NOT EXISTS "${WEB_HTTP_PROTOCOL_ERROR_INFO}" OR
+   NOT EXISTS "${WEB_HTTP2_REQUEST_BUILD_SESSION}")
+    boundary_error("HTTP/2 request build failure contract is incomplete"
+        "HTTP must own the discriminated protocol failure and Web must copy it into request lifetime")
+else()
+    file(READ "${HTTP2_REQUEST_BUILDER}" http2_request_build_contract)
+    file(READ "${WEB_HTTP_PROTOCOL_ERROR_INFO}" web_protocol_error_info)
+    file(READ "${WEB_HTTP2_REQUEST_BUILD_SESSION}" web_http2_request_build_session)
+    if(NOT http2_request_build_contract MATCHES
+           "class Http2RequestBuildResult final" OR
+       NOT http2_request_build_contract MATCHES
+           "using Value = std::variant<Http2RequestBuilt, Http2RequestBuildFailure>" OR
+       NOT http2_request_build_contract MATCHES
+           "HttpProtocolError protocolError[(][)] const noexcept" OR
+       NOT http2_request_build_contract MATCHES
+           "Http2RequestBuildResult build" OR
+       http2_request_build_contract MATCHES
+           "static bool build" OR
+       NOT web_protocol_error_info MATCHES
+           "copyHttpProtocolErrorInfo" OR
+       NOT web_protocol_error_info MATCHES
+           "resource->allocate" OR
+       NOT web_http2_request_build_session MATCHES
+           "requestBuild[.]failure[(][)]" OR
+       NOT web_http2_request_build_session MATCHES
+           "failure->protocolError[(][)]" OR
+       NOT web_http2_request_build_session MATCHES
+           "copyHttpProtocolErrorInfo" OR
+       web_http2_request_build_session MATCHES
+           "invalid http2 request headers")
+        boundary_error("HTTP/2 request build failure escaped its typed protocol owner"
+            "Web must consume one HTTP-owned failure and retain its diagnostic through the request arena")
+    endif()
+endif()
+
 set(WEB_HTTP2_SESSION
     "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/server/Http2SansIoSession.h")
 set(WEB_HTTP2_SERVER_ENTRY

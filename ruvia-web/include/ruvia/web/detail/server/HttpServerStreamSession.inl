@@ -1,17 +1,3 @@
-[[nodiscard]] inline HttpErrorInfo copyHttpProtocolError(
-    RequestMemory& requestMemory,
-    const HttpProtocolError& error) {
-    const std::string_view message(error.what());
-    auto* storage = static_cast<char*>(requestMemory.resource()->allocate(
-        message.size(),
-        alignof(char)));
-    std::memcpy(storage, message.data(), message.size());
-    return HttpErrorInfo(
-        error.status(),
-        {},
-        std::string_view(storage, message.size()));
-}
-
 template <typename Stream>
 Task<void> HttpServer::handleStreamSession(
     Stream& stream,
@@ -362,7 +348,9 @@ Task<void> HttpServer::handleStreamSession(
                     }
                 }
                 const auto error = failure->protocolError();
-                closingError = copyHttpProtocolError(requestMemory, error);
+                closingError = copyHttpProtocolErrorInfo(
+                    requestMemory.resource(),
+                    error);
                 break;
             }
 
@@ -373,7 +361,9 @@ Task<void> HttpServer::handleStreamSession(
             if (usedBytes == readBuffer.size()) {
                 const auto error = httpParseProtocolError(
                     HttpParseError::kHeaderTooLarge);
-                closingError = copyHttpProtocolError(requestMemory, error);
+                closingError = copyHttpProtocolErrorInfo(
+                    requestMemory.resource(),
+                    error);
                 break;
             }
 
