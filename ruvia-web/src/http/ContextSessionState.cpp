@@ -43,10 +43,29 @@ void ContextSessionState::set(std::string_view data) {
         fresh->data.assign(data);
         return;
     }
+    if (auto* cleared = std::get_if<SessionClear>(&value_)) {
+        // clear() then set() is the "drop the old session, start a fresh one"
+        // idiom. The presented id was already captured for deletion, so this is a
+        // rotation -- falling through to SessionPersistNew would mint a new id and
+        // silently orphan the old server-side blob.
+        if (!cleared->oldId.has_value()) {
+            value_.template emplace<SessionPersistNew>(copy(data));
+            return;
+        }
+        auto oldId = std::move(*cleared->oldId);
+        value_.template emplace<SessionRotate>(std::move(oldId), copy(data));
+        return;
+    }
     value_.template emplace<SessionPersistNew>(copy(data));
 }
 
 void ContextSessionState::clear() {
+    // Already clearing: keep the id captured by the first call. Re-emplacing would
+    // drop it, and the middleware only deletes the server-side blob when it is
+    // present -- a second clear() would silently downgrade logout to cookie-only.
+    if (std::get_if<SessionClear>(&value_) != nullptr) {
+        return;
+    }
     if (auto* loadedState = std::get_if<SessionLoaded>(&value_)) {
         std::optional<std::pmr::string> id(std::move(loadedState->id));
         value_.template emplace<SessionClear>(std::move(id));

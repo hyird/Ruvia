@@ -85,6 +85,57 @@ RUVIA_TEST(session_clear_never_requests_a_fresh_id) {
     RUVIA_CHECK(recognized.persistNew() == nullptr);
 }
 
+// The middleware deletes the server-side blob only when the cleared state still
+// carries the presented id, so no later call may drop it. A second clear() must be
+// idempotent -- otherwise logout silently degrades to expiring the cookie while the
+// session stays live in storage for the rest of its TTL.
+RUVIA_TEST(session_repeated_clear_keeps_the_id_to_delete) {
+    ruvia::detail::ContextSessionState recognized(std::pmr::new_delete_resource());
+    recognized.observePresentedId("abcdef");
+    recognized.loadRecognized("user=2");
+    recognized.clear();
+    recognized.clear();
+    RUVIA_CHECK(recognized.cleared() != nullptr);
+    RUVIA_CHECK(recognized.cleared()->oldId.has_value());
+    if (recognized.cleared()->oldId.has_value()) {
+        RUVIA_CHECK_EQ(*recognized.cleared()->oldId, std::string_view("abcdef"));
+    }
+
+    // Clearing without a presented id stays a plain clear, not a rotation.
+    ruvia::detail::ContextSessionState absent(std::pmr::new_delete_resource());
+    absent.clear();
+    absent.clear();
+    RUVIA_CHECK(absent.cleared() != nullptr);
+    RUVIA_CHECK(!absent.cleared()->oldId.has_value());
+}
+
+// clear() then set() is "drop the old session, start a fresh one". That is a
+// rotation: the new id must be minted AND the old blob deleted. Landing in
+// persistNew would mint the id but orphan the old blob.
+RUVIA_TEST(session_clear_then_set_rotates_instead_of_orphaning) {
+    ruvia::detail::ContextSessionState recognized(std::pmr::new_delete_resource());
+    recognized.observePresentedId("abcdef");
+    recognized.loadRecognized("user=2");
+    recognized.clear();
+    recognized.set("user=3");
+    RUVIA_CHECK(recognized.rotate() != nullptr);
+    RUVIA_CHECK(recognized.persistNew() == nullptr);
+    if (recognized.rotate() != nullptr) {
+        RUVIA_CHECK_EQ(recognized.rotate()->oldId, std::string_view("abcdef"));
+        RUVIA_CHECK_EQ(recognized.rotate()->data, std::string_view("user=3"));
+    }
+
+    // With no presented id there is nothing to delete, so a fresh session is right.
+    ruvia::detail::ContextSessionState absent(std::pmr::new_delete_resource());
+    absent.clear();
+    absent.set("user=4");
+    RUVIA_CHECK(absent.persistNew() != nullptr);
+    RUVIA_CHECK(absent.rotate() == nullptr);
+    if (absent.persistNew() != nullptr) {
+        RUVIA_CHECK_EQ(absent.persistNew()->data, std::string_view("user=4"));
+    }
+}
+
 RUVIA_TEST(secure_token_generation_reports_failure_as_a_type) {
     char tooSmall[47];
     const auto failure = ruvia::detail::generateSecureToken(tooSmall);
