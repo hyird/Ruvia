@@ -210,6 +210,10 @@ private:
         HttpResponseHeader& retained,
         std::string_view wirePrefix,
         std::string_view cookieName) noexcept;
+    [[nodiscard]] HttpResponseHeader& collapseResponseHeaders(
+        HttpResponseHeader& retained,
+        std::string_view key,
+        std::uint32_t knownBit) noexcept;
     bool removeHeaderValidated(std::string_view key, std::uint32_t knownBit) noexcept;
     void rebuildKnownHeaderIndex() noexcept;
     void reserveHeaders(std::size_t count);

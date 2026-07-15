@@ -14,6 +14,7 @@
 
 #include "ruvia/http/HttpInterimResponse.h"
 #include "ruvia/http/HttpResponse.h"
+#include "ruvia/http/detail/AsciiCase.h"
 #include "ruvia/http/detail/HttpResponseHeaderAccess.h"
 
 namespace {
@@ -247,6 +248,35 @@ RUVIA_TEST(response_set_cookie_append_replaces_same_wire_name) {
     RUVIA_CHECK(hasNew);
     RUVIA_CHECK(hasTheme);
     RUVIA_CHECK(hasUpper);  // cookie-name is case-sensitive
+}
+
+RUVIA_TEST(response_plain_set_collapses_prior_appended_fields) {
+    auto response = makeResponse();
+    response.header("Link", "</a>", HttpResponse::HeaderOptions{true});
+    response.header("link", "</b>", HttpResponse::HeaderOptions{true});
+    response.header("LINK", "</final>");
+
+    std::size_t linkCount = 0;
+    for (const auto& header : response.headers()) {
+        if (ruvia::detail::httpAsciiEqualsIgnoreCase(header.name(), "Link")) {
+            ++linkCount;
+            RUVIA_CHECK_EQ(header.value(), std::string_view("</final>"));
+            RUVIA_CHECK(!ruvia::detail::responseHeaderAppend(header));
+        }
+    }
+    RUVIA_CHECK_EQ(linkCount, std::size_t{1});
+
+    response.header("Set-Cookie", "a=1");
+    response.header("Set-Cookie", "b=2", HttpResponse::HeaderOptions{true});
+    response.header("Set-Cookie", "c=3");
+    std::size_t cookieCount = 0;
+    for (const auto& header : response.headers()) {
+        if (header.name() == std::string_view("Set-Cookie")) {
+            ++cookieCount;
+            RUVIA_CHECK_EQ(header.value(), std::string_view("c=3"));
+        }
+    }
+    RUVIA_CHECK_EQ(cookieCount, std::size_t{1});
 }
 
 RUVIA_TEST(response_appended_header_carries_append_flag) {

@@ -198,7 +198,11 @@ HttpResponseHeader& HttpResponse::prepareHeaderValueStorage(
     std::size_t valueSize,
     std::uint32_t knownBit) {
     if (auto* const header = findHeaderForUpdate(key, knownBit)) {
-        return headers_.assignUninitializedValue(*header, key, valueSize, knownBit);
+        const bool wasAppended = detail::responseHeaderAppend(*header);
+        headers_.assignUninitializedValue(*header, key, valueSize, knownBit);
+        return wasAppended
+            ? collapseResponseHeaders(*header, key, knownBit)
+            : *header;
     }
 
     const auto index = headers_.size();
@@ -277,7 +281,11 @@ void HttpResponse::setHeaderValidated(
     std::string_view value,
     std::uint32_t knownBit) {
     if (auto* const header = findHeaderForUpdate(key, knownBit)) {
+        const bool wasAppended = detail::responseHeaderAppend(*header);
         headers_.assign(*header, key, value, knownBit);
+        if (wasAppended) {
+            (void)collapseResponseHeaders(*header, key, knownBit);
+        }
         return;
     }
 
@@ -292,6 +300,12 @@ void HttpResponse::appendHeaderValidated(
     std::uint32_t knownBit) {
     if (detail::responseHeaderAppendForbidden(knownBit)) {
         throw std::invalid_argument("HTTP response header cannot be appended");
+    }
+    // The index cache intentionally points at the first occurrence. Mark that
+    // retained slot as plural too, so a later plain set can detect multiplicity
+    // in O(1) and collapse the field without scanning every normal update.
+    if (auto* const existing = findHeaderForUpdate(key, knownBit)) {
+        detail::setResponseHeaderAppend(*existing, true);
     }
     const auto index = headers_.size();
     auto& header = headers_.add(key, value, knownBit);
@@ -396,6 +410,45 @@ void HttpResponse::eraseLaterSetCookieHeaders(
     rebuildKnownHeaderIndex();
 }
 
+HttpResponseHeader& HttpResponse::collapseResponseHeaders(
+    HttpResponseHeader& retained,
+    std::string_view key,
+    std::uint32_t knownBit) noexcept {
+    auto* const begin = headers_.begin();
+    auto* const end = headers_.end();
+    auto* const retainedAddress = &retained;
+    auto* collapsedRetained = retainedAddress;
+    auto* write = begin;
+    for (auto* read = begin; read != end; ++read) {
+        const auto headerKnownBit = detail::responseHeaderKnownBit(*read);
+        const bool matches = knownBit != 0
+            ? headerKnownBit == knownBit
+            : detail::httpAsciiEqualsIgnoreCase(read->name(), key);
+        if (matches && read != retainedAddress) {
+            headers_.releaseHeader(*read);
+            continue;
+        }
+        if (read == retainedAddress) {
+            collapsedRetained = write;
+        }
+        if (write != read) {
+            *write = *read;
+        }
+        ++write;
+    }
+    if (write != end) {
+        if (headers_.spilled_) {
+            headers_.heap_.erase(
+                headers_.heap_.begin() + static_cast<std::ptrdiff_t>(write - begin),
+                headers_.heap_.end());
+        } else {
+            headers_.size_ = static_cast<std::size_t>(write - begin);
+        }
+    }
+    rebuildKnownHeaderIndex();
+    return *collapsedRetained;
+}
+
 bool HttpResponse::removeHeaderValidated(std::string_view key, std::uint32_t knownBit) noexcept {
     auto* const begin = headers_.begin();
     auto* const end = headers_.end();
@@ -436,7 +489,11 @@ bool HttpResponse::removeHeaderValidated(std::string_view key, std::uint32_t kno
 void HttpResponse::setHeaderStableView(std::string_view key, std::string_view value) {
     const auto knownBit = detail::classifyResponseHeaderName(key);
     if (auto* const header = findHeaderForUpdate(key, knownBit)) {
+        const bool wasAppended = detail::responseHeaderAppend(*header);
         headers_.assignStableView(*header, key, value, knownBit);
+        if (wasAppended) {
+            (void)collapseResponseHeaders(*header, key, knownBit);
+        }
         return;
     }
 
