@@ -9,6 +9,7 @@
 
 #include "ruvia/http/HttpProtocolError.h"
 #include "ruvia/http/detail/HttpContentCoding.h"
+#include "ruvia/http/detail/HttpRequestBodyFailure.h"
 #include "ruvia/http/HttpRequest.h"
 
 namespace ruvia::detail {
@@ -29,8 +30,7 @@ public:
                 return HttpProtocolError(
                     400, "failed to decode request body");
             case HttpContentDecodeError::kDecodedSizeExceeded:
-                return HttpProtocolError(
-                    413, "request body is too large");
+                return HttpRequestBodyFailure::tooLarge().protocolError();
             case HttpContentDecodeError::kDecoderFailure:
                 break;
         }

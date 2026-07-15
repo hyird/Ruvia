@@ -10,6 +10,7 @@
 
 #include "ruvia/http/HttpLimits.h"
 #include "ruvia/http/HttpProtocolError.h"
+#include "ruvia/http/detail/HttpRequestBodyFailure.h"
 #include "ruvia/http/ProtocolByteLimit.h"
 #include "ruvia/http/detail/parser/HttpChunkParser.h"
 
@@ -86,7 +87,7 @@ public:
             case Http1ChunkDecodeError::kInvalidFraming:
                 return HttpProtocolError(400, "invalid chunked request body");
             case Http1ChunkDecodeError::kBodyTooLarge:
-                return HttpProtocolError(413, "request body is too large");
+                return HttpRequestBodyFailure::tooLarge().protocolError();
             case Http1ChunkDecodeError::kFramingTooLarge:
                 return HttpProtocolError(
                     413, "request body framing is too large");

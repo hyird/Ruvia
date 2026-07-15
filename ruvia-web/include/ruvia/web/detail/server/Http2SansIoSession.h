@@ -741,10 +741,15 @@ Task<void> runHttp2SansIoSession(
                     bodyChunk->bytes(),
                     totalLimit,
                     options.maxBufferedBodyBytes);
-                if (stored != Http2RequestBodyStoreResult::kAccepted) {
+                if (stored.stored() == nullptr) {
+                    const bool knownRejection =
+                        stored.protocolFailure() != nullptr ||
+                        stored.backlogOverflow() != nullptr;
                     resetEventStream(
                         streamId,
-                        Http2ErrorCode::kCancel);
+                        knownRejection
+                            ? Http2ErrorCode::kCancel
+                            : Http2ErrorCode::kInternalError);
                     continue;
                 }
                 if (requestBody.streaming() != nullptr) {

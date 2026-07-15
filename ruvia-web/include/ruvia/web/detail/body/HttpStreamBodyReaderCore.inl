@@ -3,11 +3,11 @@
 namespace ruvia::detail {
 
 [[noreturn]] inline void throwRequestBodyTooLarge() {
-    throw HttpProtocolError(413, "request body is too large");
+    throw HttpRequestBodyFailure::tooLarge().protocolError();
 }
 
 [[noreturn]] inline void throwIncompleteRequestBody() {
-    throw HttpProtocolError(400, "incomplete request body");
+    throw HttpRequestBodyFailure::incomplete().protocolError();
 }
 
 [[noreturn]] inline void throwTransferCodingProtocolFailure(

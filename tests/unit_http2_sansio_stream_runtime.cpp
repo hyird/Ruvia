@@ -20,7 +20,6 @@ namespace {
 
 using ruvia::ProtocolByteLimit;
 using ruvia::detail::Http2RequestBodyRuntime;
-using ruvia::detail::Http2RequestBodyStoreResult;
 using ruvia::detail::Http2BufferedRequestBody;
 using ruvia::detail::Http2StreamingRequestBody;
 using ruvia::detail::Http2SansIoBodyQueue;
@@ -112,9 +111,9 @@ RUVIA_TEST(http2_web_route_selection_owns_exact_body_storage) {
     RUVIA_CHECK(bufferedBody.mode() == RequestBodyMode::kBuffered);
     RUVIA_CHECK(!bufferedRuntime.selectRoute(
         RouteResolution{}, RequestBodyMode::kStream));
-    RUVIA_CHECK(bufferedBody.store(
-        "abc", ProtocolByteLimit::limited(3), 0) ==
-        Http2RequestBodyStoreResult::kAccepted);
+    const auto bufferedStore = bufferedBody.store(
+        "abc", ProtocolByteLimit::limited(3), 0);
+    RUVIA_CHECK(bufferedStore.stored() != nullptr);
     RUVIA_CHECK_EQ(buffered->bytes(), std::string_view("abc"));
     RUVIA_CHECK_EQ(bufferedBody.receivedBytes(), std::size_t{3});
 
@@ -126,12 +125,12 @@ RUVIA_TEST(http2_web_route_selection_owns_exact_body_storage) {
     auto* streaming = streamingBody.streaming();
     RUVIA_CHECK(streaming != nullptr);
     RUVIA_CHECK(streamingBody.buffered() == nullptr);
-    RUVIA_CHECK(streamingBody.store(
-        "one", ProtocolByteLimit::unlimited(), 8) ==
-        Http2RequestBodyStoreResult::kAccepted);
-    RUVIA_CHECK(streamingBody.store(
-        "two", ProtocolByteLimit::unlimited(), 8) ==
-        Http2RequestBodyStoreResult::kAccepted);
+    const auto firstStreamingStore = streamingBody.store(
+        "one", ProtocolByteLimit::unlimited(), 8);
+    RUVIA_CHECK(firstStreamingStore.stored() != nullptr);
+    const auto secondStreamingStore = streamingBody.store(
+        "two", ProtocolByteLimit::unlimited(), 8);
+    RUVIA_CHECK(secondStreamingStore.stored() != nullptr);
     RUVIA_CHECK_EQ(streaming->queue().queuedBytes(), std::size_t{6});
 }
 
@@ -142,12 +141,15 @@ RUVIA_TEST(http2_web_request_body_runtime_enforces_total_and_backlog_limits) {
         RouteResolution{}, RequestBodyMode::kBuffered));
     auto& bufferedBody = bufferedRuntime.selectedRoute()->body();
     auto* buffered = bufferedBody.buffered();
-    RUVIA_CHECK(bufferedBody.store(
-        "1234", ProtocolByteLimit::limited(5), 0) ==
-        Http2RequestBodyStoreResult::kAccepted);
-    RUVIA_CHECK(bufferedBody.store(
-        "67", ProtocolByteLimit::limited(5), 0) ==
-        Http2RequestBodyStoreResult::kTotalLimitExceeded);
+    const auto bufferedStored = bufferedBody.store(
+        "1234", ProtocolByteLimit::limited(5), 0);
+    RUVIA_CHECK(bufferedStored.stored() != nullptr);
+    const auto totalLimitFailure = bufferedBody.store(
+        "67", ProtocolByteLimit::limited(5), 0);
+    RUVIA_CHECK(totalLimitFailure.protocolFailure() != nullptr);
+    if (const auto* failure = totalLimitFailure.protocolFailure()) {
+        RUVIA_CHECK_EQ(failure->protocolError().status(), 413);
+    }
     RUVIA_CHECK_EQ(bufferedBody.receivedBytes(), std::size_t{4});
     RUVIA_CHECK_EQ(buffered->bytes(), std::string_view("1234"));
 
@@ -157,17 +159,17 @@ RUVIA_TEST(http2_web_request_body_runtime_enforces_total_and_backlog_limits) {
         RouteResolution{}, RequestBodyMode::kStream));
     auto& streamingBody = streamingRuntime.selectedRoute()->body();
     auto* streaming = streamingBody.streaming();
-    RUVIA_CHECK(streamingBody.store(
-        "1234", ProtocolByteLimit::unlimited(), 5) ==
-        Http2RequestBodyStoreResult::kAccepted);
-    RUVIA_CHECK(streamingBody.store(
-        "67", ProtocolByteLimit::unlimited(), 5) ==
-        Http2RequestBodyStoreResult::kBacklogLimitExceeded);
+    const auto streamingStored = streamingBody.store(
+        "1234", ProtocolByteLimit::unlimited(), 5);
+    RUVIA_CHECK(streamingStored.stored() != nullptr);
+    const auto backlogOverflow = streamingBody.store(
+        "67", ProtocolByteLimit::unlimited(), 5);
+    RUVIA_CHECK(backlogOverflow.backlogOverflow() != nullptr);
     RUVIA_CHECK_EQ(streamingBody.receivedBytes(), std::size_t{4});
     RUVIA_CHECK_EQ(streaming->queue().pop(), std::string_view("1234"));
-    RUVIA_CHECK(streamingBody.store(
-        "67", ProtocolByteLimit::unlimited(), 5) ==
-        Http2RequestBodyStoreResult::kAccepted);
+    const auto resumedStore = streamingBody.store(
+        "67", ProtocolByteLimit::unlimited(), 5);
+    RUVIA_CHECK(resumedStore.stored() != nullptr);
 }
 
 RUVIA_TEST(http2_web_stream_runtime_table_keeps_active_storage_stable) {
@@ -177,9 +179,9 @@ RUVIA_TEST(http2_web_stream_runtime_table_keeps_active_storage_stable) {
     RUVIA_CHECK(first.selectRoute(
         RouteResolution{}, RequestBodyMode::kBuffered));
     auto& firstBodyRuntime = first.selectedRoute()->body();
-    RUVIA_CHECK(firstBodyRuntime.store(
-        "tiny", ProtocolByteLimit::limited(16), 0) ==
-        Http2RequestBodyStoreResult::kAccepted);
+    const auto firstStore = firstBodyRuntime.store(
+        "tiny", ProtocolByteLimit::limited(16), 0);
+    RUVIA_CHECK(firstStore.stored() != nullptr);
     const auto firstBody = firstBodyRuntime.buffered()->bytes();
     const auto* firstAddress = &first;
 

@@ -1008,6 +1008,12 @@ static_assert(std::same_as<
 static_assert(std::same_as<
     decltype(ruvia::detail::HttpServerOptions{}.maxStreamBodyBytes),
     std::optional<std::size_t>>);
+template <typename T>
+concept ExposesRvalueHttp2RequestBodyStoreAlternative =
+    requires(T&& result) { std::move(result).stored(); } ||
+    requires(T&& result) { std::move(result).protocolFailure(); } ||
+    requires(T&& result) { std::move(result).backlogOverflow(); };
+
 static_assert(std::is_same_v<
     decltype(std::declval<ruvia::ResponseStreamWriter&>().end(
         std::declval<std::span<const ruvia::HttpHeaderView>>())),
@@ -1365,6 +1371,26 @@ static_assert(std::is_same_v<
         ruvia::ProtocolByteLimit::unlimited(),
         std::size_t{})),
     ruvia::detail::Http2RequestBodyStoreResult>);
+static_assert(std::same_as<
+    decltype(std::declval<const
+        ruvia::detail::Http2RequestBodyStoreResult&>().stored()),
+    const ruvia::detail::Http2RequestBodyStored*>);
+static_assert(std::same_as<
+    decltype(std::declval<const
+        ruvia::detail::Http2RequestBodyStoreResult&>().protocolFailure()),
+    const ruvia::detail::HttpRequestBodyFailure*>);
+static_assert(std::same_as<
+    decltype(std::declval<const
+        ruvia::detail::Http2RequestBodyStoreResult&>().backlogOverflow()),
+    const ruvia::detail::Http2RequestBodyBacklogOverflow*>);
+static_assert(!std::default_initializable<
+    ruvia::detail::Http2RequestBodyStoreResult>);
+static_assert(!std::default_initializable<
+    ruvia::detail::Http2RequestBodyStored>);
+static_assert(!std::default_initializable<
+    ruvia::detail::Http2RequestBodyBacklogOverflow>);
+static_assert(!ExposesRvalueHttp2RequestBodyStoreAlternative<
+    ruvia::detail::Http2RequestBodyStoreResult>);
 static_assert(!std::default_initializable<
     ruvia::detail::Http2RequestBodyRuntime>);
 static_assert(std::same_as<
@@ -1566,11 +1592,11 @@ int main() {
     }
     auto& body = selectedRoute->body();
     auto* streamingBody = body.streaming();
+    const auto bodyStore = body.store(
+        "web-owned", ruvia::ProtocolByteLimit::unlimited(), 1024);
     if (streamingBody == nullptr || body.buffered() != nullptr ||
         body.mode() != ruvia::detail::RequestBodyMode::kStream ||
-        body.store(
-            "web-owned", ruvia::ProtocolByteLimit::unlimited(), 1024) !=
-            ruvia::detail::Http2RequestBodyStoreResult::kAccepted ||
+        bodyStore.stored() == nullptr ||
         streamingBody->queue().pop() != "web-owned") {
         return 4;
     }

@@ -23,7 +23,7 @@ namespace {
 using ruvia::ProtocolByteLimit;
 using ruvia::detail::appendHttpsPort;
 using ruvia::detail::appendResponseHead;
-using ruvia::detail::contentLengthExceedsLimit;
+using ruvia::detail::contentLengthLimitFailure;
 using ruvia::detail::hostWithoutExplicitPort;
 using ruvia::detail::Http1ConnectionDisposition;
 using ruvia::detail::Http1ServerClosePolicy;
@@ -119,13 +119,17 @@ RUVIA_TEST(request_state_content_length_exceeds_limit) {
         "POST / HTTP/1.1\r\nHost: x\r\nContent-Length: 1000000\r\n\r\n").bodyPlan;
     const auto chunked = parser.parseMessage(
         "POST / HTTP/1.1\r\nHost: x\r\nTransfer-Encoding: chunked\r\n\r\n").bodyPlan;
-    RUVIA_CHECK(contentLengthExceedsLimit(
-        over, ProtocolByteLimit::limited(100)));
-    RUVIA_CHECK(!contentLengthExceedsLimit(
+    const auto overFailure = contentLengthLimitFailure(
+        over, ProtocolByteLimit::limited(100));
+    RUVIA_CHECK(overFailure.has_value());
+    if (overFailure) {
+        RUVIA_CHECK_EQ(overFailure->protocolError().status(), 413);
+    }
+    RUVIA_CHECK(!contentLengthLimitFailure(
         exact, ProtocolByteLimit::limited(100)));
-    RUVIA_CHECK(!contentLengthExceedsLimit(
+    RUVIA_CHECK(!contentLengthLimitFailure(
         unlimited, ProtocolByteLimit::unlimited()));
-    RUVIA_CHECK(!contentLengthExceedsLimit(
+    RUVIA_CHECK(!contentLengthLimitFailure(
         chunked, ProtocolByteLimit::limited(1)));
 }
 

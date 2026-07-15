@@ -34,6 +34,7 @@
 #include <ruvia/http/detail/HttpByteRange.h>
 #include <ruvia/http/detail/HttpContentCoding.h>
 #include <ruvia/http/detail/HttpContentLength.h>
+#include <ruvia/http/detail/HttpRequestBodyFailure.h>
 #include <ruvia/http/detail/HttpTransferEncoding.h>
 #include <ruvia/http/detail/HttpResponseBody.h>
 #include <ruvia/http/detail/HttpResponseBodyAccess.h>
@@ -1863,6 +1864,28 @@ static_assert(std::same_as<
         ruvia::detail::HttpUnsupportedExpectationRejection&>()
         .protocolError()),
     ruvia::HttpProtocolError>);
+static_assert(!std::default_initializable<
+    ruvia::detail::HttpRequestBodyFailure>);
+static_assert(std::same_as<
+    decltype(ruvia::detail::HttpRequestBodyFailure::tooLarge()),
+    ruvia::detail::HttpRequestBodyFailure>);
+static_assert(std::same_as<
+    decltype(ruvia::detail::HttpRequestBodyFailure::incomplete()),
+    ruvia::detail::HttpRequestBodyFailure>);
+static_assert(std::same_as<
+    decltype(std::declval<const ruvia::detail::HttpRequestBodyFailure&>()
+        .protocolError()),
+    ruvia::HttpProtocolError>);
+static_assert(std::same_as<
+    decltype(ruvia::detail::httpRequestBodySizeFailure(
+        std::size_t{}, ruvia::ProtocolByteLimit::unlimited())),
+    std::optional<ruvia::detail::HttpRequestBodyFailure>>);
+static_assert(std::same_as<
+    decltype(ruvia::detail::httpRequestBodyAdditionFailure(
+        std::size_t{},
+        std::size_t{},
+        ruvia::ProtocolByteLimit::unlimited())),
+    std::optional<ruvia::detail::HttpRequestBodyFailure>>);
 static_assert(!std::default_initializable<
     ruvia::detail::Http2RequestBuildResult>);
 static_assert(!std::default_initializable<

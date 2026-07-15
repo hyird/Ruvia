@@ -1264,6 +1264,30 @@ endif()
 file(READ
     "${_install_prefix}/include/ruvia/http/detail/HttpExpectations.h"
     _installed_http_expectations)
+set(_installed_http_request_body_failure_path
+    "${_install_prefix}/include/ruvia/http/detail/HttpRequestBodyFailure.h")
+if(NOT EXISTS "${_installed_http_request_body_failure_path}")
+    message(FATAL_ERROR
+        "installed HTTP request-body failure contract is missing")
+endif()
+file(READ "${_installed_http_request_body_failure_path}"
+    _installed_http_request_body_failure)
+if(NOT _installed_http_request_body_failure MATCHES
+       "class HttpRequestBodyFailure final" OR
+   NOT _installed_http_request_body_failure MATCHES "tooLarge[(][)]" OR
+   NOT _installed_http_request_body_failure MATCHES "incomplete[(][)]" OR
+   NOT _installed_http_request_body_failure MATCHES "protocolError[(][)]" OR
+   NOT _installed_http_request_body_failure MATCHES
+       "HttpProtocolError[(]413, [\"]request body is too large[\"]" OR
+   NOT _installed_http_request_body_failure MATCHES
+       "HttpProtocolError[(]400, [\"]incomplete request body[\"]" OR
+   NOT _installed_http_request_body_failure MATCHES
+       "httpRequestBodySizeFailure" OR
+   NOT _installed_http_request_body_failure MATCHES
+       "httpRequestBodyAdditionFailure")
+    message(FATAL_ERROR
+        "installed HTTP request-body failure contract regressed")
+endif()
 file(READ
     "${_install_prefix}/include/ruvia/http/detail/http1/Http1RequestBodyPlan.h"
     _installed_http1_request_body_plan_expectations)
@@ -2600,6 +2624,16 @@ if(_built_components_csv MATCHES "(^|,)web(,|$)")
            "class Http2SansIoStreamRuntimeTable final" OR
        NOT _installed_http2_web_runtime MATCHES
            "Http2RequestBodyStoreResult" OR
+       NOT _installed_http2_web_runtime MATCHES
+           "class Http2RequestBodyStored final" OR
+       NOT _installed_http2_web_runtime MATCHES
+           "class Http2RequestBodyBacklogOverflow final" OR
+       NOT _installed_http2_web_runtime MATCHES
+           "protocolFailure[(][)] const [&]" OR
+       NOT _installed_http2_web_runtime MATCHES
+           "backlogOverflow[(][)] const [&]" OR
+       _installed_http2_web_runtime MATCHES
+           "kTotalLimitExceeded|kBacklogLimitExceeded" OR
        NOT _installed_http2_web_runtime MATCHES "RequestBodyMode" OR
        NOT _installed_http2_web_runtime MATCHES
            "using Storage = std::variant" OR

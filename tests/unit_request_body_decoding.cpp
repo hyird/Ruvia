@@ -27,6 +27,7 @@
 #include "ruvia/http/ProtocolByteLimit.h"
 #include "ruvia/http/detail/HttpRequestInternal.h"
 #include "ruvia/http/detail/RequestBodyDecoding.h"
+#include "ruvia/http/detail/HttpRequestBodyFailure.h"
 #include "ruvia/http/detail/http1/Http1ChunkedBodyDecoder.h"
 #include "ruvia/http/detail/http1/Http1ServerRequestParser.h"
 #include "ruvia/http/detail/body/HttpTransferCodingDecoder.h"
@@ -464,6 +465,30 @@ static_assert(std::same_as<
     HttpContentEncodeResult>);
 
 }  // namespace
+
+RUVIA_TEST(request_body_failures_own_cross_runtime_http_errors) {
+    const auto tooLarge = ruvia::detail::httpRequestBodySizeFailure(
+        5, ProtocolByteLimit::limited(4));
+    RUVIA_CHECK(tooLarge.has_value());
+    if (tooLarge) {
+        const auto error = tooLarge->protocolError();
+        RUVIA_CHECK_EQ(error.status(), 413);
+        RUVIA_CHECK_EQ(
+            std::string_view(error.what()),
+            std::string_view("request body is too large"));
+    }
+    RUVIA_CHECK(!ruvia::detail::httpRequestBodyAdditionFailure(
+        2, 2, ProtocolByteLimit::limited(4)));
+    RUVIA_CHECK(ruvia::detail::httpRequestBodyAdditionFailure(
+        2, 3, ProtocolByteLimit::limited(4)).has_value());
+
+    const auto incomplete =
+        ruvia::detail::HttpRequestBodyFailure::incomplete().protocolError();
+    RUVIA_CHECK_EQ(incomplete.status(), 400);
+    RUVIA_CHECK_EQ(
+        std::string_view(incomplete.what()),
+        std::string_view("incomplete request body"));
+}
 
 RUVIA_TEST(http1_request_body_plan_has_one_framing_truth) {
     Http1ServerRequestParser parser;

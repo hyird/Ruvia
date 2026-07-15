@@ -2,6 +2,7 @@
 
 #include "ruvia/http/detail/HttpTransferCoding.h"
 #include "ruvia/http/HttpProtocolError.h"
+#include "ruvia/http/detail/HttpRequestBodyFailure.h"
 #include "ruvia/http/ProtocolByteLimit.h"
 
 #include <cstddef>
@@ -87,8 +88,7 @@ public:
                 return HttpProtocolError(
                     400, "invalid transfer-coding body");
             case TransferCodingDecodeError::kDecodedSizeExceeded:
-                return HttpProtocolError(
-                    413, "request body is too large");
+                return HttpRequestBodyFailure::tooLarge().protocolError();
             case TransferCodingDecodeError::kDecoderFailure:
                 break;
         }

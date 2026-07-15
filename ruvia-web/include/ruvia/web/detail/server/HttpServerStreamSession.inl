@@ -164,11 +164,13 @@ Task<void> HttpServer::handleStreamSession(
                 }
                 const auto* resolved = routeResolution.resolved();
                 if (resolved == nullptr) {
-                    if (contentLengthExceedsLimit(
+                    if (const auto bodyFailure = contentLengthLimitFailure(
                             parsed.bodyPlan,
                             ProtocolByteLimit::limited(
                                 options_.maxBufferedBodyBytes))) {
-                        closingError = HttpErrorInfo(413, {}, "request body is too large");
+                        closingError = copyHttpProtocolErrorInfo(
+                            requestMemory.resource(),
+                            bodyFailure->protocolError());
                         break;
                     }
                     if (auto documentResponse = tryDocumentRootResponse(parsed.request, requestMemory)) {
@@ -208,8 +210,12 @@ Task<void> HttpServer::handleStreamSession(
                     endpoint.requestBodyMode(),
                     options_.maxStreamBodyBytes,
                     options_.maxBufferedBodyBytes);
-                if (contentLengthExceedsLimit(parsed.bodyPlan, maxRequestBodyBytes)) {
-                    closingError = HttpErrorInfo(413, {}, "request body is too large");
+                if (const auto bodyFailure = contentLengthLimitFailure(
+                        parsed.bodyPlan,
+                        maxRequestBodyBytes)) {
+                    closingError = copyHttpProtocolErrorInfo(
+                        requestMemory.resource(),
+                        bodyFailure->protocolError());
                     break;
                 }
 

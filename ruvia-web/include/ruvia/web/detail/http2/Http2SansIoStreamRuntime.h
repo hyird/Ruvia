@@ -21,6 +21,7 @@
 #include "ruvia/core/memory/PmrObject.h"
 #include "ruvia/core/memory/PmrResource.h"
 #include "ruvia/http/ProtocolByteLimit.h"
+#include "ruvia/http/detail/HttpRequestBodyFailure.h"
 #include "ruvia/http/detail/PmrString.h"
 #include "ruvia/http/detail/http2/Http2StreamState.h"
 #include "ruvia/web/detail/router/RouteModes.h"
@@ -157,11 +158,79 @@ private:
     bool hasQueuedChunk_{false};
 };
 
-enum class Http2RequestBodyStoreResult : std::uint8_t {
-    kAccepted,
-    kTotalLimitExceeded,
-    kBacklogLimitExceeded
+class Http2BufferedRequestBody;
+class Http2StreamingRequestBody;
+
+class Http2RequestBodyStored final {
+private:
+    friend class Http2RequestBodyStoreResult;
+    constexpr Http2RequestBodyStored() noexcept = default;
 };
+
+class Http2RequestBodyBacklogOverflow final {
+private:
+    friend class Http2RequestBodyStoreResult;
+    constexpr Http2RequestBodyBacklogOverflow() noexcept = default;
+};
+
+// A product-owned body store distinguishes an HTTP content failure from local
+// streaming backlog exhaustion. They require different runtime policy and must
+// never collapse into a generic non-accepted enum value.
+class Http2RequestBodyStoreResult final {
+public:
+    [[nodiscard]] constexpr const Http2RequestBodyStored*
+    stored() const & noexcept {
+        return std::get_if<Http2RequestBodyStored>(&value_);
+    }
+    const Http2RequestBodyStored* stored() const && = delete;
+
+    [[nodiscard]] constexpr const HttpRequestBodyFailure*
+    protocolFailure() const & noexcept {
+        return std::get_if<HttpRequestBodyFailure>(&value_);
+    }
+    const HttpRequestBodyFailure* protocolFailure() const && = delete;
+
+    [[nodiscard]] constexpr const Http2RequestBodyBacklogOverflow*
+    backlogOverflow() const & noexcept {
+        return std::get_if<Http2RequestBodyBacklogOverflow>(&value_);
+    }
+    const Http2RequestBodyBacklogOverflow* backlogOverflow() const && = delete;
+
+private:
+    friend class Http2BufferedRequestBody;
+    friend class Http2StreamingRequestBody;
+
+    using Value = std::variant<
+        Http2RequestBodyStored,
+        HttpRequestBodyFailure,
+        Http2RequestBodyBacklogOverflow>;
+
+    template <typename Alternative>
+    explicit constexpr Http2RequestBodyStoreResult(
+        Alternative alternative) noexcept
+        : value_(alternative) {}
+
+    [[nodiscard]] static constexpr Http2RequestBodyStoreResult makeStored()
+        noexcept {
+        return Http2RequestBodyStoreResult(Http2RequestBodyStored());
+    }
+
+    [[nodiscard]] static constexpr Http2RequestBodyStoreResult
+    makeProtocolFailure(HttpRequestBodyFailure failure) noexcept {
+        return Http2RequestBodyStoreResult(failure);
+    }
+
+    [[nodiscard]] static constexpr Http2RequestBodyStoreResult
+    makeBacklogOverflow() noexcept {
+        return Http2RequestBodyStoreResult(
+            Http2RequestBodyBacklogOverflow());
+    }
+
+    Value value_;
+};
+
+static_assert(std::is_trivially_copyable_v<Http2RequestBodyStoreResult>);
+static_assert(sizeof(Http2RequestBodyStoreResult) <= 2);
 
 class Http2BufferedRequestBody final {
 public:
@@ -172,14 +241,15 @@ public:
     [[nodiscard]] Http2RequestBodyStoreResult store(
         std::string_view data,
         ProtocolByteLimit totalLimit) {
-        if (totalLimit.additionExceeds(receivedBytes_, data.size())) {
-            return Http2RequestBodyStoreResult::kTotalLimitExceeded;
+        if (const auto failure = httpRequestBodyAdditionFailure(
+                receivedBytes_, data.size(), totalLimit)) {
+            return Http2RequestBodyStoreResult::makeProtocolFailure(*failure);
         }
         receivedBytes_ += data.size();
         if (!data.empty()) {
             bytes_.append(data.data(), data.size());
         }
-        return Http2RequestBodyStoreResult::kAccepted;
+        return Http2RequestBodyStoreResult::makeStored();
     }
 
     [[nodiscard]] std::size_t receivedBytes() const noexcept {
@@ -206,16 +276,17 @@ public:
         std::string_view data,
         ProtocolByteLimit totalLimit,
         std::size_t backlogLimit) {
-        if (totalLimit.additionExceeds(receivedBytes_, data.size())) {
-            return Http2RequestBodyStoreResult::kTotalLimitExceeded;
+        if (const auto failure = httpRequestBodyAdditionFailure(
+                receivedBytes_, data.size(), totalLimit)) {
+            return Http2RequestBodyStoreResult::makeProtocolFailure(*failure);
         }
         if (queue_.queuedBytes() > backlogLimit ||
             data.size() > backlogLimit - queue_.queuedBytes()) {
-            return Http2RequestBodyStoreResult::kBacklogLimitExceeded;
+            return Http2RequestBodyStoreResult::makeBacklogOverflow();
         }
         receivedBytes_ += data.size();
         queue_.enqueue(data);
-        return Http2RequestBodyStoreResult::kAccepted;
+        return Http2RequestBodyStoreResult::makeStored();
     }
 
     [[nodiscard]] std::size_t receivedBytes() const noexcept {

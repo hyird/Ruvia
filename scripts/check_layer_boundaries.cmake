@@ -8155,6 +8155,98 @@ if(EXISTS "${WEB_HTTP1_BODY_READER}" AND EXISTS "${WEB_HTTP1_BODY_READER_CORE}")
     endif()
 endif()
 
+set(HTTP_REQUEST_BODY_FAILURE
+    "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/detail/HttpRequestBodyFailure.h")
+set(WEB_HTTP1_REQUEST_STATE
+    "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/server/HttpServerRequestState.h")
+set(WEB_HTTP2_REQUEST_BODY_RUNTIME
+    "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/http2/Http2SansIoStreamRuntime.h")
+set(WEB_HTTP2_REQUEST_BODY_SESSION
+    "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/server/Http2SansIoSession.h")
+if(NOT EXISTS "${HTTP_REQUEST_BODY_FAILURE}")
+    boundary_error("HTTP request-body failure contract is missing"
+        "size and completion failures must map to HTTP errors in ruvia-http")
+elseif(EXISTS "${WEB_HTTP1_BODY_READER_CORE}" AND
+       EXISTS "${WEB_HTTP1_REQUEST_STATE}" AND
+       EXISTS "${HTTP1_WEB_STREAM_SESSION}" AND
+       EXISTS "${WEB_HTTP2_REQUEST_BODY_RUNTIME}" AND
+       EXISTS "${WEB_HTTP2_REQUEST_BODY_SESSION}")
+    file(READ "${HTTP_REQUEST_BODY_FAILURE}" http_request_body_failure)
+    file(READ "${WEB_HTTP1_BODY_READER_CORE}" web_http1_body_reader_core)
+    file(READ "${WEB_HTTP1_REQUEST_STATE}" web_http1_request_state)
+    file(READ "${HTTP1_WEB_STREAM_SESSION}" web_http1_stream_session)
+    file(READ "${WEB_HTTP2_REQUEST_BODY_RUNTIME}" web_http2_request_body_runtime)
+    file(READ "${WEB_HTTP2_REQUEST_BODY_SESSION}" web_http2_request_body_session)
+    if(NOT http_request_body_failure MATCHES
+           "class HttpRequestBodyFailure final" OR
+       NOT http_request_body_failure MATCHES "tooLarge[(][)]" OR
+       NOT http_request_body_failure MATCHES "incomplete[(][)]" OR
+       NOT http_request_body_failure MATCHES "protocolError[(][)]" OR
+       NOT http_request_body_failure MATCHES
+           "HttpProtocolError[(]413, [\"]request body is too large[\"]" OR
+       NOT http_request_body_failure MATCHES
+           "HttpProtocolError[(]400, [\"]incomplete request body[\"]" OR
+       NOT http_request_body_failure MATCHES
+           "httpRequestBodySizeFailure" OR
+       NOT http_request_body_failure MATCHES
+           "httpRequestBodyAdditionFailure" OR
+       NOT web_http1_body_reader_core MATCHES
+           "HttpRequestBodyFailure::tooLarge" OR
+       NOT web_http1_body_reader_core MATCHES
+           "HttpRequestBodyFailure::incomplete" OR
+       NOT web_http1_request_state MATCHES
+           "contentLengthLimitFailure" OR
+       NOT web_http1_stream_session MATCHES
+           "bodyFailure->protocolError[(][)]" OR
+       web_http1_stream_session MATCHES
+           "HttpErrorInfo[(]413|request body is too large" OR
+       NOT web_http2_request_body_runtime MATCHES
+           "class Http2RequestBodyStoreResult final" OR
+       NOT web_http2_request_body_runtime MATCHES
+           "using Value = std::variant" OR
+       NOT web_http2_request_body_runtime MATCHES
+           "protocolFailure[(][)] const [&]" OR
+       NOT web_http2_request_body_runtime MATCHES
+           "backlogOverflow[(][)] const [&]" OR
+       NOT web_http2_request_body_runtime MATCHES
+           "httpRequestBodyAdditionFailure" OR
+       web_http2_request_body_runtime MATCHES
+           "kTotalLimitExceeded|kBacklogLimitExceeded" OR
+       NOT web_http2_request_body_session MATCHES "stored[.]stored[(][)]" OR
+       NOT web_http2_request_body_session MATCHES
+           "stored[.]protocolFailure[(][)]" OR
+       NOT web_http2_request_body_session MATCHES
+           "stored[.]backlogOverflow[(][)]")
+        boundary_error("request-body failure ownership or store outcomes regressed"
+            "HTTP must own 400/413 mapping while Web keeps typed stored, protocol-failure, and backlog outcomes distinct")
+    endif()
+endif()
+check_files_no_match("request-body 413 mapping duplicated outside its HTTP failure contract"
+    "[\"]request body is too large[\"]"
+    "${RUVIA_ROOT}/ruvia-http/src/parser/HttpParseError.cpp"
+    "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/detail/RequestBodyDecoding.h"
+    "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/detail/body/HttpTransferCodingDecoder.h"
+    "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/detail/http1/Http1ChunkedBodyDecoder.h"
+    "${WEB_HTTP1_BODY_READER_CORE}"
+    "${HTTP1_WEB_STREAM_SESSION}")
+
+set(HTTP_REQUEST_BODY_FAILURE_TEST
+    "${RUVIA_ROOT}/tests/unit_request_body_decoding.cpp")
+set(WEB_HTTP2_REQUEST_BODY_TEST
+    "${RUVIA_ROOT}/tests/unit_http2_sansio_stream_runtime.cpp")
+if(EXISTS "${HTTP_REQUEST_BODY_FAILURE_TEST}" AND
+   EXISTS "${WEB_HTTP2_REQUEST_BODY_TEST}")
+    file(READ "${HTTP_REQUEST_BODY_FAILURE_TEST}" http_request_body_failure_test)
+    file(READ "${WEB_HTTP2_REQUEST_BODY_TEST}" web_http2_request_body_test)
+    if(NOT http_request_body_failure_test MATCHES
+           "request_body_failures_own_cross_runtime_http_errors" OR
+       NOT web_http2_request_body_test MATCHES "protocolFailure[(][)]" OR
+       NOT web_http2_request_body_test MATCHES "backlogOverflow[(][)]")
+        boundary_error("request-body failure contracts are under-tested"
+            "tests must pin HTTP error mapping and distinct H2 total/backlog outcomes")
+    endif()
+endif()
+
 set(HTTP_REQUEST_EXPECTATIONS
     "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/detail/HttpExpectations.h")
 set(HTTP1_HEADER_BLOCK_STATE
