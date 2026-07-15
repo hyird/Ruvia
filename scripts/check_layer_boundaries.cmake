@@ -11099,7 +11099,7 @@ if(NOT readme_content MATCHES "## Targets" OR
    NOT readme_content MATCHES "ruvia::web" OR
    NOT readme_content MATCHES "## Build" OR
    NOT readme_content MATCHES "## Install and Consume" OR
-   NOT readme_content MATCHES "## Minimal Web App" OR
+   NOT readme_content MATCHES "## (Minimal Web App|Quick Start)" OR
    NOT readme_content MATCHES
        "VCPKG_ROOT/scripts/buildsystems/vcpkg[.]cmake")
     boundary_error("README lost its user-facing contract"
