@@ -272,7 +272,12 @@ RUVIA_TEST(multipart_boundary_from_content_type) {
              "multipart/form-data; boundary=",
              "multipart/form-data; boundary=a:b",
              R"(multipart/form-data; boundary="a;b")",
-             "multipart/form-data; boundary=one; boundary=two"}) {
+             "multipart/form-data; boundary=one; boundary=two",
+             "multipart/form-data; boundary=abc; broken",
+             "multipart/form-data; broken; boundary=abc",
+             "multipart/form-data; boundary=abc; charset=unquoted value",
+             R"(multipart/form-data; boundary=abc; charset="unterminated)",
+             "multipart/form-data; boundary=abc; =value"}) {
         const auto result = httpParseMultipartBoundary(invalid);
         RUVIA_CHECK(result.boundary() == nullptr);
         RUVIA_CHECK(result.notApplicable() == nullptr);
@@ -284,6 +289,13 @@ RUVIA_TEST(multipart_boundary_from_content_type) {
                 std::string_view(error.what()),
                 std::string_view("invalid multipart boundary"));
         }
+    }
+
+    const auto extension = httpParseMultipartBoundary(
+        R"(multipart/form-data; charset="utf-8"; boundary=abc)");
+    RUVIA_CHECK(extension.boundary() != nullptr);
+    if (extension.boundary() != nullptr) {
+        RUVIA_CHECK_EQ(extension.boundary()->value(), std::string_view("abc"));
     }
 }
 

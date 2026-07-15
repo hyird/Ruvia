@@ -557,7 +557,7 @@ private:
     }
 }
 
-[[nodiscard]] inline bool httpValidMultipartDispositionParameterValue(
+[[nodiscard]] inline bool httpValidMimeParameterValue(
     std::string_view value) noexcept {
     if (value.empty()) {
         return false;
@@ -577,8 +577,7 @@ private:
                 return false;
             }
             const auto escaped = static_cast<unsigned char>(value[index]);
-            if (escaped == 0 || escaped == '\r' || escaped == '\n' ||
-                escaped == 0x7F) {
+            if (escaped != '\t' && (escaped < 0x20 || escaped == 0x7F)) {
                 return false;
             }
             continue;
@@ -647,23 +646,41 @@ httpDecodeMultipartBoundaryParameter(std::string_view parameter) {
         return HttpMultipartBoundaryParseResult::makeFailure();
     }
 
-    contentType.remove_prefix(mediaEnd + 1);
     std::optional<MultipartBoundary> boundary;
-    bool repeated = false;
-    httpVisitSemicolonParametersQuoted(
-        contentType,
-        [&boundary, &repeated](std::string_view key, std::string_view value) {
-            if (!httpAsciiEqualsIgnoreCase(key, "boundary")) {
-                return true;
+    bool boundarySeen = false;
+    const auto parameters = contentType.substr(mediaEnd + 1);
+    std::size_t start = 0;
+    while (start <= parameters.size()) {
+        const auto end = httpFindUnquotedDelimiter(parameters, start, ';');
+        const auto parameter = httpTrimOws(parameters.substr(start, end - start));
+        const auto equals = parameter.find('=');
+        if (parameter.empty() || equals == std::string_view::npos) {
+            return HttpMultipartBoundaryParseResult::makeFailure();
+        }
+        const auto key = httpTrimOws(parameter.substr(0, equals));
+        const auto value = httpTrimOws(parameter.substr(equals + 1));
+        if (key.empty() ||
+            !std::all_of(key.begin(), key.end(), httpMimeTokenChar) ||
+            !httpValidMimeParameterValue(value)) {
+            return HttpMultipartBoundaryParseResult::makeFailure();
+        }
+        if (httpAsciiEqualsIgnoreCase(key, "boundary")) {
+            if (boundarySeen) {
+                return HttpMultipartBoundaryParseResult::makeFailure();
             }
-            if (boundary) {
-                repeated = true;
-                return false;
-            }
+            boundarySeen = true;
             boundary = httpDecodeMultipartBoundaryParameter(value);
-            return boundary.has_value();
-        });
-    if (!boundary || repeated) {
+            if (!boundary) {
+                return HttpMultipartBoundaryParseResult::makeFailure();
+            }
+        }
+
+        if (end >= parameters.size()) {
+            break;
+        }
+        start = end + 1;
+    }
+    if (!boundary) {
         return HttpMultipartBoundaryParseResult::makeFailure();
     }
     return HttpMultipartBoundaryParseResult(std::move(*boundary));
@@ -726,7 +743,7 @@ httpParseMultipartPartHeaders(std::string_view headers) noexcept {
         const auto value = httpTrimOws(parameter.substr(equals + 1));
         if (key.empty() ||
             !std::all_of(key.begin(), key.end(), httpMimeTokenChar) ||
-            !httpValidMultipartDispositionParameterValue(value)) {
+            !httpValidMimeParameterValue(value)) {
             return HttpMultipartPartHeaderParseResult::makeFailure(
                 MultipartParseError::kInvalidContentDisposition);
         }
