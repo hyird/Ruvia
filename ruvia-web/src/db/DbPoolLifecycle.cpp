@@ -22,12 +22,12 @@ detail::MariaDbPool::MariaDbPool(asio::io_context& ioContext, DbConfig config, s
       config_(std::move(config)),
       resource_(detail::pmrResourceOrDefault(resource)),
       slots_(resource_),
-      scheduler_(config_.poolSize, resource_) {
+      scheduler_(config_.poolSizePerWorker, resource_) {
     detail::validateDbConfig(config_);
     if (config_.driver != DbDriver::kMariaDb) {
         throw std::invalid_argument("MariaDB pool requires the MariaDB driver");
     }
-    const auto poolSize = config_.poolSize;
+    const auto poolSize = config_.poolSizePerWorker;
     slots_.reserve(poolSize);
     for (std::size_t i = 0; i < poolSize; ++i) {
         slots_.emplace_back(resource_);

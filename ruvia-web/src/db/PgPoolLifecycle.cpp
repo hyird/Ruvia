@@ -27,13 +27,13 @@ PostgreSqlPool::PostgreSqlPool(
       config_(std::move(config)),
       resource_(pmrResourceOrDefault(resource)),
       slots_(resource_),
-      scheduler_(config_.poolSize, resource_) {
+      scheduler_(config_.poolSizePerWorker, resource_) {
     validateDbConfig(config_);
     if (config_.driver != DbDriver::kPostgreSql) {
         throw std::invalid_argument("PostgreSQL pool requires the PostgreSQL driver");
     }
-    slots_.reserve(config_.poolSize);
-    for (std::size_t i = 0; i < config_.poolSize; ++i) {
+    slots_.reserve(config_.poolSizePerWorker);
+    for (std::size_t i = 0; i < config_.poolSizePerWorker; ++i) {
         slots_.emplace_back(resource_);
     }
 }

@@ -6,6 +6,7 @@
 #include <asio/io_context.hpp>
 #include <asio/use_future.hpp>
 
+#include <array>
 #include <chrono>
 #include <exception>
 #include <memory_resource>
@@ -24,6 +25,7 @@
 #include "ruvia/web/Streaming.h"
 #include "ruvia/core/detail/AsioAwait.h"
 #include "ruvia/web/Context.h"
+#include "ruvia/web/Controller.h"
 #include "ruvia/web/detail/middleware/MiddlewareRegistration.h"
 #include "ruvia/core/memory/MemoryPool.h"
 #include "ruvia/web/Router.h"
@@ -31,6 +33,10 @@
 #include "ruvia/web/detail/router/RouteResolution.h"
 #include "ruvia/web/detail/router/RouteTable.h"
 #include "ruvia/web/detail/websocket/WebSocketInternal.h"
+
+RUVIA_REQUEST_MODEL(ScopedValidationRequest,
+    RUVIA_FIELD(value, ruvia::String)
+);
 
 namespace {
 
@@ -57,6 +63,43 @@ public:
         co_return;
     }
 };
+
+class ScopedValidationValidator final
+    : public ruvia::Middleware<ScopedValidationValidator> {
+public:
+    RUVIA_VALIDATE_JSON(ScopedValidationRequest,
+        RUVIA_RULE(value, RUVIA_REQUIRED("value is required")))
+};
+
+class ValidationScopeProbe final
+    : public ruvia::Middleware<ValidationScopeProbe> {
+public:
+    ruvia::Task<void> handle(ruvia::Context& context, ruvia::Next& next) {
+        co_await next();
+        try {
+            (void)context.req().valid<ScopedValidationRequest>();
+        } catch (const std::logic_error&) {
+            releasedAfterNext = true;
+        }
+    }
+
+    static inline bool releasedAfterNext{false};
+};
+
+bool scopedValidationHandlerRead{false};
+bool scopedValidationHandlerThrows{false};
+
+ruvia::Task<ruvia::HttpResponse> scopedValidationHandler(
+    void*,
+    ruvia::Context& context) {
+    const auto& model = context.req().valid<ScopedValidationRequest>();
+    scopedValidationHandlerRead =
+        model.value().has_value() && model.value()->view() == "ok";
+    if (scopedValidationHandlerThrows) {
+        throw std::runtime_error("validated handler failure");
+    }
+    co_return context.text("validated");
+}
 
 // Never invoked — resolve() only needs a registered route with a valid handler.
 ruvia::Task<ruvia::HttpResponse> dummyHandler(void*, ruvia::Context&) {
@@ -165,6 +208,59 @@ RUVIA_TEST(route_rejects_duplicate_validated_model_types_at_registration) {
             "duplicate validated model type on route";
     }
     RUVIA_CHECK(rejected);
+}
+
+RUVIA_TEST(validated_model_binding_spans_next_and_unwinds_before_upstream_resumes) {
+    for (const bool handlerThrows : {false, true}) {
+        scopedValidationHandlerRead = false;
+        scopedValidationHandlerThrows = handlerThrows;
+        ValidationScopeProbe::releasedAfterNext = false;
+
+        ruvia::Router router;
+        auto& impl = ruvia::detail::RouterImpl::from(router);
+        const std::array middlewares{
+            ruvia::detail::makeMiddlewareDescriptor<ValidationScopeProbe>(),
+            ruvia::detail::makeMiddlewareDescriptor<ScopedValidationValidator>()};
+        impl.registerRoute(
+            HttpKnownMethod::kPost,
+            path("/validated-scope"),
+            RouteHandler(nullptr, &scopedValidationHandler),
+            RequestBodyMode::kBuffered,
+            std::span<const ControllerMiddlewareDescriptor>{},
+            std::span(middlewares));
+        impl.finalize();
+
+        ruvia::WorkerMemory worker;
+        ruvia::RequestMemory memory(worker);
+        auto request = ruvia::detail::HttpRequestAccess::make();
+        ruvia::detail::HttpRequestAccess::reset(request);
+        ruvia::detail::HttpRequestAccess::setMethod(request, "POST");
+        ruvia::detail::HttpRequestAccess::setPath(request, "/validated-scope");
+        ruvia::detail::HttpRequestAccess::setResource(request, memory.resource());
+        const auto contentTypeSlot =
+            ruvia::detail::HttpRequestAccess::knownHeaderSlot(
+                ruvia::detail::RequestKnownHeader::kContentType);
+        (void)ruvia::detail::HttpRequestAccess::addHeader(
+            request,
+            ruvia::HttpHeaderView{"Content-Type", "application/json"},
+            contentTypeSlot);
+        ruvia::detail::HttpRequestAccess::setBody(
+            request, R"({"value":"ok"})");
+
+        asio::io_context ioContext(1);
+        auto future = asio::co_spawn(
+            ioContext,
+            ruvia::detail::taskAsAwaitable(
+                impl.routeTable().dispatch(request, memory, {})),
+            asio::use_future);
+        ioContext.run();
+        const auto response = future.get();
+        RUVIA_CHECK_EQ(
+            response.status(),
+            handlerThrows ? std::uint16_t{500} : std::uint16_t{200});
+        RUVIA_CHECK(scopedValidationHandlerRead);
+        RUVIA_CHECK(ValidationScopeProbe::releasedAfterNext);
+    }
 }
 
 struct Router final {

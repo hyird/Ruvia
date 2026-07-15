@@ -221,6 +221,7 @@ Router/error handler 不得设置 `Connection: close` 或接收 `closeConnection
 - 请求 JSON 只嵌套请求模型，响应 JSON 只嵌套响应模型；两者都支持数组。form 只支持扁平 key-value 基础字段。
 - validation 不应为 invalid type 或 duplicate 再扫描 body。
 - 同一 `RUVIA_PATTERN` 只能编译一次并复用。
+- 已校验模型由 validation middleware 的 typed coroutine frame 持有，并在 `next()` 期间以 intrusive scoped borrow 绑定到 `Context`；请求期不得为模型另行分配、保存 destroy callback 或设置固定模型数量上限，异常展开必须自动解绑。
 
 ## CMake 和安装
 

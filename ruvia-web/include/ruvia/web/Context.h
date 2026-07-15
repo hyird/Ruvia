@@ -72,7 +72,8 @@ private:
     friend ConnInfo getConnInfo(const Context& context) noexcept;
     friend struct detail::SessionAccess;
     template <typename T>
-    friend void detail::setValidatedModel(Context& context, T&& model);
+    friend detail::ValidatedModelBinding<T>
+    detail::bindValidatedModel(Context& context, const T& model);
 
     Context(
         RequestMemory& memory,
@@ -322,14 +323,14 @@ private:
     std::exception_ptr error_;
     mutable bool bodyDecoded_ : 1 {false};
 
-    detail::ValidatedValueStore validatedValues_;
+    detail::ValidatedModelBindings validatedModels_;
 };
 
 namespace detail {
 
 template <typename T>
-void setValidatedModel(Context& context, T&& model) {
-    context.validatedValues_.set(std::forward<T>(model), context.resource());
+ValidatedModelBinding<T> bindValidatedModel(Context& context, const T& model) {
+    return context.validatedModels_.bind(model);
 }
 
 }  // namespace detail

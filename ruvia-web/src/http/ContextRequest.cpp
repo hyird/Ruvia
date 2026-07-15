@@ -685,11 +685,6 @@ Task<std::string_view> Context::requestBody() const {
     }
     auto& decoded = decodedBody();
     decoded = std::move(*decodedContent).takeBytes();
-    // Keep short content in the arena (not inline SSO) so the returned view
-    // survives the Context if a handler hands it to c.text().
-    if (decoded.size() < 32) {
-        decoded.reserve(32);
-    }
     bodyDecoded_ = true;
     co_return std::string_view(decoded.data(), decoded.size());
 }

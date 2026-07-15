@@ -39,7 +39,7 @@ Task<T> ContextRequest::form() const {
 
 template <typename T>
 inline const T& ContextRequest::valid() const {
-    return validatedValues().get<T>();
+    return validatedModels().get<T>();
 }
 
 }  // namespace ruvia

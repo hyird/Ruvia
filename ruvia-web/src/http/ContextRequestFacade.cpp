@@ -111,8 +111,8 @@ std::pmr::memory_resource* ContextRequest::resource() const noexcept {
     return context_->resource();
 }
 
-const detail::ValidatedValueStore& ContextRequest::validatedValues() const noexcept {
-    return context_->validatedValues_;
+const detail::ValidatedModelBindings& ContextRequest::validatedModels() const noexcept {
+    return context_->validatedModels_;
 }
 
 }  // namespace ruvia

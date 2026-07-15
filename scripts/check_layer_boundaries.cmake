@@ -780,6 +780,60 @@ check_files_no_match("Web must not directly emit HTTP/1 Connection semantics"
     "http1MarkConnectionClose|[.]header[(][\"]Connection[\"]"
     ${WEB_SOURCE})
 
+file(READ "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/ValidatedValues.h"
+    web_validated_model_bindings)
+file(READ "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/Context.h"
+    web_validated_model_context)
+file(READ "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/controller/ControllerRuntime.h"
+    web_validated_model_runtime)
+file(READ "${RUVIA_ROOT}/ruvia-web/src/router/Router.cpp"
+    web_validated_model_registration)
+file(READ "${RUVIA_ROOT}/tests/unit_validator.cpp"
+    web_validated_model_test)
+file(READ "${RUVIA_ROOT}/tests/unit_routing.cpp"
+    web_validated_model_routing_test)
+if(NOT web_validated_model_bindings MATCHES
+       "struct ValidatedModelBindingNode final" OR
+   NOT web_validated_model_bindings MATCHES
+       "ValidatedModelBindingNode[*] previous" OR
+   NOT web_validated_model_bindings MATCHES
+       "ValidatedModelBindingNode[*] head_" OR
+   NOT web_validated_model_bindings MATCHES
+       "~ValidatedModelBinding[(][)] noexcept" OR
+   NOT web_validated_model_bindings MATCHES
+       "~ValidatedModelBindings[(][)] noexcept" OR
+   NOT web_validated_model_bindings MATCHES
+       "if [(]head_ != nullptr[)]" OR
+   NOT web_validated_model_bindings MATCHES
+       "using ModelT = std::remove_cvref_t<T>" OR
+   NOT web_validated_model_bindings MATCHES
+       "bind[(]T&&[)] = delete" OR
+   NOT web_validated_model_bindings MATCHES
+       "bindings_->pop[(]node_[)]" OR
+   web_validated_model_bindings MATCHES
+       "ValidatedValueStore|std::array|constructPmrObject|destroyPmrObject|memory_resource|void[ \t]*[(][*]destroy" OR
+   NOT web_validated_model_context MATCHES
+       "ValidatedModelBindings validatedModels_" OR
+   NOT web_validated_model_runtime MATCHES
+       "BodyT body = co_await parseValidatedBody" OR
+   NOT web_validated_model_runtime MATCHES
+       "auto binding = bindValidatedModel[(]c, body[)]" OR
+   NOT web_validated_model_runtime MATCHES
+       "co_await next[(][)]" OR
+   NOT web_validated_model_registration MATCHES
+       "validateUniqueValidatedModelTypes" OR
+   NOT web_validated_model_test MATCHES
+       "validated_model_bindings_are_nested_scoped_borrows" OR
+   NOT web_validated_model_test MATCHES
+       "validated_model_binding_unwinds_on_exception" OR
+   NOT web_validated_model_test MATCHES
+       "AcceptsRvalueValidatedModel" OR
+   NOT web_validated_model_routing_test MATCHES
+       "validated_model_binding_spans_next_and_unwinds_before_upstream_resumes")
+    boundary_error("validated models regained request-owned erased storage"
+        "typed validator coroutine frames must own models, Context must keep only an unbounded intrusive stack of scoped non-owning bindings, and registration must reject duplicate model types before requests run")
+endif()
+
 set(WEB_RATE_LIMIT_RULE
     "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/RateLimitRule.h")
 set(WEB_RATE_LIMITER
@@ -5118,10 +5172,11 @@ check_files_no_match("Context cookies must use the response mutation path"
     "${RULE_STALE_CONTEXT_COOKIE_GENERATOR}"
     "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/Context.h"
     "${RUVIA_ROOT}/ruvia-web/src/http/ContextResponse.cpp")
-check_files_no_match("session storage must not bypass SSO for obsolete response borrowing"
-    "${RULE_STALE_SESSION_SSO_BYPASS}"
+check_files_no_match("request and session storage must not bypass SSO for obsolete response borrowing"
+    "${RULE_STALE_CONTEXT_SSO_BYPASS}"
     "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/Context.h"
-    "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/http/SessionInternal.h")
+    "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/http/SessionInternal.h"
+    "${RUVIA_ROOT}/ruvia-web/src/http/ContextRequest.cpp")
 check_files_no_match("Context response construction must not restore request-local renderer state"
     "${RULE_STALE_CONTEXT_RENDER_PIPELINE}"
     "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/Context.h"
@@ -9719,6 +9774,38 @@ if(EXISTS "${WEB_DB_TIMEOUT_MODEL}" AND
            "decltype[(]ruvia::RedisConfig[{][}][.]commandTimeout[)]")
         boundary_error("integration timeout policy is insufficiently pinned"
             "unit tests must reject configured zero and installed headers must expose optional durations")
+    endif()
+endif()
+
+set(WEB_DB_POOL_MODEL
+    "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/db/DbTypes.h")
+set(WEB_DB_POOL_API_SURFACE "${RUVIA_ROOT}/examples/api_surface.cpp")
+set(WEB_DB_POOL_PACKAGE_CONSUMER
+    "${RUVIA_ROOT}/tests/package-consumer/web.cpp")
+set(WEB_DB_POOL_README "${RUVIA_ROOT}/README.md")
+if(EXISTS "${WEB_DB_POOL_MODEL}" AND
+   EXISTS "${WEB_DB_POOL_API_SURFACE}" AND
+   EXISTS "${WEB_DB_POOL_PACKAGE_CONSUMER}" AND
+   EXISTS "${WEB_DB_POOL_README}")
+    file(READ "${WEB_DB_POOL_MODEL}" web_db_pool_model)
+    file(READ "${WEB_DB_POOL_API_SURFACE}" web_db_pool_api_surface)
+    file(READ "${WEB_DB_POOL_PACKAGE_CONSUMER}" web_db_pool_package_consumer)
+    file(READ "${WEB_DB_POOL_README}" web_db_pool_readme)
+    if(NOT web_db_pool_model MATCHES
+           "std::size_t[ \t]+poolSizePerWorker[{]4[}]" OR
+       web_db_pool_model MATCHES "std::size_t[ \t]+poolSize[{]" OR
+       NOT web_db_pool_api_surface MATCHES
+           "decltype[(]ruvia::DbConfig[{][}][.]poolSizePerWorker[)]" OR
+       NOT web_db_pool_api_surface MATCHES
+           "!HasLegacyDbPoolSize<ruvia::DbConfig>" OR
+       NOT web_db_pool_package_consumer MATCHES
+           "decltype[(]ruvia::DbConfig[{][}][.]poolSizePerWorker[)]" OR
+       NOT web_db_pool_package_consumer MATCHES
+           "!HasLegacyDbPoolSize<ruvia::DbConfig>" OR
+       NOT web_db_pool_readme MATCHES "config[.]poolSizePerWorker" OR
+       NOT web_db_pool_readme MATCHES "total connection budget")
+        boundary_error("database pool size lost its per-worker API meaning"
+            "DbConfig, API/install consumers, and README must expose only poolSizePerWorker")
     endif()
 endif()
 

@@ -32,7 +32,7 @@ ruvia::DbConfig dbConfigFromEnv(const ruvia::Env& env) {
         config.port = *port;
     }
     if (const auto poolSize = env.get<std::uint32_t>("RUVIA_DB_POOL_SIZE")) {
-        config.poolSize = *poolSize;
+        config.poolSizePerWorker = *poolSize;
     }
     config.acquireTimeout = std::chrono::seconds(2);
     config.connectTimeout = std::chrono::seconds(5);

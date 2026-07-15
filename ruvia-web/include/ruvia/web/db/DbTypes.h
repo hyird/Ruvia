@@ -32,7 +32,7 @@ struct DbConfig {
     std::pmr::string password;
     std::pmr::string database;
     // Number of connections per worker; must be greater than zero.
-    std::size_t poolSize{4};
+    std::size_t poolSizePerWorker{4};
     // Absence disables the corresponding timeout.
     std::optional<std::chrono::milliseconds> connectTimeout;
     std::optional<std::chrono::milliseconds> readTimeout;

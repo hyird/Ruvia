@@ -2284,6 +2284,48 @@ set(_installed_rate_limiter_path
 set(_installed_rate_limit_decision_path
     "${_install_prefix}/include/ruvia/web/detail/server/RateLimitDecision.h")
 if(_built_components_csv MATCHES "(^|,)web(,|$)")
+    set(_installed_validated_models_path
+        "${_install_prefix}/include/ruvia/web/detail/ValidatedValues.h")
+    set(_installed_validated_runtime_path
+        "${_install_prefix}/include/ruvia/web/detail/controller/ControllerRuntime.h")
+    set(_installed_validated_context_path
+        "${_install_prefix}/include/ruvia/web/Context.h")
+    if(NOT EXISTS "${_installed_validated_models_path}" OR
+       NOT EXISTS "${_installed_validated_runtime_path}" OR
+       NOT EXISTS "${_installed_validated_context_path}")
+        message(FATAL_ERROR
+            "installed Web package is missing validated-model binding contracts")
+    endif()
+    file(READ "${_installed_validated_models_path}"
+        _installed_validated_models)
+    file(READ "${_installed_validated_runtime_path}"
+        _installed_validated_runtime)
+    file(READ "${_installed_validated_context_path}"
+        _installed_validated_context)
+    if(NOT _installed_validated_models MATCHES
+           "struct ValidatedModelBindingNode final" OR
+       NOT _installed_validated_models MATCHES
+           "ValidatedModelBindingNode[*] head_" OR
+       NOT _installed_validated_models MATCHES
+           "~ValidatedModelBinding[(][)] noexcept" OR
+       NOT _installed_validated_models MATCHES
+           "~ValidatedModelBindings[(][)] noexcept" OR
+       NOT _installed_validated_models MATCHES
+           "if [(]head_ != nullptr[)]" OR
+       NOT _installed_validated_models MATCHES
+           "using ModelT = std::remove_cvref_t<T>" OR
+       NOT _installed_validated_models MATCHES
+           "bind[(]T&&[)] = delete" OR
+       _installed_validated_models MATCHES
+           "ValidatedValueStore|std::array|constructPmrObject|destroyPmrObject|memory_resource|void[ \t]*[(][*]destroy" OR
+       NOT _installed_validated_runtime MATCHES
+           "auto binding = bindValidatedModel[(]c, body[)]" OR
+       NOT _installed_validated_context MATCHES
+           "ValidatedModelBindings validatedModels_")
+        message(FATAL_ERROR
+            "installed validated models restored request-owned erased storage")
+    endif()
+
     set(_installed_auto_https_policy_path
         "${_install_prefix}/include/ruvia/web/detail/server/HttpServerAutoHttps.h")
     set(_installed_auto_https_session_path

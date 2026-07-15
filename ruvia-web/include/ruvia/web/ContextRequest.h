@@ -11,6 +11,7 @@
 #include <span>
 #include <string>
 #include <string_view>
+#include <type_traits>
 #include <utility>
 #include <vector>
 
@@ -35,7 +36,14 @@ const RequestNameValueList& requestQueryFields(const ContextRequest& request);
 const RequestNameValueList& requestCookieFields(const ContextRequest& request);
 const RequestNameValueList& requestParamFields(const ContextRequest& request);
 template <typename T>
-void setValidatedModel(Context& context, T&& model);
+[[nodiscard]] ValidatedModelBinding<T>
+bindValidatedModel(Context& context, const T& model);
+
+template <typename T>
+    requires (!std::is_lvalue_reference_v<T>)
+ValidatedModelBinding<std::remove_cvref_t<T>>
+bindValidatedModel(Context&, T&&) = delete;
+
 [[noreturn]] void throwInvalidJsonContentType();
 [[noreturn]] void throwInvalidJsonBody();
 [[noreturn]] void throwInvalidFormContentType();
@@ -601,7 +609,7 @@ private:
 
     [[nodiscard]] bool contentTypeMatches(std::string_view expected) const noexcept;
     [[nodiscard]] std::pmr::memory_resource* resource() const noexcept;
-    [[nodiscard]] const detail::ValidatedValueStore& validatedValues() const noexcept;
+    [[nodiscard]] const detail::ValidatedModelBindings& validatedModels() const noexcept;
 
     const Context* context_{nullptr};
 

@@ -272,14 +272,14 @@ ctest --test-dir build --output-on-failure   # add -C Debug on Windows
 
 ## Database Drivers
 
-MariaDB and PostgreSQL use the same `DbHandle`, result, streaming, transaction,
-pool and migration APIs. Select the driver when constructing its configuration:
+MariaDB and PostgreSQL use the same `DbHandle`, result, streaming, transaction, pool and migration APIs. Select the driver when constructing its configuration:
 
 ```cpp
 auto config = ruvia::DbConfig::postgreSql(); // port 5432
 config.username = "app";
 config.password = "secret";
 config.database = "app";
+config.poolSizePerWorker = 4; // total connection budget is 4 * worker count
 app.useDb(std::move(config));
 ```
 
