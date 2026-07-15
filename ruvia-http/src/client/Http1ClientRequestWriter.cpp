@@ -163,16 +163,15 @@ struct RequestHeaderFacts final {
     }
     ++cursor;
     skipOws();
-    const auto parameter = parseToken();
-    if (!detail::httpAsciiEqualsIgnoreCase(parameter, "q")) {
+    // RFC 9110 section 12.4.2 defines weight with the exact `q=` literal.
+    // BWS around '=' belongs to transfer-parameter syntax instead; treating
+    // `q =` as a weight would emit an undefined gzip/deflate parameter.
+    if (cursor + 2 > item.size() ||
+        detail::httpAsciiToLower(static_cast<unsigned char>(item[cursor])) != 'q' ||
+        item[cursor + 1] != '=') {
         return false;
     }
-    skipOws();
-    if (cursor == item.size() || item[cursor] != '=') {
-        return false;
-    }
-    ++cursor;
-    skipOws();
+    cursor += 2;
     const auto quality = parseToken();
     if (quality.empty() || detail::httpParseQualityValue(quality) < 0) {
         return false;

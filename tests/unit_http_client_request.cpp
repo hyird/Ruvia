@@ -399,7 +399,7 @@ RUVIA_TEST(http1_client_request_writer_validates_te_capabilities_and_weights) {
              "trailers",
              "gzip",
              "deflate;q=0.5",
-             "x-gzip ; q = 1.000",
+             "x-gzip ; q=1.000",
              "gzip;q=0, trailers"}) {
         RUVIA_CHECK(!prepareWithTe(valid).has_value());
     }
@@ -413,6 +413,9 @@ RUVIA_TEST(http1_client_request_writer_validates_te_capabilities_and_weights) {
              "trailers;q=0.5",
              "gzip;q=1.001",
              "gzip;q=\"0.5\"",
+             "gzip;q =0.5",
+             "gzip;q= 0.5",
+             "gzip; q = 0.5",
              "gzip;level=1",
              "gzip;q=0.5;level=1",
              "gzip; q",
