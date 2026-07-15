@@ -118,6 +118,90 @@ struct RequestHeaderFacts final {
     return true;
 }
 
+[[nodiscard]] bool isValidClientTeItem(std::string_view item) noexcept {
+    std::size_t cursor = 0;
+    const auto skipOws = [&item, &cursor]() noexcept {
+        while (cursor < item.size() &&
+               (item[cursor] == ' ' || item[cursor] == '\t')) {
+            ++cursor;
+        }
+    };
+    const auto parseToken = [&item, &cursor]() noexcept {
+        const auto begin = cursor;
+        while (cursor < item.size() &&
+               detail::isHttpTokenChar(
+                   static_cast<unsigned char>(item[cursor]))) {
+            ++cursor;
+        }
+        return item.substr(begin, cursor - begin);
+    };
+
+    const auto coding = parseToken();
+    if (coding.empty()) {
+        return false;
+    }
+    const bool trailers =
+        detail::httpAsciiEqualsIgnoreCase(coding, "trailers");
+    const bool supportedCoding =
+        detail::httpAsciiEqualsIgnoreCase(coding, "gzip") ||
+        detail::httpAsciiEqualsIgnoreCase(coding, "x-gzip") ||
+        detail::httpAsciiEqualsIgnoreCase(coding, "deflate");
+    if (!trailers && !supportedCoding) {
+        // The paired response parser cannot represent any other transfer
+        // coding. Advertising one here would make the client claim a decoding
+        // capability it does not have. "chunked" is never listed in TE because
+        // every HTTP/1.1 recipient already accepts it as message framing.
+        return false;
+    }
+
+    skipOws();
+    if (cursor == item.size()) {
+        return true;
+    }
+    if (trailers || item[cursor] != ';') {
+        return false;
+    }
+    ++cursor;
+    skipOws();
+    const auto parameter = parseToken();
+    if (!detail::httpAsciiEqualsIgnoreCase(parameter, "q")) {
+        return false;
+    }
+    skipOws();
+    if (cursor == item.size() || item[cursor] != '=') {
+        return false;
+    }
+    ++cursor;
+    skipOws();
+    const auto quality = parseToken();
+    if (quality.empty() || detail::httpParseQualityValue(quality) < 0) {
+        return false;
+    }
+    skipOws();
+    return cursor == item.size();
+}
+
+[[nodiscard]] bool isValidClientTeField(std::string_view value) noexcept {
+    // RFC 9112 section 7.4 explicitly permits an empty TE field. It advertises
+    // no optional transfer coding; chunked remains implicitly acceptable.
+    if (detail::httpTrimOws(value).empty()) {
+        return true;
+    }
+    bool valid = true;
+    bool sawItem = false;
+    detail::httpVisitCommaSeparatedQuotedItems(
+        value,
+        [&valid, &sawItem](std::string_view item) noexcept {
+            sawItem = true;
+            if (!isValidClientTeItem(item)) {
+                valid = false;
+                return false;
+            }
+            return true;
+        });
+    return valid && sawItem;
+}
+
 [[nodiscard]] std::size_t authorityLength(
     const HttpOrigin& origin,
     bool forcePort) noexcept {
@@ -177,6 +261,10 @@ struct RequestHeaderFacts final {
                 return false;
             }
         } else if (detail::httpAsciiEqualsIgnoreCase(name, "TE")) {
+            if (!isValidClientTeField(value)) {
+                error = Http1ClientRequestPrepareError::kInvalidHeader;
+                return false;
+            }
             facts.hasTe = true;
         } else if (detail::httpAsciiEqualsIgnoreCase(name, "Content-Type")) {
             detail::HttpMediaTypeParts parts;

@@ -4,6 +4,7 @@
 #include <array>
 #include <concepts>
 #include <cstddef>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -372,6 +373,54 @@ RUVIA_TEST(http1_client_request_writer_owns_hop_by_hop_field_contracts) {
     valid.headers = validHeaders;
     PreparedFixture fixture(HttpOrigin::https("example.test"), valid);
     RUVIA_CHECK(fixture.result.prepared() != nullptr);
+}
+
+RUVIA_TEST(http1_client_request_writer_validates_te_capabilities_and_weights) {
+    const auto prepareWithTe = [&ruvia_ctx](std::string_view value)
+        -> std::optional<Http1ClientRequestPrepareError> {
+        const std::array headers{
+            ruvia::HttpHeaderView("Connection", "TE"),
+            ruvia::HttpHeaderView("TE", value),
+        };
+        HttpClientRequest request;
+        request.headers = headers;
+        std::array<char, 512> buffer;
+        const auto result = Http1ClientRequestWriter().prepare(
+            HttpOrigin::https("example.test"), request, buffer);
+        if (const auto* failure = result.failure()) {
+            return failure->error();
+        }
+        RUVIA_CHECK(result.prepared() != nullptr);
+        return std::nullopt;
+    };
+
+    for (const std::string_view valid : {
+             "",
+             "trailers",
+             "gzip",
+             "deflate;q=0.5",
+             "x-gzip ; q = 1.000",
+             "gzip;q=0, trailers"}) {
+        RUVIA_CHECK(!prepareWithTe(valid).has_value());
+    }
+
+    for (const std::string_view invalid : {
+             ",trailers",
+             "trailers,",
+             "trailers,,gzip",
+             "chunked",
+             "br",
+             "trailers;q=0.5",
+             "gzip;q=1.001",
+             "gzip;q=\"0.5\"",
+             "gzip;level=1",
+             "gzip;q=0.5;level=1",
+             "gzip; q",
+             "gzip;q="}) {
+        RUVIA_CHECK(
+            prepareWithTe(invalid) ==
+            Http1ClientRequestPrepareError::kInvalidHeader);
+    }
 }
 
 RUVIA_TEST(http1_client_request_writer_enforces_expect_content_semantics) {
