@@ -11,16 +11,18 @@
       "description": "Dependencies for the ruvia-core runtime library.",
       "dependencies": [
         "asio",
+        "mimalloc"
+      ]
+    },
+    "allocator-override": {
+      "description": "Override the process allocator with mimalloc.",
+      "dependencies": [
         {
           "name": "mimalloc",
           "features": [
             "override"
           ],
           "platform": "!windows | !static"
-        },
-        {
-          "name": "mimalloc",
-          "platform": "windows & static"
         }
       ]
     },

@@ -25,6 +25,11 @@ target_link_libraries(ruvia-core
         Threads::Threads
 )
 
+target_compile_definitions(ruvia-core
+    PRIVATE
+        RUVIA_ENABLE_MIMALLOC_OVERRIDE=$<BOOL:${RUVIA_ENABLE_MIMALLOC_OVERRIDE}>
+)
+
 ruvia_install_target(ruvia-core core)
 
 ruvia_install_public_headers(core

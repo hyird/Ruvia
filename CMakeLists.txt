@@ -22,6 +22,26 @@ option(RUVIA_BUILD_FUZZERS "Build Clang libFuzzer protocol targets" OFF)
 option(RUVIA_ENABLE_HTTP2_CONFORMANCE_TESTS "Run RFC 9113 wire conformance tests against a Ruvia h2c server" OFF)
 option(RUVIA_ENABLE_POSTGRESQL_INTEGRATION_TESTS "Run tests against a live PostgreSQL server" OFF)
 
+set(_ruvia_sanitizer_flags OFF)
+if(CMAKE_CXX_FLAGS MATCHES "(^|[ ;])[-/]fsanitize=" OR
+   CMAKE_EXE_LINKER_FLAGS MATCHES "(^|[ ;])[-/]fsanitize=")
+    set(_ruvia_sanitizer_flags ON)
+endif()
+set(_ruvia_mimalloc_override_default ON)
+if(_ruvia_sanitizer_flags)
+    set(_ruvia_mimalloc_override_default OFF)
+endif()
+option(
+    RUVIA_ENABLE_MIMALLOC_OVERRIDE
+    "Override the process allocator with mimalloc (incompatible with sanitizer interceptors)"
+    ${_ruvia_mimalloc_override_default})
+unset(_ruvia_mimalloc_override_default)
+if(_ruvia_sanitizer_flags AND RUVIA_ENABLE_MIMALLOC_OVERRIDE)
+    message(FATAL_ERROR
+        "RUVIA_ENABLE_MIMALLOC_OVERRIDE=ON is incompatible with sanitizer interceptors")
+endif()
+unset(_ruvia_sanitizer_flags)
+
 option(RUVIA_ENABLE_MARIADB "Build MariaDB-compatible database support" OFF)
 option(RUVIA_ENABLE_POSTGRESQL "Build PostgreSQL database support" OFF)
 option(RUVIA_ENABLE_REDIS "Build Redis support" OFF)
@@ -62,9 +82,12 @@ endif()
 if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
     set(_ruvia_vcpkg_features ${VCPKG_MANIFEST_FEATURES})
     list(REMOVE_ITEM _ruvia_vcpkg_features
-        core http web runtime protocol framework mariadb postgresql redis jwt http-client)
+        core http web runtime allocator-override protocol framework mariadb postgresql redis jwt http-client)
     if(RUVIA_BUILD_CORE)
         list(APPEND _ruvia_vcpkg_features runtime)
+        if(RUVIA_ENABLE_MIMALLOC_OVERRIDE)
+            list(APPEND _ruvia_vcpkg_features allocator-override)
+        endif()
     endif()
     if(RUVIA_BUILD_HTTP)
         list(APPEND _ruvia_vcpkg_features protocol)
