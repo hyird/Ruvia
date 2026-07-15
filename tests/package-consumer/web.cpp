@@ -379,7 +379,10 @@ concept ExposesAnyRvalueWebExecutionBorrow =
     requires(T&& value) { std::move(value).compaction(); } ||
     requires(T&& value) { std::move(value).restored(); } ||
     requires(T&& value) { std::move(value).committedStream(); } ||
-    requires(T&& value) { std::move(value).bufferCompletion(); };
+    requires(T&& value) { std::move(value).bufferCompletion(); } ||
+    requires(T&& value) { std::move(value).selectedRoute(); } ||
+    requires(T&& value) { std::move(value).resolution(); } ||
+    requires(T&& value) { std::move(value).body(); };
 
 template <typename Entry>
 concept HasStaticRootEntryFoundFlag = requires(const Entry& entry) {
@@ -1333,6 +1336,12 @@ static_assert(std::is_same_v<
         ruvia::ProtocolByteLimit::unlimited(),
         std::size_t{})),
     ruvia::detail::Http2RequestBodyStoreResult>);
+static_assert(!std::default_initializable<
+    ruvia::detail::Http2RequestBodyRuntime>);
+static_assert(std::same_as<
+    decltype(std::declval<ruvia::detail::Http2SansIoStreamRuntime&>()
+                 .selectedRoute()),
+    ruvia::detail::Http2SansIoSelectedRoute*>);
 static_assert(!HasDirectHttp2BeginDispatch<
     ruvia::detail::Http2SansIoStreamRuntime,
     asio::io_context::executor_type>);
@@ -1344,6 +1353,10 @@ static_assert(!ExposesAnyRvalueWebExecutionBorrow<ruvia::detail::RouteMatch>);
 static_assert(!ExposesAnyRvalueWebExecutionBorrow<ruvia::detail::ResolvedRoute>);
 static_assert(!ExposesAnyRvalueWebExecutionBorrow<
     ruvia::detail::RouteResolution>);
+static_assert(!ExposesAnyRvalueWebExecutionBorrow<
+    ruvia::detail::Http2SansIoSelectedRoute>);
+static_assert(!ExposesAnyRvalueWebExecutionBorrow<
+    ruvia::detail::Http2SansIoStreamRuntime>);
 static_assert(!ExposesAnyRvalueWebExecutionBorrow<
     ruvia::detail::ResponseStreamDispatchResult>);
 static_assert(!ExposesAnyRvalueWebExecutionBorrow<
@@ -1514,13 +1527,18 @@ int main() {
             ruvia::detail::RequestBodyMode::kStream)) {
         return 4;
     }
-    auto& body = standaloneRuntime.body();
-    if (body.selectedMode() == nullptr ||
-        *body.selectedMode() != ruvia::detail::RequestBodyMode::kStream ||
+    auto* selectedRoute = standaloneRuntime.selectedRoute();
+    if (selectedRoute == nullptr) {
+        return 4;
+    }
+    auto& body = selectedRoute->body();
+    auto* streamingBody = body.streaming();
+    if (streamingBody == nullptr || body.buffered() != nullptr ||
+        body.mode() != ruvia::detail::RequestBodyMode::kStream ||
         body.store(
             "web-owned", ruvia::ProtocolByteLimit::unlimited(), 1024) !=
             ruvia::detail::Http2RequestBodyStoreResult::kAccepted ||
-        body.queue().pop() != "web-owned") {
+        streamingBody->queue().pop() != "web-owned") {
         return 4;
     }
     asio::io_context io;

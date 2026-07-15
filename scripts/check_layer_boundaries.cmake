@@ -7018,7 +7018,7 @@ else()
     if(NOT http2_web_stream_runtime_test MATCHES
            "http2_web_body_queue_preserves_fifo_and_tracks_backlog" OR
        NOT http2_web_stream_runtime_test MATCHES
-           "http2_web_request_body_runtime_selects_storage_before_data" OR
+           "http2_web_route_selection_owns_exact_body_storage" OR
        NOT http2_web_stream_runtime_test MATCHES
            "http2_web_request_body_runtime_enforces_total_and_backlog_limits" OR
        NOT http2_web_stream_runtime_test MATCHES
@@ -7307,15 +7307,19 @@ else()
        NOT web_http2_stream_runtime MATCHES
            "class Http2RequestBodyRuntime final" OR
        NOT web_http2_stream_runtime MATCHES
+           "class Http2BufferedRequestBody final" OR
+       NOT web_http2_stream_runtime MATCHES
+           "class Http2StreamingRequestBody final" OR
+       NOT web_http2_stream_runtime MATCHES
+           "class Http2SansIoSelectedRoute final" OR
+       NOT web_http2_stream_runtime MATCHES
            "class Http2SansIoStreamRuntimeTable final" OR
        NOT web_http2_stream_runtime MATCHES "RequestBodyMode" OR
-       NOT web_http2_stream_runtime MATCHES "kModeNotSelected" OR
-       NOT web_http2_stream_runtime MATCHES "modeSelected" OR
-       NOT web_http2_stream_runtime MATCHES "selectedMode" OR
        NOT web_http2_stream_runtime MATCHES
-           "std::optional<RequestBodyMode>" OR
+           "using Storage = std::variant" OR
        NOT web_http2_stream_runtime MATCHES
-           "std::optional<RouteResolution>" OR
+           "std::optional<Http2SansIoSelectedRoute>" OR
+       NOT web_http2_stream_runtime MATCHES "selectedRoute[(]" OR
        NOT web_http2_stream_runtime MATCHES "selectRoute" OR
        NOT web_http2_stream_runtime MATCHES "streamingBacklogLimit" OR
        NOT web_http2_stream_runtime MATCHES
@@ -7330,8 +7334,12 @@ else()
            "Http2SansIoStreamRuntime& ensureAccepted" OR
        NOT web_http2_stream_runtime MATCHES
            "const Http2StreamState& acceptedStream" OR
+       web_http2_stream_runtime MATCHES
+           "kModeNotSelected|modeSelected|selectedMode|std::optional<RequestBodyMode>|std::optional<RouteResolution>|routeResolution[(]" OR
        NOT web_http2_stream_session MATCHES
            "streamRuntimes[.]ensureAccepted[(]streamState[)]" OR
+       NOT web_http2_stream_session MATCHES
+           "selectedRoute[-][>]body[(][)]" OR
        NOT web_http2_ws_transport MATCHES "releaseReceivedData" OR
        NOT web_http2_ws_transport MATCHES "Http2SansIoStreamSignal&" OR
        NOT web_http2_response_stream_sink MATCHES
@@ -7346,8 +7354,8 @@ else()
        web_http2_stream_runtime MATCHES
            "Http2LocalSettings|kMaxConcurrentStreams|Http2SansIoStreamRuntime[*][ \t\r\n]+ensure[(]" OR
        web_http2_stream_session MATCHES "ensureStreamRuntime")
-        boundary_error("HTTP/2 Web stream runtime lost its ownership boundary"
-            "protocol admission must enter one non-null Web runtime before route/body/signal ownership and consume-time receive-credit release")
+        boundary_error("HTTP/2 Web stream runtime lost its discriminated ownership boundary"
+            "route resolution and exactly one buffered/streaming body storage must commit together before dispatch and receive-credit release")
     endif()
 endif()
 if(EXISTS "${HTTP2_REQUEST_BUILDER}")
@@ -7428,7 +7436,7 @@ else()
     if(NOT web_http2_session MATCHES
            "Http2SansIoStreamRuntimeTable" OR
        NOT web_http2_session MATCHES
-           "streamRuntime->body[(][)][.]store" OR
+           "requestBody[.]store" OR
        NOT web_http2_session MATCHES "requestBodyByteLimit" OR
        NOT web_http2_session MATCHES "releaseReceivedData" OR
        NOT web_http2_session MATCHES "markBufferedBodyCopied" OR

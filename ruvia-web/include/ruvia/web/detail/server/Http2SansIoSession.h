@@ -267,6 +267,17 @@ Task<void> runHttp2SansIoSession(
             wakeWriter();
             co_return;
         }
+        auto* selectedRoute = streamRuntime->selectedRoute();
+        if (selectedRoute == nullptr) {
+            (void)connection.submitReset(
+                streamId,
+                Http2ErrorCode::kInternalError);
+            wakeWriter();
+            co_return;
+        }
+        auto& requestBody = selectedRoute->body();
+        auto* streamingBody = requestBody.streaming();
+        const auto* bufferedBody = requestBody.buffered();
         auto* streamSignal = streamRuntime->signal();
         if (streamSignal == nullptr) {
             (void)connection.submitReset(
@@ -280,9 +291,9 @@ Task<void> runHttp2SansIoSession(
                 *streamState,
                 request,
                 requestMemory.resource(),
-                streamRuntime->body().streaming()
+                bufferedBody == nullptr
                     ? std::string_view{}
-                    : streamRuntime->body().buffered())) {
+                    : bufferedBody->bytes())) {
             auto response = co_await routes.handleError(
                 request, requestMemory,
                 HttpErrorInfo(400, {}, "invalid http2 request headers"),
@@ -311,14 +322,7 @@ Task<void> runHttp2SansIoSession(
                     baseServices);
                 break;
             }
-            const auto* routeResolution = streamRuntime->routeResolution();
-            if (routeResolution == nullptr) {
-                (void)connection.submitReset(
-                    streamId, Http2ErrorCode::kInternalError);
-                wakeWriter();
-                co_return;
-            }
-            const auto& resolution = *routeResolution;
+            const auto& resolution = selectedRoute->resolution();
             const auto* resolved = resolution.resolved();
 
             const auto appRateLimit = rateLimitRequestAllowed(
@@ -335,12 +339,12 @@ Task<void> runHttp2SansIoSession(
             }
             std::optional<Http2SansIoRequestBodyReader> streamReaderStorage;
             std::optional<BodyReader> bodyReaderStorage;
-            if (streamRuntime->body().streaming() &&
+            if (streamingBody != nullptr &&
                 streamState->tunnel().pending() == nullptr) {
                 streamReaderStorage.emplace(
                     connection,
                     streamId,
-                    streamRuntime->body().queue(),
+                    streamingBody->queue(),
                     *streamSignal,
                     writeSignal);
                 emplaceBodyReaderFacade(bodyReaderStorage, *streamReaderStorage);
@@ -359,6 +363,12 @@ Task<void> runHttp2SansIoSession(
                 : resolved->route().endpoint().responseStream();
             if (webSocketEndpoint != nullptr) {
                 if (http2IsValidWebSocketRequest(*streamState, request)) {
+                    if (streamingBody == nullptr) {
+                        (void)connection.submitReset(
+                            streamId, Http2ErrorCode::kInternalError);
+                        wakeWriter();
+                        co_return;
+                    }
                     using WsTransport =
                         Http2SansIoWsTransport<decltype(executor)>;
                     using WsConnection = WebSocketConnection<WsTransport>;
@@ -385,7 +395,7 @@ Task<void> runHttp2SansIoSession(
                             WsTransport(
                                 connection,
                                 streamId,
-                                streamRuntime->body().queue(),
+                                streamingBody->queue(),
                                 *streamSignal,
                                 writeSignal,
                                 executor),
@@ -671,8 +681,10 @@ Task<void> runHttp2SansIoSession(
                 }
                 const bool connectRequest =
                     streamState->tunnel().pending() != nullptr;
+                const auto* selectedRoute = streamRuntime->selectedRoute();
                 const bool streamingBody = !connectRequest &&
-                    streamRuntime->body().streaming() &&
+                    selectedRoute != nullptr &&
+                    selectedRoute->body().streaming() != nullptr &&
                     streamState->remoteReceive().contentOpen() != nullptr;
                 if (expectationAction ==
                         HttpServerExpectationAction::kUnsupported ||
@@ -697,30 +709,28 @@ Task<void> runHttp2SansIoSession(
                     }
                     continue;
                 }
-                const auto* bodyMode =
-                    streamRuntime->body().selectedMode();
-                if (bodyMode == nullptr) {
+                auto* selectedRoute = streamRuntime->selectedRoute();
+                if (selectedRoute == nullptr) {
                     resetEventStream(
                         streamId, Http2ErrorCode::kInternalError);
                     continue;
                 }
+                auto& requestBody = selectedRoute->body();
                 const auto totalLimit = requestBodyByteLimit(
-                    *bodyMode,
+                    requestBody.mode(),
                     options.maxStreamBodyBytes,
                     options.maxBufferedBodyBytes);
-                const auto stored = streamRuntime->body().store(
+                const auto stored = requestBody.store(
                     bodyChunk->bytes(),
                     totalLimit,
                     options.maxBufferedBodyBytes);
                 if (stored != Http2RequestBodyStoreResult::kAccepted) {
                     resetEventStream(
                         streamId,
-                        stored == Http2RequestBodyStoreResult::kModeNotSelected
-                            ? Http2ErrorCode::kInternalError
-                            : Http2ErrorCode::kCancel);
+                        Http2ErrorCode::kCancel);
                     continue;
                 }
-                if (streamRuntime->body().streaming()) {
+                if (requestBody.streaming() != nullptr) {
                     auto* signal = streamRuntime->signal();
                     if (signal == nullptr) {
                         resetEventStream(
@@ -752,7 +762,16 @@ Task<void> runHttp2SansIoSession(
                     }
                     continue;
                 }
-                streamRuntime->body().queue().enqueue(tunnelData->bytes());
+                auto* selectedRoute = streamRuntime->selectedRoute();
+                auto* streamingBody = selectedRoute != nullptr
+                    ? selectedRoute->body().streaming()
+                    : nullptr;
+                if (streamingBody == nullptr) {
+                    resetEventStream(
+                        streamId, Http2ErrorCode::kInternalError);
+                    continue;
+                }
+                streamingBody->queue().enqueue(tunnelData->bytes());
                 signal->wake();
             } else if (const auto* tunnelEnd = event->tunnelEnd()) {
                 if (auto* signal = findSignal(tunnelEnd->streamId())) {

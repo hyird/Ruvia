@@ -2363,17 +2363,21 @@ if(_built_components_csv MATCHES "(^|,)web(,|$)")
        NOT _installed_http2_web_runtime MATCHES
            "class Http2RequestBodyRuntime final" OR
        NOT _installed_http2_web_runtime MATCHES
+           "class Http2BufferedRequestBody final" OR
+       NOT _installed_http2_web_runtime MATCHES
+           "class Http2StreamingRequestBody final" OR
+       NOT _installed_http2_web_runtime MATCHES
+           "class Http2SansIoSelectedRoute final" OR
+       NOT _installed_http2_web_runtime MATCHES
            "class Http2SansIoStreamRuntimeTable final" OR
        NOT _installed_http2_web_runtime MATCHES
            "Http2RequestBodyStoreResult" OR
        NOT _installed_http2_web_runtime MATCHES "RequestBodyMode" OR
-       NOT _installed_http2_web_runtime MATCHES "kModeNotSelected" OR
-       NOT _installed_http2_web_runtime MATCHES "modeSelected" OR
-       NOT _installed_http2_web_runtime MATCHES "selectedMode" OR
        NOT _installed_http2_web_runtime MATCHES
-           "std::optional<RequestBodyMode>" OR
+           "using Storage = std::variant" OR
        NOT _installed_http2_web_runtime MATCHES
-           "std::optional<RouteResolution>" OR
+           "std::optional<Http2SansIoSelectedRoute>" OR
+       NOT _installed_http2_web_runtime MATCHES "selectedRoute[(]" OR
        NOT _installed_http2_web_runtime MATCHES "selectRoute" OR
        NOT _installed_http2_web_runtime MATCHES
            "std::optional<Http2SansIoStreamSignal>" OR
@@ -2387,11 +2391,9 @@ if(_built_components_csv MATCHES "(^|,)web(,|$)")
             "installed Web package lost unified HTTP/2 route/body/signal runtime ownership")
     endif()
     if(_installed_http2_web_runtime MATCHES
-           "RequestBodyMode[ \t]+mode_[ \t]*[{]" OR
-       _installed_http2_web_runtime MATCHES
-           "bool[ \t]+modeSelected_")
+           "kModeNotSelected|modeSelected|selectedMode|std::optional<RequestBodyMode>|std::optional<RouteResolution>|routeResolution[(]|RequestBodyMode[ \t]+mode_[ \t]*[{]|bool[ \t]+modeSelected_")
         message(FATAL_ERROR
-            "installed Web HTTP/2 body runtime restored a default mode plus selection flag")
+            "installed Web HTTP/2 runtime restored split route/body selection state")
     endif()
     if(NOT _installed_http2_web_runtime MATCHES
            "Http2SansIoStreamRuntime& ensureAccepted" OR

@@ -4,13 +4,15 @@
 #include <concepts>
 #include <cstddef>
 #include <cstdint>
+#include <exception>
 #include <memory>
 #include <memory_resource>
 #include <optional>
 #include <string>
 #include <string_view>
-#include <utility>
 #include <type_traits>
+#include <utility>
+#include <variant>
 #include <vector>
 
 #include "ruvia/core/detail/AsioAwait.h"
@@ -157,54 +159,25 @@ private:
 
 enum class Http2RequestBodyStoreResult : std::uint8_t {
     kAccepted,
-    kModeNotSelected,
     kTotalLimitExceeded,
     kBacklogLimitExceeded
 };
 
-// Route-selected request-body storage belongs to ruvia-web. The protocol core
-// emits ordered DATA events without knowing whether an application buffers or
-// streams them; this runtime applies product limits only after route resolution.
-class Http2RequestBodyRuntime final {
+class Http2BufferedRequestBody final {
 public:
-    explicit Http2RequestBodyRuntime(
-        std::pmr::memory_resource* resource = nullptr)
-        : buffered_(pmrResourceOrDefault(resource)),
-          queue_(pmrResourceOrDefault(resource)) {}
-
-    [[nodiscard]] const RequestBodyMode* selectedMode() const noexcept {
-        return mode_ ? &*mode_ : nullptr;
-    }
-
-    [[nodiscard]] bool modeSelected() const noexcept {
-        return mode_.has_value();
-    }
-
-    [[nodiscard]] bool streaming() const noexcept {
-        return mode_ == RequestBodyMode::kStream;
-    }
+    explicit Http2BufferedRequestBody(
+        std::pmr::memory_resource* resource) noexcept
+        : bytes_(pmrResourceOrDefault(resource)) {}
 
     [[nodiscard]] Http2RequestBodyStoreResult store(
         std::string_view data,
-        ProtocolByteLimit totalLimit,
-        std::size_t streamingBacklogLimit) {
-        if (!mode_) {
-            return Http2RequestBodyStoreResult::kModeNotSelected;
-        }
+        ProtocolByteLimit totalLimit) {
         if (totalLimit.additionExceeds(receivedBytes_, data.size())) {
             return Http2RequestBodyStoreResult::kTotalLimitExceeded;
         }
-        if (streaming() &&
-            (queue_.queuedBytes() > streamingBacklogLimit ||
-             data.size() >
-                 streamingBacklogLimit - queue_.queuedBytes())) {
-            return Http2RequestBodyStoreResult::kBacklogLimitExceeded;
-        }
         receivedBytes_ += data.size();
-        if (streaming()) {
-            queue_.enqueue(data);
-        } else if (!data.empty()) {
-            buffered_.append(data.data(), data.size());
+        if (!data.empty()) {
+            bytes_.append(data.data(), data.size());
         }
         return Http2RequestBodyStoreResult::kAccepted;
     }
@@ -213,35 +186,164 @@ public:
         return receivedBytes_;
     }
 
-    [[nodiscard]] std::string_view buffered() const noexcept {
-        return buffered_;
+    [[nodiscard]] std::string_view bytes() const & noexcept {
+        return bytes_;
+    }
+    std::string_view bytes() const && = delete;
+
+private:
+    std::size_t receivedBytes_{0};
+    std::pmr::string bytes_;
+};
+
+class Http2StreamingRequestBody final {
+public:
+    explicit Http2StreamingRequestBody(
+        std::pmr::memory_resource* resource) noexcept
+        : queue_(pmrResourceOrDefault(resource)) {}
+
+    [[nodiscard]] Http2RequestBodyStoreResult store(
+        std::string_view data,
+        ProtocolByteLimit totalLimit,
+        std::size_t backlogLimit) {
+        if (totalLimit.additionExceeds(receivedBytes_, data.size())) {
+            return Http2RequestBodyStoreResult::kTotalLimitExceeded;
+        }
+        if (queue_.queuedBytes() > backlogLimit ||
+            data.size() > backlogLimit - queue_.queuedBytes()) {
+            return Http2RequestBodyStoreResult::kBacklogLimitExceeded;
+        }
+        receivedBytes_ += data.size();
+        queue_.enqueue(data);
+        return Http2RequestBodyStoreResult::kAccepted;
     }
 
-    [[nodiscard]] Http2SansIoBodyQueue& queue() noexcept {
-        return queue_;
+    [[nodiscard]] std::size_t receivedBytes() const noexcept {
+        return receivedBytes_;
     }
 
-    [[nodiscard]] const Http2SansIoBodyQueue& queue() const noexcept {
+    [[nodiscard]] Http2SansIoBodyQueue& queue() & noexcept {
         return queue_;
     }
+    Http2SansIoBodyQueue& queue() && = delete;
+
+    [[nodiscard]] const Http2SansIoBodyQueue& queue() const & noexcept {
+        return queue_;
+    }
+    const Http2SansIoBodyQueue& queue() const && = delete;
+
+private:
+    std::size_t receivedBytes_{0};
+    Http2SansIoBodyQueue queue_;
+};
+
+// Route-selected request-body storage belongs to ruvia-web. The protocol core
+// emits ordered DATA events without knowing whether an application buffers or
+// streams them; this runtime applies product limits only after route resolution.
+class Http2RequestBodyRuntime final {
+public:
+    [[nodiscard]] RequestBodyMode mode() const noexcept {
+        return std::holds_alternative<Http2BufferedRequestBody>(storage_)
+            ? RequestBodyMode::kBuffered
+            : RequestBodyMode::kStream;
+    }
+
+    [[nodiscard]] Http2BufferedRequestBody* buffered() & noexcept {
+        return std::get_if<Http2BufferedRequestBody>(&storage_);
+    }
+    Http2BufferedRequestBody* buffered() && = delete;
+
+    [[nodiscard]] const Http2BufferedRequestBody* buffered() const & noexcept {
+        return std::get_if<Http2BufferedRequestBody>(&storage_);
+    }
+    const Http2BufferedRequestBody* buffered() const && = delete;
+
+    [[nodiscard]] Http2StreamingRequestBody* streaming() & noexcept {
+        return std::get_if<Http2StreamingRequestBody>(&storage_);
+    }
+    Http2StreamingRequestBody* streaming() && = delete;
+
+    [[nodiscard]] const Http2StreamingRequestBody* streaming() const & noexcept {
+        return std::get_if<Http2StreamingRequestBody>(&storage_);
+    }
+    const Http2StreamingRequestBody* streaming() const && = delete;
+
+    [[nodiscard]] Http2RequestBodyStoreResult store(
+        std::string_view data,
+        ProtocolByteLimit totalLimit,
+        std::size_t streamingBacklogLimit) {
+        if (auto* value = buffered()) {
+            return value->store(data, totalLimit);
+        }
+        return std::get<Http2StreamingRequestBody>(storage_).store(
+            data, totalLimit, streamingBacklogLimit);
+    }
+
+    [[nodiscard]] std::size_t receivedBytes() const noexcept {
+        if (const auto* value = buffered()) {
+            return value->receivedBytes();
+        }
+        return std::get<Http2StreamingRequestBody>(storage_).receivedBytes();
+    }
+
+private:
+    friend class Http2SansIoSelectedRoute;
+
+    using Storage = std::variant<
+        Http2BufferedRequestBody,
+        Http2StreamingRequestBody>;
+
+    Http2RequestBodyRuntime(
+        RequestBodyMode mode,
+        std::pmr::memory_resource* resource) noexcept
+        : storage_(makeStorage(mode, resource)) {}
+
+    [[nodiscard]] static Storage makeStorage(
+        RequestBodyMode mode,
+        std::pmr::memory_resource* resource) noexcept {
+        if (mode == RequestBodyMode::kBuffered) {
+            return Storage(
+                std::in_place_type<Http2BufferedRequestBody>, resource);
+        }
+        if (mode == RequestBodyMode::kStream) {
+            return Storage(
+                std::in_place_type<Http2StreamingRequestBody>, resource);
+        }
+        std::terminate();
+    }
+
+    Storage storage_;
+};
+
+class Http2SansIoSelectedRoute final {
+public:
+    [[nodiscard]] const RouteResolution& resolution() const & noexcept {
+        return resolution_;
+    }
+    const RouteResolution& resolution() const && = delete;
+
+    [[nodiscard]] Http2RequestBodyRuntime& body() & noexcept {
+        return body_;
+    }
+    Http2RequestBodyRuntime& body() && = delete;
+
+    [[nodiscard]] const Http2RequestBodyRuntime& body() const & noexcept {
+        return body_;
+    }
+    const Http2RequestBodyRuntime& body() const && = delete;
 
 private:
     friend class Http2SansIoStreamRuntime;
 
-    // Route selection is the sole owner of this one-time pre-DATA choice. The
-    // body runtime cannot be independently switched away from its stored route.
-    [[nodiscard]] bool selectMode(RequestBodyMode mode) noexcept {
-        if (mode_) {
-            return false;
-        }
-        mode_.emplace(mode);
-        return true;
-    }
+    Http2SansIoSelectedRoute(
+        RouteResolution resolution,
+        RequestBodyMode bodyMode,
+        std::pmr::memory_resource* resource) noexcept
+        : resolution_(std::move(resolution)),
+          body_(bodyMode, resource) {}
 
-    std::optional<RequestBodyMode> mode_;
-    std::size_t receivedBytes_{0};
-    std::pmr::string buffered_;
-    Http2SansIoBodyQueue queue_;
+    RouteResolution resolution_;
+    Http2RequestBodyRuntime body_;
 };
 
 class Http2SansIoStreamRuntime final {
@@ -249,7 +351,7 @@ public:
     Http2SansIoStreamRuntime(
         std::uint32_t streamId,
         std::pmr::memory_resource* resource)
-        : streamId_(streamId), body_(resource) {}
+        : streamId_(streamId), resource_(pmrResourceOrDefault(resource)) {}
 
     [[nodiscard]] std::uint32_t streamId() const noexcept {
         return streamId_;
@@ -258,24 +360,24 @@ public:
     [[nodiscard]] bool selectRoute(
         RouteResolution resolution,
         RequestBodyMode bodyMode) noexcept {
-        if (routeResolution_ || !body_.selectMode(bodyMode)) {
+        if (selectedRoute_) {
             return false;
         }
-        routeResolution_.emplace(std::move(resolution));
+        selectedRoute_.emplace(Http2SansIoSelectedRoute(
+            std::move(resolution), bodyMode, resource_));
         return true;
     }
 
-    [[nodiscard]] const RouteResolution* routeResolution() const noexcept {
-        return routeResolution_ ? &*routeResolution_ : nullptr;
+    [[nodiscard]] Http2SansIoSelectedRoute* selectedRoute() & noexcept {
+        return selectedRoute_ ? &*selectedRoute_ : nullptr;
     }
+    Http2SansIoSelectedRoute* selectedRoute() && = delete;
 
-    [[nodiscard]] Http2RequestBodyRuntime& body() noexcept {
-        return body_;
+    [[nodiscard]] const Http2SansIoSelectedRoute*
+    selectedRoute() const & noexcept {
+        return selectedRoute_ ? &*selectedRoute_ : nullptr;
     }
-
-    [[nodiscard]] const Http2RequestBodyRuntime& body() const noexcept {
-        return body_;
-    }
+    const Http2SansIoSelectedRoute* selectedRoute() const && = delete;
 
     [[nodiscard]] bool dispatched() const noexcept {
         return dispatchSignal_.has_value();
@@ -294,7 +396,7 @@ private:
 
     [[nodiscard]] Http2SansIoStreamSignal* beginDispatch(
         WorkerHandle worker) {
-        if (dispatchSignal_ || !routeResolution_ || !body_.modeSelected()) {
+        if (dispatchSignal_ || !selectedRoute_) {
             return nullptr;
         }
         dispatchSignal_.emplace(std::move(worker));
@@ -303,7 +405,7 @@ private:
 
     template <typename Executor>
     [[nodiscard]] Http2SansIoStreamSignal* beginDispatch(Executor&& executor) {
-        if (dispatchSignal_ || !routeResolution_ || !body_.modeSelected()) {
+        if (dispatchSignal_ || !selectedRoute_) {
             return nullptr;
         }
         dispatchSignal_.emplace(std::forward<Executor>(executor));
@@ -311,8 +413,8 @@ private:
     }
 
     std::uint32_t streamId_;
-    std::optional<RouteResolution> routeResolution_;
-    Http2RequestBodyRuntime body_;
+    std::pmr::memory_resource* resource_;
+    std::optional<Http2SansIoSelectedRoute> selectedRoute_;
     std::optional<Http2SansIoStreamSignal> dispatchSignal_;
 };
 
