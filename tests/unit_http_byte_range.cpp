@@ -193,6 +193,16 @@ RUVIA_TEST(byte_range_unit_is_case_insensitive) {
     }
 }
 
+RUVIA_TEST(byte_range_allows_ows_after_equals) {
+    const auto spaced = resolveHttpByteRange("bytes= \t10-19", 100);
+    const auto* range = spaced.resolved();
+    RUVIA_CHECK(range != nullptr);
+    if (range != nullptr) {
+        RUVIA_CHECK_EQ(range->offset(), std::uint64_t{10});
+        RUVIA_CHECK_EQ(range->length(), std::uint64_t{10});
+    }
+}
+
 RUVIA_TEST(byte_range_huge_decimal_numerals_preserve_semantics) {
     // RFC 9110 §14.1.2 requires recipients to prevent conversion overflow.
     // Numerals beyond uint64_t still have obvious semantics against a uint64_t
@@ -221,6 +231,11 @@ RUVIA_TEST(byte_range_huge_decimal_numerals_preserve_semantics) {
 
     RUVIA_CHECK(isIgnoredRange(
         "bytes=184467440737095516160x-", 1000));
+
+    // Saturating both numerals must not erase their relative order. This is an
+    // invalid int-range (last-pos < first-pos), not a valid unsatisfiable range.
+    RUVIA_CHECK(isIgnoredRange(
+        "bytes=184467440737095516160-184467440737095516159", 1000));
 }
 
 RUVIA_TEST(byte_range_empty_representation_uses_ignore_policy) {
