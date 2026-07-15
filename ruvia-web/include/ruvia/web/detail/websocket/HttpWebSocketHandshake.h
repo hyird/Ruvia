@@ -24,10 +24,11 @@ Task<bool> writeWebSocketHandshake(
     });
     const auto activeBuffers = std::span<const asio::const_buffer>(buffers.data(), count);
 
-    const auto ec = co_await asyncError([&stream, activeBuffers](auto handler) mutable {
-        asio::async_write(stream, activeBuffers, std::move(handler));
-    });
-    co_return !ec;
+    const auto writeCompletion = co_await asyncAsio(
+        [&stream, activeBuffers](auto handler) mutable {
+            asio::async_write(stream, activeBuffers, std::move(handler));
+        });
+    co_return !writeCompletion.errorCode();
 }
 
 }  // namespace ruvia::detail

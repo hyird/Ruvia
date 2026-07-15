@@ -23,7 +23,9 @@ Task<void> HttpServer::handleSession(TcpSocket socket) {
                 ConnectionScanner::Guard handshakeGuard(&connectionScanner_, handshakeEntry, socket);
                 handshakeEntry.setPhase(ConnectionScanner::Phase::kReadingInitial);
                 asio::ssl::stream<TcpSocket&> tlsStream(socket, *tlsContext_);
-                const auto ec = co_await asyncError(TlsServerHandshakeInitiator{&tlsStream});
+                const auto handshakeCompletion = co_await asyncAsio(
+                    TlsServerHandshakeInitiator{&tlsStream});
+                const auto ec = handshakeCompletion.errorCode();
                 if (ec) {
                     closeSocket(socket);
                     co_return;

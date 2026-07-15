@@ -57,6 +57,9 @@ struct redisReader;
 
 namespace ruvia::detail {
 
+template <typename Result>
+class AsioCompletion;
+
 struct RedisReaderDeleter final {
     void operator()(redisReader* reader) const noexcept;
 };
@@ -172,7 +175,7 @@ private:
     Task<std::error_code> asyncSocketWrite(
         Connection& connection,
         std::optional<std::chrono::milliseconds> timeout);
-    Task<std::pair<std::error_code, std::size_t>> asyncSocketReadSome(
+    Task<AsioCompletion<std::size_t>> asyncSocketReadSome(
         Connection& connection,
         std::span<char> buffer,
         std::optional<std::chrono::milliseconds> timeout);

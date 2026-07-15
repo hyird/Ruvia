@@ -16,9 +16,13 @@ namespace ruvia::detail {
 
 Task<void> HttpServer::acceptLoop() {
     for (;;) {
-        auto [ec, socket] = co_await asyncResult<asio::ip::tcp::socket>([this](auto handler) mutable {
-            acceptor_.async_accept(std::move(handler));
-        });
+        auto acceptCompletion =
+            co_await asyncAsio<asio::ip::tcp::socket>(
+                [this](auto handler) mutable {
+                    acceptor_.async_accept(std::move(handler));
+                });
+        const auto ec = acceptCompletion.errorCode();
+        auto socket = std::move(acceptCompletion).takeResult();
 
         if (ec) {
             // Fatal: acceptor was cancelled (stop()) or closed. Exit cleanly.

@@ -52,12 +52,13 @@ Task<std::error_code> writeHttpResponseFile(
             continue;
         }
         if (errno == EAGAIN || errno == EWOULDBLOCK) {
-            error = co_await asyncError(
+            const auto waitCompletion = co_await asyncAsio(
                 [&socket](auto handler) mutable {
                     socket.async_wait(
                         asio::ip::tcp::socket::wait_write,
                         std::move(handler));
                 });
+            error = waitCompletion.errorCode();
             if (error) {
                 co_return error;
             }
@@ -101,12 +102,13 @@ Task<std::error_code> writeHttpResponseFile(
         }
         const auto socketError = ::WSAGetLastError();
         if (socketError == WSAEWOULDBLOCK) {
-            const auto waitError = co_await asyncError(
+            const auto waitCompletion = co_await asyncAsio(
                 [&socket](auto handler) mutable {
                     socket.async_wait(
                         asio::ip::tcp::socket::wait_write,
                         std::move(handler));
                 });
+            const auto waitError = waitCompletion.errorCode();
             if (waitError) {
                 co_return waitError;
             }

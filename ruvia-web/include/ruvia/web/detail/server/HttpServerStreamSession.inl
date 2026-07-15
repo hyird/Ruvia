@@ -42,12 +42,14 @@ Task<void> HttpServer::handleStreamSession(
             if (plainTcpShouldWaitForNextRequest(usedBytes)) {
                 releaseIdleWorkSet(workSetPool_, workSet);
                 scannerEntry.setPhase(ConnectionScanner::Phase::kReadingInitial);
-                auto [idleEc, idleBytes] = co_await asyncResult<std::size_t>(
+                auto idleCompletion = co_await asyncAsio<std::size_t>(
                     [&socket, &idleReadBuffer](auto handler) mutable {
                         socket.async_read_some(
                             asio::buffer(idleReadBuffer.data(), idleReadBuffer.size()),
                             std::move(handler));
                     });
+                const auto idleEc = idleCompletion.errorCode();
+                const auto idleBytes = idleCompletion.result();
                 if (idleEc || !workerRunning_) {
                     co_return;
                 }
@@ -364,12 +366,14 @@ Task<void> HttpServer::handleStreamSession(
                 break;
             }
 
-            auto [ec, bytesRead] = co_await asyncResult<std::size_t>(
+            auto readCompletion = co_await asyncAsio<std::size_t>(
                 [&stream, &readBuffer, usedBytes](auto handler) mutable {
                     stream.async_read_some(
                         asio::buffer(readBuffer.data() + usedBytes, readBuffer.size() - usedBytes),
                         std::move(handler));
                 });
+            const auto ec = readCompletion.errorCode();
+            const auto bytesRead = readCompletion.result();
             if (ec) {
                 co_return;
             }

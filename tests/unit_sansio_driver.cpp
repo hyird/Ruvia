@@ -68,10 +68,11 @@ ruvia::Task<ruvia::HttpResponse> slowHandler(void* context, ruvia::Context& ctx)
     auto* io = static_cast<asio::io_context*>(context);
     asio::steady_timer timer(*io);
     timer.expires_after(std::chrono::milliseconds(30));
-    const auto waitEc = co_await ruvia::detail::asyncError([&timer](auto handler) mutable {
-        timer.async_wait(std::move(handler));
-    });
-    (void)waitEc;
+    const auto waitCompletion = co_await ruvia::detail::asyncAsio(
+        [&timer](auto handler) mutable {
+            timer.async_wait(std::move(handler));
+        });
+    (void)waitCompletion.errorCode();
     co_return ctx.text("slow");
 }
 

@@ -137,12 +137,14 @@ Task<CleartextHttp2DispatchResult> dispatchCleartextHttp2Preface(
         co_return CleartextHttp2DispatchResult::kSessionFinished;
     case CleartextHttp2Probe::kNeedMorePreface: {
         scannerEntry.setPhase(ConnectionScanner::Phase::kReadingInitial);
-        auto [ec, bytesRead] = co_await asyncResult<std::size_t>(
+        auto readCompletion = co_await asyncAsio<std::size_t>(
             [&stream, &readBuffer, usedBytes](auto handler) mutable {
                 stream.async_read_some(
                     asio::buffer(readBuffer.data() + usedBytes, readBuffer.size() - usedBytes),
                     std::move(handler));
             });
+        const auto ec = readCompletion.errorCode();
+        const auto bytesRead = readCompletion.result();
         if (ec) {
             co_return CleartextHttp2DispatchResult::kSessionFinished;
         }

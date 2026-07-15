@@ -123,9 +123,12 @@ private:
         // Mark committed before the write; a partial header flush must never be
         // followed by the normal error-response path on the same socket.
         state_.markCommitted(streamHead.commitPlan());
-        auto ec = co_await asyncError([this, headView = head_.view()](auto handler) mutable {
-            asio::async_write(stream_, asio::buffer(headView), std::move(handler));
-        });
+        const auto writeCompletion = co_await asyncAsio(
+            [this, headView = head_.view()](auto handler) mutable {
+                asio::async_write(
+                    stream_, asio::buffer(headView), std::move(handler));
+            });
+        const auto ec = writeCompletion.errorCode();
         if (ec) {
             aborted_ = true;
             throw std::system_error(ec);
@@ -148,9 +151,12 @@ private:
         if (plan_.framing() == ResponseStreamFraming::kHttp1CloseDelimited) {
             // No chunk framing: write the raw body bytes. The connection close
             // (forced once the stream ends) is what delimits the message.
-            const auto rawEc = co_await asyncError([this, chunk](auto handler) mutable {
-                asio::async_write(stream_, asio::buffer(chunk), std::move(handler));
-            });
+            const auto writeCompletion = co_await asyncAsio(
+                [this, chunk](auto handler) mutable {
+                    asio::async_write(
+                        stream_, asio::buffer(chunk), std::move(handler));
+                });
+            const auto rawEc = writeCompletion.errorCode();
             if (rawEc) {
                 aborted_ = true;
                 throw std::system_error(rawEc);
@@ -164,9 +170,11 @@ private:
             asio::buffer(chunkHeader.view()),
             asio::buffer(chunk),
             asio::buffer(kHttp1ChunkDataTerminator)};
-        const auto writeEc = co_await asyncError([this, &buffers](auto handler) mutable {
-            asio::async_write(stream_, buffers, std::move(handler));
-        });
+        const auto writeCompletion = co_await asyncAsio(
+            [this, &buffers](auto handler) mutable {
+                asio::async_write(stream_, buffers, std::move(handler));
+            });
+        const auto writeEc = writeCompletion.errorCode();
         if (writeEc) {
             aborted_ = true;
             throw std::system_error(writeEc);
@@ -213,9 +221,11 @@ private:
             asio::buffer(kHttp1LastChunkPrefix),
             asio::buffer(trailers_),
             asio::buffer(kHttp1TrailerSectionTerminator)};
-        const auto ec = co_await asyncError([this, &buffers](auto handler) mutable {
-            asio::async_write(stream_, buffers, std::move(handler));
-        });
+        const auto writeCompletion = co_await asyncAsio(
+            [this, &buffers](auto handler) mutable {
+                asio::async_write(stream_, buffers, std::move(handler));
+            });
+        const auto ec = writeCompletion.errorCode();
         state_.markEnded();
         if (ec) {
             aborted_ = true;

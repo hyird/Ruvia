@@ -8,7 +8,6 @@
 
 #include <coroutine>
 #include <exception>
-#include <optional>
 #include <system_error>
 #include <type_traits>
 #include <utility>
@@ -238,73 +237,127 @@ inline asio::awaitable<void> taskAsAwaitable(Task<void> task) {
     co_return;
 }
 
-template <typename Initiate>
-class ErrorAwaiter final {
+struct AsioCompletionPending final {};
+
+template <typename Result, typename Initiate>
+class AsioCompletionAwaiter;
+
+template <typename Result>
+class AsioCompletion final {
 public:
-    explicit ErrorAwaiter(Initiate initiate) : initiate_(std::move(initiate)) {}
+    [[nodiscard]] static AsioCompletion completed(
+        std::error_code errorCode,
+        Result result) {
+        return AsioCompletion(errorCode, std::move(result));
+    }
+
+    [[nodiscard]] std::error_code errorCode() const noexcept {
+        return errorCode_;
+    }
+
+    [[nodiscard]] const Result& result() const & noexcept {
+        return result_;
+    }
+    const Result& result() const && = delete;
+
+    [[nodiscard]] Result& result() & noexcept {
+        return result_;
+    }
+    Result& result() && = delete;
+
+    [[nodiscard]] Result takeResult() && {
+        return std::move(result_);
+    }
+
+private:
+    template <typename, typename>
+    friend class AsioCompletionAwaiter;
+
+    AsioCompletion(std::error_code errorCode, Result&& result)
+        noexcept(std::is_nothrow_move_constructible_v<Result>)
+        : errorCode_(errorCode), result_(std::move(result)) {}
+
+    std::error_code errorCode_;
+    Result result_;
+};
+
+template <>
+class AsioCompletion<void> final {
+public:
+    [[nodiscard]] static AsioCompletion completed(
+        std::error_code errorCode) noexcept {
+        return AsioCompletion(errorCode);
+    }
+
+    [[nodiscard]] std::error_code errorCode() const noexcept {
+        return errorCode_;
+    }
+
+private:
+    template <typename, typename>
+    friend class AsioCompletionAwaiter;
+
+    explicit AsioCompletion(std::error_code errorCode) noexcept
+        : errorCode_(errorCode) {}
+
+    std::error_code errorCode_;
+};
+
+// Asio completion signatures always provide an error code and may also provide
+// a result that remains meaningful on partial failure (for example transferred
+// bytes). The completion therefore owns both fields; only pending versus
+// completed is exclusive.
+template <typename Result, typename Initiate>
+class AsioCompletionAwaiter final {
+public:
+    explicit AsioCompletionAwaiter(Initiate initiate)
+        : initiate_(std::move(initiate)) {}
 
     [[nodiscard]] bool await_ready() const noexcept {
         return false;
     }
 
-    // If initiate_ throws, the coroutine is resumed and the exception is
-    // rethrown from the await-expression ([expr.await]/5), same semantics as
-    // catching and rethrowing in await_resume, without an exception_ptr slot.
+    // If initiate_ throws, the exception propagates from the await-expression
+    // directly ([expr.await]/5), without an exception_ptr side channel.
     [[nodiscard]] bool await_suspend(std::coroutine_handle<> handle) {
-        initiate_([this, handle](std::error_code ec, auto&&...) mutable {
-            ec_ = ec;
-            handle.resume();
-        });
+        if constexpr (std::is_void_v<Result>) {
+            initiate_([this, handle](std::error_code ec, auto&&...) mutable {
+                state_.template emplace<AsioCompletion<void>>(
+                    AsioCompletion<void>::completed(ec));
+                handle.resume();
+            });
+        } else {
+            initiate_([this, handle](std::error_code ec, Result result) mutable {
+                state_.template emplace<AsioCompletion<Result>>(
+                    AsioCompletion<Result>::completed(
+                        ec, std::move(result)));
+                handle.resume();
+            });
+        }
         return true;
     }
 
-    [[nodiscard]] std::error_code await_resume() const noexcept {
-        return ec_;
+    [[nodiscard]] AsioCompletion<Result> await_resume() {
+        auto* completion = std::get_if<AsioCompletion<Result>>(&state_);
+        if (completion == nullptr) {
+            std::terminate();
+        }
+        return std::move(*completion);
     }
 
 private:
+    using State = std::variant<
+        AsioCompletionPending,
+        AsioCompletion<Result>>;
+
     Initiate initiate_;
-    std::error_code ec_;
+    State state_;
 };
 
-template <typename Result, typename Initiate>
-class ErrorResultAwaiter final {
-public:
-    explicit ErrorResultAwaiter(Initiate initiate) : initiate_(std::move(initiate)) {}
-
-    [[nodiscard]] bool await_ready() const noexcept {
-        return false;
-    }
-
-    // See ErrorAwaiter::await_suspend: initiation exceptions propagate from
-    // the await-expression directly.
-    [[nodiscard]] bool await_suspend(std::coroutine_handle<> handle) {
-        initiate_([this, handle](std::error_code ec, Result result) mutable {
-            ec_ = ec;
-            result_.emplace(std::move(result));
-            handle.resume();
-        });
-        return true;
-    }
-
-    [[nodiscard]] std::pair<std::error_code, Result> await_resume() {
-        return {ec_, std::move(*result_)};
-    }
-
-private:
-    Initiate initiate_;
-    std::error_code ec_;
-    std::optional<Result> result_;
-};
-
-template <typename Initiate>
-[[nodiscard]] auto asyncError(Initiate&& initiate) {
-    return ErrorAwaiter<std::decay_t<Initiate>>(std::forward<Initiate>(initiate));
-}
-
-template <typename Result, typename Initiate>
-[[nodiscard]] auto asyncResult(Initiate&& initiate) {
-    return ErrorResultAwaiter<Result, std::decay_t<Initiate>>(std::forward<Initiate>(initiate));
+template <typename Result = void, typename Initiate>
+[[nodiscard]] auto asyncAsio(Initiate&& initiate) {
+    return AsioCompletionAwaiter<Result, std::decay_t<Initiate>>(
+        std::forward<Initiate>(initiate));
 }
 
 }  // namespace ruvia::detail

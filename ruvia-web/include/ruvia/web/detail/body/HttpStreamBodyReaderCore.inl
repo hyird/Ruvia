@@ -199,12 +199,14 @@ Task<void> StreamBodyReader<Stream>::readMore() {
     resizePmrStringForOverwrite(buffer_, oldSize + writable);
 
     scannerEntry_.setPhase(ConnectionScanner::Phase::kReadingPayload);
-    const auto [ec, bytesRead] = co_await asyncResult<std::size_t>(
+    auto readCompletion = co_await asyncAsio<std::size_t>(
         [this, oldSize, writable](auto handler) mutable {
             stream_.async_read_some(
                 asio::buffer(buffer_.data() + oldSize, writable),
                 std::move(handler));
         });
+    const auto ec = readCompletion.errorCode();
+    const auto bytesRead = readCompletion.result();
     if (ec || bytesRead == 0) {
         throwIncompleteRequestBody();
     }

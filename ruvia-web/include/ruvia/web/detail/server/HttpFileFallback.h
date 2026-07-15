@@ -27,12 +27,14 @@ Task<std::error_code> writeFileChunk(
     Stream& stream,
     std::pmr::string& chunk,
     std::size_t size) {
-    co_return co_await asyncError([&stream, &chunk, size](auto handler) mutable {
-        asio::async_write(
-            stream,
-            asio::buffer(chunk.data(), size),
-            std::move(handler));
-    });
+    const auto writeCompletion = co_await asyncAsio(
+        [&stream, &chunk, size](auto handler) mutable {
+            asio::async_write(
+                stream,
+                asio::buffer(chunk.data(), size),
+                std::move(handler));
+        });
+    co_return writeCompletion.errorCode();
 }
 
 template <typename Stream>
@@ -77,12 +79,14 @@ Task<std::error_code> writeFileFallback(
     while (remaining > 0) {
         const auto nextRead = static_cast<std::size_t>(
             std::min<std::uint64_t>(chunk.size(), remaining));
-        auto [readEc, read] = co_await asyncResult<std::size_t>(
+        auto readCompletion = co_await asyncAsio<std::size_t>(
             [&input, &chunk, nextRead](auto handler) mutable {
                 input.async_read_some(
                     asio::buffer(chunk.data(), nextRead),
                     std::move(handler));
             });
+        const auto readEc = readCompletion.errorCode();
+        const auto read = readCompletion.result();
         if (readEc) {
             co_return readEc;
         }

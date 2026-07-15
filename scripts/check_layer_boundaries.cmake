@@ -271,6 +271,31 @@ if(NOT core_task_completion_contract MATCHES
     boundary_error("Task-to-Asio completion regained a loose exception/value tuple"
         "success and failure must remain exclusive alternatives, with payload borrows restricted to live lvalue owners")
 endif()
+if(NOT core_task_completion_contract MATCHES
+       "struct AsioCompletionPending final" OR
+   NOT core_task_completion_contract MATCHES
+       "class AsioCompletion final" OR
+   NOT core_task_completion_contract MATCHES
+       "class AsioCompletionAwaiter final" OR
+   NOT core_task_completion_contract MATCHES
+       "using State = std::variant" OR
+   NOT core_task_completion_contract MATCHES
+       "errorCode[(][)] const noexcept" OR
+   NOT core_task_completion_contract MATCHES
+       "result[(][)] const [&] noexcept" OR
+   NOT core_task_completion_contract MATCHES
+       "result[(][)] const && = delete" OR
+   NOT core_task_completion_contract MATCHES
+       "takeResult[(][)] &&" OR
+   NOT core_task_completion_contract MATCHES
+       "asyncAsio" OR
+   core_task_completion_contract MATCHES
+       "ErrorAwaiter|ErrorResultAwaiter|asyncError|asyncResult|std::pair<std::error_code" OR
+   NOT core_linear_receiver_package_contract MATCHES
+       "HasRvalueAsioCompletionResult")
+    boundary_error("Asio adapter regained split or positional completion results"
+        "one typed completion must own its error and optional protocol result while pending/completed remains an exclusive awaiter state")
+endif()
 if(NOT core_worker_wait_result_contract MATCHES
        "value[(][)] const [&] noexcept" OR
    NOT core_worker_wait_result_contract MATCHES
@@ -4629,7 +4654,7 @@ if(EXISTS "${HTTP_BUFFERED_RESPONSE_WRITE_PLAN}" AND
        NOT buffered_response_h1_writer MATCHES
            "Task<Http1BufferedResponseWriteResult> writeResponseWithScratch" OR
        NOT buffered_response_h1_writer MATCHES
-           "asyncResult<std::size_t>" OR
+           "asyncAsio<std::size_t>" OR
        NOT buffered_response_h1_writer MATCHES
            "classifyHttp1BufferedResponseWrite" OR
        NOT buffered_response_h1_session MATCHES

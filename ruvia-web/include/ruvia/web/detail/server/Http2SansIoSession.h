@@ -213,7 +213,7 @@ Task<void> runHttp2SansIoSession(
                         writtenBytes);
                 }
                 if (!writeDone) {
-                    writeEc = co_await asyncError(
+                    const auto writeCompletion = co_await asyncAsio(
                         [&stream, &writeScratch, writtenBytes](auto handler) mutable {
                             asio::async_write(
                                 stream,
@@ -222,6 +222,7 @@ Task<void> runHttp2SansIoSession(
                                     writeScratch.size() - writtenBytes),
                                 std::move(handler));
                         });
+                    writeEc = writeCompletion.errorCode();
                 }
                 if (writeEc) {
                     writeFailed = true;
@@ -862,11 +863,13 @@ Task<void> runHttp2SansIoSession(
             scannerEntry.setPhase(http2SansIoInactivityPhase(
                 connection.headerBlockInProgress(),
                 streamRuntimes.size()));
-            const auto [ec, bytesRead] = co_await asyncResult<std::size_t>(
+            auto readCompletion = co_await asyncAsio<std::size_t>(
                 [&stream, &readBuffer](auto handler) mutable {
                     stream.async_read_some(
                         asio::buffer(readBuffer.data(), readBuffer.size()), std::move(handler));
                 });
+            const auto ec = readCompletion.errorCode();
+            const auto bytesRead = readCompletion.result();
             if (ec || bytesRead == 0) {
                 break;
             }

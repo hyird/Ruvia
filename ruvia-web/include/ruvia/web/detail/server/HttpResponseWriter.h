@@ -66,13 +66,15 @@ Task<Http1BufferedResponseWriteResult> writeResponseWithScratch(
     const auto responseHeadBytes = head.view().size();
     const auto& responseContent = responseBody(response);
     if (const auto fileBody = responseContent.file()) {
-        auto [ec, bytesTransferred] = co_await asyncResult<std::size_t>(
+        auto writeCompletion = co_await asyncAsio<std::size_t>(
             [&stream, headView = head.view()](auto handler) mutable {
                 asio::async_write(
                     stream,
                     asio::buffer(headView),
                     std::move(handler));
             });
+        const auto ec = writeCompletion.errorCode();
+        const auto bytesTransferred = writeCompletion.result();
         if (ec) {
             co_return classifyHttp1BufferedResponseWrite(
                 responsePlan,
@@ -120,15 +122,15 @@ Task<Http1BufferedResponseWriteResult> writeResponseWithScratch(
                 stream, asio::buffer(headView), headView.size(), writeEc, writtenBytes);
         }
         if (!writeDone) {
-            auto [ec, bytesTransferred] = co_await asyncResult<std::size_t>(
+            auto writeCompletion = co_await asyncAsio<std::size_t>(
                 [&stream, remaining = headView.substr(writtenBytes)](auto handler) mutable {
                     asio::async_write(
                         stream,
                         asio::buffer(remaining),
                         std::move(handler));
                 });
-            writeEc = ec;
-            writtenBytes += bytesTransferred;
+            writeEc = writeCompletion.errorCode();
+            writtenBytes += writeCompletion.result();
         }
         co_return classifyHttp1BufferedResponseWrite(
             responsePlan,
@@ -155,12 +157,12 @@ Task<Http1BufferedResponseWriteResult> writeResponseWithScratch(
                 : std::array<asio::const_buffer, 2>{
                       asio::buffer(body.substr(writtenBytes - headView.size())),
                       asio::const_buffer{}};
-        auto [ec, bytesTransferred] = co_await asyncResult<std::size_t>(
+        auto writeCompletion = co_await asyncAsio<std::size_t>(
             [&stream, &remaining](auto handler) mutable {
                 asio::async_write(stream, remaining, std::move(handler));
             });
-        writeEc = ec;
-        writtenBytes += bytesTransferred;
+        writeEc = writeCompletion.errorCode();
+        writtenBytes += writeCompletion.result();
     }
     co_return classifyHttp1BufferedResponseWrite(
         responsePlan,

@@ -150,6 +150,29 @@ if(_built_components_csv MATCHES "(^|,)core(,|$)")
         message(FATAL_ERROR
             "installed Task completion restored a loose exception/value tuple")
     endif()
+    if(NOT _installed_task_completion MATCHES
+           "struct AsioCompletionPending final" OR
+       NOT _installed_task_completion MATCHES
+           "class AsioCompletion final" OR
+       NOT _installed_task_completion MATCHES
+           "class AsioCompletionAwaiter final" OR
+       NOT _installed_task_completion MATCHES
+           "using State = std::variant" OR
+       NOT _installed_task_completion MATCHES
+           "errorCode[(][)] const noexcept" OR
+       NOT _installed_task_completion MATCHES
+           "result[(][)] const [&] noexcept" OR
+       NOT _installed_task_completion MATCHES
+           "result[(][)] const && = delete" OR
+       NOT _installed_task_completion MATCHES
+           "takeResult[(][)] &&" OR
+       NOT _installed_task_completion MATCHES
+           "asyncAsio" OR
+       _installed_task_completion MATCHES
+           "ErrorAwaiter|ErrorResultAwaiter|asyncError|asyncResult|std::pair<std::error_code")
+        message(FATAL_ERROR
+            "installed Asio adapter restored split or positional completion results")
+    endif()
 
     set(_installed_worker_wait_result_path
         "${_install_prefix}/include/ruvia/core/WorkerWaitResult.h")
@@ -2607,7 +2630,7 @@ if(_built_components_csv MATCHES "(^|,)web(,|$)")
        NOT _installed_http1_buffered_response_writer MATCHES
            "Task<Http1BufferedResponseWriteResult> writeResponseWithScratch" OR
        NOT _installed_http1_buffered_response_writer MATCHES
-           "asyncResult<std::size_t>" OR
+           "asyncAsio<std::size_t>" OR
        NOT _installed_http1_stream_session MATCHES
            "writeResult[.]completed[(][)]" OR
        NOT _installed_http1_stream_session MATCHES

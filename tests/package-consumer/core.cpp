@@ -94,6 +94,10 @@ concept HasAnyRvalueTaskCompletionAccessor =
     requires(T&& result) { std::move(result).failure(); };
 
 template <typename T>
+concept HasRvalueAsioCompletionResult =
+    requires(T&& result) { std::move(result).result(); };
+
+template <typename T>
 concept HasAnyRvalueWorkerWaitAccessor =
     requires(T&& result) { std::move(result).value(); } ||
     requires(T&& result) { std::move(result).closed(); } ||
@@ -125,6 +129,24 @@ static_assert(std::same_as<
     decltype(std::declval<const ruvia::detail::
         TaskCompletionResult<int>&>().failure()),
     const ruvia::detail::TaskCompletionFailure*>);
+static_assert(!std::default_initializable<
+              ruvia::detail::AsioCompletion<std::size_t>>);
+static_assert(!std::default_initializable<
+              ruvia::detail::AsioCompletion<void>>);
+static_assert(!HasRvalueAsioCompletionResult<
+              ruvia::detail::AsioCompletion<std::size_t>>);
+static_assert(std::same_as<
+    decltype(std::declval<const ruvia::detail::
+        AsioCompletion<std::size_t>&>().errorCode()),
+    std::error_code>);
+static_assert(std::same_as<
+    decltype(std::declval<const ruvia::detail::
+        AsioCompletion<std::size_t>&>().result()),
+    const std::size_t&>);
+static_assert(std::same_as<
+    decltype(std::declval<ruvia::detail::
+        AsioCompletion<std::size_t>&&>().takeResult()),
+    std::size_t>);
 static_assert(!HasAnyRvalueWorkerWaitAccessor<
     ruvia::WorkerWaitResult<int>>);
 static_assert(!std::default_initializable<ruvia::WorkerWaitResult<int>>);
