@@ -491,6 +491,9 @@ std::string_view httpContentCodingToken(HttpContentCoding coding) noexcept {
 }
 
 void HttpContentCodingFieldParser::update(std::string_view value) noexcept {
+    if (std::get_if<HttpUnsupportedContentCoding>(&state_) != nullptr) {
+        return;
+    }
     std::size_t begin = 0;
     while (begin <= value.size()) {
         const auto comma = value.find(',', begin);
@@ -500,20 +503,23 @@ void HttpContentCodingFieldParser::update(std::string_view value) noexcept {
                 ? std::string_view::npos
                 : comma - begin));
         if (!token.empty()) {
-            ++codingCount_;
-            if (codingCount_ > 1) {
-                unsupported_ = true;
+            auto* supported = std::get_if<Supported>(&state_);
+            ++supported->codingCount;
+            if (supported->codingCount > 1) {
+                state_.template emplace<HttpUnsupportedContentCoding>();
+                return;
             } else if (httpAsciiEqualsIgnoreCase(token, "identity")) {
-                coding_ = HttpContentCoding::kIdentity;
+                supported->coding = HttpContentCoding::kIdentity;
             } else if (httpAsciiEqualsIgnoreCase(token, "gzip") ||
                        httpAsciiEqualsIgnoreCase(token, "x-gzip")) {
-                coding_ = HttpContentCoding::kGzip;
+                supported->coding = HttpContentCoding::kGzip;
             } else if (httpAsciiEqualsIgnoreCase(token, "br")) {
-                coding_ = HttpContentCoding::kBrotli;
+                supported->coding = HttpContentCoding::kBrotli;
             } else if (httpAsciiEqualsIgnoreCase(token, "zstd")) {
-                coding_ = HttpContentCoding::kZstd;
+                supported->coding = HttpContentCoding::kZstd;
             } else {
-                unsupported_ = true;
+                state_.template emplace<HttpUnsupportedContentCoding>();
+                return;
             }
         }
         if (comma == std::string_view::npos) {
@@ -524,10 +530,10 @@ void HttpContentCodingFieldParser::update(std::string_view value) noexcept {
 }
 
 HttpContentCodingFieldResult HttpContentCodingFieldParser::finish() const noexcept {
-    if (unsupported_) {
+    if (std::get_if<HttpUnsupportedContentCoding>(&state_) != nullptr) {
         return HttpContentCodingFieldResult(HttpUnsupportedContentCoding{});
     }
-    return HttpContentCodingFieldResult(coding_);
+    return HttpContentCodingFieldResult(std::get<Supported>(state_).coding);
 }
 
 HttpContentCodingFieldResult httpContentCodingFromFieldValue(

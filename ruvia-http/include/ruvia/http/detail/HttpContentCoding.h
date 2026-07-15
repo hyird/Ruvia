@@ -63,14 +63,20 @@ private:
 // than one coding is explicit unsupported metadata.
 class HttpContentCodingFieldParser final {
 public:
+    HttpContentCodingFieldParser() noexcept
+        : state_(std::in_place_type<Supported>) {}
+
     void update(std::string_view value) noexcept;
 
     [[nodiscard]] HttpContentCodingFieldResult finish() const noexcept;
 
 private:
-    HttpContentCoding coding_{HttpContentCoding::kIdentity};
-    std::size_t codingCount_{0};
-    bool unsupported_{false};
+    struct Supported final {
+        HttpContentCoding coding{HttpContentCoding::kIdentity};
+        std::size_t codingCount{0};
+    };
+
+    std::variant<Supported, HttpUnsupportedContentCoding> state_;
 };
 
 [[nodiscard]] HttpContentCodingFieldResult httpContentCodingFromFieldValue(

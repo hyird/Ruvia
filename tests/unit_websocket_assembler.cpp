@@ -114,6 +114,12 @@ static_assert(HasInboundContentEncoding<
     ruvia::detail::WebSocketInboundMessage>);
 static_assert(!HasInboundError<ruvia::detail::WebSocketInboundMessage>);
 static_assert(HasInboundError<ruvia::detail::WebSocketInboundFailure>);
+static_assert(std::same_as<
+    decltype(std::declval<const ruvia::detail::WebSocketInboundFragmented&>().opcode()),
+    WebSocketOpcode>);
+static_assert(std::same_as<
+    decltype(std::declval<const ruvia::detail::WebSocketInboundFragmented&>().encoding()),
+    WebSocketInboundContentEncoding>);
 
 }  // namespace
 

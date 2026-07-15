@@ -33,6 +33,19 @@ public:
 private:
     friend struct detail::DbResultAccess;
 
+    struct NoRawResult final {};
+
+    struct OwnedRawResult final {
+        OwnedRawResult(
+            void* ownedValue,
+            void (*ownedRelease)(void*) noexcept) noexcept
+            : value(ownedValue),
+              release(ownedRelease) {}
+
+        void* value;
+        void (*release)(void*) noexcept;
+    };
+
     explicit QueryResult(std::pmr::memory_resource* resource = nullptr);
     QueryResult(detail::ResolvedPmrResourceTag, std::pmr::memory_resource* resource);
 
@@ -40,8 +53,7 @@ private:
     std::pmr::vector<DbField> fields_;
     std::uint64_t affectedRows_{0};
     std::uint64_t lastInsertId_{0};
-    void* rawResult_{nullptr};
-    void (*releaseRawResult_)(void*) noexcept{nullptr};
+    std::variant<NoRawResult, OwnedRawResult> rawResult_;
 };
 
 class DbStreamResult final {

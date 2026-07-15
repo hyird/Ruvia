@@ -2814,6 +2814,12 @@ static_assert(!HasWsProtocolFailure<
     ruvia::detail::WebSocketInboundResult>);
 static_assert(!ExposesAnyRvalueWebSocketInboundAccessor<
     ruvia::detail::WebSocketInboundResult>);
+static_assert(std::same_as<
+    decltype(std::declval<const ruvia::detail::WebSocketInboundFragmented&>().opcode()),
+    ruvia::WebSocketOpcode>);
+static_assert(std::same_as<
+    decltype(std::declval<const ruvia::detail::WebSocketInboundFragmented&>().encoding()),
+    ruvia::detail::WebSocketInboundContentEncoding>);
 static_assert(HasWsProtocolFailure<
     ruvia::detail::WebSocketInboundFailure>);
 static_assert(std::same_as<

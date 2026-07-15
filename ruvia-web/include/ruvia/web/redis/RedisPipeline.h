@@ -3,11 +3,13 @@
 #include "ruvia/core/Task.h"
 #include "ruvia/web/redis/RedisTypes.h"
 
+#include <functional>
 #include <initializer_list>
 #include <memory_resource>
 #include <span>
 #include <string>
 #include <string_view>
+#include <variant>
 #include <vector>
 
 namespace ruvia {
@@ -101,9 +103,19 @@ private:
         std::pmr::vector<Command> commands,
         std::pmr::memory_resource* resource);
     void requireActive() const;
+    [[nodiscard]] detail::RedisPool& consumePool();
+    [[nodiscard]] std::pmr::memory_resource* resource() const noexcept;
 
-    detail::RedisPool* pool_{nullptr};
-    std::pmr::memory_resource* resource_{nullptr};
+    struct Ready final {
+        explicit Ready(detail::RedisPool& owner) noexcept
+            : pool(owner) {}
+
+        std::reference_wrapper<detail::RedisPool> pool;
+    };
+
+    struct Consumed final {};
+
+    std::variant<Ready, Consumed> state_;
     std::pmr::vector<Command> commands_;
 };
 

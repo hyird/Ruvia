@@ -560,6 +560,21 @@ RUVIA_TEST(http_content_coding_field_mapping_is_protocol_generic) {
     RUVIA_CHECK(stacked.unsupported() != nullptr);
 }
 
+RUVIA_TEST(http_content_coding_parser_has_a_terminal_unsupported_state) {
+    ruvia::detail::HttpContentCodingFieldParser unknown;
+    unknown.update("deflate");
+    unknown.update("gzip");
+    const auto unknownResult = unknown.finish();
+    RUVIA_CHECK(unknownResult.unsupported() != nullptr);
+
+    ruvia::detail::HttpContentCodingFieldParser stacked;
+    stacked.update("gzip");
+    stacked.update("");
+    stacked.update("br");
+    const auto stackedResult = stacked.finish();
+    RUVIA_CHECK(stackedResult.unsupported() != nullptr);
+}
+
 RUVIA_TEST(request_body_gzip_round_trip) {
     const std::string plain = "The quick brown fox jumps over the lazy dog";
     const std::string gz = gzipCompress(plain);

@@ -88,8 +88,7 @@ Task<void> HttpServer::handleStreamSession(
         // reserves its own frame slots for the call's temporaries (GCC does
         // not overlap them), so inlining handleError at each rejection site
         // costs ~660 resident bytes per site in every connection's frame.
-        std::optional<HttpErrorInfo> closingError;
-        std::optional<RateLimitRejection> closingRateLimitRejection;
+        Http1ClosingRejection closingRejection;
         std::size_t headerSearchOffset = 0;
         const auto requestStart = std::chrono::steady_clock::now();
         for (;;) {
@@ -132,14 +131,16 @@ Task<void> HttpServer::handleStreamSession(
                     // reports the semantic fact; this Web product deliberately does
                     // not implement extensions beyond 100-continue and chooses the
                     // RFC 9110-permitted 417 response before reading request content.
-                    closingError = copyHttpProtocolErrorInfo(
-                        requestMemory.resource(),
-                        rejection->protocolError());
+                    closingRejection = Http1ClosingRejection::error(
+                        copyHttpProtocolErrorInfo(
+                            requestMemory.resource(),
+                            rejection->protocolError()));
                     break;
                 }
                 if (const auto* redirect = options_.redirect()) {
                     if (requestKnownHeader(parsed.request, RequestKnownHeader::kHost).empty()) {
-                        closingError = HttpErrorInfo(400, {}, "missing Host header");
+                        closingRejection = Http1ClosingRejection::error(
+                            HttpErrorInfo(400, {}, "missing Host header"));
                         break;
                     }
                     response = makeAutoHttpsRedirectResponse(
@@ -159,8 +160,8 @@ Task<void> HttpServer::handleStreamSession(
                 const auto appRateLimit = decideRequestRateLimit(
                     &rateLimiter_, remoteAddress);
                 if (const auto* rejection = appRateLimit.rejection()) {
-                    closingError = rateLimitRejectionError();
-                    closingRateLimitRejection.emplace(*rejection);
+                    closingRejection = Http1ClosingRejection::rateLimit(
+                        rateLimitRejectionError(), *rejection);
                     break;
                 }
                 const auto* resolved = routeResolution.resolved();
@@ -169,9 +170,10 @@ Task<void> HttpServer::handleStreamSession(
                             parsed.bodyPlan,
                             ProtocolByteLimit::limited(
                                 options_.maxBufferedBodyBytes))) {
-                        closingError = copyHttpProtocolErrorInfo(
-                            requestMemory.resource(),
-                            bodyFailure->protocolError());
+                        closingRejection = Http1ClosingRejection::error(
+                            copyHttpProtocolErrorInfo(
+                                requestMemory.resource(),
+                                bodyFailure->protocolError()));
                         break;
                     }
                     if (auto documentResponse = tryDocumentRootResponse(parsed.request, requestMemory)) {
@@ -214,9 +216,10 @@ Task<void> HttpServer::handleStreamSession(
                 if (const auto bodyFailure = contentLengthLimitFailure(
                         parsed.bodyPlan,
                         maxRequestBodyBytes)) {
-                    closingError = copyHttpProtocolErrorInfo(
-                        requestMemory.resource(),
-                        bodyFailure->protocolError());
+                    closingRejection = Http1ClosingRejection::error(
+                        copyHttpProtocolErrorInfo(
+                            requestMemory.resource(),
+                            bodyFailure->protocolError()));
                     break;
                 }
 
@@ -358,9 +361,10 @@ Task<void> HttpServer::handleStreamSession(
                     }
                 }
                 const auto error = failure->protocolError();
-                closingError = copyHttpProtocolErrorInfo(
-                    requestMemory.resource(),
-                    error);
+                closingRejection = Http1ClosingRejection::error(
+                    copyHttpProtocolErrorInfo(
+                        requestMemory.resource(),
+                        error));
                 break;
             }
 
@@ -371,9 +375,10 @@ Task<void> HttpServer::handleStreamSession(
             if (usedBytes == readBuffer.size()) {
                 const auto error = httpParseProtocolError(
                     HttpParseError::kHeaderTooLarge);
-                closingError = copyHttpProtocolErrorInfo(
-                    requestMemory.resource(),
-                    error);
+                closingRejection = Http1ClosingRejection::error(
+                    copyHttpProtocolErrorInfo(
+                        requestMemory.resource(),
+                        error));
                 break;
             }
 
@@ -396,15 +401,15 @@ Task<void> HttpServer::handleStreamSession(
         // Shared exit for every rejection recorded above: one co_await site
         // keeps one set of call temporaries in the frame instead of one per
         // rejection branch.
-        if (closingError) {
+        if (const auto* closingError = closingRejection.error()) {
             response = co_await routes.handleError(
                 parsed.request,
                 requestMemory,
                 *closingError,
                 baseRouteServices);
-            if (closingRateLimitRejection) {
+            if (const auto* rateLimit = closingRejection.rateLimit()) {
                 applyRateLimitRejectionHeaders(
-                    response, *closingRateLimitRejection);
+                    response, *rateLimit);
             }
             requestCompletion.emplace(
                 Http1SessionRequestCompletion::makeBufferedClosing(

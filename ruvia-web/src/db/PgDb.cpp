@@ -132,7 +132,7 @@ Task<QueryResult> PostgreSqlPool::executeOnSlot(
                 throw std::runtime_error("PostgreSQL returned multiple tuple results");
             }
             materializeBorrowedResult(output, *result, resource);
-            DbResultAccess::retainRawResult(output, result, &freePostgreSqlResult);
+            DbResultAccess::ownRawResult(output, result, &freePostgreSqlResult);
             retainedTupleResult = true;
         } else {
             PQclear(result);

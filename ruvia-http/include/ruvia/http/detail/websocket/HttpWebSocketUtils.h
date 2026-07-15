@@ -610,6 +610,27 @@ private:
 // 6455 §5.4): control-frame dispatch, fragmentation across continuation frames,
 // per-message size limits and UTF-8 validation. Every wire failure is returned as
 // a typed alternative carrying the exact RFC Close reason; none is thrown.
+struct WebSocketInboundIdle final {};
+
+class WebSocketInboundFragmented final {
+public:
+    constexpr WebSocketInboundFragmented(
+        WebSocketOpcode opcode,
+        WebSocketInboundContentEncoding encoding) noexcept
+        : opcode_(opcode), encoding_(encoding) {}
+
+    [[nodiscard]] constexpr WebSocketOpcode opcode() const noexcept {
+        return opcode_;
+    }
+    [[nodiscard]] constexpr WebSocketInboundContentEncoding encoding() const noexcept {
+        return encoding_;
+    }
+
+private:
+    WebSocketOpcode opcode_;
+    WebSocketInboundContentEncoding encoding_;
+};
+
 class WebSocketInboundAssembler final {
 public:
     explicit WebSocketInboundAssembler(std::pmr::memory_resource* resource)
@@ -624,7 +645,8 @@ public:
                 opcode, frame.payload());
         }
         if (frame.kind() == WebSocketFrameKind::kContinuation) {
-            if (!fragmented_) {
+            const auto* fragmented = std::get_if<WebSocketInboundFragmented>(&state_);
+            if (fragmented == nullptr) {
                 return WebSocketInboundResult::makeFailure(
                     WebSocketProtocolFailure::kProtocolError);
             }
@@ -637,17 +659,18 @@ public:
             if (!frame.final()) {
                 return WebSocketInboundResult::makeContinue();
             }
-            fragmented_ = false;
+            const auto opcode = fragmented->opcode();
+            const auto encoding = fragmented->encoding();
+            state_.template emplace<WebSocketInboundIdle>();
             const auto message = WebSocketMessageAccess::make(
-                opcode_,
+                opcode,
                 std::string_view(message_.data(), message_.size()));
-            if (compressed_) {
-                compressed_ = false;
+            if (encoding == WebSocketInboundContentEncoding::kPerMessageDeflate) {
                 return WebSocketInboundResult::makeMessage(
                     message,
                     WebSocketInboundContentEncoding::kPerMessageDeflate);
             }
-            if (opcode_ == WebSocketOpcode::kText && !isValidUtf8(message_)) {
+            if (opcode == WebSocketOpcode::kText && !isValidUtf8(message_)) {
                 return WebSocketInboundResult::makeFailure(
                     WebSocketProtocolFailure::kInvalidPayloadData);
             }
@@ -657,7 +680,7 @@ public:
         }
         if (frame.kind() == WebSocketFrameKind::kText ||
             frame.kind() == WebSocketFrameKind::kBinary) {
-            if (fragmented_) {
+            if (std::get_if<WebSocketInboundFragmented>(&state_) != nullptr) {
                 return WebSocketInboundResult::makeFailure(
                     WebSocketProtocolFailure::kProtocolError);
             }
@@ -684,9 +707,11 @@ public:
                     message,
                     WebSocketInboundContentEncoding::kIdentity);
             }
-            fragmented_ = true;
-            opcode_ = opcode;
-            compressed_ = frame.compressed();
+            state_.template emplace<WebSocketInboundFragmented>(
+                opcode,
+                frame.compressed()
+                    ? WebSocketInboundContentEncoding::kPerMessageDeflate
+                    : WebSocketInboundContentEncoding::kIdentity);
             message_.assign(frame.payload().data(), frame.payload().size());
         }
         return WebSocketInboundResult::makeContinue();
@@ -694,9 +719,7 @@ public:
 
 private:
     std::pmr::string message_;
-    WebSocketOpcode opcode_{WebSocketOpcode::kText};
-    bool fragmented_{false};
-    bool compressed_{false};
+    std::variant<WebSocketInboundIdle, WebSocketInboundFragmented> state_;
 };
 
 class WebSocketFrameReadResult;

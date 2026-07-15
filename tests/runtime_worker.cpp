@@ -12,6 +12,7 @@
 #include <asio/ip/udp.hpp>
 
 #include <atomic>
+#include <array>
 #include <barrier>
 #include <future>
 #include <memory>
@@ -58,6 +59,31 @@ bool testWorkerSignalHasOneDispatchTarget() {
     fallbackSignal.notify();
     ioContext.run();
     return invalidWorkerRejected && executorResumed && fallbackResumed;
+}
+
+bool testWorkerSignalHasNoArbitraryWaiterLimit() {
+    constexpr std::size_t kWaiterCount = 16;
+    asio::io_context ioContext;
+    ruvia::detail::WorkerSignal signal(ioContext.get_executor());
+    std::array<bool, kWaiterCount> resumed{};
+    for (std::size_t index = 0; index < resumed.size(); ++index) {
+        asio::co_spawn(
+            ioContext,
+            ruvia::detail::taskAsAwaitable(
+                waitForSignal(signal, resumed[index])),
+            asio::detached);
+    }
+
+    ioContext.poll();
+    ioContext.restart();
+    signal.notify();
+    ioContext.run();
+    for (const bool value : resumed) {
+        if (!value) {
+            return false;
+        }
+    }
+    return true;
 }
 
 bool testDispatchAndAffinity() {
@@ -303,6 +329,7 @@ bool testConcurrentStopHasOneInitiator() {
 
 int main() {
     return testWorkerSignalHasOneDispatchTarget() &&
+               testWorkerSignalHasNoArbitraryWaiterLimit() &&
                testDispatchAndAffinity() && testBoundedMailbox() &&
                testExternalEventLoopAttachment() &&
                testFailurePropagation() && testExpiredHandle() &&

@@ -5,10 +5,10 @@
 #include <atomic>
 #include <exception>
 #include <mutex>
-#include <optional>
 #include <stdexcept>
 #include <thread>
 #include <utility>
+#include <variant>
 #include <vector>
 
 #include <asio/execution_context.hpp>
@@ -116,15 +116,22 @@ private:
 namespace detail {
 
 struct EventLoopState final {
+    using ContextOwnership =
+        std::variant<std::unique_ptr<asio::io_context>, ExternalContextClaim>;
+
     explicit EventLoopState(std::size_t mailboxCapacity)
-        : ownedContext(std::make_unique<asio::io_context>()),
-          ioContext(*ownedContext),
+        : contextOwnership(
+              std::in_place_type<std::unique_ptr<asio::io_context>>,
+              std::make_unique<asio::io_context>()),
+          ioContext(**std::get_if<std::unique_ptr<asio::io_context>>(
+              &contextOwnership)),
           work(asio::make_work_guard(ioContext)),
           dispatcher(std::make_shared<WorkerDispatcher>(ioContext, mailboxCapacity)),
           handle(WorkerHandleAccess::make(dispatcher)) {}
 
     EventLoopState(asio::io_context& externalContext, std::size_t mailboxCapacity)
-        : externalClaim(std::in_place, externalContext),
+        : contextOwnership(
+              std::in_place_type<ExternalContextClaim>, externalContext),
           ioContext(externalContext),
           work(asio::make_work_guard(ioContext)),
           dispatcher(std::make_shared<WorkerDispatcher>(ioContext, mailboxCapacity)),
@@ -149,13 +156,12 @@ struct EventLoopState final {
             }
         } catch (...) {
         }
-        work->reset();
+        work.reset();
     }
 
-    std::unique_ptr<asio::io_context> ownedContext;
-    std::optional<ExternalContextClaim> externalClaim;
+    ContextOwnership contextOwnership;
     asio::io_context& ioContext;
-    std::optional<asio::executor_work_guard<asio::io_context::executor_type>> work;
+    asio::executor_work_guard<asio::io_context::executor_type> work;
     std::shared_ptr<WorkerDispatcher> dispatcher;
     WorkerHandle handle;
     std::thread thread;

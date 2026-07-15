@@ -222,12 +222,13 @@ QueryResult::QueryResult(QueryResult&& other) noexcept
       fields_(std::move(other.fields_)),
       affectedRows_(std::exchange(other.affectedRows_, 0)),
       lastInsertId_(std::exchange(other.lastInsertId_, 0)),
-      rawResult_(std::exchange(other.rawResult_, nullptr)),
-      releaseRawResult_(std::exchange(other.releaseRawResult_, nullptr)) {}
+      rawResult_(std::move(other.rawResult_)) {
+    other.rawResult_.template emplace<NoRawResult>();
+}
 
 QueryResult::~QueryResult() {
-    if (rawResult_ != nullptr && releaseRawResult_ != nullptr) {
-        releaseRawResult_(rawResult_);
+    if (const auto* owned = std::get_if<OwnedRawResult>(&rawResult_)) {
+        owned->release(owned->value);
     }
 }
 

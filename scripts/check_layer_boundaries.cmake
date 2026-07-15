@@ -217,12 +217,27 @@ if(NOT core_worker_signal_contract MATCHES
        "using Target = std::variant<WorkerHandle, asio::any_io_executor>" OR
    NOT core_worker_signal_contract MATCHES
        "std::get_if<WorkerHandle>" OR
+   NOT core_worker_signal_contract MATCHES
+       "Awaiter[*][ \\t]+waiters_" OR
+   core_worker_signal_contract MATCHES
+       "std::array<std::coroutine_handle|waiter capacity exceeded" OR
    core_worker_signal_contract MATCHES
        "WorkerHandle worker_|std::optional<asio::any_io_executor> executor_" OR
    NOT core_runtime_test_contract MATCHES
-       "testWorkerSignalHasOneDispatchTarget")
-    boundary_error("WorkerSignal regained parallel dispatch targets"
-        "each signal must commit exactly one worker or executor target at construction; invalid workers and executor fallback must remain covered")
+       "testWorkerSignalHasOneDispatchTarget" OR
+   NOT core_runtime_test_contract MATCHES
+       "testWorkerSignalHasNoArbitraryWaiterLimit")
+    boundary_error("WorkerSignal regained split targets or a fixed waiter ceiling"
+        "each signal must commit one dispatch target and link coroutine-frame awaiters without allocating or imposing an arbitrary concurrency limit")
+endif()
+if(NOT core_runtime_implementation MATCHES
+       "using ContextOwnership" OR
+   NOT core_runtime_implementation MATCHES
+       "std::variant<std::unique_ptr<asio::io_context>, ExternalContextClaim>" OR
+   core_runtime_implementation MATCHES
+       "std::optional<ExternalContextClaim>|std::optional<asio::executor_work_guard")
+    boundary_error("event loop context ownership regained parallel optional state"
+        "owned context and external claim must be exclusive alternatives, and every live loop state must own an engaged work guard")
 endif()
 if(NOT core_operation_deadline_contract MATCHES
        "struct Inactive final" OR
@@ -757,7 +772,7 @@ if(EXISTS "${WEB_RATE_LIMITER}" AND
            "applyRouteRateLimitRejectionHeaders" OR
        NOT web_rate_limit_http1_session MATCHES "decideRequestRateLimit" OR
        NOT web_rate_limit_http1_session MATCHES
-           "closingRateLimitRejection" OR
+           "Http1ClosingRejection::rateLimit" OR
        NOT web_rate_limit_http1_session MATCHES
            "applyRateLimitRejectionHeaders" OR
        NOT web_rate_limit_http2_session MATCHES "decideRequestRateLimit" OR
@@ -4774,10 +4789,14 @@ if(EXISTS "${WEB_REDIS_PIPELINE_API}" AND
            "std::pmr::vector<Command>[ \t]+commands" OR
        NOT web_redis_transaction_api MATCHES
            "std::pmr::vector<RedisPipeline::Command>[ \t]+commands" OR
+       NOT web_redis_pipeline_api MATCHES
+           "std::variant<Ready, Consumed>[ \t]+state_" OR
+       web_redis_pipeline_api MATCHES
+           "RedisPool[*][ \t]+pool_|memory_resource[*][ \t]+resource_" OR
        NOT web_redis_pipeline_impl MATCHES
-           "exchange[(]pool_,[ \t]*nullptr[)]" OR
+           "emplace<Consumed>" OR
        NOT web_redis_transaction_impl MATCHES
-           "exchange[(]pipeline_[.]pool_,[ \t]*nullptr[)]" OR
+           "pipeline_[.]consumePool[(][)]" OR
        NOT web_redis_linear_api_test MATCHES "HasLvalueRedisExec" OR
        NOT web_redis_linear_api_test MATCHES "HasRvalueRedisExec" OR
        NOT web_redis_linear_package_test MATCHES "HasLvalueRedisExec" OR
@@ -4785,6 +4804,15 @@ if(EXISTS "${WEB_REDIS_PIPELINE_API}" AND
         boundary_error("Redis batch builders regained borrowed lazy execution"
             "pipeline and transaction exec must consume an rvalue, transfer command ownership into the coroutine frame, and invalidate the source")
     endif()
+endif()
+if(NOT pmr_db_query_result_api MATCHES
+       "std::variant<NoRawResult, OwnedRawResult>[ \t]+rawResult_" OR
+   pmr_db_query_result_api MATCHES
+       "void[*][ \t]+rawResult_|releaseRawResult_" OR
+   NOT pmr_db_result_access MATCHES "ownRawResult" OR
+   pmr_db_result_access MATCHES "retainRawResult")
+    boundary_error("database query result restored split backend ownership"
+        "backend result and deleter must be one exclusive OwnedRawResult state")
 endif()
 check_files_no_match("Context final-response observation must not split or expose provisional storage"
     "${RULE_STALE_CONTEXT_RESPONSE_OBSERVATION_SPLIT}"
@@ -11796,6 +11824,65 @@ if(NOT multipart_input_lifecycle_content MATCHES
        "borrowedInputMode_|inputFinished_|borrowedInput_|std::pmr::string buffer_")
     boundary_error("MultipartParser restored parallel input source/EOF state"
         "Borrowed complete input, streaming open, and streaming EOF must be exclusive MultipartInputLifecycle alternatives")
+endif()
+
+set(ROUTER_INTERNAL_HEADER
+    "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/router/RouterInternal.h")
+set(ROUTER_BUILD_SOURCE
+    "${RUVIA_ROOT}/ruvia-web/src/router/Router.cpp")
+set(ROUTER_REGISTRATION_SOURCE
+    "${RUVIA_ROOT}/ruvia-web/src/router/RouterRegistration.cpp")
+file(READ "${ROUTER_INTERNAL_HEADER}" router_internal_state_content)
+file(READ "${ROUTER_BUILD_SOURCE}" router_build_state_content)
+file(READ "${ROUTER_REGISTRATION_SOURCE}" router_registration_state_content)
+if(router_internal_state_content MATCHES "finalized_" OR
+   NOT router_internal_state_content MATCHES "routeTable_" OR
+   NOT router_build_state_content MATCHES "if [(]routeTable_[)]" OR
+   NOT router_registration_state_content MATCHES "if [(]routeTable_[)]")
+    boundary_error("Router restored a parallel finalized flag"
+        "Published RouteTable ownership must be the sole finalized-state source")
+endif()
+
+set(HTTP1_CLOSING_REJECTION_HEADER
+    "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/server/Http1ClosingRejection.h")
+set(HTTP1_STREAM_SESSION
+    "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/server/HttpServerStreamSession.inl")
+file(READ "${HTTP1_CLOSING_REJECTION_HEADER}" http1_closing_rejection_content)
+file(READ "${HTTP1_STREAM_SESSION}" http1_closing_rejection_consumer)
+if(NOT http1_closing_rejection_content MATCHES
+       "class Http1ClosingRejection final" OR
+   NOT http1_closing_rejection_content MATCHES
+       "Http1ClosingRateLimitRejection" OR
+   NOT http1_closing_rejection_content MATCHES "std::variant" OR
+   NOT http1_closing_rejection_consumer MATCHES
+       "Http1ClosingRejection closingRejection" OR
+   http1_closing_rejection_consumer MATCHES
+       "std::optional<HttpErrorInfo>[ \\t]+closingError" OR
+   http1_closing_rejection_consumer MATCHES
+       "std::optional<RateLimitRejection>[ \\t]+closingRateLimitRejection")
+    boundary_error("HTTP/1 close rejection restored parallel optional state"
+        "Ordinary and rate-limit closing errors must be exclusive typed alternatives")
+endif()
+
+set(HTTP_CONTENT_CODING_HEADER
+    "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/detail/HttpContentCoding.h")
+set(WEBSOCKET_INBOUND_HEADER
+    "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/detail/websocket/HttpWebSocketUtils.h")
+file(READ "${HTTP_CONTENT_CODING_HEADER}" http_content_coding_state_content)
+file(READ "${WEBSOCKET_INBOUND_HEADER}" websocket_inbound_state_content)
+if(NOT http_content_coding_state_content MATCHES
+       "std::variant<Supported, HttpUnsupportedContentCoding> state_" OR
+   http_content_coding_state_content MATCHES "codingCount_|unsupported_")
+    boundary_error("Content-Encoding field parsing restored parallel terminal state"
+        "Supported coding accumulation and unsupported terminal state must be exclusive")
+endif()
+if(NOT websocket_inbound_state_content MATCHES
+       "class WebSocketInboundFragmented final" OR
+   NOT websocket_inbound_state_content MATCHES
+       "std::variant<WebSocketInboundIdle, WebSocketInboundFragmented> state_" OR
+   websocket_inbound_state_content MATCHES "fragmented_")
+    boundary_error("WebSocket inbound assembly restored parallel fragment flags"
+        "Idle and fragmented opcode/content-encoding must be one exclusive state")
 endif()
 
 get_property(boundary_failed GLOBAL PROPERTY RUVIA_BOUNDARY_FAILED)

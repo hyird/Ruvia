@@ -220,7 +220,7 @@ Task<QueryResult> detail::MariaDbPool::executeOnSlot(
         co_return result;
     }
 
-    DbResultAccess::retainRawResult(result, rawResult, &freeStoredResult);
+    DbResultAccess::ownRawResult(result, rawResult, &freeStoredResult);
     const auto fieldCount = static_cast<std::size_t>(mysql_num_fields(rawResult));
     const auto rowCount = static_cast<std::size_t>(mysql_num_rows(rawResult));
     auto& resultRows = DbResultAccess::rows(result);

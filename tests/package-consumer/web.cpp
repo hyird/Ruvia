@@ -23,6 +23,7 @@
 #include <ruvia/web/Error.h>
 #include <ruvia/web/ServerConfig.h>
 #include <ruvia/web/detail/server/HttpServerOptions.h>
+#include <ruvia/web/detail/server/Http1ClosingRejection.h>
 #include <ruvia/web/detail/server/HttpServerWorkerCompletion.h>
 #include <ruvia/web/Middleware.h>
 #include <ruvia/web/Model.h>
@@ -161,6 +162,19 @@ static_assert(std::same_as<
     const ruvia::detail::RateLimitRejection*>);
 static_assert(!ExposesRvalueRateLimitAlternative<
     ruvia::detail::RateLimitDecision>);
+template <typename Rejection>
+concept ExposesRvalueHttp1ClosingAlternative = requires(Rejection rejection) {
+    std::move(rejection).error();
+    std::move(rejection).rateLimit();
+};
+static_assert(std::default_initializable<
+    ruvia::detail::Http1ClosingRejection>);
+static_assert(std::same_as<
+    decltype(std::declval<const ruvia::detail::Http1ClosingRejection&>()
+                 .error()),
+    const ruvia::HttpErrorInfo*>);
+static_assert(!ExposesRvalueHttp1ClosingAlternative<
+    ruvia::detail::Http1ClosingRejection>);
 static_assert(!std::is_move_constructible_v<ruvia::MultipartReader>);
 static_assert(!std::is_move_assignable_v<ruvia::MultipartReader>);
 static_assert(std::is_move_constructible_v<ruvia::RequestNameValueList>);

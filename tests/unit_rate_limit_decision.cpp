@@ -13,6 +13,7 @@
 #include "ruvia/web/detail/http/ContextServices.h"
 #include "ruvia/http/detail/HttpRequestInternal.h"
 #include "ruvia/web/detail/server/RateLimitDecision.h"
+#include "ruvia/web/detail/server/Http1ClosingRejection.h"
 #include "ruvia/web/detail/server/RateLimitKey.h"
 #include "ruvia/web/RateLimitRule.h"
 #include "ruvia/web/Context.h"
@@ -129,6 +130,32 @@ RUVIA_TEST(rate_limit_rejection_owns_web_error_and_retry_headers) {
     RUVIA_CHECK_EQ(response.header("X-RateLimit-Limit"), std::string_view("7"));
     RUVIA_CHECK_EQ(response.header("X-RateLimit-Remaining"), std::string_view("0"));
     RUVIA_CHECK_EQ(response.header("X-RateLimit-Reset"), std::string_view("2"));
+}
+
+RUVIA_TEST(http1_closing_rejection_has_exclusive_error_alternatives) {
+    using ruvia::detail::Http1ClosingRejection;
+
+    const Http1ClosingRejection none;
+    RUVIA_CHECK(none.error() == nullptr);
+    RUVIA_CHECK(none.rateLimit() == nullptr);
+
+    const auto ordinary = Http1ClosingRejection::error(
+        ruvia::HttpErrorInfo(400, {}, "bad request"));
+    RUVIA_CHECK(ordinary.error() != nullptr);
+    RUVIA_CHECK_EQ(ordinary.error()->status(), std::uint16_t{400});
+    RUVIA_CHECK(ordinary.rateLimit() == nullptr);
+
+    const auto decision = RateLimitDecision::reject(
+        std::chrono::milliseconds(125));
+    const auto limited = Http1ClosingRejection::rateLimit(
+        ruvia::detail::rateLimitRejectionError(),
+        *decision.rejection());
+    RUVIA_CHECK(limited.error() != nullptr);
+    RUVIA_CHECK_EQ(limited.error()->status(), std::uint16_t{429});
+    RUVIA_CHECK(limited.rateLimit() != nullptr);
+    RUVIA_CHECK_EQ(
+        limited.rateLimit()->retryAfter(),
+        std::chrono::milliseconds(125));
 }
 
 RUVIA_TEST(rate_limit_enforces_per_key_request_budget) {

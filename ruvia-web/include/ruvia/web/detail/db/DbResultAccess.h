@@ -2,6 +2,7 @@
 
 #include "ruvia/web/db/DbQueryResult.h"
 
+#include <exception>
 #include <memory_resource>
 #include <string_view>
 
@@ -31,12 +32,18 @@ struct DbResultAccess final {
         return result.fields_;
     }
 
-    static void retainRawResult(
+    static void ownRawResult(
         QueryResult& result,
         void* raw,
         void (*release)(void*) noexcept) noexcept {
-        result.rawResult_ = raw;
-        result.releaseRawResult_ = release;
+        if (raw == nullptr || release == nullptr ||
+            std::holds_alternative<QueryResult::OwnedRawResult>(
+                result.rawResult_)) {
+            std::terminate();
+        }
+        result.rawResult_.template emplace<QueryResult::OwnedRawResult>(
+            raw,
+            release);
     }
 
     [[nodiscard]] static DbField nullField(std::pmr::memory_resource* resource) {

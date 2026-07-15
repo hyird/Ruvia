@@ -185,7 +185,7 @@ void detail::RouterImpl::validateRouteTarget(HttpKnownMethod method, std::string
 }
 
 void detail::RouterImpl::finalize() {
-    if (finalized_) {
+    if (routeTable_) {
         return;
     }
 
@@ -197,7 +197,6 @@ void detail::RouterImpl::finalize() {
     table->setErrorHandler(errorHandler_);
     table->setNotFoundHandler(notFoundHandler_);
     routeTable_ = std::move(table);
-    finalized_ = true;
 }
 
 const detail::RouteTable& detail::RouterImpl::routeTable() const {

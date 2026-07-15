@@ -203,7 +203,7 @@ RUVIA_TEST(db_query_result_move_transfers_direct_raii_ownership) {
     {
         auto result = ruvia::detail::DbResultAccess::makeResult(nullptr);
         ruvia::detail::DbResultAccess::setAffectedRows(result, 7);
-        ruvia::detail::DbResultAccess::retainRawResult(
+        ruvia::detail::DbResultAccess::ownRawResult(
             result,
             &releases,
             [](void* value) noexcept {

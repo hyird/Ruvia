@@ -10,7 +10,7 @@ namespace ruvia {
 
 RedisTransaction::RedisTransaction(RedisPipeline pipeline) noexcept
     : pipeline_(std::move(pipeline)),
-      watches_(pipeline_.resource_) {}
+      watches_(pipeline_.resource()) {}
 
 RedisTransaction& RedisTransaction::command(std::span<const std::string_view> args) {
     pipeline_.command(args);
@@ -26,13 +26,13 @@ RedisTransaction& RedisTransaction::watch(std::span<const std::string_view> keys
     if (keys.empty()) {
         return *this;
     }
-    RedisPipeline::appendCommand(watches_, pipeline_.resource_, "WATCH", keys);
+    RedisPipeline::appendCommand(watches_, pipeline_.resource(), "WATCH", keys);
     return *this;
 }
 
 RedisTransaction& RedisTransaction::unwatch() {
     pipeline_.requireActive();
-    RedisPipeline::appendCommand(watches_, pipeline_.resource_, "UNWATCH");
+    RedisPipeline::appendCommand(watches_, pipeline_.resource(), "UNWATCH");
     return *this;
 }
 
@@ -276,11 +276,11 @@ Task<std::pmr::vector<RedisValue>> RedisTransaction::executeOwned(
 }
 
 Task<std::pmr::vector<RedisValue>> RedisTransaction::exec() && {
-    pipeline_.requireActive();
-    auto& pool = *std::exchange(pipeline_.pool_, nullptr);
+    auto* commandResource = pipeline_.resource();
+    auto& pool = pipeline_.consumePool();
     return executeOwned(
         pool,
-        pipeline_.resource_,
+        commandResource,
         std::move(watches_),
         std::move(pipeline_.commands_));
 }

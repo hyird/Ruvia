@@ -1,6 +1,5 @@
 #pragma once
 
-#include <array>
 #include <concepts>
 #include <coroutine>
 #include <stdexcept>
@@ -17,6 +16,8 @@
 namespace ruvia::detail {
 
 class WorkerSignal final {
+    struct Awaiter;
+
 public:
     explicit WorkerSignal(WorkerHandle worker)
         : target_(makeWorkerTarget(std::move(worker))) {}
@@ -43,31 +44,7 @@ public:
         co_await Awaiter{*this};
     }
 
-    void notify() noexcept {
-        bool woke = false;
-        for (auto& slot : waiters_) {
-            if (!slot) {
-                continue;
-            }
-            woke = true;
-            const auto waiter = std::exchange(slot, {});
-            try {
-                if (const auto* worker = std::get_if<WorkerHandle>(&target_)) {
-                    WorkerHandleAccess::defer(
-                        *worker, [waiter] { waiter.resume(); });
-                } else {
-                    asio::post(
-                        std::get<asio::any_io_executor>(target_),
-                        [waiter] { waiter.resume(); });
-                }
-            } catch (...) {
-                std::terminate();
-            }
-        }
-        if (!woke) {
-            pending_ = true;
-        }
-    }
+    void notify() noexcept;
 
 private:
     using Target = std::variant<WorkerHandle, asio::any_io_executor>;
@@ -94,6 +71,8 @@ private:
 
     struct Awaiter final {
         WorkerSignal& signal;
+        Awaiter* next{nullptr};
+        std::coroutine_handle<> continuation{};
 
         [[nodiscard]] bool await_ready() noexcept {
             if (!signal.pending_) {
@@ -103,22 +82,46 @@ private:
             return true;
         }
 
-        bool await_suspend(std::coroutine_handle<> continuation) {
-            for (auto& slot : signal.waiters_) {
-                if (!slot) {
-                    slot = continuation;
-                    return true;
-                }
-            }
-            throw std::logic_error("worker signal waiter capacity exceeded");
+        bool await_suspend(std::coroutine_handle<> value) noexcept {
+            continuation = value;
+            next = signal.waiters_;
+            signal.waiters_ = this;
+            return true;
         }
 
         void await_resume() const noexcept {}
     };
 
     Target target_;
-    std::array<std::coroutine_handle<>, 8> waiters_{};
+    Awaiter* waiters_{nullptr};
     bool pending_{false};
 };
+
+inline void WorkerSignal::notify() noexcept {
+    auto* waiter = std::exchange(waiters_, nullptr);
+    if (waiter == nullptr) {
+        pending_ = true;
+        return;
+    }
+
+    while (waiter != nullptr) {
+        auto* next = waiter->next;
+        const auto continuation = std::exchange(waiter->continuation, {});
+        waiter->next = nullptr;
+        try {
+            if (const auto* worker = std::get_if<WorkerHandle>(&target_)) {
+                WorkerHandleAccess::defer(
+                    *worker, [continuation] { continuation.resume(); });
+            } else {
+                asio::post(
+                    std::get<asio::any_io_executor>(target_),
+                    [continuation] { continuation.resume(); });
+            }
+        } catch (...) {
+            std::terminate();
+        }
+        waiter = next;
+    }
+}
 
 }

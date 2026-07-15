@@ -780,6 +780,10 @@ if(NOT _installed_http_content_coding_contract MATCHES
    NOT _installed_http_content_coding_contract MATCHES
        "class HttpContentCodingFieldResult final" OR
    NOT _installed_http_content_coding_contract MATCHES
+       "std::variant<Supported, HttpUnsupportedContentCoding> state_" OR
+   _installed_http_content_coding_contract MATCHES
+       "codingCount_|unsupported_" OR
+   NOT _installed_http_content_coding_contract MATCHES
        "std::variant<HttpContentCoding, HttpUnsupportedContentCoding>" OR
    NOT _installed_http_content_coding_contract MATCHES
        "class HttpDecodedContent final" OR
@@ -1237,12 +1241,28 @@ if(EXISTS "${_installed_db_types_path}" OR
            "rows[(][)] const [&] noexcept" OR
        NOT _installed_db_result MATCHES
            "rows[(][)] const && = delete" OR
+       NOT _installed_db_result MATCHES
+           "std::variant<NoRawResult, OwnedRawResult>[ \t]+rawResult_" OR
+       _installed_db_result MATCHES
+           "void[*][ \t]+rawResult_|releaseRawResult_" OR
        NOT _installed_db_migration MATCHES
            "applied[(][)] const [&] noexcept" OR
        NOT _installed_db_migration MATCHES
            "skipped[(][)] const && = delete")
         message(FATAL_ERROR
             "installed database values lost discriminated storage or safe owned-view lifetimes")
+    endif()
+endif()
+set(_installed_redis_pipeline_path
+    "${_install_prefix}/include/ruvia/web/redis/RedisPipeline.h")
+if(EXISTS "${_installed_redis_pipeline_path}")
+    file(READ "${_installed_redis_pipeline_path}" _installed_redis_pipeline)
+    if(NOT _installed_redis_pipeline MATCHES
+           "std::variant<Ready, Consumed>[ \t]+state_" OR
+       _installed_redis_pipeline MATCHES
+           "RedisPool[*][ \t]+pool_|memory_resource[*][ \t]+resource_")
+        message(FATAL_ERROR
+            "installed Redis pipeline restored split active/allocator state")
     endif()
 endif()
 set(_installed_jwt_path
@@ -1654,6 +1674,11 @@ if(NOT _installed_ws_connection MATCHES "class WsOutputPlan final" OR
 endif()
 if(NOT _installed_ws_inbound MATCHES
        "enum class WebSocketClosePayloadEncodeError" OR
+   NOT _installed_ws_inbound MATCHES
+       "class WebSocketInboundFragmented final" OR
+   NOT _installed_ws_inbound MATCHES
+       "std::variant<WebSocketInboundIdle, WebSocketInboundFragmented> state_" OR
+   _installed_ws_inbound MATCHES "fragmented_" OR
    NOT _installed_ws_inbound MATCHES
        "class WebSocketEncodedClosePayload final" OR
    NOT _installed_ws_inbound MATCHES
@@ -4754,8 +4779,11 @@ if("web" IN_LIST _built_components)
         "${_install_prefix}/include/ruvia/web/detail/http/ContextSessionState.h")
     set(_installed_secure_token_result
         "${_install_prefix}/include/ruvia/web/detail/http/CsrfInternal.h")
+    set(_installed_http1_closing_rejection
+        "${_install_prefix}/include/ruvia/web/detail/server/Http1ClosingRejection.h")
     if(NOT EXISTS "${_installed_context_session_state}" OR
-       NOT EXISTS "${_installed_secure_token_result}")
+       NOT EXISTS "${_installed_secure_token_result}" OR
+       NOT EXISTS "${_installed_http1_closing_rejection}")
         message(FATAL_ERROR
             "installed Web package is missing typed session/token contracts")
     endif()
@@ -4763,6 +4791,8 @@ if("web" IN_LIST _built_components)
         _installed_context_session_state_content)
     file(READ "${_installed_secure_token_result}"
         _installed_secure_token_result_content)
+    file(READ "${_installed_http1_closing_rejection}"
+        _installed_http1_closing_rejection_content)
     if(NOT _installed_context_session_state_content MATCHES
            "class ContextSessionState final" OR
        NOT _installed_context_session_state_content MATCHES
@@ -4770,7 +4800,11 @@ if("web" IN_LIST _built_components)
        NOT _installed_secure_token_result_content MATCHES
            "class SecureTokenResult final" OR
        _installed_secure_token_result_content MATCHES
-           "generateCsrfToken")
+           "generateCsrfToken" OR
+       NOT _installed_http1_closing_rejection_content MATCHES
+           "class Http1ClosingRejection final" OR
+       NOT _installed_http1_closing_rejection_content MATCHES
+           "Http1ClosingRateLimitRejection")
         message(FATAL_ERROR
             "installed Web session/token contracts are stale")
     endif()
