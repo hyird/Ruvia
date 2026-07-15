@@ -159,6 +159,8 @@ Router/error handler 不得设置 `Connection: close` 或接收 `closeConnection
 - 每个 worker 拥有一个 standalone Asio `io_context`。
 - 连接不能跨线程迁移。
 - `Task` 是 lazy structured coroutine owner：未启动任务可以丢弃，已启动任务必须在所属执行上下文运行到完成；取消只能显式请求后 await/join，禁止通过析构销毁或静默 detach 挂起中的协程帧。
+- DB stream/transaction 等线性 lease 同一时刻只允许一个异步操作；lazy Task 只能在真正启动时取得操作权，失败清理由 backend 唯一负责，失败后的 lease 不得复用。
+- 连接 teardown 必须先显式唤醒或终止挂起 I/O，再 join 所有仍持有连接对象的后台操作；不得只等待某一种操作来源。
 - `App::run()` 创建 acceptor/server/thread per worker。
 - 非 Windows 平台要求 `SO_REUSEPORT`；Windows 使用 `SO_REUSEADDR`。
 - graceful shutdown 只能在各 worker 自己的 `io_context` 上关闭 acceptor 和活跃 socket。

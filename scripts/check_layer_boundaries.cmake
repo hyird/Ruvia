@@ -2684,22 +2684,47 @@ file(READ "${RUVIA_ROOT}/ruvia-web/src/db/Db.cpp"
     db_mariadb_stream_impl)
 file(READ "${RUVIA_ROOT}/ruvia-web/src/db/PgDb.cpp"
     db_postgresql_stream_impl)
+file(READ "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/db/DbOperationState.h"
+    db_operation_state)
 if(NOT pmr_db_query_result_api MATCHES
-       "std::variant<Closed, Active>[ \n\t]+state_" OR
+       "DbOperationState<Lease>[ \n\t]+state_" OR
    NOT pmr_db_transaction_api MATCHES
-       "std::variant<Closed, Active>[ \n\t]+state_" OR
+       "DbOperationState<Lease>[ \n\t]+state_" OR
+   NOT db_operation_state MATCHES
+       "std::variant<Closed, Active, Operating, Failed>[ \n\t]+state_" OR
+   NOT db_operation_state MATCHES
+       "database operation is already in progress" OR
+   NOT db_operation_state MATCHES
+       "Payload payload[(]std::move[(]active->payload[)][)]" OR
+   NOT db_operation_state MATCHES
+       "std::holds_alternative<Operating>[(]other[.]state_[)]" OR
+   NOT db_operation_state MATCHES "std::terminate[(][)]" OR
+   NOT pmr_db_query_result_api MATCHES "class OperationGuard final" OR
+   NOT pmr_db_transaction_api MATCHES "class OperationGuard final" OR
+   NOT pmr_db_handle_impl MATCHES
+       "DbStreamResult::OperationGuard::~OperationGuard" OR
+   NOT pmr_db_handle_impl MATCHES
+       "DbTransaction::OperationGuard::~OperationGuard" OR
+   NOT pmr_db_handle_impl MATCHES
+       "owner_->state_[.]finishFailed[(][)]" OR
+   NOT pmr_db_handle_impl MATCHES
+       "Task<void> DbTransaction::commit" OR
+   NOT pmr_db_handle_impl MATCHES
+       "co_await commitPoolTransaction" OR
+   pmr_db_handle_impl MATCHES
+       "return (commit|rollback)PoolTransaction" OR
    pmr_db_query_result_api MATCHES "bool[ \t]+active_" OR
    pmr_db_transaction_api MATCHES "bool[ \t]+active_" OR
-   NOT pmr_db_handle_impl MATCHES
-       "other[.]state_[.]emplace<Closed>[(][)]" OR
-   NOT pmr_db_handle_impl MATCHES
-       "std::holds_alternative<Active>[(]state_[)]" OR
+   NOT pmr_db_types_test MATCHES
+       "database_operation_state_rejects_overlap_and_failed_reuse" OR
+   NOT pmr_db_types_test MATCHES
+       "database_cold_operations_do_not_consume_pool_lease" OR
    NOT db_mariadb_stream_impl MATCHES
        "co_return DbStreamResult[(][)]" OR
    NOT db_postgresql_stream_impl MATCHES
        "DbStreamResult[(]DbPoolRef[{]this[}], slotIndex, nullptr, resource[)]")
-    boundary_error("database linear resources regained overlapping lifecycle state"
-        "stream results and transactions must discriminate closed from active ownership; MariaDB no-result streams are closed while PostgreSQL may own an active stream with a null backend result pointer")
+    boundary_error("database linear resources regained overlapping operation or lease state"
+        "stream results and transactions must admit one lazy operation through Closed/Active/Operating/Failed state, reject overlap and failed reuse, preserve cold-task leases, and keep backend cleanup single-owner")
 endif()
 file(READ "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/detail/MultipartParsing.h"
     multipart_protocol_helpers)
@@ -11771,10 +11796,20 @@ set(ws_connection_write_state
 if(NOT ws_connection_header_content MATCHES "enum class WritePhase" OR
    NOT ws_connection_header_content MATCHES
        "WritePhase writePhase_[{]WritePhase::kIdle[}]" OR
+   NOT ws_connection_header_content MATCHES "class WriteGuard final" OR
+   NOT ws_connection_header_content MATCHES
+       "~WriteGuard[(][)][\r\n \t]*[{][\r\n \t]*connection_[.]finishWrite[(]phase_[)]" OR
+   NOT ws_connection_heartbeat_content MATCHES
+       "WriteClaim::kAdopt" OR
+   NOT ws_connection_write_content MATCHES
+       "abortTransport[(][)][;][\r\n \t]+while [(]writePhase_ != WritePhase::kIdle[)]" OR
+   ws_connection_write_state MATCHES "detachAndDrainBackgroundWrites" OR
+   ws_connection_write_content MATCHES
+       "writePhase_ = WritePhase::k(Application|Idle)" OR
    ws_connection_write_state MATCHES
        "writeActive_|heartbeatWriteActive_|backgroundWriteCount_")
     boundary_error("WebSocket write ownership is not a single typed phase"
-        "Application and heartbeat writes must transition one Idle/Application/Heartbeat state")
+        "Application and heartbeat writes must transition one Idle/Application/Heartbeat state through the cancellation-safe WriteGuard")
 endif()
 if(NOT ws_connection_header_content MATCHES
        "WebSocketLivenessState livenessState_" OR

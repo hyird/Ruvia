@@ -3,7 +3,10 @@
 namespace ruvia::detail {
 
 template <typename Transport>
-void WebSocketConnection<Transport>::completeBackgroundWrite() noexcept {
+void WebSocketConnection<Transport>::finishWrite(WritePhase phase) noexcept {
+    if (writePhase_ != phase) {
+        std::terminate();
+    }
     writePhase_ = WritePhase::kIdle;
     backgroundWriteSignal_.notify();
 }
@@ -36,7 +39,7 @@ void WebSocketConnection<Transport>::heartbeatTick(std::int64_t now) noexcept {
             taskAsAwaitable(writeHeartbeatPing()),
             asio::bind_allocator(asio::recycling_allocator<void>(), asio::detached));
     } catch (...) {
-        completeBackgroundWrite();
+        finishWrite(WritePhase::kHeartbeat);
         abortTransport();
         return;
     }
@@ -44,6 +47,10 @@ void WebSocketConnection<Transport>::heartbeatTick(std::int64_t now) noexcept {
 
 template <typename Transport>
 Task<void> WebSocketConnection<Transport>::writeHeartbeatPing() {
+    WriteGuard writeGuard(
+        *this,
+        WritePhase::kHeartbeat,
+        WriteClaim::kAdopt);
     try {
         co_await writeFrameNow(WebSocketOpcode::kPing, {});
         if (protocol_.livenessMode() == WsLivenessMode::kOpen &&
@@ -54,7 +61,6 @@ Task<void> WebSocketConnection<Transport>::writeHeartbeatPing() {
     } catch (...) {
         abortTransport();
     }
-    completeBackgroundWrite();
 }
 
 }  // namespace ruvia::detail

@@ -2,6 +2,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <exception>
 #include <memory_resource>
 #include <optional>
 #include <stdexcept>
@@ -74,13 +75,51 @@ public:
     Task<void> write(WebSocketOpcode opcode, std::string_view payload);
     Task<void> close(std::uint16_t code, std::string_view reason);
     void abort() noexcept { abortTransport(); }
-    Task<void> detachAndDrainBackgroundWrites();
+    Task<void> detachAndDrainWrites();
 
 private:
     enum class WritePhase : std::uint8_t {
         kIdle,
         kApplication,
         kHeartbeat,
+    };
+
+    enum class WriteClaim : std::uint8_t {
+        kAcquire,
+        kAdopt,
+    };
+
+    class WriteGuard final {
+    public:
+        WriteGuard(
+            WebSocketConnection& connection,
+            WritePhase phase,
+            WriteClaim claim = WriteClaim::kAcquire)
+            : connection_(connection), phase_(phase) {
+            if (phase_ == WritePhase::kIdle) {
+                std::terminate();
+            }
+            if (claim == WriteClaim::kAcquire) {
+                if (connection_.writePhase_ != WritePhase::kIdle) {
+                    throw std::logic_error(
+                        "concurrent websocket writes are not supported");
+                }
+                connection_.writePhase_ = phase_;
+            } else if (connection_.writePhase_ != phase_) {
+                std::terminate();
+            }
+        }
+
+        ~WriteGuard() {
+            connection_.finishWrite(phase_);
+        }
+
+        WriteGuard(const WriteGuard&) = delete;
+        WriteGuard& operator=(const WriteGuard&) = delete;
+
+    private:
+        WebSocketConnection& connection_;
+        WritePhase phase_;
     };
 
     class ReadGuard final {
@@ -104,7 +143,7 @@ private:
         WebSocketConnection& connection_;
     };
 
-    void completeBackgroundWrite() noexcept;
+    void finishWrite(WritePhase phase) noexcept;
     void heartbeatTick(std::int64_t now) noexcept;
     Task<void> writeHeartbeatPing();
     Task<void> waitForHeartbeatWrite();

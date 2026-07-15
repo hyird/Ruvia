@@ -260,7 +260,7 @@ Task<DbTransaction> DbHandle::beginTransaction() const {
     return beginPoolTransaction(client_, resource_);
 }
 
-DbStreamResult::Active::Active(
+DbStreamResult::Lease::Lease(
     detail::DbPoolRef client,
     std::size_t slot,
     void* result,
@@ -275,61 +275,72 @@ DbStreamResult::DbStreamResult(
     std::size_t slot,
     void* result,
     std::pmr::memory_resource* resource) noexcept
-    : state_(std::in_place_type<Active>, client, slot, result, resource) {}
+    : state_(Lease{client, slot, result, resource}) {}
 
 DbStreamResult::DbStreamResult(DbStreamResult&& other) noexcept
-    : state_(std::move(other.state_)) {
-    other.state_.emplace<Closed>();
-}
+    : state_(std::move(other.state_)) {}
 
 DbStreamResult::~DbStreamResult() {
     reset();
 }
 
 bool DbStreamResult::active() const noexcept {
-    return std::holds_alternative<Active>(state_);
+    return state_.active();
 }
 
 Task<std::optional<DbRow>> DbStreamResult::read() {
-    auto* active = std::get_if<Active>(&state_);
-    if (active == nullptr) {
-        co_return std::nullopt;
+    OperationGuard operation(*this);
+    auto& lease = operation.lease();
+    auto row = co_await readPoolStream(
+        lease.client, lease.slot, lease.result, lease.resource);
+    if (row) {
+        operation.finishActive();
+    } else {
+        operation.finishClosed();
     }
-    try {
-        auto row = co_await readPoolStream(
-            active->client, active->slot, active->result, active->resource);
-        if (!row) {
-            release();
-        }
-        co_return row;
-    } catch (...) {
-        release();
-        throw;
-    }
+    co_return row;
 }
 
 Task<void> DbStreamResult::close() {
-    auto* active = std::get_if<Active>(&state_);
-    if (active == nullptr) {
-        co_return;
-    }
-    auto owned = std::move(*active);
-    state_.emplace<Closed>();
-    co_await closePoolStream(owned.client, owned.slot, owned.result, owned.resource);
+    OperationGuard operation(*this);
+    auto& lease = operation.lease();
+    co_await closePoolStream(
+        lease.client, lease.slot, lease.result, lease.resource);
+    operation.finishClosed();
 }
 
 void DbStreamResult::reset() noexcept {
-    if (auto* active = std::get_if<Active>(&state_); active != nullptr) {
-        abortPoolStream(active->client, active->slot, active->result);
+    state_.reset([](Lease& lease) noexcept {
+        abortPoolStream(lease.client, lease.slot, lease.result);
+    });
+}
+
+DbStreamResult::OperationGuard::OperationGuard(DbStreamResult& owner)
+    : owner_(&owner),
+      lease_(&owner.state_.begin()) {}
+
+DbStreamResult::OperationGuard::~OperationGuard() {
+    if (owner_ != nullptr) {
+        owner_->state_.finishFailed();
     }
-    state_.emplace<Closed>();
 }
 
-void DbStreamResult::release() noexcept {
-    state_.emplace<Closed>();
+void DbStreamResult::OperationGuard::finishActive() noexcept {
+    owner_->state_.finishActive();
+    owner_ = nullptr;
 }
 
-DbTransaction::Active::Active(
+void DbStreamResult::OperationGuard::finishClosed() noexcept {
+    owner_->state_.finishClosed();
+    owner_ = nullptr;
+}
+
+void DbStreamResult::OperationGuard::finishFailed() noexcept {
+    owner_->state_.finishFailed();
+    owner_ = nullptr;
+}
+
+DbTransaction::Lease::Lease(
     detail::DbPoolRef client,
     std::size_t slot,
     std::pmr::memory_resource* resource) noexcept
@@ -341,19 +352,17 @@ DbTransaction::DbTransaction(
     detail::DbPoolRef client,
     std::size_t slot,
     std::pmr::memory_resource* resource) noexcept
-    : state_(std::in_place_type<Active>, client, slot, resource) {}
+    : state_(Lease{client, slot, resource}) {}
 
 DbTransaction::DbTransaction(DbTransaction&& other) noexcept
-    : state_(std::move(other.state_)) {
-    other.state_.emplace<Closed>();
-}
+    : state_(std::move(other.state_)) {}
 
 DbTransaction::~DbTransaction() {
     reset();
 }
 
 bool DbTransaction::active() const noexcept {
-    return std::holds_alternative<Active>(state_);
+    return state_.active();
 }
 
 Task<QueryResult> DbTransaction::query(
@@ -365,59 +374,72 @@ Task<QueryResult> DbTransaction::query(
 Task<QueryResult> DbTransaction::execute(
     std::string_view sql,
     std::span<const DbValue> params) {
-    const auto* active = std::get_if<Active>(&state_);
-    if (active == nullptr) {
-        throw std::logic_error("database transaction is not active");
-    }
-    auto statement = prepareDbStatement(sql, params, active->resource);
+    // executePrepared performs the authoritative admission check when its lazy
+    // task starts. Preparing parameters only needs the transaction's stable
+    // request memory domain while the lease is idle.
+    auto statement = prepareDbStatement(
+        sql, params, state_.activePayload().resource);
     return executePrepared(std::move(statement.sql), std::move(statement.params));
 }
 
 Task<QueryResult> DbTransaction::executePrepared(
     std::pmr::string sql,
     std::pmr::vector<DbValue> params) {
-    auto* active = std::get_if<Active>(&state_);
-    if (active == nullptr) {
-        throw std::logic_error("database transaction is not active");
-    }
-    try {
-        co_return co_await executeTransactionPool(
-            active->client,
-            active->slot,
-            std::move(sql),
-            std::move(params),
-            active->resource);
-    } catch (...) {
-        state_.emplace<Closed>();
-        throw;
-    }
+    OperationGuard operation(*this);
+    auto& lease = operation.lease();
+    auto result = co_await executeTransactionPool(
+        lease.client,
+        lease.slot,
+        std::move(sql),
+        std::move(params),
+        lease.resource);
+    operation.finishActive();
+    co_return result;
 }
 
 Task<void> DbTransaction::commit() {
-    auto* active = std::get_if<Active>(&state_);
-    if (active == nullptr) {
-        throw std::logic_error("database transaction is not active");
-    }
-    auto owned = std::move(*active);
-    state_.emplace<Closed>();
-    return commitPoolTransaction(owned.client, owned.slot, owned.resource);
+    OperationGuard operation(*this);
+    auto& lease = operation.lease();
+    co_await commitPoolTransaction(lease.client, lease.slot, lease.resource);
+    operation.finishClosed();
 }
 
 Task<void> DbTransaction::rollback() {
-    auto* active = std::get_if<Active>(&state_);
-    if (active == nullptr) {
-        throw std::logic_error("database transaction is not active");
-    }
-    auto owned = std::move(*active);
-    state_.emplace<Closed>();
-    return rollbackPoolTransaction(owned.client, owned.slot, owned.resource);
+    OperationGuard operation(*this);
+    auto& lease = operation.lease();
+    co_await rollbackPoolTransaction(lease.client, lease.slot, lease.resource);
+    operation.finishClosed();
 }
 
 void DbTransaction::reset() noexcept {
-    if (auto* active = std::get_if<Active>(&state_); active != nullptr) {
-        abortPoolTransaction(active->client, active->slot);
+    state_.reset([](Lease& lease) noexcept {
+        abortPoolTransaction(lease.client, lease.slot);
+    });
+}
+
+DbTransaction::OperationGuard::OperationGuard(DbTransaction& owner)
+    : owner_(&owner),
+      lease_(&owner.state_.begin()) {}
+
+DbTransaction::OperationGuard::~OperationGuard() {
+    if (owner_ != nullptr) {
+        owner_->state_.finishFailed();
     }
-    state_.emplace<Closed>();
+}
+
+void DbTransaction::OperationGuard::finishActive() noexcept {
+    owner_->state_.finishActive();
+    owner_ = nullptr;
+}
+
+void DbTransaction::OperationGuard::finishClosed() noexcept {
+    owner_->state_.finishClosed();
+    owner_ = nullptr;
+}
+
+void DbTransaction::OperationGuard::finishFailed() noexcept {
+    owner_->state_.finishFailed();
+    owner_ = nullptr;
 }
 
 }  // namespace ruvia

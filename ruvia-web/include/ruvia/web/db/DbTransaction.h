@@ -33,10 +33,8 @@ private:
     friend class detail::MariaDbPool;
     friend class detail::PostgreSqlPool;
 
-    struct Closed final {};
-
-    struct Active final {
-        Active(
+    struct Lease final {
+        Lease(
             detail::DbPoolRef client,
             std::size_t slot,
             std::pmr::memory_resource* resource) noexcept;
@@ -53,7 +51,24 @@ private:
     Task<QueryResult> executePrepared(std::pmr::string sql, std::pmr::vector<DbValue> params);
     void reset() noexcept;
 
-    std::variant<Closed, Active> state_{};
+    class OperationGuard final {
+    public:
+        explicit OperationGuard(DbTransaction& owner);
+        OperationGuard(const OperationGuard&) = delete;
+        OperationGuard& operator=(const OperationGuard&) = delete;
+        ~OperationGuard();
+
+        [[nodiscard]] Lease& lease() noexcept { return *lease_; }
+        void finishActive() noexcept;
+        void finishClosed() noexcept;
+        void finishFailed() noexcept;
+
+    private:
+        DbTransaction* owner_;
+        Lease* lease_;
+    };
+
+    detail::DbOperationState<Lease> state_{};
 };
 
 }  // namespace ruvia

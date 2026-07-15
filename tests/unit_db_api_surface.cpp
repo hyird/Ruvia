@@ -14,6 +14,7 @@
 
 #include "ruvia/web/db/Db.h"
 #include "ruvia/web/detail/db/DbInternal.h"
+#include "ruvia/web/detail/db/DbOperationState.h"
 #include "ruvia/web/detail/db/DbResultAccess.h"
 #include "ruvia/web/detail/db/DbValueAccess.h"
 
@@ -147,6 +148,57 @@ static_assert(!HasDbTransactionInitializerListParams<ruvia::DbTransaction>);
 
 RUVIA_TEST(db_api_surface_uses_span_params_without_initializer_list_overloads) {
     RUVIA_CHECK(true);
+}
+
+RUVIA_TEST(database_operation_state_rejects_overlap_and_failed_reuse) {
+    struct Lease final {
+        int value;
+    };
+
+    ruvia::detail::DbOperationState<Lease> state(Lease{7});
+    RUVIA_CHECK(state.active());
+    auto& lease = state.begin();
+    RUVIA_CHECK_EQ(lease.value, 7);
+    RUVIA_CHECK(!state.active());
+
+    bool overlapRejected = false;
+    try {
+        (void)state.begin();
+    } catch (const std::logic_error& error) {
+        overlapRejected = std::string_view(error.what()) ==
+            "database operation is already in progress";
+    }
+    RUVIA_CHECK(overlapRejected);
+
+    state.finishFailed();
+    bool failedReuseRejected = false;
+    try {
+        (void)state.begin();
+    } catch (const std::logic_error& error) {
+        failedReuseRejected = std::string_view(error.what()) ==
+            "database resource is not active";
+    }
+    RUVIA_CHECK(failedReuseRejected);
+}
+
+RUVIA_TEST(database_cold_operations_do_not_consume_pool_lease) {
+    struct Lease final {
+        int value;
+    };
+    auto operate = [](ruvia::detail::DbOperationState<Lease>& state)
+        -> ruvia::Task<void> {
+        (void)state.begin();
+        state.finishActive();
+        co_return;
+    };
+
+    ruvia::detail::DbOperationState<Lease> state(Lease{7});
+    {
+        auto cold = operate(state);
+        (void)cold;
+    }
+    RUVIA_CHECK(state.active());
+    RUVIA_CHECK_EQ(state.activePayload().value, 7);
 }
 
 RUVIA_TEST(db_value_and_result_storage_have_one_live_alternative) {

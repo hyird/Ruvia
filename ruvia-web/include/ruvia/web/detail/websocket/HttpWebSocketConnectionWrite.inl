@@ -10,13 +10,10 @@ Task<void> WebSocketConnection<Transport>::write(WebSocketOpcode opcode, std::st
 template <typename Transport>
 Task<void> WebSocketConnection<Transport>::close(std::uint16_t code, std::string_view reason) {
     co_await waitForHeartbeatWrite();
-    if (writePhase_ != WritePhase::kIdle) {
-        throw std::logic_error("concurrent websocket writes are not supported");
-    }
-    writePhase_ = WritePhase::kApplication;
     bool flushOutput = false;
     bool awaitPeerClose = false;
-    try {
+    {
+        WriteGuard writeGuard(*this, WritePhase::kApplication);
         switch (protocol_.submitClose(code, reason)) {
             case WsCloseSubmitStatus::kAccepted:
                 flushOutput = true;
@@ -46,13 +43,7 @@ Task<void> WebSocketConnection<Transport>::close(std::uint16_t code, std::string
             livenessState_ = WebSocketAwaitingPeerClose(
                 scannerEntry_.lastActiveMs());
         }
-    } catch (...) {
-        writePhase_ = WritePhase::kIdle;
-        notifyWriteIdle();
-        throw;
     }
-    writePhase_ = WritePhase::kIdle;
-    notifyWriteIdle();
 
     // RFC 6455: sending Close starts, but does not complete, the handshake.
     // Keep parsing transport input until the peer Close arrives (or EOF/timeout
@@ -70,12 +61,17 @@ Task<void> WebSocketConnection<Transport>::close(std::uint16_t code, std::string
 }
 
 template <typename Transport>
-Task<void> WebSocketConnection<Transport>::detachAndDrainBackgroundWrites() {
+Task<void> WebSocketConnection<Transport>::detachAndDrainWrites() {
     periodicCheck_.reset();
-    while (writePhase_ == WritePhase::kHeartbeat) {
+    // Teardown first cancels the transport operation that owns a suspended
+    // write, then joins that write before the connection storage disappears.
+    // Application writes can outlive the handler through the public facade just
+    // as heartbeat writes can outlive the scanner callback, so both phases are
+    // part of the same structured drain.
+    abortTransport();
+    while (writePhase_ != WritePhase::kIdle) {
         co_await backgroundWriteSignal_.wait();
     }
-    abortTransport();
 }
 
 template <typename Transport>
@@ -102,20 +98,8 @@ Task<void> WebSocketConnection<Transport>::writeExclusive(
     WebSocketOpcode opcode,
     std::string_view payload) {
     co_await waitForHeartbeatWrite();
-    if (writePhase_ != WritePhase::kIdle) {
-        throw std::logic_error("concurrent websocket writes are not supported");
-    }
-
-    writePhase_ = WritePhase::kApplication;
-    try {
-        co_await writeFrameNow(opcode, payload);
-    } catch (...) {
-        writePhase_ = WritePhase::kIdle;
-        notifyWriteIdle();
-        throw;
-    }
-    writePhase_ = WritePhase::kIdle;
-    notifyWriteIdle();
+    WriteGuard writeGuard(*this, WritePhase::kApplication);
+    co_await writeFrameNow(opcode, payload);
 }
 
 template <typename Transport>
@@ -140,16 +124,8 @@ Task<void> WebSocketConnection<Transport>::writeFrameNow(
 template <typename Transport>
 Task<void> WebSocketConnection<Transport>::flushProtocolOutputExclusive() {
     co_await waitForWriteIdle();
-    writePhase_ = WritePhase::kApplication;
-    try {
-        co_await flushProtocolOutputNow();
-    } catch (...) {
-        writePhase_ = WritePhase::kIdle;
-        notifyWriteIdle();
-        throw;
-    }
-    writePhase_ = WritePhase::kIdle;
-    notifyWriteIdle();
+    WriteGuard writeGuard(*this, WritePhase::kApplication);
+    co_await flushProtocolOutputNow();
 }
 
 template <typename Transport>

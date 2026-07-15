@@ -3,6 +3,7 @@
 #include "ruvia/core/Task.h"
 #include "ruvia/web/db/DbTypes.h"
 #include "ruvia/web/detail/db/DbBackend.h"
+#include "ruvia/web/detail/db/DbOperationState.h"
 #include "ruvia/core/memory/PmrResource.h"
 
 #include <cstddef>
@@ -72,10 +73,8 @@ private:
     friend class detail::MariaDbPool;
     friend class detail::PostgreSqlPool;
 
-    struct Closed final {};
-
-    struct Active final {
-        Active(
+    struct Lease final {
+        Lease(
             detail::DbPoolRef client,
             std::size_t slot,
             void* result,
@@ -94,9 +93,25 @@ private:
         void* result,
         std::pmr::memory_resource* resource) noexcept;
     void reset() noexcept;
-    void release() noexcept;
 
-    std::variant<Closed, Active> state_{};
+    class OperationGuard final {
+    public:
+        explicit OperationGuard(DbStreamResult& owner);
+        OperationGuard(const OperationGuard&) = delete;
+        OperationGuard& operator=(const OperationGuard&) = delete;
+        ~OperationGuard();
+
+        [[nodiscard]] Lease& lease() noexcept { return *lease_; }
+        void finishActive() noexcept;
+        void finishClosed() noexcept;
+        void finishFailed() noexcept;
+
+    private:
+        DbStreamResult* owner_;
+        Lease* lease_;
+    };
+
+    detail::DbOperationState<Lease> state_{};
 };
 
 }  // namespace ruvia

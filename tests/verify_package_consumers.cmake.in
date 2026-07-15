@@ -3535,6 +3535,10 @@ if(_built_components_csv MATCHES "(^|,)web(,|$)")
         "${_install_prefix}/include/ruvia/web/detail/websocket/HttpWebSocketHandshake.h")
     set(_installed_ws_runtime_connection_path
         "${_install_prefix}/include/ruvia/web/detail/websocket/HttpWebSocketConnection.h")
+    set(_installed_ws_runtime_write_path
+        "${_install_prefix}/include/ruvia/web/detail/websocket/HttpWebSocketConnectionWrite.inl")
+    set(_installed_ws_runtime_heartbeat_path
+        "${_install_prefix}/include/ruvia/web/detail/websocket/HttpWebSocketConnectionHeartbeat.inl")
     set(_installed_ws_h1_route_path
         "${_install_prefix}/include/ruvia/web/detail/server/HttpServerWebSocketRoute.h")
     set(_installed_stale_request_dispatcher_path
@@ -3553,6 +3557,8 @@ if(_built_components_csv MATCHES "(^|,)web(,|$)")
             "${_installed_route_websocket_session_path}"
             "${_installed_ws_handshake_writer_path}"
             "${_installed_ws_runtime_connection_path}"
+            "${_installed_ws_runtime_write_path}"
+            "${_installed_ws_runtime_heartbeat_path}"
             "${_installed_ws_h1_route_path}")
         if(NOT EXISTS "${_route_contract}")
             message(FATAL_ERROR
@@ -3590,8 +3596,24 @@ if(_built_components_csv MATCHES "(^|,)web(,|$)")
         _installed_ws_handshake_writer)
     file(READ "${_installed_ws_runtime_connection_path}"
         _installed_ws_runtime_connection)
+    file(READ "${_installed_ws_runtime_write_path}"
+        _installed_ws_runtime_write)
+    file(READ "${_installed_ws_runtime_heartbeat_path}"
+        _installed_ws_runtime_heartbeat)
     file(READ "${_installed_ws_h1_route_path}"
         _installed_ws_h1_route)
+    if(NOT _installed_ws_runtime_connection MATCHES "class WriteGuard final" OR
+       NOT _installed_ws_runtime_connection MATCHES
+           "~WriteGuard[(][)][\r\n \t]*[{][\r\n \t]*connection_[.]finishWrite[(]phase_[)]" OR
+       NOT _installed_ws_runtime_heartbeat MATCHES "WriteClaim::kAdopt" OR
+       NOT _installed_ws_runtime_write MATCHES
+           "abortTransport[(][)][;][\r\n \t]+while [(]writePhase_ != WritePhase::kIdle[)]" OR
+       _installed_ws_runtime_write MATCHES
+           "writePhase_ = WritePhase::k(Application|Idle)" OR
+       _installed_ws_runtime_write MATCHES "detachAndDrainBackgroundWrites")
+        message(FATAL_ERROR
+            "installed WebSocket runtime lost cancellation-safe structured write ownership")
+    endif()
     if(NOT _installed_http_protocol_error_info MATCHES
            "copyHttpProtocolErrorInfo" OR
        NOT _installed_http_protocol_error_info MATCHES

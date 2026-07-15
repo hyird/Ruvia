@@ -4,6 +4,7 @@
 #include <chrono>
 #include <concepts>
 #include <cstdint>
+#include <functional>
 #include <memory_resource>
 #include <stdexcept>
 #include <string>
@@ -39,6 +40,8 @@ struct RecordingTransportState final {
     std::error_code readError;
     std::string lastNonEmptyBytes;
     WsTransportDisposition lastDisposition{WsTransportDisposition::kKeepOpen};
+    bool suspendNextWrite{false};
+    std::function<void()> completeWrite;
     void* beforeWriteCompletionTarget{nullptr};
     void (*beforeWriteCompletion)(void*) noexcept{nullptr};
 };
@@ -74,11 +77,24 @@ public:
                 state_->beforeWriteCompletion, nullptr);
             callback(state_->beforeWriteCompletionTarget);
         }
+        if (std::exchange(state_->suspendNextWrite, false)) {
+            static_cast<void>(co_await ruvia::detail::asyncAsio<void>(
+                [state = state_](auto completion) mutable {
+                    state->completeWrite =
+                        [completion = std::move(completion)]() mutable {
+                            completion(std::error_code{});
+                        };
+                }));
+        }
         co_return std::error_code{};
     }
 
     void abort() noexcept {
         state_->aborted = true;
+        if (state_->completeWrite != nullptr) {
+            auto completion = std::move(state_->completeWrite);
+            completion();
+        }
     }
 
 private:
@@ -294,6 +310,138 @@ RUVIA_TEST(websocket_runtime_maps_typed_outbound_rejections) {
     RUVIA_CHECK(closeRejected);
     RUVIA_CHECK_EQ(state.writes, std::size_t{0});
     RUVIA_CHECK(!state.aborted);
+}
+
+RUVIA_TEST(websocket_write_guard_rejects_overlap_and_releases_after_suspend) {
+    asio::io_context io;
+    RecordingTransportState state;
+    state.suspendNextWrite = true;
+    ConnectionScanner::Entry scannerEntry;
+    ruvia::WorkerMemory memory;
+    WebSocketConnection<RecordingTransport> connection(
+        RecordingTransport(io, state),
+        scannerEntry,
+        {},
+        ruvia::ProtocolByteLimit::limited(1024),
+        memory.resource());
+
+    auto first = asio::co_spawn(
+        io,
+        ruvia::detail::taskAsAwaitable(
+            connection.write(WebSocketOpcode::kText, "first")),
+        asio::use_future);
+    io.poll();
+    RUVIA_CHECK(state.completeWrite != nullptr);
+
+    io.restart();
+    auto overlapping = asio::co_spawn(
+        io,
+        ruvia::detail::taskAsAwaitable(
+            connection.write(WebSocketOpcode::kText, "overlap")),
+        asio::use_future);
+    io.poll();
+    bool rejected = false;
+    try {
+        overlapping.get();
+    } catch (const std::logic_error&) {
+        rejected = true;
+    }
+    RUVIA_CHECK(rejected);
+
+    auto completeWrite = std::move(state.completeWrite);
+    completeWrite();
+    io.restart();
+    io.run();
+    first.get();
+
+    io.restart();
+    auto following = asio::co_spawn(
+        io,
+        ruvia::detail::taskAsAwaitable(
+            connection.write(WebSocketOpcode::kText, "following")),
+        asio::use_future);
+    io.run();
+    following.get();
+    RUVIA_CHECK_EQ(state.writes, std::size_t{2});
+}
+
+RUVIA_TEST(websocket_close_guard_rejects_write_until_close_flush_commits) {
+    asio::io_context io;
+    RecordingTransportState state;
+    state.suspendNextWrite = true;
+    ConnectionScanner::Entry scannerEntry;
+    ruvia::WorkerMemory memory;
+    WebSocketConnection<RecordingTransport> connection(
+        RecordingTransport(io, state),
+        scannerEntry,
+        {},
+        ruvia::ProtocolByteLimit::limited(1024),
+        memory.resource());
+
+    auto closing = asio::co_spawn(
+        io,
+        ruvia::detail::taskAsAwaitable(connection.close(1000, {})),
+        asio::use_future);
+    io.poll();
+    RUVIA_CHECK(state.completeWrite != nullptr);
+
+    io.restart();
+    auto overlapping = asio::co_spawn(
+        io,
+        ruvia::detail::taskAsAwaitable(
+            connection.write(WebSocketOpcode::kText, "late")),
+        asio::use_future);
+    io.poll();
+    bool rejected = false;
+    try {
+        overlapping.get();
+    } catch (const std::logic_error&) {
+        rejected = true;
+    }
+    RUVIA_CHECK(rejected);
+
+    auto completeWrite = std::move(state.completeWrite);
+    completeWrite();
+    io.restart();
+    io.run();
+    closing.get();
+    RUVIA_CHECK_EQ(state.writes, std::size_t{2});
+    RUVIA_CHECK(state.lastDisposition == WsTransportDisposition::kEndTransport);
+}
+
+RUVIA_TEST(websocket_teardown_aborts_and_joins_suspended_application_write) {
+    asio::io_context io;
+    RecordingTransportState state;
+    state.suspendNextWrite = true;
+    ConnectionScanner::Entry scannerEntry;
+    ruvia::WorkerMemory memory;
+    WebSocketConnection<RecordingTransport> connection(
+        RecordingTransport(io, state),
+        scannerEntry,
+        {},
+        ruvia::ProtocolByteLimit::limited(1024),
+        memory.resource());
+
+    auto writing = asio::co_spawn(
+        io,
+        ruvia::detail::taskAsAwaitable(
+            connection.write(WebSocketOpcode::kText, "in flight")),
+        asio::use_future);
+    io.poll();
+    RUVIA_CHECK(state.completeWrite != nullptr);
+
+    io.restart();
+    auto teardown = asio::co_spawn(
+        io,
+        ruvia::detail::taskAsAwaitable(
+            connection.detachAndDrainWrites()),
+        asio::use_future);
+    io.run();
+
+    writing.get();
+    teardown.get();
+    RUVIA_CHECK(state.aborted);
+    RUVIA_CHECK(state.completeWrite == nullptr);
 }
 
 // HTTP/1 upgraded-byte-stream bridge: Ping is answered by the protocol core,

@@ -74,7 +74,7 @@ Task<void> finishWebSocketSession(
         }
     } catch (...) {
     }
-    co_await connection.detachAndDrainBackgroundWrites();
+    co_await connection.detachAndDrainWrites();
 }
 
 }  // namespace ruvia::detail
