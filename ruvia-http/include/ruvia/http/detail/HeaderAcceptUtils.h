@@ -226,7 +226,8 @@ struct HttpMediaTypeParts final {
 // registrations define any value-specific case folding.
 [[nodiscard]] inline bool httpMediaParameterValueEquals(
     std::string_view left,
-    std::string_view right) noexcept {
+    std::string_view right,
+    bool asciiCaseInsensitive = false) noexcept {
     struct Cursor final {
         std::string_view value;
         std::size_t position{0};
@@ -303,6 +304,10 @@ struct HttpMediaTypeParts final {
         if (!hasLeft) {
             return true;
         }
+        if (asciiCaseInsensitive) {
+            lhsChar = httpAsciiToLower(lhsChar);
+            rhsChar = httpAsciiToLower(rhsChar);
+        }
         if (lhsChar != rhsChar) {
             return false;
         }
@@ -312,7 +317,7 @@ struct HttpMediaTypeParts final {
 template <typename Visitor>
 [[nodiscard]] inline bool httpVisitMediaTypeParameters(
     std::string_view value,
-    bool stopAtQuality,
+    bool skipQualityParameter,
     Visitor&& visitor) noexcept {
     auto start = httpFindUnquotedDelimiter(value, 0, ';');
     if (start >= value.size()) {
@@ -331,8 +336,15 @@ template <typename Visitor>
         if (!httpMediaToken(name)) {
             return false;
         }
-        if (stopAtQuality && httpAsciiEqualsIgnoreCase(name, "q")) {
-            return true;
+        if (skipQualityParameter && httpAsciiEqualsIgnoreCase(name, "q")) {
+            // RFC 9110 removed the old accept-ext grammar. q is the weight
+            // wherever it appears, but media-range parameters after it still
+            // participate in matching, so skip q itself and continue scanning.
+            if (end >= value.size()) {
+                return true;
+            }
+            start = end + 1;
+            continue;
         }
         // Comparing a value with itself performs syntax validation as well.
         if (!httpMediaParameterValueEquals(parameterValue, parameterValue) ||
@@ -359,7 +371,10 @@ template <typename Visitor>
             std::string_view name,
             std::string_view value) noexcept {
             if (httpAsciiEqualsIgnoreCase(name, expectedName) &&
-                httpMediaParameterValueEquals(value, expectedValue)) {
+                httpMediaParameterValueEquals(
+                    value,
+                    expectedValue,
+                    httpAsciiEqualsIgnoreCase(name, "charset"))) {
                 found = true;
             }
             return true;
@@ -408,9 +423,9 @@ template <typename Visitor>
         return false;
     }
 
-    // RFC 9110 section 12.5.1: media-type parameters before q are part of the
-    // media range and must match the selected representation. Parameters after
-    // q are accept extensions and do not participate in matching.
+    // RFC 9110 section 12.5.1: media-type parameters are part of the media range
+    // and must match the selected representation. q is skipped as the weight
+    // wherever it appears; parameters on either side of it still participate.
     return httpVisitMediaTypeParameters(
         range,
         true,

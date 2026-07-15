@@ -72,10 +72,17 @@ RUVIA_TEST(media_range_matches_type_subtype_and_wildcards) {
     RUVIA_CHECK(httpMediaRangeMatches("TEXT/HTML", "text/html"));                 // case-insensitive
     RUVIA_CHECK(httpMediaRangeMatches(
         "text/html;charset=utf-8", "text/html;charset=\"utf-8\""));
+    // Charset names are registered case-insensitively; quoted-string syntax
+    // does not change that comparison rule.
+    RUVIA_CHECK(httpMediaRangeMatches(
+        "text/html;charset=\"UTF-8\"", "text/html;CHARSET=utf-8"));
     RUVIA_CHECK(!httpMediaRangeMatches(
         "text/html;charset=utf-8", "text/html"));
     RUVIA_CHECK(!httpMediaRangeMatches(
         "text/html;charset=utf-8", "text/html;charset=iso-8859-1"));
+    // Other parameter values retain their registered case-sensitive semantics.
+    RUVIA_CHECK(!httpMediaRangeMatches(
+        "application/json;profile=Example", "application/json;profile=example"));
     RUVIA_CHECK(!httpMediaRangeMatches("text/*", "application/json"));            // type mismatch
     RUVIA_CHECK(!httpMediaRangeMatches("text/plain", "text/html"));              // subtype mismatch
     RUVIA_CHECK(!httpMediaRangeMatches("text", "text/html"));                    // no slash -> invalid
@@ -137,11 +144,17 @@ RUVIA_TEST(accepts_media_type_parameters_participate_in_matching_and_precedence)
         "application/json;profile=v1;q=0, application/json;q=1",
         "application/json;profile=v1"));
 
-    // Media-type parameter names are case-insensitive, quoted token-equivalent
-    // values compare after quoted-pair decoding, and accept-ext after q is not a
-    // matching constraint.
+    // Media-type parameter names are case-insensitive and quoted token-equivalent
+    // values compare after quoted-pair decoding. RFC 9110 removed accept-ext, so
+    // parameters after q still constrain the media range.
     RUVIA_CHECK(httpAcceptsMediaType(
         R"(text/plain;FORMAT="flowed";q=0.5;extension=ignored)",
+        "text/plain;format=flowed;extension=ignored"));
+    RUVIA_CHECK(!httpAcceptsMediaType(
+        R"(text/plain;q=0.5;format="flowed")",
+        "text/plain"));
+    RUVIA_CHECK(httpAcceptsMediaType(
+        R"(text/plain;q=0.5;format="flowed")",
         "text/plain;format=flowed"));
 }
 
