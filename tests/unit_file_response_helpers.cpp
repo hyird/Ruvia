@@ -98,6 +98,8 @@ RUVIA_TEST(http_parse_imf_fixdate) {
 
     // Malformed inputs are rejected.
     RUVIA_CHECK(!httpParseImfFixdate("bad").has_value());                          // wrong length
+    RUVIA_CHECK(!httpParseImfFixdate("Foo, 06 Nov 1994 08:49:37 GMT").has_value());  // bad day-name
+    RUVIA_CHECK(!httpParseImfFixdate("sun, 06 Nov 1994 08:49:37 GMT").has_value());  // case-sensitive
     RUVIA_CHECK(!httpParseImfFixdate("Sun  06 Nov 1994 08:49:37 GMT").has_value());  // bad separators
     RUVIA_CHECK(!httpParseImfFixdate("Sun, 06 Xxx 1994 08:49:37 GMT").has_value());  // bad month
     RUVIA_CHECK(!httpParseImfFixdate("Sun, 32 Nov 1994 08:49:37 GMT").has_value());  // day out of range
@@ -126,6 +128,8 @@ RUVIA_TEST(http_parse_http_date_accepts_all_three_formats) {
 
     // A malformed instance of each obsolete format is rejected, not silently
     // coerced through the shared assembler.
+    RUVIA_CHECK(!httpParseHttpDate("Funday, 06-Nov-94 08:49:37 GMT").has_value());  // bad long day-name
+    RUVIA_CHECK(!httpParseHttpDate("Foo Nov  6 08:49:37 1994").has_value());       // bad short day-name
     RUVIA_CHECK(!httpParseHttpDate("Sunday, 06-Xxx-94 08:49:37 GMT").has_value());  // bad month (RFC 850)
     RUVIA_CHECK(!httpParseHttpDate("Sunday, 06-Nov-94 08:49:37 UTC").has_value());  // not GMT (RFC 850)
     RUVIA_CHECK(!httpParseHttpDate("Sun Xxx  6 08:49:37 1994").has_value());        // bad month (asctime)

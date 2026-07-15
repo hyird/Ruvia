@@ -37,6 +37,31 @@ namespace ruvia::detail {
     return 0;
 }
 
+[[nodiscard]] inline bool httpIsShortWeekday(
+    std::string_view value) noexcept {
+    constexpr std::array<std::string_view, 7> weekdays{
+        "Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"};
+    for (const auto weekday : weekdays) {
+        if (value == weekday) {
+            return true;
+        }
+    }
+    return false;
+}
+
+[[nodiscard]] inline bool httpIsLongWeekday(
+    std::string_view value) noexcept {
+    constexpr std::array<std::string_view, 7> weekdays{
+        "Monday", "Tuesday", "Wednesday", "Thursday",
+        "Friday", "Saturday", "Sunday"};
+    for (const auto weekday : weekdays) {
+        if (value == weekday) {
+            return true;
+        }
+    }
+    return false;
+}
+
 [[nodiscard]] inline std::optional<int> httpParseFixedDigits(std::string_view value) noexcept {
     if (value.empty()) {
         return std::nullopt;
@@ -104,6 +129,7 @@ namespace ruvia::detail {
 [[nodiscard]] inline std::optional<std::time_t> httpParseImfFixdate(
     std::string_view value) noexcept {
     if (value.size() != 29 ||
+        !httpIsShortWeekday(value.substr(0, 3)) ||
         value[3] != ',' || value[4] != ' ' || value[7] != ' ' || value[11] != ' ' ||
         value[16] != ' ' || value[19] != ':' || value[22] != ':' || value[25] != ' ' ||
         value.substr(26, 3) != "GMT") {
@@ -124,7 +150,8 @@ namespace ruvia::detail {
 [[nodiscard]] inline std::optional<std::time_t> httpParseAsctimeDate(
     std::string_view value) noexcept {
     if (value.size() != 24 || value[3] != ' ' || value[7] != ' ' || value[10] != ' ' ||
-        value[13] != ':' || value[16] != ':' || value[19] != ' ') {
+        value[13] != ':' || value[16] != ':' || value[19] != ' ' ||
+        !httpIsShortWeekday(value.substr(0, 3))) {
         return std::nullopt;
     }
     const auto month = httpMonthIndex(value.substr(4, 3));
@@ -161,7 +188,8 @@ namespace ruvia::detail {
 [[nodiscard]] inline std::optional<std::time_t> httpParseRfc850Date(
     std::string_view value) noexcept {
     const auto comma = value.find(", ");
-    if (comma == std::string_view::npos || comma == 0) {
+    if (comma == std::string_view::npos ||
+        !httpIsLongWeekday(value.substr(0, comma))) {
         return std::nullopt;
     }
     const auto body = value.substr(comma + 2);
