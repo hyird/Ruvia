@@ -18,6 +18,7 @@ namespace {
 
 using ruvia::Http1InterimResponsePrepareError;
 using ruvia::Http1InterimResponseWriter;
+using ruvia::Http1InterimConnectionDisposition;
 using ruvia::HttpHeaderView;
 using ruvia::HttpInterimResponseHead;
 
@@ -32,10 +33,21 @@ concept HasResultKindDiscriminator = requires(const T& result) {
     result.kind();
 };
 
+template <typename T>
+concept HasBooleanFinalConnectionClose = requires(const T& prepared) {
+    prepared.requiresFinalConnectionClose();
+};
+
 static_assert(!HasAnyRvalueHttp1InterimResponsePrepareAccessor<
     ruvia::Http1InterimResponsePrepareResult>);
 static_assert(!HasResultKindDiscriminator<
     ruvia::Http1InterimResponsePrepareResult>);
+static_assert(!HasBooleanFinalConnectionClose<
+    ruvia::PreparedHttp1InterimResponse>);
+static_assert(std::same_as<
+    decltype(std::declval<const ruvia::PreparedHttp1InterimResponse&>()
+                 .connectionDisposition()),
+    Http1InterimConnectionDisposition>);
 
 [[nodiscard]] bool unchanged(
     const std::array<char, 64>& buffer,
@@ -57,7 +69,9 @@ RUVIA_TEST(http1_interim_response_writer_emits_exact_typed_head) {
         RUVIA_CHECK_EQ(
             prepared->head(),
             std::string_view("HTTP/1.1 100 Continue\r\n\r\n"));
-        RUVIA_CHECK(!prepared->requiresFinalConnectionClose());
+        RUVIA_CHECK_EQ(
+            prepared->connectionDisposition(),
+            Http1InterimConnectionDisposition::kUnchanged);
     }
 
     const HttpHeaderView hints[] = {
@@ -109,7 +123,9 @@ RUVIA_TEST(http1_interim_response_writer_reports_connection_close_for_final) {
     const auto* const prepared = result.prepared();
     RUVIA_CHECK(prepared != nullptr);
     if (prepared != nullptr) {
-        RUVIA_CHECK(prepared->requiresFinalConnectionClose());
+        RUVIA_CHECK_EQ(
+            prepared->connectionDisposition(),
+            Http1InterimConnectionDisposition::kCloseAfterFinalResponse);
         RUVIA_CHECK(
             prepared->head().find("Upgrade: example/1\r\n") !=
             std::string_view::npos);

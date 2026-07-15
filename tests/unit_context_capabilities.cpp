@@ -74,6 +74,9 @@ static_assert(std::is_same_v<
     decltype(std::declval<const ruvia::detail::ContextServices&>()
                  .responseOutput()),
     const ruvia::detail::ContextResponseOutput&>);
+static_assert(std::is_same_v<
+    decltype(std::declval<const ruvia::detail::ContextServices&>().worker()),
+    const ruvia::WorkerHandle&>);
 static_assert(std::is_nothrow_copy_constructible_v<
     ruvia::detail::ContextRequestBodySource>);
 static_assert(std::is_nothrow_copy_assignable_v<
@@ -289,6 +292,20 @@ RUVIA_TEST(context_request_body_source_has_one_active_alternative) {
     // Functional service refinement must not mutate either earlier value.
     RUVIA_CHECK(base.requestBodySource().buffered() != nullptr);
     RUVIA_CHECK(lazy.requestBodySource().lazy() != nullptr);
+}
+
+RUVIA_TEST(context_services_carries_worker_as_lifetime_safe_value) {
+    const ruvia::detail::ContextServices services;
+    RUVIA_CHECK(!services.worker().valid());
+
+    ruvia::WorkerMemory worker;
+    ruvia::RequestMemory memory(worker);
+    auto request = makeRequest(memory.resource());
+    auto context = ruvia::detail::ContextAccess::make(
+        memory,
+        request,
+        services);
+    RUVIA_CHECK(!context.worker().valid());
 }
 
 RUVIA_TEST(context_response_output_has_one_active_alternative) {

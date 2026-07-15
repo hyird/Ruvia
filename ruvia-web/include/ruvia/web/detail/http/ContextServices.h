@@ -9,6 +9,7 @@
 #include <cstddef>
 #include <string>
 #include <string_view>
+#include <utility>
 
 namespace ruvia::detail {
 
@@ -27,12 +28,12 @@ public:
         RateLimiter* rateLimiter = nullptr,
         std::size_t maxDecodedBodyBytes =
             kDefaultMaxBufferedBodyBytes,
-        const WorkerHandle* worker = nullptr) noexcept
+        WorkerHandle worker = {}) noexcept
         : db_(db),
           redis_(redis),
           rateLimiter_(rateLimiter),
           maxDecodedBodyBytes_(maxDecodedBodyBytes),
-          worker_(worker),
+          worker_(std::move(worker)),
           connInfo_(ConnInfo::plain({})) {}
 
     [[nodiscard]] DbRegistry* db() const noexcept {
@@ -51,7 +52,7 @@ public:
         return maxDecodedBodyBytes_;
     }
 
-    [[nodiscard]] const WorkerHandle* worker() const noexcept {
+    [[nodiscard]] const WorkerHandle& worker() const noexcept {
         return worker_;
     }
 
@@ -147,7 +148,7 @@ private:
     RedisRegistry* redis_{nullptr};
     RateLimiter* rateLimiter_{nullptr};
     std::size_t maxDecodedBodyBytes_{kDefaultMaxBufferedBodyBytes};
-    const WorkerHandle* worker_{nullptr};
+    WorkerHandle worker_;
     HttpErrorHandler errorHandler_{nullptr};
     HttpNotFoundHandler notFoundHandler_{nullptr};
 

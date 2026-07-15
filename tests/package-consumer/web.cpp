@@ -1572,6 +1572,9 @@ static_assert(std::is_same_v<
     decltype(std::declval<const ruvia::detail::ContextServices&>()
                  .responseOutput()),
     const ruvia::detail::ContextResponseOutput&>);
+static_assert(std::is_same_v<
+    decltype(std::declval<const ruvia::detail::ContextServices&>().worker()),
+    const ruvia::WorkerHandle&>);
 static_assert(std::same_as<
     decltype(std::declval<const ruvia::detail::ContextServices&>()
                  .maxDecodedBodyBytes()),
@@ -1781,6 +1784,7 @@ int main() {
         contextServices.responseOutput().buffered() == nullptr ||
         contextServices.responseOutput().responseStream() != nullptr ||
         contextServices.responseOutput().webSocket() != nullptr ||
+        contextServices.worker().valid() ||
         contextServices.connInfo().plain() == nullptr ||
         contextServices.connInfo().tls() != nullptr) {
         return 8;

@@ -140,7 +140,9 @@ Task<void> runHttp2SansIoSession(
 
     Http2Connection connection(worker.resource(), Http2Role::kServer);
 
-    WorkerSignal writeSignal(baseServices.worker(), executor);
+    WorkerSignal writeSignal(
+        baseServices.worker(),
+        executor);
     Http2SansIoSessionLifecycle lifecycle;
     bool initialInputRetained = false;
     // keepaliveRequests parity with h1's Http1RequestSequence: after this many
@@ -470,9 +472,7 @@ Task<void> runHttp2SansIoSession(
                     responseStreamEndpoint->kind(),
                     requestMemory.resource(),
                     executor,
-                    baseServices.worker() == nullptr
-                        ? WorkerHandle{}
-                        : *baseServices.worker(),
+                    baseServices.worker(),
                     writeSignal,
                     *streamSignal);
                 auto result = co_await dispatchResponseStreamWith(
@@ -593,8 +593,8 @@ Task<void> runHttp2SansIoSession(
     // file or a stream body blocks on the send window exactly like a streaming route,
     // and without a signal its blocked submit could never be woken (truncation + hang).
     const auto admitStream = [&](std::uint32_t streamId) {
-        auto* signal = baseServices.worker() != nullptr
-            ? streamRuntimes.beginDispatch(streamId, *baseServices.worker())
+        auto* signal = baseServices.worker().valid()
+            ? streamRuntimes.beginDispatch(streamId, baseServices.worker())
             : streamRuntimes.beginDispatch(streamId, executor);
         if (signal == nullptr) {
             return false;
@@ -870,7 +870,9 @@ Task<void> runHttp2SansIoSession(
     // reader reaches the join (common on an abrupt peer RST, where the write error
     // surfaces first), a cancel-only latch would be a no-op and the join would sleep
     // until time_point::max() forever. The bool makes a late join return immediately.
-    WorkerSignal writerFinished(baseServices.worker(), executor);
+    WorkerSignal writerFinished(
+        baseServices.worker(),
+        executor);
     asio::co_spawn(
         executor, taskAsAwaitable(writerLoop()),
         [&writerFinished, &lifecycle](std::exception_ptr) noexcept {

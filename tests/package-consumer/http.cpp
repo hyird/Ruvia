@@ -3858,7 +3858,9 @@ int main() {
         earlyHints, earlyHintsWireBuffer);
     if (earlyHintsWire.prepared() == nullptr ||
         earlyHintsWire.prepared()->head().find(
-            "HTTP/1.1 103 Early Hints\r\n") != 0) {
+            "HTTP/1.1 103 Early Hints\r\n") != 0 ||
+        earlyHintsWire.prepared()->connectionDisposition() !=
+            ruvia::Http1InterimConnectionDisposition::kUnchanged) {
         return 27;
     }
 

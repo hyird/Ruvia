@@ -30,8 +30,10 @@ public:
               std::forward<Executor>(executor)) {}
 
     template <typename Executor>
-    WorkerSignal(const WorkerHandle* worker, Executor&& executor)
-        : target_(makeTarget(worker, std::forward<Executor>(executor))) {}
+    WorkerSignal(WorkerHandle worker, Executor&& executor)
+        : target_(makeTarget(
+              std::move(worker),
+              std::forward<Executor>(executor))) {}
 
     WorkerSignal(const WorkerSignal&) = delete;
     WorkerSignal& operator=(const WorkerSignal&) = delete;
@@ -59,10 +61,12 @@ private:
 
     template <typename Executor>
     [[nodiscard]] static Target makeTarget(
-        const WorkerHandle* worker,
+        WorkerHandle worker,
         Executor&& executor) {
-        if (worker != nullptr && worker->valid()) {
-            return Target(std::in_place_type<WorkerHandle>, *worker);
+        if (worker.valid()) {
+            return Target(
+                std::in_place_type<WorkerHandle>,
+                std::move(worker));
         }
         return Target(
             std::in_place_type<asio::any_io_executor>,

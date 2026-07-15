@@ -179,7 +179,7 @@ if(_built_components_csv MATCHES "(^|,)core(,|$)")
        NOT _installed_worker_signal MATCHES
            "std::get_if<WorkerHandle>" OR
        _installed_worker_signal MATCHES
-           "WorkerHandle worker_|std::optional<asio::any_io_executor> executor_")
+           "WorkerHandle worker_|std::optional<asio::any_io_executor> executor_|const WorkerHandle[*] worker")
         message(FATAL_ERROR
             "installed WorkerSignal restored parallel worker/executor targets")
     endif()
@@ -1986,6 +1986,28 @@ if(_installed_http1_request_parser MATCHES "Http1RequestParseKind" OR
     message(FATAL_ERROR
         "installed HTTP/1 typed results restored redundant kind discriminators")
 endif()
+if(NOT _installed_http1_interim_response_writer MATCHES
+       "enum class Http1InterimConnectionDisposition" OR
+   NOT _installed_http1_interim_response_writer MATCHES
+       "connectionDisposition[(][)]" OR
+   _installed_http1_interim_response_writer MATCHES
+       "requiresFinalConnectionClose|bool[ \t]+requiresFinalConnectionClose_")
+    message(FATAL_ERROR
+        "installed HTTP/1 interim writer lost its typed final-close disposition")
+endif()
+set(_installed_http_response_head_buffer_path
+    "${_install_prefix}/include/ruvia/http/detail/server/HttpResponseHeadBuffer.h")
+if(NOT EXISTS "${_installed_http_response_head_buffer_path}")
+    message(FATAL_ERROR "installed HTTP response-head scratch buffer is missing")
+endif()
+file(READ "${_installed_http_response_head_buffer_path}"
+    _installed_http_response_head_buffer)
+if(NOT _installed_http_response_head_buffer MATCHES
+       "std::variant<StackState, HeapState>" OR
+   _installed_http_response_head_buffer MATCHES "overflowed_")
+    message(FATAL_ERROR
+        "installed HTTP response-head scratch buffer lost exclusive storage state")
+endif()
 if(NOT _installed_http1_request_parser MATCHES "class Http1RequestNeedMore final" OR
    NOT _installed_http1_request_parser MATCHES "class Http1ParsedRequest final" OR
    NOT _installed_http1_request_parser MATCHES "class Http1RequestParseFailure final" OR
@@ -3444,6 +3466,11 @@ if(_built_components_csv MATCHES "(^|,)web(,|$)")
            "ContextRequestBodySource requestBodySource_" OR
        NOT _installed_context_services MATCHES
            "ContextResponseOutput responseOutput_" OR
+       NOT _installed_context_services MATCHES "WorkerHandle worker_" OR
+       _installed_context_services MATCHES
+           "WorkerHandle[*][ \\n\\t]+worker_" OR
+       _installed_context_header MATCHES
+           "WorkerHandle[*][ \\n\\t]+worker_" OR
        NOT _installed_context_services MATCHES "withLazyRequestBody" OR
        NOT _installed_context_services MATCHES
            "withStreamingRequestBody" OR
@@ -4809,13 +4836,22 @@ if("web" IN_LIST _built_components)
         "${_install_prefix}/include/ruvia/web/detail/server/Http1ClosingRejection.h")
     set(_installed_request_body_facade
         "${_install_prefix}/include/ruvia/web/detail/body/HttpRequestBodyFacade.h")
+    set(_installed_request_body_loader
+        "${_install_prefix}/include/ruvia/web/detail/http/RequestBodyLoader.h")
+    set(_installed_lazy_buffered_body
+        "${_install_prefix}/include/ruvia/web/detail/body/HttpLazyBufferedBody.h")
     set(_installed_streaming_facade
         "${_install_prefix}/include/ruvia/web/Streaming.h")
+    set(_installed_stream_body_reader
+        "${_install_prefix}/include/ruvia/web/detail/body/HttpStreamBodyReader.h")
     if(NOT EXISTS "${_installed_context_session_state}" OR
        NOT EXISTS "${_installed_secure_token_result}" OR
        NOT EXISTS "${_installed_http1_closing_rejection}" OR
        NOT EXISTS "${_installed_request_body_facade}" OR
-       NOT EXISTS "${_installed_streaming_facade}")
+       NOT EXISTS "${_installed_request_body_loader}" OR
+       NOT EXISTS "${_installed_lazy_buffered_body}" OR
+       NOT EXISTS "${_installed_streaming_facade}" OR
+       NOT EXISTS "${_installed_stream_body_reader}")
         message(FATAL_ERROR
             "installed Web package is missing typed session/token contracts")
     endif()
@@ -4827,8 +4863,14 @@ if("web" IN_LIST _built_components)
         _installed_http1_closing_rejection_content)
     file(READ "${_installed_request_body_facade}"
         _installed_request_body_facade_content)
+    file(READ "${_installed_request_body_loader}"
+        _installed_request_body_loader_content)
+    file(READ "${_installed_lazy_buffered_body}"
+        _installed_lazy_buffered_body_content)
     file(READ "${_installed_streaming_facade}"
         _installed_streaming_facade_content)
+    file(READ "${_installed_stream_body_reader}"
+        _installed_stream_body_reader_content)
     if(NOT _installed_context_session_state_content MATCHES
            "class ContextSessionState final" OR
        NOT _installed_context_session_state_content MATCHES
@@ -4848,12 +4890,29 @@ if("web" IN_LIST _built_components)
         message(FATAL_ERROR
             "installed Web session/token contracts are stale")
     endif()
+    if(NOT _installed_request_body_loader_content MATCHES "kReading" OR
+       NOT _installed_request_body_loader_content MATCHES "kDiscarding" OR
+       NOT _installed_request_body_loader_content MATCHES "kDiscarded" OR
+       NOT _installed_request_body_loader_content MATCHES "kFailed" OR
+       NOT _installed_request_body_loader_content MATCHES "class OperationGuard final" OR
+       NOT _installed_request_body_loader_content MATCHES "state_ = State::kFailed" OR
+       _installed_lazy_buffered_body_content MATCHES "bool[ 	]+read_|bodyView_")
+        message(FATAL_ERROR
+            "installed lazy request-body consumer lost its exclusive lifecycle")
+    endif()
     if(NOT _installed_streaming_facade_content MATCHES
            "bool[ \t]+readActive_" OR
        NOT _installed_streaming_facade_content MATCHES
            "Only one read may be in flight")
         message(FATAL_ERROR
             "installed BodyReader lost its single-consumer borrowed-buffer contract")
+    endif()
+    if(NOT _installed_stream_body_reader_content MATCHES
+           "PmrObjectDeleter<TransferCodingDecoder>>[ \t]+transferDecoder_" OR
+       _installed_stream_body_reader_content MATCHES
+           "TransferCodingDecoder[*][ \t]+transferDecoder_|transferDecoderAllocator_")
+        message(FATAL_ERROR
+            "installed H1 stream body reader restored split decoder ownership")
     endif()
 
     ruvia_verify_package_consumer(

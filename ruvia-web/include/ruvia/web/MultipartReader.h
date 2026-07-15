@@ -5,6 +5,7 @@
 #include "ruvia/web/Streaming.h"
 
 #include <memory_resource>
+#include <cstdint>
 #include <optional>
 #include <string_view>
 #include <utility>
@@ -30,9 +31,36 @@ public:
     [[nodiscard]] Task<std::optional<MultipartStreamPart>> read();
 
 private:
+    enum class State : std::uint8_t {
+        kReady,
+        kReading,
+        kFinished,
+        kFailed,
+    };
+
+    class ReadGuard final {
+    public:
+        explicit ReadGuard(State& state) noexcept : state_(state) {}
+
+        ~ReadGuard() {
+            if (!committed_) {
+                state_ = State::kFailed;
+            }
+        }
+
+        void commit(State state) noexcept {
+            state_ = state;
+            committed_ = true;
+        }
+
+    private:
+        State& state_;
+        bool committed_{false};
+    };
+
     BodyReader& bodyReader_;
     MultipartParser parser_;
-    bool bodyEnded_{false};
+    State state_{State::kReady};
 };
 
 }  // namespace ruvia

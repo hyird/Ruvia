@@ -226,7 +226,7 @@ if(NOT core_worker_signal_contract MATCHES
    core_worker_signal_contract MATCHES
        "std::array<std::coroutine_handle|waiter capacity exceeded" OR
    core_worker_signal_contract MATCHES
-       "WorkerHandle worker_|std::optional<asio::any_io_executor> executor_" OR
+       "WorkerHandle worker_|std::optional<asio::any_io_executor> executor_|const WorkerHandle[*] worker" OR
    NOT core_runtime_test_contract MATCHES
        "testWorkerSignalHasOneDispatchTarget" OR
    NOT core_runtime_test_contract MATCHES
@@ -1811,6 +1811,9 @@ if(EXISTS "${WEB_CONTEXT_CAPABILITIES}" AND
            "ContextRequestBodySource requestBodySource_" OR
        NOT web_context_services MATCHES
            "ContextResponseOutput responseOutput_" OR
+       NOT web_context_services MATCHES "WorkerHandle worker_" OR
+       web_context_services MATCHES "WorkerHandle[*][ \\n\\t]+worker_" OR
+       web_context_header MATCHES "WorkerHandle[*][ \\n\\t]+worker_" OR
        NOT web_context_services MATCHES "withLazyRequestBody" OR
        NOT web_context_services MATCHES "withStreamingRequestBody" OR
        NOT web_context_header MATCHES
@@ -1822,7 +1825,7 @@ if(EXISTS "${WEB_CONTEXT_CAPABILITIES}" AND
        NOT web_context_internal MATCHES
            "services[.]responseOutput[(][)]")
         boundary_error("Context restored parallel nullable capability slots"
-            "ContextServices and Context must carry the two discriminated values without manual pointer clearing")
+            "ContextServices and Context must carry discriminated protocol capabilities and the lifetime-safe WorkerHandle value without manual pointer clearing or borrowed handle storage")
     endif()
     if(NOT web_context_request_source MATCHES
            "requestBodySource_[.]lazy[(][)]" OR
@@ -2768,7 +2771,8 @@ if(NOT multipart_web_driver MATCHES "parser_[.]finishInput[(][)]" OR
    NOT multipart_web_driver MATCHES "result[.]failure[(][)]" OR
    NOT multipart_web_driver MATCHES "failure->protocolError[(][)]" OR
    multipart_web_driver MATCHES "failure->error[(][)]|HttpProtocolError" OR
-   NOT multipart_web_driver MATCHES "while [(]!bodyEnded_ && co_await bodyReader_[.]read[(][)][)]")
+   NOT multipart_web_driver MATCHES "while [(]co_await bodyReader_[.]read[(][)][)]" OR
+   multipart_web_driver MATCHES "bodyEnded_")
     boundary_error("multipart Web facade stopped driving the complete HTTP body lifecycle"
         "the runtime must drive typed results, signal EOF to the protocol parser, and drain RFC 2046 epilogue bytes")
 endif()
@@ -6380,7 +6384,10 @@ else()
        NOT http_interim_response_source MATCHES "httpInterimStatusCodeValid" OR
        NOT http_response_source MATCHES "httpFinalStatusCodeValid" OR
        NOT http1_interim_response_writer MATCHES "Http1InterimResponseWriter" OR
-       NOT http1_interim_response_writer MATCHES "requiresFinalConnectionClose" OR
+       NOT http1_interim_response_writer MATCHES
+           "enum class Http1InterimConnectionDisposition" OR
+       NOT http1_interim_response_writer MATCHES "connectionDisposition[(][)]" OR
+       http1_interim_response_writer MATCHES "requiresFinalConnectionClose|bool[ \t]+requiresFinalConnectionClose_" OR
        NOT http1_interim_response_writer MATCHES
            "bufferTooSmall[(][)] const &&[ \\t]*=[ \\t]*delete" OR
        NOT http1_interim_response_writer MATCHES
@@ -6400,6 +6407,20 @@ else()
        NOT http2_response_headers MATCHES "kInvalidHeader")
         boundary_error("interim/final response types have drifted"
             "typed 1xx must use exact, transactionally validated HTTP/1 and HTTP/2 writers")
+    endif()
+endif()
+set(HTTP_RESPONSE_HEAD_BUFFER
+    "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/detail/server/HttpResponseHeadBuffer.h")
+if(NOT EXISTS "${HTTP_RESPONSE_HEAD_BUFFER}")
+    boundary_error("HTTP response-head scratch buffer is missing"
+        "the HTTP/1 writer needs an owned fixed/heap storage state")
+else()
+    file(READ "${HTTP_RESPONSE_HEAD_BUFFER}" http_response_head_buffer)
+    if(NOT http_response_head_buffer MATCHES
+           "std::variant<StackState, HeapState>" OR
+       http_response_head_buffer MATCHES "overflowed_")
+        boundary_error("HTTP response-head storage lost its exclusive state"
+            "fixed and heap storage must use one discriminated authority")
     endif()
 endif()
 check_files_no_match("obsolete untyped informational response submit API was restored"
@@ -10624,6 +10645,8 @@ set(HTTP_TRANSFER_DECODER_SOURCE
     "${RUVIA_ROOT}/ruvia-http/src/body/HttpTransferCodingDecoder.cpp")
 set(WEB_BODY_READER_CORE
     "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/body/HttpStreamBodyReaderCore.inl")
+set(WEB_BODY_READER_HEADER
+    "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/body/HttpStreamBodyReader.h")
 set(WEB_BODY_READER_CHUNKED
     "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/body/HttpStreamBodyReaderChunked.inl")
 set(HTTP_TRANSFER_DECODER_TEST
@@ -10640,6 +10663,7 @@ if(EXISTS "${HTTP_TRANSFER_DECODER}" AND
     file(READ "${HTTP_TRANSFER_DECODER}" transfer_decoder)
     file(READ "${HTTP_TRANSFER_DECODER_SOURCE}" transfer_decoder_source)
     file(READ "${WEB_BODY_READER_CORE}" body_reader_core)
+    file(READ "${WEB_BODY_READER_HEADER}" body_reader_header)
     file(READ "${WEB_BODY_READER_CHUNKED}" body_reader_chunked)
     file(READ "${HTTP_TRANSFER_DECODER_TEST}" transfer_decoder_test)
     file(READ "${WEB_BODY_READER_TEST}" body_reader_test)
@@ -10698,6 +10722,14 @@ if(EXISTS "${HTTP_TRANSFER_DECODER}" AND
     endif()
     if(NOT body_reader_core MATCHES
            "transferDecoder_->decode[(]" OR
+       NOT body_reader_header MATCHES
+           "PmrObjectDeleter<TransferCodingDecoder>>[ \t]+transferDecoder_" OR
+       body_reader_header MATCHES
+           "TransferCodingDecoder[*][ \t]+transferDecoder_|transferDecoderAllocator_" OR
+       NOT body_reader_core MATCHES
+           "makePmrObject<TransferCodingDecoder>" OR
+       body_reader_core MATCHES
+           "destroy_at[(]transferDecoder_|deallocate[(]transferDecoder_" OR
        NOT body_reader_chunked MATCHES
            "transferDecoder_->decode[(]" OR
        NOT body_reader_core MATCHES
@@ -11963,6 +11995,10 @@ endif()
 
 set(REQUEST_BODY_FACADE_HEADER
     "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/body/HttpRequestBodyFacade.h")
+set(REQUEST_BODY_LOADER_HEADER
+    "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/http/RequestBodyLoader.h")
+set(LAZY_BUFFERED_BODY_HEADER
+    "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/body/HttpLazyBufferedBody.h")
 set(HTTP1_STREAM_BODY_ROUTE
     "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/server/HttpServerStreamBodyRoute.h")
 set(HTTP1_BUFFERED_BODY_ROUTE
@@ -11970,6 +12006,8 @@ set(HTTP1_BUFFERED_BODY_ROUTE
 set(HTTP2_WEB_SESSION
     "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/server/Http2SansIoSession.h")
 file(READ "${REQUEST_BODY_FACADE_HEADER}" request_body_facade_binding_content)
+file(READ "${REQUEST_BODY_LOADER_HEADER}" request_body_loader_state_content)
+file(READ "${LAZY_BUFFERED_BODY_HEADER}" lazy_buffered_body_state_content)
 file(READ "${HTTP1_STREAM_BODY_ROUTE}" http1_stream_body_binding_consumer)
 file(READ "${HTTP1_BUFFERED_BODY_ROUTE}" http1_buffered_body_binding_consumer)
 file(READ "${HTTP2_WEB_SESSION}" http2_body_binding_consumer)
@@ -11999,6 +12037,17 @@ if(NOT request_body_facade_binding_content MATCHES
        "request body read is already in progress")
     boundary_error("Request-body target and facade regained split optional ownership"
         "H1/H2 routes must publish one atomic binding and one consumer may borrow the read buffer at a time")
+endif()
+if(NOT request_body_loader_state_content MATCHES "kReading" OR
+   NOT request_body_loader_state_content MATCHES "kDiscarding" OR
+   NOT request_body_loader_state_content MATCHES "kDiscarded" OR
+   NOT request_body_loader_state_content MATCHES "kFailed" OR
+   NOT request_body_loader_state_content MATCHES "class OperationGuard final" OR
+   NOT request_body_loader_state_content MATCHES "state_ = State::kFailed" OR
+   lazy_buffered_body_state_content MATCHES "bool[ 	]+read_|bodyView_" OR
+   multipart_web_api MATCHES "bodyEnded_")
+    boundary_error("request-body consumers restored parallel or retryable consumption state"
+        "lazy buffering, discard, and multipart reads must have one fail-fast lifecycle authority")
 endif()
 
 set(HTTP_CONTENT_CODING_HEADER

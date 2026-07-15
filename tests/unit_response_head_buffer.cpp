@@ -1,7 +1,10 @@
 #include "test_harness.h"
 
 #include <cstddef>
+#include <limits>
 #include <memory_resource>
+#include <new>
+#include <stdexcept>
 #include <string>
 #include <string_view>
 
@@ -11,6 +14,20 @@ namespace {
 
 using ruvia::detail::kResponseHeadStackBytes;
 using ruvia::detail::ResponseHeadBuffer;
+
+class RejectingMemoryResource final : public std::pmr::memory_resource {
+private:
+    void* do_allocate(std::size_t, std::size_t) override {
+        throw std::bad_alloc();
+    }
+
+    void do_deallocate(void*, std::size_t, std::size_t) override {}
+
+    [[nodiscard]] bool do_is_equal(
+        const std::pmr::memory_resource& other) const noexcept override {
+        return this == &other;
+    }
+};
 
 }  // namespace
 
@@ -91,5 +108,42 @@ RUVIA_TEST(head_buffer_reset_and_reuse) {
     // After reset a small append is served from the stack again.
     buffer.append("small");
     RUVIA_CHECK_EQ(buffer.view(), std::string_view("small"));
+    RUVIA_CHECK(buffer.canAppendOnStack(1));
+}
+
+RUVIA_TEST(head_buffer_failed_spill_preserves_stack_state) {
+    RejectingMemoryResource resource;
+    ResponseHeadBuffer buffer(&resource);
+    const std::string stackContents(kResponseHeadStackBytes, 's');
+    buffer.append(stackContents);
+
+    bool allocationFailed = false;
+    try {
+        buffer.append('x');
+    } catch (const std::bad_alloc&) {
+        allocationFailed = true;
+    }
+    RUVIA_CHECK(allocationFailed);
+    RUVIA_CHECK_EQ(buffer.view(), std::string_view(stackContents));
+    RUVIA_CHECK(!buffer.canAppendOnStack(1));
+
+    buffer.reset();
+    buffer.append("retry");
+    RUVIA_CHECK_EQ(buffer.view(), std::string_view("retry"));
+    RUVIA_CHECK(buffer.canAppendOnStack(1));
+}
+
+RUVIA_TEST(head_buffer_rejects_overflow_without_changing_storage_state) {
+    ResponseHeadBuffer buffer(std::pmr::get_default_resource());
+    buffer.append("prefix");
+
+    bool lengthRejected = false;
+    try {
+        buffer.reserveAdditional(std::numeric_limits<std::size_t>::max());
+    } catch (const std::length_error&) {
+        lengthRejected = true;
+    }
+    RUVIA_CHECK(lengthRejected);
+    RUVIA_CHECK_EQ(buffer.view(), std::string_view("prefix"));
     RUVIA_CHECK(buffer.canAppendOnStack(1));
 }

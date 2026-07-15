@@ -41,7 +41,7 @@ bool testWorkerSignalHasOneDispatchTarget() {
     asio::io_context ioContext;
     ruvia::detail::WorkerSignal executorSignal(ioContext.get_executor());
     ruvia::detail::WorkerSignal fallbackSignal(
-        static_cast<const ruvia::WorkerHandle*>(nullptr),
+        ruvia::WorkerHandle{},
         ioContext.get_executor());
     bool executorResumed = false;
     bool fallbackResumed = false;

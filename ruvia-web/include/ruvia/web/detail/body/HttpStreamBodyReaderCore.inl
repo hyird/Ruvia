@@ -45,7 +45,9 @@ StreamBodyReader<Stream>::StreamBodyReader(
     : stream_(stream),
       buffer_(allocator),
       transferOutput_(allocator),
-      transferDecoderAllocator_(allocator.resource()),
+      transferDecoder_(
+          nullptr,
+          PmrObjectDeleter<TransferCodingDecoder>{allocator.resource()}),
       initialBodyAndPipeline_(initialBodyAndPipeline),
       bodyPlan_(bodyPlan),
       bodyLimit_(bodyLimit),
@@ -54,26 +56,11 @@ StreamBodyReader<Stream>::StreamBodyReader(
       finished_(!bodyPlan_.requiresConsumption()) {
     const auto* chunked = bodyPlan_.chunked();
     if (chunked != nullptr && !chunked->transferCodings().empty()) {
-        transferDecoder_ = transferDecoderAllocator_.allocate(1);
-        try {
-            std::construct_at(
-                transferDecoder_,
-                chunked->transferCodings().values[0],
-                allocator.resource(),
-                bodyLimit);
-        } catch (...) {
-            transferDecoderAllocator_.deallocate(transferDecoder_, 1);
-            transferDecoder_ = nullptr;
-            throw;
-        }
-    }
-}
-
-template <typename Stream>
-StreamBodyReader<Stream>::~StreamBodyReader() {
-    if (transferDecoder_ != nullptr) {
-        std::destroy_at(transferDecoder_);
-        transferDecoderAllocator_.deallocate(transferDecoder_, 1);
+        transferDecoder_ = makePmrObject<TransferCodingDecoder>(
+            allocator.resource(),
+            chunked->transferCodings().values[0],
+            allocator.resource(),
+            bodyLimit);
     }
 }
 

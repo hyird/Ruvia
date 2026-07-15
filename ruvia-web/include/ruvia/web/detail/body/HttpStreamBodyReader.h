@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstddef>
+#include <memory>
 #include <memory_resource>
 #include <optional>
 #include <stdexcept>
@@ -8,6 +9,7 @@
 #include <string_view>
 
 #include "ruvia/core/detail/ConnectionScanner.h"
+#include "ruvia/core/memory/PmrObject.h"
 #include "ruvia/http/ProtocolByteLimit.h"
 #include "ruvia/http/HttpProtocolError.h"
 #include "ruvia/http/detail/HttpRequestBodyFailure.h"
@@ -32,7 +34,7 @@ public:
         Http1RequestBodyPlan bodyPlan,
         ProtocolByteLimit bodyLimit,
         ConnectionScanner::Entry& scannerEntry);
-    ~StreamBodyReader();
+    ~StreamBodyReader() = default;
 
     StreamBodyReader(const StreamBodyReader&) = delete;
     StreamBodyReader& operator=(const StreamBodyReader&) = delete;
@@ -72,8 +74,9 @@ private:
     Stream& stream_;
     std::pmr::string buffer_;
     std::pmr::string transferOutput_;
-    std::pmr::polymorphic_allocator<TransferCodingDecoder> transferDecoderAllocator_;
-    TransferCodingDecoder* transferDecoder_{nullptr};
+    std::unique_ptr<
+        TransferCodingDecoder,
+        PmrObjectDeleter<TransferCodingDecoder>> transferDecoder_;
     std::string_view transferInput_;
     std::string_view initialBodyAndPipeline_;
     Http1RequestBodyPlan bodyPlan_;

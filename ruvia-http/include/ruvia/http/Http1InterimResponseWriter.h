@@ -28,6 +28,14 @@ enum class Http1InterimResponsePrepareError : std::uint8_t {
     kHeaderTooLarge,
 };
 
+// An interim response cannot terminate the connection before the required
+// final response. Preserve that protocol obligation as a named disposition
+// instead of reducing it to an unlabelled boolean at the writer boundary.
+enum class Http1InterimConnectionDisposition : std::uint8_t {
+    kUnchanged,
+    kCloseAfterFinalResponse,
+};
+
 [[nodiscard]] std::string_view http1InterimResponsePrepareErrorMessage(
     Http1InterimResponsePrepareError error) noexcept;
 
@@ -57,8 +65,9 @@ public:
         return head_;
     }
 
-    [[nodiscard]] constexpr bool requiresFinalConnectionClose() const noexcept {
-        return requiresFinalConnectionClose_;
+    [[nodiscard]] constexpr Http1InterimConnectionDisposition
+    connectionDisposition() const noexcept {
+        return connectionDisposition_;
     }
 
 private:
@@ -66,12 +75,12 @@ private:
 
     constexpr PreparedHttp1InterimResponse(
         std::string_view head,
-        bool requiresFinalConnectionClose) noexcept
+        Http1InterimConnectionDisposition connectionDisposition) noexcept
         : head_(head),
-          requiresFinalConnectionClose_(requiresFinalConnectionClose) {}
+          connectionDisposition_(connectionDisposition) {}
 
     std::string_view head_;
-    bool requiresFinalConnectionClose_{false};
+    Http1InterimConnectionDisposition connectionDisposition_;
 };
 
 class Http1InterimResponsePrepareFailure final {

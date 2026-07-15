@@ -108,7 +108,7 @@ public:
     }
 
     [[nodiscard]] WorkerHandle worker() const noexcept {
-        return worker_ == nullptr ? WorkerHandle{} : *worker_;
+        return worker_;
     }
 
     // Server-side session blob (persisted by a SessionMiddleware via Redis; the
@@ -330,7 +330,7 @@ private:
     RequestMemory& memory_;
     const HttpRequest& request_;
     ConnInfo connInfo_;
-    const WorkerHandle* worker_{nullptr};
+    WorkerHandle worker_;
     std::string_view routePath_;
     const std::string_view* paramNames_{nullptr};
     const std::string_view* paramValues_{nullptr};

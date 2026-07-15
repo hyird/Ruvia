@@ -26,10 +26,10 @@ struct Http1InterimResponsePrepareResultAccess final {
 
     [[nodiscard]] static constexpr Http1InterimResponsePrepareResult prepared(
         std::string_view head,
-        bool requiresFinalConnectionClose) noexcept {
+        Http1InterimConnectionDisposition connectionDisposition) noexcept {
         return Http1InterimResponsePrepareResult(
             PreparedHttp1InterimResponse(
-                head, requiresFinalConnectionClose));
+                head, connectionDisposition));
     }
 };
 
@@ -215,7 +215,9 @@ Http1InterimResponsePrepareResult Http1InterimResponseWriter::prepare(
 
     return detail::Http1InterimResponsePrepareResultAccess::prepared(
         std::string_view(headBuffer.data(), facts.wireBytes),
-        facts.connectionOptions.close());
+        facts.connectionOptions.close()
+            ? Http1InterimConnectionDisposition::kCloseAfterFinalResponse
+            : Http1InterimConnectionDisposition::kUnchanged);
 }
 
 }  // namespace ruvia

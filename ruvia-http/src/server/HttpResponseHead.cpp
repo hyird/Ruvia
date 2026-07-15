@@ -2,6 +2,7 @@
 
 #include <charconv>
 #include <cstring>
+#include <limits>
 #include <stdexcept>
 
 #include "ruvia/http/detail/server/HttpDateCache.h"
@@ -48,6 +49,13 @@ struct RawHeadSink {
         out = std::to_chars(out, out + 20, value).ptr;
     }
 };
+
+void addResponseHeadBound(std::size_t& bound, std::size_t bytes) {
+    if (bytes > std::numeric_limits<std::size_t>::max() - bound) {
+        throw std::length_error("HTTP response head is too large");
+    }
+    bound += bytes;
+}
 
 template <typename Sink>
 void emitResponseHead(
@@ -152,20 +160,24 @@ void appendResponseHead(
     // numeric slots use the 20-digit std::uint64_t worst case). The raw stack
     // sink below emits without per-append bounds checks, so this must never
     // undercount the actual output.
-    std::size_t bound = 9 + 20 + 1 + reasonPhrase.size() + 2;
+    std::size_t bound = 9 + 20 + 1;
+    addResponseHeadBound(bound, reasonPhrase.size());
+    addResponseHeadBound(bound, 2);
     for (const auto& header : response.headers()) {
-        bound += header.name().size() + header.value().size() + 4;
+        addResponseHeadBound(bound, header.name().size());
+        addResponseHeadBound(bound, header.value().size());
+        addResponseHeadBound(bound, 4);
     }
     if ((knownBits & kResponseHeaderDate) == 0) {
-        bound += dateHeader.size();
+        addResponseHeadBound(bound, dateHeader.size());
     }
     if (emitChunkedTransferEncoding) {
-        bound += kChunkedTransferEncodingHeader.size();
+        addResponseHeadBound(bound, kChunkedTransferEncodingHeader.size());
     }
     if (autoContentLengthOwnedByWriter) {
-        bound += 16 + 20 + 2;
+        addResponseHeadBound(bound, 16 + 20 + 2);
     }
-    bound += 2;
+    addResponseHeadBound(bound, 2);
 
     if (char* cursor = head.stackCursor(bound); cursor != nullptr) {
         RawHeadSink sink{cursor};
