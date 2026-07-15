@@ -23,6 +23,14 @@ public:
         return size_;
     }
 
+    [[nodiscard]] std::string_view name() const noexcept {
+        return name_;
+    }
+
+    [[nodiscard]] std::string_view wirePrefix() const noexcept {
+        return prefixText_;
+    }
+
     void write(char* output) const;
 
 private:

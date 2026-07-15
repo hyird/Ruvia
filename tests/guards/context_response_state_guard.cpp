@@ -25,6 +25,18 @@ void check(bool condition) {
     return count;
 }
 
+[[nodiscard]] bool hasHeaderValue(
+    ruvia::HttpResponse& response,
+    std::string_view name,
+    std::string_view value) {
+    for (const auto& header : response.headers()) {
+        if (header.name() == name && header.value() == value) {
+            return true;
+        }
+    }
+    return false;
+}
+
 [[nodiscard]] ruvia::HttpRequest makeRequest() {
     ruvia::detail::Http1ServerRequestParser parser;
     const auto parsed = parser.parseMessage("GET / HTTP/1.1\r\nHost: example.test\r\n\r\n");
@@ -62,16 +74,62 @@ void exerciseAppendHeaderMultiplicity(ruvia::RequestMemory& memory, const ruvia:
     check(countHeaders(finalResponse, "X-Trace") == 2);
 }
 
-void exerciseSetCookieMultiplicity(ruvia::RequestMemory& memory, const ruvia::HttpRequest& request) {
+void exerciseSetCookieReplacement(ruvia::RequestMemory& memory, const ruvia::HttpRequest& request) {
     auto context = ruvia::detail::ContextAccess::make(memory, request);
     (void)ruvia::detail::ContextAccess::responseStorage(context);
-    context.setCookie("session", "id", ruvia::CookieOptions{});
-    context.setCookie("session", "id", ruvia::CookieOptions{});
+    context.setCookie("session", "first", ruvia::CookieOptions{});
+    context.setCookie("theme", "dark", ruvia::CookieOptions{});
+    context.setCookie("session", "second", ruvia::CookieOptions{});
     auto response = context.text("hi");
     check(countHeaders(response, "Set-Cookie") == 2);
+    check(hasHeaderValue(response, "Set-Cookie", "session=second; Path=/"));
+    check(hasHeaderValue(response, "Set-Cookie", "theme=dark; Path=/"));
     ruvia::detail::ContextAccess::setResponse(context, std::move(response));
     auto finalResponse = ruvia::detail::ContextAccess::takeResponse(context);
     check(countHeaders(finalResponse, "Set-Cookie") == 2);
+    check(hasHeaderValue(finalResponse, "Set-Cookie", "session=second; Path=/"));
+    check(hasHeaderValue(finalResponse, "Set-Cookie", "theme=dark; Path=/"));
+}
+
+void exercisePendingCookieReplacesRawResponseCookie(
+    ruvia::RequestMemory& memory,
+    const ruvia::HttpRequest& request) {
+    auto context = ruvia::detail::ContextAccess::make(memory, request);
+    context.setCookie("session", "typed", ruvia::CookieOptions{});
+
+    ruvia::HttpResponse raw(memory.resource());
+    raw.header("Set-Cookie", "session=raw; Path=/");
+    raw.header(
+        "Set-Cookie",
+        "theme=light; Path=/",
+        ruvia::HttpResponse::HeaderOptions{.append = true});
+    ruvia::detail::ContextAccess::setResponse(context, std::move(raw));
+    auto response = ruvia::detail::ContextAccess::takeResponse(context);
+
+    check(countHeaders(response, "Set-Cookie") == 2);
+    check(hasHeaderValue(response, "Set-Cookie", "session=typed; Path=/"));
+    check(hasHeaderValue(response, "Set-Cookie", "theme=light; Path=/"));
+}
+
+void exerciseCookieReplacementUsesWireName(
+    ruvia::RequestMemory& memory,
+    const ruvia::HttpRequest& request) {
+    auto context = ruvia::detail::ContextAccess::make(memory, request);
+    context.setCookie("session", "bare", ruvia::CookieOptions{});
+
+    ruvia::CookieOptions host;
+    host.prefix = ruvia::CookiePrefix::kHost;
+    host.secure = true;
+    context.setCookie("session", "host-first", host);
+    context.setCookie("session", "host-second", host);
+    auto response = context.text("hi");
+
+    check(countHeaders(response, "Set-Cookie") == 2);
+    check(hasHeaderValue(response, "Set-Cookie", "session=bare; Path=/"));
+    check(hasHeaderValue(
+        response,
+        "Set-Cookie",
+        "__Host-session=host-second; Path=/; Secure"));
 }
 
 void exercisePendingStateMergesIntoRawResponse(
@@ -168,7 +226,9 @@ int main() {
 
     exerciseTypedResponsePhases(memory);
     exerciseAppendHeaderMultiplicity(memory, request);
-    exerciseSetCookieMultiplicity(memory, request);
+    exerciseSetCookieReplacement(memory, request);
+    exercisePendingCookieReplacesRawResponseCookie(memory, request);
+    exerciseCookieReplacementUsesWireName(memory, request);
     exercisePendingStateMergesIntoRawResponse(memory, request);
     exerciseProvisionalStateMergesIntoAssignedResponse(memory, request);
     exerciseActiveStorageCanFinalizeInPlace(memory, request);

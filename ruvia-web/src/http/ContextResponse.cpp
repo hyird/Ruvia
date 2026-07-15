@@ -79,7 +79,9 @@ void mergeActiveResponseHeaders(HttpResponse& response, const HttpResponse& acti
         const auto knownBit = detail::responseHeaderKnownBit(header);
         const auto name = header.name();
         const auto value = header.value();
-        if (knownBit == detail::kResponseHeaderSetCookie || detail::responseHeaderAppend(header)) {
+        if (knownBit == detail::kResponseHeaderSetCookie) {
+            detail::upsertResponseSetCookieValidated(response, value);
+        } else if (detail::responseHeaderAppend(header)) {
             if (responseHeaderValueCount(response, name, value) <
                 headerOccurrenceThrough(active, header)) {
                 detail::appendResponseHeaderValidated(response, name, value, knownBit);
@@ -109,7 +111,7 @@ void assignActiveResponseHeaders(HttpResponse& response, const HttpResponse& act
                 response.header("Set-Cookie", std::nullopt);
                 replacedSetCookie = true;
             }
-            detail::appendResponseHeaderValidated(response, name, value, knownBit);
+            detail::upsertResponseSetCookieValidated(response, value);
         } else if (detail::responseHeaderAppend(header)) {
             if (responseHeaderValueCount(response, name, value) <
                 headerOccurrenceThrough(active, header)) {
@@ -265,11 +267,11 @@ namespace {
 
 void Context::setCookie(std::string_view name, std::string_view value, const CookieOptions& options) {
     const detail::SetCookiePlan plan(name, value, options);
-    auto& header = detail::appendResponseHeaderUninitializedValue(
+    auto& header = detail::upsertResponseSetCookieUninitializedValue(
         responseState_.activeResponse(),
-        "Set-Cookie",
-        plan.size(),
-        detail::kResponseHeaderSetCookie);
+        plan.wirePrefix(),
+        plan.name(),
+        plan.size());
     plan.write(detail::responseHeaderValueBegin(header));
 }
 

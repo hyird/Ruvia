@@ -66,6 +66,42 @@ void validateConnectionControlField(
     }
 }
 
+[[nodiscard]] bool setCookieValueHasWireName(
+    std::string_view value,
+    std::string_view wirePrefix,
+    std::string_view cookieName) noexcept {
+    while (!value.empty() && (value.front() == ' ' || value.front() == '\t')) {
+        value.remove_prefix(1);
+    }
+    if (!value.starts_with(wirePrefix)) {
+        return false;
+    }
+    value.remove_prefix(wirePrefix.size());
+    if (!value.starts_with(cookieName)) {
+        return false;
+    }
+    value.remove_prefix(cookieName.size());
+    while (!value.empty() && (value.front() == ' ' || value.front() == '\t')) {
+        value.remove_prefix(1);
+    }
+    return !value.empty() && value.front() == '=';
+}
+
+[[nodiscard]] std::string_view setCookieWireName(std::string_view value) noexcept {
+    while (!value.empty() && (value.front() == ' ' || value.front() == '\t')) {
+        value.remove_prefix(1);
+    }
+    const auto equals = value.find('=');
+    if (equals == std::string_view::npos) {
+        return {};
+    }
+    auto name = value.substr(0, equals);
+    while (!name.empty() && (name.back() == ' ' || name.back() == '\t')) {
+        name.remove_suffix(1);
+    }
+    return isValidHttpHeaderName(name) ? name : std::string_view{};
+}
+
 void writeContentRangeHeaderValue(
     HttpResponseHeader& header,
     std::uint64_t offset,
@@ -271,6 +307,89 @@ HttpResponseHeader& HttpResponse::appendHeaderUninitializedValue(
     detail::setResponseHeaderAppend(header, true);
     recordKnownHeaderIndex(knownBit, index);
     return header;
+}
+
+HttpResponseHeader& HttpResponse::upsertSetCookieHeaderUninitializedValue(
+    std::string_view wirePrefix,
+    std::string_view cookieName,
+    std::size_t valueSize) {
+    auto* retained = findSetCookieHeader(wirePrefix, cookieName);
+    if (retained == nullptr) {
+        return appendHeaderUninitializedValue(
+            "Set-Cookie", valueSize, detail::kResponseHeaderSetCookie);
+    }
+
+    headers_.assignUninitializedValue(
+        *retained, "Set-Cookie", valueSize, detail::kResponseHeaderSetCookie);
+    detail::setResponseHeaderAppend(*retained, true);
+    eraseLaterSetCookieHeaders(*retained, wirePrefix, cookieName);
+    return *retained;
+}
+
+void HttpResponse::upsertSetCookieHeaderValidated(std::string_view value) {
+    const auto cookieName = setCookieWireName(value);
+    if (cookieName.empty()) {
+        appendHeaderValidated(
+            "Set-Cookie", value, detail::kResponseHeaderSetCookie);
+        return;
+    }
+
+    auto* retained = findSetCookieHeader({}, cookieName);
+    if (retained == nullptr) {
+        appendHeaderValidated(
+            "Set-Cookie", value, detail::kResponseHeaderSetCookie);
+        return;
+    }
+
+    headers_.assign(
+        *retained, "Set-Cookie", value, detail::kResponseHeaderSetCookie);
+    detail::setResponseHeaderAppend(*retained, true);
+    eraseLaterSetCookieHeaders(*retained, {}, cookieName);
+}
+
+HttpResponseHeader* HttpResponse::findSetCookieHeader(
+    std::string_view wirePrefix,
+    std::string_view cookieName) noexcept {
+    for (auto& header : headers_) {
+        if (detail::responseHeaderKnownBit(header) == detail::kResponseHeaderSetCookie &&
+            setCookieValueHasWireName(header.value(), wirePrefix, cookieName)) {
+            return &header;
+        }
+    }
+    return nullptr;
+}
+
+void HttpResponse::eraseLaterSetCookieHeaders(
+    HttpResponseHeader& retained,
+    std::string_view wirePrefix,
+    std::string_view cookieName) noexcept {
+    // A response might already contain duplicates introduced through the raw
+    // header API. Once an authoritative cookie path owns this name, collapse
+    // every later occurrence so the final response has one value.
+    auto* const begin = headers_.begin();
+    auto* const end = headers_.end();
+    auto* write = &retained + 1;
+    for (auto* read = &retained + 1; read != end; ++read) {
+        if (detail::responseHeaderKnownBit(*read) == detail::kResponseHeaderSetCookie &&
+            setCookieValueHasWireName(read->value(), wirePrefix, cookieName)) {
+            headers_.releaseHeader(*read);
+            continue;
+        }
+        if (write != read) {
+            *write = *read;
+        }
+        ++write;
+    }
+    if (write != end) {
+        if (headers_.spilled_) {
+            headers_.heap_.erase(
+                headers_.heap_.begin() + static_cast<std::ptrdiff_t>(write - begin),
+                headers_.heap_.end());
+        } else {
+            headers_.size_ = static_cast<std::size_t>(write - begin);
+        }
+    }
+    rebuildKnownHeaderIndex();
 }
 
 bool HttpResponse::removeHeaderValidated(std::string_view key, std::uint32_t knownBit) noexcept {

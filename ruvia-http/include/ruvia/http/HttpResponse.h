@@ -198,6 +198,18 @@ private:
         std::string_view key,
         std::size_t valueSize,
         std::uint32_t knownBit);
+    HttpResponseHeader& upsertSetCookieHeaderUninitializedValue(
+        std::string_view wirePrefix,
+        std::string_view cookieName,
+        std::size_t valueSize);
+    void upsertSetCookieHeaderValidated(std::string_view value);
+    [[nodiscard]] HttpResponseHeader* findSetCookieHeader(
+        std::string_view wirePrefix,
+        std::string_view cookieName) noexcept;
+    void eraseLaterSetCookieHeaders(
+        HttpResponseHeader& retained,
+        std::string_view wirePrefix,
+        std::string_view cookieName) noexcept;
     bool removeHeaderValidated(std::string_view key, std::uint32_t knownBit) noexcept;
     void rebuildKnownHeaderIndex() noexcept;
     void reserveHeaders(std::size_t count);
