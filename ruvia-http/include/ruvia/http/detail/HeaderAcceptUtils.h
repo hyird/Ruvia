@@ -51,11 +51,43 @@ enum class HttpContentCoding : std::uint8_t {
     return -1;
 }
 
+[[nodiscard]] inline bool httpAcceptParametersHaveStrictEquals(
+    std::string_view value) noexcept {
+    auto start = httpFindUnquotedDelimiter(value, 0, ';');
+    if (start >= value.size()) {
+        return true;
+    }
+    ++start;
+    while (start <= value.size()) {
+        const auto end = httpFindUnquotedDelimiter(value, start, ';');
+        const auto part = httpTrimOws(value.substr(start, end - start));
+        const auto equals = part.find('=');
+        if (part.empty() || equals == std::string_view::npos) {
+            return false;
+        }
+        const auto rawName = part.substr(0, equals);
+        const auto rawValue = part.substr(equals + 1);
+        if (rawName.empty() || rawValue.empty() ||
+            rawName != httpTrimOws(rawName) ||
+            rawValue != httpTrimOws(rawValue)) {
+            return false;
+        }
+        if (end >= value.size()) {
+            return true;
+        }
+        start = end + 1;
+    }
+    return true;
+}
+
 [[nodiscard]] inline int httpQualityParameter(std::string_view value) noexcept {
     // Reuse the shared quote-aware parameter scanner so a ';' inside a quoted media-range
     // parameter (RFC 7231 section 5.3.1: token "=" (token / quoted-string)) is not mistaken for a
     // parameter separator ; the same helper multipart Content-Type parsing uses. The leading
     // media-type / coding token has no '=', so it is skipped exactly as before; first q wins.
+    if (!httpAcceptParametersHaveStrictEquals(value)) {
+        return 0;
+    }
     int quality = 1000;
     httpVisitSemicolonParametersQuoted(
         value, [&quality](std::string_view name, std::string_view parameter) noexcept {
@@ -356,6 +388,9 @@ template <typename Visitor>
     std::string_view value,
     bool skipQualityParameter,
     Visitor&& visitor) noexcept {
+    if (!httpAcceptParametersHaveStrictEquals(value)) {
+        return false;
+    }
     auto start = httpFindUnquotedDelimiter(value, 0, ';');
     if (start >= value.size()) {
         return true;

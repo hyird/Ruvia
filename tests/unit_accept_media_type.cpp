@@ -63,6 +63,10 @@ RUVIA_TEST(quality_parameter_extracts_q_from_header_item) {
     // A ';' inside a quoted parameter value is not a parameter separator, so a
     // fake q smuggled inside quotes is ignored and the real trailing q is used.
     RUVIA_CHECK_EQ(httpQualityParameter(R"(a;note="x;q=1";q=0.4)"), 400);
+
+    // Parameter grammar never permits whitespace around '='.
+    RUVIA_CHECK_EQ(httpQualityParameter("text/html;q =1"), 0);
+    RUVIA_CHECK_EQ(httpQualityParameter("text/html;q= 1"), 0);
 }
 
 RUVIA_TEST(media_range_matches_type_subtype_and_wildcards) {
@@ -104,6 +108,18 @@ RUVIA_TEST(media_range_rejects_invalid_tokens) {
 
     RUVIA_CHECK(!httpMediaRangeMatches("text/*", "text/"));
     RUVIA_CHECK(!httpAcceptsMediaType("*/json, */*;q=0", "application/json"));
+}
+
+RUVIA_TEST(media_range_rejects_whitespace_around_parameter_equals) {
+    RUVIA_CHECK(!httpAcceptsMediaType("text/html;q =1", "text/html"));
+    RUVIA_CHECK(!httpAcceptsMediaType(
+        "text/html;level =1", "text/html;level=1"));
+    RUVIA_CHECK(!httpAcceptsMediaType(
+        "text/html;charset=utf-8", "text/html;charset =utf-8"));
+
+    // OWS around the semicolon delimiter remains legal.
+    RUVIA_CHECK(httpAcceptsMediaType(
+        "text/html \t; \tq=0.5", "text/html"));
 }
 
 RUVIA_TEST(accepts_media_type_basic) {
