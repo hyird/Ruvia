@@ -94,12 +94,12 @@ struct Http1ClientResponseParseResultAccess final {
     }
 
     [[nodiscard]] static Http1ClientResponseParseResult parsed(
-        HttpClientResponse response,
+        HttpClientResponseHead head,
         Http1ClientResponsePlan plan,
         std::size_t consumedBytes) noexcept {
         return Http1ClientResponseParseResult(
             Http1ParsedClientResponseHead(
-                std::move(response), std::move(plan), consumedBytes));
+                std::move(head), std::move(plan), consumedBytes));
     }
 };
 
@@ -585,12 +585,12 @@ Http1ClientResponseParseResult Http1ClientResponseParser::parse(
     }
     auto plan = std::get<Http1ClientResponsePlan>(std::move(planning));
 
-    // No owning response is observable until the entire head and its framing
+    // No owning response head is observable until the entire head and framing
     // plan have validated. Protocol failure therefore has no partially mutated
     // out-parameter and performs no PMR allocation.
-    auto response = detail::HttpClientResponseAccess::make(
+    auto head = detail::HttpClientResponseHeadAccess::make(
         parsed.statusCode, parsed.protocolVersion, resource_);
-    auto& headers = detail::HttpClientResponseAccess::headers(response);
+    auto& headers = detail::HttpClientResponseHeadAccess::headers(head);
     if (parsed.headerCount != 0) {
         headers.reserve(parsed.headerCount);
     }
@@ -601,7 +601,7 @@ Http1ClientResponseParseResult Http1ClientResponseParser::parse(
     }
 
     auto result = detail::Http1ClientResponseParseResultAccess::parsed(
-        std::move(response), std::move(plan), headerBytes);
+        std::move(head), std::move(plan), headerBytes);
     if (parsed.statusCode == 100) {
         requestContentPhase_ = receiveContinue(requestContentPhase_);
     }

@@ -289,13 +289,13 @@ public:
     Http1ParsedClientResponseHead(Http1ParsedClientResponseHead&&) noexcept = default;
     Http1ParsedClientResponseHead& operator=(Http1ParsedClientResponseHead&&) = delete;
 
-    [[nodiscard]] const HttpClientResponse& response() const & noexcept {
-        return response_;
+    [[nodiscard]] const HttpClientResponseHead& head() const & noexcept {
+        return head_;
     }
-    [[nodiscard]] const HttpClientResponse& response() const && = delete;
+    [[nodiscard]] const HttpClientResponseHead& head() const && = delete;
 
-    [[nodiscard]] HttpClientResponse takeResponse() && noexcept {
-        return std::move(response_);
+    [[nodiscard]] HttpClientResponseHead takeHead() && noexcept {
+        return std::move(head_);
     }
 
     [[nodiscard]] const Http1ClientResponsePlan& plan() const & noexcept {
@@ -311,14 +311,14 @@ private:
     friend struct detail::Http1ClientResponseParseResultAccess;
 
     Http1ParsedClientResponseHead(
-        HttpClientResponse response,
+        HttpClientResponseHead head,
         Http1ClientResponsePlan plan,
         std::size_t consumedBytes) noexcept
-        : response_(std::move(response)),
+        : head_(std::move(head)),
           plan_(std::move(plan)),
           consumedBytes_(consumedBytes) {}
 
-    HttpClientResponse response_;
+    HttpClientResponseHead head_;
     Http1ClientResponsePlan plan_;
     std::size_t consumedBytes_{0};
 };

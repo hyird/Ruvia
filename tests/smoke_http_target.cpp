@@ -53,7 +53,7 @@ int main() {
     return origin.host().empty() || origin.port() != 443 ||
             origin.scheme() != ruvia::HttpScheme::kHttps ||
             responseHead == nullptr ||
-            responseHead->response().status() != 204 ||
+            responseHead->head().status() != 204 ||
             responseHead->plan().withoutContent() == nullptr
         ? 3
         : 0;

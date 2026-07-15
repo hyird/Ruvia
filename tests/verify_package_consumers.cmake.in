@@ -1079,7 +1079,13 @@ if(NOT _installed_http1_client_response_parser_content MATCHES
    NOT _installed_http1_client_response_parser_content MATCHES
        "kExchangeFailed" OR
    NOT _installed_http1_client_response_parser_content MATCHES
-       "consumedBytes")
+       "consumedBytes" OR
+   NOT _installed_http1_client_response_parser_content MATCHES
+       "const HttpClientResponseHead& head[(][)] const [&] noexcept" OR
+   NOT _installed_http1_client_response_parser_content MATCHES
+       "HttpClientResponseHead takeHead[(][)] && noexcept" OR
+   _installed_http1_client_response_parser_content MATCHES
+       "response[(][)] const [&]|takeResponse[(][)]")
     message(FATAL_ERROR "installed HTTP/1 client response parser lost its discriminated public contract")
 endif()
 if(NOT _installed_http1_client_response_parser_content MATCHES
@@ -1881,9 +1887,9 @@ if(NOT _installed_http_client MATCHES "enum class HttpScheme" OR
    NOT _installed_http_client MATCHES "std::get_if<HttpClientRequestBytes>" OR
    NOT _installed_http_client MATCHES "borrowedBytes" OR
    NOT _installed_http_client MATCHES "struct HttpClientRequest" OR
-   NOT _installed_http_client MATCHES "class HttpClientResponse final" OR
+   NOT _installed_http_client MATCHES "class HttpClientResponseHead final" OR
    NOT _installed_http_client MATCHES
-       "HttpClientResponse[(][ \t\r\n]*std::uint16_t status" OR
+       "HttpClientResponseHead[(][ \t\r\n]*std::uint16_t status" OR
    _installed_http_client MATCHES "status_[ \t]*[{][ \t]*0[ \t]*[}]" OR
    NOT _installed_http_client_access MATCHES
        "make[(][ \t\r\n]*std::uint16_t status" OR
@@ -1896,10 +1902,11 @@ if(NOT _installed_http_client MATCHES
        "value[(][)] const && = delete" OR
    NOT _installed_http_client MATCHES
        "headers[(][)] const [&] noexcept" OR
-   NOT _installed_http_client MATCHES
-       "body[(][)] const && = delete")
+   _installed_http_client MATCHES
+       "class HttpClientResponse final|body[(][)] const|body_[;]" OR
+   _installed_http_client_access MATCHES "HttpClientResponseAccess")
     message(FATAL_ERROR
-        "installed outbound client response exposes views from temporary owners")
+        "installed outbound client response head restored body ownership or temporary views")
 endif()
 if(_installed_http_client MATCHES "HttpClientRequestContentMode" OR
    _installed_http_client MATCHES "HttpClientRequestContentMode[ \t]+mode_" OR
@@ -4188,7 +4195,7 @@ if(NOT _installed_http_client_redirect MATCHES
    NOT _installed_http_client_redirect MATCHES
        "value[(][)] const && = delete" OR
    NOT _installed_http_client_redirect MATCHES
-       "lookupUniqueHttpClientResponseHeader[\r\n \t]*[(][\r\n \t]*const HttpClientResponse&&")
+       "lookupUniqueHttpClientResponseHeader[\r\n \t]*[(][\r\n \t]*const HttpClientResponseHead&&")
     message(FATAL_ERROR
         "installed redirect helper accepts temporary response owners or exposes temporary target storage")
 endif()

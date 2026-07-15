@@ -11,7 +11,7 @@
 #include <variant>
 
 namespace ruvia {
-class HttpClientResponse;
+class HttpClientResponseHead;
 }
 
 namespace ruvia::detail {
@@ -273,7 +273,8 @@ public:
 
 private:
     friend HttpContentDecodeResult decodeHttpClientResponseContentEncoding(
-        const HttpClientResponse&,
+        const HttpClientResponseHead&,
+        std::string_view,
         std::size_t,
         std::pmr::memory_resource*);
     friend HttpContentDecodeResult decodeHttpContent(

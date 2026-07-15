@@ -838,13 +838,13 @@ concept HasResponseBodySetter = requires(T& response) {
     { response.body(std::string_view{}) } -> std::same_as<void>;
 };
 template <typename T>
-concept HasHttpClientResponseStatusCodeField = requires {
+concept HasHttpClientResponseHeadStatusCodeField = requires {
     requires std::is_member_object_pointer_v<decltype(&T::statusCode)>;
 };
 
 template <typename T>
-concept HasHttpClientResponseStatusGetter = requires(const T& response) {
-    { response.status() } -> std::same_as<std::uint16_t>;
+concept HasHttpClientResponseHeadStatusGetter = requires(const T& head) {
+    { head.status() } -> std::same_as<std::uint16_t>;
 };
 
 template <typename T>
@@ -972,23 +972,23 @@ concept HasDbTransactionInitializerListParams = requires(
 };
 #endif
 template <typename T>
-concept HasHttpClientResponseHeadersField = requires {
+concept HasHttpClientResponseHeadHeadersField = requires {
     requires std::is_member_object_pointer_v<decltype(&T::headers)>;
 };
 
 template <typename T>
-concept HasHttpClientResponseHeadersGetter = requires(const T& response) {
-    { response.headers() } -> std::same_as<std::span<const ruvia::HttpClientResponseHeader>>;
+concept HasHttpClientResponseHeadHeadersGetter = requires(const T& head) {
+    { head.headers() } -> std::same_as<std::span<const ruvia::HttpClientResponseHeader>>;
 };
 
 template <typename T>
-concept HasHttpClientResponseBodyField = requires {
+concept HasHttpClientResponseHeadBodyField = requires {
     requires std::is_member_object_pointer_v<decltype(&T::body)>;
 };
 
 template <typename T>
-concept HasHttpClientResponseBodyGetter = requires(const T& response) {
-    { response.body() } -> std::same_as<std::string_view>;
+concept HasHttpClientResponseHeadBodyGetter = requires(const T& head) {
+    { head.body() } -> std::same_as<std::string_view>;
 };
 
 template <typename T>
@@ -2267,10 +2267,10 @@ static_assert(!HasResponseSetBodyOwnedAlias<ruvia::HttpResponse>);
 static_assert(!HasResponseSetBodyCopyAlias<ruvia::HttpResponse>);
 static_assert(!HasResponseSetBodyViewAlias<ruvia::HttpResponse>);
 static_assert(HasResponseBodySetter<ruvia::HttpResponse>);
-static_assert(!HasHttpClientResponseStatusCodeField<ruvia::HttpClientResponse>);
-static_assert(HasHttpClientResponseStatusGetter<ruvia::HttpClientResponse>);
-static_assert(std::is_move_constructible_v<ruvia::HttpClientResponse>);
-static_assert(!std::is_move_assignable_v<ruvia::HttpClientResponse>);
+static_assert(!HasHttpClientResponseHeadStatusCodeField<ruvia::HttpClientResponseHead>);
+static_assert(HasHttpClientResponseHeadStatusGetter<ruvia::HttpClientResponseHead>);
+static_assert(std::is_move_constructible_v<ruvia::HttpClientResponseHead>);
+static_assert(!std::is_move_assignable_v<ruvia::HttpClientResponseHead>);
 static_assert(HasHttpClientRequestHeaderViews<ruvia::HttpClientRequest>);
 static_assert(HasHttpClientRequestHeaderArray<ruvia::HttpClientRequest>);
 static_assert(!HasHttpClientRequestHeaderVector<ruvia::HttpClientRequest>);
@@ -2304,18 +2304,18 @@ static_assert(!HasHttpOriginRvalueHostFactory<std::pmr::string>);
 static_assert(!HasOutboundClientFacet<ruvia::Context>);
 static_assert(!HasUseHttpClient<ruvia::App>);
 static_assert(!HasRuntimeHttpClientMutation<ruvia::App>);
-static_assert(!HasHttpClientResponseHeadersField<ruvia::HttpClientResponse>);
-static_assert(HasHttpClientResponseHeadersGetter<ruvia::HttpClientResponse>);
-static_assert(!HasHttpClientResponseBodyField<ruvia::HttpClientResponse>);
-static_assert(HasHttpClientResponseBodyGetter<ruvia::HttpClientResponse>);
+static_assert(!HasHttpClientResponseHeadHeadersField<ruvia::HttpClientResponseHead>);
+static_assert(HasHttpClientResponseHeadHeadersGetter<ruvia::HttpClientResponseHead>);
+static_assert(!HasHttpClientResponseHeadBodyField<ruvia::HttpClientResponseHead>);
+static_assert(!HasHttpClientResponseHeadBodyGetter<ruvia::HttpClientResponseHead>);
 #ifdef RUVIA_ENABLE_DATABASE
 static_assert(HasDbHandleDefaultParams<ruvia::DbHandle>);
 static_assert(!HasDbHandleInitializerListParams<ruvia::DbHandle>);
 static_assert(HasDbTransactionDefaultParams<ruvia::DbTransaction>);
 static_assert(!HasDbTransactionInitializerListParams<ruvia::DbTransaction>);
 #endif
-static_assert(!std::is_default_constructible_v<ruvia::HttpClientResponse>);
-static_assert(!std::is_constructible_v<ruvia::HttpClientResponse, std::pmr::memory_resource*>);
+static_assert(!std::is_default_constructible_v<ruvia::HttpClientResponseHead>);
+static_assert(!std::is_constructible_v<ruvia::HttpClientResponseHead, std::pmr::memory_resource*>);
 static_assert(!std::is_default_constructible_v<ruvia::HttpClientResponseHeader>);
 static_assert(!std::is_constructible_v<
     ruvia::HttpClientResponseHeader,
@@ -2329,9 +2329,9 @@ static_assert(HasHttpClientResponseHeaderValueGetter<ruvia::HttpClientResponseHe
 static_assert(!ExposesAnyRvalueHttpClientOwnedView<
     ruvia::HttpClientResponseHeader>);
 static_assert(!ExposesAnyRvalueHttpClientOwnedView<
-    ruvia::HttpClientResponse>);
+    ruvia::HttpClientResponseHead>);
 static_assert(!HasCompleteType<ruvia::detail::HttpClientResponseHeaderAccess>);
-static_assert(!HasCompleteType<ruvia::detail::HttpClientResponseAccess>);
+static_assert(!HasCompleteType<ruvia::detail::HttpClientResponseHeadAccess>);
 static_assert(!HasCompleteType<ruvia::detail::Http1RequestParseResultAccess>);
 static_assert(!HasCompleteType<ruvia::detail::Http1ClientRequestPrepareResultAccess>);
 static_assert(!HasCompleteType<ruvia::detail::Http1ClientResponseParseResultAccess>);
@@ -2702,10 +2702,10 @@ static_assert(!ExposesAnyRvalueHttpClientOwnedView<
 static_assert(!ExposesAnyRvalueHttpClientOwnedView<
     ruvia::Http1ClientCloseDelimitedResponse>);
 static_assert(!AcceptsTemporaryHttpClientResponseHeaderLookup<
-    ruvia::HttpClientResponse>);
+    ruvia::HttpClientResponseHead>);
 static_assert(std::same_as<
     decltype(ruvia::lookupUniqueHttpClientResponseHeader(
-        std::declval<const ruvia::HttpClientResponse&>(),
+        std::declval<const ruvia::HttpClientResponseHead&>(),
         std::string_view{})),
     ruvia::HttpClientResponseHeaderLookupResult>);
 static_assert(!std::is_default_constructible_v<

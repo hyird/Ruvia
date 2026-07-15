@@ -997,6 +997,8 @@ static_assert(!ExposesAnyRvalueHttpProtocolPlanBorrow<
 template <typename T>
 concept ExposesAnyRvalueHttpOperationPayloadBorrow =
     requires(T&& value) { std::move(value).request(); } ||
+    requires(T&& value) { std::move(value).head(); } ||
+    requires(const T&& value) { std::move(value).head(); } ||
     requires(T&& value) { std::move(value).response(); } ||
     requires(const T&& value) { std::move(value).response(); } ||
     requires(T&& value) { std::move(value).bodyPlan(); } ||
@@ -1815,6 +1817,11 @@ concept ExposesAnyRvalueHttpClientOwnedView =
     requires(T&& value) { std::move(value).body(); };
 
 template <typename T>
+concept HasHttpClientResponseBody = requires(const T& head) {
+    { head.body() } -> std::same_as<std::string_view>;
+};
+
+template <typename T>
 concept AcceptsTemporaryHttpClientResponseHeaderLookup =
     requires(T&& response) {
         ruvia::lookupUniqueHttpClientResponseHeader(
@@ -2560,24 +2567,25 @@ static_assert(!HasAnyRvalueMultipartPartHeaderAccessor<
     ruvia::detail::HttpMultipartPartHeaderParseResult>);
 static_assert(std::same_as<
     decltype(ruvia::lookupUniqueHttpClientResponseHeader(
-        std::declval<const ruvia::HttpClientResponse&>(),
+        std::declval<const ruvia::HttpClientResponseHead&>(),
         std::string_view{})),
     ruvia::HttpClientResponseHeaderLookupResult>);
 static_assert(!std::default_initializable<
     ruvia::HttpClientResponseHeaderLookupResult>);
-static_assert(std::move_constructible<ruvia::HttpClientResponse>);
+static_assert(std::move_constructible<ruvia::HttpClientResponseHead>);
 static_assert(!std::assignable_from<
-    ruvia::HttpClientResponse&, ruvia::HttpClientResponse&&>);
+    ruvia::HttpClientResponseHead&, ruvia::HttpClientResponseHead&&>);
 static_assert(!ExposesAnyRvalueHttpClientOwnedView<
     ruvia::HttpClientResponseHeader>);
 static_assert(!ExposesAnyRvalueHttpClientOwnedView<
-    ruvia::HttpClientResponse>);
+    ruvia::HttpClientResponseHead>);
+static_assert(!HasHttpClientResponseBody<ruvia::HttpClientResponseHead>);
 static_assert(!ExposesAnyRvalueHttpClientOwnedView<
     ruvia::Http1ClientChunkedResponse>);
 static_assert(!ExposesAnyRvalueHttpClientOwnedView<
     ruvia::Http1ClientCloseDelimitedResponse>);
 static_assert(!AcceptsTemporaryHttpClientResponseHeaderLookup<
-    ruvia::HttpClientResponse>);
+    ruvia::HttpClientResponseHead>);
 static_assert(std::move_constructible<ruvia::Http1ParsedClientResponseHead>);
 static_assert(!std::assignable_from<
     ruvia::Http1ParsedClientResponseHead&,
@@ -2691,7 +2699,7 @@ static_assert(std::same_as<
     ruvia::detail::HttpContentCodingFieldResult>);
 static_assert(std::same_as<
     decltype(ruvia::detail::httpClientResponseContentCoding(
-        std::declval<const ruvia::HttpClientResponse&>())),
+        std::declval<const ruvia::HttpClientResponseHead&>())),
     ruvia::detail::HttpContentCodingFieldResult>);
 static_assert(!HasContentLengthPresent<
     ruvia::detail::HttpContentLengthState>);
@@ -2748,7 +2756,8 @@ static_assert(std::same_as<
     ruvia::detail::HttpContentDecodeResult>);
 static_assert(std::same_as<
     decltype(ruvia::detail::decodeHttpClientResponseContentEncoding(
-        std::declval<const ruvia::HttpClientResponse&>(),
+        std::declval<const ruvia::HttpClientResponseHead&>(),
+        std::string_view{},
         std::size_t{},
         std::declval<std::pmr::memory_resource*>())),
     ruvia::detail::HttpContentDecodeResult>);

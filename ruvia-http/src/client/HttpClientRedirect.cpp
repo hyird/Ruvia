@@ -93,11 +93,11 @@ bool isHttpClientRedirectStatus(std::uint16_t status) noexcept {
 }
 
 HttpClientResponseHeaderLookupResult lookupUniqueHttpClientResponseHeader(
-    const HttpClientResponse& response,
+    const HttpClientResponseHead& head,
     std::string_view name) noexcept {
     std::string_view found;
     bool seen = false;
-    for (const auto& header : response.headers()) {
+    for (const auto& header : head.headers()) {
         if (!detail::httpAsciiEqualsIgnoreCase(header.name(), name)) {
             continue;
         }

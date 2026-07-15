@@ -19,7 +19,7 @@
 
 namespace {
 
-using ruvia::HttpClientResponse;
+using ruvia::HttpClientResponseHead;
 using ruvia::Http1ClientRequestClosePolicy;
 using ruvia::Http1ClientRequestContentCompletionStatus;
 using ruvia::Http1ClientRequestContentSignal;
@@ -51,7 +51,7 @@ concept HasAnyRvalueHttp1ClientResponsePlanAccessor =
 
 template <typename T>
 concept HasAnyRvalueHttp1ParsedClientResponseBorrow =
-    requires(T&& parsed) { std::move(parsed).response(); } ||
+    requires(T&& parsed) { std::move(parsed).head(); } ||
     requires(T&& parsed) { std::move(parsed).plan(); };
 
 static_assert(!HasAnyRvalueHttp1ClientResponseParseAccessor<
@@ -62,13 +62,13 @@ static_assert(!HasAnyRvalueHttp1ParsedClientResponseBorrow<
     Http1ParsedClientResponseHead>);
 
 template <typename Access>
-concept CanMutateHttpClientResponseStatus = requires(
-    HttpClientResponse& response) {
-    Access::setStatus(response, std::uint16_t{200});
+concept CanMutateHttpClientResponseHeadStatus = requires(
+    HttpClientResponseHead& head) {
+    Access::setStatus(head, std::uint16_t{200});
 };
 
-static_assert(!CanMutateHttpClientResponseStatus<
-    ruvia::detail::HttpClientResponseAccess>);
+static_assert(!CanMutateHttpClientResponseHeadStatus<
+    ruvia::detail::HttpClientResponseHeadAccess>);
 
 Http1ClientResponseParseResult parseWire(
     std::string_view method,
@@ -129,14 +129,14 @@ Http1ParsedClientResponseHead parseHead(
 }
 
 struct ParsedResponse final {
-    HttpClientResponse response;
+    HttpClientResponseHead head;
 };
 
 ParsedResponse parseResponse(
     std::string_view method,
     std::string_view headerSection) {
     auto head = parseHead(method, headerSection);
-    return ParsedResponse{std::move(head).takeResponse()};
+    return ParsedResponse{std::move(head).takeHead()};
 }
 
 bool parseFails(
@@ -280,10 +280,16 @@ concept ExposesAnyRvalueHttpClientOwnedView =
     requires(T&& value) { std::move(value).headers(); } ||
     requires(T&& value) { std::move(value).body(); };
 
+template <typename T>
+concept HasHttpClientResponseBody = requires(const T& head) {
+    { head.body() } -> std::same_as<std::string_view>;
+};
+
 static_assert(!ExposesAnyRvalueHttpClientOwnedView<
     ruvia::HttpClientResponseHeader>);
 static_assert(!ExposesAnyRvalueHttpClientOwnedView<
-    ruvia::HttpClientResponse>);
+    ruvia::HttpClientResponseHead>);
+static_assert(!HasHttpClientResponseBody<ruvia::HttpClientResponseHead>);
 static_assert(!ExposesAnyRvalueHttpClientOwnedView<
     ruvia::Http1ClientChunkedResponse>);
 static_assert(!ExposesAnyRvalueHttpClientOwnedView<
@@ -336,13 +342,13 @@ static_assert(std::same_as<
 
 }  // namespace
 
-RUVIA_TEST(http_client_response_commits_status_and_version_at_construction) {
-    auto response = ruvia::detail::HttpClientResponseAccess::make(
+RUVIA_TEST(http_client_response_head_commits_status_and_version_at_construction) {
+    auto head = ruvia::detail::HttpClientResponseHeadAccess::make(
         207,
         HttpProtocolVersion::kHttp10,
         std::pmr::get_default_resource());
-    RUVIA_CHECK_EQ(response.status(), std::uint16_t{207});
-    RUVIA_CHECK(response.protocolVersion() == HttpProtocolVersion::kHttp10);
+    RUVIA_CHECK_EQ(head.status(), std::uint16_t{207});
+    RUVIA_CHECK(head.protocolVersion() == HttpProtocolVersion::kHttp10);
 }
 
 RUVIA_TEST(http_client_origin_target_validation) {
@@ -859,7 +865,7 @@ RUVIA_TEST(http_client_switching_protocols_is_an_exclusive_upgrade_transition) {
         "Connection: Upgrade\r\nUpgrade: WebSocket",
         Http1ClientRequestClosePolicy::kAllowReuse,
         requestHeaders);
-    RUVIA_CHECK(upgraded.response().status() == std::uint16_t{101});
+    RUVIA_CHECK(upgraded.head().status() == std::uint16_t{101});
     RUVIA_CHECK(upgraded.plan().protocolUpgrade() != nullptr);
     RUVIA_CHECK(upgraded.plan().connectTunnel() == nullptr);
 
@@ -888,7 +894,7 @@ RUVIA_TEST(http_client_connection_fields_use_recipient_list_semantics) {
         requireKnownLength(reusable.plan()).persistence() ==
         Http1ClientResponsePersistence::kReuse);
     RUVIA_CHECK(
-        reusable.response().protocolVersion() ==
+        reusable.head().protocolVersion() ==
         HttpProtocolVersion::kHttp10);
 
     RUVIA_CHECK(
@@ -925,10 +931,10 @@ RUVIA_TEST(http_client_response_preserves_typed_protocol_version) {
         "GET", "HTTP/1.1 204 No Content");
 
     RUVIA_CHECK(
-        http10.response().protocolVersion() ==
+        http10.head().protocolVersion() ==
         HttpProtocolVersion::kHttp10);
     RUVIA_CHECK(
-        http11.response().protocolVersion() ==
+        http11.head().protocolVersion() ==
         HttpProtocolVersion::kHttp11);
 }
 
@@ -1086,8 +1092,8 @@ RUVIA_TEST(http_client_content_encoding_has_one_authoritative_path) {
 
     for (const auto& test : cases) {
         auto parsed = parseResponse("GET", test.headers);
-        RUVIA_CHECK_EQ(parsed.response.status(), std::uint16_t{200});
-        const auto coding = httpClientResponseContentCoding(parsed.response);
+        RUVIA_CHECK_EQ(parsed.head.status(), std::uint16_t{200});
+        const auto coding = httpClientResponseContentCoding(parsed.head);
         RUVIA_CHECK((coding.coding() != nullptr) == test.expected.has_value());
         RUVIA_CHECK((coding.unsupported() != nullptr) == !test.expected.has_value());
         if (coding.coding() != nullptr && test.expected.has_value()) {
@@ -1101,13 +1107,12 @@ RUVIA_TEST(http_client_content_decode_reports_unsupported_wire_coding) {
         "GET",
         "HTTP/1.1 200 OK\r\nContent-Encoding: deflate\r\n"
         "Content-Length: 7");
-    auto& body = ruvia::detail::HttpClientResponseAccess::body(
-        parsed.response);
-    body = "encoded";
+    const std::string_view encodedContent = "encoded";
 
     const auto decoded =
         ruvia::detail::decodeHttpClientResponseContentEncoding(
-            parsed.response,
+            parsed.head,
+            encodedContent,
             1024,
             std::pmr::get_default_resource());
     RUVIA_CHECK(decoded.decoded() == nullptr);
@@ -1117,7 +1122,6 @@ RUVIA_TEST(http_client_content_decode_reports_unsupported_wire_coding) {
             decoded.failure()->error() ==
             ruvia::detail::HttpContentDecodeError::kUnsupportedCoding);
     }
-    RUVIA_CHECK_EQ(parsed.response.body(), std::string_view("encoded"));
 }
 
 RUVIA_TEST(http_client_content_decode_consumes_concatenated_gzip_members) {
@@ -1144,24 +1148,22 @@ RUVIA_TEST(http_client_content_decode_consumes_concatenated_gzip_members) {
         "GET",
         "HTTP/1.1 200 OK\r\nContent-Encoding: gzip\r\n"
         "Content-Length: 1");
-    auto& body = ruvia::detail::HttpClientResponseAccess::body(
-        parsed.response);
-    body = std::move(first);
-    body.append(second);
-    const std::string encodedBody(body);
+    std::string encodedContent(first);
+    encodedContent.append(second);
     auto decoded = ruvia::detail::decodeHttpClientResponseContentEncoding(
-        parsed.response,
+        parsed.head,
+        encodedContent,
         1024,
         std::pmr::get_default_resource());
     RUVIA_CHECK(decoded.decoded() != nullptr);
     if (const auto* content = decoded.decoded()) {
         RUVIA_CHECK_EQ(content->bytes(), std::string_view("first-second"));
     }
-    // Decoding is a separate representation. The parsed wire response remains
-    // internally coherent instead of retaining gzip metadata over decoded bytes.
-    RUVIA_CHECK_EQ(parsed.response.body(), std::string_view(encodedBody));
+    // Decoding is a separate representation; the sans-I/O driver's encoded
+    // content remains independent from the immutable parsed response head.
+    RUVIA_CHECK(!encodedContent.empty());
     const auto coding =
-        ruvia::detail::httpClientResponseContentCoding(parsed.response);
+        ruvia::detail::httpClientResponseContentCoding(parsed.head);
     RUVIA_CHECK(coding.coding() != nullptr);
     if (coding.coding() != nullptr) {
         RUVIA_CHECK(
@@ -1174,12 +1176,11 @@ RUVIA_TEST(http_client_content_decode_failure_preserves_encoded_body) {
         "GET",
         "HTTP/1.1 200 OK\r\nContent-Encoding: gzip\r\n"
         "Content-Length: 1");
-    auto& body = ruvia::detail::HttpClientResponseAccess::body(
-        parsed.response);
-    body = "not-gzip";
+    const std::string_view encodedContent = "not-gzip";
     const auto decoded =
         ruvia::detail::decodeHttpClientResponseContentEncoding(
-            parsed.response,
+            parsed.head,
+            encodedContent,
             1024,
             std::pmr::get_default_resource());
     RUVIA_CHECK(decoded.decoded() == nullptr);
@@ -1187,7 +1188,6 @@ RUVIA_TEST(http_client_content_decode_failure_preserves_encoded_body) {
     RUVIA_CHECK(
         decoded.failure()->error() ==
         ruvia::detail::HttpContentDecodeError::kInvalidContent);
-    RUVIA_CHECK_EQ(parsed.response.body(), std::string_view("not-gzip"));
 }
 
 RUVIA_TEST(http_client_rejects_malformed_status_and_length_fields) {
@@ -1236,14 +1236,14 @@ RUVIA_TEST(http_client_response_parser_owns_exact_head_boundary) {
         return;
     }
     RUVIA_CHECK_EQ(parsed->consumedBytes(), expectedConsumed);
-    RUVIA_CHECK_EQ(parsed->response().status(), std::uint16_t{200});
+    RUVIA_CHECK_EQ(parsed->head().status(), std::uint16_t{200});
     RUVIA_CHECK(
-        parsed->response().protocolVersion() ==
+        parsed->head().protocolVersion() ==
         HttpProtocolVersion::kHttp11);
-    RUVIA_CHECK_EQ(parsed->response().headers().size(), std::size_t{2});
+    RUVIA_CHECK_EQ(parsed->head().headers().size(), std::size_t{2});
 
     wire.assign(wire.size(), 'x');
-    const auto headers = parsed->response().headers();
+    const auto headers = parsed->head().headers();
     RUVIA_CHECK(headers[0].name() == "X-Owner");
     RUVIA_CHECK(headers[0].value() == "response");
     RUVIA_CHECK(headers[1].value() == "4");

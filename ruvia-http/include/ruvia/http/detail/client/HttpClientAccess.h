@@ -30,21 +30,17 @@ struct HttpClientResponseHeaderAccess final {
     }
 };
 
-struct HttpClientResponseAccess final {
-    [[nodiscard]] static HttpClientResponse make(
+struct HttpClientResponseHeadAccess final {
+    [[nodiscard]] static HttpClientResponseHead make(
         std::uint16_t status,
         HttpProtocolVersion protocolVersion,
         std::pmr::memory_resource* resource) {
-        return HttpClientResponse(status, protocolVersion, resource);
+        return HttpClientResponseHead(status, protocolVersion, resource);
     }
 
     [[nodiscard]] static std::pmr::vector<HttpClientResponseHeader>& headers(
-        HttpClientResponse& response) noexcept {
-        return response.headers_;
-    }
-
-    [[nodiscard]] static std::pmr::string& body(HttpClientResponse& response) noexcept {
-        return response.body_;
+        HttpClientResponseHead& head) noexcept {
+        return head.headers_;
     }
 };
 

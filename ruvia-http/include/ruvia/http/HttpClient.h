@@ -3,9 +3,10 @@
 // Outbound HTTP client protocol models.
 //
 // OWNERSHIP: these are transport-free HTTP values. HttpOrigin and
-// HttpClientRequest borrow their string storage; HttpClientResponse owns parsed
-// header/body storage through PMR. Socket/TLS configuration, pools, redirect
-// limits, timeouts, and streaming drivers belong to the external I/O owner.
+// HttpClientRequest borrow their string storage; HttpClientResponseHead owns
+// parsed header storage through PMR. Response content remains owned by the
+// external sans-I/O driver that follows the framing plan. Socket/TLS
+// configuration, pools, redirect limits, and timeouts also belong there.
 
 #include <array>
 #include <cstddef>
@@ -25,7 +26,7 @@
 
 namespace ruvia::detail {
 struct HttpClientResponseHeaderAccess;
-struct HttpClientResponseAccess;
+struct HttpClientResponseHeadAccess;
 }  // namespace ruvia::detail
 
 namespace ruvia {
@@ -276,12 +277,12 @@ struct HttpClientRequest {
     HttpClientRequestContent content{HttpClientRequestContent::none()};
 };
 
-class HttpClientResponse final {
+class HttpClientResponseHead final {
 public:
-    HttpClientResponse(const HttpClientResponse&) = delete;
-    HttpClientResponse& operator=(const HttpClientResponse&) = delete;
-    HttpClientResponse(HttpClientResponse&&) noexcept = default;
-    HttpClientResponse& operator=(HttpClientResponse&&) = delete;
+    HttpClientResponseHead(const HttpClientResponseHead&) = delete;
+    HttpClientResponseHead& operator=(const HttpClientResponseHead&) = delete;
+    HttpClientResponseHead(HttpClientResponseHead&&) noexcept = default;
+    HttpClientResponseHead& operator=(HttpClientResponseHead&&) = delete;
 
     [[nodiscard]] std::uint16_t status() const noexcept {
         return status_;
@@ -298,38 +299,31 @@ public:
     [[nodiscard]] std::span<const HttpClientResponseHeader>
     headers() const && = delete;
 
-    [[nodiscard]] std::string_view body() const & noexcept {
-        return std::string_view(body_.data(), body_.size());
-    }
-    [[nodiscard]] std::string_view body() const && = delete;
-
 private:
-    friend struct detail::HttpClientResponseAccess;
+    friend struct detail::HttpClientResponseHeadAccess;
 
-    HttpClientResponse(
+    HttpClientResponseHead(
         std::uint16_t status,
         HttpProtocolVersion protocolVersion,
         std::pmr::memory_resource* resource)
-        : HttpClientResponse(
+        : HttpClientResponseHead(
               detail::HttpResolvedPmrResourceTag{},
               status,
               protocolVersion,
               detail::httpPmrResourceOrDefault(resource)) {}
 
-    HttpClientResponse(
+    HttpClientResponseHead(
         detail::HttpResolvedPmrResourceTag,
         std::uint16_t status,
         HttpProtocolVersion protocolVersion,
         std::pmr::memory_resource* resource)
         : status_(status),
           protocolVersion_(protocolVersion),
-          headers_(resource),
-          body_(resource) {}
+          headers_(resource) {}
 
     std::uint16_t status_;
     HttpProtocolVersion protocolVersion_;
     std::pmr::vector<HttpClientResponseHeader> headers_;
-    std::pmr::string body_;
 };
 
 }  // namespace ruvia

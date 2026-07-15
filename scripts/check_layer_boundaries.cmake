@@ -1953,7 +1953,7 @@ if(EXISTS "${HTTP_PROTOCOL_VERSION_HEADER}" AND
        NOT http_protocol_http2_builder MATCHES "HttpProtocolVersion::kHttp2" OR
        NOT http_protocol_client_model MATCHES "HttpProtocolVersion protocolVersion[(][)] const noexcept" OR
        NOT http_protocol_client_model MATCHES
-           "HttpClientResponse[(][ \t\r\n]*std::uint16_t status" OR
+           "HttpClientResponseHead[(][ \t\r\n]*std::uint16_t status" OR
        http_protocol_client_model MATCHES "status_[ \t]*[{][ \t]*0[ \t]*[}]" OR
        NOT http_protocol_client_access MATCHES
            "make[(][ \t\r\n]*std::uint16_t status" OR
@@ -1972,7 +1972,7 @@ if(EXISTS "${HTTP_PROTOCOL_VERSION_HEADER}" AND
        NOT http_protocol_client_parser MATCHES
            "std::get_if<Http1ClientResponseParseError>[(]&parsedHead[)]" OR
        http_protocol_client_parser MATCHES
-           "HttpClientResponseAccess::setStatus" OR
+           "HttpClientResponseHeadAccess::setStatus" OR
        NOT http_protocol_client_parser MATCHES "parsed[.]protocolVersion" OR
        NOT http_protocol_cmake MATCHES "include/ruvia/http/HttpProtocolVersion[.]h")
         boundary_error("HTTP protocol version split back into wire strings or parallel transport state"
@@ -2130,12 +2130,13 @@ if(NOT http_client_public_model MATCHES "enum class HttpScheme" OR
        "std::get_if<HttpClientRequestWithoutContent>" OR
    NOT http_client_public_model MATCHES "std::get_if<HttpClientRequestBytes>" OR
    NOT http_client_public_model MATCHES "borrowedBytes" OR
-   NOT http_client_public_model MATCHES "class HttpClientResponse final" OR
+   NOT http_client_public_model MATCHES "class HttpClientResponseHead final" OR
    NOT http_client_public_model MATCHES "struct HttpClientRequest" OR
    NOT http_client_public_model MATCHES "std::string_view target" OR
-   http_client_public_model MATCHES "std::string_view[ \t]+body[ \t]*[{]")
+   http_client_public_model MATCHES
+       "class HttpClientResponse final|body[(][)] const|body_[;]")
     boundary_error("outbound HTTP public model lost its transport-free typed contract"
-        "HttpClient.h must distinguish absent/explicit content and own typed scheme/origin, request-target, and response models")
+        "HttpClient.h must distinguish absent/explicit request content and keep response head ownership separate from externally driven response content")
 endif()
 if(NOT EXISTS "${RUVIA_ROOT}/ruvia-http/src/client/HttpOrigin.cpp")
     boundary_error("outbound origin factory implementation is missing"
@@ -2387,7 +2388,7 @@ file(READ "${RUVIA_ROOT}/tests/package-consumer/http.cpp"
 file(READ "${RUVIA_ROOT}/tests/package-consumer/web.cpp"
     pmr_web_package_contract)
 if(NOT pmr_http_client_api MATCHES
-       "operator=[(]HttpClientResponse&&[)][ \t]*=[ \t]*delete" OR
+       "operator=[(]HttpClientResponseHead&&[)][ \t]*=[ \t]*delete" OR
    NOT pmr_http_redirect_api MATCHES
        "operator=[(]HttpClientRedirectTarget&&[)][ \t]*=[ \t]*delete" OR
    NOT pmr_http_redirect_api MATCHES
@@ -2447,7 +2448,7 @@ if(NOT pmr_http_client_api MATCHES
    pmr_redis_types_api MATCHES
        "operator=[(]RedisValue&&[)][ \t]*noexcept" OR
    NOT pmr_http_package_contract MATCHES
-       "HttpClientResponse&, ruvia::HttpClientResponse&&" OR
+       "HttpClientResponseHead&, ruvia::HttpClientResponseHead&&" OR
    NOT pmr_web_package_contract MATCHES
        "!std::is_nothrow_move_assignable_v<ruvia::DbField>" OR
    NOT pmr_web_package_contract MATCHES
@@ -3652,6 +3653,8 @@ check_files_no_match("HTTP/1 client response plans must use exclusive alternativ
     "${RUVIA_ROOT}/tests/smoke_http_target.cpp")
 check_files_no_match("HTTP/1 client response parsing must use the public discriminated API"
     "${RULE_STALE_HTTP1_CLIENT_RESPONSE_PARSER_API}"
+    "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/HttpClient.h"
+    "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/detail/client/HttpClientAccess.h"
     "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/Http1ClientResponseParser.h"
     "${RUVIA_ROOT}/ruvia-http/src/client/HttpClientResponseParser.cpp"
     "${RUVIA_ROOT}/tests/unit_http_client_response.cpp"
@@ -8324,6 +8327,12 @@ elseif(EXISTS "${HTTP1_CLIENT_RESPONSE_PARSER}")
        NOT http1_client_response_parser_header MATCHES "std::variant" OR
        NOT http1_client_response_parser_header MATCHES "consumedBytes" OR
        NOT http1_client_response_parser_header MATCHES
+           "const HttpClientResponseHead& head[(][)] const [&] noexcept" OR
+       NOT http1_client_response_parser_header MATCHES
+           "HttpClientResponseHead takeHead[(][)] && noexcept" OR
+       http1_client_response_parser_header MATCHES
+           "response[(][)] const [&]|takeResponse[(][)]" OR
+       NOT http1_client_response_parser_header MATCHES
            "needMore[(][)] const &&[ \\t]*=[ \\t]*delete" OR
        NOT http1_client_response_parser_header MATCHES
            "parsed[(][)] &&[ \\t]*=[ \\t]*delete" OR
@@ -8458,8 +8467,8 @@ if(NOT public_http_client_value_api MATCHES
        "value[(][)] const &&[ \\t]*=[ \\t]*delete" OR
    NOT public_http_client_value_api MATCHES
        "headers[(][)] const [&] noexcept" OR
-   NOT public_http_client_value_api MATCHES
-       "body[(][)] const &&[ \\t]*=[ \\t]*delete" OR
+   public_http_client_value_api MATCHES
+       "class HttpClientResponse final|body[(][)] const|body_[;]" OR
    NOT public_http_client_redirect_value_api MATCHES
        "absent[(][)] const &&[ \\t]*=[ \\t]*delete" OR
    NOT public_http_client_redirect_value_api MATCHES
@@ -8473,7 +8482,7 @@ if(NOT public_http_client_value_api MATCHES
    NOT public_http_client_redirect_value_api MATCHES
        "value[(][)] const [&] noexcept" OR
    NOT public_http_client_redirect_value_api MATCHES
-       "lookupUniqueHttpClientResponseHeader[\r\n \t]*[(][\r\n \t]*const HttpClientResponse&&" OR
+       "lookupUniqueHttpClientResponseHeader[\r\n \t]*[(][\r\n \t]*const HttpClientResponseHead&&" OR
    NOT public_http1_client_request_value_api MATCHES
        "noExpectation[(][)] const &&[ \\t]*=[ \\t]*delete" OR
    NOT public_http1_client_request_value_api MATCHES
@@ -8519,6 +8528,8 @@ if(NOT public_http_client_value_api MATCHES
    NOT public_http_value_package_contract MATCHES
        "ExposesAnyRvalueHttpClientOwnedView" OR
    NOT public_http_value_package_contract MATCHES
+       "HasHttpClientResponseBody<ruvia::HttpClientResponseHead>" OR
+   NOT public_http_value_package_contract MATCHES
        "AcceptsTemporaryHttpClientResponseHeaderLookup" OR
    NOT public_http_value_package_contract MATCHES
        "std::optional<std::size_t>" OR
@@ -8543,6 +8554,8 @@ if(NOT public_http_client_value_api MATCHES
 endif()
 if(NOT public_http_client_response_owned_view_test MATCHES
        "ExposesAnyRvalueHttpClientOwnedView" OR
+   NOT public_http_client_response_owned_view_test MATCHES
+       "HasHttpClientResponseBody<ruvia::HttpClientResponseHead>" OR
    NOT public_http_client_redirect_owned_view_test MATCHES
        "ExposesRvalueHttpClientRedirectTargetView" OR
    NOT public_http_client_redirect_owned_view_test MATCHES
@@ -10647,7 +10660,9 @@ if(EXISTS "${HTTP_OPERATION_PAYLOAD_REQUEST}" AND
        NOT http_operation_payload_request MATCHES
            "bodyPlan[(][)] const && = delete" OR
        NOT http_operation_payload_client_response MATCHES
-           "response[(][)] const [&] noexcept" OR
+           "head[(][)] const [&] noexcept" OR
+       NOT http_operation_payload_client_response MATCHES
+           "head[(][)] const && = delete" OR
        NOT http_operation_payload_client_response MATCHES
            "plan[(][)] const && = delete" OR
        NOT http_operation_payload_client_request MATCHES
@@ -10675,7 +10690,7 @@ if(EXISTS "${HTTP_OPERATION_PAYLOAD_REQUEST}" AND
        NOT http_operation_payload_consumer MATCHES
            "ExposesAnyRvalueHttpOperationPayloadBorrow")
         boundary_error("HTTP operation payloads lend owned state from temporary values"
-            "parsed and prepared payloads must expose owned request, response, and negotiation objects only from live lvalues")
+            "parsed and prepared payloads must expose owned request, response head, and negotiation objects only from live lvalues")
     endif()
 endif()
 

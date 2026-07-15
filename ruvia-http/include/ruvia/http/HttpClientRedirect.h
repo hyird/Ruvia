@@ -33,7 +33,7 @@ private:
 
 class HttpClientResponseHeaderFound final {
 public:
-    // Borrowed from the owning HttpClientResponse passed to the lookup.
+    // Borrowed from the owning HttpClientResponseHead passed to the lookup.
     [[nodiscard]] constexpr std::string_view value() const noexcept {
         return value_;
     }
@@ -80,7 +80,7 @@ public:
 private:
     friend HttpClientResponseHeaderLookupResult
     lookupUniqueHttpClientResponseHeader(
-        const HttpClientResponse&,
+        const HttpClientResponseHead&,
         std::string_view) noexcept;
 
     using Value = std::variant<
@@ -116,11 +116,11 @@ private:
 
 [[nodiscard]] HttpClientResponseHeaderLookupResult
 lookupUniqueHttpClientResponseHeader(
-    const HttpClientResponse& response,
+    const HttpClientResponseHead& head,
     std::string_view name) noexcept;
 [[nodiscard]] HttpClientResponseHeaderLookupResult
 lookupUniqueHttpClientResponseHeader(
-    const HttpClientResponse&& response,
+    const HttpClientResponseHead&& head,
     std::string_view name) = delete;
 
 enum class HttpClientRedirectContentDisposition : std::uint8_t {

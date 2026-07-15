@@ -53,7 +53,7 @@ static_assert(!HasAnyRvalueHttpClientRedirectTargetAccessor<
 static_assert(!ExposesRvalueHttpClientRedirectTargetView<
     ruvia::HttpClientRedirectTarget>);
 static_assert(!AcceptsTemporaryHttpClientResponseHeaderLookup<
-    ruvia::HttpClientResponse>);
+    ruvia::HttpClientResponseHead>);
 
 template <typename T>
 concept HasHeaderValue = requires(const T& value) {
@@ -220,24 +220,24 @@ RUVIA_TEST(http_client_redirect_request_plan_follows_rfc) {
 }
 
 RUVIA_TEST(http_client_response_header_lookup_distinguishes_empty_and_repeated) {
-    auto response = ruvia::detail::HttpClientResponseAccess::make(
+    auto head = ruvia::detail::HttpClientResponseHeadAccess::make(
         302,
         ruvia::HttpProtocolVersion::kHttp11,
         std::pmr::get_default_resource());
-    auto& headers = ruvia::detail::HttpClientResponseAccess::headers(response);
+    auto& headers = ruvia::detail::HttpClientResponseHeadAccess::headers(head);
     headers.emplace_back(ruvia::detail::HttpClientResponseHeaderAccess::make(
         "Location",
         "",
         std::pmr::get_default_resource()));
 
-    const auto empty = lookupUniqueHttpClientResponseHeader(response, "location");
+    const auto empty = lookupUniqueHttpClientResponseHeader(head, "location");
     RUVIA_CHECK(empty.absent() == nullptr);
     RUVIA_CHECK(empty.found() != nullptr);
     RUVIA_CHECK(empty.repeated() == nullptr);
     if (const auto* found = empty.found()) {
         RUVIA_CHECK(found->value().empty());
     }
-    const auto missing = lookupUniqueHttpClientResponseHeader(response, "missing");
+    const auto missing = lookupUniqueHttpClientResponseHeader(head, "missing");
     RUVIA_CHECK(missing.absent() != nullptr);
     RUVIA_CHECK(missing.found() == nullptr);
     RUVIA_CHECK(missing.repeated() == nullptr);
@@ -246,7 +246,7 @@ RUVIA_TEST(http_client_response_header_lookup_distinguishes_empty_and_repeated) 
         "LOCATION",
         "/second",
         std::pmr::get_default_resource()));
-    const auto repeated = lookupUniqueHttpClientResponseHeader(response, "Location");
+    const auto repeated = lookupUniqueHttpClientResponseHeader(head, "Location");
     RUVIA_CHECK(repeated.absent() == nullptr);
     RUVIA_CHECK(repeated.found() == nullptr);
     RUVIA_CHECK(repeated.repeated() != nullptr);
