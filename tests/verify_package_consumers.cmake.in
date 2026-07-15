@@ -4224,6 +4224,8 @@ if(NOT _installed_multipart_parser MATCHES "class MultipartBoundary final" OR
    NOT _installed_multipart_parser MATCHES "class MultipartPollResult final" OR
    NOT _installed_multipart_parser MATCHES "class MultipartBody final" OR
    NOT _installed_multipart_parser MATCHES "class MultipartBodyParseFailure final" OR
+   NOT _installed_multipart_parser MATCHES
+       "HttpProtocolError protocolError[(][)] const noexcept" OR
    NOT _installed_multipart_parser MATCHES "class MultipartBodyParseResult final" OR
    NOT _installed_multipart_parser MATCHES "MultipartBodyParseResult parseMultipartBody" OR
    NOT _installed_multipart_parser MATCHES "using Value = std::variant" OR
@@ -4231,7 +4233,9 @@ if(NOT _installed_multipart_parser MATCHES "class MultipartBoundary final" OR
        "using State = std::variant<ProgressState, MultipartParseError>" OR
    NOT _installed_multipart_parser MATCHES "std::get_if<MultipartStreamPart>" OR
    NOT _installed_multipart_parser MATCHES "std::get_if<MultipartPollFailure>" OR
-   NOT _installed_multipart_parser MATCHES "multipartParseErrorMessage" OR
+   _installed_multipart_parser MATCHES "multipartParseErrorMessage" OR
+   _installed_multipart_parser MATCHES
+       "MultipartParseError error[(][)] const noexcept" OR
    NOT _installed_multipart_parser MATCHES "void finishInput[(][)] noexcept" OR
    _installed_multipart_parser MATCHES
        "enum class[ \t]+State[ \t\r\n]*[{]" OR

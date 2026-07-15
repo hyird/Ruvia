@@ -35,6 +35,11 @@ concept HasMultipartError = requires(const T& result) {
 };
 
 template <typename T>
+concept HasMultipartProtocolError = requires(const T& result) {
+    { result.protocolError() } -> std::same_as<ruvia::HttpProtocolError>;
+};
+
+template <typename T>
 concept HasAnyRvalueMultipartPollAccessor =
     requires(T&& result) { std::move(result).needInput(); } ||
     requires(T&& result) { std::move(result).part(); } ||
@@ -73,7 +78,8 @@ static_assert(std::same_as<
 static_assert(!HasMultipartError<ruvia::MultipartPollNeedInput>);
 static_assert(!HasMultipartError<ruvia::MultipartStreamPart>);
 static_assert(!HasMultipartError<ruvia::MultipartPollDone>);
-static_assert(HasMultipartError<ruvia::MultipartPollFailure>);
+static_assert(!HasMultipartError<ruvia::MultipartPollFailure>);
+static_assert(HasMultipartProtocolError<ruvia::MultipartPollFailure>);
 static_assert(std::same_as<
     decltype(ruvia::parseMultipartBody(
         std::string_view{},
@@ -87,6 +93,8 @@ static_assert(std::same_as<
 static_assert(std::same_as<
     decltype(std::declval<const ruvia::MultipartBodyParseResult&>().failure()),
     const ruvia::MultipartBodyParseFailure*>);
+static_assert(!HasMultipartError<ruvia::MultipartBodyParseFailure>);
+static_assert(HasMultipartProtocolError<ruvia::MultipartBodyParseFailure>);
 
 static_assert(!std::default_initializable<
     ruvia::detail::HttpMultipartDelimiterResult>);
@@ -324,11 +332,10 @@ RUVIA_TEST(multipart_parser_reports_typed_incomplete_body) {
     RUVIA_CHECK(result.part() == nullptr);
     RUVIA_CHECK(result.done() == nullptr);
     if (result.failure() != nullptr) {
-        RUVIA_CHECK(
-            result.failure()->error() ==
-            ruvia::MultipartParseError::kIncompleteBody);
+        const auto error = result.failure()->protocolError();
+        RUVIA_CHECK_EQ(error.status(), 400);
         RUVIA_CHECK_EQ(
-            ruvia::multipartParseErrorMessage(result.failure()->error()),
+            std::string_view(error.what()),
             std::string_view("incomplete multipart body"));
     }
 }
@@ -491,8 +498,10 @@ RUVIA_TEST(multipart_complete_body_parser_rejects_malformed_body) {
         std::pmr::get_default_resource());
     RUVIA_CHECK(parsed.body() == nullptr);
     RUVIA_CHECK(parsed.failure() != nullptr);
-    RUVIA_CHECK(parsed.failure()->error() ==
-        ruvia::MultipartParseError::kIncompleteBody);
+    RUVIA_CHECK_EQ(parsed.failure()->protocolError().status(), 400);
+    RUVIA_CHECK_EQ(
+        std::string_view(parsed.failure()->protocolError().what()),
+        std::string_view("incomplete multipart body"));
 }
 
 RUVIA_TEST(multipart_complete_body_parser_shares_incremental_limits) {
@@ -502,8 +511,10 @@ RUVIA_TEST(multipart_complete_body_parser_shares_incremental_limits) {
         ruvia::MultipartBoundary("BOUNDARY"),
         std::pmr::get_default_resource());
     RUVIA_CHECK(complete.failure() != nullptr);
-    RUVIA_CHECK(complete.failure()->error() ==
-        ruvia::MultipartParseError::kPreambleTooLarge);
+    RUVIA_CHECK_EQ(complete.failure()->protocolError().status(), 413);
+    RUVIA_CHECK_EQ(
+        std::string_view(complete.failure()->protocolError().what()),
+        std::string_view("multipart preamble exceeds limit"));
 
     ruvia::MultipartParser incremental(
         ruvia::MultipartBoundary("BOUNDARY"),
@@ -511,10 +522,15 @@ RUVIA_TEST(multipart_complete_body_parser_shares_incremental_limits) {
     incremental.feed(oversizedPreamble);
     const auto streamed = incremental.poll();
     RUVIA_CHECK(streamed.failure() != nullptr);
-    RUVIA_CHECK(streamed.failure()->error() == complete.failure()->error());
+    RUVIA_CHECK_EQ(streamed.failure()->protocolError().status(), 413);
+    RUVIA_CHECK_EQ(
+        std::string_view(streamed.failure()->protocolError().what()),
+        std::string_view(complete.failure()->protocolError().what()));
     const auto repeated = incremental.poll();
     RUVIA_CHECK(repeated.failure() != nullptr);
-    RUVIA_CHECK(repeated.failure()->error() == complete.failure()->error());
+    RUVIA_CHECK_EQ(
+        std::string_view(repeated.failure()->protocolError().what()),
+        std::string_view(complete.failure()->protocolError().what()));
     bool feedAfterFailureThrew = false;
     try {
         incremental.feed("--BOUNDARY--");

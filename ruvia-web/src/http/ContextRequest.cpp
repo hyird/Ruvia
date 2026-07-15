@@ -331,8 +331,7 @@ void compactParsedBodyFields(
     std::pmr::memory_resource* resource) {
     auto parsed = parseMultipartBody(requestBody, std::move(boundary), resource);
     if (const auto* failure = parsed.failure()) {
-        throw HttpProtocolError(
-            400, multipartParseErrorMessage(failure->error()));
+        throw failure->protocolError();
     }
     auto* body = parsed.body();
     if (body == nullptr) {

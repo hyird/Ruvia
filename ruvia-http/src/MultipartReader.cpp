@@ -13,7 +13,10 @@
 
 namespace ruvia {
 
-std::string_view multipartParseErrorMessage(MultipartParseError error) noexcept {
+namespace {
+
+[[nodiscard]] std::string_view multipartParseErrorMessage(
+    MultipartParseError error) noexcept {
     switch (error) {
         case MultipartParseError::kIncompleteBody:
             return "incomplete multipart body";
@@ -31,6 +34,34 @@ std::string_view multipartParseErrorMessage(MultipartParseError error) noexcept 
             return "multipart delimiter line exceeds limit";
     }
     return "invalid multipart body";
+}
+
+[[nodiscard]] HttpProtocolError multipartProtocolError(
+    MultipartParseError error) noexcept {
+    switch (error) {
+        case MultipartParseError::kPreambleTooLarge:
+        case MultipartParseError::kPartHeadersTooLarge:
+        case MultipartParseError::kDelimiterLineTooLarge:
+            return HttpProtocolError(
+                413, multipartParseErrorMessage(error));
+        case MultipartParseError::kIncompleteBody:
+        case MultipartParseError::kInvalidDelimiter:
+        case MultipartParseError::kInvalidContentDisposition:
+        case MultipartParseError::kMissingFieldName:
+            return HttpProtocolError(
+                400, multipartParseErrorMessage(error));
+    }
+    return HttpProtocolError(400, "invalid multipart body");
+}
+
+}  // namespace
+
+HttpProtocolError MultipartPollFailure::protocolError() const noexcept {
+    return multipartProtocolError(error_);
+}
+
+HttpProtocolError MultipartBodyParseFailure::protocolError() const noexcept {
+    return multipartProtocolError(error_);
 }
 
 MultipartParser::MultipartParser(MultipartBoundary boundary, std::pmr::memory_resource* resource)
@@ -79,7 +110,7 @@ MultipartBodyParseResult parseMultipartBody(
             return MultipartBodyParseResult(std::move(parts));
         }
         if (const auto* failure = result.failure()) {
-            return MultipartBodyParseResult(failure->error());
+            return MultipartBodyParseResult(*failure);
         }
         return MultipartBodyParseResult(MultipartParseError::kIncompleteBody);
     }

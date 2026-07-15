@@ -573,6 +573,11 @@ concept HasMultipartParseError = requires(const T& result) {
 };
 
 template <typename T>
+concept HasMultipartProtocolError = requires(const T& result) {
+    { result.protocolError() } -> std::same_as<ruvia::HttpProtocolError>;
+};
+
+template <typename T>
 concept HasHttpClientHeaderValue = requires(const T& result) {
     { result.value() } -> std::same_as<std::string_view>;
 };
@@ -2543,7 +2548,8 @@ static_assert(std::same_as<
 static_assert(!HasMultipartParseError<ruvia::MultipartPollNeedInput>);
 static_assert(!HasMultipartParseError<ruvia::MultipartStreamPart>);
 static_assert(!HasMultipartParseError<ruvia::MultipartPollDone>);
-static_assert(HasMultipartParseError<ruvia::MultipartPollFailure>);
+static_assert(!HasMultipartParseError<ruvia::MultipartPollFailure>);
+static_assert(HasMultipartProtocolError<ruvia::MultipartPollFailure>);
 static_assert(std::same_as<
     decltype(ruvia::parseMultipartBody(
         std::string_view{}, ruvia::MultipartBoundary("x"))),
@@ -2555,6 +2561,8 @@ static_assert(std::same_as<
 static_assert(std::same_as<
     decltype(std::declval<const ruvia::MultipartBodyParseResult&>().failure()),
     const ruvia::MultipartBodyParseFailure*>);
+static_assert(!HasMultipartParseError<ruvia::MultipartBodyParseFailure>);
+static_assert(HasMultipartProtocolError<ruvia::MultipartBodyParseFailure>);
 static_assert(!std::default_initializable<
     ruvia::detail::HttpMultipartDelimiterResult>);
 static_assert(!HasMultipartStatus<
@@ -3115,10 +3123,10 @@ int main() {
     const auto repeatedMultipartFailure = failedMultipartParser.poll();
     if (multipartFailure.failure() == nullptr ||
         repeatedMultipartFailure.failure() == nullptr ||
-        multipartFailure.failure()->error() !=
-            ruvia::MultipartParseError::kPreambleTooLarge ||
-        repeatedMultipartFailure.failure()->error() !=
-            multipartFailure.failure()->error()) {
+        multipartFailure.failure()->protocolError().status() != 413 ||
+        std::string_view(
+            repeatedMultipartFailure.failure()->protocolError().what()) !=
+            multipartFailure.failure()->protocolError().what()) {
         return 72;
     }
     try {

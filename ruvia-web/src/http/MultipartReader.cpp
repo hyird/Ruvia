@@ -1,8 +1,6 @@
 #include "ruvia/web/MultipartReader.h"
 
 #include "ruvia/core/Task.h"
-#include "ruvia/http/HttpProtocolError.h"
-
 #include <stdexcept>
 #include <utility>
 
@@ -33,8 +31,7 @@ Task<std::optional<MultipartStreamPart>> MultipartReader::read() {
             continue;
         }
         if (const auto* failure = result.failure()) {
-            throw HttpProtocolError(
-                400, multipartParseErrorMessage(failure->error()));
+            throw failure->protocolError();
         }
         throw std::logic_error("unexpected multipart poll result");
     }

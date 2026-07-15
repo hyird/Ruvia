@@ -11,6 +11,8 @@
 #include <variant>
 #include <vector>
 
+#include "ruvia/http/HttpProtocolError.h"
+
 namespace ruvia {
 
 namespace detail {
@@ -181,17 +183,13 @@ enum class MultipartParseError : std::uint8_t {
     kDelimiterLineTooLarge,
 };
 
-[[nodiscard]] std::string_view multipartParseErrorMessage(
-    MultipartParseError error) noexcept;
-
 class MultipartPollFailure final {
 public:
-    [[nodiscard]] constexpr MultipartParseError error() const noexcept {
-        return error_;
-    }
+    [[nodiscard]] HttpProtocolError protocolError() const noexcept;
 
 private:
     friend class MultipartPollResult;
+    friend class MultipartBodyParseResult;
 
     explicit constexpr MultipartPollFailure(MultipartParseError error) noexcept
         : error_(error) {}
@@ -297,9 +295,7 @@ private:
 
 class MultipartBodyParseFailure final {
 public:
-    [[nodiscard]] constexpr MultipartParseError error() const noexcept {
-        return error_;
-    }
+    [[nodiscard]] HttpProtocolError protocolError() const noexcept;
 
 private:
     friend class MultipartBodyParseResult;
@@ -347,6 +343,10 @@ private:
     explicit MultipartBodyParseResult(
         MultipartParseError error) noexcept
         : value_(MultipartBodyParseFailure(error)) {}
+
+    explicit MultipartBodyParseResult(
+        const MultipartPollFailure& failure) noexcept
+        : value_(MultipartBodyParseFailure(failure.error_)) {}
 
     Value value_;
 };

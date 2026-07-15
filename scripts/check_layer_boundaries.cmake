@@ -2308,7 +2308,11 @@ if(NOT multipart_public_api MATCHES "class MultipartBoundary final" OR
        "done[(][)] const &&[ \\t]*=[ \\t]*delete" OR
    NOT multipart_public_api MATCHES
        "failure[(][)] const &&[ \\t]*=[ \\t]*delete" OR
-   NOT multipart_public_api MATCHES "multipartParseErrorMessage" OR
+   NOT multipart_public_api MATCHES
+       "HttpProtocolError protocolError[(][)] const noexcept" OR
+   multipart_public_api MATCHES "multipartParseErrorMessage" OR
+   multipart_public_api MATCHES
+       "MultipartParseError error[(][)] const noexcept" OR
    NOT multipart_public_api MATCHES "MultipartParser[(]MultipartBoundary boundary" OR
    NOT multipart_public_api MATCHES "void feed[(]std::string_view chunk[)]" OR
    NOT multipart_public_api MATCHES "void finishInput[(][)] noexcept" OR
@@ -2574,8 +2578,8 @@ if(NOT multipart_web_driver MATCHES "parser_[.]finishInput[(][)]" OR
    NOT multipart_web_driver MATCHES "result[.]done[(][)]" OR
    NOT multipart_web_driver MATCHES "result[.]needInput[(][)]" OR
    NOT multipart_web_driver MATCHES "result[.]failure[(][)]" OR
-   NOT multipart_web_driver MATCHES "failure->error[(][)]" OR
-   NOT multipart_web_driver MATCHES "HttpProtocolError" OR
+   NOT multipart_web_driver MATCHES "failure->protocolError[(][)]" OR
+   multipart_web_driver MATCHES "failure->error[(][)]|HttpProtocolError" OR
    NOT multipart_web_driver MATCHES "while [(]!bodyEnded_ && co_await bodyReader_[.]read[(][)][)]")
     boundary_error("multipart Web facade stopped driving the complete HTTP body lifecycle"
         "the runtime must drive typed results, signal EOF to the protocol parser, and drain RFC 2046 epilogue bytes")
@@ -2583,8 +2587,10 @@ endif()
 if(NOT multipart_buffered_web_driver MATCHES
        "parseCompleteMultipartBody" OR
    NOT multipart_buffered_web_driver MATCHES "parsed[.]failure[(][)]" OR
-   NOT multipart_buffered_web_driver MATCHES "failure->error[(][)]" OR
-   NOT multipart_buffered_web_driver MATCHES "HttpProtocolError" OR
+   NOT multipart_buffered_web_driver MATCHES
+       "failure->protocolError[(][)]" OR
+   multipart_buffered_web_driver MATCHES
+       "multipartParseErrorMessage" OR
    NOT multipart_buffered_web_driver MATCHES "takeParts[(][)]")
     boundary_error("buffered multipart Web facade bypasses the typed parser result"
         "Context request parsing must map one HTTP result and consume its owned part vector")
@@ -2600,11 +2606,19 @@ if(NOT multipart_unit_test MATCHES "multipart_parser_commits_an_eof_close_only_a
    NOT multipart_unit_test MATCHES "ruvia::MultipartBodyParseResult" OR
    NOT multipart_unit_test MATCHES "multipart_complete_body_parser_rejects_malformed_body" OR
    NOT multipart_unit_test MATCHES "multipart_complete_body_parser_shares_incremental_limits" OR
+   NOT multipart_unit_test MATCHES
+       "HasMultipartProtocolError<ruvia::MultipartPollFailure>" OR
+   NOT multipart_unit_test MATCHES
+       "HasMultipartProtocolError<ruvia::MultipartBodyParseFailure>" OR
    NOT multipart_unit_test MATCHES "feedAfterFailureThrew" OR
    NOT multipart_unit_test MATCHES "const auto repeated = incremental[.]poll[(][)]" OR
    NOT multipart_unit_test MATCHES "HasMultipartLineBytes" OR
    NOT multipart_package_consumer MATCHES "ruvia::MultipartPollResult" OR
    NOT multipart_package_consumer MATCHES "ruvia::MultipartBodyParseResult" OR
+   NOT multipart_package_consumer MATCHES
+       "HasMultipartProtocolError<ruvia::MultipartPollFailure>" OR
+   NOT multipart_package_consumer MATCHES
+       "HasMultipartProtocolError<ruvia::MultipartBodyParseFailure>" OR
    NOT multipart_package_consumer MATCHES "repeatedMultipartFailure" OR
    NOT multipart_package_consumer MATCHES "failedMultipartParser[.]feed" OR
    NOT multipart_package_consumer MATCHES "HttpMultipartDelimiterResult" OR
