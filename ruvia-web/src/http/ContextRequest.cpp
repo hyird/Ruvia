@@ -654,13 +654,17 @@ bool Context::requestAccepts(std::string_view mediaType) const noexcept {
     int bestQuality = 0;
     bool sawAccept = false;
     for (const auto& header : request_.headers()) {
-        if (!detail::httpAsciiEqualsIgnoreCase(header.name(), "Accept") || header.value().empty()) {
+        if (!detail::httpAsciiEqualsIgnoreCase(header.name(), "Accept")) {
             continue;
         }
         sawAccept = true;
-        detail::httpAccumulateMediaTypeAcceptance(header.value(), mediaType, bestSpecificity, bestQuality);
+        if (!header.value().empty()) {
+            detail::httpAccumulateMediaTypeAcceptance(
+                header.value(), mediaType, bestSpecificity, bestQuality);
+        }
     }
-    // No (non-empty) Accept header means the client accepts any media type.
+    // Only absence means no preference. A present but empty Accept field is an
+    // empty media-range list and therefore matches no representation.
     if (!sawAccept) {
         return true;
     }

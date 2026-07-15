@@ -219,6 +219,11 @@ RUVIA_TEST(context_request_accepts_merges_multiple_accept_field_lines) {
 
     // No Accept header -> the client accepts anything.
     RUVIA_CHECK(accepts({}, "text/html"));
+    // A present but empty Accept list is distinct from an absent field: it has
+    // no matching media range. Empty members remain harmless when another field
+    // line supplies an actual range.
+    RUVIA_CHECK(!accepts({""}, "text/html"));
+    RUVIA_CHECK(accepts({"", "text/html"}, "text/html"));
     // A single line behaves as before.
     RUVIA_CHECK(accepts({"text/html"}, "text/html"));
     RUVIA_CHECK(!accepts({"text/html"}, "application/json"));
