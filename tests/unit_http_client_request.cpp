@@ -363,6 +363,19 @@ RUVIA_TEST(http1_client_request_writer_owns_hop_by_hop_field_contracts) {
         RUVIA_CHECK(prepareError(request) == test.error);
     }
 
+    for (const std::string_view connectionOptions : {
+             "Host", "close, content-length", "EXPECT, keep-alive"}) {
+        const ruvia::HttpHeaderView connection(
+            "Connection", connectionOptions);
+        HttpClientRequest request;
+        request.method = "POST";
+        request.headers = std::span<const ruvia::HttpHeaderView>(&connection, 1);
+        request.content = HttpClientRequestContent::bytes("payload");
+        RUVIA_CHECK(
+            prepareError(request) ==
+            Http1ClientRequestPrepareError::kInvalidConnection);
+    }
+
     const ruvia::HttpHeaderView validHeaders[] = {
         {"Connection", "keep-alive"},
         {"Connection", "Upgrade, TE"},
