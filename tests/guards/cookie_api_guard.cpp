@@ -123,7 +123,8 @@ void exerciseSignedCookieRoundtrip(ruvia::RequestMemory& memory, const ruvia::Ht
     auto writer = ruvia::detail::ContextAccess::make(memory, request);
     writer.setSignedCookie("sid", "hello", kSecret);
     auto response = writer.text("x");
-    const std::string generated(response.header("Set-Cookie"));
+    const std::string generated(
+        response.header("Set-Cookie").value_or(std::string_view{}));
     const auto generatedView = std::string_view(generated);
     const auto cookiePair = generatedView.substr(0, generatedView.find(';'));
 
@@ -164,8 +165,9 @@ void exerciseDeleteCookieUsesRequestFacadeForPreviousValue(ruvia::RequestMemory&
     context.deleteCookie("legacy");
     auto response = context.text("x");
     const auto value = response.header("Set-Cookie");
-    check(value.starts_with("legacy=;"));
-    check(value.find("Max-Age=0") != std::string_view::npos);
+    check(value.has_value());
+    check(value->starts_with("legacy=;"));
+    check(value->find("Max-Age=0") != std::string_view::npos);
 }
 
 void exerciseByteSpanBody(ruvia::RequestMemory& memory, const ruvia::HttpRequest& request) {
@@ -179,7 +181,7 @@ void exerciseByteSpanBody(ruvia::RequestMemory& memory, const ruvia::HttpRequest
     auto response = context.body(std::span<const std::byte>(bytes));
     check(response.status() == 206);
     check(response.header("X-Bin") == "1");
-    check(response.header("Content-Type").empty());
+    check(!response.header("Content-Type").has_value());
     const auto body = ruvia::detail::responseBody(response).bytes();
     check(body.size() == 3);
     check(body.size() == 3 && body[0] == '\0' && body[1] == 'A' &&

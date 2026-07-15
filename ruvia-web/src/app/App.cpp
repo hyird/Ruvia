@@ -9,6 +9,7 @@
 #include <mutex>
 #include <stdexcept>
 #include <thread>
+#include <type_traits>
 #include <utility>
 #include <vector>
 
@@ -32,16 +33,62 @@ void addShutdownSignals(asio::signal_set& signals) {
 
 [[nodiscard]] detail::HttpServerOptions makeListenerOptions(
     const detail::HttpServerOptions& base,
-    bool tlsEnabled,
-    bool autoHttpsEnabled,
-    std::uint16_t httpsPort,
+    detail::HttpServerOptions::ListenerTransport transport,
     const StaticRoot* documentRoot) {
     auto options = base;
-    options.tls.enabled = tlsEnabled;
-    options.autoHttps.enabled = autoHttpsEnabled;
-    options.autoHttps.httpsPort = httpsPort;
+    options.transport = std::move(transport);
     options.documentRoot.root = documentRoot;
     return options;
+}
+
+template <typename NativeChar>
+void assignTlsFileNameFromNative(
+    std::pmr::string& output,
+    std::basic_string_view<NativeChar> native) {
+    if constexpr (std::is_same_v<NativeChar, char>) {
+        output.assign(native.data(), native.size());
+    } else {
+        const auto name = std::filesystem::path(native.begin(), native.end()).string();
+        output.assign(name.data(), name.size());
+    }
+}
+
+void assignTlsFileName(
+    std::pmr::string& output,
+    const std::filesystem::path& path) {
+    assignTlsFileNameFromNative(output, detail::nativePathView(path));
+}
+
+[[nodiscard]] detail::HttpServerOptions::Tls makeTlsOptions(
+    const TlsConfig& config) {
+    detail::HttpServerOptions::Tls tls;
+    assignTlsFileName(
+        tls.identity.certificateChainFile,
+        config.identity().certificateChainFile());
+    assignTlsFileName(
+        tls.identity.privateKeyFile,
+        config.identity().privateKeyFile());
+    tls.identity.privateKeyPassword = config.identity().privateKeyPassword();
+    if (config.clientCertificatePolicy().has_value()) {
+        auto& policy = tls.clientCertificates.emplace();
+        assignTlsFileName(
+            policy.verifyFile,
+            config.clientCertificatePolicy()->verifyFile());
+        policy.requirement = config.clientCertificatePolicy()->requirement();
+    }
+    tls.sniIdentities.reserve(config.sniIdentities().size());
+    for (const auto& configured : config.sniIdentities()) {
+        auto& sni = tls.sniIdentities.emplace_back();
+        sni.host = configured.host();
+        assignTlsFileName(
+            sni.identity.certificateChainFile,
+            configured.identity().certificateChainFile());
+        assignTlsFileName(
+            sni.identity.privateKeyFile,
+            configured.identity().privateKeyFile());
+        sni.identity.privateKeyPassword = configured.identity().privateKeyPassword();
+    }
+    return tls;
 }
 
 void invokeStopHooks(detail::AppState& state) noexcept {
@@ -164,35 +211,20 @@ void App::run() {
                 state.documentRootConfig->staticOptions);
         }
 
-        if (state.httpsListenPort.has_value() && !state.options.tls.enabled) {
-            throw std::invalid_argument("HTTPS listener requires TLS configuration");
-        }
-        if (!state.httpListenPort.has_value() && !state.httpsListenPort.has_value()) {
-            throw std::invalid_argument("at least one HTTP or HTTPS listener must be configured");
-        }
-        if (state.autoHttps) {
-            if (!state.httpListenPort.has_value() || !state.httpsListenPort.has_value()) {
-                throw std::invalid_argument("auto HTTPS requires both HTTP and HTTPS listeners");
-            }
-        }
-        if (state.httpListenPort.has_value() && state.httpsListenPort.has_value() &&
-            *state.httpListenPort == *state.httpsListenPort) {
-            throw std::invalid_argument("HTTP and HTTPS listen ports must be different");
-        }
-
         const auto address = asio::ip::make_address(state.listenAddress);
-        const auto workerCount =
-            (state.httpListenPort.has_value() ? state.threadNum : 0) +
-            (state.httpsListenPort.has_value() ? state.threadNum : 0);
+        const auto hasTwoListeners =
+            state.topology.kind_ == ServerTopology::Kind::kHttpAndHttps ||
+            state.topology.kind_ == ServerTopology::Kind::kRedirectHttpToHttps;
+        const auto workerCount = state.threadNum * (hasTwoListeners ? 2 : 1);
         runtime->workers.reserve(workerCount);
 
-        const auto addWorkers = [&](std::uint16_t port, bool tlsEnabled, bool autoHttpsEnabled) {
+        const auto addWorkers = [&state, &address, &runtime, &routeTable, runtimeResource](
+                                    std::uint16_t port,
+                                    detail::HttpServerOptions::ListenerTransport transport) {
             const asio::ip::tcp::endpoint endpoint(address, port);
             auto listenerOptions = makeListenerOptions(
                 state.options,
-                tlsEnabled,
-                autoHttpsEnabled,
-                state.httpsListenPort.value_or(443),
+                std::move(transport),
                 runtime->documentRoot.get());
             for (std::size_t i = 0; i < state.threadNum; ++i) {
                 auto workerOptions = i + 1 == state.threadNum
@@ -216,11 +248,34 @@ void App::run() {
             }
         };
 
-        if (state.httpListenPort.has_value()) {
-            addWorkers(*state.httpListenPort, false, state.autoHttps);
-        }
-        if (state.httpsListenPort.has_value()) {
-            addWorkers(*state.httpsListenPort, true, false);
+        switch (state.topology.kind_) {
+            case ServerTopology::Kind::kHttp:
+                addWorkers(
+                    state.topology.httpPort_,
+                    detail::HttpServerOptions::PlainHttp{});
+                break;
+            case ServerTopology::Kind::kHttps:
+                addWorkers(
+                    state.topology.httpsPort_,
+                    makeTlsOptions(*state.topology.tls_));
+                break;
+            case ServerTopology::Kind::kHttpAndHttps:
+                addWorkers(
+                    state.topology.httpPort_,
+                    detail::HttpServerOptions::PlainHttp{});
+                addWorkers(
+                    state.topology.httpsPort_,
+                    makeTlsOptions(*state.topology.tls_));
+                break;
+            case ServerTopology::Kind::kRedirectHttpToHttps:
+                addWorkers(
+                    state.topology.httpPort_,
+                    detail::HttpServerOptions::RedirectHttpToHttps{
+                        state.topology.httpsPort_});
+                addWorkers(
+                    state.topology.httpsPort_,
+                    makeTlsOptions(*state.topology.tls_));
+                break;
         }
 
         state.runtime = std::move(runtime);

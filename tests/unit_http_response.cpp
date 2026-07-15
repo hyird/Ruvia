@@ -42,6 +42,9 @@ concept ExposesAnyRvalueResponseView =
 
 static_assert(!ExposesAnyRvalueResponseView<ruvia::HttpResponse>);
 static_assert(!ExposesAnyRvalueResponseView<ruvia::HttpResponseHeaders>);
+static_assert(std::same_as<
+    decltype(std::declval<const HttpResponse&>().header(std::string_view{})),
+    std::optional<std::string_view>>);
 
 class CountingMemoryResource final : public std::pmr::memory_resource {
 public:
@@ -105,6 +108,16 @@ RUVIA_TEST(response_status_is_version_neutral_code_only) {
     RUVIA_CHECK_EQ(response.status(), std::uint16_t{599});
     response.status(299);
     RUVIA_CHECK_EQ(response.status(), std::uint16_t{299});
+}
+
+RUVIA_TEST(response_header_distinguishes_missing_from_present_empty) {
+    auto response = makeResponse();
+    RUVIA_CHECK(!response.header("X-Empty").has_value());
+
+    response.header("X-Empty", "");
+    const auto presentEmpty = response.header("x-empty");
+    RUVIA_CHECK(presentEmpty.has_value());
+    RUVIA_CHECK(presentEmpty.value_or("missing").empty());
 }
 
 RUVIA_TEST(response_move_assignment_transfers_one_resource_domain) {
@@ -201,7 +214,7 @@ RUVIA_TEST(response_header_replace_append_and_remove) {
 
     // Passing nullopt removes the header entirely.
     response.header("X-Test", std::nullopt);
-    RUVIA_CHECK(response.header("X-Test").empty());
+    RUVIA_CHECK(!response.header("X-Test").has_value());
 }
 
 RUVIA_TEST(response_appended_header_carries_append_flag) {
@@ -242,7 +255,7 @@ RUVIA_TEST(response_header_remove_known_header_rebuilds_index) {
     RUVIA_CHECK_EQ(response.header("Content-Type"), std::string_view("text/plain"));
 
     response.header("Content-Type", std::nullopt);
-    RUVIA_CHECK(response.header("Content-Type").empty());   // gone, not a stale index hit
+    RUVIA_CHECK(!response.header("Content-Type").has_value());  // gone, not a stale index hit
 
     // Re-adding after removal replaces cleanly and leaves exactly one header line --
     // no duplicate resurrected from a stale index entry.

@@ -13,7 +13,7 @@ namespace {
 
 void setCorsMaxAge(
     HttpResponse& response,
-    std::optional<std::chrono::seconds> maxAge) {
+    const std::optional<CorsMaxAge>& maxAge) {
     if (!maxAge.has_value() ||
         responseHasKnownHeader(response, kResponseHeaderAccessControlMaxAge)) {
         return;
@@ -21,7 +21,7 @@ void setCorsMaxAge(
     setResponseHeaderUnsigned(
         response,
         "Access-Control-Max-Age",
-        static_cast<std::uint64_t>(maxAge->count()),
+        static_cast<std::uint64_t>(maxAge->value().count()),
         kResponseHeaderAccessControlMaxAge);
 }
 
@@ -33,12 +33,11 @@ void applyCorsHeaders(const HttpRequest& request, HttpResponse& response, const 
         return;
     }
 
-    // Never reflect the request Origin: credentialed CORS requires an explicit
-    // single origin (enforced at config validation), so a "*" configuration must
-    // stay a literal wildcard without credentials. This keeps the value a stable
-    // startup string and prevents reflecting arbitrary origins.
-    const auto allowOrigin = std::string_view(cors.allowOrigin);
-    const bool wildcardOrigin = allowOrigin == "*";
+    const bool wildcardOrigin =
+        cors.origin.kind() == CorsOriginPolicy::Kind::kAny;
+    const auto allowOrigin = wildcardOrigin
+        ? std::string_view("*")
+        : cors.origin.origin();
     std::array<std::string_view, 3> varyTokens{};
     std::size_t varyTokenCount = 0;
     setStableResponseHeaderIfMissing(
@@ -49,7 +48,7 @@ void applyCorsHeaders(const HttpRequest& request, HttpResponse& response, const 
     if (!wildcardOrigin) {
         varyTokens[varyTokenCount++] = "Origin";
     }
-    if (cors.allowCredentials && !wildcardOrigin &&
+    if (cors.origin.kind() == CorsOriginPolicy::Kind::kCredentialedExact &&
         !responseHasKnownHeader(response, kResponseHeaderAccessControlAllowCredentials)) {
         setResponseHeaderStableView(response, "Access-Control-Allow-Credentials", "true");
     }
@@ -64,14 +63,13 @@ void applyCorsHeaders(const HttpRequest& request, HttpResponse& response, const 
                 "Access-Control-Allow-Methods",
                 allow);
         }
-        const auto configuredHeaders = std::string_view(cors.allowHeaders);
         const auto requestedHeaders = requestKnownHeader(request, RequestKnownHeader::kAccessControlRequestHeaders);
-        if (!configuredHeaders.empty()) {
+        if (cors.requestHeaders.kind() == CorsRequestHeadersPolicy::Kind::kFixed) {
             setStableResponseHeaderIfMissing(
                 response,
                 kResponseHeaderAccessControlAllowHeaders,
                 "Access-Control-Allow-Headers",
-                configuredHeaders);
+                cors.requestHeaders.headers());
         } else if (!requestedHeaders.empty()) {
             setResponseHeaderIfMissing(
                 response,

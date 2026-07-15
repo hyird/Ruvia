@@ -9,6 +9,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
+#include <iterator>
 #include <memory>
 #include <memory_resource>
 #include <stdexcept>
@@ -20,6 +21,12 @@ namespace ruvia {
 namespace {
 
 inline constexpr std::size_t kStaticRootLinearLookupLimit = 8;
+
+inline constexpr std::string_view kDefaultStaticFileTypes[] = {
+    "apng", "avif", "bmp", "css", "cur", "eot", "gif", "htm", "html", "ico",
+    "jpeg", "jpg", "js", "json", "map", "mjs", "otf", "png", "svg", "ttf",
+    "txt", "wasm", "webmanifest", "webp", "woff", "woff2", "xml", "xsl",
+};
 
 [[nodiscard]] bool validHeaderValue(std::string_view value) noexcept {
     for (const auto c : value) {
@@ -38,12 +45,6 @@ void validateOptions(const StaticRootOptions& options) {
         if (mime.extension.empty() || mime.contentType.empty() ||
             !validHeaderValue(mime.contentType)) {
             throw std::invalid_argument("invalid static file mime type");
-        }
-    }
-    for (const auto& fileType : options.fileTypes) {
-        if (fileType.empty() || fileType.find('/') != std::pmr::string::npos ||
-            fileType.find('\\') != std::pmr::string::npos) {
-            throw std::invalid_argument("invalid static file type");
         }
     }
     if (options.indexFile.find('/') != std::pmr::string::npos ||
@@ -85,54 +86,25 @@ void normalizeFileTypes(std::pmr::vector<std::pmr::string>& fileTypes) {
     fileTypes.erase(std::unique(fileTypes.begin(), fileTypes.end()), fileTypes.end());
 }
 
-void applyDefaultFileTypes(std::pmr::vector<std::pmr::string>& fileTypes) {
-    static constexpr std::string_view defaults[] = {
-        "apng",
-        "avif",
-        "bmp",
-        "css",
-        "cur",
-        "eot",
-        "gif",
-        "htm",
-        "html",
-        "ico",
-        "jpeg",
-        "jpg",
-        "js",
-        "json",
-        "map",
-        "mjs",
-        "otf",
-        "png",
-        "svg",
-        "ttf",
-        "txt",
-        "wasm",
-        "webmanifest",
-        "webp",
-        "woff",
-        "woff2",
-        "xml",
-        "xsl",
-    };
-    fileTypes.reserve(fileTypes.size() + sizeof(defaults) / sizeof(defaults[0]));
-    for (const auto fileType : defaults) {
-        fileTypes.emplace_back(fileType);
-    }
-}
-
 bool fileTypeAllowed(
     std::string_view extension,
     const StaticRootOptions& options) {
-    if (options.allowAll) {
+    if (options.fileTypes.kind() == StaticFileTypePolicy::Kind::kAll) {
         return true;
     }
 
     if (extension.empty() || extension == ".") {
         return false;
     }
-    return std::binary_search(options.fileTypes.begin(), options.fileTypes.end(), extension.substr(1));
+    const auto value = extension.substr(1);
+    if (options.fileTypes.kind() == StaticFileTypePolicy::Kind::kDefaults) {
+        return std::binary_search(
+            std::begin(kDefaultStaticFileTypes),
+            std::end(kDefaultStaticFileTypes),
+            value);
+    }
+    const auto extensions = options.fileTypes.extensions();
+    return std::binary_search(extensions.begin(), extensions.end(), value);
 }
 
 [[nodiscard]] const StaticMimeType* findStaticMimeType(
@@ -235,6 +207,35 @@ std::pmr::string contentTypeFor(
 
 }  // namespace
 
+StaticFileTypePolicy StaticFileTypePolicy::defaults() {
+    return StaticFileTypePolicy(Kind::kDefaults);
+}
+
+StaticFileTypePolicy StaticFileTypePolicy::all() {
+    return StaticFileTypePolicy(Kind::kAll);
+}
+
+StaticFileTypePolicy StaticFileTypePolicy::only(
+    std::span<const std::string_view> extensions) {
+    if (extensions.empty()) {
+        throw std::invalid_argument("static file type allow-list must not be empty");
+    }
+    StaticFileTypePolicy result(Kind::kOnly);
+    result.extensions_.reserve(extensions.size());
+    for (const auto extension : extensions) {
+        if (extension.empty() || extension.find('/') != std::string_view::npos ||
+            extension.find('\\') != std::string_view::npos) {
+            throw std::invalid_argument("invalid static file type");
+        }
+        result.extensions_.emplace_back(extension);
+    }
+    normalizeFileTypes(result.extensions_);
+    if (result.extensions_.front().empty()) {
+        throw std::invalid_argument("invalid static file type");
+    }
+    return result;
+}
+
 std::string_view detail::StaticRootAccess::indexFile(const StaticRoot& root) noexcept {
     return root.state_->indexFile;
 }
@@ -276,10 +277,6 @@ bool detail::StaticRootAccess::isIndexedDirectory(
 StaticRoot::StaticRoot(const std::filesystem::path& root, StaticRootOptions options)
     : state_(makeStaticRootState()) {
     normalizeMimeTypes(options.mimeTypes);
-    if (!options.allowAll) {
-        applyDefaultFileTypes(options.fileTypes);
-    }
-    normalizeFileTypes(options.fileTypes);
     validateOptions(options);
 
     std::error_code ec;

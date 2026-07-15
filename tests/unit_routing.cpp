@@ -1054,11 +1054,11 @@ DispatchResult extractDispatchResult(const ruvia::HttpResponse& response) {
     result.status = response.status();
     const auto body = ruvia::detail::responseBody(response).bytes();
     result.body.assign(body.data(), body.size());
-    const auto allow = response.header("Allow");
+    const auto allow = response.header("Allow").value_or(std::string_view{});
     result.allow.assign(allow.data(), allow.size());
-    const auto connection = response.header("Connection");
+    const auto connection = response.header("Connection").value_or(std::string_view{});
     result.connection.assign(connection.data(), connection.size());
-    const auto acceptEncoding = response.header("Accept-Encoding");
+    const auto acceptEncoding = response.header("Accept-Encoding").value_or(std::string_view{});
     result.acceptEncoding.assign(acceptEncoding.data(), acceptEncoding.size());
     return result;
 }
@@ -1313,7 +1313,7 @@ RUVIA_TEST(dispatch_options_asterisk_returns_server_wide_allow) {
     const auto response = future.get();
 
     RUVIA_CHECK_EQ(response.status(), std::uint16_t{204});
-    const auto allow = response.header("Allow");
+    const auto allow = response.header("Allow").value_or(std::string_view{});
     RUVIA_CHECK(allow.find("GET") != std::string_view::npos);
     RUVIA_CHECK(allow.find("POST") != std::string_view::npos);
 }

@@ -21,9 +21,9 @@ protocol library do not require the full Web framework.
   finalized at startup with no per-request rebuilding.
 - **Bounded, application-owned runtime** — explicit workers, bounded mailboxes,
   backpressure at every producer, and deterministic shutdown draining.
-- **TLS out of the box** — server TLS with optional mandatory mutual TLS
-  (`requireClientCertificate`), and connection metadata kept separate from the
-  HTTP request model.
+- **TLS out of the box** — server TLS with optional or required client-certificate
+  policy, SNI identities, and connection metadata kept separate from the HTTP
+  request model.
 - **Optional integrations** — MariaDB, PostgreSQL, Redis, and JWT behind vcpkg
   features; both database drivers share one `DbHandle` API surface.
 - **Verified** — RFC 9113 wire conformance suite against a real h2c server,
@@ -64,7 +64,7 @@ public:
 
 int main() {
     ruvia::app()
-        .setHttpListenPort(8080)
+        .setServerTopology(ruvia::ServerTopology::http(8080))
         .run();
 }
 ```
@@ -83,6 +83,8 @@ Handlers use `ruvia::Task<T>`, read HTTP input through `c.req()`, and build
 responses through `Context`. Set response metadata through `c.status()`,
 `c.header()`, and `c.setCookie()` before selecting one body builder such as
 `c.text()` or `c.json()`; body builders do not accept a second metadata path.
+`ServerTopology` atomically selects HTTP, HTTPS, dual-listener, or redirect
+operation; HTTPS topologies require a validated `TlsIdentity`.
 
 Connection metadata is deliberately separate from the HTTP request model:
 
@@ -386,8 +388,8 @@ protocol state, multipart parsing, SSE formatting, range and
 conditional-request helpers, cookies, content negotiation, redirects, and
 content decoding.
 
-The library is sans-I/O: callers feed bytes, consume typed results/events, and
-drive transport I/O themselves. It contains no App, Context, Router, socket,
+The library is sans-I/O: callers feed bytes, consume typed results/events, and drive
+transport I/O themselves. It contains no App, Context, Router, socket,
 TLS, connection pool, runtime timeout, static-root policy, DB, Redis, or JWT
 integration. Content-Encoding parsing distinguishes identity, one supported
 coding, and an unsupported coding stack; Web request decoding reports the

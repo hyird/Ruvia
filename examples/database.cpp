@@ -214,7 +214,7 @@ int main() {
 
     app
         .setListenAddress("0.0.0.0")
-        .setHttpListenPort(8086)
+        .setServerTopology(ruvia::ServerTopology::http(8086))
         .setThreadNum(2)
         .run();
 }

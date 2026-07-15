@@ -31,35 +31,13 @@ App& App::setListenAddress(std::string_view address) {
         });
 }
 
-App& App::setHttpListenPort(std::uint16_t port) {
+App& App::setServerTopology(ServerTopology topology) {
     return detail::mutateStoppedApp(
         *this,
         *state_,
-        "cannot change HTTP listen port while app is running",
-        [port](detail::AppState& state) {
-            detail::ensureNonZeroPort(port, "HTTP listen port must not be zero");
-            state.httpListenPort = port;
-        });
-}
-
-App& App::setHttpsListenPort(std::uint16_t port) {
-    return detail::mutateStoppedApp(
-        *this,
-        *state_,
-        "cannot change HTTPS listen port while app is running",
-        [port](detail::AppState& state) {
-            detail::ensureNonZeroPort(port, "HTTPS listen port must not be zero");
-            state.httpsListenPort = port;
-        });
-}
-
-App& App::setAutoHttps(bool enabled) {
-    return detail::mutateStoppedApp(
-        *this,
-        *state_,
-        "cannot change auto HTTPS while app is running",
-        [enabled](detail::AppState& state) {
-            state.autoHttps = enabled;
+        "cannot change server topology while app is running",
+        [&topology](detail::AppState& state) {
+            state.topology = std::move(topology);
         });
 }
 

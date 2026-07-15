@@ -164,7 +164,9 @@ RUVIA_TEST(finalize_buffered_response_preserves_request_version_and_persistence)
             response,
             parser.parseMessage(request).connectionPlan,
             requestSequence);
-        return std::pair(plan.disposition(), std::string(response.header("Connection")));
+        return std::pair(
+            plan.disposition(),
+            std::string(response.header("Connection").value_or(std::string_view{})));
     };
 
     // RFC 9112 §9.3: a kept-alive HTTP/1.0 response MUST advertise keep-alive,
@@ -276,7 +278,9 @@ RUVIA_TEST(http1_protocol_finalizer_returns_the_authoritative_reuse_verdict) {
         parser.parseMessage(
             "GET / HTTP/1.0\r\nConnection: keep-alive\r\n\r\n").connectionPlan);
     RUVIA_CHECK(http10Plan.disposition() == Http1ConnectionDisposition::kReuse);
-    RUVIA_CHECK_EQ(std::string(http10.header("Connection")), std::string("keep-alive"));
+    RUVIA_CHECK_EQ(
+        std::string(http10.header("Connection").value_or(std::string_view{})),
+        std::string("keep-alive"));
 
     HttpResponse http10Upgrade(std::pmr::new_delete_resource());
     http10Upgrade.header("Connection", "upgrade");
@@ -304,7 +308,9 @@ RUVIA_TEST(http1_protocol_finalizer_returns_the_authoritative_reuse_verdict) {
             "GET / HTTP/1.1\r\nHost: x\r\n\r\n").connectionPlan);
     RUVIA_CHECK(
         applicationClosePlan.disposition() == Http1ConnectionDisposition::kClose);
-    RUVIA_CHECK_EQ(std::string(applicationClose.header("Connection")), std::string("close"));
+    RUVIA_CHECK_EQ(
+        std::string(applicationClose.header("Connection").value_or(std::string_view{})),
+        std::string("close"));
     const auto applicationCloseHead = emitBufferedHead(applicationClose);
     RUVIA_CHECK_EQ(
         countOccurrences(applicationCloseHead, "Connection: "),
@@ -316,7 +322,9 @@ RUVIA_TEST(http1_protocol_finalizer_returns_the_authoritative_reuse_verdict) {
         parser.parseMessage(
             "GET / HTTP/1.1\r\nHost: x\r\n\r\n").connectionPlan.requireClose());
     RUVIA_CHECK(runtimeClosePlan.disposition() == Http1ConnectionDisposition::kClose);
-    RUVIA_CHECK_EQ(std::string(runtimeClose.header("Connection")), std::string("close"));
+    RUVIA_CHECK_EQ(
+        std::string(runtimeClose.header("Connection").value_or(std::string_view{})),
+        std::string("close"));
 }
 
 RUVIA_TEST(http1_protocol_finalizer_generates_upgrade_pairing) {
@@ -332,7 +340,7 @@ RUVIA_TEST(http1_protocol_finalizer_generates_upgrade_pairing) {
         commitResponse(unpaired, requestPlan).disposition() ==
         ruvia::detail::Http1ConnectionDisposition::kReuse);
     RUVIA_CHECK_EQ(
-        std::string(unpaired.header("Connection")),
+        std::string(unpaired.header("Connection").value_or(std::string_view{})),
         std::string("Upgrade"));
 
     HttpResponse closing(std::pmr::new_delete_resource());
@@ -343,10 +351,10 @@ RUVIA_TEST(http1_protocol_finalizer_generates_upgrade_pairing) {
             requestPlan.requireClose()).disposition() ==
         ruvia::detail::Http1ConnectionDisposition::kClose);
     RUVIA_CHECK_EQ(
-        std::string(closing.header("Connection")),
+        std::string(closing.header("Connection").value_or(std::string_view{})),
         std::string("close, Upgrade"));
     RUVIA_CHECK_EQ(
-        std::string(closing.header("Upgrade")),
+        std::string(closing.header("Upgrade").value_or(std::string_view{})),
         std::string("websocket"));
 }
 
@@ -366,7 +374,7 @@ RUVIA_TEST(http1_protocol_finalizer_rejects_upgrade_required_without_protocol) {
     RUVIA_CHECK_EQ(
         std::string_view(result.failure()->exception().what()),
         std::string_view("426 response requires an Upgrade protocol"));
-    RUVIA_CHECK(missingUpgrade.header("Connection").empty());
+    RUVIA_CHECK(!missingUpgrade.header("Connection").has_value());
 
     HttpResponse propagated(std::pmr::new_delete_resource());
     propagated.status(426);
@@ -420,7 +428,7 @@ RUVIA_TEST(http1_buffered_request_limit_closes_the_typed_connection_plan) {
         RUVIA_CHECK(
             connectionPlan.disposition() ==
             Http1ConnectionDisposition::kReuse);
-        RUVIA_CHECK(response.header("Connection").empty());
+        RUVIA_CHECK(!response.header("Connection").has_value());
     }
 
     HttpResponse response(std::pmr::new_delete_resource());
@@ -429,7 +437,9 @@ RUVIA_TEST(http1_buffered_request_limit_closes_the_typed_connection_plan) {
         requestPlan,
         requestSequence);
     RUVIA_CHECK(connectionPlan.disposition() == Http1ConnectionDisposition::kClose);
-    RUVIA_CHECK_EQ(std::string(response.header("Connection")), std::string("close"));
+    RUVIA_CHECK_EQ(
+        std::string(response.header("Connection").value_or(std::string_view{})),
+        std::string("close"));
 }
 
 RUVIA_TEST(http1_request_sequence_rejects_configured_zero_budget) {
@@ -515,7 +525,7 @@ RUVIA_TEST(http1_body_completion_tightens_without_losing_protocol_version) {
         completePlan.protocolVersion() ==
         ruvia::HttpProtocolVersion::kHttp10);
     RUVIA_CHECK_EQ(
-        std::string(completeResponse.header("Connection")),
+        std::string(completeResponse.header("Connection").value_or(std::string_view{})),
         std::string("keep-alive"));
 
     HttpResponse incompleteResponse(std::pmr::new_delete_resource());
@@ -532,7 +542,7 @@ RUVIA_TEST(http1_body_completion_tightens_without_losing_protocol_version) {
         incompletePlan.protocolVersion() ==
         ruvia::HttpProtocolVersion::kHttp10);
     RUVIA_CHECK_EQ(
-        std::string(incompleteResponse.header("Connection")),
+        std::string(incompleteResponse.header("Connection").value_or(std::string_view{})),
         std::string("close"));
 }
 

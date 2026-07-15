@@ -17,7 +17,7 @@ Task<void> HttpServer::handleSession(TcpSocket socket) {
             &rateLimiter_,
             options_.maxBufferedBodyBytes,
             &workerHandle_);
-        if (options_.tls.enabled) {
+        if (options_.tls() != nullptr) {
             ConnectionScanner::Entry handshakeEntry;
             {
                 ConnectionScanner::Guard handshakeGuard(&connectionScanner_, handshakeEntry, socket);

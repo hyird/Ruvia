@@ -51,7 +51,7 @@ public:
         return std::span<const HttpHeaderView>(headers_.data(), headerCount_);
     }
 
-    [[nodiscard]] std::string_view header(std::string_view name) const noexcept;
+    [[nodiscard]] std::optional<std::string_view> header(std::string_view name) const noexcept;
     [[nodiscard]] std::optional<std::string_view> query(std::string_view name) const noexcept;
     [[nodiscard]] std::optional<std::string_view> cookie(std::string_view name) const noexcept;
 

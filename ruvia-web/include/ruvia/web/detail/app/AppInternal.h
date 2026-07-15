@@ -34,9 +34,7 @@ struct AppState final {
     ~AppState();
 
     std::pmr::string listenAddress{appResource()};
-    std::optional<std::uint16_t> httpListenPort{8080};
-    std::optional<std::uint16_t> httpsListenPort;
-    bool autoHttps{false};
+    ServerTopology topology;
     std::size_t threadNum;
     HttpServerOptions options{};
     std::optional<AppDocumentRootConfig> documentRootConfig;

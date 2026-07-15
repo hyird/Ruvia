@@ -10,7 +10,7 @@ namespace {
 }
 
 [[nodiscard]] bool hasSecurityHeader(HttpResponse& response, std::string_view name) noexcept {
-    return !response.header(name).empty();
+    return response.header(name).has_value();
 }
 
 template <typename Target>

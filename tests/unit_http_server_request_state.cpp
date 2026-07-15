@@ -300,8 +300,9 @@ RUVIA_TEST(http1_prepared_stream_head_binds_wire_signal_to_final_connection_disp
             ResponseTrailerIntent::kNone);
         return std::tuple(
             prepared.connectionPlan().disposition(),
-            std::string(prepared.response().header("Connection")),
-            std::string(prepared.response().header("Transfer-Encoding")));
+            std::string(prepared.response().header("Connection").value_or(std::string_view{})),
+            std::string(
+                prepared.response().header("Transfer-Encoding").value_or(std::string_view{})));
     };
 
     constexpr std::string_view http11 = "GET / HTTP/1.1\r\nHost: x\r\n\r\n";
@@ -360,8 +361,8 @@ RUVIA_TEST(http1_prepared_stream_head_owns_exact_wire_framing) {
     auto http10 = prepare("GET / HTTP/1.0\r\nConnection: keep-alive\r\n\r\n");
     RUVIA_CHECK(http10.responseHeadPlan().closeDelimitedStream() != nullptr);
     RUVIA_CHECK(http10.responseHeadPlan().chunkedStream() == nullptr);
-    RUVIA_CHECK(http10.response().header("Transfer-Encoding").empty());
-    RUVIA_CHECK(http10.response().header("Content-Length").empty());
+    RUVIA_CHECK(!http10.response().header("Transfer-Encoding").has_value());
+    RUVIA_CHECK(!http10.response().header("Content-Length").has_value());
     RUVIA_CHECK(
         http10.connectionPlan().disposition() == Http1ConnectionDisposition::kClose);
     ResponseHeadBuffer http10Buffer(std::pmr::get_default_resource());
@@ -378,9 +379,10 @@ RUVIA_TEST(http1_prepared_stream_head_owns_exact_wire_framing) {
     RUVIA_CHECK(http11.responseHeadPlan().chunkedStream() != nullptr);
     RUVIA_CHECK(http11.responseHeadPlan().closeDelimitedStream() == nullptr);
     RUVIA_CHECK_EQ(
-        std::string(http11.response().header("Transfer-Encoding")),
+        std::string(
+            http11.response().header("Transfer-Encoding").value_or(std::string_view{})),
         std::string("chunked"));
-    RUVIA_CHECK(http11.response().header("Content-Length").empty());
+    RUVIA_CHECK(!http11.response().header("Content-Length").has_value());
     ResponseHeadBuffer http11Buffer(std::pmr::get_default_resource());
     appendResponseHead(
         http11.response(), http11Buffer, http11.responseHeadPlan());
@@ -423,7 +425,7 @@ RUVIA_TEST(http1_prepared_body_suppressed_stream_is_self_delimited) {
     RUVIA_CHECK(
         http11.commitPlan().trailerFraming() ==
         ResponseStreamTrailerFraming::kUnavailable);
-    RUVIA_CHECK(http11.response().header("Transfer-Encoding").empty());
+    RUVIA_CHECK(!http11.response().header("Transfer-Encoding").has_value());
     RUVIA_CHECK(
         http11.connectionPlan().disposition() == Http1ConnectionDisposition::kReuse);
 
@@ -432,11 +434,11 @@ RUVIA_TEST(http1_prepared_body_suppressed_stream_is_self_delimited) {
         205,
         Http1ServerClosePolicy::kAllowReuse);
     RUVIA_CHECK(http10.commitPlan().bodyPlan().bodySuppressed());
-    RUVIA_CHECK(http10.response().header("Transfer-Encoding").empty());
+    RUVIA_CHECK(!http10.response().header("Transfer-Encoding").has_value());
     RUVIA_CHECK(
         http10.connectionPlan().disposition() == Http1ConnectionDisposition::kReuse);
     RUVIA_CHECK_EQ(
-        std::string(http10.response().header("Connection")),
+        std::string(http10.response().header("Connection").value_or(std::string_view{})),
         std::string("keep-alive"));
 
     auto http10Head = prepare(
@@ -455,7 +457,8 @@ RUVIA_TEST(http1_prepared_body_suppressed_stream_is_self_delimited) {
     RUVIA_CHECK(
         limitedHttp10.connectionPlan().disposition() == Http1ConnectionDisposition::kClose);
     RUVIA_CHECK_EQ(
-        std::string(limitedHttp10.response().header("Connection")),
+        std::string(
+            limitedHttp10.response().header("Connection").value_or(std::string_view{})),
         std::string("close"));
 }
 
@@ -541,9 +544,15 @@ RUVIA_TEST(auto_https_redirect_response_is_private_and_well_formed) {
     const auto response = ruvia::detail::makeAutoHttpsRedirectResponse(parsed.request, memory, 443);
 
     RUVIA_CHECK_EQ(response.status(), std::uint16_t{308});
-    RUVIA_CHECK_EQ(std::string(response.header("Location")), std::string("https://example.com/a/b?x=1"));
+    RUVIA_CHECK_EQ(
+        std::string(response.header("Location").value_or(std::string_view{})),
+        std::string("https://example.com/a/b?x=1"));
     // The Location is Host-derived, so the redirect must be private: a shared cache
     // must not store one Host's redirect and replay it for another.
-    RUVIA_CHECK_EQ(std::string(response.header("Cache-Control")), std::string("private"));
-    RUVIA_CHECK_EQ(std::string(response.header("Connection")), std::string("close"));
+    RUVIA_CHECK_EQ(
+        std::string(response.header("Cache-Control").value_or(std::string_view{})),
+        std::string("private"));
+    RUVIA_CHECK_EQ(
+        std::string(response.header("Connection").value_or(std::string_view{})),
+        std::string("close"));
 }

@@ -1,8 +1,12 @@
 #pragma once
 
 #include <filesystem>
+#include <cstdint>
+#include <initializer_list>
 #include <memory>
 #include <memory_resource>
+#include <span>
+#include <string_view>
 #include <string>
 #include <vector>
 
@@ -15,13 +19,44 @@ struct StaticMimeType final {
     std::pmr::string contentType;
 };
 
+class StaticFileTypePolicy final {
+public:
+    enum class Kind : std::uint8_t {
+        kDefaults,
+        kAll,
+        kOnly,
+    };
+
+    [[nodiscard]] static StaticFileTypePolicy defaults();
+    [[nodiscard]] static StaticFileTypePolicy all();
+    [[nodiscard]] static StaticFileTypePolicy only(
+        std::span<const std::string_view> extensions);
+    [[nodiscard]] static StaticFileTypePolicy only(
+        std::initializer_list<std::string_view> extensions) {
+        return only(std::span<const std::string_view>(extensions.begin(), extensions.size()));
+    }
+
+    [[nodiscard]] constexpr Kind kind() const noexcept {
+        return kind_;
+    }
+
+    [[nodiscard]] constexpr std::span<const std::pmr::string> extensions() const noexcept {
+        return extensions_;
+    }
+
+private:
+    explicit StaticFileTypePolicy(Kind kind) : kind_(kind) {}
+
+    Kind kind_;
+    std::pmr::vector<std::pmr::string> extensions_;
+};
+
 struct StaticRootOptions final {
     std::pmr::string cacheControl;
     std::pmr::string indexFile;
     std::pmr::string defaultContentType{"application/octet-stream"};
     std::pmr::vector<StaticMimeType> mimeTypes;
-    std::pmr::vector<std::pmr::string> fileTypes;
-    bool allowAll{false};
+    StaticFileTypePolicy fileTypes{StaticFileTypePolicy::defaults()};
     bool enableRanges{true};
     bool enableValidators{true};
 };

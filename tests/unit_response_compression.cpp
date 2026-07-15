@@ -95,10 +95,10 @@ bool tryCompress(
     HttpContentCoding coding = HttpContentCoding::kGzip,
     HttpKnownMethod method = HttpKnownMethod::kGet) {
     const bool alreadyEncoded =
-        !response.header("Content-Encoding").empty();
+        response.header("Content-Encoding").has_value();
     applyResponseCompression(coding, method, response, options);
     return !alreadyEncoded &&
-        !response.header("Content-Encoding").empty();
+        response.header("Content-Encoding").has_value();
 }
 
 }  // namespace
@@ -156,7 +156,9 @@ RUVIA_TEST(compress_happy_path_sets_encoding_and_vary) {
     RUVIA_CHECK(tryCompress(response, Compression{.minBytes = 16}));
     RUVIA_CHECK_EQ(response.header("Content-Encoding"), std::string_view("gzip"));
     // Compressing on Accept-Encoding must advertise the variance.
-    RUVIA_CHECK(response.header("Vary").find("Accept-Encoding") != std::string_view::npos);
+    RUVIA_CHECK(
+        response.header("Vary").value_or(std::string_view{}).find("Accept-Encoding") !=
+        std::string_view::npos);
 }
 
 RUVIA_TEST(compress_weakens_strong_etag_but_leaves_weak_and_absent) {
@@ -183,7 +185,7 @@ RUVIA_TEST(compress_weakens_strong_etag_but_leaves_weak_and_absent) {
     {
         auto response = responseWithBody(kCompressibleBody);
         RUVIA_CHECK(tryCompress(response, Compression{.minBytes = 16}));
-        RUVIA_CHECK(response.header("ETag").empty());
+        RUVIA_CHECK(!response.header("ETag").has_value());
     }
     // When nothing is compressed (body below minBytes), the strong ETag is left
     // intact -- the response still is the identity representation.
@@ -202,7 +204,9 @@ RUVIA_TEST(compress_brotli_and_zstd_emit_their_content_encoding) {
         auto response = responseWithBody(kCompressibleBody);
         RUVIA_CHECK(tryCompress(response, Compression{.minBytes = 16}, HttpContentCoding::kBrotli));
         RUVIA_CHECK_EQ(response.header("Content-Encoding"), std::string_view("br"));
-        RUVIA_CHECK(response.header("Vary").find("Accept-Encoding") != std::string_view::npos);
+        RUVIA_CHECK(
+            response.header("Vary").value_or(std::string_view{}).find("Accept-Encoding") !=
+            std::string_view::npos);
     }
     {
         auto response = responseWithBody(kCompressibleBody);
@@ -229,9 +233,9 @@ RUVIA_TEST(buffered_response_absent_policies_skip_cors_and_compression) {
     RUVIA_CHECK(writePlan.matchesResponse(response));
     RUVIA_CHECK(
         writePlan.requestMethod() == ruvia::HttpKnownMethod::kGet);
-    RUVIA_CHECK(response.header("Access-Control-Allow-Origin").empty());
-    RUVIA_CHECK(response.header("Content-Encoding").empty());
-    RUVIA_CHECK(response.header("Vary").empty());
+    RUVIA_CHECK(!response.header("Access-Control-Allow-Origin").has_value());
+    RUVIA_CHECK(!response.header("Content-Encoding").has_value());
+    RUVIA_CHECK(!response.header("Vary").has_value());
 }
 
 RUVIA_TEST(compress_skips_when_no_coding_but_preserves_head_metadata) {
@@ -251,7 +255,9 @@ RUVIA_TEST(compress_skips_when_no_coding_but_preserves_head_metadata) {
         RUVIA_CHECK(writePlan.bodySuppressed());
         RUVIA_CHECK(!writePlan.sendBody());
         RUVIA_CHECK_EQ(response.header("Content-Encoding"), std::string_view("gzip"));
-        RUVIA_CHECK(response.header("Vary").find("Accept-Encoding") != std::string_view::npos);
+        RUVIA_CHECK(
+            response.header("Vary").value_or(std::string_view{}).find("Accept-Encoding") !=
+            std::string_view::npos);
     }
 }
 
@@ -284,7 +290,8 @@ RUVIA_TEST(compress_skips_already_encoded_body) {
 
 RUVIA_TEST(compress_declares_vary_for_negotiated_but_uncompressed_responses) {
     const auto varies = [](HttpResponse& r) {
-        return r.header("Vary").find("Accept-Encoding") != std::string_view::npos;
+        return r.header("Vary").value_or(std::string_view{}).find("Accept-Encoding") !=
+            std::string_view::npos;
     };
 
     // A compressible representation is selected by Accept-Encoding, so it must carry
@@ -342,7 +349,7 @@ RUVIA_TEST(compress_skips_when_result_would_not_be_smaller) {
     }
     auto response = responseWithBody(incompressible);
     RUVIA_CHECK(!tryCompress(response, Compression{.minBytes = 16}));
-    RUVIA_CHECK(response.header("Content-Encoding").empty());
+    RUVIA_CHECK(!response.header("Content-Encoding").has_value());
 }
 
 RUVIA_TEST(compress_skips_content_range_response) {
@@ -351,14 +358,14 @@ RUVIA_TEST(compress_skips_content_range_response) {
     auto response = responseWithBody(kCompressibleBody);
     response.header("Content-Range", "bytes 0-2047/8192");
     RUVIA_CHECK(!tryCompress(response, Compression{.minBytes = 16}));
-    RUVIA_CHECK(response.header("Content-Encoding").empty());
+    RUVIA_CHECK(!response.header("Content-Encoding").has_value());
 }
 
 RUVIA_TEST(compress_skips_incompressible_media_types) {
     auto png = responseWithBody(kCompressibleBody);
     png.header("Content-Type", "image/png");
     RUVIA_CHECK(!tryCompress(png, Compression{.minBytes = 16}));
-    RUVIA_CHECK(png.header("Content-Encoding").empty());
+    RUVIA_CHECK(!png.header("Content-Encoding").has_value());
 
     auto svg = responseWithBody(kCompressibleBody);
     svg.header("Content-Type", "image/svg+xml");
@@ -376,7 +383,7 @@ RUVIA_TEST(compress_skips_video_audio_and_container_media_types) {
         auto response = responseWithBody(kCompressibleBody);
         response.header("Content-Type", type);
         RUVIA_CHECK(!tryCompress(response, Compression{.minBytes = 16}));
-        RUVIA_CHECK(response.header("Content-Encoding").empty());
+        RUVIA_CHECK(!response.header("Content-Encoding").has_value());
     }
 
     // A parameterised incompressible type still matches once its parameters are
@@ -384,5 +391,5 @@ RUVIA_TEST(compress_skips_video_audio_and_container_media_types) {
     auto png = responseWithBody(kCompressibleBody);
     png.header("Content-Type", "image/png; name=photo");
     RUVIA_CHECK(!tryCompress(png, Compression{.minBytes = 16}));
-    RUVIA_CHECK(png.header("Content-Encoding").empty());
+    RUVIA_CHECK(!png.header("Content-Encoding").has_value());
 }

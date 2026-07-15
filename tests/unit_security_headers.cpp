@@ -60,8 +60,8 @@ RUVIA_TEST(security_headers_empty_policy_is_not_emitted) {
     options.contentSecurityPolicy = "";
     options.referrerPolicy = "";
     applySecurityHeaders(response, options);
-    RUVIA_CHECK(response.header("Content-Security-Policy").empty());
-    RUVIA_CHECK(response.header("Referrer-Policy").empty());
+    RUVIA_CHECK(!response.header("Content-Security-Policy").has_value());
+    RUVIA_CHECK(!response.header("Referrer-Policy").has_value());
 }
 
 RUVIA_TEST(security_headers_disabled_options_omit_headers) {
@@ -71,8 +71,8 @@ RUVIA_TEST(security_headers_disabled_options_omit_headers) {
     options.strictTransportSecurity = false;
     applySecurityHeaders(response, options);
 
-    RUVIA_CHECK(response.header("X-Frame-Options").empty());
-    RUVIA_CHECK(response.header("Strict-Transport-Security").empty());
+    RUVIA_CHECK(!response.header("X-Frame-Options").has_value());
+    RUVIA_CHECK(!response.header("Strict-Transport-Security").has_value());
     RUVIA_CHECK_EQ(response.header("X-Content-Type-Options"), std::string_view("nosniff"));
 }
 

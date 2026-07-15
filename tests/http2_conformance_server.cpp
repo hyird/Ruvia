@@ -39,7 +39,7 @@ int main(int argc, char** argv) {
 
     ruvia::app()
         .setListenAddress("127.0.0.1")
-        .setHttpListenPort(port)
+        .setServerTopology(ruvia::ServerTopology::http(port))
         .setThreadNum(1)
         .setCompression(std::nullopt)
         .run();

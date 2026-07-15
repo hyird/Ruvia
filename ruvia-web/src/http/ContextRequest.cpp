@@ -422,16 +422,7 @@ const RequestNameValueList& Context::requestHeaders() const {
 }
 
 std::optional<std::string_view> Context::requestHeader(std::string_view name) const {
-    // Case-insensitive scan directly over the raw header span — no per-lookup allocation and no
-    // forced materialization of the full lowercased header map (requestHeaders() builds that only
-    // for the list accessor). Last match wins, mirroring RequestNameValueList::get()'s reverse scan.
-    const auto rawHeaders = request_.headers();
-    for (auto it = rawHeaders.rbegin(); it != rawHeaders.rend(); ++it) {
-        if (detail::httpAsciiEqualsIgnoreCase(it->name(), name)) {
-            return it->value();
-        }
-    }
-    return std::nullopt;
+    return request_.header(name);
 }
 
 void Context::ensureRequestQuery() const {

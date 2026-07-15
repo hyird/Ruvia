@@ -2,6 +2,8 @@
 
 #include <asio/ssl/verify_mode.hpp>
 
+#include "ruvia/web/ServerConfig.h"
+
 namespace ruvia::detail {
 
 // The peer-verification mode applied once a client-CA verifyFile is configured.
@@ -10,9 +12,9 @@ namespace ruvia::detail {
 // verify_fail_if_no_peer_cert makes a missing certificate fail the handshake
 // (mandatory mutual TLS).
 [[nodiscard]] inline asio::ssl::verify_mode httpServerTlsVerifyMode(
-    bool requireClientCertificate) noexcept {
+    TlsClientCertificateRequirement requirement) noexcept {
     auto mode = asio::ssl::verify_peer;
-    if (requireClientCertificate) {
+    if (requirement == TlsClientCertificateRequirement::kRequired) {
         mode |= asio::ssl::verify_fail_if_no_peer_cert;
     }
     return mode;

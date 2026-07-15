@@ -191,7 +191,7 @@ RUVIA_TEST(context_response_metadata_uses_http_response_validation) {
     }
     RUVIA_CHECK(threw);
     const auto response = context.body("unchanged");
-    RUVIA_CHECK(response.header("Connection").empty());
+    RUVIA_CHECK(!response.header("Connection").has_value());
 }
 
 RUVIA_TEST(context_body_applies_context_headers) {

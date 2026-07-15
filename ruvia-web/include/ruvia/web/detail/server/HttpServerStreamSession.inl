@@ -137,7 +137,7 @@ Task<void> HttpServer::handleStreamSession(
                         rejection->protocolError());
                     break;
                 }
-                if (options_.autoHttps.enabled) {
+                if (const auto* redirect = options_.redirect()) {
                     if (requestKnownHeader(parsed.request, RequestKnownHeader::kHost).empty()) {
                         closingError = HttpErrorInfo(400, {}, "missing Host header");
                         break;
@@ -145,7 +145,7 @@ Task<void> HttpServer::handleStreamSession(
                     response = makeAutoHttpsRedirectResponse(
                         parsed.request,
                         requestMemory,
-                        options_.autoHttps.httpsPort);
+                        redirect->httpsPort);
                     const auto connectionPlan = requireHttp1FinalResponseCommit(
                         response,
                         parsed.connectionPlan.requireClose());
@@ -350,7 +350,7 @@ Task<void> HttpServer::handleStreamSession(
 
             if (const auto* failure = parsed.failure()) {
                 if constexpr (kPlainTcp) {
-                    if (!options_.autoHttps.enabled &&
+                    if (options_.redirect() == nullptr &&
                         shouldDropInvalidCleartextHttp1Input(
                             bufferView,
                             failure->source())) {

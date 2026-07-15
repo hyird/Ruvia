@@ -30,7 +30,7 @@ private:
 int main() {
     ruvia::app()
         .setListenAddress("0.0.0.0")
-        .setHttpListenPort(8080)
+        .setServerTopology(ruvia::ServerTopology::http(8080))
         .setThreadNum(2)
         .run();
 }

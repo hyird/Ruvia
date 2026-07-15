@@ -890,6 +890,23 @@ concept HasEmbeddedPolicyEnabledFlag = requires(Policy& policy) {
     policy.enabled;
 };
 
+template <typename Config>
+concept HasLegacyCorsFields = requires(Config& config) {
+    config.allowOrigin;
+    config.allowHeaders;
+    config.allowCredentials;
+};
+
+template <typename Options>
+concept HasLegacyStaticAllowAll = requires(Options& options) {
+    options.allowAll;
+};
+
+template <typename Options>
+concept HasLegacyStaticFileTypesVector = requires(Options& options) {
+    options.fileTypes.push_back(std::pmr::string{});
+};
+
 template <typename ContextT>
 concept HasResponseInit = requires {
     typename ContextT::ResponseInit;
@@ -1052,9 +1069,27 @@ static_assert(std::same_as<
     ruvia::HttpResponse::HeaderOptions>);
 static_assert(!HasEmbeddedPolicyEnabledFlag<ruvia::CompressionConfig>);
 static_assert(!HasEmbeddedPolicyEnabledFlag<ruvia::CorsConfig>);
+static_assert(!HasLegacyCorsFields<ruvia::CorsConfig>);
+static_assert(!HasLegacyStaticAllowAll<ruvia::StaticRootOptions>);
+static_assert(!HasLegacyStaticFileTypesVector<ruvia::StaticRootOptions>);
+static_assert(std::same_as<
+    decltype(ruvia::StaticRootOptions{}.fileTypes),
+    ruvia::StaticFileTypePolicy>);
 static_assert(std::same_as<
     decltype(ruvia::CorsConfig{}.maxAge),
-    std::optional<std::chrono::seconds>>);
+    std::optional<ruvia::CorsMaxAge>>);
+static_assert(!std::default_initializable<ruvia::CorsOriginPolicy>);
+static_assert(!std::default_initializable<ruvia::CorsRequestHeadersPolicy>);
+static_assert(std::same_as<
+    decltype(ruvia::CorsOriginPolicy::credentialed("https://app.example")),
+    ruvia::CorsOriginPolicy>);
+static_assert(std::same_as<
+    decltype(ruvia::CorsRequestHeadersPolicy::fixed("authorization")),
+    ruvia::CorsRequestHeadersPolicy>);
+static_assert(!std::default_initializable<ruvia::StaticFileTypePolicy>);
+static_assert(std::same_as<
+    decltype(ruvia::StaticFileTypePolicy::only({"html"})),
+    ruvia::StaticFileTypePolicy>);
 static_assert(std::same_as<
     decltype(std::declval<ruvia::detail::HttpServerOptions>().compression),
     std::optional<ruvia::CompressionConfig>>);
@@ -1515,6 +1550,23 @@ static_assert(!std::is_default_constructible_v<
     ruvia::detail::ContextResponseStreamOutput>);
 static_assert(!std::is_default_constructible_v<
     ruvia::detail::ContextWebSocketOutput>);
+static_assert(!std::is_default_constructible_v<ruvia::TlsIdentity>);
+static_assert(!std::is_default_constructible_v<
+    ruvia::TlsClientCertificatePolicy>);
+static_assert(!std::is_default_constructible_v<ruvia::TlsConfig>);
+static_assert(std::same_as<
+    decltype(ruvia::TlsIdentity::fromFiles("cert.pem", "key.pem")),
+    ruvia::TlsIdentity>);
+static_assert(std::same_as<
+    decltype(ruvia::TlsClientCertificatePolicy::required("ca.pem")),
+    ruvia::TlsClientCertificatePolicy>);
+static_assert(std::same_as<
+    decltype(ruvia::ServerTopology::http(8080)),
+    ruvia::ServerTopology>);
+static_assert(std::same_as<
+    decltype(std::declval<ruvia::App&>().setServerTopology(
+        ruvia::ServerTopology::http(8080))),
+    ruvia::App&>);
 static_assert(!std::is_default_constructible_v<
     ruvia::detail::RouteEndpoint>);
 static_assert(std::is_move_constructible_v<
@@ -1854,6 +1906,8 @@ int main() {
     if (postResult != ruvia::PostResult::kWorkerStopping) {
         return 22;
     }
-    ruvia::app().setWorkerMailboxCapacity(1024).setHttpListenPort(8080);
+    ruvia::app()
+        .setWorkerMailboxCapacity(1024)
+        .setServerTopology(ruvia::ServerTopology::http(8080));
     return 0;
 }

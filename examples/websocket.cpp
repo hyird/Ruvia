@@ -48,7 +48,7 @@ private:
 int main() {
     ruvia::app()
         .setListenAddress("0.0.0.0")
-        .setHttpListenPort(8084)
+        .setServerTopology(ruvia::ServerTopology::http(8084))
         .setThreadNum(2)
         .setMaxWebSocketMessageBytes(16 * 1024 * 1024)
         .run();

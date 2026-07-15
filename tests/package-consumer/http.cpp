@@ -83,6 +83,45 @@ concept HasLegacyResponseBodyView = requires(T& response) {
     response.setBodyView(std::string_view{});
 };
 
+static_assert(std::same_as<
+    decltype(std::declval<const ruvia::HttpRequest&>().header(std::string_view{})),
+    std::optional<std::string_view>>);
+static_assert(std::same_as<
+    decltype(std::declval<const ruvia::HttpResponse&>().header(std::string_view{})),
+    std::optional<std::string_view>>);
+static_assert(std::constructible_from<
+    ruvia::HttpHeaderView,
+    const std::string&,
+    const std::string&>);
+static_assert(!std::constructible_from<
+    ruvia::HttpHeaderView,
+    std::string&&,
+    std::string_view>);
+static_assert(!std::constructible_from<
+    ruvia::HttpHeaderView,
+    std::string_view,
+    std::string&&>);
+static_assert(!std::constructible_from<
+    ruvia::HttpHeaderView,
+    std::string&&,
+    std::string&&>);
+static_assert(!std::constructible_from<
+    ruvia::HttpHeaderView,
+    const std::string&&,
+    std::string_view>);
+static_assert(!std::constructible_from<
+    ruvia::HttpHeaderView,
+    std::string_view,
+    const std::string&&>);
+static_assert(!std::constructible_from<
+    ruvia::HttpHeaderView,
+    std::pmr::string&&,
+    std::string_view>);
+static_assert(!std::constructible_from<
+    ruvia::HttpHeaderView,
+    std::string_view,
+    const std::pmr::string&&>);
+
 template <typename T>
 concept HasHttp2EventError = requires(const T& event) {
     { event.error() } -> std::same_as<ruvia::detail::Http2ErrorCode>;

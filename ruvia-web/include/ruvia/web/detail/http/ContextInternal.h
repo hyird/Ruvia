@@ -137,7 +137,7 @@ struct ContextAccess final {
     [[nodiscard]] static bool hasResponseHeader(
         const Context& context,
         std::string_view name) noexcept {
-        return !context.responseState_.activeResponse().header(name).empty();
+        return context.responseState_.activeResponse().header(name).has_value();
     }
 
     static void setError(Context& context, std::exception_ptr exception) noexcept {

@@ -8,6 +8,7 @@
 #include <optional>
 #include <string>
 #include <utility>
+#include <variant>
 #include <vector>
 
 #include "ruvia/http/HttpLimits.h"
@@ -40,31 +41,40 @@ struct WorkerFailureSink final {
 // Fully normalized, worker-owned runtime options. Public callers configure App
 // with ServerConfig.h values; only the Web runtime constructs this state.
 struct HttpServerOptions final {
-    struct Tls final {
-        // An additional certificate selected by SNI server name (RFC 6066).
-        struct SniCertificate final {
-            std::pmr::string host;
-            std::pmr::string certificateChainFile;
-            std::pmr::string privateKeyFile;
-            std::pmr::string privateKeyPassword;
-        };
-
-        bool enabled{false};
+    struct TlsIdentity final {
         std::pmr::string certificateChainFile;
         std::pmr::string privateKeyFile;
         std::pmr::string privateKeyPassword;
-        std::pmr::string verifyFile;
-        bool requireClientCertificate{false};
-        std::pmr::vector<SniCertificate> sniCertificates;
     };
+
+    struct TlsClientCertificatePolicy final {
+        std::pmr::string verifyFile;
+        ruvia::TlsClientCertificateRequirement requirement{
+            ruvia::TlsClientCertificateRequirement::kOptional};
+    };
+
+    struct Tls final {
+        // An additional certificate selected by SNI server name (RFC 6066).
+        struct SniIdentity final {
+            std::pmr::string host;
+            TlsIdentity identity;
+        };
+
+        TlsIdentity identity;
+        std::optional<TlsClientCertificatePolicy> clientCertificates;
+        std::pmr::vector<SniIdentity> sniIdentities;
+    };
+
+    struct PlainHttp final {};
+
+    struct RedirectHttpToHttps final {
+        std::uint16_t httpsPort;
+    };
+
+    using ListenerTransport = std::variant<PlainHttp, Tls, RedirectHttpToHttps>;
 
     struct DocumentRoot final {
         const StaticRoot* root{nullptr};
-    };
-
-    struct AutoHttps final {
-        bool enabled{false};
-        std::uint16_t httpsPort{443};
     };
 
     // nginx-aligned inactivity timeouts. Absence disables a phase timeout;
@@ -88,16 +98,25 @@ struct HttpServerOptions final {
     std::optional<std::size_t> maxStreamBodyBytes;
     // WebSocket messages are assembled before delivery; this must be greater than 0.
     std::size_t maxWebSocketMessageBytes{kDefaultMaxWebSocketMessageBytes};
-    Tls tls;
+    ListenerTransport transport;
     // Presence enables the policy; absence bypasses it without retaining an
     // inactive configuration state.
     std::optional<CompressionConfig> compression{std::in_place};
     std::optional<CorsConfig> cors;
     DocumentRoot documentRoot;
-    AutoHttps autoHttps;
     AccessLogSink accessLog;
     WorkerFailureSink workerFailure;
     std::optional<RateLimitRule> rateLimit;
+
+    [[nodiscard]] const Tls* tls() const & noexcept {
+        return std::get_if<Tls>(&transport);
+    }
+    const Tls* tls() const && = delete;
+
+    [[nodiscard]] const RedirectHttpToHttps* redirect() const & noexcept {
+        return std::get_if<RedirectHttpToHttps>(&transport);
+    }
+    const RedirectHttpToHttps* redirect() const && = delete;
 };
 
 }  // namespace ruvia::detail

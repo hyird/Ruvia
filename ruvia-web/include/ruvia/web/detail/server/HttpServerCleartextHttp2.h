@@ -119,7 +119,7 @@ Task<CleartextHttp2DispatchResult> dispatchCleartextHttp2Preface(
     std::size_t& usedBytes,
     const HttpServerWorkerState& workerState) {
     const auto current = std::string_view(readBuffer.data(), usedBytes);
-    switch (probeCleartextHttp2Preface(current, options.autoHttps.enabled)) {
+    switch (probeCleartextHttp2Preface(current, options.redirect() != nullptr)) {
     case CleartextHttp2Probe::kHttp1:
         co_return CleartextHttp2DispatchResult::kContinueHttp1;
     case CleartextHttp2Probe::kCompletePreface:

@@ -164,9 +164,9 @@ public:
     [[nodiscard]] std::uint16_t status() const noexcept;
     [[nodiscard]] const HttpResponseHeaders& headers() const & noexcept;
     [[nodiscard]] const HttpResponseHeaders& headers() const && = delete;
-    [[nodiscard]] std::string_view header(
+    [[nodiscard]] std::optional<std::string_view> header(
         std::string_view name) const & noexcept;
-    [[nodiscard]] std::string_view header(
+    [[nodiscard]] std::optional<std::string_view> header(
         std::string_view name) const && = delete;
     // A generic HttpResponse is always final (200..599). Interim 1xx progress
     // messages use HttpInterimResponseHead; 101 uses a dedicated protocol driver.

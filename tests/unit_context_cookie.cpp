@@ -313,6 +313,22 @@ RUVIA_TEST(context_request_header_lookup_uses_last_match) {
     RUVIA_CHECK_EQ(header, std::string("second"));
 }
 
+RUVIA_TEST(context_request_header_lookup_is_case_insensitive_and_presence_aware) {
+    WorkerMemory worker;
+    HttpRequest request = HttpRequestAccess::make();
+    HttpRequestAccess::reset(request);
+    RUVIA_CHECK(HttpRequestAccess::addHeader(request, HttpHeaderView{"X-Empty", ""}));
+
+    RequestMemory requestMemory(worker);
+    HttpRequestAccess::setResource(request, requestMemory.resource());
+    auto context = ContextAccess::make(requestMemory, request);
+
+    const auto presentEmpty = context.req().header("x-EMPTY");
+    RUVIA_CHECK(presentEmpty.has_value());
+    RUVIA_CHECK(presentEmpty.value_or("missing").empty());
+    RUVIA_CHECK(!context.req().header("X-Missing").has_value());
+}
+
 RUVIA_TEST(context_request_preserves_exact_extension_method_token) {
     WorkerMemory worker;
     HttpRequest request = HttpRequestAccess::make();
@@ -621,7 +637,8 @@ RUVIA_TEST(context_signed_cookie_with_prefix_verifies_round_trip) {
     options.path = "/";
     writeContext.setSignedCookie("session", "user-1", "secret", options);
     const auto writeResponse = writeContext.text("ok");
-    const std::string setCookie(writeResponse.header("Set-Cookie"));
+    const std::string setCookie(
+        writeResponse.header("Set-Cookie").value_or(std::string_view{}));
     const std::string_view line(setCookie);
     const auto pair = line.substr(0, line.find(';'));
     RUVIA_CHECK(pair.starts_with("__Host-session="));
@@ -650,7 +667,8 @@ RUVIA_TEST(context_signed_cookie_with_prefix_verifies_round_trip) {
     auto bareWriteContext = ContextAccess::make(bareWriteMemory, bareWriteRequest);
     bareWriteContext.setSignedCookie("plain", "user-2", "secret");
     const auto bareWriteResponse = bareWriteContext.text("ok");
-    const std::string bare(bareWriteResponse.header("Set-Cookie"));
+    const std::string bare(
+        bareWriteResponse.header("Set-Cookie").value_or(std::string_view{}));
     const std::string_view bareLine(bare);
     const std::string bareField(bareLine.substr(0, bareLine.find(';')));
     HttpRequest bareRequest = HttpRequestAccess::make();
@@ -691,6 +709,8 @@ RUVIA_TEST(context_delete_cookie_with_prefix_is_response_only) {
     context.deleteCookie("session", options);
     const auto response = context.text("deleted");
     const auto setCookie = response.header("Set-Cookie");
-    RUVIA_CHECK(setCookie.starts_with("__Host-session=;"));
-    RUVIA_CHECK(setCookie.find("Max-Age=0") != std::string_view::npos);
+    RUVIA_CHECK(setCookie.has_value());
+    RUVIA_CHECK(setCookie.value_or(std::string_view{}).starts_with("__Host-session=;"));
+    RUVIA_CHECK(
+        setCookie.value_or(std::string_view{}).find("Max-Age=0") != std::string_view::npos);
 }

@@ -8,10 +8,14 @@
 #include <memory>
 #include <memory_resource>
 #include <optional>
+#include <stdexcept>
 #include <string_view>
 #include <type_traits>
+#include <utility>
+#include <vector>
 
 #include "ruvia/http/HttpKnownMethod.h"
+#include "ruvia/http/HttpHeader.h"
 #include "ruvia/http/HttpProtocolVersion.h"
 #include "ruvia/http/HttpRequest.h"
 #include "ruvia/web/StaticFiles.h"
@@ -23,19 +27,166 @@ struct AccessLogRecordAccess;
 struct AccessLogSink;
 }  // namespace detail
 
-struct TlsConfig final {
-    std::filesystem::path certificateChainFile;
-    std::filesystem::path privateKeyFile;
-    std::pmr::string privateKeyPassword;
-    // A CA bundle used to verify a client certificate when one is presented. On
-    // its own this enables OPTIONAL mutual TLS: a client with no certificate is
-    // still accepted (its identity is surfaced empty via getConnInfo), while a
-    // presented-but-untrusted certificate fails the handshake.
-    std::filesystem::path verifyFile;
-    // Require the client to present a certificate that verifyFile trusts, failing
-    // the TLS handshake otherwise (mandatory mutual TLS). Has no effect without
-    // verifyFile. Defaults false to preserve the optional-mTLS behavior above.
-    bool requireClientCertificate{false};
+class TlsIdentity final {
+public:
+    [[nodiscard]] static TlsIdentity fromFiles(
+        std::filesystem::path certificateChainFile,
+        std::filesystem::path privateKeyFile,
+        std::pmr::string privateKeyPassword = {});
+
+    [[nodiscard]] const std::filesystem::path& certificateChainFile() const & noexcept {
+        return certificateChainFile_;
+    }
+    const std::filesystem::path& certificateChainFile() const && = delete;
+
+    [[nodiscard]] const std::filesystem::path& privateKeyFile() const & noexcept {
+        return privateKeyFile_;
+    }
+    const std::filesystem::path& privateKeyFile() const && = delete;
+
+    [[nodiscard]] const std::pmr::string& privateKeyPassword() const & noexcept {
+        return privateKeyPassword_;
+    }
+    const std::pmr::string& privateKeyPassword() const && = delete;
+
+private:
+    TlsIdentity(
+        std::filesystem::path certificateChainFile,
+        std::filesystem::path privateKeyFile,
+        std::pmr::string privateKeyPassword) noexcept
+        : certificateChainFile_(std::move(certificateChainFile)),
+          privateKeyFile_(std::move(privateKeyFile)),
+          privateKeyPassword_(std::move(privateKeyPassword)) {}
+
+    std::filesystem::path certificateChainFile_;
+    std::filesystem::path privateKeyFile_;
+    std::pmr::string privateKeyPassword_;
+};
+
+enum class TlsClientCertificateRequirement : std::uint8_t {
+    kOptional,
+    kRequired,
+};
+
+class TlsClientCertificatePolicy final {
+public:
+    // A CA bundle used to verify presented client certificates. Optional mode
+    // admits a client without a certificate; required mode rejects it.
+    [[nodiscard]] static TlsClientCertificatePolicy optional(
+        std::filesystem::path verifyFile);
+    [[nodiscard]] static TlsClientCertificatePolicy required(
+        std::filesystem::path verifyFile);
+
+    [[nodiscard]] const std::filesystem::path& verifyFile() const & noexcept {
+        return verifyFile_;
+    }
+    const std::filesystem::path& verifyFile() const && = delete;
+
+    [[nodiscard]] constexpr TlsClientCertificateRequirement requirement()
+        const noexcept {
+        return requirement_;
+    }
+
+private:
+    TlsClientCertificatePolicy(
+        std::filesystem::path verifyFile,
+        TlsClientCertificateRequirement requirement) noexcept
+        : verifyFile_(std::move(verifyFile)), requirement_(requirement) {}
+
+    std::filesystem::path verifyFile_;
+    TlsClientCertificateRequirement requirement_;
+};
+
+class TlsSniIdentity final {
+public:
+    [[nodiscard]] std::string_view host() const noexcept { return host_; }
+    [[nodiscard]] const TlsIdentity& identity() const & noexcept { return identity_; }
+    const TlsIdentity& identity() const && = delete;
+
+private:
+    friend class TlsConfig;
+
+    TlsSniIdentity(std::pmr::string host, TlsIdentity identity) noexcept
+        : host_(std::move(host)), identity_(std::move(identity)) {}
+
+    std::pmr::string host_;
+    TlsIdentity identity_;
+};
+
+class TlsConfig final {
+public:
+    explicit TlsConfig(TlsIdentity identity) noexcept
+        : identity_(std::move(identity)) {}
+
+    TlsConfig& setClientCertificatePolicy(TlsClientCertificatePolicy policy);
+    TlsConfig& addSniIdentity(std::string_view host, TlsIdentity identity);
+
+    [[nodiscard]] const TlsIdentity& identity() const & noexcept { return identity_; }
+    const TlsIdentity& identity() const && = delete;
+
+    [[nodiscard]] const std::optional<TlsClientCertificatePolicy>&
+    clientCertificatePolicy() const & noexcept {
+        return clientCertificatePolicy_;
+    }
+    const std::optional<TlsClientCertificatePolicy>&
+    clientCertificatePolicy() const && = delete;
+
+    [[nodiscard]] const std::pmr::vector<TlsSniIdentity>& sniIdentities()
+        const & noexcept {
+        return sniIdentities_;
+    }
+    const std::pmr::vector<TlsSniIdentity>& sniIdentities() const && = delete;
+
+private:
+    TlsIdentity identity_;
+    std::optional<TlsClientCertificatePolicy> clientCertificatePolicy_;
+    std::pmr::vector<TlsSniIdentity> sniIdentities_;
+};
+
+// The complete listener graph is selected atomically. HTTPS and redirect
+// topologies always carry their TLS identity, so App cannot observe a partially
+// configured listener/TLS combination.
+class ServerTopology final {
+public:
+    ServerTopology() noexcept = default;
+
+    [[nodiscard]] static ServerTopology http(std::uint16_t port = 8080);
+    [[nodiscard]] static ServerTopology https(
+        std::uint16_t port,
+        TlsConfig tls);
+    [[nodiscard]] static ServerTopology httpAndHttps(
+        std::uint16_t httpPort,
+        std::uint16_t httpsPort,
+        TlsConfig tls);
+    [[nodiscard]] static ServerTopology redirectHttpToHttps(
+        std::uint16_t httpPort,
+        std::uint16_t httpsPort,
+        TlsConfig tls);
+
+private:
+    friend class App;
+
+    enum class Kind : std::uint8_t {
+        kHttp,
+        kHttps,
+        kHttpAndHttps,
+        kRedirectHttpToHttps,
+    };
+
+    explicit ServerTopology(
+        Kind kind,
+        std::uint16_t httpPort,
+        std::uint16_t httpsPort,
+        std::optional<TlsConfig> tls) noexcept
+        : kind_(kind),
+          httpPort_(httpPort),
+          httpsPort_(httpsPort),
+          tls_(std::move(tls)) {}
+
+    Kind kind_{Kind::kHttp};
+    std::uint16_t httpPort_{8080};
+    std::uint16_t httpsPort_{0};
+    std::optional<TlsConfig> tls_;
 };
 
 // Canonical startup values shared by App setters and every worker's server
@@ -44,12 +195,110 @@ struct CompressionConfig final {
     std::size_t minBytes{1024};
 };
 
+class CorsOriginPolicy final {
+public:
+    enum class Kind : std::uint8_t {
+        kAny,
+        kExact,
+        kCredentialedExact,
+    };
+
+    [[nodiscard]] static CorsOriginPolicy any() {
+        return CorsOriginPolicy(Kind::kAny, {});
+    }
+
+    [[nodiscard]] static CorsOriginPolicy exact(std::string_view origin) {
+        return CorsOriginPolicy(Kind::kExact, origin);
+    }
+
+    [[nodiscard]] static CorsOriginPolicy credentialed(std::string_view origin) {
+        return CorsOriginPolicy(Kind::kCredentialedExact, origin);
+    }
+
+    [[nodiscard]] constexpr Kind kind() const noexcept {
+        return kind_;
+    }
+
+    [[nodiscard]] constexpr std::string_view origin() const noexcept {
+        return value_;
+    }
+
+private:
+    CorsOriginPolicy(Kind kind, std::string_view value) : kind_(kind), value_(value) {
+        if (kind != Kind::kAny && value.empty()) {
+            throw std::invalid_argument("CORS exact origin must not be empty");
+        }
+        if (kind != Kind::kAny && value == "*") {
+            throw std::invalid_argument("CORS wildcard origin must use the any policy");
+        }
+        if (kind != Kind::kAny && !isValidHttpHeaderValue(value)) {
+            throw std::invalid_argument("CORS exact origin must be a valid header value");
+        }
+    }
+
+    Kind kind_;
+    std::pmr::string value_;
+};
+
+class CorsRequestHeadersPolicy final {
+public:
+    enum class Kind : std::uint8_t {
+        kReflect,
+        kFixed,
+    };
+
+    [[nodiscard]] static CorsRequestHeadersPolicy reflect() {
+        return CorsRequestHeadersPolicy(Kind::kReflect, {});
+    }
+
+    [[nodiscard]] static CorsRequestHeadersPolicy fixed(std::string_view headers) {
+        return CorsRequestHeadersPolicy(Kind::kFixed, headers);
+    }
+
+    [[nodiscard]] constexpr Kind kind() const noexcept {
+        return kind_;
+    }
+
+    [[nodiscard]] constexpr std::string_view headers() const noexcept {
+        return value_;
+    }
+
+private:
+    CorsRequestHeadersPolicy(Kind kind, std::string_view value) : kind_(kind), value_(value) {
+        if (kind == Kind::kFixed && value.empty()) {
+            throw std::invalid_argument("CORS fixed request headers must not be empty");
+        }
+        if (kind == Kind::kFixed && !isValidHttpHeaderValue(value)) {
+            throw std::invalid_argument(
+                "CORS fixed request headers must be a valid header value");
+        }
+    }
+
+    Kind kind_;
+    std::pmr::string value_;
+};
+
+class CorsMaxAge final {
+public:
+    explicit CorsMaxAge(std::chrono::seconds value) : value_(value) {
+        if (value.count() < 0) {
+            throw std::invalid_argument("CORS max age must not be negative");
+        }
+    }
+
+    [[nodiscard]] constexpr std::chrono::seconds value() const noexcept {
+        return value_;
+    }
+
+private:
+    std::chrono::seconds value_;
+};
+
 struct CorsConfig final {
-    std::pmr::string allowOrigin{"*"};
-    std::pmr::string allowHeaders;
+    CorsOriginPolicy origin{CorsOriginPolicy::any()};
+    CorsRequestHeadersPolicy requestHeaders{CorsRequestHeadersPolicy::reflect()};
     std::pmr::string exposeHeaders;
-    std::optional<std::chrono::seconds> maxAge;
-    bool allowCredentials{false};
+    std::optional<CorsMaxAge> maxAge;
 };
 
 struct DocumentRootConfig final {

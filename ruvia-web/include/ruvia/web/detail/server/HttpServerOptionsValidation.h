@@ -27,12 +27,16 @@ inline void validateHttpServerOptions(const HttpServerOptions& options) {
     ensurePositiveOptionalSize(
         options.keepaliveRequests,
         "configured keepalive request limit must be greater than zero");
-    if (options.tls.enabled &&
-        (options.tls.certificateChainFile.empty() || options.tls.privateKeyFile.empty())) {
+    if (const auto* tls = options.tls();
+        tls != nullptr &&
+        (tls->identity.certificateChainFile.empty() ||
+         tls->identity.privateKeyFile.empty())) {
         throw std::invalid_argument("TLS certificate chain and private key files must not be empty");
     }
-    if (options.autoHttps.enabled) {
-        ensureNonZeroPort(options.autoHttps.httpsPort, "auto HTTPS requires a fixed HTTPS listen port");
+    if (const auto* redirect = options.redirect()) {
+        ensureNonZeroPort(
+            redirect->httpsPort,
+            "HTTP-to-HTTPS redirect requires a fixed HTTPS listen port");
     }
     if (options.cors.has_value()) {
         validateCorsConfig(*options.cors);

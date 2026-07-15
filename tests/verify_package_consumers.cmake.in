@@ -4616,6 +4616,8 @@ if("web" IN_LIST _built_components)
         "${_install_prefix}/include/ruvia/web/detail/websocket/WsTransportReadResult.h")
     set(_app_lifecycle_header
         "${_install_prefix}/include/ruvia/web/detail/app/AppLifecycle.h")
+    set(_http2_session_lifecycle_header
+        "${_install_prefix}/include/ruvia/web/detail/server/Http2SansIoSessionLifecycle.h")
     if(NOT EXISTS "${_send_window_header}")
         message(FATAL_ERROR
             "installed web package is missing Http2SansIoSendWindow.h")
@@ -4639,6 +4641,21 @@ if("web" IN_LIST _built_components)
     if(NOT EXISTS "${_app_lifecycle_header}")
         message(FATAL_ERROR
             "installed web package is missing AppLifecycle.h")
+    endif()
+    if(NOT EXISTS "${_http2_session_lifecycle_header}")
+        message(FATAL_ERROR
+            "installed web package is missing Http2SansIoSessionLifecycle.h")
+    endif()
+    file(READ "${_http2_session_lifecycle_header}"
+        _http2_session_lifecycle_content)
+    if(NOT _http2_session_lifecycle_content MATCHES
+           "enum class Http2SansIoSessionPhase" OR
+       NOT _http2_session_lifecycle_content MATCHES
+           "class Http2SansIoSessionLifecycle final" OR
+       NOT _http2_session_lifecycle_content MATCHES
+           "kWriterDoneAfterWriteFailure")
+        message(FATAL_ERROR
+            "installed HTTP/2 Web session lifecycle contract is incomplete")
     endif()
     file(READ "${_app_lifecycle_header}" _app_lifecycle_content)
     if(NOT _app_lifecycle_content MATCHES "enum class AppLifecycleState" OR

@@ -253,14 +253,16 @@ RUVIA_TEST(sansio_tls_alpn_h2_round_trip) {
 }
 
 // Optional mutual TLS verifies a presented certificate but admits a client that
-// presents none; requireClientCertificate adds fail-if-no-peer-cert so a missing
+// presents none; required mode adds fail-if-no-peer-cert so a missing
 // certificate fails the handshake (mandatory mutual TLS).
 RUVIA_TEST(http_server_tls_verify_mode_optional_vs_mandatory) {
-    const auto optional = ruvia::detail::httpServerTlsVerifyMode(false);
+    const auto optional = ruvia::detail::httpServerTlsVerifyMode(
+        ruvia::TlsClientCertificateRequirement::kOptional);
     RUVIA_CHECK(optional == asio::ssl::verify_peer);
     RUVIA_CHECK((optional & asio::ssl::verify_fail_if_no_peer_cert) == 0);
 
-    const auto mandatory = ruvia::detail::httpServerTlsVerifyMode(true);
+    const auto mandatory = ruvia::detail::httpServerTlsVerifyMode(
+        ruvia::TlsClientCertificateRequirement::kRequired);
     RUVIA_CHECK((mandatory & asio::ssl::verify_peer) != 0);
     RUVIA_CHECK((mandatory & asio::ssl::verify_fail_if_no_peer_cert) != 0);
 }

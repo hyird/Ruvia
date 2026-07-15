@@ -310,15 +310,17 @@ void HttpServer::configureAcceptor() {
 void HttpServer::configureTlsContext() {
     sniContexts_.clear();
     sniLookup_.clear();
-    if (!options_.tls.enabled) {
+    const auto* tls = options_.tls();
+    if (tls == nullptr) {
         tlsContext_.reset();
         return;
     }
-    if (options_.tls.certificateChainFile.empty() || options_.tls.privateKeyFile.empty()) {
+    if (tls->identity.certificateChainFile.empty() ||
+        tls->identity.privateKeyFile.empty()) {
         throw std::invalid_argument("TLS requires certificate chain and private key files");
     }
 
-    const auto configure = [this](
+    const auto configure = [tls](
                                asio::ssl::context& context,
                                const std::pmr::string& certificateChainFile,
                                const std::pmr::string& privateKeyFile,
@@ -339,27 +341,35 @@ void HttpServer::configureTlsContext() {
         }
         useCertificateChainFile(context, certificateChainFile);
         usePrivateKeyFile(context, privateKeyFile);
-        if (!options_.tls.verifyFile.empty()) {
-            loadVerifyFile(context, options_.tls.verifyFile);
+        if (tls->clientCertificates.has_value()) {
+            loadVerifyFile(context, tls->clientCertificates->verifyFile);
             context.set_verify_mode(
-                httpServerTlsVerifyMode(options_.tls.requireClientCertificate));
+                httpServerTlsVerifyMode(tls->clientCertificates->requirement));
         }
     };
 
     // Per-host SNI certificates first, so the lookup can point at stable storage.
-    sniContexts_.reserve(options_.tls.sniCertificates.size());
-    for (const auto& certificate : options_.tls.sniCertificates) {
+    sniContexts_.reserve(tls->sniIdentities.size());
+    for (const auto& sni : tls->sniIdentities) {
         auto& context = sniContexts_.emplace_back(asio::ssl::context::tls_server);
-        configure(context, certificate.certificateChainFile, certificate.privateKeyFile, certificate.privateKeyPassword);
+        configure(
+            context,
+            sni.identity.certificateChainFile,
+            sni.identity.privateKeyFile,
+            sni.identity.privateKeyPassword);
     }
-    sniLookup_.reserve(options_.tls.sniCertificates.size());
-    for (std::size_t i = 0; i < options_.tls.sniCertificates.size(); ++i) {
-        sniLookup_.emplace_back(options_.tls.sniCertificates[i].host, &sniContexts_[i]);
+    sniLookup_.reserve(tls->sniIdentities.size());
+    for (std::size_t i = 0; i < tls->sniIdentities.size(); ++i) {
+        sniLookup_.emplace_back(tls->sniIdentities[i].host, &sniContexts_[i]);
     }
 
     tlsContext_.emplace(asio::ssl::context::tls_server);
     auto& context = *tlsContext_;
-    configure(context, options_.tls.certificateChainFile, options_.tls.privateKeyFile, options_.tls.privateKeyPassword);
+    configure(
+        context,
+        tls->identity.certificateChainFile,
+        tls->identity.privateKeyFile,
+        tls->identity.privateKeyPassword);
     if (!sniLookup_.empty()) {
         SSL_CTX_set_tlsext_servername_callback(context.native_handle(), &selectSniContext);
         SSL_CTX_set_tlsext_servername_arg(context.native_handle(), &sniLookup_);

@@ -225,7 +225,7 @@ RUVIA_TEST(response_body_move_preserves_active_alternative) {
     target = std::move(source);
     RUVIA_CHECK(target.headers().empty());
     RUVIA_CHECK(target.status() == 200);
-    RUVIA_CHECK(target.header("missing").empty());
+    RUVIA_CHECK(!target.header("missing").has_value());
     RUVIA_CHECK(target.headers().size() == 0);
     RUVIA_CHECK(responseBody(target).ownedBytes() != nullptr);
     RUVIA_CHECK_EQ(responseBody(target).bytes(), std::string_view("move-owned"));

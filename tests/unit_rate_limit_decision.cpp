@@ -79,10 +79,14 @@ RouteLimitResult runRouteLimit(RateLimiter& limiter, std::uintptr_t scope,
     if (r.hasResponse) {
         auto response = ContextAccess::takeResponse(context);
         r.status = response.status();
-        r.retryAfter = std::string(response.header("Retry-After"));
-        r.limit = std::string(response.header("X-RateLimit-Limit"));
-        r.remaining = std::string(response.header("X-RateLimit-Remaining"));
-        r.reset = std::string(response.header("X-RateLimit-Reset"));
+        r.retryAfter = std::string(
+            response.header("Retry-After").value_or(std::string_view{}));
+        r.limit = std::string(
+            response.header("X-RateLimit-Limit").value_or(std::string_view{}));
+        r.remaining = std::string(
+            response.header("X-RateLimit-Remaining").value_or(std::string_view{}));
+        r.reset = std::string(
+            response.header("X-RateLimit-Reset").value_or(std::string_view{}));
     }
     return r;
 }
@@ -117,7 +121,7 @@ RUVIA_TEST(rate_limit_rejection_owns_web_error_and_retry_headers) {
     ruvia::HttpResponse response;
     ruvia::detail::applyRateLimitRejectionHeaders(response, *rejection);
     RUVIA_CHECK_EQ(response.header("Retry-After"), std::string_view("2"));
-    RUVIA_CHECK(response.header("X-RateLimit-Limit").empty());
+    RUVIA_CHECK(!response.header("X-RateLimit-Limit").has_value());
 
     ruvia::detail::applyRouteRateLimitRejectionHeaders(
         response, *rejection, 7);

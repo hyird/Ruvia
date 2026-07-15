@@ -42,9 +42,7 @@ public:
     App& loadDotenv(DotenvOptions options = {});
     App& loadDotenv(const std::filesystem::path& path, DotenvOptions options = {});
     App& setListenAddress(std::string_view address);
-    App& setHttpListenPort(std::uint16_t port);
-    App& setHttpsListenPort(std::uint16_t port);
-    App& setAutoHttps(bool enabled = true);
+    App& setServerTopology(ServerTopology topology);
     App& setThreadNum(std::size_t threadNum);
     App& setWorkerMailboxCapacity(std::size_t capacity);
     App& setKeepaliveTimeout(std::optional<std::chrono::milliseconds> timeout);
@@ -58,8 +56,6 @@ public:
     App& setMaxBufferedBodyBytes(std::size_t bytes);
     App& setMaxStreamBodyBytes(std::optional<std::size_t> bytes);
     App& setMaxWebSocketMessageBytes(std::size_t bytes);
-    App& useTls(TlsConfig config);
-    App& addTlsCertificate(std::string_view host, TlsConfig config);
     App& setCompression(std::optional<CompressionConfig> config);
     App& setCors(std::optional<CorsConfig> config);
     App& setDocumentRoot(DocumentRootConfig config);

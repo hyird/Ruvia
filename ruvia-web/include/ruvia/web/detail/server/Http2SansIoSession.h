@@ -54,6 +54,7 @@
 #include "ruvia/core/detail/ConnectionScanner.h"
 #include "ruvia/web/detail/server/HttpBufferedResponse.h"
 #include "ruvia/web/detail/server/Http2BufferedResponseWrite.h"
+#include "ruvia/web/detail/server/Http2SansIoSessionLifecycle.h"
 #include "ruvia/http/detail/server/HttpResponseHeadPolicy.h"
 #include "ruvia/web/detail/server/HttpResponseStreamDispatch.h"
 #include "ruvia/web/detail/server/HttpServerAccessLog.h"
@@ -140,9 +141,7 @@ Task<void> runHttp2SansIoSession(
     Http2Connection connection(worker.resource(), Http2Role::kServer);
 
     WorkerSignal writeSignal(baseServices.worker(), executor);
-    bool stopping = false;  // reader has finished (EOF/error/connection error)
-    bool writeFailed = false;
-    bool writerDone = false;  // writer coroutine has fully exited (level-triggered join)
+    Http2SansIoSessionLifecycle lifecycle;
     bool initialInputRetained = false;
     // keepaliveRequests parity with h1's Http1RequestSequence: after this many
     // request heads the connection drains (GOAWAY NO_ERROR) instead of serving
@@ -183,19 +182,21 @@ Task<void> runHttp2SansIoSession(
     // reallocated the core's buffer would dangle a pendingOutput() view mid-write.
     //
     // CRITICAL: the writer's ONLY exit is
-    // `stopping && dispatchedCount == 0`. A write error
-    // sets writeFailed but keeps looping (draining and discarding output) until every
+    // `lifecycle.stopping() && dispatchedCount == 0`. A write error
+    // advances the lifecycle but keeps looping (draining and discarding output)
+    // until every
     // admitted handler has finished, because the session's teardown join treats the
     // writer's exit as the handler join too -- exiting while dispatchedCount is
     // nonzero would
     // let the session destroy this frame's state under a still-suspended detached
-    // handler (use-after-free). Once writeFailed, no bytes actually reach the socket.
+    // handler (use-after-free). In a write-failed phase, no bytes actually reach
+    // the socket.
     auto writerLoop = [&]() -> Task<void> {
         std::pmr::string writeScratch(worker.resource());
         for (;;) {
             while (connection.wantsWrite()) {
                 connection.takeOutput(writeScratch);  // always drain so the buffer can't grow
-                if (writeFailed) {
+                if (lifecycle.writeFailed()) {
                     continue;  // socket is dead; discard, but keep serving handlers
                 }
                 // Optimistic synchronous send, same rationale as the HTTP/1
@@ -226,7 +227,7 @@ Task<void> runHttp2SansIoSession(
                     writeEc = writeCompletion.errorCode();
                 }
                 if (writeEc) {
-                    writeFailed = true;
+                    lifecycle.markWriteFailed();
                     continue;
                 }
                 scannerEntry.touch();
@@ -235,7 +236,8 @@ Task<void> runHttp2SansIoSession(
                 // capacity for its whole lifetime (the h1 work-set trims the same way).
                 clearPmrStringRetainingSmall(writeScratch, 64 * 1024);
             }
-            if (stopping && streamRuntimes.dispatchedCount() == 0) {
+            if (lifecycle.stopping() &&
+                streamRuntimes.dispatchedCount() == 0) {
                 co_return;  // nothing left to write and no more will be produced
             }
             co_await writeSignal.wait();
@@ -863,7 +865,8 @@ Task<void> runHttp2SansIoSession(
     connection.beginConnection();
 
     // Spawn the writer; it runs concurrently with the reader below. The join below is
-    // LEVEL-triggered on writerDone, not on signal notification alone: notification
+    // LEVEL-triggered on the writer-done phase, not on signal notification alone:
+    // notification
     // before a waiter exists must still make a late join return immediately, so if the writer finishes before the
     // reader reaches the join (common on an abrupt peer RST, where the write error
     // surfaces first), a cancel-only latch would be a no-op and the join would sleep
@@ -871,8 +874,8 @@ Task<void> runHttp2SansIoSession(
     WorkerSignal writerFinished(baseServices.worker(), executor);
     asio::co_spawn(
         executor, taskAsAwaitable(writerLoop()),
-        [&writerFinished, &writerDone](std::exception_ptr) noexcept {
-            writerDone = true;
+        [&writerFinished, &lifecycle](std::exception_ptr) noexcept {
+            lifecycle.markWriterDone();
             writerFinished.notify();
         });
 
@@ -923,7 +926,8 @@ Task<void> runHttp2SansIoSession(
                 std::string_view(readBuffer.data(), bytesRead));
             wakeWriter();  // feed may have produced ACKs / WINDOW_UPDATEs to flush
             if (result == Http2FeedResult::kConnectionNotStarted ||
-                result == Http2FeedResult::kProtocolFailure || writeFailed) {
+                result == Http2FeedResult::kProtocolFailure ||
+                lifecycle.writeFailed()) {
                 break;  // retained input, terminal protocol failure, or dead write side
             }
         }
@@ -940,9 +944,9 @@ Task<void> runHttp2SansIoSession(
     // Let the writer drain the last output once every handler has finished, then join
     // it (handlers wake the writer as they complete, so joining the writer waits for
     // them too). Level-triggered: skip the wait entirely if the writer already exited.
-    stopping = true;
+    lifecycle.beginStopping();
     wakeWriter();
-    while (!writerDone) {
+    while (!lifecycle.writerDone()) {
         co_await writerFinished.wait();
     }
     co_return;

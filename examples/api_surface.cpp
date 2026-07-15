@@ -1594,8 +1594,9 @@ concept HasAppListenAddressPortSetter = requires(T& app) {
 };
 
 template <typename T>
-concept HasAppHttpListenPortSetter = requires(T& app) {
-    { app.setHttpListenPort(std::uint16_t{8080}) } -> std::same_as<ruvia::App&>;
+concept HasAppServerTopologySetter = requires(T& app) {
+    { app.setServerTopology(ruvia::ServerTopology::http(8080)) }
+        -> std::same_as<ruvia::App&>;
 };
 
 template <typename T>
@@ -2527,7 +2528,7 @@ static_assert(HasAppDocumentRootConfigSetter<ruvia::App>);
 static_assert(!HasAppDocumentRootPathSetter<ruvia::App>);
 static_assert(HasAppListenAddressSetter<ruvia::App>);
 static_assert(!HasAppListenAddressPortSetter<ruvia::App>);
-static_assert(HasAppHttpListenPortSetter<ruvia::App>);
+static_assert(HasAppServerTopologySetter<ruvia::App>);
 static_assert(HasCanonicalAccessLogCallback<ruvia::App>);
 static_assert(HasBoundAccessLogCallback<ruvia::AccessLogCallback>);
 static_assert(!std::is_default_constructible_v<ruvia::AccessLogRecord>);
@@ -3540,7 +3541,7 @@ static_assert(!ControllerBaseSurfaceProbe::hasLegacyRouteRegistration<Controller
 int main() {
     ruvia::app()
         .setListenAddress("0.0.0.0")
-        .setHttpListenPort(8088)
+        .setServerTopology(ruvia::ServerTopology::http(8088))
         .setThreadNum(2)
         .notFound(&surfaceNotFound)
         .run();

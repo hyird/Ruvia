@@ -1121,7 +1121,7 @@ if(EXISTS "${WEB_APP_PUBLIC_MODEL}" AND
        NOT web_server_config_model MATCHES
            "struct[ \t]+CorsConfig[ \t]+final" OR
        NOT web_server_config_model MATCHES
-           "std::optional<std::chrono::seconds>[ \\t]+maxAge" OR
+           "std::optional<CorsMaxAge>[ \\t]+maxAge" OR
        NOT web_server_config_model MATCHES "AccessLogCallback" OR
        NOT web_server_options_model MATCHES
            "namespace[ \t]+ruvia::detail" OR
@@ -1138,7 +1138,13 @@ if(EXISTS "${WEB_APP_PUBLIC_MODEL}" AND
        NOT web_server_config_package_consumer MATCHES
            "AppSetCorsFunction" OR
        NOT web_server_config_package_consumer MATCHES
-           "decltype[(]ruvia::CorsConfig[{][}][.]maxAge[)]")
+           "decltype[(]ruvia::CorsConfig[{][}][.]maxAge[)]" OR
+       NOT web_server_config_package_consumer MATCHES
+           "HasLegacyCorsFields" OR
+       NOT web_server_config_package_consumer MATCHES
+           "HasLegacyStaticAllowAll" OR
+       NOT web_server_config_package_consumer MATCHES
+           "HasLegacyStaticFileTypesVector")
         boundary_error("Web server configuration regained parallel public models"
             "ServerConfig.h owns active policy values; detail/server/HttpServerOptions.h uses optional presence for enablement")
     endif()
@@ -11579,6 +11585,25 @@ if(NOT app_lifecycle_content MATCHES "enum class AppLifecycleState" OR
        "bool (running|startHooksRunning|stopHooksClaimed|stopRequested)")
     boundary_error("App lifecycle is not represented by one typed state"
         "Run, hooks, deferred stop, and stopping must transition through AppLifecycle")
+endif()
+
+set(HTTP2_SESSION_LIFECYCLE_HEADER
+    "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/server/Http2SansIoSessionLifecycle.h")
+set(HTTP2_SESSION_HEADER
+    "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/server/Http2SansIoSession.h")
+file(READ "${HTTP2_SESSION_LIFECYCLE_HEADER}"
+    http2_session_lifecycle_content)
+file(READ "${HTTP2_SESSION_HEADER}" http2_session_lifecycle_consumer)
+if(NOT http2_session_lifecycle_content MATCHES
+       "enum class Http2SansIoSessionPhase" OR
+   NOT http2_session_lifecycle_content MATCHES
+       "class Http2SansIoSessionLifecycle final" OR
+   NOT http2_session_lifecycle_consumer MATCHES
+       "Http2SansIoSessionLifecycle lifecycle" OR
+   http2_session_lifecycle_consumer MATCHES
+       "bool (stopping|writeFailed|writerDone)")
+    boundary_error("HTTP/2 Web session restored parallel lifecycle flags"
+        "Reader stop, write failure, and writer join must transition one typed lifecycle")
 endif()
 
 get_property(boundary_failed GLOBAL PROPERTY RUVIA_BOUNDARY_FAILED)
