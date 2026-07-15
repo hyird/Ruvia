@@ -464,8 +464,6 @@ RUVIA_TEST(multipart_part_header_rejects_ambiguous_disposition_parameters) {
              "Content-Disposition: form-data; name=field; filename=a; filename=b",
              "Content-Disposition: form-data; name=field; FileName*=UTF-8''evil.txt",
              "Content-Disposition: form-data; name=field; x=one; X=two",
-             "Content-Disposition: form-data; name =field",
-             "Content-Disposition: form-data; name= field",
              "Content-Disposition: form-data; name=field; broken",
              "Content-Disposition: form-data; name=field\r\n"
              "Content-Disposition: form-data; name=shadow"}) {
@@ -499,6 +497,16 @@ RUVIA_TEST(multipart_part_header_rejects_ambiguous_disposition_parameters) {
     if (escaped.headers() != nullptr) {
         RUVIA_CHECK_EQ(escaped.headers()->name(), std::string_view("a\\\"b"));
         RUVIA_CHECK_EQ(escaped.headers()->filename(), std::string_view("x\\\\y"));
+    }
+
+    // MIME structured fields allow linear whitespace around separator
+    // characters; this differs from top-level HTTP media-type parameters.
+    const auto spaced = httpParseMultipartPartHeaders(
+        "Content-Disposition: form-data; name = field; filename = \"a.txt\"");
+    RUVIA_CHECK(spaced.headers() != nullptr);
+    if (spaced.headers() != nullptr) {
+        RUVIA_CHECK_EQ(spaced.headers()->name(), std::string_view("field"));
+        RUVIA_CHECK_EQ(spaced.headers()->filename(), std::string_view("a.txt"));
     }
 }
 
@@ -628,7 +636,7 @@ RUVIA_TEST(multipart_complete_body_parser_returns_borrowed_part_bodies) {
     const std::string body =
         "preamble\r\n"
         "--BOUNDARY\r\n"
-        "Content-Disposition: form-data; name=\"field\"\r\n\r\n"
+        "Content-Disposition: form-data; name = \"field\"\r\n\r\n"
         "value\r\n"
         "--BOUNDARY\r\n"
         "Content-Disposition: form-data; name=\"upload\"; filename=\"a.txt\"\r\n"

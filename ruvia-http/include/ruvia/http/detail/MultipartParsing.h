@@ -613,7 +613,8 @@ private:
 [[nodiscard]] inline bool httpParseMimeParameter(
     std::string_view parameter,
     std::string_view& name,
-    std::string_view& value) noexcept {
+    std::string_view& value,
+    bool strictEquals = true) noexcept {
     const auto equals = parameter.find('=');
     if (parameter.empty() || equals == std::string_view::npos) {
         return false;
@@ -623,10 +624,11 @@ private:
     const auto rawValue = parameter.substr(equals + 1);
     name = httpTrimOws(rawName);
     value = httpTrimOws(rawValue);
-    // RFC 9110 section 5.6.6 permits OWS around the semicolon delimiter, but
-    // none around '='. Comparing the trimmed views preserves that distinction.
-    return name.size() == rawName.size() &&
-        value.size() == rawValue.size() &&
+    // Top-level HTTP media-type parameters forbid OWS around '=' (RFC 9110
+    // section 5.6.6). MIME body-part structured fields retain RFC 822's
+    // separator whitespace and opt out while sharing the remaining checks.
+    return (!strictEquals ||
+            (name.size() == rawName.size() && value.size() == rawValue.size())) &&
         !name.empty() &&
         std::all_of(name.begin(), name.end(), httpMimeTokenChar) &&
         httpValidMimeParameterValue(value);
@@ -800,7 +802,7 @@ httpParseMultipartPartHeaders(std::string_view headers) noexcept {
         const auto parameter = httpTrimOws(remaining.substr(start, end - start));
         std::string_view key;
         std::string_view value;
-        if (!httpParseMimeParameter(parameter, key, value) ||
+        if (!httpParseMimeParameter(parameter, key, value, false) ||
             !parameterNames.record(key)) {
             return HttpMultipartPartHeaderParseResult::makeFailure(
                 MultipartParseError::kInvalidContentDisposition);
