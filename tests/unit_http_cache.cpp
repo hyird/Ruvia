@@ -1,5 +1,7 @@
 #include "test_harness.h"
 
+#include <limits>
+
 #include "ruvia/http/HttpCache.h"
 
 RUVIA_TEST(parse_cache_control_flags_and_ages) {
@@ -34,6 +36,35 @@ RUVIA_TEST(parse_cache_control_rejects_bad_delta_seconds) {
     const auto cc = ruvia::parseCacheControl("max-age=abc, s-maxage=");
     RUVIA_CHECK(!cc.maxAge.has_value());
     RUVIA_CHECK(!cc.sMaxAge.has_value());
+}
+
+RUVIA_TEST(parse_cache_control_freshness_uses_first_occurrence) {
+    const auto duplicated = ruvia::parseCacheControl(
+        "max-age=60, MAX-AGE=3600, s-maxage=120, s-maxage=7200, "
+        "stale-while-revalidate=30, stale-while-revalidate=300, "
+        "stale-if-error=45, stale-if-error=450");
+    RUVIA_CHECK_EQ(duplicated.maxAge.value_or(0), std::uint64_t{60});
+    RUVIA_CHECK_EQ(duplicated.sMaxAge.value_or(0), std::uint64_t{120});
+    RUVIA_CHECK_EQ(
+        duplicated.staleWhileRevalidate.value_or(0), std::uint64_t{30});
+    RUVIA_CHECK_EQ(duplicated.staleIfError.value_or(0), std::uint64_t{45});
+
+    // An invalid first occurrence cannot be repaired by a later value; caches
+    // must not accidentally turn invalid freshness information into freshness.
+    const auto invalidFirst = ruvia::parseCacheControl(
+        "max-age=invalid, max-age=3600, s-maxage=, s-maxage=7200");
+    RUVIA_CHECK(!invalidFirst.maxAge.has_value());
+    RUVIA_CHECK(!invalidFirst.sMaxAge.has_value());
+}
+
+RUVIA_TEST(parse_cache_control_delta_seconds_overflow_saturates) {
+    const auto cc = ruvia::parseCacheControl(
+        "max-age=184467440737095516150, "
+        "s-maxage=\"184467440737095516150\"");
+    RUVIA_CHECK_EQ(
+        cc.maxAge.value_or(0), (std::numeric_limits<std::uint64_t>::max)());
+    RUVIA_CHECK_EQ(
+        cc.sMaxAge.value_or(0), (std::numeric_limits<std::uint64_t>::max)());
 }
 
 RUVIA_TEST(parse_cache_control_does_not_split_quoted_extension_values) {

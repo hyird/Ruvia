@@ -1,6 +1,7 @@
 #include "ruvia/http/HttpCache.h"
 
 #include <charconv>
+#include <limits>
 
 #include "ruvia/http/detail/HeaderTokenUtils.h"       // httpTrimOws, httpAsciiEqualsIgnoreCase
 #include "ruvia/http/detail/HttpDate.h"
@@ -9,7 +10,8 @@ namespace ruvia {
 namespace {
 
 // Parse a delta-seconds value (RFC 9111 section 1.2.2): an optionally DQUOTE-wrapped non-negative
-// integer. Overflow / non-digit / empty yields nullopt.
+// integer. Syntactically valid overflow saturates to the greatest convenient
+// representation; non-digit / empty input remains invalid.
 [[nodiscard]] std::optional<std::uint64_t> parseDeltaSeconds(std::string_view value) noexcept {
     value = detail::httpTrimOws(value);
     if (value.size() >= 2 && value.front() == '"' && value.back() == '"') {
@@ -20,7 +22,13 @@ namespace {
     }
     std::uint64_t result = 0;
     const auto [ptr, ec] = std::from_chars(value.data(), value.data() + value.size(), result);
-    if (ec != std::errc{} || ptr != value.data() + value.size()) {
+    if (ptr != value.data() + value.size()) {
+        return std::nullopt;
+    }
+    if (ec == std::errc::result_out_of_range) {
+        return (std::numeric_limits<std::uint64_t>::max)();
+    }
+    if (ec != std::errc{}) {
         return std::nullopt;
     }
     return result;
@@ -56,6 +64,10 @@ namespace {
 
 CacheControl parseCacheControl(std::string_view value) noexcept {
     CacheControl result;
+    bool maxAgeSeen = false;
+    bool sMaxAgeSeen = false;
+    bool staleWhileRevalidateSeen = false;
+    bool staleIfErrorSeen = false;
     std::size_t pos = 0;
     while (pos < value.size()) {
         const auto comma = cacheDirectiveEnd(value, pos);
@@ -86,13 +98,25 @@ CacheControl parseCacheControl(std::string_view value) noexcept {
         } else if (!hasArgument && detail::httpAsciiEqualsIgnoreCase(name, "immutable")) {
             result.immutable = true;
         } else if (detail::httpAsciiEqualsIgnoreCase(name, "max-age")) {
-            result.maxAge = parseDeltaSeconds(arg);
+            if (!maxAgeSeen) {
+                maxAgeSeen = true;
+                result.maxAge = parseDeltaSeconds(arg);
+            }
         } else if (detail::httpAsciiEqualsIgnoreCase(name, "s-maxage")) {
-            result.sMaxAge = parseDeltaSeconds(arg);
+            if (!sMaxAgeSeen) {
+                sMaxAgeSeen = true;
+                result.sMaxAge = parseDeltaSeconds(arg);
+            }
         } else if (detail::httpAsciiEqualsIgnoreCase(name, "stale-while-revalidate")) {
-            result.staleWhileRevalidate = parseDeltaSeconds(arg);
+            if (!staleWhileRevalidateSeen) {
+                staleWhileRevalidateSeen = true;
+                result.staleWhileRevalidate = parseDeltaSeconds(arg);
+            }
         } else if (detail::httpAsciiEqualsIgnoreCase(name, "stale-if-error")) {
-            result.staleIfError = parseDeltaSeconds(arg);
+            if (!staleIfErrorSeen) {
+                staleIfErrorSeen = true;
+                result.staleIfError = parseDeltaSeconds(arg);
+            }
         }
     }
     return result;
