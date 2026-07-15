@@ -132,6 +132,78 @@ bool testBoundedMailbox() {
     return calls.load() == 2;
 }
 
+bool testExternalEventLoopAttachment() {
+    asio::io_context ioContext;
+    {
+        auto attachment = ruvia::attachEventLoop(
+            ioContext,
+            {.mailboxCapacity = 4});
+        const auto loop = attachment.loop();
+        if (!attachment.valid() || !loop.valid() ||
+            &loop.ioContext() != &ioContext) {
+            return false;
+        }
+
+        asio::ip::tcp::socket tcp(loop.executor());
+        asio::ip::udp::socket udp(loop.executor());
+        if (&tcp.get_executor().context() != &ioContext ||
+            &udp.get_executor().context() != &ioContext) {
+            return false;
+        }
+
+        bool duplicateRejected = false;
+        try {
+            auto duplicate = ruvia::attachEventLoop(ioContext);
+        } catch (const std::invalid_argument&) {
+            duplicateRejected = true;
+        }
+        if (!duplicateRejected) {
+            return false;
+        }
+
+        std::promise<bool> completed;
+        auto result = completed.get_future();
+        std::atomic_bool stopCallbackRan{false};
+        std::atomic_bool stopCallbackOnLoop{false};
+        auto stopRegistration = loop.onStop([&] {
+            stopCallbackOnLoop = loop.isCurrent();
+            stopCallbackRan = true;
+        });
+        if (loop.post([loop, completed = std::move(completed)]() mutable {
+                completed.set_value(loop.isCurrent());
+            }) != ruvia::PostResult::kAccepted) {
+            return false;
+        }
+
+        std::thread externalThread([&] { ioContext.run(); });
+        const bool dispatchedOnExternalThread = result.get();
+        attachment.stop();
+        externalThread.join();
+        if (!dispatchedOnExternalThread || !stopRegistration.valid() ||
+            !stopCallbackRan || !stopCallbackOnLoop ||
+            loop.post([] {}) != ruvia::PostResult::kWorkerStopping) {
+            return false;
+        }
+    }
+
+    ioContext.restart();
+    {
+        auto attachment = ruvia::attachEventLoop(ioContext);
+        attachment.stop();
+        ioContext.run();
+    }
+
+    ioContext.restart();
+    try {
+        auto invalid = ruvia::attachEventLoop(
+            ioContext,
+            {.mailboxCapacity = 0});
+    } catch (const std::invalid_argument&) {
+        return true;
+    }
+    return false;
+}
+
 bool testFailurePropagation() {
     ruvia::EventLoopPool loops({.loopCount = 1, .mailboxCapacity = 1});
     const auto loop = loops.loop(0);
@@ -232,6 +304,7 @@ bool testConcurrentStopHasOneInitiator() {
 int main() {
     return testWorkerSignalHasOneDispatchTarget() &&
                testDispatchAndAffinity() && testBoundedMailbox() &&
+               testExternalEventLoopAttachment() &&
                testFailurePropagation() && testExpiredHandle() &&
                testLifecycleTransitionsAreMonotonic() &&
                testConcurrentStopHasOneInitiator()

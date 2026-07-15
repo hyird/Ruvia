@@ -5,11 +5,13 @@
 #include <atomic>
 #include <exception>
 #include <mutex>
+#include <optional>
 #include <stdexcept>
 #include <thread>
 #include <utility>
 #include <vector>
 
+#include <asio/execution_context.hpp>
 #include <asio/executor_work_guard.hpp>
 
 #include <ruvia/core/detail/WorkerDispatcher.h>
@@ -21,6 +23,56 @@ namespace {
 std::size_t defaultLoopCount() noexcept {
     return std::max<std::size_t>(1, std::thread::hardware_concurrency());
 }
+
+class ExternalContextAttachmentService final
+    : public asio::execution_context::service {
+public:
+    static asio::execution_context::id id;
+
+    explicit ExternalContextAttachmentService(asio::execution_context& context)
+        : asio::execution_context::service(context) {}
+
+    [[nodiscard]] bool claim() noexcept {
+        bool expected = false;
+        return claimed_.compare_exchange_strong(
+            expected,
+            true,
+            std::memory_order_acq_rel,
+            std::memory_order_acquire);
+    }
+
+    void release() noexcept {
+        claimed_.store(false, std::memory_order_release);
+    }
+
+private:
+    void shutdown() override {}
+
+    std::atomic_bool claimed_{false};
+};
+
+asio::execution_context::id ExternalContextAttachmentService::id;
+
+class ExternalContextClaim final {
+public:
+    explicit ExternalContextClaim(asio::io_context& ioContext)
+        : service_(&asio::use_service<ExternalContextAttachmentService>(ioContext)) {
+        if (!service_->claim()) {
+            throw std::invalid_argument(
+                "an io_context can have only one Ruvia event loop attachment");
+        }
+    }
+
+    ~ExternalContextClaim() {
+        service_->release();
+    }
+
+    ExternalContextClaim(const ExternalContextClaim&) = delete;
+    ExternalContextClaim& operator=(const ExternalContextClaim&) = delete;
+
+private:
+    ExternalContextAttachmentService* service_;
+};
 
 class EventLoopStopListener final : public detail::WorkerShutdownListener {
 public:
@@ -65,15 +117,49 @@ namespace detail {
 
 struct EventLoopState final {
     explicit EventLoopState(std::size_t mailboxCapacity)
-        : work(asio::make_work_guard(ioContext)),
+        : ownedContext(std::make_unique<asio::io_context>()),
+          ioContext(*ownedContext),
+          work(asio::make_work_guard(ioContext)),
           dispatcher(std::make_shared<WorkerDispatcher>(ioContext, mailboxCapacity)),
           handle(WorkerHandleAccess::make(dispatcher)) {}
 
-    asio::io_context ioContext;
-    asio::executor_work_guard<asio::io_context::executor_type> work;
+    EventLoopState(asio::io_context& externalContext, std::size_t mailboxCapacity)
+        : externalClaim(std::in_place, externalContext),
+          ioContext(externalContext),
+          work(asio::make_work_guard(ioContext)),
+          dispatcher(std::make_shared<WorkerDispatcher>(ioContext, mailboxCapacity)),
+          handle(WorkerHandleAccess::make(dispatcher)) {
+        if (mailboxCapacity == 0) {
+            throw std::invalid_argument(
+                "event loop mailbox capacity must be greater than zero");
+        }
+    }
+
+    void stop() noexcept {
+        if (stopping.exchange(true, std::memory_order_acq_rel)) {
+            return;
+        }
+        dispatcher->close();
+        try {
+            if (dispatcher->isCurrent()) {
+                dispatcher->stopTimers();
+            } else {
+                dispatcher->defer(
+                    [dispatcher = dispatcher] { dispatcher->stopTimers(); });
+            }
+        } catch (...) {
+        }
+        work->reset();
+    }
+
+    std::unique_ptr<asio::io_context> ownedContext;
+    std::optional<ExternalContextClaim> externalClaim;
+    asio::io_context& ioContext;
+    std::optional<asio::executor_work_guard<asio::io_context::executor_type>> work;
     std::shared_ptr<WorkerDispatcher> dispatcher;
     WorkerHandle handle;
     std::thread thread;
+    std::atomic_bool stopping{false};
 };
 
 }
@@ -134,6 +220,49 @@ EventLoopStopRegistration EventLoop::registerStopCallback(
     return EventLoopStopRegistration(std::move(listener));
 }
 
+EventLoopAttachment::EventLoopAttachment(
+    std::shared_ptr<detail::EventLoopState> state) noexcept
+    : state_(std::move(state)) {}
+
+EventLoopAttachment::~EventLoopAttachment() {
+    stop();
+}
+
+EventLoopAttachment::EventLoopAttachment(EventLoopAttachment&& other) noexcept
+    : state_(std::move(other.state_)) {}
+
+EventLoopAttachment& EventLoopAttachment::operator=(
+    EventLoopAttachment&& other) noexcept {
+    if (this != &other) {
+        stop();
+        state_ = std::move(other.state_);
+    }
+    return *this;
+}
+
+bool EventLoopAttachment::valid() const noexcept {
+    return state_ != nullptr;
+}
+
+EventLoop EventLoopAttachment::loop() const noexcept {
+    return EventLoop(state_);
+}
+
+void EventLoopAttachment::stop() noexcept {
+    if (state_) {
+        state_->stop();
+    }
+}
+
+EventLoopAttachment attachEventLoop(
+    asio::io_context& ioContext,
+    EventLoopAttachmentOptions options) {
+    return EventLoopAttachment(
+        std::make_shared<detail::EventLoopState>(
+            ioContext,
+            options.mailboxCapacity));
+}
+
 struct EventLoopPool::Impl {
     explicit Impl(EventLoopPoolOptions options) {
         const auto count = options.loopCount == 0 ? defaultLoopCount() : options.loopCount;
@@ -158,17 +287,7 @@ struct EventLoopPool::Impl {
             return;
         }
         for (const auto& loop : loops) {
-            loop->dispatcher->close();
-            try {
-                if (loop->dispatcher->isCurrent()) {
-                    loop->dispatcher->stopTimers();
-                } else {
-                    loop->dispatcher->defer(
-                        [dispatcher = loop->dispatcher] { dispatcher->stopTimers(); });
-                }
-            } catch (...) {
-            }
-            loop->work.reset();
+            loop->stop();
         }
     }
 

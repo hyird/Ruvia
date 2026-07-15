@@ -150,6 +150,27 @@ use bounded `EventLoop::post()` rather than raw `asio::post()`, so shutdown and
 backpressure remain observable. Web workers deliberately expose only
 `WorkerHandle`/`WebWorkerHandle`, not their `io_context` or executor.
 
+Existing Asio applications can attach one Ruvia event loop to an externally
+owned context without transferring thread or lifecycle ownership:
+
+```cpp
+asio::io_context io;
+auto attachment = ruvia::attachEventLoop(io);
+auto loop = attachment.loop();
+
+std::thread thread([&] { io.run(); });
+loop.post([] { /* runs on the external context */ });
+
+attachment.stop(); // closes the mailbox, runs onStop hooks, releases its work guard
+thread.join();
+```
+
+The external `io_context` must outlive the attachment, every returned
+`EventLoop`, and their Asio objects. Attach at most once per context, call
+`attachment.stop()` while the context can still drain handlers, and retain
+ownership of `run()`, `stop()`, `restart()`, and the thread. The attachment
+never calls `io_context::stop()` because the context may host unrelated work.
+
 Web handlers obtain their current core worker with `Context::worker()`.
 Background components select a stable Web worker with `App::workerFor()` and
 submit an asynchronous Web job. The callback receives worker-local DB and Redis

@@ -233,6 +233,9 @@ static_assert(!std::copy_constructible<ruvia::TaskScope>);
 static_assert(!std::move_constructible<ruvia::TaskScope>);
 static_assert(std::default_initializable<ruvia::EventLoop>);
 static_assert(std::copy_constructible<ruvia::EventLoop>);
+static_assert(!std::default_initializable<ruvia::EventLoopAttachment>);
+static_assert(!std::copy_constructible<ruvia::EventLoopAttachment>);
+static_assert(std::move_constructible<ruvia::EventLoopAttachment>);
 static_assert(!std::copy_constructible<ruvia::EventLoopStopRegistration>);
 static_assert(std::move_constructible<ruvia::EventLoopStopRegistration>);
 static_assert(std::same_as<
@@ -244,6 +247,12 @@ static_assert(std::same_as<
 static_assert(std::same_as<
     decltype(std::declval<const ruvia::EventLoop&>().handle()),
     ruvia::WorkerHandle>);
+static_assert(std::same_as<
+    decltype(ruvia::attachEventLoop(std::declval<asio::io_context&>())),
+    ruvia::EventLoopAttachment>);
+static_assert(std::same_as<
+    decltype(std::declval<const ruvia::EventLoopAttachment&>().loop()),
+    ruvia::EventLoop>);
 
 static_assert(!HasConnectionTimeoutMillisecondSentinels<
               ruvia::detail::ConnectionScannerOptions>);

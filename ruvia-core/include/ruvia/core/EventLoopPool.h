@@ -74,7 +74,38 @@ private:
 
     std::shared_ptr<detail::EventLoopState> state_;
     friend class EventLoopPool;
+    friend class EventLoopAttachment;
 };
+
+struct EventLoopAttachmentOptions final {
+    std::size_t mailboxCapacity{1024};
+};
+
+class EventLoopAttachment final {
+public:
+    ~EventLoopAttachment();
+
+    EventLoopAttachment(const EventLoopAttachment&) = delete;
+    EventLoopAttachment& operator=(const EventLoopAttachment&) = delete;
+    EventLoopAttachment(EventLoopAttachment&& other) noexcept;
+    EventLoopAttachment& operator=(EventLoopAttachment&& other) noexcept;
+
+    [[nodiscard]] bool valid() const noexcept;
+    [[nodiscard]] EventLoop loop() const noexcept;
+    void stop() noexcept;
+
+private:
+    explicit EventLoopAttachment(
+        std::shared_ptr<detail::EventLoopState> state) noexcept;
+
+    std::shared_ptr<detail::EventLoopState> state_;
+    friend EventLoopAttachment attachEventLoop(
+        asio::io_context&, EventLoopAttachmentOptions);
+};
+
+[[nodiscard]] EventLoopAttachment attachEventLoop(
+    asio::io_context& ioContext,
+    EventLoopAttachmentOptions options = {});
 
 struct EventLoopPoolOptions final {
     std::size_t loopCount{0};
