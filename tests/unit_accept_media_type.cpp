@@ -131,6 +131,19 @@ RUVIA_TEST(media_range_rejects_duplicate_parameter_names) {
         "text/html;level=1", "text/html;level=1;LEVEL=2"));
 }
 
+RUVIA_TEST(media_range_rejects_invalid_offered_parameters) {
+    for (const std::string_view offered : {
+             "text/plain; charset",
+             "text/plain; charset=",
+             "text/plain; charset =utf-8",
+             "text/plain; charset=utf-8; CHARSET=latin1",
+             "text/plain; charset=\"unterminated"}) {
+        RUVIA_CHECK(!httpMediaRangeMatches("*/*", offered));
+        RUVIA_CHECK(!httpAcceptsMediaType("*/*", offered));
+        RUVIA_CHECK(!httpAcceptsMediaType("", offered));
+    }
+}
+
 RUVIA_TEST(accepts_media_type_basic) {
     RUVIA_CHECK(httpAcceptsMediaType("", "text/html"));                // absent Accept -> accept anything
     RUVIA_CHECK(httpAcceptsMediaType("text/html", "text/html"));

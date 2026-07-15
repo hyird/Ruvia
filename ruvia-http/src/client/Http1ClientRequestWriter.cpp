@@ -271,7 +271,7 @@ struct RequestHeaderFacts final {
         } else if (detail::httpAsciiEqualsIgnoreCase(name, "Content-Type")) {
             detail::HttpMediaTypeParts parts;
             if (facts.hasContentType ||
-                !detail::httpParseMediaTypeParts(value, false, parts)) {
+                !detail::httpParseMediaType(value, false, parts)) {
                 error = Http1ClientRequestPrepareError::kInvalidHeader;
                 return false;
             }

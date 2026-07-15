@@ -531,6 +531,34 @@ RUVIA_TEST(http1_client_request_writer_enforces_method_content_semantics) {
         Http1ClientRequestPrepareError::kInvalidHeader);
 }
 
+RUVIA_TEST(http1_client_request_writer_rejects_invalid_content_type_parameters) {
+    for (const std::string_view value : {
+             "text/plain; charset",
+             "text/plain; charset=",
+             "text/plain; charset =utf-8",
+             "text/plain; charset=utf-8; CHARSET=latin1",
+             "text/plain; charset=\"unterminated"}) {
+        const ruvia::HttpHeaderView contentType("Content-Type", value);
+        HttpClientRequest request;
+        request.method = "POST";
+        request.headers = std::span<const ruvia::HttpHeaderView>(&contentType, 1);
+        request.content = HttpClientRequestContent::bytes("body");
+        RUVIA_CHECK(
+            prepareError(request) ==
+            Http1ClientRequestPrepareError::kInvalidHeader);
+    }
+
+    const ruvia::HttpHeaderView validContentType(
+        "Content-Type", "text/plain; charset=\"utf-8\"");
+    HttpClientRequest valid;
+    valid.method = "POST";
+    valid.headers =
+        std::span<const ruvia::HttpHeaderView>(&validContentType, 1);
+    valid.content = HttpClientRequestContent::bytes("body");
+    PreparedFixture fixture(HttpOrigin::https("example.test"), valid);
+    RUVIA_CHECK(fixture.result.prepared() != nullptr);
+}
+
 RUVIA_TEST(http1_client_request_writer_returns_exact_buffer_requirement_without_partial_output) {
     HttpClientRequest request;
     request.method = "POST";

@@ -501,11 +501,25 @@ template <typename Visitor>
         (subtypeWildcard || httpMediaToken(parts.subtype));
 }
 
-[[nodiscard]] inline bool httpMediaRangeMatches(std::string_view range, std::string_view offered) noexcept {
+[[nodiscard]] inline bool httpParseMediaType(
+    std::string_view value,
+    bool allowWildcard,
+    HttpMediaTypeParts& parts) noexcept {
+    return httpParseMediaTypeParts(value, allowWildcard, parts) &&
+        httpVisitMediaTypeParameters(
+            value,
+            false,
+            [](std::string_view, std::string_view) noexcept {
+                return true;
+            });
+}
+
+[[nodiscard]] inline bool httpMediaRangeMatchesValidOffered(
+    std::string_view range,
+    std::string_view offered,
+    const HttpMediaTypeParts& offeredParts) noexcept {
     HttpMediaTypeParts rangeParts;
-    HttpMediaTypeParts offeredParts;
-    if (!httpParseMediaTypeParts(range, true, rangeParts) ||
-        !httpParseMediaTypeParts(offered, false, offeredParts)) {
+    if (!httpParseMediaTypeParts(range, true, rangeParts)) {
         return false;
     }
 
@@ -527,6 +541,14 @@ template <typename Visitor>
         [offered](std::string_view name, std::string_view value) noexcept {
             return httpOfferedMediaTypeHasParameter(offered, name, value);
         });
+}
+
+[[nodiscard]] inline bool httpMediaRangeMatches(
+    std::string_view range,
+    std::string_view offered) noexcept {
+    HttpMediaTypeParts offeredParts;
+    return httpParseMediaType(offered, false, offeredParts) &&
+        httpMediaRangeMatchesValidOffered(range, offered, offeredParts);
 }
 
 [[nodiscard]] inline int httpMediaRangeSpecificity(std::string_view range) noexcept {
@@ -571,29 +593,41 @@ inline void httpAccumulateMediaTypeAcceptance(
     std::string_view offered,
     int& bestSpecificity,
     int& bestQuality) noexcept {
-    httpVisitCommaSeparatedQuoted(accept, [offered, &bestSpecificity, &bestQuality](std::string_view item) noexcept {
-        if (httpMediaRangeMatches(item, offered)) {
-            const auto typeSpecificity = httpMediaRangeSpecificity(item);
-            const auto parameterCount = httpMediaRangeParameterCount(item);
-            if (typeSpecificity < 0 || parameterCount < 0) {
-                return true;
+    HttpMediaTypeParts offeredParts;
+    if (!httpParseMediaType(offered, false, offeredParts)) {
+        return;
+    }
+    httpVisitCommaSeparatedQuoted(
+        accept,
+        [offered, offeredParts, &bestSpecificity, &bestQuality](
+            std::string_view item) noexcept {
+            if (httpMediaRangeMatchesValidOffered(item, offered, offeredParts)) {
+                const auto typeSpecificity = httpMediaRangeSpecificity(item);
+                const auto parameterCount = httpMediaRangeParameterCount(item);
+                if (typeSpecificity < 0 || parameterCount < 0) {
+                    return true;
+                }
+                // Type/subtype precedence dominates any number of parameters;
+                // within the same range shape, more matching parameters are more
+                // specific.
+                const auto specificity =
+                    (typeSpecificity << 16) | parameterCount;
+                const auto quality = httpQualityParameter(item);
+                if (specificity > bestSpecificity ||
+                    (specificity == bestSpecificity &&
+                     quality > bestQuality)) {
+                    bestSpecificity = specificity;
+                    bestQuality = quality;
+                }
             }
-            // Type/subtype precedence dominates any number of parameters; within
-            // the same range shape, more matching parameters are more specific.
-            const auto specificity = (typeSpecificity << 16) | parameterCount;
-            const auto quality = httpQualityParameter(item);
-            if (specificity > bestSpecificity || (specificity == bestSpecificity && quality > bestQuality)) {
-                bestSpecificity = specificity;
-                bestQuality = quality;
-            }
-        }
-        return true;
-    });
+            return true;
+        });
 }
 
 [[nodiscard]] inline bool httpAcceptsMediaType(std::string_view accept, std::string_view offered) noexcept {
     if (accept.empty()) {
-        return true;
+        HttpMediaTypeParts offeredParts;
+        return httpParseMediaType(offered, false, offeredParts);
     }
 
     int bestSpecificity = -1;
