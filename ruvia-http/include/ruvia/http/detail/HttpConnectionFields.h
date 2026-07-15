@@ -8,6 +8,8 @@
 #include "ruvia/http/HttpHeader.h"
 #include "ruvia/http/detail/AsciiCase.h"
 #include "ruvia/http/detail/HttpOws.h"
+#include "ruvia/http/detail/HttpResponseHeaderBits.h"
+#include "ruvia/http/detail/HttpResponseKnownHeaders.h"
 
 namespace ruvia::detail {
 
@@ -33,6 +35,19 @@ enum class HttpConnectionOption : std::uint8_t {
     kTe = 1U << 3
 };
 
+[[nodiscard]] inline bool httpConnectionOptionConflictsWithManagedField(
+    std::string_view option) noexcept {
+    if (httpAsciiEqualsIgnoreCase(option, "Host") ||
+        httpAsciiEqualsIgnoreCase(option, "Expect") ||
+        httpAsciiEqualsIgnoreCase(option, "Trailer")) {
+        return true;
+    }
+    const auto knownBit = classifyResponseHeaderName(option);
+    return knownBit != 0 &&
+        knownBit != kResponseHeaderConnection &&
+        knownBit != kResponseHeaderTransferEncoding;
+}
+
 // Incremental parser for the logical Connection field value. Repeated field
 // lines extend the same state, so a caller cannot accidentally let a later
 // occurrence erase an earlier close/Upgrade/TE signal.
@@ -41,6 +56,19 @@ public:
     [[nodiscard]] HttpFieldListParseStatus parseField(
         std::string_view fieldValue,
         HttpFieldListRole role) noexcept {
+        return parseField(
+            fieldValue,
+            role,
+            [](std::string_view) noexcept {
+                return true;
+            });
+    }
+
+    template <typename Visitor>
+    [[nodiscard]] HttpFieldListParseStatus parseField(
+        std::string_view fieldValue,
+        HttpFieldListRole role,
+        Visitor&& visitor) noexcept {
         auto parsedBits = state_;
         std::size_t start = 0;
         while (start <= fieldValue.size()) {
@@ -61,6 +89,9 @@ public:
             } else {
                 if (!isValidHttpHeaderName(option)) {
                     return HttpFieldListParseStatus::kMalformed;
+                }
+                if (!visitor(option)) {
+                    return HttpFieldListParseStatus::kRejected;
                 }
                 if (httpAsciiEqualsIgnoreCase(option, "close")) {
                     parsedBits |= bit(HttpConnectionOption::kClose);

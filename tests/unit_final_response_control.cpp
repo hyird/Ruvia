@@ -86,7 +86,12 @@ RUVIA_TEST(final_response_control_entry_points_own_only_their_protocol) {
         "Connection",
         "Upgrade",
         HttpResponse::HeaderOptions{.append = true});
+    http1.header(
+        "Connection",
+        "X-Hop",
+        HttpResponse::HeaderOptions{.append = true});
     http1.header("Upgrade", "websocket");
+    http1.header("X-Hop", "value");
 
     const auto http1Result = http1FinalResponseControlPlan(http1);
     RUVIA_CHECK(http1Result.failure() == nullptr);
@@ -127,6 +132,17 @@ RUVIA_TEST(final_response_control_failure_never_exposes_protocol_alternative) {
     RUVIA_CHECK(isHttp2Failure(
         missingUpgrade,
         Http2FinalResponseControlPlanError::kUpgradeUnavailable));
+}
+
+RUVIA_TEST(final_response_control_rejects_end_to_end_connection_options) {
+    for (const std::string_view option : {
+             "content-length", "DATE", "Set-Cookie"}) {
+        HttpResponse response(std::pmr::get_default_resource());
+        response.header("Connection", option);
+        RUVIA_CHECK(isHttp1Failure(
+            response,
+            Http1FinalResponseControlPlanError::kInvalidConnectionField));
+    }
 }
 
 RUVIA_TEST(final_response_control_rejects_every_http2_connection_specific_field) {

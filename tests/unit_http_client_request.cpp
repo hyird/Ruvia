@@ -364,7 +364,11 @@ RUVIA_TEST(http1_client_request_writer_owns_hop_by_hop_field_contracts) {
     }
 
     for (const std::string_view connectionOptions : {
-             "Host", "close, content-length", "EXPECT, keep-alive"}) {
+             "Host",
+             "close, content-length",
+             "EXPECT, keep-alive",
+             "Cache-Control",
+             "Trailer"}) {
         const ruvia::HttpHeaderView connection(
             "Connection", connectionOptions);
         HttpClientRequest request;
@@ -378,9 +382,10 @@ RUVIA_TEST(http1_client_request_writer_owns_hop_by_hop_field_contracts) {
 
     const ruvia::HttpHeaderView validHeaders[] = {
         {"Connection", "keep-alive"},
-        {"Connection", "Upgrade, TE"},
+        {"Connection", "Upgrade, TE, X-Hop"},
         {"Upgrade", "custom/1, websocket"},
         {"TE", "trailers"},
+        {"X-Hop", "value"},
     };
     HttpClientRequest valid;
     valid.headers = validHeaders;

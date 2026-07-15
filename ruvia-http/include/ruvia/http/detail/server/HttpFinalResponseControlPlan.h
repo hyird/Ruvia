@@ -181,7 +181,11 @@ http1FinalResponseControlPlan(const HttpResponse& response) noexcept {
         if (httpAsciiEqualsIgnoreCase(header.name(), "Connection")) {
             if (connectionOptions.parseField(
                     header.value(),
-                    HttpFieldListRole::kSender) !=
+                    HttpFieldListRole::kSender,
+                    [](std::string_view option) noexcept {
+                        return !httpConnectionOptionConflictsWithManagedField(
+                            option);
+                    }) !=
                 HttpFieldListParseStatus::kOk) {
                 return Http1FinalResponseControlPlanResult(
                     Http1FinalResponseControlPlanFailure(

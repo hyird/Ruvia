@@ -172,6 +172,9 @@ RUVIA_TEST(http1_interim_response_writer_rejects_invalid_fields_transactionally)
         {"server", "two"},
     };
     const HttpHeaderView invalidConnection[] = {{"Connection", ","}};
+    const HttpHeaderView managedConnection[] = {
+        {"Connection", "close, date"},
+    };
     const HttpHeaderView invalidUpgrade[] = {
         {"Connection", "Upgrade"},
         {"Upgrade", "bad protocol"},
@@ -197,6 +200,9 @@ RUVIA_TEST(http1_interim_response_writer_rejects_invalid_fields_transactionally)
         Http1InterimResponsePrepareError::kRepeatedSingleton));
     RUVIA_CHECK(rejects(
         invalidConnection,
+        Http1InterimResponsePrepareError::kInvalidConnection));
+    RUVIA_CHECK(rejects(
+        managedConnection,
         Http1InterimResponsePrepareError::kInvalidConnection));
     RUVIA_CHECK(rejects(
         invalidUpgrade, Http1InterimResponsePrepareError::kInvalidUpgrade));

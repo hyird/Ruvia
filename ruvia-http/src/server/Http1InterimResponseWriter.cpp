@@ -85,7 +85,11 @@ struct Http1InterimHeaderFacts final {
         if (detail::httpAsciiEqualsIgnoreCase(name, "Connection")) {
             if (facts.connectionOptions.parseField(
                     header.value(),
-                    detail::HttpFieldListRole::kSender) !=
+                    detail::HttpFieldListRole::kSender,
+                    [](std::string_view option) noexcept {
+                        return !detail::httpConnectionOptionConflictsWithManagedField(
+                            option);
+                    }) !=
                 detail::HttpFieldListParseStatus::kOk) {
                 error = Http1InterimResponsePrepareError::kInvalidConnection;
                 return false;
