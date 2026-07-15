@@ -801,10 +801,26 @@ RUVIA_TEST(static_file_conditional_request_serving) {
     RUVIA_CHECK_EQ(serve(ruvia::detail::RequestKnownHeader::kIfNoneMatch, "If-None-Match", etag).first, std::uint16_t{304});
     RUVIA_CHECK_EQ(serve(ruvia::detail::RequestKnownHeader::kIfNoneMatch, "If-None-Match", "\"stale\"").first, std::uint16_t{200});
 
+    // A comma inside an opaque tag is data, not a list separator. This malformed
+    // value closes that tag immediately before the current ETag and must not let
+    // the apparent suffix satisfy the condition.
+    const std::string malformedList = std::string("\"stale, ") + etag;
+    RUVIA_CHECK_EQ(
+        serve(ruvia::detail::RequestKnownHeader::kIfNoneMatch, "If-None-Match", malformedList).first,
+        std::uint16_t{200});
+
     // If-Match against a non-matching ETag is a 412 precondition failure (thrown).
     bool precondition = false;
     try {
         (void)serve(ruvia::detail::RequestKnownHeader::kIfMatch, "If-Match", "\"stale\"");
+    } catch (const ruvia::HttpError& error) {
+        precondition = error.info().status() == 412;
+    }
+    RUVIA_CHECK(precondition);
+
+    precondition = false;
+    try {
+        (void)serve(ruvia::detail::RequestKnownHeader::kIfMatch, "If-Match", malformedList);
     } catch (const ruvia::HttpError& error) {
         precondition = error.info().status() == 412;
     }

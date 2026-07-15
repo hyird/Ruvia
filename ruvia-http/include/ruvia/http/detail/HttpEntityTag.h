@@ -27,4 +27,53 @@ namespace ruvia::detail {
     return httpTrimWeakEtagPrefix(left) == httpTrimWeakEtagPrefix(right);
 }
 
+[[nodiscard]] inline bool httpEtagListMatches(
+    std::string_view values,
+    std::string_view expected,
+    bool strong) noexcept {
+    bool matched = false;
+    std::size_t offset = 0;
+
+    while (offset < values.size()) {
+        while (offset < values.size() &&
+               (values[offset] == ' ' || values[offset] == '\t' || values[offset] == ',')) {
+            ++offset;
+        }
+        if (offset == values.size()) {
+            break;
+        }
+
+        const std::size_t begin = offset;
+        if (values.substr(offset).starts_with("W/")) {
+            offset += 2;
+        }
+        if (offset == values.size() || values[offset] != '"') {
+            return false;
+        }
+        ++offset;
+        while (offset < values.size() && values[offset] != '"') {
+            const auto byte = static_cast<unsigned char>(values[offset]);
+            if (byte != 0x21 && !(byte >= 0x23 && byte <= 0x7e) && byte < 0x80) {
+                return false;
+            }
+            ++offset;
+        }
+        if (offset == values.size()) {
+            return false;
+        }
+        ++offset;
+        const auto entityTag = values.substr(begin, offset - begin);
+        matched = matched ||
+            (strong ? httpStrongEtagEquals(entityTag, expected) : httpWeakEtagEquals(entityTag, expected));
+
+        while (offset < values.size() && (values[offset] == ' ' || values[offset] == '\t')) {
+            ++offset;
+        }
+        if (offset < values.size() && values[offset] != ',') {
+            return false;
+        }
+    }
+    return matched;
+}
+
 }  // namespace ruvia::detail

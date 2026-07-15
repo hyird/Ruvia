@@ -58,6 +58,14 @@ RUVIA_TEST(etag_weak_prefix_detection) {
     RUVIA_CHECK(!httpIsWeakEtag("W"));  // too short to be the "W/" marker
 }
 
+RUVIA_TEST(etag_list_parses_opaque_commas_and_rejects_malformed_suffixes) {
+    using ruvia::detail::httpEtagListMatches;
+    RUVIA_CHECK(httpEtagListMatches(R"("stale,tag", "current")", R"("current")", true));
+    RUVIA_CHECK(httpEtagListMatches(R"("stale", W/"current")", R"("current")", false));
+    RUVIA_CHECK(!httpEtagListMatches(R"("stale, "current")", R"("current")", true));
+    RUVIA_CHECK(!httpEtagListMatches(R"("current" trailing)", R"("current")", false));
+}
+
 RUVIA_TEST(imf_fixdate_parses_known_dates) {
     using ruvia::detail::httpParseImfFixdate;
     const auto epoch = httpParseImfFixdate("Thu, 01 Jan 1970 00:00:00 GMT");

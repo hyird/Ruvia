@@ -47,19 +47,7 @@ struct FileConditionalHeaders final {
     std::string_view values,
     std::string_view expected,
     bool strong) noexcept {
-    while (!values.empty()) {
-        const auto comma = values.find(',');
-        const auto value = detail::httpTrimOws(
-            comma == std::string_view::npos ? values : values.substr(0, comma));
-        if (strong ? detail::httpStrongEtagEquals(value, expected) : detail::httpWeakEtagEquals(value, expected)) {
-            return true;
-        }
-        if (comma == std::string_view::npos) {
-            break;
-        }
-        values.remove_prefix(comma + 1);
-    }
-    return false;
+    return detail::httpEtagListMatches(values, expected, strong);
 }
 
 [[nodiscard]] bool ifMatchAllows(
