@@ -11,7 +11,7 @@ namespace ruvia {
 struct SseMessage final {
     std::string_view data;
     std::string_view event;
-    std::string_view id;
+    std::optional<std::string_view> id;
     std::optional<std::uint32_t> retry;
 };
 

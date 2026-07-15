@@ -469,6 +469,10 @@ RUVIA_TEST(sse_writer_omits_data_line_for_empty_data_no_phantom_event) {
     RUVIA_CHECK_EQ(render(ruvia::SseMessage{.event = "ping"}), std::string("event: ping\n\n"));
     // A bare block is a no-op keepalive: just the terminating blank line.
     RUVIA_CHECK_EQ(render(ruvia::SseMessage{}), std::string("\n"));
+    // A present-but-empty id resets the EventSource last-event-ID buffer.
+    RUVIA_CHECK_EQ(
+        render(ruvia::SseMessage{.id = std::string_view{}}),
+        std::string("id:\n\n"));
     // Data present is unaffected: data lines are still emitted.
     RUVIA_CHECK_EQ(render(ruvia::SseMessage{.data = "hi"}), std::string("data: hi\n\n"));
     // No empty-data frame ever carries a "data:" line.
