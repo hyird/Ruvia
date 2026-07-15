@@ -366,7 +366,6 @@ void appendHeaders(
             Http1ClientRequestPrepareError::kContentForbiddenForMethod);
     }
     if (method == "OPTIONS" && explicitContent &&
-        !contentBytes->value().empty() &&
         !headerFacts.hasContentType) {
         return detail::Http1ClientRequestPrepareResultAccess::failure(
             Http1ClientRequestPrepareError::kOptionsContentTypeRequired);

@@ -493,6 +493,14 @@ RUVIA_TEST(http1_client_request_writer_enforces_method_content_semantics) {
         prepareError(options) ==
         Http1ClientRequestPrepareError::kOptionsContentTypeRequired);
 
+    // Content-Length signals request content even when its value is zero. An
+    // explicitly empty OPTIONS representation therefore has the same mandatory
+    // Content-Type contract as a non-empty one.
+    options.content = HttpClientRequestContent::bytes("");
+    RUVIA_CHECK(
+        prepareError(options) ==
+        Http1ClientRequestPrepareError::kOptionsContentTypeRequired);
+
     const ruvia::HttpHeaderView contentType("Content-Type", "application/json");
     options.headers = std::span<const ruvia::HttpHeaderView>(&contentType, 1);
     PreparedFixture fixture(HttpOrigin::https("example.test"), options);
