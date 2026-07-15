@@ -255,7 +255,7 @@ using ResponsePlanningResult = std::variant<
 requestContentSignal(
     detail::Http1ClientRequestContentPhase phase,
     std::uint16_t statusCode,
-    detail::HttpResponseContentSemantics contentSemantics) noexcept {
+    bool responseWillClose) noexcept {
     if (statusCode == 100) {
         return phase ==
                 detail::Http1ClientRequestContentPhase::kAwaitingContinue
@@ -263,16 +263,20 @@ requestContentSignal(
                   Http1ClientRequestContentSignal::kContinue)
             : std::nullopt;
     }
-    if (contentSemantics ==
-            detail::HttpResponseContentSemantics::kProtocolSwitch ||
-        statusCode >= 200) {
+    if (statusCode >= 200) {
         // A final response cancels content only while Expect still gates it.
         // Once 100 Continue releases the writer, RFC 9110 section 7.5 says the
         // client should keep sending the request unless the server explicitly
-        // indicates otherwise. Treat that phase like ordinary immediate
-        // content so a reusable response cannot strand an unsent request body.
+        // indicates otherwise. RFC 9112 section 9.5 makes a closing final
+        // response that explicit signal, including after Continue released the
+        // body writer.
         if (phase ==
-            detail::Http1ClientRequestContentPhase::kAwaitingContinue) {
+                detail::Http1ClientRequestContentPhase::kAwaitingContinue ||
+            (responseWillClose &&
+             (phase ==
+                  detail::Http1ClientRequestContentPhase::kContentPending ||
+              phase ==
+                  detail::Http1ClientRequestContentPhase::kContinueReceived))) {
             return Http1ClientRequestContentSignal::kExchangeComplete;
         }
     }
@@ -433,9 +437,6 @@ receiveContinue(
     const auto contentSemantics = detail::httpResponseContentSemantics(
         request.method(), response.statusCode);
 
-    const auto contentSignal = requestContentSignal(
-        requestContentPhase, response.statusCode, contentSemantics);
-
     if (contentSemantics ==
         detail::HttpResponseContentSemantics::kProtocolSwitch) {
         if (response.protocolVersion != HttpProtocolVersion::kHttp11 ||
@@ -448,25 +449,30 @@ receiveContinue(
             return Http1ClientResponseParseError::kInvalidProtocolSwitch;
         }
         return detail::Http1ClientResponsePlanAccess::protocolUpgrade(
-            contentSignal);
+            std::nullopt);
     }
     if (contentSemantics ==
         detail::HttpResponseContentSemantics::kInformational) {
         return detail::Http1ClientResponsePlanAccess::informational(
-            contentSignal);
+            requestContentSignal(
+                requestContentPhase, response.statusCode, false));
     }
     if (contentSemantics ==
         detail::HttpResponseContentSemantics::kConnectTunnel) {
         return detail::Http1ClientResponsePlanAccess::connectTunnel(
-            contentSignal);
+            std::nullopt);
     }
 
     const auto persistence = responsePersistence(request, response);
+    const auto persistentContentSignal = requestContentSignal(
+        requestContentPhase,
+        response.statusCode,
+        persistence == Http1ClientResponsePersistence::kClose);
     if (contentSemantics ==
         detail::HttpResponseContentSemantics::kWithoutContent) {
         return detail::Http1ClientResponsePlanAccess::withoutContent(
             persistence,
-            contentSignal);
+            persistentContentSignal);
     }
 
     const auto contentLength = response.contentLength.value();
@@ -483,25 +489,27 @@ receiveContinue(
             return detail::Http1ClientResponsePlanAccess::chunked(
                 finalChunked->transferCodings(),
                 persistence,
-                contentSignal);
+                persistentContentSignal);
         }
         return detail::Http1ClientResponsePlanAccess::closeDelimited(
             transferEncoding->nonChunked()->transferCodings(),
-            contentSignal);
+            requestContentSignal(
+                requestContentPhase, response.statusCode, true));
     }
 
     if (contentLength.has_value()) {
         return detail::Http1ClientResponsePlanAccess::knownLength(
             *contentLength,
             persistence,
-            contentSignal);
+            persistentContentSignal);
     }
 
     // RFC 9112 section 6.3: a body-allowed response with no declared
     // length is delimited by server close and cannot return to a pool.
     return detail::Http1ClientResponsePlanAccess::closeDelimited(
         {},
-        contentSignal);
+        requestContentSignal(
+            requestContentPhase, response.statusCode, true));
 }
 
 }  // namespace

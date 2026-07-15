@@ -745,6 +745,40 @@ RUVIA_TEST(http_client_final_after_continue_does_not_cancel_released_content) {
     }
 }
 
+RUVIA_TEST(http_client_closing_final_stops_unfinished_request_content) {
+    ruvia::HttpClientRequest request;
+    request.method = "POST";
+    request.content = ruvia::HttpClientRequestContent::bytes("payload");
+    std::array<char, 512> requestHead;
+    const auto prepared = ruvia::Http1ClientRequestWriter().prepare(
+        ruvia::HttpOrigin::https("example.test"),
+        request,
+        requestHead,
+        Http1ClientRequestWirePolicy::expectContinue());
+    RUVIA_CHECK(prepared.prepared() != nullptr);
+    if (prepared.prepared() == nullptr) {
+        return;
+    }
+
+    Http1ClientResponseParser parser(*prepared.prepared());
+    const auto continueResponse = parser.parse(
+        "HTTP/1.1 100 Continue\r\n\r\n");
+    RUVIA_CHECK(continueResponse.parsed() != nullptr);
+
+    const auto closingFinal = parser.parse(
+        "HTTP/1.1 413 Content Too Large\r\n"
+        "Connection: close\r\nContent-Length: 0\r\n\r\n");
+    RUVIA_CHECK(closingFinal.parsed() != nullptr);
+    if (closingFinal.parsed() != nullptr) {
+        RUVIA_CHECK(
+            closingFinal.parsed()->plan().requestContentSignal() ==
+            Http1ClientRequestContentSignal::kExchangeComplete);
+        RUVIA_CHECK(
+            requireKnownLength(closingFinal.parsed()->plan()).persistence() ==
+            Http1ClientResponsePersistence::kClose);
+    }
+}
+
 RUVIA_TEST(http_client_upgrade_after_expect_requires_prior_continue) {
     const ruvia::HttpHeaderView upgradeHeaders[] = {
         {"Connection", "Upgrade"},
