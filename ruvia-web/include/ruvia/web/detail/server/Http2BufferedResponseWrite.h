@@ -5,6 +5,7 @@
 #include <optional>
 #include <string_view>
 #include <type_traits>
+#include <variant>
 
 #include "ruvia/core/detail/WorkerSignal.h"
 
@@ -20,33 +21,169 @@ namespace ruvia::detail {
 class Http2SansIoStreamRuntimeTable;
 class HttpBufferedResponseWritePlan;
 
-// The writer completes all transport recovery (including RESET_STREAM) before
-// returning. Its owner only needs the status proven by a committed final HEADERS
-// transaction; no status exists when the stream disappeared or submission failed
-// before that commit.
-class Http2BufferedResponseWriteResult final {
+class Http2BufferedResponseWriteCompleted final {
 public:
-    [[nodiscard]] static constexpr Http2BufferedResponseWriteResult
-    committed(std::uint16_t status) noexcept {
-        return Http2BufferedResponseWriteResult(status);
-    }
-
-    [[nodiscard]] static constexpr Http2BufferedResponseWriteResult
-    uncommitted() noexcept {
-        return Http2BufferedResponseWriteResult(std::nullopt);
-    }
-
-    [[nodiscard]] constexpr std::optional<std::uint16_t>
-    committedStatus() const noexcept {
-        return committedStatus_;
+    [[nodiscard]] constexpr std::uint16_t status() const noexcept {
+        return status_;
     }
 
 private:
-    explicit constexpr Http2BufferedResponseWriteResult(
-        std::optional<std::uint16_t> committedStatus) noexcept
-        : committedStatus_(committedStatus) {}
+    friend class Http2BufferedResponseWriteResult;
 
-    std::optional<std::uint16_t> committedStatus_;
+    explicit constexpr Http2BufferedResponseWriteCompleted(
+        std::uint16_t status) noexcept
+        : status_(status) {}
+
+    std::uint16_t status_;
+};
+
+class Http2BufferedResponseWritePeerAbortedBeforeCommit final {
+private:
+    friend class Http2BufferedResponseWriteResult;
+    constexpr
+    Http2BufferedResponseWritePeerAbortedBeforeCommit() noexcept = default;
+};
+
+class Http2BufferedResponseWritePeerAbortedAfterCommit final {
+public:
+    [[nodiscard]] constexpr std::uint16_t status() const noexcept {
+        return status_;
+    }
+
+private:
+    friend class Http2BufferedResponseWriteResult;
+
+    explicit constexpr Http2BufferedResponseWritePeerAbortedAfterCommit(
+        std::uint16_t status) noexcept
+        : status_(status) {}
+
+    std::uint16_t status_;
+};
+
+class Http2BufferedResponseWriteFailedBeforeCommit final {
+private:
+    friend class Http2BufferedResponseWriteResult;
+    constexpr Http2BufferedResponseWriteFailedBeforeCommit() noexcept = default;
+};
+
+class Http2BufferedResponseWriteFailedAfterCommit final {
+public:
+    [[nodiscard]] constexpr std::uint16_t status() const noexcept {
+        return status_;
+    }
+
+private:
+    friend class Http2BufferedResponseWriteResult;
+
+    explicit constexpr Http2BufferedResponseWriteFailedAfterCommit(
+        std::uint16_t status) noexcept
+        : status_(status) {}
+
+    std::uint16_t status_;
+};
+
+// The writer completes transport recovery (including RESET_STREAM) before
+// returning. Each terminal alternative preserves both the response commit
+// boundary and whether termination came from the peer or the local write path.
+class Http2BufferedResponseWriteResult final {
+public:
+    [[nodiscard]] static constexpr Http2BufferedResponseWriteResult
+    makeCompleted(std::uint16_t status) noexcept {
+        return Http2BufferedResponseWriteResult(
+            Http2BufferedResponseWriteCompleted(status));
+    }
+
+    [[nodiscard]] static constexpr Http2BufferedResponseWriteResult
+    makePeerAbortedBeforeCommit() noexcept {
+        return Http2BufferedResponseWriteResult(
+            Http2BufferedResponseWritePeerAbortedBeforeCommit{});
+    }
+
+    [[nodiscard]] static constexpr Http2BufferedResponseWriteResult
+    makePeerAbortedAfterCommit(std::uint16_t status) noexcept {
+        return Http2BufferedResponseWriteResult(
+            Http2BufferedResponseWritePeerAbortedAfterCommit(status));
+    }
+
+    [[nodiscard]] static constexpr Http2BufferedResponseWriteResult
+    makeFailedBeforeCommit() noexcept {
+        return Http2BufferedResponseWriteResult(
+            Http2BufferedResponseWriteFailedBeforeCommit{});
+    }
+
+    [[nodiscard]] static constexpr Http2BufferedResponseWriteResult
+    makeFailedAfterCommit(std::uint16_t status) noexcept {
+        return Http2BufferedResponseWriteResult(
+            Http2BufferedResponseWriteFailedAfterCommit(status));
+    }
+
+    [[nodiscard]] constexpr const Http2BufferedResponseWriteCompleted*
+    completed() const & noexcept {
+        return std::get_if<Http2BufferedResponseWriteCompleted>(&value_);
+    }
+    const Http2BufferedResponseWriteCompleted* completed() const && = delete;
+
+    [[nodiscard]] constexpr const
+    Http2BufferedResponseWritePeerAbortedBeforeCommit*
+    peerAbortedBeforeCommit() const & noexcept {
+        return std::get_if<
+            Http2BufferedResponseWritePeerAbortedBeforeCommit>(&value_);
+    }
+    const Http2BufferedResponseWritePeerAbortedBeforeCommit*
+    peerAbortedBeforeCommit() const && = delete;
+
+    [[nodiscard]] constexpr const
+    Http2BufferedResponseWritePeerAbortedAfterCommit*
+    peerAbortedAfterCommit() const & noexcept {
+        return std::get_if<
+            Http2BufferedResponseWritePeerAbortedAfterCommit>(&value_);
+    }
+    const Http2BufferedResponseWritePeerAbortedAfterCommit*
+    peerAbortedAfterCommit() const && = delete;
+
+    [[nodiscard]] constexpr const Http2BufferedResponseWriteFailedBeforeCommit*
+    failedBeforeCommit() const & noexcept {
+        return std::get_if<Http2BufferedResponseWriteFailedBeforeCommit>(
+            &value_);
+    }
+    const Http2BufferedResponseWriteFailedBeforeCommit*
+    failedBeforeCommit() const && = delete;
+
+    [[nodiscard]] constexpr const Http2BufferedResponseWriteFailedAfterCommit*
+    failedAfterCommit() const & noexcept {
+        return std::get_if<Http2BufferedResponseWriteFailedAfterCommit>(&value_);
+    }
+    const Http2BufferedResponseWriteFailedAfterCommit*
+    failedAfterCommit() const && = delete;
+
+    [[nodiscard]] constexpr std::optional<std::uint16_t>
+    committedStatus() const noexcept {
+        if (const auto* value = completed()) {
+            return value->status();
+        }
+        if (const auto* value = peerAbortedAfterCommit()) {
+            return value->status();
+        }
+        if (const auto* value = failedAfterCommit()) {
+            return value->status();
+        }
+        return std::nullopt;
+    }
+
+private:
+    using Value = std::variant<
+        Http2BufferedResponseWriteCompleted,
+        Http2BufferedResponseWritePeerAbortedBeforeCommit,
+        Http2BufferedResponseWritePeerAbortedAfterCommit,
+        Http2BufferedResponseWriteFailedBeforeCommit,
+        Http2BufferedResponseWriteFailedAfterCommit>;
+
+    template <typename Alternative>
+    explicit constexpr Http2BufferedResponseWriteResult(
+        Alternative alternative) noexcept
+        : value_(alternative) {}
+
+    Value value_;
 };
 
 static_assert(std::is_trivially_copyable_v<Http2BufferedResponseWriteResult>);

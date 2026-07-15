@@ -92,7 +92,8 @@ Http2BufferedResponseWriter::write(
     HttpBufferedResponseWritePlan writePlan) {
     auto* stream = connection_->stream(streamId);
     if (stream == nullptr || stream->isAborted()) {
-        co_return Http2BufferedResponseWriteResult::uncommitted();
+        co_return
+            Http2BufferedResponseWriteResult::makePeerAbortedBeforeCommit();
     }
 
     const auto headResult = connection_->submitResponseHead(
@@ -103,7 +104,8 @@ Http2BufferedResponseWriter::write(
     if (submittedHead == nullptr) {
         const auto error = headResult.failure()->error();
         if (error == Http2ResponseHeadSubmitError::kClosed) {
-            co_return Http2BufferedResponseWriteResult::uncommitted();
+            co_return
+                Http2BufferedResponseWriteResult::makePeerAbortedBeforeCommit();
         }
         // Invalid final metadata cannot leave an open peer stream waiting for a
         // response that the transactional head submission rejected.
@@ -111,13 +113,13 @@ Http2BufferedResponseWriter::write(
             streamId,
             Http2ErrorCode::kInternalError);
         wakeWriter();
-        co_return Http2BufferedResponseWriteResult::uncommitted();
+        co_return Http2BufferedResponseWriteResult::makeFailedBeforeCommit();
     }
 
     wakeWriter();
     const auto committedStatus = submittedHead->responseStatus();
     if (!submittedHead->sendBody()) {
-        co_return Http2BufferedResponseWriteResult::committed(
+        co_return Http2BufferedResponseWriteResult::makeCompleted(
             committedStatus);
     }
 
@@ -137,7 +139,7 @@ Http2BufferedResponseWriter::write(
                 streamId,
                 Http2ErrorCode::kInternalError);
             wakeWriter();
-            co_return Http2BufferedResponseWriteResult::committed(
+            co_return Http2BufferedResponseWriteResult::makeFailedAfterCommit(
                 committedStatus);
         }
 
@@ -147,7 +149,7 @@ Http2BufferedResponseWriter::write(
         while (remaining > 0) {
             auto* live = connection_->stream(streamId);
             if (live == nullptr || live->isAborted()) {
-                co_return Http2BufferedResponseWriteResult::committed(
+                co_return Http2BufferedResponseWriteResult::makePeerAbortedAfterCommit(
                     committedStatus);
             }
             const auto next = static_cast<std::size_t>(
@@ -161,7 +163,7 @@ Http2BufferedResponseWriter::write(
                     streamId,
                     Http2ErrorCode::kInternalError);
                 wakeWriter();
-                co_return Http2BufferedResponseWriteResult::committed(
+                co_return Http2BufferedResponseWriteResult::makeFailedAfterCommit(
                     committedStatus);
             }
             remaining -= static_cast<std::uint64_t>(readBytes);
@@ -174,7 +176,7 @@ Http2BufferedResponseWriter::write(
                     ? Http2EndStream::kEndStream
                     : Http2EndStream::kKeepOpen);
             if (result == DataWriteResult::kPeerAborted) {
-                co_return Http2BufferedResponseWriteResult::committed(
+                co_return Http2BufferedResponseWriteResult::makePeerAbortedAfterCommit(
                     committedStatus);
             }
             if (result == DataWriteResult::kFailed) {
@@ -182,11 +184,11 @@ Http2BufferedResponseWriter::write(
                     streamId,
                     Http2ErrorCode::kInternalError);
                 wakeWriter();
-                co_return Http2BufferedResponseWriteResult::committed(
+                co_return Http2BufferedResponseWriteResult::makeFailedAfterCommit(
                     committedStatus);
             }
         }
-        co_return Http2BufferedResponseWriteResult::committed(
+        co_return Http2BufferedResponseWriteResult::makeCompleted(
             committedStatus);
     }
 
@@ -205,7 +207,7 @@ Http2BufferedResponseWriter::write(
                 ? Http2EndStream::kEndStream
                 : Http2EndStream::kKeepOpen);
         if (result == DataWriteResult::kPeerAborted) {
-            co_return Http2BufferedResponseWriteResult::committed(
+            co_return Http2BufferedResponseWriteResult::makePeerAbortedAfterCommit(
                 committedStatus);
         }
         if (result == DataWriteResult::kFailed) {
@@ -213,14 +215,14 @@ Http2BufferedResponseWriter::write(
                 streamId,
                 Http2ErrorCode::kInternalError);
             wakeWriter();
-            co_return Http2BufferedResponseWriteResult::committed(
+            co_return Http2BufferedResponseWriteResult::makeFailedAfterCommit(
                 committedStatus);
         }
         offset += size;
     }
 
     // An empty write plan committed END_STREAM with the response head above.
-    co_return Http2BufferedResponseWriteResult::committed(
+    co_return Http2BufferedResponseWriteResult::makeCompleted(
         committedStatus);
 }
 

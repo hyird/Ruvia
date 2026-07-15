@@ -23,14 +23,36 @@ static_assert(std::same_as<
 
 }  // namespace
 
-RUVIA_TEST(http2_buffered_response_write_result_is_only_committed_status) {
+RUVIA_TEST(http2_buffered_response_write_result_preserves_terminal_cause) {
     using Result = ruvia::detail::Http2BufferedResponseWriteResult;
 
-    const auto committed = Result::committed(207);
+    const auto completed = Result::makeCompleted(207);
+    RUVIA_CHECK(completed.completed() != nullptr);
+    RUVIA_CHECK(completed.peerAbortedBeforeCommit() == nullptr);
+    RUVIA_CHECK(completed.peerAbortedAfterCommit() == nullptr);
+    RUVIA_CHECK(completed.failedBeforeCommit() == nullptr);
+    RUVIA_CHECK(completed.failedAfterCommit() == nullptr);
     RUVIA_CHECK_EQ(
-        committed.committedStatus(),
+        completed.committedStatus(),
         std::optional<std::uint16_t>{207});
 
-    const auto uncommitted = Result::uncommitted();
-    RUVIA_CHECK(!uncommitted.committedStatus().has_value());
+    const auto peerBefore = Result::makePeerAbortedBeforeCommit();
+    RUVIA_CHECK(peerBefore.peerAbortedBeforeCommit() != nullptr);
+    RUVIA_CHECK(!peerBefore.committedStatus().has_value());
+
+    const auto peerAfter = Result::makePeerAbortedAfterCommit(208);
+    RUVIA_CHECK(peerAfter.peerAbortedAfterCommit() != nullptr);
+    RUVIA_CHECK_EQ(
+        peerAfter.committedStatus(),
+        std::optional<std::uint16_t>{208});
+
+    const auto failedBefore = Result::makeFailedBeforeCommit();
+    RUVIA_CHECK(failedBefore.failedBeforeCommit() != nullptr);
+    RUVIA_CHECK(!failedBefore.committedStatus().has_value());
+
+    const auto failedAfter = Result::makeFailedAfterCommit(209);
+    RUVIA_CHECK(failedAfter.failedAfterCommit() != nullptr);
+    RUVIA_CHECK_EQ(
+        failedAfter.committedStatus(),
+        std::optional<std::uint16_t>{209});
 }

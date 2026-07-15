@@ -4747,7 +4747,27 @@ if(EXISTS "${HTTP_BUFFERED_RESPONSE_WRITE_PLAN}" AND
     if(NOT buffered_response_h2_result MATCHES
            "class Http2BufferedResponseWriteResult final" OR
        NOT buffered_response_h2_result MATCHES
-           "std::optional<std::uint16_t>" OR
+           "class Http2BufferedResponseWriteCompleted final" OR
+       NOT buffered_response_h2_result MATCHES
+           "class Http2BufferedResponseWritePeerAbortedBeforeCommit final" OR
+       NOT buffered_response_h2_result MATCHES
+           "class Http2BufferedResponseWritePeerAbortedAfterCommit final" OR
+       NOT buffered_response_h2_result MATCHES
+           "class Http2BufferedResponseWriteFailedBeforeCommit final" OR
+       NOT buffered_response_h2_result MATCHES
+           "class Http2BufferedResponseWriteFailedAfterCommit final" OR
+       NOT buffered_response_h2_result MATCHES
+           "using Value = std::variant" OR
+       NOT buffered_response_h2_result MATCHES
+           "completed[(][)] const [&] noexcept" OR
+       NOT buffered_response_h2_result MATCHES
+           "peerAbortedBeforeCommit[(][)] const && = delete" OR
+       NOT buffered_response_h2_result MATCHES
+           "peerAbortedAfterCommit[(][)] const && = delete" OR
+       NOT buffered_response_h2_result MATCHES
+           "failedBeforeCommit[(][)] const && = delete" OR
+       NOT buffered_response_h2_result MATCHES
+           "failedAfterCommit[(][)] const && = delete" OR
        NOT buffered_response_h2_result MATCHES
            "committedStatus[(][)] const noexcept" OR
        NOT buffered_response_h2_result MATCHES
@@ -4763,9 +4783,15 @@ if(EXISTS "${HTTP_BUFFERED_RESPONSE_WRITE_PLAN}" AND
        NOT buffered_response_h2_writer_source MATCHES
            "const auto committedStatus = submittedHead[-][>]responseStatus[(][)]" OR
        NOT buffered_response_h2_writer_source MATCHES
-           "Http2BufferedResponseWriteResult::committed" OR
+           "Http2BufferedResponseWriteResult::makeCompleted" OR
        NOT buffered_response_h2_writer_source MATCHES
-           "Http2BufferedResponseWriteResult::uncommitted" OR
+           "Http2BufferedResponseWriteResult::makePeerAbortedBeforeCommit" OR
+       NOT buffered_response_h2_writer_source MATCHES
+           "Http2BufferedResponseWriteResult::makePeerAbortedAfterCommit" OR
+       NOT buffered_response_h2_writer_source MATCHES
+           "Http2BufferedResponseWriteResult::makeFailedBeforeCommit" OR
+       NOT buffered_response_h2_writer_source MATCHES
+           "Http2BufferedResponseWriteResult::makeFailedAfterCommit" OR
        NOT buffered_response_h2_writer_source MATCHES
            "openResponseFileInput" OR
        NOT buffered_response_h2_session MATCHES
@@ -4776,12 +4802,10 @@ if(EXISTS "${HTTP_BUFFERED_RESPONSE_WRITE_PLAN}" AND
            "bufferedResponseWriter[.]write" OR
        NOT buffered_response_h2_session MATCHES
            "result[.]committedStatus[(][)]" OR
-       buffered_response_h2_result MATCHES
-           "Http2BufferedResponseWriteCompleted|Http2BufferedResponseWritePeerAborted|Http2BufferedResponseWriteFailed|std::variant|peerAbortedBeforeCommit[(]|peerAbortedAfterCommit[(]|failedBeforeCommit[(]|failedAfterCommit[(]|completed[(]" OR
        buffered_response_h2_session MATCHES
            "openResponseFileInput|Http2BufferedDataSubmitResult|auto submitResponse")
-        boundary_error("HTTP/2 buffered completion restored a loose status/result path"
-            "the non-template writer must own file/data recovery while the session consumes only its optional committed status")
+        boundary_error("HTTP/2 buffered completion lost its typed terminal result chain"
+            "the writer must preserve peer/local and pre/post-commit outcomes while the session consumes its committed status")
     endif()
 
     if(NOT buffered_response_h1_result MATCHES
@@ -4855,7 +4879,7 @@ if(EXISTS "${HTTP_BUFFERED_RESPONSE_WRITE_PLAN}" AND
        NOT buffered_response_h2_plan_test MATCHES
            "http2_response_head_rejects_representation_plan_mismatch" OR
        NOT buffered_response_h2_result_test MATCHES
-           "http2_buffered_response_write_result_is_only_committed_status" OR
+           "http2_buffered_response_write_result_preserves_terminal_cause" OR
        NOT buffered_response_h2_runtime_test MATCHES
            "sansio_driver_h2_buffered_access_uses_only_committed_plan_status" OR
        NOT buffered_response_h2_connection_test MATCHES
@@ -4886,8 +4910,8 @@ if(EXISTS "${HTTP_BUFFERED_RESPONSE_WRITE_PLAN}" AND
            "installed HTTP/2 prepared buffered response plan ownership" OR
        NOT buffered_response_package_verify MATCHES
            "installed HTTP/1 buffered response completion ownership")
-        boundary_error("buffered response status ownership lacks regression coverage"
-            "unit, integration, source-boundary, and installed-package checks must pin the exact committed status path")
+        boundary_error("buffered response completion ownership lacks regression coverage"
+            "unit, integration, source-boundary, and installed-package checks must pin typed terminal outcomes and committed status")
     endif()
 endif()
 check_files_no_match("HTTP/2 must not restore split discard state or deprecated priority semantics"

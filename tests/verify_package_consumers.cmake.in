@@ -2645,7 +2645,27 @@ if(_built_components_csv MATCHES "(^|,)web(,|$)")
     if(NOT _installed_http2_buffered_response_result MATCHES
            "class Http2BufferedResponseWriteResult final" OR
        NOT _installed_http2_buffered_response_result MATCHES
-           "std::optional<std::uint16_t>" OR
+           "Http2BufferedResponseWriteCompleted" OR
+       NOT _installed_http2_buffered_response_result MATCHES
+           "Http2BufferedResponseWritePeerAbortedBeforeCommit" OR
+       NOT _installed_http2_buffered_response_result MATCHES
+           "Http2BufferedResponseWritePeerAbortedAfterCommit" OR
+       NOT _installed_http2_buffered_response_result MATCHES
+           "Http2BufferedResponseWriteFailedBeforeCommit" OR
+       NOT _installed_http2_buffered_response_result MATCHES
+           "Http2BufferedResponseWriteFailedAfterCommit" OR
+       NOT _installed_http2_buffered_response_result MATCHES
+           "std::variant" OR
+       NOT _installed_http2_buffered_response_result MATCHES
+           "peerAbortedBeforeCommit[(][)] const & noexcept" OR
+       NOT _installed_http2_buffered_response_result MATCHES
+           "peerAbortedAfterCommit[(][)] const & noexcept" OR
+       NOT _installed_http2_buffered_response_result MATCHES
+           "failedBeforeCommit[(][)] const & noexcept" OR
+       NOT _installed_http2_buffered_response_result MATCHES
+           "failedAfterCommit[(][)] const & noexcept" OR
+       NOT _installed_http2_buffered_response_result MATCHES
+           "completed[(][)] const & noexcept" OR
        NOT _installed_http2_buffered_response_result MATCHES
            "committedStatus[(][)] const noexcept" OR
        NOT _installed_http2_buffered_response_result MATCHES
@@ -2670,8 +2690,6 @@ if(_built_components_csv MATCHES "(^|,)web(,|$)")
            "[(]void[)][ \t]*prepareBufferedHttpResponse" OR
        NOT _installed_http2_stream_session MATCHES
            "result[.]committedStatus[(][)]" OR
-       _installed_http2_buffered_response_result MATCHES
-           "Http2BufferedResponseWriteCompleted|Http2BufferedResponseWritePeerAborted|Http2BufferedResponseWriteFailed|std::variant|peerAbortedBeforeCommit[(]|peerAbortedAfterCommit[(]|failedBeforeCommit[(]|failedAfterCommit[(]|completed[(]" OR
        _installed_http2_stream_session MATCHES
            "response[.]status[(][)][ \t\r\n]*,[ \t\r\n]*requestStart" OR
        _installed_http2_stream_session MATCHES

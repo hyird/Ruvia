@@ -1194,6 +1194,28 @@ static_assert(!std::default_initializable<
     ruvia::detail::Http2BufferedResponseWriteResult>);
 static_assert(std::same_as<
     decltype(std::declval<const ruvia::detail::
+        Http2BufferedResponseWriteResult&>().completed()),
+    const ruvia::detail::Http2BufferedResponseWriteCompleted*>);
+static_assert(std::same_as<
+    decltype(std::declval<const ruvia::detail::
+        Http2BufferedResponseWriteResult&>().peerAbortedBeforeCommit()),
+    const ruvia::detail::
+        Http2BufferedResponseWritePeerAbortedBeforeCommit*>);
+static_assert(std::same_as<
+    decltype(std::declval<const ruvia::detail::
+        Http2BufferedResponseWriteResult&>().peerAbortedAfterCommit()),
+    const ruvia::detail::
+        Http2BufferedResponseWritePeerAbortedAfterCommit*>);
+static_assert(std::same_as<
+    decltype(std::declval<const ruvia::detail::
+        Http2BufferedResponseWriteResult&>().failedBeforeCommit()),
+    const ruvia::detail::Http2BufferedResponseWriteFailedBeforeCommit*>);
+static_assert(std::same_as<
+    decltype(std::declval<const ruvia::detail::
+        Http2BufferedResponseWriteResult&>().failedAfterCommit()),
+    const ruvia::detail::Http2BufferedResponseWriteFailedAfterCommit*>);
+static_assert(std::same_as<
+    decltype(std::declval<const ruvia::detail::
         Http2BufferedResponseWriteResult&>().committedStatus()),
     std::optional<std::uint16_t>>);
 static_assert(std::is_trivially_copyable_v<
