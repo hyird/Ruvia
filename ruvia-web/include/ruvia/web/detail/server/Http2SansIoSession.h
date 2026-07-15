@@ -315,14 +315,17 @@ Task<void> runHttp2SansIoSession(
         // then converge on one buffered preparation/send tail. The single-pass block
         // avoids another request-path coroutine frame solely for common completion.
         do {
-            if (streamState->expectationAction() ==
-                HttpServerExpectationAction::kUnsupported) {
+            const auto expectationPlan = streamState->expectationPlan(
+                HttpUnsupportedExpectationPolicy::kReject);
+            if (const auto* rejection = expectationPlan.rejection()) {
                 // Expect is extensible, so the HTTP/2 decoder accepted and preserved
                 // the field. This Web product supports only 100-continue and applies
                 // its 417 policy through the normal application error handler.
                 response = co_await routes.handleError(
                     request, requestMemory,
-                    HttpErrorInfo(417, {}, "unsupported Expect header"),
+                    copyHttpProtocolErrorInfo(
+                        requestMemory.resource(),
+                        rejection->protocolError()),
                     baseServices);
                 break;
             }
@@ -676,9 +679,9 @@ Task<void> runHttp2SansIoSession(
                         streamId, Http2ErrorCode::kInternalError);
                     continue;
                 }
-                const auto expectationAction = streamState->expectationAction();
-                if (expectationAction ==
-                    HttpServerExpectationAction::kSend100Continue) {
+                const auto expectationPlan = streamState->expectationPlan(
+                    HttpUnsupportedExpectationPolicy::kReject);
+                if (expectationPlan.send100Continue() != nullptr) {
                     const auto status = connection.submitInterimResponseHead(
                         streamId,
                         HttpInterimResponseHead(100));
@@ -701,8 +704,7 @@ Task<void> runHttp2SansIoSession(
                     selectedRoute != nullptr &&
                     selectedRoute->body().streaming() != nullptr &&
                     streamState->remoteReceive().contentOpen() != nullptr;
-                if (expectationAction ==
-                        HttpServerExpectationAction::kUnsupported ||
+                if (expectationPlan.rejection() != nullptr ||
                     connectRequest || streamingBody) {
                     // Dispatch NOW; body bytes stream through the Web runtime's queue
                     // while the handler runs. Unsupported expectations also need an

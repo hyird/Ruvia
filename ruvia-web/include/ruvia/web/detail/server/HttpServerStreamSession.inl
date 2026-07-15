@@ -125,13 +125,16 @@ Task<void> HttpServer::handleStreamSession(
                 // one of those transitions, keepaliveTimeout governs as the
                 // deadman switch for hung handlers.
                 scannerEntry.setPhase(ConnectionScanner::Phase::kIdle);
-                if (parsed.bodyPlan.expectationAction() ==
-                    HttpServerExpectationAction::kUnsupported) {
+                const auto expectationPlan = parsed.bodyPlan.expectationPlan(
+                    HttpUnsupportedExpectationPolicy::kReject);
+                if (const auto* rejection = expectationPlan.rejection()) {
                     // Expect extensions are valid HTTP syntax. The protocol parser
                     // reports the semantic fact; this Web product deliberately does
                     // not implement extensions beyond 100-continue and chooses the
                     // RFC 9110-permitted 417 response before reading request content.
-                    closingError = HttpErrorInfo(417, {}, "unsupported Expect header");
+                    closingError = copyHttpProtocolErrorInfo(
+                        requestMemory.resource(),
+                        rejection->protocolError());
                     break;
                 }
                 if (options_.autoHttps.enabled) {

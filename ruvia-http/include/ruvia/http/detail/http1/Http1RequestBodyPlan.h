@@ -100,12 +100,13 @@ public:
         return expectations_;
     }
 
-    [[nodiscard]] std::optional<HttpServerExpectationAction>
-    expectationAction() const noexcept {
-        return expectations_.serverAction(
+    [[nodiscard]] HttpServerExpectationPlan expectationPlan(
+        HttpUnsupportedExpectationPolicy unsupportedPolicy) const noexcept {
+        return expectations_.serverPlan(
             requiresConsumption()
                 ? HttpRequestContentIndication::kWillFollow
-                : HttpRequestContentIndication::kNoContent);
+                : HttpRequestContentIndication::kNoContent,
+            unsupportedPolicy);
     }
 
 private:

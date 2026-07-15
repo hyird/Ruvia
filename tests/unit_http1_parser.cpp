@@ -21,7 +21,7 @@ using ruvia::HttpProtocolVersion;
 using ruvia::detail::Http1ServerRequestParseFailureSource;
 using ruvia::detail::Http1ServerRequestParser;
 using ruvia::detail::Http1ServerRequestParseState;
-using ruvia::detail::HttpServerExpectationAction;
+using ruvia::detail::HttpUnsupportedExpectationPolicy;
 
 template <typename T>
 concept HasAnyRvalueHttp1RequestParseAccessor =
@@ -189,9 +189,9 @@ RUVIA_TEST(http1_public_parser_preserves_expect_extensions_as_semantics) {
     RUVIA_CHECK(parsed != nullptr);
     RUVIA_CHECK(result.failure() == nullptr);
     if (parsed != nullptr) {
-        RUVIA_CHECK(
-            parsed->bodyPlan().expectationAction() ==
-            HttpServerExpectationAction::kUnsupported);
+        const auto plan = parsed->bodyPlan().expectationPlan(
+            HttpUnsupportedExpectationPolicy::kReject);
+        RUVIA_CHECK(plan.rejection() != nullptr);
         RUVIA_CHECK(parsed->bodyPlan().expectations().has100Continue());
         RUVIA_CHECK(parsed->bodyPlan().expectations().hasUnsupported());
     }

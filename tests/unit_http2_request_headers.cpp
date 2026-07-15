@@ -14,7 +14,7 @@ namespace {
 using ruvia::detail::Http2HeaderDecodeContext;
 using ruvia::detail::Http2StreamState;
 using ruvia::detail::HttpRequestExpectations;
-using ruvia::detail::HttpServerExpectationAction;
+using ruvia::detail::HttpUnsupportedExpectationPolicy;
 using ruvia::detail::http2AccumulateHeaderListBytes;
 using ruvia::detail::http2OnDecodedInitialHeader;
 using ruvia::detail::http2OnDecodedTrailer;
@@ -330,21 +330,23 @@ RUVIA_TEST(h2_headers_expect_is_an_extensible_repeated_list) {
     RUVIA_CHECK(http2OnDecodedInitialHeader(
         supportedContext, "expect", "100-Continue"));
     RUVIA_CHECK(supported.finalizeRemoteContentHead());
-    RUVIA_CHECK(
-        supported.expectationAction() ==
-        HttpServerExpectationAction::kSend100Continue);
+    const auto supportedPlan = supported.expectationPlan(
+        HttpUnsupportedExpectationPolicy::kReject);
+    RUVIA_CHECK(supportedPlan.send100Continue() != nullptr);
 
     RUVIA_CHECK(supported.finishRemoteContent());
-    RUVIA_CHECK(!supported.expectationAction());
+    const auto completedPlan = supported.expectationPlan(
+        HttpUnsupportedExpectationPolicy::kReject);
+    RUVIA_CHECK(completedPlan.noAction() != nullptr);
 
     Http2StreamState extension(3, res());
     Http2HeaderDecodeContext extensionContext{extension};
     RUVIA_CHECK(http2OnDecodedInitialHeader(
         extensionContext, "expect", "100-continue, custom-feature"));
     RUVIA_CHECK(extension.finalizeRemoteContentHead());
-    RUVIA_CHECK(
-        extension.expectationAction() ==
-        HttpServerExpectationAction::kUnsupported);
+    const auto extensionPlan = extension.expectationPlan(
+        HttpUnsupportedExpectationPolicy::kReject);
+    RUVIA_CHECK(extensionPlan.rejection() != nullptr);
     RUVIA_CHECK(extension.requestExpectations().has100Continue());
     RUVIA_CHECK(extension.requestExpectations().hasUnsupported());
 }

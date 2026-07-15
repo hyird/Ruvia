@@ -1269,16 +1269,24 @@ file(READ
     _installed_http2_stream_state_expectations)
 if(NOT _installed_http_expectations MATCHES "kNoContent" OR
    NOT _installed_http_expectations MATCHES
-       "std::optional<HttpServerExpectationAction> serverAction" OR
+       "HttpServerExpectationPlan serverPlan" OR
+   NOT _installed_http_expectations MATCHES
+       "HttpUnsupportedExpectationPolicy" OR
+   NOT _installed_http_expectations MATCHES
+       "HttpUnsupportedExpectationRejection" OR
+   NOT _installed_http_expectations MATCHES "std::variant" OR
+   NOT _installed_http_expectations MATCHES "protocolError" OR
+   NOT _installed_http_expectations MATCHES
+       "HttpProtocolError[(]417, [\"]unsupported Expect header[\"]" OR
    NOT _installed_http1_request_body_plan_expectations MATCHES
-       "std::optional<HttpServerExpectationAction>" OR
+       "HttpServerExpectationPlan expectationPlan" OR
    NOT _installed_http2_stream_state_expectations MATCHES
-       "std::optional<HttpServerExpectationAction>" OR
-   _installed_http_expectations MATCHES
-       "enum class HttpServerExpectationAction[^{]*[{][^}]*kNone" OR
+       "HttpServerExpectationPlan expectationPlan" OR
+   _installed_http_expectations MATCHES "HttpServerExpectationAction" OR
+   _installed_http_expectations MATCHES "serverAction" OR
    _installed_http_expectations MATCHES
        "HttpRequestContentIndication::kNone")
-    message(FATAL_ERROR "installed Expect contract lost optional server actions")
+    message(FATAL_ERROR "installed Expect contract lost typed server plans")
 endif()
 set(_installed_http1_client_request_writer
     "${_install_prefix}/include/ruvia/http/Http1ClientRequestWriter.h")

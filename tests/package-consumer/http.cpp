@@ -1765,9 +1765,26 @@ concept HasHttp1RequestPlanTransferCodings = requires(const T& framing) {
 };
 
 template <typename T>
-concept HasOptionalHttpServerExpectationAction = requires(const T& state) {
-    { state.expectationAction() } -> std::same_as<std::optional<
-        ruvia::detail::HttpServerExpectationAction>>;
+concept HasTypedHttpServerExpectationPlan = requires(const T& state) {
+    { state.expectationPlan(
+        ruvia::detail::HttpUnsupportedExpectationPolicy::kReject) } ->
+        std::same_as<ruvia::detail::HttpServerExpectationPlan>;
+};
+
+template <typename T>
+concept ExposesRvalueHttpServerExpectationAlternative =
+    requires(T&& plan) { std::move(plan).noAction(); } ||
+    requires(T&& plan) { std::move(plan).send100Continue(); } ||
+    requires(T&& plan) { std::move(plan).rejection(); };
+
+template <typename T>
+concept HasHttpServerExpectationAlternatives = requires(const T& plan) {
+    { plan.noAction() } -> std::same_as<const
+        ruvia::detail::HttpNoServerExpectationAction*>;
+    { plan.send100Continue() } -> std::same_as<const
+        ruvia::detail::HttpSend100Continue*>;
+    { plan.rejection() } -> std::same_as<const
+        ruvia::detail::HttpUnsupportedExpectationRejection*>;
 };
 
 template <typename T>
@@ -1825,10 +1842,27 @@ static_assert(!std::constructible_from<
 static_assert(!std::constructible_from<
     ruvia::detail::Http1ChunkedRequestBody,
     ruvia::detail::HttpTransferCodings>);
-static_assert(HasOptionalHttpServerExpectationAction<
+static_assert(HasTypedHttpServerExpectationPlan<
     ruvia::detail::Http1RequestBodyPlan>);
-static_assert(HasOptionalHttpServerExpectationAction<
+static_assert(HasTypedHttpServerExpectationPlan<
     ruvia::detail::Http2StreamState>);
+static_assert(HasHttpServerExpectationAlternatives<
+    ruvia::detail::HttpServerExpectationPlan>);
+static_assert(!ExposesRvalueHttpServerExpectationAlternative<
+    ruvia::detail::HttpServerExpectationPlan>);
+static_assert(!std::default_initializable<
+    ruvia::detail::HttpServerExpectationPlan>);
+static_assert(!std::default_initializable<
+    ruvia::detail::HttpNoServerExpectationAction>);
+static_assert(!std::default_initializable<
+    ruvia::detail::HttpSend100Continue>);
+static_assert(!std::default_initializable<
+    ruvia::detail::HttpUnsupportedExpectationRejection>);
+static_assert(std::same_as<
+    decltype(std::declval<const
+        ruvia::detail::HttpUnsupportedExpectationRejection&>()
+        .protocolError()),
+    ruvia::HttpProtocolError>);
 static_assert(!std::default_initializable<
     ruvia::detail::Http2RequestBuildResult>);
 static_assert(!std::default_initializable<

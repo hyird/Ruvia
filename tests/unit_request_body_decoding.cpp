@@ -54,7 +54,7 @@ using ruvia::detail::HttpRequestContentDecodeResult;
 using ruvia::detail::Http1ChunkedBodyDecoder;
 using ruvia::detail::Http1RequestBodyPlan;
 using ruvia::detail::Http1ServerRequestParser;
-using ruvia::detail::HttpServerExpectationAction;
+using ruvia::detail::HttpUnsupportedExpectationPolicy;
 using ruvia::detail::HttpTransferCoding;
 using ruvia::detail::HttpTransferCodings;
 using ruvia::detail::TransferCodingDecoder;
@@ -488,7 +488,9 @@ RUVIA_TEST(http1_request_body_plan_has_one_framing_truth) {
     }
     RUVIA_CHECK(!emptyLength.requiresConsumption());
     RUVIA_CHECK(emptyLength.expectations().has100Continue());
-    RUVIA_CHECK(!emptyLength.expectationAction());
+    const auto emptyExpectationPlan = emptyLength.expectationPlan(
+        HttpUnsupportedExpectationPolicy::kReject);
+    RUVIA_CHECK(emptyExpectationPlan.noAction() != nullptr);
 
     const auto compressedChunkedState = parser.parseMessage(
         "POST / HTTP/1.1\r\nHost: x\r\n"
@@ -500,9 +502,9 @@ RUVIA_TEST(http1_request_body_plan_has_one_framing_truth) {
     RUVIA_CHECK(compressedChunked.withoutBody() == nullptr);
     RUVIA_CHECK(compressedChunked.knownLength() == nullptr);
     RUVIA_CHECK(compressedChunked.requiresConsumption());
-    RUVIA_CHECK(
-        compressedChunked.expectationAction() ==
-        HttpServerExpectationAction::kSend100Continue);
+    const auto compressedExpectationPlan = compressedChunked.expectationPlan(
+        HttpUnsupportedExpectationPolicy::kReject);
+    RUVIA_CHECK(compressedExpectationPlan.send100Continue() != nullptr);
     if (chunkedBody != nullptr) {
         RUVIA_CHECK_EQ(
             chunkedBody->transferCodings().count,

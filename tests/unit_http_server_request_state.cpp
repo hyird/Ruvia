@@ -36,7 +36,7 @@ using ruvia::detail::ResponseStreamFraming;
 using ruvia::detail::ResponseStreamHeadDisposition;
 using ruvia::detail::ResponseStreamKind;
 using ruvia::detail::ResponseStreamTrailerFraming;
-using ruvia::detail::HttpServerExpectationAction;
+using ruvia::detail::HttpUnsupportedExpectationPolicy;
 using ruvia::detail::ResponseHeadBuffer;
 
 template <typename T>
@@ -197,15 +197,17 @@ RUVIA_TEST(request_state_wants_continue) {
         "POST / HTTP/1.1\r\nHost: x\r\n"
         "Expect: 100-continue\r\nContent-Length: 0\r\n\r\n");
     RUVIA_CHECK(empty.bodyPlan.expectations().has100Continue());
-    RUVIA_CHECK(!empty.bodyPlan.expectationAction());
+    const auto emptyPlan = empty.bodyPlan.expectationPlan(
+        HttpUnsupportedExpectationPolicy::kReject);
+    RUVIA_CHECK(emptyPlan.noAction() != nullptr);
 
     const auto body = parser.parseMessage(
         "POST / HTTP/1.1\r\nHost: x\r\n"
         "Expect: 100-continue\r\nContent-Length: 1\r\n\r\nx");
     RUVIA_CHECK(body.bodyPlan.expectations().has100Continue());
-    RUVIA_CHECK(
-        body.bodyPlan.expectationAction() ==
-        HttpServerExpectationAction::kSend100Continue);
+    const auto bodyExpectationPlan = body.bodyPlan.expectationPlan(
+        HttpUnsupportedExpectationPolicy::kReject);
+    RUVIA_CHECK(bodyExpectationPlan.send100Continue() != nullptr);
 
     const auto withoutExpectation = parser.parseMessage(
         "GET / HTTP/1.1\r\nHost: x\r\n\r\n");
@@ -214,19 +216,21 @@ RUVIA_TEST(request_state_wants_continue) {
     // A 100-continue expectation from an HTTP/1.0 client MUST be ignored: RFC 9110
     // §15.2 forbids sending any 1xx response to an HTTP/1.0 client, which would
     // misread the interim 100 as the final response.
-    RUVIA_CHECK(!parser.parseMessage(
+    const auto http10 = parser.parseMessage(
         "POST / HTTP/1.0\r\nHost: x\r\n"
-        "Expect: 100-continue\r\nContent-Length: 0\r\n\r\n")
-        .bodyPlan.expectationAction());
+        "Expect: 100-continue\r\nContent-Length: 0\r\n\r\n");
+    const auto http10Plan = http10.bodyPlan.expectationPlan(
+        HttpUnsupportedExpectationPolicy::kReject);
+    RUVIA_CHECK(http10Plan.noAction() != nullptr);
 
     const auto extension = parser.parseMessage(
         "POST / HTTP/1.1\r\nHost: x\r\n"
         "Expect: 100-continue, custom-feature\r\n"
         "Content-Length: 1\r\n\r\nx");
     RUVIA_CHECK(extension.messageReady());
-    RUVIA_CHECK(
-        extension.bodyPlan.expectationAction() ==
-        HttpServerExpectationAction::kUnsupported);
+    const auto extensionPlan = extension.bodyPlan.expectationPlan(
+        HttpUnsupportedExpectationPolicy::kReject);
+    RUVIA_CHECK(extensionPlan.rejection() != nullptr);
 }
 
 RUVIA_TEST(http1_response_stream_plan_owns_version_body_and_persistence_semantics) {

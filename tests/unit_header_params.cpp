@@ -18,7 +18,7 @@ using ruvia::detail::HttpFieldListParseStatus;
 using ruvia::detail::HttpFieldListRole;
 using ruvia::detail::HttpRequestContentIndication;
 using ruvia::detail::HttpRequestExpectations;
-using ruvia::detail::HttpServerExpectationAction;
+using ruvia::detail::HttpUnsupportedExpectationPolicy;
 
 // {close, keepAlive, upgrade, te} after recipient-side parsing.
 std::array<bool, 4> connectionOptions(std::string_view value) {
@@ -43,11 +43,14 @@ RUVIA_TEST(expectations_parse_one_logical_recipient_list) {
 
     RUVIA_CHECK(expectations.has100Continue());
     RUVIA_CHECK(!expectations.hasUnsupported());
-    RUVIA_CHECK(!expectations.serverAction(
-        HttpRequestContentIndication::kNoContent));
-    RUVIA_CHECK(
-        expectations.serverAction(HttpRequestContentIndication::kWillFollow) ==
-        HttpServerExpectationAction::kSend100Continue);
+    const auto noContent = expectations.serverPlan(
+        HttpRequestContentIndication::kNoContent,
+        HttpUnsupportedExpectationPolicy::kReject);
+    RUVIA_CHECK(noContent.noAction() != nullptr);
+    const auto withContent = expectations.serverPlan(
+        HttpRequestContentIndication::kWillFollow,
+        HttpUnsupportedExpectationPolicy::kReject);
+    RUVIA_CHECK(withContent.send100Continue() != nullptr);
 }
 
 RUVIA_TEST(expectations_preserve_unsupported_extensions_as_semantics) {
@@ -57,9 +60,17 @@ RUVIA_TEST(expectations_preserve_unsupported_extensions_as_semantics) {
 
     RUVIA_CHECK(expectations.has100Continue());
     RUVIA_CHECK(expectations.hasUnsupported());
-    RUVIA_CHECK(
-        expectations.serverAction(HttpRequestContentIndication::kWillFollow) ==
-        HttpServerExpectationAction::kUnsupported);
+    const auto rejected = expectations.serverPlan(
+        HttpRequestContentIndication::kWillFollow,
+        HttpUnsupportedExpectationPolicy::kReject);
+    RUVIA_CHECK(rejected.rejection() != nullptr);
+    if (const auto* rejection = rejected.rejection()) {
+        RUVIA_CHECK_EQ(rejection->protocolError().status(), 417);
+    }
+    const auto ignored = expectations.serverPlan(
+        HttpRequestContentIndication::kWillFollow,
+        HttpUnsupportedExpectationPolicy::kIgnore);
+    RUVIA_CHECK(ignored.send100Continue() != nullptr);
 
     expectations.ignore100Continue();
     RUVIA_CHECK(!expectations.has100Continue());

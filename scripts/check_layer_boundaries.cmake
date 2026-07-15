@@ -8098,9 +8098,9 @@ else()
        NOT http1_request_body_plan MATCHES "Http1RequestBodyConsumption" OR
        NOT http1_request_body_plan MATCHES "transferCodings" OR
        NOT http1_request_body_plan MATCHES "HttpRequestExpectations" OR
-       NOT http1_request_body_plan MATCHES "expectationAction" OR
+       NOT http1_request_body_plan MATCHES "expectationPlan" OR
        NOT http1_request_body_plan MATCHES
-           "std::optional<HttpServerExpectationAction>" OR
+           "HttpUnsupportedExpectationPolicy" OR
        NOT http1_request_body_plan MATCHES "friend class Http1ServerRequestParseState" OR
        NOT http1_request_body_plan MATCHES "friend class Http1ServerRequestParser" OR
        NOT http1_request_body_plan MATCHES
@@ -8148,8 +8148,8 @@ if(EXISTS "${WEB_HTTP1_BODY_READER}" AND EXISTS "${WEB_HTTP1_BODY_READER_CORE}")
        NOT web_http1_body_reader_core MATCHES "bodyPlan_[.]knownLength[(][)]" OR
        NOT web_http1_body_reader_core MATCHES "bodyPlan_[.]chunked[(][)]" OR
        NOT web_http1_body_reader_core MATCHES "chunked->transferCodings[(][)]" OR
-       NOT web_http1_body_reader_core MATCHES "bodyPlan_\\.expectationAction" OR
-       NOT web_http1_body_reader_core MATCHES "kSend100Continue")
+       NOT web_http1_body_reader_core MATCHES "bodyPlan_\\.expectationPlan" OR
+       NOT web_http1_body_reader_core MATCHES "send100Continue")
         boundary_error("ruvia-web request-body reader bypasses the HTTP-owned plan"
             "StreamBodyReader must consume Http1RequestBodyPlan directly")
     endif()
@@ -8188,29 +8188,41 @@ elseif(EXISTS "${HTTP1_HEADER_BLOCK_STATE}" AND
     if(NOT http_request_expectations MATCHES "class HttpRequestExpectations" OR
        NOT http_request_expectations MATCHES "httpVisitCommaSeparatedQuoted" OR
        NOT http_request_expectations MATCHES "HttpRequestContentIndication" OR
-       NOT http_request_expectations MATCHES "HttpServerExpectationAction" OR
+       NOT http_request_expectations MATCHES "HttpServerExpectationPlan" OR
+       NOT http_request_expectations MATCHES "std::variant" OR
+       NOT http_request_expectations MATCHES
+           "HttpUnsupportedExpectationPolicy" OR
+       NOT http_request_expectations MATCHES
+           "HttpUnsupportedExpectationRejection" OR
+       NOT http_request_expectations MATCHES "protocolError" OR
+       NOT http_request_expectations MATCHES
+           "HttpProtocolError[(]417, [\"]unsupported Expect header[\"]" OR
        NOT http_request_expectations MATCHES "kNoContent" OR
        NOT http_request_expectations MATCHES
-           "std::optional<HttpServerExpectationAction> serverAction" OR
-       NOT http_request_expectations MATCHES "kUnsupported" OR
+           "HttpServerExpectationPlan serverPlan" OR
+       NOT http_request_expectations MATCHES "kReject" OR
        NOT http1_header_block_state MATCHES "HttpRequestExpectations expectations" OR
        NOT http1_header_block_parser MATCHES "expectations[.]parseField" OR
        NOT http2_stream_state MATCHES "HttpRequestExpectations expectations_" OR
-       NOT http2_stream_state MATCHES
-           "std::optional<HttpServerExpectationAction>" OR
+       NOT http2_stream_state MATCHES "HttpServerExpectationPlan" OR
        NOT http2_request_headers MATCHES "parseRequestExpectationField" OR
-       NOT web_http1_session MATCHES "HttpErrorInfo[(]417" OR
-       NOT web_http1_session MATCHES "HttpServerExpectationAction::kUnsupported" OR
+       NOT web_http1_session MATCHES "expectationPlan" OR
+       NOT web_http1_session MATCHES "rejection[(][)]" OR
+       NOT web_http1_session MATCHES "copyHttpProtocolErrorInfo" OR
        NOT web_http2_session MATCHES "submitInterimResponseHead" OR
        NOT web_http2_session MATCHES "HttpInterimResponseHead[(]100" OR
-       NOT web_http2_session MATCHES "HttpErrorInfo[(]417" OR
-       NOT web_http2_session MATCHES "HttpServerExpectationAction::kUnsupported")
+       NOT web_http2_session MATCHES "expectationPlan" OR
+       NOT web_http2_session MATCHES "send100Continue" OR
+       NOT web_http2_session MATCHES "rejection[(][)]" OR
+       NOT web_http2_session MATCHES "copyHttpProtocolErrorInfo" OR
+       web_http1_session MATCHES "HttpErrorInfo[(]417" OR
+       web_http2_session MATCHES "HttpErrorInfo[(]417")
         boundary_error("server Expect ownership has split across protocol versions"
-            "shared list state must feed HTTP/1/H2 actions; Web alone chooses 417 and drives typed 100 writers")
+            "Web must choose the unsupported-extension policy while HTTP owns typed no-action, 100, and 417 outcomes")
     endif()
 endif()
-check_files_no_match("server Expect actions restored no-action sentinels"
-    "HttpServerExpectationAction::kNone|HttpRequestContentIndication::kNone|enum class HttpServerExpectationAction[^{]*[{][^}]*kNone"
+check_files_no_match("server Expect plans restored weak enum or optional actions"
+    "HttpServerExpectationAction|expectationAction|serverAction|std::optional<HttpServerExpectation"
     "${HTTP_REQUEST_EXPECTATIONS}"
     "${HTTP1_REQUEST_BODY_PLAN}"
     "${HTTP2_STREAM_STATE}"
