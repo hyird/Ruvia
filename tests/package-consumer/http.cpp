@@ -763,6 +763,7 @@ concept HasAnyRvalueMultipartPartHeaderAccessor =
 template <typename T>
 concept HasAnyRvalueMultipartBoundaryAccessor =
     requires(T&& result) { std::move(result).boundary(); } ||
+    requires(T&& result) { std::move(result).notApplicable(); } ||
     requires(T&& result) { std::move(result).failure(); };
 
 template <typename T>
@@ -2632,6 +2633,14 @@ static_assert(!HasMultipartStatus<
     ruvia::detail::HttpMultipartBoundaryParseResult>);
 static_assert(!HasAnyRvalueMultipartBoundaryAccessor<
     ruvia::detail::HttpMultipartBoundaryParseResult>);
+static_assert(std::same_as<
+    decltype(std::declval<const ruvia::detail::HttpMultipartBoundaryParseResult&>()
+                 .notApplicable()),
+    const ruvia::detail::HttpMultipartBoundaryNotApplicable*>);
+static_assert(!HasMultipartParseError<
+    ruvia::detail::HttpMultipartBoundaryParseFailure>);
+static_assert(HasMultipartProtocolError<
+    ruvia::detail::HttpMultipartBoundaryParseFailure>);
 static_assert(!std::default_initializable<
     ruvia::detail::HttpMultipartPartHeaderParseResult>);
 static_assert(!HasAnyRvalueMultipartPartHeaderAccessor<

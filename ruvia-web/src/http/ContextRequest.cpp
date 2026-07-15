@@ -387,13 +387,11 @@ void compactParsedBodyFields(
             resource,
             options);
     }
+    if (boundary.notApplicable() != nullptr) {
+        return detail::RequestFormDataAccess::empty(resource);
+    }
     if (const auto* failure = boundary.failure()) {
-        switch (failure->error()) {
-        case detail::HttpMultipartBoundaryParseError::kInvalidContentType:
-            return detail::RequestFormDataAccess::empty(resource);
-        case detail::HttpMultipartBoundaryParseError::kInvalidBoundary:
-            throw std::invalid_argument("invalid multipart boundary");
-        }
+        throw failure->protocolError();
     }
     throw std::logic_error("unexpected multipart boundary parse result");
 }
@@ -773,13 +771,11 @@ MultipartBoundary Context::multipartBoundary() const {
     if (const auto* parsed = boundary.boundary()) {
         return *parsed;
     }
+    if (boundary.notApplicable() != nullptr) {
+        throw std::invalid_argument("invalid multipart content type");
+    }
     if (const auto* failure = boundary.failure()) {
-        switch (failure->error()) {
-        case detail::HttpMultipartBoundaryParseError::kInvalidContentType:
-            throw std::invalid_argument("invalid multipart content type");
-        case detail::HttpMultipartBoundaryParseError::kInvalidBoundary:
-            throw std::invalid_argument("invalid multipart boundary");
-        }
+        throw failure->protocolError();
     }
     throw std::logic_error("unexpected multipart boundary parse result");
 }

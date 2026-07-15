@@ -4281,8 +4281,15 @@ if(NOT _installed_multipart_parser MATCHES "class MultipartBoundary final" OR
    NOT _installed_multipart_parsing MATCHES "class HttpMultipartPartDelimiter final" OR
    NOT _installed_multipart_parsing MATCHES "class HttpMultipartCloseDelimiter final" OR
    NOT _installed_multipart_parsing MATCHES "class HttpMultipartDelimiterResult final" OR
+   NOT _installed_multipart_parsing MATCHES "class HttpMultipartBoundaryNotApplicable final" OR
    NOT _installed_multipart_parsing MATCHES "class HttpMultipartBoundaryParseFailure final" OR
    NOT _installed_multipart_parsing MATCHES "class HttpMultipartBoundaryParseResult final" OR
+   NOT _installed_multipart_parsing MATCHES
+       "notApplicable[(][)] const &&[ \\t]*=[ \\t]*delete" OR
+   NOT _installed_multipart_parsing MATCHES
+       "HttpProtocolError protocolError[(][)] const noexcept" OR
+   _installed_multipart_parsing MATCHES
+       "HttpMultipartBoundaryParseError|failure->error[(][)]" OR
    NOT _installed_multipart_parsing MATCHES "class HttpMultipartPartHeaderParseFailure final" OR
    NOT _installed_multipart_parsing MATCHES "class HttpMultipartPartHeaderParseResult final")
     message(FATAL_ERROR "installed multipart parser lost its discriminated boundary/input lifecycle API")

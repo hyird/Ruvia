@@ -61,6 +61,7 @@ concept HasAnyRvalueMultipartPartHeaderAccessor =
 template <typename T>
 concept HasAnyRvalueMultipartBoundaryAccessor =
     requires(T&& result) { std::move(result).boundary(); } ||
+    requires(T&& result) { std::move(result).notApplicable(); } ||
     requires(T&& result) { std::move(result).failure(); };
 
 static_assert(std::same_as<
@@ -119,8 +120,14 @@ static_assert(!HasMultipartStatus<
     ruvia::detail::HttpMultipartBoundaryParseResult>);
 static_assert(!HasAnyRvalueMultipartBoundaryAccessor<
     ruvia::detail::HttpMultipartBoundaryParseResult>);
+static_assert(std::same_as<
+    decltype(std::declval<const ruvia::detail::HttpMultipartBoundaryParseResult&>()
+                 .notApplicable()),
+    const ruvia::detail::HttpMultipartBoundaryNotApplicable*>);
 static_assert(!HasMultipartError<ruvia::MultipartBoundary>);
-static_assert(HasMultipartError<
+static_assert(!HasMultipartError<
+    ruvia::detail::HttpMultipartBoundaryParseFailure>);
+static_assert(HasMultipartProtocolError<
     ruvia::detail::HttpMultipartBoundaryParseFailure>);
 static_assert(!std::default_initializable<
     ruvia::detail::HttpMultipartPartHeaderParseResult>);
@@ -221,10 +228,10 @@ RUVIA_TEST(multipart_boundary_value_enforces_rfc2046_grammar) {
 // Boundary extraction owns MIME parameter quoting and returns the same typed
 // value consumed by buffered and streaming parsers.
 RUVIA_TEST(multipart_boundary_from_content_type) {
-    using ruvia::detail::HttpMultipartBoundaryParseError;
     using ruvia::detail::httpParseMultipartBoundary;
     const auto plain = httpParseMultipartBoundary("multipart/form-data; boundary=abc123");
     RUVIA_CHECK(plain.boundary() != nullptr);
+    RUVIA_CHECK(plain.notApplicable() == nullptr);
     RUVIA_CHECK(plain.failure() == nullptr);
     RUVIA_CHECK_EQ(plain.boundary()->value(), std::string_view("abc123"));
 
@@ -243,15 +250,15 @@ RUVIA_TEST(multipart_boundary_from_content_type) {
     RUVIA_CHECK(quotedPair.boundary() != nullptr);
     RUVIA_CHECK_EQ(quotedPair.boundary()->value(), std::string_view("a?b"));
 
-    // Wrong media type and a missing boundary parameter are distinct errors.
+    // A different media type is not applicable to the multipart parser.
     const auto wrongType = httpParseMultipartBoundary(
         "text/plain; boundary=abc");
-    RUVIA_CHECK(wrongType.failure() != nullptr);
-    if (wrongType.failure() != nullptr) {
-        RUVIA_CHECK(
-            wrongType.failure()->error() ==
-            HttpMultipartBoundaryParseError::kInvalidContentType);
-    }
+    RUVIA_CHECK(wrongType.boundary() == nullptr);
+    RUVIA_CHECK(wrongType.notApplicable() != nullptr);
+    RUVIA_CHECK(wrongType.failure() == nullptr);
+
+    // Once multipart/form-data is declared, an invalid boundary is an HTTP
+    // request failure rather than a Web-layer parsing policy decision.
     for (const std::string_view invalid : {
              "multipart/form-data",
              "multipart/form-data; charset=utf-8",
@@ -260,11 +267,15 @@ RUVIA_TEST(multipart_boundary_from_content_type) {
              R"(multipart/form-data; boundary="a;b")",
              "multipart/form-data; boundary=one; boundary=two"}) {
         const auto result = httpParseMultipartBoundary(invalid);
+        RUVIA_CHECK(result.boundary() == nullptr);
+        RUVIA_CHECK(result.notApplicable() == nullptr);
         RUVIA_CHECK(result.failure() != nullptr);
         if (result.failure() != nullptr) {
-            RUVIA_CHECK(
-                result.failure()->error() ==
-                HttpMultipartBoundaryParseError::kInvalidBoundary);
+            const auto error = result.failure()->protocolError();
+            RUVIA_CHECK_EQ(error.status(), 400);
+            RUVIA_CHECK_EQ(
+                std::string_view(error.what()),
+                std::string_view("invalid multipart boundary"));
         }
     }
 }

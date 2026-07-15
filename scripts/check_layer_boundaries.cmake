@@ -2515,6 +2515,7 @@ if(NOT multipart_protocol_helpers MATCHES "class HttpMultipartDelimiterNoMatch f
    NOT multipart_protocol_helpers MATCHES "class HttpMultipartPartDelimiter final" OR
    NOT multipart_protocol_helpers MATCHES "class HttpMultipartCloseDelimiter final" OR
    NOT multipart_protocol_helpers MATCHES "class HttpMultipartDelimiterResult final" OR
+   NOT multipart_protocol_helpers MATCHES "class HttpMultipartBoundaryNotApplicable final" OR
    NOT multipart_protocol_helpers MATCHES "class HttpMultipartBoundaryParseFailure final" OR
    NOT multipart_protocol_helpers MATCHES "class HttpMultipartBoundaryParseResult final" OR
    NOT multipart_protocol_helpers MATCHES "class HttpMultipartPartHeaderParseFailure final" OR
@@ -2533,7 +2534,13 @@ if(NOT multipart_protocol_helpers MATCHES "class HttpMultipartDelimiterNoMatch f
    NOT multipart_protocol_helpers MATCHES
        "headers[(][)] const &&[ \\t]*=[ \\t]*delete" OR
    NOT multipart_protocol_helpers MATCHES
-       "boundary[(][)] const &&[ \\t]*=[ \\t]*delete")
+       "boundary[(][)] const &&[ \\t]*=[ \\t]*delete" OR
+   NOT multipart_protocol_helpers MATCHES
+       "notApplicable[(][)] const &&[ \\t]*=[ \\t]*delete" OR
+   NOT multipart_protocol_helpers MATCHES
+       "HttpProtocolError protocolError[(][)] const noexcept" OR
+   multipart_protocol_helpers MATCHES
+       "HttpMultipartBoundaryParseError|failure->error[(][)]")
     boundary_error("multipart delimiter and Content-Type decisions escaped the HTTP core"
         "ruvia-http must own discriminated boundary/header extraction and an input-aware shared delimiter scanner")
 endif()
@@ -2586,11 +2593,13 @@ if(NOT multipart_web_driver MATCHES "parser_[.]finishInput[(][)]" OR
 endif()
 if(NOT multipart_buffered_web_driver MATCHES
        "parseCompleteMultipartBody" OR
+   NOT multipart_buffered_web_driver MATCHES
+       "boundary[.]notApplicable[(][)]" OR
    NOT multipart_buffered_web_driver MATCHES "parsed[.]failure[(][)]" OR
    NOT multipart_buffered_web_driver MATCHES
        "failure->protocolError[(][)]" OR
    multipart_buffered_web_driver MATCHES
-       "multipartParseErrorMessage" OR
+       "multipartParseErrorMessage|HttpMultipartBoundaryParseError|failure->error[(][)]" OR
    NOT multipart_buffered_web_driver MATCHES "takeParts[(][)]")
     boundary_error("buffered multipart Web facade bypasses the typed parser result"
         "Context request parsing must map one HTTP result and consume its owned part vector")
