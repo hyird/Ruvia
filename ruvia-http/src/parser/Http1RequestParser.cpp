@@ -133,8 +133,8 @@ void Http1ServerRequestParser::parseRequestHead(
             requestHeaderKindKnownSlot(header.kind));
     }
 
-    state.responseCoding = httpSelectResponseCodingFromQualities(
-        block.gzipEncoding, block.brotliEncoding, block.zstdEncoding);
+    state.responseCoding =
+        httpSelectResponseCodingFromQualities(block.responseCodingQualities);
     auto expectations = block.expectations;
     if (protocolVersion == HttpProtocolVersion::kHttp10) {
         expectations.ignore100Continue();

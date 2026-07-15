@@ -53,9 +53,7 @@ struct ParsedRequestHeaderBlock {
     HttpUpgradeProtocols upgradeProtocols;
     HttpContentLengthState contentLength;
     std::uint32_t seenHeaderBits{0};
-    HttpAcceptedEncodingQuality gzipEncoding;
-    HttpAcceptedEncodingQuality brotliEncoding;
-    HttpAcceptedEncodingQuality zstdEncoding;
+    HttpResponseCodingQualities responseCodingQualities;
     HttpTransferEncodingState transferEncoding;
     HttpRequestExpectations expectations;
 };

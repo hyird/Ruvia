@@ -122,25 +122,67 @@ struct HttpAcceptedEncodingQuality {
     return quality.explicitQuality >= 0 ? quality.explicitQuality : quality.wildcardQuality;
 }
 
-// Picks the best response coding from per-coding qualities. The highest client
+struct HttpResponseCodingQualities final {
+    HttpAcceptedEncodingQuality gzip;
+    HttpAcceptedEncodingQuality brotli;
+    HttpAcceptedEncodingQuality zstd;
+    HttpAcceptedEncodingQuality identity;
+
+    void update(std::string_view acceptEncoding) noexcept {
+        httpVisitCommaSeparatedQuoted(
+            acceptEncoding,
+            [this](std::string_view item) noexcept {
+                const auto token = httpHeaderTokenBeforeParameters(item);
+                if (httpAsciiEqualsIgnoreCase(token, "gzip")) {
+                    gzip.explicitQuality = httpQualityParameter(item);
+                } else if (httpAsciiEqualsIgnoreCase(token, "br")) {
+                    brotli.explicitQuality = httpQualityParameter(item);
+                } else if (httpAsciiEqualsIgnoreCase(token, "zstd")) {
+                    zstd.explicitQuality = httpQualityParameter(item);
+                } else if (httpAsciiEqualsIgnoreCase(token, "identity")) {
+                    identity.explicitQuality = httpQualityParameter(item);
+                } else if (token == "*") {
+                    const auto wildcard = httpQualityParameter(item);
+                    gzip.wildcardQuality = wildcard;
+                    brotli.wildcardQuality = wildcard;
+                    zstd.wildcardQuality = wildcard;
+                    identity.wildcardQuality = wildcard;
+                }
+                return true;
+            });
+    }
+};
+
+[[nodiscard]] inline int httpAcceptedIdentityScore(
+    const HttpAcceptedEncodingQuality& identity) noexcept {
+    if (identity.explicitQuality >= 0) {
+        return identity.explicitQuality;
+    }
+    // RFC 9110 section 12.5.3: identity is acceptable by default. A wildcard
+    // only excludes it when the wildcard explicitly carries q=0; a positive
+    // wildcard quality describes otherwise-unlisted content codings and does
+    // not lower identity's implicit quality.
+    return identity.wildcardQuality == 0 ? 0 : 1000;
+}
+
+// Picks the best response coding from all candidate qualities. The highest client
 // q-value wins; ties resolve by server preference br > zstd > gzip (Brotli gives
-// the best ratio for text and is the most widely supported of the three). A
-// coding with q=0 or one the client never accepts is excluded.
+// the best ratio for text and is the most widely supported of the three), then
+// identity. A coding with q=0 or one the client never accepts is excluded.
 [[nodiscard]] inline HttpContentCoding httpSelectResponseCodingFromQualities(
-    const HttpAcceptedEncodingQuality& gzip,
-    const HttpAcceptedEncodingQuality& brotli,
-    const HttpAcceptedEncodingQuality& zstd) noexcept {
+    const HttpResponseCodingQualities& qualities) noexcept {
     struct Candidate final {
         HttpContentCoding coding;
         int score;
     };
     const Candidate candidates[] = {
-        {HttpContentCoding::kBrotli, httpAcceptedEncodingScore(brotli)},
-        {HttpContentCoding::kZstd, httpAcceptedEncodingScore(zstd)},
-        {HttpContentCoding::kGzip, httpAcceptedEncodingScore(gzip)},
+        {HttpContentCoding::kBrotli, httpAcceptedEncodingScore(qualities.brotli)},
+        {HttpContentCoding::kZstd, httpAcceptedEncodingScore(qualities.zstd)},
+        {HttpContentCoding::kGzip, httpAcceptedEncodingScore(qualities.gzip)},
+        {HttpContentCoding::kIdentity, httpAcceptedIdentityScore(qualities.identity)},
     };
     HttpContentCoding best = HttpContentCoding::kIdentity;
-    int bestScore = 0;
+    int bestScore = -1;
     for (const auto& candidate : candidates) {
         if (candidate.score > bestScore) {
             bestScore = candidate.score;
@@ -150,43 +192,10 @@ struct HttpAcceptedEncodingQuality {
     return best;
 }
 
-// Single-pass Accept-Encoding scan that updates the gzip/br/zstd qualities
-// together. Equivalent to gzip.update()/brotli.update()/zstd.update() with the
-// same header value, but walks the comma-separated list once instead of three
-// times ; this runs on the per-request header-parse hot path. Like
-// HttpAcceptedEncodingQuality::update it accumulates across calls (a later
-// matching item overwrites), so repeated Accept-Encoding header lines compose.
-inline void httpUpdateResponseCodingQualities(
-    std::string_view acceptEncoding,
-    HttpAcceptedEncodingQuality& gzip,
-    HttpAcceptedEncodingQuality& brotli,
-    HttpAcceptedEncodingQuality& zstd) noexcept {
-    httpVisitCommaSeparatedQuoted(
-        acceptEncoding,
-        [&gzip, &brotli, &zstd](std::string_view item) noexcept {
-            const auto token = httpHeaderTokenBeforeParameters(item);
-            if (httpAsciiEqualsIgnoreCase(token, "gzip")) {
-                gzip.explicitQuality = httpQualityParameter(item);
-            } else if (httpAsciiEqualsIgnoreCase(token, "br")) {
-                brotli.explicitQuality = httpQualityParameter(item);
-            } else if (httpAsciiEqualsIgnoreCase(token, "zstd")) {
-                zstd.explicitQuality = httpQualityParameter(item);
-            } else if (token == "*") {
-                const auto wildcard = httpQualityParameter(item);
-                gzip.wildcardQuality = wildcard;
-                brotli.wildcardQuality = wildcard;
-                zstd.wildcardQuality = wildcard;
-            }
-            return true;
-        });
-}
-
 [[nodiscard]] inline HttpContentCoding httpSelectResponseCoding(std::string_view acceptEncoding) noexcept {
-    HttpAcceptedEncodingQuality gzip;
-    HttpAcceptedEncodingQuality brotli;
-    HttpAcceptedEncodingQuality zstd;
-    httpUpdateResponseCodingQualities(acceptEncoding, gzip, brotli, zstd);
-    return httpSelectResponseCodingFromQualities(gzip, brotli, zstd);
+    HttpResponseCodingQualities qualities;
+    qualities.update(acceptEncoding);
+    return httpSelectResponseCodingFromQualities(qualities);
 }
 
 [[nodiscard]] inline std::string_view httpMediaTypeOnly(std::string_view value) noexcept {

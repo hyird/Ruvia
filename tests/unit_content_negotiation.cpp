@@ -8,13 +8,15 @@ namespace {
 
 using ruvia::detail::HttpAcceptedEncodingQuality;
 using ruvia::detail::HttpContentCoding;
+using ruvia::detail::HttpResponseCodingQualities;
 
-// The previous three-pass form: one full Accept-Encoding scan per coding. The
-// single-pass httpUpdateResponseCodingQualities must produce identical qualities.
+// Reference form: one full Accept-Encoding scan per coding. The aggregate
+// single-pass update must produce identical qualities.
 struct ReferenceQualities final {
     HttpAcceptedEncodingQuality gzip;
     HttpAcceptedEncodingQuality brotli;
     HttpAcceptedEncodingQuality zstd;
+    HttpAcceptedEncodingQuality identity;
 };
 
 ReferenceQualities referenceThreePass(std::string_view header) {
@@ -22,6 +24,7 @@ ReferenceQualities referenceThreePass(std::string_view header) {
     ref.gzip.update(header, "gzip");
     ref.brotli.update(header, "br");
     ref.zstd.update(header, "zstd");
+    ref.identity.update(header, "identity");
     return ref;
 }
 
@@ -31,8 +34,7 @@ bool sameQuality(const HttpAcceptedEncodingQuality& a, const HttpAcceptedEncodin
 
 }  // namespace
 
-RUVIA_TEST(response_coding_single_pass_matches_three_pass) {
-    using ruvia::detail::httpUpdateResponseCodingQualities;
+RUVIA_TEST(response_coding_single_pass_matches_per_coding_scans) {
     const std::string_view cases[] = {
         "gzip, br, zstd",
         "gzip;q=0.5, br;q=0.8, zstd;q=0.3",
@@ -50,15 +52,14 @@ RUVIA_TEST(response_coding_single_pass_matches_three_pass) {
         R"(gzip;note="a,b";q=0, br;q=0.5)",
     };
     for (const auto header : cases) {
-        HttpAcceptedEncodingQuality gzip;
-        HttpAcceptedEncodingQuality brotli;
-        HttpAcceptedEncodingQuality zstd;
-        httpUpdateResponseCodingQualities(header, gzip, brotli, zstd);
+        HttpResponseCodingQualities qualities;
+        qualities.update(header);
 
         const auto ref = referenceThreePass(header);
-        RUVIA_CHECK(sameQuality(gzip, ref.gzip));
-        RUVIA_CHECK(sameQuality(brotli, ref.brotli));
-        RUVIA_CHECK(sameQuality(zstd, ref.zstd));
+        RUVIA_CHECK(sameQuality(qualities.gzip, ref.gzip));
+        RUVIA_CHECK(sameQuality(qualities.brotli, ref.brotli));
+        RUVIA_CHECK(sameQuality(qualities.zstd, ref.zstd));
+        RUVIA_CHECK(sameQuality(qualities.identity, ref.identity));
     }
 }
 
@@ -67,9 +68,16 @@ RUVIA_TEST(response_coding_selection_end_to_end) {
     // Server tie-break prefers br > zstd > gzip at equal q.
     RUVIA_CHECK(httpSelectResponseCoding("gzip, br, zstd") == HttpContentCoding::kBrotli);
     // Explicit q ordering wins over the tie-break.
-    RUVIA_CHECK(httpSelectResponseCoding("gzip;q=0.9, br;q=0.1") == HttpContentCoding::kGzip);
+    RUVIA_CHECK(httpSelectResponseCoding("identity;q=0, gzip;q=0.9, br;q=0.1") == HttpContentCoding::kGzip);
     // A coding at q=0 is excluded even under a permissive wildcard.
-    RUVIA_CHECK(httpSelectResponseCoding("br;q=0, *;q=0.5") == HttpContentCoding::kZstd);
+    RUVIA_CHECK(httpSelectResponseCoding(
+        "identity;q=0, br;q=0, *;q=0.5") == HttpContentCoding::kZstd);
+    // identity is implicitly q=1, so a lower-quality coding must not override it.
+    RUVIA_CHECK(httpSelectResponseCoding("gzip;q=0.9") == HttpContentCoding::kIdentity);
+    // A positive wildcard does not lower identity's implicit quality, while an
+    // explicit identity preference does.
+    RUVIA_CHECK(httpSelectResponseCoding("*;q=0.5") == HttpContentCoding::kIdentity);
+    RUVIA_CHECK(httpSelectResponseCoding("identity;q=0.1, gzip;q=0.5") == HttpContentCoding::kGzip);
     // No acceptable coding.
     RUVIA_CHECK(httpSelectResponseCoding("identity") == HttpContentCoding::kIdentity);
     RUVIA_CHECK(httpSelectResponseCoding("") == HttpContentCoding::kIdentity);

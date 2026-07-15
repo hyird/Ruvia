@@ -429,15 +429,12 @@ private:
     StaticFileRepresentation selected(
         identity,
         detail::HttpContentCoding::kIdentity);
-    const auto acceptEncoding =
-        detail::requestKnownHeader(request, detail::RequestKnownHeader::kAcceptEncoding);
-    if (acceptEncoding.empty()) {
-        return selected;
+    detail::HttpResponseCodingQualities qualities;
+    for (const auto& header : request.headers()) {
+        if (detail::httpAsciiEqualsIgnoreCase(header.name(), "Accept-Encoding")) {
+            qualities.update(header.value());
+        }
     }
-    detail::HttpAcceptedEncodingQuality brotli;
-    detail::HttpAcceptedEncodingQuality zstd;
-    detail::HttpAcceptedEncodingQuality gzip;
-    detail::httpUpdateResponseCodingQualities(acceptEncoding, gzip, brotli, zstd);
 
     struct Candidate final {
         std::string_view suffix;
@@ -447,18 +444,20 @@ private:
     const Candidate candidates[] = {
         {".br",
          detail::HttpContentCoding::kBrotli,
-         detail::httpAcceptedEncodingScore(brotli)},
+         detail::httpAcceptedEncodingScore(qualities.brotli)},
         {".zst",
          detail::HttpContentCoding::kZstd,
-         detail::httpAcceptedEncodingScore(zstd)},
+         detail::httpAcceptedEncodingScore(qualities.zstd)},
         {".gz",
          detail::HttpContentCoding::kGzip,
-         detail::httpAcceptedEncodingScore(gzip)},
+         detail::httpAcceptedEncodingScore(qualities.gzip)},
     };
 
-    int best = 0;
+    int best = detail::httpAcceptedIdentityScore(qualities.identity);
     for (const auto& candidate : candidates) {
-        if (candidate.score <= best) {
+        if (candidate.score < best ||
+            (candidate.score == best &&
+             selected.contentCoding() != detail::HttpContentCoding::kIdentity)) {
             continue;
         }
         std::pmr::string variantPath(resource);

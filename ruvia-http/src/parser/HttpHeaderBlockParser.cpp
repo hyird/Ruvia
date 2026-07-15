@@ -172,8 +172,7 @@ std::optional<HttpParseError> parseHttpHeaderBlock(
                 }
                 break;
             case RequestHeaderKind::kAcceptEncoding:
-                httpUpdateResponseCodingQualities(
-                    value, block.gzipEncoding, block.brotliEncoding, block.zstdEncoding);
+                block.responseCodingQualities.update(value);
                 break;
             case RequestHeaderKind::kAccessControlRequestMethod:
             case RequestHeaderKind::kAuthorization:

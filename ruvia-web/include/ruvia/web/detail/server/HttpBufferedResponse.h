@@ -13,7 +13,13 @@
 namespace ruvia::detail {
 
 [[nodiscard]] inline HttpContentCoding httpResponseCodingFor(const HttpRequest& request) noexcept {
-    return httpSelectResponseCoding(requestKnownHeader(request, RequestKnownHeader::kAcceptEncoding));
+    HttpResponseCodingQualities qualities;
+    for (const auto& header : request.headers()) {
+        if (httpAsciiEqualsIgnoreCase(header.name(), "Accept-Encoding")) {
+            qualities.update(header.value());
+        }
+    }
+    return httpSelectResponseCodingFromQualities(qualities);
 }
 
 // This returns the one HTTP-owned snapshot both protocol drivers must consume;

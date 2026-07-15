@@ -238,6 +238,18 @@ RUVIA_TEST(buffered_response_absent_policies_skip_cors_and_compression) {
     RUVIA_CHECK(!response.header("Vary").has_value());
 }
 
+RUVIA_TEST(buffered_response_coding_folds_repeated_accept_encoding_fields) {
+    ruvia::detail::Http1ServerRequestParser parser;
+    const auto parsed = parser.parseMessage(
+        "GET / HTTP/1.1\r\nHost: x\r\n"
+        "Accept-Encoding: identity;q=0, gzip;q=0.2\r\n"
+        "Accept-Encoding: br;q=0.8\r\n\r\n");
+    RUVIA_CHECK(parsed.messageReady() != nullptr);
+    RUVIA_CHECK(
+        ruvia::detail::httpResponseCodingFor(parsed.request) ==
+        HttpContentCoding::kBrotli);
+}
+
 RUVIA_TEST(compress_skips_when_no_coding_but_preserves_head_metadata) {
     {
         auto response = responseWithBody(kCompressibleBody);

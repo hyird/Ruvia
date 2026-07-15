@@ -574,6 +574,17 @@ RUVIA_TEST(http1_server_head_ready_is_distinct_from_message_ready) {
     }
 }
 
+RUVIA_TEST(http1_response_coding_folds_all_accept_encoding_field_lines) {
+    Http1ServerRequestParser parser;
+    const auto parsed = parser.parseMessage(
+        "GET / HTTP/1.1\r\nHost: x\r\n"
+        "Accept-Encoding: identity;q=0, gzip;q=0.2\r\n"
+        "Accept-Encoding: br;q=0.8\r\n\r\n");
+    RUVIA_CHECK(parsed.messageReady() != nullptr);
+    RUVIA_CHECK(
+        parsed.responseCoding == ruvia::detail::HttpContentCoding::kBrotli);
+}
+
 RUVIA_TEST(http1_parse_header_block_too_large_rejected) {
     // A header section that reaches the byte cap without terminating is a DoS
     // guard (kMaxHttpHeaderBytes is 64 KiB).

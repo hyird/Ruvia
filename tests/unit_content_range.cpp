@@ -881,6 +881,12 @@ RUVIA_TEST(static_file_selects_precompressed_representation_atomically) {
     RUVIA_CHECK_EQ(prefersGzip.contentEncoding, std::string("gzip"));
     RUVIA_CHECK_EQ(prefersGzip.size, std::uint64_t{20});
 
+    // identity is implicitly q=1. A lower-quality gzip preference must leave
+    // the original representation selected even when a sidecar exists.
+    const auto prefersIdentity = serve("gzip;q=0.5");
+    RUVIA_CHECK(prefersIdentity.contentEncoding.empty());
+    RUVIA_CHECK_EQ(prefersIdentity.size, std::uint64_t{100});
+
     // Without Accept-Encoding the plain file is served, with no Content-Encoding.
     const auto plain = serve("");
     RUVIA_CHECK(plain.contentEncoding.empty());
