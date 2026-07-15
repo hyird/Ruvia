@@ -87,13 +87,17 @@ struct FileConditionalHeaders final {
 [[nodiscard]] bool ifRangeAllows(
     std::string_view header,
     std::string_view etag,
-    std::time_t modifiedSeconds) noexcept {
+    std::time_t modifiedSeconds,
+    bool dateValidatorStrong) noexcept {
     if (header.empty()) {
         return false;
     }
     const auto value = detail::httpTrimOws(header);
     if (!value.empty() && (value.front() == '"' || value.starts_with("W/"))) {
         return detail::httpStrongEtagEquals(value, etag);
+    }
+    if (!dateValidatorStrong) {
+        return false;
     }
     // An If-Range date requires an EXACT match against Last-Modified (RFC 9110
     // §13.1.5 / RFC 7233 §3.2: "the comparison ... uses an exact match"), NOT the
@@ -207,18 +211,34 @@ template <typename ApplyResponseState>
     std::pmr::string lastModifiedStorage(context.resource());
     std::string_view etag;
     std::string_view lastModified;
+    // RFC 9110 §8.8.2.1 forbids an origin server from emitting a
+    // Last-Modified value later than the message origination time. Filesystems
+    // can legitimately contain future mtimes (clock skew, archives, or an
+    // explicit timestamp), so use this response's current second for the wire
+    // validator and every date precondition evaluated against it. The clamped
+    // value is not the representation's actual validator and therefore cannot
+    // be a strong If-Range validator (RFC 9110 §13.1.5).
+    const auto responseSeconds = std::time(nullptr);
+    const bool lastModifiedIsActual = modifiedSeconds <= responseSeconds;
+    const auto validatorModifiedSeconds = lastModifiedIsActual
+        ? modifiedSeconds
+        : responseSeconds;
     if (enableValidators) {
-        if (precomputedEtag.empty() || precomputedLastModified.empty()) {
+        if (precomputedEtag.empty()) {
             etagStorage = detail::makeStaticFileSnapshotEtag(
                 context.resource(),
                 size,
                 modifiedToken,
                 filePath.identity());
-            lastModifiedStorage = detail::httpFormatDate(context.resource(), modifiedSeconds);
             etag = etagStorage;
-            lastModified = lastModifiedStorage;
         } else {
             etag = precomputedEtag;
+        }
+        if (precomputedLastModified.empty() || !lastModifiedIsActual) {
+            lastModifiedStorage = detail::httpFormatDate(
+                context.resource(), validatorModifiedSeconds);
+            lastModified = lastModifiedStorage;
+        } else {
             lastModified = precomputedLastModified;
         }
     }
@@ -300,7 +320,8 @@ template <typename ApplyResponseState>
         // empty list is still a present field and must take precedence over the date.
         if (enableValidators && !conditional.hasIfMatch &&
             !conditional.ifUnmodifiedSince.empty() &&
-            !httpDateUnmodified(conditional.ifUnmodifiedSince, modifiedSeconds)) {
+            !httpDateUnmodified(
+                conditional.ifUnmodifiedSince, validatorModifiedSeconds)) {
             throw HttpError(412, "precondition_failed", "file precondition failed");
         }
 
@@ -310,7 +331,8 @@ template <typename ApplyResponseState>
 
         if (enableValidators && !conditional.hasIfNoneMatch &&
             !conditional.ifModifiedSince.empty() &&
-            httpDateNotModified(conditional.ifModifiedSince, modifiedSeconds)) {
+            httpDateNotModified(
+                conditional.ifModifiedSince, validatorModifiedSeconds)) {
             return makeHeaderOnlyResponse(304);
         }
 
@@ -324,7 +346,11 @@ template <typename ApplyResponseState>
             // before) skipped the check entirely and returned a 206. A range with
             // no If-Range is still honored without validators.
             if (conditional.hasIfRange &&
-                (!enableValidators || !ifRangeAllows(conditional.ifRange, etag, modifiedSeconds))) {
+                (!enableValidators || !ifRangeAllows(
+                    conditional.ifRange,
+                    etag,
+                    validatorModifiedSeconds,
+                    lastModifiedIsActual))) {
                 return makeFullFileResponse(std::nullopt);
             }
 

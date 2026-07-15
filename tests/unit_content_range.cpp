@@ -1,8 +1,10 @@
 #include "test_harness.h"
 
 #include <array>
+#include <chrono>
 #include <cstdint>
 #include <concepts>
+#include <ctime>
 #include <filesystem>
 #include <fstream>
 #include <memory_resource>
@@ -610,6 +612,72 @@ RUVIA_TEST(static_file_if_range_date_requires_exact_match) {
 
     // If-Range date OLDER than Last-Modified: representation has since changed -> 200.
     RUVIA_CHECK_EQ(serve(fmt(modified - 86400)).first, std::uint16_t{200});
+
+    fs::remove_all(dir);
+}
+
+RUVIA_TEST(static_file_clamps_future_last_modified_and_rejects_it_for_if_range) {
+    namespace fs = std::filesystem;
+    using ruvia::HttpHeaderView;
+    using ruvia::StaticRoot;
+    using ruvia::StaticRootOptions;
+    using ruvia::detail::ContextAccess;
+    using ruvia::detail::HttpRequestAccess;
+    using ruvia::detail::RequestKnownHeader;
+
+    const auto dir = fs::temp_directory_path() / "ruvia_static_future_mtime_dir";
+    fs::create_directories(dir);
+    const auto path = dir / "data.txt";
+    {
+        std::ofstream out(path, std::ios::binary | std::ios::trunc);
+        out << "future";
+    }
+    std::error_code ec;
+    fs::last_write_time(
+        path,
+        fs::file_time_type::clock::now() + std::chrono::hours(24),
+        ec);
+    RUVIA_CHECK(!ec);
+
+    StaticRootOptions options;
+    options.fileTypes = ruvia::StaticFileTypePolicy::all();
+    StaticRoot root(dir, std::move(options));
+
+    const auto serve = [&root](std::optional<std::string_view> ifRange) {
+        ruvia::WorkerMemory worker;
+        ruvia::RequestMemory memory(worker);
+        ruvia::HttpRequest request = HttpRequestAccess::make();
+        HttpRequestAccess::reset(request);
+        HttpRequestAccess::setMethod(request, "GET");
+        HttpRequestAccess::setResource(request, memory.resource());
+        HttpRequestAccess::addHeader(
+            request, HttpHeaderView{"Range", "bytes=0-1"},
+            HttpRequestAccess::knownHeaderSlot(RequestKnownHeader::kRange));
+        if (ifRange.has_value()) {
+            HttpRequestAccess::addHeader(
+                request, HttpHeaderView{"If-Range", *ifRange},
+                HttpRequestAccess::knownHeaderSlot(RequestKnownHeader::kIfRange));
+        }
+        auto context = ContextAccess::make(memory, request);
+        const auto response = context.staticFile(root, "data.txt", "text/plain");
+        return std::pair<std::uint16_t, std::string>(
+            response.status(),
+            std::string(response.header("Last-Modified").value_or("")));
+    };
+
+    const auto before = std::time(nullptr);
+    const auto base = serve(std::nullopt);
+    const auto after = std::time(nullptr);
+    RUVIA_CHECK_EQ(base.first, std::uint16_t{206});
+    const auto lastModified = ruvia::detail::httpParseHttpDate(base.second);
+    RUVIA_CHECK(lastModified.has_value());
+    RUVIA_CHECK(lastModified.value_or(after + 1) >= before);
+    RUVIA_CHECK(lastModified.value_or(after + 1) <= after);
+
+    // The clamped wire date is the response time, not the file's actual
+    // validator. It is therefore weak and cannot authorize stitching a partial
+    // response into the client's stored representation.
+    RUVIA_CHECK_EQ(serve(base.second).first, std::uint16_t{200});
 
     fs::remove_all(dir);
 }
