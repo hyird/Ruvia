@@ -47,12 +47,12 @@
 
 ### R1：Ruvia 0.1.2 并发基础设施
 
-状态：已完成。EventLoopPool、EventLoop/WorkerHandle、WebWorkerHandle 异步作业投递、统一 deadline queue、sleep、Channel、OneShot，以及 timer-as-signal/stream timeout 迁移均已实现并通过验证。EventLoop 公开应用自有 `io_context`/executor，Web worker 保持受限。
+状态：已完成。EventLoopPool、EventLoop/WorkerHandle、`attachEventLoop(externalIoContext)`、WebWorkerHandle 异步作业投递、统一 deadline queue、sleep、Channel、OneShot，以及 timer-as-signal/stream timeout 迁移均已实现并通过验证。EventLoop 公开应用自有 `io_context`/executor，Web worker 保持受限。
 
 任务：
 
 0. 将 ConnectionScanner deadline、shutdown/stream timeout 合并到每 worker 唯一 deadline queue；HTTP/2/WS 写唤醒改用 mailbox/signal，不再创建 `steady_timer(max)`。
-1. 在 `ruvia-core` 增加 EventLoopPool、EventLoop、WorkerHandle 和有界 `post()`；EventLoop 支持原生 Asio I/O 和 owner-thread `onStop()`。
+1. 在 `ruvia-core` 增加 EventLoopPool、EventLoop、WorkerHandle 和有界 `post()`；EventLoop 支持原生 Asio I/O、owner-thread `onStop()`，并可通过 `attachEventLoop()` 接入外部单线程 `io_context`。
 2. 将 WorkerHandle 从 HttpServer worker 传入 Context；通过 `App::workerFor()`/`App::workers()` 暴露 WebWorkerHandle，使后台线程能把拥有权数据投递到稳定 Web worker，并在 `WebWorkerContext` 内使用该 worker 的 DB/Redis。
 3. 实现 worker-bound sleep。
 4. 实现创建期预分配、短临界区 mutex 保护的有界 Channel。

@@ -45,6 +45,25 @@ auto stopRegistration = loop.onStop([&socket] {
 
 `ioContext()`/`executor()` 用于构造和驱动归属于该 loop 的 Asio I/O 对象，不是无界任务入口。外部线程提交普通业务任务仍必须使用有界 `EventLoop::post()`；直接 `asio::post(loop.executor(), ...)` 绕过 mailbox 的任务不享受背压、拒绝新任务和停机可观测性保证。
 
+已有 Asio runtime 可以接入同一套原语：
+
+```cpp
+asio::io_context io;
+auto attachment = ruvia::attachEventLoop(io, {
+    .mailboxCapacity = 1024,
+});
+auto loop = attachment.loop();
+
+std::thread thread([&] { io.run(); });
+// 使用 loop.post()/handle()/onStop()。
+attachment.stop();
+thread.join();
+```
+
+`EventLoopAttachment` 不创建线程，不调用外部 context 的 `run/stop/restart`，也不取得这些生命周期操作的所有权。attachment 存活期间持有 work guard；`stop()` 关闭 mailbox、在 owner thread 投递 stop callback 和 timer 清理，然后释放 work guard，但不会调用 `io_context::stop()`，以免终止 context 上与 Ruvia 无关的工作。
+
+外部 context 必须晚于 attachment、所有 `EventLoop` 副本和其 Asio 对象销毁；一个 context 同时只能有一个 Ruvia attachment，重复绑定会抛 `std::invalid_argument`。调用方必须在 context 仍能 drain handler 时显式 `attachment.stop()`，然后才可停止或 join 自己的 runtime。外部 context 仍必须保证单线程 `run()`，以维持一个 worker 一个 owner thread 的不变量。
+
 `EventLoop::handle()` 返回可复制的 `WorkerHandle`，供 `sleepFor`、`Channel`、`OneShot`、`TaskScope` 等 worker-bound core 原语使用。Web handler 的 `Context::worker()` 也只返回这种受限句柄：
 
 - `post(fn)` 是通用公开 API，语义对应 event-loop 的 queue-in-loop。
