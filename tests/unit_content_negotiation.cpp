@@ -46,7 +46,7 @@ RUVIA_TEST(response_coding_single_pass_matches_per_coding_scans) {
         "GZIP, Br, ZSTD",  // token match is case-insensitive
         "",
         "deflate;q=0.2",   // unknown coding: leaves all three untouched
-        "gzip;q=0, gzip;q=0.9",  // later matching item overwrites
+        "gzip;q=0, gzip;q=0.9",
         ", gzip, , br,",         // empty items are skipped
         "gzip;q=1.0, br;q=0.500",
         R"(gzip;note="a,b";q=0, br;q=0.5)",
@@ -78,6 +78,24 @@ RUVIA_TEST(response_coding_selection_end_to_end) {
     // explicit identity preference does.
     RUVIA_CHECK(httpSelectResponseCoding("*;q=0.5") == HttpContentCoding::kIdentity);
     RUVIA_CHECK(httpSelectResponseCoding("identity;q=0.1, gzip;q=0.5") == HttpContentCoding::kGzip);
+    // Repeating the same coding is equivalent to multiple matching alternatives:
+    // the highest qvalue wins, independently of list order.
+    RUVIA_CHECK(httpSelectResponseCoding(
+        "identity;q=0.5, gzip;q=0.9, gzip;q=0.1") == HttpContentCoding::kGzip);
+    RUVIA_CHECK(httpSelectResponseCoding(
+        "identity;q=0.5, gzip;q=0.1, gzip;q=0.9") == HttpContentCoding::kGzip);
+    // The same rule applies to repeated wildcard entries for an unlisted coding.
+    RUVIA_CHECK(httpSelectResponseCoding(
+        "identity;q=0, *;q=0.8, *;q=0.1") == HttpContentCoding::kBrotli);
+    HttpResponseCodingQualities repeated;
+    repeated.update("gzip;q=0.9, gzip;q=0.1, *;q=0.8, *;q=0.2");
+    RUVIA_CHECK_EQ(repeated.gzip.explicitQuality, 900);
+    RUVIA_CHECK_EQ(repeated.brotli.wildcardQuality, 800);
+    HttpResponseCodingQualities splitLines;
+    splitLines.update("gzip;q=0.9, *;q=0.8");
+    splitLines.update("gzip;q=0.1, *;q=0.2");
+    RUVIA_CHECK_EQ(splitLines.gzip.explicitQuality, 900);
+    RUVIA_CHECK_EQ(splitLines.brotli.wildcardQuality, 800);
     // No acceptable coding.
     RUVIA_CHECK(httpSelectResponseCoding("identity") == HttpContentCoding::kIdentity);
     RUVIA_CHECK(httpSelectResponseCoding("") == HttpContentCoding::kIdentity);

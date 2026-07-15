@@ -74,6 +74,12 @@ enum class HttpContentCoding : std::uint8_t {
     return httpTrimOws(semicolon == std::string_view::npos ? value : value.substr(0, semicolon));
 }
 
+inline void httpAccumulateAcceptedQuality(int candidate, int& accumulated) noexcept {
+    if (candidate > accumulated) {
+        accumulated = candidate;
+    }
+}
+
 inline void httpUpdateAcceptedEncodingQuality(
     std::string_view acceptEncoding,
     std::string_view coding,
@@ -84,9 +90,11 @@ inline void httpUpdateAcceptedEncodingQuality(
         [coding, &explicitQuality, &wildcardQuality](std::string_view item) noexcept {
             const auto token = httpHeaderTokenBeforeParameters(item);
             if (httpAsciiEqualsIgnoreCase(token, coding)) {
-                explicitQuality = httpQualityParameter(item);
+                httpAccumulateAcceptedQuality(
+                    httpQualityParameter(item), explicitQuality);
             } else if (token == "*") {
-                wildcardQuality = httpQualityParameter(item);
+                httpAccumulateAcceptedQuality(
+                    httpQualityParameter(item), wildcardQuality);
             }
             return true;
         });
@@ -134,19 +142,23 @@ struct HttpResponseCodingQualities final {
             [this](std::string_view item) noexcept {
                 const auto token = httpHeaderTokenBeforeParameters(item);
                 if (httpAsciiEqualsIgnoreCase(token, "gzip")) {
-                    gzip.explicitQuality = httpQualityParameter(item);
+                    httpAccumulateAcceptedQuality(
+                        httpQualityParameter(item), gzip.explicitQuality);
                 } else if (httpAsciiEqualsIgnoreCase(token, "br")) {
-                    brotli.explicitQuality = httpQualityParameter(item);
+                    httpAccumulateAcceptedQuality(
+                        httpQualityParameter(item), brotli.explicitQuality);
                 } else if (httpAsciiEqualsIgnoreCase(token, "zstd")) {
-                    zstd.explicitQuality = httpQualityParameter(item);
+                    httpAccumulateAcceptedQuality(
+                        httpQualityParameter(item), zstd.explicitQuality);
                 } else if (httpAsciiEqualsIgnoreCase(token, "identity")) {
-                    identity.explicitQuality = httpQualityParameter(item);
+                    httpAccumulateAcceptedQuality(
+                        httpQualityParameter(item), identity.explicitQuality);
                 } else if (token == "*") {
                     const auto wildcard = httpQualityParameter(item);
-                    gzip.wildcardQuality = wildcard;
-                    brotli.wildcardQuality = wildcard;
-                    zstd.wildcardQuality = wildcard;
-                    identity.wildcardQuality = wildcard;
+                    httpAccumulateAcceptedQuality(wildcard, gzip.wildcardQuality);
+                    httpAccumulateAcceptedQuality(wildcard, brotli.wildcardQuality);
+                    httpAccumulateAcceptedQuality(wildcard, zstd.wildcardQuality);
+                    httpAccumulateAcceptedQuality(wildcard, identity.wildcardQuality);
                 }
                 return true;
             });
