@@ -732,6 +732,25 @@ RUVIA_TEST(static_file_if_match_takes_precedence_over_if_unmodified_since) {
                {RequestKnownHeader::kIfUnmodifiedSince, "If-Unmodified-Since", kOldDate}}).first,
         std::uint16_t{200});
 
+    // Presence is distinct from a non-empty field value. The empty #entity-tag
+    // list matches no current representation, so an empty If-Match fails rather
+    // than being treated as if the field were absent.
+    RUVIA_CHECK_EQ(
+        serve({{RequestKnownHeader::kIfMatch, "If-Match", ""}}).first,
+        std::uint16_t{412});
+
+    constexpr std::string_view kFutureDate =
+        "Fri, 31 Dec 9999 23:59:59 GMT";
+    RUVIA_CHECK_EQ(
+        serve({{RequestKnownHeader::kIfModifiedSince, "If-Modified-Since", kFutureDate}}).first,
+        std::uint16_t{304});
+    // Even an empty If-None-Match is present and therefore takes precedence over
+    // If-Modified-Since. Its empty list does not match, so the response is 200.
+    RUVIA_CHECK_EQ(
+        serve({{RequestKnownHeader::kIfNoneMatch, "If-None-Match", ""},
+               {RequestKnownHeader::kIfModifiedSince, "If-Modified-Since", kFutureDate}}).first,
+        std::uint16_t{200});
+
     fs::remove_all(dir);
 }
 

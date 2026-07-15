@@ -34,8 +34,10 @@ inline constexpr std::size_t kFileResponseHeaderReserve = 7;
 
 struct FileConditionalHeaders final {
     std::string_view ifMatch;
+    bool hasIfMatch;
     std::string_view ifUnmodifiedSince;
     std::string_view ifNoneMatch;
+    bool hasIfNoneMatch;
     std::string_view ifModifiedSince;
     std::string_view range;
     std::string_view ifRange;
@@ -60,8 +62,11 @@ struct FileConditionalHeaders final {
     return false;
 }
 
-[[nodiscard]] bool ifMatchAllows(std::string_view header, std::string_view etag) noexcept {
-    if (header.empty()) {
+[[nodiscard]] bool ifMatchAllows(
+    bool present,
+    std::string_view header,
+    std::string_view etag) noexcept {
+    if (!present) {
         return true;
     }
     if (detail::httpTrimOws(header) == "*") {
@@ -115,8 +120,10 @@ struct FileConditionalHeaders final {
 [[nodiscard]] FileConditionalHeaders fileConditionalHeaders(const HttpRequest& request) noexcept {
     return FileConditionalHeaders{
         detail::requestKnownHeader(request, detail::RequestKnownHeader::kIfMatch),
+        detail::requestHasKnownHeader(request, detail::RequestKnownHeader::kIfMatch),
         detail::requestKnownHeader(request, detail::RequestKnownHeader::kIfUnmodifiedSince),
         detail::requestKnownHeader(request, detail::RequestKnownHeader::kIfNoneMatch),
+        detail::requestHasKnownHeader(request, detail::RequestKnownHeader::kIfNoneMatch),
         detail::requestKnownHeader(request, detail::RequestKnownHeader::kIfModifiedSince),
         detail::requestKnownHeader(request, detail::RequestKnownHeader::kRange),
         detail::requestKnownHeader(request, detail::RequestKnownHeader::kIfRange)};
@@ -292,16 +299,16 @@ template <typename ApplyResponseState>
     if (request.knownMethod() == HttpKnownMethod::kGet ||
         request.knownMethod() == HttpKnownMethod::kHead) {
         const auto conditional = fileConditionalHeaders(request);
-        if (enableValidators && !ifMatchAllows(conditional.ifMatch, etag)) {
+        if (enableValidators &&
+            !ifMatchAllows(conditional.hasIfMatch, conditional.ifMatch, etag)) {
             throw HttpError(412, "precondition_failed", "file precondition failed");
         }
         // RFC 9110 §13.2.2 step 2: If-Unmodified-Since is evaluated only when If-Match
         // is absent -- a present If-Match takes precedence and the (weaker) date
         // condition MUST be ignored, exactly as If-Modified-Since is ignored below
-        // when If-None-Match is present. Without the ifMatch.empty() guard, a request
-        // whose strong validator matched (If-Match ok) but whose date is older than
-        // Last-Modified would draw a spurious 412.
-        if (enableValidators && conditional.ifMatch.empty() &&
+        // when If-None-Match is present. Presence is tracked separately because an
+        // empty list is still a present field and must take precedence over the date.
+        if (enableValidators && !conditional.hasIfMatch &&
             !conditional.ifUnmodifiedSince.empty() &&
             !httpDateUnmodified(conditional.ifUnmodifiedSince, modifiedSeconds)) {
             throw HttpError(412, "precondition_failed", "file precondition failed");
@@ -311,7 +318,7 @@ template <typename ApplyResponseState>
             return makeHeaderOnlyResponse(304);
         }
 
-        if (enableValidators && conditional.ifNoneMatch.empty() &&
+        if (enableValidators && !conditional.hasIfNoneMatch &&
             !conditional.ifModifiedSince.empty() &&
             httpDateNotModified(conditional.ifModifiedSince, modifiedSeconds)) {
             return makeHeaderOnlyResponse(304);
