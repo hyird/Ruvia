@@ -27,7 +27,12 @@ namespace ruvia::detail {
     return httpTrimWeakEtagPrefix(left) == httpTrimWeakEtagPrefix(right);
 }
 
-[[nodiscard]] inline bool httpEtagListMatches(
+struct HttpEtagListMatchResult final {
+    bool valid;
+    bool matched;
+};
+
+[[nodiscard]] inline HttpEtagListMatchResult httpParseEtagListMatches(
     std::string_view values,
     std::string_view expected,
     bool strong) noexcept {
@@ -48,18 +53,18 @@ namespace ruvia::detail {
             offset += 2;
         }
         if (offset == values.size() || values[offset] != '"') {
-            return false;
+            return {false, false};
         }
         ++offset;
         while (offset < values.size() && values[offset] != '"') {
             const auto byte = static_cast<unsigned char>(values[offset]);
             if (byte != 0x21 && !(byte >= 0x23 && byte <= 0x7e) && byte < 0x80) {
-                return false;
+                return {false, false};
             }
             ++offset;
         }
         if (offset == values.size()) {
-            return false;
+            return {false, false};
         }
         ++offset;
         const auto entityTag = values.substr(begin, offset - begin);
@@ -70,10 +75,18 @@ namespace ruvia::detail {
             ++offset;
         }
         if (offset < values.size() && values[offset] != ',') {
-            return false;
+            return {false, false};
         }
     }
-    return matched;
+    return {true, matched};
+}
+
+[[nodiscard]] inline bool httpEtagListMatches(
+    std::string_view values,
+    std::string_view expected,
+    bool strong) noexcept {
+    const auto result = httpParseEtagListMatches(values, expected, strong);
+    return result.valid && result.matched;
 }
 
 }  // namespace ruvia::detail

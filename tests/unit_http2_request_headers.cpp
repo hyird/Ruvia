@@ -278,11 +278,12 @@ RUVIA_TEST(h2_headers_duplicate_singleton_regular_headers_rejected) {
     }
 }
 
-RUVIA_TEST(h2_headers_duplicate_conditional_header_rejected) {
+RUVIA_TEST(h2_headers_repeated_etag_list_fields_accepted) {
     Http2StreamState stream(1, res());
     Http2HeaderDecodeContext ctx{stream};
     RUVIA_CHECK(http2OnDecodedInitialHeader(ctx, "if-none-match", R"("old")"));
-    RUVIA_CHECK(!http2OnDecodedInitialHeader(ctx, "if-none-match", R"("new")"));
+    RUVIA_CHECK(http2OnDecodedInitialHeader(ctx, "if-none-match", R"("new")"));
+    RUVIA_CHECK_EQ(stream.requestHeaderCount(), std::size_t{2});
 }
 
 RUVIA_TEST(h2_headers_duplicate_auth_and_cors_singletons_rejected) {

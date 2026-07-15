@@ -824,6 +824,18 @@ RUVIA_TEST(static_file_if_match_takes_precedence_over_if_unmodified_since) {
                {RequestKnownHeader::kIfModifiedSince, "If-Modified-Since", kFutureDate}}).first,
         std::uint16_t{200});
 
+    // If-Match and If-None-Match are list fields. Repeated field lines are
+    // equivalent to one comma-joined value, so a match on the first line must
+    // not be lost when the known-header cache records the second line.
+    RUVIA_CHECK_EQ(
+        serve({{RequestKnownHeader::kIfMatch, "If-Match", etag},
+               {RequestKnownHeader::kIfMatch, "If-Match", "\"stale\""}}).first,
+        std::uint16_t{200});
+    RUVIA_CHECK_EQ(
+        serve({{RequestKnownHeader::kIfNoneMatch, "If-None-Match", etag},
+               {RequestKnownHeader::kIfNoneMatch, "If-None-Match", "\"stale\""}}).first,
+        std::uint16_t{304});
+
     fs::remove_all(dir);
 }
 

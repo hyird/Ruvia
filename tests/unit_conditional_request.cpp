@@ -60,10 +60,15 @@ RUVIA_TEST(etag_weak_prefix_detection) {
 
 RUVIA_TEST(etag_list_parses_opaque_commas_and_rejects_malformed_suffixes) {
     using ruvia::detail::httpEtagListMatches;
+    using ruvia::detail::httpParseEtagListMatches;
     RUVIA_CHECK(httpEtagListMatches(R"("stale,tag", "current")", R"("current")", true));
     RUVIA_CHECK(httpEtagListMatches(R"("stale", W/"current")", R"("current")", false));
     RUVIA_CHECK(!httpEtagListMatches(R"("stale, "current")", R"("current")", true));
     RUVIA_CHECK(!httpEtagListMatches(R"("current" trailing)", R"("current")", false));
+    const auto malformedAfterMatch = httpParseEtagListMatches(
+        R"("current", malformed)", R"("current")", true);
+    RUVIA_CHECK(!malformedAfterMatch.valid);
+    RUVIA_CHECK(!malformedAfterMatch.matched);
 }
 
 RUVIA_TEST(imf_fixdate_parses_known_dates) {

@@ -228,14 +228,14 @@ RUVIA_TEST(header_block_rejects_duplicate_range) {
     RUVIA_CHECK(result.error == HttpParseError::kInvalidHeader);
 }
 
-RUVIA_TEST(header_block_rejects_duplicate_conditional_header) {
-    // Conditional headers drive 304/412 file responses. Repeated fields must
-    // not degrade to known-header cached last-value behavior.
+RUVIA_TEST(header_block_accepts_repeated_etag_list_fields) {
+    // If-None-Match is a list field, so repeated lines are equivalent to a
+    // comma-joined value (RFC 9110 §5.3). The execution layer folds all lines.
     const auto result = parse(
         "GET /file HTTP/1.1\r\nHost: x\r\n"
         "If-None-Match: \"old\"\r\n"
         "If-None-Match: \"new\"\r\n\r\n");
-    RUVIA_CHECK(result.error == HttpParseError::kInvalidHeader);
+    RUVIA_CHECK(!result.error.has_value());
 }
 
 RUVIA_TEST(header_block_rejects_duplicate_auth_and_cors_singletons) {

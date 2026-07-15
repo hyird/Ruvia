@@ -358,13 +358,13 @@ RUVIA_TEST(http1_parse_duplicate_range_rejected) {
     RUVIA_CHECK(isFailure(result, HttpParseError::kInvalidHeader));
 }
 
-RUVIA_TEST(http1_parse_duplicate_conditional_header_rejected) {
+RUVIA_TEST(http1_parse_repeated_etag_list_fields_accepted) {
     Http1ServerRequestParser parser;
     const auto result = parser.parseMessage(
         "GET /file HTTP/1.1\r\nHost: x\r\n"
         "If-None-Match: \"old\"\r\n"
         "If-None-Match: \"new\"\r\n\r\n");
-    RUVIA_CHECK(isFailure(result, HttpParseError::kInvalidHeader));
+    RUVIA_CHECK(result.messageReady());
 }
 
 RUVIA_TEST(http1_parse_duplicate_authorization_rejected) {

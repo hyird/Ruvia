@@ -33,45 +33,79 @@ namespace {
 inline constexpr std::size_t kFileResponseHeaderReserve = 7;
 
 struct FileConditionalHeaders final {
-    std::string_view ifMatch;
-    bool hasIfMatch;
     std::string_view ifUnmodifiedSince;
-    std::string_view ifNoneMatch;
-    bool hasIfNoneMatch;
     std::string_view ifModifiedSince;
     std::string_view range;
     std::string_view ifRange;
     bool hasIfRange;
 };
 
-[[nodiscard]] bool etagListMatches(
-    std::string_view values,
-    std::string_view expected,
-    bool strong) noexcept {
-    return detail::httpEtagListMatches(values, expected, strong);
-}
+struct EtagFieldCondition final {
+    bool present{false};
+    bool valid{true};
+    bool matched{false};
+    bool wildcard{false};
+    std::size_t lineCount{0};
 
-[[nodiscard]] bool ifMatchAllows(
-    bool present,
-    std::string_view header,
+    void update(
+        std::string_view value,
+        std::string_view expected,
+        bool strong) noexcept {
+        present = true;
+        ++lineCount;
+        const auto trimmed = detail::httpTrimOws(value);
+        if (trimmed == "*") {
+            wildcard = true;
+            if (lineCount != 1) {
+                valid = false;
+            }
+            return;
+        }
+        if (wildcard) {
+            valid = false;
+        }
+        const auto result = detail::httpParseEtagListMatches(
+            value, expected, strong);
+        valid = valid && result.valid;
+        matched = matched || result.matched;
+    }
+
+    [[nodiscard]] bool matches() const noexcept {
+        return valid && ((wildcard && lineCount == 1) || (!wildcard && matched));
+    }
+};
+
+struct FileEtagConditions final {
+    EtagFieldCondition ifMatch;
+    EtagFieldCondition ifNoneMatch;
+};
+
+[[nodiscard]] FileEtagConditions fileEtagConditions(
+    const HttpRequest& request,
     std::string_view etag) noexcept {
-    if (!present) {
-        return true;
+    FileEtagConditions result;
+    const bool hasIfMatch = detail::requestHasKnownHeader(
+        request, detail::RequestKnownHeader::kIfMatch);
+    const bool hasIfNoneMatch = detail::requestHasKnownHeader(
+        request, detail::RequestKnownHeader::kIfNoneMatch);
+    if (!hasIfMatch && !hasIfNoneMatch) {
+        return result;
     }
-    if (detail::httpTrimOws(header) == "*") {
-        return true;
-    }
-    return etagListMatches(header, etag, true);
-}
 
-[[nodiscard]] bool ifNoneMatchMatches(std::string_view header, std::string_view etag) noexcept {
-    if (header.empty()) {
-        return false;
+    // Both conditions are RFC list fields. Multiple field lines are equivalent
+    // to comma-joining their values (RFC 9110 §5.3), but the request keeps
+    // zero-copy views into separate wire lines. Fold them in one header scan and
+    // retain whole-list validity without allocating a joined string.
+    for (const auto& header : request.headers()) {
+        if (hasIfMatch && detail::httpAsciiEqualsIgnoreCase(
+                header.name(), "If-Match")) {
+            result.ifMatch.update(header.value(), etag, true);
+        } else if (hasIfNoneMatch && detail::httpAsciiEqualsIgnoreCase(
+                       header.name(), "If-None-Match")) {
+            result.ifNoneMatch.update(header.value(), etag, false);
+        }
     }
-    if (detail::httpTrimOws(header) == "*") {
-        return true;
-    }
-    return etagListMatches(header, etag, false);
+    return result;
 }
 
 [[nodiscard]] bool httpDateNotModified(std::string_view header, std::time_t modifiedSeconds) noexcept {
@@ -112,11 +146,7 @@ struct FileConditionalHeaders final {
 
 [[nodiscard]] FileConditionalHeaders fileConditionalHeaders(const HttpRequest& request) noexcept {
     return FileConditionalHeaders{
-        detail::requestKnownHeader(request, detail::RequestKnownHeader::kIfMatch),
-        detail::requestHasKnownHeader(request, detail::RequestKnownHeader::kIfMatch),
         detail::requestKnownHeader(request, detail::RequestKnownHeader::kIfUnmodifiedSince),
-        detail::requestKnownHeader(request, detail::RequestKnownHeader::kIfNoneMatch),
-        detail::requestHasKnownHeader(request, detail::RequestKnownHeader::kIfNoneMatch),
         detail::requestKnownHeader(request, detail::RequestKnownHeader::kIfModifiedSince),
         detail::requestKnownHeader(request, detail::RequestKnownHeader::kRange),
         detail::requestKnownHeader(request, detail::RequestKnownHeader::kIfRange),
@@ -309,8 +339,9 @@ template <typename ApplyResponseState>
     if (request.knownMethod() == HttpKnownMethod::kGet ||
         request.knownMethod() == HttpKnownMethod::kHead) {
         const auto conditional = fileConditionalHeaders(request);
-        if (enableValidators &&
-            !ifMatchAllows(conditional.hasIfMatch, conditional.ifMatch, etag)) {
+        const auto etagConditions = fileEtagConditions(request, etag);
+        if (enableValidators && etagConditions.ifMatch.present &&
+            !etagConditions.ifMatch.matches()) {
             throw HttpError(412, "precondition_failed", "file precondition failed");
         }
         // RFC 9110 §13.2.2 step 2: If-Unmodified-Since is evaluated only when If-Match
@@ -318,18 +349,18 @@ template <typename ApplyResponseState>
         // condition MUST be ignored, exactly as If-Modified-Since is ignored below
         // when If-None-Match is present. Presence is tracked separately because an
         // empty list is still a present field and must take precedence over the date.
-        if (enableValidators && !conditional.hasIfMatch &&
+        if (enableValidators && !etagConditions.ifMatch.present &&
             !conditional.ifUnmodifiedSince.empty() &&
             !httpDateUnmodified(
                 conditional.ifUnmodifiedSince, validatorModifiedSeconds)) {
             throw HttpError(412, "precondition_failed", "file precondition failed");
         }
 
-        if (enableValidators && ifNoneMatchMatches(conditional.ifNoneMatch, etag)) {
+        if (enableValidators && etagConditions.ifNoneMatch.matches()) {
             return makeHeaderOnlyResponse(304);
         }
 
-        if (enableValidators && !conditional.hasIfNoneMatch &&
+        if (enableValidators && !etagConditions.ifNoneMatch.present &&
             !conditional.ifModifiedSince.empty() &&
             httpDateNotModified(
                 conditional.ifModifiedSince, validatorModifiedSeconds)) {
