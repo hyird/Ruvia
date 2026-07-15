@@ -26,6 +26,7 @@ TaskScope::TaskScope(WorkerHandle worker, std::pmr::memory_resource* resource)
 TaskScope::~TaskScope() {
     if (active_ != 0 ||
         std::holds_alternative<TaskScopeOpen>(lifecycle_) ||
+        std::holds_alternative<TaskScopeJoinReserved>(lifecycle_) ||
         std::holds_alternative<TaskScopeJoining>(lifecycle_)) {
         std::terminate();
     }
@@ -77,11 +78,38 @@ Task<void> TaskScope::join() {
     if (!worker_.isCurrent()) {
         throw std::logic_error("task scope join must run on its bound worker");
     }
-    if (std::holds_alternative<TaskScopeJoining>(lifecycle_) ||
+    if (std::holds_alternative<TaskScopeJoinReserved>(lifecycle_) ||
+        std::holds_alternative<TaskScopeJoining>(lifecycle_) ||
         std::holds_alternative<TaskScopeJoined>(lifecycle_)) {
         throw std::logic_error("task scope can only be joined once");
     }
-    co_await JoinAwaiter{*this};
+    lifecycle_.template emplace<TaskScopeJoinReserved>();
+    return joinReserved(JoinReservation(*this));
+}
+
+Task<void> TaskScope::joinReserved(JoinReservation reservation) {
+    auto& scope = reservation.scope();
+    if (!scope.worker_.isCurrent()) {
+        throw std::logic_error("task scope join must run on its bound worker");
+    }
+    co_await JoinAwaiter{scope};
+}
+
+TaskScope::JoinReservation::~JoinReservation() {
+    if (scope_ != nullptr) {
+        scope_->releaseJoinReservation();
+    }
+}
+
+void TaskScope::releaseJoinReservation() noexcept {
+    if (!std::holds_alternative<TaskScopeJoinReserved>(lifecycle_)) {
+        return;
+    }
+    if (active_ == 0) {
+        lifecycle_.template emplace<TaskScopeEmpty>();
+    } else {
+        lifecycle_.template emplace<TaskScopeOpen>();
+    }
 }
 
 bool TaskScope::JoinAwaiter::await_ready() const noexcept {
@@ -89,7 +117,8 @@ bool TaskScope::JoinAwaiter::await_ready() const noexcept {
 }
 
 bool TaskScope::JoinAwaiter::await_suspend(std::coroutine_handle<> continuation) {
-    if (std::holds_alternative<TaskScopeJoining>(scope.lifecycle_) ||
+    if (!std::holds_alternative<TaskScopeJoinReserved>(scope.lifecycle_) ||
+        std::holds_alternative<TaskScopeJoining>(scope.lifecycle_) ||
         std::holds_alternative<TaskScopeJoined>(scope.lifecycle_)) {
         throw std::logic_error("task scope can only be joined once");
     }
@@ -98,8 +127,7 @@ bool TaskScope::JoinAwaiter::await_suspend(std::coroutine_handle<> continuation)
 }
 
 void TaskScope::JoinAwaiter::await_resume() {
-    if (std::holds_alternative<TaskScopeEmpty>(scope.lifecycle_) ||
-        std::holds_alternative<TaskScopeOpen>(scope.lifecycle_)) {
+    if (std::holds_alternative<TaskScopeJoinReserved>(scope.lifecycle_)) {
         scope.lifecycle_.template emplace<TaskScopeJoined>();
     } else if (!std::holds_alternative<TaskScopeJoined>(scope.lifecycle_)) {
         std::terminate();

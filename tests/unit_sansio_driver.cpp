@@ -124,6 +124,34 @@ ruvia::Task<ruvia::HttpResponse> streamBodyCountHandler(void* ctx, ruvia::Contex
     co_return c.text("upload-done");
 }
 
+struct TerminatedBodyObservation final {
+    asio::io_context* io;
+    bool started{false};
+    bool sawTransportError{false};
+    bool handlerFinished{false};
+    bool sessionReturnedAfterHandler{false};
+};
+
+ruvia::Task<ruvia::HttpResponse> terminatedBodyHandler(
+    void* raw,
+    ruvia::Context& context) {
+    auto& observation = *static_cast<TerminatedBodyObservation*>(raw);
+    observation.started = true;
+    try {
+        (void)co_await context.req().bodyReader().read();
+    } catch (const std::system_error& error) {
+        observation.sawTransportError = static_cast<bool>(error.code());
+    }
+    asio::steady_timer completionDelay(*observation.io);
+    completionDelay.expires_after(std::chrono::milliseconds(5));
+    (void)co_await ruvia::detail::asyncAsio(
+        [&completionDelay](auto handler) mutable {
+            completionDelay.async_wait(std::move(handler));
+        });
+    observation.handlerFinished = true;
+    co_return context.text("transport-ended");
+}
+
 // Path + size of the large temp file the pacing test serves (set in the test body).
 inline std::string& largeFilePath() {
     static std::string path;
@@ -2019,6 +2047,93 @@ RUVIA_TEST(sansio_driver_h2_streaming_request_body) {
     io.run();
     RUVIA_CHECK_EQ(receivedBytes, static_cast<std::size_t>(5));  // "aaa" + "bb"
     RUVIA_CHECK(body == "upload-done");
+}
+
+RUVIA_TEST(sansio_driver_h2_transport_end_is_error_and_joins_handler) {
+    asio::io_context io;
+    tcp::acceptor acceptor(
+        io, tcp::endpoint(asio::ip::make_address("127.0.0.1"), 0));
+    const std::uint16_t port = acceptor.local_endpoint().port();
+    TerminatedBodyObservation observation{.io = &io};
+
+    asio::co_spawn(
+        io,
+        [&]() -> asio::awaitable<void> {
+            auto sock = co_await acceptor.async_accept(asio::use_awaitable);
+            ruvia::WorkerMemory worker;
+            ruvia::Router router;
+            auto& impl = ruvia::detail::RouterImpl::from(router);
+            impl.registerRoute(
+                ruvia::HttpKnownMethod::kPost,
+                std::pmr::string(
+                    "/upload", std::pmr::get_default_resource()),
+                ruvia::detail::RouteHandler(
+                    &observation, &terminatedBodyHandler),
+                ruvia::detail::RequestBodyMode::kStream,
+                std::span<const ruvia::detail::ControllerMiddlewareDescriptor>{},
+                std::span<const ruvia::detail::ControllerMiddlewareDescriptor>{});
+            impl.finalize();
+            co_await ruvia::detail::taskAsAwaitable(
+                ruvia::test::runBarePlainHttp2SansIoSession(
+                    sock,
+                    impl.routeTable(),
+                    worker,
+                    "127.0.0.1"));
+            observation.sessionReturnedAfterHandler =
+                observation.handlerFinished;
+        },
+        asio::detached);
+
+    asio::co_spawn(
+        io,
+        [&]() -> asio::awaitable<void> {
+            tcp::socket sock(io);
+            co_await sock.async_connect(
+                tcp::endpoint(
+                    asio::ip::make_address("127.0.0.1"), port),
+                asio::use_awaitable);
+            const auto writeAll = [&sock](
+                std::string_view bytes) -> asio::awaitable<bool> {
+                const auto [ec, count] = co_await asio::async_write(
+                    sock,
+                    asio::buffer(bytes.data(), bytes.size()),
+                    asio::as_tuple(asio::use_awaitable));
+                co_return !ec && count == bytes.size();
+            };
+            if (!co_await writeAll(kClientPreface) ||
+                !co_await writeAll(frame(0x4, 0, 0, {}))) {
+                co_return;
+            }
+            std::pmr::string headerBlock(
+                std::pmr::get_default_resource());
+            HpackEncoder::encodeHeader(headerBlock, ":method", "POST");
+            HpackEncoder::encodeHeader(headerBlock, ":path", "/upload");
+            HpackEncoder::encodeHeader(headerBlock, ":scheme", "http");
+            HpackEncoder::encodeHeader(
+                headerBlock, ":authority", "localhost");
+            if (!co_await writeAll(frame(
+                    0x1,
+                    ruvia::detail::kHttp2FlagEndHeaders,
+                    1,
+                    std::string_view(
+                        headerBlock.data(), headerBlock.size())))) {
+                co_return;
+            }
+            while (!observation.started) {
+                asio::steady_timer yield(io);
+                yield.expires_after(std::chrono::milliseconds(1));
+                (void)co_await yield.async_wait(
+                    asio::as_tuple(asio::use_awaitable));
+            }
+            std::error_code ignored;
+            sock.close(ignored);
+        },
+        asio::detached);
+
+    io.run();
+    RUVIA_CHECK(observation.sawTransportError);
+    RUVIA_CHECK(observation.handlerFinished);
+    RUVIA_CHECK(observation.sessionReturnedAfterHandler);
 }
 
 // P2 coverage: a server-role request framed with trailers (DATA then a trailing

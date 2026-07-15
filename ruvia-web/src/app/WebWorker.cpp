@@ -27,7 +27,7 @@ WebWorkerContext::WebWorkerContext(
       redis_(redis),
       stopToken_(stopToken) {}
 
-WorkerHandle WebWorkerContext::worker() const noexcept {
+const WorkerHandle& WebWorkerContext::worker() const & noexcept {
     return worker_;
 }
 
@@ -60,38 +60,30 @@ RedisHandle WebWorkerContext::redis(std::string_view alias) const {
 #endif
 
 WebWorkerHandle::WebWorkerHandle(
-    WorkerHandle worker,
-    std::weak_ptr<detail::WebWorkerDispatch> dispatch) noexcept
-    : worker_(std::move(worker)), dispatch_(std::move(dispatch)) {}
+    std::shared_ptr<detail::WebWorkerDispatch> dispatch) noexcept
+    : dispatch_(std::move(dispatch)) {}
 
 bool WebWorkerHandle::valid() const noexcept {
-    return worker_.valid() && !dispatch_.expired();
+    return dispatch_ && dispatch_->valid();
 }
 
 bool WebWorkerHandle::accepting() const noexcept {
-    if (const auto dispatch = dispatch_.lock()) {
-        return dispatch->accepting() && worker_.accepting();
-    }
-    return false;
+    return dispatch_ && dispatch_->accepting();
 }
 
 WorkerId WebWorkerHandle::id() const noexcept {
-    return worker_.id();
+    return dispatch_ ? dispatch_->id() : 0;
 }
 
 WebWorkerStats WebWorkerHandle::stats() const noexcept {
-    if (const auto dispatch = dispatch_.lock()) {
-        return dispatch->stats();
-    }
-    return {};
+    return dispatch_ ? dispatch_->stats() : WebWorkerStats{};
 }
 
 PostResult WebWorkerHandle::postTask(
     std::move_only_function<Task<void>(WebWorkerContext&)> task) const {
-    if (const auto dispatch = dispatch_.lock()) {
-        return dispatch->post(std::move(task));
-    }
-    return PostResult::kWorkerStopping;
+    return dispatch_
+        ? dispatch_->post(std::move(task))
+        : PostResult::kWorkerStopping;
 }
 
 }  // namespace ruvia
@@ -121,7 +113,15 @@ WebWorkerDispatch::~WebWorkerDispatch() {
 }
 
 WebWorkerHandle WebWorkerDispatch::handle() {
-    return WebWorkerHandle(worker_, weak_from_this());
+    return WebWorkerHandle(shared_from_this());
+}
+
+bool WebWorkerDispatch::valid() const noexcept {
+    return worker_.valid();
+}
+
+WorkerId WebWorkerDispatch::id() const noexcept {
+    return worker_.id();
 }
 
 PostResult WebWorkerDispatch::post(Task task) {
@@ -132,9 +132,8 @@ PostResult WebWorkerDispatch::post(Task task) {
     }
 
     outstanding_.fetch_add(1, std::memory_order_acq_rel);
-    const auto self = shared_from_this();
     const auto result = worker_.post(
-        [self, task = std::move(task)]() mutable { self->start(std::move(task)); });
+        [this, task = std::move(task)]() mutable { start(std::move(task)); });
     if (result != PostResult::kAccepted) {
         outstanding_.fetch_sub(1, std::memory_order_acq_rel);
     }
@@ -158,9 +157,27 @@ void WebWorkerDispatch::close() noexcept {
     stopSource_.request_stop();
 }
 
+void WebWorkerDispatch::retire() noexcept {
+    std::lock_guard lock(submitMutex_);
+    accepting_ = false;
+    stopSource_.request_stop();
+    if (outstanding_.load(std::memory_order_acquire) != 0) {
+        std::terminate();
+    }
+    // A public handle may keep this terminal endpoint alive after HttpServer.
+    // Remove every callback/pointer into server-owned state before that state is
+    // destroyed; terminal queries use only atomics and the stable WorkerHandle.
+    drained_ = nullptr;
+    failed_ = nullptr;
+    databases_ = nullptr;
+    redis_ = nullptr;
+    resource_ = nullptr;
+    executor_ = asio::any_io_executor{};
+}
+
 bool WebWorkerDispatch::accepting() const noexcept {
     std::lock_guard lock(submitMutex_);
-    return accepting_;
+    return accepting_ && worker_.accepting();
 }
 
 std::size_t WebWorkerDispatch::outstanding() const noexcept {
@@ -185,14 +202,14 @@ void WebWorkerDispatch::start(Task task) {
             std::move(operation),
             asio::bind_executor(
                 executor_,
-                [self = shared_from_this()](TaskCompletionResult<void> result) {
+                [this](TaskCompletionResult<void> result) {
                     if (const auto* failure = result.failure()) {
-                        self->failedCount_.fetch_add(1, std::memory_order_relaxed);
-                        if (self->failed_) {
-                            self->failed_(failure->exception());
+                        failedCount_.fetch_add(1, std::memory_order_relaxed);
+                        if (failed_) {
+                            failed_(failure->exception());
                         }
                     }
-                    self->complete();
+                    complete();
                 }));
     } catch (...) {
         complete();

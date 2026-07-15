@@ -16,12 +16,45 @@
 
 namespace ruvia::detail {
 namespace {
+constexpr std::size_t kNoTimerSlot = static_cast<std::size_t>(-1);
+
 std::atomic<WorkerId> gNextWorkerId{1};
+thread_local const WorkerDispatcher* gCurrentWorker = nullptr;
+
+class CurrentWorkerGuard final {
+public:
+    explicit CurrentWorkerGuard(const WorkerDispatcher& worker)
+        : previous_(std::exchange(gCurrentWorker, &worker)) {
+        if (previous_ != nullptr && previous_ != &worker) {
+            gCurrentWorker = previous_;
+            throw std::logic_error(
+                "one thread cannot run multiple Ruvia workers concurrently");
+        }
+    }
+
+    ~CurrentWorkerGuard() {
+        gCurrentWorker = previous_;
+    }
+
+    CurrentWorkerGuard(const CurrentWorkerGuard&) = delete;
+    CurrentWorkerGuard& operator=(const CurrentWorkerGuard&) = delete;
+
+private:
+    const WorkerDispatcher* previous_;
+};
 
 struct TimerEntry final {
     std::chrono::steady_clock::time_point deadline;
     std::uint64_t sequence{0};
-    std::shared_ptr<WorkerTimerState> state;
+    std::size_t slot{kNoTimerSlot};
+    std::uint64_t generation{0};
+};
+
+struct TimerSlot final {
+    std::uint64_t generation{0};
+    bool active{false};
+    std::size_t nextFree{kNoTimerSlot};
+    std::move_only_function<void(WorkerTimerOutcome)> completion;
 };
 
 struct TimerEntryLater final {
@@ -32,25 +65,19 @@ struct TimerEntryLater final {
 };
 }
 
-struct WorkerTimerState final {
-    explicit WorkerTimerState(
-        std::move_only_function<void(WorkerTimerOutcome)> value)
-        : completion(std::move(value)) {}
-
-    std::atomic_bool active{true};
-    std::move_only_function<void(WorkerTimerOutcome)> completion;
-};
-
 struct WorkerDispatcher::Impl {
     explicit Impl(asio::io_context& context, std::size_t requestedCapacity)
         : ioContext(context),
           timer(std::make_unique<asio::steady_timer>(context)),
           slots(requestedCapacity),
           workerId(gNextWorkerId.fetch_add(1, std::memory_order_relaxed)),
-          timers(detail::processResource()) {
+          timers(detail::processResource()),
+          timerSlots(detail::processResource()) {
         if (requestedCapacity == 0) {
             throw std::invalid_argument("worker mailbox capacity must be greater than zero");
         }
+        timers.reserve(requestedCapacity);
+        timerSlots.reserve(requestedCapacity);
     }
 
     asio::io_context& ioContext;
@@ -66,47 +93,47 @@ struct WorkerDispatcher::Impl {
     bool drainScheduled{false};
     std::vector<std::weak_ptr<WorkerShutdownListener>> shutdownListeners;
     std::pmr::vector<TimerEntry> timers;
+    std::pmr::vector<TimerSlot> timerSlots;
+    std::size_t freeTimerSlot{kNoTimerSlot};
     std::uint64_t nextTimerSequence{0};
     std::uint64_t timerGeneration{0};
     bool timerArmed{false};
     bool dispatchingTimers{false};
     bool timersStopping{false};
-    std::size_t cancelledTimerCount{0};
+    std::size_t staleTimerCount{0};
 };
-
-WorkerTimerRegistration::WorkerTimerRegistration(
-    std::shared_ptr<WorkerDispatcher> dispatcher,
-    std::shared_ptr<WorkerTimerState> state) noexcept
-    : dispatcher_(std::move(dispatcher)), state_(std::move(state)) {}
 
 WorkerTimerRegistration::~WorkerTimerRegistration() {
     cancel();
 }
 
-WorkerTimerRegistration::WorkerTimerRegistration(WorkerTimerRegistration&& other) noexcept
-    : dispatcher_(std::move(other.dispatcher_)), state_(std::move(other.state_)) {}
-
-WorkerTimerRegistration& WorkerTimerRegistration::operator=(
-    WorkerTimerRegistration&& other) noexcept {
-    if (this != &other) {
-        cancel();
-        dispatcher_ = std::move(other.dispatcher_);
-        state_ = std::move(other.state_);
-    }
-    return *this;
-}
-
 void WorkerTimerRegistration::cancel() noexcept {
-    auto state = std::exchange(state_, nullptr);
-    auto dispatcher = std::exchange(dispatcher_, nullptr);
-    if (!state || !dispatcher || !state->active.load(std::memory_order_acquire)) {
+    auto* dispatcher = std::exchange(dispatcher_, nullptr);
+    const auto slot = std::exchange(slot_, 0);
+    const auto generation = std::exchange(generation_, 0);
+    if (dispatcher == nullptr || generation == 0) {
         return;
     }
-    dispatcher->requestTimerCancellation(state);
+    dispatcher->requestTimerCancellation(slot, generation);
 }
 
-bool WorkerTimerRegistration::valid() const noexcept {
-    return state_ && state_->active.load(std::memory_order_acquire);
+bool WorkerTimerRegistration::registered() const noexcept {
+    return dispatcher_ != nullptr;
+}
+
+void WorkerTimerRegistration::bind(
+    WorkerDispatcher& dispatcher,
+    std::size_t slot,
+    std::uint64_t generation) noexcept {
+    dispatcher_ = &dispatcher;
+    slot_ = slot;
+    generation_ = generation;
+}
+
+void WorkerTimerRegistration::release() noexcept {
+    dispatcher_ = nullptr;
+    slot_ = 0;
+    generation_ = 0;
 }
 
 WorkerDispatcher::WorkerDispatcher(asio::io_context& ioContext, std::size_t capacity)
@@ -172,7 +199,8 @@ void WorkerDispatcher::registerShutdownListener(
     impl_->shutdownListeners.emplace_back(listener);
 }
 
-WorkerTimerRegistration WorkerDispatcher::scheduleTimer(
+void WorkerDispatcher::scheduleTimer(
+    WorkerTimerRegistration& registration,
     std::chrono::steady_clock::time_point deadline,
     std::move_only_function<void(WorkerTimerOutcome)> completion) {
     if (!isCurrent()) {
@@ -185,30 +213,62 @@ WorkerTimerRegistration WorkerDispatcher::scheduleTimer(
         throw std::runtime_error("worker timer queue is stopping");
     }
 
-    std::pmr::polymorphic_allocator<WorkerTimerState> allocator(processResource());
-    auto state = std::allocate_shared<WorkerTimerState>(allocator, std::move(completion));
-    impl_->timers.push_back(TimerEntry{
-        .deadline = deadline,
-        .sequence = impl_->nextTimerSequence++,
-        .state = state,
-    });
+    if (registration.dispatcher_ != nullptr) {
+        if (registration.dispatcher_ != this ||
+            hasTimer(registration.slot_, registration.generation_)) {
+            throw std::logic_error("worker timer registration is already active");
+        }
+        registration.release();
+    }
+
+    std::size_t slotIndex = impl_->freeTimerSlot;
+    if (slotIndex == kNoTimerSlot) {
+        slotIndex = impl_->timerSlots.size();
+        impl_->timerSlots.emplace_back();
+    } else {
+        impl_->freeTimerSlot = impl_->timerSlots[slotIndex].nextFree;
+    }
+    auto& slot = impl_->timerSlots[slotIndex];
+    if (++slot.generation == 0) {
+        ++slot.generation;
+    }
+    slot.active = true;
+    slot.nextFree = kNoTimerSlot;
+    slot.completion = std::move(completion);
+    try {
+        impl_->timers.push_back(TimerEntry{
+            .deadline = deadline,
+            .sequence = impl_->nextTimerSequence++,
+            .slot = slotIndex,
+            .generation = slot.generation,
+        });
+    } catch (...) {
+        slot.active = false;
+        slot.completion = nullptr;
+        slot.nextFree = impl_->freeTimerSlot;
+        impl_->freeTimerSlot = slotIndex;
+        throw;
+    }
     std::push_heap(impl_->timers.begin(), impl_->timers.end(), TimerEntryLater{});
+    registration.bind(*this, slotIndex, slot.generation);
     if (!impl_->dispatchingTimers) {
         armTimer();
     }
-    return WorkerTimerRegistration(shared_from_this(), std::move(state));
 }
 
 void WorkerDispatcher::requestTimerCancellation(
-    const std::shared_ptr<WorkerTimerState>& state) noexcept {
-    if (!state || !state->active.load(std::memory_order_acquire)) {
+    std::size_t slot, std::uint64_t generation) noexcept {
+    if (generation == 0) {
+        return;
+    }
+    if (gCurrentWorker == this) {
+        cancelTimer(slot, generation);
         return;
     }
     bool current = false;
     {
         std::lock_guard lock(impl_->mutex);
         if (!impl_->contextAttached) {
-            state->active.store(false, std::memory_order_release);
             return;
         }
         current = impl_->ioContext.get_executor().running_in_this_thread();
@@ -216,8 +276,8 @@ void WorkerDispatcher::requestTimerCancellation(
             try {
                 asio::post(
                     impl_->ioContext,
-                    [self = shared_from_this(), state] {
-                        self->cancelTimer(state);
+                    [self = shared_from_this(), slot, generation] {
+                        self->cancelTimer(slot, generation);
                     });
             } catch (...) {
                 std::terminate();
@@ -225,22 +285,30 @@ void WorkerDispatcher::requestTimerCancellation(
             return;
         }
     }
-    cancelTimer(state);
+    cancelTimer(slot, generation);
 }
 
-void WorkerDispatcher::cancelTimer(const std::shared_ptr<WorkerTimerState>& state) noexcept {
-    if (!state || !state->active.exchange(false, std::memory_order_acq_rel)) {
+void WorkerDispatcher::cancelTimer(
+    std::size_t slotIndex, std::uint64_t generation) noexcept {
+    if (slotIndex >= impl_->timerSlots.size()) {
         return;
     }
-    ++impl_->cancelledTimerCount;
-    auto completion = std::move(state->completion);
-    if (impl_->cancelledTimerCount >= 64 &&
-        impl_->cancelledTimerCount * 2 >= impl_->timers.size()) {
-        std::erase_if(impl_->timers, [](const TimerEntry& entry) {
-            return !entry.state->active.load(std::memory_order_acquire);
+    auto& slot = impl_->timerSlots[slotIndex];
+    if (!slot.active || slot.generation != generation) {
+        return;
+    }
+    slot.active = false;
+    auto completion = std::move(slot.completion);
+    slot.nextFree = impl_->freeTimerSlot;
+    impl_->freeTimerSlot = slotIndex;
+    ++impl_->staleTimerCount;
+    if (impl_->staleTimerCount >= 64 &&
+        impl_->staleTimerCount * 2 >= impl_->timers.size()) {
+        std::erase_if(impl_->timers, [this](const TimerEntry& entry) {
+            return !hasTimer(entry.slot, entry.generation);
         });
         std::make_heap(impl_->timers.begin(), impl_->timers.end(), TimerEntryLater{});
-        impl_->cancelledTimerCount = 0;
+        impl_->staleTimerCount = 0;
     }
     if (!impl_->dispatchingTimers) {
         armTimer();
@@ -268,25 +336,30 @@ void WorkerDispatcher::stopTimers() noexcept {
         impl_->timer->cancel(ignored);
     }
 
-    while (!impl_->timers.empty()) {
-        std::pop_heap(impl_->timers.begin(), impl_->timers.end(), TimerEntryLater{});
-        auto entry = std::move(impl_->timers.back());
-        impl_->timers.pop_back();
-        if (!entry.state->active.exchange(false, std::memory_order_acq_rel)) {
-            if (impl_->cancelledTimerCount != 0) {
-                --impl_->cancelledTimerCount;
-            }
+    impl_->timers.clear();
+    impl_->staleTimerCount = 0;
+    for (std::size_t index = 0; index < impl_->timerSlots.size(); ++index) {
+        auto& slot = impl_->timerSlots[index];
+        if (!slot.active) {
             continue;
         }
+        slot.active = false;
+        auto completion = std::move(slot.completion);
+        slot.nextFree = impl_->freeTimerSlot;
+        impl_->freeTimerSlot = index;
         try {
-            if (entry.state->completion) {
-                auto completion = std::move(entry.state->completion);
+            if (completion) {
                 completion(WorkerTimerOutcome::kCancelled);
             }
         } catch (...) {
             std::terminate();
         }
     }
+}
+
+void WorkerDispatcher::runContext() {
+    CurrentWorkerGuard current(*this);
+    impl_->ioContext.run();
 }
 
 void WorkerDispatcher::close() noexcept {
@@ -297,6 +370,8 @@ void WorkerDispatcher::detachContext() noexcept {
     std::vector<std::optional<std::move_only_function<void()>>> abandonedSlots;
     ShutdownListeners abandonedListeners;
     std::pmr::vector<TimerEntry> abandonedTimers(impl_->timers.get_allocator());
+    std::pmr::vector<TimerSlot> abandonedTimerSlots(
+        impl_->timerSlots.get_allocator());
     std::unique_ptr<asio::steady_timer> detachedTimer;
     {
         std::lock_guard lock(impl_->mutex);
@@ -315,14 +390,12 @@ void WorkerDispatcher::detachContext() noexcept {
     }
 
     // detachContext runs only after the worker has joined, so the timer heap is
-    // exclusively owned here. Mark registrations terminal before releasing
-    // their callbacks. All user-owned closures are destroyed outside mutex so
+    // exclusively owned here. All user-owned closures are destroyed outside mutex so
     // a destructor that releases another worker primitive cannot deadlock.
-    for (auto& entry : impl_->timers) {
-        entry.state->active.store(false, std::memory_order_release);
-    }
     abandonedTimers.swap(impl_->timers);
-    impl_->cancelledTimerCount = 0;
+    abandonedTimerSlots.swap(impl_->timerSlots);
+    impl_->freeTimerSlot = kNoTimerSlot;
+    impl_->staleTimerCount = 0;
     impl_->timerArmed = false;
     impl_->timersStopping = true;
     detachedTimer.reset();
@@ -360,6 +433,9 @@ void WorkerDispatcher::notifyStopping(
 }
 
 bool WorkerDispatcher::isCurrent() const noexcept {
+    if (gCurrentWorker == this) {
+        return true;
+    }
     std::lock_guard lock(impl_->mutex);
     return impl_->contextAttached &&
            impl_->ioContext.get_executor().running_in_this_thread();
@@ -408,11 +484,12 @@ void WorkerDispatcher::armTimer() {
     impl_->timer->cancel(ignored);
     impl_->timerArmed = false;
     while (!impl_->timers.empty() &&
-           !impl_->timers.front().state->active.load(std::memory_order_acquire)) {
+           !hasTimer(impl_->timers.front().slot,
+                     impl_->timers.front().generation)) {
         std::pop_heap(impl_->timers.begin(), impl_->timers.end(), TimerEntryLater{});
         impl_->timers.pop_back();
-        if (impl_->cancelledTimerCount != 0) {
-            --impl_->cancelledTimerCount;
+        if (impl_->staleTimerCount != 0) {
+            --impl_->staleTimerCount;
         }
     }
     if (impl_->timersStopping || impl_->timers.empty()) {
@@ -436,19 +513,30 @@ void WorkerDispatcher::fireTimers() {
         std::pop_heap(impl_->timers.begin(), impl_->timers.end(), TimerEntryLater{});
         auto entry = std::move(impl_->timers.back());
         impl_->timers.pop_back();
-        if (!entry.state->active.exchange(false, std::memory_order_acq_rel)) {
-            if (impl_->cancelledTimerCount != 0) {
-                --impl_->cancelledTimerCount;
+        if (!hasTimer(entry.slot, entry.generation)) {
+            if (impl_->staleTimerCount != 0) {
+                --impl_->staleTimerCount;
             }
             continue;
         }
-        if (entry.state->completion) {
-            auto completion = std::move(entry.state->completion);
+        auto& slot = impl_->timerSlots[entry.slot];
+        slot.active = false;
+        auto completion = std::move(slot.completion);
+        slot.nextFree = impl_->freeTimerSlot;
+        impl_->freeTimerSlot = entry.slot;
+        if (completion) {
             completion(WorkerTimerOutcome::kExpired);
         }
     }
     impl_->dispatchingTimers = false;
     armTimer();
+}
+
+bool WorkerDispatcher::hasTimer(
+    std::size_t slot, std::uint64_t generation) const noexcept {
+    return slot < impl_->timerSlots.size() &&
+        impl_->timerSlots[slot].active &&
+        impl_->timerSlots[slot].generation == generation;
 }
 
 }

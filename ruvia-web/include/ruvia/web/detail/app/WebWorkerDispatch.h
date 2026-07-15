@@ -35,8 +35,11 @@ public:
     WebWorkerDispatch& operator=(const WebWorkerDispatch&) = delete;
 
     [[nodiscard]] WebWorkerHandle handle();
+    [[nodiscard]] bool valid() const noexcept;
+    [[nodiscard]] WorkerId id() const noexcept;
     [[nodiscard]] PostResult post(Task task);
     void close() noexcept;
+    void retire() noexcept;
     [[nodiscard]] bool accepting() const noexcept;
     [[nodiscard]] std::size_t outstanding() const noexcept;
     [[nodiscard]] WebWorkerStats stats() const noexcept;

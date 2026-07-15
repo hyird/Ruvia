@@ -62,8 +62,9 @@ struct WorkerHandleAccess {
     static void registerShutdownListener(
         const WorkerHandle& worker,
         const std::shared_ptr<WorkerShutdownListener>& listener);
-    [[nodiscard]] static WorkerTimerRegistration scheduleTimer(
+    static void scheduleTimer(
         const WorkerHandle& worker,
+        WorkerTimerRegistration& registration,
         std::chrono::steady_clock::time_point deadline,
         std::move_only_function<void(WorkerTimerOutcome)> completion);
 };

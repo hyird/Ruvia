@@ -22,6 +22,7 @@
 #include "ruvia/http/detail/HttpRequestBodyFailure.h"
 #include "ruvia/http/detail/PmrString.h"
 #include "ruvia/http/detail/http2/Http2StreamState.h"
+#include "ruvia/web/detail/http2/Http2SansIoTermination.h"
 #include "ruvia/web/detail/router/RouteModes.h"
 #include "ruvia/web/detail/router/RouteResolution.h"
 
@@ -34,25 +35,30 @@ inline constexpr std::size_t kHttp2WebRetainedBodyChunkCapacity = 16;
 // readiness after wakeup, so cancellation is only a level-change notification.
 class Http2SansIoStreamSignal final {
 public:
-    explicit Http2SansIoStreamSignal(const WorkerHandle& worker)
-        : signal_(worker) {}
+    Http2SansIoStreamSignal(
+        const WorkerHandle& worker,
+        Http2SansIoTermination& termination)
+        : signal_(worker), termination_(termination) {}
     Http2SansIoStreamSignal(WorkerHandle&&) = delete;
 
     void wake() noexcept {
         signal_.notify();
     }
 
-    void end() noexcept {
-        ended_ = true;
-        wake();
+    [[nodiscard]] bool terminated() const noexcept {
+        return termination_.terminated();
     }
 
-    [[nodiscard]] bool ended() const noexcept {
-        return ended_;
+    [[nodiscard]] std::error_code terminalError() const noexcept {
+        return termination_.error();
+    }
+
+    [[nodiscard]] Http2SansIoTermination& termination() noexcept {
+        return termination_;
     }
 
     [[nodiscard]] Task<void> wait() {
-        if (ended_) {
+        if (terminated()) {
             co_return;
         }
         co_await signal_.wait();
@@ -60,7 +66,7 @@ public:
 
 private:
     WorkerSignal signal_;
-    bool ended_{false};
+    Http2SansIoTermination& termination_;
 };
 
 // Web-owned storage for body/tunnel bytes that have already crossed the
@@ -431,11 +437,12 @@ public:
 
 private:
     [[nodiscard]] Http2SansIoStreamSignal* beginDispatch(
-        const WorkerHandle& worker) {
+        const WorkerHandle& worker,
+        Http2SansIoTermination& termination) {
         if (dispatched()) {
             return nullptr;
         }
-        dispatch_.emplace<Http2SansIoStreamSignal>(worker);
+        dispatch_.emplace<Http2SansIoStreamSignal>(worker, termination);
         return signal();
     }
 
@@ -499,10 +506,11 @@ private:
     friend class Http2SansIoStreamRuntimeTable;
 
     [[nodiscard]] Http2SansIoStreamSignal* beginDispatch(
-        const WorkerHandle& worker) {
+        const WorkerHandle& worker,
+        Http2SansIoTermination& termination) {
         auto* selected = selectedRoute();
         return selected != nullptr
-            ? selected->beginDispatch(worker)
+            ? selected->beginDispatch(worker, termination)
             : nullptr;
     }
 
@@ -519,8 +527,10 @@ private:
 class Http2SansIoStreamRuntimeTable final {
 public:
     explicit Http2SansIoStreamRuntimeTable(
-        std::pmr::memory_resource* resource)
+        std::pmr::memory_resource* resource,
+        Http2SansIoTermination& termination)
         : resource_(pmrResourceOrDefault(resource)),
+          termination_(termination),
           overflow_(resource_) {}
 
     [[nodiscard]] Http2SansIoStreamRuntime* find(
@@ -585,7 +595,7 @@ public:
         if (runtime == nullptr) {
             return nullptr;
         }
-        auto* signal = runtime->beginDispatch(worker);
+        auto* signal = runtime->beginDispatch(worker, termination_);
         if (signal != nullptr) {
             ++dispatchedCount_;
         }
@@ -659,6 +669,7 @@ private:
     }
 
     std::pmr::memory_resource* resource_;
+    Http2SansIoTermination& termination_;
     std::array<std::optional<Http2SansIoStreamRuntime>,
                kInlineCapacity> inline_{};
     std::pmr::vector<OverflowRuntime> overflow_;

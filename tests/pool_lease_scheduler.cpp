@@ -15,6 +15,10 @@ ruvia::Task<void> exerciseLeaseAndClose(
     ruvia::detail::PoolLeaseScheduler& scheduler,
     asio::io_context& ioContext,
     bool& success) {
+    {
+        auto discardedColdAcquire = scheduler.acquire(std::nullopt);
+        static_cast<void>(discardedColdAcquire);
+    }
     const auto first = co_await scheduler.acquire(std::nullopt);
     const auto* firstLease = first.acquired();
     if (firstLease == nullptr) {

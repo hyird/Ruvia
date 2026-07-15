@@ -20,8 +20,8 @@ public:
 
     bool await_suspend(std::coroutine_handle<> continuation) {
         continuation_ = continuation;
-        registration_ = detail::WorkerHandleAccess::scheduleTimer(
-            worker_, std::chrono::steady_clock::now() + duration_,
+        detail::WorkerHandleAccess::scheduleTimer(
+            worker_, registration_, std::chrono::steady_clock::now() + duration_,
             [this](detail::WorkerTimerOutcome) { continuation_.resume(); });
         return true;
     }

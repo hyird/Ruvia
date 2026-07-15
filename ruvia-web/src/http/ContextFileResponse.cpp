@@ -8,6 +8,7 @@
 #include "ruvia/http/detail/HttpEntityTag.h"
 #include "ruvia/web/detail/StaticFilesInternal.h"
 #include "ruvia/web/detail/StaticFileMetadata.h"
+#include "ruvia/web/detail/server/HttpNativeFile.h"
 #include "ruvia/web/detail/StaticPathNormalization.h"
 #include "ruvia/http/detail/HeaderAcceptUtils.h"
 #include "ruvia/http/detail/HeaderTokenUtils.h"
@@ -127,20 +128,26 @@ struct FileConditionalHeaders final {
 class FileResponsePath final {
 public:
     [[nodiscard]] static FileResponsePath copying(
-        std::filesystem::path path) {
-        return FileResponsePath(std::move(path));
+        std::filesystem::path path,
+        detail::ResponseFileIdentity identity) {
+        return FileResponsePath(std::move(path), identity);
     }
 
     [[nodiscard]] static FileResponsePath copyingNative(
-        const detail::NativePathChar* path) {
+        const detail::NativePathChar* path,
+        detail::ResponseFileIdentity identity) {
         if (path == nullptr || *path == detail::NativePathChar{}) {
             throw std::logic_error("static file entry has no native path");
         }
-        return copying(std::filesystem::path(path));
+        return copying(std::filesystem::path(path), identity);
     }
 
     [[nodiscard]] std::string_view guessedContentType() const noexcept {
         return detail::guessStaticFileContentType(path_);
+    }
+
+    [[nodiscard]] detail::ResponseFileIdentity identity() const noexcept {
+        return identity_;
     }
 
     void setBody(
@@ -153,7 +160,8 @@ public:
             takePath(),
             size,
             offset,
-            length);
+            length,
+            identity_);
     }
 
     void setFullBody(
@@ -163,8 +171,10 @@ public:
     }
 
 private:
-    explicit FileResponsePath(std::filesystem::path path) noexcept
-        : path_(std::move(path)) {}
+    explicit FileResponsePath(
+        std::filesystem::path path,
+        detail::ResponseFileIdentity identity) noexcept
+        : path_(std::move(path)), identity_(identity) {}
 
     [[nodiscard]] std::filesystem::path takePath() {
         if (consumed_) {
@@ -175,6 +185,7 @@ private:
     }
 
     std::filesystem::path path_;
+    detail::ResponseFileIdentity identity_;
     bool consumed_{false};
 };
 
@@ -184,7 +195,8 @@ template <typename ApplyResponseState>
     const HttpRequest& request,
     FileResponsePath filePath,
     std::uint64_t size,
-    std::filesystem::file_time_type modified,
+    std::uint64_t modifiedToken,
+    std::time_t modifiedSeconds,
     std::string_view contentType,
     std::string_view cacheControl,
     bool enableRanges,
@@ -198,11 +210,13 @@ template <typename ApplyResponseState>
     std::pmr::string lastModifiedStorage(context.resource());
     std::string_view etag;
     std::string_view lastModified;
-    std::time_t modifiedSeconds{};
     if (enableValidators) {
-        modifiedSeconds = detail::staticFileTimeToTimeT(modified);
         if (precomputedEtag.empty() || precomputedLastModified.empty()) {
-            etagStorage = detail::makeStaticFileEtag(context.resource(), size, modified);
+            etagStorage = detail::makeStaticFileSnapshotEtag(
+                context.resource(),
+                size,
+                modifiedToken,
+                filePath.identity());
             lastModifiedStorage = detail::httpFormatDate(context.resource(), modifiedSeconds);
             etag = etagStorage;
             lastModified = lastModifiedStorage;
@@ -352,16 +366,7 @@ HttpResponse Context::file(
     const std::filesystem::path& path,
     std::string_view contentType) const {
     std::error_code ec;
-    if (!std::filesystem::is_regular_file(path, ec)) {
-        throw HttpError(404, "not_found", "file not found");
-    }
-
-    const auto size = std::filesystem::file_size(path, ec);
-    if (ec) {
-        throw HttpError(404, "not_found", "file not found");
-    }
-
-    const auto modified = std::filesystem::last_write_time(path, ec);
+    const auto snapshot = detail::snapshotResponseFile(path.c_str(), ec);
     if (ec) {
         throw HttpError(404, "not_found", "file not found");
     }
@@ -374,9 +379,10 @@ HttpResponse Context::file(
     return makeFileResponse(
         *this,
         request_,
-        FileResponsePath::copying(path),
-        static_cast<std::uint64_t>(size),
-        modified,
+        FileResponsePath::copying(path, snapshot.identity),
+        snapshot.size,
+        snapshot.modifiedToken,
+        snapshot.modifiedSeconds,
         contentType,
         {},
         true,
@@ -538,9 +544,11 @@ HttpResponse Context::staticFile(
     return makeFileResponse(
         *this,
         request_,
-        FileResponsePath::copyingNative(servedEntry.filePath()),
+        FileResponsePath::copyingNative(
+            servedEntry.filePath(), servedEntry.identity()),
         servedEntry.size(),
-        servedEntry.modified(),
+        servedEntry.modifiedToken(),
+        servedEntry.modifiedSeconds(),
         contentType.empty() ? baseEntry.contentType() : contentType,
         baseEntry.cacheControl(),
         baseEntry.rangesEnabled(),

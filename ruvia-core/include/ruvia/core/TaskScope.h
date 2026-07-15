@@ -35,6 +35,7 @@ private:
 
     struct TaskScopeEmpty final {};
     struct TaskScopeOpen final {};
+    struct TaskScopeJoinReserved final {};
     class TaskScopeJoining final {
     public:
         explicit TaskScopeJoining(
@@ -72,13 +73,33 @@ private:
         void await_resume();
     };
 
+    class JoinReservation final {
+    public:
+        explicit JoinReservation(TaskScope& scope) noexcept : scope_(&scope) {}
+        ~JoinReservation();
+
+        JoinReservation(const JoinReservation&) = delete;
+        JoinReservation& operator=(const JoinReservation&) = delete;
+        JoinReservation(JoinReservation&& other) noexcept
+            : scope_(std::exchange(other.scope_, nullptr)) {}
+        JoinReservation& operator=(JoinReservation&&) = delete;
+
+        [[nodiscard]] TaskScope& scope() const noexcept { return *scope_; }
+
+    private:
+        TaskScope* scope_;
+    };
+
     static void childComplete(void* raw) noexcept;
+    [[nodiscard]] static Task<void> joinReserved(JoinReservation reservation);
+    void releaseJoinReservation() noexcept;
     void finish(Node* node) noexcept;
     void rethrowFailure();
 
     using Lifecycle = std::variant<
         TaskScopeEmpty,
         TaskScopeOpen,
+        TaskScopeJoinReserved,
         TaskScopeJoining,
         TaskScopeJoined>;
     using Outcome = std::variant<TaskScopeSuccess, TaskScopeFailure>;

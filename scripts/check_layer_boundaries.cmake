@@ -224,9 +224,27 @@ if(NOT core_worker_handle_contract MATCHES
    core_worker_handle_contract MATCHES
        "std::weak_ptr<detail::WorkerDispatcher> dispatcher_" OR
    NOT core_worker_timer_contract MATCHES
-       "std::shared_ptr<WorkerDispatcher> dispatcher_" OR
+       "WorkerTimerRegistration[(]WorkerTimerRegistration&&[)] = delete" OR
+   NOT core_worker_timer_contract MATCHES
+       "WorkerDispatcher[*] dispatcher_" OR
+   NOT core_worker_timer_contract MATCHES
+       "std::size_t slot_" OR
+   NOT core_worker_timer_contract MATCHES
+       "std::uint64_t generation_" OR
    core_worker_timer_contract MATCHES
-       "std::weak_ptr<WorkerDispatcher> dispatcher_" OR
+       "std::shared_ptr|std::weak_ptr|std::atomic" OR
+   NOT core_worker_dispatcher_implementation MATCHES
+       "struct TimerSlot final" OR
+   NOT core_worker_dispatcher_implementation MATCHES
+       "std::pmr::vector<TimerSlot> timerSlots" OR
+   NOT core_worker_dispatcher_implementation MATCHES
+       "if [(]gCurrentWorker == this[)]" OR
+   NOT core_worker_dispatcher_implementation MATCHES
+       "cancelTimer[(]slot, generation[)]" OR
+   NOT core_worker_dispatcher_implementation MATCHES
+       "self = shared_from_this[(][)], slot, generation" OR
+   core_worker_dispatcher_implementation MATCHES
+       "allocate_shared<WorkerTimerState>|WorkerTimerState" OR
    NOT core_worker_dispatcher_contract MATCHES
        "void detachContext[(][)] noexcept" OR
    NOT core_worker_dispatcher_contract MATCHES
@@ -1468,6 +1486,8 @@ file(READ "${RUVIA_ROOT}/ruvia-web/src/http/ContextRequest.cpp"
 file(READ "${CORE_REQUEST_MEMORY}" core_request_memory)
 file(READ "${RUVIA_ROOT}/tests/unit_context_capabilities.cpp"
     context_capability_tests)
+file(READ "${RUVIA_ROOT}/tests/unit_context_cookie.cpp"
+    context_request_cache_tests)
 file(READ "${RUVIA_ROOT}/tests/package-consumer/core.cpp"
     core_package_contract)
 if(NOT web_context_query_cache MATCHES
@@ -1478,6 +1498,12 @@ if(NOT web_context_query_cache MATCHES
        "std::optional<RequestQueryCache>[ \t]+query" OR
    NOT web_context_request_storage MATCHES
        "std::optional<RequestFieldCache>[ \t]+headers" OR
+   NOT web_context_request_storage MATCHES
+       "std::optional<RequestFieldCache>[ \t]+routeParams" OR
+   NOT web_context_request_storage MATCHES
+       "bool[ \t]+queryInvalid" OR
+   NOT web_context_request_storage MATCHES
+       "bool[ \t]+routeParamsInvalid" OR
    NOT web_context_query_cache MATCHES
        "PmrObjectDeleter<detail::ContextRequestStorage>" OR
    NOT web_context_storage_impl MATCHES
@@ -1487,6 +1513,14 @@ if(NOT web_context_query_cache MATCHES
    core_request_memory MATCHES
        "CleanupNode|cleanupHead_|void[ \t]*[(][*]destroy|T&[ \t]+emplace[(]" OR
    web_context_request_impl MATCHES "memory_[.]emplace" OR
+   web_context_request_impl MATCHES
+       "std::stable_sort|appendDecodedValue|decodedValues_" OR
+   web_context_request_storage MATCHES
+       "std::pmr::(list|forward_list|map|unordered_map)" OR
+   NOT web_context_request_impl MATCHES
+       "Context::requestQuery[(]std::string_view name[)] const [{][^}]*ensureRequestQuery[(][)]" OR
+   NOT web_context_request_impl MATCHES
+       "Context::routeParam[(]std::string_view name[)] const [{][^}]*ensureRouteParams[(][)]" OR
    web_context_query_cache MATCHES
        "(RequestQueryCache|RequestNameValueList|pmr::string)[*][ \t]+(requestQueryCache_|requestHeaders_|requestCookies_|routeParams_|decodedBody_)" OR
    web_context_query_cache MATCHES
@@ -1495,10 +1529,18 @@ if(NOT web_context_query_cache MATCHES
        "RequestQueryValues[*][ \t]+requestQueries_" OR
    NOT context_capability_tests MATCHES
        "context_lazy_request_caches_share_one_typed_storage_owner" OR
+   NOT context_request_cache_tests MATCHES
+       "context_request_query_single_lookup_materializes_one_shared_cache" OR
+   NOT context_request_cache_tests MATCHES
+       "context_request_param_single_lookup_materializes_one_shared_cache" OR
+   NOT context_request_cache_tests MATCHES
+       "context_request_query_rejects_and_remembers_malformed_percent_encoding" OR
+   NOT context_request_cache_tests MATCHES
+       "context_request_param_rejects_and_remembers_malformed_percent_encoding" OR
    NOT core_package_contract MATCHES
        "!HasErasedArenaEmplace<ruvia::RequestMemory>")
     boundary_error("request arena regained erased cleanup or split lazy-cache ownership"
-        "RequestMemory must remain a pure arena; Context must allocate one typed ContextRequestStorage owner whose alternatives destroy in C++ member order without erased callbacks")
+        "RequestMemory must remain a pure arena; query/route scalar and field APIs must reuse one typed cache, remember decode failure, and avoid per-lookup nodes or non-PMR sort scratch")
 endif()
 if(EXISTS "${HTTP_METHOD_CONTRACT}" AND EXISTS "${HTTP_REQUEST_MODEL}")
     file(READ "${HTTP_METHOD_CONTRACT}" http_method_contract)
@@ -3375,6 +3417,12 @@ set(WEB_STATIC_FILE_INDEX_SOURCE
     "${RUVIA_ROOT}/ruvia-web/src/StaticFiles.cpp")
 set(WEB_STATIC_FILE_INDEX_CONTRACT
     "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/StaticFilesInternal.h")
+set(HTTP_RESPONSE_FILE_IDENTITY_CONTRACT
+    "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/detail/HttpResponseFileBody.h")
+set(WEB_NATIVE_FILE_CONTRACT
+    "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/server/HttpNativeFile.h")
+set(WEB_FILE_INPUT_CONTRACT
+    "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/server/HttpFileOpen.h")
 set(WEB_STATIC_FILE_REPRESENTATION_TEST
     "${RUVIA_ROOT}/tests/unit_content_range.cpp")
 set(WEB_STATIC_FILE_PACKAGE_CONSUMER
@@ -3386,6 +3434,9 @@ check_files_no_match("static file representation must use one typed selection"
 if(EXISTS "${WEB_STATIC_FILE_RESPONSE_SOURCE}" AND
    EXISTS "${WEB_STATIC_FILE_INDEX_SOURCE}" AND
    EXISTS "${WEB_STATIC_FILE_INDEX_CONTRACT}" AND
+   EXISTS "${HTTP_RESPONSE_FILE_IDENTITY_CONTRACT}" AND
+   EXISTS "${WEB_NATIVE_FILE_CONTRACT}" AND
+   EXISTS "${WEB_FILE_INPUT_CONTRACT}" AND
    EXISTS "${WEB_STATIC_FILE_REPRESENTATION_TEST}" AND
    EXISTS "${WEB_STATIC_FILE_PACKAGE_CONSUMER}")
     file(READ "${WEB_STATIC_FILE_RESPONSE_SOURCE}"
@@ -3394,6 +3445,12 @@ if(EXISTS "${WEB_STATIC_FILE_RESPONSE_SOURCE}" AND
         web_static_file_index_source)
     file(READ "${WEB_STATIC_FILE_INDEX_CONTRACT}"
         web_static_file_index_contract)
+    file(READ "${HTTP_RESPONSE_FILE_IDENTITY_CONTRACT}"
+        http_response_file_identity_contract)
+    file(READ "${WEB_NATIVE_FILE_CONTRACT}"
+        web_native_file_contract)
+    file(READ "${WEB_FILE_INPUT_CONTRACT}"
+        web_file_input_contract)
     file(READ "${WEB_STATIC_FILE_REPRESENTATION_TEST}"
         web_static_file_representation_test)
     file(READ "${WEB_STATIC_FILE_PACKAGE_CONSUMER}"
@@ -3406,6 +3463,10 @@ if(EXISTS "${WEB_STATIC_FILE_RESPONSE_SOURCE}" AND
            "std::filesystem::path path_" OR
        NOT web_static_file_response_source MATCHES
            "setResponseFileBody[(][ \t\r\n]*response,[ \t\r\n]*takePath[(][)]" OR
+       NOT web_static_file_response_source MATCHES
+           "snapshotResponseFile[(]path[.]c_str[(][)]" OR
+       NOT web_static_file_response_source MATCHES
+           "servedEntry[.]identity[(][)]" OR
        web_static_file_response_source MATCHES
            "FileResponseBorrowedNativePath|setResponseBorrowedNativeFileBody|FileResponsePath::borrowing" OR
        NOT web_static_file_response_source MATCHES
@@ -3418,6 +3479,26 @@ if(EXISTS "${WEB_STATIC_FILE_RESPONSE_SOURCE}" AND
            "class StaticRootEntryView final" OR
        NOT web_static_file_index_contract MATCHES
            "std::optional<StaticRootEntryView>" OR
+       NOT web_static_file_index_contract MATCHES
+           "ResponseFileIdentity identity" OR
+       NOT web_static_file_index_source MATCHES
+           "snapshotResponseFile" OR
+       NOT http_response_file_identity_contract MATCHES
+           "class ResponseFileIdentity final" OR
+       NOT http_response_file_identity_contract MATCHES
+           "array<std::uint64_t, 4>" OR
+       NOT http_response_file_identity_contract MATCHES
+           "requiresValidation[(][)] const noexcept" OR
+       NOT web_native_file_contract MATCHES
+           "snapshotNativeFileHandle" OR
+       NOT web_native_file_contract MATCHES
+           "snapshot[.]identity != file[.]identity[(][)]" OR
+       NOT web_native_file_contract MATCHES
+           "snapshot[.]size != file[.]size[(][)]" OR
+       NOT web_native_file_contract MATCHES
+           "errc::state_not_recoverable" OR
+       NOT web_file_input_contract MATCHES
+           "openNativeFileForRead[(]file, error_[)]" OR
        NOT web_static_file_index_source MATCHES
            "mime[.]contentType[.]empty[(][)]" OR
        NOT web_static_file_representation_test MATCHES
@@ -3426,12 +3507,16 @@ if(EXISTS "${WEB_STATIC_FILE_RESPONSE_SOURCE}" AND
            "static_root_rejects_empty_custom_mime_type" OR
        NOT web_static_file_representation_test MATCHES
            "static_file_response_owns_path_after_handler_local_root_is_destroyed" OR
+       NOT web_static_file_representation_test MATCHES
+           "static_file_replacement_cannot_reuse_indexed_metadata" OR
+       NOT web_static_file_representation_test MATCHES
+           "context_file_replacement_cannot_reuse_response_metadata" OR
        NOT web_static_file_package_consumer MATCHES
            "!std::default_initializable<[ \t\r\n]*ruvia::detail::StaticRootEntryView>" OR
        NOT web_static_file_package_consumer MATCHES
            "std::optional<ruvia::detail::StaticRootEntryView>")
-        boundary_error("static file representation ownership was split"
-            "response paths must be owned while selected entries and HTTP content coding remain typed and atomically tested")
+        boundary_error("static file representation ownership or identity was split"
+            "response paths must be owned and carry a same-handle validated identity while selected entries and HTTP content coding remain typed and atomically tested")
     endif()
 endif()
 set(WEB_JSON_STRING_CONTRACT
@@ -8228,8 +8313,9 @@ else()
            "streamRuntimes[.]ensureAccepted[(]streamState[)]" OR
        NOT web_http2_session MATCHES "runtime[.]selectRoute" OR
        NOT web_http2_session MATCHES "routes[.]resolve[(]method, path[)]" OR
+       NOT web_http2_session MATCHES "activeHandlerTasks" OR
        NOT web_http2_session MATCHES
-           "streamRuntimes[.]dispatchedCount" OR
+           "while [(]activeHandlerTasks != 0[)]" OR
        NOT web_http2_session MATCHES "streamRuntimes[.]size" OR
        NOT web_http2_session MATCHES "streamRuntimes[.]forEach" OR
        NOT web_http2_session MATCHES "http2SansIoInactivityPhase" OR
@@ -11982,7 +12068,7 @@ else()
        NOT http2_send_window_header_content MATCHES
            "Task<Http2SendWindowWaitResult> awaitHttp2SendWindow" OR
        NOT http2_send_window_source_content MATCHES
-           "signal == nullptr [|][|] signal->ended[(][)]" OR
+           "signal == nullptr [|][|] signal->terminated[(][)]" OR
        NOT http2_send_window_source_content MATCHES
            "connection[.]hasQueuedData[(]streamId[)]")
         boundary_error("HTTP/2 send-window wait lost its typed state recheck"

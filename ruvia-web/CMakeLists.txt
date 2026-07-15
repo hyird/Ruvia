@@ -157,8 +157,13 @@ endif()
 
 ruvia_install_target(ruvia-web web)
 
-# All Web-owned public and contract headers share one physical ownership root.
-ruvia_install_public_header_tree(web include/ruvia/web/detail)
+# Install the always-available Web contracts without leaking opt-in feature
+# contracts into a feature-off package. Feature subtrees are installed below
+# together with the public API that makes them usable.
+ruvia_install_public_header_tree(web include/ruvia/web/detail
+    PATTERN "auth" EXCLUDE
+    PATTERN "db" EXCLUDE
+    PATTERN "redis" EXCLUDE)
 
 ruvia_install_public_headers(web
     include/ruvia/web/App.h
@@ -197,12 +202,36 @@ ruvia_install_public_headers(web
 
 if(RUVIA_ENABLE_MARIADB OR RUVIA_ENABLE_POSTGRESQL)
     ruvia_install_public_header_tree(web include/ruvia/web/db)
+    ruvia_install_public_headers(web
+        include/ruvia/web/detail/db/DbBackend.h
+        include/ruvia/web/detail/db/DbConfigValidation.h
+        include/ruvia/web/detail/db/DbInternal.h
+        include/ruvia/web/detail/db/DbMigrationValidation.h
+        include/ruvia/web/detail/db/DbOperationState.h
+        include/ruvia/web/detail/db/DbPoolDeadline.h
+        include/ruvia/web/detail/db/DbResultAccess.h
+        include/ruvia/web/detail/db/DbSlotSocket.h
+        include/ruvia/web/detail/db/DbUtils.h
+        include/ruvia/web/detail/db/DbValueAccess.h)
+endif()
+
+if(RUVIA_ENABLE_MARIADB)
+    ruvia_install_public_headers(web
+        include/ruvia/web/detail/db/DbMysqlRuntime.h
+        include/ruvia/web/detail/db/DbSql.h)
+endif()
+
+if(RUVIA_ENABLE_POSTGRESQL)
+    ruvia_install_public_headers(web
+        include/ruvia/web/detail/db/DbPostgreSql.h)
 endif()
 
 if(RUVIA_ENABLE_REDIS)
     ruvia_install_public_header_tree(web include/ruvia/web/redis)
+    ruvia_install_public_header_tree(web include/ruvia/web/detail/redis)
 endif()
 
 if(RUVIA_ENABLE_JWT)
     ruvia_install_public_header_tree(web include/ruvia/web/auth)
+    ruvia_install_public_header_tree(web include/ruvia/web/detail/auth)
 endif()

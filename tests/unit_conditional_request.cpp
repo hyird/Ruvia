@@ -2,7 +2,6 @@
 
 #include <cstddef>
 #include <ctime>
-#include <filesystem>
 #include <memory_resource>
 #include <string>
 #include <string_view>
@@ -20,9 +19,12 @@ std::string formatDate(std::time_t time) {
     return std::string(out.data(), out.size());
 }
 
-std::string fileEtag(std::uint64_t size, std::filesystem::file_time_type::duration ticks) {
-    const auto out = ruvia::detail::makeStaticFileEtag(
-        std::pmr::get_default_resource(), size, std::filesystem::file_time_type{ticks});
+std::string fileEtag(
+    std::uint64_t size,
+    std::uint64_t modifiedToken,
+    ruvia::detail::ResponseFileIdentity identity) {
+    const auto out = ruvia::detail::makeStaticFileSnapshotEtag(
+        std::pmr::get_default_resource(), size, modifiedToken, identity);
     return std::string(out.data(), out.size());
 }
 
@@ -137,14 +139,17 @@ RUVIA_TEST(http_format_date_round_trips_with_parse) {
 }
 
 RUVIA_TEST(file_etag_deterministic_and_sensitive) {
-    using Ticks = std::filesystem::file_time_type::duration;
-    const auto base = fileEtag(100, Ticks{123456});
-    // Exact wire format "<size>-<mtime-ticks>": stable across restarts/versions so
-    // client caches stay valid; a format change would silently invalidate them.
-    RUVIA_CHECK_EQ(base, std::string("\"100-123456\""));
-    RUVIA_CHECK_EQ(base, fileEtag(100, Ticks{123456}));       // deterministic
-    RUVIA_CHECK(base != fileEtag(101, Ticks{123456}));        // size-sensitive
-    RUVIA_CHECK(base != fileEtag(100, Ticks{123457}));        // mtime-sensitive
+    const auto identity = ruvia::detail::ResponseFileIdentity::checked(
+        {1, 2, 3, 4});
+    const auto replacement = ruvia::detail::ResponseFileIdentity::checked(
+        {1, 2, 3, 5});
+    const auto base = fileEtag(100, 123456, identity);
+    // The strong validator binds framing metadata and the exact indexed file.
+    RUVIA_CHECK_EQ(base, std::string("\"100-123456-1-2-3-4\""));
+    RUVIA_CHECK_EQ(base, fileEtag(100, 123456, identity));
+    RUVIA_CHECK(base != fileEtag(101, 123456, identity));
+    RUVIA_CHECK(base != fileEtag(100, 123457, identity));
+    RUVIA_CHECK(base != fileEtag(100, 123456, replacement));
     RUVIA_CHECK(base.size() >= 2 && base.front() == '"' && base.back() == '"');  // quoted-string
 }
 

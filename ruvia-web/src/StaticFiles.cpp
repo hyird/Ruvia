@@ -2,6 +2,7 @@
 
 #include "ruvia/http/detail/HttpDate.h"
 #include "ruvia/web/detail/StaticFileMetadata.h"
+#include "ruvia/web/detail/server/HttpNativeFile.h"
 #include "ruvia/core/memory/PmrObject.h"
 #include "ruvia/core/memory/ProcessResource.h"
 
@@ -260,7 +261,9 @@ std::optional<detail::StaticRootEntryView> detail::StaticRootAccess::find(
         entry->etag,
         entry->lastModified,
         entry->size,
-        entry->modified,
+        entry->identity,
+        entry->modifiedToken,
+        entry->modifiedSeconds,
         state.enableRanges,
         state.enableValidators);
 }
@@ -331,12 +334,8 @@ StaticRoot::StaticRoot(const std::filesystem::path& root, StaticRootOptions opti
         if (!typeAllowed) {
             continue;
         }
-        const auto size = std::filesystem::file_size(filePath, ec);
-        if (ec) {
-            ec.clear();
-            continue;
-        }
-        const auto modified = std::filesystem::last_write_time(filePath, ec);
+        const auto snapshot = detail::snapshotResponseFile(
+            filePath.c_str(), ec);
         if (ec) {
             ec.clear();
             continue;
@@ -346,16 +345,19 @@ StaticRoot::StaticRoot(const std::filesystem::path& root, StaticRootOptions opti
         entry.relativePath = std::move(relative);
         detail::assignNativePath(entry.filePath, filePath);
         entry.contentType = contentTypeFor(filePath, extension, options, upstream);
-        entry.size = static_cast<std::uint64_t>(size);
-        entry.modified = modified;
+        entry.size = snapshot.size;
+        entry.identity = snapshot.identity;
+        entry.modifiedToken = snapshot.modifiedToken;
+        entry.modifiedSeconds = snapshot.modifiedSeconds;
         if (enableValidators) {
-            entry.etag = detail::makeStaticFileEtag(
+            entry.etag = detail::makeStaticFileSnapshotEtag(
                 upstream,
-                static_cast<std::uint64_t>(size),
-                modified);
+                snapshot.size,
+                snapshot.modifiedToken,
+                snapshot.identity);
             entry.lastModified = detail::httpFormatDate(
                 upstream,
-                detail::staticFileTimeToTimeT(modified));
+                snapshot.modifiedSeconds);
         }
         state.entries.push_back(std::move(entry));
     }

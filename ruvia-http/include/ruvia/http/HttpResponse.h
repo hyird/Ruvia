@@ -204,6 +204,12 @@ private:
     HttpResponse(detail::HttpResolvedPmrResourceTag, std::pmr::memory_resource* resource);
     void setFileBody(std::filesystem::path file, std::uint64_t size);
     void setFileBody(std::filesystem::path file, std::uint64_t size, std::uint64_t offset, std::uint64_t length);
+    void setFileBody(
+        std::filesystem::path file,
+        std::uint64_t size,
+        std::uint64_t offset,
+        std::uint64_t length,
+        detail::ResponseFileIdentity identity);
     void setBorrowedFileBody(const std::filesystem::path& file, std::uint64_t size);
     void setBorrowedFileBody(const std::filesystem::path& file, std::uint64_t size, std::uint64_t offset, std::uint64_t length);
     void setBorrowedNativeFileBody(const detail::HttpNativePathChar* file, std::uint64_t size);

@@ -5,6 +5,10 @@ set(_consumer_build "@CMAKE_BINARY_DIR@/package-consumer-build")
 set(_component_install_root "@CMAKE_BINARY_DIR@/package-component-installs")
 set(_built_components "@RUVIA_BUILT_COMPONENTS@")
 set(_built_components_csv "@RUVIA_BUILT_COMPONENTS_CSV@")
+set(_mariadb_enabled "@RUVIA_ENABLE_MARIADB@")
+set(_postgresql_enabled "@RUVIA_ENABLE_POSTGRESQL@")
+set(_redis_enabled "@RUVIA_ENABLE_REDIS@")
+set(_jwt_enabled "@RUVIA_ENABLE_JWT@")
 
 file(REMOVE_RECURSE
     "${_install_prefix}"
@@ -71,6 +75,12 @@ if(_built_components_csv MATCHES "(^|,)core(,|$)")
            "struct TaskScopeEmpty final" OR
        NOT _installed_task_scope MATCHES
            "struct TaskScopeOpen final" OR
+       NOT _installed_task_scope MATCHES
+           "struct TaskScopeJoinReserved final" OR
+       NOT _installed_task_scope MATCHES
+           "class JoinReservation final" OR
+       NOT _installed_task_scope MATCHES
+           "joinReserved[(]JoinReservation reservation[)]" OR
        NOT _installed_task_scope MATCHES
            "class TaskScopeJoining final" OR
        NOT _installed_task_scope MATCHES
@@ -189,6 +199,10 @@ if(_built_components_csv MATCHES "(^|,)core(,|$)")
        NOT _installed_worker_signal MATCHES
            "std::size_t scheduledWaiters_" OR
        NOT _installed_worker_signal MATCHES
+           "std::size_t reservedWaits_" OR
+       NOT _installed_worker_signal MATCHES
+           "waitReserved[(]WaitReservation reservation[)]" OR
+       NOT _installed_worker_signal MATCHES
            "~Awaiter[(][)]" OR
        NOT _installed_worker_signal MATCHES
            "worker_[-][>]isCurrent[(][)]" OR
@@ -202,11 +216,19 @@ if(_built_components_csv MATCHES "(^|,)core(,|$)")
        _installed_worker_handle MATCHES
            "std::weak_ptr<detail::WorkerDispatcher> dispatcher_" OR
        NOT _installed_worker_timer MATCHES
-           "std::shared_ptr<WorkerDispatcher> dispatcher_" OR
+           "WorkerTimerRegistration[(]WorkerTimerRegistration&&[)] = delete" OR
+       NOT _installed_worker_timer MATCHES
+           "WorkerDispatcher[*] dispatcher_" OR
+       NOT _installed_worker_timer MATCHES
+           "std::size_t slot_" OR
+       NOT _installed_worker_timer MATCHES
+           "std::uint64_t generation_" OR
        _installed_worker_timer MATCHES
-           "std::weak_ptr<WorkerDispatcher> dispatcher_" OR
+           "std::shared_ptr|std::weak_ptr|std::atomic" OR
        NOT _installed_worker_dispatcher MATCHES
            "void detachContext[(][)] noexcept" OR
+       NOT _installed_worker_dispatcher MATCHES
+           "void runContext[(][)]" OR
        NOT _installed_worker_dispatcher MATCHES
            "bool attached[(][)] const noexcept")
         message(FATAL_ERROR
@@ -253,6 +275,14 @@ if(_built_components_csv MATCHES "(^|,)core(,|$)")
            "[(]bool cancelled[)]")
         message(FATAL_ERROR
             "installed worker timer completion restored a boolean outcome")
+    endif()
+    if(_installed_worker_timer MATCHES "shared_ptr|atomic" OR
+       NOT _installed_worker_timer MATCHES
+           "WorkerTimerRegistration[(]WorkerTimerRegistration&&[)] = delete" OR
+       NOT _installed_worker_dispatcher MATCHES
+           "WorkerTimerRegistration& registration")
+        message(FATAL_ERROR
+            "installed worker timer restored shared ownership or movable registration")
     endif()
 
     set(_installed_task_promise_path
@@ -480,6 +510,17 @@ if(_built_components_csv MATCHES "(^|,)core(,|$)")
            "vector<std::uint8_t> busy_")
         message(FATAL_ERROR
             "installed core pool scheduler lost centralized lease ownership")
+    endif()
+    if(NOT _installed_pool_lease_scheduler MATCHES
+           "class AcquireReservation final" OR
+       NOT _installed_pool_lease_scheduler MATCHES
+           "acquireReserved" OR
+       NOT _installed_pool_lease_scheduler MATCHES
+           "std::size_t reservedAcquires_" OR
+       NOT _installed_pool_lease_scheduler MATCHES
+           "return acquireReserved[(]AcquireReservation[(][*]this[)], timeout[)]")
+        message(FATAL_ERROR
+            "installed pool scheduler restored a scheduler-bound cold Task")
     endif()
 
     set(_installed_connection_scanner_path
@@ -2398,11 +2439,6 @@ if(_built_components_csv MATCHES "(^|,)web(,|$)")
         "${_install_prefix}/include/ruvia/web/detail/db/DbInternal.h")
     set(_installed_redis_internal_path
         "${_install_prefix}/include/ruvia/web/detail/redis/RedisInternal.h")
-    if(NOT EXISTS "${_installed_db_internal_path}" OR
-       NOT EXISTS "${_installed_redis_internal_path}")
-        message(FATAL_ERROR
-            "installed Web package is missing integration runtime contracts")
-    endif()
     if(NOT EXISTS "${_installed_rate_limiter_path}" OR
        NOT EXISTS "${_installed_rate_limit_decision_path}")
         message(FATAL_ERROR
@@ -2438,36 +2474,46 @@ if(_built_components_csv MATCHES "(^|,)web(,|$)")
         message(FATAL_ERROR
             "installed Web rate-limit decision restored raw flags or split rejection policy")
     endif()
-    file(READ "${_installed_db_internal_path}" _installed_db_internal)
-    file(READ "${_installed_redis_internal_path}" _installed_redis_internal)
-    if(NOT _installed_db_internal MATCHES
-           "OperationDeadline<DeadlineKind> deadline" OR
-       NOT _installed_redis_internal MATCHES
-           "OperationDeadline<DeadlineKind> deadline" OR
-       _installed_db_internal MATCHES
-           "deadlineActive|bool timedOut|deadlineKind|DeadlineKind[^;]*kNone" OR
-       _installed_redis_internal MATCHES
-           "deadlineActive|bool timedOut|deadlineKind|DeadlineKind[^;]*kNone")
-        message(FATAL_ERROR
-            "installed integration runtimes restored split deadline state")
+    if(EXISTS "${_installed_db_internal_path}")
+        file(READ "${_installed_db_internal_path}" _installed_db_internal)
+        if(NOT _installed_db_internal MATCHES
+               "OperationDeadline<DeadlineKind> deadline" OR
+           _installed_db_internal MATCHES
+               "deadlineActive|bool timedOut|deadlineKind|DeadlineKind[^;]*kNone")
+            message(FATAL_ERROR
+                "installed database runtime restored split deadline state")
+        endif()
+        if(NOT _installed_db_internal MATCHES
+               "PoolLeaseScheduler scheduler_" OR
+           NOT _installed_db_internal MATCHES
+               "std::optional<std::size_t> defaultClientIndex_" OR
+           _installed_db_internal MATCHES "DbPoolRef[ \t]+defaultClient_" OR
+           _installed_db_internal MATCHES "DbPoolScheduler")
+            message(FATAL_ERROR
+                "installed database runtime restored duplicate lease ownership")
+        endif()
     endif()
-    if(NOT _installed_db_internal MATCHES
-           "PoolLeaseScheduler scheduler_" OR
-       NOT _installed_redis_internal MATCHES
-           "PoolLeaseScheduler scheduler_" OR
-       NOT _installed_db_internal MATCHES
-           "std::optional<std::size_t> defaultClientIndex_" OR
-       _installed_db_internal MATCHES "DbPoolRef[ \t]+defaultClient_" OR
-       NOT _installed_redis_internal MATCHES "RedisPool& pool_" OR
-       NOT _installed_redis_internal MATCHES
-           "std::optional<std::size_t> defaultPoolIndex_" OR
-       _installed_redis_internal MATCHES
-           "RedisPool[*][ \t]+(pool_|defaultPool_)" OR
-       _installed_db_internal MATCHES "DbPoolScheduler" OR
-       _installed_redis_internal MATCHES
-           "free_|waiters_|closing_|bool[ \t]+busy")
-        message(FATAL_ERROR
-            "installed integration runtimes restored duplicate lease or Redis alias ownership")
+    if(EXISTS "${_installed_redis_internal_path}")
+        file(READ "${_installed_redis_internal_path}" _installed_redis_internal)
+        if(NOT _installed_redis_internal MATCHES
+               "OperationDeadline<DeadlineKind> deadline" OR
+           _installed_redis_internal MATCHES
+               "deadlineActive|bool timedOut|deadlineKind|DeadlineKind[^;]*kNone")
+            message(FATAL_ERROR
+                "installed Redis runtime restored split deadline state")
+        endif()
+        if(NOT _installed_redis_internal MATCHES
+               "PoolLeaseScheduler scheduler_" OR
+           NOT _installed_redis_internal MATCHES "RedisPool& pool_" OR
+           NOT _installed_redis_internal MATCHES
+               "std::optional<std::size_t> defaultPoolIndex_" OR
+           _installed_redis_internal MATCHES
+               "RedisPool[*][ \t]+(pool_|defaultPool_)" OR
+           _installed_redis_internal MATCHES
+               "free_|waiters_|closing_|bool[ \t]+busy")
+            message(FATAL_ERROR
+                "installed Redis runtime restored duplicate lease or alias ownership")
+        endif()
     endif()
     if(EXISTS
        "${_install_prefix}/include/ruvia/web/detail/db/DbPoolScheduler.h")
@@ -3055,6 +3101,23 @@ if(_built_components_csv MATCHES "(^|,)web(,|$)")
         _installed_http2_response_stream_sink)
     file(READ "${_installed_http1_response_stream_sink_path}"
         _installed_http1_response_stream_sink)
+    if(NOT _installed_http2_stream_session MATCHES
+           "Http2SansIoTermination termination" OR
+       NOT _installed_http2_stream_session MATCHES
+           "stream[.]lowest_layer[(][)][.]cancel" OR
+       NOT _installed_http2_stream_session MATCHES
+           "std::size_t activeHandlerTasks" OR
+       NOT _installed_http2_stream_session MATCHES
+           "while [(]activeHandlerTasks != 0[)]" OR
+       NOT _installed_http2_stream_session MATCHES
+           "while [(]!writerTaskDone[)]" OR
+       NOT _installed_http2_stream_session MATCHES
+           "std::exception_ptr readerFailure" OR
+       _installed_http2_stream_session MATCHES
+           "asio::detached")
+        message(FATAL_ERROR
+            "installed HTTP/2 session lost terminal propagation or structured task join")
+    endif()
     if(NOT _installed_response_compression MATCHES
            "void[ \t\r\n]+applyResponseCompression" OR
        NOT _installed_buffered_response_preparation MATCHES
@@ -3499,6 +3562,8 @@ if(_built_components_csv MATCHES "(^|,)web(,|$)")
         "${_install_prefix}/include/ruvia/web/detail/http/ContextServices.h")
     set(_installed_context_header_path
         "${_install_prefix}/include/ruvia/web/Context.h")
+    set(_installed_web_worker_path
+        "${_install_prefix}/include/ruvia/web/WebWorker.h")
     set(_installed_validation_target_path
         "${_install_prefix}/include/ruvia/web/ValidationTypes.h")
     set(_installed_context_inline_path
@@ -3519,6 +3584,7 @@ if(_built_components_csv MATCHES "(^|,)web(,|$)")
             "${_installed_context_capabilities_path}"
             "${_installed_context_services_path}"
             "${_installed_context_header_path}"
+            "${_installed_web_worker_path}"
             "${_installed_validation_target_path}"
             "${_installed_context_inline_path}"
             "${_installed_context_model_path}"
@@ -3543,6 +3609,17 @@ if(_built_components_csv MATCHES "(^|,)web(,|$)")
     endforeach()
     file(READ "${_installed_context_capabilities_path}"
         _installed_context_capabilities)
+    file(READ "${_installed_web_worker_path}"
+        _installed_web_worker)
+    if(NOT _installed_web_worker MATCHES
+           "const WorkerHandle& worker[(][)] const & noexcept" OR
+       NOT _installed_web_worker MATCHES
+           "shared_ptr<detail::WebWorkerDispatch> dispatch_" OR
+       _installed_web_worker MATCHES
+           "weak_ptr<detail::WebWorkerDispatch>|WorkerHandle worker_[ \\t\\r\\n]*;[ \\t\\r\\n]*std::(shared|weak)_ptr<detail::WebWorkerDispatch>")
+        message(FATAL_ERROR
+            "installed WebWorker restored per-operation weak locking or duplicate worker ownership")
+    endif()
     file(READ "${_installed_context_services_path}"
         _installed_context_services)
     file(READ "${_installed_context_header_path}"
@@ -3593,8 +3670,16 @@ if(_built_components_csv MATCHES "(^|,)web(,|$)")
            "class ContextRequestStorage final" OR
        NOT _installed_context_request_storage MATCHES
            "std::optional<RequestQueryCache>[ \t]+query" OR
+       NOT _installed_context_request_storage MATCHES
+           "std::optional<RequestFieldCache>[ \t]+routeParams" OR
+       NOT _installed_context_request_storage MATCHES
+           "bool[ \t]+queryInvalid" OR
+       NOT _installed_context_request_storage MATCHES
+           "bool[ \t]+routeParamsInvalid" OR
        NOT _installed_request_query_cache MATCHES
            "vector<std::pmr::string>[ \t]+storage_" OR
+       _installed_context_request_storage MATCHES
+           "std::pmr::(list|forward_list|map|unordered_map)|appendDecodedValue|decodedValues_" OR
        _installed_request_memory MATCHES
            "CleanupNode|cleanupHead_|void[ \t]*[(][*]destroy|T&[ \t]+emplace[(]" OR
        _installed_context_header MATCHES
@@ -4219,6 +4304,14 @@ if(_installed_response_model MATCHES
        "detail::HttpResponseBody body_" OR
    NOT _installed_response_file_body MATCHES
        "class ResponseFileBody final" OR
+   NOT _installed_response_file_body MATCHES
+       "class ResponseFileIdentity final" OR
+   NOT _installed_response_file_body MATCHES
+       "array<std::uint64_t, 4>" OR
+   NOT _installed_response_file_body MATCHES
+       "requiresValidation[(][)] const noexcept" OR
+   NOT _installed_response_file_body MATCHES
+       "ResponseFileIdentity identity_" OR
    NOT _installed_response_file_body MATCHES
        "friend class HttpResponseBody" OR
    _installed_response_body_access MATCHES
@@ -4967,6 +5060,77 @@ ruvia_verify_package_consumer(
     "${_built_components_csv}" "${_built_components_csv}" "" FALSE)
 
 if("web" IN_LIST _built_components)
+    set(_database_public_header
+        "${_install_prefix}/include/ruvia/web/db/Db.h")
+    set(_database_detail_header
+        "${_install_prefix}/include/ruvia/web/detail/db/DbInternal.h")
+    set(_mariadb_detail_header
+        "${_install_prefix}/include/ruvia/web/detail/db/DbMysqlRuntime.h")
+    set(_postgresql_detail_header
+        "${_install_prefix}/include/ruvia/web/detail/db/DbPostgreSql.h")
+    set(_redis_public_header
+        "${_install_prefix}/include/ruvia/web/redis/Redis.h")
+    set(_redis_detail_header
+        "${_install_prefix}/include/ruvia/web/detail/redis/RedisInternal.h")
+    set(_jwt_public_header
+        "${_install_prefix}/include/ruvia/web/auth/Jwt.h")
+    set(_jwt_detail_header
+        "${_install_prefix}/include/ruvia/web/detail/auth/JwtInternal.h")
+
+    if(_mariadb_enabled OR _postgresql_enabled)
+        if(NOT EXISTS "${_database_public_header}" OR
+           NOT EXISTS "${_database_detail_header}")
+            message(FATAL_ERROR
+                "installed Web package omitted enabled database contracts")
+        endif()
+    elseif(EXISTS "${_database_public_header}" OR
+           EXISTS "${_database_detail_header}")
+        message(FATAL_ERROR
+            "installed Web package leaked feature-off database contracts")
+    endif()
+
+    if(_mariadb_enabled)
+        if(NOT EXISTS "${_mariadb_detail_header}")
+            message(FATAL_ERROR
+                "installed Web package omitted enabled MariaDB contracts")
+        endif()
+    elseif(EXISTS "${_mariadb_detail_header}")
+        message(FATAL_ERROR
+            "installed Web package leaked feature-off MariaDB contracts")
+    endif()
+
+    if(_postgresql_enabled)
+        if(NOT EXISTS "${_postgresql_detail_header}")
+            message(FATAL_ERROR
+                "installed Web package omitted enabled PostgreSQL contracts")
+        endif()
+    elseif(EXISTS "${_postgresql_detail_header}")
+        message(FATAL_ERROR
+            "installed Web package leaked feature-off PostgreSQL contracts")
+    endif()
+
+    if(_redis_enabled)
+        if(NOT EXISTS "${_redis_public_header}" OR
+           NOT EXISTS "${_redis_detail_header}")
+            message(FATAL_ERROR
+                "installed Web package omitted enabled Redis contracts")
+        endif()
+    elseif(EXISTS "${_redis_public_header}" OR EXISTS "${_redis_detail_header}")
+        message(FATAL_ERROR
+            "installed Web package leaked feature-off Redis contracts")
+    endif()
+
+    if(_jwt_enabled)
+        if(NOT EXISTS "${_jwt_public_header}" OR
+           NOT EXISTS "${_jwt_detail_header}")
+            message(FATAL_ERROR
+                "installed Web package omitted enabled JWT contracts")
+        endif()
+    elseif(EXISTS "${_jwt_public_header}" OR EXISTS "${_jwt_detail_header}")
+        message(FATAL_ERROR
+            "installed Web package leaked feature-off JWT contracts")
+    endif()
+
     set(_send_window_header
         "${_install_prefix}/include/ruvia/web/detail/http2/Http2SansIoSendWindow.h")
     set(_ws_transport_read_header
@@ -4975,6 +5139,8 @@ if("web" IN_LIST _built_components)
         "${_install_prefix}/include/ruvia/web/detail/app/AppLifecycle.h")
     set(_http2_session_lifecycle_header
         "${_install_prefix}/include/ruvia/web/detail/server/Http2SansIoSessionLifecycle.h")
+    set(_http2_termination_header
+        "${_install_prefix}/include/ruvia/web/detail/http2/Http2SansIoTermination.h")
     if(NOT EXISTS "${_send_window_header}")
         message(FATAL_ERROR
             "installed web package is missing Http2SansIoSendWindow.h")
@@ -5002,6 +5168,25 @@ if("web" IN_LIST _built_components)
     if(NOT EXISTS "${_http2_session_lifecycle_header}")
         message(FATAL_ERROR
             "installed web package is missing Http2SansIoSessionLifecycle.h")
+    endif()
+    if(NOT EXISTS "${_http2_termination_header}")
+        message(FATAL_ERROR
+            "installed web package is missing Http2SansIoTermination.h")
+    endif()
+    file(READ "${_http2_termination_header}"
+        _http2_termination_content)
+    if(NOT _http2_termination_content MATCHES
+           "class Http2SansIoTermination final" OR
+       NOT _http2_termination_content MATCHES
+           "class Http2SansIoTerminationObserver final" OR
+       NOT _http2_termination_content MATCHES
+           "class Http2SansIoSleepAwaiter final" OR
+       NOT _http2_termination_content MATCHES
+           "WorkerTimerRegistration timer_" OR
+       _http2_termination_content MATCHES
+           "std::shared_ptr|std::mutex|std::atomic")
+        message(FATAL_ERROR
+            "installed HTTP/2 terminal propagation contract is incomplete")
     endif()
     file(READ "${_http2_session_lifecycle_header}"
         _http2_session_lifecycle_content)

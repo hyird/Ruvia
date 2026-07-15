@@ -39,7 +39,8 @@ public:
     WebWorkerContext(WebWorkerContext&&) = delete;
     WebWorkerContext& operator=(WebWorkerContext&&) = delete;
 
-    [[nodiscard]] WorkerHandle worker() const noexcept;
+    [[nodiscard]] const WorkerHandle& worker() const & noexcept;
+    const WorkerHandle& worker() const && = delete;
     [[nodiscard]] std::pmr::memory_resource* resource() const noexcept;
     [[nodiscard]] std::stop_token stopToken() const noexcept;
 
@@ -104,14 +105,14 @@ private:
     friend class detail::WebWorkerDispatch;
 
     WebWorkerHandle(
-        WorkerHandle worker,
-        std::weak_ptr<detail::WebWorkerDispatch> dispatch) noexcept;
+        std::shared_ptr<detail::WebWorkerDispatch> dispatch) noexcept;
 
     [[nodiscard]] PostResult postTask(
         std::move_only_function<Task<void>(WebWorkerContext&)> task) const;
 
-    WorkerHandle worker_;
-    std::weak_ptr<detail::WebWorkerDispatch> dispatch_;
+    // The handle owns a stable terminal endpoint. Server shutdown closes it;
+    // retaining a handle cannot retain the server or its io_context.
+    std::shared_ptr<detail::WebWorkerDispatch> dispatch_;
 };
 
 }  // namespace ruvia

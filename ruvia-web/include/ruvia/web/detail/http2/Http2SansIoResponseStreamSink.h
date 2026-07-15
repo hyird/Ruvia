@@ -76,7 +76,8 @@ public:
 
     [[nodiscard]] bool aborted() const noexcept {
         auto* stream = connection_.stream(streamId_);
-        return stream == nullptr || stream->isAborted();
+        return stream == nullptr || stream->isAborted() ||
+            streamSignal_.terminated();
     }
 
     void bindContext(
@@ -88,6 +89,7 @@ public:
     void releaseContext() noexcept { state_.releaseContext(); }
 
     Task<void> write(std::string_view chunk) {
+        throwIfTerminated();
         if (chunk.empty()) {
             co_return;
         }
@@ -115,7 +117,9 @@ public:
             const auto waitResult = co_await awaitHttp2SendWindow(
                 connection_, streamId_, &streamSignal_);
             if (waitResult.aborted() != nullptr) {
-                throw std::system_error(std::make_error_code(std::errc::connection_reset));
+                throw std::system_error(streamSignal_.terminated()
+                    ? streamSignal_.terminalError()
+                    : std::make_error_code(std::errc::connection_reset));
             }
             if (result == Http2DataSubmitStatus::kQueued) {
                 co_return;  // the core already owned and drained this input
@@ -125,10 +129,12 @@ public:
     }
 
     Task<void> sleep(std::chrono::milliseconds duration) {
-        co_await sleepFor(*worker_, duration);
+        co_await Http2SansIoSleepAwaiter(
+            *worker_, streamSignal_.termination(), duration);
     }
 
     Task<void> end(std::span<const HttpHeaderView> trailers) {
+        throwIfTerminated();
         if (state_.ended()) {
             if (!trailers.empty()) {
                 throw std::logic_error("response stream is already ended");
@@ -170,8 +176,9 @@ public:
             const auto waitResult = co_await awaitHttp2SendWindow(
                 connection_, streamId_, &streamSignal_);
             if (waitResult.aborted() != nullptr) {
-                throw std::system_error(
-                    std::make_error_code(std::errc::connection_reset));
+                throw std::system_error(streamSignal_.terminated()
+                    ? streamSignal_.terminalError()
+                    : std::make_error_code(std::errc::connection_reset));
             }
         }
         state_.markEnded();
@@ -179,6 +186,7 @@ public:
 
 private:
     Task<void> commit(ResponseTrailerIntent trailerIntent) {
+        throwIfTerminated();
         if (state_.committed()) {
             if (trailerIntent == ResponseTrailerIntent::kPresent) {
                 state_.ensureTrailersAllowed(
@@ -208,6 +216,12 @@ private:
     // the peer happens to send something (SSE over a quiet connection stalls).
     void wakeWriter() noexcept {
         writeSignal_.notify();
+    }
+
+    void throwIfTerminated() const {
+        if (streamSignal_.terminated()) {
+            throw std::system_error(streamSignal_.terminalError());
+        }
     }
 
     Http2Connection& connection_;

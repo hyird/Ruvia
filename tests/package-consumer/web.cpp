@@ -432,6 +432,9 @@ static_assert(ruvia::kDefaultRateLimitSlotsPerWorker == 8192);
 static_assert(!HasWebWorkerCorePostEscape<ruvia::WebWorkerHandle>);
 static_assert(!HasNativeEventLoopAccess<ruvia::WebWorkerHandle>);
 static_assert(!HasNativeEventLoopAccess<ruvia::WebWorkerContext>);
+static_assert(std::same_as<
+              decltype(std::declval<const ruvia::WebWorkerContext&>().worker()),
+              const ruvia::WorkerHandle&>);
 
 template <typename Runtime, typename Executor>
 concept HasDirectHttp2BeginDispatch = requires(
@@ -1833,8 +1836,9 @@ int main() {
     asio::io_context io;
     auto attachment = ruvia::attachEventLoop(io);
     const auto workerHandle = attachment.loop().handle();
+    ruvia::detail::Http2SansIoTermination termination;
     ruvia::detail::Http2SansIoStreamRuntimeTable runtimes(
-        std::pmr::get_default_resource());
+        std::pmr::get_default_resource(), termination);
     ruvia::detail::Http2StreamState acceptedStream(
         1,
         std::pmr::get_default_resource());
@@ -1849,11 +1853,12 @@ int main() {
         return 6;
     }
     asio::post(io, [&] {
-        signal->end();
+        (void)termination.terminate(
+            std::make_error_code(std::errc::connection_aborted));
         attachment.stop();
     });
     io.run();
-    if (!signal->ended() || !runtimes.remove(1) ||
+    if (!signal->terminated() || !runtimes.remove(1) ||
         runtimes.dispatchedCount() != 0) {
         return 7;
     }

@@ -26,6 +26,10 @@ namespace {
 ruvia::Task<void> waitForSignal(
     ruvia::detail::WorkerSignal& signal,
     bool& resumed) {
+    {
+        auto discardedColdWait = signal.wait();
+        static_cast<void>(discardedColdWait);
+    }
     co_await signal.wait();
     resumed = true;
 }

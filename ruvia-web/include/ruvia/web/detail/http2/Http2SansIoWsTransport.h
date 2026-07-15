@@ -56,6 +56,10 @@ public:
 
     [[nodiscard]] Task<WsTransportReadResult> readMore(std::pmr::string& buffer) {
         for (;;) {
+            if (signal_.terminated()) {
+                co_return WsTransportReadResult::makeFailure(
+                    signal_.terminalError());
+            }
             auto* stream = connection_.stream(streamId_);
             if (stream == nullptr || stream->isAborted()) {
                 co_return WsTransportReadResult::makeFailure(
@@ -69,9 +73,12 @@ public:
             if (!bodyQueue_.empty()) {
                 continue;
             }
-            if (stream->remoteReceive().endStream() != nullptr ||
-                signal_.ended()) {
+            if (stream->remoteReceive().endStream() != nullptr) {
                 co_return WsTransportReadResult::makeEnd();
+            }
+            if (signal_.terminated()) {
+                co_return WsTransportReadResult::makeFailure(
+                    signal_.terminalError());
             }
             co_await signal_.wait();
         }
@@ -84,6 +91,9 @@ public:
             ? Http2EndStream::kEndStream
             : Http2EndStream::kKeepOpen;
         for (;;) {
+            if (signal_.terminated()) {
+                co_return signal_.terminalError();
+            }
             const auto result = connection_.submitData(streamId_, bytes, terminal);
             wakeWriter();
             if (result == Http2DataSubmitStatus::kAccepted) {
@@ -108,7 +118,9 @@ public:
             const auto waitResult = co_await awaitHttp2SendWindow(
                 connection_, streamId_, &signal_);
             if (waitResult.aborted() != nullptr) {
-                co_return std::make_error_code(std::errc::connection_reset);
+                co_return signal_.terminated()
+                    ? signal_.terminalError()
+                    : std::make_error_code(std::errc::connection_reset);
             }
             if (result == Http2DataSubmitStatus::kQueued) {
                 co_return std::error_code{};
@@ -118,7 +130,7 @@ public:
 
     void abort() noexcept {
         (void)connection_.submitReset(streamId_, Http2ErrorCode::kCancel);
-        signal_.end();
+        signal_.wake();
         wakeWriter();
     }
 
@@ -162,9 +174,13 @@ public:
 
     [[nodiscard]] Task<std::optional<std::string_view>> read() {
         for (;;) {
+            if (signal_.terminated()) {
+                throw std::system_error(signal_.terminalError());
+            }
             auto* stream = connection_.stream(streamId_);
             if (stream == nullptr || stream->isAborted()) {
-                co_return std::nullopt;
+                throw std::system_error(
+                    std::make_error_code(std::errc::connection_reset));
             }
             if (const auto chunk = bodyQueue_.pop(); !chunk.empty()) {
                 if (bodyQueue_.empty()) {
@@ -176,9 +192,11 @@ public:
             if (!bodyQueue_.empty()) {
                 continue;
             }
-            if (stream->remoteReceive().endStream() != nullptr ||
-                signal_.ended()) {
+            if (stream->remoteReceive().endStream() != nullptr) {
                 co_return std::nullopt;
+            }
+            if (signal_.terminated()) {
+                throw std::system_error(signal_.terminalError());
             }
             co_await signal_.wait();
         }

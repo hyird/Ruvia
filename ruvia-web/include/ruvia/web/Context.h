@@ -253,6 +253,7 @@ private:
     [[nodiscard]] BodyReader& requestBodyReader() const;
     [[nodiscard]] MultipartReader requestMultipartReader() const;
     [[nodiscard]] std::optional<std::string_view> routeParam(std::string_view name) const;
+    void ensureRouteParams() const;
     [[nodiscard]] bool requestAccepts(std::string_view mediaType) const noexcept;
     void ensureRequestQuery() const;
     [[nodiscard]] std::optional<std::string_view> requestQuery(std::string_view name) const;

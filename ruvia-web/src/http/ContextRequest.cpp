@@ -121,7 +121,7 @@ void appendLowerAscii(std::pmr::string& output, std::string_view input) {
     }
 }
 
-void assignUrlDecodedOrCopy(
+[[nodiscard]] bool assignUrlDecodedOrCopy(
     std::pmr::string& output,
     std::string_view input,
     detail::UrlDecodeMode mode) {
@@ -132,10 +132,12 @@ void assignUrlDecodedOrCopy(
             output.get_allocator().resource());
         if (decoded.has_value()) {
             output = std::move(*decoded);
-            return;
+            return true;
         }
+        return false;
     }
     output.assign(input.data(), input.size());
+    return true;
 }
 
 [[nodiscard]] bool fieldNameIsArray(std::string_view name) noexcept {
@@ -194,7 +196,10 @@ void assignDotPath(
     for (std::size_t i = 0; i < count; ++i) {
         order.push_back(i);
     }
-    std::stable_sort(order.begin(), order.end(), [&storage](std::size_t left, std::size_t right) noexcept {
+    // The original position is an explicit tie-breaker, so an in-place sort has
+    // the same deterministic order as stable_sort without its non-PMR scratch
+    // allocation on the request path.
+    std::sort(order.begin(), order.end(), [&storage](std::size_t left, std::size_t right) noexcept {
         const auto leftName = pairNameAt(storage, left);
         const auto rightName = pairNameAt(storage, right);
         if (leftName == rightName) {
@@ -213,7 +218,7 @@ void assignDotPath(
     for (std::size_t i = 0; i < fields.size(); ++i) {
         order.push_back(i);
     }
-    std::stable_sort(order.begin(), order.end(), [&fields](std::size_t left, std::size_t right) noexcept {
+    std::sort(order.begin(), order.end(), [&fields](std::size_t left, std::size_t right) noexcept {
         const auto leftName = fields[left].name();
         const auto rightName = fields[right].name();
         if (leftName == rightName) {
@@ -435,22 +440,37 @@ void Context::ensureRequestQuery() const {
     if (cache) {
         return;
     }
+    if (requestStorage_->queryInvalid) {
+        detail::throwInvalidQuery();
+    }
+    if (!detail::validateUrlEncoding(request_.queryString())) {
+        requestStorage_->queryInvalid = true;
+        detail::throwInvalidQuery();
+    }
 
     const auto pairCount = delimitedFieldCount(request_.queryString(), '&');
     std::pmr::vector<std::pmr::string> storage(resource());
     storage.reserve(boundedFieldReserve(pairCount * 2));
-    (void)detail::visitUrlEncodedPairs(
+    bool valid = true;
+    const bool completed = detail::visitUrlEncodedPairs(
         request_.queryString(),
-        [this, &storage](std::string_view key, std::string_view value) {
+        [this, &storage, &valid](std::string_view key, std::string_view value) {
             std::pmr::string decodedName(resource());
             std::pmr::string decodedValue(resource());
-            assignUrlDecodedOrCopy(decodedName, key, detail::UrlDecodeMode::kForm);
-            assignUrlDecodedOrCopy(decodedValue, value, detail::UrlDecodeMode::kForm);
+            if (!assignUrlDecodedOrCopy(decodedName, key, detail::UrlDecodeMode::kForm) ||
+                !assignUrlDecodedOrCopy(decodedValue, value, detail::UrlDecodeMode::kForm)) {
+                valid = false;
+                return false;
+            }
 
             storage.push_back(std::move(decodedName));
             storage.push_back(std::move(decodedValue));
             return true;
         });
+    if (!completed || !valid) {
+        requestStorage_->queryInvalid = true;
+        detail::throwInvalidQuery();
+    }
 
     struct QueryBuild final {
         std::size_t firstIndex;
@@ -470,7 +490,7 @@ void Context::ensureRequestQuery() const {
         } while (offset < order.size() && pairNameAt(storage, order[offset]) == name);
         builds.push_back(QueryBuild{.firstIndex = firstIndex, .begin = begin, .end = offset});
     }
-    std::stable_sort(builds.begin(), builds.end(), [](const QueryBuild& left, const QueryBuild& right) noexcept {
+    std::sort(builds.begin(), builds.end(), [](const QueryBuild& left, const QueryBuild& right) noexcept {
         return left.firstIndex < right.firstIndex;
     });
 
@@ -513,24 +533,8 @@ const RequestNameValueList& Context::requestQuery() const {
 }
 
 std::optional<std::string_view> Context::requestQuery(std::string_view name) const {
-    std::optional<std::string_view> result;
-    (void)detail::visitUrlEncodedPairs(
-        request_.queryString(),
-        [this, name, &result](std::string_view encodedName, std::string_view encodedValue) {
-            if (!detail::urlComponentEquals(encodedName, name, detail::UrlDecodeMode::kForm)) {
-                return true;
-            }
-            if (!detail::hasUrlEncoding(encodedValue, detail::UrlDecodeMode::kForm)) {
-                result = encodedValue;
-                return true;
-            }
-
-            auto& decoded = requestStorage().appendDecodedValue();
-            assignUrlDecodedOrCopy(decoded, encodedValue, detail::UrlDecodeMode::kForm);
-            result = storedStringView(decoded);
-            return true;
-        });
-    return result;
+    ensureRequestQuery();
+    return requestStorage_->query->fields().get(name);
 }
 
 const detail::RequestQueryValues& Context::requestQueries() const {
@@ -582,46 +586,61 @@ const RequestNameValueList& Context::requestCookies() const {
     return *cache;
 }
 
-const RequestNameValueList& Context::routeParams() const {
+void Context::ensureRouteParams() const {
     auto& cache = requestStorage().routeParams;
-    if (!cache) {
-        std::pmr::vector<std::pmr::string> storage(resource());
-        auto params = detail::RequestNameValueListAccess::make(resource());
-        storage.reserve(paramCount_ * 2);
-        detail::RequestNameValueListAccess::reserve(params, paramCount_);
-        for (std::size_t i = 0; i < paramCount_; ++i) {
-            std::pmr::string name(paramNames_[i].data(), paramNames_[i].size(), resource());
-            std::pmr::string value(resource());
-            assignUrlDecodedOrCopy(value, paramValues_[i], detail::UrlDecodeMode::kPercent);
-            storage.push_back(std::move(name));
-            storage.push_back(std::move(value));
-            const auto nameIndex = storage.size() - 2;
-            detail::RequestNameValueListAccess::pushBack(
-                params,
-                detail::RequestNameValueViewAccess::make(
-                    std::string_view(storage[nameIndex].data(), storage[nameIndex].size()),
-                    std::string_view(storage[nameIndex + 1].data(), storage[nameIndex + 1].size())));
-        }
-        cache.emplace(std::move(storage), std::move(params));
+    if (cache) {
+        return;
     }
-    return cache->fields;
+    if (requestStorage_->routeParamsInvalid) {
+        detail::throwInvalidParam();
+    }
+    std::size_t encodedValueCount = 0;
+    for (std::size_t i = 0; i < paramCount_; ++i) {
+        if (!detail::validateUrlEncoding(paramValues_[i])) {
+            requestStorage_->routeParamsInvalid = true;
+            detail::throwInvalidParam();
+        }
+        if (detail::hasUrlEncoding(paramValues_[i], detail::UrlDecodeMode::kPercent)) {
+            ++encodedValueCount;
+        }
+    }
+
+    // Route names and unencoded captures already borrow stable route/request
+    // storage. Own only decoded values, keeping the cache compact while making
+    // every returned view stable for the whole Context lifetime.
+    std::pmr::vector<std::pmr::string> storage(resource());
+    auto params = detail::RequestNameValueListAccess::make(resource());
+    storage.reserve(encodedValueCount);
+    detail::RequestNameValueListAccess::reserve(params, paramCount_);
+    for (std::size_t i = 0; i < paramCount_; ++i) {
+        auto value = paramValues_[i];
+        if (detail::hasUrlEncoding(value, detail::UrlDecodeMode::kPercent)) {
+            auto decoded = detail::decodeUrlComponent(
+                value,
+                detail::UrlDecodeMode::kPercent,
+                resource());
+            if (!decoded) {
+                requestStorage_->routeParamsInvalid = true;
+                detail::throwInvalidParam();
+            }
+            auto& owned = storage.emplace_back(std::move(*decoded));
+            value = storedStringView(owned);
+        }
+        detail::RequestNameValueListAccess::pushBack(
+            params,
+            detail::RequestNameValueViewAccess::make(paramNames_[i], value));
+    }
+    cache.emplace(std::move(storage), std::move(params));
+}
+
+const RequestNameValueList& Context::routeParams() const {
+    ensureRouteParams();
+    return requestStorage_->routeParams->fields;
 }
 
 std::optional<std::string_view> Context::routeParam(std::string_view name) const {
-    for (std::size_t i = paramCount_; i > 0; --i) {
-        const auto index = i - 1;
-        if (paramNames_[index] != name) {
-            continue;
-        }
-        const auto value = paramValues_[index];
-        if (!detail::hasUrlEncoding(value, detail::UrlDecodeMode::kPercent)) {
-            return value;
-        }
-        auto& decoded = requestStorage().appendDecodedValue();
-        assignUrlDecodedOrCopy(decoded, value, detail::UrlDecodeMode::kPercent);
-        return storedStringView(decoded);
-    }
-    return std::nullopt;
+    ensureRouteParams();
+    return requestStorage_->routeParams->fields.get(name);
 }
 
 bool Context::requestAccepts(std::string_view mediaType) const noexcept {

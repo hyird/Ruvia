@@ -31,13 +31,19 @@ public:
     void defer(std::move_only_function<void()> task);
     void deferOrTerminate(std::move_only_function<void()> task) noexcept;
     void registerShutdownListener(const std::shared_ptr<WorkerShutdownListener>& listener);
-    [[nodiscard]] WorkerTimerRegistration scheduleTimer(
+    void scheduleTimer(
+        WorkerTimerRegistration& registration,
         std::chrono::steady_clock::time_point deadline,
         std::move_only_function<void(WorkerTimerOutcome)> completion);
     void requestTimerCancellation(
-        const std::shared_ptr<WorkerTimerState>& state) noexcept;
-    void cancelTimer(const std::shared_ptr<WorkerTimerState>& state) noexcept;
+        std::size_t slot, std::uint64_t generation) noexcept;
+    void cancelTimer(std::size_t slot, std::uint64_t generation) noexcept;
     void stopTimers() noexcept;
+    // Runs the owned/attached io_context with a thread-local worker identity so
+    // worker-affine hot paths do not lock merely to prove their current worker.
+    // External owners that run an attached context directly retain the safe
+    // executor-based fallback in isCurrent().
+    void runContext();
     void close() noexcept;
     // Called by the execution-context owner after all worker work has joined and
     // before the io_context is destroyed. Handles remain safe terminal endpoints.
@@ -56,6 +62,8 @@ private:
     void drain();
     void armTimer();
     void fireTimers();
+    [[nodiscard]] bool hasTimer(
+        std::size_t slot, std::uint64_t generation) const noexcept;
 
     struct Impl;
     std::unique_ptr<Impl> impl_;

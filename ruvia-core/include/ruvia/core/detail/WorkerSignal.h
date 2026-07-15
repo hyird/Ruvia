@@ -24,7 +24,7 @@ public:
     WorkerSignal(WorkerHandle&&) = delete;
 
     ~WorkerSignal() {
-        if (waiters_ != nullptr || scheduledWaiters_ != 0) {
+        if (waiters_ != nullptr || scheduledWaiters_ != 0 || reservedWaits_ != 0) {
             std::terminate();
         }
     }
@@ -34,7 +34,7 @@ public:
 
     [[nodiscard]] Task<void> wait() {
         requireCurrentWorker();
-        co_await Awaiter{*this};
+        return waitReserved(WaitReservation(*this));
     }
 
     void notify() noexcept;
@@ -63,6 +63,33 @@ private:
     void resumeScheduled(
         Awaiter* waiter,
         std::coroutine_handle<> continuation) noexcept;
+
+    class WaitReservation final {
+    public:
+        explicit WaitReservation(WorkerSignal& signal) noexcept : signal_(&signal) {
+            ++signal_->reservedWaits_;
+        }
+        ~WaitReservation() {
+            if (signal_ != nullptr) {
+                --signal_->reservedWaits_;
+            }
+        }
+
+        WaitReservation(const WaitReservation&) = delete;
+        WaitReservation& operator=(const WaitReservation&) = delete;
+        WaitReservation(WaitReservation&& other) noexcept
+            : signal_(std::exchange(other.signal_, nullptr)) {}
+        WaitReservation& operator=(WaitReservation&&) = delete;
+
+        [[nodiscard]] WorkerSignal& signal() const noexcept { return *signal_; }
+
+    private:
+        WorkerSignal* signal_;
+    };
+
+    [[nodiscard]] static Task<void> waitReserved(WaitReservation reservation) {
+        co_await Awaiter{reservation.signal()};
+    }
 
     struct Awaiter final {
         explicit Awaiter(WorkerSignal& owner) noexcept : signal(owner) {}
@@ -105,6 +132,7 @@ private:
     const WorkerHandle* worker_;
     Awaiter* waiters_{nullptr};
     std::size_t scheduledWaiters_{0};
+    std::size_t reservedWaits_{0};
     bool pending_{false};
 };
 

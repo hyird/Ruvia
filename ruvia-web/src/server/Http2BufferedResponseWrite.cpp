@@ -44,6 +44,11 @@ Http2BufferedResponseWriter::writeData(
     // caller ownership and must retry this exact stable view after the older
     // queued input drains.
     for (;;) {
+        auto* runtime = streamRuntimes_->find(streamId);
+        auto* signal = runtime != nullptr ? runtime->signal() : nullptr;
+        if (signal != nullptr && signal->terminated()) {
+            co_return DataWriteResult::kFailed;
+        }
         const auto result = connection_->submitData(
             streamId, chunk, endStream);
         wakeWriter();
@@ -58,8 +63,6 @@ Http2BufferedResponseWriter::writeData(
             result == Http2DataSubmitStatus::kContentLengthIncomplete) {
             co_return DataWriteResult::kFailed;
         }
-        auto* runtime = streamRuntimes_->find(streamId);
-        auto* signal = runtime != nullptr ? runtime->signal() : nullptr;
         const auto waitResult = co_await awaitHttp2SendWindow(
             *connection_, streamId, signal);
         if (waitResult.aborted() != nullptr) {
@@ -80,6 +83,11 @@ Http2BufferedResponseWriter::write(
     if (stream == nullptr || stream->isAborted()) {
         co_return
             Http2BufferedResponseWriteResult::makePeerAbortedBeforeCommit();
+    }
+    auto* runtime = streamRuntimes_->find(streamId);
+    auto* signal = runtime != nullptr ? runtime->signal() : nullptr;
+    if (signal != nullptr && signal->terminated()) {
+        co_return Http2BufferedResponseWriteResult::makeFailedBeforeCommit();
     }
 
     const auto headResult = connection_->submitResponseHead(

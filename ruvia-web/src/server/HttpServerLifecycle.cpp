@@ -253,6 +253,7 @@ HttpServer::~HttpServer() {
         join();
     } catch (...) {
     }
+    webWorkerDispatch_->retire();
     // Public worker handles may outlive this server. Leave them a detached
     // terminal endpoint before ioContext_ and its Asio objects are destroyed.
     workerDispatcher_->detachContext();
@@ -447,8 +448,8 @@ void HttpServer::stopOnContext(bool honorGracePeriod) noexcept {
     if (honorGracePeriod && options_.shutdownGracePeriod.count() > 0 &&
         (activeConnectionCount_ != 0 || webWorkerDispatch_->outstanding() != 0)) {
         try {
-            drainTimer_ = WorkerHandleAccess::scheduleTimer(
-                workerHandle_,
+            WorkerHandleAccess::scheduleTimer(
+                workerHandle_, drainTimer_,
                 std::chrono::steady_clock::now() + options_.shutdownGracePeriod,
                 [this](WorkerTimerOutcome outcome) {
                     if (workerState_ == HttpServerWorkerState::kDraining &&
@@ -504,7 +505,7 @@ void HttpServer::failWorker(std::exception_ptr failure) noexcept {
 
 void HttpServer::runIoContext() noexcept {
     try {
-        ioContext_.run();
+        workerDispatcher_->runContext();
     } catch (...) {
         const auto failure = std::current_exception();
         (void)workerCompletion_.markStartupFailed(failure);

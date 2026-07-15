@@ -92,9 +92,121 @@ RUVIA_TEST(static_file_response_owns_path_after_handler_local_root_is_destroyed)
     RUVIA_CHECK(file.has_value());
     if (file.has_value()) {
         auto input = ruvia::detail::openResponseFileInput(*file);
-        std::string body;
-        std::getline(input, body);
+        std::string body(std::string("owned-static-path").size(), '\0');
+        input.read(body.data(), static_cast<std::streamsize>(body.size()));
+        RUVIA_CHECK_EQ(
+            input.gcount(), static_cast<std::streamsize>(body.size()));
         RUVIA_CHECK_EQ(body, std::string("owned-static-path"));
+    }
+
+    fs::remove_all(dir);
+}
+
+RUVIA_TEST(static_file_replacement_cannot_reuse_indexed_metadata) {
+    namespace fs = std::filesystem;
+    using ruvia::detail::ContextAccess;
+    using ruvia::detail::HttpRequestAccess;
+
+    const auto dir = fs::temp_directory_path() /
+        "ruvia_static_replacement_identity";
+    const auto servedPath = dir / "payload.txt";
+    const auto replacementPath = dir / "replacement.txt";
+    fs::remove_all(dir);
+    fs::create_directories(dir);
+    {
+        std::ofstream output(servedPath, std::ios::binary);
+        output << "old-representation";
+    }
+
+    ruvia::StaticRootOptions options;
+    options.fileTypes = ruvia::StaticFileTypePolicy::all();
+    ruvia::StaticRoot root(dir, std::move(options));
+
+    // Use the same byte length so a size-only guard would accept and transmit
+    // the replacement under the old ETag/Last-Modified framing.
+    {
+        std::ofstream output(replacementPath, std::ios::binary);
+        output << "new-representation";
+    }
+    static_assert(
+        std::string_view("old-representation").size() ==
+        std::string_view("new-representation").size());
+#if defined(_WIN32)
+    fs::remove(servedPath);
+#endif
+    fs::rename(replacementPath, servedPath);
+
+    ruvia::WorkerMemory worker;
+    ruvia::RequestMemory memory(worker);
+    ruvia::HttpRequest request = HttpRequestAccess::make();
+    HttpRequestAccess::reset(request);
+    HttpRequestAccess::setMethod(request, "GET");
+    HttpRequestAccess::setResource(request, memory.resource());
+    auto context = ContextAccess::make(memory, request);
+    auto response = context.staticFile(root, "payload.txt", "text/plain");
+    const std::string oldEtag(response.header("ETag").value_or(""));
+    const auto file = ruvia::detail::responseBody(response).file();
+    RUVIA_CHECK(file.has_value());
+    if (file.has_value()) {
+        RUVIA_CHECK(file->identity().requiresValidation());
+        auto input = ruvia::detail::openResponseFileInput(*file);
+        RUVIA_CHECK(!static_cast<bool>(input));
+        char byte = '\0';
+        input.read(&byte, 1);
+        RUVIA_CHECK_EQ(input.gcount(), std::streamsize{0});
+    }
+
+    ruvia::StaticRootOptions refreshedOptions;
+    refreshedOptions.fileTypes = ruvia::StaticFileTypePolicy::all();
+    ruvia::StaticRoot refreshedRoot(dir, std::move(refreshedOptions));
+    auto refreshed = context.staticFile(
+        refreshedRoot, "payload.txt", "text/plain");
+    RUVIA_CHECK(!oldEtag.empty());
+    RUVIA_CHECK(refreshed.header("ETag").value_or("") != oldEtag);
+
+    fs::remove_all(dir);
+}
+
+RUVIA_TEST(context_file_replacement_cannot_reuse_response_metadata) {
+    namespace fs = std::filesystem;
+    using ruvia::detail::ContextAccess;
+    using ruvia::detail::HttpRequestAccess;
+
+    const auto dir = fs::temp_directory_path() /
+        "ruvia_context_file_replacement_identity";
+    const auto servedPath = dir / "payload.txt";
+    const auto replacementPath = dir / "replacement.txt";
+    fs::remove_all(dir);
+    fs::create_directories(dir);
+    {
+        std::ofstream output(servedPath, std::ios::binary);
+        output << "old-context-body";
+    }
+
+    ruvia::WorkerMemory worker;
+    ruvia::RequestMemory memory(worker);
+    ruvia::HttpRequest request = HttpRequestAccess::make();
+    HttpRequestAccess::reset(request);
+    HttpRequestAccess::setMethod(request, "GET");
+    HttpRequestAccess::setResource(request, memory.resource());
+    auto context = ContextAccess::make(memory, request);
+    auto response = context.file(servedPath, "text/plain");
+
+    {
+        std::ofstream output(replacementPath, std::ios::binary);
+        output << "new-context-body";
+    }
+#if defined(_WIN32)
+    fs::remove(servedPath);
+#endif
+    fs::rename(replacementPath, servedPath);
+
+    const auto file = ruvia::detail::responseBody(response).file();
+    RUVIA_CHECK(file.has_value());
+    if (file.has_value()) {
+        RUVIA_CHECK(file->identity().requiresValidation());
+        auto input = ruvia::detail::openResponseFileInput(*file);
+        RUVIA_CHECK(!static_cast<bool>(input));
     }
 
     fs::remove_all(dir);

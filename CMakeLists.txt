@@ -279,6 +279,7 @@ function(ruvia_install_public_header_tree component relative_dir)
         FILES_MATCHING
             PATTERN "*.h"
             PATTERN "*.inl"
+            ${ARGN}
     )
 endfunction()
 

@@ -14,9 +14,15 @@
 #include <memory>
 #include <stdexcept>
 #include <thread>
+#include <type_traits>
 #include <utility>
 
 namespace {
+
+static_assert(!std::is_move_constructible_v<
+              ruvia::detail::WorkerTimerRegistration>);
+static_assert(!std::is_move_assignable_v<
+              ruvia::detail::WorkerTimerRegistration>);
 
 class ThrowingMove final {
 public:
@@ -93,8 +99,8 @@ bool detachedTimerCancellationRaceWorks() {
         std::promise<void> scheduled;
         auto ready = scheduled.get_future();
         asio::post(ioContext, [&] {
-            registration = ruvia::detail::WorkerHandleAccess::scheduleTimer(
-                worker,
+            ruvia::detail::WorkerHandleAccess::scheduleTimer(
+                worker, registration,
                 std::chrono::steady_clock::now() + std::chrono::hours(1),
                 [](ruvia::detail::WorkerTimerOutcome) {});
             scheduled.set_value();
@@ -131,20 +137,22 @@ ruvia::Task<void> exercise(
 
     bool expired = false;
     bool cancelled = false;
-    auto expiredTimer = ruvia::detail::WorkerHandleAccess::scheduleTimer(
-        worker,
+    ruvia::detail::WorkerTimerRegistration expiredTimer;
+    ruvia::detail::WorkerHandleAccess::scheduleTimer(
+        worker, expiredTimer,
         std::chrono::steady_clock::now(),
         [&expired](ruvia::detail::WorkerTimerOutcome outcome) {
             expired = outcome == ruvia::detail::WorkerTimerOutcome::kExpired;
         });
-    auto cancelledTimer = ruvia::detail::WorkerHandleAccess::scheduleTimer(
-        worker,
+    ruvia::detail::WorkerTimerRegistration cancelledTimer;
+    ruvia::detail::WorkerHandleAccess::scheduleTimer(
+        worker, cancelledTimer,
         std::chrono::steady_clock::now() + std::chrono::hours(1),
         [&cancelled](ruvia::detail::WorkerTimerOutcome outcome) {
             cancelled = outcome ==
                 ruvia::detail::WorkerTimerOutcome::kCancelled;
         });
-    if (!expiredTimer.valid() || !cancelledTimer.valid()) {
+    if (!expiredTimer.registered() || !cancelledTimer.registered()) {
         co_return;
     }
     cancelledTimer.cancel();
@@ -158,6 +166,56 @@ ruvia::Task<void> exercise(
     success = expired && cancelled && cancelledSleepResumed;
 }
 
+ruvia::Task<void> exerciseSlotReuse(
+    ruvia::WorkerHandle worker, bool& success) {
+    constexpr std::size_t kTimerCount = 256;
+    auto registrations = std::make_unique<
+        ruvia::detail::WorkerTimerRegistration[]>(kTimerCount);
+    std::size_t cancelled = 0;
+    std::size_t expired = 0;
+
+    for (std::size_t index = 0; index < kTimerCount; ++index) {
+        ruvia::detail::WorkerHandleAccess::scheduleTimer(
+            worker, registrations[index],
+            std::chrono::steady_clock::now() + std::chrono::hours(1),
+            [&cancelled](ruvia::detail::WorkerTimerOutcome outcome) {
+                if (outcome == ruvia::detail::WorkerTimerOutcome::kCancelled) {
+                    ++cancelled;
+                }
+            });
+    }
+
+    bool rejectedActiveReuse = false;
+    try {
+        ruvia::detail::WorkerHandleAccess::scheduleTimer(
+            worker, registrations[0],
+            std::chrono::steady_clock::now(),
+            [](ruvia::detail::WorkerTimerOutcome) {});
+    } catch (const std::logic_error&) {
+        rejectedActiveReuse = true;
+    }
+
+    for (std::size_t index = 0; index < kTimerCount; ++index) {
+        registrations[index].cancel();
+    }
+    // Reuse every slot before the stale heap entries are popped. Generation
+    // validation must prevent the old entries from cancelling or expiring the
+    // replacements (ABA), even when cancellation compaction also runs.
+    for (std::size_t index = 0; index < kTimerCount; ++index) {
+        ruvia::detail::WorkerHandleAccess::scheduleTimer(
+            worker, registrations[index],
+            std::chrono::steady_clock::now(),
+            [&expired](ruvia::detail::WorkerTimerOutcome outcome) {
+                if (outcome == ruvia::detail::WorkerTimerOutcome::kExpired) {
+                    ++expired;
+                }
+            });
+    }
+    co_await ruvia::sleepFor(worker, std::chrono::milliseconds(1));
+    success = rejectedActiveReuse && cancelled == kTimerCount &&
+        expired == kTimerCount;
+}
+
 }
 
 int main() {
@@ -169,10 +227,16 @@ int main() {
     const auto dispatcher = std::make_shared<ruvia::detail::WorkerDispatcher>(ioContext, 8);
     const auto worker = ruvia::detail::WorkerHandleAccess::make(dispatcher);
     bool success = false;
+    bool slotReuseSuccess = false;
     asio::co_spawn(ioContext,
                    ruvia::detail::taskAsAwaitable(exercise(dispatcher, worker, success)),
                    asio::detached);
+    asio::co_spawn(
+        ioContext,
+        ruvia::detail::taskAsAwaitable(
+            exerciseSlotReuse(worker, slotReuseSuccess)),
+        asio::detached);
     ioContext.run();
     dispatcher->close();
-    return success ? 0 : 1;
+    return success && slotReuseSuccess ? 0 : 1;
 }

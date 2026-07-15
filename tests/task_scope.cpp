@@ -39,6 +39,10 @@ ruvia::Task<void> noOp() {
 ruvia::Task<void> exercise(ruvia::WorkerHandle worker, bool& success) {
     {
         ruvia::TaskScope emptyScope(worker);
+        {
+            auto discardedColdJoin = emptyScope.join();
+            static_cast<void>(discardedColdJoin);
+        }
         co_await emptyScope.join();
         bool secondJoinRejected = false;
         try {

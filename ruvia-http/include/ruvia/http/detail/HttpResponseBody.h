@@ -106,6 +106,10 @@ public:
         return length_;
     }
 
+    [[nodiscard]] constexpr ResponseFileIdentity identity() const noexcept {
+        return identity_;
+    }
+
 private:
     friend class HttpResponseBody;
 
@@ -114,11 +118,13 @@ private:
         const std::filesystem::path& file,
         std::uint64_t size,
         std::uint64_t offset,
-        std::uint64_t length)
+        std::uint64_t length,
+        ResponseFileIdentity identity)
         : nativePath_(resource),
           size_(size),
           offset_(offset),
-          length_(length) {
+          length_(length),
+          identity_(identity) {
         assignHttpNativePath(nativePath_, file);
     }
 
@@ -126,6 +132,7 @@ private:
     std::uint64_t size_;
     std::uint64_t offset_;
     std::uint64_t length_;
+    ResponseFileIdentity identity_;
 };
 
 class HttpBorrowedResponseFile final {
@@ -147,6 +154,10 @@ public:
         return length_;
     }
 
+    [[nodiscard]] constexpr ResponseFileIdentity identity() const noexcept {
+        return identity_;
+    }
+
 private:
     friend class HttpResponseBody;
 
@@ -154,16 +165,19 @@ private:
         const HttpNativePathChar* nativePath,
         std::uint64_t size,
         std::uint64_t offset,
-        std::uint64_t length) noexcept
+        std::uint64_t length,
+        ResponseFileIdentity identity) noexcept
         : nativePath_(nativePath),
           size_(size),
           offset_(offset),
-          length_(length) {}
+          length_(length),
+          identity_(identity) {}
 
     const HttpNativePathChar* nativePath_;
     std::uint64_t size_;
     std::uint64_t offset_;
     std::uint64_t length_;
+    ResponseFileIdentity identity_;
 };
 
 // Owns exactly one legal buffered response-body representation. The common
@@ -237,14 +251,16 @@ public:
                 body->nativePathCStr(),
                 body->size(),
                 body->offset(),
-                body->length());
+                body->length(),
+                body->identity());
         }
         if (const auto* body = borrowedFile()) {
             return ResponseFileBody(
                 body->nativePathCStr(),
                 body->size(),
                 body->offset(),
-                body->length());
+                body->length(),
+                body->identity());
         }
         return std::nullopt;
     }
@@ -329,8 +345,10 @@ private:
         const std::filesystem::path& file,
         std::uint64_t size,
         std::uint64_t offset,
-        std::uint64_t length) {
-        HttpOwnedResponseFile body(resource, file, size, offset, length);
+        std::uint64_t length,
+        ResponseFileIdentity identity = ResponseFileIdentity::unchecked()) {
+        HttpOwnedResponseFile body(
+            resource, file, size, offset, length, identity);
         value_.emplace<HttpOwnedResponseFile>(std::move(body));
     }
 
@@ -338,9 +356,10 @@ private:
         const HttpNativePathChar* file,
         std::uint64_t size,
         std::uint64_t offset,
-        std::uint64_t length) noexcept {
+        std::uint64_t length,
+        ResponseFileIdentity identity = ResponseFileIdentity::unchecked()) noexcept {
         value_.emplace<HttpBorrowedResponseFile>(
-            HttpBorrowedResponseFile(file, size, offset, length));
+            HttpBorrowedResponseFile(file, size, offset, length, identity));
     }
 
     Value value_;

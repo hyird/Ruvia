@@ -1,13 +1,12 @@
 #pragma once
 
+#include "ruvia/http/detail/HttpResponseFileBody.h"
 #include "ruvia/http/detail/NativePath.h"
 
 #include <array>
 #include <charconv>
-#include <chrono>
 #include <cstddef>
 #include <cstdint>
-#include <ctime>
 #include <filesystem>
 #include <memory_resource>
 #include <string>
@@ -125,27 +124,23 @@ inline void appendStaticFileUnsigned(std::pmr::string& output, std::uint64_t val
     }
 }
 
-[[nodiscard]] inline std::pmr::string makeStaticFileEtag(
+[[nodiscard]] inline std::pmr::string makeStaticFileSnapshotEtag(
     std::pmr::memory_resource* resource,
     std::uint64_t size,
-    std::filesystem::file_time_type modified) {
+    std::uint64_t modifiedToken,
+    ResponseFileIdentity identity) {
     std::pmr::string output(resource);
-    output.reserve(43);
+    output.reserve(128);
     output.push_back('"');
     appendStaticFileUnsigned(output, size);
     output.push_back('-');
-    appendStaticFileUnsigned(
-        output,
-        static_cast<std::uint64_t>(modified.time_since_epoch().count()));
+    appendStaticFileUnsigned(output, modifiedToken);
+    for (const auto word : identity.words()) {
+        output.push_back('-');
+        appendStaticFileUnsigned(output, word);
+    }
     output.push_back('"');
     return output;
-}
-
-[[nodiscard]] inline std::time_t staticFileTimeToTimeT(
-    std::filesystem::file_time_type value) noexcept {
-    const auto systemTime = std::chrono::time_point_cast<std::chrono::system_clock::duration>(
-        value - std::filesystem::file_time_type::clock::now() + std::chrono::system_clock::now());
-    return std::chrono::system_clock::to_time_t(systemTime);
 }
 
 }  // namespace ruvia::detail

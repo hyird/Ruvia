@@ -286,8 +286,8 @@ RUVIA_TEST(context_param_lookup_handles_unencoded_and_missing) {
     RUVIA_CHECK_EQ(*id, std::string_view("42"));
     // An unknown parameter name is a clean miss.
     RUVIA_CHECK(!context.req().param("missing").has_value());
-    // Neither single lookup materializes the full parameter table.
-    RUVIA_CHECK(!ContextAccess::routeParamsMaterialized(context));
+    // Every lookup shares the one typed parameter cache used by field binding.
+    RUVIA_CHECK(ContextAccess::routeParamsMaterialized(context));
 }
 
 RUVIA_TEST(context_json_serializes_scalars_with_json_content_type) {

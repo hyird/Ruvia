@@ -326,7 +326,7 @@ void EventLoopPool::start() {
         for (const auto& loop : impl_->loops) {
             loop->thread = std::thread([this, loop] {
                 try {
-                    loop->ioContext.run();
+                    loop->dispatcher->runContext();
                 } catch (...) {
                     impl_->recordFailure(std::current_exception());
                     impl_->stop();

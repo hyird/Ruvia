@@ -6,6 +6,7 @@
 #include <asio/io_context.hpp>
 
 #include <chrono>
+#include <stdexcept>
 #include <string>
 #include <string_view>
 
@@ -208,11 +209,11 @@ RUVIA_TEST(context_request_cookie_fields_include_repeated_cookie_headers) {
     RUVIA_CHECK_EQ(*latest, std::string_view("3"));
 }
 
-RUVIA_TEST(context_request_query_single_lookup_decodes_without_materializing_query_tables) {
+RUVIA_TEST(context_request_query_single_lookup_materializes_one_shared_cache) {
     WorkerMemory worker;
     HttpRequest request = HttpRequestAccess::make();
     HttpRequestAccess::reset(request);
-    HttpRequestAccess::setQueryString(request, "a=one+two&b=2&a=3");
+    HttpRequestAccess::setQueryString(request, "a=first&b=2&a=one+two");
 
     RequestMemory requestMemory(worker);
     HttpRequestAccess::setResource(request, requestMemory.resource());
@@ -220,8 +221,21 @@ RUVIA_TEST(context_request_query_single_lookup_decodes_without_materializing_que
 
     const auto query = context.req().query("a");
     RUVIA_CHECK(query.has_value());
-    RUVIA_CHECK_EQ(*query, std::string_view("3"));
-    RUVIA_CHECK(!ContextAccess::requestQueryMaterialized(context));
+    RUVIA_CHECK_EQ(*query, std::string_view("one two"));
+    RUVIA_CHECK(ContextAccess::requestQueryMaterialized(context));
+
+    // Scalar, multivalue and field-binding access all borrow the same cache.
+    // In particular, repeated encoded lookup must not append another arena list
+    // node or return a different backing allocation.
+    const auto* const stableData = query->data();
+    const auto all = context.req().queries("a");
+    RUVIA_CHECK_EQ(all.size(), std::size_t{2});
+    RUVIA_CHECK_EQ(all.back(), std::string_view("one two"));
+    const auto& fields = ruvia::detail::requestQueryFields(context.req());
+    RUVIA_CHECK_EQ(*fields.get("a"), std::string_view("one two"));
+    const auto repeated = context.req().query("a");
+    RUVIA_CHECK(repeated.has_value());
+    RUVIA_CHECK(repeated->data() == stableData);
 }
 
 RUVIA_TEST(context_request_query_list_uses_last_duplicate_like_single_lookup) {
@@ -276,7 +290,7 @@ RUVIA_TEST(context_request_queries_use_empty_span_only_for_missing_name) {
     RUVIA_CHECK(context.req().queries("missing").empty());
 }
 
-RUVIA_TEST(context_request_param_single_lookup_decodes_without_materializing_param_table) {
+RUVIA_TEST(context_request_param_single_lookup_materializes_one_shared_cache) {
     WorkerMemory worker;
     HttpRequest request = HttpRequestAccess::make();
     HttpRequestAccess::reset(request);
@@ -297,7 +311,72 @@ RUVIA_TEST(context_request_param_single_lookup_decodes_without_materializing_par
     const auto param = context.req().param("id");
     RUVIA_CHECK(param.has_value());
     RUVIA_CHECK_EQ(*param, std::string_view("one two"));
-    RUVIA_CHECK(!ContextAccess::routeParamsMaterialized(context));
+    RUVIA_CHECK(ContextAccess::routeParamsMaterialized(context));
+
+    const auto* const stableData = param->data();
+    const auto& fields = ruvia::detail::requestParamFields(context.req());
+    RUVIA_CHECK_EQ(*fields.get("id"), std::string_view("one two"));
+    const auto repeated = context.req().param("id");
+    RUVIA_CHECK(repeated.has_value());
+    RUVIA_CHECK(repeated->data() == stableData);
+}
+
+RUVIA_TEST(context_request_query_rejects_and_remembers_malformed_percent_encoding) {
+    WorkerMemory worker;
+    HttpRequest request = HttpRequestAccess::make();
+    HttpRequestAccess::reset(request);
+    HttpRequestAccess::setQueryString(request, "safe=1&bad=%zz");
+
+    RequestMemory requestMemory(worker);
+    HttpRequestAccess::setResource(request, requestMemory.resource());
+    auto context = ContextAccess::make(requestMemory, request);
+
+    for (int attempt = 0; attempt < 2; ++attempt) {
+        bool threw = false;
+        try {
+            (void)context.req().query("safe");
+        } catch (const std::invalid_argument&) {
+            threw = true;
+        }
+        RUVIA_CHECK(threw);
+    }
+    const auto* storage = ContextAccess::requestStorage(context);
+    RUVIA_CHECK(storage != nullptr);
+    RUVIA_CHECK(storage->queryInvalid);
+    RUVIA_CHECK(!storage->query.has_value());
+}
+
+RUVIA_TEST(context_request_param_rejects_and_remembers_malformed_percent_encoding) {
+    WorkerMemory worker;
+    HttpRequest request = HttpRequestAccess::make();
+    HttpRequestAccess::reset(request);
+    const std::string_view names[] = {"id"};
+    const std::string_view values[] = {"bad%zz"};
+
+    RequestMemory requestMemory(worker);
+    HttpRequestAccess::setResource(request, requestMemory.resource());
+    auto context = ContextAccess::make(
+        requestMemory,
+        request,
+        "/items/:id",
+        names,
+        values,
+        std::size(names),
+        0);
+
+    for (int attempt = 0; attempt < 2; ++attempt) {
+        bool threw = false;
+        try {
+            (void)context.req().param("id");
+        } catch (const std::invalid_argument&) {
+            threw = true;
+        }
+        RUVIA_CHECK(threw);
+    }
+    const auto* storage = ContextAccess::requestStorage(context);
+    RUVIA_CHECK(storage != nullptr);
+    RUVIA_CHECK(storage->routeParamsInvalid);
+    RUVIA_CHECK(!storage->routeParams.has_value());
 }
 
 RUVIA_TEST(context_request_header_lookup_uses_last_match) {

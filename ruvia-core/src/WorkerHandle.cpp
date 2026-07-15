@@ -67,15 +67,16 @@ void detail::WorkerHandleAccess::registerShutdownListener(
     dispatcher->registerShutdownListener(listener);
 }
 
-detail::WorkerTimerRegistration detail::WorkerHandleAccess::scheduleTimer(
+void detail::WorkerHandleAccess::scheduleTimer(
     const WorkerHandle& worker,
+    WorkerTimerRegistration& registration,
     std::chrono::steady_clock::time_point deadline,
     std::move_only_function<void(WorkerTimerOutcome)> completion) {
     const auto& dispatcher = worker.dispatcher_;
     if (!dispatcher) {
         throw std::runtime_error("cannot schedule a timer on a stopped worker");
     }
-    return dispatcher->scheduleTimer(deadline, std::move(completion));
+    dispatcher->scheduleTimer(registration, deadline, std::move(completion));
 }
 
 }

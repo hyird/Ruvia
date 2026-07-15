@@ -7,8 +7,10 @@
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
+#include <exception>
 #include <memory_resource>
 #include <optional>
+#include <utility>
 #include <vector>
 
 namespace ruvia::detail {
@@ -41,15 +43,55 @@ public:
     PoolLeaseScheduler(const PoolLeaseScheduler&) = delete;
     PoolLeaseScheduler& operator=(const PoolLeaseScheduler&) = delete;
 
+    ~PoolLeaseScheduler() {
+        if (reservedAcquires_ != 0) {
+            std::terminate();
+        }
+    }
+
     [[nodiscard]] Task<PoolWaiterResult> acquire(
         std::optional<std::chrono::milliseconds> timeout) {
-        if (closing_) {
+        return acquireReserved(AcquireReservation(*this), timeout);
+    }
+
+private:
+    class AcquireReservation final {
+    public:
+        explicit AcquireReservation(PoolLeaseScheduler& scheduler) noexcept
+            : scheduler_(&scheduler) {
+            ++scheduler_->reservedAcquires_;
+        }
+        ~AcquireReservation() {
+            if (scheduler_ != nullptr) {
+                --scheduler_->reservedAcquires_;
+            }
+        }
+
+        AcquireReservation(const AcquireReservation&) = delete;
+        AcquireReservation& operator=(const AcquireReservation&) = delete;
+        AcquireReservation(AcquireReservation&& other) noexcept
+            : scheduler_(std::exchange(other.scheduler_, nullptr)) {}
+        AcquireReservation& operator=(AcquireReservation&&) = delete;
+
+        [[nodiscard]] PoolLeaseScheduler& scheduler() const noexcept {
+            return *scheduler_;
+        }
+
+    private:
+        PoolLeaseScheduler* scheduler_;
+    };
+
+    [[nodiscard]] static Task<PoolWaiterResult> acquireReserved(
+        AcquireReservation reservation,
+        std::optional<std::chrono::milliseconds> timeout) {
+        auto& scheduler = reservation.scheduler();
+        if (scheduler.closing_) {
             co_return PoolWaiterResult::makeClosed();
         }
-        if (!freeSlots_.empty()) {
-            const auto slot = freeSlots_.back();
-            freeSlots_.pop_back();
-            busy_[slot] = 1;
+        if (!scheduler.freeSlots_.empty()) {
+            const auto slot = scheduler.freeSlots_.back();
+            scheduler.freeSlots_.pop_back();
+            scheduler.busy_[slot] = 1;
             co_return PoolWaiterResult::makeAcquired(slot);
         }
 
@@ -57,7 +99,7 @@ public:
             ? std::chrono::steady_clock::now() + *timeout
             : std::chrono::steady_clock::time_point::max();
         PoolWaiter waiter(deadline);
-        waiters_.enqueue(waiter);
+        scheduler.waiters_.enqueue(waiter);
         struct WaiterGuard final {
             PoolWaiterQueue& queue;
             PoolWaiter& waiter;
@@ -65,11 +107,12 @@ public:
             ~WaiterGuard() {
                 queue.remove(waiter);
             }
-        } guard{waiters_, waiter};
+        } guard{scheduler.waiters_, waiter};
 
         co_return co_await waiter;
     }
 
+public:
     [[nodiscard]] PoolLeaseReleaseStatus release(std::size_t slot) noexcept {
         if (slot >= busy_.size()) {
             return PoolLeaseReleaseStatus::kInvalidSlot;
@@ -107,6 +150,7 @@ private:
     std::pmr::vector<std::size_t> freeSlots_;
     std::pmr::vector<std::uint8_t> busy_;
     PoolWaiterQueue waiters_;
+    std::size_t reservedAcquires_{0};
     bool closing_{false};
 };
 

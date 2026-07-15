@@ -82,6 +82,20 @@ void HttpResponse::setFileBody(std::filesystem::path file, std::uint64_t size) {
 }
 
 void HttpResponse::setFileBody(std::filesystem::path file, std::uint64_t size, std::uint64_t offset, std::uint64_t length) {
+    setFileBody(
+        std::move(file),
+        size,
+        offset,
+        length,
+        detail::ResponseFileIdentity::unchecked());
+}
+
+void HttpResponse::setFileBody(
+    std::filesystem::path file,
+    std::uint64_t size,
+    std::uint64_t offset,
+    std::uint64_t length,
+    detail::ResponseFileIdentity identity) {
     if (file.empty()) {
         throw std::invalid_argument("file response path must not be empty");
     }
@@ -89,7 +103,7 @@ void HttpResponse::setFileBody(std::filesystem::path file, std::uint64_t size, s
         throw std::invalid_argument("file response byte range is outside the file");
     }
 
-    body_.setOwnedFile(resource(), file, size, offset, length);
+    body_.setOwnedFile(resource(), file, size, offset, length, identity);
 }
 
 void HttpResponse::setBorrowedFileBody(const std::filesystem::path& file, std::uint64_t size) {

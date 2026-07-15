@@ -122,8 +122,9 @@ struct ChannelReceiveAwaiter final {
         }
         if (timeout) {
             try {
-                timer = WorkerHandleAccess::scheduleTimer(
-                    state->worker, std::chrono::steady_clock::now() + *timeout,
+                WorkerHandleAccess::scheduleTimer(
+                    state->worker, timer,
+                    std::chrono::steady_clock::now() + *timeout,
                     [this](WorkerTimerOutcome outcome) {
                         if (outcome == WorkerTimerOutcome::kExpired) {
                             std::lock_guard stateLock(state->mutex);
@@ -167,7 +168,7 @@ template <typename T>
 
 template <typename T>
 void wakeChannelReceiver(ChannelReceiveAwaiter<T>* waiter) {
-    if (waiter->timer.valid()) {
+    if (waiter->timer.registered()) {
         waiter->timer.cancel();
         return;
     }

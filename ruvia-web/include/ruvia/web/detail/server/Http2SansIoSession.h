@@ -49,6 +49,7 @@
 #include "ruvia/web/detail/http/HttpProtocolErrorInfo.h"
 #include "ruvia/web/detail/http2/Http2SansIoResponseStreamSink.h"
 #include "ruvia/web/detail/http2/Http2SansIoStreamRuntime.h"
+#include "ruvia/web/detail/http2/Http2SansIoTermination.h"
 #include "ruvia/web/detail/http2/Http2SansIoWsTransport.h"
 #include "ruvia/http/detail/http2/Http2WebSocketHandshake.h"
 #include "ruvia/core/detail/ConnectionScanner.h"
@@ -141,7 +142,10 @@ Task<void> runHttp2SansIoSession(
     Http2Connection connection(worker.resource(), Http2Role::kServer);
 
     WorkerSignal writeSignal(baseServices.worker());
+    WorkerSignal handlerFinished(baseServices.worker());
     Http2SansIoSessionLifecycle lifecycle;
+    Http2SansIoTermination termination;
+    std::size_t activeHandlerTasks = 0;
     bool initialInputRetained = false;
     // keepaliveRequests parity with h1's Http1RequestSequence: after this many
     // request heads the connection drains (GOAWAY NO_ERROR) instead of serving
@@ -154,9 +158,11 @@ Task<void> runHttp2SansIoSession(
 
     // One stable Web runtime owns every per-stream application concern: route
     // resolution, request-body storage, the dispatch signal, and the dispatch lease.
-    // The table's dispatched count is established synchronously at admission, before
-    // co_spawn can schedule the handler, and is the writer/join source of truth.
-    Http2SansIoStreamRuntimeTable streamRuntimes(worker.resource());
+    // The table's dispatch lease is established synchronously at admission. The
+    // separate task count below is released only by co_spawn completion, after the
+    // handler awaitable and its coroutine frame are actually finished.
+    Http2SansIoStreamRuntimeTable streamRuntimes(
+        worker.resource(), termination);
     const auto findStreamRuntime = [&streamRuntimes](
         std::uint32_t streamId) noexcept {
         return streamRuntimes.find(streamId);
@@ -170,6 +176,19 @@ Task<void> runHttp2SansIoSession(
         auto* runtime = streamRuntimes.find(streamId);
         return runtime != nullptr ? runtime->signal() : nullptr;
     };
+    const auto terminateSession = [&](std::error_code error) noexcept {
+        if (!termination.terminate(error)) {
+            return;
+        }
+        std::error_code ignored;
+        stream.lowest_layer().cancel(ignored);
+        streamRuntimes.forEach([](Http2SansIoStreamRuntime& runtime) {
+            if (auto* signal = runtime.signal()) {
+                signal->wake();
+            }
+        });
+        writeSignal.notify();
+    };
     Http2BufferedResponseWriter bufferedResponseWriter(
         connection,
         streamRuntimes,
@@ -181,16 +200,9 @@ Task<void> runHttp2SansIoSession(
     // handlers keep submitting while async_write is in flight, and an append that
     // reallocated the core's buffer would dangle a pendingOutput() view mid-write.
     //
-    // CRITICAL: the writer's ONLY exit is
-    // `lifecycle.stopping() && dispatchedCount == 0`. A write error
-    // advances the lifecycle but keeps looping (draining and discarding output)
-    // until every
-    // admitted handler has finished, because the session's teardown join treats the
-    // writer's exit as the handler join too -- exiting while dispatchedCount is
-    // nonzero would
-    // let the session destroy this frame's state under a still-suspended detached
-    // handler (use-after-free). In a write-failed phase, no bytes actually reach
-    // the socket.
+    // The writer exits only after stopping begins and every admitted handler's
+    // co_spawn completion has run. A write error terminates the shared transport,
+    // then the loop keeps draining/discarding output while handlers unwind.
     auto writerLoop = [&]() -> Task<void> {
         std::pmr::string writeScratch(worker.resource());
         for (;;) {
@@ -228,6 +240,7 @@ Task<void> runHttp2SansIoSession(
                 }
                 if (writeEc) {
                     lifecycle.markWriteFailed();
+                    terminateSession(writeEc);
                     continue;
                 }
                 scannerEntry.touch();
@@ -236,8 +249,7 @@ Task<void> runHttp2SansIoSession(
                 // capacity for its whole lifetime (the h1 work-set trims the same way).
                 clearPmrStringRetainingSmall(writeScratch, 64 * 1024);
             }
-            if (lifecycle.stopping() &&
-                streamRuntimes.dispatchedCount() == 0) {
+            if (lifecycle.stopping() && activeHandlerTasks == 0) {
                 co_return;  // nothing left to write and no more will be produced
             }
             co_await writeSignal.wait();
@@ -596,11 +608,33 @@ Task<void> runHttp2SansIoSession(
             return false;
         }
         connection.pinStream(streamId);
+        ++activeHandlerTasks;
         // Recycle the per-stream handler's coroutine frame (mirrors the h1 accept path);
         // under load the common request then does no extra heap work for the frame.
-        asio::co_spawn(
-            executor, taskAsAwaitable(dispatchOne(streamId)),
-            asio::bind_allocator(asio::recycling_allocator<void>(), asio::detached));
+        try {
+            asio::co_spawn(
+                executor,
+                taskAsAwaitable(dispatchOne(streamId)),
+                asio::bind_allocator(
+                    asio::recycling_allocator<void>(),
+                    [&activeHandlerTasks,
+                     &handlerFinished,
+                     &writeSignal,
+                     &terminateSession](std::exception_ptr exception) noexcept {
+                        if (exception != nullptr) {
+                            terminateSession(std::make_error_code(
+                                std::errc::operation_canceled));
+                        }
+                        --activeHandlerTasks;
+                        handlerFinished.notify();
+                        writeSignal.notify();
+                    }));
+        } catch (...) {
+            --activeHandlerTasks;
+            connection.unpinStream(streamId);
+            eraseStreamRuntime(streamId);
+            return false;
+        }
         return true;
     };
 
@@ -867,82 +901,127 @@ Task<void> runHttp2SansIoSession(
     // surfaces first), a cancel-only latch would be a no-op and the join would sleep
     // until time_point::max() forever. The bool makes a late join return immediately.
     WorkerSignal writerFinished(baseServices.worker());
-    asio::co_spawn(
-        executor, taskAsAwaitable(writerLoop()),
-        [&writerFinished, &lifecycle](std::exception_ptr) noexcept {
-            lifecycle.markWriterDone();
-            writerFinished.notify();
-        });
-
-    // Establish the feed contract: drain any startup events before initial input.
-    drainEvents();
-    if (!connection.connectionError().has_value() && !initialBytes.empty()) {
-        const auto result = feedAndDrain(initialBytes);
-        initialInputRetained =
-            result == Http2FeedResult::kConnectionNotStarted;
+    bool writerTaskDone = false;
+    try {
+        asio::co_spawn(
+            executor,
+            taskAsAwaitable(writerLoop()),
+            [&writerFinished,
+             &writerTaskDone,
+             &lifecycle,
+             &terminateSession](std::exception_ptr exception) noexcept {
+                if (exception != nullptr) {
+                    terminateSession(std::make_error_code(
+                        std::errc::operation_canceled));
+                }
+                writerTaskDone = true;
+                lifecycle.markWriterDone();
+                writerFinished.notify();
+            });
+    } catch (...) {
+        terminateSession(std::make_error_code(
+            std::errc::operation_canceled));
+        throw;
     }
-    wakeWriter();
 
-    // Reader loop: feed inbound bytes, then act on the drained events.
-    if (!connection.connectionError().has_value() && !initialInputRetained) {
+    std::error_code readerTerminalError;
+    std::exception_ptr readerFailure;
+    try {
+        // Establish the feed contract: drain any startup events before initial input.
+        drainEvents();
+        if (!connection.connectionError().has_value() && !initialBytes.empty()) {
+            const auto result = feedAndDrain(initialBytes);
+            initialInputRetained =
+                result == Http2FeedResult::kConnectionNotStarted;
+        }
+        wakeWriter();
+
+        // Reader loop: feed inbound bytes, then act on the drained events.
+        if (!connection.connectionError().has_value() && !initialInputRetained &&
+            !termination.terminated()) {
         // 4 KB read scratch. Requests are the small direction of HTTP/2
         // traffic (responses never pass through here), so a max-size 16 KB
         // frame arriving in several reads is the rare case, while the buffer
         // is resident in every connection's coroutine frame for the whole
         // connection.
-        std::array<char, 4096> readBuffer;
-        for (;;) {
+            std::array<char, 4096> readBuffer;
+            for (;;) {
             // Pick the inactivity phase: mid-header-block -> the tight header timeout;
             // no active Web runtime (including a pre-dispatch buffered request body)
             // -> kIdle so a keep-alive connection between requests is governed by the
             // keepalive timeout, NOT client_body_timeout; otherwise a body/response is
             // in progress -> kReadingPayload. (WS tunnels carry their own heartbeat.)
-            scannerEntry.setPhase(http2SansIoInactivityPhase(
-                connection.headerBlockInProgress(),
-                streamRuntimes.size()));
-            auto readCompletion = co_await asyncAsio<std::size_t>(
-                [&stream, &readBuffer](auto handler) mutable {
-                    stream.async_read_some(
-                        asio::buffer(readBuffer.data(), readBuffer.size()), std::move(handler));
-                });
-            const auto ec = readCompletion.errorCode();
-            const auto bytesRead = readCompletion.result();
-            if (ec || bytesRead == 0) {
-                break;
-            }
-            scannerEntry.touch();
+                scannerEntry.setPhase(http2SansIoInactivityPhase(
+                    connection.headerBlockInProgress(),
+                    streamRuntimes.size()));
+                auto readCompletion = co_await asyncAsio<std::size_t>(
+                    [&stream, &readBuffer](auto handler) mutable {
+                        stream.async_read_some(
+                            asio::buffer(readBuffer.data(), readBuffer.size()),
+                            std::move(handler));
+                    });
+                const auto ec = readCompletion.errorCode();
+                const auto bytesRead = readCompletion.result();
+                if (ec || bytesRead == 0) {
+                    readerTerminalError = ec ? ec : std::make_error_code(
+                        std::errc::connection_reset);
+                    break;
+                }
+                scannerEntry.touch();
             // The server has begun draining: tell the peer to stop opening streams
             // (RFC 9113 §6.8); streams already started keep running.
-            if (!connection.draining() &&
-                !session.workerRunning()) {
-                connection.beginDrain();
-            }
-            const auto result = feedAndDrain(
-                std::string_view(readBuffer.data(), bytesRead));
-            wakeWriter();  // feed may have produced ACKs / WINDOW_UPDATEs to flush
-            if (result == Http2FeedResult::kConnectionNotStarted ||
-                result == Http2FeedResult::kProtocolFailure ||
-                lifecycle.writeFailed()) {
-                break;  // retained input, terminal protocol failure, or dead write side
+                if (!connection.draining() &&
+                    !session.workerRunning()) {
+                    connection.beginDrain();
+                }
+                const auto result = feedAndDrain(
+                    std::string_view(readBuffer.data(), bytesRead));
+                wakeWriter();  // feed may have produced ACKs / WINDOW_UPDATEs to flush
+                if (result == Http2FeedResult::kConnectionNotStarted ||
+                    result == Http2FeedResult::kProtocolFailure ||
+                    lifecycle.writeFailed()) {
+                    if (result == Http2FeedResult::kConnectionNotStarted ||
+                        result == Http2FeedResult::kProtocolFailure) {
+                        readerTerminalError = std::make_error_code(
+                            std::errc::protocol_error);
+                    }
+                    break;
+                }
             }
         }
+    } catch (...) {
+        readerFailure = std::current_exception();
+        readerTerminalError = std::make_error_code(
+            std::errc::operation_canceled);
     }
 
-    // Reader done: every stream still waiting on inbound bytes or window space must
-    // observe EOF now, or its handler (and thus the writer join below) waits forever.
-    streamRuntimes.forEach([](Http2SansIoStreamRuntime& runtime) {
-        if (auto* signal = runtime.signal()) {
-            signal->end();
+    // Reader, writer, and protocol failure converge on one terminal error. Active
+    // bodies only report EOF after a protocol END_STREAM; transport termination is
+    // delivered as an error and wakes every stream capability and cancellable sleep.
+    if (!termination.terminated()) {
+        if (!readerTerminalError) {
+            readerTerminalError = connection.connectionError().has_value() ||
+                    initialInputRetained
+                ? std::make_error_code(std::errc::protocol_error)
+                : std::make_error_code(std::errc::connection_aborted);
         }
-    });
+        terminateSession(readerTerminalError);
+    }
 
-    // Let the writer drain the last output once every handler has finished, then join
-    // it (handlers wake the writer as they complete, so joining the writer waits for
-    // them too). Level-triggered: skip the wait entirely if the writer already exited.
+    // Explicitly join both operation sources. Runtime removal is not completion:
+    // only the co_spawn callback proves the handler awaitable and frame are gone.
+    // The level checks also cover completion that happened before either wait began.
     lifecycle.beginStopping();
     wakeWriter();
-    while (!lifecycle.writerDone()) {
+    while (activeHandlerTasks != 0) {
+        co_await handlerFinished.wait();
+    }
+    wakeWriter();
+    while (!writerTaskDone) {
         co_await writerFinished.wait();
+    }
+    if (readerFailure != nullptr) {
+        std::rethrow_exception(readerFailure);
     }
     co_return;
 }

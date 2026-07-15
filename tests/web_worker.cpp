@@ -157,6 +157,30 @@ int testGracefulDrain() {
     return 0;
 }
 
+int testHandleOutlivesServerAsTerminalEndpoint() {
+    ruvia::WebWorkerHandle worker;
+    {
+        ruvia::detail::RouteTable routes(std::pmr::get_default_resource());
+        ruvia::detail::HttpServer server(
+            asio::ip::tcp::endpoint(
+                asio::ip::make_address("127.0.0.1"), 0),
+            routes);
+        worker = server.webWorker();
+        server.start();
+        server.stop();
+        server.join();
+    }
+
+    const auto stats = worker.stats();
+    return !worker.valid() && !worker.accepting() && worker.id() == 0 &&
+            stats.outstanding == 0 &&
+            worker.post([](ruvia::WebWorkerContext&) -> ruvia::Task<void> {
+                co_return;
+            }) == ruvia::PostResult::kWorkerStopping
+        ? 0
+        : 1;
+}
+
 }  // namespace
 
 int main() {
@@ -171,6 +195,9 @@ int main() {
     }
     if (testGraceDeadlineCancelsTimer() != 0) {
         return 4;
+    }
+    if (testHandleOutlivesServerAsTerminalEndpoint() != 0) {
+        return 5;
     }
     return 0;
 }

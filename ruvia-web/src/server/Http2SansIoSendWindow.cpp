@@ -12,7 +12,7 @@ Task<Http2SendWindowWaitResult> awaitHttp2SendWindow(
     for (;;) {
         auto* stream = connection.stream(streamId);
         if (stream == nullptr || stream->isAborted() ||
-            signal == nullptr || signal->ended()) {
+            signal == nullptr || signal->terminated()) {
             co_return Http2SendWindowWaitResult::makeAborted();
         }
         if (!connection.hasQueuedData(streamId)) {

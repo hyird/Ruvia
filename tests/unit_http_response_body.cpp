@@ -172,7 +172,16 @@ RUVIA_TEST(response_body_file_view_is_atomic_and_non_default) {
     RUVIA_CHECK_EQ(ownedFile->size(), std::uint64_t{20});
     RUVIA_CHECK_EQ(ownedFile->offset(), std::uint64_t{5});
     RUVIA_CHECK_EQ(ownedFile->length(), std::uint64_t{7});
+    RUVIA_CHECK(!ownedFile->identity().requiresValidation());
     RUVIA_CHECK_EQ(activeAlternativeCount(responseBody(response)), std::size_t{1});
+
+    const auto identity = ruvia::detail::ResponseFileIdentity::checked(
+        {11, 22, 33, 44});
+    setResponseFileBody(response, ownedPath, 20, 5, 7, identity);
+    const auto checkedFile = responseBody(response).file();
+    RUVIA_CHECK(checkedFile.has_value());
+    RUVIA_CHECK(checkedFile->identity().requiresValidation());
+    RUVIA_CHECK(checkedFile->identity() == identity);
 
     const std::filesystem::path borrowedPath("borrowed-fixture.bin");
     setResponseBorrowedFileBody(response, borrowedPath, 12, 2, 4);

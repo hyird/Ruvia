@@ -37,6 +37,7 @@
 #include "ruvia/web/detail/server/Http1BufferedResponseWrite.h"
 #include "ruvia/web/detail/server/HttpFileFallback.h"
 #include "ruvia/web/detail/server/HttpFileWrite.h"
+#include "ruvia/web/detail/server/HttpNativeFile.h"
 #include "ruvia/web/detail/server/HttpResponseWriter.h"
 
 namespace {
@@ -436,6 +437,48 @@ RUVIA_TEST(http_response_file_writer_preserves_open_failure) {
     }
 
     RUVIA_CHECK(static_cast<bool>(runHttpResponseFileWrite(*fileBody)));
+}
+
+RUVIA_TEST(http_response_file_native_open_rejects_same_size_replacement) {
+#if defined(__unix__) || defined(__APPLE__) || defined(_WIN32)
+    constexpr std::string_view oldContents = "old-native-body";
+    constexpr std::string_view newContents = "new-native-body";
+    static_assert(oldContents.size() == newContents.size());
+    const ScopedTestFile original(
+        "ruvia_http_response_file_identity.bin", oldContents);
+    const ScopedTestFile replacement(
+        "ruvia_http_response_file_identity_new.bin", newContents);
+
+    std::error_code error;
+    const auto snapshot = ruvia::detail::snapshotResponseFile(
+        original.path().c_str(), error);
+    RUVIA_CHECK(!error);
+    RUVIA_CHECK(snapshot.identity.requiresValidation());
+#if defined(_WIN32)
+    std::filesystem::remove(original.path(), error);
+    RUVIA_CHECK(!error);
+#endif
+    std::filesystem::rename(replacement.path(), original.path(), error);
+    RUVIA_CHECK(!error);
+
+    HttpResponse response(std::pmr::get_default_resource());
+    setResponseFileBody(
+        response,
+        original.path(),
+        snapshot.size,
+        0,
+        snapshot.size,
+        snapshot.identity);
+    const auto fileBody = responseBody(response).file();
+    RUVIA_CHECK(fileBody.has_value());
+    if (fileBody.has_value()) {
+        auto input = ruvia::detail::openNativeFileForRead(*fileBody, error);
+        RUVIA_CHECK(static_cast<bool>(error));
+        RUVIA_CHECK_EQ(
+            error,
+            std::make_error_code(std::errc::state_not_recoverable));
+    }
+#endif
 }
 
 RUVIA_TEST(http1_buffered_file_fallback_completion_owns_status) {

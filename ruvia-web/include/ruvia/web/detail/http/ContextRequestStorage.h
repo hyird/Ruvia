@@ -3,7 +3,6 @@
 #include "ruvia/web/RequestFields.h"
 #include "ruvia/web/detail/http/RequestQueryValues.h"
 
-#include <list>
 #include <memory_resource>
 #include <optional>
 #include <string>
@@ -29,8 +28,7 @@ struct RequestFieldCache final {
 
 class ContextRequestStorage final {
 public:
-    explicit ContextRequestStorage(std::pmr::memory_resource* resource)
-        : decodedValues_(resource) {}
+    ContextRequestStorage() = default;
 
     ContextRequestStorage(const ContextRequestStorage&) = delete;
     ContextRequestStorage& operator=(const ContextRequestStorage&) = delete;
@@ -40,13 +38,10 @@ public:
     std::optional<RequestQueryCache> query;
     std::optional<RequestNameValueList> cookies;
     std::optional<RequestFieldCache> routeParams;
-    [[nodiscard]] std::pmr::string& appendDecodedValue() {
-        return decodedValues_.emplace_back();
-    }
-
-private:
-    // list preserves every returned string_view across later lazy decodes.
-    std::pmr::list<std::pmr::string> decodedValues_;
+    // Malformed percent encoding is terminal for the corresponding typed cache.
+    // Remember it so repeated API calls cannot rescan attacker-controlled input.
+    bool queryInvalid{false};
+    bool routeParamsInvalid{false};
 };
 
 }  // namespace ruvia::detail
