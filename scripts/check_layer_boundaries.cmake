@@ -167,6 +167,23 @@ file(READ "${RUVIA_ROOT}/ruvia-core/include/ruvia/core/WorkerWaitResult.h"
 file(READ "${RUVIA_ROOT}/tests/package-consumer/core.cpp"
     core_linear_receiver_package_contract)
 if(NOT core_channel_contract MATCHES
+       "struct ChannelOpen final" OR
+   NOT core_channel_contract MATCHES
+       "struct ChannelClosed final" OR
+   NOT core_channel_contract MATCHES
+       "struct ChannelWorkerStopping final" OR
+   NOT core_channel_contract MATCHES
+       "using Lifecycle = std::variant" OR
+   NOT core_channel_contract MATCHES
+       "emplace<ChannelWorkerStopping>" OR
+   NOT core_channel_contract MATCHES
+       "emplace<detail::ChannelClosed>" OR
+   core_channel_contract MATCHES
+       "bool closed|bool workerStopped")
+    boundary_error("Channel regained overlapping close and worker-stop flags"
+        "open, sender-closed, and worker-stopping must remain exclusive while buffered values stay orthogonal to lifecycle")
+endif()
+if(NOT core_channel_contract MATCHES
        "ChannelReceiver[(][)][ \t]*=[ \t]*delete" OR
    NOT core_channel_contract MATCHES
        "operator=[(]ChannelReceiver&&[)][ \t]*=[ \t]*delete" OR

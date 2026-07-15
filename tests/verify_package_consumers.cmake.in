@@ -35,6 +35,32 @@ if(_built_components_csv MATCHES "(^|,)core(,|$)" AND
 endif()
 
 if(_built_components_csv MATCHES "(^|,)core(,|$)")
+    set(_installed_channel_path
+        "${_install_prefix}/include/ruvia/core/Channel.h")
+    if(NOT EXISTS "${_installed_channel_path}")
+        message(FATAL_ERROR
+            "installed core package is missing Channel")
+    endif()
+    file(READ "${_installed_channel_path}"
+        _installed_channel)
+    if(NOT _installed_channel MATCHES
+           "struct ChannelOpen final" OR
+       NOT _installed_channel MATCHES
+           "struct ChannelClosed final" OR
+       NOT _installed_channel MATCHES
+           "struct ChannelWorkerStopping final" OR
+       NOT _installed_channel MATCHES
+           "using Lifecycle = std::variant" OR
+       NOT _installed_channel MATCHES
+           "emplace<ChannelWorkerStopping>" OR
+       NOT _installed_channel MATCHES
+           "emplace<detail::ChannelClosed>" OR
+       _installed_channel MATCHES
+           "bool closed|bool workerStopped")
+        message(FATAL_ERROR
+            "installed Channel restored overlapping lifecycle flags")
+    endif()
+
     set(_installed_one_shot_path
         "${_install_prefix}/include/ruvia/core/OneShot.h")
     if(NOT EXISTS "${_installed_one_shot_path}")

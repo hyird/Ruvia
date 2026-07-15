@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cassert>
 #include <coroutine>
 #include <chrono>
 #include <cstddef>
@@ -10,6 +11,7 @@
 #include <optional>
 #include <stdexcept>
 #include <utility>
+#include <variant>
 #include <vector>
 
 #include <ruvia/core/Task.h>
@@ -39,6 +41,10 @@ namespace detail {
 template <typename T>
 struct ChannelReceiveAwaiter;
 
+struct ChannelOpen final {};
+struct ChannelClosed final {};
+struct ChannelWorkerStopping final {};
+
 template <typename T>
 struct ChannelState final : WorkerShutdownListener {
     ChannelState(WorkerHandle target,
@@ -60,9 +66,12 @@ struct ChannelState final : WorkerShutdownListener {
     std::size_t head{0};
     std::size_t tail{0};
     std::size_t size{0};
+    using Lifecycle = std::variant<
+        ChannelOpen,
+        ChannelClosed,
+        ChannelWorkerStopping>;
+    Lifecycle lifecycle;
     ChannelReceiveAwaiter<T>* waiter{nullptr};
-    bool closed{false};
-    bool workerStopped{false};
 
     void workerStopping() noexcept override;
 };
@@ -84,14 +93,15 @@ struct ChannelReceiveAwaiter final {
             --state->size;
             return true;
         }
-        if (state->workerStopped) {
+        if (std::holds_alternative<ChannelWorkerStopping>(state->lifecycle)) {
             result.emplace(WorkerWaitResultAccess::workerStopping<T>());
             return true;
         }
-        if (state->closed) {
+        if (std::holds_alternative<ChannelClosed>(state->lifecycle)) {
             result.emplace(WorkerWaitResultAccess::closed<T>());
             return true;
         }
+        assert(std::holds_alternative<ChannelOpen>(state->lifecycle));
         if (timeout && *timeout <= std::chrono::steady_clock::duration::zero()) {
             result.emplace(WorkerWaitResultAccess::timedOut<T>());
             return true;
@@ -176,8 +186,7 @@ void ChannelState<T>::workerStopping() noexcept {
     bool wake = false;
     {
         std::lock_guard lock(mutex);
-        closed = true;
-        workerStopped = true;
+        lifecycle.template emplace<ChannelWorkerStopping>();
         pending = std::exchange(waiter, nullptr);
         if (pending != nullptr) {
             pending->result.emplace(
@@ -209,16 +218,23 @@ public:
         bool wake = false;
         {
             std::lock_guard lock(state_->mutex);
-            if (state_->closed) {
+            if (std::holds_alternative<detail::ChannelClosed>(
+                    state_->lifecycle)) {
                 return ChannelSendResult::kClosed;
             }
+            if (std::holds_alternative<detail::ChannelWorkerStopping>(
+                    state_->lifecycle)) {
+                return ChannelSendResult::kWorkerStopping;
+            }
+            assert(std::holds_alternative<detail::ChannelOpen>(state_->lifecycle));
             if (!state_->worker.accepting()) {
                 return ChannelSendResult::kWorkerStopping;
             }
             if (state_->waiter != nullptr) {
-                waiter = std::exchange(state_->waiter, nullptr);
+                waiter = state_->waiter;
                 waiter->result.emplace(
                     detail::WorkerWaitResultAccess::value(std::move(value)));
+                state_->waiter = nullptr;
                 wake = detail::prepareChannelReceiverWake(waiter);
             } else {
                 if (state_->size == state_->slots.size()) {
@@ -243,10 +259,11 @@ public:
         bool wake = false;
         {
             std::lock_guard lock(state_->mutex);
-            if (state_->closed) {
+            if (!std::holds_alternative<detail::ChannelOpen>(
+                    state_->lifecycle)) {
                 return;
             }
-            state_->closed = true;
+            state_->lifecycle.template emplace<detail::ChannelClosed>();
             waiter = std::exchange(state_->waiter, nullptr);
             if (waiter != nullptr) {
                 waiter->result.emplace(
