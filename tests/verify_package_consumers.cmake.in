@@ -2560,7 +2560,27 @@ if(_built_components_csv MATCHES "(^|,)web(,|$)")
        NOT _installed_response_stream_dispatch MATCHES
            "committedResponseStreamStatus" OR
        NOT _installed_response_stream_state MATCHES
-           "std::optional<CommittedState> committed_" OR
+           "using State = std::variant<" OR
+       NOT _installed_response_stream_state MATCHES
+           "struct Unbound final" OR
+       NOT _installed_response_stream_state MATCHES
+           "struct Bound final" OR
+       NOT _installed_response_stream_state MATCHES
+           "struct Detached final" OR
+       NOT _installed_response_stream_state MATCHES
+           "struct BodyOpen final" OR
+       NOT _installed_response_stream_state MATCHES
+           "struct TrailersOnly final" OR
+       NOT _installed_response_stream_state MATCHES
+           "struct Ended final" OR
+       _installed_response_stream_state MATCHES
+           "std::optional<CommittedState>|context_|streamingHead_|committed_|enum class Phase" OR
+       NOT _installed_response_stream_state MATCHES
+           "commitPlan[(][)] const [&] noexcept" OR
+       NOT _installed_response_stream_state MATCHES
+           "commitPlan[(][)] const && = delete" OR
+       NOT _installed_response_stream_state MATCHES
+           "void releaseContext[(][)] noexcept" OR
        NOT _installed_http1_stream_route MATCHES
            "Task<Http1SessionRequestCompletion>" OR
        NOT _installed_http1_stream_route MATCHES

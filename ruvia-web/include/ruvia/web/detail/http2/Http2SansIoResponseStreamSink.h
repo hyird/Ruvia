@@ -64,18 +64,24 @@ public:
 
     [[nodiscard]] bool committed() const noexcept { return state_.committed(); }
 
-    [[nodiscard]] const ResponseStreamCommitPlan* commitPlan() const noexcept {
+    [[nodiscard]] const ResponseStreamCommitPlan*
+    commitPlan() const & noexcept {
         return state_.commitPlan();
     }
+    const ResponseStreamCommitPlan* commitPlan() const && = delete;
 
     [[nodiscard]] bool aborted() const noexcept {
         auto* stream = connection_.stream(streamId_);
         return stream == nullptr || stream->isAborted();
     }
 
-    void bindContext(Context* context, ResponseStreamState::StreamingHeadThunk streamingHead) noexcept {
+    void bindContext(
+        Context* context,
+        ResponseStreamState::StreamingHeadThunk streamingHead) {
         state_.bindContext(context, streamingHead);
     }
+
+    void releaseContext() noexcept { state_.releaseContext(); }
 
     [[nodiscard]] std::pmr::string& scratch() noexcept {
         clearPmrStringRetainingSmall(scratch_);

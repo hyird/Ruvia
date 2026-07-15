@@ -54,9 +54,11 @@ public:
 
     [[nodiscard]] bool committed() const noexcept { return state_.committed(); }
 
-    [[nodiscard]] const ResponseStreamCommitPlan* commitPlan() const noexcept {
+    [[nodiscard]] const ResponseStreamCommitPlan*
+    commitPlan() const & noexcept {
         return state_.commitPlan();
     }
+    const ResponseStreamCommitPlan* commitPlan() const && = delete;
 
     [[nodiscard]] bool aborted() const noexcept { return aborted_; }
 
@@ -71,14 +73,21 @@ public:
     template <typename Sink>
     friend Task<void> responseStreamSleepThunk(void*, std::chrono::milliseconds);
     template <typename Sink>
-    friend void responseStreamBindContextThunk(void*, Context*, ResponseStreamState::StreamingHeadThunk) noexcept;
+    friend void responseStreamBindContextThunk(
+        void*, Context*, ResponseStreamState::StreamingHeadThunk);
+    template <typename Sink>
+    friend void responseStreamReleaseContextThunk(void*) noexcept;
     template <typename Sink>
     friend std::pmr::string& responseStreamScratchThunk(void*) noexcept;
 
 private:
-    void bindContext(Context* context, ResponseStreamState::StreamingHeadThunk streamingHead) noexcept {
+    void bindContext(
+        Context* context,
+        ResponseStreamState::StreamingHeadThunk streamingHead) {
         state_.bindContext(context, streamingHead);
     }
+
+    void releaseContext() noexcept { state_.releaseContext(); }
 
     [[nodiscard]] std::pmr::string& scratch() noexcept {
         clearPmrStringRetainingSmall(scratch_);

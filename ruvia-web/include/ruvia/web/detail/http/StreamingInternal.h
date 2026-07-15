@@ -14,6 +14,7 @@ struct StreamingAccess final {
     using StreamEnd = ResponseStreamWriter::End;
     using StreamSleep = ResponseStreamWriter::Sleep;
     using StreamBindContext = ResponseStreamWriter::BindContext;
+    using StreamReleaseContext = ResponseStreamWriter::ReleaseContext;
     using StreamScratch = ResponseStreamWriter::Scratch;
     using StreamCommitted = ResponseStreamWriter::Committed;
     using StreamAborted = ResponseStreamWriter::Aborted;
@@ -31,11 +32,20 @@ struct StreamingAccess final {
         StreamEnd end,
         StreamSleep sleep,
         StreamBindContext bindContext,
+        StreamReleaseContext releaseContext,
         StreamScratch scratch,
         StreamCommitted committed,
         StreamAborted aborted) noexcept {
         return ResponseStreamWriter(
-            target, write, end, sleep, bindContext, scratch, committed, aborted);
+            target,
+            write,
+            end,
+            sleep,
+            bindContext,
+            releaseContext,
+            scratch,
+            committed,
+            aborted);
     }
 
     [[nodiscard]] static SseWriter makeSseWriter(ResponseStreamWriter& writer) noexcept {
@@ -45,8 +55,12 @@ struct StreamingAccess final {
     static void bindContext(
         ResponseStreamWriter& writer,
         Context& context,
-        ResponseStreamWriter::StreamingHeadThunk streamingHead) noexcept {
+        ResponseStreamWriter::StreamingHeadThunk streamingHead) {
         writer.bindContext(context, streamingHead);
+    }
+
+    static void releaseContext(ResponseStreamWriter& writer) noexcept {
+        writer.releaseContext();
     }
 
     [[nodiscard]] static std::pmr::string& scratch(const ResponseStreamWriter& writer) noexcept {

@@ -49,6 +49,7 @@ ruvia::Task<void> sleepStream(void*, std::chrono::milliseconds) {
 }
 
 void bindContext(void*, ruvia::Context*, ruvia::HttpResponse (*)(ruvia::Context&)) noexcept {}
+void releaseContext(void*) noexcept {}
 
 std::pmr::string& scratch(void* target) noexcept {
     return static_cast<CaptureStreamSink*>(target)->scratch;
@@ -62,6 +63,10 @@ bool aborted(void*) noexcept {
     return false;
 }
 
+ruvia::HttpResponse unusedStreamingHead(ruvia::Context&) {
+    return ruvia::HttpResponse(std::pmr::get_default_resource());
+}
+
 ruvia::ResponseStreamWriter makeWriter(CaptureStreamSink& sink) noexcept {
     return ruvia::detail::StreamingAccess::makeResponseStreamWriter(
         &sink,
@@ -69,6 +74,7 @@ ruvia::ResponseStreamWriter makeWriter(CaptureStreamSink& sink) noexcept {
         &endStream,
         &sleepStream,
         &bindContext,
+        &releaseContext,
         &scratch,
         &committed,
         &aborted);
@@ -279,6 +285,43 @@ RUVIA_TEST(sse_writer_rejects_nul_in_id) {
 
 RUVIA_TEST(response_stream_state_drives_typed_post_head_phases) {
     using ruvia::detail::ResponseStreamState;
+    ResponseStreamState bound;
+    CaptureStreamSink opaqueContextStorage;
+    auto* opaqueContext =
+        reinterpret_cast<ruvia::Context*>(&opaqueContextStorage);
+    bound.bindContext(opaqueContext, &unusedStreamingHead);
+    bool rebindRejected = false;
+    try {
+        bound.bindContext(opaqueContext, &unusedStreamingHead);
+    } catch (const std::logic_error&) {
+        rebindRejected = true;
+    }
+    RUVIA_CHECK(rebindRejected);
+    ResponseStreamState detached;
+    detached.bindContext(opaqueContext, &unusedStreamingHead);
+    detached.releaseContext();
+    bool detachedContextRejected = false;
+    try {
+        (void)detached.streamingHead();
+    } catch (const std::logic_error&) {
+        detachedContextRejected = true;
+    }
+    RUVIA_CHECK(detachedContextRejected);
+    bound.markCommitted(ruvia::detail::httpResponseStreamCommitPlan(
+        ruvia::detail::ResponseStreamFraming::kHttp1Chunked,
+        ruvia::HttpKnownMethod::kGet,
+        200,
+        ruvia::detail::ResponseTrailerIntent::kNone));
+    bool committedContextReleased = false;
+    try {
+        (void)bound.streamingHead();
+    } catch (const std::logic_error& error) {
+        committedContextReleased =
+            std::string_view(error.what()) ==
+            "response stream is already committed";
+    }
+    RUVIA_CHECK(committedContextReleased);
+
     // A committed stream that allows a body accepts a chunk before end()...
     ResponseStreamState open;
     open.markCommitted(ruvia::detail::httpResponseStreamCommitPlan(
@@ -315,6 +358,7 @@ RUVIA_TEST(response_stream_state_drives_typed_post_head_phases) {
     // 0\r\n\r\n (HTTP/1.1) or END_STREAM (HTTP/2) and desync the connection, so
     // it must be rejected -- the same way a post-end trailer already is.
     open.markEnded();
+    open.markEnded();  // terminal transition is idempotent
     bool bodyAfterEnd = false;
     try {
         open.ensureBodyAllowed();

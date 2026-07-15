@@ -398,6 +398,11 @@ concept ExposesAnyRvalueWebExecutionBorrow =
     requires(T&& value) { std::move(value).resolution(); } ||
     requires(T&& value) { std::move(value).body(); };
 
+template <typename T>
+concept ExposesRvalueResponseStreamCommitPlan = requires(T&& value) {
+    std::move(value).commitPlan();
+};
+
 template <typename Entry>
 concept HasStaticRootEntryFoundFlag = requires(const Entry& entry) {
     entry.found();
@@ -1155,6 +1160,8 @@ static_assert(std::same_as<
     decltype(std::declval<const ruvia::detail::ResponseStreamState&>()
                  .commitPlan()),
     const ruvia::detail::ResponseStreamCommitPlan*>);
+static_assert(!ExposesRvalueResponseStreamCommitPlan<
+    ruvia::detail::ResponseStreamState>);
 static_assert(!std::default_initializable<
     ruvia::detail::Http1BufferedResponseWriteResult>);
 static_assert(!std::default_initializable<

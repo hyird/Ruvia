@@ -152,6 +152,8 @@ bool outputFalse(void*) noexcept {
     return false;
 }
 
+void releaseOutputContext(void*) noexcept {}
+
 ruvia::ResponseStreamWriter makeResponseStreamWriter(OutputSink& sink) noexcept {
     return ruvia::detail::StreamingAccess::makeResponseStreamWriter(
         &sink,
@@ -159,6 +161,7 @@ ruvia::ResponseStreamWriter makeResponseStreamWriter(OutputSink& sink) noexcept 
         &endOutput,
         &sleepOutput,
         &bindOutput,
+        &releaseOutputContext,
         &outputScratch,
         &outputFalse,
         &outputFalse);

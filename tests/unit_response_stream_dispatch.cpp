@@ -109,6 +109,11 @@ public:
         streamingHead_ = streamingHead;
     }
 
+    void releaseContext() noexcept {
+        context_ = nullptr;
+        streamingHead_ = nullptr;
+    }
+
     [[nodiscard]] std::pmr::string& scratch() noexcept {
         scratch_.clear();
         return scratch_;

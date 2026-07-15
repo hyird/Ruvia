@@ -66,6 +66,24 @@ detail::ContextServices withRouteHandlers(
         .withNotFoundHandler(notFoundHandler);
 }
 
+class ResponseStreamContextBinding final {
+public:
+    explicit ResponseStreamContextBinding(ResponseStreamWriter* writer) noexcept
+        : writer_(writer) {}
+
+    ~ResponseStreamContextBinding() {
+        if (writer_ != nullptr) {
+            detail::StreamingAccess::releaseContext(*writer_);
+        }
+    }
+
+    ResponseStreamContextBinding(const ResponseStreamContextBinding&) = delete;
+    ResponseStreamContextBinding& operator=(const ResponseStreamContextBinding&) = delete;
+
+private:
+    ResponseStreamWriter* writer_;
+};
+
 struct OwnedHttpErrorInfo;
 void assignExceptionError(OwnedHttpErrorInfo& errorInfo, std::exception_ptr exception);
 
@@ -220,6 +238,8 @@ Task<std::optional<HttpResponse>> detail::RouteTable::dispatchStreamRoute(
         withRouteHandlers(services, errorHandler_, notFoundHandler_));
     const auto* responseStreamOutput = services.responseOutput().responseStream();
     const bool webSocketRoute = route.endpoint().webSocket() != nullptr;
+    ResponseStreamContextBinding streamContextBinding(
+        responseStreamOutput != nullptr ? &responseStreamOutput->writer() : nullptr);
     if (responseStreamOutput != nullptr) {
         detail::StreamingAccess::bindContext(
             responseStreamOutput->writer(), context, &streamingHeadThunk);

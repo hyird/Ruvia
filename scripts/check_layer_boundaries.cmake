@@ -4107,6 +4107,8 @@ set(WEB_HTTP2_STREAM_SESSION
     "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/server/Http2SansIoSession.h")
 set(RESPONSE_STREAM_STATUS_TEST
     "${RUVIA_ROOT}/tests/unit_response_stream_dispatch.cpp")
+set(RESPONSE_STREAM_LIFECYCLE_TEST
+    "${RUVIA_ROOT}/tests/unit_streaming.cpp")
 set(HTTP1_SESSION_COMPLETION_TEST
     "${RUVIA_ROOT}/tests/unit_connection_read_buffer.cpp")
 set(RESPONSE_STREAM_H2_RUNTIME_TEST
@@ -4128,6 +4130,7 @@ foreach(response_stream_status_contract IN ITEMS
         "${WEB_HTTP1_STREAM_SESSION}"
         "${WEB_HTTP2_STREAM_SESSION}"
         "${RESPONSE_STREAM_STATUS_TEST}"
+        "${RESPONSE_STREAM_LIFECYCLE_TEST}"
         "${HTTP1_SESSION_COMPLETION_TEST}"
         "${RESPONSE_STREAM_H2_RUNTIME_TEST}"
         "${RESPONSE_STREAM_HTTP_PACKAGE_CONSUMER}"
@@ -4151,6 +4154,7 @@ if(EXISTS "${HTTP_RESPONSE_STREAM_COMMIT_PLAN}" AND
    EXISTS "${WEB_HTTP1_STREAM_SESSION}" AND
    EXISTS "${WEB_HTTP2_STREAM_SESSION}" AND
    EXISTS "${RESPONSE_STREAM_STATUS_TEST}" AND
+   EXISTS "${RESPONSE_STREAM_LIFECYCLE_TEST}" AND
    EXISTS "${HTTP1_SESSION_COMPLETION_TEST}" AND
    EXISTS "${RESPONSE_STREAM_H2_RUNTIME_TEST}" AND
    EXISTS "${RESPONSE_STREAM_HTTP_PACKAGE_CONSUMER}" AND
@@ -4178,6 +4182,8 @@ if(EXISTS "${HTTP_RESPONSE_STREAM_COMMIT_PLAN}" AND
         web_http2_stream_session)
     file(READ "${RESPONSE_STREAM_STATUS_TEST}"
         response_stream_status_test)
+    file(READ "${RESPONSE_STREAM_LIFECYCLE_TEST}"
+        response_stream_lifecycle_test)
     file(READ "${HTTP1_SESSION_COMPLETION_TEST}"
         http1_session_completion_test)
     file(READ "${RESPONSE_STREAM_H2_RUNTIME_TEST}"
@@ -4244,9 +4250,29 @@ if(EXISTS "${HTTP_RESPONSE_STREAM_COMMIT_PLAN}" AND
        NOT web_response_stream_dispatch_result MATCHES
            "committedResponseStreamStatus" OR
        NOT web_response_stream_state MATCHES
-           "std::optional<CommittedState> committed_" OR
+           "using State = std::variant<" OR
        NOT web_response_stream_state MATCHES
-           "const ResponseStreamCommitPlan[*] commitPlan[(][)] const noexcept" OR
+           "struct Unbound final" OR
+       NOT web_response_stream_state MATCHES
+           "struct Bound final" OR
+       NOT web_response_stream_state MATCHES
+           "struct Detached final" OR
+       NOT web_response_stream_state MATCHES
+           "struct BodyOpen final" OR
+       NOT web_response_stream_state MATCHES
+           "struct TrailersOnly final" OR
+       NOT web_response_stream_state MATCHES
+           "struct Ended final" OR
+       web_response_stream_state MATCHES
+           "std::optional<CommittedState>|context_|streamingHead_|committed_|enum class Phase" OR
+       NOT web_response_stream_state MATCHES
+           "commitPlan[(][)] const [&] noexcept" OR
+       NOT web_response_stream_state MATCHES
+           "void releaseContext[(][)] noexcept" OR
+       NOT web_route_stream_dispatch_source MATCHES
+           "class ResponseStreamContextBinding final" OR
+       NOT web_route_stream_dispatch_source MATCHES
+           "StreamingAccess::releaseContext" OR
        NOT web_http1_response_stream_route MATCHES
            "Task<Http1SessionRequestCompletion>" OR
        NOT web_http1_response_stream_route MATCHES
@@ -4319,6 +4345,10 @@ if(EXISTS "${HTTP_RESPONSE_STREAM_COMMIT_PLAN}" AND
            "response_stream_dispatch_types_precommit_failure_response" OR
        NOT response_stream_status_test MATCHES
            "makeRecoveredFailure" OR
+       NOT response_stream_lifecycle_test MATCHES
+           "committedContextReleased" OR
+       NOT response_stream_lifecycle_test MATCHES
+           "rebindRejected" OR
        NOT http1_session_completion_test MATCHES
            "http1_session_request_completion_owns_wire_and_buffer_outcome" OR
        NOT http1_session_completion_test MATCHES

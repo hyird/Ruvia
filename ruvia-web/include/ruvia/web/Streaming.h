@@ -73,7 +73,8 @@ private:
     using End = Task<void> (*)(void*, std::span<const HttpHeaderView>);
     using Sleep = Task<void> (*)(void*, std::chrono::milliseconds);
     using StreamingHeadThunk = HttpResponse (*)(Context&);
-    using BindContext = void (*)(void*, Context*, StreamingHeadThunk) noexcept;
+    using BindContext = void (*)(void*, Context*, StreamingHeadThunk);
+    using ReleaseContext = void (*)(void*) noexcept;
     using Scratch = std::pmr::string& (*)(void*) noexcept;
     using Committed = bool (*)(void*) noexcept;
     using Aborted = bool (*)(void*) noexcept;
@@ -84,6 +85,7 @@ private:
         End end,
         Sleep sleep,
         BindContext bindContext,
+        ReleaseContext releaseContext,
         Scratch scratch,
         Committed committed,
         Aborted aborted) noexcept
@@ -92,12 +94,17 @@ private:
           end_(end),
           sleep_(sleep),
           bindContext_(bindContext),
+          releaseContext_(releaseContext),
           scratch_(scratch),
           committed_(committed),
           aborted_(aborted) {}
 
-    void bindContext(Context& context, StreamingHeadThunk streamingHead) noexcept {
+    void bindContext(Context& context, StreamingHeadThunk streamingHead) {
         bindContext_(target_, &context, streamingHead);
+    }
+
+    void releaseContext() noexcept {
+        releaseContext_(target_);
     }
 
     [[nodiscard]] std::pmr::string& scratch() const {
@@ -113,6 +120,7 @@ private:
     End end_;
     Sleep sleep_;
     BindContext bindContext_;
+    ReleaseContext releaseContext_;
     Scratch scratch_;
     Committed committed_;
     Aborted aborted_;

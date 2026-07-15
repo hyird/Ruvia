@@ -571,6 +571,7 @@ struct StreamCaptureSink final {
     std::pmr::string scratch{std::pmr::get_default_resource()};
     bool committedFlag = false;
     bool endedFlag = false;
+    bool contextReleased = false;
     std::vector<std::string> writes;
 };
 
@@ -590,6 +591,9 @@ ruvia::Task<void> scEnd(
 }
 ruvia::Task<void> scSleep(void*, std::chrono::milliseconds) { co_return; }
 void scBind(void*, ruvia::Context*, ruvia::HttpResponse (*)(ruvia::Context&)) noexcept {}
+void scReleaseContext(void* target) noexcept {
+    static_cast<StreamCaptureSink*>(target)->contextReleased = true;
+}
 std::pmr::string& scScratch(void* target) noexcept {
     return static_cast<StreamCaptureSink*>(target)->scratch;
 }
@@ -600,7 +604,7 @@ bool scAborted(void*) noexcept { return false; }
 
 ruvia::ResponseStreamWriter scMakeWriter(StreamCaptureSink& sink) noexcept {
     return ruvia::detail::StreamingAccess::makeResponseStreamWriter(
-        &sink, &scWrite, &scEnd, &scSleep, &scBind, &scScratch,
+        &sink, &scWrite, &scEnd, &scSleep, &scBind, &scReleaseContext, &scScratch,
         &scCommitted, &scAborted);
 }
 
@@ -610,6 +614,7 @@ struct EmptyStreamDispatchObservation final {
     bool threw{false};
     bool ended{false};
     bool committed{false};
+    bool contextReleased{false};
     std::string bufferedBody;
 };
 
@@ -677,6 +682,7 @@ EmptyStreamDispatchObservation dispatchEmptyStreamWith(
     context.run();
     observation.ended = sink.endedFlag;
     observation.committed = sink.committedFlag;
+    observation.contextReleased = sink.contextReleased;
     return observation;
 }
 
@@ -890,6 +896,7 @@ RUVIA_TEST(stream_route_middleware_propagates_empty_handler_completion) {
     RUVIA_CHECK(!observation.buffered);
     RUVIA_CHECK(observation.ended);
     RUVIA_CHECK(observation.committed);
+    RUVIA_CHECK(observation.contextReleased);
     const std::vector<int> expected{1, -1};
     RUVIA_CHECK(g_chainOrder == expected);
 }
@@ -904,6 +911,7 @@ RUVIA_TEST(stream_route_uncommitted_handler_allows_middleware_override) {
     RUVIA_CHECK(observation.buffered);
     RUVIA_CHECK(!observation.ended);
     RUVIA_CHECK(!observation.committed);
+    RUVIA_CHECK(observation.contextReleased);
     RUVIA_CHECK_EQ(observation.bufferedBody, std::string("override"));
 }
 

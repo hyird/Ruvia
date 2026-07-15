@@ -48,8 +48,13 @@ bool responseStreamAbortedThunk(void* target) noexcept {
 
 template <typename Sink>
 void responseStreamBindContextThunk(
-    void* target, Context* context, HttpResponse (*streamingHead)(Context&)) noexcept {
+    void* target, Context* context, HttpResponse (*streamingHead)(Context&)) {
     static_cast<Sink*>(target)->bindContext(context, streamingHead);
+}
+
+template <typename Sink>
+void responseStreamReleaseContextThunk(void* target) noexcept {
+    static_cast<Sink*>(target)->releaseContext();
 }
 
 template <typename Sink>
@@ -70,6 +75,7 @@ template <typename Sink>
         &responseStreamEndThunk<Sink>,
         &responseStreamSleepThunk<Sink>,
         &responseStreamBindContextThunk<Sink>,
+        &responseStreamReleaseContextThunk<Sink>,
         &responseStreamScratchThunk<Sink>,
         &responseStreamCommittedThunk<Sink>,
         &responseStreamAbortedThunk<Sink>);
