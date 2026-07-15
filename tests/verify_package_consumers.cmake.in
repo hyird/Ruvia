@@ -2010,6 +2010,13 @@ if(NOT _installed_http_client MATCHES "enum class HttpScheme" OR
     message(FATAL_ERROR "installed outbound client model lost its typed sans-I/O API")
 endif()
 if(NOT _installed_http_client MATCHES
+       "HeaderInit[(]std::array<HttpHeaderView, N>&&[)] = delete" OR
+   NOT _installed_http_client MATCHES
+       "operator=[(]std::array<HttpHeaderView, N>&&[)] = delete")
+    message(FATAL_ERROR
+        "installed outbound client header table accepts a temporary array")
+endif()
+if(NOT _installed_http_client MATCHES
        "name[(][)] const [&] noexcept" OR
    NOT _installed_http_client MATCHES
        "value[(][)] const && = delete" OR
@@ -3461,6 +3468,12 @@ if(_built_components_csv MATCHES "(^|,)web(,|$)")
             "installed Web HTTP/2 runtime bypasses the HTTP-owned request-build failure")
     endif()
     if(NOT _installed_ws_handshake_writer MATCHES
+           "Task<std::error_code> writeWebSocketHandshake" OR
+       _installed_ws_handshake_writer MATCHES
+           "Task<bool> writeWebSocketHandshake" OR
+       NOT _installed_ws_handshake_writer MATCHES
+           "co_return writeCompletion[.]errorCode[(][)]" OR
+       NOT _installed_ws_handshake_writer MATCHES
            "const HttpWebSocketServerHandshake& handshake" OR
        NOT _installed_ws_runtime_connection MATCHES
            "WebSocketDeflateNegotiation deflate" OR
@@ -4595,6 +4608,27 @@ endfunction()
 ruvia_verify_package_consumer(
     full-all "${_install_prefix}" "${_built_components_csv}"
     "${_built_components_csv}" "${_built_components_csv}" "" FALSE)
+
+if("web" IN_LIST _built_components)
+    set(_send_window_header
+        "${_install_prefix}/include/ruvia/web/detail/http2/Http2SansIoSendWindow.h")
+    if(NOT EXISTS "${_send_window_header}")
+        message(FATAL_ERROR
+            "installed web package is missing Http2SansIoSendWindow.h")
+    endif()
+    file(READ "${_send_window_header}" _send_window_header_content)
+    if(NOT _send_window_header_content MATCHES
+           "class Http2SendWindowWaitResult final" OR
+       NOT _send_window_header_content MATCHES
+           "Task<Http2SendWindowWaitResult> awaitHttp2SendWindow" OR
+       NOT _send_window_header_content MATCHES
+           "const Http2SendWindowReady[*] ready[(][)] const &" OR
+       NOT _send_window_header_content MATCHES
+           "const Http2SendWindowAborted[*] aborted[(][)] const &")
+        message(FATAL_ERROR
+            "installed HTTP/2 send-window wait contract is incomplete")
+    endif()
+endif()
 
 if("core" IN_LIST _built_components)
     ruvia_verify_package_consumer(

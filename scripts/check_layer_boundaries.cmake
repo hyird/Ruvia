@@ -11454,6 +11454,86 @@ if(NOT agents_content MATCHES "README 面向使用者" OR
     boundary_error("AGENTS lost its contributor-guide contract"
         "AGENTS must retain document roles, directory/target/dependency rules, performance constraints, verification, and VCPKG_ROOT guidance")
 endif()
+set(HTTP2_SEND_WINDOW_HEADER
+    "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/http2/Http2SansIoSendWindow.h")
+set(HTTP2_SEND_WINDOW_SOURCE
+    "${RUVIA_ROOT}/ruvia-web/src/server/Http2SansIoSendWindow.cpp")
+if(NOT EXISTS "${HTTP2_SEND_WINDOW_HEADER}" OR
+   NOT EXISTS "${HTTP2_SEND_WINDOW_SOURCE}")
+    boundary_error("HTTP/2 send-window wait contract is missing"
+        "Web buffered, streaming, and WebSocket writers must share one typed wait path")
+else()
+    file(READ "${HTTP2_SEND_WINDOW_HEADER}" http2_send_window_header_content)
+    file(READ "${HTTP2_SEND_WINDOW_SOURCE}" http2_send_window_source_content)
+    if(NOT http2_send_window_header_content MATCHES
+           "class Http2SendWindowWaitResult final" OR
+       NOT http2_send_window_header_content MATCHES
+           "Task<Http2SendWindowWaitResult> awaitHttp2SendWindow" OR
+       NOT http2_send_window_source_content MATCHES
+           "signal == nullptr [|][|] signal->ended[(][)]" OR
+       NOT http2_send_window_source_content MATCHES
+           "connection[.]hasQueuedData[(]streamId[)]")
+        boundary_error("HTTP/2 send-window wait lost its typed state recheck"
+            "The shared Web helper must jointly recheck stream, signal, abort, and queued DATA state")
+    endif()
+endif()
+
+set(http2_send_window_consumers
+    "${RUVIA_ROOT}/ruvia-web/src/server/Http2BufferedResponseWrite.cpp"
+    "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/http2/Http2SansIoResponseStreamSink.h"
+    "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/http2/Http2SansIoWsTransport.h")
+foreach(send_window_consumer IN LISTS http2_send_window_consumers)
+    file(READ "${send_window_consumer}" send_window_consumer_content)
+    if(NOT send_window_consumer_content MATCHES "awaitHttp2SendWindow")
+        boundary_error("HTTP/2 writer bypasses the shared send-window wait"
+            "${send_window_consumer} must consume awaitHttp2SendWindow")
+    endif()
+    if(send_window_consumer_content MATCHES "Task<bool>.*awaitSendWindow" OR
+       send_window_consumer_content MATCHES "while [(].*hasQueuedData")
+        boundary_error("HTTP/2 writer duplicates send-window state decisions"
+            "${send_window_consumer} must not restore a bool or local polling path")
+    endif()
+endforeach()
+
+file(READ "${RUVIA_ROOT}/ruvia-web/CMakeLists.txt" web_cmake_send_window_content)
+if(NOT web_cmake_send_window_content MATCHES "Http2SansIoSendWindow[.]cpp")
+    boundary_error("HTTP/2 send-window implementation is not built"
+        "ruvia-web must compile Http2SansIoSendWindow.cpp")
+endif()
+
+set(WS_CONNECTION_HEADER
+    "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/websocket/HttpWebSocketConnection.h")
+set(WS_CONNECTION_WRITE
+    "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/websocket/HttpWebSocketConnectionWrite.inl")
+set(WS_CONNECTION_HEARTBEAT
+    "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/websocket/HttpWebSocketConnectionHeartbeat.inl")
+file(READ "${WS_CONNECTION_HEADER}" ws_connection_header_content)
+file(READ "${WS_CONNECTION_WRITE}" ws_connection_write_content)
+file(READ "${WS_CONNECTION_HEARTBEAT}" ws_connection_heartbeat_content)
+set(ws_connection_write_state
+    "${ws_connection_header_content}${ws_connection_write_content}${ws_connection_heartbeat_content}")
+if(NOT ws_connection_header_content MATCHES "enum class WritePhase" OR
+   NOT ws_connection_header_content MATCHES
+       "WritePhase writePhase_[{]WritePhase::kIdle[}]" OR
+   ws_connection_write_state MATCHES
+       "writeActive_|heartbeatWriteActive_|backgroundWriteCount_")
+    boundary_error("WebSocket write ownership is not a single typed phase"
+        "Application and heartbeat writes must transition one Idle/Application/Heartbeat state")
+endif()
+
+set(WS_HANDSHAKE_WRITER
+    "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/websocket/HttpWebSocketHandshake.h")
+file(READ "${WS_HANDSHAKE_WRITER}" ws_handshake_writer_content)
+if(NOT ws_handshake_writer_content MATCHES
+       "Task<std::error_code> writeWebSocketHandshake" OR
+   ws_handshake_writer_content MATCHES
+       "Task<bool> writeWebSocketHandshake" OR
+   NOT ws_handshake_writer_content MATCHES
+       "co_return writeCompletion[.]errorCode[(][)]")
+    boundary_error("WebSocket handshake writer discards transport failure identity"
+        "The HTTP/1 upgrade path must preserve the concrete async write error_code")
+endif()
+
 get_property(boundary_failed GLOBAL PROPERTY RUVIA_BOUNDARY_FAILED)
 if(boundary_failed)
     message(FATAL_ERROR "Ruvia layer-boundary checks failed")

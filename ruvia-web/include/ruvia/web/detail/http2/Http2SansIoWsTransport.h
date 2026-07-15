@@ -23,6 +23,7 @@
 #include "ruvia/http/detail/websocket/WsConnection.h"
 #include "ruvia/core/Task.h"
 #include "ruvia/http/detail/PmrString.h"
+#include "ruvia/web/detail/http2/Http2SansIoSendWindow.h"
 #include "ruvia/web/detail/http2/Http2SansIoStreamRuntime.h"
 
 namespace ruvia::detail {
@@ -102,21 +103,13 @@ public:
             // kQueued means this input is already core-owned; wait for it to drain,
             // then return without resubmitting. kBackpressured accepted no bytes, so
             // wait for the older queued input and retry this exact view.
-            while (connection_.hasQueuedData(streamId_)) {
-                auto* stream = connection_.stream(streamId_);
-                if (stream == nullptr || stream->isAborted() ||
-                    signal_.ended()) {
-                    co_return std::make_error_code(std::errc::connection_reset);
-                }
-                co_await signal_.wait();
+            const auto waitResult = co_await awaitHttp2SendWindow(
+                connection_, streamId_, &signal_);
+            if (waitResult.aborted() != nullptr) {
+                co_return std::make_error_code(std::errc::connection_reset);
             }
             if (result == Http2DataSubmitStatus::kQueued) {
                 co_return std::error_code{};
-            }
-            auto* stream = connection_.stream(streamId_);
-            if (stream == nullptr || stream->isAborted() ||
-                signal_.ended()) {
-                co_return std::make_error_code(std::errc::connection_reset);
             }
         }
     }

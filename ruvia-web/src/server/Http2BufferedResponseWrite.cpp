@@ -14,6 +14,7 @@
 #include "ruvia/http/detail/HttpResponseBodyAccess.h"
 #include "ruvia/http/detail/http2/Http2Connection.h"
 #include "ruvia/http/detail/server/HttpResponseWritePlan.h"
+#include "ruvia/web/detail/http2/Http2SansIoSendWindow.h"
 #include "ruvia/web/detail/http2/Http2SansIoStreamRuntime.h"
 #include "ruvia/web/detail/server/HttpFileChunkBuffer.h"
 #include "ruvia/web/detail/server/HttpFileOpen.h"
@@ -32,25 +33,6 @@ Http2BufferedResponseWriter::Http2BufferedResponseWriter(
 
 void Http2BufferedResponseWriter::wakeWriter() noexcept {
     writeSignal_->notify();
-}
-
-Task<bool> Http2BufferedResponseWriter::awaitSendWindow(
-    std::uint32_t streamId) {
-    auto* runtime = streamRuntimes_->find(streamId);
-    auto* signal = runtime != nullptr ? runtime->signal() : nullptr;
-    for (;;) {
-        auto* stream = connection_->stream(streamId);
-        if (stream == nullptr || stream->isAborted()) {
-            co_return false;
-        }
-        if (!connection_->hasQueuedData(streamId)) {
-            co_return true;
-        }
-        if (signal == nullptr || signal->ended()) {
-            co_return false;
-        }
-        co_await signal->wait();
-    }
 }
 
 Task<Http2BufferedResponseWriter::DataWriteResult>
@@ -76,7 +58,11 @@ Http2BufferedResponseWriter::writeData(
             result == Http2DataSubmitStatus::kContentLengthIncomplete) {
             co_return DataWriteResult::kFailed;
         }
-        if (!(co_await awaitSendWindow(streamId))) {
+        auto* runtime = streamRuntimes_->find(streamId);
+        auto* signal = runtime != nullptr ? runtime->signal() : nullptr;
+        const auto waitResult = co_await awaitHttp2SendWindow(
+            *connection_, streamId, signal);
+        if (waitResult.aborted() != nullptr) {
             co_return DataWriteResult::kPeerAborted;
         }
         if (result == Http2DataSubmitStatus::kQueued) {

@@ -76,6 +76,12 @@ public:
     Task<void> detachAndDrainBackgroundWrites();
 
 private:
+    enum class WritePhase : std::uint8_t {
+        kIdle,
+        kApplication,
+        kHeartbeat,
+    };
+
     class ReadGuard final {
     public:
         explicit ReadGuard(WebSocketConnection& connection) : connection_(connection) {
@@ -116,10 +122,8 @@ private:
     WsConnection protocol_;
     WorkerSignal backgroundWriteSignal_;
     WorkerSignal readerDoneSignal_;
-    std::size_t backgroundWriteCount_{0};
-    bool writeActive_{false};
+    WritePhase writePhase_{WritePhase::kIdle};
     bool readActive_{false};
-    bool heartbeatWriteActive_{false};
     bool awaitingPong_{false};
     std::int64_t heartbeatPingSentMs_{0};
     std::int64_t localCloseStartedMs_{-1};

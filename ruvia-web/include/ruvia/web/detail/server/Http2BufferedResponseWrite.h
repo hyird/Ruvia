@@ -213,7 +213,6 @@ private:
         kFailed
     };
 
-    [[nodiscard]] Task<bool> awaitSendWindow(std::uint32_t streamId);
     [[nodiscard]] Task<DataWriteResult> writeData(
         std::uint32_t streamId,
         std::string_view chunk,

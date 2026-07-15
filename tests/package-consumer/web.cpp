@@ -38,6 +38,7 @@
 #include <ruvia/web/detail/http/ContextCapabilities.h>
 #include <ruvia/web/detail/http/ContextServices.h>
 #include <ruvia/web/detail/http2/Http2SansIoStreamRuntime.h>
+#include <ruvia/web/detail/http2/Http2SansIoSendWindow.h>
 #include <ruvia/web/detail/json/JsonString.h>
 #include <ruvia/web/detail/model/Parser.h>
 #include <ruvia/web/detail/router/RouteTable.h>
@@ -90,6 +91,25 @@ static_assert(std::same_as<
         HttpServerWorkerCompletion&>().workerFailure()),
     std::exception_ptr>);
 static_assert(!std::is_copy_assignable_v<ruvia::MultipartReader>);
+
+template <typename Result>
+concept ExposesRvalueSendWindowAlternative = requires(Result result) {
+    std::move(result).ready();
+    std::move(result).aborted();
+};
+
+static_assert(!std::default_initializable<
+    ruvia::detail::Http2SendWindowWaitResult>);
+static_assert(std::same_as<
+    decltype(std::declval<const ruvia::detail::Http2SendWindowWaitResult&>()
+                 .ready()),
+    const ruvia::detail::Http2SendWindowReady*>);
+static_assert(std::same_as<
+    decltype(std::declval<const ruvia::detail::Http2SendWindowWaitResult&>()
+                 .aborted()),
+    const ruvia::detail::Http2SendWindowAborted*>);
+static_assert(!ExposesRvalueSendWindowAlternative<
+    ruvia::detail::Http2SendWindowWaitResult>);
 
 template <typename Decision>
 concept ExposesRvalueRateLimitAlternative = requires(Decision decision) {

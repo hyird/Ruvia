@@ -1346,6 +1346,12 @@ static_assert(HasHttpClientRequestContentValue<
 static_assert(!HasHttpClientRequestContentValue<
     ruvia::HttpClientRequestWithoutContent>);
 static_assert(!std::default_initializable<ruvia::HttpClientRequestContent>);
+static_assert(!std::is_constructible_v<
+    ruvia::HttpClientRequest::HeaderInit,
+    std::array<ruvia::HttpHeaderView, 1>&&>);
+static_assert(!std::is_assignable_v<
+    ruvia::HttpClientRequest::HeaderInit&,
+    std::array<ruvia::HttpHeaderView, 1>&&>);
 static_assert(!std::default_initializable<
     ruvia::HttpClientRequestWithoutContent>);
 static_assert(!std::default_initializable<ruvia::HttpClientRequestBytes>);

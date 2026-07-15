@@ -69,6 +69,12 @@ static_assert(!HasAnyRvalueHttp1ClientRequestContentPlanAccessor<
     ruvia::Http1ClientRequestContentPlan>);
 static_assert(!HasRvaluePreparedHttp1ClientRequestContentPlan<
     ruvia::PreparedHttp1ClientRequest>);
+static_assert(!std::is_constructible_v<
+    HttpClientRequest::HeaderInit,
+    std::array<ruvia::HttpHeaderView, 1>&&>);
+static_assert(!std::is_assignable_v<
+    HttpClientRequest::HeaderInit&,
+    std::array<ruvia::HttpHeaderView, 1>&&>);
 
 template <typename T>
 concept HasRequestContentMode = requires(const T& content) {

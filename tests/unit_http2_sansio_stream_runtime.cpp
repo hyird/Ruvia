@@ -3,6 +3,7 @@
 #include <concepts>
 #include <cstddef>
 #include <memory_resource>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -12,7 +13,10 @@
 #include <asio/detached.hpp>
 #include <asio/io_context.hpp>
 
+#include "ruvia/core/detail/AsioAwait.h"
+#include "ruvia/http/detail/http2/Http2Connection.h"
 #include "ruvia/http/ProtocolByteLimit.h"
+#include "ruvia/web/detail/http2/Http2SansIoSendWindow.h"
 #include "ruvia/web/detail/router/RouteModes.h"
 #include "ruvia/web/detail/http2/Http2SansIoStreamRuntime.h"
 
@@ -25,6 +29,7 @@ using ruvia::detail::Http2StreamingRequestBody;
 using ruvia::detail::Http2SansIoBodyQueue;
 using ruvia::detail::Http2SansIoStreamRuntime;
 using ruvia::detail::Http2SansIoStreamRuntimeTable;
+using ruvia::detail::Http2SendWindowWaitResult;
 using ruvia::detail::Http2StreamState;
 using ruvia::detail::RequestBodyMode;
 using ruvia::detail::RouteResolution;
@@ -49,6 +54,13 @@ static_assert(std::same_as<
     decltype(std::declval<Http2SansIoStreamRuntimeTable&>().ensureAccepted(
         std::declval<const Http2StreamState&>())),
     Http2SansIoStreamRuntime&>);
+static_assert(!std::default_initializable<Http2SendWindowWaitResult>);
+static_assert(std::same_as<
+    decltype(std::declval<const Http2SendWindowWaitResult&>().ready()),
+    const ruvia::detail::Http2SendWindowReady*>);
+static_assert(std::same_as<
+    decltype(std::declval<const Http2SendWindowWaitResult&>().aborted()),
+    const ruvia::detail::Http2SendWindowAborted*>);
 
 Http2SansIoStreamRuntime& ensureAcceptedRuntime(
     Http2SansIoStreamRuntimeTable& table,
@@ -58,7 +70,28 @@ Http2SansIoStreamRuntime& ensureAcceptedRuntime(
     return table.ensureAccepted(acceptedStream);
 }
 
+asio::awaitable<void> collectSendWindowResult(
+    ruvia::detail::Http2Connection& connection,
+    std::optional<Http2SendWindowWaitResult>& result) {
+    result = co_await ruvia::detail::taskAsAwaitable(
+        ruvia::detail::awaitHttp2SendWindow(connection, 1, nullptr));
+}
+
 }  // namespace
+
+RUVIA_TEST(http2_send_window_wait_rejects_missing_stream_or_signal) {
+    asio::io_context io;
+    ruvia::detail::Http2Connection connection(std::pmr::get_default_resource());
+    std::optional<Http2SendWindowWaitResult> result;
+    asio::co_spawn(
+        io,
+        collectSendWindowResult(connection, result),
+        asio::detached);
+    io.run();
+    RUVIA_CHECK(result.has_value());
+    RUVIA_CHECK(result->ready() == nullptr);
+    RUVIA_CHECK(result->aborted() != nullptr);
+}
 
 RUVIA_TEST(http2_web_body_queue_preserves_fifo_and_tracks_backlog) {
     Http2SansIoBodyQueue queue(std::pmr::get_default_resource());

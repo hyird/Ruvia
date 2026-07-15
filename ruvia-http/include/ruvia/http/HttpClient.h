@@ -217,6 +217,9 @@ struct HttpClientRequest {
         constexpr HeaderInit(const std::array<HttpHeaderView, N>& headers) noexcept
             : headers_(headers.data(), headers.size()) {}
 
+        template <std::size_t N>
+        HeaderInit(std::array<HttpHeaderView, N>&&) = delete;
+
         template <typename Allocator>
         HeaderInit(const std::vector<HttpHeaderView, Allocator>&) = delete;
 
@@ -238,6 +241,9 @@ struct HttpClientRequest {
             headers_ = std::span<const HttpHeaderView>(headers.data(), headers.size());
             return *this;
         }
+
+        template <std::size_t N>
+        HeaderInit& operator=(std::array<HttpHeaderView, N>&&) = delete;
 
         template <typename Allocator>
         HeaderInit& operator=(const std::vector<HttpHeaderView, Allocator>&) = delete;

@@ -26,6 +26,7 @@
 
 #include "ruvia/http/detail/http2/Http2Connection.h"
 #include "ruvia/http/detail/server/HttpResponseTrailers.h"
+#include "ruvia/web/detail/http2/Http2SansIoSendWindow.h"
 #include "ruvia/web/detail/http2/Http2SansIoStreamRuntime.h"
 #include "ruvia/http/detail/server/HttpResponseStreamHead.h"
 #include "ruvia/web/detail/server/HttpResponseStreamState.h"
@@ -113,7 +114,9 @@ public:
             if (result == Http2DataSubmitStatus::kContentLengthIncomplete) {
                 throw std::length_error("HTTP/2 response ended before Content-Length");
             }
-            if (!(co_await awaitSendWindow())) {
+            const auto waitResult = co_await awaitHttp2SendWindow(
+                connection_, streamId_, &streamSignal_);
+            if (waitResult.aborted() != nullptr) {
                 throw std::system_error(std::make_error_code(std::errc::connection_reset));
             }
             if (result == Http2DataSubmitStatus::kQueued) {
@@ -165,9 +168,13 @@ public:
         if (result == Http2FinishSubmitStatus::kContentLengthIncomplete) {
             throw std::length_error("HTTP/2 response ended before Content-Length");
         }
-        if (result == Http2FinishSubmitStatus::kQueued &&
-            !(co_await awaitSendWindow())) {
-            throw std::system_error(std::make_error_code(std::errc::connection_reset));
+        if (result == Http2FinishSubmitStatus::kQueued) {
+            const auto waitResult = co_await awaitHttp2SendWindow(
+                connection_, streamId_, &streamSignal_);
+            if (waitResult.aborted() != nullptr) {
+                throw std::system_error(
+                    std::make_error_code(std::errc::connection_reset));
+            }
         }
         state_.markEnded();
     }
@@ -203,23 +210,6 @@ private:
     // the peer happens to send something (SSE over a quiet connection stalls).
     void wakeWriter() noexcept {
         writeSignal_.notify();
-    }
-
-    // Park until the reader reports the window-blocked remainder drained. A spurious
-    // wake just re-checks; if the stream dies or the session tears down, stop waiting
-    // (the dispatch wrapper observes the abort via peerAborted / isAborted).
-    Task<bool> awaitSendWindow() {
-        while (connection_.hasQueuedData(streamId_)) {
-            auto* stream = connection_.stream(streamId_);
-            if (stream == nullptr || stream->isAborted() ||
-                streamSignal_.ended()) {
-                co_return false;
-            }
-            co_await streamSignal_.wait();
-        }
-        auto* stream = connection_.stream(streamId_);
-        co_return stream != nullptr && !stream->isAborted() &&
-            !streamSignal_.ended();
     }
 
     Http2Connection& connection_;

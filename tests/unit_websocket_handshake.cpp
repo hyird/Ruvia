@@ -1,15 +1,23 @@
 #include "test_harness.h"
 
 #include <concepts>
+#include <system_error>
 #include <string>
 #include <string_view>
 #include <utility>
+
+#include <asio/co_spawn.hpp>
+#include <asio/io_context.hpp>
+#include <asio/post.hpp>
+#include <asio/use_future.hpp>
 
 #include "ruvia/http/detail/http1/Http1ServerRequestParser.h"
 #include "ruvia/http/detail/websocket/HttpWebSocketUtils.h"
 #include "ruvia/http/detail/websocket/HttpWebSocketHandshakeValidation.h"
 #include "ruvia/http/detail/websocket/HttpWebSocketServerHandshake.h"
 #include "ruvia/http/HttpRequest.h"
+#include "ruvia/core/detail/AsioAwait.h"
+#include "ruvia/web/detail/websocket/HttpWebSocketHandshake.h"
 
 namespace {
 
@@ -25,6 +33,30 @@ concept HasRvalueWebSocketHandshakeNegotiation =
 
 static_assert(!HasRvalueWebSocketHandshakeNegotiation<
     ruvia::detail::HttpWebSocketServerHandshake>);
+
+class FailingHandshakeWriteStream final {
+public:
+    using executor_type = asio::io_context::executor_type;
+
+    explicit FailingHandshakeWriteStream(asio::io_context& io) noexcept
+        : executor_(io.get_executor()) {}
+
+    [[nodiscard]] executor_type get_executor() const noexcept {
+        return executor_;
+    }
+
+    template <typename ConstBufferSequence, typename Handler>
+    void async_write_some(const ConstBufferSequence&, Handler&& handler) {
+        asio::post(executor_, [handler = std::forward<Handler>(handler)]() mutable {
+            std::move(handler)(
+                std::make_error_code(std::errc::broken_pipe),
+                std::size_t{0});
+        });
+    }
+
+private:
+    executor_type executor_;
+};
 
 HttpRequest parseRequest(std::string_view rawRequest) {
     Http1ServerRequestParser parser;
@@ -240,4 +272,21 @@ RUVIA_TEST(ws_server_handshake_response_serialization_is_http_owned) {
     RUVIA_CHECK_EQ(
         handshake.negotiation().extensions(),
         ruvia::detail::kWebSocketDeflateResponseExtensionsMaxWindow);
+}
+
+RUVIA_TEST(ws_handshake_writer_preserves_transport_error) {
+    const auto request = parseRequest(validHandshake());
+    const auto handshake = ruvia::detail::makeHttpWebSocketServerHandshake(
+        request, {});
+    asio::io_context io;
+    FailingHandshakeWriteStream stream(io);
+    auto result = asio::co_spawn(
+        io,
+        ruvia::detail::taskAsAwaitable(
+            ruvia::detail::writeWebSocketHandshake(stream, handshake)),
+        asio::use_future);
+    io.run();
+    RUVIA_CHECK_EQ(
+        result.get(),
+        std::make_error_code(std::errc::broken_pipe));
 }

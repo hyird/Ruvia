@@ -10,10 +10,10 @@ Task<void> WebSocketConnection<Transport>::write(WebSocketOpcode opcode, std::st
 template <typename Transport>
 Task<void> WebSocketConnection<Transport>::close(std::uint16_t code, std::string_view reason) {
     co_await waitForHeartbeatWrite();
-    if (writeActive_) {
+    if (writePhase_ != WritePhase::kIdle) {
         throw std::logic_error("concurrent websocket writes are not supported");
     }
-    writeActive_ = true;
+    writePhase_ = WritePhase::kApplication;
     bool flushOutput = false;
     bool awaitPeerClose = false;
     try {
@@ -39,11 +39,11 @@ Task<void> WebSocketConnection<Transport>::close(std::uint16_t code, std::string
             co_await flushProtocolOutputNow();
         }
     } catch (...) {
-        writeActive_ = false;
+        writePhase_ = WritePhase::kIdle;
         notifyWriteIdle();
         throw;
     }
-    writeActive_ = false;
+    writePhase_ = WritePhase::kIdle;
     notifyWriteIdle();
 
     // RFC 6455: sending Close starts, but does not complete, the handshake.
@@ -64,7 +64,7 @@ Task<void> WebSocketConnection<Transport>::close(std::uint16_t code, std::string
 template <typename Transport>
 Task<void> WebSocketConnection<Transport>::detachAndDrainBackgroundWrites() {
     periodicCheck_.reset();
-    while (backgroundWriteCount_ > 0) {
+    while (writePhase_ == WritePhase::kHeartbeat) {
         co_await backgroundWriteSignal_.wait();
     }
     abortTransport();
@@ -72,14 +72,14 @@ Task<void> WebSocketConnection<Transport>::detachAndDrainBackgroundWrites() {
 
 template <typename Transport>
 Task<void> WebSocketConnection<Transport>::waitForHeartbeatWrite() {
-    while (heartbeatWriteActive_) {
+    while (writePhase_ == WritePhase::kHeartbeat) {
         co_await backgroundWriteSignal_.wait();
     }
 }
 
 template <typename Transport>
 Task<void> WebSocketConnection<Transport>::waitForWriteIdle() {
-    while (writeActive_) {
+    while (writePhase_ != WritePhase::kIdle) {
         co_await backgroundWriteSignal_.wait();
     }
 }
@@ -94,19 +94,19 @@ Task<void> WebSocketConnection<Transport>::writeExclusive(
     WebSocketOpcode opcode,
     std::string_view payload) {
     co_await waitForHeartbeatWrite();
-    if (writeActive_) {
+    if (writePhase_ != WritePhase::kIdle) {
         throw std::logic_error("concurrent websocket writes are not supported");
     }
 
-    writeActive_ = true;
+    writePhase_ = WritePhase::kApplication;
     try {
         co_await writeFrameNow(opcode, payload);
     } catch (...) {
-        writeActive_ = false;
+        writePhase_ = WritePhase::kIdle;
         notifyWriteIdle();
         throw;
     }
-    writeActive_ = false;
+    writePhase_ = WritePhase::kIdle;
     notifyWriteIdle();
 }
 
@@ -132,15 +132,15 @@ Task<void> WebSocketConnection<Transport>::writeFrameNow(
 template <typename Transport>
 Task<void> WebSocketConnection<Transport>::flushProtocolOutputExclusive() {
     co_await waitForWriteIdle();
-    writeActive_ = true;
+    writePhase_ = WritePhase::kApplication;
     try {
         co_await flushProtocolOutputNow();
     } catch (...) {
-        writeActive_ = false;
+        writePhase_ = WritePhase::kIdle;
         notifyWriteIdle();
         throw;
     }
-    writeActive_ = false;
+    writePhase_ = WritePhase::kIdle;
     notifyWriteIdle();
 }
 

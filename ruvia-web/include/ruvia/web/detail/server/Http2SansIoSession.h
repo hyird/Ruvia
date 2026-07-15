@@ -587,7 +587,7 @@ Task<void> runHttp2SansIoSession(
     };
 
     // Admit a stream for dispatch: EVERY dispatched stream gets a signal, so response
-    // send-window pacing (awaitSendWindow / the streaming sink) can be woken by
+    // shared send-window pacing can be woken by
     // takeDrainedDataStreams no matter the body kind -- a plain route returning a large
     // file or a stream body blocks on the send window exactly like a streaming route,
     // and without a signal its blocked submit could never be woken (truncation + hang).
