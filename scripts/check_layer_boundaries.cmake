@@ -9667,6 +9667,10 @@ set(WS_SERVER_NEGOTIATION_HEADER
     "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/detail/websocket/WebSocketServerNegotiation.h")
 set(WS_H1_HANDSHAKE_HEADER
     "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/detail/websocket/HttpWebSocketServerHandshake.h")
+set(WS_HANDSHAKE_VALIDATION_HEADER
+    "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/detail/websocket/HttpWebSocketHandshakeValidation.h")
+set(WS_HANDSHAKE_VALIDATION_SOURCE
+    "${RUVIA_ROOT}/ruvia-http/src/websocket/HttpWebSocketValidation.cpp")
 set(WS_H2_HANDSHAKE_HEADER
     "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/detail/http2/Http2WebSocketHandshake.h")
 set(WS_H2_CONNECTION_HEADER
@@ -9681,6 +9685,8 @@ foreach(required IN ITEMS
     "${WS_DEFLATE_NEGOTIATION_HEADER}"
     "${WS_SERVER_NEGOTIATION_HEADER}"
     "${WS_H1_HANDSHAKE_HEADER}"
+    "${WS_HANDSHAKE_VALIDATION_HEADER}"
+    "${WS_HANDSHAKE_VALIDATION_SOURCE}"
     "${WS_H2_HANDSHAKE_HEADER}"
     "${WS_H2_CONNECTION_HEADER}"
     "${WS_H1_HANDSHAKE_WRITER}"
@@ -9694,6 +9700,8 @@ endforeach()
 if(EXISTS "${WS_DEFLATE_NEGOTIATION_HEADER}" AND
    EXISTS "${WS_SERVER_NEGOTIATION_HEADER}" AND
    EXISTS "${WS_H1_HANDSHAKE_HEADER}" AND
+   EXISTS "${WS_HANDSHAKE_VALIDATION_HEADER}" AND
+   EXISTS "${WS_HANDSHAKE_VALIDATION_SOURCE}" AND
    EXISTS "${WS_H2_HANDSHAKE_HEADER}" AND
    EXISTS "${WS_H2_CONNECTION_HEADER}" AND
    EXISTS "${WS_H1_HANDSHAKE_WRITER}" AND
@@ -9702,6 +9710,8 @@ if(EXISTS "${WS_DEFLATE_NEGOTIATION_HEADER}" AND
     file(READ "${WS_DEFLATE_NEGOTIATION_HEADER}" ws_deflate_negotiation)
     file(READ "${WS_SERVER_NEGOTIATION_HEADER}" ws_server_negotiation)
     file(READ "${WS_H1_HANDSHAKE_HEADER}" ws_h1_handshake)
+    file(READ "${WS_HANDSHAKE_VALIDATION_HEADER}" ws_handshake_validation)
+    file(READ "${WS_HANDSHAKE_VALIDATION_SOURCE}" ws_h1_validation_source)
     file(READ "${WS_H2_HANDSHAKE_HEADER}" ws_h2_handshake)
     file(READ "${WS_H2_CONNECTION_HEADER}" ws_h2_connection)
     file(READ "${WS_H1_HANDSHAKE_WRITER}" ws_h1_writer)
@@ -9733,8 +9743,32 @@ if(EXISTS "${WS_DEFLATE_NEGOTIATION_HEADER}" AND
            "class HttpWebSocketServerHandshake final" OR
        NOT ws_h1_handshake MATCHES "const WebSocketServerNegotiation&" OR
        NOT ws_h1_handshake MATCHES "makeHttpWebSocketServerHandshake" OR
+       NOT ws_handshake_validation MATCHES
+           "class HttpWebSocketHandshakeValidationResult final" OR
+       NOT ws_handshake_validation MATCHES
+           "using Value = std::variant" OR
+       NOT ws_handshake_validation MATCHES
+           "HttpWebSocketHandshakeAccepted" OR
+       NOT ws_handshake_validation MATCHES
+           "HttpWebSocketHandshakeFailure" OR
+       NOT ws_handshake_validation MATCHES
+           "HttpProtocolError protocolError[(][)] const noexcept" OR
+       NOT ws_handshake_validation MATCHES
+           "applyRequiredResponseHeaders" OR
+       NOT ws_handshake_validation MATCHES
+           "Sec-WebSocket-Version" OR
+       NOT ws_h1_validation_source MATCHES
+           "validateHttp1WebSocketHandshake" OR
+       NOT ws_h1_validation_source MATCHES
+           "bodyPlan[.]requiresConsumption[(][)]" OR
+       ws_h1_validation_source MATCHES
+           "isValidWebSocketRequest" OR
        NOT ws_h2_handshake MATCHES
            "const WebSocketServerNegotiation& negotiation" OR
+       NOT ws_h2_handshake MATCHES
+           "validateHttp2WebSocketHandshake" OR
+       ws_h2_handshake MATCHES
+           "http2IsValidWebSocketRequest" OR
        NOT ws_h2_connection MATCHES
            "class Http2WebSocketHandshakeSubmitFailure final" OR
        NOT ws_h2_connection MATCHES
@@ -9751,8 +9785,22 @@ if(EXISTS "${WS_DEFLATE_NEGOTIATION_HEADER}" AND
            "const HttpWebSocketServerHandshake& handshake" OR
        NOT ws_h1_route MATCHES "makeHttpWebSocketServerHandshake" OR
        NOT ws_h1_route MATCHES
+           "validateHttp1WebSocketHandshake" OR
+       NOT ws_h1_route MATCHES
+           "failure->protocolError[(][)]" OR
+       NOT ws_h1_route MATCHES
+           "failure->applyRequiredResponseHeaders[(]response[)]" OR
+       ws_h1_route MATCHES
+           "invalid websocket upgrade" OR
+       NOT ws_h1_route MATCHES
            "handshake[.]negotiation[(][)][.]deflate[(][)]" OR
        NOT ws_h2_route MATCHES "makeWebSocketServerNegotiation" OR
+       NOT ws_h2_route MATCHES
+           "validateHttp2WebSocketHandshake" OR
+       NOT ws_h2_route MATCHES
+           "failure->applyRequiredResponseHeaders[(]response[)]" OR
+       ws_h2_route MATCHES
+           "invalid http2 websocket request" OR
        NOT ws_h2_route MATCHES "handshakeResult[.]submitted[(][)]" OR
        NOT ws_h2_route MATCHES
            "submittedHandshake->deflate[(][)]" OR
@@ -10022,9 +10070,17 @@ if(EXISTS "${WS_H1_HANDSHAKE_TEST}" AND
     if(NOT ws_h1_handshake_test MATCHES
            "ws_server_handshake_response_serialization_is_http_owned" OR
        NOT ws_h1_handshake_test MATCHES
+           "unsupported WebSocket version" OR
+       NOT ws_h1_handshake_test MATCHES
+           "applyRequiredResponseHeaders" OR
+       NOT ws_h1_handshake_test MATCHES
            "kAcceptedWithServerMaxWindowBits" OR
        NOT ws_h2_handshake_test MATCHES
            "makeWebSocketServerNegotiation" OR
+       NOT ws_h2_handshake_test MATCHES
+           "unsupported WebSocket version" OR
+       NOT ws_h2_handshake_test MATCHES
+           "applyRequiredResponseHeaders" OR
        NOT ws_h2_connection_test MATCHES
            "duplicateHandshakeResult[.]failure[(][)]->error[(][)]" OR
        NOT ws_negotiation_runtime_test MATCHES
@@ -10036,7 +10092,9 @@ if(EXISTS "${WS_H1_HANDSHAKE_TEST}" AND
        NOT ws_negotiation_package_consumer MATCHES
            "AcceptsLooseWebSocketHandshakeSubmit" OR
        NOT ws_negotiation_package_consumer MATCHES
-           "Http2WebSocketHandshakeSubmitResult")
+           "Http2WebSocketHandshakeSubmitResult" OR
+       NOT ws_negotiation_package_consumer MATCHES
+           "HttpWebSocketHandshakeValidationResult")
         boundary_error("immutable WebSocket server negotiation is insufficiently tested"
             "H1/H2 serialization, committed submission, typed frame handoff, and installed compile contracts must stay pinned")
     endif()

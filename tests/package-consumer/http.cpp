@@ -67,6 +67,7 @@
 #include <ruvia/http/detail/server/HttpFinalResponseControlPlan.h>
 #include <ruvia/http/detail/server/HttpResponseWritePlan.h>
 #include <ruvia/http/detail/websocket/HttpWebSocketServerHandshake.h>
+#include <ruvia/http/detail/websocket/HttpWebSocketHandshakeValidation.h>
 #include <ruvia/http/detail/websocket/WebSocketServerNegotiation.h>
 #include <ruvia/http/detail/websocket/WsConnection.h>
 #include <ruvia/http/detail/websocket/WsEvent.h>
@@ -453,6 +454,18 @@ template <typename T>
 concept HasWebSocketHandshakeErrorAccessor = requires(const T& value) {
     { value.error() } -> std::same_as<
         ruvia::detail::Http2WebSocketHandshakeSubmitError>;
+};
+
+template <typename T>
+concept ExposesRvalueWebSocketHandshakeValidationAlternative =
+    requires(const T&& result) { std::move(result).accepted(); } ||
+    requires(const T&& result) { std::move(result).failure(); };
+
+template <typename T>
+concept AppliesRequiredWebSocketResponseHeaders = requires(
+    const T& failure,
+    ruvia::HttpResponse& response) {
+    failure.applyRequiredResponseHeaders(response);
 };
 
 template <typename T>
@@ -2315,13 +2328,51 @@ using WebSocketServerNegotiator =
 using HttpWebSocketServerHandshakeFactory =
     ruvia::detail::HttpWebSocketServerHandshake (*)(
         const ruvia::HttpRequest&,
-        std::string_view) noexcept;
+    std::string_view) noexcept;
+using Http1WebSocketHandshakeValidator =
+    ruvia::detail::HttpWebSocketHandshakeValidationResult (*)(
+        const ruvia::HttpRequest&,
+        const ruvia::detail::Http1RequestBodyPlan&) noexcept;
+using Http2WebSocketHandshakeValidator =
+    ruvia::detail::HttpWebSocketHandshakeValidationResult (*)(
+        const ruvia::detail::Http2StreamState&,
+        const ruvia::HttpRequest&) noexcept;
 static_assert(std::same_as<
     decltype(&ruvia::detail::makeWebSocketServerNegotiation),
     WebSocketServerNegotiator>);
 static_assert(std::same_as<
     decltype(&ruvia::detail::makeHttpWebSocketServerHandshake),
     HttpWebSocketServerHandshakeFactory>);
+static_assert(std::same_as<
+    decltype(&ruvia::detail::validateHttp1WebSocketHandshake),
+    Http1WebSocketHandshakeValidator>);
+static_assert(std::same_as<
+    decltype(&ruvia::detail::validateHttp2WebSocketHandshake),
+    Http2WebSocketHandshakeValidator>);
+static_assert(!std::default_initializable<
+    ruvia::detail::HttpWebSocketHandshakeAccepted>);
+static_assert(!std::default_initializable<
+    ruvia::detail::HttpWebSocketHandshakeFailure>);
+static_assert(!std::default_initializable<
+    ruvia::detail::HttpWebSocketHandshakeValidationResult>);
+static_assert(!ExposesRvalueWebSocketHandshakeValidationAlternative<
+    ruvia::detail::HttpWebSocketHandshakeValidationResult>);
+static_assert(!HasRawContentDecodeError<
+    ruvia::detail::HttpWebSocketHandshakeFailure>);
+static_assert(AppliesRequiredWebSocketResponseHeaders<
+    ruvia::detail::HttpWebSocketHandshakeFailure>);
+static_assert(std::same_as<
+    decltype(std::declval<const ruvia::detail::
+        HttpWebSocketHandshakeValidationResult&>().accepted()),
+    const ruvia::detail::HttpWebSocketHandshakeAccepted*>);
+static_assert(std::same_as<
+    decltype(std::declval<const ruvia::detail::
+        HttpWebSocketHandshakeValidationResult&>().failure()),
+    const ruvia::detail::HttpWebSocketHandshakeFailure*>);
+static_assert(std::same_as<
+    decltype(std::declval<const ruvia::detail::
+        HttpWebSocketHandshakeFailure&>().protocolError()),
+    ruvia::HttpProtocolError>);
 static_assert(std::is_enum_v<
     ruvia::detail::WebSocketDeflateNegotiation>);
 static_assert(!std::constructible_from<

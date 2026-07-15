@@ -1639,11 +1639,14 @@ set(_installed_ws_h1_handshake_path
     "${_install_prefix}/include/ruvia/http/detail/websocket/HttpWebSocketServerHandshake.h")
 set(_installed_ws_h2_handshake_path
     "${_install_prefix}/include/ruvia/http/detail/http2/Http2WebSocketHandshake.h")
+set(_installed_ws_handshake_validation_path
+    "${_install_prefix}/include/ruvia/http/detail/websocket/HttpWebSocketHandshakeValidation.h")
 foreach(_ws_negotiation_contract IN ITEMS
         "${_installed_ws_deflate_negotiation_path}"
         "${_installed_ws_server_negotiation_path}"
         "${_installed_ws_h1_handshake_path}"
-        "${_installed_ws_h2_handshake_path}")
+        "${_installed_ws_h2_handshake_path}"
+        "${_installed_ws_handshake_validation_path}")
     if(NOT EXISTS "${_ws_negotiation_contract}")
         message(FATAL_ERROR
             "installed HTTP package is missing immutable WebSocket negotiation")
@@ -1657,6 +1660,8 @@ file(READ "${_installed_ws_h1_handshake_path}"
     _installed_ws_h1_handshake)
 file(READ "${_installed_ws_h2_handshake_path}"
     _installed_ws_h2_handshake)
+file(READ "${_installed_ws_handshake_validation_path}"
+    _installed_ws_handshake_validation)
 if(NOT _installed_ws_deflate_negotiation MATCHES
        "enum class WebSocketDeflateNegotiation" OR
    NOT _installed_ws_deflate_negotiation MATCHES "kDisabled" OR
@@ -1681,8 +1686,26 @@ if(NOT _installed_ws_deflate_negotiation MATCHES
        "class HttpWebSocketServerHandshake final" OR
    NOT _installed_ws_h1_handshake MATCHES
        "const WebSocketServerNegotiation&" OR
+   NOT _installed_ws_handshake_validation MATCHES
+       "class HttpWebSocketHandshakeAccepted final" OR
+   NOT _installed_ws_handshake_validation MATCHES
+       "class HttpWebSocketHandshakeFailure final" OR
+   NOT _installed_ws_handshake_validation MATCHES
+       "class HttpWebSocketHandshakeValidationResult final" OR
+   NOT _installed_ws_handshake_validation MATCHES
+       "using Value = std::variant" OR
+   NOT _installed_ws_handshake_validation MATCHES
+       "HttpProtocolError protocolError[(][)] const noexcept" OR
+   NOT _installed_ws_handshake_validation MATCHES
+       "applyRequiredResponseHeaders" OR
+   NOT _installed_ws_handshake_validation MATCHES
+       "Sec-WebSocket-Version" OR
    NOT _installed_ws_h2_handshake MATCHES
        "const WebSocketServerNegotiation& negotiation" OR
+   NOT _installed_ws_h2_handshake MATCHES
+       "validateHttp2WebSocketHandshake" OR
+   _installed_ws_h2_handshake MATCHES
+       "http2IsValidWebSocketRequest" OR
    NOT _installed_http2_connection MATCHES
        "class Http2WebSocketHandshakeSubmitFailure final" OR
    NOT _installed_http2_connection MATCHES
@@ -3363,9 +3386,21 @@ if(_built_components_csv MATCHES "(^|,)web(,|$)")
        NOT _installed_ws_h1_route MATCHES
            "makeHttpWebSocketServerHandshake" OR
        NOT _installed_ws_h1_route MATCHES
+           "validateHttp1WebSocketHandshake" OR
+       NOT _installed_ws_h1_route MATCHES
+           "failure->applyRequiredResponseHeaders[(]response[)]" OR
+       _installed_ws_h1_route MATCHES
+           "invalid websocket upgrade" OR
+       NOT _installed_ws_h1_route MATCHES
            "handshake[.]negotiation[(][)][.]deflate[(][)]" OR
        NOT _installed_route_http2_session MATCHES
            "makeWebSocketServerNegotiation" OR
+       NOT _installed_route_http2_session MATCHES
+           "validateHttp2WebSocketHandshake" OR
+       NOT _installed_route_http2_session MATCHES
+           "failure->applyRequiredResponseHeaders[(]response[)]" OR
+       _installed_route_http2_session MATCHES
+           "invalid http2 websocket request" OR
        NOT _installed_route_http2_session MATCHES
            "handshakeResult[.]submitted[(][)]" OR
        NOT _installed_route_http2_session MATCHES

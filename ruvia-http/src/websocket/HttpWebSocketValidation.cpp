@@ -7,6 +7,8 @@
 #include "ruvia/http/detail/HttpRequestInternal.h"
 #include "ruvia/http/detail/HttpConnectionFields.h"
 #include "ruvia/http/detail/HeaderTokenUtils.h"
+#include "ruvia/http/detail/http1/Http1RequestBodyPlan.h"
+#include "ruvia/http/detail/websocket/HttpWebSocketHandshakeValidation.h"
 #include "ruvia/http/HttpRequest.h"
 
 namespace ruvia::detail {
@@ -93,7 +95,9 @@ namespace {
 
 }  // namespace
 
-bool isValidWebSocketRequest(const HttpRequest& request) noexcept {
+HttpWebSocketHandshakeValidationResult validateHttp1WebSocketHandshake(
+    const HttpRequest& request,
+    const Http1RequestBodyPlan& bodyPlan) noexcept {
     HttpConnectionOptions connectionOptions;
     HttpUpgradeProtocols upgradeProtocols;
     std::string_view key;
@@ -109,7 +113,8 @@ bool isValidWebSocketRequest(const HttpRequest& request) noexcept {
                     header.value(),
                     HttpFieldListRole::kRecipient) !=
                 HttpFieldListParseStatus::kOk) {
-                return false;
+                return HttpWebSocketHandshakeValidationResult::
+                    makeInvalidRequest();
             }
         } else if (httpAsciiEqualsIgnoreCase(header.name(), "Upgrade")) {
             if (upgradeProtocols.parseField(
@@ -124,7 +129,8 @@ bool isValidWebSocketRequest(const HttpRequest& request) noexcept {
                         }
                         return true;
                     }) != HttpFieldListParseStatus::kOk) {
-                return false;
+                return HttpWebSocketHandshakeValidationResult::
+                    makeInvalidRequest();
             }
         } else if (httpAsciiEqualsIgnoreCase(
                        header.name(), "Sec-WebSocket-Key")) {
@@ -140,16 +146,23 @@ bool isValidWebSocketRequest(const HttpRequest& request) noexcept {
         }
     }
 
-    return request.knownMethod() == HttpKnownMethod::kGet &&
-        request.protocolVersion() == HttpProtocolVersion::kHttp11 &&
-        connectionOptions.upgrade() &&
-        upgradeProtocols.hasProtocol() &&
-        webSocketUpgrade &&
-        !hasContentLength &&
-        keyCount == 1 &&
-        versionCount == 1 &&
-        webSocketHeaderEquals(version, "13") &&
-        decodeWebSocketKey(key).has_value();
+    if (request.knownMethod() != HttpKnownMethod::kGet ||
+        request.protocolVersion() != HttpProtocolVersion::kHttp11 ||
+        !connectionOptions.upgrade() ||
+        !upgradeProtocols.hasProtocol() ||
+        !webSocketUpgrade ||
+        hasContentLength ||
+        bodyPlan.requiresConsumption() ||
+        keyCount != 1 ||
+        !decodeWebSocketKey(key).has_value() ||
+        versionCount != 1) {
+        return HttpWebSocketHandshakeValidationResult::makeInvalidRequest();
+    }
+    if (!webSocketHeaderEquals(version, "13")) {
+        return HttpWebSocketHandshakeValidationResult::
+            makeUnsupportedVersion();
+    }
+    return HttpWebSocketHandshakeValidationResult::makeAccepted();
 }
 
 bool isValidWebSocketCloseCode(std::uint16_t code) noexcept {

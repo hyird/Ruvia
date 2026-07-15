@@ -366,7 +366,9 @@ Task<void> runHttp2SansIoSession(
                 ? nullptr
                 : resolved->route().endpoint().responseStream();
             if (webSocketEndpoint != nullptr) {
-                if (http2IsValidWebSocketRequest(*streamState, request)) {
+                const auto handshakeValidation =
+                    validateHttp2WebSocketHandshake(*streamState, request);
+                if (handshakeValidation.accepted() != nullptr) {
                     if (streamingBody == nullptr) {
                         (void)connection.submitReset(
                             streamId, Http2ErrorCode::kInternalError);
@@ -445,10 +447,19 @@ Task<void> runHttp2SansIoSession(
                     response = std::move(*buffered);
                     break;
                 }
+                const auto* failure = handshakeValidation.failure();
+                if (failure == nullptr) {
+                    throw std::logic_error(
+                        "HTTP/2 WebSocket validation returned no outcome");
+                }
                 response = co_await routes.handleError(
-                    request, requestMemory,
-                    HttpErrorInfo(400, {}, "invalid http2 websocket request"),
+                    request,
+                    requestMemory,
+                    copyHttpProtocolErrorInfo(
+                        requestMemory.resource(),
+                        failure->protocolError()),
                     baseServices);
+                failure->applyRequiredResponseHeaders(response);
             } else if (responseStreamEndpoint != nullptr) {
                 // Streaming route (for example SSE): drive the shared streaming
                 // dispatch through a sans-I/O sink that submits chunks via the core.

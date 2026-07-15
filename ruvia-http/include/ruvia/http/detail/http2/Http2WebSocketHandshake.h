@@ -7,7 +7,9 @@
 #include "ruvia/http/detail/http2/Http2Hpack.h"
 #include "ruvia/http/detail/http2/Http2ResponseHeaders.h"
 #include "ruvia/http/detail/http2/Http2StreamState.h"
+#include "ruvia/http/detail/AsciiCase.h"
 #include "ruvia/http/detail/HttpRequestInternal.h"
+#include "ruvia/http/detail/websocket/HttpWebSocketHandshakeValidation.h"
 #include "ruvia/http/detail/websocket/HttpWebSocketUtils.h"
 #include "ruvia/http/detail/websocket/WebSocketServerNegotiation.h"
 #include "ruvia/http/HttpRequest.h"
@@ -22,12 +24,33 @@ namespace ruvia::detail {
         stream.protocolIsWebSocket();
 }
 
-[[nodiscard]] inline bool http2IsValidWebSocketRequest(
+[[nodiscard]] inline HttpWebSocketHandshakeValidationResult
+validateHttp2WebSocketHandshake(
     const Http2StreamState& stream,
     const HttpRequest& request) noexcept {
-    return http2IsPendingWebSocketConnect(stream) &&
-        stream.remoteContent().allowedWithoutLength() != nullptr &&
-        requestKnownHeader(request, RequestKnownHeader::kSecWebSocketVersion) == "13";
+    if (!http2IsPendingWebSocketConnect(stream) ||
+        stream.remoteContent().allowedWithoutLength() == nullptr) {
+        return HttpWebSocketHandshakeValidationResult::makeInvalidRequest();
+    }
+
+    std::size_t versionCount = 0;
+    std::string_view version;
+    for (const auto& header : request.headers()) {
+        if (httpAsciiEqualsIgnoreCase(
+                header.name(),
+                "Sec-WebSocket-Version")) {
+            version = header.value();
+            ++versionCount;
+        }
+    }
+    if (versionCount != 1) {
+        return HttpWebSocketHandshakeValidationResult::makeInvalidRequest();
+    }
+    if (version != "13") {
+        return HttpWebSocketHandshakeValidationResult::
+            makeUnsupportedVersion();
+    }
+    return HttpWebSocketHandshakeValidationResult::makeAccepted();
 }
 
 inline void http2EncodeWebSocketHandshakeHeaders(

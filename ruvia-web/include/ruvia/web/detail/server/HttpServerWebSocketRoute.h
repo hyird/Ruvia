@@ -8,7 +8,9 @@
 #include "ruvia/web/detail/websocket/HttpWebSocketSession.h"
 #include "ruvia/web/detail/websocket/HttpWebSocketSocketTransport.h"
 #include "ruvia/web/detail/websocket/HttpWebSocketHandshake.h"
+#include "ruvia/web/detail/http/HttpProtocolErrorInfo.h"
 #include "ruvia/http/detail/websocket/HttpWebSocketUtils.h"
+#include "ruvia/http/detail/websocket/HttpWebSocketHandshakeValidation.h"
 #include "ruvia/http/detail/http1/Http1ServerRequestParser.h"
 #include "ruvia/web/detail/router/RouteTable.h"
 #include "ruvia/core/Task.h"
@@ -38,13 +40,18 @@ Task<std::optional<Http1SessionRequestCompletion>> dispatchHttpWebSocketRoute(
     const HttpServerOptions& options,
     std::string_view pendingFrames,
     HttpResponse& response) {
-    if (!isValidWebSocketRequest(parsed.request) ||
-        parsed.bodyPlan.requiresConsumption()) {
+    const auto handshakeValidation = validateHttp1WebSocketHandshake(
+        parsed.request,
+        parsed.bodyPlan);
+    if (const auto* failure = handshakeValidation.failure()) {
         response = co_await routes.handleError(
             parsed.request,
             requestMemory,
-            HttpErrorInfo(400, {}, "invalid websocket upgrade"),
+            copyHttpProtocolErrorInfo(
+                requestMemory.resource(),
+                failure->protocolError()),
             baseRouteServices);
+        failure->applyRequiredResponseHeaders(response);
         const auto connectionPlan = requireHttp1FinalResponseCommit(
             response, parsed.connectionPlan.requireClose());
         co_return Http1SessionRequestCompletion::makeBufferedClosing(

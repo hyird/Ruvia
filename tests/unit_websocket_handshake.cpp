@@ -7,6 +7,7 @@
 
 #include "ruvia/http/detail/http1/Http1ServerRequestParser.h"
 #include "ruvia/http/detail/websocket/HttpWebSocketUtils.h"
+#include "ruvia/http/detail/websocket/HttpWebSocketHandshakeValidation.h"
 #include "ruvia/http/detail/websocket/HttpWebSocketServerHandshake.h"
 #include "ruvia/http/HttpRequest.h"
 
@@ -15,7 +16,7 @@ namespace {
 using ruvia::HttpRequest;
 using ruvia::detail::Http1ServerRequestParser;
 using ruvia::detail::chooseWebSocketSubprotocol;
-using ruvia::detail::isValidWebSocketRequest;
+using ruvia::detail::validateHttp1WebSocketHandshake;
 using ruvia::detail::webSocketProtocolOffered;
 
 template <typename T>
@@ -31,6 +32,22 @@ HttpRequest parseRequest(std::string_view rawRequest) {
     return parsed.request;
 }
 
+[[nodiscard]] auto validateRequest(std::string_view rawRequest) {
+    Http1ServerRequestParser parser;
+    const auto parsed = parser.parseMessage(rawRequest);
+    return validateHttp1WebSocketHandshake(parsed.request, parsed.bodyPlan);
+}
+
+[[nodiscard]] bool acceptsRequest(std::string_view rawRequest) {
+    const auto result = validateRequest(rawRequest);
+    return result.accepted() != nullptr;
+}
+
+[[nodiscard]] bool rejectsRequest(std::string_view rawRequest) {
+    const auto result = validateRequest(rawRequest);
+    return result.failure() != nullptr;
+}
+
 HttpRequest offering() {
     return parseRequest(
         "GET /ws HTTP/1.1\r\n"
@@ -39,59 +56,54 @@ HttpRequest offering() {
         "\r\n");
 }
 
-HttpRequest validHandshake() {
-    return parseRequest(
-        "GET /ws HTTP/1.1\r\n"
+std::string_view validHandshake() {
+    return "GET /ws HTTP/1.1\r\n"
         "Host: example.test\r\n"
         "Connection: Upgrade\r\n"
         "Upgrade: websocket\r\n"
         "Sec-WebSocket-Version: 13\r\n"
         "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n"
-        "\r\n");
+        "\r\n";
 }
 
-HttpRequest postHandshake() {
-    return parseRequest(
-        "POST /ws HTTP/1.1\r\n"
+std::string_view postHandshake() {
+    return "POST /ws HTTP/1.1\r\n"
         "Host: example.test\r\n"
         "Connection: Upgrade\r\n"
         "Upgrade: websocket\r\n"
         "Sec-WebSocket-Version: 13\r\n"
         "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n"
-        "\r\n");
+        "\r\n";
 }
 
-HttpRequest http10Handshake() {
-    return parseRequest(
-        "GET /ws HTTP/1.0\r\n"
+std::string_view http10Handshake() {
+    return "GET /ws HTTP/1.0\r\n"
         "Connection: Upgrade\r\n"
         "Upgrade: websocket\r\n"
         "Sec-WebSocket-Version: 13\r\n"
         "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n"
-        "\r\n");
+        "\r\n";
 }
 
-HttpRequest badVersionHandshake() {
-    return parseRequest(
-        "GET /ws HTTP/1.1\r\n"
+std::string_view badVersionHandshake() {
+    return "GET /ws HTTP/1.1\r\n"
         "Host: example.test\r\n"
         "Connection: Upgrade\r\n"
         "Upgrade: websocket\r\n"
         "Sec-WebSocket-Version: 8\r\n"
         "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n"
-        "\r\n");
+        "\r\n";
 }
 
-HttpRequest contentLengthZeroHandshake() {
-    return parseRequest(
-        "GET /ws HTTP/1.1\r\n"
+std::string_view contentLengthZeroHandshake() {
+    return "GET /ws HTTP/1.1\r\n"
         "Host: example.test\r\n"
         "Connection: Upgrade\r\n"
         "Upgrade: websocket\r\n"
         "Sec-WebSocket-Version: 13\r\n"
         "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n"
         "Content-Length: 0\r\n"
-        "\r\n");
+        "\r\n";
 }
 
 }  // namespace
@@ -119,52 +131,66 @@ RUVIA_TEST(ws_protocol_offered_matches_whole_tokens_only) {
 }
 
 RUVIA_TEST(ws_valid_request_requires_all_conditions) {
-    RUVIA_CHECK(isValidWebSocketRequest(validHandshake()));
+    RUVIA_CHECK(acceptsRequest(validHandshake()));
 
     // Every individual requirement is necessary.
-    RUVIA_CHECK(!isValidWebSocketRequest(postHandshake()));        // not GET
-    RUVIA_CHECK(!isValidWebSocketRequest(http10Handshake()));      // not 1.1
-    RUVIA_CHECK(!isValidWebSocketRequest(badVersionHandshake()));  // version != 13
-    RUVIA_CHECK(!isValidWebSocketRequest(contentLengthZeroHandshake())); // no HTTP body framing
+    RUVIA_CHECK(rejectsRequest(postHandshake()));
+    RUVIA_CHECK(rejectsRequest(http10Handshake()));
+    RUVIA_CHECK(rejectsRequest(contentLengthZeroHandshake()));
 
-    const auto noConnectionUpgrade = parseRequest(
+    constexpr std::string_view noConnectionUpgrade =
         "GET /ws HTTP/1.1\r\nHost: x\r\nUpgrade: websocket\r\n"
         "Sec-WebSocket-Version: 13\r\n"
-        "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n\r\n");
-    RUVIA_CHECK(!isValidWebSocketRequest(noConnectionUpgrade));
+        "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n\r\n";
+    RUVIA_CHECK(rejectsRequest(noConnectionUpgrade));
 
-    const auto duplicateKey = parseRequest(
+    constexpr std::string_view duplicateKey =
         "GET /ws HTTP/1.1\r\nHost: x\r\nConnection: Upgrade\r\n"
         "Upgrade: websocket\r\nSec-WebSocket-Version: 13\r\n"
         "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n"
-        "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n\r\n");
-    RUVIA_CHECK(!isValidWebSocketRequest(duplicateKey));
+        "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n\r\n";
+    RUVIA_CHECK(rejectsRequest(duplicateKey));
 
-    const auto duplicateVersion = parseRequest(
+    constexpr std::string_view duplicateVersion =
         "GET /ws HTTP/1.1\r\nHost: x\r\nConnection: Upgrade\r\n"
         "Upgrade: websocket\r\nSec-WebSocket-Version: 13\r\n"
         "Sec-WebSocket-Version: 13\r\n"
-        "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n\r\n");
-    RUVIA_CHECK(!isValidWebSocketRequest(duplicateVersion));
+        "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n\r\n";
+    RUVIA_CHECK(rejectsRequest(duplicateVersion));
 
     // The Upgrade header must name "websocket", not another protocol token.
-    const auto wrongUpgrade = parseRequest(
+    constexpr std::string_view wrongUpgrade =
         "GET /ws HTTP/1.1\r\nHost: x\r\nConnection: Upgrade\r\n"
         "Upgrade: not-websocket\r\n"
-        "Sec-WebSocket-Version: 13\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n\r\n");
-    RUVIA_CHECK(!isValidWebSocketRequest(wrongUpgrade));
+        "Sec-WebSocket-Version: 13\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n\r\n";
+    RUVIA_CHECK(rejectsRequest(wrongUpgrade));
 
     // Sec-WebSocket-Key present exactly once but not a 16-byte base64 value
     // (RFC 6455 4.1) -> invalid. "YWJj" decodes to 3 bytes.
-    const auto badKey = parseRequest(
+    constexpr std::string_view badKey =
         "GET /ws HTTP/1.1\r\nHost: x\r\nConnection: Upgrade\r\n"
         "Upgrade: websocket\r\n"
-        "Sec-WebSocket-Version: 13\r\nSec-WebSocket-Key: YWJj\r\n\r\n");
-    RUVIA_CHECK(!isValidWebSocketRequest(badKey));
+        "Sec-WebSocket-Version: 13\r\nSec-WebSocket-Key: YWJj\r\n\r\n";
+    RUVIA_CHECK(rejectsRequest(badKey));
+
+    const auto unsupportedVersion = validateRequest(badVersionHandshake());
+    RUVIA_CHECK(unsupportedVersion.failure() != nullptr);
+    if (const auto* failure = unsupportedVersion.failure()) {
+        const auto error = failure->protocolError();
+        RUVIA_CHECK_EQ(error.status(), 400);
+        RUVIA_CHECK_EQ(
+            std::string_view(error.what()),
+            std::string_view("unsupported WebSocket version"));
+        ruvia::HttpResponse response;
+        failure->applyRequiredResponseHeaders(response);
+        RUVIA_CHECK_EQ(
+            response.header("Sec-WebSocket-Version"),
+            std::string_view("13"));
+    }
 }
 
 RUVIA_TEST(ws_upgrade_uses_the_shared_recipient_list_semantics) {
-    const auto request = parseRequest(
+    constexpr std::string_view request =
         "GET /ws HTTP/1.1\r\n"
         "Host: example.test\r\n"
         "Connection: keep-alive\r\n"
@@ -172,8 +198,8 @@ RUVIA_TEST(ws_upgrade_uses_the_shared_recipient_list_semantics) {
         "Upgrade: , custom/1, websocket,\r\n"
         "Sec-WebSocket-Version: 13\r\n"
         "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n"
-        "\r\n");
-    RUVIA_CHECK(isValidWebSocketRequest(request));
+        "\r\n";
+    RUVIA_CHECK(acceptsRequest(request));
 }
 
 RUVIA_TEST(ws_server_handshake_response_serialization_is_http_owned) {
