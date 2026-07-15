@@ -31,6 +31,7 @@
 #include "ruvia/http/HttpProtocolError.h"
 #include "ruvia/web/Error.h"
 #include "ruvia/web/RateLimit.h"
+#include "ruvia/web/SecurityHeaders.h"
 #include "ruvia/web/Session.h"
 #include "ruvia/web/WebSocket.h"
 #include "ruvia/web/redis/RedisTypes.h"
@@ -70,6 +71,19 @@ RUVIA_RESPONSE_MODEL(SurfaceJsonResponse,
 
 using DetailRequestBodyMode = ruvia::detail::RequestBodyMode;
 static_assert(std::is_enum_v<DetailRequestBodyMode>);
+static_assert(std::same_as<
+    decltype(ruvia::SecurityHeadersOptions{}.legacyXssFilter),
+    ruvia::LegacyXssFilterPolicy>);
+static_assert(
+    ruvia::SecurityHeadersOptions{}.legacyXssFilter ==
+    ruvia::LegacyXssFilterPolicy::kDisable);
+
+template <typename T>
+concept HasMisleadingXssProtectionOption = requires(T& options) {
+    options.xssProtection;
+};
+
+static_assert(!HasMisleadingXssProtectionOption<ruvia::SecurityHeadersOptions>);
 
 template <typename T>
 concept HasPlainAddressOf = requires(T& value) {

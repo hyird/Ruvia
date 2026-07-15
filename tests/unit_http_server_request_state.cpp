@@ -541,7 +541,7 @@ RUVIA_TEST(auto_https_redirect_response_is_private_and_well_formed) {
     const auto parsed = parser.parseMessage(request);
     ruvia::WorkerMemory worker;
     ruvia::RequestMemory memory(worker);
-    const auto response = ruvia::detail::makeAutoHttpsRedirectResponse(parsed.request, memory, 443);
+    auto response = ruvia::detail::makeAutoHttpsRedirectResponse(parsed.request, memory, 443);
 
     RUVIA_CHECK_EQ(response.status(), std::uint16_t{308});
     RUVIA_CHECK_EQ(
@@ -552,6 +552,20 @@ RUVIA_TEST(auto_https_redirect_response_is_private_and_well_formed) {
     RUVIA_CHECK_EQ(
         std::string(response.header("Cache-Control").value_or(std::string_view{})),
         std::string("private"));
+    // AutoHTTPS owns redirect product policy only. It must not pre-commit an
+    // HTTP/1 connection field before the runtime combines request persistence
+    // and its explicit close policy in the protocol plan.
+    RUVIA_CHECK(!response.header("Connection").has_value());
+    const auto commit = ruvia::detail::http1CommitFinalResponse(
+        response,
+        parsed.connectionPlan.requireClose());
+    RUVIA_CHECK(commit.committed() != nullptr);
+    if (commit.committed() == nullptr) {
+        return;
+    }
+    RUVIA_CHECK(
+        commit.committed()->disposition() ==
+        ruvia::detail::Http1ConnectionDisposition::kClose);
     RUVIA_CHECK_EQ(
         std::string(response.header("Connection").value_or(std::string_view{})),
         std::string("close"));

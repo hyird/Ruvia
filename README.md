@@ -377,7 +377,7 @@ JSON/form parsing and validation; response models provide typed setters and
 JSON serialization. Defaults apply to request fields, while omit-empty and
 emit-null apply to response fields. See the compiled
 [`models_validation.cpp`](examples/models_validation.cpp) example for the
-complete API.
+complete API. `SecurityHeadersOptions` defaults to `LegacyXssFilterPolicy::kDisable`, emitting `X-XSS-Protection: 0` because obsolete browser filters can create security issues; `kOmitHeader` omits that header, while Content Security Policy remains the modern content control.
 
 ## HTTP Protocol Library
 

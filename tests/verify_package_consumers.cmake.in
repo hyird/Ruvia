@@ -2284,6 +2284,31 @@ set(_installed_rate_limiter_path
 set(_installed_rate_limit_decision_path
     "${_install_prefix}/include/ruvia/web/detail/server/RateLimitDecision.h")
 if(_built_components_csv MATCHES "(^|,)web(,|$)")
+    set(_installed_auto_https_policy_path
+        "${_install_prefix}/include/ruvia/web/detail/server/HttpServerAutoHttps.h")
+    set(_installed_auto_https_session_path
+        "${_install_prefix}/include/ruvia/web/detail/server/HttpServerStreamSession.inl")
+    if(NOT EXISTS "${_installed_auto_https_policy_path}" OR
+       NOT EXISTS "${_installed_auto_https_session_path}")
+        message(FATAL_ERROR
+            "installed Web package is missing AutoHTTPS runtime contracts")
+    endif()
+    file(READ "${_installed_auto_https_policy_path}"
+        _installed_auto_https_policy)
+    file(READ "${_installed_auto_https_session_path}"
+        _installed_auto_https_session)
+    if(_installed_auto_https_policy MATCHES
+           "http1MarkConnectionClose|HttpServerResponseState[.]h|header[(][\"]Connection[\"]" OR
+       NOT _installed_auto_https_session MATCHES
+           "makeAutoHttpsRedirectResponse" OR
+       NOT _installed_auto_https_session MATCHES
+           "parsed[.]connectionPlan[.]requireClose[(][)]" OR
+       NOT _installed_auto_https_session MATCHES
+           "requireHttp1FinalResponseCommit")
+        message(FATAL_ERROR
+            "installed AutoHTTPS policy regained direct HTTP/1 connection ownership")
+    endif()
+
     set(_installed_db_internal_path
         "${_install_prefix}/include/ruvia/web/detail/db/DbInternal.h")
     set(_installed_redis_internal_path

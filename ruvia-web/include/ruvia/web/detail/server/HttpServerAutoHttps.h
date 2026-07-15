@@ -1,8 +1,7 @@
 #pragma once
 
-#include "ruvia/web/detail/server/HttpServerResponseState.h"
-
 #include "ruvia/http/detail/HttpRequestInternal.h"
+#include "ruvia/http/detail/HttpResponseHeaderState.h"
 #include "ruvia/http/HttpRequest.h"
 #include "ruvia/http/HttpResponse.h"
 #include "ruvia/core/memory/MemoryPool.h"
@@ -85,7 +84,6 @@ inline HttpResponse makeAutoHttpsRedirectResponse(
     // redirect and serves it for another (a Host-header cache-poisoning open
     // redirect); a browser still caches it per-origin, keeping the HTTPS memory.
     setResponseHeaderStableView(response, "Cache-Control", "private");
-    http1MarkConnectionClose(response);
     return response;
 }
 

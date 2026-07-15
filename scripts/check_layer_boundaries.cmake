@@ -776,6 +776,9 @@ check_files_no_match("ruvia-http must not invent a Ruvia Server product identity
     "${RULE_HTTP_IMPLICIT_SERVER_PRODUCT}" ${HTTP_SOURCE})
 check_files_no_match("Context request-field models must remain Web-owned"
     "RequestNameValue(View|List)|RequestQueryValues|RequestValueGroup(List)?" ${HTTP_SOURCE})
+check_files_no_match("Web must not directly emit HTTP/1 Connection semantics"
+    "http1MarkConnectionClose|[.]header[(][\"]Connection[\"]"
+    ${WEB_SOURCE})
 
 set(WEB_RATE_LIMIT_RULE
     "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/RateLimitRule.h")
@@ -826,6 +829,35 @@ if(EXISTS "${WEB_RATE_LIMIT_RULE}" AND EXISTS "${WEB_RATE_LIMITER}" AND
        web_app_runtime MATCHES "unique_ptr[<]RateLimiter|runtime->rateLimiter")
         boundary_error("RateLimiter escaped HttpServer worker ownership"
             "each HttpServer must own its limiter; AppRuntimeGraph must not share one")
+    endif()
+endif()
+
+set(WEB_AUTO_HTTPS_POLICY
+    "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/server/HttpServerAutoHttps.h")
+set(WEB_AUTO_HTTPS_SESSION
+    "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/server/HttpServerStreamSession.inl")
+set(WEB_AUTO_HTTPS_TEST
+    "${RUVIA_ROOT}/tests/unit_http_server_request_state.cpp")
+if(EXISTS "${WEB_AUTO_HTTPS_POLICY}" AND
+   EXISTS "${WEB_AUTO_HTTPS_SESSION}" AND
+   EXISTS "${WEB_AUTO_HTTPS_TEST}")
+    file(READ "${WEB_AUTO_HTTPS_POLICY}" web_auto_https_policy)
+    file(READ "${WEB_AUTO_HTTPS_SESSION}" web_auto_https_session)
+    file(READ "${WEB_AUTO_HTTPS_TEST}" web_auto_https_test)
+    if(web_auto_https_policy MATCHES
+           "http1MarkConnectionClose|HttpServerResponseState[.]h|header[(][\"]Connection[\"]" OR
+       NOT web_auto_https_session MATCHES
+           "makeAutoHttpsRedirectResponse" OR
+       NOT web_auto_https_session MATCHES
+           "parsed[.]connectionPlan[.]requireClose[(][)]" OR
+       NOT web_auto_https_session MATCHES
+           "requireHttp1FinalResponseCommit" OR
+       NOT web_auto_https_test MATCHES
+           "!response[.]header[(][\"]Connection[\"][)][.]has_value[(][)]" OR
+       NOT web_auto_https_test MATCHES
+           "http1CommitFinalResponse")
+        boundary_error("AutoHTTPS regained direct HTTP/1 connection ownership"
+            "the Web policy must construct only the redirect, while the HTTP/1 session applies its external close policy through the parsed connection plan and the protocol commit emits Connection")
     endif()
 endif()
 
@@ -5024,6 +5056,39 @@ check_files_no_match("ContextRequest must not expose the borrowed protocol objec
     "${RULE_STALE_CONTEXT_REQUEST_RAW_ESCAPE}"
     "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/ContextRequest.h"
     "${RUVIA_ROOT}/ruvia-web/src/http/ContextRequestFacade.cpp")
+file(READ "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/SecurityHeaders.h"
+    security_headers_public_contract)
+file(READ "${RUVIA_ROOT}/ruvia-web/src/http/SecurityHeaders.cpp"
+    security_headers_wire_contract)
+file(READ "${RUVIA_ROOT}/tests/unit_security_headers.cpp"
+    security_headers_unit_contract)
+file(READ "${RUVIA_ROOT}/examples/api_surface.cpp"
+    security_headers_api_surface_contract)
+file(READ "${RUVIA_ROOT}/tests/package-consumer/web.cpp"
+    security_headers_package_contract)
+if(security_headers_public_contract MATCHES
+       "bool[ \t]+xssProtection" OR
+   NOT security_headers_public_contract MATCHES
+       "enum class LegacyXssFilterPolicy" OR
+   NOT security_headers_public_contract MATCHES
+       "LegacyXssFilterPolicy[ \t]+legacyXssFilter" OR
+   NOT security_headers_public_contract MATCHES
+       "LegacyXssFilterPolicy::kDisable" OR
+   NOT security_headers_wire_contract MATCHES
+       "case LegacyXssFilterPolicy::kDisable" OR
+   NOT security_headers_wire_contract MATCHES
+       "setHeader[(]\"X-XSS-Protection\",[ \t]*\"0\"" OR
+   NOT security_headers_wire_contract MATCHES
+       "case LegacyXssFilterPolicy::kOmitHeader" OR
+   NOT security_headers_unit_contract MATCHES
+       "security_headers_legacy_xss_filter_policy_is_explicit" OR
+   NOT security_headers_api_surface_contract MATCHES
+       "HasMisleadingXssProtectionOption" OR
+   NOT security_headers_package_contract MATCHES
+       "HasMisleadingXssProtectionOption")
+    boundary_error("legacy browser XSS filter policy regained inverted boolean semantics"
+        "the public typed policy must default to explicit filter disablement, emit X-XSS-Protection: 0, offer only header omission, and remain pinned by source and installed API probes")
+endif()
 check_files_no_match("Context must expose explicit typed capabilities, not an arbitrary value bag"
     "ContextValueStore|ContextKey|detail/ContextValues[.]h|valuesIf[(]|void[ \t]+set[(]std::string_view|[*][ \t]+get[(]std::string_view"
     "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/Context.h"

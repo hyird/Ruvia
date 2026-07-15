@@ -14,6 +14,7 @@ namespace {
 
 using ruvia::Context;
 using ruvia::HttpResponse;
+using ruvia::LegacyXssFilterPolicy;
 using ruvia::RequestMemory;
 using ruvia::SecurityHeadersOptions;
 using ruvia::WorkerMemory;
@@ -50,6 +51,19 @@ RUVIA_TEST(security_headers_default_set) {
                    std::string_view("strict-origin-when-cross-origin"));
     RUVIA_CHECK_EQ(response.header("Permissions-Policy"),
                    std::string_view("geolocation=(), microphone=(), camera=()"));
+}
+
+RUVIA_TEST(security_headers_legacy_xss_filter_policy_is_explicit) {
+    static_assert(
+        SecurityHeadersOptions{}.legacyXssFilter ==
+        LegacyXssFilterPolicy::kDisable);
+
+    auto response = makeResponse();
+    SecurityHeadersOptions options;
+    options.legacyXssFilter = LegacyXssFilterPolicy::kOmitHeader;
+    applySecurityHeaders(response, options);
+
+    RUVIA_CHECK(!response.header("X-XSS-Protection").has_value());
 }
 
 RUVIA_TEST(security_headers_empty_policy_is_not_emitted) {

@@ -37,8 +37,12 @@ void applySecurityHeadersTo(Target& target, const SecurityHeadersOptions& option
     if (options.strictTransportSecurity) {
         setHeader("Strict-Transport-Security", "max-age=31536000; includeSubDomains", true);
     }
-    if (options.xssProtection) {
-        setHeader("X-XSS-Protection", "0", true);
+    switch (options.legacyXssFilter) {
+        case LegacyXssFilterPolicy::kDisable:
+            setHeader("X-XSS-Protection", "0", true);
+            break;
+        case LegacyXssFilterPolicy::kOmitHeader:
+            break;
     }
 
     setHeader("Content-Security-Policy", options.contentSecurityPolicy, true);

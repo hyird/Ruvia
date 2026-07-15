@@ -28,6 +28,7 @@
 #include <ruvia/web/Middleware.h>
 #include <ruvia/web/Model.h>
 #include <ruvia/web/RequestFields.h>
+#include <ruvia/web/SecurityHeaders.h>
 #include <ruvia/web/detail/router/RouteModes.h>
 #include <ruvia/web/Streaming.h>
 #include <ruvia/web/Validation.h>
@@ -950,6 +951,11 @@ concept HasContextVarFacade = requires(ContextT& context) {
     context.var();
 };
 
+template <typename Options>
+concept HasMisleadingXssProtectionOption = requires(Options& options) {
+    options.xssProtection;
+};
+
 template <typename ContextT>
 concept HasArbitraryContextValueSet = requires(ContextT& context) {
     context.set(std::string_view{}, std::uint32_t{});
@@ -1096,6 +1102,13 @@ static_assert(!HasContextSignedCookieGenerator<ruvia::Context>);
 static_assert(!HasContextRenderPipeline<ruvia::Context>);
 static_assert(!HasResponseInit<ruvia::Context>);
 static_assert(!HasContextVarFacade<ruvia::Context>);
+static_assert(!HasMisleadingXssProtectionOption<ruvia::SecurityHeadersOptions>);
+static_assert(std::same_as<
+    decltype(ruvia::SecurityHeadersOptions{}.legacyXssFilter),
+    ruvia::LegacyXssFilterPolicy>);
+static_assert(
+    ruvia::SecurityHeadersOptions{}.legacyXssFilter ==
+    ruvia::LegacyXssFilterPolicy::kDisable);
 static_assert(!HasArbitraryContextValueSet<ruvia::Context>);
 static_assert(!HasArbitraryContextValueGet<ruvia::Context>);
 static_assert(!HasContextFinalized<ruvia::Context>);
