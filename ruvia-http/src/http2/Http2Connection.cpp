@@ -118,8 +118,17 @@ std::span<const std::uint32_t> Http2Connection::takeDrainedDataStreams() noexcep
 // =============================================================================
 
 void Http2Connection::appendGoaway(Http2ErrorCode error, std::string_view debug) {
+    // RFC 9113 §6.8: "Endpoints MUST NOT increase the value they send in the last
+    // stream identifier". lastStreamId_ doubles as the idle-stream high-water mark
+    // (§5.1.1), so it keeps climbing for streams a graceful drain already refused --
+    // those are exactly the ids the peer was told it may retry elsewhere. Clamp to the
+    // advertised drain boundary; read it before fail() replaces the drain state.
+    auto advertised = lastStreamId_;
+    if (const auto* drain = localConnectionState_.gracefulDrain()) {
+        advertised = std::min(advertised, drain->lastStreamId());
+    }
     localConnectionState_.fail(error);
-    output_.appendGoawayFrame(lastStreamId_, error, debug);
+    output_.appendGoawayFrame(advertised, error, debug);
 }
 
 void Http2Connection::beginDrain() {
@@ -506,8 +515,15 @@ bool Http2Connection::processPriority(const Http2FrameHeader& header, std::strin
 bool Http2Connection::processGoaway(
     const Http2FrameHeader& header,
     std::string_view payload) {
-    if (header.streamId != 0 || payload.size() < 8) {
-        appendGoaway(Http2ErrorCode::kProtocolError, "malformed GOAWAY");
+    // RFC 9113 §6.8 gives these two malformations distinct codes: a nonzero stream id is
+    // a PROTOCOL_ERROR, while a payload short of the 8-octet fixed fields is a
+    // FRAME_SIZE_ERROR. Both are connection errors, but conformance suites read the code.
+    if (header.streamId != 0) {
+        appendGoaway(Http2ErrorCode::kProtocolError, "GOAWAY stream id must be zero");
+        return false;
+    }
+    if (payload.size() < 8) {
+        appendGoaway(Http2ErrorCode::kFrameSizeError, "invalid GOAWAY size");
         return false;
     }
 

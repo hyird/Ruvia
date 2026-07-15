@@ -979,6 +979,42 @@ RUVIA_TEST(http2_connection_feed_zero_window_update_goaway) {
     RUVIA_CHECK_EQ(goaway.type, static_cast<std::uint8_t>(Http2FrameType::kGoaway));
 }
 
+// RFC 9113 §6.8 distinguishes the two GOAWAY malformations: a nonzero stream id is a
+// PROTOCOL_ERROR, a payload shorter than the 8 fixed octets is a FRAME_SIZE_ERROR.
+RUVIA_TEST(http2_connection_malformed_goaway_error_codes) {
+    const auto goawayErrorFor = [&](std::uint32_t streamId, std::size_t payloadBytes) {
+        std::pmr::monotonic_buffer_resource resource;
+        Http2Connection conn(&resource);
+        handshake(conn);
+        conn.consumeOutput(conn.pendingOutput().size());
+
+        std::pmr::string frame(&resource);
+        char hdr[9];
+        ruvia::detail::http2EncodeFrameHeader(
+            hdr,
+            static_cast<std::uint32_t>(payloadBytes),
+            Http2FrameType::kGoaway,
+            0,
+            streamId);
+        frame.append(hdr, 9);
+        frame.append(payloadBytes, '\0');
+        (void)conn.feed(std::string_view(frame.data(), frame.size()));
+
+        const auto out = conn.pendingOutput();
+        const auto header = ruvia::detail::http2ParseFrameHeader(out.substr(0, 9));
+        RUVIA_CHECK_EQ(header.type, static_cast<std::uint8_t>(Http2FrameType::kGoaway));
+        return ruvia::detail::http2Read32(
+            reinterpret_cast<const unsigned char*>(out.data() + 13));
+    };
+
+    RUVIA_CHECK_EQ(
+        goawayErrorFor(1, 8),
+        static_cast<std::uint32_t>(Http2ErrorCode::kProtocolError));
+    RUVIA_CHECK_EQ(
+        goawayErrorFor(0, 7),
+        static_cast<std::uint32_t>(Http2ErrorCode::kFrameSizeError));
+}
+
 // RST_STREAM referencing an idle (never-opened) stream is a protocol error (GOAWAY).
 RUVIA_TEST(http2_connection_feed_rst_on_idle_stream_goaway) {
     std::pmr::monotonic_buffer_resource resource;
@@ -3938,6 +3974,54 @@ RUVIA_TEST(http2_connection_begin_drain_refuses_new_streams) {
 
     conn.beginDrain();  // idempotent: no further GOAWAY
     RUVIA_CHECK(conn.pendingOutput().empty());
+}
+
+// RFC 9113 §6.8: "Endpoints MUST NOT increase the value they send in the last stream
+// identifier." A drain advertises id 1; a later HEADERS(3) is refused but still raises
+// the internal idle-stream high-water mark. A fatal GOAWAY after that must still
+// advertise 1 -- widening to 3 would tell the peer that a request it already retried
+// elsewhere (on REFUSED_STREAM) might have been processed after all.
+RUVIA_TEST(http2_connection_fatal_goaway_never_widens_drained_last_stream_id) {
+    std::pmr::monotonic_buffer_resource resource;
+    Http2Connection conn(&resource);
+    handshake(conn);
+    driveGetRequest(conn, &resource);  // stream 1 open
+    conn.consumeOutput(conn.pendingOutput().size());
+
+    conn.beginDrain();  // GOAWAY(NO_ERROR, lastStreamId=1)
+    const auto drainGoaway = conn.pendingOutput();
+    RUVIA_CHECK_EQ(
+        ruvia::detail::http2Read31(
+            reinterpret_cast<const unsigned char*>(drainGoaway.data() + 9)),
+        static_cast<std::uint32_t>(1));
+    conn.consumeOutput(drainGoaway.size());
+
+    // Stream 3 arrives after the drain: refused, but it bumps lastStreamId_ to 3.
+    std::pmr::string block(&resource);
+    encodeGetRequest(block);
+    const auto h3 = headersFrame(
+        &resource,
+        3,
+        ruvia::detail::kHttp2FlagEndHeaders | ruvia::detail::kHttp2FlagEndStream,
+        std::string_view(block.data(), block.size()));
+    RUVIA_CHECK(conn.feed(std::string_view(h3.data(), h3.size())) ==
+        ruvia::detail::Http2FeedResult::kAccepted);
+    RUVIA_CHECK(!conn.connectionError().has_value());
+    conn.consumeOutput(conn.pendingOutput().size());  // RST_STREAM(3, REFUSED_STREAM)
+
+    // Now trip a connection error: the fatal GOAWAY must not advertise past 1.
+    char wu[ruvia::detail::kHttp2WindowUpdateFrameBytes];
+    ruvia::detail::http2WriteWindowUpdate(wu, 0, 0);
+    RUVIA_CHECK(conn.feed(std::string_view(wu, sizeof(wu))) ==
+        ruvia::detail::Http2FeedResult::kProtocolFailure);
+
+    const auto fatal = conn.pendingOutput();
+    const auto fh = ruvia::detail::http2ParseFrameHeader(fatal.substr(0, 9));
+    RUVIA_CHECK_EQ(fh.type, static_cast<std::uint8_t>(Http2FrameType::kGoaway));
+    RUVIA_CHECK_EQ(
+        ruvia::detail::http2Read31(
+            reinterpret_cast<const unsigned char*>(fatal.data() + 9)),
+        static_cast<std::uint32_t>(1));
 }
 
 RUVIA_TEST(http2_connection_fatal_failure_atomically_supersedes_local_drain) {
