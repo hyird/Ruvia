@@ -6,6 +6,7 @@
 #include <utility>
 
 #include <ruvia/core/Task.h>
+#include <ruvia/core/TaskScope.h>
 #include <ruvia/core/Channel.h>
 #include <ruvia/core/OneShot.h>
 #include <ruvia/core/WorkerWaitResult.h>
@@ -203,6 +204,9 @@ static_assert(std::move_constructible<ruvia::Task<void>>);
 static_assert(!std::assignable_from<ruvia::Task<void>&, ruvia::Task<void>&&>);
 static_assert(std::move_constructible<ruvia::Task<int>>);
 static_assert(!std::assignable_from<ruvia::Task<int>&, ruvia::Task<int>&&>);
+static_assert(!std::default_initializable<ruvia::TaskScope>);
+static_assert(!std::copy_constructible<ruvia::TaskScope>);
+static_assert(!std::move_constructible<ruvia::TaskScope>);
 
 static_assert(!HasConnectionTimeoutMillisecondSentinels<
               ruvia::detail::ConnectionScannerOptions>);

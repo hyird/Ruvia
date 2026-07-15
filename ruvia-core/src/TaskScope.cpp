@@ -24,7 +24,9 @@ TaskScope::TaskScope(WorkerHandle worker, std::pmr::memory_resource* resource)
 }
 
 TaskScope::~TaskScope() {
-    if (active_ != 0) {
+    if (active_ != 0 ||
+        std::holds_alternative<TaskScopeOpen>(lifecycle_) ||
+        std::holds_alternative<TaskScopeJoining>(lifecycle_)) {
         std::terminate();
     }
 }
@@ -33,8 +35,12 @@ void TaskScope::spawn(Task<void> task) {
     if (!worker_.isCurrent()) {
         throw std::logic_error("task scope spawn must run on its bound worker");
     }
-    if (joinStarted_) {
+    if (std::holds_alternative<TaskScopeJoining>(lifecycle_) ||
+        std::holds_alternative<TaskScopeJoined>(lifecycle_)) {
         throw std::logic_error("cannot spawn a task after task scope join started");
+    }
+    if (task.handle_ == nullptr) {
+        throw std::invalid_argument("cannot spawn an empty ruvia::Task");
     }
 
     std::pmr::polymorphic_allocator<Node> allocator(resource_);
@@ -45,6 +51,7 @@ void TaskScope::spawn(Task<void> task) {
     }
     head_ = node;
     ++active_;
+    lifecycle_.template emplace<TaskScopeOpen>();
 
     node->task.handle_.promise().setCompletion(node, &TaskScope::childComplete);
     node->task.start();
@@ -70,7 +77,8 @@ Task<void> TaskScope::join() {
     if (!worker_.isCurrent()) {
         throw std::logic_error("task scope join must run on its bound worker");
     }
-    if (joinStarted_) {
+    if (std::holds_alternative<TaskScopeJoining>(lifecycle_) ||
+        std::holds_alternative<TaskScopeJoined>(lifecycle_)) {
         throw std::logic_error("task scope can only be joined once");
     }
     co_await JoinAwaiter{*this};
@@ -81,16 +89,21 @@ bool TaskScope::JoinAwaiter::await_ready() const noexcept {
 }
 
 bool TaskScope::JoinAwaiter::await_suspend(std::coroutine_handle<> continuation) {
-    if (scope.joinStarted_) {
+    if (std::holds_alternative<TaskScopeJoining>(scope.lifecycle_) ||
+        std::holds_alternative<TaskScopeJoined>(scope.lifecycle_)) {
         throw std::logic_error("task scope can only be joined once");
     }
-    scope.joinStarted_ = true;
-    scope.joinContinuation_ = continuation;
+    scope.lifecycle_.template emplace<TaskScopeJoining>(continuation);
     return true;
 }
 
 void TaskScope::JoinAwaiter::await_resume() {
-    scope.joinStarted_ = true;
+    if (std::holds_alternative<TaskScopeEmpty>(scope.lifecycle_) ||
+        std::holds_alternative<TaskScopeOpen>(scope.lifecycle_)) {
+        scope.lifecycle_.template emplace<TaskScopeJoined>();
+    } else if (!std::holds_alternative<TaskScopeJoined>(scope.lifecycle_)) {
+        std::terminate();
+    }
     scope.rethrowFailure();
 }
 
@@ -108,8 +121,9 @@ void TaskScope::finish(Node* node) noexcept {
     try {
         node->task.handle_.promise().result();
     } catch (...) {
-        if (!firstFailure_) {
-            firstFailure_ = std::current_exception();
+        if (std::holds_alternative<TaskScopeSuccess>(outcome_)) {
+            outcome_.template emplace<TaskScopeFailure>(
+                std::current_exception());
             requestStop();
         }
     }
@@ -126,15 +140,20 @@ void TaskScope::finish(Node* node) noexcept {
     allocator.delete_object(node);
     --active_;
 
-    if (active_ == 0 && joinContinuation_) {
-        const auto continuation = std::exchange(joinContinuation_, {});
+    if (active_ == 0) {
+        auto* joining = std::get_if<TaskScopeJoining>(&lifecycle_);
+        if (joining == nullptr) {
+            return;
+        }
+        const auto continuation = joining->continuation();
+        lifecycle_.template emplace<TaskScopeJoined>();
         continuation.resume();
     }
 }
 
 void TaskScope::rethrowFailure() {
-    if (firstFailure_) {
-        std::rethrow_exception(firstFailure_);
+    if (const auto* failure = std::get_if<TaskScopeFailure>(&outcome_)) {
+        std::rethrow_exception(failure->exception());
     }
 }
 

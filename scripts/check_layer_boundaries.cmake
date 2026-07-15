@@ -158,6 +158,12 @@ file(READ "${RUVIA_ROOT}/ruvia-core/include/ruvia/core/OneShot.h"
     core_one_shot_contract)
 file(READ "${RUVIA_ROOT}/ruvia-core/include/ruvia/core/Task.h"
     core_task_contract)
+file(READ "${RUVIA_ROOT}/ruvia-core/include/ruvia/core/TaskScope.h"
+    core_task_scope_contract)
+file(READ "${RUVIA_ROOT}/ruvia-core/src/TaskScope.cpp"
+    core_task_scope_implementation)
+file(READ "${RUVIA_ROOT}/tests/task_scope.cpp"
+    core_task_scope_test_contract)
 file(READ "${RUVIA_ROOT}/ruvia-core/include/ruvia/core/detail/TaskPromise.h"
     core_task_promise_contract)
 file(READ "${RUVIA_ROOT}/ruvia-core/include/ruvia/core/detail/AsioAwait.h"
@@ -211,6 +217,41 @@ if(NOT core_channel_contract MATCHES
        "!std::assignable_from<ruvia::Task<int>&, ruvia::Task<int>&&>")
     boundary_error("core linear async owners regained invalid default states or destructive reassignment"
         "receivers must be factory-created and Task/receiver handles must be move-construct-only so assignment cannot orphan endpoints or destroy live coroutine frames")
+endif()
+if(NOT core_task_scope_contract MATCHES
+       "struct TaskScopeEmpty final" OR
+   NOT core_task_scope_contract MATCHES
+       "struct TaskScopeOpen final" OR
+   NOT core_task_scope_contract MATCHES
+       "class TaskScopeJoining final" OR
+   NOT core_task_scope_contract MATCHES
+       "struct TaskScopeJoined final" OR
+   NOT core_task_scope_contract MATCHES
+       "struct TaskScopeSuccess final" OR
+   NOT core_task_scope_contract MATCHES
+       "class TaskScopeFailure final" OR
+   NOT core_task_scope_contract MATCHES
+       "using Lifecycle = std::variant" OR
+   NOT core_task_scope_contract MATCHES
+       "using Outcome = std::variant" OR
+   core_task_scope_contract MATCHES
+       "firstFailure_|joinContinuation_|joinStarted_" OR
+   NOT core_task_scope_implementation MATCHES
+       "holds_alternative<TaskScopeOpen>[(]lifecycle_[)]" OR
+   NOT core_task_scope_implementation MATCHES
+       "holds_alternative<TaskScopeJoining>[(]lifecycle_[)]" OR
+   NOT core_task_scope_implementation MATCHES
+       "task[.]handle_ == nullptr" OR
+   NOT core_task_scope_implementation MATCHES
+       "emplace<TaskScopeJoined>" OR
+   NOT core_task_scope_test_contract MATCHES
+       "emptyTaskRejected" OR
+   NOT core_task_scope_test_contract MATCHES
+       "completedFailureObserved" OR
+   NOT core_linear_receiver_package_contract MATCHES
+       "!std::move_constructible<ruvia::TaskScope>")
+    boundary_error("TaskScope regained overlapping join/failure state or optional joining"
+        "empty, open, joining, and joined must be exclusive; non-empty scopes must join, failures must remain a success/failure outcome, and moved-from Task inputs must be rejected")
 endif()
 if(NOT core_one_shot_contract MATCHES
        "struct OneShotPending final" OR

@@ -5,6 +5,8 @@
 #include <exception>
 #include <memory_resource>
 #include <stop_token>
+#include <utility>
+#include <variant>
 
 #include <ruvia/core/Task.h>
 #include <ruvia/core/WorkerHandle.h>
@@ -31,6 +33,38 @@ public:
 private:
     struct Node;
 
+    struct TaskScopeEmpty final {};
+    struct TaskScopeOpen final {};
+    class TaskScopeJoining final {
+    public:
+        explicit TaskScopeJoining(
+            std::coroutine_handle<> continuation) noexcept
+            : continuation_(continuation) {}
+
+        [[nodiscard]] std::coroutine_handle<> continuation() const noexcept {
+            return continuation_;
+        }
+
+    private:
+        std::coroutine_handle<> continuation_;
+    };
+    struct TaskScopeJoined final {};
+
+    struct TaskScopeSuccess final {};
+    class TaskScopeFailure final {
+    public:
+        explicit TaskScopeFailure(std::exception_ptr exception) noexcept
+            : exception_(std::move(exception)) {}
+
+        [[nodiscard]] const std::exception_ptr& exception() const & noexcept {
+            return exception_;
+        }
+        const std::exception_ptr& exception() const && = delete;
+
+    private:
+        std::exception_ptr exception_;
+    };
+
     struct JoinAwaiter {
         TaskScope& scope;
         [[nodiscard]] bool await_ready() const noexcept;
@@ -42,14 +76,20 @@ private:
     void finish(Node* node) noexcept;
     void rethrowFailure();
 
+    using Lifecycle = std::variant<
+        TaskScopeEmpty,
+        TaskScopeOpen,
+        TaskScopeJoining,
+        TaskScopeJoined>;
+    using Outcome = std::variant<TaskScopeSuccess, TaskScopeFailure>;
+
     WorkerHandle worker_;
     std::pmr::memory_resource* resource_;
     std::stop_source stopSource_;
     Node* head_{nullptr};
     std::size_t active_{0};
-    std::exception_ptr firstFailure_;
-    std::coroutine_handle<> joinContinuation_{};
-    bool joinStarted_{false};
+    Lifecycle lifecycle_;
+    Outcome outcome_;
 };
 
 }

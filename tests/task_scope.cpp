@@ -12,6 +12,7 @@
 #include <stdexcept>
 #include <string_view>
 #include <type_traits>
+#include <utility>
 
 static_assert(std::is_move_constructible_v<ruvia::Task<void>>);
 static_assert(!std::is_move_assignable_v<ruvia::Task<void>>);
@@ -31,7 +32,67 @@ ruvia::Task<void> fail() {
     co_return;
 }
 
+ruvia::Task<void> noOp() {
+    co_return;
+}
+
 ruvia::Task<void> exercise(ruvia::WorkerHandle worker, bool& success) {
+    {
+        ruvia::TaskScope emptyScope(worker);
+        co_await emptyScope.join();
+        bool secondJoinRejected = false;
+        try {
+            co_await emptyScope.join();
+        } catch (const std::logic_error&) {
+            secondJoinRejected = true;
+        }
+        bool spawnAfterJoinRejected = false;
+        try {
+            emptyScope.spawn(noOp());
+        } catch (const std::logic_error&) {
+            spawnAfterJoinRejected = true;
+        }
+        if (!secondJoinRejected || !spawnAfterJoinRejected) {
+            co_return;
+        }
+    }
+
+    {
+        ruvia::TaskScope emptyTaskScope(worker);
+        auto movedFrom = noOp();
+        auto retained = std::move(movedFrom);
+        static_cast<void>(retained);
+        bool emptyTaskRejected = false;
+        try {
+            emptyTaskScope.spawn(std::move(movedFrom));
+        } catch (const std::invalid_argument&) {
+            emptyTaskRejected = true;
+        }
+        if (!emptyTaskRejected || emptyTaskScope.size() != 0) {
+            co_return;
+        }
+        co_await emptyTaskScope.join();
+    }
+
+    {
+        ruvia::TaskScope completedFailureScope(worker);
+        completedFailureScope.spawn(fail());
+        co_await ruvia::sleepFor(worker, std::chrono::milliseconds(1));
+        if (completedFailureScope.size() != 0) {
+            co_return;
+        }
+        bool completedFailureObserved = false;
+        try {
+            co_await completedFailureScope.join();
+        } catch (const std::runtime_error& error) {
+            completedFailureObserved =
+                std::string_view(error.what()) == "child failed";
+        }
+        if (!completedFailureObserved) {
+            co_return;
+        }
+    }
+
     int calls = 0;
     ruvia::TaskScope scope(worker);
     scope.spawn(increment(worker, calls));

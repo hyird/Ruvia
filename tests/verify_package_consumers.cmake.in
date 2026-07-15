@@ -35,6 +35,36 @@ if(_built_components_csv MATCHES "(^|,)core(,|$)" AND
 endif()
 
 if(_built_components_csv MATCHES "(^|,)core(,|$)")
+    set(_installed_task_scope_path
+        "${_install_prefix}/include/ruvia/core/TaskScope.h")
+    if(NOT EXISTS "${_installed_task_scope_path}")
+        message(FATAL_ERROR
+            "installed core package is missing TaskScope")
+    endif()
+    file(READ "${_installed_task_scope_path}"
+        _installed_task_scope)
+    if(NOT _installed_task_scope MATCHES
+           "struct TaskScopeEmpty final" OR
+       NOT _installed_task_scope MATCHES
+           "struct TaskScopeOpen final" OR
+       NOT _installed_task_scope MATCHES
+           "class TaskScopeJoining final" OR
+       NOT _installed_task_scope MATCHES
+           "struct TaskScopeJoined final" OR
+       NOT _installed_task_scope MATCHES
+           "struct TaskScopeSuccess final" OR
+       NOT _installed_task_scope MATCHES
+           "class TaskScopeFailure final" OR
+       NOT _installed_task_scope MATCHES
+           "using Lifecycle = std::variant" OR
+       NOT _installed_task_scope MATCHES
+           "using Outcome = std::variant" OR
+       _installed_task_scope MATCHES
+           "firstFailure_|joinContinuation_|joinStarted_")
+        message(FATAL_ERROR
+            "installed TaskScope restored overlapping join/failure state")
+    endif()
+
     set(_installed_channel_path
         "${_install_prefix}/include/ruvia/core/Channel.h")
     if(NOT EXISTS "${_installed_channel_path}")
