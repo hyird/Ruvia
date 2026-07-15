@@ -15,6 +15,10 @@ namespace ruvia {
 
 namespace {
 
+constexpr std::size_t kMaxMultipartPreambleBytes = 64 * 1024;
+constexpr std::size_t kMaxMultipartHeaderBytes = 64 * 1024;
+constexpr std::size_t kMaxMultipartDelimiterLineBytes = 64 * 1024;
+
 [[nodiscard]] std::string_view multipartParseErrorMessage(
     MultipartParseError error) noexcept {
     switch (error) {
@@ -300,15 +304,24 @@ MultipartParser::StepResult MultipartParser::processBoundary() {
     // RFC 2046 section 5.1.1: the first boundary may be preceded by a preamble that
     // is ignored. Skip it once, reusing the buffered parser's boundary finder so
     // the streaming and buffered paths accept exactly the same bodies.
-    constexpr std::size_t kMaxMultipartPreambleBytes = 64 * 1024;
     for (;;) {
         if (firstBoundary_) {
             const auto delimiter = detail::httpFindInitialMultipartDelimiter(
                 bufferView(), boundary_, input_.eof());
-            if (delimiter.noMatch() != nullptr ||
-                delimiter.needInput() != nullptr) {
+            if (delimiter.noMatch() != nullptr) {
                 if (bufferView().size() > kMaxMultipartPreambleBytes) {
                     return MultipartParseError::kPreambleTooLarge;
+                }
+                return StepProgress::kNeedInput;
+            }
+            if (const auto* needInput = delimiter.needInput()) {
+                const auto bufferBytes = bufferView().size();
+                if (needInput->offset() > kMaxMultipartPreambleBytes) {
+                    return MultipartParseError::kPreambleTooLarge;
+                }
+                if (bufferBytes - needInput->offset() >
+                    kMaxMultipartDelimiterLineBytes) {
+                    return MultipartParseError::kDelimiterLineTooLarge;
                 }
                 return StepProgress::kNeedInput;
             }
@@ -317,7 +330,13 @@ MultipartParser::StepResult MultipartParser::processBoundary() {
             if (part == nullptr && close == nullptr) {
                 return MultipartParseError::kInvalidDelimiter;
             }
-            consume(part != nullptr ? part->offset() : close->offset());
+            const auto preambleBytes = part != nullptr
+                ? part->offset()
+                : close->offset();
+            if (preambleBytes > kMaxMultipartPreambleBytes) {
+                return MultipartParseError::kPreambleTooLarge;
+            }
+            consume(preambleBytes);
             firstBoundary_ = false;
         } else if (bufferView().starts_with("\r\n")) {
             consume(2);
@@ -329,11 +348,17 @@ MultipartParser::StepResult MultipartParser::processBoundary() {
             return StepProgress::kNeedInput;
         }
         if (const auto* part = delimiter.part()) {
+            if (part->lineBytes() > kMaxMultipartDelimiterLineBytes) {
+                return MultipartParseError::kDelimiterLineTooLarge;
+            }
             consume(part->lineBytes());
             state_ = ProgressState::kHeaders;
             return StepProgress::kContinue;
         }
         if (const auto* close = delimiter.close()) {
+            if (close->lineBytes() > kMaxMultipartDelimiterLineBytes) {
+                return MultipartParseError::kDelimiterLineTooLarge;
+            }
             consume(close->lineBytes());
             state_ = ProgressState::kDone;
             return StepProgress::kDone;
@@ -344,7 +369,6 @@ MultipartParser::StepResult MultipartParser::processBoundary() {
 
 MultipartParser::StepResult MultipartParser::processHeaders() {
     // Cap on a single part's header block, mirroring the 64KB request-header limit.
-    constexpr std::size_t kMaxMultipartHeaderBytes = 64 * 1024;
     for (;;) {
         const auto buffer = bufferView();
         const auto headersEnd = buffer.find("\r\n\r\n");
@@ -353,6 +377,12 @@ MultipartParser::StepResult MultipartParser::processHeaders() {
                 return MultipartParseError::kPartHeadersTooLarge;
             }
             return StepProgress::kNeedInput;
+        }
+        // Include the terminating CRLF CRLF in the same byte cap. Checking only
+        // the incomplete path allowed an oversized but already-terminated block
+        // delivered in one feed() to bypass the limit entirely.
+        if (headersEnd > kMaxMultipartHeaderBytes - 4) {
+            return MultipartParseError::kPartHeadersTooLarge;
         }
 
         const auto headers = buffer.substr(0, headersEnd);
@@ -413,6 +443,13 @@ MultipartPollResult MultipartParser::readBodyChunk() {
         const auto* partDelimiter = delimiter.part();
         const auto* closeDelimiter = delimiter.close();
         if (partDelimiter != nullptr || closeDelimiter != nullptr) {
+            const auto delimiterLineBytes = partDelimiter != nullptr
+                ? partDelimiter->lineBytes()
+                : closeDelimiter->lineBytes();
+            if (delimiterLineBytes > kMaxMultipartDelimiterLineBytes) {
+                return fail(
+                    MultipartParseError::kDelimiterLineTooLarge);
+            }
             const auto delimiterOffset = partDelimiter != nullptr
                 ? partDelimiter->offset()
                 : closeDelimiter->offset();
@@ -422,9 +459,8 @@ MultipartPollResult MultipartParser::readBodyChunk() {
             return MultipartPollResult::makePart(part);
         }
         if (const auto* needInput = delimiter.needInput()) {
-            constexpr std::size_t kMaxMultipartDelimiterLineBytes = 64 * 1024;
             if (buffer.size() - needInput->offset() >
-                kMaxMultipartDelimiterLineBytes) {
+                kMaxMultipartDelimiterLineBytes + 2) {
                 return fail(
                     MultipartParseError::kDelimiterLineTooLarge);
             }

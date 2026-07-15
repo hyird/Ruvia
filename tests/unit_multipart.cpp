@@ -597,3 +597,76 @@ RUVIA_TEST(multipart_complete_body_parser_shares_incremental_limits) {
     }
     RUVIA_CHECK(feedAfterFailureThrew);
 }
+
+RUVIA_TEST(multipart_complete_limits_cannot_be_bypassed_by_terminators) {
+    auto* const resource = std::pmr::get_default_resource();
+    const auto parse = [resource](std::string_view body) {
+        return ruvia::parseMultipartBody(
+            body,
+            ruvia::MultipartBoundary("BOUNDARY"),
+            resource);
+    };
+    const auto checkFailure = [&ruvia_ctx, &parse, resource](
+                                  const std::string& body,
+                                  std::string_view message) {
+        const auto result = parse(body);
+        RUVIA_CHECK(result.failure() != nullptr);
+        if (const auto* failure = result.failure()) {
+            RUVIA_CHECK_EQ(failure->protocolError().status(), 413);
+            RUVIA_CHECK_EQ(
+                std::string_view(failure->protocolError().what()),
+                message);
+        }
+
+        ruvia::MultipartParser incremental(
+            ruvia::MultipartBoundary("BOUNDARY"), resource);
+        incremental.feed(body);
+        incremental.finishInput();
+        const auto streamed = incremental.poll();
+        RUVIA_CHECK(streamed.failure() != nullptr);
+        if (const auto* failure = streamed.failure()) {
+            RUVIA_CHECK_EQ(failure->protocolError().status(), 413);
+            RUVIA_CHECK_EQ(
+                std::string_view(failure->protocolError().what()),
+                message);
+        }
+    };
+
+    // A complete boundary used to skip the preamble cap because the limit was
+    // checked only while the parser was still searching for that boundary.
+    std::string preamble(64 * 1024 + 1, 'p');
+    preamble.append("\r\n--BOUNDARY--\r\n");
+    checkFailure(preamble, "multipart preamble exceeds limit");
+
+    // Likewise, finding CRLF CRLF in the same input bypassed the part-header
+    // check, even when the complete block was already larger than 64 KiB.
+    std::string headers =
+        "--BOUNDARY\r\n"
+        "Content-Disposition: form-data; name=\"field\"\r\n"
+        "X-Large: ";
+    headers.append(64 * 1024, 'h');
+    headers.append(
+        "\r\n\r\nvalue\r\n"
+        "--BOUNDARY--\r\n");
+    checkFailure(headers, "multipart part headers exceed limit");
+
+    // A completed delimiter line with excessive transport-padding must be
+    // bounded too; the previous check ran only while the line was incomplete.
+    std::string delimiter = "--BOUNDARY";
+    delimiter.append(64 * 1024, ' ');
+    delimiter.append("\r\n");
+    checkFailure(delimiter, "multipart delimiter line exceeds limit");
+
+    // Exercise the same completed-line check after a part body, where the
+    // delimiter is discovered by the streaming body scanner rather than the
+    // initial-boundary path.
+    std::string bodyDelimiter =
+        "--BOUNDARY\r\n"
+        "Content-Disposition: form-data; name=\"field\"\r\n"
+        "\r\n"
+        "value\r\n"
+        "--BOUNDARY--";
+    bodyDelimiter.append(64 * 1024, ' ');
+    bodyDelimiter.append("\r\n");
+    checkFailure(bodyDelimiter, "multipart delimiter line exceeds limit");
+}
