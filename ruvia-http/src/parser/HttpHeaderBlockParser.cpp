@@ -87,6 +87,8 @@ std::optional<HttpParseError> parseHttpHeaderBlock(
         return HttpParseError::kInvalidRequestLine;
     }
     block.version = makeSlice(versionStart, cursor - versionStart);
+    const bool ignoreUpgrade =
+        buffer.substr(versionStart, cursor - versionStart) == "HTTP/1.0";
     cursor += 2;
 
     while (cursor < headersEnd) {
@@ -162,7 +164,12 @@ std::optional<HttpParseError> parseHttpHeaderBlock(
                 break;
             }
             case RequestHeaderKind::kUpgrade:
-                if (block.upgradeProtocols.parseField(
+                // RFC 9110 section 7.8 requires a server to ignore Upgrade in
+                // an HTTP/1.0 request. The bytes still have to be a valid
+                // generic field value, but Upgrade-specific grammar must not
+                // turn an otherwise valid HTTP/1.0 request into a 400.
+                if (!ignoreUpgrade &&
+                    block.upgradeProtocols.parseField(
                         value,
                         HttpFieldListRole::kRecipient,
                         [](const HttpUpgradeProtocol&) noexcept {

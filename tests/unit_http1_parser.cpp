@@ -505,6 +505,21 @@ RUVIA_TEST(http1_parse_http10_without_host_allowed) {
         result.request.protocolVersion() == HttpProtocolVersion::kHttp10);
 }
 
+RUVIA_TEST(http1_parse_http10_ignores_upgrade_field_semantics) {
+    Http1ServerRequestParser parser;
+    const auto result = parser.parseMessage(
+        "GET / HTTP/1.0\r\n"
+        "Connection: Upgrade\r\n"
+        "Upgrade: websocket/\r\n\r\n");
+
+    RUVIA_CHECK(result.messageReady());
+    RUVIA_CHECK(
+        result.request.protocolVersion() == HttpProtocolVersion::kHttp10);
+    RUVIA_CHECK_EQ(
+        result.request.header("Upgrade"),
+        std::optional<std::string_view>("websocket/"));
+}
+
 RUVIA_TEST(http1_parse_non_numeric_content_length_rejected) {
     Http1ServerRequestParser parser;
     const auto result = parser.parseMessage("POST / HTTP/1.1\r\nHost: x\r\nContent-Length: abc\r\n\r\n");
