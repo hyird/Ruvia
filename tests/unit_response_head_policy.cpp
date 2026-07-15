@@ -15,6 +15,42 @@ namespace {
 
 using ruvia::detail::responseWritePolicy;
 
+template <typename Policy>
+concept ExposesAnyRvalueResponseWritePolicyAlternative =
+    requires(const Policy&& policy) { std::move(policy).normal(); } ||
+    requires(const Policy&& policy) { std::move(policy).bodyForbidden(); } ||
+    requires(const Policy&& policy) { std::move(policy).zeroLength(); } ||
+    requires(const Policy&& policy) { std::move(policy).notModified(); };
+
+static_assert(!std::default_initializable<
+    ruvia::detail::ResponseWritePolicy>);
+static_assert(!std::default_initializable<
+    ruvia::detail::ResponseNormalWrite>);
+static_assert(!std::default_initializable<
+    ruvia::detail::ResponseBodyForbiddenWrite>);
+static_assert(!std::default_initializable<
+    ruvia::detail::ResponseZeroLengthWrite>);
+static_assert(!std::default_initializable<
+    ruvia::detail::ResponseNotModifiedWrite>);
+static_assert(!ExposesAnyRvalueResponseWritePolicyAlternative<
+    ruvia::detail::ResponseWritePolicy>);
+static_assert(std::same_as<
+    decltype(std::declval<const ruvia::detail::ResponseWritePolicy&>().normal()),
+    const ruvia::detail::ResponseNormalWrite*>);
+static_assert(std::same_as<
+    decltype(std::declval<const ruvia::detail::ResponseWritePolicy&>()
+                 .bodyForbidden()),
+    const ruvia::detail::ResponseBodyForbiddenWrite*>);
+static_assert(std::same_as<
+    decltype(std::declval<const ruvia::detail::ResponseWritePolicy&>()
+                 .zeroLength()),
+    const ruvia::detail::ResponseZeroLengthWrite*>);
+static_assert(std::same_as<
+    decltype(std::declval<const ruvia::detail::ResponseWritePolicy&>()
+                 .notModified()),
+    const ruvia::detail::ResponseNotModifiedWrite*>);
+static_assert(sizeof(ruvia::detail::ResponseWritePolicy) <= 2);
+
 template <typename T>
 concept HasValueSemanticResponseBodyPlan = requires(
     const T& plan,
@@ -177,6 +213,10 @@ RUVIA_TEST(response_policy_normal_status_allows_everything) {
     for (std::uint16_t status : {std::uint16_t{200}, std::uint16_t{206},
                                  std::uint16_t{404}, std::uint16_t{500}}) {
         const auto policy = responseWritePolicy(status);
+        RUVIA_CHECK(policy.normal() != nullptr);
+        RUVIA_CHECK(policy.bodyForbidden() == nullptr);
+        RUVIA_CHECK(policy.zeroLength() == nullptr);
+        RUVIA_CHECK(policy.notModified() == nullptr);
         RUVIA_CHECK(policy.bodyAllowed());
         RUVIA_CHECK(policy.autoContentLengthAllowed());
         RUVIA_CHECK(policy.explicitContentLengthAllowed());
@@ -190,6 +230,10 @@ RUVIA_TEST(response_policy_bodyless_statuses_forbid_all_framing) {
     for (std::uint16_t status : {std::uint16_t{100}, std::uint16_t{101},
                                  std::uint16_t{199}, std::uint16_t{204}}) {
         const auto policy = responseWritePolicy(status);
+        RUVIA_CHECK(policy.normal() == nullptr);
+        RUVIA_CHECK(policy.bodyForbidden() != nullptr);
+        RUVIA_CHECK(policy.zeroLength() == nullptr);
+        RUVIA_CHECK(policy.notModified() == nullptr);
         RUVIA_CHECK(!policy.bodyAllowed());
         RUVIA_CHECK(!policy.autoContentLengthAllowed());
         RUVIA_CHECK(!policy.explicitContentLengthAllowed());
@@ -202,6 +246,10 @@ RUVIA_TEST(response_policy_reset_content_owns_zero_length_framing) {
     // length from that status, so the writer owns one canonical Content-Length:
     // 0 and rejects both caller-owned length and transfer coding declarations.
     const auto policy = responseWritePolicy(205);
+    RUVIA_CHECK(policy.normal() == nullptr);
+    RUVIA_CHECK(policy.bodyForbidden() == nullptr);
+    RUVIA_CHECK(policy.zeroLength() != nullptr);
+    RUVIA_CHECK(policy.notModified() == nullptr);
     RUVIA_CHECK(!policy.bodyAllowed());
     RUVIA_CHECK(policy.autoContentLengthAllowed());
     RUVIA_CHECK(!policy.explicitContentLengthAllowed());
@@ -212,6 +260,10 @@ RUVIA_TEST(response_policy_not_modified_keeps_explicit_content_length) {
     // 304 has no body, but may echo the Content-Length of the selected
     // representation; auto length and transfer-encoding stay forbidden.
     const auto policy = responseWritePolicy(304);
+    RUVIA_CHECK(policy.normal() == nullptr);
+    RUVIA_CHECK(policy.bodyForbidden() == nullptr);
+    RUVIA_CHECK(policy.zeroLength() == nullptr);
+    RUVIA_CHECK(policy.notModified() != nullptr);
     RUVIA_CHECK(!policy.bodyAllowed());
     RUVIA_CHECK(!policy.autoContentLengthAllowed());
     RUVIA_CHECK(policy.explicitContentLengthAllowed());

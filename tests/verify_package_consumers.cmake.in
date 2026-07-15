@@ -3261,7 +3261,23 @@ if(NOT _installed_response_content_semantics MATCHES
    NOT _installed_response_head_policy MATCHES
        "is_trivially_copyable_v<ResponseWritePolicy>" OR
    NOT _installed_response_head_policy MATCHES
-       "sizeof[(]ResponseWritePolicy[)] <= 4" OR
+       "sizeof[(]ResponseWritePolicy[)] <= 2" OR
+   NOT _installed_response_head_policy MATCHES
+       "using State = std::variant" OR
+   NOT _installed_response_head_policy MATCHES
+       "ResponseNormalWrite" OR
+   NOT _installed_response_head_policy MATCHES
+       "ResponseBodyForbiddenWrite" OR
+   NOT _installed_response_head_policy MATCHES
+       "ResponseZeroLengthWrite" OR
+   NOT _installed_response_head_policy MATCHES
+       "ResponseNotModifiedWrite" OR
+   NOT _installed_response_head_policy MATCHES
+       "normal[(][)] const [&] noexcept" OR
+   NOT _installed_response_head_policy MATCHES
+       "notModified[(][)] const && = delete" OR
+   _installed_response_head_policy MATCHES
+       "bool[ 	]+bodyAllowed_|bool[ 	]+autoContentLengthAllowed_|bool[ 	]+explicitContentLengthAllowed_|bool[ 	]+transferEncodingAllowed_|zeroLengthContent" OR
    _installed_response_write_plan MATCHES "bodySuppressed_")
     message(FATAL_ERROR "installed response writers and parsers lost their shared content semantics")
 endif()

@@ -2150,6 +2150,46 @@ concept HasValueSemanticResponseWritePolicy =
         { std::move(plan).policy() } ->
             std::same_as<ruvia::detail::ResponseWritePolicy>;
     };
+template <typename Policy>
+concept ExposesAnyRvalueResponseWritePolicyAlternative =
+    requires(const Policy&& policy) { std::move(policy).normal(); } ||
+    requires(const Policy&& policy) { std::move(policy).bodyForbidden(); } ||
+    requires(const Policy&& policy) { std::move(policy).zeroLength(); } ||
+    requires(const Policy&& policy) { std::move(policy).notModified(); };
+template <typename Policy>
+concept HasLegacyResponseWritePolicyFactory = requires {
+    Policy::zeroLengthContent();
+};
+static_assert(!std::default_initializable<
+    ruvia::detail::ResponseWritePolicy>);
+static_assert(!std::default_initializable<
+    ruvia::detail::ResponseNormalWrite>);
+static_assert(!std::default_initializable<
+    ruvia::detail::ResponseBodyForbiddenWrite>);
+static_assert(!std::default_initializable<
+    ruvia::detail::ResponseZeroLengthWrite>);
+static_assert(!std::default_initializable<
+    ruvia::detail::ResponseNotModifiedWrite>);
+static_assert(!ExposesAnyRvalueResponseWritePolicyAlternative<
+    ruvia::detail::ResponseWritePolicy>);
+static_assert(!HasLegacyResponseWritePolicyFactory<
+    ruvia::detail::ResponseWritePolicy>);
+static_assert(std::same_as<
+    decltype(std::declval<const ruvia::detail::ResponseWritePolicy&>().normal()),
+    const ruvia::detail::ResponseNormalWrite*>);
+static_assert(std::same_as<
+    decltype(std::declval<const ruvia::detail::ResponseWritePolicy&>()
+                 .bodyForbidden()),
+    const ruvia::detail::ResponseBodyForbiddenWrite*>);
+static_assert(std::same_as<
+    decltype(std::declval<const ruvia::detail::ResponseWritePolicy&>()
+                 .zeroLength()),
+    const ruvia::detail::ResponseZeroLengthWrite*>);
+static_assert(std::same_as<
+    decltype(std::declval<const ruvia::detail::ResponseWritePolicy&>()
+                 .notModified()),
+    const ruvia::detail::ResponseNotModifiedWrite*>);
+static_assert(sizeof(ruvia::detail::ResponseWritePolicy) <= 2);
 static_assert(HasValueSemanticResponseWritePolicy<
     ruvia::detail::HttpResponseBodyPlan>);
 static_assert(HasValueSemanticResponseWritePolicy<

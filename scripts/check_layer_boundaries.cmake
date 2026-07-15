@@ -4686,7 +4686,7 @@ set(HTTP_RESPONSE_HEAD_POLICY
 if(EXISTS "${HTTP_RESPONSE_HEAD_POLICY}")
     file(READ "${HTTP_RESPONSE_HEAD_POLICY}" http_response_head_policy)
     if(NOT http_response_head_policy MATCHES "statusCode == 205" OR
-       NOT http_response_head_policy MATCHES "ResponseWritePolicy::zeroLengthContent")
+       NOT http_response_head_policy MATCHES "ResponseWritePolicy::makeZeroLength")
         boundary_error("205 Reset Content bypasses the shared response policy"
             "205 must suppress content while retaining writer-owned zero-length framing")
     endif()
@@ -9943,7 +9943,23 @@ if(EXISTS "${HTTP_PROTOCOL_PLAN_RANGE}" AND
        NOT http_protocol_plan_policy MATCHES
            "is_trivially_copyable_v<ResponseWritePolicy>" OR
        NOT http_protocol_plan_policy MATCHES
-           "sizeof[(]ResponseWritePolicy[)] <= 4" OR
+           "sizeof[(]ResponseWritePolicy[)] <= 2" OR
+       NOT http_protocol_plan_policy MATCHES
+           "using State = std::variant" OR
+       NOT http_protocol_plan_policy MATCHES
+           "ResponseNormalWrite" OR
+       NOT http_protocol_plan_policy MATCHES
+           "ResponseBodyForbiddenWrite" OR
+       NOT http_protocol_plan_policy MATCHES
+           "ResponseZeroLengthWrite" OR
+       NOT http_protocol_plan_policy MATCHES
+           "ResponseNotModifiedWrite" OR
+       NOT http_protocol_plan_policy MATCHES
+           "normal[(][)] const [&] noexcept" OR
+       NOT http_protocol_plan_policy MATCHES
+           "notModified[(][)] const && = delete" OR
+       http_protocol_plan_policy MATCHES
+           "bool[ 	]+bodyAllowed_|bool[ 	]+autoContentLengthAllowed_|bool[ 	]+explicitContentLengthAllowed_|bool[ 	]+transferEncodingAllowed_|zeroLengthContent" OR
        NOT http_protocol_plan_write MATCHES
            "HttpResponseContentSemantics[ \t\r\n]+contentSemantics[(][)] const noexcept" OR
        NOT http_protocol_plan_write MATCHES
@@ -10022,6 +10038,10 @@ if(EXISTS "${HTTP_PROTOCOL_PLAN_RANGE}" AND
            "ExposesAnyRvalueHttpProtocolPlanBorrow" OR
        NOT http_protocol_plan_consumer MATCHES
            "HasValueSemanticResponseWritePolicy" OR
+       NOT http_protocol_plan_consumer MATCHES
+           "ExposesAnyRvalueResponseWritePolicyAlternative" OR
+       NOT http_protocol_plan_consumer MATCHES
+           "HasLegacyResponseWritePolicyFactory" OR
        NOT http_protocol_plan_consumer MATCHES
            "is_enum_v<[\r\n \t]*ruvia::detail::HttpResponseContentSemantics>" OR
        NOT http_protocol_plan_consumer MATCHES
