@@ -1,5 +1,6 @@
 #pragma once
 
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <string_view>
@@ -89,16 +90,24 @@ enum class HttpContentCoding : std::uint8_t {
         return 0;
     }
     int quality = 1000;
+    bool qualitySeen = false;
+    bool valid = true;
     httpVisitSemicolonParametersQuoted(
-        value, [&quality](std::string_view name, std::string_view parameter) noexcept {
+        value, [&quality, &qualitySeen, &valid](
+                   std::string_view name,
+                   std::string_view parameter) noexcept {
             if (httpAsciiEqualsIgnoreCase(name, "q")) {
+                if (qualitySeen) {
+                    valid = false;
+                    return false;
+                }
+                qualitySeen = true;
                 const auto parsed = httpParseQualityValue(parameter);
                 quality = parsed < 0 ? 0 : parsed;
-                return false;  // first q wins; later parameters are accept-ext
             }
             return true;
         });
-    return quality;
+    return valid ? quality : 0;
 }
 
 [[nodiscard]] inline std::string_view httpHeaderTokenBeforeParameters(std::string_view value) noexcept {
@@ -391,6 +400,11 @@ template <typename Visitor>
     if (!httpAcceptParametersHaveStrictEquals(value)) {
         return false;
     }
+    // Registered media types forbid duplicate parameter names. Keep a small,
+    // fixed view table so validation stays allocation-free and bounded even for
+    // hostile field values; an implausibly parameter-heavy item is invalidated.
+    std::array<std::string_view, 64> names{};
+    std::size_t nameCount = 0;
     auto start = httpFindUnquotedDelimiter(value, 0, ';');
     if (start >= value.size()) {
         return true;
@@ -408,6 +422,15 @@ template <typename Visitor>
         if (!httpMediaToken(name)) {
             return false;
         }
+        for (std::size_t index = 0; index < nameCount; ++index) {
+            if (httpAsciiEqualsIgnoreCase(names[index], name)) {
+                return false;
+            }
+        }
+        if (nameCount == names.size()) {
+            return false;
+        }
+        names[nameCount++] = name;
         if (skipQualityParameter && httpAsciiEqualsIgnoreCase(name, "q")) {
             // RFC 9110 removed the old accept-ext grammar. q is the weight
             // wherever it appears, but media-range parameters after it still

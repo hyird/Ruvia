@@ -57,8 +57,8 @@ RUVIA_TEST(quality_parameter_extracts_q_from_header_item) {
     RUVIA_CHECK_EQ(httpQualityParameter("gzip;q=2"), 0);
     RUVIA_CHECK_EQ(httpQualityParameter("gzip;q=bogus"), 0);
 
-    // The first q wins; parameters after it are accept-ext and do not override it.
-    RUVIA_CHECK_EQ(httpQualityParameter("gzip;q=0.3;q=0.9"), 300);
+    // A media parameter name cannot occur more than once; duplicate q is invalid.
+    RUVIA_CHECK_EQ(httpQualityParameter("gzip;q=0.3;q=0.9"), 0);
 
     // A ';' inside a quoted parameter value is not a parameter separator, so a
     // fake q smuggled inside quotes is ignored and the real trailing q is used.
@@ -120,6 +120,15 @@ RUVIA_TEST(media_range_rejects_whitespace_around_parameter_equals) {
     // OWS around the semicolon delimiter remains legal.
     RUVIA_CHECK(httpAcceptsMediaType(
         "text/html \t; \tq=0.5", "text/html"));
+}
+
+RUVIA_TEST(media_range_rejects_duplicate_parameter_names) {
+    RUVIA_CHECK(!httpAcceptsMediaType(
+        "text/html;level=1;LEVEL=1", "text/html;level=1"));
+    RUVIA_CHECK(!httpAcceptsMediaType(
+        "text/html;q=1;Q=0", "text/html"));
+    RUVIA_CHECK(!httpAcceptsMediaType(
+        "text/html;level=1", "text/html;level=1;LEVEL=2"));
 }
 
 RUVIA_TEST(accepts_media_type_basic) {
