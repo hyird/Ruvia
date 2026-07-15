@@ -88,7 +88,12 @@ private:
     };
 
     [[nodiscard]] static Task<void> waitReserved(WaitReservation reservation) {
-        co_await Awaiter{reservation.signal()};
+        auto& signal = reservation.signal();
+        // wait() returns a lazy Task. Recheck affinity when that Task actually
+        // starts: a cold wait can otherwise be created on the owner worker and
+        // later started on another worker, mutating the intrusive list there.
+        signal.requireCurrentWorker();
+        co_await Awaiter{signal};
     }
 
     struct Awaiter final {

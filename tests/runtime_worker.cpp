@@ -16,6 +16,7 @@
 #include <barrier>
 #include <future>
 #include <memory>
+#include <optional>
 #include <stdexcept>
 #include <string_view>
 #include <thread>
@@ -95,6 +96,46 @@ bool testWorkerSignalHasNoArbitraryWaiterLimit() {
         }
     }
     return true;
+}
+
+ruvia::Task<void> startColdSignalWait(
+    ruvia::Task<void> coldWait,
+    bool& rejected) {
+    try {
+        co_await std::move(coldWait);
+    } catch (const std::logic_error&) {
+        rejected = true;
+    }
+}
+
+bool testWorkerSignalRechecksAffinityWhenColdWaitStarts() {
+    asio::io_context ownerContext;
+    asio::io_context otherContext;
+    auto ownerAttachment = ruvia::attachEventLoop(ownerContext);
+    auto otherAttachment = ruvia::attachEventLoop(otherContext);
+    const auto ownerHandle = ownerAttachment.loop().handle();
+    ruvia::detail::WorkerSignal signal(ownerHandle);
+    std::optional<ruvia::Task<void>> coldWait;
+
+    asio::post(ownerContext, [&] {
+        coldWait.emplace(signal.wait());
+        ownerAttachment.stop();
+    });
+    ownerContext.run();
+    if (!coldWait.has_value()) {
+        return false;
+    }
+
+    bool rejected = false;
+    asio::co_spawn(
+        otherContext,
+        ruvia::detail::taskAsAwaitable(startColdSignalWait(
+            std::move(*coldWait), rejected)),
+        asio::detached);
+    asio::post(otherContext, [&] { otherAttachment.stop(); });
+    otherContext.run();
+    coldWait.reset();
+    return rejected;
 }
 
 bool testDispatchAndAffinity() {
@@ -396,6 +437,7 @@ bool testConcurrentStopHasOneInitiator() {
 int main() {
     return testWorkerSignalIsWorkerAffine() &&
                testWorkerSignalHasNoArbitraryWaiterLimit() &&
+               testWorkerSignalRechecksAffinityWhenColdWaitStarts() &&
                testDispatchAndAffinity() && testBoundedMailbox() &&
                testExternalEventLoopAttachment() &&
                testFailurePropagation() && testExpiredHandle() &&
