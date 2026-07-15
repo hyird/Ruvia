@@ -392,6 +392,106 @@ RUVIA_TEST(ws_connection_inflates_compressed_message) {
     RUVIA_CHECK(e->message()->payload() == std::string_view("hello hello hello"));
 }
 
+// Messages suppressed during the closing handshake must not leave their inflate
+// output behind for the next message. A Binary message inflating to a non-UTF-8 byte
+// is legal and ignored; a following Text message must be judged on its own bytes, not
+// on the concatenation, and the peer Close must still complete the handshake.
+RUVIA_TEST(ws_connection_suppressed_compressed_message_does_not_taint_next_utf8) {
+    std::pmr::monotonic_buffer_resource resource;
+    std::pmr::string input(&resource);
+    WsConnection conn(
+        input,
+        ProtocolByteLimit::unlimited(),
+        WebSocketDeflateNegotiation::kAccepted);
+
+    RUVIA_CHECK(conn.submitClose(1000, "") == WsCloseSubmitStatus::kAccepted);
+    const auto plan = conn.outputPlan();
+    RUVIA_CHECK(conn.consumeOutput(plan.bytes().size()) ==
+        WsOutputConsumeStatus::kDrained);
+    RUVIA_CHECK(conn.livenessMode() == WsLivenessMode::kAwaitingPeerClose);
+
+    ruvia::detail::WebSocketDeflate encoder;
+    std::pmr::string binaryBlock(&resource);
+    RUVIA_CHECK(encoder.compress("\xFF", binaryBlock));
+    std::pmr::string textBlock(&resource);
+    RUVIA_CHECK(encoder.compress("hi", textBlock));
+
+    std::pmr::string closePayload(&resource);
+    closePayload.push_back(static_cast<char>(0x03));
+    closePayload.push_back(static_cast<char>(0xE8));
+
+    const auto binaryFrame = maskedFrame(
+        &resource, 0x2, std::string_view(binaryBlock.data(), binaryBlock.size()),
+        /*fin=*/true, /*rsv1=*/true);
+    const auto textFrame = maskedFrame(
+        &resource, 0x1, std::string_view(textBlock.data(), textBlock.size()),
+        /*fin=*/true, /*rsv1=*/true);
+    const auto peerClose = maskedFrame(
+        &resource, 0x8, std::string_view(closePayload.data(), closePayload.size()));
+
+    std::pmr::string inbound(&resource);
+    inbound.append(binaryFrame.data(), binaryFrame.size());
+    inbound.append(textFrame.data(), textFrame.size());
+    inbound.append(peerClose.data(), peerClose.size());
+
+    const auto event = pollBytes(
+        conn, input, std::string_view(inbound.data(), inbound.size()));
+    RUVIA_CHECK(event.has_value());
+    RUVIA_CHECK(event->close() != nullptr);  // not a spurious 1007 protocol error
+    if (event->close() != nullptr) {
+        RUVIA_CHECK_EQ(event->close()->closeCode(), std::uint16_t{1000});
+    }
+}
+
+// The decompression-bomb limit is per message. Two suppressed compressed messages that
+// each fit must not be charged as one accumulated total.
+RUVIA_TEST(ws_connection_suppressed_compressed_message_does_not_charge_next_limit) {
+    std::pmr::monotonic_buffer_resource resource;
+    std::pmr::string input(&resource);
+    WsConnection conn(
+        input,
+        ProtocolByteLimit::limited(1000),
+        WebSocketDeflateNegotiation::kAccepted);
+
+    RUVIA_CHECK(conn.submitClose(1000, "") == WsCloseSubmitStatus::kAccepted);
+    const auto plan = conn.outputPlan();
+    RUVIA_CHECK(conn.consumeOutput(plan.bytes().size()) ==
+        WsOutputConsumeStatus::kDrained);
+
+    const std::string payload(600, 'a');  // 600 < 1000; two of them would exceed it
+    ruvia::detail::WebSocketDeflate encoder;
+    std::pmr::string firstBlock(&resource);
+    RUVIA_CHECK(encoder.compress(payload, firstBlock));
+    std::pmr::string secondBlock(&resource);
+    RUVIA_CHECK(encoder.compress(payload, secondBlock));
+
+    std::pmr::string closePayload(&resource);
+    closePayload.push_back(static_cast<char>(0x03));
+    closePayload.push_back(static_cast<char>(0xE8));
+
+    const auto first = maskedFrame(
+        &resource, 0x1, std::string_view(firstBlock.data(), firstBlock.size()),
+        /*fin=*/true, /*rsv1=*/true);
+    const auto second = maskedFrame(
+        &resource, 0x1, std::string_view(secondBlock.data(), secondBlock.size()),
+        /*fin=*/true, /*rsv1=*/true);
+    const auto peerClose = maskedFrame(
+        &resource, 0x8, std::string_view(closePayload.data(), closePayload.size()));
+
+    std::pmr::string inbound(&resource);
+    inbound.append(first.data(), first.size());
+    inbound.append(second.data(), second.size());
+    inbound.append(peerClose.data(), peerClose.size());
+
+    const auto event = pollBytes(
+        conn, input, std::string_view(inbound.data(), inbound.size()));
+    RUVIA_CHECK(event.has_value());
+    RUVIA_CHECK(event->close() != nullptr);  // not a spurious 1009 message-too-large
+    if (event->close() != nullptr) {
+        RUVIA_CHECK_EQ(event->close()->closeCode(), std::uint16_t{1000});
+    }
+}
+
 // With permessage-deflate on, submitFrame compresses a shrinkable payload and sets
 // the RSV1 bit.
 RUVIA_TEST(ws_connection_submit_compresses_when_enabled) {

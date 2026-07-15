@@ -254,6 +254,12 @@ std::optional<WsEvent> WsConnection::poll() {
             return WsEvent::message(message.opcode(), message.payload());
         }
 
+        // decompress() only appends, so the buffer must be emptied per MESSAGE, not
+        // per poll(): one poll() drains several frames, and a message suppressed
+        // during the closing handshake (below) returns via `continue` with its bytes
+        // still here. Inheriting them would make the next message's UTF-8 check read
+        // the concatenation, and would charge its decompression-bomb limit for both.
+        inboundInflated_.clear();
         const auto inflateResult = deflate_.has_value()
             ? deflate_->decompress(
                 message.payload(), inboundInflated_, messageLimit_)
