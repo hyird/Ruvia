@@ -44,11 +44,12 @@ enum class Http1ClientResponsePersistence : std::uint8_t {
 
 // Signal for a request body gated by Expect: 100-continue. It is deliberately
 // separate from wait duration: the protocol core reports Continue or
-// exchange-complete progress only while content remains pending, while an
-// external I/O runtime owns its finite timeout policy. A duplicate or late 100
-// after content completion is therefore ignored. Most response heads emit no
-// request-content event, represented by an empty optional rather than a
-// non-event enum member.
+// exchange-complete progress only while Expect still gates content, while an
+// external I/O runtime owns its finite timeout policy. Once Continue releases
+// the writer, an early final response does not cancel that in-flight content.
+// A duplicate or late 100 after content completion is therefore ignored. Most
+// response heads emit no request-content event, represented by an empty
+// optional rather than a non-event enum member.
 enum class Http1ClientRequestContentSignal : std::uint8_t {
     kContinue,
     kExchangeComplete,

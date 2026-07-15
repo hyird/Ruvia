@@ -263,10 +263,13 @@ requestContentSignal(
     if (contentSemantics ==
             detail::HttpResponseContentSemantics::kProtocolSwitch ||
         statusCode >= 200) {
+        // A final response cancels content only while Expect still gates it.
+        // Once 100 Continue releases the writer, RFC 9110 section 7.5 says the
+        // client should keep sending the request unless the server explicitly
+        // indicates otherwise. Treat that phase like ordinary immediate
+        // content so a reusable response cannot strand an unsent request body.
         if (phase ==
-                detail::Http1ClientRequestContentPhase::kAwaitingContinue ||
-            phase ==
-                detail::Http1ClientRequestContentPhase::kContinueReceived) {
+            detail::Http1ClientRequestContentPhase::kAwaitingContinue) {
             return Http1ClientRequestContentSignal::kExchangeComplete;
         }
     }
