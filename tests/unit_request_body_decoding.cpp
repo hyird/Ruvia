@@ -48,6 +48,8 @@ using ruvia::detail::HttpContentDecodeFailure;
 using ruvia::detail::HttpContentDecodeResult;
 using ruvia::detail::HttpDecodedContent;
 using ruvia::detail::HttpEncodedContent;
+using ruvia::detail::HttpRequestContentDecodeFailure;
+using ruvia::detail::HttpRequestContentDecodeResult;
 using ruvia::detail::Http1ChunkedBodyDecoder;
 using ruvia::detail::Http1RequestBodyPlan;
 using ruvia::detail::Http1ServerRequestParser;
@@ -60,6 +62,7 @@ using ruvia::detail::TransferCodingDecodeNeedInput;
 using ruvia::detail::TransferCodingDecodeOutput;
 using ruvia::detail::TransferCodingDecodeResult;
 using ruvia::detail::decodeHttpContent;
+using ruvia::detail::decodeHttpRequestContent;
 using ruvia::detail::encodeHttpContent;
 using ruvia::detail::httpContentCodingFromFieldValue;
 
@@ -86,9 +89,20 @@ concept HasRawTransferDecodeError = requires(const T& result) {
     result.error();
 };
 
+template <typename T>
+concept HasRawRequestContentDecodeError = requires(const T& result) {
+    result.error();
+};
+
 static_assert(!HasRawTransferDecodeError<TransferCodingDecodeFailure>);
 static_assert(std::same_as<
     decltype(std::declval<const TransferCodingDecodeFailure&>()
+        .protocolError()),
+    std::optional<ruvia::HttpProtocolError>>);
+static_assert(!HasRawRequestContentDecodeError<
+    HttpRequestContentDecodeFailure>);
+static_assert(std::same_as<
+    decltype(std::declval<const HttpRequestContentDecodeFailure&>()
         .protocolError()),
     std::optional<ruvia::HttpProtocolError>>);
 
@@ -273,8 +287,8 @@ ContextBodyReadObservation readContextGzipBody(
     ContextBodyReadObservation observation;
     try {
         observation.body = future.get();
-    } catch (const ruvia::HttpError& error) {
-        observation.errorStatus = error.info().status();
+    } catch (const ruvia::HttpProtocolError& error) {
+        observation.errorStatus = error.status();
     }
     return observation;
 }
@@ -396,6 +410,23 @@ static_assert(std::same_as<
         std::size_t{},
         static_cast<std::pmr::memory_resource*>(nullptr))),
     HttpContentDecodeResult>);
+static_assert(!std::default_initializable<HttpRequestContentDecodeResult>);
+static_assert(!std::copy_constructible<HttpRequestContentDecodeResult>);
+static_assert(std::move_constructible<HttpRequestContentDecodeResult>);
+static_assert(!std::is_move_assignable_v<HttpRequestContentDecodeResult>);
+static_assert(std::same_as<
+    decltype(std::declval<HttpRequestContentDecodeResult&>().decoded()),
+    HttpDecodedContent*>);
+static_assert(std::same_as<
+    decltype(std::declval<const HttpRequestContentDecodeResult&>().failure()),
+    const HttpRequestContentDecodeFailure*>);
+static_assert(std::same_as<
+    decltype(decodeHttpRequestContent(
+        HttpContentCoding::kGzip,
+        std::string_view{},
+        std::size_t{},
+        static_cast<std::pmr::memory_resource*>(nullptr))),
+    HttpRequestContentDecodeResult>);
 static_assert(!std::default_initializable<HttpContentEncodeResult>);
 static_assert(!std::copy_constructible<HttpContentEncodeResult>);
 static_assert(std::move_constructible<HttpContentEncodeResult>);
@@ -753,6 +784,34 @@ RUVIA_TEST(web_request_decode_rejects_empty_encoded_representation) {
     const auto observation = readContextGzipBody({}, 1024);
     RUVIA_CHECK_EQ(observation.errorStatus, std::uint16_t{400});
     RUVIA_CHECK(observation.body.empty());
+}
+
+RUVIA_TEST(http_request_content_decoder_owns_protocol_failure_status) {
+    auto* resource = std::pmr::get_default_resource();
+
+    const auto invalid = decodeHttpRequestContent(
+        HttpContentCoding::kGzip,
+        "not-gzip",
+        1024,
+        resource);
+    RUVIA_CHECK(invalid.failure() != nullptr);
+    RUVIA_CHECK_EQ(invalid.failure()->protocolError().value().status(), 400);
+
+    const auto oversized = decodeHttpRequestContent(
+        HttpContentCoding::kIdentity,
+        "too large",
+        4,
+        resource);
+    RUVIA_CHECK(oversized.failure() != nullptr);
+    RUVIA_CHECK_EQ(oversized.failure()->protocolError().value().status(), 413);
+
+    const auto unsupported = decodeHttpRequestContent(
+        static_cast<HttpContentCoding>(255),
+        {},
+        1024,
+        resource);
+    RUVIA_CHECK(unsupported.failure() != nullptr);
+    RUVIA_CHECK_EQ(unsupported.failure()->protocolError().value().status(), 415);
 }
 
 RUVIA_TEST(transfer_coding_decoder_gzip_round_trip) {

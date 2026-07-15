@@ -38,6 +38,7 @@
 #include <ruvia/http/detail/HttpResponseBodyAccess.h>
 #include <ruvia/http/detail/HttpResponseContentSemantics.h>
 #include <ruvia/http/detail/HttpResponseFileBody.h>
+#include <ruvia/http/detail/RequestBodyDecoding.h>
 #include <ruvia/http/detail/client/HttpClientContentEncoding.h>
 #include <ruvia/http/detail/client/HttpOrigin.h>
 #include <ruvia/http/detail/http1/Http1ChunkedBodyDecoder.h>
@@ -124,6 +125,11 @@ concept ExposesRvalueDecodedContent = requires(T&& result) {
 template <typename T>
 concept ExposesRvalueDecodeFailure = requires(const T&& result) {
     std::move(result).failure();
+};
+
+template <typename T>
+concept HasRawContentDecodeError = requires(const T& result) {
+    result.error();
 };
 
 template <typename T>
@@ -2753,6 +2759,31 @@ static_assert(std::same_as<
     std::optional<ruvia::detail::HttpTransferEncodingValue>>);
 static_assert(!std::default_initializable<
     ruvia::detail::HttpContentDecodeResult>);
+static_assert(!std::default_initializable<
+    ruvia::detail::HttpRequestContentDecodeResult>);
+static_assert(!std::copy_constructible<
+    ruvia::detail::HttpRequestContentDecodeResult>);
+static_assert(std::move_constructible<
+    ruvia::detail::HttpRequestContentDecodeResult>);
+static_assert(!std::is_move_assignable_v<
+    ruvia::detail::HttpRequestContentDecodeResult>);
+static_assert(!ExposesRvalueDecodedContent<
+    ruvia::detail::HttpRequestContentDecodeResult>);
+static_assert(!ExposesRvalueDecodeFailure<
+    ruvia::detail::HttpRequestContentDecodeResult>);
+static_assert(!HasRawContentDecodeError<
+    ruvia::detail::HttpRequestContentDecodeFailure>);
+static_assert(std::same_as<
+    decltype(std::declval<const ruvia::detail::
+        HttpRequestContentDecodeFailure&>().protocolError()),
+    std::optional<ruvia::HttpProtocolError>>);
+static_assert(std::same_as<
+    decltype(ruvia::detail::decodeHttpRequestContent(
+        ruvia::detail::HttpContentCoding::kGzip,
+        std::string_view{},
+        std::size_t{},
+        std::declval<std::pmr::memory_resource*>())),
+    ruvia::detail::HttpRequestContentDecodeResult>);
 static_assert(!std::copy_constructible<
     ruvia::detail::HttpContentDecodeResult>);
 static_assert(std::move_constructible<

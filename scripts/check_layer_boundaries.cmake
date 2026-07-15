@@ -1707,7 +1707,7 @@ if(EXISTS "${WEB_CONTENT_DECODE_SERVER_ENTRY}" AND
        NOT web_context_internal MATCHES
            "maxDecodedBodyBytes_[(]services[.]maxDecodedBodyBytes[(][)][)]" OR
        NOT web_context_request_source MATCHES
-           "decodeHttpContent" OR
+           "decodeHttpRequestContent" OR
        NOT web_context_request_source MATCHES
            "maxDecodedBodyBytes_")
         boundary_error("Web decoded-body limit is not wired end to end"
@@ -2854,6 +2854,96 @@ if(EXISTS "${HTTP_CONTENT_CODING_CONTRACT}" AND
            "dispatch_rejects_unsupported_request_content_coding_with_advertisement")
         boundary_error("unsupported content-coding status must remain protocol-owned"
             "the Web signal must carry no status copy and Router dispatch must map the protocol status while preserving its 415/Accept-Encoding behavior test")
+    endif()
+endif()
+set(HTTP_REQUEST_CONTENT_DECODING_CONTRACT
+    "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/detail/RequestBodyDecoding.h")
+set(HTTP_CLIENT_CONTENT_DECODING_CONTRACT
+    "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/detail/client/HttpClientContentEncoding.h")
+set(WEB_CONTEXT_REQUEST_SOURCE
+    "${RUVIA_ROOT}/ruvia-web/src/http/ContextRequest.cpp")
+set(REQUEST_CONTENT_DECODING_TEST
+    "${RUVIA_ROOT}/tests/unit_request_body_decoding.cpp")
+set(HTTP_CONTENT_PACKAGE_CONSUMER
+    "${RUVIA_ROOT}/tests/package-consumer/http.cpp")
+foreach(request_content_decode_contract IN ITEMS
+        "${HTTP_REQUEST_CONTENT_DECODING_CONTRACT}"
+        "${HTTP_CLIENT_CONTENT_DECODING_CONTRACT}"
+        "${WEB_CONTEXT_REQUEST_SOURCE}"
+        "${REQUEST_CONTENT_DECODING_TEST}"
+        "${HTTP_CONTENT_PACKAGE_CONSUMER}")
+    if(NOT EXISTS "${request_content_decode_contract}")
+        file(RELATIVE_PATH relative "${RUVIA_ROOT}"
+            "${request_content_decode_contract}")
+        boundary_error("request content decode role contract is incomplete"
+            "${relative} is required")
+    endif()
+endforeach()
+if(EXISTS "${HTTP_REQUEST_CONTENT_DECODING_CONTRACT}" AND
+   EXISTS "${HTTP_CLIENT_CONTENT_DECODING_CONTRACT}" AND
+   EXISTS "${WEB_CONTEXT_REQUEST_SOURCE}" AND
+   EXISTS "${REQUEST_CONTENT_DECODING_TEST}" AND
+   EXISTS "${HTTP_CONTENT_PACKAGE_CONSUMER}")
+    file(READ "${HTTP_REQUEST_CONTENT_DECODING_CONTRACT}"
+        request_content_decode_contract)
+    file(READ "${HTTP_CLIENT_CONTENT_DECODING_CONTRACT}"
+        client_content_decode_contract)
+    file(READ "${WEB_CONTEXT_REQUEST_SOURCE}"
+        web_context_request_source)
+    file(READ "${REQUEST_CONTENT_DECODING_TEST}"
+        request_content_decode_test)
+    file(READ "${HTTP_CONTENT_PACKAGE_CONSUMER}"
+        content_decode_package_consumer)
+    if(NOT request_content_decode_contract MATCHES
+           "class HttpRequestContentDecodeFailure final" OR
+       NOT request_content_decode_contract MATCHES
+           "class HttpRequestContentDecodeResult final" OR
+       NOT request_content_decode_contract MATCHES
+           "std::optional<HttpProtocolError>" OR
+       NOT request_content_decode_contract MATCHES
+           "protocolError[(][)] const noexcept" OR
+       NOT request_content_decode_contract MATCHES
+           "std::variant<[ \t\r\n]*HttpDecodedContent,[ \t\r\n]*HttpRequestContentDecodeFailure>" OR
+       NOT request_content_decode_contract MATCHES
+           "HttpRequestContentDecodeResult decodeHttpRequestContent" OR
+       NOT request_content_decode_contract MATCHES
+           "decoded[(][)] const &&[ \t]*=[ \t]*delete" OR
+       NOT request_content_decode_contract MATCHES
+           "failure[(][)] const &&[ \t]*=[ \t]*delete" OR
+       request_content_decode_contract MATCHES
+           "HttpContentDecodeError error[(][)] const" OR
+       client_content_decode_contract MATCHES
+           "decodeHttpRequestContent|HttpRequestContentDecodeResult")
+        boundary_error("request and client content decoding roles were merged"
+            "HTTP request decoding must own protocol status while client decoding keeps the role-neutral result")
+    endif()
+    if(NOT web_context_request_source MATCHES
+           "decodeHttpRequestContent[(]" OR
+       NOT web_context_request_source MATCHES
+           "failure->protocolError[(][)]" OR
+       web_context_request_source MATCHES
+           "decodeHttpContent[(]|HttpContentDecodeError::")
+        boundary_error("Web request content decoding rebuilt HTTP failure semantics"
+            "Context must drive the HTTP-owned request result and only propagate its protocol error")
+    endif()
+    if(NOT request_content_decode_test MATCHES
+           "HttpRequestContentDecodeResult" OR
+       NOT request_content_decode_test MATCHES
+           "HasRawRequestContentDecodeError" OR
+       NOT request_content_decode_test MATCHES
+           "web_request_decode_uses_the_configured_buffered_body_limit" OR
+       NOT request_content_decode_test MATCHES
+           "web_request_decode_rejects_empty_encoded_representation" OR
+       NOT request_content_decode_test MATCHES
+           "http_request_content_decoder_owns_protocol_failure_status" OR
+       NOT content_decode_package_consumer MATCHES
+           "HttpRequestContentDecodeResult" OR
+       NOT content_decode_package_consumer MATCHES
+           "HttpRequestContentDecodeFailure" OR
+       NOT content_decode_package_consumer MATCHES
+           "decodeHttpRequestContent")
+        boundary_error("request content decode role ownership is insufficiently tested"
+            "unit and installed-consumer contracts must pin result lifetime and 400/413 protocol mappings")
     endif()
 endif()
 if(EXISTS

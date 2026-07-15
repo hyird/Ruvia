@@ -7,7 +7,6 @@
 #include "ruvia/http/detail/HeaderTokenUtils.h"
 #include "ruvia/http/detail/HeaderAcceptUtils.h"
 #include "ruvia/http/detail/HttpRequestInternal.h"
-#include "ruvia/http/HttpProtocolError.h"
 #include "ruvia/web/detail/http/ContextRequestInternal.h"
 #include "ruvia/web/detail/http/RequestFieldsAccess.h"
 #include "ruvia/web/detail/http/RequestQueryValues.h"
@@ -15,7 +14,6 @@
 #include "ruvia/http/detail/RequestBodyDecoding.h"
 #include "ruvia/web/detail/http/RequestBodyLoader.h"
 #include "ruvia/http/detail/AsciiCase.h"
-#include "ruvia/web/Error.h"
 #include "ruvia/http/UrlEncoding.h"
 #include "ruvia/web/detail/model/Parser.h"
 
@@ -678,30 +676,20 @@ Task<std::string_view> Context::requestBody() const {
     if (coding == detail::HttpContentCoding::kIdentity) {
         co_return raw;
     }
-    auto decodeResult = detail::decodeHttpContent(
+    auto decodeResult = detail::decodeHttpRequestContent(
         coding,
         raw,
         maxDecodedBodyBytes_,
         resource());
     auto* decodedContent = decodeResult.decoded();
     if (decodedContent == nullptr) {
-        switch (decodeResult.failure()->error()) {
-            case detail::HttpContentDecodeError::kDecodedSizeExceeded:
-                throw HttpError(
-                    413,
-                    "payload_too_large",
-                    "request body is too large");
-            case detail::HttpContentDecodeError::kInvalidContent:
-                throw HttpError(
-                    400,
-                    "bad_request",
-                    "failed to decode request body");
-            case detail::HttpContentDecodeError::kDecoderFailure:
-                throw std::runtime_error("request content decoder failed");
-            case detail::HttpContentDecodeError::kUnsupportedCoding:
-                throw std::logic_error(
-                    "request content decoder received an unsupported coding");
+        if (const auto* failure = decodeResult.failure()) {
+            if (auto protocolError = failure->protocolError()) {
+                throw *protocolError;
+            }
+            throw std::runtime_error("request content decoder failed");
         }
+        throw std::logic_error("unexpected request content decode result");
     }
     auto& decoded = decodedBody();
     decoded = std::move(*decodedContent).takeBytes();

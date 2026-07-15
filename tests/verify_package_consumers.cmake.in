@@ -740,11 +740,17 @@ if(EXISTS "${_removed_client_types_header}")
 endif()
 set(_installed_http_content_coding
     "${_install_prefix}/include/ruvia/http/detail/HttpContentCoding.h")
+set(_installed_http_request_content_decoding
+    "${_install_prefix}/include/ruvia/http/detail/RequestBodyDecoding.h")
 set(_removed_http_streaming_decoder
     "${_install_prefix}/include/ruvia/http/detail/client/HttpStreamingDecoder.h")
 if(NOT EXISTS "${_installed_http_content_coding}")
     message(FATAL_ERROR
         "installed HTTP package is missing its typed content decoder")
+endif()
+if(NOT EXISTS "${_installed_http_request_content_decoding}")
+    message(FATAL_ERROR
+        "installed HTTP package is missing request content decoding")
 endif()
 if(EXISTS "${_removed_http_streaming_decoder}")
     message(FATAL_ERROR
@@ -752,6 +758,8 @@ if(EXISTS "${_removed_http_streaming_decoder}")
 endif()
 file(READ "${_installed_http_content_coding}"
     _installed_http_content_coding_contract)
+file(READ "${_installed_http_request_content_decoding}"
+    _installed_http_request_content_decoding_contract)
 if(NOT _installed_http_content_coding_contract MATCHES
        "class HttpUnsupportedContentCoding final" OR
    NOT _installed_http_content_coding_contract MATCHES
@@ -784,6 +792,23 @@ if(NOT _installed_http_content_coding_contract MATCHES
        "HttpContentCoding::kNone|decodeRequestContentEncoding|kMaxDecodedRequestBodyBytes|bool[ \t\r\n]+encodeHttpContent|encodeHttpContent[ \t\r\n]*[(][^)]*std::pmr::string[ \t]*&")
     message(FATAL_ERROR
         "installed HTTP content coding lost its owning discriminated contract")
+endif()
+if(NOT _installed_http_request_content_decoding_contract MATCHES
+       "class HttpRequestContentDecodeFailure final" OR
+   NOT _installed_http_request_content_decoding_contract MATCHES
+       "class HttpRequestContentDecodeResult final" OR
+   NOT _installed_http_request_content_decoding_contract MATCHES
+       "std::optional<HttpProtocolError>" OR
+   NOT _installed_http_request_content_decoding_contract MATCHES
+       "HttpRequestContentDecodeResult decodeHttpRequestContent" OR
+   NOT _installed_http_request_content_decoding_contract MATCHES
+       "decoded[(][)] const &&[ \t]*=[ \t]*delete" OR
+   NOT _installed_http_request_content_decoding_contract MATCHES
+       "failure[(][)] const &&[ \t]*=[ \t]*delete" OR
+   _installed_http_request_content_decoding_contract MATCHES
+       "HttpContentDecodeError error[(][)] const")
+    message(FATAL_ERROR
+        "installed request content decoder lost protocol-owned role semantics")
 endif()
 set(_installed_http_content_length
     "${_install_prefix}/include/ruvia/http/detail/HttpContentLength.h")
