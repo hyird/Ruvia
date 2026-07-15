@@ -16,6 +16,7 @@
 #include <utility>
 
 #include "ruvia/web/detail/http/ContextInternal.h"
+#include "ruvia/http/detail/HeaderTokenUtils.h"
 #include "ruvia/http/detail/HttpDate.h"
 #include "ruvia/http/detail/HttpRequestInternal.h"
 #include "ruvia/http/detail/HttpResponseBodyAccess.h"
@@ -511,6 +512,43 @@ RUVIA_TEST(static_file_declares_vary_accept_encoding_but_context_file_does_not) 
         direct.header("Content-Type").value_or(""),
         std::string_view("text/javascript; charset=utf-8"));
     RUVIA_CHECK(ruvia::detail::responseBody(direct).ownedFile() != nullptr);
+
+    fs::remove_all(dir);
+}
+
+RUVIA_TEST(static_file_preserves_context_vary_when_adding_accept_encoding) {
+    namespace fs = std::filesystem;
+    using ruvia::StaticRoot;
+    using ruvia::StaticRootOptions;
+    using ruvia::detail::ContextAccess;
+    using ruvia::detail::HttpRequestAccess;
+
+    const auto dir = fs::temp_directory_path() / "ruvia_static_vary_merge_dir";
+    fs::create_directories(dir);
+    {
+        std::ofstream out(dir / "app.js", std::ios::binary | std::ios::trunc);
+        out << "console.log('ok');";
+    }
+    StaticRootOptions options;
+    options.fileTypes = ruvia::StaticFileTypePolicy::all();
+    StaticRoot root(dir, std::move(options));
+
+    ruvia::WorkerMemory worker;
+    ruvia::RequestMemory memory(worker);
+    ruvia::HttpRequest request = HttpRequestAccess::make();
+    HttpRequestAccess::reset(request);
+    HttpRequestAccess::setMethod(request, "GET");
+    HttpRequestAccess::setResource(request, memory.resource());
+    auto context = ContextAccess::make(memory, request);
+    context.header("Vary", "Origin");
+
+    const auto response = context.staticFile(root, "app.js", "text/javascript");
+    const auto vary = response.header("Vary").value_or("");
+    // Context response metadata is applied after the file's base headers. It
+    // must not erase the negotiation dimension, or a shared cache can reuse an
+    // identity/encoded representation for the wrong Accept-Encoding request.
+    RUVIA_CHECK(ruvia::detail::httpHasToken(vary, "Origin"));
+    RUVIA_CHECK(ruvia::detail::httpHasToken(vary, "Accept-Encoding"));
 
     fs::remove_all(dir);
 }

@@ -3,6 +3,7 @@
 #include "ruvia/http/detail/HttpRequestInternal.h"
 #include "ruvia/http/detail/HttpResponseFileAccess.h"
 #include "ruvia/http/detail/HttpResponseHeaderState.h"
+#include "ruvia/http/detail/ResponseHeaderUtils.h"
 #include "ruvia/http/detail/HttpByteRange.h"
 #include "ruvia/http/detail/HttpConditionalRequest.h"
 #include "ruvia/http/detail/HttpDate.h"
@@ -297,22 +298,25 @@ template <typename ApplyResponseState>
                 "Content-Encoding",
                 contentEncoding);
         }
-        // Declare Vary: Accept-Encoding on every response from an endpoint that
-        // negotiates the representation by Accept-Encoding -- even when the
-        // identity variant was served. Gating it on a chosen compressed variant
-        // left the identity 200/206/304 with no Vary, so a shared cache keyed only
-        // on the URL would serve that identity body to an encoding-capable client
-        // (RFC 9110 12.5.5 / RFC 9111 4.1). Context::file does no negotiation and
-        // stays Vary-free.
-        if (negotiatesEncoding) {
-            detail::setResponseHeaderStableView(response, "Vary", "Accept-Encoding");
-        }
         if (enableRanges) {
             detail::setResponseHeaderStableView(response, "Accept-Ranges", "bytes");
         }
         if (enableValidators) {
             response.header("ETag", etag);
             response.header("Last-Modified", lastModified);
+        }
+    };
+    auto applyFileResponseState = [&](
+        HttpResponse& response,
+        std::optional<std::uint16_t> statusCode) {
+        applyResponseState(response, statusCode);
+        // Declare the negotiation dimension after Context response metadata is
+        // applied. A caller-provided Vary value must be merged, not allowed to
+        // overwrite Accept-Encoding and make differently encoded variants share
+        // one cache entry (RFC 9110 12.5.5 / RFC 9111 4.1). Context::file does no
+        // Accept-Encoding negotiation and stays Vary-free.
+        if (negotiatesEncoding) {
+            detail::addVaryToken(response, "Accept-Encoding");
         }
     };
     auto setFileBody = [&](HttpResponse& response, std::uint64_t offset, std::uint64_t length) {
@@ -325,7 +329,7 @@ template <typename ApplyResponseState>
         std::optional<std::uint16_t> statusCode) {
         HttpResponse response(context.resource());
         addFileHeaders(response);
-        applyResponseState(response, statusCode);
+        applyFileResponseState(response, statusCode);
         return response;
     };
     auto makeFullFileResponse = [&](
@@ -333,7 +337,7 @@ template <typename ApplyResponseState>
         HttpResponse response(context.resource());
         addFileHeaders(response);
         setFullFileBody(response);
-        applyResponseState(response, statusCode);
+        applyFileResponseState(response, statusCode);
         return response;
     };
 
@@ -411,7 +415,7 @@ template <typename ApplyResponseState>
             HttpResponse response(context.resource());
             detail::setResponseContentRangeUnsatisfied(response, size);
             addFileHeaders(response);
-            applyResponseState(response, 416);
+            applyFileResponseState(response, 416);
             return response;
         }
 
@@ -421,7 +425,7 @@ template <typename ApplyResponseState>
         detail::setResponseContentRange(
             response, resolved.offset(), resolved.length(), size);
         setFileBody(response, resolved.offset(), resolved.length());
-        applyResponseState(response, 206);
+        applyFileResponseState(response, 206);
         return response;
     }
 
