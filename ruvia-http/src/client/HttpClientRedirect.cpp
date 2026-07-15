@@ -26,6 +26,18 @@ namespace {
     return true;
 }
 
+[[nodiscard]] bool isValidHttpClientUriFragment(
+    std::string_view fragment) noexcept {
+    if (fragment.empty()) {
+        return true;
+    }
+    // RFC 3986 section 3.5 permits pchar, '/', and '?'. The shared
+    // request-target byte validator covers that grammar and percent encoding,
+    // except that its authority union also admits IP-literal brackets.
+    return fragment.find_first_of("[]") == std::string_view::npos &&
+        detail::isValidRequestTargetBytes(fragment);
+}
+
 void removeHttpClientLastPathSegment(std::pmr::string& path) noexcept {
     const auto slash = path.rfind('/');
     if (slash == std::pmr::string::npos) {
@@ -160,6 +172,10 @@ HttpClientRedirectTargetResult resolveHttpClientSameOriginRedirectTarget(
 
     location = detail::httpTrimOws(location);
     if (const auto hash = location.find('#'); hash != std::string_view::npos) {
+        if (!isValidHttpClientUriFragment(location.substr(hash + 1))) {
+            return HttpClientRedirectTargetResult::makeFailure(
+                HttpClientRedirectTargetError::kInvalidLocation);
+        }
         location = location.substr(0, hash);
     }
 

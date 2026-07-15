@@ -316,6 +316,12 @@ RUVIA_TEST(http_client_same_origin_redirect_resolves_uri_references) {
     checkResolvedTarget(
         ruvia_ctx, origin, current, "?new=2", "/base/dir/page?new=2");
     checkResolvedTarget(ruvia_ctx, origin, current, "#fragment", current);
+    checkResolvedTarget(
+        ruvia_ctx,
+        origin,
+        current,
+        "/next#part/one?x=%2F:@!$&'()*+,;=",
+        "/next");
     checkResolvedTarget(ruvia_ctx, origin, current, "", current);
     checkResolvedTarget(ruvia_ctx, origin, current, "/a/../b#section", "/b");
 }
@@ -340,7 +346,11 @@ RUVIA_TEST(http_client_same_origin_redirect_reports_rejection_reason) {
              "https://example.com:99999/next",
              "http://user@example.com/next",
              "http://example.com:99999/next",
-             "http:/broken"}) {
+             "http:/broken",
+             "/next#bad fragment",
+             "/next#%zz",
+             "/next#[bad]",
+             "/next#first#second"}) {
         checkRedirectTargetFailure(
             ruvia_ctx,
             origin,
