@@ -805,6 +805,12 @@ httpParseMultipartPartHeaders(std::string_view headers) noexcept {
             return HttpMultipartPartHeaderParseResult::makeFailure(
                 MultipartParseError::kInvalidContentDisposition);
         }
+        // RFC 7578 section 4.2 forbids RFC 5987's filename* parameter in
+        // multipart/form-data; accepting and ignoring it loses the filename.
+        if (httpAsciiEqualsIgnoreCase(key, "filename*")) {
+            return HttpMultipartPartHeaderParseResult::makeFailure(
+                MultipartParseError::kInvalidContentDisposition);
+        }
 
         const auto decoded = httpTrimQuotes(value);
         if (httpAsciiEqualsIgnoreCase(key, "name")) {

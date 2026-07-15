@@ -462,6 +462,7 @@ RUVIA_TEST(multipart_part_header_rejects_ambiguous_disposition_parameters) {
              "Content-Disposition: form-data; name=unquoted value",
              "Content-Disposition: form-data; name=field; name=shadow",
              "Content-Disposition: form-data; name=field; filename=a; filename=b",
+             "Content-Disposition: form-data; name=field; FileName*=UTF-8''evil.txt",
              "Content-Disposition: form-data; name=field; x=one; X=two",
              "Content-Disposition: form-data; name =field",
              "Content-Disposition: form-data; name= field",
