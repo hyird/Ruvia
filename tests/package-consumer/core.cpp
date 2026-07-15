@@ -6,6 +6,7 @@
 #include <utility>
 
 #include <ruvia/core/Task.h>
+#include <ruvia/core/EventLoopPool.h>
 #include <ruvia/core/TaskScope.h>
 #include <ruvia/core/Channel.h>
 #include <ruvia/core/OneShot.h>
@@ -230,6 +231,19 @@ static_assert(!std::assignable_from<ruvia::Task<int>&, ruvia::Task<int>&&>);
 static_assert(!std::default_initializable<ruvia::TaskScope>);
 static_assert(!std::copy_constructible<ruvia::TaskScope>);
 static_assert(!std::move_constructible<ruvia::TaskScope>);
+static_assert(std::default_initializable<ruvia::EventLoop>);
+static_assert(std::copy_constructible<ruvia::EventLoop>);
+static_assert(!std::copy_constructible<ruvia::EventLoopStopRegistration>);
+static_assert(std::move_constructible<ruvia::EventLoopStopRegistration>);
+static_assert(std::same_as<
+    decltype(std::declval<const ruvia::EventLoop&>().ioContext()),
+    asio::io_context&>);
+static_assert(std::same_as<
+    decltype(std::declval<const ruvia::EventLoop&>().executor()),
+    asio::io_context::executor_type>);
+static_assert(std::same_as<
+    decltype(std::declval<const ruvia::EventLoop&>().handle()),
+    ruvia::WorkerHandle>);
 
 static_assert(!HasConnectionTimeoutMillisecondSentinels<
               ruvia::detail::ConnectionScannerOptions>);

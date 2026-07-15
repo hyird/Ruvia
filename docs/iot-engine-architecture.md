@@ -14,7 +14,7 @@ iot-engine 是单进程、生产者—消费者架构的物联网平台后端，
 
 - Ruvia 负责 HTTP/WebSocket/SSE runtime，以及 worker 亲和的调度、等待和结构化并发原语。
 - iot-engine 负责南向 raw TCP、设备协议、事件聚合、命令持久化、Webhook 传输和产品策略；长批处理 runtime 可自持数据库连接，普通后台业务可投递到 Ruvia Web worker 查询。
-- `ruvia-http` 提供 Webhook 所需的 sans-I/O HTTP client 协议能力；DNS、TCP、TLS、timeout 和连接池由 iot-engine 驱动。
+- `ruvia-http` 提供 Webhook 所需的 sans-I/O HTTP client 协议能力；DNS、TCP、TLS、timeout 和连接池由 iot-engine 在应用自有 `EventLoopPool` 上驱动。
 - `c.db()` 和 `c.redis()` 只服务所属 Ruvia worker；后台线程不得借用这些 handle，而应使用 `App::workerFor(key).post()`，在 `WebWorkerContext` 内重新取得目标 worker 的 DB/Redis handle。
 - 单进程内事件不经 Redis 绕行。Redis 只承担跨实例协调、短期缓存、限流和分布式部署后的消息能力。
 
@@ -33,10 +33,10 @@ TCP devices <-> DeviceEngine/DeviceSession
 
 线程所有权：
 
-- 每个 Ruvia worker 独占一个 `io_context` 和它的 HTTP/WS 连接。
-- 每个 DeviceSession 从建立到关闭固定在一个 engine executor。
+- 每个 Ruvia Web worker 独占一个不向业务公开的 `io_context` 和它的 HTTP/WS 连接。
+- iot-engine 通过 `EventLoopPool` 创建应用自有 loop；每个 loop 公开 `ioContext()`/executor，DeviceSession 从建立到关闭固定归属一个 loop。
 - 每个 pipeline shard 按 `deviceId` hash 固定拥有一组设备事件。
-- WebhookRuntime 使用独立 Asio executor，不阻塞 Ruvia worker 或 pipeline。
+- WebhookRuntime 使用独立 `EventLoopPool`（或与 DeviceEngine 明确分组的应用 loop），不阻塞 Ruvia Web worker 或 pipeline。
 - socket、连接状态机、协议 decoder、数据库连接都不得跨所有者线程访问。
 
 跨线程交互只能经过 Ruvia Channel/OneShot、DeviceEngine command mailbox 或其他明确的有界 mailbox。

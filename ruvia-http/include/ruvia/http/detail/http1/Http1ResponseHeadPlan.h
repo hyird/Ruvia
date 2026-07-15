@@ -155,7 +155,7 @@ public:
         return headPlan_.bodyPlan();
     }
 
-    [[nodiscard]] constexpr std::uint16_t responseStatus() const noexcept {
+    [[nodiscard]] std::uint16_t responseStatus() const noexcept {
         return bodyPlan().responseStatus();
     }
 
@@ -163,7 +163,7 @@ public:
         return headPlan_.buffered()->contentLength();
     }
 
-    [[nodiscard]] constexpr bool sendBody() const noexcept {
+    [[nodiscard]] bool sendBody() const noexcept {
         return !bodyPlan().bodySuppressed() && contentLength() != 0;
     }
 

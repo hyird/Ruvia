@@ -1,5 +1,5 @@
 #include "ruvia/core/Task.h"
-#include "ruvia/core/Runtime.h"
+#include "ruvia/core/EventLoopPool.h"
 #include "ruvia/core/memory/MemoryPool.h"
 
 #include <memory_resource>
@@ -11,6 +11,6 @@ ruvia::Task<int> smokeTask() {
 int main() {
     ruvia::WorkerMemory worker;
     std::pmr::memory_resource* resource = worker.resource();
-    ruvia::Runtime runtime({.workerCount = 1, .mailboxCapacity = 1});
-    return resource == nullptr || !runtime.worker(0).valid() ? 1 : 0;
+    ruvia::EventLoopPool loops({.loopCount = 1, .mailboxCapacity = 1});
+    return resource == nullptr || !loops.loop(0).valid() ? 1 : 0;
 }

@@ -149,6 +149,8 @@ if(_built_components_csv MATCHES "(^|,)core(,|$)")
         "${_install_prefix}/include/ruvia/core/detail/WorkerTimer.h")
     set(_installed_worker_handle_path
         "${_install_prefix}/include/ruvia/core/WorkerHandle.h")
+    set(_installed_event_loop_pool_path
+        "${_install_prefix}/include/ruvia/core/EventLoopPool.h")
     set(_installed_worker_dispatcher_path
         "${_install_prefix}/include/ruvia/core/detail/WorkerDispatcher.h")
     set(_installed_worker_signal_path
@@ -156,10 +158,11 @@ if(_built_components_csv MATCHES "(^|,)core(,|$)")
     if(NOT EXISTS "${_installed_worker_wait_awaiter_path}" OR
        NOT EXISTS "${_installed_worker_timer_path}" OR
        NOT EXISTS "${_installed_worker_handle_path}" OR
+       NOT EXISTS "${_installed_event_loop_pool_path}" OR
        NOT EXISTS "${_installed_worker_dispatcher_path}" OR
        NOT EXISTS "${_installed_worker_signal_path}")
         message(FATAL_ERROR
-            "installed core package is missing worker wait/timer contracts")
+            "installed core package is missing event-loop/worker contracts")
     endif()
     file(READ "${_installed_worker_wait_awaiter_path}"
         _installed_worker_wait_awaiter)
