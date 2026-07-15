@@ -2106,6 +2106,13 @@ static_assert(!std::default_initializable<
     ruvia::detail::HttpResponseTrailerSectionFailure>);
 static_assert(!std::default_initializable<
     ruvia::detail::HttpResponseTrailerSectionResult>);
+static_assert(std::derived_from<
+    ruvia::detail::HttpResponseTrailerSectionError,
+    std::exception>);
+static_assert(std::same_as<
+    decltype(std::declval<const
+        ruvia::detail::HttpResponseTrailerSectionFailure&>().exception()),
+    ruvia::detail::HttpResponseTrailerSectionError>);
 static_assert(!HasStagedResponseTrailerBlock<
     ruvia::detail::Http2StreamState>);
 static_assert(!HasStagedResponseTrailers<

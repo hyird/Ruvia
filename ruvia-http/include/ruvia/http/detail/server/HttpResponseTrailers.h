@@ -4,8 +4,8 @@
 #include "ruvia/http/detail/parser/HttpParserSyntax.h"
 #include "ruvia/http/HttpHeader.h"
 
+#include <exception>
 #include <span>
-#include <cstdint>
 #include <string_view>
 #include <variant>
 
@@ -122,11 +122,20 @@ namespace ruvia::detail {
         isValidResponseTrailerValue(value);
 }
 
-enum class HttpResponseTrailerSectionError : std::uint8_t {
-    kInvalidField
-};
-
 class HttpResponseTrailerSectionResult;
+class HttpResponseTrailerSectionFailure;
+
+class HttpResponseTrailerSectionError final : public std::exception {
+public:
+    [[nodiscard]] const char* what() const noexcept override {
+        return "invalid HTTP response trailer section";
+    }
+
+private:
+    friend class HttpResponseTrailerSectionFailure;
+
+    HttpResponseTrailerSectionError() noexcept = default;
+};
 
 // Borrowed proof that the complete terminal section passed the shared response-
 // trailer rules. Protocol encoders accept this value instead of revalidating raw
@@ -155,8 +164,8 @@ private:
 
 class HttpResponseTrailerSectionFailure final {
 public:
-    [[nodiscard]] HttpResponseTrailerSectionError error() const noexcept {
-        return error_;
+    [[nodiscard]] HttpResponseTrailerSectionError exception() const noexcept {
+        return HttpResponseTrailerSectionError();
     }
 
 private:
@@ -164,11 +173,7 @@ private:
     friend HttpResponseTrailerSectionResult httpResponseTrailerSection(
         std::span<const HttpHeaderView>) noexcept;
 
-    explicit HttpResponseTrailerSectionFailure(
-        HttpResponseTrailerSectionError error) noexcept
-        : error_(error) {}
-
-    HttpResponseTrailerSectionError error_;
+    HttpResponseTrailerSectionFailure() noexcept = default;
 };
 
 class HttpResponseTrailerSectionResult final {
@@ -207,8 +212,7 @@ httpResponseTrailerSection(
     for (const auto& trailer : trailers) {
         if (!responseTrailerFieldValid(trailer.name(), trailer.value())) {
             return HttpResponseTrailerSectionResult(
-                HttpResponseTrailerSectionFailure(
-                    HttpResponseTrailerSectionError::kInvalidField));
+                HttpResponseTrailerSectionFailure());
         }
     }
     return HttpResponseTrailerSectionResult(

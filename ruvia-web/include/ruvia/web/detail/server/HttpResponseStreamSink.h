@@ -200,8 +200,8 @@ private:
         }
 
         const auto trailerResult = httpResponseTrailerSection(trailers);
-        if (trailerResult.failure() != nullptr) {
-            throw std::invalid_argument("invalid response trailer section");
+        if (const auto* failure = trailerResult.failure()) {
+            throw failure->exception();
         }
         const auto& trailerSection = *trailerResult.section();
         const auto trailerIntent = trailerSection.empty()

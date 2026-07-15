@@ -2,7 +2,9 @@
 
 #include <array>
 #include <concepts>
+#include <exception>
 #include <string_view>
+#include <type_traits>
 #include <utility>
 
 #include "ruvia/http/detail/server/HttpResponseTrailers.h"
@@ -14,6 +16,8 @@ using ruvia::detail::isValidResponseTrailerName;
 using ruvia::detail::isValidResponseTrailerValue;
 using ruvia::detail::responseTrailerFieldValid;
 using ruvia::detail::httpResponseTrailerSection;
+using ruvia::detail::HttpResponseTrailerSectionError;
+using ruvia::detail::HttpResponseTrailerSectionFailure;
 using ruvia::detail::HttpResponseTrailerSectionResult;
 
 template <typename T>
@@ -23,6 +27,20 @@ concept HasAnyRvalueTrailerSectionAccessor =
 
 static_assert(!HasAnyRvalueTrailerSectionAccessor<
     HttpResponseTrailerSectionResult>);
+static_assert(std::derived_from<
+    HttpResponseTrailerSectionError,
+    std::exception>);
+static_assert(std::is_trivially_copyable_v<
+    HttpResponseTrailerSectionResult>);
+static_assert(sizeof(HttpResponseTrailerSectionResult) <= 24);
+
+template <typename T>
+concept HasRawTrailerSectionError = requires(const T& failure) {
+    failure.error();
+};
+
+static_assert(!HasRawTrailerSectionError<
+    HttpResponseTrailerSectionFailure>);
 
 }  // namespace
 
@@ -125,6 +143,9 @@ RUVIA_TEST(response_trailer_section_validation_is_all_fields_or_none) {
     const auto mixedResult = httpResponseTrailerSection(mixed);
     RUVIA_CHECK(mixedResult.section() == nullptr);
     RUVIA_CHECK(mixedResult.failure() != nullptr);
+    RUVIA_CHECK_EQ(
+        std::string_view(mixedResult.failure()->exception().what()),
+        std::string_view("invalid HTTP response trailer section"));
     // An empty field sequence is the valid absence of a trailer section; the
     // submission API reports kEmpty separately when asked to submit one.
     const auto emptyResult = httpResponseTrailerSection({});
