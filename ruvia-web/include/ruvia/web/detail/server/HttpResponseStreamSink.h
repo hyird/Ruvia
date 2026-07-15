@@ -39,17 +39,26 @@ public:
         WorkerMemory& memory,
         ResponseHeadBuffer& head,
         ScannerEntry& scannerEntry,
-        WorkerHandle worker,
+        const WorkerHandle& worker,
         ResponseStreamKind kind,
         Http1ResponseStreamPlan plan) noexcept
         : stream_(stream),
           head_(head),
           trailers_(memory.resource()),
           scannerEntry_(scannerEntry),
-          worker_(std::move(worker)),
+          worker_(&worker),
           kind_(kind),
           plan_(plan),
           connectionPlan_(plan.requestConnectionPlan().requireClose()) {}
+
+    ResponseStreamSink(
+        Stream&,
+        WorkerMemory&,
+        ResponseHeadBuffer&,
+        ScannerEntry&,
+        WorkerHandle&&,
+        ResponseStreamKind,
+        Http1ResponseStreamPlan) = delete;
 
     [[nodiscard]] bool committed() const noexcept { return state_.committed(); }
 
@@ -137,7 +146,7 @@ private:
     }
 
     Task<void> sleep(std::chrono::milliseconds duration) {
-        co_await sleepFor(worker_, duration);
+        co_await sleepFor(*worker_, duration);
         scannerEntry_.touch();
     }
 
@@ -238,7 +247,9 @@ private:
     ResponseHeadBuffer& head_;
     std::pmr::string trailers_;
     ScannerEntry& scannerEntry_;
-    WorkerHandle worker_;
+    // The connection/server owns an address-stable handle for the complete
+    // route dispatch. Streaming must not acquire shared ownership per request.
+    const WorkerHandle* worker_;
     ResponseStreamKind kind_;
     Http1ResponseStreamPlan plan_;
     Http1ServerConnectionPlan connectionPlan_;

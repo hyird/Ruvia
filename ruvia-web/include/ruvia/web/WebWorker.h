@@ -13,6 +13,7 @@
 
 #include "ruvia/core/Task.h"
 #include "ruvia/core/WorkerHandle.h"
+#include "ruvia/web/ScopedOperation.h"
 
 #ifdef RUVIA_ENABLE_DATABASE
 #include "ruvia/web/db/DbHandle.h"
@@ -66,6 +67,9 @@ private:
     detail::DbRegistry* databases_;
     detail::RedisRegistry* redis_;
     std::stop_token stopToken_;
+    // Each posted callback gets an independent operation lifetime. Declared
+    // last so cold frames are destroyed before the callback context disappears.
+    mutable detail::ScopedOperationScope operationScope_;
 };
 
 struct WebWorkerStats final {

@@ -25,6 +25,7 @@
 #include "ruvia/web/detail/router/RouterInternal.h"
 #include "ruvia/web/detail/router/RouteTable.h"
 #include "ruvia/web/detail/server/HttpResponseStreamDispatch.h"
+#include "ruvia/web/detail/server/HttpResponseStreamSink.h"
 
 namespace {
 
@@ -41,6 +42,35 @@ using ruvia::detail::ResponseStreamFraming;
 using ruvia::detail::ResponseStreamKind;
 using ruvia::detail::ResponseTrailerIntent;
 using ruvia::detail::RouteStreamHandler;
+
+struct BorrowTestStream final {};
+
+struct BorrowTestScannerEntry final {
+    void touch() noexcept {}
+};
+
+using Http1BorrowTestSink = ruvia::detail::ResponseStreamSink<
+    BorrowTestStream,
+    BorrowTestScannerEntry>;
+
+static_assert(std::constructible_from<
+    Http1BorrowTestSink,
+    BorrowTestStream&,
+    ruvia::WorkerMemory&,
+    ruvia::detail::ResponseHeadBuffer&,
+    BorrowTestScannerEntry&,
+    const ruvia::WorkerHandle&,
+    ResponseStreamKind,
+    ruvia::detail::Http1ResponseStreamPlan>);
+static_assert(!std::constructible_from<
+    Http1BorrowTestSink,
+    BorrowTestStream&,
+    ruvia::WorkerMemory&,
+    ruvia::detail::ResponseHeadBuffer&,
+    BorrowTestScannerEntry&,
+    ruvia::WorkerHandle&&,
+    ResponseStreamKind,
+    ruvia::detail::Http1ResponseStreamPlan>);
 
 template <typename Result>
 concept HasLegacyStreamedPredicate = requires(const Result& result) {

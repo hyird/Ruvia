@@ -144,7 +144,10 @@ Task<void> WebSocketConnection<Transport>::flushProtocolOutputNow() {
             (void)protocol_.abort();
             throw std::system_error(ec, "failed to write websocket bytes");
         }
-        protocol_.consumeOutput(plan.bytes().size());
+        if (protocol_.consumeOutput(plan.bytes().size()) !=
+            WsOutputConsumeStatus::kDrained) {
+            std::terminate();
+        }
         scannerEntry_.touch();
         if (disposition == WsTransportDisposition::kEndTransport) {
             protocol_.commitTransportEnd();

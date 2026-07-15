@@ -192,21 +192,72 @@ RUVIA_TEST(redis_registry_derives_default_pool_from_owned_entry_index) {
         ioContext,
         std::pmr::get_default_resource(),
         definitions);
+    ruvia::detail::ScopedOperationScope operationScope;
 
     bool defaultResolved = true;
     bool aliasResolved = true;
     try {
-        (void)registry.get(std::pmr::get_default_resource());
+        (void)registry.get(std::pmr::get_default_resource(), operationScope);
     } catch (...) {
         defaultResolved = false;
     }
     try {
-        (void)registry.get("cache", std::pmr::get_default_resource());
+        (void)registry.get(
+            "cache", std::pmr::get_default_resource(), operationScope);
     } catch (...) {
         aliasResolved = false;
     }
     RUVIA_CHECK(defaultResolved);
     RUVIA_CHECK(aliasResolved);
+}
+
+RUVIA_TEST(redis_request_capabilities_reject_after_parent_scope_closes) {
+    asio::io_context ioContext;
+    const std::array definitions{
+        ruvia::detail::RedisDefinition{
+            std::pmr::string("default"), ruvia::RedisConfig{}}};
+    ruvia::detail::RedisRegistry registry(
+        ioContext, std::pmr::get_default_resource(), definitions);
+    ruvia::detail::ScopedOperationScope operationScope;
+    auto handle = registry.get(
+        std::pmr::get_default_resource(), operationScope);
+    auto copiedHandle = handle;
+    auto pipeline = handle.pipeline();
+    pipeline.get("key");
+    auto movedPipeline = std::move(pipeline);
+    auto transaction = handle.transaction();
+    transaction.get("key");
+    auto movedTransaction = std::move(transaction);
+
+    operationScope.close();
+    bool handleRejected = false;
+    bool copyRejected = false;
+    bool builderRejected = false;
+    bool transactionRejected = false;
+    try {
+        (void)handle.ping();
+    } catch (const std::logic_error&) {
+        handleRejected = true;
+    }
+    try {
+        (void)copiedHandle.ping();
+    } catch (const std::logic_error&) {
+        copyRejected = true;
+    }
+    try {
+        movedPipeline.get("other");
+    } catch (const std::logic_error&) {
+        builderRejected = true;
+    }
+    try {
+        movedTransaction.get("other");
+    } catch (const std::logic_error&) {
+        transactionRejected = true;
+    }
+    RUVIA_CHECK(handleRejected);
+    RUVIA_CHECK(copyRejected);
+    RUVIA_CHECK(builderRejected);
+    RUVIA_CHECK(transactionRejected);
 }
 
 RUVIA_TEST(redis_set_expiration_cannot_represent_conflicting_modes) {

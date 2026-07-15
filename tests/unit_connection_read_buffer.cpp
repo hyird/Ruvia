@@ -4,9 +4,14 @@
 #include <cstddef>
 #include <cstdint>
 #include <memory_resource>
+#include <stdexcept>
 #include <string>
 #include <string_view>
+#include <type_traits>
 #include <utility>
+
+#include <asio/io_context.hpp>
+#include <asio/ip/tcp.hpp>
 
 #include "ruvia/web/detail/server/HttpConnectionState.h"
 #include "ruvia/web/detail/server/Http1SessionRequestCompletion.h"
@@ -18,7 +23,7 @@ namespace {
 
 using ruvia::detail::applyReusableHttp1RequestBufferCompletion;
 using ruvia::detail::compactConnectionReadBuffer;
-using ruvia::detail::ConnectionCountGuard;
+using ruvia::detail::AcceptedConnectionLease;
 using ruvia::detail::growReadBuffer;
 using ruvia::detail::kInitialReadBufferBytes;
 using ruvia::detail::Http1BufferedResponseReady;
@@ -301,20 +306,74 @@ RUVIA_TEST(trim_read_buffer_keeps_buffer_when_still_heavily_used) {
     RUVIA_CHECK_EQ(readBuffer.size(), std::size_t{70 * 1024});
 }
 
-RUVIA_TEST(connection_count_guard_decrements_with_underflow_protection) {
-    // The guard decrements the live-connection count on scope exit (the accept path
-    // increments). It must never decrement below zero: a stray release at zero would
-    // wrap the count to SIZE_MAX and effectively remove the concurrent-connection cap.
-    std::size_t count = 3;
-    {
-        ConnectionCountGuard guard(count);
-        RUVIA_CHECK_EQ(count, std::size_t{3});  // construction does not change the count
-    }
-    RUVIA_CHECK_EQ(count, std::size_t{2});       // decremented on scope exit
+RUVIA_TEST(accepted_connection_lease_acquires_moves_and_releases_once) {
+    static_assert(!std::default_initializable<AcceptedConnectionLease>);
+    static_assert(!std::copy_constructible<AcceptedConnectionLease>);
+    static_assert(std::move_constructible<AcceptedConnectionLease>);
+    static_assert(!std::is_move_assignable_v<AcceptedConnectionLease>);
 
-    std::size_t zero = 0;
+    asio::io_context ioContext;
+    asio::ip::tcp::socket socket(ioContext);
+    socket.open(asio::ip::tcp::v4());
+    std::size_t count = 0;
+    struct ReleaseObservation final {
+        asio::ip::tcp::socket* socket{nullptr};
+        std::size_t notifications{0};
+        bool socketClosedBeforeNotification{false};
+    } observation;
     {
-        ConnectionCountGuard guard(zero);
+        AcceptedConnectionLease admitted(
+            std::move(socket),
+            count,
+            &observation,
+            [](void* target) noexcept {
+                auto& observed = *static_cast<ReleaseObservation*>(target);
+                ++observed.notifications;
+                observed.socketClosedBeforeNotification =
+                    observed.socket != nullptr &&
+                    !observed.socket->is_open();
+            });
+        RUVIA_CHECK_EQ(count, std::size_t{1});
+        RUVIA_CHECK(admitted.socket().is_open());
+
+        AcceptedConnectionLease session(std::move(admitted));
+        observation.socket = &session.socket();
+        RUVIA_CHECK_EQ(count, std::size_t{1});
+        RUVIA_CHECK(session.socket().is_open());
     }
-    RUVIA_CHECK_EQ(zero, std::size_t{0});         // never underflows past zero
+    RUVIA_CHECK_EQ(count, std::size_t{0});
+    RUVIA_CHECK_EQ(observation.notifications, std::size_t{1});
+    RUVIA_CHECK(observation.socketClosedBeforeNotification);
+}
+
+RUVIA_TEST(accepted_connection_lease_rolls_back_throwing_initiation) {
+    asio::io_context ioContext;
+    asio::ip::tcp::socket socket(ioContext);
+    socket.open(asio::ip::tcp::v4());
+    std::size_t count = 0;
+    bool released = false;
+
+    try {
+        AcceptedConnectionLease admitted(
+            std::move(socket),
+            count,
+            &released,
+            [](void* target) noexcept {
+                *static_cast<bool*>(target) = true;
+            });
+        RUVIA_CHECK_EQ(count, std::size_t{1});
+
+        const auto throwingInitiation = [](
+            AcceptedConnectionLease) -> void {
+            throw std::runtime_error("spawn initiation failed");
+        };
+        throwingInitiation(std::move(admitted));
+        RUVIA_CHECK(false);
+    } catch (const std::runtime_error& error) {
+        RUVIA_CHECK(
+            std::string_view(error.what()) == "spawn initiation failed");
+    }
+
+    RUVIA_CHECK_EQ(count, std::size_t{0});
+    RUVIA_CHECK(released);
 }

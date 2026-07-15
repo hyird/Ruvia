@@ -161,6 +161,16 @@ struct OneShotAwaiter final {
 };
 
 template <typename T>
+[[nodiscard]] Task<WorkerWaitResult<T>> waitOneShotState(
+    std::shared_ptr<OneShotState<T>> state,
+    std::optional<std::chrono::steady_clock::duration> timeout) {
+    if (!state || !state->worker.isCurrent()) {
+        throw std::logic_error("one-shot wait must run on its bound worker");
+    }
+    co_return co_await OneShotAwaiter<T>(std::move(state), timeout);
+}
+
+template <typename T>
 void wakeOneShotReceiver(OneShotAwaiter<T>* waiter) {
     if (waiter->timer.valid()) {
         waiter->timer.cancel();
@@ -265,16 +275,16 @@ public:
     ~OneShotReceiver() { close(); }
 
     [[nodiscard]] Task<WorkerWaitResult<T>> wait() {
-        validateWorker();
-        co_return co_await detail::OneShotAwaiter<T>(state_, std::nullopt);
+        return detail::waitOneShotState<T>(state_, std::nullopt);
     }
 
     template <typename Rep, typename Period>
     [[nodiscard]] Task<WorkerWaitResult<T>>
     waitFor(std::chrono::duration<Rep, Period> duration) {
-        validateWorker();
-        co_return co_await detail::OneShotAwaiter<T>(
-            state_, std::chrono::duration_cast<std::chrono::steady_clock::duration>(duration));
+        return detail::waitOneShotState<T>(
+            state_,
+            std::chrono::duration_cast<std::chrono::steady_clock::duration>(
+                duration));
     }
 
     void close() const {
@@ -304,11 +314,6 @@ public:
 private:
     explicit OneShotReceiver(std::shared_ptr<detail::OneShotState<T>> state)
         : state_(std::move(state)) {}
-    void validateWorker() const {
-        if (!state_ || !state_->worker.isCurrent()) {
-            throw std::logic_error("one-shot wait must run on its bound worker");
-        }
-    }
     std::shared_ptr<detail::OneShotState<T>> state_;
     template <typename U>
     friend auto makeOneShot(WorkerHandle, std::pmr::memory_resource*);

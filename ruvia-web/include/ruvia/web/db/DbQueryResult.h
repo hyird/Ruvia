@@ -1,6 +1,7 @@
 #pragma once
 
 #include "ruvia/core/Task.h"
+#include "ruvia/web/ScopedOperation.h"
 #include "ruvia/web/db/DbTypes.h"
 #include "ruvia/web/detail/db/DbBackend.h"
 #include "ruvia/web/detail/db/DbOperationState.h"
@@ -57,7 +58,7 @@ private:
     std::variant<NoRawResult, OwnedRawResult> rawResult_;
 };
 
-class DbStreamResult final {
+class DbStreamResult final : private detail::ScopedCapabilityNode {
 public:
     DbStreamResult(const DbStreamResult&) = delete;
     DbStreamResult& operator=(const DbStreamResult&) = delete;
@@ -66,10 +67,11 @@ public:
     ~DbStreamResult();
 
     [[nodiscard]] bool active() const noexcept;
-    Task<std::optional<DbRow>> read();
-    Task<void> close();
+    ScopedOperation<std::optional<DbRow>> read();
+    ScopedOperation<void> close();
 
 private:
+    friend class DbHandle;
     friend class detail::MariaDbPool;
     friend class detail::PostgreSqlPool;
 
@@ -93,6 +95,10 @@ private:
         void* result,
         std::pmr::memory_resource* resource) noexcept;
     void reset() noexcept;
+    void bindOperationScope(detail::ScopedOperationScope& scope) noexcept;
+    static void expireCapability(detail::ScopedCapabilityNode& capability) noexcept;
+    Task<std::optional<DbRow>> readTask();
+    Task<void> closeTask();
 
     class OperationGuard final {
     public:
@@ -112,6 +118,7 @@ private:
     };
 
     detail::DbOperationState<Lease> state_{};
+    detail::ScopedOperationScope operationScope_;
 };
 
 }  // namespace ruvia

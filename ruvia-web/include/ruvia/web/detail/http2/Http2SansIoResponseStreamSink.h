@@ -42,24 +42,29 @@ class Context;  // only forwarded as Context* via the type-erased bindContext th
 
 namespace ruvia::detail {
 
-template <typename Executor>
 class Http2SansIoResponseStreamSink final {
 public:
     Http2SansIoResponseStreamSink(
         Http2Connection& connection,
         std::uint32_t streamId,
         ResponseStreamKind kind,
-        Executor executor,
-        WorkerHandle worker,
+        const WorkerHandle& worker,
         WorkerSignal& writeSignal,
         Http2SansIoStreamSignal& streamSignal) noexcept
         : connection_(connection),
           streamId_(streamId),
           kind_(kind),
-          executor_(std::move(executor)),
-          worker_(std::move(worker)),
+          worker_(&worker),
           writeSignal_(writeSignal),
           streamSignal_(streamSignal) {}
+
+    Http2SansIoResponseStreamSink(
+        Http2Connection&,
+        std::uint32_t,
+        ResponseStreamKind,
+        WorkerHandle&&,
+        WorkerSignal&,
+        Http2SansIoStreamSignal&) = delete;
 
     [[nodiscard]] bool committed() const noexcept { return state_.committed(); }
 
@@ -120,7 +125,7 @@ public:
     }
 
     Task<void> sleep(std::chrono::milliseconds duration) {
-        co_await sleepFor(worker_, duration);
+        co_await sleepFor(*worker_, duration);
     }
 
     Task<void> end(std::span<const HttpHeaderView> trailers) {
@@ -209,8 +214,9 @@ private:
     std::uint32_t streamId_;
     ResponseStreamKind kind_;
     ResponseStreamState state_;
-    Executor executor_;
-    WorkerHandle worker_;
+    // Borrow the stable server-owned handle. Holding a value here would add a
+    // shared ownership operation for every streaming HTTP/2 request.
+    const WorkerHandle* worker_;
     WorkerSignal& writeSignal_;
     Http2SansIoStreamSignal& streamSignal_;
 };

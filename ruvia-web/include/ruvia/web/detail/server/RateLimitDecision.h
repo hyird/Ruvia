@@ -13,11 +13,11 @@ namespace ruvia::detail {
 [[nodiscard]] inline RateLimitDecision decideRequestRateLimit(
     RateLimiter* limiter,
     std::string_view remoteAddress) noexcept {
-    if (limiter == nullptr || !limiter->enabled()) {
+    if (limiter == nullptr || !limiter->hasDefaultRule()) {
         return RateLimitDecision::allow();
     }
     char keyBuffer[kRateLimitKeyBufferBytes];
-    return limiter->allowGlobal(rateLimitKeyFor(remoteAddress, keyBuffer));
+    return limiter->allowDefault(rateLimitKeyFor(remoteAddress, keyBuffer));
 }
 
 [[nodiscard]] HttpErrorInfo rateLimitRejectionError() noexcept;

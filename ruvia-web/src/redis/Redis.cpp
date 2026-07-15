@@ -64,19 +64,22 @@ bool RedisRegistry::hasAnyTimeout() const noexcept {
     });
 }
 
-RedisHandle RedisRegistry::get(std::pmr::memory_resource* resource) const {
+RedisHandle RedisRegistry::get(
+    std::pmr::memory_resource* resource,
+    ScopedOperationScope& operationScope) const {
     if (!defaultPoolIndex_.has_value()) {
         throw RedisError(RedisError::Code::kNotConfigured, "default redis is not configured");
     }
-    return RedisHandle(*pools_[*defaultPoolIndex_].pool, resource);
+    return RedisHandle(*pools_[*defaultPoolIndex_].pool, resource, operationScope);
 }
 
 RedisHandle RedisRegistry::get(
     std::string_view alias,
-    std::pmr::memory_resource* resource) const {
+    std::pmr::memory_resource* resource,
+    ScopedOperationScope& operationScope) const {
     for (const auto& entry : pools_) {
         if (std::string_view(entry.alias.data(), entry.alias.size()) == alias) {
-            return RedisHandle(*entry.pool, resource);
+            return RedisHandle(*entry.pool, resource, operationScope);
         }
     }
     throw RedisError(RedisError::Code::kNotConfigured, "redis is not configured");
@@ -95,14 +98,14 @@ RedisHandle Context::redis() const {
     if (redis_ == nullptr) {
         throw RedisError(RedisError::Code::kNotConfigured, "redis is not configured");
     }
-    return redis_->get(resource());
+    return redis_->get(resource(), operationScope_);
 }
 
 RedisHandle Context::redis(std::string_view alias) const {
     if (redis_ == nullptr) {
         throw RedisError(RedisError::Code::kNotConfigured, "redis is not configured");
     }
-    return redis_->get(alias, resource());
+    return redis_->get(alias, resource(), operationScope_);
 }
 
 }  // namespace ruvia

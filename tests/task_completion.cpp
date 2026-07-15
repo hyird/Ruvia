@@ -2,8 +2,10 @@
 #include <ruvia/core/detail/AsioAwait.h>
 
 #include <asio/bind_executor.hpp>
+#include <asio/bind_allocator.hpp>
 #include <asio/io_context.hpp>
 
+#include <cstddef>
 #include <concepts>
 #include <exception>
 #include <memory>
@@ -12,6 +14,47 @@
 #include <utility>
 
 namespace {
+
+struct AllocationCounts final {
+    std::size_t allocations{0};
+    std::size_t deallocations{0};
+};
+
+template <typename T>
+class CountingAllocator {
+public:
+    using value_type = T;
+
+    explicit CountingAllocator(AllocationCounts& counts) noexcept
+        : counts_(&counts) {}
+
+    template <typename U>
+    CountingAllocator(const CountingAllocator<U>& other) noexcept
+        : counts_(other.counts()) {}
+
+    [[nodiscard]] T* allocate(std::size_t count) {
+        ++counts_->allocations;
+        return std::allocator<T>{}.allocate(count);
+    }
+
+    void deallocate(T* pointer, std::size_t count) noexcept {
+        ++counts_->deallocations;
+        std::allocator<T>{}.deallocate(pointer, count);
+    }
+
+    [[nodiscard]] AllocationCounts* counts() const noexcept {
+        return counts_;
+    }
+
+    template <typename U>
+    [[nodiscard]] bool operator==(
+        const CountingAllocator<U>& other) const noexcept {
+        return counts_ == other.counts();
+    }
+
+private:
+    AllocationCounts* counts_;
+};
 
 template <typename Result>
 concept HasLooseCompletionFields = requires(Result& result) {
@@ -124,5 +167,50 @@ int main() {
             }));
 
     ioContext.run();
-    return valid && completed == 4 ? 0 : 1;
+
+    // The Task-to-Asio bridge is itself an asynchronous operation. Its state
+    // and queued delivery must therefore use the completion handler's associated
+    // allocator, just like the surrounding co_spawn operation does.
+    AllocationCounts successCounts;
+    asio::io_context allocatedContext(1);
+    ruvia::detail::asyncStartTask(
+        completeVoid(),
+        asio::bind_executor(
+            allocatedContext.get_executor(),
+            asio::bind_allocator(
+                CountingAllocator<std::byte>(successCounts),
+                [&completed](auto result) {
+                    if (result.success() != nullptr) {
+                        ++completed;
+                    }
+                })));
+    valid = valid && successCounts.allocations != 0;
+    allocatedContext.run();
+    valid = valid &&
+            successCounts.allocations == successCounts.deallocations;
+
+    // User completion code is allowed to propagate through io_context::run().
+    // The adapter must still release its state and completed Task frame while
+    // that exception unwinds.
+    AllocationCounts throwingCounts;
+    asio::io_context throwingContext(1);
+    ruvia::detail::asyncStartTask(
+        completeVoid(),
+        asio::bind_executor(
+            throwingContext.get_executor(),
+            asio::bind_allocator(
+                CountingAllocator<std::byte>(throwingCounts),
+                [](auto) { throw std::runtime_error("completion failed"); })));
+    bool throwingHandlerObserved = false;
+    try {
+        throwingContext.run();
+    } catch (const std::runtime_error& error) {
+        throwingHandlerObserved =
+            std::string_view(error.what()) == "completion failed";
+    }
+    valid = valid && throwingHandlerObserved &&
+            throwingCounts.allocations != 0 &&
+            throwingCounts.allocations == throwingCounts.deallocations;
+
+    return valid && completed == 5 ? 0 : 1;
 }

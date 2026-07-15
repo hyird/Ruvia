@@ -3,6 +3,26 @@
 
 namespace ruvia {
 
+Task<std::string_view> ContextRequest::contextTextTask(const Context* context) {
+    return context->requestBody();
+}
+
+bool ContextRequest::contextContentTypeMatches(
+    const Context* context,
+    std::string_view expected) noexcept {
+    return context->requestContentTypeMatches(expected);
+}
+
+std::pmr::memory_resource* ContextRequest::contextResource(
+    const Context* context) noexcept {
+    return context->resource();
+}
+
+detail::ScopedOperationScope& ContextRequest::contextOperationScope(
+    const Context* context) noexcept {
+    return context->operationScope_;
+}
+
 std::string_view ContextRequest::method() const noexcept {
     return context_->request_.method();
 }
@@ -61,33 +81,49 @@ const RequestNameValueList& requestParamFields(const ContextRequest& request) {
 }  // namespace detail
 
 
-Task<std::string_view> ContextRequest::text() const {
-    return context_->requestBody();
+ScopedOperation<std::string_view> ContextRequest::text() const {
+    return detail::makeScopedOperation(
+        context_->operationScope_, context_->requestBody());
 }
 
-Task<std::span<const std::byte>> ContextRequest::bytes() const {
-    const auto body = co_await text();
+Task<std::span<const std::byte>> ContextRequest::bytesTask(const Context* context) {
+    const auto body = co_await contextTextTask(context);
     co_return std::span<const std::byte>(
         reinterpret_cast<const std::byte*>(body.data()),
         body.size());
 }
 
-Task<ContextRequest::RequestBlob> ContextRequest::blob() const {
-    auto bytes = co_await this->bytes();
-    co_return RequestBlob(bytes, header("Content-Type").value_or(std::string_view{}));
+ScopedOperation<std::span<const std::byte>> ContextRequest::bytes() const {
+    return detail::makeScopedOperation(
+        context_->operationScope_, bytesTask(context_));
 }
 
-Task<void> ContextRequest::discardBody() const {
-    return context_->requestDiscardBody();
+Task<ContextRequest::RequestBlob> ContextRequest::blobTask(const Context* context) {
+    auto bytes = co_await bytesTask(context);
+    co_return RequestBlob(
+        bytes,
+        context->requestHeader("Content-Type").value_or(std::string_view{}));
 }
 
-Task<std::pmr::vector<MultipartPart>> ContextRequest::multipart() const {
-    return context_->requestMultipart();
+ScopedOperation<ContextRequest::RequestBlob> ContextRequest::blob() const {
+    return detail::makeScopedOperation(
+        context_->operationScope_, blobTask(context_));
 }
 
-Task<ContextRequest::RequestFormData> ContextRequest::parseBody(
+ScopedOperation<void> ContextRequest::discardBody() const {
+    return detail::makeScopedOperation(
+        context_->operationScope_, context_->requestDiscardBody());
+}
+
+ScopedOperation<std::pmr::vector<MultipartPart>> ContextRequest::multipart() const {
+    return detail::makeScopedOperation(
+        context_->operationScope_, context_->requestMultipart());
+}
+
+ScopedOperation<ContextRequest::RequestFormData> ContextRequest::parseBody(
     ParseBodyOptions options) const {
-    return context_->parseRequestBody(options);
+    return detail::makeScopedOperation(
+        context_->operationScope_, context_->parseRequestBody(options));
 }
 
 BodyReader& ContextRequest::bodyReader() const {

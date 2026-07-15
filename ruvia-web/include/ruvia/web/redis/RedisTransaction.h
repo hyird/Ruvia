@@ -12,7 +12,7 @@
 
 namespace ruvia {
 
-class RedisTransaction final {
+class RedisTransaction final : private detail::ScopedCapabilityNode {
 public:
     RedisTransaction(const RedisTransaction&) = delete;
     RedisTransaction& operator=(const RedisTransaction&) = delete;
@@ -65,7 +65,7 @@ public:
 
     // A transaction is a single-use command batch. Its commands are transferred
     // into the returned coroutine frame before this builder may be destroyed.
-    Task<std::pmr::vector<RedisValue>> exec() &&;
+    ScopedOperation<std::pmr::vector<RedisValue>> exec() &&;
 
 private:
     friend class RedisHandle;
@@ -79,6 +79,7 @@ private:
 
     RedisPipeline pipeline_;
     std::pmr::vector<RedisPipeline::Command> watches_;
+    static void expireCapability(detail::ScopedCapabilityNode& capability) noexcept;
 };
 
 }  // namespace ruvia

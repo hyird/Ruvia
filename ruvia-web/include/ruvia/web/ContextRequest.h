@@ -19,6 +19,7 @@
 #include "ruvia/http/HttpKnownMethod.h"
 #include "ruvia/web/ModelTypes.h"
 #include "ruvia/web/MultipartReader.h"
+#include "ruvia/web/ScopedOperation.h"
 #include "ruvia/web/RequestFields.h"
 #include "ruvia/web/Streaming.h"
 #include "ruvia/web/detail/ValidatedValues.h"
@@ -565,29 +566,29 @@ public:
     [[nodiscard]] std::optional<std::string_view> signedCookie(
         std::string_view name,
         std::string_view secret) const;
-    [[nodiscard]] Task<std::string_view> text() const;
-    [[nodiscard]] Task<std::span<const std::byte>> bytes() const;
-    [[nodiscard]] Task<RequestBlob> blob() const;
-    Task<void> discardBody() const;
+    [[nodiscard]] ScopedOperation<std::string_view> text() const;
+    [[nodiscard]] ScopedOperation<std::span<const std::byte>> bytes() const;
+    [[nodiscard]] ScopedOperation<RequestBlob> blob() const;
+    ScopedOperation<void> discardBody() const;
 
-    [[nodiscard]] Task<JsonValue> json() const;
-
-    template <typename T>
-    [[nodiscard]] Task<T> json() const;
+    [[nodiscard]] ScopedOperation<JsonValue> json() const;
 
     template <typename T>
-    [[nodiscard]] Task<T> form() const;
+    [[nodiscard]] ScopedOperation<T> json() const;
+
+    template <typename T>
+    [[nodiscard]] ScopedOperation<T> form() const;
 
     template <typename T>
     [[nodiscard]] const T& valid() const;
 
-    [[nodiscard]] Task<std::pmr::vector<MultipartPart>> multipart() const;
+    [[nodiscard]] ScopedOperation<std::pmr::vector<MultipartPart>> multipart() const;
 
-    [[nodiscard]] Task<RequestFormData> parseBody() const {
+    [[nodiscard]] ScopedOperation<RequestFormData> parseBody() const {
         return parseBody(ParseBodyOptions{});
     }
 
-    [[nodiscard]] Task<RequestFormData> parseBody(ParseBodyOptions options) const;
+    [[nodiscard]] ScopedOperation<RequestFormData> parseBody(ParseBodyOptions options) const;
 
     /// Streaming request-body reader for explicit stream routes. Each BodyReader::read()
     /// returns a view valid only until the next read() call (see BodyReader::read).
@@ -610,6 +611,22 @@ private:
     [[nodiscard]] bool contentTypeMatches(std::string_view expected) const noexcept;
     [[nodiscard]] std::pmr::memory_resource* resource() const noexcept;
     [[nodiscard]] const detail::ValidatedModelBindings& validatedModels() const noexcept;
+
+    [[nodiscard]] static Task<std::span<const std::byte>> bytesTask(const Context* context);
+    [[nodiscard]] static Task<RequestBlob> blobTask(const Context* context);
+    [[nodiscard]] static Task<JsonValue> jsonTask(const Context* context);
+    template <typename T>
+    [[nodiscard]] static Task<T> jsonModelTask(const Context* context);
+    template <typename T>
+    [[nodiscard]] static Task<T> formModelTask(const Context* context);
+    [[nodiscard]] static Task<std::string_view> contextTextTask(const Context* context);
+    [[nodiscard]] static bool contextContentTypeMatches(
+        const Context* context,
+        std::string_view expected) noexcept;
+    [[nodiscard]] static std::pmr::memory_resource* contextResource(
+        const Context* context) noexcept;
+    [[nodiscard]] static detail::ScopedOperationScope& contextOperationScope(
+        const Context* context) noexcept;
 
     const Context* context_{nullptr};
 

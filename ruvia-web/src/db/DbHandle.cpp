@@ -223,41 +223,84 @@ void abortPoolTransaction(detail::DbPoolRef pool, std::size_t slot) noexcept {
 
 DbHandle::DbHandle(
     detail::DbPoolRef client,
-    std::pmr::memory_resource* resource) noexcept
-    : client_(client),
+    std::pmr::memory_resource* resource,
+    detail::ScopedOperationScope& operationScope) noexcept
+    : detail::ScopedCapabilityNode(operationScope, &DbHandle::expireCapability),
+      client_(client),
       resource_(detail::pmrResourceOrDefault(resource)) {}
 
-Task<QueryResult> DbHandle::query(std::string_view sql, std::span<const DbValue> params) const {
+DbHandle::DbHandle(const DbHandle& other) noexcept
+    : detail::ScopedCapabilityNode(other),
+      client_(other.client_),
+      resource_(other.resource_) {}
+
+void DbHandle::expireCapability(detail::ScopedCapabilityNode& capability) noexcept {
+    auto& handle = static_cast<DbHandle&>(capability);
+    handle.client_ = detail::DbPoolRef{};
+    handle.resource_ = nullptr;
+}
+
+ScopedOperation<QueryResult> DbHandle::query(std::string_view sql, std::span<const DbValue> params) const {
     return execute(sql, params);
 }
 
-Task<QueryResult> DbHandle::execute(std::string_view sql, std::span<const DbValue> params) const {
+ScopedOperation<QueryResult> DbHandle::execute(std::string_view sql, std::span<const DbValue> params) const {
+    requireActive();
     auto statement = prepareDbStatement(sql, params, resource_);
-    return executePrepared(std::move(statement.sql), std::move(statement.params));
+    return detail::makeScopedOperation(
+        operationScope(),
+        executePrepared(
+            client_, std::move(statement.sql), std::move(statement.params),
+            resource_));
 }
 
 Task<QueryResult> DbHandle::executePrepared(
+    detail::DbPoolRef client,
     std::pmr::string sql,
-    std::pmr::vector<DbValue> params) const {
+    std::pmr::vector<DbValue> params,
+    std::pmr::memory_resource* resource) {
     co_return co_await executePool(
-        client_, std::move(sql), std::move(params), resource_);
+        client, std::move(sql), std::move(params), resource);
 }
 
-Task<DbStreamResult> DbHandle::queryStream(
+ScopedOperation<DbStreamResult> DbHandle::queryStream(
     std::string_view sql,
     std::span<const DbValue> params) const {
+    requireActive();
     auto statement = prepareDbStatement(sql, params, resource_);
-    return queryStreamPrepared(std::move(statement.sql), std::move(statement.params));
+    return detail::makeScopedOperation(
+        operationScope(),
+        queryStreamPrepared(
+            client_, std::move(statement.sql), std::move(statement.params),
+            resource_, operationScope()));
 }
 
 Task<DbStreamResult> DbHandle::queryStreamPrepared(
+    detail::DbPoolRef client,
     std::pmr::string sql,
-    std::pmr::vector<DbValue> params) const {
-    return streamPool(client_, std::move(sql), std::move(params), resource_);
+    std::pmr::vector<DbValue> params,
+    std::pmr::memory_resource* resource,
+    detail::ScopedOperationScope& operationScope) {
+    auto result = co_await streamPool(
+        client, std::move(sql), std::move(params), resource);
+    result.bindOperationScope(operationScope);
+    co_return result;
 }
 
-Task<DbTransaction> DbHandle::beginTransaction() const {
-    return beginPoolTransaction(client_, resource_);
+ScopedOperation<DbTransaction> DbHandle::beginTransaction() const {
+    requireActive();
+    return detail::makeScopedOperation(
+        operationScope(),
+        beginTransactionPrepared(client_, resource_, operationScope()));
+}
+
+Task<DbTransaction> DbHandle::beginTransactionPrepared(
+    detail::DbPoolRef client,
+    std::pmr::memory_resource* resource,
+    detail::ScopedOperationScope& operationScope) {
+    auto transaction = co_await beginPoolTransaction(client, resource);
+    transaction.bindOperationScope(operationScope);
+    co_return transaction;
 }
 
 DbStreamResult::Lease::Lease(
@@ -278,7 +321,8 @@ DbStreamResult::DbStreamResult(
     : state_(Lease{client, slot, result, resource}) {}
 
 DbStreamResult::DbStreamResult(DbStreamResult&& other) noexcept
-    : state_(std::move(other.state_)) {}
+    : detail::ScopedCapabilityNode(std::move(other)),
+      state_(std::move(other.state_)) {}
 
 DbStreamResult::~DbStreamResult() {
     reset();
@@ -288,7 +332,22 @@ bool DbStreamResult::active() const noexcept {
     return state_.active();
 }
 
-Task<std::optional<DbRow>> DbStreamResult::read() {
+void DbStreamResult::bindOperationScope(detail::ScopedOperationScope& scope) noexcept {
+    bind(scope, &DbStreamResult::expireCapability);
+}
+
+void DbStreamResult::expireCapability(detail::ScopedCapabilityNode& capability) noexcept {
+    auto& result = static_cast<DbStreamResult&>(capability);
+    result.operationScope_.close();
+    result.reset();
+}
+
+ScopedOperation<std::optional<DbRow>> DbStreamResult::read() {
+    requireActive();
+    return detail::makeScopedOperation(operationScope_, readTask());
+}
+
+Task<std::optional<DbRow>> DbStreamResult::readTask() {
     OperationGuard operation(*this);
     auto& lease = operation.lease();
     auto row = co_await readPoolStream(
@@ -301,7 +360,12 @@ Task<std::optional<DbRow>> DbStreamResult::read() {
     co_return row;
 }
 
-Task<void> DbStreamResult::close() {
+ScopedOperation<void> DbStreamResult::close() {
+    requireActive();
+    return detail::makeScopedOperation(operationScope_, closeTask());
+}
+
+Task<void> DbStreamResult::closeTask() {
     OperationGuard operation(*this);
     auto& lease = operation.lease();
     co_await closePoolStream(
@@ -355,7 +419,8 @@ DbTransaction::DbTransaction(
     : state_(Lease{client, slot, resource}) {}
 
 DbTransaction::DbTransaction(DbTransaction&& other) noexcept
-    : state_(std::move(other.state_)) {}
+    : detail::ScopedCapabilityNode(std::move(other)),
+      state_(std::move(other.state_)) {}
 
 DbTransaction::~DbTransaction() {
     reset();
@@ -365,21 +430,34 @@ bool DbTransaction::active() const noexcept {
     return state_.active();
 }
 
-Task<QueryResult> DbTransaction::query(
+void DbTransaction::bindOperationScope(detail::ScopedOperationScope& scope) noexcept {
+    bind(scope, &DbTransaction::expireCapability);
+}
+
+void DbTransaction::expireCapability(detail::ScopedCapabilityNode& capability) noexcept {
+    auto& transaction = static_cast<DbTransaction&>(capability);
+    transaction.operationScope_.close();
+    transaction.reset();
+}
+
+ScopedOperation<QueryResult> DbTransaction::query(
     std::string_view sql,
     std::span<const DbValue> params) {
     return execute(sql, params);
 }
 
-Task<QueryResult> DbTransaction::execute(
+ScopedOperation<QueryResult> DbTransaction::execute(
     std::string_view sql,
     std::span<const DbValue> params) {
     // executePrepared performs the authoritative admission check when its lazy
     // task starts. Preparing parameters only needs the transaction's stable
     // request memory domain while the lease is idle.
+    requireActive();
     auto statement = prepareDbStatement(
         sql, params, state_.activePayload().resource);
-    return executePrepared(std::move(statement.sql), std::move(statement.params));
+    return detail::makeScopedOperation(
+        operationScope_,
+        executePrepared(std::move(statement.sql), std::move(statement.params)));
 }
 
 Task<QueryResult> DbTransaction::executePrepared(
@@ -397,14 +475,24 @@ Task<QueryResult> DbTransaction::executePrepared(
     co_return result;
 }
 
-Task<void> DbTransaction::commit() {
+ScopedOperation<void> DbTransaction::commit() {
+    requireActive();
+    return detail::makeScopedOperation(operationScope_, commitTask());
+}
+
+Task<void> DbTransaction::commitTask() {
     OperationGuard operation(*this);
     auto& lease = operation.lease();
     co_await commitPoolTransaction(lease.client, lease.slot, lease.resource);
     operation.finishClosed();
 }
 
-Task<void> DbTransaction::rollback() {
+ScopedOperation<void> DbTransaction::rollback() {
+    requireActive();
+    return detail::makeScopedOperation(operationScope_, rollbackTask());
+}
+
+Task<void> DbTransaction::rollbackTask() {
     OperationGuard operation(*this);
     auto& lease = operation.lease();
     co_await rollbackPoolTransaction(lease.client, lease.slot, lease.resource);

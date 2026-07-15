@@ -68,6 +68,26 @@ ruvia::Task<void> receiveThrowingMove(
     success = result.value() != nullptr && result.value()->value() == 6;
 }
 
+ruvia::Task<ruvia::WorkerWaitResult<int>> makeColdReceiveAfterReceiverClose(
+    ruvia::WorkerHandle worker,
+    bool timed) {
+    auto [sender, receiver] = ruvia::makeChannel<int>(std::move(worker), 1);
+    if (timed) {
+        return receiver.receiveFor(std::chrono::seconds(1));
+    }
+    return receiver.receive();
+}
+
+ruvia::Task<void> verifyColdReceiverTasks(
+    ruvia::Task<ruvia::WorkerWaitResult<int>> receive,
+    ruvia::Task<ruvia::WorkerWaitResult<int>> timedReceive,
+    bool& success) {
+    const auto coldClosed = co_await std::move(receive);
+    const auto timedColdClosed = co_await std::move(timedReceive);
+    success = coldClosed.closed() != nullptr &&
+              timedColdClosed.closed() != nullptr;
+}
+
 ruvia::Task<void> exercise(ruvia::WorkerHandle worker, bool& success) {
     auto [sender, receiver] = ruvia::makeChannel<int>(worker, 2);
     auto activeReceiver = std::move(receiver);
@@ -107,14 +127,24 @@ ruvia::Task<void> exercise(ruvia::WorkerHandle worker, bool& success) {
 
 int main() {
     bool success = false;
+    bool coldReceiverTasksSafe = false;
     {
         asio::io_context ioContext;
         const auto dispatcher =
             std::make_shared<ruvia::detail::WorkerDispatcher>(ioContext, 8);
         const auto worker = ruvia::detail::WorkerHandleAccess::make(dispatcher);
+        auto coldReceive = makeColdReceiveAfterReceiverClose(worker, false);
+        auto timedColdReceive = makeColdReceiveAfterReceiverClose(worker, true);
         asio::co_spawn(ioContext,
                        ruvia::detail::taskAsAwaitable(exercise(worker, success)),
                        asio::detached);
+        asio::co_spawn(
+            ioContext,
+            ruvia::detail::taskAsAwaitable(verifyColdReceiverTasks(
+                std::move(coldReceive),
+                std::move(timedColdReceive),
+                coldReceiverTasksSafe)),
+            asio::detached);
         ioContext.run();
         dispatcher->close();
         dispatcher->stopTimers();
@@ -183,7 +213,8 @@ int main() {
         dispatcher->stopTimers();
     }
 
-    const bool allPassed = success && workerStopping && stoppingSend &&
+    const bool allPassed = success && coldReceiverTasksSafe &&
+                           workerStopping && stoppingSend &&
                            moveFailed && recoveredValue && recoveredSend;
     return allPassed ? 0 : 1;
 }

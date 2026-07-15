@@ -3,6 +3,7 @@
 #include "ruvia/core/detail/AsioAwait.h"
 #include "ruvia/core/detail/SocketUtils.h"
 #include "ruvia/core/Timer.h"
+#include "ruvia/web/detail/server/HttpServerConnectionGuards.h"
 
 #include <asio/bind_allocator.hpp>
 #include <asio/co_spawn.hpp>
@@ -51,11 +52,16 @@ Task<void> HttpServer::acceptLoop() {
         }
 
         configureAcceptedSocket(socket);
-        ++activeConnectionCount_;
-
+        AcceptedConnectionLease connection(
+            std::move(socket),
+            activeConnectionCount_,
+            this,
+            [](void* target) noexcept {
+                static_cast<HttpServer*>(target)->maybeFinishDrain();
+            });
         asio::co_spawn(
             ioContext_,
-            taskAsAwaitable(handleSession(std::move(socket))),
+            taskAsAwaitable(handleSession(std::move(connection))),
             asio::bind_allocator(asio::recycling_allocator<void>(), asio::detached));
     }
 }

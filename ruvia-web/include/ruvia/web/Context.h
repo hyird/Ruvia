@@ -324,6 +324,9 @@ private:
     mutable bool bodyDecoded_ : 1 {false};
 
     detail::ValidatedModelBindings validatedModels_;
+    // Declared last so it closes first, while every request-owned object and its
+    // memory resource are still alive.
+    mutable detail::ScopedOperationScope operationScope_;
 };
 
 namespace detail {

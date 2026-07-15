@@ -28,6 +28,49 @@
 
 namespace {
 
+class TestScopedCapability final : private ruvia::detail::ScopedCapabilityNode {
+public:
+    TestScopedCapability(
+        ruvia::detail::ScopedOperationScope& scope,
+        int& expiredCount) noexcept
+        : ScopedCapabilityNode(scope, &TestScopedCapability::expire),
+          expiredCount_(&expiredCount) {}
+
+    TestScopedCapability(const TestScopedCapability& other) noexcept
+        : ScopedCapabilityNode(other),
+          expiredCount_(other.expiredCount_) {}
+
+    TestScopedCapability(TestScopedCapability&& other) noexcept
+        : ScopedCapabilityNode(std::move(other)),
+          expiredCount_(std::exchange(other.expiredCount_, nullptr)) {}
+
+    void use() const { requireActive(); }
+
+private:
+    static void expire(ruvia::detail::ScopedCapabilityNode& node) noexcept {
+        auto& capability = static_cast<TestScopedCapability&>(node);
+        ++*capability.expiredCount_;
+    }
+
+    int* expiredCount_;
+};
+
+struct ColdFrameProbe final {
+    bool* destroyed;
+    bool armed{true};
+
+    explicit ColdFrameProbe(bool& value) noexcept : destroyed(&value) {}
+    ColdFrameProbe(ColdFrameProbe&& other) noexcept
+        : destroyed(other.destroyed), armed(std::exchange(other.armed, false)) {}
+    ~ColdFrameProbe() {
+        if (armed) {
+            *destroyed = true;
+        }
+    }
+};
+
+ruvia::Task<void> coldFrameTask(ColdFrameProbe) { co_return; }
+
 struct CaptureStreamSink final {
     std::vector<std::string> writes;
     std::vector<std::string> trailers;
@@ -685,6 +728,55 @@ RUVIA_TEST(response_stream_state_drives_typed_post_head_phases) {
     RUVIA_CHECK(trailersOnlyBodyRejected);
     trailersOnly.ensureTrailersAllowed(
         ruvia::detail::ResponseStreamTrailerFraming::kHttp2TrailingHeaders);
+}
+
+RUVIA_TEST(scoped_capability_move_relinks_and_parent_close_expires_destination) {
+    ruvia::detail::ScopedOperationScope scope;
+    int expiredCount = 0;
+    TestScopedCapability first(scope, expiredCount);
+    TestScopedCapability moved(std::move(first));
+    moved.use();
+    scope.close();
+    RUVIA_CHECK_EQ(expiredCount, 1);
+    bool rejected = false;
+    try {
+        moved.use();
+    } catch (const std::logic_error&) {
+        rejected = true;
+    }
+    RUVIA_CHECK(rejected);
+}
+
+RUVIA_TEST(scoped_capability_copy_relinks_and_early_destruction_unlinks) {
+    int expiredCount = 0;
+    ruvia::detail::ScopedOperationScope scope;
+    TestScopedCapability source(scope, expiredCount);
+    {
+        TestScopedCapability destroyedEarly(source);
+        destroyedEarly.use();
+    }
+    TestScopedCapability survivingCopy(source);
+    scope.close();
+    RUVIA_CHECK_EQ(expiredCount, 2);
+
+    bool sourceRejected = false;
+    try {
+        source.use();
+    } catch (const std::logic_error&) {
+        sourceRejected = true;
+    }
+    RUVIA_CHECK(sourceRejected);
+}
+
+RUVIA_TEST(scoped_operation_parent_close_destroys_cold_frame_immediately) {
+    ruvia::detail::ScopedOperationScope scope;
+    bool destroyed = false;
+    auto operation = ruvia::detail::makeScopedOperation(
+        scope, coldFrameTask(ColdFrameProbe(destroyed)));
+    RUVIA_CHECK(!destroyed);
+    scope.close();
+    RUVIA_CHECK(destroyed);
+    (void)operation;
 }
 
 RUVIA_TEST(response_stream_head_rejects_a_mismatched_status_plan) {

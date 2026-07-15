@@ -325,6 +325,12 @@ static_assert(!std::is_move_assignable_v<ruvia::DbStreamResult>);
 static_assert(std::is_move_constructible_v<ruvia::DbTransaction>);
 static_assert(!std::is_move_assignable_v<ruvia::DbTransaction>);
 static_assert(std::same_as<
+    decltype(std::declval<const ruvia::DbHandle&>().query(std::string_view{})),
+    ruvia::ScopedOperation<ruvia::QueryResult>>);
+static_assert(std::same_as<
+    decltype(std::declval<ruvia::DbStreamResult&>().read()),
+    ruvia::ScopedOperation<std::optional<ruvia::DbRow>>>);
+static_assert(std::same_as<
     decltype(ruvia::DbConfig{}.connectTimeout),
     std::optional<std::chrono::milliseconds>>);
 static_assert(std::same_as<
@@ -465,6 +471,12 @@ static_assert(!HasLvalueRedisExec<ruvia::RedisPipeline>);
 static_assert(HasRvalueRedisExec<ruvia::RedisPipeline>);
 static_assert(!HasLvalueRedisExec<ruvia::RedisTransaction>);
 static_assert(HasRvalueRedisExec<ruvia::RedisTransaction>);
+static_assert(std::same_as<
+    decltype(std::declval<const ruvia::RedisHandle&>().ping()),
+    ruvia::ScopedOperation<void>>);
+static_assert(std::same_as<
+    decltype(std::declval<ruvia::RedisPipeline&&>().exec()),
+    ruvia::ScopedOperation<std::pmr::vector<ruvia::RedisValue>>>);
 static_assert(std::move_constructible<ruvia::RedisPipeline>);
 static_assert(!std::assignable_from<ruvia::RedisPipeline&, ruvia::RedisPipeline&&>);
 static_assert(std::move_constructible<ruvia::RedisTransaction>);
@@ -1232,7 +1244,7 @@ static_assert(!HasFreeRoutePath<ruvia::Context>);
 static_assert(!HasFreeMatchedRoutes<ruvia::Context>);
 static_assert(std::same_as<
     decltype(std::declval<const ruvia::ContextRequest&>().bytes()),
-    ruvia::Task<std::span<const std::byte>>>);
+    ruvia::ScopedOperation<std::span<const std::byte>>>);
 static_assert(!HasRawRequestEscape<ruvia::ContextRequest>);
 static_assert(!HasRequestArrayBufferAlias<ruvia::ContextRequest>);
 static_assert(!HasRequestBlobTypeAlias<ruvia::ContextRequest::RequestBlob>);
@@ -1291,7 +1303,7 @@ static_assert(
     ruvia::ContextRequest::DottedNamePolicy::kLiteral);
 static_assert(std::same_as<
     decltype(std::declval<const ruvia::ContextRequest&>().parseBody()),
-    ruvia::Task<ruvia::ContextRequest::RequestFormData>>);
+    ruvia::ScopedOperation<ruvia::ContextRequest::RequestFormData>>);
 static_assert(!HasRequestFormDataAlias<ruvia::ContextRequest>);
 static_assert(!HasFormPathValueType<ruvia::ContextRequest::RequestFormData>);
 static_assert(!HasFormDataEntryLookup<ruvia::ContextRequest::RequestFormData>);

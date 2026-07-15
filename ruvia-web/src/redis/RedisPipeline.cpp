@@ -20,20 +20,31 @@ RedisPipeline& appendCommandArgs(RedisPipeline& pipeline, Args&&... args) {
 
 RedisPipeline::RedisPipeline(
     detail::RedisPool& pool,
-    std::pmr::memory_resource* resource) noexcept
-    : state_(std::in_place_type<Ready>, pool),
+    std::pmr::memory_resource* resource,
+    detail::ScopedOperationScope& operationScope) noexcept
+    : detail::ScopedCapabilityNode(operationScope, &RedisPipeline::expireCapability),
+      state_(std::in_place_type<Ready>, pool),
       commands_(detail::pmrResourceOrDefault(resource)) {}
 
 RedisPipeline::RedisPipeline(RedisPipeline&& other) noexcept
-    : state_(std::move(other.state_)),
+    : detail::ScopedCapabilityNode(std::move(other)),
+      state_(std::move(other.state_)),
       commands_(std::move(other.commands_)) {
     other.state_.template emplace<Consumed>();
 }
 
 void RedisPipeline::requireActive() const {
+    detail::ScopedCapabilityNode::requireActive();
     if (!std::holds_alternative<Ready>(state_)) {
         throw std::logic_error("redis pipeline has already been consumed");
     }
+}
+
+void RedisPipeline::expireCapability(detail::ScopedCapabilityNode& capability) noexcept {
+    auto& pipeline = static_cast<RedisPipeline&>(capability);
+    pipeline.state_.template emplace<Consumed>();
+    std::pmr::vector<Command> empty(pipeline.commands_.get_allocator().resource());
+    pipeline.commands_.swap(empty);
 }
 
 detail::RedisPool& RedisPipeline::consumePool() {
@@ -48,6 +59,10 @@ detail::RedisPool& RedisPipeline::consumePool() {
 
 std::pmr::memory_resource* RedisPipeline::resource() const noexcept {
     return commands_.get_allocator().resource();
+}
+
+detail::ScopedOperationScope& RedisPipeline::operationScope() const {
+    return detail::ScopedCapabilityNode::operationScope();
 }
 
 RedisPipeline::Command RedisPipeline::makeCommand(
@@ -269,10 +284,13 @@ Task<std::pmr::vector<RedisValue>> RedisPipeline::executeOwned(
         resource);
 }
 
-Task<std::pmr::vector<RedisValue>> RedisPipeline::exec() && {
+ScopedOperation<std::pmr::vector<RedisValue>> RedisPipeline::exec() && {
+    requireActive();
     auto* commandResource = resource();
     auto& pool = consumePool();
-    return executeOwned(pool, std::move(commands_), commandResource);
+    return detail::makeScopedOperation(
+        operationScope(),
+        executeOwned(pool, std::move(commands_), commandResource));
 }
 
 }  // namespace ruvia

@@ -68,6 +68,26 @@ ruvia::Task<void> waitForWorkerStopping(
     success = result.workerStopping() != nullptr;
 }
 
+ruvia::Task<ruvia::WorkerWaitResult<int>> makeColdWaitAfterReceiverClose(
+    ruvia::WorkerHandle worker,
+    bool timed) {
+    auto [completion, receiver] = ruvia::makeOneShot<int>(std::move(worker));
+    if (timed) {
+        return receiver.waitFor(std::chrono::seconds(1));
+    }
+    return receiver.wait();
+}
+
+ruvia::Task<void> verifyColdReceiverTasks(
+    ruvia::Task<ruvia::WorkerWaitResult<int>> wait,
+    ruvia::Task<ruvia::WorkerWaitResult<int>> timedWait,
+    bool& success) {
+    const auto coldClosed = co_await std::move(wait);
+    const auto timedColdClosed = co_await std::move(timedWait);
+    success = coldClosed.closed() != nullptr &&
+              timedColdClosed.closed() != nullptr;
+}
+
 ruvia::Task<void> exercise(ruvia::WorkerHandle worker, bool& success) {
     {
         auto [completion, receiver] =
@@ -141,14 +161,24 @@ ruvia::Task<void> exercise(ruvia::WorkerHandle worker, bool& success) {
 
 int main() {
     bool success = false;
+    bool coldReceiverTasksSafe = false;
     {
         asio::io_context ioContext;
         const auto dispatcher =
             std::make_shared<ruvia::detail::WorkerDispatcher>(ioContext, 8);
         const auto worker = ruvia::detail::WorkerHandleAccess::make(dispatcher);
+        auto coldWait = makeColdWaitAfterReceiverClose(worker, false);
+        auto timedColdWait = makeColdWaitAfterReceiverClose(worker, true);
         asio::co_spawn(ioContext,
                        ruvia::detail::taskAsAwaitable(exercise(worker, success)),
                        asio::detached);
+        asio::co_spawn(
+            ioContext,
+            ruvia::detail::taskAsAwaitable(verifyColdReceiverTasks(
+                std::move(coldWait),
+                std::move(timedColdWait),
+                coldReceiverTasksSafe)),
+            asio::detached);
         ioContext.run();
         dispatcher->close();
         dispatcher->stopTimers();
@@ -199,7 +229,8 @@ int main() {
         dispatcher->close();
         dispatcher->stopTimers();
     }
-    const bool allPassed = success && workerStopping && crossThreadValue &&
+    const bool allPassed = success && coldReceiverTasksSafe &&
+                           workerStopping && crossThreadValue &&
                            crossThreadCompleted;
     return allPassed ? 0 : 1;
 }

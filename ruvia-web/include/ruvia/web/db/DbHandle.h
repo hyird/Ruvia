@@ -1,6 +1,7 @@
 #pragma once
 
 #include "ruvia/web/db/DbTransaction.h"
+#include "ruvia/web/ScopedOperation.h"
 #include "ruvia/web/detail/db/DbBackend.h"
 
 #include <initializer_list>
@@ -12,30 +13,45 @@
 
 namespace ruvia {
 
-class DbHandle final {
+class DbHandle final : private detail::ScopedCapabilityNode {
 public:
-    DbHandle(const DbHandle&) = default;
+    DbHandle(const DbHandle& other) noexcept;
     DbHandle& operator=(const DbHandle&) = delete;
 
-    Task<QueryResult> query(std::string_view sql, std::span<const DbValue> params = {}) const;
-    Task<QueryResult> query(std::string_view sql, std::initializer_list<DbValue> params) const = delete;
-    Task<QueryResult> execute(std::string_view sql, std::span<const DbValue> params = {}) const;
-    Task<QueryResult> execute(std::string_view sql, std::initializer_list<DbValue> params) const = delete;
-    Task<DbStreamResult> queryStream(std::string_view sql, std::span<const DbValue> params = {}) const;
-    Task<DbStreamResult> queryStream(std::string_view sql, std::initializer_list<DbValue> params) const = delete;
-    Task<DbTransaction> beginTransaction() const;
+    ScopedOperation<QueryResult> query(std::string_view sql, std::span<const DbValue> params = {}) const;
+    ScopedOperation<QueryResult> query(std::string_view sql, std::initializer_list<DbValue> params) const = delete;
+    ScopedOperation<QueryResult> execute(std::string_view sql, std::span<const DbValue> params = {}) const;
+    ScopedOperation<QueryResult> execute(std::string_view sql, std::initializer_list<DbValue> params) const = delete;
+    ScopedOperation<DbStreamResult> queryStream(std::string_view sql, std::span<const DbValue> params = {}) const;
+    ScopedOperation<DbStreamResult> queryStream(std::string_view sql, std::initializer_list<DbValue> params) const = delete;
+    ScopedOperation<DbTransaction> beginTransaction() const;
 
 private:
     friend class detail::DbRegistry;
 
     DbHandle(
         detail::DbPoolRef client,
-        std::pmr::memory_resource* resource) noexcept;
-    Task<QueryResult> executePrepared(std::pmr::string sql, std::pmr::vector<DbValue> params) const;
-    Task<DbStreamResult> queryStreamPrepared(std::pmr::string sql, std::pmr::vector<DbValue> params) const;
+        std::pmr::memory_resource* resource,
+        detail::ScopedOperationScope& operationScope) noexcept;
+    static Task<QueryResult> executePrepared(
+        detail::DbPoolRef client,
+        std::pmr::string sql,
+        std::pmr::vector<DbValue> params,
+        std::pmr::memory_resource* resource);
+    static Task<DbStreamResult> queryStreamPrepared(
+        detail::DbPoolRef client,
+        std::pmr::string sql,
+        std::pmr::vector<DbValue> params,
+        std::pmr::memory_resource* resource,
+        detail::ScopedOperationScope& operationScope);
+    static Task<DbTransaction> beginTransactionPrepared(
+        detail::DbPoolRef client,
+        std::pmr::memory_resource* resource,
+        detail::ScopedOperationScope& operationScope);
 
     detail::DbPoolRef client_;
     std::pmr::memory_resource* resource_;
+    static void expireCapability(detail::ScopedCapabilityNode& capability) noexcept;
 };
 
 }  // namespace ruvia

@@ -41,21 +41,21 @@ std::stop_token WebWorkerContext::stopToken() const noexcept {
 
 #ifdef RUVIA_ENABLE_DATABASE
 DbHandle WebWorkerContext::db() const {
-    return databases_->get(resource_);
+    return databases_->get(resource_, operationScope_);
 }
 
 DbHandle WebWorkerContext::db(std::string_view alias) const {
-    return databases_->get(alias, resource_);
+    return databases_->get(alias, resource_, operationScope_);
 }
 #endif
 
 #ifdef RUVIA_ENABLE_REDIS
 RedisHandle WebWorkerContext::redis() const {
-    return redis_->get(resource_);
+    return redis_->get(resource_, operationScope_);
 }
 
 RedisHandle WebWorkerContext::redis(std::string_view alias) const {
-    return redis_->get(alias, resource_);
+    return redis_->get(alias, resource_, operationScope_);
 }
 #endif
 

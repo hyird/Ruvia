@@ -61,7 +61,7 @@ static_assert(std::same_as<
     std::string_view>);
 static_assert(std::same_as<
     decltype(std::declval<const ruvia::ContextRequest&>().parseBody()),
-    ruvia::Task<ruvia::ContextRequest::RequestFormData>>);
+    ruvia::ScopedOperation<ruvia::ContextRequest::RequestFormData>>);
 static_assert(!HasRawRequestEscape<ruvia::ContextRequest>);
 static_assert(!HasRequestCloneMethod<ruvia::ContextRequest>);
 static_assert(!HasRawRequestCloneType<ruvia::ContextRequest>);

@@ -156,6 +156,16 @@ struct ChannelReceiveAwaiter final {
 };
 
 template <typename T>
+[[nodiscard]] Task<WorkerWaitResult<T>> receiveChannelState(
+    std::shared_ptr<ChannelState<T>> state,
+    std::optional<std::chrono::steady_clock::duration> timeout) {
+    if (!state || !state->worker.isCurrent()) {
+        throw std::logic_error("channel receive must run on its bound worker");
+    }
+    co_return co_await ChannelReceiveAwaiter<T>(std::move(state), timeout);
+}
+
+template <typename T>
 void wakeChannelReceiver(ChannelReceiveAwaiter<T>* waiter) {
     if (waiter->timer.valid()) {
         waiter->timer.cancel();
@@ -281,20 +291,16 @@ public:
     ~ChannelReceiver() { close(); }
 
     [[nodiscard]] Task<WorkerWaitResult<T>> receive() {
-        if (!state_ || !state_->worker.isCurrent()) {
-            throw std::logic_error("channel receive must run on its bound worker");
-        }
-        co_return co_await detail::ChannelReceiveAwaiter<T>(state_);
+        return detail::receiveChannelState<T>(state_, std::nullopt);
     }
 
     template <typename Rep, typename Period>
     [[nodiscard]] Task<WorkerWaitResult<T>>
     receiveFor(std::chrono::duration<Rep, Period> duration) {
-        if (!state_ || !state_->worker.isCurrent()) {
-            throw std::logic_error("channel receive must run on its bound worker");
-        }
-        co_return co_await detail::ChannelReceiveAwaiter<T>(
-            state_, std::chrono::duration_cast<std::chrono::steady_clock::duration>(duration));
+        return detail::receiveChannelState<T>(
+            state_,
+            std::chrono::duration_cast<std::chrono::steady_clock::duration>(
+                duration));
     }
 
     void close() const { ChannelSender<T>(state_).close(); }

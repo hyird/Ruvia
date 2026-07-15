@@ -246,10 +246,13 @@ public:
     void scanDeadlines() noexcept;
     [[nodiscard]] bool empty() const noexcept;
     [[nodiscard]] bool hasAnyTimeout() const noexcept;
-    [[nodiscard]] DbHandle get(std::pmr::memory_resource* resource) const;
+    [[nodiscard]] DbHandle get(
+        std::pmr::memory_resource* resource,
+        ScopedOperationScope& operationScope) const;
     [[nodiscard]] DbHandle get(
         std::string_view alias,
-        std::pmr::memory_resource* resource) const;
+        std::pmr::memory_resource* resource,
+        ScopedOperationScope& operationScope) const;
 
 public:
 #ifdef RUVIA_ENABLE_MARIADB

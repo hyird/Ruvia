@@ -139,7 +139,8 @@ public:
         };
         detail::DbRegistry registry(ioContext, resolved, databases);
         co_await registry.connect();
-        auto handle = registry.get(resolved);
+        detail::ScopedOperationScope operationScope;
+        auto handle = registry.get(resolved, operationScope);
 
         if (driver == DbDriver::kMariaDb) {
             const auto lockSeconds =

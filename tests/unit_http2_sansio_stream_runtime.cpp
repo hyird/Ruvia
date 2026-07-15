@@ -20,6 +20,7 @@
 #include "ruvia/http/detail/http2/Http2Connection.h"
 #include "ruvia/http/ProtocolByteLimit.h"
 #include "ruvia/web/detail/http2/Http2SansIoSendWindow.h"
+#include "ruvia/web/detail/http2/Http2SansIoResponseStreamSink.h"
 #include "ruvia/web/detail/router/RouteModes.h"
 #include "ruvia/web/detail/http2/Http2SansIoStreamRuntime.h"
 
@@ -61,6 +62,7 @@ using ruvia::detail::Http2StreamingRequestBody;
 using ruvia::detail::Http2SansIoBodyQueue;
 using ruvia::detail::Http2SansIoStreamRuntime;
 using ruvia::detail::Http2SansIoStreamRuntimeTable;
+using ruvia::detail::Http2SansIoResponseStreamSink;
 using ruvia::detail::Http2SendWindowWaitResult;
 using ruvia::detail::Http2StreamState;
 using ruvia::detail::RequestBodyMode;
@@ -93,6 +95,22 @@ static_assert(std::same_as<
 static_assert(std::same_as<
     decltype(std::declval<const Http2SendWindowWaitResult&>().aborted()),
     const ruvia::detail::Http2SendWindowAborted*>);
+static_assert(std::constructible_from<
+    Http2SansIoResponseStreamSink,
+    ruvia::detail::Http2Connection&,
+    std::uint32_t,
+    ruvia::detail::ResponseStreamKind,
+    const ruvia::WorkerHandle&,
+    ruvia::detail::WorkerSignal&,
+    ruvia::detail::Http2SansIoStreamSignal&>);
+static_assert(!std::constructible_from<
+    Http2SansIoResponseStreamSink,
+    ruvia::detail::Http2Connection&,
+    std::uint32_t,
+    ruvia::detail::ResponseStreamKind,
+    ruvia::WorkerHandle&&,
+    ruvia::detail::WorkerSignal&,
+    ruvia::detail::Http2SansIoStreamSignal&>);
 
 Http2SansIoStreamRuntime& ensureAcceptedRuntime(
     Http2SansIoStreamRuntimeTable& table,

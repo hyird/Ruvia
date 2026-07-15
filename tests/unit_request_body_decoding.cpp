@@ -254,6 +254,34 @@ struct ContextBodyReadObservation final {
     std::uint16_t errorStatus{0};
 };
 
+ruvia::Task<std::string_view> readContextText(ruvia::Context& context) {
+    co_return co_await context.req().text();
+}
+
+ruvia::ScopedOperation<std::string_view> makeExpiredContextTextRead() {
+    ruvia::WorkerMemory worker;
+    ruvia::RequestMemory memory(worker);
+    auto request = ruvia::detail::HttpRequestAccess::make();
+    ruvia::detail::HttpRequestAccess::reset(request);
+    ruvia::detail::HttpRequestAccess::setResource(request, memory.resource());
+    ruvia::detail::HttpRequestAccess::setBody(request, "body");
+    auto context = ruvia::detail::ContextAccess::make(
+        memory,
+        request,
+        ruvia::detail::ContextServices(nullptr, nullptr, nullptr, 1024));
+    return context.req().text();
+}
+
+ruvia::Task<void> awaitExpiredContextTextRead(
+    ruvia::ScopedOperation<std::string_view>& operation,
+    bool& rejected) {
+    try {
+        (void)co_await std::move(operation);
+    } catch (const std::logic_error&) {
+        rejected = true;
+    }
+}
+
 ContextBodyReadObservation readContextGzipBody(
     std::string_view encoded,
     std::size_t maxDecodedBodyBytes) {
@@ -287,7 +315,7 @@ ContextBodyReadObservation readContextGzipBody(
     asio::io_context io(1);
     auto future = asio::co_spawn(
         io,
-        ruvia::detail::taskAsAwaitable(context.req().text()),
+        ruvia::detail::taskAsAwaitable(readContextText(context)),
         asio::use_future);
     io.run();
 
@@ -962,6 +990,20 @@ RUVIA_TEST(transfer_coding_decoder_rejects_bomb) {
         RUVIA_CHECK(
             finish.protocolFailure()->protocolError().status() == 413);
     }
+}
+
+RUVIA_TEST(context_request_cold_operation_rejects_after_request_scope_closes) {
+    auto operation = makeExpiredContextTextRead();
+    bool rejected = false;
+    asio::io_context io(1);
+    auto future = asio::co_spawn(
+        io,
+        ruvia::detail::taskAsAwaitable(
+            awaitExpiredContextTextRead(operation, rejected)),
+        asio::use_future);
+    io.run();
+    future.get();
+    RUVIA_CHECK(rejected);
 }
 
 RUVIA_TEST(transfer_coding_decoder_reports_typed_wire_failures) {

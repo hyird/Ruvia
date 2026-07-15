@@ -26,6 +26,7 @@ using ruvia::detail::WsCloseSubmitStatus;
 using ruvia::detail::WsFrameSubmitStatus;
 using ruvia::detail::WsLivenessMode;
 using ruvia::detail::WsMessageEvent;
+using ruvia::detail::WsOutputConsumeStatus;
 using ruvia::detail::WsProtocolErrorEvent;
 using ruvia::detail::WsTransportDisposition;
 
@@ -266,7 +267,14 @@ RUVIA_TEST(ws_connection_echoes_close) {
     RUVIA_CHECK(plan.disposition() ==
         WsTransportDisposition::kEndTransport);
     RUVIA_CHECK_EQ(static_cast<unsigned char>(out[0]), static_cast<unsigned char>(0x88));  // FIN|Close
-    conn.consumeOutput(out.size());
+    const auto original = std::string(out);
+    RUVIA_CHECK(conn.consumeOutput(out.size() + 1) ==
+        WsOutputConsumeStatus::kOutOfRange);
+    RUVIA_CHECK(conn.outputPlan().bytes() == original);
+    RUVIA_CHECK(conn.outputPlan().disposition() ==
+        WsTransportDisposition::kEndTransport);
+    RUVIA_CHECK(conn.consumeOutput(out.size()) ==
+        WsOutputConsumeStatus::kDrained);
     conn.commitTransportEnd();
     RUVIA_CHECK(conn.abort() == WsAbortDisposition::kNoTransportAction);
 }
@@ -469,7 +477,18 @@ RUVIA_TEST(ws_connection_local_close_waits_for_peer_close) {
     RUVIA_CHECK(plan.disposition() ==
         WsTransportDisposition::kKeepOpen);
     RUVIA_CHECK_EQ(static_cast<unsigned char>(plan.bytes()[0]), 0x88U);
-    conn.consumeOutput(plan.bytes().size());
+    const auto original = std::string(plan.bytes());
+    RUVIA_CHECK(conn.consumeOutput(plan.bytes().size() + 1) ==
+        WsOutputConsumeStatus::kOutOfRange);
+    RUVIA_CHECK(conn.outputPlan().bytes() == original);
+    RUVIA_CHECK(conn.outputPlan().disposition() ==
+        WsTransportDisposition::kKeepOpen);
+    RUVIA_CHECK(conn.consumeOutput(1) ==
+        WsOutputConsumeStatus::kPending);
+    RUVIA_CHECK(conn.outputPlan().bytes() ==
+        std::string_view(original).substr(1));
+    RUVIA_CHECK(conn.consumeOutput(original.size() - 1) ==
+        WsOutputConsumeStatus::kDrained);
     RUVIA_CHECK(conn.livenessMode() == WsLivenessMode::kAwaitingPeerClose);
 
     std::pmr::string closePayload(&resource);

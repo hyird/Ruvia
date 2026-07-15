@@ -285,21 +285,56 @@ RUVIA_TEST(db_registry_derives_default_pool_from_owned_entry_index) {
         ioContext,
         std::pmr::get_default_resource(),
         definitions);
+    ruvia::detail::ScopedOperationScope operationScope;
 
     bool defaultResolved = true;
     bool aliasResolved = true;
     try {
-        (void)registry.get(std::pmr::get_default_resource());
+        (void)registry.get(std::pmr::get_default_resource(), operationScope);
     } catch (...) {
         defaultResolved = false;
     }
     try {
-        (void)registry.get("analytics", std::pmr::get_default_resource());
+        (void)registry.get(
+            "analytics", std::pmr::get_default_resource(), operationScope);
     } catch (...) {
         aliasResolved = false;
     }
     RUVIA_CHECK(defaultResolved);
     RUVIA_CHECK(aliasResolved);
+}
+
+RUVIA_TEST(db_handle_copy_rejects_after_parent_scope_closes) {
+    asio::io_context ioContext;
+#ifdef RUVIA_ENABLE_MARIADB
+    const auto config = ruvia::DbConfig::mariaDb();
+#else
+    const auto config = ruvia::DbConfig::postgreSql();
+#endif
+    const std::array definitions{
+        ruvia::detail::DbDefinition{std::pmr::string("default"), config}};
+    ruvia::detail::DbRegistry registry(
+        ioContext, std::pmr::get_default_resource(), definitions);
+    ruvia::detail::ScopedOperationScope operationScope;
+    auto handle = registry.get(
+        std::pmr::get_default_resource(), operationScope);
+    auto copiedHandle = handle;
+    operationScope.close();
+
+    bool handleRejected = false;
+    bool copyRejected = false;
+    try {
+        (void)handle.query("SELECT 1");
+    } catch (const std::logic_error&) {
+        handleRejected = true;
+    }
+    try {
+        (void)copiedHandle.query("SELECT 1");
+    } catch (const std::logic_error&) {
+        copyRejected = true;
+    }
+    RUVIA_CHECK(handleRejected);
+    RUVIA_CHECK(copyRejected);
 }
 
 RUVIA_TEST(db_migrator_validates_before_opening_connection) {

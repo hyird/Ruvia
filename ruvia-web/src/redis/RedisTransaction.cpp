@@ -9,8 +9,17 @@
 namespace ruvia {
 
 RedisTransaction::RedisTransaction(RedisPipeline pipeline) noexcept
-    : pipeline_(std::move(pipeline)),
+    : detail::ScopedCapabilityNode(
+          pipeline.operationScope(), &RedisTransaction::expireCapability),
+      pipeline_(std::move(pipeline)),
       watches_(pipeline_.resource()) {}
+
+void RedisTransaction::expireCapability(detail::ScopedCapabilityNode& capability) noexcept {
+    auto& transaction = static_cast<RedisTransaction&>(capability);
+    std::pmr::vector<RedisPipeline::Command> empty(
+        transaction.watches_.get_allocator().resource());
+    transaction.watches_.swap(empty);
+}
 
 RedisTransaction& RedisTransaction::command(std::span<const std::string_view> args) {
     pipeline_.command(args);
@@ -275,14 +284,16 @@ Task<std::pmr::vector<RedisValue>> RedisTransaction::executeOwned(
     co_return result;
 }
 
-Task<std::pmr::vector<RedisValue>> RedisTransaction::exec() && {
+ScopedOperation<std::pmr::vector<RedisValue>> RedisTransaction::exec() && {
     auto* commandResource = pipeline_.resource();
     auto& pool = pipeline_.consumePool();
-    return executeOwned(
-        pool,
-        commandResource,
-        std::move(watches_),
-        std::move(pipeline_.commands_));
+    return detail::makeScopedOperation(
+        pipeline_.operationScope(),
+        executeOwned(
+            pool,
+            commandResource,
+            std::move(watches_),
+            std::move(pipeline_.commands_)));
 }
 
 }  // namespace ruvia

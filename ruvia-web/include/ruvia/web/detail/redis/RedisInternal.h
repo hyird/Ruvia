@@ -198,10 +198,13 @@ public:
 
     [[nodiscard]] bool empty() const noexcept;
     [[nodiscard]] bool hasAnyTimeout() const noexcept;
-    [[nodiscard]] RedisHandle get(std::pmr::memory_resource* resource) const;
+    [[nodiscard]] RedisHandle get(
+        std::pmr::memory_resource* resource,
+        ScopedOperationScope& operationScope) const;
     [[nodiscard]] RedisHandle get(
         std::string_view alias,
-        std::pmr::memory_resource* resource) const;
+        std::pmr::memory_resource* resource,
+        ScopedOperationScope& operationScope) const;
     void scanDeadlines() noexcept;
 
 private:

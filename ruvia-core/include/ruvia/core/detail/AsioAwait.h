@@ -1,13 +1,16 @@
 #pragma once
 
 #include <asio/associated_executor.hpp>
+#include <asio/associated_allocator.hpp>
 #include <asio/async_result.hpp>
 #include <asio/awaitable.hpp>
+#include <asio/bind_allocator.hpp>
 #include <asio/post.hpp>
 #include <asio/use_awaitable.hpp>
 
 #include <coroutine>
 #include <exception>
+#include <memory>
 #include <stdexcept>
 #include <system_error>
 #include <type_traits>
@@ -142,9 +145,39 @@ private:
 template <typename T, typename Handler>
 class TaskCompletionState final {
 public:
-    TaskCompletionState(Task<T>&& taskValue, Handler&& handlerValue)
+    using HandlerAllocator = asio::associated_allocator_t<Handler>;
+    using StateAllocator = typename std::allocator_traits<
+        HandlerAllocator>::template rebind_alloc<TaskCompletionState>;
+    using StateAllocatorTraits = std::allocator_traits<StateAllocator>;
+
+    static TaskCompletionState* create(
+        Task<T>&& taskValue,
+        Handler&& handlerValue) {
+        HandlerAllocator handlerAllocator(
+            asio::get_associated_allocator(handlerValue));
+        StateAllocator stateAllocator(handlerAllocator);
+        auto* state = StateAllocatorTraits::allocate(stateAllocator, 1);
+        try {
+            StateAllocatorTraits::construct(
+                stateAllocator,
+                state,
+                std::move(taskValue),
+                std::forward<Handler>(handlerValue),
+                std::move(handlerAllocator));
+        } catch (...) {
+            StateAllocatorTraits::deallocate(stateAllocator, state, 1);
+            throw;
+        }
+        return state;
+    }
+
+    TaskCompletionState(
+        Task<T>&& taskValue,
+        Handler&& handlerValue,
+        HandlerAllocator allocatorValue)
         : task_(std::move(taskValue)),
-          handler_(std::forward<Handler>(handlerValue)) {}
+          handler_(std::forward<Handler>(handlerValue)),
+          allocator_(std::move(allocatorValue)) {}
 
     void start() {
         task_.handle_.promise().setCompletion(this, &TaskCompletionState::complete);
@@ -154,13 +187,34 @@ public:
     static void complete(void* raw) noexcept {
         auto* state = static_cast<TaskCompletionState*>(raw);
         auto executor = asio::get_associated_executor(state->handler_);
-        asio::post(executor, [state]() mutable {
-            state->deliver();
-            delete state;
-        });
+        auto completionAllocator = state->allocator_;
+        StateOwner owner(
+            state,
+            StateDeleter{StateAllocator(state->allocator_)});
+        asio::post(
+            executor,
+            asio::bind_allocator(
+                std::move(completionAllocator),
+                [owner = std::move(owner)]() mutable {
+                    // Own the state before invoking user code. If the completion
+                    // handler throws through the Asio executor, stack unwinding
+                    // still destroys both this state and its completed Task frame.
+                    owner->deliver();
+                }));
     }
 
 private:
+    struct StateDeleter final {
+        void operator()(TaskCompletionState* state) noexcept {
+            StateAllocatorTraits::destroy(allocator, state);
+            StateAllocatorTraits::deallocate(allocator, state, 1);
+        }
+
+        StateAllocator allocator;
+    };
+
+    using StateOwner = std::unique_ptr<TaskCompletionState, StateDeleter>;
+
     void deliver() {
         if constexpr (std::is_void_v<T>) {
             auto result = [this]() {
@@ -189,6 +243,7 @@ private:
 
     Task<T> task_;
     Handler handler_;
+    HandlerAllocator allocator_;
 };
 
 template <typename T, typename CompletionToken>
@@ -200,7 +255,7 @@ auto asyncStartTask(Task<T>&& task, CompletionToken&& token) {
         return asio::async_initiate<CompletionToken, void(TaskCompletionResult<void>)>(
             [](auto&& handler, Task<T> taskValue) {
                 using Handler = std::decay_t<decltype(handler)>;
-                auto* state = new TaskCompletionState<T, Handler>(
+                auto* state = TaskCompletionState<T, Handler>::create(
                     std::move(taskValue),
                     std::forward<decltype(handler)>(handler));
                 state->start();
@@ -211,7 +266,7 @@ auto asyncStartTask(Task<T>&& task, CompletionToken&& token) {
         return asio::async_initiate<CompletionToken, void(TaskCompletionResult<T>)>(
             [](auto&& handler, Task<T> taskValue) {
                 using Handler = std::decay_t<decltype(handler)>;
-                auto* state = new TaskCompletionState<T, Handler>(
+                auto* state = TaskCompletionState<T, Handler>::create(
                     std::move(taskValue),
                     std::forward<decltype(handler)>(handler));
                 state->start();

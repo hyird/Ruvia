@@ -222,7 +222,9 @@ HttpServer::HttpServer(
           })),
       rateLimiter_(
           options_.defaultRateLimitPerWorker,
-          routes_.hasRouteRateLimit(),
+          routes_.hasRouteRateLimit()
+              ? RouteRateLimitPresence::kPresent
+              : RouteRateLimitPresence::kAbsent,
           options_.rateLimitSlotsPerWorker,
           memory_.resource()),
       connectionScanner_(workerHandle_, makeConnectionScannerOptions(options_)),

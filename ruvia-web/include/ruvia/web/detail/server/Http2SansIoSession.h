@@ -465,11 +465,10 @@ Task<void> runHttp2SansIoSession(
             } else if (responseStreamEndpoint != nullptr) {
                 // Streaming route (for example SSE): drive the shared streaming
                 // dispatch through a sans-I/O sink that submits chunks via the core.
-                Http2SansIoResponseStreamSink<decltype(executor)> sink(
+                Http2SansIoResponseStreamSink sink(
                     connection,
                     streamId,
                     responseStreamEndpoint->kind(),
-                    executor,
                     baseServices.worker(),
                     writeSignal,
                     *streamSignal);

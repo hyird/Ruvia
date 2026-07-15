@@ -2,12 +2,14 @@
 
 #include <algorithm>
 #include <array>
+#include <bit>
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <limits>
 #include <memory_resource>
 #include <optional>
+#include <stdexcept>
 #include <string_view>
 #include <type_traits>
 #include <utility>
@@ -88,6 +90,11 @@ struct SteadyRateLimiterClock final {
     }
 };
 
+enum class RouteRateLimitPresence : std::uint8_t {
+    kAbsent,
+    kPresent,
+};
+
 // One fixed-window table owned and accessed by exactly one HttpServer worker.
 // Startup allocates every slot from WorkerMemory; request-path lookup mutates
 // ordinary worker-local state and performs no allocation, locking, atomics, or
@@ -95,49 +102,37 @@ struct SteadyRateLimiterClock final {
 template <typename Clock>
 class BasicRateLimiter {
 public:
-    explicit BasicRateLimiter(
-        std::optional<RateLimitRule> appRule,
-        std::pmr::memory_resource* resource = nullptr)
-        : BasicRateLimiter(
-              appRule,
-              kDefaultRateLimitSlotsPerWorker,
-              resource) {}
-
     BasicRateLimiter(
-        std::optional<RateLimitRule> appRule,
+        std::optional<RateLimitRule> defaultRulePerWorker,
+        RouteRateLimitPresence routeRules,
         std::size_t slotCount,
         std::pmr::memory_resource* resource = nullptr)
-        : appRule_(std::move(appRule)),
+        : defaultRulePerWorker_(std::move(defaultRulePerWorker)),
           slots_(pmrResourceOrDefault(resource)) {
-        slots_.resize(nextPowerOfTwo(slotCount));
-    }
-
-    BasicRateLimiter(
-        std::optional<RateLimitRule> appRule,
-        bool hasRouteRateLimit,
-        std::size_t slotCount,
-        std::pmr::memory_resource* resource = nullptr)
-        : appRule_(std::move(appRule)),
-          slots_(pmrResourceOrDefault(resource)) {
-        if (appRule_.has_value() || hasRouteRateLimit) {
-            slots_.resize(nextPowerOfTwo(slotCount));
+        if (!std::has_single_bit(slotCount)) {
+            throw std::invalid_argument(
+                "rate-limit slot count must be a power of two");
+        }
+        if (defaultRulePerWorker_.has_value() ||
+            routeRules == RouteRateLimitPresence::kPresent) {
+            slots_.resize(slotCount);
         }
     }
 
     BasicRateLimiter(const BasicRateLimiter&) = delete;
     BasicRateLimiter& operator=(const BasicRateLimiter&) = delete;
 
-    [[nodiscard]] bool enabled() const noexcept {
-        return appRule_.has_value();
+    [[nodiscard]] bool hasDefaultRule() const noexcept {
+        return defaultRulePerWorker_.has_value();
     }
 
     [[nodiscard]] std::size_t slotCapacity() const noexcept {
         return slots_.size();
     }
 
-    [[nodiscard]] RateLimitDecision allowGlobal(std::string_view remoteAddress) noexcept {
-        return appRule_.has_value()
-            ? allow(kGlobalScope, remoteAddress, *appRule_)
+    [[nodiscard]] RateLimitDecision allowDefault(std::string_view remoteAddress) noexcept {
+        return defaultRulePerWorker_.has_value()
+            ? allow(kDefaultScope, remoteAddress, *defaultRulePerWorker_)
             : RateLimitDecision::allow();
     }
 
@@ -156,7 +151,7 @@ private:
     // accommodates canonical peer strings carrying an IPv6 scope identifier.
     static constexpr std::size_t kMaxKeyBytes = 64;
     static constexpr std::uint64_t kEmptyHash = 0;
-    static constexpr std::uintptr_t kGlobalScope = 1;
+    static constexpr std::uintptr_t kDefaultScope = 1;
     static constexpr std::uintptr_t kFallbackRouteScope = 2;
 
     struct Slot final {
@@ -168,18 +163,6 @@ private:
         std::array<char, kMaxKeyBytes> key{};
     };
     static_assert(sizeof(Slot) <= 112, "worker rate-limit slots must stay compact");
-
-    [[nodiscard]] static std::size_t nextPowerOfTwo(std::size_t value) noexcept {
-        if (value <= 1) {
-            return 1;
-        }
-        std::size_t result = 1;
-        const auto largest = std::numeric_limits<std::size_t>::max() / 2 + 1;
-        while (result < value && result < largest) {
-            result <<= 1U;
-        }
-        return result;
-    }
 
     [[nodiscard]] static std::uint64_t keyHash(
         std::uintptr_t scope,
@@ -330,7 +313,7 @@ private:
             : RateLimitDecision::reject(std::chrono::milliseconds(1));
     }
 
-    std::optional<RateLimitRule> appRule_;
+    std::optional<RateLimitRule> defaultRulePerWorker_;
     std::pmr::vector<Slot> slots_;
 };
 

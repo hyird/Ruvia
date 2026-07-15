@@ -6026,7 +6026,7 @@ elseif(EXISTS "${WEB_CONTEXT_HEADER}")
        NOT web_context_request_facade_source MATCHES
            "ContextRequest::method[(][)] const noexcept" OR
        NOT web_context_request_facade_source MATCHES
-           "Task<std::string_view> ContextRequest::text[(][)] const" OR
+           "ScopedOperation<std::string_view> ContextRequest::text[(][)] const" OR
        NOT web_context_request_facade_source MATCHES
            "requestHeaderFields[(]const ContextRequest& request[)]" OR
        NOT web_context_cmake MATCHES

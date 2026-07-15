@@ -35,18 +35,24 @@ WsOutputPlan WsConnection::outputPlan() const noexcept {
     return WsOutputPlan(bytes, disposition);
 }
 
-void WsConnection::consumeOutput(std::size_t n) noexcept {
+WsOutputConsumeStatus WsConnection::consumeOutput(std::size_t n) noexcept {
     const auto remaining = outBuffer_.size() - outOffset_;
-    outOffset_ += n < remaining ? n : remaining;
-    if (outOffset_ >= outBuffer_.size()) {
-        outBuffer_.clear();
-        outOffset_ = 0;
-        if (closePhase_ == ClosePhase::kLocalCloseQueued) {
-            closePhase_ = ClosePhase::kAwaitingPeerClose;
-        } else if (closePhase_ == ClosePhase::kFinalCloseQueued) {
-            closePhase_ = ClosePhase::kTransportEndReady;
-        }
+    if (n > remaining) {
+        return WsOutputConsumeStatus::kOutOfRange;
     }
+    if (n < remaining) {
+        outOffset_ += n;
+        return WsOutputConsumeStatus::kPending;
+    }
+
+    outBuffer_.clear();
+    outOffset_ = 0;
+    if (closePhase_ == ClosePhase::kLocalCloseQueued) {
+        closePhase_ = ClosePhase::kAwaitingPeerClose;
+    } else if (closePhase_ == ClosePhase::kFinalCloseQueued) {
+        closePhase_ = ClosePhase::kTransportEndReady;
+    }
+    return WsOutputConsumeStatus::kDrained;
 }
 
 void WsConnection::commitTransportEnd() noexcept {

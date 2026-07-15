@@ -2684,6 +2684,13 @@ static_assert(std::same_as<
         std::uint16_t{},
         std::string_view{})),
     ruvia::detail::WsCloseSubmitStatus>);
+static_assert(std::same_as<
+    decltype(std::declval<ruvia::detail::WsConnection&>().consumeOutput(
+        std::size_t{})),
+    ruvia::detail::WsOutputConsumeStatus>);
+static_assert(!std::convertible_to<
+    ruvia::detail::WsOutputConsumeStatus,
+    bool>);
 static_assert(!HasWsSubmitMessageAlias<ruvia::detail::WsConnection>);
 static_assert(!HasWsSubmitPingAlias<ruvia::detail::WsConnection>);
 static_assert(!HasWsSubmitPongAlias<ruvia::detail::WsConnection>);

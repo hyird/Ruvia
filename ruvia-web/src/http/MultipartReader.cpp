@@ -6,7 +6,11 @@
 
 namespace ruvia {
 
-Task<std::optional<MultipartStreamPart>> MultipartReader::read() {
+ScopedOperation<std::optional<MultipartStreamPart>> MultipartReader::read() {
+    return detail::makeScopedOperation(operationScope_, readTask());
+}
+
+Task<std::optional<MultipartStreamPart>> MultipartReader::readTask() {
     if (state_ == State::kFinished) {
         co_return std::nullopt;
     }

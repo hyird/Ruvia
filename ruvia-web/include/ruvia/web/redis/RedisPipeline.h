@@ -2,6 +2,7 @@
 
 #include "ruvia/core/Task.h"
 #include "ruvia/web/redis/RedisTypes.h"
+#include "ruvia/web/ScopedOperation.h"
 
 #include <functional>
 #include <initializer_list>
@@ -17,7 +18,7 @@ namespace ruvia {
 class RedisHandle;
 class RedisTransaction;
 
-class RedisPipeline final {
+class RedisPipeline final : private detail::ScopedCapabilityNode {
 public:
     RedisPipeline(const RedisPipeline&) = delete;
     RedisPipeline& operator=(const RedisPipeline&) = delete;
@@ -67,7 +68,7 @@ public:
 
     // Consumes the batch before returning the lazy Task, so the coroutine frame
     // owns every command and never borrows this builder through `this`.
-    Task<std::pmr::vector<RedisValue>> exec() &&;
+    ScopedOperation<std::pmr::vector<RedisValue>> exec() &&;
 
 private:
     friend class RedisHandle;
@@ -97,7 +98,8 @@ private:
 
     RedisPipeline(
         detail::RedisPool& pool,
-        std::pmr::memory_resource* resource) noexcept;
+        std::pmr::memory_resource* resource,
+        detail::ScopedOperationScope& operationScope) noexcept;
     [[nodiscard]] static Task<std::pmr::vector<RedisValue>> executeOwned(
         detail::RedisPool& pool,
         std::pmr::vector<Command> commands,
@@ -105,6 +107,7 @@ private:
     void requireActive() const;
     [[nodiscard]] detail::RedisPool& consumePool();
     [[nodiscard]] std::pmr::memory_resource* resource() const noexcept;
+    [[nodiscard]] detail::ScopedOperationScope& operationScope() const;
 
     struct Ready final {
         explicit Ready(detail::RedisPool& owner) noexcept
@@ -117,6 +120,7 @@ private:
 
     std::variant<Ready, Consumed> state_;
     std::pmr::vector<Command> commands_;
+    static void expireCapability(detail::ScopedCapabilityNode& capability) noexcept;
 };
 
 }  // namespace ruvia

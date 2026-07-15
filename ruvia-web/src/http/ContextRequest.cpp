@@ -68,16 +68,21 @@ namespace detail {
 
 }  // namespace detail
 
-Task<JsonValue> ContextRequest::json() const {
-    if (!contentTypeMatches("application/json")) {
+Task<JsonValue> ContextRequest::jsonTask(const Context* context) {
+    if (!contextContentTypeMatches(context, "application/json")) {
         detail::throwInvalidJsonContentType();
     }
-    const auto requestBody = co_await text();
-    auto parsed = JsonValue::parse(requestBody, resource());
+    const auto requestBody = co_await contextTextTask(context);
+    auto parsed = JsonValue::parse(requestBody, contextResource(context));
     if (!parsed) {
         detail::throwInvalidJsonBody();
     }
     co_return std::move(*parsed);
+}
+
+ScopedOperation<JsonValue> ContextRequest::json() const {
+    return detail::makeScopedOperation(
+        context_->operationScope_, jsonTask(context_));
 }
 
 namespace {

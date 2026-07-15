@@ -109,10 +109,14 @@ if(_built_components_csv MATCHES "(^|,)core(,|$)")
            "emplace<ChannelWorkerStopping>" OR
        NOT _installed_channel MATCHES
            "emplace<detail::ChannelClosed>" OR
+       NOT _installed_channel MATCHES
+           "receiveChannelState[(]" OR
+       _installed_channel MATCHES
+           "co_return co_await detail::ChannelReceiveAwaiter" OR
        _installed_channel MATCHES
            "bool closed|bool workerStopped")
         message(FATAL_ERROR
-            "installed Channel restored overlapping lifecycle flags")
+            "installed Channel restored overlapping lifecycle flags or receiver-bound cold tasks")
     endif()
 
     set(_installed_one_shot_path
@@ -137,10 +141,14 @@ if(_built_components_csv MATCHES "(^|,)core(,|$)")
            "using Lifecycle = std::variant" OR
        NOT _installed_one_shot MATCHES
            "wakeOneShotReceiver" OR
+       NOT _installed_one_shot MATCHES
+           "waitOneShotState[(]" OR
+       _installed_one_shot MATCHES
+           "co_return co_await detail::OneShotAwaiter" OR
        _installed_one_shot MATCHES
            "std::optional<T>[ \t]+value|bool completed|bool consumed|bool closed|bool workerStopped")
         message(FATAL_ERROR
-            "installed OneShot restored parallel lifecycle flags")
+            "installed OneShot restored parallel lifecycle flags or receiver-bound cold tasks")
     endif()
 
     set(_installed_worker_wait_awaiter_path
@@ -1723,6 +1731,16 @@ if(NOT _installed_ws_connection MATCHES "enum class WsLivenessMode" OR
     message(FATAL_ERROR
         "installed WebSocket core lost its typed liveness/abort operations")
 endif()
+if(NOT _installed_ws_connection MATCHES
+       "enum class WsOutputConsumeStatus" OR
+   NOT _installed_ws_connection MATCHES "kPending" OR
+   NOT _installed_ws_connection MATCHES "kDrained" OR
+   NOT _installed_ws_connection MATCHES "kOutOfRange" OR
+   NOT _installed_ws_connection MATCHES
+       "WsOutputConsumeStatus consumeOutput")
+    message(FATAL_ERROR
+        "installed WebSocket core lost its typed transactional output acknowledgement")
+endif()
 if(NOT _installed_ws_connection MATCHES "class WsOutputPlan final" OR
    NOT _installed_ws_connection MATCHES
        "WsTransportDisposition disposition[(][)] const noexcept" OR
@@ -2404,8 +2422,13 @@ if(_built_components_csv MATCHES "(^|,)web(,|$)")
            "std::variant<RateLimitAllowed, RateLimitRejection>" OR
        NOT _installed_rate_limiter MATCHES "allowed[(][)] const [&]" OR
        NOT _installed_rate_limiter MATCHES "rejection[(][)] const [&]" OR
+       NOT _installed_rate_limiter MATCHES
+           "enum class RouteRateLimitPresence" OR
+       NOT _installed_rate_limiter MATCHES "hasDefaultRule[(][)]" OR
+       NOT _installed_rate_limiter MATCHES "allowDefault[(]" OR
+       NOT _installed_rate_limiter MATCHES "std::has_single_bit[(]slotCount[)]" OR
        _installed_rate_limiter MATCHES
-           "struct RateLimitCheck|bool[ 	]+allowed" OR
+           "struct RateLimitCheck|bool[ 	]+allowed|allowGlobal|kGlobalScope|nextPowerOfTwo|enabled[(][)]" OR
        NOT _installed_rate_limit_decision MATCHES
            "decideRequestRateLimit" OR
        NOT _installed_rate_limit_decision MATCHES
@@ -2481,6 +2504,15 @@ if(_built_components_csv MATCHES "(^|,)web(,|$)")
            "startupReady_|startupException_|workerException_|startupMutex_|startupCv_|resetStartupState|completeStartup|waitForStartupReady")
         message(FATAL_ERROR
             "installed Web package restored split worker startup state")
+    endif()
+    if(NOT _installed_http_server MATCHES
+           "const WorkerHandle& worker[(][)] const & noexcept" OR
+       NOT _installed_http_server MATCHES
+           "WorkerHandle worker[(][)] const && = delete" OR
+       _installed_http_server MATCHES
+           "WorkerHandle worker[(][)] const noexcept")
+        message(FATAL_ERROR
+            "installed HttpServer restored value-copy worker access")
     endif()
     set(_removed_public_server_options
         "${_install_prefix}/include/ruvia/web/HttpServerOptions.h")
@@ -2963,6 +2995,8 @@ if(_built_components_csv MATCHES "(^|,)web(,|$)")
         "${_install_prefix}/include/ruvia/web/detail/server/HttpConnectionState.h")
     set(_installed_http2_response_stream_sink_path
         "${_install_prefix}/include/ruvia/web/detail/http2/Http2SansIoResponseStreamSink.h")
+    set(_installed_http1_response_stream_sink_path
+        "${_install_prefix}/include/ruvia/web/detail/server/HttpResponseStreamSink.h")
     foreach(_response_stream_status_contract IN ITEMS
             "${_installed_route_stream_state_path}"
             "${_installed_response_stream_dispatch_path}"
@@ -2978,6 +3012,7 @@ if(_built_components_csv MATCHES "(^|,)web(,|$)")
             "${_installed_buffered_response_preparation_path}"
             "${_installed_response_compression_path}"
             "${_installed_connection_state_path}"
+            "${_installed_http1_response_stream_sink_path}"
             "${_installed_http2_response_stream_sink_path}")
         if(NOT EXISTS "${_response_stream_status_contract}")
             message(FATAL_ERROR
@@ -3018,6 +3053,8 @@ if(_built_components_csv MATCHES "(^|,)web(,|$)")
         _installed_connection_state)
     file(READ "${_installed_http2_response_stream_sink_path}"
         _installed_http2_response_stream_sink)
+    file(READ "${_installed_http1_response_stream_sink_path}"
+        _installed_http1_response_stream_sink)
     if(NOT _installed_response_compression MATCHES
            "void[ \t\r\n]+applyResponseCompression" OR
        NOT _installed_buffered_response_preparation MATCHES
@@ -3212,6 +3249,28 @@ if(_built_components_csv MATCHES "(^|,)web(,|$)")
            "submitResponseTrailerSection")
         message(FATAL_ERROR
             "installed Web HTTP/2 sink restored staged trailer submission")
+    endif()
+    foreach(_installed_stream_sink IN ITEMS
+            "${_installed_http1_response_stream_sink}"
+            "${_installed_http2_response_stream_sink}")
+        if(NOT _installed_stream_sink MATCHES
+               "const WorkerHandle[*] worker_" OR
+           NOT _installed_stream_sink MATCHES
+               "WorkerHandle&&" OR
+           _installed_stream_sink MATCHES
+               "(^|[^*])WorkerHandle worker_" OR
+           _installed_stream_sink MATCHES
+               "WorkerHandle worker,")
+            message(FATAL_ERROR
+                "installed response stream sink restored value-owned WorkerHandle")
+        endif()
+    endforeach()
+    if(_installed_http2_response_stream_sink MATCHES
+           "template[ \t\r\n]*<[^>]*Executor" OR
+       _installed_http2_response_stream_sink MATCHES
+           "Executor executor_")
+        message(FATAL_ERROR
+            "installed HTTP/2 response stream sink retained unused executor state")
     endif()
 
     set(_installed_http2_buffered_response_result_path
@@ -3743,6 +3802,12 @@ if(_built_components_csv MATCHES "(^|,)web(,|$)")
        _installed_ws_runtime_write MATCHES "detachAndDrainBackgroundWrites")
         message(FATAL_ERROR
             "installed WebSocket runtime lost cancellation-safe structured write ownership")
+    endif()
+    if(NOT _installed_ws_runtime_write MATCHES
+           "WsOutputConsumeStatus::kDrained" OR
+       NOT _installed_ws_runtime_write MATCHES "std::terminate[(][)]")
+        message(FATAL_ERROR
+            "installed WebSocket runtime no longer enforces exact output acknowledgement")
     endif()
     if(NOT _installed_http_protocol_error_info MATCHES
            "copyHttpProtocolErrorInfo" OR

@@ -219,7 +219,15 @@ static_assert(std::same_as<
     decltype(std::declval<ruvia::ChannelReceiver<int>&>().receive()),
     ruvia::Task<ruvia::WorkerWaitResult<int>>>);
 static_assert(std::same_as<
+    decltype(std::declval<ruvia::ChannelReceiver<int>&>().receiveFor(
+        std::chrono::milliseconds(1))),
+    ruvia::Task<ruvia::WorkerWaitResult<int>>>);
+static_assert(std::same_as<
     decltype(std::declval<ruvia::OneShotReceiver<int>&>().wait()),
+    ruvia::Task<ruvia::WorkerWaitResult<int>>>);
+static_assert(std::same_as<
+    decltype(std::declval<ruvia::OneShotReceiver<int>&>().waitFor(
+        std::chrono::milliseconds(1))),
     ruvia::Task<ruvia::WorkerWaitResult<int>>>);
 static_assert(!std::default_initializable<ruvia::ChannelReceiver<int>>);
 static_assert(std::move_constructible<ruvia::ChannelReceiver<int>>);

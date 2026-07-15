@@ -90,41 +90,49 @@ Task<std::optional<RedisKeyValue>> executeRedisBlockingPop(
 
 }  // namespace
 
-Task<RedisScanResult> RedisHandle::scan(RedisScanOptions options) const {
-    return executeRedisScan(pool_, redisScanArgs("SCAN", options, resource_), resource_);
+ScopedOperation<RedisScanResult> RedisHandle::scan(RedisScanOptions options) const {
+    requireActive();
+    return scoped(executeRedisScan(*pool_, redisScanArgs("SCAN", options, resource_), resource_));
 }
 
-Task<RedisHashScanResult> RedisHandle::hscan(std::string_view key, RedisScanOptions options) const {
-    return executeRedisHashScan(pool_, redisKeyScanArgs("HSCAN", key, options, resource_), resource_);
+ScopedOperation<RedisHashScanResult> RedisHandle::hscan(std::string_view key, RedisScanOptions options) const {
+    requireActive();
+    return scoped(executeRedisHashScan(*pool_, redisKeyScanArgs("HSCAN", key, options, resource_), resource_));
 }
 
-Task<RedisScanResult> RedisHandle::sscan(std::string_view key, RedisScanOptions options) const {
-    return executeRedisScan(pool_, redisKeyScanArgs("SSCAN", key, options, resource_), resource_);
+ScopedOperation<RedisScanResult> RedisHandle::sscan(std::string_view key, RedisScanOptions options) const {
+    requireActive();
+    return scoped(executeRedisScan(*pool_, redisKeyScanArgs("SSCAN", key, options, resource_), resource_));
 }
 
-Task<RedisZScanResult> RedisHandle::zscan(std::string_view key, RedisScanOptions options) const {
-    return executeRedisZScan(pool_, redisKeyScanArgs("ZSCAN", key, options, resource_), resource_);
+ScopedOperation<RedisZScanResult> RedisHandle::zscan(std::string_view key, RedisScanOptions options) const {
+    requireActive();
+    return scoped(executeRedisZScan(*pool_, redisKeyScanArgs("ZSCAN", key, options, resource_), resource_));
 }
 
-Task<RedisValue> RedisHandle::eval(
+ScopedOperation<RedisValue> RedisHandle::eval(
     std::string_view script,
     std::span<const std::string_view> keys,
     std::span<const std::string_view> args) const {
-    return detail::executeOwnedRedisCommand(pool_, detail::redisEvalArgs("EVAL", script, keys, args, resource_), resource_);
+    requireActive();
+    return scoped(detail::executeOwnedRedisCommand(*pool_, detail::redisEvalArgs("EVAL", script, keys, args, resource_), resource_));
 }
 
-Task<RedisValue> RedisHandle::evalSha(
+ScopedOperation<RedisValue> RedisHandle::evalSha(
     std::string_view sha1,
     std::span<const std::string_view> keys,
     std::span<const std::string_view> args) const {
-    return detail::executeOwnedRedisCommand(pool_, detail::redisEvalArgs("EVALSHA", sha1, keys, args, resource_), resource_);
+    requireActive();
+    return scoped(detail::executeOwnedRedisCommand(*pool_, detail::redisEvalArgs("EVALSHA", sha1, keys, args, resource_), resource_));
 }
 
-Task<std::pmr::string> RedisHandle::scriptLoad(std::string_view script) const {
-    return detail::redisStatusCommand(pool_, detail::ownRedisArgs({"SCRIPT", "LOAD", script}, resource_), resource_);
+ScopedOperation<std::pmr::string> RedisHandle::scriptLoad(std::string_view script) const {
+    requireActive();
+    return scoped(detail::redisStatusCommand(*pool_, detail::ownRedisArgs({"SCRIPT", "LOAD", script}, resource_), resource_));
 }
 
-Task<std::pmr::vector<bool>> RedisHandle::scriptExists(std::span<const std::string_view> sha1s) const {
+ScopedOperation<std::pmr::vector<bool>> RedisHandle::scriptExists(std::span<const std::string_view> sha1s) const {
+    requireActive();
     if (sha1s.empty()) {
         throw std::invalid_argument("redis script exists requires at least one sha1");
     }
@@ -135,31 +143,34 @@ Task<std::pmr::vector<bool>> RedisHandle::scriptExists(std::span<const std::stri
     for (const auto sha1 : sha1s) {
         detail::emplaceRedisString(args, sha1);
     }
-    return detail::redisBoolArrayCommand(pool_, std::move(args), resource_);
+    return scoped(detail::redisBoolArrayCommand(*pool_, std::move(args), resource_));
 }
 
-Task<std::optional<RedisKeyValue>> RedisHandle::blpop(
+ScopedOperation<std::optional<RedisKeyValue>> RedisHandle::blpop(
     std::span<const std::string_view> keys,
     std::chrono::seconds timeout) const {
-    return executeRedisBlockingPop(
-        pool_,
+    requireActive();
+    return scoped(executeRedisBlockingPop(
+        *pool_,
         detail::redisBlockingPopArgs("BLPOP", keys, timeout, resource_),
         timeout,
-        resource_);
+        resource_));
 }
 
-Task<std::optional<RedisKeyValue>> RedisHandle::brpop(
+ScopedOperation<std::optional<RedisKeyValue>> RedisHandle::brpop(
     std::span<const std::string_view> keys,
     std::chrono::seconds timeout) const {
-    return executeRedisBlockingPop(
-        pool_,
+    requireActive();
+    return scoped(executeRedisBlockingPop(
+        *pool_,
         detail::redisBlockingPopArgs("BRPOP", keys, timeout, resource_),
         timeout,
-        resource_);
+        resource_));
 }
 
 RedisPipeline RedisHandle::pipeline() const {
-    return RedisPipeline(pool_, resource_);
+    requireActive();
+    return RedisPipeline(*pool_, resource_, operationScope());
 }
 
 RedisTransaction RedisHandle::transaction() const {

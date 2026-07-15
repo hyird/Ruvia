@@ -63,6 +63,12 @@ enum class WsAbortDisposition : std::uint8_t {
     kNoTransportAction,
 };
 
+enum class WsOutputConsumeStatus : std::uint8_t {
+    kPending,
+    kDrained,
+    kOutOfRange,
+};
+
 class WsOutputPlan final {
 public:
     [[nodiscard]] constexpr std::string_view bytes() const noexcept {
@@ -100,7 +106,7 @@ public:
     [[nodiscard]] std::optional<WsEvent> poll();
 
     [[nodiscard]] WsOutputPlan outputPlan() const noexcept;
-    void consumeOutput(std::size_t n) noexcept;
+    [[nodiscard]] WsOutputConsumeStatus consumeOutput(std::size_t n) noexcept;
     void commitTransportEnd() noexcept;
     void notifyTransportEof() noexcept;
     [[nodiscard]] WsAbortDisposition abort() noexcept;

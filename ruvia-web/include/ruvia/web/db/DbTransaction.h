@@ -1,6 +1,7 @@
 #pragma once
 
 #include "ruvia/web/db/DbQueryResult.h"
+#include "ruvia/web/ScopedOperation.h"
 
 #include <cstddef>
 #include <initializer_list>
@@ -13,7 +14,7 @@
 
 namespace ruvia {
 
-class DbTransaction final {
+class DbTransaction final : private detail::ScopedCapabilityNode {
 public:
     DbTransaction(const DbTransaction&) = delete;
     DbTransaction& operator=(const DbTransaction&) = delete;
@@ -22,14 +23,15 @@ public:
     ~DbTransaction();
 
     [[nodiscard]] bool active() const noexcept;
-    Task<QueryResult> query(std::string_view sql, std::span<const DbValue> params = {});
-    Task<QueryResult> query(std::string_view sql, std::initializer_list<DbValue> params) = delete;
-    Task<QueryResult> execute(std::string_view sql, std::span<const DbValue> params = {});
-    Task<QueryResult> execute(std::string_view sql, std::initializer_list<DbValue> params) = delete;
-    Task<void> commit();
-    Task<void> rollback();
+    ScopedOperation<QueryResult> query(std::string_view sql, std::span<const DbValue> params = {});
+    ScopedOperation<QueryResult> query(std::string_view sql, std::initializer_list<DbValue> params) = delete;
+    ScopedOperation<QueryResult> execute(std::string_view sql, std::span<const DbValue> params = {});
+    ScopedOperation<QueryResult> execute(std::string_view sql, std::initializer_list<DbValue> params) = delete;
+    ScopedOperation<void> commit();
+    ScopedOperation<void> rollback();
 
 private:
+    friend class DbHandle;
     friend class detail::MariaDbPool;
     friend class detail::PostgreSqlPool;
 
@@ -49,7 +51,11 @@ private:
         std::size_t slot,
         std::pmr::memory_resource* resource) noexcept;
     Task<QueryResult> executePrepared(std::pmr::string sql, std::pmr::vector<DbValue> params);
+    Task<void> commitTask();
+    Task<void> rollbackTask();
     void reset() noexcept;
+    void bindOperationScope(detail::ScopedOperationScope& scope) noexcept;
+    static void expireCapability(detail::ScopedCapabilityNode& capability) noexcept;
 
     class OperationGuard final {
     public:
@@ -69,6 +75,7 @@ private:
     };
 
     detail::DbOperationState<Lease> state_{};
+    detail::ScopedOperationScope operationScope_;
 };
 
 }  // namespace ruvia

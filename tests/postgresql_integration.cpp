@@ -88,7 +88,8 @@ ruvia::Task<void> withDatabase(
         ruvia::detail::DbDefinition{std::pmr::string("default", resource), config}};
     ruvia::detail::DbRegistry registry(ioContext, resource, definitions);
     co_await registry.connect();
-    auto db = registry.get(resource);
+    ruvia::detail::ScopedOperationScope operationScope;
+    auto db = registry.get(resource, operationScope);
 
     if (cleanupOnly) {
         (void)co_await db.execute("DROP TABLE IF EXISTS ruvia_pg_integration_items");

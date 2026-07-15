@@ -3,6 +3,7 @@
 #include "ruvia/core/Task.h"
 #include "ruvia/http/MultipartParser.h"
 #include "ruvia/web/Streaming.h"
+#include "ruvia/web/ScopedOperation.h"
 
 #include <memory_resource>
 #include <cstdint>
@@ -28,7 +29,7 @@ public:
 
     /// Returns one typed chunk of the current multipart part. All views in the
     /// returned value remain valid only until the next read() call.
-    [[nodiscard]] Task<std::optional<MultipartStreamPart>> read();
+    [[nodiscard]] ScopedOperation<std::optional<MultipartStreamPart>> read();
 
 private:
     enum class State : std::uint8_t {
@@ -61,6 +62,9 @@ private:
     BodyReader& bodyReader_;
     MultipartParser parser_;
     State state_{State::kReady};
+    detail::ScopedOperationScope operationScope_;
+
+    [[nodiscard]] Task<std::optional<MultipartStreamPart>> readTask();
 };
 
 }  // namespace ruvia

@@ -35,6 +35,7 @@
 namespace ruvia::detail {
 
 class ContextServices;
+class AcceptedConnectionLease;
 class RouteTable;
 class WorkerDispatcher;
 class WebWorkerDispatch;
@@ -64,7 +65,10 @@ public:
     void stop();
     void join();
     [[nodiscard]] asio::ip::tcp::endpoint localEndpoint() const;
-    [[nodiscard]] WorkerHandle worker() const noexcept { return workerHandle_; }
+    [[nodiscard]] const WorkerHandle& worker() const & noexcept {
+        return workerHandle_;
+    }
+    WorkerHandle worker() const && = delete;
     [[nodiscard]] WebWorkerHandle webWorker() const;
 private:
     struct ValidatedOptionsTag final {};
@@ -77,15 +81,6 @@ private:
         std::span<const RedisDefinition> redis,
         HttpServerOptions validatedOptions);
 
-    // RAII notify for the graceful-drain path, held across a session's whole
-    // coroutine body. A nested type (rather than a session-local struct) gives it
-    // linkage so it does not taint the coroutine frame with a no-linkage subobject,
-    // while still reaching the private maybeFinishDrain.
-    struct SessionDrainGuard final {
-        HttpServer* server;
-        ~SessionDrainGuard() { server->maybeFinishDrain(); }
-    };
-
     void configureAcceptor();
     void configureTlsContext();
     void stopOnContext(bool honorGracePeriod = true) noexcept;
@@ -96,7 +91,7 @@ private:
     void runIoContext() noexcept;
     Task<void> runWorker();
     Task<void> acceptLoop();
-    Task<void> handleSession(asio::ip::tcp::socket socket);
+    Task<void> handleSession(AcceptedConnectionLease connection);
     template <typename Stream>
     Task<void> handleStreamSession(
         Stream& stream,

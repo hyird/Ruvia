@@ -160,7 +160,7 @@ concept HasResponseHeadersAlias = requires(T& response) {
 
 template <typename T>
 concept HasContextRequestBytes = requires(const T& request) {
-    { request.bytes() } -> std::same_as<ruvia::Task<std::span<const std::byte>>>;
+    { request.bytes() } -> std::same_as<ruvia::ScopedOperation<std::span<const std::byte>>>;
 };
 
 template <typename T>
@@ -201,7 +201,7 @@ concept HasLegacyParseBodyFlags = requires(T& options) {
 
 template <typename T>
 concept HasRequestJsonValueAlias = requires(const T& request) {
-    { request.json() } -> std::same_as<ruvia::Task<ruvia::JsonValue>>;
+    { request.json() } -> std::same_as<ruvia::ScopedOperation<ruvia::JsonValue>>;
 };
 
 template <typename T>
