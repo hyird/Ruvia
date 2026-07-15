@@ -2,11 +2,13 @@
 
 #include <concepts>
 #include <cstddef>
+#include <exception>
 #include <memory_resource>
 #include <optional>
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <type_traits>
 #include <utility>
 
 #include "ruvia/http/HttpResponse.h"
@@ -20,6 +22,8 @@ namespace {
 using ruvia::HttpResponse;
 using ruvia::HttpKnownMethod;
 using ruvia::detail::Http1ResponseHeadPlan;
+using ruvia::detail::Http1FinalResponseCommitFailure;
+using ruvia::detail::Http1FinalResponseCommitError;
 using ruvia::detail::Http1FinalResponseCommitResult;
 using ruvia::detail::Http1ServerConnectionPlan;
 using ruvia::detail::ResponseHeadBuffer;
@@ -33,6 +37,19 @@ static_assert(std::same_as<
     decltype(std::declval<
         const Http1FinalResponseCommitResult&>().committed()),
     const Http1ServerConnectionPlan*>);
+static_assert(std::derived_from<
+    Http1FinalResponseCommitError,
+    std::exception>);
+static_assert(std::is_trivially_copyable_v<
+    Http1FinalResponseCommitResult>);
+static_assert(sizeof(Http1FinalResponseCommitResult) <= 8);
+
+template <typename T>
+concept HasRawFinalCommitError = requires(const T& failure) {
+    failure.error();
+};
+
+static_assert(!HasRawFinalCommitError<Http1FinalResponseCommitFailure>);
 
 ruvia::detail::Http1ServerConnectionPlan connectionPlanFor(
     ruvia::HttpProtocolVersion protocolVersion) {
@@ -346,10 +363,22 @@ RUVIA_TEST(http1_protocol_finalizer_rejects_upgrade_required_without_protocol) {
         missingUpgrade, requestPlan);
     RUVIA_CHECK(result.committed() == nullptr);
     RUVIA_CHECK(result.failure() != nullptr);
-    RUVIA_CHECK(
-        result.failure()->error() ==
-        ruvia::detail::Http1FinalResponseControlPlanError::kUpgradeRequired);
+    RUVIA_CHECK_EQ(
+        std::string_view(result.failure()->exception().what()),
+        std::string_view("426 response requires an Upgrade protocol"));
     RUVIA_CHECK(missingUpgrade.header("Connection").empty());
+
+    HttpResponse propagated(std::pmr::new_delete_resource());
+    propagated.status(426);
+    bool caughtTypedFailure = false;
+    try {
+        (void)ruvia::detail::requireHttp1FinalResponseCommit(
+            propagated, requestPlan);
+    } catch (const Http1FinalResponseCommitError& error) {
+        caughtTypedFailure = std::string_view(error.what()) ==
+            "426 response requires an Upgrade protocol";
+    }
+    RUVIA_CHECK(caughtTypedFailure);
 }
 
 RUVIA_TEST(http1_stream_prepare_preserves_typed_final_commit_failure) {
@@ -367,9 +396,9 @@ RUVIA_TEST(http1_stream_prepare_preserves_typed_final_commit_failure) {
         ruvia::detail::ResponseTrailerIntent::kNone);
     RUVIA_CHECK(result.prepared() == nullptr);
     RUVIA_CHECK(result.failure() != nullptr);
-    RUVIA_CHECK(
-        result.failure()->error() ==
-        ruvia::detail::Http1FinalResponseControlPlanError::kUpgradeRequired);
+    RUVIA_CHECK_EQ(
+        std::string_view(result.failure()->exception().what()),
+        std::string_view("426 response requires an Upgrade protocol"));
 }
 
 RUVIA_TEST(http1_buffered_request_limit_closes_the_typed_connection_plan) {

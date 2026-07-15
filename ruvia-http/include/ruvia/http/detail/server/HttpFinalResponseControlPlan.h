@@ -26,6 +26,7 @@ enum class Http2FinalResponseControlPlanError : std::uint8_t {
 
 class Http1FinalResponseControl;
 class Http2FinalResponseControl;
+class Http1FinalResponseCommitFailure;
 class Http1FinalResponseControlPlanFailure;
 class Http2FinalResponseControlPlanFailure;
 
@@ -89,6 +90,7 @@ public:
     }
 
 private:
+    friend class Http1FinalResponseCommitFailure;
     template <typename Control, typename Failure>
     friend class HttpFinalResponseControlPlanResult;
     friend Http1FinalResponseControlPlanResult

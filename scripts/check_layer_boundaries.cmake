@@ -7752,6 +7752,14 @@ if(EXISTS "${HTTP1_SERVER_SEMANTICS}")
        NOT http1_server_semantics MATCHES "Http1ServerConnectionPlan requestConnectionPlan" OR
        NOT http1_server_semantics MATCHES "Http1ServerClosePolicy closePolicy" OR
        NOT http1_server_semantics MATCHES "class Http1FinalResponseCommitFailure final" OR
+       NOT http1_server_semantics MATCHES
+           "Http1FinalResponseCommitError final : public std::exception" OR
+       NOT http1_server_semantics MATCHES
+           "what[(][)] const noexcept override" OR
+       NOT http1_server_semantics MATCHES
+           "Http1FinalResponseCommitError exception[(][)] const noexcept" OR
+       http1_server_semantics MATCHES
+           "Http1FinalResponseControlPlanError error[(][)] const" OR
        NOT http1_server_semantics MATCHES "class Http1FinalResponseCommitResult final" OR
        NOT http1_server_semantics MATCHES
            "std::variant<[ \t\r\n]*Http1ServerConnectionPlan,[ \t\r\n]*Http1FinalResponseCommitFailure>" OR
@@ -7786,24 +7794,50 @@ set(WEB_HTTP1_FINAL_RESPONSE_COMMIT
     "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/server/HttpServerResponseState.h")
 set(WEB_HTTP1_STREAM_SINK
     "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/server/HttpResponseStreamSink.h")
+set(HTTP1_FINAL_COMMIT_TEST
+    "${RUVIA_ROOT}/tests/unit_response_head_emit.cpp")
+set(HTTP1_FINAL_COMMIT_PACKAGE_CONSUMER
+    "${RUVIA_ROOT}/tests/package-consumer/http.cpp")
 if(EXISTS "${WEB_HTTP1_FINAL_RESPONSE_COMMIT}" AND
-   EXISTS "${WEB_HTTP1_STREAM_SINK}")
+   EXISTS "${WEB_HTTP1_STREAM_SINK}" AND
+   EXISTS "${HTTP1_FINAL_COMMIT_TEST}" AND
+   EXISTS "${HTTP1_FINAL_COMMIT_PACKAGE_CONSUMER}")
     file(READ "${WEB_HTTP1_FINAL_RESPONSE_COMMIT}"
         web_http1_final_response_commit)
     file(READ "${WEB_HTTP1_STREAM_SINK}" web_http1_stream_sink)
-    if(NOT web_http1_final_response_commit MATCHES
-           "throwHttp1FinalResponseCommitFailure" OR
+    file(READ "${HTTP1_FINAL_COMMIT_TEST}" http1_final_commit_test)
+    file(READ "${HTTP1_FINAL_COMMIT_PACKAGE_CONSUMER}"
+        http1_final_commit_package_consumer)
+    if(web_http1_final_response_commit MATCHES
+           "throwHttp1FinalResponseCommitFailure|Http1FinalResponseControlPlanError::|std::invalid_argument" OR
        NOT web_http1_final_response_commit MATCHES
            "requireHttp1FinalResponseCommit" OR
        NOT web_http1_final_response_commit MATCHES
            "http1CommitFinalResponse" OR
+       NOT web_http1_final_response_commit MATCHES
+           "throw failure->exception[(][)]" OR
        NOT web_http1_stream_sink MATCHES "prepareResult[.]failure[(][)]" OR
        NOT web_http1_stream_sink MATCHES "prepareResult[.]prepared[(][)]" OR
        NOT web_http1_stream_sink MATCHES "std::move[(][*]prepared[)]" OR
        NOT web_http1_stream_sink MATCHES
-           "throwHttp1FinalResponseCommitFailure")
+           "throw failure->exception[(][)]" OR
+       web_http1_stream_sink MATCHES
+           "throwHttp1FinalResponseCommitFailure|Http1FinalResponseControlPlanError::")
         boundary_error("Web bypassed the typed HTTP/1 final response commit"
-            "buffered and streaming paths must map the same typed HTTP failure at one Web boundary")
+            "buffered and streaming paths must propagate the same HTTP-owned failure without rebuilding diagnostics")
+    endif()
+    if(NOT http1_final_commit_test MATCHES
+           "HasRawFinalCommitError" OR
+       NOT http1_final_commit_test MATCHES
+           "catch [(]const Http1FinalResponseCommitError& error[)]" OR
+       NOT http1_final_commit_package_consumer MATCHES
+           "HasRawHttp1FinalCommitError" OR
+       NOT http1_final_commit_package_consumer MATCHES
+           "Http1FinalResponseCommitError,[ \t\r\n]*std::exception" OR
+       NOT http1_final_commit_package_consumer MATCHES
+           "is_trivially_copyable_v<[ \t\r\n]*ruvia::detail::Http1FinalResponseCommitResult")
+        boundary_error("HTTP/1 final commit failure classification is insufficiently tested"
+            "unit and installed consumers must pin the HTTP-owned exception and removal of raw commit errors")
     endif()
 endif()
 if(EXISTS "${HTTP1_PARSER_INTERNAL}" AND EXISTS "${HTTP1_PARSER_SOURCE}")

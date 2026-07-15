@@ -109,7 +109,7 @@ private:
             plan_,
             trailerIntent);
         if (const auto* failure = prepareResult.failure()) {
-            throwHttp1FinalResponseCommitFailure(failure->error());
+            throw failure->exception();
         }
         auto* prepared = prepareResult.prepared();
         if (prepared == nullptr) {

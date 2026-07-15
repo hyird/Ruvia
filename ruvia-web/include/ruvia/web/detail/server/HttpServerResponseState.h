@@ -8,32 +8,15 @@
 #include <charconv>
 #include <chrono>
 #include <cstddef>
-#include <stdexcept>
 
 namespace ruvia::detail {
-
-[[noreturn]] inline void throwHttp1FinalResponseCommitFailure(
-    Http1FinalResponseControlPlanError error) {
-    switch (error) {
-        case Http1FinalResponseControlPlanError::kInvalidStatus:
-            throw std::invalid_argument("invalid final HTTP response status");
-        case Http1FinalResponseControlPlanError::kInvalidConnectionField:
-            throw std::invalid_argument("invalid HTTP Connection header");
-        case Http1FinalResponseControlPlanError::kInvalidUpgradeField:
-            throw std::invalid_argument("invalid HTTP Upgrade header");
-        case Http1FinalResponseControlPlanError::kUpgradeRequired:
-            throw std::invalid_argument(
-                "426 response requires an Upgrade protocol");
-    }
-    throw std::logic_error("unknown HTTP final response commit failure");
-}
 
 [[nodiscard]] inline Http1ServerConnectionPlan requireHttp1FinalResponseCommit(
     HttpResponse& response,
     Http1ServerConnectionPlan connectionPlan) {
     const auto result = http1CommitFinalResponse(response, connectionPlan);
     if (const auto* failure = result.failure()) {
-        throwHttp1FinalResponseCommitFailure(failure->error());
+        throw failure->exception();
     }
     return *result.committed();
 }

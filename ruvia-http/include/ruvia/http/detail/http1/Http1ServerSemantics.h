@@ -12,6 +12,7 @@
 #include "ruvia/http/HttpResponse.h"
 
 #include <cstdint>
+#include <exception>
 #include <optional>
 #include <utility>
 #include <variant>
@@ -119,19 +120,46 @@ inline void http1MarkConnectionClose(
 }
 
 class Http1FinalResponseCommitResult;
+class Http1FinalResponseCommitFailure;
+
+class Http1FinalResponseCommitError final : public std::exception {
+public:
+    [[nodiscard]] const char* what() const noexcept override {
+        switch (error_) {
+            case Http1FinalResponseControlPlanError::kInvalidStatus:
+                return "invalid final HTTP response status";
+            case Http1FinalResponseControlPlanError::kInvalidConnectionField:
+                return "invalid HTTP Connection header";
+            case Http1FinalResponseControlPlanError::kInvalidUpgradeField:
+                return "invalid HTTP Upgrade header";
+            case Http1FinalResponseControlPlanError::kUpgradeRequired:
+                return "426 response requires an Upgrade protocol";
+        }
+        return "unknown HTTP final response commit failure";
+    }
+
+private:
+    friend class Http1FinalResponseCommitFailure;
+
+    explicit Http1FinalResponseCommitError(
+        Http1FinalResponseControlPlanError error) noexcept
+        : error_(error) {}
+
+    Http1FinalResponseControlPlanError error_;
+};
 
 class Http1FinalResponseCommitFailure final {
 public:
-    [[nodiscard]] Http1FinalResponseControlPlanError error() const noexcept {
-        return error_;
+    [[nodiscard]] Http1FinalResponseCommitError exception() const noexcept {
+        return Http1FinalResponseCommitError(error_);
     }
 
 private:
     friend class Http1FinalResponseCommitResult;
 
     explicit Http1FinalResponseCommitFailure(
-        Http1FinalResponseControlPlanError error) noexcept
-        : error_(error) {}
+        const Http1FinalResponseControlPlanFailure& failure) noexcept
+        : error_(failure.error_) {}
 
     Http1FinalResponseControlPlanError error_;
 };
@@ -174,9 +202,9 @@ private:
     }
 
     [[nodiscard]] static Http1FinalResponseCommitResult failure(
-        Http1FinalResponseControlPlanError error) noexcept {
+        const Http1FinalResponseControlPlanFailure& failure) noexcept {
         return Http1FinalResponseCommitResult(
-            Http1FinalResponseCommitFailure(error));
+            Http1FinalResponseCommitFailure(failure));
     }
 
     Value value_;
@@ -192,7 +220,7 @@ private:
     Http1ServerConnectionPlan plan) {
     const auto controlResult = http1FinalResponseControlPlan(response);
     if (const auto* failure = controlResult.failure()) {
-        return Http1FinalResponseCommitResult::failure(failure->error());
+        return Http1FinalResponseCommitResult::failure(*failure);
     }
     const auto& http1Control = *controlResult.control();
     const auto responseOptions = http1Control.connectionOptions();

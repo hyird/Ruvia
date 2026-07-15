@@ -3840,6 +3840,14 @@ if(NOT _installed_http1_response_head_plan MATCHES
    NOT _installed_http1_server_semantics MATCHES
        "class Http1FinalResponseCommitFailure final" OR
    NOT _installed_http1_server_semantics MATCHES
+       "Http1FinalResponseCommitError final : public std::exception" OR
+   NOT _installed_http1_server_semantics MATCHES
+       "what[(][)] const noexcept override" OR
+   NOT _installed_http1_server_semantics MATCHES
+       "Http1FinalResponseCommitError exception[(][)] const noexcept" OR
+   _installed_http1_server_semantics MATCHES
+       "Http1FinalResponseControlPlanError error[(][)] const" OR
+   NOT _installed_http1_server_semantics MATCHES
        "class Http1FinalResponseCommitResult final" OR
    NOT _installed_http1_server_semantics MATCHES
        "std::variant<[ \t\r\n]*Http1ServerConnectionPlan,[ \t\r\n]*Http1FinalResponseCommitFailure>" OR

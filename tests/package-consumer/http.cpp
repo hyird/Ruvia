@@ -2,6 +2,7 @@
 #include <chrono>
 #include <concepts>
 #include <cstdint>
+#include <exception>
 #include <memory_resource>
 #include <optional>
 #include <span>
@@ -835,6 +836,11 @@ concept HasPreparedHttp1StreamAlternatives = requires(const T& result) {
 };
 
 template <typename T>
+concept HasRawHttp1FinalCommitError = requires(const T& failure) {
+    failure.error();
+};
+
+template <typename T>
 concept HasUncheckedPreparedHttp1StreamExtraction = requires(T&& result) {
     std::move(result).takePrepared();
 };
@@ -1413,6 +1419,19 @@ static_assert(!HasUncheckedPreparedHttp1StreamExtraction<
     ruvia::detail::PreparedHttp1ResponseStreamResult>);
 static_assert(!std::default_initializable<
     ruvia::detail::Http1FinalResponseCommitFailure>);
+static_assert(std::derived_from<
+    ruvia::detail::Http1FinalResponseCommitError,
+    std::exception>);
+static_assert(!HasRawHttp1FinalCommitError<
+    ruvia::detail::Http1FinalResponseCommitFailure>);
+static_assert(std::same_as<
+    decltype(std::declval<const ruvia::detail::
+        Http1FinalResponseCommitFailure&>().exception()),
+    ruvia::detail::Http1FinalResponseCommitError>);
+static_assert(std::is_trivially_copyable_v<
+    ruvia::detail::Http1FinalResponseCommitResult>);
+static_assert(sizeof(
+    ruvia::detail::Http1FinalResponseCommitResult) <= 8);
 static_assert(!std::default_initializable<
     ruvia::detail::Http1FinalResponseCommitResult>);
 static_assert(!std::default_initializable<
