@@ -178,6 +178,8 @@ file(READ "${RUVIA_ROOT}/ruvia-core/include/ruvia/core/WorkerHandle.h"
     core_worker_handle_contract)
 file(READ "${RUVIA_ROOT}/ruvia-core/include/ruvia/core/detail/WorkerDispatcher.h"
     core_worker_dispatcher_contract)
+file(READ "${RUVIA_ROOT}/ruvia-core/include/ruvia/core/detail/WorkerSignal.h"
+    core_worker_signal_contract)
 file(READ "${RUVIA_ROOT}/ruvia-core/include/ruvia/core/detail/RuntimeLifecycle.h"
     core_runtime_lifecycle_contract)
 file(READ "${RUVIA_ROOT}/ruvia-core/src/Runtime.cpp"
@@ -206,6 +208,17 @@ if(NOT core_runtime_lifecycle_contract MATCHES
        "testConcurrentStopHasOneInitiator")
     boundary_error("Runtime lifecycle can regress after terminal stop"
         "start, stop initiation, and stop completion must use the monotonic lifecycle contract, with concurrent stop ownership and terminal-state regression covered by tests")
+endif()
+if(NOT core_worker_signal_contract MATCHES
+       "using Target = std::variant<WorkerHandle, asio::any_io_executor>" OR
+   NOT core_worker_signal_contract MATCHES
+       "std::get_if<WorkerHandle>" OR
+   core_worker_signal_contract MATCHES
+       "WorkerHandle worker_|std::optional<asio::any_io_executor> executor_" OR
+   NOT core_runtime_test_contract MATCHES
+       "testWorkerSignalHasOneDispatchTarget")
+    boundary_error("WorkerSignal regained parallel dispatch targets"
+        "each signal must commit exactly one worker or executor target at construction; invalid workers and executor fallback must remain covered")
 endif()
 if(NOT core_channel_contract MATCHES
        "struct ChannelOpen final" OR

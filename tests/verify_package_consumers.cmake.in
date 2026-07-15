@@ -127,10 +127,13 @@ if(_built_components_csv MATCHES "(^|,)core(,|$)")
         "${_install_prefix}/include/ruvia/core/WorkerHandle.h")
     set(_installed_worker_dispatcher_path
         "${_install_prefix}/include/ruvia/core/detail/WorkerDispatcher.h")
+    set(_installed_worker_signal_path
+        "${_install_prefix}/include/ruvia/core/detail/WorkerSignal.h")
     if(NOT EXISTS "${_installed_worker_wait_awaiter_path}" OR
        NOT EXISTS "${_installed_worker_timer_path}" OR
        NOT EXISTS "${_installed_worker_handle_path}" OR
-       NOT EXISTS "${_installed_worker_dispatcher_path}")
+       NOT EXISTS "${_installed_worker_dispatcher_path}" OR
+       NOT EXISTS "${_installed_worker_signal_path}")
         message(FATAL_ERROR
             "installed core package is missing worker wait/timer contracts")
     endif()
@@ -142,6 +145,17 @@ if(_built_components_csv MATCHES "(^|,)core(,|$)")
         _installed_worker_handle)
     file(READ "${_installed_worker_dispatcher_path}"
         _installed_worker_dispatcher)
+    file(READ "${_installed_worker_signal_path}"
+        _installed_worker_signal)
+    if(NOT _installed_worker_signal MATCHES
+           "using Target = std::variant<WorkerHandle, asio::any_io_executor>" OR
+       NOT _installed_worker_signal MATCHES
+           "std::get_if<WorkerHandle>" OR
+       _installed_worker_signal MATCHES
+           "WorkerHandle worker_|std::optional<asio::any_io_executor> executor_")
+        message(FATAL_ERROR
+            "installed WorkerSignal restored parallel worker/executor targets")
+    endif()
     if(NOT _installed_worker_wait_awaiter MATCHES
            "struct WorkerWaitAwaitPreparing final" OR
        NOT _installed_worker_wait_awaiter MATCHES

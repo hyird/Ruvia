@@ -1,7 +1,13 @@
 #include <ruvia/core/Runtime.h>
+#include <ruvia/core/detail/AsioAwait.h>
 #include <ruvia/core/detail/RuntimeLifecycle.h>
 #include <ruvia/core/detail/WorkerDispatcher.h>
 #include <ruvia/core/detail/WorkerSelection.h>
+#include <ruvia/core/detail/WorkerSignal.h>
+
+#include <asio/co_spawn.hpp>
+#include <asio/detached.hpp>
+#include <asio/io_context.hpp>
 
 #include <atomic>
 #include <barrier>
@@ -13,6 +19,44 @@
 #include <vector>
 
 namespace {
+
+ruvia::Task<void> waitForSignal(
+    ruvia::detail::WorkerSignal& signal,
+    bool& resumed) {
+    co_await signal.wait();
+    resumed = true;
+}
+
+bool testWorkerSignalHasOneDispatchTarget() {
+    bool invalidWorkerRejected = false;
+    try {
+        ruvia::detail::WorkerSignal invalid(ruvia::WorkerHandle{});
+    } catch (const std::invalid_argument&) {
+        invalidWorkerRejected = true;
+    }
+
+    asio::io_context ioContext;
+    ruvia::detail::WorkerSignal executorSignal(ioContext.get_executor());
+    ruvia::detail::WorkerSignal fallbackSignal(
+        static_cast<const ruvia::WorkerHandle*>(nullptr),
+        ioContext.get_executor());
+    bool executorResumed = false;
+    bool fallbackResumed = false;
+    asio::co_spawn(
+        ioContext,
+        ruvia::detail::taskAsAwaitable(
+            waitForSignal(executorSignal, executorResumed)),
+        asio::detached);
+    asio::co_spawn(
+        ioContext,
+        ruvia::detail::taskAsAwaitable(
+            waitForSignal(fallbackSignal, fallbackResumed)),
+        asio::detached);
+    executorSignal.notify();
+    fallbackSignal.notify();
+    ioContext.run();
+    return invalidWorkerRejected && executorResumed && fallbackResumed;
+}
 
 bool testDispatchAndAffinity() {
     ruvia::Runtime runtime({.workerCount = 2, .mailboxCapacity = 4});
@@ -157,10 +201,11 @@ bool testConcurrentStopHasOneInitiator() {
 }
 
 int main() {
-    return testDispatchAndAffinity() && testBoundedMailbox() &&
-                   testFailurePropagation() && testExpiredHandle() &&
-                   testLifecycleTransitionsAreMonotonic() &&
-                   testConcurrentStopHasOneInitiator()
+    return testWorkerSignalHasOneDispatchTarget() &&
+               testDispatchAndAffinity() && testBoundedMailbox() &&
+               testFailurePropagation() && testExpiredHandle() &&
+               testLifecycleTransitionsAreMonotonic() &&
+               testConcurrentStopHasOneInitiator()
                ? 0
                : 1;
 }
