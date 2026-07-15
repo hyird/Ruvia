@@ -5878,22 +5878,31 @@ if(EXISTS "${WEB_CONTEXT_HEADER}" AND
     file(READ "${WEB_CONTEXT_HEADER}" web_context_status_header)
     file(READ "${WEB_CONTEXT_RESPONSE_SOURCE}" web_context_response_metadata)
     file(READ "${WEB_CONTEXT_INTERNAL}" web_context_internal_metadata)
+    file(READ
+        "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/http/ContextResponseState.h"
+        web_context_response_state)
     if(NOT web_context_status_header MATCHES
            "using HeaderOptions = HttpResponse::HeaderOptions" OR
        NOT web_context_status_header MATCHES
-           "HttpResponse responseMetadata_" OR
+           "ContextResponseState responseState_" OR
        NOT web_context_internal_metadata MATCHES
-           "responseMetadata_[(]memory[.]resource[(][)][)]" OR
+           "responseState_[(]memory[.]resource[(][)][)]" OR
        NOT web_context_response_metadata MATCHES
-           "responseMetadata_[.]status[(]statusCode[)]" OR
+           "responseState_[.]activeResponse[(][)][.]status[(]statusCode[)]" OR
        NOT web_context_response_metadata MATCHES
-           "responseMetadata_[.]header" OR
+           "responseState_[.]activeResponse[(][)][.]header" OR
+       NOT web_context_response_state MATCHES
+           "std::variant<ContextPendingResponse" OR
+       NOT web_context_response_state MATCHES
+           "ContextProvisionalResponse" OR
+       NOT web_context_response_state MATCHES
+           "ContextFinalResponse> value_" OR
        web_context_status_header MATCHES
-           "responseStatusCode_|responseHeaders_|responseHeaderIndexes_" OR
+           "responseMetadata_|response_[{;]|responseFinalized_|responseStatusCode_|responseHeaders_|responseHeaderIndexes_" OR
        web_context_response_metadata MATCHES
            "httpFinalStatusCodeValid|isValidHttpHeaderName|isValidHttpHeaderValue")
-        boundary_error("Context duplicated HTTP response metadata ownership"
-            "pending status, headers, indexes, and validation must remain owned by one HttpResponse")
+        boundary_error("Context response lifecycle lost its single typed owner"
+            "Pending, provisional, and final phases must share one ContextResponseState-owned HttpResponse")
     endif()
 endif()
 
@@ -11532,6 +11541,44 @@ if(NOT ws_handshake_writer_content MATCHES
        "co_return writeCompletion[.]errorCode[(][)]")
     boundary_error("WebSocket handshake writer discards transport failure identity"
         "The HTTP/1 upgrade path must preserve the concrete async write error_code")
+endif()
+
+set(WS_TRANSPORT_READ_RESULT
+    "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/websocket/WsTransportReadResult.h")
+file(READ "${WS_TRANSPORT_READ_RESULT}" ws_transport_read_result_content)
+if(NOT ws_transport_read_result_content MATCHES
+       "class WsTransportReadResult final" OR
+   NOT ws_transport_read_result_content MATCHES
+       "class WsTransportReadFailure final")
+    boundary_error("WebSocket transport reads lack exclusive outcomes"
+        "Data, orderly end, and concrete transport failure must be distinct alternatives")
+endif()
+set(ws_transport_read_consumers
+    "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/websocket/HttpWebSocketSocketTransport.h"
+    "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/http2/Http2SansIoWsTransport.h")
+foreach(ws_read_consumer IN LISTS ws_transport_read_consumers)
+    file(READ "${ws_read_consumer}" ws_read_consumer_content)
+    if(NOT ws_read_consumer_content MATCHES
+           "Task<WsTransportReadResult> readMore" OR
+       ws_read_consumer_content MATCHES "Task<bool> readMore")
+        boundary_error("WebSocket transport restored a bool read result"
+            "${ws_read_consumer} must preserve data/end/failure identity")
+    endif()
+endforeach()
+
+set(APP_LIFECYCLE_HEADER
+    "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/app/AppLifecycle.h")
+set(APP_INTERNAL_HEADER
+    "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/app/AppInternal.h")
+file(READ "${APP_LIFECYCLE_HEADER}" app_lifecycle_content)
+file(READ "${APP_INTERNAL_HEADER}" app_internal_lifecycle_content)
+if(NOT app_lifecycle_content MATCHES "enum class AppLifecycleState" OR
+   NOT app_lifecycle_content MATCHES "enum class AppStopRequest" OR
+   NOT app_internal_lifecycle_content MATCHES "AppLifecycle lifecycle" OR
+   app_internal_lifecycle_content MATCHES
+       "bool (running|startHooksRunning|stopHooksClaimed|stopRequested)")
+    boundary_error("App lifecycle is not represented by one typed state"
+        "Run, hooks, deferred stop, and stopping must transition through AppLifecycle")
 endif()
 
 get_property(boundary_failed GLOBAL PROPERTY RUVIA_BOUNDARY_FAILED)

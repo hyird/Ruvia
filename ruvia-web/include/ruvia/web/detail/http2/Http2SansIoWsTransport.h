@@ -25,6 +25,7 @@
 #include "ruvia/http/detail/PmrString.h"
 #include "ruvia/web/detail/http2/Http2SansIoSendWindow.h"
 #include "ruvia/web/detail/http2/Http2SansIoStreamRuntime.h"
+#include "ruvia/web/detail/websocket/WsTransportReadResult.h"
 
 namespace ruvia::detail {
 
@@ -53,23 +54,24 @@ public:
         return executor_;
     }
 
-    [[nodiscard]] Task<bool> readMore(std::pmr::string& buffer) {
+    [[nodiscard]] Task<WsTransportReadResult> readMore(std::pmr::string& buffer) {
         for (;;) {
             auto* stream = connection_.stream(streamId_);
             if (stream == nullptr || stream->isAborted()) {
-                co_return false;
+                co_return WsTransportReadResult::makeFailure(
+                    std::make_error_code(std::errc::connection_reset));
             }
             if (const auto chunk = bodyQueue_.pop(); !chunk.empty()) {
                 releaseCreditIfDrained();
                 buffer.append(chunk.data(), chunk.size());
-                co_return true;
+                co_return WsTransportReadResult::makeData();
             }
             if (!bodyQueue_.empty()) {
                 continue;
             }
             if (stream->remoteReceive().endStream() != nullptr ||
                 signal_.ended()) {
-                co_return false;
+                co_return WsTransportReadResult::makeEnd();
             }
             co_await signal_.wait();
         }

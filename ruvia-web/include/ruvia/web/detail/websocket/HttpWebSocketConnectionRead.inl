@@ -12,13 +12,24 @@ Task<std::optional<WebSocketMessage>> WebSocketConnection<Transport>::read() {
         co_await waitForWriteIdle();
         const auto event = protocol_.poll();
         if (!event.has_value()) {
-            if (!(co_await transport_.readMore(buffer_))) {
+            const auto readResult = co_await transport_.readMore(buffer_);
+            if (const auto* failure = readResult.failure()) {
+                transport_.abort();
+                (void)protocol_.abort();
+                throw std::system_error(
+                    failure->errorCode(),
+                    "failed to read websocket bytes");
+            }
+            if (readResult.end() != nullptr) {
                 // EOF is an abnormal WebSocket close when no peer Close was
                 // received. The core discards unsent WS output and asks the
                 // transport adapter to finish only its own direction/stream.
                 protocol_.notifyTransportEof();
                 co_await flushProtocolOutputExclusive();
                 co_return std::nullopt;
+            }
+            if (readResult.data() == nullptr) {
+                throw std::logic_error("unexpected WebSocket transport read result");
             }
             scannerEntry_.touch();
             continue;

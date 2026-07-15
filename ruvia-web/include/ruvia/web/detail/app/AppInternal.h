@@ -8,6 +8,7 @@
 
 #include "ruvia/core/memory/PmrObject.h"
 #include "ruvia/web/Router.h"
+#include "ruvia/web/detail/app/AppLifecycle.h"
 #include "ruvia/web/detail/app/AppResource.h"
 #include "ruvia/web/detail/app/DotenvInternal.h"
 #include "ruvia/core/detail/NativePath.h"
@@ -57,15 +58,7 @@ struct AppState final {
 
     mutable std::mutex mutex;
     bool autoControllersLoaded{false};
-    bool running{false};
-    bool startHooksRunning{false};
-    bool stopHooksClaimed{false};
-    // Set by stop() (including from the signal handler) so run()'s worker-start
-    // loop can observe a shutdown requested mid-startup and tear down the workers
-    // it started -- otherwise a stop() that lands before a worker is started is a
-    // no-op on that worker and run()'s join would hang. Reset under the lock at
-    // the top of run() because a completed run()/stop() cycle leaves it true.
-    bool stopRequested{false};
+    AppLifecycle lifecycle;
 };
 
 }  // namespace ruvia::detail

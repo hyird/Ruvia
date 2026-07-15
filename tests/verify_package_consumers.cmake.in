@@ -4612,6 +4612,10 @@ ruvia_verify_package_consumer(
 if("web" IN_LIST _built_components)
     set(_send_window_header
         "${_install_prefix}/include/ruvia/web/detail/http2/Http2SansIoSendWindow.h")
+    set(_ws_transport_read_header
+        "${_install_prefix}/include/ruvia/web/detail/websocket/WsTransportReadResult.h")
+    set(_app_lifecycle_header
+        "${_install_prefix}/include/ruvia/web/detail/app/AppLifecycle.h")
     if(NOT EXISTS "${_send_window_header}")
         message(FATAL_ERROR
             "installed web package is missing Http2SansIoSendWindow.h")
@@ -4627,6 +4631,31 @@ if("web" IN_LIST _built_components)
            "const Http2SendWindowAborted[*] aborted[(][)] const &")
         message(FATAL_ERROR
             "installed HTTP/2 send-window wait contract is incomplete")
+    endif()
+    if(NOT EXISTS "${_ws_transport_read_header}")
+        message(FATAL_ERROR
+            "installed web package is missing WsTransportReadResult.h")
+    endif()
+    if(NOT EXISTS "${_app_lifecycle_header}")
+        message(FATAL_ERROR
+            "installed web package is missing AppLifecycle.h")
+    endif()
+    file(READ "${_app_lifecycle_header}" _app_lifecycle_content)
+    if(NOT _app_lifecycle_content MATCHES "enum class AppLifecycleState" OR
+       NOT _app_lifecycle_content MATCHES "enum class AppStopRequest" OR
+       NOT _app_lifecycle_content MATCHES "class AppLifecycle final")
+        message(FATAL_ERROR
+            "installed App lifecycle state contract is incomplete")
+    endif()
+    file(READ "${_ws_transport_read_header}" _ws_transport_read_content)
+    if(NOT _ws_transport_read_content MATCHES
+           "class WsTransportReadResult final" OR
+       NOT _ws_transport_read_content MATCHES
+           "class WsTransportReadFailure final" OR
+       NOT _ws_transport_read_content MATCHES
+           "std::error_code errorCode[(][)] const noexcept")
+        message(FATAL_ERROR
+            "installed WebSocket transport read contract is incomplete")
     endif()
 endif()
 

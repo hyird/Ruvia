@@ -45,7 +45,7 @@ inline Context::Context(
       maxDecodedBodyBytes_(services.maxDecodedBodyBytes()),
       requestBodySource_(services.requestBodySource()),
       responseOutput_(services.responseOutput()),
-      responseMetadata_(memory.resource()) {}
+      responseState_(memory.resource()) {}
 
 }  // namespace ruvia
 
@@ -137,15 +137,7 @@ struct ContextAccess final {
     [[nodiscard]] static bool hasResponseHeader(
         const Context& context,
         std::string_view name) noexcept {
-        if (context.response_ != nullptr && !context.response_->header(name).empty()) {
-            return true;
-        }
-        for (const auto& header : context.responseMetadata_.headers()) {
-            if (header.name() == name && !header.value().empty()) {
-                return true;
-            }
-        }
-        return false;
+        return !context.responseState_.activeResponse().header(name).empty();
     }
 
     static void setError(Context& context, std::exception_ptr exception) noexcept {
@@ -179,7 +171,7 @@ struct ContextAccess final {
     [[nodiscard]] static bool hasPendingSetCookie(
         const Context& context,
         std::string_view valuePrefix) noexcept {
-        for (const auto& header : context.responseMetadata_.headers()) {
+        for (const auto& header : context.responseState_.activeResponse().headers()) {
             if (header.name() == "Set-Cookie" && header.value().starts_with(valuePrefix)) {
                 return true;
             }

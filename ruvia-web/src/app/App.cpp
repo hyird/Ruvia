@@ -129,7 +129,7 @@ void App::run() {
 
     {
         std::lock_guard lock(state.mutex);
-        detail::ensureAppNotRunning(state.running, "app is already running");
+        detail::ensureAppNotRunning(state.lifecycle.active(), "app is already running");
 
         if (!state.autoControllersLoaded) {
             detail::registerControllers(state.router, state.controllerLifetimes);
@@ -224,10 +224,9 @@ void App::run() {
         }
 
         state.runtime = std::move(runtime);
-        state.stopRequested = false;
-        state.startHooksRunning = false;
-        state.stopHooksClaimed = false;
-        state.running = true;
+        if (!state.lifecycle.beginRun()) {
+            throw std::logic_error("app lifecycle failed to begin run");
+        }
     }
 
     asio::io_context signalContext(1);
@@ -246,7 +245,7 @@ void App::run() {
         for (const auto& worker : state.runtime->workers) {
             {
                 std::lock_guard lock(state.mutex);
-                if (state.stopRequested) {
+                if (state.lifecycle.stopRequested()) {
                     break;
                 }
             }
@@ -265,7 +264,7 @@ void App::run() {
         bool shutdownRequestedDuringStartup = false;
         {
             std::lock_guard lock(state.mutex);
-            shutdownRequestedDuringStartup = state.stopRequested;
+            shutdownRequestedDuringStartup = state.lifecycle.stopRequested();
         }
         if (shutdownRequestedDuringStartup) {
             for (auto* worker : startedWorkers) {
@@ -276,10 +275,7 @@ void App::run() {
         bool runStartHooks = false;
         {
             std::lock_guard lock(state.mutex);
-            if (!state.stopRequested) {
-                state.startHooksRunning = true;
-                runStartHooks = true;
-            }
+            runStartHooks = state.lifecycle.beginStartHooks();
         }
 
         std::exception_ptr startHookFailure;
@@ -296,10 +292,9 @@ void App::run() {
         bool runDeferredStopHooks = false;
         {
             std::lock_guard lock(state.mutex);
-            state.startHooksRunning = false;
-            if (state.stopRequested && !state.stopHooksClaimed) {
-                state.stopHooksClaimed = true;
-                runDeferredStopHooks = true;
+            if (runStartHooks) {
+                runDeferredStopHooks = state.lifecycle.completeStartHooks() ==
+                    detail::AppStartHooksCompletion::kRunDeferredStopHooks;
             }
         }
         if (runDeferredStopHooks) {
@@ -322,7 +317,7 @@ void App::run() {
 
         std::lock_guard lock(state.mutex);
         state.runtime.reset();
-        state.running = false;
+        state.lifecycle.completeRun();
         throw;
     }
 
@@ -331,7 +326,7 @@ void App::run() {
 
     std::lock_guard lock(state.mutex);
     state.runtime.reset();
-    state.running = false;
+    state.lifecycle.completeRun();
 }
 void App::stop() {
     auto& state = *state_;
@@ -340,17 +335,14 @@ void App::stop() {
 
     {
         std::lock_guard lock(state.mutex);
-        if (!state.running || state.stopRequested) {
+        const auto request = state.lifecycle.requestStop();
+        if (request == detail::AppStopRequest::kIgnored) {
             return;
         }
         // Record the request durably so run()'s startup loop tears down any worker
         // it starts after this snapshot -- stop() below is a no-op on a worker that
         // is not started yet.
-        state.stopRequested = true;
-        if (!state.startHooksRunning && !state.stopHooksClaimed) {
-            state.stopHooksClaimed = true;
-            runStopHooks = true;
-        }
+        runStopHooks = request == detail::AppStopRequest::kStopWorkersAndRunHooks;
 
         if (state.runtime) {
             workers.reserve(state.runtime->workers.size());

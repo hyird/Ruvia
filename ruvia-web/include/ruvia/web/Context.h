@@ -30,6 +30,7 @@
 #include "ruvia/web/detail/ContextValues.h"
 #include "ruvia/web/detail/ValidatedValues.h"
 #include "ruvia/web/detail/http/ContextCapabilities.h"
+#include "ruvia/web/detail/http/ContextResponseState.h"
 #include "ruvia/core/memory/MemoryPool.h"
 
 #ifdef RUVIA_ENABLE_REDIS
@@ -328,7 +329,7 @@ private:
         error_ = std::move(exception);
     }
     [[nodiscard]] bool hasResponse() const noexcept {
-        return responseFinalized_;
+        return responseState_.final() != nullptr;
     }
     [[nodiscard]] HttpResponse takeResponse();
     [[nodiscard]] detail::ContextValueStore* valuesIf() noexcept {
@@ -355,7 +356,7 @@ private:
     std::size_t maxDecodedBodyBytes_{0};
     detail::ContextRequestBodySource requestBodySource_;
     detail::ContextResponseOutput responseOutput_;
-    HttpResponse responseMetadata_;
+    detail::ContextResponseState responseState_;
     // Holds the decoded request body when Content-Encoding was applied, so
     // body() can return a stable view; mutable because body() is const.
     mutable std::pmr::string* decodedBody_{nullptr};
@@ -367,12 +368,10 @@ private:
     std::pmr::string* sessionId_{nullptr};
     std::pmr::string* sessionData_{nullptr};
     detail::ContextValueStore* values_{nullptr};
-    HttpResponse* response_{nullptr};
     std::exception_ptr error_;
     mutable bool bodyDecoded_ : 1 {false};
     bool sessionDirty_ : 1 {false};
     bool sessionRegenerate_ : 1 {false};
-    bool responseFinalized_ : 1 {false};
 
     detail::ValidatedValueStore validatedValues_;
 };

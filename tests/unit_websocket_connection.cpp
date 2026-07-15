@@ -35,6 +35,7 @@ using ruvia::detail::WsTransportDisposition;
 struct RecordingTransportState final {
     bool aborted{false};
     std::size_t writes{0};
+    std::error_code readError;
     std::string lastNonEmptyBytes;
     WsTransportDisposition lastDisposition{WsTransportDisposition::kKeepOpen};
 };
@@ -48,8 +49,13 @@ public:
         return io_->get_executor();
     }
 
-    [[nodiscard]] ruvia::Task<bool> readMore(std::pmr::string&) {
-        co_return false;
+    [[nodiscard]] ruvia::Task<ruvia::detail::WsTransportReadResult> readMore(
+        std::pmr::string&) {
+        if (state_->readError) {
+            co_return ruvia::detail::WsTransportReadResult::makeFailure(
+                state_->readError);
+        }
+        co_return ruvia::detail::WsTransportReadResult::makeEnd();
     }
 
     [[nodiscard]] ruvia::Task<std::error_code> writeBytes(
@@ -115,6 +121,36 @@ asio::awaitable<std::string> readShortServerFrame(tcp::socket& socket) {
 }
 
 }  // namespace
+
+RUVIA_TEST(websocket_transport_read_failure_preserves_error_and_aborts) {
+    asio::io_context io;
+    RecordingTransportState state;
+    state.readError = std::make_error_code(std::errc::connection_reset);
+    ConnectionScanner::Entry scannerEntry;
+    ruvia::WorkerMemory memory;
+    WebSocketConnection<RecordingTransport> connection(
+        RecordingTransport(io, state),
+        scannerEntry,
+        {},
+        ruvia::ProtocolByteLimit::limited(1024),
+        memory.resource());
+    std::error_code observed;
+
+    asio::co_spawn(
+        io,
+        [&]() -> asio::awaitable<void> {
+            try {
+                (void)co_await ruvia::detail::taskAsAwaitable(connection.read());
+            } catch (const std::system_error& error) {
+                observed = error.code();
+            }
+        },
+        asio::detached);
+    io.run();
+
+    RUVIA_CHECK_EQ(observed, state.readError);
+    RUVIA_CHECK(state.aborted);
+}
 
 RUVIA_TEST(websocket_session_finish_maps_chain_failure_to_1011) {
     asio::io_context io;

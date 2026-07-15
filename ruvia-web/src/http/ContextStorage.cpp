@@ -37,15 +37,12 @@ detail::ContextValueStore& Context::values() {
 }
 
 HttpResponse& Context::responseStorage() {
-    if (response_ == nullptr) {
-        response_ = &memory_.emplace<HttpResponse>(resource());
-        applyResponseState(*response_, std::nullopt);
-    }
-    return *response_;
+    return responseState_.materializeProvisional();
 }
 
 const HttpResponse* Context::response() const noexcept {
-    return responseFinalized_ ? response_ : nullptr;
+    const auto* final = responseState_.final();
+    return final == nullptr ? nullptr : &final->response();
 }
 
 void Context::respond(HttpResponse&& response) {
@@ -53,14 +50,7 @@ void Context::respond(HttpResponse&& response) {
 }
 
 HttpResponse Context::takeResponse() {
-    if (response_ == nullptr) {
-        return HttpResponse(resource());
-    }
-
-    auto response = std::move(*response_);
-    response_ = nullptr;
-    responseFinalized_ = false;
-    return response;
+    return responseState_.take();
 }
 
 }  // namespace ruvia

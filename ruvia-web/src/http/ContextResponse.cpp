@@ -26,19 +26,6 @@ namespace {
         : std::string_view(reinterpret_cast<const char*>(body.data()), body.size());
 }
 
-[[nodiscard]] bool responseHasHeaderValue(
-    const HttpResponse& response,
-    std::string_view name,
-    std::string_view value) noexcept {
-    for (const auto& header : response.headers()) {
-        if (detail::httpAsciiEqualsIgnoreCase(header.name(), name) &&
-            header.value() == value) {
-            return true;
-        }
-    }
-    return false;
-}
-
 [[nodiscard]] bool responseHasHeaderName(
     const HttpResponse& response,
     std::string_view name) noexcept {
@@ -50,17 +37,51 @@ namespace {
     return false;
 }
 
-void mergeResponseSlotHeaders(HttpResponse& response, const HttpResponse& slot) {
-    const auto slotHeaderCount = slot.headers().size();
-    if (slotHeaderCount > 0) {
-        detail::reserveResponseHeaders(response, response.headers().size() + slotHeaderCount);
+[[nodiscard]] std::size_t responseHeaderValueCount(
+    const HttpResponse& response,
+    std::string_view name,
+    std::string_view value) noexcept {
+    std::size_t count = 0;
+    for (const auto& header : response.headers()) {
+        if (detail::httpAsciiEqualsIgnoreCase(header.name(), name) &&
+            header.value() == value) {
+            ++count;
+        }
     }
-    for (const auto& header : slot.headers()) {
+    return count;
+}
+
+[[nodiscard]] std::size_t headerOccurrenceThrough(
+    const HttpResponse& source,
+    const HttpResponseHeader& target) noexcept {
+    std::size_t count = 0;
+    for (const auto& candidate : source.headers()) {
+        if (detail::httpAsciiEqualsIgnoreCase(candidate.name(), target.name()) &&
+            candidate.value() == target.value()) {
+            ++count;
+        }
+        if (&candidate == &target) {
+            break;
+        }
+    }
+    return count;
+}
+
+// A Context-built response already contains the active state. A raw response
+// does not. Merge by occurrence count so both paths converge without treating
+// repeated equal append fields as a set.
+void mergeActiveResponseHeaders(HttpResponse& response, const HttpResponse& active) {
+    const auto activeHeaderCount = active.headers().size();
+    if (activeHeaderCount > 0) {
+        detail::reserveResponseHeaders(response, response.headers().size() + activeHeaderCount);
+    }
+    for (const auto& header : active.headers()) {
         const auto knownBit = detail::responseHeaderKnownBit(header);
         const auto name = header.name();
         const auto value = header.value();
         if (knownBit == detail::kResponseHeaderSetCookie || detail::responseHeaderAppend(header)) {
-            if (!responseHasHeaderValue(response, name, value)) {
+            if (responseHeaderValueCount(response, name, value) <
+                headerOccurrenceThrough(active, header)) {
                 detail::appendResponseHeaderValidated(response, name, value, knownBit);
             }
         } else if (!responseHasHeaderName(response, name)) {
@@ -69,14 +90,14 @@ void mergeResponseSlotHeaders(HttpResponse& response, const HttpResponse& slot) 
     }
 }
 
-void assignResponseSlotHeaders(HttpResponse& response, const HttpResponse& slot) {
-    const auto slotHeaderCount = slot.headers().size();
-    if (slotHeaderCount > 0) {
-        detail::reserveResponseHeaders(response, response.headers().size() + slotHeaderCount);
+void assignActiveResponseHeaders(HttpResponse& response, const HttpResponse& active) {
+    const auto activeHeaderCount = active.headers().size();
+    if (activeHeaderCount > 0) {
+        detail::reserveResponseHeaders(response, response.headers().size() + activeHeaderCount);
     }
 
-    bool removedAssignedSetCookie = false;
-    for (const auto& header : slot.headers()) {
+    bool replacedSetCookie = false;
+    for (const auto& header : active.headers()) {
         const auto knownBit = detail::responseHeaderKnownBit(header);
         if (knownBit == detail::kResponseHeaderContentType) {
             continue;
@@ -84,13 +105,16 @@ void assignResponseSlotHeaders(HttpResponse& response, const HttpResponse& slot)
         const auto name = header.name();
         const auto value = header.value();
         if (knownBit == detail::kResponseHeaderSetCookie) {
-            if (!removedAssignedSetCookie) {
+            if (!replacedSetCookie) {
                 response.header("Set-Cookie", std::nullopt);
-                removedAssignedSetCookie = true;
+                replacedSetCookie = true;
             }
             detail::appendResponseHeaderValidated(response, name, value, knownBit);
         } else if (detail::responseHeaderAppend(header)) {
-            detail::appendResponseHeaderValidated(response, name, value, knownBit);
+            if (responseHeaderValueCount(response, name, value) <
+                headerOccurrenceThrough(active, header)) {
+                detail::appendResponseHeaderValidated(response, name, value, knownBit);
+            }
         } else {
             detail::setResponseHeaderValidated(response, name, value, knownBit);
         }
@@ -182,35 +206,19 @@ void appendPercentEncodedByte(std::pmr::string& output, unsigned char ch) {
 }  // namespace
 
 void Context::status(std::uint16_t statusCode) {
-    responseMetadata_.status(statusCode);
-    if (response_ != nullptr) {
-        response_->status(statusCode);
-    }
+    responseState_.activeResponse().status(statusCode);
 }
 
 Context& Context::removeResponseHeader(std::string_view name) {
-    responseMetadata_.header(name, std::nullopt);
-    if (response_ != nullptr) {
-        responseStorage().header(name, std::nullopt);
-    }
+    responseState_.activeResponse().header(name, std::nullopt);
     return *this;
 }
 
 void Context::header(std::string_view name, std::string_view value, HeaderOptions options) {
-    responseMetadata_.header(
+    responseState_.activeResponse().header(
         name,
         value,
         HttpResponse::HeaderOptions{.append = options.append});
-    const auto knownBit = detail::classifyResponseKnownHeader(name);
-    if (options.append) {
-        if (response_ != nullptr) {
-            detail::appendResponseHeaderValidated(responseStorage(), name, value, knownBit);
-        }
-        return;
-    }
-    if (response_ != nullptr) {
-        detail::setResponseHeaderValidated(responseStorage(), name, value, knownBit);
-    }
 }
 
 void Context::header(std::string_view name, std::nullopt_t) {
@@ -258,18 +266,11 @@ namespace {
 void Context::setCookie(std::string_view name, std::string_view value, const CookieOptions& options) {
     const detail::SetCookiePlan plan(name, value, options);
     auto& header = detail::appendResponseHeaderUninitializedValue(
-        responseMetadata_,
+        responseState_.activeResponse(),
         "Set-Cookie",
         plan.size(),
         detail::kResponseHeaderSetCookie);
     plan.write(detail::responseHeaderValueBegin(header));
-    if (response_ != nullptr) {
-        detail::appendResponseHeaderValidated(
-            responseStorage(),
-            "Set-Cookie",
-            header.value(),
-            detail::kResponseHeaderSetCookie);
-    }
 }
 
 void Context::setSignedCookie(
@@ -294,47 +295,21 @@ void Context::deleteCookie(std::string_view name, CookieOptions options) {
 }
 
 void Context::storeResponse(HttpResponse&& response) {
-    const bool hadResponseSlot = response_ != nullptr;
-    if (hadResponseSlot && response_ != &response) {
-        mergeResponseSlotHeaders(response, *response_);
+    if (&response == &responseState_.activeResponse()) {
+        responseState_.finalizeActive();
+        return;
     }
-
-    if (!hadResponseSlot) {
-        const auto contextHeaderCount = responseMetadata_.headers().size();
-        if (contextHeaderCount > 0) {
-            detail::reserveResponseHeaders(response, response.headers().size() + contextHeaderCount);
-        }
-        const auto& headers = responseMetadata_.headers();
-        for (const auto& header : headers) {
-            const auto knownBit = detail::responseHeaderKnownBit(header);
-            const auto name = header.name();
-            const auto value = header.value();
-            if (knownBit == detail::kResponseHeaderSetCookie || detail::responseHeaderAppend(header)) {
-                if (!responseHasHeaderValue(response, name, value)) {
-                    detail::appendResponseHeaderValidated(response, name, value, knownBit);
-                }
-            } else if (!responseHasHeaderName(response, name)) {
-                detail::setResponseHeaderValidated(response, name, value, knownBit);
-            }
-        }
-    }
-
-    responseStorage() = std::move(response);
-    responseFinalized_ = true;
+    mergeActiveResponseHeaders(response, responseState_.activeResponse());
+    responseState_.finalize(std::move(response));
 }
 
 void Context::storeAssignedResponse(HttpResponse&& response) {
-    const bool hadResponseSlot = response_ != nullptr;
-    if (hadResponseSlot && response_ != &response) {
-        assignResponseSlotHeaders(response, *response_);
+    if (&response == &responseState_.activeResponse()) {
+        responseState_.finalizeActive();
+        return;
     }
-
-    if (response_ == nullptr) {
-        response_ = &memory_.emplace<HttpResponse>(std::move(response));
-    } else {
-        *response_ = std::move(response);
-    }
-    responseFinalized_ = true;
+    assignActiveResponseHeaders(response, responseState_.activeResponse());
+    responseState_.finalize(std::move(response));
 }
 
 HttpResponse Context::body(std::string_view body) const {
@@ -475,32 +450,26 @@ HttpResponse Context::streamingHead(std::string_view contentType) const {
 }
 
 Context& Context::setStableResponseHeader(std::string_view name, std::string_view value) {
-    detail::setResponseHeaderStableView(responseMetadata_, name, value);
+    detail::setResponseHeaderStableView(responseState_.activeResponse(), name, value);
     return *this;
 }
 
 void Context::applyResponseState(
     HttpResponse& response,
     std::optional<std::uint16_t> statusCode) const {
-    const auto finalStatusCode = statusCode.value_or(responseMetadata_.status());
+    const auto& activeResponse = responseState_.activeResponse();
+    const auto finalStatusCode = statusCode.value_or(activeResponse.status());
     response.status(finalStatusCode);
-    if (response_ != nullptr && response_ != &response) {
-        mergeResponseSlotHeaders(response, *response_);
-    }
-    const auto contextHeaderCount = responseMetadata_.headers().size();
+    const auto contextHeaderCount = activeResponse.headers().size();
     if (contextHeaderCount > 0) {
         detail::reserveResponseHeaders(response, response.headers().size() + contextHeaderCount);
     }
-    for (const auto& header : responseMetadata_.headers()) {
+    for (const auto& header : activeResponse.headers()) {
         const auto knownBit = detail::responseHeaderKnownBit(header);
         const auto name = header.name();
         const auto value = header.value();
         if (knownBit == detail::kResponseHeaderSetCookie || detail::responseHeaderAppend(header)) {
-            // Appended headers live in both the context list and a materialized
-            // response slot; the slot merge above may have carried them already.
-            if (!responseHasHeaderValue(response, name, value)) {
-                detail::appendResponseHeaderValidated(response, name, value, knownBit);
-            }
+            detail::appendResponseHeaderValidated(response, name, value, knownBit);
         } else {
             detail::setResponseHeaderValidated(response, name, value, knownBit);
         }

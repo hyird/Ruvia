@@ -31,23 +31,84 @@ void check(bool condition) {
     return parsed.request;
 }
 
-// A header appended while a response slot exists is stored in both the slot
-// and the context header list; response builders must emit it exactly once.
-void exerciseAppendHeaderNotDuplicated(ruvia::RequestMemory& memory, const ruvia::HttpRequest& request) {
+void exerciseTypedResponsePhases(ruvia::RequestMemory& memory) {
+    ruvia::detail::ContextResponseState state(memory.resource());
+    check(state.pending() != nullptr);
+    check(state.provisional() == nullptr);
+    check(state.final() == nullptr);
+
+    state.materializeProvisional().status(202);
+    check(state.pending() == nullptr);
+    check(state.provisional() != nullptr);
+    state.finalize(ruvia::HttpResponse(memory.resource()));
+    check(state.provisional() == nullptr);
+    check(state.final() != nullptr);
+    (void)state.take();
+    check(state.pending() != nullptr);
+}
+
+// Append is a wire operation, not set membership: equal fields retain their
+// multiplicity even after provisional storage has been materialized.
+void exerciseAppendHeaderMultiplicity(ruvia::RequestMemory& memory, const ruvia::HttpRequest& request) {
     auto context = ruvia::detail::ContextAccess::make(memory, request);
     (void)ruvia::detail::ContextAccess::responseStorage(context);
     check(context.response() == nullptr);
     context.header("X-Trace", "abc", ruvia::Context::HeaderOptions{.append = true});
+    context.header("X-Trace", "abc", ruvia::Context::HeaderOptions{.append = true});
     auto response = context.text("hi");
-    check(countHeaders(response, "X-Trace") == 1);
+    check(countHeaders(response, "X-Trace") == 2);
+    ruvia::detail::ContextAccess::setResponse(context, std::move(response));
+    auto finalResponse = ruvia::detail::ContextAccess::takeResponse(context);
+    check(countHeaders(finalResponse, "X-Trace") == 2);
 }
 
-void exerciseSetCookieNotDuplicated(ruvia::RequestMemory& memory, const ruvia::HttpRequest& request) {
+void exerciseSetCookieMultiplicity(ruvia::RequestMemory& memory, const ruvia::HttpRequest& request) {
     auto context = ruvia::detail::ContextAccess::make(memory, request);
     (void)ruvia::detail::ContextAccess::responseStorage(context);
     context.setCookie("session", "id", ruvia::CookieOptions{});
+    context.setCookie("session", "id", ruvia::CookieOptions{});
     auto response = context.text("hi");
-    check(countHeaders(response, "Set-Cookie") == 1);
+    check(countHeaders(response, "Set-Cookie") == 2);
+    ruvia::detail::ContextAccess::setResponse(context, std::move(response));
+    auto finalResponse = ruvia::detail::ContextAccess::takeResponse(context);
+    check(countHeaders(finalResponse, "Set-Cookie") == 2);
+}
+
+void exercisePendingStateMergesIntoRawResponse(
+    ruvia::RequestMemory& memory,
+    const ruvia::HttpRequest& request) {
+    auto context = ruvia::detail::ContextAccess::make(memory, request);
+    context.status(404);
+    context.header("X-Pending", "yes");
+    ruvia::detail::ContextAccess::setResponse(
+        context,
+        ruvia::HttpResponse(context.resource()));
+    auto response = ruvia::detail::ContextAccess::takeResponse(context);
+    // A raw response owns its status, while pending headers still decorate it.
+    check(response.status() == 200);
+    check(response.header("X-Pending") == "yes");
+}
+
+void exerciseProvisionalStateMergesIntoAssignedResponse(
+    ruvia::RequestMemory& memory,
+    const ruvia::HttpRequest& request) {
+    auto context = ruvia::detail::ContextAccess::make(memory, request);
+    auto& provisional = ruvia::detail::ContextAccess::responseStorage(context);
+    provisional.header("X-Middleware", "yes");
+    context.respond(ruvia::HttpResponse(context.resource()));
+    const auto* response = context.response();
+    check(response != nullptr && response->header("X-Middleware") == "yes");
+}
+
+void exerciseActiveStorageCanFinalizeInPlace(
+    ruvia::RequestMemory& memory,
+    const ruvia::HttpRequest& request) {
+    auto context = ruvia::detail::ContextAccess::make(memory, request);
+    auto& provisional = ruvia::detail::ContextAccess::responseStorage(context);
+    provisional.header("X-In-Place", "yes");
+    ruvia::detail::ContextAccess::setResponse(context, std::move(provisional));
+    const auto* response = context.response();
+    check(response != nullptr && response->header("X-In-Place") == "yes");
 }
 
 void exerciseContextStatusOnReturn(ruvia::RequestMemory& memory, const ruvia::HttpRequest& request) {
@@ -105,8 +166,12 @@ int main() {
     ruvia::RequestMemory memory(worker);
     auto request = makeRequest();
 
-    exerciseAppendHeaderNotDuplicated(memory, request);
-    exerciseSetCookieNotDuplicated(memory, request);
+    exerciseTypedResponsePhases(memory);
+    exerciseAppendHeaderMultiplicity(memory, request);
+    exerciseSetCookieMultiplicity(memory, request);
+    exercisePendingStateMergesIntoRawResponse(memory, request);
+    exerciseProvisionalStateMergesIntoAssignedResponse(memory, request);
+    exerciseActiveStorageCanFinalizeInPlace(memory, request);
     exerciseContextStatusOnReturn(memory, request);
     exerciseContextStatusOnAssign(memory, request);
     exerciseRedirectLocationWins(memory, request);

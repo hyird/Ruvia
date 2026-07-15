@@ -25,7 +25,7 @@ public:
         return stream_.get_executor();
     }
 
-    [[nodiscard]] Task<bool> readMore(std::pmr::string& buffer) {
+    [[nodiscard]] Task<WsTransportReadResult> readMore(std::pmr::string& buffer) {
         const auto oldSize = buffer.size();
         resizePmrStringForOverwrite(buffer, oldSize + 4096);
         auto readCompletion = co_await asyncAsio<std::size_t>(
@@ -36,12 +36,16 @@ public:
             });
         const auto ec = readCompletion.errorCode();
         const auto bytesRead = readCompletion.result();
-        if (ec || bytesRead == 0) {
+        if (ec) {
             buffer.resize(oldSize);
-            co_return false;
+            co_return WsTransportReadResult::makeFailure(ec);
+        }
+        if (bytesRead == 0) {
+            buffer.resize(oldSize);
+            co_return WsTransportReadResult::makeEnd();
         }
         buffer.resize(oldSize + bytesRead);
-        co_return true;
+        co_return WsTransportReadResult::makeData();
     }
 
     [[nodiscard]] Task<std::error_code> writeBytes(

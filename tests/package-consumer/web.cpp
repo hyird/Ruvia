@@ -33,12 +33,14 @@
 #include <ruvia/web/ValidationTypes.h>
 #include <ruvia/web/WebSocket.h>
 #include <ruvia/web/detail/ContextValues.h>
+#include <ruvia/web/detail/app/AppLifecycle.h>
 #include <ruvia/web/detail/StaticFilesInternal.h>
 #include <ruvia/web/detail/ValidatedValues.h>
 #include <ruvia/web/detail/http/ContextCapabilities.h>
 #include <ruvia/web/detail/http/ContextServices.h>
 #include <ruvia/web/detail/http2/Http2SansIoStreamRuntime.h>
 #include <ruvia/web/detail/http2/Http2SansIoSendWindow.h>
+#include <ruvia/web/detail/websocket/WsTransportReadResult.h>
 #include <ruvia/web/detail/json/JsonString.h>
 #include <ruvia/web/detail/model/Parser.h>
 #include <ruvia/web/detail/router/RouteTable.h>
@@ -91,6 +93,13 @@ static_assert(std::same_as<
         HttpServerWorkerCompletion&>().workerFailure()),
     std::exception_ptr>);
 static_assert(!std::is_copy_assignable_v<ruvia::MultipartReader>);
+static_assert(std::same_as<
+    decltype(std::declval<ruvia::detail::AppLifecycle&>().requestStop()),
+    ruvia::detail::AppStopRequest>);
+static_assert(std::same_as<
+    decltype(std::declval<ruvia::detail::AppLifecycle&>()
+                 .completeStartHooks()),
+    ruvia::detail::AppStartHooksCompletion>);
 
 template <typename Result>
 concept ExposesRvalueSendWindowAlternative = requires(Result result) {
@@ -110,6 +119,22 @@ static_assert(std::same_as<
     const ruvia::detail::Http2SendWindowAborted*>);
 static_assert(!ExposesRvalueSendWindowAlternative<
     ruvia::detail::Http2SendWindowWaitResult>);
+
+template <typename Result>
+concept ExposesRvalueWsTransportReadAlternative = requires(Result result) {
+    std::move(result).data();
+    std::move(result).end();
+    std::move(result).failure();
+};
+
+static_assert(!std::default_initializable<
+    ruvia::detail::WsTransportReadResult>);
+static_assert(std::same_as<
+    decltype(std::declval<const ruvia::detail::WsTransportReadResult&>()
+                 .failure()),
+    const ruvia::detail::WsTransportReadFailure*>);
+static_assert(!ExposesRvalueWsTransportReadAlternative<
+    ruvia::detail::WsTransportReadResult>);
 
 template <typename Decision>
 concept ExposesRvalueRateLimitAlternative = requires(Decision decision) {
