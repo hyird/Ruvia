@@ -439,6 +439,50 @@ RUVIA_TEST(multipart_part_header_result_is_discriminated) {
     }
 }
 
+RUVIA_TEST(multipart_part_header_rejects_ambiguous_disposition_parameters) {
+    using ruvia::detail::httpParseMultipartPartHeaders;
+
+    for (const std::string_view invalid : {
+             "Content-Disposition: form-data; name=\"unterminated",
+             "Content-Disposition: form-data; name=unquoted value",
+             "Content-Disposition: form-data; name=field; name=shadow",
+             "Content-Disposition: form-data; name=field; filename=a; filename=b",
+             "Content-Disposition: form-data; name=field; broken",
+             "Content-Disposition: form-data; name=field\r\n"
+             "Content-Disposition: form-data; name=shadow"}) {
+        const auto parsed = httpParseMultipartPartHeaders(invalid);
+        RUVIA_CHECK(parsed.failure() != nullptr);
+        if (parsed.failure() != nullptr) {
+            RUVIA_CHECK(
+                parsed.failure()->parseError() ==
+                ruvia::MultipartParseError::kInvalidContentDisposition);
+        }
+
+        std::string body = "--BOUNDARY\r\n";
+        body.append(invalid);
+        body.append("\r\n\r\nvalue\r\n--BOUNDARY--\r\n");
+        const auto complete = ruvia::parseMultipartBody(
+            body,
+            ruvia::MultipartBoundary("BOUNDARY"),
+            std::pmr::get_default_resource());
+        RUVIA_CHECK(complete.failure() != nullptr);
+        if (complete.failure() != nullptr) {
+            RUVIA_CHECK_EQ(complete.failure()->protocolError().status(), 400);
+            RUVIA_CHECK_EQ(
+                std::string_view(complete.failure()->protocolError().what()),
+                std::string_view("invalid multipart content disposition"));
+        }
+    }
+
+    const auto escaped = httpParseMultipartPartHeaders(
+        "Content-Disposition: form-data; name=\"a\\\"b\"; filename=\"x\\\\y\"");
+    RUVIA_CHECK(escaped.headers() != nullptr);
+    if (escaped.headers() != nullptr) {
+        RUVIA_CHECK_EQ(escaped.headers()->name(), std::string_view("a\\\"b"));
+        RUVIA_CHECK_EQ(escaped.headers()->filename(), std::string_view("x\\\\y"));
+    }
+}
+
 RUVIA_TEST(multipart_part_header_names_are_case_insensitive) {
     using ruvia::detail::httpParseMultipartPartHeaders;
 

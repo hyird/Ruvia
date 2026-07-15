@@ -557,6 +557,40 @@ private:
     }
 }
 
+[[nodiscard]] inline bool httpValidMultipartDispositionParameterValue(
+    std::string_view value) noexcept {
+    if (value.empty()) {
+        return false;
+    }
+    if (value.front() != '"') {
+        return std::all_of(value.begin(), value.end(), httpMimeTokenChar);
+    }
+    if (value.size() < 2 || value.back() != '"') {
+        return false;
+    }
+
+    const auto last = value.size() - 1;
+    for (std::size_t index = 1; index < last; ++index) {
+        const auto byte = static_cast<unsigned char>(value[index]);
+        if (value[index] == '\\') {
+            if (++index >= last) {
+                return false;
+            }
+            const auto escaped = static_cast<unsigned char>(value[index]);
+            if (escaped == 0 || escaped == '\r' || escaped == '\n' ||
+                escaped == 0x7F) {
+                return false;
+            }
+            continue;
+        }
+        if (value[index] == '"' || byte == 0 || byte == '\r' ||
+            byte == '\n' || byte == 0x7F || (byte < 0x20 && byte != '\t')) {
+            return false;
+        }
+    }
+    return true;
+}
+
 [[nodiscard]] inline std::optional<MultipartBoundary>
 httpDecodeMultipartBoundaryParameter(std::string_view parameter) {
     std::array<char, 70> decoded{};
@@ -637,20 +671,92 @@ httpDecodeMultipartBoundaryParameter(std::string_view parameter) {
 
 [[nodiscard]] inline HttpMultipartPartHeaderParseResult
 httpParseMultipartPartHeaders(std::string_view headers) noexcept {
-    const auto disposition = httpHeaderValueInBlock(headers, "Content-Disposition");
+    std::optional<std::string_view> disposition;
+    std::optional<std::string_view> contentType;
+    auto remainingHeaders = headers;
+    while (!remainingHeaders.empty()) {
+        const auto lineEnd = remainingHeaders.find("\r\n");
+        const auto line = lineEnd == std::string_view::npos
+            ? remainingHeaders
+            : remainingHeaders.substr(0, lineEnd);
+        const auto colon = line.find(':');
+        if (colon != std::string_view::npos) {
+            const auto key = httpTrimOws(line.substr(0, colon));
+            const auto value = httpTrimOws(line.substr(colon + 1));
+            if (httpAsciiEqualsIgnoreCase(key, "Content-Disposition")) {
+                if (disposition) {
+                    return HttpMultipartPartHeaderParseResult::makeFailure(
+                        MultipartParseError::kInvalidContentDisposition);
+                }
+                disposition = value;
+            } else if (httpAsciiEqualsIgnoreCase(key, "Content-Type")) {
+                contentType = value;
+            }
+        }
+        if (lineEnd == std::string_view::npos) {
+            break;
+        }
+        remainingHeaders.remove_prefix(lineEnd + 2);
+    }
+
     if (!disposition || !httpIsFormDataDisposition(*disposition)) {
         return HttpMultipartPartHeaderParseResult::makeFailure(
             MultipartParseError::kInvalidContentDisposition);
     }
 
-    const auto name = httpDispositionParameter(*disposition, "name");
+    const auto parameters = disposition->find(';');
+    if (parameters == std::string_view::npos) {
+        return HttpMultipartPartHeaderParseResult::makeFailure(
+            MultipartParseError::kMissingFieldName);
+    }
+
+    std::optional<std::string_view> name;
+    std::optional<std::string_view> filename;
+    auto remaining = disposition->substr(parameters + 1);
+    std::size_t start = 0;
+    while (start <= remaining.size()) {
+        const auto end = httpFindUnquotedDelimiter(remaining, start, ';');
+        const auto parameter = httpTrimOws(remaining.substr(start, end - start));
+        const auto equals = parameter.find('=');
+        if (parameter.empty() || equals == std::string_view::npos) {
+            return HttpMultipartPartHeaderParseResult::makeFailure(
+                MultipartParseError::kInvalidContentDisposition);
+        }
+        const auto key = httpTrimOws(parameter.substr(0, equals));
+        const auto value = httpTrimOws(parameter.substr(equals + 1));
+        if (key.empty() ||
+            !std::all_of(key.begin(), key.end(), httpMimeTokenChar) ||
+            !httpValidMultipartDispositionParameterValue(value)) {
+            return HttpMultipartPartHeaderParseResult::makeFailure(
+                MultipartParseError::kInvalidContentDisposition);
+        }
+
+        const auto decoded = httpTrimQuotes(value);
+        if (httpAsciiEqualsIgnoreCase(key, "name")) {
+            if (name) {
+                return HttpMultipartPartHeaderParseResult::makeFailure(
+                    MultipartParseError::kInvalidContentDisposition);
+            }
+            name = decoded;
+        } else if (httpAsciiEqualsIgnoreCase(key, "filename")) {
+            if (filename) {
+                return HttpMultipartPartHeaderParseResult::makeFailure(
+                    MultipartParseError::kInvalidContentDisposition);
+            }
+            filename = decoded;
+        }
+
+        if (end >= remaining.size()) {
+            break;
+        }
+        start = end + 1;
+    }
+
     if (!name) {
         return HttpMultipartPartHeaderParseResult::makeFailure(
             MultipartParseError::kMissingFieldName);
     }
 
-    const auto filename = httpDispositionParameter(*disposition, "filename");
-    const auto contentType = httpHeaderValueInBlock(headers, "Content-Type");
     return HttpMultipartPartHeaderParseResult::makeHeaders(
         *name,
         filename.value_or(std::string_view{}),
