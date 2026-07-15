@@ -96,6 +96,18 @@ RUVIA_TEST(response_coding_selection_end_to_end) {
     splitLines.update("gzip;q=0.1, *;q=0.2");
     RUVIA_CHECK_EQ(splitLines.gzip.explicitQuality, 900);
     RUVIA_CHECK_EQ(splitLines.brotli.wildcardQuality, 800);
+    // Accept-Encoding allows only an optional weight after a coding. Unknown
+    // parameters and whitespace around q's '=' make the item invalid; they must
+    // not inherit the default q=1 and outrank identity.
+    RUVIA_CHECK(httpSelectResponseCoding(
+        "identity;q=0.5, gzip;level=9") == HttpContentCoding::kIdentity);
+    RUVIA_CHECK(httpSelectResponseCoding(
+        "identity;q=0.5, gzip;q =1") == HttpContentCoding::kIdentity);
+    RUVIA_CHECK(httpSelectResponseCoding(
+        "identity;q=0.5, gzip;q= 1") == HttpContentCoding::kIdentity);
+    // OWS around the weight delimiter itself is explicitly allowed.
+    RUVIA_CHECK(httpSelectResponseCoding(
+        "identity;q=0.5, gzip \t; \tq=0.8") == HttpContentCoding::kGzip);
     // No acceptable coding.
     RUVIA_CHECK(httpSelectResponseCoding("identity") == HttpContentCoding::kIdentity);
     RUVIA_CHECK(httpSelectResponseCoding("") == HttpContentCoding::kIdentity);

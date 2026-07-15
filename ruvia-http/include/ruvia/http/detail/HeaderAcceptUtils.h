@@ -74,6 +74,31 @@ enum class HttpContentCoding : std::uint8_t {
     return httpTrimOws(semicolon == std::string_view::npos ? value : value.substr(0, semicolon));
 }
 
+// Accept-Encoding uses `codings [ weight ]`, not the arbitrary parameter list
+// accepted by media ranges. Validate that optional weight without normalizing
+// whitespace around '='; malformed items are explicitly unacceptable.
+[[nodiscard]] inline int httpEncodingQualityParameter(std::string_view value) noexcept {
+    const auto semicolon = value.find(';');
+    if (semicolon == std::string_view::npos) {
+        return 1000;
+    }
+    auto weight = value.substr(semicolon + 1);
+    while (!weight.empty() && (weight.front() == ' ' || weight.front() == '\t')) {
+        weight.remove_prefix(1);
+    }
+    if (weight.size() < 3 ||
+        httpAsciiToLower(static_cast<unsigned char>(weight[0])) != 'q' ||
+        weight[1] != '=') {
+        return 0;
+    }
+    const auto qvalue = weight.substr(2);
+    if (qvalue != httpTrimOws(qvalue)) {
+        return 0;
+    }
+    const auto parsed = httpParseQualityValue(qvalue);
+    return parsed < 0 ? 0 : parsed;
+}
+
 inline void httpAccumulateAcceptedQuality(int candidate, int& accumulated) noexcept {
     if (candidate > accumulated) {
         accumulated = candidate;
@@ -91,10 +116,10 @@ inline void httpUpdateAcceptedEncodingQuality(
             const auto token = httpHeaderTokenBeforeParameters(item);
             if (httpAsciiEqualsIgnoreCase(token, coding)) {
                 httpAccumulateAcceptedQuality(
-                    httpQualityParameter(item), explicitQuality);
+                    httpEncodingQualityParameter(item), explicitQuality);
             } else if (token == "*") {
                 httpAccumulateAcceptedQuality(
-                    httpQualityParameter(item), wildcardQuality);
+                    httpEncodingQualityParameter(item), wildcardQuality);
             }
             return true;
         });
@@ -143,18 +168,18 @@ struct HttpResponseCodingQualities final {
                 const auto token = httpHeaderTokenBeforeParameters(item);
                 if (httpAsciiEqualsIgnoreCase(token, "gzip")) {
                     httpAccumulateAcceptedQuality(
-                        httpQualityParameter(item), gzip.explicitQuality);
+                        httpEncodingQualityParameter(item), gzip.explicitQuality);
                 } else if (httpAsciiEqualsIgnoreCase(token, "br")) {
                     httpAccumulateAcceptedQuality(
-                        httpQualityParameter(item), brotli.explicitQuality);
+                        httpEncodingQualityParameter(item), brotli.explicitQuality);
                 } else if (httpAsciiEqualsIgnoreCase(token, "zstd")) {
                     httpAccumulateAcceptedQuality(
-                        httpQualityParameter(item), zstd.explicitQuality);
+                        httpEncodingQualityParameter(item), zstd.explicitQuality);
                 } else if (httpAsciiEqualsIgnoreCase(token, "identity")) {
                     httpAccumulateAcceptedQuality(
-                        httpQualityParameter(item), identity.explicitQuality);
+                        httpEncodingQualityParameter(item), identity.explicitQuality);
                 } else if (token == "*") {
-                    const auto wildcard = httpQualityParameter(item);
+                    const auto wildcard = httpEncodingQualityParameter(item);
                     httpAccumulateAcceptedQuality(wildcard, gzip.wildcardQuality);
                     httpAccumulateAcceptedQuality(wildcard, brotli.wildcardQuality);
                     httpAccumulateAcceptedQuality(wildcard, zstd.wildcardQuality);
