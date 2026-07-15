@@ -2164,6 +2164,10 @@ foreach(_stale_http2_runtime_header IN ITEMS
 endforeach()
 set(_installed_http2_web_runtime_path
     "${_install_prefix}/include/ruvia/web/detail/http2/Http2SansIoStreamRuntime.h")
+set(_installed_rate_limiter_path
+    "${_install_prefix}/include/ruvia/web/detail/server/RateLimiter.h")
+set(_installed_rate_limit_decision_path
+    "${_install_prefix}/include/ruvia/web/detail/server/RateLimitDecision.h")
 if(_built_components_csv MATCHES "(^|,)web(,|$)")
     set(_installed_db_internal_path
         "${_install_prefix}/include/ruvia/web/detail/db/DbInternal.h")
@@ -2173,6 +2177,36 @@ if(_built_components_csv MATCHES "(^|,)web(,|$)")
        NOT EXISTS "${_installed_redis_internal_path}")
         message(FATAL_ERROR
             "installed Web package is missing integration runtime contracts")
+    endif()
+    if(NOT EXISTS "${_installed_rate_limiter_path}" OR
+       NOT EXISTS "${_installed_rate_limit_decision_path}")
+        message(FATAL_ERROR
+            "installed Web package lost its typed rate-limit contract")
+    endif()
+    file(READ "${_installed_rate_limiter_path}"
+        _installed_rate_limiter)
+    file(READ "${_installed_rate_limit_decision_path}"
+        _installed_rate_limit_decision)
+    if(NOT _installed_rate_limiter MATCHES
+           "class RateLimitAllowed final" OR
+       NOT _installed_rate_limiter MATCHES
+           "class RateLimitRejection final" OR
+       NOT _installed_rate_limiter MATCHES
+           "class RateLimitDecision final" OR
+       NOT _installed_rate_limiter MATCHES
+           "std::variant<RateLimitAllowed, RateLimitRejection>" OR
+       NOT _installed_rate_limiter MATCHES "allowed[(][)] const [&]" OR
+       NOT _installed_rate_limiter MATCHES "rejection[(][)] const [&]" OR
+       _installed_rate_limiter MATCHES
+           "struct RateLimitCheck|bool[ 	]+allowed" OR
+       NOT _installed_rate_limit_decision MATCHES
+           "decideRequestRateLimit" OR
+       NOT _installed_rate_limit_decision MATCHES
+           "rateLimitRejectionError" OR
+       NOT _installed_rate_limit_decision MATCHES
+           "applyRateLimitRejectionHeaders")
+        message(FATAL_ERROR
+            "installed Web rate-limit decision restored raw flags or split rejection policy")
     endif()
     file(READ "${_installed_db_internal_path}" _installed_db_internal)
     file(READ "${_installed_redis_internal_path}" _installed_redis_internal)

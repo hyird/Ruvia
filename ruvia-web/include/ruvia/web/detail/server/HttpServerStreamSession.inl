@@ -89,7 +89,7 @@ Task<void> HttpServer::handleStreamSession(
         // not overlap them), so inlining handleError at each rejection site
         // costs ~660 resident bytes per site in every connection's frame.
         std::optional<HttpErrorInfo> closingError;
-        std::optional<std::chrono::milliseconds> closingRetryAfter;
+        std::optional<RateLimitRejection> closingRateLimitRejection;
         std::size_t headerSearchOffset = 0;
         const auto requestStart = std::chrono::steady_clock::now();
         for (;;) {
@@ -156,10 +156,11 @@ Task<void> HttpServer::handleStreamSession(
                     break;
                 }
                 routeResolution = routes.resolve(parsed.request);
-                const auto appRateLimit = rateLimitRequestAllowed(&rateLimiter_, remoteAddress);
-                if (!appRateLimit.allowed) {
-                    closingError = HttpErrorInfo(429, {}, "rate limit exceeded");
-                    closingRetryAfter.emplace(appRateLimit.resetAfterMs);
+                const auto appRateLimit = decideRequestRateLimit(
+                    &rateLimiter_, remoteAddress);
+                if (const auto* rejection = appRateLimit.rejection()) {
+                    closingError = rateLimitRejectionError();
+                    closingRateLimitRejection.emplace(*rejection);
                     break;
                 }
                 const auto* resolved = routeResolution.resolved();
@@ -401,8 +402,9 @@ Task<void> HttpServer::handleStreamSession(
                 requestMemory,
                 *closingError,
                 baseRouteServices);
-            if (closingRetryAfter) {
-                setRetryAfterSeconds(response, *closingRetryAfter);
+            if (closingRateLimitRejection) {
+                applyRateLimitRejectionHeaders(
+                    response, *closingRateLimitRejection);
             }
             requestCompletion.emplace(
                 Http1SessionRequestCompletion::makeBufferedClosing(

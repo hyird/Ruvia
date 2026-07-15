@@ -675,6 +675,10 @@ set(WEB_RATE_LIMIT_RULE
     "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/RateLimitRule.h")
 set(WEB_RATE_LIMITER
     "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/server/RateLimiter.h")
+set(WEB_RATE_LIMIT_DECISION
+    "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/server/RateLimitDecision.h")
+set(WEB_RATE_LIMIT_SOURCE
+    "${RUVIA_ROOT}/ruvia-web/src/http/RateLimit.cpp")
 set(WEB_HTTP_SERVER
     "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/server/HttpServer.h")
 set(WEB_APP_RUNTIME
@@ -718,6 +722,62 @@ if(EXISTS "${WEB_RATE_LIMIT_RULE}" AND EXISTS "${WEB_RATE_LIMITER}" AND
             "each HttpServer must own its limiter; AppRuntimeGraph must not share one")
     endif()
 endif()
+
+set(WEB_RATE_LIMIT_HTTP1_SESSION
+    "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/server/HttpServerStreamSession.inl")
+set(WEB_RATE_LIMIT_HTTP2_SESSION
+    "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/server/Http2SansIoSession.h")
+set(WEB_SERVER_RESPONSE_STATE
+    "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/server/HttpServerResponseState.h")
+if(EXISTS "${WEB_RATE_LIMITER}" AND
+   EXISTS "${WEB_RATE_LIMIT_DECISION}" AND
+   EXISTS "${WEB_RATE_LIMIT_SOURCE}" AND
+   EXISTS "${WEB_RATE_LIMIT_HTTP1_SESSION}" AND
+   EXISTS "${WEB_RATE_LIMIT_HTTP2_SESSION}" AND
+   EXISTS "${WEB_SERVER_RESPONSE_STATE}")
+    file(READ "${WEB_RATE_LIMIT_DECISION}" web_rate_limit_decision)
+    file(READ "${WEB_RATE_LIMIT_SOURCE}" web_rate_limit_source)
+    file(READ "${WEB_RATE_LIMIT_HTTP1_SESSION}" web_rate_limit_http1_session)
+    file(READ "${WEB_RATE_LIMIT_HTTP2_SESSION}" web_rate_limit_http2_session)
+    file(READ "${WEB_SERVER_RESPONSE_STATE}" web_server_response_state)
+    if(NOT web_rate_limiter MATCHES "class RateLimitAllowed final" OR
+       NOT web_rate_limiter MATCHES "class RateLimitRejection final" OR
+       NOT web_rate_limiter MATCHES "class RateLimitDecision final" OR
+       NOT web_rate_limiter MATCHES
+           "std::variant<RateLimitAllowed, RateLimitRejection>" OR
+       NOT web_rate_limiter MATCHES "allowed[(][)] const [&]" OR
+       NOT web_rate_limiter MATCHES "rejection[(][)] const [&]" OR
+       web_rate_limiter MATCHES "struct RateLimitCheck|bool[ 	]+allowed" OR
+       NOT web_rate_limit_decision MATCHES "decideRequestRateLimit" OR
+       NOT web_rate_limit_decision MATCHES "rateLimitRejectionError" OR
+       NOT web_rate_limit_decision MATCHES "applyRateLimitRejectionHeaders" OR
+       NOT web_rate_limit_source MATCHES
+           "HttpErrorInfo[(]429, [\"]too_many_requests[\"], [\"]rate limit exceeded[\"]" OR
+       NOT web_rate_limit_source MATCHES
+           "applyRouteRateLimitRejectionHeaders" OR
+       NOT web_rate_limit_http1_session MATCHES "decideRequestRateLimit" OR
+       NOT web_rate_limit_http1_session MATCHES
+           "closingRateLimitRejection" OR
+       NOT web_rate_limit_http1_session MATCHES
+           "applyRateLimitRejectionHeaders" OR
+       NOT web_rate_limit_http2_session MATCHES "decideRequestRateLimit" OR
+       NOT web_rate_limit_http2_session MATCHES
+           "applyRateLimitRejectionHeaders" OR
+       web_rate_limit_http1_session MATCHES
+           "HttpErrorInfo[(]429|rate limit exceeded|resetAfterMs" OR
+       web_rate_limit_http2_session MATCHES
+           "HttpErrorInfo[(]429|rate limit exceeded|resetAfterMs" OR
+       web_server_response_state MATCHES
+           "Retry-After|setRetryAfterSeconds")
+        boundary_error("rate-limit decisions or rejection presentation regressed"
+            "the worker limiter must return typed alternatives and one Web policy must map every H1/H2/route rejection to 429 and Retry-After")
+    endif()
+endif()
+check_files_no_match("rate-limit 429 presentation duplicated outside its Web policy"
+    "[\"]rate limit exceeded[\"]|[\"]Retry-After[\"]"
+    "${WEB_RATE_LIMIT_HTTP1_SESSION}"
+    "${WEB_RATE_LIMIT_HTTP2_SESSION}"
+    "${WEB_SERVER_RESPONSE_STATE}")
 
 set(WEB_HTTP_SERVER_LIFECYCLE
     "${RUVIA_ROOT}/ruvia-web/src/server/HttpServerLifecycle.cpp")

@@ -54,6 +54,8 @@
 #include <ruvia/web/detail/server/HttpResponseStreamState.h>
 #include <ruvia/web/detail/server/HttpResponseCompression.h>
 #include <ruvia/web/detail/server/HttpBufferedResponse.h>
+#include <ruvia/web/detail/server/RateLimitDecision.h>
+#include <ruvia/web/detail/server/RateLimiter.h>
 #include <ruvia/web/detail/server/HttpServerResponseStreamRoute.h>
 #include <ruvia/web/detail/server/HttpServerWebSocketRoute.h>
 #include <ruvia/http/detail/HttpResponseBodyAccess.h>
@@ -88,6 +90,24 @@ static_assert(std::same_as<
         HttpServerWorkerCompletion&>().workerFailure()),
     std::exception_ptr>);
 static_assert(!std::is_copy_assignable_v<ruvia::MultipartReader>);
+
+template <typename Decision>
+concept ExposesRvalueRateLimitAlternative = requires(Decision decision) {
+    std::move(decision).allowed();
+    std::move(decision).rejection();
+};
+
+static_assert(!std::default_initializable<ruvia::detail::RateLimitDecision>);
+static_assert(!std::default_initializable<ruvia::detail::RateLimitAllowed>);
+static_assert(!std::default_initializable<ruvia::detail::RateLimitRejection>);
+static_assert(std::same_as<
+    decltype(std::declval<const ruvia::detail::RateLimitDecision&>().allowed()),
+    const ruvia::detail::RateLimitAllowed*>);
+static_assert(std::same_as<
+    decltype(std::declval<const ruvia::detail::RateLimitDecision&>().rejection()),
+    const ruvia::detail::RateLimitRejection*>);
+static_assert(!ExposesRvalueRateLimitAlternative<
+    ruvia::detail::RateLimitDecision>);
 static_assert(!std::is_move_constructible_v<ruvia::MultipartReader>);
 static_assert(!std::is_move_assignable_v<ruvia::MultipartReader>);
 static_assert(std::is_move_constructible_v<ruvia::RequestNameValueList>);

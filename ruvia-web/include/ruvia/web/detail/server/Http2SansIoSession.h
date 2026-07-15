@@ -57,7 +57,6 @@
 #include "ruvia/http/detail/server/HttpResponseHeadPolicy.h"
 #include "ruvia/web/detail/server/HttpResponseStreamDispatch.h"
 #include "ruvia/web/detail/server/HttpServerAccessLog.h"
-#include "ruvia/web/detail/server/HttpServerResponseState.h"
 #include "ruvia/web/detail/server/RateLimitDecision.h"
 #include "ruvia/web/detail/server/RequestBodyLimit.h"
 #include "ruvia/web/detail/websocket/HttpWebSocketConnection.h"
@@ -332,16 +331,14 @@ Task<void> runHttp2SansIoSession(
             const auto& resolution = selectedRoute->resolution();
             const auto* resolved = resolution.resolved();
 
-            const auto appRateLimit = rateLimitRequestAllowed(
+            const auto appRateLimit = decideRequestRateLimit(
                 baseServices.rateLimiter(), remoteAddress);
-            if (!appRateLimit.allowed) {
+            if (const auto* rejection = appRateLimit.rejection()) {
                 response = co_await routes.handleError(
                     request, requestMemory,
-                    HttpErrorInfo(429, {}, "rate limit exceeded"),
+                    rateLimitRejectionError(),
                     baseServices);
-                setRetryAfterSeconds(
-                    response,
-                    std::chrono::milliseconds(appRateLimit.resetAfterMs));
+                applyRateLimitRejectionHeaders(response, *rejection);
                 break;
             }
             std::optional<Http2SansIoRequestBodyReader> streamReaderStorage;
