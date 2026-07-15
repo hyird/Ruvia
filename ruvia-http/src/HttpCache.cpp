@@ -1,6 +1,5 @@
 #include "ruvia/http/HttpCache.h"
 
-#include <charconv>
 #include <limits>
 
 #include "ruvia/http/detail/HeaderTokenUtils.h"       // httpTrimOws, httpAsciiEqualsIgnoreCase
@@ -11,25 +10,44 @@ namespace ruvia {
 namespace {
 
 // Parse a delta-seconds value (RFC 9111 section 1.2.2): an optionally DQUOTE-wrapped non-negative
-// integer. Syntactically valid overflow saturates to the greatest convenient
-// representation; non-digit / empty input remains invalid.
+// integer. Quoted-pairs have their RFC 9110 section 5.6.4 semantic value, so
+// `"6\0"` is equivalent to `60`. Syntactically valid overflow saturates to the
+// greatest convenient representation; non-digit / empty input remains invalid.
 [[nodiscard]] std::optional<std::uint64_t> parseDeltaSeconds(std::string_view value) noexcept {
-    if (value.size() >= 2 && value.front() == '"' && value.back() == '"') {
-        value = value.substr(1, value.size() - 2);
+    bool quoted = false;
+    std::size_t begin = 0;
+    std::size_t end = value.size();
+    if (!value.empty() && value.front() == '"') {
+        if (value.size() < 2 || value.back() != '"') {
+            return std::nullopt;
+        }
+        quoted = true;
+        begin = 1;
+        --end;
     }
-    if (value.empty()) {
+    if (begin == end) {
         return std::nullopt;
     }
+
     std::uint64_t result = 0;
-    const auto [ptr, ec] = std::from_chars(value.data(), value.data() + value.size(), result);
-    if (ptr != value.data() + value.size()) {
-        return std::nullopt;
-    }
-    if (ec == std::errc::result_out_of_range) {
-        return (std::numeric_limits<std::uint64_t>::max)();
-    }
-    if (ec != std::errc{}) {
-        return std::nullopt;
+    constexpr auto maximum = (std::numeric_limits<std::uint64_t>::max)();
+    for (std::size_t cursor = begin; cursor < end; ++cursor) {
+        auto ch = static_cast<unsigned char>(value[cursor]);
+        if (quoted && ch == '\\') {
+            if (++cursor == end) {
+                return std::nullopt;
+            }
+            ch = static_cast<unsigned char>(value[cursor]);
+        }
+        if (ch < '0' || ch > '9') {
+            return std::nullopt;
+        }
+        const auto digit = static_cast<std::uint64_t>(ch - '0');
+        if (result > (maximum - digit) / 10) {
+            result = maximum;
+        } else {
+            result = result * 10 + digit;
+        }
     }
     return result;
 }

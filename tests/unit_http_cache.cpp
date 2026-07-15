@@ -32,6 +32,15 @@ RUVIA_TEST(parse_cache_control_quoted_and_case_insensitive_and_unknown) {
     RUVIA_CHECK_EQ(*cc.maxAge, std::uint64_t{45});
 }
 
+RUVIA_TEST(parse_cache_control_decodes_quoted_pairs_in_delta_seconds) {
+    const auto cc = ruvia::parseCacheControl(
+        R"(max-age="6\0", s-maxage="1\20", stale-while-revalidate="\30", stale-if-error="4\5")");
+    RUVIA_CHECK_EQ(cc.maxAge.value_or(0), std::uint64_t{60});
+    RUVIA_CHECK_EQ(cc.sMaxAge.value_or(0), std::uint64_t{120});
+    RUVIA_CHECK_EQ(cc.staleWhileRevalidate.value_or(0), std::uint64_t{30});
+    RUVIA_CHECK_EQ(cc.staleIfError.value_or(0), std::uint64_t{45});
+}
+
 RUVIA_TEST(parse_cache_control_rejects_bad_delta_seconds) {
     const auto cc = ruvia::parseCacheControl("max-age=abc, s-maxage=");
     RUVIA_CHECK(!cc.maxAge.has_value());
