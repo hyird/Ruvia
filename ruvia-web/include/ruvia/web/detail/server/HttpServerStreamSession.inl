@@ -427,8 +427,7 @@ Task<void> HttpServer::handleStreamSession(
                     *committedStatus,
                     requestStart);
             }
-            if (writeResult.outcome() !=
-                Http1BufferedResponseWriteOutcome::kCompleted) {
+            if (writeResult.completed() == nullptr) {
                 co_return;
             }
         } else if (const auto* committed =

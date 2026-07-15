@@ -5,33 +5,87 @@
 #include <optional>
 #include <system_error>
 #include <type_traits>
+#include <variant>
 
 #include "ruvia/http/detail/http1/Http1ResponseHeadPlan.h"
 
 namespace ruvia::detail {
 
-enum class Http1BufferedResponseWriteOutcome : std::uint8_t {
-    kCompleted,
-    kFailedBeforeCommit,
-    kFailedAfterCommit
+class Http1BufferedResponseWriteResult;
+
+class Http1BufferedResponseWriteCompleted final {
+public:
+    [[nodiscard]] constexpr std::uint16_t status() const noexcept {
+        return status_;
+    }
+
+private:
+    friend class Http1BufferedResponseWriteResult;
+
+    explicit constexpr Http1BufferedResponseWriteCompleted(
+        std::uint16_t status) noexcept
+        : status_(status) {}
+
+    std::uint16_t status_;
 };
 
-// The writer collapses the transport error and complete-head byte boundary into
-// one terminal outcome. A status is committed in exactly two of the three states;
-// callers must not reconstruct that state from a completion flag plus an optional.
+class Http1BufferedResponseWriteFailedBeforeCommit final {
+private:
+    friend class Http1BufferedResponseWriteResult;
+    constexpr Http1BufferedResponseWriteFailedBeforeCommit() noexcept = default;
+};
+
+class Http1BufferedResponseWriteFailedAfterCommit final {
+public:
+    [[nodiscard]] constexpr std::uint16_t status() const noexcept {
+        return status_;
+    }
+
+private:
+    friend class Http1BufferedResponseWriteResult;
+
+    explicit constexpr Http1BufferedResponseWriteFailedAfterCommit(
+        std::uint16_t status) noexcept
+        : status_(status) {}
+
+    std::uint16_t status_;
+};
+
+// The complete-head byte boundary produces exactly one terminal alternative.
+// Only alternatives reached after a complete head own a committed status, so a
+// failed-before-commit result cannot carry meaningless status storage.
 class Http1BufferedResponseWriteResult final {
 public:
-    [[nodiscard]] constexpr Http1BufferedResponseWriteOutcome
-    outcome() const noexcept {
-        return outcome_;
+    [[nodiscard]] constexpr const Http1BufferedResponseWriteCompleted*
+    completed() const & noexcept {
+        return std::get_if<Http1BufferedResponseWriteCompleted>(&value_);
     }
+    const Http1BufferedResponseWriteCompleted* completed() const && = delete;
+
+    [[nodiscard]] constexpr const Http1BufferedResponseWriteFailedBeforeCommit*
+    failedBeforeCommit() const & noexcept {
+        return std::get_if<Http1BufferedResponseWriteFailedBeforeCommit>(
+            &value_);
+    }
+    const Http1BufferedResponseWriteFailedBeforeCommit*
+    failedBeforeCommit() const && = delete;
+
+    [[nodiscard]] constexpr const Http1BufferedResponseWriteFailedAfterCommit*
+    failedAfterCommit() const & noexcept {
+        return std::get_if<Http1BufferedResponseWriteFailedAfterCommit>(&value_);
+    }
+    const Http1BufferedResponseWriteFailedAfterCommit*
+    failedAfterCommit() const && = delete;
 
     [[nodiscard]] constexpr std::optional<std::uint16_t>
     committedStatus() const noexcept {
-        return outcome_ ==
-                Http1BufferedResponseWriteOutcome::kFailedBeforeCommit
-            ? std::nullopt
-            : std::optional<std::uint16_t>(status_);
+        if (const auto* value = completed()) {
+            return value->status();
+        }
+        if (const auto* value = failedAfterCommit()) {
+            return value->status();
+        }
+        return std::nullopt;
     }
 
 private:
@@ -42,35 +96,35 @@ private:
         std::error_code,
         std::size_t) noexcept;
 
-    [[nodiscard]] static Http1BufferedResponseWriteResult
+    using Value = std::variant<
+        Http1BufferedResponseWriteCompleted,
+        Http1BufferedResponseWriteFailedBeforeCommit,
+        Http1BufferedResponseWriteFailedAfterCommit>;
+
+    [[nodiscard]] static constexpr Http1BufferedResponseWriteResult
     makeCompleted(std::uint16_t status) noexcept {
         return Http1BufferedResponseWriteResult(
-            Http1BufferedResponseWriteOutcome::kCompleted,
-            status);
+            Http1BufferedResponseWriteCompleted(status));
     }
 
-    [[nodiscard]] static Http1BufferedResponseWriteResult
+    [[nodiscard]] static constexpr Http1BufferedResponseWriteResult
     makeFailedBeforeCommit() noexcept {
         return Http1BufferedResponseWriteResult(
-            Http1BufferedResponseWriteOutcome::kFailedBeforeCommit,
-            0);
+            Http1BufferedResponseWriteFailedBeforeCommit());
     }
 
-    [[nodiscard]] static Http1BufferedResponseWriteResult
+    [[nodiscard]] static constexpr Http1BufferedResponseWriteResult
     makeFailedAfterCommit(std::uint16_t status) noexcept {
         return Http1BufferedResponseWriteResult(
-            Http1BufferedResponseWriteOutcome::kFailedAfterCommit,
-            status);
+            Http1BufferedResponseWriteFailedAfterCommit(status));
     }
 
-    constexpr Http1BufferedResponseWriteResult(
-        Http1BufferedResponseWriteOutcome outcome,
-        std::uint16_t status) noexcept
-        : status_(status),
-          outcome_(outcome) {}
+    template <typename Alternative>
+    explicit constexpr Http1BufferedResponseWriteResult(
+        Alternative alternative) noexcept
+        : value_(alternative) {}
 
-    std::uint16_t status_;
-    Http1BufferedResponseWriteOutcome outcome_;
+    Value value_;
 };
 
 static_assert(std::is_trivially_copyable_v<Http1BufferedResponseWriteResult>);

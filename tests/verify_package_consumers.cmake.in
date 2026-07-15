@@ -2454,11 +2454,19 @@ if(_built_components_csv MATCHES "(^|,)web(,|$)")
     if(NOT _installed_http1_buffered_response_result MATCHES
            "class Http1BufferedResponseWriteResult final" OR
        NOT _installed_http1_buffered_response_result MATCHES
-           "enum class Http1BufferedResponseWriteOutcome" OR
+           "class Http1BufferedResponseWriteCompleted final" OR
        NOT _installed_http1_buffered_response_result MATCHES
-           "Http1BufferedResponseWriteOutcome[ \t\r\n]+outcome[(][)] const noexcept" OR
+           "class Http1BufferedResponseWriteFailedBeforeCommit final" OR
+       NOT _installed_http1_buffered_response_result MATCHES
+           "class Http1BufferedResponseWriteFailedAfterCommit final" OR
+       NOT _installed_http1_buffered_response_result MATCHES
+           "using Value = std::variant" OR
+       NOT _installed_http1_buffered_response_result MATCHES
+           "completed[(][)] const [&] noexcept" OR
+       NOT _installed_http1_buffered_response_result MATCHES
+           "failedBeforeCommit[(][)] const && = delete" OR
        _installed_http1_buffered_response_result MATCHES
-           "bool completed[(][)] const noexcept" OR
+           "enum class Http1BufferedResponseWriteOutcome|outcome[(][)] const noexcept|bool completed[(][)] const noexcept" OR
        NOT _installed_http1_buffered_response_result MATCHES
            "std::optional<std::uint16_t>[ \t\r\n]+committedStatus[(][)] const noexcept" OR
        NOT _installed_http1_buffered_response_result MATCHES
@@ -2472,11 +2480,11 @@ if(_built_components_csv MATCHES "(^|,)web(,|$)")
        NOT _installed_http1_buffered_response_writer MATCHES
            "asyncResult<std::size_t>" OR
        NOT _installed_http1_stream_session MATCHES
-           "writeResult[.]outcome[(][)]" OR
+           "writeResult[.]completed[(][)]" OR
        NOT _installed_http1_stream_session MATCHES
            "writeResult[.]committedStatus[(][)]" OR
        _installed_http1_buffered_response_result MATCHES
-           "Http1BufferedResponseWriteCompleted|Http1BufferedResponseWriteFailedBeforeCommit|Http1BufferedResponseWriteFailedAfterCommit|using Value = std::variant|failedBeforeCommit[(]|failedAfterCommit[(]|error[(][)]" OR
+           "error[(][)]" OR
        _installed_http1_stream_session MATCHES
            "response[.]status[(][)][ \t\r\n]*,[ \t\r\n]*requestStart|writeResult[.]failedBeforeCommit[(]|writeResult[.]failedAfterCommit[(]" OR
        _installed_http1_buffered_response_writer MATCHES
