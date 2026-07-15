@@ -2,7 +2,7 @@
 
 #include <cstddef>
 #include <memory_resource>
-#include <optional>
+#include <stdexcept>
 #include <string_view>
 #include <utility>
 #include <variant>
@@ -18,10 +18,9 @@ namespace ruvia::detail {
     return httpContentCodingFromHeaders(request.headers());
 }
 
-class HttpRequestContentDecodeFailure final {
+class HttpRequestContentDecodeProtocolFailure final {
 public:
-    [[nodiscard]] std::optional<HttpProtocolError>
-    protocolError() const noexcept {
+    [[nodiscard]] HttpProtocolError protocolError() const noexcept {
         switch (error_) {
             case HttpContentDecodeError::kUnsupportedCoding:
                 return HttpProtocolError(
@@ -33,25 +32,31 @@ public:
                 return HttpProtocolError(
                     413, "request body is too large");
             case HttpContentDecodeError::kDecoderFailure:
-                return std::nullopt;
+                break;
         }
-        return std::nullopt;
+        std::unreachable();
     }
 
 private:
     friend class HttpRequestContentDecodeResult;
 
-    explicit constexpr HttpRequestContentDecodeFailure(
+    explicit constexpr HttpRequestContentDecodeProtocolFailure(
         HttpContentDecodeError error) noexcept
         : error_(error) {}
 
     HttpContentDecodeError error_;
 };
 
-// Request decoding is role-specific: success owns the decoded representation;
-// wire, coding, and body-limit failures expose an HTTP response status, while
-// an unavailable decoder remains an internal runtime failure. Client response
-// decoding keeps using the role-neutral HttpContentDecodeResult.
+class HttpRequestContentDecoderFailure final {
+private:
+    friend class HttpRequestContentDecodeResult;
+
+    constexpr HttpRequestContentDecoderFailure() noexcept = default;
+};
+
+// Request decoding is role-specific: success, an HTTP protocol failure, and an
+// internal decoder failure are mutually exclusive alternatives. Client
+// response decoding keeps using the role-neutral HttpContentDecodeResult.
 class HttpRequestContentDecodeResult final {
 public:
     HttpRequestContentDecodeResult(
@@ -72,11 +77,18 @@ public:
     HttpDecodedContent* decoded() && = delete;
     const HttpDecodedContent* decoded() const && = delete;
 
-    [[nodiscard]] const HttpRequestContentDecodeFailure*
-    failure() const & noexcept {
-        return std::get_if<HttpRequestContentDecodeFailure>(&value_);
+    [[nodiscard]] const HttpRequestContentDecodeProtocolFailure*
+    protocolFailure() const & noexcept {
+        return std::get_if<HttpRequestContentDecodeProtocolFailure>(&value_);
     }
-    const HttpRequestContentDecodeFailure* failure() const && = delete;
+    const HttpRequestContentDecodeProtocolFailure*
+    protocolFailure() const && = delete;
+
+    [[nodiscard]] const HttpRequestContentDecoderFailure*
+    decoderFailure() const & noexcept {
+        return std::get_if<HttpRequestContentDecoderFailure>(&value_);
+    }
+    const HttpRequestContentDecoderFailure* decoderFailure() const && = delete;
 
 private:
     friend HttpRequestContentDecodeResult decodeHttpRequestContent(
@@ -87,7 +99,8 @@ private:
 
     using Value = std::variant<
         HttpDecodedContent,
-        HttpRequestContentDecodeFailure>;
+        HttpRequestContentDecodeProtocolFailure,
+        HttpRequestContentDecoderFailure>;
 
     explicit HttpRequestContentDecodeResult(
         HttpDecodedContent decoded) noexcept
@@ -95,7 +108,17 @@ private:
 
     explicit HttpRequestContentDecodeResult(
         HttpContentDecodeError error) noexcept
-        : value_(HttpRequestContentDecodeFailure(error)) {}
+        : value_(HttpRequestContentDecodeProtocolFailure(error)) {}
+
+    explicit constexpr HttpRequestContentDecodeResult(
+        HttpRequestContentDecoderFailure failure) noexcept
+        : value_(failure) {}
+
+    [[nodiscard]] static constexpr HttpRequestContentDecodeResult
+    makeDecoderFailure() noexcept {
+        return HttpRequestContentDecodeResult(
+            HttpRequestContentDecoderFailure());
+    }
 
     Value value_;
 };
@@ -111,10 +134,12 @@ private:
         return HttpRequestContentDecodeResult(std::move(*decoded));
     }
     if (const auto* failure = result.failure()) {
+        if (failure->error() == HttpContentDecodeError::kDecoderFailure) {
+            return HttpRequestContentDecodeResult::makeDecoderFailure();
+        }
         return HttpRequestContentDecodeResult(failure->error());
     }
-    return HttpRequestContentDecodeResult(
-        HttpContentDecodeError::kDecoderFailure);
+    throw std::logic_error("unexpected HTTP content decode result");
 }
 
 }  // namespace ruvia::detail

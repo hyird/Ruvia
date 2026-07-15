@@ -794,19 +794,23 @@ if(NOT _installed_http_content_coding_contract MATCHES
         "installed HTTP content coding lost its owning discriminated contract")
 endif()
 if(NOT _installed_http_request_content_decoding_contract MATCHES
-       "class HttpRequestContentDecodeFailure final" OR
+       "class HttpRequestContentDecodeProtocolFailure final" OR
+   NOT _installed_http_request_content_decoding_contract MATCHES
+       "class HttpRequestContentDecoderFailure final" OR
    NOT _installed_http_request_content_decoding_contract MATCHES
        "class HttpRequestContentDecodeResult final" OR
    NOT _installed_http_request_content_decoding_contract MATCHES
-       "std::optional<HttpProtocolError>" OR
+       "HttpProtocolError protocolError[(][)] const noexcept" OR
    NOT _installed_http_request_content_decoding_contract MATCHES
        "HttpRequestContentDecodeResult decodeHttpRequestContent" OR
    NOT _installed_http_request_content_decoding_contract MATCHES
        "decoded[(][)] const &&[ \t]*=[ \t]*delete" OR
    NOT _installed_http_request_content_decoding_contract MATCHES
-       "failure[(][)] const &&[ \t]*=[ \t]*delete" OR
+       "protocolFailure[(][)] const &&[ \t]*=[ \t]*delete" OR
+   NOT _installed_http_request_content_decoding_contract MATCHES
+       "decoderFailure[(][)] const &&[ \t]*=[ \t]*delete" OR
    _installed_http_request_content_decoding_contract MATCHES
-       "HttpContentDecodeError error[(][)] const")
+       "HttpContentDecodeError error[(][)] const|std::optional<HttpProtocolError>")
     message(FATAL_ERROR
         "installed request content decoder lost protocol-owned role semantics")
 endif()
@@ -901,11 +905,11 @@ if(NOT _installed_transfer_decoder_contract MATCHES
    NOT _installed_transfer_decoder_contract MATCHES
        "class TransferCodingDecodeComplete final" OR
    NOT _installed_transfer_decoder_contract MATCHES
-       "class TransferCodingDecodeFailure final" OR
+       "class TransferCodingDecodeProtocolFailure final" OR
    NOT _installed_transfer_decoder_contract MATCHES
-       "std::optional<HttpProtocolError>" OR
+       "class TransferCodingDecoderFailure final" OR
    NOT _installed_transfer_decoder_contract MATCHES
-       "protocolError[(][)] const noexcept" OR
+       "HttpProtocolError protocolError[(][)] const noexcept" OR
    NOT _installed_transfer_decoder_contract MATCHES
        "class TransferCodingDecodeResult final" OR
    NOT _installed_transfer_decoder_contract MATCHES
@@ -915,7 +919,7 @@ if(NOT _installed_transfer_decoder_contract MATCHES
    NOT _installed_transfer_decoder_contract MATCHES
        "TransferCodingDecodeResult finishInput" OR
    _installed_transfer_decoder_contract MATCHES
-       "TransferCodingFinishStatus|bool[ \t]+(ended_|failed_)|TransferCodingDecodeError[ \t]+failure_|TransferCodingDecodeError[ \t]+error[(][)] const" OR
+       "TransferCodingFinishStatus|bool[ \t]+(ended_|failed_)|TransferCodingDecodeError[ \t]+failure_|TransferCodingDecodeError[ \t]+error[(][)] const|std::optional<HttpProtocolError>" OR
    _installed_transfer_decoder_contract MATCHES
        "decodeAppend[(]|produce[(]|setInput[(]|finished[(]|empty[(]")
     message(FATAL_ERROR

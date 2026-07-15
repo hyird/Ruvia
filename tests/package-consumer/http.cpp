@@ -563,7 +563,14 @@ concept HasAnyRvalueTransferCodingDecodeAccessor =
     requires(T&& result) { std::move(result).needInput(); } ||
     requires(T&& result) { std::move(result).output(); } ||
     requires(T&& result) { std::move(result).complete(); } ||
-    requires(T&& result) { std::move(result).failure(); };
+    requires(T&& result) { std::move(result).protocolFailure(); } ||
+    requires(T&& result) { std::move(result).decoderFailure(); };
+
+template <typename T>
+concept HasAnyRvalueRequestContentDecodeAccessor =
+    requires(T&& result) { std::move(result).decoded(); } ||
+    requires(T&& result) { std::move(result).protocolFailure(); } ||
+    requires(T&& result) { std::move(result).decoderFailure(); };
 
 template <typename T>
 concept HasMultipartStatus = requires(const T& result) {
@@ -2553,19 +2560,22 @@ static_assert(HasConsumedBytes<
 static_assert(HasConsumedBytes<
     ruvia::detail::TransferCodingDecodeComplete>);
 static_assert(HasConsumedBytes<
-    ruvia::detail::TransferCodingDecodeFailure>);
+    ruvia::detail::TransferCodingDecodeProtocolFailure>);
+static_assert(HasConsumedBytes<
+    ruvia::detail::TransferCodingDecoderFailure>);
 static_assert(HasTransferOutputBytes<
     ruvia::detail::TransferCodingDecodeOutput>);
 static_assert(!HasTransferOutputBytes<
-    ruvia::detail::TransferCodingDecodeFailure>);
+    ruvia::detail::TransferCodingDecodeProtocolFailure>);
 static_assert(!HasTransferDecodeError<
-    ruvia::detail::TransferCodingDecodeFailure>);
+    ruvia::detail::TransferCodingDecodeProtocolFailure>);
 static_assert(HasProtocolError<
-    ruvia::detail::TransferCodingDecodeFailure>);
+    ruvia::detail::TransferCodingDecodeProtocolFailure>);
 static_assert(std::same_as<
-    decltype(std::declval<const ruvia::detail::TransferCodingDecodeFailure&>()
+    decltype(std::declval<const ruvia::detail::
+        TransferCodingDecodeProtocolFailure&>()
         .protocolError()),
-    std::optional<ruvia::HttpProtocolError>>);
+    ruvia::HttpProtocolError>);
 static_assert(std::same_as<
     decltype(ruvia::detail::scanHttpChunkedBody(std::string_view{})),
     ruvia::detail::HttpChunkScanResult>);
@@ -2821,14 +2831,22 @@ static_assert(!std::is_move_assignable_v<
     ruvia::detail::HttpRequestContentDecodeResult>);
 static_assert(!ExposesRvalueDecodedContent<
     ruvia::detail::HttpRequestContentDecodeResult>);
-static_assert(!ExposesRvalueDecodeFailure<
+static_assert(!HasAnyRvalueRequestContentDecodeAccessor<
     ruvia::detail::HttpRequestContentDecodeResult>);
 static_assert(!HasRawContentDecodeError<
-    ruvia::detail::HttpRequestContentDecodeFailure>);
+    ruvia::detail::HttpRequestContentDecodeProtocolFailure>);
 static_assert(std::same_as<
     decltype(std::declval<const ruvia::detail::
-        HttpRequestContentDecodeFailure&>().protocolError()),
-    std::optional<ruvia::HttpProtocolError>>);
+        HttpRequestContentDecodeProtocolFailure&>().protocolError()),
+    ruvia::HttpProtocolError>);
+static_assert(std::same_as<
+    decltype(std::declval<const ruvia::detail::
+        HttpRequestContentDecodeResult&>().protocolFailure()),
+    const ruvia::detail::HttpRequestContentDecodeProtocolFailure*>);
+static_assert(std::same_as<
+    decltype(std::declval<const ruvia::detail::
+        HttpRequestContentDecodeResult&>().decoderFailure()),
+    const ruvia::detail::HttpRequestContentDecoderFailure*>);
 static_assert(std::same_as<
     decltype(ruvia::detail::decodeHttpRequestContent(
         ruvia::detail::HttpContentCoding::kGzip,

@@ -681,10 +681,10 @@ Task<std::string_view> Context::requestBody() const {
         resource());
     auto* decodedContent = decodeResult.decoded();
     if (decodedContent == nullptr) {
-        if (const auto* failure = decodeResult.failure()) {
-            if (auto protocolError = failure->protocolError()) {
-                throw *protocolError;
-            }
+        if (const auto* failure = decodeResult.protocolFailure()) {
+            throw failure->protocolError();
+        }
+        if (decodeResult.decoderFailure() != nullptr) {
             throw std::runtime_error("request content decoder failed");
         }
         throw std::logic_error("unexpected request content decode result");

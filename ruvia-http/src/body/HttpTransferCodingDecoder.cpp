@@ -38,8 +38,7 @@ TransferCodingDecodeResult TransferCodingDecoder::decode(
     std::string_view input,
     std::span<char> outputBuffer) noexcept {
     if (const auto* failure = std::get_if<TransferCodingDecodeError>(&state_)) {
-        return TransferCodingDecodeResult(
-            TransferCodingDecodeFailure(0, *failure));
+        return fail(0, *failure);
     }
     if (std::holds_alternative<Complete>(state_)) {
         return input.empty()
@@ -99,8 +98,7 @@ TransferCodingDecodeResult TransferCodingDecoder::finishInput() noexcept {
         return complete(0);
     }
     if (const auto* failure = std::get_if<TransferCodingDecodeError>(&state_)) {
-        return TransferCodingDecodeResult(
-            TransferCodingDecodeFailure(0, *failure));
+        return fail(0, *failure);
     }
     return fail(0, TransferCodingDecodeError::kInvalidContent);
 }
@@ -151,8 +149,12 @@ TransferCodingDecodeResult TransferCodingDecoder::fail(
     std::size_t consumed,
     TransferCodingDecodeError error) noexcept {
     state_.emplace<TransferCodingDecodeError>(error);
+    if (error == TransferCodingDecodeError::kDecoderFailure) {
+        return TransferCodingDecodeResult(
+            TransferCodingDecoderFailure(consumed));
+    }
     return TransferCodingDecodeResult(
-        TransferCodingDecodeFailure(consumed, error));
+        TransferCodingDecodeProtocolFailure(consumed, error));
 }
 
 voidpf TransferCodingDecoder::zallocThunk(voidpf opaque, uInt items, uInt size) noexcept {

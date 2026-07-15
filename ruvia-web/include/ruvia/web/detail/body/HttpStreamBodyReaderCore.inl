@@ -10,20 +10,28 @@ namespace ruvia::detail {
     throw HttpProtocolError(400, "incomplete request body");
 }
 
-[[noreturn]] inline void throwTransferCodingDecodeFailure(
-    const TransferCodingDecodeFailure& failure) {
-    if (auto protocolError = failure.protocolError()) {
-        throw *protocolError;
-    }
+[[noreturn]] inline void throwTransferCodingProtocolFailure(
+    const TransferCodingDecodeProtocolFailure& failure) {
+    throw failure.protocolError();
+}
+
+[[noreturn]] inline void throwTransferCodingDecoderFailure() {
     throw std::runtime_error("transfer-coding decoder failure");
 }
 
 inline void requireCompleteTransferCoding(
     TransferCodingDecoder& decoder) {
     const auto finishResult = decoder.finishInput();
-    if (finishResult.complete() == nullptr) {
-        throw HttpProtocolError(400, "incomplete transfer-coding body");
+    if (finishResult.complete() != nullptr) {
+        return;
     }
+    if (const auto* failure = finishResult.protocolFailure()) {
+        throwTransferCodingProtocolFailure(*failure);
+    }
+    if (finishResult.decoderFailure() != nullptr) {
+        throwTransferCodingDecoderFailure();
+    }
+    throw std::logic_error("unexpected transfer-coding finish result");
 }
 
 template <typename Stream>
@@ -149,8 +157,11 @@ void StreamBodyReader<Stream>::decodeTransferAppend(
             continue;
         }
         target.resize(oldSize);
-        if (const auto* failure = result.failure()) {
-            throwTransferCodingDecodeFailure(*failure);
+        if (const auto* failure = result.protocolFailure()) {
+            throwTransferCodingProtocolFailure(*failure);
+        }
+        if (result.decoderFailure() != nullptr) {
+            throwTransferCodingDecoderFailure();
         }
         if (result.complete() != nullptr) {
             return;

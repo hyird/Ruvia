@@ -64,8 +64,11 @@ Task<std::optional<std::string_view>> StreamBodyReader<Stream>::readTransferDeco
         if (const auto* output = result.output()) {
             co_return output->bytes();
         }
-        if (const auto* failure = result.failure()) {
-            throwTransferCodingDecodeFailure(*failure);
+        if (const auto* failure = result.protocolFailure()) {
+            throwTransferCodingProtocolFailure(*failure);
+        }
+        if (result.decoderFailure() != nullptr) {
+            throwTransferCodingDecoderFailure();
         }
         if (result.complete() == nullptr &&
             result.needInput() == nullptr) {

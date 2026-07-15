@@ -2917,23 +2917,25 @@ if(EXISTS "${HTTP_REQUEST_CONTENT_DECODING_CONTRACT}" AND
     file(READ "${HTTP_CONTENT_PACKAGE_CONSUMER}"
         content_decode_package_consumer)
     if(NOT request_content_decode_contract MATCHES
-           "class HttpRequestContentDecodeFailure final" OR
+           "class HttpRequestContentDecodeProtocolFailure final" OR
+       NOT request_content_decode_contract MATCHES
+           "class HttpRequestContentDecoderFailure final" OR
        NOT request_content_decode_contract MATCHES
            "class HttpRequestContentDecodeResult final" OR
        NOT request_content_decode_contract MATCHES
-           "std::optional<HttpProtocolError>" OR
+           "HttpProtocolError protocolError[(][)] const noexcept" OR
        NOT request_content_decode_contract MATCHES
-           "protocolError[(][)] const noexcept" OR
-       NOT request_content_decode_contract MATCHES
-           "std::variant<[ \t\r\n]*HttpDecodedContent,[ \t\r\n]*HttpRequestContentDecodeFailure>" OR
+           "std::variant<[ \t\r\n]*HttpDecodedContent,[ \t\r\n]*HttpRequestContentDecodeProtocolFailure,[ \t\r\n]*HttpRequestContentDecoderFailure>" OR
        NOT request_content_decode_contract MATCHES
            "HttpRequestContentDecodeResult decodeHttpRequestContent" OR
        NOT request_content_decode_contract MATCHES
            "decoded[(][)] const &&[ \t]*=[ \t]*delete" OR
        NOT request_content_decode_contract MATCHES
-           "failure[(][)] const &&[ \t]*=[ \t]*delete" OR
+           "protocolFailure[(][)] const &&[ \t]*=[ \t]*delete" OR
+       NOT request_content_decode_contract MATCHES
+           "decoderFailure[(][)] const &&[ \t]*=[ \t]*delete" OR
        request_content_decode_contract MATCHES
-           "HttpContentDecodeError error[(][)] const" OR
+           "HttpContentDecodeError error[(][)] const|std::optional<HttpProtocolError>" OR
        client_content_decode_contract MATCHES
            "decodeHttpRequestContent|HttpRequestContentDecodeResult")
         boundary_error("request and client content decoding roles were merged"
@@ -2941,6 +2943,10 @@ if(EXISTS "${HTTP_REQUEST_CONTENT_DECODING_CONTRACT}" AND
     endif()
     if(NOT web_context_request_source MATCHES
            "decodeHttpRequestContent[(]" OR
+       NOT web_context_request_source MATCHES
+           "decodeResult[.]protocolFailure[(][)]" OR
+       NOT web_context_request_source MATCHES
+           "decodeResult[.]decoderFailure[(][)]" OR
        NOT web_context_request_source MATCHES
            "failure->protocolError[(][)]" OR
        web_context_request_source MATCHES
@@ -2961,7 +2967,9 @@ if(EXISTS "${HTTP_REQUEST_CONTENT_DECODING_CONTRACT}" AND
        NOT content_decode_package_consumer MATCHES
            "HttpRequestContentDecodeResult" OR
        NOT content_decode_package_consumer MATCHES
-           "HttpRequestContentDecodeFailure" OR
+           "HttpRequestContentDecodeProtocolFailure" OR
+       NOT content_decode_package_consumer MATCHES
+           "HttpRequestContentDecoderFailure" OR
        NOT content_decode_package_consumer MATCHES
            "decodeHttpRequestContent")
         boundary_error("request content decode role ownership is insufficiently tested"
@@ -10161,13 +10169,13 @@ if(EXISTS "${HTTP_TRANSFER_DECODER}" AND
        NOT transfer_decoder MATCHES
            "class TransferCodingDecodeComplete final" OR
        NOT transfer_decoder MATCHES
-           "class TransferCodingDecodeFailure final" OR
+           "class TransferCodingDecodeProtocolFailure final" OR
        NOT transfer_decoder MATCHES
-           "std::optional<HttpProtocolError>" OR
+           "class TransferCodingDecoderFailure final" OR
        NOT transfer_decoder MATCHES
-           "protocolError[(][)] const noexcept" OR
+           "HttpProtocolError protocolError[(][)] const noexcept" OR
        transfer_decoder MATCHES
-           "TransferCodingDecodeError error[(][)] const" OR
+           "TransferCodingDecodeError error[(][)] const|std::optional<HttpProtocolError>" OR
        NOT transfer_decoder MATCHES
            "class TransferCodingDecodeResult final" OR
        NOT transfer_decoder MATCHES
@@ -10184,7 +10192,9 @@ if(EXISTS "${HTTP_TRANSFER_DECODER}" AND
        NOT transfer_decoder MATCHES
            "complete[(][)] const &&[ \\t]*=[ \\t]*delete" OR
        NOT transfer_decoder MATCHES
-           "failure[(][)] const &&[ \\t]*=[ \\t]*delete" OR
+           "protocolFailure[(][)] const &&[ \\t]*=[ \\t]*delete" OR
+       NOT transfer_decoder MATCHES
+           "decoderFailure[(][)] const &&[ \\t]*=[ \\t]*delete" OR
        transfer_decoder MATCHES
            "${RULE_STALE_TRANSFER_CODING_TERMINAL_SPLIT}" OR
        transfer_decoder_source MATCHES
@@ -10201,9 +10211,13 @@ if(EXISTS "${HTTP_TRANSFER_DECODER}" AND
        NOT body_reader_chunked MATCHES
            "transferDecoder_->decode[(]" OR
        NOT body_reader_core MATCHES
-           "throwTransferCodingDecodeFailure" OR
+           "throwTransferCodingProtocolFailure" OR
        NOT body_reader_core MATCHES
-           "failure[.]protocolError[(][)]" OR
+           "throwTransferCodingDecoderFailure" OR
+       NOT body_reader_core MATCHES
+           "finishResult[.]protocolFailure[(][)]" OR
+       NOT body_reader_core MATCHES
+           "finishResult[.]decoderFailure[(][)]" OR
        NOT body_reader_core MATCHES
            "requireCompleteTransferCoding" OR
        body_reader_core MATCHES "TransferCodingDecodeError::" OR
@@ -10218,11 +10232,11 @@ if(EXISTS "${HTTP_TRANSFER_DECODER}" AND
        NOT transfer_decoder_test MATCHES
            "TransferCodingDecodeResult" OR
        NOT transfer_decoder_test MATCHES
-           "repeatedFinish[.]failure[(]" OR
+           "repeatedFinish[.]protocolFailure[(]" OR
        NOT transfer_decoder_test MATCHES
-           "!HasRawTransferDecodeError<TransferCodingDecodeFailure>" OR
+           "!HasRawTransferDecodeError<TransferCodingDecodeProtocolFailure>" OR
        NOT transfer_decoder_test MATCHES
-           "protocolError[(][)]->status[(][)]" OR
+           "protocolFailure[(][)]->protocolError[(][)][.]status[(][)]" OR
        NOT body_reader_test MATCHES
            "http1_transfer_coding_uses_one_decoder_for_streaming_and_buffered_reads" OR
        NOT body_reader_test MATCHES
@@ -10232,7 +10246,7 @@ if(EXISTS "${HTTP_TRANSFER_DECODER}" AND
        NOT transfer_package_consumer MATCHES
            "TransferCodingDecodeResult" OR
        NOT transfer_package_consumer MATCHES
-           "HasProtocolError.*TransferCodingDecodeFailure" OR
+           "HasProtocolError.*TransferCodingDecodeProtocolFailure" OR
        NOT transfer_package_consumer MATCHES
            "!HasTransferDecodeError" OR
        NOT transfer_package_consumer MATCHES
