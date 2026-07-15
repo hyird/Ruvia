@@ -332,18 +332,62 @@ public:
     }
     const Http2RequestBodyRuntime& body() const && = delete;
 
+    [[nodiscard]] bool dispatched() const noexcept {
+        return signal() != nullptr;
+    }
+
+    [[nodiscard]] Http2SansIoStreamSignal* signal() noexcept {
+        return std::get_if<Http2SansIoStreamSignal>(&dispatch_);
+    }
+
+    [[nodiscard]] const Http2SansIoStreamSignal* signal() const noexcept {
+        return std::get_if<Http2SansIoStreamSignal>(&dispatch_);
+    }
+
 private:
     friend class Http2SansIoStreamRuntime;
 
+    // The private token lets the owning runtime construct this non-movable
+    // address-stable state directly inside its optional storage.
+    struct Token final {};
+    struct AwaitingDispatch final {};
+
+    using DispatchState = std::variant<
+        AwaitingDispatch,
+        Http2SansIoStreamSignal>;
+
+public:
     Http2SansIoSelectedRoute(
+        Token,
         RouteResolution resolution,
         RequestBodyMode bodyMode,
         std::pmr::memory_resource* resource) noexcept
         : resolution_(std::move(resolution)),
           body_(bodyMode, resource) {}
 
+private:
+    [[nodiscard]] Http2SansIoStreamSignal* beginDispatch(
+        WorkerHandle worker) {
+        if (dispatched()) {
+            return nullptr;
+        }
+        dispatch_.emplace<Http2SansIoStreamSignal>(std::move(worker));
+        return signal();
+    }
+
+    template <typename Executor>
+    [[nodiscard]] Http2SansIoStreamSignal* beginDispatch(Executor&& executor) {
+        if (dispatched()) {
+            return nullptr;
+        }
+        dispatch_.emplace<Http2SansIoStreamSignal>(
+            std::forward<Executor>(executor));
+        return signal();
+    }
+
     RouteResolution resolution_;
     Http2RequestBodyRuntime body_;
+    DispatchState dispatch_;
 };
 
 class Http2SansIoStreamRuntime final {
@@ -363,8 +407,11 @@ public:
         if (selectedRoute_) {
             return false;
         }
-        selectedRoute_.emplace(Http2SansIoSelectedRoute(
-            std::move(resolution), bodyMode, resource_));
+        selectedRoute_.emplace(
+            Http2SansIoSelectedRoute::Token{},
+            std::move(resolution),
+            bodyMode,
+            resource_);
         return true;
     }
 
@@ -380,15 +427,18 @@ public:
     const Http2SansIoSelectedRoute* selectedRoute() const && = delete;
 
     [[nodiscard]] bool dispatched() const noexcept {
-        return dispatchSignal_.has_value();
+        const auto* selected = selectedRoute();
+        return selected != nullptr && selected->dispatched();
     }
 
     [[nodiscard]] Http2SansIoStreamSignal* signal() noexcept {
-        return dispatchSignal_ ? &*dispatchSignal_ : nullptr;
+        auto* selected = selectedRoute();
+        return selected != nullptr ? selected->signal() : nullptr;
     }
 
     [[nodiscard]] const Http2SansIoStreamSignal* signal() const noexcept {
-        return dispatchSignal_ ? &*dispatchSignal_ : nullptr;
+        const auto* selected = selectedRoute();
+        return selected != nullptr ? selected->signal() : nullptr;
     }
 
 private:
@@ -396,26 +446,23 @@ private:
 
     [[nodiscard]] Http2SansIoStreamSignal* beginDispatch(
         WorkerHandle worker) {
-        if (dispatchSignal_ || !selectedRoute_) {
-            return nullptr;
-        }
-        dispatchSignal_.emplace(std::move(worker));
-        return &*dispatchSignal_;
+        auto* selected = selectedRoute();
+        return selected != nullptr
+            ? selected->beginDispatch(std::move(worker))
+            : nullptr;
     }
 
     template <typename Executor>
     [[nodiscard]] Http2SansIoStreamSignal* beginDispatch(Executor&& executor) {
-        if (dispatchSignal_ || !selectedRoute_) {
-            return nullptr;
-        }
-        dispatchSignal_.emplace(std::forward<Executor>(executor));
-        return &*dispatchSignal_;
+        auto* selected = selectedRoute();
+        return selected != nullptr
+            ? selected->beginDispatch(std::forward<Executor>(executor))
+            : nullptr;
     }
 
     std::uint32_t streamId_;
     std::pmr::memory_resource* resource_;
     std::optional<Http2SansIoSelectedRoute> selectedRoute_;
-    std::optional<Http2SansIoStreamSignal> dispatchSignal_;
 };
 
 // Stable per-stream Web runtime storage. The common multiplexing case uses inline

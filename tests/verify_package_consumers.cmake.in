@@ -2392,7 +2392,9 @@ if(_built_components_csv MATCHES "(^|,)web(,|$)")
        NOT _installed_http2_web_runtime MATCHES "selectedRoute[(]" OR
        NOT _installed_http2_web_runtime MATCHES "selectRoute" OR
        NOT _installed_http2_web_runtime MATCHES
-           "std::optional<Http2SansIoStreamSignal>" OR
+           "using DispatchState = std::variant" OR
+       NOT _installed_http2_web_runtime MATCHES
+           "struct AwaitingDispatch final" OR
        NOT _installed_http2_web_runtime MATCHES
            "friend class Http2SansIoStreamRuntimeTable" OR
        NOT _installed_http2_web_runtime MATCHES "beginDispatch" OR
@@ -2403,9 +2405,9 @@ if(_built_components_csv MATCHES "(^|,)web(,|$)")
             "installed Web package lost unified HTTP/2 route/body/signal runtime ownership")
     endif()
     if(_installed_http2_web_runtime MATCHES
-           "kModeNotSelected|modeSelected|selectedMode|std::optional<RequestBodyMode>|std::optional<RouteResolution>|routeResolution[(]|RequestBodyMode[ \t]+mode_[ \t]*[{]|bool[ \t]+modeSelected_")
+           "kModeNotSelected|modeSelected|selectedMode|std::optional<RequestBodyMode>|std::optional<RouteResolution>|std::optional<Http2SansIoStreamSignal>|dispatchSignal_|routeResolution[(]|RequestBodyMode[ \t]+mode_[ \t]*[{]|bool[ \t]+modeSelected_")
         message(FATAL_ERROR
-            "installed Web HTTP/2 runtime restored split route/body selection state")
+            "installed Web HTTP/2 runtime restored split route/body/dispatch state")
     endif()
     if(NOT _installed_http2_web_runtime MATCHES
            "Http2SansIoStreamRuntime& ensureAccepted" OR

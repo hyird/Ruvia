@@ -7386,7 +7386,9 @@ else()
        NOT web_http2_stream_runtime MATCHES "selectRoute" OR
        NOT web_http2_stream_runtime MATCHES "streamingBacklogLimit" OR
        NOT web_http2_stream_runtime MATCHES
-           "std::optional<Http2SansIoStreamSignal>" OR
+           "using DispatchState = std::variant" OR
+       NOT web_http2_stream_runtime MATCHES
+           "struct AwaitingDispatch final" OR
        NOT web_http2_stream_runtime MATCHES
            "friend class Http2SansIoStreamRuntimeTable" OR
        NOT web_http2_stream_runtime MATCHES "beginDispatch" OR
@@ -7411,7 +7413,7 @@ else()
        web_http2_response_stream_sink MATCHES
            "Http2SansIoStreamSignal[*]" OR
        web_http2_stream_runtime MATCHES
-           "${RULE_STALE_HTTP2_BODY_MODE_SPLIT}" OR
+           "std::optional<Http2SansIoStreamSignal>|dispatchSignal_|${RULE_STALE_HTTP2_BODY_MODE_SPLIT}" OR
        web_http2_ws_transport MATCHES
            "Http2BodyQueue|Http2StreamBodyQueue|class Http2SansIoStreamSignal final" OR
        web_http2_stream_runtime MATCHES

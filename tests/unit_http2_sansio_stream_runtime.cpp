@@ -211,9 +211,15 @@ RUVIA_TEST(http2_web_stream_runtime_table_owns_dispatch_signal_and_lease) {
     RUVIA_CHECK(table.beginDispatch(1, io.get_executor()) == nullptr);
     RUVIA_CHECK(runtime.selectRoute(
         RouteResolution{}, RequestBodyMode::kBuffered));
+    auto* selectedRoute = runtime.selectedRoute();
+    RUVIA_CHECK(selectedRoute != nullptr);
+    RUVIA_CHECK(selectedRoute->signal() == nullptr);
 
     auto* signal = table.beginDispatch(1, io.get_executor());
     RUVIA_CHECK(signal != nullptr);
+    RUVIA_CHECK(runtime.selectedRoute() == selectedRoute);
+    RUVIA_CHECK(selectedRoute->dispatched());
+    RUVIA_CHECK(selectedRoute->signal() == signal);
     RUVIA_CHECK(runtime.dispatched());
     RUVIA_CHECK(runtime.signal() == signal);
     RUVIA_CHECK_EQ(table.dispatchedCount(), std::size_t{1});

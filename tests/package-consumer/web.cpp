@@ -1363,6 +1363,10 @@ static_assert(std::same_as<
     decltype(std::declval<ruvia::detail::Http2SansIoStreamRuntime&>()
                  .selectedRoute()),
     ruvia::detail::Http2SansIoSelectedRoute*>);
+static_assert(std::same_as<
+    decltype(std::declval<ruvia::detail::Http2SansIoSelectedRoute&>()
+                 .signal()),
+    ruvia::detail::Http2SansIoStreamSignal*>);
 static_assert(!HasDirectHttp2BeginDispatch<
     ruvia::detail::Http2SansIoStreamRuntime,
     asio::io_context::executor_type>);
