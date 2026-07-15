@@ -1005,6 +1005,25 @@ RUVIA_TEST(http_client_connection_fields_use_recipient_list_semantics) {
     RUVIA_CHECK(upgraded.plan().protocolUpgrade() != nullptr);
 }
 
+RUVIA_TEST(http_client_rejects_end_to_end_connection_options) {
+    for (const std::string_view option : {
+             "Content-Length", "DATE", "Set-Cookie"}) {
+        std::string response =
+            "HTTP/1.1 200 OK\r\nConnection: ";
+        response.append(option);
+        response.append("\r\nContent-Length: 0");
+        RUVIA_CHECK(
+            parseFailureError("GET", response) ==
+            Http1ClientResponseParseError::kInvalidConnection);
+    }
+
+    const auto extension = parseHead(
+        "GET",
+        "HTTP/1.1 200 OK\r\nConnection: X-Hop\r\n"
+        "X-Hop: local\r\nContent-Length: 0");
+    RUVIA_CHECK(extension.plan().knownLength() != nullptr);
+}
+
 RUVIA_TEST(http_client_response_preserves_typed_protocol_version) {
     const auto http10 = parseHead(
         "GET", "HTTP/1.0 204 No Content");

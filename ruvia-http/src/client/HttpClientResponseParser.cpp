@@ -378,7 +378,11 @@ receiveContinue(
         } else if (detail::httpAsciiEqualsIgnoreCase(name, "Connection")) {
             if (output.connectionOptions.parseField(
                     value,
-                    detail::HttpFieldListRole::kRecipient) !=
+                    detail::HttpFieldListRole::kRecipient,
+                    [](std::string_view option) noexcept {
+                        return !detail::httpConnectionOptionConflictsWithManagedField(
+                            option);
+                    }) !=
                 detail::HttpFieldListParseStatus::kOk) {
                 return Http1ClientResponseParseError::kInvalidConnection;
             }
