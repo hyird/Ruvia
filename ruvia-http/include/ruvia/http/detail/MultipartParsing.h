@@ -632,6 +632,28 @@ private:
         httpValidMimeParameterValue(value);
 }
 
+class HttpMimeParameterNames final {
+public:
+    [[nodiscard]] bool record(std::string_view name) noexcept {
+        for (std::size_t index = 0; index < size_; ++index) {
+            if (httpAsciiEqualsIgnoreCase(names_[index], name)) {
+                return false;
+            }
+        }
+        // Parameter-heavy input is hostile in practice. A fixed bound keeps
+        // duplicate detection allocation-free and its worst-case work constant.
+        if (size_ == names_.size()) {
+            return false;
+        }
+        names_[size_++] = name;
+        return true;
+    }
+
+private:
+    std::array<std::string_view, 64> names_{};
+    std::size_t size_ = 0;
+};
+
 [[nodiscard]] inline std::optional<MultipartBoundary>
 httpDecodeMultipartBoundaryParameter(std::string_view parameter) {
     std::array<char, 70> decoded{};
@@ -689,7 +711,7 @@ httpDecodeMultipartBoundaryParameter(std::string_view parameter) {
     }
 
     std::optional<MultipartBoundary> boundary;
-    bool boundarySeen = false;
+    HttpMimeParameterNames parameterNames;
     const auto parameters = contentType.substr(mediaEnd + 1);
     std::size_t start = 0;
     while (start <= parameters.size()) {
@@ -697,14 +719,11 @@ httpDecodeMultipartBoundaryParameter(std::string_view parameter) {
         const auto parameter = httpTrimOws(parameters.substr(start, end - start));
         std::string_view key;
         std::string_view value;
-        if (!httpParseMimeParameter(parameter, key, value)) {
+        if (!httpParseMimeParameter(parameter, key, value) ||
+            !parameterNames.record(key)) {
             return HttpMultipartBoundaryParseResult::makeFailure();
         }
         if (httpAsciiEqualsIgnoreCase(key, "boundary")) {
-            if (boundarySeen) {
-                return HttpMultipartBoundaryParseResult::makeFailure();
-            }
-            boundarySeen = true;
             boundary = httpDecodeMultipartBoundaryParameter(value);
             if (!boundary) {
                 return HttpMultipartBoundaryParseResult::makeFailure();
@@ -773,6 +792,7 @@ httpParseMultipartPartHeaders(std::string_view headers) noexcept {
 
     std::optional<std::string_view> name;
     std::optional<std::string_view> filename;
+    HttpMimeParameterNames parameterNames;
     auto remaining = disposition->substr(parameters + 1);
     std::size_t start = 0;
     while (start <= remaining.size()) {
@@ -780,23 +800,16 @@ httpParseMultipartPartHeaders(std::string_view headers) noexcept {
         const auto parameter = httpTrimOws(remaining.substr(start, end - start));
         std::string_view key;
         std::string_view value;
-        if (!httpParseMimeParameter(parameter, key, value)) {
+        if (!httpParseMimeParameter(parameter, key, value) ||
+            !parameterNames.record(key)) {
             return HttpMultipartPartHeaderParseResult::makeFailure(
                 MultipartParseError::kInvalidContentDisposition);
         }
 
         const auto decoded = httpTrimQuotes(value);
         if (httpAsciiEqualsIgnoreCase(key, "name")) {
-            if (name) {
-                return HttpMultipartPartHeaderParseResult::makeFailure(
-                    MultipartParseError::kInvalidContentDisposition);
-            }
             name = decoded;
         } else if (httpAsciiEqualsIgnoreCase(key, "filename")) {
-            if (filename) {
-                return HttpMultipartPartHeaderParseResult::makeFailure(
-                    MultipartParseError::kInvalidContentDisposition);
-            }
             filename = decoded;
         }
 
