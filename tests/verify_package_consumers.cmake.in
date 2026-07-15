@@ -35,6 +35,36 @@ if(_built_components_csv MATCHES "(^|,)core(,|$)" AND
 endif()
 
 if(_built_components_csv MATCHES "(^|,)core(,|$)")
+    set(_installed_task_promise_path
+        "${_install_prefix}/include/ruvia/core/detail/TaskPromise.h")
+    if(NOT EXISTS "${_installed_task_promise_path}")
+        message(FATAL_ERROR
+            "installed core package is missing its Task promise state")
+    endif()
+    file(READ "${_installed_task_promise_path}"
+        _installed_task_promise)
+    if(NOT _installed_task_promise MATCHES
+           "struct TaskPromisePending final" OR
+       NOT _installed_task_promise MATCHES
+           "struct TaskPromiseCompleted final" OR
+       NOT _installed_task_promise MATCHES
+           "class TaskPromiseValue final" OR
+       NOT _installed_task_promise MATCHES
+           "class TaskPromiseFailure final" OR
+       NOT _installed_task_promise MATCHES
+           "using State = std::variant" OR
+       NOT _installed_task_promise MATCHES
+           "emplace<TaskPromiseValue<T>>" OR
+       NOT _installed_task_promise MATCHES
+           "emplace<TaskPromiseCompleted>" OR
+       NOT _installed_task_promise MATCHES
+           "emplace<TaskPromiseFailure>" OR
+       _installed_task_promise MATCHES
+           "TaskExceptionStorage|hasException_|std::optional<T>[ 	]+value_")
+        message(FATAL_ERROR
+            "installed Task promise restored parallel value/exception state")
+    endif()
+
     set(_installed_task_completion_path
         "${_install_prefix}/include/ruvia/core/detail/AsioAwait.h")
     if(NOT EXISTS "${_installed_task_completion_path}")

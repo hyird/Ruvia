@@ -158,6 +158,8 @@ file(READ "${RUVIA_ROOT}/ruvia-core/include/ruvia/core/OneShot.h"
     core_one_shot_contract)
 file(READ "${RUVIA_ROOT}/ruvia-core/include/ruvia/core/Task.h"
     core_task_contract)
+file(READ "${RUVIA_ROOT}/ruvia-core/include/ruvia/core/detail/TaskPromise.h"
+    core_task_promise_contract)
 file(READ "${RUVIA_ROOT}/ruvia-core/include/ruvia/core/detail/AsioAwait.h"
     core_task_completion_contract)
 file(READ "${RUVIA_ROOT}/ruvia-core/include/ruvia/core/WorkerWaitResult.h"
@@ -184,6 +186,27 @@ if(NOT core_channel_contract MATCHES
        "!std::assignable_from<ruvia::Task<int>&, ruvia::Task<int>&&>")
     boundary_error("core linear async owners regained invalid default states or destructive reassignment"
         "receivers must be factory-created and Task/receiver handles must be move-construct-only so assignment cannot orphan endpoints or destroy live coroutine frames")
+endif()
+if(NOT core_task_promise_contract MATCHES
+       "struct TaskPromisePending final" OR
+   NOT core_task_promise_contract MATCHES
+       "struct TaskPromiseCompleted final" OR
+   NOT core_task_promise_contract MATCHES
+       "class TaskPromiseValue final" OR
+   NOT core_task_promise_contract MATCHES
+       "class TaskPromiseFailure final" OR
+   NOT core_task_promise_contract MATCHES
+       "using State = std::variant" OR
+   NOT core_task_promise_contract MATCHES
+       "emplace<TaskPromiseValue<T>>" OR
+   NOT core_task_promise_contract MATCHES
+       "emplace<TaskPromiseCompleted>" OR
+   NOT core_task_promise_contract MATCHES
+       "emplace<TaskPromiseFailure>" OR
+   core_task_promise_contract MATCHES
+       "TaskExceptionStorage|hasException_|std::optional<T>[ 	]+value_")
+    boundary_error("Task promise regained parallel value/exception state"
+        "pending, returned value, completed void, and failure must remain explicit exclusive coroutine states")
 endif()
 if(NOT core_task_completion_contract MATCHES
        "class TaskCompletionSuccess final" OR
