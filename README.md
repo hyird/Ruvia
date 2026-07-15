@@ -70,12 +70,10 @@ int main() {
 ```
 
 The same route is part of the compiled
-[`basic_http.cpp`](examples/basic_http.cpp) example:
+[`basic_http.cpp`](examples/basic_http.cpp) example. Configure once with
+`-DRUVIA_BUILD_EXAMPLES=ON` as shown in [Build](#build), then:
 
 ```bash
-cmake -S . -B build -G Ninja \
-  -DCMAKE_TOOLCHAIN_FILE="$VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake" \
-  -DCMAKE_BUILD_TYPE=Release -DRUVIA_BUILD_EXAMPLES=ON
 cmake --build build --target ruvia_example_basic_http
 ./build/examples/ruvia_example_basic_http &
 curl http://127.0.0.1:8080/hello
@@ -209,16 +207,11 @@ cmake -S . -B build `
 cmake --build build --config Debug
 ```
 
-Add tests and examples to the same configuration when needed:
+When needed, add `-DRUVIA_BUILD_TESTS=ON` and `-DRUVIA_BUILD_EXAMPLES=ON` to
+the same configuration, rebuild, and run the tests:
 
-```powershell
-cmake -S . -B build `
-  -DCMAKE_TOOLCHAIN_FILE="$env:VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake" `
-  -DVCPKG_TARGET_TRIPLET=x64-windows-static `
-  -DRUVIA_BUILD_TESTS=ON `
-  -DRUVIA_BUILD_EXAMPLES=ON
-cmake --build build --config Debug
-ctest --test-dir build -C Debug --output-on-failure
+```bash
+ctest --test-dir build --output-on-failure   # add -C Debug on Windows
 ```
 
 ### Build options
