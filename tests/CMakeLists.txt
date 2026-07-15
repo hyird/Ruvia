@@ -245,6 +245,16 @@ if(RUVIA_BUILD_CORE)
     target_link_libraries(ruvia_task_completion PRIVATE ruvia::core)
     add_test(NAME ruvia_task_completion COMMAND ruvia_task_completion)
 
+    add_executable(ruvia_task_lifetime_violation task_lifetime_violation.cpp)
+    target_link_libraries(ruvia_task_lifetime_violation PRIVATE ruvia::core)
+    add_test(NAME ruvia_task_lifetime_violation
+        COMMAND ruvia_task_lifetime_violation void)
+    set_tests_properties(ruvia_task_lifetime_violation PROPERTIES WILL_FAIL TRUE)
+    add_test(NAME ruvia_task_lifetime_violation_value
+        COMMAND ruvia_task_lifetime_violation value)
+    set_tests_properties(
+        ruvia_task_lifetime_violation_value PROPERTIES WILL_FAIL TRUE)
+
     add_executable(ruvia_channel channel.cpp)
     target_link_libraries(ruvia_channel PRIVATE ruvia::core)
     add_test(NAME ruvia_channel COMMAND ruvia_channel)

@@ -32,6 +32,7 @@ public:
 
     [[nodiscard]] std::coroutine_handle<> await_suspend(std::coroutine_handle<> continuation) noexcept {
         task_.handle_.promise().setContinuation(continuation);
+        task_.handle_.promise().markStarted();
         return task_.handle_;
     }
 
@@ -58,6 +59,7 @@ public:
 
     [[nodiscard]] std::coroutine_handle<> await_suspend(std::coroutine_handle<> continuation) noexcept {
         task_.handle_.promise().setContinuation(continuation);
+        task_.handle_.promise().markStarted();
         return task_.handle_;
     }
 

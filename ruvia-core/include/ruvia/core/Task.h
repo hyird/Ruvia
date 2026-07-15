@@ -3,12 +3,19 @@
 #include "ruvia/core/detail/TaskPromise.h"
 
 #include <coroutine>
+#include <exception>
 #include <utility>
 
 namespace ruvia {
 
 class TaskScope;
 
+// Task is a structured, lazy coroutine owner. A cold Task may be discarded and
+// a completed Task may be destroyed, but a started Task must run to completion.
+// Cancellation is cooperative: request it through the owning operation/scope
+// and then await or join the Task. Destroying a suspended frame would invalidate
+// every external await registration that borrows it, so that contract violation
+// terminates instead of manufacturing use-after-free cancellation semantics.
 template <typename T = void>
 class [[nodiscard]] Task {
 public:
@@ -48,14 +55,18 @@ private:
 
     void start() noexcept {
         if (handle_ != nullptr) {
+            handle_.promise().markStarted();
             handle_.resume();
         }
     }
 
     void reset() noexcept {
         if (handle_ != nullptr) {
-            handle_.destroy();
-            handle_ = nullptr;
+            auto handle = std::exchange(handle_, {});
+            if (!handle.done() && handle.promise().started()) {
+                std::terminate();
+            }
+            handle.destroy();
         }
     }
 
@@ -101,14 +112,18 @@ private:
 
     void start() noexcept {
         if (handle_ != nullptr) {
+            handle_.promise().markStarted();
             handle_.resume();
         }
     }
 
     void reset() noexcept {
         if (handle_ != nullptr) {
-            handle_.destroy();
-            handle_ = nullptr;
+            auto handle = std::exchange(handle_, {});
+            if (!handle.done() && handle.promise().started()) {
+                std::terminate();
+            }
+            handle.destroy();
         }
     }
 

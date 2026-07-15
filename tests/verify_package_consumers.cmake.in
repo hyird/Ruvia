@@ -234,6 +234,34 @@ if(_built_components_csv MATCHES "(^|,)core(,|$)")
     endif()
     file(READ "${_installed_task_promise_path}"
         _installed_task_promise)
+    set(_installed_task_path
+        "${_install_prefix}/include/ruvia/core/Task.h")
+    if(NOT EXISTS "${_installed_task_path}")
+        message(FATAL_ERROR
+            "installed core package is missing its Task ownership contract")
+    endif()
+    file(READ "${_installed_task_path}" _installed_task)
+    if(NOT _installed_task_promise MATCHES
+           "enum class TaskFrameOwnership" OR
+       NOT _installed_task_promise MATCHES
+           "kCold" OR
+       NOT _installed_task_promise MATCHES
+           "kStarted" OR
+       NOT _installed_task_promise MATCHES
+           "void markStarted[(][)] noexcept" OR
+       NOT _installed_task_promise MATCHES
+           "bool started[(][)] const noexcept" OR
+       NOT _installed_task MATCHES
+           "!handle[.]done[(][)] && handle[.]promise[(][)][.]started[(][)]" OR
+       NOT _installed_task MATCHES
+           "std::terminate[(][)]" OR
+       _installed_task_promise MATCHES
+           "kDetached|detachIfStarted" OR
+       _installed_task MATCHES
+           "handle_[.]destroy[(][)];[\r\n \t]*handle_ = nullptr")
+        message(FATAL_ERROR
+            "installed Task lost structured run-to-completion ownership")
+    endif()
     if(NOT _installed_task_promise MATCHES
            "struct TaskPromisePending final" OR
        NOT _installed_task_promise MATCHES
@@ -3467,6 +3495,7 @@ if(_built_components_csv MATCHES "(^|,)web(,|$)")
        NOT _installed_context_services MATCHES
            "ContextResponseOutput responseOutput_" OR
        NOT _installed_context_services MATCHES "WorkerHandle worker_" OR
+       _installed_context_services MATCHES "constexpr ContextServices" OR
        _installed_context_services MATCHES
            "WorkerHandle[*][ \\n\\t]+worker_" OR
        _installed_context_header MATCHES
@@ -3479,7 +3508,7 @@ if(_built_components_csv MATCHES "(^|,)web(,|$)")
        NOT _installed_context_header MATCHES
            "ContextResponseOutput responseOutput_")
         message(FATAL_ERROR
-            "installed Context restored parallel nullable capability slots")
+            "installed Context restored invalid capability ownership")
     endif()
 
     set(_installed_route_modes_path

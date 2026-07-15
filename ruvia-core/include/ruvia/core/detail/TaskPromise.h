@@ -4,6 +4,7 @@
 #include <concepts>
 #include <coroutine>
 #include <cstddef>
+#include <cstdint>
 #include <exception>
 #include <type_traits>
 #include <utility>
@@ -16,6 +17,11 @@ class Task;
 class TaskScope;
 
 namespace detail {
+
+enum class TaskFrameOwnership : std::uint8_t {
+    kCold,
+    kStarted,
+};
 
 [[nodiscard]] void* taskFrameAllocate(std::size_t bytes);
 void taskFrameDeallocate(void* pointer) noexcept;
@@ -149,6 +155,15 @@ private:
         continuation_ = continuation;
     }
 
+    void markStarted() noexcept {
+        assert(ownership_ == TaskFrameOwnership::kCold);
+        ownership_ = TaskFrameOwnership::kStarted;
+    }
+
+    [[nodiscard]] bool started() const noexcept {
+        return ownership_ == TaskFrameOwnership::kStarted;
+    }
+
     void setCompletion(void* state, void (*completion)(void*) noexcept) noexcept {
         completionState_ = state;
         completion_ = completion;
@@ -160,6 +175,7 @@ private:
         TaskPromiseFailure>;
 
     State state_;
+    TaskFrameOwnership ownership_{TaskFrameOwnership::kCold};
     std::coroutine_handle<> continuation_{std::noop_coroutine()};
     void* completionState_{nullptr};
     void (*completion_)(void*) noexcept{nullptr};
@@ -222,6 +238,15 @@ private:
         continuation_ = continuation;
     }
 
+    void markStarted() noexcept {
+        assert(ownership_ == TaskFrameOwnership::kCold);
+        ownership_ = TaskFrameOwnership::kStarted;
+    }
+
+    [[nodiscard]] bool started() const noexcept {
+        return ownership_ == TaskFrameOwnership::kStarted;
+    }
+
     void setCompletion(void* state, void (*completion)(void*) noexcept) noexcept {
         completionState_ = state;
         completion_ = completion;
@@ -233,6 +258,7 @@ private:
         TaskPromiseFailure>;
 
     State state_;
+    TaskFrameOwnership ownership_{TaskFrameOwnership::kCold};
     std::coroutine_handle<> continuation_{std::noop_coroutine()};
     void* completionState_{nullptr};
     void (*completion_)(void*) noexcept{nullptr};

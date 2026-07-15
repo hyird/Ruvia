@@ -19,10 +19,10 @@ class RateLimiter;
 
 class ContextServices final {
 public:
-    constexpr ContextServices() noexcept
+    ContextServices() noexcept
         : connInfo_(ConnInfo::plain({})) {}
 
-    constexpr ContextServices(
+    ContextServices(
         DbRegistry* db,
         RedisRegistry* redis,
         RateLimiter* rateLimiter = nullptr,

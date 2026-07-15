@@ -432,6 +432,27 @@ if(NOT core_worker_timer_contract MATCHES
         "timer expiry and cancellation must remain named outcomes throughout core and Web runtime callbacks")
 endif()
 if(NOT core_task_promise_contract MATCHES
+       "enum class TaskFrameOwnership" OR
+   NOT core_task_promise_contract MATCHES
+       "kCold" OR
+   NOT core_task_promise_contract MATCHES
+       "kStarted" OR
+   NOT core_task_promise_contract MATCHES
+       "void markStarted[(][)] noexcept" OR
+   NOT core_task_promise_contract MATCHES
+       "bool started[(][)] const noexcept" OR
+   NOT core_task_contract MATCHES
+       "!handle[.]done[(][)] && handle[.]promise[(][)][.]started[(][)]" OR
+   NOT core_task_contract MATCHES
+       "std::terminate[(][)]" OR
+   core_task_promise_contract MATCHES
+       "kDetached|detachIfStarted" OR
+   core_task_contract MATCHES
+       "handle_[.]destroy[(][)];[\r\n \t]*handle_ = nullptr" )
+    boundary_error("Task regained destructive or detached cancellation"
+        "cold Tasks may be discarded, but started Tasks are structured run-to-completion owners and must never destroy or silently detach a suspended coroutine frame")
+endif()
+if(NOT core_task_promise_contract MATCHES
        "struct TaskPromisePending final" OR
    NOT core_task_promise_contract MATCHES
        "struct TaskPromiseCompleted final" OR
@@ -1812,6 +1833,7 @@ if(EXISTS "${WEB_CONTEXT_CAPABILITIES}" AND
        NOT web_context_services MATCHES
            "ContextResponseOutput responseOutput_" OR
        NOT web_context_services MATCHES "WorkerHandle worker_" OR
+       web_context_services MATCHES "constexpr ContextServices" OR
        web_context_services MATCHES "WorkerHandle[*][ \\n\\t]+worker_" OR
        web_context_header MATCHES "WorkerHandle[*][ \\n\\t]+worker_" OR
        NOT web_context_services MATCHES "withLazyRequestBody" OR
@@ -1824,8 +1846,8 @@ if(EXISTS "${WEB_CONTEXT_CAPABILITIES}" AND
            "services[.]requestBodySource[(][)]" OR
        NOT web_context_internal MATCHES
            "services[.]responseOutput[(][)]")
-        boundary_error("Context restored parallel nullable capability slots"
-            "ContextServices and Context must carry discriminated protocol capabilities and the lifetime-safe WorkerHandle value without manual pointer clearing or borrowed handle storage")
+        boundary_error("Context restored invalid capability ownership"
+            "ContextServices and Context must carry discriminated protocol capabilities and the lifetime-safe, non-literal WorkerHandle value without constexpr construction, manual pointer clearing, or borrowed handle storage")
     endif()
     if(NOT web_context_request_source MATCHES
            "requestBodySource_[.]lazy[(][)]" OR
