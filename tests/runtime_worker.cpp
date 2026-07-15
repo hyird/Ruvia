@@ -1,12 +1,16 @@
 #include <ruvia/core/Runtime.h>
+#include <ruvia/core/detail/RuntimeLifecycle.h>
 #include <ruvia/core/detail/WorkerDispatcher.h>
 #include <ruvia/core/detail/WorkerSelection.h>
 
 #include <atomic>
+#include <barrier>
 #include <future>
 #include <memory>
 #include <stdexcept>
 #include <string_view>
+#include <thread>
+#include <vector>
 
 namespace {
 
@@ -96,11 +100,67 @@ bool testExpiredHandle() {
     return !handle.valid() && handle.post([] {}) == ruvia::PostResult::kWorkerStopping;
 }
 
+bool testLifecycleTransitionsAreMonotonic() {
+    using Lifecycle = ruvia::detail::RuntimeLifecycle;
+    Lifecycle lifecycle;
+    lifecycle.completeStop();
+    if (lifecycle.state() != Lifecycle::State::kReady ||
+        !lifecycle.start()) {
+        return false;
+    }
+    lifecycle.completeStop();
+    if (lifecycle.state() != Lifecycle::State::kRunning ||
+        lifecycle.start() ||
+        !lifecycle.requestStop() ||
+        lifecycle.state() != Lifecycle::State::kStopping ||
+        lifecycle.requestStop()) {
+        return false;
+    }
+
+    lifecycle.completeStop();
+    return lifecycle.state() == Lifecycle::State::kStopped &&
+           !lifecycle.requestStop() &&
+           lifecycle.state() == Lifecycle::State::kStopped &&
+           !lifecycle.start();
+}
+
+bool testConcurrentStopHasOneInitiator() {
+    using Lifecycle = ruvia::detail::RuntimeLifecycle;
+    constexpr std::size_t kThreadCount = 16;
+    Lifecycle lifecycle;
+    if (!lifecycle.start()) {
+        return false;
+    }
+
+    std::atomic<std::size_t> initiators{0};
+    std::barrier gate(kThreadCount + 1);
+    {
+        std::vector<std::jthread> threads;
+        threads.reserve(kThreadCount);
+        for (std::size_t i = 0; i < kThreadCount; ++i) {
+            threads.emplace_back([&] {
+                gate.arrive_and_wait();
+                if (lifecycle.requestStop()) {
+                    initiators.fetch_add(1, std::memory_order_relaxed);
+                }
+            });
+        }
+        gate.arrive_and_wait();
+    }
+
+    lifecycle.completeStop();
+    return initiators.load(std::memory_order_relaxed) == 1 &&
+           lifecycle.state() == Lifecycle::State::kStopped &&
+           !lifecycle.requestStop();
+}
+
 }
 
 int main() {
     return testDispatchAndAffinity() && testBoundedMailbox() &&
-                   testFailurePropagation() && testExpiredHandle()
+                   testFailurePropagation() && testExpiredHandle() &&
+                   testLifecycleTransitionsAreMonotonic() &&
+                   testConcurrentStopHasOneInitiator()
                ? 0
                : 1;
 }

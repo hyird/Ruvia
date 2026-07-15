@@ -1,4 +1,5 @@
 #include <ruvia/core/Runtime.h>
+#include <ruvia/core/detail/RuntimeLifecycle.h>
 
 #include <algorithm>
 #include <atomic>
@@ -17,8 +18,6 @@
 
 namespace ruvia {
 namespace {
-
-enum class RuntimeState : std::uint8_t { kReady, kRunning, kStopping, kStopped };
 
 std::size_t defaultWorkerCount() noexcept {
     return std::max<std::size_t>(1, std::thread::hardware_concurrency());
@@ -60,8 +59,7 @@ struct Runtime::Impl {
     }
 
     void stop() noexcept {
-        const auto previous = state.exchange(RuntimeState::kStopping, std::memory_order_acq_rel);
-        if (previous == RuntimeState::kStopping || previous == RuntimeState::kStopped) {
+        if (!lifecycle.requestStop()) {
             return;
         }
         for (const auto& worker : workers) {
@@ -80,7 +78,7 @@ struct Runtime::Impl {
     }
 
     std::vector<std::unique_ptr<Worker>> workers;
-    std::atomic<RuntimeState> state{RuntimeState::kReady};
+    detail::RuntimeLifecycle lifecycle;
     std::atomic<std::size_t> nextIndex{0};
     std::mutex failureMutex;
     std::exception_ptr firstFailure;
@@ -97,10 +95,7 @@ Runtime::~Runtime() {
 }
 
 void Runtime::start() {
-    auto expected = RuntimeState::kReady;
-    if (!impl_->state.compare_exchange_strong(expected,
-                                              RuntimeState::kRunning,
-                                              std::memory_order_acq_rel)) {
+    if (!impl_->lifecycle.start()) {
         throw std::logic_error("runtime can only be started once");
     }
     try {
@@ -121,7 +116,7 @@ void Runtime::start() {
                 worker->thread.join();
             }
         }
-        impl_->state.store(RuntimeState::kStopped, std::memory_order_release);
+        impl_->lifecycle.completeStop();
         throw;
     }
 }
@@ -131,7 +126,7 @@ void Runtime::stop() noexcept {
 }
 
 void Runtime::join() {
-    if (impl_->state.load(std::memory_order_acquire) == RuntimeState::kReady) {
+    if (impl_->lifecycle.state() == detail::RuntimeLifecycle::State::kReady) {
         impl_->stop();
     }
     for (const auto& worker : impl_->workers) {
@@ -139,7 +134,7 @@ void Runtime::join() {
             worker->thread.join();
         }
     }
-    impl_->state.store(RuntimeState::kStopped, std::memory_order_release);
+    impl_->lifecycle.completeStop();
 
     std::exception_ptr failure;
     {

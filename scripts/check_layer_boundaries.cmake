@@ -178,8 +178,35 @@ file(READ "${RUVIA_ROOT}/ruvia-core/include/ruvia/core/WorkerHandle.h"
     core_worker_handle_contract)
 file(READ "${RUVIA_ROOT}/ruvia-core/include/ruvia/core/detail/WorkerDispatcher.h"
     core_worker_dispatcher_contract)
+file(READ "${RUVIA_ROOT}/ruvia-core/include/ruvia/core/detail/RuntimeLifecycle.h"
+    core_runtime_lifecycle_contract)
+file(READ "${RUVIA_ROOT}/ruvia-core/src/Runtime.cpp"
+    core_runtime_implementation)
+file(READ "${RUVIA_ROOT}/tests/runtime_worker.cpp"
+    core_runtime_test_contract)
 file(READ "${RUVIA_ROOT}/tests/package-consumer/core.cpp"
     core_linear_receiver_package_contract)
+if(NOT core_runtime_lifecycle_contract MATCHES
+       "class RuntimeLifecycle final" OR
+   NOT core_runtime_lifecycle_contract MATCHES
+       "compare_exchange_weak" OR
+   NOT core_runtime_lifecycle_contract MATCHES
+       "expected = State::kStopping" OR
+   NOT core_runtime_lifecycle_contract MATCHES
+       "State::kStopped" OR
+   core_runtime_lifecycle_contract MATCHES
+       "exchange[(]State::kStopping" OR
+   NOT core_runtime_implementation MATCHES
+       "lifecycle[.]requestStop[(][)]" OR
+   core_runtime_implementation MATCHES
+       "exchange[(]RuntimeState::kStopping" OR
+   NOT core_runtime_test_contract MATCHES
+       "testLifecycleTransitionsAreMonotonic" OR
+   NOT core_runtime_test_contract MATCHES
+       "testConcurrentStopHasOneInitiator")
+    boundary_error("Runtime lifecycle can regress after terminal stop"
+        "start, stop initiation, and stop completion must use the monotonic lifecycle contract, with concurrent stop ownership and terminal-state regression covered by tests")
+endif()
 if(NOT core_channel_contract MATCHES
        "struct ChannelOpen final" OR
    NOT core_channel_contract MATCHES
