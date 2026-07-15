@@ -67,6 +67,16 @@ public:
     [[nodiscard]] WorkerHandle worker() const noexcept { return workerHandle_; }
     [[nodiscard]] WebWorkerHandle webWorker() const;
 private:
+    struct ValidatedOptionsTag final {};
+
+    HttpServer(
+        ValidatedOptionsTag,
+        asio::ip::tcp::endpoint endpoint,
+        const RouteTable& routes,
+        std::span<const DbDefinition> databases,
+        std::span<const RedisDefinition> redis,
+        HttpServerOptions validatedOptions);
+
     // RAII notify for the graceful-drain path, held across a session's whole
     // coroutine body. A nested type (rather than a session-local struct) gives it
     // linkage so it does not taint the coroutine frame with a no-linkage subobject,

@@ -9,6 +9,7 @@
 #include <variant>
 
 #include "ruvia/http/detail/http1/Http1RequestBodyPlan.h"
+#include "ruvia/http/detail/BorrowedView.h"
 #include "ruvia/http/HttpParseError.h"
 #include "ruvia/http/HttpRequest.h"
 
@@ -153,6 +154,9 @@ class Http1RequestParser final {
 public:
     [[nodiscard]] Http1RequestParseResult parse(
         std::string_view buffer) const noexcept;
+
+    template <detail::HttpTemporaryOwningCharString Buffer>
+    Http1RequestParseResult parse(Buffer&&) const = delete;
 };
 
 }  // namespace ruvia

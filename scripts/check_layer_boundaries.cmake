@@ -1122,6 +1122,12 @@ if(EXISTS "${WEB_APP_PUBLIC_MODEL}" AND
            "struct[ \t]+CorsConfig[ \t]+final" OR
        NOT web_server_config_model MATCHES
            "std::optional<CorsMaxAge>[ \\t]+maxAge" OR
+       NOT web_server_config_model MATCHES
+           "using[ \\t]+Topology[ \\t]*=[ \\t]*std::variant" OR
+       web_server_config_model MATCHES
+           "enum class[ \\t]+Kind[^{]*[{][^}]*kHttpAndHttps" OR
+       web_server_config_model MATCHES
+           "std::optional<TlsConfig>[ \\t]+tls_" OR
        NOT web_server_config_model MATCHES "AccessLogCallback" OR
        NOT web_server_options_model MATCHES
            "namespace[ \t]+ruvia::detail" OR
@@ -1148,6 +1154,28 @@ if(EXISTS "${WEB_APP_PUBLIC_MODEL}" AND
         boundary_error("Web server configuration regained parallel public models"
             "ServerConfig.h owns active policy values; detail/server/HttpServerOptions.h uses optional presence for enablement")
     endif()
+endif()
+
+set(WEB_SERVER_OPTIONS_VALIDATION
+    "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/server/HttpServerOptionsValidation.h")
+set(WEB_SERVER_LIFECYCLE
+    "${RUVIA_ROOT}/ruvia-web/src/server/HttpServerLifecycle.cpp")
+file(READ "${WEB_SERVER_OPTIONS_VALIDATION}" web_server_options_validation)
+file(READ "${WEB_SERVER_LIFECYCLE}" web_server_lifecycle)
+if(NOT web_server_options_validation MATCHES
+       "options[.]workerMailboxCapacity" OR
+   NOT web_server_options_validation MATCHES
+       "options[.]shutdownGracePeriod" OR
+   NOT web_server_options_validation MATCHES
+       "TLS client certificate CA bundle must not be empty" OR
+   NOT web_server_options_validation MATCHES
+       "SNI hosts must be unique" OR
+   NOT web_server_lifecycle MATCHES
+       "validatedHttpServerOptions[(]std::move[(]options[)][)]" OR
+   web_server_lifecycle MATCHES
+       "ioContext_, options[.]workerMailboxCapacity")
+    boundary_error("HttpServer consumed a partially validated runtime configuration"
+        "All scalar and nested TLS options must be validated before member initialization")
 endif()
 if(EXISTS "${WEB_LEGACY_SERVER_SESSION_UMBRELLA}")
     boundary_error("Generic Web server session aggregation was restored"
@@ -1552,6 +1580,17 @@ else()
            "ruvia::detail::(VoidHandleMiddleware|ResponseHandleMiddleware)|detail/middleware")
         boundary_error("middleware public API and registration implementation were mixed"
             "the public header must contain only the CRTP marker; signature/factory checks belong in detail and guard tests")
+    endif()
+endif()
+set(WEB_NEXT_CONTRACT
+    "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/Next.h")
+if(EXISTS "${WEB_NEXT_CONTRACT}")
+    file(READ "${WEB_NEXT_CONTRACT}" web_next_contract)
+    if(NOT web_next_contract MATCHES "enum class Invocation" OR
+       NOT web_next_contract MATCHES "enum class Phase" OR
+       web_next_contract MATCHES "bool[ \t]+(invoked|active|repeated|awaited_)")
+        boundary_error("middleware Next regained parallel boolean lifecycle state"
+            "Next invocation, scope expiry, and repeated calls must remain typed phases")
     endif()
 endif()
 file(READ "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/router/RouterInternal.h"
@@ -11604,6 +11643,73 @@ if(NOT http2_session_lifecycle_content MATCHES
        "bool (stopping|writeFailed|writerDone)")
     boundary_error("HTTP/2 Web session restored parallel lifecycle flags"
         "Reader stop, write failure, and writer join must transition one typed lifecycle")
+endif()
+
+# Zero-copy protocol results may borrow caller storage, but accepting an owning
+# string rvalue would make that storage disappear at the end of the call.
+set(HTTP_BORROWED_VIEW_HEADER
+    "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/detail/BorrowedView.h")
+if(NOT EXISTS "${HTTP_BORROWED_VIEW_HEADER}")
+    boundary_error("HTTP borrowed-view lifetime guard is missing"
+        "All escaping zero-copy APIs must share one owning-string predicate")
+else()
+    file(READ "${HTTP_BORROWED_VIEW_HEADER}" http_borrowed_view_content)
+    if(NOT http_borrowed_view_content MATCHES
+           "kIsHttpOwningCharString" OR
+       NOT http_borrowed_view_content MATCHES
+           "HttpTemporaryOwningCharString")
+        boundary_error("HTTP borrowed-view lifetime trait is incomplete"
+            "std::string and std::pmr::string rvalues need one shared deleted-overload contract")
+    endif()
+endif()
+
+set(http_escaping_borrowed_input_headers
+    "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/Http1RequestParser.h"
+    "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/MultipartParser.h"
+    "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/detail/http1/Http1ChunkedBodyDecoder.h"
+    "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/detail/http1/Http1ServerRequestParser.h"
+    "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/detail/http2/Http2Connection.h"
+    "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/detail/parser/HttpHeaderBlockParser.h"
+    "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/detail/parser/HttpRequestTarget.h"
+    "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/UrlEncoding.h"
+    "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/detail/HeaderTokenUtils.h"
+    "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/detail/MultipartParsing.h")
+foreach(http_borrowed_input_header IN LISTS http_escaping_borrowed_input_headers)
+    file(READ "${http_borrowed_input_header}" http_borrowed_input_content)
+    if(NOT http_borrowed_input_content MATCHES
+           "HttpTemporaryOwningCharString" OR
+       NOT http_borrowed_input_content MATCHES "= delete")
+        boundary_error("Escaping HTTP borrowed view accepts a temporary owning string"
+            "${http_borrowed_input_header} must reject owning character-string rvalues")
+    endif()
+endforeach()
+
+set(CONTEXT_SESSION_STATE_HEADER
+    "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/http/ContextSessionState.h")
+set(CONTEXT_HEADER
+    "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/Context.h")
+set(CSRF_INTERNAL_HEADER
+    "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/http/CsrfInternal.h")
+file(READ "${CONTEXT_SESSION_STATE_HEADER}" context_session_state_content)
+file(READ "${CONTEXT_HEADER}" context_session_consumer_content)
+file(READ "${CSRF_INTERNAL_HEADER}" secure_token_result_content)
+if(NOT context_session_state_content MATCHES "class ContextSessionState final" OR
+   NOT context_session_state_content MATCHES "SessionPersistNew" OR
+   NOT context_session_state_content MATCHES "SessionRotate" OR
+   NOT context_session_state_content MATCHES "SessionClear" OR
+   NOT context_session_consumer_content MATCHES
+       "ContextSessionState sessionState_" OR
+   context_session_consumer_content MATCHES
+       "session(Id|Data)_|session(Dirty|Regenerate)_")
+    boundary_error("Context session mutation restored parallel nullable/boolean state"
+        "Load, persist, rotate, and clear must be exclusive ContextSessionState alternatives")
+endif()
+if(NOT secure_token_result_content MATCHES "class SecureTokenResult final" OR
+   NOT secure_token_result_content MATCHES "class SecureTokenReady final" OR
+   NOT secure_token_result_content MATCHES "struct SecureTokenFailure final" OR
+   secure_token_result_content MATCHES "generateCsrfToken")
+    boundary_error("secure token generation restored an empty-view failure sentinel"
+        "CSRF and Session must exhaustively handle SecureTokenReady/SecureTokenFailure")
 endif()
 
 get_property(boundary_failed GLOBAL PROPERTY RUVIA_BOUNDARY_FAILED)

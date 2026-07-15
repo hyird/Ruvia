@@ -12,6 +12,7 @@
 #include <vector>
 
 #include "ruvia/http/HttpProtocolError.h"
+#include "ruvia/http/detail/BorrowedView.h"
 
 namespace ruvia {
 
@@ -437,5 +438,11 @@ private:
     std::string_view body,
     MultipartBoundary boundary,
     std::pmr::memory_resource* resource = nullptr);
+
+template <detail::HttpTemporaryOwningCharString Body>
+MultipartBodyParseResult parseMultipartBody(
+    Body&&,
+    MultipartBoundary,
+    std::pmr::memory_resource* = nullptr) = delete;
 
 }  // namespace ruvia

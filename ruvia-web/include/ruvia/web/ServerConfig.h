@@ -12,6 +12,7 @@
 #include <string_view>
 #include <type_traits>
 #include <utility>
+#include <variant>
 #include <vector>
 
 #include "ruvia/http/HttpKnownMethod.h"
@@ -166,27 +167,37 @@ public:
 private:
     friend class App;
 
-    enum class Kind : std::uint8_t {
-        kHttp,
-        kHttps,
-        kHttpAndHttps,
-        kRedirectHttpToHttps,
+    struct Http final {
+        std::uint16_t port;
     };
 
-    explicit ServerTopology(
-        Kind kind,
-        std::uint16_t httpPort,
-        std::uint16_t httpsPort,
-        std::optional<TlsConfig> tls) noexcept
-        : kind_(kind),
-          httpPort_(httpPort),
-          httpsPort_(httpsPort),
-          tls_(std::move(tls)) {}
+    struct Https final {
+        std::uint16_t port;
+        TlsConfig tls;
+    };
 
-    Kind kind_{Kind::kHttp};
-    std::uint16_t httpPort_{8080};
-    std::uint16_t httpsPort_{0};
-    std::optional<TlsConfig> tls_;
+    struct HttpAndHttps final {
+        std::uint16_t httpPort;
+        std::uint16_t httpsPort;
+        TlsConfig tls;
+    };
+
+    struct RedirectHttpToHttps final {
+        std::uint16_t httpPort;
+        std::uint16_t httpsPort;
+        TlsConfig tls;
+    };
+
+    using Topology = std::variant<
+        Http,
+        Https,
+        HttpAndHttps,
+        RedirectHttpToHttps>;
+
+    explicit ServerTopology(Topology topology) noexcept
+        : topology_(std::move(topology)) {}
+
+    Topology topology_{Http{8080}};
 };
 
 // Canonical startup values shared by App setters and every worker's server

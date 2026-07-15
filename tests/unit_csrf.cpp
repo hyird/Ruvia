@@ -33,7 +33,7 @@ using ruvia::RequestMemory;
 using ruvia::WorkerMemory;
 using ruvia::detail::ContextAccess;
 using ruvia::detail::csrfTokensEqual;
-using ruvia::detail::generateCsrfToken;
+using ruvia::detail::generateSecureToken;
 using ruvia::detail::HttpRequestAccess;
 using ruvia::detail::NextAccess;
 using ruvia::detail::RequestKnownHeader;
@@ -77,10 +77,7 @@ CsrfOutcome runCsrf(HttpKnownMethod method, bool withCookie, std::string_view co
     ruvia::detail::NextState state{};
     state.context = &context;
     state.control = &control;
-    Next next = NextAccess::make(state, [](ruvia::detail::NextState s) -> ruvia::Task<void> {
-        if (s.control != nullptr) {
-            s.control->invoked = true;
-        }
+    Next next = NextAccess::make(state, [](ruvia::detail::NextState) -> ruvia::Task<void> {
         co_return;
     });
 
@@ -90,7 +87,8 @@ CsrfOutcome runCsrf(HttpKnownMethod method, bool withCookie, std::string_view co
     io.run();
 
     CsrfOutcome out;
-    out.nextInvoked = control.invoked;
+    out.nextInvoked =
+        control.phase() == ruvia::detail::NextState::Control::Phase::kInvoked;
     out.reseeded = ContextAccess::hasPendingSetCookie(context, "XSRF-TOKEN=");
     out.hasResponse = ContextAccess::hasResponse(context);
     if (out.hasResponse) {
@@ -103,8 +101,10 @@ CsrfOutcome runCsrf(HttpKnownMethod method, bool withCookie, std::string_view co
 
 RUVIA_TEST(csrf_token_is_48_lowercase_hex_chars) {
     std::array<char, 64> buffer{};
-    const auto token = generateCsrfToken(buffer);
-    RUVIA_CHECK_EQ(token.size(), std::size_t{48});  // 24 random bytes -> 48 hex chars
+    const auto result = generateSecureToken(buffer);
+    RUVIA_CHECK(result.ready() != nullptr);
+    const auto token = result.ready()->value();
+    RUVIA_CHECK_EQ(token.size(), std::size_t{48});
     for (const char c : token) {
         RUVIA_CHECK(isLowerHex(c));
     }
@@ -112,16 +112,22 @@ RUVIA_TEST(csrf_token_is_48_lowercase_hex_chars) {
 
 RUVIA_TEST(csrf_token_requires_a_large_enough_buffer) {
     std::array<char, 47> tooSmall{};
-    RUVIA_CHECK(generateCsrfToken(tooSmall).empty());  // one byte short -> empty
+    RUVIA_CHECK(generateSecureToken(tooSmall).failure() != nullptr);
     std::array<char, 48> exact{};
-    RUVIA_CHECK_EQ(generateCsrfToken(exact).size(), std::size_t{48});  // exact fit works
+    const auto exactResult = generateSecureToken(exact);
+    RUVIA_CHECK(exactResult.ready() != nullptr);
+    RUVIA_CHECK_EQ(exactResult.ready()->value().size(), std::size_t{48});
 }
 
 RUVIA_TEST(csrf_token_is_unpredictable) {
     std::array<char, 64> a{};
     std::array<char, 64> b{};
-    const std::string first(generateCsrfToken(a));
-    const std::string second(generateCsrfToken(b));
+    const auto firstResult = generateSecureToken(a);
+    const auto secondResult = generateSecureToken(b);
+    RUVIA_CHECK(firstResult.ready() != nullptr);
+    RUVIA_CHECK(secondResult.ready() != nullptr);
+    const std::string first(firstResult.ready()->value());
+    const std::string second(secondResult.ready()->value());
     RUVIA_CHECK_EQ(first.size(), std::size_t{48});
     RUVIA_CHECK_EQ(second.size(), std::size_t{48});
     // 192 bits of CSPRNG entropy: a repeat is astronomically unlikely.

@@ -42,7 +42,7 @@ public:
     NextControlScope& operator=(const NextControlScope&) = delete;
 
     ~NextControlScope() {
-        control_->active = false;
+        control_->expire();
     }
 
 private:
@@ -115,7 +115,7 @@ Task<void> detail::RouteTable::invokeMiddlewareAt(
 
 Task<void> detail::RouteTable::invokeMiddlewareContinuation(NextState state) {
     auto* context = state.context;
-    if (state.repeated) {
+    if (state.invocation != detail::NextState::Invocation::kReady) {
         storeRepeatedNextError(*context);
         co_return;
     }
@@ -168,7 +168,7 @@ Task<void> detail::RouteTable::invokeStreamMiddlewareAt(
 
 Task<void> detail::RouteTable::invokeStreamMiddlewareContinuation(NextState state) {
     auto* context = state.context;
-    if (state.repeated) {
+    if (state.invocation != detail::NextState::Invocation::kReady) {
         storeRepeatedNextError(*context);
         co_return;
     }

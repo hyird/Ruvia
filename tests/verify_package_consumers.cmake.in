@@ -2290,6 +2290,19 @@ if(_built_components_csv MATCHES "(^|,)web(,|$)")
         message(FATAL_ERROR
             "installed Web package lost the public-config/runtime-options boundary")
     endif()
+    file(READ "${_installed_server_config}"
+        _installed_server_config_content)
+    file(READ "${_installed_server_options}"
+        _installed_server_options_content)
+    if(NOT _installed_server_config_content MATCHES
+           "using[ \\t]+Topology[ \\t]*=[ \\t]*std::variant" OR
+       _installed_server_config_content MATCHES
+           "std::optional<TlsConfig>[ \\t]+tls_" OR
+       NOT _installed_server_options_content MATCHES
+           "using[ \\t]+ListenerTransport[ \\t]*=[ \\t]*std::variant")
+        message(FATAL_ERROR
+            "installed Web package restored a split listener topology")
+    endif()
     set(_removed_server_session_umbrella
         "${_install_prefix}/include/ruvia/web/detail/server/HttpServerSessionUtils.h")
     if(EXISTS "${_removed_server_session_umbrella}")
@@ -4689,6 +4702,22 @@ if("core" IN_LIST _built_components)
 endif()
 
 if("http" IN_LIST _built_components)
+    set(_installed_http_borrowed_view
+        "${_install_prefix}/include/ruvia/http/detail/BorrowedView.h")
+    if(NOT EXISTS "${_installed_http_borrowed_view}")
+        message(FATAL_ERROR
+            "installed HTTP package is missing the borrowed-view lifetime contract")
+    endif()
+    file(READ "${_installed_http_borrowed_view}"
+        _installed_http_borrowed_view_content)
+    if(NOT _installed_http_borrowed_view_content MATCHES
+           "kIsHttpOwningCharString" OR
+       NOT _installed_http_borrowed_view_content MATCHES
+           "HttpTemporaryOwningCharString")
+        message(FATAL_ERROR
+            "installed HTTP borrowed-view lifetime contract is incomplete")
+    endif()
+
     ruvia_verify_package_consumer(
         full-http "${_install_prefix}" http http "${_built_components_csv}"
         unavailable FALSE)
@@ -4701,6 +4730,31 @@ if("http" IN_LIST _built_components)
 endif()
 
 if("web" IN_LIST _built_components)
+    set(_installed_context_session_state
+        "${_install_prefix}/include/ruvia/web/detail/http/ContextSessionState.h")
+    set(_installed_secure_token_result
+        "${_install_prefix}/include/ruvia/web/detail/http/CsrfInternal.h")
+    if(NOT EXISTS "${_installed_context_session_state}" OR
+       NOT EXISTS "${_installed_secure_token_result}")
+        message(FATAL_ERROR
+            "installed Web package is missing typed session/token contracts")
+    endif()
+    file(READ "${_installed_context_session_state}"
+        _installed_context_session_state_content)
+    file(READ "${_installed_secure_token_result}"
+        _installed_secure_token_result_content)
+    if(NOT _installed_context_session_state_content MATCHES
+           "class ContextSessionState final" OR
+       NOT _installed_context_session_state_content MATCHES
+           "SessionClear" OR
+       NOT _installed_secure_token_result_content MATCHES
+           "class SecureTokenResult final" OR
+       _installed_secure_token_result_content MATCHES
+           "generateCsrfToken")
+        message(FATAL_ERROR
+            "installed Web session/token contracts are stale")
+    endif()
+
     ruvia_verify_package_consumer(
         full-web "${_install_prefix}" web "core,http,web"
         "${_built_components_csv}" unavailable FALSE)

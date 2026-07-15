@@ -334,6 +334,11 @@ private:
     return result;
 }
 
+template <HttpTemporaryOwningCharString Headers>
+std::optional<std::string_view> httpHeaderValueInBlock(
+    Headers&&,
+    std::string_view) = delete;
+
 [[nodiscard]] inline std::optional<std::string_view> httpDispositionParameter(
     std::string_view disposition,
     std::string_view name) noexcept {
@@ -344,6 +349,11 @@ private:
     const auto value = httpFindSemicolonParameterQuotedIgnoreCase(disposition, name);
     return value ? std::optional<std::string_view>(httpTrimQuotes(*value)) : std::nullopt;
 }
+
+template <HttpTemporaryOwningCharString Disposition>
+std::optional<std::string_view> httpDispositionParameter(
+    Disposition&&,
+    std::string_view) = delete;
 
 [[nodiscard]] inline bool httpIsFormDataDisposition(std::string_view disposition) noexcept {
     const auto value = httpTrimOws(disposition);

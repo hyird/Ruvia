@@ -31,6 +31,7 @@
 #include "ruvia/web/detail/ValidatedValues.h"
 #include "ruvia/web/detail/http/ContextCapabilities.h"
 #include "ruvia/web/detail/http/ContextResponseState.h"
+#include "ruvia/web/detail/http/ContextSessionState.h"
 #include "ruvia/core/memory/MemoryPool.h"
 
 #ifdef RUVIA_ENABLE_REDIS
@@ -113,19 +114,13 @@ public:
     // application owns the blob's format). setSession/clearSession mark it for
     // persistence on the way out.
     [[nodiscard]] std::string_view session() const noexcept {
-        return sessionData_ == nullptr
-            ? std::string_view{}
-            : std::string_view(sessionData_->data(), sessionData_->size());
+        return sessionState_.data();
     }
     void setSession(std::string_view data) {
-        sessionDataStorage().assign(data);
-        sessionDirty_ = true;
+        sessionState_.set(data);
     }
     void clearSession() {
-        if (sessionData_ != nullptr) {
-            sessionData_->clear();
-        }
-        sessionDirty_ = true;
+        sessionState_.clear();
     }
     // Force a fresh session id when the middleware persists on the way out, and
     // drop the blob under the old id. Call this on any privilege change (e.g. after
@@ -133,8 +128,7 @@ public:
     // was recognized in the store gets a new, server-chosen id the client could not
     // have planted. Mirrors PHP session_regenerate_id(true) / express regenerate.
     void regenerateSession() {
-        sessionRegenerate_ = true;
-        sessionDirty_ = true;
+        sessionState_.regenerate();
     }
 
     [[nodiscard]] std::pmr::memory_resource* resource() const noexcept {
@@ -314,13 +308,6 @@ private:
     [[nodiscard]] std::optional<std::string_view> requestHeader(std::string_view name) const;
     [[nodiscard]] const RequestNameValueList& routeParams() const;
     [[nodiscard]] std::pmr::string& decodedBody() const;
-    [[nodiscard]] std::string_view sessionId() const noexcept {
-        return sessionId_ == nullptr
-            ? std::string_view{}
-            : std::string_view(sessionId_->data(), sessionId_->size());
-    }
-    [[nodiscard]] std::pmr::string& sessionIdStorage();
-    [[nodiscard]] std::pmr::string& sessionDataStorage();
     [[nodiscard]] detail::ContextValueStore& values();
     [[nodiscard]] HttpResponse& responseStorage();
     void storeResponse(HttpResponse&& response);
@@ -357,6 +344,7 @@ private:
     detail::ContextRequestBodySource requestBodySource_;
     detail::ContextResponseOutput responseOutput_;
     detail::ContextResponseState responseState_;
+    detail::ContextSessionState sessionState_;
     // Holds the decoded request body when Content-Encoding was applied, so
     // body() can return a stable view; mutable because body() is const.
     mutable std::pmr::string* decodedBody_{nullptr};
@@ -365,13 +353,9 @@ private:
     mutable detail::RequestQueryValues* requestQueries_{nullptr};
     mutable RequestNameValueList* requestCookies_{nullptr};
     mutable RequestNameValueList* routeParams_{nullptr};
-    std::pmr::string* sessionId_{nullptr};
-    std::pmr::string* sessionData_{nullptr};
     detail::ContextValueStore* values_{nullptr};
     std::exception_ptr error_;
     mutable bool bodyDecoded_ : 1 {false};
-    bool sessionDirty_ : 1 {false};
-    bool sessionRegenerate_ : 1 {false};
 
     detail::ValidatedValueStore validatedValues_;
 };

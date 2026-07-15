@@ -103,6 +103,11 @@ RUVIA_TEST(validate_server_options_rejects_configured_nonpositive_timeout) {
 RUVIA_TEST(validate_server_options_rejects_nonpositive_limits) {
     {
         HttpServerOptions options;
+        options.workerMailboxCapacity = 0;
+        RUVIA_CHECK(throwsInvalid([&] { validateHttpServerOptions(options); }));
+    }
+    {
+        HttpServerOptions options;
         options.maxConnections = 0;
         RUVIA_CHECK(throwsInvalid([&] { validateHttpServerOptions(options); }));
     }
@@ -131,6 +136,11 @@ RUVIA_TEST(validate_server_options_rejects_nonpositive_limits) {
         options.scanInterval = std::chrono::milliseconds(0);
         RUVIA_CHECK(throwsInvalid([&] { validateHttpServerOptions(options); }));
     }
+    {
+        HttpServerOptions options;
+        options.shutdownGracePeriod = std::chrono::milliseconds(-1);
+        RUVIA_CHECK(throwsInvalid([&] { validateHttpServerOptions(options); }));
+    }
 }
 
 RUVIA_TEST(validate_server_options_enforces_tls_material) {
@@ -148,6 +158,52 @@ RUVIA_TEST(validate_server_options_enforces_tls_material) {
     RUVIA_CHECK(!throwsInvalid([&] { validateHttpServerOptions(configured); }));
 }
 
+RUVIA_TEST(validate_server_options_enforces_nested_tls_material) {
+    const auto validTls = [] {
+        HttpServerOptions::Tls tls;
+        tls.identity.certificateChainFile = "cert.pem";
+        tls.identity.privateKeyFile = "key.pem";
+        return tls;
+    };
+
+    {
+        HttpServerOptions options;
+        auto tls = validTls();
+        tls.clientCertificates.emplace();
+        options.transport = std::move(tls);
+        RUVIA_CHECK(throwsInvalid([&] { validateHttpServerOptions(options); }));
+    }
+    {
+        HttpServerOptions options;
+        auto tls = validTls();
+        auto& sni = tls.sniIdentities.emplace_back();
+        sni.identity.certificateChainFile = "sni-cert.pem";
+        sni.identity.privateKeyFile = "sni-key.pem";
+        options.transport = std::move(tls);
+        RUVIA_CHECK(throwsInvalid([&] { validateHttpServerOptions(options); }));
+    }
+    {
+        HttpServerOptions options;
+        auto tls = validTls();
+        auto& sni = tls.sniIdentities.emplace_back();
+        sni.host = "example.com";
+        options.transport = std::move(tls);
+        RUVIA_CHECK(throwsInvalid([&] { validateHttpServerOptions(options); }));
+    }
+    {
+        HttpServerOptions options;
+        auto tls = validTls();
+        for (const auto* host : {"Example.com", "example.COM"}) {
+            auto& sni = tls.sniIdentities.emplace_back();
+            sni.host = host;
+            sni.identity.certificateChainFile = "sni-cert.pem";
+            sni.identity.privateKeyFile = "sni-key.pem";
+        }
+        options.transport = std::move(tls);
+        RUVIA_CHECK(throwsInvalid([&] { validateHttpServerOptions(options); }));
+    }
+}
+
 RUVIA_TEST(validate_server_options_requires_redirect_https_port) {
     HttpServerOptions options;
     options.transport = HttpServerOptions::RedirectHttpToHttps{0};
@@ -158,6 +214,7 @@ RUVIA_TEST(server_topology_rejects_invalid_listener_and_tls_states_at_constructi
     static_assert(!std::is_default_constructible_v<ruvia::TlsIdentity>);
     static_assert(!std::is_default_constructible_v<ruvia::TlsClientCertificatePolicy>);
     static_assert(!std::is_default_constructible_v<ruvia::TlsConfig>);
+    static_assert(!std::is_aggregate_v<ruvia::ServerTopology>);
 
     RUVIA_CHECK(throwsInvalid([] {
         (void)ruvia::TlsIdentity::fromFiles({}, "key.pem");

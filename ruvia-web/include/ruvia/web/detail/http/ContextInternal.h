@@ -45,7 +45,8 @@ inline Context::Context(
       maxDecodedBodyBytes_(services.maxDecodedBodyBytes()),
       requestBodySource_(services.requestBodySource()),
       responseOutput_(services.responseOutput()),
-      responseState_(memory.resource()) {}
+      responseState_(memory.resource()),
+      sessionState_(memory.resource()) {}
 
 }  // namespace ruvia
 

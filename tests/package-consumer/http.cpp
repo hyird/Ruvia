@@ -31,6 +31,8 @@
 #include <ruvia/http/MultipartParser.h>
 #include <ruvia/http/UrlEncoding.h>
 #include <ruvia/http/detail/AsciiCase.h>
+#include <ruvia/http/detail/BorrowedView.h>
+#include <ruvia/http/detail/HeaderTokenUtils.h>
 #include <ruvia/http/detail/HttpByteRange.h>
 #include <ruvia/http/detail/HttpContentCoding.h>
 #include <ruvia/http/detail/HttpContentLength.h>
@@ -65,6 +67,8 @@
 #include <ruvia/http/detail/MultipartParsing.h>
 #include <ruvia/http/detail/SetCookiePlan.h>
 #include <ruvia/http/detail/parser/HttpChunkParser.h>
+#include <ruvia/http/detail/parser/HttpHeaderBlockParser.h>
+#include <ruvia/http/detail/parser/HttpRequestTarget.h>
 #include <ruvia/http/detail/server/HttpFinalResponseControlPlan.h>
 #include <ruvia/http/detail/server/HttpResponseWritePlan.h>
 #include <ruvia/http/detail/websocket/HttpWebSocketServerHandshake.h>
@@ -77,6 +81,111 @@ template <typename T>
 concept HasLegacyResponseBodyCopy = requires(T& response) {
     response.setBodyCopy(std::string_view{});
 };
+
+template <typename Input>
+concept AcceptsHttp1BorrowedParseInput = requires(
+    const ruvia::Http1RequestParser& parser,
+    Input&& input) {
+    parser.parse(std::forward<Input>(input));
+};
+
+template <typename Input>
+concept AcceptsHttp2BorrowedFeedInput = requires(
+    ruvia::detail::Http2Connection& connection,
+    Input&& input) {
+    connection.feed(std::forward<Input>(input));
+};
+
+template <typename Input>
+concept AcceptsHttp1ChunkBorrowedInput = requires(
+    ruvia::detail::Http1ChunkedBodyDecoder& decoder,
+    Input&& input) {
+    decoder.decode(std::forward<Input>(input));
+};
+
+template <typename Input>
+concept AcceptsMultipartBorrowedInput = requires(Input&& input) {
+    ruvia::parseMultipartBody(
+        std::forward<Input>(input), ruvia::MultipartBoundary("x"));
+};
+
+template <typename Input>
+concept AcceptsAuthorityBorrowedInput = requires(Input&& input) {
+    ruvia::detail::parseHttpAuthority(std::forward<Input>(input));
+};
+
+template <typename Input>
+concept AcceptsUrlValueBorrowedInput = requires(Input&& input) {
+    ruvia::detail::findUrlEncodedValue(
+        std::forward<Input>(input), "name", ruvia::detail::UrlDecodeMode::kForm);
+};
+
+template <typename Input>
+concept AcceptsParameterBorrowedInput = requires(Input&& input) {
+    ruvia::detail::httpFindSemicolonParameter(
+        std::forward<Input>(input), "name");
+};
+
+template <typename Input>
+concept AcceptsServerMessageBorrowedInput = requires(
+    const ruvia::detail::Http1ServerRequestParser& parser,
+    Input&& input) {
+    parser.parseMessage(std::forward<Input>(input));
+};
+
+template <typename Input>
+concept AcceptsHeaderSliceBorrowedInput = requires(
+    const ruvia::detail::HttpHeaderSlice& slice,
+    Input&& input) {
+    slice.bind(std::forward<Input>(input));
+};
+
+template <typename Input>
+concept AcceptsMultipartHeaderBorrowedInput = requires(Input&& input) {
+    ruvia::detail::httpHeaderValueInBlock(
+        std::forward<Input>(input), "content-type");
+};
+
+static_assert(ruvia::detail::kIsHttpOwningCharString<std::string>);
+static_assert(ruvia::detail::kIsHttpOwningCharString<std::pmr::string>);
+static_assert(!ruvia::detail::kIsHttpOwningCharString<std::string_view>);
+static_assert(AcceptsHttp1BorrowedParseInput<std::string&>);
+static_assert(AcceptsHttp1BorrowedParseInput<std::pmr::string&>);
+static_assert(AcceptsHttp1BorrowedParseInput<std::string_view>);
+static_assert(!AcceptsHttp1BorrowedParseInput<std::string>);
+static_assert(!AcceptsHttp1BorrowedParseInput<std::pmr::string>);
+static_assert(AcceptsHttp2BorrowedFeedInput<std::string&>);
+static_assert(AcceptsHttp2BorrowedFeedInput<std::string_view>);
+static_assert(!AcceptsHttp2BorrowedFeedInput<std::string>);
+static_assert(!AcceptsHttp2BorrowedFeedInput<std::pmr::string>);
+static_assert(AcceptsHttp1ChunkBorrowedInput<std::string&>);
+static_assert(AcceptsHttp1ChunkBorrowedInput<std::string_view>);
+static_assert(!AcceptsHttp1ChunkBorrowedInput<std::string>);
+static_assert(!AcceptsHttp1ChunkBorrowedInput<std::pmr::string>);
+static_assert(AcceptsMultipartBorrowedInput<std::string&>);
+static_assert(AcceptsMultipartBorrowedInput<std::string_view>);
+static_assert(!AcceptsMultipartBorrowedInput<std::string>);
+static_assert(!AcceptsMultipartBorrowedInput<std::pmr::string>);
+static_assert(AcceptsAuthorityBorrowedInput<std::string&>);
+static_assert(AcceptsAuthorityBorrowedInput<std::string_view>);
+static_assert(!AcceptsAuthorityBorrowedInput<std::string>);
+static_assert(!AcceptsAuthorityBorrowedInput<std::pmr::string>);
+static_assert(AcceptsUrlValueBorrowedInput<std::string&>);
+static_assert(!AcceptsUrlValueBorrowedInput<std::string>);
+static_assert(!AcceptsUrlValueBorrowedInput<std::pmr::string>);
+static_assert(AcceptsParameterBorrowedInput<std::string&>);
+static_assert(!AcceptsParameterBorrowedInput<std::string>);
+static_assert(!AcceptsParameterBorrowedInput<std::pmr::string>);
+static_assert(AcceptsServerMessageBorrowedInput<std::string&>);
+static_assert(AcceptsServerMessageBorrowedInput<std::string_view>);
+static_assert(!AcceptsServerMessageBorrowedInput<std::string>);
+static_assert(!AcceptsServerMessageBorrowedInput<std::pmr::string>);
+static_assert(AcceptsHeaderSliceBorrowedInput<std::string&>);
+static_assert(!AcceptsHeaderSliceBorrowedInput<std::string>);
+static_assert(!AcceptsHeaderSliceBorrowedInput<std::pmr::string>);
+static_assert(AcceptsMultipartHeaderBorrowedInput<std::string&>);
+static_assert(!AcceptsMultipartHeaderBorrowedInput<std::string>);
+static_assert(!AcceptsMultipartHeaderBorrowedInput<std::pmr::string>);
 
 template <typename T>
 concept HasLegacyResponseBodyView = requires(T& response) {

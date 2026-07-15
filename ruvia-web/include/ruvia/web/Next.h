@@ -4,6 +4,7 @@
 
 #include <coroutine>
 #include <cstddef>
+#include <cstdint>
 #include <utility>
 
 namespace ruvia {
@@ -19,9 +20,35 @@ class RouteTable;
 class StreamMiddlewareChainState;
 
 struct NextState final {
+    enum class Invocation : std::uint8_t {
+        kReady,
+        kRepeated,
+        kExpired,
+    };
+
     struct Control final {
-        bool invoked{false};
-        bool active{true};
+        enum class Phase : std::uint8_t {
+            kFresh,
+            kInvoked,
+            kExpired,
+        };
+
+        [[nodiscard]] Invocation beginInvocation() noexcept {
+            if (phase_ == Phase::kFresh) {
+                phase_ = Phase::kInvoked;
+                return Invocation::kReady;
+            }
+            return phase_ == Phase::kInvoked
+                ? Invocation::kRepeated
+                : Invocation::kExpired;
+        }
+
+        void expire() noexcept { phase_ = Phase::kExpired; }
+
+        [[nodiscard]] Phase phase() const noexcept { return phase_; }
+
+    private:
+        Phase phase_{Phase::kFresh};
     };
 
     const RouteTable* table{nullptr};
@@ -31,7 +58,7 @@ struct NextState final {
     const CallableRef<void, Context&>* streamHandler{nullptr};
     Control* control{nullptr};
     std::size_t index{0};
-    bool repeated{false};
+    Invocation invocation{Invocation::kReady};
 };
 
 using NextInvoke = Task<void> (*)(NextState);
@@ -80,8 +107,10 @@ public:
 
         [[nodiscard]] Awaiter operator co_await() && {
             auto state = state_;
-            state.repeated = state.repeated || awaited_;
-            awaited_ = true;
+            if (phase_ == Phase::kAwaited) {
+                state.invocation = detail::NextState::Invocation::kRepeated;
+            }
+            phase_ = Phase::kAwaited;
             return Awaiter(invoke_(state));
         }
         [[nodiscard]] auto operator co_await() & = delete;
@@ -99,7 +128,11 @@ public:
 
         detail::NextState state_;
         detail::NextInvoke invoke_{nullptr};
-        bool awaited_{false};
+        enum class Phase : std::uint8_t {
+            kFresh,
+            kAwaited,
+        };
+        Phase phase_{Phase::kFresh};
     };
 
     Next(const Next&) = delete;

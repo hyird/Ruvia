@@ -10,6 +10,7 @@
 
 #include "ruvia/http/HttpLimits.h"
 #include "ruvia/http/HttpProtocolError.h"
+#include "ruvia/http/detail/BorrowedView.h"
 #include "ruvia/http/detail/HttpRequestBodyFailure.h"
 #include "ruvia/http/ProtocolByteLimit.h"
 #include "ruvia/http/detail/parser/HttpChunkParser.h"
@@ -313,6 +314,9 @@ public:
             }
         }
     }
+
+    template <HttpTemporaryOwningCharString Input>
+    Http1ChunkDecodeResult decode(Input&&) = delete;
 
 private:
     enum class ProgressState : std::uint8_t {

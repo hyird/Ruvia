@@ -53,14 +53,11 @@ void validateUniqueValidatedModelTypes(
 Next::Awaitable Next::operator()() & {
     auto state = state_;
     auto* control = state.control;
-    if (control == nullptr || !control->active) {
-        state.repeated = true;
+    state.invocation = control == nullptr
+        ? detail::NextState::Invocation::kExpired
+        : control->beginInvocation();
+    if (state.invocation == detail::NextState::Invocation::kExpired) {
         return Awaitable(state, &ignoreExpiredNext);
-    }
-
-    state.repeated = control->invoked;
-    if (!control->invoked) {
-        control->invoked = true;
     }
     return Awaitable(state, invoke_);
 }

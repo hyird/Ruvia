@@ -30,6 +30,16 @@ namespace {
     return true;
 }
 
+void validateDualListenerPorts(
+    std::uint16_t httpPort,
+    std::uint16_t httpsPort) {
+    detail::ensureNonZeroPort(httpPort, "HTTP listen port must not be zero");
+    detail::ensureNonZeroPort(httpsPort, "HTTPS listen port must not be zero");
+    if (httpPort == httpsPort) {
+        throw std::invalid_argument("HTTP and HTTPS listen ports must be different");
+    }
+}
+
 }  // namespace
 
 TlsIdentity TlsIdentity::fromFiles(
@@ -93,33 +103,34 @@ TlsConfig& TlsConfig::addSniIdentity(
 
 ServerTopology ServerTopology::http(std::uint16_t port) {
     detail::ensureNonZeroPort(port, "HTTP listen port must not be zero");
-    return ServerTopology(Kind::kHttp, port, 0, std::nullopt);
+    return ServerTopology(Http{port});
 }
 
 ServerTopology ServerTopology::https(std::uint16_t port, TlsConfig tls) {
     detail::ensureNonZeroPort(port, "HTTPS listen port must not be zero");
-    return ServerTopology(Kind::kHttps, 0, port, std::move(tls));
+    return ServerTopology(Https{port, std::move(tls)});
 }
 
 ServerTopology ServerTopology::httpAndHttps(
     std::uint16_t httpPort,
     std::uint16_t httpsPort,
     TlsConfig tls) {
-    detail::ensureNonZeroPort(httpPort, "HTTP listen port must not be zero");
-    detail::ensureNonZeroPort(httpsPort, "HTTPS listen port must not be zero");
-    if (httpPort == httpsPort) {
-        throw std::invalid_argument("HTTP and HTTPS listen ports must be different");
-    }
-    return ServerTopology(Kind::kHttpAndHttps, httpPort, httpsPort, std::move(tls));
+    validateDualListenerPorts(httpPort, httpsPort);
+    return ServerTopology(HttpAndHttps{
+        httpPort,
+        httpsPort,
+        std::move(tls)});
 }
 
 ServerTopology ServerTopology::redirectHttpToHttps(
     std::uint16_t httpPort,
     std::uint16_t httpsPort,
     TlsConfig tls) {
-    auto topology = httpAndHttps(httpPort, httpsPort, std::move(tls));
-    topology.kind_ = Kind::kRedirectHttpToHttps;
-    return topology;
+    validateDualListenerPorts(httpPort, httpsPort);
+    return ServerTopology(RedirectHttpToHttps{
+        httpPort,
+        httpsPort,
+        std::move(tls)});
 }
 
 App& App::setCompression(std::optional<CompressionConfig> config) {

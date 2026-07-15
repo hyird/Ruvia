@@ -160,19 +160,34 @@ HttpServer::HttpServer(
     std::span<const DbDefinition> databases,
     std::span<const RedisDefinition> redis,
     HttpServerOptions options)
+    : HttpServer(
+          ValidatedOptionsTag{},
+          std::move(endpoint),
+          routes,
+          databases,
+          redis,
+          validatedHttpServerOptions(std::move(options))) {}
+
+HttpServer::HttpServer(
+    ValidatedOptionsTag,
+    TcpEndpoint endpoint,
+    const RouteTable& routes,
+    std::span<const DbDefinition> databases,
+    std::span<const RedisDefinition> redis,
+    HttpServerOptions validatedOptions)
     // One worker thread runs all I/O on this context; cross-thread access is
     // limited to stop()'s asio::post, which UNSAFE_IO keeps locked. Only the
     // reactor's per-descriptor I/O locking is elided.
     : ioContext_(ASIO_CONCURRENCY_HINT_UNSAFE_IO),
       workerDispatcher_(std::make_shared<WorkerDispatcher>(
-          ioContext_, options.workerMailboxCapacity)),
+          ioContext_, validatedOptions.workerMailboxCapacity)),
       workerHandle_(WorkerHandleAccess::make(workerDispatcher_)),
       acceptor_(ioContext_),
       endpoint_(std::move(endpoint)),
       routes_(routes),
       sniContexts_(memory_.resource()),
       sniLookup_(memory_.resource()),
-      options_(validatedHttpServerOptions(std::move(options))),
+      options_(std::move(validatedOptions)),
       databases_(ioContext_, memory_.resource(), databases),
       redis_(ioContext_, memory_.resource(), redis),
       webWorkerDispatch_(std::make_shared<WebWorkerDispatch>(

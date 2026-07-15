@@ -29,6 +29,9 @@ struct HttpHeaderSlice {
     [[nodiscard]] std::string_view bind(std::string_view buffer) const noexcept {
         return buffer.substr(offset, length);
     }
+
+    template <HttpTemporaryOwningCharString Buffer>
+    std::string_view bind(Buffer&&) const = delete;
 };
 
 struct ParsedRequestHeaderSlot {

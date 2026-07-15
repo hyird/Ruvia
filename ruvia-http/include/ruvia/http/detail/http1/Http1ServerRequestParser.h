@@ -214,10 +214,19 @@ public:
         Http1ServerRequestParseState& state,
         std::size_t headerSearchOffset = 0) const noexcept;
 
+    template <HttpTemporaryOwningCharString Buffer>
+    void parseHead(
+        Buffer&&,
+        Http1ServerRequestParseState&,
+        std::size_t = 0) const = delete;
+
     // Whole-message scanner used by the public sans-I/O API. It always advances
     // beyond kRequestHeadReady to an unambiguous message/failure/need-more phase.
     [[nodiscard]] Http1ServerRequestParseState parseMessage(
         std::string_view buffer) const noexcept;
+
+    template <HttpTemporaryOwningCharString Buffer>
+    Http1ServerRequestParseState parseMessage(Buffer&&) const = delete;
 
 private:
     static void parseRequestHead(

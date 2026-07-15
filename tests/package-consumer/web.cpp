@@ -38,6 +38,8 @@
 #include <ruvia/web/detail/ValidatedValues.h>
 #include <ruvia/web/detail/http/ContextCapabilities.h>
 #include <ruvia/web/detail/http/ContextServices.h>
+#include <ruvia/web/detail/http/ContextSessionState.h>
+#include <ruvia/web/detail/http/CsrfInternal.h>
 #include <ruvia/web/detail/http2/Http2SansIoStreamRuntime.h>
 #include <ruvia/web/detail/http2/Http2SansIoSendWindow.h>
 #include <ruvia/web/detail/websocket/WsTransportReadResult.h>
@@ -74,6 +76,12 @@
 #endif
 
 static_assert(!std::is_copy_constructible_v<ruvia::MultipartReader>);
+static_assert(std::same_as<
+    decltype(ruvia::detail::generateSecureToken(std::declval<std::span<char>>())),
+    ruvia::detail::SecureTokenResult>);
+static_assert(std::same_as<
+    decltype(std::declval<const ruvia::detail::ContextSessionState&>().persistNew()),
+    const ruvia::detail::SessionPersistNew*>);
 static_assert(std::default_initializable<
     ruvia::detail::HttpServerWorkerCompletion>);
 static_assert(!std::copy_constructible<
@@ -1563,6 +1571,8 @@ static_assert(std::same_as<
 static_assert(std::same_as<
     decltype(ruvia::ServerTopology::http(8080)),
     ruvia::ServerTopology>);
+static_assert(!std::is_aggregate_v<ruvia::ServerTopology>);
+static_assert(std::is_move_constructible_v<ruvia::ServerTopology>);
 static_assert(std::same_as<
     decltype(std::declval<ruvia::App&>().setServerTopology(
         ruvia::ServerTopology::http(8080))),

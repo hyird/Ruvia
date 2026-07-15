@@ -213,9 +213,12 @@ void App::run() {
         }
 
         const auto address = asio::ip::make_address(state.listenAddress);
-        const auto hasTwoListeners =
-            state.topology.kind_ == ServerTopology::Kind::kHttpAndHttps ||
-            state.topology.kind_ == ServerTopology::Kind::kRedirectHttpToHttps;
+        const auto hasTwoListeners = std::visit(
+            []<typename Topology>(const Topology&) {
+                return std::is_same_v<Topology, ServerTopology::HttpAndHttps> ||
+                       std::is_same_v<Topology, ServerTopology::RedirectHttpToHttps>;
+            },
+            state.topology.topology_);
         const auto workerCount = state.threadNum * (hasTwoListeners ? 2 : 1);
         runtime->workers.reserve(workerCount);
 
@@ -249,35 +252,36 @@ void App::run() {
             }
         };
 
-        switch (state.topology.kind_) {
-            case ServerTopology::Kind::kHttp:
-                addWorkers(
-                    state.topology.httpPort_,
-                    detail::HttpServerOptions::PlainHttp{});
-                break;
-            case ServerTopology::Kind::kHttps:
-                addWorkers(
-                    state.topology.httpsPort_,
-                    makeTlsOptions(*state.topology.tls_));
-                break;
-            case ServerTopology::Kind::kHttpAndHttps:
-                addWorkers(
-                    state.topology.httpPort_,
-                    detail::HttpServerOptions::PlainHttp{});
-                addWorkers(
-                    state.topology.httpsPort_,
-                    makeTlsOptions(*state.topology.tls_));
-                break;
-            case ServerTopology::Kind::kRedirectHttpToHttps:
-                addWorkers(
-                    state.topology.httpPort_,
-                    detail::HttpServerOptions::RedirectHttpToHttps{
-                        state.topology.httpsPort_});
-                addWorkers(
-                    state.topology.httpsPort_,
-                    makeTlsOptions(*state.topology.tls_));
-                break;
-        }
+        std::visit(
+            [&]<typename Topology>(const Topology& topology) {
+                if constexpr (std::is_same_v<Topology, ServerTopology::Http>) {
+                    addWorkers(
+                        topology.port,
+                        detail::HttpServerOptions::PlainHttp{});
+                } else if constexpr (
+                    std::is_same_v<Topology, ServerTopology::Https>) {
+                    addWorkers(
+                        topology.port,
+                        makeTlsOptions(topology.tls));
+                } else if constexpr (
+                    std::is_same_v<Topology, ServerTopology::HttpAndHttps>) {
+                    addWorkers(
+                        topology.httpPort,
+                        detail::HttpServerOptions::PlainHttp{});
+                    addWorkers(
+                        topology.httpsPort,
+                        makeTlsOptions(topology.tls));
+                } else {
+                    addWorkers(
+                        topology.httpPort,
+                        detail::HttpServerOptions::RedirectHttpToHttps{
+                            topology.httpsPort});
+                    addWorkers(
+                        topology.httpsPort,
+                        makeTlsOptions(topology.tls));
+                }
+            },
+            state.topology.topology_);
 
         state.runtime = std::move(runtime);
         if (!state.lifecycle.beginRun()) {

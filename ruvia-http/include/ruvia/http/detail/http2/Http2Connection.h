@@ -37,6 +37,7 @@
 #include <variant>
 #include <vector>
 
+#include "ruvia/http/detail/BorrowedView.h"
 #include "ruvia/http/detail/http2/Http2ClosedStreams.h"
 #include "ruvia/http/detail/http2/Http2Event.h"
 #include "ruvia/http/detail/http2/Http2FrameTypes.h"
@@ -469,6 +470,8 @@ public:
     // is terminal, so that input must be dropped. Every accepted call can emit events,
     // which must be drained before the next input is offered.
     [[nodiscard]] Http2FeedResult feed(std::string_view in);
+    template <HttpTemporaryOwningCharString Input>
+    Http2FeedResult feed(Input&&) = delete;
     // Pull the next protocol event. nullopt means the queue is drained; every
     // materialized event contains exactly one typed payload.
     [[nodiscard]] std::optional<Http2Event> nextEvent();

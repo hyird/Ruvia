@@ -7,6 +7,7 @@
 #include <string_view>
 
 #include "ruvia/http/detail/AsciiCase.h"
+#include "ruvia/http/detail/BorrowedView.h"
 #include "ruvia/http/detail/HttpOws.h"
 
 namespace ruvia::detail {
@@ -170,6 +171,11 @@ inline void httpVisitSemicolonParametersQuoted(std::string_view value, Visitor&&
     return result;
 }
 
+template <HttpTemporaryOwningCharString Value>
+std::optional<std::string_view> httpFindSemicolonParameter(
+    Value&&,
+    std::string_view) = delete;
+
 [[nodiscard]] inline std::optional<std::string_view> httpFindSemicolonParameterQuoted(
     std::string_view value,
     std::string_view name) {
@@ -182,6 +188,11 @@ inline void httpVisitSemicolonParametersQuoted(std::string_view value, Visitor&&
     });
     return result;
 }
+
+template <HttpTemporaryOwningCharString Value>
+std::optional<std::string_view> httpFindSemicolonParameterQuoted(
+    Value&&,
+    std::string_view) = delete;
 
 [[nodiscard]] inline std::optional<std::string_view> httpFindSemicolonParameterQuotedIgnoreCase(
     std::string_view value,
@@ -196,6 +207,11 @@ inline void httpVisitSemicolonParametersQuoted(std::string_view value, Visitor&&
     return result;
 }
 
+template <HttpTemporaryOwningCharString Value>
+std::optional<std::string_view> httpFindSemicolonParameterQuotedIgnoreCase(
+    Value&&,
+    std::string_view) = delete;
+
 [[nodiscard]] inline std::optional<std::string_view> httpFindSemicolonParameterIgnoreCase(
     std::string_view value,
     std::string_view name) {
@@ -208,6 +224,11 @@ inline void httpVisitSemicolonParametersQuoted(std::string_view value, Visitor&&
     });
     return result;
 }
+
+template <HttpTemporaryOwningCharString Value>
+std::optional<std::string_view> httpFindSemicolonParameterIgnoreCase(
+    Value&&,
+    std::string_view) = delete;
 
 [[nodiscard]] inline bool httpHasToken(std::string_view value, std::string_view expected) noexcept {
     if (expected.empty()) {

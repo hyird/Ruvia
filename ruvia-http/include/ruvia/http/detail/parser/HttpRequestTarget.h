@@ -1,6 +1,7 @@
 #pragma once
 
 #include "ruvia/http/HttpKnownMethod.h"
+#include "ruvia/http/detail/BorrowedView.h"
 #include "ruvia/http/detail/parser/HttpParserSyntax.h"
 
 #include <cstddef>
@@ -98,6 +99,8 @@ private:
 [[nodiscard]] bool isValidHttpHost(std::string_view value) noexcept;
 [[nodiscard]] std::optional<HttpAuthorityView> parseHttpAuthority(
     std::string_view value) noexcept;
+template <HttpTemporaryOwningCharString Value>
+std::optional<HttpAuthorityView> parseHttpAuthority(Value&&) = delete;
 [[nodiscard]] bool httpUriHostEquals(
     std::string_view left,
     std::string_view right) noexcept;
