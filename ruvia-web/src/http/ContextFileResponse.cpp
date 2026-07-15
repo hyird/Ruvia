@@ -4,6 +4,7 @@
 #include "ruvia/http/detail/HttpResponseFileAccess.h"
 #include "ruvia/http/detail/HttpResponseHeaderState.h"
 #include "ruvia/http/detail/HttpByteRange.h"
+#include "ruvia/http/detail/HttpConditionalRequest.h"
 #include "ruvia/http/detail/HttpDate.h"
 #include "ruvia/http/detail/HttpEntityTag.h"
 #include "ruvia/web/detail/StaticFilesInternal.h"
@@ -336,11 +337,12 @@ template <typename ApplyResponseState>
         return response;
     };
 
-    if (request.knownMethod() == HttpKnownMethod::kGet ||
-        request.knownMethod() == HttpKnownMethod::kHead) {
-        const auto conditional = fileConditionalHeaders(request);
+    const auto method = request.knownMethod();
+    const auto methodPlan = detail::httpConditionalMethodPlan(method);
+    const auto conditional = fileConditionalHeaders(request);
+    if (enableValidators && methodPlan.evaluatesPreconditions) {
         const auto etagConditions = fileEtagConditions(request, etag);
-        if (enableValidators && etagConditions.ifMatch.present &&
+        if (etagConditions.ifMatch.present &&
             !etagConditions.ifMatch.matches()) {
             throw HttpError(412, "precondition_failed", "file precondition failed");
         }
@@ -349,66 +351,74 @@ template <typename ApplyResponseState>
         // condition MUST be ignored, exactly as If-Modified-Since is ignored below
         // when If-None-Match is present. Presence is tracked separately because an
         // empty list is still a present field and must take precedence over the date.
-        if (enableValidators && !etagConditions.ifMatch.present &&
+        if (!etagConditions.ifMatch.present &&
             !conditional.ifUnmodifiedSince.empty() &&
             !httpDateUnmodified(
                 conditional.ifUnmodifiedSince, validatorModifiedSeconds)) {
             throw HttpError(412, "precondition_failed", "file precondition failed");
         }
 
-        if (enableValidators && etagConditions.ifNoneMatch.matches()) {
-            return makeHeaderOnlyResponse(304);
+        if (etagConditions.ifNoneMatch.matches()) {
+            if (methodPlan.usesNotModifiedResponse) {
+                return makeHeaderOnlyResponse(304);
+            }
+            throw HttpError(412, "precondition_failed", "file precondition failed");
         }
 
-        if (enableValidators && !etagConditions.ifNoneMatch.present &&
+        if (methodPlan.evaluatesIfModifiedSince &&
+            !etagConditions.ifNoneMatch.present &&
             !conditional.ifModifiedSince.empty() &&
             httpDateNotModified(
                 conditional.ifModifiedSince, validatorModifiedSeconds)) {
             return makeHeaderOnlyResponse(304);
         }
+    }
 
-        if (enableRanges && !conditional.range.empty()) {
-            // RFC 9110 13.1.5: honor the Range only if a present If-Range matches
-            // the current representation. When validators are disabled this root
-            // exposes no ETag/Last-Modified, so an If-Range can never be confirmed
-            // -- the condition MUST be treated as not matching and the full
-            // representation served, rather than a 206 stitched from bytes the
-            // client cannot verify it still holds. Gating on enableValidators (as
-            // before) skipped the check entirely and returned a 206. A range with
-            // no If-Range is still honored without validators.
-            if (conditional.hasIfRange &&
-                (!enableValidators || !ifRangeAllows(
-                    conditional.ifRange,
-                    etag,
-                    validatorModifiedSeconds,
-                    lastModifiedIsActual))) {
-                return makeFullFileResponse(std::nullopt);
-            }
+    // RFC 9110 §14.2 defines Range only for GET. In particular, HEAD must
+    // describe the full selected representation rather than returning partial
+    // response metadata for content that will never be sent.
+    if (methodPlan.evaluatesRange &&
+        enableRanges && !conditional.range.empty()) {
+        // RFC 9110 13.1.5: honor the Range only if a present If-Range matches
+        // the current representation. When validators are disabled this root
+        // exposes no ETag/Last-Modified, so an If-Range can never be confirmed
+        // -- the condition MUST be treated as not matching and the full
+        // representation served, rather than a 206 stitched from bytes the
+        // client cannot verify it still holds. Gating on enableValidators (as
+        // before) skipped the check entirely and returned a 206. A range with
+        // no If-Range is still honored without validators.
+        if (conditional.hasIfRange &&
+            (!enableValidators || !ifRangeAllows(
+                conditional.ifRange,
+                etag,
+                validatorModifiedSeconds,
+                lastModifiedIsActual))) {
+            return makeFullFileResponse(std::nullopt);
+        }
 
-            const auto rangeResolution = detail::resolveHttpByteRange(
-                conditional.range, size);
-            if (rangeResolution.ignored()) {
-                // Unknown units, invalid/unsupported sets, and ranges over an
-                // empty representation follow the RFC 9110 §14.2 ignore policy.
-                return makeFullFileResponse(std::nullopt);
-            }
-            if (rangeResolution.unsatisfiable()) {
-                HttpResponse response(context.resource());
-                detail::setResponseContentRangeUnsatisfied(response, size);
-                addFileHeaders(response);
-                applyResponseState(response, 416);
-                return response;
-            }
-
-            const auto& resolved = *rangeResolution.resolved();
+        const auto rangeResolution = detail::resolveHttpByteRange(
+            conditional.range, size);
+        if (rangeResolution.ignored()) {
+            // Unknown units, invalid/unsupported sets, and ranges over an
+            // empty representation follow the RFC 9110 §14.2 ignore policy.
+            return makeFullFileResponse(std::nullopt);
+        }
+        if (rangeResolution.unsatisfiable()) {
             HttpResponse response(context.resource());
+            detail::setResponseContentRangeUnsatisfied(response, size);
             addFileHeaders(response);
-            detail::setResponseContentRange(
-                response, resolved.offset(), resolved.length(), size);
-            setFileBody(response, resolved.offset(), resolved.length());
-            applyResponseState(response, 206);
+            applyResponseState(response, 416);
             return response;
         }
+
+        const auto& resolved = *rangeResolution.resolved();
+        HttpResponse response(context.resource());
+        addFileHeaders(response);
+        detail::setResponseContentRange(
+            response, resolved.offset(), resolved.length(), size);
+        setFileBody(response, resolved.offset(), resolved.length());
+        applyResponseState(response, 206);
+        return response;
     }
 
     return makeFullFileResponse(std::nullopt);

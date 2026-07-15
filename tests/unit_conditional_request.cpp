@@ -6,6 +6,7 @@
 #include <string>
 #include <string_view>
 
+#include "ruvia/http/detail/HttpConditionalRequest.h"
 #include "ruvia/http/detail/HttpDate.h"
 #include "ruvia/http/detail/HttpEntityTag.h"
 #include "ruvia/http/detail/HttpImfFixdate.h"
@@ -31,7 +32,46 @@ std::string fileEtag(
 }  // namespace
 
 // ETag comparison and IMF-fixdate parsing back the conditional-request handling
-// (If-Match / If-None-Match / If-Range, RFC 7232) for static file responses.
+// (If-Match / If-None-Match / If-Range, RFC 9110) for static file responses.
+
+RUVIA_TEST(conditional_method_plan_follows_precondition_and_range_semantics) {
+    using ruvia::detail::httpConditionalMethodPlan;
+
+    const auto get = httpConditionalMethodPlan(ruvia::HttpKnownMethod::kGet);
+    RUVIA_CHECK(get.evaluatesPreconditions);
+    RUVIA_CHECK(get.usesNotModifiedResponse);
+    RUVIA_CHECK(get.evaluatesIfModifiedSince);
+    RUVIA_CHECK(get.evaluatesRange);
+
+    const auto head = httpConditionalMethodPlan(ruvia::HttpKnownMethod::kHead);
+    RUVIA_CHECK(head.evaluatesPreconditions);
+    RUVIA_CHECK(head.usesNotModifiedResponse);
+    RUVIA_CHECK(head.evaluatesIfModifiedSince);
+    RUVIA_CHECK(!head.evaluatesRange);
+
+    for (const auto method : {
+             ruvia::HttpKnownMethod::kPost,
+             ruvia::HttpKnownMethod::kPut,
+             ruvia::HttpKnownMethod::kDelete,
+             ruvia::HttpKnownMethod::kPatch}) {
+        const auto plan = httpConditionalMethodPlan(method);
+        RUVIA_CHECK(plan.evaluatesPreconditions);
+        RUVIA_CHECK(!plan.usesNotModifiedResponse);
+        RUVIA_CHECK(!plan.evaluatesIfModifiedSince);
+        RUVIA_CHECK(!plan.evaluatesRange);
+    }
+
+    for (const auto method : {
+             ruvia::HttpKnownMethod::kOptions,
+             ruvia::HttpKnownMethod::kConnect,
+             ruvia::HttpKnownMethod::kUnknown}) {
+        const auto plan = httpConditionalMethodPlan(method);
+        RUVIA_CHECK(!plan.evaluatesPreconditions);
+        RUVIA_CHECK(!plan.usesNotModifiedResponse);
+        RUVIA_CHECK(!plan.evaluatesIfModifiedSince);
+        RUVIA_CHECK(!plan.evaluatesRange);
+    }
+}
 
 RUVIA_TEST(etag_strong_comparison) {
     using ruvia::detail::httpStrongEtagEquals;

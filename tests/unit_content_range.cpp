@@ -339,14 +339,15 @@ RUVIA_TEST(static_file_range_serving_status_and_content_range) {
     options.fileTypes = ruvia::StaticFileTypePolicy::all();
     StaticRoot root(dir, std::move(options));
 
-    const auto serveFile = [&root](
+    const auto serveMethod = [&root](
+        std::string_view method,
         std::string_view path,
         std::string_view range) {
         ruvia::WorkerMemory worker;
         ruvia::RequestMemory memory(worker);
         ruvia::HttpRequest request = HttpRequestAccess::make();
         HttpRequestAccess::reset(request);
-        HttpRequestAccess::setMethod(request, "GET");
+        HttpRequestAccess::setMethod(request, method);
         HttpRequestAccess::setResource(request, memory.resource());
         if (!range.empty()) {
             HttpRequestAccess::addHeader(
@@ -359,6 +360,11 @@ RUVIA_TEST(static_file_range_serving_status_and_content_range) {
         // Copy out before the request arena unwinds.
         return std::pair<std::uint16_t, std::string>(
             response.status(), std::string(response.header("Content-Range").value_or("")));
+    };
+    const auto serveFile = [&serveMethod](
+        std::string_view path,
+        std::string_view range) {
+        return serveMethod("GET", path, range);
     };
     const auto serve = [&serveFile](std::string_view range) {
         return serveFile("data.txt", range);
@@ -390,6 +396,13 @@ RUVIA_TEST(static_file_range_serving_status_and_content_range) {
     const auto caseInsensitiveUnit = serve("Bytes=5-9");
     RUVIA_CHECK_EQ(caseInsensitiveUnit.first, std::uint16_t{206});
     RUVIA_CHECK_EQ(caseInsensitiveUnit.second, std::string("bytes 5-9/100"));
+
+    // RFC 9110 §14.2 defines Range handling only for GET. A HEAD request
+    // carrying the same field must describe the full representation with 200,
+    // not invent a partial 206 response with Content-Range metadata.
+    const auto head = serveMethod("HEAD", "data.txt", "bytes=0-4");
+    RUVIA_CHECK_EQ(head.first, std::uint16_t{200});
+    RUVIA_CHECK(head.second.empty());
 
     // This server uses RFC 9110 §14.2's permitted ignore policy for a selected
     // representation with no content, avoiding an invalid zero-length 206 range.
@@ -760,12 +773,14 @@ RUVIA_TEST(static_file_if_match_takes_precedence_over_if_unmodified_since) {
         std::string_view name;
         std::string_view value;
     };
-    const auto serve = [&root](std::initializer_list<Header> headers) {
+    const auto serveMethod = [&root](
+        std::string_view method,
+        std::initializer_list<Header> headers) {
         ruvia::WorkerMemory worker;
         ruvia::RequestMemory memory(worker);
         ruvia::HttpRequest request = HttpRequestAccess::make();
         HttpRequestAccess::reset(request);
-        HttpRequestAccess::setMethod(request, "GET");
+        HttpRequestAccess::setMethod(request, method);
         HttpRequestAccess::setResource(request, memory.resource());
         for (const auto& header : headers) {
             HttpRequestAccess::addHeader(
@@ -783,6 +798,9 @@ RUVIA_TEST(static_file_if_match_takes_precedence_over_if_unmodified_since) {
             status = error.info().status();
         }
         return std::pair<std::uint16_t, std::string>(status, std::move(etag));
+    };
+    const auto serve = [&serveMethod](std::initializer_list<Header> headers) {
+        return serveMethod("GET", headers);
     };
 
     // Discover the current strong ETag with a bare request.
@@ -835,6 +853,34 @@ RUVIA_TEST(static_file_if_match_takes_precedence_over_if_unmodified_since) {
         serve({{RequestKnownHeader::kIfNoneMatch, "If-None-Match", etag},
                {RequestKnownHeader::kIfNoneMatch, "If-None-Match", "\"stale\""}}).first,
         std::uint16_t{304});
+
+    // Preconditions protect unsafe methods too. A matching If-None-Match or a
+    // stale If-Match / If-Unmodified-Since on POST must fail with 412 instead of
+    // serving the file as an unconditional 200.
+    RUVIA_CHECK_EQ(
+        serveMethod("POST", {{RequestKnownHeader::kIfNoneMatch, "If-None-Match", etag}}).first,
+        std::uint16_t{412});
+    RUVIA_CHECK_EQ(
+        serveMethod("POST", {{RequestKnownHeader::kIfMatch, "If-Match", "\"stale\""}}).first,
+        std::uint16_t{412});
+    RUVIA_CHECK_EQ(
+        serveMethod("POST", {{RequestKnownHeader::kIfUnmodifiedSince, "If-Unmodified-Since", kOldDate}}).first,
+        std::uint16_t{412});
+    RUVIA_CHECK_EQ(
+        serveMethod("POST", {{RequestKnownHeader::kIfMatch, "If-Match", etag}}).first,
+        std::uint16_t{200});
+    RUVIA_CHECK_EQ(
+        serveMethod("POST", {{RequestKnownHeader::kIfNoneMatch, "If-None-Match", "\"stale\""}}).first,
+        std::uint16_t{200});
+    RUVIA_CHECK_EQ(
+        serveMethod("POST", {{RequestKnownHeader::kIfModifiedSince, "If-Modified-Since", kFutureDate}}).first,
+        std::uint16_t{200});
+
+    // OPTIONS does not select or modify a representation, so RFC 9110 §13.2.1
+    // requires these conditional fields to be ignored for that method.
+    RUVIA_CHECK_EQ(
+        serveMethod("OPTIONS", {{RequestKnownHeader::kIfMatch, "If-Match", "\"stale\""}}).first,
+        std::uint16_t{200});
 
     fs::remove_all(dir);
 }
