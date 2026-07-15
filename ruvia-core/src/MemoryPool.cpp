@@ -103,6 +103,12 @@ WorkerMemory::WorkerMemory(const MemoryPoolConfig& config)
     ProcessMemory::instance().freeze();
 }
 
+WorkerMemory::WorkerMemory(
+    const MemoryPoolConfig& config,
+    detail::DeferProcessMemoryFreeze)
+    : config_(config),
+      resource_(detail::processResource()) {}
+
 std::pmr::memory_resource* WorkerMemory::resource() noexcept {
     return resource_;
 }

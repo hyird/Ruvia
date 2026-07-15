@@ -43,7 +43,11 @@ Task<std::size_t> RedisPool::acquire() {
 }
 
 void RedisPool::release(std::size_t index) noexcept {
-    scheduler_.release(index);
+    const auto status = scheduler_.release(index);
+    if (status == PoolLeaseReleaseStatus::kInvalidSlot ||
+        status == PoolLeaseReleaseStatus::kAlreadyReleased) {
+        std::terminate();
+    }
 }
 
 }  // namespace ruvia::detail

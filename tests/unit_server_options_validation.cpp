@@ -108,6 +108,11 @@ RUVIA_TEST(validate_server_options_rejects_nonpositive_limits) {
     }
     {
         HttpServerOptions options;
+        options.memoryConfig.requestInitialBufferBytes = 0;
+        RUVIA_CHECK(throwsInvalid([&] { validateHttpServerOptions(options); }));
+    }
+    {
+        HttpServerOptions options;
         options.maxConnections = 0;
         RUVIA_CHECK(throwsInvalid([&] { validateHttpServerOptions(options); }));
     }
@@ -169,7 +174,9 @@ RUVIA_TEST(validate_server_options_enforces_nested_tls_material) {
     {
         HttpServerOptions options;
         auto tls = validTls();
-        tls.clientCertificates.emplace();
+        tls.clientCertificates.emplace(
+            std::pmr::string{},
+            ruvia::TlsClientCertificateRequirement::kOptional);
         options.transport = std::move(tls);
         RUVIA_CHECK(throwsInvalid([&] { validateHttpServerOptions(options); }));
     }

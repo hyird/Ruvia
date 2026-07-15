@@ -38,7 +38,6 @@ struct AppState final {
     std::size_t threadNum;
     HttpServerOptions options{};
     std::optional<AppDocumentRootConfig> documentRootConfig;
-    MemoryPoolConfig memoryConfig{};
     HttpErrorHandler errorHandler{nullptr};
     HttpNotFoundHandler notFoundHandler{nullptr};
     std::pmr::vector<AppHook> onStartHooks{appResource()};
@@ -51,11 +50,10 @@ struct AppState final {
 #endif
     Env env;
     ControllerStore controllerLifetimes;
+    std::unique_ptr<Router, PmrObjectDeleter<Router>> router;
     std::unique_ptr<AppRuntimeGraph, PmrObjectDeleter<AppRuntimeGraph>> runtime;
-    Router router;
 
     mutable std::mutex mutex;
-    bool autoControllersLoaded{false};
     AppLifecycle lifecycle;
 };
 

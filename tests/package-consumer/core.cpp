@@ -348,6 +348,10 @@ static_assert(std::same_as<
 static_assert(std::same_as<
     decltype(std::declval<ruvia::detail::PoolLeaseScheduler&>().close()),
     bool>);
+static_assert(std::same_as<
+    decltype(std::declval<ruvia::detail::PoolLeaseScheduler&>().release(
+        std::size_t{})),
+    ruvia::detail::PoolLeaseReleaseStatus>);
 
 int main() {
     ruvia::WorkerMemory worker;

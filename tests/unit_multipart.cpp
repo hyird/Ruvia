@@ -333,6 +333,47 @@ RUVIA_TEST(multipart_parser_commits_an_eof_close_only_after_finish_input) {
     RUVIA_CHECK(feedAfterFinishThrew);
 }
 
+RUVIA_TEST(multipart_input_lifecycle_has_three_exclusive_states) {
+    ruvia::detail::MultipartInputLifecycle streaming(
+        std::pmr::get_default_resource());
+    RUVIA_CHECK(streaming.streamingOpen() != nullptr);
+    RUVIA_CHECK(streaming.streamingEof() == nullptr);
+    RUVIA_CHECK(streaming.borrowed() == nullptr);
+    RUVIA_CHECK(!streaming.eof());
+
+    streaming.feed("abcdef");
+    streaming.consume(2);
+    RUVIA_CHECK_EQ(streaming.view(), std::string_view("cdef"));
+    streaming.finishInput();
+    RUVIA_CHECK(streaming.streamingOpen() == nullptr);
+    RUVIA_CHECK(streaming.streamingEof() != nullptr);
+    RUVIA_CHECK(streaming.eof());
+    RUVIA_CHECK_EQ(streaming.view(), std::string_view("cdef"));
+
+    // EOF is an idempotent transition and cannot discard pending bytes.
+    streaming.finishInput();
+    RUVIA_CHECK(streaming.streamingEof() != nullptr);
+    RUVIA_CHECK_EQ(streaming.view(), std::string_view("cdef"));
+}
+
+RUVIA_TEST(multipart_borrowed_input_is_complete_and_rejects_feed) {
+    ruvia::detail::MultipartInputLifecycle borrowed(
+        ruvia::detail::MultipartBorrowedInput{"--BOUNDARY--"});
+    RUVIA_CHECK(borrowed.borrowed() != nullptr);
+    RUVIA_CHECK(borrowed.eof());
+    RUVIA_CHECK_EQ(borrowed.view(), std::string_view("--BOUNDARY--"));
+
+    borrowed.finishInput();
+    RUVIA_CHECK(borrowed.borrowed() != nullptr);
+    bool feedThrew = false;
+    try {
+        borrowed.feed("ignored");
+    } catch (const std::logic_error&) {
+        feedThrew = true;
+    }
+    RUVIA_CHECK(feedThrew);
+}
+
 RUVIA_TEST(multipart_parser_reports_typed_incomplete_body) {
     ruvia::MultipartParser parser(
         ruvia::MultipartBoundary("BOUNDARY"),

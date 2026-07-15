@@ -13,6 +13,13 @@
 
 namespace ruvia::detail {
 
+enum class PoolLeaseReleaseStatus : std::uint8_t {
+    kReleased,
+    kTransferredToWaiter,
+    kInvalidSlot,
+    kAlreadyReleased,
+};
+
 // Allocation-stable lease ownership for a single-worker connection pool.
 // Concrete integrations map the typed acquire result to their own public error
 // type and retain ownership of protocol connections; slot availability,
@@ -63,15 +70,19 @@ public:
         co_return co_await waiter;
     }
 
-    void release(std::size_t slot) noexcept {
-        if (slot >= busy_.size() || busy_[slot] == 0) {
-            return;
+    [[nodiscard]] PoolLeaseReleaseStatus release(std::size_t slot) noexcept {
+        if (slot >= busy_.size()) {
+            return PoolLeaseReleaseStatus::kInvalidSlot;
+        }
+        if (busy_[slot] == 0) {
+            return PoolLeaseReleaseStatus::kAlreadyReleased;
         }
         if (!closing_ && waiters_.resumeNext(slot)) {
-            return;
+            return PoolLeaseReleaseStatus::kTransferredToWaiter;
         }
         busy_[slot] = 0;
         freeSlots_.push_back(slot);
+        return PoolLeaseReleaseStatus::kReleased;
     }
 
     [[nodiscard]] bool close() noexcept {

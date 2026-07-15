@@ -9,6 +9,10 @@
 
 namespace ruvia {
 
+namespace detail {
+struct DeferProcessMemoryFreeze final {};
+}
+
 // Default initial bump-block size for a request arena. Runtime integrations size
 // their connection-private dispatch blocks to this same constant, so configured
 // defaults and compile-time blocks stay in lockstep: a request whose allocations
@@ -57,6 +61,9 @@ private:
 class WorkerMemory final {
 public:
     explicit WorkerMemory(const MemoryPoolConfig& config = ProcessMemory::instance().config());
+    WorkerMemory(
+        const MemoryPoolConfig& config,
+        detail::DeferProcessMemoryFreeze);
 
     WorkerMemory(const WorkerMemory&) = delete;
     WorkerMemory& operator=(const WorkerMemory&) = delete;

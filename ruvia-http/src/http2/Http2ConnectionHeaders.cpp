@@ -461,7 +461,10 @@ bool Http2Connection::processHeaders(const Http2FrameHeader& header, std::string
             // Record every genuinely new peer stream ID, even when it is malformed or
             // refused, so a later lower ID cannot be reopened as idle.
             lastStreamId_ = header.streamId;
-            const bool drainRefused = draining_ && header.streamId > goawayLastStreamId_;
+            const auto* gracefulDrain =
+                localConnectionState_.gracefulDrain();
+            const bool drainRefused = gracefulDrain != nullptr &&
+                header.streamId > gracefulDrain->lastStreamId();
             stream = drainRefused ? nullptr : createStream(header.streamId);
             if (stream == nullptr) {
                 discardedAction = DiscardedHeaderAction::kRefuseStream;

@@ -3940,6 +3940,43 @@ RUVIA_TEST(http2_connection_begin_drain_refuses_new_streams) {
     RUVIA_CHECK(conn.pendingOutput().empty());
 }
 
+RUVIA_TEST(http2_connection_fatal_failure_atomically_supersedes_local_drain) {
+    std::pmr::monotonic_buffer_resource resource;
+    Http2Connection client(
+        &resource, ruvia::detail::Http2Role::kClient);
+    beginClient(client);
+    client.consumeOutput(client.pendingOutput().size());
+
+    client.beginDrain();
+    RUVIA_CHECK(client.draining());
+    RUVIA_CHECK(!client.connectionError().has_value());
+    client.consumeOutput(client.pendingOutput().size());
+
+    // SETTINGS is connection-scoped. A non-zero stream id is fatal and must
+    // replace, rather than coexist with, the earlier graceful drain state.
+    char invalidSettings[9];
+    ruvia::detail::http2EncodeFrameHeader(
+        invalidSettings, 0, Http2FrameType::kSettings, 0, 1);
+    RUVIA_CHECK(client.feed(std::string_view(
+        invalidSettings, sizeof(invalidSettings))) ==
+        Http2FeedResult::kProtocolFailure);
+    RUVIA_CHECK(!client.draining());
+    RUVIA_CHECK(client.connectionError() ==
+        Http2ErrorCode::kProtocolError);
+
+    const auto failedOutputSize = client.pendingOutput().size();
+    client.beginDrain();
+    RUVIA_CHECK(!client.draining());
+    RUVIA_CHECK_EQ(client.pendingOutput().size(), failedOutputSize);
+
+    const auto rejected = client.submitRegularRequestHead(
+        "GET", "https", "example.test", "/", {},
+        Http2RequestContent::none());
+    RUVIA_CHECK(rejected.submitted() == nullptr);
+    RUVIA_CHECK(requestHeadSubmitError(rejected) ==
+        Http2RequestHeadSubmitError::kConnectionUnavailable);
+}
+
 // Every non-empty DATA event retains receive-window debt. That debt must return to
 // the CONNECTION window when the stream is removed, even if the owner never calls
 // releaseReceivedData(), or the shared window would shrink permanently.

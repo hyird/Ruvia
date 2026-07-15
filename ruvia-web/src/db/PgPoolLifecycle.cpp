@@ -5,6 +5,7 @@
 
 #include <libpq-fe.h>
 
+#include <exception>
 #include <stdexcept>
 #include <utility>
 
@@ -92,7 +93,11 @@ Task<std::size_t> PostgreSqlPool::acquireSlot() {
 }
 
 void PostgreSqlPool::releaseSlot(std::size_t slot) noexcept {
-    scheduler_.release(slot);
+    const auto status = scheduler_.release(slot);
+    if (status == PoolLeaseReleaseStatus::kInvalidSlot ||
+        status == PoolLeaseReleaseStatus::kAlreadyReleased) {
+        std::terminate();
+    }
 }
 
 void PostgreSqlPool::closeSlot(ConnectionSlot& slot) noexcept {

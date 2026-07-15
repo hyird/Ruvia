@@ -57,6 +57,7 @@ class RateLimiter;
 struct ContextAccess;
 class ContextServices;
 class RequestQueryValues;
+class RequestQueryCache;
 struct SessionAccess;
 }
 
@@ -349,8 +350,7 @@ private:
     // body() can return a stable view; mutable because body() is const.
     mutable std::pmr::string* decodedBody_{nullptr};
     mutable RequestNameValueList* requestHeaders_{nullptr};
-    mutable RequestNameValueList* requestQuery_{nullptr};
-    mutable detail::RequestQueryValues* requestQueries_{nullptr};
+    mutable detail::RequestQueryCache* requestQueryCache_{nullptr};
     mutable RequestNameValueList* requestCookies_{nullptr};
     mutable RequestNameValueList* routeParams_{nullptr};
     detail::ContextValueStore* values_{nullptr};

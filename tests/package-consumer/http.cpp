@@ -186,6 +186,20 @@ static_assert(!AcceptsHeaderSliceBorrowedInput<std::pmr::string>);
 static_assert(AcceptsMultipartHeaderBorrowedInput<std::string&>);
 static_assert(!AcceptsMultipartHeaderBorrowedInput<std::string>);
 static_assert(!AcceptsMultipartHeaderBorrowedInput<std::pmr::string>);
+static_assert(std::default_initializable<
+    ruvia::detail::Http2LocalConnectionState>);
+static_assert(std::same_as<
+    decltype(std::declval<const ruvia::detail::
+        Http2LocalConnectionState&>().open()),
+    const ruvia::detail::Http2LocalConnectionOpen*>);
+static_assert(std::same_as<
+    decltype(std::declval<const ruvia::detail::
+        Http2LocalConnectionState&>().gracefulDrain()),
+    const ruvia::detail::Http2LocalConnectionGracefulDrain*>);
+static_assert(std::same_as<
+    decltype(std::declval<const ruvia::detail::
+        Http2LocalConnectionState&>().fatalFailure()),
+    const ruvia::detail::Http2LocalConnectionFatalFailure*>);
 
 template <typename T>
 concept HasLegacyResponseBodyView = requires(T& response) {

@@ -116,6 +116,7 @@ struct AppRuntimeGraph final {
 
 AppState::AppState()
     : threadNum(std::max(1U, std::thread::hardware_concurrency())),
+      router(nullptr, PmrObjectDeleter<Router>{detail::appResource()}),
       runtime(nullptr, PmrObjectDeleter<AppRuntimeGraph>{detail::appResource()}) {
     listenAddress.assign("0.0.0.0");
 }
@@ -174,30 +175,31 @@ void App::run() {
     auto* runtimeResource = detail::appResource();
     std::pmr::vector<detail::HttpServer*> startedWorkers(runtimeResource);
     auto runtime = detail::makePmrObject<detail::AppRuntimeGraph>(runtimeResource, runtimeResource);
+    auto preparedRouter = std::unique_ptr<Router, detail::PmrObjectDeleter<Router>>(
+        nullptr,
+        detail::PmrObjectDeleter<Router>{runtimeResource});
+    detail::ControllerStore preparedControllerLifetimes;
 
     {
         std::lock_guard lock(state.mutex);
         detail::ensureAppNotRunning(state.lifecycle.active(), "app is already running");
 
-        if (!state.autoControllersLoaded) {
-            detail::registerControllers(state.router, state.controllerLifetimes);
-            state.autoControllersLoaded = true;
+        auto* routeOwner = state.router.get();
+        if (routeOwner == nullptr) {
+            preparedRouter = detail::makePmrObject<Router>(runtimeResource);
+            detail::registerControllers(
+                *preparedRouter,
+                preparedControllerLifetimes);
+            routeOwner = preparedRouter.get();
         }
-        auto& processMemory = ProcessMemory::instance();
-        if (processMemory.frozen()) {
-            if (processMemory.config().requestInitialBufferBytes != state.memoryConfig.requestInitialBufferBytes) {
-                throw std::logic_error("process memory configuration is already frozen with different values");
-            }
-        } else {
-            processMemory.configure(state.memoryConfig);
-            processMemory.freeze();
-        }
-        auto& routes = detail::RouterImpl::from(state.router);
+        auto& routes = detail::RouterImpl::from(*routeOwner);
         routes.setErrorHandler(state.errorHandler);
         routes.setNotFoundHandler(state.notFoundHandler);
         routes.finalize();
         const auto& routeTable = routes.routeTable();
-        state.options.workerFailure = detail::WorkerFailureSink{
+
+        auto preparedOptions = state.options;
+        preparedOptions.workerFailure = detail::WorkerFailureSink{
             .target = this,
             .invoke = [](void* target, std::exception_ptr) noexcept {
                 static_cast<App*>(target)->stop();
@@ -222,12 +224,13 @@ void App::run() {
         const auto workerCount = state.threadNum * (hasTwoListeners ? 2 : 1);
         runtime->workers.reserve(workerCount);
 
-        const auto addWorkers = [&state, &address, &runtime, &routeTable, runtimeResource](
+        const auto addWorkers = [&state, &address, &runtime, &routeTable,
+                                 &preparedOptions, runtimeResource](
                                     std::uint16_t port,
                                     detail::HttpServerOptions::ListenerTransport transport) {
             const asio::ip::tcp::endpoint endpoint(address, port);
             auto listenerOptions = makeListenerOptions(
-                state.options,
+                preparedOptions,
                 std::move(transport),
                 runtime->documentRoot.get());
             for (std::size_t i = 0; i < state.threadNum; ++i) {
@@ -283,9 +286,27 @@ void App::run() {
             },
             state.topology.topology_);
 
+        // All fallible startup preparation is complete. Freeze the process-wide
+        // arena configuration and publish prepared ownership only at commit.
+        auto& processMemory = ProcessMemory::instance();
+        if (processMemory.frozen()) {
+            if (processMemory.config().requestInitialBufferBytes !=
+                preparedOptions.memoryConfig.requestInitialBufferBytes) {
+                throw std::logic_error(
+                    "process memory configuration is already frozen with different values");
+            }
+        } else {
+            processMemory.configure(preparedOptions.memoryConfig);
+            processMemory.freeze();
+        }
+        if (preparedRouter) {
+            state.controllerLifetimes =
+                std::move(preparedControllerLifetimes);
+            state.router = std::move(preparedRouter);
+        }
         state.runtime = std::move(runtime);
         if (!state.lifecycle.beginRun()) {
-            throw std::logic_error("app lifecycle failed to begin run");
+            std::terminate();
         }
     }
 

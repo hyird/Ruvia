@@ -1245,6 +1245,8 @@ else()
            "namespace[ \t]+ruvia::detail" OR
        NOT web_request_query_values MATCHES
            "class[ \t]+RequestQueryValues[ \t]+final" OR
+       NOT web_request_query_values MATCHES
+           "class[ \t]+RequestQueryCache[ \t]+final" OR
        web_request_query_values MATCHES
            "namespace[ \t]+ruvia[ \t]*[{]" OR
        web_request_query_values MATCHES
@@ -1252,6 +1254,17 @@ else()
         boundary_error("Query multivalue indexing escaped its internal owner"
             "detail/http/RequestQueryValues.h must own the sole private query multivalue index")
     endif()
+endif()
+file(READ "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/Context.h"
+    web_context_query_cache)
+if(NOT web_context_query_cache MATCHES
+       "RequestQueryCache[*][ \t]+requestQueryCache_" OR
+   web_context_query_cache MATCHES
+       "RequestNameValueList[*][ \t]+requestQuery_" OR
+   web_context_query_cache MATCHES
+       "RequestQueryValues[*][ \t]+requestQueries_")
+    boundary_error("Context query materialization regained parallel cache pointers"
+        "flattened and multivalue query views must be committed as one RequestQueryCache")
 endif()
 if(EXISTS "${HTTP_METHOD_CONTRACT}" AND EXISTS "${HTTP_REQUEST_MODEL}")
     file(READ "${HTTP_METHOD_CONTRACT}" http_method_contract)
@@ -2680,7 +2693,7 @@ else()
        NOT multipart_parser_implementation MATCHES
            "MultipartParser parser[(]" OR
        NOT multipart_parser_implementation MATCHES
-           "borrowedInputMode_[(]true[)]")
+           "MultipartBorrowedInput[{]completeBody[}]")
         boundary_error("incremental multipart wire failures bypass typed results"
             "buffered and incremental parsing must share MultipartParser and return typed wire failures")
     endif()
@@ -6983,7 +6996,8 @@ if(EXISTS "${HTTP2_CONNECTION_SOURCE}")
            "Http2Event::requestUnprocessed[(]streamId[)]" OR
        NOT http2_connection_source MATCHES "closeStreamImpl" OR
        NOT http2_connection_source MATCHES "beginDrain\\(\\)" OR
-       NOT http2_connection_source MATCHES "connectionError_ = error")
+       NOT http2_connection_source MATCHES
+           "localConnectionState_[.]fail[(]error[)]")
         boundary_error("HTTP/2 peer GOAWAY escaped the protocol core"
             "monotonic last-stream-id, bilateral drain, typed fatal error, cleanup, and safe-retry events must remain centralized")
     endif()
@@ -7015,6 +7029,26 @@ if(EXISTS "${HTTP2_CONNECTION_SOURCE}")
         boundary_error("HTTP/2 response-head transaction bypasses its typed result"
             "buffered and streaming heads must return error-only failures and plan-only committed submissions")
     endif()
+endif()
+
+set(HTTP2_LOCAL_CONNECTION_STATE
+    "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/detail/http2/Http2LocalConnectionState.h")
+file(READ "${HTTP2_LOCAL_CONNECTION_STATE}" http2_local_connection_state)
+file(READ
+    "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/detail/http2/Http2Connection.h"
+    http2_connection_state_owner)
+if(NOT http2_local_connection_state MATCHES
+       "class Http2LocalConnectionState final" OR
+   NOT http2_local_connection_state MATCHES
+       "Http2LocalConnectionGracefulDrain" OR
+   NOT http2_local_connection_state MATCHES
+       "Http2LocalConnectionFatalFailure" OR
+   NOT http2_connection_state_owner MATCHES
+       "Http2LocalConnectionState localConnectionState_" OR
+   http2_connection_state_owner MATCHES
+       "bool draining_|goawayLastStreamId_|connectionError_")
+    boundary_error("HTTP/2 local connection restored parallel terminal fields"
+        "Open, graceful GOAWAY boundary, and fatal error must be one exclusive state")
 endif()
 
 set(HTTP2_FLOW_CONTROL
@@ -9729,6 +9763,10 @@ if(EXISTS "${POOL_WAITER_HEADER}" AND
     endif()
     if(NOT pool_lease_scheduler MATCHES "class PoolLeaseScheduler final" OR
        NOT pool_lease_scheduler MATCHES "Task<PoolWaiterResult> acquire" OR
+       NOT pool_lease_scheduler MATCHES "enum class PoolLeaseReleaseStatus" OR
+       NOT pool_lease_scheduler MATCHES "PoolLeaseReleaseStatus release" OR
+       NOT pool_lease_scheduler MATCHES "kInvalidSlot" OR
+       NOT pool_lease_scheduler MATCHES "kAlreadyReleased" OR
        NOT pool_lease_scheduler MATCHES "waiters_[.]resumeNext" OR
        NOT pool_lease_scheduler MATCHES "waiters_[.]closeAll" OR
        NOT pool_lease_scheduler MATCHES "vector<std::size_t> freeSlots_" OR
@@ -9766,6 +9804,8 @@ if(EXISTS "${POOL_WAITER_HEADER}" AND
            "HasAnyRvaluePoolWaiterAccessor" OR
        NOT pool_waiter_package_consumer MATCHES
            "PoolLeaseScheduler" OR
+       NOT pool_waiter_package_consumer MATCHES
+           "PoolLeaseReleaseStatus" OR
        NOT pool_lease_test MATCHES "exerciseLeaseAndClose" OR
        NOT pool_lease_test MATCHES "exerciseAcquireTimeout")
         boundary_error("core pool lease scheduling is insufficiently pinned"
@@ -11626,6 +11666,34 @@ if(NOT app_lifecycle_content MATCHES "enum class AppLifecycleState" OR
         "Run, hooks, deferred stop, and stopping must transition through AppLifecycle")
 endif()
 
+set(APP_STARTUP_SOURCE
+    "${RUVIA_ROOT}/ruvia-web/src/app/App.cpp")
+file(READ "${APP_STARTUP_SOURCE}" app_startup_content)
+if(NOT app_internal_lifecycle_content MATCHES
+       "std::unique_ptr<Router, PmrObjectDeleter<Router>> router" OR
+   app_internal_lifecycle_content MATCHES "autoControllersLoaded" OR
+   NOT app_startup_content MATCHES "preparedRouter" OR
+   NOT app_startup_content MATCHES "preparedControllerLifetimes" OR
+   NOT app_startup_content MATCHES "preparedOptions[.]workerFailure" OR
+   app_startup_content MATCHES "state[.]options[.]workerFailure[ \\t]*=" OR
+   app_startup_content MATCHES
+       "registerControllers[(][ \\n\\r\\t]*state[.]router")
+    boundary_error("App startup preparation lost its strong exception boundary"
+        "Controllers, router, worker options, and runtime must remain prepared until commit")
+endif()
+string(FIND "${app_startup_content}"
+    "processMemory.freeze();" app_startup_freeze_position)
+string(FIND "${app_startup_content}"
+    "state.runtime = std::move(runtime);" app_runtime_commit_position)
+string(FIND "${app_startup_content}"
+    "std::visit(" app_listener_preflight_position)
+if(app_startup_freeze_position LESS 0 OR
+   app_runtime_commit_position LESS app_startup_freeze_position OR
+   app_startup_freeze_position LESS app_listener_preflight_position)
+    boundary_error("App startup commit occurs before fallible preparation completes"
+        "Listener preparation must precede ProcessMemory freeze and runtime publication")
+endif()
+
 set(HTTP2_SESSION_LIFECYCLE_HEADER
     "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/server/Http2SansIoSessionLifecycle.h")
 set(HTTP2_SESSION_HEADER
@@ -11710,6 +11778,24 @@ if(NOT secure_token_result_content MATCHES "class SecureTokenResult final" OR
    secure_token_result_content MATCHES "generateCsrfToken")
     boundary_error("secure token generation restored an empty-view failure sentinel"
         "CSRF and Session must exhaustively handle SecureTokenReady/SecureTokenFailure")
+endif()
+
+set(MULTIPART_INPUT_LIFECYCLE_HEADER
+    "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/MultipartParser.h")
+file(READ "${MULTIPART_INPUT_LIFECYCLE_HEADER}"
+    multipart_input_lifecycle_content)
+if(NOT multipart_input_lifecycle_content MATCHES
+       "class MultipartInputLifecycle final" OR
+   NOT multipart_input_lifecycle_content MATCHES
+       "MultipartBorrowedInput" OR
+   NOT multipart_input_lifecycle_content MATCHES
+       "MultipartStreamingInputOpen" OR
+   NOT multipart_input_lifecycle_content MATCHES
+       "MultipartStreamingInputEof" OR
+   multipart_input_lifecycle_content MATCHES
+       "borrowedInputMode_|inputFinished_|borrowedInput_|std::pmr::string buffer_")
+    boundary_error("MultipartParser restored parallel input source/EOF state"
+        "Borrowed complete input, streaming open, and streaming EOF must be exclusive MultipartInputLifecycle alternatives")
 endif()
 
 get_property(boundary_failed GLOBAL PROPERTY RUVIA_BOUNDARY_FAILED)

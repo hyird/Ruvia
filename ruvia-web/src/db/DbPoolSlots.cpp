@@ -1,5 +1,6 @@
 #include "ruvia/web/detail/db/DbInternal.h"
 
+#include <exception>
 #include <stdexcept>
 
 namespace ruvia {
@@ -27,7 +28,11 @@ Task<std::size_t> detail::MariaDbPool::acquireSlot() {
 }
 
 void detail::MariaDbPool::releaseSlot(std::size_t slot) noexcept {
-    scheduler_.release(slot);
+    const auto status = scheduler_.release(slot);
+    if (status == detail::PoolLeaseReleaseStatus::kInvalidSlot ||
+        status == detail::PoolLeaseReleaseStatus::kAlreadyReleased) {
+        std::terminate();
+    }
 }
 
 }  // namespace ruvia

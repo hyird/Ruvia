@@ -414,6 +414,10 @@ if(_built_components_csv MATCHES "(^|,)core(,|$)")
        NOT _installed_pool_lease_scheduler MATCHES
            "waiters_[.]closeAll" OR
        NOT _installed_pool_lease_scheduler MATCHES
+           "enum class PoolLeaseReleaseStatus" OR
+       NOT _installed_pool_lease_scheduler MATCHES
+           "PoolLeaseReleaseStatus release" OR
+       NOT _installed_pool_lease_scheduler MATCHES
            "vector<std::size_t> freeSlots_" OR
        NOT _installed_pool_lease_scheduler MATCHES
            "vector<std::uint8_t> busy_")
@@ -3238,6 +3242,8 @@ if(_built_components_csv MATCHES "(^|,)web(,|$)")
         "${_install_prefix}/include/ruvia/web/ContextRequest.h")
     set(_installed_context_request_model_path
         "${_install_prefix}/include/ruvia/web/detail/http/ContextRequestModel.inl")
+    set(_installed_request_query_cache_path
+        "${_install_prefix}/include/ruvia/web/detail/http/RequestQueryValues.h")
     foreach(_context_capability_contract IN ITEMS
             "${_installed_context_capabilities_path}"
             "${_installed_context_services_path}"
@@ -3246,7 +3252,8 @@ if(_built_components_csv MATCHES "(^|,)web(,|$)")
             "${_installed_context_inline_path}"
             "${_installed_context_model_path}"
             "${_installed_context_request_header_path}"
-            "${_installed_context_request_model_path}")
+            "${_installed_context_request_model_path}"
+            "${_installed_request_query_cache_path}")
         if(NOT EXISTS "${_context_capability_contract}")
             message(FATAL_ERROR
                 "installed Web package is missing a typed Context capability contract")
@@ -3269,6 +3276,8 @@ if(_built_components_csv MATCHES "(^|,)web(,|$)")
         _installed_context_header)
     file(READ "${_installed_context_request_header_path}"
         _installed_context_request_header)
+    file(READ "${_installed_request_query_cache_path}"
+        _installed_request_query_cache)
     file(READ "${_installed_validation_target_path}"
         _installed_validation_target)
     if(NOT _installed_context_request_header MATCHES
@@ -3296,6 +3305,17 @@ if(_built_components_csv MATCHES "(^|,)web(,|$)")
            "ruvia/web/detail/http/ContextModel[.]inl")
         message(FATAL_ERROR
             "installed Context.h does not own all public template definitions")
+    endif()
+    if(NOT _installed_request_query_cache MATCHES
+           "class RequestQueryCache final" OR
+       NOT _installed_context_header MATCHES
+           "RequestQueryCache[*][ \t]+requestQueryCache_" OR
+       _installed_context_header MATCHES
+           "RequestNameValueList[*][ \t]+requestQuery_" OR
+       _installed_context_header MATCHES
+           "RequestQueryValues[*][ \t]+requestQueries_")
+        message(FATAL_ERROR
+            "installed Context restored split query-cache ownership")
     endif()
     if(NOT _installed_context_header MATCHES
            "ruvia/web/ContextRequest[.]h" OR

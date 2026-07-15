@@ -426,7 +426,7 @@ std::optional<std::string_view> Context::requestHeader(std::string_view name) co
 }
 
 void Context::ensureRequestQuery() const {
-    if (requestQuery_ != nullptr) {
+    if (requestQueryCache_ != nullptr) {
         return;
     }
 
@@ -468,8 +468,8 @@ void Context::ensureRequestQuery() const {
         return left.firstIndex < right.firstIndex;
     });
 
-    auto& query = memory_.emplace<RequestNameValueList>(detail::RequestNameValueListAccess::make(resource()));
-    auto& groups = memory_.emplace<detail::RequestQueryValues>(resource());
+    auto query = detail::RequestNameValueListAccess::make(resource());
+    detail::RequestQueryValues groups{resource()};
     detail::RequestNameValueListAccess::reserve(query, builds.size());
     groups.reserve(builds.size());
     for (const auto& build : builds) {
@@ -495,13 +495,14 @@ void Context::ensureRequestQuery() const {
         }
     }
 
-    requestQuery_ = &query;
-    requestQueries_ = &groups;
+    requestQueryCache_ = &memory_.emplace<detail::RequestQueryCache>(
+        std::move(query),
+        std::move(groups));
 }
 
 const RequestNameValueList& Context::requestQuery() const {
     ensureRequestQuery();
-    return *requestQuery_;
+    return requestQueryCache_->fields();
 }
 
 std::optional<std::string_view> Context::requestQuery(std::string_view name) const {
@@ -527,7 +528,7 @@ std::optional<std::string_view> Context::requestQuery(std::string_view name) con
 
 const detail::RequestQueryValues& Context::requestQueries() const {
     ensureRequestQuery();
-    return *requestQueries_;
+    return requestQueryCache_->values();
 }
 
 std::optional<std::string_view> Context::requestCookie(std::string_view name) const {

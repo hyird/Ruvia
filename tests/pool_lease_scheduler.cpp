@@ -21,8 +21,14 @@ ruvia::Task<void> exerciseLeaseAndClose(
         co_return;
     }
     const auto index = firstLease->index();
-    scheduler.release(index);
-    scheduler.release(index);  // duplicate release must not duplicate the slot
+    if (scheduler.release(index) !=
+            ruvia::detail::PoolLeaseReleaseStatus::kReleased ||
+        scheduler.release(index) !=
+            ruvia::detail::PoolLeaseReleaseStatus::kAlreadyReleased ||
+        scheduler.release(index + 1) !=
+            ruvia::detail::PoolLeaseReleaseStatus::kInvalidSlot) {
+        co_return;
+    }
 
     const auto reacquired = co_await scheduler.acquire(std::nullopt);
     if (reacquired.acquired() == nullptr ||
@@ -30,15 +36,30 @@ ruvia::Task<void> exerciseLeaseAndClose(
         co_return;
     }
 
+    auto handoffStatus = ruvia::detail::PoolLeaseReleaseStatus::kInvalidSlot;
+    asio::post(ioContext, [&scheduler, &handoffStatus, index] {
+        handoffStatus = scheduler.release(index);
+    });
+    const auto handedOff = co_await scheduler.acquire(std::nullopt);
+    if (handedOff.acquired() == nullptr ||
+        handedOff.acquired()->index() != index) {
+        co_return;
+    }
+
     asio::post(ioContext, [&scheduler] {
         (void)scheduler.close();
     });
     const auto waitingAtClose = co_await scheduler.acquire(std::nullopt);
-    if (waitingAtClose.closed() == nullptr || !scheduler.closing() ||
+    if (handoffStatus !=
+            ruvia::detail::PoolLeaseReleaseStatus::kTransferredToWaiter ||
+        waitingAtClose.closed() == nullptr || !scheduler.closing() ||
         scheduler.close()) {
         co_return;
     }
-    scheduler.release(index);
+    if (scheduler.release(index) !=
+        ruvia::detail::PoolLeaseReleaseStatus::kReleased) {
+        co_return;
+    }
     const auto afterClose = co_await scheduler.acquire(std::nullopt);
     success = afterClose.closed() != nullptr;
 }

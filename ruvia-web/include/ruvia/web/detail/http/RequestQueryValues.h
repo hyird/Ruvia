@@ -4,9 +4,11 @@
 #include <memory_resource>
 #include <span>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 #include "ruvia/core/memory/PmrResource.h"
+#include "ruvia/web/RequestFields.h"
 
 namespace ruvia::detail {
 
@@ -61,6 +63,31 @@ public:
 
 private:
     std::pmr::vector<Group> groups_;
+};
+
+// The flattened scalar view and multivalue index are materialized together.
+// One owner prevents Context from representing a half-built query cache.
+class RequestQueryCache final {
+public:
+    RequestQueryCache(
+        RequestNameValueList&& fields,
+        RequestQueryValues&& values) noexcept
+        : fields_(std::move(fields)),
+          values_(std::move(values)) {}
+
+    [[nodiscard]] const RequestNameValueList& fields() const & noexcept {
+        return fields_;
+    }
+    const RequestNameValueList& fields() const && = delete;
+
+    [[nodiscard]] const RequestQueryValues& values() const & noexcept {
+        return values_;
+    }
+    const RequestQueryValues& values() const && = delete;
+
+private:
+    RequestNameValueList fields_;
+    RequestQueryValues values_;
 };
 
 }  // namespace ruvia::detail

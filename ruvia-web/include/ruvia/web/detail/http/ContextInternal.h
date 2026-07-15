@@ -120,7 +120,7 @@ struct ContextAccess final {
     }
 
     [[nodiscard]] static bool requestQueryMaterialized(const Context& context) noexcept {
-        return context.requestQuery_ != nullptr || context.requestQueries_ != nullptr;
+        return context.requestQueryCache_ != nullptr;
     }
 
     [[nodiscard]] static bool routeParamsMaterialized(const Context& context) noexcept {

@@ -11,6 +11,7 @@
 #include <variant>
 #include <vector>
 
+#include "ruvia/core/memory/MemoryPool.h"
 #include "ruvia/http/HttpLimits.h"
 #include "ruvia/web/RateLimitRule.h"
 #include "ruvia/web/ServerConfig.h"
@@ -84,6 +85,7 @@ struct HttpServerOptions final {
     std::chrono::milliseconds scanInterval{std::chrono::seconds(1)};
     // Capacity of the explicit cross-thread queue for this Web worker.
     std::size_t workerMailboxCapacity{1024};
+    MemoryPoolConfig memoryConfig{};
     std::optional<std::chrono::milliseconds> clientHeaderTimeout{std::chrono::seconds(60)};
     std::optional<std::chrono::milliseconds> clientBodyTimeout{std::chrono::seconds(60)};
     std::optional<std::chrono::milliseconds> sendTimeout{std::chrono::seconds(60)};

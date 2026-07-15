@@ -214,7 +214,7 @@ App& App::setMemoryPoolConfig(MemoryPoolConfig config) {
                 config.requestInitialBufferBytes,
                 "memory pool config values must be greater than 0");
 
-            state.memoryConfig = config;
+            state.options.memoryConfig = config;
         });
 }
 

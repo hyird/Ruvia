@@ -4,9 +4,11 @@
 
 #include "ruvia/web/detail/server/HttpServerTlsVerify.h"
 
+#include <asio/bind_allocator.hpp>
 #include <asio/co_spawn.hpp>
 #include <asio/detached.hpp>
 #include <asio/post.hpp>
+#include <asio/recycling_allocator.hpp>
 #include <asio/ssl/context.hpp>
 #include <asio/ssl/error.hpp>
 #include <asio/system_error.hpp>
@@ -36,6 +38,20 @@ namespace ruvia::detail {
 using TcpEndpoint = asio::ip::tcp::endpoint;
 
 namespace {
+
+void freezeProcessMemoryForWorker(const MemoryPoolConfig& config) {
+    auto& processMemory = ProcessMemory::instance();
+    if (processMemory.frozen()) {
+        if (processMemory.config().requestInitialBufferBytes !=
+            config.requestInitialBufferBytes) {
+            throw std::logic_error(
+                "process memory configuration is already frozen with different values");
+        }
+        return;
+    }
+    processMemory.configure(config);
+    processMemory.freeze();
+}
 
 int selectAlpnProtocol(
     SSL*,
@@ -185,6 +201,9 @@ HttpServer::HttpServer(
       acceptor_(ioContext_),
       endpoint_(std::move(endpoint)),
       routes_(routes),
+      memory_(
+          validatedOptions.memoryConfig,
+          DeferProcessMemoryFreeze{}),
       sniContexts_(memory_.resource()),
       sniLookup_(memory_.resource()),
       options_(std::move(validatedOptions)),
@@ -230,6 +249,7 @@ HttpServer::~HttpServer() {
 }
 
 void HttpServer::start() {
+    freezeProcessMemoryForWorker(options_.memoryConfig);
     if (!lifecycle_.start()) {
         throw std::logic_error("http server worker cannot be restarted");
     }

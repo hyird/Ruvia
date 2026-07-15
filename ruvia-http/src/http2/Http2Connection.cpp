@@ -118,7 +118,7 @@ std::span<const std::uint32_t> Http2Connection::takeDrainedDataStreams() noexcep
 // =============================================================================
 
 void Http2Connection::appendGoaway(Http2ErrorCode error, std::string_view debug) {
-    connectionError_ = error;
+    localConnectionState_.fail(error);
     output_.appendGoawayFrame(lastStreamId_, error, debug);
 }
 
@@ -126,11 +126,9 @@ void Http2Connection::beginDrain() {
     // Graceful drain (RFC 9113 §6.8): advertise GOAWAY(NO_ERROR) at the last accepted
     // stream id WITHOUT a connection error -- established streams keep running, and HEADERS
     // for a stream above the advertised id are refused in processHeaders.
-    if (draining_ || connectionError_) {
+    if (!localConnectionState_.beginGracefulDrain(lastStreamId_)) {
         return;
     }
-    draining_ = true;
-    goawayLastStreamId_ = lastStreamId_;
     output_.appendGoawayFrame(
         lastStreamId_, Http2ErrorCode::kNoError, "connection draining");
 }
@@ -623,7 +621,8 @@ Http2Connection::localRequestAdmissionError() const noexcept {
     if (prefacePhase_ == PrefacePhase::kNotStarted) {
         return Http2RequestHeadSubmitError::kConnectionNotStarted;
     }
-    if (connectionError_ || peerGoaway_.has_value() || nextLocalStreamId_ > 0x7fffffffU) {
+    if (localConnectionState_.fatalFailure() != nullptr ||
+        peerGoaway_.has_value() || nextLocalStreamId_ > 0x7fffffffU) {
         return Http2RequestHeadSubmitError::kConnectionUnavailable;
     }
     if (activeLocalRequestStreams_ >= peerSettings_.maxConcurrentStreams()) {
@@ -1020,7 +1019,7 @@ bool Http2Connection::consumeFrames(std::string_view buffer, std::size_t& offset
             return false;
         }
         offset += kHttp2FrameHeaderBytes + header.length;
-        if (connectionError_) {
+        if (localConnectionState_.fatalFailure() != nullptr) {
             break;
         }
     }
@@ -1040,7 +1039,7 @@ Http2FeedResult Http2Connection::feed(std::string_view in) {
     if (eventOffset_ < events_.size()) {
         return Http2FeedResult::kEventsPending;
     }
-    if (connectionError_) {
+    if (localConnectionState_.fatalFailure() != nullptr) {
         return Http2FeedResult::kProtocolFailure;
     }
 
@@ -1071,7 +1070,7 @@ Http2FeedResult Http2Connection::feed(std::string_view in) {
         if (offset < in.size()) {
             input_.append(in.data() + offset, in.size() - offset);  // partial-frame tail
         }
-        if (connectionError_) {
+        if (localConnectionState_.fatalFailure() != nullptr) {
             return Http2FeedResult::kProtocolFailure;
         }
         return input_.empty()
@@ -1104,7 +1103,7 @@ Http2FeedResult Http2Connection::feed(std::string_view in) {
     }
     // NOTE: the consumed prefix is reclaimed at the START of the next feed (see above),
     // so body-chunk views handed out via events stay valid until then.
-    if (connectionError_) {
+    if (localConnectionState_.fatalFailure() != nullptr) {
         return Http2FeedResult::kProtocolFailure;
     }
     return inputOffset_ < input_.size()

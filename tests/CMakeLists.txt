@@ -313,6 +313,11 @@ add_executable(ruvia_app_web_worker app_web_worker.cpp)
 target_link_libraries(ruvia_app_web_worker PRIVATE ruvia::web)
 add_test(NAME ruvia_app_web_worker COMMAND ruvia_app_web_worker)
 set_tests_properties(ruvia_app_web_worker PROPERTIES TIMEOUT 30)
+
+add_executable(ruvia_app_startup_retry app_startup_retry.cpp)
+target_link_libraries(ruvia_app_startup_retry PRIVATE ruvia::web)
+add_test(NAME ruvia_app_startup_retry COMMAND ruvia_app_startup_retry)
+set_tests_properties(ruvia_app_startup_retry PROPERTIES TIMEOUT 30)
 endif()
 
 configure_file(

@@ -35,7 +35,8 @@ Task<void> SessionMiddleware::handle(Context& c, Next& next) {
     }
 
     auto& response = detail::ContextAccess::responseStorage(c);
-    const bool secure = getConnInfo(c).tls() != nullptr;
+    const auto connection = getConnInfo(c);
+    const bool secure = connection.tls() != nullptr;
     if (const auto* cleared = state.cleared()) {
         if (cleared->oldId.has_value()) {
             std::pmr::string key(c.resource());

@@ -352,6 +352,58 @@ private:
     Value value_;
 };
 
+namespace detail {
+
+struct MultipartBorrowedInput final {
+    std::string_view bytes;
+};
+
+struct MultipartStreamingInputOpen final {
+    explicit MultipartStreamingInputOpen(std::pmr::memory_resource* resource)
+        : bytes(resource) {}
+    std::pmr::string bytes;
+};
+
+struct MultipartStreamingInputEof final {
+    explicit MultipartStreamingInputEof(std::pmr::string&& input)
+        : bytes(std::move(input)) {}
+    std::pmr::string bytes;
+};
+
+// Owns the multipart byte source and its EOF lifecycle. Parser grammar progress
+// remains orthogonal in MultipartParser::state_.
+class MultipartInputLifecycle final {
+public:
+    explicit MultipartInputLifecycle(std::pmr::memory_resource* resource);
+    explicit MultipartInputLifecycle(MultipartBorrowedInput input) noexcept;
+
+    [[nodiscard]] const MultipartBorrowedInput* borrowed() const noexcept;
+    [[nodiscard]] const MultipartStreamingInputOpen* streamingOpen() const noexcept;
+    [[nodiscard]] const MultipartStreamingInputEof* streamingEof() const noexcept;
+    [[nodiscard]] bool eof() const noexcept;
+    [[nodiscard]] std::string_view view() const noexcept;
+
+    void feed(std::string_view chunk);
+    void finishInput() noexcept;
+    void consume(std::size_t bytes) noexcept;
+    void compactConsumedPrefix(std::size_t threshold);
+
+private:
+    static constexpr std::size_t kCompactConsumedPrefixBytes = 64 * 1024;
+    using Value = std::variant<
+        MultipartBorrowedInput,
+        MultipartStreamingInputOpen,
+        MultipartStreamingInputEof>;
+
+    [[nodiscard]] std::pmr::string* ownedBytes() noexcept;
+    [[nodiscard]] const std::pmr::string* ownedBytes() const noexcept;
+
+    Value value_;
+    std::size_t offset_{0};
+};
+
+}  // namespace detail
+
 class MultipartParser final {
 public:
     MultipartParser(MultipartBoundary boundary, std::pmr::memory_resource* resource);
@@ -402,11 +454,8 @@ private:
 
     using StepResult = std::variant<StepProgress, MultipartParseError>;
 
-    static constexpr std::size_t kCompactConsumedPrefixBytes = 64 * 1024;
-
     [[nodiscard]] std::string_view bufferView() const noexcept;
     void consume(std::size_t bytes) noexcept;
-    void compactConsumedPrefix();
     void compactPending();
     [[nodiscard]] MultipartPollResult fail(
         MultipartParseError error) noexcept;
@@ -417,19 +466,15 @@ private:
 
     std::pmr::memory_resource* resource_;
     MultipartBoundary boundary_;
-    std::pmr::string buffer_;
+    detail::MultipartInputLifecycle input_;
     std::pmr::string currentName_;
     std::pmr::string currentFilename_;
     std::pmr::string currentContentType_;
     std::string_view currentContentTypeView_;
-    std::string_view borrowedInput_;
-    bool borrowedInputMode_{false};
     State state_{ProgressState::kBoundary};
-    std::size_t bufferOffset_{0};
     std::size_t pendingEraseBytes_{0};
     bool nextChunkIsFirst_{false};
     bool firstBoundary_{true};
-    bool inputFinished_{false};
 };
 
 // Parses a complete multipart/form-data body without I/O. Returned part bodies

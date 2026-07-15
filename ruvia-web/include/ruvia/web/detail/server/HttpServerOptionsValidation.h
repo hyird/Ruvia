@@ -32,6 +32,9 @@ inline void validateHttpServerOptions(const HttpServerOptions& options) {
     ensurePositiveSize(
         options.workerMailboxCapacity,
         "worker mailbox capacity must be greater than 0");
+    ensurePositiveSize(
+        options.memoryConfig.requestInitialBufferBytes,
+        "memory pool config values must be greater than 0");
     ensurePositiveSize(options.maxBufferedBodyBytes, "buffered body limit must be greater than 0");
     ensurePositiveOptionalSize(
         options.maxStreamBodyBytes,

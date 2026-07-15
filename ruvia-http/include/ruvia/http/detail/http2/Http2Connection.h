@@ -45,6 +45,7 @@
 #include "ruvia/http/detail/http2/Http2HeaderDecode.h"
 #include "ruvia/http/detail/http2/Http2Hpack.h"
 #include "ruvia/http/detail/http2/Http2LocalSettings.h"
+#include "ruvia/http/detail/http2/Http2LocalConnectionState.h"
 #include "ruvia/http/detail/http2/Http2OutputBuffer.h"
 #include "ruvia/http/detail/http2/Http2PeerSettings.h"
 #include "ruvia/http/detail/http2/Http2ReadyQueue.h"
@@ -563,7 +564,10 @@ public:
     // deliberately absent from this value; those connections keep established streams
     // alive while draining.
     [[nodiscard]] std::optional<Http2ErrorCode> connectionError() const noexcept {
-        return connectionError_;
+        const auto* failure = localConnectionState_.fatalFailure();
+        return failure != nullptr
+            ? std::optional<Http2ErrorCode>(failure->error())
+            : std::nullopt;
     }
 
     // Graceful local drain: advertise GOAWAY(NO_ERROR) at the current last peer stream
@@ -571,7 +575,9 @@ public:
     // advertised id are refused (RST_STREAM(REFUSED_STREAM)). Idempotent. Receiving a
     // valid peer GOAWAY enters this state through the same path so shutdown is bilateral.
     void beginDrain();
-    [[nodiscard]] bool draining() const noexcept { return draining_; }
+    [[nodiscard]] bool draining() const noexcept {
+        return localConnectionState_.gracefulDrain() != nullptr;
+    }
 
     // True while a HEADERS block is still being assembled (awaiting CONTINUATION); the
     // I/O layer maps this to its tight header-read inactivity timeout.
@@ -671,7 +677,8 @@ private:
     // caller's bytes) and slow (parse the buffered input_) paths.
     [[nodiscard]] bool consumeFrames(std::string_view buffer, std::size_t& offset);
     // Synchronous per-frame dispatch (ported 1:1 from processFrame/*; returns false
-    // on a fatal protocol error, having appended GOAWAY and set connectionError_).
+    // on a fatal protocol error, having appended GOAWAY and transitioned the
+    // local connection state to fatal failure).
     [[nodiscard]] bool processFrame(const Http2FrameHeader& header, std::string_view payload);
     [[nodiscard]] bool processSettings(const Http2FrameHeader& header, std::string_view payload);
     [[nodiscard]] bool processPing(const Http2FrameHeader& header, std::string_view payload);
@@ -794,8 +801,7 @@ private:
 
     std::uint32_t localMaxFrameSize_{Http2LocalSettings::kMaxFrameSize};
     std::uint32_t lastStreamId_{0};
-    bool draining_{false};
-    std::uint32_t goawayLastStreamId_{0};
+    Http2LocalConnectionState localConnectionState_;
     Http2Role role_{Http2Role::kServer};
     std::uint32_t nextLocalStreamId_{1};  // client role: next odd stream id to open
     std::uint32_t activeLocalRequestStreams_{0};
@@ -804,7 +810,6 @@ private:
     std::int32_t connectionReceiveWindow_{
         static_cast<std::int32_t>(Http2LocalSettings::kInitialWindowSize)};
     PrefacePhase prefacePhase_{PrefacePhase::kNotStarted};
-    std::optional<Http2ErrorCode> connectionError_;
 
     // Defense-in-depth flood budgets (see Http2Connection.cpp). No clock in the core, so
     // these are per-connection counters that trip GOAWAY(ENHANCE_YOUR_CALM).
