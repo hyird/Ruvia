@@ -11,7 +11,7 @@
 | 工作流 | 内容 | 框架依赖 |
 |---|---|---|
 | Ruvia R0 | 每 Web worker 单一时间调度 timer，移除 timer-as-signal | 无 |
-| Ruvia R1 | Runtime、WorkerHandle/post、sleep、Channel、OneShot | R0 |
+| Ruvia R1 | EventLoopPool、EventLoop/WorkerHandle、sleep、Channel、OneShot | R0 |
 | Ruvia R2 | TaskScope、WS 单 reader/close/abort | R1 |
 | iot-engine | schema、CRUD、DeviceEngine、EventBus、Webhook | 可在 R1/R2 前并行 |
 
@@ -47,12 +47,12 @@
 
 ### R1：Ruvia 0.1.2 并发基础设施
 
-状态：已完成。Runtime、WorkerHandle/post、WebWorkerHandle 异步作业投递、统一 deadline queue、sleep、Channel、OneShot，以及 timer-as-signal/stream timeout 迁移均已实现并通过验证。
+状态：已完成。EventLoopPool、EventLoop/WorkerHandle、WebWorkerHandle 异步作业投递、统一 deadline queue、sleep、Channel、OneShot，以及 timer-as-signal/stream timeout 迁移均已实现并通过验证。EventLoop 公开应用自有 `io_context`/executor，Web worker 保持受限。
 
 任务：
 
 0. 将 ConnectionScanner deadline、shutdown/stream timeout 合并到每 worker 唯一 deadline queue；HTTP/2/WS 写唤醒改用 mailbox/signal，不再创建 `steady_timer(max)`。
-1. 在 `ruvia-core` 增加 Runtime、WorkerHandle 和有界 `post()`。
+1. 在 `ruvia-core` 增加 EventLoopPool、EventLoop、WorkerHandle 和有界 `post()`；EventLoop 支持原生 Asio I/O 和 owner-thread `onStop()`。
 2. 将 WorkerHandle 从 HttpServer worker 传入 Context；通过 `App::workerFor()`/`App::workers()` 暴露 WebWorkerHandle，使后台线程能把拥有权数据投递到稳定 Web worker，并在 `WebWorkerContext` 内使用该 worker 的 DB/Redis。
 3. 实现 worker-bound sleep。
 4. 实现创建期预分配、短临界区 mutex 保护的有界 Channel。
@@ -64,7 +64,7 @@
 验收：
 
 - 满足 [原语规范第 10 节](ruvia-concurrency-primitives.md#10-验证门禁) 的全部 0.1.2 测试。
-- 不新增通用 `withTimeout`、裸 executor 或 detached spawn；通用有界 `WorkerHandle::post()` 是正式公开能力。
+- 不新增通用 `withTimeout` 或 detached spawn；应用自有 `EventLoop` 可取得 executor/`io_context`，Web worker 只能通过有界 `WorkerHandle::post()`/`WebWorkerHandle::post()` 投递。
 - 普通 HTTP route dispatch 不新增 mutex 或共享控制块分配。
 - `git diff --check`、Debug build、ctest、install、package consumer 全通过。
 
@@ -74,8 +74,8 @@
 
 任务：
 
-- 建立 engine io_context/thread、acceptor/client session 和串行 write queue。
-- DeviceSession 固定 executor，完成心跳、idle、重连和 framing。
+- 使用 `EventLoopPool` 建立 engine loops，在 `EventLoop::ioContext()` 上创建 acceptor/client session 和串行 write queue，并通过 `onStop()` 关闭网络资源。
+- DeviceSession 固定所属 EventLoop，完成心跳、idle、重连和 framing。
 - CommandRegistry 使用分片线程安全 map。
 - 接入 `device_command` 持久状态。
 - HTTP 快速回执路径使用 OneShot；超过同步窗口返回 202。

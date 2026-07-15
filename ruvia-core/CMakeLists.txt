@@ -2,7 +2,7 @@ add_library(ruvia-core
     ${CMAKE_CURRENT_SOURCE_DIR}/src/MemoryPool.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/MimallocOverride.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/ConnectionScanner.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/Runtime.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/EventLoopPool.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/TaskScope.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/Timer.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/WorkerDispatcher.cpp
@@ -34,7 +34,7 @@ ruvia_install_public_headers(core
     include/ruvia/core/OneShot.h
     include/ruvia/core/TaskScope.h
     include/ruvia/core/Timer.h
-    include/ruvia/core/Runtime.h
+    include/ruvia/core/EventLoopPool.h
     include/ruvia/core/WorkerHandle.h
     include/ruvia/core/WorkerWaitResult.h
     include/ruvia/core/memory/MemoryPool.h

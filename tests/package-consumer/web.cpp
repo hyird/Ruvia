@@ -290,12 +290,20 @@ concept HasWebWorkerCorePostEscape = requires(const T& worker) {
 };
 
 template <typename T>
+concept HasNativeEventLoopAccess = requires(const T& worker) {
+    worker.ioContext();
+    worker.executor();
+};
+
+template <typename T>
 concept HasAppInstanceAlias = requires {
     T::instance();
 };
 
 static_assert(!HasAppInstanceAlias<ruvia::App>);
 static_assert(!HasWebWorkerCorePostEscape<ruvia::WebWorkerHandle>);
+static_assert(!HasNativeEventLoopAccess<ruvia::WebWorkerHandle>);
+static_assert(!HasNativeEventLoopAccess<ruvia::WebWorkerContext>);
 
 template <typename Runtime, typename Executor>
 concept HasDirectHttp2BeginDispatch = requires(

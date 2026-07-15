@@ -10,37 +10,48 @@
 
 必须保持：
 
-- `Runtime` 可以创建应用自有 worker；`App::run()` 仍创建 Web worker。
+- `EventLoopPool` 可以创建应用自有 event loop；`App::run()` 仍创建受限的 Web worker。
 - 连接、Context、DB handle 和 Redis handle 不跨 worker。
 - 外部线程通过有界 mailbox 投递，不直接恢复协程或操作连接。
 - 普通请求热路径不新增锁或共享控制块分配。
-- 公开 API 不暴露 `asio::io_context`、socket 或 `ruvia::detail`。
+- 应用自有 `EventLoop` 公开 `asio::io_context` 和 executor；Web worker 不公开二者。
+- pool-owned `io_context` 的 `run/stop/restart` 生命周期只由 `EventLoopPool` 控制。
 - 不提供 detached Ruvia Task，也不实现不安全的通用 `withTimeout(Task<T>)`。
 
-## 2. Runtime 与 WorkerHandle
+## 2. EventLoopPool、EventLoop 与 WorkerHandle
 
 ```cpp
-ruvia::Runtime runtime({
-    .workerCount = 4,
+ruvia::EventLoopPool loops({
+    .loopCount = 4,
     .mailboxCapacity = 1024,
 });
-runtime.start();
+loops.start();
 
-auto worker = runtime.workerFor("device-42");
-auto result = worker.post([state = std::move(state)]() mutable {
-    // 始终在目标 worker 执行
+auto loop = loops.loopFor("device-42");
+asio::ip::tcp::socket socket(loop.ioContext());
+auto result = loop.post([state = std::move(state)]() mutable {
+    // 始终在目标 event loop 执行
+});
+
+auto stopRegistration = loop.onStop([&socket] {
+    std::error_code ignored;
+    socket.close(ignored);
 });
 ```
 
-`Runtime` 是应用自有运行时，负责 worker 的创建、启动、停止和 join。每个 worker 拥有独立 `asio::io_context` 和线程。
+`EventLoopPool` 负责应用 event loop 的创建、启动、停止和 join。每个 `EventLoop` 拥有独立 `asio::io_context` 和线程，公开 `ioContext()` 与 `executor()`，供应用创建 TCP、UDP、DNS、TLS 等异步对象。连接创建后固定归属该 loop，不得迁移。
 
-`WorkerHandle` 是可复制的安全句柄：
+`EventLoop::onStop()` 返回 move-only registration。业务资源存活期间必须保留 registration；pool 停止时回调在所属 loop 线程执行，应用在其中 cancel/close acceptor、socket、resolver 和 TLS stream。回调必须尽快返回且不得依赖异常传播；框架会忽略 stop callback 异常并继续关闭。应用不得对 pool-owned `io_context` 调用 `run()`、`stop()` 或 `restart()`。
+
+`ioContext()`/`executor()` 用于构造和驱动归属于该 loop 的 Asio I/O 对象，不是无界任务入口。外部线程提交普通业务任务仍必须使用有界 `EventLoop::post()`；直接 `asio::post(loop.executor(), ...)` 绕过 mailbox 的任务不享受背压、拒绝新任务和停机可观测性保证。
+
+`EventLoop::handle()` 返回可复制的 `WorkerHandle`，供 `sleepFor`、`Channel`、`OneShot`、`TaskScope` 等 worker-bound core 原语使用。Web handler 的 `Context::worker()` 也只返回这种受限句柄：
 
 - `post(fn)` 是通用公开 API，语义对应 event-loop 的 queue-in-loop。
 - 返回 `kAccepted`、`kQueueFull` 或 `kWorkerStopping`，调用方必须处理背压。
 - 支持 move-only callable。
 - `isCurrent()` 用于断言线程亲和；`id()` 用于诊断。
-- 不暴露 `run()`、`stop()`、裸 executor 或 `io_context`。
+- 自身不暴露 executor 或 `io_context`，因此不能借 Web worker 创建任意网络 runtime。
 - 句柄晚于 worker 销毁仍可安全调用，返回 stopping。
 
 Web 侧提供普通请求和后台作业两种入口：
@@ -81,7 +92,7 @@ auto result = target.post(
 co_await ruvia::sleepFor(c.worker(), 100ms);
 ```
 
-每个 Runtime worker 只拥有一个底层 `steady_timer`。`sleepFor`、OneShot timeout、连接扫描和 graceful drain 都向同一个 worker deadline queue 注册，不得各自创建 Asio timer。deadline queue 维护最小截止时间并统一重设唯一 timer。DB/Redis deadline 和遗留 Web stream timeout 将继续迁入该队列。
+每个 EventLoop/Web worker 只拥有一个框架 deadline queue 底层 `steady_timer`。`sleepFor`、OneShot timeout、连接扫描和 graceful drain 都向同一个 worker deadline queue 注册，不得各自为框架超时创建 Asio timer。应用通过 `ioContext()` 创建的协议 I/O 不改变该约束；业务超时应优先复用 worker-bound core 原语。deadline queue 维护最小截止时间并统一重设唯一 timer。DB/Redis deadline 和遗留 Web stream timeout 将继续迁入该队列。
 
 调用必须发生在目标 worker；duration 小于等于零立即完成。不会增加通用 `withTimeout`：现有 `Task` 没有统一取消协议，输掉超时竞争的任意 Task 不能被安全销毁。
 
@@ -186,7 +197,7 @@ co_await scope.join();
 
 ## 10. 验证门禁
 
-- Runtime worker 线程亲和、稳定分片、round-robin。
+- EventLoop 线程亲和、稳定分片、round-robin、原生 Asio 对象创建与 owner-thread stop callback。
 - move-only post、队列满、停止后 post、过期句柄。
 - posted callable 异常传播。
 - Web worker 稳定选择、队列满、统计、DB/Redis context 编译面、停止后拒绝、异常触发 App 级联停止，以及 shutdown/grace deadline 排空已接受异步作业。

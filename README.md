@@ -115,25 +115,40 @@ connection-pool, or client TLS runtime APIs.
 
 ## Core Runtime
 
-`ruvia::Runtime` creates application-owned workers. `WorkerHandle::post()` is a
-bounded, thread-safe queue-in-loop API; it does not expose the underlying Asio
-executor:
+`ruvia::EventLoopPool` creates application-owned event loops. Every
+`EventLoop` owns one thread and one standalone Asio `io_context`, which is
+available for application TCP, UDP, DNS, and TLS integrations. Its bounded
+`post()` remains the cross-thread queue-in-loop API:
 
 ```cpp
-#include <ruvia/core/Runtime.h>
+#include <ruvia/core/EventLoopPool.h>
 
-ruvia::Runtime runtime({.workerCount = 4, .mailboxCapacity = 1024});
-runtime.start();
+ruvia::EventLoopPool loops({.loopCount = 4, .mailboxCapacity = 1024});
+loops.start();
 
-auto worker = runtime.workerFor("device-42");
-if (worker.post([] { /* runs on the selected worker */ }) !=
+auto loop = loops.loopFor("device-42");
+asio::ip::tcp::socket socket(loop.ioContext());
+if (loop.post([] { /* runs on the selected event loop */ }) !=
     ruvia::PostResult::kAccepted) {
     // Apply application backpressure or shutdown handling.
 }
 
-runtime.stop();
-runtime.join();
+auto stopRegistration = loop.onStop([&socket] {
+    std::error_code ignored;
+    socket.close(ignored);
+});
+
+loops.stop();
+loops.join();
 ```
+
+Keep the stop registration alive while its resource is active. The callback
+runs on the owning event-loop thread before that loop exits. Do not call
+`run()`, `stop()`, or `restart()` on a pool-owned `io_context`; lifecycle
+control belongs to `EventLoopPool`. Cross-thread application work must still
+use bounded `EventLoop::post()` rather than raw `asio::post()`, so shutdown and
+backpressure remain observable. Web workers deliberately expose only
+`WorkerHandle`/`WebWorkerHandle`, not their `io_context` or executor.
 
 Web handlers obtain their current core worker with `Context::worker()`.
 Background components select a stable Web worker with `App::workerFor()` and

@@ -224,9 +224,9 @@ if(RUVIA_BUILD_CORE)
     target_link_libraries(ruvia_connection_scanner_lifetime PRIVATE ruvia::core)
     add_test(NAME ruvia_connection_scanner_lifetime COMMAND ruvia_connection_scanner_lifetime)
 
-    add_executable(ruvia_runtime_worker runtime_worker.cpp)
-    target_link_libraries(ruvia_runtime_worker PRIVATE ruvia::core)
-    add_test(NAME ruvia_runtime_worker COMMAND ruvia_runtime_worker)
+    add_executable(ruvia_event_loop_pool runtime_worker.cpp)
+    target_link_libraries(ruvia_event_loop_pool PRIVATE ruvia::core)
+    add_test(NAME ruvia_event_loop_pool COMMAND ruvia_event_loop_pool)
 
     add_executable(ruvia_operation_deadline operation_deadline.cpp)
     target_link_libraries(ruvia_operation_deadline PRIVATE ruvia::core)

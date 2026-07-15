@@ -184,7 +184,7 @@ file(READ "${RUVIA_ROOT}/ruvia-core/include/ruvia/core/detail/WorkerSignal.h"
     core_worker_signal_contract)
 file(READ "${RUVIA_ROOT}/ruvia-core/include/ruvia/core/detail/RuntimeLifecycle.h"
     core_runtime_lifecycle_contract)
-file(READ "${RUVIA_ROOT}/ruvia-core/src/Runtime.cpp"
+file(READ "${RUVIA_ROOT}/ruvia-core/src/EventLoopPool.cpp"
     core_runtime_implementation)
 file(READ "${RUVIA_ROOT}/tests/runtime_worker.cpp"
     core_runtime_test_contract)

@@ -243,7 +243,7 @@ public:
     }
     ResponseStreamRecoveredFailure* recoveredFailure() && = delete;
 
-    [[nodiscard]] constexpr std::optional<std::uint16_t>
+    [[nodiscard]] std::optional<std::uint16_t>
     committedStatus() const noexcept {
         if (const auto* value = completed()) {
             return value->status();

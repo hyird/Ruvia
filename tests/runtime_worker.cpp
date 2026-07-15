@@ -1,4 +1,4 @@
-#include <ruvia/core/Runtime.h>
+#include <ruvia/core/EventLoopPool.h>
 #include <ruvia/core/detail/AsioAwait.h>
 #include <ruvia/core/detail/RuntimeLifecycle.h>
 #include <ruvia/core/detail/WorkerDispatcher.h>
@@ -8,6 +8,8 @@
 #include <asio/co_spawn.hpp>
 #include <asio/detached.hpp>
 #include <asio/io_context.hpp>
+#include <asio/ip/tcp.hpp>
+#include <asio/ip/udp.hpp>
 
 #include <atomic>
 #include <barrier>
@@ -59,20 +61,36 @@ bool testWorkerSignalHasOneDispatchTarget() {
 }
 
 bool testDispatchAndAffinity() {
-    ruvia::Runtime runtime({.workerCount = 2, .mailboxCapacity = 4});
-    const auto first = runtime.worker(0);
-    const auto second = runtime.worker(1);
+    ruvia::EventLoopPool loops({.loopCount = 2, .mailboxCapacity = 4});
+    const auto first = loops.loop(0);
+    const auto second = loops.loop(1);
     if (!first.valid() || first.id() == 0 || first.id() == second.id() || first.isCurrent()) {
         return false;
     }
     constexpr std::string_view key = "device-42";
-    if (runtime.workerFor(key).id() !=
-        runtime.workerFor(ruvia::detail::workerSelectionHash(key)).id()) {
+    if (loops.loopFor(key).id() !=
+        loops.loopFor(ruvia::detail::workerSelectionHash(key)).id()) {
+        return false;
+    }
+    if (&first.ioContext() != &first.executor().context() ||
+        first.handle().id() != first.id()) {
+        return false;
+    }
+    asio::ip::tcp::socket tcp(first.ioContext());
+    asio::ip::udp::socket udp(first.ioContext());
+    if (&tcp.get_executor().context() != &first.ioContext() ||
+        &udp.get_executor().context() != &first.ioContext()) {
         return false;
     }
 
     std::promise<bool> completed;
     auto result = completed.get_future();
+    std::atomic_bool stopCallbackRan{false};
+    std::atomic_bool stopCallbackOnLoop{false};
+    auto stopRegistration = first.onStop([&] {
+        stopCallbackOnLoop = first.isCurrent();
+        stopCallbackRan = true;
+    });
     auto moveOnly = std::make_unique<int>(42);
     if (first.post([worker = first,
                     value = std::move(moveOnly),
@@ -82,16 +100,18 @@ bool testDispatchAndAffinity() {
         return false;
     }
 
-    runtime.start();
+    loops.start();
     const bool success = result.get();
-    runtime.stop();
-    runtime.join();
-    return success && first.post([] {}) == ruvia::PostResult::kWorkerStopping;
+    loops.stop();
+    loops.join();
+    return success && stopRegistration.valid() && stopCallbackRan &&
+           stopCallbackOnLoop &&
+           first.post([] {}) == ruvia::PostResult::kWorkerStopping;
 }
 
 bool testBoundedMailbox() {
-    ruvia::Runtime runtime({.workerCount = 1, .mailboxCapacity = 2});
-    const auto worker = runtime.worker(0);
+    ruvia::EventLoopPool loops({.loopCount = 1, .mailboxCapacity = 2});
+    const auto worker = loops.loop(0);
     std::atomic<int> calls{0};
     std::promise<void> completed;
     auto result = completed.get_future();
@@ -105,43 +125,52 @@ bool testBoundedMailbox() {
         return false;
     }
 
-    runtime.start();
+    loops.start();
     result.get();
-    runtime.stop();
-    runtime.join();
+    loops.stop();
+    loops.join();
     return calls.load() == 2;
 }
 
 bool testFailurePropagation() {
-    ruvia::Runtime runtime({.workerCount = 1, .mailboxCapacity = 1});
+    ruvia::EventLoopPool loops({.loopCount = 1, .mailboxCapacity = 1});
+    const auto loop = loops.loop(0);
+    std::atomic_bool stopCallbackRan{false};
+    std::atomic_bool stopCallbackOnLoop{false};
+    auto stopRegistration = loop.onStop([&] {
+        stopCallbackOnLoop = loop.isCurrent();
+        stopCallbackRan = true;
+    });
     struct Listener final : ruvia::detail::WorkerShutdownListener {
         void workerStopping() noexcept override { notified = true; }
         bool notified{false};
     };
     const auto listener = std::make_shared<Listener>();
     ruvia::detail::WorkerHandleAccess::registerShutdownListener(
-        runtime.worker(0), listener);
-    if (runtime.worker(0).post([] { throw std::runtime_error("posted task failed"); }) !=
+        loop.handle(), listener);
+    if (loop.post([] { throw std::runtime_error("posted task failed"); }) !=
         ruvia::PostResult::kAccepted) {
         return false;
     }
-    runtime.start();
+    loops.start();
     try {
-        runtime.join();
+        loops.join();
     } catch (const std::runtime_error& error) {
-        return listener->notified &&
+        return stopRegistration.valid() && stopCallbackRan &&
+               stopCallbackOnLoop && listener->notified &&
                std::string_view(error.what()) == "posted task failed";
     }
     return false;
 }
 
 bool testExpiredHandle() {
-    ruvia::WorkerHandle handle;
+    ruvia::EventLoop loop;
     {
-        ruvia::Runtime runtime({.workerCount = 1, .mailboxCapacity = 1});
-        handle = runtime.worker(0);
+        ruvia::EventLoopPool loops({.loopCount = 1, .mailboxCapacity = 1});
+        loop = loops.loop(0);
     }
-    return !handle.valid() && handle.post([] {}) == ruvia::PostResult::kWorkerStopping;
+    return loop.valid() && !loop.accepting() &&
+           loop.post([] {}) == ruvia::PostResult::kWorkerStopping;
 }
 
 bool testLifecycleTransitionsAreMonotonic() {
