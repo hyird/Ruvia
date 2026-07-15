@@ -8817,7 +8817,14 @@ if(EXISTS "${POOL_WAITER_HEADER}" AND
        NOT pool_waiter_header MATCHES
            "acquired[(][)] const && = delete" OR
        NOT pool_waiter_header MATCHES
-           "std::optional<PoolWaiterResult> result_" OR
+           "struct PoolWaiterIdle final" OR
+       NOT pool_waiter_header MATCHES
+           "struct PoolWaiterQueued final" OR
+       NOT pool_waiter_header MATCHES "using State = std::variant" OR
+       NOT pool_waiter_header MATCHES
+           "holds_alternative<PoolWaiterResult>" OR
+       NOT pool_waiter_header MATCHES
+           "holds_alternative<PoolWaiterQueued>" OR
        NOT pool_waiter_header MATCHES "bool await_ready[(][)] const noexcept" OR
        NOT pool_waiter_header MATCHES
            "void await_suspend[(]std::coroutine_handle<> handle[)] noexcept" OR
@@ -8827,9 +8834,11 @@ if(EXISTS "${POOL_WAITER_HEADER}" AND
        NOT pool_waiter_header MATCHES "void completeTimedOut" OR
        NOT pool_waiter_header MATCHES "void completeClosed" OR
        NOT pool_waiter_header MATCHES "PoolWaiter[*] closedHead" OR
-       NOT pool_waiter_header MATCHES "void closeAll[(][)] noexcept")
+       NOT pool_waiter_header MATCHES "void closeAll[(][)] noexcept" OR
+       pool_waiter_header MATCHES
+           "std::optional<PoolWaiterResult>|bool queued_")
         boundary_error("pool waiter lost its discriminated await result"
-            "pending must remain optional; acquired, timeout, and closure must be exclusive completion alternatives, and closeAll must commit its entire queue before resuming")
+            "idle, queued, and completed must remain exclusive states; acquired, timeout, and closure must remain exclusive results; closeAll must commit its entire queue before resuming")
     endif()
     if(NOT pool_waiter_db_scheduler MATCHES
            "const auto& result = co_await waiter" OR
@@ -8852,6 +8861,8 @@ if(EXISTS "${POOL_WAITER_HEADER}" AND
            "pool_waiter_queue_close_all_wakes_with_closed_result" OR
        NOT pool_waiter_test MATCHES
            "observeWaiterThenTryResumeNext" OR
+       NOT pool_waiter_test MATCHES
+           "completed waiter cannot re-enter" OR
        NOT pool_waiter_test MATCHES "PoolWaiterTimedOut" OR
        NOT pool_waiter_package_consumer MATCHES
            "AcceptsLoosePoolWaiterTuple" OR

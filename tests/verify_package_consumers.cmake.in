@@ -206,12 +206,21 @@ if(_built_components_csv MATCHES "(^|,)core(,|$)")
        NOT _installed_pool_waiter MATCHES
            "acquired[(][)] const && = delete" OR
        NOT _installed_pool_waiter MATCHES
-           "std::optional<PoolWaiterResult> result_" OR
+           "struct PoolWaiterIdle final" OR
+       NOT _installed_pool_waiter MATCHES
+           "struct PoolWaiterQueued final" OR
+       NOT _installed_pool_waiter MATCHES "using State = std::variant" OR
+       NOT _installed_pool_waiter MATCHES
+           "holds_alternative<PoolWaiterResult>" OR
+       NOT _installed_pool_waiter MATCHES
+           "holds_alternative<PoolWaiterQueued>" OR
        NOT _installed_pool_waiter MATCHES
            "bool await_ready[(][)] const noexcept" OR
        NOT _installed_pool_waiter MATCHES
            "const PoolWaiterResult& await_resume[(][)] const noexcept" OR
-       NOT _installed_pool_waiter MATCHES "void closeAll[(][)] noexcept")
+       NOT _installed_pool_waiter MATCHES "void closeAll[(][)] noexcept" OR
+       _installed_pool_waiter MATCHES
+           "std::optional<PoolWaiterResult>|bool queued_")
         message(FATAL_ERROR
             "installed pool waiter lost its discriminated await completion")
     endif()
