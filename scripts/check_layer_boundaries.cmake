@@ -9513,7 +9513,9 @@ else()
        NOT http_transfer_encoding_state MATCHES "std::variant" OR
        NOT http_transfer_encoding_state MATCHES "std::optional<HttpTransferEncodingValue>" OR
        NOT http_transfer_encoding_state MATCHES "auto next = value_" OR
-       NOT http_transfer_encoding_state MATCHES "item\\.find\\(';'"
+       NOT http_transfer_encoding_state MATCHES "httpParseTransferCodingSyntax" OR
+       NOT http_transfer_encoding_state MATCHES "httpValidTransferParameterValue" OR
+       NOT http_transfer_encoding_state MATCHES "hasParameters"
        OR http_transfer_encoding_state MATCHES "bool present_"
        OR http_transfer_encoding_state MATCHES "bool finalChunked_"
        OR http_transfer_encoding_state MATCHES "bool present[(]")

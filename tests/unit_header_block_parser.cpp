@@ -114,6 +114,19 @@ RUVIA_TEST(transfer_encoding_field_updates_are_transactional_and_discriminated) 
     RUVIA_CHECK(value->finalChunked() == nullptr);
 
     RUVIA_CHECK(
+        state.parseField("g@zip") ==
+        HttpTransferEncodingParseStatus::kMalformed);
+    RUVIA_CHECK(
+        state.parseField(R"(custom; level="a\"b")") ==
+        HttpTransferEncodingParseStatus::kUnsupported);
+    RUVIA_CHECK(
+        state.parseField("custom; level") ==
+        HttpTransferEncodingParseStatus::kMalformed);
+    value = state.value();
+    RUVIA_CHECK(value->nonChunked() != nullptr);
+    RUVIA_CHECK(value->finalChunked() == nullptr);
+
+    RUVIA_CHECK(
         state.parseField("chunked") == HttpTransferEncodingParseStatus::kOk);
     value = state.value();
     RUVIA_CHECK(value->nonChunked() == nullptr);
@@ -310,6 +323,12 @@ RUVIA_TEST(header_block_rejects_smuggling_transfer_encodings) {
     // An unknown coding is unsupported.
     RUVIA_CHECK(parse("POST / HTTP/1.1\r\nHost: x\r\nTransfer-Encoding: bogus\r\n\r\n").error ==
                 HttpParseError::kUnsupportedTransferEncoding);
+    RUVIA_CHECK(parse("POST / HTTP/1.1\r\nHost: x\r\nTransfer-Encoding: bogus; level=1\r\n\r\n").error ==
+                HttpParseError::kUnsupportedTransferEncoding);
+    // Invalid transfer-coding grammar is a malformed request, not an unknown
+    // extension that merits 501.
+    RUVIA_CHECK(parse("POST / HTTP/1.1\r\nHost: x\r\nTransfer-Encoding: g@zip\r\n\r\n").error ==
+                HttpParseError::kInvalidTransferEncoding);
     // More than one non-chunked coding exceeds the single-coding limit.
     RUVIA_CHECK(parse("POST / HTTP/1.1\r\nHost: x\r\nTransfer-Encoding: gzip, deflate, chunked\r\n\r\n").error ==
                 HttpParseError::kUnsupportedTransferEncoding);
