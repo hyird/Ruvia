@@ -9301,6 +9301,8 @@ elseif(EXISTS "${HTTP1_CLIENT_RESPONSE_PARSER}")
        NOT http1_client_response_parser MATCHES "contentLengthFieldPresent" OR
        NOT http1_client_response_parser MATCHES
            "detail::httpResponseContentSemantics" OR
+       NOT http1_client_response_parser MATCHES
+           "detail::httpStatusCodeValid" OR
        http1_client_response_parser MATCHES "request[.]expectsContinue" OR
        http1_client_response_parser MATCHES
            "Http1ClientRequestContentSignal::kNone" OR

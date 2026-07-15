@@ -1272,6 +1272,9 @@ RUVIA_TEST(http_client_content_decode_failure_preserves_encoded_body) {
 }
 
 RUVIA_TEST(http_client_rejects_malformed_status_and_length_fields) {
+    const auto upperBoundary = parseHead(
+        "GET", "HTTP/1.1 599 Extension Status\r\nContent-Length: 0");
+    RUVIA_CHECK_EQ(upperBoundary.head().status(), std::uint16_t{599});
     RUVIA_CHECK(
         parseFailureError("GET", "HTTP/2 200 OK") ==
         Http1ClientResponseParseError::kUnsupportedHttpVersion);
@@ -1281,6 +1284,13 @@ RUVIA_TEST(http_client_rejects_malformed_status_and_length_fields) {
     RUVIA_CHECK(
         parseFailureError("GET", "HTTP/1.1 abc Bad") ==
         Http1ClientResponseParseError::kInvalidStatusCode);
+    for (const std::string_view invalid : {
+             "HTTP/1.1 600 Invalid",
+             "HTTP/1.1 999 Invalid"}) {
+        RUVIA_CHECK(
+            parseFailureError("GET", invalid) ==
+            Http1ClientResponseParseError::kInvalidStatusCode);
+    }
     RUVIA_CHECK(
         parseFailureError("GET", "HTTP/1.1 200") ==
         Http1ClientResponseParseError::kInvalidStatusCode);

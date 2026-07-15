@@ -16,6 +16,7 @@
 #include "ruvia/http/detail/parser/HttpParserSyntax.h"
 #include "ruvia/http/HttpHeader.h"
 #include "ruvia/http/HttpLimits.h"
+#include "ruvia/http/HttpStatus.h"
 
 namespace ruvia::detail {
 
@@ -165,7 +166,8 @@ using ResponsePlanningResult = std::variant<
     const auto [end, ec] = std::from_chars(
         code.data(), code.data() + code.size(), statusCode);
     if (ec != std::errc{} || end != code.data() + code.size() ||
-        statusCode < 100 || statusCode > 999) {
+        !detail::httpStatusCodeValid(
+            static_cast<std::uint16_t>(statusCode))) {
         return Http1ClientResponseParseError::kInvalidStatusCode;
     }
 
