@@ -275,6 +275,8 @@ RUVIA_TEST(multipart_boundary_from_content_type) {
              "multipart/form-data; boundary=one; boundary=two",
              "multipart/form-data; boundary=abc; broken",
              "multipart/form-data; broken; boundary=abc",
+             "multipart/form-data; boundary =abc",
+             "multipart/form-data; boundary= abc",
              "multipart/form-data; boundary=abc; charset=unquoted value",
              R"(multipart/form-data; boundary=abc; charset="unterminated)",
              "multipart/form-data; boundary=abc; =value"}) {
@@ -459,6 +461,8 @@ RUVIA_TEST(multipart_part_header_rejects_ambiguous_disposition_parameters) {
              "Content-Disposition: form-data; name=unquoted value",
              "Content-Disposition: form-data; name=field; name=shadow",
              "Content-Disposition: form-data; name=field; filename=a; filename=b",
+             "Content-Disposition: form-data; name =field",
+             "Content-Disposition: form-data; name= field",
              "Content-Disposition: form-data; name=field; broken",
              "Content-Disposition: form-data; name=field\r\n"
              "Content-Disposition: form-data; name=shadow"}) {

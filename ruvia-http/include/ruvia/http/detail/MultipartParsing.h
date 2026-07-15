@@ -610,6 +610,28 @@ private:
     return true;
 }
 
+[[nodiscard]] inline bool httpParseMimeParameter(
+    std::string_view parameter,
+    std::string_view& name,
+    std::string_view& value) noexcept {
+    const auto equals = parameter.find('=');
+    if (parameter.empty() || equals == std::string_view::npos) {
+        return false;
+    }
+
+    const auto rawName = parameter.substr(0, equals);
+    const auto rawValue = parameter.substr(equals + 1);
+    name = httpTrimOws(rawName);
+    value = httpTrimOws(rawValue);
+    // RFC 9110 section 5.6.6 permits OWS around the semicolon delimiter, but
+    // none around '='. Comparing the trimmed views preserves that distinction.
+    return name.size() == rawName.size() &&
+        value.size() == rawValue.size() &&
+        !name.empty() &&
+        std::all_of(name.begin(), name.end(), httpMimeTokenChar) &&
+        httpValidMimeParameterValue(value);
+}
+
 [[nodiscard]] inline std::optional<MultipartBoundary>
 httpDecodeMultipartBoundaryParameter(std::string_view parameter) {
     std::array<char, 70> decoded{};
@@ -673,15 +695,9 @@ httpDecodeMultipartBoundaryParameter(std::string_view parameter) {
     while (start <= parameters.size()) {
         const auto end = httpFindUnquotedDelimiter(parameters, start, ';');
         const auto parameter = httpTrimOws(parameters.substr(start, end - start));
-        const auto equals = parameter.find('=');
-        if (parameter.empty() || equals == std::string_view::npos) {
-            return HttpMultipartBoundaryParseResult::makeFailure();
-        }
-        const auto key = httpTrimOws(parameter.substr(0, equals));
-        const auto value = httpTrimOws(parameter.substr(equals + 1));
-        if (key.empty() ||
-            !std::all_of(key.begin(), key.end(), httpMimeTokenChar) ||
-            !httpValidMimeParameterValue(value)) {
+        std::string_view key;
+        std::string_view value;
+        if (!httpParseMimeParameter(parameter, key, value)) {
             return HttpMultipartBoundaryParseResult::makeFailure();
         }
         if (httpAsciiEqualsIgnoreCase(key, "boundary")) {
@@ -762,16 +778,9 @@ httpParseMultipartPartHeaders(std::string_view headers) noexcept {
     while (start <= remaining.size()) {
         const auto end = httpFindUnquotedDelimiter(remaining, start, ';');
         const auto parameter = httpTrimOws(remaining.substr(start, end - start));
-        const auto equals = parameter.find('=');
-        if (parameter.empty() || equals == std::string_view::npos) {
-            return HttpMultipartPartHeaderParseResult::makeFailure(
-                MultipartParseError::kInvalidContentDisposition);
-        }
-        const auto key = httpTrimOws(parameter.substr(0, equals));
-        const auto value = httpTrimOws(parameter.substr(equals + 1));
-        if (key.empty() ||
-            !std::all_of(key.begin(), key.end(), httpMimeTokenChar) ||
-            !httpValidMimeParameterValue(value)) {
+        std::string_view key;
+        std::string_view value;
+        if (!httpParseMimeParameter(parameter, key, value)) {
             return HttpMultipartPartHeaderParseResult::makeFailure(
                 MultipartParseError::kInvalidContentDisposition);
         }
