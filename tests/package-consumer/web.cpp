@@ -997,6 +997,13 @@ concept HasMisleadingXssProtectionOption = requires(Options& options) {
     options.xssProtection;
 };
 
+template <typename Response>
+concept HasContextlessSecurityHeaders = requires(
+    Response& response,
+    const ruvia::SecurityHeadersOptions& options) {
+    ruvia::applySecurityHeaders(response, options);
+};
+
 template <typename ContextT>
 concept HasArbitraryContextValueSet = requires(ContextT& context) {
     context.set(std::string_view{}, std::uint32_t{});
@@ -1153,6 +1160,7 @@ static_assert(!HasContextRenderPipeline<ruvia::Context>);
 static_assert(!HasResponseInit<ruvia::Context>);
 static_assert(!HasContextVarFacade<ruvia::Context>);
 static_assert(!HasMisleadingXssProtectionOption<ruvia::SecurityHeadersOptions>);
+static_assert(!HasContextlessSecurityHeaders<ruvia::HttpResponse>);
 static_assert(std::same_as<
     decltype(ruvia::SecurityHeadersOptions{}.legacyXssFilter),
     ruvia::LegacyXssFilterPolicy>);
