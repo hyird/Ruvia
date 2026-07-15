@@ -70,11 +70,12 @@ void assignTlsFileName(
         config.identity().privateKeyFile());
     tls.identity.privateKeyPassword = config.identity().privateKeyPassword();
     if (config.clientCertificatePolicy().has_value()) {
-        auto& policy = tls.clientCertificates.emplace();
+        auto& policy = tls.clientCertificates.emplace(
+            std::pmr::string{},
+            config.clientCertificatePolicy()->requirement());
         assignTlsFileName(
             policy.verifyFile,
             config.clientCertificatePolicy()->verifyFile());
-        policy.requirement = config.clientCertificatePolicy()->requirement();
     }
     tls.sniIdentities.reserve(config.sniIdentities().size());
     for (const auto& configured : config.sniIdentities()) {
