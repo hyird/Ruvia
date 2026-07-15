@@ -7837,10 +7837,21 @@ elseif(EXISTS "${HTTP1_CLIENT_RESPONSE_PARSER}")
        NOT http1_client_response_parser_header MATCHES "completeRequestContent" OR
        NOT http1_client_response_parser_header MATCHES "const PreparedHttp1ClientRequest& request" OR
        NOT http1_client_response_parser_header MATCHES
-           "request[.]contentPlan_[.]continueGated" OR
-       NOT http1_client_response_parser_header MATCHES "continueGated_" OR
+           "plan[.]continueGated" OR
        NOT http1_client_response_parser_header MATCHES
            "requestContentStartsComplete" OR
+       NOT http1_client_response_parser_header MATCHES
+           "enum class Http1ClientRequestContentPhase" OR
+       NOT http1_client_response_parser_header MATCHES
+           "kContentCompleteAwaitingContinue" OR
+       NOT http1_client_response_parser_header MATCHES
+           "kContinueReceivedContentComplete" OR
+       NOT http1_client_response_parser_header MATCHES
+           "initialRequestContentPhase" OR
+       NOT http1_client_response_parser_header MATCHES
+           "Http1ClientRequestContentPhase requestContentPhase_" OR
+       http1_client_response_parser_header MATCHES
+           "bool (continueGated_|sawContinue_|requestContentComplete_)" OR
        NOT http1_client_response_parser_header MATCHES "enum class Phase" OR
        NOT http1_client_response_parser_header MATCHES "kExchangeComplete" OR
        NOT http1_client_response_parser_header MATCHES "kExchangeFailed" OR
@@ -7880,13 +7891,14 @@ elseif(EXISTS "${HTTP1_CLIENT_RESPONSE_PARSER}")
        NOT http1_client_response_parser MATCHES "std::get_if<Http1ClientResponseParseError>" OR
        NOT http1_client_response_parser MATCHES "requestAllowsProtocolSwitch" OR
        NOT http1_client_response_parser MATCHES
-           "continueGated && !sawContinue" OR
-       NOT http1_client_response_parser MATCHES "!requestContentComplete" OR
-       NOT http1_client_response_parser MATCHES "requestContentComplete_ = true" OR
-       NOT http1_client_response_parser MATCHES "sawContinue_ = true" OR
-       NOT http1_client_response_parser MATCHES "phase_ = Phase::kComplete" OR
+           "kContinueReceivedContentComplete" OR
+       NOT http1_client_response_parser MATCHES "requestContentSignal" OR
+       NOT http1_client_response_parser MATCHES "receiveContinue" OR
        NOT http1_client_response_parser MATCHES
-           "std::optional<Http1ClientRequestContentSignal>[{][}]" OR
+           "kContentCompleteAwaitingContinue" OR
+       http1_client_response_parser MATCHES
+           "continueGated && !sawContinue|requestContentComplete_ = true|sawContinue_ = true" OR
+       NOT http1_client_response_parser MATCHES "phase_ = Phase::kComplete" OR
        NOT http1_client_response_parser MATCHES "Http1ClientRequestContentSignal::kContinue" OR
        NOT http1_client_response_parser MATCHES "Http1ClientRequestContentSignal::kExchangeComplete" OR
        NOT http1_client_response_parser MATCHES

@@ -1756,6 +1756,14 @@ static_assert(HasOptionalHttpServerExpectationAction<
     ruvia::detail::Http1RequestBodyPlan>);
 static_assert(HasOptionalHttpServerExpectationAction<
     ruvia::detail::Http2StreamState>);
+static_assert(std::is_enum_v<
+    ruvia::detail::Http1ClientRequestContentPhase>);
+static_assert(sizeof(ruvia::detail::Http1ClientRequestContentPhase) == 1);
+static_assert(
+    ruvia::detail::Http1ClientRequestContentPhase::
+        kContentCompleteAwaitingContinue !=
+    ruvia::detail::Http1ClientRequestContentPhase::
+        kContinueReceivedContentComplete);
 
 template <typename T>
 concept HasHttp1ClientResponsePlanAlternatives = requires(const T& plan) {
@@ -2955,8 +2963,7 @@ int main() {
     const auto* expectFinalHead = expectFinalResult.parsed();
     if (expectFinalHead == nullptr ||
         expectFinalHead->plan().withoutContent() == nullptr ||
-        expectFinalHead->plan().requestContentSignal() !=
-            ruvia::Http1ClientRequestContentSignal::kExchangeComplete) {
+        expectFinalHead->plan().requestContentSignal().has_value()) {
         return 25;
     }
     const auto zeroPortOrigin = ruvia::HttpOrigin::http("example.test", 0);

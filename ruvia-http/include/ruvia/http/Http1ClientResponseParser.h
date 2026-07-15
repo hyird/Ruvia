@@ -19,6 +19,19 @@ namespace detail {
 struct Http1ClientResponseParseResultAccess;
 struct Http1ClientResponsePlanAccess;
 
+// One request-content lifecycle for the response side of an HTTP/1 exchange.
+// Expect and completion are not independent booleans: receiving Continue and
+// completing content are ordered events, and the combined phase determines
+// whether a later 100 is actionable and whether 101 is legal.
+enum class Http1ClientRequestContentPhase : std::uint8_t {
+    kContentComplete,
+    kContentPending,
+    kAwaitingContinue,
+    kContinueReceived,
+    kContentCompleteAwaitingContinue,
+    kContinueReceivedContentComplete,
+};
+
 }  // namespace detail
 
 // Connection lifecycle after a self-delimited final response has been consumed.
@@ -31,9 +44,11 @@ enum class Http1ClientResponsePersistence : std::uint8_t {
 
 // Signal for a request body gated by Expect: 100-continue. It is deliberately
 // separate from wait duration: the protocol core reports Continue or
-// exchange-complete progress, while an external I/O runtime owns its finite
-// timeout policy. Most response heads emit no request-content event, represented
-// by an empty optional rather than a non-event enum member.
+// exchange-complete progress only while content remains pending, while an
+// external I/O runtime owns its finite timeout policy. A duplicate or late 100
+// after content completion is therefore ignored. Most response heads emit no
+// request-content event, represented by an empty optional rather than a
+// non-event enum member.
 enum class Http1ClientRequestContentSignal : std::uint8_t {
     kContinue,
     kExchangeComplete,
@@ -384,9 +399,8 @@ public:
         std::pmr::memory_resource* resource = nullptr) noexcept
         : request_(request.responseContext_),
           resource_(resource),
-          continueGated_(request.contentPlan_.continueGated() != nullptr),
-          requestContentComplete_(
-              requestContentStartsComplete(request.contentPlan_)) {}
+          requestContentPhase_(
+              initialRequestContentPhase(request.contentPlan_)) {}
 
     Http1ClientResponseParser(const Http1ClientResponseParser&) = delete;
     Http1ClientResponseParser& operator=(const Http1ClientResponseParser&) = delete;
@@ -411,6 +425,17 @@ private:
         return false;
     }
 
+    [[nodiscard]] static constexpr detail::Http1ClientRequestContentPhase
+    initialRequestContentPhase(
+        const Http1ClientRequestContentPlan& plan) noexcept {
+        if (plan.continueGated() != nullptr) {
+            return detail::Http1ClientRequestContentPhase::kAwaitingContinue;
+        }
+        return requestContentStartsComplete(plan)
+            ? detail::Http1ClientRequestContentPhase::kContentComplete
+            : detail::Http1ClientRequestContentPhase::kContentPending;
+    }
+
     enum class Phase : std::uint8_t {
         kAwaitResponse,
         kComplete,
@@ -420,9 +445,7 @@ private:
     detail::Http1ClientRequestContext request_;
     std::pmr::memory_resource* resource_;
     Phase phase_{Phase::kAwaitResponse};
-    bool continueGated_{false};
-    bool sawContinue_{false};
-    bool requestContentComplete_{false};
+    detail::Http1ClientRequestContentPhase requestContentPhase_;
 };
 
 }  // namespace ruvia

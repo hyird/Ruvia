@@ -586,6 +586,13 @@ RUVIA_TEST(http_client_expect_continue_is_one_stateful_exchange_contract) {
             continueResponse.parsed()->plan().requestContentSignal() ==
             Http1ClientRequestContentSignal::kContinue);
     }
+    const auto duplicateContinue = parser.parse(
+        "HTTP/1.1 100 Continue\r\n\r\n");
+    RUVIA_CHECK(duplicateContinue.parsed() != nullptr);
+    if (duplicateContinue.parsed() != nullptr) {
+        RUVIA_CHECK(
+            !duplicateContinue.parsed()->plan().requestContentSignal());
+    }
     RUVIA_CHECK(
         parser.completeRequestContent() ==
         Http1ClientRequestContentCompletionStatus::kCompleted);
@@ -598,8 +605,7 @@ RUVIA_TEST(http_client_expect_continue_is_one_stateful_exchange_contract) {
     RUVIA_CHECK(finalResponse.parsed() != nullptr);
     if (finalResponse.parsed() != nullptr) {
         RUVIA_CHECK(
-            finalResponse.parsed()->plan().requestContentSignal() ==
-            Http1ClientRequestContentSignal::kExchangeComplete);
+            !finalResponse.parsed()->plan().requestContentSignal());
     }
 
     const auto afterFinal = parser.parse("HTTP/1.1 204 No Content\r\n\r\n");
@@ -612,6 +618,44 @@ RUVIA_TEST(http_client_expect_continue_is_one_stateful_exchange_contract) {
     RUVIA_CHECK(
         parser.completeRequestContent() ==
         Http1ClientRequestContentCompletionStatus::kExchangeTerminal);
+}
+
+RUVIA_TEST(http_client_expect_final_cancels_only_pending_request_content) {
+    ruvia::HttpClientRequest request;
+    request.method = "POST";
+    request.content = ruvia::HttpClientRequestContent::bytes("payload");
+    std::array<char, 512> requestHead;
+    const auto prepared = ruvia::Http1ClientRequestWriter().prepare(
+        ruvia::HttpOrigin::https("example.test"),
+        request,
+        requestHead,
+        Http1ClientRequestWirePolicy::expectContinue());
+    RUVIA_CHECK(prepared.prepared() != nullptr);
+    if (prepared.prepared() == nullptr) {
+        return;
+    }
+
+    Http1ClientResponseParser parser(*prepared.prepared());
+    const auto finalResponse = parser.parse(
+        "HTTP/1.1 417 Expectation Failed\r\nContent-Length: 0\r\n\r\n");
+    RUVIA_CHECK(finalResponse.parsed() != nullptr);
+    if (finalResponse.parsed() != nullptr) {
+        RUVIA_CHECK(
+            finalResponse.parsed()->plan().requestContentSignal() ==
+            Http1ClientRequestContentSignal::kExchangeComplete);
+    }
+
+    Http1ClientResponseParser completedParser(*prepared.prepared());
+    RUVIA_CHECK(
+        completedParser.completeRequestContent() ==
+        Http1ClientRequestContentCompletionStatus::kCompleted);
+    const auto completedFinal = completedParser.parse(
+        "HTTP/1.1 417 Expectation Failed\r\nContent-Length: 0\r\n\r\n");
+    RUVIA_CHECK(completedFinal.parsed() != nullptr);
+    if (completedFinal.parsed() != nullptr) {
+        RUVIA_CHECK(
+            !completedFinal.parsed()->plan().requestContentSignal());
+    }
 }
 
 RUVIA_TEST(http_client_upgrade_after_expect_requires_prior_continue) {
@@ -651,6 +695,64 @@ RUVIA_TEST(http_client_upgrade_after_expect_requires_prior_continue) {
         RUVIA_CHECK(
             afterFailure.failure()->error() ==
             Http1ClientResponseParseError::kExchangeFailed);
+    }
+
+    // RFC 9110 section 7.8 still requires the server to acknowledge Expect
+    // with 100 before 101, even when the client released and completed content
+    // after its own finite wait expired.
+    std::array<char, 512> completedWithoutContinueHead;
+    const auto completedWithoutContinuePrepared =
+        ruvia::Http1ClientRequestWriter().prepare(
+            ruvia::HttpOrigin::https("example.test"),
+            request,
+            completedWithoutContinueHead,
+            Http1ClientRequestWirePolicy::expectContinue());
+    RUVIA_CHECK(completedWithoutContinuePrepared.prepared() != nullptr);
+    if (completedWithoutContinuePrepared.prepared() == nullptr) {
+        return;
+    }
+    Http1ClientResponseParser completedWithoutContinueParser(
+        *completedWithoutContinuePrepared.prepared());
+    RUVIA_CHECK(
+        completedWithoutContinueParser.completeRequestContent() ==
+        Http1ClientRequestContentCompletionStatus::kCompleted);
+    const auto completedWithoutContinue =
+        completedWithoutContinueParser.parse(switching);
+    RUVIA_CHECK(completedWithoutContinue.failure() != nullptr);
+    if (completedWithoutContinue.failure() != nullptr) {
+        RUVIA_CHECK(
+            completedWithoutContinue.failure()->error() ==
+            Http1ClientResponseParseError::kInvalidProtocolSwitch);
+    }
+
+    std::array<char, 512> lateContinueHead;
+    const auto lateContinuePrepared =
+        ruvia::Http1ClientRequestWriter().prepare(
+            ruvia::HttpOrigin::https("example.test"),
+            request,
+            lateContinueHead,
+            Http1ClientRequestWirePolicy::expectContinue());
+    RUVIA_CHECK(lateContinuePrepared.prepared() != nullptr);
+    if (lateContinuePrepared.prepared() == nullptr) {
+        return;
+    }
+    Http1ClientResponseParser lateContinueParser(
+        *lateContinuePrepared.prepared());
+    RUVIA_CHECK(
+        lateContinueParser.completeRequestContent() ==
+        Http1ClientRequestContentCompletionStatus::kCompleted);
+    const auto lateContinue = lateContinueParser.parse(
+        "HTTP/1.1 100 Continue\r\n\r\n");
+    RUVIA_CHECK(lateContinue.parsed() != nullptr);
+    if (lateContinue.parsed() != nullptr) {
+        RUVIA_CHECK(!lateContinue.parsed()->plan().requestContentSignal());
+    }
+    const auto acceptedAfterLateContinue = lateContinueParser.parse(switching);
+    RUVIA_CHECK(acceptedAfterLateContinue.parsed() != nullptr);
+    if (acceptedAfterLateContinue.parsed() != nullptr) {
+        RUVIA_CHECK(
+            acceptedAfterLateContinue.parsed()->plan().protocolUpgrade() !=
+            nullptr);
     }
 
     std::array<char, 512> pendingHead;

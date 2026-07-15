@@ -757,6 +757,18 @@ if(NOT _installed_http1_client_response_parser_content MATCHES
    NOT _installed_http1_client_response_parser_content MATCHES
        "Http1ClientRequestContentCompletionStatus" OR
    NOT _installed_http1_client_response_parser_content MATCHES
+       "enum class Http1ClientRequestContentPhase" OR
+   NOT _installed_http1_client_response_parser_content MATCHES
+       "kContentCompleteAwaitingContinue" OR
+   NOT _installed_http1_client_response_parser_content MATCHES
+       "kContinueReceivedContentComplete" OR
+   NOT _installed_http1_client_response_parser_content MATCHES
+       "initialRequestContentPhase" OR
+   NOT _installed_http1_client_response_parser_content MATCHES
+       "Http1ClientRequestContentPhase requestContentPhase_" OR
+   _installed_http1_client_response_parser_content MATCHES
+       "bool (continueGated_|sawContinue_|requestContentComplete_)" OR
+   NOT _installed_http1_client_response_parser_content MATCHES
        "completeRequestContent" OR
    NOT _installed_http1_client_response_parser_content MATCHES
        "kExchangeComplete" OR

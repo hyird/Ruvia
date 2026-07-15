@@ -210,13 +210,16 @@ using ResponsePlanningResult = std::variant<
 [[nodiscard]] bool requestAllowsProtocolSwitch(
     const detail::Http1ClientRequestContext& request,
     const ParsedResponseHead& response,
-    bool continueGated,
-    bool sawContinue,
-    bool requestContentComplete) noexcept {
+    detail::Http1ClientRequestContentPhase requestContentPhase) noexcept {
+    const bool requestContentAllowsSwitch =
+        requestContentPhase ==
+            detail::Http1ClientRequestContentPhase::kContentComplete ||
+        requestContentPhase ==
+            detail::Http1ClientRequestContentPhase::
+                kContinueReceivedContentComplete;
     if (request.closePolicy() ==
             Http1ClientRequestClosePolicy::kCloseAfterResponse ||
-        (continueGated && !sawContinue) ||
-        !requestContentComplete) {
+        !requestContentAllowsSwitch) {
         return false;
     }
     if (!request.connectionOptions().upgrade() ||
@@ -243,6 +246,51 @@ using ResponsePlanningResult = std::variant<
         }
     }
     return selectedProtocols.hasProtocol();
+}
+
+[[nodiscard]] std::optional<Http1ClientRequestContentSignal>
+requestContentSignal(
+    detail::Http1ClientRequestContentPhase phase,
+    std::uint16_t statusCode,
+    detail::HttpResponseContentSemantics contentSemantics) noexcept {
+    if (statusCode == 100) {
+        return phase ==
+                detail::Http1ClientRequestContentPhase::kAwaitingContinue
+            ? std::optional<Http1ClientRequestContentSignal>(
+                  Http1ClientRequestContentSignal::kContinue)
+            : std::nullopt;
+    }
+    if (contentSemantics ==
+            detail::HttpResponseContentSemantics::kProtocolSwitch ||
+        statusCode >= 200) {
+        if (phase ==
+                detail::Http1ClientRequestContentPhase::kAwaitingContinue ||
+            phase ==
+                detail::Http1ClientRequestContentPhase::kContinueReceived) {
+            return Http1ClientRequestContentSignal::kExchangeComplete;
+        }
+    }
+    return std::nullopt;
+}
+
+[[nodiscard]] constexpr detail::Http1ClientRequestContentPhase
+receiveContinue(
+    detail::Http1ClientRequestContentPhase phase) noexcept {
+    switch (phase) {
+        case detail::Http1ClientRequestContentPhase::kAwaitingContinue:
+            return detail::Http1ClientRequestContentPhase::kContinueReceived;
+        case detail::Http1ClientRequestContentPhase::
+                kContentCompleteAwaitingContinue:
+            return detail::Http1ClientRequestContentPhase::
+                kContinueReceivedContentComplete;
+        case detail::Http1ClientRequestContentPhase::kContentComplete:
+        case detail::Http1ClientRequestContentPhase::kContentPending:
+        case detail::Http1ClientRequestContentPhase::kContinueReceived:
+        case detail::Http1ClientRequestContentPhase::
+                kContinueReceivedContentComplete:
+            return phase;
+    }
+    return phase;
 }
 
 [[nodiscard]] Http1ClientResponsePersistence responsePersistence(
@@ -371,24 +419,12 @@ using ResponsePlanningResult = std::variant<
 [[nodiscard]] ResponsePlanningResult planResponse(
     const detail::Http1ClientRequestContext& request,
     const ParsedResponseHead& response,
-    bool continueGated,
-    bool sawContinue,
-    bool requestContentComplete) noexcept {
+    detail::Http1ClientRequestContentPhase requestContentPhase) noexcept {
     const auto contentSemantics = detail::httpResponseContentSemantics(
         request.method(), response.statusCode);
 
-    auto requestContentSignal =
-        std::optional<Http1ClientRequestContentSignal>{};
-    if (continueGated) {
-        if (response.statusCode == 100) {
-            requestContentSignal = Http1ClientRequestContentSignal::kContinue;
-        } else if (contentSemantics ==
-                       detail::HttpResponseContentSemantics::kProtocolSwitch ||
-                   response.statusCode >= 200) {
-            requestContentSignal =
-                Http1ClientRequestContentSignal::kExchangeComplete;
-        }
-    }
+    const auto contentSignal = requestContentSignal(
+        requestContentPhase, response.statusCode, contentSemantics);
 
     if (contentSemantics ==
         detail::HttpResponseContentSemantics::kProtocolSwitch) {
@@ -398,23 +434,21 @@ using ResponsePlanningResult = std::variant<
             !requestAllowsProtocolSwitch(
                 request,
                 response,
-                continueGated,
-                sawContinue,
-                requestContentComplete)) {
+                requestContentPhase)) {
             return Http1ClientResponseParseError::kInvalidProtocolSwitch;
         }
         return detail::Http1ClientResponsePlanAccess::protocolUpgrade(
-            requestContentSignal);
+            contentSignal);
     }
     if (contentSemantics ==
         detail::HttpResponseContentSemantics::kInformational) {
         return detail::Http1ClientResponsePlanAccess::informational(
-            requestContentSignal);
+            contentSignal);
     }
     if (contentSemantics ==
         detail::HttpResponseContentSemantics::kConnectTunnel) {
         return detail::Http1ClientResponsePlanAccess::connectTunnel(
-            requestContentSignal);
+            contentSignal);
     }
 
     const auto persistence = responsePersistence(request, response);
@@ -422,7 +456,7 @@ using ResponsePlanningResult = std::variant<
         detail::HttpResponseContentSemantics::kWithoutContent) {
         return detail::Http1ClientResponsePlanAccess::withoutContent(
             persistence,
-            requestContentSignal);
+            contentSignal);
     }
 
     const auto contentLength = response.contentLength.value();
@@ -439,25 +473,25 @@ using ResponsePlanningResult = std::variant<
             return detail::Http1ClientResponsePlanAccess::chunked(
                 finalChunked->transferCodings(),
                 persistence,
-                requestContentSignal);
+                contentSignal);
         }
         return detail::Http1ClientResponsePlanAccess::closeDelimited(
             transferEncoding->nonChunked()->transferCodings(),
-            requestContentSignal);
+            contentSignal);
     }
 
     if (contentLength.has_value()) {
         return detail::Http1ClientResponsePlanAccess::knownLength(
             *contentLength,
             persistence,
-            requestContentSignal);
+            contentSignal);
     }
 
     // RFC 9112 section 6.3: a body-allowed response with no declared
     // length is delimited by server close and cannot return to a pool.
     return detail::Http1ClientResponsePlanAccess::closeDelimited(
         {},
-        requestContentSignal);
+        contentSignal);
 }
 
 }  // namespace
@@ -544,9 +578,7 @@ Http1ClientResponseParseResult Http1ClientResponseParser::parse(
     auto planning = planResponse(
         request_,
         parsed,
-        continueGated_,
-        sawContinue_,
-        requestContentComplete_);
+        requestContentPhase_);
     if (const auto* planningError =
             std::get_if<Http1ClientResponseParseError>(&planning)) {
         return fail(*planningError);
@@ -571,7 +603,7 @@ Http1ClientResponseParseResult Http1ClientResponseParser::parse(
     auto result = detail::Http1ClientResponseParseResultAccess::parsed(
         std::move(response), std::move(plan), headerBytes);
     if (parsed.statusCode == 100) {
-        sawContinue_ = true;
+        requestContentPhase_ = receiveContinue(requestContentPhase_);
     }
     if (parsed.statusCode == 101 || parsed.statusCode >= 200) {
         phase_ = Phase::kComplete;
@@ -584,11 +616,27 @@ Http1ClientResponseParser::completeRequestContent() noexcept {
     if (phase_ != Phase::kAwaitResponse) {
         return Http1ClientRequestContentCompletionStatus::kExchangeTerminal;
     }
-    if (requestContentComplete_) {
-        return Http1ClientRequestContentCompletionStatus::kAlreadyComplete;
+    switch (requestContentPhase_) {
+        case detail::Http1ClientRequestContentPhase::kContentPending:
+            requestContentPhase_ =
+                detail::Http1ClientRequestContentPhase::kContentComplete;
+            return Http1ClientRequestContentCompletionStatus::kCompleted;
+        case detail::Http1ClientRequestContentPhase::kAwaitingContinue:
+            requestContentPhase_ = detail::Http1ClientRequestContentPhase::
+                kContentCompleteAwaitingContinue;
+            return Http1ClientRequestContentCompletionStatus::kCompleted;
+        case detail::Http1ClientRequestContentPhase::kContinueReceived:
+            requestContentPhase_ = detail::Http1ClientRequestContentPhase::
+                kContinueReceivedContentComplete;
+            return Http1ClientRequestContentCompletionStatus::kCompleted;
+        case detail::Http1ClientRequestContentPhase::kContentComplete:
+        case detail::Http1ClientRequestContentPhase::
+                kContentCompleteAwaitingContinue:
+        case detail::Http1ClientRequestContentPhase::
+                kContinueReceivedContentComplete:
+            return Http1ClientRequestContentCompletionStatus::kAlreadyComplete;
     }
-    requestContentComplete_ = true;
-    return Http1ClientRequestContentCompletionStatus::kCompleted;
+    return Http1ClientRequestContentCompletionStatus::kAlreadyComplete;
 }
 
 }  // namespace ruvia
