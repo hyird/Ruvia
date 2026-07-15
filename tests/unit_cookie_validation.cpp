@@ -224,19 +224,18 @@ RUVIA_TEST(cookie_literal_prefix_name_enforces_requirements) {
         }
     };
 
-    // RFC 6265bis §4.1.3: the prefix rules apply to the cookie's actual wire name,
-    // so a hand-typed "__Host-"/"__Secure-" name (with no CookiePrefix) must be
-    // enforced like the enum, case-insensitively -- not silently shipped for the
-    // browser to drop. Keying only on the enum let these through.
+    // RFC 6265bis §4.1.3: the prefix rules apply to an exact, case-sensitive
+    // "__Host-"/"__Secure-" prefix on the cookie's actual wire name. Similar
+    // spellings are ordinary cookie names and must not inherit those constraints.
     ruvia::CookieOptions insecure;  // secure defaults to false
     RUVIA_CHECK(rejectsWithName("__Secure-tok", insecure));    // __Secure- requires Secure
-    RUVIA_CHECK(rejectsWithName("__secure-tok", insecure));    // matched case-insensitively
+    RUVIA_CHECK(!rejectsWithName("__secure-tok", insecure));
 
     ruvia::CookieOptions hostBadDomain;
     hostBadDomain.secure = true;
     hostBadDomain.domain = "example.com";  // __Host- forbids Domain
     RUVIA_CHECK(rejectsWithName("__Host-sid", hostBadDomain));
-    RUVIA_CHECK(rejectsWithName("__HOST-sid", hostBadDomain));  // case-insensitive
+    RUVIA_CHECK(!rejectsWithName("__HOST-sid", hostBadDomain));
 
     // A literal-prefixed name that meets the constraints is accepted.
     ruvia::CookieOptions okSecure;

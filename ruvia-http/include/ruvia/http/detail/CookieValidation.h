@@ -105,25 +105,6 @@ inline constexpr std::int64_t kMaxCookieAgeSeconds = 34560000;
     return {};
 }
 
-// Case-insensitive check that `name` begins with `lowerPrefix` (which must be
-// given lowercase). RFC 6265bis §4.1.3 matches the __Host-/__Secure- prefixes
-// case-insensitively.
-[[nodiscard]] inline bool cookieNameHasPrefix(std::string_view name, std::string_view lowerPrefix) noexcept {
-    if (name.size() < lowerPrefix.size()) {
-        return false;
-    }
-    for (std::size_t i = 0; i < lowerPrefix.size(); ++i) {
-        auto c = static_cast<unsigned char>(name[i]);
-        if (c >= 'A' && c <= 'Z') {
-            c = static_cast<unsigned char>(c + ('a' - 'A'));
-        }
-        if (static_cast<char>(c) != lowerPrefix[i]) {
-            return false;
-        }
-    }
-    return true;
-}
-
 inline void validateCookie(std::string_view name, std::string_view value, const CookieOptions& options) {
     if (!isValidHttpHeaderName(name)) {
         throw std::invalid_argument("invalid cookie name");
@@ -170,13 +151,14 @@ inline void validateCookie(std::string_view name, std::string_view value, const 
     // "__Host-"/"__Secure-" name passed without a prefix ship without the
     // required attributes, producing
     // a cookie every browser silently drops. Derive the effective prefix from the
-    // wire name (case-insensitive) so the enum and literal-name routes enforce
-    // identically. When the enum sets a prefix, it is exactly the wire prefix; a
-    // present enum thus takes precedence over any prefix-looking bytes in `name`.
+    // wire name using the RFC's exact, case-sensitive prefix spelling so the enum
+    // and literal-name routes enforce identically. When the enum sets a prefix, it
+    // is exactly the wire prefix; a present enum thus takes precedence over any
+    // prefix-looking bytes in `name`.
     const bool hostPrefixed = options.prefix == CookiePrefix::kHost ||
-        (!options.prefix && cookieNameHasPrefix(name, "__host-"));
+        (!options.prefix && name.starts_with("__Host-"));
     const bool securePrefixed = options.prefix == CookiePrefix::kSecure ||
-        (!options.prefix && cookieNameHasPrefix(name, "__secure-"));
+        (!options.prefix && name.starts_with("__Secure-"));
     if (hostPrefixed) {
         if (!options.secure || options.path != "/" || !options.domain.empty()) {
             throw std::invalid_argument("__Host- cookie requires Secure, Path=/, and no Domain");
