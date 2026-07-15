@@ -12,20 +12,131 @@
 #include <system_error>
 #include <type_traits>
 #include <utility>
+#include <variant>
 
 #include "ruvia/core/Task.h"
 
 namespace ruvia::detail {
 
 template <typename T>
-struct TaskCompletionResult final {
-    std::exception_ptr exception;
-    std::optional<T> value;
+class TaskCompletionResult;
+
+template <typename T>
+class TaskCompletionSuccess final {
+public:
+    [[nodiscard]] T takeValue() && {
+        return std::move(value_);
+    }
+
+private:
+    friend class TaskCompletionResult<T>;
+
+    explicit TaskCompletionSuccess(T value)
+        : value_(std::move(value)) {}
+
+    T value_;
 };
 
 template <>
-struct TaskCompletionResult<void> final {
-    std::exception_ptr exception;
+class TaskCompletionSuccess<void> final {
+private:
+    friend class TaskCompletionResult<void>;
+
+    constexpr TaskCompletionSuccess() noexcept = default;
+};
+
+class TaskCompletionFailure final {
+public:
+    [[nodiscard]] const std::exception_ptr& exception() const & noexcept {
+        return exception_;
+    }
+    const std::exception_ptr& exception() const && = delete;
+
+private:
+    template <typename>
+    friend class TaskCompletionResult;
+
+    explicit TaskCompletionFailure(std::exception_ptr exception) noexcept
+        : exception_(std::move(exception)) {}
+
+    std::exception_ptr exception_;
+};
+
+// Adapting Task completion into an Asio completion token preserves exactly one
+// terminal: success owns the value (or a void marker), while failure owns the
+// exception. Callers cannot observe or construct an empty or contradictory
+// value/exception tuple.
+template <typename T>
+class TaskCompletionResult final {
+public:
+    [[nodiscard]] TaskCompletionSuccess<T>* success() & noexcept {
+        return std::get_if<TaskCompletionSuccess<T>>(&value_);
+    }
+    TaskCompletionSuccess<T>* success() && = delete;
+
+    [[nodiscard]] const TaskCompletionFailure* failure() const & noexcept {
+        return std::get_if<TaskCompletionFailure>(&value_);
+    }
+    const TaskCompletionFailure* failure() const && = delete;
+
+private:
+    template <typename, typename>
+    friend class TaskCompletionState;
+
+    using Value = std::variant<TaskCompletionSuccess<T>, TaskCompletionFailure>;
+
+    template <typename Alternative>
+    explicit TaskCompletionResult(Alternative alternative)
+        : value_(std::move(alternative)) {}
+
+    [[nodiscard]] static TaskCompletionResult makeSuccess(T value) {
+        return TaskCompletionResult(TaskCompletionSuccess<T>(std::move(value)));
+    }
+
+    [[nodiscard]] static TaskCompletionResult makeFailure(
+        std::exception_ptr exception) noexcept {
+        return TaskCompletionResult(TaskCompletionFailure(std::move(exception)));
+    }
+
+    Value value_;
+};
+
+template <>
+class TaskCompletionResult<void> final {
+public:
+    [[nodiscard]] const TaskCompletionSuccess<void>*
+    success() const & noexcept {
+        return std::get_if<TaskCompletionSuccess<void>>(&value_);
+    }
+    const TaskCompletionSuccess<void>* success() const && = delete;
+
+    [[nodiscard]] const TaskCompletionFailure* failure() const & noexcept {
+        return std::get_if<TaskCompletionFailure>(&value_);
+    }
+    const TaskCompletionFailure* failure() const && = delete;
+
+private:
+    template <typename, typename>
+    friend class TaskCompletionState;
+
+    using Value = std::variant<
+        TaskCompletionSuccess<void>,
+        TaskCompletionFailure>;
+
+    template <typename Alternative>
+    explicit TaskCompletionResult(Alternative alternative) noexcept
+        : value_(std::move(alternative)) {}
+
+    [[nodiscard]] static TaskCompletionResult makeSuccess() noexcept {
+        return TaskCompletionResult(TaskCompletionSuccess<void>());
+    }
+
+    [[nodiscard]] static TaskCompletionResult makeFailure(
+        std::exception_ptr exception) noexcept {
+        return TaskCompletionResult(TaskCompletionFailure(std::move(exception)));
+    }
+
+    Value value_;
 };
 
 template <typename T, typename Handler>
@@ -52,20 +163,26 @@ public:
 private:
     void deliver() {
         if constexpr (std::is_void_v<T>) {
-            TaskCompletionResult<void> result;
-            try {
-                task_.handle_.promise().result();
-            } catch (...) {
-                result.exception = std::current_exception();
-            }
+            auto result = [this]() {
+                try {
+                    task_.handle_.promise().result();
+                    return TaskCompletionResult<void>::makeSuccess();
+                } catch (...) {
+                    return TaskCompletionResult<void>::makeFailure(
+                        std::current_exception());
+                }
+            }();
             std::move(handler_)(std::move(result));
         } else {
-            TaskCompletionResult<T> result;
-            try {
-                result.value.emplace(task_.handle_.promise().result());
-            } catch (...) {
-                result.exception = std::current_exception();
-            }
+            auto result = [this]() {
+                try {
+                    return TaskCompletionResult<T>::makeSuccess(
+                        task_.handle_.promise().result());
+                } catch (...) {
+                    return TaskCompletionResult<T>::makeFailure(
+                        std::current_exception());
+                }
+            }();
             std::move(handler_)(std::move(result));
         }
     }
@@ -107,16 +224,16 @@ auto asyncStartTask(Task<T>&& task, CompletionToken&& token) {
 template <typename T>
 [[nodiscard]] asio::awaitable<T> taskAsAwaitable(Task<T> task) {
     auto result = co_await asyncStartTask(std::move(task), asio::use_awaitable);
-    if (result.exception != nullptr) {
-        std::rethrow_exception(result.exception);
+    if (const auto* failure = result.failure()) {
+        std::rethrow_exception(failure->exception());
     }
-    co_return std::move(*result.value);
+    co_return std::move(*result.success()).takeValue();
 }
 
 inline asio::awaitable<void> taskAsAwaitable(Task<void> task) {
     auto result = co_await asyncStartTask(std::move(task), asio::use_awaitable);
-    if (result.exception != nullptr) {
-        std::rethrow_exception(result.exception);
+    if (const auto* failure = result.failure()) {
+        std::rethrow_exception(failure->exception());
     }
     co_return;
 }

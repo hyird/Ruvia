@@ -9,6 +9,7 @@
 #include <ruvia/core/Channel.h>
 #include <ruvia/core/OneShot.h>
 #include <ruvia/core/WorkerWaitResult.h>
+#include <ruvia/core/detail/AsioAwait.h>
 #include <ruvia/core/detail/ConnectionScanner.h>
 #include <ruvia/core/detail/PoolWaiterQueue.h>
 #include <ruvia/core/memory/MemoryPool.h>
@@ -82,6 +83,17 @@ concept HasPublicWorkerWaitFields = requires(T& result) {
 };
 
 template <typename T>
+concept HasLooseTaskCompletionFields = requires(T& result) {
+    result.exception;
+    result.value;
+};
+
+template <typename T>
+concept HasAnyRvalueTaskCompletionAccessor =
+    requires(T&& result) { std::move(result).success(); } ||
+    requires(T&& result) { std::move(result).failure(); };
+
+template <typename T>
 concept HasAnyRvalueWorkerWaitAccessor =
     requires(T&& result) { std::move(result).value(); } ||
     requires(T&& result) { std::move(result).closed(); } ||
@@ -95,6 +107,24 @@ concept HasAnyRvaluePoolWaiterAccessor =
     requires(T&& result) { std::move(result).closed(); };
 
 static_assert(!HasPublicWorkerWaitFields<ruvia::WorkerWaitResult<int>>);
+static_assert(!HasLooseTaskCompletionFields<
+              ruvia::detail::TaskCompletionResult<int>>);
+static_assert(!HasAnyRvalueTaskCompletionAccessor<
+              ruvia::detail::TaskCompletionResult<int>>);
+static_assert(!HasAnyRvalueTaskCompletionAccessor<
+              ruvia::detail::TaskCompletionResult<void>>);
+static_assert(!std::default_initializable<
+              ruvia::detail::TaskCompletionResult<int>>);
+static_assert(!std::default_initializable<
+              ruvia::detail::TaskCompletionResult<void>>);
+static_assert(std::same_as<
+    decltype(std::declval<ruvia::detail::
+        TaskCompletionResult<int>&>().success()),
+    ruvia::detail::TaskCompletionSuccess<int>*>);
+static_assert(std::same_as<
+    decltype(std::declval<const ruvia::detail::
+        TaskCompletionResult<int>&>().failure()),
+    const ruvia::detail::TaskCompletionFailure*>);
 static_assert(!HasAnyRvalueWorkerWaitAccessor<
     ruvia::WorkerWaitResult<int>>);
 static_assert(!std::default_initializable<ruvia::WorkerWaitResult<int>>);

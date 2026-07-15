@@ -255,9 +255,11 @@ DbMigrationReport DbMigrator::migrate(
             ioContext.get_executor(),
             [&report, &exception](
                 detail::TaskCompletionResult<DbMigrationReport> completion) {
-                exception = std::move(completion.exception);
-                if (completion.value.has_value()) {
-                    report.emplace(std::move(*completion.value));
+                if (const auto* failure = completion.failure()) {
+                    exception = failure->exception();
+                } else {
+                    report.emplace(
+                        std::move(*completion.success()).takeValue());
                 }
             }));
     ioContext.run();

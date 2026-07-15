@@ -35,6 +35,36 @@ if(_built_components_csv MATCHES "(^|,)core(,|$)" AND
 endif()
 
 if(_built_components_csv MATCHES "(^|,)core(,|$)")
+    set(_installed_task_completion_path
+        "${_install_prefix}/include/ruvia/core/detail/AsioAwait.h")
+    if(NOT EXISTS "${_installed_task_completion_path}")
+        message(FATAL_ERROR
+            "installed core package is missing its Task completion contract")
+    endif()
+    file(READ "${_installed_task_completion_path}"
+        _installed_task_completion)
+    if(NOT _installed_task_completion MATCHES
+           "class TaskCompletionSuccess final" OR
+       NOT _installed_task_completion MATCHES
+           "class TaskCompletionFailure final" OR
+       NOT _installed_task_completion MATCHES
+           "class TaskCompletionResult final" OR
+       NOT _installed_task_completion MATCHES
+           "using Value = std::variant" OR
+       NOT _installed_task_completion MATCHES
+           "success[(][)] [&] noexcept" OR
+       NOT _installed_task_completion MATCHES
+           "failure[(][)] const [&] noexcept" OR
+       NOT _installed_task_completion MATCHES
+           "success[(][)] && = delete" OR
+       NOT _installed_task_completion MATCHES
+           "failure[(][)] const && = delete" OR
+       _installed_task_completion MATCHES
+           "struct TaskCompletionResult|std::optional<T>[ 	]+value|std::exception_ptr[ 	]+exception[;]")
+        message(FATAL_ERROR
+            "installed Task completion restored a loose exception/value tuple")
+    endif()
+
     set(_installed_worker_wait_result_path
         "${_install_prefix}/include/ruvia/core/WorkerWaitResult.h")
     if(NOT EXISTS "${_installed_worker_wait_result_path}")

@@ -231,6 +231,10 @@ if(RUVIA_BUILD_CORE)
     target_link_libraries(ruvia_task_scope PRIVATE ruvia::core)
     add_test(NAME ruvia_task_scope COMMAND ruvia_task_scope)
 
+    add_executable(ruvia_task_completion task_completion.cpp)
+    target_link_libraries(ruvia_task_completion PRIVATE ruvia::core)
+    add_test(NAME ruvia_task_completion COMMAND ruvia_task_completion)
+
     add_executable(ruvia_channel channel.cpp)
     target_link_libraries(ruvia_channel PRIVATE ruvia::core)
     add_test(NAME ruvia_channel COMMAND ruvia_channel)

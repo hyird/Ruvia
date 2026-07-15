@@ -186,10 +186,10 @@ void WebWorkerDispatch::start(Task task) {
             asio::bind_executor(
                 executor_,
                 [self = shared_from_this()](TaskCompletionResult<void> result) {
-                    if (result.exception) {
+                    if (const auto* failure = result.failure()) {
                         self->failedCount_.fetch_add(1, std::memory_order_relaxed);
                         if (self->failed_) {
-                            self->failed_(std::move(result.exception));
+                            self->failed_(failure->exception());
                         }
                     }
                     self->complete();

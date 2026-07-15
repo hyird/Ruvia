@@ -158,6 +158,8 @@ file(READ "${RUVIA_ROOT}/ruvia-core/include/ruvia/core/OneShot.h"
     core_one_shot_contract)
 file(READ "${RUVIA_ROOT}/ruvia-core/include/ruvia/core/Task.h"
     core_task_contract)
+file(READ "${RUVIA_ROOT}/ruvia-core/include/ruvia/core/detail/AsioAwait.h"
+    core_task_completion_contract)
 file(READ "${RUVIA_ROOT}/ruvia-core/include/ruvia/core/WorkerWaitResult.h"
     core_worker_wait_result_contract)
 file(READ "${RUVIA_ROOT}/tests/package-consumer/core.cpp"
@@ -182,6 +184,31 @@ if(NOT core_channel_contract MATCHES
        "!std::assignable_from<ruvia::Task<int>&, ruvia::Task<int>&&>")
     boundary_error("core linear async owners regained invalid default states or destructive reassignment"
         "receivers must be factory-created and Task/receiver handles must be move-construct-only so assignment cannot orphan endpoints or destroy live coroutine frames")
+endif()
+if(NOT core_task_completion_contract MATCHES
+       "class TaskCompletionSuccess final" OR
+   NOT core_task_completion_contract MATCHES
+       "class TaskCompletionFailure final" OR
+   NOT core_task_completion_contract MATCHES
+       "class TaskCompletionResult final" OR
+   NOT core_task_completion_contract MATCHES
+       "using Value = std::variant" OR
+   NOT core_task_completion_contract MATCHES
+       "success[(][)] [&] noexcept" OR
+   NOT core_task_completion_contract MATCHES
+       "failure[(][)] const [&] noexcept" OR
+   NOT core_task_completion_contract MATCHES
+       "success[(][)] && = delete" OR
+   NOT core_task_completion_contract MATCHES
+       "failure[(][)] const && = delete" OR
+   core_task_completion_contract MATCHES
+       "struct TaskCompletionResult|std::optional<T>[ 	]+value|std::exception_ptr[ 	]+exception[;]" OR
+   NOT core_linear_receiver_package_contract MATCHES
+       "HasLooseTaskCompletionFields" OR
+   NOT core_linear_receiver_package_contract MATCHES
+       "HasAnyRvalueTaskCompletionAccessor")
+    boundary_error("Task-to-Asio completion regained a loose exception/value tuple"
+        "success and failure must remain exclusive alternatives, with payload borrows restricted to live lvalue owners")
 endif()
 if(NOT core_worker_wait_result_contract MATCHES
        "value[(][)] const [&] noexcept" OR
@@ -4257,6 +4284,12 @@ if(EXISTS "${DB_MIGRATION_SOURCE}" AND EXISTS "${DB_MIGRATION_TEST}")
            "Task<DbMigrationReport>[ \t]+run" OR
        NOT db_migration_source MATCHES
            "TaskCompletionResult<DbMigrationReport>" OR
+       NOT db_migration_source MATCHES
+           "completion[.]failure[(][)]" OR
+       NOT db_migration_source MATCHES
+           "completion[.]success[(][)]" OR
+       db_migration_source MATCHES
+           "completion[.](exception|value)" OR
        NOT db_migration_source MATCHES "return std::move[(][*]report[)]" OR
        NOT db_migration_test MATCHES
            "db_migrator_validates_before_opening_connection")
