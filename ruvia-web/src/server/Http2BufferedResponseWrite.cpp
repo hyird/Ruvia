@@ -102,8 +102,7 @@ Http2BufferedResponseWriter::write(
         std::move(writePlan));
     const auto* submittedHead = headResult.submitted();
     if (submittedHead == nullptr) {
-        const auto error = headResult.failure()->error();
-        if (error == Http2ResponseHeadSubmitError::kClosed) {
+        if (headResult.failure()->peerClosed()) {
             co_return
                 Http2BufferedResponseWriteResult::makePeerAbortedBeforeCommit();
         }

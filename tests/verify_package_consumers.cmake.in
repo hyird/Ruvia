@@ -1479,7 +1479,7 @@ if(_installed_http2_connection MATCHES "Http2HeadSubmitResult" OR
     message(FATAL_ERROR "installed HTTP/2 core restored the response-head status/plan tuple")
 endif()
 if(NOT _installed_http2_connection MATCHES
-       "enum class Http2ResponseHeadSubmitError" OR
+       "class Http2ResponseHeadSubmitError final : public std::exception" OR
    NOT _installed_http2_connection MATCHES
        "class Http2ResponseHeadSubmitFailure final" OR
    NOT _installed_http2_connection MATCHES
@@ -1494,7 +1494,11 @@ if(NOT _installed_http2_connection MATCHES
    NOT _installed_http2_connection MATCHES
        "Http2StreamingResponseHeadSubmitResult" OR
    NOT _installed_http2_connection MATCHES
-       "kResponsePlanMismatch" OR
+       "peerClosed[(][)] const noexcept" OR
+   NOT _installed_http2_connection MATCHES
+       "exception[(][)] const noexcept" OR
+   _installed_http2_connection MATCHES
+       "Http2ResponseHeadSubmitFailure[^}]*error[(][)]" OR
    NOT _installed_http2_connection MATCHES
        "HttpBufferedResponseWritePlan writePlan" OR
    _installed_http2_connection MATCHES

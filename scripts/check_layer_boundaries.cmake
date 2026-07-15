@@ -6199,8 +6199,8 @@ if(EXISTS "${WEB_H2_BUFFERED_WRITER}")
     file(READ "${WEB_H2_BUFFERED_WRITER}" web_h2_buffered_writer)
     if(NOT web_h2_buffered_writer MATCHES "submittedHead[-][>]sendBody" OR
        NOT web_h2_buffered_writer MATCHES "headResult[.]submitted[(][)]" OR
-       NOT web_h2_buffered_writer MATCHES "headResult[.]failure[(][)][-][>]error[(][)]" OR
-       NOT web_h2_buffered_writer MATCHES "Http2ResponseHeadSubmitError::kClosed" OR
+       NOT web_h2_buffered_writer MATCHES "headResult[.]failure[(][)][-][>]peerClosed[(][)]" OR
+       web_h2_buffered_writer MATCHES "Http2ResponseHeadSubmitError::|failure[(][)][-][>]error[(][)]" OR
        web_h2_buffered_writer MATCHES "submittedHead[-][>]plan[(][)]" OR
        NOT web_h2_buffered_writer MATCHES "Http2ErrorCode::kInternalError")
         boundary_error("ruvia-web HTTP/2 runtime bypasses the HTTP-owned send-body verdict"
@@ -6213,8 +6213,9 @@ set(WEB_H2_STREAM_SINK
 if(EXISTS "${WEB_H2_STREAM_SINK}")
     file(READ "${WEB_H2_STREAM_SINK}" web_h2_stream_sink)
     if(NOT web_h2_stream_sink MATCHES "headResult[.]submitted[(][)]" OR
-       NOT web_h2_stream_sink MATCHES "headResult[.]failure[(][)][-][>]error[(][)]" OR
-       NOT web_h2_stream_sink MATCHES "Http2ResponseHeadSubmitError::kClosed" OR
+       NOT web_h2_stream_sink MATCHES "headResult[.]failure[(][)][-][>]peerClosed[(][)]" OR
+       NOT web_h2_stream_sink MATCHES "headResult[.]failure[(][)][-][>]exception[(][)]" OR
+       web_h2_stream_sink MATCHES "Http2ResponseHeadSubmitError::|failure[(][)][-][>]error[(][)]" OR
        NOT web_h2_stream_sink MATCHES
            "markCommitted[(][*]submittedHead[)]")
         boundary_error("ruvia-web HTTP/2 streaming sink bypasses the submitted-head plan"
@@ -6854,19 +6855,19 @@ if(EXISTS "${HTTP2_CONNECTION_SOURCE}")
             "every structurally valid DATA payload must debit connection credit before stream lookup and release discarded credit exactly once")
     endif()
     if(NOT http2_connection_source MATCHES
-           "Http2BufferedResponseHeadSubmitResult::makeFailure" OR
+           "Http2BufferedResponseHeadSubmitResult::makeClosedFailure" OR
        NOT http2_connection_source MATCHES
            "Http2BufferedResponseHeadSubmitResult::makeSubmitted" OR
        NOT http2_connection_source MATCHES
-           "Http2StreamingResponseHeadSubmitResult::makeFailure" OR
+           "Http2StreamingResponseHeadSubmitResult::makeClosedFailure" OR
        NOT http2_connection_source MATCHES
            "Http2StreamingResponseHeadSubmitResult::makeSubmitted" OR
        NOT http2_connection_source MATCHES
-           "Http2ResponseHeadSubmitError::kClosed" OR
+           "makeInvalidStateFailure" OR
        NOT http2_connection_source MATCHES
-           "Http2ResponseHeadSubmitError::kInvalidState" OR
+           "makeResponsePlanMismatchFailure" OR
        NOT http2_connection_source MATCHES
-           "Http2ResponseHeadSubmitError::kInvalidMessage")
+           "makeInvalidMessageFailure")
         boundary_error("HTTP/2 response-head transaction bypasses its typed result"
             "buffered and streaming heads must return error-only failures and plan-only committed submissions")
     endif()
@@ -7422,7 +7423,7 @@ if(EXISTS "${HTTP2_CONNECTION_HEADER}")
             "request submission must keep dedicated entries and exclusive submitted/failure payloads")
     endif()
     if(NOT http2_connection_header MATCHES
-           "enum class Http2ResponseHeadSubmitError" OR
+           "class Http2ResponseHeadSubmitError final : public std::exception" OR
        NOT http2_connection_header MATCHES
            "class Http2ResponseHeadSubmitFailure final" OR
        NOT http2_connection_header MATCHES
@@ -7436,6 +7437,12 @@ if(EXISTS "${HTTP2_CONNECTION_HEADER}")
            "Http2BufferedResponseHeadSubmitResult" OR
        NOT http2_connection_header MATCHES
            "Http2StreamingResponseHeadSubmitResult" OR
+       NOT http2_connection_header MATCHES
+           "peerClosed[(][)] const noexcept" OR
+       NOT http2_connection_header MATCHES
+           "exception[(][)] const noexcept" OR
+       http2_connection_header MATCHES
+           "Http2ResponseHeadSubmitFailure[^}]*error[(][)]" OR
        http2_connection_header MATCHES
            "Http2SubmittedResponseHead|Http2SubmittedBufferedResponseHead|Http2SubmittedStreamingResponseHead")
         boundary_error("HTTP/2 final response-head result lost exclusive ownership"

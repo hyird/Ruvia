@@ -302,17 +302,52 @@ enum class Http2FinishSubmitStatus : std::uint8_t {
 
 // A final response HEADERS transaction either commits one body/stream plan or
 // rejects the submission without exposing a plan that was never committed.
-enum class Http2ResponseHeadSubmitError : std::uint8_t {
-    kClosed,
-    kInvalidState,
-    kResponsePlanMismatch,
-    kInvalidMessage,
+class Http2ResponseHeadSubmitFailure;
+template <typename Plan>
+class Http2ResponseHeadSubmitResult;
+
+class Http2ResponseHeadSubmitError final : public std::exception {
+public:
+    [[nodiscard]] const char* what() const noexcept override {
+        switch (kind_) {
+            case Kind::kClosed:
+                return "HTTP/2 response stream is closed";
+            case Kind::kInvalidState:
+                return "invalid HTTP/2 response head submission state";
+            case Kind::kResponsePlanMismatch:
+                return "HTTP/2 response head does not match its write plan";
+            case Kind::kInvalidMessage:
+                return "invalid HTTP/2 response head message";
+        }
+        return "unknown HTTP/2 response head submission failure";
+    }
+
+private:
+    friend class Http2ResponseHeadSubmitFailure;
+    template <typename>
+    friend class Http2ResponseHeadSubmitResult;
+
+    enum class Kind : std::uint8_t {
+        kClosed,
+        kInvalidState,
+        kResponsePlanMismatch,
+        kInvalidMessage,
+    };
+
+    explicit constexpr Http2ResponseHeadSubmitError(Kind kind) noexcept
+        : kind_(kind) {}
+
+    Kind kind_;
 };
 
 class Http2ResponseHeadSubmitFailure final {
 public:
-    [[nodiscard]] constexpr Http2ResponseHeadSubmitError error() const noexcept {
-        return error_;
+    [[nodiscard]] constexpr bool peerClosed() const noexcept {
+        return kind_ == Http2ResponseHeadSubmitError::Kind::kClosed;
+    }
+
+    [[nodiscard]] Http2ResponseHeadSubmitError exception() const noexcept {
+        return Http2ResponseHeadSubmitError(kind_);
     }
 
 private:
@@ -320,10 +355,10 @@ private:
     friend class Http2ResponseHeadSubmitResult;
 
     explicit constexpr Http2ResponseHeadSubmitFailure(
-        Http2ResponseHeadSubmitError error) noexcept
-        : error_(error) {}
+        Http2ResponseHeadSubmitError::Kind kind) noexcept
+        : kind_(kind) {}
 
-    Http2ResponseHeadSubmitError error_;
+    Http2ResponseHeadSubmitError::Kind kind_;
 };
 
 // The successful alternative directly owns the plan that now governs
@@ -359,10 +394,31 @@ private:
             std::move(plan));
     }
 
-    [[nodiscard]] static Http2ResponseHeadSubmitResult
-    makeFailure(Http2ResponseHeadSubmitError error) {
+    [[nodiscard]] static Http2ResponseHeadSubmitResult makeClosedFailure() {
         return Http2ResponseHeadSubmitResult(
-            Http2ResponseHeadSubmitFailure(error));
+            Http2ResponseHeadSubmitFailure(
+                Http2ResponseHeadSubmitError::Kind::kClosed));
+    }
+
+    [[nodiscard]] static Http2ResponseHeadSubmitResult
+    makeInvalidStateFailure() {
+        return Http2ResponseHeadSubmitResult(
+            Http2ResponseHeadSubmitFailure(
+                Http2ResponseHeadSubmitError::Kind::kInvalidState));
+    }
+
+    [[nodiscard]] static Http2ResponseHeadSubmitResult
+    makeResponsePlanMismatchFailure() {
+        return Http2ResponseHeadSubmitResult(
+            Http2ResponseHeadSubmitFailure(
+                Http2ResponseHeadSubmitError::Kind::kResponsePlanMismatch));
+    }
+
+    [[nodiscard]] static Http2ResponseHeadSubmitResult
+    makeInvalidMessageFailure() {
+        return Http2ResponseHeadSubmitResult(
+            Http2ResponseHeadSubmitFailure(
+                Http2ResponseHeadSubmitError::Kind::kInvalidMessage));
     }
 
     Value value_;

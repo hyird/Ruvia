@@ -268,7 +268,13 @@ concept HasResponseHeadPlanAccessor = requires(const T& result) {
 
 template <typename T>
 concept HasResponseHeadErrorAccessor = requires(const T& result) {
-    { result.error() } ->
+    result.error();
+};
+
+template <typename T>
+concept HasResponseHeadFailureContract = requires(const T& failure) {
+    { failure.peerClosed() } -> std::same_as<bool>;
+    { failure.exception() } ->
         std::same_as<ruvia::detail::Http2ResponseHeadSubmitError>;
 };
 
@@ -2247,8 +2253,17 @@ static_assert(!AcceptsLooseResponseStreamBodyPlan<
     ruvia::detail::HttpResponseBodyPlan>);
 static_assert(!AcceptsLooseBufferedResponseBodyPlan<
     ruvia::detail::HttpResponseBodyPlan>);
-static_assert(HasResponseHeadErrorAccessor<
+static_assert(!HasResponseHeadErrorAccessor<
     ruvia::detail::Http2ResponseHeadSubmitFailure>);
+static_assert(HasResponseHeadFailureContract<
+    ruvia::detail::Http2ResponseHeadSubmitFailure>);
+static_assert(std::derived_from<
+    ruvia::detail::Http2ResponseHeadSubmitError,
+    std::exception>);
+static_assert(std::is_trivially_copyable_v<
+    ruvia::detail::Http2ResponseHeadSubmitFailure>);
+static_assert(sizeof(
+    ruvia::detail::Http2ResponseHeadSubmitFailure) <= 1);
 static_assert(!HasResponseHeadPlanAccessor<
     ruvia::detail::Http2ResponseHeadSubmitFailure>);
 static_assert(!std::constructible_from<

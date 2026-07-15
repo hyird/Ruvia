@@ -139,7 +139,13 @@ concept HasResponseHeadPlanAccessor = requires(const T& result) {
 
 template <typename T>
 concept HasResponseHeadErrorAccessor = requires(const T& result) {
-    { result.error() } -> std::same_as<Http2ResponseHeadSubmitError>;
+    result.error();
+};
+
+template <typename T>
+concept HasResponseHeadFailureContract = requires(const T& failure) {
+    { failure.peerClosed() } -> std::same_as<bool>;
+    { failure.exception() } -> std::same_as<Http2ResponseHeadSubmitError>;
 };
 
 template <typename T>
@@ -279,8 +285,16 @@ static_assert(!HasResponseHeadPlanAccessor<
     Http2BufferedResponseHeadSubmitResult>);
 static_assert(!HasResponseHeadErrorAccessor<
     Http2BufferedResponseHeadSubmitResult>);
-static_assert(HasResponseHeadErrorAccessor<
+static_assert(!HasResponseHeadErrorAccessor<
     Http2ResponseHeadSubmitFailure>);
+static_assert(HasResponseHeadFailureContract<
+    Http2ResponseHeadSubmitFailure>);
+static_assert(std::derived_from<
+    Http2ResponseHeadSubmitError,
+    std::exception>);
+static_assert(std::is_trivially_copyable_v<
+    Http2ResponseHeadSubmitFailure>);
+static_assert(sizeof(Http2ResponseHeadSubmitFailure) <= 1);
 static_assert(!HasResponseHeadPlanAccessor<
     Http2ResponseHeadSubmitFailure>);
 static_assert(!std::constructible_from<
@@ -317,10 +331,10 @@ bool responseHeadSubmitted(const Result& result) {
 }
 
 template <typename Result>
-Http2ResponseHeadSubmitError responseHeadSubmitError(
+std::string_view responseHeadSubmitFailureMessage(
     const Result& result) {
     if (const auto* failure = result.failure()) {
-        return failure->error();
+        return failure->exception().what();
     }
     throw std::runtime_error("HTTP/2 response head did not fail");
 }
@@ -1663,9 +1677,10 @@ RUVIA_TEST(http2_connection_response_head_submit_result_is_discriminated) {
     const auto closed = submitBufferedResponseHead(missingStream, 1, response);
     RUVIA_CHECK(closed.submitted() == nullptr);
     RUVIA_CHECK(closed.failure() != nullptr);
-    RUVIA_CHECK(
-        closed.failure()->error() ==
-        Http2ResponseHeadSubmitError::kClosed);
+    RUVIA_CHECK(closed.failure()->peerClosed());
+    RUVIA_CHECK_EQ(
+        std::string_view(closed.failure()->exception().what()),
+        std::string_view("HTTP/2 response stream is closed"));
     RUVIA_CHECK(missingStream.pendingOutput().empty());
 
     Http2Connection buffered(&resource);
@@ -1711,8 +1726,8 @@ RUVIA_TEST(http2_connection_buffered_response_requires_matching_prepared_plan) {
         response,
         wrongMethodPlan);
     RUVIA_CHECK(
-        responseHeadSubmitError(wrongMethod) ==
-        Http2ResponseHeadSubmitError::kResponsePlanMismatch);
+        responseHeadSubmitFailureMessage(wrongMethod) ==
+        "HTTP/2 response head does not match its write plan");
     RUVIA_CHECK(connection.pendingOutput().empty());
 
     const auto staleRepresentationPlan =
@@ -1725,8 +1740,8 @@ RUVIA_TEST(http2_connection_buffered_response_requires_matching_prepared_plan) {
         response,
         staleRepresentationPlan);
     RUVIA_CHECK(
-        responseHeadSubmitError(staleRepresentation) ==
-        Http2ResponseHeadSubmitError::kResponsePlanMismatch);
+        responseHeadSubmitFailureMessage(staleRepresentation) ==
+        "HTTP/2 response head does not match its write plan");
     RUVIA_CHECK(connection.pendingOutput().empty());
 
     const auto staleStatusPlan =
@@ -1739,8 +1754,8 @@ RUVIA_TEST(http2_connection_buffered_response_requires_matching_prepared_plan) {
         response,
         staleStatusPlan);
     RUVIA_CHECK(
-        responseHeadSubmitError(staleStatus) ==
-        Http2ResponseHeadSubmitError::kResponsePlanMismatch);
+        responseHeadSubmitFailureMessage(staleStatus) ==
+        "HTTP/2 response head does not match its write plan");
     RUVIA_CHECK(connection.pendingOutput().empty());
 
     const auto submitted = connection.submitResponseHead(
@@ -1777,8 +1792,8 @@ RUVIA_TEST(http2_connection_rejects_duplicate_response_head_without_output) {
     duplicate.status(200);
     const auto duplicateResult = submitBufferedResponseHead(conn, 1, duplicate);
     RUVIA_CHECK(
-        responseHeadSubmitError(duplicateResult) ==
-        Http2ResponseHeadSubmitError::kInvalidState);
+        responseHeadSubmitFailureMessage(duplicateResult) ==
+        "invalid HTTP/2 response head submission state");
     RUVIA_CHECK(conn.pendingOutput().empty());
 }
 
@@ -1803,8 +1818,8 @@ RUVIA_TEST(http2_connection_rejects_head_api_for_wrong_role) {
     response.status(200);
     const auto result = submitBufferedResponseHead(client, streamId, response);
     RUVIA_CHECK(
-        responseHeadSubmitError(result) ==
-        Http2ResponseHeadSubmitError::kInvalidState);
+        responseHeadSubmitFailureMessage(result) ==
+        "invalid HTTP/2 response head submission state");
     RUVIA_CHECK(client.pendingOutput().empty());
 }
 
@@ -2175,8 +2190,8 @@ RUVIA_TEST(http2_connection_rejects_upgrade_required_final_heads_transactionally
     buffered.header("Upgrade", "websocket");
     const auto bufferedResult = submitBufferedResponseHead(conn, 1, buffered);
     RUVIA_CHECK(
-        responseHeadSubmitError(bufferedResult) ==
-        Http2ResponseHeadSubmitError::kInvalidMessage);
+        responseHeadSubmitFailureMessage(bufferedResult) ==
+            "invalid HTTP/2 response head message");
     RUVIA_CHECK(conn.pendingOutput().empty());
 
     ruvia::HttpResponse streaming(&resource);
@@ -2188,8 +2203,8 @@ RUVIA_TEST(http2_connection_rejects_upgrade_required_final_heads_transactionally
         ruvia::detail::ResponseStreamKind::kGeneric,
         ruvia::detail::ResponseTrailerIntent::kNone);
     RUVIA_CHECK(
-        responseHeadSubmitError(streamingResult) ==
-        Http2ResponseHeadSubmitError::kInvalidMessage);
+        responseHeadSubmitFailureMessage(streamingResult) ==
+            "invalid HTTP/2 response head message");
     RUVIA_CHECK(conn.pendingOutput().empty());
 
     // Both failures occur before HPACK/stream mutation, so a conformant final
@@ -2220,8 +2235,8 @@ RUVIA_TEST(http2_connection_rejects_connection_specific_final_heads_transactiona
         buffered.header(name, value);
         const auto bufferedResult = submitBufferedResponseHead(conn, 1, buffered);
         RUVIA_CHECK(
-            responseHeadSubmitError(bufferedResult) ==
-            Http2ResponseHeadSubmitError::kInvalidMessage);
+            responseHeadSubmitFailureMessage(bufferedResult) ==
+            "invalid HTTP/2 response head message");
         RUVIA_CHECK(conn.pendingOutput().empty());
 
         ruvia::HttpResponse streaming(&resource);
@@ -2232,8 +2247,8 @@ RUVIA_TEST(http2_connection_rejects_connection_specific_final_heads_transactiona
             ruvia::detail::ResponseStreamKind::kGeneric,
             ruvia::detail::ResponseTrailerIntent::kNone);
         RUVIA_CHECK(
-            responseHeadSubmitError(streamingResult) ==
-            Http2ResponseHeadSubmitError::kInvalidMessage);
+            responseHeadSubmitFailureMessage(streamingResult) ==
+            "invalid HTTP/2 response head message");
         RUVIA_CHECK(conn.pendingOutput().empty());
     }
 
@@ -2404,8 +2419,8 @@ RUVIA_TEST(http2_connection_streaming_rejects_invalid_content_length_before_head
             ruvia::detail::ResponseStreamKind::kGeneric,
             ResponseTrailerIntent::kNone);
         RUVIA_CHECK(
-            responseHeadSubmitError(result) ==
-            Http2ResponseHeadSubmitError::kInvalidMessage);
+            responseHeadSubmitFailureMessage(result) ==
+            "invalid HTTP/2 response head message");
         RUVIA_CHECK(conn.pendingOutput().empty());
         auto* stream = conn.stream(1);
         RUVIA_CHECK(stream != nullptr);

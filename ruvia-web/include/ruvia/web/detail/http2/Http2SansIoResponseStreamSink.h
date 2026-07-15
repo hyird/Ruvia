@@ -188,13 +188,11 @@ private:
             trailerIntent);
         const auto* submittedHead = headResult.submitted();
         if (submittedHead == nullptr) {
-            if (headResult.failure()->error() ==
-                Http2ResponseHeadSubmitError::kClosed) {
+            if (headResult.failure()->peerClosed()) {
                 throw std::system_error(
                     std::make_error_code(std::errc::connection_reset));
             }
-            throw std::logic_error(
-                "invalid HTTP/2 response stream head state");
+            throw headResult.failure()->exception();
         }
         state_.markCommitted(*submittedHead);
         wakeWriter();
