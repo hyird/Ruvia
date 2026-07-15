@@ -232,6 +232,10 @@ if(RUVIA_BUILD_CORE)
     target_link_libraries(ruvia_operation_deadline PRIVATE ruvia::core)
     add_test(NAME ruvia_operation_deadline COMMAND ruvia_operation_deadline)
 
+    add_executable(ruvia_pool_lease_scheduler pool_lease_scheduler.cpp)
+    target_link_libraries(ruvia_pool_lease_scheduler PRIVATE ruvia::core)
+    add_test(NAME ruvia_pool_lease_scheduler COMMAND ruvia_pool_lease_scheduler)
+
     add_executable(ruvia_task_scope task_scope.cpp)
     target_link_libraries(ruvia_task_scope PRIVATE ruvia::core)
     add_test(NAME ruvia_task_scope COMMAND ruvia_task_scope)

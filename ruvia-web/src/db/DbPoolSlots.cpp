@@ -1,5 +1,7 @@
 #include "ruvia/web/detail/db/DbInternal.h"
 
+#include <stdexcept>
+
 namespace ruvia {
 
 detail::MariaDbPool::SlotGuard::SlotGuard(MariaDbPool& client, std::size_t slot) noexcept
@@ -13,7 +15,15 @@ detail::MariaDbPool::SlotGuard::~SlotGuard() {
 }
 
 Task<std::size_t> detail::MariaDbPool::acquireSlot() {
-    return scheduler_.acquire(config_.acquireTimeout);
+    const auto result = co_await scheduler_.acquire(config_.acquireTimeout);
+    if (const auto* acquired = result.acquired()) {
+        co_return acquired->index();
+    }
+    if (result.timedOut() != nullptr) {
+        throw std::runtime_error(
+            "database connection pool acquire timed out");
+    }
+    throw std::runtime_error("database client is closing");
 }
 
 void detail::MariaDbPool::releaseSlot(std::size_t slot) noexcept {

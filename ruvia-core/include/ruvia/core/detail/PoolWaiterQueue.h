@@ -9,6 +9,7 @@
 
 namespace ruvia::detail {
 
+class PoolLeaseScheduler;
 class PoolWaiterResult;
 
 class PoolWaiterAcquired final {
@@ -67,6 +68,7 @@ public:
 
 private:
     friend class PoolWaiter;
+    friend class PoolLeaseScheduler;
 
     using Value = std::variant<
         PoolWaiterAcquired,

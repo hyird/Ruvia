@@ -80,7 +80,15 @@ bool PostgreSqlPool::hasAnyTimeout() const noexcept {
 }
 
 Task<std::size_t> PostgreSqlPool::acquireSlot() {
-    return scheduler_.acquire(config_.acquireTimeout);
+    const auto result = co_await scheduler_.acquire(config_.acquireTimeout);
+    if (const auto* acquired = result.acquired()) {
+        co_return acquired->index();
+    }
+    if (result.timedOut() != nullptr) {
+        throw std::runtime_error(
+            "database connection pool acquire timed out");
+    }
+    throw std::runtime_error("database client is closing");
 }
 
 void PostgreSqlPool::releaseSlot(std::size_t slot) noexcept {

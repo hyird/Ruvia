@@ -47,9 +47,9 @@ public:
 #include <vector>
 
 #include "ruvia/core/detail/OperationDeadline.h"
+#include "ruvia/core/detail/PoolLeaseScheduler.h"
 #include "ruvia/core/memory/PmrObject.h"
 #include "ruvia/web/detail/db/DbPoolDeadline.h"
-#include "ruvia/web/detail/db/DbPoolScheduler.h"
 
 struct st_mysql;
 struct st_mysql_res;
@@ -142,7 +142,7 @@ private:
     DbConfig config_;
     std::pmr::memory_resource* resource_;
     std::pmr::vector<ConnectionSlot> slots_;
-    DbPoolScheduler scheduler_;
+    PoolLeaseScheduler scheduler_;
 };
 
 #endif  // RUVIA_ENABLE_MARIADB
@@ -227,7 +227,7 @@ private:
     DbConfig config_;
     std::pmr::memory_resource* resource_;
     std::pmr::vector<ConnectionSlot> slots_;
-    DbPoolScheduler scheduler_;
+    PoolLeaseScheduler scheduler_;
 };
 
 #endif  // RUVIA_ENABLE_POSTGRESQL

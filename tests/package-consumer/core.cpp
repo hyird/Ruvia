@@ -13,6 +13,7 @@
 #include <ruvia/core/detail/AsioAwait.h>
 #include <ruvia/core/detail/ConnectionScanner.h>
 #include <ruvia/core/detail/OperationDeadline.h>
+#include <ruvia/core/detail/PoolLeaseScheduler.h>
 #include <ruvia/core/detail/PoolWaiterQueue.h>
 #include <ruvia/core/detail/WorkerTimer.h>
 #include <ruvia/core/detail/WorkerWaitAwaiter.h>
@@ -313,6 +314,14 @@ static_assert(std::same_as<
     decltype(&ruvia::detail::PoolWaiterQueue::closeAll),
     void (ruvia::detail::PoolWaiterQueue::*)() noexcept>);
 static_assert(!AcceptsPoolCloseSentinel<ruvia::detail::PoolWaiterQueue>);
+static_assert(!std::copyable<ruvia::detail::PoolLeaseScheduler>);
+static_assert(std::same_as<
+    decltype(std::declval<ruvia::detail::PoolLeaseScheduler&>().acquire(
+        std::optional<std::chrono::milliseconds>{})),
+    ruvia::Task<ruvia::detail::PoolWaiterResult>>);
+static_assert(std::same_as<
+    decltype(std::declval<ruvia::detail::PoolLeaseScheduler&>().close()),
+    bool>);
 
 int main() {
     ruvia::WorkerMemory worker;

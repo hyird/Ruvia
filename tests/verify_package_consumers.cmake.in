@@ -394,6 +394,30 @@ if(_built_components_csv MATCHES "(^|,)core(,|$)")
             "installed pool waiter restored parallel completion state or a close sentinel")
     endif()
 
+    set(_installed_pool_lease_scheduler_path
+        "${_install_prefix}/include/ruvia/core/detail/PoolLeaseScheduler.h")
+    if(NOT EXISTS "${_installed_pool_lease_scheduler_path}")
+        message(FATAL_ERROR
+            "installed core package is missing PoolLeaseScheduler")
+    endif()
+    file(READ "${_installed_pool_lease_scheduler_path}"
+        _installed_pool_lease_scheduler)
+    if(NOT _installed_pool_lease_scheduler MATCHES
+           "class PoolLeaseScheduler final" OR
+       NOT _installed_pool_lease_scheduler MATCHES
+           "Task<PoolWaiterResult> acquire" OR
+       NOT _installed_pool_lease_scheduler MATCHES
+           "waiters_[.]resumeNext" OR
+       NOT _installed_pool_lease_scheduler MATCHES
+           "waiters_[.]closeAll" OR
+       NOT _installed_pool_lease_scheduler MATCHES
+           "vector<std::size_t> freeSlots_" OR
+       NOT _installed_pool_lease_scheduler MATCHES
+           "vector<std::uint8_t> busy_")
+        message(FATAL_ERROR
+            "installed core pool scheduler lost centralized lease ownership")
+    endif()
+
     set(_installed_connection_scanner_path
         "${_install_prefix}/include/ruvia/core/detail/ConnectionScanner.h")
     if(NOT EXISTS "${_installed_connection_scanner_path}")
@@ -2022,6 +2046,21 @@ if(_built_components_csv MATCHES "(^|,)web(,|$)")
            "deadlineActive|bool timedOut|deadlineKind|DeadlineKind[^;]*kNone")
         message(FATAL_ERROR
             "installed integration runtimes restored split deadline state")
+    endif()
+    if(NOT _installed_db_internal MATCHES
+           "PoolLeaseScheduler scheduler_" OR
+       NOT _installed_redis_internal MATCHES
+           "PoolLeaseScheduler scheduler_" OR
+       _installed_db_internal MATCHES "DbPoolScheduler" OR
+       _installed_redis_internal MATCHES
+           "free_|waiters_|closing_|bool[ \t]+busy")
+        message(FATAL_ERROR
+            "installed integration runtimes restored duplicate pool lease state")
+    endif()
+    if(EXISTS
+       "${_install_prefix}/include/ruvia/web/detail/db/DbPoolScheduler.h")
+        message(FATAL_ERROR
+            "installed Web package retained the obsolete DB pool scheduler")
     endif()
 
     set(_installed_http_server_path

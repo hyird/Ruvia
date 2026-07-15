@@ -9154,38 +9154,52 @@ endif()
 
 set(POOL_WAITER_HEADER
     "${RUVIA_ROOT}/ruvia-core/include/ruvia/core/detail/PoolWaiterQueue.h")
-set(POOL_WAITER_DB_SCHEDULER
-    "${RUVIA_ROOT}/ruvia-web/src/db/DbPoolScheduler.cpp")
+set(POOL_LEASE_SCHEDULER
+    "${RUVIA_ROOT}/ruvia-core/include/ruvia/core/detail/PoolLeaseScheduler.h")
+set(POOL_WAITER_DB_SLOTS
+    "${RUVIA_ROOT}/ruvia-web/src/db/DbPoolSlots.cpp")
+set(POOL_WAITER_PG_LIFECYCLE
+    "${RUVIA_ROOT}/ruvia-web/src/db/PgPoolLifecycle.cpp")
 set(POOL_WAITER_REDIS_SLOTS
     "${RUVIA_ROOT}/ruvia-web/src/redis/RedisPoolSlots.cpp")
 set(POOL_WAITER_REDIS_LIFECYCLE
     "${RUVIA_ROOT}/ruvia-web/src/redis/RedisPoolLifecycle.cpp")
 set(POOL_WAITER_TEST "${RUVIA_ROOT}/tests/unit_pool_waiter_queue.cpp")
+set(POOL_LEASE_TEST "${RUVIA_ROOT}/tests/pool_lease_scheduler.cpp")
 set(POOL_WAITER_PACKAGE_CONSUMER
     "${RUVIA_ROOT}/tests/package-consumer/core.cpp")
 foreach(required IN ITEMS
     "${POOL_WAITER_HEADER}"
-    "${POOL_WAITER_DB_SCHEDULER}"
+    "${POOL_LEASE_SCHEDULER}"
+    "${POOL_WAITER_DB_SLOTS}"
+    "${POOL_WAITER_PG_LIFECYCLE}"
     "${POOL_WAITER_REDIS_SLOTS}"
     "${POOL_WAITER_REDIS_LIFECYCLE}"
     "${POOL_WAITER_TEST}"
+    "${POOL_LEASE_TEST}"
     "${POOL_WAITER_PACKAGE_CONSUMER}")
     if(NOT EXISTS "${required}")
-        boundary_error("typed pool waiter completion is missing" "${required}")
+        boundary_error("core pool lease ownership is missing" "${required}")
     endif()
 endforeach()
 if(EXISTS "${POOL_WAITER_HEADER}" AND
-   EXISTS "${POOL_WAITER_DB_SCHEDULER}" AND
+   EXISTS "${POOL_LEASE_SCHEDULER}" AND
+   EXISTS "${POOL_WAITER_DB_SLOTS}" AND
+   EXISTS "${POOL_WAITER_PG_LIFECYCLE}" AND
    EXISTS "${POOL_WAITER_REDIS_SLOTS}" AND
    EXISTS "${POOL_WAITER_REDIS_LIFECYCLE}" AND
    EXISTS "${POOL_WAITER_TEST}" AND
+   EXISTS "${POOL_LEASE_TEST}" AND
    EXISTS "${POOL_WAITER_PACKAGE_CONSUMER}")
     file(READ "${POOL_WAITER_HEADER}" pool_waiter_header)
-    file(READ "${POOL_WAITER_DB_SCHEDULER}" pool_waiter_db_scheduler)
+    file(READ "${POOL_LEASE_SCHEDULER}" pool_lease_scheduler)
+    file(READ "${POOL_WAITER_DB_SLOTS}" pool_waiter_db_slots)
+    file(READ "${POOL_WAITER_PG_LIFECYCLE}" pool_waiter_pg_lifecycle)
     file(READ "${POOL_WAITER_REDIS_SLOTS}" pool_waiter_redis_slots)
     file(READ "${POOL_WAITER_REDIS_LIFECYCLE}"
         pool_waiter_redis_lifecycle)
     file(READ "${POOL_WAITER_TEST}" pool_waiter_test)
+    file(READ "${POOL_LEASE_TEST}" pool_lease_test)
     file(READ "${POOL_WAITER_PACKAGE_CONSUMER}"
         pool_waiter_package_consumer)
     if(NOT pool_waiter_header MATCHES "class PoolWaiterAcquired final" OR
@@ -9228,20 +9242,25 @@ if(EXISTS "${POOL_WAITER_HEADER}" AND
         boundary_error("pool waiter lost its discriminated await result"
             "idle, queued, and completed must remain exclusive states; acquired, timeout, and closure must remain exclusive results; closeAll must commit its entire queue before resuming")
     endif()
-    if(NOT pool_waiter_db_scheduler MATCHES
-           "const auto& result = co_await waiter" OR
-       NOT pool_waiter_db_scheduler MATCHES "result[.]timedOut[(][)]" OR
-       NOT pool_waiter_db_scheduler MATCHES "result[.]closed[(][)]" OR
-       NOT pool_waiter_db_scheduler MATCHES "result[.]acquired[(][)]" OR
+    if(NOT pool_lease_scheduler MATCHES "class PoolLeaseScheduler final" OR
+       NOT pool_lease_scheduler MATCHES "Task<PoolWaiterResult> acquire" OR
+       NOT pool_lease_scheduler MATCHES "waiters_[.]resumeNext" OR
+       NOT pool_lease_scheduler MATCHES "waiters_[.]closeAll" OR
+       NOT pool_lease_scheduler MATCHES "vector<std::size_t> freeSlots_" OR
+       NOT pool_lease_scheduler MATCHES "vector<std::uint8_t> busy_" OR
+       NOT pool_waiter_db_slots MATCHES "scheduler_[.]acquire" OR
+       NOT pool_waiter_db_slots MATCHES "scheduler_[.]release" OR
+       NOT pool_waiter_pg_lifecycle MATCHES "scheduler_[.]acquire" OR
+       NOT pool_waiter_pg_lifecycle MATCHES "scheduler_[.]release" OR
        NOT pool_waiter_redis_slots MATCHES
-           "const auto& result = co_await waiter" OR
+           "scheduler_[.]acquire" OR
+       NOT pool_waiter_redis_slots MATCHES "scheduler_[.]release" OR
        NOT pool_waiter_redis_slots MATCHES "result[.]timedOut[(][)]" OR
        NOT pool_waiter_redis_slots MATCHES "result[.]closed[(][)]" OR
        NOT pool_waiter_redis_slots MATCHES "result[.]acquired[(][)]" OR
-       NOT pool_waiter_db_scheduler MATCHES "waiters_[.]closeAll[(][)]" OR
-       NOT pool_waiter_redis_lifecycle MATCHES "waiters_[.]closeAll[(][)]")
-        boundary_error("DB/Redis pool waits stopped consuming one core completion"
-            "both integrations must co_await PoolWaiter and map only its typed timeout, closed, or acquired outcome")
+       NOT pool_waiter_redis_lifecycle MATCHES "scheduler_[.]close")
+        boundary_error("DB/Redis pool leases escaped core ownership"
+            "core must exclusively own free, busy, waiter, timeout, handoff, and closing state while integrations only map typed acquire outcomes")
     endif()
     if(NOT pool_waiter_test MATCHES
            "pool_waiter_is_its_own_typed_awaiter" OR
@@ -9261,9 +9280,37 @@ if(EXISTS "${POOL_WAITER_HEADER}" AND
        NOT pool_waiter_package_consumer MATCHES
            "HasAnyRvaluePoolWaiterAccessor" OR
        NOT pool_waiter_package_consumer MATCHES
-           "PoolWaiterResult")
-        boundary_error("typed pool waiter completion is insufficiently pinned"
-            "runtime tests and installed-core compile contracts must reject the former flags/sentinel tuple")
+           "PoolLeaseScheduler" OR
+       NOT pool_lease_test MATCHES "exerciseLeaseAndClose" OR
+       NOT pool_lease_test MATCHES "exerciseAcquireTimeout")
+        boundary_error("core pool lease scheduling is insufficiently pinned"
+            "runtime tests and installed-core compile contracts must reject split waiter and lease state")
+    endif()
+endif()
+
+foreach(stale_pool_scheduler IN ITEMS
+    "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/db/DbPoolScheduler.h"
+    "${RUVIA_ROOT}/ruvia-web/src/db/DbPoolScheduler.cpp")
+    if(EXISTS "${stale_pool_scheduler}")
+        boundary_error("Web retained a duplicate DB pool scheduler"
+            "${stale_pool_scheduler}")
+    endif()
+endforeach()
+set(POOL_LEASE_DB_INTERNAL
+    "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/db/DbInternal.h")
+set(POOL_LEASE_REDIS_INTERNAL
+    "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/redis/RedisInternal.h")
+if(EXISTS "${POOL_LEASE_DB_INTERNAL}" AND
+   EXISTS "${POOL_LEASE_REDIS_INTERNAL}")
+    file(READ "${POOL_LEASE_DB_INTERNAL}" pool_lease_db_internal)
+    file(READ "${POOL_LEASE_REDIS_INTERNAL}" pool_lease_redis_internal)
+    if(NOT pool_lease_db_internal MATCHES "PoolLeaseScheduler scheduler_" OR
+       NOT pool_lease_redis_internal MATCHES "PoolLeaseScheduler scheduler_" OR
+       pool_lease_db_internal MATCHES "DbPoolScheduler" OR
+       pool_lease_redis_internal MATCHES
+           "free_|waiters_|closing_|bool[ \t]+busy")
+        boundary_error("integration headers restored duplicate pool lease state"
+            "DB and Redis must retain only one core PoolLeaseScheduler")
     endif()
 endif()
 

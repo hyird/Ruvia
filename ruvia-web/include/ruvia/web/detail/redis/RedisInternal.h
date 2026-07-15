@@ -51,7 +51,7 @@ public:
 #include <vector>
 
 #include "ruvia/core/detail/OperationDeadline.h"
-#include "ruvia/core/detail/PoolWaiterQueue.h"
+#include "ruvia/core/detail/PoolLeaseScheduler.h"
 #include "ruvia/core/memory/PmrObject.h"
 
 struct redisReader;
@@ -119,7 +119,6 @@ private:
         std::array<char, kRedisReadBufferBytes> readBuffer;
         std::unique_ptr<redisReader, RedisReaderDeleter> reader;
         std::size_t replyBytes{0};
-        bool busy{false};
         bool connected{false};
         enum class DeadlineKind : std::uint8_t {
             kResolve,
@@ -180,9 +179,7 @@ private:
     RedisConfig config_;
     std::pmr::memory_resource* resource_;
     std::pmr::vector<Connection> connections_;
-    std::pmr::vector<std::size_t> free_;
-    PoolWaiterQueue waiters_;
-    bool closing_{false};
+    PoolLeaseScheduler scheduler_;
 };
 
 class RedisRegistry final {
