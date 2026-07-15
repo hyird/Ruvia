@@ -10,6 +10,7 @@
 #include <memory_resource>
 #include <optional>
 #include <span>
+#include <variant>
 #include <vector>
 
 struct st_mysql_res;
@@ -59,20 +60,31 @@ private:
     friend class detail::MariaDbPool;
     friend class detail::PostgreSqlPool;
 
+    struct Closed final {};
+
+    struct Active final {
+        Active(
+            detail::DbPoolRef client,
+            std::size_t slot,
+            void* result,
+            std::pmr::memory_resource* resource) noexcept;
+
+        detail::DbPoolRef client;
+        std::size_t slot;
+        void* result;
+        std::pmr::memory_resource* resource;
+    };
+
+    DbStreamResult() noexcept = default;
     DbStreamResult(
         detail::DbPoolRef client,
         std::size_t slot,
         void* result,
-        std::pmr::memory_resource* resource,
-        bool active = true) noexcept;
+        std::pmr::memory_resource* resource) noexcept;
     void reset() noexcept;
     void release() noexcept;
 
-    detail::DbPoolRef client_{};
-    std::size_t slot_{0};
-    void* result_{nullptr};
-    std::pmr::memory_resource* resource_{nullptr};
-    bool active_{false};
+    std::variant<Closed, Active> state_{};
 };
 
 }  // namespace ruvia

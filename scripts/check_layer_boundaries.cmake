@@ -2338,6 +2338,27 @@ if(NOT pmr_http_client_api MATCHES
     boundary_error("PMR-owning public values or linear database handles regained unsafe move-assignment guarantees"
         "single-use results and active DB operations must reject reassignment; assignable values must expose allocation failure, and HttpResponse replacement must transfer one resource domain without member-wise PMR assignment")
 endif()
+file(READ "${RUVIA_ROOT}/ruvia-web/src/db/Db.cpp"
+    db_mariadb_stream_impl)
+file(READ "${RUVIA_ROOT}/ruvia-web/src/db/PgDb.cpp"
+    db_postgresql_stream_impl)
+if(NOT pmr_db_query_result_api MATCHES
+       "std::variant<Closed, Active>[ \n\t]+state_" OR
+   NOT pmr_db_transaction_api MATCHES
+       "std::variant<Closed, Active>[ \n\t]+state_" OR
+   pmr_db_query_result_api MATCHES "bool[ \t]+active_" OR
+   pmr_db_transaction_api MATCHES "bool[ \t]+active_" OR
+   NOT pmr_db_handle_impl MATCHES
+       "other[.]state_[.]emplace<Closed>[(][)]" OR
+   NOT pmr_db_handle_impl MATCHES
+       "std::holds_alternative<Active>[(]state_[)]" OR
+   NOT db_mariadb_stream_impl MATCHES
+       "co_return DbStreamResult[(][)]" OR
+   NOT db_postgresql_stream_impl MATCHES
+       "DbStreamResult[(]DbPoolRef[{]this[}], slotIndex, nullptr, resource[)]")
+    boundary_error("database linear resources regained overlapping lifecycle state"
+        "stream results and transactions must discriminate closed from active ownership; MariaDB no-result streams are closed while PostgreSQL may own an active stream with a null backend result pointer")
+endif()
 file(READ "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/detail/MultipartParsing.h"
     multipart_protocol_helpers)
 if(NOT multipart_protocol_helpers MATCHES "class HttpMultipartDelimiterNoMatch final" OR

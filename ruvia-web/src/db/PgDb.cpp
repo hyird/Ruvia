@@ -162,7 +162,7 @@ Task<DbStreamResult> PostgreSqlPool::stream(
             std::span<const DbValue>(params.data(), params.size()),
             deadline,
             true);
-        co_return DbStreamResult(DbPoolRef{this}, slotIndex, nullptr, resource, true);
+        co_return DbStreamResult(DbPoolRef{this}, slotIndex, nullptr, resource);
     } catch (...) {
         closeSlot(slots_[slotIndex]);
         releaseSlot(slotIndex);

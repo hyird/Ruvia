@@ -8,6 +8,7 @@
 #include <span>
 #include <string>
 #include <string_view>
+#include <variant>
 #include <vector>
 
 namespace ruvia {
@@ -32,6 +33,19 @@ private:
     friend class detail::MariaDbPool;
     friend class detail::PostgreSqlPool;
 
+    struct Closed final {};
+
+    struct Active final {
+        Active(
+            detail::DbPoolRef client,
+            std::size_t slot,
+            std::pmr::memory_resource* resource) noexcept;
+
+        detail::DbPoolRef client;
+        std::size_t slot;
+        std::pmr::memory_resource* resource;
+    };
+
     DbTransaction(
         detail::DbPoolRef client,
         std::size_t slot,
@@ -39,10 +53,7 @@ private:
     Task<QueryResult> executePrepared(std::pmr::string sql, std::pmr::vector<DbValue> params);
     void reset() noexcept;
 
-    detail::DbPoolRef client_{};
-    std::size_t slot_{0};
-    std::pmr::memory_resource* resource_{nullptr};
-    bool active_{false};
+    std::variant<Closed, Active> state_{};
 };
 
 }  // namespace ruvia

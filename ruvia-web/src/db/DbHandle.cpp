@@ -260,39 +260,44 @@ Task<DbTransaction> DbHandle::beginTransaction() const {
     return beginPoolTransaction(client_, resource_);
 }
 
+DbStreamResult::Active::Active(
+    detail::DbPoolRef client,
+    std::size_t slot,
+    void* result,
+    std::pmr::memory_resource* resource) noexcept
+    : client(client),
+      slot(slot),
+      result(result),
+      resource(detail::pmrResourceOrDefault(resource)) {}
+
 DbStreamResult::DbStreamResult(
     detail::DbPoolRef client,
     std::size_t slot,
     void* result,
-    std::pmr::memory_resource* resource,
-    bool active) noexcept
-    : client_(client),
-      slot_(slot),
-      result_(result),
-      resource_(detail::pmrResourceOrDefault(resource)),
-      active_(active) {}
+    std::pmr::memory_resource* resource) noexcept
+    : state_(std::in_place_type<Active>, client, slot, result, resource) {}
 
 DbStreamResult::DbStreamResult(DbStreamResult&& other) noexcept
-    : client_(std::exchange(other.client_, {})),
-      slot_(std::exchange(other.slot_, 0)),
-      result_(std::exchange(other.result_, nullptr)),
-      resource_(std::exchange(other.resource_, nullptr)),
-      active_(std::exchange(other.active_, false)) {}
+    : state_(std::move(other.state_)) {
+    other.state_.emplace<Closed>();
+}
 
 DbStreamResult::~DbStreamResult() {
     reset();
 }
 
 bool DbStreamResult::active() const noexcept {
-    return active_;
+    return std::holds_alternative<Active>(state_);
 }
 
 Task<std::optional<DbRow>> DbStreamResult::read() {
-    if (!active_ || detail::dbPoolRefEmpty(client_)) {
+    auto* active = std::get_if<Active>(&state_);
+    if (active == nullptr) {
         co_return std::nullopt;
     }
     try {
-        auto row = co_await readPoolStream(client_, slot_, result_, resource_);
+        auto row = co_await readPoolStream(
+            active->client, active->slot, active->result, active->resource);
         if (!row) {
             release();
         }
@@ -304,58 +309,51 @@ Task<std::optional<DbRow>> DbStreamResult::read() {
 }
 
 Task<void> DbStreamResult::close() {
-    if (!active_ || detail::dbPoolRefEmpty(client_)) {
+    auto* active = std::get_if<Active>(&state_);
+    if (active == nullptr) {
         co_return;
     }
-    active_ = false;
-    auto client = client_;
-    const auto slot = slot_;
-    auto* result = result_;
-    auto* resource = resource_;
-    client_ = {};
-    slot_ = 0;
-    result_ = nullptr;
-    co_await closePoolStream(client, slot, result, resource);
+    auto owned = std::move(*active);
+    state_.emplace<Closed>();
+    co_await closePoolStream(owned.client, owned.slot, owned.result, owned.resource);
 }
 
 void DbStreamResult::reset() noexcept {
-    if (active_ && !detail::dbPoolRefEmpty(client_)) {
-        abortPoolStream(client_, slot_, result_);
+    if (auto* active = std::get_if<Active>(&state_); active != nullptr) {
+        abortPoolStream(active->client, active->slot, active->result);
     }
-    client_ = {};
-    slot_ = 0;
-    result_ = nullptr;
-    active_ = false;
+    state_.emplace<Closed>();
 }
 
 void DbStreamResult::release() noexcept {
-    client_ = {};
-    slot_ = 0;
-    result_ = nullptr;
-    active_ = false;
+    state_.emplace<Closed>();
 }
+
+DbTransaction::Active::Active(
+    detail::DbPoolRef client,
+    std::size_t slot,
+    std::pmr::memory_resource* resource) noexcept
+    : client(client),
+      slot(slot),
+      resource(detail::pmrResourceOrDefault(resource)) {}
 
 DbTransaction::DbTransaction(
     detail::DbPoolRef client,
     std::size_t slot,
     std::pmr::memory_resource* resource) noexcept
-    : client_(client),
-      slot_(slot),
-      resource_(detail::pmrResourceOrDefault(resource)),
-      active_(true) {}
+    : state_(std::in_place_type<Active>, client, slot, resource) {}
 
 DbTransaction::DbTransaction(DbTransaction&& other) noexcept
-    : client_(std::exchange(other.client_, {})),
-      slot_(std::exchange(other.slot_, 0)),
-      resource_(std::exchange(other.resource_, nullptr)),
-      active_(std::exchange(other.active_, false)) {}
+    : state_(std::move(other.state_)) {
+    other.state_.emplace<Closed>();
+}
 
 DbTransaction::~DbTransaction() {
     reset();
 }
 
 bool DbTransaction::active() const noexcept {
-    return active_;
+    return std::holds_alternative<Active>(state_);
 }
 
 Task<QueryResult> DbTransaction::query(
@@ -367,63 +365,59 @@ Task<QueryResult> DbTransaction::query(
 Task<QueryResult> DbTransaction::execute(
     std::string_view sql,
     std::span<const DbValue> params) {
-    if (!active_ || detail::dbPoolRefEmpty(client_)) {
+    const auto* active = std::get_if<Active>(&state_);
+    if (active == nullptr) {
         throw std::logic_error("database transaction is not active");
     }
-    auto statement = prepareDbStatement(sql, params, resource_);
+    auto statement = prepareDbStatement(sql, params, active->resource);
     return executePrepared(std::move(statement.sql), std::move(statement.params));
 }
 
 Task<QueryResult> DbTransaction::executePrepared(
     std::pmr::string sql,
     std::pmr::vector<DbValue> params) {
-    if (!active_ || detail::dbPoolRefEmpty(client_)) {
+    auto* active = std::get_if<Active>(&state_);
+    if (active == nullptr) {
         throw std::logic_error("database transaction is not active");
     }
     try {
         co_return co_await executeTransactionPool(
-            client_, slot_, std::move(sql), std::move(params), resource_);
+            active->client,
+            active->slot,
+            std::move(sql),
+            std::move(params),
+            active->resource);
     } catch (...) {
-        client_ = {};
-        slot_ = 0;
-        active_ = false;
+        state_.emplace<Closed>();
         throw;
     }
 }
 
 Task<void> DbTransaction::commit() {
-    if (!active_ || detail::dbPoolRefEmpty(client_)) {
+    auto* active = std::get_if<Active>(&state_);
+    if (active == nullptr) {
         throw std::logic_error("database transaction is not active");
     }
-    active_ = false;
-    auto client = client_;
-    const auto slot = slot_;
-    auto* resource = resource_;
-    client_ = {};
-    slot_ = 0;
-    return commitPoolTransaction(client, slot, resource);
+    auto owned = std::move(*active);
+    state_.emplace<Closed>();
+    return commitPoolTransaction(owned.client, owned.slot, owned.resource);
 }
 
 Task<void> DbTransaction::rollback() {
-    if (!active_ || detail::dbPoolRefEmpty(client_)) {
+    auto* active = std::get_if<Active>(&state_);
+    if (active == nullptr) {
         throw std::logic_error("database transaction is not active");
     }
-    active_ = false;
-    auto client = client_;
-    const auto slot = slot_;
-    auto* resource = resource_;
-    client_ = {};
-    slot_ = 0;
-    return rollbackPoolTransaction(client, slot, resource);
+    auto owned = std::move(*active);
+    state_.emplace<Closed>();
+    return rollbackPoolTransaction(owned.client, owned.slot, owned.resource);
 }
 
 void DbTransaction::reset() noexcept {
-    if (active_ && !detail::dbPoolRefEmpty(client_)) {
-        abortPoolTransaction(client_, slot_);
+    if (auto* active = std::get_if<Active>(&state_); active != nullptr) {
+        abortPoolTransaction(active->client, active->slot);
     }
-    client_ = {};
-    slot_ = 0;
-    active_ = false;
+    state_.emplace<Closed>();
 }
 
 }  // namespace ruvia

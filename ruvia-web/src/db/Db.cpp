@@ -67,7 +67,7 @@ Task<DbStreamResult> detail::MariaDbPool::stream(
                 throw mysqlError(*slot.connection, "mysql_use_result");
             }
             releaseSlot(slotIndex);
-            co_return DbStreamResult(DbPoolRef{this}, slotIndex, nullptr, resource, false);
+            co_return DbStreamResult();
         }
 
         co_return DbStreamResult(DbPoolRef{this}, slotIndex, rawResult, resource);
