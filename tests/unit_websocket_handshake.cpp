@@ -205,6 +205,15 @@ RUVIA_TEST(ws_valid_request_requires_all_conditions) {
         "Sec-WebSocket-Version: 13\r\nSec-WebSocket-Key: YWJj\r\n\r\n";
     RUVIA_CHECK(rejectsRequest(badKey));
 
+    // "...ZR==" decodes to the same 16 bytes as the canonical "...ZQ==",
+    // but sets unused base64 padding bits and must therefore be rejected.
+    constexpr std::string_view nonCanonicalKey =
+        "GET /ws HTTP/1.1\r\nHost: x\r\nConnection: Upgrade\r\n"
+        "Upgrade: websocket\r\n"
+        "Sec-WebSocket-Version: 13\r\n"
+        "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZR==\r\n\r\n";
+    RUVIA_CHECK(rejectsRequest(nonCanonicalKey));
+
     const auto unsupportedVersion = validateRequest(badVersionHandshake());
     RUVIA_CHECK(unsupportedVersion.failure() != nullptr);
     if (const auto* failure = unsupportedVersion.failure()) {

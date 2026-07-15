@@ -336,6 +336,9 @@ void HttpResponse::setContentRange(std::uint64_t offset, std::uint64_t length, s
     if (length == 0) {
         throw std::logic_error("file response byte range length must not be zero");
     }
+    if (offset > size || length > size - offset) {
+        throw std::logic_error("file response byte range is outside the representation");
+    }
     const auto endOffset = offset + length - 1;
     const auto valueSize = std::string_view("bytes ").size() +
         detail::httpUnsignedDecimalSize(offset) +

@@ -122,7 +122,7 @@ void PostgreSqlPool::setSlotDeadline(
         return;
     }
     slot.deadline.arm(
-        std::chrono::steady_clock::now() + *timeout,
+        workerTimerDeadlineAfter(*timeout),
         ConnectionSlot::DeadlineKind::kSocket);
 }
 

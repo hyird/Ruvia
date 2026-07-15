@@ -52,7 +52,14 @@ template <typename Char>
 [[nodiscard]] inline std::pmr::string lowerStaticFileExtension(
     const std::filesystem::path& path,
     std::pmr::memory_resource* resource) {
-    const auto source = staticFileExtension(httpNativePathView(path));
+    // On Windows the native path uses wchar_t. Narrowing those code units one
+    // by one can alias unrelated Unicode extensions to an ASCII allow-listed
+    // type (for example U+0168 has the same low byte as 'h'). Convert the full
+    // path to UTF-8 first so extension policy and MIME lookup compare the
+    // actual filename bytes on every platform.
+    const auto utf8Path = path.generic_u8string();
+    const auto source = staticFileExtension(
+        std::u8string_view(utf8Path.data(), utf8Path.size()));
     if (source.empty()) {
         return std::pmr::string(resource);
     }
@@ -60,10 +67,10 @@ template <typename Char>
     extension.reserve(source.size());
     for (const auto c : source) {
         auto out = c;
-        if (out >= static_cast<HttpNativePathChar>('A') &&
-            out <= static_cast<HttpNativePathChar>('Z')) {
-            out = static_cast<HttpNativePathChar>(
-                out + static_cast<HttpNativePathChar>('a' - 'A'));
+        if (out >= static_cast<char8_t>('A') &&
+            out <= static_cast<char8_t>('Z')) {
+            out = static_cast<char8_t>(
+                out + static_cast<char8_t>('a' - 'A'));
         }
         extension.push_back(static_cast<char>(out));
     }

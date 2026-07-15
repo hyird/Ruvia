@@ -1,10 +1,12 @@
 #include "test_harness.h"
 
+#include <array>
 #include <cstdint>
 #include <concepts>
 #include <filesystem>
 #include <fstream>
 #include <memory_resource>
+#include <limits>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -23,6 +25,7 @@
 #include "ruvia/http/HttpKnownMethod.h"
 #include "ruvia/http/HttpResponse.h"
 #include "ruvia/web/StaticFiles.h"
+#include "ruvia/web/detail/StaticFileMetadata.h"
 #include "ruvia/web/detail/StaticFilesInternal.h"
 #include "ruvia/web/detail/server/HttpFileOpen.h"
 #include "ruvia/core/memory/MemoryPool.h"
@@ -59,6 +62,35 @@ RUVIA_TEST(content_range_formats_satisfied_range) {
     auto one = makeResponse();
     setResponseContentRange(one, 0, 1, 1);
     RUVIA_CHECK_EQ(one.header("Content-Range").value_or(""), std::string_view("bytes 0-0/1"));
+
+    constexpr auto maximum = (std::numeric_limits<std::uint64_t>::max)();
+    auto boundary = makeResponse();
+    setResponseContentRange(boundary, maximum - 1, 1, maximum);
+    RUVIA_CHECK_EQ(
+        boundary.header("Content-Range").value_or(""),
+        std::string_view(
+            "bytes 18446744073709551614-18446744073709551614/"
+            "18446744073709551615"));
+}
+
+RUVIA_TEST(content_range_rejects_out_of_bounds_and_overflow) {
+    constexpr auto maximum = (std::numeric_limits<std::uint64_t>::max)();
+
+    for (const auto values : {
+             std::array<std::uint64_t, 3>{maximum, 2, maximum},
+             std::array<std::uint64_t, 3>{10, 1, 10},
+             std::array<std::uint64_t, 3>{11, 1, 10}}) {
+        auto response = makeResponse();
+        bool rejected = false;
+        try {
+            setResponseContentRange(
+                response, values[0], values[1], values[2]);
+        } catch (const std::logic_error&) {
+            rejected = true;
+        }
+        RUVIA_CHECK(rejected);
+        RUVIA_CHECK(!response.header("Content-Range").has_value());
+    }
 }
 
 RUVIA_TEST(static_file_response_owns_path_after_handler_local_root_is_destroyed) {
@@ -269,6 +301,17 @@ RUVIA_TEST(static_file_type_policy_has_closed_exact_alternatives) {
     RUVIA_CHECK(ruvia::detail::StaticRootAccess::find(onlyRoot, "asset.custom").has_value());
 
     fs::remove_all(dir);
+}
+
+RUVIA_TEST(static_file_extension_preserves_unicode_without_ascii_aliasing) {
+    std::pmr::monotonic_buffer_resource resource;
+    const auto extension = ruvia::detail::lowerStaticFileExtension(
+        std::filesystem::path(u8"asset.\u0168TML"), &resource);
+
+    RUVIA_CHECK_EQ(
+        std::string_view(extension),
+        std::string_view(reinterpret_cast<const char*>(u8".\u0168tml")));
+    RUVIA_CHECK(extension != ".html");
 }
 
 RUVIA_TEST(static_file_range_serving_status_and_content_range) {

@@ -11,6 +11,7 @@
 #include <chrono>
 #include <barrier>
 #include <future>
+#include <limits>
 #include <memory>
 #include <stdexcept>
 #include <thread>
@@ -87,6 +88,65 @@ bool discriminatedWaitStateWorks() {
     }
     const auto recovered = recovering.takeResult();
     return recovered.value() != nullptr && recovered.value()->value() == 7;
+}
+
+bool saturatingTimerDeadlineWorks() {
+    using Clock = std::chrono::steady_clock;
+    using ruvia::detail::workerTimerSaturatingDeadline;
+
+    const auto ordinaryNow = Clock::time_point(Clock::duration(100));
+    if (workerTimerSaturatingDeadline(
+            ordinaryNow, Clock::duration(25)) !=
+        Clock::time_point(Clock::duration(125))) {
+        return false;
+    }
+
+    const auto nearMaximum = Clock::time_point::max() - Clock::duration(5);
+    if (workerTimerSaturatingDeadline(
+            nearMaximum, Clock::duration(10)) !=
+        Clock::time_point::max()) {
+        return false;
+    }
+
+    // The old direct `now + duration` expression overflowed for this public
+    // input and could turn an effectively infinite wait into an expired timer.
+    return workerTimerSaturatingDeadline(
+               ordinaryNow, Clock::duration::max()) ==
+        Clock::time_point::max();
+}
+
+bool saturatingTimerDurationCastWorks() {
+    using Target = std::chrono::steady_clock::duration;
+    using ruvia::detail::workerTimerSaturatingDurationCast;
+
+    const auto ordinary = workerTimerSaturatingDurationCast(
+        std::chrono::microseconds(1500));
+    if (ordinary != std::chrono::duration_cast<Target>(
+                        std::chrono::microseconds(1500))) {
+        return false;
+    }
+
+    using UnsignedSeconds = std::chrono::duration<std::uint64_t>;
+    if (workerTimerSaturatingDurationCast(UnsignedSeconds::max()) !=
+        Target::max()) {
+        return false;
+    }
+    if (ruvia::detail::workerTimerDeadlineAfter(
+            std::chrono::milliseconds::max()) !=
+        std::chrono::steady_clock::time_point::max()) {
+        return false;
+    }
+
+    using FloatingSeconds = std::chrono::duration<long double>;
+    return workerTimerSaturatingDurationCast(FloatingSeconds(
+               std::numeric_limits<long double>::infinity())) ==
+            Target::max() &&
+        workerTimerSaturatingDurationCast(FloatingSeconds(
+            -std::numeric_limits<long double>::infinity())) ==
+            Target::min() &&
+        workerTimerSaturatingDurationCast(FloatingSeconds(
+            std::numeric_limits<long double>::quiet_NaN())) ==
+            Target::zero();
 }
 
 bool detachedTimerCancellationRaceWorks() {
@@ -220,6 +280,8 @@ ruvia::Task<void> exerciseSlotReuse(
 
 int main() {
     if (!discriminatedWaitStateWorks() ||
+        !saturatingTimerDeadlineWorks() ||
+        !saturatingTimerDurationCastWorks() ||
         !detachedTimerCancellationRaceWorks()) {
         return 1;
     }

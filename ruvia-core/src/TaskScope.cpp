@@ -36,7 +36,8 @@ void TaskScope::spawn(Task<void> task) {
     if (!worker_.isCurrent()) {
         throw std::logic_error("task scope spawn must run on its bound worker");
     }
-    if (std::holds_alternative<TaskScopeJoining>(lifecycle_) ||
+    if (std::holds_alternative<TaskScopeJoinReserved>(lifecycle_) ||
+        std::holds_alternative<TaskScopeJoining>(lifecycle_) ||
         std::holds_alternative<TaskScopeJoined>(lifecycle_)) {
         throw std::logic_error("cannot spawn a task after task scope join started");
     }

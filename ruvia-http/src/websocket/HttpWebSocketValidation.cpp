@@ -73,6 +73,13 @@ namespace {
         if (padding > 2 || (padding != 0 && i + 4 != key.size())) {
             return std::nullopt;
         }
+        // RFC 4648 requires unused bits in the final base64 quantum to be
+        // zero.  Without this check, multiple non-canonical strings decode
+        // to the same nonce and are incorrectly accepted as WebSocket keys.
+        if ((padding == 2 && (values[1] & 0x0FU) != 0) ||
+            (padding == 1 && (values[2] & 0x03U) != 0)) {
+            return std::nullopt;
+        }
         const auto triple =
             (static_cast<std::uint32_t>(values[0]) << 18) |
             (static_cast<std::uint32_t>(values[1]) << 12) |

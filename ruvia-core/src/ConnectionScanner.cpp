@@ -336,7 +336,7 @@ void ConnectionScanner::schedule() {
     }
 
     WorkerHandleAccess::scheduleTimer(
-        worker_, timer_, std::chrono::steady_clock::now() + options_.scanInterval,
+        worker_, timer_, workerTimerDeadlineAfter(options_.scanInterval),
         [this](WorkerTimerOutcome outcome) {
         if (outcome == WorkerTimerOutcome::kCancelled || !running_) {
             return;

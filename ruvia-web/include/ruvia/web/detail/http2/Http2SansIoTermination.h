@@ -144,7 +144,7 @@ public:
         try {
             WorkerHandleAccess::scheduleTimer(
                 worker_, timer_,
-                std::chrono::steady_clock::now() + duration_,
+                workerTimerDeadlineAfter(duration_),
                 [this](WorkerTimerOutcome outcome) noexcept {
                     timerOutcome_ = outcome;
                     termination_.detach(observer_);

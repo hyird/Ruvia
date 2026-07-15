@@ -108,6 +108,26 @@ RUVIA_TEST(imf_fixdate_leap_second_boundary) {
     RUVIA_CHECK(!httpParseImfFixdate("Thu, 01 Jan 1970 23:59:61 GMT").has_value());  // 61 rejected
 }
 
+RUVIA_TEST(http_date_rejects_nonexistent_calendar_days) {
+    using ruvia::detail::httpParseAsctimeDate;
+    using ruvia::detail::httpParseImfFixdate;
+    using ruvia::detail::httpParseRfc850Date;
+
+    // The civil-date conversion must not normalize impossible dates into the
+    // following month. All three HTTP-date syntaxes share this validation.
+    RUVIA_CHECK(!httpParseImfFixdate(
+        "Thu, 31 Apr 1970 00:00:00 GMT").has_value());
+    RUVIA_CHECK(!httpParseRfc850Date(
+        "Thursday, 31-Apr-70 00:00:00 GMT").has_value());
+    RUVIA_CHECK(!httpParseAsctimeDate(
+        "Thu Apr 31 00:00:00 1970").has_value());
+
+    RUVIA_CHECK(!httpParseImfFixdate(
+        "Mon, 29 Feb 1900 00:00:00 GMT").has_value());
+    RUVIA_CHECK(httpParseImfFixdate(
+        "Tue, 29 Feb 2000 00:00:00 GMT").has_value());
+}
+
 // httpFormatDate must emit RFC 7231 IMF-fixdate with English day/month names
 // independent of the process locale (regression: it used strftime %a/%b).
 RUVIA_TEST(http_format_date_known_vectors) {

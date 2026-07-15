@@ -1,5 +1,7 @@
 #pragma once
 
+#include <chrono>
+#include <cmath>
 #include <cstddef>
 #include <cstdint>
 
@@ -11,6 +13,57 @@ enum class WorkerTimerOutcome : std::uint8_t {
     kExpired,
     kCancelled,
 };
+
+template <typename Rep, typename Period>
+[[nodiscard]] inline std::chrono::steady_clock::duration
+workerTimerSaturatingDurationCast(
+    std::chrono::duration<Rep, Period> value) {
+    using Target = std::chrono::steady_clock::duration;
+    using Wide = std::chrono::duration<long double, typename Target::period>;
+    const auto count = std::chrono::duration_cast<Wide>(value).count();
+    if (std::isnan(count)) {
+        return Target::zero();
+    }
+    const auto maximum = static_cast<long double>(Target::max().count());
+    if (count >= maximum) {
+        return Target::max();
+    }
+    const auto minimum = static_cast<long double>(Target::min().count());
+    if (count <= minimum) {
+        return Target::min();
+    }
+    return Target(static_cast<typename Target::rep>(count));
+}
+
+[[nodiscard]] inline std::chrono::steady_clock::time_point
+workerTimerSaturatingDeadline(
+    std::chrono::steady_clock::time_point now,
+    std::chrono::steady_clock::duration delay) noexcept {
+    if (delay <= std::chrono::steady_clock::duration::zero()) {
+        return now;
+    }
+    constexpr auto maximum =
+        std::chrono::steady_clock::time_point::max();
+    if (now > maximum - delay) {
+        return maximum;
+    }
+    return now + delay;
+}
+
+[[nodiscard]] inline std::chrono::steady_clock::time_point
+workerTimerDeadlineAfter(
+    std::chrono::steady_clock::duration delay) noexcept {
+    return workerTimerSaturatingDeadline(
+        std::chrono::steady_clock::now(), delay);
+}
+
+template <typename Rep, typename Period>
+[[nodiscard]] inline std::chrono::steady_clock::time_point
+workerTimerDeadlineAfter(std::chrono::duration<Rep, Period> delay) {
+    return workerTimerSaturatingDeadline(
+        std::chrono::steady_clock::now(),
+        workerTimerSaturatingDurationCast(delay));
+}
 
 class WorkerTimerRegistration final {
 public:

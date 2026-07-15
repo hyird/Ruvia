@@ -58,7 +58,7 @@ void RedisPool::setDeadline(
         return;
     }
     connection.deadline.arm(
-        std::chrono::steady_clock::now() + *timeout,
+        workerTimerDeadlineAfter(*timeout),
         kind);
 }
 

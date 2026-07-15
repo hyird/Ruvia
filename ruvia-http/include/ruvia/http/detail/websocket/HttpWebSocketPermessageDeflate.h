@@ -4,6 +4,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <limits>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -147,7 +148,13 @@ private:
             inflate_.next_out = reinterpret_cast<Bytef*>(buffer);
             inflate_.avail_out = sizeof(buffer);
             const int status = inflate(&inflate_, Z_NO_FLUSH);
-            if (status != Z_OK && status != Z_BUF_ERROR && status != Z_STREAM_END) {
+            // RFC 7692 messages are Z_SYNC_FLUSH blocks with the four-byte
+            // marker removed. After restoring that marker, the raw stream does
+            // not terminate with BFINAL. Accepting Z_STREAM_END lets a peer
+            // submit an independently terminated DEFLATE stream and makes zlib
+            // silently ignore any bytes that follow it.
+            if (status == Z_STREAM_END ||
+                (status != Z_OK && status != Z_BUF_ERROR)) {
                 return WebSocketInflateResult::kError;
             }
             const auto produced = sizeof(buffer) - inflate_.avail_out;
@@ -155,10 +162,9 @@ private:
                 return WebSocketInflateResult::kTooLarge;
             }
             out.append(buffer, produced);
-            if (status == Z_STREAM_END ||
-                (inflate_.avail_out != 0 &&
-                 inflate_.avail_in == 0 &&
-                 supplied == size)) {
+            if (inflate_.avail_out != 0 &&
+                inflate_.avail_in == 0 &&
+                supplied == size) {
                 break;
             }
         }
@@ -196,29 +202,133 @@ enum class WebSocketDeflateNegotiation : std::uint8_t {
 // Scan one Sec-WebSocket-Extensions field-line value (a comma list of offers) and
 // return the first honorable permessage-deflate offer, or a disabled negotiation
 // if the line carries none we can accept.
-[[nodiscard]] inline WebSocketDeflateNegotiation webSocketScanDeflateOffers(std::string_view offers) noexcept {
-    while (!offers.empty()) {
-        const auto comma = offers.find(',');
-        const auto offer = httpTrimOws(comma == std::string_view::npos ? offers : offers.substr(0, comma));
-        const auto semicolon = offer.find(';');
-        const auto name = httpTrimOws(semicolon == std::string_view::npos ? offer : offer.substr(0, semicolon));
-        if (httpAsciiEqualsIgnoreCase(name, "permessage-deflate")) {
-            const auto params = semicolon == std::string_view::npos ? std::string_view{} : offer.substr(semicolon + 1);
-            const auto serverWindow = httpFindSemicolonParameterQuotedIgnoreCase(params, "server_max_window_bits");
-            if (!serverWindow.has_value()) {
-                return WebSocketDeflateNegotiation::kAccepted;
-            }
-            if (httpTrimQuotes(*serverWindow) == "15") {
-                return WebSocketDeflateNegotiation::
-                    kAcceptedWithServerMaxWindowBits;
-            }
+[[nodiscard]] inline std::optional<int> webSocketDeflateWindowBits(
+    std::string_view value) noexcept {
+    value = httpTrimOws(value);
+    bool quoted = false;
+    if (!value.empty() && value.front() == '"') {
+        if (value.size() < 2 || value.back() != '"') {
+            return std::nullopt;
         }
-        if (comma == std::string_view::npos) {
-            break;
-        }
-        offers.remove_prefix(comma + 1);
+        quoted = true;
+        value.remove_prefix(1);
+        value.remove_suffix(1);
     }
-    return WebSocketDeflateNegotiation::kDisabled;
+
+    int parsed = 0;
+    std::size_t digits = 0;
+    for (std::size_t i = 0; i < value.size(); ++i) {
+        auto ch = value[i];
+        if (quoted && ch == '\\') {
+            if (++i == value.size()) {
+                return std::nullopt;
+            }
+            ch = value[i];
+        } else if (ch == '"') {
+            return std::nullopt;
+        }
+        if (ch < '0' || ch > '9' || ++digits > 2) {
+            return std::nullopt;
+        }
+        parsed = parsed * 10 + (ch - '0');
+    }
+    return digits != 0 && parsed >= 8 && parsed <= 15
+        ? std::optional<int>(parsed)
+        : std::nullopt;
+}
+
+[[nodiscard]] inline std::optional<WebSocketDeflateNegotiation>
+webSocketParseDeflateOffer(std::string_view offer) noexcept {
+    const auto firstSemicolon = httpFindUnquotedDelimiter(offer, 0, ';');
+    const auto name = httpTrimOws(offer.substr(0, firstSemicolon));
+    if (!httpAsciiEqualsIgnoreCase(name, "permessage-deflate")) {
+        return std::nullopt;
+    }
+
+    bool serverNoContextTakeover = false;
+    bool clientNoContextTakeover = false;
+    bool serverWindowSeen = false;
+    bool clientWindowSeen = false;
+    int serverWindow = 15;
+    std::size_t start = firstSemicolon;
+    while (start < offer.size()) {
+        ++start;
+        const auto end = httpFindUnquotedDelimiter(offer, start, ';');
+        const auto parameter = httpTrimOws(offer.substr(start, end - start));
+        if (parameter.empty()) {
+            return std::nullopt;
+        }
+        const auto equals = parameter.find('=');
+        const bool hasValue = equals != std::string_view::npos;
+        const auto parameterName = httpTrimOws(
+            hasValue ? parameter.substr(0, equals) : parameter);
+        const auto parameterValue = hasValue
+            ? httpTrimOws(parameter.substr(equals + 1))
+            : std::string_view{};
+
+        if (httpAsciiEqualsIgnoreCase(
+                parameterName, "server_no_context_takeover")) {
+            if (serverNoContextTakeover || hasValue) {
+                return std::nullopt;
+            }
+            serverNoContextTakeover = true;
+        } else if (httpAsciiEqualsIgnoreCase(
+                       parameterName, "client_no_context_takeover")) {
+            if (clientNoContextTakeover || hasValue) {
+                return std::nullopt;
+            }
+            clientNoContextTakeover = true;
+        } else if (httpAsciiEqualsIgnoreCase(
+                       parameterName, "server_max_window_bits")) {
+            if (serverWindowSeen || !hasValue) {
+                return std::nullopt;
+            }
+            const auto parsed = webSocketDeflateWindowBits(parameterValue);
+            if (!parsed.has_value()) {
+                return std::nullopt;
+            }
+            serverWindowSeen = true;
+            serverWindow = *parsed;
+        } else if (httpAsciiEqualsIgnoreCase(
+                       parameterName, "client_max_window_bits")) {
+            if (clientWindowSeen) {
+                return std::nullopt;
+            }
+            if (hasValue &&
+                !webSocketDeflateWindowBits(parameterValue).has_value()) {
+                return std::nullopt;
+            }
+            clientWindowSeen = true;
+        } else {
+            // RFC 7692 section 7.1: an offer containing an undefined or
+            // malformed permessage-deflate parameter cannot be negotiated.
+            return std::nullopt;
+        }
+
+        start = end;
+    }
+
+    if (serverWindowSeen && serverWindow != 15) {
+        return std::nullopt;
+    }
+    return serverWindowSeen
+        ? WebSocketDeflateNegotiation::kAcceptedWithServerMaxWindowBits
+        : WebSocketDeflateNegotiation::kAccepted;
+}
+
+[[nodiscard]] inline WebSocketDeflateNegotiation webSocketScanDeflateOffers(
+    std::string_view offers) noexcept {
+    std::optional<WebSocketDeflateNegotiation> accepted;
+    httpVisitCommaSeparatedQuotedItems(
+        offers,
+        [&accepted](std::string_view offer) noexcept {
+            if (offer.empty()) {
+                return true;
+            }
+            accepted = webSocketParseDeflateOffer(offer);
+            return !accepted.has_value();
+        });
+    return accepted.value_or(WebSocketDeflateNegotiation::kDisabled);
 }
 
 // Response Sec-WebSocket-Extensions VALUES for an accepted permessage-deflate offer

@@ -124,7 +124,7 @@ struct ChannelReceiveAwaiter final {
             try {
                 WorkerHandleAccess::scheduleTimer(
                     state->worker, timer,
-                    std::chrono::steady_clock::now() + *timeout,
+                    workerTimerDeadlineAfter(*timeout),
                     [this](WorkerTimerOutcome outcome) {
                         if (outcome == WorkerTimerOutcome::kExpired) {
                             std::lock_guard stateLock(state->mutex);
@@ -300,8 +300,7 @@ public:
     receiveFor(std::chrono::duration<Rep, Period> duration) {
         return detail::receiveChannelState<T>(
             state_,
-            std::chrono::duration_cast<std::chrono::steady_clock::duration>(
-                duration));
+            detail::workerTimerSaturatingDurationCast(duration));
     }
 
     void close() const { ChannelSender<T>(state_).close(); }

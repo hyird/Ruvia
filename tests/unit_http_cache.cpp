@@ -36,6 +36,46 @@ RUVIA_TEST(parse_cache_control_rejects_bad_delta_seconds) {
     RUVIA_CHECK(!cc.sMaxAge.has_value());
 }
 
+RUVIA_TEST(parse_cache_control_does_not_split_quoted_extension_values) {
+    const auto cc = ruvia::parseCacheControl(
+        "extension=\"a, public, max-age=999, b\", private");
+    RUVIA_CHECK(!cc.isPublic);
+    RUVIA_CHECK(!cc.maxAge.has_value());
+    RUVIA_CHECK(cc.isPrivate);
+
+    // A quoted-pair keeps the escaped quote inside the extension value; its
+    // commas likewise cannot introduce directives.
+    const auto escaped = ruvia::parseCacheControl(
+        "extension=\"a\\\", no-store, b\", immutable");
+    RUVIA_CHECK(!escaped.noStore);
+    RUVIA_CHECK(escaped.immutable);
+
+    // An unterminated quoted value is malformed through the end of the field,
+    // so a comma within it must not accidentally enable caching directives.
+    const auto unterminated = ruvia::parseCacheControl(
+        "extension=\"a, public, max-age=3600");
+    RUVIA_CHECK(!unterminated.isPublic);
+    RUVIA_CHECK(!unterminated.maxAge.has_value());
+}
+
+RUVIA_TEST(parse_cache_control_ignores_arguments_on_bare_directives) {
+    const auto cc = ruvia::parseCacheControl(
+        "public=ignored, no-store=ignored, must-revalidate=x, "
+        "proxy-revalidate=\"x\", immutable=");
+    RUVIA_CHECK(!cc.isPublic);
+    RUVIA_CHECK(!cc.noStore);
+    RUVIA_CHECK(!cc.mustRevalidate);
+    RUVIA_CHECK(!cc.proxyRevalidate);
+    RUVIA_CHECK(!cc.immutable);
+
+    // no-cache and private are different: their response forms can carry a
+    // field-name list, so an argument does not invalidate the directive.
+    const auto qualified = ruvia::parseCacheControl(
+        "no-cache=\"Set-Cookie\", private=\"Authorization\"");
+    RUVIA_CHECK(qualified.noCache);
+    RUVIA_CHECK(qualified.isPrivate);
+}
+
 RUVIA_TEST(parse_http_date_imf_fixdate) {
     // RFC 7231 example: Sun, 06 Nov 1994 08:49:37 GMT.
     const auto t = ruvia::parseHttpDate("Sun, 06 Nov 1994 08:49:37 GMT");

@@ -121,7 +121,7 @@ void detail::MariaDbPool::setSlotDeadline(
         return;
     }
     slot.deadline.arm(
-        std::chrono::steady_clock::now() + timeout,
+        detail::workerTimerDeadlineAfter(timeout),
         kind);
 }
 

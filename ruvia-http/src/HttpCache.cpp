@@ -26,37 +26,64 @@ namespace {
     return result;
 }
 
+[[nodiscard]] std::size_t cacheDirectiveEnd(
+    std::string_view value,
+    std::size_t begin) noexcept {
+    bool quoted = false;
+    bool escaped = false;
+    for (std::size_t cursor = begin; cursor < value.size(); ++cursor) {
+        const auto ch = value[cursor];
+        if (quoted) {
+            if (escaped) {
+                escaped = false;
+            } else if (ch == '\\') {
+                escaped = true;
+            } else if (ch == '"') {
+                quoted = false;
+            }
+            continue;
+        }
+        if (ch == '"') {
+            quoted = true;
+        } else if (ch == ',') {
+            return cursor;
+        }
+    }
+    return value.size();
+}
+
 }  // namespace
 
 CacheControl parseCacheControl(std::string_view value) noexcept {
     CacheControl result;
     std::size_t pos = 0;
     while (pos < value.size()) {
-        const auto comma = value.find(',', pos);
-        auto token = value.substr(pos, comma == std::string_view::npos ? std::string_view::npos : comma - pos);
-        pos = comma == std::string_view::npos ? value.size() : comma + 1;
+        const auto comma = cacheDirectiveEnd(value, pos);
+        auto token = value.substr(pos, comma - pos);
+        pos = comma == value.size() ? value.size() : comma + 1;
 
         token = detail::httpTrimOws(token);
         if (token.empty()) {
             continue;
         }
         const auto eq = token.find('=');
+        const bool hasArgument = eq != std::string_view::npos;
         const auto name = detail::httpTrimOws(eq == std::string_view::npos ? token : token.substr(0, eq));
         const auto arg = eq == std::string_view::npos ? std::string_view{} : token.substr(eq + 1);
 
-        if (detail::httpAsciiEqualsIgnoreCase(name, "no-store")) {
+        if (!hasArgument && detail::httpAsciiEqualsIgnoreCase(name, "no-store")) {
             result.noStore = true;
         } else if (detail::httpAsciiEqualsIgnoreCase(name, "no-cache")) {
             result.noCache = true;
-        } else if (detail::httpAsciiEqualsIgnoreCase(name, "must-revalidate")) {
+        } else if (!hasArgument && detail::httpAsciiEqualsIgnoreCase(name, "must-revalidate")) {
             result.mustRevalidate = true;
-        } else if (detail::httpAsciiEqualsIgnoreCase(name, "proxy-revalidate")) {
+        } else if (!hasArgument && detail::httpAsciiEqualsIgnoreCase(name, "proxy-revalidate")) {
             result.proxyRevalidate = true;
         } else if (detail::httpAsciiEqualsIgnoreCase(name, "private")) {
             result.isPrivate = true;
-        } else if (detail::httpAsciiEqualsIgnoreCase(name, "public")) {
+        } else if (!hasArgument && detail::httpAsciiEqualsIgnoreCase(name, "public")) {
             result.isPublic = true;
-        } else if (detail::httpAsciiEqualsIgnoreCase(name, "immutable")) {
+        } else if (!hasArgument && detail::httpAsciiEqualsIgnoreCase(name, "immutable")) {
             result.immutable = true;
         } else if (detail::httpAsciiEqualsIgnoreCase(name, "max-age")) {
             result.maxAge = parseDeltaSeconds(arg);

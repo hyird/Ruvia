@@ -450,7 +450,7 @@ void HttpServer::stopOnContext(bool honorGracePeriod) noexcept {
         try {
             WorkerHandleAccess::scheduleTimer(
                 workerHandle_, drainTimer_,
-                std::chrono::steady_clock::now() + options_.shutdownGracePeriod,
+                workerTimerDeadlineAfter(options_.shutdownGracePeriod),
                 [this](WorkerTimerOutcome outcome) {
                     if (workerState_ == HttpServerWorkerState::kDraining &&
                         outcome == WorkerTimerOutcome::kExpired) {

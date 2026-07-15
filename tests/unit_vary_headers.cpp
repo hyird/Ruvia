@@ -70,3 +70,20 @@ RUVIA_TEST(vary_batch_dedups_case_insensitively_within_batch) {
     addVaryTokens(response, more, 2);
     RUVIA_CHECK_EQ(response.header("Vary"), std::string_view("Origin, Accept-Encoding"));
 }
+
+RUVIA_TEST(vary_existing_wildcard_is_not_combined_with_field_names) {
+    auto response = makeResponse();
+    response.header("Vary", "*");
+
+    addVaryToken(response, "Origin");
+    RUVIA_CHECK_EQ(response.header("Vary"), std::string_view("*"));
+}
+
+RUVIA_TEST(vary_wildcard_in_batch_dominates_field_names) {
+    auto response = makeResponse();
+    const std::string_view batch[] = {
+        "Origin", " * ", "Accept-Encoding"};
+
+    addVaryTokens(response, batch, 3);
+    RUVIA_CHECK_EQ(response.header("Vary"), std::string_view("*"));
+}

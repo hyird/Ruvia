@@ -2,6 +2,7 @@
 
 #include "ruvia/core/Task.h"
 #include "ruvia/core/detail/PoolWaiterQueue.h"
+#include "ruvia/core/detail/WorkerTimer.h"
 #include "ruvia/core/memory/PmrResource.h"
 
 #include <chrono>
@@ -96,7 +97,7 @@ private:
         }
 
         const auto deadline = timeout.has_value()
-            ? std::chrono::steady_clock::now() + *timeout
+            ? workerTimerDeadlineAfter(*timeout)
             : std::chrono::steady_clock::time_point::max();
         PoolWaiter waiter(deadline);
         scheduler.waiters_.enqueue(waiter);

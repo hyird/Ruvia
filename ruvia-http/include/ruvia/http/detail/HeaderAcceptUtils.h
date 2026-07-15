@@ -210,6 +210,154 @@ struct HttpMediaTypeParts final {
     std::string_view subtype;
 };
 
+// Compare media-type parameter values after removing quoted-string syntax and
+// decoding quoted-pairs.  A token and its quoted equivalent therefore compare
+// equal (for example, utf-8 and "utf-8") without allocating temporary strings.
+// Parameter values are otherwise case-sensitive; individual media-type
+// registrations define any value-specific case folding.
+[[nodiscard]] inline bool httpMediaParameterValueEquals(
+    std::string_view left,
+    std::string_view right) noexcept {
+    struct Cursor final {
+        std::string_view value;
+        std::size_t position{0};
+        std::size_t end{0};
+        bool quoted{false};
+        bool valid{true};
+
+        explicit Cursor(std::string_view input) noexcept : value(httpTrimOws(input)) {
+            if (value.empty()) {
+                valid = false;
+                return;
+            }
+            if (value.front() == '"') {
+                if (value.size() < 2 || value.back() != '"') {
+                    valid = false;
+                    return;
+                }
+                quoted = true;
+                position = 1;
+                end = value.size() - 1;
+                return;
+            }
+            end = value.size();
+            for (const auto ch : value) {
+                if (!isHttpTokenChar(static_cast<unsigned char>(ch))) {
+                    valid = false;
+                    return;
+                }
+            }
+        }
+
+        [[nodiscard]] bool next(unsigned char& out) noexcept {
+            if (!valid || position >= end) {
+                return false;
+            }
+            auto ch = static_cast<unsigned char>(value[position++]);
+            if (quoted) {
+                if (ch == '\\') {
+                    if (position >= end) {
+                        valid = false;
+                        return false;
+                    }
+                    ch = static_cast<unsigned char>(value[position++]);
+                } else if (ch == '"' || !isHttpFieldValueChar(ch)) {
+                    valid = false;
+                    return false;
+                }
+                if (!isHttpFieldValueChar(ch)) {
+                    valid = false;
+                    return false;
+                }
+            }
+            out = ch;
+            return true;
+        }
+    };
+
+    Cursor lhs(left);
+    Cursor rhs(right);
+    if (!lhs.valid || !rhs.valid) {
+        return false;
+    }
+    while (true) {
+        unsigned char lhsChar = 0;
+        unsigned char rhsChar = 0;
+        const bool hasLeft = lhs.next(lhsChar);
+        const bool hasRight = rhs.next(rhsChar);
+        if (!lhs.valid || !rhs.valid) {
+            return false;
+        }
+        if (hasLeft != hasRight) {
+            return false;
+        }
+        if (!hasLeft) {
+            return true;
+        }
+        if (lhsChar != rhsChar) {
+            return false;
+        }
+    }
+}
+
+template <typename Visitor>
+[[nodiscard]] inline bool httpVisitMediaTypeParameters(
+    std::string_view value,
+    bool stopAtQuality,
+    Visitor&& visitor) noexcept {
+    auto start = httpFindUnquotedDelimiter(value, 0, ';');
+    if (start >= value.size()) {
+        return true;
+    }
+    ++start;
+    while (start <= value.size()) {
+        const auto end = httpFindUnquotedDelimiter(value, start, ';');
+        const auto part = httpTrimOws(value.substr(start, end - start));
+        const auto equals = part.find('=');
+        if (part.empty() || equals == std::string_view::npos) {
+            return false;
+        }
+        const auto name = httpTrimOws(part.substr(0, equals));
+        const auto parameterValue = httpTrimOws(part.substr(equals + 1));
+        if (!httpMediaToken(name)) {
+            return false;
+        }
+        if (stopAtQuality && httpAsciiEqualsIgnoreCase(name, "q")) {
+            return true;
+        }
+        // Comparing a value with itself performs syntax validation as well.
+        if (!httpMediaParameterValueEquals(parameterValue, parameterValue) ||
+            !visitor(name, parameterValue)) {
+            return false;
+        }
+        if (end >= value.size()) {
+            return true;
+        }
+        start = end + 1;
+    }
+    return true;
+}
+
+[[nodiscard]] inline bool httpOfferedMediaTypeHasParameter(
+    std::string_view offered,
+    std::string_view expectedName,
+    std::string_view expectedValue) noexcept {
+    bool found = false;
+    const bool valid = httpVisitMediaTypeParameters(
+        offered,
+        false,
+        [expectedName, expectedValue, &found](
+            std::string_view name,
+            std::string_view value) noexcept {
+            if (httpAsciiEqualsIgnoreCase(name, expectedName) &&
+                httpMediaParameterValueEquals(value, expectedValue)) {
+                found = true;
+            }
+            return true;
+        });
+    return valid && found;
+}
+
 [[nodiscard]] inline bool httpParseMediaTypeParts(
     std::string_view value,
     bool allowWildcard,
@@ -242,14 +390,24 @@ struct HttpMediaTypeParts final {
         return false;
     }
 
-    if (rangeParts.type == "*" && rangeParts.subtype == "*") {
-        return true;
-    }
-    if (!httpAsciiEqualsIgnoreCase(rangeParts.type, offeredParts.type)) {
+    if (rangeParts.type != "*" &&
+        !httpAsciiEqualsIgnoreCase(rangeParts.type, offeredParts.type)) {
         return false;
     }
-    return rangeParts.subtype == "*" ||
-        httpAsciiEqualsIgnoreCase(rangeParts.subtype, offeredParts.subtype);
+    if (rangeParts.subtype != "*" &&
+        !httpAsciiEqualsIgnoreCase(rangeParts.subtype, offeredParts.subtype)) {
+        return false;
+    }
+
+    // RFC 9110 section 12.5.1: media-type parameters before q are part of the
+    // media range and must match the selected representation. Parameters after
+    // q are accept extensions and do not participate in matching.
+    return httpVisitMediaTypeParameters(
+        range,
+        true,
+        [offered](std::string_view name, std::string_view value) noexcept {
+            return httpOfferedMediaTypeHasParameter(offered, name, value);
+        });
 }
 
 [[nodiscard]] inline int httpMediaRangeSpecificity(std::string_view range) noexcept {
@@ -266,6 +424,22 @@ struct HttpMediaTypeParts final {
     return 2;
 }
 
+[[nodiscard]] inline int httpMediaRangeParameterCount(std::string_view range) noexcept {
+    int count = 0;
+    if (!httpVisitMediaTypeParameters(
+            range,
+            true,
+            [&count](std::string_view, std::string_view) noexcept {
+                if (count < 0xFFFF) {
+                    ++count;
+                }
+                return true;
+            })) {
+        return -1;
+    }
+    return count;
+}
+
 // Fold the media-ranges of one Accept field value into a running best-match
 // accumulator (most specific range wins; ties break on higher q). Kept separate
 // from httpAcceptsMediaType so a caller with an Accept field split across several
@@ -280,7 +454,14 @@ inline void httpAccumulateMediaTypeAcceptance(
     int& bestQuality) noexcept {
     httpVisitCommaSeparatedQuoted(accept, [offered, &bestSpecificity, &bestQuality](std::string_view item) noexcept {
         if (httpMediaRangeMatches(item, offered)) {
-            const auto specificity = httpMediaRangeSpecificity(item);
+            const auto typeSpecificity = httpMediaRangeSpecificity(item);
+            const auto parameterCount = httpMediaRangeParameterCount(item);
+            if (typeSpecificity < 0 || parameterCount < 0) {
+                return true;
+            }
+            // Type/subtype precedence dominates any number of parameters; within
+            // the same range shape, more matching parameters are more specific.
+            const auto specificity = (typeSpecificity << 16) | parameterCount;
             const auto quality = httpQualityParameter(item);
             if (specificity > bestSpecificity || (specificity == bestSpecificity && quality > bestQuality)) {
                 bestSpecificity = specificity;

@@ -79,6 +79,22 @@ ruvia::Task<void> exercise(ruvia::WorkerHandle worker, bool& success) {
     }
 
     {
+        ruvia::TaskScope reservedJoinScope(worker);
+        reservedJoinScope.spawn(noOp());
+        auto reservedJoin = reservedJoinScope.join();
+        bool spawnAfterReservationRejected = false;
+        try {
+            reservedJoinScope.spawn(noOp());
+        } catch (const std::logic_error&) {
+            spawnAfterReservationRejected = true;
+        }
+        if (!spawnAfterReservationRejected) {
+            co_return;
+        }
+        co_await std::move(reservedJoin);
+    }
+
+    {
         ruvia::TaskScope completedFailureScope(worker);
         completedFailureScope.spawn(fail());
         co_await ruvia::sleepFor(worker, std::chrono::milliseconds(1));

@@ -81,14 +81,32 @@ ruvia::Task<void> exerciseAcquireTimeout(
     success = result.timedOut() != nullptr;
 }
 
+ruvia::Task<void> exerciseSaturatedAcquireTimeout(
+    ruvia::detail::PoolLeaseScheduler& scheduler,
+    asio::io_context& ioContext,
+    bool& success) {
+    asio::post(ioContext, [&scheduler] {
+        scheduler.scanDeadlines(std::chrono::steady_clock::now());
+        (void)scheduler.close();
+    });
+    const auto result = co_await scheduler.acquire(
+        std::chrono::milliseconds::max());
+    // A maximum positive timeout is effectively unbounded. Direct deadline
+    // addition used to wrap it into the past, making the deadline scan win
+    // with a false timeout instead of the subsequent close notification.
+    success = result.closed() != nullptr;
+}
+
 }  // namespace
 
 int main() {
     asio::io_context ioContext;
     ruvia::detail::PoolLeaseScheduler leaseScheduler(1);
     ruvia::detail::PoolLeaseScheduler timeoutScheduler(0);
+    ruvia::detail::PoolLeaseScheduler saturatedTimeoutScheduler(0);
     bool leaseSuccess = false;
     bool timeoutSuccess = false;
+    bool saturatedTimeoutSuccess = false;
     asio::co_spawn(
         ioContext,
         ruvia::detail::taskAsAwaitable(
@@ -101,6 +119,14 @@ int main() {
             exerciseAcquireTimeout(
                 timeoutScheduler, ioContext, timeoutSuccess)),
         asio::detached);
+    asio::co_spawn(
+        ioContext,
+        ruvia::detail::taskAsAwaitable(
+            exerciseSaturatedAcquireTimeout(
+                saturatedTimeoutScheduler,
+                ioContext,
+                saturatedTimeoutSuccess)),
+        asio::detached);
     ioContext.run();
-    return leaseSuccess && timeoutSuccess ? 0 : 1;
+    return leaseSuccess && timeoutSuccess && saturatedTimeoutSuccess ? 0 : 1;
 }

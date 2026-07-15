@@ -300,7 +300,8 @@ RUVIA_TEST(accept_quality_quoted_semicolon_param) {
     // separator when locating q (RFC 7231 §5.3.2). Before unifying onto the quote-aware
     // scanner this mis-read "q=0" from inside the quotes and rejected the type.
     RUVIA_CHECK(httpAcceptsMediaType(
-        R"(application/json;version="a;q=0";q=0.9)", "application/json"));
+        R"(application/json;version="a;q=0";q=0.9)",
+        R"(application/json;version="a;q=0")"));
     // Regressions: a real q=0 still means "not accepted", and a normal q is honored.
     RUVIA_CHECK(!httpAcceptsMediaType("application/json;q=0", "application/json"));
     RUVIA_CHECK(httpAcceptsMediaType("text/html;q=0.8", "text/html"));
