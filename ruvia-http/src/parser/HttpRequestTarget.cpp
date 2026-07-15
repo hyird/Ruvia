@@ -55,6 +55,61 @@ inline constexpr std::array<bool, 256> kRegNameCharTable = [] {
         (c >= 'a' && c <= 'f');
 }
 
+[[nodiscard]] bool isUriUnreserved(unsigned char byte) noexcept {
+    return (byte >= '0' && byte <= '9') ||
+        (byte >= 'A' && byte <= 'Z') ||
+        (byte >= 'a' && byte <= 'z') ||
+        byte == '-' || byte == '.' || byte == '_' || byte == '~';
+}
+
+[[nodiscard]] bool isUriSubDelimiter(unsigned char byte) noexcept {
+    switch (byte) {
+        case '!':
+        case '$':
+        case '&':
+        case '\'':
+        case '(':
+        case ')':
+        case '*':
+        case '+':
+        case ',':
+        case ';':
+        case '=':
+            return true;
+        default:
+            return false;
+    }
+}
+
+[[nodiscard]] bool isUriPchar(unsigned char byte) noexcept {
+    return isUriUnreserved(byte) || isUriSubDelimiter(byte) ||
+        byte == ':' || byte == '@';
+}
+
+[[nodiscard]] bool isValidUriComponent(
+    std::string_view value,
+    bool allowSlash,
+    bool allowQuestion) noexcept {
+    for (std::size_t i = 0; i < value.size(); ++i) {
+        const auto byte = static_cast<unsigned char>(value[i]);
+        if (byte == '%') {
+            if (i + 2 >= value.size() ||
+                decodeHexNibble(value[i + 1]) < 0 ||
+                decodeHexNibble(value[i + 2]) < 0) {
+                return false;
+            }
+            i += 2;
+            continue;
+        }
+        if (!isUriPchar(byte) &&
+            !(allowSlash && byte == '/') &&
+            !(allowQuestion && byte == '?')) {
+            return false;
+        }
+    }
+    return true;
+}
+
 [[nodiscard]] bool parseIpv6HexGroup(std::string_view literal, std::size_t& offset) noexcept {
     std::size_t digits = 0;
     while (offset < literal.size() && digits < 4 && isHexDigit(literal[offset])) {
@@ -278,6 +333,52 @@ struct HttpAuthorityViewAccess final {
     }
 };
 
+bool isValidRequestTargetBytes(std::string_view target) noexcept {
+    if (target.empty()) {
+        return false;
+    }
+    for (std::size_t i = 0; i < target.size(); ++i) {
+        const auto byte = static_cast<unsigned char>(target[i]);
+        if (byte == '%') {
+            if (i + 2 >= target.size() ||
+                decodeHexNibble(target[i + 1]) < 0 ||
+                decodeHexNibble(target[i + 2]) < 0) {
+                return false;
+            }
+            i += 2;
+            continue;
+        }
+        // RFC 3986 URI-reference is ASCII and consists only of unreserved or
+        // reserved characters. A fragment delimiter is never part of an HTTP
+        // request target. Brackets are admitted here because this low-level
+        // union also covers an IP-literal authority; component validation below
+        // rejects them from path and query.
+        if (!isUriPchar(byte) && byte != '/' && byte != '?' &&
+            byte != '[' && byte != ']') {
+            return false;
+        }
+    }
+    return true;
+}
+
+bool isValidOriginFormTarget(std::string_view target) noexcept {
+    if (target == "*") {
+        return true;
+    }
+    if (target.empty() || target.front() != '/') {
+        return false;
+    }
+    const auto separator = target.find('?');
+    const auto path = separator == std::string_view::npos
+        ? target
+        : target.substr(0, separator);
+    const auto query = separator == std::string_view::npos
+        ? std::string_view{}
+        : target.substr(separator + 1);
+    return isValidUriComponent(path, true, false) &&
+        isValidUriComponent(query, true, true);
+}
+
 bool isValidHttpHost(std::string_view value) noexcept {
     if (value.empty()) {
         return false;
@@ -395,19 +496,30 @@ namespace {
 
     const auto pathBegin = authorityBegin + separator;
     if (target[pathBegin] == '?') {
+        const auto query = target.substr(pathBegin + 1);
+        if (!isValidUriComponent(query, true, true)) {
+            return false;
+        }
         output.path = "/";
-        output.query = target.substr(pathBegin + 1);
+        output.query = query;
         return true;
     }
 
     const auto querySeparator = target.find('?', pathBegin);
-    output.path = querySeparator == std::string_view::npos
+    const auto path = querySeparator == std::string_view::npos
         ? target.substr(pathBegin)
         : target.substr(pathBegin, querySeparator - pathBegin);
-    output.query = querySeparator == std::string_view::npos
+    const auto query = querySeparator == std::string_view::npos
         ? std::string_view{}
         : target.substr(querySeparator + 1);
-    return !output.path.empty() && output.path.front() == '/';
+    if (path.empty() || path.front() != '/' ||
+        !isValidUriComponent(path, true, false) ||
+        !isValidUriComponent(query, true, true)) {
+        return false;
+    }
+    output.path = path;
+    output.query = query;
+    return true;
 }
 
 }  // namespace

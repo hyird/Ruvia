@@ -176,6 +176,8 @@ RUVIA_TEST(parse_request_target_absolute_form) {
     RUVIA_CHECK(!parseRequestTarget(HttpKnownMethod::kGet, "ftp://example.com/x", out));
     RUVIA_CHECK(!parseRequestTarget(HttpKnownMethod::kGet, "http://", out));
     RUVIA_CHECK(!parseRequestTarget(HttpKnownMethod::kGet, "http://exa@mple.com/x", out));
+    RUVIA_CHECK(!parseRequestTarget(HttpKnownMethod::kGet, "http://example.com/[x]", out));
+    RUVIA_CHECK(!parseRequestTarget(HttpKnownMethod::kGet, "http://example.com/?q={x}", out));
 }
 
 RUVIA_TEST(parse_request_target_connect_authority_form) {
@@ -214,6 +216,9 @@ RUVIA_TEST(parse_request_target_asterisk_and_rejections) {
     RUVIA_CHECK(!parseRequestTarget(HttpKnownMethod::kGet, "/bad%zz", out));      // malformed pct-encoded
     RUVIA_CHECK(!parseRequestTarget(HttpKnownMethod::kGet, "/bad%", out));        // truncated pct-encoded
     RUVIA_CHECK(!parseRequestTarget(HttpKnownMethod::kGet, "/bad%2", out));       // truncated pct-encoded
+    RUVIA_CHECK(!parseRequestTarget(HttpKnownMethod::kGet, "/raw{brace}", out));
+    RUVIA_CHECK(!parseRequestTarget(
+        HttpKnownMethod::kGet, std::string_view("/caf\xC3\xA9", 6), out));
     RUVIA_CHECK(parseRequestTarget(HttpKnownMethod::kGet, "/ok%2F?q=%7B%7D", out));
     RUVIA_CHECK_EQ(out.path, std::string_view("/ok%2F"));
     RUVIA_CHECK_EQ(out.query, std::string_view("q=%7B%7D"));
@@ -226,6 +231,7 @@ RUVIA_TEST(request_target_bytes_reject_smuggling_and_control_chars) {
     RUVIA_CHECK(isValidRequestTargetBytes("/index.html"));
     RUVIA_CHECK(isValidRequestTargetBytes("/search?q=a+b&x=1"));
     RUVIA_CHECK(isValidRequestTargetBytes("/a/b/c"));
+    RUVIA_CHECK(isValidRequestTargetBytes("http://[::1]/x?y=1"));
 
     RUVIA_CHECK(!isValidRequestTargetBytes(""));              // empty is never a valid target
     RUVIA_CHECK(!isValidRequestTargetBytes("/a b"));          // raw space (0x20) splits the request line
@@ -236,6 +242,9 @@ RUVIA_TEST(request_target_bytes_reject_smuggling_and_control_chars) {
     RUVIA_CHECK(!isValidRequestTargetBytes("/a\x7f" "b"));    // DEL (0x7F); split literal so 'b' is not eaten by the hex escape
     RUVIA_CHECK(!isValidRequestTargetBytes("/page#frag"));    // '#' -- fragment must not reach the origin
     RUVIA_CHECK(!isValidRequestTargetBytes("/a\\b"));         // backslash -- path-normalization confusion
+    RUVIA_CHECK(!isValidRequestTargetBytes("/raw{brace}"));   // not in the RFC 3986 URI character set
+    RUVIA_CHECK(!isValidRequestTargetBytes("/raw|pipe"));
+    RUVIA_CHECK(!isValidRequestTargetBytes(std::string_view("/caf\xC3\xA9", 6)));  // raw UTF-8 must be encoded
 }
 
 RUVIA_TEST(request_target_bytes_validate_percent_encoding) {
@@ -264,4 +273,7 @@ RUVIA_TEST(origin_form_target_shape) {
     RUVIA_CHECK(!isValidOriginFormTarget("*/"));              // '*' is valid only as the whole target
     RUVIA_CHECK(!isValidOriginFormTarget("/bad path"));       // inherits byte validation (raw space)
     RUVIA_CHECK(!isValidOriginFormTarget("/x#y"));            // inherits fragment rejection
+    RUVIA_CHECK(!isValidOriginFormTarget("/[x]"));            // brackets belong only to an IP-literal authority
+    RUVIA_CHECK(!isValidOriginFormTarget("/?q={x}"));         // braces must be percent-encoded
+    RUVIA_CHECK(isValidOriginFormTarget("/!$&'()*+,-._~:@/x?y=/?:@"));
 }

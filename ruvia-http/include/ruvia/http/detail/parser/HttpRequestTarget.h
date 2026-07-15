@@ -64,33 +64,13 @@ private:
     HttpAuthorityPortKind portKind_{HttpAuthorityPortKind::kAbsent};
 };
 
-[[nodiscard]] inline bool isValidRequestTargetBytes(std::string_view target) noexcept {
-    if (target.empty()) {
-        return false;
-    }
-    for (std::size_t i = 0; i < target.size(); ++i) {
-        const auto c = static_cast<unsigned char>(target[i]);
-        if (c <= 0x20 || c == 0x7F || c == '#' || c == '\\') {
-            return false;
-        }
-        if (c == '%') {
-            if (i + 2 >= target.size() ||
-                decodeHexNibble(target[i + 1]) < 0 ||
-                decodeHexNibble(target[i + 2]) < 0) {
-                return false;
-            }
-            i += 2;
-        }
-    }
-    return true;
-}
+// Validates the byte repertoire shared by the four HTTP request-target forms.
+// Component-specific rules (for example, '[' and ']' being legal only in an
+// IP-literal authority) are applied by parseRequestTarget /
+// isValidOriginFormTarget.
+[[nodiscard]] bool isValidRequestTargetBytes(std::string_view target) noexcept;
 
-[[nodiscard]] inline bool isValidOriginFormTarget(std::string_view target) noexcept {
-    if (target == "*") {
-        return true;
-    }
-    return !target.empty() && target.front() == '/' && isValidRequestTargetBytes(target);
-}
+[[nodiscard]] bool isValidOriginFormTarget(std::string_view target) noexcept;
 
 [[nodiscard]] bool isValidHostHeader(std::string_view value) noexcept;
 // RFC 3986 `host` / HTTP `uri-host`, without a port. IP literals use their
