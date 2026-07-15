@@ -82,9 +82,17 @@ std::optional<HttpChunkScanError> validateHttpChunkTrailers(
     if (trailers.empty()) {
         return std::nullopt;
     }
+    if (trailers.size() > kMaxHttpHeaderBytes) {
+        return HttpChunkScanError::kTooLarge;
+    }
 
     std::size_t cursor = 0;
+    std::size_t fieldCount = 0;
     while (cursor < trailers.size()) {
+        if (fieldCount == kMaxHttpHeaderFields) {
+            return HttpChunkScanError::kTooLarge;
+        }
+        ++fieldCount;
         const auto lineEnd = trailers.find("\r\n", cursor);
         const auto line = lineEnd == std::string_view::npos
             ? trailers.substr(cursor)
@@ -162,6 +170,10 @@ HttpChunkScanResult scanHttpChunkedBody(std::string_view body) noexcept {
             }
             const auto trailerEnd = body.find("\r\n\r\n", cursor);
             if (trailerEnd != std::string_view::npos) {
+                if (trailerEnd - cursor > kMaxHttpHeaderBytes - 4) {
+                    return HttpChunkScanResult::makeFailure(
+                        HttpChunkScanError::kTooLarge);
+                }
                 if (const auto trailerError = validateHttpChunkTrailers(
                         body.substr(cursor, trailerEnd - cursor));
                     trailerError.has_value()) {

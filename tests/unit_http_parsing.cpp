@@ -349,3 +349,30 @@ RUVIA_TEST(chunk_scan_result_is_discriminated) {
     RUVIA_CHECK(failure.needMore() == nullptr);
     RUVIA_CHECK(failure.complete() == nullptr);
 }
+
+RUVIA_TEST(chunk_trailer_section_enforces_field_and_byte_limits) {
+    std::string tooMany = "0\r\n";
+    for (std::size_t i = 0; i <= ruvia::kMaxHttpHeaderFields; ++i) {
+        tooMany.append("X-Trace: value\r\n");
+    }
+    tooMany.append("\r\n");
+    const auto tooManyResult = ruvia::detail::scanHttpChunkedBody(tooMany);
+    RUVIA_CHECK(tooManyResult.failure() != nullptr);
+    if (const auto* failure = tooManyResult.failure()) {
+        RUVIA_CHECK(
+            failure->error() ==
+            ruvia::detail::HttpChunkScanError::kTooLarge);
+    }
+
+    std::string oversized = "0\r\nX-Trace: ";
+    oversized.append(ruvia::kMaxHttpHeaderBytes, 'x');
+    oversized.append("\r\n\r\n");
+    const auto oversizedResult =
+        ruvia::detail::scanHttpChunkedBody(oversized);
+    RUVIA_CHECK(oversizedResult.failure() != nullptr);
+    if (const auto* failure = oversizedResult.failure()) {
+        RUVIA_CHECK(
+            failure->error() ==
+            ruvia::detail::HttpChunkScanError::kTooLarge);
+    }
+}
