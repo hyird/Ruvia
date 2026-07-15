@@ -28,12 +28,12 @@ enum class Http1InterimResponsePrepareError : std::uint8_t {
     kHeaderTooLarge,
 };
 
-// An interim response cannot terminate the connection before the required
-// final response. Preserve that protocol obligation as a named disposition
-// instead of reducing it to an unlabelled boolean at the writer boundary.
+// Connection lifecycle after the encoded interim response. RFC 9112 requires
+// a sender of Connection: close to begin closing after the response containing
+// that option, even though doing so leaves the request without a final response.
 enum class Http1InterimConnectionDisposition : std::uint8_t {
     kUnchanged,
-    kCloseAfterFinalResponse,
+    kCloseAfterInterimResponse,
 };
 
 [[nodiscard]] std::string_view http1InterimResponsePrepareErrorMessage(
@@ -56,9 +56,8 @@ private:
 };
 
 // A transactionally encoded HTTP/1.1 interim head. The byte view points into
-// the caller's output buffer. A Connection: close option cannot terminate the
-// interim message; the owner must remember it and close after the required
-// final response instead.
+// the caller's output buffer. When Connection: close is present, the owner must
+// initiate connection closure as soon as this interim head has been written.
 class PreparedHttp1InterimResponse final {
 public:
     [[nodiscard]] constexpr std::string_view head() const noexcept {

@@ -220,7 +220,7 @@ Http1InterimResponsePrepareResult Http1InterimResponseWriter::prepare(
     return detail::Http1InterimResponsePrepareResultAccess::prepared(
         std::string_view(headBuffer.data(), facts.wireBytes),
         facts.connectionOptions.close()
-            ? Http1InterimConnectionDisposition::kCloseAfterFinalResponse
+            ? Http1InterimConnectionDisposition::kCloseAfterInterimResponse
             : Http1InterimConnectionDisposition::kUnchanged);
 }
 

@@ -2101,11 +2101,15 @@ endif()
 if(NOT _installed_http1_interim_response_writer MATCHES
        "enum class Http1InterimConnectionDisposition" OR
    NOT _installed_http1_interim_response_writer MATCHES
+       "kCloseAfterInterimResponse" OR
+   NOT _installed_http1_interim_response_writer MATCHES
        "connectionDisposition[(][)]" OR
+   _installed_http1_interim_response_writer MATCHES
+       "kCloseAfterFinalResponse" OR
    _installed_http1_interim_response_writer MATCHES
        "requiresFinalConnectionClose|bool[ \t]+requiresFinalConnectionClose_")
     message(FATAL_ERROR
-        "installed HTTP/1 interim writer lost its typed final-close disposition")
+        "installed HTTP/1 interim writer lost its current-response close disposition")
 endif()
 set(_installed_http_response_head_buffer_path
     "${_install_prefix}/include/ruvia/http/detail/server/HttpResponseHeadBuffer.h")

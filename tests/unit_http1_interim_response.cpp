@@ -112,7 +112,7 @@ RUVIA_TEST(http1_interim_response_writer_preserves_required_status_line_space) {
     }
 }
 
-RUVIA_TEST(http1_interim_response_writer_reports_connection_close_for_final) {
+RUVIA_TEST(http1_interim_response_writer_closes_after_containing_response) {
     const HttpHeaderView fields[] = {
         {"Connection", "close, Upgrade"},
         {"Upgrade", "example/1"},
@@ -125,7 +125,7 @@ RUVIA_TEST(http1_interim_response_writer_reports_connection_close_for_final) {
     if (prepared != nullptr) {
         RUVIA_CHECK_EQ(
             prepared->connectionDisposition(),
-            Http1InterimConnectionDisposition::kCloseAfterFinalResponse);
+            Http1InterimConnectionDisposition::kCloseAfterInterimResponse);
         RUVIA_CHECK(
             prepared->head().find("Upgrade: example/1\r\n") !=
             std::string_view::npos);
