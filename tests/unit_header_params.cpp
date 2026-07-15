@@ -19,6 +19,7 @@ using ruvia::detail::HttpFieldListRole;
 using ruvia::detail::HttpRequestContentIndication;
 using ruvia::detail::HttpRequestExpectations;
 using ruvia::detail::HttpUnsupportedExpectationPolicy;
+using ruvia::detail::HttpUpgradeProtocols;
 
 // {close, keepAlive, upgrade, te} after recipient-side parsing.
 std::array<bool, 4> connectionOptions(std::string_view value) {
@@ -217,4 +218,48 @@ RUVIA_TEST(connection_options_enforce_sender_and_recipient_list_roles) {
     RUVIA_CHECK(
         malformed.parseField("close;param", HttpFieldListRole::kRecipient) ==
         HttpFieldListParseStatus::kMalformed);
+}
+
+RUVIA_TEST(upgrade_protocols_commit_one_explicit_field_state) {
+    HttpUpgradeProtocols protocols;
+    RUVIA_CHECK(!protocols.hasField());
+    RUVIA_CHECK(!protocols.hasProtocol());
+
+    const auto accept = [](const auto&) noexcept { return true; };
+    RUVIA_CHECK(
+        protocols.parseField(", ,", HttpFieldListRole::kRecipient, accept) ==
+        HttpFieldListParseStatus::kOk);
+    RUVIA_CHECK(protocols.hasField());
+    RUVIA_CHECK(!protocols.hasProtocol());
+
+    RUVIA_CHECK(
+        protocols.parseField("websocket", HttpFieldListRole::kRecipient, accept) ==
+        HttpFieldListParseStatus::kOk);
+    RUVIA_CHECK(protocols.hasField());
+    RUVIA_CHECK(protocols.hasProtocol());
+
+    RUVIA_CHECK(
+        protocols.parseField("", HttpFieldListRole::kRecipient, accept) ==
+        HttpFieldListParseStatus::kOk);
+    RUVIA_CHECK(protocols.hasProtocol());
+}
+
+RUVIA_TEST(upgrade_protocols_only_commit_successful_fields) {
+    const auto accept = [](const auto&) noexcept { return true; };
+
+    HttpUpgradeProtocols malformed;
+    RUVIA_CHECK(
+        malformed.parseField("", HttpFieldListRole::kSender, accept) ==
+        HttpFieldListParseStatus::kMalformed);
+    RUVIA_CHECK(!malformed.hasField());
+    RUVIA_CHECK(!malformed.hasProtocol());
+
+    HttpUpgradeProtocols rejected;
+    RUVIA_CHECK(
+        rejected.parseField(
+            "websocket", HttpFieldListRole::kRecipient,
+            [](const auto&) noexcept { return false; }) ==
+        HttpFieldListParseStatus::kRejected);
+    RUVIA_CHECK(!rejected.hasField());
+    RUVIA_CHECK(!rejected.hasProtocol());
 }

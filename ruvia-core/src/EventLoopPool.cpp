@@ -147,14 +147,11 @@ struct EventLoopState final {
             return;
         }
         dispatcher->close();
-        try {
-            if (dispatcher->isCurrent()) {
-                dispatcher->stopTimers();
-            } else {
-                dispatcher->defer(
-                    [dispatcher = dispatcher] { dispatcher->stopTimers(); });
-            }
-        } catch (...) {
+        if (dispatcher->isCurrent()) {
+            dispatcher->stopTimers();
+        } else {
+            dispatcher->deferOrTerminate(
+                [dispatcher = dispatcher] { dispatcher->stopTimers(); });
         }
         work.reset();
     }

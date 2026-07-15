@@ -343,22 +343,21 @@ Task<void> runHttp2SansIoSession(
                 applyRateLimitRejectionHeaders(response, *rejection);
                 break;
             }
-            std::optional<Http2SansIoRequestBodyReader> streamReaderStorage;
-            std::optional<BodyReader> bodyReaderStorage;
+            std::optional<BodyReaderBinding<Http2SansIoRequestBodyReader>>
+                bodyReaderStorage;
             if (streamingBody != nullptr &&
                 streamState->tunnel().pending() == nullptr) {
-                streamReaderStorage.emplace(
+                bodyReaderStorage.emplace(
                     connection,
                     streamId,
                     streamingBody->queue(),
                     *streamSignal,
                     writeSignal);
-                emplaceBodyReaderFacade(bodyReaderStorage, *streamReaderStorage);
             }
             auto dispatchServices = baseServices;
             if (bodyReaderStorage) {
                 dispatchServices = dispatchServices.withStreamingRequestBody(
-                    *bodyReaderStorage);
+                    bodyReaderStorage->facade());
             }
 
             const auto* webSocketEndpoint = resolved == nullptr

@@ -27,11 +27,10 @@ TransferCodingDecoder::TransferCodingDecoder(
     if (rc != Z_OK) {
         throw std::runtime_error("failed to initialize transfer-coding decoder");
     }
-    initialized_ = true;
 }
 
 TransferCodingDecoder::~TransferCodingDecoder() {
-    cleanup();
+    (void)inflateEnd(&stream_);
 }
 
 TransferCodingDecodeResult TransferCodingDecoder::decode(
@@ -190,13 +189,6 @@ void TransferCodingDecoder::zfreeThunk(voidpf, voidpf address) noexcept {
     auto* raw = static_cast<std::byte*>(address) - sizeof(ZlibAllocationHeader);
     auto* header = reinterpret_cast<ZlibAllocationHeader*>(raw);
     header->resource->deallocate(raw, header->bytes, alignof(ZlibAllocationHeader));
-}
-
-void TransferCodingDecoder::cleanup() noexcept {
-    if (initialized_) {
-        (void)inflateEnd(&stream_);
-        initialized_ = false;
-    }
 }
 
 }  // namespace ruvia::detail

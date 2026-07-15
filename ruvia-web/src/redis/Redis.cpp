@@ -34,7 +34,7 @@ RedisRegistry::RedisRegistry(
             std::pmr::string(definition.alias, resource_),
             std::move(pool)});
         if (std::string_view(pools_.back().alias.data(), pools_.back().alias.size()) == kDefaultRedisAlias) {
-            defaultPool_ = pools_.back().pool.get();
+            defaultPoolIndex_ = pools_.size() - 1;
         }
     }
 }
@@ -65,10 +65,10 @@ bool RedisRegistry::hasAnyTimeout() const noexcept {
 }
 
 RedisHandle RedisRegistry::get(std::pmr::memory_resource* resource) const {
-    if (defaultPool_ == nullptr) {
+    if (!defaultPoolIndex_.has_value()) {
         throw RedisError(RedisError::Code::kNotConfigured, "default redis is not configured");
     }
-    return RedisHandle(*defaultPool_, resource);
+    return RedisHandle(*pools_[*defaultPoolIndex_].pool, resource);
 }
 
 RedisHandle RedisRegistry::get(

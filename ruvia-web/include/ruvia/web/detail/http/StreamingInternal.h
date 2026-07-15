@@ -26,6 +26,12 @@ struct StreamingAccess final {
         storage.emplace(BodyReader::Token{}, target, read);
     }
 
+    [[nodiscard]] static BodyReader makeBodyReader(
+        void* target,
+        BodyRead read) noexcept {
+        return BodyReader(BodyReader::Token{}, target, read);
+    }
+
     [[nodiscard]] static ResponseStreamWriter makeResponseStreamWriter(
         void* target,
         StreamWrite write,

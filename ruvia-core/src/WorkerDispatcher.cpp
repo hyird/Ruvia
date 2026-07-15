@@ -106,11 +106,8 @@ void WorkerTimerRegistration::cancel() noexcept {
         dispatcher->cancelTimer(state);
         return;
     }
-    try {
-        dispatcher->defer(
-            [dispatcher, state = std::move(state)] { dispatcher->cancelTimer(state); });
-    } catch (...) {
-    }
+    dispatcher->deferOrTerminate(
+        [dispatcher, state = std::move(state)] { dispatcher->cancelTimer(state); });
 }
 
 bool WorkerTimerRegistration::valid() const noexcept {
@@ -123,25 +120,31 @@ WorkerDispatcher::WorkerDispatcher(asio::io_context& ioContext, std::size_t capa
 WorkerDispatcher::~WorkerDispatcher() = default;
 
 PostResult WorkerDispatcher::post(std::move_only_function<void()> task) {
-    bool scheduleDrain = false;
-    {
-        std::lock_guard lock(impl_->mutex);
-        if (!impl_->accepting) {
-            return PostResult::kWorkerStopping;
-        }
-        if (impl_->size == impl_->slots.size()) {
-            return PostResult::kQueueFull;
-        }
-        impl_->slots[impl_->tail].emplace(std::move(task));
-        impl_->tail = (impl_->tail + 1) % impl_->slots.size();
-        ++impl_->size;
-        if (!impl_->drainScheduled) {
-            impl_->drainScheduled = true;
-            scheduleDrain = true;
-        }
+    std::lock_guard lock(impl_->mutex);
+    if (!impl_->accepting) {
+        return PostResult::kWorkerStopping;
     }
-    if (scheduleDrain) {
-        asio::post(impl_->ioContext, [self = shared_from_this()] { self->drain(); });
+    if (impl_->size == impl_->slots.size()) {
+        return PostResult::kQueueFull;
+    }
+    const auto insertedIndex = impl_->tail;
+    impl_->slots[insertedIndex].emplace(std::move(task));
+    impl_->tail = (impl_->tail + 1) % impl_->slots.size();
+    ++impl_->size;
+    if (impl_->drainScheduled) {
+        return PostResult::kAccepted;
+    }
+    impl_->drainScheduled = true;
+    try {
+        asio::post(
+            impl_->ioContext,
+            [self = shared_from_this()] { self->drain(); });
+    } catch (...) {
+        impl_->slots[insertedIndex].reset();
+        impl_->tail = insertedIndex;
+        --impl_->size;
+        impl_->drainScheduled = false;
+        throw;
     }
     return PostResult::kAccepted;
 }
@@ -149,6 +152,15 @@ PostResult WorkerDispatcher::post(std::move_only_function<void()> task) {
 void WorkerDispatcher::defer(std::move_only_function<void()> task) {
     asio::post(impl_->ioContext,
                [self = shared_from_this(), task = std::move(task)]() mutable { task(); });
+}
+
+void WorkerDispatcher::deferOrTerminate(
+    std::move_only_function<void()> task) noexcept {
+    try {
+        defer(std::move(task));
+    } catch (...) {
+        std::terminate();
+    }
 }
 
 void WorkerDispatcher::registerShutdownListener(

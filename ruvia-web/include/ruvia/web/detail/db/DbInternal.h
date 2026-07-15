@@ -41,6 +41,7 @@ public:
 #include <cstdint>
 #include <memory>
 #include <memory_resource>
+#include <optional>
 #include <span>
 #include <string_view>
 #include <variant>
@@ -274,7 +275,7 @@ public:
 private:
     std::pmr::memory_resource* resource_;
     std::pmr::vector<Entry> clients_;
-    DbPoolRef defaultClient_{};
+    std::optional<std::size_t> defaultClientIndex_;
 };
 
 }  // namespace ruvia::detail

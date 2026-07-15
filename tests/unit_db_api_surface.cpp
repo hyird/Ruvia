@@ -13,6 +13,7 @@
 #include <utility>
 
 #include "ruvia/web/db/Db.h"
+#include "ruvia/web/detail/db/DbInternal.h"
 #include "ruvia/web/detail/db/DbResultAccess.h"
 #include "ruvia/web/detail/db/DbValueAccess.h"
 
@@ -215,6 +216,38 @@ RUVIA_TEST(db_query_result_move_transfers_direct_raii_ownership) {
         RUVIA_CHECK_EQ(releases, 0);
     }
     RUVIA_CHECK_EQ(releases, 1);
+}
+
+RUVIA_TEST(db_registry_derives_default_pool_from_owned_entry_index) {
+    asio::io_context ioContext;
+#ifdef RUVIA_ENABLE_MARIADB
+    const auto config = ruvia::DbConfig::mariaDb();
+#else
+    const auto config = ruvia::DbConfig::postgreSql();
+#endif
+    const std::array<ruvia::detail::DbDefinition, 2> definitions{{
+        {std::pmr::string("analytics"), config},
+        {std::pmr::string("default"), config},
+    }};
+    ruvia::detail::DbRegistry registry(
+        ioContext,
+        std::pmr::get_default_resource(),
+        definitions);
+
+    bool defaultResolved = true;
+    bool aliasResolved = true;
+    try {
+        (void)registry.get(std::pmr::get_default_resource());
+    } catch (...) {
+        defaultResolved = false;
+    }
+    try {
+        (void)registry.get("analytics", std::pmr::get_default_resource());
+    } catch (...) {
+        aliasResolved = false;
+    }
+    RUVIA_CHECK(defaultResolved);
+    RUVIA_CHECK(aliasResolved);
 }
 
 RUVIA_TEST(db_migrator_validates_before_opening_connection) {

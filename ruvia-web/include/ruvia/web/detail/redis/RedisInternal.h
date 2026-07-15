@@ -138,7 +138,7 @@ private:
         void discard() noexcept;
 
     private:
-        RedisPool* pool_{nullptr};
+        RedisPool& pool_;
         std::size_t index_{0};
         bool discard_{false};
     };
@@ -214,7 +214,7 @@ private:
 
     std::pmr::memory_resource* resource_;
     std::pmr::vector<Entry> pools_;
-    RedisPool* defaultPool_{nullptr};
+    std::optional<std::size_t> defaultPoolIndex_;
 };
 
 }  // namespace ruvia::detail

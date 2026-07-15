@@ -180,6 +180,8 @@ file(READ "${RUVIA_ROOT}/ruvia-core/include/ruvia/core/WorkerHandle.h"
     core_worker_handle_contract)
 file(READ "${RUVIA_ROOT}/ruvia-core/include/ruvia/core/detail/WorkerDispatcher.h"
     core_worker_dispatcher_contract)
+file(READ "${RUVIA_ROOT}/ruvia-core/src/WorkerDispatcher.cpp"
+    core_worker_dispatcher_implementation)
 file(READ "${RUVIA_ROOT}/ruvia-core/include/ruvia/core/detail/WorkerSignal.h"
     core_worker_signal_contract)
 file(READ "${RUVIA_ROOT}/ruvia-core/include/ruvia/core/detail/RuntimeLifecycle.h"
@@ -188,6 +190,8 @@ file(READ "${RUVIA_ROOT}/ruvia-core/src/EventLoopPool.cpp"
     core_runtime_implementation)
 file(READ "${RUVIA_ROOT}/tests/runtime_worker.cpp"
     core_runtime_test_contract)
+file(READ "${RUVIA_ROOT}/tests/worker_dispatch_failure.cpp"
+    core_worker_dispatch_failure_test_contract)
 file(READ "${RUVIA_ROOT}/tests/operation_deadline.cpp"
     core_operation_deadline_test_contract)
 file(READ "${RUVIA_ROOT}/tests/package-consumer/core.cpp"
@@ -238,6 +242,37 @@ if(NOT core_runtime_implementation MATCHES
        "std::optional<ExternalContextClaim>|std::optional<asio::executor_work_guard")
     boundary_error("event loop context ownership regained parallel optional state"
         "owned context and external claim must be exclusive alternatives, and every live loop state must own an engaged work guard")
+endif()
+if(NOT core_worker_dispatcher_implementation MATCHES
+       "impl_->slots\\[insertedIndex\\][.]reset[(][)]" OR
+   NOT core_worker_dispatcher_implementation MATCHES
+       "impl_->tail = insertedIndex" OR
+   NOT core_worker_dispatcher_implementation MATCHES
+       "impl_->drainScheduled = false" OR
+   NOT core_worker_dispatch_failure_test_contract MATCHES
+       "attempt < 2")
+    boundary_error("worker mailbox dispatch regained partial commit"
+        "drain scheduling failure must roll back the inserted slot, tail, size, and scheduled state before another producer can observe the mailbox")
+endif()
+if(NOT core_worker_dispatcher_contract MATCHES
+       "deferOrTerminate" OR
+   NOT core_worker_dispatcher_implementation MATCHES
+       "void WorkerDispatcher::deferOrTerminate" OR
+   core_worker_dispatcher_implementation MATCHES
+       "dispatcher->defer[(][ \\t\\r\\n]*\\[dispatcher, state" OR
+   NOT core_runtime_implementation MATCHES
+       "dispatcher->deferOrTerminate[(]" OR
+   core_runtime_implementation MATCHES
+       "dispatcher->defer[(][ \\t\\r\\n]*\\[dispatcher = dispatcher\\].*stopTimers")
+    boundary_error("worker control dispatch regained silent failure"
+        "timer cancellation and loop stopping must terminate if their required worker dispatch cannot be committed")
+endif()
+if(NOT core_worker_dispatch_failure_test_contract MATCHES
+       "deferOrTerminate" OR
+   NOT core_worker_dispatch_failure_test_contract MATCHES
+       "set_terminate")
+    boundary_error("worker dispatch failure injection coverage was removed"
+        "tests must inject both transactional mailbox scheduling failure and required-control-dispatch termination")
 endif()
 if(NOT core_operation_deadline_contract MATCHES
        "struct Inactive final" OR
@@ -9859,11 +9894,20 @@ if(EXISTS "${POOL_LEASE_DB_INTERNAL}" AND
     file(READ "${POOL_LEASE_REDIS_INTERNAL}" pool_lease_redis_internal)
     if(NOT pool_lease_db_internal MATCHES "PoolLeaseScheduler scheduler_" OR
        NOT pool_lease_redis_internal MATCHES "PoolLeaseScheduler scheduler_" OR
+       NOT pool_lease_db_internal MATCHES
+           "std::optional<std::size_t> defaultClientIndex_" OR
+       pool_lease_db_internal MATCHES
+           "DbPoolRef[ \t]+defaultClient_" OR
+       NOT pool_lease_redis_internal MATCHES "RedisPool& pool_" OR
+       NOT pool_lease_redis_internal MATCHES
+           "std::optional<std::size_t> defaultPoolIndex_" OR
+       pool_lease_redis_internal MATCHES
+           "RedisPool[*][ \t]+(pool_|defaultPool_)" OR
        pool_lease_db_internal MATCHES "DbPoolScheduler" OR
        pool_lease_redis_internal MATCHES
            "free_|waiters_|closing_|bool[ \t]+busy")
-        boundary_error("integration headers restored duplicate pool lease state"
-            "DB and Redis must retain only one core PoolLeaseScheduler")
+        boundary_error("integration headers restored duplicate lease or alias ownership"
+            "DB and Redis must retain one core scheduler; registry defaults must be derived by index and Redis guards must own references")
     endif()
 endif()
 
@@ -10623,6 +10667,12 @@ if(EXISTS "${HTTP_TRANSFER_DECODER}" AND
        transfer_decoder_source MATCHES
            "${RULE_STALE_TRANSFER_CODING_TERMINAL_SPLIT}" OR
        transfer_decoder MATCHES
+           "bool[ \\t]+initialized_|void[ \\t]+cleanup[(]" OR
+       transfer_decoder_source MATCHES
+           "initialized_|TransferCodingDecoder::cleanup[(]" OR
+       NOT transfer_decoder_source MATCHES
+           "[(]void[)]inflateEnd[(]&stream_[)]" OR
+       transfer_decoder MATCHES
            "decodeAppend[(]|produce[(]|setInput[(]|finished[(]|empty[(]" OR
        transfer_decoder_source MATCHES
            "throw[ \t]+(std::invalid_argument|HttpProtocolError)")
@@ -11240,7 +11290,13 @@ if(EXISTS "${HTTP_PROTOCOL_PLAN_RANGE}" AND
        NOT http_protocol_connection_facts MATCHES
            "is_trivially_copyable_v<HttpUpgradeProtocols>" OR
        NOT http_protocol_connection_facts MATCHES
-           "sizeof[(]HttpUpgradeProtocols[)] <= 2" OR
+           "enum class HttpUpgradeFieldState" OR
+       NOT http_protocol_connection_facts MATCHES
+           "HttpUpgradeFieldState[ \t]+state_" OR
+       http_protocol_connection_facts MATCHES
+           "bool[ \t]+hasProtocol_" OR
+       NOT http_protocol_connection_facts MATCHES
+           "sizeof[(]HttpUpgradeProtocols[)] == 1" OR
        NOT http_protocol_plan_stream MATCHES
            "HttpResponseBodyPlan bodyPlan[(][)] const noexcept" OR
        NOT http_protocol_plan_consumer MATCHES
@@ -11862,6 +11918,38 @@ if(NOT http1_closing_rejection_content MATCHES
        "std::optional<RateLimitRejection>[ \\t]+closingRateLimitRejection")
     boundary_error("HTTP/1 close rejection restored parallel optional state"
         "Ordinary and rate-limit closing errors must be exclusive typed alternatives")
+endif()
+
+set(REQUEST_BODY_FACADE_HEADER
+    "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/body/HttpRequestBodyFacade.h")
+set(HTTP1_STREAM_BODY_ROUTE
+    "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/server/HttpServerStreamBodyRoute.h")
+set(HTTP1_BUFFERED_BODY_ROUTE
+    "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/server/HttpServerBodyRouteCompletion.h")
+set(HTTP2_WEB_SESSION
+    "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/server/Http2SansIoSession.h")
+file(READ "${REQUEST_BODY_FACADE_HEADER}" request_body_facade_binding_content)
+file(READ "${HTTP1_STREAM_BODY_ROUTE}" http1_stream_body_binding_consumer)
+file(READ "${HTTP1_BUFFERED_BODY_ROUTE}" http1_buffered_body_binding_consumer)
+file(READ "${HTTP2_WEB_SESSION}" http2_body_binding_consumer)
+if(NOT request_body_facade_binding_content MATCHES
+       "class BodyReaderBinding final" OR
+   NOT request_body_facade_binding_content MATCHES
+       "class RequestBodyLoaderBinding final" OR
+   NOT http1_stream_body_binding_consumer MATCHES
+       "optional<BodyReaderBinding<StreamBodyReader<Stream>>>" OR
+   http1_stream_body_binding_consumer MATCHES
+       "optional<StreamBodyReader<Stream>>" OR
+   NOT http1_buffered_body_binding_consumer MATCHES
+       "optional<RequestBodyLoaderBinding<LazyBufferedBody<Stream>>>" OR
+   http1_buffered_body_binding_consumer MATCHES
+       "optional<RequestBodyLoader>" OR
+   NOT http2_body_binding_consumer MATCHES
+       "optional<BodyReaderBinding<Http2SansIoRequestBodyReader>>" OR
+   http2_body_binding_consumer MATCHES
+       "optional<Http2SansIoRequestBodyReader>")
+    boundary_error("Request-body target and facade regained split optional ownership"
+        "H1/H2 streaming and lazy buffered routes must publish one atomic binding")
 endif()
 
 set(HTTP_CONTENT_CODING_HEADER

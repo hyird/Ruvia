@@ -228,9 +228,7 @@ private:
     static voidpf zallocThunk(voidpf opaque, uInt items, uInt size) noexcept;
     static void zfreeThunk(voidpf opaque, voidpf address) noexcept;
 
-    void cleanup() noexcept;
     z_stream stream_{};
-    bool initialized_{false};
     State state_{Active{}};
     std::pmr::memory_resource* resource_{nullptr};
     ProtocolByteLimit bodyLimit_;

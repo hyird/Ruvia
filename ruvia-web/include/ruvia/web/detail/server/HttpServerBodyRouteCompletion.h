@@ -25,8 +25,7 @@ namespace ruvia::detail {
 
 template <typename Stream>
 struct HttpLazyBufferedBodyRouteState final {
-    std::optional<LazyBufferedBody<Stream>> body;
-    std::optional<RequestBodyLoader> loader;
+    std::optional<RequestBodyLoaderBinding<LazyBufferedBody<Stream>>> body;
 
     void emplace(
         Stream& stream,
@@ -44,19 +43,18 @@ struct HttpLazyBufferedBodyRouteState final {
             bodyPlan,
             bodyLimit,
             scannerEntry);
-        emplaceRequestBodyLoaderFacade(loader, *body);
     }
 
     [[nodiscard]] ContextServices withLoader(ContextServices services) noexcept {
-        return services.withLazyRequestBody(*loader);
+        return services.withLazyRequestBody(body->facade());
     }
 
     [[nodiscard]] Http1RequestBodyConsumption consumption() const noexcept {
-        return body->consumption();
+        return body->loader().consumption();
     }
 
     void restorePipeline(std::pmr::string& readBuffer, std::size_t& usedBytes) {
-        body->restorePipeline(readBuffer, usedBytes);
+        body->loader().restorePipeline(readBuffer, usedBytes);
     }
 };
 

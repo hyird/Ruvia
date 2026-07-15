@@ -9,6 +9,7 @@
 #include "ruvia/web/detail/http/ContextServices.h"
 #include "ruvia/web/detail/http/RequestBodyLoader.h"
 #include "ruvia/web/detail/http/StreamingInternal.h"
+#include "ruvia/web/detail/body/HttpRequestBodyFacade.h"
 #include "ruvia/web/detail/websocket/WebSocketInternal.h"
 #include "ruvia/web/detail/ContextValues.h"
 
@@ -192,7 +193,46 @@ ruvia::HttpRequest makeRequest(std::pmr::memory_resource* resource) {
     return request;
 }
 
+struct BoundBodyReader final {
+    explicit BoundBodyReader(int value) noexcept : value(value) {}
+
+    ruvia::Task<std::optional<std::string_view>> read() {
+        co_return std::nullopt;
+    }
+
+    int value;
+};
+
+struct BoundBodyLoader final {
+    explicit BoundBodyLoader(int value) noexcept : value(value) {}
+
+    ruvia::Task<std::string_view> readAll() { co_return std::string_view{}; }
+    ruvia::Task<void> discard() { co_return; }
+
+    int value;
+};
+
 }  // namespace
+
+RUVIA_TEST(request_body_capability_binding_constructs_target_and_facade_atomically) {
+    ruvia::detail::BodyReaderBinding<BoundBodyReader> reader(17);
+    ruvia::detail::RequestBodyLoaderBinding<BoundBodyLoader> loader(23);
+
+    static_assert(!std::is_move_constructible_v<decltype(reader)>);
+    static_assert(!std::is_move_constructible_v<decltype(loader)>);
+    RUVIA_CHECK_EQ(reader.reader().value, 17);
+    RUVIA_CHECK_EQ(loader.loader().value, 23);
+
+    const ruvia::detail::ContextServices base;
+    const auto streaming = base.withStreamingRequestBody(reader.facade());
+    const auto lazy = base.withLazyRequestBody(loader.facade());
+    RUVIA_CHECK(
+        &streaming.requestBodySource().streaming()->reader() ==
+        &reader.facade());
+    RUVIA_CHECK(
+        &lazy.requestBodySource().lazy()->loader() ==
+        &loader.facade());
+}
 
 RUVIA_TEST(context_value_store_transfers_entry_ownership_without_assignment) {
     std::pmr::monotonic_buffer_resource resource;

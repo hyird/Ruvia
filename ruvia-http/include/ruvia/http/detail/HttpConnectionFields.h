@@ -156,6 +156,12 @@ struct HttpUpgradeProtocol final {
 
 // Incremental Upgrade list parser. It owns repeated-field/list syntax, while
 // the visitor owns policy such as whether a selected protocol was offered.
+enum class HttpUpgradeFieldState : std::uint8_t {
+    kAbsent,
+    kPresentWithoutProtocol,
+    kPresentWithProtocol,
+};
+
 class HttpUpgradeProtocols final {
 public:
     template <typename Visitor>
@@ -192,25 +198,27 @@ public:
             start = comma + 1;
         }
 
-        fieldPresent_ = true;
-        hasProtocol_ = hasProtocol_ || parsedProtocol;
+        if (parsedProtocol) {
+            state_ = HttpUpgradeFieldState::kPresentWithProtocol;
+        } else if (state_ == HttpUpgradeFieldState::kAbsent) {
+            state_ = HttpUpgradeFieldState::kPresentWithoutProtocol;
+        }
         return HttpFieldListParseStatus::kOk;
     }
 
     [[nodiscard]] bool hasField() const noexcept {
-        return fieldPresent_;
+        return state_ != HttpUpgradeFieldState::kAbsent;
     }
 
     [[nodiscard]] bool hasProtocol() const noexcept {
-        return hasProtocol_;
+        return state_ == HttpUpgradeFieldState::kPresentWithProtocol;
     }
 
 private:
-    bool fieldPresent_{false};
-    bool hasProtocol_{false};
+    HttpUpgradeFieldState state_{HttpUpgradeFieldState::kAbsent};
 };
 
 static_assert(std::is_trivially_copyable_v<HttpUpgradeProtocols>);
-static_assert(sizeof(HttpUpgradeProtocols) <= 2);
+static_assert(sizeof(HttpUpgradeProtocols) == 1);
 
 }  // namespace ruvia::detail

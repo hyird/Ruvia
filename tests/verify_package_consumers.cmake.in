@@ -641,7 +641,13 @@ if(NOT _installed_http_protocol_plan_range_text MATCHES
    NOT _installed_http_protocol_connection_facts_text MATCHES
        "is_trivially_copyable_v<HttpUpgradeProtocols>" OR
    NOT _installed_http_protocol_connection_facts_text MATCHES
-       "sizeof[(]HttpUpgradeProtocols[)] <= 2" OR
+       "enum class HttpUpgradeFieldState" OR
+   NOT _installed_http_protocol_connection_facts_text MATCHES
+       "HttpUpgradeFieldState[ \t]+state_" OR
+   _installed_http_protocol_connection_facts_text MATCHES
+       "bool[ \t]+hasProtocol_" OR
+   NOT _installed_http_protocol_connection_facts_text MATCHES
+       "sizeof[(]HttpUpgradeProtocols[)] == 1" OR
    NOT _installed_http_protocol_plan_stream_text MATCHES
        "HttpResponseBodyPlan bodyPlan[(][)] const noexcept")
     message(FATAL_ERROR
@@ -934,7 +940,7 @@ if(NOT _installed_transfer_decoder_contract MATCHES
    NOT _installed_transfer_decoder_contract MATCHES
        "TransferCodingDecodeResult finishInput" OR
    _installed_transfer_decoder_contract MATCHES
-       "TransferCodingFinishStatus|bool[ \t]+(ended_|failed_)|TransferCodingDecodeError[ \t]+failure_|TransferCodingDecodeError[ \t]+error[(][)] const|std::optional<HttpProtocolError>" OR
+       "TransferCodingFinishStatus|bool[ \t]+(ended_|failed_|initialized_)|void[ \t]+cleanup[(]|TransferCodingDecodeError[ \t]+failure_|TransferCodingDecodeError[ \t]+error[(][)] const|std::optional<HttpProtocolError>" OR
    _installed_transfer_decoder_contract MATCHES
        "decodeAppend[(]|produce[(]|setInput[(]|finished[(]|empty[(]")
     message(FATAL_ERROR
@@ -2265,11 +2271,19 @@ if(_built_components_csv MATCHES "(^|,)web(,|$)")
            "PoolLeaseScheduler scheduler_" OR
        NOT _installed_redis_internal MATCHES
            "PoolLeaseScheduler scheduler_" OR
+       NOT _installed_db_internal MATCHES
+           "std::optional<std::size_t> defaultClientIndex_" OR
+       _installed_db_internal MATCHES "DbPoolRef[ \t]+defaultClient_" OR
+       NOT _installed_redis_internal MATCHES "RedisPool& pool_" OR
+       NOT _installed_redis_internal MATCHES
+           "std::optional<std::size_t> defaultPoolIndex_" OR
+       _installed_redis_internal MATCHES
+           "RedisPool[*][ \t]+(pool_|defaultPool_)" OR
        _installed_db_internal MATCHES "DbPoolScheduler" OR
        _installed_redis_internal MATCHES
            "free_|waiters_|closing_|bool[ \t]+busy")
         message(FATAL_ERROR
-            "installed integration runtimes restored duplicate pool lease state")
+            "installed integration runtimes restored duplicate lease or Redis alias ownership")
     endif()
     if(EXISTS
        "${_install_prefix}/include/ruvia/web/detail/db/DbPoolScheduler.h")
@@ -4781,9 +4795,12 @@ if("web" IN_LIST _built_components)
         "${_install_prefix}/include/ruvia/web/detail/http/CsrfInternal.h")
     set(_installed_http1_closing_rejection
         "${_install_prefix}/include/ruvia/web/detail/server/Http1ClosingRejection.h")
+    set(_installed_request_body_facade
+        "${_install_prefix}/include/ruvia/web/detail/body/HttpRequestBodyFacade.h")
     if(NOT EXISTS "${_installed_context_session_state}" OR
        NOT EXISTS "${_installed_secure_token_result}" OR
-       NOT EXISTS "${_installed_http1_closing_rejection}")
+       NOT EXISTS "${_installed_http1_closing_rejection}" OR
+       NOT EXISTS "${_installed_request_body_facade}")
         message(FATAL_ERROR
             "installed Web package is missing typed session/token contracts")
     endif()
@@ -4793,6 +4810,8 @@ if("web" IN_LIST _built_components)
         _installed_secure_token_result_content)
     file(READ "${_installed_http1_closing_rejection}"
         _installed_http1_closing_rejection_content)
+    file(READ "${_installed_request_body_facade}"
+        _installed_request_body_facade_content)
     if(NOT _installed_context_session_state_content MATCHES
            "class ContextSessionState final" OR
        NOT _installed_context_session_state_content MATCHES
@@ -4804,7 +4823,11 @@ if("web" IN_LIST _built_components)
        NOT _installed_http1_closing_rejection_content MATCHES
            "class Http1ClosingRejection final" OR
        NOT _installed_http1_closing_rejection_content MATCHES
-           "Http1ClosingRateLimitRejection")
+           "Http1ClosingRateLimitRejection" OR
+       NOT _installed_request_body_facade_content MATCHES
+           "class BodyReaderBinding final" OR
+       NOT _installed_request_body_facade_content MATCHES
+           "class RequestBodyLoaderBinding final")
         message(FATAL_ERROR
             "installed Web session/token contracts are stale")
     endif()

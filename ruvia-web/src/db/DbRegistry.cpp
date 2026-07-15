@@ -140,10 +140,9 @@ detail::DbRegistry::DbRegistry(
         clients_.push_back(Entry{
             std::pmr::string(definition.alias, resource_),
             std::move(owner)});
-        const auto clientRef = poolRef(clients_.back().client);
         if (std::string_view(clients_.back().alias.data(), clients_.back().alias.size()) ==
             kDefaultDbAlias) {
-            defaultClient_ = clientRef;
+            defaultClientIndex_ = clients_.size() - 1;
         }
     }
 }
@@ -182,10 +181,12 @@ bool detail::DbRegistry::hasAnyTimeout() const noexcept {
 
 DbHandle detail::DbRegistry::get(
     std::pmr::memory_resource* resource) const {
-    if (detail::dbPoolRefEmpty(defaultClient_)) {
+    if (!defaultClientIndex_.has_value()) {
         throw std::logic_error("default database is not configured");
     }
-    return DbHandle(defaultClient_, resource);
+    return DbHandle(
+        poolRef(clients_[*defaultClientIndex_].client),
+        resource);
 }
 
 DbHandle detail::DbRegistry::get(

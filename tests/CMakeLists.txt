@@ -256,6 +256,10 @@ if(RUVIA_BUILD_CORE)
     target_link_libraries(ruvia_worker_timer PRIVATE ruvia::core)
     add_test(NAME ruvia_worker_timer COMMAND ruvia_worker_timer)
 
+    add_executable(ruvia_worker_dispatch_failure worker_dispatch_failure.cpp)
+    target_link_libraries(ruvia_worker_dispatch_failure PRIVATE ruvia::core)
+    add_test(NAME ruvia_worker_dispatch_failure COMMAND ruvia_worker_dispatch_failure)
+
 endif()
 
 if(RUVIA_BUILD_HTTP)

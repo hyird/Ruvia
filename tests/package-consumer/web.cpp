@@ -38,6 +38,7 @@
 #include <ruvia/web/detail/StaticFilesInternal.h>
 #include <ruvia/web/detail/ValidatedValues.h>
 #include <ruvia/web/detail/http/ContextCapabilities.h>
+#include <ruvia/web/detail/body/HttpRequestBodyFacade.h>
 #include <ruvia/web/detail/http/ContextServices.h>
 #include <ruvia/web/detail/http/ContextSessionState.h>
 #include <ruvia/web/detail/http/CsrfInternal.h>
@@ -162,6 +163,17 @@ static_assert(std::same_as<
     const ruvia::detail::RateLimitRejection*>);
 static_assert(!ExposesRvalueRateLimitAlternative<
     ruvia::detail::RateLimitDecision>);
+struct PackageBodyReaderTarget final {
+    ruvia::Task<std::optional<std::string_view>> read();
+};
+struct PackageBodyLoaderTarget final {
+    ruvia::Task<std::string_view> readAll();
+    ruvia::Task<void> discard();
+};
+static_assert(!std::is_move_constructible_v<
+    ruvia::detail::BodyReaderBinding<PackageBodyReaderTarget>>);
+static_assert(!std::is_move_constructible_v<
+    ruvia::detail::RequestBodyLoaderBinding<PackageBodyLoaderTarget>>);
 template <typename Rejection>
 concept ExposesRvalueHttp1ClosingAlternative = requires(Rejection rejection) {
     std::move(rejection).error();

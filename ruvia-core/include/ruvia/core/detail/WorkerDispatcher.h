@@ -29,6 +29,7 @@ public:
 
     [[nodiscard]] PostResult post(std::move_only_function<void()> task);
     void defer(std::move_only_function<void()> task);
+    void deferOrTerminate(std::move_only_function<void()> task) noexcept;
     void registerShutdownListener(const std::shared_ptr<WorkerShutdownListener>& listener);
     [[nodiscard]] WorkerTimerRegistration scheduleTimer(
         std::chrono::steady_clock::time_point deadline,

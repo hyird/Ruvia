@@ -5,21 +5,18 @@
 namespace ruvia::detail {
 
 RedisPool::ConnectionGuard::ConnectionGuard(RedisPool& pool, std::size_t index) noexcept
-    : pool_(&pool),
+    : pool_(pool),
       index_(index) {}
 
 RedisPool::ConnectionGuard::~ConnectionGuard() {
-    if (pool_ == nullptr) {
-        return;
-    }
     if (discard_) {
-        pool_->close(pool_->connections_[index_]);
+        pool_.close(pool_.connections_[index_]);
     }
-    pool_->release(index_);
+    pool_.release(index_);
 }
 
 RedisPool::Connection& RedisPool::ConnectionGuard::connection() noexcept {
-    return pool_->connections_[index_];
+    return pool_.connections_[index_];
 }
 
 void RedisPool::ConnectionGuard::discard() noexcept {

@@ -1,5 +1,6 @@
 #include "test_harness.h"
 
+#include <array>
 #include <chrono>
 #include <concepts>
 #include <initializer_list>
@@ -13,6 +14,7 @@
 #include <utility>
 
 #include "ruvia/web/redis/RedisHandle.h"
+#include "ruvia/web/detail/redis/RedisInternal.h"
 #include "ruvia/web/detail/redis/RedisTypesAccess.h"
 
 namespace {
@@ -178,6 +180,33 @@ static_assert(std::same_as<
 
 RUVIA_TEST(redis_api_surface_uses_span_args_without_initializer_list_overloads) {
     RUVIA_CHECK(true);
+}
+
+RUVIA_TEST(redis_registry_derives_default_pool_from_owned_entry_index) {
+    asio::io_context ioContext;
+    const std::array<ruvia::detail::RedisDefinition, 2> definitions{{
+        {std::pmr::string("cache"), ruvia::RedisConfig{}},
+        {std::pmr::string("default"), ruvia::RedisConfig{}},
+    }};
+    ruvia::detail::RedisRegistry registry(
+        ioContext,
+        std::pmr::get_default_resource(),
+        definitions);
+
+    bool defaultResolved = true;
+    bool aliasResolved = true;
+    try {
+        (void)registry.get(std::pmr::get_default_resource());
+    } catch (...) {
+        defaultResolved = false;
+    }
+    try {
+        (void)registry.get("cache", std::pmr::get_default_resource());
+    } catch (...) {
+        aliasResolved = false;
+    }
+    RUVIA_CHECK(defaultResolved);
+    RUVIA_CHECK(aliasResolved);
 }
 
 RUVIA_TEST(redis_set_expiration_cannot_represent_conflicting_modes) {
