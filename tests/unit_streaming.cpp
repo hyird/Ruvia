@@ -2,6 +2,7 @@
 
 #include <asio/co_spawn.hpp>
 #include <asio/io_context.hpp>
+#include <asio/post.hpp>
 #include <asio/use_future.hpp>
 
 #include <array>
@@ -15,8 +16,10 @@
 #include <vector>
 
 #include "ruvia/web/detail/http/StreamingInternal.h"
+#include "ruvia/web/detail/body/HttpRequestBodyFacade.h"
 #include "ruvia/web/detail/server/HttpResponseStreamState.h"
 #include "ruvia/core/detail/AsioAwait.h"
+#include "ruvia/core/detail/WorkerSignal.h"
 #include "ruvia/core/Task.h"
 #include "ruvia/web/Streaming.h"
 
@@ -92,7 +95,62 @@ ruvia::Task<void> endWithTrailers(ruvia::ResponseStreamWriter& writer) {
     co_await writer.end(trailers);
 }
 
+struct SuspendedBodySource final {
+    explicit SuspendedBodySource(asio::io_context& io)
+        : signal(io.get_executor()) {}
+
+    ruvia::Task<std::optional<std::string_view>> read() {
+        co_await signal.wait();
+        co_return std::nullopt;
+    }
+
+    ruvia::detail::WorkerSignal signal;
+};
+
+ruvia::Task<void> completeBodyRead(
+    ruvia::BodyReader& reader,
+    bool& completed) {
+    (void)co_await reader.read();
+    completed = true;
+}
+
+ruvia::Task<void> rejectConcurrentBodyRead(
+    ruvia::BodyReader& reader,
+    bool& rejected) {
+    try {
+        (void)co_await reader.read();
+    } catch (const std::logic_error&) {
+        rejected = true;
+    }
+}
+
 }  // namespace
+
+RUVIA_TEST(body_reader_rejects_concurrent_consumers_of_one_borrowed_buffer) {
+    asio::io_context io(1);
+    auto binding =
+        ruvia::detail::BodyReaderBinding<SuspendedBodySource>(io);
+    bool firstCompleted = false;
+    bool secondRejected = false;
+
+    auto first = asio::co_spawn(
+        io,
+        ruvia::detail::taskAsAwaitable(
+            completeBodyRead(binding.facade(), firstCompleted)),
+        asio::use_future);
+    auto second = asio::co_spawn(
+        io,
+        ruvia::detail::taskAsAwaitable(
+            rejectConcurrentBodyRead(binding.facade(), secondRejected)),
+        asio::use_future);
+    asio::post(io, [&binding] { binding.reader().signal.notify(); });
+    io.run();
+    first.get();
+    second.get();
+
+    RUVIA_CHECK(firstCompleted);
+    RUVIA_CHECK(secondRejected);
+}
 
 RUVIA_TEST(response_stream_writeln_reuses_scratch_without_leaking_previous_chunk) {
     CaptureStreamSink sink;
@@ -374,6 +432,38 @@ RUVIA_TEST(response_stream_state_drives_typed_post_head_phases) {
         trailerAfterEnd = true;
     }
     RUVIA_CHECK(trailerAfterEnd);
+
+    // Transport failure is a terminal alternative, not a second flag that can
+    // coexist with Ended. A post-commit abort retains the exact wire plan for
+    // dispatch accounting, while an uncommitted abort cannot manufacture one.
+    ResponseStreamState abortedOpen;
+    abortedOpen.markCommitted(ruvia::detail::httpResponseStreamCommitPlan(
+        ruvia::detail::ResponseStreamFraming::kHttp1Chunked,
+        ruvia::HttpKnownMethod::kGet,
+        206,
+        ruvia::detail::ResponseTrailerIntent::kNone));
+    abortedOpen.markAborted();
+    abortedOpen.markAborted();
+    RUVIA_CHECK(abortedOpen.aborted());
+    RUVIA_CHECK(!abortedOpen.ended());
+    RUVIA_CHECK(abortedOpen.committed());
+    RUVIA_CHECK_EQ(
+        abortedOpen.commitPlan()->responseStatus(),
+        std::uint16_t{206});
+    bool endAfterAbort = false;
+    try {
+        abortedOpen.markEnded();
+    } catch (const std::logic_error&) {
+        endAfterAbort = true;
+    }
+    RUVIA_CHECK(endAfterAbort);
+
+    ResponseStreamState abortedBeforeCommit;
+    abortedBeforeCommit.markAborted();
+    RUVIA_CHECK(abortedBeforeCommit.aborted());
+    RUVIA_CHECK(!abortedBeforeCommit.committed());
+    RUVIA_CHECK(!abortedBeforeCommit.ended());
+    RUVIA_CHECK(abortedBeforeCommit.commitPlan() == nullptr);
 
     // A suppressed body (e.g. HEAD, 204 or 304) still rejects a body chunk.
     ResponseStreamState suppressed;

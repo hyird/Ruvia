@@ -22,6 +22,11 @@ public:
         return std::holds_alternative<Ended>(state_);
     }
 
+    [[nodiscard]] bool aborted() const noexcept {
+        return std::holds_alternative<AbortedBeforeCommit>(state_) ||
+            std::holds_alternative<AbortedAfterCommit>(state_);
+    }
+
     [[nodiscard]] const ResponseStreamCommitPlan*
     commitPlan() const & noexcept {
         if (const auto* value = std::get_if<BodyOpen>(&state_)) {
@@ -31,6 +36,9 @@ public:
             return &value->plan;
         }
         if (const auto* value = std::get_if<Ended>(&state_)) {
+            return &value->plan;
+        }
+        if (const auto* value = std::get_if<AbortedAfterCommit>(&state_)) {
             return &value->plan;
         }
         return nullptr;
@@ -67,7 +75,7 @@ public:
     }
 
     void markCommitted(ResponseStreamCommitPlan plan) {
-        if (committed()) {
+        if (committed() || aborted()) {
             throw std::logic_error("response stream is already committed");
         }
         switch (plan.headDisposition()) {
@@ -100,7 +108,30 @@ public:
         throw std::logic_error("response stream is not committed");
     }
 
+    void markAborted() noexcept {
+        if (aborted()) {
+            return;
+        }
+        if (auto* value = std::get_if<BodyOpen>(&state_)) {
+            auto plan = std::move(value->plan);
+            state_.emplace<AbortedAfterCommit>(std::move(plan));
+            return;
+        }
+        if (auto* value = std::get_if<TrailersOnly>(&state_)) {
+            auto plan = std::move(value->plan);
+            state_.emplace<AbortedAfterCommit>(std::move(plan));
+            return;
+        }
+        if (std::holds_alternative<Ended>(state_)) {
+            return;
+        }
+        state_.emplace<AbortedBeforeCommit>();
+    }
+
     void ensureBodyAllowed() const {
+        if (aborted()) {
+            throw std::logic_error("response stream is aborted");
+        }
         if (ended()) {
             throw std::logic_error("response stream is already ended");
         }
@@ -110,6 +141,9 @@ public:
     }
 
     void ensureTrailersAllowed(ResponseStreamTrailerFraming requiredFraming) const {
+        if (aborted()) {
+            throw std::logic_error("response stream is aborted");
+        }
         if (ended()) {
             throw std::logic_error("response stream is already ended");
         }
@@ -153,13 +187,24 @@ private:
         ResponseStreamCommitPlan plan;
     };
 
+    struct AbortedBeforeCommit final {};
+
+    struct AbortedAfterCommit final {
+        explicit AbortedAfterCommit(ResponseStreamCommitPlan commitPlan) noexcept
+            : plan(std::move(commitPlan)) {}
+
+        ResponseStreamCommitPlan plan;
+    };
+
     using State = std::variant<
         Unbound,
         Bound,
         Detached,
         BodyOpen,
         TrailersOnly,
-        Ended>;
+        Ended,
+        AbortedBeforeCommit,
+        AbortedAfterCommit>;
 
     State state_;
 };

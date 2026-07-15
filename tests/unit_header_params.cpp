@@ -195,6 +195,26 @@ RUVIA_TEST(connection_options_parse_tokens_case_insensitively) {
     RUVIA_CHECK((connectionOptions("") == Arr{false, false, false, false}));
 }
 
+RUVIA_TEST(connection_options_commit_presence_and_tokens_in_one_byte) {
+    static_assert(sizeof(HttpConnectionOptions) == 1);
+
+    HttpConnectionOptions options;
+    RUVIA_CHECK(!options.hasField());
+    RUVIA_CHECK(
+        options.parseField(", ,", HttpFieldListRole::kRecipient) ==
+        HttpFieldListParseStatus::kOk);
+    RUVIA_CHECK(options.hasField());
+    RUVIA_CHECK(!options.close());
+    RUVIA_CHECK(!options.upgrade());
+
+    RUVIA_CHECK(
+        options.parseField("close, Upgrade", HttpFieldListRole::kRecipient) ==
+        HttpFieldListParseStatus::kOk);
+    RUVIA_CHECK(options.hasField());
+    RUVIA_CHECK(options.close());
+    RUVIA_CHECK(options.upgrade());
+}
+
 RUVIA_TEST(connection_options_enforce_sender_and_recipient_list_roles) {
     for (const auto value : {",close", "close,", "close,,Upgrade", ""}) {
         HttpConnectionOptions sender;

@@ -1998,6 +1998,9 @@ static_assert(std::same_as<
 static_assert(std::is_trivially_copyable_v<
     ruvia::detail::HttpUpgradeProtocols>);
 static_assert(sizeof(ruvia::detail::HttpUpgradeProtocols) == 1);
+static_assert(std::is_trivially_copyable_v<
+    ruvia::detail::HttpConnectionOptions>);
+static_assert(sizeof(ruvia::detail::HttpConnectionOptions) == 1);
 static_assert(!HasPublicHttp1RequestBodyPlanFactories<
     ruvia::detail::Http1RequestBodyPlan>);
 static_assert(!std::default_initializable<ruvia::detail::Http1RequestBodyPlan>);

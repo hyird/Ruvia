@@ -125,9 +125,7 @@ private:
     WorkerSignal readerDoneSignal_;
     WritePhase writePhase_{WritePhase::kIdle};
     bool readActive_{false};
-    bool awaitingPong_{false};
-    std::int64_t heartbeatPingSentMs_{0};
-    std::int64_t localCloseStartedMs_{-1};
+    WebSocketLivenessState livenessState_{WebSocketLivenessIdle{}};
     // Declared last so destruction unregisters before any callback target state
     // starts to disappear.
     ConnectionScanner::PeriodicCheckRegistration periodicCheck_;

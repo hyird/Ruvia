@@ -35,7 +35,15 @@ SseWriter Context::streamSse() {
 }
 
 Task<std::optional<std::string_view>> BodyReader::read() {
-    return read_();
+    if (readActive_) {
+        throw std::logic_error("request body read is already in progress");
+    }
+    readActive_ = true;
+    struct ReadGuard final {
+        bool& active;
+        ~ReadGuard() { active = false; }
+    } guard{readActive_};
+    co_return co_await read_();
 }
 
 Task<void> ResponseStreamWriter::write(std::string_view chunk) {

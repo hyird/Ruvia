@@ -60,7 +60,7 @@ public:
     }
     const ResponseStreamCommitPlan* commitPlan() const && = delete;
 
-    [[nodiscard]] bool aborted() const noexcept { return aborted_; }
+    [[nodiscard]] bool aborted() const noexcept { return state_.aborted(); }
 
     [[nodiscard]] Http1ServerConnectionPlan connectionPlan() const noexcept {
         return connectionPlan_;
@@ -139,7 +139,7 @@ private:
             });
         const auto ec = writeCompletion.errorCode();
         if (ec) {
-            aborted_ = true;
+            state_.markAborted();
             throw std::system_error(ec);
         }
         scannerEntry_.touch();
@@ -167,7 +167,7 @@ private:
                 });
             const auto rawEc = writeCompletion.errorCode();
             if (rawEc) {
-                aborted_ = true;
+                state_.markAborted();
                 throw std::system_error(rawEc);
             }
             scannerEntry_.touch();
@@ -185,7 +185,7 @@ private:
             });
         const auto writeEc = writeCompletion.errorCode();
         if (writeEc) {
-            aborted_ = true;
+            state_.markAborted();
             throw std::system_error(writeEc);
         }
         scannerEntry_.touch();
@@ -235,11 +235,11 @@ private:
                 asio::async_write(stream_, buffers, std::move(handler));
             });
         const auto ec = writeCompletion.errorCode();
-        state_.markEnded();
         if (ec) {
-            aborted_ = true;
+            state_.markAborted();
             throw std::system_error(ec);
         }
+        state_.markEnded();
         scannerEntry_.touch();
     }
 
@@ -253,7 +253,6 @@ private:
     Http1ResponseStreamPlan plan_;
     Http1ServerConnectionPlan connectionPlan_;
     ResponseStreamState state_;
-    bool aborted_{false};
 };
 
 }  // namespace ruvia::detail

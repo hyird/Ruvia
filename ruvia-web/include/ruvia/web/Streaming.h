@@ -37,11 +37,13 @@ public:
     /// Reads the next chunk of the streamed request body.
     /// @warning The returned view borrows the connection read buffer and is only valid
     /// until the NEXT read() call; copy it out if you need to retain it past then. An
-    /// empty optional signals end-of-body.
+    /// empty optional signals end-of-body. Only one read may be in flight; concurrent
+    /// consumers are rejected because they cannot safely share the borrowed buffer.
     [[nodiscard]] Task<std::optional<std::string_view>> read();
 
 private:
     detail::CallableRef<std::optional<std::string_view>> read_;
+    bool readActive_{false};
 };
 
 class ResponseStreamWriter final {

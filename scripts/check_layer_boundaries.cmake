@@ -4291,6 +4291,9 @@ check_files_no_match("response-stream runtime must consume the typed commit plan
     "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/server/HttpResponseStreamState.h"
     "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/server/HttpResponseStreamSink.h"
     "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/http2/Http2SansIoResponseStreamSink.h")
+check_files_no_match("HTTP/1 response-stream termination must remain exclusive"
+    "bool[ \t]+aborted_"
+    "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/server/HttpResponseStreamSink.h")
 check_files_no_match("response-stream status must follow exclusive commit results"
     "${RULE_STALE_RESPONSE_STREAM_STATUS_SPLIT}"
     "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/router/RouteStreamState.h"
@@ -4604,6 +4607,14 @@ if(EXISTS "${HTTP_RESPONSE_STREAM_COMMIT_PLAN}" AND
            "struct TrailersOnly final" OR
        NOT web_response_stream_state MATCHES
            "struct Ended final" OR
+       NOT web_response_stream_state MATCHES
+           "struct AbortedBeforeCommit final" OR
+       NOT web_response_stream_state MATCHES
+           "struct AbortedAfterCommit final" OR
+       NOT web_response_stream_state MATCHES
+           "bool aborted[(][)] const noexcept" OR
+       NOT web_response_stream_state MATCHES
+           "void markAborted[(][)] noexcept" OR
        web_response_stream_state MATCHES
            "std::optional<CommittedState>|context_|streamingHead_|committed_|enum class Phase" OR
        NOT web_response_stream_state MATCHES
@@ -4690,6 +4701,8 @@ if(EXISTS "${HTTP_RESPONSE_STREAM_COMMIT_PLAN}" AND
            "committedContextReleased" OR
        NOT response_stream_lifecycle_test MATCHES
            "rebindRejected" OR
+       NOT response_stream_lifecycle_test MATCHES
+           "abortedOpen[.]markAborted[(][)]" OR
        NOT http1_session_completion_test MATCHES
            "http1_session_request_completion_owns_wire_and_buffer_outcome" OR
        NOT http1_session_completion_test MATCHES
@@ -7804,14 +7817,14 @@ else()
        web_http2_response_stream_sink MATCHES
            "Http2SansIoStreamSignal[*]" OR
        web_http2_stream_runtime MATCHES
-           "std::optional<Http2SansIoStreamSignal>|dispatchSignal_|${RULE_STALE_HTTP2_BODY_MODE_SPLIT}" OR
+           "std::optional<Http2SansIoStreamSignal>|dispatchSignal_|bool[ \t]+hasQueuedChunk_|${RULE_STALE_HTTP2_BODY_MODE_SPLIT}" OR
        web_http2_ws_transport MATCHES
            "Http2BodyQueue|Http2StreamBodyQueue|class Http2SansIoStreamSignal final" OR
        web_http2_stream_runtime MATCHES
            "Http2LocalSettings|kMaxConcurrentStreams|Http2SansIoStreamRuntime[*][ \t\r\n]+ensure[(]" OR
        web_http2_stream_session MATCHES "ensureStreamRuntime")
         boundary_error("HTTP/2 Web stream runtime lost its discriminated ownership boundary"
-            "route resolution and exactly one buffered/streaming body storage must commit together before dispatch and receive-credit release")
+            "route resolution and exactly one buffered/streaming body storage must commit together before dispatch, while queued storage remains the sole backlog-presence authority")
     endif()
 endif()
 if(EXISTS "${HTTP2_REQUEST_BUILDER}")
@@ -9693,6 +9706,8 @@ if(EXISTS "${CONNECTION_TIMEOUT_CORE_MODEL}" AND
            "periodicCheckCount_[ \t]*!=[ \t]*0" OR
        NOT connection_timeout_core_runtime MATCHES
            "if [(]hasScanningWork[(][)][)]" OR
+       NOT connection_timeout_core_runtime MATCHES
+           "running_[ 	]*=[ 	]*false;[\r\n 	]+throw;" OR
        NOT connection_periodic_ws MATCHES
            "ConnectionScanner::PeriodicCheckRegistration[ \t]+periodicCheck_" OR
        NOT connection_periodic_ws MATCHES
@@ -9703,6 +9718,8 @@ if(EXISTS "${CONNECTION_TIMEOUT_CORE_MODEL}" AND
            "void WebSocketConnection<Transport>::heartbeatTick" OR
        NOT connection_periodic_test MATCHES
            "PeriodicCheckRegistration,[ \t\r\n]+12> registrations" OR
+       NOT connection_periodic_test MATCHES
+           "offWorkerRejected" OR
        NOT connection_timeout_core_package MATCHES
            "using ScannerRegistration" OR
        NOT connection_timeout_core_package MATCHES
@@ -11286,7 +11303,11 @@ if(EXISTS "${HTTP_PROTOCOL_PLAN_RANGE}" AND
        NOT http_protocol_connection_facts MATCHES
            "is_trivially_copyable_v<HttpConnectionOptions>" OR
        NOT http_protocol_connection_facts MATCHES
-           "sizeof[(]HttpConnectionOptions[)] <= 2" OR
+           "sizeof[(]HttpConnectionOptions[)] == 1" OR
+       NOT http_protocol_connection_facts MATCHES
+           "kFieldPresentBit" OR
+       http_protocol_connection_facts MATCHES
+           "bool[ \t]+fieldPresent_" OR
        NOT http_protocol_connection_facts MATCHES
            "is_trivially_copyable_v<HttpUpgradeProtocols>" OR
        NOT http_protocol_connection_facts MATCHES
@@ -11685,9 +11706,12 @@ set(WS_CONNECTION_WRITE
     "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/websocket/HttpWebSocketConnectionWrite.inl")
 set(WS_CONNECTION_HEARTBEAT
     "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/websocket/HttpWebSocketConnectionHeartbeat.inl")
+set(WS_CONNECTION_LIVENESS
+    "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/websocket/HttpWebSocketLiveness.h")
 file(READ "${WS_CONNECTION_HEADER}" ws_connection_header_content)
 file(READ "${WS_CONNECTION_WRITE}" ws_connection_write_content)
 file(READ "${WS_CONNECTION_HEARTBEAT}" ws_connection_heartbeat_content)
+file(READ "${WS_CONNECTION_LIVENESS}" ws_connection_liveness_content)
 set(ws_connection_write_state
     "${ws_connection_header_content}${ws_connection_write_content}${ws_connection_heartbeat_content}")
 if(NOT ws_connection_header_content MATCHES "enum class WritePhase" OR
@@ -11697,6 +11721,23 @@ if(NOT ws_connection_header_content MATCHES "enum class WritePhase" OR
        "writeActive_|heartbeatWriteActive_|backgroundWriteCount_")
     boundary_error("WebSocket write ownership is not a single typed phase"
         "Application and heartbeat writes must transition one Idle/Application/Heartbeat state")
+endif()
+if(NOT ws_connection_header_content MATCHES
+       "WebSocketLivenessState livenessState_" OR
+   NOT ws_connection_header_content MATCHES
+       "WebSocketLivenessIdle" OR
+   NOT ws_connection_liveness_content MATCHES
+       "WebSocketSendingPing" OR
+   NOT ws_connection_heartbeat_content MATCHES
+       "WebSocketAwaitingPong" OR
+   NOT ws_connection_write_content MATCHES
+       "WebSocketAwaitingPeerClose" OR
+   ws_connection_write_state MATCHES
+       "awaitingPong_|heartbeatPingSentMs_|localCloseStartedMs_" OR
+   NOT ws_connection_write_content MATCHES
+       "flushProtocolOutputNow[(][)][;][\r\n \t]+[}][\r\n \t]+if [(]awaitPeerClose [&&]")
+    boundary_error("WebSocket liveness ownership is not one committed state"
+        "idle, awaiting Pong, and awaiting peer Close must be exclusive; the Close timeout starts only after its transport write commits")
 endif()
 
 set(WS_HANDSHAKE_WRITER
@@ -11932,6 +11973,10 @@ file(READ "${REQUEST_BODY_FACADE_HEADER}" request_body_facade_binding_content)
 file(READ "${HTTP1_STREAM_BODY_ROUTE}" http1_stream_body_binding_consumer)
 file(READ "${HTTP1_BUFFERED_BODY_ROUTE}" http1_buffered_body_binding_consumer)
 file(READ "${HTTP2_WEB_SESSION}" http2_body_binding_consumer)
+file(READ "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/Streaming.h"
+    request_body_public_facade_content)
+file(READ "${RUVIA_ROOT}/ruvia-web/src/http/HttpRuntimeFacades.cpp"
+    request_body_public_facade_runtime)
 if(NOT request_body_facade_binding_content MATCHES
        "class BodyReaderBinding final" OR
    NOT request_body_facade_binding_content MATCHES
@@ -11947,9 +11992,13 @@ if(NOT request_body_facade_binding_content MATCHES
    NOT http2_body_binding_consumer MATCHES
        "optional<BodyReaderBinding<Http2SansIoRequestBodyReader>>" OR
    http2_body_binding_consumer MATCHES
-       "optional<Http2SansIoRequestBodyReader>")
+       "optional<Http2SansIoRequestBodyReader>" OR
+   NOT request_body_public_facade_content MATCHES
+       "bool[ \t]+readActive_" OR
+   NOT request_body_public_facade_runtime MATCHES
+       "request body read is already in progress")
     boundary_error("Request-body target and facade regained split optional ownership"
-        "H1/H2 streaming and lazy buffered routes must publish one atomic binding")
+        "H1/H2 routes must publish one atomic binding and one consumer may borrow the read buffer at a time")
 endif()
 
 set(HTTP_CONTENT_CODING_HEADER

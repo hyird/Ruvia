@@ -44,7 +44,10 @@ Task<std::optional<WebSocketMessage>> WebSocketConnection<Transport>::read() {
             continue;
         }
         if (event->pong() != nullptr) {
-            awaitingPong_ = false;
+            if (std::holds_alternative<WebSocketSendingPing>(livenessState_) ||
+                std::holds_alternative<WebSocketAwaitingPong>(livenessState_)) {
+                livenessState_ = WebSocketLivenessIdle{};
+            }
             continue;
         }
         if (event->close() != nullptr || event->protocolError() != nullptr ||
@@ -52,6 +55,7 @@ Task<std::optional<WebSocketMessage>> WebSocketConnection<Transport>::read() {
             // These observations terminate the application read side. WsOutputPlan
             // remains the sole authority for flushing Close bytes and mapping
             // orderly transport completion.
+            livenessState_ = WebSocketLivenessIdle{};
             co_await flushProtocolOutputExclusive();
             co_return std::nullopt;
         }

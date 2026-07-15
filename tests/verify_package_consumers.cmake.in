@@ -637,7 +637,11 @@ if(NOT _installed_http_protocol_plan_range_text MATCHES
    NOT _installed_http_protocol_connection_facts_text MATCHES
        "is_trivially_copyable_v<HttpConnectionOptions>" OR
    NOT _installed_http_protocol_connection_facts_text MATCHES
-       "sizeof[(]HttpConnectionOptions[)] <= 2" OR
+       "sizeof[(]HttpConnectionOptions[)] == 1" OR
+   NOT _installed_http_protocol_connection_facts_text MATCHES
+       "kFieldPresentBit" OR
+   _installed_http_protocol_connection_facts_text MATCHES
+       "bool[ \t]+fieldPresent_" OR
    NOT _installed_http_protocol_connection_facts_text MATCHES
        "is_trivially_copyable_v<HttpUpgradeProtocols>" OR
    NOT _installed_http_protocol_connection_facts_text MATCHES
@@ -2756,9 +2760,9 @@ if(_built_components_csv MATCHES "(^|,)web(,|$)")
             "installed Web package lost unified HTTP/2 route/body/signal runtime ownership")
     endif()
     if(_installed_http2_web_runtime MATCHES
-           "kModeNotSelected|modeSelected|selectedMode|std::optional<RequestBodyMode>|std::optional<RouteResolution>|std::optional<Http2SansIoStreamSignal>|dispatchSignal_|routeResolution[(]|RequestBodyMode[ \t]+mode_[ \t]*[{]|bool[ \t]+modeSelected_")
+           "kModeNotSelected|modeSelected|selectedMode|std::optional<RequestBodyMode>|std::optional<RouteResolution>|std::optional<Http2SansIoStreamSignal>|dispatchSignal_|routeResolution[(]|RequestBodyMode[ \t]+mode_[ \t]*[{]|bool[ \t]+modeSelected_|bool[ \t]+hasQueuedChunk_")
         message(FATAL_ERROR
-            "installed Web HTTP/2 runtime restored split route/body/dispatch state")
+            "installed Web HTTP/2 runtime restored split route/body/dispatch or queue-presence state")
     endif()
     if(NOT _installed_http2_web_runtime MATCHES
            "Http2SansIoStreamRuntime& ensureAccepted" OR
@@ -2926,6 +2930,14 @@ if(_built_components_csv MATCHES "(^|,)web(,|$)")
            "struct TrailersOnly final" OR
        NOT _installed_response_stream_state MATCHES
            "struct Ended final" OR
+       NOT _installed_response_stream_state MATCHES
+           "struct AbortedBeforeCommit final" OR
+       NOT _installed_response_stream_state MATCHES
+           "struct AbortedAfterCommit final" OR
+       NOT _installed_response_stream_state MATCHES
+           "bool aborted[(][)] const noexcept" OR
+       NOT _installed_response_stream_state MATCHES
+           "void markAborted[(][)] noexcept" OR
        _installed_response_stream_state MATCHES
            "std::optional<CommittedState>|context_|streamingHead_|committed_|enum class Phase" OR
        NOT _installed_response_stream_state MATCHES
@@ -4797,10 +4809,13 @@ if("web" IN_LIST _built_components)
         "${_install_prefix}/include/ruvia/web/detail/server/Http1ClosingRejection.h")
     set(_installed_request_body_facade
         "${_install_prefix}/include/ruvia/web/detail/body/HttpRequestBodyFacade.h")
+    set(_installed_streaming_facade
+        "${_install_prefix}/include/ruvia/web/Streaming.h")
     if(NOT EXISTS "${_installed_context_session_state}" OR
        NOT EXISTS "${_installed_secure_token_result}" OR
        NOT EXISTS "${_installed_http1_closing_rejection}" OR
-       NOT EXISTS "${_installed_request_body_facade}")
+       NOT EXISTS "${_installed_request_body_facade}" OR
+       NOT EXISTS "${_installed_streaming_facade}")
         message(FATAL_ERROR
             "installed Web package is missing typed session/token contracts")
     endif()
@@ -4812,6 +4827,8 @@ if("web" IN_LIST _built_components)
         _installed_http1_closing_rejection_content)
     file(READ "${_installed_request_body_facade}"
         _installed_request_body_facade_content)
+    file(READ "${_installed_streaming_facade}"
+        _installed_streaming_facade_content)
     if(NOT _installed_context_session_state_content MATCHES
            "class ContextSessionState final" OR
        NOT _installed_context_session_state_content MATCHES
@@ -4830,6 +4847,13 @@ if("web" IN_LIST _built_components)
            "class RequestBodyLoaderBinding final")
         message(FATAL_ERROR
             "installed Web session/token contracts are stale")
+    endif()
+    if(NOT _installed_streaming_facade_content MATCHES
+           "bool[ \t]+readActive_" OR
+       NOT _installed_streaming_facade_content MATCHES
+           "Only one read may be in flight")
+        message(FATAL_ERROR
+            "installed BodyReader lost its single-consumer borrowed-buffer contract")
     endif()
 
     ruvia_verify_package_consumer(

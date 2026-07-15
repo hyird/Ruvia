@@ -188,7 +188,15 @@ void ConnectionScanner::start() {
     // armed, but schedule() skips the connection-list walk while no timeout,
     // worker maintenance check, or periodic registration exists.
     running_ = true;
-    schedule();
+    try {
+        schedule();
+    } catch (...) {
+        // start() is an atomic lifecycle transition. In particular, calling it
+        // off-worker must not leave a scanner that reports itself running while
+        // owning no timer and then silently rejects the valid on-worker retry.
+        running_ = false;
+        throw;
+    }
 }
 
 void ConnectionScanner::stop() noexcept {

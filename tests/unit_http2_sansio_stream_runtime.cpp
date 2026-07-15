@@ -3,6 +3,7 @@
 #include <concepts>
 #include <cstddef>
 #include <memory_resource>
+#include <new>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -21,6 +22,35 @@
 #include "ruvia/web/detail/http2/Http2SansIoStreamRuntime.h"
 
 namespace {
+
+class ToggleRejectingMemoryResource final : public std::pmr::memory_resource {
+public:
+    void rejectAllocations(bool value) noexcept {
+        rejecting_ = value;
+    }
+
+private:
+    void* do_allocate(std::size_t bytes, std::size_t alignment) override {
+        if (rejecting_) {
+            throw std::bad_alloc();
+        }
+        return std::pmr::new_delete_resource()->allocate(bytes, alignment);
+    }
+
+    void do_deallocate(
+        void* pointer,
+        std::size_t bytes,
+        std::size_t alignment) override {
+        std::pmr::new_delete_resource()->deallocate(pointer, bytes, alignment);
+    }
+
+    [[nodiscard]] bool do_is_equal(
+        const std::pmr::memory_resource& other) const noexcept override {
+        return this == &other;
+    }
+
+    bool rejecting_{false};
+};
 
 using ruvia::ProtocolByteLimit;
 using ruvia::detail::Http2RequestBodyRuntime;
@@ -126,6 +156,38 @@ RUVIA_TEST(http2_web_body_queue_reuses_storage_and_ignores_empty_chunks) {
     RUVIA_CHECK(queue.empty());
     queue.enqueue("reused");
     RUVIA_CHECK_EQ(queue.pop(), std::string_view("reused"));
+}
+
+RUVIA_TEST(http2_web_body_queue_commits_backlog_only_after_storage_succeeds) {
+    const std::string allocationSizedChunk(256, 'x');
+
+    ToggleRejectingMemoryResource firstChunkResource;
+    Http2SansIoBodyQueue emptyQueue(&firstChunkResource);
+    firstChunkResource.rejectAllocations(true);
+    bool firstChunkRejected = false;
+    try {
+        emptyQueue.enqueue(allocationSizedChunk);
+    } catch (const std::bad_alloc&) {
+        firstChunkRejected = true;
+    }
+    RUVIA_CHECK(firstChunkRejected);
+    RUVIA_CHECK(emptyQueue.empty());
+    RUVIA_CHECK_EQ(emptyQueue.queuedBytes(), std::size_t{0});
+
+    ToggleRejectingMemoryResource overflowResource;
+    Http2SansIoBodyQueue populatedQueue(&overflowResource);
+    populatedQueue.enqueue("retained");
+    overflowResource.rejectAllocations(true);
+    bool overflowRejected = false;
+    try {
+        populatedQueue.enqueue(allocationSizedChunk);
+    } catch (const std::bad_alloc&) {
+        overflowRejected = true;
+    }
+    RUVIA_CHECK(overflowRejected);
+    RUVIA_CHECK_EQ(populatedQueue.queuedBytes(), std::size_t{8});
+    RUVIA_CHECK_EQ(populatedQueue.pop(), std::string_view("retained"));
+    RUVIA_CHECK(populatedQueue.empty());
 }
 
 RUVIA_TEST(http2_web_route_selection_owns_exact_body_storage) {

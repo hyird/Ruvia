@@ -41,7 +41,7 @@ public:
     [[nodiscard]] HttpFieldListParseStatus parseField(
         std::string_view fieldValue,
         HttpFieldListRole role) noexcept {
-        auto parsedBits = bits_;
+        auto parsedBits = state_;
         std::size_t start = 0;
         while (start <= fieldValue.size()) {
             const auto comma = fieldValue.find(',', start);
@@ -78,17 +78,16 @@ public:
             start = comma + 1;
         }
 
-        bits_ = parsedBits;
-        fieldPresent_ = true;
+        state_ = static_cast<std::uint8_t>(parsedBits | kFieldPresentBit);
         return HttpFieldListParseStatus::kOk;
     }
 
     [[nodiscard]] bool hasField() const noexcept {
-        return fieldPresent_;
+        return (state_ & kFieldPresentBit) != 0;
     }
 
     [[nodiscard]] bool contains(HttpConnectionOption option) const noexcept {
-        return (bits_ & bit(option)) != 0;
+        return (state_ & bit(option)) != 0;
     }
 
     [[nodiscard]] bool close() const noexcept {
@@ -108,17 +107,21 @@ public:
     }
 
 private:
+    static constexpr std::uint8_t kFieldPresentBit = 1U << 7;
+
     [[nodiscard]] static constexpr std::uint8_t bit(
         HttpConnectionOption option) noexcept {
         return static_cast<std::uint8_t>(option);
     }
 
-    std::uint8_t bits_{0};
-    bool fieldPresent_{false};
+    // Connection owns four recognised-token bits plus one orthogonal field
+    // presence bit. Keeping them in one committed byte makes absent, present
+    // empty/unknown, and present with recognised options impossible to tear.
+    std::uint8_t state_{0};
 };
 
 static_assert(std::is_trivially_copyable_v<HttpConnectionOptions>);
-static_assert(sizeof(HttpConnectionOptions) <= 2);
+static_assert(sizeof(HttpConnectionOptions) == 1);
 
 struct HttpUpgradeProtocol final {
     std::string_view name;

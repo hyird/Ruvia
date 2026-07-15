@@ -84,18 +84,19 @@ public:
         if (data.empty()) {
             return;
         }
-        queuedBytes_ += data.size();
-        if (!hasQueuedChunk_ && !hasOverflowChunk()) {
+        if (queuedChunk_.empty() && !hasOverflowChunk()) {
             queuedChunk_.assign(data.data(), data.size());
-            hasQueuedChunk_ = true;
+            queuedBytes_ += data.size();
             return;
         }
-        auto& chunk = overflowChunks_.emplace_back();
-        chunk.assign(data.data(), data.size());
+        std::pmr::string chunk(
+            data.data(), data.size(), overflowChunks_.get_allocator());
+        overflowChunks_.push_back(std::move(chunk));
+        queuedBytes_ += data.size();
     }
 
     [[nodiscard]] bool empty() const noexcept {
-        return !hasQueuedChunk_ && !hasOverflowChunk();
+        return queuedChunk_.empty() && !hasOverflowChunk();
     }
 
     [[nodiscard]] std::size_t queuedBytes() const noexcept {
@@ -105,11 +106,10 @@ public:
     // The returned view remains valid until the next pop().
     [[nodiscard]] std::string_view pop() {
         clearPmrStringRetainingSmall(activeChunk_);
-        if (hasQueuedChunk_) {
+        if (!queuedChunk_.empty()) {
             activeChunk_.swap(queuedChunk_);
             queuedBytes_ -= activeChunk_.size();
             clearPmrStringRetainingSmall(queuedChunk_);
-            hasQueuedChunk_ = false;
             return std::string_view(activeChunk_);
         }
         if (!hasOverflowChunk()) {
@@ -155,7 +155,6 @@ private:
     std::pmr::vector<std::pmr::string> overflowChunks_;
     std::size_t overflowOffset_{0};
     std::size_t queuedBytes_{0};
-    bool hasQueuedChunk_{false};
 };
 
 class Http2BufferedRequestBody;

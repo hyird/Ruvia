@@ -13,11 +13,9 @@ void WebSocketConnection<Transport>::heartbeatTick(std::int64_t now) noexcept {
     switch (webSocketLivenessDecision(
         lifecycleOptions_,
         protocol_.livenessMode(),
-        awaitingPong_,
+        livenessState_,
         writePhase_ != WritePhase::kIdle,
         scannerEntry_.lastActiveMs(),
-        heartbeatPingSentMs_,
-        localCloseStartedMs_,
         now)) {
         case WebSocketLivenessDecision::kIdle:
             return;
@@ -30,8 +28,7 @@ void WebSocketConnection<Transport>::heartbeatTick(std::int64_t now) noexcept {
             break;
     }
 
-    awaitingPong_ = true;
-    heartbeatPingSentMs_ = now;
+    livenessState_ = WebSocketSendingPing{};
     writePhase_ = WritePhase::kHeartbeat;
     try {
         asio::co_spawn(
@@ -49,6 +46,11 @@ template <typename Transport>
 Task<void> WebSocketConnection<Transport>::writeHeartbeatPing() {
     try {
         co_await writeFrameNow(WebSocketOpcode::kPing, {});
+        if (protocol_.livenessMode() == WsLivenessMode::kOpen &&
+            std::holds_alternative<WebSocketSendingPing>(livenessState_)) {
+            livenessState_ = WebSocketAwaitingPong(
+                scannerEntry_.lastActiveMs());
+        }
     } catch (...) {
         abortTransport();
     }

@@ -19,7 +19,6 @@ Task<void> WebSocketConnection<Transport>::close(std::uint16_t code, std::string
     try {
         switch (protocol_.submitClose(code, reason)) {
             case WsCloseSubmitStatus::kAccepted:
-                localCloseStartedMs_ = scannerEntry_.lastActiveMs();
                 flushOutput = true;
                 awaitPeerClose = true;
                 break;
@@ -37,6 +36,15 @@ Task<void> WebSocketConnection<Transport>::close(std::uint16_t code, std::string
         }
         if (flushOutput) {
             co_await flushProtocolOutputNow();
+        }
+        if (awaitPeerClose &&
+            protocol_.livenessMode() == WsLivenessMode::kAwaitingPeerClose) {
+            // The timeout bounds the peer's response window, so commit it only
+            // after the local Close bytes have reached the transport. The
+            // successful flush touched the scanner with the current coarse
+            // worker timestamp.
+            livenessState_ = WebSocketAwaitingPeerClose(
+                scannerEntry_.lastActiveMs());
         }
     } catch (...) {
         writePhase_ = WritePhase::kIdle;
@@ -171,6 +179,7 @@ Task<void> WebSocketConnection<Transport>::flushProtocolOutputNow() {
 
 template <typename Transport>
 void WebSocketConnection<Transport>::abortTransport() noexcept {
+    livenessState_ = WebSocketLivenessIdle{};
     if (protocol_.abort() == WsAbortDisposition::kAbortTransport) {
         transport_.abort();
         notifyWriteIdle();

@@ -9,6 +9,7 @@
 #include <string>
 #include <string_view>
 #include <system_error>
+#include <utility>
 
 #include <asio.hpp>
 
@@ -38,6 +39,8 @@ struct RecordingTransportState final {
     std::error_code readError;
     std::string lastNonEmptyBytes;
     WsTransportDisposition lastDisposition{WsTransportDisposition::kKeepOpen};
+    void* beforeWriteCompletionTarget{nullptr};
+    void (*beforeWriteCompletion)(void*) noexcept{nullptr};
 };
 
 class RecordingTransport final {
@@ -66,6 +69,11 @@ public:
             state_->lastNonEmptyBytes.assign(bytes);
         }
         state_->lastDisposition = disposition;
+        if (state_->beforeWriteCompletion != nullptr) {
+            const auto callback = std::exchange(
+                state_->beforeWriteCompletion, nullptr);
+            callback(state_->beforeWriteCompletionTarget);
+        }
         co_return std::error_code{};
     }
 
@@ -215,6 +223,38 @@ RUVIA_TEST(websocket_liveness_aborts_transport_not_scanner_owner) {
     // own transport; it cannot ask Core to close the scanner's owning socket.
     WebSocketConnection<RecordingTransport>::heartbeatTickThunk(&connection, 12);
     RUVIA_CHECK(state.aborted);
+}
+
+RUVIA_TEST(websocket_close_timeout_starts_after_close_write_commits) {
+    asio::io_context io;
+    RecordingTransportState state;
+    ConnectionScanner::Entry scannerEntry;
+    ruvia::WorkerMemory memory;
+    ruvia::WebSocketLifecycleOptions lifecycle;
+    lifecycle.closeHandshakeTimeout = std::chrono::milliseconds(1);
+    WebSocketConnection<RecordingTransport> connection(
+        RecordingTransport(io, state),
+        scannerEntry,
+        lifecycle,
+        ruvia::ProtocolByteLimit::limited(1024),
+        memory.resource());
+    state.beforeWriteCompletionTarget = &connection;
+    state.beforeWriteCompletion = [](void* target) noexcept {
+        auto* runtime = static_cast<WebSocketConnection<RecordingTransport>*>(target);
+        // Even an arbitrarily large scanner time cannot expire a peer-response
+        // window before the local Close write has completed.
+        WebSocketConnection<RecordingTransport>::heartbeatTickThunk(runtime, 10000);
+    };
+
+    auto future = asio::co_spawn(
+        io,
+        ruvia::detail::taskAsAwaitable(connection.close(1000, {})),
+        asio::use_future);
+    io.run();
+    future.get();
+
+    RUVIA_CHECK(!state.aborted);
+    RUVIA_CHECK(state.beforeWriteCompletion == nullptr);
 }
 
 RUVIA_TEST(websocket_runtime_maps_typed_outbound_rejections) {

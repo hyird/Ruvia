@@ -108,6 +108,43 @@ int main() {
         }
     }
 
+    // A failed start is transactional. Scheduling off the worker is rejected,
+    // but it must not poison the lifecycle state and suppress a later valid
+    // on-worker retry.
+    {
+        auto options = ruvia::detail::ConnectionScannerOptions{};
+        options.scanInterval = std::chrono::milliseconds(1);
+        ruvia::detail::ConnectionScanner scanner(worker, std::move(options));
+        WorkerMaintenanceProbe retryProbe;
+        ruvia::detail::ConnectionScanner::WorkerMaintenanceRegistration
+            retryRegistration;
+        scanner.registerWorkerMaintenance(
+            retryRegistration,
+            &retryProbe,
+            &WorkerMaintenanceProbe::check);
+        bool offWorkerRejected = false;
+        try {
+            scanner.start();
+        } catch (const std::logic_error&) {
+            offWorkerRejected = true;
+        }
+        if (!offWorkerRejected ||
+            dispatcher->post([&scanner] { scanner.start(); }) !=
+                ruvia::PostResult::kAccepted) {
+            return 6;
+        }
+        ioContext.run_for(std::chrono::milliseconds(20));
+        if (retryProbe.ticks == 0 ||
+            dispatcher->post([&scanner] { scanner.stop(); }) !=
+                ruvia::PostResult::kAccepted) {
+            return 7;
+        }
+        if (ioContext.stopped()) {
+            ioContext.restart();
+        }
+        ioContext.run_for(std::chrono::milliseconds(5));
+    }
+
     asio::ip::tcp::socket socket(ioContext);
     ruvia::detail::ConnectionScanner::Entry firstEntry;
     ruvia::detail::ConnectionScanner::Entry secondEntry;
