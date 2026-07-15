@@ -29,6 +29,7 @@
 #include "ruvia/web/detail/middleware/MiddlewareRegistration.h"
 #include "ruvia/core/memory/MemoryPool.h"
 #include "ruvia/web/Router.h"
+#include "ruvia/web/RateLimit.h"
 #include "ruvia/web/detail/router/RouterInternal.h"
 #include "ruvia/web/detail/router/RouteResolution.h"
 #include "ruvia/web/detail/router/RouteTable.h"
@@ -208,6 +209,32 @@ RUVIA_TEST(route_rejects_duplicate_validated_model_types_at_registration) {
             "duplicate validated model type on route";
     }
     RUVIA_CHECK(rejected);
+}
+
+RUVIA_TEST(finalized_route_table_records_route_rate_limit_usage) {
+    {
+        ruvia::Router router;
+        auto& impl = ruvia::detail::RouterImpl::from(router);
+        addRoute(impl, "/plain");
+        impl.finalize();
+        RUVIA_CHECK(!impl.routeTable().hasRouteRateLimit());
+    }
+
+    {
+        ruvia::Router router;
+        auto& impl = ruvia::detail::RouterImpl::from(router);
+        const auto rateLimit = ruvia::detail::makeMiddlewareDescriptor<
+            ruvia::RouteRateLimit<1, 1000>>();
+        impl.registerRoute(
+            HttpKnownMethod::kGet,
+            path("/limited"),
+            RouteHandler(nullptr, &dummyHandler),
+            RequestBodyMode::kBuffered,
+            std::span<const ControllerMiddlewareDescriptor>{},
+            std::span(&rateLimit, std::size_t{1}));
+        impl.finalize();
+        RUVIA_CHECK(impl.routeTable().hasRouteRateLimit());
+    }
 }
 
 RUVIA_TEST(validated_model_binding_spans_next_and_unwinds_before_upstream_resumes) {
@@ -690,9 +717,6 @@ void scBind(void*, ruvia::Context*, ruvia::HttpResponse (*)(ruvia::Context&)) no
 void scReleaseContext(void* target) noexcept {
     static_cast<StreamCaptureSink*>(target)->contextReleased = true;
 }
-std::pmr::string& scScratch(void* target) noexcept {
-    return static_cast<StreamCaptureSink*>(target)->scratch;
-}
 bool scCommitted(void* target) noexcept {
     return static_cast<StreamCaptureSink*>(target)->committedFlag;
 }
@@ -700,7 +724,7 @@ bool scAborted(void*) noexcept { return false; }
 
 ruvia::ResponseStreamWriter scMakeWriter(StreamCaptureSink& sink) noexcept {
     return ruvia::detail::StreamingAccess::makeResponseStreamWriter(
-        &sink, &scWrite, &scEnd, &scSleep, &scBind, &scReleaseContext, &scScratch,
+        &sink, &scWrite, &scEnd, &scSleep, &scBind, &scReleaseContext,
         &scCommitted, &scAborted);
 }
 

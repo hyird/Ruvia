@@ -30,41 +30,47 @@ ruvia::Task<void> waitForSignal(
     resumed = true;
 }
 
-bool testWorkerSignalHasOneDispatchTarget() {
+bool testWorkerSignalIsWorkerAffine() {
     bool invalidWorkerRejected = false;
+    ruvia::WorkerHandle invalidWorker;
     try {
-        ruvia::detail::WorkerSignal invalid(ruvia::WorkerHandle{});
+        ruvia::detail::WorkerSignal invalid(invalidWorker);
     } catch (const std::invalid_argument&) {
         invalidWorkerRejected = true;
     }
 
     asio::io_context ioContext;
-    ruvia::detail::WorkerSignal executorSignal(ioContext.get_executor());
-    ruvia::detail::WorkerSignal fallbackSignal(
-        ruvia::WorkerHandle{},
-        ioContext.get_executor());
-    bool executorResumed = false;
-    bool fallbackResumed = false;
+    auto attachment = ruvia::attachEventLoop(ioContext);
+    const auto workerHandle = attachment.loop().handle();
+    ruvia::detail::WorkerSignal firstSignal(workerHandle);
+    ruvia::detail::WorkerSignal secondSignal(workerHandle);
+    bool firstResumed = false;
+    bool secondResumed = false;
     asio::co_spawn(
         ioContext,
         ruvia::detail::taskAsAwaitable(
-            waitForSignal(executorSignal, executorResumed)),
+            waitForSignal(firstSignal, firstResumed)),
         asio::detached);
     asio::co_spawn(
         ioContext,
         ruvia::detail::taskAsAwaitable(
-            waitForSignal(fallbackSignal, fallbackResumed)),
+            waitForSignal(secondSignal, secondResumed)),
         asio::detached);
-    executorSignal.notify();
-    fallbackSignal.notify();
+    asio::post(ioContext, [&] {
+        firstSignal.notify();
+        secondSignal.notify();
+        attachment.stop();
+    });
     ioContext.run();
-    return invalidWorkerRejected && executorResumed && fallbackResumed;
+    return invalidWorkerRejected && firstResumed && secondResumed;
 }
 
 bool testWorkerSignalHasNoArbitraryWaiterLimit() {
     constexpr std::size_t kWaiterCount = 16;
     asio::io_context ioContext;
-    ruvia::detail::WorkerSignal signal(ioContext.get_executor());
+    auto attachment = ruvia::attachEventLoop(ioContext);
+    const auto workerHandle = attachment.loop().handle();
+    ruvia::detail::WorkerSignal signal(workerHandle);
     std::array<bool, kWaiterCount> resumed{};
     for (std::size_t index = 0; index < resumed.size(); ++index) {
         asio::co_spawn(
@@ -74,9 +80,10 @@ bool testWorkerSignalHasNoArbitraryWaiterLimit() {
             asio::detached);
     }
 
-    ioContext.poll();
-    ioContext.restart();
-    signal.notify();
+    asio::post(ioContext, [&] {
+        signal.notify();
+        attachment.stop();
+    });
     ioContext.run();
     for (const bool value : resumed) {
         if (!value) {
@@ -383,7 +390,7 @@ bool testConcurrentStopHasOneInitiator() {
 }
 
 int main() {
-    return testWorkerSignalHasOneDispatchTarget() &&
+    return testWorkerSignalIsWorkerAffine() &&
                testWorkerSignalHasNoArbitraryWaiterLimit() &&
                testDispatchAndAffinity() && testBoundedMailbox() &&
                testExternalEventLoopAttachment() &&

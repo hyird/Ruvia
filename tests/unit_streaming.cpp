@@ -9,6 +9,7 @@
 #include <chrono>
 #include <cstdint>
 #include <memory_resource>
+#include <memory>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -18,15 +19,16 @@
 #include "ruvia/web/detail/http/StreamingInternal.h"
 #include "ruvia/web/detail/body/HttpRequestBodyFacade.h"
 #include "ruvia/web/detail/server/HttpResponseStreamState.h"
+#include "ruvia/web/detail/websocket/WebSocketInternal.h"
 #include "ruvia/core/detail/AsioAwait.h"
 #include "ruvia/core/detail/WorkerSignal.h"
+#include "ruvia/core/detail/WorkerDispatcher.h"
 #include "ruvia/core/Task.h"
 #include "ruvia/web/Streaming.h"
 
 namespace {
 
 struct CaptureStreamSink final {
-    std::pmr::string scratch{std::pmr::get_default_resource()};
     std::vector<std::string> writes;
     std::vector<std::string> trailers;
 };
@@ -54,10 +56,6 @@ ruvia::Task<void> sleepStream(void*, std::chrono::milliseconds) {
 void bindContext(void*, ruvia::Context*, ruvia::HttpResponse (*)(ruvia::Context&)) noexcept {}
 void releaseContext(void*) noexcept {}
 
-std::pmr::string& scratch(void* target) noexcept {
-    return static_cast<CaptureStreamSink*>(target)->scratch;
-}
-
 bool committed(void*) noexcept {
     return false;
 }
@@ -78,7 +76,6 @@ ruvia::ResponseStreamWriter makeWriter(CaptureStreamSink& sink) noexcept {
         &sleepStream,
         &bindContext,
         &releaseContext,
-        &scratch,
         &committed,
         &aborted);
 }
@@ -88,6 +85,82 @@ ruvia::Task<void> writeLines(ruvia::ResponseStreamWriter& writer) {
     co_await writer.writeln("second");
 }
 
+ruvia::Task<void> writeStoredLines(ruvia::ResponseStreamWriter& writer) {
+    auto first = writer.writeln(std::string("stored-first"));
+    auto second = writer.writeln(std::string("stored-second"));
+    co_await std::move(first);
+    co_await std::move(second);
+}
+
+ruvia::ScopedOperation<void> makeExpiredWrite(CaptureStreamSink& sink) {
+    auto writer = makeWriter(sink);
+    return writer.write(std::string("must-not-run"));
+}
+
+ruvia::Task<void> awaitExpiredWrite(
+    ruvia::ScopedOperation<void>& operation,
+    bool& rejected) {
+    try {
+        co_await std::move(operation);
+    } catch (const std::logic_error&) {
+        rejected = true;
+    }
+}
+
+struct CaptureWebSocket final {
+    std::vector<std::string> writes;
+};
+
+ruvia::Task<std::optional<ruvia::WebSocketMessage>> readSocket(void*) {
+    co_return std::nullopt;
+}
+
+ruvia::Task<void> writeSocket(
+    void* target,
+    ruvia::WebSocketOpcode,
+    std::string_view payload) {
+    static_cast<CaptureWebSocket*>(target)->writes.emplace_back(payload);
+    co_return;
+}
+
+ruvia::Task<void> closeSocket(void*, std::uint16_t, std::string_view) {
+    co_return;
+}
+
+ruvia::ScopedOperation<void> makeExpiredWebSocketWrite(
+    CaptureWebSocket& capture) {
+    auto socket = ruvia::detail::WebSocketAccess::make(
+        &capture, &readSocket, &writeSocket, &closeSocket);
+    return socket.text(std::string("expired-payload"));
+}
+
+ruvia::Task<void> writeStoredTemporaryWebSocketPayload(
+    ruvia::WebSocket& socket) {
+    auto operation = socket.text(std::string("owned-payload"));
+    co_await std::move(operation);
+}
+
+struct ImmediateBodySource final {
+    ruvia::Task<std::optional<std::string_view>> read() {
+        co_return std::string_view("must-not-read");
+    }
+};
+
+ruvia::ScopedOperation<std::optional<std::string_view>> makeExpiredBodyRead() {
+    ruvia::detail::BodyReaderBinding<ImmediateBodySource> binding;
+    return binding.facade().read();
+}
+
+ruvia::Task<void> awaitExpiredBodyRead(
+    ruvia::ScopedOperation<std::optional<std::string_view>>& operation,
+    bool& rejected) {
+    try {
+        (void)co_await std::move(operation);
+    } catch (const std::logic_error&) {
+        rejected = true;
+    }
+}
+
 ruvia::Task<void> endWithTrailers(ruvia::ResponseStreamWriter& writer) {
     const std::array<ruvia::HttpHeaderView, 2> trailers{
         ruvia::HttpHeaderView{"Digest", "sha-256=value"},
@@ -95,15 +168,31 @@ ruvia::Task<void> endWithTrailers(ruvia::ResponseStreamWriter& writer) {
     co_await writer.end(trailers);
 }
 
+ruvia::Task<void> endWithExpiredTrailerSources(
+    ruvia::ResponseStreamWriter& writer) {
+    auto operation = [&] {
+        std::string name = "X-Owned-Trailer";
+        std::string value = "temporary-value";
+        const std::array<ruvia::HttpHeaderView, 1> trailers{
+            ruvia::HttpHeaderView{name, value}};
+        return writer.end(trailers);
+    }();
+    co_await std::move(operation);
+}
+
 struct SuspendedBodySource final {
     explicit SuspendedBodySource(asio::io_context& io)
-        : signal(io.get_executor()) {}
+        : dispatcher(std::make_shared<ruvia::detail::WorkerDispatcher>(io, 8)),
+          worker(ruvia::detail::WorkerHandleAccess::make(dispatcher)),
+          signal(worker) {}
 
     ruvia::Task<std::optional<std::string_view>> read() {
         co_await signal.wait();
         co_return std::nullopt;
     }
 
+    std::shared_ptr<ruvia::detail::WorkerDispatcher> dispatcher;
+    ruvia::WorkerHandle worker;
     ruvia::detail::WorkerSignal signal;
 };
 
@@ -152,7 +241,7 @@ RUVIA_TEST(body_reader_rejects_concurrent_consumers_of_one_borrowed_buffer) {
     RUVIA_CHECK(secondRejected);
 }
 
-RUVIA_TEST(response_stream_writeln_reuses_scratch_without_leaking_previous_chunk) {
+RUVIA_TEST(response_stream_writeln_emits_independent_lines) {
     CaptureStreamSink sink;
     auto writer = makeWriter(sink);
 
@@ -167,6 +256,87 @@ RUVIA_TEST(response_stream_writeln_reuses_scratch_without_leaking_previous_chunk
     RUVIA_CHECK_EQ(sink.writes.size(), std::size_t{2});
     RUVIA_CHECK_EQ(sink.writes[0], std::string("first\n"));
     RUVIA_CHECK_EQ(sink.writes[1], std::string("second\n"));
+}
+
+RUVIA_TEST(response_stream_stored_writeln_operations_own_independent_payloads) {
+    CaptureStreamSink sink;
+    auto writer = makeWriter(sink);
+
+    asio::io_context ctx(1);
+    auto future = asio::co_spawn(
+        ctx,
+        ruvia::detail::taskAsAwaitable(writeStoredLines(writer)),
+        asio::use_future);
+    ctx.run();
+    future.get();
+
+    RUVIA_CHECK_EQ(sink.writes.size(), std::size_t{2});
+    RUVIA_CHECK_EQ(sink.writes[0], std::string("stored-first\n"));
+    RUVIA_CHECK_EQ(sink.writes[1], std::string("stored-second\n"));
+}
+
+RUVIA_TEST(response_stream_cold_operation_rejects_after_capability_teardown) {
+    CaptureStreamSink sink;
+    auto operation = makeExpiredWrite(sink);
+    bool rejected = false;
+
+    asio::io_context ctx(1);
+    auto future = asio::co_spawn(
+        ctx,
+        ruvia::detail::taskAsAwaitable(
+            awaitExpiredWrite(operation, rejected)),
+        asio::use_future);
+    ctx.run();
+    future.get();
+
+    RUVIA_CHECK(rejected);
+    RUVIA_CHECK(sink.writes.empty());
+}
+
+RUVIA_TEST(websocket_stored_operation_owns_temporary_payload) {
+    CaptureWebSocket capture;
+    auto socket = ruvia::detail::WebSocketAccess::make(
+        &capture, &readSocket, &writeSocket, &closeSocket);
+    asio::io_context ctx(1);
+    auto future = asio::co_spawn(
+        ctx,
+        ruvia::detail::taskAsAwaitable(
+            writeStoredTemporaryWebSocketPayload(socket)),
+        asio::use_future);
+    ctx.run();
+    future.get();
+    RUVIA_CHECK_EQ(capture.writes.size(), std::size_t{1});
+    RUVIA_CHECK_EQ(capture.writes[0], std::string("owned-payload"));
+}
+
+RUVIA_TEST(websocket_cold_operation_rejects_after_facade_teardown) {
+    CaptureWebSocket capture;
+    auto operation = makeExpiredWebSocketWrite(capture);
+    bool rejected = false;
+    asio::io_context ctx(1);
+    auto future = asio::co_spawn(
+        ctx,
+        ruvia::detail::taskAsAwaitable(
+            awaitExpiredWrite(operation, rejected)),
+        asio::use_future);
+    ctx.run();
+    future.get();
+    RUVIA_CHECK(rejected);
+    RUVIA_CHECK(capture.writes.empty());
+}
+
+RUVIA_TEST(body_reader_cold_operation_rejects_after_facade_teardown) {
+    auto operation = makeExpiredBodyRead();
+    bool rejected = false;
+    asio::io_context ctx(1);
+    auto future = asio::co_spawn(
+        ctx,
+        ruvia::detail::taskAsAwaitable(
+            awaitExpiredBodyRead(operation, rejected)),
+        asio::use_future);
+    ctx.run();
+    future.get();
+    RUVIA_CHECK(rejected);
 }
 
 RUVIA_TEST(response_stream_end_submits_one_terminal_trailer_section) {
@@ -184,6 +354,22 @@ RUVIA_TEST(response_stream_end_submits_one_terminal_trailer_section) {
     RUVIA_CHECK_EQ(sink.trailers.size(), std::size_t{2});
     RUVIA_CHECK_EQ(sink.trailers[0], std::string("Digest=sha-256=value"));
     RUVIA_CHECK_EQ(sink.trailers[1], std::string("Server-Timing=db;dur=7"));
+}
+
+RUVIA_TEST(response_stream_stored_end_owns_trailer_names_and_values) {
+    CaptureStreamSink sink;
+    auto writer = makeWriter(sink);
+    asio::io_context ctx(1);
+    auto future = asio::co_spawn(
+        ctx,
+        ruvia::detail::taskAsAwaitable(endWithExpiredTrailerSources(writer)),
+        asio::use_future);
+    ctx.run();
+    future.get();
+    RUVIA_CHECK_EQ(sink.trailers.size(), std::size_t{1});
+    RUVIA_CHECK_EQ(
+        sink.trailers[0],
+        std::string("X-Owned-Trailer=temporary-value"));
 }
 
 namespace {

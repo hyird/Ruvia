@@ -83,8 +83,8 @@ Handlers use `ruvia::Task<T>`, read HTTP input through `c.req()`, and build
 responses through `Context`. Set response metadata through `c.status()`,
 `c.header()`, and `c.setCookie()` before selecting one body builder such as
 `c.text()` or `c.json()`; body builders do not accept a second metadata path.
-`ServerTopology` atomically selects HTTP, HTTPS, dual-listener, or redirect
-operation; HTTPS topologies require a validated `TlsIdentity`.
+`ServerTopology` atomically selects HTTP, HTTPS, dual-listener, or redirect operation; HTTPS requires a validated `TlsIdentity`, and `setWorkersPerListener()` makes dual-listener topologies own twice the configured workers.
+Default rate limiting is worker-local via `setDefaultRateLimitPerWorker()`; `setRateLimitSlotsPerWorker()` selects its power-of-two startup capacity (`kDefaultRateLimitSlotsPerWorker` by default), and workers with neither a default nor route-specific rule allocate no table.
 
 Connection metadata is deliberately separate from the HTTP request model:
 
@@ -279,7 +279,7 @@ auto config = ruvia::DbConfig::postgreSql(); // port 5432
 config.username = "app";
 config.password = "secret";
 config.database = "app";
-config.poolSizePerWorker = 4; // total connection budget is 4 * worker count
+config.poolSizePerWorker = 4; // total connection budget is 4 * listeners * workers per listener
 app.useDb(std::move(config));
 ```
 

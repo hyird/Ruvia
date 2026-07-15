@@ -108,7 +108,8 @@ struct HttpServerOptions final {
     DocumentRoot documentRoot;
     AccessLogSink accessLog;
     WorkerFailureSink workerFailure;
-    std::optional<RateLimitRule> rateLimit;
+    std::optional<RateLimitRule> defaultRateLimitPerWorker;
+    std::size_t rateLimitSlotsPerWorker{kDefaultRateLimitSlotsPerWorker};
 
     [[nodiscard]] const Tls* tls() const & noexcept {
         return std::get_if<Tls>(&transport);

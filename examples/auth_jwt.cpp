@@ -77,6 +77,6 @@ int main() {
     ruvia::app()
         .setListenAddress("0.0.0.0")
         .setServerTopology(ruvia::ServerTopology::http(8085))
-        .setThreadNum(2)
+        .setWorkersPerListener(2)
         .run();
 }

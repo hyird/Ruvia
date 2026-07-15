@@ -154,7 +154,7 @@ int main() {
     ruvia::app()
         .setListenAddress("0.0.0.0")
         .setServerTopology(ruvia::ServerTopology::http(8080))
-        .setThreadNum(2)
+        .setWorkersPerListener(2)
         .setKeepaliveTimeout(std::chrono::seconds(75))
         .setClientHeaderTimeout(std::chrono::seconds(60))
         .setClientBodyTimeout(std::chrono::seconds(60))

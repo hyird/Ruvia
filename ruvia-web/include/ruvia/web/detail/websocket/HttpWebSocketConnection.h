@@ -41,6 +41,7 @@ class WebSocketConnection final {
 public:
     WebSocketConnection(
         Transport transport,
+        const WorkerHandle& worker,
         ConnectionScanner::Entry& scannerEntry,
         WebSocketLifecycleOptions lifecycleOptions,
         ProtocolByteLimit messageLimit,
@@ -53,14 +54,25 @@ public:
           lifecycleOptions_(lifecycleOptions),
           buffer_(pmrResourceOrDefault(resource)),
           protocol_(buffer_, messageLimit, deflate),
-          backgroundWriteSignal_(transport_.executor()),
-          readerDoneSignal_(transport_.executor()) {
+          backgroundWriteSignal_(worker),
+          readerDoneSignal_(worker) {
         buffer_.append(initialBytes.data(), initialBytes.size());
         scannerEntry_.registerPeriodicCheck(
             periodicCheck_,
             this,
             &WebSocketConnection::heartbeatTickThunk);
     }
+
+    WebSocketConnection(
+        Transport,
+        WorkerHandle&&,
+        ConnectionScanner::Entry&,
+        WebSocketLifecycleOptions,
+        ProtocolByteLimit,
+        std::pmr::memory_resource*,
+        std::string_view = {},
+        WebSocketDeflateNegotiation =
+            WebSocketDeflateNegotiation::kDisabled) = delete;
 
     ~WebSocketConnection() = default;
 

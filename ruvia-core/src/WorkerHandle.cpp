@@ -47,6 +47,16 @@ void detail::WorkerHandleAccess::defer(
     dispatcher->defer(std::move(task));
 }
 
+void detail::WorkerHandleAccess::deferOrTerminate(
+    const WorkerHandle& worker,
+    std::move_only_function<void()> task) noexcept {
+    const auto& dispatcher = worker.dispatcher_;
+    if (!dispatcher) {
+        std::terminate();
+    }
+    dispatcher->deferOrTerminate(std::move(task));
+}
+
 void detail::WorkerHandleAccess::registerShutdownListener(
     const WorkerHandle& worker,
     const std::shared_ptr<WorkerShutdownListener>& listener) {

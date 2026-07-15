@@ -67,7 +67,8 @@ int main() {
 
     app
         .setListenAddress("0.0.0.0")
-        .setThreadNum(app.env().get<std::uint32_t>("RUVIA_THREADS").value_or(2))
+        .setWorkersPerListener(
+            app.env().get<std::uint32_t>("RUVIA_WORKERS_PER_LISTENER").value_or(2))
         .setKeepaliveTimeout(std::chrono::seconds(75))
         .setConnectionScanInterval(std::chrono::seconds(1))
         .setClientHeaderTimeout(std::chrono::seconds(60))

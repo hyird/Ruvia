@@ -1,7 +1,6 @@
 #pragma once
 
 #include <array>
-#include <concepts>
 #include <cstddef>
 #include <cstdint>
 #include <exception>
@@ -10,7 +9,6 @@
 #include <optional>
 #include <string>
 #include <string_view>
-#include <type_traits>
 #include <utility>
 #include <variant>
 #include <vector>
@@ -36,13 +34,9 @@ inline constexpr std::size_t kHttp2WebRetainedBodyChunkCapacity = 16;
 // readiness after wakeup, so cancellation is only a level-change notification.
 class Http2SansIoStreamSignal final {
 public:
-    explicit Http2SansIoStreamSignal(WorkerHandle worker)
-        : signal_(std::move(worker)) {}
-
-    template <typename Executor>
-        requires (!std::same_as<std::remove_cvref_t<Executor>, WorkerHandle>)
-    explicit Http2SansIoStreamSignal(Executor&& executor)
-        : signal_(std::forward<Executor>(executor)) {}
+    explicit Http2SansIoStreamSignal(const WorkerHandle& worker)
+        : signal_(worker) {}
+    Http2SansIoStreamSignal(WorkerHandle&&) = delete;
 
     void wake() noexcept {
         signal_.notify();
@@ -437,21 +431,11 @@ public:
 
 private:
     [[nodiscard]] Http2SansIoStreamSignal* beginDispatch(
-        WorkerHandle worker) {
+        const WorkerHandle& worker) {
         if (dispatched()) {
             return nullptr;
         }
-        dispatch_.emplace<Http2SansIoStreamSignal>(std::move(worker));
-        return signal();
-    }
-
-    template <typename Executor>
-    [[nodiscard]] Http2SansIoStreamSignal* beginDispatch(Executor&& executor) {
-        if (dispatched()) {
-            return nullptr;
-        }
-        dispatch_.emplace<Http2SansIoStreamSignal>(
-            std::forward<Executor>(executor));
+        dispatch_.emplace<Http2SansIoStreamSignal>(worker);
         return signal();
     }
 
@@ -515,18 +499,10 @@ private:
     friend class Http2SansIoStreamRuntimeTable;
 
     [[nodiscard]] Http2SansIoStreamSignal* beginDispatch(
-        WorkerHandle worker) {
+        const WorkerHandle& worker) {
         auto* selected = selectedRoute();
         return selected != nullptr
-            ? selected->beginDispatch(std::move(worker))
-            : nullptr;
-    }
-
-    template <typename Executor>
-    [[nodiscard]] Http2SansIoStreamSignal* beginDispatch(Executor&& executor) {
-        auto* selected = selectedRoute();
-        return selected != nullptr
-            ? selected->beginDispatch(std::forward<Executor>(executor))
+            ? selected->beginDispatch(worker)
             : nullptr;
     }
 
@@ -604,32 +580,20 @@ public:
 
     [[nodiscard]] Http2SansIoStreamSignal* beginDispatch(
         std::uint32_t streamId,
-        WorkerHandle worker) {
+        const WorkerHandle& worker) {
         auto* runtime = find(streamId);
         if (runtime == nullptr) {
             return nullptr;
         }
-        auto* signal = runtime->beginDispatch(std::move(worker));
+        auto* signal = runtime->beginDispatch(worker);
         if (signal != nullptr) {
             ++dispatchedCount_;
         }
         return signal;
     }
-
-    template <typename Executor>
-    [[nodiscard]] Http2SansIoStreamSignal* beginDispatch(
-        std::uint32_t streamId,
-        Executor&& executor) {
-        auto* runtime = find(streamId);
-        if (runtime == nullptr) {
-            return nullptr;
-        }
-        auto* signal = runtime->beginDispatch(std::forward<Executor>(executor));
-        if (signal != nullptr) {
-            ++dispatchedCount_;
-        }
-        return signal;
-    }
+    Http2SansIoStreamSignal* beginDispatch(
+        std::uint32_t,
+        WorkerHandle&&) = delete;
 
     [[nodiscard]] bool remove(std::uint32_t streamId) noexcept {
         for (auto& slot : inline_) {

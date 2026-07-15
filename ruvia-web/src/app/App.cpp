@@ -115,7 +115,7 @@ struct AppRuntimeGraph final {
 };
 
 AppState::AppState()
-    : threadNum(std::max(1U, std::thread::hardware_concurrency())),
+    : workersPerListener(std::max(1U, std::thread::hardware_concurrency())),
       router(nullptr, PmrObjectDeleter<Router>{detail::appResource()}),
       runtime(nullptr, PmrObjectDeleter<AppRuntimeGraph>{detail::appResource()}) {
     listenAddress.assign("0.0.0.0");
@@ -221,7 +221,8 @@ void App::run() {
                        std::is_same_v<Topology, ServerTopology::RedirectHttpToHttps>;
             },
             state.topology.topology_);
-        const auto workerCount = state.threadNum * (hasTwoListeners ? 2 : 1);
+        const auto workerCount =
+            state.workersPerListener * (hasTwoListeners ? 2 : 1);
         runtime->workers.reserve(workerCount);
 
         const auto addWorkers = [&state, &address, &runtime, &routeTable,
@@ -233,8 +234,8 @@ void App::run() {
                 preparedOptions,
                 std::move(transport),
                 runtime->documentRoot.get());
-            for (std::size_t i = 0; i < state.threadNum; ++i) {
-                auto workerOptions = i + 1 == state.threadNum
+            for (std::size_t i = 0; i < state.workersPerListener; ++i) {
+                auto workerOptions = i + 1 == state.workersPerListener
                     ? std::move(listenerOptions)
                     : listenerOptions;
                 runtime->workers.push_back(detail::makePmrObject<detail::HttpServer>(

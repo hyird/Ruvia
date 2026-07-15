@@ -1588,19 +1588,39 @@ concept HasRedisZScanResultCanonicalReadAccessors = requires(const T& result) {
 };
 
 template <typename T>
-concept HasAppGlobalRateLimitRuleSetter = requires(T& app) {
-    { app.setGlobalRateLimit(ruvia::RateLimitRule::fixedWindow(
+concept HasAppDefaultRateLimitPerWorkerRuleSetter = requires(T& app) {
+    { app.setDefaultRateLimitPerWorker(ruvia::RateLimitRule::fixedWindow(
         std::size_t{1}, std::chrono::seconds(1))) } -> std::same_as<ruvia::App&>;
 };
 
 template <typename T>
-concept HasAppGlobalRateLimitTupleSetter = requires(T& app) {
-    { app.setGlobalRateLimit(std::size_t{1}, std::chrono::milliseconds{1000}) } -> std::same_as<ruvia::App&>;
+concept HasAppDefaultRateLimitPerWorkerTupleSetter = requires(T& app) {
+    { app.setDefaultRateLimitPerWorker(std::size_t{1}, std::chrono::milliseconds{1000}) } -> std::same_as<ruvia::App&>;
 };
 
 template <typename T>
-concept HasAppGlobalRateLimitDisable = requires(T& app) {
-    { app.setGlobalRateLimit(std::nullopt) } -> std::same_as<ruvia::App&>;
+concept HasAppDefaultRateLimitPerWorkerDisable = requires(T& app) {
+    { app.setDefaultRateLimitPerWorker(std::nullopt) } -> std::same_as<ruvia::App&>;
+};
+
+template <typename T>
+concept HasAppRateLimitSlotsPerWorkerSetter = requires(T& app) {
+    { app.setRateLimitSlotsPerWorker(std::size_t{1024}) } -> std::same_as<ruvia::App&>;
+};
+
+template <typename T>
+concept HasAppWorkersPerListenerSetter = requires(T& app) {
+    { app.setWorkersPerListener(std::size_t{2}) } -> std::same_as<ruvia::App&>;
+};
+
+template <typename T>
+concept HasLegacyAppThreadNumSetter = requires(T& app) {
+    app.setThreadNum(std::size_t{2});
+};
+
+template <typename T>
+concept HasLegacyAppGlobalRateLimitSetter = requires(T& app) {
+    app.setGlobalRateLimit(std::nullopt);
 };
 
 template <typename T>
@@ -2553,9 +2573,14 @@ static_assert(!std::is_constructible_v<ruvia::RedisZScanResult, std::pmr::memory
 static_assert(!HasRedisZScanResultPublicFields<ruvia::RedisZScanResult>);
 #endif
 static_assert(HasRedisZScanResultCanonicalReadAccessors<ruvia::RedisZScanResult>);
-static_assert(HasAppGlobalRateLimitRuleSetter<ruvia::App>);
-static_assert(HasAppGlobalRateLimitDisable<ruvia::App>);
-static_assert(!HasAppGlobalRateLimitTupleSetter<ruvia::App>);
+static_assert(HasAppDefaultRateLimitPerWorkerRuleSetter<ruvia::App>);
+static_assert(HasAppDefaultRateLimitPerWorkerDisable<ruvia::App>);
+static_assert(!HasAppDefaultRateLimitPerWorkerTupleSetter<ruvia::App>);
+static_assert(HasAppRateLimitSlotsPerWorkerSetter<ruvia::App>);
+static_assert(ruvia::kDefaultRateLimitSlotsPerWorker == 8192);
+static_assert(HasAppWorkersPerListenerSetter<ruvia::App>);
+static_assert(!HasLegacyAppThreadNumSetter<ruvia::App>);
+static_assert(!HasLegacyAppGlobalRateLimitSetter<ruvia::App>);
 static_assert(HasAppDocumentRootConfigSetter<ruvia::App>);
 static_assert(!HasAppDocumentRootPathSetter<ruvia::App>);
 static_assert(HasAppListenAddressSetter<ruvia::App>);
@@ -2839,14 +2864,14 @@ static_assert(!HasContextCookieGenerator<ruvia::Context>);
 static_assert(!HasContextSignedCookieGenerator<ruvia::Context>);
 static_assert(std::is_same_v<
     decltype(std::declval<ruvia::ResponseStreamWriter&>().writeln(std::string_view{})),
-    ruvia::Task<void>>);
+    ruvia::ScopedOperation<void>>);
 static_assert(std::is_same_v<
     decltype(std::declval<ruvia::ResponseStreamWriter&>().sleep(std::chrono::milliseconds{1})),
-    ruvia::Task<void>>);
+    ruvia::ScopedOperation<void>>);
 static_assert(std::is_same_v<
     decltype(std::declval<ruvia::ResponseStreamWriter&>().end(
         std::declval<std::span<const ruvia::HttpHeaderView>>())),
-    ruvia::Task<void>>);
+    ruvia::ScopedOperation<void>>);
 static_assert(std::is_same_v<
     decltype(std::declval<const ruvia::ResponseStreamWriter&>().aborted()),
     bool>);
@@ -2855,7 +2880,7 @@ static_assert(std::is_same_v<
     ruvia::SseWriter>);
 static_assert(std::is_same_v<
     decltype(std::declval<ruvia::SseWriter&>().sleep(std::chrono::milliseconds{1})),
-    ruvia::Task<void>>);
+    ruvia::ScopedOperation<void>>);
 static_assert(std::is_same_v<
     decltype(std::declval<const ruvia::SseWriter&>().aborted()),
     bool>);
@@ -3548,7 +3573,7 @@ int main() {
     ruvia::app()
         .setListenAddress("0.0.0.0")
         .setServerTopology(ruvia::ServerTopology::http(8088))
-        .setThreadNum(2)
+        .setWorkersPerListener(2)
         .notFound(&surfaceNotFound)
         .run();
 }

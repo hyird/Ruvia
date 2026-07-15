@@ -56,6 +56,9 @@ struct WorkerHandleAccess {
     [[nodiscard]] static WorkerHandle
     make(const std::shared_ptr<WorkerDispatcher>& dispatcher) noexcept;
     static void defer(const WorkerHandle& worker, std::move_only_function<void()> task);
+    static void deferOrTerminate(
+        const WorkerHandle& worker,
+        std::move_only_function<void()> task) noexcept;
     static void registerShutdownListener(
         const WorkerHandle& worker,
         const std::shared_ptr<WorkerShutdownListener>& listener);

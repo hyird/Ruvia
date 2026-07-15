@@ -255,6 +255,19 @@ if(RUVIA_BUILD_CORE)
     set_tests_properties(
         ruvia_task_lifetime_violation_value PROPERTIES WILL_FAIL TRUE)
 
+    if(RUVIA_BUILD_WEB)
+        add_executable(
+            ruvia_scoped_operation_lifetime_violation
+            scoped_operation_lifetime_violation.cpp)
+        target_link_libraries(
+            ruvia_scoped_operation_lifetime_violation PRIVATE ruvia::web)
+        add_test(
+            NAME ruvia_scoped_operation_lifetime_violation
+            COMMAND ruvia_scoped_operation_lifetime_violation)
+        set_tests_properties(
+            ruvia_scoped_operation_lifetime_violation PROPERTIES WILL_FAIL TRUE)
+    endif()
+
     add_executable(ruvia_channel channel.cpp)
     target_link_libraries(ruvia_channel PRIVATE ruvia::core)
     add_test(NAME ruvia_channel COMMAND ruvia_channel)
@@ -270,6 +283,15 @@ if(RUVIA_BUILD_CORE)
     add_executable(ruvia_worker_dispatch_failure worker_dispatch_failure.cpp)
     target_link_libraries(ruvia_worker_dispatch_failure PRIVATE ruvia::core)
     add_test(NAME ruvia_worker_dispatch_failure COMMAND ruvia_worker_dispatch_failure)
+
+    add_executable(ruvia_worker_signal_violation worker_signal_violation.cpp)
+    target_link_libraries(ruvia_worker_signal_violation PRIVATE ruvia::core)
+    foreach(_probe IN ITEMS waiter notify dispatch)
+        add_test(NAME ruvia_worker_signal_${_probe}_violation
+            COMMAND ruvia_worker_signal_violation ${_probe})
+        set_tests_properties(ruvia_worker_signal_${_probe}_violation
+            PROPERTIES WILL_FAIL TRUE)
+    endforeach()
 
 endif()
 

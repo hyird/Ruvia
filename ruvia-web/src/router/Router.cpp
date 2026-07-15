@@ -48,6 +48,16 @@ void validateUniqueValidatedModelTypes(
     }
 }
 
+[[nodiscard]] bool usesRouteRateLimit(
+    std::span<const ControllerMiddlewareDescriptor> descriptors) noexcept {
+    for (const auto& descriptor : descriptors) {
+        if (descriptor.usesRouteRateLimit()) {
+            return true;
+        }
+    }
+    return false;
+}
+
 }  // namespace
 
 Next::Awaitable Next::operator()() & {
@@ -165,6 +175,8 @@ std::pmr::vector<detail::RouteMiddleware> detail::RouterImpl::materializeMiddlew
     std::span<const ControllerMiddlewareDescriptor> first,
     std::span<const ControllerMiddlewareDescriptor> second) {
     validateUniqueValidatedModelTypes(first, second);
+    hasRouteRateLimit_ = hasRouteRateLimit_ ||
+        usesRouteRateLimit(first) || usesRouteRateLimit(second);
     std::pmr::vector<RouteMiddleware> frames(resource_);
     frames.reserve(first.size() + second.size());
     appendMaterializedMiddlewares(frames, first);
@@ -194,6 +206,7 @@ void detail::RouterImpl::finalize() {
         constructPmrObject<RouteTable>(resource_, resource_),
         RouteTableDeleter{resource_});
     buildRouteTable(*table);
+    table->hasRouteRateLimit_ = hasRouteRateLimit_;
     table->setErrorHandler(errorHandler_);
     table->setNotFoundHandler(notFoundHandler_);
     routeTable_ = std::move(table);

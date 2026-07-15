@@ -49,7 +49,6 @@ public:
         Http2Connection& connection,
         std::uint32_t streamId,
         ResponseStreamKind kind,
-        std::pmr::memory_resource* resource,
         Executor executor,
         WorkerHandle worker,
         WorkerSignal& writeSignal,
@@ -57,7 +56,6 @@ public:
         : connection_(connection),
           streamId_(streamId),
           kind_(kind),
-          scratch_(resource),
           executor_(std::move(executor)),
           worker_(std::move(worker)),
           writeSignal_(writeSignal),
@@ -83,11 +81,6 @@ public:
     }
 
     void releaseContext() noexcept { state_.releaseContext(); }
-
-    [[nodiscard]] std::pmr::string& scratch() noexcept {
-        clearPmrStringRetainingSmall(scratch_);
-        return scratch_;
-    }
 
     Task<void> write(std::string_view chunk) {
         if (chunk.empty()) {
@@ -216,7 +209,6 @@ private:
     std::uint32_t streamId_;
     ResponseStreamKind kind_;
     ResponseStreamState state_;
-    std::pmr::string scratch_;
     Executor executor_;
     WorkerHandle worker_;
     WorkerSignal& writeSignal_;

@@ -32,7 +32,8 @@ ruvia::RedisConfig redisConfig(const ruvia::Env& env) {
     if (const auto database = env.get<std::uint32_t>("RUVIA_REDIS_DATABASE")) {
         config.database = *database;
     }
-    if (const auto poolSize = env.get<std::uint32_t>("RUVIA_REDIS_POOL_SIZE")) {
+    if (const auto poolSize =
+            env.get<std::uint32_t>("RUVIA_REDIS_POOL_SIZE_PER_WORKER")) {
         config.poolSizePerWorker = *poolSize;
     }
     return config;
@@ -444,6 +445,7 @@ int main() {
         .setListenAddress("0.0.0.0")
         .setServerTopology(ruvia::ServerTopology::http(
             app.env().get<std::uint16_t>("RUVIA_PORT").value_or(8090)))
-        .setThreadNum(app.env().get<std::uint32_t>("RUVIA_THREADS").value_or(2))
+        .setWorkersPerListener(
+            app.env().get<std::uint32_t>("RUVIA_WORKERS_PER_LISTENER").value_or(2))
         .run();
 }

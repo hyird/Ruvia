@@ -29,6 +29,7 @@
 #include "ruvia/core/detail/ConnectionScanner.h"
 #include "ruvia/web/detail/server/HttpConnectionState.h"
 #include "ruvia/web/detail/server/HttpServerOptionsValidation.h"
+#include "ruvia/web/detail/router/RouteTable.h"
 #include "ruvia/http/detail/HeaderTokenUtils.h"
 #include "ruvia/core/detail/AsioAwait.h"
 #include "ruvia/http/detail/AsciiCase.h"
@@ -219,7 +220,11 @@ HttpServer::HttpServer(
           [this](std::exception_ptr failure) {
               failWorker(std::move(failure));
           })),
-      rateLimiter_(options_.rateLimit, memory_.resource()),
+      rateLimiter_(
+          options_.defaultRateLimitPerWorker,
+          routes_.hasRouteRateLimit(),
+          options_.rateLimitSlotsPerWorker,
+          memory_.resource()),
       connectionScanner_(workerHandle_, makeConnectionScannerOptions(options_)),
       workSetPool_(memory_) {
     if (databases_.hasAnyTimeout()) {

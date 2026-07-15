@@ -1,82 +1,80 @@
 #pragma once
 
-#include <concepts>
 #include <coroutine>
+#include <cstddef>
+#include <cstdint>
+#include <exception>
 #include <stdexcept>
-#include <type_traits>
 #include <utility>
-#include <variant>
-
-#include <asio/any_io_executor.hpp>
-#include <asio/post.hpp>
 
 #include <ruvia/core/Task.h>
 #include <ruvia/core/WorkerHandle.h>
 
 namespace ruvia::detail {
 
+// Intrusive, allocation-free wake primitive for one worker. Every operation
+// which touches its waiter list is worker-affine; the WorkerHandle is therefore
+// the dispatch target and the affinity capability, not an optional fast path.
 class WorkerSignal final {
     struct Awaiter;
 
 public:
-    explicit WorkerSignal(WorkerHandle worker)
-        : target_(makeWorkerTarget(std::move(worker))) {}
+    explicit WorkerSignal(const WorkerHandle& worker)
+        : worker_(requireWorker(worker)) {}
+    WorkerSignal(WorkerHandle&&) = delete;
 
-    template <typename Executor>
-        requires (!std::same_as<std::remove_cvref_t<Executor>, WorkerHandle>)
-    explicit WorkerSignal(Executor&& executor)
-        : target_(
-              std::in_place_type<asio::any_io_executor>,
-              std::forward<Executor>(executor)) {}
-
-    template <typename Executor>
-    WorkerSignal(WorkerHandle worker, Executor&& executor)
-        : target_(makeTarget(
-              std::move(worker),
-              std::forward<Executor>(executor))) {}
+    ~WorkerSignal() {
+        if (waiters_ != nullptr || scheduledWaiters_ != 0) {
+            std::terminate();
+        }
+    }
 
     WorkerSignal(const WorkerSignal&) = delete;
     WorkerSignal& operator=(const WorkerSignal&) = delete;
 
     [[nodiscard]] Task<void> wait() {
-        const auto* worker = std::get_if<WorkerHandle>(&target_);
-        if (worker != nullptr && !worker->isCurrent()) {
-            throw std::logic_error("worker signal wait must run on its worker");
-        }
+        requireCurrentWorker();
         co_await Awaiter{*this};
     }
 
     void notify() noexcept;
 
 private:
-    using Target = std::variant<WorkerHandle, asio::any_io_executor>;
+    enum class AwaitState : std::uint8_t {
+        kIdle,
+        kLinked,
+        kScheduled,
+    };
 
-    [[nodiscard]] static Target makeWorkerTarget(WorkerHandle worker) {
+    [[nodiscard]] static const WorkerHandle* requireWorker(
+        const WorkerHandle& worker) {
         if (!worker.valid()) {
             throw std::invalid_argument("worker signal requires a valid worker");
         }
-        return Target(
-            std::in_place_type<WorkerHandle>, std::move(worker));
+        return &worker;
     }
 
-    template <typename Executor>
-    [[nodiscard]] static Target makeTarget(
-        WorkerHandle worker,
-        Executor&& executor) {
-        if (worker.valid()) {
-            return Target(
-                std::in_place_type<WorkerHandle>,
-                std::move(worker));
+    void requireCurrentWorker() const {
+        if (!worker_->isCurrent()) {
+            throw std::logic_error("worker signal operation must run on its worker");
         }
-        return Target(
-            std::in_place_type<asio::any_io_executor>,
-            std::forward<Executor>(executor));
     }
+
+    void resumeScheduled(
+        Awaiter* waiter,
+        std::coroutine_handle<> continuation) noexcept;
 
     struct Awaiter final {
-        WorkerSignal& signal;
-        Awaiter* next{nullptr};
-        std::coroutine_handle<> continuation{};
+        explicit Awaiter(WorkerSignal& owner) noexcept : signal(owner) {}
+
+        ~Awaiter() {
+            if (state != AwaitState::kIdle) {
+                std::terminate();
+            }
+        }
+
+        Awaiter(const Awaiter&) = delete;
+        Awaiter& operator=(const Awaiter&) = delete;
 
         [[nodiscard]] bool await_ready() noexcept {
             if (!signal.pending_) {
@@ -89,19 +87,32 @@ private:
         bool await_suspend(std::coroutine_handle<> value) noexcept {
             continuation = value;
             next = signal.waiters_;
+            state = AwaitState::kLinked;
             signal.waiters_ = this;
             return true;
         }
 
         void await_resume() const noexcept {}
+
+        WorkerSignal& signal;
+        Awaiter* next{nullptr};
+        std::coroutine_handle<> continuation{};
+        AwaitState state{AwaitState::kIdle};
     };
 
-    Target target_;
+    // The owning session/connection keeps its stable worker handle alive until
+    // every signal waiter and scheduled resumption has joined.
+    const WorkerHandle* worker_;
     Awaiter* waiters_{nullptr};
+    std::size_t scheduledWaiters_{0};
     bool pending_{false};
 };
 
 inline void WorkerSignal::notify() noexcept {
+    if (!worker_->isCurrent()) {
+        std::terminate();
+    }
+
     auto* waiter = std::exchange(waiters_, nullptr);
     if (waiter == nullptr) {
         pending_ = true;
@@ -110,22 +121,33 @@ inline void WorkerSignal::notify() noexcept {
 
     while (waiter != nullptr) {
         auto* next = waiter->next;
-        const auto continuation = std::exchange(waiter->continuation, {});
+        const auto continuation = waiter->continuation;
         waiter->next = nullptr;
-        try {
-            if (const auto* worker = std::get_if<WorkerHandle>(&target_)) {
-                WorkerHandleAccess::defer(
-                    *worker, [continuation] { continuation.resume(); });
-            } else {
-                asio::post(
-                    std::get<asio::any_io_executor>(target_),
-                    [continuation] { continuation.resume(); });
-            }
-        } catch (...) {
-            std::terminate();
-        }
+        waiter->state = AwaitState::kScheduled;
+        ++scheduledWaiters_;
+        // A detached intrusive node has no recoverable owner. Dispatch failure
+        // is terminal instead of silently stranding the continuation.
+        WorkerHandleAccess::deferOrTerminate(
+            *worker_,
+            [this, waiter, continuation] {
+                resumeScheduled(waiter, continuation);
+            });
         waiter = next;
     }
+}
+
+inline void WorkerSignal::resumeScheduled(
+    Awaiter* waiter,
+    std::coroutine_handle<> continuation) noexcept {
+    if (!worker_->isCurrent() || waiter == nullptr ||
+        waiter->state != AwaitState::kScheduled ||
+        waiter->continuation != continuation || scheduledWaiters_ == 0) {
+        std::terminate();
+    }
+    --scheduledWaiters_;
+    waiter->continuation = {};
+    waiter->state = AwaitState::kIdle;
+    continuation.resume();
 }
 
 }

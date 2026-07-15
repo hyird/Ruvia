@@ -73,6 +73,23 @@ RUVIA_TEST(rate_limiter_disabled_allows_everything) {
     }
 }
 
+RUVIA_TEST(rate_limiter_skips_table_when_startup_metadata_has_no_rules) {
+    RateLimiter limiter(
+        std::nullopt,
+        false,
+        ruvia::kDefaultRateLimitSlotsPerWorker);
+    RUVIA_CHECK(!limiter.enabled());
+    RUVIA_CHECK_EQ(limiter.slotCapacity(), std::size_t{0});
+}
+
+RUVIA_TEST(rate_limiter_allocates_table_for_route_metadata_without_default_rule) {
+    RateLimiter limiter(std::nullopt, true, 8);
+    RUVIA_CHECK(!limiter.enabled());
+    RUVIA_CHECK_EQ(limiter.slotCapacity(), std::size_t{8});
+    RUVIA_CHECK(rateLimitAllowed(limiter.allowRoute(0x1234, "ip", ruleWith(1))));
+    RUVIA_CHECK(!rateLimitAllowed(limiter.allowRoute(0x1234, "ip", ruleWith(1))));
+}
+
 RUVIA_TEST(rate_limiter_resets_after_window) {
     const auto rule = RateLimitRule::fixedWindow(
         1, std::chrono::milliseconds(20));

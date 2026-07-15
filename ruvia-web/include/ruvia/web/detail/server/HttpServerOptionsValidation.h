@@ -1,5 +1,6 @@
 #pragma once
 
+#include <bit>
 #include <stdexcept>
 
 #include "ruvia/http/detail/AsciiCase.h"
@@ -32,6 +33,10 @@ inline void validateHttpServerOptions(const HttpServerOptions& options) {
     ensurePositiveSize(
         options.workerMailboxCapacity,
         "worker mailbox capacity must be greater than 0");
+    if (!std::has_single_bit(options.rateLimitSlotsPerWorker)) {
+        throw std::invalid_argument(
+            "rate-limit slots per worker must be a power of two");
+    }
     ensurePositiveSize(
         options.memoryConfig.requestInitialBufferBytes,
         "memory pool config values must be greater than 0");

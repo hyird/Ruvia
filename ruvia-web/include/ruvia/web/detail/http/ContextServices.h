@@ -60,6 +60,15 @@ public:
         return invalidWorker;
     }
 
+    // The handle is connection-owned and outlives every ContextServices copy.
+    [[nodiscard]] ContextServices withWorker(
+        const WorkerHandle& value) const noexcept {
+        auto services = *this;
+        services.worker_ = &value;
+        return services;
+    }
+    ContextServices withWorker(WorkerHandle&&) const = delete;
+
     [[nodiscard]] HttpErrorHandler errorHandler() const noexcept {
         return errorHandler_;
     }

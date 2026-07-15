@@ -121,87 +121,36 @@ struct FileConditionalHeaders final {
         detail::requestKnownHeader(request, detail::RequestKnownHeader::kIfRange)};
 }
 
-class FileResponseCopiedPath final {
-public:
-    [[nodiscard]] const std::filesystem::path& path() const noexcept {
-        return *path_;
-    }
-
-private:
-    friend class FileResponsePath;
-
-    explicit FileResponseCopiedPath(
-        const std::filesystem::path& path) noexcept
-        : path_(&path) {}
-
-    const std::filesystem::path* path_;
-};
-
-class FileResponseBorrowedNativePath final {
-public:
-    [[nodiscard]] const detail::NativePathChar* path() const noexcept {
-        return path_;
-    }
-
-private:
-    friend class FileResponsePath;
-
-    explicit FileResponseBorrowedNativePath(
-        const detail::NativePathChar* path) noexcept
-        : path_(path) {}
-
-    const detail::NativePathChar* path_;
-};
-
-// Exactly one path-lifetime policy travels with a file response. Context::file
-// copies its caller-owned filesystem path into HttpResponse; an indexed static
-// entry instead borrows the immutable process-lifetime native path.
+// The path travels by value until HttpResponse takes its own copy. StaticRoot is
+// a public value whose lifetime is not coupled to the returned response, so an
+// indexed entry must never leak its internal native-path pointer into the body.
 class FileResponsePath final {
 public:
     [[nodiscard]] static FileResponsePath copying(
-        const std::filesystem::path& path) noexcept {
-        return FileResponsePath(FileResponseCopiedPath(path));
+        std::filesystem::path path) {
+        return FileResponsePath(std::move(path));
     }
 
-    [[nodiscard]] static FileResponsePath borrowing(
+    [[nodiscard]] static FileResponsePath copyingNative(
         const detail::NativePathChar* path) {
         if (path == nullptr || *path == detail::NativePathChar{}) {
             throw std::logic_error("static file entry has no native path");
         }
-        return FileResponsePath(FileResponseBorrowedNativePath(path));
+        return copying(std::filesystem::path(path));
     }
 
     [[nodiscard]] std::string_view guessedContentType() const noexcept {
-        if (const auto* copied =
-                std::get_if<FileResponseCopiedPath>(&value_)) {
-            return detail::guessStaticFileContentType(copied->path());
-        }
-        const auto* borrowed =
-            std::get_if<FileResponseBorrowedNativePath>(&value_);
-        return detail::guessStaticFileContentTypeFromPathView(
-            std::basic_string_view<detail::NativePathChar>(borrowed->path()));
+        return detail::guessStaticFileContentType(path_);
     }
 
     void setBody(
         HttpResponse& response,
         std::uint64_t size,
         std::uint64_t offset,
-        std::uint64_t length) const {
-        if (const auto* copied =
-                std::get_if<FileResponseCopiedPath>(&value_)) {
-            detail::setResponseFileBody(
-                response,
-                copied->path(),
-                size,
-                offset,
-                length);
-            return;
-        }
-        const auto* borrowed =
-            std::get_if<FileResponseBorrowedNativePath>(&value_);
-        detail::setResponseBorrowedNativeFileBody(
+        std::uint64_t length) {
+        detail::setResponseFileBody(
             response,
-            borrowed->path(),
+            takePath(),
             size,
             offset,
             length);
@@ -209,22 +158,24 @@ public:
 
     void setFullBody(
         HttpResponse& response,
-        std::uint64_t size) const {
+        std::uint64_t size) {
         setBody(response, size, 0, size);
     }
 
 private:
-    using Value = std::variant<
-        FileResponseCopiedPath,
-        FileResponseBorrowedNativePath>;
+    explicit FileResponsePath(std::filesystem::path path) noexcept
+        : path_(std::move(path)) {}
 
-    explicit FileResponsePath(FileResponseCopiedPath path) noexcept
-        : value_(path) {}
+    [[nodiscard]] std::filesystem::path takePath() {
+        if (consumed_) {
+            throw std::logic_error("file response path was consumed more than once");
+        }
+        consumed_ = true;
+        return std::move(path_);
+    }
 
-    explicit FileResponsePath(FileResponseBorrowedNativePath path) noexcept
-        : value_(path) {}
-
-    Value value_;
+    std::filesystem::path path_;
+    bool consumed_{false};
 };
 
 template <typename ApplyResponseState>
@@ -587,7 +538,7 @@ HttpResponse Context::staticFile(
     return makeFileResponse(
         *this,
         request_,
-        FileResponsePath::borrowing(servedEntry.filePath()),
+        FileResponsePath::copyingNative(servedEntry.filePath()),
         servedEntry.size(),
         servedEntry.modified(),
         contentType.empty() ? baseEntry.contentType() : contentType,

@@ -35,7 +35,7 @@ struct AppState final {
 
     std::pmr::string listenAddress{appResource()};
     ServerTopology topology;
-    std::size_t threadNum;
+    std::size_t workersPerListener;
     HttpServerOptions options{};
     std::optional<AppDocumentRootConfig> documentRootConfig;
     HttpErrorHandler errorHandler{nullptr};

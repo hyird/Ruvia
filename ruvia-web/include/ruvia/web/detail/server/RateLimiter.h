@@ -19,8 +19,6 @@
 
 namespace ruvia::detail {
 
-inline constexpr std::size_t kDefaultRateLimitSlotsPerWorker = 8192;
-
 class RateLimitAllowed final {
 private:
     constexpr RateLimitAllowed() noexcept = default;
@@ -114,11 +112,27 @@ public:
         slots_.resize(nextPowerOfTwo(slotCount));
     }
 
+    BasicRateLimiter(
+        std::optional<RateLimitRule> appRule,
+        bool hasRouteRateLimit,
+        std::size_t slotCount,
+        std::pmr::memory_resource* resource = nullptr)
+        : appRule_(std::move(appRule)),
+          slots_(pmrResourceOrDefault(resource)) {
+        if (appRule_.has_value() || hasRouteRateLimit) {
+            slots_.resize(nextPowerOfTwo(slotCount));
+        }
+    }
+
     BasicRateLimiter(const BasicRateLimiter&) = delete;
     BasicRateLimiter& operator=(const BasicRateLimiter&) = delete;
 
     [[nodiscard]] bool enabled() const noexcept {
         return appRule_.has_value();
+    }
+
+    [[nodiscard]] std::size_t slotCapacity() const noexcept {
+        return slots_.size();
     }
 
     [[nodiscard]] RateLimitDecision allowGlobal(std::string_view remoteAddress) noexcept {
@@ -273,6 +287,11 @@ private:
         const RateLimitRule& rule) noexcept {
         const bool allowOnOverflow =
             rule.overflowPolicy() == RateLimitOverflowPolicy::kAllow;
+        if (slots_.empty()) {
+            return allowOnOverflow
+                ? RateLimitDecision::allow()
+                : RateLimitDecision::reject(std::chrono::milliseconds(1));
+        }
         if (key.size() > kMaxKeyBytes) {
             return allowOnOverflow
                 ? RateLimitDecision::allow()

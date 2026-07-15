@@ -16,6 +16,7 @@
 #include <chrono>
 #include <cstdint>
 #include <memory_resource>
+#include <memory>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -46,6 +47,11 @@
 #include "ruvia/web/Router.h"
 
 namespace {
+
+ruvia::WorkerHandle testWorker(asio::io_context& io) {
+    return ruvia::detail::WorkerHandleAccess::make(
+        std::make_shared<ruvia::detail::WorkerDispatcher>(io, 64));
+}
 
 using asio::ip::tcp;
 using ruvia::detail::Http2Connection;
@@ -1047,6 +1053,7 @@ RUVIA_TEST(sansio_driver_h2_expectation_decision_precedes_request_content) {
                 std::span<const ruvia::detail::ControllerMiddlewareDescriptor>{});
             impl.finalize();
             ruvia::test::Http2SansIoSessionFixture fixture;
+            const auto workerHandle = testWorker(io);
             fixture.options.accessLog.callback =
                 ruvia::AccessLogCallback::bind(accessObservation);
             co_await ruvia::detail::taskAsAwaitable(
@@ -1056,7 +1063,8 @@ RUVIA_TEST(sansio_driver_h2_expectation_decision_precedes_request_content) {
                     worker,
                     fixture.context(
                         ruvia::detail::ContextServices{}
-                            .withPlainTransport("127.0.0.1"))));
+                            .withPlainTransport("127.0.0.1")
+                            .withWorker(workerHandle))));
         },
         asio::detached);
 
@@ -1235,6 +1243,7 @@ RUVIA_TEST(sansio_driver_h2_buffered_access_uses_only_committed_plan_status) {
             impl.finalize();
 
             ruvia::test::Http2SansIoSessionFixture fixture;
+            const auto workerHandle = testWorker(io);
             fixture.options.accessLog.callback =
                 ruvia::AccessLogCallback::bind(accessObservation);
             co_await ruvia::detail::taskAsAwaitable(
@@ -1244,7 +1253,8 @@ RUVIA_TEST(sansio_driver_h2_buffered_access_uses_only_committed_plan_status) {
                     worker,
                     fixture.context(
                         ruvia::detail::ContextServices{}
-                            .withPlainTransport("127.0.0.1"))));
+                            .withPlainTransport("127.0.0.1")
+                            .withWorker(workerHandle))));
         },
         asio::detached);
 
@@ -1380,6 +1390,7 @@ RUVIA_TEST(sansio_driver_h2_buffered_peer_abort_before_commit_has_no_status) {
                 std::span<const ruvia::detail::ControllerMiddlewareDescriptor>{});
             impl.finalize();
             ruvia::test::Http2SansIoSessionFixture fixture;
+            const auto workerHandle = testWorker(io);
             fixture.options.accessLog.callback =
                 ruvia::AccessLogCallback::bind(accessObservation);
             co_await ruvia::detail::taskAsAwaitable(
@@ -1389,7 +1400,8 @@ RUVIA_TEST(sansio_driver_h2_buffered_peer_abort_before_commit_has_no_status) {
                     worker,
                     fixture.context(
                         ruvia::detail::ContextServices{}
-                            .withPlainTransport("127.0.0.1"))));
+                            .withPlainTransport("127.0.0.1")
+                            .withWorker(workerHandle))));
         },
         asio::detached);
 
@@ -1474,6 +1486,7 @@ RUVIA_TEST(sansio_driver_h2_stream_trailers_emitted) {
                 std::span<const ruvia::detail::ControllerMiddlewareDescriptor>{});
             impl.finalize();
             ruvia::test::Http2SansIoSessionFixture fixture;
+            const auto workerHandle = testWorker(io);
             fixture.options.accessLog.callback =
                 ruvia::AccessLogCallback::bind(accessObservation);
             co_await ruvia::detail::taskAsAwaitable(
@@ -1483,7 +1496,8 @@ RUVIA_TEST(sansio_driver_h2_stream_trailers_emitted) {
                     worker,
                     fixture.context(
                         ruvia::detail::ContextServices{}
-                            .withPlainTransport("127.0.0.1"))));
+                            .withPlainTransport("127.0.0.1")
+                            .withWorker(workerHandle))));
         },
         asio::detached);
 
@@ -2328,13 +2342,16 @@ RUVIA_TEST(sansio_driver_h2_keepalive_requests_drains_connection) {
                 std::span<const ruvia::detail::ControllerMiddlewareDescriptor>{});
             impl.finalize();
             ruvia::test::Http2SansIoSessionFixture fixture;
+            const auto workerHandle = testWorker(io);
             fixture.options.keepaliveRequests = 1;
             co_await ruvia::detail::taskAsAwaitable(ruvia::detail::runHttp2SansIoSession(
                 sock,
                 impl.routeTable(),
                 worker,
                 fixture.context(
-                    ruvia::detail::ContextServices{}.withPlainTransport("127.0.0.1"))));
+                    ruvia::detail::ContextServices{}
+                        .withPlainTransport("127.0.0.1")
+                        .withWorker(workerHandle))));
         },
         asio::detached);
 

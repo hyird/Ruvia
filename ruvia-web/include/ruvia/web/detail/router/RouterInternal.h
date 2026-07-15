@@ -192,6 +192,7 @@ private:
     std::unique_ptr<RouteTable, RouteTableDeleter> routeTable_;
     HttpErrorHandler errorHandler_{nullptr};
     HttpNotFoundHandler notFoundHandler_{nullptr};
+    bool hasRouteRateLimit_{false};
 };
 
 }  // namespace ruvia::detail

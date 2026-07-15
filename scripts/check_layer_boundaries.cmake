@@ -253,21 +253,27 @@ if(NOT core_worker_handle_contract MATCHES
         "worker handles must directly own a stable dispatcher endpoint, while every context owner detaches it before context destruction and escaped handles are tested as safe invalid endpoints")
 endif()
 if(NOT core_worker_signal_contract MATCHES
-       "using Target = std::variant<WorkerHandle, asio::any_io_executor>" OR
-   NOT core_worker_signal_contract MATCHES
-       "std::get_if<WorkerHandle>" OR
+       "const WorkerHandle[*][ \\t]+worker_" OR
    NOT core_worker_signal_contract MATCHES
        "Awaiter[*][ \\t]+waiters_" OR
+   NOT core_worker_signal_contract MATCHES
+       "std::size_t scheduledWaiters_" OR
+   NOT core_worker_signal_contract MATCHES
+       "~Awaiter[(][)]" OR
+   NOT core_worker_signal_contract MATCHES
+       "worker_[-][>]isCurrent[(][)]" OR
+   core_worker_signal_contract MATCHES
+       "asio::any_io_executor|template <typename Executor>|using Target = std::variant" OR
+   core_worker_signal_contract MATCHES
+       "WorkerHandle[ \\t]+worker_" OR
    core_worker_signal_contract MATCHES
        "std::array<std::coroutine_handle|waiter capacity exceeded" OR
-   core_worker_signal_contract MATCHES
-       "WorkerHandle worker_|std::optional<asio::any_io_executor> executor_|const WorkerHandle[*] worker" OR
    NOT core_runtime_test_contract MATCHES
-       "testWorkerSignalHasOneDispatchTarget" OR
+       "testWorkerSignalIsWorkerAffine" OR
    NOT core_runtime_test_contract MATCHES
        "testWorkerSignalHasNoArbitraryWaiterLimit")
-    boundary_error("WorkerSignal regained split targets or a fixed waiter ceiling"
-        "each signal must commit one dispatch target and link coroutine-frame awaiters without allocating or imposing an arbitrary concurrency limit")
+    boundary_error("WorkerSignal weakened worker affinity or intrusive waiter lifetime"
+        "each signal must borrow one stable WorkerHandle, guard linked and scheduled coroutine-frame nodes, and avoid handle refcount churn, executor fallback, or an arbitrary concurrency limit")
 endif()
 if(NOT core_runtime_implementation MATCHES
        "using ContextOwnership" OR
@@ -3393,7 +3399,15 @@ if(EXISTS "${WEB_STATIC_FILE_RESPONSE_SOURCE}" AND
     file(READ "${WEB_STATIC_FILE_PACKAGE_CONSUMER}"
         web_static_file_package_consumer)
     if(NOT web_static_file_response_source MATCHES
-           "std::variant<[ \t\r\n]*FileResponseCopiedPath,[ \t\r\n]*FileResponseBorrowedNativePath>" OR
+           "class FileResponsePath final" OR
+       NOT web_static_file_response_source MATCHES
+           "copyingNative[(]" OR
+       NOT web_static_file_response_source MATCHES
+           "std::filesystem::path path_" OR
+       NOT web_static_file_response_source MATCHES
+           "setResponseFileBody[(][ \t\r\n]*response,[ \t\r\n]*takePath[(][)]" OR
+       web_static_file_response_source MATCHES
+           "FileResponseBorrowedNativePath|setResponseBorrowedNativeFileBody|FileResponsePath::borrowing" OR
        NOT web_static_file_response_source MATCHES
            "class StaticFileRepresentation final" OR
        NOT web_static_file_response_source MATCHES
@@ -3410,12 +3424,14 @@ if(EXISTS "${WEB_STATIC_FILE_RESPONSE_SOURCE}" AND
            "static_file_selects_precompressed_representation_atomically" OR
        NOT web_static_file_representation_test MATCHES
            "static_root_rejects_empty_custom_mime_type" OR
+       NOT web_static_file_representation_test MATCHES
+           "static_file_response_owns_path_after_handler_local_root_is_destroyed" OR
        NOT web_static_file_package_consumer MATCHES
            "!std::default_initializable<[ \t\r\n]*ruvia::detail::StaticRootEntryView>" OR
        NOT web_static_file_package_consumer MATCHES
            "std::optional<ruvia::detail::StaticRootEntryView>")
         boundary_error("static file representation ownership was split"
-            "path lifetime, selected entry, and HTTP content coding must remain typed and atomically tested")
+            "response paths must be owned while selected entries and HTTP content coding remain typed and atomically tested")
     endif()
 endif()
 set(WEB_JSON_STRING_CONTRACT

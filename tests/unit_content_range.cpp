@@ -24,6 +24,7 @@
 #include "ruvia/http/HttpResponse.h"
 #include "ruvia/web/StaticFiles.h"
 #include "ruvia/web/detail/StaticFilesInternal.h"
+#include "ruvia/web/detail/server/HttpFileOpen.h"
 #include "ruvia/core/memory/MemoryPool.h"
 
 namespace {
@@ -58,6 +59,45 @@ RUVIA_TEST(content_range_formats_satisfied_range) {
     auto one = makeResponse();
     setResponseContentRange(one, 0, 1, 1);
     RUVIA_CHECK_EQ(one.header("Content-Range").value_or(""), std::string_view("bytes 0-0/1"));
+}
+
+RUVIA_TEST(static_file_response_owns_path_after_handler_local_root_is_destroyed) {
+    namespace fs = std::filesystem;
+    using ruvia::detail::ContextAccess;
+    using ruvia::detail::HttpRequestAccess;
+
+    const auto dir = fs::temp_directory_path() / "ruvia_static_local_root";
+    fs::create_directories(dir);
+    {
+        std::ofstream output(dir / "payload.txt", std::ios::binary | std::ios::trunc);
+        output << "owned-static-path";
+    }
+
+    ruvia::WorkerMemory worker;
+    ruvia::RequestMemory memory(worker);
+    ruvia::HttpRequest request = HttpRequestAccess::make();
+    HttpRequestAccess::reset(request);
+    HttpRequestAccess::setMethod(request, "GET");
+    HttpRequestAccess::setResource(request, memory.resource());
+    auto context = ContextAccess::make(memory, request);
+
+    auto response = [&] {
+        ruvia::StaticRootOptions options;
+        options.fileTypes = ruvia::StaticFileTypePolicy::all();
+        ruvia::StaticRoot handlerLocalRoot(dir, std::move(options));
+        return context.staticFile(handlerLocalRoot, "payload.txt", "text/plain");
+    }();
+
+    const auto file = ruvia::detail::responseBody(response).file();
+    RUVIA_CHECK(file.has_value());
+    if (file.has_value()) {
+        auto input = ruvia::detail::openResponseFileInput(*file);
+        std::string body;
+        std::getline(input, body);
+        RUVIA_CHECK_EQ(body, std::string("owned-static-path"));
+    }
+
+    fs::remove_all(dir);
 }
 
 RUVIA_TEST(content_range_formats_unsatisfied) {

@@ -51,7 +51,7 @@ int main() {
     ruvia::app()
         .setListenAddress("0.0.0.0")
         .setServerTopology(ruvia::ServerTopology::http(8083))
-        .setThreadNum(2)
+        .setWorkersPerListener(2)
         .setCompression(ruvia::CompressionConfig{.minBytes = 128})
         .setDocumentRoot(std::move(documentRoot))
         .run();

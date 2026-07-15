@@ -48,7 +48,16 @@ RUVIA_TEST(validate_server_options_accepts_defaults) {
     static_assert(std::same_as<
                   decltype(HttpServerOptions{}.maxStreamBodyBytes),
                   std::optional<std::size_t>>);
+    static_assert(std::same_as<
+                  decltype(HttpServerOptions{}.defaultRateLimitPerWorker),
+                  std::optional<ruvia::RateLimitRule>>);
+    static_assert(std::same_as<
+                  decltype(HttpServerOptions{}.rateLimitSlotsPerWorker),
+                  std::size_t>);
     RUVIA_CHECK(!HttpServerOptions{}.maxStreamBodyBytes.has_value());
+    RUVIA_CHECK_EQ(
+        HttpServerOptions{}.rateLimitSlotsPerWorker,
+        ruvia::kDefaultRateLimitSlotsPerWorker);
     RUVIA_CHECK(!throwsInvalid([] { validateHttpServerOptions(HttpServerOptions{}); }));
 }
 
@@ -104,6 +113,16 @@ RUVIA_TEST(validate_server_options_rejects_nonpositive_limits) {
     {
         HttpServerOptions options;
         options.workerMailboxCapacity = 0;
+        RUVIA_CHECK(throwsInvalid([&] { validateHttpServerOptions(options); }));
+    }
+    {
+        HttpServerOptions options;
+        options.rateLimitSlotsPerWorker = 0;
+        RUVIA_CHECK(throwsInvalid([&] { validateHttpServerOptions(options); }));
+    }
+    {
+        HttpServerOptions options;
+        options.rateLimitSlotsPerWorker = 3;
         RUVIA_CHECK(throwsInvalid([&] { validateHttpServerOptions(options); }));
     }
     {

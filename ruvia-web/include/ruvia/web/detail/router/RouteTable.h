@@ -324,6 +324,9 @@ public:
 
     void setErrorHandler(HttpErrorHandler handler) noexcept;
     void setNotFoundHandler(HttpNotFoundHandler handler) noexcept;
+    [[nodiscard]] bool hasRouteRateLimit() const noexcept {
+        return hasRouteRateLimit_;
+    }
     [[nodiscard]] RouteResolution resolve(const HttpRequest& request) const noexcept;
     [[nodiscard]] RouteResolution resolve(
         HttpKnownMethod method,
@@ -536,6 +539,7 @@ private:
     std::size_t exactMask_{0};
     HttpErrorHandler errorHandler_{nullptr};
     HttpNotFoundHandler notFoundHandler_{nullptr};
+    bool hasRouteRateLimit_{false};
 };
 
 }  // namespace ruvia::detail

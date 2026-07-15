@@ -38,7 +38,7 @@ int main() {
 
     app.setListenAddress("127.0.0.1")
         .setServerTopology(ruvia::ServerTopology::http(availablePort()))
-        .setThreadNum(2)
+        .setWorkersPerListener(2)
         .setWorkerMailboxCapacity(8)
         .onStop([&] {
             ++stopCalls;

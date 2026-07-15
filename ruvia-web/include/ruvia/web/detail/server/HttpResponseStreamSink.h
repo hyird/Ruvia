@@ -44,7 +44,6 @@ public:
         Http1ResponseStreamPlan plan) noexcept
         : stream_(stream),
           head_(head),
-          scratch_(memory.resource()),
           trailers_(memory.resource()),
           scannerEntry_(scannerEntry),
           worker_(std::move(worker)),
@@ -77,9 +76,6 @@ public:
         void*, Context*, ResponseStreamState::StreamingHeadThunk);
     template <typename Sink>
     friend void responseStreamReleaseContextThunk(void*) noexcept;
-    template <typename Sink>
-    friend std::pmr::string& responseStreamScratchThunk(void*) noexcept;
-
 private:
     void bindContext(
         Context* context,
@@ -88,11 +84,6 @@ private:
     }
 
     void releaseContext() noexcept { state_.releaseContext(); }
-
-    [[nodiscard]] std::pmr::string& scratch() noexcept {
-        clearPmrStringRetainingSmall(scratch_);
-        return scratch_;
-    }
 
     Task<void> commit(ResponseTrailerIntent trailerIntent) {
         if (state_.committed()) {
@@ -245,7 +236,6 @@ private:
 
     Stream& stream_;
     ResponseHeadBuffer& head_;
-    std::pmr::string scratch_;
     std::pmr::string trailers_;
     ScannerEntry& scannerEntry_;
     WorkerHandle worker_;

@@ -31,7 +31,8 @@ ruvia::DbConfig dbConfigFromEnv(const ruvia::Env& env) {
     if (const auto port = env.get<std::uint16_t>("RUVIA_DB_PORT")) {
         config.port = *port;
     }
-    if (const auto poolSize = env.get<std::uint32_t>("RUVIA_DB_POOL_SIZE")) {
+    if (const auto poolSize =
+            env.get<std::uint32_t>("RUVIA_DB_POOL_SIZE_PER_WORKER")) {
         config.poolSizePerWorker = *poolSize;
     }
     config.acquireTimeout = std::chrono::seconds(2);
@@ -215,6 +216,6 @@ int main() {
     app
         .setListenAddress("0.0.0.0")
         .setServerTopology(ruvia::ServerTopology::http(8086))
-        .setThreadNum(2)
+        .setWorkersPerListener(2)
         .run();
 }

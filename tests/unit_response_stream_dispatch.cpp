@@ -114,11 +114,6 @@ public:
         streamingHead_ = nullptr;
     }
 
-    [[nodiscard]] std::pmr::string& scratch() noexcept {
-        scratch_.clear();
-        return scratch_;
-    }
-
     [[nodiscard]] bool committed() const noexcept {
         return commitPlan_.has_value();
     }
@@ -173,7 +168,6 @@ private:
     Context* context_{nullptr};
     StreamingHeadThunk streamingHead_{nullptr};
     std::optional<ResponseStreamCommitPlan> commitPlan_;
-    std::pmr::string scratch_{std::pmr::get_default_resource()};
     bool failUncommittedEnd_{false};
 };
 

@@ -20,6 +20,7 @@ set(RUVIA_WEB_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/src/http/Csrf.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/http/Health.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/http/HttpRuntimeFacades.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/http/ScopedOperation.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/http/MultipartReader.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/http/RateLimit.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/http/Streaming.cpp
@@ -185,6 +186,7 @@ ruvia_install_public_headers(web
     include/ruvia/web/RequestFields.h
     include/ruvia/web/SecurityHeaders.h
     include/ruvia/web/Session.h
+    include/ruvia/web/ScopedOperation.h
     include/ruvia/web/Streaming.h
     include/ruvia/web/Validation.h
     include/ruvia/web/ValidationTypes.h

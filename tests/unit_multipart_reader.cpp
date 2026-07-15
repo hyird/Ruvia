@@ -22,6 +22,7 @@
 #include "ruvia/web/detail/body/HttpRequestBodyFacade.h"
 #include "ruvia/core/detail/AsioAwait.h"
 #include "ruvia/core/detail/WorkerSignal.h"
+#include "ruvia/core/detail/WorkerDispatcher.h"
 
 namespace {
 
@@ -54,13 +55,17 @@ struct ChunkSource final {
 
 struct SuspendedChunkSource final {
     explicit SuspendedChunkSource(asio::io_context& io)
-        : signal(io.get_executor()) {}
+        : dispatcher(std::make_shared<ruvia::detail::WorkerDispatcher>(io, 8)),
+          worker(ruvia::detail::WorkerHandleAccess::make(dispatcher)),
+          signal(worker) {}
 
     Task<std::optional<std::string_view>> read() {
         co_await signal.wait();
         co_return std::nullopt;
     }
 
+    std::shared_ptr<ruvia::detail::WorkerDispatcher> dispatcher;
+    ruvia::WorkerHandle worker;
     ruvia::detail::WorkerSignal signal;
 };
 

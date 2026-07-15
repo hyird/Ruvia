@@ -132,10 +132,6 @@ void bindOutput(
     ruvia::Context*,
     ruvia::HttpResponse (*)(ruvia::Context&)) noexcept {}
 
-std::pmr::string& outputScratch(void* target) noexcept {
-    return static_cast<OutputSink*>(target)->scratch;
-}
-
 bool outputFalse(void*) noexcept {
     return false;
 }
@@ -150,7 +146,6 @@ ruvia::ResponseStreamWriter makeResponseStreamWriter(OutputSink& sink) noexcept 
         &sleepOutput,
         &bindOutput,
         &releaseOutputContext,
-        &outputScratch,
         &outputFalse,
         &outputFalse);
 }

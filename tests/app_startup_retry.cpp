@@ -38,7 +38,7 @@ std::uint16_t availablePort() {
 int main() {
     auto& app = ruvia::app();
     app.setListenAddress("not-an-ip-address")
-        .setThreadNum(1)
+        .setWorkersPerListener(1)
         .setMemoryPoolConfig(
             {.requestInitialBufferBytes =
                  ruvia::kRequestArenaInitialBytes});

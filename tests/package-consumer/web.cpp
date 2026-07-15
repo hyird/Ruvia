@@ -12,8 +12,10 @@
 #include <utility>
 
 #include <asio/io_context.hpp>
+#include <asio/post.hpp>
 
 #include <ruvia/http/ProtocolByteLimit.h>
+#include <ruvia/core/EventLoopPool.h>
 #include <ruvia/web/App.h>
 #include <ruvia/web/AppHook.h>
 #include <ruvia/web/ConnInfo.h>
@@ -407,7 +409,20 @@ concept HasAppInstanceAlias = requires {
     T::instance();
 };
 
+template <typename T>
+concept HasLegacyAppThreadNumSetter = requires(T& app) {
+    app.setThreadNum(std::size_t{1});
+};
+
+template <typename T>
+concept HasLegacyAppGlobalRateLimitSetter = requires(T& app) {
+    app.setGlobalRateLimit(std::nullopt);
+};
+
 static_assert(!HasAppInstanceAlias<ruvia::App>);
+static_assert(!HasLegacyAppThreadNumSetter<ruvia::App>);
+static_assert(!HasLegacyAppGlobalRateLimitSetter<ruvia::App>);
+static_assert(ruvia::kDefaultRateLimitSlotsPerWorker == 8192);
 static_assert(!HasWebWorkerCorePostEscape<ruvia::WebWorkerHandle>);
 static_assert(!HasNativeEventLoopAccess<ruvia::WebWorkerHandle>);
 static_assert(!HasNativeEventLoopAccess<ruvia::WebWorkerContext>);
@@ -1047,6 +1062,7 @@ using AppSetConnectionTimeoutFunction = ruvia::App& (ruvia::App::*)(
     std::optional<std::chrono::milliseconds>);
 using AppSetOptionalSizeFunction = ruvia::App& (ruvia::App::*)(
     std::optional<std::size_t>);
+using AppSetSizeFunction = ruvia::App& (ruvia::App::*)(std::size_t);
 using ContextTextFunction = ruvia::HttpResponse (ruvia::Context::*)(
     std::string_view) const;
 using ContextPmrStringFunction = ruvia::HttpResponse (ruvia::Context::*)(
@@ -1093,6 +1109,14 @@ static_assert(std::same_as<
         &ruvia::App::setMaxStreamBodyBytes)),
     AppSetOptionalSizeFunction>);
 static_assert(std::same_as<
+    decltype(static_cast<AppSetSizeFunction>(
+        &ruvia::App::setWorkersPerListener)),
+    AppSetSizeFunction>);
+static_assert(std::same_as<
+    decltype(static_cast<AppSetSizeFunction>(
+        &ruvia::App::setRateLimitSlotsPerWorker)),
+    AppSetSizeFunction>);
+static_assert(std::same_as<
     decltype(static_cast<ContextTextFunction>(&ruvia::Context::text)),
     ContextTextFunction>);
 static_assert(std::same_as<
@@ -1131,7 +1155,7 @@ static_assert(std::same_as<
 static_assert(std::same_as<
     decltype(std::declval<ruvia::SseWriter&>().write(
         std::declval<const ruvia::SseMessage&>())),
-    ruvia::Task<void>>);
+    ruvia::ScopedOperation<void>>);
 static_assert(!HasBuilderMetadataArguments<ruvia::Context>);
 static_assert(std::same_as<
     ruvia::Context::HeaderOptions,
@@ -1186,7 +1210,7 @@ concept ExposesRvalueHttp2RequestBodyStoreAlternative =
 static_assert(std::is_same_v<
     decltype(std::declval<ruvia::ResponseStreamWriter&>().end(
         std::declval<std::span<const ruvia::HttpHeaderView>>())),
-    ruvia::Task<void>>);
+    ruvia::ScopedOperation<void>>);
 static_assert(std::is_same_v<
     decltype(std::declval<const ruvia::ContextRequest&>().method()),
     std::string_view>);
@@ -1795,6 +1819,8 @@ int main() {
         return 4;
     }
     asio::io_context io;
+    auto attachment = ruvia::attachEventLoop(io);
+    const auto workerHandle = attachment.loop().handle();
     ruvia::detail::Http2SansIoStreamRuntimeTable runtimes(
         std::pmr::get_default_resource());
     ruvia::detail::Http2StreamState acceptedStream(
@@ -1806,11 +1832,15 @@ int main() {
             ruvia::detail::RequestBodyMode::kBuffered)) {
         return 5;
     }
-    auto* signal = runtimes.beginDispatch(1, io.get_executor());
+    auto* signal = runtimes.beginDispatch(1, workerHandle);
     if (signal == nullptr || runtimes.dispatchedCount() != 1) {
         return 6;
     }
-    signal->end();
+    asio::post(io, [&] {
+        signal->end();
+        attachment.stop();
+    });
+    io.run();
     if (!signal->ended() || !runtimes.remove(1) ||
         runtimes.dispatchedCount() != 0) {
         return 7;
@@ -1986,6 +2016,9 @@ int main() {
     }
     ruvia::app()
         .setWorkerMailboxCapacity(1024)
+        .setWorkersPerListener(1)
+        .setRateLimitSlotsPerWorker(ruvia::kDefaultRateLimitSlotsPerWorker)
+        .setDefaultRateLimitPerWorker(std::nullopt)
         .setServerTopology(ruvia::ServerTopology::http(8080));
     return 0;
 }

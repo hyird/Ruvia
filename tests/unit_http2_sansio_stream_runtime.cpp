@@ -3,6 +3,7 @@
 #include <concepts>
 #include <cstddef>
 #include <memory_resource>
+#include <memory>
 #include <new>
 #include <optional>
 #include <string>
@@ -15,6 +16,7 @@
 #include <asio/io_context.hpp>
 
 #include "ruvia/core/detail/AsioAwait.h"
+#include "ruvia/core/detail/WorkerDispatcher.h"
 #include "ruvia/http/detail/http2/Http2Connection.h"
 #include "ruvia/http/ProtocolByteLimit.h"
 #include "ruvia/web/detail/http2/Http2SansIoSendWindow.h"
@@ -297,22 +299,25 @@ RUVIA_TEST(http2_web_stream_runtime_table_keeps_active_storage_stable) {
 
 RUVIA_TEST(http2_web_stream_runtime_table_owns_dispatch_signal_and_lease) {
     asio::io_context io;
+    auto dispatcher =
+        std::make_shared<ruvia::detail::WorkerDispatcher>(io, 8);
+    const auto worker = ruvia::detail::WorkerHandleAccess::make(dispatcher);
     std::pmr::monotonic_buffer_resource resource;
     Http2SansIoStreamRuntimeTable table(&resource);
 
-    RUVIA_CHECK(table.beginDispatch(1, io.get_executor()) == nullptr);
+    RUVIA_CHECK(table.beginDispatch(1, worker) == nullptr);
     auto& runtime = ensureAcceptedRuntime(table, 1, &resource);
     RUVIA_CHECK(!runtime.dispatched());
     RUVIA_CHECK(runtime.signal() == nullptr);
     RUVIA_CHECK_EQ(table.dispatchedCount(), std::size_t{0});
-    RUVIA_CHECK(table.beginDispatch(1, io.get_executor()) == nullptr);
+    RUVIA_CHECK(table.beginDispatch(1, worker) == nullptr);
     RUVIA_CHECK(runtime.selectRoute(
         RouteResolution{}, RequestBodyMode::kBuffered));
     auto* selectedRoute = runtime.selectedRoute();
     RUVIA_CHECK(selectedRoute != nullptr);
     RUVIA_CHECK(selectedRoute->signal() == nullptr);
 
-    auto* signal = table.beginDispatch(1, io.get_executor());
+    auto* signal = table.beginDispatch(1, worker);
     RUVIA_CHECK(signal != nullptr);
     RUVIA_CHECK(runtime.selectedRoute() == selectedRoute);
     RUVIA_CHECK(selectedRoute->dispatched());
@@ -320,7 +325,7 @@ RUVIA_TEST(http2_web_stream_runtime_table_owns_dispatch_signal_and_lease) {
     RUVIA_CHECK(runtime.dispatched());
     RUVIA_CHECK(runtime.signal() == signal);
     RUVIA_CHECK_EQ(table.dispatchedCount(), std::size_t{1});
-    RUVIA_CHECK(table.beginDispatch(1, io.get_executor()) == nullptr);
+    RUVIA_CHECK(table.beginDispatch(1, worker) == nullptr);
     RUVIA_CHECK_EQ(table.dispatchedCount(), std::size_t{1});
 
     std::size_t visited = 0;
@@ -331,9 +336,11 @@ RUVIA_TEST(http2_web_stream_runtime_table_owns_dispatch_signal_and_lease) {
     });
     RUVIA_CHECK_EQ(visited, std::size_t{1});
 
-    signal->wake();
-    RUVIA_CHECK(!signal->ended());
-    signal->end();
+    asio::post(io, [signal] {
+        signal->wake();
+        signal->end();
+    });
+    io.run();
     RUVIA_CHECK(signal->ended());
     RUVIA_CHECK(table.remove(1));
     RUVIA_CHECK_EQ(table.dispatchedCount(), std::size_t{0});
@@ -342,12 +349,15 @@ RUVIA_TEST(http2_web_stream_runtime_table_owns_dispatch_signal_and_lease) {
 
 RUVIA_TEST(http2_web_stream_signal_wakes_concurrent_waiters_without_self_cancel) {
     asio::io_context io;
+    auto dispatcher =
+        std::make_shared<ruvia::detail::WorkerDispatcher>(io, 8);
+    const auto worker = ruvia::detail::WorkerHandleAccess::make(dispatcher);
     std::pmr::monotonic_buffer_resource resource;
     Http2SansIoStreamRuntimeTable table(&resource);
     auto& runtime = ensureAcceptedRuntime(table, 1, &resource);
     RUVIA_CHECK(runtime.selectRoute(
         RouteResolution{}, RequestBodyMode::kBuffered));
-    auto* signal = table.beginDispatch(1, io.get_executor());
+    auto* signal = table.beginDispatch(1, worker);
     RUVIA_CHECK(signal != nullptr);
     if (signal == nullptr) {
         return;
@@ -363,14 +373,17 @@ RUVIA_TEST(http2_web_stream_signal_wakes_concurrent_waiters_without_self_cancel)
     (void)io.poll();
     RUVIA_CHECK_EQ(wakeCount, std::size_t{0});
 
-    signal->wake();
     io.restart();
+    asio::post(io, [signal] { signal->wake(); });
     io.run();
     RUVIA_CHECK_EQ(wakeCount, std::size_t{2});
 }
 
 RUVIA_TEST(http2_web_stream_runtime_keeps_overflow_signal_reference_stable) {
     asio::io_context io;
+    auto dispatcher =
+        std::make_shared<ruvia::detail::WorkerDispatcher>(io, 8);
+    const auto worker = ruvia::detail::WorkerHandleAccess::make(dispatcher);
     std::pmr::monotonic_buffer_resource resource;
     Http2SansIoStreamRuntimeTable table(&resource);
     for (std::uint32_t id = 1; id <= 33; id += 2) {
@@ -383,7 +396,7 @@ RUVIA_TEST(http2_web_stream_runtime_keeps_overflow_signal_reference_stable) {
     }
     RUVIA_CHECK(runtime->selectRoute(
         RouteResolution{}, RequestBodyMode::kBuffered));
-    auto* signal = table.beginDispatch(33, io.get_executor());
+    auto* signal = table.beginDispatch(33, worker);
     RUVIA_CHECK(signal != nullptr);
     const auto* runtimeAddress = runtime;
 

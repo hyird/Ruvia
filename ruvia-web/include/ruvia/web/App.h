@@ -43,7 +43,7 @@ public:
     App& loadDotenv(const std::filesystem::path& path, DotenvOptions options = {});
     App& setListenAddress(std::string_view address);
     App& setServerTopology(ServerTopology topology);
-    App& setThreadNum(std::size_t threadNum);
+    App& setWorkersPerListener(std::size_t workersPerListener);
     App& setWorkerMailboxCapacity(std::size_t capacity);
     App& setKeepaliveTimeout(std::optional<std::chrono::milliseconds> timeout);
     App& setShutdownGracePeriod(std::chrono::milliseconds gracePeriod);
@@ -62,7 +62,8 @@ public:
     App& setMemoryPoolConfig(MemoryPoolConfig config);
     App& onError(HttpErrorHandler handler);
     App& notFound(HttpNotFoundHandler handler);
-    App& setGlobalRateLimit(std::optional<RateLimitRule> rule);
+    App& setDefaultRateLimitPerWorker(std::optional<RateLimitRule> rule);
+    App& setRateLimitSlotsPerWorker(std::size_t slotsPerWorker);
     App& onAccess(AccessLogCallback callback);
     App& onStart(AppHook hook);
     App& onStop(AppHook hook);

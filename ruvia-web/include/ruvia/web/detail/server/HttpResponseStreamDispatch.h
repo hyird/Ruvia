@@ -58,11 +58,6 @@ void responseStreamReleaseContextThunk(void* target) noexcept {
 }
 
 template <typename Sink>
-std::pmr::string& responseStreamScratchThunk(void* target) noexcept {
-    return static_cast<Sink*>(target)->scratch();
-}
-
-template <typename Sink>
 bool responseStreamCommittedThunk(void* target) noexcept {
     return static_cast<Sink*>(target)->committed();
 }
@@ -76,7 +71,6 @@ template <typename Sink>
         &responseStreamSleepThunk<Sink>,
         &responseStreamBindContextThunk<Sink>,
         &responseStreamReleaseContextThunk<Sink>,
-        &responseStreamScratchThunk<Sink>,
         &responseStreamCommittedThunk<Sink>,
         &responseStreamAbortedThunk<Sink>);
 }

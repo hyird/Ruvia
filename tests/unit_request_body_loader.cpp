@@ -3,6 +3,7 @@
 #include "ruvia/core/Task.h"
 #include "ruvia/core/detail/AsioAwait.h"
 #include "ruvia/core/detail/WorkerSignal.h"
+#include "ruvia/core/detail/WorkerDispatcher.h"
 #include "ruvia/web/detail/body/HttpRequestBodyFacade.h"
 
 #include <asio/co_spawn.hpp>
@@ -10,6 +11,7 @@
 #include <asio/post.hpp>
 #include <asio/use_future.hpp>
 
+#include <memory>
 #include <stdexcept>
 #include <string_view>
 
@@ -17,7 +19,9 @@ namespace {
 
 struct SuspendedLoader final {
     explicit SuspendedLoader(asio::io_context& io)
-        : signal(io.get_executor()) {}
+        : dispatcher(std::make_shared<ruvia::detail::WorkerDispatcher>(io, 8)),
+          worker(ruvia::detail::WorkerHandleAccess::make(dispatcher)),
+          signal(worker) {}
 
     ruvia::Task<std::string_view> readAll() {
         ++readCalls;
@@ -30,6 +34,8 @@ struct SuspendedLoader final {
         co_await signal.wait();
     }
 
+    std::shared_ptr<ruvia::detail::WorkerDispatcher> dispatcher;
+    ruvia::WorkerHandle worker;
     ruvia::detail::WorkerSignal signal;
     int readCalls{0};
     int discardCalls{0};

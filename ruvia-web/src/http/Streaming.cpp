@@ -1,13 +1,14 @@
 #include "ruvia/web/detail/http/StreamingInternal.h"
 
 #include "ruvia/core/Task.h"
+#include "ruvia/core/memory/PmrResource.h"
 
 namespace ruvia {
 
-Task<void> SseWriter::write(const SseMessage& message) {
-    auto& frame = detail::StreamingAccess::scratch(writer_);
+ScopedOperation<void> SseWriter::write(const SseMessage& message) {
+    std::pmr::string frame(detail::processResource());
     detail::formatSseMessage(frame, message);
-    co_await writer_.write(frame);
+    return writer_.writeOwned(std::move(frame));
 }
 
 }  // namespace ruvia

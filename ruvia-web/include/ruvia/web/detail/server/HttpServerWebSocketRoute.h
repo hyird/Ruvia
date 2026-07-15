@@ -70,6 +70,7 @@ Task<std::optional<Http1SessionRequestCompletion>> dispatchHttpWebSocketRoute(
         }
         webSocketConnection.emplace(
             WebSocketSocketTransport<Stream>{stream},
+            baseRouteServices.worker(),
             scannerEntry,
             webSocketEndpoint.lifecycle(),
             ProtocolByteLimit::limited(options.maxWebSocketMessageBytes),
