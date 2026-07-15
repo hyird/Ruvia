@@ -6,10 +6,14 @@
 #include <asio/co_spawn.hpp>
 #include <asio/detached.hpp>
 #include <asio/io_context.hpp>
+#include <asio/post.hpp>
 
 #include <chrono>
 #include <concepts>
 #include <memory>
+#include <semaphore>
+#include <stdexcept>
+#include <thread>
 #include <type_traits>
 #include <utility>
 
@@ -27,12 +31,66 @@ static_assert(!HasAnyRvalueWorkerWaitAccessor<ruvia::WorkerWaitResult<int>>);
 
 namespace {
 
-ruvia::Task<void> waitForCompletion(ruvia::OneShotReceiver<int>& receiver, bool& success) {
+class ThrowingMove final {
+public:
+    explicit ThrowingMove(int value) noexcept
+        : value_(value) {}
+
+    ThrowingMove(const ThrowingMove&) = delete;
+    ThrowingMove& operator=(const ThrowingMove&) = delete;
+    ThrowingMove(ThrowingMove&& other) {
+        if (throwOnMove) {
+            throw std::runtime_error("requested move failure");
+        }
+        value_ = std::exchange(other.value_, 0);
+    }
+
+    [[nodiscard]] int value() const noexcept { return value_; }
+
+    static inline bool throwOnMove{false};
+
+private:
+    int value_{0};
+};
+
+ruvia::Task<void> waitForValue(
+    ruvia::OneShotReceiver<int>& receiver,
+    int expected,
+    bool& success) {
     const auto result = co_await receiver.waitFor(std::chrono::seconds(1));
-    success = result.value() != nullptr && *result.value() == 42;
+    success = result.value() != nullptr && *result.value() == expected;
+}
+
+ruvia::Task<void> waitForWorkerStopping(
+    ruvia::OneShotReceiver<int>& receiver,
+    bool& success) {
+    const auto result = co_await receiver.wait();
+    success = result.workerStopping() != nullptr;
 }
 
 ruvia::Task<void> exercise(ruvia::WorkerHandle worker, bool& success) {
+    {
+        auto [completion, receiver] =
+            ruvia::makeOneShot<ThrowingMove>(worker);
+        bool moveFailed = false;
+        ThrowingMove::throwOnMove = true;
+        try {
+            static_cast<void>(completion.complete(ThrowingMove(5)));
+        } catch (const std::runtime_error&) {
+            moveFailed = true;
+        }
+        ThrowingMove::throwOnMove = false;
+        if (!moveFailed ||
+            completion.complete(ThrowingMove(6)) !=
+                ruvia::OneShotCompleteResult::kCompleted) {
+            co_return;
+        }
+        const auto result = co_await receiver.wait();
+        if (result.value() == nullptr || result.value()->value() != 6) {
+            co_return;
+        }
+    }
+
     {
         auto [completion, receiver] = ruvia::makeOneShot<int>(worker);
         if (completion.complete(7) != ruvia::OneShotCompleteResult::kCompleted ||
@@ -72,7 +130,7 @@ ruvia::Task<void> exercise(ruvia::WorkerHandle worker, bool& success) {
     auto [completion, receiver] = ruvia::makeOneShot<int>(worker);
     auto activeReceiver = std::move(receiver);
     ruvia::TaskScope scope(worker);
-    scope.spawn(waitForCompletion(activeReceiver, success));
+    scope.spawn(waitForValue(activeReceiver, 42, success));
     if (completion.complete(42) != ruvia::OneShotCompleteResult::kCompleted) {
         co_return;
     }
@@ -82,15 +140,66 @@ ruvia::Task<void> exercise(ruvia::WorkerHandle worker, bool& success) {
 }
 
 int main() {
-    asio::io_context ioContext;
-    const auto dispatcher = std::make_shared<ruvia::detail::WorkerDispatcher>(ioContext, 8);
-    const auto worker = ruvia::detail::WorkerHandleAccess::make(dispatcher);
     bool success = false;
-    asio::co_spawn(ioContext,
-                   ruvia::detail::taskAsAwaitable(exercise(worker, success)),
-                   asio::detached);
-    ioContext.run();
-    dispatcher->close();
-    dispatcher->stopTimers();
-    return success ? 0 : 1;
+    {
+        asio::io_context ioContext;
+        const auto dispatcher =
+            std::make_shared<ruvia::detail::WorkerDispatcher>(ioContext, 8);
+        const auto worker = ruvia::detail::WorkerHandleAccess::make(dispatcher);
+        asio::co_spawn(ioContext,
+                       ruvia::detail::taskAsAwaitable(exercise(worker, success)),
+                       asio::detached);
+        ioContext.run();
+        dispatcher->close();
+        dispatcher->stopTimers();
+    }
+
+    bool workerStopping = false;
+    {
+        asio::io_context ioContext;
+        const auto dispatcher =
+            std::make_shared<ruvia::detail::WorkerDispatcher>(ioContext, 8);
+        const auto worker = ruvia::detail::WorkerHandleAccess::make(dispatcher);
+        auto [completion, receiver] = ruvia::makeOneShot<int>(worker);
+        asio::co_spawn(
+            ioContext,
+            ruvia::detail::taskAsAwaitable(
+                waitForWorkerStopping(receiver, workerStopping)),
+            asio::detached);
+        asio::post(ioContext, [dispatcher] { dispatcher->close(); });
+        ioContext.run();
+        dispatcher->stopTimers();
+    }
+
+    bool crossThreadValue = false;
+    bool crossThreadCompleted = false;
+    {
+        asio::io_context ioContext;
+        const auto dispatcher =
+            std::make_shared<ruvia::detail::WorkerDispatcher>(ioContext, 8);
+        const auto worker = ruvia::detail::WorkerHandleAccess::make(dispatcher);
+        auto [completion, receiver] = ruvia::makeOneShot<int>(worker);
+        std::binary_semaphore receiverScheduled{0};
+        asio::co_spawn(
+            ioContext,
+            ruvia::detail::taskAsAwaitable(
+                waitForValue(receiver, 77, crossThreadValue)),
+            asio::detached);
+        asio::post(ioContext, [&receiverScheduled] {
+            receiverScheduled.release();
+        });
+        std::thread completer([&] {
+            receiverScheduled.acquire();
+            crossThreadCompleted =
+                completion.complete(77) ==
+                ruvia::OneShotCompleteResult::kCompleted;
+        });
+        ioContext.run();
+        completer.join();
+        dispatcher->close();
+        dispatcher->stopTimers();
+    }
+    const bool allPassed = success && workerStopping && crossThreadValue &&
+                           crossThreadCompleted;
+    return allPassed ? 0 : 1;
 }

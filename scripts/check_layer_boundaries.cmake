@@ -187,6 +187,27 @@ if(NOT core_channel_contract MATCHES
     boundary_error("core linear async owners regained invalid default states or destructive reassignment"
         "receivers must be factory-created and Task/receiver handles must be move-construct-only so assignment cannot orphan endpoints or destroy live coroutine frames")
 endif()
+if(NOT core_one_shot_contract MATCHES
+       "struct OneShotPending final" OR
+   NOT core_one_shot_contract MATCHES
+       "class OneShotReady final" OR
+   NOT core_one_shot_contract MATCHES
+       "struct OneShotConsumed final" OR
+   NOT core_one_shot_contract MATCHES
+       "struct OneShotReceiverClosed final" OR
+   NOT core_one_shot_contract MATCHES
+       "struct OneShotWorkerStopping final" OR
+   NOT core_one_shot_contract MATCHES
+       "using Lifecycle = std::variant" OR
+   NOT core_one_shot_contract MATCHES
+       "prepareOneShotReceiverWake" OR
+   NOT core_one_shot_contract MATCHES
+       "wakeOneShotReceiver" OR
+   core_one_shot_contract MATCHES
+       "std::optional<T>[ \t]+value|bool completed|bool consumed|bool closed|bool workerStopped")
+    boundary_error("OneShot regained parallel lifecycle flags"
+        "pending, ready, consumed, receiver-closed, and worker-stopping must remain exclusive states and use the shared prepare-then-wake protocol")
+endif()
 if(NOT core_task_promise_contract MATCHES
        "struct TaskPromisePending final" OR
    NOT core_task_promise_contract MATCHES

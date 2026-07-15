@@ -35,6 +35,36 @@ if(_built_components_csv MATCHES "(^|,)core(,|$)" AND
 endif()
 
 if(_built_components_csv MATCHES "(^|,)core(,|$)")
+    set(_installed_one_shot_path
+        "${_install_prefix}/include/ruvia/core/OneShot.h")
+    if(NOT EXISTS "${_installed_one_shot_path}")
+        message(FATAL_ERROR
+            "installed core package is missing OneShot")
+    endif()
+    file(READ "${_installed_one_shot_path}"
+        _installed_one_shot)
+    if(NOT _installed_one_shot MATCHES
+           "struct OneShotPending final" OR
+       NOT _installed_one_shot MATCHES
+           "class OneShotReady final" OR
+       NOT _installed_one_shot MATCHES
+           "struct OneShotConsumed final" OR
+       NOT _installed_one_shot MATCHES
+           "struct OneShotReceiverClosed final" OR
+       NOT _installed_one_shot MATCHES
+           "struct OneShotWorkerStopping final" OR
+       NOT _installed_one_shot MATCHES
+           "using Lifecycle = std::variant" OR
+       NOT _installed_one_shot MATCHES
+           "prepareOneShotReceiverWake" OR
+       NOT _installed_one_shot MATCHES
+           "wakeOneShotReceiver" OR
+       _installed_one_shot MATCHES
+           "std::optional<T>[ \t]+value|bool completed|bool consumed|bool closed|bool workerStopped")
+        message(FATAL_ERROR
+            "installed OneShot restored parallel lifecycle flags")
+    endif()
+
     set(_installed_task_promise_path
         "${_install_prefix}/include/ruvia/core/detail/TaskPromise.h")
     if(NOT EXISTS "${_installed_task_promise_path}")

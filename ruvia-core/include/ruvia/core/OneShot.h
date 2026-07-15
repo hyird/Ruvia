@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cassert>
 #include <chrono>
 #include <coroutine>
 #include <cstdint>
@@ -8,7 +9,9 @@
 #include <mutex>
 #include <optional>
 #include <stdexcept>
+#include <type_traits>
 #include <utility>
+#include <variant>
 
 #include <ruvia/core/Task.h>
 #include <ruvia/core/WorkerHandle.h>
@@ -36,10 +39,31 @@ namespace detail {
 template <typename T>
 struct OneShotAwaiter;
 
+struct OneShotPending final {};
+struct OneShotConsumed final {};
+struct OneShotReceiverClosed final {};
+struct OneShotWorkerStopping final {};
+
+template <typename T>
+class OneShotReady final {
+public:
+    explicit OneShotReady(T&& value)
+        noexcept(std::is_nothrow_move_constructible_v<T>)
+        : value_(std::move(value)) {}
+
+    [[nodiscard]] T takeValue() &&
+        noexcept(std::is_nothrow_move_constructible_v<T>) {
+        return std::move(value_);
+    }
+
+private:
+    T value_;
+};
+
 template <typename T>
 struct OneShotState final : WorkerShutdownListener {
-    OneShotState(WorkerHandle target, std::pmr::memory_resource* memory)
-        : worker(std::move(target)), resource(memory) {
+    explicit OneShotState(WorkerHandle target)
+        : worker(std::move(target)) {
         if (!worker.valid()) {
             throw std::invalid_argument("one-shot requires a valid worker");
         }
@@ -48,14 +72,15 @@ struct OneShotState final : WorkerShutdownListener {
     void workerStopping() noexcept override;
 
     WorkerHandle worker;
-    std::pmr::memory_resource* resource;
     std::mutex mutex;
-    std::optional<T> value;
+    using Lifecycle = std::variant<
+        OneShotPending,
+        OneShotReady<T>,
+        OneShotConsumed,
+        OneShotReceiverClosed,
+        OneShotWorkerStopping>;
+    Lifecycle lifecycle;
     OneShotAwaiter<T>* waiter{nullptr};
-    bool completed{false};
-    bool consumed{false};
-    bool closed{false};
-    bool workerStopped{false};
 };
 
 template <typename T>
@@ -66,21 +91,22 @@ struct OneShotAwaiter final {
 
     [[nodiscard]] bool await_ready() {
         std::lock_guard lock(state->mutex);
-        if (state->completed && !state->consumed) {
+        if (auto* ready = std::get_if<OneShotReady<T>>(&state->lifecycle)) {
             result.emplace(WorkerWaitResultAccess::value(
-                std::move(*state->value)));
-            state->value.reset();
-            state->consumed = true;
+                std::move(*ready).takeValue()));
+            state->lifecycle.template emplace<OneShotConsumed>();
             return true;
         }
-        if (state->workerStopped) {
+        if (std::holds_alternative<OneShotWorkerStopping>(state->lifecycle)) {
             result.emplace(WorkerWaitResultAccess::workerStopping<T>());
             return true;
         }
-        if (state->closed || state->consumed) {
+        if (std::holds_alternative<OneShotReceiverClosed>(state->lifecycle) ||
+            std::holds_alternative<OneShotConsumed>(state->lifecycle)) {
             result.emplace(WorkerWaitResultAccess::closed<T>());
             return true;
         }
+        assert(std::holds_alternative<OneShotPending>(state->lifecycle));
         if (timeout && *timeout <= std::chrono::steady_clock::duration::zero()) {
             result.emplace(WorkerWaitResultAccess::timedOut<T>());
             return true;
@@ -141,11 +167,7 @@ struct OneShotAwaiter final {
 };
 
 template <typename T>
-void wakeOneShot(OneShotAwaiter<T>* waiter) {
-    if (!waiter->suspended) {
-        waiter->wakePending = true;
-        return;
-    }
+void wakeOneShotReceiver(OneShotAwaiter<T>* waiter) {
     if (waiter->timer.valid()) {
         waiter->timer.cancel();
         return;
@@ -155,21 +177,35 @@ void wakeOneShot(OneShotAwaiter<T>* waiter) {
 }
 
 template <typename T>
+bool prepareOneShotReceiverWake(OneShotAwaiter<T>* waiter) noexcept {
+    if (!waiter->suspended) {
+        waiter->wakePending = true;
+        return false;
+    }
+    return true;
+}
+
+template <typename T>
 void OneShotState<T>::workerStopping() noexcept {
     OneShotAwaiter<T>* pending = nullptr;
+    bool wake = false;
     {
         std::lock_guard lock(mutex);
-        closed = true;
-        workerStopped = true;
+        if (!std::holds_alternative<OneShotReady<T>>(lifecycle)) {
+            lifecycle.template emplace<OneShotWorkerStopping>();
+        }
         pending = std::exchange(waiter, nullptr);
         if (pending != nullptr) {
             pending->result.emplace(
                 WorkerWaitResultAccess::workerStopping<T>());
-            try {
-                wakeOneShot(pending);
-            } catch (...) {
-                std::terminate();
-            }
+            wake = prepareOneShotReceiverWake(pending);
+        }
+    }
+    if (wake) {
+        try {
+            wakeOneShotReceiver(pending);
+        } catch (...) {
+            std::terminate();
         }
     }
 }
@@ -186,30 +222,42 @@ public:
             return OneShotCompleteResult::kReceiverClosed;
         }
         detail::OneShotAwaiter<T>* waiter = nullptr;
+        bool wake = false;
         {
             std::lock_guard lock(state_->mutex);
-            if (state_->completed) {
+            if (std::holds_alternative<detail::OneShotReady<T>>(state_->lifecycle) ||
+                std::holds_alternative<detail::OneShotConsumed>(state_->lifecycle)) {
                 return OneShotCompleteResult::kAlreadyCompleted;
             }
-            if (state_->workerStopped) {
+            if (std::holds_alternative<detail::OneShotWorkerStopping>(state_->lifecycle)) {
                 return OneShotCompleteResult::kWorkerStopping;
             }
-            if (state_->closed) {
+            if (std::holds_alternative<detail::OneShotReceiverClosed>(state_->lifecycle)) {
                 return OneShotCompleteResult::kReceiverClosed;
             }
+            assert(std::holds_alternative<detail::OneShotPending>(state_->lifecycle));
             if (!state_->worker.accepting()) {
                 return OneShotCompleteResult::kWorkerStopping;
             }
-            state_->completed = true;
-            waiter = std::exchange(state_->waiter, nullptr);
+            waiter = state_->waiter;
             if (waiter != nullptr) {
                 waiter->result.emplace(
                     detail::WorkerWaitResultAccess::value(std::move(value)));
-                state_->consumed = true;
-                detail::wakeOneShot(waiter);
+                state_->lifecycle.template emplace<detail::OneShotConsumed>();
+                state_->waiter = nullptr;
+                wake = detail::prepareOneShotReceiverWake(waiter);
             } else {
-                state_->value.emplace(std::move(value));
+                try {
+                    state_->lifecycle.template emplace<detail::OneShotReady<T>>(
+                        std::move(value));
+                } catch (...) {
+                    state_->lifecycle.template emplace<detail::OneShotPending>();
+                    throw;
+                }
             }
+        }
+        if (wake) {
+            detail::wakeOneShotReceiver(waiter);
         }
         return OneShotCompleteResult::kCompleted;
     }
@@ -249,16 +297,24 @@ public:
         if (!state_) {
             return;
         }
-        std::lock_guard lock(state_->mutex);
-        if (state_->closed) {
-            return;
+        detail::OneShotAwaiter<T>* waiter = nullptr;
+        bool wake = false;
+        {
+            std::lock_guard lock(state_->mutex);
+            if (!std::holds_alternative<detail::OneShotPending>(
+                    state_->lifecycle)) {
+                return;
+            }
+            state_->lifecycle.template emplace<detail::OneShotReceiverClosed>();
+            waiter = std::exchange(state_->waiter, nullptr);
+            if (waiter != nullptr) {
+                waiter->result.emplace(
+                    detail::WorkerWaitResultAccess::closed<T>());
+                wake = detail::prepareOneShotReceiverWake(waiter);
+            }
         }
-        state_->closed = true;
-        auto* waiter = std::exchange(state_->waiter, nullptr);
-        if (waiter != nullptr) {
-            waiter->result.emplace(
-                detail::WorkerWaitResultAccess::closed<T>());
-            detail::wakeOneShot(waiter);
+        if (wake) {
+            detail::wakeOneShotReceiver(waiter);
         }
     }
 
@@ -281,7 +337,7 @@ template <typename T>
     auto* resolved = detail::pmrResourceOrDefault(resource);
     std::pmr::polymorphic_allocator<detail::OneShotState<T>> allocator(resolved);
     auto state = std::allocate_shared<detail::OneShotState<T>>(
-        allocator, std::move(worker), resolved);
+        allocator, std::move(worker));
     detail::WorkerHandleAccess::registerShutdownListener(state->worker, state);
     return std::pair(OneShotCompletion<T>(state), OneShotReceiver<T>(state));
 }
