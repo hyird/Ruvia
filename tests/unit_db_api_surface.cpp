@@ -14,6 +14,7 @@
 
 #include "ruvia/web/db/Db.h"
 #include "ruvia/web/detail/db/DbResultAccess.h"
+#include "ruvia/web/detail/db/DbValueAccess.h"
 
 namespace {
 
@@ -46,6 +47,22 @@ static_assert(std::is_move_assignable_v<ruvia::DbField>);
 static_assert(!std::is_nothrow_move_assignable_v<ruvia::DbField>);
 static_assert(std::is_move_assignable_v<ruvia::DbRow>);
 static_assert(!std::is_nothrow_move_assignable_v<ruvia::DbRow>);
+static_assert(std::is_copy_constructible_v<ruvia::DbValue>);
+static_assert(std::is_nothrow_move_constructible_v<ruvia::DbValue>);
+static_assert(!std::is_copy_assignable_v<ruvia::DbValue>);
+static_assert(!std::is_move_assignable_v<ruvia::DbValue>);
+
+template <typename T>
+concept ExposesDbValueInspection = requires(const T& value) {
+    value.type();
+    value.text();
+    value.signedValue();
+    value.unsignedValue();
+    value.doubleValue();
+    value.boolValue();
+};
+
+static_assert(!ExposesDbValueInspection<ruvia::DbValue>);
 static_assert(std::is_move_constructible_v<ruvia::DbMigrationReport>);
 static_assert(!std::is_move_assignable_v<ruvia::DbMigrationReport>);
 static_assert(std::is_move_constructible_v<ruvia::QueryResult>);
@@ -131,6 +148,56 @@ RUVIA_TEST(db_api_surface_uses_span_params_without_initializer_list_overloads) {
     RUVIA_CHECK(true);
 }
 
+RUVIA_TEST(db_value_and_result_storage_have_one_live_alternative) {
+    const ruvia::DbValue nullValue(nullptr);
+    const ruvia::DbValue textValue("value");
+    const ruvia::DbValue signedValue(-7);
+    const ruvia::DbValue unsignedValue(std::uint64_t{9});
+    const ruvia::DbValue doubleValue(1.5);
+    const ruvia::DbValue boolValue(true);
+    using ValueAccess = ruvia::detail::DbValueAccess;
+    RUVIA_CHECK(
+        ValueAccess::type(nullValue) == ruvia::detail::DbValueType::kNull);
+    RUVIA_CHECK(
+        ValueAccess::type(textValue) == ruvia::detail::DbValueType::kString);
+    RUVIA_CHECK_EQ(ValueAccess::text(textValue), std::string_view("value"));
+    RUVIA_CHECK(
+        ValueAccess::type(signedValue) == ruvia::detail::DbValueType::kSigned);
+    RUVIA_CHECK_EQ(ValueAccess::signedValue(signedValue), std::int64_t{-7});
+    RUVIA_CHECK(
+        ValueAccess::type(unsignedValue) ==
+        ruvia::detail::DbValueType::kUnsigned);
+    RUVIA_CHECK_EQ(
+        ValueAccess::unsignedValue(unsignedValue), std::uint64_t{9});
+    RUVIA_CHECK(
+        ValueAccess::type(doubleValue) == ruvia::detail::DbValueType::kDouble);
+    RUVIA_CHECK_EQ(ValueAccess::doubleValue(doubleValue), 1.5);
+    RUVIA_CHECK(
+        ValueAccess::type(boolValue) == ruvia::detail::DbValueType::kBool);
+    RUVIA_CHECK(ValueAccess::boolValue(boolValue));
+
+    auto ownedRow = ruvia::detail::DbResultAccess::ownedRow(nullptr);
+    auto& fields = ruvia::detail::DbResultAccess::ownedFields(ownedRow);
+    fields.push_back(
+        ruvia::detail::DbResultAccess::ownedField("owned", nullptr));
+    RUVIA_CHECK_EQ(ownedRow.size(), std::size_t{1});
+    RUVIA_CHECK_EQ(ownedRow[0].text(), std::string_view("owned"));
+
+    auto movedRow = std::move(ownedRow);
+    RUVIA_CHECK(ownedRow.empty());
+    RUVIA_CHECK_EQ(movedRow.size(), std::size_t{1});
+
+    auto borrowedField =
+        ruvia::detail::DbResultAccess::borrowedField("borrowed", nullptr);
+    auto borrowedRow = ruvia::detail::DbResultAccess::borrowedRow(
+        &borrowedField, 1, nullptr);
+    RUVIA_CHECK_EQ(borrowedRow[0].text(), std::string_view("borrowed"));
+
+    auto movedField = std::move(borrowedField);
+    RUVIA_CHECK(borrowedField.isNull());
+    RUVIA_CHECK_EQ(movedField.text(), std::string_view("borrowed"));
+}
+
 RUVIA_TEST(db_query_result_move_transfers_direct_raii_ownership) {
     int releases = 0;
     {
@@ -191,7 +258,6 @@ RUVIA_TEST(db_result_value_move_assignment_propagates_allocator_failure) {
         ruvia::detail::DbResultAccess::ownedField(
             "row field",
             std::pmr::get_default_resource()));
-    ruvia::detail::DbResultAccess::refresh(sourceRow);
     rejecting.rejectAllocations();
 
     allocationFailure = false;

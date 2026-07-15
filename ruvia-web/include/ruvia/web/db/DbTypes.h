@@ -9,6 +9,7 @@
 #include <string>
 #include <string_view>
 #include <type_traits>
+#include <variant>
 #include <vector>
 
 namespace ruvia {
@@ -65,9 +66,7 @@ class DbMigrationRunner;
 struct DbValueAccess;
 struct DbResultAccess;
 
-}  // namespace detail
-
-enum class DbValueType {
+enum class DbValueType : std::uint8_t {
     kNull,
     kString,
     kSigned,
@@ -76,31 +75,51 @@ enum class DbValueType {
     kBool
 };
 
+}  // namespace detail
+
 class DbValue final {
+private:
+    struct BorrowedText final {
+        std::string_view value;
+    };
+
+    using Storage = std::variant<
+        std::monostate,
+        BorrowedText,
+        std::pmr::string,
+        std::int64_t,
+        std::uint64_t,
+        double,
+        bool>;
+
 public:
     DbValue(std::nullptr_t);
     DbValue(const char* value);
     DbValue(std::string_view value);
     DbValue(bool value);
 
+    DbValue(const DbValue&) = default;
+    DbValue(DbValue&&) noexcept = default;
+    DbValue& operator=(const DbValue&) = delete;
+    DbValue& operator=(DbValue&&) = delete;
+
     template <typename T>
         requires (std::is_integral_v<std::remove_cvref_t<T>> &&
                   !std::is_same_v<std::remove_cvref_t<T>, bool>)
-    DbValue(T value) {
-        if constexpr (std::is_signed_v<std::remove_cvref_t<T>>) {
-            type_ = DbValueType::kSigned;
-            signedValue_ = static_cast<std::int64_t>(value);
-        } else {
-            type_ = DbValueType::kUnsigned;
-            unsignedValue_ = static_cast<std::uint64_t>(value);
-        }
-    }
+    DbValue(T value)
+        : storage_(makeIntegerStorage(value)) {}
 
     template <typename T>
         requires std::is_floating_point_v<std::remove_cvref_t<T>>
-    DbValue(T value) : type_(DbValueType::kDouble), doubleValue_(static_cast<double>(value)) {}
+    DbValue(T value)
+        : storage_(std::in_place_type<double>, static_cast<double>(value)) {}
 
-    [[nodiscard]] DbValueType type() const noexcept;
+private:
+    friend struct detail::DbValueAccess;
+
+    explicit DbValue(std::pmr::string value);
+
+    [[nodiscard]] detail::DbValueType type() const noexcept;
     [[nodiscard]] std::string_view text() const & noexcept;
     [[nodiscard]] std::string_view text() const && = delete;
     [[nodiscard]] std::int64_t signedValue() const noexcept;
@@ -108,22 +127,33 @@ public:
     [[nodiscard]] double doubleValue() const noexcept;
     [[nodiscard]] bool boolValue() const noexcept;
 
-private:
-    friend struct detail::DbValueAccess;
+    template <typename T>
+    [[nodiscard]] static Storage makeIntegerStorage(T value) {
+        if constexpr (std::is_signed_v<std::remove_cvref_t<T>>) {
+            return Storage(
+                std::in_place_type<std::int64_t>,
+                static_cast<std::int64_t>(value));
+        } else {
+            return Storage(
+                std::in_place_type<std::uint64_t>,
+                static_cast<std::uint64_t>(value));
+        }
+    }
 
-    explicit DbValue(std::pmr::string value);
-
-    DbValueType type_{DbValueType::kNull};
-    std::pmr::string ownedText_;
-    std::string_view text_;
-    bool ownsText_{false};
-    std::int64_t signedValue_{0};
-    std::uint64_t unsignedValue_{0};
-    double doubleValue_{0.0};
-    bool boolValue_{false};
+    Storage storage_;
 };
 
 class DbField final {
+private:
+    struct BorrowedText final {
+        std::string_view value;
+    };
+
+    using Storage = std::variant<
+        std::monostate,
+        std::pmr::string,
+        BorrowedText>;
+
 public:
     DbField(DbField&& other) noexcept;
     DbField& operator=(DbField&& other);
@@ -145,15 +175,17 @@ private:
     DbField(std::string_view value, std::pmr::memory_resource* resource);
     DbField(BorrowedTag, std::string_view value, std::pmr::memory_resource* resource);
     [[nodiscard]] static DbField borrowed(std::string_view value, std::pmr::memory_resource* resource);
-    void refreshView() noexcept;
 
-    bool isNull_{true};
-    std::pmr::string value_;
-    std::string_view valueView_;
-    bool ownsValue_{false};
+    std::pmr::memory_resource* resource_;
+    Storage storage_;
 };
 
 class DbRow final {
+private:
+    using OwnedFields = std::pmr::vector<DbField>;
+    using BorrowedFields = std::span<const DbField>;
+    using Storage = std::variant<OwnedFields, BorrowedFields>;
+
 public:
     DbRow(DbRow&& other) noexcept;
     DbRow& operator=(DbRow&& other);
@@ -177,12 +209,10 @@ private:
 
     explicit DbRow(std::pmr::memory_resource* resource = nullptr);
     DbRow(const DbField* fields, std::size_t size, std::pmr::memory_resource* resource);
-    void refreshView() noexcept;
+    [[nodiscard]] OwnedFields& ownedFields() noexcept;
 
-    std::pmr::vector<DbField> ownedFields_;
-    const DbField* fields_{nullptr};
-    std::size_t size_{0};
-    bool ownsFields_{true};
+    std::pmr::memory_resource* resource_;
+    Storage storage_;
 };
 
 }  // namespace ruvia

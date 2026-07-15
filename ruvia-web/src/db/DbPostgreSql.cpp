@@ -57,24 +57,25 @@ PostgreSqlParams encodePostgreSqlParams(
     for (const auto& param : params) {
         output.encoded.emplace_back();
         auto& value = output.encoded.back();
-        switch (param.type()) {
+        switch (DbValueAccess::type(param)) {
             case DbValueType::kNull:
                 output.values.push_back(nullptr);
                 continue;
             case DbValueType::kString:
-                value.assign(param.text());
+                value.assign(DbValueAccess::text(param));
                 break;
             case DbValueType::kSigned:
-                appendDbNumber(value, param.signedValue());
+                appendDbNumber(value, DbValueAccess::signedValue(param));
                 break;
             case DbValueType::kUnsigned:
-                appendDbNumber(value, param.unsignedValue());
+                appendDbNumber(value, DbValueAccess::unsignedValue(param));
                 break;
             case DbValueType::kDouble:
-                appendDbNumber(value, param.doubleValue());
+                appendDbNumber(value, DbValueAccess::doubleValue(param));
                 break;
             case DbValueType::kBool:
-                value.assign(param.boolValue() ? "true" : "false");
+                value.assign(
+                    DbValueAccess::boolValue(param) ? "true" : "false");
                 break;
         }
         output.values.push_back(value.c_str());

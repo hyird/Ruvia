@@ -1100,6 +1100,18 @@ if(EXISTS "${_installed_db_types_path}" OR
     file(READ "${_installed_db_result_path}" _installed_db_result)
     file(READ "${_installed_db_migration_path}" _installed_db_migration)
     if(NOT _installed_db_types MATCHES
+           "using Storage = std::variant<" OR
+       NOT _installed_db_types MATCHES
+           "using Storage = std::variant<OwnedFields, BorrowedFields>" OR
+       NOT _installed_db_types MATCHES
+           "operator=[(]const DbValue&[)][ 	]*=[ 	]*delete" OR
+       NOT _installed_db_types MATCHES
+           "operator=[(]DbValue&&[)][ 	]*=[ 	]*delete" OR
+       NOT _installed_db_types MATCHES
+           "detail::DbValueType type[(][)] const noexcept" OR
+       _installed_db_types MATCHES
+           "ownsText_|ownsValue_|ownsFields_|ownedFields_|valueView_|refreshView|DbValueType[ 	]+type_|bool[ 	]+isNull_" OR
+       NOT _installed_db_types MATCHES
            "text[(][)] const [&] noexcept" OR
        NOT _installed_db_types MATCHES
            "text[(][)] const && = delete" OR
@@ -1116,7 +1128,7 @@ if(EXISTS "${_installed_db_types_path}" OR
        NOT _installed_db_migration MATCHES
            "skipped[(][)] const && = delete")
         message(FATAL_ERROR
-            "installed database owning values expose views from temporary owners")
+            "installed database values lost discriminated storage or safe owned-view lifetimes")
     endif()
 endif()
 set(_installed_jwt_path

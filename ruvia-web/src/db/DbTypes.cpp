@@ -6,163 +6,208 @@
 
 namespace ruvia {
 
-DbValue::DbValue(std::nullptr_t) {}
+DbValue::DbValue(std::nullptr_t)
+    : storage_(std::monostate{}) {}
 
-DbValue::DbValue(const char* value) {
-    if (value == nullptr) {
-        return;
-    }
+DbValue::DbValue(const char* value)
+    : storage_(value == nullptr
+          ? Storage(std::monostate{})
+          : Storage(std::in_place_type<BorrowedText>, value)) {}
 
-    type_ = DbValueType::kString;
-    text_ = value;
-}
-
-DbValue::DbValue(std::string_view value) : type_(DbValueType::kString), text_(value) {}
+DbValue::DbValue(std::string_view value)
+    : storage_(std::in_place_type<BorrowedText>, value) {}
 
 DbValue::DbValue(std::pmr::string value)
-    : type_(DbValueType::kString),
-      ownedText_(std::move(value)),
-      ownsText_(true) {}
+    : storage_(std::in_place_type<std::pmr::string>, std::move(value)) {}
 
-DbValue::DbValue(bool value) : type_(DbValueType::kBool), boolValue_(value) {}
+DbValue::DbValue(bool value)
+    : storage_(std::in_place_type<bool>, value) {}
 
-DbValueType DbValue::type() const noexcept {
-    return type_;
+detail::DbValueType DbValue::type() const noexcept {
+    return std::visit([](const auto& value) noexcept {
+        using Value = std::remove_cvref_t<decltype(value)>;
+        if constexpr (std::is_same_v<Value, std::monostate>) {
+            return detail::DbValueType::kNull;
+        } else if constexpr (
+            std::is_same_v<Value, BorrowedText> ||
+            std::is_same_v<Value, std::pmr::string>) {
+            return detail::DbValueType::kString;
+        } else if constexpr (std::is_same_v<Value, std::int64_t>) {
+            return detail::DbValueType::kSigned;
+        } else if constexpr (std::is_same_v<Value, std::uint64_t>) {
+            return detail::DbValueType::kUnsigned;
+        } else if constexpr (std::is_same_v<Value, double>) {
+            return detail::DbValueType::kDouble;
+        } else {
+            return detail::DbValueType::kBool;
+        }
+    }, storage_);
 }
 
 std::string_view DbValue::text() const & noexcept {
-    if (ownsText_) {
-        return ownedText_;
+    if (const auto* borrowed = std::get_if<BorrowedText>(&storage_)) {
+        return borrowed->value;
     }
-    return text_;
+    if (const auto* owned = std::get_if<std::pmr::string>(&storage_)) {
+        return *owned;
+    }
+    return {};
 }
 
 std::int64_t DbValue::signedValue() const noexcept {
-    return signedValue_;
+    const auto* value = std::get_if<std::int64_t>(&storage_);
+    return value == nullptr ? 0 : *value;
 }
 
 std::uint64_t DbValue::unsignedValue() const noexcept {
-    return unsignedValue_;
+    const auto* value = std::get_if<std::uint64_t>(&storage_);
+    return value == nullptr ? 0 : *value;
 }
 
 double DbValue::doubleValue() const noexcept {
-    return doubleValue_;
+    const auto* value = std::get_if<double>(&storage_);
+    return value == nullptr ? 0.0 : *value;
 }
 
 bool DbValue::boolValue() const noexcept {
-    return boolValue_;
+    const auto* value = std::get_if<bool>(&storage_);
+    return value != nullptr && *value;
 }
 
 DbField::DbField(std::pmr::memory_resource* resource)
-    : value_(detail::pmrResourceOrDefault(resource)) {}
+    : resource_(detail::pmrResourceOrDefault(resource)),
+      storage_(std::monostate{}) {}
 
 DbField::DbField(std::nullptr_t, std::pmr::memory_resource* resource)
     : DbField(resource) {}
 
 DbField::DbField(std::string_view value, std::pmr::memory_resource* resource)
-    : isNull_(false),
-      value_(value, detail::pmrResourceOrDefault(resource)),
-      valueView_(value_),
-      ownsValue_(true) {}
+    : resource_(detail::pmrResourceOrDefault(resource)),
+      storage_(std::in_place_type<std::pmr::string>, value, resource_) {}
 
 DbField::DbField(BorrowedTag, std::string_view value, std::pmr::memory_resource* resource)
-    : isNull_(false),
-      value_(detail::pmrResourceOrDefault(resource)),
-      valueView_(value),
-      ownsValue_(false) {}
+    : resource_(detail::pmrResourceOrDefault(resource)),
+      storage_(std::in_place_type<BorrowedText>, value) {}
 
 DbField DbField::borrowed(std::string_view value, std::pmr::memory_resource* resource) {
     return DbField(BorrowedTag{}, value, resource);
 }
 
 DbField::DbField(DbField&& other) noexcept
-    : isNull_(std::exchange(other.isNull_, true)),
-      value_(std::move(other.value_)),
-      valueView_(std::exchange(other.valueView_, {})),
-      ownsValue_(std::exchange(other.ownsValue_, false)) {
-    refreshView();
+    : resource_(other.resource_),
+      storage_(std::move(other.storage_)) {
+    other.storage_.emplace<std::monostate>();
 }
 
 DbField& DbField::operator=(DbField&& other) {
     if (this == &other) {
         return *this;
     }
-    isNull_ = std::exchange(other.isNull_, true);
-    value_ = std::move(other.value_);
-    valueView_ = std::exchange(other.valueView_, {});
-    ownsValue_ = std::exchange(other.ownsValue_, false);
-    refreshView();
+    if (auto* owned = std::get_if<std::pmr::string>(&other.storage_)) {
+        if (auto* destination = std::get_if<std::pmr::string>(&storage_)) {
+            *destination = std::move(*owned);
+        } else {
+            std::pmr::string replacement(std::move(*owned), resource_);
+            storage_.emplace<std::pmr::string>(std::move(replacement));
+        }
+    } else if (const auto* borrowed =
+                   std::get_if<BorrowedText>(&other.storage_)) {
+        storage_.emplace<BorrowedText>(*borrowed);
+    } else {
+        storage_.emplace<std::monostate>();
+    }
+    other.storage_.emplace<std::monostate>();
     return *this;
 }
 
 bool DbField::isNull() const noexcept {
-    return isNull_;
+    return std::holds_alternative<std::monostate>(storage_);
 }
 
 std::string_view DbField::text() const & noexcept {
-    return valueView_;
-}
-
-void DbField::refreshView() noexcept {
-    if (ownsValue_) {
-        valueView_ = value_;
+    if (const auto* owned = std::get_if<std::pmr::string>(&storage_)) {
+        return *owned;
     }
+    if (const auto* borrowed = std::get_if<BorrowedText>(&storage_)) {
+        return borrowed->value;
+    }
+    return {};
 }
 
 DbRow::DbRow(std::pmr::memory_resource* resource)
-    : ownedFields_(detail::pmrResourceOrDefault(resource)) {}
+    : resource_(detail::pmrResourceOrDefault(resource)),
+      storage_(std::in_place_type<OwnedFields>, resource_) {}
 
 DbRow::DbRow(const DbField* fields, std::size_t size, std::pmr::memory_resource* resource)
-    : ownedFields_(detail::pmrResourceOrDefault(resource)),
-      fields_(fields),
-      size_(size),
-      ownsFields_(false) {}
+    : resource_(detail::pmrResourceOrDefault(resource)),
+      storage_(std::in_place_type<BorrowedFields>, fields, size) {}
 
 DbRow::DbRow(DbRow&& other) noexcept
-    : ownedFields_(std::move(other.ownedFields_)),
-      fields_(std::exchange(other.fields_, nullptr)),
-      size_(std::exchange(other.size_, 0)),
-      ownsFields_(std::exchange(other.ownsFields_, true)) {
-    refreshView();
+    : resource_(other.resource_),
+      storage_([&other]() noexcept -> Storage {
+          if (auto* owned = std::get_if<OwnedFields>(&other.storage_)) {
+              return Storage(
+                  std::in_place_type<OwnedFields>, std::move(*owned));
+          }
+          return Storage(
+              std::in_place_type<BorrowedFields>,
+              std::get<BorrowedFields>(other.storage_));
+      }()) {
+    other.storage_.emplace<OwnedFields>(other.resource_);
 }
 
 DbRow& DbRow::operator=(DbRow&& other) {
     if (this == &other) {
         return *this;
     }
-    ownedFields_ = std::move(other.ownedFields_);
-    fields_ = std::exchange(other.fields_, nullptr);
-    size_ = std::exchange(other.size_, 0);
-    ownsFields_ = std::exchange(other.ownsFields_, true);
-    refreshView();
+    if (auto* owned = std::get_if<OwnedFields>(&other.storage_)) {
+        if (auto* destination = std::get_if<OwnedFields>(&storage_)) {
+            *destination = std::move(*owned);
+        } else {
+            OwnedFields replacement(std::move(*owned), resource_);
+            storage_.emplace<OwnedFields>(std::move(replacement));
+        }
+    } else {
+        storage_.emplace<BorrowedFields>(
+            std::get<BorrowedFields>(other.storage_));
+    }
+    other.storage_.emplace<OwnedFields>(other.resource_);
     return *this;
 }
 
 bool DbRow::empty() const noexcept {
-    return size_ == 0;
+    return size() == 0;
 }
 
 std::size_t DbRow::size() const noexcept {
-    return size_;
+    if (const auto* owned = std::get_if<OwnedFields>(&storage_)) {
+        return owned->size();
+    }
+    return std::get<BorrowedFields>(storage_).size();
 }
 
 const DbField& DbRow::operator[](std::size_t index) const & noexcept {
-    return fields_[index];
+    if (const auto* owned = std::get_if<OwnedFields>(&storage_)) {
+        return (*owned)[index];
+    }
+    return std::get<BorrowedFields>(storage_)[index];
 }
 
 const DbField* DbRow::begin() const & noexcept {
-    return fields_;
+    if (const auto* owned = std::get_if<OwnedFields>(&storage_)) {
+        return owned->data();
+    }
+    return std::get<BorrowedFields>(storage_).data();
 }
 
 const DbField* DbRow::end() const & noexcept {
-    return fields_ + size_;
+    const auto* first = begin();
+    const auto count = size();
+    return count == 0 ? first : first + count;
 }
 
-void DbRow::refreshView() noexcept {
-    if (ownsFields_) {
-        fields_ = ownedFields_.data();
-        size_ = ownedFields_.size();
-    }
+DbRow::OwnedFields& DbRow::ownedFields() noexcept {
+    return std::get<OwnedFields>(storage_);
 }
 
 QueryResult::QueryResult(std::pmr::memory_resource* resource)

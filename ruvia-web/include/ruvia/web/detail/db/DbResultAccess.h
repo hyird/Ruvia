@@ -60,7 +60,7 @@ struct DbResultAccess final {
     }
 
     [[nodiscard]] static std::pmr::vector<DbField>& ownedFields(DbRow& row) noexcept {
-        return row.ownedFields_;
+        return row.ownedFields();
     }
 
     [[nodiscard]] static DbRow borrowedRow(
@@ -70,9 +70,6 @@ struct DbResultAccess final {
         return DbRow(fields, size, resource);
     }
 
-    static void refresh(DbRow& row) noexcept {
-        row.refreshView();
-    }
 };
 
 }  // namespace ruvia::detail

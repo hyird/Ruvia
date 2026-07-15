@@ -116,7 +116,6 @@ Task<std::optional<DbRow>> detail::MariaDbPool::readStreamRow(
             outputFields.push_back(
                 DbResultAccess::ownedField(std::string_view(row[i], lengths[i]), resource));
         }
-        DbResultAccess::refresh(outputRow);
         co_return outputRow;
     } catch (...) {
         closeSlot(slots_[slot]);

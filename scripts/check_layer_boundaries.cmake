@@ -2336,6 +2336,12 @@ file(READ "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/db/DbTypes.h"
     pmr_db_types_api)
 file(READ "${RUVIA_ROOT}/ruvia-web/src/db/DbTypes.cpp"
     pmr_db_types_impl)
+file(READ "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/db/DbResultAccess.h"
+    pmr_db_result_access)
+file(READ "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/db/DbValueAccess.h"
+    pmr_db_value_access)
+file(READ "${RUVIA_ROOT}/tests/unit_db_api_surface.cpp"
+    pmr_db_types_test)
 file(READ "${RUVIA_ROOT}/ruvia-web/src/db/DbHandle.cpp"
     pmr_db_handle_impl)
 file(READ "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/redis/RedisTypes.h"
@@ -2412,6 +2418,33 @@ if(NOT pmr_http_client_api MATCHES
        "!std::is_nothrow_move_assignable_v<ruvia::RedisValue>")
     boundary_error("PMR-owning public values or linear database handles regained unsafe move-assignment guarantees"
         "single-use results and active DB operations must reject reassignment; assignable values must expose allocation failure, and HttpResponse replacement must transfer one resource domain without member-wise PMR assignment")
+endif()
+if(NOT pmr_db_types_api MATCHES
+       "using Storage = std::variant<" OR
+   NOT pmr_db_types_api MATCHES
+       "using Storage = std::variant<OwnedFields, BorrowedFields>" OR
+   NOT pmr_db_types_api MATCHES
+       "operator=[(]const DbValue&[)][ 	]*=[ 	]*delete" OR
+   NOT pmr_db_types_api MATCHES
+       "operator=[(]DbValue&&[)][ 	]*=[ 	]*delete" OR
+   NOT pmr_db_types_api MATCHES
+       "detail::DbValueType type[(][)] const noexcept" OR
+   NOT pmr_db_types_api MATCHES
+       "OwnedFields& ownedFields[(][)] noexcept" OR
+   pmr_db_types_api MATCHES
+       "ownsText_|ownsValue_|ownsFields_|ownedFields_|valueView_|refreshView|DbValueType[ 	]+type_|bool[ 	]+isNull_" OR
+   pmr_db_types_impl MATCHES
+       "ownsText_|ownsValue_|ownsFields_|ownedFields_|valueView_|refreshView" OR
+   pmr_db_result_access MATCHES
+       "refresh[(]DbRow&|refreshView|ownedFields_" OR
+   NOT pmr_db_value_access MATCHES
+       "static DbValueType type[(]const DbValue& value[)] noexcept" OR
+   NOT pmr_web_package_contract MATCHES
+       "!ExposesDbValueInspection<ruvia::DbValue>" OR
+   NOT pmr_db_types_test MATCHES
+       "db_value_and_result_storage_have_one_live_alternative")
+    boundary_error("database values restored parallel tag, payload, or ownership state"
+        "DbValue, DbField, and DbRow must own one exact storage alternative; owned rows expose their live vector directly and immutable query parameters reject assignment")
 endif()
 file(READ "${RUVIA_ROOT}/ruvia-web/src/db/Db.cpp"
     db_mariadb_stream_impl)

@@ -70,7 +70,6 @@ void materializeBorrowedResult(
                 static_cast<std::size_t>(PQgetlength(&result, 0, fieldIndex))),
             resource));
     }
-    DbResultAccess::refresh(row);
     return row;
 }
 

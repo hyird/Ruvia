@@ -201,6 +201,20 @@ static_assert(std::is_move_assignable_v<ruvia::DbField>);
 static_assert(!std::is_nothrow_move_assignable_v<ruvia::DbField>);
 static_assert(std::is_move_assignable_v<ruvia::DbRow>);
 static_assert(!std::is_nothrow_move_assignable_v<ruvia::DbRow>);
+static_assert(std::is_copy_constructible_v<ruvia::DbValue>);
+static_assert(std::is_nothrow_move_constructible_v<ruvia::DbValue>);
+static_assert(!std::is_copy_assignable_v<ruvia::DbValue>);
+static_assert(!std::is_move_assignable_v<ruvia::DbValue>);
+template <typename T>
+concept ExposesDbValueInspection = requires(const T& value) {
+    value.type();
+    value.text();
+    value.signedValue();
+    value.unsignedValue();
+    value.doubleValue();
+    value.boolValue();
+};
+static_assert(!ExposesDbValueInspection<ruvia::DbValue>);
 static_assert(std::is_move_constructible_v<ruvia::DbMigrationReport>);
 static_assert(!std::is_move_assignable_v<ruvia::DbMigrationReport>);
 static_assert(std::is_move_constructible_v<ruvia::QueryResult>);
