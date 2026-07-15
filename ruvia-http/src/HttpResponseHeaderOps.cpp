@@ -255,7 +255,11 @@ void HttpResponse::header(std::string_view key, std::string_view value, HeaderOp
         if (detail::responseHeaderAppendForbidden(knownBit)) {
             throw std::invalid_argument("HTTP response header cannot be appended");
         }
-        appendHeaderValidated(key, value, knownBit);
+        if (knownBit == detail::kResponseHeaderSetCookie) {
+            upsertSetCookieHeaderValidated(value);
+        } else {
+            appendHeaderValidated(key, value, knownBit);
+        }
     } else {
         setHeaderValidated(key, value, knownBit);
     }

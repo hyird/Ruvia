@@ -217,6 +217,38 @@ RUVIA_TEST(response_header_replace_append_and_remove) {
     RUVIA_CHECK(!response.header("X-Test").has_value());
 }
 
+RUVIA_TEST(response_set_cookie_append_replaces_same_wire_name) {
+    auto response = makeResponse();
+    response.header("Set-Cookie", "session=old; Path=/");
+    response.header(
+        "Set-Cookie", "theme=dark; Path=/", HttpResponse::HeaderOptions{true});
+    response.header(
+        "Set-Cookie", "session=new; Path=/", HttpResponse::HeaderOptions{true});
+    response.header(
+        "Set-Cookie", "Session=upper; Path=/", HttpResponse::HeaderOptions{true});
+
+    std::size_t count = 0;
+    bool hasOld = false;
+    bool hasNew = false;
+    bool hasTheme = false;
+    bool hasUpper = false;
+    for (const auto& header : response.headers()) {
+        if (header.name() != std::string_view("Set-Cookie")) {
+            continue;
+        }
+        ++count;
+        hasOld = hasOld || header.value() == "session=old; Path=/";
+        hasNew = hasNew || header.value() == "session=new; Path=/";
+        hasTheme = hasTheme || header.value() == "theme=dark; Path=/";
+        hasUpper = hasUpper || header.value() == "Session=upper; Path=/";
+    }
+    RUVIA_CHECK_EQ(count, std::size_t{3});
+    RUVIA_CHECK(!hasOld);
+    RUVIA_CHECK(hasNew);
+    RUVIA_CHECK(hasTheme);
+    RUVIA_CHECK(hasUpper);  // cookie-name is case-sensitive
+}
+
 RUVIA_TEST(response_appended_header_carries_append_flag) {
     auto response = makeResponse();
 
