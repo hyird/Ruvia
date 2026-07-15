@@ -1893,10 +1893,22 @@ if(NOT _installed_http1_request_parser MATCHES "class Http1RequestNeedMore final
    NOT _installed_http1_request_parser MATCHES "requiredTotalBytes" OR
    NOT _installed_http1_request_parser MATCHES "bodyPlan" OR
    NOT _installed_http1_request_parser MATCHES "wireBody" OR
+   NOT _installed_http1_request_parser MATCHES
+       "HttpProtocolError protocolError[(][)] const noexcept" OR
+   _installed_http1_request_parser MATCHES
+       "HttpParseError error[(][)] const noexcept" OR
+   NOT _installed_http_parse_error MATCHES
+       "HttpProtocolError httpParseProtocolError" OR
+   _installed_http_parse_error MATCHES
+       "httpParseError(Status|Message)" OR
    _installed_http1_request_parser MATCHES "HttpParseError::kNone" OR
    _installed_http_parse_error MATCHES "kNone" OR
    NOT _installed_http1_server_request_parser MATCHES
        "const Http1ServerRequestParseFailure[*][\r\n \t]*failure[(][)] const noexcept" OR
+   NOT _installed_http1_server_request_parser MATCHES
+       "HttpProtocolError protocolError[(][)] const noexcept" OR
+   NOT _installed_http1_server_request_parser MATCHES
+       "Http1ServerRequestParseFailureSource[\r\n \t]+source[(][)] const noexcept" OR
    NOT _installed_http1_server_request_parser MATCHES
        "using Progress = std::variant" OR
    _installed_http1_server_request_parser MATCHES

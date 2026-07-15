@@ -93,8 +93,8 @@ private:
 
 class Http1RequestParseFailure final {
 public:
-    [[nodiscard]] constexpr HttpParseError error() const noexcept {
-        return error_;
+    [[nodiscard]] HttpProtocolError protocolError() const noexcept {
+        return httpParseProtocolError(error_);
     }
 
 private:

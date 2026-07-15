@@ -1534,9 +1534,12 @@ static_assert(!ExposesRvalueDecodeFailure<
     ruvia::detail::HpackDecodeResult>);
 static_assert(!std::default_initializable<
     ruvia::Http1RequestParseFailure>);
+static_assert(!HasRawContentDecodeError<
+    ruvia::Http1RequestParseFailure>);
 static_assert(std::same_as<
-    decltype(std::declval<const ruvia::Http1RequestParseFailure&>().error()),
-    ruvia::HttpParseError>);
+    decltype(std::declval<const ruvia::Http1RequestParseFailure&>()
+        .protocolError()),
+    ruvia::HttpProtocolError>);
 static_assert(std::same_as<
     decltype(std::declval<const ruvia::detail::
         Http1ServerRequestParseState&>().failure()),

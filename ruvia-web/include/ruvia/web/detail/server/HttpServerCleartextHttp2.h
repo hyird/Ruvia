@@ -1,10 +1,10 @@
 #pragma once
 
+#include "ruvia/http/detail/http1/Http1ServerRequestParser.h"
 #include "ruvia/http/detail/http2/Http2FrameTypes.h"
 #include "ruvia/web/detail/server/Http2SansIoSession.h"
 #include "ruvia/web/detail/server/HttpServerOptions.h"
 #include "ruvia/web/detail/router/RouteTable.h"
-#include "ruvia/http/HttpParseError.h"
 #include "ruvia/core/detail/AsioAwait.h"
 #include "ruvia/core/Task.h"
 
@@ -37,9 +37,8 @@ enum class CleartextHttp2DispatchResult {
 // obvious non-HTTP traffic is dropped without reflecting an error response.
 [[nodiscard]] inline bool shouldDropInvalidCleartextHttp1Input(
     std::string_view buffer,
-    HttpParseError error) noexcept {
-    if (error != HttpParseError::kInvalidRequestLine &&
-        error != HttpParseError::kUnsupportedHttpVersion) {
+    Http1ServerRequestParseFailureSource failureSource) noexcept {
+    if (failureSource != Http1ServerRequestParseFailureSource::kRequestLine) {
         return false;
     }
 

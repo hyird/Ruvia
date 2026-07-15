@@ -1,3 +1,17 @@
+[[nodiscard]] inline HttpErrorInfo copyHttpProtocolError(
+    RequestMemory& requestMemory,
+    const HttpProtocolError& error) {
+    const std::string_view message(error.what());
+    auto* storage = static_cast<char*>(requestMemory.resource()->allocate(
+        message.size(),
+        alignof(char)));
+    std::memcpy(storage, message.data(), message.size());
+    return HttpErrorInfo(
+        error.status(),
+        {},
+        std::string_view(storage, message.size()));
+}
+
 template <typename Stream>
 Task<void> HttpServer::handleStreamSession(
     Stream& stream,
@@ -339,17 +353,16 @@ Task<void> HttpServer::handleStreamSession(
             }
 
             if (const auto* failure = parsed.failure()) {
-                const auto error = failure->error();
                 if constexpr (kPlainTcp) {
                     if (!options_.autoHttps.enabled &&
-                        shouldDropInvalidCleartextHttp1Input(bufferView, error)) {
+                        shouldDropInvalidCleartextHttp1Input(
+                            bufferView,
+                            failure->source())) {
                         co_return;
                     }
                 }
-                closingError = HttpErrorInfo(
-                    httpParseErrorStatus(error),
-                    {},
-                    httpParseErrorMessage(error));
+                const auto error = failure->protocolError();
+                closingError = copyHttpProtocolError(requestMemory, error);
                 break;
             }
 
@@ -358,11 +371,9 @@ Task<void> HttpServer::handleStreamSession(
             scannerEntry.setPhase(ConnectionScanner::Phase::kReadingInitial);
             growReadBuffer(readBuffer, usedBytes);
             if (usedBytes == readBuffer.size()) {
-                constexpr auto error = HttpParseError::kHeaderTooLarge;
-                closingError = HttpErrorInfo(
-                    httpParseErrorStatus(error),
-                    {},
-                    httpParseErrorMessage(error));
+                const auto error = httpParseProtocolError(
+                    HttpParseError::kHeaderTooLarge);
+                closingError = copyHttpProtocolError(requestMemory, error);
                 break;
             }
 

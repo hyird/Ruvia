@@ -16,6 +16,13 @@
 
 namespace ruvia::detail {
 
+class Http1ServerRequestParseFailure;
+
+enum class Http1ServerRequestParseFailureSource : std::uint8_t {
+    kRequestLine,
+    kMessage
+};
+
 struct Http1RequestParseResultAccess final {
     [[nodiscard]] static Http1RequestParseResult needMore(
         std::optional<std::size_t> requiredTotalBytes) noexcept {
@@ -36,6 +43,9 @@ struct Http1RequestParseResultAccess final {
         HttpParseError error) noexcept {
         return Http1RequestParseResult(Http1RequestParseFailure(error));
     }
+
+    [[nodiscard]] static Http1RequestParseResult failure(
+        const Http1ServerRequestParseFailure& failure) noexcept;
 };
 
 class Http1ServerNeedRequestHead final {};
@@ -117,12 +127,21 @@ private:
 
 class Http1ServerRequestParseFailure final {
 public:
-    [[nodiscard]] constexpr HttpParseError error() const noexcept {
-        return error_;
+    [[nodiscard]] HttpProtocolError protocolError() const noexcept {
+        return httpParseProtocolError(error_);
+    }
+
+    [[nodiscard]] constexpr Http1ServerRequestParseFailureSource
+    source() const noexcept {
+        return error_ == HttpParseError::kInvalidRequestLine ||
+            error_ == HttpParseError::kUnsupportedHttpVersion
+            ? Http1ServerRequestParseFailureSource::kRequestLine
+            : Http1ServerRequestParseFailureSource::kMessage;
     }
 
 private:
     friend class Http1ServerRequestParser;
+    friend struct Http1RequestParseResultAccess;
 
     explicit constexpr Http1ServerRequestParseFailure(
         HttpParseError error) noexcept
@@ -130,6 +149,11 @@ private:
 
     HttpParseError error_;
 };
+
+inline Http1RequestParseResult Http1RequestParseResultAccess::failure(
+    const Http1ServerRequestParseFailure& failure) noexcept {
+    return Http1RequestParseResult(Http1RequestParseFailure(failure.error_));
+}
 
 class Http1ServerRequestParseState final {
 public:

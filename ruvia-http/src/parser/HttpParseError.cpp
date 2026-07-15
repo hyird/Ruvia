@@ -2,82 +2,49 @@
 
 namespace ruvia {
 
-std::string_view httpParseErrorMessage(HttpParseError error) noexcept {
+HttpProtocolError httpParseProtocolError(HttpParseError error) noexcept {
     switch (error) {
         case HttpParseError::kHeaderTooLarge:
-            return "request header is too large";
+            return HttpProtocolError(431, "request header is too large");
         case HttpParseError::kBodyTooLarge:
-            return "request body is too large";
+            return HttpProtocolError(413, "request body is too large");
         case HttpParseError::kInvalidRequestLine:
-            return "invalid request line";
+            return HttpProtocolError(400, "invalid request line");
         case HttpParseError::kUnsupportedHttpVersion:
-            return "unsupported HTTP version";
+            return HttpProtocolError(505, "unsupported HTTP version");
         case HttpParseError::kInvalidRequestTarget:
-            return "invalid request target";
+            return HttpProtocolError(400, "invalid request target");
         case HttpParseError::kInvalidHeader:
-            return "invalid request header";
+            return HttpProtocolError(400, "invalid request header");
         case HttpParseError::kInvalidConnection:
-            return "invalid Connection header";
+            return HttpProtocolError(400, "invalid Connection header");
         case HttpParseError::kInvalidUpgrade:
-            return "invalid Upgrade header";
+            return HttpProtocolError(400, "invalid Upgrade header");
         case HttpParseError::kTooManyHeaders:
-            return "too many request headers";
+            return HttpProtocolError(431, "too many request headers");
         case HttpParseError::kMissingHost:
-            return "missing Host header";
+            return HttpProtocolError(400, "missing Host header");
         case HttpParseError::kInvalidHost:
-            return "invalid Host header";
+            return HttpProtocolError(400, "invalid Host header");
         case HttpParseError::kInvalidContentLength:
         case HttpParseError::kConflictingContentLength:
-            return "invalid Content-Length header";
+            return HttpProtocolError(400, "invalid Content-Length header");
         case HttpParseError::kInvalidTransferEncoding:
-            return "invalid Transfer-Encoding header";
+            return HttpProtocolError(400, "invalid Transfer-Encoding header");
         case HttpParseError::kUnsupportedTransferEncoding:
-            return "unsupported transfer encoding";
+            return HttpProtocolError(501, "unsupported transfer encoding");
         case HttpParseError::kInvalidChunkSize:
-            return "invalid chunk size";
+            return HttpProtocolError(400, "invalid chunk size");
         case HttpParseError::kChunkSizeOverflow:
-            return "chunk size is too large";
+            return HttpProtocolError(400, "chunk size is too large");
         case HttpParseError::kInvalidChunkExtension:
-            return "invalid chunk extension";
+            return HttpProtocolError(400, "invalid chunk extension");
         case HttpParseError::kInvalidChunkCrlf:
-            return "invalid chunk delimiter";
+            return HttpProtocolError(400, "invalid chunk delimiter");
         case HttpParseError::kInvalidTrailer:
-            return "invalid chunk trailer";
+            return HttpProtocolError(400, "invalid chunk trailer");
     }
-
-    return "invalid HTTP request";
-}
-
-std::uint16_t httpParseErrorStatus(HttpParseError error) noexcept {
-    switch (error) {
-        case HttpParseError::kHeaderTooLarge:
-        case HttpParseError::kTooManyHeaders:
-            return 431;
-        case HttpParseError::kBodyTooLarge:
-            return 413;
-        case HttpParseError::kUnsupportedTransferEncoding:
-            return 501;
-        case HttpParseError::kUnsupportedHttpVersion:
-            return 505;
-        case HttpParseError::kInvalidRequestLine:
-        case HttpParseError::kInvalidHeader:
-        case HttpParseError::kInvalidConnection:
-        case HttpParseError::kInvalidUpgrade:
-        case HttpParseError::kInvalidRequestTarget:
-        case HttpParseError::kMissingHost:
-        case HttpParseError::kInvalidHost:
-        case HttpParseError::kInvalidContentLength:
-        case HttpParseError::kConflictingContentLength:
-        case HttpParseError::kInvalidTransferEncoding:
-        case HttpParseError::kInvalidChunkSize:
-        case HttpParseError::kChunkSizeOverflow:
-        case HttpParseError::kInvalidChunkExtension:
-        case HttpParseError::kInvalidChunkCrlf:
-        case HttpParseError::kInvalidTrailer:
-            return 400;
-    }
-
-    return 400;
+    return HttpProtocolError(400, "invalid HTTP request");
 }
 
 }  // namespace ruvia

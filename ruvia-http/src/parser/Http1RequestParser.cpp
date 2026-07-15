@@ -265,8 +265,7 @@ Http1RequestParseResult Http1RequestParser::parse(std::string_view buffer) const
             needBody->requiredTotalBytes());
     }
     if (const auto* failure = parsed.failure()) {
-        return detail::Http1RequestParseResultAccess::failure(
-            failure->error());
+        return detail::Http1RequestParseResultAccess::failure(*failure);
     }
     const auto* message = parsed.messageReady();
     if (message == nullptr) {

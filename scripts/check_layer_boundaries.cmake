@@ -7904,6 +7904,10 @@ if(EXISTS "${HTTP1_PARSER_INTERNAL}" AND EXISTS "${HTTP1_PARSER_SOURCE}")
            "const Http1ServerRequestMessageReady[*][\r\n \t]*messageReady[(][)] const noexcept" OR
        NOT http1_parser_internal MATCHES
            "const Http1ServerRequestParseFailure[*][\r\n \t]*failure[(][)] const noexcept" OR
+       NOT http1_parser_internal MATCHES
+           "HttpProtocolError protocolError[(][)] const noexcept" OR
+       NOT http1_parser_internal MATCHES
+           "Http1ServerRequestParseFailureSource[\r\n \t]+source[(][)] const noexcept" OR
        NOT http1_parser_internal MATCHES "using Progress = std::variant" OR
        NOT http1_parser_internal MATCHES "class Http1ServerRequestParser final" OR
        NOT http1_parser_internal MATCHES "void parseHead" OR
@@ -7946,6 +7950,14 @@ else()
            "parsed[(][)] const &&[ \\t]*=[ \\t]*delete" OR
        NOT public_http1_request_parser MATCHES
            "failure[(][)] const &&[ \\t]*=[ \\t]*delete" OR
+       NOT public_http1_request_parser MATCHES
+           "HttpProtocolError protocolError[(][)] const noexcept" OR
+       public_http1_request_parser MATCHES
+           "HttpParseError error[(][)] const noexcept" OR
+       NOT public_http_parse_error MATCHES
+           "HttpProtocolError httpParseProtocolError" OR
+       public_http_parse_error MATCHES
+           "httpParseError(Status|Message)" OR
        public_http1_request_parser MATCHES "HttpParseError::kNone" OR
        public_http_parse_error MATCHES "kNone" OR
        NOT http_header_block_parser MATCHES
@@ -8005,6 +8017,12 @@ if(EXISTS "${HTTP1_WEB_CONNECTION_STATE_SOURCE}" AND
            "requestHead->headerBytes[(][)]" OR
        NOT http1_web_stream_session MATCHES
            "growReadBuffer[(]readBuffer, usedBytes[)]" OR
+       NOT http1_web_stream_session MATCHES
+           "failure->protocolError[(][)]" OR
+       NOT http1_web_stream_session MATCHES
+           "failure->source[(][)]" OR
+       http1_web_stream_session MATCHES
+           "failure->error[(][)]|httpParseError(Status|Message)" OR
        http1_web_connection_state_source MATCHES
            "parsed[.]requiredTotalBytes")
         boundary_error("HTTP/1 Web runtime lost typed request-head metadata"

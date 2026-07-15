@@ -6,13 +6,12 @@
 
 #include "ruvia/http/detail/http2/Http2HeaderContinuation.h"
 #include "ruvia/http/detail/http2/Http2HeaderDecode.h"
-#include "ruvia/http/HttpParseError.h"
 #include "ruvia/web/detail/server/HttpServerCleartextHttp2.h"
 
 namespace {
 
-using ruvia::HttpParseError;
 using ruvia::detail::HeaderDecodeStatus;
+using ruvia::detail::Http1ServerRequestParseFailureSource;
 using ruvia::detail::HpackDecoder;
 using ruvia::detail::CleartextHttp2Probe;
 using ruvia::detail::http2ClassifyHeaderDecodeResult;
@@ -64,27 +63,35 @@ RUVIA_TEST(classify_header_decode_result) {
 
 RUVIA_TEST(drop_invalid_cleartext_only_for_request_line_errors) {
     // Only request-line-shaped parse failures are candidates for a silent drop.
-    RUVIA_CHECK(!shouldDropInvalidCleartextHttp1Input("blah blah\r\n", HttpParseError::kMissingHost));
+    RUVIA_CHECK(!shouldDropInvalidCleartextHttp1Input(
+        "blah blah\r\n",
+        Http1ServerRequestParseFailureSource::kMessage));
 }
 
 RUVIA_TEST(drop_invalid_cleartext_by_version_token) {
     // A request line whose final token is not an HTTP version looks like non-HTTP
     // traffic (a port scan, TLS on a cleartext port) and is dropped.
-    RUVIA_CHECK(shouldDropInvalidCleartextHttp1Input("FOO /path GARBAGE\r\n",
-                                                     HttpParseError::kInvalidRequestLine));
-    RUVIA_CHECK(shouldDropInvalidCleartextHttp1Input("random bytes here\r\n",
-                                                     HttpParseError::kInvalidRequestLine));
+    RUVIA_CHECK(shouldDropInvalidCleartextHttp1Input(
+        "FOO /path GARBAGE\r\n",
+        Http1ServerRequestParseFailureSource::kRequestLine));
+    RUVIA_CHECK(shouldDropInvalidCleartextHttp1Input(
+        "random bytes here\r\n",
+        Http1ServerRequestParseFailureSource::kRequestLine));
 
     // A well-formed HTTP-version token means a real client request -> keep. Its
     // extension method is valid syntax and is handled as a Web-level 501 later.
-    RUVIA_CHECK(!shouldDropInvalidCleartextHttp1Input("XX /p HTTP/1.1\r\n",
-                                                      HttpParseError::kInvalidRequestLine));
-    RUVIA_CHECK(!shouldDropInvalidCleartextHttp1Input("PRI * HTTP/2.0\r\n",
-                                                      HttpParseError::kUnsupportedHttpVersion));
+    RUVIA_CHECK(!shouldDropInvalidCleartextHttp1Input(
+        "XX /p HTTP/1.1\r\n",
+        Http1ServerRequestParseFailureSource::kRequestLine));
+    RUVIA_CHECK(!shouldDropInvalidCleartextHttp1Input(
+        "PRI * HTTP/2.0\r\n",
+        Http1ServerRequestParseFailureSource::kRequestLine));
 
     // No line terminator, or a single token, cannot be classified -> keep.
-    RUVIA_CHECK(!shouldDropInvalidCleartextHttp1Input("no-line-break",
-                                                      HttpParseError::kInvalidRequestLine));
-    RUVIA_CHECK(!shouldDropInvalidCleartextHttp1Input("singletoken\r\n",
-                                                      HttpParseError::kInvalidRequestLine));
+    RUVIA_CHECK(!shouldDropInvalidCleartextHttp1Input(
+        "no-line-break",
+        Http1ServerRequestParseFailureSource::kRequestLine));
+    RUVIA_CHECK(!shouldDropInvalidCleartextHttp1Input(
+        "singletoken\r\n",
+        Http1ServerRequestParseFailureSource::kRequestLine));
 }

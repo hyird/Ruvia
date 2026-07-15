@@ -18,6 +18,7 @@ namespace {
 using ruvia::HttpKnownMethod;
 using ruvia::HttpParseError;
 using ruvia::HttpProtocolVersion;
+using ruvia::detail::Http1ServerRequestParseFailureSource;
 using ruvia::detail::Http1ServerRequestParser;
 using ruvia::detail::Http1ServerRequestParseState;
 using ruvia::detail::HttpServerExpectationAction;
@@ -60,7 +61,13 @@ const ruvia::detail::Http1ChunkedRequestBody& requireChunked(
     const Http1ServerRequestParseState& state,
     HttpParseError error) noexcept {
     const auto* failure = state.failure();
-    return failure != nullptr && failure->error() == error;
+    if (failure == nullptr) {
+        return false;
+    }
+    const auto actual = failure->protocolError();
+    const auto expected = ruvia::httpParseProtocolError(error);
+    return actual.status() == expected.status() &&
+        std::string_view(actual.what()) == expected.what();
 }
 
 }  // namespace
@@ -84,7 +91,32 @@ RUVIA_TEST(http1_public_parse_outcome_exposes_only_its_active_alternative) {
     RUVIA_CHECK(failure.parsed() == nullptr);
     RUVIA_CHECK(failureState != nullptr);
     if (failureState != nullptr) {
-        RUVIA_CHECK(failureState->error() == HttpParseError::kMissingHost);
+        const auto error = failureState->protocolError();
+        RUVIA_CHECK_EQ(error.status(), 400);
+        RUVIA_CHECK_EQ(
+            std::string_view(error.what()),
+            std::string_view("missing Host header"));
+    }
+}
+
+RUVIA_TEST(http1_internal_parse_failure_classifies_only_request_line_failures) {
+    Http1ServerRequestParser parser;
+
+    const auto requestLineFailure = parser.parseMessage(
+        "GET / HTTP/9.0\r\nHost: example.com\r\n\r\n");
+    RUVIA_CHECK(requestLineFailure.failure() != nullptr);
+    if (const auto* failure = requestLineFailure.failure()) {
+        RUVIA_CHECK(
+            failure->source() ==
+            Http1ServerRequestParseFailureSource::kRequestLine);
+    }
+
+    const auto messageFailure = parser.parseMessage("GET / HTTP/1.1\r\n\r\n");
+    RUVIA_CHECK(messageFailure.failure() != nullptr);
+    if (const auto* failure = messageFailure.failure()) {
+        RUVIA_CHECK(
+            failure->source() ==
+            Http1ServerRequestParseFailureSource::kMessage);
     }
 }
 
