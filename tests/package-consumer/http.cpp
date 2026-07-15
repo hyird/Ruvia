@@ -582,7 +582,7 @@ concept HasMultipartLineBytes = requires(const T& result) {
 
 template <typename T>
 concept HasMultipartParseError = requires(const T& result) {
-    { result.error() } -> std::same_as<ruvia::MultipartParseError>;
+    { result.parseError() } -> std::same_as<ruvia::MultipartParseError>;
 };
 
 template <typename T>
@@ -2645,6 +2645,8 @@ static_assert(!std::default_initializable<
     ruvia::detail::HttpMultipartPartHeaderParseResult>);
 static_assert(!HasAnyRvalueMultipartPartHeaderAccessor<
     ruvia::detail::HttpMultipartPartHeaderParseResult>);
+static_assert(HasMultipartParseError<
+    ruvia::detail::HttpMultipartPartHeaderParseFailure>);
 static_assert(std::same_as<
     decltype(ruvia::lookupUniqueHttpClientResponseHeader(
         std::declval<const ruvia::HttpClientResponseHead&>(),

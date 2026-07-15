@@ -2540,12 +2540,16 @@ if(NOT multipart_protocol_helpers MATCHES "class HttpMultipartDelimiterNoMatch f
    NOT multipart_protocol_helpers MATCHES
        "HttpProtocolError protocolError[(][)] const noexcept" OR
    multipart_protocol_helpers MATCHES
-       "HttpMultipartBoundaryParseError|failure->error[(][)]")
+       "HttpMultipartBoundaryParseError|HttpMultipartPartHeaderParseError|failure->error[(][)]" OR
+   NOT multipart_protocol_helpers MATCHES
+       "MultipartParseError parseError[(][)] const noexcept")
     boundary_error("multipart delimiter and Content-Type decisions escaped the HTTP core"
         "ruvia-http must own discriminated boundary/header extraction and an input-aware shared delimiter scanner")
 endif()
 file(READ "${RUVIA_ROOT}/ruvia-http/src/MultipartReader.cpp"
     multipart_parser_implementation)
+file(READ "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/MultipartParser.h"
+    multipart_parser_api)
 string(FIND "${multipart_parser_implementation}"
     "MultipartPollResult MultipartParser::poll" multipart_poll_offset)
 if(multipart_poll_offset EQUAL -1)
@@ -2575,6 +2579,15 @@ else()
         boundary_error("incremental multipart wire failures bypass typed results"
             "buffered and incremental parsing must share MultipartParser and return typed wire failures")
     endif()
+endif()
+if(multipart_parser_api MATCHES "StepStatus|stepError" OR
+   NOT multipart_parser_api MATCHES
+       "using StepResult = std::variant<StepProgress, MultipartParseError>" OR
+   multipart_parser_implementation MATCHES
+       "StepStatus|stepError|HttpMultipartPartHeaderParseError|failure->error[(][)]" OR
+   NOT multipart_parser_implementation MATCHES "failure->parseError[(][)]")
+    boundary_error("multipart parser regained duplicate internal error domains"
+        "part-header and parser steps must carry the single MultipartParseError domain without translation switches")
 endif()
 file(READ "${RUVIA_ROOT}/ruvia-web/src/http/MultipartReader.cpp"
     multipart_web_driver)

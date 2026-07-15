@@ -352,11 +352,6 @@ private:
     return httpAsciiEqualsIgnoreCase(type, "form-data");
 }
 
-enum class HttpMultipartPartHeaderParseError : std::uint8_t {
-    kInvalidDisposition,
-    kMissingName,
-};
-
 class HttpMultipartPartHeaderParseResult;
 
 class HttpMultipartPartHeaders final {
@@ -389,8 +384,7 @@ private:
 
 class HttpMultipartPartHeaderParseFailure final {
 public:
-    [[nodiscard]] constexpr HttpMultipartPartHeaderParseError
-    error() const noexcept {
+    [[nodiscard]] constexpr MultipartParseError parseError() const noexcept {
         return error_;
     }
 
@@ -398,10 +392,10 @@ private:
     friend class HttpMultipartPartHeaderParseResult;
 
     explicit constexpr HttpMultipartPartHeaderParseFailure(
-        HttpMultipartPartHeaderParseError error) noexcept
+        MultipartParseError error) noexcept
         : error_(error) {}
 
-    HttpMultipartPartHeaderParseError error_;
+    MultipartParseError error_;
 };
 
 class HttpMultipartPartHeaderParseResult final {
@@ -426,9 +420,13 @@ private:
         HttpMultipartPartHeaders,
         HttpMultipartPartHeaderParseFailure>;
 
-    template <typename Result>
-    explicit constexpr HttpMultipartPartHeaderParseResult(Result result) noexcept
-        : value_(result) {}
+    explicit constexpr HttpMultipartPartHeaderParseResult(
+        HttpMultipartPartHeaders headers) noexcept
+        : value_(headers) {}
+
+    explicit constexpr HttpMultipartPartHeaderParseResult(
+        HttpMultipartPartHeaderParseFailure failure) noexcept
+        : value_(failure) {}
 
     [[nodiscard]] static constexpr HttpMultipartPartHeaderParseResult
     makeHeaders(
@@ -440,7 +438,7 @@ private:
     }
 
     [[nodiscard]] static constexpr HttpMultipartPartHeaderParseResult
-    makeFailure(HttpMultipartPartHeaderParseError error) noexcept {
+    makeFailure(MultipartParseError error) noexcept {
         return HttpMultipartPartHeaderParseResult(
             HttpMultipartPartHeaderParseFailure(error));
     }
@@ -632,13 +630,13 @@ httpParseMultipartPartHeaders(std::string_view headers) noexcept {
     const auto disposition = httpHeaderValueInBlock(headers, "Content-Disposition");
     if (!disposition || !httpIsFormDataDisposition(*disposition)) {
         return HttpMultipartPartHeaderParseResult::makeFailure(
-            HttpMultipartPartHeaderParseError::kInvalidDisposition);
+            MultipartParseError::kInvalidContentDisposition);
     }
 
     const auto name = httpDispositionParameter(*disposition, "name");
     if (!name) {
         return HttpMultipartPartHeaderParseResult::makeFailure(
-            HttpMultipartPartHeaderParseError::kMissingName);
+            MultipartParseError::kMissingFieldName);
     }
 
     const auto filename = httpDispositionParameter(*disposition, "filename");

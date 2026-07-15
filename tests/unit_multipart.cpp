@@ -40,6 +40,11 @@ concept HasMultipartProtocolError = requires(const T& result) {
 };
 
 template <typename T>
+concept HasMultipartParseError = requires(const T& result) {
+    { result.parseError() } -> std::same_as<ruvia::MultipartParseError>;
+};
+
+template <typename T>
 concept HasAnyRvalueMultipartPollAccessor =
     requires(T&& result) { std::move(result).needInput(); } ||
     requires(T&& result) { std::move(result).part(); } ||
@@ -135,7 +140,9 @@ static_assert(!HasAnyRvalueMultipartPartHeaderAccessor<
     ruvia::detail::HttpMultipartPartHeaderParseResult>);
 static_assert(!HasMultipartError<
     ruvia::detail::HttpMultipartPartHeaders>);
-static_assert(HasMultipartError<
+static_assert(!HasMultipartError<
+    ruvia::detail::HttpMultipartPartHeaderParseFailure>);
+static_assert(HasMultipartParseError<
     ruvia::detail::HttpMultipartPartHeaderParseFailure>);
 
 }  // namespace
@@ -354,7 +361,6 @@ RUVIA_TEST(multipart_parser_reports_typed_incomplete_body) {
 // Part header parsing owns either the parsed views or a typed failure.
 RUVIA_TEST(multipart_part_header_result_is_discriminated) {
     using ruvia::detail::httpParseMultipartPartHeaders;
-    using ruvia::detail::HttpMultipartPartHeaderParseError;
 
     const auto parsed = httpParseMultipartPartHeaders(
         "Content-Disposition: form-data; name=\"field\"; filename=\"f.txt\"\r\n"
@@ -374,8 +380,8 @@ RUVIA_TEST(multipart_part_header_result_is_discriminated) {
     RUVIA_CHECK(missingName.failure() != nullptr);
     if (missingName.failure() != nullptr) {
         RUVIA_CHECK(
-            missingName.failure()->error() ==
-            HttpMultipartPartHeaderParseError::kMissingName);
+            missingName.failure()->parseError() ==
+            ruvia::MultipartParseError::kMissingFieldName);
     }
 
     // A non-form-data disposition, and no disposition at all, are invalid.
@@ -386,8 +392,8 @@ RUVIA_TEST(multipart_part_header_result_is_discriminated) {
         RUVIA_CHECK(result.failure() != nullptr);
         if (result.failure() != nullptr) {
             RUVIA_CHECK(
-                result.failure()->error() ==
-                HttpMultipartPartHeaderParseError::kInvalidDisposition);
+                result.failure()->parseError() ==
+                ruvia::MultipartParseError::kInvalidContentDisposition);
         }
     }
 }

@@ -393,16 +393,13 @@ private:
 
     using State = std::variant<ProgressState, MultipartParseError>;
 
-    enum class StepStatus : std::uint8_t {
+    enum class StepProgress : std::uint8_t {
         kNeedInput,
         kContinue,
         kDone,
-        kInvalidDelimiter,
-        kPreambleTooLarge,
-        kPartHeadersTooLarge,
-        kInvalidContentDisposition,
-        kMissingFieldName,
     };
+
+    using StepResult = std::variant<StepProgress, MultipartParseError>;
 
     static constexpr std::size_t kCompactConsumedPrefixBytes = 64 * 1024;
 
@@ -410,12 +407,10 @@ private:
     void consume(std::size_t bytes) noexcept;
     void compactConsumedPrefix();
     void compactPending();
-    [[nodiscard]] static MultipartParseError stepError(
-        StepStatus status) noexcept;
     [[nodiscard]] MultipartPollResult fail(
         MultipartParseError error) noexcept;
-    [[nodiscard]] StepStatus processBoundary();
-    [[nodiscard]] StepStatus processHeaders();
+    [[nodiscard]] StepResult processBoundary();
+    [[nodiscard]] StepResult processHeaders();
     [[nodiscard]] MultipartStreamPart makePart(std::string_view body, bool partEnd);
     [[nodiscard]] MultipartPollResult readBodyChunk();
 
