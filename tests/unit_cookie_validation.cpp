@@ -110,6 +110,33 @@ RUVIA_TEST(cookie_attribute_char_validation) {
     RUVIA_CHECK(isValidCookieAttribute("caf\xc3\xa9.com"));  // UTF-8 obs-text
 }
 
+RUVIA_TEST(cookie_domain_requires_dns_subdomain_syntax) {
+    const auto acceptsDomain = [](std::string_view domain) {
+        ruvia::CookieOptions options;
+        options.domain = domain;
+        return !rejects(options);
+    };
+
+    RUVIA_CHECK(acceptsDomain("example.com"));
+    RUVIA_CHECK(acceptsDomain("EXAMPLE.com"));
+    RUVIA_CHECK(acceptsDomain("localhost"));
+    RUVIA_CHECK(acceptsDomain("3.example"));
+    RUVIA_CHECK(acceptsDomain("xn--bcher-kva.example"));
+
+    // Domain= is a DNS subdomain, not the generic Set-Cookie av-octet syntax
+    // used by Path. Emitting any of these values produces a non-conforming
+    // Set-Cookie field that user agents ignore or interpret inconsistently.
+    RUVIA_CHECK(!acceptsDomain(".example.com"));
+    RUVIA_CHECK(!acceptsDomain("example.com."));
+    RUVIA_CHECK(!acceptsDomain("bad domain.example"));
+    RUVIA_CHECK(!acceptsDomain("bad_domain.example"));
+    RUVIA_CHECK(!acceptsDomain("-bad.example"));
+    RUVIA_CHECK(!acceptsDomain("bad-.example"));
+    RUVIA_CHECK(!acceptsDomain("bad..example"));
+    RUVIA_CHECK(!acceptsDomain("caf\xc3\xa9.example"));
+    RUVIA_CHECK(!acceptsDomain(std::string(64, 'a') + ".example"));
+}
+
 RUVIA_TEST(cookie_priority_enum_maps_to_wire_tokens) {
     using ruvia::detail::cookiePriorityToken;
     RUVIA_CHECK(!ruvia::CookieOptions{}.priority.has_value());

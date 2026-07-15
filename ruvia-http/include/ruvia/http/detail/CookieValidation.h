@@ -41,6 +41,44 @@ inline constexpr std::int64_t kMaxCookieAgeSeconds = 34560000;
     return true;
 }
 
+[[nodiscard]] inline bool isValidCookieDomain(std::string_view value) noexcept {
+    if (value.empty()) {
+        return true;
+    }
+
+    // RFC 6265bis domain-value is an RFC 1034 subdomain as relaxed by RFC 1123:
+    // ASCII LDH labels, each at most 63 octets, with a letter or digit at both
+    // ends. The root separators consume the remaining two octets of DNS's
+    // 255-octet wire limit, so an unqualified textual name is at most 253.
+    if (value.size() > 253) {
+        return false;
+    }
+
+    std::size_t labelLength = 0;
+    bool labelEndsWithAlnum = false;
+    for (const auto c : value) {
+        const auto byte = static_cast<unsigned char>(c);
+        const bool alnum = (byte >= 'a' && byte <= 'z') ||
+            (byte >= 'A' && byte <= 'Z') ||
+            (byte >= '0' && byte <= '9');
+        if (c == '.') {
+            if (labelLength == 0 || !labelEndsWithAlnum) {
+                return false;
+            }
+            labelLength = 0;
+            labelEndsWithAlnum = false;
+            continue;
+        }
+        if ((!alnum && c != '-') || labelLength == 63 ||
+            (labelLength == 0 && !alnum)) {
+            return false;
+        }
+        ++labelLength;
+        labelEndsWithAlnum = alnum;
+    }
+    return labelLength != 0 && labelEndsWithAlnum;
+}
+
 [[nodiscard]] inline std::string_view cookiePriorityToken(CookiePriority priority) noexcept {
     switch (priority) {
         case CookiePriority::kLow: return "Low";
@@ -93,9 +131,11 @@ inline void validateCookie(std::string_view name, std::string_view value, const 
     if (!isValidCookieValue(value)) {
         throw std::invalid_argument("invalid cookie value");
     }
-    if (!isValidCookieAttribute(options.path) ||
-        !isValidCookieAttribute(options.domain)) {
+    if (!isValidCookieAttribute(options.path)) {
         throw std::invalid_argument("invalid cookie attribute");
+    }
+    if (!isValidCookieDomain(options.domain)) {
+        throw std::invalid_argument("invalid cookie domain");
     }
     if (options.maxAge.has_value()) {
         if (options.maxAge->count() < 0) {
