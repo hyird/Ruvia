@@ -334,7 +334,7 @@ private:
         kInvalidMessage,
     };
 
-    explicit constexpr Http2ResponseHeadSubmitError(Kind kind) noexcept
+    explicit Http2ResponseHeadSubmitError(Kind kind) noexcept
         : kind_(kind) {}
 
     Kind kind_;
