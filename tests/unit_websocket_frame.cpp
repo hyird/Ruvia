@@ -24,8 +24,10 @@ using ruvia::detail::decodeWebSocketFrameStart;
 using ruvia::detail::encodeWebSocketFrameHeader;
 using ruvia::detail::isInvalidWebSocketControlFrame;
 using ruvia::detail::WebSocketFrameHeader;
+using ruvia::detail::WebSocketFrameKind;
 using ruvia::detail::WebSocketFrameReadResult;
 using ruvia::detail::WebSocketFrameStart;
+using ruvia::detail::WebSocketFrameView;
 using ruvia::detail::WebSocketProtocolFailure;
 using ruvia::detail::webSocketFrameLengthExceedsLimit;
 using ruvia::detail::webSocketTryReadFrame;
@@ -62,6 +64,8 @@ concept HasAnyRvalueFrameReadAccessor =
     requires(T&& result) { std::move(result).failure(); };
 
 static_assert(!std::default_initializable<WebSocketFrameReadResult>);
+static_assert(!std::default_initializable<WebSocketFrameStart>);
+static_assert(!std::default_initializable<WebSocketFrameView>);
 static_assert(std::same_as<
     decltype(std::declval<const WebSocketFrameReadResult&>().needInput()),
     const ruvia::detail::WebSocketFrameNeedInput*>);
@@ -102,52 +106,70 @@ std::pmr::string maskedFrame(
 // RFC 6455 §5.2: server-received client frames must be masked (second byte high
 // bit set), RSV2/RSV3 must be clear, and reserved opcodes are rejected.
 RUVIA_TEST(ws_frame_start_accepts_valid_masked_frames) {
-    WebSocketFrameStart frame;
-    RUVIA_CHECK(decodeWebSocketFrameStart(0x81, 0x80, frame, false));  // FIN + text, masked
-    RUVIA_CHECK(frame.fin && !frame.continuation && !frame.rsv1);
-    RUVIA_CHECK(frame.opcode == WebSocketOpcode::kText);
-    RUVIA_CHECK(decodeWebSocketFrameStart(0x82, 0x80, frame, false));  // binary
-    RUVIA_CHECK(frame.opcode == WebSocketOpcode::kBinary);
-    RUVIA_CHECK(decodeWebSocketFrameStart(0x88, 0x80, frame, false));  // close
-    RUVIA_CHECK(frame.opcode == WebSocketOpcode::kClose);
-    RUVIA_CHECK(decodeWebSocketFrameStart(0x89, 0x80, frame, false));  // ping
-    RUVIA_CHECK(decodeWebSocketFrameStart(0x8A, 0x80, frame, false));  // pong
-    RUVIA_CHECK(decodeWebSocketFrameStart(0x80, 0x80, frame, false));  // continuation, FIN
-    RUVIA_CHECK(frame.continuation);
-    RUVIA_CHECK(decodeWebSocketFrameStart(0x01, 0x80, frame, false));  // non-FIN text (fragment start)
-    RUVIA_CHECK(!frame.fin);
+    const auto text = decodeWebSocketFrameStart(0x81, 0x80, false);
+    RUVIA_CHECK(text.has_value());
+    RUVIA_CHECK(text->final());
+    RUVIA_CHECK(!text->compressed());
+    RUVIA_CHECK(text->kind() == WebSocketFrameKind::kText);
+    const auto binary = decodeWebSocketFrameStart(0x82, 0x80, false);
+    RUVIA_CHECK(binary->kind() == WebSocketFrameKind::kBinary);
+    const auto close = decodeWebSocketFrameStart(0x88, 0x80, false);
+    RUVIA_CHECK(close->kind() == WebSocketFrameKind::kClose);
+    RUVIA_CHECK(decodeWebSocketFrameStart(0x89, 0x80, false)->kind() ==
+        WebSocketFrameKind::kPing);
+    RUVIA_CHECK(decodeWebSocketFrameStart(0x8A, 0x80, false)->kind() ==
+        WebSocketFrameKind::kPong);
+    const auto continuation = decodeWebSocketFrameStart(0x80, 0x80, false);
+    RUVIA_CHECK(continuation->kind() == WebSocketFrameKind::kContinuation);
+    const auto fragmentStart = decodeWebSocketFrameStart(0x01, 0x80, false);
+    RUVIA_CHECK(!fragmentStart->final());
 }
 
 RUVIA_TEST(ws_frame_start_rejects_malformed) {
-    WebSocketFrameStart frame;
-    RUVIA_CHECK(!decodeWebSocketFrameStart(0x81, 0x00, frame, false));  // not masked
-    RUVIA_CHECK(!decodeWebSocketFrameStart(0x91, 0x80, frame, false));  // RSV2 set
-    RUVIA_CHECK(!decodeWebSocketFrameStart(0xA1, 0x80, frame, false));  // RSV3 set
-    RUVIA_CHECK(!decodeWebSocketFrameStart(0x83, 0x80, frame, false));  // reserved opcode 0x3
-    RUVIA_CHECK(!decodeWebSocketFrameStart(0x87, 0x80, frame, false));  // reserved opcode 0x7
-    RUVIA_CHECK(!decodeWebSocketFrameStart(0x8B, 0x80, frame, false));  // reserved control 0xB
-    RUVIA_CHECK(!decodeWebSocketFrameStart(0x8F, 0x80, frame, false));  // reserved control 0xF
+    RUVIA_CHECK(!decodeWebSocketFrameStart(0x81, 0x00, false));  // not masked
+    RUVIA_CHECK(!decodeWebSocketFrameStart(0x91, 0x80, false));  // RSV2 set
+    RUVIA_CHECK(!decodeWebSocketFrameStart(0xA1, 0x80, false));  // RSV3 set
+    RUVIA_CHECK(!decodeWebSocketFrameStart(0x83, 0x80, false));  // reserved opcode 0x3
+    RUVIA_CHECK(!decodeWebSocketFrameStart(0x87, 0x80, false));  // reserved opcode 0x7
+    RUVIA_CHECK(!decodeWebSocketFrameStart(0x8B, 0x80, false));  // reserved control 0xB
+    RUVIA_CHECK(!decodeWebSocketFrameStart(0x8F, 0x80, false));  // reserved control 0xF
 }
 
 RUVIA_TEST(ws_frame_start_rsv1_rules) {
     // RSV1 (compression) is valid only on the first data frame when negotiated.
-    WebSocketFrameStart frame;
-    RUVIA_CHECK(!decodeWebSocketFrameStart(0xC1, 0x80, frame, false));  // rsv1 but not allowed
-    RUVIA_CHECK(decodeWebSocketFrameStart(0xC1, 0x80, frame, true));    // rsv1 on text, allowed
-    RUVIA_CHECK(frame.rsv1);
-    RUVIA_CHECK(!decodeWebSocketFrameStart(0xC0, 0x80, frame, true));   // rsv1 on continuation -> reject
-    RUVIA_CHECK(!decodeWebSocketFrameStart(0xC8, 0x80, frame, true));   // rsv1 on control frame -> reject
+    RUVIA_CHECK(!decodeWebSocketFrameStart(0xC1, 0x80, false));
+    const auto compressed = decodeWebSocketFrameStart(0xC1, 0x80, true);
+    RUVIA_CHECK(compressed.has_value());
+    RUVIA_CHECK(compressed->compressed());
+    RUVIA_CHECK(!decodeWebSocketFrameStart(0xC0, 0x80, true));
+    RUVIA_CHECK(!decodeWebSocketFrameStart(0xC8, 0x80, true));
 }
 
 RUVIA_TEST(ws_control_frame_rules) {
-    const WebSocketFrameStart close{.opcode = WebSocketOpcode::kClose, .fin = true};
-    RUVIA_CHECK(!isInvalidWebSocketControlFrame(close, 0));
-    RUVIA_CHECK(!isInvalidWebSocketControlFrame(close, 125));
-    RUVIA_CHECK(isInvalidWebSocketControlFrame(close, 126));  // control payload must be <= 125
-    const WebSocketFrameStart fragmentedPing{.opcode = WebSocketOpcode::kPing, .fin = false};
-    RUVIA_CHECK(isInvalidWebSocketControlFrame(fragmentedPing, 10));  // control frames must be FIN
-    const WebSocketFrameStart data{.opcode = WebSocketOpcode::kText, .fin = false};
-    RUVIA_CHECK(!isInvalidWebSocketControlFrame(data, 1000000));  // data frames are not control frames
+    const auto close = decodeWebSocketFrameStart(0x88, 0x80, false);
+    RUVIA_CHECK(!isInvalidWebSocketControlFrame(*close, 0));
+    RUVIA_CHECK(!isInvalidWebSocketControlFrame(*close, 125));
+    RUVIA_CHECK(isInvalidWebSocketControlFrame(*close, 126));
+    const auto fragmentedPing = decodeWebSocketFrameStart(0x09, 0x80, false);
+    RUVIA_CHECK(isInvalidWebSocketControlFrame(*fragmentedPing, 10));
+    const auto data = decodeWebSocketFrameStart(0x01, 0x80, false);
+    RUVIA_CHECK(!isInvalidWebSocketControlFrame(*data, 1000000));
+}
+
+RUVIA_TEST(ws_frame_view_factories_exclude_invalid_metadata_combinations) {
+    const auto continuation = WebSocketFrameView::continuation("next", false);
+    RUVIA_CHECK(continuation.kind() == WebSocketFrameKind::kContinuation);
+    RUVIA_CHECK(!continuation.final());
+    RUVIA_CHECK(!continuation.compressed());
+
+    const auto compressedText = WebSocketFrameView::text("data", true, true);
+    RUVIA_CHECK(compressedText.kind() == WebSocketFrameKind::kText);
+    RUVIA_CHECK(compressedText.compressed());
+
+    RUVIA_CHECK(WebSocketFrameView::ping("ok").has_value());
+    RUVIA_CHECK(!WebSocketFrameView::ping(std::string(126, 'x')).has_value());
+    RUVIA_CHECK(WebSocketFrameView::close({}).has_value());
+    RUVIA_CHECK(!WebSocketFrameView::close("x").has_value());
 }
 
 RUVIA_TEST(ws_encode_frame_header_length_boundaries) {
@@ -242,10 +264,10 @@ RUVIA_TEST(ws_frame_reader_returns_one_unmasked_borrowed_frame) {
     RUVIA_CHECK(result.needInput() == nullptr);
     RUVIA_CHECK(result.failure() == nullptr);
     RUVIA_CHECK(result.frame() != nullptr);
-    RUVIA_CHECK(result.frame()->opcode == WebSocketOpcode::kText);
-    RUVIA_CHECK(result.frame()->fin);
-    RUVIA_CHECK(!result.frame()->continuation);
-    RUVIA_CHECK_EQ(result.frame()->payload, std::string_view("hi"));
+    RUVIA_CHECK(result.frame()->kind() == WebSocketFrameKind::kText);
+    RUVIA_CHECK(result.frame()->final());
+    RUVIA_CHECK(!result.frame()->compressed());
+    RUVIA_CHECK_EQ(result.frame()->payload(), std::string_view("hi"));
     RUVIA_CHECK_EQ(offset, input.size());
     RUVIA_CHECK_EQ(pendingCompactUntil, input.size());
 }
@@ -347,5 +369,5 @@ RUVIA_TEST(ws_frame_reader_rejects_non_minimal_length_encoding) {
         minimal16, offset, pendingCompactUntil,
         ProtocolByteLimit::limited(1U << 20), false);
     RUVIA_CHECK(ok.frame() != nullptr);
-    RUVIA_CHECK_EQ(ok.frame()->payload.size(), std::size_t{126});
+    RUVIA_CHECK_EQ(ok.frame()->payload().size(), std::size_t{126});
 }

@@ -9067,6 +9067,15 @@ if(EXISTS "${WS_PROTOCOL_HEADER}" AND EXISTS "${WS_EVENT_HEADER}" AND
             "need-input must be optional and every materialized message, control, close, failure, or terminal event must own only its valid fields and lend alternatives only from live lvalues")
     endif()
     if(NOT ws_inbound MATCHES "enum class WebSocketProtocolFailure" OR
+       NOT ws_inbound MATCHES "enum class WebSocketFrameKind" OR
+       NOT ws_inbound MATCHES "class WebSocketFrameStart final" OR
+       NOT ws_inbound MATCHES "class WebSocketFrameView final" OR
+       NOT ws_inbound MATCHES "std::optional<WebSocketFrameStart>" OR
+       NOT ws_inbound MATCHES "WebSocketFrameKind kind_" OR
+       NOT ws_inbound MATCHES "WebSocketFrameView continuation" OR
+       ws_inbound MATCHES "struct WebSocketFrame(Start|View) final" OR
+       ws_inbound MATCHES
+           "unsigned char second,[ \t\r\n]+WebSocketFrameStart&" OR
        NOT ws_inbound MATCHES "class WebSocketFrameNeedInput final" OR
        NOT ws_inbound MATCHES "class WebSocketFrameReadFailure final" OR
        NOT ws_inbound MATCHES "class WebSocketFrameReadResult final" OR

@@ -28,9 +28,22 @@ using ruvia::detail::webSocketProtocolFailureCloseCode;
 WebSocketFrameView frame(
     WebSocketOpcode opcode, std::string_view payload, bool fin,
     bool continuation = false, bool rsv1 = false) {
-    return WebSocketFrameView{
-        .opcode = opcode, .payload = payload, .fin = fin,
-        .continuation = continuation, .rsv1 = rsv1};
+    if (continuation) {
+        return WebSocketFrameView::continuation(payload, fin);
+    }
+    switch (opcode) {
+        case WebSocketOpcode::kText:
+            return WebSocketFrameView::text(payload, fin, rsv1);
+        case WebSocketOpcode::kBinary:
+            return WebSocketFrameView::binary(payload, fin, rsv1);
+        case WebSocketOpcode::kClose:
+            return *WebSocketFrameView::close(payload);
+        case WebSocketOpcode::kPing:
+            return *WebSocketFrameView::ping(payload);
+        case WebSocketOpcode::kPong:
+            return *WebSocketFrameView::pong(payload);
+    }
+    return WebSocketFrameView::text(payload, fin, rsv1);
 }
 
 ProtocolByteLimit byteLimit(std::size_t bytes) {

@@ -46,21 +46,22 @@ RUVIA_TEST(websocket_control_opcode_classification) {
 }
 
 RUVIA_TEST(websocket_frame_message_limit_exempts_control_frames) {
+    using ruvia::detail::WebSocketFrameKind;
     using ruvia::detail::webSocketFrameExceedsMessageLimit;
     // Data frames are measured against the per-message size limit.
     const auto limit = ProtocolByteLimit::limited(64);
-    RUVIA_CHECK(webSocketFrameExceedsMessageLimit(WebSocketOpcode::kText, 100, limit));
-    RUVIA_CHECK(webSocketFrameExceedsMessageLimit(WebSocketOpcode::kBinary, 100, limit));
-    RUVIA_CHECK(!webSocketFrameExceedsMessageLimit(WebSocketOpcode::kText, 50, limit));
+    RUVIA_CHECK(webSocketFrameExceedsMessageLimit(WebSocketFrameKind::kText, 100, limit));
+    RUVIA_CHECK(webSocketFrameExceedsMessageLimit(WebSocketFrameKind::kBinary, 100, limit));
+    RUVIA_CHECK(!webSocketFrameExceedsMessageLimit(WebSocketFrameKind::kText, 50, limit));
 
     // Control frames (Close/Ping/Pong) are capped at 125 by RFC 6455 5.5 and are
     // NOT subject to the message-size limit: a 100-byte Ping, or a Close carrying a
     // reason phrase, must pass even when maxMessageBytes is 64.
-    RUVIA_CHECK(!webSocketFrameExceedsMessageLimit(WebSocketOpcode::kPing, 100, limit));
-    RUVIA_CHECK(!webSocketFrameExceedsMessageLimit(WebSocketOpcode::kPong, 100, limit));
-    RUVIA_CHECK(!webSocketFrameExceedsMessageLimit(WebSocketOpcode::kClose, 100, limit));
+    RUVIA_CHECK(!webSocketFrameExceedsMessageLimit(WebSocketFrameKind::kPing, 100, limit));
+    RUVIA_CHECK(!webSocketFrameExceedsMessageLimit(WebSocketFrameKind::kPong, 100, limit));
+    RUVIA_CHECK(!webSocketFrameExceedsMessageLimit(WebSocketFrameKind::kClose, 100, limit));
     RUVIA_CHECK(!webSocketFrameExceedsMessageLimit(
-        WebSocketOpcode::kText,
+        WebSocketFrameKind::kText,
         1'000'000,
         ProtocolByteLimit::unlimited()));
 }

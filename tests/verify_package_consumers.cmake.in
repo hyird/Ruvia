@@ -1341,6 +1341,22 @@ endif()
 if(NOT _installed_ws_inbound MATCHES
        "enum class WebSocketProtocolFailure" OR
    NOT _installed_ws_inbound MATCHES
+       "enum class WebSocketFrameKind" OR
+   NOT _installed_ws_inbound MATCHES
+       "class WebSocketFrameStart final" OR
+   NOT _installed_ws_inbound MATCHES
+       "class WebSocketFrameView final" OR
+   NOT _installed_ws_inbound MATCHES
+       "std::optional<WebSocketFrameStart>" OR
+   NOT _installed_ws_inbound MATCHES
+       "WebSocketFrameKind kind_" OR
+   NOT _installed_ws_inbound MATCHES
+       "WebSocketFrameView continuation" OR
+   _installed_ws_inbound MATCHES
+       "struct WebSocketFrame(Start|View) final" OR
+   _installed_ws_inbound MATCHES
+       "unsigned char second,[ \t\r\n]+WebSocketFrameStart&" OR
+   NOT _installed_ws_inbound MATCHES
        "class WebSocketFrameNeedInput final" OR
    NOT _installed_ws_inbound MATCHES
        "class WebSocketFrameReadFailure final" OR

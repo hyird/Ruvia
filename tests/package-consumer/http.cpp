@@ -478,6 +478,24 @@ concept HasWsCleanEofAllowedField = requires(const T& result) {
 };
 
 template <typename T>
+concept HasLooseWebSocketFrameFields = requires(T& frame) {
+    frame.opcode;
+    frame.payload;
+    frame.fin;
+    frame.continuation;
+    frame.rsv1;
+};
+
+template <typename T>
+concept AcceptsMutableWebSocketFrameStartDecode = requires(T& frame) {
+    ruvia::detail::decodeWebSocketFrameStart(
+        static_cast<unsigned char>(0x81),
+        static_cast<unsigned char>(0x80),
+        frame,
+        false);
+};
+
+template <typename T>
 concept HasWsInboundActionAccessor = requires(const T& result) {
     result.action();
 };
@@ -2292,6 +2310,35 @@ static_assert(HasWsReason<ruvia::detail::WsCloseEvent>);
 static_assert(!HasWsReason<ruvia::detail::WsProtocolErrorEvent>);
 static_assert(!std::default_initializable<
     ruvia::detail::WebSocketFrameReadResult>);
+static_assert(!std::default_initializable<
+    ruvia::detail::WebSocketFrameStart>);
+static_assert(!std::default_initializable<
+    ruvia::detail::WebSocketFrameView>);
+static_assert(!HasLooseWebSocketFrameFields<
+    ruvia::detail::WebSocketFrameStart>);
+static_assert(!HasLooseWebSocketFrameFields<
+    ruvia::detail::WebSocketFrameView>);
+static_assert(!AcceptsMutableWebSocketFrameStartDecode<
+    ruvia::detail::WebSocketFrameStart>);
+static_assert(std::same_as<
+    decltype(ruvia::detail::decodeWebSocketFrameStart(
+        static_cast<unsigned char>(0x81),
+        static_cast<unsigned char>(0x80),
+        false)),
+    std::optional<ruvia::detail::WebSocketFrameStart>>);
+static_assert(std::same_as<
+    decltype(std::declval<const ruvia::detail::WebSocketFrameView&>().kind()),
+    ruvia::detail::WebSocketFrameKind>);
+static_assert(std::same_as<
+    decltype(std::declval<const ruvia::detail::WebSocketFrameView&>().payload()),
+    std::string_view>);
+static_assert(std::same_as<
+    decltype(ruvia::detail::WebSocketFrameView::continuation(
+        std::string_view{}, false)),
+    ruvia::detail::WebSocketFrameView>);
+static_assert(std::same_as<
+    decltype(ruvia::detail::WebSocketFrameView::close(std::string_view{})),
+    std::optional<ruvia::detail::WebSocketFrameView>>);
 static_assert(std::same_as<
     decltype(std::declval<
         const ruvia::detail::WebSocketFrameReadResult&>().needInput()),
