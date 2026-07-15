@@ -44,7 +44,7 @@ struct WorkerTimerState final {
 struct WorkerDispatcher::Impl {
     explicit Impl(asio::io_context& context, std::size_t requestedCapacity)
         : ioContext(context),
-          timer(context),
+          timer(std::make_unique<asio::steady_timer>(context)),
           slots(requestedCapacity),
           workerId(gNextWorkerId.fetch_add(1, std::memory_order_relaxed)),
           timers(detail::processResource()) {
@@ -54,7 +54,7 @@ struct WorkerDispatcher::Impl {
     }
 
     asio::io_context& ioContext;
-    asio::steady_timer timer;
+    std::unique_ptr<asio::steady_timer> timer;
     std::vector<std::optional<std::move_only_function<void()>>> slots;
     std::mutex mutex;
     std::size_t head{0};
@@ -62,6 +62,7 @@ struct WorkerDispatcher::Impl {
     std::size_t size{0};
     WorkerId workerId{0};
     bool accepting{true};
+    bool contextAttached{true};
     bool drainScheduled{false};
     std::vector<std::weak_ptr<WorkerShutdownListener>> shutdownListeners;
     std::pmr::vector<TimerEntry> timers;
@@ -74,7 +75,7 @@ struct WorkerDispatcher::Impl {
 };
 
 WorkerTimerRegistration::WorkerTimerRegistration(
-    std::weak_ptr<WorkerDispatcher> dispatcher,
+    std::shared_ptr<WorkerDispatcher> dispatcher,
     std::shared_ptr<WorkerTimerState> state) noexcept
     : dispatcher_(std::move(dispatcher)), state_(std::move(state)) {}
 
@@ -97,17 +98,11 @@ WorkerTimerRegistration& WorkerTimerRegistration::operator=(
 
 void WorkerTimerRegistration::cancel() noexcept {
     auto state = std::exchange(state_, nullptr);
-    const auto dispatcher = dispatcher_.lock();
-    dispatcher_.reset();
+    auto dispatcher = std::exchange(dispatcher_, nullptr);
     if (!state || !dispatcher || !state->active.load(std::memory_order_acquire)) {
         return;
     }
-    if (dispatcher->isCurrent()) {
-        dispatcher->cancelTimer(state);
-        return;
-    }
-    dispatcher->deferOrTerminate(
-        [dispatcher, state = std::move(state)] { dispatcher->cancelTimer(state); });
+    dispatcher->requestTimerCancellation(state);
 }
 
 bool WorkerTimerRegistration::valid() const noexcept {
@@ -121,7 +116,7 @@ WorkerDispatcher::~WorkerDispatcher() = default;
 
 PostResult WorkerDispatcher::post(std::move_only_function<void()> task) {
     std::lock_guard lock(impl_->mutex);
-    if (!impl_->accepting) {
+    if (!impl_->contextAttached || !impl_->accepting) {
         return PostResult::kWorkerStopping;
     }
     if (impl_->size == impl_->slots.size()) {
@@ -150,6 +145,10 @@ PostResult WorkerDispatcher::post(std::move_only_function<void()> task) {
 }
 
 void WorkerDispatcher::defer(std::move_only_function<void()> task) {
+    std::lock_guard lock(impl_->mutex);
+    if (!impl_->contextAttached) {
+        throw std::runtime_error("worker execution context is detached");
+    }
     asio::post(impl_->ioContext,
                [self = shared_from_this(), task = std::move(task)]() mutable { task(); });
 }
@@ -179,6 +178,9 @@ WorkerTimerRegistration WorkerDispatcher::scheduleTimer(
     if (!isCurrent()) {
         throw std::logic_error("worker timers must be scheduled on their worker");
     }
+    if (!attached()) {
+        throw std::runtime_error("worker execution context is detached");
+    }
     if (impl_->timersStopping) {
         throw std::runtime_error("worker timer queue is stopping");
     }
@@ -194,7 +196,36 @@ WorkerTimerRegistration WorkerDispatcher::scheduleTimer(
     if (!impl_->dispatchingTimers) {
         armTimer();
     }
-    return WorkerTimerRegistration(weak_from_this(), std::move(state));
+    return WorkerTimerRegistration(shared_from_this(), std::move(state));
+}
+
+void WorkerDispatcher::requestTimerCancellation(
+    const std::shared_ptr<WorkerTimerState>& state) noexcept {
+    if (!state || !state->active.load(std::memory_order_acquire)) {
+        return;
+    }
+    bool current = false;
+    {
+        std::lock_guard lock(impl_->mutex);
+        if (!impl_->contextAttached) {
+            state->active.store(false, std::memory_order_release);
+            return;
+        }
+        current = impl_->ioContext.get_executor().running_in_this_thread();
+        if (!current) {
+            try {
+                asio::post(
+                    impl_->ioContext,
+                    [self = shared_from_this(), state] {
+                        self->cancelTimer(state);
+                    });
+            } catch (...) {
+                std::terminate();
+            }
+            return;
+        }
+    }
+    cancelTimer(state);
 }
 
 void WorkerDispatcher::cancelTimer(const std::shared_ptr<WorkerTimerState>& state) noexcept {
@@ -233,7 +264,9 @@ void WorkerDispatcher::stopTimers() noexcept {
     ++impl_->timerGeneration;
     impl_->timerArmed = false;
     std::error_code ignored;
-    impl_->timer.cancel(ignored);
+    if (impl_->timer) {
+        impl_->timer->cancel(ignored);
+    }
 
     while (!impl_->timers.empty()) {
         std::pop_heap(impl_->timers.begin(), impl_->timers.end(), TimerEntryLater{});
@@ -258,6 +291,46 @@ void WorkerDispatcher::stopTimers() noexcept {
 
 void WorkerDispatcher::close() noexcept {
     notifyStopping(beginStopping(false));
+}
+
+void WorkerDispatcher::detachContext() noexcept {
+    std::vector<std::optional<std::move_only_function<void()>>> abandonedSlots;
+    ShutdownListeners abandonedListeners;
+    std::pmr::vector<TimerEntry> abandonedTimers(impl_->timers.get_allocator());
+    std::unique_ptr<asio::steady_timer> detachedTimer;
+    {
+        std::lock_guard lock(impl_->mutex);
+        if (!impl_->contextAttached) {
+            return;
+        }
+        impl_->accepting = false;
+        impl_->contextAttached = false;
+        impl_->drainScheduled = false;
+        impl_->head = 0;
+        impl_->tail = 0;
+        impl_->size = 0;
+        abandonedSlots.swap(impl_->slots);
+        abandonedListeners.swap(impl_->shutdownListeners);
+        detachedTimer = std::move(impl_->timer);
+    }
+
+    // detachContext runs only after the worker has joined, so the timer heap is
+    // exclusively owned here. Mark registrations terminal before releasing
+    // their callbacks. All user-owned closures are destroyed outside mutex so
+    // a destructor that releases another worker primitive cannot deadlock.
+    for (auto& entry : impl_->timers) {
+        entry.state->active.store(false, std::memory_order_release);
+    }
+    abandonedTimers.swap(impl_->timers);
+    impl_->cancelledTimerCount = 0;
+    impl_->timerArmed = false;
+    impl_->timersStopping = true;
+    detachedTimer.reset();
+}
+
+bool WorkerDispatcher::attached() const noexcept {
+    std::lock_guard lock(impl_->mutex);
+    return impl_->contextAttached;
 }
 
 WorkerDispatcher::ShutdownListeners WorkerDispatcher::beginStopping(
@@ -287,7 +360,9 @@ void WorkerDispatcher::notifyStopping(
 }
 
 bool WorkerDispatcher::isCurrent() const noexcept {
-    return impl_->ioContext.get_executor().running_in_this_thread();
+    std::lock_guard lock(impl_->mutex);
+    return impl_->contextAttached &&
+           impl_->ioContext.get_executor().running_in_this_thread();
 }
 
 bool WorkerDispatcher::accepting() const noexcept {
@@ -296,7 +371,8 @@ bool WorkerDispatcher::accepting() const noexcept {
 }
 
 WorkerId WorkerDispatcher::id() const noexcept {
-    return impl_->workerId;
+    std::lock_guard lock(impl_->mutex);
+    return impl_->contextAttached ? impl_->workerId : 0;
 }
 
 void WorkerDispatcher::drain() {
@@ -326,7 +402,10 @@ void WorkerDispatcher::armTimer() {
     ++impl_->timerGeneration;
     const auto generation = impl_->timerGeneration;
     std::error_code ignored;
-    impl_->timer.cancel(ignored);
+    if (!impl_->timer) {
+        return;
+    }
+    impl_->timer->cancel(ignored);
     impl_->timerArmed = false;
     while (!impl_->timers.empty() &&
            !impl_->timers.front().state->active.load(std::memory_order_acquire)) {
@@ -339,9 +418,9 @@ void WorkerDispatcher::armTimer() {
     if (impl_->timersStopping || impl_->timers.empty()) {
         return;
     }
-    impl_->timer.expires_at(impl_->timers.front().deadline);
+    impl_->timer->expires_at(impl_->timers.front().deadline);
     impl_->timerArmed = true;
-    impl_->timer.async_wait([self = shared_from_this(), generation](const std::error_code& error) {
+    impl_->timer->async_wait([self = shared_from_this(), generation](const std::error_code& error) {
         if (error || generation != self->impl_->timerGeneration) {
             return;
         }

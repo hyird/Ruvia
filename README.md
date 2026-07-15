@@ -173,9 +173,9 @@ The external `io_context` must outlive the attachment, every returned
 ownership of `run()`, `stop()`, `restart()`, and the thread. The attachment
 never calls `io_context::stop()` because the context may host unrelated work.
 
-Web handlers obtain their current core worker with `Context::worker()`.
-Background components select a stable Web worker with `App::workerFor()` and
-submit an asynchronous Web job. The callback receives worker-local DB and Redis
+Web handlers obtain their current core worker with `Context::worker()`; its reference is
+borrowed for the request, so use `auto worker = c.worker()` before capturing it. Background
+components select a stable Web worker with `App::workerFor()` and submit a job with worker-local DB and Redis
 access without exposing the underlying executor:
 
 ```cpp

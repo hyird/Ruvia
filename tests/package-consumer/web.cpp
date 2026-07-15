@@ -33,7 +33,6 @@
 #include <ruvia/web/Validation.h>
 #include <ruvia/web/ValidationTypes.h>
 #include <ruvia/web/WebSocket.h>
-#include <ruvia/web/detail/ContextValues.h>
 #include <ruvia/web/detail/app/AppLifecycle.h>
 #include <ruvia/web/detail/StaticFilesInternal.h>
 #include <ruvia/web/detail/ValidatedValues.h>
@@ -952,6 +951,16 @@ concept HasContextVarFacade = requires(ContextT& context) {
 };
 
 template <typename ContextT>
+concept HasArbitraryContextValueSet = requires(ContextT& context) {
+    context.set(std::string_view{}, std::uint32_t{});
+};
+
+template <typename ContextT>
+concept HasArbitraryContextValueGet = requires(ContextT& context) {
+    context.template get<std::uint32_t>(std::string_view{});
+};
+
+template <typename ContextT>
 concept HasContextFinalized = requires(const ContextT& context) {
     context.finalized();
 };
@@ -1087,6 +1096,8 @@ static_assert(!HasContextSignedCookieGenerator<ruvia::Context>);
 static_assert(!HasContextRenderPipeline<ruvia::Context>);
 static_assert(!HasResponseInit<ruvia::Context>);
 static_assert(!HasContextVarFacade<ruvia::Context>);
+static_assert(!HasArbitraryContextValueSet<ruvia::Context>);
+static_assert(!HasArbitraryContextValueGet<ruvia::Context>);
 static_assert(!HasContextFinalized<ruvia::Context>);
 static_assert(!HasLegacyStreamSSE<ruvia::Context>);
 static_assert(!HasLegacyWriteSSE<ruvia::SseWriter>);
@@ -1574,6 +1585,9 @@ static_assert(std::is_same_v<
     const ruvia::detail::ContextResponseOutput&>);
 static_assert(std::is_same_v<
     decltype(std::declval<const ruvia::detail::ContextServices&>().worker()),
+    const ruvia::WorkerHandle&>);
+static_assert(std::is_same_v<
+    decltype(std::declval<const ruvia::Context&>().worker()),
     const ruvia::WorkerHandle&>);
 static_assert(std::same_as<
     decltype(std::declval<const ruvia::detail::ContextServices&>()

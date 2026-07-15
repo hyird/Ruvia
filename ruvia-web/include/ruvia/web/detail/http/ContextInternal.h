@@ -116,15 +116,20 @@ struct ContextAccess final {
     }
 
     [[nodiscard]] static bool requestCookiesMaterialized(const Context& context) noexcept {
-        return context.requestCookies_ != nullptr;
+        return context.requestStorage_ && context.requestStorage_->cookies;
     }
 
     [[nodiscard]] static bool requestQueryMaterialized(const Context& context) noexcept {
-        return context.requestQueryCache_ != nullptr;
+        return context.requestStorage_ && context.requestStorage_->query;
     }
 
     [[nodiscard]] static bool routeParamsMaterialized(const Context& context) noexcept {
-        return context.routeParams_ != nullptr;
+        return context.requestStorage_ && context.requestStorage_->routeParams;
+    }
+
+    [[nodiscard]] static const ContextRequestStorage* requestStorage(
+        const Context& context) noexcept {
+        return context.requestStorage_.get();
     }
 
     static void setResponse(Context& context, HttpResponse&& response) {

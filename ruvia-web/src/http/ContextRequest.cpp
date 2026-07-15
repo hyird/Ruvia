@@ -399,11 +399,11 @@ void compactParsedBodyFields(
 }  // namespace
 
 const RequestNameValueList& Context::requestHeaders() const {
-    if (requestHeaders_ == nullptr) {
+    auto& cache = requestStorage().headers;
+    if (!cache) {
         const auto rawHeaders = request_.headers();
-        auto& names = memory_.emplace<std::pmr::vector<std::pmr::string>>(resource());
-        auto& headers = memory_.emplace<RequestNameValueList>(
-            detail::RequestNameValueListAccess::make(resource()));
+        std::pmr::vector<std::pmr::string> names(resource());
+        auto headers = detail::RequestNameValueListAccess::make(resource());
         names.reserve(rawHeaders.size());
         detail::RequestNameValueListAccess::reserve(headers, rawHeaders.size());
         for (const auto& rawHeader : rawHeaders) {
@@ -416,9 +416,9 @@ const RequestNameValueList& Context::requestHeaders() const {
                     std::string_view(name.data(), name.size()),
                     rawHeader.value()));
         }
-        requestHeaders_ = &headers;
+        cache.emplace(std::move(names), std::move(headers));
     }
-    return *requestHeaders_;
+    return cache->fields;
 }
 
 std::optional<std::string_view> Context::requestHeader(std::string_view name) const {
@@ -426,12 +426,13 @@ std::optional<std::string_view> Context::requestHeader(std::string_view name) co
 }
 
 void Context::ensureRequestQuery() const {
-    if (requestQueryCache_ != nullptr) {
+    auto& cache = requestStorage().query;
+    if (cache) {
         return;
     }
 
     const auto pairCount = delimitedFieldCount(request_.queryString(), '&');
-    auto& storage = memory_.emplace<std::pmr::vector<std::pmr::string>>(resource());
+    std::pmr::vector<std::pmr::string> storage(resource());
     storage.reserve(boundedFieldReserve(pairCount * 2));
     (void)detail::visitUrlEncodedPairs(
         request_.queryString(),
@@ -495,14 +496,15 @@ void Context::ensureRequestQuery() const {
         }
     }
 
-    requestQueryCache_ = &memory_.emplace<detail::RequestQueryCache>(
+    cache.emplace(
+        std::move(storage),
         std::move(query),
         std::move(groups));
 }
 
 const RequestNameValueList& Context::requestQuery() const {
     ensureRequestQuery();
-    return requestQueryCache_->fields();
+    return requestStorage_->query->fields();
 }
 
 std::optional<std::string_view> Context::requestQuery(std::string_view name) const {
@@ -518,7 +520,7 @@ std::optional<std::string_view> Context::requestQuery(std::string_view name) con
                 return true;
             }
 
-            auto& decoded = memory_.emplace<std::pmr::string>(resource());
+            auto& decoded = requestStorage().appendDecodedValue();
             assignUrlDecodedOrCopy(decoded, encodedValue, detail::UrlDecodeMode::kForm);
             result = storedStringView(decoded);
             return true;
@@ -528,7 +530,7 @@ std::optional<std::string_view> Context::requestQuery(std::string_view name) con
 
 const detail::RequestQueryValues& Context::requestQueries() const {
     ensureRequestQuery();
-    return requestQueryCache_->values();
+    return requestStorage_->query->values();
 }
 
 std::optional<std::string_view> Context::requestCookie(std::string_view name) const {
@@ -546,7 +548,8 @@ std::optional<std::string_view> Context::requestCookie(std::string_view name) co
 }
 
 const RequestNameValueList& Context::requestCookies() const {
-    if (requestCookies_ == nullptr) {
+    auto& cache = requestStorage().cookies;
+    if (!cache) {
         std::size_t cookieCount = 0;
         for (const auto& header : request_.headers()) {
             if (detail::httpAsciiEqualsIgnoreCase(header.name(), "Cookie")) {
@@ -554,8 +557,7 @@ const RequestNameValueList& Context::requestCookies() const {
             }
         }
 
-        auto& cookies = memory_.emplace<RequestNameValueList>(
-            detail::RequestNameValueListAccess::make(resource()));
+        auto cookies = detail::RequestNameValueListAccess::make(resource());
         detail::RequestNameValueListAccess::reserve(cookies, boundedFieldReserve(cookieCount));
         for (const auto& header : request_.headers()) {
             if (!detail::httpAsciiEqualsIgnoreCase(header.name(), "Cookie")) {
@@ -570,16 +572,16 @@ const RequestNameValueList& Context::requestCookies() const {
                     return true;
                 });
         }
-        requestCookies_ = &cookies;
+        cache.emplace(std::move(cookies));
     }
-    return *requestCookies_;
+    return *cache;
 }
 
 const RequestNameValueList& Context::routeParams() const {
-    if (routeParams_ == nullptr) {
-        auto& storage = memory_.emplace<std::pmr::vector<std::pmr::string>>(resource());
-        auto& params = memory_.emplace<RequestNameValueList>(
-            detail::RequestNameValueListAccess::make(resource()));
+    auto& cache = requestStorage().routeParams;
+    if (!cache) {
+        std::pmr::vector<std::pmr::string> storage(resource());
+        auto params = detail::RequestNameValueListAccess::make(resource());
         storage.reserve(paramCount_ * 2);
         detail::RequestNameValueListAccess::reserve(params, paramCount_);
         for (std::size_t i = 0; i < paramCount_; ++i) {
@@ -595,9 +597,9 @@ const RequestNameValueList& Context::routeParams() const {
                     std::string_view(storage[nameIndex].data(), storage[nameIndex].size()),
                     std::string_view(storage[nameIndex + 1].data(), storage[nameIndex + 1].size())));
         }
-        routeParams_ = &params;
+        cache.emplace(std::move(storage), std::move(params));
     }
-    return *routeParams_;
+    return cache->fields;
 }
 
 std::optional<std::string_view> Context::routeParam(std::string_view name) const {
@@ -610,7 +612,7 @@ std::optional<std::string_view> Context::routeParam(std::string_view name) const
         if (!detail::hasUrlEncoding(value, detail::UrlDecodeMode::kPercent)) {
             return value;
         }
-        auto& decoded = memory_.emplace<std::pmr::string>(resource());
+        auto& decoded = requestStorage().appendDecodedValue();
         assignUrlDecodedOrCopy(decoded, value, detail::UrlDecodeMode::kPercent);
         return storedStringView(decoded);
     }
@@ -643,7 +645,7 @@ bool Context::requestAccepts(std::string_view mediaType) const noexcept {
 
 Task<std::string_view> Context::requestBody() const {
     if (bodyDecoded_) {
-        const auto& decoded = *decodedBody_;
+        const auto& decoded = *requestStorage_->decodedBody;
         co_return std::string_view(decoded.data(), decoded.size());
     }
 

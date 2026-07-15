@@ -246,6 +246,9 @@ HttpServer::~HttpServer() {
         join();
     } catch (...) {
     }
+    // Public worker handles may outlive this server. Leave them a detached
+    // terminal endpoint before ioContext_ and its Asio objects are destroyed.
+    workerDispatcher_->detachContext();
 }
 
 void HttpServer::start() {

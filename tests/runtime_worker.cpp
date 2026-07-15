@@ -271,6 +271,61 @@ bool testExpiredHandle() {
            loop.post([] {}) == ruvia::PostResult::kWorkerStopping;
 }
 
+bool testEscapedWorkerHandleBecomesDetachedEndpoint() {
+    ruvia::WorkerHandle worker;
+    ruvia::WorkerId liveId = 0;
+    {
+        ruvia::EventLoopPool loops({.loopCount = 1, .mailboxCapacity = 1});
+        worker = loops.loop(0).handle();
+        liveId = worker.id();
+        if (!worker.valid() || liveId == 0) {
+            return false;
+        }
+    }
+
+    bool internalDeferRejected = false;
+    try {
+        ruvia::detail::WorkerHandleAccess::defer(worker, [] {});
+    } catch (const std::runtime_error&) {
+        internalDeferRejected = true;
+    }
+    return !worker.valid() && !worker.accepting() && !worker.isCurrent() &&
+           worker.id() == 0 &&
+           worker.post([] {}) == ruvia::PostResult::kWorkerStopping &&
+           internalDeferRejected;
+}
+
+bool testDetachDestroysAbandonedMailboxTasks() {
+    struct DestructionProbe final {
+        explicit DestructionProbe(bool& value) noexcept
+            : destroyed(&value) {}
+        bool* destroyed;
+        ~DestructionProbe() { *destroyed = true; }
+    };
+
+    asio::io_context ioContext;
+    const auto dispatcher =
+        std::make_shared<ruvia::detail::WorkerDispatcher>(ioContext, 2);
+    const auto worker = ruvia::detail::WorkerHandleAccess::make(dispatcher);
+    bool queuedTaskDestroyed = false;
+    if (worker.post([] { throw std::runtime_error("stop mailbox drain"); }) !=
+            ruvia::PostResult::kAccepted ||
+        worker.post(
+            [probe = std::make_unique<DestructionProbe>(queuedTaskDestroyed)] {}) !=
+            ruvia::PostResult::kAccepted) {
+        return false;
+    }
+    try {
+        ioContext.run();
+    } catch (const std::runtime_error&) {
+    }
+    if (queuedTaskDestroyed) {
+        return false;
+    }
+    dispatcher->detachContext();
+    return queuedTaskDestroyed && !worker.valid();
+}
+
 bool testLifecycleTransitionsAreMonotonic() {
     using Lifecycle = ruvia::detail::RuntimeLifecycle;
     Lifecycle lifecycle;
@@ -333,6 +388,8 @@ int main() {
                testDispatchAndAffinity() && testBoundedMailbox() &&
                testExternalEventLoopAttachment() &&
                testFailurePropagation() && testExpiredHandle() &&
+               testEscapedWorkerHandleBecomesDetachedEndpoint() &&
+               testDetachDestroysAbandonedMailboxTasks() &&
                testLifecycleTransitionsAreMonotonic() &&
                testConcurrentStopHasOneInitiator()
                ? 0

@@ -34,9 +34,15 @@ public:
     [[nodiscard]] WorkerTimerRegistration scheduleTimer(
         std::chrono::steady_clock::time_point deadline,
         std::move_only_function<void(WorkerTimerOutcome)> completion);
+    void requestTimerCancellation(
+        const std::shared_ptr<WorkerTimerState>& state) noexcept;
     void cancelTimer(const std::shared_ptr<WorkerTimerState>& state) noexcept;
     void stopTimers() noexcept;
     void close() noexcept;
+    // Called by the execution-context owner after all worker work has joined and
+    // before the io_context is destroyed. Handles remain safe terminal endpoints.
+    void detachContext() noexcept;
+    [[nodiscard]] bool attached() const noexcept;
     [[nodiscard]] bool isCurrent() const noexcept;
     [[nodiscard]] bool accepting() const noexcept;
     [[nodiscard]] WorkerId id() const noexcept;

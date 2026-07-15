@@ -4,6 +4,7 @@
 #include <cstdint>
 #include <exception>
 #include <filesystem>
+#include <memory>
 #include <memory_resource>
 #include <optional>
 #include <span>
@@ -27,12 +28,13 @@
 #include "ruvia/web/Streaming.h"
 #include "ruvia/web/ValidationTypes.h"
 #include "ruvia/web/WebSocket.h"
-#include "ruvia/web/detail/ContextValues.h"
 #include "ruvia/web/detail/ValidatedValues.h"
 #include "ruvia/web/detail/http/ContextCapabilities.h"
 #include "ruvia/web/detail/http/ContextResponseState.h"
+#include "ruvia/web/detail/http/ContextRequestStorage.h"
 #include "ruvia/web/detail/http/ContextSessionState.h"
 #include "ruvia/core/memory/MemoryPool.h"
+#include "ruvia/core/memory/PmrObject.h"
 
 #ifdef RUVIA_ENABLE_REDIS
 #include "ruvia/web/redis/Redis.h"
@@ -56,8 +58,6 @@ class RedisRegistry;
 class RateLimiter;
 struct ContextAccess;
 class ContextServices;
-class RequestQueryValues;
-class RequestQueryCache;
 struct SessionAccess;
 }
 
@@ -107,7 +107,9 @@ public:
         return error_;
     }
 
-    [[nodiscard]] WorkerHandle worker() const noexcept {
+    // Borrowed for this request. Copy the returned handle when it must outlive
+    // the handler; the copy owns a terminal-safe dispatcher endpoint.
+    [[nodiscard]] const WorkerHandle& worker() const noexcept {
         return worker_;
     }
 
@@ -157,38 +159,6 @@ public:
     template <typename T = std::byte>
     [[nodiscard]] std::pmr::polymorphic_allocator<T> allocator() const noexcept {
         return std::pmr::polymorphic_allocator<T>(resource());
-    }
-
-    template <typename T>
-    void set(std::string_view name, T&& value) {
-        values().set(name, std::forward<T>(value));
-    }
-
-    template <typename T, typename ValueT>
-    void set(ContextKey<T> key, ValueT&& value) {
-        values().template setAs<T>(key.name(), std::forward<ValueT>(value));
-    }
-
-    template <typename T>
-    [[nodiscard]] T* get(std::string_view name) noexcept {
-        auto* store = valuesIf();
-        return store == nullptr ? nullptr : store->template getIf<T>(name);
-    }
-
-    template <typename T>
-    [[nodiscard]] const T* get(std::string_view name) const noexcept {
-        const auto* store = valuesIf();
-        return store == nullptr ? nullptr : store->template getIf<T>(name);
-    }
-
-    template <typename T>
-    [[nodiscard]] T* get(ContextKey<T> key) noexcept {
-        return get<T>(key.name());
-    }
-
-    template <typename T>
-    [[nodiscard]] const T* get(ContextKey<T> key) const noexcept {
-        return get<T>(key.name());
     }
 
     // Route handlers construct one final response, so Context accepts only
@@ -309,7 +279,7 @@ private:
     [[nodiscard]] std::optional<std::string_view> requestHeader(std::string_view name) const;
     [[nodiscard]] const RequestNameValueList& routeParams() const;
     [[nodiscard]] std::pmr::string& decodedBody() const;
-    [[nodiscard]] detail::ContextValueStore& values();
+    [[nodiscard]] detail::ContextRequestStorage& requestStorage() const;
     [[nodiscard]] HttpResponse& responseStorage();
     void storeResponse(HttpResponse&& response);
     void storeAssignedResponse(HttpResponse&& response);
@@ -320,17 +290,13 @@ private:
         return responseState_.final() != nullptr;
     }
     [[nodiscard]] HttpResponse takeResponse();
-    [[nodiscard]] detail::ContextValueStore* valuesIf() noexcept {
-        return values_;
-    }
-    [[nodiscard]] const detail::ContextValueStore* valuesIf() const noexcept {
-        return values_;
-    }
 
     RequestMemory& memory_;
     const HttpRequest& request_;
     ConnInfo connInfo_;
-    WorkerHandle worker_;
+    // Context cannot escape request dispatch and therefore borrows the stable
+    // server-owned handle without touching its shared ownership count.
+    const WorkerHandle& worker_;
     std::string_view routePath_;
     const std::string_view* paramNames_{nullptr};
     const std::string_view* paramValues_{nullptr};
@@ -343,17 +309,16 @@ private:
     std::uintptr_t routeRateLimitScope_{0};
     std::size_t maxDecodedBodyBytes_{0};
     detail::ContextRequestBodySource requestBodySource_;
+    using RequestStorageOwner = std::unique_ptr<
+        detail::ContextRequestStorage,
+        detail::PmrObjectDeleter<detail::ContextRequestStorage>>;
+    // One typed arena allocation owns all lazy request caches. It is destroyed
+    // after response/session state borrowers but before RequestMemory releases
+    // their backing arena.
+    mutable RequestStorageOwner requestStorage_;
     detail::ContextResponseOutput responseOutput_;
     detail::ContextResponseState responseState_;
     detail::ContextSessionState sessionState_;
-    // Holds the decoded request body when Content-Encoding was applied, so
-    // body() can return a stable view; mutable because body() is const.
-    mutable std::pmr::string* decodedBody_{nullptr};
-    mutable RequestNameValueList* requestHeaders_{nullptr};
-    mutable detail::RequestQueryCache* requestQueryCache_{nullptr};
-    mutable RequestNameValueList* requestCookies_{nullptr};
-    mutable RequestNameValueList* routeParams_{nullptr};
-    detail::ContextValueStore* values_{nullptr};
     std::exception_ptr error_;
     mutable bool bodyDecoded_ : 1 {false};
 

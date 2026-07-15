@@ -1,6 +1,7 @@
 #include "test_harness.h"
 
 #include "ruvia/core/Task.h"
+#include "ruvia/core/EventLoopPool.h"
 #include "ruvia/core/memory/MemoryPool.h"
 #include "ruvia/http/detail/HttpRequestInternal.h"
 #include "ruvia/web/Context.h"
@@ -11,7 +12,6 @@
 #include "ruvia/web/detail/http/StreamingInternal.h"
 #include "ruvia/web/detail/body/HttpRequestBodyFacade.h"
 #include "ruvia/web/detail/websocket/WebSocketInternal.h"
-#include "ruvia/web/detail/ContextValues.h"
 
 #include <chrono>
 #include <cstdint>
@@ -77,6 +77,9 @@ static_assert(std::is_same_v<
 static_assert(std::is_same_v<
     decltype(std::declval<const ruvia::detail::ContextServices&>().worker()),
     const ruvia::WorkerHandle&>);
+static_assert(std::is_same_v<
+    decltype(std::declval<const ruvia::Context&>().worker()),
+    const ruvia::WorkerHandle&>);
 static_assert(std::is_nothrow_copy_constructible_v<
     ruvia::detail::ContextRequestBodySource>);
 static_assert(std::is_nothrow_copy_assignable_v<
@@ -108,25 +111,6 @@ ruvia::Task<std::optional<std::string_view>> readBody(void*) {
 
 struct OutputSink final {
     std::pmr::string scratch{std::pmr::get_default_resource()};
-};
-
-struct TrackedContextValue final {
-    TrackedContextValue(int& live, int& destroyed, int value) noexcept
-        : live_(&live), destroyed_(&destroyed), value(value) {
-        ++*live_;
-    }
-
-    TrackedContextValue(const TrackedContextValue&) = delete;
-    TrackedContextValue& operator=(const TrackedContextValue&) = delete;
-
-    ~TrackedContextValue() {
-        --*live_;
-        ++*destroyed_;
-    }
-
-    int* live_;
-    int* destroyed_;
-    int value;
 };
 
 ruvia::Task<void> writeOutput(void*, std::string_view) {
@@ -237,33 +221,6 @@ RUVIA_TEST(request_body_capability_binding_constructs_target_and_facade_atomical
         &loader.facade());
 }
 
-RUVIA_TEST(context_value_store_transfers_entry_ownership_without_assignment) {
-    std::pmr::monotonic_buffer_resource resource;
-    int live = 0;
-    int destroyed = 0;
-    {
-        ruvia::detail::ContextValueStore values(&resource);
-        values.setAs<TrackedContextValue>("same", live, destroyed, 1);
-        RUVIA_CHECK_EQ(live, 1);
-
-        auto& replacement = values.setAs<TrackedContextValue>(
-            "same", live, destroyed, 2);
-        RUVIA_CHECK_EQ(replacement.value, 2);
-        RUVIA_CHECK_EQ(live, 1);
-        RUVIA_CHECK_EQ(destroyed, 1);
-
-        for (int i = 0; i < 32; ++i) {
-            const auto name = std::to_string(i);
-            values.setAs<TrackedContextValue>(name, live, destroyed, i);
-        }
-        RUVIA_CHECK_EQ(live, 33);
-        RUVIA_CHECK_EQ(destroyed, 1);
-        RUVIA_CHECK_EQ(values.get<TrackedContextValue>("same").value, 2);
-    }
-    RUVIA_CHECK_EQ(live, 0);
-    RUVIA_CHECK_EQ(destroyed, 34);
-}
-
 RUVIA_TEST(context_request_body_source_has_one_active_alternative) {
     ruvia::detail::RequestBodyLoader loader(
         nullptr, &loadBody, &discardBody);
@@ -294,18 +251,23 @@ RUVIA_TEST(context_request_body_source_has_one_active_alternative) {
     RUVIA_CHECK(lazy.requestBodySource().lazy() != nullptr);
 }
 
-RUVIA_TEST(context_services_carries_worker_as_lifetime_safe_value) {
-    const ruvia::detail::ContextServices services;
-    RUVIA_CHECK(!services.worker().valid());
+RUVIA_TEST(context_services_borrows_address_stable_worker) {
+    ruvia::EventLoopPool loops({.loopCount = 1, .mailboxCapacity = 1});
+    const auto handle = loops.loop(0).handle();
+    const ruvia::detail::ContextServices services(
+        nullptr, nullptr, nullptr, ruvia::kDefaultMaxBufferedBodyBytes, &handle);
+    const auto derived = services.withPlainTransport("127.0.0.1");
+    RUVIA_CHECK(&services.worker() == &handle);
+    RUVIA_CHECK(&derived.worker() == &handle);
 
-    ruvia::WorkerMemory worker;
-    ruvia::RequestMemory memory(worker);
+    ruvia::WorkerMemory workerMemory;
+    ruvia::RequestMemory memory(workerMemory);
     auto request = makeRequest(memory.resource());
     auto context = ruvia::detail::ContextAccess::make(
         memory,
         request,
-        services);
-    RUVIA_CHECK(!context.worker().valid());
+        derived);
+    RUVIA_CHECK(&context.worker() == &handle);
 }
 
 RUVIA_TEST(context_response_output_has_one_active_alternative) {
@@ -421,4 +383,37 @@ RUVIA_TEST(context_request_exposes_matched_route_path) {
 
     const auto facade = context.req();
     RUVIA_CHECK_EQ(facade.routePath(), std::string_view("/items/:id"));
+}
+
+RUVIA_TEST(context_lazy_request_caches_share_one_typed_storage_owner) {
+    ruvia::WorkerMemory worker;
+    ruvia::RequestMemory memory(worker);
+    auto request = makeRequest(memory.resource());
+    ruvia::detail::HttpRequestAccess::setQueryString(
+        request, "name=ruvia&name=web");
+    RUVIA_CHECK(ruvia::detail::HttpRequestAccess::addHeader(
+        request, ruvia::HttpHeaderView("Cookie", "theme=dark")));
+
+    const std::string_view names[]{"id"};
+    const std::string_view values[]{"42"};
+    auto context = ruvia::detail::ContextAccess::make(
+        memory,
+        request,
+        "/items/:id",
+        names,
+        values,
+        1,
+        0);
+    RUVIA_CHECK(
+        ruvia::detail::ContextAccess::requestStorage(context) == nullptr);
+
+    (void)ruvia::detail::requestHeaderFields(context.req());
+    const auto* const owner =
+        ruvia::detail::ContextAccess::requestStorage(context);
+    RUVIA_CHECK(owner != nullptr);
+    (void)ruvia::detail::requestQueryFields(context.req());
+    (void)ruvia::detail::requestCookieFields(context.req());
+    (void)ruvia::detail::requestParamFields(context.req());
+    RUVIA_CHECK(
+        ruvia::detail::ContextAccess::requestStorage(context) == owner);
 }

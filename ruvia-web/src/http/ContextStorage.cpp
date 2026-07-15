@@ -9,17 +9,19 @@ const Env& Context::env() const noexcept {
 }
 
 std::pmr::string& Context::decodedBody() const {
-    if (decodedBody_ == nullptr) {
-        decodedBody_ = &memory_.emplace<std::pmr::string>(resource());
+    auto& storage = requestStorage();
+    if (!storage.decodedBody) {
+        storage.decodedBody.emplace(resource());
     }
-    return *decodedBody_;
+    return *storage.decodedBody;
 }
 
-detail::ContextValueStore& Context::values() {
-    if (values_ == nullptr) {
-        values_ = &memory_.emplace<detail::ContextValueStore>(resource());
+detail::ContextRequestStorage& Context::requestStorage() const {
+    if (!requestStorage_) {
+        requestStorage_ = detail::makePmrObject<detail::ContextRequestStorage>(
+            resource(), resource());
     }
-    return *values_;
+    return *requestStorage_;
 }
 
 HttpResponse& Context::responseStorage() {

@@ -68,8 +68,6 @@ RUVIA_RESPONSE_MODEL(SurfaceJsonResponse,
     RUVIA_FIELD(message, ruvia::String)
 );
 
-inline constexpr ruvia::ContextKey<CurrentUser> kCurrentUser("currentUser");
-
 using DetailRequestBodyMode = ruvia::detail::RequestBodyMode;
 static_assert(std::is_enum_v<DetailRequestBodyMode>);
 
@@ -1119,6 +1117,16 @@ concept HasContextGetIfAlias = requires(T& context) {
 };
 
 template <typename T>
+concept HasArbitraryContextValueSet = requires(T& context) {
+    context.set(std::string_view{}, CurrentUser{});
+};
+
+template <typename T>
+concept HasArbitraryContextValueGet = requires(T& context) {
+    context.template get<CurrentUser>(std::string_view{});
+};
+
+template <typename T>
 concept HasContextVarIfAlias = requires(T& context) {
     context.template varIf<std::string_view>(std::string_view{});
 };
@@ -1130,13 +1138,11 @@ concept HasContextVarFacade = requires(T& context) {
 
 template <typename T>
 concept HasContextVarHasAlias = requires(T& context) {
-    context.var().template has<CurrentUser>(kCurrentUser);
     context.var().template has<CurrentUser>(std::string_view{});
 };
 
 template <typename T>
 concept HasConstContextVarHasAlias = requires(const T& context) {
-    context.var().template has<CurrentUser>(kCurrentUser);
     context.var().template has<CurrentUser>(std::string_view{});
 };
 
@@ -2393,6 +2399,8 @@ static_assert(!std::is_constructible_v<ruvia::WebSocketMessage, ruvia::WebSocket
 static_assert(!HasWebSocketPublicCallbackConstructor<ruvia::WebSocket>);
 static_assert(!HasWebSocketRuntimeCallbacks<ruvia::WebSocket>);
 static_assert(!HasContextGetIfAlias<ruvia::Context>);
+static_assert(!HasArbitraryContextValueSet<ruvia::Context>);
+static_assert(!HasArbitraryContextValueGet<ruvia::Context>);
 static_assert(!HasContextVarIfAlias<ruvia::Context>);
 static_assert(!HasContextVarFacade<ruvia::Context>);
 static_assert(!HasContextVarHasAlias<ruvia::Context>);
@@ -2775,21 +2783,6 @@ static_assert(std::is_same_v<
     decltype(std::declval<ruvia::Context&>().header(std::string_view{}, std::nullopt)),
     void>);
 static_assert(std::is_same_v<
-    decltype(std::declval<ruvia::Context&>().set(kCurrentUser, CurrentUser{})),
-    void>);
-static_assert(std::is_same_v<
-    decltype(std::declval<ruvia::Context&>().set(std::string_view{}, std::string_view{})),
-    void>);
-static_assert(std::is_same_v<
-    decltype(std::declval<ruvia::Context&>().get<CurrentUser>(kCurrentUser)),
-    CurrentUser*>);
-static_assert(std::is_same_v<
-    decltype(std::declval<const ruvia::Context&>().get<CurrentUser>(kCurrentUser)),
-    const CurrentUser*>);
-static_assert(std::is_same_v<
-    decltype(std::declval<ruvia::Context&>().get<std::string_view>(std::string_view{})),
-    std::string_view*>);
-static_assert(std::is_same_v<
     decltype(std::declval<ruvia::Context&>().respond(std::declval<ruvia::HttpResponse&&>())),
     void>);
 static_assert(std::is_same_v<
@@ -2893,8 +2886,6 @@ ruvia::Task<ruvia::HttpResponse> surfaceNotFound(ruvia::Context& c) {
 class SurfaceContextMiddleware final : public ruvia::Middleware<SurfaceContextMiddleware> {
 public:
     ruvia::Task<void> handle(ruvia::Context& c, ruvia::Next& next) {
-        c.set(kCurrentUser, CurrentUser{.id = 7, .name = "surface-user"});
-        c.set("traceId", std::string_view("surface-trace"));
         co_await next();
         if (c.error()) {
             const auto* downstreamResponse = c.response();
@@ -3034,18 +3025,9 @@ private:
     }
 
     ruvia::Task<ruvia::HttpResponse> contextInfo(ruvia::Context& c) {
-        const auto* user = c.get<CurrentUser>(kCurrentUser);
-        const auto* traceId = c.get<std::string_view>("traceId");
-        const auto* missing = c.get<std::uint32_t>("missing");
         std::pmr::string body(c.allocator<char>());
-        body.append("user=");
-        body.append(user == nullptr ? "missing" : user->name);
-        body.append("\nid=");
-        appendUnsigned(body, user == nullptr ? 0 : user->id);
-        body.append("\ntrace=");
-        body.append(traceId == nullptr ? "missing" : *traceId);
-        body.append("\nmissing-var=");
-        body.append(missing == nullptr ? "true" : "false");
+        body.append("session=");
+        body.append(c.session());
         body.append("\nenv-vars=");
         appendUnsigned(body, c.env().size());
         body.push_back('\n');

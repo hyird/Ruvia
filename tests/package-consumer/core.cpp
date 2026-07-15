@@ -27,6 +27,13 @@ concept HasPoolWaiterIndex = requires(const T& value) {
 };
 
 template <typename T>
+concept HasErasedArenaEmplace = requires(T& memory) {
+    memory.template emplace<int>(1);
+};
+
+static_assert(!HasErasedArenaEmplace<ruvia::RequestMemory>);
+
+template <typename T>
 concept AcceptsLoosePoolWaiterTuple = requires(
     bool& ready,
     bool& timedOut,

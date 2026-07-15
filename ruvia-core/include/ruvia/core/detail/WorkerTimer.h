@@ -27,10 +27,10 @@ public:
     [[nodiscard]] bool valid() const noexcept;
 
 private:
-    WorkerTimerRegistration(std::weak_ptr<WorkerDispatcher> dispatcher,
+    WorkerTimerRegistration(std::shared_ptr<WorkerDispatcher> dispatcher,
                             std::shared_ptr<WorkerTimerState> state) noexcept;
 
-    std::weak_ptr<WorkerDispatcher> dispatcher_;
+    std::shared_ptr<WorkerDispatcher> dispatcher_;
     std::shared_ptr<WorkerTimerState> state_;
 
     friend class WorkerDispatcher;

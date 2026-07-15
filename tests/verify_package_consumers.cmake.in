@@ -183,6 +183,21 @@ if(_built_components_csv MATCHES "(^|,)core(,|$)")
         message(FATAL_ERROR
             "installed WorkerSignal restored parallel worker/executor targets")
     endif()
+    if(NOT _installed_worker_handle MATCHES
+           "std::shared_ptr<detail::WorkerDispatcher> dispatcher_" OR
+       _installed_worker_handle MATCHES
+           "std::weak_ptr<detail::WorkerDispatcher> dispatcher_" OR
+       NOT _installed_worker_timer MATCHES
+           "std::shared_ptr<WorkerDispatcher> dispatcher_" OR
+       _installed_worker_timer MATCHES
+           "std::weak_ptr<WorkerDispatcher> dispatcher_" OR
+       NOT _installed_worker_dispatcher MATCHES
+           "void detachContext[(][)] noexcept" OR
+       NOT _installed_worker_dispatcher MATCHES
+           "bool attached[(][)] const noexcept")
+        message(FATAL_ERROR
+            "installed WorkerHandle restored weak-lock dispatch or lacks explicit context detachment")
+    endif()
     if(NOT _installed_worker_wait_awaiter MATCHES
            "struct WorkerWaitAwaitPreparing final" OR
        NOT _installed_worker_wait_awaiter MATCHES
@@ -3345,6 +3360,10 @@ if(_built_components_csv MATCHES "(^|,)web(,|$)")
         "${_install_prefix}/include/ruvia/web/detail/http/ContextRequestModel.inl")
     set(_installed_request_query_cache_path
         "${_install_prefix}/include/ruvia/web/detail/http/RequestQueryValues.h")
+    set(_installed_context_request_storage_path
+        "${_install_prefix}/include/ruvia/web/detail/http/ContextRequestStorage.h")
+    set(_installed_request_memory_path
+        "${_install_prefix}/include/ruvia/core/memory/MemoryPool.h")
     foreach(_context_capability_contract IN ITEMS
             "${_installed_context_capabilities_path}"
             "${_installed_context_services_path}"
@@ -3354,7 +3373,9 @@ if(_built_components_csv MATCHES "(^|,)web(,|$)")
             "${_installed_context_model_path}"
             "${_installed_context_request_header_path}"
             "${_installed_context_request_model_path}"
-            "${_installed_request_query_cache_path}")
+            "${_installed_request_query_cache_path}"
+            "${_installed_context_request_storage_path}"
+            "${_installed_request_memory_path}")
         if(NOT EXISTS "${_context_capability_contract}")
             message(FATAL_ERROR
                 "installed Web package is missing a typed Context capability contract")
@@ -3379,6 +3400,10 @@ if(_built_components_csv MATCHES "(^|,)web(,|$)")
         _installed_context_request_header)
     file(READ "${_installed_request_query_cache_path}"
         _installed_request_query_cache)
+    file(READ "${_installed_context_request_storage_path}"
+        _installed_context_request_storage)
+    file(READ "${_installed_request_memory_path}"
+        _installed_request_memory)
     file(READ "${_installed_validation_target_path}"
         _installed_validation_target)
     if(NOT _installed_context_request_header MATCHES
@@ -3410,13 +3435,23 @@ if(_built_components_csv MATCHES "(^|,)web(,|$)")
     if(NOT _installed_request_query_cache MATCHES
            "class RequestQueryCache final" OR
        NOT _installed_context_header MATCHES
-           "RequestQueryCache[*][ \t]+requestQueryCache_" OR
+           "RequestStorageOwner[ \t]+requestStorage_" OR
+       NOT _installed_context_header MATCHES
+           "PmrObjectDeleter<detail::ContextRequestStorage>" OR
+       NOT _installed_context_request_storage MATCHES
+           "class ContextRequestStorage final" OR
+       NOT _installed_context_request_storage MATCHES
+           "std::optional<RequestQueryCache>[ \t]+query" OR
+       NOT _installed_request_query_cache MATCHES
+           "vector<std::pmr::string>[ \t]+storage_" OR
+       _installed_request_memory MATCHES
+           "CleanupNode|cleanupHead_|void[ \t]*[(][*]destroy|T&[ \t]+emplace[(]" OR
        _installed_context_header MATCHES
            "RequestNameValueList[*][ \t]+requestQuery_" OR
        _installed_context_header MATCHES
            "RequestQueryValues[*][ \t]+requestQueries_")
         message(FATAL_ERROR
-            "installed Context restored split query-cache ownership")
+            "installed request arena restored erased cleanup or split query-cache ownership")
     endif()
     if(NOT _installed_context_header MATCHES
            "ruvia/web/ContextRequest[.]h" OR
@@ -3494,12 +3529,15 @@ if(_built_components_csv MATCHES "(^|,)web(,|$)")
            "ContextRequestBodySource requestBodySource_" OR
        NOT _installed_context_services MATCHES
            "ContextResponseOutput responseOutput_" OR
-       NOT _installed_context_services MATCHES "WorkerHandle worker_" OR
-       _installed_context_services MATCHES "constexpr ContextServices" OR
+       NOT _installed_context_services MATCHES
+           "const WorkerHandle[*] worker_" OR
        _installed_context_services MATCHES
-           "WorkerHandle[*][ \\n\\t]+worker_" OR
+           "(^|[^*])WorkerHandle worker_" OR
+       _installed_context_services MATCHES "constexpr ContextServices" OR
+       NOT _installed_context_header MATCHES
+           "const WorkerHandle& worker_" OR
        _installed_context_header MATCHES
-           "WorkerHandle[*][ \\n\\t]+worker_" OR
+           "std::shared_ptr<[^>]*WorkerHandle|std::weak_ptr<[^>]*WorkerHandle" OR
        NOT _installed_context_services MATCHES "withLazyRequestBody" OR
        NOT _installed_context_services MATCHES
            "withStreamingRequestBody" OR

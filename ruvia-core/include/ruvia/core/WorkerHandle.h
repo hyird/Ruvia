@@ -41,10 +41,12 @@ public:
     }
 
 private:
-    explicit WorkerHandle(std::weak_ptr<detail::WorkerDispatcher> dispatcher) noexcept;
+    explicit WorkerHandle(std::shared_ptr<detail::WorkerDispatcher> dispatcher) noexcept;
     [[nodiscard]] PostResult postTask(std::move_only_function<void()> task) const;
 
-    std::weak_ptr<detail::WorkerDispatcher> dispatcher_;
+    // A handle owns the stable dispatcher endpoint, not the worker's io_context.
+    // The worker detaches that endpoint before destroying its execution context.
+    std::shared_ptr<detail::WorkerDispatcher> dispatcher_;
     friend struct detail::WorkerHandleAccess;
 };
 

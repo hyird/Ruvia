@@ -7,39 +7,29 @@
 
 namespace ruvia {
 
-WorkerHandle::WorkerHandle(std::weak_ptr<detail::WorkerDispatcher> dispatcher) noexcept
+WorkerHandle::WorkerHandle(std::shared_ptr<detail::WorkerDispatcher> dispatcher) noexcept
     : dispatcher_(std::move(dispatcher)) {}
 
 bool WorkerHandle::valid() const noexcept {
-    return !dispatcher_.expired();
+    return dispatcher_ && dispatcher_->attached();
 }
 
 bool WorkerHandle::accepting() const noexcept {
-    if (const auto dispatcher = dispatcher_.lock()) {
-        return dispatcher->accepting();
-    }
-    return false;
+    return dispatcher_ && dispatcher_->accepting();
 }
 
 bool WorkerHandle::isCurrent() const noexcept {
-    if (const auto dispatcher = dispatcher_.lock()) {
-        return dispatcher->isCurrent();
-    }
-    return false;
+    return dispatcher_ && dispatcher_->isCurrent();
 }
 
 WorkerId WorkerHandle::id() const noexcept {
-    if (const auto dispatcher = dispatcher_.lock()) {
-        return dispatcher->id();
-    }
-    return 0;
+    return dispatcher_ ? dispatcher_->id() : 0;
 }
 
 PostResult WorkerHandle::postTask(std::move_only_function<void()> task) const {
-    if (const auto dispatcher = dispatcher_.lock()) {
-        return dispatcher->post(std::move(task));
-    }
-    return PostResult::kWorkerStopping;
+    return dispatcher_
+        ? dispatcher_->post(std::move(task))
+        : PostResult::kWorkerStopping;
 }
 
 WorkerHandle detail::WorkerHandleAccess::make(
@@ -50,7 +40,7 @@ WorkerHandle detail::WorkerHandleAccess::make(
 void detail::WorkerHandleAccess::defer(
     const WorkerHandle& worker,
     std::move_only_function<void()> task) {
-    const auto dispatcher = worker.dispatcher_.lock();
+    const auto& dispatcher = worker.dispatcher_;
     if (!dispatcher) {
         throw std::runtime_error("worker stopped before internal continuation was scheduled");
     }
@@ -60,7 +50,7 @@ void detail::WorkerHandleAccess::defer(
 void detail::WorkerHandleAccess::registerShutdownListener(
     const WorkerHandle& worker,
     const std::shared_ptr<WorkerShutdownListener>& listener) {
-    const auto dispatcher = worker.dispatcher_.lock();
+    const auto& dispatcher = worker.dispatcher_;
     if (!dispatcher) {
         throw std::runtime_error("cannot register state on a stopped worker");
     }
@@ -71,7 +61,7 @@ detail::WorkerTimerRegistration detail::WorkerHandleAccess::scheduleTimer(
     const WorkerHandle& worker,
     std::chrono::steady_clock::time_point deadline,
     std::move_only_function<void(WorkerTimerOutcome)> completion) {
-    const auto dispatcher = worker.dispatcher_.lock();
+    const auto& dispatcher = worker.dispatcher_;
     if (!dispatcher) {
         throw std::runtime_error("cannot schedule a timer on a stopped worker");
     }

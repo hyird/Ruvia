@@ -70,9 +70,11 @@ private:
 class RequestQueryCache final {
 public:
     RequestQueryCache(
+        std::pmr::vector<std::pmr::string>&& storage,
         RequestNameValueList&& fields,
         RequestQueryValues&& values) noexcept
-        : fields_(std::move(fields)),
+        : storage_(std::move(storage)),
+          fields_(std::move(fields)),
           values_(std::move(values)) {}
 
     [[nodiscard]] const RequestNameValueList& fields() const & noexcept {
@@ -86,6 +88,10 @@ public:
     const RequestQueryValues& values() const && = delete;
 
 private:
+    // The public fields and multivalue groups borrow these decoded strings.
+    // Keep storage first so reverse member destruction drops borrowers before
+    // their backing bytes.
+    std::pmr::vector<std::pmr::string> storage_;
     RequestNameValueList fields_;
     RequestQueryValues values_;
 };

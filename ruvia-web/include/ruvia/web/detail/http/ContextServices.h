@@ -28,12 +28,12 @@ public:
         RateLimiter* rateLimiter = nullptr,
         std::size_t maxDecodedBodyBytes =
             kDefaultMaxBufferedBodyBytes,
-        WorkerHandle worker = {}) noexcept
+        const WorkerHandle* worker = nullptr) noexcept
         : db_(db),
           redis_(redis),
           rateLimiter_(rateLimiter),
           maxDecodedBodyBytes_(maxDecodedBodyBytes),
-          worker_(std::move(worker)),
+          worker_(worker),
           connInfo_(ConnInfo::plain({})) {}
 
     [[nodiscard]] DbRegistry* db() const noexcept {
@@ -53,7 +53,11 @@ public:
     }
 
     [[nodiscard]] const WorkerHandle& worker() const noexcept {
-        return worker_;
+        if (worker_ != nullptr) {
+            return *worker_;
+        }
+        static const WorkerHandle invalidWorker;
+        return invalidWorker;
     }
 
     [[nodiscard]] HttpErrorHandler errorHandler() const noexcept {
@@ -148,7 +152,9 @@ private:
     RedisRegistry* redis_{nullptr};
     RateLimiter* rateLimiter_{nullptr};
     std::size_t maxDecodedBodyBytes_{kDefaultMaxBufferedBodyBytes};
-    WorkerHandle worker_;
+    // Request/session services borrow the address-stable server-owned handle.
+    // Every derived ContextServices value stays inside that server's dispatch.
+    const WorkerHandle* worker_{nullptr};
     HttpErrorHandler errorHandler_{nullptr};
     HttpNotFoundHandler notFoundHandler_{nullptr};
 

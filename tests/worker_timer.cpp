@@ -9,8 +9,11 @@
 #include <asio/io_context.hpp>
 
 #include <chrono>
+#include <barrier>
+#include <future>
 #include <memory>
 #include <stdexcept>
+#include <thread>
 #include <utility>
 
 namespace {
@@ -80,6 +83,41 @@ bool discriminatedWaitStateWorks() {
     return recovered.value() != nullptr && recovered.value()->value() == 7;
 }
 
+bool detachedTimerCancellationRaceWorks() {
+    for (int attempt = 0; attempt < 32; ++attempt) {
+        asio::io_context ioContext;
+        const auto dispatcher =
+            std::make_shared<ruvia::detail::WorkerDispatcher>(ioContext, 2);
+        const auto worker = ruvia::detail::WorkerHandleAccess::make(dispatcher);
+        ruvia::detail::WorkerTimerRegistration registration;
+        std::promise<void> scheduled;
+        auto ready = scheduled.get_future();
+        asio::post(ioContext, [&] {
+            registration = ruvia::detail::WorkerHandleAccess::scheduleTimer(
+                worker,
+                std::chrono::steady_clock::now() + std::chrono::hours(1),
+                [](ruvia::detail::WorkerTimerOutcome) {});
+            scheduled.set_value();
+        });
+        std::thread workerThread([&] { ioContext.run(); });
+        ready.get();
+        ioContext.stop();
+        workerThread.join();
+
+        std::barrier gate(3);
+        std::jthread cancelling([&] {
+            gate.arrive_and_wait();
+            registration.cancel();
+        });
+        std::jthread detaching([&] {
+            gate.arrive_and_wait();
+            dispatcher->detachContext();
+        });
+        gate.arrive_and_wait();
+    }
+    return true;
+}
+
 ruvia::Task<void> markAfterSleep(ruvia::WorkerHandle worker, bool& completed) {
     co_await ruvia::sleepFor(worker, std::chrono::hours(1));
     completed = true;
@@ -123,7 +161,8 @@ ruvia::Task<void> exercise(
 }
 
 int main() {
-    if (!discriminatedWaitStateWorks()) {
+    if (!discriminatedWaitStateWorks() ||
+        !detachedTimerCancellationRaceWorks()) {
         return 1;
     }
     asio::io_context ioContext;

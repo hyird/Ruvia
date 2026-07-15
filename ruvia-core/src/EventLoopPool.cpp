@@ -142,6 +142,12 @@ struct EventLoopState final {
         }
     }
 
+    ~EventLoopState() {
+        // Dispatcher handles may escape EventLoop/EventLoopPool. Retire their
+        // endpoint while the owned or attached io_context is still alive.
+        dispatcher->detachContext();
+    }
+
     void stop() noexcept {
         if (stopping.exchange(true, std::memory_order_acq_rel)) {
             return;

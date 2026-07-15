@@ -190,6 +190,8 @@ file(READ "${RUVIA_ROOT}/ruvia-core/src/EventLoopPool.cpp"
     core_runtime_implementation)
 file(READ "${RUVIA_ROOT}/tests/runtime_worker.cpp"
     core_runtime_test_contract)
+file(READ "${RUVIA_ROOT}/tests/worker_timer.cpp"
+    core_worker_timer_test_contract)
 file(READ "${RUVIA_ROOT}/tests/worker_dispatch_failure.cpp"
     core_worker_dispatch_failure_test_contract)
 file(READ "${RUVIA_ROOT}/tests/operation_deadline.cpp"
@@ -216,6 +218,39 @@ if(NOT core_runtime_lifecycle_contract MATCHES
        "testConcurrentStopHasOneInitiator")
     boundary_error("Runtime lifecycle can regress after terminal stop"
         "start, stop initiation, and stop completion must use the monotonic lifecycle contract, with concurrent stop ownership and terminal-state regression covered by tests")
+endif()
+if(NOT core_worker_handle_contract MATCHES
+       "std::shared_ptr<detail::WorkerDispatcher> dispatcher_" OR
+   core_worker_handle_contract MATCHES
+       "std::weak_ptr<detail::WorkerDispatcher> dispatcher_" OR
+   NOT core_worker_timer_contract MATCHES
+       "std::shared_ptr<WorkerDispatcher> dispatcher_" OR
+   core_worker_timer_contract MATCHES
+       "std::weak_ptr<WorkerDispatcher> dispatcher_" OR
+   NOT core_worker_dispatcher_contract MATCHES
+       "void detachContext[(][)] noexcept" OR
+   NOT core_worker_dispatcher_contract MATCHES
+       "bool attached[(][)] const noexcept" OR
+   NOT core_worker_dispatcher_implementation MATCHES
+       "if [(]!impl_->contextAttached[)]" OR
+   NOT core_worker_dispatcher_implementation MATCHES
+       "abandonedSlots[.]swap[(]impl_->slots[)]" OR
+   NOT core_worker_dispatcher_implementation MATCHES
+       "abandonedTimers[.]swap[(]impl_->timers[)]" OR
+   NOT core_worker_dispatcher_contract MATCHES
+       "requestTimerCancellation" OR
+   NOT core_worker_dispatcher_implementation MATCHES
+       "requestTimerCancellation" OR
+   NOT core_worker_timer_test_contract MATCHES
+       "detachedTimerCancellationRaceWorks" OR
+   NOT core_runtime_implementation MATCHES
+       "dispatcher->detachContext[(][)]" OR
+   NOT core_runtime_test_contract MATCHES
+       "testEscapedWorkerHandleBecomesDetachedEndpoint" OR
+   NOT core_runtime_test_contract MATCHES
+       "testDetachDestroysAbandonedMailboxTasks")
+    boundary_error("WorkerHandle regained weak-lock dispatch or an unretired context endpoint"
+        "worker handles must directly own a stable dispatcher endpoint, while every context owner detaches it before context destruction and escaped handles are tested as safe invalid endpoints")
 endif()
 if(NOT core_worker_signal_contract MATCHES
        "using Target = std::variant<WorkerHandle, asio::any_io_executor>" OR
@@ -1110,6 +1145,10 @@ set(WEB_REQUEST_FIELDS_ACCESS
     "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/http/RequestFieldsAccess.h")
 set(WEB_REQUEST_QUERY_VALUES
     "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/http/RequestQueryValues.h")
+set(WEB_CONTEXT_REQUEST_STORAGE
+    "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/http/ContextRequestStorage.h")
+set(CORE_REQUEST_MEMORY
+    "${RUVIA_ROOT}/ruvia-core/include/ruvia/core/memory/MemoryPool.h")
 set(HTTP_REQUEST_MODEL
     "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/HttpRequest.h")
 set(HTTP1_REQUEST_PARSER
@@ -1278,13 +1317,15 @@ else()
 endif()
 if(NOT EXISTS "${WEB_REQUEST_FIELDS}" OR
    NOT EXISTS "${WEB_REQUEST_FIELDS_ACCESS}" OR
-   NOT EXISTS "${WEB_REQUEST_QUERY_VALUES}")
+   NOT EXISTS "${WEB_REQUEST_QUERY_VALUES}" OR
+   NOT EXISTS "${WEB_CONTEXT_REQUEST_STORAGE}")
     boundary_error("Web request-field ownership is incomplete"
         "RequestFields.h, RequestFieldsAccess.h and RequestQueryValues.h are required")
 else()
     file(READ "${WEB_REQUEST_FIELDS}" web_request_fields)
     file(READ "${WEB_REQUEST_FIELDS_ACCESS}" web_request_fields_access)
     file(READ "${WEB_REQUEST_QUERY_VALUES}" web_request_query_values)
+    file(READ "${WEB_CONTEXT_REQUEST_STORAGE}" web_context_request_storage)
     foreach(request_field_type IN ITEMS
             RequestNameValueView
             RequestNameValueList)
@@ -1328,14 +1369,44 @@ else()
 endif()
 file(READ "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/Context.h"
     web_context_query_cache)
+file(READ "${RUVIA_ROOT}/ruvia-web/src/http/ContextStorage.cpp"
+    web_context_storage_impl)
+file(READ "${RUVIA_ROOT}/ruvia-web/src/http/ContextRequest.cpp"
+    web_context_request_impl)
+file(READ "${CORE_REQUEST_MEMORY}" core_request_memory)
+file(READ "${RUVIA_ROOT}/tests/unit_context_capabilities.cpp"
+    context_capability_tests)
+file(READ "${RUVIA_ROOT}/tests/package-consumer/core.cpp"
+    core_package_contract)
 if(NOT web_context_query_cache MATCHES
-       "RequestQueryCache[*][ \t]+requestQueryCache_" OR
+       "RequestStorageOwner[ \t]+requestStorage_" OR
+   NOT web_context_request_storage MATCHES
+       "class ContextRequestStorage final" OR
+   NOT web_context_request_storage MATCHES
+       "std::optional<RequestQueryCache>[ \t]+query" OR
+   NOT web_context_request_storage MATCHES
+       "std::optional<RequestFieldCache>[ \t]+headers" OR
+   NOT web_context_query_cache MATCHES
+       "PmrObjectDeleter<detail::ContextRequestStorage>" OR
+   NOT web_context_storage_impl MATCHES
+       "makePmrObject<detail::ContextRequestStorage>" OR
+   NOT web_request_query_values MATCHES
+       "vector<std::pmr::string>[ \t]+storage_" OR
+   core_request_memory MATCHES
+       "CleanupNode|cleanupHead_|void[ \t]*[(][*]destroy|T&[ \t]+emplace[(]" OR
+   web_context_request_impl MATCHES "memory_[.]emplace" OR
+   web_context_query_cache MATCHES
+       "(RequestQueryCache|RequestNameValueList|pmr::string)[*][ \t]+(requestQueryCache_|requestHeaders_|requestCookies_|routeParams_|decodedBody_)" OR
    web_context_query_cache MATCHES
        "RequestNameValueList[*][ \t]+requestQuery_" OR
    web_context_query_cache MATCHES
-       "RequestQueryValues[*][ \t]+requestQueries_")
-    boundary_error("Context query materialization regained parallel cache pointers"
-        "flattened and multivalue query views must be committed as one RequestQueryCache")
+       "RequestQueryValues[*][ \t]+requestQueries_" OR
+   NOT context_capability_tests MATCHES
+       "context_lazy_request_caches_share_one_typed_storage_owner" OR
+   NOT core_package_contract MATCHES
+       "!HasErasedArenaEmplace<ruvia::RequestMemory>")
+    boundary_error("request arena regained erased cleanup or split lazy-cache ownership"
+        "RequestMemory must remain a pure arena; Context must allocate one typed ContextRequestStorage owner whose alternatives destroy in C++ member order without erased callbacks")
 endif()
 if(EXISTS "${HTTP_METHOD_CONTRACT}" AND EXISTS "${HTTP_REQUEST_MODEL}")
     file(READ "${HTTP_METHOD_CONTRACT}" http_method_contract)
@@ -1832,10 +1903,15 @@ if(EXISTS "${WEB_CONTEXT_CAPABILITIES}" AND
            "ContextRequestBodySource requestBodySource_" OR
        NOT web_context_services MATCHES
            "ContextResponseOutput responseOutput_" OR
-       NOT web_context_services MATCHES "WorkerHandle worker_" OR
+       NOT web_context_services MATCHES
+           "const WorkerHandle[*] worker_" OR
+       web_context_services MATCHES
+           "(^|[^*])WorkerHandle worker_" OR
        web_context_services MATCHES "constexpr ContextServices" OR
-       web_context_services MATCHES "WorkerHandle[*][ \\n\\t]+worker_" OR
-       web_context_header MATCHES "WorkerHandle[*][ \\n\\t]+worker_" OR
+       NOT web_context_header MATCHES
+           "const WorkerHandle& worker_" OR
+       web_context_header MATCHES
+           "std::shared_ptr<[^>]*WorkerHandle|std::weak_ptr<[^>]*WorkerHandle" OR
        NOT web_context_services MATCHES "withLazyRequestBody" OR
        NOT web_context_services MATCHES "withStreamingRequestBody" OR
        NOT web_context_header MATCHES
@@ -1846,8 +1922,8 @@ if(EXISTS "${WEB_CONTEXT_CAPABILITIES}" AND
            "services[.]requestBodySource[(][)]" OR
        NOT web_context_internal MATCHES
            "services[.]responseOutput[(][)]")
-        boundary_error("Context restored invalid capability ownership"
-            "ContextServices and Context must carry discriminated protocol capabilities and the lifetime-safe, non-literal WorkerHandle value without constexpr construction, manual pointer clearing, or borrowed handle storage")
+        boundary_error("Context restored owning worker-handle copies or invalid capability ownership"
+            "request-local ContextServices and Context must borrow the address-stable server WorkerHandle while carrying discriminated protocol capabilities, so derived service values never contend on shared ownership")
     endif()
     if(NOT web_context_request_source MATCHES
            "requestBodySource_[.]lazy[(][)]" OR
@@ -4948,23 +5024,13 @@ check_files_no_match("ContextRequest must not expose the borrowed protocol objec
     "${RULE_STALE_CONTEXT_REQUEST_RAW_ESCAPE}"
     "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/ContextRequest.h"
     "${RUVIA_ROOT}/ruvia-web/src/http/ContextRequestFacade.cpp")
-check_files_no_match("Context values must use the direct set/get API"
-    "${RULE_STALE_CONTEXT_VAR_FACADE}"
-    "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/Context.h")
-file(READ "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/ContextValues.h"
-    context_value_store_contract)
-file(READ "${RUVIA_ROOT}/tests/unit_context_capabilities.cpp"
-    context_value_store_test)
-if(NOT context_value_store_contract MATCHES
-       "Entry&[ \t]+operator=[(]Entry&&[)][ \t]*=[ \t]*delete" OR
-   NOT context_value_store_contract MATCHES
-       "std::exchange[(]other[.]value, nullptr[)]" OR
-   NOT context_value_store_contract MATCHES
-       "std::construct_at[(]entry, std::move[(]next[)][)]" OR
-   NOT context_value_store_test MATCHES
-       "context_value_store_transfers_entry_ownership_without_assignment")
-    boundary_error("request-local context values regained split or assignable erased ownership"
-        "Entry move construction must transfer the erased pointer, and same-name replacement must reconstruct the slot after destroying its prior value")
+check_files_no_match("Context must expose explicit typed capabilities, not an arbitrary value bag"
+    "ContextValueStore|ContextKey|detail/ContextValues[.]h|valuesIf[(]|void[ \t]+set[(]std::string_view|[*][ \t]+get[(]std::string_view"
+    "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/Context.h"
+    "${RUVIA_ROOT}/ruvia-web/src/http/ContextStorage.cpp")
+if(EXISTS "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/ContextValues.h")
+    boundary_error("Context regained an arbitrary request-local value bag"
+        "request state must use an explicit typed Context capability with direct storage and lifecycle")
 endif()
 check_files_no_match("Context layout mutation must not return the assigned value"
     "${RULE_STALE_CONTEXT_LAYOUT_SETTER_RESULT}"
