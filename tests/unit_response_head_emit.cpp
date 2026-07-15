@@ -628,6 +628,40 @@ RUVIA_TEST(response_head_close_delimited_stream_rejects_declared_framing) {
         std::string::npos);
 }
 
+RUVIA_TEST(response_head_validates_explicit_content_length_metadata) {
+    HttpResponse malformed(std::pmr::new_delete_resource());
+    malformed.status(304);
+    malformed.header("Content-Length", "invalid");
+    RUVIA_CHECK(throwsInvalid([&] {
+        (void)emitBufferedHead(malformed);
+    }));
+
+    HttpResponse conflicting(std::pmr::new_delete_resource());
+    conflicting.status(304);
+    conflicting.header("Content-Length", "7, 8");
+    RUVIA_CHECK(throwsInvalid([&] {
+        (void)emitBufferedHead(conflicting);
+    }));
+
+    HttpResponse equivalent(std::pmr::new_delete_resource());
+    equivalent.status(304);
+    equivalent.header("Content-Length", "0007, 7");
+    const auto canonical = emitBufferedHead(equivalent);
+    RUVIA_CHECK_EQ(
+        countOccurrences(canonical, "Content-Length: "),
+        std::size_t{1});
+    RUVIA_CHECK(
+        canonical.find("Content-Length: 7\r\n") !=
+        std::string::npos);
+
+    HttpResponse headMetadata(std::pmr::new_delete_resource());
+    headMetadata.header("Content-Length", "bad");
+    RUVIA_CHECK(throwsInvalid([&] {
+        (void)emitCloseDelimitedStreamHead(
+            headMetadata, HttpKnownMethod::kHead);
+    }));
+}
+
 RUVIA_TEST(response_head_bodyless_status_omits_auto_content_length) {
     HttpResponse response(std::pmr::new_delete_resource());
     response.status(204);
