@@ -156,6 +156,8 @@ file(READ "${RUVIA_ROOT}/ruvia-core/include/ruvia/core/Channel.h"
     core_channel_contract)
 file(READ "${RUVIA_ROOT}/ruvia-core/include/ruvia/core/OneShot.h"
     core_one_shot_contract)
+file(READ "${RUVIA_ROOT}/ruvia-core/include/ruvia/core/detail/OperationDeadline.h"
+    core_operation_deadline_contract)
 file(READ "${RUVIA_ROOT}/ruvia-core/include/ruvia/core/Task.h"
     core_task_contract)
 file(READ "${RUVIA_ROOT}/ruvia-core/include/ruvia/core/TaskScope.h"
@@ -186,6 +188,8 @@ file(READ "${RUVIA_ROOT}/ruvia-core/src/Runtime.cpp"
     core_runtime_implementation)
 file(READ "${RUVIA_ROOT}/tests/runtime_worker.cpp"
     core_runtime_test_contract)
+file(READ "${RUVIA_ROOT}/tests/operation_deadline.cpp"
+    core_operation_deadline_test_contract)
 file(READ "${RUVIA_ROOT}/tests/package-consumer/core.cpp"
     core_linear_receiver_package_contract)
 if(NOT core_runtime_lifecycle_contract MATCHES
@@ -219,6 +223,25 @@ if(NOT core_worker_signal_contract MATCHES
        "testWorkerSignalHasOneDispatchTarget")
     boundary_error("WorkerSignal regained parallel dispatch targets"
         "each signal must commit exactly one worker or executor target at construction; invalid workers and executor fallback must remain covered")
+endif()
+if(NOT core_operation_deadline_contract MATCHES
+       "struct Inactive final" OR
+   NOT core_operation_deadline_contract MATCHES
+       "struct Active final" OR
+   NOT core_operation_deadline_contract MATCHES
+       "struct Expired final" OR
+   NOT core_operation_deadline_contract MATCHES
+       "using State = std::variant" OR
+   NOT core_operation_deadline_contract MATCHES
+       "requires std::is_enum_v<Kind>" OR
+   core_operation_deadline_contract MATCHES
+       "bool active_|bool expired_|optional<Kind> kind_" OR
+   NOT core_operation_deadline_test_contract MATCHES
+       "operationDeadlineTransitionsAreExclusive" OR
+   NOT core_linear_receiver_package_contract MATCHES
+       "HasRvalueOperationDeadlineKind")
+    boundary_error("operation deadlines regained parallel lifecycle state"
+        "inactive, armed, and expired deadlines must remain exclusive while retaining the cancellation kind through expiry")
 endif()
 if(NOT core_channel_contract MATCHES
        "struct ChannelOpen final" OR
@@ -8924,6 +8947,47 @@ if(EXISTS "${WEB_DB_TIMEOUT_MODEL}" AND
         boundary_error("integration timeout policy is insufficiently pinned"
             "unit tests must reject configured zero and installed headers must expose optional durations")
     endif()
+endif()
+
+set(WEB_DB_DEADLINE_STATE
+    "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/db/DbInternal.h")
+set(WEB_REDIS_DEADLINE_STATE
+    "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/redis/RedisInternal.h")
+set(WEB_DB_DEADLINE_LIFECYCLE
+    "${RUVIA_ROOT}/ruvia-web/src/db/DbPoolLifecycle.cpp")
+set(WEB_PG_DEADLINE_LIFECYCLE
+    "${RUVIA_ROOT}/ruvia-web/src/db/PgPoolLifecycle.cpp")
+set(WEB_REDIS_DEADLINE_LIFECYCLE
+    "${RUVIA_ROOT}/ruvia-web/src/redis/RedisPoolLifecycle.cpp")
+foreach(deadline_contract IN ITEMS
+        "${WEB_DB_DEADLINE_STATE}"
+        "${WEB_REDIS_DEADLINE_STATE}"
+        "${WEB_DB_DEADLINE_LIFECYCLE}"
+        "${WEB_PG_DEADLINE_LIFECYCLE}"
+        "${WEB_REDIS_DEADLINE_LIFECYCLE}")
+    if(NOT EXISTS "${deadline_contract}")
+        boundary_error("integration deadline contract is incomplete"
+            "${deadline_contract} is required")
+    endif()
+endforeach()
+file(READ "${WEB_DB_DEADLINE_STATE}" web_db_deadline_state)
+file(READ "${WEB_REDIS_DEADLINE_STATE}" web_redis_deadline_state)
+file(READ "${WEB_DB_DEADLINE_LIFECYCLE}" web_db_deadline_lifecycle)
+file(READ "${WEB_PG_DEADLINE_LIFECYCLE}" web_pg_deadline_lifecycle)
+file(READ "${WEB_REDIS_DEADLINE_LIFECYCLE}" web_redis_deadline_lifecycle)
+if(NOT web_db_deadline_state MATCHES
+       "OperationDeadline<DeadlineKind> deadline" OR
+   NOT web_redis_deadline_state MATCHES
+       "OperationDeadline<DeadlineKind> deadline" OR
+   web_db_deadline_state MATCHES
+       "deadlineActive|bool timedOut|deadlineKind|DeadlineKind[^;]*kNone" OR
+   web_redis_deadline_state MATCHES
+       "deadlineActive|bool timedOut|deadlineKind|DeadlineKind[^;]*kNone" OR
+   NOT web_db_deadline_lifecycle MATCHES "deadline[.]expire[(]now[)]" OR
+   NOT web_pg_deadline_lifecycle MATCHES "deadline[.]expire[(]now[)]" OR
+   NOT web_redis_deadline_lifecycle MATCHES "deadline[.]expire[(]now[)]")
+    boundary_error("integration runtimes restored split deadline state"
+        "MariaDB, PostgreSQL, and Redis must share core's inactive/active/expired deadline lifecycle and retain cancellation kind only inside that state")
 endif()
 
 set(WEB_REDIS_OPTIONAL_LIMIT_MODEL

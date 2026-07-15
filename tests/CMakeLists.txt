@@ -228,6 +228,10 @@ if(RUVIA_BUILD_CORE)
     target_link_libraries(ruvia_runtime_worker PRIVATE ruvia::core)
     add_test(NAME ruvia_runtime_worker COMMAND ruvia_runtime_worker)
 
+    add_executable(ruvia_operation_deadline operation_deadline.cpp)
+    target_link_libraries(ruvia_operation_deadline PRIVATE ruvia::core)
+    add_test(NAME ruvia_operation_deadline COMMAND ruvia_operation_deadline)
+
     add_executable(ruvia_task_scope task_scope.cpp)
     target_link_libraries(ruvia_task_scope PRIVATE ruvia::core)
     add_test(NAME ruvia_task_scope COMMAND ruvia_task_scope)

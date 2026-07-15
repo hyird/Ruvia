@@ -46,6 +46,7 @@ public:
 #include <variant>
 #include <vector>
 
+#include "ruvia/core/detail/OperationDeadline.h"
 #include "ruvia/core/memory/PmrObject.h"
 #include "ruvia/web/detail/db/DbPoolDeadline.h"
 #include "ruvia/web/detail/db/DbPoolScheduler.h"
@@ -106,13 +107,10 @@ public:
 
         st_mysql* connection{nullptr};
         std::unique_ptr<DbSlotSocket, SlotSocketDeleter> waitSocket;
-        std::chrono::steady_clock::time_point deadline{};
         std::coroutine_handle<> deadlineContinuation{};
         bool connected{false};
-        bool deadlineActive{false};
-        bool timedOut{false};
-        enum class DeadlineKind : std::uint8_t { kNone, kSocket, kSleep };
-        DeadlineKind deadlineKind{DeadlineKind::kNone};
+        enum class DeadlineKind : std::uint8_t { kSocket, kSleep };
+        OperationDeadline<DeadlineKind> deadline;
     };
 
 public:
@@ -194,10 +192,9 @@ private:
 
         pg_conn* connection{nullptr};
         std::unique_ptr<DbSlotSocket, SlotSocketDeleter> waitSocket;
-        std::chrono::steady_clock::time_point deadline{};
         bool connected{false};
-        bool deadlineActive{false};
-        bool timedOut{false};
+        enum class DeadlineKind : std::uint8_t { kSocket };
+        OperationDeadline<DeadlineKind> deadline;
     };
 
 public:

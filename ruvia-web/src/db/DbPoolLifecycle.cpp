@@ -59,15 +59,15 @@ void detail::MariaDbPool::scanDeadlines(std::chrono::steady_clock::time_point no
     }
 
     for (auto& slot : slots_) {
-        if (!slot.deadlineActive || slot.deadline > now) {
+        const auto kind = slot.deadline.expire(now);
+        if (!kind.has_value()) {
             continue;
         }
-        slot.timedOut = true;
-        if (slot.deadlineKind == ConnectionSlot::DeadlineKind::kSocket) {
+        if (*kind == ConnectionSlot::DeadlineKind::kSocket) {
             if (slot.waitSocket != nullptr) {
                 slot.waitSocket->cancel();
             }
-        } else if (slot.deadlineKind == ConnectionSlot::DeadlineKind::kSleep) {
+        } else if (*kind == ConnectionSlot::DeadlineKind::kSleep) {
             auto handle = slot.deadlineContinuation;
             slot.deadlineContinuation = {};
             if (handle) {
@@ -86,9 +86,13 @@ bool detail::MariaDbPool::hasAnyTimeout() const noexcept {
 }
 
 void detail::MariaDbPool::closeSlot(ConnectionSlot& slot) noexcept {
-    if (slot.deadlineKind == ConnectionSlot::DeadlineKind::kSocket && slot.waitSocket != nullptr) {
+    const auto* kind = slot.deadline.kind();
+    if (kind != nullptr &&
+        *kind == ConnectionSlot::DeadlineKind::kSocket &&
+        slot.waitSocket != nullptr) {
         slot.waitSocket->cancel();
-    } else if (slot.deadlineKind == ConnectionSlot::DeadlineKind::kSleep) {
+    } else if (kind != nullptr &&
+               *kind == ConnectionSlot::DeadlineKind::kSleep) {
         auto handle = slot.deadlineContinuation;
         slot.deadlineContinuation = {};
         if (handle) {
@@ -112,19 +116,17 @@ void detail::MariaDbPool::setSlotDeadline(
     ConnectionSlot& slot,
     std::chrono::milliseconds timeout,
     ConnectionSlot::DeadlineKind kind) noexcept {
-    slot.deadlineKind = kind;
-    slot.timedOut = false;
     if (timeout.count() <= 0) {
-        slot.deadlineActive = false;
+        slot.deadline.reset();
         return;
     }
-    slot.deadline = std::chrono::steady_clock::now() + timeout;
-    slot.deadlineActive = true;
+    slot.deadline.arm(
+        std::chrono::steady_clock::now() + timeout,
+        kind);
 }
 
 void detail::MariaDbPool::clearSlotDeadline(ConnectionSlot& slot) noexcept {
-    slot.deadlineActive = false;
-    slot.deadlineKind = ConnectionSlot::DeadlineKind::kNone;
+    (void)slot.deadline.clear();
     slot.deadlineContinuation = {};
 }
 

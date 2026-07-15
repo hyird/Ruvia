@@ -12,6 +12,7 @@
 #include <ruvia/core/WorkerWaitResult.h>
 #include <ruvia/core/detail/AsioAwait.h>
 #include <ruvia/core/detail/ConnectionScanner.h>
+#include <ruvia/core/detail/OperationDeadline.h>
 #include <ruvia/core/detail/PoolWaiterQueue.h>
 #include <ruvia/core/detail/WorkerTimer.h>
 #include <ruvia/core/detail/WorkerWaitAwaiter.h>
@@ -112,6 +113,27 @@ concept HasAnyRvaluePoolWaiterAccessor =
     requires(T&& result) { std::move(result).acquired(); } ||
     requires(T&& result) { std::move(result).timedOut(); } ||
     requires(T&& result) { std::move(result).closed(); };
+
+enum class PackageDeadlineKind {
+    kRead
+};
+
+template <typename T>
+concept HasRvalueOperationDeadlineKind =
+    requires(T&& deadline) { std::move(deadline).kind(); };
+
+using PackageOperationDeadline =
+    ruvia::detail::OperationDeadline<PackageDeadlineKind>;
+
+static_assert(std::default_initializable<PackageOperationDeadline>);
+static_assert(std::same_as<
+    decltype(std::declval<const PackageOperationDeadline&>().kind()),
+    const PackageDeadlineKind*>);
+static_assert(std::same_as<
+    decltype(std::declval<PackageOperationDeadline&>().expire(
+        std::chrono::steady_clock::time_point{})),
+    std::optional<PackageDeadlineKind>>);
+static_assert(!HasRvalueOperationDeadlineKind<PackageOperationDeadline>);
 
 static_assert(!HasPublicWorkerWaitFields<ruvia::WorkerWaitResult<int>>);
 static_assert(!HasLooseTaskCompletionFields<

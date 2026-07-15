@@ -24,7 +24,7 @@ void RedisPool::close(Connection& connection) noexcept {
     connection.socket.cancel(ignored);
     connection.socket.close(ignored);
     connection.connected = false;
-    clearDeadline(connection);
+    (void)clearDeadline(connection);
     connection.reader.reset();
     connection.replyBytes = 0;
 }
@@ -53,19 +53,17 @@ void RedisPool::setDeadline(
     Connection& connection,
     std::optional<std::chrono::milliseconds> timeout,
     Connection::DeadlineKind kind) noexcept {
-    connection.deadlineKind = kind;
-    connection.timedOut = false;
     if (!timeout.has_value()) {
-        connection.deadlineActive = false;
+        connection.deadline.reset();
         return;
     }
-    connection.deadline = std::chrono::steady_clock::now() + *timeout;
-    connection.deadlineActive = true;
+    connection.deadline.arm(
+        std::chrono::steady_clock::now() + *timeout,
+        kind);
 }
 
-void RedisPool::clearDeadline(Connection& connection) noexcept {
-    connection.deadlineActive = false;
-    connection.deadlineKind = Connection::DeadlineKind::kNone;
+bool RedisPool::clearDeadline(Connection& connection) noexcept {
+    return connection.deadline.clear();
 }
 
 Task<std::error_code> RedisPool::asyncSocketWrite(
@@ -80,9 +78,7 @@ Task<std::error_code> RedisPool::asyncSocketWrite(
                 std::move(handler));
         });
     const auto ec = writeCompletion.errorCode();
-    const auto timedOut = connection.timedOut;
-    clearDeadline(connection);
-    if (timedOut) {
+    if (clearDeadline(connection)) {
         co_return asio::error::timed_out;
     }
     co_return ec;
@@ -97,9 +93,7 @@ Task<AsioCompletion<std::size_t>> RedisPool::asyncSocketReadSome(
         [&connection, buffer](auto handler) mutable {
             connection.socket.async_read_some(asio::buffer(buffer.data(), buffer.size()), std::move(handler));
     });
-    const auto timedOut = connection.timedOut;
-    clearDeadline(connection);
-    if (timedOut) {
+    if (clearDeadline(connection)) {
         co_return AsioCompletion<std::size_t>::completed(
             asio::error::timed_out, 0);
     }
@@ -179,9 +173,7 @@ Task<void> RedisPool::connect(Connection& connection) {
         });
     const auto resolveEc = resolveCompletion.errorCode();
     auto endpoints = std::move(resolveCompletion).takeResult();
-    const auto resolveTimedOut = connection.timedOut;
-    clearDeadline(connection);
-    if (resolveTimedOut) {
+    if (clearDeadline(connection)) {
         throw RedisError(RedisError::Code::kTimeout, "redis resolve timed out");
     }
     if (resolveEc) {
@@ -195,9 +187,7 @@ Task<void> RedisPool::connect(Connection& connection) {
                 connection.socket, endpoints, std::move(handler));
         });
     const auto connectEc = connectCompletion.errorCode();
-    const auto connectTimedOut = connection.timedOut;
-    clearDeadline(connection);
-    if (connectTimedOut) {
+    if (clearDeadline(connection)) {
         throw RedisError(RedisError::Code::kTimeout, "redis connect timed out");
     }
     if (connectEc) {

@@ -62,10 +62,9 @@ void PostgreSqlPool::scanDeadlines(
         scheduler_.scanDeadlines(now);
     }
     for (auto& slot : slots_) {
-        if (!slot.deadlineActive || slot.deadline > now) {
+        if (!slot.deadline.expire(now).has_value()) {
             continue;
         }
-        slot.timedOut = true;
         if (slot.waitSocket != nullptr) {
             slot.waitSocket->cancel();
         }
@@ -105,18 +104,17 @@ void PostgreSqlPool::closeSlot(ConnectionSlot& slot) noexcept {
 void PostgreSqlPool::setSlotDeadline(
     ConnectionSlot& slot,
     std::optional<std::chrono::milliseconds> timeout) noexcept {
-    slot.timedOut = false;
     if (!timeout.has_value() || timeout->count() <= 0) {
-        slot.deadlineActive = false;
+        slot.deadline.reset();
         return;
     }
-    slot.deadline = std::chrono::steady_clock::now() + *timeout;
-    slot.deadlineActive = true;
+    slot.deadline.arm(
+        std::chrono::steady_clock::now() + *timeout,
+        ConnectionSlot::DeadlineKind::kSocket);
 }
 
 void PostgreSqlPool::clearSlotDeadline(ConnectionSlot& slot) noexcept {
-    slot.deadlineActive = false;
-    slot.timedOut = false;
+    (void)slot.deadline.clear();
 }
 
 PostgreSqlPool::SlotGuard::SlotGuard(

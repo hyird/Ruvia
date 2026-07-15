@@ -35,6 +35,30 @@ if(_built_components_csv MATCHES "(^|,)core(,|$)" AND
 endif()
 
 if(_built_components_csv MATCHES "(^|,)core(,|$)")
+    set(_installed_operation_deadline_path
+        "${_install_prefix}/include/ruvia/core/detail/OperationDeadline.h")
+    if(NOT EXISTS "${_installed_operation_deadline_path}")
+        message(FATAL_ERROR
+            "installed core package is missing OperationDeadline")
+    endif()
+    file(READ "${_installed_operation_deadline_path}"
+        _installed_operation_deadline)
+    if(NOT _installed_operation_deadline MATCHES
+           "struct Inactive final" OR
+       NOT _installed_operation_deadline MATCHES
+           "struct Active final" OR
+       NOT _installed_operation_deadline MATCHES
+           "struct Expired final" OR
+       NOT _installed_operation_deadline MATCHES
+           "using State = std::variant" OR
+       NOT _installed_operation_deadline MATCHES
+           "requires std::is_enum_v<Kind>" OR
+       _installed_operation_deadline MATCHES
+           "bool active_|bool expired_|optional<Kind> kind_")
+        message(FATAL_ERROR
+            "installed OperationDeadline restored parallel lifecycle state")
+    endif()
+
     set(_installed_task_scope_path
         "${_install_prefix}/include/ruvia/core/TaskScope.h")
     if(NOT EXISTS "${_installed_task_scope_path}")
@@ -1977,6 +2001,29 @@ endforeach()
 set(_installed_http2_web_runtime_path
     "${_install_prefix}/include/ruvia/web/detail/http2/Http2SansIoStreamRuntime.h")
 if(_built_components_csv MATCHES "(^|,)web(,|$)")
+    set(_installed_db_internal_path
+        "${_install_prefix}/include/ruvia/web/detail/db/DbInternal.h")
+    set(_installed_redis_internal_path
+        "${_install_prefix}/include/ruvia/web/detail/redis/RedisInternal.h")
+    if(NOT EXISTS "${_installed_db_internal_path}" OR
+       NOT EXISTS "${_installed_redis_internal_path}")
+        message(FATAL_ERROR
+            "installed Web package is missing integration runtime contracts")
+    endif()
+    file(READ "${_installed_db_internal_path}" _installed_db_internal)
+    file(READ "${_installed_redis_internal_path}" _installed_redis_internal)
+    if(NOT _installed_db_internal MATCHES
+           "OperationDeadline<DeadlineKind> deadline" OR
+       NOT _installed_redis_internal MATCHES
+           "OperationDeadline<DeadlineKind> deadline" OR
+       _installed_db_internal MATCHES
+           "deadlineActive|bool timedOut|deadlineKind|DeadlineKind[^;]*kNone" OR
+       _installed_redis_internal MATCHES
+           "deadlineActive|bool timedOut|deadlineKind|DeadlineKind[^;]*kNone")
+        message(FATAL_ERROR
+            "installed integration runtimes restored split deadline state")
+    endif()
+
     set(_installed_http_server_path
         "${_install_prefix}/include/ruvia/web/detail/server/HttpServer.h")
     set(_installed_http_server_worker_completion_path

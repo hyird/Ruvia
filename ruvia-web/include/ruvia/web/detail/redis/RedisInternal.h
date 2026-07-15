@@ -50,8 +50,9 @@ public:
 #include <string_view>
 #include <vector>
 
-#include "ruvia/core/memory/PmrObject.h"
+#include "ruvia/core/detail/OperationDeadline.h"
 #include "ruvia/core/detail/PoolWaiterQueue.h"
+#include "ruvia/core/memory/PmrObject.h"
 
 struct redisReader;
 
@@ -118,17 +119,13 @@ private:
         std::array<char, kRedisReadBufferBytes> readBuffer;
         std::unique_ptr<redisReader, RedisReaderDeleter> reader;
         std::size_t replyBytes{0};
-        std::chrono::steady_clock::time_point deadline{};
         bool busy{false};
         bool connected{false};
-        bool deadlineActive{false};
-        bool timedOut{false};
         enum class DeadlineKind : std::uint8_t {
-            kNone,
             kResolve,
             kSocket
         };
-        DeadlineKind deadlineKind{DeadlineKind::kNone};
+        OperationDeadline<DeadlineKind> deadline;
     };
 
     class ConnectionGuard final {
@@ -156,7 +153,7 @@ private:
         Connection& connection,
         std::optional<std::chrono::milliseconds> timeout,
         Connection::DeadlineKind kind) noexcept;
-    void clearDeadline(Connection& connection) noexcept;
+    [[nodiscard]] bool clearDeadline(Connection& connection) noexcept;
     Task<void> connect(Connection& connection);
     Task<void> authenticate(Connection& connection);
     Task<RedisValue> readReply(

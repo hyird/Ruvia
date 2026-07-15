@@ -69,14 +69,14 @@ void RedisPool::scanDeadlines(std::chrono::steady_clock::time_point now) noexcep
     }
 
     for (auto& connection : connections_) {
-        if (!connection.deadlineActive || connection.deadline > now) {
+        const auto kind = connection.deadline.expire(now);
+        if (!kind.has_value()) {
             continue;
         }
-        connection.timedOut = true;
         std::error_code ignored;
-        if (connection.deadlineKind == Connection::DeadlineKind::kResolve) {
+        if (*kind == Connection::DeadlineKind::kResolve) {
             connection.resolver.cancel();
-        } else if (connection.deadlineKind == Connection::DeadlineKind::kSocket) {
+        } else if (*kind == Connection::DeadlineKind::kSocket) {
             connection.socket.cancel(ignored);
         }
     }
