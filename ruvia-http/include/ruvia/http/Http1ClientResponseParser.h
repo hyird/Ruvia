@@ -266,6 +266,7 @@ enum class Http1ClientResponseParseError : std::uint8_t {
     kTransferEncodingInHttp10,
     kContentLengthAndTransferEncoding,
     kInvalidProtocolSwitch,
+    kTooManyInformationalResponses,
     kExchangeComplete,
     kExchangeFailed,
 };
@@ -447,6 +448,7 @@ private:
     std::pmr::memory_resource* resource_;
     Phase phase_{Phase::kAwaitResponse};
     detail::Http1ClientRequestContentPhase requestContentPhase_;
+    std::uint8_t informationalResponseCount_{0};
 };
 
 }  // namespace ruvia

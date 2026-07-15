@@ -16,6 +16,7 @@
 #include "ruvia/http/HttpLimits.h"
 #include "ruvia/http/detail/client/HttpClientAccess.h"
 #include "ruvia/http/detail/client/HttpClientContentEncoding.h"
+#include "ruvia/http/detail/client/HttpClientResponseLimits.h"
 
 namespace {
 
@@ -556,6 +557,49 @@ RUVIA_TEST(http_client_informational_response_awaits_final_response) {
         "HTTP/1.1 103 Early Hints\r\nContent-Length: invalid\r\n"
         "Transfer-Encoding: custom-coding");
     RUVIA_CHECK(ignoredFraming.plan().informational() != nullptr);
+}
+
+RUVIA_TEST(http_client_limits_informational_responses_per_exchange) {
+    ruvia::HttpClientRequest request;
+    request.method = "GET";
+    std::array<char, 512> requestHead;
+    const auto prepared = ruvia::Http1ClientRequestWriter().prepare(
+        ruvia::HttpOrigin::https("example.test"),
+        request,
+        requestHead);
+    RUVIA_CHECK(prepared.prepared() != nullptr);
+    if (prepared.prepared() == nullptr) {
+        return;
+    }
+
+    Http1ClientResponseParser parser(*prepared.prepared());
+    constexpr std::string_view earlyHints =
+        "HTTP/1.1 103 Early Hints\r\n\r\n";
+    for (std::size_t i = 0;
+         i < ruvia::detail::kMaxHttpClientInterimResponses;
+         ++i) {
+        const auto interim = parser.parse(earlyHints);
+        RUVIA_CHECK(interim.parsed() != nullptr);
+        if (interim.parsed() != nullptr) {
+            RUVIA_CHECK(interim.parsed()->plan().informational() != nullptr);
+        }
+    }
+
+    const auto excessive = parser.parse(earlyHints);
+    RUVIA_CHECK(excessive.failure() != nullptr);
+    if (excessive.failure() != nullptr) {
+        RUVIA_CHECK(
+            excessive.failure()->error() ==
+            Http1ClientResponseParseError::kTooManyInformationalResponses);
+    }
+    const auto afterFailure = parser.parse(
+        "HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n");
+    RUVIA_CHECK(afterFailure.failure() != nullptr);
+    if (afterFailure.failure() != nullptr) {
+        RUVIA_CHECK(
+            afterFailure.failure()->error() ==
+            Http1ClientResponseParseError::kExchangeFailed);
+    }
 }
 
 RUVIA_TEST(http_client_expect_continue_is_one_stateful_exchange_contract) {

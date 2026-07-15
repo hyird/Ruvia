@@ -9236,6 +9236,10 @@ elseif(EXISTS "${HTTP1_CLIENT_RESPONSE_PARSER}")
        NOT http1_client_response_parser_header MATCHES "enum class Phase" OR
        NOT http1_client_response_parser_header MATCHES "kExchangeComplete" OR
        NOT http1_client_response_parser_header MATCHES "kExchangeFailed" OR
+       NOT http1_client_response_parser_header MATCHES
+           "kTooManyInformationalResponses" OR
+       NOT http1_client_response_parser_header MATCHES
+           "informationalResponseCount_" OR
        NOT http1_client_response_parser_header MATCHES "class Http1ClientResponseNeedMore final" OR
        NOT http1_client_response_parser_header MATCHES "class Http1ParsedClientResponseHead final" OR
        NOT http1_client_response_parser_header MATCHES "class Http1ClientResponseParseFailure final" OR
@@ -9281,6 +9285,10 @@ elseif(EXISTS "${HTTP1_CLIENT_RESPONSE_PARSER}")
            "kContinueReceivedContentComplete" OR
        NOT http1_client_response_parser MATCHES "requestContentSignal" OR
        NOT http1_client_response_parser MATCHES "receiveContinue" OR
+       NOT http1_client_response_parser MATCHES
+           "kMaxHttpClientInterimResponses" OR
+       NOT http1_client_response_parser MATCHES
+           "kTooManyInformationalResponses" OR
        NOT http1_client_response_parser MATCHES
            "kContentCompleteAwaitingContinue" OR
        http1_client_response_parser MATCHES

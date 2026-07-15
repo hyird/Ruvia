@@ -11,6 +11,7 @@
 #include "ruvia/http/detail/HttpResponseContentSemantics.h"
 #include "ruvia/http/detail/HttpTransferEncoding.h"
 #include "ruvia/http/detail/client/HttpClientAccess.h"
+#include "ruvia/http/detail/client/HttpClientResponseLimits.h"
 #include "ruvia/http/detail/parser/HttpHeaderBlockParser.h"
 #include "ruvia/http/detail/parser/HttpParserSyntax.h"
 #include "ruvia/http/HttpHeader.h"
@@ -534,6 +535,8 @@ std::string_view http1ClientResponseParseErrorMessage(
             return "response has both Content-Length and Transfer-Encoding";
         case Http1ClientResponseParseError::kInvalidProtocolSwitch:
             return "invalid Switching Protocols response";
+        case Http1ClientResponseParseError::kTooManyInformationalResponses:
+            return "too many informational responses";
         case Http1ClientResponseParseError::kExchangeComplete:
             return "HTTP/1 client exchange is already complete";
         case Http1ClientResponseParseError::kExchangeFailed:
@@ -587,6 +590,13 @@ Http1ClientResponseParseResult Http1ClientResponseParser::parse(
         return fail(*planningError);
     }
     auto plan = std::get<Http1ClientResponsePlan>(std::move(planning));
+    const bool informational = plan.informational() != nullptr;
+    if (informational &&
+        informationalResponseCount_ >=
+            detail::kMaxHttpClientInterimResponses) {
+        return fail(
+            Http1ClientResponseParseError::kTooManyInformationalResponses);
+    }
 
     // No owning response head is observable until the entire head and framing
     // plan have validated. Protocol failure therefore has no partially mutated
@@ -605,6 +615,9 @@ Http1ClientResponseParseResult Http1ClientResponseParser::parse(
 
     auto result = detail::Http1ClientResponseParseResultAccess::parsed(
         std::move(head), std::move(plan), headerBytes);
+    if (informational) {
+        ++informationalResponseCount_;
+    }
     if (parsed.statusCode == 100) {
         requestContentPhase_ = receiveContinue(requestContentPhase_);
     }

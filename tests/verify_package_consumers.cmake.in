@@ -1237,6 +1237,10 @@ if(NOT _installed_http1_client_response_parser_content MATCHES
    NOT _installed_http1_client_response_parser_content MATCHES
        "kExchangeFailed" OR
    NOT _installed_http1_client_response_parser_content MATCHES
+       "kTooManyInformationalResponses" OR
+   NOT _installed_http1_client_response_parser_content MATCHES
+       "informationalResponseCount_" OR
+   NOT _installed_http1_client_response_parser_content MATCHES
        "consumedBytes" OR
    NOT _installed_http1_client_response_parser_content MATCHES
        "const HttpClientResponseHead& head[(][)] const [&] noexcept" OR
