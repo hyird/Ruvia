@@ -4,7 +4,11 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <memory_resource>
+#include <span>
+#include <stdexcept>
 #include <string_view>
+#include <utility>
 
 #include "ruvia/http/detail/ResponseHeaderUtils.h"
 
@@ -90,8 +94,28 @@ void applyCorsHeaders(const HttpRequest& request, HttpResponse& response, const 
             response,
             kResponseHeaderAccessControlExposeHeaders,
             "Access-Control-Expose-Headers",
-            cors.exposeHeaders);
+            cors.exposeHeaders.value());
     }
 }
 
 }  // namespace ruvia::detail
+
+namespace ruvia {
+
+CorsHeaderNames CorsHeaderNames::of(
+    std::span<const std::string_view> names) {
+    std::pmr::string value;
+    for (const auto name : names) {
+        if (!isValidHttpHeaderName(name)) {
+            throw std::invalid_argument(
+                "CORS header names must be valid HTTP field names");
+        }
+        if (!value.empty()) {
+            value.append(", ");
+        }
+        value.append(name);
+    }
+    return CorsHeaderNames(std::move(value));
+}
+
+}  // namespace ruvia

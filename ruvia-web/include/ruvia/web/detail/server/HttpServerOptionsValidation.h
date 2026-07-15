@@ -5,7 +5,6 @@
 
 #include "ruvia/http/detail/AsciiCase.h"
 #include "ruvia/web/detail/app/ConfigValidation.h"
-#include "ruvia/web/detail/http/HttpCorsConfigValidation.h"
 #include "ruvia/web/detail/server/HttpServerOptions.h"
 
 namespace ruvia::detail {
@@ -86,9 +85,6 @@ inline void validateHttpServerOptions(const HttpServerOptions& options) {
         ensureNonZeroPort(
             redirect->httpsPort,
             "HTTP-to-HTTPS redirect requires a fixed HTTPS listen port");
-    }
-    if (options.cors.has_value()) {
-        validateCorsConfig(*options.cors);
     }
 }
 

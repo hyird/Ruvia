@@ -1196,12 +1196,30 @@ static_assert(std::same_as<
     std::optional<ruvia::CorsMaxAge>>);
 static_assert(!std::default_initializable<ruvia::CorsOriginPolicy>);
 static_assert(!std::default_initializable<ruvia::CorsRequestHeadersPolicy>);
+
+template <typename Headers>
+concept SupportsRawCorsRequestHeaders = requires(Headers headers) {
+    ruvia::CorsRequestHeadersPolicy::fixed(headers);
+};
+
+template <typename Headers>
+concept SupportsRawCorsExposeHeaders = requires(
+    ruvia::CorsConfig config,
+    Headers headers) {
+    config.exposeHeaders = headers;
+};
+
+static_assert(std::same_as<
+    decltype(ruvia::CorsConfig{}.exposeHeaders),
+    ruvia::CorsHeaderNames>);
 static_assert(std::same_as<
     decltype(ruvia::CorsOriginPolicy::credentialed("https://app.example")),
     ruvia::CorsOriginPolicy>);
 static_assert(std::same_as<
-    decltype(ruvia::CorsRequestHeadersPolicy::fixed("authorization")),
+    decltype(ruvia::CorsRequestHeadersPolicy::fixed({"authorization"})),
     ruvia::CorsRequestHeadersPolicy>);
+static_assert(!SupportsRawCorsRequestHeaders<std::string_view>);
+static_assert(!SupportsRawCorsExposeHeaders<std::string_view>);
 static_assert(!std::default_initializable<ruvia::StaticFileTypePolicy>);
 static_assert(std::same_as<
     decltype(ruvia::StaticFileTypePolicy::only({"html"})),

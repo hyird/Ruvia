@@ -9,23 +9,9 @@
 #include <type_traits>
 
 #include "ruvia/web/detail/http/HttpCors.h"
-#include "ruvia/web/detail/http/HttpCorsConfigValidation.h"
 #include "ruvia/http/detail/http1/Http1ServerRequestParser.h"
 #include "ruvia/web/App.h"
 #include "ruvia/http/HttpResponse.h"
-
-namespace {
-
-bool corsConfigThrows(const ruvia::CorsConfig& config) {
-    try {
-        ruvia::detail::validateCorsConfig(config);
-        return false;
-    } catch (const std::invalid_argument&) {
-        return true;
-    }
-}
-
-}  // namespace
 
 RUVIA_TEST(cors_origin_policy_has_explicit_legal_alternatives) {
     static_assert(!std::default_initializable<ruvia::CorsOriginPolicy>);
@@ -66,30 +52,49 @@ RUVIA_TEST(cors_exact_origin_rejects_invalid_value_at_construction) {
     RUVIA_CHECK(injectionThrew);
 }
 
-RUVIA_TEST(cors_header_values_reject_crlf_injection) {
-    ruvia::CorsConfig cors;
-    cors.exposeHeaders = "X-Bar\r\nX: y";
-    RUVIA_CHECK(corsConfigThrows(cors));
+RUVIA_TEST(cors_header_names_validate_each_field_name_at_construction) {
+    bool injectionThrew = false;
+    bool invalidNameThrew = false;
+    try {
+        (void)ruvia::CorsHeaderNames::of({"X-Bar\r\nX: y"});
+    } catch (const std::invalid_argument&) {
+        injectionThrew = true;
+    }
+    try {
+        (void)ruvia::CorsHeaderNames::of({"X Bad"});
+    } catch (const std::invalid_argument&) {
+        invalidNameThrew = true;
+    }
 
-    cors.exposeHeaders = "X-Exposed";
-    RUVIA_CHECK(!corsConfigThrows(cors));
+    const auto valid = ruvia::CorsHeaderNames::of({"X-Exposed", "X-Other"});
+    RUVIA_CHECK(injectionThrew);
+    RUVIA_CHECK(invalidNameThrew);
+    RUVIA_CHECK_EQ(valid.value(), std::string_view("X-Exposed, X-Other"));
 }
 
 RUVIA_TEST(cors_fixed_request_headers_reject_invalid_value_at_construction) {
     bool emptyThrew = false;
     bool injectionThrew = false;
+    bool invalidNameThrew = false;
     try {
-        (void)ruvia::CorsRequestHeadersPolicy::fixed("");
+        (void)ruvia::CorsRequestHeadersPolicy::fixed(
+            std::initializer_list<std::string_view>{});
     } catch (const std::invalid_argument&) {
         emptyThrew = true;
     }
     try {
-        (void)ruvia::CorsRequestHeadersPolicy::fixed("X-Foo\r\nX: y");
+        (void)ruvia::CorsRequestHeadersPolicy::fixed({"X-Foo\r\nX: y"});
     } catch (const std::invalid_argument&) {
         injectionThrew = true;
     }
+    try {
+        (void)ruvia::CorsRequestHeadersPolicy::fixed({"X Bad"});
+    } catch (const std::invalid_argument&) {
+        invalidNameThrew = true;
+    }
     RUVIA_CHECK(emptyThrew);
     RUVIA_CHECK(injectionThrew);
+    RUVIA_CHECK(invalidNameThrew);
 }
 
 RUVIA_TEST(cors_max_age_rejects_negative_value_at_construction) {
@@ -230,7 +235,8 @@ RUVIA_TEST(cors_preflight_prefers_configured_allow_headers) {
 
     auto cors = corsOptions("https://app.example", false);
     cors.requestHeaders =
-        ruvia::CorsRequestHeadersPolicy::fixed("Authorization, X-Configured");
+        ruvia::CorsRequestHeadersPolicy::fixed(
+            {"Authorization", "X-Configured"});
     applyCorsHeaders(result.request, response, cors);
 
     // The configured allow-list wins over reflecting the requested headers.
@@ -250,7 +256,8 @@ RUVIA_TEST(cors_runtime_exposes_configured_headers_on_simple_response) {
             "GET / HTTP/1.1\r\nHost: x\r\nOrigin: https://app.example\r\n\r\n");
         HttpResponse response(std::pmr::new_delete_resource());
         auto cors = corsOptions("https://app.example", false);
-        cors.exposeHeaders.assign("X-Total-Count, X-Request-Id");
+        cors.exposeHeaders =
+            ruvia::CorsHeaderNames::of({"X-Total-Count", "X-Request-Id"});
         applyCorsHeaders(result.request, response, cors);
         RUVIA_CHECK_EQ(response.header("Access-Control-Expose-Headers").value_or(""),
                        std::string_view("X-Total-Count, X-Request-Id"));
@@ -264,7 +271,7 @@ RUVIA_TEST(cors_runtime_exposes_configured_headers_on_simple_response) {
             "Access-Control-Request-Method: POST\r\n\r\n");
         HttpResponse response(std::pmr::new_delete_resource());
         auto cors = corsOptions("https://app.example", false);
-        cors.exposeHeaders.assign("X-Total-Count");
+        cors.exposeHeaders = ruvia::CorsHeaderNames::of({"X-Total-Count"});
         applyCorsHeaders(result.request, response, cors);
         RUVIA_CHECK(!response.header("Access-Control-Expose-Headers").has_value());
     }

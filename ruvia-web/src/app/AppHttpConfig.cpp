@@ -2,7 +2,6 @@
 #include "ruvia/web/detail/app/AppConfigMutation.h"
 #include "ruvia/web/detail/app/ConfigValidation.h"
 #include "ruvia/core/detail/NativePath.h"
-#include "ruvia/web/detail/http/HttpCorsConfigValidation.h"
 
 #include <stdexcept>
 #include <type_traits>
@@ -149,9 +148,6 @@ App& App::setCors(std::optional<CorsConfig> config) {
         *state_,
         "cannot change CORS config while app is running",
         [&config](detail::AppState& state) {
-            if (config.has_value()) {
-                detail::validateCorsConfig(*config);
-            }
             state.options.cors = std::move(config);
         });
 }

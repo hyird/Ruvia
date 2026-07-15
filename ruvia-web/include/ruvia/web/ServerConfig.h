@@ -5,9 +5,11 @@
 #include <cstdint>
 #include <concepts>
 #include <filesystem>
+#include <initializer_list>
 #include <memory>
 #include <memory_resource>
 #include <optional>
+#include <span>
 #include <stdexcept>
 #include <string_view>
 #include <type_traits>
@@ -251,6 +253,32 @@ private:
     std::pmr::string value_;
 };
 
+class CorsHeaderNames final {
+public:
+    CorsHeaderNames() noexcept = default;
+
+    [[nodiscard]] static CorsHeaderNames of(
+        std::span<const std::string_view> names);
+    [[nodiscard]] static CorsHeaderNames of(
+        std::initializer_list<std::string_view> names) {
+        return of(std::span<const std::string_view>(names.begin(), names.size()));
+    }
+
+    [[nodiscard]] std::string_view value() const noexcept {
+        return value_;
+    }
+
+    [[nodiscard]] bool empty() const noexcept {
+        return value_.empty();
+    }
+
+private:
+    explicit CorsHeaderNames(std::pmr::string value) noexcept
+        : value_(std::move(value)) {}
+
+    std::pmr::string value_;
+};
+
 class CorsRequestHeadersPolicy final {
 public:
     enum class Kind : std::uint8_t {
@@ -259,34 +287,44 @@ public:
     };
 
     [[nodiscard]] static CorsRequestHeadersPolicy reflect() {
-        return CorsRequestHeadersPolicy(Kind::kReflect, {});
+        return CorsRequestHeadersPolicy(Kind::kReflect, CorsHeaderNames{});
     }
 
-    [[nodiscard]] static CorsRequestHeadersPolicy fixed(std::string_view headers) {
-        return CorsRequestHeadersPolicy(Kind::kFixed, headers);
+    [[nodiscard]] static CorsRequestHeadersPolicy fixed(
+        CorsHeaderNames headers) {
+        if (headers.empty()) {
+            throw std::invalid_argument(
+                "CORS fixed request headers must not be empty");
+        }
+        return CorsRequestHeadersPolicy(Kind::kFixed, std::move(headers));
+    }
+
+    [[nodiscard]] static CorsRequestHeadersPolicy fixed(
+        std::span<const std::string_view> headers) {
+        return fixed(CorsHeaderNames::of(headers));
+    }
+
+    [[nodiscard]] static CorsRequestHeadersPolicy fixed(
+        std::initializer_list<std::string_view> headers) {
+        return fixed(std::span<const std::string_view>(
+            headers.begin(),
+            headers.size()));
     }
 
     [[nodiscard]] constexpr Kind kind() const noexcept {
         return kind_;
     }
 
-    [[nodiscard]] constexpr std::string_view headers() const noexcept {
-        return value_;
+    [[nodiscard]] std::string_view headers() const noexcept {
+        return headers_.value();
     }
 
 private:
-    CorsRequestHeadersPolicy(Kind kind, std::string_view value) : kind_(kind), value_(value) {
-        if (kind == Kind::kFixed && value.empty()) {
-            throw std::invalid_argument("CORS fixed request headers must not be empty");
-        }
-        if (kind == Kind::kFixed && !isValidHttpHeaderValue(value)) {
-            throw std::invalid_argument(
-                "CORS fixed request headers must be a valid header value");
-        }
-    }
+    CorsRequestHeadersPolicy(Kind kind, CorsHeaderNames headers) noexcept
+        : kind_(kind), headers_(std::move(headers)) {}
 
     Kind kind_;
-    std::pmr::string value_;
+    CorsHeaderNames headers_;
 };
 
 class CorsMaxAge final {
@@ -308,7 +346,7 @@ private:
 struct CorsConfig final {
     CorsOriginPolicy origin{CorsOriginPolicy::any()};
     CorsRequestHeadersPolicy requestHeaders{CorsRequestHeadersPolicy::reflect()};
-    std::pmr::string exposeHeaders;
+    CorsHeaderNames exposeHeaders;
     std::optional<CorsMaxAge> maxAge;
 };
 

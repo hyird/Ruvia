@@ -61,7 +61,8 @@ int main() {
         auto& config = cors.emplace();
         config.origin = ruvia::CorsOriginPolicy::any();
         config.requestHeaders =
-            ruvia::CorsRequestHeadersPolicy::fixed("content-type, authorization");
+            ruvia::CorsRequestHeadersPolicy::fixed(
+                {"content-type", "authorization"});
         config.maxAge.emplace(std::chrono::seconds(600));
     }
 
