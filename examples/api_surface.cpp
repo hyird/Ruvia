@@ -2736,6 +2736,8 @@ static_assert(HasHttp1ClientResponseTransferCodings<
 static_assert(!HasHttp1ClientResponseTransferCodings<
     ruvia::Http1ClientKnownLengthResponse>);
 static_assert(HasHttp1ClientResponsePersistence<
+    ruvia::Http1ClientInformationalResponse>);
+static_assert(HasHttp1ClientResponsePersistence<
     ruvia::Http1ClientResponseWithoutContent>);
 static_assert(HasHttp1ClientResponsePersistence<
     ruvia::Http1ClientKnownLengthResponse>);

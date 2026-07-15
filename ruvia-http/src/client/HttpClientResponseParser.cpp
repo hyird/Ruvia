@@ -25,9 +25,11 @@ struct Http1ClientResponsePlanAccess final {
         std::optional<Http1ClientRequestContentSignal>;
 
     [[nodiscard]] static Http1ClientResponsePlan informational(
+        Http1ClientResponsePersistence persistence,
         RequestContentSignal requestContentSignal) noexcept {
         return Http1ClientResponsePlan(
-            Http1ClientResponsePlan::State(Http1ClientInformationalResponse()),
+            Http1ClientResponsePlan::State(
+                Http1ClientInformationalResponse(persistence)),
             requestContentSignal);
     }
 
@@ -256,6 +258,14 @@ requestContentSignal(
     detail::Http1ClientRequestContentPhase phase,
     std::uint16_t statusCode,
     bool responseWillClose) noexcept {
+    if (responseWillClose &&
+        (phase ==
+             detail::Http1ClientRequestContentPhase::kAwaitingContinue ||
+         phase == detail::Http1ClientRequestContentPhase::kContentPending ||
+         phase ==
+             detail::Http1ClientRequestContentPhase::kContinueReceived)) {
+        return Http1ClientRequestContentSignal::kExchangeComplete;
+    }
     if (statusCode == 100) {
         return phase ==
                 detail::Http1ClientRequestContentPhase::kAwaitingContinue
@@ -304,11 +314,8 @@ receiveContinue(
 }
 
 [[nodiscard]] Http1ClientResponsePersistence responsePersistence(
-    const detail::Http1ClientRequestContext& request,
     const ParsedResponseHead& response) noexcept {
-    if (request.closePolicy() ==
-            Http1ClientRequestClosePolicy::kCloseAfterResponse ||
-        response.connectionOptions.close()) {
+    if (response.connectionOptions.close()) {
         return Http1ClientResponsePersistence::kClose;
     }
     if (response.protocolVersion == HttpProtocolVersion::kHttp11 ||
@@ -316,6 +323,16 @@ receiveContinue(
         return Http1ClientResponsePersistence::kReuse;
     }
     return Http1ClientResponsePersistence::kClose;
+}
+
+[[nodiscard]] Http1ClientResponsePersistence finalResponsePersistence(
+    const detail::Http1ClientRequestContext& request,
+    const ParsedResponseHead& response) noexcept {
+    if (request.closePolicy() ==
+        Http1ClientRequestClosePolicy::kCloseAfterResponse) {
+        return Http1ClientResponsePersistence::kClose;
+    }
+    return responsePersistence(response);
 }
 
 [[nodiscard]] ResponseHeadParseResult parseResponseHeadFields(
@@ -453,9 +470,13 @@ receiveContinue(
     }
     if (contentSemantics ==
         detail::HttpResponseContentSemantics::kInformational) {
+        const auto persistence = responsePersistence(response);
         return detail::Http1ClientResponsePlanAccess::informational(
+            persistence,
             requestContentSignal(
-                requestContentPhase, response.statusCode, false));
+                requestContentPhase,
+                response.statusCode,
+                persistence == Http1ClientResponsePersistence::kClose));
     }
     if (contentSemantics ==
         detail::HttpResponseContentSemantics::kConnectTunnel) {
@@ -463,7 +484,7 @@ receiveContinue(
             std::nullopt);
     }
 
-    const auto persistence = responsePersistence(request, response);
+    const auto persistence = finalResponsePersistence(request, response);
     const auto persistentContentSignal = requestContentSignal(
         requestContentPhase,
         response.statusCode,
@@ -604,7 +625,11 @@ Http1ClientResponseParseResult Http1ClientResponseParser::parse(
         return fail(*planningError);
     }
     auto plan = std::get<Http1ClientResponsePlan>(std::move(planning));
-    const bool informational = plan.informational() != nullptr;
+    const auto* const informationalPlan = plan.informational();
+    const bool informational = informationalPlan != nullptr;
+    const bool closingInformational = informational &&
+        informationalPlan->persistence() ==
+            Http1ClientResponsePersistence::kClose;
     if (informational &&
         informationalResponseCount_ >=
             detail::kMaxHttpClientInterimResponses) {
@@ -632,10 +657,11 @@ Http1ClientResponseParseResult Http1ClientResponseParser::parse(
     if (informational) {
         ++informationalResponseCount_;
     }
-    if (parsed.statusCode == 100) {
+    if (parsed.statusCode == 100 && !closingInformational) {
         requestContentPhase_ = receiveContinue(requestContentPhase_);
     }
-    if (parsed.statusCode == 101 || parsed.statusCode >= 200) {
+    if (closingInformational ||
+        parsed.statusCode == 101 || parsed.statusCode >= 200) {
         phase_ = Phase::kComplete;
     }
     return result;

@@ -670,6 +670,113 @@ RUVIA_TEST(http_client_expect_continue_is_one_stateful_exchange_contract) {
         Http1ClientRequestContentCompletionStatus::kExchangeTerminal);
 }
 
+RUVIA_TEST(http_client_closing_informational_response_ends_exchange) {
+    ruvia::HttpClientRequest getRequest;
+    getRequest.method = "GET";
+    std::array<char, 512> getHead;
+    const auto getPrepared = ruvia::Http1ClientRequestWriter().prepare(
+        ruvia::HttpOrigin::https("example.test"), getRequest, getHead);
+    RUVIA_CHECK(getPrepared.prepared() != nullptr);
+    if (getPrepared.prepared() == nullptr) {
+        return;
+    }
+
+    Http1ClientResponseParser getParser(*getPrepared.prepared());
+    const auto earlyHints = getParser.parse(
+        "HTTP/1.1 103 Early Hints\r\nConnection: close\r\n\r\n");
+    RUVIA_CHECK(earlyHints.parsed() != nullptr);
+    if (earlyHints.parsed() != nullptr) {
+        const auto* const informational =
+            earlyHints.parsed()->plan().informational();
+        RUVIA_CHECK(informational != nullptr);
+        if (informational != nullptr) {
+            RUVIA_CHECK(
+                informational->persistence() ==
+                Http1ClientResponsePersistence::kClose);
+        }
+    }
+    const auto afterClose = getParser.parse(
+        "HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n");
+    RUVIA_CHECK(afterClose.failure() != nullptr);
+    if (afterClose.failure() != nullptr) {
+        RUVIA_CHECK(
+            afterClose.failure()->error() ==
+            Http1ClientResponseParseError::kExchangeComplete);
+    }
+
+    ruvia::HttpClientRequest postRequest;
+    postRequest.method = "POST";
+    postRequest.content = ruvia::HttpClientRequestContent::bytes("payload");
+    std::array<char, 512> postHead;
+    const auto postPrepared = ruvia::Http1ClientRequestWriter().prepare(
+        ruvia::HttpOrigin::https("example.test"),
+        postRequest,
+        postHead,
+        Http1ClientRequestWirePolicy::expectContinue());
+    RUVIA_CHECK(postPrepared.prepared() != nullptr);
+    if (postPrepared.prepared() == nullptr) {
+        return;
+    }
+
+    Http1ClientResponseParser postParser(*postPrepared.prepared());
+    const auto closingContinue = postParser.parse(
+        "HTTP/1.1 100 Continue\r\nConnection: close\r\n\r\n");
+    RUVIA_CHECK(closingContinue.parsed() != nullptr);
+    if (closingContinue.parsed() != nullptr) {
+        RUVIA_CHECK(
+            closingContinue.parsed()->plan().requestContentSignal() ==
+            Http1ClientRequestContentSignal::kExchangeComplete);
+    }
+
+    Http1ClientResponseParser closingHintsParser(*postPrepared.prepared());
+    const auto closingHints = closingHintsParser.parse(
+        "HTTP/1.1 103 Early Hints\r\nConnection: close\r\n\r\n");
+    RUVIA_CHECK(closingHints.parsed() != nullptr);
+    if (closingHints.parsed() != nullptr) {
+        RUVIA_CHECK(
+            closingHints.parsed()->plan().requestContentSignal() ==
+            Http1ClientRequestContentSignal::kExchangeComplete);
+    }
+
+    std::array<char, 512> requestCloseHead;
+    const auto requestClosePrepared =
+        ruvia::Http1ClientRequestWriter().prepare(
+            ruvia::HttpOrigin::https("example.test"),
+            getRequest,
+            requestCloseHead,
+            Http1ClientRequestWirePolicy::withoutExpectation(
+                Http1ClientRequestClosePolicy::kCloseAfterResponse));
+    RUVIA_CHECK(requestClosePrepared.prepared() != nullptr);
+    if (requestClosePrepared.prepared() == nullptr) {
+        return;
+    }
+
+    Http1ClientResponseParser requestCloseParser(
+        *requestClosePrepared.prepared());
+    const auto nonClosingHints = requestCloseParser.parse(
+        "HTTP/1.1 103 Early Hints\r\n\r\n");
+    RUVIA_CHECK(nonClosingHints.parsed() != nullptr);
+    if (nonClosingHints.parsed() != nullptr) {
+        const auto* const informational =
+            nonClosingHints.parsed()->plan().informational();
+        RUVIA_CHECK(informational != nullptr);
+        if (informational != nullptr) {
+            RUVIA_CHECK(
+                informational->persistence() ==
+                Http1ClientResponsePersistence::kReuse);
+        }
+    }
+    const auto requestCloseFinal = requestCloseParser.parse(
+        "HTTP/1.1 204 No Content\r\n\r\n");
+    RUVIA_CHECK(requestCloseFinal.parsed() != nullptr);
+    if (requestCloseFinal.parsed() != nullptr) {
+        RUVIA_CHECK(
+            requireWithoutContent(requestCloseFinal.parsed()->plan())
+                    .persistence() ==
+            Http1ClientResponsePersistence::kClose);
+    }
+}
+
 RUVIA_TEST(http_client_expect_final_cancels_only_pending_request_content) {
     ruvia::HttpClientRequest request;
     request.method = "POST";

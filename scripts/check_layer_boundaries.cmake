@@ -9145,6 +9145,8 @@ if(EXISTS "${HTTP1_CLIENT_API_SURFACE}" AND
        NOT http1_client_api_surface MATCHES
            "!HasStaleHttp1ClientResponseMode<[\r\n \t]*ruvia::Http1ClientResponsePlan>" OR
        NOT http1_client_api_surface MATCHES
+           "HasHttp1ClientResponsePersistence<[\r\n \t]*ruvia::Http1ClientInformationalResponse>" OR
+       NOT http1_client_api_surface MATCHES
            "!HasHttp1ClientResponsePersistence<[\r\n \t]*ruvia::Http1ClientCloseDelimitedResponse>" OR
        NOT http1_client_package_consumer MATCHES "Http1ClientRequestWriter" OR
        NOT http1_client_package_consumer MATCHES

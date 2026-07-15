@@ -34,22 +34,21 @@ enum class Http1ClientRequestContentPhase : std::uint8_t {
 
 }  // namespace detail
 
-// Connection lifecycle after a self-delimited final response has been consumed.
-// Informational responses, close-delimited responses, tunnels, and upgrades are
-// separate alternatives and therefore cannot be mistaken for reusable messages.
+// Connection lifecycle after a self-delimited response has been consumed.
+// For an informational response, kReuse means the same exchange can await its
+// final response; it does not make the connection poolable before that final.
+// Close-delimited responses, tunnels, and upgrades are separate alternatives.
 enum class Http1ClientResponsePersistence : std::uint8_t {
     kReuse,
     kClose
 };
 
-// Signal for a request body gated by Expect: 100-continue. It is deliberately
-// separate from wait duration: the protocol core reports Continue or
-// exchange-complete progress only while Expect still gates content, while an
-// external I/O runtime owns its finite timeout policy. Once Continue releases
-// the writer, an early final response does not cancel that in-flight content.
-// A duplicate or late 100 after content completion is therefore ignored. Most
-// response heads emit no request-content event, represented by an empty
-// optional rather than a non-event enum member.
+// Request-content lifecycle signal. It is deliberately separate from wait
+// duration: an external I/O runtime owns the finite Expect timeout policy. A
+// reusable early final does not cancel content already released by Continue,
+// but a response that closes the connection stops any unfinished content. A
+// duplicate or late 100 after completion is ignored. Most response heads emit
+// no event, represented by an empty optional rather than a non-event enum.
 enum class Http1ClientRequestContentSignal : std::uint8_t {
     kContinue,
     kExchangeComplete,
@@ -65,9 +64,19 @@ enum class Http1ClientRequestContentCompletionStatus : std::uint8_t {
 };
 
 class Http1ClientInformationalResponse final {
+public:
+    [[nodiscard]] constexpr Http1ClientResponsePersistence persistence() const noexcept {
+        return persistence_;
+    }
+
 private:
     friend struct detail::Http1ClientResponsePlanAccess;
-    constexpr Http1ClientInformationalResponse() noexcept = default;
+
+    explicit constexpr Http1ClientInformationalResponse(
+        Http1ClientResponsePersistence persistence) noexcept
+        : persistence_(persistence) {}
+
+    Http1ClientResponsePersistence persistence_;
 };
 
 class Http1ClientResponseWithoutContent final {
