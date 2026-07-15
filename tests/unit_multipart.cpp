@@ -548,6 +548,43 @@ RUVIA_TEST(multipart_part_header_rejects_ambiguous_header_blocks) {
     }
 }
 
+RUVIA_TEST(multipart_part_header_rejects_invalid_content_types) {
+    using ruvia::detail::httpParseMultipartPartHeaders;
+
+    for (const std::string_view contentType : {
+             "",
+             "text",
+             "text/",
+             "/plain",
+             "*/plain",
+             "text/*",
+             "text/plain; charset",
+             "text/plain; charset=",
+             "text/plain; charset=utf-8; CHARSET=latin1"}) {
+        std::string headers =
+            "Content-Disposition: form-data; name=field\r\n"
+            "Content-Type: ";
+        headers.append(contentType);
+        const auto parsed = httpParseMultipartPartHeaders(headers);
+        RUVIA_CHECK(parsed.failure() != nullptr);
+        if (parsed.failure() != nullptr) {
+            RUVIA_CHECK(
+                parsed.failure()->parseError() ==
+                ruvia::MultipartParseError::kInvalidPartHeaders);
+        }
+    }
+
+    const auto valid = httpParseMultipartPartHeaders(
+        "Content-Disposition: form-data; name=field\r\n"
+        "Content-Type: text/plain; charset = \"UTF-8\"");
+    RUVIA_CHECK(valid.headers() != nullptr);
+    if (valid.headers() != nullptr) {
+        RUVIA_CHECK_EQ(
+            valid.headers()->contentType(),
+            std::string_view("text/plain; charset = \"UTF-8\""));
+    }
+}
+
 RUVIA_TEST(multipart_part_header_names_are_case_insensitive) {
     using ruvia::detail::httpParseMultipartPartHeaders;
 

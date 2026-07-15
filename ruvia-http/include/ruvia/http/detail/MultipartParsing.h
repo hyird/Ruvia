@@ -656,6 +656,47 @@ private:
     std::size_t size_ = 0;
 };
 
+[[nodiscard]] inline bool httpValidMimeMediaType(
+    std::string_view value) noexcept {
+    const auto parameters = httpFindUnquotedDelimiter(value, 0, ';');
+    const auto mediaType = httpTrimOws(value.substr(0, parameters));
+    const auto slash = mediaType.find('/');
+    if (slash == std::string_view::npos ||
+        mediaType.find('/', slash + 1) != std::string_view::npos) {
+        return false;
+    }
+    const auto type = mediaType.substr(0, slash);
+    const auto subtype = mediaType.substr(slash + 1);
+    if (type == "*" || subtype == "*" ||
+        !std::all_of(type.begin(), type.end(), httpMimeTokenChar) ||
+        !std::all_of(subtype.begin(), subtype.end(), httpMimeTokenChar) ||
+        type.empty() || subtype.empty()) {
+        return false;
+    }
+    if (parameters >= value.size()) {
+        return true;
+    }
+
+    HttpMimeParameterNames parameterNames;
+    std::size_t start = parameters + 1;
+    while (start <= value.size()) {
+        const auto end = httpFindUnquotedDelimiter(value, start, ';');
+        const auto parameter = httpTrimOws(value.substr(start, end - start));
+        std::string_view name;
+        std::string_view parameterValue;
+        if (!httpParseMimeParameter(
+                parameter, name, parameterValue, false) ||
+            !parameterNames.record(name)) {
+            return false;
+        }
+        if (end >= value.size()) {
+            return true;
+        }
+        start = end + 1;
+    }
+    return true;
+}
+
 [[nodiscard]] inline std::optional<MultipartBoundary>
 httpDecodeMultipartBoundaryParameter(std::string_view parameter) {
     std::array<char, 70> decoded{};
@@ -769,7 +810,7 @@ httpParseMultipartPartHeaders(std::string_view headers) noexcept {
             }
             disposition = value;
         } else if (httpAsciiEqualsIgnoreCase(key, "Content-Type")) {
-            if (contentType) {
+            if (contentType || !httpValidMimeMediaType(value)) {
                 return HttpMultipartPartHeaderParseResult::makeFailure(
                     MultipartParseError::kInvalidPartHeaders);
             }
