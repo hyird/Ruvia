@@ -82,13 +82,77 @@ if(_built_components_csv MATCHES "(^|,)core(,|$)")
        NOT _installed_one_shot MATCHES
            "using Lifecycle = std::variant" OR
        NOT _installed_one_shot MATCHES
-           "prepareOneShotReceiverWake" OR
-       NOT _installed_one_shot MATCHES
            "wakeOneShotReceiver" OR
        _installed_one_shot MATCHES
            "std::optional<T>[ \t]+value|bool completed|bool consumed|bool closed|bool workerStopped")
         message(FATAL_ERROR
             "installed OneShot restored parallel lifecycle flags")
+    endif()
+
+    set(_installed_worker_wait_awaiter_path
+        "${_install_prefix}/include/ruvia/core/detail/WorkerWaitAwaiter.h")
+    set(_installed_worker_timer_path
+        "${_install_prefix}/include/ruvia/core/detail/WorkerTimer.h")
+    set(_installed_worker_handle_path
+        "${_install_prefix}/include/ruvia/core/WorkerHandle.h")
+    set(_installed_worker_dispatcher_path
+        "${_install_prefix}/include/ruvia/core/detail/WorkerDispatcher.h")
+    if(NOT EXISTS "${_installed_worker_wait_awaiter_path}" OR
+       NOT EXISTS "${_installed_worker_timer_path}" OR
+       NOT EXISTS "${_installed_worker_handle_path}" OR
+       NOT EXISTS "${_installed_worker_dispatcher_path}")
+        message(FATAL_ERROR
+            "installed core package is missing worker wait/timer contracts")
+    endif()
+    file(READ "${_installed_worker_wait_awaiter_path}"
+        _installed_worker_wait_awaiter)
+    file(READ "${_installed_worker_timer_path}"
+        _installed_worker_timer)
+    file(READ "${_installed_worker_handle_path}"
+        _installed_worker_handle)
+    file(READ "${_installed_worker_dispatcher_path}"
+        _installed_worker_dispatcher)
+    if(NOT _installed_worker_wait_awaiter MATCHES
+           "struct WorkerWaitAwaitPreparing final" OR
+       NOT _installed_worker_wait_awaiter MATCHES
+           "class WorkerWaitAwaitSuspended final" OR
+       NOT _installed_worker_wait_awaiter MATCHES
+           "class WorkerWaitAwaitReadyBeforeSuspend final" OR
+       NOT _installed_worker_wait_awaiter MATCHES
+           "class WorkerWaitAwaitReadyAfterSuspend final" OR
+       NOT _installed_worker_wait_awaiter MATCHES
+           "class WorkerWaitAwaitState final" OR
+       NOT _installed_worker_wait_awaiter MATCHES
+           "using State = std::variant" OR
+       NOT _installed_worker_wait_awaiter MATCHES
+           "WorkerWaitAwaitState[(]WorkerWaitAwaitState&&[)] = delete" OR
+       NOT _installed_channel MATCHES
+           "WorkerWaitAwaitState<T> completion" OR
+       NOT _installed_one_shot MATCHES
+           "WorkerWaitAwaitState<T> completion" OR
+       _installed_channel MATCHES
+           "std::optional<WorkerWaitResult<T>>|bool suspended|bool wakePending|prepareChannelReceiverWake" OR
+       _installed_one_shot MATCHES
+           "std::optional<WorkerWaitResult<T>>|bool suspended|bool wakePending|prepareOneShotReceiverWake")
+        message(FATAL_ERROR
+            "installed worker waits restored parallel await-suspension state")
+    endif()
+    if(NOT _installed_worker_timer MATCHES
+           "enum class WorkerTimerOutcome" OR
+       NOT _installed_worker_timer MATCHES
+           "kExpired" OR
+       NOT _installed_worker_timer MATCHES
+           "kCancelled" OR
+       NOT _installed_worker_handle MATCHES
+           "move_only_function<void[(]WorkerTimerOutcome[)]>" OR
+       NOT _installed_worker_dispatcher MATCHES
+           "move_only_function<void[(]WorkerTimerOutcome[)]>" OR
+       _installed_channel MATCHES
+           "[(]bool cancelled[)]" OR
+       _installed_one_shot MATCHES
+           "[(]bool cancelled[)]")
+        message(FATAL_ERROR
+            "installed worker timer completion restored a boolean outcome")
     endif()
 
     set(_installed_task_promise_path

@@ -21,6 +21,7 @@ namespace detail {
 class WorkerDispatcher;
 class WorkerShutdownListener;
 class WorkerTimerRegistration;
+enum class WorkerTimerOutcome : std::uint8_t;
 struct WorkerHandleAccess;
 }
 
@@ -59,7 +60,7 @@ struct WorkerHandleAccess {
     [[nodiscard]] static WorkerTimerRegistration scheduleTimer(
         const WorkerHandle& worker,
         std::chrono::steady_clock::time_point deadline,
-        std::move_only_function<void(bool)> completion);
+        std::move_only_function<void(WorkerTimerOutcome)> completion);
 };
 
 }

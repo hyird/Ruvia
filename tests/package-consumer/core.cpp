@@ -12,6 +12,8 @@
 #include <ruvia/core/detail/AsioAwait.h>
 #include <ruvia/core/detail/ConnectionScanner.h>
 #include <ruvia/core/detail/PoolWaiterQueue.h>
+#include <ruvia/core/detail/WorkerTimer.h>
+#include <ruvia/core/detail/WorkerWaitAwaiter.h>
 #include <ruvia/core/memory/MemoryPool.h>
 #include <ruvia/core/memory/PmrObject.h>
 
@@ -149,6 +151,22 @@ static_assert(std::same_as<
     std::size_t>);
 static_assert(!HasAnyRvalueWorkerWaitAccessor<
     ruvia::WorkerWaitResult<int>>);
+static_assert(!std::convertible_to<
+              ruvia::detail::WorkerTimerOutcome, bool>);
+static_assert(std::default_initializable<
+              ruvia::detail::WorkerWaitAwaitState<int>>);
+static_assert(!std::copy_constructible<
+              ruvia::detail::WorkerWaitAwaitState<int>>);
+static_assert(!std::move_constructible<
+              ruvia::detail::WorkerWaitAwaitState<int>>);
+static_assert(std::same_as<
+    decltype(std::declval<ruvia::detail::WorkerWaitAwaitState<int>&>().suspend(
+        std::coroutine_handle<>{})),
+    bool>);
+static_assert(std::same_as<
+    decltype(std::declval<ruvia::detail::WorkerWaitAwaitState<int>&>().complete(
+        std::declval<ruvia::WorkerWaitResult<int>>())),
+    bool>);
 static_assert(!std::default_initializable<ruvia::WorkerWaitResult<int>>);
 static_assert(!std::default_initializable<ruvia::WorkerWaitClosed>);
 static_assert(!std::default_initializable<ruvia::WorkerWaitStopping>);

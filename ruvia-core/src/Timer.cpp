@@ -22,7 +22,7 @@ public:
         continuation_ = continuation;
         registration_ = detail::WorkerHandleAccess::scheduleTimer(
             worker_, std::chrono::steady_clock::now() + duration_,
-            [this](bool) { continuation_.resume(); });
+            [this](detail::WorkerTimerOutcome) { continuation_.resume(); });
         return true;
     }
 

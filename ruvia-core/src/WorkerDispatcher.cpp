@@ -33,11 +33,12 @@ struct TimerEntryLater final {
 }
 
 struct WorkerTimerState final {
-    explicit WorkerTimerState(std::move_only_function<void(bool)> value)
+    explicit WorkerTimerState(
+        std::move_only_function<void(WorkerTimerOutcome)> value)
         : completion(std::move(value)) {}
 
     std::atomic_bool active{true};
-    std::move_only_function<void(bool)> completion;
+    std::move_only_function<void(WorkerTimerOutcome)> completion;
 };
 
 struct WorkerDispatcher::Impl {
@@ -162,7 +163,7 @@ void WorkerDispatcher::registerShutdownListener(
 
 WorkerTimerRegistration WorkerDispatcher::scheduleTimer(
     std::chrono::steady_clock::time_point deadline,
-    std::move_only_function<void(bool)> completion) {
+    std::move_only_function<void(WorkerTimerOutcome)> completion) {
     if (!isCurrent()) {
         throw std::logic_error("worker timers must be scheduled on their worker");
     }
@@ -203,7 +204,9 @@ void WorkerDispatcher::cancelTimer(const std::shared_ptr<WorkerTimerState>& stat
     }
     try {
         if (completion) {
-            defer([completion = std::move(completion)]() mutable { completion(true); });
+            defer([completion = std::move(completion)]() mutable {
+                completion(WorkerTimerOutcome::kCancelled);
+            });
         }
     } catch (...) {
         std::terminate();
@@ -233,7 +236,7 @@ void WorkerDispatcher::stopTimers() noexcept {
         try {
             if (entry.state->completion) {
                 auto completion = std::move(entry.state->completion);
-                completion(true);
+                completion(WorkerTimerOutcome::kCancelled);
             }
         } catch (...) {
             std::terminate();
@@ -350,7 +353,7 @@ void WorkerDispatcher::fireTimers() {
         }
         if (entry.state->completion) {
             auto completion = std::move(entry.state->completion);
-            completion(false);
+            completion(WorkerTimerOutcome::kExpired);
         }
     }
     impl_->dispatchingTimers = false;

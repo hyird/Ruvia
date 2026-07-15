@@ -164,6 +164,14 @@ file(READ "${RUVIA_ROOT}/ruvia-core/include/ruvia/core/detail/AsioAwait.h"
     core_task_completion_contract)
 file(READ "${RUVIA_ROOT}/ruvia-core/include/ruvia/core/WorkerWaitResult.h"
     core_worker_wait_result_contract)
+file(READ "${RUVIA_ROOT}/ruvia-core/include/ruvia/core/detail/WorkerWaitAwaiter.h"
+    core_worker_wait_awaiter_contract)
+file(READ "${RUVIA_ROOT}/ruvia-core/include/ruvia/core/detail/WorkerTimer.h"
+    core_worker_timer_contract)
+file(READ "${RUVIA_ROOT}/ruvia-core/include/ruvia/core/WorkerHandle.h"
+    core_worker_handle_contract)
+file(READ "${RUVIA_ROOT}/ruvia-core/include/ruvia/core/detail/WorkerDispatcher.h"
+    core_worker_dispatcher_contract)
 file(READ "${RUVIA_ROOT}/tests/package-consumer/core.cpp"
     core_linear_receiver_package_contract)
 if(NOT core_channel_contract MATCHES
@@ -217,13 +225,57 @@ if(NOT core_one_shot_contract MATCHES
    NOT core_one_shot_contract MATCHES
        "using Lifecycle = std::variant" OR
    NOT core_one_shot_contract MATCHES
-       "prepareOneShotReceiverWake" OR
-   NOT core_one_shot_contract MATCHES
        "wakeOneShotReceiver" OR
    core_one_shot_contract MATCHES
        "std::optional<T>[ \t]+value|bool completed|bool consumed|bool closed|bool workerStopped")
     boundary_error("OneShot regained parallel lifecycle flags"
-        "pending, ready, consumed, receiver-closed, and worker-stopping must remain exclusive states and use the shared prepare-then-wake protocol")
+        "pending, ready, consumed, receiver-closed, and worker-stopping must remain exclusive states and use the shared completion-then-wake protocol")
+endif()
+if(NOT core_worker_wait_awaiter_contract MATCHES
+       "struct WorkerWaitAwaitPreparing final" OR
+   NOT core_worker_wait_awaiter_contract MATCHES
+       "class WorkerWaitAwaitSuspended final" OR
+   NOT core_worker_wait_awaiter_contract MATCHES
+       "class WorkerWaitAwaitReadyBeforeSuspend final" OR
+   NOT core_worker_wait_awaiter_contract MATCHES
+       "class WorkerWaitAwaitReadyAfterSuspend final" OR
+   NOT core_worker_wait_awaiter_contract MATCHES
+       "class WorkerWaitAwaitState final" OR
+   NOT core_worker_wait_awaiter_contract MATCHES
+       "using State = std::variant" OR
+   NOT core_worker_wait_awaiter_contract MATCHES
+       "WorkerWaitAwaitState[(]WorkerWaitAwaitState&&[)] = delete" OR
+   NOT core_channel_contract MATCHES
+       "WorkerWaitAwaitState<T> completion" OR
+   NOT core_one_shot_contract MATCHES
+       "WorkerWaitAwaitState<T> completion" OR
+   core_channel_contract MATCHES
+       "std::optional<WorkerWaitResult<T>>|bool suspended|bool wakePending|prepareChannelReceiverWake" OR
+   core_one_shot_contract MATCHES
+       "std::optional<WorkerWaitResult<T>>|bool suspended|bool wakePending|prepareOneShotReceiverWake")
+    boundary_error("worker waits regained parallel await-suspension state"
+        "Channel and OneShot must share one discriminated preparing/suspended/completed handshake so a racing wake cannot overlap flags or an optional result")
+endif()
+if(NOT core_worker_timer_contract MATCHES
+       "enum class WorkerTimerOutcome" OR
+   NOT core_worker_timer_contract MATCHES
+       "kExpired" OR
+   NOT core_worker_timer_contract MATCHES
+       "kCancelled" OR
+   NOT core_worker_handle_contract MATCHES
+       "move_only_function<void[(]WorkerTimerOutcome[)]>" OR
+   NOT core_worker_dispatcher_contract MATCHES
+       "move_only_function<void[(]WorkerTimerOutcome[)]>" OR
+   core_channel_contract MATCHES
+       "[(]bool cancelled[)]" OR
+   core_one_shot_contract MATCHES
+       "[(]bool cancelled[)]" OR
+   NOT core_linear_receiver_package_contract MATCHES
+       "!std::convertible_to<" OR
+   NOT core_linear_receiver_package_contract MATCHES
+       "WorkerTimerOutcome, bool")
+    boundary_error("worker timer completion regained a boolean outcome"
+        "timer expiry and cancellation must remain named outcomes throughout core and Web runtime callbacks")
 endif()
 if(NOT core_task_promise_contract MATCHES
        "struct TaskPromisePending final" OR

@@ -1,11 +1,17 @@
 #pragma once
 
+#include <cstdint>
 #include <memory>
 
 namespace ruvia::detail {
 
 class WorkerDispatcher;
 struct WorkerTimerState;
+
+enum class WorkerTimerOutcome : std::uint8_t {
+    kExpired,
+    kCancelled,
+};
 
 class WorkerTimerRegistration final {
 public:
