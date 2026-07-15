@@ -450,6 +450,11 @@ concept HasLooseWebSocketDeflateFields = requires(T& value) {
 };
 
 template <typename T>
+concept HasFallibleWebSocketDeflateState = requires(const T& value) {
+    { value.ok() } -> std::same_as<bool>;
+};
+
+template <typename T>
 concept AcceptsLooseWebSocketHandshakeSubmit = requires(T& connection) {
     connection.submitWebSocketHandshake(
         std::uint32_t{},
@@ -2155,6 +2160,10 @@ static_assert(!std::constructible_from<
     bool>);
 static_assert(!HasLooseWebSocketDeflateFields<
     ruvia::detail::WebSocketDeflateNegotiation>);
+static_assert(!HasFallibleWebSocketDeflateState<
+    ruvia::detail::WebSocketDeflate>);
+static_assert(!std::is_nothrow_default_constructible_v<
+    ruvia::detail::WebSocketDeflate>);
 static_assert(!std::default_initializable<
     ruvia::detail::WebSocketServerNegotiation>);
 static_assert(!std::constructible_from<

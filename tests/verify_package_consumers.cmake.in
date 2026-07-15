@@ -1291,6 +1291,12 @@ if(NOT _installed_ws_deflate_negotiation MATCHES
    NOT _installed_ws_deflate_negotiation MATCHES
        "kAcceptedWithServerMaxWindowBits" OR
    NOT _installed_ws_deflate_negotiation MATCHES
+       "failed to initialize WebSocket deflate encoder" OR
+   NOT _installed_ws_deflate_negotiation MATCHES
+       "failed to initialize WebSocket deflate decoder" OR
+   _installed_ws_deflate_negotiation MATCHES
+       "bool ok[(][)] const noexcept|deflateOk_|inflateOk_" OR
+   NOT _installed_ws_deflate_negotiation MATCHES
        "webSocketDeflateNegotiated" OR
    NOT _installed_ws_server_negotiation MATCHES
        "class WebSocketServerNegotiation final" OR

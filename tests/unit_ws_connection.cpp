@@ -374,7 +374,6 @@ RUVIA_TEST(ws_connection_inflates_compressed_message) {
         WebSocketDeflateNegotiation::kAccepted);
 
     ruvia::detail::WebSocketDeflate encoder;
-    RUVIA_CHECK(encoder.ok());
     std::pmr::string compressed(&resource);
     RUVIA_CHECK(encoder.compress("hello hello hello", compressed));
 

@@ -4,6 +4,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <limits>
+#include <stdexcept>
 #include <string>
 #include <string_view>
 
@@ -28,31 +29,36 @@ enum class WebSocketInflateResult : std::uint8_t {
 // to mimalloc, so no custom resource plumbing is needed.
 class WebSocketDeflate final {
 public:
-    WebSocketDeflate() noexcept {
-        deflateOk_ = deflateInit2(&deflate_, Z_DEFAULT_COMPRESSION, Z_DEFLATED, -15, 8, Z_DEFAULT_STRATEGY) == Z_OK;
-        inflateOk_ = inflateInit2(&inflate_, -15) == Z_OK;
+    WebSocketDeflate() {
+        if (deflateInit2(
+                &deflate_,
+                Z_DEFAULT_COMPRESSION,
+                Z_DEFLATED,
+                -15,
+                8,
+                Z_DEFAULT_STRATEGY) != Z_OK) {
+            throw std::runtime_error(
+                "failed to initialize WebSocket deflate encoder");
+        }
+        if (inflateInit2(&inflate_, -15) != Z_OK) {
+            (void)deflateEnd(&deflate_);
+            throw std::runtime_error(
+                "failed to initialize WebSocket deflate decoder");
+        }
     }
 
     ~WebSocketDeflate() {
-        if (deflateOk_) {
-            (void)deflateEnd(&deflate_);
-        }
-        if (inflateOk_) {
-            (void)inflateEnd(&inflate_);
-        }
+        (void)inflateEnd(&inflate_);
+        (void)deflateEnd(&deflate_);
     }
 
     WebSocketDeflate(const WebSocketDeflate&) = delete;
     WebSocketDeflate& operator=(const WebSocketDeflate&) = delete;
 
-    [[nodiscard]] bool ok() const noexcept {
-        return deflateOk_ && inflateOk_;
-    }
-
     // Compresses a whole message, appending the raw-DEFLATE block to `out` with
     // the trailing 0x00 0x00 0xFF 0xFF flush marker removed (RFC 7692 §7.2.1).
     bool compress(std::string_view input, std::pmr::string& out) {
-        if (!deflateOk_ || deflateReset(&deflate_) != Z_OK) {
+        if (deflateReset(&deflate_) != Z_OK) {
             return false;
         }
         // Messages can exceed zlib's 32-bit avail_in, so supply the input in
@@ -101,7 +107,7 @@ public:
         std::string_view input,
         std::pmr::string& out,
         ProtocolByteLimit messageLimit) {
-        if (!inflateOk_ || inflateReset(&inflate_) != Z_OK) {
+        if (inflateReset(&inflate_) != Z_OK) {
             return WebSocketInflateResult::kError;
         }
         static constexpr unsigned char kFlushMarker[4] = {0x00, 0x00, 0xFF, 0xFF};
@@ -161,8 +167,6 @@ private:
 
     z_stream deflate_{};
     z_stream inflate_{};
-    bool deflateOk_{false};
-    bool inflateOk_{false};
 };
 
 // One negotiated permessage-deflate outcome. The former enabled/echo booleans

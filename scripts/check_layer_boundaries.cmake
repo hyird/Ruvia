@@ -8895,6 +8895,12 @@ if(EXISTS "${WS_DEFLATE_NEGOTIATION_HEADER}" AND
        NOT ws_deflate_negotiation MATCHES "kAccepted" OR
        NOT ws_deflate_negotiation MATCHES
            "kAcceptedWithServerMaxWindowBits" OR
+       NOT ws_deflate_negotiation MATCHES
+           "failed to initialize WebSocket deflate encoder" OR
+       NOT ws_deflate_negotiation MATCHES
+           "failed to initialize WebSocket deflate decoder" OR
+       ws_deflate_negotiation MATCHES
+           "bool ok[(][)] const noexcept|deflateOk_|inflateOk_" OR
        NOT ws_deflate_negotiation MATCHES "webSocketDeflateNegotiated" OR
        NOT ws_deflate_negotiation MATCHES
            "webSocketDeflateResponseExtensions" OR
