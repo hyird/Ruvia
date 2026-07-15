@@ -495,6 +495,44 @@ RUVIA_TEST(multipart_part_header_rejects_ambiguous_disposition_parameters) {
     }
 }
 
+RUVIA_TEST(multipart_part_header_rejects_ambiguous_header_blocks) {
+    using ruvia::detail::httpParseMultipartPartHeaders;
+
+    for (const std::string_view invalid : {
+             "Broken-Line\r\n"
+             "Content-Disposition: form-data; name=field",
+             " Content-Disposition: form-data; name=field",
+             "Content-Disposition : form-data; name=field",
+             "Content-Disposition: form-data; name=field\r\n"
+             " filename=shadow.txt",
+             "Content-Disposition: form-data; name=field\r\n"
+             "Content-Type: text/plain\r\n"
+             "Content-Type: application/json"}) {
+        const auto parsed = httpParseMultipartPartHeaders(invalid);
+        RUVIA_CHECK(parsed.failure() != nullptr);
+        if (parsed.failure() != nullptr) {
+            RUVIA_CHECK(
+                parsed.failure()->parseError() ==
+                ruvia::MultipartParseError::kInvalidPartHeaders);
+        }
+
+        std::string body = "--BOUNDARY\r\n";
+        body.append(invalid);
+        body.append("\r\n\r\nvalue\r\n--BOUNDARY--\r\n");
+        const auto complete = ruvia::parseMultipartBody(
+            body,
+            ruvia::MultipartBoundary("BOUNDARY"),
+            std::pmr::get_default_resource());
+        RUVIA_CHECK(complete.failure() != nullptr);
+        if (complete.failure() != nullptr) {
+            RUVIA_CHECK_EQ(complete.failure()->protocolError().status(), 400);
+            RUVIA_CHECK_EQ(
+                std::string_view(complete.failure()->protocolError().what()),
+                std::string_view("invalid multipart part headers"));
+        }
+    }
+}
+
 RUVIA_TEST(multipart_part_header_names_are_case_insensitive) {
     using ruvia::detail::httpParseMultipartPartHeaders;
 

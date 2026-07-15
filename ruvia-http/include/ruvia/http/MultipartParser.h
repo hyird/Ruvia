@@ -179,6 +179,7 @@ enum class MultipartParseError : std::uint8_t {
     kInvalidDelimiter,
     kPreambleTooLarge,
     kPartHeadersTooLarge,
+    kInvalidPartHeaders,
     kInvalidContentDisposition,
     kMissingFieldName,
     kDelimiterLineTooLarge,

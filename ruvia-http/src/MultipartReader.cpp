@@ -30,6 +30,8 @@ constexpr std::size_t kMaxMultipartDelimiterLineBytes = 64 * 1024;
             return "multipart preamble exceeds limit";
         case MultipartParseError::kPartHeadersTooLarge:
             return "multipart part headers exceed limit";
+        case MultipartParseError::kInvalidPartHeaders:
+            return "invalid multipart part headers";
         case MultipartParseError::kInvalidContentDisposition:
             return "invalid multipart content disposition";
         case MultipartParseError::kMissingFieldName:
@@ -50,6 +52,7 @@ constexpr std::size_t kMaxMultipartDelimiterLineBytes = 64 * 1024;
                 413, multipartParseErrorMessage(error));
         case MultipartParseError::kIncompleteBody:
         case MultipartParseError::kInvalidDelimiter:
+        case MultipartParseError::kInvalidPartHeaders:
         case MultipartParseError::kInvalidContentDisposition:
         case MultipartParseError::kMissingFieldName:
             return HttpProtocolError(

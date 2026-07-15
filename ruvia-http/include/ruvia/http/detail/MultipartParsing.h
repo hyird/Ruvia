@@ -557,6 +557,26 @@ private:
     }
 }
 
+[[nodiscard]] inline bool httpValidMimeFieldName(
+    std::string_view value) noexcept {
+    if (value.empty()) {
+        return false;
+    }
+    return std::all_of(value.begin(), value.end(), [](char byte) {
+        const auto character = static_cast<unsigned char>(byte);
+        return character >= 33 && character <= 126 && byte != ':';
+    });
+}
+
+[[nodiscard]] inline bool httpValidMimeFieldBody(
+    std::string_view value) noexcept {
+    return std::all_of(value.begin(), value.end(), [](char byte) {
+        const auto character = static_cast<unsigned char>(byte);
+        return character == '\t' ||
+            (character >= 0x20 && character != 0x7F);
+    });
+}
+
 [[nodiscard]] inline bool httpValidMimeParameterValue(
     std::string_view value) noexcept {
     if (value.empty()) {
@@ -697,18 +717,26 @@ httpParseMultipartPartHeaders(std::string_view headers) noexcept {
             ? remainingHeaders
             : remainingHeaders.substr(0, lineEnd);
         const auto colon = line.find(':');
-        if (colon != std::string_view::npos) {
-            const auto key = httpTrimOws(line.substr(0, colon));
-            const auto value = httpTrimOws(line.substr(colon + 1));
-            if (httpAsciiEqualsIgnoreCase(key, "Content-Disposition")) {
-                if (disposition) {
-                    return HttpMultipartPartHeaderParseResult::makeFailure(
-                        MultipartParseError::kInvalidContentDisposition);
-                }
-                disposition = value;
-            } else if (httpAsciiEqualsIgnoreCase(key, "Content-Type")) {
-                contentType = value;
+        if (colon == std::string_view::npos ||
+            !httpValidMimeFieldName(line.substr(0, colon)) ||
+            !httpValidMimeFieldBody(line.substr(colon + 1))) {
+            return HttpMultipartPartHeaderParseResult::makeFailure(
+                MultipartParseError::kInvalidPartHeaders);
+        }
+        const auto key = line.substr(0, colon);
+        const auto value = httpTrimOws(line.substr(colon + 1));
+        if (httpAsciiEqualsIgnoreCase(key, "Content-Disposition")) {
+            if (disposition) {
+                return HttpMultipartPartHeaderParseResult::makeFailure(
+                    MultipartParseError::kInvalidContentDisposition);
             }
+            disposition = value;
+        } else if (httpAsciiEqualsIgnoreCase(key, "Content-Type")) {
+            if (contentType) {
+                return HttpMultipartPartHeaderParseResult::makeFailure(
+                    MultipartParseError::kInvalidPartHeaders);
+            }
+            contentType = value;
         }
         if (lineEnd == std::string_view::npos) {
             break;
