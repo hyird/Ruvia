@@ -270,6 +270,9 @@ static_assert(std::same_as<
               std::optional<std::chrono::milliseconds>>);
 using ScannerRegistration =
     ruvia::detail::ConnectionScanner::PeriodicCheckRegistration;
+static_assert(std::same_as<
+    ruvia::detail::ConnectionScanner::PeriodicCheck,
+    void (*)(void*, std::int64_t) noexcept>);
 static_assert(std::default_initializable<ScannerRegistration>);
 static_assert(!std::movable<ScannerRegistration>);
 static_assert(!HasTargetOnlyPeriodicCheck<

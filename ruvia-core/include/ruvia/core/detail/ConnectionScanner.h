@@ -24,7 +24,11 @@ struct ConnectionScannerOptions final {
 
 class ConnectionScanner final {
 public:
-    using PeriodicCheck = bool (*)(void*, std::int64_t) noexcept;
+    // Product-owned long-lived checks receive the worker's coarse timestamp
+    // and act on their own transport. They cannot command Core to close the
+    // owning socket because a check may belong to only one stream of a
+    // multiplexed connection.
+    using PeriodicCheck = void (*)(void*, std::int64_t) noexcept;
     using WorkerMaintenanceCheck = void (*)(void*) noexcept;
 
     enum class Phase {
@@ -117,7 +121,7 @@ public:
         friend class PeriodicCheckRegistration;
 
         [[nodiscard]] bool linked() const noexcept;
-        [[nodiscard]] bool tickLongLived(std::int64_t now) noexcept;
+        void runPeriodicChecks(std::int64_t now) noexcept;
         void removePeriodicCheck(
             PeriodicCheckRegistration& registration) noexcept;
         void detachPeriodicChecks() noexcept;
@@ -132,7 +136,7 @@ public:
         std::int64_t lastActiveMs_{0};
         Phase phase_{Phase::kIdle};
         PeriodicCheckRegistration* periodicChecks_{nullptr};
-        // The next node to visit while tickLongLived() is active. Unlinking a
+        // The next node to visit while runPeriodicChecks() is active. Unlinking a
         // different registration from inside a callback advances this cursor,
         // so RAII teardown cannot leave iteration pointing at freed storage.
         PeriodicCheckRegistration* periodicScanNext_{nullptr};

@@ -9500,6 +9500,8 @@ set(CONNECTION_PERIODIC_TEST
     "${RUVIA_ROOT}/tests/connection_scanner_lifetime.cpp")
 set(CONNECTION_PERIODIC_WS
     "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/websocket/HttpWebSocketConnection.h")
+set(CONNECTION_PERIODIC_WS_HEARTBEAT
+    "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/websocket/HttpWebSocketConnectionHeartbeat.inl")
 set(CONNECTION_MAINTENANCE_SERVER_HEADER
     "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/server/HttpServer.h")
 set(CONNECTION_MAINTENANCE_SERVER_RUNTIME
@@ -9508,11 +9510,14 @@ if(EXISTS "${CONNECTION_TIMEOUT_CORE_MODEL}" AND
    EXISTS "${CONNECTION_TIMEOUT_CORE_RUNTIME}" AND
    EXISTS "${CONNECTION_PERIODIC_TEST}" AND
    EXISTS "${CONNECTION_PERIODIC_WS}" AND
+   EXISTS "${CONNECTION_PERIODIC_WS_HEARTBEAT}" AND
    EXISTS "${CONNECTION_MAINTENANCE_SERVER_HEADER}" AND
    EXISTS "${CONNECTION_MAINTENANCE_SERVER_RUNTIME}" AND
    EXISTS "${CONNECTION_TIMEOUT_CORE_PACKAGE}")
     file(READ "${CONNECTION_PERIODIC_TEST}" connection_periodic_test)
     file(READ "${CONNECTION_PERIODIC_WS}" connection_periodic_ws)
+    file(READ "${CONNECTION_PERIODIC_WS_HEARTBEAT}"
+        connection_periodic_ws_heartbeat)
     file(READ "${CONNECTION_MAINTENANCE_SERVER_HEADER}"
         connection_maintenance_server_header)
     file(READ "${CONNECTION_MAINTENANCE_SERVER_RUNTIME}"
@@ -9521,8 +9526,16 @@ if(EXISTS "${CONNECTION_TIMEOUT_CORE_MODEL}" AND
            "class PeriodicCheckRegistration final" OR
        NOT connection_timeout_core_model MATCHES
            "void registerPeriodicCheck" OR
+       NOT connection_timeout_core_model MATCHES
+           "using PeriodicCheck = void [(][*][)][(]void[*], std::int64_t[)] noexcept" OR
+       connection_timeout_core_model MATCHES
+           "using PeriodicCheck = bool" OR
        NOT connection_timeout_core_runtime MATCHES
            "registration[.]reset[(][)]" OR
+       NOT connection_timeout_core_runtime MATCHES
+           "void ConnectionScanner::Entry::runPeriodicChecks" OR
+       connection_timeout_core_runtime MATCHES
+           "periodicCheckFailed|shouldClose" OR
        NOT connection_timeout_core_runtime MATCHES
            "void ConnectionScanner::periodicCheckAdded" OR
        NOT connection_timeout_core_runtime MATCHES
@@ -9531,10 +9544,18 @@ if(EXISTS "${CONNECTION_TIMEOUT_CORE_MODEL}" AND
            "if [(]hasScanningWork[(][)][)]" OR
        NOT connection_periodic_ws MATCHES
            "ConnectionScanner::PeriodicCheckRegistration[ \t]+periodicCheck_" OR
+       NOT connection_periodic_ws MATCHES
+           "static void heartbeatTickThunk" OR
+       connection_periodic_ws MATCHES
+           "static bool heartbeatTickThunk|bool heartbeatTick" OR
+       NOT connection_periodic_ws_heartbeat MATCHES
+           "void WebSocketConnection<Transport>::heartbeatTick" OR
        NOT connection_periodic_test MATCHES
            "PeriodicCheckRegistration,[ \t\r\n]+12> registrations" OR
        NOT connection_timeout_core_package MATCHES
            "using ScannerRegistration" OR
+       NOT connection_timeout_core_package MATCHES
+           "void [(][*][)][(]void[*], std::int64_t[)] noexcept" OR
        NOT connection_timeout_core_model MATCHES
            "class WorkerMaintenanceRegistration final" OR
        NOT connection_timeout_core_model MATCHES
@@ -9557,8 +9578,8 @@ if(EXISTS "${CONNECTION_TIMEOUT_CORE_MODEL}" AND
            "No free slot|first free" OR
        connection_timeout_core_model MATCHES
            "workerScanners_|WorkerScanner[ \t]+final|setWorkerScanner")
-        boundary_error("worker scanning regained a fixed registration ceiling"
-            "stream liveness and worker maintenance checks must own intrusive RAII registrations so the scanner stays allocation-free without silently dropping work")
+        boundary_error("worker scanning ownership or registration contract regressed"
+            "stream hooks must be void intrusive notifications that act on their own transport; only Core timeout policy may close the owning socket")
     endif()
 endif()
 

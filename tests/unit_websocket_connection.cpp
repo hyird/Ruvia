@@ -152,9 +152,9 @@ RUVIA_TEST(websocket_session_finish_maps_chain_failure_to_1011) {
     RUVIA_CHECK(!state.aborted);
 }
 
-// Periodic liveness failure aborts the WebSocket transport itself and returns false
-// to ConnectionScanner. For an RFC 8441 adapter that means RST_STREAM(CANCEL), so one
-// silent tunnel cannot tear down unrelated streams on the multiplexed connection.
+// Periodic liveness failure aborts the WebSocket transport itself. The scanner
+// callback has no connection-close return channel; for an RFC 8441 adapter abort
+// means RST_STREAM(CANCEL), so one silent tunnel cannot tear down unrelated streams.
 RUVIA_TEST(websocket_liveness_aborts_transport_not_scanner_owner) {
     asio::io_context io;
     RecordingTransportState state;
@@ -170,15 +170,14 @@ RUVIA_TEST(websocket_liveness_aborts_transport_not_scanner_owner) {
         ruvia::ProtocolByteLimit::limited(1024),
         memory.resource());
 
-    RUVIA_CHECK(!WebSocketConnection<RecordingTransport>::heartbeatTickThunk(&connection, 10));
+    WebSocketConnection<RecordingTransport>::heartbeatTickThunk(&connection, 10);
     io.run();
     RUVIA_CHECK_EQ(state.writes, std::size_t{1});
     RUVIA_CHECK(state.lastDisposition == WsTransportDisposition::kKeepOpen);
 
-    // No Pong arrived and its deadline elapsed. The callback still tells the
-    // scanner not to close the owning socket because abort() already targeted this
-    // transport.
-    RUVIA_CHECK(!WebSocketConnection<RecordingTransport>::heartbeatTickThunk(&connection, 12));
+    // No Pong arrived and its deadline elapsed. The callback can only abort its
+    // own transport; it cannot ask Core to close the scanner's owning socket.
+    WebSocketConnection<RecordingTransport>::heartbeatTickThunk(&connection, 12);
     RUVIA_CHECK(state.aborted);
 }
 

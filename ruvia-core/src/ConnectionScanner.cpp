@@ -133,20 +133,16 @@ bool ConnectionScanner::Entry::linked() const noexcept {
     return prev_ != nullptr && next_ != nullptr;
 }
 
-bool ConnectionScanner::Entry::tickLongLived(std::int64_t now) noexcept {
-    // Run every registered check; any failure closes the owning connection.
-    bool shouldClose = false;
+void ConnectionScanner::Entry::runPeriodicChecks(std::int64_t now) noexcept {
     periodicScanNext_ = periodicChecks_;
     while (periodicScanNext_ != nullptr) {
         auto* registration = periodicScanNext_;
         periodicScanNext_ = registration->next_;
         if (registration->tick_ != nullptr &&
-            registration->target_ != nullptr &&
-            registration->tick_(registration->target_, now)) {
-            shouldClose = true;
+            registration->target_ != nullptr) {
+            registration->tick_(registration->target_, now);
         }
     }
-    return shouldClose;
 }
 
 ConnectionScanner::Guard::Guard(ConnectionScanner* scanner, Entry& entry, asio::ip::tcp::socket& socket)
@@ -357,8 +353,8 @@ void ConnectionScanner::scan() noexcept {
     auto* current = sentinel_.next_;
     while (current != &sentinel_) {
         auto* next = current->next_;
-        const bool periodicCheckFailed = current->tickLongLived(now);
-        if (current->socket_ != nullptr && (periodicCheckFailed || isTimedOut(*current, now))) {
+        current->runPeriodicChecks(now);
+        if (current->socket_ != nullptr && isTimedOut(*current, now)) {
             closeSocket(*current->socket_);
         }
         current = next;

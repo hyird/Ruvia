@@ -18,9 +18,8 @@ namespace {
 struct PeriodicProbe final {
     std::size_t ticks{0};
 
-    static bool tick(void* target, std::int64_t) noexcept {
+    static void tick(void* target, std::int64_t) noexcept {
         ++static_cast<PeriodicProbe*>(target)->ticks;
-        return false;
     }
 };
 
@@ -28,11 +27,10 @@ struct PeriodicResetProbe final {
     ruvia::detail::ConnectionScanner::PeriodicCheckRegistration* registration;
     std::size_t ticks{0};
 
-    static bool tick(void* target, std::int64_t) noexcept {
+    static void tick(void* target, std::int64_t) noexcept {
         auto& probe = *static_cast<PeriodicResetProbe*>(target);
         ++probe.ticks;
         probe.registration->reset();
-        return false;
     }
 };
 

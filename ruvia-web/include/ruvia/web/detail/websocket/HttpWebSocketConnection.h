@@ -65,8 +65,8 @@ public:
     WebSocketConnection(const WebSocketConnection&) = delete;
     WebSocketConnection& operator=(const WebSocketConnection&) = delete;
 
-    static bool heartbeatTickThunk(void* target, std::int64_t now) noexcept {
-        return static_cast<WebSocketConnection*>(target)->heartbeatTick(now);
+    static void heartbeatTickThunk(void* target, std::int64_t now) noexcept {
+        static_cast<WebSocketConnection*>(target)->heartbeatTick(now);
     }
 
     [[nodiscard]] Task<std::optional<WebSocketMessage>> read();
@@ -98,7 +98,7 @@ private:
     };
 
     void completeBackgroundWrite() noexcept;
-    bool heartbeatTick(std::int64_t now) noexcept;
+    void heartbeatTick(std::int64_t now) noexcept;
     Task<void> writeHeartbeatPing();
     Task<void> waitForHeartbeatWrite();
     Task<void> waitForWriteIdle();

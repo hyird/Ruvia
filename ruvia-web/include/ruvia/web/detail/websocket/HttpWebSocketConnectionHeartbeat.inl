@@ -11,7 +11,7 @@ void WebSocketConnection<Transport>::completeBackgroundWrite() noexcept {
 }
 
 template <typename Transport>
-bool WebSocketConnection<Transport>::heartbeatTick(std::int64_t now) noexcept {
+void WebSocketConnection<Transport>::heartbeatTick(std::int64_t now) noexcept {
     switch (webSocketLivenessDecision(
         lifecycleOptions_,
         protocol_.livenessMode(),
@@ -22,12 +22,12 @@ bool WebSocketConnection<Transport>::heartbeatTick(std::int64_t now) noexcept {
         localCloseStartedMs_,
         now)) {
         case WebSocketLivenessDecision::kIdle:
-            return false;
+            return;
         case WebSocketLivenessDecision::kAbortTransport:
             // A heartbeat/close timeout belongs to this WebSocket transport.
             // For RFC 8441 that is one stream, not the multiplexed h2 socket.
             abortTransport();
-            return false;
+            return;
         case WebSocketLivenessDecision::kSendPing:
             break;
     }
@@ -47,9 +47,8 @@ bool WebSocketConnection<Transport>::heartbeatTick(std::int64_t now) noexcept {
         writeActive_ = false;
         completeBackgroundWrite();
         abortTransport();
-        return false;
+        return;
     }
-    return false;
 }
 
 template <typename Transport>

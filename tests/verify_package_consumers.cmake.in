@@ -434,6 +434,10 @@ if(_built_components_csv MATCHES "(^|,)core(,|$)")
        NOT _installed_connection_scanner MATCHES
            "void registerPeriodicCheck" OR
        NOT _installed_connection_scanner MATCHES
+           "using PeriodicCheck = void [(][*][)][(]void[*], std::int64_t[)] noexcept" OR
+       _installed_connection_scanner MATCHES
+           "using PeriodicCheck = bool" OR
+       NOT _installed_connection_scanner MATCHES
            "PeriodicCheckRegistration[*][ \t]+periodicChecks_" OR
        NOT _installed_connection_scanner MATCHES
            "class WorkerMaintenanceRegistration final" OR
