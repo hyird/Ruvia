@@ -3,11 +3,9 @@
 #include <asio/io_context.hpp>
 #include <asio/ip/tcp.hpp>
 #include <asio/ssl/context.hpp>
-#include <condition_variable>
 #include <exception>
 #include <memory>
 #include <memory_resource>
-#include <mutex>
 #include <optional>
 #include <span>
 #include <string>
@@ -29,6 +27,7 @@
 #include "ruvia/web/detail/server/RateLimiter.h"
 #include "ruvia/web/detail/server/HttpServerOptions.h"
 #include "ruvia/web/detail/server/HttpServerWorkerState.h"
+#include "ruvia/web/detail/server/HttpServerWorkerCompletion.h"
 #include "ruvia/web/detail/db/DbInternal.h"
 #include "ruvia/web/detail/redis/RedisInternal.h"
 #include "ruvia/web/detail/server/RateLimitDecision.h"
@@ -84,9 +83,6 @@ private:
     void maybeFinishDrain() noexcept;
     void forceCloseAll() noexcept;
     void failWorker(std::exception_ptr failure) noexcept;
-    void resetStartupState();
-    void completeStartup(std::exception_ptr exception = nullptr) noexcept;
-    void waitForStartupReady();
     void runIoContext() noexcept;
     Task<void> runWorker();
     Task<void> acceptLoop();
@@ -136,11 +132,7 @@ private:
     HttpServerWorkerState workerState_{HttpServerWorkerState::kFresh};
     std::jthread workerThread_;
 
-    std::mutex startupMutex_;
-    std::condition_variable startupCv_;
-    std::exception_ptr startupException_;
-    std::exception_ptr workerException_;
-    bool startupReady_{false};
+    HttpServerWorkerCompletion workerCompletion_;
 };
 
 }  // namespace ruvia::detail

@@ -1951,6 +1951,36 @@ endforeach()
 set(_installed_http2_web_runtime_path
     "${_install_prefix}/include/ruvia/web/detail/http2/Http2SansIoStreamRuntime.h")
 if(_built_components_csv MATCHES "(^|,)web(,|$)")
+    set(_installed_http_server_path
+        "${_install_prefix}/include/ruvia/web/detail/server/HttpServer.h")
+    set(_installed_http_server_worker_completion_path
+        "${_install_prefix}/include/ruvia/web/detail/server/HttpServerWorkerCompletion.h")
+    if(NOT EXISTS "${_installed_http_server_path}" OR
+       NOT EXISTS "${_installed_http_server_worker_completion_path}")
+        message(FATAL_ERROR
+            "installed Web package is missing worker startup completion ownership")
+    endif()
+    file(READ "${_installed_http_server_path}"
+        _installed_http_server)
+    file(READ "${_installed_http_server_worker_completion_path}"
+        _installed_http_server_worker_completion)
+    if(NOT _installed_http_server_worker_completion MATCHES
+           "class HttpServerWorkerCompletion final" OR
+       NOT _installed_http_server_worker_completion MATCHES
+           "using Startup = std::variant" OR
+       NOT _installed_http_server_worker_completion MATCHES
+           "markStartupReady[(][)] noexcept" OR
+       NOT _installed_http_server_worker_completion MATCHES
+           "markStartupFailed" OR
+       NOT _installed_http_server_worker_completion MATCHES
+           "waitForStartup[(][)]" OR
+       NOT _installed_http_server MATCHES
+           "HttpServerWorkerCompletion[ \t]+workerCompletion_" OR
+       _installed_http_server MATCHES
+           "startupReady_|startupException_|workerException_|startupMutex_|startupCv_|resetStartupState|completeStartup|waitForStartupReady")
+        message(FATAL_ERROR
+            "installed Web package restored split worker startup state")
+    endif()
     set(_removed_public_server_options
         "${_install_prefix}/include/ruvia/web/HttpServerOptions.h")
     set(_installed_server_config

@@ -695,8 +695,12 @@ set(WEB_CLEARTEXT_HTTP2_SESSION
     "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/server/HttpServerCleartextHttp2.h")
 set(WEB_HTTP_SERVER_WORKER_STATE
     "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/server/HttpServerWorkerState.h")
+set(WEB_HTTP_SERVER_WORKER_COMPLETION
+    "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/server/HttpServerWorkerCompletion.h")
 set(WEB_HTTP_SERVER_SHUTDOWN_TEST
     "${RUVIA_ROOT}/tests/server_shutdown_drain.cpp")
+set(WEB_HTTP_SERVER_WORKER_COMPLETION_TEST
+    "${RUVIA_ROOT}/tests/unit_http_server_worker_completion.cpp")
 foreach(worker_lifecycle_file IN ITEMS
         "${WEB_HTTP_SERVER_LIFECYCLE}"
         "${WEB_HTTP_SERVER_ACCEPT}"
@@ -704,7 +708,9 @@ foreach(worker_lifecycle_file IN ITEMS
         "${WEB_HTTP2_SESSION}"
         "${WEB_CLEARTEXT_HTTP2_SESSION}"
         "${WEB_HTTP_SERVER_WORKER_STATE}"
-        "${WEB_HTTP_SERVER_SHUTDOWN_TEST}")
+        "${WEB_HTTP_SERVER_WORKER_COMPLETION}"
+        "${WEB_HTTP_SERVER_SHUTDOWN_TEST}"
+        "${WEB_HTTP_SERVER_WORKER_COMPLETION_TEST}")
     if(NOT EXISTS "${worker_lifecycle_file}")
         file(RELATIVE_PATH relative "${RUVIA_ROOT}" "${worker_lifecycle_file}")
         boundary_error("Worker-local shutdown chain is incomplete"
@@ -733,7 +739,11 @@ if(EXISTS "${WEB_HTTP_SERVER}" AND EXISTS "${WEB_HTTP_SERVER_LIFECYCLE}")
     file(READ "${WEB_HTTP_SERVER}" web_http_server_lifecycle_model)
     file(READ "${WEB_HTTP_SERVER_LIFECYCLE}" web_http_server_lifecycle)
     file(READ "${WEB_HTTP_SERVER_WORKER_STATE}" web_http_server_worker_state)
+    file(READ "${WEB_HTTP_SERVER_WORKER_COMPLETION}"
+        web_http_server_worker_completion)
     file(READ "${WEB_HTTP_SERVER_SHUTDOWN_TEST}" web_http_server_shutdown_test)
+    file(READ "${WEB_HTTP_SERVER_WORKER_COMPLETION_TEST}"
+        web_http_server_worker_completion_test)
     if(NOT web_http_server_lifecycle_model MATCHES
            "RuntimeLifecycle[ \t]+lifecycle_" OR
        NOT web_http_server_lifecycle_model MATCHES
@@ -742,14 +752,36 @@ if(EXISTS "${WEB_HTTP_SERVER}" AND EXISTS "${WEB_HTTP_SERVER_LIFECYCLE}")
            "bool[ \t]+(workerRunning_|drainPending_)" OR
        NOT web_http_server_worker_state MATCHES
            "kRunning,[ \t\r\n]+kDraining,[ \t\r\n]+kStopped" OR
+       NOT web_http_server_lifecycle_model MATCHES
+           "HttpServerWorkerCompletion[ \t]+workerCompletion_" OR
+       web_http_server_lifecycle_model MATCHES
+           "startupReady_|startupException_|workerException_|startupMutex_|startupCv_" OR
+       NOT web_http_server_worker_completion MATCHES
+           "class HttpServerWorkerCompletion final" OR
+       NOT web_http_server_worker_completion MATCHES
+           "using Startup = std::variant" OR
+       NOT web_http_server_worker_completion MATCHES
+           "markStartupReady[(][)] noexcept" OR
+       NOT web_http_server_worker_completion MATCHES
+           "markStartupFailed" OR
+       NOT web_http_server_worker_completion MATCHES
+           "waitForStartup[(][)]" OR
+       web_http_server_lifecycle MATCHES
+           "resetStartupState|completeStartup|waitForStartupReady" OR
+       NOT web_http_server_worker_completion_test MATCHES
+           "http_server_worker_completion_is_monotonic" OR
+       NOT web_http_server_worker_completion_test MATCHES
+           "http_server_worker_completion_propagates_startup_failure" OR
+       NOT web_http_server_worker_completion_test MATCHES
+           "http_server_worker_completion_keeps_first_terminal_failure" OR
        NOT web_http_server_lifecycle MATCHES "asio::post[(]ioContext_" OR
        NOT web_http_server_lifecycle MATCHES
            "HttpServer::~HttpServer[(][)][ \t\r\n]*[{][ \t\r\n]*stop[(][)][;][ \t\r\n]*try[ \t\r\n]*[{][ \t\r\n]*join[(][)]" OR
        NOT web_http_server_lifecycle MATCHES "finishStopOnContext[(][)]" OR
        NOT web_http_server_shutdown_test MATCHES
            "worker failed during graceful stop")
-        boundary_error("HttpServer shutdown bypasses its worker mailbox"
-            "external callers must use the core monotonic lifecycle and post shutdown; the worker must distinguish running, draining, and stopped so failure can override an already-posted graceful stop")
+        boundary_error("HttpServer lifecycle bypasses its monotonic worker state"
+            "startup completion must be discriminated and synchronized in one owner; shutdown must use the worker mailbox and distinguish running, draining, and stopped")
     endif()
 endif()
 file(GLOB_RECURSE EDGE_REFERENCE_SOURCE LIST_DIRECTORIES FALSE

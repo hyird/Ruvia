@@ -221,7 +221,6 @@ void HttpServer::start() {
     workerState_ = HttpServerWorkerState::kRunning;
 
     try {
-        resetStartupState();
         configureAcceptor();
         configureTlsContext();
         asio::co_spawn(
@@ -229,7 +228,7 @@ void HttpServer::start() {
             taskAsAwaitable(runWorker()),
             asio::bind_allocator(asio::recycling_allocator<void>(), asio::detached));
         workerThread_ = std::jthread([this] { runIoContext(); });
-        waitForStartupReady();
+        workerCompletion_.waitForStartup();
     } catch (...) {
         (void)lifecycle_.requestStop();
         if (workerThread_.joinable()) {
@@ -257,11 +256,7 @@ void HttpServer::join() {
         workerThread_.join();
     }
     lifecycle_.completeStop();
-    std::exception_ptr failure;
-    {
-        std::lock_guard lock(startupMutex_);
-        failure = workerException_;
-    }
+    const auto failure = workerCompletion_.workerFailure();
     if (failure != nullptr) {
         std::rethrow_exception(failure);
     }
@@ -443,48 +438,13 @@ void HttpServer::forceCloseAll() noexcept {
     workerDispatcher_->stopTimers();
 }
 
-void HttpServer::resetStartupState() {
-    std::lock_guard lock(startupMutex_);
-    startupException_ = nullptr;
-    workerException_ = nullptr;
-    startupReady_ = false;
-}
-
 void HttpServer::failWorker(std::exception_ptr failure) noexcept {
-    if (failure == nullptr) {
+    if (!workerCompletion_.recordWorkerFailure(failure)) {
         return;
-    }
-    {
-        std::lock_guard lock(startupMutex_);
-        if (workerException_ != nullptr) {
-            return;
-        }
-        workerException_ = failure;
     }
     (void)lifecycle_.requestStop();
     options_.workerFailure.notify(failure);
     stopOnContext(/*honorGracePeriod=*/false);
-}
-
-void HttpServer::completeStartup(std::exception_ptr exception) noexcept {
-    {
-        std::lock_guard lock(startupMutex_);
-        if (startupReady_) {
-            return;
-        }
-
-        startupException_ = exception;
-        startupReady_ = true;
-    }
-    startupCv_.notify_all();
-}
-
-void HttpServer::waitForStartupReady() {
-    std::unique_lock lock(startupMutex_);
-    startupCv_.wait(lock, [this] { return startupReady_; });
-    if (startupException_ != nullptr) {
-        std::rethrow_exception(startupException_);
-    }
 }
 
 void HttpServer::runIoContext() noexcept {
@@ -492,7 +452,7 @@ void HttpServer::runIoContext() noexcept {
         ioContext_.run();
     } catch (...) {
         const auto failure = std::current_exception();
-        completeStartup(failure);
+        (void)workerCompletion_.markStartupFailed(failure);
         failWorker(failure);
         lifecycle_.completeStop();
         workerState_ = HttpServerWorkerState::kStopped;
@@ -501,7 +461,7 @@ void HttpServer::runIoContext() noexcept {
 
     lifecycle_.completeStop();
     workerState_ = HttpServerWorkerState::kStopped;
-    completeStartup(std::make_exception_ptr(
+    (void)workerCompletion_.markStartupFailed(std::make_exception_ptr(
         std::runtime_error("http server worker stopped before startup completed")));
 }
 
@@ -514,11 +474,11 @@ Task<void> HttpServer::runWorker() {
         if (!redis_.empty()) {
             co_await redis_.connect();
         }
-        completeStartup();
+        (void)workerCompletion_.markStartupReady();
         co_await acceptLoop();
     } catch (...) {
         const auto failure = std::current_exception();
-        completeStartup(failure);
+        (void)workerCompletion_.markStartupFailed(failure);
         failWorker(failure);
     }
 }

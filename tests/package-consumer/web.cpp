@@ -1,6 +1,7 @@
 #include <chrono>
 #include <concepts>
 #include <cstddef>
+#include <exception>
 #include <memory_resource>
 #include <optional>
 #include <span>
@@ -22,6 +23,7 @@
 #include <ruvia/web/Error.h>
 #include <ruvia/web/ServerConfig.h>
 #include <ruvia/web/detail/server/HttpServerOptions.h>
+#include <ruvia/web/detail/server/HttpServerWorkerCompletion.h>
 #include <ruvia/web/Middleware.h>
 #include <ruvia/web/Model.h>
 #include <ruvia/web/RequestFields.h>
@@ -67,6 +69,24 @@
 #endif
 
 static_assert(!std::is_copy_constructible_v<ruvia::MultipartReader>);
+static_assert(std::default_initializable<
+    ruvia::detail::HttpServerWorkerCompletion>);
+static_assert(!std::copy_constructible<
+    ruvia::detail::HttpServerWorkerCompletion>);
+static_assert(!std::move_constructible<
+    ruvia::detail::HttpServerWorkerCompletion>);
+static_assert(std::same_as<
+    decltype(std::declval<ruvia::detail::HttpServerWorkerCompletion&>()
+                 .markStartupReady()),
+    bool>);
+static_assert(std::same_as<
+    decltype(std::declval<ruvia::detail::HttpServerWorkerCompletion&>()
+                 .markStartupFailed(std::declval<std::exception_ptr>())),
+    bool>);
+static_assert(std::same_as<
+    decltype(std::declval<const ruvia::detail::
+        HttpServerWorkerCompletion&>().workerFailure()),
+    std::exception_ptr>);
 static_assert(!std::is_copy_assignable_v<ruvia::MultipartReader>);
 static_assert(!std::is_move_constructible_v<ruvia::MultipartReader>);
 static_assert(!std::is_move_assignable_v<ruvia::MultipartReader>);
