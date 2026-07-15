@@ -560,7 +560,7 @@ RUVIA_TEST(static_file_if_range_date_requires_exact_match) {
     StaticRoot root(dir, std::move(options));
 
     // Serve with a Range plus an optional If-Range; returns (status, Last-Modified).
-    const auto serve = [&root](std::string_view ifRange) {
+    const auto serve = [&root](std::optional<std::string_view> ifRange) {
         ruvia::WorkerMemory worker;
         ruvia::RequestMemory memory(worker);
         ruvia::HttpRequest request = HttpRequestAccess::make();
@@ -570,9 +570,9 @@ RUVIA_TEST(static_file_if_range_date_requires_exact_match) {
         HttpRequestAccess::addHeader(
             request, HttpHeaderView{"Range", "bytes=0-4"},
             HttpRequestAccess::knownHeaderSlot(RequestKnownHeader::kRange));
-        if (!ifRange.empty()) {
+        if (ifRange.has_value()) {
             HttpRequestAccess::addHeader(
-                request, HttpHeaderView{"If-Range", ifRange},
+                request, HttpHeaderView{"If-Range", *ifRange},
                 HttpRequestAccess::knownHeaderSlot(RequestKnownHeader::kIfRange));
         }
         auto ctx = ContextAccess::make(memory, request);
@@ -582,7 +582,7 @@ RUVIA_TEST(static_file_if_range_date_requires_exact_match) {
     };
 
     // Discover the representation's current Last-Modified via a bare range request.
-    const auto base = serve("");
+    const auto base = serve(std::nullopt);
     RUVIA_CHECK_EQ(base.first, std::uint16_t{206});
     RUVIA_CHECK(!base.second.empty());
     const auto lastModified = ruvia::detail::httpParseHttpDate(base.second);
@@ -596,6 +596,11 @@ RUVIA_TEST(static_file_if_range_date_requires_exact_match) {
 
     // Exact match -> the representation is unchanged, so the range is honored (206).
     RUVIA_CHECK_EQ(serve(fmt(modified)).first, std::uint16_t{206});
+
+    // A present empty If-Range is not an entity-tag or HTTP-date. Its condition
+    // is therefore false, so it must suppress the Range rather than being
+    // confused with an absent field and producing a partial response.
+    RUVIA_CHECK_EQ(serve(std::string_view{}).first, std::uint16_t{200});
 
     // If-Range date NEWER than Last-Modified: the file's mtime is older, so it is a
     // DIFFERENT representation than the client holds. RFC 9110 §13.1.5 requires an

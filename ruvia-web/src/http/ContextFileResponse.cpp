@@ -41,6 +41,7 @@ struct FileConditionalHeaders final {
     std::string_view ifModifiedSince;
     std::string_view range;
     std::string_view ifRange;
+    bool hasIfRange;
 };
 
 [[nodiscard]] bool etagListMatches(
@@ -88,7 +89,7 @@ struct FileConditionalHeaders final {
     std::string_view etag,
     std::time_t modifiedSeconds) noexcept {
     if (header.empty()) {
-        return true;
+        return false;
     }
     const auto value = detail::httpTrimOws(header);
     if (!value.empty() && (value.front() == '"' || value.starts_with("W/"))) {
@@ -114,7 +115,8 @@ struct FileConditionalHeaders final {
         detail::requestHasKnownHeader(request, detail::RequestKnownHeader::kIfNoneMatch),
         detail::requestKnownHeader(request, detail::RequestKnownHeader::kIfModifiedSince),
         detail::requestKnownHeader(request, detail::RequestKnownHeader::kRange),
-        detail::requestKnownHeader(request, detail::RequestKnownHeader::kIfRange)};
+        detail::requestKnownHeader(request, detail::RequestKnownHeader::kIfRange),
+        detail::requestHasKnownHeader(request, detail::RequestKnownHeader::kIfRange)};
 }
 
 // The path travels by value until HttpResponse takes its own copy. StaticRoot is
@@ -321,7 +323,7 @@ template <typename ApplyResponseState>
             // client cannot verify it still holds. Gating on enableValidators (as
             // before) skipped the check entirely and returned a 206. A range with
             // no If-Range is still honored without validators.
-            if (!conditional.ifRange.empty() &&
+            if (conditional.hasIfRange &&
                 (!enableValidators || !ifRangeAllows(conditional.ifRange, etag, modifiedSeconds))) {
                 return makeFullFileResponse(std::nullopt);
             }
