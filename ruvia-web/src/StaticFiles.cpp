@@ -248,6 +248,16 @@ bool detail::StaticRootAccess::hasDirectoryIndex(const StaticRoot& root) noexcep
 std::optional<detail::StaticRootEntryView> detail::StaticRootAccess::find(
     const StaticRoot& root,
     std::string_view relativePath) noexcept {
+    auto entry = findVariant(root, relativePath);
+    if (!entry.has_value() || !entry->directlyServable_) {
+        return std::nullopt;
+    }
+    return entry;
+}
+
+std::optional<detail::StaticRootEntryView> detail::StaticRootAccess::findVariant(
+    const StaticRoot& root,
+    std::string_view relativePath) noexcept {
     const auto& state = *root.state_;
     const auto& entries = state.entries;
     const auto* const entry = findStaticRootEntry(entries, relativePath);
@@ -265,7 +275,8 @@ std::optional<detail::StaticRootEntryView> detail::StaticRootAccess::find(
         entry->modifiedToken,
         entry->modifiedSeconds,
         state.enableRanges,
-        state.enableValidators);
+        state.enableValidators,
+        entry->directlyServable);
 }
 
 bool detail::StaticRootAccess::isIndexedDirectory(
@@ -326,12 +337,13 @@ StaticRoot::StaticRoot(const std::filesystem::path& root, StaticRootOptions opti
             continue;
         }
         const auto extension = detail::lowerStaticFileExtension(filePath, upstream);
-        bool typeAllowed = fileTypeAllowed(extension, options);
-        if (!typeAllowed && isPrecompressedSidecarExtension(extension)) {
-            typeAllowed = fileTypeAllowed(
+        const bool directlyServable = fileTypeAllowed(extension, options);
+        bool usableAsSidecar = false;
+        if (!directlyServable && isPrecompressedSidecarExtension(extension)) {
+            usableAsSidecar = fileTypeAllowed(
                 detail::lowerStaticFileExtension(filePath.stem(), upstream), options);
         }
-        if (!typeAllowed) {
+        if (!directlyServable && !usableAsSidecar) {
             continue;
         }
         const auto snapshot = detail::snapshotResponseFile(
@@ -349,6 +361,7 @@ StaticRoot::StaticRoot(const std::filesystem::path& root, StaticRootOptions opti
         entry.identity = snapshot.identity;
         entry.modifiedToken = snapshot.modifiedToken;
         entry.modifiedSeconds = snapshot.modifiedSeconds;
+        entry.directlyServable = directlyServable;
         if (enableValidators) {
             entry.etag = detail::makeStaticFileSnapshotEtag(
                 upstream,

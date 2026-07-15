@@ -537,7 +537,7 @@ private:
         variantPath.assign(relative.data(), relative.size());
         variantPath.append(candidate.suffix.data(), candidate.suffix.size());
         if (const auto entry =
-                detail::StaticRootAccess::find(root, variantPath);
+                detail::StaticRootAccess::findVariant(root, variantPath);
             entry.has_value()) {
             best = candidate.score;
             selected = StaticFileRepresentation(

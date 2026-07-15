@@ -32,6 +32,7 @@ struct StaticRootEntry final {
     std::time_t modifiedSeconds{0};
     std::pmr::string etag;
     std::pmr::string lastModified;
+    bool directlyServable{true};
 };
 
 struct StaticRootState final {
@@ -111,7 +112,8 @@ private:
         std::uint64_t modifiedToken,
         std::time_t modifiedSeconds,
         bool rangesEnabled,
-        bool validatorsEnabled) noexcept
+        bool validatorsEnabled,
+        bool directlyServable) noexcept
         : filePath_(filePath),
           contentType_(contentType),
           cacheControl_(cacheControl),
@@ -122,7 +124,8 @@ private:
           modifiedToken_(modifiedToken),
           modifiedSeconds_(modifiedSeconds),
           rangesEnabled_(rangesEnabled),
-          validatorsEnabled_(validatorsEnabled) {}
+          validatorsEnabled_(validatorsEnabled),
+          directlyServable_(directlyServable) {}
 
     const NativePathChar* filePath_;
     std::string_view contentType_;
@@ -135,6 +138,7 @@ private:
     std::time_t modifiedSeconds_;
     bool rangesEnabled_;
     bool validatorsEnabled_;
+    bool directlyServable_;
 };
 
 class StaticRootAccess final {
@@ -142,6 +146,9 @@ public:
     [[nodiscard]] static std::string_view indexFile(const StaticRoot& root) noexcept;
     [[nodiscard]] static bool hasDirectoryIndex(const StaticRoot& root) noexcept;
     [[nodiscard]] static std::optional<StaticRootEntryView> find(
+        const StaticRoot& root,
+        std::string_view relativePath) noexcept;
+    [[nodiscard]] static std::optional<StaticRootEntryView> findVariant(
         const StaticRoot& root,
         std::string_view relativePath) noexcept;
     [[nodiscard]] static bool isIndexedDirectory(const StaticRoot& root, std::string_view relativePath) noexcept;

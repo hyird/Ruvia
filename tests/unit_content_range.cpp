@@ -12,6 +12,7 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <tuple>
 #include <type_traits>
 #include <utility>
 
@@ -1171,6 +1172,84 @@ RUVIA_TEST(static_file_selects_precompressed_representation_atomically) {
     const auto plain = serve("");
     RUVIA_CHECK(plain.contentEncoding.empty());
     RUVIA_CHECK_EQ(plain.size, std::uint64_t{100});
+
+    fs::remove_all(dir);
+}
+
+RUVIA_TEST(static_file_internal_sidecar_does_not_bypass_file_type_policy) {
+    namespace fs = std::filesystem;
+    using ruvia::HttpHeaderView;
+    using ruvia::StaticRoot;
+    using ruvia::detail::ContextAccess;
+    using ruvia::detail::HttpRequestAccess;
+    using ruvia::detail::RequestKnownHeader;
+
+    const auto dir = fs::temp_directory_path() / "ruvia_static_sidecar_policy_dir";
+    fs::create_directories(dir);
+    {
+        std::ofstream out(dir / "app.js", std::ios::binary | std::ios::trunc);
+        out << "identity";
+    }
+    {
+        std::ofstream out(dir / "app.js.gz", std::ios::binary | std::ios::trunc);
+        out << "gzip";
+    }
+    // The default policy allows .js but not .gz. The .gz file is indexed only
+    // as an internal representation of app.js for Accept-Encoding negotiation.
+    StaticRoot root(dir);
+
+    const auto serve = [](
+        const StaticRoot& selectedRoot,
+        std::string_view path,
+        std::string_view acceptEncoding) {
+        ruvia::WorkerMemory worker;
+        ruvia::RequestMemory memory(worker);
+        ruvia::HttpRequest request = HttpRequestAccess::make();
+        HttpRequestAccess::reset(request);
+        HttpRequestAccess::setMethod(request, "GET");
+        HttpRequestAccess::setResource(request, memory.resource());
+        if (!acceptEncoding.empty()) {
+            HttpRequestAccess::addHeader(
+                request,
+                HttpHeaderView{"Accept-Encoding", acceptEncoding},
+                HttpRequestAccess::knownHeaderSlot(
+                    RequestKnownHeader::kAcceptEncoding));
+        }
+        auto context = ContextAccess::make(memory, request);
+        try {
+            const auto response = context.staticFile(selectedRoot, path);
+            const auto file = ruvia::detail::responseBody(response).file();
+            return std::tuple{
+                response.status(),
+                std::string(response.header("Content-Encoding").value_or("")),
+                file.has_value() ? file->length() : std::uint64_t{0}};
+        } catch (const ruvia::HttpError& error) {
+            return std::tuple{
+                error.info().status(), std::string{}, std::uint64_t{0}};
+        }
+    };
+
+    const auto negotiated = serve(root, "app.js", "gzip");
+    RUVIA_CHECK_EQ(std::get<0>(negotiated), std::uint16_t{200});
+    RUVIA_CHECK_EQ(std::get<1>(negotiated), std::string("gzip"));
+    RUVIA_CHECK_EQ(std::get<2>(negotiated), std::uint64_t{4});
+
+    // Directly requesting the internal sidecar must follow the same extension
+    // allow-list as every other public path. Before this guard, it returned the
+    // raw compressed bytes as an identity application/octet-stream response.
+    RUVIA_CHECK_EQ(
+        std::get<0>(serve(root, "app.js.gz", "")),
+        std::uint16_t{404});
+
+    // A policy that explicitly allows .gz still exposes it as a normal file;
+    // only entries admitted solely because their base type is allowed are
+    // internal-only.
+    ruvia::StaticRootOptions gzipOptions;
+    gzipOptions.fileTypes = ruvia::StaticFileTypePolicy::only({"gz"});
+    StaticRoot gzipRoot(dir, std::move(gzipOptions));
+    RUVIA_CHECK_EQ(
+        std::get<0>(serve(gzipRoot, "app.js.gz", "")),
+        std::uint16_t{200});
 
     fs::remove_all(dir);
 }
