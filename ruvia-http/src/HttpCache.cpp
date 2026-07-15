@@ -5,6 +5,7 @@
 
 #include "ruvia/http/detail/HeaderTokenUtils.h"       // httpTrimOws, httpAsciiEqualsIgnoreCase
 #include "ruvia/http/detail/HttpDate.h"
+#include "ruvia/http/detail/parser/HttpParserSyntax.h"
 
 namespace ruvia {
 namespace {
@@ -13,7 +14,6 @@ namespace {
 // integer. Syntactically valid overflow saturates to the greatest convenient
 // representation; non-digit / empty input remains invalid.
 [[nodiscard]] std::optional<std::uint64_t> parseDeltaSeconds(std::string_view value) noexcept {
-    value = detail::httpTrimOws(value);
     if (value.size() >= 2 && value.front() == '"' && value.back() == '"') {
         value = value.substr(1, value.size() - 2);
     }
@@ -32,6 +32,42 @@ namespace {
         return std::nullopt;
     }
     return result;
+}
+
+[[nodiscard]] bool isValidCacheDirectiveArgument(std::string_view value) noexcept {
+    if (value.empty()) {
+        return false;
+    }
+    if (value.front() != '"') {
+        for (const auto ch : value) {
+            if (!detail::isHttpTokenChar(static_cast<unsigned char>(ch))) {
+                return false;
+            }
+        }
+        return true;
+    }
+    if (value.size() < 2 || value.back() != '"') {
+        return false;
+    }
+    for (std::size_t cursor = 1; cursor + 1 < value.size(); ++cursor) {
+        const auto ch = static_cast<unsigned char>(value[cursor]);
+        if (ch == '\\') {
+            if (++cursor + 1 >= value.size()) {
+                return false;
+            }
+            const auto escaped = static_cast<unsigned char>(value[cursor]);
+            if (escaped != '\t' && escaped != ' ' &&
+                (escaped < 0x21 || escaped > 0x7e) && escaped < 0x80) {
+                return false;
+            }
+        } else if (ch == '"' ||
+                   (ch != '\t' && ch != ' ' && ch != 0x21 &&
+                    (ch < 0x23 || ch > 0x5b) &&
+                    (ch < 0x5d || ch > 0x7e) && ch < 0x80)) {
+            return false;
+        }
+    }
+    return true;
 }
 
 [[nodiscard]] std::size_t cacheDirectiveEnd(
@@ -80,18 +116,20 @@ CacheControl parseCacheControl(std::string_view value) noexcept {
         }
         const auto eq = token.find('=');
         const bool hasArgument = eq != std::string_view::npos;
-        const auto name = detail::httpTrimOws(eq == std::string_view::npos ? token : token.substr(0, eq));
+        const auto name = eq == std::string_view::npos ? token : token.substr(0, eq);
         const auto arg = eq == std::string_view::npos ? std::string_view{} : token.substr(eq + 1);
 
         if (!hasArgument && detail::httpAsciiEqualsIgnoreCase(name, "no-store")) {
             result.noStore = true;
-        } else if (detail::httpAsciiEqualsIgnoreCase(name, "no-cache")) {
+        } else if ((!hasArgument || isValidCacheDirectiveArgument(arg)) &&
+                   detail::httpAsciiEqualsIgnoreCase(name, "no-cache")) {
             result.noCache = true;
         } else if (!hasArgument && detail::httpAsciiEqualsIgnoreCase(name, "must-revalidate")) {
             result.mustRevalidate = true;
         } else if (!hasArgument && detail::httpAsciiEqualsIgnoreCase(name, "proxy-revalidate")) {
             result.proxyRevalidate = true;
-        } else if (detail::httpAsciiEqualsIgnoreCase(name, "private")) {
+        } else if ((!hasArgument || isValidCacheDirectiveArgument(arg)) &&
+                   detail::httpAsciiEqualsIgnoreCase(name, "private")) {
             result.isPrivate = true;
         } else if (!hasArgument && detail::httpAsciiEqualsIgnoreCase(name, "public")) {
             result.isPublic = true;

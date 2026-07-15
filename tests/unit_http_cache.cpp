@@ -38,6 +38,25 @@ RUVIA_TEST(parse_cache_control_rejects_bad_delta_seconds) {
     RUVIA_CHECK(!cc.sMaxAge.has_value());
 }
 
+RUVIA_TEST(parse_cache_control_rejects_whitespace_around_equals) {
+    const auto cc = ruvia::parseCacheControl(
+        "max-age =60, s-maxage= 120, stale-while-revalidate = 30, "
+        "stale-if-error=\t45, no-cache =\"Set-Cookie\", private = auth, "
+        "no-cache= \"ETag\", private= auth");
+    RUVIA_CHECK(!cc.maxAge.has_value());
+    RUVIA_CHECK(!cc.sMaxAge.has_value());
+    RUVIA_CHECK(!cc.staleWhileRevalidate.has_value());
+    RUVIA_CHECK(!cc.staleIfError.has_value());
+    RUVIA_CHECK(!cc.noCache);
+    RUVIA_CHECK(!cc.isPrivate);
+
+    // OWS around comma separators remains valid list framing.
+    const auto separated = ruvia::parseCacheControl(
+        " max-age=60 \t,\t no-store ");
+    RUVIA_CHECK_EQ(separated.maxAge.value_or(0), std::uint64_t{60});
+    RUVIA_CHECK(separated.noStore);
+}
+
 RUVIA_TEST(parse_cache_control_freshness_uses_first_occurrence) {
     const auto duplicated = ruvia::parseCacheControl(
         "max-age=60, MAX-AGE=3600, s-maxage=120, s-maxage=7200, "
