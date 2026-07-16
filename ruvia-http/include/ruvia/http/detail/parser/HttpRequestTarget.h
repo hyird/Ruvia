@@ -70,6 +70,13 @@ private:
 // isValidOriginFormTarget.
 [[nodiscard]] bool isValidRequestTargetBytes(std::string_view target) noexcept;
 
+// RFC 3986 scheme = ALPHA *( ALPHA / DIGIT / "+" / "-" / "." ).
+[[nodiscard]] bool isValidUriScheme(std::string_view value) noexcept;
+// Returns the HTTP-defined default for http/https (case-insensitively), or 0
+// when the framework does not know a default port for the valid URI scheme.
+[[nodiscard]] std::uint16_t httpUriSchemeDefaultPort(
+    std::string_view scheme) noexcept;
+
 [[nodiscard]] bool isValidOriginFormTarget(std::string_view target) noexcept;
 
 [[nodiscard]] bool isValidHostHeader(std::string_view value) noexcept;

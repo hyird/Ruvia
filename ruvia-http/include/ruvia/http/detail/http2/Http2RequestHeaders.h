@@ -88,10 +88,11 @@ struct Http2HeaderDecodeContext final {
             return true;
         }
         if (name == ":scheme") {
-            if (stream.hasScheme() || (value != "http" && value != "https")) {
+            if (stream.hasScheme() || !isValidUriScheme(value)) {
                 return false;
             }
-            stream.markScheme(value == "https" ? 443 : 80);
+            stream.assignRequestScheme(value);
+            stream.markScheme(httpUriSchemeDefaultPort(value));
             return true;
         }
         if (name == ":authority") {

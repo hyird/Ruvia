@@ -372,6 +372,14 @@ public:
         return requestState_.hasScheme();
     }
 
+    [[nodiscard]] std::string_view requestScheme() const noexcept {
+        return requestData_.scheme();
+    }
+
+    void assignRequestScheme(std::string_view value) {
+        requestData_.assignScheme(value);
+    }
+
     void markScheme(std::uint16_t defaultPort) noexcept {
         requestState_.markScheme(defaultPort);
     }

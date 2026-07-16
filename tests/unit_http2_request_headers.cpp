@@ -88,10 +88,10 @@ RUVIA_TEST(h2_headers_empty_and_unknown_pseudo_rejected) {
         Http2HeaderDecodeContext ctx{stream};
         RUVIA_CHECK(!http2OnDecodedInitialHeader(ctx, ":scheme", ""));  // empty scheme
     }
-    {
+    for (const auto malformed : {"1ftp", "bad scheme", "ftp:"}) {
         Http2StreamState stream(1, res());
         Http2HeaderDecodeContext ctx{stream};
-        RUVIA_CHECK(!http2OnDecodedInitialHeader(ctx, ":scheme", "ftp"));  // unsupported scheme
+        RUVIA_CHECK(!http2OnDecodedInitialHeader(ctx, ":scheme", malformed));
     }
     Http2StreamState stream(1, res());
     Http2HeaderDecodeContext ctx{stream};
@@ -168,6 +168,29 @@ RUVIA_TEST(h2_headers_authority_host_match_uses_scheme_default_port) {
         RUVIA_CHECK(http2OnDecodedInitialHeader(ctx, ":scheme", "https"));
         RUVIA_CHECK(http2OnDecodedInitialHeader(ctx, ":authority", "example.com:80"));
         RUVIA_CHECK(!http2OnDecodedInitialHeader(ctx, "host", "example.com"));
+    }
+    {
+        Http2StreamState stream(1, res());
+        Http2HeaderDecodeContext ctx{stream};
+        RUVIA_CHECK(http2OnDecodedInitialHeader(ctx, ":scheme", "ftp"));
+        RUVIA_CHECK_EQ(stream.requestScheme(), std::string_view("ftp"));
+        RUVIA_CHECK_EQ(stream.schemeDefaultPort(), std::uint16_t{0});
+        RUVIA_CHECK(http2OnDecodedInitialHeader(ctx, ":authority", "example.com"));
+        RUVIA_CHECK(http2OnDecodedInitialHeader(ctx, "host", "example.com:"));
+    }
+    {
+        Http2StreamState stream(1, res());
+        Http2HeaderDecodeContext ctx{stream};
+        RUVIA_CHECK(http2OnDecodedInitialHeader(ctx, ":scheme", "ftp"));
+        RUVIA_CHECK(http2OnDecodedInitialHeader(ctx, ":authority", "example.com:21"));
+        RUVIA_CHECK(!http2OnDecodedInitialHeader(ctx, "host", "example.com"));
+    }
+    {
+        Http2StreamState stream(1, res());
+        Http2HeaderDecodeContext ctx{stream};
+        RUVIA_CHECK(http2OnDecodedInitialHeader(ctx, ":scheme", "ftp"));
+        RUVIA_CHECK(http2OnDecodedInitialHeader(ctx, ":authority", "example.com:21"));
+        RUVIA_CHECK(http2OnDecodedInitialHeader(ctx, "host", "example.com:21"));
     }
 }
 

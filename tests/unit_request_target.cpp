@@ -10,15 +10,34 @@ using ruvia::HttpKnownMethod;
 using ruvia::detail::RequestTargetView;
 using ruvia::detail::HttpAuthorityPortKind;
 using ruvia::detail::authorityMatchesHost;
+using ruvia::detail::httpUriSchemeDefaultPort;
 using ruvia::detail::httpUriHostEquals;
 using ruvia::detail::isValidHostHeader;
 using ruvia::detail::isValidHttpHost;
 using ruvia::detail::isValidOriginFormTarget;
 using ruvia::detail::isValidRequestTargetBytes;
+using ruvia::detail::isValidUriScheme;
 using ruvia::detail::parseHttpAuthority;
 using ruvia::detail::parseRequestTarget;
 
 }  // namespace
+
+RUVIA_TEST(uri_scheme_uses_complete_rfc3986_grammar) {
+    RUVIA_CHECK(isValidUriScheme("http"));
+    RUVIA_CHECK(isValidUriScheme("HTTPS"));
+    RUVIA_CHECK(isValidUriScheme("ftp"));
+    RUVIA_CHECK(isValidUriScheme("git+ssh"));
+    RUVIA_CHECK(isValidUriScheme("x-1.example"));
+    RUVIA_CHECK(!isValidUriScheme(""));
+    RUVIA_CHECK(!isValidUriScheme("1http"));
+    RUVIA_CHECK(!isValidUriScheme("bad scheme"));
+    RUVIA_CHECK(!isValidUriScheme("https:"));
+    RUVIA_CHECK(!isValidUriScheme("https/other"));
+
+    RUVIA_CHECK_EQ(httpUriSchemeDefaultPort("HTTP"), std::uint16_t{80});
+    RUVIA_CHECK_EQ(httpUriSchemeDefaultPort("hTtPs"), std::uint16_t{443});
+    RUVIA_CHECK_EQ(httpUriSchemeDefaultPort("ftp"), std::uint16_t{0});
+}
 
 RUVIA_TEST(host_header_accepts_valid) {
     RUVIA_CHECK(isValidHostHeader("example.com"));
@@ -119,6 +138,8 @@ RUVIA_TEST(authority_matches_host_ports_and_case) {
     RUVIA_CHECK(authorityMatchesHost("EXAMPLE.com", "example.COM", 80));     // host is case-insensitive
     RUVIA_CHECK(authorityMatchesHost("[::1]:443", "[::1]", 443));            // IPv6 default port
     RUVIA_CHECK(authorityMatchesHost("[v1.future]:", "[V1.FUTURE]", 80));
+    RUVIA_CHECK(authorityMatchesHost("example.com", "example.com:", 0));
+    RUVIA_CHECK(authorityMatchesHost("example.com:21", "example.com:21", 0));
 }
 
 RUVIA_TEST(authority_matches_host_rejects_mismatches) {
@@ -126,6 +147,9 @@ RUVIA_TEST(authority_matches_host_rejects_mismatches) {
     RUVIA_CHECK(!authorityMatchesHost("example.com", "other.com", 80));            // host mismatch
     RUVIA_CHECK(!authorityMatchesHost("example.com:8080", "example.com:80", 80));  // explicit port mismatch
     RUVIA_CHECK(!authorityMatchesHost("evil.com", "example.com", 80));
+    RUVIA_CHECK(!authorityMatchesHost("example.com", "example.com:0", 0));
+    RUVIA_CHECK(!authorityMatchesHost("example.com", "example.com:21", 0));
+    RUVIA_CHECK(!authorityMatchesHost("example.com:21", "example.com", 0));
 }
 
 RUVIA_TEST(parse_request_target_origin_form) {

@@ -653,6 +653,34 @@ bool isValidHostHeader(std::string_view value) noexcept {
     return parseHttpAuthority(value).has_value();
 }
 
+bool isValidUriScheme(std::string_view value) noexcept {
+    const auto isAlpha = [](unsigned char byte) noexcept {
+        return (byte >= 'A' && byte <= 'Z') ||
+            (byte >= 'a' && byte <= 'z');
+    };
+    if (value.empty() || !isAlpha(static_cast<unsigned char>(value.front()))) {
+        return false;
+    }
+    for (const auto c : value.substr(1)) {
+        const auto byte = static_cast<unsigned char>(c);
+        if (!isAlpha(byte) && !(byte >= '0' && byte <= '9') &&
+            byte != '+' && byte != '-' && byte != '.') {
+            return false;
+        }
+    }
+    return true;
+}
+
+std::uint16_t httpUriSchemeDefaultPort(std::string_view scheme) noexcept {
+    if (httpAsciiEqualsIgnoreCase(scheme, "http")) {
+        return 80;
+    }
+    if (httpAsciiEqualsIgnoreCase(scheme, "https")) {
+        return 443;
+    }
+    return 0;
+}
+
 namespace {
 
 [[nodiscard]] bool parseAbsoluteTarget(std::string_view target, RequestTargetView& output) noexcept {
@@ -720,6 +748,19 @@ bool authorityMatchesHost(
     if (!authorityParts || !hostParts ||
         !httpUriHostEquals(authorityParts->host(), hostParts->host())) {
         return false;
+    }
+    // With no known scheme default, an omitted/empty port has no numeric value.
+    // In particular, it must not compare equal to the explicit port `:0` merely
+    // because zero is also our "unknown default" sentinel.
+    if (defaultPort == 0) {
+        const bool authorityHasPort =
+            authorityParts->portKind() == HttpAuthorityPortKind::kValue;
+        const bool hostHasPort =
+            hostParts->portKind() == HttpAuthorityPortKind::kValue;
+        if (authorityHasPort != hostHasPort) {
+            return false;
+        }
+        return !authorityHasPort || authorityParts->port() == hostParts->port();
     }
     return authorityParts->effectivePort(defaultPort) ==
         hostParts->effectivePort(defaultPort);

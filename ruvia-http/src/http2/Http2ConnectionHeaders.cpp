@@ -38,6 +38,13 @@ HeaderDecodeStatus Http2Connection::decodeHeaderBlock(Http2StreamState& stream) 
             stream.remoteContent().allowedKnownLength() != nullptr) {
             return HeaderDecodeStatus::kProtocolError;
         }
+        // RFC 8441 defines WebSocket extended CONNECT only for HTTP(S) URI
+        // schemes. Other extended protocols retain the full RFC 3986 space.
+        if (stream.protocolIsWebSocket() &&
+            !httpAsciiEqualsIgnoreCase(stream.requestScheme(), "http") &&
+            !httpAsciiEqualsIgnoreCase(stream.requestScheme(), "https")) {
+            return HeaderDecodeStatus::kProtocolError;
+        }
         if (!stream.beginExtendedConnect()) {
             return HeaderDecodeStatus::kProtocolError;
         }

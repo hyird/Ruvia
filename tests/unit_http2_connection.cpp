@@ -366,6 +366,7 @@ const auto& submittedResponsePlan(const Result& result) {
 struct RequestContentLengthObservation final {
     std::size_t count{0};
     std::string value;
+    std::string scheme;
 };
 
 bool observeRequestContentLength(
@@ -376,14 +377,19 @@ bool observeRequestContentLength(
     if (name == "content-length") {
         ++observation.count;
         observation.value.assign(value.data(), value.size());
+    } else if (name == ":scheme") {
+        observation.scheme.assign(value.data(), value.size());
     }
     return true;
 }
 
 // Encode a minimal valid request header block (HPACK literals) into `block`.
-void encodeRequest(std::pmr::string& block, std::string_view method) {
+void encodeRequest(
+    std::pmr::string& block,
+    std::string_view method,
+    std::string_view scheme = "https") {
     HpackEncoder::encodeHeader(block, ":method", method);
-    HpackEncoder::encodeHeader(block, ":scheme", "https");
+    HpackEncoder::encodeHeader(block, ":scheme", scheme);
     HpackEncoder::encodeHeader(block, ":path", "/");
     HpackEncoder::encodeHeader(block, ":authority", "example.com");
 }
@@ -1125,6 +1131,31 @@ RUVIA_TEST(http2_connection_feed_extension_method_emits_request_event) {
         RUVIA_CHECK_EQ(stream->requestMethod(), std::string_view("PROPFIND"));
         RUVIA_CHECK(
             stream->requestKnownMethod() == ruvia::HttpKnownMethod::kUnknown);
+    }
+}
+
+RUVIA_TEST(http2_connection_feed_accepts_non_http_request_scheme) {
+    std::pmr::monotonic_buffer_resource resource;
+    Http2Connection conn(&resource);
+    handshake(conn);
+
+    std::pmr::string block(&resource);
+    encodeRequest(block, "GET", "gemini");
+    const auto frame = headersFrame(
+        &resource, 1,
+        ruvia::detail::kHttp2FlagEndHeaders | ruvia::detail::kHttp2FlagEndStream,
+        std::string_view(block.data(), block.size()));
+
+    RUVIA_CHECK(conn.feed(std::string_view(frame.data(), frame.size())) ==
+        Http2FeedResult::kAccepted);
+    RUVIA_CHECK(!conn.connectionError().has_value());
+    RUVIA_CHECK(conn.nextEvent().value().kind() == Http2EventKind::kMessageHead);
+    RUVIA_CHECK(conn.nextEvent().value().kind() == Http2EventKind::kMessageEnd);
+    const auto* stream = conn.stream(1);
+    RUVIA_CHECK(stream != nullptr);
+    if (stream != nullptr) {
+        RUVIA_CHECK_EQ(stream->requestScheme(), std::string_view("gemini"));
+        RUVIA_CHECK_EQ(stream->schemeDefaultPort(), std::uint16_t{0});
     }
 }
 
@@ -2053,7 +2084,7 @@ RUVIA_TEST(http2_connection_rejects_invalid_request_head_before_hpack) {
     const ruvia::HttpHeaderView mismatchedHost[] = {{"host", "other.test"}};
     reject("CONNECT", "https", "example.test:443", "/", {});
     reject("GET bad", "https", "example.test", "/", {});
-    reject("GET", "ftp", "example.test", "/", {});
+    reject("GET", "1ftp", "example.test", "/", {});
     reject("GET", "https", "example.test", "relative", {});
     reject("GET", "https", "example.test", "/", uppercase);
     reject("GET", "https", "example.test", "/", connection);
@@ -2068,6 +2099,33 @@ RUVIA_TEST(http2_connection_rejects_invalid_request_head_before_hpack) {
         Http2RequestContent::none());
     RUVIA_CHECK(accepted.submitted() != nullptr);
     RUVIA_CHECK_EQ(submittedRequestStreamId(accepted), std::uint32_t{1});
+}
+
+RUVIA_TEST(http2_connection_encodes_non_http_request_scheme) {
+    std::pmr::monotonic_buffer_resource resource;
+    Http2Connection client(&resource, ruvia::detail::Http2Role::kClient);
+    beginClient(client);
+
+    const auto submitted = client.submitRegularRequestHead(
+        "GET", "git+ssh", "example.test", "/repository", {},
+        Http2RequestContent::none());
+    RUVIA_CHECK(submitted.submitted() != nullptr);
+    RUVIA_CHECK_EQ(submittedRequestStreamId(submitted), std::uint32_t{1});
+
+    const auto out = client.pendingOutput();
+    const auto frame = ruvia::detail::http2ParseFrameHeader(out.substr(0, 9));
+    RequestContentLengthObservation observation;
+    HpackDecoder decoder(&resource);
+    const auto decoded = decoder.decode(
+        out.substr(9, frame.length), &observation,
+        &observeRequestContentLength);
+    RUVIA_CHECK(decoded.decoded() != nullptr);
+    RUVIA_CHECK_EQ(observation.scheme, std::string("git+ssh"));
+    const auto* stream = client.stream(1);
+    RUVIA_CHECK(stream != nullptr);
+    if (stream != nullptr) {
+        RUVIA_CHECK_EQ(stream->requestScheme(), std::string_view("git+ssh"));
+    }
 }
 
 RUVIA_TEST(http2_connection_exposes_negotiated_extended_connect_capability) {

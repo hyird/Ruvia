@@ -3941,7 +3941,7 @@ int main() {
     }
     const auto request = h2.submitRegularRequestHead(
         "PROPFIND",
-        "https",
+        "git+ssh",
         "example.test",
         "/",
         {},
@@ -3954,6 +3954,7 @@ int main() {
     const auto* extensionStream = h2.stream(streamId);
     if (extensionStream == nullptr ||
         extensionStream->requestMethod() != "PROPFIND" ||
+        extensionStream->requestScheme() != "git+ssh" ||
         extensionStream->requestKnownMethod() != ruvia::HttpKnownMethod::kUnknown ||
         extensionStream->localContent().forbidden() == nullptr ||
         extensionStream->localContent().knownLength() != nullptr ||

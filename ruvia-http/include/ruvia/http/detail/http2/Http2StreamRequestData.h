@@ -29,6 +29,14 @@ public:
         knownMethod_ = classifyHttpMethod(method);
     }
 
+    [[nodiscard]] std::string_view scheme() const noexcept {
+        return scheme_;
+    }
+
+    void assignScheme(std::string_view value) {
+        scheme_.assign(value.data(), value.size());
+    }
+
     [[nodiscard]] std::string_view authority() const noexcept {
         return authority_;
     }
@@ -99,6 +107,7 @@ public:
 private:
     Http2StreamRequestData(HttpResolvedPmrResourceTag, std::pmr::memory_resource* resource)
         : method_(resource),
+          scheme_(resource),
           authority_(resource),
           path_(resource),
           protocol_(resource),
@@ -107,6 +116,7 @@ private:
 
     std::pmr::string method_;
     HttpKnownMethod knownMethod_{HttpKnownMethod::kUnknown};
+    std::pmr::string scheme_;
     std::pmr::string authority_;
     std::pmr::string path_;
     std::pmr::string protocol_;

@@ -70,12 +70,12 @@ namespace {
     std::string_view path,
     std::span<const HttpHeaderView> headers) noexcept {
     if (!http2IsValidOutboundMethod(method) ||
-        (scheme != "http" && scheme != "https") ||
+        !isValidUriScheme(scheme) ||
         !isValidHostHeader(authority) ||
         !isValidOriginFormTarget(path)) {
         return false;
     }
-    const auto defaultPort = static_cast<std::uint16_t>(scheme == "https" ? 443 : 80);
+    const auto defaultPort = httpUriSchemeDefaultPort(scheme);
     return http2AreValidOutboundRequestHeaders(
         authority, defaultPort, headers, /*allowHost=*/true, /*allowTrailers=*/true);
 }
@@ -174,6 +174,7 @@ Http2RequestHeadSubmitResult Http2Connection::submitRegularRequestHead(
     const auto streamId = stream->id();
 
     stream->assignRequestMethod(method);
+    stream->assignRequestScheme(scheme);
     auto& block = stream->responseHeaderBlock();
     block.clear();
     HpackEncoder::encodeHeader(block, ":method", method);
@@ -269,16 +270,20 @@ Http2RequestHeadSubmitResult Http2Connection::submitExtendedConnectRequestHead(
     }
 
     const bool websocket = httpAsciiEqualsIgnoreCase(protocol, "websocket");
+    const bool websocketScheme =
+        httpAsciiEqualsIgnoreCase(scheme, "http") ||
+        httpAsciiEqualsIgnoreCase(scheme, "https");
     const auto encodedProtocol = websocket
         ? std::string_view("websocket")
         : protocol;
     if (!isValidHttpHeaderName(protocol) ||
-        (scheme != "http" && scheme != "https") ||
+        !isValidUriScheme(scheme) ||
+        (websocket && !websocketScheme) ||
         !isValidHostHeader(authority) ||
         !isValidOriginFormTarget(path) ||
         !http2AreValidOutboundRequestHeaders(
             authority,
-            static_cast<std::uint16_t>(scheme == "https" ? 443 : 80),
+            httpUriSchemeDefaultPort(scheme),
             headers,
             /*allowHost=*/!websocket,
             /*allowTrailers=*/false) ||
@@ -313,6 +318,7 @@ Http2RequestHeadSubmitResult Http2Connection::submitExtendedConnectRequestHead(
         std::string_view(block.data(), block.size()),
         Http2EndStream::kKeepOpen);
     stream->assignRequestMethod("CONNECT");
+    stream->assignRequestScheme(scheme);
     stream->setProtocol(encodedProtocol);
     stream->beginLocalContentForbidden();
     (void)stream->beginLocalConnectRequest();
