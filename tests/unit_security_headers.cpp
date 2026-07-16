@@ -1,7 +1,14 @@
 #include "test_harness.h"
 
+#include <array>
 #include <concepts>
+#include <memory_resource>
+#include <span>
+#include <string>
 #include <string_view>
+#include <type_traits>
+#include <utility>
+#include <vector>
 
 #include "ruvia/web/detail/http/ContextInternal.h"
 #include "ruvia/web/detail/http/ContextServices.h"
@@ -17,6 +24,7 @@ using ruvia::Context;
 using ruvia::HttpResponse;
 using ruvia::LegacyXssFilterPolicy;
 using ruvia::RequestMemory;
+using ruvia::SecurityHeader;
 using ruvia::SecurityHeadersOptions;
 using ruvia::WorkerMemory;
 using ruvia::applySecurityHeaders;
@@ -32,6 +40,173 @@ concept HasContextlessSecurityHeaders = requires(
 };
 
 static_assert(!HasContextlessSecurityHeaders<HttpResponse>);
+
+template <typename Text>
+concept AcceptsAnySecurityHeaderText =
+    requires(Text&& text) {
+        SecurityHeader{
+            .name = std::forward<Text>(text),
+            .value = "value",
+        };
+    } ||
+    requires(Text&& text) {
+        SecurityHeader{
+            .name = "X-Test",
+            .value = std::forward<Text>(text),
+        };
+    };
+
+template <typename Text>
+concept AcceptsAllSecurityHeaderText = requires(Text&& text) {
+    SecurityHeader{
+        .name = std::forward<Text>(text),
+        .value = "value",
+    };
+    SecurityHeader{
+        .name = "X-Test",
+        .value = std::forward<Text>(text),
+    };
+};
+
+template <typename Text>
+concept AssignsAnySecurityHeaderText =
+    requires(SecurityHeader& header, Text&& text) {
+        header.name = std::forward<Text>(text);
+    } ||
+    requires(SecurityHeader& header, Text&& text) {
+        header.value = std::forward<Text>(text);
+    };
+
+template <typename Text>
+concept AssignsAllSecurityHeaderText =
+    requires(SecurityHeader& header, Text&& text) {
+        header.name = std::forward<Text>(text);
+        header.value = std::forward<Text>(text);
+    };
+
+template <typename Text>
+concept AcceptsAnySecurityPolicyText =
+    requires(Text&& text) {
+        SecurityHeadersOptions{
+            .contentSecurityPolicy = std::forward<Text>(text),
+        };
+    } ||
+    requires(Text&& text) {
+        SecurityHeadersOptions{
+            .referrerPolicy = std::forward<Text>(text),
+        };
+    } ||
+    requires(Text&& text) {
+        SecurityHeadersOptions{
+            .permissionsPolicy = std::forward<Text>(text),
+        };
+    };
+
+template <typename Text>
+concept AcceptsAllSecurityPolicyText = requires(Text&& text) {
+    SecurityHeadersOptions{
+        .contentSecurityPolicy = std::forward<Text>(text),
+    };
+    SecurityHeadersOptions{
+        .referrerPolicy = std::forward<Text>(text),
+    };
+    SecurityHeadersOptions{
+        .permissionsPolicy = std::forward<Text>(text),
+    };
+};
+
+template <typename Text>
+concept AssignsAnySecurityPolicyText =
+    requires(SecurityHeadersOptions& options, Text&& text) {
+        options.contentSecurityPolicy = std::forward<Text>(text);
+    } ||
+    requires(SecurityHeadersOptions& options, Text&& text) {
+        options.referrerPolicy = std::forward<Text>(text);
+    } ||
+    requires(SecurityHeadersOptions& options, Text&& text) {
+        options.permissionsPolicy = std::forward<Text>(text);
+    };
+
+template <typename Text>
+concept AssignsAllSecurityPolicyText =
+    requires(SecurityHeadersOptions& options, Text&& text) {
+        options.contentSecurityPolicy = std::forward<Text>(text);
+        options.referrerPolicy = std::forward<Text>(text);
+        options.permissionsPolicy = std::forward<Text>(text);
+    };
+
+template <typename Headers>
+concept AcceptsSecurityCustomHeaders = requires(Headers&& headers) {
+    SecurityHeadersOptions{
+        .customHeaders = std::forward<Headers>(headers),
+    };
+};
+
+template <typename Headers>
+concept AssignsSecurityCustomHeaders = requires(
+    SecurityHeadersOptions& options,
+    Headers&& headers) {
+    options.customHeaders = std::forward<Headers>(headers);
+};
+
+using SecurityHeaderArray = std::array<SecurityHeader, 1>;
+using SecurityHeaderVector = std::vector<SecurityHeader>;
+
+static_assert(std::is_aggregate_v<SecurityHeader>);
+static_assert(std::is_aggregate_v<SecurityHeadersOptions>);
+constexpr SecurityHeader kLiteralSecurityHeader{
+    .name = "X-Test",
+    .value = "value",
+};
+constexpr std::array kLiteralSecurityHeaders{kLiteralSecurityHeader};
+constexpr SecurityHeadersOptions kLiteralSecurityHeaderOptions{
+    .contentSecurityPolicy = "default-src 'none'",
+    .customHeaders = kLiteralSecurityHeaders,
+};
+static_assert(kLiteralSecurityHeader.name.view() == "X-Test");
+static_assert(kLiteralSecurityHeader.value.view() == "value");
+static_assert(
+    kLiteralSecurityHeaderOptions.contentSecurityPolicy.view() ==
+    "default-src 'none'");
+static_assert(kLiteralSecurityHeaderOptions.customHeaders.size() == 1);
+static_assert(!AcceptsAnySecurityHeaderText<std::string>);
+static_assert(!AcceptsAnySecurityHeaderText<const std::string>);
+static_assert(!AcceptsAnySecurityHeaderText<std::pmr::string>);
+static_assert(AcceptsAllSecurityHeaderText<std::string&>);
+static_assert(AcceptsAllSecurityHeaderText<std::pmr::string&>);
+static_assert(AcceptsAllSecurityHeaderText<std::string_view>);
+static_assert(!AssignsAnySecurityHeaderText<std::string>);
+static_assert(!AssignsAnySecurityHeaderText<const std::string>);
+static_assert(!AssignsAnySecurityHeaderText<std::pmr::string>);
+static_assert(AssignsAllSecurityHeaderText<std::string&>);
+static_assert(AssignsAllSecurityHeaderText<std::pmr::string&>);
+static_assert(AssignsAllSecurityHeaderText<std::string_view>);
+static_assert(!AcceptsAnySecurityPolicyText<std::string>);
+static_assert(!AcceptsAnySecurityPolicyText<const std::string>);
+static_assert(!AcceptsAnySecurityPolicyText<std::pmr::string>);
+static_assert(AcceptsAllSecurityPolicyText<std::string&>);
+static_assert(AcceptsAllSecurityPolicyText<std::pmr::string&>);
+static_assert(AcceptsAllSecurityPolicyText<std::string_view>);
+static_assert(!AssignsAnySecurityPolicyText<std::string>);
+static_assert(!AssignsAnySecurityPolicyText<const std::string>);
+static_assert(!AssignsAnySecurityPolicyText<std::pmr::string>);
+static_assert(AssignsAllSecurityPolicyText<std::string&>);
+static_assert(AssignsAllSecurityPolicyText<std::pmr::string&>);
+static_assert(AssignsAllSecurityPolicyText<std::string_view>);
+static_assert(!AcceptsSecurityCustomHeaders<SecurityHeaderArray>);
+static_assert(!AcceptsSecurityCustomHeaders<const SecurityHeaderArray>);
+static_assert(!AcceptsSecurityCustomHeaders<SecurityHeaderVector>);
+static_assert(!AcceptsSecurityCustomHeaders<const SecurityHeaderVector>);
+static_assert(AcceptsSecurityCustomHeaders<SecurityHeaderArray&>);
+static_assert(AcceptsSecurityCustomHeaders<SecurityHeaderVector&>);
+static_assert(AcceptsSecurityCustomHeaders<std::span<const SecurityHeader>>);
+static_assert(!AssignsSecurityCustomHeaders<SecurityHeaderArray>);
+static_assert(!AssignsSecurityCustomHeaders<const SecurityHeaderArray>);
+static_assert(!AssignsSecurityCustomHeaders<SecurityHeaderVector>);
+static_assert(!AssignsSecurityCustomHeaders<const SecurityHeaderVector>);
+static_assert(AssignsSecurityCustomHeaders<SecurityHeaderArray&>);
+static_assert(AssignsSecurityCustomHeaders<SecurityHeaderVector&>);
+static_assert(AssignsSecurityCustomHeaders<std::span<const SecurityHeader>>);
 
 class SecurityContextFixture final {
 public:

@@ -1,3 +1,4 @@
+#include <array>
 #include <chrono>
 #include <concepts>
 #include <cstddef>
@@ -10,6 +11,7 @@
 #include <system_error>
 #include <type_traits>
 #include <utility>
+#include <vector>
 
 #include <asio/io_context.hpp>
 #include <asio/post.hpp>
@@ -1230,6 +1232,117 @@ concept HasMisleadingXssProtectionOption = requires(Options& options) {
     options.xssProtection;
 };
 
+template <typename Text>
+concept AcceptsAnySecurityHeaderText =
+    requires(Text&& text) {
+        ruvia::SecurityHeader{
+            .name = std::forward<Text>(text),
+            .value = "value",
+        };
+    } ||
+    requires(Text&& text) {
+        ruvia::SecurityHeader{
+            .name = "X-Test",
+            .value = std::forward<Text>(text),
+        };
+    };
+
+template <typename Text>
+concept AcceptsAllSecurityHeaderText = requires(Text&& text) {
+    ruvia::SecurityHeader{
+        .name = std::forward<Text>(text),
+        .value = "value",
+    };
+    ruvia::SecurityHeader{
+        .name = "X-Test",
+        .value = std::forward<Text>(text),
+    };
+};
+
+template <typename Text>
+concept AssignsAnySecurityHeaderText =
+    requires(ruvia::SecurityHeader& header, Text&& text) {
+        header.name = std::forward<Text>(text);
+    } ||
+    requires(ruvia::SecurityHeader& header, Text&& text) {
+        header.value = std::forward<Text>(text);
+    };
+
+template <typename Text>
+concept AssignsAllSecurityHeaderText =
+    requires(ruvia::SecurityHeader& header, Text&& text) {
+        header.name = std::forward<Text>(text);
+        header.value = std::forward<Text>(text);
+    };
+
+template <typename Text>
+concept AcceptsAnySecurityPolicyText =
+    requires(Text&& text) {
+        ruvia::SecurityHeadersOptions{
+            .contentSecurityPolicy = std::forward<Text>(text),
+        };
+    } ||
+    requires(Text&& text) {
+        ruvia::SecurityHeadersOptions{
+            .referrerPolicy = std::forward<Text>(text),
+        };
+    } ||
+    requires(Text&& text) {
+        ruvia::SecurityHeadersOptions{
+            .permissionsPolicy = std::forward<Text>(text),
+        };
+    };
+
+template <typename Text>
+concept AcceptsAllSecurityPolicyText = requires(Text&& text) {
+    ruvia::SecurityHeadersOptions{
+        .contentSecurityPolicy = std::forward<Text>(text),
+    };
+    ruvia::SecurityHeadersOptions{
+        .referrerPolicy = std::forward<Text>(text),
+    };
+    ruvia::SecurityHeadersOptions{
+        .permissionsPolicy = std::forward<Text>(text),
+    };
+};
+
+template <typename Text>
+concept AssignsAnySecurityPolicyText =
+    requires(ruvia::SecurityHeadersOptions& options, Text&& text) {
+        options.contentSecurityPolicy = std::forward<Text>(text);
+    } ||
+    requires(ruvia::SecurityHeadersOptions& options, Text&& text) {
+        options.referrerPolicy = std::forward<Text>(text);
+    } ||
+    requires(ruvia::SecurityHeadersOptions& options, Text&& text) {
+        options.permissionsPolicy = std::forward<Text>(text);
+    };
+
+template <typename Text>
+concept AssignsAllSecurityPolicyText =
+    requires(ruvia::SecurityHeadersOptions& options, Text&& text) {
+        options.contentSecurityPolicy = std::forward<Text>(text);
+        options.referrerPolicy = std::forward<Text>(text);
+        options.permissionsPolicy = std::forward<Text>(text);
+    };
+
+template <typename Headers>
+concept AcceptsSecurityCustomHeaders = requires(Headers&& headers) {
+    ruvia::SecurityHeadersOptions{
+        .customHeaders = std::forward<Headers>(headers),
+    };
+};
+
+template <typename Headers>
+concept AssignsSecurityCustomHeaders = requires(
+    ruvia::SecurityHeadersOptions& options,
+    Headers&& headers) {
+    options.customHeaders = std::forward<Headers>(headers);
+};
+
+using SecurityHeaderArray = std::array<ruvia::SecurityHeader, 1>;
+using SecurityHeaderVector = std::vector<ruvia::SecurityHeader>;
+
 template <typename Response>
 concept HasContextlessSecurityHeaders = requires(
     Response& response,
@@ -1394,6 +1507,63 @@ static_assert(!HasResponseInit<ruvia::Context>);
 static_assert(!HasContextVarFacade<ruvia::Context>);
 static_assert(!HasMisleadingXssProtectionOption<ruvia::SecurityHeadersOptions>);
 static_assert(!HasContextlessSecurityHeaders<ruvia::HttpResponse>);
+static_assert(std::is_aggregate_v<ruvia::SecurityHeader>);
+static_assert(std::is_aggregate_v<ruvia::SecurityHeadersOptions>);
+constexpr ruvia::SecurityHeader kLiteralSecurityHeader{
+    .name = "X-Test",
+    .value = "value",
+};
+constexpr std::array kLiteralSecurityHeaders{kLiteralSecurityHeader};
+constexpr ruvia::SecurityHeadersOptions kLiteralSecurityHeaderOptions{
+    .contentSecurityPolicy = "default-src 'none'",
+    .customHeaders = kLiteralSecurityHeaders,
+};
+static_assert(kLiteralSecurityHeader.name.view() == "X-Test");
+static_assert(kLiteralSecurityHeader.value.view() == "value");
+static_assert(
+    kLiteralSecurityHeaderOptions.contentSecurityPolicy.view() ==
+    "default-src 'none'");
+static_assert(kLiteralSecurityHeaderOptions.customHeaders.size() == 1);
+static_assert(!AcceptsAnySecurityHeaderText<std::string>);
+static_assert(!AcceptsAnySecurityHeaderText<const std::string>);
+static_assert(!AcceptsAnySecurityHeaderText<std::pmr::string>);
+static_assert(AcceptsAllSecurityHeaderText<std::string&>);
+static_assert(AcceptsAllSecurityHeaderText<std::pmr::string&>);
+static_assert(AcceptsAllSecurityHeaderText<std::string_view>);
+static_assert(!AssignsAnySecurityHeaderText<std::string>);
+static_assert(!AssignsAnySecurityHeaderText<const std::string>);
+static_assert(!AssignsAnySecurityHeaderText<std::pmr::string>);
+static_assert(AssignsAllSecurityHeaderText<std::string&>);
+static_assert(AssignsAllSecurityHeaderText<std::pmr::string&>);
+static_assert(AssignsAllSecurityHeaderText<std::string_view>);
+static_assert(!AcceptsAnySecurityPolicyText<std::string>);
+static_assert(!AcceptsAnySecurityPolicyText<const std::string>);
+static_assert(!AcceptsAnySecurityPolicyText<std::pmr::string>);
+static_assert(AcceptsAllSecurityPolicyText<std::string&>);
+static_assert(AcceptsAllSecurityPolicyText<std::pmr::string&>);
+static_assert(AcceptsAllSecurityPolicyText<std::string_view>);
+static_assert(!AssignsAnySecurityPolicyText<std::string>);
+static_assert(!AssignsAnySecurityPolicyText<const std::string>);
+static_assert(!AssignsAnySecurityPolicyText<std::pmr::string>);
+static_assert(AssignsAllSecurityPolicyText<std::string&>);
+static_assert(AssignsAllSecurityPolicyText<std::pmr::string&>);
+static_assert(AssignsAllSecurityPolicyText<std::string_view>);
+static_assert(!AcceptsSecurityCustomHeaders<SecurityHeaderArray>);
+static_assert(!AcceptsSecurityCustomHeaders<const SecurityHeaderArray>);
+static_assert(!AcceptsSecurityCustomHeaders<SecurityHeaderVector>);
+static_assert(!AcceptsSecurityCustomHeaders<const SecurityHeaderVector>);
+static_assert(AcceptsSecurityCustomHeaders<SecurityHeaderArray&>);
+static_assert(AcceptsSecurityCustomHeaders<SecurityHeaderVector&>);
+static_assert(AcceptsSecurityCustomHeaders<
+    std::span<const ruvia::SecurityHeader>>);
+static_assert(!AssignsSecurityCustomHeaders<SecurityHeaderArray>);
+static_assert(!AssignsSecurityCustomHeaders<const SecurityHeaderArray>);
+static_assert(!AssignsSecurityCustomHeaders<SecurityHeaderVector>);
+static_assert(!AssignsSecurityCustomHeaders<const SecurityHeaderVector>);
+static_assert(AssignsSecurityCustomHeaders<SecurityHeaderArray&>);
+static_assert(AssignsSecurityCustomHeaders<SecurityHeaderVector&>);
+static_assert(AssignsSecurityCustomHeaders<
+    std::span<const ruvia::SecurityHeader>>);
 static_assert(std::same_as<
     decltype(ruvia::SecurityHeadersOptions{}.legacyXssFilter),
     ruvia::LegacyXssFilterPolicy>);
