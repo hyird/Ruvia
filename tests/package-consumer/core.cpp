@@ -3,8 +3,10 @@
 #include <coroutine>
 #include <cstddef>
 #include <optional>
+#include <string_view>
 #include <utility>
 
+#include <ruvia/core/version.h>
 #include <ruvia/core/Task.h>
 #include <ruvia/core/EventLoopPool.h>
 #include <ruvia/core/TaskScope.h>
@@ -20,6 +22,15 @@
 #include <ruvia/core/detail/WorkerWaitAwaiter.h>
 #include <ruvia/core/memory/MemoryPool.h>
 #include <ruvia/core/memory/PmrObject.h>
+
+#ifdef RUVIA_EXPECTED_VERSION_MAJOR
+static_assert(RUVIA_VERSION_MAJOR == RUVIA_EXPECTED_VERSION_MAJOR);
+static_assert(RUVIA_VERSION_MINOR == RUVIA_EXPECTED_VERSION_MINOR);
+static_assert(RUVIA_VERSION_PATCH == RUVIA_EXPECTED_VERSION_PATCH);
+static_assert(
+    std::string_view(RUVIA_VERSION_STRING) ==
+    std::string_view(RUVIA_EXPECTED_VERSION_STRING));
+#endif
 
 template <typename T>
 concept HasPoolWaiterIndex = requires(const T& value) {

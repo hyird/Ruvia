@@ -4982,7 +4982,8 @@ function(ruvia_verify_package_consumer
         "-DRUVIA_PACKAGE_COMPONENTS=${components}"
         "-DRUVIA_PACKAGE_OPTIONAL_COMPONENTS=${optional_components}"
         "-DRUVIA_EXPECT_VISIBLE_COMPONENTS=${visible_components}"
-        "-DRUVIA_EXPECT_AVAILABLE_COMPONENTS=${available_components}")
+        "-DRUVIA_EXPECT_AVAILABLE_COMPONENTS=${available_components}"
+        "-DRUVIA_EXPECT_PACKAGE_VERSION=@PROJECT_VERSION@")
 
     if(NOT "@CMAKE_GENERATOR_PLATFORM@" STREQUAL "")
         list(APPEND _configure_command -A "@CMAKE_GENERATOR_PLATFORM@")

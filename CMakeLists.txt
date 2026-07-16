@@ -119,7 +119,15 @@ if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
     unset(_ruvia_vcpkg_features)
 endif()
 
-project(ruvia VERSION 0.1.1 LANGUAGES CXX)
+file(READ "${CMAKE_CURRENT_SOURCE_DIR}/vcpkg.json" _ruvia_manifest_json)
+string(JSON _ruvia_manifest_version GET "${_ruvia_manifest_json}" version-string)
+if(NOT _ruvia_manifest_version MATCHES "^[0-9]+\\.[0-9]+\\.[0-9]+$")
+    message(FATAL_ERROR
+        "vcpkg.json version-string must be a three-component numeric version, got: ${_ruvia_manifest_version}")
+endif()
+project(ruvia VERSION "${_ruvia_manifest_version}" LANGUAGES CXX)
+unset(_ruvia_manifest_json)
+unset(_ruvia_manifest_version)
 
 if(RUVIA_BUILD_FUZZERS AND NOT CMAKE_CXX_COMPILER_ID MATCHES "Clang")
     message(FATAL_ERROR "RUVIA_BUILD_FUZZERS=ON requires Clang with libFuzzer")
@@ -306,9 +314,37 @@ function(ruvia_install_public_header_tree component relative_dir)
     )
 endfunction()
 
+function(ruvia_install_generated_public_header component generated_header relative_path)
+    set(_ruvia_expected_header_root "ruvia/${component}")
+    if(NOT relative_path MATCHES "^${_ruvia_expected_header_root}(/|$)")
+        message(FATAL_ERROR
+            "${component} cannot install a generated header outside ${_ruvia_expected_header_root}: ${relative_path}")
+    endif()
+
+    set(_ruvia_target_binary_dir "${CMAKE_CURRENT_BINARY_DIR}")
+    cmake_path(NORMAL_PATH _ruvia_target_binary_dir
+        OUTPUT_VARIABLE _ruvia_target_binary_root)
+    cmake_path(IS_PREFIX _ruvia_target_binary_root
+        "${generated_header}" NORMALIZE _ruvia_generated_header_is_owned)
+    if(NOT _ruvia_generated_header_is_owned)
+        message(FATAL_ERROR
+            "${component} generated header is outside its target build directory: ${generated_header}")
+    endif()
+
+    get_filename_component(_ruvia_header_install_subdir "${relative_path}" DIRECTORY)
+    install(
+        FILES "${generated_header}"
+        DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}/${_ruvia_header_install_subdir}"
+        COMPONENT ${component}
+    )
+endfunction()
+
 function(ruvia_assert_target_file_ownership target)
     get_target_property(_ruvia_target_source_dir ${target} SOURCE_DIR)
     cmake_path(NORMAL_PATH _ruvia_target_source_dir OUTPUT_VARIABLE _ruvia_target_root)
+    get_target_property(_ruvia_target_binary_dir ${target} BINARY_DIR)
+    cmake_path(NORMAL_PATH _ruvia_target_binary_dir
+        OUTPUT_VARIABLE _ruvia_target_binary_root)
 
     get_target_property(_ruvia_target_sources ${target} SOURCES)
     foreach(_ruvia_source IN LISTS _ruvia_target_sources)
@@ -341,7 +377,9 @@ function(ruvia_assert_target_file_ownership target)
         endif()
         cmake_path(IS_PREFIX _ruvia_target_root
             "${_ruvia_include_path}" NORMALIZE _ruvia_include_is_owned)
-        if(NOT _ruvia_include_is_owned)
+        cmake_path(IS_PREFIX _ruvia_target_binary_root
+            "${_ruvia_include_path}" NORMALIZE _ruvia_generated_include_is_owned)
+        if(NOT _ruvia_include_is_owned AND NOT _ruvia_generated_include_is_owned)
             message(FATAL_ERROR
                 "${target} cannot add another target's private include directory: ${_ruvia_include_dir}")
         endif()
@@ -418,6 +456,7 @@ endif()
 set(_ruvia_config [=[
 include(CMakeFindDependencyMacro)
 
+set(ruvia_VERSION "@PROJECT_VERSION@")
 set(RUVIA_ENABLE_MARIADB @RUVIA_ENABLE_MARIADB@)
 set(RUVIA_ENABLE_POSTGRESQL @RUVIA_ENABLE_POSTGRESQL@)
 set(RUVIA_ENABLE_REDIS @RUVIA_ENABLE_REDIS@)

@@ -219,6 +219,11 @@ endif()
 if(RUVIA_BUILD_CORE)
     add_executable(ruvia_smoke_core_target smoke_core_target.cpp)
     target_link_libraries(ruvia_smoke_core_target PRIVATE ruvia::core)
+    target_compile_definitions(ruvia_smoke_core_target PRIVATE
+        RUVIA_EXPECTED_VERSION_MAJOR=${PROJECT_VERSION_MAJOR}
+        RUVIA_EXPECTED_VERSION_MINOR=${PROJECT_VERSION_MINOR}
+        RUVIA_EXPECTED_VERSION_PATCH=${PROJECT_VERSION_PATCH}
+        RUVIA_EXPECTED_VERSION_STRING="${PROJECT_VERSION}")
     add_test(NAME ruvia_smoke_core_target COMMAND ruvia_smoke_core_target)
 
     add_executable(ruvia_connection_scanner_lifetime connection_scanner_lifetime.cpp)
