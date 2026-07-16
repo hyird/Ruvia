@@ -489,6 +489,11 @@ concept ExposesAnyRvalueWebSocketInboundAccessor =
     requires(T&& result) { std::move(result).failure(); };
 
 template <typename T>
+concept ExposesRvalueWebSocketInboundMessageMember = requires(T&& message) {
+    std::move(message).message();
+};
+
+template <typename T>
 concept ExposesAnyRvalueHttpOperationResultAccessor =
     requires(T&& result) { std::move(result).committed(); } ||
     requires(T&& result) { std::move(result).prepared(); } ||
@@ -1704,6 +1709,11 @@ concept ExposesRvalueResponseBodyAccess =
         ruvia::detail::HttpResponseBodyAccess::body(std::move(response));
     };
 
+template <typename T>
+concept ExposesRvalueResponseFileIdentityWords = requires(T&& identity) {
+    std::move(identity).words();
+};
+
 static_assert(!HasLegacyResponseBodyCopy<ruvia::HttpResponse>);
 static_assert(!HasLegacyResponseBodyView<ruvia::HttpResponse>);
 static_assert(!std::is_copy_constructible_v<ruvia::HttpResponse>);
@@ -1729,6 +1739,8 @@ static_assert(!ExposesAnyRvalueResponseBodyBorrow<
     ruvia::detail::HttpOwnedResponseBytes>);
 static_assert(!ExposesAnyRvalueResponseBodyBorrow<
     ruvia::detail::HttpOwnedResponseFile>);
+static_assert(!ExposesRvalueResponseFileIdentityWords<
+    ruvia::detail::ResponseFileIdentity>);
 static_assert(!ExposesRvalueResponseBodyAccess<ruvia::HttpResponse>);
 static_assert(!HasSharedCacheFreshnessPolicy<ruvia::CacheControl>);
 static_assert(std::same_as<
@@ -3138,6 +3150,8 @@ static_assert(!HasWsProtocolFailure<
     ruvia::detail::WebSocketInboundResult>);
 static_assert(!ExposesAnyRvalueWebSocketInboundAccessor<
     ruvia::detail::WebSocketInboundResult>);
+static_assert(!ExposesRvalueWebSocketInboundMessageMember<
+    ruvia::detail::WebSocketInboundMessage>);
 static_assert(std::same_as<
     decltype(std::declval<const ruvia::detail::WebSocketInboundFragmented&>().opcode()),
     ruvia::WebSocketOpcode>);

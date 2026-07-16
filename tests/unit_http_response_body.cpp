@@ -67,12 +67,19 @@ concept ExposesRvalueResponseBodyAccess =
         ruvia::detail::HttpResponseBodyAccess::body(std::move(response));
     };
 
+template <typename T>
+concept ExposesRvalueResponseFileIdentityWords = requires(T&& identity) {
+    std::move(identity).words();
+};
+
 static_assert(!ExposesAnyRvalueResponseBodyBorrow<HttpResponseBody>);
 static_assert(!ExposesAnyRvalueResponseBodyBorrow<
     ruvia::detail::HttpOwnedResponseBytes>);
 static_assert(!ExposesAnyRvalueResponseBodyBorrow<
     ruvia::detail::HttpOwnedResponseFile>);
 static_assert(!ExposesRvalueResponseBodyAccess<HttpResponse>);
+static_assert(!ExposesRvalueResponseFileIdentityWords<
+    ruvia::detail::ResponseFileIdentity>);
 
 [[nodiscard]] std::size_t activeAlternativeCount(
     const HttpResponseBody& body) noexcept {

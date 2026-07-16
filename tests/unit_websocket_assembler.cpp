@@ -90,6 +90,11 @@ concept HasAnyRvalueInboundAccessor =
     requires(T&& result) { std::move(result).message(); } ||
     requires(T&& result) { std::move(result).failure(); };
 
+template <typename T>
+concept ExposesRvalueInboundMessageMember = requires(T&& message) {
+    std::move(message).message();
+};
+
 static_assert(!std::default_initializable<WebSocketInboundResult>);
 static_assert(std::same_as<
     decltype(std::declval<const WebSocketInboundResult&>().continueReading()),
@@ -113,6 +118,8 @@ static_assert(!HasInboundOpcode<ruvia::detail::WebSocketInboundMessage>);
 static_assert(HasInboundContentEncoding<
     ruvia::detail::WebSocketInboundMessage>);
 static_assert(!HasInboundError<ruvia::detail::WebSocketInboundMessage>);
+static_assert(!ExposesRvalueInboundMessageMember<
+    ruvia::detail::WebSocketInboundMessage>);
 static_assert(HasInboundError<ruvia::detail::WebSocketInboundFailure>);
 static_assert(std::same_as<
     decltype(std::declval<const ruvia::detail::WebSocketInboundFragmented&>().opcode()),

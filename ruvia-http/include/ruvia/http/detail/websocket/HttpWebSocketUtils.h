@@ -489,9 +489,10 @@ enum class WebSocketInboundContentEncoding : std::uint8_t {
 
 class WebSocketInboundMessage final {
 public:
-    [[nodiscard]] constexpr const WebSocketMessage& message() const noexcept {
+    [[nodiscard]] constexpr const WebSocketMessage& message() const & noexcept {
         return message_;
     }
+    [[nodiscard]] constexpr const WebSocketMessage& message() const && = delete;
 
     [[nodiscard]] constexpr WebSocketInboundContentEncoding
     contentEncoding() const noexcept {
