@@ -408,6 +408,8 @@ RUVIA_TEST(http_client_redirect_relative_resolution_matches_rfc3986_examples) {
         {"g/./h", "/b/c/g/h"},
         {"g/../h", "/b/c/h"},
         {"g;x=1/../y", "/b/c/y"},
+        {"/a//.", "/a//"},
+        {"g//.", "/b/c/g//"},
         {"g?y/./x", "/b/c/g?y/./x"},
     };
 

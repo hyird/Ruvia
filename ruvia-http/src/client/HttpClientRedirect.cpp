@@ -56,35 +56,38 @@ void removeHttpClientLastPathSegment(std::pmr::string& path) noexcept {
 
     normalized.clear();
     normalized.reserve(path.size());
-    std::size_t cursor = 0;
-    while (cursor < path.size()) {
-        if (path[cursor] != '/') {
-            return false;
-        }
-        const auto nextSlash = path.find('/', cursor + 1);
-        const bool last = nextSlash == std::string_view::npos;
-        const auto segment = path.substr(
-            cursor + 1,
-            last ? std::string_view::npos : nextSlash - cursor - 1);
-
-        if (segment == ".") {
-            if (last && (normalized.empty() || normalized.back() != '/')) {
-                normalized.push_back('/');
-            }
-        } else if (segment == "..") {
+    auto remaining = path;
+    while (!remaining.empty()) {
+        // RFC 3986 section 5.2.4 deliberately moves one path segment at a
+        // time. Empty segments are significant: reducing the path to a stack
+        // of non-dot segments would turn "/a//." into "/a/" instead of the
+        // required "/a//".
+        if (remaining.starts_with("../")) {
+            remaining.remove_prefix(3);
+        } else if (remaining.starts_with("./")) {
+            remaining.remove_prefix(2);
+        } else if (remaining.starts_with("/./")) {
+            remaining.remove_prefix(2);
+        } else if (remaining == "/.") {
+            remaining = "/";
+        } else if (remaining.starts_with("/../")) {
+            remaining.remove_prefix(3);
             removeHttpClientLastPathSegment(normalized);
-            if (last && (normalized.empty() || normalized.back() != '/')) {
-                normalized.push_back('/');
-            }
+        } else if (remaining == "/..") {
+            remaining = "/";
+            removeHttpClientLastPathSegment(normalized);
+        } else if (remaining == "." || remaining == "..") {
+            remaining = {};
         } else {
-            normalized.push_back('/');
-            normalized.append(segment.data(), segment.size());
+            const auto nextSlash = remaining.front() == '/'
+                ? remaining.find('/', 1)
+                : remaining.find('/');
+            const auto segmentBytes = nextSlash == std::string_view::npos
+                ? remaining.size()
+                : nextSlash;
+            normalized.append(remaining.data(), segmentBytes);
+            remaining.remove_prefix(segmentBytes);
         }
-
-        if (last) {
-            break;
-        }
-        cursor = nextSlash;
     }
 
     if (normalized.empty()) {
