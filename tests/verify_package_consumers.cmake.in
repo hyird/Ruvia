@@ -1802,6 +1802,14 @@ file(READ "${_installed_ws_event_path}" _installed_ws_event)
 file(READ "${_installed_ws_inbound_path}" _installed_ws_inbound)
 if(NOT _installed_ws_connection MATCHES
        "std::optional<WsEvent>[ \t]+poll" OR
+   NOT _installed_ws_connection MATCHES
+       "poll[(][)][ \\t]*&[ \\t]*[;]" OR
+   NOT _installed_ws_connection MATCHES
+       "poll[(][)][ \\t]*&&[ \\t]*=[ \\t]*delete" OR
+   NOT _installed_ws_connection MATCHES
+       "outputPlan[(][)] const &[ \\t]+noexcept" OR
+   NOT _installed_ws_connection MATCHES
+       "outputPlan[(][)] const &&[ \\t]*=[ \\t]*delete" OR
    NOT _installed_ws_event MATCHES "enum class WsEventKind" OR
    NOT _installed_ws_event MATCHES "using Value = std::variant" OR
    NOT _installed_ws_event MATCHES "class WsMessageEvent final" OR
@@ -5241,6 +5249,22 @@ if(NOT _installed_multipart_parser MATCHES "class MultipartBoundary final" OR
    _installed_multipart_parser MATCHES
        "MultipartParseError error[(][)] const noexcept" OR
    NOT _installed_multipart_parser MATCHES "void finishInput[(][)] noexcept" OR
+   NOT _installed_multipart_parser MATCHES
+       "borrowed[(][)] const &[ \\t]+noexcept" OR
+   NOT _installed_multipart_parser MATCHES
+       "borrowed[(][)] const &&[ \\t]*=[ \\t]*delete" OR
+   NOT _installed_multipart_parser MATCHES
+       "streamingOpen[(][)] const &[ \\t]+noexcept" OR
+   NOT _installed_multipart_parser MATCHES
+       "streamingOpen[(][)] const &&[ \\t]*=[ \\t]*delete" OR
+   NOT _installed_multipart_parser MATCHES
+       "streamingEof[(][)] const &[ \\t]+noexcept" OR
+   NOT _installed_multipart_parser MATCHES
+       "streamingEof[(][)] const &&[ \\t]*=[ \\t]*delete" OR
+   NOT _installed_multipart_parser MATCHES
+       "view[(][)] const &[ \\t]+noexcept" OR
+   NOT _installed_multipart_parser MATCHES
+       "view[(][)] const &&[ \\t]*=[ \\t]*delete" OR
    _installed_multipart_parser MATCHES
        "enum class[ \t]+State[ \t\r\n]*[{]" OR
    NOT _installed_multipart_parsing MATCHES "class HttpMultipartDelimiterNoMatch final" OR

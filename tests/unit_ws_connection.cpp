@@ -47,7 +47,13 @@ concept HasAnyRvalueWsEventBorrow =
     requires(T&& event) { std::move(event).protocolError(); } ||
     requires(T&& event) { std::move(event).transportEnd(); };
 
+template <typename T>
+concept ExposesRvalueWsConnectionStorage =
+    requires(T&& connection) { std::move(connection).poll(); } ||
+    requires(T&& connection) { std::move(connection).outputPlan(); };
+
 static_assert(!HasAnyRvalueWsEventBorrow<WsEvent>);
+static_assert(!ExposesRvalueWsConnectionStorage<WsConnection>);
 
 template <typename T>
 concept HasWsCloseCode = requires(const T& event) {

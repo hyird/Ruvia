@@ -11415,6 +11415,8 @@ set(WS_H2_TRANSPORT
 set(WS_LIVENESS_POLICY
     "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/websocket/HttpWebSocketLiveness.h")
 set(WS_PUBLIC_CONFIG "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/WebSocket.h")
+set(WS_PROTOCOL_TEST "${RUVIA_ROOT}/tests/unit_ws_connection.cpp")
+set(WS_PACKAGE_CONSUMER "${RUVIA_ROOT}/tests/package-consumer/http.cpp")
 foreach(required IN ITEMS
     "${WS_PROTOCOL_HEADER}"
     "${WS_EVENT_HEADER}"
@@ -11426,7 +11428,9 @@ foreach(required IN ITEMS
     "${WS_RUNTIME_WRITE}"
     "${WS_H2_TRANSPORT}"
     "${WS_LIVENESS_POLICY}"
-    "${WS_PUBLIC_CONFIG}")
+    "${WS_PUBLIC_CONFIG}"
+    "${WS_PROTOCOL_TEST}"
+    "${WS_PACKAGE_CONSUMER}")
     if(NOT EXISTS "${required}")
         boundary_error("typed WebSocket close chain is missing" "${required}")
     endif()
@@ -11436,7 +11440,8 @@ if(EXISTS "${WS_PROTOCOL_HEADER}" AND EXISTS "${WS_EVENT_HEADER}" AND
    EXISTS "${WS_VALIDATION_SOURCE}" AND
    EXISTS "${WS_RUNTIME_HEADER}" AND EXISTS "${WS_RUNTIME_READ}" AND
    EXISTS "${WS_RUNTIME_WRITE}" AND EXISTS "${WS_H2_TRANSPORT}" AND
-   EXISTS "${WS_LIVENESS_POLICY}" AND EXISTS "${WS_PUBLIC_CONFIG}")
+   EXISTS "${WS_LIVENESS_POLICY}" AND EXISTS "${WS_PUBLIC_CONFIG}" AND
+   EXISTS "${WS_PROTOCOL_TEST}" AND EXISTS "${WS_PACKAGE_CONSUMER}")
     file(READ "${WS_PROTOCOL_HEADER}" ws_protocol)
     file(READ "${WS_EVENT_HEADER}" ws_event)
     file(READ "${WS_INBOUND_HEADER}" ws_inbound)
@@ -11448,6 +11453,8 @@ if(EXISTS "${WS_PROTOCOL_HEADER}" AND EXISTS "${WS_EVENT_HEADER}" AND
     file(READ "${WS_H2_TRANSPORT}" ws_h2_transport)
     file(READ "${WS_LIVENESS_POLICY}" ws_liveness)
     file(READ "${WS_PUBLIC_CONFIG}" ws_public_config)
+    file(READ "${WS_PROTOCOL_TEST}" ws_protocol_test)
+    file(READ "${WS_PACKAGE_CONSUMER}" ws_package_consumer)
     if(NOT ws_protocol MATCHES "enum class WsLivenessMode" OR
        NOT ws_protocol MATCHES "enum class WsAbortDisposition" OR
        NOT ws_protocol MATCHES "class WsOutputPlan" OR
@@ -11459,9 +11466,21 @@ if(EXISTS "${WS_PROTOCOL_HEADER}" AND EXISTS "${WS_EVENT_HEADER}" AND
        ws_protocol MATCHES "closePhase[(]" OR
        ws_protocol MATCHES "closed[(]" OR
        NOT ws_protocol MATCHES "std::optional<WsEvent> poll" OR
-       NOT ws_protocol MATCHES "ruvia/http/detail/websocket/WsEvent.h")
+       NOT ws_protocol MATCHES "ruvia/http/detail/websocket/WsEvent.h" OR
+       NOT ws_protocol MATCHES
+           "poll[(][)][ \\t]*&[ \\t]*[;]" OR
+       NOT ws_protocol MATCHES
+           "poll[(][)][ \\t]*&&[ \\t]*=[ \\t]*delete" OR
+       NOT ws_protocol MATCHES
+           "outputPlan[(][)] const &[ \\t]+noexcept" OR
+       NOT ws_protocol MATCHES
+           "outputPlan[(][)] const &&[ \\t]*=[ \\t]*delete" OR
+       NOT ws_protocol_test MATCHES
+           "static_assert[(]!ExposesRvalueWsConnectionStorage<WsConnection>" OR
+       NOT ws_package_consumer MATCHES
+           "static_assert[(]!ExposesRvalueWsConnectionStorage<")
         boundary_error("WebSocket close lifecycle lost its protocol-owned plan"
-            "liveness, abort, output, and event operations must expose typed plans without close-state side channels")
+            "liveness, abort, output, and event operations must expose typed plans without close-state side channels or temporary connection borrows")
     endif()
     if(NOT ws_protocol MATCHES "enum class WsFrameSubmitStatus" OR
        NOT ws_protocol MATCHES "enum class WsCloseSubmitStatus" OR
@@ -11605,10 +11624,8 @@ if(EXISTS "${WS_PROTOCOL_HEADER}" AND EXISTS "${WS_EVENT_HEADER}" AND
     endif()
 endif()
 
-set(WS_PROTOCOL_TEST "${RUVIA_ROOT}/tests/unit_ws_connection.cpp")
 set(WS_RUNTIME_TEST "${RUVIA_ROOT}/tests/unit_websocket_connection.cpp")
 set(WS_H2_DRIVER_TEST "${RUVIA_ROOT}/tests/unit_sansio_driver.cpp")
-set(WS_PACKAGE_CONSUMER "${RUVIA_ROOT}/tests/package-consumer/http.cpp")
 if(EXISTS "${WS_PROTOCOL_TEST}" AND EXISTS "${WS_RUNTIME_TEST}" AND
    EXISTS "${WS_H2_DRIVER_TEST}" AND EXISTS "${WS_PACKAGE_CONSUMER}")
     file(READ "${WS_PROTOCOL_TEST}" ws_protocol_test)
@@ -13155,8 +13172,16 @@ endif()
 
 set(MULTIPART_INPUT_LIFECYCLE_HEADER
     "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/MultipartParser.h")
+set(MULTIPART_INPUT_LIFECYCLE_TEST
+    "${RUVIA_ROOT}/tests/unit_multipart.cpp")
+set(MULTIPART_INPUT_LIFECYCLE_PACKAGE_CONSUMER
+    "${RUVIA_ROOT}/tests/package-consumer/http.cpp")
 file(READ "${MULTIPART_INPUT_LIFECYCLE_HEADER}"
     multipart_input_lifecycle_content)
+file(READ "${MULTIPART_INPUT_LIFECYCLE_TEST}"
+    multipart_input_lifecycle_test)
+file(READ "${MULTIPART_INPUT_LIFECYCLE_PACKAGE_CONSUMER}"
+    multipart_input_lifecycle_package_consumer)
 if(NOT multipart_input_lifecycle_content MATCHES
        "class MultipartInputLifecycle final" OR
    NOT multipart_input_lifecycle_content MATCHES
@@ -13165,10 +13190,30 @@ if(NOT multipart_input_lifecycle_content MATCHES
        "MultipartStreamingInputOpen" OR
    NOT multipart_input_lifecycle_content MATCHES
        "MultipartStreamingInputEof" OR
+   NOT multipart_input_lifecycle_content MATCHES
+       "borrowed[(][)] const &[ \\t]+noexcept" OR
+   NOT multipart_input_lifecycle_content MATCHES
+       "borrowed[(][)] const &&[ \\t]*=[ \\t]*delete" OR
+   NOT multipart_input_lifecycle_content MATCHES
+       "streamingOpen[(][)] const &[ \\t]+noexcept" OR
+   NOT multipart_input_lifecycle_content MATCHES
+       "streamingOpen[(][)] const &&[ \\t]*=[ \\t]*delete" OR
+   NOT multipart_input_lifecycle_content MATCHES
+       "streamingEof[(][)] const &[ \\t]+noexcept" OR
+   NOT multipart_input_lifecycle_content MATCHES
+       "streamingEof[(][)] const &&[ \\t]*=[ \\t]*delete" OR
+   NOT multipart_input_lifecycle_content MATCHES
+       "view[(][)] const &[ \\t]+noexcept" OR
+   NOT multipart_input_lifecycle_content MATCHES
+       "view[(][)] const &&[ \\t]*=[ \\t]*delete" OR
+   NOT multipart_input_lifecycle_test MATCHES
+       "static_assert[(]!ExposesRvalueMultipartInputStorage<" OR
+   NOT multipart_input_lifecycle_package_consumer MATCHES
+       "static_assert[(]!ExposesRvalueMultipartInputStorage<" OR
    multipart_input_lifecycle_content MATCHES
        "borrowedInputMode_|inputFinished_|borrowedInput_|std::pmr::string buffer_")
     boundary_error("MultipartParser restored parallel input source/EOF state"
-        "Borrowed complete input, streaming open, and streaming EOF must be exclusive MultipartInputLifecycle alternatives")
+        "Borrowed complete input, streaming open, and streaming EOF must be exclusive alternatives whose storage can only be borrowed from stable lvalues")
 endif()
 
 set(ROUTER_INTERNAL_HEADER

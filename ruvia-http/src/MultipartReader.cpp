@@ -82,17 +82,17 @@ detail::MultipartInputLifecycle::MultipartInputLifecycle(
     : value_(input) {}
 
 const detail::MultipartBorrowedInput*
-detail::MultipartInputLifecycle::borrowed() const noexcept {
+detail::MultipartInputLifecycle::borrowed() const & noexcept {
     return std::get_if<MultipartBorrowedInput>(&value_);
 }
 
 const detail::MultipartStreamingInputOpen*
-detail::MultipartInputLifecycle::streamingOpen() const noexcept {
+detail::MultipartInputLifecycle::streamingOpen() const & noexcept {
     return std::get_if<MultipartStreamingInputOpen>(&value_);
 }
 
 const detail::MultipartStreamingInputEof*
-detail::MultipartInputLifecycle::streamingEof() const noexcept {
+detail::MultipartInputLifecycle::streamingEof() const & noexcept {
     return std::get_if<MultipartStreamingInputEof>(&value_);
 }
 
@@ -120,7 +120,7 @@ const std::pmr::string* detail::MultipartInputLifecycle::ownedBytes() const noex
     return nullptr;
 }
 
-std::string_view detail::MultipartInputLifecycle::view() const noexcept {
+std::string_view detail::MultipartInputLifecycle::view() const & noexcept {
     const auto source = borrowed() != nullptr
         ? borrowed()->bytes
         : std::string_view(ownedBytes()->data(), ownedBytes()->size());

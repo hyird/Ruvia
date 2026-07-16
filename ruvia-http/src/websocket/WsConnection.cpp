@@ -17,7 +17,7 @@ WsConnection::WsConnection(
     }
 }
 
-WsOutputPlan WsConnection::outputPlan() const noexcept {
+WsOutputPlan WsConnection::outputPlan() const & noexcept {
     // EOF/abort may race an async transport write. Keep the backing allocation
     // untouched until destruction, but make discarded bytes unreachable from the
     // protocol driver once transport termination has become authoritative.
@@ -190,7 +190,7 @@ WsCloseSubmitStatus WsConnection::submitClose(
     return WsCloseSubmitStatus::kAccepted;
 }
 
-std::optional<WsEvent> WsConnection::poll() {
+std::optional<WsEvent> WsConnection::poll() & {
     inboundInflated_.clear();
     if (closePhase_ == ClosePhase::kFinalCloseQueued ||
         closePhase_ == ClosePhase::kTransportEndReady ||

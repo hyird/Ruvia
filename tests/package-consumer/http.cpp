@@ -222,6 +222,23 @@ static_assert(!ExposesRvalueHttp2StreamStateStorage<
 static_assert(!ExposesRvalueHttp2StreamTableStorage<
     ruvia::detail::Http2StreamTable>);
 
+template <typename T>
+concept ExposesRvalueMultipartInputStorage =
+    requires(T&& input) { std::move(input).borrowed(); } ||
+    requires(T&& input) { std::move(input).streamingOpen(); } ||
+    requires(T&& input) { std::move(input).streamingEof(); } ||
+    requires(T&& input) { std::move(input).view(); };
+
+template <typename T>
+concept ExposesRvalueWsConnectionStorage =
+    requires(T&& connection) { std::move(connection).poll(); } ||
+    requires(T&& connection) { std::move(connection).outputPlan(); };
+
+static_assert(!ExposesRvalueMultipartInputStorage<
+    ruvia::detail::MultipartInputLifecycle>);
+static_assert(!ExposesRvalueWsConnectionStorage<
+    ruvia::detail::WsConnection>);
+
 template <typename Input>
 concept AcceptsHttp1BorrowedParseInput = requires(
     const ruvia::Http1RequestParser& parser,

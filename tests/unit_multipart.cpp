@@ -40,6 +40,16 @@ concept HasMultipartProtocolError = requires(const T& result) {
 };
 
 template <typename T>
+concept ExposesRvalueMultipartInputStorage =
+    requires(T&& input) { std::move(input).borrowed(); } ||
+    requires(T&& input) { std::move(input).streamingOpen(); } ||
+    requires(T&& input) { std::move(input).streamingEof(); } ||
+    requires(T&& input) { std::move(input).view(); };
+
+static_assert(!ExposesRvalueMultipartInputStorage<
+    ruvia::detail::MultipartInputLifecycle>);
+
+template <typename T>
 concept HasMultipartParseError = requires(const T& result) {
     { result.parseError() } -> std::same_as<ruvia::MultipartParseError>;
 };

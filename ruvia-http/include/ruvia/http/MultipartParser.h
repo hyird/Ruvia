@@ -381,11 +381,19 @@ public:
     explicit MultipartInputLifecycle(std::pmr::memory_resource* resource);
     explicit MultipartInputLifecycle(MultipartBorrowedInput input) noexcept;
 
-    [[nodiscard]] const MultipartBorrowedInput* borrowed() const noexcept;
-    [[nodiscard]] const MultipartStreamingInputOpen* streamingOpen() const noexcept;
-    [[nodiscard]] const MultipartStreamingInputEof* streamingEof() const noexcept;
+    [[nodiscard]] const MultipartBorrowedInput* borrowed() const & noexcept;
+    [[nodiscard]] const MultipartBorrowedInput* borrowed() const && = delete;
+    [[nodiscard]] const MultipartStreamingInputOpen*
+    streamingOpen() const & noexcept;
+    [[nodiscard]] const MultipartStreamingInputOpen*
+    streamingOpen() const && = delete;
+    [[nodiscard]] const MultipartStreamingInputEof*
+    streamingEof() const & noexcept;
+    [[nodiscard]] const MultipartStreamingInputEof*
+    streamingEof() const && = delete;
     [[nodiscard]] bool eof() const noexcept;
-    [[nodiscard]] std::string_view view() const noexcept;
+    [[nodiscard]] std::string_view view() const & noexcept;
+    [[nodiscard]] std::string_view view() const && = delete;
 
     void feed(std::string_view chunk);
     void finishInput() noexcept;
