@@ -959,11 +959,12 @@ bool Http2Connection::processData(const Http2FrameHeader& header, std::string_vi
         }
     }
 
-    // sans-I/O: hand the body to the owner as an event; the core does not buffer it
-    // (buffered vs streaming delivery and product size limits are owner policy).
-    // Content-Length was accounted above. A non-empty event retains receive-window
-    // debt until releaseReceivedData(); the view remains valid until the next feed.
-    if (!metadataOnlyContent) {
+    // sans-I/O: hand only actual body bytes to the owner. Empty and padding-only
+    // DATA frames still participate in framing, END_STREAM, and flow control, but
+    // exposing them as empty chunks would create no-progress queue wakeups and let
+    // a frame flood allocate one application event per nine wire octets.
+    // Buffered vs streaming delivery and product size limits remain owner policy.
+    if (deliverData) {
         events_.push_back(tunnelData
             ? Http2Event::tunnelData(header.streamId, data)
             : Http2Event::messageBodyChunk(header.streamId, data));

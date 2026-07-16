@@ -1940,6 +1940,71 @@ RUVIA_TEST(http2_connection_feed_data_emits_body_chunk_and_end) {
     RUVIA_CHECK_EQ(wu.type, static_cast<std::uint8_t>(Http2FrameType::kWindowUpdate));
 }
 
+// A DATA frame is protocol progress even when its Data field is empty, but it is not
+// an application body chunk. Padding still consumes and immediately restores both
+// flow-control windows, and END_STREAM still emits the terminal message event.
+RUVIA_TEST(http2_connection_empty_data_never_emits_body_chunk) {
+    std::pmr::monotonic_buffer_resource resource;
+    Http2Connection conn(&resource);
+    handshake(conn);
+
+    const auto head = postHeadFrame(&resource, "");
+    RUVIA_CHECK(conn.feed(std::string_view(head.data(), head.size())) ==
+        Http2FeedResult::kAccepted);
+    RUVIA_CHECK(conn.nextEvent().value().kind() == Http2EventKind::kMessageHead);
+    RUVIA_CHECK(!conn.nextEvent().has_value());
+
+    const auto empty = dataFrame(&resource, 1, 0, {});
+    RUVIA_CHECK(conn.feed(std::string_view(empty.data(), empty.size())) ==
+        Http2FeedResult::kAccepted);
+    RUVIA_CHECK(!conn.nextEvent().has_value());
+    RUVIA_CHECK(conn.pendingOutput().empty());
+
+    const std::string_view paddingOnly("\x02\0\0", 3);
+    const auto padded = dataFrame(
+        &resource,
+        1,
+        ruvia::detail::kHttp2FlagPadded,
+        paddingOnly);
+    RUVIA_CHECK(conn.feed(std::string_view(padded.data(), padded.size())) ==
+        Http2FeedResult::kAccepted);
+    RUVIA_CHECK(!conn.nextEvent().has_value());
+
+    const auto updates = conn.pendingOutput();
+    RUVIA_CHECK_EQ(
+        updates.size(),
+        std::size_t{2 * ruvia::detail::kHttp2WindowUpdateFrameBytes});
+    const auto connectionUpdate =
+        ruvia::detail::http2ParseFrameHeader(updates.substr(0, 9));
+    const auto streamUpdate = ruvia::detail::http2ParseFrameHeader(
+        updates.substr(ruvia::detail::kHttp2WindowUpdateFrameBytes, 9));
+    RUVIA_CHECK_EQ(connectionUpdate.streamId, std::uint32_t{0});
+    RUVIA_CHECK_EQ(streamUpdate.streamId, std::uint32_t{1});
+    RUVIA_CHECK_EQ(
+        ruvia::detail::http2WindowUpdateIncrement(updates.substr(9, 4)),
+        std::uint32_t{3});
+    RUVIA_CHECK_EQ(
+        ruvia::detail::http2WindowUpdateIncrement(updates.substr(
+            ruvia::detail::kHttp2WindowUpdateFrameBytes + 9,
+            4)),
+        std::uint32_t{3});
+    conn.consumeOutput(updates.size());
+
+    const auto terminal = dataFrame(
+        &resource,
+        1,
+        ruvia::detail::kHttp2FlagEndStream,
+        {});
+    RUVIA_CHECK(conn.feed(std::string_view(terminal.data(), terminal.size())) ==
+        Http2FeedResult::kAccepted);
+    const auto end = conn.nextEvent();
+    RUVIA_CHECK(end.has_value());
+    if (end.has_value()) {
+        RUVIA_CHECK(end->kind() == Http2EventKind::kMessageEnd);
+    }
+    RUVIA_CHECK(!conn.nextEvent().has_value());
+}
+
 RUVIA_TEST(http2_connection_same_feed_data_credit_waits_for_owner_batch_release) {
     std::pmr::monotonic_buffer_resource resource;
     Http2Connection conn(&resource);
