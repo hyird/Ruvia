@@ -78,9 +78,10 @@ public:
 
     // Client role: nullptr until the final response :status is committed once for
     // a stream this endpoint opened. The owner bounds preceding 1xx heads.
-    [[nodiscard]] const std::uint16_t* responseStatus() const noexcept {
+    [[nodiscard]] const std::uint16_t* responseStatus() const & noexcept {
         return responseStatus_ ? &*responseStatus_ : nullptr;
     }
+    [[nodiscard]] const std::uint16_t* responseStatus() const && = delete;
 
     [[nodiscard]] bool setResponseStatus(std::uint16_t status) noexcept {
         if (responseStatus_) {

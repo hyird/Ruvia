@@ -3,6 +3,7 @@
 #include <cstdint>
 #include <limits>
 #include <memory_resource>
+#include <utility>
 #include <vector>
 
 #include "ruvia/http/detail/http2/Http2StreamTable.h"
@@ -11,6 +12,18 @@ namespace {
 
 using ruvia::detail::Http2StreamTable;
 using ruvia::detail::Http2LocalSettings;
+
+template <typename T>
+concept ExposesRvalueHttp2StreamTableStorage =
+    requires(T&& table) { std::move(table).find(std::uint32_t{}); } ||
+    requires(const T&& table) {
+        std::move(table).find(std::uint32_t{});
+    } ||
+    requires(T&& table) {
+        std::move(table).create(std::uint32_t{}, std::int32_t{});
+    };
+
+static_assert(!ExposesRvalueHttp2StreamTableStorage<Http2StreamTable>);
 
 }  // namespace
 

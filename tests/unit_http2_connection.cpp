@@ -91,6 +91,9 @@ concept ExposesRvalueHttp2ConnectionStorage =
     requires(T&& connection) { std::move(connection).pendingOutput(); } ||
     requires(T&& connection) {
         std::move(connection).takeDrainedDataStreams();
+    } ||
+    requires(T&& connection) {
+        std::move(connection).stream(std::uint32_t{});
     };
 
 static_assert(!HasAnyRvalueHttp2EventBorrow<Http2Event>);

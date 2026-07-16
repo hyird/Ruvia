@@ -3,6 +3,7 @@
 #include <concepts>
 #include <memory_resource>
 #include <type_traits>
+#include <utility>
 
 #include "ruvia/http/detail/http2/Http2StreamState.h"
 
@@ -123,6 +124,14 @@ static_assert(!HasStalePeerEndStream<Http2StreamLifecycle>);
 static_assert(!HasStaleBodyEnded<Http2StreamState>);
 static_assert(!HasStalePeerEndStream<Http2StreamState>);
 static_assert(!HasStaleHeadersDecoded<Http2StreamState>);
+
+template <typename T>
+concept ExposesRvalueHttp2StreamLifecycleStorage =
+    requires(T&& lifecycle) { std::move(lifecycle).localSend(); } ||
+    requires(T&& lifecycle) { std::move(lifecycle).remoteReceive(); };
+
+static_assert(!ExposesRvalueHttp2StreamLifecycleStorage<
+    Http2StreamLifecycle>);
 
 }  // namespace
 

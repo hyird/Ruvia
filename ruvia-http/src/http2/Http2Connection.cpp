@@ -1217,7 +1217,8 @@ Http2FeedResult Http2Connection::feed(std::string_view in) {
         : Http2FeedResult::kAccepted;
 }
 
-Http2StreamState* Http2Connection::stream(std::uint32_t streamId) noexcept {
+Http2StreamState* Http2Connection::stream(
+    std::uint32_t streamId) & noexcept {
     return streams_.find(streamId);
 }
 

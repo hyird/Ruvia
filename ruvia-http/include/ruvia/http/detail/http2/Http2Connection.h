@@ -488,7 +488,9 @@ public:
     [[nodiscard]] std::optional<Http2Event> nextEvent();
 
     // Access an assembled request head / stream for the owner to build an HttpRequest.
-    [[nodiscard]] Http2StreamState* stream(std::uint32_t streamId) noexcept;
+    [[nodiscard]] Http2StreamState* stream(
+        std::uint32_t streamId) & noexcept;
+    [[nodiscard]] Http2StreamState* stream(std::uint32_t) && = delete;
 
     // --- outbound --------------------------------------------------------------
     // Bytes the core wants written to the peer (frame headers + payloads, batched).

@@ -2255,6 +2255,138 @@ if(NOT _installed_http1_chunk_header_buffer MATCHES
     message(FATAL_ERROR
         "installed protocol buffers expose storage from temporary owners")
 endif()
+set(_installed_http2_header_list_owner_path
+    "${_install_prefix}/include/ruvia/http/detail/http2/Http2HeaderList.h")
+set(_installed_http2_stream_request_data_owner_path
+    "${_install_prefix}/include/ruvia/http/detail/http2/Http2StreamRequestData.h")
+set(_installed_http2_stream_request_state_owner_path
+    "${_install_prefix}/include/ruvia/http/detail/http2/Http2StreamRequestState.h")
+set(_installed_http2_stream_header_blocks_owner_path
+    "${_install_prefix}/include/ruvia/http/detail/http2/Http2StreamHeaderBlocks.h")
+set(_installed_http2_stream_lifecycle_owner_path
+    "${_install_prefix}/include/ruvia/http/detail/http2/Http2StreamLifecycle.h")
+set(_installed_http2_stream_state_owner_path
+    "${_install_prefix}/include/ruvia/http/detail/http2/Http2StreamState.h")
+set(_installed_http2_stream_table_owner_path
+    "${_install_prefix}/include/ruvia/http/detail/http2/Http2StreamTable.h")
+foreach(_installed_http2_stream_owner_path IN ITEMS
+        "${_installed_http2_header_list_owner_path}"
+        "${_installed_http2_stream_request_data_owner_path}"
+        "${_installed_http2_stream_request_state_owner_path}"
+        "${_installed_http2_stream_header_blocks_owner_path}"
+        "${_installed_http2_stream_lifecycle_owner_path}"
+        "${_installed_http2_stream_state_owner_path}"
+        "${_installed_http2_stream_table_owner_path}")
+    if(NOT EXISTS "${_installed_http2_stream_owner_path}")
+        message(FATAL_ERROR
+            "installed HTTP package is missing an HTTP/2 stream owner")
+    endif()
+endforeach()
+file(READ "${_installed_http2_header_list_owner_path}"
+    _installed_http2_header_list_owner)
+file(READ "${_installed_http2_stream_request_data_owner_path}"
+    _installed_http2_stream_request_data_owner)
+file(READ "${_installed_http2_stream_request_state_owner_path}"
+    _installed_http2_stream_request_state_owner)
+file(READ "${_installed_http2_stream_header_blocks_owner_path}"
+    _installed_http2_stream_header_blocks_owner)
+file(READ "${_installed_http2_stream_lifecycle_owner_path}"
+    _installed_http2_stream_lifecycle_owner)
+file(READ "${_installed_http2_stream_state_owner_path}"
+    _installed_http2_stream_state_owner)
+file(READ "${_installed_http2_stream_table_owner_path}"
+    _installed_http2_stream_table_owner)
+if(NOT _installed_http2_header_list_owner MATCHES
+       "at[(][^)]*[)][\\r\\n \\t]*const &[\\r\\n \\t]+noexcept" OR
+   NOT _installed_http2_header_list_owner MATCHES
+       "at[(][^)]*[)][\\r\\n \\t]*const &&[\\r\\n \\t]*=[\\r\\n \\t]*delete")
+    message(FATAL_ERROR
+        "installed HTTP/2 header list exposes views from temporary owners")
+endif()
+foreach(_installed_http2_request_data_borrow IN ITEMS
+        method scheme authority path protocol cookie headerAt)
+    if(NOT _installed_http2_stream_request_data_owner MATCHES
+           "${_installed_http2_request_data_borrow}[(][^)]*[)][\\r\\n \\t]*const &[\\r\\n \\t]+noexcept" OR
+       NOT _installed_http2_stream_request_data_owner MATCHES
+           "${_installed_http2_request_data_borrow}[(][^)]*[)][\\r\\n \\t]*const &&[\\r\\n \\t]*=[\\r\\n \\t]*delete")
+        message(FATAL_ERROR
+            "installed HTTP/2 request data exposes views from temporary owners")
+    endif()
+endforeach()
+if(NOT _installed_http2_stream_request_state_owner MATCHES
+       "responseStatus[(][)][\\r\\n \\t]*const &[\\r\\n \\t]+noexcept" OR
+   NOT _installed_http2_stream_request_state_owner MATCHES
+       "responseStatus[(][)][\\r\\n \\t]*const &&[\\r\\n \\t]*=[\\r\\n \\t]*delete")
+    message(FATAL_ERROR
+        "installed HTTP/2 request state exposes pointers from temporary owners")
+endif()
+foreach(_installed_http2_header_block_borrow IN ITEMS request response)
+    if(NOT _installed_http2_stream_header_blocks_owner MATCHES
+           "${_installed_http2_header_block_borrow}[(][)][\\r\\n \\t]*&[\\r\\n \\t]+noexcept" OR
+       NOT _installed_http2_stream_header_blocks_owner MATCHES
+           "${_installed_http2_header_block_borrow}[(][)][\\r\\n \\t]*&&[\\r\\n \\t]*=[\\r\\n \\t]*delete" OR
+       NOT _installed_http2_stream_header_blocks_owner MATCHES
+           "${_installed_http2_header_block_borrow}[(][)][\\r\\n \\t]*const &[\\r\\n \\t]+noexcept" OR
+       NOT _installed_http2_stream_header_blocks_owner MATCHES
+           "${_installed_http2_header_block_borrow}[(][)][\\r\\n \\t]*const &&[\\r\\n \\t]*=[\\r\\n \\t]*delete")
+        message(FATAL_ERROR
+            "installed HTTP/2 header blocks expose references from temporary owners")
+    endif()
+endforeach()
+foreach(_installed_http2_lifecycle_borrow IN ITEMS localSend remoteReceive)
+    if(NOT _installed_http2_stream_lifecycle_owner MATCHES
+           "${_installed_http2_lifecycle_borrow}[(][)][\\r\\n \\t]*const &[\\r\\n \\t]+noexcept" OR
+       NOT _installed_http2_stream_lifecycle_owner MATCHES
+           "${_installed_http2_lifecycle_borrow}[(][)][\\r\\n \\t]*const &&[\\r\\n \\t]*=[\\r\\n \\t]*delete")
+        message(FATAL_ERROR
+            "installed HTTP/2 lifecycle exposes references from temporary owners")
+    endif()
+endforeach()
+foreach(_installed_http2_stream_mutable_borrow IN ITEMS
+        receiveWindowCredit requestHeaderBlock responseHeaderBlock)
+    if(NOT _installed_http2_stream_state_owner MATCHES
+           "${_installed_http2_stream_mutable_borrow}[(][^)]*[)][\\r\\n \\t]*&[\\r\\n \\t]+noexcept" OR
+       NOT _installed_http2_stream_state_owner MATCHES
+           "${_installed_http2_stream_mutable_borrow}[(][^)]*[)][\\r\\n \\t]*&&[\\r\\n \\t]*=[\\r\\n \\t]*delete")
+        message(FATAL_ERROR
+            "installed HTTP/2 stream exposes mutable storage from temporary owners")
+    endif()
+endforeach()
+foreach(_installed_http2_stream_const_borrow IN ITEMS
+        requestHeaderBlock responseHeaderBlock remoteContent localContent
+        localSend remoteReceive requestMethod requestAuthority requestPath
+        requestProtocol requestCookie requestHeaderAt requestScheme tunnel
+        responseStatus)
+    if(NOT _installed_http2_stream_state_owner MATCHES
+           "${_installed_http2_stream_const_borrow}[(][^)]*[)][\\r\\n \\t]*const &[\\r\\n \\t]+noexcept" OR
+       NOT _installed_http2_stream_state_owner MATCHES
+           "${_installed_http2_stream_const_borrow}[(][^)]*[)][\\r\\n \\t]*const &&[\\r\\n \\t]*=[\\r\\n \\t]*delete")
+        message(FATAL_ERROR
+            "installed HTTP/2 stream exposes storage from temporary owners")
+    endif()
+endforeach()
+if(NOT _installed_http2_stream_table_owner MATCHES
+       "find[(][^)]*[)][\\r\\n \\t]*&[\\r\\n \\t]+noexcept" OR
+   NOT _installed_http2_stream_table_owner MATCHES
+       "find[(][^)]*[)][\\r\\n \\t]*&&[\\r\\n \\t]*=[\\r\\n \\t]*delete" OR
+   NOT _installed_http2_stream_table_owner MATCHES
+       "find[(][^)]*[)][\\r\\n \\t]*const &[\\r\\n \\t]+noexcept" OR
+   NOT _installed_http2_stream_table_owner MATCHES
+       "find[(][^)]*[)][\\r\\n \\t]*const &&[\\r\\n \\t]*=[\\r\\n \\t]*delete" OR
+   NOT _installed_http2_stream_table_owner MATCHES
+       "create[(][^)]*[)][\\r\\n \\t]*&[\\r\\n \\t]*[{]" OR
+   NOT _installed_http2_stream_table_owner MATCHES
+       "create[(][^)]*[)][\\r\\n \\t]*&&[\\r\\n \\t]*=[\\r\\n \\t]*delete")
+    message(FATAL_ERROR
+        "installed HTTP/2 stream table exposes pointers from temporary owners")
+endif()
+if(NOT _installed_http2_connection_buffer MATCHES
+       "stream[(][^)]*[)][\\r\\n \\t]*&[\\r\\n \\t]+noexcept" OR
+   NOT _installed_http2_connection_buffer MATCHES
+       "stream[(][^)]*[)][\\r\\n \\t]*&&[\\r\\n \\t]*=[\\r\\n \\t]*delete")
+    message(FATAL_ERROR
+        "installed HTTP/2 connection exposes streams from temporary owners")
+endif()
 if(NOT _installed_http1_request_parser MATCHES "class Http1RequestNeedMore final" OR
    NOT _installed_http1_request_parser MATCHES "class Http1ParsedRequest final" OR
    NOT _installed_http1_request_parser MATCHES "class Http1RequestParseFailure final" OR
@@ -2451,7 +2583,7 @@ if(_installed_http2_local_content MATCHES "Http2LocalContentMode" OR
        "std::get_if<Http2LocalContentKnownLength>" OR
    NOT _installed_http2_local_content MATCHES "kNotStarted" OR
    NOT _installed_http2_stream_state MATCHES
-       "const Http2LocalContentState& localContent[(][)] const noexcept" OR
+       "const Http2LocalContentState&[ \t\r\n]+localContent[(][)] const & noexcept" OR
    NOT _installed_http2_stream_state MATCHES
        "HttpRequestExpectations requestExpectations[(][)] const noexcept" OR
    _installed_http2_stream_state MATCHES
@@ -4388,7 +4520,7 @@ if(_installed_http2_remote_content MATCHES
    NOT _installed_http2_remote_content MATCHES "account[(]" OR
    NOT _installed_http2_remote_content MATCHES "terminalLengthValid" OR
    NOT _installed_http2_stream_state MATCHES
-       "const Http2RemoteContentState&[ \t\r\n]+remoteContent[(][)] const noexcept" OR
+       "const Http2RemoteContentState&[ \t\r\n]+remoteContent[(][)] const & noexcept" OR
    NOT _installed_http2_stream_state MATCHES "accountRemoteContent" OR
    NOT _installed_http2_stream_state MATCHES
        "selectRemoteContentMetadataOnly" OR
@@ -4838,7 +4970,7 @@ if(_installed_http2_tunnel_state MATCHES
    NOT _installed_http2_tunnel_state MATCHES
        "form != Http2ConnectForm::kExtended" OR
    NOT _installed_http2_stream_state MATCHES
-       "const Http2TunnelState& tunnel[(][)] const noexcept" OR
+       "const Http2TunnelState& tunnel[(][)] const & noexcept" OR
    _installed_http2_stream_state MATCHES
        "(standardConnect|extendedConnect|extendedConnectWebSocket|connectRequest|connectPending|tunnelOpen|connectRejected)[(]")
     message(FATAL_ERROR "installed HTTP/2 tunnel state retained a kind/phase product or stream forwarding accessors")
@@ -4925,7 +5057,7 @@ if(NOT _installed_http2_close_source MATCHES
    NOT _installed_http2_local_send MATCHES
        "Http2StreamCloseSource source[(][)] const noexcept" OR
    NOT _installed_http2_lifecycle MATCHES
-       "const Http2LocalSendState& localSend[(][)] const noexcept" OR
+       "const Http2LocalSendState& localSend[(][)] const & noexcept" OR
    NOT _installed_http2_lifecycle MATCHES
        "private:[\r\n \t]+friend class Http2StreamState" OR
    NOT _installed_http2_lifecycle MATCHES "bool aborted[(][)] const noexcept" OR
@@ -4933,7 +5065,7 @@ if(NOT _installed_http2_close_source MATCHES
        "bool abort[(]Http2StreamCloseSource source[)] noexcept" OR
    NOT _installed_http2_lifecycle MATCHES "queued_ = false" OR
    NOT _installed_http2_stream_state MATCHES
-       "const Http2LocalSendState& localSend[(][)] const noexcept" OR
+       "const Http2LocalSendState& localSend[(][)] const & noexcept" OR
    NOT _installed_http2_stream_state MATCHES "bool isAborted[(][)] const noexcept" OR
    NOT _installed_http2_stream_state MATCHES
        "bool abort[(]Http2StreamCloseSource source[)] noexcept" OR
@@ -5006,15 +5138,15 @@ if(NOT _installed_http2_remote_receive MATCHES
    NOT _installed_http2_remote_receive MATCHES
        "std::get_if<Http2RemoteEndStream>" OR
    NOT _installed_http2_lifecycle MATCHES
-       "const Http2RemoteReceiveState& remoteReceive[(][)] const noexcept" OR
+       "const Http2RemoteReceiveState& remoteReceive[(][)] const & noexcept" OR
    NOT _installed_http2_lifecycle MATCHES "remoteReceive_[.]abort[(][)]" OR
    NOT _installed_http2_stream_state MATCHES
-       "const Http2RemoteReceiveState& remoteReceive[(][)] const noexcept" OR
+       "const Http2RemoteReceiveState&[ \t\r\n]+remoteReceive[(][)] const & noexcept" OR
    NOT _installed_http2_stream_state MATCHES "finalizeRemoteConnectHead" OR
    NOT _installed_http2_stream_state MATCHES "finishRemotePendingConnect" OR
    NOT _installed_http2_stream_state MATCHES "finishRemoteRejectedConnect" OR
    NOT _installed_http2_request_state MATCHES
-       "const std::uint16_t[*] responseStatus[(][)] const noexcept" OR
+       "const std::uint16_t[*] responseStatus[(][)] const & noexcept" OR
    NOT _installed_http2_request_state MATCHES
        "bool setResponseStatus[(]std::uint16_t status[)] noexcept" OR
    NOT _installed_http2_request_state MATCHES

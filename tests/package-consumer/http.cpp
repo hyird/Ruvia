@@ -57,6 +57,7 @@
 #include <ruvia/http/detail/http2/Http2Connection.h>
 #include <ruvia/http/detail/http2/Http2ClosedStreams.h>
 #include <ruvia/http/detail/http2/Http2Event.h>
+#include <ruvia/http/detail/http2/Http2HeaderList.h>
 #include <ruvia/http/detail/http2/Http2Hpack.h>
 #include <ruvia/http/detail/http2/Http2LocalSendState.h>
 #include <ruvia/http/detail/http2/Http2OutputBuffer.h>
@@ -66,6 +67,9 @@
 #include <ruvia/http/detail/http2/Http2RequestBuilder.h>
 #include <ruvia/http/detail/http2/Http2ResponseHeadPlan.h>
 #include <ruvia/http/detail/http2/Http2StreamHeaderBlocks.h>
+#include <ruvia/http/detail/http2/Http2StreamLifecycle.h>
+#include <ruvia/http/detail/http2/Http2StreamRequestData.h>
+#include <ruvia/http/detail/http2/Http2StreamRequestState.h>
 #include <ruvia/http/detail/http2/Http2StreamState.h>
 #include <ruvia/http/detail/http2/Http2StreamTable.h>
 #include <ruvia/http/detail/http2/Http2TunnelState.h>
@@ -117,6 +121,9 @@ concept ExposesRvalueHttp2ConnectionStorage =
     requires(T&& connection) { std::move(connection).pendingOutput(); } ||
     requires(T&& connection) {
         std::move(connection).takeDrainedDataStreams();
+    } ||
+    requires(T&& connection) {
+        std::move(connection).stream(std::uint32_t{});
     };
 
 template <typename T>
@@ -134,6 +141,86 @@ static_assert(!ExposesRvalueHttp2ConnectionStorage<
     ruvia::detail::Http2Connection>);
 static_assert(!ExposesRvalueEncodedClosePayloadBytes<
     ruvia::detail::WebSocketEncodedClosePayload>);
+
+template <typename T>
+concept ExposesRvalueHttp2HeaderListStorage = requires(T&& list) {
+    std::move(list).at(std::size_t{});
+};
+
+template <typename T>
+concept ExposesRvalueHttp2StreamRequestDataStorage =
+    requires(T&& data) { std::move(data).method(); } ||
+    requires(T&& data) { std::move(data).scheme(); } ||
+    requires(T&& data) { std::move(data).authority(); } ||
+    requires(T&& data) { std::move(data).path(); } ||
+    requires(T&& data) { std::move(data).protocol(); } ||
+    requires(T&& data) { std::move(data).cookie(); } ||
+    requires(T&& data) { std::move(data).headerAt(std::size_t{}); };
+
+template <typename T>
+concept ExposesRvalueHttp2StreamRequestStateStorage = requires(T&& state) {
+    std::move(state).responseStatus();
+};
+
+template <typename T>
+concept ExposesRvalueHttp2StreamHeaderBlocksStorage =
+    requires(T&& blocks) { std::move(blocks).request(); } ||
+    requires(const T&& blocks) { std::move(blocks).request(); } ||
+    requires(T&& blocks) { std::move(blocks).response(); } ||
+    requires(const T&& blocks) { std::move(blocks).response(); };
+
+template <typename T>
+concept ExposesRvalueHttp2StreamLifecycleStorage =
+    requires(T&& lifecycle) { std::move(lifecycle).localSend(); } ||
+    requires(T&& lifecycle) { std::move(lifecycle).remoteReceive(); };
+
+template <typename T>
+concept ExposesRvalueHttp2StreamStateStorage =
+    requires(T&& stream) { std::move(stream).receiveWindowCredit(); } ||
+    requires(T&& stream) { std::move(stream).requestHeaderBlock(); } ||
+    requires(const T&& stream) { std::move(stream).requestHeaderBlock(); } ||
+    requires(T&& stream) { std::move(stream).responseHeaderBlock(); } ||
+    requires(const T&& stream) { std::move(stream).responseHeaderBlock(); } ||
+    requires(T&& stream) { std::move(stream).remoteContent(); } ||
+    requires(T&& stream) { std::move(stream).localContent(); } ||
+    requires(T&& stream) { std::move(stream).localSend(); } ||
+    requires(T&& stream) { std::move(stream).remoteReceive(); } ||
+    requires(T&& stream) { std::move(stream).requestMethod(); } ||
+    requires(T&& stream) { std::move(stream).requestAuthority(); } ||
+    requires(T&& stream) { std::move(stream).requestPath(); } ||
+    requires(T&& stream) { std::move(stream).requestProtocol(); } ||
+    requires(T&& stream) { std::move(stream).requestCookie(); } ||
+    requires(T&& stream) {
+        std::move(stream).requestHeaderAt(std::size_t{});
+    } ||
+    requires(T&& stream) { std::move(stream).requestScheme(); } ||
+    requires(T&& stream) { std::move(stream).tunnel(); } ||
+    requires(T&& stream) { std::move(stream).responseStatus(); };
+
+template <typename T>
+concept ExposesRvalueHttp2StreamTableStorage =
+    requires(T&& table) { std::move(table).find(std::uint32_t{}); } ||
+    requires(const T&& table) {
+        std::move(table).find(std::uint32_t{});
+    } ||
+    requires(T&& table) {
+        std::move(table).create(std::uint32_t{}, std::int32_t{});
+    };
+
+static_assert(!ExposesRvalueHttp2HeaderListStorage<
+    ruvia::detail::Http2HeaderList>);
+static_assert(!ExposesRvalueHttp2StreamRequestDataStorage<
+    ruvia::detail::Http2StreamRequestData>);
+static_assert(!ExposesRvalueHttp2StreamRequestStateStorage<
+    ruvia::detail::Http2StreamRequestState>);
+static_assert(!ExposesRvalueHttp2StreamHeaderBlocksStorage<
+    ruvia::detail::Http2StreamHeaderBlocks>);
+static_assert(!ExposesRvalueHttp2StreamLifecycleStorage<
+    ruvia::detail::Http2StreamLifecycle>);
+static_assert(!ExposesRvalueHttp2StreamStateStorage<
+    ruvia::detail::Http2StreamState>);
+static_assert(!ExposesRvalueHttp2StreamTableStorage<
+    ruvia::detail::Http2StreamTable>);
 
 template <typename Input>
 concept AcceptsHttp1BorrowedParseInput = requires(

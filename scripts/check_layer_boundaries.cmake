@@ -7210,6 +7210,211 @@ if(EXISTS "${HTTP1_CHUNK_HEADER_BUFFER}" AND
         endif()
     endforeach()
 endif()
+set(HTTP2_HEADER_LIST_OWNER
+    "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/detail/http2/Http2HeaderList.h")
+set(HTTP2_STREAM_REQUEST_DATA_OWNER
+    "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/detail/http2/Http2StreamRequestData.h")
+set(HTTP2_STREAM_REQUEST_STATE_OWNER
+    "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/detail/http2/Http2StreamRequestState.h")
+set(HTTP2_STREAM_HEADER_BLOCKS_OWNER
+    "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/detail/http2/Http2StreamHeaderBlocks.h")
+set(HTTP2_STREAM_LIFECYCLE_OWNER
+    "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/detail/http2/Http2StreamLifecycle.h")
+set(HTTP2_STREAM_STATE_OWNER
+    "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/detail/http2/Http2StreamState.h")
+set(HTTP2_STREAM_TABLE_OWNER
+    "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/detail/http2/Http2StreamTable.h")
+set(HTTP2_HEADER_LIST_OWNER_TEST
+    "${RUVIA_ROOT}/tests/unit_http2_header_list.cpp")
+set(HTTP2_STREAM_REQUEST_DATA_OWNER_TEST
+    "${RUVIA_ROOT}/tests/unit_http2_stream_request_data.cpp")
+set(HTTP2_STREAM_REQUEST_STATE_OWNER_TEST
+    "${RUVIA_ROOT}/tests/unit_http2_request_headers.cpp")
+set(HTTP2_STREAM_LIFECYCLE_OWNER_TEST
+    "${RUVIA_ROOT}/tests/unit_http2_stream_lifecycle.cpp")
+set(HTTP2_STREAM_TABLE_OWNER_TEST
+    "${RUVIA_ROOT}/tests/unit_http2_stream_table.cpp")
+foreach(http2_stream_owner_contract IN ITEMS
+        "${HTTP2_HEADER_LIST_OWNER}"
+        "${HTTP2_STREAM_REQUEST_DATA_OWNER}"
+        "${HTTP2_STREAM_REQUEST_STATE_OWNER}"
+        "${HTTP2_STREAM_HEADER_BLOCKS_OWNER}"
+        "${HTTP2_STREAM_LIFECYCLE_OWNER}"
+        "${HTTP2_STREAM_STATE_OWNER}"
+        "${HTTP2_STREAM_TABLE_OWNER}"
+        "${HTTP2_CONNECTION_BUFFER_API}"
+        "${HTTP2_HEADER_LIST_OWNER_TEST}"
+        "${HTTP2_STREAM_REQUEST_DATA_OWNER_TEST}"
+        "${HTTP2_STREAM_REQUEST_STATE_OWNER_TEST}"
+        "${HTTP2_STREAM_LIFECYCLE_OWNER_TEST}"
+        "${HTTP2_STREAM_TABLE_OWNER_TEST}"
+        "${HTTP2_CONNECTION_BUFFER_TEST}"
+        "${PROTOCOL_BUFFER_PACKAGE_CONSUMER}")
+    if(NOT EXISTS "${http2_stream_owner_contract}")
+        file(RELATIVE_PATH relative "${RUVIA_ROOT}"
+            "${http2_stream_owner_contract}")
+        boundary_error("HTTP/2 stream-owner lifetime contract is incomplete"
+            "${relative} is required")
+    endif()
+endforeach()
+if(EXISTS "${HTTP2_HEADER_LIST_OWNER}" AND
+   EXISTS "${HTTP2_STREAM_REQUEST_DATA_OWNER}" AND
+   EXISTS "${HTTP2_STREAM_REQUEST_STATE_OWNER}" AND
+   EXISTS "${HTTP2_STREAM_HEADER_BLOCKS_OWNER}" AND
+   EXISTS "${HTTP2_STREAM_LIFECYCLE_OWNER}" AND
+   EXISTS "${HTTP2_STREAM_STATE_OWNER}" AND
+   EXISTS "${HTTP2_STREAM_TABLE_OWNER}" AND
+   EXISTS "${HTTP2_CONNECTION_BUFFER_API}" AND
+   EXISTS "${HTTP2_HEADER_LIST_OWNER_TEST}" AND
+   EXISTS "${HTTP2_STREAM_REQUEST_DATA_OWNER_TEST}" AND
+   EXISTS "${HTTP2_STREAM_REQUEST_STATE_OWNER_TEST}" AND
+   EXISTS "${HTTP2_STREAM_LIFECYCLE_OWNER_TEST}" AND
+   EXISTS "${HTTP2_STREAM_TABLE_OWNER_TEST}" AND
+   EXISTS "${HTTP2_CONNECTION_BUFFER_TEST}" AND
+   EXISTS "${PROTOCOL_BUFFER_PACKAGE_CONSUMER}")
+    file(READ "${HTTP2_HEADER_LIST_OWNER}" http2_header_list_owner)
+    file(READ "${HTTP2_STREAM_REQUEST_DATA_OWNER}"
+        http2_stream_request_data_owner)
+    file(READ "${HTTP2_STREAM_REQUEST_STATE_OWNER}"
+        http2_stream_request_state_owner)
+    file(READ "${HTTP2_STREAM_HEADER_BLOCKS_OWNER}"
+        http2_stream_header_blocks_owner)
+    file(READ "${HTTP2_STREAM_LIFECYCLE_OWNER}"
+        http2_stream_lifecycle_owner)
+    file(READ "${HTTP2_STREAM_STATE_OWNER}" http2_stream_state_owner)
+    file(READ "${HTTP2_STREAM_TABLE_OWNER}" http2_stream_table_owner)
+    file(READ "${HTTP2_CONNECTION_BUFFER_API}"
+        http2_stream_connection_owner)
+    file(READ "${PROTOCOL_BUFFER_PACKAGE_CONSUMER}"
+        http2_stream_owner_package_consumer)
+    if(NOT http2_header_list_owner MATCHES
+           "at[(][^)]*[)][\\r\\n \\t]*const &[\\r\\n \\t]+noexcept" OR
+       NOT http2_header_list_owner MATCHES
+           "at[(][^)]*[)][\\r\\n \\t]*const &&[\\r\\n \\t]*=[\\r\\n \\t]*delete")
+        boundary_error("HTTP/2 header list exposes views from temporary owners"
+            "Http2HeaderList::at must require a stable lvalue")
+    endif()
+    foreach(http2_request_data_borrow IN ITEMS
+            method scheme authority path protocol cookie headerAt)
+        if(NOT http2_stream_request_data_owner MATCHES
+               "${http2_request_data_borrow}[(][^)]*[)][\\r\\n \\t]*const &[\\r\\n \\t]+noexcept" OR
+           NOT http2_stream_request_data_owner MATCHES
+               "${http2_request_data_borrow}[(][^)]*[)][\\r\\n \\t]*const &&[\\r\\n \\t]*=[\\r\\n \\t]*delete")
+            boundary_error("HTTP/2 request data exposes views from temporary owners"
+                "${http2_request_data_borrow} must require a stable lvalue")
+            break()
+        endif()
+    endforeach()
+    if(NOT http2_stream_request_state_owner MATCHES
+           "responseStatus[(][)][\\r\\n \\t]*const &[\\r\\n \\t]+noexcept" OR
+       NOT http2_stream_request_state_owner MATCHES
+           "responseStatus[(][)][\\r\\n \\t]*const &&[\\r\\n \\t]*=[\\r\\n \\t]*delete")
+        boundary_error("HTTP/2 request state exposes pointers from temporary owners"
+            "responseStatus must require a stable lvalue")
+    endif()
+    foreach(http2_header_block_borrow IN ITEMS request response)
+        if(NOT http2_stream_header_blocks_owner MATCHES
+               "${http2_header_block_borrow}[(][)][\\r\\n \\t]*&[\\r\\n \\t]+noexcept" OR
+           NOT http2_stream_header_blocks_owner MATCHES
+               "${http2_header_block_borrow}[(][)][\\r\\n \\t]*&&[\\r\\n \\t]*=[\\r\\n \\t]*delete" OR
+           NOT http2_stream_header_blocks_owner MATCHES
+               "${http2_header_block_borrow}[(][)][\\r\\n \\t]*const &[\\r\\n \\t]+noexcept" OR
+           NOT http2_stream_header_blocks_owner MATCHES
+               "${http2_header_block_borrow}[(][)][\\r\\n \\t]*const &&[\\r\\n \\t]*=[\\r\\n \\t]*delete")
+            boundary_error("HTTP/2 header blocks expose references from temporary owners"
+                "${http2_header_block_borrow} must require a stable lvalue")
+            break()
+        endif()
+    endforeach()
+    foreach(http2_lifecycle_borrow IN ITEMS localSend remoteReceive)
+        if(NOT http2_stream_lifecycle_owner MATCHES
+               "${http2_lifecycle_borrow}[(][)][\\r\\n \\t]*const &[\\r\\n \\t]+noexcept" OR
+           NOT http2_stream_lifecycle_owner MATCHES
+               "${http2_lifecycle_borrow}[(][)][\\r\\n \\t]*const &&[\\r\\n \\t]*=[\\r\\n \\t]*delete")
+            boundary_error("HTTP/2 lifecycle exposes references from temporary owners"
+                "${http2_lifecycle_borrow} must require a stable lvalue")
+            break()
+        endif()
+    endforeach()
+    foreach(http2_stream_mutable_borrow IN ITEMS
+            receiveWindowCredit requestHeaderBlock responseHeaderBlock)
+        if(NOT http2_stream_state_owner MATCHES
+               "${http2_stream_mutable_borrow}[(][^)]*[)][\\r\\n \\t]*&[\\r\\n \\t]+noexcept" OR
+           NOT http2_stream_state_owner MATCHES
+               "${http2_stream_mutable_borrow}[(][^)]*[)][\\r\\n \\t]*&&[\\r\\n \\t]*=[\\r\\n \\t]*delete")
+            boundary_error("HTTP/2 stream exposes mutable storage from temporary owners"
+                "${http2_stream_mutable_borrow} must require a stable lvalue")
+            break()
+        endif()
+    endforeach()
+    foreach(http2_stream_const_borrow IN ITEMS
+            requestHeaderBlock responseHeaderBlock remoteContent localContent
+            localSend remoteReceive requestMethod requestAuthority requestPath
+            requestProtocol requestCookie requestHeaderAt requestScheme tunnel
+            responseStatus)
+        if(NOT http2_stream_state_owner MATCHES
+               "${http2_stream_const_borrow}[(][^)]*[)][\\r\\n \\t]*const &[\\r\\n \\t]+noexcept" OR
+           NOT http2_stream_state_owner MATCHES
+               "${http2_stream_const_borrow}[(][^)]*[)][\\r\\n \\t]*const &&[\\r\\n \\t]*=[\\r\\n \\t]*delete")
+            boundary_error("HTTP/2 stream exposes storage from temporary owners"
+                "${http2_stream_const_borrow} must require a stable lvalue")
+            break()
+        endif()
+    endforeach()
+    if(NOT http2_stream_table_owner MATCHES
+           "find[(][^)]*[)][\\r\\n \\t]*&[\\r\\n \\t]+noexcept" OR
+       NOT http2_stream_table_owner MATCHES
+           "find[(][^)]*[)][\\r\\n \\t]*&&[\\r\\n \\t]*=[\\r\\n \\t]*delete" OR
+       NOT http2_stream_table_owner MATCHES
+           "find[(][^)]*[)][\\r\\n \\t]*const &[\\r\\n \\t]+noexcept" OR
+       NOT http2_stream_table_owner MATCHES
+           "find[(][^)]*[)][\\r\\n \\t]*const &&[\\r\\n \\t]*=[\\r\\n \\t]*delete" OR
+       NOT http2_stream_table_owner MATCHES
+           "create[(][^)]*[)][\\r\\n \\t]*&[\\r\\n \\t]*[{]" OR
+       NOT http2_stream_table_owner MATCHES
+           "create[(][^)]*[)][\\r\\n \\t]*&&[\\r\\n \\t]*=[\\r\\n \\t]*delete")
+        boundary_error("HTTP/2 stream table exposes pointers from temporary owners"
+            "find and create must require a stable lvalue")
+    endif()
+    if(NOT http2_stream_connection_owner MATCHES
+           "stream[(][^)]*[)][\\r\\n \\t]*&[\\r\\n \\t]+noexcept" OR
+       NOT http2_stream_connection_owner MATCHES
+           "stream[(][^)]*[)][\\r\\n \\t]*&&[\\r\\n \\t]*=[\\r\\n \\t]*delete")
+        boundary_error("HTTP/2 connection exposes streams from temporary owners"
+            "Http2Connection::stream must require a stable lvalue")
+    endif()
+    foreach(http2_stream_owner_test IN ITEMS
+            "${HTTP2_HEADER_LIST_OWNER_TEST}"
+            "${HTTP2_STREAM_REQUEST_DATA_OWNER_TEST}"
+            "${HTTP2_STREAM_REQUEST_STATE_OWNER_TEST}"
+            "${HTTP2_STREAM_LIFECYCLE_OWNER_TEST}"
+            "${HTTP2_STREAM_TABLE_OWNER_TEST}"
+            "${HTTP2_CONNECTION_BUFFER_TEST}")
+        file(READ "${http2_stream_owner_test}" http2_stream_owner_test_content)
+        if(NOT http2_stream_owner_test_content MATCHES
+               "ExposesRvalueHttp2(HeaderList|StreamRequestData|StreamRequestState|StreamHeaderBlocks|StreamLifecycle|StreamState|StreamTable|Connection)Storage")
+            boundary_error("HTTP/2 stream-owner direct coverage is incomplete"
+                "each owner layer requires an rvalue-borrow compile probe")
+            break()
+        endif()
+    endforeach()
+    foreach(http2_stream_owner_probe IN ITEMS
+            "ExposesRvalueHttp2HeaderListStorage"
+            "ExposesRvalueHttp2StreamRequestDataStorage"
+            "ExposesRvalueHttp2StreamRequestStateStorage"
+            "ExposesRvalueHttp2StreamHeaderBlocksStorage"
+            "ExposesRvalueHttp2StreamLifecycleStorage"
+            "ExposesRvalueHttp2StreamStateStorage"
+            "ExposesRvalueHttp2StreamTableStorage"
+            "ExposesRvalueHttp2ConnectionStorage")
+        if(NOT http2_stream_owner_package_consumer MATCHES
+               "static_assert[(]!${http2_stream_owner_probe}<")
+            boundary_error("installed HTTP/2 stream-owner coverage is incomplete"
+                "tests/package-consumer/http.cpp must reject every temporary owner")
+            break()
+        endif()
+    endforeach()
+endif()
 check_files_no_match("obsolete untyped informational response submit API was restored"
     "submitInformationalResponseHead"
     "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/detail/http2/Http2Connection.h"
@@ -7450,7 +7655,7 @@ else()
        NOT http2_local_send_state MATCHES
            "Http2StreamCloseSource source[(][)] const noexcept" OR
        NOT http2_stream_lifecycle MATCHES
-           "const Http2LocalSendState& localSend[(][)] const noexcept" OR
+           "const Http2LocalSendState& localSend[(][)] const & noexcept" OR
        NOT http2_stream_lifecycle MATCHES
            "private:[\r\n \t]+friend class Http2StreamState" OR
        NOT http2_stream_lifecycle MATCHES
@@ -7459,7 +7664,7 @@ else()
            "bool abort[(]Http2StreamCloseSource source[)] noexcept" OR
        NOT http2_stream_lifecycle MATCHES "queued_ = false" OR
        NOT http2_local_send_stream_state MATCHES
-           "const Http2LocalSendState& localSend[(][)] const noexcept" OR
+           "const Http2LocalSendState& localSend[(][)] const & noexcept" OR
        NOT http2_local_send_stream_state MATCHES
            "bool isAborted[(][)] const noexcept" OR
        NOT http2_local_send_stream_state MATCHES
@@ -7519,10 +7724,10 @@ else()
        NOT http2_remote_receive_state MATCHES
            "std::get_if<Http2RemoteEndStream>" OR
        NOT http2_remote_receive_lifecycle MATCHES
-           "const Http2RemoteReceiveState& remoteReceive[(][)] const noexcept" OR
+           "const Http2RemoteReceiveState& remoteReceive[(][)] const & noexcept" OR
        NOT http2_remote_receive_lifecycle MATCHES "remoteReceive_[.]abort[(][)]" OR
        NOT http2_remote_receive_stream MATCHES
-           "const Http2RemoteReceiveState& remoteReceive[(][)] const noexcept" OR
+           "const Http2RemoteReceiveState&[ \t\r\n]+remoteReceive[(][)] const & noexcept" OR
        NOT http2_remote_receive_stream MATCHES "finalizeRemoteConnectHead" OR
        NOT http2_remote_receive_stream MATCHES "finishRemotePendingConnect" OR
        NOT http2_remote_receive_stream MATCHES "finishRemoteRejectedConnect" OR
@@ -7573,7 +7778,7 @@ else()
        NOT http2_local_content_state MATCHES "kNotStarted" OR
        NOT http2_local_content_state MATCHES "if [(]unset[(][)] != nullptr[)]" OR
        NOT http2_stream_state MATCHES
-           "const Http2LocalContentState& localContent[(][)] const noexcept" OR
+           "const Http2LocalContentState&[ \t\r\n]+localContent[(][)] const & noexcept" OR
        NOT http2_stream_state MATCHES
            "HttpRequestExpectations requestExpectations[(][)] const noexcept" OR
        http2_stream_state MATCHES
@@ -7622,7 +7827,7 @@ else()
        NOT http2_remote_content_state MATCHES "account[(]" OR
        NOT http2_remote_content_state MATCHES "terminalLengthValid" OR
        NOT http2_remote_stream_state MATCHES
-           "const Http2RemoteContentState&[ \t\r\n]+remoteContent[(][)] const noexcept" OR
+           "const Http2RemoteContentState&[ \t\r\n]+remoteContent[(][)] const & noexcept" OR
        NOT http2_remote_stream_state MATCHES "accountRemoteContent" OR
        NOT http2_remote_stream_state MATCHES
            "selectRemoteContentMetadataOnly" OR
@@ -7697,7 +7902,7 @@ else()
        NOT http2_tunnel_state MATCHES
            "form != Http2ConnectForm::kExtended" OR
        NOT http2_tunnel_stream_state MATCHES
-           "const Http2TunnelState& tunnel[(][)] const noexcept" OR
+           "const Http2TunnelState& tunnel[(][)] const & noexcept" OR
        NOT http2_tunnel_request_builder MATCHES
            "tunnel[(][)][.]pending[(][)]" OR
        NOT http2_tunnel_websocket_handshake MATCHES
@@ -12029,7 +12234,7 @@ if(EXISTS "${HTTP2_STREAM_REQUEST_STATE}" AND
     if(NOT http2_stream_request_state MATCHES
            "std::optional<std::uint16_t> responseStatus_" OR
        NOT http2_stream_request_state MATCHES
-           "const std::uint16_t[*] responseStatus[(][)] const noexcept" OR
+           "const std::uint16_t[*] responseStatus[(][)] const & noexcept" OR
        NOT http2_stream_request_state MATCHES
            "bool setResponseStatus[(]std::uint16_t status[)] noexcept" OR
        NOT http2_stream_request_state MATCHES "if [(]responseStatus_[)]" OR
