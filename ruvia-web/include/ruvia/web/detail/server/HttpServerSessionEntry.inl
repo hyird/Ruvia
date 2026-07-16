@@ -1,49 +1,58 @@
-Task<void> HttpServer::handleSession(TcpSocket socket) {
+Task<void> HttpServer::handleSession(AcceptedConnectionLease connection) {
+    auto& socket = connection.socket();
     try {
-        // Destroyed after connectionCount below, i.e. once this session has
-        // left the count, so a shutdown waiting on the grace period can
-        // force-close the moment the last session finishes.
-        SessionDrainGuard drainNotify{this};
-        ConnectionCountGuard connectionCount(activeConnectionCount_);
         std::pmr::string remoteAddress(memory_.allocator<char>());
         std::error_code remoteEc;
         const auto remoteEndpoint = socket.remote_endpoint(remoteEc);
         if (!remoteEc) {
             assignRemoteAddress(remoteAddress, remoteEndpoint.address());
         }
-        const ContextServices baseServices(
-            &databases_,
-            &redis_,
-            &rateLimiter_,
-            options_.maxBufferedBodyBytes);
-        if (options_.tls.enabled) {
-            ConnectionScanner::Entry handshakeEntry;
+        const ContextServices baseServices =
+            ContextServices(
+                &databases_,
+                &redis_,
+                &rateLimiter_,
+                options_.maxBufferedBodyBytes,
+                &workerHandle_)
+                .withWorkerStates(workerStates_);
+        if (options_.tls() != nullptr) {
+            asio::ssl::stream<TcpSocket&> tlsStream(socket, *tlsContext_);
             {
-                ConnectionScanner::Guard handshakeGuard(&connectionScanner_, handshakeEntry, socket);
+                // The TLS handshake has its own initial-read deadline. It must be
+                // released the moment the handshake resolves and before the
+                // session is dispatched: the session installs and continuously
+                // refreshes its own scanner entry, but this handshake entry stays
+                // pinned at kReadingInitial with a frozen last-active time. Left
+                // registered across the session, the scanner would close an active
+                // connection's socket one clientHeaderTimeout after the handshake
+                // regardless of session activity -- severing long-lived TLS
+                // sessions (WebSocket, keep-alive, slow uploads, streaming).
+                ConnectionScanner::Entry handshakeEntry;
+                ConnectionScanner::Guard handshakeGuard(
+                    &connectionScanner_, handshakeEntry, socket);
                 handshakeEntry.setPhase(ConnectionScanner::Phase::kReadingInitial);
-                asio::ssl::stream<TcpSocket&> tlsStream(socket, *tlsContext_);
-                const auto ec = co_await asyncError(TlsServerHandshakeInitiator{&tlsStream});
-                if (ec) {
+                const auto handshakeCompletion = co_await asyncAsio(
+                    TlsServerHandshakeInitiator{&tlsStream});
+                if (handshakeCompletion.errorCode()) {
                     closeSocket(socket);
                     co_return;
                 }
-                handshakeEntry.touch();
-                std::pmr::string clientCertificate(memory_.allocator<char>());
-                extractTlsClientCertificate(tlsStream.native_handle(), clientCertificate);
-                const auto tlsServices = baseServices.withTlsTransport(
-                    remoteAddress,
-                    clientCertificate);
-                if (isHttp2AlpnSelected(tlsStream)) {
-                    co_await handleHttp2Session(
-                        tlsStream,
-                        socket,
-                        tlsServices);
-                } else {
-                    co_await handleStreamSession(
-                        tlsStream,
-                        socket,
-                        tlsServices);
-                }
+            }
+            std::pmr::string clientCertificate(memory_.allocator<char>());
+            extractTlsClientCertificate(tlsStream.native_handle(), clientCertificate);
+            const auto tlsServices = baseServices.withTlsTransport(
+                remoteAddress,
+                clientCertificate);
+            if (isHttp2AlpnSelected(tlsStream)) {
+                co_await handleHttp2Session(
+                    tlsStream,
+                    socket,
+                    tlsServices);
+            } else {
+                co_await handleStreamSession(
+                    tlsStream,
+                    socket,
+                    tlsServices);
             }
             closeSocket(socket);
             co_return;
@@ -79,6 +88,6 @@ Task<void> HttpServer::handleHttp2Session(
         options_,
         scannerEntry,
         services,
-        workerRunning_,
+        workerState_,
         initialBytes);
 }

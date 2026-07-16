@@ -75,24 +75,32 @@ public:
     }
 
     [[nodiscard]] constexpr const Http2LocalContentUnset*
-    unset() const noexcept {
+    unset() const & noexcept {
         return std::get_if<Http2LocalContentUnset>(&content_);
     }
+    [[nodiscard]] constexpr const Http2LocalContentUnset*
+    unset() const && = delete;
 
     [[nodiscard]] constexpr const Http2LocalContentForbidden*
-    forbidden() const noexcept {
+    forbidden() const & noexcept {
         return std::get_if<Http2LocalContentForbidden>(&content_);
     }
+    [[nodiscard]] constexpr const Http2LocalContentForbidden*
+    forbidden() const && = delete;
 
     [[nodiscard]] constexpr const Http2LocalContentUnbounded*
-    unbounded() const noexcept {
+    unbounded() const & noexcept {
         return std::get_if<Http2LocalContentUnbounded>(&content_);
     }
+    [[nodiscard]] constexpr const Http2LocalContentUnbounded*
+    unbounded() const && = delete;
 
     [[nodiscard]] constexpr const Http2LocalContentKnownLength*
-    knownLength() const noexcept {
+    knownLength() const & noexcept {
         return std::get_if<Http2LocalContentKnownLength>(&content_);
     }
+    [[nodiscard]] constexpr const Http2LocalContentKnownLength*
+    knownLength() const && = delete;
 
     [[nodiscard]] std::uint64_t acceptedBytes() const noexcept {
         return acceptedBytes_;

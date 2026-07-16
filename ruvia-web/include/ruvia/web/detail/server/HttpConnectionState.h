@@ -3,6 +3,7 @@
 #include <cstddef>
 #include <memory_resource>
 #include <string>
+#include <string_view>
 
 #include "ruvia/core/detail/ConnectionScanner.h"
 #include "ruvia/http/detail/server/HttpResponseHeadBuffer.h"
@@ -78,10 +79,16 @@ void compactConnectionReadBuffer(
     std::pmr::string& readBuffer,
     std::size_t& usedBytes,
     std::size_t consumedBytes) noexcept;
+void installConnectionReadBufferPipeline(
+    std::pmr::string& readBuffer,
+    std::size_t& usedBytes,
+    std::string_view pipeline);
+// Installing a handed-over pipeline can grow the read buffer, so this is the one
+// buffer-completion step that may allocate.
 void applyReusableHttp1RequestBufferCompletion(
     const Http1RequestBufferCompletion& completion,
     std::pmr::string& readBuffer,
-    std::size_t& usedBytes) noexcept;
+    std::size_t& usedBytes);
 void trimReadBufferStorage(std::pmr::string& readBuffer, std::size_t usedBytes);
 void growReadBuffer(std::pmr::string& readBuffer, std::size_t usedBytes);
 

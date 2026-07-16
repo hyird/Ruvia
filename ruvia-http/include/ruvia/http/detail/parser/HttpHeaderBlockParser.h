@@ -29,6 +29,9 @@ struct HttpHeaderSlice {
     [[nodiscard]] std::string_view bind(std::string_view buffer) const noexcept {
         return buffer.substr(offset, length);
     }
+
+    template <HttpTemporaryOwningCharString Buffer>
+    std::string_view bind(Buffer&&) const = delete;
 };
 
 struct ParsedRequestHeaderSlot {
@@ -50,9 +53,7 @@ struct ParsedRequestHeaderBlock {
     HttpUpgradeProtocols upgradeProtocols;
     HttpContentLengthState contentLength;
     std::uint32_t seenHeaderBits{0};
-    HttpAcceptedEncodingQuality gzipEncoding;
-    HttpAcceptedEncodingQuality brotliEncoding;
-    HttpAcceptedEncodingQuality zstdEncoding;
+    HttpResponseCodingQualities responseCodingQualities;
     HttpTransferEncodingState transferEncoding;
     HttpRequestExpectations expectations;
 };

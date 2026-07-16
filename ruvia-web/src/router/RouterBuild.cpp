@@ -154,16 +154,25 @@ void detail::RouterImpl::validateNoDynamicRouteConflict(std::span<const PendingR
     }
 }
 
-detail::RouteTable detail::RouterImpl::buildRouteTable() const {
-    RouteTable table(resource_);
+// HEAD mirrors GET for buffered AND response-stream routes (RFC 9110 9.3.2:
+// same header section, no content). Buffered responses strip the body at the
+// writer; a streaming route runs its handler until the first body write, which
+// completes head-only. WebSocket routes stay GET-only: their handshake is an
+// upgrade, and a HEAD probe must not enter it.
+[[nodiscard]] static bool eligibleForHeadShadow(const detail::RouteEndpoint& endpoint) noexcept {
+    return endpoint.buffered() != nullptr || endpoint.responseStream() != nullptr;
+}
+
+void detail::RouterImpl::buildRouteTable(RouteTable& table) const {
     std::size_t headShadowCandidateCount = 0;
     std::size_t middlewareCount = 0;
     for (const auto& route : pendingRoutes_) {
         if (route.method() == HttpKnownMethod::kGet &&
-            route.endpoint().buffered() != nullptr) {
+            eligibleForHeadShadow(route.endpoint())) {
             ++headShadowCandidateCount;
         }
-        middlewareCount += route.middlewares().size();
+        middlewareCount +=
+            globalMiddlewareFrames_.size() + route.middlewares().size();
     }
     table.routes_.reserve(pendingRoutes_.size() + headShadowCandidateCount);
     table.middlewareFrames_.reserve(middlewareCount);
@@ -177,7 +186,16 @@ detail::RouteTable detail::RouterImpl::buildRouteTable() const {
             .dynamic = pending.dynamic(),
             .middlewareOffset = 0,
             .middlewareCount = 0});
-        route.setMiddlewareRange(table.middlewareFrames_.size(), pendingMiddlewares.size());
+        // App-wide middleware runs before controller/route middleware on every
+        // matched route: each route's contiguous frame range starts with the
+        // shared global instances.
+        route.setMiddlewareRange(
+            table.middlewareFrames_.size(),
+            globalMiddlewareFrames_.size() + pendingMiddlewares.size());
+        table.middlewareFrames_.insert(
+            table.middlewareFrames_.end(),
+            globalMiddlewareFrames_.begin(),
+            globalMiddlewareFrames_.end());
         table.middlewareFrames_.insert(
             table.middlewareFrames_.end(),
             pendingMiddlewares.begin(),
@@ -209,7 +227,7 @@ detail::RouteTable detail::RouterImpl::buildRouteTable() const {
     for (std::size_t i = 0; i < originalRouteCount; ++i) {
         const auto& source = table.routes_[i];
         if (source.method() != HttpKnownMethod::kGet ||
-            source.endpoint().buffered() == nullptr) {
+            !eligibleForHeadShadow(source.endpoint())) {
             continue;
         }
         bool conflictsWithExistingHead = false;
@@ -238,7 +256,6 @@ detail::RouteTable detail::RouterImpl::buildRouteTable() const {
         table.buildRadix();
     }
     table.buildDynamicRoutes();
-    return table;
 }
 
 }  // namespace ruvia

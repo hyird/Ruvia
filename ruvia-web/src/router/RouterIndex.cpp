@@ -67,11 +67,7 @@ std::uint64_t detail::RouteTable::routeHash(HttpKnownMethod method, std::string_
 }
 
 std::size_t detail::RouteTable::nextPowerOfTwo(std::size_t value) noexcept {
-    std::size_t result = 1;
-    while (result < value) {
-        result <<= 1U;
-    }
-    return result;
+    return std::bit_ceil(value);
 }
 
 std::size_t detail::RouteTable::commonPrefixLength(std::string_view left, std::string_view right) noexcept {

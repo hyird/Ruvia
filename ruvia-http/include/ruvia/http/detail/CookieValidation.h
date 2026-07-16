@@ -2,6 +2,7 @@
 
 #include "ruvia/http/HttpHeader.h"
 
+#include "ruvia/http/detail/AsciiCase.h"
 #include "ruvia/http/detail/parser/HttpParserSyntax.h"
 #include "ruvia/http/Cookies.h"
 
@@ -26,19 +27,61 @@ inline constexpr std::int64_t kMaxCookieAgeSeconds = 34560000;
 }
 
 [[nodiscard]] inline bool isValidCookieAttribute(std::string_view value) noexcept {
-    // A cookie attribute (Path/Domain) is emitted verbatim inside the Set-Cookie
-    // field value, which setCookie writes raw -- so it must satisfy the same HTTP
-    // field-value rule as every other header value (RFC 9110 5.5: no CTLs except
-    // HTAB, no DEL). Rejecting only CR/LF/NUL, as before, blocked response splitting
-    // but still let other control bytes (VT, FF, DEL, ...) reach the wire. ';' is a
-    // valid field-value octet but delimits attributes, so it stays forbidden inside
-    // one attribute to prevent a spurious attribute being injected.
+    // RFC 6265bis path-value is *av-octet: ASCII %x20-3A / %x3C-7E.
+    // HTTP field values can carry HTAB and obs-text, but emitting either inside
+    // Path produces a Set-Cookie value outside the server grammar.
     for (const auto c : value) {
-        if (!isHttpFieldValueChar(static_cast<unsigned char>(c)) || c == ';') {
+        const auto byte = static_cast<unsigned char>(c);
+        if (byte < 0x20 || byte > 0x7e || c == ';') {
             return false;
         }
     }
     return true;
+}
+
+[[nodiscard]] inline bool cookieNameStartsWithIgnoreCase(
+    std::string_view name,
+    std::string_view prefix) noexcept {
+    return name.size() >= prefix.size() &&
+        httpAsciiEqualsIgnoreCase(name.substr(0, prefix.size()), prefix);
+}
+
+[[nodiscard]] inline bool isValidCookieDomain(std::string_view value) noexcept {
+    if (value.empty()) {
+        return true;
+    }
+
+    // RFC 6265bis domain-value is an RFC 1034 subdomain as relaxed by RFC 1123:
+    // ASCII LDH labels, each at most 63 octets, with a letter or digit at both
+    // ends. The root separators consume the remaining two octets of DNS's
+    // 255-octet wire limit, so an unqualified textual name is at most 253.
+    if (value.size() > 253) {
+        return false;
+    }
+
+    std::size_t labelLength = 0;
+    bool labelEndsWithAlnum = false;
+    for (const auto c : value) {
+        const auto byte = static_cast<unsigned char>(c);
+        const bool alnum = (byte >= 'a' && byte <= 'z') ||
+            (byte >= 'A' && byte <= 'Z') ||
+            (byte >= '0' && byte <= '9');
+        if (c == '.') {
+            if (labelLength == 0 || !labelEndsWithAlnum) {
+                return false;
+            }
+            labelLength = 0;
+            labelEndsWithAlnum = false;
+            continue;
+        }
+        if ((!alnum && c != '-') || labelLength == 63 ||
+            (labelLength == 0 && !alnum)) {
+            return false;
+        }
+        ++labelLength;
+        labelEndsWithAlnum = alnum;
+    }
+    return labelLength != 0 && labelEndsWithAlnum;
 }
 
 [[nodiscard]] inline std::string_view cookiePriorityToken(CookiePriority priority) noexcept {
@@ -67,25 +110,6 @@ inline constexpr std::int64_t kMaxCookieAgeSeconds = 34560000;
     return {};
 }
 
-// Case-insensitive check that `name` begins with `lowerPrefix` (which must be
-// given lowercase). RFC 6265bis §4.1.3 matches the __Host-/__Secure- prefixes
-// case-insensitively.
-[[nodiscard]] inline bool cookieNameHasPrefix(std::string_view name, std::string_view lowerPrefix) noexcept {
-    if (name.size() < lowerPrefix.size()) {
-        return false;
-    }
-    for (std::size_t i = 0; i < lowerPrefix.size(); ++i) {
-        auto c = static_cast<unsigned char>(name[i]);
-        if (c >= 'A' && c <= 'Z') {
-            c = static_cast<unsigned char>(c + ('a' - 'A'));
-        }
-        if (static_cast<char>(c) != lowerPrefix[i]) {
-            return false;
-        }
-    }
-    return true;
-}
-
 inline void validateCookie(std::string_view name, std::string_view value, const CookieOptions& options) {
     if (!isValidHttpHeaderName(name)) {
         throw std::invalid_argument("invalid cookie name");
@@ -93,9 +117,11 @@ inline void validateCookie(std::string_view name, std::string_view value, const 
     if (!isValidCookieValue(value)) {
         throw std::invalid_argument("invalid cookie value");
     }
-    if (!isValidCookieAttribute(options.path) ||
-        !isValidCookieAttribute(options.domain)) {
+    if (!isValidCookieAttribute(options.path)) {
         throw std::invalid_argument("invalid cookie attribute");
+    }
+    if (!isValidCookieDomain(options.domain)) {
+        throw std::invalid_argument("invalid cookie domain");
     }
     if (options.maxAge.has_value()) {
         if (options.maxAge->count() < 0) {
@@ -124,19 +150,16 @@ inline void validateCookie(std::string_view name, std::string_view value, const 
     if (options.partitioned && !options.secure) {
         throw std::invalid_argument("partitioned cookie requires Secure");
     }
-    // RFC 6265bis §4.1.3: the __Host-/__Secure- rules apply to the cookie's actual
-    // wire name -- cookiePrefixText(prefix) + name -- however the prefix was formed.
-    // Keying only on the optional CookiePrefix let a hand-typed
-    // "__Host-"/"__Secure-" name passed without a prefix ship without the
-    // required attributes, producing
-    // a cookie every browser silently drops. Derive the effective prefix from the
-    // wire name (case-insensitive) so the enum and literal-name routes enforce
-    // identically. When the enum sets a prefix, it is exactly the wire prefix; a
-    // present enum thus takes precedence over any prefix-looking bytes in `name`.
+    // User agents apply __Host-/__Secure- constraints case-insensitively. Mirror
+    // that receive-side rule for literal wire names so every cookie emitted by
+    // this sender can actually be stored. A typed prefix is canonical and is the
+    // outermost wire prefix, so it takes precedence over bytes in `name`.
     const bool hostPrefixed = options.prefix == CookiePrefix::kHost ||
-        (!options.prefix && cookieNameHasPrefix(name, "__host-"));
+        (!options.prefix &&
+         cookieNameStartsWithIgnoreCase(name, "__Host-"));
     const bool securePrefixed = options.prefix == CookiePrefix::kSecure ||
-        (!options.prefix && cookieNameHasPrefix(name, "__secure-"));
+        (!options.prefix &&
+         cookieNameStartsWithIgnoreCase(name, "__Secure-"));
     if (hostPrefixed) {
         if (!options.secure || options.path != "/" || !options.domain.empty()) {
             throw std::invalid_argument("__Host- cookie requires Secure, Path=/, and no Domain");

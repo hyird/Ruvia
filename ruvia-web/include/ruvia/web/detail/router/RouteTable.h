@@ -6,6 +6,7 @@
 #include <exception>
 #include <memory_resource>
 #include <new>
+#include <optional>
 #include <span>
 #include <stdexcept>
 #include <string>
@@ -15,12 +16,13 @@
 #include <vector>
 
 #include "ruvia/http/HttpKnownMethod.h"
+#include "ruvia/http/detail/websocket/HttpWebSocketHandshakeFields.h"
 #include "ruvia/web/detail/http/ContextServices.h"
 #include "ruvia/web/Context.h"
 #include "ruvia/web/detail/CallableRef.h"
 #include "ruvia/web/detail/router/RouteResolution.h"
 #include "ruvia/web/detail/router/RouteModes.h"
-#include "ruvia/web/detail/router/RouteStreamResult.h"
+#include "ruvia/web/detail/router/RouteStreamState.h"
 #include "ruvia/web/Error.h"
 #include "ruvia/web/ErrorHandlers.h"
 #include "ruvia/web/Next.h"
@@ -28,6 +30,10 @@
 #include "ruvia/http/detail/server/HttpResponseStreamHead.h"
 #include "ruvia/core/memory/PmrResource.h"
 #include "ruvia/web/Router.h"
+
+namespace ruvia {
+class StaticRoot;
+}
 
 namespace ruvia::detail {
 
@@ -140,7 +146,7 @@ public:
     RouteEndpoint(const RouteEndpoint&) = delete;
     RouteEndpoint& operator=(const RouteEndpoint&) = delete;
     RouteEndpoint(RouteEndpoint&&) noexcept = default;
-    RouteEndpoint& operator=(RouteEndpoint&&) noexcept = default;
+    RouteEndpoint& operator=(RouteEndpoint&&) = delete;
 
     [[nodiscard]] static RouteEndpoint buffered(
         RouteHandler handler,
@@ -180,6 +186,11 @@ public:
             throw std::invalid_argument(
                 "websocket close-handshake timeout must be greater than zero");
         }
+        if (!options.subprotocols.empty() &&
+            !isValidWebSocketSubprotocolList(options.subprotocols)) {
+            throw std::invalid_argument(
+                "websocket subprotocols must be a list of at most 64 unique HTTP tokens");
+        }
         return RouteEndpoint(WebSocketRouteEndpoint(
             pmrResourceOrDefault(resource), handler, options));
     }
@@ -201,17 +212,22 @@ public:
             WebSocketRouteOptions{endpoint.subprotocols(), endpoint.lifecycle()});
     }
 
-    [[nodiscard]] const BufferedRouteEndpoint* buffered() const noexcept {
+    [[nodiscard]] const BufferedRouteEndpoint* buffered() const & noexcept {
         return std::get_if<BufferedRouteEndpoint>(&value_);
     }
+    [[nodiscard]] const BufferedRouteEndpoint* buffered() const && = delete;
 
-    [[nodiscard]] const ResponseStreamRouteEndpoint* responseStream() const noexcept {
+    [[nodiscard]] const ResponseStreamRouteEndpoint*
+    responseStream() const & noexcept {
         return std::get_if<ResponseStreamRouteEndpoint>(&value_);
     }
+    [[nodiscard]] const ResponseStreamRouteEndpoint*
+    responseStream() const && = delete;
 
-    [[nodiscard]] const WebSocketRouteEndpoint* webSocket() const noexcept {
+    [[nodiscard]] const WebSocketRouteEndpoint* webSocket() const & noexcept {
         return std::get_if<WebSocketRouteEndpoint>(&value_);
     }
+    [[nodiscard]] const WebSocketRouteEndpoint* webSocket() const && = delete;
 
     // Every non-buffered endpoint has a buffered request body contract. Only a
     // buffered-response endpoint may opt into the explicit stream-body route.
@@ -251,7 +267,7 @@ public:
     RouteEntry(const RouteEntry&) = delete;
     RouteEntry& operator=(const RouteEntry&) = delete;
     RouteEntry(RouteEntry&&) noexcept = default;
-    RouteEntry& operator=(RouteEntry&&) noexcept = default;
+    RouteEntry& operator=(RouteEntry&&) = delete;
 
     [[nodiscard]] HttpKnownMethod method() const noexcept {
         return method_;
@@ -304,13 +320,17 @@ private:
     std::size_t middlewareCount_{0};
 };
 
-// How dispatch treats a failure escaping the routing machinery itself (the
-// handler's own exceptions are always turned into responses inside dispatch):
-// kPropagate rethrows to the caller, kRespond routes it through the
-// request-level exception handler so the coroutine never throws.
-enum class RouteDispatchFailure : std::uint8_t {
-    kPropagate,
-    kRespond,
+// One path-prefix-scoped fallback registration (Hono sub-app scoping analog).
+// The prefix is a borrowed view during registration; RouteTable copies it into
+// owned storage. Selection is longest-prefix-first on whole path segments.
+struct HttpPrefixErrorHandler final {
+    std::string_view prefix;
+    HttpErrorHandler handler{nullptr};
+};
+
+struct HttpPrefixNotFoundHandler final {
+    std::string_view prefix;
+    HttpNotFoundHandler handler{nullptr};
 };
 
 class RouteTable final {
@@ -318,11 +338,28 @@ public:
     explicit RouteTable(std::pmr::memory_resource* resource);
     RouteTable(const RouteTable&) = delete;
     RouteTable& operator=(const RouteTable&) = delete;
-    RouteTable(RouteTable&&) noexcept = default;
-    RouteTable& operator=(RouteTable&&) noexcept = default;
+    RouteTable(RouteTable&&) = delete;
+    RouteTable& operator=(RouteTable&&) = delete;
 
     void setErrorHandler(HttpErrorHandler handler) noexcept;
     void setNotFoundHandler(HttpNotFoundHandler handler) noexcept;
+    // Wholesale replacement (idempotent for an app stop()/run() cycle). The
+    // stored set is normalized (trailing slash stripped) and ordered longest
+    // prefix first so selection is a first-match scan.
+    void setPrefixErrorHandlers(std::span<const HttpPrefixErrorHandler> handlers);
+    void setPrefixNotFoundHandlers(std::span<const HttpPrefixNotFoundHandler> handlers);
+    [[nodiscard]] bool hasRouteRateLimit() const noexcept {
+        return hasRouteRateLimit_;
+    }
+    // Builds a request path from a registered route pattern: ":name" segments
+    // take the next value (percent-encoded, non-empty), a trailing "*" takes
+    // the final value (slashes preserved, may be empty). The pattern is the
+    // route's identity -- an unregistered pattern or a value-count mismatch is
+    // a programming error and throws std::invalid_argument.
+    [[nodiscard]] std::pmr::string urlFor(
+        std::string_view pattern,
+        std::span<const std::string_view> values,
+        std::pmr::memory_resource* resource) const;
     [[nodiscard]] RouteResolution resolve(const HttpRequest& request) const noexcept;
     [[nodiscard]] RouteResolution resolve(
         HttpKnownMethod method,
@@ -335,17 +372,17 @@ public:
         const HttpRequest& request,
         const RouteResolution& resolution,
         RequestMemory& memory,
-        ContextServices services = {},
-        RouteDispatchFailure failure = RouteDispatchFailure::kPropagate) const;
-    // Never throws: dispatches a resolved route and turns any failure -- a
-    // handler exception (already handled inside dispatch) or one escaping the
-    // routing machinery itself -- into an error response. It never decides
-    // connection persistence; the HTTP/1 driver finalizes that after request-body
-    // state is known, while HTTP/2 has no Connection header semantics.
-    Task<HttpResponse> dispatchBuffered(
+        ContextServices services = {}) const;
+    // Canonical buffered-response application dispatch for every server
+    // protocol. An unresolved route first consults the configured document
+    // root, then falls through to 404/405/OPTIONS handling. Any failure escaping
+    // the routing machinery becomes an error response. Connection persistence
+    // and wire framing remain the protocol driver's responsibility.
+    Task<HttpResponse> dispatchBufferedResponse(
         const HttpRequest& request,
         const RouteResolution& resolution,
         RequestMemory& memory,
+        const StaticRoot* documentRoot,
         ContextServices services = {}) const;
     Task<HttpResponse> handleError(
         const HttpRequest& request,
@@ -357,21 +394,30 @@ public:
         RequestMemory& memory,
         std::exception_ptr exception,
         ContextServices services = {}) const;
-    Task<StreamDispatchResult> dispatchResponseStream(
+    // Absence means the bound output handled the request; a value is the one
+    // buffered response produced before a response-stream commit.
+    Task<std::optional<HttpResponse>> dispatchResponseStream(
         const HttpRequest& request,
         const ResolvedRoute& route,
         RequestMemory& memory,
         ResponseStreamWriter& responseStream,
         ContextServices services = {}) const;
-    Task<StreamDispatchResult> dispatchWebSocket(
+    Task<std::optional<HttpResponse>> dispatchWebSocket(
         const HttpRequest& request,
         const ResolvedRoute& route,
         RequestMemory& memory,
-        WebSocket& webSocket,
+        const RouteStreamHandler& handler,
         ContextServices services = {}) const;
 
 private:
     friend class RouterImpl;
+
+    // How dispatchRequest treats a failure escaping the routing machinery
+    // itself. Handler exceptions are already converted inside the route path.
+    enum class DispatchFailure : std::uint8_t {
+        kPropagate,
+        kRespond,
+    };
 
     static constexpr std::size_t kRoutableMethodCount = 7;
 
@@ -484,6 +530,13 @@ private:
         RouteMatch& match) const noexcept;
     [[nodiscard]] std::uint32_t allowedMethods(std::string_view path, HttpKnownMethod requestedMethod) const noexcept;
     [[nodiscard]] std::uint32_t allowedMethodsForServer() const noexcept;
+    [[nodiscard]] Task<HttpResponse> dispatchRequest(
+        const HttpRequest& request,
+        const RouteResolution& resolution,
+        RequestMemory& memory,
+        ContextServices services,
+        const StaticRoot* documentRoot,
+        DispatchFailure failure) const;
     [[nodiscard]] Task<HttpResponse> invokeRoute(const RouteEntry& route, Context& context) const;
     [[nodiscard]] Task<HttpResponse> invokeRouteWithMiddleware(const RouteEntry& route, Context& context) const;
     [[nodiscard]] Task<void> invokeMiddlewareAt(
@@ -491,16 +544,18 @@ private:
         std::size_t index,
         Context& context) const;
     [[nodiscard]] static Task<void> invokeMiddlewareContinuation(NextState state);
-    [[nodiscard]] Task<StreamDispatchResult> dispatchStreamRoute(
+    [[nodiscard]] Task<std::optional<HttpResponse>> dispatchStreamRoute(
         const HttpRequest& request,
         const ResolvedRoute& route,
         RequestMemory& memory,
+        const RouteStreamHandler& handler,
         ContextServices services) const;
     [[nodiscard]] Task<void> invokeStreamMiddlewareAt(
         const RouteEntry& route,
         std::size_t index,
         Context& context,
-        StreamMiddlewareChainState& chain) const;
+        StreamMiddlewareChainState& chain,
+        const RouteStreamHandler& handler) const;
     [[nodiscard]] static Task<void> invokeStreamMiddlewareContinuation(NextState state);
     [[nodiscard]] Task<void> storeMiddlewareExceptionResponse(
         Context& context,
@@ -515,6 +570,23 @@ private:
     [[nodiscard]] Task<HttpResponse> handleException(
         Context& context,
         std::exception_ptr exception) const;
+
+    template <typename Handler>
+    struct StoredPrefixHandler final {
+        StoredPrefixHandler(
+            std::pmr::memory_resource* resource,
+            std::string_view prefixValue,
+            Handler handlerValue)
+            : prefix(prefixValue, resource), handler(handlerValue) {}
+
+        std::pmr::string prefix;
+        Handler handler{nullptr};
+    };
+
+    [[nodiscard]] HttpErrorHandler errorHandlerFor(
+        std::string_view path) const noexcept;
+    [[nodiscard]] HttpNotFoundHandler notFoundHandlerFor(
+        std::string_view path) const noexcept;
 
     std::pmr::memory_resource* resource_;
     std::pmr::vector<RouteEntry> routes_;
@@ -531,6 +603,11 @@ private:
     std::size_t exactMask_{0};
     HttpErrorHandler errorHandler_{nullptr};
     HttpNotFoundHandler notFoundHandler_{nullptr};
+    std::pmr::vector<StoredPrefixHandler<HttpErrorHandler>>
+        prefixErrorHandlers_{resource_};
+    std::pmr::vector<StoredPrefixHandler<HttpNotFoundHandler>>
+        prefixNotFoundHandlers_{resource_};
+    bool hasRouteRateLimit_{false};
 };
 
 }  // namespace ruvia::detail

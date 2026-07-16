@@ -8,8 +8,7 @@
 
 #include <asio.hpp>
 
-#include "ruvia/web/detail/server/HttpFileFallback.h"
-#include "ruvia/web/detail/server/HttpFileZeroCopy.h"
+#include "ruvia/web/detail/server/HttpFileWrite.h"
 #include "ruvia/web/detail/server/Http1BufferedResponseWrite.h"
 #include "ruvia/http/detail/server/HttpResponseHead.h"
 #include "ruvia/http/detail/server/HttpResponseHeadPolicy.h"
@@ -59,7 +58,6 @@ Task<Http1BufferedResponseWriteResult> writeResponseWithScratch(
     std::pmr::string* fileChunkBuffer,
     const HttpResponse& response,
     const Http1BufferedResponsePlan& responsePlan) {
-    const auto& writePlan = responsePlan.writePlan();
     head.reset();
     appendResponseHead(
         response,
@@ -68,13 +66,15 @@ Task<Http1BufferedResponseWriteResult> writeResponseWithScratch(
     const auto responseHeadBytes = head.view().size();
     const auto& responseContent = responseBody(response);
     if (const auto fileBody = responseContent.file()) {
-        auto [ec, bytesTransferred] = co_await asyncResult<std::size_t>(
+        auto writeCompletion = co_await asyncAsio<std::size_t>(
             [&stream, headView = head.view()](auto handler) mutable {
                 asio::async_write(
                     stream,
                     asio::buffer(headView),
                     std::move(handler));
             });
+        const auto ec = writeCompletion.errorCode();
+        const auto bytesTransferred = writeCompletion.result();
         if (ec) {
             co_return classifyHttp1BufferedResponseWrite(
                 responsePlan,
@@ -82,7 +82,7 @@ Task<Http1BufferedResponseWriteResult> writeResponseWithScratch(
                 ec,
                 bytesTransferred);
         }
-        if (!writePlan.sendBody()) {
+        if (!responsePlan.sendBody()) {
             co_return classifyHttp1BufferedResponseWrite(
                 responsePlan,
                 responseHeadBytes,
@@ -90,30 +90,7 @@ Task<Http1BufferedResponseWriteResult> writeResponseWithScratch(
                 bytesTransferred);
         }
 
-        if constexpr (std::is_same_v<
-                          std::remove_cvref_t<Stream>,
-                          asio::ip::tcp::socket>) {
-            const auto zeroCopyResult =
-                co_await writeFileZeroCopy(stream, *fileBody);
-            if (zeroCopyResult.completed() != nullptr) {
-                co_return classifyHttp1BufferedResponseWrite(
-                    responsePlan,
-                    responseHeadBytes,
-                    {},
-                    responseHeadBytes);
-            }
-            if (const auto* failed = zeroCopyResult.failed()) {
-                co_return classifyHttp1BufferedResponseWrite(
-                    responsePlan,
-                    responseHeadBytes,
-                    failed->error(),
-                    responseHeadBytes);
-            }
-            // The sole remaining alternative is zero-copy unavailable, which
-            // intentionally selects the portable buffered writer below.
-        }
-
-        const auto fileError = co_await writeFileFallback(
+        const auto fileError = co_await writeHttpResponseFile(
             stream,
             memory,
             fileChunkBuffer,
@@ -128,7 +105,7 @@ Task<Http1BufferedResponseWriteResult> writeResponseWithScratch(
     constexpr bool kPlainTcpStream = std::is_same_v<
         std::remove_cvref_t<Stream>,
         asio::ip::tcp::socket>;
-    auto body = writePlan.sendBody()
+    auto body = responsePlan.sendBody()
         ? responseContent.bytes()
         : std::string_view{};
     if (!body.empty() && head.canAppendOnStack(body.size())) {
@@ -145,15 +122,15 @@ Task<Http1BufferedResponseWriteResult> writeResponseWithScratch(
                 stream, asio::buffer(headView), headView.size(), writeEc, writtenBytes);
         }
         if (!writeDone) {
-            auto [ec, bytesTransferred] = co_await asyncResult<std::size_t>(
+            auto writeCompletion = co_await asyncAsio<std::size_t>(
                 [&stream, remaining = headView.substr(writtenBytes)](auto handler) mutable {
                     asio::async_write(
                         stream,
                         asio::buffer(remaining),
                         std::move(handler));
                 });
-            writeEc = ec;
-            writtenBytes += bytesTransferred;
+            writeEc = writeCompletion.errorCode();
+            writtenBytes += writeCompletion.result();
         }
         co_return classifyHttp1BufferedResponseWrite(
             responsePlan,
@@ -180,12 +157,12 @@ Task<Http1BufferedResponseWriteResult> writeResponseWithScratch(
                 : std::array<asio::const_buffer, 2>{
                       asio::buffer(body.substr(writtenBytes - headView.size())),
                       asio::const_buffer{}};
-        auto [ec, bytesTransferred] = co_await asyncResult<std::size_t>(
+        auto writeCompletion = co_await asyncAsio<std::size_t>(
             [&stream, &remaining](auto handler) mutable {
                 asio::async_write(stream, remaining, std::move(handler));
             });
-        writeEc = ec;
-        writtenBytes += bytesTransferred;
+        writeEc = writeCompletion.errorCode();
+        writtenBytes += writeCompletion.result();
     }
     co_return classifyHttp1BufferedResponseWrite(
         responsePlan,

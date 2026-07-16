@@ -1,3 +1,6 @@
+// Runtime configuration: dotenv, app-wide middleware via App::use, memory
+// pool, timeouts, limits, compression and optional TLS.
+
 #include <chrono>
 #include <filesystem>
 #include <optional>
@@ -23,6 +26,9 @@ std::filesystem::path pathOrEmpty(std::optional<std::string_view> value) {
 
 }  // namespace
 
+// Registered app-wide below (App::use): one shared instance runs before the
+// controller and route middlewares of EVERY matched route, in use() order.
+// Requests that match no route (404/405) never enter a middleware chain.
 class GlobalHeaderMiddleware final : public ruvia::Middleware<GlobalHeaderMiddleware> {
 public:
     ruvia::Task<void> handle(ruvia::Context& c, ruvia::Next& next) {
@@ -33,7 +39,7 @@ public:
 
 class RuntimeController final : public ruvia::Controller<RuntimeController> {
 public:
-    RUVIA_CONTROLLER_GROUP("/runtime", GlobalHeaderMiddleware)
+    RUVIA_CONTROLLER_GROUP("/runtime")
     RUVIA_ROUTES_BEGIN
     RUVIA_GET("/", runtime);
     RUVIA_ROUTES_END
@@ -47,6 +53,7 @@ private:
 int main() {
     auto& app = ruvia::app();
     app.loadDotenv();
+    app.use<GlobalHeaderMiddleware>();
 
     ruvia::MemoryPoolConfig memory;
     memory.requestInitialBufferBytes = 4096;
@@ -59,15 +66,17 @@ int main() {
     std::optional<ruvia::CorsConfig> cors;
     if (app.env().get<bool>("RUVIA_CORS").value_or(false)) {
         auto& config = cors.emplace();
-        config.allowOrigin = "*";
-        config.allowHeaders = "content-type, authorization";
-        config.maxAge = std::chrono::seconds(600);
+        config.origin = ruvia::CorsOriginPolicy::any();
+        config.requestHeaders =
+            ruvia::CorsRequestHeadersPolicy::fixed(
+                {"content-type", "authorization"});
+        config.maxAge.emplace(std::chrono::seconds(600));
     }
 
     app
         .setListenAddress("0.0.0.0")
-        .setHttpListenPort(httpPort)
-        .setThreadNum(app.env().get<std::uint32_t>("RUVIA_THREADS").value_or(2))
+        .setWorkersPerListener(
+            app.env().get<std::uint32_t>("RUVIA_WORKERS_PER_LISTENER").value_or(2))
         .setKeepaliveTimeout(std::chrono::seconds(75))
         .setConnectionScanInterval(std::chrono::seconds(1))
         .setClientHeaderTimeout(std::chrono::seconds(60))
@@ -85,15 +94,27 @@ int main() {
     const auto cert = pathOrEmpty(app.env().get("RUVIA_TLS_CERT"));
     const auto key = pathOrEmpty(app.env().get("RUVIA_TLS_KEY"));
     if (!cert.empty() && !key.empty()) {
-        ruvia::TlsConfig tls;
-        tls.certificateChainFile = cert;
-        tls.privateKeyFile = key;
-        assignIfPresent(tls.privateKeyPassword, app.env().get("RUVIA_TLS_PASSWORD"));
-        tls.verifyFile = pathOrEmpty(app.env().get("RUVIA_TLS_VERIFY_FILE"));
-        app
-            .setHttpsListenPort(app.env().get<std::uint16_t>("RUVIA_HTTPS_PORT").value_or(8443))
-            .useTls(std::move(tls))
-            .setAutoHttps(app.env().get<bool>("RUVIA_AUTO_HTTPS").value_or(false));
+        std::pmr::string password;
+        assignIfPresent(password, app.env().get("RUVIA_TLS_PASSWORD"));
+        ruvia::TlsConfig tls(ruvia::TlsIdentity::fromFiles(
+            cert,
+            key,
+            std::move(password)));
+        const auto verifyFile = pathOrEmpty(app.env().get("RUVIA_TLS_VERIFY_FILE"));
+        if (!verifyFile.empty()) {
+            tls.setClientCertificatePolicy(
+                ruvia::TlsClientCertificatePolicy::optional(verifyFile));
+        }
+        const auto httpsPort =
+            app.env().get<std::uint16_t>("RUVIA_HTTPS_PORT").value_or(8443);
+        const auto topology = app.env().get<bool>("RUVIA_AUTO_HTTPS").value_or(false)
+            ? ruvia::ServerTopology::redirectHttpToHttps(
+                  httpPort, httpsPort, std::move(tls))
+            : ruvia::ServerTopology::httpAndHttps(
+                  httpPort, httpsPort, std::move(tls));
+        app.setServerTopology(std::move(topology));
+    } else {
+        app.setServerTopology(ruvia::ServerTopology::http(httpPort));
     }
 
     app.run();

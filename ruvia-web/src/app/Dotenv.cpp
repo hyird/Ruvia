@@ -16,12 +16,12 @@ namespace {
 
 template <typename Variables>
 [[nodiscard]] auto findVariableSlot(Variables& variables, std::string_view name) noexcept {
-    return std::lower_bound(
-        variables.begin(),
-        variables.end(),
+    return std::ranges::lower_bound(
+        variables,
         name,
-        [](const detail::EnvVariable& variable, std::string_view key) {
-            return std::string_view(variable.name).compare(key) < 0;
+        std::ranges::less{},
+        [](const detail::EnvVariable& variable) noexcept {
+            return std::string_view(variable.name);
         });
 }
 
@@ -36,7 +36,8 @@ void Env::StateDeleter::operator()(detail::EnvState* state) const noexcept {
     detail::destroyPmrObject(state, detail::appResource());
 }
 
-std::optional<std::string_view> Env::get(std::string_view name) const noexcept {
+std::optional<std::string_view> Env::get(
+    std::string_view name) const & noexcept {
     const auto& variables = state_->variables;
     const auto it = findVariableSlot(variables, name);
     if (it == variables.end() || std::string_view(it->name) != name) {
@@ -84,14 +85,12 @@ DotenvResult detail::loadEnvFromExecutableDirectory(Env& env, DotenvOptions opti
 }
 
 DotenvResult detail::loadEnvFromFile(Env& env, const std::filesystem::path& path, DotenvOptions options) {
-    std::ifstream probe(path);
-    if (!probe) {
+    if (std::ifstream probe(path); !probe) {
         if (options.required) {
             throw std::runtime_error("dotenv file not found: " + path.string());
         }
         return detail::DotenvResultAccess::make(false);
     }
-    probe.close();
 
     const auto entries = detail::readDotenvEntries(path);
     auto result = detail::DotenvResultAccess::make(true);

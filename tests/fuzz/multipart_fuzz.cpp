@@ -74,7 +74,7 @@ void fuzzBuffered(
             (void)part.body();
         }
     } else if (const auto* failure = result.failure()) {
-        (void)failure->error();
+        (void)failure->protocolError();
     }
 }
 

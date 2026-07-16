@@ -2,6 +2,9 @@
 
 #include <cstddef>
 #include <string_view>
+#include <utility>
+
+#include "ruvia/http/detail/BorrowedView.h"
 
 namespace ruvia {
 
@@ -14,6 +17,12 @@ public:
     constexpr HttpHeaderView(std::string_view name, std::string_view value) noexcept
         : name_(name),
           value_(value) {}
+
+    template <typename Name, typename Value>
+        requires(
+            detail::HttpTemporaryOwningCharString<Name> ||
+            detail::HttpTemporaryOwningCharString<Value>)
+    HttpHeaderView(Name&& name, Value&& value) = delete;
 
     [[nodiscard]] constexpr std::string_view name() const noexcept {
         return name_;

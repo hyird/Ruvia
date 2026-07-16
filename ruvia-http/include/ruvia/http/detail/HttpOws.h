@@ -2,6 +2,8 @@
 
 #include <string_view>
 
+#include "ruvia/http/detail/BorrowedView.h"
+
 namespace ruvia::detail {
 
 // Trim RFC 7230 section 3.2.3 optional whitespace (OWS = *( SP / HTAB )) from both ends.
@@ -16,5 +18,8 @@ namespace ruvia::detail {
     }
     return value;
 }
+
+template <HttpTemporaryOwningCharString Value>
+std::string_view httpTrimOws(Value&&) = delete;
 
 }  // namespace ruvia::detail

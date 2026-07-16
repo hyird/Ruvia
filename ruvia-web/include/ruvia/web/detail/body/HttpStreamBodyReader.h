@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstddef>
+#include <memory>
 #include <memory_resource>
 #include <optional>
 #include <stdexcept>
@@ -8,8 +9,10 @@
 #include <string_view>
 
 #include "ruvia/core/detail/ConnectionScanner.h"
+#include "ruvia/core/memory/PmrObject.h"
 #include "ruvia/http/ProtocolByteLimit.h"
 #include "ruvia/http/HttpProtocolError.h"
+#include "ruvia/http/detail/HttpRequestBodyFailure.h"
 #include "ruvia/http/detail/body/HttpTransferCodingDecoder.h"
 #include "ruvia/http/detail/http1/Http1ChunkedBodyDecoder.h"
 #include "ruvia/http/detail/http1/Http1RequestBodyPlan.h"
@@ -31,13 +34,18 @@ public:
         Http1RequestBodyPlan bodyPlan,
         ProtocolByteLimit bodyLimit,
         ConnectionScanner::Entry& scannerEntry);
-    ~StreamBodyReader();
+    ~StreamBodyReader() = default;
 
     StreamBodyReader(const StreamBodyReader&) = delete;
     StreamBodyReader& operator=(const StreamBodyReader&) = delete;
 
     [[nodiscard]] Http1RequestBodyConsumption consumption() const noexcept;
-    void restorePipeline(std::pmr::string& readBuffer, std::size_t& usedBytes);
+    // Hands the pipelined suffix -- the bytes of the next request that arrived
+    // in the same segment -- to `stash`, and drops this reader's claim on them.
+    // The connection read buffer is deliberately untouched: every view in the
+    // request being served still borrows it, so the session installs these bytes
+    // itself once those views are dead.
+    void takePipeline(std::pmr::string& stash);
 
     [[nodiscard]] Task<std::optional<std::string_view>> read();
     Task<std::string_view> readAll(std::pmr::string& body);
@@ -47,11 +55,6 @@ private:
     void compactPending();
     [[nodiscard]] std::string_view initialPipelineRemainder() const noexcept;
     [[nodiscard]] std::string_view bufferedPipelineRemainder() const noexcept;
-    static void restorePipelineBytes(
-        std::pmr::string& readBuffer,
-        std::size_t& usedBytes,
-        std::string_view initialPipeline,
-        std::string_view bufferedPipeline);
     void resetPipelineState() noexcept;
     void materializeInitialRemainder();
     Task<void> readMore();
@@ -71,8 +74,9 @@ private:
     Stream& stream_;
     std::pmr::string buffer_;
     std::pmr::string transferOutput_;
-    std::pmr::polymorphic_allocator<TransferCodingDecoder> transferDecoderAllocator_;
-    TransferCodingDecoder* transferDecoder_{nullptr};
+    std::unique_ptr<
+        TransferCodingDecoder,
+        PmrObjectDeleter<TransferCodingDecoder>> transferDecoder_;
     std::string_view transferInput_;
     std::string_view initialBodyAndPipeline_;
     Http1RequestBodyPlan bodyPlan_;

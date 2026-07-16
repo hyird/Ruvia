@@ -4,7 +4,8 @@
 
 #include "ruvia/web/detail/websocket/HttpWebSocketConnection.h"
 #include "ruvia/core/detail/ConnectionScanner.h"
-#include "ruvia/web/detail/router/RouteTable.h"
+#include "ruvia/web/detail/http/ContextInternal.h"
+#include "ruvia/web/detail/CallableRef.h"
 #include "ruvia/web/detail/websocket/WebSocketInternal.h"
 #include "ruvia/core/Task.h"
 #include "ruvia/http/HttpRequest.h"
@@ -28,42 +29,43 @@ Task<void> webSocketCloseThunk(void* target, std::uint16_t code, std::string_vie
 }
 
 template <typename Connection>
+void webSocketAbortThunk(void* target) noexcept {
+    static_cast<Connection*>(target)->abort();
+}
+
+template <typename Connection>
 [[nodiscard]] WebSocket makeWebSocketFacade(Connection& connection) noexcept {
     return WebSocketAccess::make(
         &connection,
         &webSocketReadThunk<Connection>,
         &webSocketWriteThunk<Connection>,
-        &webSocketCloseThunk<Connection>);
+        &webSocketCloseThunk<Connection>,
+        &webSocketAbortThunk<Connection>);
 }
 
-// Shared run loop for an established WebSocket session, transport-agnostic.
-// Both the HTTP/1.1 and HTTP/2 routes build a WebSocketConnection<Transport>,
-// then hand it here: this wires the WebSocket facade, dispatches the user
-// handler, and closes cleanly (1000) on success or abnormally (1011) on an
-// unhandled exception, then drains any background heartbeat writes. Keeping the
-// post-handshake chain in one place keeps the two transports identical and the
-// graceful close (RFC 6455 Sections 5.5.1 and 7.1) consistent across both. close()
-// is idempotent through the protocol core's typed close phase, so a handler that
-// closes itself is fine.
+// The terminal handler borrows an established connection, but does not close it:
+// onion middleware post-processing still belongs to the same WebSocket request
+// and must be able to turn its own failure into the session's 1011 outcome.
 template <typename Transport>
-Task<void> runWebSocketSession(
+Task<void> invokeWebSocketHandler(
     WebSocketConnection<Transport>& connection,
     ConnectionScanner::Entry& scannerEntry,
-    const RouteTable& routes,
-    const HttpRequest& request,
-    const ResolvedRoute& route,
-    RequestMemory& requestMemory,
-    ContextServices services) {
+    const CallableRef<void, Context&>& handler,
+    Context& context) {
     auto webSocket = makeWebSocketFacade(connection);
+    ContextWebSocketBinding webSocketBinding(context, webSocket);
 
     scannerEntry.setPhase(ConnectionScanner::Phase::kLongLived);
-    std::exception_ptr exception;
-    try {
-        (void)co_await routes.dispatchWebSocket(
-            request, route, requestMemory, webSocket, services);
-    } catch (...) {
-        exception = std::current_exception();
-    }
+    co_await handler(context);
+}
+
+// HTTP/1 and HTTP/2 retain the connection until the complete route middleware
+// chain finishes, then converge here. close() is idempotent through the protocol
+// core's typed close phase, so a handler that already closed itself is safe.
+template <typename Transport>
+Task<void> finishWebSocketSession(
+    WebSocketConnection<Transport>& connection,
+    std::exception_ptr exception) {
     try {
         if (exception != nullptr) {
             co_await connection.close(1011, "internal server error");
@@ -72,7 +74,7 @@ Task<void> runWebSocketSession(
         }
     } catch (...) {
     }
-    co_await connection.detachAndDrainBackgroundWrites();
+    co_await connection.detachAndDrainWrites();
 }
 
 }  // namespace ruvia::detail

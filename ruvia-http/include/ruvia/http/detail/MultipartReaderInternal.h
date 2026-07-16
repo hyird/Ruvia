@@ -1,6 +1,7 @@
 #pragma once
 
 #include "ruvia/http/MultipartParser.h"
+#include "ruvia/http/detail/BorrowedView.h"
 
 namespace ruvia::detail {
 
@@ -13,6 +14,38 @@ struct MultipartStreamPartAccess final {
         MultipartChunkPhase phase) noexcept {
         return MultipartStreamPart(name, filename, contentType, body, phase);
     }
+
+    template <HttpTemporaryOwningCharString Name>
+    static MultipartStreamPart make(
+        Name&&,
+        std::string_view,
+        std::string_view,
+        std::string_view,
+        MultipartChunkPhase) = delete;
+
+    template <HttpTemporaryOwningCharString Filename>
+    static MultipartStreamPart make(
+        std::string_view,
+        Filename&&,
+        std::string_view,
+        std::string_view,
+        MultipartChunkPhase) = delete;
+
+    template <HttpTemporaryOwningCharString ContentType>
+    static MultipartStreamPart make(
+        std::string_view,
+        std::string_view,
+        ContentType&&,
+        std::string_view,
+        MultipartChunkPhase) = delete;
+
+    template <HttpTemporaryOwningCharString Body>
+    static MultipartStreamPart make(
+        std::string_view,
+        std::string_view,
+        std::string_view,
+        Body&&,
+        MultipartChunkPhase) = delete;
 };
 
 }  // namespace ruvia::detail

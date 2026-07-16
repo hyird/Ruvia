@@ -14,7 +14,7 @@ struct StreamingAccess final {
     using StreamEnd = ResponseStreamWriter::End;
     using StreamSleep = ResponseStreamWriter::Sleep;
     using StreamBindContext = ResponseStreamWriter::BindContext;
-    using StreamScratch = ResponseStreamWriter::Scratch;
+    using StreamReleaseContext = ResponseStreamWriter::ReleaseContext;
     using StreamCommitted = ResponseStreamWriter::Committed;
     using StreamAborted = ResponseStreamWriter::Aborted;
 
@@ -25,17 +25,30 @@ struct StreamingAccess final {
         storage.emplace(BodyReader::Token{}, target, read);
     }
 
+    [[nodiscard]] static BodyReader makeBodyReader(
+        void* target,
+        BodyRead read) noexcept {
+        return BodyReader(BodyReader::Token{}, target, read);
+    }
+
     [[nodiscard]] static ResponseStreamWriter makeResponseStreamWriter(
         void* target,
         StreamWrite write,
         StreamEnd end,
         StreamSleep sleep,
         StreamBindContext bindContext,
-        StreamScratch scratch,
+        StreamReleaseContext releaseContext,
         StreamCommitted committed,
         StreamAborted aborted) noexcept {
         return ResponseStreamWriter(
-            target, write, end, sleep, bindContext, scratch, committed, aborted);
+            target,
+            write,
+            end,
+            sleep,
+            bindContext,
+            releaseContext,
+            committed,
+            aborted);
     }
 
     [[nodiscard]] static SseWriter makeSseWriter(ResponseStreamWriter& writer) noexcept {
@@ -45,12 +58,12 @@ struct StreamingAccess final {
     static void bindContext(
         ResponseStreamWriter& writer,
         Context& context,
-        ResponseStreamWriter::StreamingHeadThunk streamingHead) noexcept {
+        ResponseStreamWriter::StreamingHeadThunk streamingHead) {
         writer.bindContext(context, streamingHead);
     }
 
-    [[nodiscard]] static std::pmr::string& scratch(const ResponseStreamWriter& writer) noexcept {
-        return writer.scratch();
+    static void releaseContext(ResponseStreamWriter& writer) noexcept {
+        writer.releaseContext();
     }
 
     [[nodiscard]] static bool committed(const ResponseStreamWriter& writer) noexcept {

@@ -29,9 +29,10 @@ public:
     explicit Http2OutputBuffer(std::pmr::memory_resource* resource)
         : bytes_(resource) {}
 
-    [[nodiscard]] std::string_view pending() const noexcept {
+    [[nodiscard]] std::string_view pending() const & noexcept {
         return std::string_view(bytes_).substr(consumed_);
     }
+    [[nodiscard]] std::string_view pending() const && = delete;
 
     [[nodiscard]] bool wantsWrite() const noexcept {
         return consumed_ < bytes_.size();
@@ -81,7 +82,7 @@ public:
             type,
             flags,
             streamId);
-        appendBytes(std::string_view(header.data(), header.size()));
+        appendBytes(std::string_view(header));
         appendBytes(first);
         appendBytes(second);
     }

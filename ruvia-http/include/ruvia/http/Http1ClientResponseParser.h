@@ -19,21 +19,36 @@ namespace detail {
 struct Http1ClientResponseParseResultAccess;
 struct Http1ClientResponsePlanAccess;
 
+// One request-content lifecycle for the response side of an HTTP/1 exchange.
+// Expect and completion are not independent booleans: receiving Continue and
+// completing content are ordered events, and the combined phase determines
+// whether a later 100 is actionable and whether 101 is legal.
+enum class Http1ClientRequestContentPhase : std::uint8_t {
+    kContentComplete,
+    kContentPending,
+    kAwaitingContinue,
+    kContinueReceived,
+    kContentCompleteAwaitingContinue,
+    kContinueReceivedContentComplete,
+};
+
 }  // namespace detail
 
-// Connection lifecycle after a self-delimited final response has been consumed.
-// Informational responses, close-delimited responses, tunnels, and upgrades are
-// separate alternatives and therefore cannot be mistaken for reusable messages.
+// Connection lifecycle after a self-delimited response has been consumed.
+// For an informational response, kReuse means the same exchange can await its
+// final response; it does not make the connection poolable before that final.
+// Close-delimited responses, tunnels, and upgrades are separate alternatives.
 enum class Http1ClientResponsePersistence : std::uint8_t {
     kReuse,
     kClose
 };
 
-// Signal for a request body gated by Expect: 100-continue. It is deliberately
-// separate from wait duration: the protocol core reports Continue or
-// exchange-complete progress, while an external I/O runtime owns its finite
-// timeout policy. Most response heads emit no request-content event, represented
-// by an empty optional rather than a non-event enum member.
+// Request-content lifecycle signal. It is deliberately separate from wait
+// duration: an external I/O runtime owns the finite Expect timeout policy. A
+// reusable early final does not cancel content already released by Continue,
+// but a response that closes the connection stops any unfinished content. A
+// duplicate or late 100 after completion is ignored. Most response heads emit
+// no event, represented by an empty optional rather than a non-event enum.
 enum class Http1ClientRequestContentSignal : std::uint8_t {
     kContinue,
     kExchangeComplete,
@@ -49,9 +64,19 @@ enum class Http1ClientRequestContentCompletionStatus : std::uint8_t {
 };
 
 class Http1ClientInformationalResponse final {
+public:
+    [[nodiscard]] constexpr Http1ClientResponsePersistence persistence() const noexcept {
+        return persistence_;
+    }
+
 private:
     friend struct detail::Http1ClientResponsePlanAccess;
-    constexpr Http1ClientInformationalResponse() noexcept = default;
+
+    explicit constexpr Http1ClientInformationalResponse(
+        Http1ClientResponsePersistence persistence) noexcept
+        : persistence_(persistence) {}
+
+    Http1ClientResponsePersistence persistence_;
 };
 
 class Http1ClientResponseWithoutContent final {
@@ -100,7 +125,7 @@ class Http1ClientChunkedResponse final {
 public:
     // Transfer codings preceding the terminal chunked framing. The runtime
     // removes chunk framing first and then drives this decoder list.
-    [[nodiscard]] constexpr const detail::HttpTransferCodings&
+    [[nodiscard]] constexpr detail::HttpTransferCodings
     transferCodings() const noexcept {
         return transferCodings_;
     }
@@ -126,7 +151,7 @@ public:
     // Any non-chunked transfer coding is decoded after EOF delimits the message.
     // This alternative always consumes through EOF and always closes; it exposes
     // no independent persistence field that could contradict those facts.
-    [[nodiscard]] constexpr const detail::HttpTransferCodings&
+    [[nodiscard]] constexpr detail::HttpTransferCodings
     transferCodings() const noexcept {
         return transferCodings_;
     }
@@ -141,6 +166,47 @@ private:
     detail::HttpTransferCodings transferCodings_;
 };
 
+// A 205 response has an ordinary HTTP/1 message-body framing phase, unlike
+// HEAD/204/304, but RFC 9110 requires its decoded content to remain empty. The
+// nested framing alternative tells the runtime how to reach the message end;
+// the outer type prevents that framing from being mistaken for ordinary
+// content that an application may consume.
+class Http1ClientResponseWithZeroContent final {
+public:
+    [[nodiscard]] constexpr const Http1ClientKnownLengthResponse*
+    knownLength() const & noexcept {
+        return std::get_if<Http1ClientKnownLengthResponse>(&framing_);
+    }
+    const Http1ClientKnownLengthResponse* knownLength() const && = delete;
+
+    [[nodiscard]] constexpr const Http1ClientChunkedResponse*
+    chunked() const & noexcept {
+        return std::get_if<Http1ClientChunkedResponse>(&framing_);
+    }
+    const Http1ClientChunkedResponse* chunked() const && = delete;
+
+    [[nodiscard]] constexpr const Http1ClientCloseDelimitedResponse*
+    closeDelimited() const & noexcept {
+        return std::get_if<Http1ClientCloseDelimitedResponse>(&framing_);
+    }
+    const Http1ClientCloseDelimitedResponse*
+    closeDelimited() const && = delete;
+
+private:
+    friend struct detail::Http1ClientResponsePlanAccess;
+
+    using Framing = std::variant<
+        Http1ClientKnownLengthResponse,
+        Http1ClientChunkedResponse,
+        Http1ClientCloseDelimitedResponse>;
+
+    explicit constexpr Http1ClientResponseWithZeroContent(
+        Framing framing) noexcept
+        : framing_(std::move(framing)) {}
+
+    Framing framing_;
+};
+
 class Http1ClientConnectTunnel final {
 private:
     friend struct detail::Http1ClientResponsePlanAccess;
@@ -153,47 +219,63 @@ private:
     constexpr Http1ClientProtocolUpgrade() noexcept = default;
 };
 
-// Immutable RFC 9110/9112 response framing and lifecycle contract. The seven
-// alternatives mirror the message-length precedence directly: informational,
-// no-content final, exact-length final, final-chunked, close-delimited, CONNECT
-// tunnel, or protocol upgrade. Alternative-specific payload is only reachable
-// from the alternative that owns it.
+// Immutable RFC 9110/9112 response framing and lifecycle contract. The eight
+// alternatives mirror message-length precedence and content semantics directly:
+// informational, no-content final, zero-content-with-framing, exact-length,
+// final-chunked, close-delimited, CONNECT tunnel, or protocol upgrade.
+// Alternative-specific payload is only reachable from the alternative that owns
+// it.
 class Http1ClientResponsePlan final {
 public:
     [[nodiscard]] constexpr const Http1ClientInformationalResponse*
-    informational() const noexcept {
+    informational() const & noexcept {
         return std::get_if<Http1ClientInformationalResponse>(&state_);
     }
+    const Http1ClientInformationalResponse* informational() const && = delete;
 
     [[nodiscard]] constexpr const Http1ClientResponseWithoutContent*
-    withoutContent() const noexcept {
+    withoutContent() const & noexcept {
         return std::get_if<Http1ClientResponseWithoutContent>(&state_);
     }
+    const Http1ClientResponseWithoutContent* withoutContent() const && = delete;
+
+    [[nodiscard]] constexpr const Http1ClientResponseWithZeroContent*
+    zeroContent() const & noexcept {
+        return std::get_if<Http1ClientResponseWithZeroContent>(&state_);
+    }
+    const Http1ClientResponseWithZeroContent*
+    zeroContent() const && = delete;
 
     [[nodiscard]] constexpr const Http1ClientKnownLengthResponse*
-    knownLength() const noexcept {
+    knownLength() const & noexcept {
         return std::get_if<Http1ClientKnownLengthResponse>(&state_);
     }
+    const Http1ClientKnownLengthResponse* knownLength() const && = delete;
 
     [[nodiscard]] constexpr const Http1ClientChunkedResponse*
-    chunked() const noexcept {
+    chunked() const & noexcept {
         return std::get_if<Http1ClientChunkedResponse>(&state_);
     }
+    const Http1ClientChunkedResponse* chunked() const && = delete;
 
     [[nodiscard]] constexpr const Http1ClientCloseDelimitedResponse*
-    closeDelimited() const noexcept {
+    closeDelimited() const & noexcept {
         return std::get_if<Http1ClientCloseDelimitedResponse>(&state_);
     }
+    const Http1ClientCloseDelimitedResponse*
+    closeDelimited() const && = delete;
 
     [[nodiscard]] constexpr const Http1ClientConnectTunnel*
-    connectTunnel() const noexcept {
+    connectTunnel() const & noexcept {
         return std::get_if<Http1ClientConnectTunnel>(&state_);
     }
+    const Http1ClientConnectTunnel* connectTunnel() const && = delete;
 
     [[nodiscard]] constexpr const Http1ClientProtocolUpgrade*
-    protocolUpgrade() const noexcept {
+    protocolUpgrade() const & noexcept {
         return std::get_if<Http1ClientProtocolUpgrade>(&state_);
     }
+    const Http1ClientProtocolUpgrade* protocolUpgrade() const && = delete;
 
     [[nodiscard]] constexpr std::optional<Http1ClientRequestContentSignal>
     requestContentSignal() const noexcept {
@@ -206,6 +288,7 @@ private:
     using State = std::variant<
         Http1ClientInformationalResponse,
         Http1ClientResponseWithoutContent,
+        Http1ClientResponseWithZeroContent,
         Http1ClientKnownLengthResponse,
         Http1ClientChunkedResponse,
         Http1ClientCloseDelimitedResponse,
@@ -242,6 +325,7 @@ enum class Http1ClientResponseParseError : std::uint8_t {
     kTransferEncodingInHttp10,
     kContentLengthAndTransferEncoding,
     kInvalidProtocolSwitch,
+    kTooManyInformationalResponses,
     kExchangeComplete,
     kExchangeFailed,
 };
@@ -264,19 +348,21 @@ public:
     Http1ParsedClientResponseHead(const Http1ParsedClientResponseHead&) = delete;
     Http1ParsedClientResponseHead& operator=(const Http1ParsedClientResponseHead&) = delete;
     Http1ParsedClientResponseHead(Http1ParsedClientResponseHead&&) noexcept = default;
-    Http1ParsedClientResponseHead& operator=(Http1ParsedClientResponseHead&&) noexcept = default;
+    Http1ParsedClientResponseHead& operator=(Http1ParsedClientResponseHead&&) = delete;
 
-    [[nodiscard]] const HttpClientResponse& response() const noexcept {
-        return response_;
+    [[nodiscard]] const HttpClientResponseHead& head() const & noexcept {
+        return head_;
+    }
+    [[nodiscard]] const HttpClientResponseHead& head() const && = delete;
+
+    [[nodiscard]] HttpClientResponseHead takeHead() && noexcept {
+        return std::move(head_);
     }
 
-    [[nodiscard]] HttpClientResponse takeResponse() && noexcept {
-        return std::move(response_);
-    }
-
-    [[nodiscard]] const Http1ClientResponsePlan& plan() const noexcept {
+    [[nodiscard]] const Http1ClientResponsePlan& plan() const & noexcept {
         return plan_;
     }
+    [[nodiscard]] const Http1ClientResponsePlan& plan() const && = delete;
 
     [[nodiscard]] constexpr std::size_t consumedBytes() const noexcept {
         return consumedBytes_;
@@ -286,14 +372,14 @@ private:
     friend struct detail::Http1ClientResponseParseResultAccess;
 
     Http1ParsedClientResponseHead(
-        HttpClientResponse response,
+        HttpClientResponseHead head,
         Http1ClientResponsePlan plan,
         std::size_t consumedBytes) noexcept
-        : response_(std::move(response)),
+        : head_(std::move(head)),
           plan_(std::move(plan)),
           consumedBytes_(consumedBytes) {}
 
-    HttpClientResponse response_;
+    HttpClientResponseHead head_;
     Http1ClientResponsePlan plan_;
     std::size_t consumedBytes_{0};
 };
@@ -314,43 +400,32 @@ private:
     Http1ClientResponseParseError error_;
 };
 
-enum class Http1ClientResponseParseKind : std::uint8_t {
-    kNeedMore,
-    kParsed,
-    kFailure
-};
-
 class Http1ClientResponseParseResult final {
 public:
     Http1ClientResponseParseResult(const Http1ClientResponseParseResult&) = delete;
     Http1ClientResponseParseResult& operator=(const Http1ClientResponseParseResult&) = delete;
     Http1ClientResponseParseResult(Http1ClientResponseParseResult&&) noexcept = default;
-    Http1ClientResponseParseResult& operator=(Http1ClientResponseParseResult&&) noexcept = default;
+    Http1ClientResponseParseResult& operator=(Http1ClientResponseParseResult&&) = delete;
 
-    [[nodiscard]] Http1ClientResponseParseKind kind() const noexcept {
-        if (std::holds_alternative<Http1ParsedClientResponseHead>(state_)) {
-            return Http1ClientResponseParseKind::kParsed;
-        }
-        return std::holds_alternative<Http1ClientResponseParseFailure>(state_)
-            ? Http1ClientResponseParseKind::kFailure
-            : Http1ClientResponseParseKind::kNeedMore;
-    }
-
-    [[nodiscard]] const Http1ClientResponseNeedMore* needMore() const noexcept {
+    [[nodiscard]] const Http1ClientResponseNeedMore* needMore() const & noexcept {
         return std::get_if<Http1ClientResponseNeedMore>(&state_);
     }
+    const Http1ClientResponseNeedMore* needMore() const && = delete;
 
-    [[nodiscard]] Http1ParsedClientResponseHead* parsed() noexcept {
+    [[nodiscard]] Http1ParsedClientResponseHead* parsed() & noexcept {
         return std::get_if<Http1ParsedClientResponseHead>(&state_);
     }
 
-    [[nodiscard]] const Http1ParsedClientResponseHead* parsed() const noexcept {
+    [[nodiscard]] const Http1ParsedClientResponseHead* parsed() const & noexcept {
         return std::get_if<Http1ParsedClientResponseHead>(&state_);
     }
+    Http1ParsedClientResponseHead* parsed() && = delete;
+    const Http1ParsedClientResponseHead* parsed() const && = delete;
 
-    [[nodiscard]] const Http1ClientResponseParseFailure* failure() const noexcept {
+    [[nodiscard]] const Http1ClientResponseParseFailure* failure() const & noexcept {
         return std::get_if<Http1ClientResponseParseFailure>(&state_);
     }
+    const Http1ClientResponseParseFailure* failure() const && = delete;
 
 private:
     friend struct detail::Http1ClientResponseParseResultAccess;
@@ -385,9 +460,8 @@ public:
         std::pmr::memory_resource* resource = nullptr) noexcept
         : request_(request.responseContext_),
           resource_(resource),
-          continueGated_(request.contentPlan_.continueGated() != nullptr),
-          requestContentComplete_(
-              requestContentStartsComplete(request.contentPlan_)) {}
+          requestContentPhase_(
+              initialRequestContentPhase(request.contentPlan_)) {}
 
     Http1ClientResponseParser(const Http1ClientResponseParser&) = delete;
     Http1ClientResponseParser& operator=(const Http1ClientResponseParser&) = delete;
@@ -412,6 +486,17 @@ private:
         return false;
     }
 
+    [[nodiscard]] static constexpr detail::Http1ClientRequestContentPhase
+    initialRequestContentPhase(
+        const Http1ClientRequestContentPlan& plan) noexcept {
+        if (plan.continueGated() != nullptr) {
+            return detail::Http1ClientRequestContentPhase::kAwaitingContinue;
+        }
+        return requestContentStartsComplete(plan)
+            ? detail::Http1ClientRequestContentPhase::kContentComplete
+            : detail::Http1ClientRequestContentPhase::kContentPending;
+    }
+
     enum class Phase : std::uint8_t {
         kAwaitResponse,
         kComplete,
@@ -421,9 +506,8 @@ private:
     detail::Http1ClientRequestContext request_;
     std::pmr::memory_resource* resource_;
     Phase phase_{Phase::kAwaitResponse};
-    bool continueGated_{false};
-    bool sawContinue_{false};
-    bool requestContentComplete_{false};
+    detail::Http1ClientRequestContentPhase requestContentPhase_;
+    std::uint8_t informationalResponseCount_{0};
 };
 
 }  // namespace ruvia

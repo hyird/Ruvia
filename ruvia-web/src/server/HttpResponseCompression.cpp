@@ -1,6 +1,8 @@
 #include "ruvia/web/detail/server/HttpResponseCompression.h"
 
+#include "ruvia/http/HttpCache.h"
 #include "ruvia/http/detail/HttpResponseBodyAccess.h"
+#include "ruvia/http/detail/HttpResponseHeaderAccess.h"
 #include "ruvia/http/detail/HeaderTokenUtils.h"
 #include "ruvia/http/detail/HttpContentCoding.h"
 #include "ruvia/http/detail/ResponseHeaderUtils.h"
@@ -56,6 +58,17 @@ void setCompressedContentLength(HttpResponse& response, std::size_t size) {
         httpAsciiEqualsIgnoreCase(mediaType, "application/octet-stream");
 }
 
+[[nodiscard]] CacheControl responseCacheControl(
+    const HttpResponse& response) noexcept {
+    CacheControlFieldParser parser;
+    for (const auto& header : response.headers()) {
+        if (responseHeaderKnownBit(header) == kResponseHeaderCacheControl) {
+            parser.update(header.value());
+        }
+    }
+    return parser.finish();
+}
+
 // The handler's ETag validates its (identity) representation. Once the body is
 // replaced with a content-coding, that is a different representation -- RFC 9110
 // 8.8.1: "A strong validator ... changes ... whenever a change occurs to the
@@ -98,7 +111,8 @@ void applyResponseCompression(
     }
 
     const auto statusCode = response.status();
-    if (statusCode == 206 || statusCode == 205) {
+    if (statusCode == http_status::kPartialContent ||
+        statusCode == http_status::kResetContent) {
         return;
     }
 
@@ -113,7 +127,7 @@ void applyResponseCompression(
         responseHasKnownHeader(response, kResponseHeaderContentEncoding) ||
         responseHasKnownHeader(response, kResponseHeaderContentRange) ||
         responseContentTypeSkipsCompression(responseKnownHeader(response, kResponseHeaderContentType)) ||
-        httpHasToken(responseKnownHeader(response, kResponseHeaderCacheControl), "no-transform")) {
+        responseCacheControl(response).noTransform) {
         return;
     }
 

@@ -4,12 +4,12 @@
 #include <coroutine>
 #include <cstddef>
 #include <exception>
-#include <optional>
 #include <utility>
 #include <variant>
 
 namespace ruvia::detail {
 
+class PoolLeaseScheduler;
 class PoolWaiterResult;
 
 class PoolWaiterAcquired final {
@@ -45,20 +45,30 @@ private:
 // slot index; timeout and pool closure can never expose a plausible sentinel.
 class PoolWaiterResult final {
 public:
-    [[nodiscard]] constexpr const PoolWaiterAcquired* acquired() const noexcept {
+    [[nodiscard]] constexpr const PoolWaiterAcquired*
+    acquired() const & noexcept {
         return std::get_if<PoolWaiterAcquired>(&value_);
     }
+    [[nodiscard]] constexpr const PoolWaiterAcquired*
+    acquired() const && = delete;
 
-    [[nodiscard]] constexpr const PoolWaiterTimedOut* timedOut() const noexcept {
+    [[nodiscard]] constexpr const PoolWaiterTimedOut*
+    timedOut() const & noexcept {
         return std::get_if<PoolWaiterTimedOut>(&value_);
     }
+    [[nodiscard]] constexpr const PoolWaiterTimedOut*
+    timedOut() const && = delete;
 
-    [[nodiscard]] constexpr const PoolWaiterClosed* closed() const noexcept {
+    [[nodiscard]] constexpr const PoolWaiterClosed*
+    closed() const & noexcept {
         return std::get_if<PoolWaiterClosed>(&value_);
     }
+    [[nodiscard]] constexpr const PoolWaiterClosed*
+    closed() const && = delete;
 
 private:
     friend class PoolWaiter;
+    friend class PoolLeaseScheduler;
 
     using Value = std::variant<
         PoolWaiterAcquired,
@@ -85,6 +95,9 @@ private:
     Value value_;
 };
 
+struct PoolWaiterIdle final {};
+struct PoolWaiterQueued final {};
+
 // One coroutine waiting for a free connection slot in a per-worker connection
 // pool. The node lives on the waiting coroutine's frame; the queue owns only
 // the intrusive links, so enqueuing costs no allocation.
@@ -100,7 +113,7 @@ public:
     PoolWaiter& operator=(const PoolWaiter&) = delete;
 
     [[nodiscard]] bool await_ready() const noexcept {
-        return result_.has_value();
+        return std::holds_alternative<PoolWaiterResult>(state_);
     }
 
     void await_suspend(std::coroutine_handle<> handle) noexcept {
@@ -108,34 +121,33 @@ public:
     }
 
     [[nodiscard]] const PoolWaiterResult& await_resume() const noexcept {
-        if (!result_) {
+        const auto* result = std::get_if<PoolWaiterResult>(&state_);
+        if (result == nullptr) {
             std::terminate();
         }
-        return *result_;
+        return *result;
     }
 
 private:
     friend class PoolWaiterQueue;
 
-    void completeAcquired(std::size_t index) noexcept {
-        if (result_) {
+    void complete(PoolWaiterResult result) noexcept {
+        if (!std::holds_alternative<PoolWaiterIdle>(state_)) {
             std::terminate();
         }
-        result_.emplace(PoolWaiterResult::makeAcquired(index));
+        state_.template emplace<PoolWaiterResult>(std::move(result));
+    }
+
+    void completeAcquired(std::size_t index) noexcept {
+        complete(PoolWaiterResult::makeAcquired(index));
     }
 
     void completeTimedOut() noexcept {
-        if (result_) {
-            std::terminate();
-        }
-        result_.emplace(PoolWaiterResult::makeTimedOut());
+        complete(PoolWaiterResult::makeTimedOut());
     }
 
     void completeClosed() noexcept {
-        if (result_) {
-            std::terminate();
-        }
-        result_.emplace(PoolWaiterResult::makeClosed());
+        complete(PoolWaiterResult::makeClosed());
     }
 
     void resume() noexcept {
@@ -145,12 +157,16 @@ private:
         }
     }
 
-    std::optional<PoolWaiterResult> result_;
+    using State = std::variant<
+        PoolWaiterIdle,
+        PoolWaiterQueued,
+        PoolWaiterResult>;
+
+    State state_;
     std::chrono::steady_clock::time_point deadline_{};
     std::coroutine_handle<> handle_{};
     PoolWaiter* previous_{nullptr};
     PoolWaiter* next_{nullptr};
-    bool queued_{false};
 };
 
 // Intrusive FIFO shared by per-worker connection pools. Each pool is owned by a
@@ -163,12 +179,12 @@ public:
     }
 
     void enqueue(PoolWaiter& waiter) noexcept {
-        if (waiter.queued_ || waiter.result_) {
+        if (!std::holds_alternative<PoolWaiterIdle>(waiter.state_)) {
             return;
         }
         waiter.previous_ = tail_;
         waiter.next_ = nullptr;
-        waiter.queued_ = true;
+        waiter.state_.template emplace<PoolWaiterQueued>();
         if (tail_ != nullptr) {
             tail_->next_ = &waiter;
         } else {
@@ -178,7 +194,7 @@ public:
     }
 
     void remove(PoolWaiter& waiter) noexcept {
-        if (!waiter.queued_) {
+        if (!std::holds_alternative<PoolWaiterQueued>(waiter.state_)) {
             return;
         }
         if (waiter.previous_ != nullptr) {
@@ -193,7 +209,7 @@ public:
         }
         waiter.previous_ = nullptr;
         waiter.next_ = nullptr;
-        waiter.queued_ = false;
+        waiter.state_.template emplace<PoolWaiterIdle>();
     }
 
     // Hand the freed slot `index` to the next waiter and resume it. Returns true

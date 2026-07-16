@@ -135,6 +135,8 @@ tests/
 
 `ruvia-web` 拥有 HTTP 之上的 App、Context、Router、middleware、controller、validation、session、CSRF、JWT、rate limit、CORS、安全头、静态文件产品策略、AutoHTTPS、DB/Redis 和 WebSocket route 绑定。读取或设置 HTTP header 不等于拥有协议语义。
 
+AutoHTTPS 只构造重定向响应并向 HTTP/1 runtime 提交外部关闭策略；不得直接设置 `Connection`，最终连接字段和复用判定必须由解析所得 connection plan 经 `requireClose()` 后统一提交。
+
 边界判断：
 
 - 决定字节如何解析、分帧、序列化，连接是否保持，升级是否成立，协议失败对应哪个 HTTP status：放在 `ruvia-http`。
@@ -151,6 +153,7 @@ Router/error handler 不得设置 `Connection: close` 或接收 `closeConnection
 - 请求热路径目标是 0 抽象成本。
 - 启动期可以使用注册表、工厂、虚函数和一次性构建。
 - 请求期不要新增 mutex、rwlock、spinlock、共享原子争用、type-erasure、`shared_ptr` 分配或不必要拷贝。
+- `Context` 只暴露职责明确的 typed capability 并直接保存其状态；不得恢复按字符串和运行时类型索引的任意 request-local value bag。
 - 优先使用 per-worker 所有权、连接私有状态、启动期构建后只读数据。
 - 跨线程操作连接状态默认禁止；必须先设计明确的 worker mailbox 或 intrusive MPSC 边界。
 
@@ -158,16 +161,24 @@ Router/error handler 不得设置 `Connection: close` 或接收 `closeConnection
 
 - 每个 worker 拥有一个 standalone Asio `io_context`。
 - 连接不能跨线程迁移。
+- `Task` 是 lazy structured coroutine owner：未启动任务可以丢弃，已启动任务必须在所属执行上下文运行到完成；取消只能显式请求后 await/join，禁止通过析构销毁或静默 detach 挂起中的协程帧。
+- `WorkerHandle` 直接持有可关闭的稳定 dispatcher endpoint；热路径操作不得通过 `weak_ptr::lock()` 临时取得所有权，context owner 必须在销毁执行上下文前 detach endpoint，使逃逸句柄安全失效。请求期 `ContextServices`/`Context` 只借用 server 中地址稳定的 handle，不复制其共享所有权。
+- DB stream/transaction 等线性 lease 同一时刻只允许一个异步操作；lazy Task 只能在真正启动时取得操作权，失败清理由 backend 唯一负责，失败后的 lease 不得复用。
+- 连接 teardown 必须先显式唤醒或终止挂起 I/O，再 join 所有仍持有连接对象的后台操作；不得只等待某一种操作来源。
+- `App::setWorkersPerListener()` 配置每个 listener 的 worker 数；双 listener topology 的总 worker 数是其两倍，禁止恢复含糊的总线程数命名。
 - `App::run()` 创建 acceptor/server/thread per worker。
 - 非 Windows 平台要求 `SO_REUSEPORT`；Windows 使用 `SO_REUSEADDR`。
 - graceful shutdown 只能在各 worker 自己的 `io_context` 上关闭 acceptor 和活跃 socket。
 - idle/header/body/write timeout、连接数限制和请求数限制保持 per-worker 所有权。
+- 默认限流规则和限流槽容量都显式保持 per-worker 语义；只有启动期路由元数据或默认规则证明需要限流时才预分配固定表，请求期不得惰性分配。
+- worker 内部唤醒原语只借用连接/会话稳定持有的有效 `WorkerHandle`，不得在请求热路径按值复制 handle；`wait/notify` 必须在所属 worker 执行，不得恢复 generic executor fallback。intrusive waiter 从挂链、调度到恢复前都必须有显式生命周期守卫，通知调度失败属于终止性契约违例。
 
 ## 内存规则
 
 - 框架内部拥有动态内存的对象默认使用 PMR 容器。
 - 公开 API 输入优先使用 `std::string_view`、`std::span`、`std::filesystem::path` 或值类型配置。
 - 请求热路径 PMR 容器使用请求 arena；Worker 层容器使用 `WorkerMemory`。
+- `RequestMemory` 只提供 arena resource，不拥有任意 C++ 对象的 erased cleanup 链；非平凡惰性对象必须由其职责明确的持有者通过 typed RAII 统一拥有和析构。
 - 启动期容器使用 mimalloc-backed 默认 resource。
 - 不要让 `std::pmr::new_delete_resource()` 成为生产默认路径。
 - `Context::text(std::string&)`、`std::string&&`、`const std::string&` 入口保持 deleted。
@@ -213,6 +224,7 @@ Router/error handler 不得设置 `Connection: close` 或接收 `closeConnection
 - 请求 JSON 只嵌套请求模型，响应 JSON 只嵌套响应模型；两者都支持数组。form 只支持扁平 key-value 基础字段。
 - validation 不应为 invalid type 或 duplicate 再扫描 body。
 - 同一 `RUVIA_PATTERN` 只能编译一次并复用。
+- 已校验模型由 validation middleware 的 typed coroutine frame 持有，并在 `next()` 期间以 intrusive scoped borrow 绑定到 `Context`；请求期不得为模型另行分配、保存 destroy callback 或设置固定模型数量上限，异常展开必须自动解绑。
 
 ## CMake 和安装
 

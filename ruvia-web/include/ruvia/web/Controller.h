@@ -2,8 +2,10 @@
 
 #include "ruvia/http/HttpKnownMethod.h"
 #include "ruvia/web/Middleware.h"
+#include "ruvia/web/detail/BorrowedView.h"
 #include "ruvia/web/detail/controller/ControllerRuntime.h"
 
+#include <array>
 #include <concepts>
 #include <cstddef>
 #include <string_view>
@@ -12,7 +14,7 @@
 namespace ruvia::detail {
 
 // Methods covered by RUVIA_ALL; HEAD is served by the implicit GET fallback.
-inline constexpr HttpKnownMethod kRuviaAllRouteMethods[] = {
+inline constexpr std::array kRuviaAllRouteMethods = {
     HttpKnownMethod::kGet,
     HttpKnownMethod::kPost,
     HttpKnownMethod::kPut,
@@ -31,16 +33,18 @@ public:
         static_assert(sizeof...(Methods) > 0, "RUVIA_ON requires at least one method");
     }
 
-    [[nodiscard]] constexpr const HttpKnownMethod* begin() const noexcept {
-        return methods_;
+    [[nodiscard]] constexpr const HttpKnownMethod* begin() const & noexcept {
+        return methods_.data();
     }
+    [[nodiscard]] constexpr const HttpKnownMethod* begin() const && = delete;
 
-    [[nodiscard]] constexpr const HttpKnownMethod* end() const noexcept {
-        return methods_ + count_;
+    [[nodiscard]] constexpr const HttpKnownMethod* end() const & noexcept {
+        return methods_.data() + count_;
     }
+    [[nodiscard]] constexpr const HttpKnownMethod* end() const && = delete;
 
 private:
-    HttpKnownMethod methods_[9]{};
+    std::array<HttpKnownMethod, 9> methods_{};
     std::size_t count_{0};
 };
 
@@ -48,23 +52,32 @@ private:
 // parenthesized list as a constructor call.
 class RuviaPathList final {
 public:
-    template <std::convertible_to<std::string_view>... Paths>
-    constexpr explicit RuviaPathList(Paths... paths) noexcept
-        : paths_{paths...},
+    template <typename... Paths>
+        requires ((std::convertible_to<Paths&&, std::string_view> && ...) &&
+                  (!RvalueCharBasicString<Paths> && ...))
+    constexpr explicit RuviaPathList(Paths&&... paths) noexcept
+        : paths_{std::string_view(std::forward<Paths>(paths))...},
           count_(sizeof...(Paths)) {
         static_assert(sizeof...(Paths) > 0, "RUVIA_ON requires at least one path");
     }
 
-    [[nodiscard]] constexpr const std::string_view* begin() const noexcept {
-        return paths_;
-    }
+    template <typename... Paths>
+        requires ((std::convertible_to<Paths&&, std::string_view> && ...) &&
+                  (RvalueCharBasicString<Paths> || ...))
+    explicit RuviaPathList(Paths&&...) = delete;
 
-    [[nodiscard]] constexpr const std::string_view* end() const noexcept {
-        return paths_ + count_;
+    [[nodiscard]] constexpr const std::string_view* begin() const & noexcept {
+        return paths_.data();
     }
+    [[nodiscard]] constexpr const std::string_view* begin() const && = delete;
+
+    [[nodiscard]] constexpr const std::string_view* end() const & noexcept {
+        return paths_.data() + count_;
+    }
+    [[nodiscard]] constexpr const std::string_view* end() const && = delete;
 
 private:
-    std::string_view paths_[8]{};
+    std::array<std::string_view, 8> paths_{};
     std::size_t count_{0};
 };
 

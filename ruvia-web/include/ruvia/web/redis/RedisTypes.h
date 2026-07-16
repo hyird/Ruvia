@@ -14,6 +14,7 @@
 #include <vector>
 
 #include "ruvia/core/memory/PmrResource.h"
+#include "ruvia/web/detail/BorrowedView.h"
 
 namespace ruvia {
 
@@ -66,9 +67,12 @@ public:
         return RedisSetExpiration(KeepExisting{});
     }
 
-    [[nodiscard]] const std::chrono::milliseconds* duration() const noexcept {
+    [[nodiscard]] const std::chrono::milliseconds*
+    duration() const & noexcept {
         return std::get_if<std::chrono::milliseconds>(&value_);
     }
+    [[nodiscard]] const std::chrono::milliseconds*
+    duration() const && = delete;
 
     [[nodiscard]] bool keepsExisting() const noexcept {
         return std::get_if<KeepExisting>(&value_) != nullptr;
@@ -96,10 +100,88 @@ struct RedisSetOptions final {
 };
 
 struct RedisScanOptions {
+    // A scan options value may be retained before the command copies its
+    // arguments. Keep MATCH zero-copy while rejecting owning-string rvalues
+    // that would leave a saved options value with an already-dangling view.
+    class BorrowedText final {
+    public:
+        constexpr BorrowedText() noexcept = default;
+
+        constexpr BorrowedText(std::string_view value) noexcept
+            : value_(value) {}
+
+        constexpr BorrowedText(const char* value) noexcept
+            : value_(value) {}
+
+        template <typename Traits, typename Allocator>
+        constexpr BorrowedText(
+            const std::basic_string<char, Traits, Allocator>& value) noexcept
+            : value_(value) {}
+
+        template <detail::RvalueCharBasicString String>
+        BorrowedText(String&&) = delete;
+
+        constexpr BorrowedText& operator=(std::string_view value) noexcept {
+            value_ = value;
+            return *this;
+        }
+
+        constexpr BorrowedText& operator=(const char* value) noexcept {
+            value_ = std::string_view(value);
+            return *this;
+        }
+
+        template <typename Traits, typename Allocator>
+        constexpr BorrowedText& operator=(
+            const std::basic_string<char, Traits, Allocator>& value) noexcept {
+            value_ = std::string_view(value);
+            return *this;
+        }
+
+        template <detail::RvalueCharBasicString String>
+        BorrowedText& operator=(String&&) = delete;
+
+        [[nodiscard]] constexpr std::string_view view() const noexcept {
+            return value_;
+        }
+
+        [[nodiscard]] constexpr operator std::string_view() const noexcept {
+            return value_;
+        }
+
+        [[nodiscard]] constexpr bool empty() const noexcept {
+            return value_.empty();
+        }
+
+        friend constexpr bool operator==(
+            BorrowedText left,
+            BorrowedText right) noexcept {
+            return left.value_ == right.value_;
+        }
+
+        friend constexpr bool operator==(
+            BorrowedText left,
+            std::string_view right) noexcept {
+            return left.value_ == right;
+        }
+
+        friend constexpr bool operator==(
+            BorrowedText left,
+            const char* right) noexcept {
+            return left.value_ == right;
+        }
+
+    private:
+        std::string_view value_;
+    };
+
     std::uint64_t cursor{0};
-    std::string_view match;
+    BorrowedText match;
     std::optional<std::uint64_t> count;
 };
+
+static_assert(
+    sizeof(RedisScanOptions::BorrowedText) == sizeof(std::string_view));
 
 namespace detail {
 
@@ -112,15 +194,17 @@ public:
     RedisKeyValue(const RedisKeyValue&) = default;
     RedisKeyValue& operator=(const RedisKeyValue&) = default;
     RedisKeyValue(RedisKeyValue&&) noexcept = default;
-    RedisKeyValue& operator=(RedisKeyValue&&) noexcept = default;
+    RedisKeyValue& operator=(RedisKeyValue&&) = default;
 
-    [[nodiscard]] std::string_view key() const noexcept {
-        return std::string_view(key_.data(), key_.size());
+    [[nodiscard]] std::string_view key() const & noexcept {
+        return key_;
     }
+    [[nodiscard]] std::string_view key() const && = delete;
 
-    [[nodiscard]] std::string_view value() const noexcept {
-        return std::string_view(value_.data(), value_.size());
+    [[nodiscard]] std::string_view value() const & noexcept {
+        return value_;
     }
+    [[nodiscard]] std::string_view value() const && = delete;
 
 private:
     friend struct detail::RedisTypesAccess;
@@ -145,11 +229,12 @@ public:
     RedisScoredValue(const RedisScoredValue&) = default;
     RedisScoredValue& operator=(const RedisScoredValue&) = default;
     RedisScoredValue(RedisScoredValue&&) noexcept = default;
-    RedisScoredValue& operator=(RedisScoredValue&&) noexcept = default;
+    RedisScoredValue& operator=(RedisScoredValue&&) = default;
 
-    [[nodiscard]] std::string_view value() const noexcept {
-        return std::string_view(value_.data(), value_.size());
+    [[nodiscard]] std::string_view value() const & noexcept {
+        return value_;
     }
+    [[nodiscard]] std::string_view value() const && = delete;
 
     [[nodiscard]] double score() const noexcept {
         return score_;
@@ -179,9 +264,12 @@ public:
         return cursor_;
     }
 
-    [[nodiscard]] std::span<const std::pmr::string> values() const noexcept {
-        return std::span<const std::pmr::string>(values_.data(), values_.size());
+    [[nodiscard]] std::span<const std::pmr::string>
+    values() const & noexcept {
+        return values_;
     }
+    [[nodiscard]] std::span<const std::pmr::string>
+    values() const && = delete;
 
 private:
     friend struct detail::RedisTypesAccess;
@@ -199,9 +287,10 @@ public:
         return cursor_;
     }
 
-    [[nodiscard]] std::span<const RedisKeyValue> entries() const noexcept {
-        return std::span<const RedisKeyValue>(entries_.data(), entries_.size());
+    [[nodiscard]] std::span<const RedisKeyValue> entries() const & noexcept {
+        return entries_;
     }
+    [[nodiscard]] std::span<const RedisKeyValue> entries() const && = delete;
 
 private:
     friend struct detail::RedisTypesAccess;
@@ -219,9 +308,12 @@ public:
         return cursor_;
     }
 
-    [[nodiscard]] std::span<const RedisScoredValue> entries() const noexcept {
-        return std::span<const RedisScoredValue>(entries_.data(), entries_.size());
+    [[nodiscard]] std::span<const RedisScoredValue>
+    entries() const & noexcept {
+        return entries_;
     }
+    [[nodiscard]] std::span<const RedisScoredValue>
+    entries() const && = delete;
 
 private:
     friend struct detail::RedisTypesAccess;
@@ -269,7 +361,8 @@ public:
 
     [[nodiscard]] const char* what() const noexcept override;
     [[nodiscard]] Code code() const noexcept;
-    [[nodiscard]] std::string_view message() const noexcept;
+    [[nodiscard]] std::string_view message() const & noexcept;
+    [[nodiscard]] std::string_view message() const && = delete;
 
 private:
     Code code_;
@@ -289,13 +382,15 @@ public:
     RedisValue(const RedisValue&) = default;
     RedisValue& operator=(const RedisValue&) = default;
     RedisValue(RedisValue&&) noexcept = default;
-    RedisValue& operator=(RedisValue&&) noexcept = default;
+    RedisValue& operator=(RedisValue&&) = default;
 
     [[nodiscard]] Kind kind() const noexcept;
     [[nodiscard]] bool null() const noexcept;
-    [[nodiscard]] std::string_view string() const;
+    [[nodiscard]] std::string_view string() const &;
+    [[nodiscard]] std::string_view string() const && = delete;
     [[nodiscard]] std::int64_t integer() const;
-    [[nodiscard]] std::span<const RedisValue> array() const;
+    [[nodiscard]] std::span<const RedisValue> array() const &;
+    [[nodiscard]] std::span<const RedisValue> array() const && = delete;
 
 private:
     friend class detail::RedisPool;

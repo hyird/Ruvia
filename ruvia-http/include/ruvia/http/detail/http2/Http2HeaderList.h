@@ -35,7 +35,8 @@ public:
         return count_ == kMaxHttpHeaderFields;
     }
 
-    [[nodiscard]] Http2StoredHeaderView at(std::size_t index) const noexcept {
+    [[nodiscard]] Http2StoredHeaderView at(
+        std::size_t index) const & noexcept {
         const auto& field = index < kInlineHeaderFields
             ? inlineFields_[index]
             : overflowFields_[index - kInlineHeaderFields];
@@ -44,6 +45,7 @@ public:
             .value = view(field.valueOffset, field.valueSize),
             .kind = field.kind};
     }
+    [[nodiscard]] Http2StoredHeaderView at(std::size_t) const && = delete;
 
     [[nodiscard]] bool append(
         std::string_view name,

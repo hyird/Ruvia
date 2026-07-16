@@ -70,7 +70,6 @@ void materializeBorrowedResult(
                 static_cast<std::size_t>(PQgetlength(&result, 0, fieldIndex))),
             resource));
     }
-    DbResultAccess::refresh(row);
     return row;
 }
 
@@ -89,7 +88,7 @@ Task<QueryResult> PostgreSqlPool::execute(
         co_return co_await executeOnSlot(
             slots_[slotIndex],
             sql,
-            std::span<const DbValue>(params.data(), params.size()),
+            std::span<const DbValue>(params),
             resource);
     } catch (...) {
         closeSlot(slots_[slotIndex]);
@@ -133,7 +132,7 @@ Task<QueryResult> PostgreSqlPool::executeOnSlot(
                 throw std::runtime_error("PostgreSQL returned multiple tuple results");
             }
             materializeBorrowedResult(output, *result, resource);
-            DbResultAccess::retainRawResult(output, result, &freePostgreSqlResult);
+            DbResultAccess::ownRawResult(output, result, &freePostgreSqlResult);
             retainedTupleResult = true;
         } else {
             PQclear(result);
@@ -159,10 +158,10 @@ Task<DbStreamResult> PostgreSqlPool::stream(
         co_await sendQuery(
             slot,
             sql,
-            std::span<const DbValue>(params.data(), params.size()),
+            std::span<const DbValue>(params),
             deadline,
             true);
-        co_return DbStreamResult(DbPoolRef{this}, slotIndex, nullptr, resource, true);
+        co_return DbStreamResult(DbPoolRef{this}, slotIndex, nullptr, resource);
     } catch (...) {
         closeSlot(slots_[slotIndex]);
         releaseSlot(slotIndex);
@@ -259,7 +258,7 @@ Task<QueryResult> PostgreSqlPool::executeOnTransactionSlot(
         co_return co_await executeOnSlot(
             slots_[slot],
             sql,
-            std::span<const DbValue>(params.data(), params.size()),
+            std::span<const DbValue>(params),
             resource);
     } catch (...) {
         closeSlot(slots_[slot]);
@@ -269,8 +268,7 @@ Task<QueryResult> PostgreSqlPool::executeOnTransactionSlot(
 }
 
 Task<DbTransaction> PostgreSqlPool::beginTransaction(
-    std::pmr::memory_resource* resource,
-    RequestMemory* requestMemory) {
+    std::pmr::memory_resource* resource) {
     const auto slotIndex = co_await acquireSlot();
     try {
         auto& slot = slots_[slotIndex];
@@ -283,7 +281,7 @@ Task<DbTransaction> PostgreSqlPool::beginTransaction(
         releaseSlot(slotIndex);
         throw;
     }
-    co_return DbTransaction(DbPoolRef{this}, slotIndex, resource, requestMemory);
+    co_return DbTransaction(DbPoolRef{this}, slotIndex, resource);
 }
 
 Task<void> PostgreSqlPool::commitTransaction(

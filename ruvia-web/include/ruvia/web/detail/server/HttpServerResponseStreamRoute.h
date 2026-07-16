@@ -45,6 +45,7 @@ Task<Http1SessionRequestCompletion> dispatchHttpResponseStreamRoute(
         memory,
         responseHead,
         scannerEntry,
+        baseRouteServices.worker(),
         endpoint.kind(),
         streamPlan);
 
@@ -58,56 +59,46 @@ Task<Http1SessionRequestCompletion> dispatchHttpResponseStreamRoute(
         baseRouteServices,
         /*peerAborted=*/[]() noexcept { return false; });
 
-    if (const auto* failed = result.failedAfterCommit()) {
-        connectionPlan = responseSink.connectionPlan().requireClose();
-        co_return Http1SessionRequestCompletion::makeCommittedStream(
-            connectionPlan,
-            failed->status(),
-            requestHead.headerBytes());
-    }
-    if (const auto* peer = result.peerAbortedAfterCommit()) {
-        connectionPlan = responseSink.connectionPlan().requireClose();
-        co_return Http1SessionRequestCompletion::makeCommittedStream(
-            connectionPlan,
-            peer->status(),
-            requestHead.headerBytes());
-    }
     if (result.peerAbortedBeforeCommit() != nullptr) {
         throw std::logic_error(
             "HTTP/1 response stream reported an impossible peer-abort predicate");
     }
-    if (auto* failed = result.failedBeforeCommit()) {
-        response = std::move(*failed).takeResponse();
+    if (auto* recovered = result.recoveredFailure()) {
+        response = std::move(*recovered).takeResponse();
+        scannerEntry.touch();
         connectionPlan = requireHttp1FinalResponseCommit(
             response,
             streamPlan.requestConnectionPlan().requireClose());
-        scannerEntry.touch();
         co_return Http1SessionRequestCompletion::makeBufferedClosing(
             connectionPlan);
     }
-    if (auto* buffered = result.buffered()) {
-        response = std::move(*buffered).takeResponse();
+    if (auto* routeResponse = result.routeResponse()) {
+        response = std::move(*routeResponse).takeResponse();
+        scannerEntry.touch();
         connectionPlan = finalizeBufferedRouteResponse(
             response,
             connectionPlan,
             requestSequence);
-        scannerEntry.touch();
         co_return Http1SessionRequestCompletion::makeBufferedUnrestored(
             connectionPlan,
             requestHead.headerBytes());
     }
 
-    const auto* completed = result.completed();
-    if (completed == nullptr) {
+    const auto committedStatus = result.committedStatus();
+    if (!committedStatus.has_value()) {
         throw std::logic_error(
             "response stream dispatch returned no H1 terminal alternative");
     }
 
     connectionPlan = responseSink.connectionPlan();
-    requestSequence.completeCommittedResponse(connectionPlan);
+    if (result.completed() != nullptr) {
+        requestSequence.completeCommittedResponse(connectionPlan);
+    } else {
+        connectionPlan = connectionPlan.requireClose();
+    }
     co_return Http1SessionRequestCompletion::makeCommittedStream(
         connectionPlan,
-        completed->status(),
+        *committedStatus,
         requestHead.headerBytes());
 }
 

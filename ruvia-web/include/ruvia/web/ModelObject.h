@@ -10,10 +10,14 @@
 
 #include <memory_resource>
 #include <optional>
+#include <string>
 #include <string_view>
 
 namespace ruvia {
 
+// JsonValue, JsonObject, and FormObject borrow their complete input body. An
+// owning string passed to parse() must therefore outlive the parsed view;
+// basic_string rvalues are rejected before a dangling view can be created.
 class JsonValue final {
 public:
     enum class Kind : unsigned char {
@@ -38,6 +42,16 @@ public:
         }
         return JsonValue(detail::ResolvedPmrResourceTag{}, body, detail::pmrResourceOrDefault(resource));
     }
+
+    template <typename Traits, typename Allocator>
+    static std::optional<JsonValue> parse(
+        std::basic_string<char, Traits, Allocator>&&,
+        std::pmr::memory_resource* = nullptr) = delete;
+
+    template <typename Traits, typename Allocator>
+    static std::optional<JsonValue> parse(
+        const std::basic_string<char, Traits, Allocator>&&,
+        std::pmr::memory_resource* = nullptr) = delete;
 
     [[nodiscard]] std::string_view view() const noexcept {
         return body_;
@@ -122,6 +136,16 @@ public:
         return JsonObject(detail::ResolvedPmrResourceTag{}, body, detail::pmrResourceOrDefault(resource));
     }
 
+    template <typename Traits, typename Allocator>
+    static std::optional<JsonObject> parse(
+        std::basic_string<char, Traits, Allocator>&&,
+        std::pmr::memory_resource* = nullptr) = delete;
+
+    template <typename Traits, typename Allocator>
+    static std::optional<JsonObject> parse(
+        const std::basic_string<char, Traits, Allocator>&&,
+        std::pmr::memory_resource* = nullptr) = delete;
+
     [[nodiscard]] std::string_view view() const noexcept {
         return body_;
     }
@@ -192,6 +216,16 @@ public:
         }
         return FormObject(detail::ResolvedPmrResourceTag{}, body, detail::pmrResourceOrDefault(resource));
     }
+
+    template <typename Traits, typename Allocator>
+    static std::optional<FormObject> parse(
+        std::basic_string<char, Traits, Allocator>&&,
+        std::pmr::memory_resource* = nullptr) = delete;
+
+    template <typename Traits, typename Allocator>
+    static std::optional<FormObject> parse(
+        const std::basic_string<char, Traits, Allocator>&&,
+        std::pmr::memory_resource* = nullptr) = delete;
 
     [[nodiscard]] std::string_view view() const noexcept {
         return body_;

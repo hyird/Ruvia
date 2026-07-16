@@ -4,18 +4,24 @@
 #include <concepts>
 #include <coroutine>
 #include <cstddef>
+#include <cstdint>
 #include <exception>
-#include <new>
-#include <optional>
 #include <type_traits>
 #include <utility>
+#include <variant>
 
 namespace ruvia {
 
 template <typename T>
 class Task;
+class TaskScope;
 
 namespace detail {
+
+enum class TaskFrameOwnership : std::uint8_t {
+    kCold,
+    kStarted,
+};
 
 [[nodiscard]] void* taskFrameAllocate(std::size_t bytes);
 void taskFrameDeallocate(void* pointer) noexcept;
@@ -50,11 +56,38 @@ struct TaskFinalAwaiter final {
     void await_resume() const noexcept {}
 };
 
-union TaskExceptionStorage {
-    std::exception_ptr exception;
+struct TaskPromisePending final {};
+struct TaskPromiseCompleted final {};
 
-    TaskExceptionStorage() noexcept {}
-    ~TaskExceptionStorage() noexcept {}
+template <typename T>
+class TaskPromiseValue final {
+public:
+    template <typename U>
+        requires std::constructible_from<T, U>
+    explicit TaskPromiseValue(U&& value)
+        noexcept(std::is_nothrow_constructible_v<T, U>)
+        : value_(std::forward<U>(value)) {}
+
+    [[nodiscard]] T takeValue() && {
+        return std::move(value_);
+    }
+
+private:
+    T value_;
+};
+
+class TaskPromiseFailure final {
+public:
+    explicit TaskPromiseFailure(std::exception_ptr exception) noexcept
+        : exception_(std::move(exception)) {}
+
+    [[nodiscard]] const std::exception_ptr& exception() const & noexcept {
+        return exception_;
+    }
+    const std::exception_ptr& exception() const && = delete;
+
+private:
+    std::exception_ptr exception_;
 };
 
 template <typename T>
@@ -64,13 +97,7 @@ public:
 
     static_assert(!std::is_reference_v<T>, "ruvia::Task<T> does not support reference result types");
 
-    TaskPromise() noexcept {}
-
-    ~TaskPromise() {
-        if (hasException_) {
-            exceptionPointer()->~exception_ptr();
-        }
-    }
+    TaskPromise() noexcept = default;
 
     static void* operator new(std::size_t size) {
         return taskFrameAllocate(size);
@@ -97,20 +124,21 @@ public:
     template <typename U>
         requires std::constructible_from<T, U>
     void return_value(U&& value) noexcept(std::is_nothrow_constructible_v<T, U>) {
-        value_.emplace(std::forward<U>(value));
+        state_.template emplace<TaskPromiseValue<T>>(std::forward<U>(value));
     }
 
     void unhandled_exception() noexcept {
-        ::new (static_cast<void*>(std::addressof(exceptionStorage_.exception))) std::exception_ptr(std::current_exception());
-        hasException_ = true;
+        state_.template emplace<TaskPromiseFailure>(std::current_exception());
     }
 
     [[nodiscard]] T result() & {
-        if (hasException_) [[unlikely]] {
-            std::rethrow_exception(*exceptionPointer());
+        if (const auto* failure = std::get_if<TaskPromiseFailure>(&state_))
+            [[unlikely]] {
+            std::rethrow_exception(failure->exception());
         }
-        assert(value_.has_value());
-        return std::move(*value_);
+        auto* value = std::get_if<TaskPromiseValue<T>>(&state_);
+        assert(value != nullptr);
+        return std::move(*value).takeValue();
     }
 
 private:
@@ -120,10 +148,20 @@ private:
     friend class TaskAwaiter;
     template <typename, typename>
     friend class TaskCompletionState;
+    friend class ruvia::TaskScope;
     friend struct TaskFinalAwaiter;
 
     void setContinuation(std::coroutine_handle<> continuation) noexcept {
         continuation_ = continuation;
+    }
+
+    void markStarted() noexcept {
+        assert(ownership_ == TaskFrameOwnership::kCold);
+        ownership_ = TaskFrameOwnership::kStarted;
+    }
+
+    [[nodiscard]] bool started() const noexcept {
+        return ownership_ == TaskFrameOwnership::kStarted;
     }
 
     void setCompletion(void* state, void (*completion)(void*) noexcept) noexcept {
@@ -131,13 +169,13 @@ private:
         completion_ = completion;
     }
 
-    [[nodiscard]] std::exception_ptr* exceptionPointer() noexcept {
-        return std::launder(std::addressof(exceptionStorage_.exception));
-    }
+    using State = std::variant<
+        TaskPromisePending,
+        TaskPromiseValue<T>,
+        TaskPromiseFailure>;
 
-    std::optional<T> value_;
-    TaskExceptionStorage exceptionStorage_;
-    bool hasException_{false};
+    State state_;
+    TaskFrameOwnership ownership_{TaskFrameOwnership::kCold};
     std::coroutine_handle<> continuation_{std::noop_coroutine()};
     void* completionState_{nullptr};
     void (*completion_)(void*) noexcept{nullptr};
@@ -146,13 +184,7 @@ private:
 template <>
 class TaskPromise<void> final {
 public:
-    TaskPromise() noexcept {}
-
-    ~TaskPromise() {
-        if (hasException_) {
-            exceptionPointer()->~exception_ptr();
-        }
-    }
+    TaskPromise() noexcept = default;
 
     static void* operator new(std::size_t size) {
         return taskFrameAllocate(size);
@@ -176,17 +208,20 @@ public:
         return {};
     }
 
-    void return_void() const noexcept {}
+    void return_void() noexcept {
+        state_.template emplace<TaskPromiseCompleted>();
+    }
 
     void unhandled_exception() noexcept {
-        ::new (static_cast<void*>(std::addressof(exceptionStorage_.exception))) std::exception_ptr(std::current_exception());
-        hasException_ = true;
+        state_.template emplace<TaskPromiseFailure>(std::current_exception());
     }
 
     void result() {
-        if (hasException_) [[unlikely]] {
-            std::rethrow_exception(*exceptionPointer());
+        if (const auto* failure = std::get_if<TaskPromiseFailure>(&state_))
+            [[unlikely]] {
+            std::rethrow_exception(failure->exception());
         }
+        assert(std::holds_alternative<TaskPromiseCompleted>(state_));
     }
 
 private:
@@ -196,10 +231,20 @@ private:
     friend class TaskAwaiter;
     template <typename, typename>
     friend class TaskCompletionState;
+    friend class ruvia::TaskScope;
     friend struct TaskFinalAwaiter;
 
     void setContinuation(std::coroutine_handle<> continuation) noexcept {
         continuation_ = continuation;
+    }
+
+    void markStarted() noexcept {
+        assert(ownership_ == TaskFrameOwnership::kCold);
+        ownership_ = TaskFrameOwnership::kStarted;
+    }
+
+    [[nodiscard]] bool started() const noexcept {
+        return ownership_ == TaskFrameOwnership::kStarted;
     }
 
     void setCompletion(void* state, void (*completion)(void*) noexcept) noexcept {
@@ -207,12 +252,13 @@ private:
         completion_ = completion;
     }
 
-    [[nodiscard]] std::exception_ptr* exceptionPointer() noexcept {
-        return std::launder(std::addressof(exceptionStorage_.exception));
-    }
+    using State = std::variant<
+        TaskPromisePending,
+        TaskPromiseCompleted,
+        TaskPromiseFailure>;
 
-    TaskExceptionStorage exceptionStorage_;
-    bool hasException_{false};
+    State state_;
+    TaskFrameOwnership ownership_{TaskFrameOwnership::kCold};
     std::coroutine_handle<> continuation_{std::noop_coroutine()};
     void* completionState_{nullptr};
     void (*completion_)(void*) noexcept{nullptr};

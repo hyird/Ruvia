@@ -1,3 +1,6 @@
+// WebSocket: upgrade routes, subprotocol options, lifecycle timeouts,
+// text/binary echo and the RFC close handshake.
+
 #include <chrono>
 
 #include "ruvia/web/App.h"
@@ -48,8 +51,8 @@ private:
 int main() {
     ruvia::app()
         .setListenAddress("0.0.0.0")
-        .setHttpListenPort(8084)
-        .setThreadNum(2)
+        .setServerTopology(ruvia::ServerTopology::http(8084))
+        .setWorkersPerListener(2)
         .setMaxWebSocketMessageBytes(16 * 1024 * 1024)
         .run();
 }

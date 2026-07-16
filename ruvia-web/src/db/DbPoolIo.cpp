@@ -133,7 +133,7 @@ Task<int> detail::MariaDbPool::waitForMysql(
             ConnectionSlot& slot;
 
             [[nodiscard]] bool await_ready() const noexcept {
-                return slot.timedOut;
+                return slot.deadline.expired();
             }
 
             void await_suspend(std::coroutine_handle<> handle) noexcept {
@@ -220,7 +220,9 @@ Task<int> detail::MariaDbPool::waitForMysql(
 
         void onSocket(int flag, std::error_code) noexcept {
             if (!resultSet) {
-                result = slot.timedOut ? MYSQL_WAIT_TIMEOUT : flag;
+                result = slot.deadline.expired()
+                    ? MYSQL_WAIT_TIMEOUT
+                    : flag;
                 resultSet = true;
                 slotSocket.cancel();
             }

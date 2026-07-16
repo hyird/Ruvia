@@ -118,10 +118,18 @@ int main() {
     const char* portEnv = std::getenv("PORT");
     const auto port = static_cast<std::uint16_t>(portEnv ? std::atoi(portEnv) : 8080);
 
+    const char* tlsCert = std::getenv("TLS_CERT");
+    const char* tlsKey = std::getenv("TLS_KEY");
+    const auto topology = (tlsCert != nullptr && tlsKey != nullptr)
+        ? ruvia::ServerTopology::https(
+              port,
+              ruvia::TlsConfig(ruvia::TlsIdentity::fromFiles(tlsCert, tlsKey)))
+        : ruvia::ServerTopology::http(port);
+
     ruvia::app()
         .setListenAddress("0.0.0.0")
-        .setHttpListenPort(port)
-        .setThreadNum(4)
+        .setServerTopology(topology)
+        .setWorkersPerListener(4)
         .setKeepaliveRequests(1u << 30)
         .setMaxConnectionsPerWorker(20000)
         .run();

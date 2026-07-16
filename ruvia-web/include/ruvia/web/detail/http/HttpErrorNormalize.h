@@ -9,8 +9,8 @@ namespace ruvia::detail {
 
 [[nodiscard]] inline HttpErrorInfo normalizeHttpErrorInfo(HttpErrorInfo error) noexcept {
     auto status = error.status();
-    if (!httpFinalStatusCodeValid(status)) {
-        status = 500;
+    if (!status.isError()) {
+        status = http_status::kInternalServerError;
     }
     auto statusText = error.statusText();
     if (statusText.empty() || !isValidHttpStatusText(statusText)) {

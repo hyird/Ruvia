@@ -29,31 +29,21 @@ public:
         return reader_.consumption();
     }
 
-    void restorePipeline(std::pmr::string& readBuffer, std::size_t& usedBytes) {
-        reader_.restorePipeline(readBuffer, usedBytes);
+    void takePipeline(std::pmr::string& stash) {
+        reader_.takePipeline(stash);
     }
 
     [[nodiscard]] Task<std::string_view> readAll() {
-        if (read_) {
-            co_return bodyView_;
-        }
-        bodyView_ = co_await reader_.readAll(body_);
-        read_ = true;
-        co_return bodyView_;
+        co_return co_await reader_.readAll(body_);
     }
 
     Task<void> discard() {
-        if (read_) {
-            co_return;
-        }
         while (co_await reader_.read()) {}
     }
 
 private:
     StreamBodyReader<Stream> reader_;
     std::pmr::string body_;
-    std::string_view bodyView_;
-    bool read_{false};
 };
 
 }  // namespace ruvia::detail

@@ -2,11 +2,12 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <optional>
 #include <string_view>
-#include <utility>
+#include <type_traits>
 #include <variant>
 
-#include <asio/steady_timer.hpp>
+#include "ruvia/core/detail/WorkerSignal.h"
 
 #include "ruvia/core/Task.h"
 #include "ruvia/http/detail/http2/Http2Connection.h"
@@ -22,7 +23,7 @@ class HttpBufferedResponseWritePlan;
 
 class Http2BufferedResponseWriteCompleted final {
 public:
-    [[nodiscard]] constexpr std::uint16_t status() const noexcept {
+    [[nodiscard]] constexpr HttpStatusCode status() const noexcept {
         return status_;
     }
 
@@ -30,22 +31,22 @@ private:
     friend class Http2BufferedResponseWriteResult;
 
     explicit constexpr Http2BufferedResponseWriteCompleted(
-        std::uint16_t status) noexcept
+        HttpStatusCode status) noexcept
         : status_(status) {}
 
-    std::uint16_t status_;
+    HttpStatusCode status_;
 };
 
 class Http2BufferedResponseWritePeerAbortedBeforeCommit final {
 private:
     friend class Http2BufferedResponseWriteResult;
-
-    constexpr Http2BufferedResponseWritePeerAbortedBeforeCommit() noexcept = default;
+    constexpr
+    Http2BufferedResponseWritePeerAbortedBeforeCommit() noexcept = default;
 };
 
 class Http2BufferedResponseWritePeerAbortedAfterCommit final {
 public:
-    [[nodiscard]] constexpr std::uint16_t status() const noexcept {
+    [[nodiscard]] constexpr HttpStatusCode status() const noexcept {
         return status_;
     }
 
@@ -53,31 +54,21 @@ private:
     friend class Http2BufferedResponseWriteResult;
 
     explicit constexpr Http2BufferedResponseWritePeerAbortedAfterCommit(
-        std::uint16_t status) noexcept
+        HttpStatusCode status) noexcept
         : status_(status) {}
 
-    std::uint16_t status_;
+    HttpStatusCode status_;
 };
 
 class Http2BufferedResponseWriteFailedBeforeCommit final {
-public:
-    [[nodiscard]] constexpr Http2ResponseHeadSubmitError error() const noexcept {
-        return error_;
-    }
-
 private:
     friend class Http2BufferedResponseWriteResult;
-
-    explicit constexpr Http2BufferedResponseWriteFailedBeforeCommit(
-        Http2ResponseHeadSubmitError error) noexcept
-        : error_(error) {}
-
-    Http2ResponseHeadSubmitError error_;
+    constexpr Http2BufferedResponseWriteFailedBeforeCommit() noexcept = default;
 };
 
 class Http2BufferedResponseWriteFailedAfterCommit final {
 public:
-    [[nodiscard]] constexpr std::uint16_t status() const noexcept {
+    [[nodiscard]] constexpr HttpStatusCode status() const noexcept {
         return status_;
     }
 
@@ -85,21 +76,19 @@ private:
     friend class Http2BufferedResponseWriteResult;
 
     explicit constexpr Http2BufferedResponseWriteFailedAfterCommit(
-        std::uint16_t status) noexcept
+        HttpStatusCode status) noexcept
         : status_(status) {}
 
-    std::uint16_t status_;
+    HttpStatusCode status_;
 };
 
-// A buffered HTTP/2 response has an HTTP status only after the core commits the
-// final HEADERS transaction. Every terminal alternative therefore owns exactly
-// the metadata valid for that point in the send lifecycle: pre-commit aborts and
-// failures cannot manufacture a status, while all post-commit outcomes carry the
-// status from the submitted HttpBufferedResponseWritePlan.
+// The writer completes transport recovery (including RESET_STREAM) before
+// returning. Each terminal alternative preserves both the response commit
+// boundary and whether termination came from the peer or the local write path.
 class Http2BufferedResponseWriteResult final {
 public:
     [[nodiscard]] static constexpr Http2BufferedResponseWriteResult
-    makeCompleted(std::uint16_t status) noexcept {
+    makeCompleted(HttpStatusCode status) noexcept {
         return Http2BufferedResponseWriteResult(
             Http2BufferedResponseWriteCompleted(status));
     }
@@ -111,48 +100,74 @@ public:
     }
 
     [[nodiscard]] static constexpr Http2BufferedResponseWriteResult
-    makePeerAbortedAfterCommit(std::uint16_t status) noexcept {
+    makePeerAbortedAfterCommit(HttpStatusCode status) noexcept {
         return Http2BufferedResponseWriteResult(
             Http2BufferedResponseWritePeerAbortedAfterCommit(status));
     }
 
     [[nodiscard]] static constexpr Http2BufferedResponseWriteResult
-    makeFailedBeforeCommit(Http2ResponseHeadSubmitError error) noexcept {
+    makeFailedBeforeCommit() noexcept {
         return Http2BufferedResponseWriteResult(
-            Http2BufferedResponseWriteFailedBeforeCommit(error));
+            Http2BufferedResponseWriteFailedBeforeCommit{});
     }
 
     [[nodiscard]] static constexpr Http2BufferedResponseWriteResult
-    makeFailedAfterCommit(std::uint16_t status) noexcept {
+    makeFailedAfterCommit(HttpStatusCode status) noexcept {
         return Http2BufferedResponseWriteResult(
             Http2BufferedResponseWriteFailedAfterCommit(status));
     }
 
     [[nodiscard]] constexpr const Http2BufferedResponseWriteCompleted*
-    completed() const noexcept {
+    completed() const & noexcept {
         return std::get_if<Http2BufferedResponseWriteCompleted>(&value_);
     }
+    const Http2BufferedResponseWriteCompleted* completed() const && = delete;
 
-    [[nodiscard]] constexpr const Http2BufferedResponseWritePeerAbortedBeforeCommit*
-    peerAbortedBeforeCommit() const noexcept {
-        return std::get_if<Http2BufferedResponseWritePeerAbortedBeforeCommit>(
-            &value_);
+    [[nodiscard]] constexpr const
+    Http2BufferedResponseWritePeerAbortedBeforeCommit*
+    peerAbortedBeforeCommit() const & noexcept {
+        return std::get_if<
+            Http2BufferedResponseWritePeerAbortedBeforeCommit>(&value_);
     }
+    const Http2BufferedResponseWritePeerAbortedBeforeCommit*
+    peerAbortedBeforeCommit() const && = delete;
 
-    [[nodiscard]] constexpr const Http2BufferedResponseWritePeerAbortedAfterCommit*
-    peerAbortedAfterCommit() const noexcept {
-        return std::get_if<Http2BufferedResponseWritePeerAbortedAfterCommit>(
-            &value_);
+    [[nodiscard]] constexpr const
+    Http2BufferedResponseWritePeerAbortedAfterCommit*
+    peerAbortedAfterCommit() const & noexcept {
+        return std::get_if<
+            Http2BufferedResponseWritePeerAbortedAfterCommit>(&value_);
     }
+    const Http2BufferedResponseWritePeerAbortedAfterCommit*
+    peerAbortedAfterCommit() const && = delete;
 
     [[nodiscard]] constexpr const Http2BufferedResponseWriteFailedBeforeCommit*
-    failedBeforeCommit() const noexcept {
-        return std::get_if<Http2BufferedResponseWriteFailedBeforeCommit>(&value_);
+    failedBeforeCommit() const & noexcept {
+        return std::get_if<Http2BufferedResponseWriteFailedBeforeCommit>(
+            &value_);
     }
+    const Http2BufferedResponseWriteFailedBeforeCommit*
+    failedBeforeCommit() const && = delete;
 
     [[nodiscard]] constexpr const Http2BufferedResponseWriteFailedAfterCommit*
-    failedAfterCommit() const noexcept {
+    failedAfterCommit() const & noexcept {
         return std::get_if<Http2BufferedResponseWriteFailedAfterCommit>(&value_);
+    }
+    const Http2BufferedResponseWriteFailedAfterCommit*
+    failedAfterCommit() const && = delete;
+
+    [[nodiscard]] constexpr std::optional<HttpStatusCode>
+    committedStatus() const noexcept {
+        if (const auto* value = completed()) {
+            return value->status();
+        }
+        if (const auto* value = peerAbortedAfterCommit()) {
+            return value->status();
+        }
+        if (const auto* value = failedAfterCommit()) {
+            return value->status();
+        }
+        return std::nullopt;
     }
 
 private:
@@ -166,10 +181,13 @@ private:
     template <typename Alternative>
     explicit constexpr Http2BufferedResponseWriteResult(
         Alternative alternative) noexcept
-        : value_(std::move(alternative)) {}
+        : value_(alternative) {}
 
     Value value_;
 };
+
+static_assert(std::is_trivially_copyable_v<Http2BufferedResponseWriteResult>);
+static_assert(sizeof(Http2BufferedResponseWriteResult) <= 4);
 
 // Non-transport HTTP/2 buffered/file response driver. The session template owns
 // socket reads/writes and event dispatch; this object owns the single response
@@ -181,7 +199,7 @@ public:
         Http2Connection& connection,
         Http2SansIoStreamRuntimeTable& streamRuntimes,
         WorkerMemory& worker,
-        asio::steady_timer& writeSignal) noexcept;
+        WorkerSignal& writeSignal) noexcept;
 
     [[nodiscard]] Task<Http2BufferedResponseWriteResult> write(
         std::uint32_t streamId,
@@ -195,7 +213,6 @@ private:
         kFailed
     };
 
-    [[nodiscard]] Task<bool> awaitSendWindow(std::uint32_t streamId);
     [[nodiscard]] Task<DataWriteResult> writeData(
         std::uint32_t streamId,
         std::string_view chunk,
@@ -205,7 +222,7 @@ private:
     Http2Connection* connection_;
     Http2SansIoStreamRuntimeTable* streamRuntimes_;
     WorkerMemory* worker_;
-    asio::steady_timer* writeSignal_;
+    WorkerSignal* writeSignal_;
 };
 
 }  // namespace ruvia::detail

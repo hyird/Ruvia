@@ -1,6 +1,7 @@
 #pragma once
 
 #include <charconv>
+#include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <memory_resource>
@@ -57,6 +58,17 @@ template <typename NumberT>
     if (ec != std::errc{} || ptr != decoded.data() + decoded.size()) {
         return std::nullopt;
     }
+    if constexpr (std::is_floating_point_v<NumberT>) {
+        // std::from_chars accepts "inf"/"nan", but the rest of the pipeline
+        // cannot round-trip them: the JSON number grammar rejects them on input,
+        // the model JSON writer replaces them with null, and the finite number
+        // formatter throws. Reject them here so a bound floating field is always
+        // a finite value rather than one that silently changes or aborts the
+        // response when serialized.
+        if (!std::isfinite(parsed)) {
+            return std::nullopt;
+        }
+    }
     return parsed;
 }
 
@@ -98,15 +110,11 @@ template <typename T>
     } else if constexpr (isRuviaScalar<FieldT>) {
         using ScalarT = typename RuviaScalarTraits<FieldT>::value_type;
         if constexpr (std::is_same_v<ScalarT, bool>) {
-            const auto parsed = parseFormBool(decoded);
-            return parsed.has_value()
-                ? std::optional<FieldT>(FieldT(*parsed))
-                : std::nullopt;
+            return parseFormBool(decoded).transform(
+                [](bool parsed) { return FieldT(parsed); });
         } else {
-            const auto parsed = parseFormNumber<ScalarT>(decoded);
-            return parsed.has_value()
-                ? std::optional<FieldT>(FieldT(*parsed))
-                : std::nullopt;
+            return parseFormNumber<ScalarT>(decoded).transform(
+                [](ScalarT parsed) { return FieldT(parsed); });
         }
     } else {
         static_assert(alwaysFalse<FieldT>, "RUVIA_REQUEST_MODEL form field type is not supported");

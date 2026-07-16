@@ -1,6 +1,7 @@
 #include "ruvia/http/detail/http2/Http2OutputBuffer.h"
 
 #include <array>
+#include <utility>
 
 namespace ruvia::detail {
 
@@ -36,7 +37,7 @@ void Http2OutputBuffer::appendRstStream(
     Http2ErrorCode error) {
     std::array<char, 4> payload;
     auto* const end = http2Write32(
-        payload.data(), static_cast<std::uint32_t>(error));
+        payload.data(), std::to_underlying(error));
     appendFrame(
         Http2FrameType::kRstStream,
         0,

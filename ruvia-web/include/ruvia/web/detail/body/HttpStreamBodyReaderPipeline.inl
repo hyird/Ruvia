@@ -62,41 +62,6 @@ std::string_view StreamBodyReader<Stream>::bufferedPipelineRemainder() const noe
 }
 
 template <typename Stream>
-void StreamBodyReader<Stream>::restorePipelineBytes(
-    std::pmr::string& readBuffer,
-    std::size_t& usedBytes,
-    std::string_view initialPipeline,
-    std::string_view bufferedPipeline) {
-    usedBytes = initialPipeline.size() + bufferedPipeline.size();
-    if (usedBytes == 0) {
-        return;
-    }
-
-    if (usedBytes > readBuffer.capacity()) {
-        std::pmr::string pipeline(readBuffer.get_allocator());
-        pipeline.reserve(usedBytes);
-        pipeline.append(initialPipeline);
-        pipeline.append(bufferedPipeline);
-        readBuffer = std::move(pipeline);
-        return;
-    }
-
-    // Move the aliasing view first: initialPipeline may point into
-    // readBuffer, and a shrinking resize writes its terminator inside the
-    // source range before the bytes are copied.
-    if (!initialPipeline.empty()) {
-        std::memmove(readBuffer.data(), initialPipeline.data(), initialPipeline.size());
-    }
-    resizePmrStringForOverwrite(readBuffer, usedBytes);
-    if (!bufferedPipeline.empty()) {
-        std::memcpy(
-            readBuffer.data() + initialPipeline.size(),
-            bufferedPipeline.data(),
-            bufferedPipeline.size());
-    }
-}
-
-template <typename Stream>
 void StreamBodyReader<Stream>::resetPipelineState() noexcept {
     buffer_.clear();
     initialBodyAndPipeline_ = {};

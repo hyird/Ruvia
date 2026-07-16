@@ -120,7 +120,7 @@ public:
                 "database migration lock timeout must be greater than zero");
         }
 
-        config.poolSize = 1;
+        config.poolSizePerWorker = 1;
         if (!config.acquireTimeout.has_value()) {
             config.acquireTimeout = config.queryTimeout;
         }
@@ -139,7 +139,8 @@ public:
         };
         detail::DbRegistry registry(ioContext, resolved, databases);
         co_await registry.connect();
-        auto handle = registry.get(resolved);
+        detail::ScopedOperationScope operationScope;
+        auto handle = registry.get(resolved, operationScope);
 
         if (driver == DbDriver::kMariaDb) {
             const auto lockSeconds =
@@ -182,17 +183,17 @@ public:
             auto insertSql = buildInsertMigrationSql(
                 options.table, driver, resolved);
             for (const auto& migration : migrations) {
-                std::array<DbValue, 1> findParams{DbValue{migration.id}};
+                std::array<DbValue, 1> findParams{DbValue{migration.id()}};
                 auto existing = co_await handle.query(findSql, std::span<const DbValue>(findParams));
                 if (!existing.rows().empty()) {
-                    appendMigrationId(report.skipped_, migration.id);
+                    appendMigrationId(report.skipped_, migration.id());
                     continue;
                 }
 
-                (void)co_await handle.execute(migration.sql);
-                std::array<DbValue, 1> insertParams{DbValue{migration.id}};
+                (void)co_await handle.execute(migration.sql());
+                std::array<DbValue, 1> insertParams{DbValue{migration.id()}};
                 (void)co_await handle.execute(insertSql, std::span<const DbValue>(insertParams));
-                appendMigrationId(report.applied_, migration.id);
+                appendMigrationId(report.applied_, migration.id());
             }
         } catch (...) {
             failure = std::current_exception();
@@ -255,9 +256,11 @@ DbMigrationReport DbMigrator::migrate(
             ioContext.get_executor(),
             [&report, &exception](
                 detail::TaskCompletionResult<DbMigrationReport> completion) {
-                exception = std::move(completion.exception);
-                if (completion.value.has_value()) {
-                    report.emplace(std::move(*completion.value));
+                if (const auto* failure = completion.failure()) {
+                    exception = failure->exception();
+                } else {
+                    report.emplace(
+                        std::move(*completion.success()).takeValue());
                 }
             }));
     ioContext.run();

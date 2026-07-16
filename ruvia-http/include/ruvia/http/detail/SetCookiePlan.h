@@ -7,11 +7,14 @@
 #include <cstdint>
 #include <string_view>
 
+#include "ruvia/http/detail/BorrowedView.h"
+
 namespace ruvia::detail {
 
 // Validates and fixes the exact Set-Cookie field-value shape before a runtime
 // allocates its output buffer. The plan borrows name, value, path and domain
-// until write() completes.
+// until write() completes, so owning-string and CookieOptions temporaries are
+// rejected at construction.
 class SetCookiePlan final {
 public:
     SetCookiePlan(
@@ -19,8 +22,31 @@ public:
         std::string_view value,
         const CookieOptions& options);
 
+    template <typename Name, typename Value>
+        requires(
+            HttpTemporaryOwningCharString<Name> ||
+            HttpTemporaryOwningCharString<Value>)
+    SetCookiePlan(Name&&, Value&&, const CookieOptions&) = delete;
+
+    SetCookiePlan(
+        std::string_view,
+        std::string_view,
+        CookieOptions&&) = delete;
+    SetCookiePlan(
+        std::string_view,
+        std::string_view,
+        const CookieOptions&&) = delete;
+
     [[nodiscard]] std::size_t size() const noexcept {
         return size_;
+    }
+
+    [[nodiscard]] std::string_view name() const noexcept {
+        return name_;
+    }
+
+    [[nodiscard]] std::string_view wirePrefix() const noexcept {
+        return prefixText_;
     }
 
     void write(char* output) const;

@@ -59,17 +59,20 @@ private:
 // accidentally expose a plausible framing boundary.
 class HttpChunkScanResult final {
 public:
-    [[nodiscard]] const HttpChunkScanNeedMore* needMore() const noexcept {
+    [[nodiscard]] const HttpChunkScanNeedMore* needMore() const & noexcept {
         return std::get_if<HttpChunkScanNeedMore>(&value_);
     }
+    const HttpChunkScanNeedMore* needMore() const && = delete;
 
-    [[nodiscard]] const HttpChunkScanComplete* complete() const noexcept {
+    [[nodiscard]] const HttpChunkScanComplete* complete() const & noexcept {
         return std::get_if<HttpChunkScanComplete>(&value_);
     }
+    const HttpChunkScanComplete* complete() const && = delete;
 
-    [[nodiscard]] const HttpChunkScanFailure* failure() const noexcept {
+    [[nodiscard]] const HttpChunkScanFailure* failure() const & noexcept {
         return std::get_if<HttpChunkScanFailure>(&value_);
     }
+    const HttpChunkScanFailure* failure() const && = delete;
 
 private:
     friend HttpChunkScanResult scanHttpChunkedBody(std::string_view body) noexcept;

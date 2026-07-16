@@ -27,12 +27,14 @@ Task<std::error_code> writeFileChunk(
     Stream& stream,
     std::pmr::string& chunk,
     std::size_t size) {
-    co_return co_await asyncError([&stream, &chunk, size](auto handler) mutable {
-        asio::async_write(
-            stream,
-            asio::buffer(chunk.data(), size),
-            std::move(handler));
-    });
+    const auto writeCompletion = co_await asyncAsio(
+        [&stream, &chunk, size](auto handler) mutable {
+            asio::async_write(
+                stream,
+                asio::buffer(chunk.data(), size),
+                std::move(handler));
+        });
+    co_return writeCompletion.errorCode();
 }
 
 template <typename Stream>
@@ -45,11 +47,17 @@ Task<std::error_code> writeFileFallback(
 
 #if defined(ASIO_HAS_FILE)
     asio::stream_file input(stream.get_executor());
-#if defined(_WIN32)
+#if defined(__unix__) || defined(__APPLE__) || defined(_WIN32)
     auto nativeInput = openNativeFileForRead(
         fileBody,
         error,
-        NativeFileOpenOptions{.overlapped = true, .sequentialScan = true});
+        NativeFileOpenOptions{
+#if defined(_WIN32)
+            .overlapped = true,
+#else
+            .overlapped = false,
+#endif
+            .sequentialScan = true});
     if (!error) {
         input.assign(nativeInput.get(), error);
     }
@@ -77,12 +85,14 @@ Task<std::error_code> writeFileFallback(
     while (remaining > 0) {
         const auto nextRead = static_cast<std::size_t>(
             std::min<std::uint64_t>(chunk.size(), remaining));
-        auto [readEc, read] = co_await asyncResult<std::size_t>(
+        auto readCompletion = co_await asyncAsio<std::size_t>(
             [&input, &chunk, nextRead](auto handler) mutable {
                 input.async_read_some(
                     asio::buffer(chunk.data(), nextRead),
                     std::move(handler));
             });
+        const auto readEc = readCompletion.errorCode();
+        const auto read = readCompletion.result();
         if (readEc) {
             co_return readEc;
         }

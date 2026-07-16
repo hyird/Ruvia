@@ -3,6 +3,8 @@
 #include <chrono>
 #include <optional>
 
+#include "ruvia/core/detail/WorkerTimer.h"
+
 namespace ruvia::detail {
 
 class DbOperationDeadline final {
@@ -12,7 +14,7 @@ public:
     explicit DbOperationDeadline(
         std::optional<std::chrono::milliseconds> timeout) noexcept {
         if (timeout.has_value()) {
-            deadline = std::chrono::steady_clock::now() + *timeout;
+            deadline = workerTimerDeadlineAfter(*timeout);
         }
     }
 

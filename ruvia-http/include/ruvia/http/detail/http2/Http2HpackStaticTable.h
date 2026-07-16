@@ -1,5 +1,7 @@
 #pragma once
 
+#include "ruvia/http/HttpStatus.h"
+
 #include <array>
 #include <cstddef>
 #include <cstdint>
@@ -17,6 +19,21 @@ struct HpackStaticHeaderMatch final {
     std::uint32_t nameIndex{0};
 };
 
+inline constexpr auto kHpackStatusOkToken =
+    httpStatusCodeToken(http_status::kOk);
+inline constexpr auto kHpackStatusNoContentToken =
+    httpStatusCodeToken(http_status::kNoContent);
+inline constexpr auto kHpackStatusPartialContentToken =
+    httpStatusCodeToken(http_status::kPartialContent);
+inline constexpr auto kHpackStatusNotModifiedToken =
+    httpStatusCodeToken(http_status::kNotModified);
+inline constexpr auto kHpackStatusBadRequestToken =
+    httpStatusCodeToken(http_status::kBadRequest);
+inline constexpr auto kHpackStatusNotFoundToken =
+    httpStatusCodeToken(http_status::kNotFound);
+inline constexpr auto kHpackStatusInternalServerErrorToken =
+    httpStatusCodeToken(http_status::kInternalServerError);
+
 // Normative HPACK static table from RFC 7541 Appendix A.
 inline constexpr std::array<HpackStaticHeader, 61> kHpackStaticTable{{
     {":authority", ""},
@@ -26,13 +43,13 @@ inline constexpr std::array<HpackStaticHeader, 61> kHpackStaticTable{{
     {":path", "/index.html"},
     {":scheme", "http"},
     {":scheme", "https"},
-    {":status", "200"},
-    {":status", "204"},
-    {":status", "206"},
-    {":status", "304"},
-    {":status", "400"},
-    {":status", "404"},
-    {":status", "500"},
+    {":status", httpStatusCodeTokenView(kHpackStatusOkToken)},
+    {":status", httpStatusCodeTokenView(kHpackStatusNoContentToken)},
+    {":status", httpStatusCodeTokenView(kHpackStatusPartialContentToken)},
+    {":status", httpStatusCodeTokenView(kHpackStatusNotModifiedToken)},
+    {":status", httpStatusCodeTokenView(kHpackStatusBadRequestToken)},
+    {":status", httpStatusCodeTokenView(kHpackStatusNotFoundToken)},
+    {":status", httpStatusCodeTokenView(kHpackStatusInternalServerErrorToken)},
     {"accept-charset", ""},
     {"accept-encoding", "gzip, deflate"},
     {"accept-language", ""},

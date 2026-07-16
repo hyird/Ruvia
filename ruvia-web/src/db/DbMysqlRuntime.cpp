@@ -1,9 +1,8 @@
 #include "ruvia/web/detail/db/DbMysqlRuntime.h"
 
-#include <algorithm>
 #include <cstdlib>
-#include <cstdint>
 #include <limits>
+#include <utility>
 
 namespace ruvia::detail {
 namespace {
@@ -44,11 +43,10 @@ public:
         return 0;
     }
 
-    const auto seconds = std::chrono::duration_cast<std::chrono::seconds>(
-        timeout + std::chrono::milliseconds(999));
-    return static_cast<unsigned int>(std::min<std::uint64_t>(
-        static_cast<std::uint64_t>(std::max<std::int64_t>(1, seconds.count())),
-        std::numeric_limits<unsigned int>::max()));
+    const auto seconds = std::chrono::ceil<std::chrono::seconds>(timeout).count();
+    return std::in_range<unsigned int>(seconds)
+        ? static_cast<unsigned int>(seconds)
+        : std::numeric_limits<unsigned int>::max();
 }
 
 }  // namespace

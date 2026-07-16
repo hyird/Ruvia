@@ -16,19 +16,20 @@ template <typename Headers>
 }
 
 [[nodiscard]] inline HttpContentCodingFieldResult httpClientResponseContentCoding(
-    const HttpClientResponse& response) noexcept {
-    return httpClientContentCodingOf(response.headers());
+    const HttpClientResponseHead& head) noexcept {
+    return httpClientContentCodingOf(head.headers());
 }
 
 [[nodiscard]] inline HttpContentDecodeResult
 decodeHttpClientResponseContentEncoding(
-    const HttpClientResponse& response,
+    const HttpClientResponseHead& head,
+    std::string_view encodedContent,
     std::size_t maxDecodedBytes,
     std::pmr::memory_resource* resource) {
-    // The parsed wire response remains untouched. A decoded representation has
-    // different Content-Encoding/Content-Length metadata, so returning owned
-    // bytes avoids constructing an internally contradictory response object.
-    const auto parsedCoding = httpClientResponseContentCoding(response);
+    // The immutable parsed head and externally driven encoded bytes remain
+    // separate. A decoded representation has different Content-Encoding and
+    // Content-Length metadata, so return independently owned bytes.
+    const auto parsedCoding = httpClientResponseContentCoding(head);
     const auto* coding = parsedCoding.coding();
     if (coding == nullptr) {
         return HttpContentDecodeResult::makeFailure(
@@ -36,7 +37,7 @@ decodeHttpClientResponseContentEncoding(
     }
     return decodeHttpContent(
         *coding,
-        response.body(),
+        encodedContent,
         maxDecodedBytes,
         resource);
 }

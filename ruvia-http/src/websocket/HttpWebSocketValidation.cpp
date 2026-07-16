@@ -1,4 +1,5 @@
 #include "ruvia/http/detail/websocket/HttpWebSocketUtils.h"
+#include "ruvia/http/detail/websocket/HttpWebSocketHandshakeFields.h"
 
 #include <array>
 #include <cstring>
@@ -7,6 +8,8 @@
 #include "ruvia/http/detail/HttpRequestInternal.h"
 #include "ruvia/http/detail/HttpConnectionFields.h"
 #include "ruvia/http/detail/HeaderTokenUtils.h"
+#include "ruvia/http/detail/http1/Http1RequestBodyPlan.h"
+#include "ruvia/http/detail/websocket/HttpWebSocketHandshakeValidation.h"
 #include "ruvia/http/HttpRequest.h"
 
 namespace ruvia::detail {
@@ -71,6 +74,13 @@ namespace {
         if (padding > 2 || (padding != 0 && i + 4 != key.size())) {
             return std::nullopt;
         }
+        // RFC 4648 requires unused bits in the final base64 quantum to be
+        // zero.  Without this check, multiple non-canonical strings decode
+        // to the same nonce and are incorrectly accepted as WebSocket keys.
+        if ((padding == 2 && (values[1] & 0x0FU) != 0) ||
+            (padding == 1 && (values[2] & 0x03U) != 0)) {
+            return std::nullopt;
+        }
         const auto triple =
             (static_cast<std::uint32_t>(values[0]) << 18) |
             (static_cast<std::uint32_t>(values[1]) << 12) |
@@ -93,7 +103,9 @@ namespace {
 
 }  // namespace
 
-bool isValidWebSocketRequest(const HttpRequest& request) noexcept {
+HttpWebSocketHandshakeValidationResult validateHttp1WebSocketHandshake(
+    const HttpRequest& request,
+    const Http1RequestBodyPlan& bodyPlan) noexcept {
     HttpConnectionOptions connectionOptions;
     HttpUpgradeProtocols upgradeProtocols;
     std::string_view key;
@@ -101,7 +113,6 @@ bool isValidWebSocketRequest(const HttpRequest& request) noexcept {
     std::size_t keyCount = 0;
     std::size_t versionCount = 0;
     bool webSocketUpgrade = false;
-    bool hasContentLength = false;
 
     for (const auto& header : request.headers()) {
         if (httpAsciiEqualsIgnoreCase(header.name(), "Connection")) {
@@ -109,7 +120,8 @@ bool isValidWebSocketRequest(const HttpRequest& request) noexcept {
                     header.value(),
                     HttpFieldListRole::kRecipient) !=
                 HttpFieldListParseStatus::kOk) {
-                return false;
+                return HttpWebSocketHandshakeValidationResult::
+                    makeInvalidRequest();
             }
         } else if (httpAsciiEqualsIgnoreCase(header.name(), "Upgrade")) {
             if (upgradeProtocols.parseField(
@@ -124,7 +136,8 @@ bool isValidWebSocketRequest(const HttpRequest& request) noexcept {
                         }
                         return true;
                     }) != HttpFieldListParseStatus::kOk) {
-                return false;
+                return HttpWebSocketHandshakeValidationResult::
+                    makeInvalidRequest();
             }
         } else if (httpAsciiEqualsIgnoreCase(
                        header.name(), "Sec-WebSocket-Key")) {
@@ -134,22 +147,32 @@ bool isValidWebSocketRequest(const HttpRequest& request) noexcept {
                        header.name(), "Sec-WebSocket-Version")) {
             version = header.value();
             ++versionCount;
-        } else if (httpAsciiEqualsIgnoreCase(
-                       header.name(), "Content-Length")) {
-            hasContentLength = true;
         }
     }
 
-    return request.knownMethod() == HttpKnownMethod::kGet &&
-        request.protocolVersion() == HttpProtocolVersion::kHttp11 &&
-        connectionOptions.upgrade() &&
-        upgradeProtocols.hasProtocol() &&
-        webSocketUpgrade &&
-        !hasContentLength &&
-        keyCount == 1 &&
-        versionCount == 1 &&
-        webSocketHeaderEquals(version, "13") &&
-        decodeWebSocketKey(key).has_value();
+    if (request.knownMethod() != HttpKnownMethod::kGet ||
+        request.protocolVersion() != HttpProtocolVersion::kHttp11 ||
+        !connectionOptions.upgrade() ||
+        !upgradeProtocols.hasProtocol() ||
+        !webSocketUpgrade ||
+        // RFC 6455 does not forbid Content-Length on the HTTP Upgrade request.
+        // The parser-owned framing plan is the authoritative distinction:
+        // Content-Length: 0 carries no content, while a positive length or
+        // chunked coding still has bytes that must be consumed before the
+        // connection can change protocols.
+        bodyPlan.requiresConsumption() ||
+        !webSocketSubprotocolOffersValid(request) ||
+        !webSocketExtensionOffersValid(request) ||
+        keyCount != 1 ||
+        !decodeWebSocketKey(key).has_value() ||
+        versionCount != 1) {
+        return HttpWebSocketHandshakeValidationResult::makeInvalidRequest();
+    }
+    if (!webSocketHeaderEquals(version, "13")) {
+        return HttpWebSocketHandshakeValidationResult::
+            makeUnsupportedVersion();
+    }
+    return HttpWebSocketHandshakeValidationResult::makeAccepted();
 }
 
 bool isValidWebSocketCloseCode(std::uint16_t code) noexcept {

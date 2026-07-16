@@ -5,6 +5,7 @@
 #include <utility>
 
 #include "ruvia/http/MultipartParser.h"
+#include "ruvia/http/detail/BorrowedView.h"
 #include "ruvia/http/detail/HeaderTokenUtils.h"
 
 namespace ruvia::detail {
@@ -26,6 +27,22 @@ struct MultipartPartAccess final {
         return MultipartPart(std::move(decodedName), std::move(decodedFilename), contentType, body);
     }
 
+    template <HttpTemporaryOwningCharString ContentType>
+    static MultipartPart make(
+        std::string_view,
+        std::string_view,
+        ContentType&&,
+        std::string_view,
+        std::pmr::memory_resource*) = delete;
+
+    template <HttpTemporaryOwningCharString Body>
+    static MultipartPart make(
+        std::string_view,
+        std::string_view,
+        std::string_view,
+        Body&&,
+        std::pmr::memory_resource*) = delete;
+
     [[nodiscard]] static MultipartPart makeDecoded(
         std::string_view name,
         std::string_view filename,
@@ -38,6 +55,22 @@ struct MultipartPartAccess final {
             contentType,
             body);
     }
+
+    template <HttpTemporaryOwningCharString ContentType>
+    static MultipartPart makeDecoded(
+        std::string_view,
+        std::string_view,
+        ContentType&&,
+        std::string_view,
+        std::pmr::memory_resource*) = delete;
+
+    template <HttpTemporaryOwningCharString Body>
+    static MultipartPart makeDecoded(
+        std::string_view,
+        std::string_view,
+        std::string_view,
+        Body&&,
+        std::pmr::memory_resource*) = delete;
 };
 
 }  // namespace ruvia::detail

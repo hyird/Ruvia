@@ -1,3 +1,5 @@
+// Middleware Next: the value Next and one-shot co_await next() signatures.
+
 #include "ruvia/web/App.h"
 #include "ruvia/web/Controller.h"
 
@@ -53,7 +55,7 @@ private:
 int main() {
     ruvia::app()
         .setListenAddress("0.0.0.0")
-        .setHttpListenPort(8089)
-        .setThreadNum(1)
+        .setServerTopology(ruvia::ServerTopology::http(8089))
+        .setWorkersPerListener(1)
         .run();
 }

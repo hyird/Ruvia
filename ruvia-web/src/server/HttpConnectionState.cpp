@@ -102,10 +102,25 @@ void compactConnectionReadBuffer(
     usedBytes = remainingBytes;
 }
 
+void installConnectionReadBufferPipeline(
+    std::pmr::string& readBuffer,
+    std::size_t& usedBytes,
+    std::string_view pipeline) {
+    // `pipeline` is request-scoped storage handed over by a body runtime, never
+    // an alias of readBuffer, so this copies rather than shifts in place.
+    if (pipeline.size() > readBuffer.size()) {
+        resizePmrStringForOverwrite(readBuffer, pipeline.size());
+    }
+    if (!pipeline.empty()) {
+        std::memcpy(readBuffer.data(), pipeline.data(), pipeline.size());
+    }
+    usedBytes = pipeline.size();
+}
+
 void applyReusableHttp1RequestBufferCompletion(
     const Http1RequestBufferCompletion& completion,
     std::pmr::string& readBuffer,
-    std::size_t& usedBytes) noexcept {
+    std::size_t& usedBytes) {
     if (const auto* compaction = completion.compaction()) {
         if (compaction->consumedBytes() > usedBytes) {
             std::terminate();
@@ -116,7 +131,11 @@ void applyReusableHttp1RequestBufferCompletion(
             compaction->consumedBytes());
         return;
     }
-    if (completion.restored() != nullptr) {
+    if (const auto* restore = completion.pipelineRestore()) {
+        installConnectionReadBufferPipeline(
+            readBuffer,
+            usedBytes,
+            restore->pipeline());
         return;
     }
     // A discarded buffer is valid only when the connection plan closes. The

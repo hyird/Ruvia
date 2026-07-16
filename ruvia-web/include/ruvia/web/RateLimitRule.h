@@ -7,6 +7,10 @@
 
 namespace ruvia {
 
+// Each worker preallocates this many fixed-window key slots when either the
+// app-wide default rule or a route-specific rate-limit middleware is present.
+inline constexpr std::size_t kDefaultRateLimitSlotsPerWorker = 8192;
+
 enum class RateLimitOverflowPolicy : std::uint8_t {
     kDeny,
     kAllow,

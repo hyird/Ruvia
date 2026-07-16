@@ -4,6 +4,7 @@ namespace ruvia::detail {
 
 template <typename Transport>
 Task<std::optional<WebSocketMessage>> WebSocketConnection<Transport>::read() {
+    ReadGuard readGuard(*this);
     for (;;) {
         // poll() can queue an automatic Pong/Close. Keep that mutation mutually
         // exclusive with an in-flight application/heartbeat write so the core's
@@ -11,13 +12,24 @@ Task<std::optional<WebSocketMessage>> WebSocketConnection<Transport>::read() {
         co_await waitForWriteIdle();
         const auto event = protocol_.poll();
         if (!event.has_value()) {
-            if (!(co_await transport_.readMore(buffer_))) {
+            const auto readResult = co_await transport_.readMore(buffer_);
+            if (const auto* failure = readResult.failure()) {
+                transport_.abort();
+                (void)protocol_.abort();
+                throw std::system_error(
+                    failure->errorCode(),
+                    "failed to read websocket bytes");
+            }
+            if (readResult.end() != nullptr) {
                 // EOF is an abnormal WebSocket close when no peer Close was
                 // received. The core discards unsent WS output and asks the
                 // transport adapter to finish only its own direction/stream.
                 protocol_.notifyTransportEof();
                 co_await flushProtocolOutputExclusive();
                 co_return std::nullopt;
+            }
+            if (readResult.data() == nullptr) {
+                throw std::logic_error("unexpected WebSocket transport read result");
             }
             scannerEntry_.touch();
             continue;
@@ -32,7 +44,10 @@ Task<std::optional<WebSocketMessage>> WebSocketConnection<Transport>::read() {
             continue;
         }
         if (event->pong() != nullptr) {
-            awaitingPong_ = false;
+            if (std::holds_alternative<WebSocketSendingPing>(livenessState_) ||
+                std::holds_alternative<WebSocketAwaitingPong>(livenessState_)) {
+                livenessState_ = WebSocketLivenessIdle{};
+            }
             continue;
         }
         if (event->close() != nullptr || event->protocolError() != nullptr ||
@@ -40,6 +55,7 @@ Task<std::optional<WebSocketMessage>> WebSocketConnection<Transport>::read() {
             // These observations terminate the application read side. WsOutputPlan
             // remains the sole authority for flushing Close bytes and mapping
             // orderly transport completion.
+            livenessState_ = WebSocketLivenessIdle{};
             co_await flushProtocolOutputExclusive();
             co_return std::nullopt;
         }

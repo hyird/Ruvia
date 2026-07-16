@@ -17,13 +17,15 @@
 #include <string_view>
 #include <system_error>
 
-#include <asio/steady_timer.hpp>
+#include "ruvia/core/detail/WorkerSignal.h"
 
 #include "ruvia/http/detail/http2/Http2Connection.h"
 #include "ruvia/http/detail/websocket/WsConnection.h"
 #include "ruvia/core/Task.h"
 #include "ruvia/http/detail/PmrString.h"
+#include "ruvia/web/detail/http2/Http2SansIoSendWindow.h"
 #include "ruvia/web/detail/http2/Http2SansIoStreamRuntime.h"
+#include "ruvia/web/detail/websocket/WsTransportReadResult.h"
 
 namespace ruvia::detail {
 
@@ -39,7 +41,7 @@ public:
         std::uint32_t streamId,
         Http2SansIoBodyQueue& bodyQueue,
         Http2SansIoStreamSignal& signal,
-        asio::steady_timer& writeSignal,
+        WorkerSignal& writeSignal,
         Executor executor) noexcept
         : connection_(connection),
           streamId_(streamId),
@@ -52,23 +54,31 @@ public:
         return executor_;
     }
 
-    [[nodiscard]] Task<bool> readMore(std::pmr::string& buffer) {
+    [[nodiscard]] Task<WsTransportReadResult> readMore(std::pmr::string& buffer) {
         for (;;) {
+            if (signal_.terminated()) {
+                co_return WsTransportReadResult::makeFailure(
+                    signal_.terminalError());
+            }
             auto* stream = connection_.stream(streamId_);
             if (stream == nullptr || stream->isAborted()) {
-                co_return false;
+                co_return WsTransportReadResult::makeFailure(
+                    std::make_error_code(std::errc::connection_reset));
             }
             if (const auto chunk = bodyQueue_.pop(); !chunk.empty()) {
                 releaseCreditIfDrained();
                 buffer.append(chunk.data(), chunk.size());
-                co_return true;
+                co_return WsTransportReadResult::makeData();
             }
             if (!bodyQueue_.empty()) {
                 continue;
             }
-            if (stream->remoteReceive().endStream() != nullptr ||
-                signal_.ended()) {
-                co_return false;
+            if (stream->remoteReceive().endStream() != nullptr) {
+                co_return WsTransportReadResult::makeEnd();
+            }
+            if (signal_.terminated()) {
+                co_return WsTransportReadResult::makeFailure(
+                    signal_.terminalError());
             }
             co_await signal_.wait();
         }
@@ -81,6 +91,9 @@ public:
             ? Http2EndStream::kEndStream
             : Http2EndStream::kKeepOpen;
         for (;;) {
+            if (signal_.terminated()) {
+                co_return signal_.terminalError();
+            }
             const auto result = connection_.submitData(streamId_, bytes, terminal);
             wakeWriter();
             if (result == Http2DataSubmitStatus::kAccepted) {
@@ -102,35 +115,28 @@ public:
             // kQueued means this input is already core-owned; wait for it to drain,
             // then return without resubmitting. kBackpressured accepted no bytes, so
             // wait for the older queued input and retry this exact view.
-            while (connection_.hasQueuedData(streamId_)) {
-                auto* stream = connection_.stream(streamId_);
-                if (stream == nullptr || stream->isAborted() ||
-                    signal_.ended()) {
-                    co_return std::make_error_code(std::errc::connection_reset);
-                }
-                co_await signal_.wait();
+            const auto waitResult = co_await awaitHttp2SendWindow(
+                connection_, streamId_, &signal_);
+            if (waitResult.aborted() != nullptr) {
+                co_return signal_.terminated()
+                    ? signal_.terminalError()
+                    : std::make_error_code(std::errc::connection_reset);
             }
             if (result == Http2DataSubmitStatus::kQueued) {
                 co_return std::error_code{};
-            }
-            auto* stream = connection_.stream(streamId_);
-            if (stream == nullptr || stream->isAborted() ||
-                signal_.ended()) {
-                co_return std::make_error_code(std::errc::connection_reset);
             }
         }
     }
 
     void abort() noexcept {
         (void)connection_.submitReset(streamId_, Http2ErrorCode::kCancel);
-        signal_.end();
+        signal_.wake();
         wakeWriter();
     }
 
 private:
     void wakeWriter() noexcept {
-        asio::error_code ignored;
-        writeSignal_.cancel(ignored);
+        writeSignal_.notify();
     }
 
     void releaseCreditIfDrained() {
@@ -145,7 +151,7 @@ private:
     std::uint32_t streamId_;
     Http2SansIoBodyQueue& bodyQueue_;
     Http2SansIoStreamSignal& signal_;
-    asio::steady_timer& writeSignal_;
+    WorkerSignal& writeSignal_;
     Executor executor_;
 };
 
@@ -159,7 +165,7 @@ public:
         std::uint32_t streamId,
         Http2SansIoBodyQueue& bodyQueue,
         Http2SansIoStreamSignal& signal,
-        asio::steady_timer& writeSignal) noexcept
+        WorkerSignal& writeSignal) noexcept
         : connection_(connection),
           streamId_(streamId),
           bodyQueue_(bodyQueue),
@@ -168,24 +174,29 @@ public:
 
     [[nodiscard]] Task<std::optional<std::string_view>> read() {
         for (;;) {
+            if (signal_.terminated()) {
+                throw std::system_error(signal_.terminalError());
+            }
             auto* stream = connection_.stream(streamId_);
             if (stream == nullptr || stream->isAborted()) {
-                co_return std::nullopt;
+                throw std::system_error(
+                    std::make_error_code(std::errc::connection_reset));
             }
             if (const auto chunk = bodyQueue_.pop(); !chunk.empty()) {
                 if (bodyQueue_.empty()) {
                     connection_.releaseReceivedData(streamId_);
-                    asio::error_code ignored;
-                    writeSignal_.cancel(ignored);
+                    writeSignal_.notify();
                 }
                 co_return chunk;
             }
             if (!bodyQueue_.empty()) {
                 continue;
             }
-            if (stream->remoteReceive().endStream() != nullptr ||
-                signal_.ended()) {
+            if (stream->remoteReceive().endStream() != nullptr) {
                 co_return std::nullopt;
+            }
+            if (signal_.terminated()) {
+                throw std::system_error(signal_.terminalError());
             }
             co_await signal_.wait();
         }
@@ -196,7 +207,7 @@ private:
     std::uint32_t streamId_;
     Http2SansIoBodyQueue& bodyQueue_;
     Http2SansIoStreamSignal& signal_;
-    asio::steady_timer& writeSignal_;
+    WorkerSignal& writeSignal_;
 };
 
 }  // namespace ruvia::detail

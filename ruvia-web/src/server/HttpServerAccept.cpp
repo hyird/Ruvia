@@ -2,12 +2,13 @@
 
 #include "ruvia/core/detail/AsioAwait.h"
 #include "ruvia/core/detail/SocketUtils.h"
+#include "ruvia/core/Timer.h"
+#include "ruvia/web/detail/server/HttpServerConnectionGuards.h"
 
 #include <asio/bind_allocator.hpp>
 #include <asio/co_spawn.hpp>
 #include <asio/detached.hpp>
 #include <asio/recycling_allocator.hpp>
-#include <asio/steady_timer.hpp>
 #include <chrono>
 #include <system_error>
 #include <utility>
@@ -15,11 +16,14 @@
 namespace ruvia::detail {
 
 Task<void> HttpServer::acceptLoop() {
-    asio::steady_timer retryTimer(ioContext_);
     for (;;) {
-        auto [ec, socket] = co_await asyncResult<asio::ip::tcp::socket>([this](auto handler) mutable {
-            acceptor_.async_accept(std::move(handler));
-        });
+        auto acceptCompletion =
+            co_await asyncAsio<asio::ip::tcp::socket>(
+                [this](auto handler) mutable {
+                    acceptor_.async_accept(std::move(handler));
+                });
+        const auto ec = acceptCompletion.errorCode();
+        auto socket = std::move(acceptCompletion).takeResult();
 
         if (ec) {
             // Fatal: acceptor was cancelled (stop()) or closed. Exit cleanly.
@@ -30,17 +34,14 @@ Task<void> HttpServer::acceptLoop() {
             }
             // Transient: fd exhaustion, ECONNABORTED, EINTR, ENOBUFS, ENOMEM,
             // etc. A single bad accept must not stop the worker forever.
-            retryTimer.expires_after(std::chrono::milliseconds(50));
-            const auto waitEc = co_await asyncError([&retryTimer](auto handler) mutable {
-                retryTimer.async_wait(std::move(handler));
-            });
-            if (waitEc || !workerRunning_) {
+            co_await sleepFor(workerHandle_, std::chrono::milliseconds(50));
+            if (!httpServerWorkerRunning(workerState_)) {
                 co_return;
             }
             continue;
         }
 
-        if (!workerRunning_) {
+        if (!httpServerWorkerRunning(workerState_)) {
             closeSocket(socket);
             co_return;
         }
@@ -51,11 +52,16 @@ Task<void> HttpServer::acceptLoop() {
         }
 
         configureAcceptedSocket(socket);
-        ++activeConnectionCount_;
-
+        AcceptedConnectionLease connection(
+            std::move(socket),
+            activeConnectionCount_,
+            this,
+            [](void* target) noexcept {
+                static_cast<HttpServer*>(target)->maybeFinishDrain();
+            });
         asio::co_spawn(
             ioContext_,
-            taskAsAwaitable(handleSession(std::move(socket))),
+            taskAsAwaitable(handleSession(std::move(connection))),
             asio::bind_allocator(asio::recycling_allocator<void>(), asio::detached));
     }
 }

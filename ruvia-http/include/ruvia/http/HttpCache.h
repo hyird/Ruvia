@@ -13,6 +13,7 @@ namespace ruvia {
 struct CacheControl {
     bool noStore{false};
     bool noCache{false};            // bare or field-name form -- both require revalidation
+    bool noTransform{false};        // intermediaries must not transform the content
     bool mustRevalidate{false};
     bool proxyRevalidate{false};
     bool isPrivate{false};          // "private" (not for a shared cache)
@@ -22,6 +23,25 @@ struct CacheControl {
     std::optional<std::uint64_t> sMaxAge;
     std::optional<std::uint64_t> staleWhileRevalidate;
     std::optional<std::uint64_t> staleIfError;
+};
+
+// Incrementally parses every Cache-Control field line as one logical directive
+// list (RFC 9110 section 5.2). State spans updates so duplicate freshness
+// directives keep the first occurrence even when they appear on different lines.
+class CacheControlFieldParser final {
+public:
+    void update(std::string_view fieldValue) noexcept;
+
+    [[nodiscard]] CacheControl finish() const noexcept {
+        return value_;
+    }
+
+private:
+    CacheControl value_;
+    bool maxAgeSeen_{false};
+    bool sMaxAgeSeen_{false};
+    bool staleWhileRevalidateSeen_{false};
+    bool staleIfErrorSeen_{false};
 };
 
 // Parse a Cache-Control field value (a single line, or several joined by commas).

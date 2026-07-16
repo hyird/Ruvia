@@ -3,6 +3,7 @@
 #include "ruvia/web/detail/json/JsonEscape.h"
 
 #include <memory_resource>
+#include <utility>
 
 namespace ruvia {
 namespace {
@@ -10,14 +11,10 @@ namespace {
 [[nodiscard]] HttpResponse makeJsonResponse(
     Context& context,
     std::pmr::string& body,
-    std::uint16_t statusCode = 200) {
-    constexpr HttpHeaderView kJsonHeaders[] = {
-        {"Content-Type", "application/json"}};
-    return context.body(
-        body,
-        Context::ResponseInit{
-            .status = statusCode,
-            .headers = kJsonHeaders});
+    HttpStatusCode statusCode = http_status::kOk) {
+    context.status(statusCode);
+    context.header("Content-Type", "application/json");
+    return context.body(std::move(body));
 }
 
 }  // namespace
@@ -41,7 +38,7 @@ HttpResponse makeReadyResponse(Context& context, bool ready, std::string_view re
         detail::appendJsonString(body, reason);
     }
     body.push_back('}');
-    return makeJsonResponse(context, body, 503);
+    return makeJsonResponse(context, body, http_status::kServiceUnavailable);
 }
 
 }  // namespace ruvia

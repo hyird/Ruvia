@@ -1,7 +1,6 @@
 #pragma once
 
-#include <cstdint>
-#include <string_view>
+#include "ruvia/http/HttpProtocolError.h"
 
 namespace ruvia {
 
@@ -28,7 +27,7 @@ enum class HttpParseError {
     kInvalidTrailer
 };
 
-[[nodiscard]] std::string_view httpParseErrorMessage(HttpParseError error) noexcept;
-[[nodiscard]] std::uint16_t httpParseErrorStatus(HttpParseError error) noexcept;
+[[nodiscard]] HttpProtocolError httpParseProtocolError(
+    HttpParseError error) noexcept;
 
 }  // namespace ruvia

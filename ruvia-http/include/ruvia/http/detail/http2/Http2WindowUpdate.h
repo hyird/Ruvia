@@ -35,15 +35,4 @@ enum class Http2WindowUpdateResult : std::uint8_t {
     return Http2WindowUpdateResult::kOk;
 }
 
-inline char* http2WriteDataWindowUpdates(
-    char* out,
-    std::uint32_t streamId,
-    std::uint32_t increment) noexcept {
-    if (increment == 0) {
-        return out;
-    }
-    out = http2WriteWindowUpdate(out, 0, increment);
-    return http2WriteWindowUpdate(out, streamId, increment);
-}
-
 }  // namespace ruvia::detail

@@ -16,6 +16,13 @@
 
 namespace ruvia::detail {
 
+class Http1ServerRequestParseFailure;
+
+enum class Http1ServerRequestParseFailureSource : std::uint8_t {
+    kRequestLine,
+    kMessage
+};
+
 struct Http1RequestParseResultAccess final {
     [[nodiscard]] static Http1RequestParseResult needMore(
         std::optional<std::size_t> requiredTotalBytes) noexcept {
@@ -36,6 +43,9 @@ struct Http1RequestParseResultAccess final {
         HttpParseError error) noexcept {
         return Http1RequestParseResult(Http1RequestParseFailure(error));
     }
+
+    [[nodiscard]] static Http1RequestParseResult failure(
+        const Http1ServerRequestParseFailure& failure) noexcept;
 };
 
 class Http1ServerNeedRequestHead final {};
@@ -117,12 +127,21 @@ private:
 
 class Http1ServerRequestParseFailure final {
 public:
-    [[nodiscard]] constexpr HttpParseError error() const noexcept {
-        return error_;
+    [[nodiscard]] HttpProtocolError protocolError() const noexcept {
+        return httpParseProtocolError(error_);
+    }
+
+    [[nodiscard]] constexpr Http1ServerRequestParseFailureSource
+    source() const noexcept {
+        return error_ == HttpParseError::kInvalidRequestLine ||
+            error_ == HttpParseError::kUnsupportedHttpVersion
+            ? Http1ServerRequestParseFailureSource::kRequestLine
+            : Http1ServerRequestParseFailureSource::kMessage;
     }
 
 private:
     friend class Http1ServerRequestParser;
+    friend struct Http1RequestParseResultAccess;
 
     explicit constexpr Http1ServerRequestParseFailure(
         HttpParseError error) noexcept
@@ -131,32 +150,47 @@ private:
     HttpParseError error_;
 };
 
+inline Http1RequestParseResult Http1RequestParseResultAccess::failure(
+    const Http1ServerRequestParseFailure& failure) noexcept {
+    return Http1RequestParseResult(Http1RequestParseFailure(failure.error_));
+}
+
 class Http1ServerRequestParseState final {
 public:
     [[nodiscard]] const Http1ServerNeedRequestHead*
-    needRequestHead() const noexcept {
+    needRequestHead() const & noexcept {
         return std::get_if<Http1ServerNeedRequestHead>(&progress_);
     }
+    [[nodiscard]] const Http1ServerNeedRequestHead*
+    needRequestHead() const && = delete;
 
     [[nodiscard]] const Http1ServerRequestHeadReady*
-    headReady() const noexcept {
+    headReady() const & noexcept {
         return std::get_if<Http1ServerRequestHeadReady>(&progress_);
     }
+    [[nodiscard]] const Http1ServerRequestHeadReady*
+    headReady() const && = delete;
 
     [[nodiscard]] const Http1ServerNeedRequestBody*
-    needRequestBody() const noexcept {
+    needRequestBody() const & noexcept {
         return std::get_if<Http1ServerNeedRequestBody>(&progress_);
     }
+    [[nodiscard]] const Http1ServerNeedRequestBody*
+    needRequestBody() const && = delete;
 
     [[nodiscard]] const Http1ServerRequestMessageReady*
-    messageReady() const noexcept {
+    messageReady() const & noexcept {
         return std::get_if<Http1ServerRequestMessageReady>(&progress_);
     }
+    [[nodiscard]] const Http1ServerRequestMessageReady*
+    messageReady() const && = delete;
 
     [[nodiscard]] const Http1ServerRequestParseFailure*
-    failure() const noexcept {
+    failure() const & noexcept {
         return std::get_if<Http1ServerRequestParseFailure>(&progress_);
     }
+    [[nodiscard]] const Http1ServerRequestParseFailure*
+    failure() const && = delete;
 
     HttpRequest request{HttpRequestAccess::make()};
     Http1RequestBodyPlan bodyPlan{
@@ -190,10 +224,19 @@ public:
         Http1ServerRequestParseState& state,
         std::size_t headerSearchOffset = 0) const noexcept;
 
+    template <HttpTemporaryOwningCharString Buffer>
+    void parseHead(
+        Buffer&&,
+        Http1ServerRequestParseState&,
+        std::size_t = 0) const = delete;
+
     // Whole-message scanner used by the public sans-I/O API. It always advances
     // beyond kRequestHeadReady to an unambiguous message/failure/need-more phase.
     [[nodiscard]] Http1ServerRequestParseState parseMessage(
         std::string_view buffer) const noexcept;
+
+    template <HttpTemporaryOwningCharString Buffer>
+    Http1ServerRequestParseState parseMessage(Buffer&&) const = delete;
 
 private:
     static void parseRequestHead(

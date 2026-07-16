@@ -1,6 +1,7 @@
 #pragma once
 
 #include "ruvia/web/db/DbQueryResult.h"
+#include "ruvia/web/ScopedOperation.h"
 
 #include <cstddef>
 #include <initializer_list>
@@ -8,44 +9,73 @@
 #include <span>
 #include <string>
 #include <string_view>
+#include <variant>
 #include <vector>
 
 namespace ruvia {
 
-class DbTransaction final {
+class DbTransaction final : private detail::ScopedCapabilityNode {
 public:
     DbTransaction(const DbTransaction&) = delete;
     DbTransaction& operator=(const DbTransaction&) = delete;
     DbTransaction(DbTransaction&& other) noexcept;
-    DbTransaction& operator=(DbTransaction&& other) noexcept;
+    DbTransaction& operator=(DbTransaction&&) = delete;
     ~DbTransaction();
 
     [[nodiscard]] bool active() const noexcept;
-    Task<QueryResult> query(std::string_view sql, std::span<const DbValue> params = {});
-    Task<QueryResult> query(std::string_view sql, std::initializer_list<DbValue> params) = delete;
-    Task<QueryResult> execute(std::string_view sql, std::span<const DbValue> params = {});
-    Task<QueryResult> execute(std::string_view sql, std::initializer_list<DbValue> params) = delete;
-    Task<void> commit();
-    Task<void> rollback();
+    ScopedOperation<QueryResult> query(std::string_view sql, std::span<const DbValue> params = {});
+    ScopedOperation<QueryResult> query(std::string_view sql, std::initializer_list<DbValue> params) = delete;
+    ScopedOperation<QueryResult> execute(std::string_view sql, std::span<const DbValue> params = {});
+    ScopedOperation<QueryResult> execute(std::string_view sql, std::initializer_list<DbValue> params) = delete;
+    ScopedOperation<void> commit();
+    ScopedOperation<void> rollback();
 
 private:
+    friend class DbHandle;
     friend class detail::MariaDbPool;
     friend class detail::PostgreSqlPool;
+
+    struct Lease final {
+        Lease(
+            detail::DbPoolRef client,
+            std::size_t slot,
+            std::pmr::memory_resource* resource) noexcept;
+
+        detail::DbPoolRef client;
+        std::size_t slot;
+        std::pmr::memory_resource* resource;
+    };
 
     DbTransaction(
         detail::DbPoolRef client,
         std::size_t slot,
-        std::pmr::memory_resource* resource,
-        RequestMemory* requestMemory = nullptr) noexcept;
+        std::pmr::memory_resource* resource) noexcept;
     Task<QueryResult> executePrepared(std::pmr::string sql, std::pmr::vector<DbValue> params);
-    [[nodiscard]] QueryResult mountResult(QueryResult result) const;
+    Task<void> commitTask();
+    Task<void> rollbackTask();
     void reset() noexcept;
+    void bindOperationScope(detail::ScopedOperationScope& scope) noexcept;
+    static void expireCapability(detail::ScopedCapabilityNode& capability) noexcept;
 
-    detail::DbPoolRef client_{};
-    std::size_t slot_{0};
-    std::pmr::memory_resource* resource_{nullptr};
-    RequestMemory* requestMemory_{nullptr};
-    bool active_{false};
+    class OperationGuard final {
+    public:
+        explicit OperationGuard(DbTransaction& owner);
+        OperationGuard(const OperationGuard&) = delete;
+        OperationGuard& operator=(const OperationGuard&) = delete;
+        ~OperationGuard();
+
+        [[nodiscard]] Lease& lease() noexcept { return *lease_; }
+        void finishActive() noexcept;
+        void finishClosed() noexcept;
+        void finishFailed() noexcept;
+
+    private:
+        DbTransaction* owner_;
+        Lease* lease_;
+    };
+
+    detail::DbOperationState<Lease> state_{};
+    detail::ScopedOperationScope operationScope_;
 };
 
 }  // namespace ruvia

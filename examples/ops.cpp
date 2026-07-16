@@ -1,3 +1,6 @@
+// Operational middleware: security headers, route-level per-IP rate limiting,
+// and health/readiness response helpers wired through controller macros.
+
 #include <string_view>
 
 #include "ruvia/web/App.h"
@@ -30,7 +33,7 @@ private:
 int main() {
     ruvia::app()
         .setListenAddress("0.0.0.0")
-        .setHttpListenPort(8080)
-        .setThreadNum(2)
+        .setServerTopology(ruvia::ServerTopology::http(8080))
+        .setWorkersPerListener(2)
         .run();
 }

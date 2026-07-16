@@ -14,7 +14,9 @@ inline void validateDbConfig(const DbConfig& config) {
         "database host is invalid",
         kSeparatedPortHostRules);
     ensureNonZeroPort(config.port, "database port must not be zero");
-    ensurePositiveSize(config.poolSize, "database pool size must be greater than zero");
+    ensurePositiveSize(
+        config.poolSizePerWorker,
+        "database pool size per worker must be greater than zero");
     ensurePositiveOptionalDurations(
         "configured database timeouts must be greater than zero",
         config.connectTimeout,

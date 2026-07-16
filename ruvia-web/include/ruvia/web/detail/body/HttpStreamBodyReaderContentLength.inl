@@ -8,7 +8,7 @@ Task<std::string_view> StreamBodyReader<Stream>::readKnownLengthAll(
     std::size_t contentLength) {
     compactPending();
     if (finished_) {
-        co_return std::string_view(body.data(), body.size());
+        co_return std::string_view(body);
     }
     if (exceedsLimit(contentLength)) {
         throwRequestBodyTooLarge();
@@ -30,12 +30,14 @@ Task<std::string_view> StreamBodyReader<Stream>::readKnownLengthAll(
     std::size_t offset = initialBodyBytes;
     while (offset < contentLength) {
         scannerEntry_.setPhase(ConnectionScanner::Phase::kReadingPayload);
-        const auto [ec, bytesRead] = co_await asyncResult<std::size_t>(
+        auto readCompletion = co_await asyncAsio<std::size_t>(
             [this, &body, offset](auto handler) mutable {
                 stream_.async_read_some(
                     asio::buffer(body.data() + offset, body.size() - offset),
                     std::move(handler));
             });
+        const auto ec = readCompletion.errorCode();
+        const auto bytesRead = readCompletion.result();
         if (ec || bytesRead == 0) {
             throwIncompleteRequestBody();
         }
@@ -45,7 +47,7 @@ Task<std::string_view> StreamBodyReader<Stream>::readKnownLengthAll(
 
     deliveredBytes_ = contentLength;
     markFinished();
-    co_return std::string_view(body.data(), body.size());
+    co_return std::string_view(body);
 }
 
 template <typename Stream>

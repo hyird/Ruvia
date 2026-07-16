@@ -3,12 +3,15 @@
 #include <asio/ssl.hpp>
 #include <array>
 #include <cstring>
+#include <memory>
 #include <stdexcept>
 #include <type_traits>
 
 #include "ruvia/core/detail/ConnectionScanner.h"
 #include "ruvia/http/detail/HttpRequestInternal.h"
+#include "ruvia/web/detail/http/HttpProtocolErrorInfo.h"
 #include "ruvia/web/detail/server/Http1SessionRequestCompletion.h"
+#include "ruvia/web/detail/server/Http1ClosingRejection.h"
 #include "ruvia/web/detail/server/HttpBufferedResponse.h"
 #include "ruvia/web/detail/server/HttpConnectionState.h"
 #include "ruvia/web/detail/server/HttpResponseWriter.h"
@@ -40,16 +43,17 @@ using TcpSocket = asio::ip::tcp::socket;
 // mutual-TLS identity to handlers via getConnInfo(context).
 inline void extractTlsClientCertificate(SSL* ssl, std::pmr::string& out) {
     out.clear();
-    X509* certificate = SSL_get_peer_certificate(ssl);
+    const auto certificate = std::unique_ptr<X509, decltype(&X509_free)>(
+        SSL_get_peer_certificate(ssl),
+        &X509_free);
     if (certificate == nullptr) {
         return;
     }
     char buffer[256];
-    X509_NAME* subject = X509_get_subject_name(certificate);
+    X509_NAME* subject = X509_get_subject_name(certificate.get());
     if (subject != nullptr && X509_NAME_oneline(subject, buffer, sizeof(buffer)) != nullptr) {
         out.assign(buffer);
     }
-    X509_free(certificate);
 }
 
 struct TlsServerHandshakeInitiator final {
