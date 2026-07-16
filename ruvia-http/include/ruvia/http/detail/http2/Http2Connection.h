@@ -801,6 +801,11 @@ private:
     HpackDecoder decoder_;
     Http2HeaderContinuation headerContinuation_;
     Http2PeerSettings peerSettings_;
+    // The static-only encoder starts with HPACK's implicit 4096-byte maximum even
+    // though it never inserts entries. A peer reduction below this value must still
+    // be acknowledged on the wire at the beginning of the next field block.
+    std::uint32_t encoderDynamicTableSize_{Http2LocalSettings::kHeaderTableSize};
+    bool encoderTableSizeUpdatePending_{false};
     std::optional<Http2StreamState> discardedHeaderStream_;
     DiscardedHeaderAction discardedHeaderAction_{DiscardedHeaderAction::kIgnore};
 

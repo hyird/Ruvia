@@ -406,20 +406,34 @@ void Http2Connection::appendResponseHeaderFrames(
     // A HEADERS + CONTINUATION run must be an uninterrupted frame sequence for the same
     // stream (RFC 9113 §6.10). Appending them contiguously to the single outbound buffer
     // guarantees that ordering (replacing the coroutine writeHeaders' atomic write).
+    std::pmr::string tableSizeUpdate(resource_);
+    if (encoderTableSizeUpdatePending_) {
+        HpackEncoder::encodeDynamicTableSizeUpdate(
+            tableSizeUpdate, encoderDynamicTableSize_);
+    }
+
     const std::size_t maxFrame = peerSettings_.maxFrameSize();
     std::size_t offset = 0;
     bool first = true;
-    while (offset < headerBlock.size()) {
-        const auto chunk = std::min<std::size_t>(headerBlock.size() - offset, maxFrame);
+    while (offset < headerBlock.size() ||
+           (first && !tableSizeUpdate.empty())) {
+        const auto prefix = first
+            ? std::string_view(tableSizeUpdate.data(), tableSizeUpdate.size())
+            : std::string_view{};
+        const auto chunk = std::min<std::size_t>(
+            headerBlock.size() - offset, maxFrame - prefix.size());
         const bool last = offset + chunk == headerBlock.size();
         const auto flags = static_cast<std::uint8_t>(
             (last ? kHttp2FlagEndHeaders : 0) |
             (first && http2EndsStream(endStream) ? kHttp2FlagEndStream : 0));
         output_.appendFrame(
             first ? Http2FrameType::kHeaders : Http2FrameType::kContinuation,
-            flags, stream.id(), headerBlock.substr(offset, chunk));
+            flags, stream.id(), prefix, headerBlock.substr(offset, chunk));
         offset += chunk;
         first = false;
+    }
+    if (!tableSizeUpdate.empty()) {
+        encoderTableSizeUpdatePending_ = false;
     }
 }
 

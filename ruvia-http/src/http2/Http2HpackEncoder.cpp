@@ -35,6 +35,13 @@ void HpackEncoder::encodeIndexed(std::pmr::string& out, std::uint32_t index) {
     encodeInteger(out, 0x80, 7, index);
 }
 
+void HpackEncoder::encodeDynamicTableSizeUpdate(
+    std::pmr::string& out,
+    std::uint32_t maximum) {
+    // RFC 7541 §6.3: 001xxxxx followed by an HPACK integer with a 5-bit prefix.
+    encodeInteger(out, 0x20, 5, maximum);
+}
+
 void HpackEncoder::encodeHeader(std::pmr::string& out, std::string_view name, std::string_view value) {
     const auto match = hpackFindStaticHeaderMatch(name, value);
     if (match.exactIndex != 0) {

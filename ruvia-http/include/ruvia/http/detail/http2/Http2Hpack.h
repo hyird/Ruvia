@@ -191,6 +191,9 @@ private:
 class HpackEncoder final {
 public:
     static void encodeIndexed(std::pmr::string& out, std::uint32_t index);
+    static void encodeDynamicTableSizeUpdate(
+        std::pmr::string& out,
+        std::uint32_t maximum);
     static void encodeHeader(std::pmr::string& out, std::string_view name, std::string_view value);
     static void encodeHeaderWithNameIndex(
         std::pmr::string& out,

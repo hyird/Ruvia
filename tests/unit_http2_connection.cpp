@@ -833,6 +833,44 @@ RUVIA_TEST(http2_connection_feed_settings_emits_ack) {
     RUVIA_CHECK_EQ(ack.length, static_cast<std::uint32_t>(0));
 }
 
+RUVIA_TEST(http2_connection_header_table_reduction_prefixes_next_field_block) {
+    std::pmr::monotonic_buffer_resource resource;
+    Http2Connection client(&resource, ruvia::detail::Http2Role::kClient);
+    beginPeerInput(client);
+
+    // RFC 9113 §4.3.1: after acknowledging a reduction of the peer's HPACK
+    // dynamic-table maximum, the next field block must begin with a conformant
+    // Dynamic Table Size Update. The stateless Ruvia encoder uses no dynamic
+    // entries, so it can truthfully select zero (encoded as the single byte 0x20).
+    char settings[15];
+    auto* out = ruvia::detail::http2WriteFrameHeader(
+        settings, 6, Http2FrameType::kSettings, 0, 0);
+    out = ruvia::detail::http2WriteSettingsEntry(
+        out, ruvia::detail::Http2SettingId::kHeaderTableSize, 0);
+    RUVIA_CHECK_EQ(out, settings + sizeof(settings));
+    RUVIA_CHECK(client.feed(std::string_view(settings, sizeof(settings))) ==
+        Http2FeedResult::kAccepted);
+
+    const auto ack = client.pendingOutput();
+    RUVIA_CHECK_EQ(ack.size(), std::size_t{9});
+    RUVIA_CHECK(
+        (ruvia::detail::http2ParseFrameHeader(ack).flags &
+         ruvia::detail::kHttp2FlagAck) != 0);
+    client.consumeOutput(ack.size());
+
+    const auto submitted = client.submitRegularRequestHead(
+        "GET", "https", "example.test", "/", {},
+        Http2RequestContent::none());
+    RUVIA_CHECK(submitted.submitted() != nullptr);
+    const auto bytes = client.pendingOutput();
+    const auto headers = ruvia::detail::http2ParseFrameHeader(bytes.substr(0, 9));
+    RUVIA_CHECK_EQ(headers.type, static_cast<std::uint8_t>(Http2FrameType::kHeaders));
+    RUVIA_CHECK(headers.length > 0);
+    RUVIA_CHECK_EQ(
+        static_cast<unsigned char>(bytes[9]),
+        static_cast<unsigned char>(0x20));
+}
+
 RUVIA_TEST(http2_connection_enable_push_validation_uses_peer_direction) {
     char frame[15];
     auto* out = ruvia::detail::http2WriteFrameHeader(

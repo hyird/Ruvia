@@ -145,6 +145,15 @@ bool Http2Connection::applySettingsPayload(std::string_view payload) {
                 http2PeerSettingErrorMessage(failure->error()));
             return false;
         }
+        if (entry.id == Http2SettingId::kHeaderTableSize &&
+            entry.value < encoderDynamicTableSize_) {
+            // RFC 9113 §4.3.1 requires the next field block after our SETTINGS ACK
+            // to begin with a conformant table-size update. This encoder never uses
+            // dynamic entries, so permanently selecting zero is both exact and avoids
+            // carrying a fictitious compression capacity through later SETTINGS.
+            encoderDynamicTableSize_ = 0;
+            encoderTableSizeUpdatePending_ = true;
+        }
         const auto* initialWindowChange = result.initialWindowChange();
         if (initialWindowChange &&
             !http2ApplyStreamSendWindowDelta(streams_, initialWindowChange->delta())) {

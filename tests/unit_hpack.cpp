@@ -286,6 +286,18 @@ RUVIA_TEST(hpack_size_update_after_header_is_rejected) {
     RUVIA_CHECK_EQ(out2.headers.size(), std::size_t{1});
 }
 
+RUVIA_TEST(hpack_encoder_dynamic_table_size_update_uses_five_bit_integer) {
+    std::pmr::string encoded(std::pmr::get_default_resource());
+    HpackEncoder::encodeDynamicTableSizeUpdate(encoded, 0);
+    RUVIA_CHECK_EQ(std::string_view(encoded), std::string_view(bytes({0x20})));
+
+    encoded.clear();
+    HpackEncoder::encodeDynamicTableSizeUpdate(encoded, 4096);
+    RUVIA_CHECK_EQ(
+        std::string_view(encoded),
+        std::string_view(bytes({0x3f, 0xe1, 0x1f})));
+}
+
 RUVIA_TEST(hpack_size_update_exceeding_settings_max_is_rejected) {
     // RFC 7541 §6.3: a dynamic-table size update must not exceed the maximum the
     // decoder advertised via SETTINGS_HEADER_TABLE_SIZE (default 4096). Accepting a
