@@ -44,6 +44,18 @@ concept ExposesAnyRvalueJwtOwnedView =
 static_assert(!ExposesAnyRvalueJwtOwnedView<ruvia::JwtClaim>);
 static_assert(!ExposesAnyRvalueJwtOwnedView<ruvia::JwtPayload>);
 
+template <typename Token>
+concept AcceptsJwtTokenSplit = requires(Token&& token) {
+    ruvia::detail::jwtSplitToken(std::forward<Token>(token));
+};
+
+static_assert(!AcceptsJwtTokenSplit<std::string>);
+static_assert(!AcceptsJwtTokenSplit<const std::string>);
+static_assert(!AcceptsJwtTokenSplit<std::pmr::string>);
+static_assert(AcceptsJwtTokenSplit<std::string&>);
+static_assert(AcceptsJwtTokenSplit<std::pmr::string&>);
+static_assert(AcceptsJwtTokenSplit<std::string_view>);
+
 JwtSignOptions signOptions(std::string_view secret) {
     JwtSignOptions options;
     options.secret.assign(secret.data(), secret.size());

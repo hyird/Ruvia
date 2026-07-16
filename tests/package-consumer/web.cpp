@@ -71,6 +71,7 @@
 
 #ifdef RUVIA_ENABLE_JWT
 #include <ruvia/web/auth/Jwt.h>
+#include <ruvia/web/detail/auth/JwtInternal.h>
 #endif
 #ifdef RUVIA_ENABLE_DATABASE
 #include <ruvia/web/db/Db.h>
@@ -370,6 +371,11 @@ concept ExposesAnyRvalueJwtOwnedView =
     requires(T&& value) { std::move(value).claims(); } ||
     requires(T&& value) { std::move(value).claim(std::string_view{}); };
 
+template <typename Token>
+concept AcceptsJwtTokenSplit = requires(Token&& token) {
+    ruvia::detail::jwtSplitToken(std::forward<Token>(token));
+};
+
 static_assert(std::same_as<
     decltype(ruvia::JwtSignOptions{}.expiresIn),
     std::optional<std::chrono::seconds>>);
@@ -378,6 +384,12 @@ static_assert(std::same_as<
     std::optional<std::chrono::seconds>>);
 static_assert(!ExposesAnyRvalueJwtOwnedView<ruvia::JwtClaim>);
 static_assert(!ExposesAnyRvalueJwtOwnedView<ruvia::JwtPayload>);
+static_assert(AcceptsJwtTokenSplit<std::string&>);
+static_assert(AcceptsJwtTokenSplit<std::pmr::string&>);
+static_assert(AcceptsJwtTokenSplit<std::string_view>);
+static_assert(!AcceptsJwtTokenSplit<std::string>);
+static_assert(!AcceptsJwtTokenSplit<const std::string>);
+static_assert(!AcceptsJwtTokenSplit<std::pmr::string>);
 #endif
 
 #ifdef RUVIA_ENABLE_DATABASE
