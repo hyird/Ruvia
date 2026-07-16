@@ -871,6 +871,53 @@ RUVIA_TEST(http2_connection_header_table_reduction_prefixes_next_field_block) {
         static_cast<unsigned char>(0x20));
 }
 
+RUVIA_TEST(http2_connection_rejects_invalid_hpack_size_update_sequences) {
+    // RFC 7541 section 4.2 permits at most two table-size updates at the start
+    // of a field block and requires the smallest value before the final value.
+    // Either violation makes the field block undecodable, which RFC 9113
+    // section 4.3 maps to a connection-level COMPRESSION_ERROR.
+    constexpr std::string_view invalidPrefixes[] = {
+        std::string_view("\x20\x21\x22", 3),  // three updates
+        std::string_view("\x2a\x25", 2),      // 10 then 5: smallest is last
+    };
+
+    for (const auto prefix : invalidPrefixes) {
+        std::pmr::monotonic_buffer_resource resource;
+        Http2Connection conn(&resource);
+        handshake(conn);
+
+        std::pmr::string block(prefix, &resource);
+        encodeGetRequest(block);
+        const auto request = headersFrame(
+            &resource,
+            1,
+            ruvia::detail::kHttp2FlagEndHeaders |
+                ruvia::detail::kHttp2FlagEndStream,
+            std::string_view(block.data(), block.size()));
+        RUVIA_CHECK(conn.feed(
+            std::string_view(request.data(), request.size())) ==
+            Http2FeedResult::kProtocolFailure);
+        RUVIA_CHECK(
+            conn.connectionError() == Http2ErrorCode::kCompressionError);
+
+        const auto output = conn.pendingOutput();
+        RUVIA_CHECK(output.size() >= 17);
+        if (output.size() >= 17) {
+            const auto goaway =
+                ruvia::detail::http2ParseFrameHeader(output.substr(0, 9));
+            RUVIA_CHECK_EQ(
+                goaway.type,
+                static_cast<std::uint8_t>(Http2FrameType::kGoaway));
+            RUVIA_CHECK_EQ(
+                ruvia::detail::http2Read32(
+                    reinterpret_cast<const unsigned char*>(
+                        output.data() + 13)),
+                static_cast<std::uint32_t>(
+                    Http2ErrorCode::kCompressionError));
+        }
+    }
+}
+
 RUVIA_TEST(http2_connection_enable_push_validation_uses_peer_direction) {
     char frame[15];
     auto* out = ruvia::detail::http2WriteFrameHeader(

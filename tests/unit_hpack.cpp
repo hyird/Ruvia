@@ -286,6 +286,47 @@ RUVIA_TEST(hpack_size_update_after_header_is_rejected) {
     RUVIA_CHECK_EQ(out2.headers.size(), std::size_t{1});
 }
 
+RUVIA_TEST(hpack_rejects_more_than_two_size_updates_at_block_start) {
+    // RFC 7541 section 4.2 permits at most two dynamic-table size updates at
+    // the beginning of one field block: the smallest intervening maximum and
+    // the final maximum. Accepting a third update admits an HPACK representation
+    // that the peer is forbidden to generate.
+    HpackDecoder decoder(std::pmr::get_default_resource());
+    Collector out;
+    const auto result = decoder.decode(
+        bytes({0x20, 0x21, 0x22, 0x82}), &out, &collect);
+    const auto* failure = result.failure();
+    RUVIA_CHECK(failure != nullptr);
+    if (failure != nullptr) {
+        RUVIA_CHECK(failure->error() == HpackDecodeError::kDynamicTableSize);
+    }
+}
+
+RUVIA_TEST(hpack_rejects_decreasing_second_size_update) {
+    // With two updates, RFC 7541 section 4.2 requires the smallest value first
+    // and the final value second. A 10 -> 5 sequence reverses that order.
+    HpackDecoder decoder(std::pmr::get_default_resource());
+    Collector out;
+    const auto result = decoder.decode(bytes({0x2a, 0x25, 0x82}), &out, &collect);
+    const auto* failure = result.failure();
+    RUVIA_CHECK(failure != nullptr);
+    if (failure != nullptr) {
+        RUVIA_CHECK(failure->error() == HpackDecodeError::kDynamicTableSize);
+    }
+}
+
+RUVIA_TEST(hpack_accepts_smallest_then_final_size_updates) {
+    // The valid two-update form carries the smallest intervening maximum first
+    // and the final maximum second, followed by the first header representation.
+    Collector out;
+    RUVIA_CHECK(decodeBlock(bytes({0x20, 0x3f, 0x01, 0x82}), out));
+    RUVIA_CHECK_EQ(out.headers.size(), std::size_t{1});
+    if (!out.headers.empty()) {
+        RUVIA_CHECK_EQ(out.headers[0].first, std::string(":method"));
+        RUVIA_CHECK_EQ(out.headers[0].second, std::string("GET"));
+    }
+}
+
 RUVIA_TEST(hpack_encoder_dynamic_table_size_update_uses_five_bit_integer) {
     std::pmr::string encoded(std::pmr::get_default_resource());
     HpackEncoder::encodeDynamicTableSizeUpdate(encoded, 0);

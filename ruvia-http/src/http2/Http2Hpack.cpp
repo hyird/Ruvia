@@ -148,6 +148,8 @@ HpackDecodeResult HpackDecoder::decode(std::string_view block, void* target, Hea
     const auto* cursor = reinterpret_cast<const unsigned char*>(block.data());
     const auto* const end = cursor + block.size();
     bool sawHeader = false;
+    std::uint8_t sizeUpdateCount = 0;
+    std::uint32_t firstSizeUpdate = 0;
     // Callback rejection does NOT abort the block: the whole field block must be
     // decoded so the connection-global dynamic table stays consistent (RFC 7541 §4.1 /
     // RFC 9113 §4.3). We keep going with the callback suppressed and report the
@@ -183,16 +185,25 @@ HpackDecodeResult HpackDecoder::decode(std::string_view block, void* target, Hea
         }
 
         if ((first & 0xe0U) == 0x20U) {
-            if (sawHeader) {
+            if (sawHeader || sizeUpdateCount == 2) {
                 return HpackDecodeResult(HpackDecodeError::kDynamicTableSize);
             }
             std::uint32_t size = 0;
             if (const auto error = decodeInteger(cursor, end, 5, size); error.has_value()) {
                 return HpackDecodeResult(*error);
             }
-            if (size > allowedDynamicSize_) {
+            // RFC 7541 section 4.2 permits at most two updates at the start
+            // of a field block. When two are present, the first is the
+            // smallest intervening maximum and the second is the final
+            // maximum, so the second value cannot be lower than the first.
+            if (size > allowedDynamicSize_ ||
+                (sizeUpdateCount == 1 && size < firstSizeUpdate)) {
                 return HpackDecodeResult(HpackDecodeError::kDynamicTableSize);
             }
+            if (sizeUpdateCount == 0) {
+                firstSizeUpdate = size;
+            }
+            ++sizeUpdateCount;
             maxDynamicSize_ = size;
             evictDynamic();
             continue;
