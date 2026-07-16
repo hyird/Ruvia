@@ -569,11 +569,12 @@ HttpContentDecodeResult decodeHttpContent(
                 resource);
             break;
         case HttpContentCoding::kIdentity: {
-            std::pmr::string decoded(input, resource);
-            if (decoded.size() > maxDecodedBytes) {
+            if (input.size() > maxDecodedBytes) {
                 attempt = HttpContentDecodeError::kDecodedSizeExceeded;
             } else {
-                attempt = std::move(decoded);
+                attempt = std::pmr::string(
+                    input,
+                    httpPmrResourceOrDefault(resource));
             }
             break;
         }
@@ -611,11 +612,12 @@ HttpContentEncodeResult encodeHttpContent(
                 resource);
             break;
         case HttpContentCoding::kIdentity: {
-            std::pmr::string encoded(input, resource);
-            if (encoded.size() > maxEncodedBytes) {
+            if (input.size() > maxEncodedBytes) {
                 attempt = HttpContentEncodeError::kEncodedSizeExceeded;
             } else {
-                attempt = std::move(encoded);
+                attempt = std::pmr::string(
+                    input,
+                    httpPmrResourceOrDefault(resource));
             }
             break;
         }

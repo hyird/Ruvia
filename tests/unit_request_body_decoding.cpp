@@ -799,6 +799,68 @@ RUVIA_TEST(http_content_encode_enforces_exact_cap_without_partial_output) {
     }
 }
 
+RUVIA_TEST(http_identity_content_uses_the_default_resource_when_none_is_supplied) {
+    const std::string input(1024, 'i');
+
+    auto decoded = decodeHttpContent(
+        HttpContentCoding::kIdentity,
+        input,
+        input.size(),
+        nullptr);
+    RUVIA_CHECK(decoded.decoded() != nullptr);
+    if (decoded.decoded() != nullptr) {
+        auto bytes = std::move(*decoded.decoded()).takeBytes();
+        RUVIA_CHECK_EQ(std::string_view(bytes), std::string_view(input));
+        RUVIA_CHECK(
+            bytes.get_allocator().resource() ==
+            std::pmr::get_default_resource());
+    }
+
+    auto encoded = encodeHttpContent(
+        HttpContentCoding::kIdentity,
+        input,
+        input.size(),
+        nullptr);
+    RUVIA_CHECK(encoded.encoded() != nullptr);
+    if (encoded.encoded() != nullptr) {
+        auto bytes = std::move(*encoded.encoded()).takeBytes();
+        RUVIA_CHECK_EQ(std::string_view(bytes), std::string_view(input));
+        RUVIA_CHECK(
+            bytes.get_allocator().resource() ==
+            std::pmr::get_default_resource());
+    }
+}
+
+RUVIA_TEST(http_identity_content_rejects_oversize_before_allocating) {
+    const std::string input(1024, 'i');
+
+    const auto decoded = decodeHttpContent(
+        HttpContentCoding::kIdentity,
+        input,
+        input.size() - 1,
+        std::pmr::null_memory_resource());
+    RUVIA_CHECK(decoded.decoded() == nullptr);
+    RUVIA_CHECK(decoded.failure() != nullptr);
+    if (decoded.failure() != nullptr) {
+        RUVIA_CHECK(
+            decoded.failure()->error() ==
+            HttpContentDecodeError::kDecodedSizeExceeded);
+    }
+
+    const auto encoded = encodeHttpContent(
+        HttpContentCoding::kIdentity,
+        input,
+        input.size() - 1,
+        std::pmr::null_memory_resource());
+    RUVIA_CHECK(encoded.encoded() == nullptr);
+    RUVIA_CHECK(encoded.failure() != nullptr);
+    if (encoded.failure() != nullptr) {
+        RUVIA_CHECK(
+            encoded.failure()->error() ==
+            HttpContentEncodeError::kEncodedSizeExceeded);
+    }
+}
+
 RUVIA_TEST(http_content_decode_rejects_empty_encoded_input) {
     RUVIA_CHECK(
         decodeError(HttpContentCoding::kGzip, {}) ==

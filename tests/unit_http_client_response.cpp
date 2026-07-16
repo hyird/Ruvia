@@ -1365,6 +1365,27 @@ RUVIA_TEST(http_client_content_decode_reports_unsupported_wire_coding) {
     }
 }
 
+RUVIA_TEST(http_client_identity_content_decode_accepts_a_null_resource) {
+    auto parsed = parseResponse(
+        "GET",
+        "HTTP/1.1 200 OK\r\nContent-Length: 1024");
+    const std::string content(1024, 'i');
+
+    auto decoded = ruvia::detail::decodeHttpClientResponseContentEncoding(
+        parsed.head,
+        content,
+        content.size(),
+        nullptr);
+    RUVIA_CHECK(decoded.decoded() != nullptr);
+    if (decoded.decoded() != nullptr) {
+        auto bytes = std::move(*decoded.decoded()).takeBytes();
+        RUVIA_CHECK_EQ(std::string_view(bytes), std::string_view(content));
+        RUVIA_CHECK(
+            bytes.get_allocator().resource() ==
+            std::pmr::get_default_resource());
+    }
+}
+
 RUVIA_TEST(http_client_content_decode_consumes_concatenated_gzip_members) {
     auto firstEncoding = ruvia::detail::encodeHttpContent(
         ruvia::detail::HttpContentCoding::kGzip,
