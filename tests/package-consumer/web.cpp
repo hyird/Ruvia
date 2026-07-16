@@ -50,6 +50,7 @@
 #include <ruvia/web/detail/http2/Http2SansIoStreamRuntime.h>
 #include <ruvia/web/detail/http2/Http2SansIoSendWindow.h>
 #include <ruvia/web/detail/websocket/WsTransportReadResult.h>
+#include <ruvia/web/detail/json/JsonSkip.h>
 #include <ruvia/web/detail/json/JsonString.h>
 #include <ruvia/web/detail/model/Parser.h>
 #include <ruvia/web/detail/router/RouteTable.h>
@@ -92,6 +93,32 @@ template <typename Result>
 concept ExposesRvalueSecureTokenAlternative =
     requires(Result&& result) { std::move(result).ready(); } ||
     requires(Result&& result) { std::move(result).failure(); };
+
+template <typename Value>
+concept CanForgeSecureTokenResult = requires(Value&& value) {
+    ruvia::detail::SecureTokenResult::makeReady(
+        std::forward<Value>(value));
+};
+
+template <typename Input>
+concept ConstructsJsonScanner = requires(Input&& input) {
+    ruvia::detail::JsonScanner(std::forward<Input>(input));
+};
+
+template <typename Pipeline>
+concept AcceptsTemporaryPipelineRestore = requires(
+    ruvia::detail::Http1ServerConnectionPlan connectionPlan,
+    Pipeline&& pipeline) {
+    ruvia::detail::Http1SessionRequestCompletion::
+        makeBufferedPipelineRestore(
+            connectionPlan,
+            std::forward<Pipeline>(pipeline));
+};
+
+template <typename T>
+concept ExposesRvalueHttp2BodyQueuePop = requires(T&& queue) {
+    std::move(queue).pop();
+};
 
 template <typename State>
 concept ExposesRvalueSessionState =
@@ -139,6 +166,28 @@ concept AcceptsTemporaryRoutePath = requires(String&& path) {
 
 static_assert(!ExposesRvalueSecureTokenAlternative<
     ruvia::detail::SecureTokenResult>);
+static_assert(!std::constructible_from<
+    ruvia::detail::SecureTokenReady,
+    std::string_view>);
+static_assert(!CanForgeSecureTokenResult<std::string_view>);
+static_assert(!ConstructsJsonScanner<std::string>);
+static_assert(!ConstructsJsonScanner<const std::string>);
+static_assert(!ConstructsJsonScanner<std::pmr::string>);
+static_assert(ConstructsJsonScanner<std::string&>);
+static_assert(ConstructsJsonScanner<std::pmr::string&>);
+static_assert(ConstructsJsonScanner<std::string_view>);
+static_assert(!std::constructible_from<
+    ruvia::detail::JsonStringToken,
+    std::string_view,
+    ruvia::detail::JsonStringEncoding>);
+static_assert(!AcceptsTemporaryPipelineRestore<std::string>);
+static_assert(!AcceptsTemporaryPipelineRestore<const std::string>);
+static_assert(!AcceptsTemporaryPipelineRestore<std::pmr::string>);
+static_assert(AcceptsTemporaryPipelineRestore<std::string&>);
+static_assert(AcceptsTemporaryPipelineRestore<std::pmr::string&>);
+static_assert(AcceptsTemporaryPipelineRestore<std::string_view>);
+static_assert(!ExposesRvalueHttp2BodyQueuePop<
+    ruvia::detail::Http2SansIoBodyQueue>);
 static_assert(!ExposesRvalueSessionState<
     ruvia::detail::ContextSessionState>);
 static_assert(!ExposesRvalueRouteEndpoint<

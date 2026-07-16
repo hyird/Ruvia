@@ -58,12 +58,27 @@ concept HasAnyRvalueRequestCompletionBorrow =
     requires(Result&& value) { std::move(value).committedStream(); } ||
     requires(Result&& value) { std::move(value).bufferCompletion(); };
 
+template <typename Pipeline>
+concept AcceptsTemporaryPipelineRestore = requires(
+    ruvia::detail::Http1ServerConnectionPlan connectionPlan,
+    Pipeline&& pipeline) {
+    Http1SessionRequestCompletion::makeBufferedPipelineRestore(
+        connectionPlan,
+        std::forward<Pipeline>(pipeline));
+};
+
 static_assert(!std::default_initializable<Http1RequestBufferCompletion>);
 static_assert(!std::default_initializable<Http1SessionRequestCompletion>);
 static_assert(!HasAnyRvalueRequestCompletionBorrow<
     Http1RequestBufferCompletion>);
 static_assert(!HasAnyRvalueRequestCompletionBorrow<
     Http1SessionRequestCompletion>);
+static_assert(!AcceptsTemporaryPipelineRestore<std::string>);
+static_assert(!AcceptsTemporaryPipelineRestore<const std::string>);
+static_assert(!AcceptsTemporaryPipelineRestore<std::pmr::string>);
+static_assert(AcceptsTemporaryPipelineRestore<std::string&>);
+static_assert(AcceptsTemporaryPipelineRestore<std::pmr::string&>);
+static_assert(AcceptsTemporaryPipelineRestore<std::string_view>);
 static_assert(!std::default_initializable<Http1RequestBufferDiscarded>);
 static_assert(!std::constructible_from<
     Http1RequestBufferCompaction,

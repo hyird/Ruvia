@@ -39,6 +39,12 @@ using ruvia::detail::HttpRequestAccess;
 using ruvia::detail::NextAccess;
 using ruvia::detail::RequestKnownHeader;
 
+template <typename Value>
+concept CanForgeSecureTokenResult = requires(Value&& value) {
+    ruvia::detail::SecureTokenResult::makeReady(
+        std::forward<Value>(value));
+};
+
 template <typename Result>
 concept ExposesRvalueSecureTokenAlternative =
     requires(Result&& result) { std::move(result).ready(); } ||
@@ -46,6 +52,10 @@ concept ExposesRvalueSecureTokenAlternative =
 
 static_assert(!ExposesRvalueSecureTokenAlternative<
     ruvia::detail::SecureTokenResult>);
+static_assert(!std::constructible_from<
+    ruvia::detail::SecureTokenReady,
+    std::string_view>);
+static_assert(!CanForgeSecureTokenResult<std::string_view>);
 
 bool isLowerHex(char c) noexcept {
     return (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f');

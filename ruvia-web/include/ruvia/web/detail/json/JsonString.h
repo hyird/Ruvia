@@ -84,11 +84,6 @@ enum class JsonStringEncoding : std::uint8_t {
 
 class JsonStringToken final {
 public:
-    JsonStringToken(
-        std::string_view raw,
-        JsonStringEncoding encoding) noexcept
-        : raw_(raw), encoding_(encoding) {}
-
     [[nodiscard]] std::string_view raw() const noexcept {
         return raw_;
     }
@@ -98,6 +93,14 @@ public:
     }
 
 private:
+    friend std::optional<JsonStringToken> parseJsonString(
+        std::string_view& input) noexcept;
+
+    JsonStringToken(
+        std::string_view raw,
+        JsonStringEncoding encoding) noexcept
+        : raw_(raw), encoding_(encoding) {}
+
     std::string_view raw_;
     JsonStringEncoding encoding_;
 };

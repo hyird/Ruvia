@@ -79,12 +79,18 @@ concept HasRawStreamIdAdmission = requires(T& table) {
     table.ensure(std::uint32_t{1});
 };
 
+template <typename T>
+concept ExposesRvalueHttp2BodyQueuePop = requires(T&& queue) {
+    std::move(queue).pop();
+};
+
 static_assert(!HasDirectBodyModeSelection<Http2RequestBodyRuntime>);
 static_assert(!std::default_initializable<Http2RequestBodyRuntime>);
 static_assert(
     sizeof(Http2RequestBodyRuntime) <
     sizeof(Http2BufferedRequestBody) + sizeof(Http2StreamingRequestBody));
 static_assert(!HasRawStreamIdAdmission<Http2SansIoStreamRuntimeTable>);
+static_assert(!ExposesRvalueHttp2BodyQueuePop<Http2SansIoBodyQueue>);
 static_assert(std::same_as<
     decltype(std::declval<Http2SansIoStreamRuntimeTable&>().ensureAccepted(
         std::declval<const Http2StreamState&>())),

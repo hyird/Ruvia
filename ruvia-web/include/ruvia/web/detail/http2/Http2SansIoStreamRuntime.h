@@ -104,7 +104,7 @@ public:
     }
 
     // The returned view remains valid until the next pop().
-    [[nodiscard]] std::string_view pop() {
+    [[nodiscard]] std::string_view pop() & {
         clearPmrStringRetainingSmall(activeChunk_);
         if (!queuedChunk_.empty()) {
             activeChunk_.swap(queuedChunk_);
@@ -120,6 +120,7 @@ public:
         compactOverflow();
         return std::string_view(activeChunk_);
     }
+    std::string_view pop() && = delete;
 
 private:
     [[nodiscard]] bool hasOverflowChunk() const noexcept {
