@@ -75,7 +75,9 @@ namespace {
         (authority.has_value() && !isValidHostHeader(*authority)) ||
         !isValidOriginOrAsteriskFormTarget(
             classifyHttpMethod(method), path) ||
-        (path == "*" && authority.has_value())) {
+        (path == "*" && authority.has_value()) ||
+        (!authority.has_value() &&
+         http2RegularRequestRequiresAuthority(scheme, path))) {
         return false;
     }
     const auto defaultPort = httpUriSchemeDefaultPort(scheme);

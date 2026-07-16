@@ -599,8 +599,8 @@ public:
     // rejected here; it uses the dedicated CONNECT submission path. `scheme`
     // accepts the complete RFC 3986 grammar, including non-HTTP schemes. `path`
     // is origin-form, except that only OPTIONS can use asterisk-form. `authority`
-    // is absent exactly when the target URI has no authority information; in
-    // particular, asterisk-form OPTIONS requires std::nullopt.
+    // is absent exactly when the target URI has no authority information. HTTP(S)
+    // origin-form requires it; asterisk-form OPTIONS requires std::nullopt.
     [[nodiscard]] Http2RequestHeadSubmitResult submitRegularRequestHead(
         std::string_view method,
         std::string_view scheme,

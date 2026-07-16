@@ -1150,7 +1150,7 @@ RUVIA_TEST(http2_connection_feed_accepts_non_http_request_scheme) {
     handshake(conn);
 
     std::pmr::string block(&resource);
-    encodeRequest(block, "GET", "gemini");
+    encodeRequest(block, "GET", "gemini", "/", std::nullopt);
     const auto frame = headersFrame(
         &resource, 1,
         ruvia::detail::kHttp2FlagEndHeaders | ruvia::detail::kHttp2FlagEndStream,
@@ -1166,6 +1166,42 @@ RUVIA_TEST(http2_connection_feed_accepts_non_http_request_scheme) {
     if (stream != nullptr) {
         RUVIA_CHECK_EQ(stream->requestScheme(), std::string_view("gemini"));
         RUVIA_CHECK_EQ(stream->schemeDefaultPort(), std::uint16_t{0});
+        RUVIA_CHECK(!stream->hasAuthority());
+    }
+}
+
+RUVIA_TEST(http2_connection_rejects_http_request_without_authority) {
+    std::pmr::monotonic_buffer_resource resource;
+    constexpr std::string_view schemes[] = {"http", "HTTPS"};
+    for (const auto scheme : schemes) {
+        Http2Connection server(&resource);
+        handshake(server);
+        std::pmr::string block(&resource);
+        encodeRequest(block, "GET", scheme, "/resource", std::nullopt);
+        // A retained Host field is not a substitute for mandatory HTTP/2
+        // control data when the target URI itself has an authority.
+        HpackEncoder::encodeHeader(block, "host", "example.com");
+        const auto request = headersFrame(
+            &resource, 1,
+            ruvia::detail::kHttp2FlagEndHeaders |
+                ruvia::detail::kHttp2FlagEndStream,
+            std::string_view(block.data(), block.size()));
+
+        RUVIA_CHECK(server.feed(
+            std::string_view(request.data(), request.size())) ==
+            Http2FeedResult::kAccepted);
+        RUVIA_CHECK(!server.connectionError().has_value());
+        RUVIA_CHECK(server.nextEvent().value().kind() ==
+            Http2EventKind::kStreamClosed);
+        RUVIA_CHECK(!server.nextEvent().has_value());
+        const auto out = server.pendingOutput();
+        const auto reset = ruvia::detail::http2ParseFrameHeader(out.substr(0, 9));
+        RUVIA_CHECK_EQ(
+            reset.type, static_cast<std::uint8_t>(Http2FrameType::kRstStream));
+        RUVIA_CHECK_EQ(
+            ruvia::detail::http2Read32(
+                reinterpret_cast<const unsigned char*>(out.data() + 9)),
+            static_cast<std::uint32_t>(Http2ErrorCode::kProtocolError));
     }
 }
 
@@ -2174,12 +2210,15 @@ RUVIA_TEST(http2_connection_rejects_invalid_request_head_before_hpack) {
 
     const ruvia::HttpHeaderView uppercase[] = {{"X-Test", "value"}};
     const ruvia::HttpHeaderView connection[] = {{"connection", "keep-alive"}};
+    const ruvia::HttpHeaderView matchingHost[] = {{"host", "example.test"}};
     const ruvia::HttpHeaderView mismatchedHost[] = {{"host", "other.test"}};
     reject("CONNECT", "https", "example.test:443", "/", {});
     reject("GET bad", "https", "example.test", "/", {});
     reject("GET", "1ftp", "example.test", "/", {});
     reject("GET", "https", "example.test", "*", {});
     reject("OPTIONS", "https", "example.test", "*", {});
+    reject("GET", "https", std::nullopt, "/", {});
+    reject("GET", "HTTP", std::nullopt, "/", matchingHost);
     reject("GET", "https", "example.test", "relative", {});
     reject("GET", "https", "example.test", "/", uppercase);
     reject("GET", "https", "example.test", "/", connection);

@@ -19,6 +19,17 @@ struct Http2HeaderDecodeContext final {
     std::size_t decodedHeaderListBytes{0};
 };
 
+// RFC 9110 defines both http-URI and https-URI with a mandatory authority.
+// Asterisk-form OPTIONS is server-wide and is the deliberate exception: its
+// target contains no authority information (RFC 9113 section 8.3.1).
+[[nodiscard]] inline bool http2RegularRequestRequiresAuthority(
+    std::string_view scheme,
+    std::string_view path) noexcept {
+    return path != "*" &&
+        (httpAsciiEqualsIgnoreCase(scheme, "http") ||
+         httpAsciiEqualsIgnoreCase(scheme, "https"));
+}
+
 [[nodiscard]] inline bool http2AccumulateHeaderListBytes(
     Http2HeaderDecodeContext& context,
     std::string_view name,

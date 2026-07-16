@@ -3946,10 +3946,23 @@ int main() {
             ruvia::HttpKnownMethod::kGet, "*")) {
         return 36;
     }
+    const auto missingHttpAuthority = h2.submitRegularRequestHead(
+        "GET",
+        "https",
+        std::nullopt,
+        "/",
+        {},
+        h2WithoutContent);
+    if (missingHttpAuthority.submitted() != nullptr ||
+        missingHttpAuthority.failure() == nullptr ||
+        missingHttpAuthority.failure()->error() !=
+            ruvia::detail::Http2RequestHeadSubmitError::kInvalidMessage) {
+        return 51;
+    }
     const auto request = h2.submitRegularRequestHead(
         "PROPFIND",
         "git+ssh",
-        "example.test",
+        std::nullopt,
         "/",
         {},
         h2WithoutContent);
