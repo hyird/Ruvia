@@ -203,8 +203,13 @@ private:
     };
 
     struct Active final {};
+    struct GzipMemberBoundary final {};
     struct Complete final {};
-    using State = std::variant<Active, Complete, TransferCodingDecodeError>;
+    using State = std::variant<
+        Active,
+        GzipMemberBoundary,
+        Complete,
+        TransferCodingDecodeError>;
 
     [[nodiscard]] InflateStep inflateStep(
         std::string_view input,
@@ -233,6 +238,7 @@ private:
     std::pmr::memory_resource* resource_{nullptr};
     ProtocolByteLimit bodyLimit_;
     std::size_t decodedBytes_{0};
+    HttpTransferCoding coding_;
 };
 
 }  // namespace ruvia::detail

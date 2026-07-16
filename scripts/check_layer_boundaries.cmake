@@ -11098,8 +11098,12 @@ if(EXISTS "${HTTP_TRANSFER_DECODER}" AND
        NOT transfer_decoder MATCHES "std::span<char> output" OR
        NOT transfer_decoder MATCHES
            "TransferCodingDecodeResult finishInput" OR
+       NOT transfer_decoder MATCHES "struct Active final" OR
+       NOT transfer_decoder MATCHES "struct GzipMemberBoundary final" OR
+       NOT transfer_decoder MATCHES "struct Complete final" OR
+       NOT transfer_decoder MATCHES "using State = std::variant" OR
        NOT transfer_decoder MATCHES
-           "using State = std::variant<Active, Complete, TransferCodingDecodeError>" OR
+           "GzipMemberBoundary,[ \t\r\n]+Complete,[ \t\r\n]+TransferCodingDecodeError>" OR
        NOT transfer_decoder MATCHES
            "needInput[(][)] const &&[ \\t]*=[ \\t]*delete" OR
        NOT transfer_decoder MATCHES
@@ -11159,6 +11163,8 @@ if(EXISTS "${HTTP_TRANSFER_DECODER}" AND
     if(NOT transfer_decoder_test MATCHES
            "transfer_coding_decoder_reports_typed_wire_failures" OR
        NOT transfer_decoder_test MATCHES
+           "transfer_coding_decoder_gzip_decodes_every_rfc1952_member" OR
+       NOT transfer_decoder_test MATCHES
            "TransferCodingDecodeResult" OR
        NOT transfer_decoder_test MATCHES
            "repeatedFinish[.]protocolFailure[(]" OR
@@ -11172,6 +11178,8 @@ if(EXISTS "${HTTP_TRANSFER_DECODER}" AND
            "http1_transfer_coding_failure_maps_once_for_both_read_surfaces" OR
        NOT body_reader_test MATCHES
            "http1_transfer_coding_eof_commits_only_the_complete_decode_pipeline" OR
+       NOT body_reader_test MATCHES
+           "http1_transfer_coding_preserves_gzip_members_across_chunks" OR
        NOT transfer_package_consumer MATCHES
            "TransferCodingDecodeResult" OR
        NOT transfer_package_consumer MATCHES

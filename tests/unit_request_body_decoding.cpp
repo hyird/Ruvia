@@ -914,6 +914,42 @@ RUVIA_TEST(transfer_coding_decoder_gzip_round_trip) {
     RUVIA_CHECK_EQ(std::string_view(output.data(), output.size()), std::string_view(plain));
 }
 
+RUVIA_TEST(transfer_coding_decoder_gzip_decodes_every_rfc1952_member) {
+    auto* resource = std::pmr::get_default_resource();
+    const std::string first = gzipCompress("first-");
+    const std::string second = gzipCompress("second");
+    RUVIA_CHECK(!first.empty());
+    RUVIA_CHECK(!second.empty());
+
+    TransferCodingDecoder contiguous(
+        HttpTransferCoding::kGzip,
+        resource,
+        ProtocolByteLimit::limited(1024));
+    std::pmr::string contiguousOutput(resource);
+    RUVIA_CHECK(!appendTransferDecoded(
+        contiguous, first + second, contiguousOutput).failed);
+    const auto contiguousFinish = contiguous.finishInput();
+    RUVIA_CHECK(contiguousFinish.complete() != nullptr);
+    RUVIA_CHECK_EQ(
+        std::string_view(contiguousOutput.data(), contiguousOutput.size()),
+        std::string_view("first-second"));
+
+    TransferCodingDecoder fragmented(
+        HttpTransferCoding::kGzip,
+        resource,
+        ProtocolByteLimit::limited(1024));
+    std::pmr::string fragmentedOutput(resource);
+    RUVIA_CHECK(!appendTransferDecoded(
+        fragmented, first, fragmentedOutput).failed);
+    RUVIA_CHECK(!appendTransferDecoded(
+        fragmented, second, fragmentedOutput).failed);
+    const auto fragmentedFinish = fragmented.finishInput();
+    RUVIA_CHECK(fragmentedFinish.complete() != nullptr);
+    RUVIA_CHECK_EQ(
+        std::string_view(fragmentedOutput.data(), fragmentedOutput.size()),
+        std::string_view("first-second"));
+}
+
 RUVIA_TEST(transfer_coded_chunked_request_plan_drives_decode_order) {
     const std::string plain =
         "RFC 9112 transfer coding followed by final chunked framing";
@@ -1061,7 +1097,12 @@ RUVIA_TEST(transfer_coding_decoder_reports_typed_wire_failures) {
         ProtocolByteLimit::limited(1024));
     const auto trailingError = appendTransferDecoded(
         extra, trailing, ignored);
-    RUVIA_CHECK(trailingError.failed);
-    RUVIA_CHECK(trailingError.protocolError.has_value());
-    RUVIA_CHECK_EQ(trailingError.protocolError->status(), 400);
+    // A short prefix of another member can remain ambiguous until framing EOF.
+    // It must not make the first valid member terminal, but EOF must reject it.
+    RUVIA_CHECK(!trailingError.failed);
+    const auto trailingFinish = extra.finishInput();
+    RUVIA_CHECK(trailingFinish.protocolFailure() != nullptr);
+    if (const auto* failure = trailingFinish.protocolFailure()) {
+        RUVIA_CHECK_EQ(failure->protocolError().status(), 400);
+    }
 }
