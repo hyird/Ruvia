@@ -155,7 +155,7 @@ RUVIA_TEST(cors_max_age_distinguishes_absence_from_zero) {
         std::string_view("0"));
 }
 
-RUVIA_TEST(cors_runtime_sets_configured_origin_and_vary) {
+RUVIA_TEST(cors_runtime_sets_static_configured_origin) {
     Http1ServerRequestParser parser;
     const auto result = parser.parseMessage(
         "GET / HTTP/1.1\r\nHost: x\r\nOrigin: https://app.example\r\n\r\n");
@@ -165,8 +165,9 @@ RUVIA_TEST(cors_runtime_sets_configured_origin_and_vary) {
     // The configured origin is emitted verbatim -- the request Origin is never reflected.
     RUVIA_CHECK_EQ(response.header("Access-Control-Allow-Origin").value_or(""),
                    std::string_view("https://app.example"));
-    // A specific (non-wildcard) origin varies the response by Origin.
-    RUVIA_CHECK(response.header("Vary").value_or("").find("Origin") != std::string_view::npos);
+    // A configured origin is static across requests, so it does not vary by
+    // the presence or value of Origin.
+    RUVIA_CHECK(response.header("Vary").value_or("").find("Origin") == std::string_view::npos);
     RUVIA_CHECK(!response.header("Access-Control-Allow-Credentials").has_value());
 }
 
@@ -192,15 +193,57 @@ RUVIA_TEST(cors_runtime_credentials_belong_to_specific_origin) {
     }
 }
 
-RUVIA_TEST(cors_runtime_skips_non_cors_requests) {
-    // No Origin header -> not a CORS request -> no CORS headers emitted.
+RUVIA_TEST(cors_static_response_metadata_is_cache_stable_without_origin) {
+    // A shared cache can reuse this response for a later CORS request. Static
+    // CORS metadata therefore cannot depend on whether Origin was present.
     {
         Http1ServerRequestParser parser;
         const auto result = parser.parseMessage("GET / HTTP/1.1\r\nHost: x\r\n\r\n");
         HttpResponse response(std::pmr::new_delete_resource());
-        applyCorsHeaders(result.request, response, corsOptions("https://app.example", false));
-        RUVIA_CHECK(!response.header("Access-Control-Allow-Origin").has_value());
+        auto cors = corsOptions("*", false);
+        cors.exposeHeaders = ruvia::CorsHeaderNames::of({"X-Total-Count"});
+        applyCorsHeaders(result.request, response, cors);
+        RUVIA_CHECK_EQ(
+            response.header("Access-Control-Allow-Origin").value_or(""),
+            std::string_view("*"));
+        RUVIA_CHECK_EQ(
+            response.header("Access-Control-Expose-Headers").value_or(""),
+            std::string_view("X-Total-Count"));
+        RUVIA_CHECK(!response.header("Vary").has_value());
     }
+    {
+        Http1ServerRequestParser parser;
+        const auto result = parser.parseMessage("GET / HTTP/1.1\r\nHost: x\r\n\r\n");
+        HttpResponse response(std::pmr::new_delete_resource());
+        applyCorsHeaders(
+            result.request,
+            response,
+            corsOptions("https://app.example", true));
+        RUVIA_CHECK_EQ(
+            response.header("Access-Control-Allow-Origin").value_or(""),
+            std::string_view("https://app.example"));
+        RUVIA_CHECK_EQ(
+            response.header("Access-Control-Allow-Credentials").value_or(""),
+            std::string_view("true"));
+        RUVIA_CHECK(!response.header("Vary").has_value());
+    }
+}
+
+RUVIA_TEST(cors_options_variants_declare_every_request_dependency) {
+    Http1ServerRequestParser parser;
+    const auto result = parser.parseMessage(
+        "OPTIONS / HTTP/1.1\r\nHost: x\r\n"
+        "Access-Control-Request-Method: POST\r\n\r\n");
+    HttpResponse response(std::pmr::new_delete_resource());
+    applyCorsHeaders(result.request, response, corsOptions("*", false));
+
+    const auto vary = response.header("Vary").value_or("");
+    RUVIA_CHECK(vary.find("Origin") != std::string_view::npos);
+    RUVIA_CHECK(
+        vary.find("Access-Control-Request-Method") != std::string_view::npos);
+    RUVIA_CHECK(
+        vary.find("Access-Control-Request-Headers") != std::string_view::npos);
+    RUVIA_CHECK(!response.header("Access-Control-Allow-Methods").has_value());
 }
 
 RUVIA_TEST(cors_preflight_reflects_methods_and_requested_headers) {

@@ -33,10 +33,6 @@ void setCorsMaxAge(
 
 void applyCorsHeaders(const HttpRequest& request, HttpResponse& response, const CorsConfig& cors) {
     const auto origin = requestKnownHeader(request, RequestKnownHeader::kOrigin);
-    if (origin.empty()) {
-        return;
-    }
-
     const bool wildcardOrigin =
         cors.origin.kind() == CorsOriginPolicy::Kind::kAny;
     const auto allowOrigin = wildcardOrigin
@@ -44,20 +40,26 @@ void applyCorsHeaders(const HttpRequest& request, HttpResponse& response, const 
         : cors.origin.origin();
     std::array<std::string_view, 3> varyTokens{};
     std::size_t varyTokenCount = 0;
+    const bool options = request.knownMethod() == HttpKnownMethod::kOptions;
+    if (options) {
+        varyTokens[varyTokenCount++] = "Origin";
+        varyTokens[varyTokenCount++] = "Access-Control-Request-Method";
+        if (cors.requestHeaders.kind() ==
+            CorsRequestHeadersPolicy::Kind::kReflect) {
+            varyTokens[varyTokenCount++] = "Access-Control-Request-Headers";
+        }
+    }
     setStableResponseHeaderIfMissing(
         response,
         kResponseHeaderAccessControlAllowOrigin,
         "Access-Control-Allow-Origin",
         allowOrigin);
-    if (!wildcardOrigin) {
-        varyTokens[varyTokenCount++] = "Origin";
-    }
     if (cors.origin.kind() == CorsOriginPolicy::Kind::kCredentialedExact &&
         !responseHasKnownHeader(response, kResponseHeaderAccessControlAllowCredentials)) {
         setResponseHeaderStableView(response, "Access-Control-Allow-Credentials", "true");
     }
 
-    const bool preflight = request.knownMethod() == HttpKnownMethod::kOptions &&
+    const bool preflight = options && !origin.empty() &&
         !requestKnownHeader(request, RequestKnownHeader::kAccessControlRequestMethod).empty();
     if (preflight) {
         if (const auto allow = responseKnownHeader(response, kResponseHeaderAllow); !allow.empty()) {
@@ -80,9 +82,7 @@ void applyCorsHeaders(const HttpRequest& request, HttpResponse& response, const 
                 kResponseHeaderAccessControlAllowHeaders,
                 "Access-Control-Allow-Headers",
                 requestedHeaders);
-            varyTokens[varyTokenCount++] = "Access-Control-Request-Headers";
         }
-        varyTokens[varyTokenCount++] = "Access-Control-Request-Method";
         addVaryTokens(response, varyTokens.data(), varyTokenCount);
         setCorsMaxAge(response, cors.maxAge);
         return;
