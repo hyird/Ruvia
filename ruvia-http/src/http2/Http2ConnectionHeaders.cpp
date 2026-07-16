@@ -206,6 +206,17 @@ HeaderDecodeStatus Http2Connection::decodeResponseHeaderBlock(Http2StreamState& 
     }
     const auto contentSemantics = httpResponseContentSemantics(
         stream.requestKnownMethod(), *context.status);
+    // RFC 9110 section 15.3.6 gives 205 an ordinary, zero-length content
+    // phase (unlike HEAD/204/304 representation metadata), but forbids a
+    // server from generating any content. Bind that semantic limit into the
+    // same byte-accounting state that validates DATA and Content-Length. A
+    // successful CONNECT takes precedence because its following bytes are a
+    // tunnel, not response content.
+    if (*context.status == 205 &&
+        contentSemantics != HttpResponseContentSemantics::kConnectTunnel &&
+        !stream.declareRemoteContentLength(0)) {
+        return HeaderDecodeStatus::kProtocolError;
+    }
     if (contentSemantics == HttpResponseContentSemantics::kWithoutContent &&
         !stream.selectRemoteContentMetadataOnly()) {
         return HeaderDecodeStatus::kProtocolError;
