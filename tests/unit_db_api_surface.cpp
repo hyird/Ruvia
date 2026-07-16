@@ -8,6 +8,7 @@
 #include <new>
 #include <span>
 #include <stdexcept>
+#include <string>
 #include <string_view>
 #include <type_traits>
 #include <utility>
@@ -53,6 +54,20 @@ static_assert(std::is_copy_constructible_v<ruvia::DbValue>);
 static_assert(std::is_nothrow_move_constructible_v<ruvia::DbValue>);
 static_assert(!std::is_copy_assignable_v<ruvia::DbValue>);
 static_assert(!std::is_move_assignable_v<ruvia::DbValue>);
+
+template <typename String>
+concept AcceptsTemporaryDbValueText = requires(String&& value) {
+    ruvia::DbValue(std::forward<String>(value));
+};
+
+template <typename String>
+concept AcceptsLvalueDbValueText = requires(String& value) {
+    ruvia::DbValue(value);
+};
+
+static_assert(!AcceptsTemporaryDbValueText<std::string>);
+static_assert(!AcceptsTemporaryDbValueText<const std::string>);
+static_assert(AcceptsLvalueDbValueText<std::string>);
 
 template <typename T>
 concept ExposesDbValueInspection = requires(const T& value) {

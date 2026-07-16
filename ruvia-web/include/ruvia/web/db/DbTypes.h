@@ -94,8 +94,18 @@ private:
 
 public:
     DbValue(std::nullptr_t);
+    // Text is borrowed until a database operation synchronously clones the
+    // parameter. The source must outlive this value; owning-string rvalues are
+    // rejected so a stored DbValue cannot retain a destroyed temporary.
     DbValue(const char* value);
     DbValue(std::string_view value);
+
+    template <typename Traits, typename Allocator>
+    DbValue(std::basic_string<char, Traits, Allocator>&&) = delete;
+
+    template <typename Traits, typename Allocator>
+    DbValue(const std::basic_string<char, Traits, Allocator>&&) = delete;
+
     DbValue(bool value);
 
     DbValue(const DbValue&) = default;

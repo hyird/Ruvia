@@ -1471,6 +1471,16 @@ concept HasDbValuePmrStringConstructor = requires(std::pmr::string value) {
     T(std::move(value));
 };
 
+template <typename String>
+concept AcceptsTemporaryDbValueText = requires(String&& value) {
+    ruvia::DbValue(std::forward<String>(value));
+};
+
+template <typename String>
+concept AcceptsLvalueDbValueText = requires(String& value) {
+    ruvia::DbValue(value);
+};
+
 template <typename T>
 concept HasDbRowCanonicalReadAccessors = requires(const T& row) {
     { row.empty() } -> std::same_as<bool>;
@@ -2528,6 +2538,9 @@ static_assert(!HasControllerStorePublicMutators<ruvia::detail::ControllerStore>)
 static_assert(!HasControllerStorePublicSize<ruvia::detail::ControllerStore>);
 static_assert(!HasDbRowPublicMutators<ruvia::DbRow>);
 static_assert(!HasDbValuePmrStringConstructor<ruvia::DbValue>);
+static_assert(!AcceptsTemporaryDbValueText<std::string>);
+static_assert(!AcceptsTemporaryDbValueText<const std::string>);
+static_assert(AcceptsLvalueDbValueText<std::string>);
 static_assert(!std::is_default_constructible_v<ruvia::DbRow>);
 static_assert(!std::is_constructible_v<ruvia::DbRow, std::pmr::memory_resource*>);
 static_assert(HasDbRowCanonicalReadAccessors<ruvia::DbRow>);

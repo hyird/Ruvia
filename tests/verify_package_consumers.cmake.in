@@ -1338,6 +1338,10 @@ if(EXISTS "${_installed_db_types_path}" OR
        NOT _installed_db_types MATCHES
            "operator=[(]DbValue&&[)][ 	]*=[ 	]*delete" OR
        NOT _installed_db_types MATCHES
+           "DbValue[(]std::basic_string<char, Traits, Allocator>&&[)] = delete" OR
+       NOT _installed_db_types MATCHES
+           "DbValue[(]const std::basic_string<char, Traits, Allocator>&&[)] = delete" OR
+       NOT _installed_db_types MATCHES
            "detail::DbValueType type[(][)] const noexcept" OR
        _installed_db_types MATCHES
            "ownsText_|ownsValue_|ownsFields_|ownedFields_|valueView_|refreshView|DbValueType[ 	]+type_|bool[ 	]+isNull_" OR

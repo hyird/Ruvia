@@ -2792,6 +2792,8 @@ file(READ "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/db/DbValueAccess.h"
     pmr_db_value_access)
 file(READ "${RUVIA_ROOT}/tests/unit_db_api_surface.cpp"
     pmr_db_types_test)
+file(READ "${RUVIA_ROOT}/examples/api_surface.cpp"
+    pmr_db_api_surface)
 file(READ "${RUVIA_ROOT}/ruvia-web/src/db/DbHandle.cpp"
     pmr_db_handle_impl)
 file(READ "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/redis/RedisTypes.h"
@@ -2868,6 +2870,21 @@ if(NOT pmr_http_client_api MATCHES
        "!std::is_nothrow_move_assignable_v<ruvia::RedisValue>")
     boundary_error("PMR-owning public values or linear database handles regained unsafe move-assignment guarantees"
         "single-use results and active DB operations must reject reassignment; assignable values must expose allocation failure, and HttpResponse replacement must transfer one resource domain without member-wise PMR assignment")
+endif()
+if(NOT pmr_db_types_api MATCHES
+       "DbValue[(]std::basic_string<char, Traits, Allocator>&&[)] = delete" OR
+   NOT pmr_db_types_api MATCHES
+       "DbValue[(]const std::basic_string<char, Traits, Allocator>&&[)] = delete" OR
+   NOT pmr_db_types_test MATCHES
+       "!AcceptsTemporaryDbValueText<std::string>" OR
+   NOT pmr_db_types_test MATCHES
+       "AcceptsLvalueDbValueText<std::string>" OR
+   NOT pmr_db_api_surface MATCHES
+       "!AcceptsTemporaryDbValueText<const std::string>" OR
+   NOT pmr_web_package_contract MATCHES
+       "!AcceptsTemporaryDbValueText<std::string>")
+    boundary_error("DbValue regained temporary owning-text borrows"
+        "stored query parameters must reject owning-string rvalues while preserving borrowed lvalue input")
 endif()
 if(NOT pmr_db_types_api MATCHES
        "using Storage = std::variant<" OR
