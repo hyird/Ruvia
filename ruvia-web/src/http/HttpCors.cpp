@@ -1,6 +1,8 @@
 #include "ruvia/web/detail/http/HttpCors.h"
 
 #include "ruvia/http/detail/HttpRequestInternal.h"
+#include "ruvia/http/detail/AsciiCase.h"
+#include "ruvia/http/detail/HttpCorsFields.h"
 #include "ruvia/http/detail/parser/HttpRequestTarget.h"
 #include <array>
 #include <cstddef>
@@ -28,6 +30,47 @@ void setCorsMaxAge(
         "Access-Control-Max-Age",
         static_cast<std::uint64_t>(maxAge->value().count()),
         kResponseHeaderAccessControlMaxAge);
+}
+
+void reflectCorsRequestHeaderNames(
+    const HttpRequest& request,
+    HttpResponse& response) {
+    if (responseHasKnownHeader(
+            response,
+            kResponseHeaderAccessControlAllowHeaders)) {
+        return;
+    }
+
+    bool first = true;
+    for (const auto& header : request.headers()) {
+        if (!httpAsciiEqualsIgnoreCase(
+                header.name(),
+                "Access-Control-Request-Headers")) {
+            continue;
+        }
+        const bool valid = visitHttpCorsRequestHeaderNames(
+            header.value(),
+            [&response, &first](std::string_view name) {
+                if (first) {
+                    setResponseHeaderIfMissing(
+                        response,
+                        kResponseHeaderAccessControlAllowHeaders,
+                        "Access-Control-Allow-Headers",
+                        name);
+                    first = false;
+                } else {
+                    response.header(
+                        "Access-Control-Allow-Headers",
+                        name,
+                        HttpResponse::HeaderOptions{.append = true});
+                }
+                return true;
+            });
+        if (!valid) {
+            throw std::logic_error(
+                "validated CORS request header list became invalid");
+        }
+    }
 }
 
 }  // namespace
@@ -70,19 +113,14 @@ void applyCorsHeaders(const HttpRequest& request, HttpResponse& response, const 
                 "Access-Control-Allow-Methods",
                 allow);
         }
-        const auto requestedHeaders = requestKnownHeader(request, RequestKnownHeader::kAccessControlRequestHeaders);
         if (cors.requestHeaders.kind() == CorsRequestHeadersPolicy::Kind::kFixed) {
             setStableResponseHeaderIfMissing(
                 response,
                 kResponseHeaderAccessControlAllowHeaders,
                 "Access-Control-Allow-Headers",
                 cors.requestHeaders.headers());
-        } else if (!requestedHeaders.empty()) {
-            setResponseHeaderIfMissing(
-                response,
-                kResponseHeaderAccessControlAllowHeaders,
-                "Access-Control-Allow-Headers",
-                requestedHeaders);
+        } else {
+            reflectCorsRequestHeaderNames(request, response);
         }
         addVaryTokens(response, varyTokens.data(), varyTokenCount);
         setCorsMaxAge(response, cors.maxAge);

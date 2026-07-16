@@ -66,6 +66,9 @@ RUVIA_TEST(chunk_trailers_reject_framing_and_routing_fields) {
     RUVIA_CHECK(validateHttpChunkTrailers("Connection: close\r\n") == HttpChunkScanError::kInvalidTrailer);
     RUVIA_CHECK(validateHttpChunkTrailers("Authorization: Bearer x\r\n") == HttpChunkScanError::kInvalidTrailer);
     RUVIA_CHECK(validateHttpChunkTrailers("Cookie: sid=1\r\n") == HttpChunkScanError::kInvalidTrailer);
+    RUVIA_CHECK(validateHttpChunkTrailers("Origin: https://app.example\r\n") == HttpChunkScanError::kInvalidTrailer);
+    RUVIA_CHECK(validateHttpChunkTrailers("Access-Control-Request-Method: POST\r\n") == HttpChunkScanError::kInvalidTrailer);
+    RUVIA_CHECK(validateHttpChunkTrailers("Access-Control-Request-Headers: X-One\r\n") == HttpChunkScanError::kInvalidTrailer);
     // The classification is case-insensitive, so a lowercase spelling is caught too.
     RUVIA_CHECK(validateHttpChunkTrailers("content-length: 10\r\n") == HttpChunkScanError::kInvalidTrailer);
 }

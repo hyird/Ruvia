@@ -256,6 +256,50 @@ RUVIA_TEST(header_block_rejects_duplicate_auth_and_cors_singletons) {
                     .error == HttpParseError::kInvalidHeader);
 }
 
+RUVIA_TEST(header_block_enforces_cors_request_field_grammar) {
+    for (const auto value : {
+             std::string_view(""),
+             std::string_view("POST, DELETE"),
+             std::string_view("POST /admin")}) {
+        const auto result = parse(
+            std::string("OPTIONS / HTTP/1.1\r\nHost: x\r\n") +
+            "Access-Control-Request-Method: " + std::string(value) +
+            "\r\n\r\n");
+        RUVIA_CHECK(result.error == HttpParseError::kInvalidHeader);
+    }
+
+    for (const auto value : {
+             std::string_view(""),
+             std::string_view(", ,"),
+             std::string_view("X-Good, X Bad")}) {
+        const auto result = parse(
+            std::string("OPTIONS / HTTP/1.1\r\nHost: x\r\n") +
+            "Access-Control-Request-Headers: " + std::string(value) +
+            "\r\n\r\n");
+        RUVIA_CHECK(result.error == HttpParseError::kInvalidHeader);
+    }
+
+    for (const auto value : {
+             std::string_view("*"),
+             std::string_view("https://app.example/"),
+             std::string_view("https://APP.example")}) {
+        const auto result = parse(
+            std::string("GET / HTTP/1.1\r\nHost: x\r\nOrigin: ") +
+            std::string(value) + "\r\n\r\n");
+        RUVIA_CHECK(result.error == HttpParseError::kInvalidHeader);
+    }
+
+    RUVIA_CHECK(!parse(
+        "OPTIONS / HTTP/1.1\r\nHost: x\r\n"
+        "Origin: https://first.example https://second.example\r\n"
+        "Access-Control-Request-Method: PATCH\r\n"
+        "Access-Control-Request-Headers: , X-One,, X-Two,\r\n\r\n")
+        .error.has_value());
+    RUVIA_CHECK(!parse(
+        "GET / HTTP/1.1\r\nHost: x\r\nOrigin: null\r\n\r\n")
+        .error.has_value());
+}
+
 RUVIA_TEST(header_block_rejects_invalid_bracketed_host_literal) {
     RUVIA_CHECK(!parse(
         "GET / HTTP/1.1\r\nHost: [::1]\r\n\r\n").error.has_value());

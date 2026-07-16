@@ -5,6 +5,7 @@
 
 #include "ruvia/http/HttpHeader.h"
 #include "ruvia/http/HttpKnownMethod.h"
+#include "ruvia/http/detail/HttpCorsFields.h"
 #include "ruvia/http/detail/http2/Http2HeaderRules.h"
 #include "ruvia/http/detail/http2/Http2StreamState.h"
 #include "ruvia/http/detail/parser/HttpRequestTarget.h"
@@ -117,6 +118,14 @@ struct Http2HeaderDecodeContext final {
     }
     stream.markRegularHeaderSeen();
     const auto kind = classifyRequestHeader(name);
+    if ((kind == RequestHeaderKind::kOrigin &&
+         !isValidHttpOriginFieldValue(value)) ||
+        (kind == RequestHeaderKind::kAccessControlRequestMethod &&
+         !isValidHttpCorsRequestMethod(value)) ||
+        (kind == RequestHeaderKind::kAccessControlRequestHeaders &&
+         !isValidHttpCorsRequestHeaderNames(value))) {
+        return false;
+    }
     if (kind == RequestHeaderKind::kHost) {
         if (stream.hasHost() || !isValidHostHeader(value)) {
             return false;

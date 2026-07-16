@@ -307,6 +307,32 @@ RUVIA_TEST(h2_headers_duplicate_auth_and_cors_singletons_rejected) {
     }
 }
 
+RUVIA_TEST(h2_headers_enforce_cors_request_field_grammar) {
+    const auto accepts = [](std::string_view name, std::string_view value) {
+        Http2StreamState stream(1, res());
+        Http2HeaderDecodeContext ctx{stream};
+        return http2OnDecodedInitialHeader(ctx, name, value);
+    };
+
+    RUVIA_CHECK(accepts("origin", "null"));
+    RUVIA_CHECK(accepts(
+        "origin",
+        "https://first.example https://second.example"));
+    RUVIA_CHECK(accepts("access-control-request-method", "PATCH"));
+    RUVIA_CHECK(accepts(
+        "access-control-request-headers",
+        ", x-one,, x-two,"));
+
+    RUVIA_CHECK(!accepts("origin", "*"));
+    RUVIA_CHECK(!accepts("origin", "https://app.example/"));
+    RUVIA_CHECK(!accepts("origin", "https://APP.example"));
+    RUVIA_CHECK(!accepts("access-control-request-method", "POST, DELETE"));
+    RUVIA_CHECK(!accepts("access-control-request-method", "POST /admin"));
+    RUVIA_CHECK(!accepts("access-control-request-headers", ""));
+    RUVIA_CHECK(!accepts("access-control-request-headers", ", ,"));
+    RUVIA_CHECK(!accepts("access-control-request-headers", "x-good, x bad"));
+}
+
 RUVIA_TEST(h2_headers_content_length_and_cookie) {
     Http2StreamState stream(1, res());
     Http2HeaderDecodeContext ctx{stream};
@@ -363,6 +389,15 @@ RUVIA_TEST(h2_headers_trailer_rejects_pseudo_and_invalid) {
     RUVIA_CHECK(!http2OnDecodedTrailer(ctx, "te", "trailers"));       // connection option is header-only
     RUVIA_CHECK(!http2OnDecodedTrailer(ctx, "trailer", "x-checksum"));
     RUVIA_CHECK(!http2OnDecodedTrailer(ctx, "content-type", "text/plain"));
+    RUVIA_CHECK(!http2OnDecodedTrailer(ctx, "origin", "https://app.example"));
+    RUVIA_CHECK(!http2OnDecodedTrailer(
+        ctx,
+        "access-control-request-method",
+        "POST"));
+    RUVIA_CHECK(!http2OnDecodedTrailer(
+        ctx,
+        "access-control-request-headers",
+        "x-one"));
 }
 
 RUVIA_TEST(h2_headers_list_byte_limit) {

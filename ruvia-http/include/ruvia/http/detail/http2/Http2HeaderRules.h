@@ -75,16 +75,16 @@ namespace ruvia::detail {
         case RequestHeaderKind::kIfUnmodifiedSince:
         case RequestHeaderKind::kRange:
         case RequestHeaderKind::kAuthorization:
+        case RequestHeaderKind::kAccessControlRequestHeaders:
+        case RequestHeaderKind::kAccessControlRequestMethod:
+        case RequestHeaderKind::kOrigin:
             return true;
         case RequestHeaderKind::kOther:
         case RequestHeaderKind::kAccept:
         case RequestHeaderKind::kAcceptEncoding:
-        case RequestHeaderKind::kAccessControlRequestHeaders:
-        case RequestHeaderKind::kAccessControlRequestMethod:
         case RequestHeaderKind::kTransferEncoding:
         case RequestHeaderKind::kUpgrade:
         case RequestHeaderKind::kUserAgent:
-        case RequestHeaderKind::kOrigin:
         case RequestHeaderKind::kSecWebSocketKey:
         case RequestHeaderKind::kSecWebSocketProtocol:
         case RequestHeaderKind::kSecWebSocketVersion:

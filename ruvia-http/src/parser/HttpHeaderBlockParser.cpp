@@ -1,5 +1,6 @@
 #include "ruvia/http/detail/parser/HttpHeaderBlockParser.h"
 
+#include "ruvia/http/detail/HttpCorsFields.h"
 #include "ruvia/http/detail/parser/HttpRequestTarget.h"
 
 #include <algorithm>
@@ -182,6 +183,27 @@ std::optional<HttpParseError> parseHttpHeaderBlock(
                 block.responseCodingQualities.update(value);
                 break;
             case RequestHeaderKind::kAccessControlRequestMethod:
+                if (!isValidHttpCorsRequestMethod(value)) {
+                    return HttpParseError::kInvalidHeader;
+                }
+                if (const auto bit = singletonRequestHeaderBit(kind);
+                    (block.seenHeaderBits & bit) != 0) {
+                    return HttpParseError::kInvalidHeader;
+                } else {
+                    block.seenHeaderBits |= bit;
+                }
+                break;
+            case RequestHeaderKind::kOrigin:
+                if (!isValidHttpOriginFieldValue(value)) {
+                    return HttpParseError::kInvalidHeader;
+                }
+                if (const auto bit = singletonRequestHeaderBit(kind);
+                    (block.seenHeaderBits & bit) != 0) {
+                    return HttpParseError::kInvalidHeader;
+                } else {
+                    block.seenHeaderBits |= bit;
+                }
+                break;
             case RequestHeaderKind::kAuthorization:
             case RequestHeaderKind::kContentType:
             case RequestHeaderKind::kIfMatch:
@@ -189,7 +211,6 @@ std::optional<HttpParseError> parseHttpHeaderBlock(
             case RequestHeaderKind::kIfNoneMatch:
             case RequestHeaderKind::kIfRange:
             case RequestHeaderKind::kIfUnmodifiedSince:
-            case RequestHeaderKind::kOrigin:
             case RequestHeaderKind::kRange:
                 if (const auto bit = singletonRequestHeaderBit(kind); bit != 0) {
                     if ((block.seenHeaderBits & bit) != 0) {
@@ -200,13 +221,17 @@ std::optional<HttpParseError> parseHttpHeaderBlock(
                 break;
             case RequestHeaderKind::kOther:
             case RequestHeaderKind::kAccept:
-            case RequestHeaderKind::kAccessControlRequestHeaders:
             case RequestHeaderKind::kContentEncoding:
             case RequestHeaderKind::kCookie:
             case RequestHeaderKind::kSecWebSocketKey:
             case RequestHeaderKind::kSecWebSocketProtocol:
             case RequestHeaderKind::kSecWebSocketVersion:
             case RequestHeaderKind::kUserAgent:
+                break;
+            case RequestHeaderKind::kAccessControlRequestHeaders:
+                if (!isValidHttpCorsRequestHeaderNames(value)) {
+                    return HttpParseError::kInvalidHeader;
+                }
                 break;
         }
 

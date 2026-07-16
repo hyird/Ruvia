@@ -25,14 +25,14 @@ namespace {
         case RequestHeaderKind::kRange:
         case RequestHeaderKind::kUpgrade:
         case RequestHeaderKind::kAuthorization:
+        case RequestHeaderKind::kAccessControlRequestHeaders:
+        case RequestHeaderKind::kAccessControlRequestMethod:
+        case RequestHeaderKind::kOrigin:
             return true;
         case RequestHeaderKind::kOther:
         case RequestHeaderKind::kAccept:
         case RequestHeaderKind::kAcceptEncoding:
-        case RequestHeaderKind::kAccessControlRequestHeaders:
-        case RequestHeaderKind::kAccessControlRequestMethod:
         case RequestHeaderKind::kUserAgent:
-        case RequestHeaderKind::kOrigin:
         case RequestHeaderKind::kSecWebSocketKey:
         case RequestHeaderKind::kSecWebSocketProtocol:
         case RequestHeaderKind::kSecWebSocketVersion:

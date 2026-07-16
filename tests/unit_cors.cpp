@@ -274,6 +274,37 @@ RUVIA_TEST(cors_preflight_reflects_methods_and_requested_headers) {
     RUVIA_CHECK(response.header("Vary").value_or("").find("Access-Control-Request-Headers") != std::string_view::npos);
 }
 
+RUVIA_TEST(cors_preflight_reflects_every_request_header_field_line) {
+    Http1ServerRequestParser parser;
+    const auto result = parser.parseMessage(
+        "OPTIONS / HTTP/1.1\r\nHost: x\r\nOrigin: https://app.example\r\n"
+        "Access-Control-Request-Method: POST\r\n"
+        "Access-Control-Request-Headers: , X-One,\r\n"
+        "Access-Control-Request-Headers: X-Two, X-Three\r\n\r\n");
+    HttpResponse response(std::pmr::new_delete_resource());
+    applyCorsHeaders(
+        result.request,
+        response,
+        corsOptions("https://app.example", false));
+
+    std::size_t reflectedLines = 0;
+    for (const auto& header : response.headers()) {
+        if (ruvia::detail::httpAsciiEqualsIgnoreCase(
+                header.name(),
+                "Access-Control-Allow-Headers")) {
+            if (reflectedLines == 0) {
+                RUVIA_CHECK_EQ(header.value(), std::string_view("X-One"));
+            } else if (reflectedLines == 1) {
+                RUVIA_CHECK_EQ(header.value(), std::string_view("X-Two"));
+            } else if (reflectedLines == 2) {
+                RUVIA_CHECK_EQ(header.value(), std::string_view("X-Three"));
+            }
+            ++reflectedLines;
+        }
+    }
+    RUVIA_CHECK_EQ(reflectedLines, std::size_t{3});
+}
+
 RUVIA_TEST(cors_preflight_prefers_configured_allow_headers) {
     Http1ServerRequestParser parser;
     const auto result = parser.parseMessage(
