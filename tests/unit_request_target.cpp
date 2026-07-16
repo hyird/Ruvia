@@ -1,6 +1,9 @@
 #include "test_harness.h"
 
+#include <memory_resource>
+#include <string>
 #include <string_view>
+#include <utility>
 
 #include "ruvia/http/detail/parser/HttpRequestTarget.h"
 
@@ -22,6 +25,23 @@ using ruvia::detail::isValidUriAuthority;
 using ruvia::detail::isValidUriScheme;
 using ruvia::detail::parseHttpAuthority;
 using ruvia::detail::parseRequestTarget;
+
+template <typename Input>
+concept AcceptsTemporaryRequestTargetInput = requires(
+    Input&& input,
+    RequestTargetView& output) {
+    parseRequestTarget(
+        HttpKnownMethod::kGet,
+        std::forward<Input>(input),
+        output);
+};
+
+static_assert(!AcceptsTemporaryRequestTargetInput<std::string>);
+static_assert(!AcceptsTemporaryRequestTargetInput<const std::string>);
+static_assert(!AcceptsTemporaryRequestTargetInput<std::pmr::string>);
+static_assert(AcceptsTemporaryRequestTargetInput<std::string&>);
+static_assert(AcceptsTemporaryRequestTargetInput<std::pmr::string&>);
+static_assert(AcceptsTemporaryRequestTargetInput<std::string_view>);
 
 }  // namespace
 

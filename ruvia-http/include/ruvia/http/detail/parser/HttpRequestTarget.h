@@ -121,6 +121,11 @@ std::optional<HttpAuthorityView> parseHttpAuthority(Value&&) = delete;
     HttpKnownMethod method,
     std::string_view target,
     RequestTargetView& output) noexcept;
+template <HttpTemporaryOwningCharString Target>
+bool parseRequestTarget(
+    HttpKnownMethod,
+    Target&&,
+    RequestTargetView&) = delete;
 [[nodiscard]] bool authorityMatchesHost(
     std::string_view authority,
     std::string_view host,

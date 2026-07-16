@@ -273,6 +273,16 @@ concept AcceptsAuthorityBorrowedInput = requires(Input&& input) {
 };
 
 template <typename Input>
+concept AcceptsRequestTargetBorrowedInput = requires(
+    Input&& input,
+    ruvia::detail::RequestTargetView& output) {
+    ruvia::detail::parseRequestTarget(
+        ruvia::HttpKnownMethod::kGet,
+        std::forward<Input>(input),
+        output);
+};
+
+template <typename Input>
 concept AcceptsUrlValueBorrowedInput = requires(Input&& input) {
     ruvia::detail::findUrlEncodedValue(
         std::forward<Input>(input), "name", ruvia::detail::UrlDecodeMode::kForm);
@@ -328,6 +338,12 @@ static_assert(AcceptsAuthorityBorrowedInput<std::string&>);
 static_assert(AcceptsAuthorityBorrowedInput<std::string_view>);
 static_assert(!AcceptsAuthorityBorrowedInput<std::string>);
 static_assert(!AcceptsAuthorityBorrowedInput<std::pmr::string>);
+static_assert(AcceptsRequestTargetBorrowedInput<std::string&>);
+static_assert(AcceptsRequestTargetBorrowedInput<std::pmr::string&>);
+static_assert(AcceptsRequestTargetBorrowedInput<std::string_view>);
+static_assert(!AcceptsRequestTargetBorrowedInput<std::string>);
+static_assert(!AcceptsRequestTargetBorrowedInput<const std::string>);
+static_assert(!AcceptsRequestTargetBorrowedInput<std::pmr::string>);
 static_assert(AcceptsUrlValueBorrowedInput<std::string&>);
 static_assert(!AcceptsUrlValueBorrowedInput<std::string>);
 static_assert(!AcceptsUrlValueBorrowedInput<std::pmr::string>);
