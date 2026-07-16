@@ -496,9 +496,6 @@ bool isValidRequestTargetBytes(std::string_view target) noexcept {
 }
 
 bool isValidOriginFormTarget(std::string_view target) noexcept {
-    if (target == "*") {
-        return true;
-    }
     if (target.empty() || target.front() != '/') {
         return false;
     }
@@ -511,6 +508,18 @@ bool isValidOriginFormTarget(std::string_view target) noexcept {
         : target.substr(separator + 1);
     return isValidUriComponent(path, true, false) &&
         isValidUriComponent(query, true, true);
+}
+
+bool isValidOriginOrAsteriskFormTarget(std::string_view target) noexcept {
+    return target == "*" || isValidOriginFormTarget(target);
+}
+
+bool isValidOriginOrAsteriskFormTarget(
+    HttpKnownMethod method,
+    std::string_view target) noexcept {
+    return target == "*"
+        ? method == HttpKnownMethod::kOptions
+        : isValidOriginFormTarget(target);
 }
 
 bool isValidHttpHost(std::string_view value) noexcept {

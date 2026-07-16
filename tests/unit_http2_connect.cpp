@@ -331,6 +331,10 @@ RUVIA_TEST(http2_connect_client_extended_head_requires_setting_and_protocol_cont
         Http2RequestHeadSubmitError::kInvalidMessage);
     RUVIA_CHECK(requestHeadSubmitError(
         client.submitExtendedConnectRequestHead(
+            "example-tunnel", "https", "example.test", "*")) ==
+        Http2RequestHeadSubmitError::kInvalidMessage);
+    RUVIA_CHECK(requestHeadSubmitError(
+        client.submitExtendedConnectRequestHead(
             "connect-udp", "https", "example.test", "/masque", rawLength)) ==
         Http2RequestHeadSubmitError::kInvalidMessage);
     RUVIA_CHECK(client.pendingOutput().empty());
@@ -859,6 +863,38 @@ RUVIA_TEST(http2_connect_server_rejects_non_http_websocket_scheme) {
     HpackEncoder::encodeHeader(block, ":authority", "example.test");
     HpackEncoder::encodeHeader(block, ":path", "/ws");
     HpackEncoder::encodeHeader(block, "sec-websocket-version", "13");
+    const auto request = frame(
+        &resource,
+        Http2FrameType::kHeaders,
+        ruvia::detail::kHttp2FlagEndHeaders,
+        1,
+        std::string_view(block.data(), block.size()));
+
+    RUVIA_CHECK(server.feed(std::string_view(request.data(), request.size())) ==
+        ruvia::detail::Http2FeedResult::kAccepted);
+    RUVIA_CHECK(!server.connectionError().has_value());
+    RUVIA_CHECK(server.nextEvent().value().kind() == Http2EventKind::kStreamClosed);
+    RUVIA_CHECK(!server.nextEvent().has_value());
+    const auto out = server.pendingOutput();
+    const auto reset = ruvia::detail::http2ParseFrameHeader(out.substr(0, 9));
+    RUVIA_CHECK_EQ(reset.type, static_cast<std::uint8_t>(Http2FrameType::kRstStream));
+    RUVIA_CHECK_EQ(
+        ruvia::detail::http2Read32(
+            reinterpret_cast<const unsigned char*>(out.data() + 9)),
+        static_cast<std::uint32_t>(Http2ErrorCode::kProtocolError));
+}
+
+RUVIA_TEST(http2_connect_server_rejects_asterisk_path) {
+    std::pmr::monotonic_buffer_resource resource;
+    Http2Connection server(&resource);
+    handshake(server);
+
+    std::pmr::string block(&resource);
+    HpackEncoder::encodeHeader(block, ":method", "CONNECT");
+    HpackEncoder::encodeHeader(block, ":protocol", "example-tunnel");
+    HpackEncoder::encodeHeader(block, ":scheme", "https");
+    HpackEncoder::encodeHeader(block, ":authority", "example.test");
+    HpackEncoder::encodeHeader(block, ":path", "*");
     const auto request = frame(
         &resource,
         Http2FrameType::kHeaders,

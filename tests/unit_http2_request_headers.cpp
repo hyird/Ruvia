@@ -198,6 +198,13 @@ RUVIA_TEST(h2_headers_path_rejects_malformed_origin_target) {
     {
         Http2StreamState stream(1, res());
         Http2HeaderDecodeContext ctx{stream};
+        // Method can follow :path, so field-level decoding accepts the
+        // asterisk syntax and final head validation enforces OPTIONS-only.
+        RUVIA_CHECK(http2OnDecodedInitialHeader(ctx, ":path", "*"));
+    }
+    {
+        Http2StreamState stream(1, res());
+        Http2HeaderDecodeContext ctx{stream};
         RUVIA_CHECK(!http2OnDecodedInitialHeader(ctx, ":path", "relative"));
     }
     {

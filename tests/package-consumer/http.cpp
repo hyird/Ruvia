@@ -3939,6 +3939,13 @@ int main() {
         h2Streaming.streamingContent() == nullptr) {
         return 35;
     }
+    if (ruvia::detail::isValidOriginFormTarget("*") ||
+        !ruvia::detail::isValidOriginOrAsteriskFormTarget(
+            ruvia::HttpKnownMethod::kOptions, "*") ||
+        ruvia::detail::isValidOriginOrAsteriskFormTarget(
+            ruvia::HttpKnownMethod::kGet, "*")) {
+        return 36;
+    }
     const auto request = h2.submitRegularRequestHead(
         "PROPFIND",
         "git+ssh",

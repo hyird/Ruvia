@@ -104,7 +104,8 @@ struct Http2HeaderDecodeContext final {
             return true;
         }
         if (name == ":path") {
-            if (stream.hasPath() || !isValidOriginFormTarget(value)) {
+            if (stream.hasPath() ||
+                !isValidOriginOrAsteriskFormTarget(value)) {
                 return false;
             }
             stream.assignRequestPath(value);

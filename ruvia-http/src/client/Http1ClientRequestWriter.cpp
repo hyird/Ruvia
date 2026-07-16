@@ -522,8 +522,8 @@ Http1ClientRequestPrepareResult Http1ClientRequestWriter::prepare(
         return detail::Http1ClientRequestPrepareResultAccess::failure(
             Http1ClientRequestPrepareError::kConnectRequiresDedicatedEntry);
     }
-    if ((request.target == "*" && request.method != "OPTIONS") ||
-        !detail::isValidOriginFormTarget(request.target)) {
+    if (!detail::isValidOriginOrAsteriskFormTarget(
+            classifyHttpMethod(request.method), request.target)) {
         return detail::Http1ClientRequestPrepareResultAccess::failure(
             Http1ClientRequestPrepareError::kInvalidTarget);
     }

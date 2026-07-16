@@ -77,7 +77,14 @@ private:
 [[nodiscard]] std::uint16_t httpUriSchemeDefaultPort(
     std::string_view scheme) noexcept;
 
+// Strict origin-form starts with '/'. Asterisk-form is a separate target form
+// and is exposed explicitly so callers cannot lose its OPTIONS-only contract.
 [[nodiscard]] bool isValidOriginFormTarget(std::string_view target) noexcept;
+[[nodiscard]] bool isValidOriginOrAsteriskFormTarget(
+    std::string_view target) noexcept;
+[[nodiscard]] bool isValidOriginOrAsteriskFormTarget(
+    HttpKnownMethod method,
+    std::string_view target) noexcept;
 
 [[nodiscard]] bool isValidHostHeader(std::string_view value) noexcept;
 // RFC 3986 `host` / HTTP `uri-host`, without a port. IP literals use their

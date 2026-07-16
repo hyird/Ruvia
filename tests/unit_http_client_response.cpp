@@ -354,7 +354,7 @@ RUVIA_TEST(http_client_response_head_commits_status_and_version_at_construction)
 
 RUVIA_TEST(http_client_origin_target_validation) {
     RUVIA_CHECK(isValidHttpClientOriginTarget("/ok%2F?q=%7B%7D"));
-    RUVIA_CHECK(isValidHttpClientOriginTarget("*"));
+    RUVIA_CHECK(!isValidHttpClientOriginTarget("*"));
     RUVIA_CHECK(!isValidHttpClientOriginTarget(""));
     RUVIA_CHECK(!isValidHttpClientOriginTarget("relative"));
     RUVIA_CHECK(!isValidHttpClientOriginTarget("/bad#fragment"));

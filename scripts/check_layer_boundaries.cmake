@@ -9047,7 +9047,8 @@ else()
             "buffer sizing, prepared content gate, typed failure, CONNECT, and Prepared-bound response state must remain one result")
     endif()
     if(NOT http1_client_request_writer MATCHES "isValidHttpMethodToken" OR
-       NOT http1_client_request_writer MATCHES "isValidOriginFormTarget" OR
+       NOT http1_client_request_writer MATCHES
+           "isValidOriginOrAsteriskFormTarget" OR
        NOT http1_client_request_writer MATCHES "kHostPrefix" OR
        NOT http1_client_request_writer MATCHES "kContentLengthPrefix" OR
        NOT http1_client_request_writer MATCHES "kConnectionClose" OR

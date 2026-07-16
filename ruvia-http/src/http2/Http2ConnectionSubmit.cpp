@@ -72,7 +72,8 @@ namespace {
     if (!http2IsValidOutboundMethod(method) ||
         !isValidUriScheme(scheme) ||
         !isValidHostHeader(authority) ||
-        !isValidOriginFormTarget(path)) {
+        !isValidOriginOrAsteriskFormTarget(
+            classifyHttpMethod(method), path)) {
         return false;
     }
     const auto defaultPort = httpUriSchemeDefaultPort(scheme);

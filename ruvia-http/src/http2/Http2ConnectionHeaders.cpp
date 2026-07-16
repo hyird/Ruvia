@@ -35,6 +35,7 @@ HeaderDecodeStatus Http2Connection::decodeHeaderBlock(Http2StreamState& stream) 
             !stream.hasScheme() ||
             !stream.hasPath() ||
             !stream.hasAuthority() ||
+            !isValidOriginFormTarget(stream.requestPath()) ||
             stream.remoteContent().allowedKnownLength() != nullptr) {
             return HeaderDecodeStatus::kProtocolError;
         }
@@ -61,7 +62,9 @@ HeaderDecodeStatus Http2Connection::decodeHeaderBlock(Http2StreamState& stream) 
         if (!stream.beginStandardConnect()) {
             return HeaderDecodeStatus::kProtocolError;
         }
-    } else if (!stream.hasScheme() || !stream.hasPath()) {
+    } else if (!stream.hasScheme() || !stream.hasPath() ||
+        !isValidOriginOrAsteriskFormTarget(
+            stream.requestKnownMethod(), stream.requestPath())) {
         return HeaderDecodeStatus::kProtocolError;
     }
     const bool remoteHeadFinalized = stream.tunnel().pending() != nullptr

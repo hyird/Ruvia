@@ -15,6 +15,7 @@ using ruvia::detail::httpUriHostEquals;
 using ruvia::detail::isValidHostHeader;
 using ruvia::detail::isValidHttpHost;
 using ruvia::detail::isValidOriginFormTarget;
+using ruvia::detail::isValidOriginOrAsteriskFormTarget;
 using ruvia::detail::isValidRequestTargetBytes;
 using ruvia::detail::isValidUriScheme;
 using ruvia::detail::parseHttpAuthority;
@@ -285,11 +286,17 @@ RUVIA_TEST(request_target_bytes_validate_percent_encoding) {
 }
 
 RUVIA_TEST(origin_form_target_shape) {
-    // Origin-form must start with '/'; the sole exception is the asterisk-form ("*",
-    // used by OPTIONS) which is valid on its own but not as a prefix.
+    // Origin-form and asterisk-form are distinct request-target forms.
     RUVIA_CHECK(isValidOriginFormTarget("/"));
     RUVIA_CHECK(isValidOriginFormTarget("/path?q=1"));
-    RUVIA_CHECK(isValidOriginFormTarget("*"));
+    RUVIA_CHECK(!isValidOriginFormTarget("*"));
+    RUVIA_CHECK(isValidOriginOrAsteriskFormTarget("*"));
+    RUVIA_CHECK(isValidOriginOrAsteriskFormTarget(
+        HttpKnownMethod::kOptions, "*"));
+    RUVIA_CHECK(!isValidOriginOrAsteriskFormTarget(
+        HttpKnownMethod::kGet, "*"));
+    RUVIA_CHECK(isValidOriginOrAsteriskFormTarget(
+        HttpKnownMethod::kGet, "/"));
 
     RUVIA_CHECK(!isValidOriginFormTarget(""));                // empty
     RUVIA_CHECK(!isValidOriginFormTarget("path"));            // missing leading '/'
