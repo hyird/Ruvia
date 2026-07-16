@@ -204,3 +204,32 @@ RUVIA_TEST(chunked_body_decoder_rejects_bad_delimiter_and_trailer) {
     RUVIA_CHECK(badTrailer.failure() != nullptr);
     RUVIA_CHECK_EQ(badTrailer.failure()->protocolError().status(), 400);
 }
+
+RUVIA_TEST(chunked_body_decoder_caps_each_size_line) {
+    Http1ChunkedBodyDecoder decoder(
+        ProtocolByteLimit::limited(ruvia::kMaxHttpBodyBytes));
+    std::string oversized = "1;x=";
+    oversized.append(ruvia::kMaxHttpHeaderBytes, 'a');
+    oversized.append("\r\n");
+
+    const auto result = decoder.decode(oversized);
+    RUVIA_CHECK(result.failure() != nullptr);
+    if (const auto* failure = result.failure()) {
+        RUVIA_CHECK_EQ(failure->protocolError().status(), 413);
+    }
+
+    Http1ChunkedBodyDecoder boundary(
+        ProtocolByteLimit::limited(ruvia::kMaxHttpBodyBytes));
+    std::string accepted = "1;x=";
+    accepted.append(
+        ruvia::kMaxHttpHeaderBytes - accepted.size() - 2,
+        'a');
+    accepted.append("\r\nx\r\n0\r\n\r\n");
+    const auto boundaryResult = boundary.decode(accepted);
+    RUVIA_CHECK(boundaryResult.bodyChunk() != nullptr);
+    if (const auto* body = boundaryResult.bodyChunk()) {
+        const auto terminal = boundary.decode(
+            std::string_view(accepted).substr(body->consumedBytes()));
+        RUVIA_CHECK(terminal.complete() != nullptr);
+    }
+}

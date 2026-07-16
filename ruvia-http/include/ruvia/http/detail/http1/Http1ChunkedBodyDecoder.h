@@ -210,6 +210,11 @@ public:
                         }
                         return Http1ChunkDecodeResult::makeNeedMore(cursor);
                     }
+                    if (lineEnd - cursor + 2 > kMaxHttpHeaderBytes) {
+                        return fail(
+                            cursor,
+                            Http1ChunkDecodeError::kFramingTooLarge);
+                    }
                     std::size_t chunkSize = 0;
                     if (!parseHttpChunkSize(
                             available.substr(cursor, lineEnd - cursor),

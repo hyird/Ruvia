@@ -137,7 +137,18 @@ HttpChunkScanResult scanHttpChunkedBody(std::string_view body) noexcept {
     for (;;) {
         const auto lineEnd = body.find("\r\n", cursor);
         if (lineEnd == std::string_view::npos) {
+            // A future CRLF can begin at most one byte before the current end.
+            // Once the unterminated line itself reaches the framing-line byte
+            // limit, no completion can make this a bounded chunk-size line.
+            if (body.size() - cursor >= kMaxHttpHeaderBytes) {
+                return HttpChunkScanResult::makeFailure(
+                    HttpChunkScanError::kTooLarge);
+            }
             return HttpChunkScanResult::makeNeedMore();
+        }
+        if (lineEnd - cursor + 2 > kMaxHttpHeaderBytes) {
+            return HttpChunkScanResult::makeFailure(
+                HttpChunkScanError::kTooLarge);
         }
 
         std::size_t chunkSize = 0;
@@ -184,6 +195,13 @@ HttpChunkScanResult scanHttpChunkedBody(std::string_view body) noexcept {
                         HttpChunkScanError::kTooLarge);
                 }
                 return HttpChunkScanResult::makeComplete(trailerEnd + 4);
+            }
+            // Preserve the last three bytes as a possible delimiter prefix.
+            // At kMaxHttpHeaderBytes available bytes, even the earliest future
+            // CRLFCRLF would exceed the complete trailer-section limit.
+            if (body.size() - cursor >= kMaxHttpHeaderBytes) {
+                return HttpChunkScanResult::makeFailure(
+                    HttpChunkScanError::kTooLarge);
             }
             return HttpChunkScanResult::makeNeedMore();
         }
