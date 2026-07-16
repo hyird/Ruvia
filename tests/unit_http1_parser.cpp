@@ -505,6 +505,25 @@ RUVIA_TEST(http1_parse_connect_requires_authority_form) {
     }
 }
 
+RUVIA_TEST(http1_parse_connect_uses_target_authority) {
+    Http1ServerRequestParser parser;
+    const auto result = parser.parseMessage(
+        "CONNECT tunnel.example:443 HTTP/1.1\r\n"
+        "Host: decoy.example\r\n\r\n");
+
+    RUVIA_CHECK(result.messageReady());
+    RUVIA_CHECK_EQ(
+        result.request.header("Host").value_or(std::string_view{}),
+        std::string_view("tunnel.example:443"));
+    for (const auto& header : result.request.headers()) {
+        if (header.name() == "Host") {
+            RUVIA_CHECK_EQ(
+                header.value(),
+                std::string_view("tunnel.example:443"));
+        }
+    }
+}
+
 RUVIA_TEST(http1_parse_http10_without_host_allowed) {
     // HTTP/1.0 does not require a Host header.
     Http1ServerRequestParser parser;
