@@ -22,8 +22,22 @@ using ruvia::detail::WebSocketFrameView;
 using ruvia::detail::WebSocketInboundAssembler;
 using ruvia::detail::WebSocketInboundContentEncoding;
 using ruvia::detail::WebSocketInboundResult;
+using ruvia::detail::WebSocketMessageAccess;
 using ruvia::detail::WebSocketProtocolFailure;
 using ruvia::detail::webSocketProtocolFailureCloseCode;
+
+template <typename Payload>
+concept AcceptsWebSocketMessagePayload = requires(Payload&& payload) {
+    WebSocketMessageAccess::make(
+        WebSocketOpcode::kText, std::forward<Payload>(payload));
+};
+
+static_assert(!AcceptsWebSocketMessagePayload<std::string>);
+static_assert(!AcceptsWebSocketMessagePayload<const std::string>);
+static_assert(!AcceptsWebSocketMessagePayload<std::pmr::string>);
+static_assert(AcceptsWebSocketMessagePayload<std::string&>);
+static_assert(AcceptsWebSocketMessagePayload<std::pmr::string&>);
+static_assert(AcceptsWebSocketMessagePayload<std::string_view>);
 
 WebSocketFrameView frame(
     WebSocketOpcode opcode, std::string_view payload, bool fin,

@@ -86,6 +86,7 @@
 #include <ruvia/http/detail/websocket/HttpWebSocketServerHandshake.h>
 #include <ruvia/http/detail/websocket/HttpWebSocketHandshakeFields.h>
 #include <ruvia/http/detail/websocket/HttpWebSocketHandshakeValidation.h>
+#include <ruvia/http/detail/websocket/HttpWebSocketMessageAccess.h>
 #include <ruvia/http/detail/websocket/HttpWebSocketUtils.h>
 #include <ruvia/http/detail/websocket/WebSocketServerNegotiation.h>
 #include <ruvia/http/detail/websocket/WsConnection.h>
@@ -546,6 +547,13 @@ concept AcceptsAnyTemporaryWebSocketFramePayload =
     requires(String&& payload) {
         ruvia::detail::WebSocketFrameView::pong(std::move(payload));
     };
+
+template <typename Payload>
+concept AcceptsWebSocketMessagePayload = requires(Payload&& payload) {
+    ruvia::detail::WebSocketMessageAccess::make(
+        ruvia::WebSocketOpcode::kText,
+        std::forward<Payload>(payload));
+};
 
 template <typename T>
 concept ExposesAnyRvalueWebSocketInboundAccessor =
@@ -3243,6 +3251,12 @@ static_assert(std::same_as<
     std::optional<ruvia::detail::WebSocketFrameView>>);
 static_assert(!AcceptsAnyTemporaryWebSocketFramePayload<std::string>);
 static_assert(!AcceptsAnyTemporaryWebSocketFramePayload<std::pmr::string>);
+static_assert(AcceptsWebSocketMessagePayload<std::string&>);
+static_assert(AcceptsWebSocketMessagePayload<std::pmr::string&>);
+static_assert(AcceptsWebSocketMessagePayload<std::string_view>);
+static_assert(!AcceptsWebSocketMessagePayload<std::string>);
+static_assert(!AcceptsWebSocketMessagePayload<const std::string>);
+static_assert(!AcceptsWebSocketMessagePayload<std::pmr::string>);
 static_assert(std::same_as<
     decltype(std::declval<
         const ruvia::detail::WebSocketFrameReadResult&>().needInput()),
