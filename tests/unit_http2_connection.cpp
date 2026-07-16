@@ -86,8 +86,16 @@ concept HasAnyRvalueHttp2EventBorrow =
     requires(T&& event) { std::move(event).goaway(); } ||
     requires(T&& event) { std::move(event).peerGoaway(); };
 
+template <typename T>
+concept ExposesRvalueHttp2ConnectionStorage =
+    requires(T&& connection) { std::move(connection).pendingOutput(); } ||
+    requires(T&& connection) {
+        std::move(connection).takeDrainedDataStreams();
+    };
+
 static_assert(!HasAnyRvalueHttp2EventBorrow<Http2Event>);
 static_assert(!HasAnyRvalueHttp2EventBorrow<ruvia::detail::Http2GoawayEvent>);
+static_assert(!ExposesRvalueHttp2ConnectionStorage<Http2Connection>);
 
 template <typename T>
 concept HasHttp2EventError = requires(const T& event) {

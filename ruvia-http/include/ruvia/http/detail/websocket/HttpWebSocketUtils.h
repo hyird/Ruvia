@@ -275,9 +275,10 @@ class WebSocketClosePayloadEncodeResult;
 
 class WebSocketEncodedClosePayload final {
 public:
-    [[nodiscard]] constexpr std::string_view bytes() const noexcept {
+    [[nodiscard]] constexpr std::string_view bytes() const & noexcept {
         return std::string_view(bytes_.data(), size_);
     }
+    [[nodiscard]] constexpr std::string_view bytes() const && = delete;
 
 private:
     friend class WebSocketClosePayloadEncodeResult;

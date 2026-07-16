@@ -59,7 +59,7 @@ Http2Connection::Http2Connection(
 
 // --- outbound byte buffer (batched writes) ------------------------------------
 
-std::string_view Http2Connection::pendingOutput() const noexcept {
+std::string_view Http2Connection::pendingOutput() const & noexcept {
     return output_.pending();
 }
 
@@ -90,7 +90,8 @@ std::optional<Http2Event> Http2Connection::nextEvent() {
     return std::nullopt;
 }
 
-std::span<const std::uint32_t> Http2Connection::takeDrainedDataStreams() noexcept {
+std::span<const std::uint32_t>
+Http2Connection::takeDrainedDataStreams() & noexcept {
     // Swap-and-clear so each drain is reported exactly once; the returned span stays
     // valid until the next call (double buffer, no allocation churn).
     takenDrainedDataStreams_.swap(drainedDataStreams_);

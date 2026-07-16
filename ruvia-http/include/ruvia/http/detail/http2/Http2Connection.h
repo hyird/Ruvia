@@ -492,7 +492,8 @@ public:
 
     // --- outbound --------------------------------------------------------------
     // Bytes the core wants written to the peer (frame headers + payloads, batched).
-    [[nodiscard]] std::string_view pendingOutput() const noexcept;
+    [[nodiscard]] std::string_view pendingOutput() const & noexcept;
+    [[nodiscard]] std::string_view pendingOutput() const && = delete;
     // Acknowledges at most the current pending size. An out-of-range count is
     // rejected without clearing bytes or advancing the cursor.
     Http2OutputConsumeStatus consumeOutput(std::size_t bytes) noexcept;
@@ -568,7 +569,10 @@ public:
 
     // Returns streams whose core-owned DATA remainder just fully drained after a
     // WINDOW_UPDATE/SETTINGS change. Their owner may now submit the next source chunk.
-    [[nodiscard]] std::span<const std::uint32_t> takeDrainedDataStreams() noexcept;
+    [[nodiscard]] std::span<const std::uint32_t>
+    takeDrainedDataStreams() & noexcept;
+    [[nodiscard]] std::span<const std::uint32_t>
+    takeDrainedDataStreams() && = delete;
 
     // --- lifecycle / timeout ---------------------------------------------------
     // A local connection error is terminal: its GOAWAY has been queued and the I/O

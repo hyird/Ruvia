@@ -7072,6 +7072,45 @@ else()
 endif()
 set(HTTP_RESPONSE_HEAD_BUFFER
     "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/detail/server/HttpResponseHeadBuffer.h")
+set(HTTP1_CHUNK_HEADER_BUFFER
+    "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/detail/http1/Http1ChunkedFraming.h")
+set(HTTP2_OUTPUT_BUFFER
+    "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/detail/http2/Http2OutputBuffer.h")
+set(HTTP2_CONNECTION_BUFFER_API
+    "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/detail/http2/Http2Connection.h")
+set(WEBSOCKET_CLOSE_BUFFER
+    "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/detail/websocket/HttpWebSocketUtils.h")
+set(HTTP1_CHUNK_HEADER_BUFFER_TEST
+    "${RUVIA_ROOT}/tests/unit_http1_chunked_framing.cpp")
+set(HTTP_RESPONSE_HEAD_BUFFER_TEST
+    "${RUVIA_ROOT}/tests/unit_response_head_buffer.cpp")
+set(HTTP2_OUTPUT_BUFFER_TEST
+    "${RUVIA_ROOT}/tests/unit_http2_output_buffer.cpp")
+set(HTTP2_CONNECTION_BUFFER_TEST
+    "${RUVIA_ROOT}/tests/unit_http2_connection.cpp")
+set(WEBSOCKET_CLOSE_BUFFER_TEST
+    "${RUVIA_ROOT}/tests/unit_websocket_close.cpp")
+set(PROTOCOL_BUFFER_PACKAGE_CONSUMER
+    "${RUVIA_ROOT}/tests/package-consumer/http.cpp")
+foreach(protocol_buffer_contract IN ITEMS
+        "${HTTP_RESPONSE_HEAD_BUFFER}"
+        "${HTTP1_CHUNK_HEADER_BUFFER}"
+        "${HTTP2_OUTPUT_BUFFER}"
+        "${HTTP2_CONNECTION_BUFFER_API}"
+        "${WEBSOCKET_CLOSE_BUFFER}"
+        "${HTTP1_CHUNK_HEADER_BUFFER_TEST}"
+        "${HTTP_RESPONSE_HEAD_BUFFER_TEST}"
+        "${HTTP2_OUTPUT_BUFFER_TEST}"
+        "${HTTP2_CONNECTION_BUFFER_TEST}"
+        "${WEBSOCKET_CLOSE_BUFFER_TEST}"
+        "${PROTOCOL_BUFFER_PACKAGE_CONSUMER}")
+    if(NOT EXISTS "${protocol_buffer_contract}")
+        file(RELATIVE_PATH relative "${RUVIA_ROOT}"
+            "${protocol_buffer_contract}")
+        boundary_error("protocol buffer lifetime contract is incomplete"
+            "${relative} is required")
+    endif()
+endforeach()
 if(NOT EXISTS "${HTTP_RESPONSE_HEAD_BUFFER}")
     boundary_error("HTTP response-head scratch buffer is missing"
         "the HTTP/1 writer needs an owned fixed/heap storage state")
@@ -7083,6 +7122,93 @@ else()
         boundary_error("HTTP response-head storage lost its exclusive state"
             "fixed and heap storage must use one discriminated authority")
     endif()
+endif()
+if(EXISTS "${HTTP1_CHUNK_HEADER_BUFFER}" AND
+   EXISTS "${HTTP_RESPONSE_HEAD_BUFFER}" AND
+   EXISTS "${HTTP2_OUTPUT_BUFFER}" AND
+   EXISTS "${HTTP2_CONNECTION_BUFFER_API}" AND
+   EXISTS "${WEBSOCKET_CLOSE_BUFFER}" AND
+   EXISTS "${HTTP1_CHUNK_HEADER_BUFFER_TEST}" AND
+   EXISTS "${HTTP_RESPONSE_HEAD_BUFFER_TEST}" AND
+   EXISTS "${HTTP2_OUTPUT_BUFFER_TEST}" AND
+   EXISTS "${HTTP2_CONNECTION_BUFFER_TEST}" AND
+   EXISTS "${WEBSOCKET_CLOSE_BUFFER_TEST}" AND
+   EXISTS "${PROTOCOL_BUFFER_PACKAGE_CONSUMER}")
+    file(READ "${HTTP1_CHUNK_HEADER_BUFFER}"
+        http1_chunk_header_buffer)
+    file(READ "${HTTP2_OUTPUT_BUFFER}" http2_output_buffer)
+    file(READ "${HTTP2_CONNECTION_BUFFER_API}"
+        http2_connection_buffer_api)
+    file(READ "${WEBSOCKET_CLOSE_BUFFER}" websocket_close_buffer)
+    file(READ "${HTTP1_CHUNK_HEADER_BUFFER_TEST}"
+        http1_chunk_header_buffer_test)
+    file(READ "${HTTP_RESPONSE_HEAD_BUFFER_TEST}"
+        http_response_head_buffer_test)
+    file(READ "${HTTP2_OUTPUT_BUFFER_TEST}"
+        http2_output_buffer_test)
+    file(READ "${HTTP2_CONNECTION_BUFFER_TEST}"
+        http2_connection_buffer_test)
+    file(READ "${WEBSOCKET_CLOSE_BUFFER_TEST}"
+        websocket_close_buffer_test)
+    file(READ "${PROTOCOL_BUFFER_PACKAGE_CONSUMER}"
+        protocol_buffer_package_consumer)
+    if(NOT http1_chunk_header_buffer MATCHES
+           "view[(][)] const &[ 	]+noexcept" OR
+       NOT http1_chunk_header_buffer MATCHES
+           "view[(][)] const &&[ 	]*=[ 	]*delete" OR
+       NOT http_response_head_buffer MATCHES
+           "view[(][)] const &[ 	]+noexcept" OR
+       NOT http_response_head_buffer MATCHES
+           "view[(][)] const &&[ 	]*=[ 	]*delete" OR
+       NOT http_response_head_buffer MATCHES
+           "stackCursor[(]std::size_t bound[)] &[ 	]+noexcept" OR
+       NOT http_response_head_buffer MATCHES
+           "stackCursor[(]std::size_t[)][ 	]*&&[ 	]*=[ 	]*delete" OR
+       NOT http2_output_buffer MATCHES
+           "pending[(][)] const &[ 	]+noexcept" OR
+       NOT http2_output_buffer MATCHES
+           "pending[(][)] const &&[ 	]*=[ 	]*delete" OR
+       NOT http2_connection_buffer_api MATCHES
+           "pendingOutput[(][)] const &[ 	]+noexcept" OR
+       NOT http2_connection_buffer_api MATCHES
+           "pendingOutput[(][)] const &&[ 	]*=[ 	]*delete" OR
+       NOT http2_connection_buffer_api MATCHES
+           "takeDrainedDataStreams[(][)] &[ 	]+noexcept" OR
+       NOT http2_connection_buffer_api MATCHES
+           "takeDrainedDataStreams[(][)] &&[ 	]*=[ 	]*delete" OR
+       NOT websocket_close_buffer MATCHES
+           "bytes[(][)] const &[ 	]+noexcept" OR
+       NOT websocket_close_buffer MATCHES
+           "bytes[(][)] const &&[ 	]*=[ 	]*delete")
+        boundary_error("protocol buffers expose storage from temporary owners"
+            "H1, H2, response-head, and WebSocket owned byte buffers must expose borrows only from stable lvalues")
+    endif()
+    foreach(protocol_buffer_lifetime_test IN ITEMS
+            "${http1_chunk_header_buffer_test}"
+            "${http_response_head_buffer_test}"
+            "${http2_output_buffer_test}"
+            "${http2_connection_buffer_test}"
+            "${websocket_close_buffer_test}")
+        if(NOT protocol_buffer_lifetime_test MATCHES
+               "ExposesRvalue(Http1ChunkHeaderView|ResponseHeadBufferStorage|Http2OutputBuffer|Http2ConnectionStorage|EncodedClosePayloadBytes)")
+            boundary_error("protocol buffer temporary-owner coverage is incomplete"
+                "each owning protocol buffer requires a direct rvalue-borrow probe")
+            break()
+        endif()
+    endforeach()
+    foreach(protocol_buffer_probe IN ITEMS
+            "ExposesRvalueHttp1ChunkHeaderView"
+            "ExposesRvalueResponseHeadBufferStorage"
+            "ExposesRvalueHttp2OutputBuffer"
+            "ExposesRvalueHttp2ConnectionStorage"
+            "ExposesRvalueEncodedClosePayloadBytes")
+        if(NOT protocol_buffer_package_consumer MATCHES
+               "static_assert[(]!${protocol_buffer_probe}<")
+            boundary_error("installed protocol buffer lifetime coverage is incomplete"
+                "tests/package-consumer/http.cpp must reject every temporary owner")
+            break()
+        endif()
+    endforeach()
 endif()
 check_files_no_match("obsolete untyped informational response submit API was restored"
     "submitInformationalResponseHead"

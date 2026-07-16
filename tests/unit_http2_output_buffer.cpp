@@ -5,6 +5,7 @@
 #include <memory_resource>
 #include <string>
 #include <string_view>
+#include <utility>
 
 #include "ruvia/http/detail/http2/Http2FrameCodec.h"
 #include "ruvia/http/detail/http2/Http2OutputBuffer.h"
@@ -18,6 +19,13 @@ using ruvia::detail::Http2OutputConsumeStatus;
 using ruvia::detail::http2ParseFrameHeader;
 using ruvia::detail::http2Read32;
 using ruvia::detail::kHttp2FrameHeaderBytes;
+
+template <typename T>
+concept ExposesRvalueHttp2OutputBuffer = requires(T&& output) {
+    std::move(output).pending();
+};
+
+static_assert(!ExposesRvalueHttp2OutputBuffer<Http2OutputBuffer>);
 
 const unsigned char* bytes(const char* value) noexcept {
     return reinterpret_cast<const unsigned char*>(value);

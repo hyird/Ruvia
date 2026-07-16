@@ -49,6 +49,7 @@
 #include <ruvia/http/detail/client/HttpClientContentEncoding.h>
 #include <ruvia/http/detail/client/HttpOrigin.h>
 #include <ruvia/http/detail/http1/Http1ChunkedBodyDecoder.h>
+#include <ruvia/http/detail/http1/Http1ChunkedFraming.h>
 #include <ruvia/http/detail/body/HttpTransferCodingDecoder.h>
 #include <ruvia/http/detail/http1/Http1ResponseHeadPlan.h>
 #include <ruvia/http/detail/http1/Http1ServerRequestParser.h>
@@ -58,6 +59,7 @@
 #include <ruvia/http/detail/http2/Http2Event.h>
 #include <ruvia/http/detail/http2/Http2Hpack.h>
 #include <ruvia/http/detail/http2/Http2LocalSendState.h>
+#include <ruvia/http/detail/http2/Http2OutputBuffer.h>
 #include <ruvia/http/detail/http2/Http2PeerSettings.h>
 #include <ruvia/http/detail/http2/Http2RemoteContentState.h>
 #include <ruvia/http/detail/http2/Http2RemoteReceiveState.h>
@@ -73,10 +75,12 @@
 #include <ruvia/http/detail/parser/HttpHeaderBlockParser.h>
 #include <ruvia/http/detail/parser/HttpRequestTarget.h>
 #include <ruvia/http/detail/server/HttpFinalResponseControlPlan.h>
+#include <ruvia/http/detail/server/HttpResponseHeadBuffer.h>
 #include <ruvia/http/detail/server/HttpResponseWritePlan.h>
 #include <ruvia/http/detail/websocket/HttpWebSocketServerHandshake.h>
 #include <ruvia/http/detail/websocket/HttpWebSocketHandshakeFields.h>
 #include <ruvia/http/detail/websocket/HttpWebSocketHandshakeValidation.h>
+#include <ruvia/http/detail/websocket/HttpWebSocketUtils.h>
 #include <ruvia/http/detail/websocket/WebSocketServerNegotiation.h>
 #include <ruvia/http/detail/websocket/WsConnection.h>
 #include <ruvia/http/detail/websocket/WsEvent.h>
@@ -92,6 +96,44 @@ concept ExposesRvalueHttpRequestHeaders = requires(T&& request) {
 };
 
 static_assert(!ExposesRvalueHttpRequestHeaders<ruvia::HttpRequest>);
+
+template <typename T>
+concept ExposesRvalueHttp1ChunkHeaderView = requires(T&& header) {
+    std::move(header).view();
+};
+
+template <typename T>
+concept ExposesRvalueResponseHeadBufferStorage =
+    requires(T&& buffer) { std::move(buffer).view(); } ||
+    requires(T&& buffer) { std::move(buffer).stackCursor(std::size_t{}); };
+
+template <typename T>
+concept ExposesRvalueHttp2OutputBuffer = requires(T&& output) {
+    std::move(output).pending();
+};
+
+template <typename T>
+concept ExposesRvalueHttp2ConnectionStorage =
+    requires(T&& connection) { std::move(connection).pendingOutput(); } ||
+    requires(T&& connection) {
+        std::move(connection).takeDrainedDataStreams();
+    };
+
+template <typename T>
+concept ExposesRvalueEncodedClosePayloadBytes = requires(T&& payload) {
+    std::move(payload).bytes();
+};
+
+static_assert(!ExposesRvalueHttp1ChunkHeaderView<
+    ruvia::detail::Http1ChunkHeader>);
+static_assert(!ExposesRvalueResponseHeadBufferStorage<
+    ruvia::detail::ResponseHeadBuffer>);
+static_assert(!ExposesRvalueHttp2OutputBuffer<
+    ruvia::detail::Http2OutputBuffer>);
+static_assert(!ExposesRvalueHttp2ConnectionStorage<
+    ruvia::detail::Http2Connection>);
+static_assert(!ExposesRvalueEncodedClosePayloadBytes<
+    ruvia::detail::WebSocketEncodedClosePayload>);
 
 template <typename Input>
 concept AcceptsHttp1BorrowedParseInput = requires(

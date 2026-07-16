@@ -2198,6 +2198,63 @@ if(NOT _installed_http_response_head_buffer MATCHES
     message(FATAL_ERROR
         "installed HTTP response-head scratch buffer lost exclusive storage state")
 endif()
+set(_installed_http1_chunk_header_buffer_path
+    "${_install_prefix}/include/ruvia/http/detail/http1/Http1ChunkedFraming.h")
+set(_installed_http2_output_buffer_path
+    "${_install_prefix}/include/ruvia/http/detail/http2/Http2OutputBuffer.h")
+set(_installed_http2_connection_buffer_path
+    "${_install_prefix}/include/ruvia/http/detail/http2/Http2Connection.h")
+set(_installed_websocket_close_buffer_path
+    "${_install_prefix}/include/ruvia/http/detail/websocket/HttpWebSocketUtils.h")
+foreach(_installed_protocol_buffer_path IN ITEMS
+        "${_installed_http1_chunk_header_buffer_path}"
+        "${_installed_http2_output_buffer_path}"
+        "${_installed_http2_connection_buffer_path}"
+        "${_installed_websocket_close_buffer_path}")
+    if(NOT EXISTS "${_installed_protocol_buffer_path}")
+        message(FATAL_ERROR
+            "installed HTTP package is missing an owned protocol buffer")
+    endif()
+endforeach()
+file(READ "${_installed_http1_chunk_header_buffer_path}"
+    _installed_http1_chunk_header_buffer)
+file(READ "${_installed_http2_output_buffer_path}"
+    _installed_http2_output_buffer)
+file(READ "${_installed_http2_connection_buffer_path}"
+    _installed_http2_connection_buffer)
+file(READ "${_installed_websocket_close_buffer_path}"
+    _installed_websocket_close_buffer)
+if(NOT _installed_http1_chunk_header_buffer MATCHES
+       "view[(][)] const &[ 	]+noexcept" OR
+   NOT _installed_http1_chunk_header_buffer MATCHES
+       "view[(][)] const &&[ 	]*=[ 	]*delete" OR
+   NOT _installed_http_response_head_buffer MATCHES
+       "view[(][)] const &[ 	]+noexcept" OR
+   NOT _installed_http_response_head_buffer MATCHES
+       "view[(][)] const &&[ 	]*=[ 	]*delete" OR
+   NOT _installed_http_response_head_buffer MATCHES
+       "stackCursor[(]std::size_t bound[)] &[ 	]+noexcept" OR
+   NOT _installed_http_response_head_buffer MATCHES
+       "stackCursor[(]std::size_t[)][ 	]*&&[ 	]*=[ 	]*delete" OR
+   NOT _installed_http2_output_buffer MATCHES
+       "pending[(][)] const &[ 	]+noexcept" OR
+   NOT _installed_http2_output_buffer MATCHES
+       "pending[(][)] const &&[ 	]*=[ 	]*delete" OR
+   NOT _installed_http2_connection_buffer MATCHES
+       "pendingOutput[(][)] const &[ 	]+noexcept" OR
+   NOT _installed_http2_connection_buffer MATCHES
+       "pendingOutput[(][)] const &&[ 	]*=[ 	]*delete" OR
+   NOT _installed_http2_connection_buffer MATCHES
+       "takeDrainedDataStreams[(][)] &[ 	]+noexcept" OR
+   NOT _installed_http2_connection_buffer MATCHES
+       "takeDrainedDataStreams[(][)] &&[ 	]*=[ 	]*delete" OR
+   NOT _installed_websocket_close_buffer MATCHES
+       "bytes[(][)] const &[ 	]+noexcept" OR
+   NOT _installed_websocket_close_buffer MATCHES
+       "bytes[(][)] const &&[ 	]*=[ 	]*delete")
+    message(FATAL_ERROR
+        "installed protocol buffers expose storage from temporary owners")
+endif()
 if(NOT _installed_http1_request_parser MATCHES "class Http1RequestNeedMore final" OR
    NOT _installed_http1_request_parser MATCHES "class Http1ParsedRequest final" OR
    NOT _installed_http1_request_parser MATCHES "class Http1RequestParseFailure final" OR
