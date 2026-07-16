@@ -1,6 +1,8 @@
 #pragma once
 
 #include "ruvia/http/detail/HeaderTokenUtils.h"
+#include "ruvia/http/detail/HttpResponseHeaderBits.h"
+#include "ruvia/http/detail/HttpResponseKnownHeaders.h"
 #include "ruvia/http/detail/parser/HttpParserSyntax.h"
 #include "ruvia/http/HttpHeader.h"
 
@@ -45,6 +47,18 @@ namespace ruvia::detail {
 // framing, routing, authentication, response controls, or content format
 // (RFC 9110 §6.5.1, RFC 9113 §8.1).
 [[nodiscard]] inline bool isForbiddenResponseTrailerName(std::string_view name) noexcept {
+    // The response header classifier is the authoritative set of standardized
+    // fields Ruvia manages. RFC 9110 explicitly permits only ETag (section
+    // 8.8.3) and Accept-Ranges (section 14.3) from that set in trailers; every
+    // other known field lacks trailer permission or controls framing,
+    // representation handling, caching, routing, cookies, methods, or CORS.
+    if (const auto known = classifyResponseHeaderName(name);
+        known != 0 &&
+        known != kResponseHeaderEtag &&
+        known != kResponseHeaderAcceptRanges) {
+        return true;
+    }
+
     switch (classifyRequestHeader(name)) {
         case RequestHeaderKind::kHost:
         case RequestHeaderKind::kContentLength:
@@ -102,12 +116,30 @@ namespace ruvia::detail {
             return httpAsciiEqualsIgnoreCase(name, "Max-Forwards");
         case 13:
             return httpAsciiEqualsIgnoreCase(name, "Cache-Control") ||
-                httpAsciiEqualsIgnoreCase(name, "Accept-Ranges") ||
                 httpAsciiEqualsIgnoreCase(name, "Content-Range");
+        case 15:
+            return httpAsciiEqualsIgnoreCase(name, "X-Frame-Options") ||
+                httpAsciiEqualsIgnoreCase(name, "Referrer-Policy") ||
+                httpAsciiEqualsIgnoreCase(name, "Clear-Site-Data");
+        case 16:
+            return httpAsciiEqualsIgnoreCase(name, "X-XSS-Protection") ||
+                httpAsciiEqualsIgnoreCase(name, "WWW-Authenticate");
         case 18:
-            return httpAsciiEqualsIgnoreCase(name, "Proxy-Authenticate");
+            return httpAsciiEqualsIgnoreCase(name, "Proxy-Authenticate") ||
+                httpAsciiEqualsIgnoreCase(name, "Permissions-Policy");
         case 19:
-            return httpAsciiEqualsIgnoreCase(name, "Proxy-Authorization");
+            return httpAsciiEqualsIgnoreCase(name, "Proxy-Authorization") ||
+                httpAsciiEqualsIgnoreCase(name, "Content-Disposition");
+        case 22:
+            return httpAsciiEqualsIgnoreCase(name, "X-Content-Type-Options");
+        case 23:
+            return httpAsciiEqualsIgnoreCase(name, "Content-Security-Policy");
+        case 25:
+            return httpAsciiEqualsIgnoreCase(name, "Strict-Transport-Security");
+        case 35:
+            return httpAsciiEqualsIgnoreCase(
+                name,
+                "Content-Security-Policy-Report-Only");
         default:
             return false;
     }
