@@ -298,6 +298,10 @@ RUVIA_TEST(header_block_enforces_cors_request_field_grammar) {
     RUVIA_CHECK(!parse(
         "GET / HTTP/1.1\r\nHost: x\r\nOrigin: null\r\n\r\n")
         .error.has_value());
+    RUVIA_CHECK(parse(
+        "GET / HTTP/1.1\r\nHost: x\r\n"
+        "Origin: https://app.example:65536\r\n\r\n")
+        .error == HttpParseError::kInvalidHeader);
 }
 
 RUVIA_TEST(header_block_rejects_invalid_bracketed_host_literal) {

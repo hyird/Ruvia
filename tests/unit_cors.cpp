@@ -66,6 +66,7 @@ RUVIA_TEST(cors_origin_requires_an_explicit_valid_wire_value) {
     RUVIA_CHECK(rejects("https://a\r\nX: y"));
     RUVIA_CHECK(rejects("https://app.example/"));
     RUVIA_CHECK(rejects("https://APP.example"));
+    RUVIA_CHECK(rejects("https://app.example:65536"));
 
     const auto opaque = ruvia::CorsOrigin::opaque();
     RUVIA_CHECK_EQ(opaque.value(), std::string_view("null"));

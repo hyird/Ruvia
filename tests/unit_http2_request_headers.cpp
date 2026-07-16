@@ -370,6 +370,8 @@ RUVIA_TEST(h2_headers_enforce_cors_request_field_grammar) {
     RUVIA_CHECK(!accepts("origin", "*"));
     RUVIA_CHECK(!accepts("origin", "https://app.example/"));
     RUVIA_CHECK(!accepts("origin", "https://APP.example"));
+    RUVIA_CHECK(!accepts("origin", "https://app.example:443"));
+    RUVIA_CHECK(!accepts("origin", "https://app.example:65536"));
     RUVIA_CHECK(!accepts("access-control-request-method", "POST, DELETE"));
     RUVIA_CHECK(!accepts("access-control-request-method", "POST /admin"));
     RUVIA_CHECK(!accepts("access-control-request-headers", ""));

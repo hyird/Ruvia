@@ -300,17 +300,31 @@ inline constexpr std::array<bool, 256> kRegNameCharTable = [] {
         leftGroups + rightGroups <= 6;
 }
 
-[[nodiscard]] bool isValidSerializedOriginPort(
-    std::string_view port) noexcept {
-    if (port.empty() || port.size() > 5) {
+[[nodiscard]] bool parseSerializedOriginPort(
+    std::string_view value,
+    std::uint16_t& port) noexcept {
+    // A serialized URL port is the shortest decimal form of the URL record's
+    // 16-bit port. Merely accepting five digits admits values such as 99999,
+    // while accepting leading zeroes admits spellings no serializer can emit.
+    if (value.empty() ||
+        (value.size() > 1 && value.front() == '0')) {
         return false;
     }
-    for (const auto value : port) {
-        if (!isDecimalDigit(value)) {
-            return false;
-        }
+    return parsePortValue(value, port);
+}
+
+[[nodiscard]] std::optional<std::uint16_t>
+serializedOriginDefaultPort(std::string_view scheme) noexcept {
+    if (scheme == "ftp") {
+        return 21;
     }
-    return true;
+    if (scheme == "http" || scheme == "ws") {
+        return 80;
+    }
+    if (scheme == "https" || scheme == "wss") {
+        return 443;
+    }
+    return std::nullopt;
 }
 
 [[nodiscard]] bool isValidIpv6Literal(std::string_view literal) noexcept {
@@ -567,8 +581,9 @@ bool isValidHttpHost(std::string_view value) noexcept {
 
 bool isValidHttpSerializedOrigin(std::string_view value) noexcept {
     const auto schemeEnd = value.find("://");
+    const auto scheme = value.substr(0, schemeEnd);
     if (schemeEnd == std::string_view::npos ||
-        !isValidSerializedOriginScheme(value.substr(0, schemeEnd))) {
+        !isValidSerializedOriginScheme(scheme)) {
         return false;
     }
 
@@ -615,7 +630,15 @@ bool isValidHttpSerializedOrigin(std::string_view value) noexcept {
             return false;
         }
     }
-    return !hasPort || isValidSerializedOriginPort(port);
+    if (!hasPort) {
+        return true;
+    }
+    std::uint16_t portValue = 0;
+    if (!parseSerializedOriginPort(port, portValue)) {
+        return false;
+    }
+    const auto defaultPort = serializedOriginDefaultPort(scheme);
+    return !defaultPort.has_value() || portValue != *defaultPort;
 }
 
 std::optional<HttpAuthorityView> parseHttpAuthority(std::string_view value) noexcept {
