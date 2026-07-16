@@ -4966,13 +4966,13 @@ if(EXISTS "${HTTP_RESPONSE_STREAM_COMMIT_PLAN}" AND
        NOT web_http1_session_request_completion MATCHES
            "Http1RequestBufferCompaction" OR
        NOT web_http1_session_request_completion MATCHES
-           "Http1RequestBufferRestored" OR
+           "Http1RequestBufferPipelineRestore" OR
        NOT web_http1_session_request_completion MATCHES
            "makeBufferedClosing" OR
        NOT web_http1_session_request_completion MATCHES
            "makeBufferedUnrestored" OR
        NOT web_http1_session_request_completion MATCHES
-           "makeBufferedRestored" OR
+           "makeBufferedPipelineRestore" OR
        NOT web_http1_session_request_completion MATCHES
            "makeCommittedStream" OR
        NOT web_http1_session_request_completion MATCHES
@@ -4996,6 +4996,31 @@ if(EXISTS "${HTTP_RESPONSE_STREAM_COMMIT_PLAN}" AND
         boundary_error("server runtime re-derived streamed access-log status"
             "H1 must consume one request completion carrying wire status, connection disposition, and buffer cleanup; H2 must log exact committed status before close/reset")
     endif()
+
+    # Every method/target/header view of the request being completed borrows the
+    # connection read buffer, and the response is not built nor the access log
+    # recorded until after the body route returns. So a body runtime must hand its
+    # pipelined suffix to the session rather than shifting the next request into
+    # that buffer itself -- doing so logs request N under request N+1's path.
+    file(READ "${WEB_CONTEXT_LAZY_BODY_ROUTE}" web_body_route_completion)
+    # Shifting bytes to the front of the read buffer means rewriting the fill
+    # level, so a mutable usedBytes here is the signature of that regression;
+    # reading the buffer to locate the body (by value, const) stays fine.
+    if(NOT web_body_route_completion MATCHES "takePipeline" OR
+       NOT web_body_route_completion MATCHES "pipelineStash" OR
+       web_body_route_completion MATCHES "std::size_t& usedBytes")
+        boundary_error("HTTP/1 body route completion wrote the connection read buffer"
+            "completeSuccessfulHttpBodyRoute must hand the pipelined suffix to a request-scoped stash; the session installs it after the response is written and the access log is recorded")
+    endif()
+    check_files_no_match(
+        "HTTP/1 body runtime restored an eager read-buffer pipeline shift"
+        "restorePipeline"
+        "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/body/HttpStreamBodyReader.h"
+        "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/body/HttpStreamBodyReaderCore.inl"
+        "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/body/HttpStreamBodyReaderPipeline.inl"
+        "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/body/HttpLazyBufferedBody.h"
+        "${WEB_CONTEXT_LAZY_BODY_ROUTE}"
+        "${WEB_CONTEXT_STREAM_BODY_ROUTE}")
 
     if(NOT response_stream_status_test MATCHES
            "response_stream_dispatch_preserves_exact_committed_status" OR

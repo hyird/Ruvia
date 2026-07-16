@@ -32,7 +32,7 @@ using ruvia::detail::Http1ConnectionDisposition;
 using ruvia::detail::Http1RequestBufferCompaction;
 using ruvia::detail::Http1RequestBufferCompletion;
 using ruvia::detail::Http1RequestBufferDiscarded;
-using ruvia::detail::Http1RequestBufferRestored;
+using ruvia::detail::Http1RequestBufferPipelineRestore;
 using ruvia::detail::Http1SessionRequestCompletion;
 using ruvia::detail::Http1ServerRequestParseState;
 using ruvia::detail::Http1ServerRequestParser;
@@ -53,7 +53,7 @@ template <typename Result>
 concept HasAnyRvalueRequestCompletionBorrow =
     requires(Result&& value) { std::move(value).discarded(); } ||
     requires(Result&& value) { std::move(value).compaction(); } ||
-    requires(Result&& value) { std::move(value).restored(); } ||
+    requires(Result&& value) { std::move(value).pipelineRestore(); } ||
     requires(Result&& value) { std::move(value).bufferedResponse(); } ||
     requires(Result&& value) { std::move(value).committedStream(); } ||
     requires(Result&& value) { std::move(value).bufferCompletion(); };
@@ -68,14 +68,14 @@ static_assert(!std::default_initializable<Http1RequestBufferDiscarded>);
 static_assert(!std::constructible_from<
     Http1RequestBufferCompaction,
     std::size_t>);
-static_assert(!std::default_initializable<Http1RequestBufferRestored>);
+static_assert(!std::default_initializable<Http1RequestBufferPipelineRestore>);
 static_assert(!std::default_initializable<Http1BufferedResponseReady>);
 static_assert(!std::constructible_from<
     Http1CommittedStreamResponse,
     std::uint16_t>);
 static_assert(HasConsumedBytes<Http1RequestBufferCompaction>);
 static_assert(!HasConsumedBytes<Http1RequestBufferDiscarded>);
-static_assert(!HasConsumedBytes<Http1RequestBufferRestored>);
+static_assert(!HasConsumedBytes<Http1RequestBufferPipelineRestore>);
 static_assert(HasCompletionStatus<Http1CommittedStreamResponse>);
 static_assert(!HasCompletionStatus<Http1BufferedResponseReady>);
 static_assert(std::same_as<
@@ -132,7 +132,7 @@ RUVIA_TEST(http1_session_request_completion_owns_wire_and_buffer_outcome) {
         buffered.bufferCompletion().compaction()->consumedBytes(),
         std::size_t{12});
     RUVIA_CHECK(buffered.bufferCompletion().discarded() == nullptr);
-    RUVIA_CHECK(buffered.bufferCompletion().restored() == nullptr);
+    RUVIA_CHECK(buffered.bufferCompletion().pipelineRestore() == nullptr);
 
     const auto committed =
         Http1SessionRequestCompletion::makeCommittedStream(
@@ -160,7 +160,7 @@ RUVIA_TEST(http1_session_request_completion_discriminates_close_and_restore) {
                 Http1ConnectionDisposition::kClose);
     RUVIA_CHECK(closing.bufferCompletion().discarded() != nullptr);
     RUVIA_CHECK(closing.bufferCompletion().compaction() == nullptr);
-    RUVIA_CHECK(closing.bufferCompletion().restored() == nullptr);
+    RUVIA_CHECK(closing.bufferCompletion().pipelineRestore() == nullptr);
 
     const auto unshiftedClosing =
         Http1SessionRequestCompletion::makeBufferedUnrestored(
@@ -178,12 +178,16 @@ RUVIA_TEST(http1_session_request_completion_discriminates_close_and_restore) {
     RUVIA_CHECK(committedClosing.bufferCompletion().discarded() != nullptr);
     RUVIA_CHECK(committedClosing.bufferCompletion().compaction() == nullptr);
 
-    const auto restored =
-        Http1SessionRequestCompletion::makeBufferedRestored(
-            reusableHttp11Plan());
-    RUVIA_CHECK(restored.bufferCompletion().discarded() == nullptr);
-    RUVIA_CHECK(restored.bufferCompletion().compaction() == nullptr);
-    RUVIA_CHECK(restored.bufferCompletion().restored() != nullptr);
+    const auto restore =
+        Http1SessionRequestCompletion::makeBufferedPipelineRestore(
+            reusableHttp11Plan(),
+            "GET /next HTTP/1.1\r\n\r\n");
+    RUVIA_CHECK(restore.bufferCompletion().discarded() == nullptr);
+    RUVIA_CHECK(restore.bufferCompletion().compaction() == nullptr);
+    RUVIA_CHECK(restore.bufferCompletion().pipelineRestore() != nullptr);
+    RUVIA_CHECK_EQ(
+        restore.bufferCompletion().pipelineRestore()->pipeline(),
+        std::string_view("GET /next HTTP/1.1\r\n\r\n"));
 }
 
 RUVIA_TEST(http1_request_buffer_completion_applies_exactly_one_cleanup) {
@@ -200,15 +204,22 @@ RUVIA_TEST(http1_request_buffer_completion_applies_exactly_one_cleanup) {
     RUVIA_CHECK_EQ(usedBytes, std::size_t{4});
     RUVIA_CHECK_EQ(live(readBuffer, usedBytes), std::string_view("PIPE"));
 
-    const auto restored =
-        Http1SessionRequestCompletion::makeBufferedRestored(
-            reusableHttp11Plan());
+    // A body runtime that kept the pipelined bytes out of the read buffer -- so
+    // that the completed request's borrowed views survived until the response was
+    // written -- hands them over here. Installing them replaces the live bytes and
+    // grows the buffer when the handover does not fit.
+    constexpr std::string_view handedOver = "GET /next HTTP/1.1\r\nHost: x\r\n\r\n";
+    const auto restore =
+        Http1SessionRequestCompletion::makeBufferedPipelineRestore(
+            reusableHttp11Plan(),
+            handedOver);
     applyReusableHttp1RequestBufferCompletion(
-        restored.bufferCompletion(),
+        restore.bufferCompletion(),
         readBuffer,
         usedBytes);
-    RUVIA_CHECK_EQ(usedBytes, std::size_t{4});
-    RUVIA_CHECK_EQ(live(readBuffer, usedBytes), std::string_view("PIPE"));
+    RUVIA_CHECK_EQ(usedBytes, handedOver.size());
+    RUVIA_CHECK_EQ(live(readBuffer, usedBytes), handedOver);
+    RUVIA_CHECK(readBuffer.size() >= handedOver.size());
 }
 
 RUVIA_TEST(connection_read_buffer_partial_consume_moves_remainder) {

@@ -29,8 +29,8 @@ public:
         return reader_.consumption();
     }
 
-    void restorePipeline(std::pmr::string& readBuffer, std::size_t& usedBytes) {
-        reader_.restorePipeline(readBuffer, usedBytes);
+    void takePipeline(std::pmr::string& stash) {
+        reader_.takePipeline(stash);
     }
 
     [[nodiscard]] Task<std::string_view> readAll() {

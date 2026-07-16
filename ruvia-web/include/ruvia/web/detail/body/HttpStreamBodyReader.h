@@ -40,7 +40,12 @@ public:
     StreamBodyReader& operator=(const StreamBodyReader&) = delete;
 
     [[nodiscard]] Http1RequestBodyConsumption consumption() const noexcept;
-    void restorePipeline(std::pmr::string& readBuffer, std::size_t& usedBytes);
+    // Hands the pipelined suffix -- the bytes of the next request that arrived
+    // in the same segment -- to `stash`, and drops this reader's claim on them.
+    // The connection read buffer is deliberately untouched: every view in the
+    // request being served still borrows it, so the session installs these bytes
+    // itself once those views are dead.
+    void takePipeline(std::pmr::string& stash);
 
     [[nodiscard]] Task<std::optional<std::string_view>> read();
     Task<std::string_view> readAll(std::pmr::string& body);
@@ -50,11 +55,6 @@ private:
     void compactPending();
     [[nodiscard]] std::string_view initialPipelineRemainder() const noexcept;
     [[nodiscard]] std::string_view bufferedPipelineRemainder() const noexcept;
-    static void restorePipelineBytes(
-        std::pmr::string& readBuffer,
-        std::size_t& usedBytes,
-        std::string_view initialPipeline,
-        std::string_view bufferedPipeline);
     void resetPipelineState() noexcept;
     void materializeInitialRemainder();
     Task<void> readMore();

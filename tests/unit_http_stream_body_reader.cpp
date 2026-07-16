@@ -153,9 +153,8 @@ TransferBodyObservation readTransferBody(
 
     observation.consumption = reader.consumption();
     std::pmr::string pipeline(&resource);
-    std::size_t usedBytes = 0;
-    reader.restorePipeline(pipeline, usedBytes);
-    observation.pipeline.assign(pipeline.data(), usedBytes);
+    reader.takePipeline(pipeline);
+    observation.pipeline.assign(pipeline.data(), pipeline.size());
     return observation;
 }
 
@@ -180,12 +179,10 @@ RUVIA_TEST(http1_without_body_plan_preserves_the_entire_pipeline) {
         reader.consumption() ==
         ruvia::detail::Http1RequestBodyConsumption::kComplete);
 
-    std::pmr::string restored(&resource);
-    std::size_t usedBytes = 0;
-    reader.restorePipeline(restored, usedBytes);
-    RUVIA_CHECK_EQ(usedBytes, restored.size());
+    std::pmr::string taken(&resource);
+    reader.takePipeline(taken);
     RUVIA_CHECK_EQ(
-        std::string_view(restored.data(), restored.size()),
+        std::string_view(taken.data(), taken.size()),
         std::string_view("GET /next HTTP/1.1\r\nHost: x\r\n\r\n"));
 }
 

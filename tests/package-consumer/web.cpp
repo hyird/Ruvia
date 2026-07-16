@@ -536,7 +536,7 @@ concept ExposesAnyRvalueWebExecutionBorrow =
     requires(T&& value) { std::move(value).failed(); } ||
     requires(T&& value) { std::move(value).discarded(); } ||
     requires(T&& value) { std::move(value).compaction(); } ||
-    requires(T&& value) { std::move(value).restored(); } ||
+    requires(T&& value) { std::move(value).pipelineRestore(); } ||
     requires(T&& value) { std::move(value).committedStream(); } ||
     requires(T&& value) { std::move(value).bufferCompletion(); } ||
     requires(T&& value) { std::move(value).selectedRoute(); } ||
@@ -1577,8 +1577,8 @@ static_assert(std::same_as<
     const ruvia::detail::Http1RequestBufferCompaction*>);
 static_assert(std::same_as<
     decltype(std::declval<const ruvia::detail::
-        Http1RequestBufferCompletion&>().restored()),
-    const ruvia::detail::Http1RequestBufferRestored*>);
+        Http1RequestBufferCompletion&>().pipelineRestore()),
+    const ruvia::detail::Http1RequestBufferPipelineRestore*>);
 static_assert(HasResponseStatus<
     ruvia::detail::Http1CommittedStreamResponse>);
 static_assert(!HasResponseStatus<
@@ -1590,7 +1590,7 @@ static_assert(HasConsumedBytes<
 static_assert(!HasConsumedBytes<
     ruvia::detail::Http1RequestBufferDiscarded>);
 static_assert(!HasConsumedBytes<
-    ruvia::detail::Http1RequestBufferRestored>);
+    ruvia::detail::Http1RequestBufferPipelineRestore>);
 static_assert(std::same_as<
     decltype(ruvia::detail::dispatchHttpWebSocketRoute(
         std::declval<asio::ip::tcp::socket&>(),

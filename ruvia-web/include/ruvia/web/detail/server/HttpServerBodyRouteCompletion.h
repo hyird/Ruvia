@@ -53,8 +53,8 @@ struct HttpLazyBufferedBodyRouteState final {
         return body->loader().consumption();
     }
 
-    void restorePipeline(std::pmr::string& readBuffer, std::size_t& usedBytes) {
-        body->loader().restorePipeline(readBuffer, usedBytes);
+    void takePipeline(std::pmr::string& stash) {
+        body->loader().takePipeline(stash);
     }
 };
 
@@ -109,7 +109,11 @@ inline Task<Http1SessionRequestCompletion> completeFailedHttpBodyRoute(
         connectionPlan);
 }
 
-template <typename RestorePipeline>
+// `pipelineStash` must be request-scoped storage that outlives the returned
+// completion: it carries the next pipelined request until the session installs
+// it. The read buffer is not touched here -- the response has not been written
+// and the access log not recorded yet, and both still read views that borrow it.
+template <typename TakePipeline>
 [[nodiscard]] inline Http1SessionRequestCompletion
 completeSuccessfulHttpBodyRoute(
     ConnectionScanner::Entry& scannerEntry,
@@ -117,19 +121,19 @@ completeSuccessfulHttpBodyRoute(
     Http1ServerConnectionPlan connectionPlan,
     Http1RequestSequence& requestSequence,
     Http1RequestBodyConsumption bodyConsumption,
-    std::pmr::string& readBuffer,
-    std::size_t& usedBytes,
-    RestorePipeline restorePipeline) {
+    std::pmr::string& pipelineStash,
+    TakePipeline takePipeline) {
     connectionPlan = finalizeBodyRouteResponse(
         response,
         connectionPlan,
         requestSequence,
         bodyConsumption);
     if (connectionPlan.disposition() == Http1ConnectionDisposition::kReuse) {
-        restorePipeline(readBuffer, usedBytes);
+        takePipeline(pipelineStash);
         scannerEntry.touch();
-        return Http1SessionRequestCompletion::makeBufferedRestored(
-            connectionPlan);
+        return Http1SessionRequestCompletion::makeBufferedPipelineRestore(
+            connectionPlan,
+            std::string_view(pipelineStash));
     }
     scannerEntry.touch();
     return Http1SessionRequestCompletion::makeBufferedClosing(

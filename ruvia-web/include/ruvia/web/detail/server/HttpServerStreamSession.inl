@@ -82,6 +82,11 @@ Task<void> HttpServer::handleStreamSession(
             memory_,
             std::span<std::byte>(workSet->arenaBlock, sizeof(workSet->arenaBlock)));
         HttpResponse response(requestMemory.resource());
+        // Holds the next pipelined request from the moment a body route hands it
+        // over until the read buffer is cleaned up below. Declared before
+        // requestCompletion, which borrows it, and empty for the common case of a
+        // client that does not pipeline.
+        std::pmr::string pipelineStash(requestMemory.resource());
         std::optional<Http1SessionRequestCompletion> requestCompletion;
         // Rejections that close the connection funnel through one co_await
         // site after the read loop: every co_await expression in a coroutine
@@ -282,6 +287,7 @@ Task<void> HttpServer::handleStreamSession(
                         options_,
                         readBuffer,
                         usedBytes,
+                        pipelineStash,
                         response,
                         requestSequence));
                     break;
@@ -342,10 +348,9 @@ Task<void> HttpServer::handleStreamSession(
                         parsed.connectionPlan,
                         requestSequence,
                         bodyState.consumption(),
-                        readBuffer,
-                        usedBytes,
-                        [&bodyState](std::pmr::string& buffer, std::size_t& size) {
-                            bodyState.restorePipeline(buffer, size);
+                        pipelineStash,
+                        [&bodyState](std::pmr::string& stash) {
+                            bodyState.takePipeline(stash);
                         }));
                     break;
                 }

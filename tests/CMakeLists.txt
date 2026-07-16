@@ -341,6 +341,11 @@ target_link_libraries(ruvia_server_shutdown_drain PRIVATE ruvia::web)
 add_test(NAME ruvia_server_shutdown_drain COMMAND ruvia_server_shutdown_drain)
 set_tests_properties(ruvia_server_shutdown_drain PROPERTIES TIMEOUT 90)
 
+add_executable(ruvia_server_pipeline_request_views server_pipeline_request_views.cpp)
+target_link_libraries(ruvia_server_pipeline_request_views PRIVATE ruvia::web)
+add_test(NAME ruvia_server_pipeline_request_views COMMAND ruvia_server_pipeline_request_views)
+set_tests_properties(ruvia_server_pipeline_request_views PROPERTIES TIMEOUT 60)
+
 add_executable(ruvia_web_worker web_worker.cpp)
 target_link_libraries(ruvia_web_worker PRIVATE ruvia::web)
 add_test(NAME ruvia_web_worker COMMAND ruvia_web_worker)

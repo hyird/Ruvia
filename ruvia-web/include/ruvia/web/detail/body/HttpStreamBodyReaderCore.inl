@@ -72,9 +72,17 @@ Http1RequestBodyConsumption StreamBodyReader<Stream>::consumption() const noexce
 }
 
 template <typename Stream>
-void StreamBodyReader<Stream>::restorePipeline(std::pmr::string& readBuffer, std::size_t& usedBytes) {
+void StreamBodyReader<Stream>::takePipeline(std::pmr::string& stash) {
     compactPending();
-    restorePipelineBytes(readBuffer, usedBytes, initialPipelineRemainder(), bufferedPipelineRemainder());
+    // The remainder is split across at most two places: the bytes still sitting
+    // in the connection read buffer behind the body, and the bytes this reader
+    // over-read from the socket into its own buffer. Neither aliases `stash`.
+    const auto initialPipeline = initialPipelineRemainder();
+    const auto bufferedPipeline = bufferedPipelineRemainder();
+    stash.clear();
+    stash.reserve(initialPipeline.size() + bufferedPipeline.size());
+    stash.append(initialPipeline);
+    stash.append(bufferedPipeline);
     resetPipelineState();
 }
 
