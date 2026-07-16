@@ -45,10 +45,14 @@ Task<void> pumpSansIoConnection(
         // synchronously, so this drains the pending output completely.
         while (connection.wantsWrite()) {
             const auto out = connection.pendingOutput();
-            const auto ec = co_await asyncError([&stream, out](auto handler) mutable {
-                asio::async_write(
-                    stream, asio::buffer(out.data(), out.size()), std::move(handler));
-            });
+            const auto writeCompletion = co_await asyncAsio(
+                [&stream, out](auto handler) mutable {
+                    asio::async_write(
+                        stream,
+                        asio::buffer(out.data(), out.size()),
+                        std::move(handler));
+                });
+            const auto ec = writeCompletion.errorCode();
             if (ec) {
                 co_return;
             }
@@ -59,11 +63,13 @@ Task<void> pumpSansIoConnection(
         if (shouldStop(connection)) {
             co_return;
         }
-        const auto [ec, bytesRead] = co_await asyncResult<std::size_t>(
+        auto readCompletion = co_await asyncAsio<std::size_t>(
             [&stream, &readBuffer](auto handler) mutable {
                 stream.async_read_some(
                     asio::buffer(readBuffer.data(), readBuffer.size()), std::move(handler));
             });
+        const auto ec = readCompletion.errorCode();
+        const auto bytesRead = readCompletion.result();
         if (ec || bytesRead == 0) {
             co_return;
         }

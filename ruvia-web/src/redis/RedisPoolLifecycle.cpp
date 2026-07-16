@@ -31,14 +31,12 @@ RedisPool::RedisPool(asio::io_context& ioContext, RedisConfig config, std::pmr::
       config_(std::move(config)),
       resource_(detail::pmrResourceOrDefault(resource)),
       connections_(resource_),
-      free_(resource_) {
+      scheduler_(config_.poolSizePerWorker, resource_) {
     validateRedisConfig(config_);
     const auto poolSize = config_.poolSizePerWorker;
     connections_.reserve(poolSize);
-    free_.reserve(poolSize);
     for (std::size_t i = 0; i < poolSize; ++i) {
         connections_.emplace_back(ioContext_, resource_);
-        free_.push_back(i);
     }
 }
 
@@ -56,8 +54,9 @@ Task<void> RedisPool::connect() {
 }
 
 void RedisPool::closeNow() noexcept {
-    closing_ = true;
-    waiters_.closeAll();
+    if (!scheduler_.close()) {
+        return;
+    }
     for (auto& connection : connections_) {
         close(connection);
     }
@@ -65,18 +64,18 @@ void RedisPool::closeNow() noexcept {
 
 void RedisPool::scanDeadlines(std::chrono::steady_clock::time_point now) noexcept {
     if (config_.acquireTimeout.has_value()) {
-        waiters_.expireDeadlines(now);
+        scheduler_.scanDeadlines(now);
     }
 
     for (auto& connection : connections_) {
-        if (!connection.deadlineActive || connection.deadline > now) {
+        const auto kind = connection.deadline.expire(now);
+        if (!kind.has_value()) {
             continue;
         }
-        connection.timedOut = true;
         std::error_code ignored;
-        if (connection.deadlineKind == Connection::DeadlineKind::kResolve) {
+        if (*kind == Connection::DeadlineKind::kResolve) {
             connection.resolver.cancel();
-        } else if (connection.deadlineKind == Connection::DeadlineKind::kSocket) {
+        } else if (*kind == Connection::DeadlineKind::kSocket) {
             connection.socket.cancel(ignored);
         }
     }

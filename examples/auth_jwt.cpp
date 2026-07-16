@@ -1,3 +1,6 @@
+// JWT auth: signing, verification, bearer-token middleware and protected
+// routes. Built only with RUVIA_ENABLE_JWT=ON.
+
 #include <chrono>
 #include <string_view>
 
@@ -35,7 +38,7 @@ public:
     ruvia::Task<void> handle(ruvia::Context& c, ruvia::Next& next) {
         const auto token = ruvia::jwtBearerToken(c.req().header("Authorization").value_or(""));
         if (!token) {
-            c.respond(c.error(401, "missing_token", "missing bearer token"));
+            c.respond(c.error(ruvia::http_status::kUnauthorized, "missing_token", "missing bearer token"));
             co_return;
         }
 
@@ -43,7 +46,7 @@ public:
             const auto payload = ruvia::jwtVerify(*token, verifyOptions(), c.resource());
             c.header("X-Jwt-Subject", payload.subject());
         } catch (...) {
-            c.respond(c.error(401, "invalid_token", "invalid bearer token"));
+            c.respond(c.error(ruvia::http_status::kUnauthorized, "invalid_token", "invalid bearer token"));
             co_return;
         }
 
@@ -65,7 +68,7 @@ private:
         auto options = signOptions(c);
         options.subject.assign(c.req().query("sub").value_or("example-user"));
         auto jwt = ruvia::jwtSign(options, c.resource());
-        co_return c.text(jwt);
+        co_return c.text(std::move(jwt));
     }
 
     ruvia::Task<ruvia::HttpResponse> me(ruvia::Context& c) {
@@ -76,7 +79,7 @@ private:
 int main() {
     ruvia::app()
         .setListenAddress("0.0.0.0")
-        .setHttpListenPort(8085)
-        .setThreadNum(2)
+        .setServerTopology(ruvia::ServerTopology::http(8085))
+        .setWorkersPerListener(2)
         .run();
 }

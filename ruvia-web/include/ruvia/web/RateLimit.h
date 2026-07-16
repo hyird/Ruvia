@@ -36,6 +36,8 @@ struct RouteRateLimitOptions final {
 template <typename Derived>
 class RouteRateLimitMiddleware : public Middleware<Derived> {
 public:
+    static constexpr bool ruviaUsesRouteRateLimit = true;
+
     Task<void> handle(Context& context, Next& next) {
         static_assert(
             Derived::ruviaRateLimitMaxRequests > 0,

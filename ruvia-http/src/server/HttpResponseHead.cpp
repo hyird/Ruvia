@@ -2,11 +2,15 @@
 
 #include <charconv>
 #include <cstring>
+#include <optional>
 #include <stdexcept>
 
 #include "ruvia/http/detail/server/HttpDateCache.h"
+#include "ruvia/http/detail/HttpContentLength.h"
 #include "ruvia/http/detail/HttpResponseHeaderAccess.h"
 #include "ruvia/http/detail/HttpResponseHeaderState.h"
+#include "ruvia/http/HttpHeader.h"
+#include "ruvia/http/HttpLimits.h"
 #include "ruvia/http/HttpStatus.h"
 
 namespace ruvia::detail {
@@ -16,13 +20,33 @@ namespace {
 struct ResponseHeadFlags {
     HttpProtocolVersion protocolVersion{HttpProtocolVersion::kHttp11};
     bool emitChunkedTransferEncoding{false};
-    bool autoContentLengthOwnedByWriter{false};
-    bool explicitContentLengthAllowed{false};
+    bool emitContentLength{false};
     std::uint64_t canonicalContentLength{0};
 };
 
 inline constexpr std::string_view kChunkedTransferEncodingHeader =
     "Transfer-Encoding: chunked\r\n";
+
+[[nodiscard]] std::optional<std::uint64_t> explicitContentLength(
+    const HttpResponse& response) {
+    HttpContentLengthState state;
+    bool present = false;
+    for (const auto& header : response.headers()) {
+        if (responseHeaderKnownBit(header) != kResponseHeaderContentLength) {
+            continue;
+        }
+        present = true;
+        if (state.parseField(header.value()) !=
+            HttpContentLengthParseStatus::kOk) {
+            throw std::invalid_argument(
+                "invalid explicit HTTP response Content-Length");
+        }
+    }
+    if (!present) {
+        return std::nullopt;
+    }
+    return static_cast<std::uint64_t>(*state.value());
+}
 
 // Unchecked sink writing through a raw cursor; the caller guarantees capacity
 // via ResponseHeadBuffer::stackCursor. Constant-size appends inline to stores.
@@ -49,11 +73,27 @@ struct RawHeadSink {
     }
 };
 
+void addResponseHeadBytes(std::size_t& total, std::size_t bytes) {
+    if (bytes > kMaxHttpHeaderBytes - total) {
+        throw std::length_error("HTTP response head is too large");
+    }
+    total += bytes;
+}
+
+[[nodiscard]] std::size_t decimalDigits(std::uint64_t value) noexcept {
+    std::size_t digits = 1;
+    while (value >= 10) {
+        value /= 10;
+        ++digits;
+    }
+    return digits;
+}
+
 template <typename Sink>
 void emitResponseHead(
     const HttpResponse& response,
     Sink& sink,
-    std::uint16_t responseStatus,
+    HttpStatusCode responseStatus,
     std::string_view reasonPhrase,
     std::string_view dateHeader,
     ResponseHeadFlags flags) {
@@ -61,7 +101,8 @@ void emitResponseHead(
         flags.protocolVersion == HttpProtocolVersion::kHttp10
             ? std::string_view("HTTP/1.0 ")
             : std::string_view("HTTP/1.1 "));
-    sink.appendUnsigned(responseStatus);
+    const auto statusToken = httpStatusCodeToken(responseStatus);
+    sink.append(httpStatusCodeTokenView(statusToken));
     // RFC 9112 requires this SP even when the optional reason phrase is empty.
     sink.append(' ');
     sink.append(reasonPhrase);
@@ -74,8 +115,7 @@ void emitResponseHead(
         // an HTTP/1.0 response, or attach Content-Length to a body-open
         // close-delimited stream.
         if (knownBit == kResponseHeaderTransferEncoding ||
-            (knownBit == kResponseHeaderContentLength &&
-             !flags.explicitContentLengthAllowed)) {
+            knownBit == kResponseHeaderContentLength) {
             continue;
         }
         sink.append(header.name());
@@ -91,7 +131,7 @@ void emitResponseHead(
     if (flags.emitChunkedTransferEncoding) {
         sink.append(kChunkedTransferEncodingHeader);
     }
-    if (flags.autoContentLengthOwnedByWriter) {
+    if (flags.emitContentLength) {
         sink.append(std::string_view("Content-Length: "));
         sink.appendUnsigned(flags.canonicalContentLength);
         sink.append(std::string_view("\r\n"));
@@ -105,7 +145,7 @@ void appendResponseHead(
     const HttpResponse& response,
     ResponseHeadBuffer& head,
     const Http1ResponseHeadPlan& plan) {
-    const auto& bodyPlan = plan.bodyPlan();
+    const auto bodyPlan = plan.bodyPlan();
     if (response.status() != bodyPlan.responseStatus()) {
         throw std::invalid_argument(
             "HTTP/1 response plan status does not match response");
@@ -118,7 +158,7 @@ void appendResponseHead(
             "HTTP/1 response plan representation does not match response");
     }
     const auto responseStatus = bodyPlan.responseStatus();
-    const auto& policy = bodyPlan.policy();
+    const auto policy = bodyPlan.policy();
     const bool emitChunkedTransferEncoding =
         plan.chunkedStream() != nullptr && policy.transferEncodingAllowed();
     const bool autoContentLengthOwnedByWriter =
@@ -130,44 +170,71 @@ void appendResponseHead(
         !emitChunkedTransferEncoding &&
         !autoContentLengthOwnedByWriter &&
         (plan.closeDelimitedStream() == nullptr || bodyPlan.bodySuppressed());
+    const auto knownBits = responseKnownHeaderBits(response);
+    const auto declaredContentLength =
+        explicitContentLengthAllowed &&
+            (knownBits & kResponseHeaderContentLength) != 0
+        ? explicitContentLength(response)
+        : std::nullopt;
     const ResponseHeadFlags flags{
         .protocolVersion = plan.protocolVersion(),
         .emitChunkedTransferEncoding = emitChunkedTransferEncoding,
-        .autoContentLengthOwnedByWriter = autoContentLengthOwnedByWriter,
-        .explicitContentLengthAllowed = explicitContentLengthAllowed,
+        .emitContentLength =
+            autoContentLengthOwnedByWriter ||
+            declaredContentLength.has_value(),
         // Buffered HEAD metadata retains the selected representation length.
         // A status-level no-content policy that still owns framing (205) is
         // canonicalized to zero for both buffered and streaming heads.
-        .canonicalContentLength =
+        .canonicalContentLength = declaredContentLength.value_or(
             buffered != nullptr && policy.bodyAllowed()
                 ? buffered->contentLength()
-                : std::uint64_t{0}};
-
-    const auto knownBits = responseKnownHeaderBits(response);
+                : std::uint64_t{0})};
 
     const auto reasonPhrase = httpReasonPhrase(responseStatus);
     const auto dateHeader = cachedDateHeader();
 
-    // Upper bound on emitted bytes (filtered headers are counted anyway; the
-    // numeric slots use the 20-digit std::uint64_t worst case). The raw stack
-    // sink below emits without per-append bounds checks, so this must never
-    // undercount the actual output.
-    std::size_t bound = 9 + 20 + 1 + reasonPhrase.size() + 2;
+    // Measure the exact emitted head before touching reusable output storage.
+    // This both bounds the unchecked raw stack sink and enforces the same 64 KiB
+    // field-section ceiling used by request and HTTP/2 paths.
+    std::size_t headBytes = 9;
+    addResponseHeadBytes(headBytes, kHttpStatusCodeTokenSize);
+    addResponseHeadBytes(headBytes, 1);
+    addResponseHeadBytes(headBytes, reasonPhrase.size());
+    addResponseHeadBytes(headBytes, 2);
+    std::size_t fieldCount = 0;
     for (const auto& header : response.headers()) {
-        bound += header.name().size() + header.value().size() + 4;
+        const auto knownBit = responseHeaderKnownBit(header);
+        if (knownBit == kResponseHeaderTransferEncoding ||
+            knownBit == kResponseHeaderContentLength) {
+            continue;
+        }
+        ++fieldCount;
+        addResponseHeadBytes(headBytes, header.name().size());
+        addResponseHeadBytes(headBytes, header.value().size());
+        addResponseHeadBytes(headBytes, 4);
     }
     if ((knownBits & kResponseHeaderDate) == 0) {
-        bound += dateHeader.size();
+        ++fieldCount;
+        addResponseHeadBytes(headBytes, dateHeader.size());
     }
     if (emitChunkedTransferEncoding) {
-        bound += kChunkedTransferEncodingHeader.size();
+        ++fieldCount;
+        addResponseHeadBytes(
+            headBytes, kChunkedTransferEncodingHeader.size());
     }
-    if (autoContentLengthOwnedByWriter) {
-        bound += 16 + 20 + 2;
+    if (flags.emitContentLength) {
+        ++fieldCount;
+        addResponseHeadBytes(headBytes, 16);
+        addResponseHeadBytes(
+            headBytes, decimalDigits(flags.canonicalContentLength));
+        addResponseHeadBytes(headBytes, 2);
     }
-    bound += 2;
+    if (fieldCount > kMaxHttpHeaderFields) {
+        throw std::length_error("too many HTTP response headers");
+    }
+    addResponseHeadBytes(headBytes, 2);
 
-    if (char* cursor = head.stackCursor(bound); cursor != nullptr) {
+    if (char* cursor = head.stackCursor(headBytes); cursor != nullptr) {
         RawHeadSink sink{cursor};
         emitResponseHead(
             response,
@@ -179,7 +246,7 @@ void appendResponseHead(
         head.commitStack(sink.out);
         return;
     }
-    head.reserveAdditional(bound);
+    head.reserveAdditional(headBytes);
     emitResponseHead(
         response,
         head,

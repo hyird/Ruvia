@@ -9,8 +9,10 @@
 #include "ruvia/web/detail/http/ContextInternal.h"
 #include "ruvia/http/detail/HttpResponseHeaderState.h"
 #include "ruvia/web/detail/http/StreamingInternal.h"
+#include "ruvia/web/detail/server/HttpResponseStreamState.h"
 #include "ruvia/http/HttpProtocolError.h"
 #include "ruvia/web/Error.h"
+#include "ruvia/web/StaticFiles.h"
 #include "ruvia/web/Validation.h"
 #include "ruvia/web/detail/http/HttpErrorResponse.h"
 #include "ruvia/web/detail/http/UnsupportedRequestContentCoding.h"
@@ -24,7 +26,7 @@ void setAllowHeader(HttpResponse& response, std::uint32_t methodMask) {
 
 HttpResponse makeAllowNoContentResponse(RequestMemory& memory, std::uint32_t methodMask) {
     HttpResponse response(memory.resource());
-    response.status(204);
+    response.status(ruvia::http_status::kNoContent);
     setAllowHeader(response, methodMask);
     return response;
 }
@@ -42,8 +44,6 @@ Context makeRouteContext(
             memory,
             request,
             route.path(),
-            route.method(),
-            route.middlewareCount(),
             routeRateLimitScope,
             services);
     }
@@ -55,20 +55,38 @@ Context makeRouteContext(
         route.paramNames().data(),
         values.data(),
         values.size(),
-        route.method(),
-        route.middlewareCount(),
         routeRateLimitScope,
         services);
 }
 
 detail::ContextServices withRouteHandlers(
     detail::ContextServices services,
+    const detail::RouteTable& routes,
     HttpErrorHandler errorHandler,
     HttpNotFoundHandler notFoundHandler) noexcept {
     return services
+        .withRoutes(routes)
         .withErrorHandler(errorHandler)
         .withNotFoundHandler(notFoundHandler);
 }
+
+class ResponseStreamContextBinding final {
+public:
+    explicit ResponseStreamContextBinding(ResponseStreamWriter* writer) noexcept
+        : writer_(writer) {}
+
+    ~ResponseStreamContextBinding() {
+        if (writer_ != nullptr) {
+            detail::StreamingAccess::releaseContext(*writer_);
+        }
+    }
+
+    ResponseStreamContextBinding(const ResponseStreamContextBinding&) = delete;
+    ResponseStreamContextBinding& operator=(const ResponseStreamContextBinding&) = delete;
+
+private:
+    ResponseStreamWriter* writer_;
+};
 
 struct OwnedHttpErrorInfo;
 void assignExceptionError(OwnedHttpErrorInfo& errorInfo, std::exception_ptr exception);
@@ -90,7 +108,7 @@ struct OwnedHttpErrorInfo final {
 
     OwnedHttpErrorInfo(std::pmr::memory_resource* resource, std::exception_ptr exception)
         : OwnedHttpErrorInfo(
-              HttpErrorInfo(500, {}, "unhandled exception"),
+              HttpErrorInfo(ruvia::http_status::kInternalServerError, {}, "unhandled exception"),
               resource) {
         assignExceptionError(*this, exception);
     }
@@ -114,7 +132,7 @@ void assignExceptionError(OwnedHttpErrorInfo& errorInfo, std::exception_ptr exce
         errorInfo.assign(error.info());
     } catch (const detail::UnsupportedRequestContentCoding& error) {
         errorInfo.assign(HttpErrorInfo(
-            error.status(),
+            detail::HttpUnsupportedContentCoding::status(),
             "unsupported_content_coding",
             error.what()));
     } catch (const HttpError& error) {
@@ -125,16 +143,16 @@ void assignExceptionError(OwnedHttpErrorInfo& errorInfo, std::exception_ptr exce
         // invalid_argument is the framework's own request-validation signal (bad
         // cookie/json/form); its message describes the request, so it is safe to
         // surface to the client as a 400.
-        errorInfo.assign(HttpErrorInfo(400, {}, error.what()));
+        errorInfo.assign(HttpErrorInfo(ruvia::http_status::kBadRequest, {}, error.what()));
     } catch (const std::exception&) {
         // An unexpected exception (e.g. a database/library error) may carry
         // internal detail -- table names, query fragments, file paths. Do NOT echo
         // what() to the client: normalizeError renders a generic "Internal Server
         // Error" body. The exception_ptr is still set on the Context, so an onError
         // handler can log or inspect the full detail server-side.
-        errorInfo.assign(HttpErrorInfo(500, {}, {}));
+        errorInfo.assign(HttpErrorInfo(ruvia::http_status::kInternalServerError, {}, {}));
     } catch (...) {
-        errorInfo.assign(HttpErrorInfo(500, {}, {}));
+        errorInfo.assign(HttpErrorInfo(ruvia::http_status::kInternalServerError, {}, {}));
     }
 }
 
@@ -161,6 +179,29 @@ void applyExceptionResponseMetadata(
     }
 }
 
+[[nodiscard]] std::optional<HttpResponse> selectDocumentRootFallback(
+    const StaticRoot* root,
+    const HttpRequest& request,
+    RequestMemory& memory) {
+    if (root == nullptr ||
+        (request.knownMethod() != HttpKnownMethod::kGet &&
+         request.knownMethod() != HttpKnownMethod::kHead)) {
+        return std::nullopt;
+    }
+
+    auto relative = request.path();
+    if (!relative.empty() && relative.front() == '/') {
+        relative.remove_prefix(1);
+    }
+
+    auto context = detail::ContextAccess::make(memory, request);
+    try {
+        return context.staticFile(*root, relative);
+    } catch (const HttpError&) {
+        return std::nullopt;
+    }
+}
+
 }  // namespace
 
 Task<HttpResponse> detail::RouteTable::dispatch(
@@ -171,7 +212,7 @@ Task<HttpResponse> detail::RouteTable::dispatch(
     co_return co_await dispatch(request, resolution, memory, services);
 }
 
-Task<detail::StreamDispatchResult> detail::RouteTable::dispatchResponseStream(
+Task<std::optional<HttpResponse>> detail::RouteTable::dispatchResponseStream(
     const HttpRequest& request,
     const ResolvedRoute& resolved,
     RequestMemory& memory,
@@ -181,20 +222,23 @@ Task<detail::StreamDispatchResult> detail::RouteTable::dispatchResponseStream(
         throw std::logic_error("route is not a response stream route");
     }
     return dispatchStreamRoute(
-        request, resolved, memory, services.withResponseStream(responseStream));
+        request,
+        resolved,
+        memory,
+        resolved.route().endpoint().responseStream()->handler(),
+        services.withResponseStream(responseStream));
 }
 
-Task<detail::StreamDispatchResult> detail::RouteTable::dispatchWebSocket(
+Task<std::optional<HttpResponse>> detail::RouteTable::dispatchWebSocket(
     const HttpRequest& request,
     const ResolvedRoute& resolved,
     RequestMemory& memory,
-    WebSocket& webSocket,
+    const RouteStreamHandler& handler,
     ContextServices services) const {
     if (resolved.route().endpoint().webSocket() == nullptr) {
         throw std::logic_error("route is not a websocket route");
     }
-    return dispatchStreamRoute(
-        request, resolved, memory, services.withWebSocket(webSocket));
+    return dispatchStreamRoute(request, resolved, memory, handler, services);
 }
 
 namespace {
@@ -206,10 +250,11 @@ namespace {
 }
 }  // namespace
 
-Task<detail::StreamDispatchResult> detail::RouteTable::dispatchStreamRoute(
+Task<std::optional<HttpResponse>> detail::RouteTable::dispatchStreamRoute(
     const HttpRequest& request,
     const ResolvedRoute& resolved,
     RequestMemory& memory,
+    const RouteStreamHandler& handler,
     ContextServices services) const {
     const auto& route = resolved.route();
     StreamMiddlewareChainState middlewareChain;
@@ -217,9 +262,15 @@ Task<detail::StreamDispatchResult> detail::RouteTable::dispatchStreamRoute(
         memory,
         request,
         resolved,
-        withRouteHandlers(services, errorHandler_, notFoundHandler_));
+        withRouteHandlers(
+            services,
+            *this,
+            errorHandlerFor(request.path()),
+            notFoundHandlerFor(request.path())));
     const auto* responseStreamOutput = services.responseOutput().responseStream();
-    const auto* webSocketOutput = services.responseOutput().webSocket();
+    const bool webSocketRoute = route.endpoint().webSocket() != nullptr;
+    ResponseStreamContextBinding streamContextBinding(
+        responseStreamOutput != nullptr ? &responseStreamOutput->writer() : nullptr);
     if (responseStreamOutput != nullptr) {
         detail::StreamingAccess::bindContext(
             responseStreamOutput->writer(), context, &streamingHeadThunk);
@@ -228,23 +279,15 @@ Task<detail::StreamDispatchResult> detail::RouteTable::dispatchStreamRoute(
     std::exception_ptr exception;
     try {
         if (!route.hasMiddleware()) {
-            const auto& endpoint = route.endpoint();
-            const auto* responseStream = endpoint.responseStream();
-            const auto* webSocket = endpoint.webSocket();
-            if (responseStream == nullptr && webSocket == nullptr) {
-                throw std::logic_error("route is not a stream-handler route");
-            }
-            const auto& handler = responseStream != nullptr
-                ? responseStream->handler()
-                : webSocket->handler();
-            co_await handler(context);
             middlewareChain.markHandlerInvoked();
+            co_await handler(context);
         } else {
             co_await invokeStreamMiddlewareAt(
                 route,
                 0,
                 context,
-                middlewareChain);
+                middlewareChain,
+                handler);
             if (!detail::ContextAccess::hasResponse(context)) {
                 if (auto contextException = context.error()) {
                     std::rethrow_exception(contextException);
@@ -264,13 +307,31 @@ Task<detail::StreamDispatchResult> detail::RouteTable::dispatchStreamRoute(
     }
 
     if (exception != nullptr) {
-        if (webSocketOutput != nullptr ||
+        // Head-only completion is a control signal from the writer, not a
+        // failure: the committed head already ended the message (HEAD served
+        // by a streaming GET route), the handler was merely stopped at its
+        // first body write. Finish the stream as a normal head-only success.
+        bool headOnlyComplete = false;
+        if (responseStreamOutput != nullptr &&
+            detail::StreamingAccess::committed(responseStreamOutput->writer())) {
+            try {
+                std::rethrow_exception(exception);
+            } catch (const detail::ResponseStreamHeadOnlyComplete&) {
+                headOnlyComplete = true;
+            } catch (...) {
+            }
+        }
+        if (headOnlyComplete) {
+            co_await responseStreamOutput->writer().end();
+            co_return std::nullopt;
+        }
+        if ((webSocketRoute && middlewareChain.handlerInvoked()) ||
             (responseStreamOutput != nullptr &&
              detail::StreamingAccess::committed(responseStreamOutput->writer()))) {
             std::rethrow_exception(exception);
         }
         auto response = co_await handleException(context, exception);
-        co_return StreamDispatchResult::makeBuffered(std::move(response));
+        co_return std::move(response);
     }
 
     // The middleware chain converts a handler exception into a buffered error
@@ -281,7 +342,7 @@ Task<detail::StreamDispatchResult> detail::RouteTable::dispatchStreamRoute(
     // the stream with a clean terminator would frame a truncated body as complete.
     // Rethrow so the driver aborts (connection close / RST_STREAM), exactly as the
     // no-middleware path does through the committed check above.
-    if (webSocketOutput != nullptr ||
+    if (webSocketRoute ||
         (responseStreamOutput != nullptr &&
          detail::StreamingAccess::committed(responseStreamOutput->writer()))) {
         if (auto contextException = context.error()) {
@@ -294,16 +355,14 @@ Task<detail::StreamDispatchResult> detail::RouteTable::dispatchStreamRoute(
         detail::StreamingAccess::committed(
             responseStreamOutput->writer());
     const bool handlerInvoked = middlewareChain.handlerInvoked();
-    const bool webSocketHandled =
-        webSocketOutput != nullptr && handlerInvoked;
+    const bool webSocketHandled = webSocketRoute && handlerInvoked;
     // Middleware may replace an uncommitted response stream with a buffered
     // response after `next()`. A WebSocket handler, however, owns its upgraded
     // session as soon as it is invoked and cannot return to HTTP response mode.
     if (detail::ContextAccess::hasResponse(context) &&
         !streamCommitted &&
         !webSocketHandled) {
-        co_return StreamDispatchResult::makeBuffered(
-            detail::ContextAccess::takeResponse(context));
+        co_return detail::ContextAccess::takeResponse(context);
     }
     if (handlerInvoked || streamCommitted) {
         // The bound Context is local to this coroutine. Finish a response stream
@@ -315,7 +374,7 @@ Task<detail::StreamDispatchResult> detail::RouteTable::dispatchStreamRoute(
         if (responseStreamOutput != nullptr) {
             co_await responseStreamOutput->writer().end();
         }
-        co_return StreamDispatchResult::makeHandled();
+        co_return std::nullopt;
     }
     throw std::logic_error(
         "stream route completed without a response or handled output");
@@ -325,12 +384,31 @@ Task<HttpResponse> detail::RouteTable::dispatch(
     const HttpRequest& request,
     const RouteResolution& resolution,
     RequestMemory& memory,
+    ContextServices services) const {
+    return dispatchRequest(
+        request,
+        resolution,
+        memory,
+        services,
+        nullptr,
+        DispatchFailure::kPropagate);
+}
+
+Task<HttpResponse> detail::RouteTable::dispatchRequest(
+    const HttpRequest& request,
+    const RouteResolution& resolution,
+    RequestMemory& memory,
     ContextServices services,
-    RouteDispatchFailure failure) const {
+    const StaticRoot* documentRoot,
+    DispatchFailure failure) const {
     std::exception_ptr dispatchException;
     try {
         const auto* resolved = resolution.resolved();
         if (resolved == nullptr) {
+            if (auto documentResponse = selectDocumentRootFallback(
+                    documentRoot, request, memory)) {
+                co_return std::move(*documentResponse);
+            }
             // One handleError co_await serves both rejection kinds: each
             // co_await expression reserves its own slots for the call's
             // temporaries in the frame, so distinct inline sites would each
@@ -338,7 +416,7 @@ Task<HttpResponse> detail::RouteTable::dispatch(
             std::optional<HttpErrorInfo> error;
             std::uint32_t allowedMethods = 0;
             if (request.knownMethod() == HttpKnownMethod::kUnknown) {
-                error = HttpErrorInfo(501, {}, "method not implemented");
+                error = HttpErrorInfo(ruvia::http_status::kNotImplemented, {}, "method not implemented");
             } else if (request.knownMethod() == HttpKnownMethod::kOptions && request.path() == "*") {
                 co_return makeAllowNoContentResponse(memory, allowedMethodsForServer());
             } else if (const auto* methodNotAllowed = resolution.methodNotAllowed()) {
@@ -346,7 +424,7 @@ Task<HttpResponse> detail::RouteTable::dispatch(
                     co_return makeAllowNoContentResponse(
                         memory, methodNotAllowed->allowedMethods());
                 }
-                error = HttpErrorInfo(405, {}, "method not allowed");
+                error = HttpErrorInfo(ruvia::http_status::kMethodNotAllowed, {}, "method not allowed");
                 allowedMethods = methodNotAllowed->allowedMethods();
             }
 
@@ -365,7 +443,11 @@ Task<HttpResponse> detail::RouteTable::dispatch(
             memory,
             request,
             *resolved,
-            withRouteHandlers(services, errorHandler_, notFoundHandler_));
+            withRouteHandlers(
+                services,
+                *this,
+                errorHandlerFor(request.path()),
+                notFoundHandlerFor(request.path())));
         std::exception_ptr exception;
         try {
             const auto& route = resolved->route();
@@ -379,7 +461,7 @@ Task<HttpResponse> detail::RouteTable::dispatch(
         }
         co_return co_await handleException(context, exception);
     } catch (...) {
-        if (failure == RouteDispatchFailure::kPropagate) {
+        if (failure == DispatchFailure::kPropagate) {
             throw;
         }
         dispatchException = std::current_exception();
@@ -387,15 +469,22 @@ Task<HttpResponse> detail::RouteTable::dispatch(
     co_return co_await handleException(request, memory, dispatchException, services);
 }
 
-Task<HttpResponse> detail::RouteTable::dispatchBuffered(
+Task<HttpResponse> detail::RouteTable::dispatchBufferedResponse(
     const HttpRequest& request,
     const RouteResolution& resolution,
     RequestMemory& memory,
+    const StaticRoot* documentRoot,
     ContextServices services) const {
-    // Plain forwarding, not a coroutine: the failure policy folds the old
-    // wrapper's try/catch into dispatch itself, so no extra frame is paid.
-    return dispatch(
-        request, resolution, memory, services, RouteDispatchFailure::kRespond);
+    // Plain forwarding, not a coroutine: document-root selection and the
+    // failure policy live in the existing dispatch frame, so the unified
+    // application entry adds no request-path allocation.
+    return dispatchRequest(
+        request,
+        resolution,
+        memory,
+        services,
+        documentRoot,
+        DispatchFailure::kRespond);
 }
 
 Task<HttpResponse> detail::RouteTable::handleError(
@@ -403,14 +492,16 @@ Task<HttpResponse> detail::RouteTable::handleError(
     RequestMemory& memory,
     HttpErrorInfo error,
     ContextServices services) const {
-    if (errorHandler_ == nullptr) {
+    const auto errorHandler = errorHandlerFor(request.path());
+    if (errorHandler == nullptr) {
         co_return makeDefaultErrorResponse(memory.resource(), error);
     }
 
     auto context = detail::ContextAccess::make(
         memory,
         request,
-        withRouteHandlers(services, errorHandler_, notFoundHandler_));
+        withRouteHandlers(
+            services, *this, errorHandler, notFoundHandlerFor(request.path())));
     co_return co_await handleError(context, error);
 }
 
@@ -419,7 +510,7 @@ Task<HttpResponse> detail::RouteTable::handleException(
     RequestMemory& memory,
     std::exception_ptr exception,
     ContextServices services) const {
-    if (errorHandler_ == nullptr) {
+    if (errorHandlerFor(request.path()) == nullptr) {
         OwnedHttpErrorInfo errorInfo(memory.resource(), exception);
         auto response = makeDefaultErrorResponse(memory.resource(), errorInfo.info);
         applyExceptionResponseMetadata(response, exception);
@@ -429,34 +520,43 @@ Task<HttpResponse> detail::RouteTable::handleException(
     auto context = detail::ContextAccess::make(
         memory,
         request,
-        withRouteHandlers(services, errorHandler_, notFoundHandler_));
+        withRouteHandlers(
+            services,
+            *this,
+            errorHandlerFor(request.path()),
+            notFoundHandlerFor(request.path())));
     co_return co_await handleException(context, exception);
 }
 
 Task<HttpResponse> detail::RouteTable::handleError(
     Context& context,
     HttpErrorInfo error) const {
-    return invokeErrorHandler(context, error, errorHandler_);
+    return invokeErrorHandler(
+        context,
+        error,
+        errorHandlerFor(detail::ContextAccess::request(context).path()));
 }
 
 Task<HttpResponse> detail::RouteTable::handleNotFound(
     const HttpRequest& request,
     RequestMemory& memory,
     ContextServices services) const {
-    if (notFoundHandler_ == nullptr) {
+    const auto notFoundHandler = notFoundHandlerFor(request.path());
+    if (notFoundHandler == nullptr) {
         co_return makeDefaultErrorResponse(
             memory.resource(),
-            HttpErrorInfo(404, {}, "route not found"));
+            HttpErrorInfo(ruvia::http_status::kNotFound, {}, "route not found"));
     }
 
     auto context = detail::ContextAccess::make(
         memory,
         request,
-        withRouteHandlers(services, errorHandler_, notFoundHandler_));
+        withRouteHandlers(
+            services, *this, errorHandlerFor(request.path()), notFoundHandler));
 
     std::exception_ptr exception;
     try {
-        co_return co_await notFoundHandler_(context);
+        co_return co_await notFoundHandler(context);
     } catch (...) {
         exception = std::current_exception();
     }

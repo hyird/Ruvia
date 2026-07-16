@@ -73,19 +73,25 @@ public:
     }
 
     [[nodiscard]] constexpr const ContextBufferedRequestBodySource* buffered()
-        const noexcept {
+        const & noexcept {
         return std::get_if<ContextBufferedRequestBodySource>(&value_);
     }
+    [[nodiscard]] constexpr const ContextBufferedRequestBodySource* buffered()
+        const && = delete;
 
     [[nodiscard]] constexpr const ContextLazyRequestBodySource* lazy()
-        const noexcept {
+        const & noexcept {
         return std::get_if<ContextLazyRequestBodySource>(&value_);
     }
+    [[nodiscard]] constexpr const ContextLazyRequestBodySource* lazy()
+        const && = delete;
 
     [[nodiscard]] constexpr const ContextStreamingRequestBodySource* streaming()
-        const noexcept {
+        const & noexcept {
         return std::get_if<ContextStreamingRequestBodySource>(&value_);
     }
+    [[nodiscard]] constexpr const ContextStreamingRequestBodySource* streaming()
+        const && = delete;
 
 private:
     using Value = std::variant<
@@ -156,19 +162,25 @@ public:
     }
 
     [[nodiscard]] constexpr const ContextBufferedResponseOutput* buffered()
-        const noexcept {
+        const & noexcept {
         return std::get_if<ContextBufferedResponseOutput>(&value_);
     }
+    [[nodiscard]] constexpr const ContextBufferedResponseOutput* buffered()
+        const && = delete;
 
     [[nodiscard]] constexpr const ContextResponseStreamOutput* responseStream()
-        const noexcept {
+        const & noexcept {
         return std::get_if<ContextResponseStreamOutput>(&value_);
     }
+    [[nodiscard]] constexpr const ContextResponseStreamOutput* responseStream()
+        const && = delete;
 
     [[nodiscard]] constexpr const ContextWebSocketOutput* webSocket()
-        const noexcept {
+        const & noexcept {
         return std::get_if<ContextWebSocketOutput>(&value_);
     }
+    [[nodiscard]] constexpr const ContextWebSocketOutput* webSocket()
+        const && = delete;
 
 private:
     using Value = std::variant<

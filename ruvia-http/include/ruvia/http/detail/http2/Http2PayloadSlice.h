@@ -4,6 +4,8 @@
 #include <cstddef>
 #include <string_view>
 
+#include "ruvia/http/detail/BorrowedView.h"
+
 namespace ruvia::detail {
 
 struct Http2PayloadSlice final {
@@ -28,5 +30,19 @@ struct Http2PayloadSlice final {
         .first = second.substr(offset - first.size(), size),
         .second = {}};
 }
+
+template <HttpTemporaryOwningCharString First>
+Http2PayloadSlice http2SliceTwoPartPayload(
+    First&&,
+    std::string_view,
+    std::size_t,
+    std::size_t) = delete;
+
+template <HttpTemporaryOwningCharString Second>
+Http2PayloadSlice http2SliceTwoPartPayload(
+    std::string_view,
+    Second&&,
+    std::size_t,
+    std::size_t) = delete;
 
 }  // namespace ruvia::detail

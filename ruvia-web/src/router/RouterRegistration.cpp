@@ -169,7 +169,7 @@ void detail::RouterImpl::registerEndpoint(
 }
 
 void detail::RouterImpl::appendPendingRoute(PendingRoute route) {
-    if (finalized_) {
+    if (routeTable_) {
         throw std::logic_error("cannot register route after router finalize");
     }
     validateRouteTarget(route.method(), route.path());

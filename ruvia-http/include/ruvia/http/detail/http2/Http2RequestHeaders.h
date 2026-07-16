@@ -5,6 +5,10 @@
 
 #include "ruvia/http/HttpHeader.h"
 #include "ruvia/http/HttpKnownMethod.h"
+#include "ruvia/http/detail/HeaderAcceptUtils.h"
+#include "ruvia/http/detail/HttpCorsFields.h"
+#include "ruvia/http/detail/HttpContentCoding.h"
+#include "ruvia/http/detail/HttpHeaderSectionSize.h"
 #include "ruvia/http/detail/http2/Http2HeaderRules.h"
 #include "ruvia/http/detail/http2/Http2StreamState.h"
 #include "ruvia/http/detail/parser/HttpRequestTarget.h"
@@ -14,35 +18,73 @@
 namespace ruvia::detail {
 
 struct Http2HeaderDecodeContext final {
+    explicit Http2HeaderDecodeContext(
+        Http2StreamState& streamValue) noexcept
+        : stream(streamValue) {}
+
+    [[nodiscard]] bool acceptRegularField() noexcept {
+        if (regularFieldCount == kMaxHttpHeaderFields) {
+            return false;
+        }
+        ++regularFieldCount;
+        return true;
+    }
+
     Http2StreamState& stream;
-    std::size_t decodedHeaderListBytes{0};
+    HttpHeaderSectionSize decodedHeaderListSize;
+    std::size_t regularFieldCount{0};
 };
+
+[[nodiscard]] inline bool http2IsHttpRequestScheme(
+    std::string_view scheme) noexcept {
+    return httpAsciiEqualsIgnoreCase(scheme, "http") ||
+        httpAsciiEqualsIgnoreCase(scheme, "https");
+}
+
+// RFC 9110 defines both http-URI and https-URI with a mandatory authority.
+// Asterisk-form OPTIONS is server-wide and is the deliberate exception: its
+// target contains no authority information (RFC 9113 section 8.3.1).
+[[nodiscard]] inline bool http2RegularRequestRequiresAuthority(
+    std::string_view scheme,
+    std::string_view path) noexcept {
+    return path != "*" && http2IsHttpRequestScheme(scheme);
+}
+
+[[nodiscard]] inline bool http2IsValidRegularRequestPath(
+    HttpKnownMethod method,
+    std::string_view scheme,
+    std::string_view path) noexcept {
+    if (path.empty()) {
+        return !http2IsHttpRequestScheme(scheme);
+    }
+    return isValidOriginOrAsteriskFormTarget(method, path);
+}
+
+[[nodiscard]] inline bool http2IsValidExtendedConnectPath(
+    std::string_view scheme,
+    std::string_view path) noexcept {
+    if (path.empty()) {
+        return !http2IsHttpRequestScheme(scheme);
+    }
+    return isValidOriginFormTarget(path);
+}
+
+[[nodiscard]] inline bool http2IsValidRequestAuthority(
+    std::string_view scheme,
+    std::string_view authority) noexcept {
+    if (http2IsHttpRequestScheme(scheme)) {
+        // HTTP(S) URI authority is mandatory even though an empty Host field is
+        // valid HTTP/1 wire syntax for target URIs of other schemes.
+        return !authority.empty() && isValidHostHeader(authority);
+    }
+    return isValidUriAuthority(authority);
+}
 
 [[nodiscard]] inline bool http2AccumulateHeaderListBytes(
     Http2HeaderDecodeContext& context,
     std::string_view name,
     std::string_view value) noexcept {
-    constexpr std::size_t kHeaderListEntryOverhead = 32;
-
-    if (name.size() > kMaxHttpHeaderBytes ||
-        value.size() > kMaxHttpHeaderBytes ||
-        name.size() > kMaxHttpHeaderBytes - value.size()) {
-        return false;
-    }
-
-    auto fieldBytes = name.size() + value.size();
-    if (fieldBytes > kMaxHttpHeaderBytes - kHeaderListEntryOverhead) {
-        return false;
-    }
-    fieldBytes += kHeaderListEntryOverhead;
-
-    if (context.decodedHeaderListBytes > kMaxHttpHeaderBytes ||
-        fieldBytes > kMaxHttpHeaderBytes - context.decodedHeaderListBytes) {
-        return false;
-    }
-
-    context.decodedHeaderListBytes += fieldBytes;
-    return true;
+    return context.decodedHeaderListSize.add(name, value);
 }
 
 [[nodiscard]] inline bool http2AppendCookieHeaderValue(
@@ -64,7 +106,7 @@ struct Http2HeaderDecodeContext final {
     }
 
     auto& stream = context.stream;
-    if (name.empty() || stream.requestHeadersFull()) {
+    if (name.empty()) {
         return false;
     }
 
@@ -87,14 +129,15 @@ struct Http2HeaderDecodeContext final {
             return true;
         }
         if (name == ":scheme") {
-            if (stream.hasScheme() || (value != "http" && value != "https")) {
+            if (stream.hasScheme() || !isValidUriScheme(value)) {
                 return false;
             }
-            stream.markScheme(value == "https" ? 443 : 80);
+            stream.assignRequestScheme(value);
+            stream.markScheme(httpUriSchemeDefaultPort(value));
             return true;
         }
         if (name == ":authority") {
-            if (stream.hasAuthority() || !isValidHostHeader(value)) {
+            if (stream.hasAuthority() || !isValidUriAuthority(value)) {
                 return false;
             }
             stream.assignRequestAuthority(value);
@@ -102,7 +145,9 @@ struct Http2HeaderDecodeContext final {
             return true;
         }
         if (name == ":path") {
-            if (stream.hasPath() || !isValidOriginFormTarget(value)) {
+            if (stream.hasPath() ||
+                (!value.empty() &&
+                 !isValidOriginOrAsteriskFormTarget(value))) {
                 return false;
             }
             stream.assignRequestPath(value);
@@ -112,11 +157,20 @@ struct Http2HeaderDecodeContext final {
         return false;
     }
 
-    if (!http2IsValidRegularHeader(name, value)) {
+    if (!context.acceptRegularField() ||
+        !http2IsValidRegularHeader(name, value)) {
         return false;
     }
     stream.markRegularHeaderSeen();
     const auto kind = classifyRequestHeader(name);
+    if ((kind == RequestHeaderKind::kOrigin &&
+         !isValidHttpOriginFieldValue(value)) ||
+        (kind == RequestHeaderKind::kAccessControlRequestMethod &&
+         !isValidHttpCorsRequestMethod(value)) ||
+        (kind == RequestHeaderKind::kAccessControlRequestHeaders &&
+         !isValidHttpCorsRequestHeaderNames(value))) {
+        return false;
+    }
     if (kind == RequestHeaderKind::kHost) {
         if (stream.hasHost() || !isValidHostHeader(value)) {
             return false;
@@ -136,6 +190,16 @@ struct Http2HeaderDecodeContext final {
         // 417 policy while still accepting the conformant header section.
         stream.parseRequestExpectationField(value);
     }
+    if (kind == RequestHeaderKind::kContentType) {
+        if (!isValidHttpContentTypeFieldValue(value)) {
+            return false;
+        }
+    }
+    if (kind == RequestHeaderKind::kContentEncoding &&
+        !isValidHttpContentEncodingFieldValue(
+            value, HttpFieldListRole::kRecipient)) {
+        return false;
+    }
     if (const auto singletonBit = singletonRequestHeaderBit(kind); singletonBit != 0) {
         if (!stream.markSingletonRequestHeader(singletonBit)) {
             return false;
@@ -154,7 +218,7 @@ struct Http2HeaderDecodeContext final {
     return stream.appendRequestHeader(name, value, kind);
 }
 
-[[nodiscard]] inline bool http2OnDecodedTrailer(
+[[nodiscard]] inline bool http2OnDecodedRequestTrailer(
     Http2HeaderDecodeContext& context,
     std::string_view name,
     std::string_view value) {
@@ -162,8 +226,9 @@ struct Http2HeaderDecodeContext final {
         return false;
     }
 
-    return http2IsValidRegularHeader(name, value) &&
-        !http2IsForbiddenTrailerHeader(name);
+    return context.acceptRegularField() &&
+        http2IsValidRegularHeader(name, value) &&
+        !http2IsForbiddenRequestTrailerHeader(name);
 }
 
 }  // namespace ruvia::detail

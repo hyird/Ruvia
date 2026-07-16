@@ -56,6 +56,21 @@ void exercise(
         feedChunk(connection, std::string_view(kEmptySettings, sizeof(kEmptySettings)));
     }
 
+    // A client only decodes a response header/data/trailer block on a stream it
+    // has already opened. Without an in-flight request the fuzzed bytes never
+    // reach the response-side decode path, so submit one request up front and
+    // exercise those decoders against arbitrary inbound frames.
+    if (role == Http2Role::kClient) {
+        (void)connection.submitRegularRequestHead(
+            "GET",
+            "https",
+            "example.test",
+            "/",
+            {},
+            ruvia::detail::Http2RequestContent::none());
+        drain(connection);
+    }
+
     for (std::size_t offset = 0; offset < input.size();) {
         const auto bytes = std::min(chunkSize, input.size() - offset);
         feedChunk(connection, input.substr(offset, bytes));

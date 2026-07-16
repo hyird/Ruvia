@@ -2,6 +2,7 @@
 
 #include <array>
 #include <charconv>
+#include <cstdint>
 #include <cstring>
 #include <system_error>
 
@@ -10,7 +11,12 @@
 #include "ruvia/http/HttpLimits.h"
 #include "ruvia/http/detail/HeaderAcceptUtils.h"
 #include "ruvia/http/detail/HeaderTokenUtils.h"
+#include "ruvia/http/detail/HttpCorsFields.h"
+#include "ruvia/http/detail/HttpExpectations.h"
+#include "ruvia/http/detail/HttpContentCoding.h"
+#include "ruvia/http/detail/HttpRequestContentSemantics.h"
 #include "ruvia/http/detail/client/HttpOrigin.h"
+#include "ruvia/http/detail/parser/HttpParserSyntax.h"
 #include "ruvia/http/detail/parser/HttpRequestTarget.h"
 
 namespace ruvia::detail {
@@ -87,12 +93,13 @@ namespace {
 constexpr std::string_view kHttp11RequestLineSuffix = " HTTP/1.1\r\n";
 constexpr std::string_view kHostPrefix = "Host: ";
 constexpr std::string_view kContentLengthPrefix = "Content-Length: ";
-constexpr std::string_view kExpectContinue = "Expect: 100-continue\r\n";
+constexpr std::string_view kExpectPrefix = "Expect: ";
 constexpr std::string_view kConnectionClose = "Connection: close\r\n";
 constexpr std::string_view kCrlf = "\r\n";
 
 struct RequestHeaderFacts final {
     std::size_t wireBytes{0};
+    std::uint32_t singletonHeaders{0};
     detail::HttpConnectionOptions connectionOptions;
     detail::HttpUpgradeProtocols upgradeProtocols;
     bool hasContentType{false};
@@ -118,6 +125,89 @@ struct RequestHeaderFacts final {
     return true;
 }
 
+[[nodiscard]] bool isValidClientTeItem(std::string_view item) noexcept {
+    std::size_t cursor = 0;
+    const auto skipOws = [&item, &cursor]() noexcept {
+        while (cursor < item.size() &&
+               (item[cursor] == ' ' || item[cursor] == '\t')) {
+            ++cursor;
+        }
+    };
+    const auto parseToken = [&item, &cursor]() noexcept {
+        const auto begin = cursor;
+        while (cursor < item.size() &&
+               detail::isHttpTokenChar(
+                   static_cast<unsigned char>(item[cursor]))) {
+            ++cursor;
+        }
+        return item.substr(begin, cursor - begin);
+    };
+
+    const auto coding = parseToken();
+    if (coding.empty()) {
+        return false;
+    }
+    const bool trailers =
+        detail::httpAsciiEqualsIgnoreCase(coding, "trailers");
+    const bool supportedCoding =
+        detail::httpAsciiEqualsIgnoreCase(coding, "gzip") ||
+        detail::httpAsciiEqualsIgnoreCase(coding, "x-gzip") ||
+        detail::httpAsciiEqualsIgnoreCase(coding, "deflate");
+    if (!trailers && !supportedCoding) {
+        // The paired response parser cannot represent any other transfer
+        // coding. Advertising one here would make the client claim a decoding
+        // capability it does not have. "chunked" is never listed in TE because
+        // every HTTP/1.1 recipient already accepts it as message framing.
+        return false;
+    }
+
+    skipOws();
+    if (cursor == item.size()) {
+        return true;
+    }
+    if (trailers || item[cursor] != ';') {
+        return false;
+    }
+    ++cursor;
+    skipOws();
+    // RFC 9110 section 12.4.2 defines weight with the exact `q=` literal.
+    // BWS around '=' belongs to transfer-parameter syntax instead; treating
+    // `q =` as a weight would emit an undefined gzip/deflate parameter.
+    if (cursor + 2 > item.size() ||
+        detail::httpAsciiToLower(static_cast<unsigned char>(item[cursor])) != 'q' ||
+        item[cursor + 1] != '=') {
+        return false;
+    }
+    cursor += 2;
+    const auto quality = parseToken();
+    if (quality.empty() || detail::httpParseQualityValue(quality) < 0) {
+        return false;
+    }
+    skipOws();
+    return cursor == item.size();
+}
+
+[[nodiscard]] bool isValidClientTeField(std::string_view value) noexcept {
+    // RFC 9112 section 7.4 explicitly permits an empty TE field. It advertises
+    // no optional transfer coding; chunked remains implicitly acceptable.
+    if (detail::httpTrimOws(value).empty()) {
+        return true;
+    }
+    bool valid = true;
+    bool sawItem = false;
+    detail::httpVisitCommaSeparatedQuotedItems(
+        value,
+        [&valid, &sawItem](std::string_view item) noexcept {
+            sawItem = true;
+            if (!isValidClientTeItem(item)) {
+                valid = false;
+                return false;
+            }
+            return true;
+        });
+    return valid && sawItem;
+}
+
 [[nodiscard]] std::size_t authorityLength(
     const HttpOrigin& origin,
     bool forcePort) noexcept {
@@ -138,6 +228,7 @@ struct RequestHeaderFacts final {
             error = Http1ClientRequestPrepareError::kInvalidHeader;
             return false;
         }
+        const auto kind = detail::classifyRequestHeader(name);
         if (detail::httpAsciiEqualsIgnoreCase(name, "Host")) {
             error = Http1ClientRequestPrepareError::kHostHeaderManagedByWriter;
             return false;
@@ -158,11 +249,30 @@ struct RequestHeaderFacts final {
             error = Http1ClientRequestPrepareError::kExpectHeaderManagedByWriter;
             return false;
         }
+        if ((kind == detail::RequestHeaderKind::kOrigin &&
+             !detail::isValidHttpOriginFieldValue(value)) ||
+            (kind == detail::RequestHeaderKind::kAccessControlRequestMethod &&
+             !detail::isValidHttpCorsRequestMethod(value)) ||
+            (kind == detail::RequestHeaderKind::kAccessControlRequestHeaders &&
+             !detail::isValidHttpCorsRequestHeaderNames(value))) {
+            error = Http1ClientRequestPrepareError::kInvalidHeader;
+            return false;
+        }
+        if (const auto bit = detail::singletonRequestHeaderBit(kind); bit != 0) {
+            if ((facts.singletonHeaders & bit) != 0) {
+                error = Http1ClientRequestPrepareError::kInvalidHeader;
+                return false;
+            }
+            facts.singletonHeaders |= bit;
+        }
         if (detail::httpAsciiEqualsIgnoreCase(name, "Connection")) {
             if (facts.connectionOptions.parseField(
                     value,
-                    detail::HttpFieldListRole::kSender) !=
-                detail::HttpFieldListParseStatus::kOk) {
+                    detail::HttpFieldListRole::kSender,
+                    [](std::string_view option) noexcept {
+                        return !detail::httpConnectionOptionConflictsWithManagedField(
+                            option);
+                    }) != detail::HttpFieldListParseStatus::kOk) {
                 error = Http1ClientRequestPrepareError::kInvalidConnection;
                 return false;
             }
@@ -177,15 +287,24 @@ struct RequestHeaderFacts final {
                 return false;
             }
         } else if (detail::httpAsciiEqualsIgnoreCase(name, "TE")) {
+            if (!isValidClientTeField(value)) {
+                error = Http1ClientRequestPrepareError::kInvalidHeader;
+                return false;
+            }
             facts.hasTe = true;
         } else if (detail::httpAsciiEqualsIgnoreCase(name, "Content-Type")) {
-            detail::HttpMediaTypeParts parts;
-            if (facts.hasContentType ||
-                !detail::httpParseMediaTypeParts(value, false, parts)) {
+            if (!detail::isValidHttpContentTypeFieldValue(value)) {
                 error = Http1ClientRequestPrepareError::kInvalidHeader;
                 return false;
             }
             facts.hasContentType = true;
+        } else if (detail::httpAsciiEqualsIgnoreCase(
+                       name, "Content-Encoding")) {
+            if (!detail::isValidHttpContentEncodingFieldValue(
+                    value, detail::HttpFieldListRole::kSender)) {
+                error = Http1ClientRequestPrepareError::kInvalidHeader;
+                return false;
+            }
         }
 
         if (!addHeadBytes(facts.wireBytes, name.size()) ||
@@ -269,20 +388,29 @@ void appendHeaders(
     }
     const bool expectContinue =
         policy.continueExpectation() != nullptr;
-    if (expectContinue &&
-        (!explicitContent || contentBytes->value().empty())) {
+    const auto contentIndication =
+        explicitContent && !contentBytes->value().empty()
+        ? detail::HttpRequestContentIndication::kWillFollow
+        : detail::HttpRequestContentIndication::kNoContent;
+    if (!detail::httpClientExpectationIsValid(
+            expectContinue, contentIndication)) {
         return detail::Http1ClientRequestPrepareResultAccess::failure(
             Http1ClientRequestPrepareError::kExpectationWithoutContent);
     }
-    if (method == "TRACE" && explicitContent) {
-        return detail::Http1ClientRequestPrepareResultAccess::failure(
-            Http1ClientRequestPrepareError::kContentForbiddenForMethod);
-    }
-    if (method == "OPTIONS" && explicitContent &&
-        !contentBytes->value().empty() &&
-        !headerFacts.hasContentType) {
-        return detail::Http1ClientRequestPrepareResultAccess::failure(
-            Http1ClientRequestPrepareError::kOptionsContentTypeRequired);
+    if (explicitContent) {
+        const auto contentSemantics =
+            detail::httpRequestContentSemantics(method);
+        if (contentSemantics ==
+            detail::HttpRequestContentSemantics::kForbidden) {
+            return detail::Http1ClientRequestPrepareResultAccess::failure(
+                Http1ClientRequestPrepareError::kContentForbiddenForMethod);
+        }
+        if (contentSemantics ==
+                detail::HttpRequestContentSemantics::kContentTypeRequired &&
+            !headerFacts.hasContentType) {
+            return detail::Http1ClientRequestPrepareResultAccess::failure(
+                Http1ClientRequestPrepareError::kOptionsContentTypeRequired);
+        }
     }
 
     const bool generateConnectionClose =
@@ -316,7 +444,11 @@ void appendHeaders(
          (!addHeadBytes(headBytes, kContentLengthPrefix.size()) ||
           !addHeadBytes(headBytes, decimalDigits(contentBytes->value().size())) ||
           !addHeadBytes(headBytes, kCrlf.size()))) ||
-        (expectContinue && !addHeadBytes(headBytes, kExpectContinue.size())) ||
+        (expectContinue &&
+         (!addHeadBytes(headBytes, kExpectPrefix.size()) ||
+          !addHeadBytes(
+              headBytes, detail::kHttpContinueExpectationToken.size()) ||
+          !addHeadBytes(headBytes, kCrlf.size()))) ||
         (generateConnectionClose &&
          !addHeadBytes(headBytes, kConnectionClose.size())) ||
         !addHeadBytes(headBytes, kCrlf.size())) {
@@ -347,7 +479,9 @@ void appendHeaders(
         appendView(cursor, kCrlf);
     }
     if (expectContinue) {
-        appendView(cursor, kExpectContinue);
+        appendView(cursor, kExpectPrefix);
+        appendView(cursor, detail::kHttpContinueExpectationToken);
+        appendView(cursor, kCrlf);
     }
     if (generateConnectionClose) {
         appendView(cursor, kConnectionClose);
@@ -409,7 +543,7 @@ std::string_view http1ClientRequestPrepareErrorMessage(
         case Http1ClientRequestPrepareError::kTeConnectionOptionRequired:
             return "HTTP/1 TE requires Connection: TE";
         case Http1ClientRequestPrepareError::kExpectationWithoutContent:
-            return "100-continue requires non-empty request content";
+            return "Continue expectation requires non-empty request content";
         case Http1ClientRequestPrepareError::kContentForbiddenForMethod:
             return "request method forbids content";
         case Http1ClientRequestPrepareError::kOptionsContentTypeRequired:
@@ -433,8 +567,8 @@ Http1ClientRequestPrepareResult Http1ClientRequestWriter::prepare(
         return detail::Http1ClientRequestPrepareResultAccess::failure(
             Http1ClientRequestPrepareError::kConnectRequiresDedicatedEntry);
     }
-    if ((request.target == "*" && request.method != "OPTIONS") ||
-        !detail::isValidOriginFormTarget(request.target)) {
+    if (!detail::isValidOriginOrAsteriskFormTarget(
+            classifyHttpMethod(request.method), request.target)) {
         return detail::Http1ClientRequestPrepareResultAccess::failure(
             Http1ClientRequestPrepareError::kInvalidTarget);
     }

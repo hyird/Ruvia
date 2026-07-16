@@ -39,17 +39,17 @@ namespace ruvia::detail {
 inline void validateMigrationList(std::span<const DbMigration> migrations) {
     for (std::size_t i = 0; i < migrations.size(); ++i) {
         const auto& migration = migrations[i];
-        if (migration.id.empty()) {
+        if (migration.id().empty()) {
             throw std::invalid_argument("database migration id must not be empty");
         }
-        if (migration.id.size() > 190) {
+        if (migration.id().size() > 190) {
             throw std::invalid_argument("database migration id must not exceed 190 bytes");
         }
-        if (migration.sql.empty()) {
+        if (migration.sql().empty()) {
             throw std::invalid_argument("database migration SQL must not be empty");
         }
         for (std::size_t j = i + 1; j < migrations.size(); ++j) {
-            if (migrations[j].id == migration.id) {
+            if (migrations[j].id() == migration.id()) {
                 throw std::invalid_argument("database migration ids must be unique");
             }
         }

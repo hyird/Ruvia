@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <array>
+#include <utility>
 
 #include "ruvia/http/detail/http2/Http2FlowControl.h"
 #include "ruvia/http/detail/http2/Http2FrameCodec.h"
@@ -34,15 +35,6 @@ constexpr std::uint32_t kHttp2MaxUndrainedPings = 1000;
 // the same output drains; a peer legitimately re-tuning SETTINGS mid-connection sends only
 // a handful and never trips.
 constexpr std::uint32_t kHttp2MaxUndrainedSettings = 1000;
-// Closed-stream RST flood: DATA aimed at a non-live, non-idle stream is answered with an
-// RST_STREAM(STREAM_CLOSED) into the outbound buffer, and a peer can keep aiming DATA at
-// the same already-closed id forever. Same undrained-output-accumulation family as the
-// PING/SETTINGS floods. Reset on the same output drains, so legitimate in-flight DATA that
-// arrives after we closed a stream (bounded by the flow-control window and flushed as
-// output drains) never accumulates to the limit; only a peer that both floods and refuses
-// to read our output trips.
-constexpr std::uint32_t kHttp2MaxUndrainedClosedStreamResets = 1000;
-
 }  // namespace
 
 Http2Connection::Http2Connection(
@@ -68,7 +60,7 @@ Http2Connection::Http2Connection(
 
 // --- outbound byte buffer (batched writes) ------------------------------------
 
-std::string_view Http2Connection::pendingOutput() const noexcept {
+std::string_view Http2Connection::pendingOutput() const & noexcept {
     return output_.pending();
 }
 
@@ -78,7 +70,6 @@ Http2OutputConsumeStatus Http2Connection::consumeOutput(
     if (status == Http2OutputConsumeStatus::kDrained) {
         consecutivePings_ = 0;  // outbound (incl. PING ACKs) fully flushed
         consecutiveSettings_ = 0;  // outbound (incl. SETTINGS ACKs) fully flushed
-        consecutiveClosedStreamResets_ = 0;  // outbound (incl. those RSTs) fully flushed
     }
     return status;
 }
@@ -86,7 +77,6 @@ Http2OutputConsumeStatus Http2Connection::consumeOutput(
 void Http2Connection::takeOutput(std::pmr::string& into) {
     consecutivePings_ = 0;  // outbound (incl. PING ACKs) is being flushed
     consecutiveSettings_ = 0;  // outbound (incl. SETTINGS ACKs) is being flushed
-    consecutiveClosedStreamResets_ = 0;  // outbound (incl. those RSTs) is being flushed
     output_.take(into);
 }
 
@@ -101,13 +91,13 @@ std::optional<Http2Event> Http2Connection::nextEvent() {
     return std::nullopt;
 }
 
-std::span<const std::uint32_t> Http2Connection::takeDrainedDataStreams() noexcept {
+std::span<const std::uint32_t>
+Http2Connection::takeDrainedDataStreams() & noexcept {
     // Swap-and-clear so each drain is reported exactly once; the returned span stays
     // valid until the next call (double buffer, no allocation churn).
     takenDrainedDataStreams_.swap(drainedDataStreams_);
     drainedDataStreams_.clear();
-    return std::span<const std::uint32_t>(
-        takenDrainedDataStreams_.data(), takenDrainedDataStreams_.size());
+    return takenDrainedDataStreams_;
 }
 
 // =============================================================================
@@ -118,19 +108,26 @@ std::span<const std::uint32_t> Http2Connection::takeDrainedDataStreams() noexcep
 // =============================================================================
 
 void Http2Connection::appendGoaway(Http2ErrorCode error, std::string_view debug) {
-    connectionError_ = error;
-    output_.appendGoawayFrame(lastStreamId_, error, debug);
+    // RFC 9113 §6.8: "Endpoints MUST NOT increase the value they send in the last
+    // stream identifier". lastStreamId_ doubles as the idle-stream high-water mark
+    // (§5.1.1), so it keeps climbing for streams a graceful drain already refused --
+    // those are exactly the ids the peer was told it may retry elsewhere. Clamp to the
+    // advertised drain boundary; read it before fail() replaces the drain state.
+    auto advertised = lastStreamId_;
+    if (const auto* drain = localConnectionState_.gracefulDrain()) {
+        advertised = std::min(advertised, drain->lastStreamId());
+    }
+    localConnectionState_.fail(error);
+    output_.appendGoawayFrame(advertised, error, debug);
 }
 
 void Http2Connection::beginDrain() {
     // Graceful drain (RFC 9113 §6.8): advertise GOAWAY(NO_ERROR) at the last accepted
     // stream id WITHOUT a connection error -- established streams keep running, and HEADERS
     // for a stream above the advertised id are refused in processHeaders.
-    if (draining_ || connectionError_) {
+    if (!localConnectionState_.beginGracefulDrain(lastStreamId_)) {
         return;
     }
-    draining_ = true;
-    goawayLastStreamId_ = lastStreamId_;
     output_.appendGoawayFrame(
         lastStreamId_, Http2ErrorCode::kNoError, "connection draining");
 }
@@ -148,6 +145,15 @@ bool Http2Connection::applySettingsPayload(std::string_view payload) {
                 http2PeerSettingErrorCode(failure->error()),
                 http2PeerSettingErrorMessage(failure->error()));
             return false;
+        }
+        if (entry.id == Http2SettingId::kHeaderTableSize &&
+            entry.value < encoderDynamicTableSize_) {
+            // RFC 9113 §4.3.1 requires the next field block after our SETTINGS ACK
+            // to begin with a conformant table-size update. This encoder never uses
+            // dynamic entries, so permanently selecting zero is both exact and avoids
+            // carrying a fictitious compression capacity through later SETTINGS.
+            encoderDynamicTableSize_ = 0;
+            encoderTableSizeUpdatePending_ = true;
         }
         const auto* initialWindowChange = result.initialWindowChange();
         if (initialWindowChange &&
@@ -233,7 +239,7 @@ void Http2Connection::markSendWindowOpened() {
             continue;
         }
         pending.offset = sendDataUpToWindow(
-            *stream, std::string_view(pending.bytes.data(), pending.bytes.size()),
+            *stream, std::string_view(pending.bytes),
             pending.offset, pending.endStream);
         if (pending.offset >= pending.bytes.size()) {
             // The body fully drained. If a trailer block was queued behind it, emit it
@@ -241,7 +247,7 @@ void Http2Connection::markSendWindowOpened() {
             if (!pending.trailerBlock.empty() && !stream->isAborted()) {
                 appendResponseHeaderFrames(
                     *stream,
-                    std::string_view(pending.trailerBlock.data(), pending.trailerBlock.size()),
+                    std::string_view(pending.trailerBlock),
                     Http2EndStream::kEndStream);
             }
             if (http2EndsStream(pending.endStream) || !pending.trailerBlock.empty()) {
@@ -277,9 +283,29 @@ bool Http2Connection::processWindowUpdate(const Http2FrameHeader& header, std::s
         return true;
     }
     auto* stream = streams_.find(header.streamId);
+    if (stream != nullptr && http2StreamIsClosed(*stream)) {
+        // RFC 9113 section 6.9 permits a valid WINDOW_UPDATE on a closed
+        // stream. A zero increment remains a stream PROTOCOL_ERROR, but no
+        // RST_STREAM can legally be emitted after protocol closure.
+        if (increment == 0) {
+            appendGoaway(
+                Http2ErrorCode::kProtocolError,
+                "zero WINDOW_UPDATE on closed stream");
+            return false;
+        }
+        return true;
+    }
     if (stream == nullptr) {
         if (isIdleStreamId(header.streamId)) {
             appendGoaway(Http2ErrorCode::kProtocolError, "WINDOW_UPDATE on idle stream");
+            return false;
+        }
+        if (increment == 0) {
+            // A skipped/released identifier is closed, not idle. Promote the
+            // mandatory stream error because RST_STREAM is forbidden there.
+            appendGoaway(
+                Http2ErrorCode::kProtocolError,
+                "zero WINDOW_UPDATE on released closed stream");
             return false;
         }
         return true;
@@ -309,7 +335,7 @@ bool Http2Connection::processWindowUpdate(const Http2FrameHeader& header, std::s
 }
 
 bool Http2Connection::isPinned(std::uint32_t streamId) const noexcept {
-    return std::find(pinnedStreams_.begin(), pinnedStreams_.end(), streamId) != pinnedStreams_.end();
+    return std::ranges::contains(pinnedStreams_, streamId);
 }
 
 void Http2Connection::pinStream(std::uint32_t streamId) {
@@ -319,19 +345,18 @@ void Http2Connection::pinStream(std::uint32_t streamId) {
 }
 
 void Http2Connection::flushWindowDebt(Http2StreamState& stream) {
-    // Unreleased event credit must return to the CONNECTION window when a stream is
-    // removed, or an owner that stops consuming after reset would permanently shrink
-    // the shared window. Connection-scope only: a stream WINDOW_UPDATE on a gone
-    // stream is a peer protocol error.
+    // Unreleased event credit must survive stream removal at CONNECTION scope, or an
+    // owner that stops consuming after reset would permanently shrink the shared
+    // window. It joins the same bounded batch as owner-consumed credit; a stream
+    // WINDOW_UPDATE on a gone stream would instead be a peer protocol error.
+    // Stream-scoped credit that was consumed but not yet advertised dies with
+    // the stream. Its matching connection credit was queued independently.
+    (void)stream.receiveWindowCredit().take();
     const auto debt = stream.takeWindowDebt();
     if (debt == 0) {
         return;
     }
-    http2CreditConnectionReceiveWindow(
-        connectionReceiveWindow_, static_cast<std::int32_t>(debt));
-    char buf[kHttp2WindowUpdateFrameBytes];
-    http2WriteWindowUpdate(buf, 0, debt);
-    output_.appendBytes(std::string_view(buf, sizeof(buf)));
+    queueConsumedDataCredit(nullptr, debt);
 }
 
 void Http2Connection::detachActiveHeaderBlock(Http2StreamState& stream) {
@@ -358,8 +383,7 @@ void Http2Connection::detachActiveHeaderBlock(Http2StreamState& stream) {
 }
 
 void Http2Connection::unpinStream(std::uint32_t streamId) {
-    pinnedStreams_.erase(
-        std::remove(pinnedStreams_.begin(), pinnedStreams_.end(), streamId), pinnedStreams_.end());
+    std::erase(pinnedStreams_, streamId);
     auto* stream = streams_.find(streamId);
     if (stream == nullptr) {
         return;  // never created, or already removed
@@ -372,8 +396,7 @@ void Http2Connection::unpinStream(std::uint32_t streamId) {
         return;
     }
 
-    if (http2RemotePeerHalfClosed(*stream) &&
-        stream->localSend().endStreamCommitted() != nullptr) {
+    if (http2StreamIsClosed(*stream)) {
         // Both protocol halves are closed and the owner lease is gone: normal
         // completion can finally release storage and refill the rapid-reset budget.
         detachActiveHeaderBlock(*stream);
@@ -397,16 +420,12 @@ void Http2Connection::unpinStream(std::uint32_t streamId) {
 }
 
 void Http2Connection::discardDeferredStreamState(std::uint32_t streamId) {
-    pendingSends_.erase(
-        std::remove_if(
-            pendingSends_.begin(), pendingSends_.end(),
-            [streamId](const Http2PendingSend& pending) {
-                return pending.streamId == streamId;
-            }),
-        pendingSends_.end());
-    drainedDataStreams_.erase(
-        std::remove(drainedDataStreams_.begin(), drainedDataStreams_.end(), streamId),
-        drainedDataStreams_.end());
+    std::erase_if(
+        pendingSends_,
+        [streamId](const Http2PendingSend& pending) {
+            return pending.streamId == streamId;
+        });
+    std::erase(drainedDataStreams_, streamId);
     if (auto* stream = streams_.find(streamId); stream != nullptr) {
         http2ReleaseResponseHeaderBlock(*stream);
     }
@@ -458,6 +477,18 @@ bool Http2Connection::closeStreamByOwner(std::uint32_t streamId) {
         CloseNotification::kOwnerAlreadyKnows);
 }
 
+bool Http2Connection::wasClosedByPeerReset(
+    std::uint32_t streamId,
+    const Http2StreamState* retainedStream) const noexcept {
+    if (retainedStream != nullptr) {
+        return retainedStream->isAborted() &&
+            retainedStream->localSend().aborted()->source() ==
+                Http2StreamCloseSource::kPeer;
+    }
+    return closedStreams_.source(streamId) ==
+        Http2StreamCloseSource::kPeer;
+}
+
 bool Http2Connection::processRstStream(const Http2FrameHeader& header, std::string_view payload) {
     if (payload.size() != 4) {
         appendGoaway(Http2ErrorCode::kFrameSizeError, "invalid RST_STREAM");
@@ -467,10 +498,27 @@ bool Http2Connection::processRstStream(const Http2FrameHeader& header, std::stri
         appendGoaway(Http2ErrorCode::kProtocolError, "RST_STREAM stream id must be nonzero");
         return false;
     }
-    if (streams_.find(header.streamId) == nullptr &&
+    auto* const stream = streams_.find(header.streamId);
+    if (stream == nullptr &&
         isIdleStreamId(header.streamId)) {
         appendGoaway(Http2ErrorCode::kProtocolError, "RST_STREAM on idle stream");
         return false;
+    }
+    if (wasClosedByPeerReset(header.streamId, stream)) {
+        // This peer's two resets are ordered on the same connection, so the
+        // second cannot have been sent before it knew that it had terminated
+        // the stream. Enforce the same peer-reset finality as DATA/HEADERS and
+        // avoid counting a duplicate as another rapid-reset lifecycle.
+        appendGoaway(
+            Http2ErrorCode::kStreamClosed,
+            "RST_STREAM after peer RST_STREAM");
+        return false;
+    }
+    if (stream != nullptr && http2StreamIsClosed(*stream)) {
+        // RST_STREAM can race with END_STREAM or a reset sent by this endpoint.
+        // The stream was already terminal, so minimally process without charging
+        // another peer-reset lifecycle.
+        return true;
     }
     if (closedStreams_.source(header.streamId) ==
         Http2StreamCloseSource::kPeerGoaway) {
@@ -480,7 +528,13 @@ bool Http2Connection::processRstStream(const Http2FrameHeader& header, std::stri
     }
     const auto error = static_cast<Http2ErrorCode>(http2Read32(
         reinterpret_cast<const unsigned char*>(payload.data())));
-    closeStream(header.streamId, Http2StreamCloseSource::kPeer, error);
+    if (!closeStream(header.streamId, Http2StreamCloseSource::kPeer, error)) {
+        // A reset can race with one sent by this endpoint. RFC 9113 requires
+        // minimal processing in that state, but the no-op neither opened a
+        // handler slot nor freed one and therefore must not spend the
+        // rapid-reset lifecycle budget.
+        return true;
+    }
     // Rapid-reset budget (CVE-2023-44487): count peer resets and trip if they run too far
     // ahead of the responses this connection has actually let complete.
     ++peerResetStreams_;
@@ -492,13 +546,33 @@ bool Http2Connection::processRstStream(const Http2FrameHeader& header, std::stri
 }
 
 bool Http2Connection::processPriority(const Http2FrameHeader& header, std::string_view payload) {
-    if (payload.size() != 5) {
-        appendGoaway(Http2ErrorCode::kFrameSizeError, "invalid PRIORITY");
-        return false;
-    }
     if (header.streamId == 0) {
         appendGoaway(Http2ErrorCode::kProtocolError, "PRIORITY stream id must be nonzero");
         return false;
+    }
+    if (payload.size() != 5) {
+        auto* const stream = findStream(header.streamId);
+        if (stream == nullptr || http2StreamIsClosed(*stream)) {
+            // PRIORITY is allowed in every state, but RST_STREAM is not legal
+            // on an idle or closed stream. Promote its mandatory stream
+            // FRAME_SIZE_ERROR to the connection instead.
+            appendGoaway(
+                Http2ErrorCode::kFrameSizeError,
+                "invalid PRIORITY without active stream");
+            return false;
+        }
+        // RFC 9113 section 6.3 makes malformed PRIORITY length a stream error,
+        // unlike most fixed-size connection-control frames. Do not terminate
+        // unrelated multiplexed streams for one bad advisory frame.
+        output_.appendRstStream(
+            header.streamId, Http2ErrorCode::kFrameSizeError);
+        if (stream != nullptr) {
+            closeStream(
+                header.streamId,
+                Http2StreamCloseSource::kLocal,
+                Http2ErrorCode::kFrameSizeError);
+        }
+        return true;
     }
     // RFC 9113 deprecates the RFC 7540 priority tree. Retain frame-shape validation,
     // then ignore the advisory dependency and weight on streams in every state.
@@ -508,8 +582,15 @@ bool Http2Connection::processPriority(const Http2FrameHeader& header, std::strin
 bool Http2Connection::processGoaway(
     const Http2FrameHeader& header,
     std::string_view payload) {
-    if (header.streamId != 0 || payload.size() < 8) {
-        appendGoaway(Http2ErrorCode::kProtocolError, "malformed GOAWAY");
+    // RFC 9113 §6.8 gives these two malformations distinct codes: a nonzero stream id is
+    // a PROTOCOL_ERROR, while a payload short of the 8-octet fixed fields is a
+    // FRAME_SIZE_ERROR. Both are connection errors, but conformance suites read the code.
+    if (header.streamId != 0) {
+        appendGoaway(Http2ErrorCode::kProtocolError, "GOAWAY stream id must be zero");
+        return false;
+    }
+    if (payload.size() < 8) {
+        appendGoaway(Http2ErrorCode::kFrameSizeError, "invalid GOAWAY size");
         return false;
     }
 
@@ -549,10 +630,8 @@ bool Http2Connection::processGoaway(
                 "GOAWAY excludes a started response");
             return false;
         }
-        std::sort(
-            unprocessedStreamIds.begin(),
-            unprocessedStreamIds.begin() +
-                static_cast<std::ptrdiff_t>(unprocessedCount));
+        std::ranges::sort(
+            std::span(unprocessedStreamIds).first(unprocessedCount));
     }
 
     peerGoaway_ = goaway;
@@ -623,7 +702,8 @@ Http2Connection::localRequestAdmissionError() const noexcept {
     if (prefacePhase_ == PrefacePhase::kNotStarted) {
         return Http2RequestHeadSubmitError::kConnectionNotStarted;
     }
-    if (connectionError_ || peerGoaway_.has_value() || nextLocalStreamId_ > 0x7fffffffU) {
+    if (localConnectionState_.fatalFailure() != nullptr ||
+        peerGoaway_.has_value() || nextLocalStreamId_ > 0x7fffffffU) {
         return Http2RequestHeadSubmitError::kConnectionUnavailable;
     }
     if (activeLocalRequestStreams_ >= peerSettings_.maxConcurrentStreams()) {
@@ -653,9 +733,7 @@ void Http2Connection::releaseLocalRequestStream(Http2StreamState& stream) noexce
 }
 
 void Http2Connection::releaseLocalRequestStreamIfClosed(Http2StreamState& stream) noexcept {
-    if (stream.isAborted() ||
-        (http2RemotePeerHalfClosed(stream) &&
-         stream.localSend().endStreamCommitted() != nullptr)) {
+    if (http2StreamIsClosed(stream)) {
         releaseLocalRequestStream(stream);
     }
 }
@@ -678,45 +756,56 @@ void Http2Connection::releaseReceivedData(std::uint32_t streamId) {
     if (debt == 0) {
         return;
     }
-    http2CreditConnectionReceiveWindow(
-        connectionReceiveWindow_, static_cast<std::int32_t>(debt));
-    // Re-advertise the stream window only while the peer can still send on it; a
-    // stream-scoped WINDOW_UPDATE on an ended/reset stream can trip a strict peer.
-    if (!http2RemotePeerHalfClosed(*stream)) {
-        http2CreditStreamReceiveWindow(*stream, static_cast<std::int32_t>(debt));
-        char buf[kHttp2WindowUpdateFrameBytes * 2];
-        auto* out = http2WriteDataWindowUpdates(buf, streamId, debt);
-        output_.appendBytes(std::string_view(
-            buf, static_cast<std::size_t>(out - buf)));
-    } else {
-        char buf[kHttp2WindowUpdateFrameBytes];
-        http2WriteWindowUpdate(buf, 0, debt);
-        output_.appendBytes(std::string_view(buf, sizeof(buf)));
-    }
+    queueConsumedDataCredit(stream, debt);
 }
 
 bool Http2Connection::hasQueuedData(std::uint32_t streamId) const noexcept {
-    for (const auto& pending : pendingSends_) {
-        if (pending.streamId == streamId) {
-            return true;
-        }
-    }
-    return false;
+    return std::ranges::contains(
+        pendingSends_, streamId, &Http2PendingSend::streamId);
 }
 
+void Http2Connection::queueConsumedDataCredit(
+    Http2StreamState* stream,
+    std::uint32_t bytes) {
+    if (bytes == 0) {
+        return;
+    }
 
+    connectionReceiveCredit_.add(bytes);
+    const bool streamCanReceive = stream != nullptr &&
+        !http2RemotePeerHalfClosed(*stream) && !stream->isAborted();
+    if (streamCanReceive) {
+        stream->receiveWindowCredit().add(bytes);
+    }
+
+    char buffer[kHttp2WindowUpdateFrameBytes * 2];
+    auto* out = buffer;
+    if (connectionReceiveCredit_.ready()) {
+        const auto increment = connectionReceiveCredit_.take();
+        http2CreditConnectionReceiveWindow(
+            connectionReceiveWindow_, static_cast<std::int32_t>(increment));
+        out = http2WriteWindowUpdate(out, 0, increment);
+    }
+    if (streamCanReceive && stream->receiveWindowCredit().ready()) {
+        const auto increment = stream->receiveWindowCredit().take();
+        http2CreditStreamReceiveWindow(
+            *stream, static_cast<std::int32_t>(increment));
+        out = http2WriteWindowUpdate(out, stream->id(), increment);
+    }
+    if (out != buffer) {
+        output_.appendBytes(std::string_view(
+            buffer, static_cast<std::size_t>(out - buffer)));
+    }
+}
 
 void Http2Connection::releaseDroppedDataConnectionWindow(std::int32_t flowBytes) {
     // Every structurally valid DATA frame reached this path only after the shared
     // connection debit succeeded. Return exactly that credit while keeping the
     // connection; no stream window survives an abandoned stream.
-    http2CreditConnectionReceiveWindow(connectionReceiveWindow_, flowBytes);
-    if (flowBytes == 0) {
+    if (flowBytes <= 0) {
         return;
     }
-    char buf[kHttp2WindowUpdateFrameBytes];
-    http2WriteWindowUpdate(buf, 0, static_cast<std::uint32_t>(flowBytes));
-    output_.appendBytes(std::string_view(buf, sizeof(buf)));
+    queueConsumedDataCredit(nullptr, static_cast<std::uint32_t>(flowBytes));
 }
 
 bool Http2Connection::processData(const Http2FrameHeader& header, std::string_view payload) {
@@ -746,28 +835,36 @@ bool Http2Connection::processData(const Http2FrameHeader& header, std::string_vi
     }
 
     auto* stream = findStream(header.streamId);
+    if (wasClosedByPeerReset(header.streamId, stream)) {
+        // This peer's RST_STREAM and later DATA are ordered on the same
+        // connection. Unlike DATA that was already in flight when WE sent a
+        // reset, this cannot be a state-view race. Do not answer with another
+        // stream frame; use the same strict closed-state verdict for retained
+        // (pinned) and already-released storage.
+        appendGoaway(
+            Http2ErrorCode::kStreamClosed,
+            "DATA after peer RST_STREAM");
+        return false;
+    }
     if (stream == nullptr) {
-        if (closedStreams_.source(header.streamId) ==
-            Http2StreamCloseSource::kPeerGoaway) {
+        const auto closeSource = closedStreams_.source(header.streamId);
+        if (closeSource == Http2StreamCloseSource::kPeerGoaway) {
             releaseDroppedDataConnectionWindow(flowBytes);
             return true;
         }
         if (!isIdleStreamId(header.streamId)) {
-            // A peer can aim DATA at the same already-closed stream forever; each answer
-            // is an RST_STREAM appended to output. Bound them like the PING/SETTINGS
-            // floods so an unread peer cannot grow output without limit.
-            if (++consecutiveClosedStreamResets_ > kHttp2MaxUndrainedClosedStreamResets) {
-                appendGoaway(Http2ErrorCode::kEnhanceYourCalm, "excessive closed-stream DATA");
-                return false;
-            }
-            output_.appendRstStream(header.streamId, Http2ErrorCode::kStreamClosed);
+            // A locally reset stream can receive DATA that was already in flight.
+            // Minimal processing still debits connection flow control, then drops
+            // it without manufacturing an illegal second stream frame. Applying
+            // this tolerant rule to released closed streams also avoids coupling
+            // wire behavior to the bounded close-history lifetime.
             releaseDroppedDataConnectionWindow(flowBytes);
             return true;
         }
         appendGoaway(Http2ErrorCode::kProtocolError, "DATA before HEADERS");
         return false;
     }
-    if (stream->isAborted()) {
+    if (http2StreamIsClosed(*stream)) {
         releaseDroppedDataConnectionWindow(flowBytes);
         return true;
     }
@@ -840,14 +937,11 @@ bool Http2Connection::processData(const Http2FrameHeader& header, std::string_vi
             return true;
         }
         if (flowBytes > 0) {
-            const auto increment = static_cast<std::uint32_t>(flowBytes);
-            http2CreditConnectionReceiveWindow(connectionReceiveWindow_, flowBytes);
-            http2CreditStreamReceiveWindow(*stream, flowBytes);
-            char buf[kHttp2WindowUpdateFrameBytes * 2];
-            auto* out = http2WriteDataWindowUpdates(
-                buf, header.streamId, increment);
-            output_.appendBytes(std::string_view(
-                buf, static_cast<std::size_t>(out - buf)));
+            queueConsumedDataCredit(
+                (header.flags & kHttp2FlagEndStream) == 0
+                    ? stream
+                    : nullptr,
+                static_cast<std::uint32_t>(flowBytes));
         }
         if ((header.flags & kHttp2FlagEndStream) == 0) {
             return true;
@@ -900,22 +994,22 @@ bool Http2Connection::processData(const Http2FrameHeader& header, std::string_vi
             stream->addWindowDebt(static_cast<std::uint32_t>(flowBytes));
         } else {
             // Empty DATA (including padding-only DATA) gives the owner no content to
-            // retain. Metadata-only empty frames likewise need no application ack.
-            const auto increment = static_cast<std::uint32_t>(flowBytes);
-            http2CreditConnectionReceiveWindow(connectionReceiveWindow_, flowBytes);
-            http2CreditStreamReceiveWindow(*stream, flowBytes);
-            char buf[kHttp2WindowUpdateFrameBytes * 2];
-            auto* out = http2WriteDataWindowUpdates(buf, header.streamId, increment);
-            output_.appendBytes(std::string_view(
-                buf, static_cast<std::size_t>(out - buf)));
+            // retain. Metadata-only empty frames likewise need no application ack,
+            // but their credit is still batched to prevent per-frame amplification.
+            queueConsumedDataCredit(
+                (header.flags & kHttp2FlagEndStream) == 0
+                    ? stream
+                    : nullptr,
+                static_cast<std::uint32_t>(flowBytes));
         }
     }
 
-    // sans-I/O: hand the body to the owner as an event; the core does not buffer it
-    // (buffered vs streaming delivery and product size limits are owner policy).
-    // Content-Length was accounted above. A non-empty event retains receive-window
-    // debt until releaseReceivedData(); the view remains valid until the next feed.
-    if (!metadataOnlyContent) {
+    // sans-I/O: hand only actual body bytes to the owner. Empty and padding-only
+    // DATA frames still participate in framing, END_STREAM, and flow control, but
+    // exposing them as empty chunks would create no-progress queue wakeups and let
+    // a frame flood allocate one application event per nine wire octets.
+    // Buffered vs streaming delivery and product size limits remain owner policy.
+    if (deliverData) {
         events_.push_back(tunnelData
             ? Http2Event::tunnelData(header.streamId, data)
             : Http2Event::messageBodyChunk(header.streamId, data));
@@ -951,7 +1045,7 @@ bool Http2Connection::processData(const Http2FrameHeader& header, std::string_vi
 
 bool Http2Connection::processFrame(const Http2FrameHeader& header, std::string_view payload) {
     if (prefacePhase_ == PrefacePhase::kAwaitingPeerSettings &&
-        header.type != static_cast<std::uint8_t>(Http2FrameType::kSettings)) {
+        header.type != std::to_underlying(Http2FrameType::kSettings)) {
         appendGoaway(Http2ErrorCode::kProtocolError, "first frame must be SETTINGS");
         return false;
     }
@@ -985,7 +1079,7 @@ bool Http2Connection::processFrame(const Http2FrameHeader& header, std::string_v
         default:
             if (header.streamId != 0) {
                 if (auto* stream = findStream(header.streamId);
-                    stream != nullptr &&
+                    stream != nullptr && !http2StreamIsClosed(*stream) &&
                     stream->tunnel().open() != nullptr) {
                     // RFC 9113 8.5 narrows connected streams to DATA and the three
                     // stream-management frame types, even though unknown frames are
@@ -1020,7 +1114,7 @@ bool Http2Connection::consumeFrames(std::string_view buffer, std::size_t& offset
             return false;
         }
         offset += kHttp2FrameHeaderBytes + header.length;
-        if (connectionError_) {
+        if (localConnectionState_.fatalFailure() != nullptr) {
             break;
         }
     }
@@ -1040,7 +1134,7 @@ Http2FeedResult Http2Connection::feed(std::string_view in) {
     if (eventOffset_ < events_.size()) {
         return Http2FeedResult::kEventsPending;
     }
-    if (connectionError_) {
+    if (localConnectionState_.fatalFailure() != nullptr) {
         return Http2FeedResult::kProtocolFailure;
     }
 
@@ -1071,7 +1165,7 @@ Http2FeedResult Http2Connection::feed(std::string_view in) {
         if (offset < in.size()) {
             input_.append(in.data() + offset, in.size() - offset);  // partial-frame tail
         }
-        if (connectionError_) {
+        if (localConnectionState_.fatalFailure() != nullptr) {
             return Http2FeedResult::kProtocolFailure;
         }
         return input_.empty()
@@ -1099,12 +1193,12 @@ Http2FeedResult Http2Connection::feed(std::string_view in) {
         prefacePhase_ = PrefacePhase::kAwaitingPeerSettings;
     }
 
-    if (!consumeFrames(std::string_view(input_.data(), input_.size()), inputOffset_)) {
+    if (!consumeFrames(std::string_view(input_), inputOffset_)) {
         return Http2FeedResult::kProtocolFailure;
     }
     // NOTE: the consumed prefix is reclaimed at the START of the next feed (see above),
     // so body-chunk views handed out via events stay valid until then.
-    if (connectionError_) {
+    if (localConnectionState_.fatalFailure() != nullptr) {
         return Http2FeedResult::kProtocolFailure;
     }
     return inputOffset_ < input_.size()
@@ -1112,7 +1206,8 @@ Http2FeedResult Http2Connection::feed(std::string_view in) {
         : Http2FeedResult::kAccepted;
 }
 
-Http2StreamState* Http2Connection::stream(std::uint32_t streamId) noexcept {
+Http2StreamState* Http2Connection::stream(
+    std::uint32_t streamId) & noexcept {
     return streams_.find(streamId);
 }
 

@@ -23,4 +23,14 @@ namespace ruvia::detail {
         remote.aborted() != nullptr;
 }
 
+// Protocol closure is independent of whether request-view storage remains pinned.
+// A reset closes both halves immediately; otherwise both peer END_STREAM and a
+// committed local END_STREAM are required.
+[[nodiscard]] inline bool http2StreamIsClosed(
+    const Http2StreamState& stream) noexcept {
+    return stream.isAborted() ||
+        (http2RemotePeerHalfClosed(stream) &&
+         stream.localSend().endStreamCommitted() != nullptr);
+}
+
 }  // namespace ruvia::detail

@@ -25,14 +25,14 @@ namespace {
         case RequestHeaderKind::kRange:
         case RequestHeaderKind::kUpgrade:
         case RequestHeaderKind::kAuthorization:
+        case RequestHeaderKind::kAccessControlRequestHeaders:
+        case RequestHeaderKind::kAccessControlRequestMethod:
+        case RequestHeaderKind::kOrigin:
             return true;
         case RequestHeaderKind::kOther:
         case RequestHeaderKind::kAccept:
         case RequestHeaderKind::kAcceptEncoding:
-        case RequestHeaderKind::kAccessControlRequestHeaders:
-        case RequestHeaderKind::kAccessControlRequestMethod:
         case RequestHeaderKind::kUserAgent:
-        case RequestHeaderKind::kOrigin:
         case RequestHeaderKind::kSecWebSocketKey:
         case RequestHeaderKind::kSecWebSocketProtocol:
         case RequestHeaderKind::kSecWebSocketVersion:
@@ -82,9 +82,17 @@ std::optional<HttpChunkScanError> validateHttpChunkTrailers(
     if (trailers.empty()) {
         return std::nullopt;
     }
+    if (trailers.size() > kMaxHttpHeaderBytes) {
+        return HttpChunkScanError::kTooLarge;
+    }
 
     std::size_t cursor = 0;
+    std::size_t fieldCount = 0;
     while (cursor < trailers.size()) {
+        if (fieldCount == kMaxHttpHeaderFields) {
+            return HttpChunkScanError::kTooLarge;
+        }
+        ++fieldCount;
         const auto lineEnd = trailers.find("\r\n", cursor);
         const auto line = lineEnd == std::string_view::npos
             ? trailers.substr(cursor)
@@ -129,7 +137,18 @@ HttpChunkScanResult scanHttpChunkedBody(std::string_view body) noexcept {
     for (;;) {
         const auto lineEnd = body.find("\r\n", cursor);
         if (lineEnd == std::string_view::npos) {
+            // A future CRLF can begin at most one byte before the current end.
+            // Once the unterminated line itself reaches the framing-line byte
+            // limit, no completion can make this a bounded chunk-size line.
+            if (body.size() - cursor >= kMaxHttpHeaderBytes) {
+                return HttpChunkScanResult::makeFailure(
+                    HttpChunkScanError::kTooLarge);
+            }
             return HttpChunkScanResult::makeNeedMore();
+        }
+        if (lineEnd - cursor + 2 > kMaxHttpHeaderBytes) {
+            return HttpChunkScanResult::makeFailure(
+                HttpChunkScanError::kTooLarge);
         }
 
         std::size_t chunkSize = 0;
@@ -162,6 +181,10 @@ HttpChunkScanResult scanHttpChunkedBody(std::string_view body) noexcept {
             }
             const auto trailerEnd = body.find("\r\n\r\n", cursor);
             if (trailerEnd != std::string_view::npos) {
+                if (trailerEnd - cursor > kMaxHttpHeaderBytes - 4) {
+                    return HttpChunkScanResult::makeFailure(
+                        HttpChunkScanError::kTooLarge);
+                }
                 if (const auto trailerError = validateHttpChunkTrailers(
                         body.substr(cursor, trailerEnd - cursor));
                     trailerError.has_value()) {
@@ -172,6 +195,13 @@ HttpChunkScanResult scanHttpChunkedBody(std::string_view body) noexcept {
                         HttpChunkScanError::kTooLarge);
                 }
                 return HttpChunkScanResult::makeComplete(trailerEnd + 4);
+            }
+            // Preserve the last three bytes as a possible delimiter prefix.
+            // At kMaxHttpHeaderBytes available bytes, even the earliest future
+            // CRLFCRLF would exceed the complete trailer-section limit.
+            if (body.size() - cursor >= kMaxHttpHeaderBytes) {
+                return HttpChunkScanResult::makeFailure(
+                    HttpChunkScanError::kTooLarge);
             }
             return HttpChunkScanResult::makeNeedMore();
         }

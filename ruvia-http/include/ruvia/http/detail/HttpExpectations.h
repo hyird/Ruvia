@@ -1,28 +1,125 @@
 #pragma once
 
 #include <cstdint>
-#include <optional>
 #include <string_view>
+#include <type_traits>
+#include <variant>
 
+#include "ruvia/http/HttpProtocolError.h"
 #include "ruvia/http/detail/HeaderTokenUtils.h"
 
 namespace ruvia::detail {
 
+// The standardized Expect field member is defined once so parsers and writers
+// cannot drift on its wire spelling.
+inline constexpr std::string_view kHttpContinueExpectationToken =
+    "100-continue";
+
 // Whether the framing/lifecycle owner has established that request content will
 // follow the initial head. Keep this typed: HTTP/1 derives it from its body plan,
-// while HTTP/2 derives it from END_STREAM rather than from Content-Length alone.
+// while HTTP/2 combines its receive-half and remaining-content states so an open
+// metadata-only or known-empty stream cannot masquerade as pending content.
 enum class HttpRequestContentIndication : std::uint8_t {
     kNoContent,
     kWillFollow
 };
 
-// A protocol action consumed by a server runtime. Absence is returned as an
-// empty optional. kUnsupported is deliberately not a parse error: Expect is
-// extensible and RFC 9110 permits (rather than requires) a server to answer an
-// unknown expectation with 417.
-enum class HttpServerExpectationAction : std::uint8_t {
-    kSend100Continue,
-    kUnsupported
+// RFC 9110 Section 10.1.1 forbids a client from generating 100-continue when
+// the request has no content. Keep this sender check next to the recipient-side
+// expectation state so HTTP/1 and HTTP/2 cannot derive different answers.
+[[nodiscard]] constexpr bool httpClientExpectationIsValid(
+    bool hasContinue,
+    HttpRequestContentIndication content) noexcept {
+    return !hasContinue ||
+        content == HttpRequestContentIndication::kWillFollow;
+}
+
+// Whether the product accepts unknown expectation extensions. Expect remains
+// valid syntax either way; the HTTP contract owns the protocol response chosen
+// by the explicit rejection policy.
+enum class HttpUnsupportedExpectationPolicy : std::uint8_t {
+    kIgnore,
+    kReject
+};
+
+class HttpServerExpectationPlan;
+
+class HttpNoServerExpectationAction final {
+private:
+    friend class HttpServerExpectationPlan;
+    constexpr HttpNoServerExpectationAction() noexcept = default;
+};
+
+class HttpSendContinue final {
+private:
+    friend class HttpServerExpectationPlan;
+    constexpr HttpSendContinue() noexcept = default;
+};
+
+class HttpUnsupportedExpectationRejection final {
+public:
+    [[nodiscard]] HttpProtocolError protocolError() const noexcept {
+        return HttpProtocolError(http_status::kExpectationFailed, "unsupported Expect header");
+    }
+
+private:
+    friend class HttpServerExpectationPlan;
+    constexpr HttpUnsupportedExpectationRejection() noexcept = default;
+};
+
+// No action, an interim response, and a final rejection are mutually exclusive
+// protocol outcomes. Keep them typed so runtimes cannot compare a semantic enum
+// and then reconstruct the required status themselves.
+class HttpServerExpectationPlan final {
+public:
+    [[nodiscard]] constexpr const HttpNoServerExpectationAction*
+    noAction() const & noexcept {
+        return std::get_if<HttpNoServerExpectationAction>(&value_);
+    }
+    const HttpNoServerExpectationAction* noAction() const && = delete;
+
+    [[nodiscard]] constexpr const HttpSendContinue*
+    sendContinue() const & noexcept {
+        return std::get_if<HttpSendContinue>(&value_);
+    }
+    const HttpSendContinue* sendContinue() const && = delete;
+
+    [[nodiscard]] constexpr const HttpUnsupportedExpectationRejection*
+    rejection() const & noexcept {
+        return std::get_if<HttpUnsupportedExpectationRejection>(&value_);
+    }
+    const HttpUnsupportedExpectationRejection* rejection() const && = delete;
+
+private:
+    friend class HttpRequestExpectations;
+
+    using Value = std::variant<
+        HttpNoServerExpectationAction,
+        HttpSendContinue,
+        HttpUnsupportedExpectationRejection>;
+
+    template <typename Alternative>
+    explicit constexpr HttpServerExpectationPlan(
+        Alternative alternative) noexcept
+        : value_(alternative) {}
+
+    [[nodiscard]] static constexpr HttpServerExpectationPlan noActionPlan()
+        noexcept {
+        return HttpServerExpectationPlan(HttpNoServerExpectationAction());
+    }
+
+    [[nodiscard]] static constexpr HttpServerExpectationPlan continuePlan()
+        noexcept {
+        return HttpServerExpectationPlan(HttpSendContinue());
+    }
+
+    [[nodiscard]] static constexpr HttpServerExpectationPlan rejectionPlan()
+        noexcept {
+        return HttpServerExpectationPlan(
+            HttpUnsupportedExpectationRejection());
+    }
+
+    Value value_;
 };
 
 // Incremental recipient-side state for the RFC 9110 Expect #list. Repeated field
@@ -35,8 +132,9 @@ public:
         httpVisitCommaSeparatedQuoted(
             value,
             [this](std::string_view member) noexcept {
-                if (httpAsciiEqualsIgnoreCase(member, "100-continue")) {
-                    flags_ |= k100Continue;
+                if (httpAsciiEqualsIgnoreCase(
+                        member, kHttpContinueExpectationToken)) {
+                    flags_ |= kContinue;
                 } else {
                     flags_ |= kUnsupported;
                 }
@@ -44,8 +142,8 @@ public:
             });
     }
 
-    [[nodiscard]] bool has100Continue() const noexcept {
-        return (flags_ & k100Continue) != 0;
+    [[nodiscard]] bool hasContinue() const noexcept {
+        return (flags_ & kContinue) != 0;
     }
 
     [[nodiscard]] bool hasUnsupported() const noexcept {
@@ -55,27 +153,34 @@ public:
     // RFC 9110 requires an HTTP/1.0 recipient to ignore 100-continue. Preserve
     // the independent unsupported-member fact so the Web product can still apply
     // its chosen extension-support policy.
-    void ignore100Continue() noexcept {
-        flags_ &= static_cast<std::uint8_t>(~k100Continue);
+    void ignoreContinue() noexcept {
+        flags_ &= static_cast<std::uint8_t>(~kContinue);
     }
 
-    [[nodiscard]] std::optional<HttpServerExpectationAction> serverAction(
-        HttpRequestContentIndication content) const noexcept {
-        if (hasUnsupported()) {
-            return HttpServerExpectationAction::kUnsupported;
+    [[nodiscard]] HttpServerExpectationPlan serverPlan(
+        HttpRequestContentIndication content,
+        HttpUnsupportedExpectationPolicy unsupportedPolicy) const noexcept {
+        if (hasUnsupported() &&
+            unsupportedPolicy == HttpUnsupportedExpectationPolicy::kReject) {
+            return HttpServerExpectationPlan::rejectionPlan();
         }
-        if (has100Continue() &&
+        if (hasContinue() &&
             content == HttpRequestContentIndication::kWillFollow) {
-            return HttpServerExpectationAction::kSend100Continue;
+            return HttpServerExpectationPlan::continuePlan();
         }
-        return std::nullopt;
+        return HttpServerExpectationPlan::noActionPlan();
     }
 
 private:
-    static constexpr std::uint8_t k100Continue = 1U << 0;
+    static constexpr std::uint8_t kContinue = 1U << 0;
     static constexpr std::uint8_t kUnsupported = 1U << 1;
 
     std::uint8_t flags_{0};
 };
+
+static_assert(std::is_trivially_copyable_v<HttpRequestExpectations>);
+static_assert(sizeof(HttpRequestExpectations) <= 1);
+static_assert(std::is_trivially_copyable_v<HttpServerExpectationPlan>);
+static_assert(sizeof(HttpServerExpectationPlan) <= 2);
 
 }  // namespace ruvia::detail

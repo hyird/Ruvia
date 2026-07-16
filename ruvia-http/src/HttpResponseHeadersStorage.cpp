@@ -8,11 +8,6 @@
 
 namespace ruvia {
 
-HttpResponseHeaders::HttpResponseHeaders(std::pmr::memory_resource* resource)
-    : HttpResponseHeaders(
-          detail::HttpResolvedPmrResourceTag{},
-          detail::httpPmrResourceOrDefault(resource)) {}
-
 HttpResponseHeaders::HttpResponseHeaders(
     detail::HttpResolvedPmrResourceTag,
     std::pmr::memory_resource* resource)
@@ -27,19 +22,6 @@ HttpResponseHeaders::HttpResponseHeaders(HttpResponseHeaders&& other) noexcept
     : resource_(other.resource_),
       heap_(resource_) {
     moveFrom(std::move(other));
-}
-
-HttpResponseHeaders& HttpResponseHeaders::operator=(HttpResponseHeaders&& other) noexcept {
-    if (this == &other) {
-        return *this;
-    }
-
-    clear();
-    resource_ = other.resource_;
-    heap_ = std::pmr::vector<HttpResponseHeader>(resource_);
-    spilled_ = false;
-    moveFrom(std::move(other));
-    return *this;
 }
 
 void HttpResponseHeaders::reserve(std::size_t count) {

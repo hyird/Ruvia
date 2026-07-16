@@ -3,6 +3,8 @@
 #include <cstdint>
 #include <optional>
 
+#include "ruvia/http/HttpStatus.h"
+
 namespace ruvia::detail {
 
 class Http2StreamRequestState final {
@@ -76,13 +78,18 @@ public:
         return true;
     }
 
-    // Client role: nullptr until the final response :status is committed once for
-    // a stream this endpoint opened. The owner bounds preceding 1xx heads.
-    [[nodiscard]] const std::uint16_t* responseStatus() const noexcept {
-        return responseStatus_ ? &*responseStatus_ : nullptr;
+    [[nodiscard]] bool hasSingletonHeader(std::uint32_t bit) const noexcept {
+        return (singletonHeaderBits_ & bit) != 0;
     }
 
-    [[nodiscard]] bool setResponseStatus(std::uint16_t status) noexcept {
+    // Client role: nullptr until the final response :status is committed once for
+    // a stream this endpoint opened. The owner bounds preceding 1xx heads.
+    [[nodiscard]] const HttpStatusCode* responseStatus() const & noexcept {
+        return responseStatus_ ? &*responseStatus_ : nullptr;
+    }
+    [[nodiscard]] const HttpStatusCode* responseStatus() const && = delete;
+
+    [[nodiscard]] bool setResponseStatus(HttpStatusCode status) noexcept {
         if (responseStatus_) {
             return false;
         }
@@ -108,7 +115,7 @@ private:
     bool regularHeaderSeen_ : 1 {false};
     std::uint32_t singletonHeaderBits_{0};
     std::uint16_t schemeDefaultPort_{0};
-    std::optional<std::uint16_t> responseStatus_;
+    std::optional<HttpStatusCode> responseStatus_;
     std::uint8_t interimResponses_{0};
 };
 

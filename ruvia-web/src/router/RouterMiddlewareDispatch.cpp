@@ -1,6 +1,7 @@
 #include "ruvia/web/detail/router/RouteTable.h"
 
 #include "ruvia/web/detail/http/ContextInternal.h"
+#include "ruvia/web/detail/server/HttpResponseStreamState.h"
 #include "ruvia/web/Error.h"
 #include "ruvia/web/detail/http/HttpErrorResponse.h"
 
@@ -21,7 +22,7 @@ void storeRepeatedNextError(Context& context) {
         context,
         detail::makeDefaultErrorResponse(
             context.resource(),
-            HttpErrorInfo(500, "next_called_multiple_times", "next() called multiple times")));
+            HttpErrorInfo(ruvia::http_status::kInternalServerError, "next_called_multiple_times", "next() called multiple times")));
 }
 
 detail::NextState::Control* makeNextControl(Context& context) {
@@ -42,7 +43,7 @@ public:
     NextControlScope& operator=(const NextControlScope&) = delete;
 
     ~NextControlScope() {
-        control_->active = false;
+        control_->expire();
     }
 
 private:
@@ -115,7 +116,7 @@ Task<void> detail::RouteTable::invokeMiddlewareAt(
 
 Task<void> detail::RouteTable::invokeMiddlewareContinuation(NextState state) {
     auto* context = state.context;
-    if (state.repeated) {
+    if (state.invocation != detail::NextState::Invocation::kReady) {
         storeRepeatedNextError(*context);
         co_return;
     }
@@ -139,19 +140,11 @@ Task<void> detail::RouteTable::invokeStreamMiddlewareAt(
     const RouteEntry& route,
     std::size_t index,
     Context& context,
-    StreamMiddlewareChainState& chain) const {
+    StreamMiddlewareChainState& chain,
+    const RouteStreamHandler& handler) const {
     if (index >= route.middlewareCount()) {
-        const auto& endpoint = route.endpoint();
-        const auto* responseStream = endpoint.responseStream();
-        const auto* webSocket = endpoint.webSocket();
-        if (responseStream == nullptr && webSocket == nullptr) {
-            throw std::logic_error("route is not a stream-handler route");
-        }
-        const auto& handler = responseStream != nullptr
-            ? responseStream->handler()
-            : webSocket->handler();
-        co_await handler(context);
         chain.markHandlerInvoked();
+        co_await handler(context);
         co_return;
     }
 
@@ -165,6 +158,7 @@ Task<void> detail::RouteTable::invokeStreamMiddlewareAt(
             .route = &route,
             .context = &context,
             .streamChain = &chain,
+            .streamHandler = &handler,
             .control = &control,
             .index = index + 1},
         &RouteTable::invokeStreamMiddlewareContinuation);
@@ -175,7 +169,7 @@ Task<void> detail::RouteTable::invokeStreamMiddlewareAt(
 
 Task<void> detail::RouteTable::invokeStreamMiddlewareContinuation(NextState state) {
     auto* context = state.context;
-    if (state.repeated) {
+    if (state.invocation != detail::NextState::Invocation::kReady) {
         storeRepeatedNextError(*context);
         co_return;
     }
@@ -188,7 +182,15 @@ Task<void> detail::RouteTable::invokeStreamMiddlewareContinuation(NextState stat
             *route,
             state.index,
             *context,
-            *chain);
+            *chain,
+            *state.streamHandler);
+    } catch (const ResponseStreamHeadOnlyComplete&) {
+        // Not a failure: the committed head already completed a
+        // body-suppressed message (HEAD on a streaming route). Let the signal
+        // unwind through every middleware frame so dispatchStreamRoute can
+        // finish the stream as a head-only success instead of rendering a
+        // buffered error response that can no longer be sent.
+        throw;
     } catch (...) {
         exception = std::current_exception();
     }

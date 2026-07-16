@@ -22,6 +22,26 @@ option(RUVIA_BUILD_FUZZERS "Build Clang libFuzzer protocol targets" OFF)
 option(RUVIA_ENABLE_HTTP2_CONFORMANCE_TESTS "Run RFC 9113 wire conformance tests against a Ruvia h2c server" OFF)
 option(RUVIA_ENABLE_POSTGRESQL_INTEGRATION_TESTS "Run tests against a live PostgreSQL server" OFF)
 
+set(_ruvia_sanitizer_flags OFF)
+if(CMAKE_CXX_FLAGS MATCHES "(^|[ ;])[-/]fsanitize=" OR
+   CMAKE_EXE_LINKER_FLAGS MATCHES "(^|[ ;])[-/]fsanitize=")
+    set(_ruvia_sanitizer_flags ON)
+endif()
+set(_ruvia_mimalloc_override_default ON)
+if(_ruvia_sanitizer_flags)
+    set(_ruvia_mimalloc_override_default OFF)
+endif()
+option(
+    RUVIA_ENABLE_MIMALLOC_OVERRIDE
+    "Override the process allocator with mimalloc (incompatible with sanitizer interceptors)"
+    ${_ruvia_mimalloc_override_default})
+unset(_ruvia_mimalloc_override_default)
+if(_ruvia_sanitizer_flags AND RUVIA_ENABLE_MIMALLOC_OVERRIDE)
+    message(FATAL_ERROR
+        "RUVIA_ENABLE_MIMALLOC_OVERRIDE=ON is incompatible with sanitizer interceptors")
+endif()
+unset(_ruvia_sanitizer_flags)
+
 option(RUVIA_ENABLE_MARIADB "Build MariaDB-compatible database support" OFF)
 option(RUVIA_ENABLE_POSTGRESQL "Build PostgreSQL database support" OFF)
 option(RUVIA_ENABLE_REDIS "Build Redis support" OFF)
@@ -62,9 +82,12 @@ endif()
 if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
     set(_ruvia_vcpkg_features ${VCPKG_MANIFEST_FEATURES})
     list(REMOVE_ITEM _ruvia_vcpkg_features
-        core http web runtime protocol framework mariadb postgresql redis jwt http-client)
+        core http web runtime allocator-override protocol framework mariadb postgresql redis jwt http-client)
     if(RUVIA_BUILD_CORE)
         list(APPEND _ruvia_vcpkg_features runtime)
+        if(RUVIA_ENABLE_MIMALLOC_OVERRIDE)
+            list(APPEND _ruvia_vcpkg_features allocator-override)
+        endif()
     endif()
     if(RUVIA_BUILD_HTTP)
         list(APPEND _ruvia_vcpkg_features protocol)
@@ -96,7 +119,15 @@ if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
     unset(_ruvia_vcpkg_features)
 endif()
 
-project(ruvia VERSION 0.1.1 LANGUAGES CXX)
+file(READ "${CMAKE_CURRENT_SOURCE_DIR}/vcpkg.json" _ruvia_manifest_json)
+string(JSON _ruvia_manifest_version GET "${_ruvia_manifest_json}" version-string)
+if(NOT _ruvia_manifest_version MATCHES "^[0-9]+\\.[0-9]+\\.[0-9]+$")
+    message(FATAL_ERROR
+        "vcpkg.json version-string must be a three-component numeric version, got: ${_ruvia_manifest_version}")
+endif()
+project(ruvia VERSION "${_ruvia_manifest_version}" LANGUAGES CXX)
+unset(_ruvia_manifest_json)
+unset(_ruvia_manifest_version)
 
 if(RUVIA_BUILD_FUZZERS AND NOT CMAKE_CXX_COMPILER_ID MATCHES "Clang")
     message(FATAL_ERROR "RUVIA_BUILD_FUZZERS=ON requires Clang with libFuzzer")
@@ -104,51 +135,9 @@ endif()
 
 include(GNUInstallDirs)
 include(CMakePackageConfigHelpers)
-
-set(CMAKE_CXX_STANDARD 23)
-set(CMAKE_CXX_STANDARD_REQUIRED ON)
-set(CMAKE_CXX_EXTENSIONS OFF)
-
-if(MSVC AND NOT DEFINED CMAKE_MSVC_RUNTIME_LIBRARY)
-    set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
-endif()
-
-if(RUVIA_BUILD_CORE)
-    find_package(asio CONFIG REQUIRED)
-    find_package(Threads REQUIRED)
-    find_package(mimalloc CONFIG REQUIRED)
-endif()
-
-if(RUVIA_BUILD_HTTP)
-    find_package(ZLIB REQUIRED)
-    find_package(unofficial-brotli CONFIG REQUIRED)
-    find_package(zstd CONFIG REQUIRED)
-
-    if(TARGET zstd::libzstd)
-        set(RUVIA_ZSTD_TARGET zstd::libzstd)
-    elseif(TARGET zstd::libzstd_static)
-        set(RUVIA_ZSTD_TARGET zstd::libzstd_static)
-    else()
-        set(RUVIA_ZSTD_TARGET zstd::libzstd_shared)
-    endif()
-endif()
-
-if(RUVIA_BUILD_WEB)
-    find_package(OpenSSL REQUIRED)
-endif()
-
-if(RUVIA_ENABLE_MARIADB)
-    find_package(unofficial-libmariadb CONFIG REQUIRED)
-endif()
-
-if(RUVIA_ENABLE_POSTGRESQL)
-    find_package(PostgreSQL REQUIRED)
-endif()
-
-if(RUVIA_ENABLE_REDIS)
-    find_package(hiredis CONFIG REQUIRED)
-endif()
-
+# Shared build/install/export helpers remain in the root build description so
+# component CMakeLists files can stay self-contained without extra repository
+# CMake fragments.
 function(ruvia_deduplicate_link_interface target)
     if(NOT TARGET ${target})
         return()
@@ -163,13 +152,6 @@ function(ruvia_deduplicate_link_interface target)
     set_target_properties(${target} PROPERTIES
         INTERFACE_LINK_LIBRARIES "${_ruvia_link_interface}")
 endfunction()
-
-if(RUVIA_ENABLE_MARIADB)
-    ruvia_deduplicate_link_interface(unofficial::libmariadb)
-endif()
-if(RUVIA_ENABLE_POSTGRESQL)
-    ruvia_deduplicate_link_interface(PostgreSQL::PostgreSQL)
-endif()
 
 function(ruvia_configure_library target)
     target_compile_features(${target} PUBLIC cxx_std_23)
@@ -197,6 +179,11 @@ function(ruvia_configure_library target)
     else()
         target_compile_options(${target} PRIVATE -Wall -Wextra -Wpedantic)
     endif()
+
+    target_link_options(${target}
+        INTERFACE
+            $<$<PLATFORM_ID:Darwin>:LINKER:-no_warn_duplicate_libraries>
+    )
 endfunction()
 
 function(ruvia_configure_runtime_library target)
@@ -207,16 +194,6 @@ function(ruvia_configure_runtime_library target)
     target_precompile_headers(${target} PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src/pch.h")
 endfunction()
 
-if(RUVIA_BUILD_CORE)
-    set(RUVIA_MIMALLOC_TARGET mimalloc)
-    if(TARGET mimalloc-static)
-        get_target_property(_ruvia_mimalloc_static_type mimalloc-static TYPE)
-        if(NOT _ruvia_mimalloc_static_type STREQUAL "INTERFACE_LIBRARY")
-            set(RUVIA_MIMALLOC_TARGET mimalloc-static)
-        endif()
-    endif()
-endif()
-
 function(ruvia_install_target target component)
     install(
         TARGETS ${target}
@@ -225,6 +202,19 @@ function(ruvia_install_target target component)
         LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR} COMPONENT ${component} NAMELINK_COMPONENT ${component}
         RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR} COMPONENT ${component}
         INCLUDES DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}
+    )
+endfunction()
+
+# Install the export set for a component. Each component calls this itself so its
+# targets file lives with the component that produced it; a partial prefix never
+# imports libraries that were not installed.
+function(ruvia_install_export component)
+    install(
+        EXPORT ruvia_${component}_targets
+        FILE ruvia-${component}-targets.cmake
+        NAMESPACE ruvia::
+        DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/ruvia
+        COMPONENT ${component}
     )
 endfunction()
 
@@ -279,12 +269,41 @@ function(ruvia_install_public_header_tree component relative_dir)
         FILES_MATCHING
             PATTERN "*.h"
             PATTERN "*.inl"
+            ${ARGN}
+    )
+endfunction()
+
+function(ruvia_install_generated_public_header component generated_header relative_path)
+    set(_ruvia_expected_header_root "ruvia/${component}")
+    if(NOT relative_path MATCHES "^${_ruvia_expected_header_root}(/|$)")
+        message(FATAL_ERROR
+            "${component} cannot install a generated header outside ${_ruvia_expected_header_root}: ${relative_path}")
+    endif()
+
+    set(_ruvia_target_binary_dir "${CMAKE_CURRENT_BINARY_DIR}")
+    cmake_path(NORMAL_PATH _ruvia_target_binary_dir
+        OUTPUT_VARIABLE _ruvia_target_binary_root)
+    cmake_path(IS_PREFIX _ruvia_target_binary_root
+        "${generated_header}" NORMALIZE _ruvia_generated_header_is_owned)
+    if(NOT _ruvia_generated_header_is_owned)
+        message(FATAL_ERROR
+            "${component} generated header is outside its target build directory: ${generated_header}")
+    endif()
+
+    get_filename_component(_ruvia_header_install_subdir "${relative_path}" DIRECTORY)
+    install(
+        FILES "${generated_header}"
+        DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}/${_ruvia_header_install_subdir}"
+        COMPONENT ${component}
     )
 endfunction()
 
 function(ruvia_assert_target_file_ownership target)
     get_target_property(_ruvia_target_source_dir ${target} SOURCE_DIR)
     cmake_path(NORMAL_PATH _ruvia_target_source_dir OUTPUT_VARIABLE _ruvia_target_root)
+    get_target_property(_ruvia_target_binary_dir ${target} BINARY_DIR)
+    cmake_path(NORMAL_PATH _ruvia_target_binary_dir
+        OUTPUT_VARIABLE _ruvia_target_binary_root)
 
     get_target_property(_ruvia_target_sources ${target} SOURCES)
     foreach(_ruvia_source IN LISTS _ruvia_target_sources)
@@ -317,12 +336,27 @@ function(ruvia_assert_target_file_ownership target)
         endif()
         cmake_path(IS_PREFIX _ruvia_target_root
             "${_ruvia_include_path}" NORMALIZE _ruvia_include_is_owned)
-        if(NOT _ruvia_include_is_owned)
+        cmake_path(IS_PREFIX _ruvia_target_binary_root
+            "${_ruvia_include_path}" NORMALIZE _ruvia_generated_include_is_owned)
+        if(NOT _ruvia_include_is_owned AND NOT _ruvia_generated_include_is_owned)
             message(FATAL_ERROR
                 "${target} cannot add another target's private include directory: ${_ruvia_include_dir}")
         endif()
     endforeach()
 endfunction()
+
+# Each component runs find_package() in its own subdirectory now, so make the
+# resulting imported targets global: a sibling component (e.g. web resolving
+# core's transitive asio link) must see targets another component discovered.
+set(CMAKE_FIND_PACKAGE_TARGETS_GLOBAL ON)
+
+set(CMAKE_CXX_STANDARD 23)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_CXX_EXTENSIONS OFF)
+
+if(MSVC AND NOT DEFINED CMAKE_MSVC_RUNTIME_LIBRARY)
+    set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+endif()
 
 set(RUVIA_BUILT_COMPONENTS)
 if(RUVIA_BUILD_CORE)
@@ -339,29 +373,6 @@ if(RUVIA_BUILD_WEB)
 endif()
 string(JOIN "," RUVIA_BUILT_COMPONENTS_CSV ${RUVIA_BUILT_COMPONENTS})
 
-foreach(_ruvia_owned_target IN ITEMS ruvia-core ruvia-http ruvia-web)
-    if(TARGET ${_ruvia_owned_target})
-        ruvia_assert_target_file_ownership(${_ruvia_owned_target})
-    endif()
-endforeach()
-
-foreach(_ruvia_target IN ITEMS ruvia-core ruvia-http ruvia-web)
-    if(TARGET ${_ruvia_target})
-        target_link_options(${_ruvia_target}
-            INTERFACE
-                $<$<PLATFORM_ID:Darwin>:LINKER:-no_warn_duplicate_libraries>
-        )
-    endif()
-endforeach()
-
-if(WIN32 AND RUVIA_BUILD_CORE)
-    target_link_libraries(ruvia-core PUBLIC Mswsock Ws2_32)
-    set_target_properties(ruvia-core PROPERTIES
-        INTERFACE_LINK_LIBRARIES_DIRECT "$<TARGET_LINKER_FILE:${RUVIA_MIMALLOC_TARGET}>"
-    )
-    target_link_options(ruvia-core INTERFACE "$<$<CXX_COMPILER_ID:MSVC>:/INCLUDE:mi_version>")
-endif()
-
 if(RUVIA_BUILD_EXAMPLES)
     add_subdirectory(examples)
 endif()
@@ -376,24 +387,16 @@ if(RUVIA_BUILD_BENCHMARKS)
 endif()
 
 if(RUVIA_BUILD_FUZZERS)
-    # Instrument the protocol library itself, not only the thin fuzz entrypoints.
-    # The sanitizer runtime link flags propagate to every executable that consumes
-    # the instrumented static library in this opt-in build.
-    target_compile_options(ruvia-http PRIVATE
-        -fsanitize=fuzzer-no-link,undefined
-        -fno-sanitize-recover=all
-        -fno-omit-frame-pointer
-    )
-    target_link_options(ruvia-http INTERFACE
-        -fsanitize=undefined
-        -fno-sanitize-recover=all
-    )
     add_subdirectory(tests/fuzz)
 endif()
 
+# Umbrella package config: the shared find_package(ruvia) entry point that loads
+# whichever component export sets are present in an install prefix. The component
+# targets files themselves are installed by each component's own CMakeLists.
 set(_ruvia_config [=[
 include(CMakeFindDependencyMacro)
 
+set(ruvia_VERSION "@PROJECT_VERSION@")
 set(RUVIA_ENABLE_MARIADB @RUVIA_ENABLE_MARIADB@)
 set(RUVIA_ENABLE_POSTGRESQL @RUVIA_ENABLE_POSTGRESQL@)
 set(RUVIA_ENABLE_REDIS @RUVIA_ENABLE_REDIS@)
@@ -539,13 +542,3 @@ install(
     DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/ruvia
     COMPONENT Development
 )
-
-foreach(_ruvia_component IN LISTS RUVIA_BUILT_COMPONENTS)
-    install(
-        EXPORT ruvia_${_ruvia_component}_targets
-        FILE ruvia-${_ruvia_component}-targets.cmake
-        NAMESPACE ruvia::
-        DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/ruvia
-        COMPONENT ${_ruvia_component}
-    )
-endforeach()

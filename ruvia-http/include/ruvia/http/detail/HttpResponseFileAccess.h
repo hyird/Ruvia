@@ -22,6 +22,17 @@ struct HttpResponseFileAccess final {
         response.setFileBody(std::move(file), size, offset, length);
     }
 
+    static void setFile(
+        HttpResponse& response,
+        std::filesystem::path file,
+        std::uint64_t size,
+        std::uint64_t offset,
+        std::uint64_t length,
+        ResponseFileIdentity identity) {
+        response.setFileBody(
+            std::move(file), size, offset, length, identity);
+    }
+
     static void setBorrowedFile(HttpResponse& response, const std::filesystem::path& file, std::uint64_t size) {
         response.setBorrowedFileBody(file, size);
     }
@@ -63,6 +74,17 @@ inline void setResponseFileBody(
     std::uint64_t offset,
     std::uint64_t length) {
     HttpResponseFileAccess::setFile(response, std::move(file), size, offset, length);
+}
+
+inline void setResponseFileBody(
+    HttpResponse& response,
+    std::filesystem::path file,
+    std::uint64_t size,
+    std::uint64_t offset,
+    std::uint64_t length,
+    ResponseFileIdentity identity) {
+    HttpResponseFileAccess::setFile(
+        response, std::move(file), size, offset, length, identity);
 }
 
 inline void setResponseBorrowedFileBody(

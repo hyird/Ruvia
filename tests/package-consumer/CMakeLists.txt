@@ -8,6 +8,8 @@ set(RUVIA_EXPECT_VISIBLE_COMPONENTS "" CACHE STRING
     "Comma-separated Ruvia targets expected after find_package")
 set(RUVIA_EXPECT_AVAILABLE_COMPONENTS "" CACHE STRING
     "Comma-separated components expected in ruvia_AVAILABLE_COMPONENTS")
+set(RUVIA_EXPECT_PACKAGE_VERSION "" CACHE STRING
+    "Exact installed Ruvia package version expected by this consumer")
 if(RUVIA_PACKAGE_COMPONENTS STREQUAL "")
     message(FATAL_ERROR "RUVIA_PACKAGE_COMPONENTS must name at least one component")
 endif()
@@ -15,11 +17,28 @@ string(REPLACE "," ";" _ruvia_components "${RUVIA_PACKAGE_COMPONENTS}")
 string(REPLACE "," ";" _ruvia_optional_components "${RUVIA_PACKAGE_OPTIONAL_COMPONENTS}")
 
 if(_ruvia_optional_components)
-    find_package(ruvia CONFIG REQUIRED
-        COMPONENTS ${_ruvia_components}
-        OPTIONAL_COMPONENTS ${_ruvia_optional_components})
+    if(RUVIA_EXPECT_PACKAGE_VERSION STREQUAL "")
+        find_package(ruvia CONFIG REQUIRED
+            COMPONENTS ${_ruvia_components}
+            OPTIONAL_COMPONENTS ${_ruvia_optional_components})
+    else()
+        find_package(ruvia ${RUVIA_EXPECT_PACKAGE_VERSION} EXACT CONFIG REQUIRED
+            COMPONENTS ${_ruvia_components}
+            OPTIONAL_COMPONENTS ${_ruvia_optional_components})
+    endif()
 else()
-    find_package(ruvia CONFIG REQUIRED COMPONENTS ${_ruvia_components})
+    if(RUVIA_EXPECT_PACKAGE_VERSION STREQUAL "")
+        find_package(ruvia CONFIG REQUIRED COMPONENTS ${_ruvia_components})
+    else()
+        find_package(ruvia ${RUVIA_EXPECT_PACKAGE_VERSION} EXACT CONFIG REQUIRED
+            COMPONENTS ${_ruvia_components})
+    endif()
+endif()
+
+if(NOT RUVIA_EXPECT_PACKAGE_VERSION STREQUAL "" AND
+   NOT ruvia_VERSION STREQUAL RUVIA_EXPECT_PACKAGE_VERSION)
+    message(FATAL_ERROR
+        "package version mismatch: expected '${RUVIA_EXPECT_PACKAGE_VERSION}', got '${ruvia_VERSION}'")
 endif()
 
 foreach(_ruvia_component IN LISTS _ruvia_components)
@@ -76,4 +95,17 @@ foreach(_ruvia_component IN LISTS _ruvia_components)
     endif()
     add_executable(ruvia_consumer_${_ruvia_component} ${_ruvia_consumer_source})
     target_link_libraries(ruvia_consumer_${_ruvia_component} PRIVATE ruvia::${_ruvia_component})
+    if(_ruvia_component STREQUAL "core" AND
+       NOT RUVIA_EXPECT_PACKAGE_VERSION STREQUAL "")
+        string(REPLACE "." ";" _ruvia_expected_version_parts
+            "${RUVIA_EXPECT_PACKAGE_VERSION}")
+        list(GET _ruvia_expected_version_parts 0 _ruvia_expected_version_major)
+        list(GET _ruvia_expected_version_parts 1 _ruvia_expected_version_minor)
+        list(GET _ruvia_expected_version_parts 2 _ruvia_expected_version_patch)
+        target_compile_definitions(ruvia_consumer_core PRIVATE
+            RUVIA_EXPECTED_VERSION_MAJOR=${_ruvia_expected_version_major}
+            RUVIA_EXPECTED_VERSION_MINOR=${_ruvia_expected_version_minor}
+            RUVIA_EXPECTED_VERSION_PATCH=${_ruvia_expected_version_patch}
+            RUVIA_EXPECTED_VERSION_STRING="${RUVIA_EXPECT_PACKAGE_VERSION}")
+    endif()
 endforeach()

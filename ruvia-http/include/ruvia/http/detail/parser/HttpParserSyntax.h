@@ -53,13 +53,14 @@ inline constexpr std::size_t kRequestHeaderKindCount =
         case RequestHeaderKind::kAccessControlRequestMethod:
         case RequestHeaderKind::kAuthorization:
         case RequestHeaderKind::kContentType:
-        case RequestHeaderKind::kIfMatch:
         case RequestHeaderKind::kIfModifiedSince:
-        case RequestHeaderKind::kIfNoneMatch:
         case RequestHeaderKind::kIfRange:
         case RequestHeaderKind::kIfUnmodifiedSince:
         case RequestHeaderKind::kOrigin:
         case RequestHeaderKind::kRange:
+        case RequestHeaderKind::kSecWebSocketKey:
+        case RequestHeaderKind::kSecWebSocketVersion:
+        case RequestHeaderKind::kUserAgent:
             return 1U << static_cast<std::uint32_t>(kind);
         case RequestHeaderKind::kOther:
         case RequestHeaderKind::kAccept:
@@ -71,12 +72,11 @@ inline constexpr std::size_t kRequestHeaderKindCount =
         case RequestHeaderKind::kCookie:
         case RequestHeaderKind::kExpect:
         case RequestHeaderKind::kHost:
-        case RequestHeaderKind::kSecWebSocketKey:
+        case RequestHeaderKind::kIfMatch:
+        case RequestHeaderKind::kIfNoneMatch:
         case RequestHeaderKind::kSecWebSocketProtocol:
-        case RequestHeaderKind::kSecWebSocketVersion:
         case RequestHeaderKind::kTransferEncoding:
         case RequestHeaderKind::kUpgrade:
-        case RequestHeaderKind::kUserAgent:
             return 0;
     }
     return 0;

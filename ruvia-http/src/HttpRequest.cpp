@@ -28,11 +28,15 @@ static_assert(
 
 }  // namespace
 
-std::string_view HttpRequest::header(std::string_view name) const noexcept {
+std::optional<std::string_view> HttpRequest::header(std::string_view name) const noexcept {
     const auto kind = detail::classifyRequestHeader(name);
     if (kind != detail::RequestHeaderKind::kOther) {
         const auto knownSlot = static_cast<std::size_t>(kind) - 1;
-        return detail::requestKnownHeader(*this, static_cast<detail::RequestKnownHeader>(knownSlot));
+        const auto bit = std::uint32_t{1} << knownSlot;
+        if ((cachedHeaderBits_ & bit) == 0) {
+            return std::nullopt;
+        }
+        return cachedHeaders_[knownSlot];
     }
 
     for (std::size_t i = headerCount_; i > 0; --i) {
@@ -42,7 +46,7 @@ std::string_view HttpRequest::header(std::string_view name) const noexcept {
         }
     }
 
-    return {};
+    return std::nullopt;
 }
 
 std::optional<std::string_view> HttpRequest::query(std::string_view name) const noexcept {

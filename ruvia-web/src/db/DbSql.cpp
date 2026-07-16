@@ -30,11 +30,11 @@ void appendStringLiteral(st_mysql& connection, std::pmr::string& output, std::st
 }
 
 [[nodiscard]] std::size_t valueLiteralSizeHint(const DbValue& value) noexcept {
-    switch (value.type()) {
+    switch (DbValueAccess::type(value)) {
         case DbValueType::kNull:
             return 4;
         case DbValueType::kString:
-            return value.text().size() * 2 + 2;
+            return DbValueAccess::text(value).size() * 2 + 2;
         case DbValueType::kSigned:
         case DbValueType::kUnsigned:
             return 32;
@@ -47,24 +47,25 @@ void appendStringLiteral(st_mysql& connection, std::pmr::string& output, std::st
 }
 
 void appendValueLiteral(st_mysql& connection, std::pmr::string& output, const DbValue& value) {
-    switch (value.type()) {
+    switch (DbValueAccess::type(value)) {
         case DbValueType::kNull:
             output.append("NULL");
             break;
         case DbValueType::kString:
-            appendStringLiteral(connection, output, value.text());
+            appendStringLiteral(
+                connection, output, DbValueAccess::text(value));
             break;
         case DbValueType::kSigned:
-            appendDbNumber(output, value.signedValue());
+            appendDbNumber(output, DbValueAccess::signedValue(value));
             break;
         case DbValueType::kUnsigned:
-            appendDbNumber(output, value.unsignedValue());
+            appendDbNumber(output, DbValueAccess::unsignedValue(value));
             break;
         case DbValueType::kDouble:
-            appendDbNumber(output, value.doubleValue());
+            appendDbNumber(output, DbValueAccess::doubleValue(value));
             break;
         case DbValueType::kBool:
-            output.push_back(value.boolValue() ? '1' : '0');
+            output.push_back(DbValueAccess::boolValue(value) ? '1' : '0');
             break;
     }
 }

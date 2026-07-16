@@ -1,5 +1,6 @@
 #pragma once
 
+#include <algorithm>
 #include <concepts>
 #include <cstddef>
 #include <cstdint>
@@ -9,6 +10,7 @@
 #include <string_view>
 #include <utility>
 
+#include "ruvia/http/detail/BorrowedView.h"
 #include "ruvia/http/detail/Hex.h"
 #include "ruvia/http/detail/PmrResource.h"
 
@@ -20,12 +22,9 @@ enum class UrlDecodeMode : std::uint8_t {
 };
 
 [[nodiscard]] inline bool hasUrlEncoding(std::string_view value, UrlDecodeMode mode) noexcept {
-    for (const char c : value) {
-        if (c == '%' || (mode == UrlDecodeMode::kForm && c == '+')) {
-            return true;
-        }
-    }
-    return false;
+    return std::ranges::any_of(value, [mode](char c) noexcept {
+        return c == '%' || (mode == UrlDecodeMode::kForm && c == '+');
+    });
 }
 
 // Decode the percent-escape at position i, where input[i] == '%'. Returns the
@@ -166,5 +165,11 @@ template <typename Visitor>
     });
     return result;
 }
+
+template <HttpTemporaryOwningCharString Input>
+std::optional<std::string_view> findUrlEncodedValue(
+    Input&&,
+    std::string_view,
+    UrlDecodeMode) = delete;
 
 }  // namespace ruvia::detail

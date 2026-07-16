@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <utility>
 
 #include "ruvia/http/detail/http2/Http2FrameTypes.h"
 
@@ -16,14 +17,13 @@ enum class Http2HeaderBlockKind : std::uint8_t {
 
 // A single header block may span one HEADERS/PUSH_PROMISE plus this many
 // CONTINUATION frames (RFC 9113 §6.10 permits an endpoint to limit them). The
-// per-block byte cap (kMaxHttpHeaderBytes) bounds frames that carry payload, but
-// an empty CONTINUATION frame adds zero bytes and so slips past it -- an
-// unbounded stream of them keeps a block "in progress" forever (the
-// CVE-2024-27316 CONTINUATION flood). The sans-I/O core has no clock, so like the
-// rapid-reset and PING budgets it needs an explicit frame count. 1024 is far
-// above any real peer: a 64 KiB block delivered in 1024 frames averages 64 bytes
-// each, finer fragmentation than any client produces, while the flood dies after
-// ~9 KiB of wire garbage.
+// encoded-block byte cap bounds frames that carry payload, but an empty
+// CONTINUATION frame adds zero bytes and so slips past it -- an unbounded stream
+// of them keeps a block "in progress" forever (the CVE-2024-27316 CONTINUATION
+// flood). The sans-I/O core has no clock, so like the rapid-reset and PING budgets
+// it needs an explicit frame count. 1024 is far above any real peer: a 256 KiB
+// block delivered in 1024 frames averages 256 bytes each, finer fragmentation
+// than any client produces, while the flood dies after ~9 KiB of wire garbage.
 inline constexpr std::uint32_t kHttp2MaxContinuationFrames = 1024;
 
 class Http2HeaderContinuation final {
@@ -39,7 +39,7 @@ public:
     }
 
     [[nodiscard]] bool expectsFrameType(std::uint8_t frameType) const noexcept {
-        return !active() || frameType == static_cast<std::uint8_t>(Http2FrameType::kContinuation);
+        return !active() || frameType == std::to_underlying(Http2FrameType::kContinuation);
     }
 
     [[nodiscard]] bool matches(std::uint32_t streamId) const noexcept {

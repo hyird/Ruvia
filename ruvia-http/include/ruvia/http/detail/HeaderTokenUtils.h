@@ -7,6 +7,7 @@
 #include <string_view>
 
 #include "ruvia/http/detail/AsciiCase.h"
+#include "ruvia/http/detail/BorrowedView.h"
 #include "ruvia/http/detail/HttpOws.h"
 
 namespace ruvia::detail {
@@ -33,6 +34,9 @@ inline void httpAppendDecodedQuotedPairs(std::pmr::string& out, std::string_view
     return value;
 }
 
+template <HttpTemporaryOwningCharString Value>
+std::string_view httpTrimQuotes(Value&&) = delete;
+
 template <typename Predicate>
 [[nodiscard]] inline std::string_view httpFindHeaderToken(std::string_view value, Predicate&& predicate) noexcept {
     while (!value.empty()) {
@@ -48,6 +52,9 @@ template <typename Predicate>
     }
     return {};
 }
+
+template <HttpTemporaryOwningCharString Value, typename Predicate>
+std::string_view httpFindHeaderToken(Value&&, Predicate&&) = delete;
 
 // Index of the next `delimiter` in `value` at/after `start` that is not inside an
 // RFC quoted-string (honoring quoted-pairs, so a `\"` does not end the string), or
@@ -170,6 +177,11 @@ inline void httpVisitSemicolonParametersQuoted(std::string_view value, Visitor&&
     return result;
 }
 
+template <HttpTemporaryOwningCharString Value>
+std::optional<std::string_view> httpFindSemicolonParameter(
+    Value&&,
+    std::string_view) = delete;
+
 [[nodiscard]] inline std::optional<std::string_view> httpFindSemicolonParameterQuoted(
     std::string_view value,
     std::string_view name) {
@@ -182,6 +194,11 @@ inline void httpVisitSemicolonParametersQuoted(std::string_view value, Visitor&&
     });
     return result;
 }
+
+template <HttpTemporaryOwningCharString Value>
+std::optional<std::string_view> httpFindSemicolonParameterQuoted(
+    Value&&,
+    std::string_view) = delete;
 
 [[nodiscard]] inline std::optional<std::string_view> httpFindSemicolonParameterQuotedIgnoreCase(
     std::string_view value,
@@ -196,6 +213,11 @@ inline void httpVisitSemicolonParametersQuoted(std::string_view value, Visitor&&
     return result;
 }
 
+template <HttpTemporaryOwningCharString Value>
+std::optional<std::string_view> httpFindSemicolonParameterQuotedIgnoreCase(
+    Value&&,
+    std::string_view) = delete;
+
 [[nodiscard]] inline std::optional<std::string_view> httpFindSemicolonParameterIgnoreCase(
     std::string_view value,
     std::string_view name) {
@@ -208,6 +230,11 @@ inline void httpVisitSemicolonParametersQuoted(std::string_view value, Visitor&&
     });
     return result;
 }
+
+template <HttpTemporaryOwningCharString Value>
+std::optional<std::string_view> httpFindSemicolonParameterIgnoreCase(
+    Value&&,
+    std::string_view) = delete;
 
 [[nodiscard]] inline bool httpHasToken(std::string_view value, std::string_view expected) noexcept {
     if (expected.empty()) {

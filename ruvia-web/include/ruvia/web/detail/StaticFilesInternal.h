@@ -1,9 +1,11 @@
 #pragma once
 
 #include "ruvia/core/detail/NativePath.h"
+#include "ruvia/http/detail/HttpResponseFileBody.h"
 #include "ruvia/web/StaticFiles.h"
 
 #include <cstdint>
+#include <ctime>
 #include <filesystem>
 #include <memory_resource>
 #include <optional>
@@ -25,9 +27,12 @@ struct StaticRootEntry final {
     NativePathString filePath;
     std::pmr::string contentType;
     std::uint64_t size{0};
-    std::filesystem::file_time_type modified{};
+    ResponseFileIdentity identity{ResponseFileIdentity::unchecked()};
+    std::uint64_t modifiedToken{0};
+    std::time_t modifiedSeconds{0};
     std::pmr::string etag;
     std::pmr::string lastModified;
+    bool directlyServable{true};
 };
 
 struct StaticRootState final {
@@ -73,8 +78,16 @@ public:
         return size_;
     }
 
-    [[nodiscard]] std::filesystem::file_time_type modified() const noexcept {
-        return modified_;
+    [[nodiscard]] ResponseFileIdentity identity() const noexcept {
+        return identity_;
+    }
+
+    [[nodiscard]] std::uint64_t modifiedToken() const noexcept {
+        return modifiedToken_;
+    }
+
+    [[nodiscard]] std::time_t modifiedSeconds() const noexcept {
+        return modifiedSeconds_;
     }
 
     [[nodiscard]] bool rangesEnabled() const noexcept {
@@ -95,18 +108,24 @@ private:
         std::string_view etag,
         std::string_view lastModified,
         std::uint64_t size,
-        std::filesystem::file_time_type modified,
+        ResponseFileIdentity identity,
+        std::uint64_t modifiedToken,
+        std::time_t modifiedSeconds,
         bool rangesEnabled,
-        bool validatorsEnabled) noexcept
+        bool validatorsEnabled,
+        bool directlyServable) noexcept
         : filePath_(filePath),
           contentType_(contentType),
           cacheControl_(cacheControl),
           etag_(etag),
           lastModified_(lastModified),
           size_(size),
-          modified_(modified),
+          identity_(identity),
+          modifiedToken_(modifiedToken),
+          modifiedSeconds_(modifiedSeconds),
           rangesEnabled_(rangesEnabled),
-          validatorsEnabled_(validatorsEnabled) {}
+          validatorsEnabled_(validatorsEnabled),
+          directlyServable_(directlyServable) {}
 
     const NativePathChar* filePath_;
     std::string_view contentType_;
@@ -114,9 +133,12 @@ private:
     std::string_view etag_;
     std::string_view lastModified_;
     std::uint64_t size_;
-    std::filesystem::file_time_type modified_;
+    ResponseFileIdentity identity_;
+    std::uint64_t modifiedToken_;
+    std::time_t modifiedSeconds_;
     bool rangesEnabled_;
     bool validatorsEnabled_;
+    bool directlyServable_;
 };
 
 class StaticRootAccess final {
@@ -124,6 +146,9 @@ public:
     [[nodiscard]] static std::string_view indexFile(const StaticRoot& root) noexcept;
     [[nodiscard]] static bool hasDirectoryIndex(const StaticRoot& root) noexcept;
     [[nodiscard]] static std::optional<StaticRootEntryView> find(
+        const StaticRoot& root,
+        std::string_view relativePath) noexcept;
+    [[nodiscard]] static std::optional<StaticRootEntryView> findVariant(
         const StaticRoot& root,
         std::string_view relativePath) noexcept;
     [[nodiscard]] static bool isIndexedDirectory(const StaticRoot& root, std::string_view relativePath) noexcept;

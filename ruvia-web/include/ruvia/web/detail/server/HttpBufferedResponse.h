@@ -12,34 +12,20 @@
 
 namespace ruvia::detail {
 
-class HttpBufferedResponsePreparation final {
-public:
-    // This is the one HTTP-owned snapshot both protocol drivers must consume;
-    // neither driver may re-plan after Web compression/CORS has finalized the
-    // response representation.
-    [[nodiscard]] const HttpBufferedResponseWritePlan& writePlan() const noexcept {
-        return writePlan_;
-    }
-
-private:
-    friend HttpBufferedResponsePreparation prepareBufferedHttpResponse(
-        const HttpRequest&,
-        HttpContentCoding,
-        HttpResponse&,
-        const HttpServerOptions&);
-
-    explicit HttpBufferedResponsePreparation(
-        HttpBufferedResponseWritePlan writePlan) noexcept
-        : writePlan_(writePlan) {}
-
-    HttpBufferedResponseWritePlan writePlan_;
-};
-
 [[nodiscard]] inline HttpContentCoding httpResponseCodingFor(const HttpRequest& request) noexcept {
-    return httpSelectResponseCoding(requestKnownHeader(request, RequestKnownHeader::kAcceptEncoding));
+    HttpResponseCodingQualities qualities;
+    for (const auto& header : request.headers()) {
+        if (httpAsciiEqualsIgnoreCase(header.name(), "Accept-Encoding")) {
+            qualities.update(header.value());
+        }
+    }
+    return httpSelectResponseCodingFromQualities(qualities);
 }
 
-[[nodiscard]] inline HttpBufferedResponsePreparation prepareBufferedHttpResponse(
+// This returns the one HTTP-owned snapshot both protocol drivers must consume;
+// neither driver may re-plan after Web compression/CORS has finalized the
+// response representation.
+[[nodiscard]] inline HttpBufferedResponseWritePlan prepareBufferedHttpResponse(
     const HttpRequest& request,
     HttpContentCoding coding,
     HttpResponse& response,
@@ -55,11 +41,10 @@ private:
             response,
             *options.compression);
     }
-    return HttpBufferedResponsePreparation(
-        httpBufferedResponseWritePlan(request.knownMethod(), response));
+    return httpBufferedResponseWritePlan(request.knownMethod(), response);
 }
 
-[[nodiscard]] inline HttpBufferedResponsePreparation prepareBufferedHttpResponse(
+[[nodiscard]] inline HttpBufferedResponseWritePlan prepareBufferedHttpResponse(
     const HttpRequest& request,
     HttpResponse& response,
     const HttpServerOptions& options) {

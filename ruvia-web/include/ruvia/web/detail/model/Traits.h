@@ -29,13 +29,10 @@ template <typename T>
 inline constexpr bool isRuviaString = std::is_same_v<std::remove_cvref_t<T>, String>;
 
 template <typename T>
-struct RuviaArrayTraits {
-    static constexpr bool value = false;
-};
+struct RuviaArrayTraits : std::false_type {};
 
 template <typename ValueT>
-struct RuviaArrayTraits<std::pmr::vector<ValueT>> {
-    static constexpr bool value = true;
+struct RuviaArrayTraits<std::pmr::vector<ValueT>> : std::true_type {
     using value_type = ValueT;
 };
 
@@ -43,13 +40,10 @@ template <typename T>
 inline constexpr bool isRuviaArray = RuviaArrayTraits<std::remove_cvref_t<T>>::value;
 
 template <typename T>
-struct RuviaListTraits {
-    static constexpr bool value = false;
-};
+struct RuviaListTraits : std::false_type {};
 
 template <typename ValueT>
-struct RuviaListTraits<List<ValueT>> {
-    static constexpr bool value = true;
+struct RuviaListTraits<List<ValueT>> : std::true_type {
     using value_type = ValueT;
 };
 
@@ -57,17 +51,15 @@ template <typename T>
 inline constexpr bool isRuviaList = RuviaListTraits<std::remove_cvref_t<T>>::value;
 
 template <typename T>
-struct RuviaScalarTraits {
-    static constexpr bool value = false;
-};
+struct RuviaScalarTraits : std::false_type {};
 
-template <> struct RuviaScalarTraits<Bool> { static constexpr bool value = true; using value_type = bool; };
-template <> struct RuviaScalarTraits<Float> { static constexpr bool value = true; using value_type = float; };
-template <> struct RuviaScalarTraits<Double> { static constexpr bool value = true; using value_type = double; };
-template <> struct RuviaScalarTraits<Int32> { static constexpr bool value = true; using value_type = std::int32_t; };
-template <> struct RuviaScalarTraits<UInt32> { static constexpr bool value = true; using value_type = std::uint32_t; };
-template <> struct RuviaScalarTraits<Int64> { static constexpr bool value = true; using value_type = std::int64_t; };
-template <> struct RuviaScalarTraits<UInt64> { static constexpr bool value = true; using value_type = std::uint64_t; };
+template <> struct RuviaScalarTraits<Bool> : std::true_type { using value_type = bool; };
+template <> struct RuviaScalarTraits<Float> : std::true_type { using value_type = float; };
+template <> struct RuviaScalarTraits<Double> : std::true_type { using value_type = double; };
+template <> struct RuviaScalarTraits<Int32> : std::true_type { using value_type = std::int32_t; };
+template <> struct RuviaScalarTraits<UInt32> : std::true_type { using value_type = std::uint32_t; };
+template <> struct RuviaScalarTraits<Int64> : std::true_type { using value_type = std::int64_t; };
+template <> struct RuviaScalarTraits<UInt64> : std::true_type { using value_type = std::uint64_t; };
 
 template <typename T>
 inline constexpr bool isRuviaScalar = RuviaScalarTraits<std::remove_cvref_t<T>>::value;

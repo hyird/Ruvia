@@ -37,4 +37,16 @@ struct RequestFormFieldAccess final {
     }
 };
 
+struct RequestFormDataAccess final {
+    [[nodiscard]] static ContextRequest::RequestFormData empty(
+        std::pmr::memory_resource* resource) {
+        return ContextRequest::RequestFormData(resource);
+    }
+
+    [[nodiscard]] static ContextRequest::RequestFormData fromFields(
+        std::pmr::vector<ContextRequest::RequestFormField>&& fields) {
+        return ContextRequest::RequestFormData(std::move(fields));
+    }
+};
+
 }  // namespace ruvia::detail

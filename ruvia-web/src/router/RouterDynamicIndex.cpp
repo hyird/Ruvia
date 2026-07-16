@@ -85,12 +85,12 @@ const detail::RouteTable::DynamicStaticChild* detail::RouteTable::findDynamicSta
         return nullptr;
     }
 
-    const auto iter = std::lower_bound(
-        node.staticChildren.begin(),
-        node.staticChildren.end(),
+    const auto iter = std::ranges::lower_bound(
+        node.staticChildren,
         segment,
-        [](const DynamicStaticChild& child, std::string_view value) {
-            return std::string_view(child.segment) < value;
+        std::ranges::less{},
+        [](const DynamicStaticChild& child) noexcept {
+            return std::string_view(child.segment);
         });
     if (iter != node.staticChildren.end() && std::string_view(iter->segment) == segment) {
         return &*iter;

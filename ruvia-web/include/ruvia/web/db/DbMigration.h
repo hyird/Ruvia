@@ -2,6 +2,7 @@
 
 #include "ruvia/web/db/DbTypes.h"
 #include "ruvia/core/memory/PmrResource.h"
+#include "ruvia/web/detail/BorrowedView.h"
 
 #include <chrono>
 #include <memory_resource>
@@ -12,9 +13,33 @@
 
 namespace ruvia {
 
-struct DbMigration final {
-    std::string_view id;
-    std::string_view sql;
+// Immutable migration descriptor borrowing stable application storage. String
+// literals and owning-string lvalues preserve constexpr/zero-allocation use;
+// owning-string rvalues are rejected before an async run can retain them.
+class DbMigration final {
+public:
+    constexpr DbMigration(
+        std::string_view id,
+        std::string_view sql) noexcept
+        : id_(id), sql_(sql) {}
+
+    template <detail::RvalueCharBasicString String>
+    DbMigration(String&&, std::string_view) = delete;
+
+    template <detail::RvalueCharBasicString String>
+    DbMigration(std::string_view, String&&) = delete;
+
+    [[nodiscard]] constexpr std::string_view id() const noexcept {
+        return id_;
+    }
+
+    [[nodiscard]] constexpr std::string_view sql() const noexcept {
+        return sql_;
+    }
+
+private:
+    std::string_view id_;
+    std::string_view sql_;
 };
 
 struct DbMigrationOptions final {
@@ -27,10 +52,12 @@ public:
     DbMigrationReport(const DbMigrationReport&) = delete;
     DbMigrationReport& operator=(const DbMigrationReport&) = delete;
     DbMigrationReport(DbMigrationReport&&) noexcept = default;
-    DbMigrationReport& operator=(DbMigrationReport&&) noexcept = default;
+    DbMigrationReport& operator=(DbMigrationReport&&) = delete;
 
-    [[nodiscard]] std::span<const std::pmr::string> applied() const noexcept;
-    [[nodiscard]] std::span<const std::pmr::string> skipped() const noexcept;
+    [[nodiscard]] std::span<const std::pmr::string> applied() const & noexcept;
+    [[nodiscard]] std::span<const std::pmr::string> applied() const && = delete;
+    [[nodiscard]] std::span<const std::pmr::string> skipped() const & noexcept;
+    [[nodiscard]] std::span<const std::pmr::string> skipped() const && = delete;
     [[nodiscard]] bool changed() const noexcept;
 
 private:

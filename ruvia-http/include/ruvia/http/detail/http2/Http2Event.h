@@ -181,9 +181,12 @@ public:
         return peerGoaway_.error();
     }
 
-    [[nodiscard]] constexpr const Http2PeerGoaway& peerGoaway() const noexcept {
+    [[nodiscard]] constexpr const Http2PeerGoaway&
+    peerGoaway() const & noexcept {
         return peerGoaway_;
     }
+    [[nodiscard]] constexpr const Http2PeerGoaway&
+    peerGoaway() const && = delete;
 
 private:
     friend class Http2Event;
@@ -201,37 +204,49 @@ public:
         return static_cast<Http2EventKind>(value_.index());
     }
 
-    [[nodiscard]] const Http2MessageHeadEvent* messageHead() const noexcept {
+    [[nodiscard]] const Http2MessageHeadEvent* messageHead() const & noexcept {
         return std::get_if<Http2MessageHeadEvent>(&value_);
     }
+    [[nodiscard]] const Http2MessageHeadEvent* messageHead() const && = delete;
 
-    [[nodiscard]] const Http2MessageBodyChunkEvent* messageBodyChunk() const noexcept {
+    [[nodiscard]] const Http2MessageBodyChunkEvent*
+    messageBodyChunk() const & noexcept {
         return std::get_if<Http2MessageBodyChunkEvent>(&value_);
     }
+    [[nodiscard]] const Http2MessageBodyChunkEvent*
+    messageBodyChunk() const && = delete;
 
-    [[nodiscard]] const Http2MessageEndEvent* messageEnd() const noexcept {
+    [[nodiscard]] const Http2MessageEndEvent* messageEnd() const & noexcept {
         return std::get_if<Http2MessageEndEvent>(&value_);
     }
+    [[nodiscard]] const Http2MessageEndEvent* messageEnd() const && = delete;
 
-    [[nodiscard]] const Http2TunnelDataEvent* tunnelData() const noexcept {
+    [[nodiscard]] const Http2TunnelDataEvent* tunnelData() const & noexcept {
         return std::get_if<Http2TunnelDataEvent>(&value_);
     }
+    [[nodiscard]] const Http2TunnelDataEvent* tunnelData() const && = delete;
 
-    [[nodiscard]] const Http2TunnelEndEvent* tunnelEnd() const noexcept {
+    [[nodiscard]] const Http2TunnelEndEvent* tunnelEnd() const & noexcept {
         return std::get_if<Http2TunnelEndEvent>(&value_);
     }
+    [[nodiscard]] const Http2TunnelEndEvent* tunnelEnd() const && = delete;
 
-    [[nodiscard]] const Http2StreamClosedEvent* streamClosed() const noexcept {
+    [[nodiscard]] const Http2StreamClosedEvent* streamClosed() const & noexcept {
         return std::get_if<Http2StreamClosedEvent>(&value_);
     }
+    [[nodiscard]] const Http2StreamClosedEvent* streamClosed() const && = delete;
 
-    [[nodiscard]] const Http2RequestUnprocessedEvent* requestUnprocessed() const noexcept {
+    [[nodiscard]] const Http2RequestUnprocessedEvent*
+    requestUnprocessed() const & noexcept {
         return std::get_if<Http2RequestUnprocessedEvent>(&value_);
     }
+    [[nodiscard]] const Http2RequestUnprocessedEvent*
+    requestUnprocessed() const && = delete;
 
-    [[nodiscard]] const Http2GoawayEvent* goaway() const noexcept {
+    [[nodiscard]] const Http2GoawayEvent* goaway() const & noexcept {
         return std::get_if<Http2GoawayEvent>(&value_);
     }
+    [[nodiscard]] const Http2GoawayEvent* goaway() const && = delete;
 
 private:
     friend class Http2Connection;

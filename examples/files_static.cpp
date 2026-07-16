@@ -1,3 +1,6 @@
+// Static files: c.file(...), c.staticFile(...), StaticRoot, a document root,
+// validators/ranges and gzip configuration.
+
 #include <filesystem>
 #include <memory>
 
@@ -50,8 +53,8 @@ int main() {
 
     ruvia::app()
         .setListenAddress("0.0.0.0")
-        .setHttpListenPort(8083)
-        .setThreadNum(2)
+        .setServerTopology(ruvia::ServerTopology::http(8083))
+        .setWorkersPerListener(2)
         .setCompression(ruvia::CompressionConfig{.minBytes = 128})
         .setDocumentRoot(std::move(documentRoot))
         .run();

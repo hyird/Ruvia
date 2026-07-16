@@ -3,6 +3,89 @@
 #include <stdexcept>
 
 #include "ruvia/core/Task.h"
+#include "ruvia/core/memory/PmrResource.h"
+
+#include <memory_resource>
+#include <utility>
+#include <vector>
+
+namespace {
+
+class ResponseStreamOutputGuard final {
+public:
+    explicit ResponseStreamOutputGuard(bool& active) : active_(active) {
+        if (active_) {
+            throw std::logic_error(
+                "response stream output operation is already in progress");
+        }
+        active_ = true;
+    }
+
+    ~ResponseStreamOutputGuard() { active_ = false; }
+
+    ResponseStreamOutputGuard(const ResponseStreamOutputGuard&) = delete;
+    ResponseStreamOutputGuard& operator=(
+        const ResponseStreamOutputGuard&) = delete;
+
+private:
+    bool& active_;
+};
+
+ruvia::Task<void> writeOwned(
+    void* target,
+    ruvia::Task<void> (*write)(void*, std::string_view),
+    std::pmr::string chunk,
+    bool& outputActive) {
+    ResponseStreamOutputGuard guard(outputActive);
+    co_await write(target, chunk);
+}
+
+struct OwnedTrailers final {
+    explicit OwnedTrailers(
+        std::span<const ruvia::HttpHeaderView> source,
+        std::pmr::memory_resource* resource)
+        : strings(resource), views(resource) {
+        strings.reserve(source.size() * 2);
+        views.reserve(source.size());
+        for (const auto& header : source) {
+            strings.emplace_back(header.name());
+            strings.emplace_back(header.value());
+        }
+        for (std::size_t index = 0; index < source.size(); ++index) {
+            views.emplace_back(strings[index * 2], strings[index * 2 + 1]);
+        }
+    }
+
+    std::pmr::vector<std::pmr::string> strings;
+    std::pmr::vector<ruvia::HttpHeaderView> views;
+};
+
+ruvia::Task<void> endOwned(
+    void* target,
+    ruvia::Task<void> (*end)(void*, std::span<const ruvia::HttpHeaderView>),
+    OwnedTrailers trailers,
+    bool& outputActive) {
+    ResponseStreamOutputGuard guard(outputActive);
+    co_await end(target, trailers.views);
+}
+
+ruvia::Task<void> writeWebSocketOwned(
+    void* target,
+    ruvia::Task<void> (*write)(void*, ruvia::WebSocketOpcode, std::string_view),
+    ruvia::WebSocketOpcode opcode,
+    std::pmr::string payload) {
+    co_await write(target, opcode, payload);
+}
+
+ruvia::Task<void> closeWebSocketOwned(
+    void* target,
+    ruvia::Task<void> (*close)(void*, std::uint16_t, std::string_view),
+    std::uint16_t code,
+    std::pmr::string reason) {
+    co_await close(target, code, reason);
+}
+
+}  // namespace
 
 namespace ruvia {
 
@@ -28,73 +111,109 @@ ResponseStreamWriter& Context::streamText() {
     return stream();
 }
 
-SseWriter Context::streamSSE() {
+SseWriter Context::streamSse() {
     setStableResponseHeader("Content-Type", "text/event-stream");
     setStableResponseHeader("Cache-Control", "no-cache");
     return SseWriter(stream());
 }
 
-Task<std::optional<std::string_view>> BodyReader::read() {
-    return read_();
-}
+namespace {
 
-Task<void> ResponseStreamWriter::write(std::string_view chunk) {
-    return write_(target_, chunk);
-}
-
-Task<void> ResponseStreamWriter::writeln(std::string_view chunk) {
-    auto& buffer = scratch_(target_);
-    buffer.clear();
-    buffer.reserve(chunk.size() + 1);
-    if (!chunk.empty()) {
-        buffer.append(chunk.data(), chunk.size());
+Task<std::optional<std::string_view>> readBody(
+    detail::CallableRef<std::optional<std::string_view>> read,
+    bool& readActive) {
+    if (readActive) {
+        throw std::logic_error("request body read is already in progress");
     }
-    buffer.push_back('\n');
-    return write_(target_, std::string_view(buffer.data(), buffer.size()));
+    readActive = true;
+    struct ReadGuard final {
+        bool& active;
+        ~ReadGuard() { active = false; }
+    } guard{readActive};
+    co_return co_await read();
 }
 
-Task<void> ResponseStreamWriter::sleep(std::chrono::milliseconds duration) {
-    return sleep_(target_, duration);
+}  // namespace
+
+ScopedOperation<std::optional<std::string_view>> BodyReader::read() {
+    return detail::makeScopedOperation(operationScope_, readBody(read_, readActive_));
 }
 
-Task<void> ResponseStreamWriter::end(std::span<const HttpHeaderView> trailers) {
-    return end_(target_, trailers);
+ScopedOperation<void> ResponseStreamWriter::write(std::string_view chunk) {
+    std::pmr::string owned(chunk, detail::processResource());
+    return writeOwned(std::move(owned));
 }
 
-Task<void> SseWriter::sleep(std::chrono::milliseconds duration) {
+ScopedOperation<void> ResponseStreamWriter::writeOwned(std::pmr::string chunk) {
+    return detail::makeScopedOperation(
+        operationScope_,
+        ::writeOwned(target_, write_, std::move(chunk), outputActive_));
+}
+
+ScopedOperation<void> ResponseStreamWriter::writeln(std::string_view chunk) {
+    std::pmr::string owned(chunk, detail::processResource());
+    owned.push_back('\n');
+    return writeOwned(std::move(owned));
+}
+
+ScopedOperation<void> ResponseStreamWriter::sleep(std::chrono::milliseconds duration) {
+    return detail::makeScopedOperation(operationScope_, sleep_(target_, duration));
+}
+
+ScopedOperation<void> ResponseStreamWriter::end(std::span<const HttpHeaderView> trailers) {
+    return detail::makeScopedOperation(
+        operationScope_,
+        endOwned(
+            target_,
+            end_,
+            OwnedTrailers(trailers, detail::processResource()),
+            outputActive_));
+}
+
+ScopedOperation<void> SseWriter::sleep(std::chrono::milliseconds duration) {
     return writer_.sleep(duration);
 }
 
-Task<void> SseWriter::end(std::span<const HttpHeaderView> trailers) {
+ScopedOperation<void> SseWriter::end(std::span<const HttpHeaderView> trailers) {
     return writer_.end(trailers);
 }
 
-Task<std::optional<WebSocketMessage>> WebSocket::read() {
-    return read_(target_);
+ScopedOperation<std::optional<WebSocketMessage>> WebSocket::read() {
+    return detail::makeScopedOperation(operationScope_, read_(target_));
 }
 
-Task<void> WebSocket::text(std::string_view payload) {
+ScopedOperation<void> WebSocket::text(std::string_view payload) {
     return write(WebSocketOpcode::kText, payload);
 }
 
-Task<void> WebSocket::binary(std::string_view payload) {
+ScopedOperation<void> WebSocket::binary(std::string_view payload) {
     return write(WebSocketOpcode::kBinary, payload);
 }
 
-Task<void> WebSocket::pong(std::string_view payload) {
+ScopedOperation<void> WebSocket::pong(std::string_view payload) {
     return write(WebSocketOpcode::kPong, payload);
 }
 
-Task<void> WebSocket::ping(std::string_view payload) {
+ScopedOperation<void> WebSocket::ping(std::string_view payload) {
     return write(WebSocketOpcode::kPing, payload);
 }
 
-Task<void> WebSocket::close(std::uint16_t code, std::string_view reason) {
-    return close_(target_, code, reason);
+ScopedOperation<void> WebSocket::close(std::uint16_t code, std::string_view reason) {
+    std::pmr::string owned(reason, detail::processResource());
+    return detail::makeScopedOperation(
+        operationScope_,
+        closeWebSocketOwned(target_, close_, code, std::move(owned)));
 }
 
-Task<void> WebSocket::write(WebSocketOpcode opcode, std::string_view payload) {
-    return write_(target_, opcode, payload);
+void WebSocket::abort() noexcept {
+    abort_(target_);
+}
+
+ScopedOperation<void> WebSocket::write(WebSocketOpcode opcode, std::string_view payload) {
+    std::pmr::string owned(payload, detail::processResource());
+    return detail::makeScopedOperation(
+        operationScope_,
+        writeWebSocketOwned(target_, write_, opcode, std::move(owned)));
 }
 
 }  // namespace ruvia

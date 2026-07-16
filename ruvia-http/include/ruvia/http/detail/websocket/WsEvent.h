@@ -128,29 +128,37 @@ public:
         return static_cast<WsEventKind>(value_.index());
     }
 
-    [[nodiscard]] const WsMessageEvent* message() const noexcept {
+    [[nodiscard]] const WsMessageEvent* message() const & noexcept {
         return std::get_if<WsMessageEvent>(&value_);
     }
+    [[nodiscard]] const WsMessageEvent* message() const && = delete;
 
-    [[nodiscard]] const WsPingEvent* ping() const noexcept {
+    [[nodiscard]] const WsPingEvent* ping() const & noexcept {
         return std::get_if<WsPingEvent>(&value_);
     }
+    [[nodiscard]] const WsPingEvent* ping() const && = delete;
 
-    [[nodiscard]] const WsPongEvent* pong() const noexcept {
+    [[nodiscard]] const WsPongEvent* pong() const & noexcept {
         return std::get_if<WsPongEvent>(&value_);
     }
+    [[nodiscard]] const WsPongEvent* pong() const && = delete;
 
-    [[nodiscard]] const WsCloseEvent* close() const noexcept {
+    [[nodiscard]] const WsCloseEvent* close() const & noexcept {
         return std::get_if<WsCloseEvent>(&value_);
     }
+    [[nodiscard]] const WsCloseEvent* close() const && = delete;
 
-    [[nodiscard]] const WsProtocolErrorEvent* protocolError() const noexcept {
+    [[nodiscard]] const WsProtocolErrorEvent*
+    protocolError() const & noexcept {
         return std::get_if<WsProtocolErrorEvent>(&value_);
     }
+    [[nodiscard]] const WsProtocolErrorEvent*
+    protocolError() const && = delete;
 
-    [[nodiscard]] const WsTransportEndEvent* transportEnd() const noexcept {
+    [[nodiscard]] const WsTransportEndEvent* transportEnd() const & noexcept {
         return std::get_if<WsTransportEndEvent>(&value_);
     }
+    [[nodiscard]] const WsTransportEndEvent* transportEnd() const && = delete;
 
 private:
     friend class WsConnection;

@@ -7,18 +7,18 @@
 #include "ruvia/http/detail/HeaderTokenUtils.h"
 #include "ruvia/http/detail/HeaderAcceptUtils.h"
 #include "ruvia/http/detail/HttpRequestInternal.h"
-#include "ruvia/http/HttpProtocolError.h"
 #include "ruvia/web/detail/http/ContextRequestInternal.h"
 #include "ruvia/web/detail/http/RequestFieldsAccess.h"
+#include "ruvia/web/detail/http/RequestQueryValues.h"
 #include "ruvia/http/detail/MultipartParsing.h"
 #include "ruvia/http/detail/RequestBodyDecoding.h"
 #include "ruvia/web/detail/http/RequestBodyLoader.h"
 #include "ruvia/http/detail/AsciiCase.h"
-#include "ruvia/web/Error.h"
 #include "ruvia/http/UrlEncoding.h"
 #include "ruvia/web/detail/model/Parser.h"
 
 #include <algorithm>
+#include <memory>
 #include <memory_resource>
 #include <optional>
 #include <stdexcept>
@@ -34,8 +34,14 @@ ConnInfo getConnInfo(const Context& context) noexcept {
 
 namespace detail {
 
+// A media-type mismatch is the client speaking the wrong format at a valid
+// endpoint: RFC 9110 15.5.16 assigns that 415, distinct from the 400 a
+// malformed body of the RIGHT type earns below.
 [[noreturn]] void throwInvalidJsonContentType() {
-    throw std::invalid_argument("invalid json content type");
+    throw HttpError(
+        http_status::kUnsupportedMediaType,
+        "unsupported_media_type",
+        "request body must be application/json");
 }
 
 [[noreturn]] void throwInvalidJsonBody() {
@@ -43,7 +49,10 @@ namespace detail {
 }
 
 [[noreturn]] void throwInvalidFormContentType() {
-    throw std::invalid_argument("invalid form content type");
+    throw HttpError(
+        http_status::kUnsupportedMediaType,
+        "unsupported_media_type",
+        "request body must be application/x-www-form-urlencoded");
 }
 
 [[noreturn]] void throwInvalidFormBody() {
@@ -68,16 +77,38 @@ namespace detail {
 
 }  // namespace detail
 
-Task<JsonValue> ContextRequest::json() const {
-    if (!contentTypeMatches("application/json")) {
+Task<JsonValue> ContextRequest::jsonTask(const Context* context) {
+    if (!contextContentTypeMatches(context, "application/json")) {
         detail::throwInvalidJsonContentType();
     }
-    const auto requestBody = co_await text();
-    auto parsed = JsonValue::parse(requestBody, resource());
+    const auto requestBody = co_await contextTextTask(context);
+    auto parsed = JsonValue::parse(requestBody, contextResource(context));
     if (!parsed) {
         detail::throwInvalidJsonBody();
     }
     co_return std::move(*parsed);
+}
+
+ScopedOperation<JsonValue> ContextRequest::json() const {
+    return detail::makeScopedOperation(
+        context_->operationScope_, jsonTask(context_));
+}
+
+Task<std::optional<JsonValue>> ContextRequest::jsonIfTask(const Context* context) {
+    if (!contextContentTypeMatches(context, "application/json")) {
+        co_return std::nullopt;
+    }
+    const auto requestBody = co_await contextTextTask(context);
+    auto parsed = JsonValue::parse(requestBody, contextResource(context));
+    if (!parsed) {
+        co_return std::nullopt;
+    }
+    co_return std::move(*parsed);
+}
+
+ScopedOperation<std::optional<JsonValue>> ContextRequest::jsonIf() const {
+    return detail::makeScopedOperation(
+        context_->operationScope_, jsonIfTask(context_));
 }
 
 namespace {
@@ -116,7 +147,7 @@ void appendLowerAscii(std::pmr::string& output, std::string_view input) {
     }
 }
 
-void assignUrlDecodedOrCopy(
+[[nodiscard]] bool assignUrlDecodedOrCopy(
     std::pmr::string& output,
     std::string_view input,
     detail::UrlDecodeMode mode) {
@@ -127,14 +158,16 @@ void assignUrlDecodedOrCopy(
             output.get_allocator().resource());
         if (decoded.has_value()) {
             output = std::move(*decoded);
-            return;
+            return true;
         }
+        return false;
     }
     output.assign(input.data(), input.size());
+    return true;
 }
 
 [[nodiscard]] bool fieldNameIsArray(std::string_view name) noexcept {
-    return name.size() >= 2 && name.substr(name.size() - 2) == "[]";
+    return name.ends_with("[]");
 }
 
 [[nodiscard]] bool fieldNameHasProtoObject(std::string_view name) noexcept {
@@ -171,7 +204,7 @@ void assignDotPath(
 }
 
 [[nodiscard]] std::string_view storedStringView(const std::pmr::string& value) noexcept {
-    return std::string_view(value.data(), value.size());
+    return value;
 }
 
 [[nodiscard]] std::string_view pairNameAt(
@@ -189,7 +222,10 @@ void assignDotPath(
     for (std::size_t i = 0; i < count; ++i) {
         order.push_back(i);
     }
-    std::stable_sort(order.begin(), order.end(), [&storage](std::size_t left, std::size_t right) noexcept {
+    // The original position is an explicit tie-breaker, so an in-place sort has
+    // the same deterministic order as stable_sort without its non-PMR scratch
+    // allocation on the request path.
+    std::ranges::sort(order, [&storage](std::size_t left, std::size_t right) noexcept {
         const auto leftName = pairNameAt(storage, left);
         const auto rightName = pairNameAt(storage, right);
         if (leftName == rightName) {
@@ -208,7 +244,7 @@ void assignDotPath(
     for (std::size_t i = 0; i < fields.size(); ++i) {
         order.push_back(i);
     }
-    std::stable_sort(order.begin(), order.end(), [&fields](std::size_t left, std::size_t right) noexcept {
+    std::ranges::sort(order, [&fields](std::size_t left, std::size_t right) noexcept {
         const auto leftName = fields[left].name();
         const auto rightName = fields[right].name();
         if (leftName == rightName) {
@@ -223,7 +259,7 @@ void appendParsedBodyField(
     std::pmr::vector<ContextRequest::RequestFormField>& fields,
     ContextRequest::RequestFormField&& field,
     ContextRequest::ParseBodyOptions options) {
-    if (options.dot) {
+    if (options.dottedNames == ContextRequest::DottedNamePolicy::kExpandPath) {
         if (fieldNameHasProtoObject(field.name())) {
             return;
         }
@@ -236,7 +272,8 @@ void appendParsedBodyField(
 void compactParsedBodyFields(
     std::pmr::vector<ContextRequest::RequestFormField>& fields,
     ContextRequest::ParseBodyOptions options) {
-    if (options.all || fields.size() < 2) {
+    if (options.repeatedScalars == ContextRequest::RepeatedScalarPolicy::kRetainAll ||
+        fields.size() < 2) {
         return;
     }
 
@@ -268,11 +305,14 @@ void compactParsedBodyFields(
             continue;
         }
         if (write != read) {
-            fields[write] = std::move(fields[read]);
+            std::destroy_at(&fields[write]);
+            std::construct_at(&fields[write], std::move(fields[read]));
         }
         ++write;
     }
-    fields.erase(fields.begin() + write, fields.end());
+    while (fields.size() > write) {
+        fields.pop_back();
+    }
 }
 
 [[nodiscard]] ContextRequest::RequestFormData parseUrlEncodedFormBody(
@@ -316,7 +356,7 @@ void compactParsedBodyFields(
         throw std::invalid_argument("invalid form body");
     }
     compactParsedBodyFields(fields, options);
-    return ContextRequest::RequestFormData(std::move(fields));
+    return detail::RequestFormDataAccess::fromFields(std::move(fields));
 }
 
 [[nodiscard]] std::pmr::vector<MultipartPart> parseCompleteMultipartBody(
@@ -325,8 +365,7 @@ void compactParsedBodyFields(
     std::pmr::memory_resource* resource) {
     auto parsed = parseMultipartBody(requestBody, std::move(boundary), resource);
     if (const auto* failure = parsed.failure()) {
-        throw HttpProtocolError(
-            400, multipartParseErrorMessage(failure->error()));
+        throw failure->protocolError();
     }
     auto* body = parsed.body();
     if (body == nullptr) {
@@ -350,7 +389,7 @@ void compactParsedBodyFields(
         const auto partFilename = part.filename();
         const auto partContentType = part.contentType();
         std::pmr::string name(partName.data(), partName.size(), resource);
-        const bool array = fieldNameIsArray(std::string_view(name.data(), name.size()));
+        const bool array = fieldNameIsArray(std::string_view(name));
         appendParsedBodyField(
             fields,
             detail::RequestFormFieldAccess::make(
@@ -364,7 +403,7 @@ void compactParsedBodyFields(
             options);
     }
     compactParsedBodyFields(fields, options);
-    return ContextRequest::RequestFormData(std::move(fields));
+    return detail::RequestFormDataAccess::fromFields(std::move(fields));
 }
 
 [[nodiscard]] ContextRequest::RequestFormData parseFormBodyFromView(
@@ -384,42 +423,23 @@ void compactParsedBodyFields(
             resource,
             options);
     }
+    if (boundary.notApplicable() != nullptr) {
+        return detail::RequestFormDataAccess::empty(resource);
+    }
     if (const auto* failure = boundary.failure()) {
-        switch (failure->error()) {
-        case detail::HttpMultipartBoundaryParseError::kInvalidContentType:
-            return ContextRequest::RequestFormData(resource);
-        case detail::HttpMultipartBoundaryParseError::kInvalidBoundary:
-            throw std::invalid_argument("invalid multipart boundary");
-        }
+        throw failure->protocolError();
     }
     throw std::logic_error("unexpected multipart boundary parse result");
 }
 
 }  // namespace
 
-std::string_view ContextRequest::RawRequestClone::header(std::string_view name) const noexcept {
-    for (auto it = headers_.rbegin(); it != headers_.rend(); ++it) {
-        if (detail::httpAsciiEqualsIgnoreCase(it->name(), name)) {
-            return it->value();
-        }
-    }
-    return {};
-}
-
-ContextRequest::RequestFormData ContextRequest::RawRequestClone::parseBody(ParseBodyOptions options) const {
-    return parseFormBodyFromView(
-        header("Content-Type"),
-        body(),
-        body_.get_allocator().resource(),
-        options);
-}
-
 const RequestNameValueList& Context::requestHeaders() const {
-    if (requestHeaders_ == nullptr) {
+    auto& cache = requestStorage().headers;
+    if (!cache) {
         const auto rawHeaders = request_.headers();
-        auto& names = memory_.emplace<std::pmr::vector<std::pmr::string>>(resource());
-        auto& headers = memory_.emplace<RequestNameValueList>(
-            detail::RequestNameValueListAccess::make(resource()));
+        std::pmr::vector<std::pmr::string> names(resource());
+        auto headers = detail::RequestNameValueListAccess::make(resource());
         names.reserve(rawHeaders.size());
         detail::RequestNameValueListAccess::reserve(headers, rawHeaders.size());
         for (const auto& rawHeader : rawHeaders) {
@@ -429,47 +449,54 @@ const RequestNameValueList& Context::requestHeaders() const {
             detail::RequestNameValueListAccess::pushBack(
                 headers,
                 detail::RequestNameValueViewAccess::make(
-                    std::string_view(name.data(), name.size()),
+                    std::string_view(name),
                     rawHeader.value()));
         }
-        requestHeaders_ = &headers;
+        cache.emplace(std::move(names), std::move(headers));
     }
-    return *requestHeaders_;
+    return cache->fields;
 }
 
 std::optional<std::string_view> Context::requestHeader(std::string_view name) const {
-    // Case-insensitive scan directly over the raw header span — no per-lookup allocation and no
-    // forced materialization of the full lowercased header map (requestHeaders() builds that only
-    // for the list accessor). Last match wins, mirroring RequestNameValueList::get()'s reverse scan.
-    const auto rawHeaders = request_.headers();
-    for (auto it = rawHeaders.rbegin(); it != rawHeaders.rend(); ++it) {
-        if (detail::httpAsciiEqualsIgnoreCase(it->name(), name)) {
-            return it->value();
-        }
-    }
-    return std::nullopt;
+    return request_.header(name);
 }
 
 void Context::ensureRequestQuery() const {
-    if (requestQuery_ != nullptr) {
+    auto& cache = requestStorage().query;
+    if (cache) {
         return;
+    }
+    if (requestStorage_->queryInvalid) {
+        detail::throwInvalidQuery();
+    }
+    if (!detail::validateUrlEncoding(request_.queryString())) {
+        requestStorage_->queryInvalid = true;
+        detail::throwInvalidQuery();
     }
 
     const auto pairCount = delimitedFieldCount(request_.queryString(), '&');
-    auto& storage = memory_.emplace<std::pmr::vector<std::pmr::string>>(resource());
+    std::pmr::vector<std::pmr::string> storage(resource());
     storage.reserve(boundedFieldReserve(pairCount * 2));
-    (void)detail::visitUrlEncodedPairs(
+    bool valid = true;
+    const bool completed = detail::visitUrlEncodedPairs(
         request_.queryString(),
-        [this, &storage](std::string_view key, std::string_view value) {
+        [this, &storage, &valid](std::string_view key, std::string_view value) {
             std::pmr::string decodedName(resource());
             std::pmr::string decodedValue(resource());
-            assignUrlDecodedOrCopy(decodedName, key, detail::UrlDecodeMode::kForm);
-            assignUrlDecodedOrCopy(decodedValue, value, detail::UrlDecodeMode::kForm);
+            if (!assignUrlDecodedOrCopy(decodedName, key, detail::UrlDecodeMode::kForm) ||
+                !assignUrlDecodedOrCopy(decodedValue, value, detail::UrlDecodeMode::kForm)) {
+                valid = false;
+                return false;
+            }
 
             storage.push_back(std::move(decodedName));
             storage.push_back(std::move(decodedValue));
             return true;
         });
+    if (!completed || !valid) {
+        requestStorage_->queryInvalid = true;
+        detail::throwInvalidQuery();
+    }
 
     struct QueryBuild final {
         std::size_t firstIndex;
@@ -489,14 +516,14 @@ void Context::ensureRequestQuery() const {
         } while (offset < order.size() && pairNameAt(storage, order[offset]) == name);
         builds.push_back(QueryBuild{.firstIndex = firstIndex, .begin = begin, .end = offset});
     }
-    std::stable_sort(builds.begin(), builds.end(), [](const QueryBuild& left, const QueryBuild& right) noexcept {
+    std::ranges::sort(builds, [](const QueryBuild& left, const QueryBuild& right) noexcept {
         return left.firstIndex < right.firstIndex;
     });
 
-    auto& query = memory_.emplace<RequestNameValueList>(detail::RequestNameValueListAccess::make(resource()));
-    auto& groups = memory_.emplace<RequestValueGroupList>(detail::RequestValueGroupListAccess::make(resource()));
+    auto query = detail::RequestNameValueListAccess::make(resource());
+    detail::RequestQueryValues groups{resource()};
     detail::RequestNameValueListAccess::reserve(query, builds.size());
-    detail::RequestValueGroupListAccess::reserve(groups, builds.size());
+    groups.reserve(builds.size());
     for (const auto& build : builds) {
         // A duplicated query name resolves to its LAST value, matching every other
         // duplicate-resolution path: Context::requestQuery(name), HttpRequest::query,
@@ -513,49 +540,32 @@ void Context::ensureRequestQuery() const {
                 storedStringView(storage[lastIndex * 2]),
                 storedStringView(storage[lastIndex * 2 + 1])));
 
-        auto group = detail::RequestValueGroupAccess::make(resource(), pairNameAt(storage, build.firstIndex));
+        auto& group = groups.append(pairNameAt(storage, build.firstIndex));
         for (std::size_t i = build.begin; i < build.end; ++i) {
             const auto pairIndex = order[i];
-            detail::RequestValueGroupAccess::add(group, storedStringView(storage[pairIndex * 2 + 1]));
+            group.add(storedStringView(storage[pairIndex * 2 + 1]));
         }
-        detail::RequestValueGroupListAccess::pushBack(groups, std::move(group));
     }
 
-    requestQueryStorage_ = &storage;
-    requestQueriesStorage_ = &storage;
-    requestQuery_ = &query;
-    requestQueries_ = &groups;
+    cache.emplace(
+        std::move(storage),
+        std::move(query),
+        std::move(groups));
 }
 
 const RequestNameValueList& Context::requestQuery() const {
     ensureRequestQuery();
-    return *requestQuery_;
+    return requestStorage_->query->fields();
 }
 
 std::optional<std::string_view> Context::requestQuery(std::string_view name) const {
-    std::optional<std::string_view> result;
-    (void)detail::visitUrlEncodedPairs(
-        request_.queryString(),
-        [this, name, &result](std::string_view encodedName, std::string_view encodedValue) {
-            if (!detail::urlComponentEquals(encodedName, name, detail::UrlDecodeMode::kForm)) {
-                return true;
-            }
-            if (!detail::hasUrlEncoding(encodedValue, detail::UrlDecodeMode::kForm)) {
-                result = encodedValue;
-                return true;
-            }
-
-            auto& decoded = memory_.emplace<std::pmr::string>(resource());
-            assignUrlDecodedOrCopy(decoded, encodedValue, detail::UrlDecodeMode::kForm);
-            result = storedStringView(decoded);
-            return true;
-        });
-    return result;
+    ensureRequestQuery();
+    return requestStorage_->query->fields().get(name);
 }
 
-const RequestValueGroupList& Context::requestQueries() const {
+const detail::RequestQueryValues& Context::requestQueries() const {
     ensureRequestQuery();
-    return *requestQueries_;
+    return requestStorage_->query->values();
 }
 
 std::optional<std::string_view> Context::requestCookie(std::string_view name) const {
@@ -573,7 +583,8 @@ std::optional<std::string_view> Context::requestCookie(std::string_view name) co
 }
 
 const RequestNameValueList& Context::requestCookies() const {
-    if (requestCookies_ == nullptr) {
+    auto& cache = requestStorage().cookies;
+    if (!cache) {
         std::size_t cookieCount = 0;
         for (const auto& header : request_.headers()) {
             if (detail::httpAsciiEqualsIgnoreCase(header.name(), "Cookie")) {
@@ -581,8 +592,7 @@ const RequestNameValueList& Context::requestCookies() const {
             }
         }
 
-        auto& cookies = memory_.emplace<RequestNameValueList>(
-            detail::RequestNameValueListAccess::make(resource()));
+        auto cookies = detail::RequestNameValueListAccess::make(resource());
         detail::RequestNameValueListAccess::reserve(cookies, boundedFieldReserve(cookieCount));
         for (const auto& header : request_.headers()) {
             if (!detail::httpAsciiEqualsIgnoreCase(header.name(), "Cookie")) {
@@ -597,74 +607,66 @@ const RequestNameValueList& Context::requestCookies() const {
                     return true;
                 });
         }
-        requestCookies_ = &cookies;
+        cache.emplace(std::move(cookies));
     }
-    return *requestCookies_;
+    return *cache;
 }
 
-const std::pmr::vector<ContextRequest::MatchedRoute>& Context::requestMatchedRoutes() const {
-    if (matchedRoutes_ == nullptr) {
-        auto& routes = memory_.emplace<std::pmr::vector<ContextRequest::MatchedRoute>>(resource());
-        if (!routePath_.empty() && routeMethod_ != HttpKnownMethod::kUnknown) {
-            const auto method = knownHttpMethodToken(routeMethod_);
-            routes.reserve(routeMiddlewareCount_ + 1);
-            for (std::size_t i = 0; i < routeMiddlewareCount_; ++i) {
-                routes.push_back(ContextRequest::MatchedRoute{
-                    .method = method,
-                    .path = routePath_,
-                    .kind = ContextRequest::MatchedRouteKind::kMiddleware});
-            }
-            routes.push_back(ContextRequest::MatchedRoute{
-                .method = method,
-                .path = routePath_,
-                .kind = ContextRequest::MatchedRouteKind::kHandler});
-        }
-        matchedRoutes_ = &routes;
+void Context::ensureRouteParams() const {
+    auto& cache = requestStorage().routeParams;
+    if (cache) {
+        return;
     }
-    return *matchedRoutes_;
+    if (requestStorage_->routeParamsInvalid) {
+        detail::throwInvalidParam();
+    }
+    std::size_t encodedValueCount = 0;
+    for (std::size_t i = 0; i < paramCount_; ++i) {
+        if (!detail::validateUrlEncoding(paramValues_[i])) {
+            requestStorage_->routeParamsInvalid = true;
+            detail::throwInvalidParam();
+        }
+        if (detail::hasUrlEncoding(paramValues_[i], detail::UrlDecodeMode::kPercent)) {
+            ++encodedValueCount;
+        }
+    }
+
+    // Route names and unencoded captures already borrow stable route/request
+    // storage. Own only decoded values, keeping the cache compact while making
+    // every returned view stable for the whole Context lifetime.
+    std::pmr::vector<std::pmr::string> storage(resource());
+    auto params = detail::RequestNameValueListAccess::make(resource());
+    storage.reserve(encodedValueCount);
+    detail::RequestNameValueListAccess::reserve(params, paramCount_);
+    for (std::size_t i = 0; i < paramCount_; ++i) {
+        auto value = paramValues_[i];
+        if (detail::hasUrlEncoding(value, detail::UrlDecodeMode::kPercent)) {
+            auto decoded = detail::decodeUrlComponent(
+                value,
+                detail::UrlDecodeMode::kPercent,
+                resource());
+            if (!decoded) {
+                requestStorage_->routeParamsInvalid = true;
+                detail::throwInvalidParam();
+            }
+            auto& owned = storage.emplace_back(std::move(*decoded));
+            value = storedStringView(owned);
+        }
+        detail::RequestNameValueListAccess::pushBack(
+            params,
+            detail::RequestNameValueViewAccess::make(paramNames_[i], value));
+    }
+    cache.emplace(std::move(storage), std::move(params));
 }
 
 const RequestNameValueList& Context::routeParams() const {
-    if (routeParams_ == nullptr) {
-        auto& storage = memory_.emplace<std::pmr::vector<std::pmr::string>>(resource());
-        auto& params = memory_.emplace<RequestNameValueList>(
-            detail::RequestNameValueListAccess::make(resource()));
-        storage.reserve(paramCount_ * 2);
-        detail::RequestNameValueListAccess::reserve(params, paramCount_);
-        for (std::size_t i = 0; i < paramCount_; ++i) {
-            std::pmr::string name(paramNames_[i].data(), paramNames_[i].size(), resource());
-            std::pmr::string value(resource());
-            assignUrlDecodedOrCopy(value, paramValues_[i], detail::UrlDecodeMode::kPercent);
-            storage.push_back(std::move(name));
-            storage.push_back(std::move(value));
-            const auto nameIndex = storage.size() - 2;
-            detail::RequestNameValueListAccess::pushBack(
-                params,
-                detail::RequestNameValueViewAccess::make(
-                    std::string_view(storage[nameIndex].data(), storage[nameIndex].size()),
-                    std::string_view(storage[nameIndex + 1].data(), storage[nameIndex + 1].size())));
-        }
-        routeParamStorage_ = &storage;
-        routeParams_ = &params;
-    }
-    return *routeParams_;
+    ensureRouteParams();
+    return requestStorage_->routeParams->fields;
 }
 
 std::optional<std::string_view> Context::routeParam(std::string_view name) const {
-    for (std::size_t i = paramCount_; i > 0; --i) {
-        const auto index = i - 1;
-        if (paramNames_[index] != name) {
-            continue;
-        }
-        const auto value = paramValues_[index];
-        if (!detail::hasUrlEncoding(value, detail::UrlDecodeMode::kPercent)) {
-            return value;
-        }
-        auto& decoded = memory_.emplace<std::pmr::string>(resource());
-        assignUrlDecodedOrCopy(decoded, value, detail::UrlDecodeMode::kPercent);
-        return storedStringView(decoded);
-    }
-    return std::nullopt;
+    ensureRouteParams();
+    return requestStorage_->routeParams->fields.get(name);
 }
 
 bool Context::requestAccepts(std::string_view mediaType) const noexcept {
@@ -678,13 +680,17 @@ bool Context::requestAccepts(std::string_view mediaType) const noexcept {
     int bestQuality = 0;
     bool sawAccept = false;
     for (const auto& header : request_.headers()) {
-        if (!detail::httpAsciiEqualsIgnoreCase(header.name(), "Accept") || header.value().empty()) {
+        if (!detail::httpAsciiEqualsIgnoreCase(header.name(), "Accept")) {
             continue;
         }
         sawAccept = true;
-        detail::httpAccumulateMediaTypeAcceptance(header.value(), mediaType, bestSpecificity, bestQuality);
+        if (!header.value().empty()) {
+            detail::httpAccumulateMediaTypeAcceptance(
+                header.value(), mediaType, bestSpecificity, bestQuality);
+        }
     }
-    // No (non-empty) Accept header means the client accepts any media type.
+    // Only absence means no preference. A present but empty Accept field is an
+    // empty media-range list and therefore matches no representation.
     if (!sawAccept) {
         return true;
     }
@@ -693,8 +699,8 @@ bool Context::requestAccepts(std::string_view mediaType) const noexcept {
 
 Task<std::string_view> Context::requestBody() const {
     if (bodyDecoded_) {
-        const auto& decoded = *decodedBody_;
-        co_return std::string_view(decoded.data(), decoded.size());
+        const auto& decoded = *requestStorage_->decodedBody;
+        co_return std::string_view(decoded);
     }
 
     std::string_view raw;
@@ -709,6 +715,10 @@ Task<std::string_view> Context::requestBody() const {
     // Transparently decode a request body whose Content-Encoding we understand,
     // so handlers always see the decoded representation (RFC 9110 §8.4).
     const auto parsedCoding = detail::requestContentCoding(request_);
+    if (const auto* invalid = parsedCoding.invalid()) {
+        throw HttpProtocolError(
+            invalid->status(), "invalid request Content-Encoding");
+    }
     if (const auto* unsupported = parsedCoding.unsupported()) {
         throw detail::UnsupportedRequestContentCoding(*unsupported);
     }
@@ -716,40 +726,25 @@ Task<std::string_view> Context::requestBody() const {
     if (coding == detail::HttpContentCoding::kIdentity) {
         co_return raw;
     }
-    auto decodeResult = detail::decodeHttpContent(
+    auto decodeResult = detail::decodeHttpRequestContent(
         coding,
         raw,
         maxDecodedBodyBytes_,
         resource());
     auto* decodedContent = decodeResult.decoded();
     if (decodedContent == nullptr) {
-        switch (decodeResult.failure()->error()) {
-            case detail::HttpContentDecodeError::kDecodedSizeExceeded:
-                throw HttpError(
-                    413,
-                    "payload_too_large",
-                    "request body is too large");
-            case detail::HttpContentDecodeError::kInvalidContent:
-                throw HttpError(
-                    400,
-                    "bad_request",
-                    "failed to decode request body");
-            case detail::HttpContentDecodeError::kDecoderFailure:
-                throw std::runtime_error("request content decoder failed");
-            case detail::HttpContentDecodeError::kUnsupportedCoding:
-                throw std::logic_error(
-                    "request content decoder received an unsupported coding");
+        if (const auto* failure = decodeResult.protocolFailure()) {
+            throw failure->protocolError();
         }
+        if (decodeResult.decoderFailure() != nullptr) {
+            throw std::runtime_error("request content decoder failed");
+        }
+        throw std::logic_error("unexpected request content decode result");
     }
     auto& decoded = decodedBody();
     decoded = std::move(*decodedContent).takeBytes();
-    // Keep short content in the arena (not inline SSO) so the returned view
-    // survives the Context if a handler hands it to c.text().
-    if (decoded.size() < 32) {
-        decoded.reserve(32);
-    }
     bodyDecoded_ = true;
-    co_return std::string_view(decoded.data(), decoded.size());
+    co_return std::string_view(decoded);
 }
 
 std::optional<std::string_view> ContextRequest::signedCookie(
@@ -771,22 +766,6 @@ std::optional<std::string_view> ContextRequest::signedCookie(
         return std::nullopt;
     }
     return value;
-}
-
-Task<ContextRequest::RawRequestClone> ContextRequest::cloneRawRequest() const {
-    RawRequestClone clone(context_->resource());
-    clone.method_.assign(raw().method().data(), raw().method().size());
-    const auto requestUrl = url();
-    clone.url_.assign(requestUrl.data(), requestUrl.size());
-    clone.path_.assign(raw().path().data(), raw().path().size());
-    clone.headers_.reserve(raw().headers().size());
-    for (const auto& header : raw().headers()) {
-        clone.headers_.push_back(
-            RawRequestClone::Header::make(context_->resource(), header.name(), header.value()));
-    }
-    const auto requestBody = co_await text();
-    clone.body_.assign(requestBody.data(), requestBody.size());
-    co_return std::move(clone);
 }
 
 bool Context::requestContentTypeMatches(std::string_view expected) const noexcept {
@@ -839,13 +818,11 @@ MultipartBoundary Context::multipartBoundary() const {
     if (const auto* parsed = boundary.boundary()) {
         return *parsed;
     }
+    if (boundary.notApplicable() != nullptr) {
+        throw std::invalid_argument("invalid multipart content type");
+    }
     if (const auto* failure = boundary.failure()) {
-        switch (failure->error()) {
-        case detail::HttpMultipartBoundaryParseError::kInvalidContentType:
-            throw std::invalid_argument("invalid multipart content type");
-        case detail::HttpMultipartBoundaryParseError::kInvalidBoundary:
-            throw std::invalid_argument("invalid multipart boundary");
-        }
+        throw failure->protocolError();
     }
     throw std::logic_error("unexpected multipart boundary parse result");
 }

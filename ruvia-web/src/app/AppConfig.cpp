@@ -1,5 +1,6 @@
 #include "ruvia/web/detail/app/AppConfigMutation.h"
 
+#include <bit>
 #include <stdexcept>
 #include <utility>
 
@@ -31,49 +32,42 @@ App& App::setListenAddress(std::string_view address) {
         });
 }
 
-App& App::setHttpListenPort(std::uint16_t port) {
+App& App::setServerTopology(ServerTopology topology) {
     return detail::mutateStoppedApp(
         *this,
         *state_,
-        "cannot change HTTP listen port while app is running",
-        [port](detail::AppState& state) {
-            detail::ensureNonZeroPort(port, "HTTP listen port must not be zero");
-            state.httpListenPort = port;
+        "cannot change server topology while app is running",
+        [&topology](detail::AppState& state) {
+            state.topology = std::move(topology);
         });
 }
 
-App& App::setHttpsListenPort(std::uint16_t port) {
+App& App::setWorkersPerListener(std::size_t workersPerListener) {
     return detail::mutateStoppedApp(
         *this,
         *state_,
-        "cannot change HTTPS listen port while app is running",
-        [port](detail::AppState& state) {
-            detail::ensureNonZeroPort(port, "HTTPS listen port must not be zero");
-            state.httpsListenPort = port;
-        });
-}
-
-App& App::setAutoHttps(bool enabled) {
-    return detail::mutateStoppedApp(
-        *this,
-        *state_,
-        "cannot change auto HTTPS while app is running",
-        [enabled](detail::AppState& state) {
-            state.autoHttps = enabled;
-        });
-}
-
-App& App::setThreadNum(std::size_t threadNum) {
-    return detail::mutateStoppedApp(
-        *this,
-        *state_,
-        "cannot change thread count while app is running",
-        [threadNum](detail::AppState& state) {
-            if (threadNum == 0) {
-                throw std::invalid_argument("thread count must be greater than 0");
+        "cannot change workers per listener while app is running",
+        [workersPerListener](detail::AppState& state) {
+            if (workersPerListener == 0) {
+                throw std::invalid_argument(
+                    "workers per listener must be greater than 0");
             }
 
-            state.threadNum = threadNum;
+            state.workersPerListener = workersPerListener;
+        });
+}
+
+App& App::setWorkerMailboxCapacity(std::size_t capacity) {
+    return detail::mutateStoppedApp(
+        *this,
+        *state_,
+        "cannot change worker mailbox capacity while app is running",
+        [capacity](detail::AppState& state) {
+            if (capacity == 0) {
+                throw std::invalid_argument(
+                    "worker mailbox capacity must be greater than 0");
+            }
+            state.options.workerMailboxCapacity = capacity;
         });
 }
 
@@ -222,7 +216,7 @@ App& App::setMemoryPoolConfig(MemoryPoolConfig config) {
                 config.requestInitialBufferBytes,
                 "memory pool config values must be greater than 0");
 
-            state.memoryConfig = config;
+            state.options.memoryConfig = config;
         });
 }
 
@@ -246,13 +240,27 @@ App& App::onStop(AppHook hook) {
         });
 }
 
-App& App::setGlobalRateLimit(std::optional<RateLimitRule> rule) {
+App& App::setDefaultRateLimitPerWorker(std::optional<RateLimitRule> rule) {
     return detail::mutateStoppedApp(
         *this,
         *state_,
-        "cannot change the global rate limit while app is running",
+        "cannot change the default rate limit per worker while app is running",
         [rule](detail::AppState& state) mutable {
-            state.options.rateLimit = std::move(rule);
+            state.options.defaultRateLimitPerWorker = std::move(rule);
+        });
+}
+
+App& App::setRateLimitSlotsPerWorker(std::size_t slotsPerWorker) {
+    return detail::mutateStoppedApp(
+        *this,
+        *state_,
+        "cannot change rate-limit slots per worker while app is running",
+        [slotsPerWorker](detail::AppState& state) {
+            if (!std::has_single_bit(slotsPerWorker)) {
+                throw std::invalid_argument(
+                    "rate-limit slots per worker must be a power of two");
+            }
+            state.options.rateLimitSlotsPerWorker = slotsPerWorker;
         });
 }
 

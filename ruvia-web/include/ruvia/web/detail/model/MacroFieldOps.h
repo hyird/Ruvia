@@ -78,10 +78,11 @@
     RUVIA_MODEL_FIELD_ACCESSORS_I(T, RUVIA_MODEL_UNPAREN x)
 #define RUVIA_MODEL_FIELD_ACCESSORS_I(T, ...) RUVIA_MODEL_FIELD_ACCESSORS_IMPL(T, __VA_ARGS__)
 #define RUVIA_MODEL_FIELD_ACCESSORS_IMPL(model_type, type, field, wire, rules) \
-    [[nodiscard]] const ::std::optional<RUVIA_MODEL_UNPAREN type>& field() const { \
+    [[nodiscard]] const ::std::optional<RUVIA_MODEL_UNPAREN type>& field() const & { \
         return ruviaField_##field##_; \
     } \
-    [[nodiscard]] RUVIA_MODEL_UNPAREN type& field##Ensure() { \
+    [[nodiscard]] const ::std::optional<RUVIA_MODEL_UNPAREN type>& field() const && = delete; \
+    [[nodiscard]] RUVIA_MODEL_UNPAREN type& field##Ensure() & { \
         auto* const ruviaResource = ruviaResource_; \
         if (!ruviaField_##field##_) { \
             ruviaField_##field##_.emplace(::ruvia::detail::makeRequestValue<RUVIA_MODEL_UNPAREN type>( \
@@ -91,6 +92,7 @@
         ruviaState_##field##_ = ::ruvia::detail::ModelFieldState::kParsed; \
         return *ruviaField_##field##_; \
     } \
+    [[nodiscard]] RUVIA_MODEL_UNPAREN type& field##Ensure() && = delete; \
     void field##Reset() noexcept { \
         ruviaState_##field##_ = ::ruvia::detail::ModelFieldState::kMissing; \
         ruviaField_##field##_.reset(); \
@@ -101,7 +103,7 @@
                           ::std::constructible_from<RUVIA_MODEL_UNPAREN type, RuviaFieldValueT&&>)) || \
                   (!::ruvia::detail::isRuviaString<RUVIA_MODEL_UNPAREN type> && \
                       ::std::constructible_from<RUVIA_MODEL_UNPAREN type, RuviaFieldValueT&&>)) \
-    model_type& field(RuviaFieldValueT&& value) { \
+    model_type& field(RuviaFieldValueT&& value) & { \
         auto* const ruviaResource = ruviaResource_; \
         ::ruvia::detail::model::assignFieldValue( \
             ruviaField_##field##_, \
@@ -109,7 +111,9 @@
             ruviaResource); \
         ruviaState_##field##_ = ::ruvia::detail::ModelFieldState::kParsed; \
         return *this; \
-    }
+    } \
+    template <typename RuviaFieldValueT> \
+    model_type& field(RuviaFieldValueT&&) && = delete;
 
 #define RUVIA_MODEL_APPLY_DEFAULT_FIELD(T, x) \
     RUVIA_MODEL_APPLY_DEFAULT_FIELD_I(RUVIA_MODEL_UNPAREN x)
@@ -135,10 +139,11 @@
 #define RUVIA_RESPONSE_MODEL_FIELD_ACCESSORS_I(T, ...) \
     RUVIA_RESPONSE_MODEL_FIELD_ACCESSORS_IMPL(T, __VA_ARGS__)
 #define RUVIA_RESPONSE_MODEL_FIELD_ACCESSORS_IMPL(model_type, type, field, wire, rules) \
-    [[nodiscard]] const ::std::optional<RUVIA_MODEL_UNPAREN type>& field() const { \
+    [[nodiscard]] const ::std::optional<RUVIA_MODEL_UNPAREN type>& field() const & { \
         return ruviaField_##field##_; \
     } \
-    [[nodiscard]] RUVIA_MODEL_UNPAREN type& field##Ensure() { \
+    [[nodiscard]] const ::std::optional<RUVIA_MODEL_UNPAREN type>& field() const && = delete; \
+    [[nodiscard]] RUVIA_MODEL_UNPAREN type& field##Ensure() & { \
         auto* const ruviaResource = ruviaResource_; \
         if (!ruviaField_##field##_) { \
             ruviaField_##field##_.emplace(::ruvia::detail::makeResponseValue<RUVIA_MODEL_UNPAREN type>( \
@@ -147,6 +152,7 @@
         } \
         return *ruviaField_##field##_; \
     } \
+    [[nodiscard]] RUVIA_MODEL_UNPAREN type& field##Ensure() && = delete; \
     void field##Reset() noexcept { \
         ruviaField_##field##_.reset(); \
     } \
@@ -156,14 +162,16 @@
                           ::std::constructible_from<RUVIA_MODEL_UNPAREN type, RuviaFieldValueT&&>)) || \
                   (!::ruvia::detail::isRuviaString<RUVIA_MODEL_UNPAREN type> && \
                       ::std::constructible_from<RUVIA_MODEL_UNPAREN type, RuviaFieldValueT&&>)) \
-    model_type& field(RuviaFieldValueT&& value) { \
+    model_type& field(RuviaFieldValueT&& value) & { \
         auto* const ruviaResource = ruviaResource_; \
         ::ruvia::detail::model::assignFieldValue( \
             ruviaField_##field##_, \
             ::std::forward<RuviaFieldValueT>(value), \
             ruviaResource); \
         return *this; \
-    }
+    } \
+    template <typename RuviaFieldValueT> \
+    model_type& field(RuviaFieldValueT&&) && = delete;
 
 #define RUVIA_REQUEST_MODEL_FIELD_OPTION_GUARD(T, x) \
     RUVIA_REQUEST_MODEL_FIELD_OPTION_GUARD_I(RUVIA_MODEL_UNPAREN x)

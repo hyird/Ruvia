@@ -9,6 +9,10 @@
 namespace ruvia::detail {
 
 struct HttpResponseBodyAccess final {
+    static void setBorrowedView(HttpResponse& response, std::string_view value) noexcept {
+        response.setBodyBorrowedView(value);
+    }
+
     static void setStaticView(HttpResponse& response, std::string_view value) noexcept {
         response.setBodyStaticView(value);
     }
@@ -25,7 +29,13 @@ struct HttpResponseBodyAccess final {
         const HttpResponse& response) noexcept {
         return response.body_;
     }
+    [[nodiscard]] static const HttpResponseBody& body(
+        const HttpResponse&& response) = delete;
 };
+
+inline void setResponseBodyBorrowedView(HttpResponse& response, std::string_view value) noexcept {
+    HttpResponseBodyAccess::setBorrowedView(response, value);
+}
 
 inline void setResponseBodyStaticView(HttpResponse& response, std::string_view value) noexcept {
     HttpResponseBodyAccess::setStaticView(response, value);
@@ -43,5 +53,7 @@ inline void materializeResponseBody(HttpResponse& response) {
     const HttpResponse& response) noexcept {
     return HttpResponseBodyAccess::body(response);
 }
+[[nodiscard]] const HttpResponseBody& responseBody(
+    const HttpResponse&& response) = delete;
 
 }  // namespace ruvia::detail

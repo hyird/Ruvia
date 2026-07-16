@@ -4,6 +4,7 @@
 #include "ruvia/web/detail/json/JsonLimits.h"
 #include "ruvia/web/detail/json/JsonNumber.h"
 #include "ruvia/web/detail/json/JsonString.h"
+#include "ruvia/web/detail/BorrowedView.h"
 
 #include <cstddef>
 #include <string_view>
@@ -114,6 +115,9 @@ namespace ruvia::detail {
 class JsonScanner final {
 public:
     explicit JsonScanner(std::string_view input) noexcept : input_(input) {}
+
+    template <RvalueCharBasicString Input>
+    JsonScanner(Input&&) = delete;
 
     [[nodiscard]] bool consumeObject() noexcept {
         return skipJsonObject(input_);

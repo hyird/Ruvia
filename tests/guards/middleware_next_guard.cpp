@@ -47,6 +47,21 @@ static_assert(!HasPublicNextRuntimeState<ruvia::Next>);
 
 int continuationCalls = 0;
 
+bool exerciseTypedControlPhases() {
+    using Control = ruvia::detail::NextState::Control;
+    using Invocation = ruvia::detail::NextState::Invocation;
+    Control control;
+    if (control.phase() != Control::Phase::kFresh ||
+        control.beginInvocation() != Invocation::kReady ||
+        control.phase() != Control::Phase::kInvoked ||
+        control.beginInvocation() != Invocation::kRepeated) {
+        return false;
+    }
+    control.expire();
+    return control.phase() == Control::Phase::kExpired &&
+        control.beginInvocation() == Invocation::kExpired;
+}
+
 ruvia::Task<void> countingContinuation(ruvia::detail::NextState) {
     ++continuationCalls;
     co_return;
@@ -59,7 +74,7 @@ ruvia::Task<int> exerciseExpiredNext() {
         ruvia::detail::NextState{.control = &control},
         &countingContinuation);
 
-    control.active = false;
+    control.expire();
     co_await next();
 
     co_return continuationCalls == 0 ? 0 : 1;
@@ -76,5 +91,5 @@ int main() {
     int result = 2;
     asio::co_spawn(io, runExercise(result), asio::detached);
     io.run();
-    return result;
+    return result == 0 && exerciseTypedControlPhases() ? 0 : 1;
 }

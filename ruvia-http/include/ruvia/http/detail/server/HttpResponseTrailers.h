@@ -1,11 +1,15 @@
 #pragma once
 
 #include "ruvia/http/detail/HeaderTokenUtils.h"
+#include "ruvia/http/detail/HttpResponseHeaderBits.h"
+#include "ruvia/http/detail/HttpHeaderSectionSize.h"
+#include "ruvia/http/detail/HttpResponseKnownHeaders.h"
 #include "ruvia/http/detail/parser/HttpParserSyntax.h"
 #include "ruvia/http/HttpHeader.h"
 
+#include <algorithm>
+#include <exception>
 #include <span>
-#include <cstdint>
 #include <string_view>
 #include <variant>
 
@@ -18,12 +22,9 @@ namespace ruvia::detail {
     if (name.empty()) {
         return false;
     }
-    for (const char ch : name) {
-        if (!isHttpTokenChar(static_cast<unsigned char>(ch))) {
-            return false;
-        }
-    }
-    return true;
+    return std::ranges::all_of(name, [](char ch) noexcept {
+        return isHttpTokenChar(static_cast<unsigned char>(ch));
+    });
 }
 
 // A trailer value must be a valid HTTP field value (RFC 9110 §5.5): field-vchar
@@ -33,18 +34,27 @@ namespace ruvia::detail {
 // field-value. Enforce the shared field-value rule so this matches the request
 // trailer path and every other header-value check (isHttpFieldValueChar).
 [[nodiscard]] inline bool isValidResponseTrailerValue(std::string_view value) noexcept {
-    for (const char ch : value) {
-        if (!isHttpFieldValueChar(static_cast<unsigned char>(ch))) {
-            return false;
-        }
-    }
-    return true;
+    return std::ranges::all_of(value, [](char ch) noexcept {
+        return isHttpFieldValueChar(static_cast<unsigned char>(ch));
+    });
 }
 
 // Fields that must never appear in a trailer section because they govern message
 // framing, routing, authentication, response controls, or content format
 // (RFC 9110 §6.5.1, RFC 9113 §8.1).
 [[nodiscard]] inline bool isForbiddenResponseTrailerName(std::string_view name) noexcept {
+    // The response header classifier is the authoritative set of standardized
+    // fields Ruvia manages. RFC 9110 explicitly permits only ETag (section
+    // 8.8.3) and Accept-Ranges (section 14.3) from that set in trailers; every
+    // other known field lacks trailer permission or controls framing,
+    // representation handling, caching, routing, cookies, methods, or CORS.
+    if (const auto known = classifyResponseHeaderName(name);
+        known != 0 &&
+        known != kResponseHeaderEtag &&
+        known != kResponseHeaderAcceptRanges) {
+        return true;
+    }
+
     switch (classifyRequestHeader(name)) {
         case RequestHeaderKind::kHost:
         case RequestHeaderKind::kContentLength:
@@ -102,12 +112,31 @@ namespace ruvia::detail {
             return httpAsciiEqualsIgnoreCase(name, "Max-Forwards");
         case 13:
             return httpAsciiEqualsIgnoreCase(name, "Cache-Control") ||
-                httpAsciiEqualsIgnoreCase(name, "Accept-Ranges") ||
                 httpAsciiEqualsIgnoreCase(name, "Content-Range");
+        case 15:
+            return httpAsciiEqualsIgnoreCase(name, "X-Frame-Options") ||
+                httpAsciiEqualsIgnoreCase(name, "Referrer-Policy") ||
+                httpAsciiEqualsIgnoreCase(name, "Clear-Site-Data");
+        case 16:
+            return httpAsciiEqualsIgnoreCase(name, "X-XSS-Protection") ||
+                httpAsciiEqualsIgnoreCase(name, "WWW-Authenticate") ||
+                httpAsciiEqualsIgnoreCase(name, "Proxy-Connection");
         case 18:
-            return httpAsciiEqualsIgnoreCase(name, "Proxy-Authenticate");
+            return httpAsciiEqualsIgnoreCase(name, "Proxy-Authenticate") ||
+                httpAsciiEqualsIgnoreCase(name, "Permissions-Policy");
         case 19:
-            return httpAsciiEqualsIgnoreCase(name, "Proxy-Authorization");
+            return httpAsciiEqualsIgnoreCase(name, "Proxy-Authorization") ||
+                httpAsciiEqualsIgnoreCase(name, "Content-Disposition");
+        case 22:
+            return httpAsciiEqualsIgnoreCase(name, "X-Content-Type-Options");
+        case 23:
+            return httpAsciiEqualsIgnoreCase(name, "Content-Security-Policy");
+        case 25:
+            return httpAsciiEqualsIgnoreCase(name, "Strict-Transport-Security");
+        case 35:
+            return httpAsciiEqualsIgnoreCase(
+                name,
+                "Content-Security-Policy-Report-Only");
         default:
             return false;
     }
@@ -122,11 +151,20 @@ namespace ruvia::detail {
         isValidResponseTrailerValue(value);
 }
 
-enum class HttpResponseTrailerSectionError : std::uint8_t {
-    kInvalidField
-};
-
 class HttpResponseTrailerSectionResult;
+class HttpResponseTrailerSectionFailure;
+
+class HttpResponseTrailerSectionError final : public std::exception {
+public:
+    [[nodiscard]] const char* what() const noexcept override {
+        return "invalid HTTP response trailer section";
+    }
+
+private:
+    friend class HttpResponseTrailerSectionFailure;
+
+    HttpResponseTrailerSectionError() noexcept = default;
+};
 
 // Borrowed proof that the complete terminal section passed the shared response-
 // trailer rules. Protocol encoders accept this value instead of revalidating raw
@@ -155,8 +193,8 @@ private:
 
 class HttpResponseTrailerSectionFailure final {
 public:
-    [[nodiscard]] HttpResponseTrailerSectionError error() const noexcept {
-        return error_;
+    [[nodiscard]] HttpResponseTrailerSectionError exception() const noexcept {
+        return HttpResponseTrailerSectionError();
     }
 
 private:
@@ -164,23 +202,22 @@ private:
     friend HttpResponseTrailerSectionResult httpResponseTrailerSection(
         std::span<const HttpHeaderView>) noexcept;
 
-    explicit HttpResponseTrailerSectionFailure(
-        HttpResponseTrailerSectionError error) noexcept
-        : error_(error) {}
-
-    HttpResponseTrailerSectionError error_;
+    HttpResponseTrailerSectionFailure() noexcept = default;
 };
 
 class HttpResponseTrailerSectionResult final {
 public:
-    [[nodiscard]] const HttpResponseTrailerSection* section() const noexcept {
+    [[nodiscard]] const HttpResponseTrailerSection* section() const & noexcept {
         return std::get_if<HttpResponseTrailerSection>(&value_);
     }
+    [[nodiscard]] const HttpResponseTrailerSection* section() const && = delete;
 
     [[nodiscard]] const HttpResponseTrailerSectionFailure*
-    failure() const noexcept {
+    failure() const & noexcept {
         return std::get_if<HttpResponseTrailerSectionFailure>(&value_);
     }
+    [[nodiscard]] const HttpResponseTrailerSectionFailure*
+    failure() const && = delete;
 
 private:
     friend HttpResponseTrailerSectionResult httpResponseTrailerSection(
@@ -201,11 +238,16 @@ private:
 [[nodiscard]] inline HttpResponseTrailerSectionResult
 httpResponseTrailerSection(
     std::span<const HttpHeaderView> trailers) noexcept {
+    if (trailers.size() > kMaxHttpHeaderFields) {
+        return HttpResponseTrailerSectionResult(
+            HttpResponseTrailerSectionFailure());
+    }
+    HttpHeaderSectionSize sectionSize;
     for (const auto& trailer : trailers) {
-        if (!responseTrailerFieldValid(trailer.name(), trailer.value())) {
+        if (!responseTrailerFieldValid(trailer.name(), trailer.value()) ||
+            !sectionSize.add(trailer.name(), trailer.value())) {
             return HttpResponseTrailerSectionResult(
-                HttpResponseTrailerSectionFailure(
-                    HttpResponseTrailerSectionError::kInvalidField));
+                HttpResponseTrailerSectionFailure());
         }
     }
     return HttpResponseTrailerSectionResult(

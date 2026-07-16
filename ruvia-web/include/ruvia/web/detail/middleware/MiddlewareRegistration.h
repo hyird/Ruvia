@@ -70,6 +70,15 @@ template <typename MiddlewareT>
 }
 
 template <typename MiddlewareT>
+[[nodiscard]] constexpr bool middlewareUsesRouteRateLimit() noexcept {
+    if constexpr (requires { MiddlewareT::ruviaUsesRouteRateLimit; }) {
+        return MiddlewareT::ruviaUsesRouteRateLimit;
+    } else {
+        return false;
+    }
+}
+
+template <typename MiddlewareT>
 [[nodiscard]] ControllerMiddlewareDescriptor makeMiddlewareDescriptor() {
     static_assert(
         std::is_base_of_v<Middleware<MiddlewareT>, MiddlewareT>,
@@ -81,7 +90,8 @@ template <typename MiddlewareT>
         &invokeMiddleware<MiddlewareT>,
         &createMiddleware<MiddlewareT>,
         &destroyMiddleware<MiddlewareT>,
-        middlewareValidatedModelTypeKey<MiddlewareT>());
+        middlewareValidatedModelTypeKey<MiddlewareT>(),
+        middlewareUsesRouteRateLimit<MiddlewareT>());
 }
 
 }  // namespace ruvia::detail

@@ -26,10 +26,10 @@ struct Http1InterimResponsePrepareResultAccess final {
 
     [[nodiscard]] static constexpr Http1InterimResponsePrepareResult prepared(
         std::string_view head,
-        bool requiresFinalConnectionClose) noexcept {
+        Http1InterimConnectionDisposition connectionDisposition) noexcept {
         return Http1InterimResponsePrepareResult(
             PreparedHttp1InterimResponse(
-                head, requiresFinalConnectionClose));
+                head, connectionDisposition));
     }
 };
 
@@ -85,7 +85,11 @@ struct Http1InterimHeaderFacts final {
         if (detail::httpAsciiEqualsIgnoreCase(name, "Connection")) {
             if (facts.connectionOptions.parseField(
                     header.value(),
-                    detail::HttpFieldListRole::kSender) !=
+                    detail::HttpFieldListRole::kSender,
+                    [](std::string_view option) noexcept {
+                        return !detail::httpConnectionOptionConflictsWithManagedField(
+                            option);
+                    }) !=
                 detail::HttpFieldListParseStatus::kOk) {
                 error = Http1InterimResponsePrepareError::kInvalidConnection;
                 return false;
@@ -127,12 +131,6 @@ void appendView(char*& cursor, std::string_view value) noexcept {
         std::memcpy(cursor, value.data(), value.size());
         cursor += value.size();
     }
-}
-
-void appendStatusCode(char*& cursor, std::uint16_t statusCode) noexcept {
-    *cursor++ = static_cast<char>('0' + statusCode / 100);
-    *cursor++ = static_cast<char>('0' + (statusCode / 10) % 10);
-    *cursor++ = static_cast<char>('0' + statusCode % 10);
 }
 
 }  // namespace
@@ -182,9 +180,11 @@ Http1InterimResponsePrepareResult Http1InterimResponseWriter::prepare(
     }
 
     const auto reasonPhrase = httpReasonPhrase(response.status());
+    const auto statusToken = detail::httpStatusCodeToken(response.status());
     Http1InterimHeaderFacts facts;
     facts.wireBytes =
-        kHttp11StatusPrefix.size() + 3 + 1 + reasonPhrase.size() + kCrlf.size();
+        kHttp11StatusPrefix.size() + statusToken.size() + 1 +
+        reasonPhrase.size() + kCrlf.size();
     Http1InterimResponsePrepareError error =
         Http1InterimResponsePrepareError::kInvalidHeader;
     if (!analyzeHttp1Fields(response, facts, error)) {
@@ -201,7 +201,7 @@ Http1InterimResponsePrepareResult Http1InterimResponseWriter::prepare(
 
     char* cursor = headBuffer.data();
     appendView(cursor, kHttp11StatusPrefix);
-    appendStatusCode(cursor, response.status());
+    appendView(cursor, detail::httpStatusCodeTokenView(statusToken));
     *cursor++ = ' ';
     appendView(cursor, reasonPhrase);
     appendView(cursor, kCrlf);
@@ -215,7 +215,9 @@ Http1InterimResponsePrepareResult Http1InterimResponseWriter::prepare(
 
     return detail::Http1InterimResponsePrepareResultAccess::prepared(
         std::string_view(headBuffer.data(), facts.wireBytes),
-        facts.connectionOptions.close());
+        facts.connectionOptions.close()
+            ? Http1InterimConnectionDisposition::kCloseAfterInterimResponse
+            : Http1InterimConnectionDisposition::kUnchanged);
 }
 
 }  // namespace ruvia

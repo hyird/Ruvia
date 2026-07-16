@@ -15,8 +15,4 @@ using DbPoolRef = std::variant<
     MariaDbPool*,
     PostgreSqlPool*>;
 
-[[nodiscard]] inline bool dbPoolRefEmpty(const DbPoolRef& pool) noexcept {
-    return std::holds_alternative<std::monostate>(pool);
-}
-
 }  // namespace ruvia::detail

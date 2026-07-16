@@ -14,7 +14,7 @@ using HttpNativePathView = std::basic_string_view<HttpNativePathChar>;
 [[nodiscard]] inline HttpNativePathView httpNativePathView(
     const std::filesystem::path& path) noexcept {
     const auto& native = path.native();
-    return HttpNativePathView(native.data(), native.size());
+    return HttpNativePathView(native);
 }
 
 inline void assignHttpNativePath(HttpNativePathString& output, const std::filesystem::path& path) {

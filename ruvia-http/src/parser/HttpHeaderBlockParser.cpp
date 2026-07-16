@@ -1,5 +1,7 @@
 #include "ruvia/http/detail/parser/HttpHeaderBlockParser.h"
 
+#include "ruvia/http/detail/HttpCorsFields.h"
+#include "ruvia/http/detail/HttpContentCoding.h"
 #include "ruvia/http/detail/parser/HttpRequestTarget.h"
 
 #include <algorithm>
@@ -87,6 +89,8 @@ std::optional<HttpParseError> parseHttpHeaderBlock(
         return HttpParseError::kInvalidRequestLine;
     }
     block.version = makeSlice(versionStart, cursor - versionStart);
+    const bool ignoreUpgrade =
+        buffer.substr(versionStart, cursor - versionStart) == "HTTP/1.0";
     cursor += 2;
 
     while (cursor < headersEnd) {
@@ -162,7 +166,12 @@ std::optional<HttpParseError> parseHttpHeaderBlock(
                 break;
             }
             case RequestHeaderKind::kUpgrade:
-                if (block.upgradeProtocols.parseField(
+                // RFC 9110 section 7.8 requires a server to ignore Upgrade in
+                // an HTTP/1.0 request. The bytes still have to be a valid
+                // generic field value, but Upgrade-specific grammar must not
+                // turn an otherwise valid HTTP/1.0 request into a 400.
+                if (!ignoreUpgrade &&
+                    block.upgradeProtocols.parseField(
                         value,
                         HttpFieldListRole::kRecipient,
                         [](const HttpUpgradeProtocol&) noexcept {
@@ -172,19 +181,60 @@ std::optional<HttpParseError> parseHttpHeaderBlock(
                 }
                 break;
             case RequestHeaderKind::kAcceptEncoding:
-                httpUpdateResponseCodingQualities(
-                    value, block.gzipEncoding, block.brotliEncoding, block.zstdEncoding);
+                block.responseCodingQualities.update(value);
                 break;
             case RequestHeaderKind::kAccessControlRequestMethod:
+                if (!isValidHttpCorsRequestMethod(value)) {
+                    return HttpParseError::kInvalidHeader;
+                }
+                if (const auto bit = singletonRequestHeaderBit(kind);
+                    (block.seenHeaderBits & bit) != 0) {
+                    return HttpParseError::kInvalidHeader;
+                } else {
+                    block.seenHeaderBits |= bit;
+                }
+                break;
+            case RequestHeaderKind::kOrigin:
+                if (!isValidHttpOriginFieldValue(value)) {
+                    return HttpParseError::kInvalidHeader;
+                }
+                if (const auto bit = singletonRequestHeaderBit(kind);
+                    (block.seenHeaderBits & bit) != 0) {
+                    return HttpParseError::kInvalidHeader;
+                } else {
+                    block.seenHeaderBits |= bit;
+                }
+                break;
+            case RequestHeaderKind::kContentType: {
+                // Content-Type is a typed field, not an arbitrary singleton.
+                // Validate its media-type grammar at the protocol boundary so
+                // recipients and both request writers accept the same values.
+                if (!isValidHttpContentTypeFieldValue(value)) {
+                    return HttpParseError::kInvalidHeader;
+                }
+                const auto bit = singletonRequestHeaderBit(kind);
+                if ((block.seenHeaderBits & bit) != 0) {
+                    return HttpParseError::kInvalidHeader;
+                }
+                block.seenHeaderBits |= bit;
+                break;
+            }
+            case RequestHeaderKind::kContentEncoding:
+                if (!isValidHttpContentEncodingFieldValue(
+                        value, HttpFieldListRole::kRecipient)) {
+                    return HttpParseError::kInvalidHeader;
+                }
+                break;
             case RequestHeaderKind::kAuthorization:
-            case RequestHeaderKind::kContentType:
             case RequestHeaderKind::kIfMatch:
             case RequestHeaderKind::kIfModifiedSince:
             case RequestHeaderKind::kIfNoneMatch:
             case RequestHeaderKind::kIfRange:
             case RequestHeaderKind::kIfUnmodifiedSince:
-            case RequestHeaderKind::kOrigin:
             case RequestHeaderKind::kRange:
+            case RequestHeaderKind::kSecWebSocketKey:
+            case RequestHeaderKind::kSecWebSocketVersion:
+            case RequestHeaderKind::kUserAgent:
                 if (const auto bit = singletonRequestHeaderBit(kind); bit != 0) {
                     if ((block.seenHeaderBits & bit) != 0) {
                         return HttpParseError::kInvalidHeader;
@@ -194,13 +244,13 @@ std::optional<HttpParseError> parseHttpHeaderBlock(
                 break;
             case RequestHeaderKind::kOther:
             case RequestHeaderKind::kAccept:
-            case RequestHeaderKind::kAccessControlRequestHeaders:
-            case RequestHeaderKind::kContentEncoding:
             case RequestHeaderKind::kCookie:
-            case RequestHeaderKind::kSecWebSocketKey:
             case RequestHeaderKind::kSecWebSocketProtocol:
-            case RequestHeaderKind::kSecWebSocketVersion:
-            case RequestHeaderKind::kUserAgent:
+                break;
+            case RequestHeaderKind::kAccessControlRequestHeaders:
+                if (!isValidHttpCorsRequestHeaderNames(value)) {
+                    return HttpParseError::kInvalidHeader;
+                }
                 break;
         }
 

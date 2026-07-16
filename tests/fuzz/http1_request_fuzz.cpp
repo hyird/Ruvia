@@ -13,7 +13,6 @@ extern "C" int LLVMFuzzerTestOneInput(const std::uint8_t* data, std::size_t size
 
     // Exercise every active-alternative accessor. These calls must remain safe for
     // arbitrary bytes, including embedded NULs and incomplete message boundaries.
-    (void)result.kind();
     (void)result.needMore();
     (void)result.parsed();
     (void)result.failure();

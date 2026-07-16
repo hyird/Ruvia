@@ -3,10 +3,19 @@
 #include "ruvia/core/detail/TaskPromise.h"
 
 #include <coroutine>
+#include <exception>
 #include <utility>
 
 namespace ruvia {
 
+class TaskScope;
+
+// Task is a structured, lazy coroutine owner. A cold Task may be discarded and
+// a completed Task may be destroyed, but a started Task must run to completion.
+// Cancellation is cooperative: request it through the owning operation/scope
+// and then await or join the Task. Destroying a suspended frame would invalidate
+// every external await registration that borrows it, so that contract violation
+// terminates instead of manufacturing use-after-free cancellation semantics.
 template <typename T = void>
 class [[nodiscard]] Task {
 public:
@@ -20,15 +29,7 @@ public:
     Task& operator=(const Task&) = delete;
 
     Task(Task&& other) noexcept : handle_(std::exchange(other.handle_, {})) {}
-
-    Task& operator=(Task&& other) noexcept {
-        if (this == &other) {
-            return *this;
-        }
-        reset();
-        handle_ = std::exchange(other.handle_, {});
-        return *this;
-    }
+    Task& operator=(Task&&) = delete;
 
     ~Task() {
         reset();
@@ -48,19 +49,24 @@ private:
     friend class detail::TaskCompletionState;
     template <typename U, typename CompletionToken>
     friend auto detail::asyncStartTask(Task<U>&&, CompletionToken&&);
+    friend class TaskScope;
 
     explicit Task(handle_type handle) noexcept : handle_(handle) {}
 
     void start() noexcept {
         if (handle_ != nullptr) {
+            handle_.promise().markStarted();
             handle_.resume();
         }
     }
 
     void reset() noexcept {
         if (handle_ != nullptr) {
-            handle_.destroy();
-            handle_ = nullptr;
+            auto handle = std::exchange(handle_, {});
+            if (!handle.done() && handle.promise().started()) {
+                std::terminate();
+            }
+            handle.destroy();
         }
     }
 
@@ -80,15 +86,7 @@ public:
     Task& operator=(const Task&) = delete;
 
     Task(Task&& other) noexcept : handle_(std::exchange(other.handle_, {})) {}
-
-    Task& operator=(Task&& other) noexcept {
-        if (this == &other) {
-            return *this;
-        }
-        reset();
-        handle_ = std::exchange(other.handle_, {});
-        return *this;
-    }
+    Task& operator=(Task&&) = delete;
 
     ~Task() {
         reset();
@@ -108,19 +106,24 @@ private:
     friend class detail::TaskCompletionState;
     template <typename U, typename CompletionToken>
     friend auto detail::asyncStartTask(Task<U>&&, CompletionToken&&);
+    friend class TaskScope;
 
     explicit Task(handle_type handle) noexcept : handle_(handle) {}
 
     void start() noexcept {
         if (handle_ != nullptr) {
+            handle_.promise().markStarted();
             handle_.resume();
         }
     }
 
     void reset() noexcept {
         if (handle_ != nullptr) {
-            handle_.destroy();
-            handle_ = nullptr;
+            auto handle = std::exchange(handle_, {});
+            if (!handle.done() && handle.promise().started()) {
+                std::terminate();
+            }
+            handle.destroy();
         }
     }
 

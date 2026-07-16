@@ -2,6 +2,7 @@
 
 #include "ruvia/http/Http1RequestParser.h"
 
+#include "ruvia/http/detail/HttpRequestContentSemantics.h"
 #include "ruvia/http/detail/HttpRequestInternal.h"
 #include "ruvia/http/detail/parser/HttpChunkParser.h"
 #include "ruvia/http/detail/parser/HttpHeaderBlockParser.h"
@@ -11,9 +12,9 @@
 namespace ruvia::detail {
 namespace {
 
-using ruvia::detail::authorityMatchesHost;
 using ruvia::detail::findHttpHeaderEnd;
 using ruvia::detail::HttpRequestAccess;
+using ruvia::detail::HttpRequestTargetForm;
 using ruvia::detail::parseHttpHeaderBlock;
 using ruvia::detail::parseRequestTarget;
 using ruvia::detail::ParsedRequestHeaderBlock;
@@ -69,7 +70,7 @@ void Http1ServerRequestParser::parseRequestHead(
     HttpRequestAccess::setTarget(state.request, target);
 
     if (version.size() != 8 ||
-        version.substr(0, 5) != "HTTP/" ||
+        !version.starts_with("HTTP/") ||
         version[5] < '0' ||
         version[5] > '9' ||
         version[6] != '.') {
@@ -98,17 +99,25 @@ void Http1ServerRequestParser::parseRequestHead(
         return fail(HttpParseError::kMissingHost);
     }
     const auto hostHeaderIndex = block.hostHeaderIndex;
-    if (!targetView.authority.empty() && hostHeaderIndex >= 0) {
-        const auto hostHeaderValue = block.headers[static_cast<std::size_t>(hostHeaderIndex)].value.bind(buffer);
-        if (!authorityMatchesHost(targetView.authority, hostHeaderValue, targetView.defaultPort)) {
-            return fail(HttpParseError::kInvalidHost);
-        }
-    }
 
     const auto contentLength = block.contentLength.value();
     const auto transferEncoding = block.transferEncoding.value();
     if (transferEncoding.has_value() && contentLength.has_value()) {
         return fail(HttpParseError::kInvalidTransferEncoding);
+    }
+
+    if (httpRequestContentSemantics(method) ==
+        HttpRequestContentSemantics::kForbidden) {
+        // CONNECT has no request content, and TRACE explicitly forbids it
+        // (RFC 9110 sections 9.3.6 and 9.3.8). Content-Length is an explicit
+        // content signal even at zero; accepting either framing field would
+        // give the runtime a body contract that the method does not have.
+        if (transferEncoding.has_value()) {
+            return fail(HttpParseError::kInvalidTransferEncoding);
+        }
+        if (contentLength.has_value()) {
+            return fail(HttpParseError::kInvalidContentLength);
+        }
     }
 
     const auto* finalChunked = transferEncoding.has_value()
@@ -125,19 +134,41 @@ void Http1ServerRequestParser::parseRequestHead(
         return fail(HttpParseError::kInvalidTransferEncoding);
     }
 
+    if (httpRequestContentSemantics(method) ==
+            HttpRequestContentSemantics::kContentTypeRequired &&
+        (contentLength.has_value() || transferEncoding.has_value()) &&
+        (block.seenHeaderBits & singletonRequestHeaderBit(
+             RequestHeaderKind::kContentType)) == 0) {
+        // RFC 9110 section 9.3.7 requires a valid Content-Type when OPTIONS
+        // explicitly carries content. A zero Content-Length still declares an
+        // empty representation and therefore retains this metadata contract.
+        return fail(HttpParseError::kInvalidHeader);
+    }
+
     for (std::size_t i = 0; i < block.headerCount; ++i) {
         const auto& header = block.headers[i];
+        auto value = header.value.bind(buffer);
+        // RFC 9112 sections 3.2.2 and 3.3 make the request-target authoritative
+        // for absolute-form and authority-form. Rebind both headers() and the
+        // known-header cache so application code cannot observe a conflicting
+        // Host value as a second routing truth.
+        if ((targetView.form == HttpRequestTargetForm::kAbsolute ||
+             targetView.form == HttpRequestTargetForm::kAuthority) &&
+            hostHeaderIndex >= 0 &&
+            i == static_cast<std::size_t>(hostHeaderIndex)) {
+            value = targetView.authority;
+        }
         (void)HttpRequestAccess::addHeader(
             state.request,
-            HttpHeaderView{header.name.bind(buffer), header.value.bind(buffer)},
+            HttpHeaderView{header.name.bind(buffer), value},
             requestHeaderKindKnownSlot(header.kind));
     }
 
-    state.responseCoding = httpSelectResponseCodingFromQualities(
-        block.gzipEncoding, block.brotliEncoding, block.zstdEncoding);
+    state.responseCoding =
+        httpSelectResponseCodingFromQualities(block.responseCodingQualities);
     auto expectations = block.expectations;
     if (protocolVersion == HttpProtocolVersion::kHttp10) {
-        expectations.ignore100Continue();
+        expectations.ignoreContinue();
     }
     if (finalChunked != nullptr) {
         state.bodyPlan = Http1RequestBodyPlan(
@@ -265,8 +296,7 @@ Http1RequestParseResult Http1RequestParser::parse(std::string_view buffer) const
             needBody->requiredTotalBytes());
     }
     if (const auto* failure = parsed.failure()) {
-        return detail::Http1RequestParseResultAccess::failure(
-            failure->error());
+        return detail::Http1RequestParseResultAccess::failure(*failure);
     }
     const auto* message = parsed.messageReady();
     if (message == nullptr) {

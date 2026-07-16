@@ -31,11 +31,17 @@ public:
     }
 
     [[nodiscard]] constexpr bool required() const noexcept {
-        return requiredImpl(std::index_sequence_for<RuleTs...>{});
+        return (isRequiredRule<RuleTs>() || ... || false);
     }
 
     [[nodiscard]] constexpr std::string_view requiredMessage() const noexcept {
-        return requiredMessageImpl(std::index_sequence_for<RuleTs...>{});
+        std::string_view result{"is required"};
+        std::apply(
+            [&result](const auto&... rules) {
+                (setRequiredMessage(result, rules), ...);
+            },
+            rules_);
+        return result;
     }
 
     template <typename OptionalT, typename ValidatorT>
@@ -63,18 +69,6 @@ public:
     }
 
 private:
-    template <std::size_t... Indexes>
-    [[nodiscard]] constexpr bool requiredImpl(std::index_sequence<Indexes...>) const noexcept {
-        return ((isRequiredRule<decltype(std::get<Indexes>(rules_))>()) || ... || false);
-    }
-
-    template <std::size_t... Indexes>
-    [[nodiscard]] constexpr std::string_view requiredMessageImpl(std::index_sequence<Indexes...>) const noexcept {
-        std::string_view result{"is required"};
-        (setRequiredMessage(result, std::get<Indexes>(rules_)), ...);
-        return result;
-    }
-
     template <typename RuleT>
     static constexpr void setRequiredMessage(std::string_view& result, const RuleT& rule) noexcept {
         if constexpr (isRequiredRule<RuleT>()) {

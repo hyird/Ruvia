@@ -38,19 +38,20 @@ inline void appendDbNumber(std::pmr::string& output, double value) {
 [[nodiscard]] inline DbValue cloneDbValueForResource(
     const DbValue& value,
     std::pmr::memory_resource* resolvedResource) {
-    switch (value.type()) {
+    switch (DbValueAccess::type(value)) {
         case DbValueType::kNull:
             return DbValue(nullptr);
         case DbValueType::kString:
-            return DbValueAccess::ownedString(std::pmr::string(value.text(), resolvedResource));
+            return DbValueAccess::ownedString(std::pmr::string(
+                DbValueAccess::text(value), resolvedResource));
         case DbValueType::kSigned:
-            return DbValue(value.signedValue());
+            return DbValue(DbValueAccess::signedValue(value));
         case DbValueType::kUnsigned:
-            return DbValue(value.unsignedValue());
+            return DbValue(DbValueAccess::unsignedValue(value));
         case DbValueType::kDouble:
-            return DbValue(value.doubleValue());
+            return DbValue(DbValueAccess::doubleValue(value));
         case DbValueType::kBool:
-            return DbValue(value.boolValue());
+            return DbValue(DbValueAccess::boolValue(value));
     }
     return DbValue(nullptr);
 }

@@ -25,21 +25,27 @@ public:
         return stream_.get_executor();
     }
 
-    [[nodiscard]] Task<bool> readMore(std::pmr::string& buffer) {
+    [[nodiscard]] Task<WsTransportReadResult> readMore(std::pmr::string& buffer) {
         const auto oldSize = buffer.size();
         resizePmrStringForOverwrite(buffer, oldSize + 4096);
-        const auto [ec, bytesRead] = co_await asyncResult<std::size_t>(
+        auto readCompletion = co_await asyncAsio<std::size_t>(
             [this, oldSize, &buffer](auto handler) mutable {
                 stream_.async_read_some(
                     asio::buffer(buffer.data() + oldSize, buffer.size() - oldSize),
                     std::move(handler));
             });
-        if (ec || bytesRead == 0) {
+        const auto ec = readCompletion.errorCode();
+        const auto bytesRead = readCompletion.result();
+        if (ec) {
             buffer.resize(oldSize);
-            co_return false;
+            co_return WsTransportReadResult::makeFailure(ec);
+        }
+        if (bytesRead == 0) {
+            buffer.resize(oldSize);
+            co_return WsTransportReadResult::makeEnd();
         }
         buffer.resize(oldSize + bytesRead);
-        co_return true;
+        co_return WsTransportReadResult::makeData();
     }
 
     [[nodiscard]] Task<std::error_code> writeBytes(
@@ -49,9 +55,11 @@ public:
             co_return std::error_code{};
         }
         const auto buffer = asio::buffer(bytes.data(), bytes.size());
-        co_return co_await asyncError([this, buffer](auto handler) mutable {
-            asio::async_write(stream_, buffer, std::move(handler));
-        });
+        const auto writeCompletion = co_await asyncAsio(
+            [this, buffer](auto handler) mutable {
+                asio::async_write(stream_, buffer, std::move(handler));
+            });
+        co_return writeCompletion.errorCode();
     }
 
     void abort() noexcept {

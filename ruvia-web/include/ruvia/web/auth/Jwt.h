@@ -9,6 +9,7 @@
 #include <vector>
 
 #include "ruvia/core/memory/PmrResource.h"
+#include "ruvia/web/detail/BorrowedView.h"
 
 namespace ruvia {
 
@@ -30,13 +31,15 @@ public:
         : name_(name, detail::pmrResourceOrDefault(nullptr)),
           value_(value, name_.get_allocator().resource()) {}
 
-    [[nodiscard]] std::string_view name() const noexcept {
+    [[nodiscard]] std::string_view name() const & noexcept {
         return name_;
     }
+    [[nodiscard]] std::string_view name() const && = delete;
 
-    [[nodiscard]] std::string_view value() const noexcept {
+    [[nodiscard]] std::string_view value() const & noexcept {
         return value_;
     }
+    [[nodiscard]] std::string_view value() const && = delete;
 
 private:
     friend struct detail::JwtPayloadAccess;
@@ -78,18 +81,26 @@ struct JwtVerifyOptions final {
 
 class JwtPayload final {
 public:
-    [[nodiscard]] std::string_view issuer() const noexcept;
-    [[nodiscard]] std::string_view subject() const noexcept;
+    [[nodiscard]] std::string_view issuer() const & noexcept;
+    [[nodiscard]] std::string_view issuer() const && = delete;
+    [[nodiscard]] std::string_view subject() const & noexcept;
+    [[nodiscard]] std::string_view subject() const && = delete;
     // The first "aud" value, or empty if none. A JWT may carry multiple audiences
     // (RFC 7519 §4.1.3); use hasAudience to test membership across all of them.
-    [[nodiscard]] std::string_view audience() const noexcept;
+    [[nodiscard]] std::string_view audience() const & noexcept;
+    [[nodiscard]] std::string_view audience() const && = delete;
     [[nodiscard]] bool hasAudience(std::string_view audience) const noexcept;
-    [[nodiscard]] std::string_view id() const noexcept;
+    [[nodiscard]] std::string_view id() const & noexcept;
+    [[nodiscard]] std::string_view id() const && = delete;
     [[nodiscard]] std::optional<std::chrono::system_clock::time_point> expiresAt() const noexcept;
     [[nodiscard]] std::optional<std::chrono::system_clock::time_point> notBefore() const noexcept;
     [[nodiscard]] std::optional<std::chrono::system_clock::time_point> issuedAt() const noexcept;
-    [[nodiscard]] std::span<const JwtClaim> claims() const noexcept;
-    [[nodiscard]] std::optional<std::string_view> claim(std::string_view name) const noexcept;
+    [[nodiscard]] std::span<const JwtClaim> claims() const & noexcept;
+    [[nodiscard]] std::span<const JwtClaim> claims() const && = delete;
+    [[nodiscard]] std::optional<std::string_view> claim(
+        std::string_view name) const & noexcept;
+    [[nodiscard]] std::optional<std::string_view> claim(
+        std::string_view name) const && = delete;
 
 private:
     friend struct detail::JwtPayloadAccess;
@@ -119,5 +130,8 @@ private:
     std::string_view token,
     std::pmr::memory_resource* resource = nullptr);
 [[nodiscard]] std::optional<std::string_view> jwtBearerToken(std::string_view authorization) noexcept;
+
+template <detail::RvalueCharBasicString Authorization>
+std::optional<std::string_view> jwtBearerToken(Authorization&&) = delete;
 
 }  // namespace ruvia
