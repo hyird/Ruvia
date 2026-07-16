@@ -106,7 +106,7 @@ bool http2OnDecodedResponseHeader(void* target, std::string_view name, std::stri
         context->status = static_cast<std::uint16_t>(parsedStatus);
         return true;
     }
-    if (!context->status || !http2IsValidRegularHeader(name, value)) {
+    if (!context->status || !http2IsValidDecodedResponseHeader(name, value)) {
         return false;
     }
     context->sawRegular = true;

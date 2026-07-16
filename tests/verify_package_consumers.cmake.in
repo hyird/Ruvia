@@ -3236,13 +3236,13 @@ if(_built_components_csv MATCHES "(^|,)web(,|$)")
        NOT _installed_http1_request_completion MATCHES
            "Http1RequestBufferCompaction" OR
        NOT _installed_http1_request_completion MATCHES
-           "Http1RequestBufferRestored" OR
+           "Http1RequestBufferPipelineRestore" OR
        NOT _installed_http1_request_completion MATCHES
            "makeBufferedClosing" OR
        NOT _installed_http1_request_completion MATCHES
            "makeBufferedUnrestored" OR
        NOT _installed_http1_request_completion MATCHES
-           "makeBufferedRestored" OR
+           "makeBufferedPipelineRestore" OR
        NOT _installed_http1_request_completion MATCHES
            "makeCommittedStream" OR
        NOT _installed_http1_request_completion MATCHES
