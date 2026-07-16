@@ -113,7 +113,6 @@ HttpWebSocketHandshakeValidationResult validateHttp1WebSocketHandshake(
     std::size_t keyCount = 0;
     std::size_t versionCount = 0;
     bool webSocketUpgrade = false;
-    bool hasContentLength = false;
 
     for (const auto& header : request.headers()) {
         if (httpAsciiEqualsIgnoreCase(header.name(), "Connection")) {
@@ -148,9 +147,6 @@ HttpWebSocketHandshakeValidationResult validateHttp1WebSocketHandshake(
                        header.name(), "Sec-WebSocket-Version")) {
             version = header.value();
             ++versionCount;
-        } else if (httpAsciiEqualsIgnoreCase(
-                       header.name(), "Content-Length")) {
-            hasContentLength = true;
         }
     }
 
@@ -159,7 +155,11 @@ HttpWebSocketHandshakeValidationResult validateHttp1WebSocketHandshake(
         !connectionOptions.upgrade() ||
         !upgradeProtocols.hasProtocol() ||
         !webSocketUpgrade ||
-        hasContentLength ||
+        // RFC 6455 does not forbid Content-Length on the HTTP Upgrade request.
+        // The parser-owned framing plan is the authoritative distinction:
+        // Content-Length: 0 carries no content, while a positive length or
+        // chunked coding still has bytes that must be consumed before the
+        // connection can change protocols.
         bodyPlan.requiresConsumption() ||
         !webSocketSubprotocolOffersValid(request) ||
         !webSocketExtensionOffersValid(request) ||

@@ -138,6 +138,18 @@ std::string_view contentLengthZeroHandshake() {
         "\r\n";
 }
 
+std::string_view contentLengthOneHandshake() {
+    return "GET /ws HTTP/1.1\r\n"
+        "Host: example.test\r\n"
+        "Connection: Upgrade\r\n"
+        "Upgrade: websocket\r\n"
+        "Sec-WebSocket-Version: 13\r\n"
+        "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n"
+        "Content-Length: 1\r\n"
+        "\r\n"
+        "x";
+}
+
 }  // namespace
 
 RUVIA_TEST(ws_subprotocol_negotiation_prefers_server_order) {
@@ -249,7 +261,13 @@ RUVIA_TEST(ws_valid_request_requires_all_conditions) {
     // Every individual requirement is necessary.
     RUVIA_CHECK(rejectsRequest(postHandshake()));
     RUVIA_CHECK(rejectsRequest(http10Handshake()));
-    RUVIA_CHECK(rejectsRequest(contentLengthZeroHandshake()));
+    // RFC 6455 permits additional HTTP fields, and RFC 9112 framing makes a
+    // zero Content-Length an empty request. Its mere presence must not block
+    // an otherwise valid protocol switch.
+    RUVIA_CHECK(acceptsRequest(contentLengthZeroHandshake()));
+    // Actual request content still prevents switching protocols because those
+    // octets belong to the HTTP message rather than to the WebSocket stream.
+    RUVIA_CHECK(rejectsRequest(contentLengthOneHandshake()));
 
     constexpr std::string_view noConnectionUpgrade =
         "GET /ws HTTP/1.1\r\nHost: x\r\nUpgrade: websocket\r\n"
