@@ -23,7 +23,31 @@ concept ExposesRvalueHttpErrorInfo = requires {
     std::declval<const T&&>().info();
 };
 
+template <typename String>
+concept AcceptsAnyRvalueHttpErrorInfoText =
+    requires(String&& value) {
+        ruvia::HttpErrorInfo(400, std::forward<String>(value));
+    } ||
+    requires(String&& value) {
+        ruvia::HttpErrorInfo(400, {}, std::forward<String>(value));
+    } ||
+    requires(String&& value) {
+        ruvia::HttpErrorInfo(400, {}, {}, std::forward<String>(value));
+    } ||
+    requires(String&& value) {
+        ruvia::HttpErrorInfo(400, {}, {}, {}, std::forward<String>(value));
+    };
+
+template <typename String>
+concept AcceptsLvalueHttpErrorInfoText = requires(String& value) {
+    ruvia::HttpErrorInfo(400, value, value, value, value);
+};
+
 static_assert(!ExposesRvalueHttpErrorInfo<ruvia::HttpError>);
+static_assert(!AcceptsAnyRvalueHttpErrorInfoText<std::string>);
+static_assert(!AcceptsAnyRvalueHttpErrorInfoText<const std::string>);
+static_assert(!AcceptsAnyRvalueHttpErrorInfoText<std::pmr::string>);
+static_assert(AcceptsLvalueHttpErrorInfoText<std::string>);
 
 RUVIA_TEST(http_reason_phrase_is_conventional_http1_presentation) {
     RUVIA_CHECK_EQ(httpReasonPhrase(200), std::string_view("OK"));

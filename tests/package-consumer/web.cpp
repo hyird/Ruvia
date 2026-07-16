@@ -257,6 +257,26 @@ concept ExposesRvalueHttpErrorInfo = requires {
     std::declval<const T&&>().info();
 };
 
+template <typename String>
+concept AcceptsAnyRvalueHttpErrorInfoText =
+    requires(String&& value) {
+        ruvia::HttpErrorInfo(400, std::forward<String>(value));
+    } ||
+    requires(String&& value) {
+        ruvia::HttpErrorInfo(400, {}, std::forward<String>(value));
+    } ||
+    requires(String&& value) {
+        ruvia::HttpErrorInfo(400, {}, {}, std::forward<String>(value));
+    } ||
+    requires(String&& value) {
+        ruvia::HttpErrorInfo(400, {}, {}, {}, std::forward<String>(value));
+    };
+
+template <typename String>
+concept AcceptsLvalueHttpErrorInfoText = requires(String& value) {
+    ruvia::HttpErrorInfo(400, value, value, value, value);
+};
+
 static_assert(!ExposesAnyRvalueRequestNameValueListBorrow<
     ruvia::RequestNameValueList>);
 static_assert(!ExposesAnyRvalueValidationIssueBorrow<ruvia::ValidationIssue>);
@@ -264,6 +284,10 @@ static_assert(!ExposesAnyRvalueValidationErrorBorrow<ruvia::ValidationError>);
 static_assert(!ExposesRvalueValidatorIssues<ruvia::Validator>);
 static_assert(!AcceptsAnyRvalueValidatorMutation<ruvia::Validator>);
 static_assert(!ExposesRvalueHttpErrorInfo<ruvia::HttpError>);
+static_assert(!AcceptsAnyRvalueHttpErrorInfoText<std::string>);
+static_assert(!AcceptsAnyRvalueHttpErrorInfoText<const std::string>);
+static_assert(!AcceptsAnyRvalueHttpErrorInfoText<std::pmr::string>);
+static_assert(AcceptsLvalueHttpErrorInfoText<std::string>);
 
 #ifdef RUVIA_ENABLE_JWT
 template <typename T>
