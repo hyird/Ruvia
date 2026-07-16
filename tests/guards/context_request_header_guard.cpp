@@ -1,8 +1,12 @@
 #include "ruvia/web/ContextRequest.h"
+#include "ruvia/web/detail/http/RequestFieldsAccess.h"
 
 #include <concepts>
+#include <memory_resource>
+#include <string>
 #include <string_view>
 #include <type_traits>
+#include <utility>
 
 template <typename Request>
 concept HasRawRequestEscape = requires(const Request& request) {
@@ -55,6 +59,18 @@ concept ExposesAnyRvalueRequestNameValueListBorrow =
     requires { std::declval<const List&&>()[std::size_t{}]; } ||
     requires { std::declval<const List&&>().entries(); };
 
+template <typename Input>
+concept AcceptsRequestFieldName = requires(Input&& input) {
+    ruvia::detail::RequestNameValueViewAccess::make(
+        std::forward<Input>(input), std::string_view{});
+};
+
+template <typename Input>
+concept AcceptsRequestFieldValue = requires(Input&& input) {
+    ruvia::detail::RequestNameValueViewAccess::make(
+        std::string_view{}, std::forward<Input>(input));
+};
+
 static_assert(sizeof(ruvia::ContextRequest) == sizeof(void*));
 static_assert(std::same_as<
     decltype(std::declval<const ruvia::ContextRequest&>().method()),
@@ -75,6 +91,18 @@ static_assert(!ExposesRvalueRequestFormObjectGroups<
     ruvia::ContextRequest::RequestFormData::Object>);
 static_assert(!ExposesAnyRvalueRequestNameValueListBorrow<
     ruvia::RequestNameValueList>);
+static_assert(!AcceptsRequestFieldName<std::string>);
+static_assert(!AcceptsRequestFieldName<const std::string>);
+static_assert(!AcceptsRequestFieldName<std::pmr::string>);
+static_assert(AcceptsRequestFieldName<std::string&>);
+static_assert(AcceptsRequestFieldName<std::pmr::string&>);
+static_assert(AcceptsRequestFieldName<std::string_view>);
+static_assert(!AcceptsRequestFieldValue<std::string>);
+static_assert(!AcceptsRequestFieldValue<const std::string>);
+static_assert(!AcceptsRequestFieldValue<std::pmr::string>);
+static_assert(AcceptsRequestFieldValue<std::string&>);
+static_assert(AcceptsRequestFieldValue<std::pmr::string&>);
+static_assert(AcceptsRequestFieldValue<std::string_view>);
 
 int main() {
     using Method = std::string_view (ruvia::ContextRequest::*)() const noexcept;

@@ -44,6 +44,7 @@
 #include <ruvia/web/detail/http/ContextServices.h>
 #include <ruvia/web/detail/http/ContextSessionState.h>
 #include <ruvia/web/detail/http/CsrfInternal.h>
+#include <ruvia/web/detail/http/RequestFieldsAccess.h>
 #include <ruvia/web/detail/http2/Http2SansIoStreamRuntime.h>
 #include <ruvia/web/detail/http2/Http2SansIoSendWindow.h>
 #include <ruvia/web/detail/websocket/WsTransportReadResult.h>
@@ -287,6 +288,18 @@ concept ExposesAnyRvalueRequestNameValueListBorrow =
     requires { std::declval<const T&&>()[std::size_t{}]; } ||
     requires { std::declval<const T&&>().entries(); };
 
+template <typename Input>
+concept AcceptsRequestFieldName = requires(Input&& input) {
+    ruvia::detail::RequestNameValueViewAccess::make(
+        std::forward<Input>(input), std::string_view{});
+};
+
+template <typename Input>
+concept AcceptsRequestFieldValue = requires(Input&& input) {
+    ruvia::detail::RequestNameValueViewAccess::make(
+        std::string_view{}, std::forward<Input>(input));
+};
+
 template <typename T>
 concept ExposesAnyRvalueValidationIssueBorrow =
     requires { std::declval<const T&&>().field(); } ||
@@ -349,6 +362,18 @@ concept AcceptsLvalueHttpErrorInfoText = requires(String& value) {
 
 static_assert(!ExposesAnyRvalueRequestNameValueListBorrow<
     ruvia::RequestNameValueList>);
+static_assert(AcceptsRequestFieldName<std::string&>);
+static_assert(AcceptsRequestFieldName<std::pmr::string&>);
+static_assert(AcceptsRequestFieldName<std::string_view>);
+static_assert(!AcceptsRequestFieldName<std::string>);
+static_assert(!AcceptsRequestFieldName<const std::string>);
+static_assert(!AcceptsRequestFieldName<std::pmr::string>);
+static_assert(AcceptsRequestFieldValue<std::string&>);
+static_assert(AcceptsRequestFieldValue<std::pmr::string&>);
+static_assert(AcceptsRequestFieldValue<std::string_view>);
+static_assert(!AcceptsRequestFieldValue<std::string>);
+static_assert(!AcceptsRequestFieldValue<const std::string>);
+static_assert(!AcceptsRequestFieldValue<std::pmr::string>);
 static_assert(!ExposesAnyRvalueValidationIssueBorrow<ruvia::ValidationIssue>);
 static_assert(!ExposesAnyRvalueValidationErrorBorrow<ruvia::ValidationError>);
 static_assert(!ExposesRvalueValidatorIssues<ruvia::Validator>);

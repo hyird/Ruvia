@@ -3,7 +3,9 @@
 #include <cstddef>
 #include <memory_resource>
 #include <string_view>
+
 #include "ruvia/web/RequestFields.h"
+#include "ruvia/web/detail/BorrowedView.h"
 
 namespace ruvia::detail {
 
@@ -13,6 +15,12 @@ struct RequestNameValueViewAccess final {
         std::string_view value) noexcept {
         return RequestNameValueView(name, value);
     }
+
+    template <RvalueCharBasicString Name>
+    static RequestNameValueView make(Name&&, std::string_view) = delete;
+
+    template <RvalueCharBasicString Value>
+    static RequestNameValueView make(std::string_view, Value&&) = delete;
 };
 
 struct RequestNameValueListAccess final {
