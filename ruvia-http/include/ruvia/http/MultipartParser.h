@@ -25,13 +25,15 @@ struct MultipartStreamPartAccess;
 // content type and body remain borrowed views into the caller-owned request body.
 class MultipartPart final {
 public:
-    [[nodiscard]] std::string_view name() const noexcept {
+    [[nodiscard]] std::string_view name() const & noexcept {
         return std::string_view(name_.data(), name_.size());
     }
+    [[nodiscard]] std::string_view name() const && = delete;
 
-    [[nodiscard]] std::string_view filename() const noexcept {
+    [[nodiscard]] std::string_view filename() const & noexcept {
         return std::string_view(filename_.data(), filename_.size());
     }
+    [[nodiscard]] std::string_view filename() const && = delete;
 
     [[nodiscard]] std::string_view contentType() const noexcept {
         return contentType_;
@@ -72,9 +74,10 @@ public:
         assign(value);
     }
 
-    [[nodiscard]] constexpr std::string_view value() const noexcept {
+    [[nodiscard]] constexpr std::string_view value() const & noexcept {
         return std::string_view(bytes_.data(), size_);
     }
+    [[nodiscard]] std::string_view value() const && = delete;
 
 private:
     static constexpr std::size_t kMaxSize = 70;

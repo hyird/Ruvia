@@ -69,6 +69,12 @@ concept HasAnyRvalueMultipartBoundaryAccessor =
     requires(T&& result) { std::move(result).notApplicable(); } ||
     requires(T&& result) { std::move(result).failure(); };
 
+template <typename T>
+concept ExposesAnyRvalueMultipartOwnedView =
+    requires(T&& value) { std::move(value).value(); } ||
+    requires(T&& value) { std::move(value).name(); } ||
+    requires(T&& value) { std::move(value).filename(); };
+
 static_assert(std::same_as<
     decltype(std::declval<ruvia::MultipartParser&>().poll()),
     ruvia::MultipartPollResult>);
@@ -130,6 +136,8 @@ static_assert(std::same_as<
                  .notApplicable()),
     const ruvia::detail::HttpMultipartBoundaryNotApplicable*>);
 static_assert(!HasMultipartError<ruvia::MultipartBoundary>);
+static_assert(!ExposesAnyRvalueMultipartOwnedView<ruvia::MultipartBoundary>);
+static_assert(!ExposesAnyRvalueMultipartOwnedView<ruvia::MultipartPart>);
 static_assert(!HasMultipartError<
     ruvia::detail::HttpMultipartBoundaryParseFailure>);
 static_assert(HasMultipartProtocolError<
@@ -221,9 +229,11 @@ RUVIA_TEST(multipart_boundary_value_enforces_rfc2046_grammar) {
         }
     };
 
-    RUVIA_CHECK_EQ(ruvia::MultipartBoundary("a b").value(), std::string_view("a b"));
+    const auto spaced = ruvia::MultipartBoundary("a b");
+    RUVIA_CHECK_EQ(spaced.value(), std::string_view("a b"));
+    const auto maximum = ruvia::MultipartBoundary(std::string(70, 'x'));
     RUVIA_CHECK_EQ(
-        ruvia::MultipartBoundary(std::string(70, 'x')).value().size(),
+        maximum.value().size(),
         std::size_t{70});
     RUVIA_CHECK(throwsOn(""));
     RUVIA_CHECK(throwsOn(std::string(71, 'x')));

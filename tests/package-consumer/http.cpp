@@ -957,6 +957,12 @@ concept HasAnyRvalueMultipartBoundaryAccessor =
     requires(T&& result) { std::move(result).failure(); };
 
 template <typename T>
+concept ExposesAnyRvalueMultipartOwnedView =
+    requires(T&& value) { std::move(value).value(); } ||
+    requires(T&& value) { std::move(value).name(); } ||
+    requires(T&& value) { std::move(value).filename(); };
+
+template <typename T>
 concept HasAnyRvalueHttp1ClientRequestPrepareAccessor =
     requires(T&& result) { std::move(result).bufferTooSmall(); } ||
     requires(T&& result) { std::move(result).prepared(); } ||
@@ -2984,6 +2990,8 @@ static_assert(std::same_as<
     decltype(std::declval<const ruvia::detail::HttpMultipartBoundaryParseResult&>()
                  .notApplicable()),
     const ruvia::detail::HttpMultipartBoundaryNotApplicable*>);
+static_assert(!ExposesAnyRvalueMultipartOwnedView<ruvia::MultipartBoundary>);
+static_assert(!ExposesAnyRvalueMultipartOwnedView<ruvia::MultipartPart>);
 static_assert(!HasMultipartParseError<
     ruvia::detail::HttpMultipartBoundaryParseFailure>);
 static_assert(HasMultipartProtocolError<
