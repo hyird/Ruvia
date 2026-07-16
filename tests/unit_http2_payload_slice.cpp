@@ -1,13 +1,41 @@
 #include "test_harness.h"
 
 #include <cstddef>
+#include <memory_resource>
+#include <string>
 #include <string_view>
+#include <utility>
 
 #include "ruvia/http/detail/http2/Http2PayloadSlice.h"
 
 namespace {
 
 using ruvia::detail::http2SliceTwoPartPayload;
+
+template <typename Input>
+concept AcceptsFirstPayloadPart = requires(Input&& input) {
+    http2SliceTwoPartPayload(
+        std::forward<Input>(input), std::string_view{}, 0, 0);
+};
+
+template <typename Input>
+concept AcceptsSecondPayloadPart = requires(Input&& input) {
+    http2SliceTwoPartPayload(
+        std::string_view{}, std::forward<Input>(input), 0, 0);
+};
+
+static_assert(!AcceptsFirstPayloadPart<std::string>);
+static_assert(!AcceptsFirstPayloadPart<const std::string>);
+static_assert(!AcceptsFirstPayloadPart<std::pmr::string>);
+static_assert(AcceptsFirstPayloadPart<std::string&>);
+static_assert(AcceptsFirstPayloadPart<std::pmr::string&>);
+static_assert(AcceptsFirstPayloadPart<std::string_view>);
+static_assert(!AcceptsSecondPayloadPart<std::string>);
+static_assert(!AcceptsSecondPayloadPart<const std::string>);
+static_assert(!AcceptsSecondPayloadPart<std::pmr::string>);
+static_assert(AcceptsSecondPayloadPart<std::string&>);
+static_assert(AcceptsSecondPayloadPart<std::pmr::string&>);
+static_assert(AcceptsSecondPayloadPart<std::string_view>);
 
 // Virtual concatenation "ABCDE" + "12345" == "ABCDE12345".
 constexpr std::string_view kFirst = "ABCDE";

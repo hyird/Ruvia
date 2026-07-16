@@ -63,6 +63,7 @@
 #include <ruvia/http/detail/http2/Http2LocalSendState.h>
 #include <ruvia/http/detail/http2/Http2OutputBuffer.h>
 #include <ruvia/http/detail/http2/Http2PeerSettings.h>
+#include <ruvia/http/detail/http2/Http2PayloadSlice.h>
 #include <ruvia/http/detail/http2/Http2RemoteContentState.h>
 #include <ruvia/http/detail/http2/Http2RemoteReceiveState.h>
 #include <ruvia/http/detail/http2/Http2RequestBuilder.h>
@@ -283,6 +284,18 @@ concept AcceptsRequestTargetBorrowedInput = requires(
 };
 
 template <typename Input>
+concept AcceptsFirstHttp2PayloadPart = requires(Input&& input) {
+    ruvia::detail::http2SliceTwoPartPayload(
+        std::forward<Input>(input), std::string_view{}, 0, 0);
+};
+
+template <typename Input>
+concept AcceptsSecondHttp2PayloadPart = requires(Input&& input) {
+    ruvia::detail::http2SliceTwoPartPayload(
+        std::string_view{}, std::forward<Input>(input), 0, 0);
+};
+
+template <typename Input>
 concept AcceptsUrlValueBorrowedInput = requires(Input&& input) {
     ruvia::detail::findUrlEncodedValue(
         std::forward<Input>(input), "name", ruvia::detail::UrlDecodeMode::kForm);
@@ -344,6 +357,18 @@ static_assert(AcceptsRequestTargetBorrowedInput<std::string_view>);
 static_assert(!AcceptsRequestTargetBorrowedInput<std::string>);
 static_assert(!AcceptsRequestTargetBorrowedInput<const std::string>);
 static_assert(!AcceptsRequestTargetBorrowedInput<std::pmr::string>);
+static_assert(AcceptsFirstHttp2PayloadPart<std::string&>);
+static_assert(AcceptsFirstHttp2PayloadPart<std::pmr::string&>);
+static_assert(AcceptsFirstHttp2PayloadPart<std::string_view>);
+static_assert(!AcceptsFirstHttp2PayloadPart<std::string>);
+static_assert(!AcceptsFirstHttp2PayloadPart<const std::string>);
+static_assert(!AcceptsFirstHttp2PayloadPart<std::pmr::string>);
+static_assert(AcceptsSecondHttp2PayloadPart<std::string&>);
+static_assert(AcceptsSecondHttp2PayloadPart<std::pmr::string&>);
+static_assert(AcceptsSecondHttp2PayloadPart<std::string_view>);
+static_assert(!AcceptsSecondHttp2PayloadPart<std::string>);
+static_assert(!AcceptsSecondHttp2PayloadPart<const std::string>);
+static_assert(!AcceptsSecondHttp2PayloadPart<std::pmr::string>);
 static_assert(AcceptsUrlValueBorrowedInput<std::string&>);
 static_assert(!AcceptsUrlValueBorrowedInput<std::string>);
 static_assert(!AcceptsUrlValueBorrowedInput<std::pmr::string>);
