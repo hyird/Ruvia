@@ -1263,6 +1263,9 @@ if(_installed_http1_client_response_parser_content MATCHES
 endif()
 file(READ "${_install_prefix}/include/ruvia/http/Cookies.h"
     _installed_cookie_options)
+file(READ
+    "${_install_prefix}/include/ruvia/http/detail/CookieValidation.h"
+    _installed_cookie_validation)
 if(NOT _installed_cookie_options MATCHES
        "std::optional<CookiePrefix>[ \t]+prefix" OR
    NOT _installed_cookie_options MATCHES
@@ -1276,6 +1279,17 @@ if(NOT _installed_cookie_options MATCHES
    _installed_cookie_options MATCHES
        "enum class CookiePriority[^{]*[{][^}]*kUnspecified")
     message(FATAL_ERROR "installed Cookie options lost explicit optional attributes")
+endif()
+if(NOT _installed_cookie_validation MATCHES
+       "byte < 0x20 [|][|] byte > 0x7e [|][|] c == ';'" OR
+   NOT _installed_cookie_validation MATCHES
+       "cookieNameStartsWithIgnoreCase" OR
+   NOT _installed_cookie_validation MATCHES
+       "cookieNameStartsWithIgnoreCase[(]name, [\"]__Host-[\"]" OR
+   NOT _installed_cookie_validation MATCHES
+       "cookieNameStartsWithIgnoreCase[(]name, [\"]__Secure-[\"]")
+    message(FATAL_ERROR
+        "installed Set-Cookie validation lost path octet or UA prefix semantics")
 endif()
 set(_installed_redis_set_options_path
     "${_install_prefix}/include/ruvia/web/redis/RedisTypes.h")

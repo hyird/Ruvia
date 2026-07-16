@@ -32,6 +32,7 @@
 #include <ruvia/http/UrlEncoding.h>
 #include <ruvia/http/detail/AsciiCase.h>
 #include <ruvia/http/detail/BorrowedView.h>
+#include <ruvia/http/detail/CookieValidation.h>
 #include <ruvia/http/detail/HeaderTokenUtils.h>
 #include <ruvia/http/detail/HttpByteRange.h>
 #include <ruvia/http/detail/HttpContentCoding.h>
@@ -3316,6 +3317,13 @@ static_assert(std::same_as<
     std::optional<std::pmr::string>>);
 
 int main() {
+    if (!ruvia::detail::isValidCookieAttribute("/a path") ||
+        ruvia::detail::isValidCookieAttribute("/a\tpath") ||
+        ruvia::detail::isValidCookieAttribute("/caf\xc3\xa9") ||
+        !ruvia::detail::cookieNameStartsWithIgnoreCase(
+            "__sEcUrE-id", "__Secure-")) {
+        return 53;
+    }
     ruvia::CookieOptions cookieOptions;
     cookieOptions.sameSite = ruvia::CookieSameSite::kLax;
     cookieOptions.maxAge = std::chrono::seconds(60);

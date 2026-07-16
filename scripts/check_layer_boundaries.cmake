@@ -1151,6 +1151,40 @@ check_files_no_match("Cookie attribute enums restored absence sentinels"
     "${RUVIA_ROOT}/tests/unit_cookie_validation.cpp"
     "${RUVIA_ROOT}/tests/package-consumer/http.cpp"
     "${RUVIA_ROOT}/examples/api_surface.cpp")
+set(HTTP_COOKIE_VALIDATION
+    "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/detail/CookieValidation.h")
+set(HTTP_COOKIE_VALIDATION_TEST
+    "${RUVIA_ROOT}/tests/unit_cookie_validation.cpp")
+set(HTTP_COOKIE_PACKAGE_CONSUMER
+    "${RUVIA_ROOT}/tests/package-consumer/http.cpp")
+if(EXISTS "${HTTP_COOKIE_VALIDATION}" AND
+   EXISTS "${HTTP_COOKIE_VALIDATION_TEST}" AND
+   EXISTS "${HTTP_COOKIE_PACKAGE_CONSUMER}")
+    file(READ "${HTTP_COOKIE_VALIDATION}" http_cookie_validation)
+    file(READ "${HTTP_COOKIE_VALIDATION_TEST}"
+        http_cookie_validation_test)
+    file(READ "${HTTP_COOKIE_PACKAGE_CONSUMER}"
+        http_cookie_package_consumer)
+    if(NOT http_cookie_validation MATCHES
+           "byte < 0x20 [|][|] byte > 0x7e" OR
+       NOT http_cookie_validation MATCHES
+           "cookieNameStartsWithIgnoreCase" OR
+       NOT http_cookie_validation MATCHES
+           "cookieNameStartsWithIgnoreCase[(]name, [\"]__Host-[\"]" OR
+       NOT http_cookie_validation MATCHES
+           "cookieNameStartsWithIgnoreCase[(]name, [\"]__Secure-[\"]" OR
+       NOT http_cookie_validation_test MATCHES
+           "cookie_path_octets_follow_set_cookie_grammar" OR
+       NOT http_cookie_validation_test MATCHES
+           "__SeCuRe-tok" OR
+       NOT http_cookie_validation_test MATCHES
+           "__hOsT-sid" OR
+       NOT http_cookie_package_consumer MATCHES
+           "cookieNameStartsWithIgnoreCase")
+        boundary_error("Set-Cookie sender accepts values user agents reject"
+            "Path must use av-octet and literal __Host-/__Secure- constraints must mirror UA case-insensitive matching")
+    endif()
+endif()
 check_files_no_match("Set-Cookie wire serialization belongs to ruvia-http"
     "\";[ ]+(Path=|Domain=|Max-Age=|Expires=|HttpOnly|Secure|SameSite=|Priority=|Partitioned)"
     ${WEB_SOURCE})
