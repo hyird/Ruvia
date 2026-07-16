@@ -167,6 +167,13 @@ WsCloseSubmitStatus WsConnection::submitClose(
     if (closePhase_ != ClosePhase::kOpen) {
         return WsCloseSubmitStatus::kAlreadyClosing;
     }
+    // RFC 6455 §7.4.1 reserves 1010 for a client reporting extensions that
+    // were absent from the server handshake. This core emits server frames;
+    // a server must reject that mismatch during the opening handshake rather
+    // than initiate a Close frame with the client-only status code.
+    if (code == 1010) {
+        return WsCloseSubmitStatus::kInvalidCode;
+    }
     const auto payload = encodeWebSocketClosePayload(code, reason);
     if (const auto* failure = payload.failure()) {
         switch (failure->error()) {

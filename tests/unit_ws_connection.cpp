@@ -566,6 +566,23 @@ RUVIA_TEST(ws_connection_outbound_close_rejections_are_typed_and_transactional) 
     RUVIA_CHECK(conn.livenessMode() == WsLivenessMode::kOpen);
 }
 
+// RFC 6455 assigns 1010 to clients that expected an extension the server did
+// not negotiate. A server must fail that mismatch during the opening handshake
+// instead of initiating a Close frame with the client-only status code.
+RUVIA_TEST(ws_connection_server_rejects_client_only_1010_close) {
+    std::pmr::monotonic_buffer_resource resource;
+    std::pmr::string input(&resource);
+    WsConnection conn(input);
+
+    RUVIA_CHECK(conn.submitClose(1010, "permessage-deflate") ==
+        WsCloseSubmitStatus::kInvalidCode);
+    RUVIA_CHECK(conn.outputPlan().bytes().empty());
+    RUVIA_CHECK(conn.livenessMode() == WsLivenessMode::kOpen);
+
+    RUVIA_CHECK(conn.submitClose(1000, "normal") ==
+        WsCloseSubmitStatus::kAccepted);
+}
+
 // A locally initiated Close is not transport EOF. Its bytes are flushed while the
 // transport remains open; application data is then ignored until the peer Close
 // completes the handshake and produces the terminal transport plan.
