@@ -1,29 +1,14 @@
 #pragma once
 
+#include "ruvia/web/detail/BorrowedView.h"
+
 #include <cstdint>
 #include <exception>
 #include <memory_resource>
 #include <string>
 #include <string_view>
-#include <type_traits>
 
 namespace ruvia {
-
-namespace detail {
-
-template <typename T>
-struct IsCharBasicString final : std::false_type {};
-
-template <typename Traits, typename Allocator>
-struct IsCharBasicString<std::basic_string<char, Traits, Allocator>> final
-    : std::true_type {};
-
-template <typename T>
-concept RvalueCharBasicString =
-    !std::is_lvalue_reference_v<T> &&
-    IsCharBasicString<std::remove_cvref_t<T>>::value;
-
-}  // namespace detail
 
 // Non-owning Web application error metadata used by Context and custom error
 // handlers. Every text field must outlive this view; basic_string rvalues are

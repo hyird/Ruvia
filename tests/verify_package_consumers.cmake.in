@@ -1364,7 +1364,17 @@ if(EXISTS "${_installed_db_types_path}" OR
        NOT _installed_db_migration MATCHES
            "applied[(][)] const [&] noexcept" OR
        NOT _installed_db_migration MATCHES
-           "skipped[(][)] const && = delete")
+           "skipped[(][)] const && = delete" OR
+       NOT _installed_db_migration MATCHES
+           "class DbMigration final" OR
+       NOT _installed_db_migration MATCHES
+           "DbMigration[(]String&&, std::string_view[)] = delete" OR
+       NOT _installed_db_migration MATCHES
+           "DbMigration[(]std::string_view, String&&[)] = delete" OR
+       NOT _installed_db_migration MATCHES
+           "std::string_view id[(][)] const noexcept" OR
+       NOT _installed_db_migration MATCHES
+           "std::string_view sql[(][)] const noexcept")
         message(FATAL_ERROR
             "installed database values lost discriminated storage or safe owned-view lifetimes")
     endif()

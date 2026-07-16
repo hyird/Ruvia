@@ -345,6 +345,40 @@ static_assert(!AcceptsTemporaryDbValueText<std::string>);
 static_assert(!AcceptsTemporaryDbValueText<const std::string>);
 static_assert(AcceptsLvalueDbValueText<std::string>);
 
+template <typename String>
+concept AcceptsAnyTemporaryDbMigrationText =
+    requires(String&& value) {
+        ruvia::DbMigration{
+            std::forward<String>(value), "SELECT 1"};
+    } ||
+    requires(String&& value) {
+        ruvia::DbMigration{
+            "migration", std::forward<String>(value)};
+    } ||
+    requires(ruvia::DbMigration& migration, String&& value) {
+        migration.id = std::forward<String>(value);
+    } ||
+    requires(ruvia::DbMigration& migration, String&& value) {
+        migration.sql = std::forward<String>(value);
+    };
+
+template <typename String>
+concept AcceptsLvalueDbMigrationText = requires(String& value) {
+    ruvia::DbMigration{value, value};
+};
+
+template <typename T>
+concept HasDbMigrationTextAccessors = requires(const T& migration) {
+    { migration.id() } -> std::same_as<std::string_view>;
+    { migration.sql() } -> std::same_as<std::string_view>;
+};
+
+static_assert(!AcceptsAnyTemporaryDbMigrationText<std::string>);
+static_assert(!AcceptsAnyTemporaryDbMigrationText<const std::string>);
+static_assert(!AcceptsAnyTemporaryDbMigrationText<std::pmr::string>);
+static_assert(AcceptsLvalueDbMigrationText<std::string>);
+static_assert(HasDbMigrationTextAccessors<ruvia::DbMigration>);
+
 template <typename T>
 concept ExposesDbValueInspection = requires(const T& value) {
     value.type();

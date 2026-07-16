@@ -2886,6 +2886,26 @@ if(NOT pmr_db_types_api MATCHES
     boundary_error("DbValue regained temporary owning-text borrows"
         "stored query parameters must reject owning-string rvalues while preserving borrowed lvalue input")
 endif()
+if(NOT pmr_db_migration_api MATCHES "class DbMigration final" OR
+   NOT pmr_db_migration_api MATCHES
+       "DbMigration[(]String&&, std::string_view[)] = delete" OR
+   NOT pmr_db_migration_api MATCHES
+       "DbMigration[(]std::string_view, String&&[)] = delete" OR
+   NOT pmr_db_migration_api MATCHES
+       "std::string_view id[(][)] const noexcept" OR
+   NOT pmr_db_migration_api MATCHES
+       "std::string_view sql[(][)] const noexcept" OR
+   NOT pmr_db_types_test MATCHES
+       "!AcceptsAnyTemporaryDbMigrationText<std::pmr::string>" OR
+   NOT pmr_db_types_test MATCHES
+       "kCompileTimeMigration" OR
+   NOT pmr_db_api_surface MATCHES
+       "HasDbMigrationTextAccessors<ruvia::DbMigration>" OR
+   NOT pmr_web_package_contract MATCHES
+       "!AcceptsAnyTemporaryDbMigrationText<const std::string>")
+    boundary_error("DbMigration regained mutable or temporary text borrows"
+        "migration descriptors must remain immutable constexpr borrowed values that reject owning-string rvalues")
+endif()
 if(NOT pmr_db_types_api MATCHES
        "using Storage = std::variant<" OR
    NOT pmr_db_types_api MATCHES

@@ -183,17 +183,17 @@ public:
             auto insertSql = buildInsertMigrationSql(
                 options.table, driver, resolved);
             for (const auto& migration : migrations) {
-                std::array<DbValue, 1> findParams{DbValue{migration.id}};
+                std::array<DbValue, 1> findParams{DbValue{migration.id()}};
                 auto existing = co_await handle.query(findSql, std::span<const DbValue>(findParams));
                 if (!existing.rows().empty()) {
-                    appendMigrationId(report.skipped_, migration.id);
+                    appendMigrationId(report.skipped_, migration.id());
                     continue;
                 }
 
-                (void)co_await handle.execute(migration.sql);
-                std::array<DbValue, 1> insertParams{DbValue{migration.id}};
+                (void)co_await handle.execute(migration.sql());
+                std::array<DbValue, 1> insertParams{DbValue{migration.id()}};
                 (void)co_await handle.execute(insertSql, std::span<const DbValue>(insertParams));
-                appendMigrationId(report.applied_, migration.id);
+                appendMigrationId(report.applied_, migration.id());
             }
         } catch (...) {
             failure = std::current_exception();
