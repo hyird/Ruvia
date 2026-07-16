@@ -10,6 +10,7 @@
 namespace {
 
 using ruvia::detail::Http2FrameHeader;
+using ruvia::detail::Http2FramePayloadStatus;
 using ruvia::detail::http2DecodeDataPayload;
 using ruvia::detail::http2DecodeHeadersPayload;
 using ruvia::detail::http2HeadersPriorityDependency;
@@ -92,18 +93,24 @@ RUVIA_TEST(frame_headers_priority_skipped_and_dependency_masked) {
     payload += "frag";
 
     std::string_view fragment;
-    RUVIA_CHECK(http2DecodeHeadersPayload(header, payload, fragment));
+    RUVIA_CHECK(
+        http2DecodeHeadersPayload(header, payload, fragment) ==
+        Http2FramePayloadStatus::kDecoded);
     RUVIA_CHECK_EQ(fragment, std::string_view("frag"));
 
     std::uint32_t dependency = 0xffffffffU;
-    RUVIA_CHECK(http2HeadersPriorityDependency(header, payload, dependency));
+    RUVIA_CHECK(
+        http2HeadersPriorityDependency(header, payload, dependency) ==
+        Http2FramePayloadStatus::kDecoded);
     RUVIA_CHECK_EQ(dependency, std::uint32_t{5});  // E bit stripped
 }
 
 RUVIA_TEST(frame_headers_priority_too_short_rejected) {
     auto header = headerWithFlags(kHttp2FlagPriority);
     std::string_view fragment;
-    RUVIA_CHECK(!http2DecodeHeadersPayload(header, "abc", fragment));  // < 5 bytes
+    RUVIA_CHECK(
+        http2DecodeHeadersPayload(header, "abc", fragment) ==
+        Http2FramePayloadStatus::kMissingPriorityFields);
 }
 
 RUVIA_TEST(frame_headers_padded_and_priority_combined) {
@@ -121,7 +128,9 @@ RUVIA_TEST(frame_headers_padded_and_priority_combined) {
 
     std::string_view content;
     std::uint32_t dependency = 0;
-    RUVIA_CHECK(http2StripPadAndPriority(header, payload, true, content, &dependency));
+    RUVIA_CHECK(
+        http2StripPadAndPriority(header, payload, true, content, &dependency) ==
+        Http2FramePayloadStatus::kDecoded);
     RUVIA_CHECK_EQ(content, std::string_view("hdr"));
     RUVIA_CHECK_EQ(dependency, std::uint32_t{7});
 }
@@ -129,12 +138,16 @@ RUVIA_TEST(frame_headers_padded_and_priority_combined) {
 RUVIA_TEST(frame_headers_plain_keeps_all_and_default_dependency) {
     auto header = headerWithFlags(0);
     std::string_view fragment;
-    RUVIA_CHECK(http2DecodeHeadersPayload(header, "block", fragment));
+    RUVIA_CHECK(
+        http2DecodeHeadersPayload(header, "block", fragment) ==
+        Http2FramePayloadStatus::kDecoded);
     RUVIA_CHECK_EQ(fragment, std::string_view("block"));
 
     // No PRIORITY flag -> dependency defaults to 0.
     std::uint32_t dependency = 0xffffffffU;
-    RUVIA_CHECK(http2HeadersPriorityDependency(header, "block", dependency));
+    RUVIA_CHECK(
+        http2HeadersPriorityDependency(header, "block", dependency) ==
+        Http2FramePayloadStatus::kDecoded);
     RUVIA_CHECK_EQ(dependency, std::uint32_t{0});
 }
 

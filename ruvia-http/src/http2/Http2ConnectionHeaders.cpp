@@ -405,9 +405,20 @@ bool Http2Connection::processHeaders(const Http2FrameHeader& header, std::string
     }
 
     std::string_view fragment;
-    if (!http2DecodeHeadersPayload(header, payload, fragment)) {
-        appendGoaway(Http2ErrorCode::kProtocolError, "invalid HEADERS priority");
-        return false;
+    switch (http2DecodeHeadersPayload(header, payload, fragment)) {
+        case Http2FramePayloadStatus::kDecoded:
+            break;
+        case Http2FramePayloadStatus::kInvalidPadding:
+            appendGoaway(Http2ErrorCode::kProtocolError, "invalid HEADERS padding");
+            return false;
+        case Http2FramePayloadStatus::kMissingPriorityFields:
+            // HEADERS carries a field block and can alter HPACK state, so a payload
+            // too short for its mandatory fields is a connection FRAME_SIZE_ERROR
+            // (RFC 9113 §4.2), unlike the stream-scoped standalone PRIORITY frame.
+            appendGoaway(
+                Http2ErrorCode::kFrameSizeError,
+                "HEADERS priority fields are incomplete");
+            return false;
     }
 
     Http2StreamState* stream = nullptr;

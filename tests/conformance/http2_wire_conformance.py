@@ -35,6 +35,7 @@ END_STREAM = 0x1
 ACK = 0x1
 END_HEADERS = 0x4
 PADDED = 0x8
+HEADERS_PRIORITY = 0x20
 
 NO_ERROR = 0x0
 PROTOCOL_ERROR = 0x1
@@ -333,6 +334,20 @@ def invalid_data_padding(host: str, port: int) -> None:
 def headers_stream_zero(host: str, port: int) -> None:
     with H2Connection(host, port) as connection:
         connection.send(frame(HEADERS, END_HEADERS, 0, request_block()))
+        connection.expect_goaway(PROTOCOL_ERROR)
+
+
+@case("4.2", "truncated HEADERS priority fields cause FRAME_SIZE_ERROR")
+def headers_priority_too_short(host: str, port: int) -> None:
+    with H2Connection(host, port) as connection:
+        connection.send(frame(HEADERS, END_HEADERS | HEADERS_PRIORITY, 1, b"\x00" * 4))
+        connection.expect_goaway(FRAME_SIZE_ERROR)
+
+
+@case("6.2", "invalid HEADERS padding causes PROTOCOL_ERROR")
+def invalid_headers_padding(host: str, port: int) -> None:
+    with H2Connection(host, port) as connection:
+        connection.send(frame(HEADERS, END_HEADERS | PADDED, 1))
         connection.expect_goaway(PROTOCOL_ERROR)
 
 

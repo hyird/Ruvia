@@ -1036,6 +1036,34 @@ RUVIA_TEST(http2_connection_malformed_goaway_error_codes) {
         static_cast<std::uint32_t>(Http2ErrorCode::kFrameSizeError));
 }
 
+// RFC 9113 §4.2/§6.2 gives malformed HEADERS payloads two distinct connection
+// errors: missing mandatory PRIORITY fields are FRAME_SIZE_ERROR, while an invalid
+// Pad Length remains PROTOCOL_ERROR.
+RUVIA_TEST(http2_connection_malformed_headers_payload_error_codes) {
+    const auto goawayErrorFor = [&](std::uint8_t flags, std::string_view payload) {
+        std::pmr::monotonic_buffer_resource resource;
+        Http2Connection conn(&resource);
+        handshake(conn);
+
+        const auto frame = headersFrame(&resource, 1, flags, payload);
+        RUVIA_CHECK(conn.feed(frame) == Http2FeedResult::kProtocolFailure);
+        RUVIA_CHECK(conn.connectionError().has_value());
+
+        const auto out = conn.pendingOutput();
+        const auto header = ruvia::detail::http2ParseFrameHeader(out.substr(0, 9));
+        RUVIA_CHECK_EQ(header.type, static_cast<std::uint8_t>(Http2FrameType::kGoaway));
+        return ruvia::detail::http2Read32(
+            reinterpret_cast<const unsigned char*>(out.data() + 13));
+    };
+
+    RUVIA_CHECK_EQ(
+        goawayErrorFor(ruvia::detail::kHttp2FlagPriority, std::string_view("\0\0\0\0", 4)),
+        static_cast<std::uint32_t>(Http2ErrorCode::kFrameSizeError));
+    RUVIA_CHECK_EQ(
+        goawayErrorFor(ruvia::detail::kHttp2FlagPadded, std::string_view()),
+        static_cast<std::uint32_t>(Http2ErrorCode::kProtocolError));
+}
+
 // RST_STREAM referencing an idle (never-opened) stream is a protocol error (GOAWAY).
 RUVIA_TEST(http2_connection_feed_rst_on_idle_stream_goaway) {
     std::pmr::monotonic_buffer_resource resource;
