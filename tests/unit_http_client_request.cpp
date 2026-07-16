@@ -97,6 +97,13 @@ static_assert(!AcceptsAnyTemporaryHttpClientRequestText<std::string>);
 static_assert(!AcceptsAnyTemporaryHttpClientRequestText<const std::string>);
 static_assert(!AcceptsAnyTemporaryHttpClientRequestText<std::pmr::string>);
 static_assert(AcceptsLvalueHttpClientRequestText<std::string>);
+constexpr HttpClientRequest kLiteralHttpClientRequest{
+    .method = "POST",
+    .target = "/items"};
+static_assert(kLiteralHttpClientRequest.method.view() == "POST");
+static_assert(kLiteralHttpClientRequest.target.view() == "/items");
+static_assert(kLiteralHttpClientRequest.method == "POST");
+static_assert("/items" == kLiteralHttpClientRequest.target);
 static_assert(!std::is_constructible_v<
     HttpClientRequest::HeaderInit,
     std::array<ruvia::HttpHeaderView, 1>&&>);

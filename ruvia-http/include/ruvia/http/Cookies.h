@@ -38,6 +38,9 @@ struct CookieOptions final {
         constexpr BorrowedText(std::string_view value) noexcept
             : value_(value) {}
 
+        constexpr BorrowedText(const char* value) noexcept
+            : value_(value) {}
+
         template <typename Traits, typename Allocator>
         constexpr BorrowedText(
             const std::basic_string<char, Traits, Allocator>& value) noexcept
@@ -48,6 +51,11 @@ struct CookieOptions final {
 
         constexpr BorrowedText& operator=(std::string_view value) noexcept {
             value_ = value;
+            return *this;
+        }
+
+        constexpr BorrowedText& operator=(const char* value) noexcept {
+            value_ = std::string_view(value);
             return *this;
         }
 
@@ -87,6 +95,18 @@ struct CookieOptions final {
 
         friend constexpr bool operator==(
             std::string_view left,
+            BorrowedText right) noexcept {
+            return left == right.value_;
+        }
+
+        friend constexpr bool operator==(
+            BorrowedText left,
+            const char* right) noexcept {
+            return left.value_ == right;
+        }
+
+        friend constexpr bool operator==(
+            const char* left,
             BorrowedText right) noexcept {
             return left == right.value_;
         }

@@ -9,6 +9,7 @@
 #include <string>
 #include <string_view>
 #include <type_traits>
+#include <utility>
 
 #include "ruvia/web/detail/router/RouteTable.h"
 #include "ruvia/http/HttpKnownMethod.h"
@@ -23,6 +24,13 @@ using ruvia::detail::RouteMatch;
 using ruvia::detail::RouteResolution;
 using ruvia::detail::RouteStreamHandler;
 using ruvia::detail::RouteTable;
+
+template <typename Text>
+concept WebSocketSubprotocolsAccepts = requires(
+    ruvia::WebSocketRouteOptions& options,
+    Text&& text) {
+    options.subprotocols = std::forward<Text>(text);
+};
 
 template <typename T>
 concept HasLooseRouteResolutionAccessors = requires(const T& value) {
@@ -53,6 +61,16 @@ static_assert(!std::is_move_assignable_v<RouteEntry>);
 static_assert(!std::is_polymorphic_v<RouteTable>);
 static_assert(!std::is_move_constructible_v<RouteTable>);
 static_assert(!std::is_move_assignable_v<RouteTable>);
+static_assert(WebSocketSubprotocolsAccepts<std::string&>);
+static_assert(WebSocketSubprotocolsAccepts<const std::pmr::string&>);
+static_assert(!WebSocketSubprotocolsAccepts<std::string>);
+static_assert(!WebSocketSubprotocolsAccepts<const std::string>);
+static_assert(!WebSocketSubprotocolsAccepts<std::pmr::string>);
+constexpr ruvia::WebSocketRouteOptions kLiteralWebSocketOptions{
+    .subprotocols = "chat.v1"};
+static_assert(kLiteralWebSocketOptions.subprotocols.view() == "chat.v1");
+static_assert(kLiteralWebSocketOptions.subprotocols == "chat.v1");
+static_assert("chat.v1" == kLiteralWebSocketOptions.subprotocols);
 
 ruvia::Task<ruvia::HttpResponse> routeHandler(void*, ruvia::Context& context) {
     co_return ruvia::HttpResponse(context.resource());

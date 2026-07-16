@@ -1814,6 +1814,11 @@ static_assert(!CanConstructSetCookiePlan<
     std::string_view,
     std::string_view,
     const ruvia::CookieOptions>);
+constexpr ruvia::CookieOptions kLiteralCookieOptions{
+    .path = "/app",
+    .domain = "example.com"};
+static_assert(kLiteralCookieOptions.path.view() == "/app");
+static_assert(kLiteralCookieOptions.domain.view() == "example.com");
 static_assert(HasHttpClientRequestContentAlternatives<
     ruvia::HttpClientRequestContent>);
 static_assert(!HasStaleHttpClientContentMode<
@@ -3417,6 +3422,11 @@ static_assert(!AcceptsAnyTemporaryHttpClientRequestText<std::string>);
 static_assert(!AcceptsAnyTemporaryHttpClientRequestText<const std::string>);
 static_assert(!AcceptsAnyTemporaryHttpClientRequestText<std::pmr::string>);
 static_assert(AcceptsLvalueHttpClientRequestText<std::string>);
+constexpr ruvia::HttpClientRequest kLiteralHttpClientRequest{
+    .method = "POST",
+    .target = "/items"};
+static_assert(kLiteralHttpClientRequest.method.view() == "POST");
+static_assert(kLiteralHttpClientRequest.target.view() == "/items");
 static_assert(!HasAnyRvalueHttp1ClientRequestContentPlanAccessor<
     ruvia::Http1ClientRequestContentPlan>);
 static_assert(!HasAnyRvalueHttp1ClientRequestWirePolicyAccessor<

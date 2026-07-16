@@ -1932,6 +1932,23 @@ static_assert(std::same_as<
 static_assert(std::same_as<
     decltype(ruvia::WebSocketLifecycleOptions{}.closeHandshakeTimeout),
     std::optional<std::chrono::milliseconds>>);
+template <typename Text>
+concept WebSocketSubprotocolsAccepts = requires(
+    ruvia::WebSocketRouteOptions& options,
+    Text&& text) {
+    options.subprotocols = std::forward<Text>(text);
+};
+static_assert(WebSocketSubprotocolsAccepts<std::string&>);
+static_assert(WebSocketSubprotocolsAccepts<const std::pmr::string&>);
+static_assert(!WebSocketSubprotocolsAccepts<std::string>);
+static_assert(!WebSocketSubprotocolsAccepts<const std::string>);
+static_assert(!WebSocketSubprotocolsAccepts<std::pmr::string>);
+constexpr ruvia::WebSocketRouteOptions kLiteralWebSocketOptions{
+    .subprotocols = "chat.v1"};
+static_assert(kLiteralWebSocketOptions.subprotocols.view() == "chat.v1");
+static_assert(std::same_as<
+    decltype(ruvia::WebSocketRouteOptions{}.subprotocols.view()),
+    std::string_view>);
 static_assert(std::is_same_v<
     decltype(std::declval<const ruvia::detail::RouteResolution&>().resolved()),
     const ruvia::detail::ResolvedRoute*>);

@@ -86,6 +86,13 @@ static_assert(!CanConstructSetCookiePlan<
     std::string_view,
     std::string_view,
     const ruvia::CookieOptions>);
+constexpr ruvia::CookieOptions kLiteralCookieOptions{
+    .path = "/app",
+    .domain = "example.com"};
+static_assert(kLiteralCookieOptions.path.view() == "/app");
+static_assert(kLiteralCookieOptions.domain.view() == "example.com");
+static_assert(kLiteralCookieOptions.path == "/app");
+static_assert("example.com" == kLiteralCookieOptions.domain);
 
 static_assert(std::same_as<
     decltype(ruvia::CookieOptions{}.sameSite),

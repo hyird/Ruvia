@@ -1167,6 +1167,25 @@ concept HasWebSocketMessageCanonicalReadAccessors = requires(const T& message) {
 };
 
 template <typename T>
+concept HasWebSocketRouteBorrowedText = requires(const T& options) {
+    { options.subprotocols.view() } -> std::same_as<std::string_view>;
+};
+
+template <typename String>
+concept AcceptsTemporaryWebSocketRouteSubprotocols = requires(
+    ruvia::WebSocketRouteOptions& options,
+    String&& value) {
+    options.subprotocols = std::forward<String>(value);
+};
+
+template <typename String>
+concept AcceptsLvalueWebSocketRouteSubprotocols = requires(
+    ruvia::WebSocketRouteOptions& options,
+    String& value) {
+    options.subprotocols = value;
+};
+
+template <typename T>
 concept HasWebSocketPublicCallbackConstructor = requires(
     void* target,
     typename T::Read read,
@@ -2425,6 +2444,11 @@ static_assert(!AcceptsAnyTemporaryHttpClientRequestText<std::string>);
 static_assert(!AcceptsAnyTemporaryHttpClientRequestText<const std::string>);
 static_assert(!AcceptsAnyTemporaryHttpClientRequestText<std::pmr::string>);
 static_assert(AcceptsLvalueHttpClientRequestText<std::string>);
+constexpr ruvia::HttpClientRequest kLiteralHttpClientRequest{
+    .method = "POST",
+    .target = "/items"};
+static_assert(kLiteralHttpClientRequest.method.view() == "POST");
+static_assert(kLiteralHttpClientRequest.target.view() == "/items");
 static_assert(!HasRawHttpClientRequestBody<ruvia::HttpClientRequest>);
 static_assert(HasDiscriminatedHttpClientRequestContent<ruvia::HttpClientRequest>);
 static_assert(!HasStaleHttpClientRequestContentTuple<ruvia::HttpClientRequest>);
@@ -2540,6 +2564,14 @@ static_assert(!std::is_default_constructible_v<ruvia::WebSocketMessage>);
 static_assert(!std::is_constructible_v<ruvia::WebSocketMessage, ruvia::WebSocketOpcode, std::string_view>);
 static_assert(!HasWebSocketPublicCallbackConstructor<ruvia::WebSocket>);
 static_assert(!HasWebSocketRuntimeCallbacks<ruvia::WebSocket>);
+static_assert(HasWebSocketRouteBorrowedText<ruvia::WebSocketRouteOptions>);
+static_assert(!AcceptsTemporaryWebSocketRouteSubprotocols<std::string>);
+static_assert(!AcceptsTemporaryWebSocketRouteSubprotocols<const std::string>);
+static_assert(!AcceptsTemporaryWebSocketRouteSubprotocols<std::pmr::string>);
+static_assert(AcceptsLvalueWebSocketRouteSubprotocols<std::string>);
+constexpr ruvia::WebSocketRouteOptions kLiteralWebSocketRouteOptions{
+    .subprotocols = "chat.v1"};
+static_assert(kLiteralWebSocketRouteOptions.subprotocols.view() == "chat.v1");
 static_assert(!HasContextGetIfAlias<ruvia::Context>);
 static_assert(!HasArbitraryContextValueSet<ruvia::Context>);
 static_assert(!HasArbitraryContextValueGet<ruvia::Context>);
@@ -2966,6 +2998,11 @@ static_assert(std::is_same_v<
         std::string_view{},
         std::declval<const ruvia::CookieOptions&>())),
     void>);
+constexpr ruvia::CookieOptions kLiteralCookieOptions{
+    .path = "/app",
+    .domain = "example.com"};
+static_assert(kLiteralCookieOptions.path.view() == "/app");
+static_assert(kLiteralCookieOptions.domain.view() == "example.com");
 static_assert(std::is_same_v<
     decltype(std::declval<ruvia::Context&>().deleteCookie(std::string_view{})),
     void>);

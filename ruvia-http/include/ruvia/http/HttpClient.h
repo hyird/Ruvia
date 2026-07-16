@@ -214,6 +214,9 @@ struct HttpClientRequest {
         constexpr BorrowedText(std::string_view value) noexcept
             : value_(value) {}
 
+        constexpr BorrowedText(const char* value) noexcept
+            : value_(value) {}
+
         template <typename Traits, typename Allocator>
         constexpr BorrowedText(
             const std::basic_string<char, Traits, Allocator>& value) noexcept
@@ -224,6 +227,11 @@ struct HttpClientRequest {
 
         constexpr BorrowedText& operator=(std::string_view value) noexcept {
             value_ = value;
+            return *this;
+        }
+
+        constexpr BorrowedText& operator=(const char* value) noexcept {
+            value_ = std::string_view(value);
             return *this;
         }
 
@@ -259,6 +267,18 @@ struct HttpClientRequest {
 
         friend constexpr bool operator==(
             std::string_view lhs,
+            BorrowedText rhs) noexcept {
+            return lhs == rhs.value_;
+        }
+
+        friend constexpr bool operator==(
+            BorrowedText lhs,
+            const char* rhs) noexcept {
+            return lhs.value_ == rhs;
+        }
+
+        friend constexpr bool operator==(
+            const char* lhs,
             BorrowedText rhs) noexcept {
             return lhs == rhs.value_;
         }
