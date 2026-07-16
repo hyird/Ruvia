@@ -532,6 +532,10 @@ RUVIA_TEST(ws_connection_outbound_frame_rejections_are_typed_and_transactional) 
     std::pmr::string input(&resource);
     WsConnection conn(input, ProtocolByteLimit::limited(4));
 
+    const std::string invalidText("\xc0\x80", 2);
+    RUVIA_CHECK(conn.submitFrame(
+        WebSocketOpcode::kText,
+        invalidText) == WsFrameSubmitStatus::kInvalidTextPayload);
     RUVIA_CHECK(conn.submitFrame(WebSocketOpcode::kText, "12345") ==
         WsFrameSubmitStatus::kMessageTooLarge);
     RUVIA_CHECK(conn.submitFrame(

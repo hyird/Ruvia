@@ -46,6 +46,7 @@ enum class WsFrameSubmitStatus : std::uint8_t {
     kNotOpen,
     kInvalidOpcode,
     kMessageTooLarge,
+    kInvalidTextPayload,
     kControlFrameTooLarge,
 };
 
@@ -112,8 +113,9 @@ public:
     [[nodiscard]] WsAbortDisposition abort() noexcept;
     [[nodiscard]] WsLivenessMode livenessMode() const noexcept;
 
-    // Submit one already-formed logical frame payload. Server masking, optional
-    // data-message compression and wire header encoding stay inside the core.
+    // Submit one complete logical message/control payload. Server masking,
+    // outbound text UTF-8 validation, optional data-message compression and
+    // wire header encoding stay inside the core.
     // Close has a separate typed entry because it owns code/reason validation
     // and close-handshake state rather than accepting a pre-encoded payload.
     [[nodiscard]] WsFrameSubmitStatus submitFrame(

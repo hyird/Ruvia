@@ -140,6 +140,9 @@ WsFrameSubmitStatus WsConnection::submitFrame(
     if (dataFrame && webSocketMessageExceedsLimit(payload.size(), messageLimit_)) {
         return WsFrameSubmitStatus::kMessageTooLarge;
     }
+    if (opcode == WebSocketOpcode::kText && !isValidUtf8(payload)) {
+        return WsFrameSubmitStatus::kInvalidTextPayload;
+    }
     if (controlFrame && payload.size() > 125) {
         return WsFrameSubmitStatus::kControlFrameTooLarge;
     }

@@ -310,7 +310,9 @@ RUVIA_TEST(websocket_runtime_maps_typed_outbound_rejections) {
         ruvia::ProtocolByteLimit::limited(4),
         memory.resource());
     bool messageRejected = false;
+    bool invalidTextRejected = false;
     bool closeRejected = false;
+    const std::string invalidText("\xc0\x80", 2);
 
     asio::co_spawn(
         io,
@@ -323,6 +325,14 @@ RUVIA_TEST(websocket_runtime_maps_typed_outbound_rejections) {
             }
             try {
                 co_await ruvia::detail::taskAsAwaitable(
+                    connection.write(
+                        WebSocketOpcode::kText,
+                        invalidText));
+            } catch (const std::invalid_argument&) {
+                invalidTextRejected = true;
+            }
+            try {
+                co_await ruvia::detail::taskAsAwaitable(
                     connection.close(1005, {}));
             } catch (const std::invalid_argument&) {
                 closeRejected = true;
@@ -332,6 +342,7 @@ RUVIA_TEST(websocket_runtime_maps_typed_outbound_rejections) {
 
     io.run();
     RUVIA_CHECK(messageRejected);
+    RUVIA_CHECK(invalidTextRejected);
     RUVIA_CHECK(closeRejected);
     RUVIA_CHECK_EQ(state.writes, std::size_t{0});
     RUVIA_CHECK(!state.aborted);

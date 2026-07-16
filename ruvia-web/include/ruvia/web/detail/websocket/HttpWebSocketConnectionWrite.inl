@@ -115,6 +115,9 @@ Task<void> WebSocketConnection<Transport>::writeFrameNow(
             throw std::logic_error("invalid outbound websocket opcode");
         case WsFrameSubmitStatus::kMessageTooLarge:
             throw std::invalid_argument("websocket message is too large");
+        case WsFrameSubmitStatus::kInvalidTextPayload:
+            throw std::invalid_argument(
+                "websocket text payload is not valid UTF-8");
         case WsFrameSubmitStatus::kControlFrameTooLarge:
             throw std::invalid_argument("websocket control frame is too large");
     }
