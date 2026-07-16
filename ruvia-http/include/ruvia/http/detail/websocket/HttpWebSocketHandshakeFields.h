@@ -4,6 +4,7 @@
 #include <string_view>
 
 #include "ruvia/http/HttpHeader.h"
+#include "ruvia/http/detail/BorrowedView.h"
 
 namespace ruvia {
 
@@ -29,6 +30,10 @@ namespace detail {
 [[nodiscard]] std::string_view chooseWebSocketSubprotocol(
     const HttpRequest& request,
     std::string_view supported) noexcept;
+template <HttpTemporaryOwningCharString Supported>
+std::string_view chooseWebSocketSubprotocol(
+    const HttpRequest&,
+    Supported&&) = delete;
 
 }  // namespace detail
 }  // namespace ruvia

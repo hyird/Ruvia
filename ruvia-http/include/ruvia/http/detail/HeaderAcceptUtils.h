@@ -115,6 +115,9 @@ enum class HttpContentCoding : std::uint8_t {
     return httpTrimOws(semicolon == std::string_view::npos ? value : value.substr(0, semicolon));
 }
 
+template <HttpTemporaryOwningCharString Value>
+std::string_view httpHeaderTokenBeforeParameters(Value&&) = delete;
+
 // Accept-Encoding uses `codings [ weight ]`, not the arbitrary parameter list
 // accepted by media ranges. Validate that optional weight without normalizing
 // whitespace around '='; malformed items are explicitly unacceptable.
@@ -279,6 +282,9 @@ struct HttpResponseCodingQualities final {
 [[nodiscard]] inline std::string_view httpMediaTypeOnly(std::string_view value) noexcept {
     return httpHeaderTokenBeforeParameters(value);
 }
+
+template <HttpTemporaryOwningCharString Value>
+std::string_view httpMediaTypeOnly(Value&&) = delete;
 
 [[nodiscard]] inline bool httpMediaToken(std::string_view token) noexcept {
     if (token.empty()) {

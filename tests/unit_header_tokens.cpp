@@ -1,14 +1,82 @@
 #include "test_harness.h"
 
+#include <memory_resource>
+#include <string>
 #include <string_view>
+#include <utility>
 
+#include "ruvia/http/detail/HeaderAcceptUtils.h"
 #include "ruvia/http/detail/HeaderTokenUtils.h"
+#include "ruvia/http/detail/HttpEntityTag.h"
+#include "ruvia/http/detail/HttpOws.h"
+#include "ruvia/http/detail/websocket/HttpWebSocketHandshakeFields.h"
 
 namespace {
 
 using ruvia::detail::httpHasExactToken;
 using ruvia::detail::httpHasToken;
 using ruvia::detail::httpTrimQuotes;
+
+struct MatchAnyHeaderToken final {
+    [[nodiscard]] constexpr bool operator()(std::string_view) const noexcept {
+        return true;
+    }
+};
+
+template <typename Input>
+concept AcceptsAnyBorrowedHttpSubviewInput =
+    requires(Input&& input) {
+        ruvia::detail::httpTrimOws(std::forward<Input>(input));
+    } ||
+    requires(Input&& input) {
+        ruvia::detail::httpTrimQuotes(std::forward<Input>(input));
+    } ||
+    requires(Input&& input) {
+        ruvia::detail::httpFindHeaderToken(
+            std::forward<Input>(input),
+            MatchAnyHeaderToken{});
+    } ||
+    requires(Input&& input) {
+        ruvia::detail::httpHeaderTokenBeforeParameters(
+            std::forward<Input>(input));
+    } ||
+    requires(Input&& input) {
+        ruvia::detail::httpMediaTypeOnly(std::forward<Input>(input));
+    } ||
+    requires(Input&& input) {
+        ruvia::detail::httpTrimWeakEtagPrefix(
+            std::forward<Input>(input));
+    } ||
+    requires(const ruvia::HttpRequest& request, Input&& input) {
+        ruvia::detail::chooseWebSocketSubprotocol(
+            request,
+            std::forward<Input>(input));
+    };
+
+template <typename Input>
+concept AcceptsAllBorrowedHttpSubviewInputs = requires(
+    const ruvia::HttpRequest& request,
+    Input&& input) {
+    ruvia::detail::httpTrimOws(std::forward<Input>(input));
+    ruvia::detail::httpTrimQuotes(std::forward<Input>(input));
+    ruvia::detail::httpFindHeaderToken(
+        std::forward<Input>(input),
+        MatchAnyHeaderToken{});
+    ruvia::detail::httpHeaderTokenBeforeParameters(
+        std::forward<Input>(input));
+    ruvia::detail::httpMediaTypeOnly(std::forward<Input>(input));
+    ruvia::detail::httpTrimWeakEtagPrefix(std::forward<Input>(input));
+    ruvia::detail::chooseWebSocketSubprotocol(
+        request,
+        std::forward<Input>(input));
+};
+
+static_assert(!AcceptsAnyBorrowedHttpSubviewInput<std::string>);
+static_assert(!AcceptsAnyBorrowedHttpSubviewInput<const std::string>);
+static_assert(!AcceptsAnyBorrowedHttpSubviewInput<std::pmr::string>);
+static_assert(AcceptsAllBorrowedHttpSubviewInputs<std::string&>);
+static_assert(AcceptsAllBorrowedHttpSubviewInputs<std::pmr::string&>);
+static_assert(AcceptsAllBorrowedHttpSubviewInputs<std::string_view>);
 
 }  // namespace
 
