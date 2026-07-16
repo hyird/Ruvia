@@ -446,11 +446,10 @@ RUVIA_TEST(sse_writer_formats_event_id_retry_and_multiline_data) {
         std::string("event: update\nid: 7\nretry: 3000\ndata: line1\ndata: line2\n\n"));
 }
 
-RUVIA_TEST(sse_writer_omits_data_line_for_empty_data_no_phantom_event) {
-    // WHATWG HTML 9.2.6: a block whose data buffer is empty must NOT dispatch. An
-    // unconditional "data:" line makes the client's data buffer "\n" (non-empty),
-    // so it would strip the trailing LF and fire a phantom empty message event.
-    // An empty-data block must therefore emit no data field at all.
+RUVIA_TEST(sse_writer_distinguishes_absent_and_empty_data) {
+    // WHATWG HTML 9.2.6: a block whose data buffer is empty must NOT dispatch,
+    // while even an empty `data:` field appends LF and makes that buffer
+    // non-empty. The API must preserve that presence distinction.
     const auto render = [](ruvia::SseMessage message) {
         CaptureStreamSink sink;
         auto writer = makeWriter(sink);
@@ -469,13 +468,18 @@ RUVIA_TEST(sse_writer_omits_data_line_for_empty_data_no_phantom_event) {
     RUVIA_CHECK_EQ(render(ruvia::SseMessage{.event = "ping"}), std::string("event: ping\n\n"));
     // A bare block is a no-op keepalive: just the terminating blank line.
     RUVIA_CHECK_EQ(render(ruvia::SseMessage{}), std::string("\n"));
+    // A present empty data value is an event: the data field first makes the
+    // EventSource data buffer non-empty, then dispatch removes its final LF.
+    RUVIA_CHECK_EQ(
+        render(ruvia::SseMessage{.data = ""}),
+        std::string("data: \n\n"));
     // A present-but-empty id resets the EventSource last-event-ID buffer.
     RUVIA_CHECK_EQ(
         render(ruvia::SseMessage{.id = std::string_view{}}),
         std::string("id:\n\n"));
-    // Data present is unaffected: data lines are still emitted.
+    // Non-empty data is unaffected: data lines are still emitted.
     RUVIA_CHECK_EQ(render(ruvia::SseMessage{.data = "hi"}), std::string("data: hi\n\n"));
-    // No empty-data frame ever carries a "data:" line.
+    // No absent-data frame carries a "data:" line.
     RUVIA_CHECK(render(ruvia::SseMessage{.retry = 1}).find("data:") == std::string::npos);
 }
 

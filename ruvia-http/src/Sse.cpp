@@ -67,8 +67,8 @@ void formatSseMessage(std::pmr::string& frame, const SseMessage& message) {
         appendUnsigned(frame, *message.retry);
         frame.push_back('\n');
     }
-    if (!message.data.empty()) {
-        appendSseData(frame, message.data);
+    if (message.data.has_value()) {
+        appendSseData(frame, *message.data);
     }
     frame.push_back('\n');
 }
