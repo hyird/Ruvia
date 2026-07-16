@@ -9,6 +9,7 @@
 #include <optional>
 #include <span>
 #include <stdexcept>
+#include <string>
 #include <string_view>
 #include <type_traits>
 #include <utility>
@@ -149,6 +150,18 @@ concept HasLegacyRedisSetOptionBooleans = requires(T& options) {
     options.keepTtl;
 };
 
+template <typename Match>
+concept AcceptsRedisScanMatch = requires(Match&& match) {
+    ruvia::RedisScanOptions{.match = std::forward<Match>(match)};
+};
+
+template <typename Match>
+concept AssignsRedisScanMatch = requires(
+    ruvia::RedisScanOptions& options,
+    Match&& match) {
+    options.match = std::forward<Match>(match);
+};
+
 static_assert(HasRedisHandleSpanArgs<ruvia::RedisHandle>);
 static_assert(!HasRedisHandleInitializerListArgs<ruvia::RedisHandle>);
 static_assert(HasRedisPipelineSpanCommand<ruvia::RedisPipeline>);
@@ -175,6 +188,23 @@ static_assert(!std::default_initializable<ruvia::RedisSetExpiration>);
 static_assert(std::same_as<
     decltype(ruvia::RedisScanOptions{}.count),
     std::optional<std::uint64_t>>);
+static_assert(std::is_aggregate_v<ruvia::RedisScanOptions>);
+constexpr ruvia::RedisScanOptions kLiteralRedisScanOptions{
+    .match = "session:*",
+};
+static_assert(kLiteralRedisScanOptions.match.view() == "session:*");
+static_assert(!AcceptsRedisScanMatch<std::string>);
+static_assert(!AcceptsRedisScanMatch<const std::string>);
+static_assert(!AcceptsRedisScanMatch<std::pmr::string>);
+static_assert(AcceptsRedisScanMatch<std::string&>);
+static_assert(AcceptsRedisScanMatch<std::pmr::string&>);
+static_assert(AcceptsRedisScanMatch<std::string_view>);
+static_assert(!AssignsRedisScanMatch<std::string>);
+static_assert(!AssignsRedisScanMatch<const std::string>);
+static_assert(!AssignsRedisScanMatch<std::pmr::string>);
+static_assert(AssignsRedisScanMatch<std::string&>);
+static_assert(AssignsRedisScanMatch<std::pmr::string&>);
+static_assert(AssignsRedisScanMatch<std::string_view>);
 
 }  // namespace
 

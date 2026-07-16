@@ -558,6 +558,18 @@ concept ExposesAnyRvalueRedisOwnedView =
     requires(T&& value) { std::move(value).string(); } ||
     requires(T&& value) { std::move(value).array(); };
 
+template <typename Match>
+concept AcceptsRedisScanMatch = requires(Match&& match) {
+    ruvia::RedisScanOptions{.match = std::forward<Match>(match)};
+};
+
+template <typename Match>
+concept AssignsRedisScanMatch = requires(
+    ruvia::RedisScanOptions& options,
+    Match&& match) {
+    options.match = std::forward<Match>(match);
+};
+
 static_assert(std::is_move_assignable_v<ruvia::RedisKeyValue>);
 static_assert(!std::is_nothrow_move_assignable_v<ruvia::RedisKeyValue>);
 static_assert(std::is_move_assignable_v<ruvia::RedisScoredValue>);
@@ -579,6 +591,23 @@ static_assert(std::same_as<
 static_assert(std::same_as<
     decltype(ruvia::RedisScanOptions{}.count),
     std::optional<std::uint64_t>>);
+static_assert(std::is_aggregate_v<ruvia::RedisScanOptions>);
+constexpr ruvia::RedisScanOptions kLiteralRedisScanOptions{
+    .match = "session:*",
+};
+static_assert(kLiteralRedisScanOptions.match.view() == "session:*");
+static_assert(!AcceptsRedisScanMatch<std::string>);
+static_assert(!AcceptsRedisScanMatch<const std::string>);
+static_assert(!AcceptsRedisScanMatch<std::pmr::string>);
+static_assert(AcceptsRedisScanMatch<std::string&>);
+static_assert(AcceptsRedisScanMatch<std::pmr::string&>);
+static_assert(AcceptsRedisScanMatch<std::string_view>);
+static_assert(!AssignsRedisScanMatch<std::string>);
+static_assert(!AssignsRedisScanMatch<const std::string>);
+static_assert(!AssignsRedisScanMatch<std::pmr::string>);
+static_assert(AssignsRedisScanMatch<std::string&>);
+static_assert(AssignsRedisScanMatch<std::pmr::string&>);
+static_assert(AssignsRedisScanMatch<std::string_view>);
 static_assert(!ExposesAnyRvalueRedisOwnedView<ruvia::RedisSetExpiration>);
 static_assert(!ExposesAnyRvalueRedisOwnedView<ruvia::RedisKeyValue>);
 static_assert(!ExposesAnyRvalueRedisOwnedView<ruvia::RedisScoredValue>);
