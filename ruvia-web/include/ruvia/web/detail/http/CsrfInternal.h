@@ -27,12 +27,15 @@ public:
     [[nodiscard]] static SecureTokenResult makeFailure() noexcept {
         return SecureTokenResult(SecureTokenFailure{});
     }
-    [[nodiscard]] const SecureTokenReady* ready() const noexcept {
+    [[nodiscard]] const SecureTokenReady* ready() const & noexcept {
         return std::get_if<SecureTokenReady>(&value_);
     }
-    [[nodiscard]] const SecureTokenFailure* failure() const noexcept {
+    [[nodiscard]] const SecureTokenReady* ready() const && = delete;
+
+    [[nodiscard]] const SecureTokenFailure* failure() const & noexcept {
         return std::get_if<SecureTokenFailure>(&value_);
     }
+    [[nodiscard]] const SecureTokenFailure* failure() const && = delete;
 
 private:
     explicit SecureTokenResult(SecureTokenReady value) noexcept : value_(value) {}

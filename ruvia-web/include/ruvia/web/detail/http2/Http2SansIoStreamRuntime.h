@@ -406,13 +406,15 @@ public:
         return signal() != nullptr;
     }
 
-    [[nodiscard]] Http2SansIoStreamSignal* signal() noexcept {
+    [[nodiscard]] Http2SansIoStreamSignal* signal() & noexcept {
         return std::get_if<Http2SansIoStreamSignal>(&dispatch_);
     }
+    [[nodiscard]] Http2SansIoStreamSignal* signal() && = delete;
 
-    [[nodiscard]] const Http2SansIoStreamSignal* signal() const noexcept {
+    [[nodiscard]] const Http2SansIoStreamSignal* signal() const & noexcept {
         return std::get_if<Http2SansIoStreamSignal>(&dispatch_);
     }
+    [[nodiscard]] const Http2SansIoStreamSignal* signal() const && = delete;
 
 private:
     friend class Http2SansIoStreamRuntime;

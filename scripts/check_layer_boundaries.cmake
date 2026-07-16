@@ -8747,13 +8747,25 @@ if(EXISTS "${HTTP1_PARSER_INTERNAL}" AND EXISTS "${HTTP1_PARSER_SOURCE}")
        NOT http1_parser_internal MATCHES "class Http1ServerRequestParseFailure final" OR
        NOT http1_parser_internal MATCHES "class Http1ServerRequestParseState final" OR
        NOT http1_parser_internal MATCHES
-           "const Http1ServerRequestHeadReady[*][\r\n \t]*headReady[(][)] const noexcept" OR
+           "const Http1ServerNeedRequestHead[*][\r\n \t]*needRequestHead[(][)] const [&] noexcept" OR
        NOT http1_parser_internal MATCHES
-           "const Http1ServerNeedRequestBody[*][\r\n \t]*needRequestBody[(][)] const noexcept" OR
+           "const Http1ServerRequestHeadReady[*][\r\n \t]*headReady[(][)] const [&] noexcept" OR
        NOT http1_parser_internal MATCHES
-           "const Http1ServerRequestMessageReady[*][\r\n \t]*messageReady[(][)] const noexcept" OR
+           "const Http1ServerNeedRequestBody[*][\r\n \t]*needRequestBody[(][)] const [&] noexcept" OR
        NOT http1_parser_internal MATCHES
-           "const Http1ServerRequestParseFailure[*][\r\n \t]*failure[(][)] const noexcept" OR
+           "const Http1ServerRequestMessageReady[*][\r\n \t]*messageReady[(][)] const [&] noexcept" OR
+       NOT http1_parser_internal MATCHES
+           "const Http1ServerRequestParseFailure[*][\r\n \t]*failure[(][)] const [&] noexcept" OR
+       NOT http1_parser_internal MATCHES
+           "needRequestHead[(][)] const && = delete" OR
+       NOT http1_parser_internal MATCHES
+           "headReady[(][)] const && = delete" OR
+       NOT http1_parser_internal MATCHES
+           "needRequestBody[(][)] const && = delete" OR
+       NOT http1_parser_internal MATCHES
+           "messageReady[(][)] const && = delete" OR
+       NOT http1_parser_internal MATCHES
+           "failure[(][)] const && = delete" OR
        NOT http1_parser_internal MATCHES
            "HttpProtocolError protocolError[(][)] const noexcept" OR
        NOT http1_parser_internal MATCHES

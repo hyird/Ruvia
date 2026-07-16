@@ -240,7 +240,8 @@ RUVIA_TEST(http1_parse_missing_host_rejected) {
 RUVIA_TEST(http1_parse_rejects_header_smuggling_vectors) {
     const auto rejected = [](std::string_view request) {
         Http1ServerRequestParser parser;
-        return parser.parseMessage(request).failure() != nullptr;
+        const auto result = parser.parseMessage(request);
+        return result.failure() != nullptr;
     };
 
     // obs-fold: a continuation line (leading SP or HTAB) must be rejected, not

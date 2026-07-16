@@ -6,6 +6,7 @@
 #include <span>
 #include <string>
 #include <string_view>
+#include <utility>
 
 #include <asio/co_spawn.hpp>
 #include <asio/detached.hpp>
@@ -37,6 +38,14 @@ using ruvia::detail::generateSecureToken;
 using ruvia::detail::HttpRequestAccess;
 using ruvia::detail::NextAccess;
 using ruvia::detail::RequestKnownHeader;
+
+template <typename Result>
+concept ExposesRvalueSecureTokenAlternative =
+    requires(Result&& result) { std::move(result).ready(); } ||
+    requires(Result&& result) { std::move(result).failure(); };
+
+static_assert(!ExposesRvalueSecureTokenAlternative<
+    ruvia::detail::SecureTokenResult>);
 
 bool isLowerHex(char c) noexcept {
     return (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f');
@@ -112,7 +121,8 @@ RUVIA_TEST(csrf_token_is_48_lowercase_hex_chars) {
 
 RUVIA_TEST(csrf_token_requires_a_large_enough_buffer) {
     std::array<char, 47> tooSmall{};
-    RUVIA_CHECK(generateSecureToken(tooSmall).failure() != nullptr);
+    const auto tooSmallResult = generateSecureToken(tooSmall);
+    RUVIA_CHECK(tooSmallResult.failure() != nullptr);
     std::array<char, 48> exact{};
     const auto exactResult = generateSecureToken(exact);
     RUVIA_CHECK(exactResult.ready() != nullptr);

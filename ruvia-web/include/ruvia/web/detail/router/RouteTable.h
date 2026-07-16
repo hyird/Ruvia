@@ -208,17 +208,22 @@ public:
             WebSocketRouteOptions{endpoint.subprotocols(), endpoint.lifecycle()});
     }
 
-    [[nodiscard]] const BufferedRouteEndpoint* buffered() const noexcept {
+    [[nodiscard]] const BufferedRouteEndpoint* buffered() const & noexcept {
         return std::get_if<BufferedRouteEndpoint>(&value_);
     }
+    [[nodiscard]] const BufferedRouteEndpoint* buffered() const && = delete;
 
-    [[nodiscard]] const ResponseStreamRouteEndpoint* responseStream() const noexcept {
+    [[nodiscard]] const ResponseStreamRouteEndpoint*
+    responseStream() const & noexcept {
         return std::get_if<ResponseStreamRouteEndpoint>(&value_);
     }
+    [[nodiscard]] const ResponseStreamRouteEndpoint*
+    responseStream() const && = delete;
 
-    [[nodiscard]] const WebSocketRouteEndpoint* webSocket() const noexcept {
+    [[nodiscard]] const WebSocketRouteEndpoint* webSocket() const & noexcept {
         return std::get_if<WebSocketRouteEndpoint>(&value_);
     }
+    [[nodiscard]] const WebSocketRouteEndpoint* webSocket() const && = delete;
 
     // Every non-buffered endpoint has a buffered request body contract. Only a
     // buffered-response endpoint may opt into the explicit stream-body route.

@@ -953,6 +953,14 @@ concept HasHttp1ServerParseAlternatives = requires(const T& state) {
 };
 
 template <typename T>
+concept HasAnyRvalueHttp1ServerParseAccessor =
+    requires(T&& state) { std::move(state).needRequestHead(); } ||
+    requires(T&& state) { std::move(state).headReady(); } ||
+    requires(T&& state) { std::move(state).needRequestBody(); } ||
+    requires(T&& state) { std::move(state).messageReady(); } ||
+    requires(T&& state) { std::move(state).failure(); };
+
+template <typename T>
 concept HasAnyRvalueHttp1RequestParseAccessor =
     requires(T&& result) { std::move(result).needMore(); } ||
     requires(T&& result) { std::move(result).parsed(); } ||
@@ -1124,6 +1132,13 @@ concept HasHttp2LocalContentAlternatives = requires(const T& content) {
 };
 
 template <typename T>
+concept HasAnyRvalueHttp2LocalContentAccessor =
+    requires(T&& content) { std::move(content).unset(); } ||
+    requires(T&& content) { std::move(content).forbidden(); } ||
+    requires(T&& content) { std::move(content).unbounded(); } ||
+    requires(T&& content) { std::move(content).knownLength(); };
+
+template <typename T>
 concept HasStaleHttp2LocalModeAccessor = requires(const T& content) {
     content.mode();
 };
@@ -1158,6 +1173,13 @@ concept HasHttp2RemoteContentAlternatives = requires(const T& content) {
         std::same_as<const
             ruvia::detail::Http2RemoteContentMetadataOnlyKnownLength*>;
 };
+
+template <typename T>
+concept HasAnyRvalueHttp2RemoteContentAccessor =
+    requires(T&& content) { std::move(content).allowedWithoutLength(); } ||
+    requires(T&& content) { std::move(content).allowedKnownLength(); } ||
+    requires(T&& content) { std::move(content).metadataOnlyWithoutLength(); } ||
+    requires(T&& content) { std::move(content).metadataOnlyKnownLength(); };
 
 template <typename T>
 concept HasHttp2RemoteDeclaredLength = requires(const T& content) {
@@ -1324,6 +1346,13 @@ concept HasHttp2TunnelAlternatives = requires(const T& state) {
 };
 
 template <typename T>
+concept HasAnyRvalueHttp2TunnelAccessor =
+    requires(T&& state) { std::move(state).notConnect(); } ||
+    requires(T&& state) { std::move(state).pending(); } ||
+    requires(T&& state) { std::move(state).open(); } ||
+    requires(T&& state) { std::move(state).rejected(); };
+
+template <typename T>
 concept HasHttp2ConnectForm = requires(const T& state) {
     { state.form() } -> std::same_as<ruvia::detail::Http2ConnectForm>;
 };
@@ -1368,6 +1397,18 @@ concept HasHttp2LocalSendAlternatives = requires(const T& state) {
 };
 
 template <typename T>
+concept HasAnyRvalueHttp2LocalSendAccessor =
+    requires(T&& state) { std::move(state).headPending(); } ||
+    requires(T&& state) { std::move(state).requestContentOpen(); } ||
+    requires(T&& state) { std::move(state).responseContentOpen(); } ||
+    requires(T&& state) { std::move(state).responseTrailersOnly(); } ||
+    requires(T&& state) { std::move(state).connectPending(); } ||
+    requires(T&& state) { std::move(state).tunnelOpen(); } ||
+    requires(T&& state) { std::move(state).endStreamQueued(); } ||
+    requires(T&& state) { std::move(state).endStreamCommitted(); } ||
+    requires(T&& state) { std::move(state).aborted(); };
+
+template <typename T>
 concept HasHttp2RemoteReceiveAlternatives = requires(const T& state) {
     { state.headPending() } ->
         std::same_as<const ruvia::detail::Http2RemoteHeadPending*>;
@@ -1388,6 +1429,20 @@ concept HasHttp2RemoteReceiveAlternatives = requires(const T& state) {
     { state.aborted() } ->
         std::same_as<const ruvia::detail::Http2RemoteAborted*>;
 };
+
+template <typename T>
+concept HasAnyRvalueHttp2RemoteReceiveAccessor =
+    requires(T&& state) { std::move(state).headPending(); } ||
+    requires(T&& state) { std::move(state).headEndStreamPending(); } ||
+    requires(T&& state) { std::move(state).contentOpen(); } ||
+    requires(T&& state) { std::move(state).connectPending(); } ||
+    requires(T&& state) { std::move(state).connectPendingEndStream(); } ||
+    requires(T&& state) {
+        std::move(state).connectRejectedAwaitingEndStream();
+    } ||
+    requires(T&& state) { std::move(state).tunnelOpen(); } ||
+    requires(T&& state) { std::move(state).endStream(); } ||
+    requires(T&& state) { std::move(state).aborted(); };
 
 template <typename T>
 concept HasStaleHttp2BodyEnded = requires(const T& stream) {
@@ -1711,6 +1766,8 @@ static_assert(!std::default_initializable<
     ruvia::detail::Http2StreamingRequestContent>);
 static_assert(HasHttp2LocalContentAlternatives<
     ruvia::detail::Http2LocalContentState>);
+static_assert(!HasAnyRvalueHttp2LocalContentAccessor<
+    ruvia::detail::Http2LocalContentState>);
 static_assert(!HasStaleHttp2LocalModeAccessor<
     ruvia::detail::Http2LocalContentState>);
 static_assert(!HasHttp2LocalDeclaredLength<
@@ -1775,9 +1832,13 @@ static_assert(std::same_as<
     const ruvia::detail::Http1ServerRequestParseFailure*>);
 static_assert(HasHttp1ServerParseAlternatives<
     ruvia::detail::Http1ServerRequestParseState>);
+static_assert(!HasAnyRvalueHttp1ServerParseAccessor<
+    ruvia::detail::Http1ServerRequestParseState>);
 static_assert(!HasStaleHttp1ServerParseScalars<
     ruvia::detail::Http1ServerRequestParseState>);
 static_assert(HasHttp2RemoteContentAlternatives<
+    ruvia::detail::Http2RemoteContentState>);
+static_assert(!HasAnyRvalueHttp2RemoteContentAccessor<
     ruvia::detail::Http2RemoteContentState>);
 static_assert(!HasStaleHttp2RemoteContentTuple<
     ruvia::detail::Http2RemoteContentState>);
@@ -1851,6 +1912,8 @@ static_assert(std::is_trivially_copyable_v<
 static_assert(sizeof(ruvia::detail::HttpResponseBodyPlan) <= 12);
 static_assert(HasHttp2TunnelAlternatives<
     ruvia::detail::Http2TunnelState>);
+static_assert(!HasAnyRvalueHttp2TunnelAccessor<
+    ruvia::detail::Http2TunnelState>);
 static_assert(!HasStaleHttp2TunnelKindPhase<
     ruvia::detail::Http2TunnelState>);
 static_assert(!HasHttp2ConnectForm<
@@ -1880,6 +1943,8 @@ static_assert(std::same_as<
         .tunnel()),
     const ruvia::detail::Http2TunnelState&>);
 static_assert(HasHttp2LocalSendAlternatives<
+    ruvia::detail::Http2LocalSendState>);
+static_assert(!HasAnyRvalueHttp2LocalSendAccessor<
     ruvia::detail::Http2LocalSendState>);
 static_assert(!HasStaleHttp2LocalSendProduct<
     ruvia::detail::Http2LocalSendState>);
@@ -1931,6 +1996,8 @@ static_assert(std::same_as<
         .localSend()),
     const ruvia::detail::Http2LocalSendState&>);
 static_assert(HasHttp2RemoteReceiveAlternatives<
+    ruvia::detail::Http2RemoteReceiveState>);
+static_assert(!HasAnyRvalueHttp2RemoteReceiveAccessor<
     ruvia::detail::Http2RemoteReceiveState>);
 static_assert(!std::default_initializable<
     ruvia::detail::Http2RemoteReceiveState>);

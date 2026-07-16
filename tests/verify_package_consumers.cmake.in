@@ -2179,7 +2179,9 @@ if(NOT _installed_http1_request_parser MATCHES "class Http1RequestNeedMore final
    _installed_http1_request_parser MATCHES "HttpParseError::kNone" OR
    _installed_http_parse_error MATCHES "kNone" OR
    NOT _installed_http1_server_request_parser MATCHES
-       "const Http1ServerRequestParseFailure[*][\r\n \t]*failure[(][)] const noexcept" OR
+       "const Http1ServerRequestParseFailure[*][\r\n \t]*failure[(][)] const [&] noexcept" OR
+   NOT _installed_http1_server_request_parser MATCHES
+       "failure[(][)] const && = delete" OR
    NOT _installed_http1_server_request_parser MATCHES
        "HttpProtocolError protocolError[(][)] const noexcept" OR
    NOT _installed_http1_server_request_parser MATCHES
@@ -5359,6 +5361,14 @@ if("web" IN_LIST _built_components)
            "SessionClear" OR
        NOT _installed_secure_token_result_content MATCHES
            "class SecureTokenResult final" OR
+       NOT _installed_secure_token_result_content MATCHES
+           "ready[(][)] const [&] noexcept" OR
+       NOT _installed_secure_token_result_content MATCHES
+           "ready[(][)] const && = delete" OR
+       NOT _installed_secure_token_result_content MATCHES
+           "failure[(][)] const [&] noexcept" OR
+       NOT _installed_secure_token_result_content MATCHES
+           "failure[(][)] const && = delete" OR
        _installed_secure_token_result_content MATCHES
            "generateCsrfToken" OR
        NOT _installed_http1_closing_rejection_content MATCHES

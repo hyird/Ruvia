@@ -83,6 +83,42 @@ static_assert(!std::is_copy_constructible_v<ruvia::MultipartReader>);
 static_assert(std::same_as<
     decltype(ruvia::detail::generateSecureToken(std::declval<std::span<char>>())),
     ruvia::detail::SecureTokenResult>);
+
+template <typename Result>
+concept ExposesRvalueSecureTokenAlternative =
+    requires(Result&& result) { std::move(result).ready(); } ||
+    requires(Result&& result) { std::move(result).failure(); };
+
+template <typename State>
+concept ExposesRvalueSessionState =
+    requires(State&& state) { std::move(state).data(); } ||
+    requires(State&& state) { std::move(state).untouched(); } ||
+    requires(State&& state) { std::move(state).unrecognized(); } ||
+    requires(State&& state) { std::move(state).loaded(); } ||
+    requires(State&& state) { std::move(state).persistNew(); } ||
+    requires(State&& state) { std::move(state).persistExisting(); } ||
+    requires(State&& state) { std::move(state).rotate(); } ||
+    requires(State&& state) { std::move(state).cleared(); };
+
+template <typename Endpoint>
+concept ExposesRvalueRouteEndpoint =
+    requires(Endpoint&& endpoint) { std::move(endpoint).buffered(); } ||
+    requires(Endpoint&& endpoint) { std::move(endpoint).responseStream(); } ||
+    requires(Endpoint&& endpoint) { std::move(endpoint).webSocket(); };
+
+template <typename Route>
+concept ExposesRvalueSelectedRouteSignal =
+    requires(Route&& route) { std::move(route).signal(); } ||
+    requires(const Route&& route) { std::move(route).signal(); };
+
+static_assert(!ExposesRvalueSecureTokenAlternative<
+    ruvia::detail::SecureTokenResult>);
+static_assert(!ExposesRvalueSessionState<
+    ruvia::detail::ContextSessionState>);
+static_assert(!ExposesRvalueRouteEndpoint<
+    ruvia::detail::RouteEndpoint>);
+static_assert(!ExposesRvalueSelectedRouteSignal<
+    ruvia::detail::Http2SansIoSelectedRoute>);
 static_assert(std::same_as<
     decltype(std::declval<const ruvia::detail::ContextSessionState&>().persistNew()),
     const ruvia::detail::SessionPersistNew*>);
