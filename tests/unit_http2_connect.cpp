@@ -365,7 +365,7 @@ RUVIA_TEST(http2_connect_client_extended_head_requires_setting_and_protocol_cont
     const ruvia::HttpHeaderView websocketHeaders[] = {
         {"sec-websocket-version", "13"}};
     const auto websocket = client.submitExtendedConnectRequestHead(
-        "websocket",
+        "WebSocket",
         "https",
         "example.test",
         "/ws",
@@ -373,6 +373,13 @@ RUVIA_TEST(http2_connect_client_extended_head_requires_setting_and_protocol_cont
     RUVIA_CHECK(websocket.submitted() != nullptr);
     const auto websocketStream = submittedRequestStreamId(websocket);
     RUVIA_CHECK_EQ(websocketStream, std::uint32_t{3});
+    out = client.pendingOutput();
+    const auto websocketObserved =
+        decodeSingleHeaderFrame(&resource, out, ruvia_ctx);
+    RUVIA_CHECK_EQ(websocketObserved.protocol, std::string("websocket"));
+    RUVIA_CHECK_EQ(
+        client.stream(websocketStream)->requestProtocol(),
+        std::string_view("websocket"));
     RUVIA_CHECK(http2IsPendingWebSocketConnect(
         *client.stream(websocketStream)));
 }

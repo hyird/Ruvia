@@ -269,6 +269,9 @@ Http2RequestHeadSubmitResult Http2Connection::submitExtendedConnectRequestHead(
     }
 
     const bool websocket = httpAsciiEqualsIgnoreCase(protocol, "websocket");
+    const auto encodedProtocol = websocket
+        ? std::string_view("websocket")
+        : protocol;
     if (!isValidHttpHeaderName(protocol) ||
         (scheme != "http" && scheme != "https") ||
         !isValidHostHeader(authority) ||
@@ -295,7 +298,10 @@ Http2RequestHeadSubmitResult Http2Connection::submitExtendedConnectRequestHead(
     auto& block = stream->responseHeaderBlock();
     block.clear();
     HpackEncoder::encodeHeader(block, ":method", "CONNECT");
-    HpackEncoder::encodeHeader(block, ":protocol", protocol);
+    // RFC 8441 registers and requires the lowercase `websocket` value. HTTP
+    // protocol-name matching is case-insensitive, so accept caller spelling but
+    // never put a non-canonical WebSocket token on the wire or in stream state.
+    HpackEncoder::encodeHeader(block, ":protocol", encodedProtocol);
     HpackEncoder::encodeHeader(block, ":scheme", scheme);
     HpackEncoder::encodeHeader(block, ":authority", authority);
     HpackEncoder::encodeHeader(block, ":path", path);
@@ -307,7 +313,7 @@ Http2RequestHeadSubmitResult Http2Connection::submitExtendedConnectRequestHead(
         std::string_view(block.data(), block.size()),
         Http2EndStream::kKeepOpen);
     stream->assignRequestMethod("CONNECT");
-    stream->setProtocol(protocol);
+    stream->setProtocol(encodedProtocol);
     stream->beginLocalContentForbidden();
     (void)stream->beginLocalConnectRequest();
     activateLocalRequestStream(*stream);
