@@ -487,20 +487,9 @@ RUVIA_TEST(http2_connect_server_accepts_standard_tunnel_and_preserves_half_close
     const auto afterFin = frame(&resource, Http2FrameType::kData, 0, 1, "late");
     (void)server.feed(std::string_view(afterFin.data(), afterFin.size()));
     // Both halves are now closed. Tolerant minimal processing discards the late
-    // peer frame; only connection flow-control credit may be emitted, never a
-    // second stream frame after closure.
-    const auto creditBytes = server.pendingOutput();
-    const auto credit = ruvia::detail::http2ParseFrameHeader(
-        creditBytes.substr(0, 9));
-    RUVIA_CHECK_EQ(
-        credit.type,
-        static_cast<std::uint8_t>(Http2FrameType::kWindowUpdate));
-    RUVIA_CHECK_EQ(credit.streamId, std::uint32_t{0});
-    RUVIA_CHECK_EQ(
-        ruvia::detail::http2WindowUpdateIncrement(
-            creditBytes.substr(9, 4)),
-        std::uint32_t{4});
-    RUVIA_CHECK_EQ(creditBytes.size(), std::size_t{13});
+    // peer frame and banks its connection credit below the batching threshold;
+    // it never emits a second stream frame after closure.
+    RUVIA_CHECK(server.pendingOutput().empty());
     RUVIA_CHECK(!server.connectionError().has_value());
 }
 
@@ -682,7 +671,7 @@ RUVIA_TEST(http2_connect_pending_accepts_empty_request_half_close) {
     RUVIA_CHECK(!server.nextEvent().has_value());
 }
 
-RUVIA_TEST(http2_connect_open_tunnel_replenishes_owner_released_stream_window) {
+RUVIA_TEST(http2_connect_open_tunnel_batches_owner_released_window_credit) {
     std::pmr::monotonic_buffer_resource resource;
     Http2Connection server(&resource);
     handshake(server);
@@ -699,29 +688,10 @@ RUVIA_TEST(http2_connect_open_tunnel_replenishes_owner_released_stream_window) {
     RUVIA_CHECK(server.pendingOutput().empty());
 
     server.releaseReceivedData(1);
-    const auto updates = server.pendingOutput();
-    RUVIA_CHECK_EQ(
-        updates.size(),
-        std::size_t{2 * ruvia::detail::kHttp2WindowUpdateFrameBytes});
-    const auto connectionUpdate =
-        ruvia::detail::http2ParseFrameHeader(updates.substr(0, 9));
-    const auto streamUpdate = ruvia::detail::http2ParseFrameHeader(
-        updates.substr(ruvia::detail::kHttp2WindowUpdateFrameBytes, 9));
-    RUVIA_CHECK_EQ(
-        connectionUpdate.type,
-        static_cast<std::uint8_t>(Http2FrameType::kWindowUpdate));
-    RUVIA_CHECK_EQ(connectionUpdate.streamId, std::uint32_t{0});
-    RUVIA_CHECK_EQ(
-        streamUpdate.type,
-        static_cast<std::uint8_t>(Http2FrameType::kWindowUpdate));
-    RUVIA_CHECK_EQ(streamUpdate.streamId, std::uint32_t{1});
-    RUVIA_CHECK_EQ(
-        ruvia::detail::http2WindowUpdateIncrement(updates.substr(9, 4)),
-        std::uint32_t{4});
-    RUVIA_CHECK_EQ(
-        ruvia::detail::http2WindowUpdateIncrement(
-            updates.substr(ruvia::detail::kHttp2WindowUpdateFrameBytes + 9, 4)),
-        std::uint32_t{4});
+    // Owner acknowledgement transfers the four octets into both live receive
+    // scopes, but neither emits a frame before the batching threshold.
+    RUVIA_CHECK(server.pendingOutput().empty());
+    RUVIA_CHECK(!server.connectionError().has_value());
 }
 
 RUVIA_TEST(http2_connect_server_rejects_data_before_acceptance) {

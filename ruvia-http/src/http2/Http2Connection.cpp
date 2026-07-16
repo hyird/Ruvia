@@ -335,19 +335,18 @@ void Http2Connection::pinStream(std::uint32_t streamId) {
 }
 
 void Http2Connection::flushWindowDebt(Http2StreamState& stream) {
-    // Unreleased event credit must return to the CONNECTION window when a stream is
-    // removed, or an owner that stops consuming after reset would permanently shrink
-    // the shared window. Connection-scope only: a stream WINDOW_UPDATE on a gone
-    // stream is a peer protocol error.
+    // Unreleased event credit must survive stream removal at CONNECTION scope, or an
+    // owner that stops consuming after reset would permanently shrink the shared
+    // window. It joins the same bounded batch as owner-consumed credit; a stream
+    // WINDOW_UPDATE on a gone stream would instead be a peer protocol error.
+    // Stream-scoped credit that was consumed but not yet advertised dies with
+    // the stream. Its matching connection credit was queued independently.
+    (void)stream.receiveWindowCredit().take();
     const auto debt = stream.takeWindowDebt();
     if (debt == 0) {
         return;
     }
-    http2CreditConnectionReceiveWindow(
-        connectionReceiveWindow_, static_cast<std::int32_t>(debt));
-    char buf[kHttp2WindowUpdateFrameBytes];
-    http2WriteWindowUpdate(buf, 0, debt);
-    output_.appendBytes(std::string_view(buf, sizeof(buf)));
+    queueConsumedDataCredit(nullptr, debt);
 }
 
 void Http2Connection::detachActiveHeaderBlock(Http2StreamState& stream) {
@@ -754,21 +753,7 @@ void Http2Connection::releaseReceivedData(std::uint32_t streamId) {
     if (debt == 0) {
         return;
     }
-    http2CreditConnectionReceiveWindow(
-        connectionReceiveWindow_, static_cast<std::int32_t>(debt));
-    // Re-advertise the stream window only while the peer can still send on it; a
-    // stream-scoped WINDOW_UPDATE on an ended/reset stream can trip a strict peer.
-    if (!http2RemotePeerHalfClosed(*stream)) {
-        http2CreditStreamReceiveWindow(*stream, static_cast<std::int32_t>(debt));
-        char buf[kHttp2WindowUpdateFrameBytes * 2];
-        auto* out = http2WriteDataWindowUpdates(buf, streamId, debt);
-        output_.appendBytes(std::string_view(
-            buf, static_cast<std::size_t>(out - buf)));
-    } else {
-        char buf[kHttp2WindowUpdateFrameBytes];
-        http2WriteWindowUpdate(buf, 0, debt);
-        output_.appendBytes(std::string_view(buf, sizeof(buf)));
-    }
+    queueConsumedDataCredit(stream, debt);
 }
 
 bool Http2Connection::hasQueuedData(std::uint32_t streamId) const noexcept {
@@ -780,19 +765,48 @@ bool Http2Connection::hasQueuedData(std::uint32_t streamId) const noexcept {
     return false;
 }
 
+void Http2Connection::queueConsumedDataCredit(
+    Http2StreamState* stream,
+    std::uint32_t bytes) {
+    if (bytes == 0) {
+        return;
+    }
 
+    connectionReceiveCredit_.add(bytes);
+    const bool streamCanReceive = stream != nullptr &&
+        !http2RemotePeerHalfClosed(*stream) && !stream->isAborted();
+    if (streamCanReceive) {
+        stream->receiveWindowCredit().add(bytes);
+    }
+
+    char buffer[kHttp2WindowUpdateFrameBytes * 2];
+    auto* out = buffer;
+    if (connectionReceiveCredit_.ready()) {
+        const auto increment = connectionReceiveCredit_.take();
+        http2CreditConnectionReceiveWindow(
+            connectionReceiveWindow_, static_cast<std::int32_t>(increment));
+        out = http2WriteWindowUpdate(out, 0, increment);
+    }
+    if (streamCanReceive && stream->receiveWindowCredit().ready()) {
+        const auto increment = stream->receiveWindowCredit().take();
+        http2CreditStreamReceiveWindow(
+            *stream, static_cast<std::int32_t>(increment));
+        out = http2WriteWindowUpdate(out, stream->id(), increment);
+    }
+    if (out != buffer) {
+        output_.appendBytes(std::string_view(
+            buffer, static_cast<std::size_t>(out - buffer)));
+    }
+}
 
 void Http2Connection::releaseDroppedDataConnectionWindow(std::int32_t flowBytes) {
     // Every structurally valid DATA frame reached this path only after the shared
     // connection debit succeeded. Return exactly that credit while keeping the
     // connection; no stream window survives an abandoned stream.
-    http2CreditConnectionReceiveWindow(connectionReceiveWindow_, flowBytes);
-    if (flowBytes == 0) {
+    if (flowBytes <= 0) {
         return;
     }
-    char buf[kHttp2WindowUpdateFrameBytes];
-    http2WriteWindowUpdate(buf, 0, static_cast<std::uint32_t>(flowBytes));
-    output_.appendBytes(std::string_view(buf, sizeof(buf)));
+    queueConsumedDataCredit(nullptr, static_cast<std::uint32_t>(flowBytes));
 }
 
 bool Http2Connection::processData(const Http2FrameHeader& header, std::string_view payload) {
@@ -924,14 +938,11 @@ bool Http2Connection::processData(const Http2FrameHeader& header, std::string_vi
             return true;
         }
         if (flowBytes > 0) {
-            const auto increment = static_cast<std::uint32_t>(flowBytes);
-            http2CreditConnectionReceiveWindow(connectionReceiveWindow_, flowBytes);
-            http2CreditStreamReceiveWindow(*stream, flowBytes);
-            char buf[kHttp2WindowUpdateFrameBytes * 2];
-            auto* out = http2WriteDataWindowUpdates(
-                buf, header.streamId, increment);
-            output_.appendBytes(std::string_view(
-                buf, static_cast<std::size_t>(out - buf)));
+            queueConsumedDataCredit(
+                (header.flags & kHttp2FlagEndStream) == 0
+                    ? stream
+                    : nullptr,
+                static_cast<std::uint32_t>(flowBytes));
         }
         if ((header.flags & kHttp2FlagEndStream) == 0) {
             return true;
@@ -984,14 +995,13 @@ bool Http2Connection::processData(const Http2FrameHeader& header, std::string_vi
             stream->addWindowDebt(static_cast<std::uint32_t>(flowBytes));
         } else {
             // Empty DATA (including padding-only DATA) gives the owner no content to
-            // retain. Metadata-only empty frames likewise need no application ack.
-            const auto increment = static_cast<std::uint32_t>(flowBytes);
-            http2CreditConnectionReceiveWindow(connectionReceiveWindow_, flowBytes);
-            http2CreditStreamReceiveWindow(*stream, flowBytes);
-            char buf[kHttp2WindowUpdateFrameBytes * 2];
-            auto* out = http2WriteDataWindowUpdates(buf, header.streamId, increment);
-            output_.appendBytes(std::string_view(
-                buf, static_cast<std::size_t>(out - buf)));
+            // retain. Metadata-only empty frames likewise need no application ack,
+            // but their credit is still batched to prevent per-frame amplification.
+            queueConsumedDataCredit(
+                (header.flags & kHttp2FlagEndStream) == 0
+                    ? stream
+                    : nullptr,
+                static_cast<std::uint32_t>(flowBytes));
         }
     }
 

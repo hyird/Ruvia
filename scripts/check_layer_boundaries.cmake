@@ -7777,7 +7777,7 @@ elseif(EXISTS "${HTTP_PACKAGE_CONSUMER}")
        NOT http2_remote_receive_connect_test MATCHES
            "http2_connect_pending_accepts_empty_request_half_close" OR
        NOT http2_remote_receive_connect_test MATCHES
-           "http2_connect_open_tunnel_replenishes_owner_released_stream_window" OR
+           "http2_connect_open_tunnel_batches_owner_released_window_credit" OR
        NOT http2_remote_receive_package_test MATCHES
            "HasHttp2RemoteReceiveAlternatives" OR
        NOT http2_remote_receive_package_test MATCHES
@@ -7795,7 +7795,7 @@ elseif(EXISTS "${HTTP_PACKAGE_CONSUMER}")
        NOT http2_remote_receive_package_test MATCHES
            "remotePendingEndStream[.]finishRemotePendingConnect")
         boundary_error("HTTP/2 remote receive alternative ownership is under-tested"
-            "unit and installed consumers must reject head/body/peer booleans, pin private alternatives, and preserve rejected-CONNECT termination plus tunnel stream-window replenishment")
+            "unit and installed consumers must reject head/body/peer booleans, pin private alternatives, and preserve rejected-CONNECT termination plus tunnel receive-credit batching")
     endif()
 endif()
 if(NOT EXISTS "${HTTP2_CONNECT_TEST}")
@@ -7869,7 +7869,7 @@ elseif(EXISTS "${HTTP2_EVENT_TEST}" AND EXISTS "${HTTP_PACKAGE_CONSUMER}")
        NOT http2_remote_connection_test MATCHES
            "http2_connection_feed_data_emits_body_chunk_and_end" OR
        NOT http2_remote_connection_test MATCHES
-           "http2_connection_same_feed_data_credit_waits_for_owner_batch_release" OR
+           "http2_connection_same_feed_data_credit_queues_owner_batch" OR
        NOT http2_remote_connection_test MATCHES
            "releaseReceivedData[(]1[)]" OR
        NOT http2_remote_connection_test MATCHES "remoteKnownLength" OR

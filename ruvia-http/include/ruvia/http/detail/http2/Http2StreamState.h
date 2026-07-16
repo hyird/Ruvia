@@ -9,6 +9,7 @@
 #include "ruvia/http/HttpKnownMethod.h"
 #include "ruvia/http/detail/http2/Http2LocalContentState.h"
 #include "ruvia/http/detail/http2/Http2RemoteContentState.h"
+#include "ruvia/http/detail/http2/Http2ReceiveWindowCredit.h"
 #include "ruvia/http/detail/http2/Http2StreamFlowControl.h"
 #include "ruvia/http/detail/http2/Http2StreamHeaderBlocks.h"
 #include "ruvia/http/detail/http2/Http2StreamLifecycle.h"
@@ -30,6 +31,7 @@ class Http2StreamState final {
     Http2TunnelState tunnelState_;
     Http2StreamFlowControl flowControl_;
     std::uint32_t windowDebt_{0};
+    Http2ReceiveWindowCredit receiveWindowCredit_;
     Http2StreamHeaderBlocks headerBlocks_;
     Http2StreamRequestData requestData_;
 
@@ -71,6 +73,10 @@ public:
         const auto debt = windowDebt_;
         windowDebt_ = 0;
         return debt;
+    }
+
+    [[nodiscard]] Http2ReceiveWindowCredit& receiveWindowCredit() noexcept {
+        return receiveWindowCredit_;
     }
 
     void restoreReceiveWindow(std::int32_t bytes) noexcept {

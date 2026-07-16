@@ -48,6 +48,7 @@
 #include "ruvia/http/detail/http2/Http2LocalConnectionState.h"
 #include "ruvia/http/detail/http2/Http2OutputBuffer.h"
 #include "ruvia/http/detail/http2/Http2PeerSettings.h"
+#include "ruvia/http/detail/http2/Http2ReceiveWindowCredit.h"
 #include "ruvia/http/detail/http2/Http2ReadyQueue.h"
 #include "ruvia/http/detail/http2/Http2RequestContent.h"
 #include "ruvia/http/detail/http2/Http2Role.h"
@@ -629,8 +630,9 @@ public:
         std::span<const HttpHeaderView> headers = {});
     // A DATA event borrows bytes from the accepted input and retains the matching
     // receive-window debt. Once the owner has copied/consumed every currently
-    // delivered DATA event for this stream, release the debt and queue the required
-    // connection/stream WINDOW_UPDATE frames. Safe when the stream is gone.
+    // delivered DATA event for this stream, transfer the debt into batched
+    // connection/stream credit. WINDOW_UPDATE is emitted only at the shared
+    // half-window threshold. Safe when the stream is gone.
     void releaseReceivedData(std::uint32_t streamId);
     // True while submitData left a window-blocked remainder queued for this stream
     // (the owner waits for the drain report before pulling its next body chunk).
@@ -703,6 +705,9 @@ private:
     // Release a successfully debited DATA payload that protocol semantics discard.
     // Only connection credit survives because the stream is closed/being abandoned.
     void releaseDroppedDataConnectionWindow(std::int32_t flowBytes);
+    void queueConsumedDataCredit(
+        Http2StreamState* stream,
+        std::uint32_t bytes);
     [[nodiscard]] bool applySettingsPayload(std::string_view payload);
 
     // HPACK header-block decode (all pure; ported 1:1 from the coroutine session but
@@ -776,7 +781,7 @@ private:
         std::uint32_t streamId,
         const Http2StreamState* retainedStream) const noexcept;
     void discardDeferredStreamState(std::uint32_t streamId);
-    // Return a stream's banked receive-window debt to the connection window on removal.
+    // Preserve a removed stream's banked debt as batched connection credit.
     void flushWindowDebt(Http2StreamState& stream);
 
     std::pmr::memory_resource* resource_;
@@ -821,6 +826,7 @@ private:
     std::int32_t connectionSendWindow_{kHttp2DefaultInitialWindowSize};
     std::int32_t connectionReceiveWindow_{
         static_cast<std::int32_t>(Http2LocalSettings::kInitialWindowSize)};
+    Http2ReceiveWindowCredit connectionReceiveCredit_;
     PrefacePhase prefacePhase_{PrefacePhase::kNotStarted};
 
     // Defense-in-depth flood budgets (see Http2Connection.cpp). No clock in the core, so
