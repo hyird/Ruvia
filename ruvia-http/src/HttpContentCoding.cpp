@@ -372,28 +372,54 @@ void gzipZfree(voidpf, voidpf address) noexcept {
     std::size_t maxEncodedBytes,
     std::pmr::memory_resource* resource) {
     std::pmr::string output(httpPmrResourceOrDefault(resource));
-    const auto bound = BrotliEncoderMaxCompressedSize(input.size());
-    bool ok = false;
-    output.resize_and_overwrite(
-        maxEncodedBytes,
-        [&input, &ok](char* data, std::size_t count) noexcept {
-            std::size_t encodedSize = count;
-            ok = BrotliEncoderCompress(
-                     5,
-                     BROTLI_DEFAULT_WINDOW,
-                     BROTLI_MODE_GENERIC,
-                     input.size(),
-                     reinterpret_cast<const std::uint8_t*>(input.data()),
-                     &encodedSize,
-                     reinterpret_cast<std::uint8_t*>(data)) == BROTLI_TRUE;
-            return ok ? encodedSize : std::size_t{0};
-        });
-    if (ok) {
-        return output;
+    auto* state = BrotliEncoderCreateInstance(nullptr, nullptr, nullptr);
+    if (state == nullptr) {
+        return HttpContentEncodeError::kEncoderFailure;
     }
-    return bound != 0 && bound > maxEncodedBytes
-        ? ContentEncodeAttempt(HttpContentEncodeError::kEncodedSizeExceeded)
-        : ContentEncodeAttempt(HttpContentEncodeError::kEncoderFailure);
+    struct Guard final {
+        BrotliEncoderState* state;
+        ~Guard() { BrotliEncoderDestroyInstance(state); }
+    } guard{state};
+    if (BrotliEncoderSetParameter(
+            state,
+            BROTLI_PARAM_QUALITY,
+            5) != BROTLI_TRUE) {
+        return HttpContentEncodeError::kEncoderFailure;
+    }
+
+    std::size_t availableInput = input.size();
+    const auto* nextInput = reinterpret_cast<const std::uint8_t*>(
+        input.data());
+    std::uint8_t buffer[8192];
+    for (;;) {
+        const auto beforeInput = availableInput;
+        std::size_t availableOutput = sizeof(buffer);
+        auto* nextOutput = buffer;
+        if (BrotliEncoderCompressStream(
+                state,
+                BROTLI_OPERATION_FINISH,
+                &availableInput,
+                &nextInput,
+                &availableOutput,
+                &nextOutput,
+                nullptr) != BROTLI_TRUE) {
+            return HttpContentEncodeError::kEncoderFailure;
+        }
+        const auto produced = sizeof(buffer) - availableOutput;
+        if (output.size() > maxEncodedBytes ||
+            produced > maxEncodedBytes - output.size()) {
+            return HttpContentEncodeError::kEncodedSizeExceeded;
+        }
+        output.append(
+            reinterpret_cast<const char*>(buffer),
+            produced);
+        if (BrotliEncoderIsFinished(state) == BROTLI_TRUE) {
+            return output;
+        }
+        if (produced == 0 && availableInput == beforeInput) {
+            return HttpContentEncodeError::kEncoderFailure;
+        }
+    }
 }
 
 [[nodiscard]] ContentEncodeAttempt encodeZstdContent(

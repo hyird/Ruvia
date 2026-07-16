@@ -7,6 +7,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <memory_resource>
+#include <new>
 #include <optional>
 #include <span>
 #include <stdexcept>
@@ -70,6 +71,35 @@ using ruvia::detail::encodeHttpContent;
 using ruvia::detail::httpContentCodingFromFieldValue;
 
 inline constexpr std::size_t kDecodedBodyLimit = 16 * 1024 * 1024;
+
+class RejectLargeAllocationResource final : public std::pmr::memory_resource {
+public:
+    explicit RejectLargeAllocationResource(std::size_t maximumBlockBytes)
+        : maximumBlockBytes_(maximumBlockBytes) {}
+
+private:
+    void* do_allocate(std::size_t bytes, std::size_t alignment) override {
+        if (bytes > maximumBlockBytes_) {
+            throw std::bad_alloc();
+        }
+        return std::pmr::get_default_resource()->allocate(bytes, alignment);
+    }
+
+    void do_deallocate(
+        void* pointer,
+        std::size_t bytes,
+        std::size_t alignment) override {
+        std::pmr::get_default_resource()->deallocate(
+            pointer, bytes, alignment);
+    }
+
+    [[nodiscard]] bool do_is_equal(
+        const std::pmr::memory_resource& other) const noexcept override {
+        return this == &other;
+    }
+
+    std::size_t maximumBlockBytes_;
+};
 
 static_assert(std::same_as<
     decltype(std::declval<TransferCodingDecoder&>().decode(
@@ -797,6 +827,30 @@ RUVIA_TEST(http_content_encode_enforces_exact_cap_without_partial_output) {
             failure->error() ==
             HttpContentEncodeError::kEncodedSizeExceeded);
     }
+}
+
+RUVIA_TEST(http_brotli_encode_does_not_reserve_the_output_cap) {
+    const std::string input(1u << 20, 'b');
+    RejectLargeAllocationResource resource(4096);
+    bool completed = false;
+    bool roundTripped = false;
+    try {
+        auto result = encodeHttpContent(
+            HttpContentCoding::kBrotli,
+            input,
+            input.size() - 1,
+            &resource);
+        completed = result.encoded() != nullptr;
+        if (const auto* encoded = result.encoded()) {
+            roundTripped = decoded(
+                HttpContentCoding::kBrotli,
+                encoded->bytes(),
+                input.size()) == input;
+        }
+    } catch (const std::bad_alloc&) {
+    }
+    RUVIA_CHECK(completed);
+    RUVIA_CHECK(roundTripped);
 }
 
 RUVIA_TEST(http_identity_content_uses_the_default_resource_when_none_is_supplied) {
