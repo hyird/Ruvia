@@ -507,6 +507,9 @@ template <typename Visitor>
         (subtypeWildcard || httpMediaToken(parts.subtype));
 }
 
+template <HttpTemporaryOwningCharString Value>
+bool httpParseMediaTypeParts(Value&&, bool, HttpMediaTypeParts&) = delete;
+
 [[nodiscard]] inline bool httpParseMediaType(
     std::string_view value,
     bool allowWildcard,
@@ -519,6 +522,9 @@ template <typename Visitor>
                 return true;
             });
 }
+
+template <HttpTemporaryOwningCharString Value>
+bool httpParseMediaType(Value&&, bool, HttpMediaTypeParts&) = delete;
 
 [[nodiscard]] inline bool httpMediaRangeMatchesValidOffered(
     std::string_view range,

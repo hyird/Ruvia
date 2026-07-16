@@ -92,6 +92,9 @@ namespace ruvia::detail {
     return true;
 }
 
+template <HttpTemporaryOwningCharString Item>
+bool httpParseTransferCodingSyntax(Item&&, std::string_view&, bool&) = delete;
+
 enum class HttpTransferEncodingParseStatus : std::uint8_t {
     kOk,
     kMalformed,

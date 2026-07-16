@@ -634,6 +634,13 @@ private:
         httpValidMimeParameterValue(value);
 }
 
+template <HttpTemporaryOwningCharString Parameter>
+bool httpParseMimeParameter(
+    Parameter&&,
+    std::string_view&,
+    std::string_view&,
+    bool = true) = delete;
+
 class HttpMimeParameterNames final {
 public:
     [[nodiscard]] bool record(std::string_view name) noexcept {

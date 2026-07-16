@@ -179,6 +179,9 @@ struct HttpUpgradeProtocol final {
     return true;
 }
 
+template <HttpTemporaryOwningCharString Value>
+bool httpParseUpgradeProtocol(Value&&, HttpUpgradeProtocol&) = delete;
+
 [[nodiscard]] inline bool httpUpgradeProtocolEquals(
     const HttpUpgradeProtocol& left,
     const HttpUpgradeProtocol& right) noexcept {
