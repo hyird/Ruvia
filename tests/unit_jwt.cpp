@@ -49,12 +49,23 @@ concept AcceptsJwtTokenSplit = requires(Token&& token) {
     ruvia::detail::jwtSplitToken(std::forward<Token>(token));
 };
 
+template <typename Authorization>
+concept AcceptsJwtBearerToken = requires(Authorization&& authorization) {
+    ruvia::jwtBearerToken(std::forward<Authorization>(authorization));
+};
+
 static_assert(!AcceptsJwtTokenSplit<std::string>);
 static_assert(!AcceptsJwtTokenSplit<const std::string>);
 static_assert(!AcceptsJwtTokenSplit<std::pmr::string>);
 static_assert(AcceptsJwtTokenSplit<std::string&>);
 static_assert(AcceptsJwtTokenSplit<std::pmr::string&>);
 static_assert(AcceptsJwtTokenSplit<std::string_view>);
+static_assert(!AcceptsJwtBearerToken<std::string>);
+static_assert(!AcceptsJwtBearerToken<const std::string>);
+static_assert(!AcceptsJwtBearerToken<std::pmr::string>);
+static_assert(AcceptsJwtBearerToken<std::string&>);
+static_assert(AcceptsJwtBearerToken<std::pmr::string&>);
+static_assert(AcceptsJwtBearerToken<std::string_view>);
 
 JwtSignOptions signOptions(std::string_view secret) {
     JwtSignOptions options;
