@@ -482,6 +482,30 @@ concept ExposesAnyRvalueWebSocketFrameReadAccessor =
     requires(T&& result) { std::move(result).frame(); } ||
     requires(T&& result) { std::move(result).failure(); };
 
+template <typename String>
+concept AcceptsAnyTemporaryWebSocketFramePayload =
+    requires(String&& payload) {
+        ruvia::detail::WebSocketFrameView::text(
+            std::move(payload), true);
+    } ||
+    requires(String&& payload) {
+        ruvia::detail::WebSocketFrameView::binary(
+            std::move(payload), true);
+    } ||
+    requires(String&& payload) {
+        ruvia::detail::WebSocketFrameView::continuation(
+            std::move(payload), true);
+    } ||
+    requires(String&& payload) {
+        ruvia::detail::WebSocketFrameView::close(std::move(payload));
+    } ||
+    requires(String&& payload) {
+        ruvia::detail::WebSocketFrameView::ping(std::move(payload));
+    } ||
+    requires(String&& payload) {
+        ruvia::detail::WebSocketFrameView::pong(std::move(payload));
+    };
+
 template <typename T>
 concept ExposesAnyRvalueWebSocketInboundAccessor =
     requires(T&& result) { std::move(result).continueReading(); } ||
@@ -3176,6 +3200,8 @@ static_assert(std::same_as<
 static_assert(std::same_as<
     decltype(ruvia::detail::WebSocketFrameView::close(std::string_view{})),
     std::optional<ruvia::detail::WebSocketFrameView>>);
+static_assert(!AcceptsAnyTemporaryWebSocketFramePayload<std::string>);
+static_assert(!AcceptsAnyTemporaryWebSocketFramePayload<std::pmr::string>);
 static_assert(std::same_as<
     decltype(std::declval<
         const ruvia::detail::WebSocketFrameReadResult&>().needInput()),

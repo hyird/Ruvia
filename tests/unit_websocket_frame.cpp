@@ -63,6 +63,36 @@ concept HasAnyRvalueFrameReadAccessor =
     requires(T&& result) { std::move(result).frame(); } ||
     requires(T&& result) { std::move(result).failure(); };
 
+template <typename String>
+concept AcceptsTemporaryTextFramePayload = requires(String&& payload) {
+    WebSocketFrameView::text(std::move(payload), true);
+};
+
+template <typename String>
+concept AcceptsTemporaryBinaryFramePayload = requires(String&& payload) {
+    WebSocketFrameView::binary(std::move(payload), true);
+};
+
+template <typename String>
+concept AcceptsTemporaryContinuationFramePayload = requires(String&& payload) {
+    WebSocketFrameView::continuation(std::move(payload), true);
+};
+
+template <typename String>
+concept AcceptsTemporaryCloseFramePayload = requires(String&& payload) {
+    WebSocketFrameView::close(std::move(payload));
+};
+
+template <typename String>
+concept AcceptsTemporaryPingFramePayload = requires(String&& payload) {
+    WebSocketFrameView::ping(std::move(payload));
+};
+
+template <typename String>
+concept AcceptsTemporaryPongFramePayload = requires(String&& payload) {
+    WebSocketFrameView::pong(std::move(payload));
+};
+
 static_assert(!std::default_initializable<WebSocketFrameReadResult>);
 static_assert(!std::default_initializable<WebSocketFrameStart>);
 static_assert(!std::default_initializable<WebSocketFrameView>);
@@ -82,6 +112,12 @@ static_assert(!HasCleanEofAllowedField<WebSocketFrameReadResult>);
 static_assert(!HasFrameReadError<WebSocketFrameReadResult>);
 static_assert(!HasAnyRvalueFrameReadAccessor<WebSocketFrameReadResult>);
 static_assert(HasFrameReadError<ruvia::detail::WebSocketFrameReadFailure>);
+static_assert(!AcceptsTemporaryTextFramePayload<std::string>);
+static_assert(!AcceptsTemporaryBinaryFramePayload<std::string>);
+static_assert(!AcceptsTemporaryContinuationFramePayload<std::string>);
+static_assert(!AcceptsTemporaryCloseFramePayload<std::string>);
+static_assert(!AcceptsTemporaryPingFramePayload<std::string>);
+static_assert(!AcceptsTemporaryPongFramePayload<std::string>);
 
 std::pmr::string maskedFrame(
     unsigned char first,
@@ -167,7 +203,8 @@ RUVIA_TEST(ws_frame_view_factories_exclude_invalid_metadata_combinations) {
     RUVIA_CHECK(compressedText.compressed());
 
     RUVIA_CHECK(WebSocketFrameView::ping("ok").has_value());
-    RUVIA_CHECK(!WebSocketFrameView::ping(std::string(126, 'x')).has_value());
+    const std::string oversizedPing(126, 'x');
+    RUVIA_CHECK(!WebSocketFrameView::ping(oversizedPing).has_value());
     RUVIA_CHECK(WebSocketFrameView::close({}).has_value());
     RUVIA_CHECK(!WebSocketFrameView::close("x").has_value());
 }

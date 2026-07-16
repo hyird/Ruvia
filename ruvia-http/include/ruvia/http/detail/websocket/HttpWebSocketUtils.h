@@ -12,6 +12,7 @@
 #include <variant>
 
 #include "ruvia/http/ProtocolByteLimit.h"
+#include "ruvia/http/detail/BorrowedView.h"
 #include "ruvia/http/detail/websocket/HttpWebSocketMessageAccess.h"
 #include "ruvia/http/WebSocketProtocol.h"
 
@@ -354,10 +355,11 @@ private:
     std::string_view reason) noexcept;
 [[nodiscard]] std::optional<WebSocketProtocolFailure>
 webSocketClosePayloadFailure(std::string_view payload) noexcept;
-// One borrowed frame with validated metadata combinations. Named factories keep
-// continuation and control frames from acquiring an impossible data opcode or
-// compression bit; the wire reader additionally owns masking, length, and Close
-// payload validation before publishing the same type.
+// One borrowed frame with validated metadata combinations. Payload storage must
+// outlive the view, so named factories reject owning-string rvalues. They also
+// keep continuation and control frames from acquiring an impossible data opcode
+// or compression bit; the wire reader additionally owns masking, length, and
+// Close payload validation before publishing the same type.
 class WebSocketFrameView final {
 public:
     [[nodiscard]] static constexpr WebSocketFrameView text(
@@ -368,6 +370,12 @@ public:
             WebSocketFrameKind::kText, payload, final, compressed);
     }
 
+    template <HttpTemporaryOwningCharString String>
+    static WebSocketFrameView text(
+        String&&,
+        bool,
+        bool = false) = delete;
+
     [[nodiscard]] static constexpr WebSocketFrameView binary(
         std::string_view payload,
         bool final,
@@ -376,12 +384,21 @@ public:
             WebSocketFrameKind::kBinary, payload, final, compressed);
     }
 
+    template <HttpTemporaryOwningCharString String>
+    static WebSocketFrameView binary(
+        String&&,
+        bool,
+        bool = false) = delete;
+
     [[nodiscard]] static constexpr WebSocketFrameView continuation(
         std::string_view payload,
         bool final) noexcept {
         return WebSocketFrameView(
             WebSocketFrameKind::kContinuation, payload, final, false);
     }
+
+    template <HttpTemporaryOwningCharString String>
+    static WebSocketFrameView continuation(String&&, bool) = delete;
 
     [[nodiscard]] static std::optional<WebSocketFrameView> close(
         std::string_view payload) noexcept {
@@ -393,6 +410,9 @@ public:
             WebSocketFrameKind::kClose, payload, true, false);
     }
 
+    template <HttpTemporaryOwningCharString String>
+    static std::optional<WebSocketFrameView> close(String&&) = delete;
+
     [[nodiscard]] static constexpr std::optional<WebSocketFrameView> ping(
         std::string_view payload) noexcept {
         if (payload.size() > 125) {
@@ -402,6 +422,9 @@ public:
             WebSocketFrameKind::kPing, payload, true, false);
     }
 
+    template <HttpTemporaryOwningCharString String>
+    static std::optional<WebSocketFrameView> ping(String&&) = delete;
+
     [[nodiscard]] static constexpr std::optional<WebSocketFrameView> pong(
         std::string_view payload) noexcept {
         if (payload.size() > 125) {
@@ -410,6 +433,9 @@ public:
         return WebSocketFrameView(
             WebSocketFrameKind::kPong, payload, true, false);
     }
+
+    template <HttpTemporaryOwningCharString String>
+    static std::optional<WebSocketFrameView> pong(String&&) = delete;
 
     [[nodiscard]] constexpr WebSocketFrameKind kind() const noexcept {
         return kind_;
