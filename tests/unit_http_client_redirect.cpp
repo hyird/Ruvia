@@ -3,6 +3,7 @@
 #include <concepts>
 #include <cstdint>
 #include <memory_resource>
+#include <string>
 #include <string_view>
 #include <utility>
 
@@ -40,6 +41,10 @@ concept ExposesRvalueHttpClientRedirectTargetView =
     requires(T&& target) { std::move(target).value(); };
 
 template <typename T>
+concept ExposesRvalueHttpClientRedirectRequestMethod =
+    requires(T&& plan) { std::move(plan).method(); };
+
+template <typename T>
 concept AcceptsTemporaryHttpClientResponseHeaderLookup =
     requires(T&& response) {
         lookupUniqueHttpClientResponseHeader(
@@ -52,6 +57,12 @@ static_assert(!HasAnyRvalueHttpClientRedirectTargetAccessor<
     ruvia::HttpClientRedirectTargetResult>);
 static_assert(!ExposesRvalueHttpClientRedirectTargetView<
     ruvia::HttpClientRedirectTarget>);
+static_assert(!ExposesRvalueHttpClientRedirectRequestMethod<
+    ruvia::HttpClientRedirectRequestPlan>);
+static_assert(!std::copy_constructible<
+    ruvia::HttpClientRedirectRequestPlan>);
+static_assert(std::move_constructible<
+    ruvia::HttpClientRedirectRequestPlan>);
 static_assert(!AcceptsTemporaryHttpClientResponseHeaderLookup<
     ruvia::HttpClientResponseHead>);
 
@@ -217,6 +228,22 @@ RUVIA_TEST(http_client_redirect_request_plan_follows_rfc) {
         RUVIA_CHECK(
             plan.contentDisposition() == HttpClientRedirectContentDisposition::kPreserve);
     }
+}
+
+RUVIA_TEST(http_client_redirect_request_plan_owns_preserved_method) {
+    std::string method = "PROPFIND";
+    HttpClientRequest request;
+    request.method = method;
+
+    const auto plan = planHttpClientRedirectRequest(request, 307);
+    for (char& ch : method) {
+        ch = 'X';
+    }
+
+    RUVIA_CHECK_EQ(plan.method(), std::string_view("PROPFIND"));
+    RUVIA_CHECK(
+        plan.contentDisposition() ==
+        HttpClientRedirectContentDisposition::kPreserve);
 }
 
 RUVIA_TEST(http_client_response_header_lookup_distinguishes_empty_and_repeated) {

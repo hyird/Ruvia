@@ -1064,7 +1064,8 @@ concept ExposesAnyRvalueHttpClientOwnedView =
     requires(T&& value) { std::move(value).name(); } ||
     requires(T&& value) { std::move(value).value(); } ||
     requires(T&& value) { std::move(value).headers(); } ||
-    requires(T&& value) { std::move(value).body(); };
+    requires(T&& value) { std::move(value).body(); } ||
+    requires(T&& value) { std::move(value).method(); };
 
 template <typename T>
 concept HasCompleteType = requires {
@@ -2858,6 +2859,18 @@ static_assert(!HasHttpClientHeaderValue<
     ruvia::HttpClientResponseHeaderRepeated>);
 static_assert(!HasHttpClientRedirectStatus<
     ruvia::HttpClientResponseHeaderLookupResult>);
+static_assert(std::same_as<
+    decltype(ruvia::planHttpClientRedirectRequest(
+        std::declval<const ruvia::HttpClientRequest&>(),
+        std::uint16_t{},
+        std::declval<std::pmr::memory_resource*>())),
+    ruvia::HttpClientRedirectRequestPlan>);
+static_assert(!std::is_copy_constructible_v<
+    ruvia::HttpClientRedirectRequestPlan>);
+static_assert(std::is_move_constructible_v<
+    ruvia::HttpClientRedirectRequestPlan>);
+static_assert(!ExposesAnyRvalueHttpClientOwnedView<
+    ruvia::HttpClientRedirectRequestPlan>);
 static_assert(std::same_as<
     decltype(ruvia::resolveHttpClientSameOriginRedirectTarget(
         std::declval<const ruvia::HttpOrigin&>(),

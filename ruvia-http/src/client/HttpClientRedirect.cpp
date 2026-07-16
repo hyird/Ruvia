@@ -127,24 +127,35 @@ HttpClientResponseHeaderLookupResult lookupUniqueHttpClientResponseHeader(
         : HttpClientResponseHeaderLookupResult::makeAbsent();
 }
 
+HttpClientRedirectRequestPlan::HttpClientRedirectRequestPlan(
+    std::string_view method,
+    HttpClientRedirectContentDisposition contentDisposition,
+    std::pmr::memory_resource* resource)
+    : method_(method, detail::httpPmrResourceOrDefault(resource)),
+      contentDisposition_(contentDisposition) {}
+
 HttpClientRedirectRequestPlan planHttpClientRedirectRequest(
     const HttpClientRequest& request,
-    std::uint16_t status) noexcept {
+    std::uint16_t status,
+    std::pmr::memory_resource* resource) {
     if (status == 303) {
         return HttpClientRedirectRequestPlan(
             request.method == "HEAD"
                 ? request.method.view()
                 : std::string_view("GET"),
-            HttpClientRedirectContentDisposition::kDrop);
+            HttpClientRedirectContentDisposition::kDrop,
+            resource);
     }
     if ((status == 301 || status == 302) && request.method == "POST") {
         return HttpClientRedirectRequestPlan(
             "GET",
-            HttpClientRedirectContentDisposition::kDrop);
+            HttpClientRedirectContentDisposition::kDrop,
+            resource);
     }
     return HttpClientRedirectRequestPlan(
         request.method.view(),
-        HttpClientRedirectContentDisposition::kPreserve);
+        HttpClientRedirectContentDisposition::kPreserve,
+        resource);
 }
 
 HttpClientOriginAuthorityStatus classifyHttpClientOriginAuthority(

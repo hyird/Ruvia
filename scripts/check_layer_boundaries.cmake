@@ -9618,11 +9618,15 @@ elseif(EXISTS "${HTTP1_CLIENT_RESPONSE_PARSER}")
     file(READ "${RUVIA_ROOT}/ruvia-http/src/client/HttpClientRedirect.cpp"
         http_client_redirect)
     if(NOT http_client_redirect_header MATCHES "HttpClientRedirectRequestPlan" OR
+       NOT http_client_redirect_header MATCHES "std::pmr::string method_" OR
+       NOT http_client_redirect_header MATCHES "method[(][)] const [&] noexcept" OR
+       NOT http_client_redirect_header MATCHES "method[(][)] const && = delete" OR
+       NOT http_client_redirect MATCHES "httpPmrResourceOrDefault[(]resource[)]" OR
        NOT http_client_redirect MATCHES "request\\.method[ \t]*==[ \t]*\"POST\"" OR
        NOT http_client_redirect MATCHES "request\\.method[ \t]*==[ \t]*\"HEAD\"" OR
        http_client_redirect MATCHES "httpAsciiEqualsIgnoreCase\\([^,\r\n]*request\\.method")
-        boundary_error("HTTP client redirect request plan lost RFC method semantics"
-            "303 must select GET/HEAD, only POST may become GET for 301/302, and tokens remain case-sensitive")
+        boundary_error("HTTP client redirect request plan lost ownership or RFC method semantics"
+            "the plan must own its PMR method without temporary views; 303 selects GET/HEAD, only POST may become GET for 301/302, and tokens remain case-sensitive")
     endif()
     if(NOT http_client_redirect_header MATCHES "enum class HttpClientOriginAuthorityStatus" OR
        NOT http_client_redirect_header MATCHES "kSameOrigin" OR
@@ -9707,6 +9711,12 @@ if(NOT public_http_client_value_api MATCHES
        "failure[(][)] const &&[ \\t]*=[ \\t]*delete" OR
    NOT public_http_client_redirect_value_api MATCHES
        "value[(][)] const [&] noexcept" OR
+   NOT public_http_client_redirect_value_api MATCHES
+       "method[(][)] const [&] noexcept" OR
+   NOT public_http_client_redirect_value_api MATCHES
+       "method[(][)] const &&[ \\t]*=[ \\t]*delete" OR
+   NOT public_http_client_redirect_value_api MATCHES
+       "std::pmr::string method_" OR
    NOT public_http_client_redirect_value_api MATCHES
        "lookupUniqueHttpClientResponseHeader[\r\n \t]*[(][\r\n \t]*const HttpClientResponseHead&&" OR
    NOT public_http1_client_request_value_api MATCHES

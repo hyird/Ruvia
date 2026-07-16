@@ -130,11 +130,21 @@ enum class HttpClientRedirectContentDisposition : std::uint8_t {
     kDrop,
 };
 
+// The method is copied into caller-selected PMR storage so the plan does not
+// inherit the request or request-method backing storage lifetime.
 class HttpClientRedirectRequestPlan final {
 public:
-    [[nodiscard]] constexpr std::string_view method() const noexcept {
-        return method_;
+    HttpClientRedirectRequestPlan(const HttpClientRedirectRequestPlan&) = delete;
+    HttpClientRedirectRequestPlan& operator=(
+        const HttpClientRedirectRequestPlan&) = delete;
+    HttpClientRedirectRequestPlan(HttpClientRedirectRequestPlan&&) noexcept = default;
+    HttpClientRedirectRequestPlan& operator=(
+        HttpClientRedirectRequestPlan&&) = delete;
+
+    [[nodiscard]] std::string_view method() const & noexcept {
+        return std::string_view(method_.data(), method_.size());
     }
+    std::string_view method() const && = delete;
 
     [[nodiscard]] constexpr HttpClientRedirectContentDisposition
     contentDisposition() const noexcept {
@@ -144,20 +154,22 @@ public:
 private:
     friend HttpClientRedirectRequestPlan planHttpClientRedirectRequest(
         const HttpClientRequest&,
-        std::uint16_t) noexcept;
+        std::uint16_t,
+        std::pmr::memory_resource*);
 
-    constexpr HttpClientRedirectRequestPlan(
+    HttpClientRedirectRequestPlan(
         std::string_view method,
-        HttpClientRedirectContentDisposition contentDisposition) noexcept
-        : method_(method), contentDisposition_(contentDisposition) {}
+        HttpClientRedirectContentDisposition contentDisposition,
+        std::pmr::memory_resource* resource);
 
-    std::string_view method_;
+    std::pmr::string method_;
     HttpClientRedirectContentDisposition contentDisposition_;
 };
 
 [[nodiscard]] HttpClientRedirectRequestPlan planHttpClientRedirectRequest(
     const HttpClientRequest& request,
-    std::uint16_t status) noexcept;
+    std::uint16_t status,
+    std::pmr::memory_resource* resource = nullptr);
 
 // This classification has no alternative-specific payload, so an enum is the
 // complete result rather than a status coupled to unrelated fields.

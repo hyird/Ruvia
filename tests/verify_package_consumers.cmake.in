@@ -4917,9 +4917,15 @@ if(NOT _installed_http_client_redirect MATCHES
    NOT _installed_http_client_redirect MATCHES
        "value[(][)] const && = delete" OR
    NOT _installed_http_client_redirect MATCHES
+       "method[(][)] const [&] noexcept" OR
+   NOT _installed_http_client_redirect MATCHES
+       "method[(][)] const && = delete" OR
+   NOT _installed_http_client_redirect MATCHES
+       "std::pmr::string method_" OR
+   NOT _installed_http_client_redirect MATCHES
        "lookupUniqueHttpClientResponseHeader[\r\n \t]*[(][\r\n \t]*const HttpClientResponseHead&&")
     message(FATAL_ERROR
-        "installed redirect helper accepts temporary response owners or exposes temporary target storage")
+        "installed redirect helper borrows request methods, accepts temporary response owners, or exposes temporary owned storage")
 endif()
 file(READ "${_install_prefix}/include/ruvia/http/MultipartParser.h"
     _installed_multipart_parser)
