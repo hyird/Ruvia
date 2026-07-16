@@ -6,6 +6,7 @@
 #include <string_view>
 
 #include "ruvia/http/HttpStatus.h"
+#include "ruvia/http/detail/HttpInterimResponseValidation.h"
 #include "ruvia/http/detail/HttpResponseContentSemantics.h"
 #include "ruvia/http/detail/http2/Http2FramePayload.h"
 #include "ruvia/http/detail/http2/Http2HeaderBlock.h"
@@ -98,6 +99,7 @@ constexpr std::uint8_t kMaxHttp2InterimResponses = 8;
 
 struct Http2ResponseDecodeContext final {
     Http2HeaderDecodeContext base;
+    HttpInterimResponseHeaderValidator interimHeaders;
     std::optional<std::uint16_t> status;
     bool sawRegular{false};
 };
@@ -136,7 +138,10 @@ bool http2OnDecodedResponseHeader(void* target, std::string_view name, std::stri
     }
     context->sawRegular = true;
     if (*context->status < 200) {
-        return true;  // interim head: validate only, never stored
+        // Interim fields are validated but not stored. The shared incremental
+        // validator keeps receive acceptance identical to both response writers.
+        return context->interimHeaders.validate(name, value) ==
+            HttpInterimResponseHeaderValidationStatus::kOk;
     }
     const auto kind = classifyRequestHeader(name);
     const auto responseContentSemantics = httpResponseContentSemantics(
@@ -171,7 +176,7 @@ bool http2OnDecodedResponseHeader(void* target, std::string_view name, std::stri
 
 HeaderDecodeStatus Http2Connection::decodeResponseHeaderBlock(Http2StreamState& stream) {
     Http2ResponseDecodeContext context{
-        Http2HeaderDecodeContext{stream}, std::nullopt, false};
+        Http2HeaderDecodeContext{stream}, {}, std::nullopt, false};
     const auto result = decoder_.decode(
         stream.requestHeaderBlock(), &context,
         [](void* target, std::string_view name, std::string_view value) {

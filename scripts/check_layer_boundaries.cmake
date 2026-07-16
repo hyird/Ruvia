@@ -6813,14 +6813,20 @@ set(WEB_CONTINUE_WRITER
     "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/body/HttpContinueWriter.h")
 set(HTTP2_CONNECTION_HEADER
     "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/detail/http2/Http2Connection.h")
+set(HTTP2_INTERIM_RESPONSE_RECEIVER
+    "${RUVIA_ROOT}/ruvia-http/src/http2/Http2ConnectionHeaders.cpp")
+set(HTTP2_INTERIM_RESPONSE_TEST
+    "${RUVIA_ROOT}/tests/unit_http2_connection.cpp")
 if(NOT EXISTS "${HTTP_INTERIM_RESPONSE_HEADER}" OR
    NOT EXISTS "${HTTP_INTERIM_RESPONSE_SOURCE}" OR
    NOT EXISTS "${HTTP1_INTERIM_RESPONSE_WRITER}" OR
    NOT EXISTS "${HTTP1_INTERIM_RESPONSE_WRITER_SOURCE}" OR
    NOT EXISTS "${HTTP_INTERIM_RESPONSE_VALIDATION}" OR
+   NOT EXISTS "${HTTP2_INTERIM_RESPONSE_RECEIVER}" OR
+   NOT EXISTS "${HTTP2_INTERIM_RESPONSE_TEST}" OR
    NOT EXISTS "${WEB_CONTINUE_WRITER}")
     boundary_error("typed interim response head is missing"
-        "non-switching 1xx needs typed HTTP/1 and HTTP/2 protocol writers")
+        "non-switching 1xx needs typed HTTP/1 and HTTP/2 writers plus shared receive validation")
 else()
     file(READ "${HTTP_INTERIM_RESPONSE_HEADER}" http_interim_response_header)
     file(READ "${HTTP_INTERIM_RESPONSE_SOURCE}" http_interim_response_source)
@@ -6830,6 +6836,10 @@ else()
     file(READ "${WEB_CONTINUE_WRITER}" web_continue_writer)
     file(READ "${HTTP2_CONNECTION_HEADER}" http2_connection_header)
     file(READ "${HTTP2_RESPONSE_HEADERS}" http2_response_headers)
+    file(READ "${HTTP2_INTERIM_RESPONSE_RECEIVER}"
+        http2_interim_response_receiver)
+    file(READ "${HTTP2_INTERIM_RESPONSE_TEST}"
+        http2_interim_response_test)
     file(READ "${RUVIA_ROOT}/ruvia-http/src/HttpResponse.cpp" http_response_source)
     if(NOT http_interim_response_header MATCHES "HttpInterimResponseHead" OR
        NOT http_interim_response_header MATCHES "HeaderInit" OR
@@ -6851,14 +6861,24 @@ else()
        NOT http_interim_response_validation MATCHES "kContentLengthForbidden" OR
        NOT http_interim_response_validation MATCHES "kTransferEncodingForbidden" OR
        NOT http_interim_response_validation MATCHES "kRepeatedSingleton" OR
+       NOT http_interim_response_validation MATCHES
+           "class HttpInterimResponseHeaderValidator final" OR
+       NOT http_interim_response_validation MATCHES
+           "validator[.]validate" OR
        NOT web_continue_writer MATCHES "Http1InterimResponseWriter" OR
        NOT web_continue_writer MATCHES "system_error" OR
        NOT http2_connection_header MATCHES "submitInterimResponseHead" OR
        NOT http2_response_headers MATCHES "appendHttp2InterimResponseHeaders" OR
        NOT http2_response_headers MATCHES "validateHttpInterimResponseHeaders" OR
-       NOT http2_response_headers MATCHES "kInvalidHeader")
+       NOT http2_response_headers MATCHES "kInvalidHeader" OR
+       NOT http2_interim_response_receiver MATCHES
+           "HttpInterimResponseHeaderValidator interimHeaders" OR
+       NOT http2_interim_response_receiver MATCHES
+           "interimHeaders[.]validate" OR
+       NOT http2_interim_response_test MATCHES
+           "http2_connection_client_rejects_forbidden_interim_fields")
         boundary_error("interim/final response types have drifted"
-            "typed 1xx must use exact, transactionally validated HTTP/1 and HTTP/2 writers")
+            "typed 1xx must use one incremental field contract across exact HTTP/1 and HTTP/2 writers and the HTTP/2 client receiver")
     endif()
 endif()
 set(HTTP_RESPONSE_HEAD_BUFFER
