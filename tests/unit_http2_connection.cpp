@@ -5119,9 +5119,10 @@ RUVIA_TEST(http2_connection_drained_settings_never_trip) {
 }
 
 namespace {
-// Open stream 1 and let the peer RST it, leaving it a tracked closed (non-idle,
-// non-GOAWAY) stream that answers further DATA with RST_STREAM.
-void openThenPeerReset(Http2Connection& conn, std::pmr::memory_resource* resource) {
+// Open stream 1 and let this endpoint reset it. DATA that was already in flight
+// before the peer observes our RST_STREAM can still arrive, so the closed-stream
+// response/flood budget remains meaningful only for this local-close direction.
+void openThenLocalReset(Http2Connection& conn, std::pmr::memory_resource* resource) {
     std::pmr::string block(resource);
     encodeGetRequest(block);
     const auto head = headersFrame(
@@ -5131,15 +5132,64 @@ void openThenPeerReset(Http2Connection& conn, std::pmr::memory_resource* resourc
     (void)conn.feed(std::string_view(head.data(), head.size()));
     while (conn.nextEvent().has_value()) {
     }
-    char rst[9 + 4];
-    ruvia::detail::http2EncodeFrameHeader(rst, 4, Http2FrameType::kRstStream, 0, 1);
-    ruvia::detail::http2Write32(rst + 9, 0);
-    (void)conn.feed(std::string_view(rst, sizeof(rst)));
-    while (conn.nextEvent().has_value()) {
-    }
+    (void)conn.submitReset(1, Http2ErrorCode::kCancel);
     conn.consumeOutput(conn.pendingOutput().size());  // flush + reset the flood budgets
 }
 }  // namespace
+
+RUVIA_TEST(http2_connection_data_after_peer_reset_is_connection_error) {
+    for (const bool pinned : {false, true}) {
+        std::pmr::monotonic_buffer_resource resource;
+        Http2Connection conn(&resource);
+        handshake(conn);
+
+        std::pmr::string block(&resource);
+        encodeGetRequest(block);
+        const auto head = headersFrame(
+            &resource,
+            1,
+            ruvia::detail::kHttp2FlagEndHeaders |
+                ruvia::detail::kHttp2FlagEndStream,
+            std::string_view(block.data(), block.size()));
+        RUVIA_CHECK(
+            conn.feed(std::string_view(head.data(), head.size())) ==
+            ruvia::detail::Http2FeedResult::kAccepted);
+        while (conn.nextEvent().has_value()) {
+        }
+        if (pinned) {
+            conn.pinStream(1);
+        }
+
+        char rst[9 + 4];
+        ruvia::detail::http2EncodeFrameHeader(
+            rst, 4, Http2FrameType::kRstStream, 0, 1);
+        ruvia::detail::http2Write32(
+            rst + 9, static_cast<std::uint32_t>(Http2ErrorCode::kCancel));
+        RUVIA_CHECK(
+            conn.feed(std::string_view(rst, sizeof(rst))) ==
+            ruvia::detail::Http2FeedResult::kAccepted);
+        while (conn.nextEvent().has_value()) {
+        }
+        conn.consumeOutput(conn.pendingOutput().size());
+
+        // The peer's RST_STREAM precedes this DATA on the same ordered byte
+        // stream. It cannot be an in-flight race with a reset sent by us, and
+        // replying with another stream frame would itself violate RFC 9113 6.4.
+        const auto data = dataFrame(&resource, 1, 0, {});
+        RUVIA_CHECK(
+            conn.feed(std::string_view(data.data(), data.size())) ==
+            ruvia::detail::Http2FeedResult::kProtocolFailure);
+        RUVIA_CHECK(
+            conn.connectionError() == Http2ErrorCode::kStreamClosed);
+        RUVIA_CHECK_EQ(
+            firstGoawayError(conn.pendingOutput()),
+            static_cast<std::uint32_t>(Http2ErrorCode::kStreamClosed));
+
+        if (pinned) {
+            conn.unpinStream(1);
+        }
+    }
+}
 
 // A peer that keeps aiming DATA at the SAME already-closed stream forces an RST_STREAM
 // into the outbound buffer each time. Without draining, that grows output unboundedly;
@@ -5148,7 +5198,7 @@ RUVIA_TEST(http2_connection_closed_stream_data_flood_trips_enhance_your_calm) {
     std::pmr::monotonic_buffer_resource resource;
     Http2Connection conn(&resource);
     handshake(conn);
-    openThenPeerReset(conn, &resource);
+    openThenLocalReset(conn, &resource);
 
     // Empty DATA (zero flow bytes) isolates the RST amplification from flow control.
     const auto data = dataFrame(&resource, 1, 0, {});
@@ -5169,7 +5219,7 @@ RUVIA_TEST(http2_connection_drained_closed_stream_data_never_trips) {
     std::pmr::monotonic_buffer_resource resource;
     Http2Connection conn(&resource);
     handshake(conn);
-    openThenPeerReset(conn, &resource);
+    openThenLocalReset(conn, &resource);
 
     const auto data = dataFrame(&resource, 1, 0, {});
     for (int i = 0; i < 5000; ++i) {

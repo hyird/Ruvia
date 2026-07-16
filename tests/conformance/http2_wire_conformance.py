@@ -365,6 +365,20 @@ def rst_idle_stream(host: str, port: int) -> None:
         connection.expect_goaway(PROTOCOL_ERROR)
 
 
+@case("5.1/6.4", "DATA after the peer sends RST_STREAM closes the connection")
+def data_after_peer_reset(host: str, port: int) -> None:
+    with H2Connection(host, port) as connection:
+        # Keep the request half open so the peer reset, rather than ordinary
+        # response completion, is the stream's authoritative close source. On
+        # this ordered connection the following DATA cannot predate that reset.
+        connection.send(
+            request_headers(1, end_stream=False)
+            + frame(RST_STREAM, 0, 1, PROTOCOL_ERROR.to_bytes(4, "big"))
+            + frame(DATA, 0, 1, b"")
+        )
+        connection.expect_goaway(STREAM_CLOSED)
+
+
 @case("6.5", "SETTINGS ACK payload causes FRAME_SIZE_ERROR")
 def settings_ack_payload(host: str, port: int) -> None:
     with H2Connection(host, port) as connection:

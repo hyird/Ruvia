@@ -794,8 +794,21 @@ bool Http2Connection::processData(const Http2FrameHeader& header, std::string_vi
 
     auto* stream = findStream(header.streamId);
     if (stream == nullptr) {
-        if (closedStreams_.source(header.streamId) ==
-            Http2StreamCloseSource::kPeerGoaway) {
+        const auto closeSource = closedStreams_.source(header.streamId);
+        if (closeSource == Http2StreamCloseSource::kPeer) {
+            // This peer's RST_STREAM and later DATA are ordered on the same
+            // connection. Unlike DATA that was already in flight when WE sent a
+            // reset, this cannot be a state-view race: RFC 9113 section 6.4
+            // forbids the reset sender from sending another stream frame. Do not
+            // answer with RST_STREAM (which is likewise forbidden after receiving
+            // the peer reset); use the strict closed-state connection error that
+            // the HEADERS path applies to the same sequence.
+            appendGoaway(
+                Http2ErrorCode::kStreamClosed,
+                "DATA after peer RST_STREAM");
+            return false;
+        }
+        if (closeSource == Http2StreamCloseSource::kPeerGoaway) {
             releaseDroppedDataConnectionWindow(flowBytes);
             return true;
         }
@@ -816,6 +829,15 @@ bool Http2Connection::processData(const Http2FrameHeader& header, std::string_vi
         return false;
     }
     if (stream->isAborted()) {
+        if (stream->localSend().aborted()->source() ==
+            Http2StreamCloseSource::kPeer) {
+            // A pin can retain request-view storage after the protocol stream
+            // closes. It must not weaken the wire-state verdict above.
+            appendGoaway(
+                Http2ErrorCode::kStreamClosed,
+                "DATA after peer RST_STREAM");
+            return false;
+        }
         releaseDroppedDataConnectionWindow(flowBytes);
         return true;
     }
