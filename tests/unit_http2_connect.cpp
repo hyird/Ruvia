@@ -486,13 +486,21 @@ RUVIA_TEST(http2_connect_server_accepts_standard_tunnel_and_preserves_half_close
 
     const auto afterFin = frame(&resource, Http2FrameType::kData, 0, 1, "late");
     (void)server.feed(std::string_view(afterFin.data(), afterFin.size()));
-    const auto resetBytes = server.pendingOutput();
-    const auto reset = ruvia::detail::http2ParseFrameHeader(resetBytes.substr(0, 9));
-    RUVIA_CHECK_EQ(reset.type, static_cast<std::uint8_t>(Http2FrameType::kRstStream));
+    // Both halves are now closed. Tolerant minimal processing discards the late
+    // peer frame; only connection flow-control credit may be emitted, never a
+    // second stream frame after closure.
+    const auto creditBytes = server.pendingOutput();
+    const auto credit = ruvia::detail::http2ParseFrameHeader(
+        creditBytes.substr(0, 9));
     RUVIA_CHECK_EQ(
-        ruvia::detail::http2Read32(
-            reinterpret_cast<const unsigned char*>(resetBytes.data() + 9)),
-        static_cast<std::uint32_t>(Http2ErrorCode::kStreamClosed));
+        credit.type,
+        static_cast<std::uint8_t>(Http2FrameType::kWindowUpdate));
+    RUVIA_CHECK_EQ(credit.streamId, std::uint32_t{0});
+    RUVIA_CHECK_EQ(
+        ruvia::detail::http2WindowUpdateIncrement(
+            creditBytes.substr(9, 4)),
+        std::uint32_t{4});
+    RUVIA_CHECK_EQ(creditBytes.size(), std::size_t{13});
     RUVIA_CHECK(!server.connectionError().has_value());
 }
 

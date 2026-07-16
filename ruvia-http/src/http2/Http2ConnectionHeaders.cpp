@@ -435,6 +435,11 @@ bool Http2Connection::processHeaders(const Http2FrameHeader& header, std::string
             // After WE sent RST_STREAM, any peer frames already in flight must be
             // minimally processed and discarded. Do not send a second RST.
             discardedAction = DiscardedHeaderAction::kIgnore;
+        } else if (http2StreamIsClosed(*existing)) {
+            // A pin can retain normally completed request storage after both
+            // protocol halves have closed. Decode for HPACK synchronization,
+            // but never make storage retention authorize another stream frame.
+            discardedAction = DiscardedHeaderAction::kIgnore;
         } else if (http2RemoteFinalHeadDecoded(*existing) &&
                    (existing->tunnel().open() != nullptr ||
                     (role_ == Http2Role::kServer &&

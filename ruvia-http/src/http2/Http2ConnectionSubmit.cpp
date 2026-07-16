@@ -775,8 +775,7 @@ Http2SubmitStatus Http2Connection::submitReset(
     if ((role_ == Http2Role::kClient &&
          stream->localSend().headPending() != nullptr) ||
         (role_ == Http2Role::kServer && !http2RemoteFinalHeadDecoded(*stream)) ||
-        (http2RemotePeerHalfClosed(*stream) &&
-         stream->localSend().endStreamCommitted() != nullptr)) {
+        http2StreamIsClosed(*stream)) {
         return Http2SubmitStatus::kInvalidState;
     }
     output_.appendRstStream(streamId, error);
