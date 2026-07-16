@@ -21,6 +21,7 @@
 #include <vector>
 
 #include "ruvia/http/HttpHeader.h"
+#include "ruvia/http/detail/BorrowedView.h"
 #include "ruvia/http/HttpProtocolVersion.h"
 #include "ruvia/http/detail/PmrResource.h"
 
@@ -202,6 +203,70 @@ private:
 };
 
 struct HttpClientRequest {
+    // Zero-cost field wrapper for request text retained by the sans-I/O
+    // request/response transaction. String literals, string_view values, and
+    // owning-string lvalues remain valid inputs; owning-string temporaries are
+    // rejected before they can leave a dangling view in the request.
+    class BorrowedText final {
+    public:
+        constexpr BorrowedText() noexcept = default;
+
+        constexpr BorrowedText(std::string_view value) noexcept
+            : value_(value) {}
+
+        template <typename Traits, typename Allocator>
+        constexpr BorrowedText(
+            const std::basic_string<char, Traits, Allocator>& value) noexcept
+            : value_(value.data(), value.size()) {}
+
+        template <detail::HttpTemporaryOwningCharString String>
+        BorrowedText(String&&) = delete;
+
+        constexpr BorrowedText& operator=(std::string_view value) noexcept {
+            value_ = value;
+            return *this;
+        }
+
+        template <typename Traits, typename Allocator>
+        constexpr BorrowedText& operator=(
+            const std::basic_string<char, Traits, Allocator>& value) noexcept {
+            value_ = std::string_view(value.data(), value.size());
+            return *this;
+        }
+
+        template <detail::HttpTemporaryOwningCharString String>
+        BorrowedText& operator=(String&&) = delete;
+
+        [[nodiscard]] constexpr std::string_view view() const noexcept {
+            return value_;
+        }
+
+        [[nodiscard]] constexpr operator std::string_view() const noexcept {
+            return value_;
+        }
+
+        friend constexpr bool operator==(
+            BorrowedText lhs,
+            BorrowedText rhs) noexcept {
+            return lhs.value_ == rhs.value_;
+        }
+
+        friend constexpr bool operator==(
+            BorrowedText lhs,
+            std::string_view rhs) noexcept {
+            return lhs.value_ == rhs;
+        }
+
+        friend constexpr bool operator==(
+            std::string_view lhs,
+            BorrowedText rhs) noexcept {
+            return lhs == rhs.value_;
+        }
+
+    private:
+        std::string_view value_;
+    };
+
     class HeaderInit final {
     public:
         constexpr HeaderInit() noexcept = default;
@@ -274,14 +339,17 @@ struct HttpClientRequest {
         std::span<const HttpHeaderView> headers_{};
     };
 
-    std::string_view method{"GET"};
-    std::string_view target{"/"};
+    BorrowedText method{"GET"};
+    BorrowedText target{"/"};
     // Borrowed header table; its elements and their strings must remain alive
     // and unchanged through request preparation and any corresponding HTTP/1
     // response-head decision that inspects the prepared request context.
     HeaderInit headers{};
     HttpClientRequestContent content{HttpClientRequestContent::none()};
 };
+
+static_assert(
+    sizeof(HttpClientRequest::BorrowedText) == sizeof(std::string_view));
 
 class HttpClientResponseHead final {
 public:

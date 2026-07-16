@@ -60,6 +60,29 @@ template <typename T>
 concept HasRvaluePreparedHttp1ClientRequestContentPlan =
     requires(T&& prepared) { std::move(prepared).contentPlan(); };
 
+template <typename String>
+concept AcceptsAnyTemporaryHttpClientRequestText =
+    requires(String&& value) {
+        HttpClientRequest{.method = std::forward<String>(value)};
+    } ||
+    requires(String&& value) {
+        HttpClientRequest{.target = std::forward<String>(value)};
+    } ||
+    requires(HttpClientRequest& request, String&& value) {
+        request.method = std::forward<String>(value);
+    } ||
+    requires(HttpClientRequest& request, String&& value) {
+        request.target = std::forward<String>(value);
+    };
+
+template <typename String>
+concept AcceptsLvalueHttpClientRequestText =
+    requires(HttpClientRequest& request, String& value) {
+        HttpClientRequest{.method = value, .target = value};
+        request.method = value;
+        request.target = value;
+    };
+
 static_assert(!HasAnyRvalueHttp1ClientRequestPrepareAccessor<
     ruvia::Http1ClientRequestPrepareResult>);
 static_assert(!HasAnyRvalueHttpClientRequestContentAccessor<
@@ -70,6 +93,10 @@ static_assert(!HasAnyRvalueHttp1ClientRequestContentPlanAccessor<
     ruvia::Http1ClientRequestContentPlan>);
 static_assert(!HasRvaluePreparedHttp1ClientRequestContentPlan<
     ruvia::PreparedHttp1ClientRequest>);
+static_assert(!AcceptsAnyTemporaryHttpClientRequestText<std::string>);
+static_assert(!AcceptsAnyTemporaryHttpClientRequestText<const std::string>);
+static_assert(!AcceptsAnyTemporaryHttpClientRequestText<std::pmr::string>);
+static_assert(AcceptsLvalueHttpClientRequestText<std::string>);
 static_assert(!std::is_constructible_v<
     HttpClientRequest::HeaderInit,
     std::array<ruvia::HttpHeaderView, 1>&&>);

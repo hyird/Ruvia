@@ -893,8 +893,34 @@ concept HasHttpClientRequestInitializerListHeaders = requires(
 };
 
 template <typename T>
-concept HasHttpClientRequestTarget = requires(T& request) {
-    { request.target } -> std::same_as<std::string_view&>;
+concept HasHttpClientRequestBorrowedText = requires(T& request) {
+    { request.method.view() } -> std::same_as<std::string_view>;
+    { request.target.view() } -> std::same_as<std::string_view>;
+};
+
+template <typename String>
+concept AcceptsAnyTemporaryHttpClientRequestText =
+    requires(String&& value) {
+        ruvia::HttpClientRequest{
+            .method = std::forward<String>(value)};
+    } ||
+    requires(String&& value) {
+        ruvia::HttpClientRequest{
+            .target = std::forward<String>(value)};
+    } ||
+    requires(ruvia::HttpClientRequest& request, String&& value) {
+        request.method = std::forward<String>(value);
+    } ||
+    requires(ruvia::HttpClientRequest& request, String&& value) {
+        request.target = std::forward<String>(value);
+    };
+
+template <typename String>
+concept AcceptsLvalueHttpClientRequestText =
+    requires(ruvia::HttpClientRequest& request, String& value) {
+        ruvia::HttpClientRequest{.method = value, .target = value};
+        request.method = value;
+        request.target = value;
 };
 
 template <typename T>
@@ -2326,7 +2352,11 @@ static_assert(HasHttpClientRequestHeaderViews<ruvia::HttpClientRequest>);
 static_assert(HasHttpClientRequestHeaderArray<ruvia::HttpClientRequest>);
 static_assert(!HasHttpClientRequestHeaderVector<ruvia::HttpClientRequest>);
 static_assert(!HasHttpClientRequestInitializerListHeaders<ruvia::HttpClientRequest>);
-static_assert(HasHttpClientRequestTarget<ruvia::HttpClientRequest>);
+static_assert(HasHttpClientRequestBorrowedText<ruvia::HttpClientRequest>);
+static_assert(!AcceptsAnyTemporaryHttpClientRequestText<std::string>);
+static_assert(!AcceptsAnyTemporaryHttpClientRequestText<const std::string>);
+static_assert(!AcceptsAnyTemporaryHttpClientRequestText<std::pmr::string>);
+static_assert(AcceptsLvalueHttpClientRequestText<std::string>);
 static_assert(!HasRawHttpClientRequestBody<ruvia::HttpClientRequest>);
 static_assert(HasDiscriminatedHttpClientRequestContent<ruvia::HttpClientRequest>);
 static_assert(!HasStaleHttpClientRequestContentTuple<ruvia::HttpClientRequest>);

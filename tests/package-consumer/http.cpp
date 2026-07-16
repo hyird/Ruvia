@@ -809,6 +809,31 @@ concept HasAnyRvalueHttpClientRequestContentAccessor =
     requires(T&& content) { std::move(content).withoutContent(); } ||
     requires(T&& content) { std::move(content).borrowedBytes(); };
 
+template <typename String>
+concept AcceptsAnyTemporaryHttpClientRequestText =
+    requires(String&& value) {
+        ruvia::HttpClientRequest{
+            .method = std::forward<String>(value)};
+    } ||
+    requires(String&& value) {
+        ruvia::HttpClientRequest{
+            .target = std::forward<String>(value)};
+    } ||
+    requires(ruvia::HttpClientRequest& request, String&& value) {
+        request.method = std::forward<String>(value);
+    } ||
+    requires(ruvia::HttpClientRequest& request, String&& value) {
+        request.target = std::forward<String>(value);
+    };
+
+template <typename String>
+concept AcceptsLvalueHttpClientRequestText =
+    requires(ruvia::HttpClientRequest& request, String& value) {
+        ruvia::HttpClientRequest{.method = value, .target = value};
+        request.method = value;
+        request.target = value;
+    };
+
 template <typename T>
 concept HasStaleHttpClientContentMode = requires(const T& content) {
     content.mode();
@@ -3049,6 +3074,10 @@ static_assert(!HasResultKindDiscriminator<
     ruvia::Http1InterimResponsePrepareResult>);
 static_assert(!HasAnyRvalueHttpClientRequestContentAccessor<
     ruvia::HttpClientRequestContent>);
+static_assert(!AcceptsAnyTemporaryHttpClientRequestText<std::string>);
+static_assert(!AcceptsAnyTemporaryHttpClientRequestText<const std::string>);
+static_assert(!AcceptsAnyTemporaryHttpClientRequestText<std::pmr::string>);
+static_assert(AcceptsLvalueHttpClientRequestText<std::string>);
 static_assert(!HasAnyRvalueHttp1ClientRequestContentPlanAccessor<
     ruvia::Http1ClientRequestContentPlan>);
 static_assert(!HasAnyRvalueHttp1ClientRequestWirePolicyAccessor<

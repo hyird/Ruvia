@@ -2535,11 +2535,17 @@ if(NOT http_client_public_model MATCHES "enum class HttpScheme" OR
    NOT http_client_public_model MATCHES "borrowedBytes" OR
    NOT http_client_public_model MATCHES "class HttpClientResponseHead final" OR
    NOT http_client_public_model MATCHES "struct HttpClientRequest" OR
-   NOT http_client_public_model MATCHES "std::string_view target" OR
+   NOT http_client_public_model MATCHES "class BorrowedText final" OR
+   NOT http_client_public_model MATCHES "BorrowedText[(]String&&[)] = delete" OR
+   NOT http_client_public_model MATCHES "operator=[(]String&&[)] = delete" OR
+   NOT http_client_public_model MATCHES "BorrowedText method" OR
+   NOT http_client_public_model MATCHES "BorrowedText target" OR
+   NOT http_client_public_model MATCHES
+       "sizeof[(]HttpClientRequest::BorrowedText[)] == sizeof[(]std::string_view[)]" OR
    http_client_public_model MATCHES
        "class HttpClientResponse final|body[(][)] const|body_[;]")
     boundary_error("outbound HTTP public model lost its transport-free typed contract"
-        "HttpClient.h must distinguish absent/explicit request content and keep response head ownership separate from externally driven response content")
+        "HttpClient.h must type borrowed request text, distinguish absent/explicit content, and keep response head ownership separate from externally driven response content")
 endif()
 if(NOT EXISTS "${RUVIA_ROOT}/ruvia-http/src/client/HttpOrigin.cpp")
     boundary_error("outbound origin factory implementation is missing"
@@ -9111,6 +9117,15 @@ if(EXISTS "${HTTP1_CLIENT_REQUEST_TEST}")
             "both wire-policy factories must expose only their active alternative")
     endif()
     if(NOT http1_client_request_test MATCHES
+           "!AcceptsAnyTemporaryHttpClientRequestText<std::string>" OR
+       NOT http1_client_request_test MATCHES
+           "!AcceptsAnyTemporaryHttpClientRequestText<std::pmr::string>" OR
+       NOT http1_client_request_test MATCHES
+           "AcceptsLvalueHttpClientRequestText<std::string>")
+        boundary_error("HTTP client request text lost its borrowed lifetime guard"
+            "method/target must reject temporary owning strings while preserving borrowed lvalue input")
+    endif()
+    if(NOT http1_client_request_test MATCHES
            "!HasRequestContentMode<ruvia::HttpClientRequestContent>" OR
        NOT http1_client_request_test MATCHES
            "HasRequestContentValue<ruvia::HttpClientRequestBytes>" OR
@@ -9149,6 +9164,10 @@ if(EXISTS "${HTTP1_CLIENT_API_SURFACE}" AND
        NOT http1_client_api_surface MATCHES
            "HasDiscriminatedHttpClientRequestContent<ruvia::HttpClientRequest>" OR
        NOT http1_client_api_surface MATCHES
+           "HasHttpClientRequestBorrowedText<ruvia::HttpClientRequest>" OR
+       NOT http1_client_api_surface MATCHES
+           "!AcceptsAnyTemporaryHttpClientRequestText<std::pmr::string>" OR
+       NOT http1_client_api_surface MATCHES
            "!HasStaleHttpClientRequestContentTuple<ruvia::HttpClientRequest>" OR
        NOT http1_client_api_surface MATCHES
            "HasHttp1ClientPreparedContentPlan<[\r\n \t]*ruvia::PreparedHttp1ClientRequest>" OR
@@ -9177,6 +9196,8 @@ if(EXISTS "${HTTP1_CLIENT_API_SURFACE}" AND
        NOT http1_client_package_consumer MATCHES "Http1ClientRequestWriter" OR
        NOT http1_client_package_consumer MATCHES
            "HasHttpClientRequestContentAlternatives" OR
+       NOT http1_client_package_consumer MATCHES
+           "!AcceptsAnyTemporaryHttpClientRequestText<std::pmr::string>" OR
        NOT http1_client_package_consumer MATCHES
            "HasHttp1PreparedContentAlternatives" OR
        NOT http1_client_package_consumer MATCHES

@@ -132,7 +132,9 @@ HttpClientRedirectRequestPlan planHttpClientRedirectRequest(
     std::uint16_t status) noexcept {
     if (status == 303) {
         return HttpClientRedirectRequestPlan(
-            request.method == "HEAD" ? request.method : std::string_view("GET"),
+            request.method == "HEAD"
+                ? request.method.view()
+                : std::string_view("GET"),
             HttpClientRedirectContentDisposition::kDrop);
     }
     if ((status == 301 || status == 302) && request.method == "POST") {
@@ -141,7 +143,7 @@ HttpClientRedirectRequestPlan planHttpClientRedirectRequest(
             HttpClientRedirectContentDisposition::kDrop);
     }
     return HttpClientRedirectRequestPlan(
-        request.method,
+        request.method.view(),
         HttpClientRedirectContentDisposition::kPreserve);
 }
 
