@@ -1,4 +1,5 @@
 #include "ruvia/http/detail/websocket/HttpWebSocketUtils.h"
+#include "ruvia/http/detail/websocket/HttpWebSocketHandshakeFields.h"
 
 #include <array>
 #include <cstring>
@@ -161,6 +162,7 @@ HttpWebSocketHandshakeValidationResult validateHttp1WebSocketHandshake(
         hasContentLength ||
         bodyPlan.requiresConsumption() ||
         !webSocketSubprotocolOffersValid(request) ||
+        !webSocketExtensionOffersValid(request) ||
         keyCount != 1 ||
         !decodeWebSocketKey(key).has_value() ||
         versionCount != 1) {

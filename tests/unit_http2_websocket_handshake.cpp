@@ -193,6 +193,19 @@ RUVIA_TEST(websocket_subprotocol_offers_are_validated_for_extended_connect) {
     RUVIA_CHECK(rejectsWebSocketHandshake(duplicateStream, duplicate));
 }
 
+RUVIA_TEST(websocket_extension_offers_are_validated_for_extended_connect) {
+    const auto malformed = parseRequest(
+        "GET /ws HTTP/1.1\r\n"
+        "Host: example.test\r\n"
+        "Sec-WebSocket-Version: 13\r\n"
+        "Sec-WebSocket-Extensions: permessage-deflate; =value\r\n"
+        "\r\n");
+    auto stream = makeStream();
+    stream.setProtocol("websocket");
+    RUVIA_CHECK(stream.beginExtendedConnect());
+    RUVIA_CHECK(rejectsWebSocketHandshake(stream, malformed));
+}
+
 RUVIA_TEST(http2_websocket_handshake_does_not_invent_server_product) {
     const auto request = parseRequest(
         "GET /ws HTTP/1.1\r\n"

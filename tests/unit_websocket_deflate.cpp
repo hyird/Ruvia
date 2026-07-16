@@ -158,7 +158,12 @@ RUVIA_TEST(websocket_deflate_offer_ignores_unrelated_parameters) {
         "permessage-deflate; xserver_max_window_bits=10"));
     // An invalid offer can still be followed by a separate valid offer.
     RUVIA_CHECK(offersDeflate(
-        "permessage-deflate; unknown=\"a,b\", permessage-deflate"));
+        "permessage-deflate; unknown=value, permessage-deflate"));
+
+    // A syntactically malformed extension list invalidates the entire opening
+    // handshake; negotiation must not skip it and honor a later offer.
+    RUVIA_CHECK(!offersDeflate(
+        "x-test; value=\"bad value\", permessage-deflate"));
 }
 
 RUVIA_TEST(websocket_deflate_offer_rejects_malformed_parameters) {

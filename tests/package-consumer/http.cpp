@@ -72,6 +72,7 @@
 #include <ruvia/http/detail/server/HttpFinalResponseControlPlan.h>
 #include <ruvia/http/detail/server/HttpResponseWritePlan.h>
 #include <ruvia/http/detail/websocket/HttpWebSocketServerHandshake.h>
+#include <ruvia/http/detail/websocket/HttpWebSocketHandshakeFields.h>
 #include <ruvia/http/detail/websocket/HttpWebSocketHandshakeValidation.h>
 #include <ruvia/http/detail/websocket/WebSocketServerNegotiation.h>
 #include <ruvia/http/detail/websocket/WsConnection.h>
@@ -2570,6 +2571,8 @@ using Http2WebSocketHandshakeValidator =
     ruvia::detail::HttpWebSocketHandshakeValidationResult (*)(
         const ruvia::detail::Http2StreamState&,
         const ruvia::HttpRequest&) noexcept;
+using WebSocketHandshakeFieldValidator =
+    bool (*)(const ruvia::HttpRequest&) noexcept;
 static_assert(std::same_as<
     decltype(&ruvia::detail::makeWebSocketServerNegotiation),
     WebSocketServerNegotiator>);
@@ -2582,6 +2585,12 @@ static_assert(std::same_as<
 static_assert(std::same_as<
     decltype(&ruvia::detail::validateHttp2WebSocketHandshake),
     Http2WebSocketHandshakeValidator>);
+static_assert(std::same_as<
+    decltype(&ruvia::detail::webSocketSubprotocolOffersValid),
+    WebSocketHandshakeFieldValidator>);
+static_assert(std::same_as<
+    decltype(&ruvia::detail::webSocketExtensionOffersValid),
+    WebSocketHandshakeFieldValidator>);
 static_assert(!std::default_initializable<
     ruvia::detail::HttpWebSocketHandshakeAccepted>);
 static_assert(!std::default_initializable<

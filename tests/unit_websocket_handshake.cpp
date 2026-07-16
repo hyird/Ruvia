@@ -12,7 +12,7 @@
 #include <asio/use_future.hpp>
 
 #include "ruvia/http/detail/http1/Http1ServerRequestParser.h"
-#include "ruvia/http/detail/websocket/HttpWebSocketUtils.h"
+#include "ruvia/http/detail/websocket/HttpWebSocketHandshakeFields.h"
 #include "ruvia/http/detail/websocket/HttpWebSocketHandshakeValidation.h"
 #include "ruvia/http/detail/websocket/HttpWebSocketServerHandshake.h"
 #include "ruvia/http/HttpRequest.h"
@@ -204,6 +204,43 @@ RUVIA_TEST(ws_subprotocol_offers_require_unique_http_tokens) {
     }
     tooMany.append("\r\n");
     RUVIA_CHECK(rejectsRequest(withProtocols(tooMany)));
+}
+
+RUVIA_TEST(ws_extension_offers_must_match_the_rfc6455_abnf) {
+    const auto withExtensions = [](std::string_view fields) {
+        std::string request(validHandshake());
+        request.insert(request.size() - 2, fields);
+        return request;
+    };
+
+    RUVIA_CHECK(acceptsRequest(withExtensions(
+        "Sec-WebSocket-Extensions: , x-test; flag; value=token,,\r\n")));
+    RUVIA_CHECK(acceptsRequest(withExtensions(
+        "Sec-WebSocket-Extensions: x-test; value=\"to\\ken\"\r\n")));
+    RUVIA_CHECK(acceptsRequest(withExtensions(
+        "Sec-WebSocket-Extensions: x-test\r\n"
+        "Sec-WebSocket-Extensions: y-test; value=token\r\n")));
+
+    RUVIA_CHECK(rejectsRequest(withExtensions(
+        "Sec-WebSocket-Extensions: , ,\r\n")));
+    RUVIA_CHECK(rejectsRequest(withExtensions(
+        "Sec-WebSocket-Extensions: \"x-test\"\r\n")));
+    RUVIA_CHECK(rejectsRequest(withExtensions(
+        "Sec-WebSocket-Extensions: x test\r\n")));
+    RUVIA_CHECK(rejectsRequest(withExtensions(
+        "Sec-WebSocket-Extensions: x-test;\r\n")));
+    RUVIA_CHECK(rejectsRequest(withExtensions(
+        "Sec-WebSocket-Extensions: x-test;; flag\r\n")));
+    RUVIA_CHECK(rejectsRequest(withExtensions(
+        "Sec-WebSocket-Extensions: x-test; =value\r\n")));
+    RUVIA_CHECK(rejectsRequest(withExtensions(
+        "Sec-WebSocket-Extensions: x-test; value=\r\n")));
+    RUVIA_CHECK(rejectsRequest(withExtensions(
+        "Sec-WebSocket-Extensions: x-test; value=\"bad value\"\r\n")));
+    RUVIA_CHECK(rejectsRequest(withExtensions(
+        "Sec-WebSocket-Extensions: x-test; value=\"unterminated\r\n")));
+    RUVIA_CHECK(rejectsRequest(withExtensions(
+        "Sec-WebSocket-Extensions: x-test; value=\"token\"junk\r\n")));
 }
 
 RUVIA_TEST(ws_valid_request_requires_all_conditions) {

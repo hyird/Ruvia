@@ -1,4 +1,4 @@
-#include "ruvia/http/detail/websocket/HttpWebSocketUtils.h"
+#include "ruvia/http/detail/websocket/HttpWebSocketHandshakeFields.h"
 
 #include <array>
 
@@ -92,6 +92,113 @@ private:
     return true;
 }
 
+void skipWebSocketExtensionOws(
+    std::string_view value,
+    std::size_t& cursor) noexcept {
+    while (cursor < value.size() &&
+           (value[cursor] == ' ' || value[cursor] == '\t')) {
+        ++cursor;
+    }
+}
+
+[[nodiscard]] bool consumeWebSocketExtensionToken(
+    std::string_view value,
+    std::size_t& cursor) noexcept {
+    const auto start = cursor;
+    while (cursor < value.size() &&
+           isHttpTokenChar(
+               static_cast<unsigned char>(value[cursor]))) {
+        ++cursor;
+    }
+    return cursor != start;
+}
+
+[[nodiscard]] bool consumeWebSocketExtensionQuotedToken(
+    std::string_view value,
+    std::size_t& cursor) noexcept {
+    if (cursor == value.size() || value[cursor] != '"') {
+        return false;
+    }
+    ++cursor;
+    bool decodedAny = false;
+    while (cursor < value.size()) {
+        auto ch = value[cursor++];
+        if (ch == '"') {
+            return decodedAny;
+        }
+        if (ch == '\\') {
+            if (cursor == value.size()) {
+                return false;
+            }
+            ch = value[cursor++];
+        }
+        // RFC 6455 section 4.3 narrows quoted-string extension values:
+        // after quoted-pair unescaping, the result still has to be a token.
+        if (!isHttpTokenChar(static_cast<unsigned char>(ch))) {
+            return false;
+        }
+        decodedAny = true;
+    }
+    return false;
+}
+
+[[nodiscard]] bool appendWebSocketExtensionList(
+    std::string_view value,
+    bool& hasExtension) noexcept {
+    std::size_t cursor = 0;
+    while (true) {
+        skipWebSocketExtensionOws(value, cursor);
+        // RFC 2616's #rule permits null comma-list elements, but 1#extension
+        // still requires at least one real extension across the logical field.
+        while (cursor < value.size() && value[cursor] == ',') {
+            ++cursor;
+            skipWebSocketExtensionOws(value, cursor);
+        }
+        if (cursor == value.size()) {
+            return true;
+        }
+        if (!consumeWebSocketExtensionToken(value, cursor)) {
+            return false;
+        }
+        hasExtension = true;
+
+        while (true) {
+            skipWebSocketExtensionOws(value, cursor);
+            if (cursor == value.size()) {
+                return true;
+            }
+            if (value[cursor] == ',') {
+                ++cursor;
+                break;
+            }
+            if (value[cursor] != ';') {
+                return false;
+            }
+            ++cursor;
+            skipWebSocketExtensionOws(value, cursor);
+            if (!consumeWebSocketExtensionToken(value, cursor)) {
+                return false;
+            }
+            skipWebSocketExtensionOws(value, cursor);
+            if (cursor == value.size() || value[cursor] != '=') {
+                continue;
+            }
+            ++cursor;
+            skipWebSocketExtensionOws(value, cursor);
+            if (cursor == value.size()) {
+                return false;
+            }
+            if (value[cursor] == '"') {
+                if (!consumeWebSocketExtensionQuotedToken(value, cursor)) {
+                    return false;
+                }
+            } else if (!consumeWebSocketExtensionToken(value, cursor)) {
+                return false;
+            }
+        }
+    }
+}
+
 }  // namespace
 
 bool isValidWebSocketSubprotocolList(std::string_view protocols) noexcept {
@@ -104,6 +211,23 @@ bool webSocketSubprotocolOffersValid(const HttpRequest& request) noexcept {
     bool present = false;
     return appendWebSocketSubprotocolOffers(request, protocols, present) &&
         (!present || !protocols.empty());
+}
+
+bool webSocketExtensionOffersValid(const HttpRequest& request) noexcept {
+    bool present = false;
+    bool hasExtension = false;
+    for (const auto& header : request.headers()) {
+        if (!httpAsciiEqualsIgnoreCase(
+                header.name(), "Sec-WebSocket-Extensions")) {
+            continue;
+        }
+        present = true;
+        if (!appendWebSocketExtensionList(
+                header.value(), hasExtension)) {
+            return false;
+        }
+    }
+    return !present || hasExtension;
 }
 
 bool webSocketProtocolOffered(const HttpRequest& request, std::string_view protocol) noexcept {

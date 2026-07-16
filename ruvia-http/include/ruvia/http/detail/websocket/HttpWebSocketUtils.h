@@ -262,11 +262,6 @@ inline void compactWebSocketReadBuffer(
 }
 
 void encodeWebSocketAccept(WebSocketAcceptKey& output, std::string_view key);
-[[nodiscard]] bool isValidWebSocketSubprotocolList(
-    std::string_view protocols) noexcept;
-[[nodiscard]] bool webSocketSubprotocolOffersValid(
-    const HttpRequest& request) noexcept;
-[[nodiscard]] bool webSocketProtocolOffered(const HttpRequest& request, std::string_view protocol) noexcept;
 [[nodiscard]] bool isValidWebSocketCloseCode(std::uint16_t code) noexcept;
 [[nodiscard]] bool isValidUtf8(std::string_view value) noexcept;
 
@@ -358,10 +353,6 @@ private:
     std::string_view reason) noexcept;
 [[nodiscard]] std::optional<WebSocketProtocolFailure>
 webSocketClosePayloadFailure(std::string_view payload) noexcept;
-[[nodiscard]] std::string_view chooseWebSocketSubprotocol(
-    const HttpRequest& request,
-    std::string_view supported) noexcept;
-
 // One borrowed frame with validated metadata combinations. Named factories keep
 // continuation and control frames from acquiring an impossible data opcode or
 // compression bit; the wire reader additionally owns masking, length, and Close

@@ -32,7 +32,7 @@ add_library(ruvia-http
     ${CMAKE_CURRENT_SOURCE_DIR}/src/http2/Http2HpackHuffman.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/http2/Http2OutputBuffer.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/websocket/HttpWebSocketAccept.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/websocket/HttpWebSocketUtils.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/websocket/HttpWebSocketHandshakeFields.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/websocket/HttpWebSocketValidation.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/websocket/WsConnection.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/client/HttpOrigin.cpp

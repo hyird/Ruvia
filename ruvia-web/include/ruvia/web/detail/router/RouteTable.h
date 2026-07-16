@@ -16,7 +16,7 @@
 #include <vector>
 
 #include "ruvia/http/HttpKnownMethod.h"
-#include "ruvia/http/detail/websocket/HttpWebSocketUtils.h"
+#include "ruvia/http/detail/websocket/HttpWebSocketHandshakeFields.h"
 #include "ruvia/web/detail/http/ContextServices.h"
 #include "ruvia/web/Context.h"
 #include "ruvia/web/detail/CallableRef.h"

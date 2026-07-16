@@ -13,6 +13,7 @@
 
 #include "ruvia/http/ProtocolByteLimit.h"
 #include "ruvia/http/detail/HeaderTokenUtils.h"
+#include "ruvia/http/detail/websocket/HttpWebSocketHandshakeFields.h"
 #include "ruvia/http/HttpRequest.h"
 
 namespace ruvia::detail {
@@ -367,6 +368,9 @@ inline constexpr std::string_view kWebSocketDeflateResponseExtensionsMaxWindow =
 
 [[nodiscard]] inline WebSocketDeflateNegotiation webSocketNegotiatePermessageDeflate(
     const HttpRequest& request) noexcept {
+    if (!webSocketExtensionOffersValid(request)) {
+        return WebSocketDeflateNegotiation::kDisabled;
+    }
     // RFC 6455 §9.1: extension declarations may be split across multiple
     // Sec-WebSocket-Extensions field lines, which RFC 9110 §5.3 makes equivalent to
     // one comma-joined list. request.header() returns only the last line, so scan

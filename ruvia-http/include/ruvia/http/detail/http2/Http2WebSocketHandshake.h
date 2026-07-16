@@ -9,8 +9,8 @@
 #include "ruvia/http/detail/http2/Http2StreamState.h"
 #include "ruvia/http/detail/AsciiCase.h"
 #include "ruvia/http/detail/HttpRequestInternal.h"
+#include "ruvia/http/detail/websocket/HttpWebSocketHandshakeFields.h"
 #include "ruvia/http/detail/websocket/HttpWebSocketHandshakeValidation.h"
-#include "ruvia/http/detail/websocket/HttpWebSocketUtils.h"
 #include "ruvia/http/detail/websocket/WebSocketServerNegotiation.h"
 #include "ruvia/http/HttpRequest.h"
 
@@ -47,6 +47,9 @@ validateHttp2WebSocketHandshake(
         return HttpWebSocketHandshakeValidationResult::makeInvalidRequest();
     }
     if (!webSocketSubprotocolOffersValid(request)) {
+        return HttpWebSocketHandshakeValidationResult::makeInvalidRequest();
+    }
+    if (!webSocketExtensionOffersValid(request)) {
         return HttpWebSocketHandshakeValidationResult::makeInvalidRequest();
     }
     if (version != "13") {
