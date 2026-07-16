@@ -18,6 +18,16 @@ enum class HttpRequestContentIndication : std::uint8_t {
     kWillFollow
 };
 
+// RFC 9110 Section 10.1.1 forbids a client from generating 100-continue when
+// the request has no content. Keep this sender check next to the recipient-side
+// expectation state so HTTP/1 and HTTP/2 cannot derive different answers.
+[[nodiscard]] constexpr bool httpClientExpectationIsValid(
+    bool has100Continue,
+    HttpRequestContentIndication content) noexcept {
+    return !has100Continue ||
+        content == HttpRequestContentIndication::kWillFollow;
+}
+
 // Whether the product accepts unknown expectation extensions. Expect remains
 // valid syntax either way; the HTTP contract owns the protocol response chosen
 // by the explicit rejection policy.

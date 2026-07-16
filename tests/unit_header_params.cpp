@@ -13,6 +13,7 @@ namespace {
 
 using ruvia::detail::httpFindSemicolonParameterIgnoreCase;
 using ruvia::detail::httpFindSemicolonParameterQuotedIgnoreCase;
+using ruvia::detail::httpClientExpectationIsValid;
 using ruvia::detail::HttpConnectionOptions;
 using ruvia::detail::HttpFieldListParseStatus;
 using ruvia::detail::HttpFieldListRole;
@@ -36,6 +37,15 @@ std::array<bool, 4> connectionOptions(std::string_view value) {
 }
 
 }  // namespace
+
+RUVIA_TEST(client_expectation_requires_following_content) {
+    RUVIA_CHECK(httpClientExpectationIsValid(
+        false, HttpRequestContentIndication::kNoContent));
+    RUVIA_CHECK(!httpClientExpectationIsValid(
+        true, HttpRequestContentIndication::kNoContent));
+    RUVIA_CHECK(httpClientExpectationIsValid(
+        true, HttpRequestContentIndication::kWillFollow));
+}
 
 RUVIA_TEST(expectations_parse_one_logical_recipient_list) {
     HttpRequestExpectations expectations;

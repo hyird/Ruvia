@@ -10,6 +10,7 @@
 #include "ruvia/http/HttpLimits.h"
 #include "ruvia/http/detail/HeaderAcceptUtils.h"
 #include "ruvia/http/detail/HeaderTokenUtils.h"
+#include "ruvia/http/detail/HttpExpectations.h"
 #include "ruvia/http/detail/HttpRequestContentSemantics.h"
 #include "ruvia/http/detail/client/HttpOrigin.h"
 #include "ruvia/http/detail/parser/HttpRequestTarget.h"
@@ -360,8 +361,12 @@ void appendHeaders(
     }
     const bool expectContinue =
         policy.continueExpectation() != nullptr;
-    if (expectContinue &&
-        (!explicitContent || contentBytes->value().empty())) {
+    const auto contentIndication =
+        explicitContent && !contentBytes->value().empty()
+        ? detail::HttpRequestContentIndication::kWillFollow
+        : detail::HttpRequestContentIndication::kNoContent;
+    if (!detail::httpClientExpectationIsValid(
+            expectContinue, contentIndication)) {
         return detail::Http1ClientRequestPrepareResultAccess::failure(
             Http1ClientRequestPrepareError::kExpectationWithoutContent);
     }

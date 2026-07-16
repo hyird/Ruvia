@@ -9089,6 +9089,35 @@ elseif(EXISTS "${HTTP1_HEADER_BLOCK_STATE}" AND
             "Web must choose the unsupported-extension policy while HTTP owns typed no-action, 100, and 417 outcomes")
     endif()
 endif()
+set(HTTP1_CLIENT_EXPECTATION_SOURCE
+    "${RUVIA_ROOT}/ruvia-http/src/client/Http1ClientRequestWriter.cpp")
+set(HTTP2_CLIENT_EXPECTATION_SOURCE
+    "${RUVIA_ROOT}/ruvia-http/src/http2/Http2ConnectionSubmit.cpp")
+if(NOT EXISTS "${HTTP1_CLIENT_EXPECTATION_SOURCE}" OR
+   NOT EXISTS "${HTTP2_CLIENT_EXPECTATION_SOURCE}")
+    boundary_error("shared client expectation semantics are missing"
+        "HTTP/1 and HTTP/2 client writers must consume one content-indication check")
+else()
+    file(READ "${HTTP_REQUEST_EXPECTATIONS}"
+        http_client_request_expectations)
+    file(READ "${HTTP1_CLIENT_EXPECTATION_SOURCE}"
+        http1_client_expectation_source)
+    file(READ "${HTTP2_CLIENT_EXPECTATION_SOURCE}"
+        http2_client_expectation_source)
+    if(NOT http_client_request_expectations MATCHES
+           "httpClientExpectationIsValid" OR
+       NOT http1_client_expectation_source MATCHES
+           "detail::httpClientExpectationIsValid" OR
+       NOT http2_client_expectation_source MATCHES
+           "httpClientExpectationIsValid" OR
+       NOT http2_client_expectation_source MATCHES
+           "expectations[.]parseField" OR
+       NOT http2_client_expectation_source MATCHES
+           "HttpRequestContentIndication::kNoContent")
+        boundary_error("client 100-continue semantics split by HTTP version"
+            "every client request shape must reject 100-continue unless request content follows the initial head")
+    endif()
+endif()
 check_files_no_match("server Expect plans restored weak enum or optional actions"
     "HttpServerExpectationAction|expectationAction|serverAction|std::optional<HttpServerExpectation"
     "${HTTP_REQUEST_EXPECTATIONS}"
@@ -9105,15 +9134,27 @@ set(HTTP_EXPECTATION_LIST_TEST "${RUVIA_ROOT}/tests/unit_header_params.cpp")
 set(HTTP1_EXPECTATION_TEST "${RUVIA_ROOT}/tests/unit_http1_parser.cpp")
 set(HTTP2_EXPECTATION_HEADER_TEST "${RUVIA_ROOT}/tests/unit_http2_request_headers.cpp")
 set(HTTP2_EXPECTATION_RUNTIME_TEST "${RUVIA_ROOT}/tests/unit_sansio_driver.cpp")
+set(HTTP2_CLIENT_EXPECTATION_TEST
+    "${RUVIA_ROOT}/tests/unit_http2_connection.cpp")
+set(HTTP_EXPECTATION_PACKAGE_CONSUMER
+    "${RUVIA_ROOT}/tests/package-consumer/http.cpp")
 if(EXISTS "${HTTP_EXPECTATION_LIST_TEST}" AND
    EXISTS "${HTTP1_EXPECTATION_TEST}" AND
    EXISTS "${HTTP2_EXPECTATION_HEADER_TEST}" AND
-   EXISTS "${HTTP2_EXPECTATION_RUNTIME_TEST}")
+   EXISTS "${HTTP2_EXPECTATION_RUNTIME_TEST}" AND
+   EXISTS "${HTTP2_CLIENT_EXPECTATION_TEST}" AND
+   EXISTS "${HTTP_EXPECTATION_PACKAGE_CONSUMER}")
     file(READ "${HTTP_EXPECTATION_LIST_TEST}" http_expectation_list_test)
     file(READ "${HTTP1_EXPECTATION_TEST}" http1_expectation_test)
     file(READ "${HTTP2_EXPECTATION_HEADER_TEST}" http2_expectation_header_test)
     file(READ "${HTTP2_EXPECTATION_RUNTIME_TEST}" http2_expectation_runtime_test)
+    file(READ "${HTTP2_CLIENT_EXPECTATION_TEST}"
+        http2_client_expectation_test)
+    file(READ "${HTTP_EXPECTATION_PACKAGE_CONSUMER}"
+        http_expectation_package_consumer)
     if(NOT http_expectation_list_test MATCHES
+           "client_expectation_requires_following_content" OR
+       NOT http_expectation_list_test MATCHES
            "expectations_parse_one_logical_recipient_list" OR
        NOT http_expectation_list_test MATCHES
            "expectations_preserve_unsupported_extensions_as_semantics" OR
@@ -9122,9 +9163,13 @@ if(EXISTS "${HTTP_EXPECTATION_LIST_TEST}" AND
        NOT http2_expectation_header_test MATCHES
            "h2_headers_expect_is_an_extensible_repeated_list" OR
        NOT http2_expectation_runtime_test MATCHES
-           "sansio_driver_h2_expectation_decision_precedes_request_content")
+           "sansio_driver_h2_expectation_decision_precedes_request_content" OR
+       NOT http2_client_expectation_test MATCHES
+           "http2_connection_rejects_100_continue_without_following_content_transactionally" OR
+       NOT http_expectation_package_consumer MATCHES
+           "httpClientExpectationIsValid")
         boundary_error("cross-version Expect contract is under-tested"
-            "tests must pin list/repeat/empty parsing, semantic extensions, H2 100-before-DATA, and immediate Web 417")
+            "tests must pin client content gating, list/repeat/empty parsing, semantic extensions, H2 100-before-DATA, and immediate Web 417")
     endif()
 endif()
 
@@ -9230,6 +9275,8 @@ else()
        NOT http1_client_request_writer MATCHES "kExpectationWithoutContent" OR
        NOT http1_client_request_writer MATCHES
            "policy[.]continueExpectation[(][)] != nullptr" OR
+       NOT http1_client_request_writer MATCHES
+           "detail::httpClientExpectationIsValid" OR
        NOT http1_client_request_writer MATCHES "content[.]borrowedBytes" OR
        NOT http1_client_request_writer MATCHES "preparedWithoutContent" OR
        NOT http1_client_request_writer MATCHES "preparedImmediateContent" OR

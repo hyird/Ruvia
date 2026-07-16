@@ -6,6 +6,7 @@
 #include <utility>
 
 #include "ruvia/http/detail/HeaderAcceptUtils.h"
+#include "ruvia/http/detail/HttpExpectations.h"
 #include "ruvia/http/detail/HttpRequestContentSemantics.h"
 #include "ruvia/http/detail/HttpResponseBodyAccess.h"
 #include "ruvia/http/detail/HttpResponseContentSemantics.h"
@@ -36,10 +37,12 @@ struct Http2OutboundRequestHeaderFacts final {
     std::span<const HttpHeaderView> headers,
     bool allowHost,
     bool allowTrailers,
+    HttpRequestContentIndication contentIndication,
     Http2OutboundRequestHeaderFacts* facts = nullptr) noexcept {
     std::uint32_t singletonHeaders = 0;
     bool hostSeen = false;
     bool hasContentType = false;
+    HttpRequestExpectations expectations;
     for (const auto& header : headers) {
         if (!http2IsValidRegularHeader(header.name(), header.value())) {
             return false;
@@ -70,12 +73,19 @@ struct Http2OutboundRequestHeaderFacts final {
             }
             hasContentType = true;
         }
+        if (kind == RequestHeaderKind::kExpect) {
+            expectations.parseField(header.value());
+        }
         if (const auto bit = singletonRequestHeaderBit(kind); bit != 0) {
             if ((singletonHeaders & bit) != 0) {
                 return false;
             }
             singletonHeaders |= bit;
         }
+    }
+    if (!httpClientExpectationIsValid(
+            expectations.has100Continue(), contentIndication)) {
+        return false;
     }
     if (facts != nullptr) {
         facts->hasContentType = hasContentType;
@@ -89,7 +99,8 @@ struct Http2OutboundRequestHeaderFacts final {
     std::optional<std::string_view> authority,
     std::string_view path,
     std::span<const HttpHeaderView> headers,
-    bool explicitContent) noexcept {
+    bool explicitContent,
+    HttpRequestContentIndication contentIndication) noexcept {
     if (!http2IsValidOutboundMethod(method) ||
         !isValidUriScheme(scheme) ||
         (authority.has_value() &&
@@ -109,6 +120,7 @@ struct Http2OutboundRequestHeaderFacts final {
             headers,
             /*allowHost=*/true,
             /*allowTrailers=*/true,
+            contentIndication,
             &facts)) {
         return false;
     }
@@ -178,6 +190,12 @@ Http2RequestHeadSubmitResult Http2Connection::submitRegularRequestHead(
         return Http2RequestHeadSubmitResult::makeFailure(
             Http2RequestHeadSubmitError::kInvalidMessage);
     }
+    const bool contentWillFollow =
+        streamingContent ||
+        (knownLengthContent != nullptr && knownLengthContent->length() != 0);
+    const auto contentIndication = contentWillFollow
+        ? HttpRequestContentIndication::kWillFollow
+        : HttpRequestContentIndication::kNoContent;
     // Validate the entire semantic head before touching HPACK storage, outbound
     // bytes, the stream method, local-content accounting, or lifecycle state.
     if (!http2IsValidOutboundRegularRequestHead(
@@ -186,7 +204,8 @@ Http2RequestHeadSubmitResult Http2Connection::submitRegularRequestHead(
             authority,
             path,
             headers,
-            !withoutContent)) {
+            !withoutContent,
+            contentIndication)) {
         return Http2RequestHeadSubmitResult::makeFailure(
             Http2RequestHeadSubmitError::kInvalidMessage);
     }
@@ -273,7 +292,8 @@ Http2RequestHeadSubmitResult Http2Connection::submitConnectRequestHead(
             0,
             headers,
             /*allowHost=*/false,
-            /*allowTrailers=*/false)) {
+            /*allowTrailers=*/false,
+            HttpRequestContentIndication::kNoContent)) {
         return Http2RequestHeadSubmitResult::makeFailure(
             Http2RequestHeadSubmitError::kInvalidMessage);
     }
@@ -336,7 +356,8 @@ Http2RequestHeadSubmitResult Http2Connection::submitExtendedConnectRequestHead(
             httpUriSchemeDefaultPort(scheme),
             headers,
             /*allowHost=*/!websocket,
-            /*allowTrailers=*/false) ||
+            /*allowTrailers=*/false,
+            HttpRequestContentIndication::kNoContent) ||
         (websocket && !http2IsValidWebSocketConnectHeaders(headers))) {
         return Http2RequestHeadSubmitResult::makeFailure(
             Http2RequestHeadSubmitError::kInvalidMessage);

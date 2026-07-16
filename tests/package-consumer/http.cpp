@@ -36,6 +36,7 @@
 #include <ruvia/http/detail/HttpByteRange.h>
 #include <ruvia/http/detail/HttpContentCoding.h>
 #include <ruvia/http/detail/HttpContentLength.h>
+#include <ruvia/http/detail/HttpExpectations.h>
 #include <ruvia/http/detail/HttpRequestBodyFailure.h>
 #include <ruvia/http/detail/HttpRequestContentSemantics.h>
 #include <ruvia/http/detail/HttpTransferEncoding.h>
@@ -1823,6 +1824,12 @@ static_assert(sizeof(ruvia::detail::HttpResponseContentSemantics) == 1);
 static_assert(std::is_enum_v<
     ruvia::detail::HttpRequestContentSemantics>);
 static_assert(sizeof(ruvia::detail::HttpRequestContentSemantics) == 1);
+static_assert(ruvia::detail::httpClientExpectationIsValid(
+    false, ruvia::detail::HttpRequestContentIndication::kNoContent));
+static_assert(!ruvia::detail::httpClientExpectationIsValid(
+    true, ruvia::detail::HttpRequestContentIndication::kNoContent));
+static_assert(ruvia::detail::httpClientExpectationIsValid(
+    true, ruvia::detail::HttpRequestContentIndication::kWillFollow));
 static_assert(
     ruvia::detail::httpRequestContentSemantics("TRACE") ==
     ruvia::detail::HttpRequestContentSemantics::kForbidden);

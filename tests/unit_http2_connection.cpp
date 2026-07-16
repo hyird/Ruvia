@@ -2629,6 +2629,84 @@ RUVIA_TEST(http2_connection_enforces_request_method_content_semantics_transactio
     RUVIA_CHECK_EQ(submittedRequestStreamId(accepted), std::uint32_t{1});
 }
 
+RUVIA_TEST(http2_connection_rejects_100_continue_without_following_content_transactionally) {
+    std::pmr::monotonic_buffer_resource resource;
+    const ruvia::HttpHeaderView expectContinue[] = {
+        {"expect", "100-Continue"}};
+    const ruvia::HttpHeaderView combinedExpectation[] = {
+        {"expect", "extension, 100-Continue"}};
+
+    const auto checkRegularRejected = [&resource, &ruvia_ctx](
+                                          std::span<const ruvia::HttpHeaderView> headers,
+                                          Http2RequestContent content) {
+        Http2Connection client(
+            &resource, ruvia::detail::Http2Role::kClient);
+        beginClient(client);
+        const auto rejected = client.submitRegularRequestHead(
+            "POST",
+            "https",
+            "example.test",
+            "/upload",
+            headers,
+            content);
+        RUVIA_CHECK(rejected.submitted() == nullptr);
+        RUVIA_CHECK(requestHeadSubmitError(rejected) ==
+            Http2RequestHeadSubmitError::kInvalidMessage);
+        RUVIA_CHECK(client.pendingOutput().empty());
+        RUVIA_CHECK(client.stream(1) == nullptr);
+
+        const auto accepted = client.submitRegularRequestHead(
+            "GET",
+            "https",
+            "example.test",
+            "/",
+            {},
+            Http2RequestContent::none());
+        RUVIA_CHECK(accepted.submitted() != nullptr);
+        RUVIA_CHECK_EQ(submittedRequestStreamId(accepted), std::uint32_t{1});
+    };
+
+    checkRegularRejected(expectContinue, Http2RequestContent::none());
+    checkRegularRejected(expectContinue, Http2RequestContent::knownLength(0));
+    checkRegularRejected(
+        combinedExpectation, Http2RequestContent::knownLength(0));
+
+    Http2Connection connectClient(
+        &resource, ruvia::detail::Http2Role::kClient);
+    beginClient(connectClient);
+    const auto rejectedConnect = connectClient.submitConnectRequestHead(
+        "example.test:443", expectContinue);
+    RUVIA_CHECK(rejectedConnect.submitted() == nullptr);
+    RUVIA_CHECK(requestHeadSubmitError(rejectedConnect) ==
+        Http2RequestHeadSubmitError::kInvalidMessage);
+    RUVIA_CHECK(connectClient.pendingOutput().empty());
+    RUVIA_CHECK(connectClient.stream(1) == nullptr);
+
+    const auto checkAccepted = [&resource, &ruvia_ctx](
+                                   std::span<const ruvia::HttpHeaderView> headers,
+                                   Http2RequestContent content) {
+        Http2Connection client(
+            &resource, ruvia::detail::Http2Role::kClient);
+        beginClient(client);
+        const auto accepted = client.submitRegularRequestHead(
+            "POST",
+            "https",
+            "example.test",
+            "/upload",
+            headers,
+            content);
+        RUVIA_CHECK(accepted.submitted() != nullptr);
+        RUVIA_CHECK_EQ(submittedRequestStreamId(accepted), std::uint32_t{1});
+        RUVIA_CHECK(!client.pendingOutput().empty());
+    };
+
+    checkAccepted(expectContinue, Http2RequestContent::knownLength(1));
+    checkAccepted(expectContinue, Http2RequestContent::streaming());
+    const ruvia::HttpHeaderView extensionExpectation[] = {
+        {"expect", "extension"}};
+    checkAccepted(extensionExpectation, Http2RequestContent::none());
+}
+
 RUVIA_TEST(http2_connection_rejects_raw_request_content_length_transactionally) {
     std::pmr::monotonic_buffer_resource resource;
     const auto checkRejected =

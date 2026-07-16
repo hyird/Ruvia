@@ -1450,6 +1450,8 @@ file(READ
     _installed_http2_stream_state_expectations)
 if(NOT _installed_http_expectations MATCHES "kNoContent" OR
    NOT _installed_http_expectations MATCHES
+       "httpClientExpectationIsValid" OR
+   NOT _installed_http_expectations MATCHES
        "HttpServerExpectationPlan serverPlan" OR
    NOT _installed_http_expectations MATCHES
        "HttpUnsupportedExpectationPolicy" OR

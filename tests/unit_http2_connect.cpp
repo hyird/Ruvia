@@ -323,6 +323,8 @@ RUVIA_TEST(http2_connect_client_extended_head_requires_setting_and_protocol_cont
 
     enableExtendedConnect(client);
     const ruvia::HttpHeaderView rawLength[] = {{"content-length", "0"}};
+    const ruvia::HttpHeaderView expectContinue[] = {
+        {"expect", "100-continue"}};
     RUVIA_CHECK(requestHeadSubmitError(
         client.submitExtendedConnectRequestHead(
             "bad protocol", "https", "example.test", "/masque")) ==
@@ -346,6 +348,14 @@ RUVIA_TEST(http2_connect_client_extended_head_requires_setting_and_protocol_cont
     RUVIA_CHECK(requestHeadSubmitError(
         client.submitExtendedConnectRequestHead(
             "connect-udp", "https", "example.test", "/masque", rawLength)) ==
+        Http2RequestHeadSubmitError::kInvalidMessage);
+    RUVIA_CHECK(requestHeadSubmitError(
+        client.submitExtendedConnectRequestHead(
+            "connect-udp",
+            "https",
+            "example.test",
+            "/masque",
+            expectContinue)) ==
         Http2RequestHeadSubmitError::kInvalidMessage);
     RUVIA_CHECK(client.pendingOutput().empty());
     RUVIA_CHECK(client.stream(1) == nullptr);
