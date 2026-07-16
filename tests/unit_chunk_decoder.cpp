@@ -126,11 +126,39 @@ RUVIA_TEST(chunked_body_decoder_reports_typed_size_and_limit_failures) {
     const auto second = accumulated.decode(wire.substr(first.consumedBytes()));
     RUVIA_CHECK(second.failure() != nullptr);
     RUVIA_CHECK_EQ(second.failure()->protocolError().status(), 413);
+}
 
-    Http1ChunkedBodyDecoder framing(ProtocolByteLimit::limited(4));
-    const auto framingResult = framing.decode("0\r\n\r\n");
-    RUVIA_CHECK(framingResult.failure() != nullptr);
-    RUVIA_CHECK_EQ(framingResult.failure()->protocolError().status(), 413);
+RUVIA_TEST(chunked_body_decoder_separates_body_and_framing_budgets) {
+    Http1ChunkedBodyDecoder tinyBody(ProtocolByteLimit::limited(1));
+    constexpr std::string_view tinyWire = "1\r\nx\r\n0\r\n\r\n";
+    const auto body = tinyBody.decode(tinyWire);
+    RUVIA_CHECK(body.bodyChunk() != nullptr);
+    if (const auto* chunk = body.bodyChunk()) {
+        RUVIA_CHECK_EQ(chunk->bytes(), std::string_view("x"));
+        const auto terminal = tinyBody.decode(
+            tinyWire.substr(chunk->consumedBytes()));
+        RUVIA_CHECK(terminal.complete() != nullptr);
+    }
+
+    Http1ChunkedBodyDecoder framingFlood(ProtocolByteLimit::unlimited());
+    std::string sizeLine = "1;x=";
+    sizeLine.append(
+        ruvia::kMaxHttpHeaderBytes / 2 - sizeLine.size() - 2,
+        'a');
+    sizeLine.append("\r\n");
+    const std::string floodWire =
+        sizeLine + "x\r\n" + sizeLine + "y\r\n0\r\n\r\n";
+
+    const auto first = framingFlood.decode(floodWire);
+    RUVIA_CHECK(first.bodyChunk() != nullptr);
+    if (const auto* chunk = first.bodyChunk()) {
+        const auto excessive = framingFlood.decode(
+            std::string_view(floodWire).substr(chunk->consumedBytes()));
+        RUVIA_CHECK(excessive.failure() != nullptr);
+        if (const auto* failure = excessive.failure()) {
+            RUVIA_CHECK_EQ(failure->protocolError().status(), 413);
+        }
+    }
 }
 
 RUVIA_TEST(chunked_body_decoder_emits_zero_copy_chunks_and_preserves_pipeline) {
@@ -221,8 +249,9 @@ RUVIA_TEST(chunked_body_decoder_caps_each_size_line) {
     Http1ChunkedBodyDecoder boundary(
         ProtocolByteLimit::limited(ruvia::kMaxHttpBodyBytes));
     std::string accepted = "1;x=";
+    // Reserve two bytes for the data delimiter and five for the terminal chunk.
     accepted.append(
-        ruvia::kMaxHttpHeaderBytes - accepted.size() - 2,
+        ruvia::kMaxHttpHeaderBytes - 7 - accepted.size() - 2,
         'a');
     accepted.append("\r\nx\r\n0\r\n\r\n");
     const auto boundaryResult = boundary.decode(accepted);

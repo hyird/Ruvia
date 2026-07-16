@@ -186,6 +186,8 @@ private:
 // input buffer and removes result.consumedBytes() only after a returned body
 // view is no longer needed. Framing, trailer validation, and size accounting
 // remain protocol-owned; a runtime only refills input on a need-more result.
+// Representation bytes use the configured body limit, while chunk-size lines,
+// delimiters, and trailers share an independent fixed framing budget.
 class Http1ChunkedBodyDecoder final {
 public:
     explicit Http1ChunkedBodyDecoder(ProtocolByteLimit bodyLimit) noexcept
@@ -339,7 +341,8 @@ private:
 
     [[nodiscard]] std::optional<Http1ChunkDecodeError> accountFraming(
         std::size_t bytes) noexcept {
-        if (bodyLimit_.additionExceeds(encodedOverheadBytes_, bytes)) {
+        if (encodedOverheadBytes_ > kMaxHttpHeaderBytes ||
+            bytes > kMaxHttpHeaderBytes - encodedOverheadBytes_) {
             return Http1ChunkDecodeError::kFramingTooLarge;
         }
         encodedOverheadBytes_ += bytes;
