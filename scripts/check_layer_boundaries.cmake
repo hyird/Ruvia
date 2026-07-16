@@ -6402,6 +6402,56 @@ if(EXISTS "${HTTP_STATUS_HEADER}" AND
     endif()
 endif()
 
+set(HTTP2_CLIENT_RESPONSE_HEADERS_SOURCE
+    "${RUVIA_ROOT}/ruvia-http/src/http2/Http2ConnectionHeaders.cpp")
+set(HTTP1_CLIENT_RESPONSE_STATUS_TEST
+    "${RUVIA_ROOT}/tests/unit_http_client_response.cpp")
+set(HTTP2_CLIENT_RESPONSE_STATUS_TEST
+    "${RUVIA_ROOT}/tests/unit_http2_connection.cpp")
+foreach(http_client_status_contract_file IN ITEMS
+        "${HTTP_STATUS_HEADER}"
+        "${HTTP1_CLIENT_RESPONSE_SOURCE}"
+        "${HTTP2_CLIENT_RESPONSE_HEADERS_SOURCE}"
+        "${HTTP1_CLIENT_RESPONSE_STATUS_TEST}"
+        "${HTTP2_CLIENT_RESPONSE_STATUS_TEST}")
+    if(NOT EXISTS "${http_client_status_contract_file}")
+        file(RELATIVE_PATH relative
+            "${RUVIA_ROOT}" "${http_client_status_contract_file}")
+        boundary_error("cross-version HTTP client status contract is incomplete"
+            "${relative} is required")
+    endif()
+endforeach()
+if(EXISTS "${HTTP_STATUS_HEADER}" AND
+   EXISTS "${HTTP1_CLIENT_RESPONSE_SOURCE}" AND
+   EXISTS "${HTTP2_CLIENT_RESPONSE_HEADERS_SOURCE}" AND
+   EXISTS "${HTTP1_CLIENT_RESPONSE_STATUS_TEST}" AND
+   EXISTS "${HTTP2_CLIENT_RESPONSE_STATUS_TEST}")
+    file(READ "${HTTP_STATUS_HEADER}" http_status_code_contract)
+    file(READ "${HTTP1_CLIENT_RESPONSE_SOURCE}"
+        http1_client_response_status_parser)
+    file(READ "${HTTP2_CLIENT_RESPONSE_HEADERS_SOURCE}"
+        http2_client_response_status_parser)
+    file(READ "${HTTP1_CLIENT_RESPONSE_STATUS_TEST}"
+        http1_client_response_status_test)
+    file(READ "${HTTP2_CLIENT_RESPONSE_STATUS_TEST}"
+        http2_client_response_status_test)
+    if(NOT http_status_code_contract MATCHES
+           "statusCode >= 100 && statusCode <= 599" OR
+       NOT http1_client_response_status_parser MATCHES
+           "detail::httpStatusCodeValid" OR
+       NOT http2_client_response_status_parser MATCHES
+           "#[ \t]*include[ \t]*[<\"]ruvia/http/HttpStatus[.]h[>\"]" OR
+       NOT http2_client_response_status_parser MATCHES
+           "httpStatusCodeValid[(]status[)]" OR
+       NOT http1_client_response_status_test MATCHES
+           "http_client_rejects_malformed_status_and_length_fields" OR
+       NOT http2_client_response_status_test MATCHES
+           "http2_connection_client_rejects_status_outside_http_range")
+        boundary_error("HTTP client response status-code space diverged across versions"
+            "HTTP/1 and HTTP/2 must consume the shared 100..599 wire contract, with both boundaries pinned by protocol-specific regressions")
+    endif()
+endif()
+
 check_files_no_match("Context response status recovered a zero sentinel"
     "statusCode[ \t]*(==|!=)[ \t]*0|statusCode[ \t]*=[ \t]*0"
     "${WEB_CONTEXT_HEADER}"

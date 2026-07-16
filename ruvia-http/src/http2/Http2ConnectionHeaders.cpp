@@ -5,6 +5,7 @@
 #include <optional>
 #include <string_view>
 
+#include "ruvia/http/HttpStatus.h"
 #include "ruvia/http/detail/HttpResponseContentSemantics.h"
 #include "ruvia/http/detail/http2/Http2FramePayload.h"
 #include "ruvia/http/detail/http2/Http2HeaderBlock.h"
@@ -119,11 +120,15 @@ bool http2OnDecodedResponseHeader(void* target, std::string_view name, std::stri
         int parsedStatus = 0;
         const auto [ptr, ec] = std::from_chars(
             value.data(), value.data() + value.size(), parsedStatus);
-        if (value.size() != 3 || ec != std::errc{} || ptr != value.data() + value.size() ||
-            parsedStatus < 100 || parsedStatus > 999 || parsedStatus == 101) {
+        if (value.size() != 3 || ec != std::errc{} ||
+            ptr != value.data() + value.size()) {
             return false;
         }
-        context->status = static_cast<std::uint16_t>(parsedStatus);
+        const auto status = static_cast<std::uint16_t>(parsedStatus);
+        if (!httpStatusCodeValid(status) || status == 101) {
+            return false;
+        }
+        context->status = status;
         return true;
     }
     if (!context->status || !http2IsValidDecodedResponseHeader(name, value)) {
