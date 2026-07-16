@@ -169,6 +169,10 @@ RUVIA_TEST(websocket_deflate_offer_rejects_malformed_parameters) {
     RUVIA_CHECK(!offersDeflate(
         "permessage-deflate; client_max_window_bits=7"));
     RUVIA_CHECK(!offersDeflate(
+        "permessage-deflate; client_max_window_bits=08"));
+    RUVIA_CHECK(!offersDeflate(
+        "permessage-deflate; client_max_window_bits=\"09\""));
+    RUVIA_CHECK(!offersDeflate(
         "permessage-deflate; server_no_context_takeover=true"));
     RUVIA_CHECK(!offersDeflate(
         "permessage-deflate; client_no_context_takeover=1"));
@@ -184,6 +188,12 @@ RUVIA_TEST(websocket_deflate_offer_rejects_malformed_parameters) {
         negotiateDeflate(
             "permessage-deflate; server_max_window_bits=\"1\\5\"") ==
         WebSocketDeflateNegotiation::kAcceptedWithServerMaxWindowBits);
+
+    // A malformed offer does not poison the comma list: a later conforming
+    // offer remains independently negotiable.
+    RUVIA_CHECK(offersDeflate(
+        "permessage-deflate; client_max_window_bits=08, "
+        "permessage-deflate; client_max_window_bits=8"));
 }
 
 RUVIA_TEST(websocket_deflate_offer_picks_first_honorable_offer) {

@@ -217,6 +217,7 @@ enum class WebSocketDeflateNegotiation : std::uint8_t {
 
     int parsed = 0;
     std::size_t digits = 0;
+    bool leadingZero = false;
     for (std::size_t i = 0; i < value.size(); ++i) {
         auto ch = value[i];
         if (quoted && ch == '\\') {
@@ -228,6 +229,14 @@ enum class WebSocketDeflateNegotiation : std::uint8_t {
             return std::nullopt;
         }
         if (ch < '0' || ch > '9' || ++digits > 2) {
+            return std::nullopt;
+        }
+        if (digits == 1) {
+            leadingZero = ch == '0';
+        } else if (leadingZero) {
+            // RFC 7692 section 7.1.2 defines both max-window-bits
+            // parameters as decimal integers without leading zeroes. Apply
+            // that grammar after quoted-pair decoding as well as to tokens.
             return std::nullopt;
         }
         parsed = parsed * 10 + (ch - '0');
