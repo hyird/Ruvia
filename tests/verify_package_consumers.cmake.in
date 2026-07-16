@@ -1899,6 +1899,12 @@ if(NOT _installed_ws_deflate_negotiation MATCHES
    NOT _installed_ws_server_negotiation MATCHES
        "class WebSocketServerNegotiation final" OR
    NOT _installed_ws_server_negotiation MATCHES
+       "std::pmr::string subprotocol_" OR
+   NOT _installed_ws_server_negotiation MATCHES
+       "subprotocol[(][)] const [&] noexcept" OR
+   NOT _installed_ws_server_negotiation MATCHES
+       "subprotocol[(][)] const && = delete" OR
+   NOT _installed_ws_server_negotiation MATCHES
        "makeWebSocketServerNegotiation" OR
    NOT _installed_ws_server_negotiation MATCHES
        "WebSocketDeflateNegotiation deflate[(][)]" OR
@@ -1935,11 +1941,11 @@ if(NOT _installed_ws_deflate_negotiation MATCHES
    NOT _installed_http2_connection MATCHES
        "std::get_if<WebSocketServerNegotiation>" OR
    NOT _installed_http2_connection MATCHES
-       "WebSocketServerNegotiation negotiation" OR
+       "WebSocketServerNegotiation&& negotiation" OR
    NOT _installed_ws_connection MATCHES
        "WebSocketDeflateNegotiation deflate")
     message(FATAL_ERROR
-        "installed WebSocket handshake lost its immutable negotiation contract")
+        "installed WebSocket handshake lost its owned immutable negotiation contract")
 endif()
 if(_installed_ws_deflate_negotiation MATCHES
        "bool[ \t]+(enabled|echoServerMaxWindowBits)" OR

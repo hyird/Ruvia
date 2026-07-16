@@ -31,7 +31,17 @@ template <typename T>
 concept HasRvalueWebSocketHandshakeNegotiation =
     requires(T&& handshake) { std::move(handshake).negotiation(); };
 
+template <typename T>
+concept HasRvalueWebSocketServerSubprotocol =
+    requires(T&& negotiation) { std::move(negotiation).subprotocol(); };
+
 static_assert(!HasRvalueWebSocketHandshakeNegotiation<
+    ruvia::detail::HttpWebSocketServerHandshake>);
+static_assert(!HasRvalueWebSocketServerSubprotocol<
+    ruvia::detail::WebSocketServerNegotiation>);
+static_assert(!std::copy_constructible<
+    ruvia::detail::HttpWebSocketServerHandshake>);
+static_assert(std::move_constructible<
     ruvia::detail::HttpWebSocketServerHandshake>);
 
 class FailingHandshakeWriteStream final {
@@ -353,8 +363,10 @@ RUVIA_TEST(ws_server_handshake_response_serialization_is_http_owned) {
         "Sec-WebSocket-Protocol: chat, superchat\r\n"
         "Sec-WebSocket-Extensions: permessage-deflate; server_max_window_bits=15\r\n"
         "\r\n");
+    std::string supported = "chat";
     const auto handshake = ruvia::detail::makeHttpWebSocketServerHandshake(
-        request, "chat");
+        request, supported);
+    supported.front() = 'X';
 
     std::string response;
     handshake.forEachResponsePart([&response](std::string_view part) {

@@ -748,7 +748,7 @@ Http2SubmitStatus Http2Connection::submitConnectResponseHead(
 Http2WebSocketHandshakeSubmitResult
 Http2Connection::submitWebSocketHandshake(
     std::uint32_t streamId,
-    WebSocketServerNegotiation negotiation) {
+    WebSocketServerNegotiation&& negotiation) {
     auto* stream = findStream(streamId);
     if (stream == nullptr || stream->isAborted()) {
         return Http2WebSocketHandshakeSubmitResult::makeFailure(
@@ -774,7 +774,8 @@ Http2Connection::submitWebSocketHandshake(
     if (http2RemotePeerHalfClosed(*stream)) {
         events_.push_back(Http2Event::tunnelEnd(streamId));
     }
-    return Http2WebSocketHandshakeSubmitResult::makeSubmitted(negotiation);
+    return Http2WebSocketHandshakeSubmitResult::makeSubmitted(
+        std::move(negotiation));
 }
 
 Http2FinishSubmitStatus Http2Connection::finishResponse(

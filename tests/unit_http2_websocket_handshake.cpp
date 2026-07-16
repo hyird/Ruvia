@@ -1,5 +1,6 @@
 #include "test_harness.h"
 
+#include <concepts>
 #include <memory_resource>
 #include <string>
 #include <string_view>
@@ -19,6 +20,19 @@ using ruvia::detail::HpackDecoder;
 using ruvia::detail::http2EncodeWebSocketHandshakeHeaders;
 using ruvia::detail::makeWebSocketServerNegotiation;
 using ruvia::detail::validateHttp2WebSocketHandshake;
+
+template <typename T>
+concept ExposesRvalueWebSocketServerSubprotocol =
+    requires(T&& negotiation) {
+        std::move(negotiation).subprotocol();
+    };
+
+static_assert(!ExposesRvalueWebSocketServerSubprotocol<
+    ruvia::detail::WebSocketServerNegotiation>);
+static_assert(!std::copy_constructible<
+    ruvia::detail::WebSocketServerNegotiation>);
+static_assert(std::move_constructible<
+    ruvia::detail::WebSocketServerNegotiation>);
 
 struct Collector final {
     std::vector<std::pair<std::string, std::string>> headers;
@@ -100,23 +114,31 @@ Http2StreamState makeStream() {
 RUVIA_TEST(websocket_subprotocol_negotiation) {
     const auto request = requestWithProtocol();
     // Server preference wins: the first supported token the client also offered.
-    RUVIA_CHECK_EQ(
-        makeWebSocketServerNegotiation(request, "superchat, chat")
-            .subprotocol(),
-        std::string_view("superchat"));
-    RUVIA_CHECK_EQ(
-        makeWebSocketServerNegotiation(request, "chat").subprotocol(),
-        std::string_view("chat"));
+    const auto preferred =
+        makeWebSocketServerNegotiation(request, "superchat, chat");
+    RUVIA_CHECK_EQ(preferred.subprotocol(), std::string_view("superchat"));
+    const auto chat = makeWebSocketServerNegotiation(request, "chat");
+    RUVIA_CHECK_EQ(chat.subprotocol(), std::string_view("chat"));
     // No overlap yields no subprotocol.
-    RUVIA_CHECK(
-        makeWebSocketServerNegotiation(request, "binary")
-            .subprotocol()
-            .empty());
+    const auto noOverlap =
+        makeWebSocketServerNegotiation(request, "binary");
+    RUVIA_CHECK(noOverlap.subprotocol().empty());
 
     // A request offering nothing yields no subprotocol.
     const auto none = parseRequest("GET /ws HTTP/1.1\r\nHost: example.test\r\n\r\n");
-    RUVIA_CHECK(
-        makeWebSocketServerNegotiation(none, "chat").subprotocol().empty());
+    const auto noOffer = makeWebSocketServerNegotiation(none, "chat");
+    RUVIA_CHECK(noOffer.subprotocol().empty());
+}
+
+RUVIA_TEST(websocket_server_negotiation_owns_selected_subprotocol) {
+    const auto request = requestWithProtocol();
+    std::string supported = "chat";
+    const auto negotiation =
+        makeWebSocketServerNegotiation(request, supported);
+
+    supported.front() = 'X';
+
+    RUVIA_CHECK_EQ(negotiation.subprotocol(), std::string_view("chat"));
 }
 
 RUVIA_TEST(websocket_request_validity_requires_all_conditions) {

@@ -395,13 +395,14 @@ Task<void> runHttp2SansIoSession(
                     auto upgradeAndRun = [&](Context& context) -> Task<void> {
                         // HTTP/1 and RFC 8441 consume the same immutable
                         // negotiation only after middleware reaches the handler.
-                        const auto negotiation = makeWebSocketServerNegotiation(
+                        auto negotiation = makeWebSocketServerNegotiation(
                             request,
-                            webSocketEndpoint->subprotocols());
+                            webSocketEndpoint->subprotocols(),
+                            requestMemory.resource());
                         const auto handshakeResult =
                             connection.submitWebSocketHandshake(
                                 streamId,
-                                negotiation);
+                                std::move(negotiation));
                         const auto* submittedHandshake =
                             handshakeResult.submitted();
                         if (submittedHandshake == nullptr) {

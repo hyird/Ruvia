@@ -1,5 +1,9 @@
 #include "ruvia/http/detail/websocket/HttpWebSocketHandshakeFields.h"
 
+#include "ruvia/http/detail/PmrResource.h"
+#include "ruvia/http/detail/websocket/HttpWebSocketPermessageDeflate.h"
+#include "ruvia/http/detail/websocket/WebSocketServerNegotiation.h"
+
 #include <array>
 
 #include "ruvia/http/detail/HeaderTokenUtils.h"
@@ -273,6 +277,23 @@ std::string_view chooseWebSocketSubprotocol(
         [&offered](std::string_view token) noexcept {
             return offered.contains(token);
         });
+}
+
+WebSocketServerNegotiation::WebSocketServerNegotiation(
+    std::string_view subprotocol,
+    WebSocketDeflateNegotiation deflate,
+    std::pmr::memory_resource* resource)
+    : subprotocol_(subprotocol, httpPmrResourceOrDefault(resource)),
+      deflate_(deflate) {}
+
+WebSocketServerNegotiation makeWebSocketServerNegotiation(
+    const HttpRequest& request,
+    std::string_view supportedSubprotocols,
+    std::pmr::memory_resource* resource) {
+    return WebSocketServerNegotiation(
+        chooseWebSocketSubprotocol(request, supportedSubprotocols),
+        webSocketNegotiatePermessageDeflate(request),
+        resource);
 }
 
 }  // namespace ruvia::detail

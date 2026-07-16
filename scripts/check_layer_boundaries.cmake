@@ -10742,6 +10742,8 @@ set(WS_DEFLATE_NEGOTIATION_HEADER
     "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/detail/websocket/HttpWebSocketPermessageDeflate.h")
 set(WS_SERVER_NEGOTIATION_HEADER
     "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/detail/websocket/WebSocketServerNegotiation.h")
+set(WS_HANDSHAKE_FIELDS_SOURCE
+    "${RUVIA_ROOT}/ruvia-http/src/websocket/HttpWebSocketHandshakeFields.cpp")
 set(WS_H1_HANDSHAKE_HEADER
     "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/detail/websocket/HttpWebSocketServerHandshake.h")
 set(WS_HANDSHAKE_VALIDATION_HEADER
@@ -10761,6 +10763,7 @@ set(WS_H2_ROUTE_DRIVER
 foreach(required IN ITEMS
     "${WS_DEFLATE_NEGOTIATION_HEADER}"
     "${WS_SERVER_NEGOTIATION_HEADER}"
+    "${WS_HANDSHAKE_FIELDS_SOURCE}"
     "${WS_H1_HANDSHAKE_HEADER}"
     "${WS_HANDSHAKE_VALIDATION_HEADER}"
     "${WS_HANDSHAKE_VALIDATION_SOURCE}"
@@ -10776,6 +10779,7 @@ foreach(required IN ITEMS
 endforeach()
 if(EXISTS "${WS_DEFLATE_NEGOTIATION_HEADER}" AND
    EXISTS "${WS_SERVER_NEGOTIATION_HEADER}" AND
+   EXISTS "${WS_HANDSHAKE_FIELDS_SOURCE}" AND
    EXISTS "${WS_H1_HANDSHAKE_HEADER}" AND
    EXISTS "${WS_HANDSHAKE_VALIDATION_HEADER}" AND
    EXISTS "${WS_HANDSHAKE_VALIDATION_SOURCE}" AND
@@ -10786,6 +10790,7 @@ if(EXISTS "${WS_DEFLATE_NEGOTIATION_HEADER}" AND
    EXISTS "${WS_H2_ROUTE_DRIVER}")
     file(READ "${WS_DEFLATE_NEGOTIATION_HEADER}" ws_deflate_negotiation)
     file(READ "${WS_SERVER_NEGOTIATION_HEADER}" ws_server_negotiation)
+    file(READ "${WS_HANDSHAKE_FIELDS_SOURCE}" ws_handshake_fields_source)
     file(READ "${WS_H1_HANDSHAKE_HEADER}" ws_h1_handshake)
     file(READ "${WS_HANDSHAKE_VALIDATION_HEADER}" ws_handshake_validation)
     file(READ "${WS_HANDSHAKE_VALIDATION_SOURCE}" ws_h1_validation_source)
@@ -10811,7 +10816,13 @@ if(EXISTS "${WS_DEFLATE_NEGOTIATION_HEADER}" AND
            "webSocketDeflateResponseExtensions" OR
        NOT ws_server_negotiation MATCHES
            "class WebSocketServerNegotiation final" OR
-       NOT ws_server_negotiation MATCHES "std::string_view subprotocol[(][)]" OR
+       NOT ws_server_negotiation MATCHES
+           "std::string_view subprotocol[(][)] const [&] noexcept" OR
+       NOT ws_server_negotiation MATCHES
+           "subprotocol[(][)] const && = delete" OR
+       NOT ws_server_negotiation MATCHES "std::pmr::string subprotocol_" OR
+       NOT ws_handshake_fields_source MATCHES
+           "httpPmrResourceOrDefault[(]resource[)]" OR
        NOT ws_server_negotiation MATCHES
            "WebSocketDeflateNegotiation deflate[(][)]" OR
        NOT ws_server_negotiation MATCHES "std::string_view extensions[(][)]" OR
@@ -10855,12 +10866,13 @@ if(EXISTS "${WS_DEFLATE_NEGOTIATION_HEADER}" AND
        NOT ws_h2_connection MATCHES
            "std::get_if<WebSocketServerNegotiation>" OR
        NOT ws_h2_connection MATCHES
-           "WebSocketServerNegotiation negotiation" OR
+           "WebSocketServerNegotiation&& negotiation" OR
        ws_h2_connection MATCHES
            "class Http2SubmittedWebSocketHandshake final|std::get_if<Http2SubmittedWebSocketHandshake>" OR
        NOT ws_h1_writer MATCHES
            "const HttpWebSocketServerHandshake& handshake" OR
        NOT ws_h1_route MATCHES "makeHttpWebSocketServerHandshake" OR
+       NOT ws_h1_route MATCHES "memory[.]resource[(][)]" OR
        NOT ws_h1_route MATCHES
            "validateHttp1WebSocketHandshake" OR
        NOT ws_h1_route MATCHES
@@ -10872,6 +10884,8 @@ if(EXISTS "${WS_DEFLATE_NEGOTIATION_HEADER}" AND
        NOT ws_h1_route MATCHES
            "handshake[.]negotiation[(][)][.]deflate[(][)]" OR
        NOT ws_h2_route MATCHES "makeWebSocketServerNegotiation" OR
+       NOT ws_h2_route MATCHES "requestMemory[.]resource[(][)]" OR
+       NOT ws_h2_route MATCHES "std::move[(]negotiation[)]" OR
        NOT ws_h2_route MATCHES
            "validateHttp2WebSocketHandshake" OR
        NOT ws_h2_route MATCHES
@@ -11155,6 +11169,8 @@ if(EXISTS "${WS_H1_HANDSHAKE_TEST}" AND
        NOT ws_h2_handshake_test MATCHES
            "makeWebSocketServerNegotiation" OR
        NOT ws_h2_handshake_test MATCHES
+           "websocket_server_negotiation_owns_selected_subprotocol" OR
+       NOT ws_h2_handshake_test MATCHES
            "unsupported WebSocket version" OR
        NOT ws_h2_handshake_test MATCHES
            "applyRequiredResponseHeaders" OR
@@ -11166,6 +11182,8 @@ if(EXISTS "${WS_H1_HANDSHAKE_TEST}" AND
            "HasLooseWebSocketDeflateFields" OR
        NOT ws_negotiation_package_consumer MATCHES
            "HasLooseWebSocketNegotiationFields" OR
+       NOT ws_negotiation_package_consumer MATCHES
+           "ExposesRvalueWebSocketServerSubprotocol" OR
        NOT ws_negotiation_package_consumer MATCHES
            "AcceptsLooseWebSocketHandshakeSubmit" OR
        NOT ws_negotiation_package_consumer MATCHES

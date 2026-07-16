@@ -131,6 +131,15 @@ private:
 // value, never from a separately recomputed compression/subprotocol tuple.
 class Http2WebSocketHandshakeSubmitResult final {
 public:
+    Http2WebSocketHandshakeSubmitResult(
+        const Http2WebSocketHandshakeSubmitResult&) = delete;
+    Http2WebSocketHandshakeSubmitResult& operator=(
+        const Http2WebSocketHandshakeSubmitResult&) = delete;
+    Http2WebSocketHandshakeSubmitResult(
+        Http2WebSocketHandshakeSubmitResult&&) noexcept = default;
+    Http2WebSocketHandshakeSubmitResult& operator=(
+        Http2WebSocketHandshakeSubmitResult&&) = delete;
+
     [[nodiscard]] const WebSocketServerNegotiation*
     submitted() const & noexcept {
         return std::get_if<WebSocketServerNegotiation>(&value_);
@@ -154,13 +163,13 @@ private:
 
     template <typename Alternative>
     explicit Http2WebSocketHandshakeSubmitResult(
-        Alternative alternative) noexcept
-        : value_(std::move(alternative)) {}
+        Alternative&& alternative) noexcept
+        : value_(std::forward<Alternative>(alternative)) {}
 
     [[nodiscard]] static Http2WebSocketHandshakeSubmitResult
-    makeSubmitted(WebSocketServerNegotiation negotiation) noexcept {
+    makeSubmitted(WebSocketServerNegotiation&& negotiation) noexcept {
         return Http2WebSocketHandshakeSubmitResult(
-            negotiation);
+            std::move(negotiation));
     }
 
     [[nodiscard]] static Http2WebSocketHandshakeSubmitResult
@@ -534,10 +543,12 @@ public:
     // Queue the RFC 8441 successful response (:status 200, Date and the exact
     // negotiated fields, without END_STREAM) and open the stream as a tunnel.
     // Only the submitted alternative exposes the negotiation committed on wire.
+    // Ownership moves into that alternative only after validation succeeds; a
+    // rejected submission leaves the caller's negotiation unchanged.
     [[nodiscard]] Http2WebSocketHandshakeSubmitResult
     submitWebSocketHandshake(
         std::uint32_t streamId,
-        WebSocketServerNegotiation negotiation);
+        WebSocketServerNegotiation&& negotiation);
     // Accept a pending standard or extended CONNECT with a successful final response.
     // The head must be bodyless and contain neither Content-Length nor
     // Transfer-Encoding. DATA becomes opaque tunnel bytes only after this succeeds.

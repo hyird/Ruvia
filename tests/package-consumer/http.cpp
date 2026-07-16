@@ -654,6 +654,12 @@ concept HasFallibleWebSocketDeflateState = requires(const T& value) {
 };
 
 template <typename T>
+concept ExposesRvalueWebSocketServerSubprotocol =
+    requires(T&& negotiation) {
+        std::move(negotiation).subprotocol();
+    };
+
+template <typename T>
 concept AcceptsLooseWebSocketHandshakeSubmit = requires(T& connection) {
     connection.submitWebSocketHandshake(
         std::uint32_t{},
@@ -2611,11 +2617,13 @@ static_assert(!std::constructible_from<
 using WebSocketServerNegotiator =
     ruvia::detail::WebSocketServerNegotiation (*)(
         const ruvia::HttpRequest&,
-        std::string_view) noexcept;
+        std::string_view,
+        std::pmr::memory_resource*);
 using HttpWebSocketServerHandshakeFactory =
     ruvia::detail::HttpWebSocketServerHandshake (*)(
         const ruvia::HttpRequest&,
-    std::string_view) noexcept;
+        std::string_view,
+        std::pmr::memory_resource*);
 using Http1WebSocketHandshakeValidator =
     ruvia::detail::HttpWebSocketHandshakeValidationResult (*)(
         const ruvia::HttpRequest&,
@@ -2686,6 +2694,12 @@ static_assert(!std::is_nothrow_default_constructible_v<
     ruvia::detail::WebSocketDeflate>);
 static_assert(!std::default_initializable<
     ruvia::detail::WebSocketServerNegotiation>);
+static_assert(!std::copy_constructible<
+    ruvia::detail::WebSocketServerNegotiation>);
+static_assert(std::move_constructible<
+    ruvia::detail::WebSocketServerNegotiation>);
+static_assert(!ExposesRvalueWebSocketServerSubprotocol<
+    ruvia::detail::WebSocketServerNegotiation>);
 static_assert(!std::constructible_from<
     ruvia::detail::WebSocketServerNegotiation,
     std::string_view,
@@ -2704,11 +2718,19 @@ static_assert(std::same_as<
     std::string_view>);
 static_assert(!std::default_initializable<
     ruvia::detail::HttpWebSocketServerHandshake>);
+static_assert(!std::copy_constructible<
+    ruvia::detail::HttpWebSocketServerHandshake>);
+static_assert(std::move_constructible<
+    ruvia::detail::HttpWebSocketServerHandshake>);
 static_assert(HasWebSocketNegotiationAccessor<
     ruvia::detail::HttpWebSocketServerHandshake>);
 static_assert(!HasLooseWebSocketNegotiationFields<
     ruvia::detail::HttpWebSocketServerHandshake>);
 static_assert(!std::default_initializable<
+    ruvia::detail::Http2WebSocketHandshakeSubmitResult>);
+static_assert(!std::copy_constructible<
+    ruvia::detail::Http2WebSocketHandshakeSubmitResult>);
+static_assert(std::move_constructible<
     ruvia::detail::Http2WebSocketHandshakeSubmitResult>);
 static_assert(std::same_as<
     decltype(std::declval<const ruvia::detail::

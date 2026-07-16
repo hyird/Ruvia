@@ -4,7 +4,9 @@
 #include "ruvia/http/detail/websocket/HttpWebSocketUtils.h"
 #include "ruvia/http/detail/websocket/WebSocketServerNegotiation.h"
 
+#include <memory_resource>
 #include <string_view>
+#include <utility>
 
 namespace ruvia::detail {
 
@@ -21,6 +23,13 @@ inline constexpr std::string_view kHttpCrlf = "\r\n";
 
 class HttpWebSocketServerHandshake final {
 public:
+    HttpWebSocketServerHandshake(const HttpWebSocketServerHandshake&) = delete;
+    HttpWebSocketServerHandshake& operator=(
+        const HttpWebSocketServerHandshake&) = delete;
+    HttpWebSocketServerHandshake(HttpWebSocketServerHandshake&&) noexcept = default;
+    HttpWebSocketServerHandshake& operator=(
+        HttpWebSocketServerHandshake&&) = delete;
+
     [[nodiscard]] const WebSocketServerNegotiation&
     negotiation() const & noexcept {
         return negotiation_;
@@ -49,13 +58,14 @@ public:
 private:
     friend HttpWebSocketServerHandshake makeHttpWebSocketServerHandshake(
         const HttpRequest&,
-        std::string_view) noexcept;
+        std::string_view,
+        std::pmr::memory_resource*);
 
     HttpWebSocketServerHandshake(
         WebSocketAcceptKey accept,
-        WebSocketServerNegotiation negotiation) noexcept
+        WebSocketServerNegotiation&& negotiation) noexcept
         : accept_(accept),
-          negotiation_(negotiation) {}
+          negotiation_(std::move(negotiation)) {}
 
     WebSocketAcceptKey accept_;
     WebSocketServerNegotiation negotiation_;
@@ -63,14 +73,16 @@ private:
 
 [[nodiscard]] inline HttpWebSocketServerHandshake makeHttpWebSocketServerHandshake(
     const HttpRequest& request,
-    std::string_view supportedSubprotocols) noexcept {
+    std::string_view supportedSubprotocols,
+    std::pmr::memory_resource* resource = nullptr) {
     WebSocketAcceptKey accept;
     encodeWebSocketAccept(
         accept,
         requestKnownHeader(request, RequestKnownHeader::kSecWebSocketKey));
     return HttpWebSocketServerHandshake(
         accept,
-        makeWebSocketServerNegotiation(request, supportedSubprotocols));
+        makeWebSocketServerNegotiation(
+            request, supportedSubprotocols, resource));
 }
 
 }  // namespace ruvia::detail

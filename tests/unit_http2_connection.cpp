@@ -3977,24 +3977,30 @@ RUVIA_TEST(http2_connection_websocket_tunnel_handshake_and_data) {
         "Host: example.test\r\n"
         "Sec-WebSocket-Protocol: chat\r\n"
         "\r\n");
-    const auto negotiation =
+    auto negotiation =
         ruvia::detail::makeWebSocketServerNegotiation(
             negotiationRequest.request,
             "chat");
     const auto handshakeResult =
-        conn.submitWebSocketHandshake(1, negotiation);
+        conn.submitWebSocketHandshake(1, std::move(negotiation));
     RUVIA_CHECK(handshakeResult.submitted() != nullptr);
     RUVIA_CHECK(handshakeResult.failure() == nullptr);
     RUVIA_CHECK(
         handshakeResult.submitted()->subprotocol() == "chat");
 
-    const auto duplicateHandshakeResult =
-        conn.submitWebSocketHandshake(1, negotiation);
+    auto duplicateNegotiation =
+        ruvia::detail::makeWebSocketServerNegotiation(
+            negotiationRequest.request,
+            "chat");
+    const auto duplicateHandshakeResult = conn.submitWebSocketHandshake(
+        1, std::move(duplicateNegotiation));
     RUVIA_CHECK(duplicateHandshakeResult.submitted() == nullptr);
     RUVIA_CHECK(duplicateHandshakeResult.failure() != nullptr);
     RUVIA_CHECK(
         duplicateHandshakeResult.failure()->error() ==
         ruvia::detail::Http2WebSocketHandshakeSubmitError::kInvalidState);
+    RUVIA_CHECK_EQ(
+        duplicateNegotiation.subprotocol(), std::string_view("chat"));
 
     const auto out = conn.pendingOutput();
     RUVIA_CHECK(out.size() > 9);
