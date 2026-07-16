@@ -3,6 +3,7 @@
 #include <concepts>
 #include <cstdint>
 #include <memory_resource>
+#include <span>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -392,7 +393,11 @@ RUVIA_TEST(http2_connect_client_extended_head_requires_setting_and_protocol_cont
             "websocket", "https", "example.test", "/ws")) ==
         Http2RequestHeadSubmitError::kInvalidMessage);
     const ruvia::HttpHeaderView websocketHeaders[] = {
-        {"sec-websocket-version", "13"}};
+        {"sec-websocket-version", "13"},
+        {"sec-websocket-protocol", "chat, superchat"},
+        {"sec-websocket-extensions",
+         "permessage-deflate; client_max_window_bits"},
+    };
     RUVIA_CHECK(requestHeadSubmitError(
         client.submitExtendedConnectRequestHead(
             "websocket", "gemini", "example.test", "/ws", websocketHeaders)) ==
@@ -417,6 +422,60 @@ RUVIA_TEST(http2_connect_client_extended_head_requires_setting_and_protocol_cont
         std::string_view("websocket"));
     RUVIA_CHECK(http2IsPendingWebSocketConnect(
         *client.stream(websocketStream)));
+}
+
+// RFC 8441 keeps the RFC 6455 syntax of Sec-WebSocket-Protocol and
+// Sec-WebSocket-Extensions on Extended CONNECT. The dedicated WebSocket
+// sender must reject malformed offers before allocating a stream or emitting
+// an HPACK block that a conformant server can only reject.
+RUVIA_TEST(http2_connect_client_websocket_offer_rejection_is_transactional) {
+    const auto rejects = [&](std::span<const ruvia::HttpHeaderView> headers) {
+        std::pmr::monotonic_buffer_resource resource;
+        Http2Connection client(&resource, Http2Role::kClient);
+        beginClient(client);
+        enableExtendedConnect(client);
+
+        const auto result = client.submitExtendedConnectRequestHead(
+            "websocket", "https", "example.test", "/ws", headers);
+        RUVIA_CHECK(result.failure() != nullptr);
+        if (result.failure() != nullptr) {
+            RUVIA_CHECK(result.failure()->error() ==
+                Http2RequestHeadSubmitError::kInvalidMessage);
+        }
+        RUVIA_CHECK(client.pendingOutput().empty());
+        RUVIA_CHECK(client.stream(1) == nullptr);
+    };
+
+    const ruvia::HttpHeaderView emptySubprotocol[] = {
+        {"sec-websocket-version", "13"},
+        {"sec-websocket-protocol", ""},
+    };
+    rejects(emptySubprotocol);
+
+    const ruvia::HttpHeaderView malformedSubprotocol[] = {
+        {"sec-websocket-version", "13"},
+        {"sec-websocket-protocol", "chat, bad token"},
+    };
+    rejects(malformedSubprotocol);
+
+    const ruvia::HttpHeaderView duplicateSubprotocol[] = {
+        {"sec-websocket-version", "13"},
+        {"sec-websocket-protocol", "chat"},
+        {"sec-websocket-protocol", "superchat, chat"},
+    };
+    rejects(duplicateSubprotocol);
+
+    const ruvia::HttpHeaderView emptyExtensions[] = {
+        {"sec-websocket-version", "13"},
+        {"sec-websocket-extensions", ""},
+    };
+    rejects(emptyExtensions);
+
+    const ruvia::HttpHeaderView malformedExtensions[] = {
+        {"sec-websocket-version", "13"},
+        {"sec-websocket-extensions", "permessage-deflate;"},
+    };
+    rejects(malformedExtensions);
 }
 
 RUVIA_TEST(http2_connect_server_accepts_standard_tunnel_and_preserves_half_close) {

@@ -19,6 +19,7 @@
 #include "ruvia/http/detail/parser/HttpRequestTarget.h"
 #include "ruvia/http/detail/server/HttpFinalResponseControlPlan.h"
 #include "ruvia/http/detail/server/HttpResponseTrailers.h"
+#include "ruvia/http/detail/websocket/HttpWebSocketHandshakeFields.h"
 
 namespace ruvia::detail {
 namespace {
@@ -150,7 +151,7 @@ struct Http2OutboundRequestHeaderFacts final {
             sawVersion = true;
         }
     }
-    return sawVersion;
+    return sawVersion && webSocketClientOfferHeadersValid(headers);
 }
 
 [[nodiscard]] bool http2IsValidConnectResponseHead(
