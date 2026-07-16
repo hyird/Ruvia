@@ -160,6 +160,7 @@ HttpWebSocketHandshakeValidationResult validateHttp1WebSocketHandshake(
         !webSocketUpgrade ||
         hasContentLength ||
         bodyPlan.requiresConsumption() ||
+        !webSocketSubprotocolOffersValid(request) ||
         keyCount != 1 ||
         !decodeWebSocketKey(key).has_value() ||
         versionCount != 1) {

@@ -16,6 +16,7 @@
 #include <vector>
 
 #include "ruvia/http/HttpKnownMethod.h"
+#include "ruvia/http/detail/websocket/HttpWebSocketUtils.h"
 #include "ruvia/web/detail/http/ContextServices.h"
 #include "ruvia/web/Context.h"
 #include "ruvia/web/detail/CallableRef.h"
@@ -180,6 +181,11 @@ public:
             options.lifecycle.closeHandshakeTimeout->count() <= 0) {
             throw std::invalid_argument(
                 "websocket close-handshake timeout must be greater than zero");
+        }
+        if (!options.subprotocols.empty() &&
+            !isValidWebSocketSubprotocolList(options.subprotocols)) {
+            throw std::invalid_argument(
+                "websocket subprotocols must be a list of at most 64 unique HTTP tokens");
         }
         return RouteEndpoint(WebSocketRouteEndpoint(
             pmrResourceOrDefault(resource), handler, options));

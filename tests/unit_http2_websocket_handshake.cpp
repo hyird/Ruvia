@@ -168,6 +168,31 @@ RUVIA_TEST(websocket_request_validity_requires_all_conditions) {
     }
 }
 
+RUVIA_TEST(websocket_subprotocol_offers_are_validated_for_extended_connect) {
+    const auto malformed = parseRequest(
+        "GET /ws HTTP/1.1\r\n"
+        "Host: example.test\r\n"
+        "Sec-WebSocket-Version: 13\r\n"
+        "Sec-WebSocket-Protocol: chat, bad token\r\n"
+        "\r\n");
+    auto malformedStream = makeStream();
+    malformedStream.setProtocol("websocket");
+    RUVIA_CHECK(malformedStream.beginExtendedConnect());
+    RUVIA_CHECK(rejectsWebSocketHandshake(malformedStream, malformed));
+
+    const auto duplicate = parseRequest(
+        "GET /ws HTTP/1.1\r\n"
+        "Host: example.test\r\n"
+        "Sec-WebSocket-Version: 13\r\n"
+        "Sec-WebSocket-Protocol: chat\r\n"
+        "Sec-WebSocket-Protocol: superchat, chat\r\n"
+        "\r\n");
+    auto duplicateStream = makeStream();
+    duplicateStream.setProtocol("websocket");
+    RUVIA_CHECK(duplicateStream.beginExtendedConnect());
+    RUVIA_CHECK(rejectsWebSocketHandshake(duplicateStream, duplicate));
+}
+
 RUVIA_TEST(http2_websocket_handshake_does_not_invent_server_product) {
     const auto request = parseRequest(
         "GET /ws HTTP/1.1\r\n"

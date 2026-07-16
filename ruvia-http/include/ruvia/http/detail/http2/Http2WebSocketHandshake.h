@@ -46,6 +46,9 @@ validateHttp2WebSocketHandshake(
     if (versionCount != 1) {
         return HttpWebSocketHandshakeValidationResult::makeInvalidRequest();
     }
+    if (!webSocketSubprotocolOffersValid(request)) {
+        return HttpWebSocketHandshakeValidationResult::makeInvalidRequest();
+    }
     if (version != "13") {
         return HttpWebSocketHandshakeValidationResult::
             makeUnsupportedVersion();

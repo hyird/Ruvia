@@ -160,6 +160,50 @@ RUVIA_TEST(ws_protocol_offered_matches_whole_tokens_only) {
     RUVIA_CHECK(webSocketProtocolOffered(request, "superchat"));
     RUVIA_CHECK(!webSocketProtocolOffered(request, "super"));   // prefix, not a whole token
     RUVIA_CHECK(!webSocketProtocolOffered(request, "binary"));
+
+    const auto malformed = parseRequest(
+        "GET /ws HTTP/1.1\r\nHost: example.test\r\n"
+        "Sec-WebSocket-Protocol: chat, bad token\r\n\r\n");
+    RUVIA_CHECK(!webSocketProtocolOffered(malformed, "chat"));
+    RUVIA_CHECK(chooseWebSocketSubprotocol(malformed, "chat").empty());
+    RUVIA_CHECK(chooseWebSocketSubprotocol(request, "chat, bad token").empty());
+}
+
+RUVIA_TEST(ws_subprotocol_offers_require_unique_http_tokens) {
+    const auto withProtocols = [](std::string_view fields) {
+        std::string request(validHandshake());
+        request.insert(request.size() - 2, fields);
+        return request;
+    };
+
+    RUVIA_CHECK(acceptsRequest(withProtocols(
+        "Sec-WebSocket-Protocol: , chat,, superchat,\r\n")));
+    // Subprotocol identifiers are case-sensitive, so these are distinct.
+    RUVIA_CHECK(acceptsRequest(withProtocols(
+        "Sec-WebSocket-Protocol: chat, Chat\r\n")));
+
+    RUVIA_CHECK(rejectsRequest(withProtocols(
+        "Sec-WebSocket-Protocol: bad token\r\n")));
+    RUVIA_CHECK(rejectsRequest(withProtocols(
+        "Sec-WebSocket-Protocol: \"chat\"\r\n")));
+    RUVIA_CHECK(rejectsRequest(withProtocols(
+        "Sec-WebSocket-Protocol: , ,\r\n")));
+    RUVIA_CHECK(rejectsRequest(withProtocols(
+        "Sec-WebSocket-Protocol: chat, chat\r\n")));
+    RUVIA_CHECK(rejectsRequest(withProtocols(
+        "Sec-WebSocket-Protocol: chat\r\n"
+        "Sec-WebSocket-Protocol: superchat, chat\r\n")));
+
+    std::string tooMany = "Sec-WebSocket-Protocol: ";
+    for (std::size_t i = 0; i <= ruvia::kMaxHttpHeaderFields; ++i) {
+        if (i != 0) {
+            tooMany.append(", ");
+        }
+        tooMany.append("protocol-");
+        tooMany.append(std::to_string(i));
+    }
+    tooMany.append("\r\n");
+    RUVIA_CHECK(rejectsRequest(withProtocols(tooMany)));
 }
 
 RUVIA_TEST(ws_valid_request_requires_all_conditions) {
