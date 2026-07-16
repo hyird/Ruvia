@@ -284,6 +284,19 @@ bool Http2Connection::processWindowUpdate(const Http2FrameHeader& header, std::s
         return true;
     }
     auto* stream = streams_.find(header.streamId);
+    if (wasClosedByPeerReset(header.streamId, stream)) {
+        // RFC 9113 section 6.9 permits a valid WINDOW_UPDATE on a closed
+        // stream, so ignore it. A zero increment remains a stream
+        // PROTOCOL_ERROR, but the peer's earlier RST_STREAM forbids us from
+        // sending another stream frame; promote only that malformed case.
+        if (increment == 0) {
+            appendGoaway(
+                Http2ErrorCode::kProtocolError,
+                "zero WINDOW_UPDATE after peer RST_STREAM");
+            return false;
+        }
+        return true;
+    }
     if (stream == nullptr) {
         if (isIdleStreamId(header.streamId)) {
             appendGoaway(Http2ErrorCode::kProtocolError, "WINDOW_UPDATE on idle stream");
@@ -487,6 +500,18 @@ bool Http2Connection::closeStreamByOwner(std::uint32_t streamId) {
         CloseNotification::kOwnerAlreadyKnows);
 }
 
+bool Http2Connection::wasClosedByPeerReset(
+    std::uint32_t streamId,
+    const Http2StreamState* retainedStream) const noexcept {
+    if (retainedStream != nullptr) {
+        return retainedStream->isAborted() &&
+            retainedStream->localSend().aborted()->source() ==
+                Http2StreamCloseSource::kPeer;
+    }
+    return closedStreams_.source(streamId) ==
+        Http2StreamCloseSource::kPeer;
+}
+
 bool Http2Connection::processRstStream(const Http2FrameHeader& header, std::string_view payload) {
     if (payload.size() != 4) {
         appendGoaway(Http2ErrorCode::kFrameSizeError, "invalid RST_STREAM");
@@ -526,12 +551,23 @@ bool Http2Connection::processPriority(const Http2FrameHeader& header, std::strin
         return false;
     }
     if (payload.size() != 5) {
+        auto* const stream = findStream(header.streamId);
+        if (wasClosedByPeerReset(header.streamId, stream)) {
+            // PRIORITY is allowed on a closed stream, but malformed PRIORITY
+            // still requires FRAME_SIZE_ERROR. The peer's earlier RST_STREAM
+            // prevents reporting that error with another stream frame, so use
+            // the permitted connection-level promotion instead.
+            appendGoaway(
+                Http2ErrorCode::kFrameSizeError,
+                "invalid PRIORITY after peer RST_STREAM");
+            return false;
+        }
         // RFC 9113 section 6.3 makes malformed PRIORITY length a stream error,
         // unlike most fixed-size connection-control frames. Do not terminate
         // unrelated multiplexed streams for one bad advisory frame.
         output_.appendRstStream(
             header.streamId, Http2ErrorCode::kFrameSizeError);
-        if (findStream(header.streamId) != nullptr) {
+        if (stream != nullptr) {
             closeStream(
                 header.streamId,
                 Http2StreamCloseSource::kLocal,
@@ -793,21 +829,19 @@ bool Http2Connection::processData(const Http2FrameHeader& header, std::string_vi
     }
 
     auto* stream = findStream(header.streamId);
+    if (wasClosedByPeerReset(header.streamId, stream)) {
+        // This peer's RST_STREAM and later DATA are ordered on the same
+        // connection. Unlike DATA that was already in flight when WE sent a
+        // reset, this cannot be a state-view race. Do not answer with another
+        // stream frame; use the same strict closed-state verdict for retained
+        // (pinned) and already-released storage.
+        appendGoaway(
+            Http2ErrorCode::kStreamClosed,
+            "DATA after peer RST_STREAM");
+        return false;
+    }
     if (stream == nullptr) {
         const auto closeSource = closedStreams_.source(header.streamId);
-        if (closeSource == Http2StreamCloseSource::kPeer) {
-            // This peer's RST_STREAM and later DATA are ordered on the same
-            // connection. Unlike DATA that was already in flight when WE sent a
-            // reset, this cannot be a state-view race: RFC 9113 section 6.4
-            // forbids the reset sender from sending another stream frame. Do not
-            // answer with RST_STREAM (which is likewise forbidden after receiving
-            // the peer reset); use the strict closed-state connection error that
-            // the HEADERS path applies to the same sequence.
-            appendGoaway(
-                Http2ErrorCode::kStreamClosed,
-                "DATA after peer RST_STREAM");
-            return false;
-        }
         if (closeSource == Http2StreamCloseSource::kPeerGoaway) {
             releaseDroppedDataConnectionWindow(flowBytes);
             return true;
@@ -829,15 +863,6 @@ bool Http2Connection::processData(const Http2FrameHeader& header, std::string_vi
         return false;
     }
     if (stream->isAborted()) {
-        if (stream->localSend().aborted()->source() ==
-            Http2StreamCloseSource::kPeer) {
-            // A pin can retain request-view storage after the protocol stream
-            // closes. It must not weaken the wire-state verdict above.
-            appendGoaway(
-                Http2ErrorCode::kStreamClosed,
-                "DATA after peer RST_STREAM");
-            return false;
-        }
         releaseDroppedDataConnectionWindow(flowBytes);
         return true;
     }

@@ -5119,6 +5119,39 @@ RUVIA_TEST(http2_connection_drained_settings_never_trip) {
 }
 
 namespace {
+// Open stream 1 and let the peer reset it. `pinned` retains the aborted stream
+// object to exercise the request-view lifetime branch; the wire state is closed
+// in both cases.
+void openThenPeerReset(
+    Http2Connection& conn,
+    std::pmr::memory_resource* resource,
+    bool pinned) {
+    std::pmr::string block(resource);
+    encodeGetRequest(block);
+    const auto head = headersFrame(
+        resource,
+        1,
+        ruvia::detail::kHttp2FlagEndHeaders |
+            ruvia::detail::kHttp2FlagEndStream,
+        std::string_view(block.data(), block.size()));
+    (void)conn.feed(std::string_view(head.data(), head.size()));
+    while (conn.nextEvent().has_value()) {
+    }
+    if (pinned) {
+        conn.pinStream(1);
+    }
+
+    char rst[9 + 4];
+    ruvia::detail::http2EncodeFrameHeader(
+        rst, 4, Http2FrameType::kRstStream, 0, 1);
+    ruvia::detail::http2Write32(
+        rst + 9, static_cast<std::uint32_t>(Http2ErrorCode::kCancel));
+    (void)conn.feed(std::string_view(rst, sizeof(rst)));
+    while (conn.nextEvent().has_value()) {
+    }
+    conn.consumeOutput(conn.pendingOutput().size());
+}
+
 // Open stream 1 and let this endpoint reset it. DATA that was already in flight
 // before the peer observes our RST_STREAM can still arrive, so the closed-stream
 // response/flood budget remains meaningful only for this local-close direction.
@@ -5142,35 +5175,7 @@ RUVIA_TEST(http2_connection_data_after_peer_reset_is_connection_error) {
         std::pmr::monotonic_buffer_resource resource;
         Http2Connection conn(&resource);
         handshake(conn);
-
-        std::pmr::string block(&resource);
-        encodeGetRequest(block);
-        const auto head = headersFrame(
-            &resource,
-            1,
-            ruvia::detail::kHttp2FlagEndHeaders |
-                ruvia::detail::kHttp2FlagEndStream,
-            std::string_view(block.data(), block.size()));
-        RUVIA_CHECK(
-            conn.feed(std::string_view(head.data(), head.size())) ==
-            ruvia::detail::Http2FeedResult::kAccepted);
-        while (conn.nextEvent().has_value()) {
-        }
-        if (pinned) {
-            conn.pinStream(1);
-        }
-
-        char rst[9 + 4];
-        ruvia::detail::http2EncodeFrameHeader(
-            rst, 4, Http2FrameType::kRstStream, 0, 1);
-        ruvia::detail::http2Write32(
-            rst + 9, static_cast<std::uint32_t>(Http2ErrorCode::kCancel));
-        RUVIA_CHECK(
-            conn.feed(std::string_view(rst, sizeof(rst))) ==
-            ruvia::detail::Http2FeedResult::kAccepted);
-        while (conn.nextEvent().has_value()) {
-        }
-        conn.consumeOutput(conn.pendingOutput().size());
+        openThenPeerReset(conn, &resource, pinned);
 
         // The peer's RST_STREAM precedes this DATA on the same ordered byte
         // stream. It cannot be an in-flight race with a reset sent by us, and
@@ -5184,6 +5189,70 @@ RUVIA_TEST(http2_connection_data_after_peer_reset_is_connection_error) {
         RUVIA_CHECK_EQ(
             firstGoawayError(conn.pendingOutput()),
             static_cast<std::uint32_t>(Http2ErrorCode::kStreamClosed));
+
+        if (pinned) {
+            conn.unpinStream(1);
+        }
+    }
+}
+
+RUVIA_TEST(http2_connection_window_update_after_peer_reset_never_reopens_stream) {
+    for (const bool pinned : {false, true}) {
+        std::pmr::monotonic_buffer_resource resource;
+        Http2Connection conn(&resource);
+        handshake(conn);
+        openThenPeerReset(conn, &resource, pinned);
+
+        // RFC 9113 section 6.9 permits WINDOW_UPDATE on a closed stream. A
+        // valid increment is ignored, including while pinned storage remains.
+        char update[ruvia::detail::kHttp2WindowUpdateFrameBytes];
+        ruvia::detail::http2WriteWindowUpdate(update, 1, 1);
+        RUVIA_CHECK(
+            conn.feed(std::string_view(update, sizeof(update))) ==
+            ruvia::detail::Http2FeedResult::kAccepted);
+        RUVIA_CHECK(!conn.connectionError().has_value());
+        RUVIA_CHECK(conn.pendingOutput().empty());
+
+        // Increment zero is still a PROTOCOL_ERROR. Because the peer reset
+        // already closed this ordered stream, the core cannot legally send a
+        // second RST_STREAM and must promote the stream error to the connection.
+        ruvia::detail::http2WriteWindowUpdate(update, 1, 0);
+        RUVIA_CHECK(
+            conn.feed(std::string_view(update, sizeof(update))) ==
+            ruvia::detail::Http2FeedResult::kProtocolFailure);
+        RUVIA_CHECK(
+            conn.connectionError() == Http2ErrorCode::kProtocolError);
+        RUVIA_CHECK_EQ(
+            firstGoawayError(conn.pendingOutput()),
+            static_cast<std::uint32_t>(Http2ErrorCode::kProtocolError));
+
+        if (pinned) {
+            conn.unpinStream(1);
+        }
+    }
+}
+
+RUVIA_TEST(http2_connection_malformed_priority_after_peer_reset_is_connection_error) {
+    for (const bool pinned : {false, true}) {
+        std::pmr::monotonic_buffer_resource resource;
+        Http2Connection conn(&resource);
+        handshake(conn);
+        openThenPeerReset(conn, &resource, pinned);
+
+        // PRIORITY itself is legal in every stream state, but its payload must
+        // contain exactly five bytes. The resulting FRAME_SIZE_ERROR cannot be
+        // reported with RST_STREAM after this peer-originated reset.
+        char priority[9 + 4]{};
+        ruvia::detail::http2EncodeFrameHeader(
+            priority, 4, Http2FrameType::kPriority, 0, 1);
+        RUVIA_CHECK(
+            conn.feed(std::string_view(priority, sizeof(priority))) ==
+            ruvia::detail::Http2FeedResult::kProtocolFailure);
+        RUVIA_CHECK(
+            conn.connectionError() == Http2ErrorCode::kFrameSizeError);
+        RUVIA_CHECK_EQ(
+            firstGoawayError(conn.pendingOutput()),
+            static_cast<std::uint32_t>(Http2ErrorCode::kFrameSizeError));
 
         if (pinned) {
             conn.unpinStream(1);

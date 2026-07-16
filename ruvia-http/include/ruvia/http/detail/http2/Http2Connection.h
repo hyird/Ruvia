@@ -779,6 +779,9 @@ private:
         Http2StreamCloseSource source,
         Http2ErrorCode error);
     bool closeStreamByOwner(std::uint32_t streamId);
+    [[nodiscard]] bool wasClosedByPeerReset(
+        std::uint32_t streamId,
+        const Http2StreamState* retainedStream) const noexcept;
     void discardDeferredStreamState(std::uint32_t streamId);
     // Return a stream's banked receive-window debt to the connection window on removal.
     void flushWindowDebt(Http2StreamState& stream);
