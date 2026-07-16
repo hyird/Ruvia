@@ -700,6 +700,13 @@ private:
         Http2StreamState& stream, const Http2FrameHeader& header, std::string_view fragment);
     [[nodiscard]] bool processContinuation(const Http2FrameHeader& header, std::string_view payload);
     [[nodiscard]] bool processData(const Http2FrameHeader& header, std::string_view payload);
+    // Emit a bounded stream error for a stream whose live state is already gone.
+    // An unread peer can otherwise turn mandatory RST_STREAM responses into
+    // unbounded output growth.
+    [[nodiscard]] bool appendClosedStreamReset(
+        std::uint32_t streamId,
+        Http2ErrorCode error,
+        std::string_view floodDebug);
     // Release a successfully debited DATA payload that protocol semantics discard.
     // Only connection credit survives because the stream is closed/being abandoned.
     void releaseDroppedDataConnectionWindow(std::int32_t flowBytes);
@@ -826,7 +833,7 @@ private:
     std::uint32_t completedResponses_{0};  // streams finished without reset (refills budget)
     std::uint32_t consecutivePings_{0};    // inbound PINGs since output was last drained
     std::uint32_t consecutiveSettings_{0}; // inbound non-ACK SETTINGS since output drained
-    std::uint32_t consecutiveClosedStreamResets_{0};  // closed-stream DATA RSTs since drain
+    std::uint32_t consecutiveClosedStreamResets_{0};  // closed-stream RSTs since drain
 };
 
 }  // namespace ruvia::detail

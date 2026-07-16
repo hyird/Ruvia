@@ -289,6 +289,16 @@ bool Http2Connection::processWindowUpdate(const Http2FrameHeader& header, std::s
             appendGoaway(Http2ErrorCode::kProtocolError, "WINDOW_UPDATE on idle stream");
             return false;
         }
+        if (increment == 0) {
+            // A skipped lower identifier is closed, not idle (RFC 9113 §5.1.1).
+            // WINDOW_UPDATE is allowed there, but its value still has to satisfy
+            // §6.9: zero is a stream PROTOCOL_ERROR. The old early return silently
+            // accepted this malformed frame whenever live storage was gone.
+            return appendClosedStreamReset(
+                header.streamId,
+                Http2ErrorCode::kProtocolError,
+                "excessive closed-stream WINDOW_UPDATE");
+        }
         return true;
     }
     switch (http2ApplyStreamWindowUpdate(*stream, increment)) {
@@ -312,6 +322,18 @@ bool Http2Connection::processWindowUpdate(const Http2FrameHeader& header, std::s
             markSendWindowOpened();
             return true;
     }
+    return true;
+}
+
+bool Http2Connection::appendClosedStreamReset(
+    std::uint32_t streamId,
+    Http2ErrorCode error,
+    std::string_view floodDebug) {
+    if (++consecutiveClosedStreamResets_ > kHttp2MaxUndrainedClosedStreamResets) {
+        appendGoaway(Http2ErrorCode::kEnhanceYourCalm, floodDebug);
+        return false;
+    }
+    output_.appendRstStream(streamId, error);
     return true;
 }
 
@@ -781,11 +803,12 @@ bool Http2Connection::processData(const Http2FrameHeader& header, std::string_vi
             // A peer can aim DATA at the same already-closed stream forever; each answer
             // is an RST_STREAM appended to output. Bound them like the PING/SETTINGS
             // floods so an unread peer cannot grow output without limit.
-            if (++consecutiveClosedStreamResets_ > kHttp2MaxUndrainedClosedStreamResets) {
-                appendGoaway(Http2ErrorCode::kEnhanceYourCalm, "excessive closed-stream DATA");
+            if (!appendClosedStreamReset(
+                    header.streamId,
+                    Http2ErrorCode::kStreamClosed,
+                    "excessive closed-stream DATA")) {
                 return false;
             }
-            output_.appendRstStream(header.streamId, Http2ErrorCode::kStreamClosed);
             releaseDroppedDataConnectionWindow(flowBytes);
             return true;
         }

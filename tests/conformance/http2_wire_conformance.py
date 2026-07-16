@@ -450,6 +450,15 @@ def window_update_bad_length(host: str, port: int) -> None:
         connection.expect_goaway(FRAME_SIZE_ERROR)
 
 
+@case("5.1.1/6.9", "zero WINDOW_UPDATE on a skipped closed stream is a stream error")
+def window_update_zero_on_skipped_stream(host: str, port: int) -> None:
+    with H2Connection(host, port) as connection:
+        connection.send(request_headers(3))
+        connection.send(frame(WINDOW_UPDATE, 0, 1, b"\x00" * 4))
+        connection.expect_rst(1, PROTOCOL_ERROR)
+        connection.expect_alive()
+
+
 @case("6.10", "CONTINUATION without an open field block causes PROTOCOL_ERROR")
 def continuation_without_headers(host: str, port: int) -> None:
     with H2Connection(host, port) as connection:

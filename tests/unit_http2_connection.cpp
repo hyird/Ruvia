@@ -1000,6 +1000,44 @@ RUVIA_TEST(http2_connection_feed_zero_window_update_goaway) {
     RUVIA_CHECK_EQ(goaway.type, static_cast<std::uint8_t>(Http2FrameType::kGoaway));
 }
 
+// Opening stream 3 transitions skipped stream 1 from idle to closed (RFC 9113
+// §5.1.1). A WINDOW_UPDATE is permitted there, but §6.9 still requires a stream
+// PROTOCOL_ERROR when its increment is zero.
+RUVIA_TEST(http2_connection_zero_window_update_on_skipped_stream_resets_stream) {
+    std::pmr::monotonic_buffer_resource resource;
+    Http2Connection conn(&resource);
+    handshake(conn);
+
+    std::pmr::string block(&resource);
+    encodeGetRequest(block);
+    const auto request = headersFrame(
+        &resource,
+        3,
+        ruvia::detail::kHttp2FlagEndHeaders |
+            ruvia::detail::kHttp2FlagEndStream,
+        std::string_view(block.data(), block.size()));
+    RUVIA_CHECK(conn.feed(request) == Http2FeedResult::kAccepted);
+    while (conn.nextEvent().has_value()) {
+    }
+    conn.consumeOutput(conn.pendingOutput().size());
+
+    char update[ruvia::detail::kHttp2WindowUpdateFrameBytes];
+    ruvia::detail::http2WriteWindowUpdate(update, 1, 0);
+    RUVIA_CHECK(conn.feed(std::string_view(update, sizeof(update))) ==
+        Http2FeedResult::kAccepted);
+    RUVIA_CHECK(!conn.connectionError().has_value());
+
+    const auto out = conn.pendingOutput();
+    const auto reset = ruvia::detail::http2ParseFrameHeader(out.substr(0, 9));
+    RUVIA_CHECK_EQ(
+        reset.type, static_cast<std::uint8_t>(Http2FrameType::kRstStream));
+    RUVIA_CHECK_EQ(reset.streamId, std::uint32_t{1});
+    RUVIA_CHECK_EQ(
+        ruvia::detail::http2Read32(
+            reinterpret_cast<const unsigned char*>(out.data() + 9)),
+        static_cast<std::uint32_t>(Http2ErrorCode::kProtocolError));
+}
+
 // RFC 9113 §6.8 distinguishes the two GOAWAY malformations: a nonzero stream id is a
 // PROTOCOL_ERROR, a payload shorter than the 8 fixed octets is a FRAME_SIZE_ERROR.
 RUVIA_TEST(http2_connection_malformed_goaway_error_codes) {
