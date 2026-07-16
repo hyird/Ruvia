@@ -18,9 +18,11 @@ RUVIA_TEST(cors_origin_policy_has_explicit_legal_alternatives) {
     static_assert(!std::is_aggregate_v<ruvia::CorsOriginPolicy>);
 
     const auto any = ruvia::CorsOriginPolicy::any();
-    const auto exact = ruvia::CorsOriginPolicy::exact("https://app.example.com");
+    const auto exact = ruvia::CorsOriginPolicy::exact(
+        ruvia::CorsOrigin::serialized("https://app.example.com"));
     const auto credentialed =
-        ruvia::CorsOriginPolicy::credentialed("https://app.example.com");
+        ruvia::CorsOriginPolicy::credentialed(
+            ruvia::CorsOrigin::serialized("https://app.example.com"));
     RUVIA_CHECK(any.kind() == ruvia::CorsOriginPolicy::Kind::kAny);
     RUVIA_CHECK(exact.kind() == ruvia::CorsOriginPolicy::Kind::kExact);
     RUVIA_CHECK(
@@ -28,28 +30,30 @@ RUVIA_TEST(cors_origin_policy_has_explicit_legal_alternatives) {
         ruvia::CorsOriginPolicy::Kind::kCredentialedExact);
 }
 
-RUVIA_TEST(cors_exact_origin_rejects_invalid_value_at_construction) {
-    bool emptyThrew = false;
-    bool wildcardCredentialsThrew = false;
-    bool injectionThrew = false;
-    try {
-        (void)ruvia::CorsOriginPolicy::exact("");
-    } catch (const std::invalid_argument&) {
-        emptyThrew = true;
-    }
-    try {
-        (void)ruvia::CorsOriginPolicy::credentialed("*");
-    } catch (const std::invalid_argument&) {
-        wildcardCredentialsThrew = true;
-    }
-    try {
-        (void)ruvia::CorsOriginPolicy::credentialed("https://a\r\nX: y");
-    } catch (const std::invalid_argument&) {
-        injectionThrew = true;
-    }
-    RUVIA_CHECK(emptyThrew);
-    RUVIA_CHECK(wildcardCredentialsThrew);
-    RUVIA_CHECK(injectionThrew);
+RUVIA_TEST(cors_origin_requires_an_explicit_valid_wire_value) {
+    const auto rejects = [](std::string_view value) {
+        try {
+            (void)ruvia::CorsOrigin::serialized(value);
+            return false;
+        } catch (const std::invalid_argument&) {
+            return true;
+        }
+    };
+
+    RUVIA_CHECK(rejects(""));
+    RUVIA_CHECK(rejects("*"));
+    RUVIA_CHECK(rejects("null"));
+    RUVIA_CHECK(rejects("https://a\r\nX: y"));
+    RUVIA_CHECK(rejects("https://app.example/"));
+    RUVIA_CHECK(rejects("https://APP.example"));
+
+    const auto opaque = ruvia::CorsOrigin::opaque();
+    RUVIA_CHECK_EQ(opaque.value(), std::string_view("null"));
+    const auto credentialedOpaque =
+        ruvia::CorsOriginPolicy::credentialed(opaque);
+    RUVIA_CHECK_EQ(
+        credentialedOpaque.origin(),
+        std::string_view("null"));
 }
 
 RUVIA_TEST(cors_header_names_validate_each_field_name_at_construction) {
@@ -124,8 +128,10 @@ CorsConfig corsOptions(std::string_view configuredOrigin, bool credentials) {
         return cors;
     }
     cors.origin = credentials
-        ? ruvia::CorsOriginPolicy::credentialed(configuredOrigin)
-        : ruvia::CorsOriginPolicy::exact(configuredOrigin);
+        ? ruvia::CorsOriginPolicy::credentialed(
+              ruvia::CorsOrigin::serialized(configuredOrigin))
+        : ruvia::CorsOriginPolicy::exact(
+              ruvia::CorsOrigin::serialized(configuredOrigin));
     return cors;
 }
 

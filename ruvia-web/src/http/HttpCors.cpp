@@ -1,6 +1,7 @@
 #include "ruvia/web/detail/http/HttpCors.h"
 
 #include "ruvia/http/detail/HttpRequestInternal.h"
+#include "ruvia/http/detail/parser/HttpRequestTarget.h"
 #include <array>
 #include <cstddef>
 #include <cstdint>
@@ -101,6 +102,18 @@ void applyCorsHeaders(const HttpRequest& request, HttpResponse& response, const 
 }  // namespace ruvia::detail
 
 namespace ruvia {
+
+CorsOrigin CorsOrigin::serialized(std::string_view value) {
+    if (!detail::isValidHttpSerializedOrigin(value)) {
+        throw std::invalid_argument(
+            "CORS origin must be a WHATWG serialized origin");
+    }
+    return CorsOrigin(std::pmr::string(value));
+}
+
+CorsOrigin CorsOrigin::opaque() {
+    return CorsOrigin(std::pmr::string("null"));
+}
 
 CorsHeaderNames CorsHeaderNames::of(
     std::span<const std::string_view> names) {

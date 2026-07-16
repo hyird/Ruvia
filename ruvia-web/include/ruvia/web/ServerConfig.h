@@ -208,6 +208,24 @@ struct CompressionConfig final {
     std::size_t minBytes{1024};
 };
 
+class CorsOrigin final {
+public:
+    [[nodiscard]] static CorsOrigin serialized(std::string_view value);
+    [[nodiscard]] static CorsOrigin opaque();
+
+    [[nodiscard]] std::string_view value() const noexcept {
+        return value_;
+    }
+
+private:
+    friend class CorsOriginPolicy;
+
+    explicit CorsOrigin(std::pmr::string value) noexcept
+        : value_(std::move(value)) {}
+
+    std::pmr::string value_;
+};
+
 class CorsOriginPolicy final {
 public:
     enum class Kind : std::uint8_t {
@@ -220,12 +238,14 @@ public:
         return CorsOriginPolicy(Kind::kAny, {});
     }
 
-    [[nodiscard]] static CorsOriginPolicy exact(std::string_view origin) {
-        return CorsOriginPolicy(Kind::kExact, origin);
+    [[nodiscard]] static CorsOriginPolicy exact(CorsOrigin origin) {
+        return CorsOriginPolicy(Kind::kExact, std::move(origin.value_));
     }
 
-    [[nodiscard]] static CorsOriginPolicy credentialed(std::string_view origin) {
-        return CorsOriginPolicy(Kind::kCredentialedExact, origin);
+    [[nodiscard]] static CorsOriginPolicy credentialed(CorsOrigin origin) {
+        return CorsOriginPolicy(
+            Kind::kCredentialedExact,
+            std::move(origin.value_));
     }
 
     [[nodiscard]] constexpr Kind kind() const noexcept {
@@ -237,17 +257,8 @@ public:
     }
 
 private:
-    CorsOriginPolicy(Kind kind, std::string_view value) : kind_(kind), value_(value) {
-        if (kind != Kind::kAny && value.empty()) {
-            throw std::invalid_argument("CORS exact origin must not be empty");
-        }
-        if (kind != Kind::kAny && value == "*") {
-            throw std::invalid_argument("CORS wildcard origin must use the any policy");
-        }
-        if (kind != Kind::kAny && !isValidHttpHeaderValue(value)) {
-            throw std::invalid_argument("CORS exact origin must be a valid header value");
-        }
-    }
+    CorsOriginPolicy(Kind kind, std::pmr::string value) noexcept
+        : kind_(kind), value_(std::move(value)) {}
 
     Kind kind_;
     std::pmr::string value_;

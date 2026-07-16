@@ -1202,6 +1202,11 @@ concept SupportsRawCorsRequestHeaders = requires(Headers headers) {
     ruvia::CorsRequestHeadersPolicy::fixed(headers);
 };
 
+template <typename Origin>
+concept SupportsRawCorsOrigin = requires(Origin origin) {
+    ruvia::CorsOriginPolicy::exact(origin);
+};
+
 template <typename Headers>
 concept SupportsRawCorsExposeHeaders = requires(
     ruvia::CorsConfig config,
@@ -1213,8 +1218,10 @@ static_assert(std::same_as<
     decltype(ruvia::CorsConfig{}.exposeHeaders),
     ruvia::CorsHeaderNames>);
 static_assert(std::same_as<
-    decltype(ruvia::CorsOriginPolicy::credentialed("https://app.example")),
+    decltype(ruvia::CorsOriginPolicy::credentialed(
+        ruvia::CorsOrigin::serialized("https://app.example"))),
     ruvia::CorsOriginPolicy>);
+static_assert(!SupportsRawCorsOrigin<std::string_view>);
 static_assert(std::same_as<
     decltype(ruvia::CorsRequestHeadersPolicy::fixed({"authorization"})),
     ruvia::CorsRequestHeadersPolicy>);
