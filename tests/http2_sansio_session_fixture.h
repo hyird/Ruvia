@@ -1,7 +1,9 @@
 #pragma once
 
 #include <string_view>
+#include <memory>
 
+#include "ruvia/core/detail/WorkerDispatcher.h"
 #include "ruvia/web/detail/http/ContextServices.h"
 #include "ruvia/web/detail/server/Http2SansIoSession.h"
 
@@ -18,12 +20,13 @@ public:
             services,
             options,
             scannerEntry,
-            workerRunning);
+            workerState);
     }
 
     detail::HttpServerOptions options;
     detail::ConnectionScanner::Entry scannerEntry;
-    bool workerRunning{true};
+    detail::HttpServerWorkerState workerState{
+        detail::HttpServerWorkerState::kRunning};
 };
 
 template <typename Stream>
@@ -34,11 +37,14 @@ Task<void> runBareHttp2SansIoSession(
     detail::ContextServices services,
     std::string_view initialBytes = {}) {
     Http2SansIoSessionFixture fixture;
+    auto dispatcher = std::make_shared<detail::WorkerDispatcher>(
+        static_cast<asio::io_context&>(stream.get_executor().context()), 64);
+    const auto workerHandle = detail::WorkerHandleAccess::make(dispatcher);
     co_await detail::runHttp2SansIoSession(
         stream,
         routes,
         worker,
-        fixture.context(services),
+        fixture.context(services.withWorker(workerHandle)),
         initialBytes);
 }
 

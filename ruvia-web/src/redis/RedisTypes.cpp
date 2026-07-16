@@ -32,7 +32,7 @@ RedisError::Code RedisError::code() const noexcept {
     return code_;
 }
 
-std::string_view RedisError::message() const noexcept {
+std::string_view RedisError::message() const & noexcept {
     return std::string_view(message_.data(), message_.size());
 }
 
@@ -51,7 +51,7 @@ bool RedisValue::null() const noexcept {
     return kind_ == Kind::kNull;
 }
 
-std::string_view RedisValue::string() const {
+std::string_view RedisValue::string() const & {
     if (kind_ != Kind::kString && kind_ != Kind::kError) {
         throw std::logic_error("redis value is not a string");
     }
@@ -65,7 +65,7 @@ std::int64_t RedisValue::integer() const {
     return integer_;
 }
 
-std::span<const RedisValue> RedisValue::array() const {
+std::span<const RedisValue> RedisValue::array() const & {
     if (kind_ != Kind::kArray) {
         throw std::logic_error("redis value is not an array");
     }

@@ -12,19 +12,18 @@
 
 namespace ruvia {
 
-class RedisTransaction final {
+class RedisTransaction final : private detail::ScopedCapabilityNode {
 public:
     RedisTransaction(const RedisTransaction&) = delete;
     RedisTransaction& operator=(const RedisTransaction&) = delete;
     RedisTransaction(RedisTransaction&&) noexcept = default;
-    RedisTransaction& operator=(RedisTransaction&&) noexcept = default;
+    RedisTransaction& operator=(RedisTransaction&&) = delete;
 
     RedisTransaction& command(std::span<const std::string_view> args);
     RedisTransaction& command(std::initializer_list<std::string_view> args) = delete;
     RedisTransaction& watch(std::string_view key);
     RedisTransaction& watch(std::span<const std::string_view> keys);
     RedisTransaction& unwatch();
-    RedisTransaction& discard() noexcept;
     RedisTransaction& get(std::string_view key);
     RedisTransaction& set(std::string_view key, std::string_view value);
     RedisTransaction& getDel(std::string_view key);
@@ -64,17 +63,23 @@ public:
     RedisTransaction& zscore(std::string_view key, std::string_view member);
     RedisTransaction& zcard(std::string_view key);
 
-    Task<std::pmr::vector<RedisValue>> exec();
+    // A transaction is a single-use command batch. Its commands are transferred
+    // into the returned coroutine frame before this builder may be destroyed.
+    ScopedOperation<std::pmr::vector<RedisValue>> exec() &&;
 
 private:
     friend class RedisHandle;
 
     explicit RedisTransaction(RedisPipeline pipeline) noexcept;
-    RedisTransaction& markActive() noexcept;
+    [[nodiscard]] static Task<std::pmr::vector<RedisValue>> executeOwned(
+        detail::RedisPool& pool,
+        std::pmr::memory_resource* resource,
+        std::pmr::vector<RedisPipeline::Command> watches,
+        std::pmr::vector<RedisPipeline::Command> commands);
 
     RedisPipeline pipeline_;
     std::pmr::vector<RedisPipeline::Command> watches_;
-    bool discarded_{false};
+    static void expireCapability(detail::ScopedCapabilityNode& capability) noexcept;
 };
 
 }  // namespace ruvia

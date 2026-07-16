@@ -1,6 +1,8 @@
 #pragma once
 
 #include "ruvia/http/detail/HttpTransferCoding.h"
+#include "ruvia/http/HttpProtocolError.h"
+#include "ruvia/http/detail/HttpRequestBodyFailure.h"
 #include "ruvia/http/ProtocolByteLimit.h"
 
 #include <cstddef>
@@ -74,20 +76,29 @@ private:
     std::size_t consumedBytes_;
 };
 
-class TransferCodingDecodeFailure final {
+class TransferCodingDecodeProtocolFailure final {
 public:
     [[nodiscard]] constexpr std::size_t consumedBytes() const noexcept {
         return consumedBytes_;
     }
 
-    [[nodiscard]] constexpr TransferCodingDecodeError error() const noexcept {
-        return error_;
+    [[nodiscard]] HttpProtocolError protocolError() const noexcept {
+        switch (error_) {
+            case TransferCodingDecodeError::kInvalidContent:
+                return HttpProtocolError(
+                    400, "invalid transfer-coding body");
+            case TransferCodingDecodeError::kDecodedSizeExceeded:
+                return HttpRequestBodyFailure::tooLarge().protocolError();
+            case TransferCodingDecodeError::kDecoderFailure:
+                break;
+        }
+        std::unreachable();
     }
 
 private:
     friend class TransferCodingDecodeResult;
     friend class TransferCodingDecoder;
-    constexpr TransferCodingDecodeFailure(
+    constexpr TransferCodingDecodeProtocolFailure(
         std::size_t consumedBytes,
         TransferCodingDecodeError error) noexcept
         : consumedBytes_(consumedBytes), error_(error) {}
@@ -95,10 +106,25 @@ private:
     TransferCodingDecodeError error_;
 };
 
+class TransferCodingDecoderFailure final {
+public:
+    [[nodiscard]] constexpr std::size_t consumedBytes() const noexcept {
+        return consumedBytes_;
+    }
+
+private:
+    friend class TransferCodingDecodeResult;
+    friend class TransferCodingDecoder;
+    explicit constexpr TransferCodingDecoderFailure(
+        std::size_t consumedBytes) noexcept
+        : consumedBytes_(consumedBytes) {}
+    std::size_t consumedBytes_;
+};
+
 // One inflate step consumes a prefix of caller-owned input and exclusively
 // requests more input, exposes output in the caller-owned span, completes, or
-// reports a wire/limit/decoder failure. No input view or output storage is kept
-// by the decoder across calls.
+// reports a protocol failure or an internal decoder failure. No input view or
+// output storage is kept by the decoder across calls.
 class TransferCodingDecodeResult final {
 public:
     [[nodiscard]] std::size_t consumedBytes() const noexcept {
@@ -107,21 +133,33 @@ public:
             value_);
     }
 
-    [[nodiscard]] const TransferCodingDecodeNeedInput* needInput() const noexcept {
+    [[nodiscard]] const TransferCodingDecodeNeedInput* needInput() const & noexcept {
         return std::get_if<TransferCodingDecodeNeedInput>(&value_);
     }
+    const TransferCodingDecodeNeedInput* needInput() const && = delete;
 
-    [[nodiscard]] const TransferCodingDecodeOutput* output() const noexcept {
+    [[nodiscard]] const TransferCodingDecodeOutput* output() const & noexcept {
         return std::get_if<TransferCodingDecodeOutput>(&value_);
     }
+    const TransferCodingDecodeOutput* output() const && = delete;
 
-    [[nodiscard]] const TransferCodingDecodeComplete* complete() const noexcept {
+    [[nodiscard]] const TransferCodingDecodeComplete* complete() const & noexcept {
         return std::get_if<TransferCodingDecodeComplete>(&value_);
     }
+    const TransferCodingDecodeComplete* complete() const && = delete;
 
-    [[nodiscard]] const TransferCodingDecodeFailure* failure() const noexcept {
-        return std::get_if<TransferCodingDecodeFailure>(&value_);
+    [[nodiscard]] const TransferCodingDecodeProtocolFailure*
+    protocolFailure() const & noexcept {
+        return std::get_if<TransferCodingDecodeProtocolFailure>(&value_);
     }
+    const TransferCodingDecodeProtocolFailure*
+    protocolFailure() const && = delete;
+
+    [[nodiscard]] const TransferCodingDecoderFailure*
+    decoderFailure() const & noexcept {
+        return std::get_if<TransferCodingDecoderFailure>(&value_);
+    }
+    const TransferCodingDecoderFailure* decoderFailure() const && = delete;
 
 private:
     friend class TransferCodingDecoder;
@@ -129,7 +167,8 @@ private:
         TransferCodingDecodeNeedInput,
         TransferCodingDecodeOutput,
         TransferCodingDecodeComplete,
-        TransferCodingDecodeFailure>;
+        TransferCodingDecodeProtocolFailure,
+        TransferCodingDecoderFailure>;
 
     template <typename Result>
     explicit TransferCodingDecodeResult(Result result) noexcept
@@ -164,8 +203,13 @@ private:
     };
 
     struct Active final {};
+    struct GzipMemberBoundary final {};
     struct Complete final {};
-    using State = std::variant<Active, Complete, TransferCodingDecodeError>;
+    using State = std::variant<
+        Active,
+        GzipMemberBoundary,
+        Complete,
+        TransferCodingDecodeError>;
 
     [[nodiscard]] InflateStep inflateStep(
         std::string_view input,
@@ -189,13 +233,12 @@ private:
     static voidpf zallocThunk(voidpf opaque, uInt items, uInt size) noexcept;
     static void zfreeThunk(voidpf opaque, voidpf address) noexcept;
 
-    void cleanup() noexcept;
     z_stream stream_{};
-    bool initialized_{false};
     State state_{Active{}};
     std::pmr::memory_resource* resource_{nullptr};
     ProtocolByteLimit bodyLimit_;
     std::size_t decodedBytes_{0};
+    HttpTransferCoding coding_;
 };
 
 }  // namespace ruvia::detail

@@ -1,13 +1,12 @@
 #pragma once
 
+#include "ruvia/http/detail/HttpResponseFileBody.h"
 #include "ruvia/http/detail/NativePath.h"
 
 #include <array>
 #include <charconv>
-#include <chrono>
 #include <cstddef>
 #include <cstdint>
-#include <ctime>
 #include <filesystem>
 #include <memory_resource>
 #include <string>
@@ -53,7 +52,14 @@ template <typename Char>
 [[nodiscard]] inline std::pmr::string lowerStaticFileExtension(
     const std::filesystem::path& path,
     std::pmr::memory_resource* resource) {
-    const auto source = staticFileExtension(httpNativePathView(path));
+    // On Windows the native path uses wchar_t. Narrowing those code units one
+    // by one can alias unrelated Unicode extensions to an ASCII allow-listed
+    // type (for example U+0168 has the same low byte as 'h'). Convert the full
+    // path to UTF-8 first so extension policy and MIME lookup compare the
+    // actual filename bytes on every platform.
+    const auto utf8Path = path.generic_u8string();
+    const auto source = staticFileExtension(
+        std::u8string_view(utf8Path.data(), utf8Path.size()));
     if (source.empty()) {
         return std::pmr::string(resource);
     }
@@ -61,10 +67,10 @@ template <typename Char>
     extension.reserve(source.size());
     for (const auto c : source) {
         auto out = c;
-        if (out >= static_cast<HttpNativePathChar>('A') &&
-            out <= static_cast<HttpNativePathChar>('Z')) {
-            out = static_cast<HttpNativePathChar>(
-                out + static_cast<HttpNativePathChar>('a' - 'A'));
+        if (out >= static_cast<char8_t>('A') &&
+            out <= static_cast<char8_t>('Z')) {
+            out = static_cast<char8_t>(
+                out + static_cast<char8_t>('a' - 'A'));
         }
         extension.push_back(static_cast<char>(out));
     }
@@ -125,27 +131,23 @@ inline void appendStaticFileUnsigned(std::pmr::string& output, std::uint64_t val
     }
 }
 
-[[nodiscard]] inline std::pmr::string makeStaticFileEtag(
+[[nodiscard]] inline std::pmr::string makeStaticFileSnapshotEtag(
     std::pmr::memory_resource* resource,
     std::uint64_t size,
-    std::filesystem::file_time_type modified) {
+    std::uint64_t modifiedToken,
+    ResponseFileIdentity identity) {
     std::pmr::string output(resource);
-    output.reserve(43);
+    output.reserve(128);
     output.push_back('"');
     appendStaticFileUnsigned(output, size);
     output.push_back('-');
-    appendStaticFileUnsigned(
-        output,
-        static_cast<std::uint64_t>(modified.time_since_epoch().count()));
+    appendStaticFileUnsigned(output, modifiedToken);
+    for (const auto word : identity.words()) {
+        output.push_back('-');
+        appendStaticFileUnsigned(output, word);
+    }
     output.push_back('"');
     return output;
-}
-
-[[nodiscard]] inline std::time_t staticFileTimeToTimeT(
-    std::filesystem::file_time_type value) noexcept {
-    const auto systemTime = std::chrono::time_point_cast<std::chrono::system_clock::duration>(
-        value - std::filesystem::file_time_type::clock::now() + std::chrono::system_clock::now());
-    return std::chrono::system_clock::to_time_t(systemTime);
 }
 
 }  // namespace ruvia::detail

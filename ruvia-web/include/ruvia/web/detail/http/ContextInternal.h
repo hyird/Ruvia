@@ -24,21 +24,18 @@ inline Context::Context(
     const std::string_view* paramValues,
     std::size_t paramCount,
     std::uintptr_t routeRateLimitScope,
-    detail::ContextServices services,
-    HttpKnownMethod routeMethod,
-    std::size_t routeMiddlewareCount) noexcept
+    detail::ContextServices services) noexcept
     : memory_(memory),
       request_(request),
       connInfo_(services.connInfo()),
+      worker_(services.worker()),
       routePath_(routePath),
-      routeMethod_(routeMethod),
       paramNames_(paramNames),
       paramValues_(paramValues),
       paramCount_(
           paramCount < detail::kMaxRouteParams
               ? paramCount
               : detail::kMaxRouteParams),
-      routeMiddlewareCount_(routeMiddlewareCount),
       db_(services.db()),
       redis_(services.redis()),
       rateLimiter_(services.rateLimiter()),
@@ -48,11 +45,14 @@ inline Context::Context(
       maxDecodedBodyBytes_(services.maxDecodedBodyBytes()),
       requestBodySource_(services.requestBodySource()),
       responseOutput_(services.responseOutput()),
-      responseMetadata_(memory.resource()) {}
+      responseState_(memory.resource()),
+      sessionState_(memory.resource()) {}
 
 }  // namespace ruvia
 
 namespace ruvia::detail {
+
+class ContextWebSocketBinding;
 
 struct ContextAccess final {
     [[nodiscard]] static Context make(
@@ -74,8 +74,6 @@ struct ContextAccess final {
         RequestMemory& memory,
         const HttpRequest& request,
         std::string_view routePath,
-        HttpKnownMethod routeMethod,
-        std::size_t routeMiddlewareCount,
         std::uintptr_t routeRateLimitScope,
         ContextServices services = {}) noexcept {
         return Context(
@@ -86,9 +84,7 @@ struct ContextAccess final {
             nullptr,
             0,
             routeRateLimitScope,
-            services,
-            routeMethod,
-            routeMiddlewareCount);
+            services);
     }
 
     [[nodiscard]] static Context make(
@@ -98,8 +94,6 @@ struct ContextAccess final {
         const std::string_view* paramNames,
         const std::string_view* paramValues,
         std::size_t paramCount,
-        HttpKnownMethod routeMethod,
-        std::size_t routeMiddlewareCount,
         std::uintptr_t routeRateLimitScope,
         ContextServices services = {}) noexcept {
         return Context(
@@ -110,9 +104,7 @@ struct ContextAccess final {
             paramValues,
             paramCount,
             routeRateLimitScope,
-            services,
-            routeMethod,
-            routeMiddlewareCount);
+            services);
     }
 
     [[nodiscard]] static RateLimiter* rateLimiter(Context& context) noexcept {
@@ -124,15 +116,20 @@ struct ContextAccess final {
     }
 
     [[nodiscard]] static bool requestCookiesMaterialized(const Context& context) noexcept {
-        return context.requestCookies_ != nullptr;
+        return context.requestStorage_ && context.requestStorage_->cookies;
     }
 
     [[nodiscard]] static bool requestQueryMaterialized(const Context& context) noexcept {
-        return context.requestQuery_ != nullptr || context.requestQueries_ != nullptr;
+        return context.requestStorage_ && context.requestStorage_->query;
     }
 
     [[nodiscard]] static bool routeParamsMaterialized(const Context& context) noexcept {
-        return context.routeParams_ != nullptr;
+        return context.requestStorage_ && context.requestStorage_->routeParams;
+    }
+
+    [[nodiscard]] static const ContextRequestStorage* requestStorage(
+        const Context& context) noexcept {
+        return context.requestStorage_.get();
     }
 
     static void setResponse(Context& context, HttpResponse&& response) {
@@ -146,15 +143,7 @@ struct ContextAccess final {
     [[nodiscard]] static bool hasResponseHeader(
         const Context& context,
         std::string_view name) noexcept {
-        if (context.response_ != nullptr && !context.response_->header(name).empty()) {
-            return true;
-        }
-        for (const auto& header : context.responseMetadata_.headers()) {
-            if (header.name() == name && !header.value().empty()) {
-                return true;
-            }
-        }
-        return false;
+        return context.responseState_.activeResponse().header(name).has_value();
     }
 
     static void setError(Context& context, std::exception_ptr exception) noexcept {
@@ -188,13 +177,55 @@ struct ContextAccess final {
     [[nodiscard]] static bool hasPendingSetCookie(
         const Context& context,
         std::string_view valuePrefix) noexcept {
-        for (const auto& header : context.responseMetadata_.headers()) {
+        for (const auto& header : context.responseState_.activeResponse().headers()) {
             if (header.name() == "Set-Cookie" && header.value().starts_with(valuePrefix)) {
                 return true;
             }
         }
         return false;
     }
+
+private:
+    friend class ContextWebSocketBinding;
+
+    [[nodiscard]] static ContextResponseOutput bindWebSocket(
+        Context& context,
+        WebSocket& webSocket) noexcept {
+        auto previous = context.responseOutput_;
+        context.responseOutput_ = ContextResponseOutput::webSocket(webSocket);
+        return previous;
+    }
+
+    static void restoreResponseOutput(
+        Context& context,
+        ContextResponseOutput output) noexcept {
+        context.responseOutput_ = output;
+    }
+};
+
+// The facade borrowed by Context is valid only while the established session
+// owns its connection. Restoring the previous output capability on every exit
+// prevents onion middleware post-processing from observing a dangling facade.
+class ContextWebSocketBinding final {
+public:
+    ContextWebSocketBinding(
+        Context& context,
+        WebSocket& webSocket) noexcept
+        : context_(&context),
+          previous_(ContextAccess::bindWebSocket(context, webSocket)) {}
+
+    ContextWebSocketBinding(const ContextWebSocketBinding&) = delete;
+    ContextWebSocketBinding& operator=(const ContextWebSocketBinding&) = delete;
+    ContextWebSocketBinding(ContextWebSocketBinding&&) = delete;
+    ContextWebSocketBinding& operator=(ContextWebSocketBinding&&) = delete;
+
+    ~ContextWebSocketBinding() {
+        ContextAccess::restoreResponseOutput(*context_, previous_);
+    }
+
+private:
+    Context* context_;
+    ContextResponseOutput previous_;
 };
 
 }  // namespace ruvia::detail

@@ -1,16 +1,11 @@
 #pragma once
 
-#include <atomic>
 #include <asio/io_context.hpp>
 #include <asio/ip/tcp.hpp>
 #include <asio/ssl/context.hpp>
-#include <asio/steady_timer.hpp>
-#include <condition_variable>
-#include <cstdint>
 #include <exception>
 #include <memory>
 #include <memory_resource>
-#include <mutex>
 #include <optional>
 #include <span>
 #include <string>
@@ -20,13 +15,19 @@
 #include <vector>
 
 #include "ruvia/core/Task.h"
+#include "ruvia/core/WorkerHandle.h"
+#include "ruvia/core/detail/WorkerTimer.h"
+#include "ruvia/core/detail/RuntimeLifecycle.h"
 #include "ruvia/core/memory/MemoryPool.h"
 #include "ruvia/core/detail/ConnectionScanner.h"
+#include "ruvia/web/WebWorker.h"
 #include "ruvia/http/HttpRequest.h"
 #include "ruvia/http/HttpResponse.h"
 #include "ruvia/web/detail/server/HttpConnectionState.h"
 #include "ruvia/web/detail/server/RateLimiter.h"
 #include "ruvia/web/detail/server/HttpServerOptions.h"
+#include "ruvia/web/detail/server/HttpServerWorkerState.h"
+#include "ruvia/web/detail/server/HttpServerWorkerCompletion.h"
 #include "ruvia/web/detail/db/DbInternal.h"
 #include "ruvia/web/detail/redis/RedisInternal.h"
 #include "ruvia/web/detail/server/RateLimitDecision.h"
@@ -34,7 +35,10 @@
 namespace ruvia::detail {
 
 class ContextServices;
+class AcceptedConnectionLease;
 class RouteTable;
+class WorkerDispatcher;
+class WebWorkerDispatch;
 
 using SniContextStore = std::pmr::vector<asio::ssl::context>;
 using SniContextLookup = std::pmr::vector<std::pair<std::pmr::string, asio::ssl::context*>>;
@@ -61,35 +65,33 @@ public:
     void stop();
     void join();
     [[nodiscard]] asio::ip::tcp::endpoint localEndpoint() const;
+    [[nodiscard]] const WorkerHandle& worker() const & noexcept {
+        return workerHandle_;
+    }
+    WorkerHandle worker() const && = delete;
+    [[nodiscard]] WebWorkerHandle webWorker() const;
 private:
-    enum class LifecycleState : std::uint8_t {
-        kFresh,
-        kRunning,
-        kStopping,
-        kStopped,
-    };
+    struct ValidatedOptionsTag final {};
 
-    // RAII notify for the graceful-drain path, held across a session's whole
-    // coroutine body. A nested type (rather than a session-local struct) gives it
-    // linkage so it does not taint the coroutine frame with a no-linkage subobject,
-    // while still reaching the private maybeFinishDrain.
-    struct SessionDrainGuard final {
-        HttpServer* server;
-        ~SessionDrainGuard() { server->maybeFinishDrain(); }
-    };
+    HttpServer(
+        ValidatedOptionsTag,
+        asio::ip::tcp::endpoint endpoint,
+        const RouteTable& routes,
+        std::span<const DbDefinition> databases,
+        std::span<const RedisDefinition> redis,
+        HttpServerOptions validatedOptions);
 
     void configureAcceptor();
     void configureTlsContext();
     void stopOnContext(bool honorGracePeriod = true) noexcept;
+    void finishStopOnContext() noexcept;
     void maybeFinishDrain() noexcept;
     void forceCloseAll() noexcept;
-    void resetStartupState();
-    void completeStartup(std::exception_ptr exception = nullptr) noexcept;
-    void waitForStartupReady();
+    void failWorker(std::exception_ptr failure) noexcept;
     void runIoContext() noexcept;
     Task<void> runWorker();
     Task<void> acceptLoop();
-    Task<void> handleSession(asio::ip::tcp::socket socket);
+    Task<void> handleSession(AcceptedConnectionLease connection);
     template <typename Stream>
     Task<void> handleStreamSession(
         Stream& stream,
@@ -106,8 +108,10 @@ private:
         RequestMemory& memory) const;
 
     asio::io_context ioContext_;
+    std::shared_ptr<WorkerDispatcher> workerDispatcher_;
+    WorkerHandle workerHandle_;
     asio::ip::tcp::acceptor acceptor_;
-    asio::steady_timer drainTimer_;
+    WorkerTimerRegistration drainTimer_;
     std::optional<asio::ssl::context> tlsContext_;
     asio::ip::tcp::endpoint endpoint_;
     const RouteTable& routes_;
@@ -119,24 +123,21 @@ private:
     HttpServerOptions options_;
     DbRegistry databases_;
     RedisRegistry redis_;
+    std::shared_ptr<WebWorkerDispatch> webWorkerDispatch_;
     RateLimiter rateLimiter_;
     ConnectionScanner connectionScanner_;
+    ConnectionScanner::WorkerMaintenanceRegistration databaseDeadlineCheck_;
+    ConnectionScanner::WorkerMaintenanceRegistration redisDeadlineCheck_;
     ConnectionWorkSetPool workSetPool_;
     std::size_t activeConnectionCount_{0};
 
-    // lifecycleState_ is touched by external start/stop callers. All request
-    // coroutines use workerRunning_, which is mutated only on this io_context.
-    std::atomic<LifecycleState> lifecycleState_{LifecycleState::kFresh};
-    bool workerRunning_{false};
-    // True while stopOnContext() is holding the force-close behind drainTimer_.
-    // Mutated only on this io_context.
-    bool drainPending_{false};
+    // lifecycle_ is touched by external start/stop callers. Request coroutines
+    // observe workerState_, which is mutated only on this io_context.
+    RuntimeLifecycle lifecycle_;
+    HttpServerWorkerState workerState_{HttpServerWorkerState::kFresh};
     std::jthread workerThread_;
 
-    std::mutex startupMutex_;
-    std::condition_variable startupCv_;
-    std::exception_ptr startupException_;
-    bool startupReady_{false};
+    HttpServerWorkerCompletion workerCompletion_;
 };
 
 }  // namespace ruvia::detail

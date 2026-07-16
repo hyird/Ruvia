@@ -42,6 +42,10 @@ public:
         return validatedModelTypeKey_;
     }
 
+    [[nodiscard]] bool usesRouteRateLimit() const noexcept {
+        return usesRouteRateLimit_;
+    }
+
 private:
     template <typename MiddlewareT>
     friend ControllerMiddlewareDescriptor makeMiddlewareDescriptor();
@@ -51,16 +55,19 @@ private:
         Invoke invoke,
         Create create,
         Destroy destroy,
-        const void* validatedModelTypeKey) noexcept
+        const void* validatedModelTypeKey,
+        bool usesRouteRateLimit) noexcept
         : invoke_(invoke),
           create_(create),
           destroy_(destroy),
-          validatedModelTypeKey_(validatedModelTypeKey) {}
+          validatedModelTypeKey_(validatedModelTypeKey),
+          usesRouteRateLimit_(usesRouteRateLimit) {}
 
     Invoke invoke_{nullptr};
     Create create_{nullptr};
     Destroy destroy_{nullptr};
     const void* validatedModelTypeKey_{nullptr};
+    bool usesRouteRateLimit_{false};
 };
 
 }  // namespace detail

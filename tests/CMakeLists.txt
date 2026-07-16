@@ -10,6 +10,7 @@ add_executable(ruvia_unit_tests
     unit_http_parsing.cpp
     unit_multipart.cpp
     unit_multipart_reader.cpp
+    unit_request_body_loader.cpp
     unit_content_negotiation.cpp
     unit_accept_media_type.cpp
     unit_form_parser.cpp
@@ -52,6 +53,7 @@ add_executable(ruvia_unit_tests
     unit_websocket_close.cpp
     unit_config_validation.cpp
     unit_server_options_validation.cpp
+    unit_http_server_worker_completion.cpp
     unit_response_head_buffer.cpp
     unit_pmr_string.cpp
     unit_http2_offset_vector.cpp
@@ -217,11 +219,85 @@ endif()
 if(RUVIA_BUILD_CORE)
     add_executable(ruvia_smoke_core_target smoke_core_target.cpp)
     target_link_libraries(ruvia_smoke_core_target PRIVATE ruvia::core)
+    target_compile_definitions(ruvia_smoke_core_target PRIVATE
+        RUVIA_EXPECTED_VERSION_MAJOR=${PROJECT_VERSION_MAJOR}
+        RUVIA_EXPECTED_VERSION_MINOR=${PROJECT_VERSION_MINOR}
+        RUVIA_EXPECTED_VERSION_PATCH=${PROJECT_VERSION_PATCH}
+        RUVIA_EXPECTED_VERSION_STRING="${PROJECT_VERSION}")
     add_test(NAME ruvia_smoke_core_target COMMAND ruvia_smoke_core_target)
 
     add_executable(ruvia_connection_scanner_lifetime connection_scanner_lifetime.cpp)
     target_link_libraries(ruvia_connection_scanner_lifetime PRIVATE ruvia::core)
     add_test(NAME ruvia_connection_scanner_lifetime COMMAND ruvia_connection_scanner_lifetime)
+
+    add_executable(ruvia_event_loop_pool runtime_worker.cpp)
+    target_link_libraries(ruvia_event_loop_pool PRIVATE ruvia::core)
+    add_test(NAME ruvia_event_loop_pool COMMAND ruvia_event_loop_pool)
+
+    add_executable(ruvia_operation_deadline operation_deadline.cpp)
+    target_link_libraries(ruvia_operation_deadline PRIVATE ruvia::core)
+    add_test(NAME ruvia_operation_deadline COMMAND ruvia_operation_deadline)
+
+    add_executable(ruvia_pool_lease_scheduler pool_lease_scheduler.cpp)
+    target_link_libraries(ruvia_pool_lease_scheduler PRIVATE ruvia::core)
+    add_test(NAME ruvia_pool_lease_scheduler COMMAND ruvia_pool_lease_scheduler)
+
+    add_executable(ruvia_task_scope task_scope.cpp)
+    target_link_libraries(ruvia_task_scope PRIVATE ruvia::core)
+    add_test(NAME ruvia_task_scope COMMAND ruvia_task_scope)
+
+    add_executable(ruvia_task_completion task_completion.cpp)
+    target_link_libraries(ruvia_task_completion PRIVATE ruvia::core)
+    add_test(NAME ruvia_task_completion COMMAND ruvia_task_completion)
+
+    add_executable(ruvia_task_lifetime_violation task_lifetime_violation.cpp)
+    target_link_libraries(ruvia_task_lifetime_violation PRIVATE ruvia::core)
+    add_test(NAME ruvia_task_lifetime_violation
+        COMMAND ruvia_task_lifetime_violation void)
+    set_tests_properties(ruvia_task_lifetime_violation PROPERTIES WILL_FAIL TRUE)
+    add_test(NAME ruvia_task_lifetime_violation_value
+        COMMAND ruvia_task_lifetime_violation value)
+    set_tests_properties(
+        ruvia_task_lifetime_violation_value PROPERTIES WILL_FAIL TRUE)
+
+    if(RUVIA_BUILD_WEB)
+        add_executable(
+            ruvia_scoped_operation_lifetime_violation
+            scoped_operation_lifetime_violation.cpp)
+        target_link_libraries(
+            ruvia_scoped_operation_lifetime_violation PRIVATE ruvia::web)
+        add_test(
+            NAME ruvia_scoped_operation_lifetime_violation
+            COMMAND ruvia_scoped_operation_lifetime_violation)
+        set_tests_properties(
+            ruvia_scoped_operation_lifetime_violation PROPERTIES WILL_FAIL TRUE)
+    endif()
+
+    add_executable(ruvia_channel channel.cpp)
+    target_link_libraries(ruvia_channel PRIVATE ruvia::core)
+    add_test(NAME ruvia_channel COMMAND ruvia_channel)
+
+    add_executable(ruvia_one_shot one_shot.cpp)
+    target_link_libraries(ruvia_one_shot PRIVATE ruvia::core)
+    add_test(NAME ruvia_one_shot COMMAND ruvia_one_shot)
+
+    add_executable(ruvia_worker_timer worker_timer.cpp)
+    target_link_libraries(ruvia_worker_timer PRIVATE ruvia::core)
+    add_test(NAME ruvia_worker_timer COMMAND ruvia_worker_timer)
+
+    add_executable(ruvia_worker_dispatch_failure worker_dispatch_failure.cpp)
+    target_link_libraries(ruvia_worker_dispatch_failure PRIVATE ruvia::core)
+    add_test(NAME ruvia_worker_dispatch_failure COMMAND ruvia_worker_dispatch_failure)
+
+    add_executable(ruvia_worker_signal_violation worker_signal_violation.cpp)
+    target_link_libraries(ruvia_worker_signal_violation PRIVATE ruvia::core)
+    foreach(_probe IN ITEMS waiter notify dispatch)
+        add_test(NAME ruvia_worker_signal_${_probe}_violation
+            COMMAND ruvia_worker_signal_violation ${_probe})
+        set_tests_properties(ruvia_worker_signal_${_probe}_violation
+            PROPERTIES WILL_FAIL TRUE)
+    endforeach()
+
 endif()
 
 if(RUVIA_BUILD_HTTP)
@@ -262,11 +338,33 @@ ruvia_add_internal_guard(ruvia_guard_http2_stream_table guards/http2_stream_tabl
 ruvia_add_internal_guard(ruvia_guard_context_response_state guards/context_response_state_guard.cpp)
 ruvia_add_internal_guard(ruvia_guard_context_request_header guards/context_request_header_guard.cpp)
 ruvia_add_internal_guard(ruvia_guard_cookie_api guards/cookie_api_guard.cpp)
+ruvia_add_internal_guard(ruvia_guard_app_lifecycle guards/app_lifecycle_guard.cpp)
+ruvia_add_internal_guard(ruvia_guard_http2_session_lifecycle guards/http2_session_lifecycle_guard.cpp)
 
 add_executable(ruvia_server_shutdown_drain server_shutdown_drain.cpp)
 target_link_libraries(ruvia_server_shutdown_drain PRIVATE ruvia::web)
 add_test(NAME ruvia_server_shutdown_drain COMMAND ruvia_server_shutdown_drain)
 set_tests_properties(ruvia_server_shutdown_drain PROPERTIES TIMEOUT 90)
+
+add_executable(ruvia_server_pipeline_request_views server_pipeline_request_views.cpp)
+target_link_libraries(ruvia_server_pipeline_request_views PRIVATE ruvia::web)
+add_test(NAME ruvia_server_pipeline_request_views COMMAND ruvia_server_pipeline_request_views)
+set_tests_properties(ruvia_server_pipeline_request_views PROPERTIES TIMEOUT 60)
+
+add_executable(ruvia_web_worker web_worker.cpp)
+target_link_libraries(ruvia_web_worker PRIVATE ruvia::web)
+add_test(NAME ruvia_web_worker COMMAND ruvia_web_worker)
+set_tests_properties(ruvia_web_worker PROPERTIES TIMEOUT 30)
+
+add_executable(ruvia_app_web_worker app_web_worker.cpp)
+target_link_libraries(ruvia_app_web_worker PRIVATE ruvia::web)
+add_test(NAME ruvia_app_web_worker COMMAND ruvia_app_web_worker)
+set_tests_properties(ruvia_app_web_worker PROPERTIES TIMEOUT 30)
+
+add_executable(ruvia_app_startup_retry app_startup_retry.cpp)
+target_link_libraries(ruvia_app_startup_retry PRIVATE ruvia::web)
+add_test(NAME ruvia_app_startup_retry COMMAND ruvia_app_startup_retry)
+set_tests_properties(ruvia_app_startup_retry PROPERTIES TIMEOUT 30)
 endif()
 
 configure_file(
@@ -285,12 +383,16 @@ add_custom_target(ruvia_package_consumers
     VERBATIM)
 
 # Mechanised layer-boundary checks (asio-free http, no framework reach-down,
-# docs ownership). Opt-in: the rules pin literal source patterns, which makes
-# them brittle across refactors, so they no longer gate every build or the
-# test suite. Run on demand with:
-#   cmake --build <build-dir> --target ruvia_check_boundaries
+# docs ownership). The production check gates CTest; its fixture self-test
+# remains available as an explicit maintenance target.
 set(RUVIA_BOUNDARY_CHECK_SCRIPT
     ${CMAKE_SOURCE_DIR}/scripts/check_layer_boundaries.cmake)
+add_test(
+    NAME ruvia_layer_boundaries
+    COMMAND ${CMAKE_COMMAND} -P ${RUVIA_BOUNDARY_CHECK_SCRIPT})
+set_tests_properties(
+    ruvia_layer_boundaries
+    PROPERTIES WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
 add_custom_target(ruvia_check_boundaries
     COMMAND ${CMAKE_COMMAND} -P ${RUVIA_BOUNDARY_CHECK_SCRIPT}
     WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}

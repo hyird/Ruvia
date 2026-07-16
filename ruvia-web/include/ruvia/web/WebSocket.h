@@ -2,6 +2,7 @@
 
 #include "ruvia/core/Task.h"
 #include "ruvia/http/WebSocketProtocol.h"
+#include "ruvia/web/ScopedOperation.h"
 
 #include <chrono>
 #include <cstdint>
@@ -71,17 +72,18 @@ public:
     WebSocket(const WebSocket&) = delete;
     WebSocket& operator=(const WebSocket&) = delete;
 
-    [[nodiscard]] Task<std::optional<WebSocketMessage>> read();
+    [[nodiscard]] ScopedOperation<std::optional<WebSocketMessage>> read();
 
-    Task<void> text(std::string_view payload);
+    ScopedOperation<void> text(std::string_view payload);
 
-    Task<void> binary(std::string_view payload);
+    ScopedOperation<void> binary(std::string_view payload);
 
-    Task<void> pong(std::string_view payload);
+    ScopedOperation<void> pong(std::string_view payload);
 
-    Task<void> ping(std::string_view payload = {});
+    ScopedOperation<void> ping(std::string_view payload = {});
 
-    Task<void> close(std::uint16_t code = 1000, std::string_view reason = {});
+    ScopedOperation<void> close(std::uint16_t code = 1000, std::string_view reason = {});
+    void abort() noexcept;
 
 private:
     friend struct detail::WebSocketAccess;
@@ -89,16 +91,19 @@ private:
     using Read = Task<std::optional<WebSocketMessage>> (*)(void*);
     using Write = Task<void> (*)(void*, WebSocketOpcode, std::string_view);
     using Close = Task<void> (*)(void*, std::uint16_t, std::string_view);
+    using Abort = void (*)(void*) noexcept;
 
-    constexpr WebSocket(void* target, Read read, Write write, Close close) noexcept
-        : target_(target), read_(read), write_(write), close_(close) {}
+    WebSocket(void* target, Read read, Write write, Close close, Abort abort) noexcept
+        : target_(target), read_(read), write_(write), close_(close), abort_(abort) {}
 
-    Task<void> write(WebSocketOpcode opcode, std::string_view payload);
+    ScopedOperation<void> write(WebSocketOpcode opcode, std::string_view payload);
 
     void* target_;
     Read read_;
     Write write_;
     Close close_;
+    Abort abort_;
+    detail::ScopedOperationScope operationScope_;
 };
 
 }  // namespace ruvia

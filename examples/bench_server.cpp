@@ -120,8 +120,8 @@ int main() {
 
     ruvia::app()
         .setListenAddress("0.0.0.0")
-        .setHttpListenPort(port)
-        .setThreadNum(4)
+        .setServerTopology(ruvia::ServerTopology::http(port))
+        .setWorkersPerListener(4)
         .setKeepaliveRequests(1u << 30)
         .setMaxConnectionsPerWorker(20000)
         .run();

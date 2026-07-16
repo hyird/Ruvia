@@ -1,11 +1,14 @@
 #include "test_harness.h"
 
+#include <concepts>
 #include <cstddef>
+#include <exception>
 #include <memory_resource>
 #include <optional>
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <type_traits>
 #include <utility>
 
 #include "ruvia/http/HttpResponse.h"
@@ -19,12 +22,34 @@ namespace {
 using ruvia::HttpResponse;
 using ruvia::HttpKnownMethod;
 using ruvia::detail::Http1ResponseHeadPlan;
+using ruvia::detail::Http1FinalResponseCommitFailure;
+using ruvia::detail::Http1FinalResponseCommitError;
+using ruvia::detail::Http1FinalResponseCommitResult;
+using ruvia::detail::Http1ServerConnectionPlan;
 using ruvia::detail::ResponseHeadBuffer;
 using ruvia::detail::appendResponseHead;
 using ruvia::detail::http1BufferedResponsePlan;
 using ruvia::detail::http1ChunkedResponseStreamHeadPlan;
 using ruvia::detail::http1CloseDelimitedResponseStreamHeadPlan;
 using ruvia::detail::httpResponseBodyPlan;
+
+static_assert(std::same_as<
+    decltype(std::declval<
+        const Http1FinalResponseCommitResult&>().committed()),
+    const Http1ServerConnectionPlan*>);
+static_assert(std::derived_from<
+    Http1FinalResponseCommitError,
+    std::exception>);
+static_assert(std::is_trivially_copyable_v<
+    Http1FinalResponseCommitResult>);
+static_assert(sizeof(Http1FinalResponseCommitResult) <= 8);
+
+template <typename T>
+concept HasRawFinalCommitError = requires(const T& failure) {
+    failure.error();
+};
+
+static_assert(!HasRawFinalCommitError<Http1FinalResponseCommitFailure>);
 
 ruvia::detail::Http1ServerConnectionPlan connectionPlanFor(
     ruvia::HttpProtocolVersion protocolVersion) {
@@ -95,7 +120,7 @@ ruvia::detail::Http1ServerConnectionPlan commitResponse(
     if (result.failure() != nullptr || result.committed() == nullptr) {
         throw std::logic_error("expected successful HTTP/1 final response commit");
     }
-    return result.committed()->connectionPlan();
+    return *result.committed();
 }
 
 ruvia::detail::PreparedHttp1ResponseStream prepareStream(
@@ -105,10 +130,11 @@ ruvia::detail::PreparedHttp1ResponseStream prepareStream(
     ruvia::detail::ResponseTrailerIntent trailerIntent) {
     auto result = ruvia::detail::prepareHttp1ResponseStreamHead(
         std::move(response), kind, plan, trailerIntent);
-    if (result.failure() != nullptr || result.prepared() == nullptr) {
+    auto* prepared = result.prepared();
+    if (result.failure() != nullptr || prepared == nullptr) {
         throw std::logic_error("expected prepared HTTP/1 response stream");
     }
-    return std::move(result).takePrepared();
+    return std::move(*prepared);
 }
 
 template <typename Fn>
@@ -138,7 +164,9 @@ RUVIA_TEST(finalize_buffered_response_preserves_request_version_and_persistence)
             response,
             parser.parseMessage(request).connectionPlan,
             requestSequence);
-        return std::pair(plan.disposition(), std::string(response.header("Connection")));
+        return std::pair(
+            plan.disposition(),
+            std::string(response.header("Connection").value_or(std::string_view{})));
     };
 
     // RFC 9112 §9.3: a kept-alive HTTP/1.0 response MUST advertise keep-alive,
@@ -169,7 +197,7 @@ RUVIA_TEST(http1_buffered_response_plan_owns_request_version_and_length) {
     Http1ServerRequestParser parser;
     const auto emitFor = [&](std::string_view request) {
         HttpResponse response(std::pmr::new_delete_resource());
-        response.setBodyCopy("hello");
+        response.body("hello");
         const auto connectionPlan = commitResponse(
             response,
             parser.parseMessage(request).connectionPlan);
@@ -178,7 +206,7 @@ RUVIA_TEST(http1_buffered_response_plan_owns_request_version_and_length) {
             connectionPlan);
         RUVIA_CHECK_EQ(
             responsePlan.headPlan().buffered()->contentLength(),
-            responsePlan.writePlan().contentLength());
+            responsePlan.contentLength());
         return std::pair(
             emitHead(response, responsePlan.headPlan()),
             responsePlan.headPlan().protocolVersion());
@@ -204,7 +232,7 @@ RUVIA_TEST(http1_buffered_response_plan_owns_request_version_and_length) {
 RUVIA_TEST(http1_response_head_rejects_status_plan_mismatch) {
     HttpResponse response(std::pmr::new_delete_resource());
     response.status(207);
-    response.setBodyCopy("planned");
+    response.body("planned");
     const auto plan = http1BufferedResponsePlan(
         ruvia::detail::httpBufferedResponseWritePlan(
             HttpKnownMethod::kGet,
@@ -215,7 +243,7 @@ RUVIA_TEST(http1_response_head_rejects_status_plan_mismatch) {
     RUVIA_CHECK(throwsInvalid([&] {
         (void)emitHead(response, plan.headPlan());
     }));
-    RUVIA_CHECK_EQ(plan.writePlan().responseStatus(), std::uint16_t{207});
+    RUVIA_CHECK_EQ(plan.responseStatus(), std::uint16_t{207});
     RUVIA_CHECK_EQ(
         plan.headPlan().bodyPlan().responseStatus(),
         std::uint16_t{207});
@@ -224,18 +252,18 @@ RUVIA_TEST(http1_response_head_rejects_status_plan_mismatch) {
 RUVIA_TEST(http1_response_head_rejects_representation_plan_mismatch) {
     HttpResponse response(std::pmr::new_delete_resource());
     response.status(207);
-    response.setBodyCopy("old");
+    response.body("old");
     const auto plan = http1BufferedResponsePlan(
         ruvia::detail::httpBufferedResponseWritePlan(
             HttpKnownMethod::kGet,
             response),
         connectionPlanFor(ruvia::HttpProtocolVersion::kHttp11));
 
-    response.setBodyCopy("longer");
+    response.body("longer");
     RUVIA_CHECK(throwsInvalid([&] {
         (void)emitHead(response, plan.headPlan());
     }));
-    RUVIA_CHECK_EQ(plan.writePlan().contentLength(), std::uint64_t{3});
+    RUVIA_CHECK_EQ(plan.contentLength(), std::uint64_t{3});
 }
 
 RUVIA_TEST(http1_protocol_finalizer_returns_the_authoritative_reuse_verdict) {
@@ -250,7 +278,9 @@ RUVIA_TEST(http1_protocol_finalizer_returns_the_authoritative_reuse_verdict) {
         parser.parseMessage(
             "GET / HTTP/1.0\r\nConnection: keep-alive\r\n\r\n").connectionPlan);
     RUVIA_CHECK(http10Plan.disposition() == Http1ConnectionDisposition::kReuse);
-    RUVIA_CHECK_EQ(std::string(http10.header("Connection")), std::string("keep-alive"));
+    RUVIA_CHECK_EQ(
+        std::string(http10.header("Connection").value_or(std::string_view{})),
+        std::string("keep-alive"));
 
     HttpResponse http10Upgrade(std::pmr::new_delete_resource());
     http10Upgrade.header("Connection", "upgrade");
@@ -278,7 +308,9 @@ RUVIA_TEST(http1_protocol_finalizer_returns_the_authoritative_reuse_verdict) {
             "GET / HTTP/1.1\r\nHost: x\r\n\r\n").connectionPlan);
     RUVIA_CHECK(
         applicationClosePlan.disposition() == Http1ConnectionDisposition::kClose);
-    RUVIA_CHECK_EQ(std::string(applicationClose.header("Connection")), std::string("close"));
+    RUVIA_CHECK_EQ(
+        std::string(applicationClose.header("Connection").value_or(std::string_view{})),
+        std::string("close"));
     const auto applicationCloseHead = emitBufferedHead(applicationClose);
     RUVIA_CHECK_EQ(
         countOccurrences(applicationCloseHead, "Connection: "),
@@ -290,7 +322,9 @@ RUVIA_TEST(http1_protocol_finalizer_returns_the_authoritative_reuse_verdict) {
         parser.parseMessage(
             "GET / HTTP/1.1\r\nHost: x\r\n\r\n").connectionPlan.requireClose());
     RUVIA_CHECK(runtimeClosePlan.disposition() == Http1ConnectionDisposition::kClose);
-    RUVIA_CHECK_EQ(std::string(runtimeClose.header("Connection")), std::string("close"));
+    RUVIA_CHECK_EQ(
+        std::string(runtimeClose.header("Connection").value_or(std::string_view{})),
+        std::string("close"));
 }
 
 RUVIA_TEST(http1_protocol_finalizer_generates_upgrade_pairing) {
@@ -306,7 +340,7 @@ RUVIA_TEST(http1_protocol_finalizer_generates_upgrade_pairing) {
         commitResponse(unpaired, requestPlan).disposition() ==
         ruvia::detail::Http1ConnectionDisposition::kReuse);
     RUVIA_CHECK_EQ(
-        std::string(unpaired.header("Connection")),
+        std::string(unpaired.header("Connection").value_or(std::string_view{})),
         std::string("Upgrade"));
 
     HttpResponse closing(std::pmr::new_delete_resource());
@@ -317,10 +351,10 @@ RUVIA_TEST(http1_protocol_finalizer_generates_upgrade_pairing) {
             requestPlan.requireClose()).disposition() ==
         ruvia::detail::Http1ConnectionDisposition::kClose);
     RUVIA_CHECK_EQ(
-        std::string(closing.header("Connection")),
+        std::string(closing.header("Connection").value_or(std::string_view{})),
         std::string("close, Upgrade"));
     RUVIA_CHECK_EQ(
-        std::string(closing.header("Upgrade")),
+        std::string(closing.header("Upgrade").value_or(std::string_view{})),
         std::string("websocket"));
 }
 
@@ -337,10 +371,22 @@ RUVIA_TEST(http1_protocol_finalizer_rejects_upgrade_required_without_protocol) {
         missingUpgrade, requestPlan);
     RUVIA_CHECK(result.committed() == nullptr);
     RUVIA_CHECK(result.failure() != nullptr);
-    RUVIA_CHECK(
-        result.failure()->error() ==
-        ruvia::detail::HttpFinalResponseControlPlanError::kUpgradeRequired);
-    RUVIA_CHECK(missingUpgrade.header("Connection").empty());
+    RUVIA_CHECK_EQ(
+        std::string_view(result.failure()->exception().what()),
+        std::string_view("426 response requires an Upgrade protocol"));
+    RUVIA_CHECK(!missingUpgrade.header("Connection").has_value());
+
+    HttpResponse propagated(std::pmr::new_delete_resource());
+    propagated.status(426);
+    bool caughtTypedFailure = false;
+    try {
+        (void)ruvia::detail::requireHttp1FinalResponseCommit(
+            propagated, requestPlan);
+    } catch (const Http1FinalResponseCommitError& error) {
+        caughtTypedFailure = std::string_view(error.what()) ==
+            "426 response requires an Upgrade protocol";
+    }
+    RUVIA_CHECK(caughtTypedFailure);
 }
 
 RUVIA_TEST(http1_stream_prepare_preserves_typed_final_commit_failure) {
@@ -358,9 +404,9 @@ RUVIA_TEST(http1_stream_prepare_preserves_typed_final_commit_failure) {
         ruvia::detail::ResponseTrailerIntent::kNone);
     RUVIA_CHECK(result.prepared() == nullptr);
     RUVIA_CHECK(result.failure() != nullptr);
-    RUVIA_CHECK(
-        result.failure()->error() ==
-        ruvia::detail::HttpFinalResponseControlPlanError::kUpgradeRequired);
+    RUVIA_CHECK_EQ(
+        std::string_view(result.failure()->exception().what()),
+        std::string_view("426 response requires an Upgrade protocol"));
 }
 
 RUVIA_TEST(http1_buffered_request_limit_closes_the_typed_connection_plan) {
@@ -382,7 +428,7 @@ RUVIA_TEST(http1_buffered_request_limit_closes_the_typed_connection_plan) {
         RUVIA_CHECK(
             connectionPlan.disposition() ==
             Http1ConnectionDisposition::kReuse);
-        RUVIA_CHECK(response.header("Connection").empty());
+        RUVIA_CHECK(!response.header("Connection").has_value());
     }
 
     HttpResponse response(std::pmr::new_delete_resource());
@@ -391,7 +437,9 @@ RUVIA_TEST(http1_buffered_request_limit_closes_the_typed_connection_plan) {
         requestPlan,
         requestSequence);
     RUVIA_CHECK(connectionPlan.disposition() == Http1ConnectionDisposition::kClose);
-    RUVIA_CHECK_EQ(std::string(response.header("Connection")), std::string("close"));
+    RUVIA_CHECK_EQ(
+        std::string(response.header("Connection").value_or(std::string_view{})),
+        std::string("close"));
 }
 
 RUVIA_TEST(http1_request_sequence_rejects_configured_zero_budget) {
@@ -464,7 +512,7 @@ RUVIA_TEST(http1_body_completion_tightens_without_losing_protocol_version) {
         "POST / HTTP/1.0\r\nConnection: keep-alive\r\nContent-Length: 1\r\n\r\nx";
 
     HttpResponse completeResponse(std::pmr::new_delete_resource());
-    completeResponse.setBodyCopy("response");
+    completeResponse.body("response");
     ruvia::detail::Http1RequestSequence completeRequestSequence(
         std::nullopt);
     const auto completePlan = finalizeBodyRouteResponse(
@@ -477,11 +525,11 @@ RUVIA_TEST(http1_body_completion_tightens_without_losing_protocol_version) {
         completePlan.protocolVersion() ==
         ruvia::HttpProtocolVersion::kHttp10);
     RUVIA_CHECK_EQ(
-        std::string(completeResponse.header("Connection")),
+        std::string(completeResponse.header("Connection").value_or(std::string_view{})),
         std::string("keep-alive"));
 
     HttpResponse incompleteResponse(std::pmr::new_delete_resource());
-    incompleteResponse.setBodyCopy("response");
+    incompleteResponse.body("response");
     ruvia::detail::Http1RequestSequence incompleteRequestSequence(
         std::nullopt);
     const auto incompletePlan = finalizeBodyRouteResponse(
@@ -494,7 +542,7 @@ RUVIA_TEST(http1_body_completion_tightens_without_losing_protocol_version) {
         incompletePlan.protocolVersion() ==
         ruvia::HttpProtocolVersion::kHttp10);
     RUVIA_CHECK_EQ(
-        std::string(incompleteResponse.header("Connection")),
+        std::string(incompleteResponse.header("Connection").value_or(std::string_view{})),
         std::string("close"));
 }
 
@@ -502,7 +550,7 @@ RUVIA_TEST(response_head_emits_well_formed_normal) {
     HttpResponse response(std::pmr::new_delete_resource());
     response.status(200);
     response.header("X-Foo", "bar");
-    response.setBodyCopy("hello");
+    response.body("hello");
     const auto head = emitBufferedHead(response);
 
     RUVIA_CHECK(head.starts_with("HTTP/1.1 200 OK\r\n"));
@@ -528,7 +576,7 @@ RUVIA_TEST(response_head_preserves_explicit_server_and_does_not_duplicate_date) 
     HttpResponse response(std::pmr::new_delete_resource());
     response.header("Server", "custom");
     response.header("Date", "Wed, 21 Oct 2015 07:28:00 GMT");
-    response.setBodyCopy("x");
+    response.body("x");
     const auto head = emitBufferedHead(response);
 
     RUVIA_CHECK(head.find("Server: custom\r\n") != std::string::npos);
@@ -540,7 +588,7 @@ RUVIA_TEST(response_head_suppresses_auto_content_length) {
     // A streaming/chunked writer owns framing itself. Caller-provided framing is
     // replaced by one canonical chunked field and no Content-Length survives.
     HttpResponse response(std::pmr::new_delete_resource());
-    response.setBodyCopy("hello");
+    response.body("hello");
     response.header("Transfer-Encoding", "gzip, chunked");
     response.header("Content-Length", "999");
     const auto head = emitChunkedStreamHead(response);
@@ -554,7 +602,7 @@ RUVIA_TEST(response_head_suppresses_auto_content_length) {
 
 RUVIA_TEST(response_head_close_delimited_stream_rejects_declared_framing) {
     HttpResponse response(std::pmr::new_delete_resource());
-    response.setBodyCopy("streamed");
+    response.body("streamed");
     response.header("Transfer-Encoding", "chunked");
     response.header("Content-Length", "8");
 
@@ -580,6 +628,40 @@ RUVIA_TEST(response_head_close_delimited_stream_rejects_declared_framing) {
         std::string::npos);
 }
 
+RUVIA_TEST(response_head_validates_explicit_content_length_metadata) {
+    HttpResponse malformed(std::pmr::new_delete_resource());
+    malformed.status(304);
+    malformed.header("Content-Length", "invalid");
+    RUVIA_CHECK(throwsInvalid([&] {
+        (void)emitBufferedHead(malformed);
+    }));
+
+    HttpResponse conflicting(std::pmr::new_delete_resource());
+    conflicting.status(304);
+    conflicting.header("Content-Length", "7, 8");
+    RUVIA_CHECK(throwsInvalid([&] {
+        (void)emitBufferedHead(conflicting);
+    }));
+
+    HttpResponse equivalent(std::pmr::new_delete_resource());
+    equivalent.status(304);
+    equivalent.header("Content-Length", "0007, 7");
+    const auto canonical = emitBufferedHead(equivalent);
+    RUVIA_CHECK_EQ(
+        countOccurrences(canonical, "Content-Length: "),
+        std::size_t{1});
+    RUVIA_CHECK(
+        canonical.find("Content-Length: 7\r\n") !=
+        std::string::npos);
+
+    HttpResponse headMetadata(std::pmr::new_delete_resource());
+    headMetadata.header("Content-Length", "bad");
+    RUVIA_CHECK(throwsInvalid([&] {
+        (void)emitCloseDelimitedStreamHead(
+            headMetadata, HttpKnownMethod::kHead);
+    }));
+}
+
 RUVIA_TEST(response_head_bodyless_status_omits_auto_content_length) {
     HttpResponse response(std::pmr::new_delete_resource());
     response.status(204);
@@ -596,7 +678,7 @@ RUVIA_TEST(response_head_reset_content_canonicalizes_zero_length) {
     for (const bool streaming : {false, true}) {
         HttpResponse response(std::pmr::new_delete_resource());
         response.status(205);
-        response.setBodyCopy("must-not-be-sent");
+        response.body("must-not-be-sent");
         response.header("Content-Length", "16");
         response.header("Transfer-Encoding", "chunked");
         const auto head = streaming
@@ -622,7 +704,7 @@ RUVIA_TEST(response_head_heap_spill_preserves_full_output) {
     for (int i = 0; i < 10; ++i) {
         response.header("X-Pad-" + std::to_string(i), big);
     }
-    response.setBodyCopy("body");
+    response.body("body");
     const auto head = emitBufferedHead(response);
 
     RUVIA_CHECK(head.starts_with("HTTP/1.1 200 OK\r\n"));

@@ -85,6 +85,19 @@ private:
 
 }  // namespace
 
+template <typename T>
+concept ExposesAnyRvalueModelListBorrow =
+    requires { std::declval<const T&&>()[std::size_t{}]; } ||
+    requires { std::declval<const T&&>().front(); } ||
+    requires { std::declval<const T&&>().begin(); } ||
+    requires { std::declval<const T&&>().end(); } ||
+    requires { std::declval<T&&>().emplace(1); } ||
+    requires {
+        std::declval<T&&>().emplaceMove(typename T::value_type{});
+    };
+
+static_assert(!ExposesAnyRvalueModelListBorrow<ruvia::List<ruvia::Int32>>);
+
 RUVIA_TEST(model_list_clear_and_destructor_release_owned_elements) {
     CountingMemoryResource resource;
     {

@@ -2,6 +2,7 @@
 
 #include "ruvia/http/detail/HttpDate.h"
 #include "ruvia/web/detail/StaticFileMetadata.h"
+#include "ruvia/web/detail/server/HttpNativeFile.h"
 #include "ruvia/core/memory/PmrObject.h"
 #include "ruvia/core/memory/ProcessResource.h"
 
@@ -9,6 +10,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
+#include <iterator>
 #include <memory>
 #include <memory_resource>
 #include <stdexcept>
@@ -20,6 +22,12 @@ namespace ruvia {
 namespace {
 
 inline constexpr std::size_t kStaticRootLinearLookupLimit = 8;
+
+inline constexpr std::string_view kDefaultStaticFileTypes[] = {
+    "apng", "avif", "bmp", "css", "cur", "eot", "gif", "htm", "html", "ico",
+    "jpeg", "jpg", "js", "json", "map", "mjs", "otf", "png", "svg", "ttf",
+    "txt", "wasm", "webmanifest", "webp", "woff", "woff2", "xml", "xsl",
+};
 
 [[nodiscard]] bool validHeaderValue(std::string_view value) noexcept {
     for (const auto c : value) {
@@ -38,12 +46,6 @@ void validateOptions(const StaticRootOptions& options) {
         if (mime.extension.empty() || mime.contentType.empty() ||
             !validHeaderValue(mime.contentType)) {
             throw std::invalid_argument("invalid static file mime type");
-        }
-    }
-    for (const auto& fileType : options.fileTypes) {
-        if (fileType.empty() || fileType.find('/') != std::pmr::string::npos ||
-            fileType.find('\\') != std::pmr::string::npos) {
-            throw std::invalid_argument("invalid static file type");
         }
     }
     if (options.indexFile.find('/') != std::pmr::string::npos ||
@@ -85,54 +87,25 @@ void normalizeFileTypes(std::pmr::vector<std::pmr::string>& fileTypes) {
     fileTypes.erase(std::unique(fileTypes.begin(), fileTypes.end()), fileTypes.end());
 }
 
-void applyDefaultFileTypes(std::pmr::vector<std::pmr::string>& fileTypes) {
-    static constexpr std::string_view defaults[] = {
-        "apng",
-        "avif",
-        "bmp",
-        "css",
-        "cur",
-        "eot",
-        "gif",
-        "htm",
-        "html",
-        "ico",
-        "jpeg",
-        "jpg",
-        "js",
-        "json",
-        "map",
-        "mjs",
-        "otf",
-        "png",
-        "svg",
-        "ttf",
-        "txt",
-        "wasm",
-        "webmanifest",
-        "webp",
-        "woff",
-        "woff2",
-        "xml",
-        "xsl",
-    };
-    fileTypes.reserve(fileTypes.size() + sizeof(defaults) / sizeof(defaults[0]));
-    for (const auto fileType : defaults) {
-        fileTypes.emplace_back(fileType);
-    }
-}
-
 bool fileTypeAllowed(
     std::string_view extension,
     const StaticRootOptions& options) {
-    if (options.allowAll) {
+    if (options.fileTypes.kind() == StaticFileTypePolicy::Kind::kAll) {
         return true;
     }
 
     if (extension.empty() || extension == ".") {
         return false;
     }
-    return std::binary_search(options.fileTypes.begin(), options.fileTypes.end(), extension.substr(1));
+    const auto value = extension.substr(1);
+    if (options.fileTypes.kind() == StaticFileTypePolicy::Kind::kDefaults) {
+        return std::binary_search(
+            std::begin(kDefaultStaticFileTypes),
+            std::end(kDefaultStaticFileTypes),
+            value);
+    }
+    const auto extensions = options.fileTypes.extensions();
+    return std::binary_search(extensions.begin(), extensions.end(), value);
 }
 
 [[nodiscard]] const StaticMimeType* findStaticMimeType(
@@ -235,6 +208,35 @@ std::pmr::string contentTypeFor(
 
 }  // namespace
 
+StaticFileTypePolicy StaticFileTypePolicy::defaults() {
+    return StaticFileTypePolicy(Kind::kDefaults);
+}
+
+StaticFileTypePolicy StaticFileTypePolicy::all() {
+    return StaticFileTypePolicy(Kind::kAll);
+}
+
+StaticFileTypePolicy StaticFileTypePolicy::only(
+    std::span<const std::string_view> extensions) {
+    if (extensions.empty()) {
+        throw std::invalid_argument("static file type allow-list must not be empty");
+    }
+    StaticFileTypePolicy result(Kind::kOnly);
+    result.extensions_.reserve(extensions.size());
+    for (const auto extension : extensions) {
+        if (extension.empty() || extension.find('/') != std::string_view::npos ||
+            extension.find('\\') != std::string_view::npos) {
+            throw std::invalid_argument("invalid static file type");
+        }
+        result.extensions_.emplace_back(extension);
+    }
+    normalizeFileTypes(result.extensions_);
+    if (result.extensions_.front().empty()) {
+        throw std::invalid_argument("invalid static file type");
+    }
+    return result;
+}
+
 std::string_view detail::StaticRootAccess::indexFile(const StaticRoot& root) noexcept {
     return root.state_->indexFile;
 }
@@ -244,6 +246,16 @@ bool detail::StaticRootAccess::hasDirectoryIndex(const StaticRoot& root) noexcep
 }
 
 std::optional<detail::StaticRootEntryView> detail::StaticRootAccess::find(
+    const StaticRoot& root,
+    std::string_view relativePath) noexcept {
+    auto entry = findVariant(root, relativePath);
+    if (!entry.has_value() || !entry->directlyServable_) {
+        return std::nullopt;
+    }
+    return entry;
+}
+
+std::optional<detail::StaticRootEntryView> detail::StaticRootAccess::findVariant(
     const StaticRoot& root,
     std::string_view relativePath) noexcept {
     const auto& state = *root.state_;
@@ -259,9 +271,12 @@ std::optional<detail::StaticRootEntryView> detail::StaticRootAccess::find(
         entry->etag,
         entry->lastModified,
         entry->size,
-        entry->modified,
+        entry->identity,
+        entry->modifiedToken,
+        entry->modifiedSeconds,
         state.enableRanges,
-        state.enableValidators);
+        state.enableValidators,
+        entry->directlyServable);
 }
 
 bool detail::StaticRootAccess::isIndexedDirectory(
@@ -276,10 +291,6 @@ bool detail::StaticRootAccess::isIndexedDirectory(
 StaticRoot::StaticRoot(const std::filesystem::path& root, StaticRootOptions options)
     : state_(makeStaticRootState()) {
     normalizeMimeTypes(options.mimeTypes);
-    if (!options.allowAll) {
-        applyDefaultFileTypes(options.fileTypes);
-    }
-    normalizeFileTypes(options.fileTypes);
     validateOptions(options);
 
     std::error_code ec;
@@ -326,20 +337,17 @@ StaticRoot::StaticRoot(const std::filesystem::path& root, StaticRootOptions opti
             continue;
         }
         const auto extension = detail::lowerStaticFileExtension(filePath, upstream);
-        bool typeAllowed = fileTypeAllowed(extension, options);
-        if (!typeAllowed && isPrecompressedSidecarExtension(extension)) {
-            typeAllowed = fileTypeAllowed(
+        const bool directlyServable = fileTypeAllowed(extension, options);
+        bool usableAsSidecar = false;
+        if (!directlyServable && isPrecompressedSidecarExtension(extension)) {
+            usableAsSidecar = fileTypeAllowed(
                 detail::lowerStaticFileExtension(filePath.stem(), upstream), options);
         }
-        if (!typeAllowed) {
+        if (!directlyServable && !usableAsSidecar) {
             continue;
         }
-        const auto size = std::filesystem::file_size(filePath, ec);
-        if (ec) {
-            ec.clear();
-            continue;
-        }
-        const auto modified = std::filesystem::last_write_time(filePath, ec);
+        const auto snapshot = detail::snapshotResponseFile(
+            filePath.c_str(), ec);
         if (ec) {
             ec.clear();
             continue;
@@ -349,16 +357,20 @@ StaticRoot::StaticRoot(const std::filesystem::path& root, StaticRootOptions opti
         entry.relativePath = std::move(relative);
         detail::assignNativePath(entry.filePath, filePath);
         entry.contentType = contentTypeFor(filePath, extension, options, upstream);
-        entry.size = static_cast<std::uint64_t>(size);
-        entry.modified = modified;
+        entry.size = snapshot.size;
+        entry.identity = snapshot.identity;
+        entry.modifiedToken = snapshot.modifiedToken;
+        entry.modifiedSeconds = snapshot.modifiedSeconds;
+        entry.directlyServable = directlyServable;
         if (enableValidators) {
-            entry.etag = detail::makeStaticFileEtag(
+            entry.etag = detail::makeStaticFileSnapshotEtag(
                 upstream,
-                static_cast<std::uint64_t>(size),
-                modified);
+                snapshot.size,
+                snapshot.modifiedToken,
+                snapshot.identity);
             entry.lastModified = detail::httpFormatDate(
                 upstream,
-                detail::staticFileTimeToTimeT(modified));
+                snapshot.modifiedSeconds);
         }
         state.entries.push_back(std::move(entry));
     }

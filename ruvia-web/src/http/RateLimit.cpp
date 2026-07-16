@@ -2,7 +2,7 @@
 
 #include "ruvia/web/detail/http/ContextInternal.h"
 #include "ruvia/web/detail/server/RateLimitKey.h"
-#include "ruvia/web/detail/server/RateLimiter.h"
+#include "ruvia/web/detail/server/RateLimitDecision.h"
 
 #include <charconv>
 #include <cstdint>
@@ -14,41 +14,19 @@ namespace ruvia::detail {
 
 namespace {
 
-class RouteRateLimitCheck final {
-public:
-    [[nodiscard]] bool allowed() const noexcept {
-        return allowed_;
-    }
-
-    [[nodiscard]] std::int64_t resetAfterMs() const noexcept {
-        return resetAfterMs_;
-    }
-
-    constexpr RouteRateLimitCheck() noexcept = default;
-
-    constexpr RouteRateLimitCheck(bool allowed, std::int64_t resetAfterMs) noexcept
-        : allowed_(allowed),
-          resetAfterMs_(resetAfterMs) {}
-
-private:
-    bool allowed_{true};
-    std::int64_t resetAfterMs_{1};
-};
-
-[[nodiscard]] RouteRateLimitCheck checkRouteRateLimit(
+[[nodiscard]] RateLimitDecision decideRouteRateLimit(
     Context& context,
     const RouteRateLimitOptions& options) noexcept {
     auto* limiter = ContextAccess::rateLimiter(context);
     if (limiter == nullptr) {
-        return RouteRateLimitCheck{};
+        return RateLimitDecision::allow();
     }
 
     char keyBuffer[kRateLimitKeyBufferBytes];
-    const auto check = limiter->allowRoute(
+    return limiter->allowRoute(
         ContextAccess::routeRateLimitScope(context),
         rateLimitKeyFor(getConnInfo(context).remote().address(), keyBuffer),
         options.rule);
-    return RouteRateLimitCheck(check.allowed, check.resetAfterMs);
 }
 
 void setUnsignedHeader(HttpResponse& response, std::string_view name, std::uint64_t value) {
@@ -59,29 +37,58 @@ void setUnsignedHeader(HttpResponse& response, std::string_view name, std::uint6
     }
 }
 
-[[nodiscard]] std::uint64_t retryAfterSeconds(std::int64_t resetAfterMs) noexcept {
-    return static_cast<std::uint64_t>((resetAfterMs <= 0 ? 1 : resetAfterMs + 999) / 1000);
+[[nodiscard]] std::uint64_t retryAfterSeconds(
+    std::chrono::milliseconds retryAfter) noexcept {
+    const auto milliseconds = retryAfter.count();
+    const auto positiveMilliseconds = milliseconds <= 0
+        ? std::uint64_t{1}
+        : static_cast<std::uint64_t>(milliseconds);
+    return positiveMilliseconds / 1000 +
+        (positiveMilliseconds % 1000 == 0 ? 0 : 1);
 }
 
 }  // namespace
 
+HttpErrorInfo rateLimitRejectionError() noexcept {
+    return HttpErrorInfo(429, "too_many_requests", "rate limit exceeded");
+}
+
+void applyRateLimitRejectionHeaders(
+    HttpResponse& response,
+    const RateLimitRejection& rejection) {
+    setUnsignedHeader(
+        response,
+        "Retry-After",
+        retryAfterSeconds(rejection.retryAfter()));
+}
+
+void applyRouteRateLimitRejectionHeaders(
+    HttpResponse& response,
+    const RateLimitRejection& rejection,
+    std::size_t maxRequests) {
+    const auto retryAfter = retryAfterSeconds(rejection.retryAfter());
+    setUnsignedHeader(response, "Retry-After", retryAfter);
+    setUnsignedHeader(response, "X-RateLimit-Limit", maxRequests);
+    setUnsignedHeader(response, "X-RateLimit-Remaining", 0);
+    setUnsignedHeader(response, "X-RateLimit-Reset", retryAfter);
+}
+
 bool applyRouteRateLimit(
     Context& context,
     const RouteRateLimitOptions& options) {
-    const auto check = checkRouteRateLimit(context, options);
-    if (check.allowed()) {
+    const auto decision = decideRouteRateLimit(context, options);
+    const auto* rejection = decision.rejection();
+    if (rejection == nullptr) {
         return true;
     }
 
-    auto response = context.error(429, "too_many_requests", "rate limit exceeded");
-    const auto retryAfter = retryAfterSeconds(check.resetAfterMs());
-    setUnsignedHeader(response, "Retry-After", retryAfter);
-    setUnsignedHeader(
+    const auto error = rateLimitRejectionError();
+    auto response = context.error(
+        error.status(), error.code(), error.message(), error.statusText());
+    applyRouteRateLimitRejectionHeaders(
         response,
-        "X-RateLimit-Limit",
+        *rejection,
         options.rule.maxRequests());
-    setUnsignedHeader(response, "X-RateLimit-Remaining", 0);
-    setUnsignedHeader(response, "X-RateLimit-Reset", retryAfter);
     context.respond(std::move(response));
     return false;
 }

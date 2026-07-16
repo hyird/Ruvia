@@ -32,10 +32,27 @@ concept HasLooseRouteResolutionAccessors = requires(const T& value) {
     value.allowedMethods();
 };
 
+template <typename T>
+concept HasAnyRvalueRouteResolutionBorrow =
+    requires(T&& value) { std::move(value).values(); } ||
+    requires(T&& value) { std::move(value).match(); } ||
+    requires(T&& value) { std::move(value).resolved(); } ||
+    requires(T&& value) { std::move(value).methodNotAllowed(); } ||
+    requires(T&& value) { std::move(value).notFound(); };
+
 static_assert(!HasLooseRouteResolutionAccessors<RouteResolution>);
+static_assert(!HasAnyRvalueRouteResolutionBorrow<RouteMatch>);
+static_assert(!HasAnyRvalueRouteResolutionBorrow<ruvia::detail::ResolvedRoute>);
+static_assert(!HasAnyRvalueRouteResolutionBorrow<RouteResolution>);
 static_assert(!std::default_initializable<RouteEndpoint>);
 static_assert(!std::copy_constructible<RouteEndpoint>);
+static_assert(std::move_constructible<RouteEndpoint>);
+static_assert(!std::is_move_assignable_v<RouteEndpoint>);
+static_assert(std::move_constructible<RouteEntry>);
+static_assert(!std::is_move_assignable_v<RouteEntry>);
 static_assert(!std::is_polymorphic_v<RouteTable>);
+static_assert(!std::is_move_constructible_v<RouteTable>);
+static_assert(!std::is_move_assignable_v<RouteTable>);
 
 ruvia::Task<ruvia::HttpResponse> routeHandler(void*, ruvia::Context& context) {
     co_return ruvia::HttpResponse(context.resource());

@@ -67,14 +67,17 @@ public:
     }
 
     [[nodiscard]] constexpr const Http1ClientNoRequestExpectation*
-    noExpectation() const noexcept {
+    noExpectation() const & noexcept {
         return std::get_if<Http1ClientNoRequestExpectation>(&expectation_);
     }
+    const Http1ClientNoRequestExpectation* noExpectation() const && = delete;
 
     [[nodiscard]] constexpr const Http1ClientContinueExpectation*
-    continueExpectation() const noexcept {
+    continueExpectation() const & noexcept {
         return std::get_if<Http1ClientContinueExpectation>(&expectation_);
     }
+    const Http1ClientContinueExpectation*
+    continueExpectation() const && = delete;
 
 private:
     Http1ClientRequestClosePolicy closePolicy_;
@@ -103,7 +106,7 @@ public:
         return closePolicy_;
     }
 
-    [[nodiscard]] constexpr const HttpConnectionOptions& connectionOptions() const noexcept {
+    [[nodiscard]] constexpr HttpConnectionOptions connectionOptions() const noexcept {
         return connectionOptions_;
     }
 
@@ -175,19 +178,23 @@ private:
 class Http1ClientRequestContentPlan final {
 public:
     [[nodiscard]] constexpr const Http1ClientRequestWithoutContent*
-    withoutContent() const noexcept {
+    withoutContent() const & noexcept {
         return std::get_if<Http1ClientRequestWithoutContent>(&content_);
     }
+    const Http1ClientRequestWithoutContent* withoutContent() const && = delete;
 
     [[nodiscard]] constexpr const Http1ClientImmediateRequestContent*
-    immediate() const noexcept {
+    immediate() const & noexcept {
         return std::get_if<Http1ClientImmediateRequestContent>(&content_);
     }
+    const Http1ClientImmediateRequestContent* immediate() const && = delete;
 
     [[nodiscard]] constexpr const Http1ClientContinueGatedRequestContent*
-    continueGated() const noexcept {
+    continueGated() const & noexcept {
         return std::get_if<Http1ClientContinueGatedRequestContent>(&content_);
     }
+    const Http1ClientContinueGatedRequestContent*
+    continueGated() const && = delete;
 
 private:
     friend struct detail::Http1ClientRequestPrepareResultAccess;
@@ -262,13 +269,17 @@ private:
 // protocol-switch decision has been parsed.
 class PreparedHttp1ClientRequest final {
 public:
-    [[nodiscard]] constexpr std::string_view head() const noexcept {
+    [[nodiscard]] constexpr std::string_view head() const & noexcept {
         return head_;
     }
+    [[nodiscard]] constexpr std::string_view head() const && = delete;
 
-    [[nodiscard]] constexpr const Http1ClientRequestContentPlan& contentPlan() const noexcept {
+    [[nodiscard]] constexpr const Http1ClientRequestContentPlan&
+    contentPlan() const & noexcept {
         return contentPlan_;
     }
+    [[nodiscard]] constexpr const Http1ClientRequestContentPlan&
+    contentPlan() const && = delete;
 
 private:
     friend struct detail::Http1ClientRequestPrepareResultAccess;
@@ -303,35 +314,25 @@ private:
     Http1ClientRequestPrepareError error_;
 };
 
-enum class Http1ClientRequestPrepareKind : std::uint8_t {
-    kBufferTooSmall,
-    kPrepared,
-    kFailure,
-};
-
 class Http1ClientRequestPrepareResult final {
 public:
-    [[nodiscard]] constexpr Http1ClientRequestPrepareKind kind() const noexcept {
-        if (std::holds_alternative<PreparedHttp1ClientRequest>(state_)) {
-            return Http1ClientRequestPrepareKind::kPrepared;
-        }
-        return std::holds_alternative<Http1ClientRequestPrepareFailure>(state_)
-            ? Http1ClientRequestPrepareKind::kFailure
-            : Http1ClientRequestPrepareKind::kBufferTooSmall;
-    }
-
     [[nodiscard]] constexpr const Http1ClientRequestBufferTooSmall*
-    bufferTooSmall() const noexcept {
+    bufferTooSmall() const & noexcept {
         return std::get_if<Http1ClientRequestBufferTooSmall>(&state_);
     }
+    const Http1ClientRequestBufferTooSmall* bufferTooSmall() const && = delete;
 
-    [[nodiscard]] constexpr const PreparedHttp1ClientRequest* prepared() const noexcept {
+    [[nodiscard]] constexpr const PreparedHttp1ClientRequest*
+    prepared() const & noexcept {
         return std::get_if<PreparedHttp1ClientRequest>(&state_);
     }
+    const PreparedHttp1ClientRequest* prepared() const && = delete;
 
-    [[nodiscard]] constexpr const Http1ClientRequestPrepareFailure* failure() const noexcept {
+    [[nodiscard]] constexpr const Http1ClientRequestPrepareFailure*
+    failure() const & noexcept {
         return std::get_if<Http1ClientRequestPrepareFailure>(&state_);
     }
+    const Http1ClientRequestPrepareFailure* failure() const && = delete;
 
 private:
     friend struct detail::Http1ClientRequestPrepareResultAccess;

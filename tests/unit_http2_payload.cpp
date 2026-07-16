@@ -9,6 +9,7 @@
 namespace {
 
 using ruvia::detail::Http2FrameHeader;
+using ruvia::detail::Http2FramePayloadStatus;
 using ruvia::detail::http2DecodeDataPayload;
 using ruvia::detail::http2DecodeHeadersPayload;
 using ruvia::detail::http2HeadersPriorityDependency;
@@ -65,16 +66,22 @@ RUVIA_TEST(http2_headers_payload_priority) {
     payload += "hpack-fragment";
 
     std::uint32_t dependency = 999;
-    RUVIA_CHECK(http2HeadersPriorityDependency(header, payload, dependency));
+    RUVIA_CHECK(
+        http2HeadersPriorityDependency(header, payload, dependency) ==
+        Http2FramePayloadStatus::kDecoded);
     RUVIA_CHECK_EQ(dependency, std::uint32_t{7});
 
     std::string_view fragment;
-    RUVIA_CHECK(http2DecodeHeadersPayload(header, payload, fragment));
+    RUVIA_CHECK(
+        http2DecodeHeadersPayload(header, payload, fragment) ==
+        Http2FramePayloadStatus::kDecoded);
     RUVIA_CHECK_EQ(fragment, std::string_view("hpack-fragment"));
 
     // The PRIORITY flag with fewer than 5 bytes is rejected.
     std::string_view rejected;
-    RUVIA_CHECK(!http2DecodeHeadersPayload(header, std::string_view("\0\0", 2), rejected));
+    RUVIA_CHECK(
+        http2DecodeHeadersPayload(header, std::string_view("\0\0", 2), rejected) ==
+        Http2FramePayloadStatus::kMissingPriorityFields);
 }
 
 RUVIA_TEST(http2_headers_payload_padded_and_priority) {
@@ -87,6 +94,8 @@ RUVIA_TEST(http2_headers_payload_padded_and_priority) {
     payload += "blk";
     payload += std::string(2, '\0');
     std::string_view fragment;
-    RUVIA_CHECK(http2DecodeHeadersPayload(header, payload, fragment));
+    RUVIA_CHECK(
+        http2DecodeHeadersPayload(header, payload, fragment) ==
+        Http2FramePayloadStatus::kDecoded);
     RUVIA_CHECK_EQ(fragment, std::string_view("blk"));
 }

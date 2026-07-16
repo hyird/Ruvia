@@ -1,13 +1,14 @@
 #pragma once
 
 #include <cstddef>
-#include <memory>
 #include <memory_resource>
-#include <new>
 #include <span>
-#include <utility>
 
 namespace ruvia {
+
+namespace detail {
+struct DeferProcessMemoryFreeze final {};
+}
 
 // Default initial bump-block size for a request arena. Runtime integrations size
 // their connection-private dispatch blocks to this same constant, so configured
@@ -57,6 +58,9 @@ private:
 class WorkerMemory final {
 public:
     explicit WorkerMemory(const MemoryPoolConfig& config = ProcessMemory::instance().config());
+    WorkerMemory(
+        const MemoryPoolConfig& config,
+        detail::DeferProcessMemoryFreeze);
 
     WorkerMemory(const WorkerMemory&) = delete;
     WorkerMemory& operator=(const WorkerMemory&) = delete;
@@ -79,7 +83,7 @@ class RequestMemory final {
 public:
     explicit RequestMemory(WorkerMemory& worker);
     RequestMemory(WorkerMemory& worker, std::span<std::byte> initialBuffer);
-    ~RequestMemory();
+    ~RequestMemory() = default;
 
     RequestMemory(const RequestMemory&) = delete;
     RequestMemory& operator=(const RequestMemory&) = delete;
@@ -92,37 +96,8 @@ public:
     [[nodiscard]] std::pmr::memory_resource* resource() noexcept;
     [[nodiscard]] std::pmr::memory_resource* resource() const noexcept;
 
-    template <typename T, typename... Args>
-    T& emplace(Args&&... args) {
-        auto* node = static_cast<CleanupNode*>(arena_.allocate(sizeof(CleanupNode), alignof(CleanupNode)));
-        // Construct directly in the request arena so the cleanup node and the
-        // object share one lifetime domain without an extra owning wrapper.
-        auto* storage = arena_.allocate(sizeof(T), alignof(T));
-        T* object;
-        try {
-            object = std::construct_at(static_cast<T*>(storage), std::forward<Args>(args)...);
-        } catch (...) {
-            arena_.deallocate(storage, sizeof(T), alignof(T));
-            throw;
-        }
-        node->object = object;
-        node->destroy = [](void* value) noexcept {
-            std::destroy_at(static_cast<T*>(value));
-        };
-        node->next = cleanupHead_;
-        cleanupHead_ = node;
-        return *object;
-    }
-
 private:
-    struct CleanupNode {
-        CleanupNode* next{nullptr};
-        void* object{nullptr};
-        void (*destroy)(void*) noexcept{nullptr};
-    };
-
     std::pmr::monotonic_buffer_resource arena_;
-    CleanupNode* cleanupHead_{nullptr};
 };
 
 }  // namespace ruvia

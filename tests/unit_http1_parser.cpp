@@ -1,8 +1,10 @@
 #include "test_harness.h"
 
+#include <concepts>
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <utility>
 
 #include "ruvia/http/detail/http1/Http1ServerRequestParser.h"
 #include "ruvia/http/Http1RequestParser.h"
@@ -14,12 +16,28 @@
 namespace {
 
 using ruvia::HttpKnownMethod;
-using ruvia::Http1RequestParseKind;
 using ruvia::HttpParseError;
 using ruvia::HttpProtocolVersion;
+using ruvia::detail::Http1ServerRequestParseFailureSource;
 using ruvia::detail::Http1ServerRequestParser;
 using ruvia::detail::Http1ServerRequestParseState;
-using ruvia::detail::HttpServerExpectationAction;
+using ruvia::detail::HttpUnsupportedExpectationPolicy;
+
+template <typename T>
+concept HasAnyRvalueHttp1RequestParseAccessor =
+    requires(T&& result) { std::move(result).needMore(); } ||
+    requires(T&& result) { std::move(result).parsed(); } ||
+    requires(T&& result) { std::move(result).failure(); };
+
+template <typename T>
+concept HasAnyRvalueHttp1ParsedRequestBorrow =
+    requires(T&& parsed) { std::move(parsed).request(); } ||
+    requires(T&& parsed) { std::move(parsed).bodyPlan(); };
+
+static_assert(!HasAnyRvalueHttp1RequestParseAccessor<
+    ruvia::Http1RequestParseResult>);
+static_assert(!HasAnyRvalueHttp1ParsedRequestBorrow<
+    ruvia::Http1ParsedRequest>);
 
 const ruvia::detail::Http1KnownLengthRequestBody& requireKnownLength(
     const ruvia::detail::Http1RequestBodyPlan& plan) {
@@ -43,7 +61,13 @@ const ruvia::detail::Http1ChunkedRequestBody& requireChunked(
     const Http1ServerRequestParseState& state,
     HttpParseError error) noexcept {
     const auto* failure = state.failure();
-    return failure != nullptr && failure->error() == error;
+    if (failure == nullptr) {
+        return false;
+    }
+    const auto actual = failure->protocolError();
+    const auto expected = ruvia::httpParseProtocolError(error);
+    return actual.status() == expected.status() &&
+        std::string_view(actual.what()) == expected.what();
 }
 
 }  // namespace
@@ -54,7 +78,6 @@ RUVIA_TEST(http1_public_parse_outcome_exposes_only_its_active_alternative) {
     const auto needMore = publicParser.parse(
         "GET / HTTP/1.1\r\nHost: example.com\r\n");
     const auto* needMoreState = needMore.needMore();
-    RUVIA_CHECK(needMore.kind() == Http1RequestParseKind::kNeedMore);
     RUVIA_CHECK(needMoreState != nullptr);
     if (needMoreState != nullptr) {
         RUVIA_CHECK(!needMoreState->requiredTotalBytes().has_value());
@@ -64,12 +87,36 @@ RUVIA_TEST(http1_public_parse_outcome_exposes_only_its_active_alternative) {
 
     const auto failure = publicParser.parse("GET / HTTP/1.1\r\n\r\n");
     const auto* failureState = failure.failure();
-    RUVIA_CHECK(failure.kind() == Http1RequestParseKind::kFailure);
     RUVIA_CHECK(failure.needMore() == nullptr);
     RUVIA_CHECK(failure.parsed() == nullptr);
     RUVIA_CHECK(failureState != nullptr);
     if (failureState != nullptr) {
-        RUVIA_CHECK(failureState->error() == HttpParseError::kMissingHost);
+        const auto error = failureState->protocolError();
+        RUVIA_CHECK_EQ(error.status(), 400);
+        RUVIA_CHECK_EQ(
+            std::string_view(error.what()),
+            std::string_view("missing Host header"));
+    }
+}
+
+RUVIA_TEST(http1_internal_parse_failure_classifies_only_request_line_failures) {
+    Http1ServerRequestParser parser;
+
+    const auto requestLineFailure = parser.parseMessage(
+        "GET / HTTP/9.0\r\nHost: example.com\r\n\r\n");
+    RUVIA_CHECK(requestLineFailure.failure() != nullptr);
+    if (const auto* failure = requestLineFailure.failure()) {
+        RUVIA_CHECK(
+            failure->source() ==
+            Http1ServerRequestParseFailureSource::kRequestLine);
+    }
+
+    const auto messageFailure = parser.parseMessage("GET / HTTP/1.1\r\n\r\n");
+    RUVIA_CHECK(messageFailure.failure() != nullptr);
+    if (const auto* failure = messageFailure.failure()) {
+        RUVIA_CHECK(
+            failure->source() ==
+            Http1ServerRequestParseFailureSource::kMessage);
     }
 }
 
@@ -80,7 +127,6 @@ RUVIA_TEST(http1_public_parse_need_more_separates_required_size_from_consumption
         "Content-Length: 5\r\n\r\nhe";
     const auto result = publicParser.parse(partial);
     const auto* needMore = result.needMore();
-    RUVIA_CHECK(result.kind() == Http1RequestParseKind::kNeedMore);
     RUVIA_CHECK(needMore != nullptr);
     if (needMore != nullptr) {
         RUVIA_CHECK(needMore->requiredTotalBytes().has_value());
@@ -103,7 +149,6 @@ RUVIA_TEST(http1_public_parse_success_retains_the_exact_framed_body) {
         "GET /next HTTP/1.1\r\nHost: example.com\r\n\r\n";
     const auto fixedResult = publicParser.parse(contentLengthPipeline);
     const auto* fixed = fixedResult.parsed();
-    RUVIA_CHECK(fixedResult.kind() == Http1RequestParseKind::kParsed);
     RUVIA_CHECK(fixed != nullptr);
     if (fixed != nullptr) {
         RUVIA_CHECK_EQ(fixed->request().path(), std::string_view("/fixed"));
@@ -123,7 +168,6 @@ RUVIA_TEST(http1_public_parse_success_retains_the_exact_framed_body) {
         "GET /next HTTP/1.1\r\nHost: example.com\r\n\r\n";
     const auto chunkedResult = publicParser.parse(chunkedPipeline);
     const auto* chunked = chunkedResult.parsed();
-    RUVIA_CHECK(chunkedResult.kind() == Http1RequestParseKind::kParsed);
     RUVIA_CHECK(chunked != nullptr);
     if (chunked != nullptr) {
         RUVIA_CHECK(chunked->bodyPlan().chunked() != nullptr);
@@ -145,9 +189,9 @@ RUVIA_TEST(http1_public_parser_preserves_expect_extensions_as_semantics) {
     RUVIA_CHECK(parsed != nullptr);
     RUVIA_CHECK(result.failure() == nullptr);
     if (parsed != nullptr) {
-        RUVIA_CHECK(
-            parsed->bodyPlan().expectationAction() ==
-            HttpServerExpectationAction::kUnsupported);
+        const auto plan = parsed->bodyPlan().expectationPlan(
+            HttpUnsupportedExpectationPolicy::kReject);
+        RUVIA_CHECK(plan.rejection() != nullptr);
         RUVIA_CHECK(parsed->bodyPlan().expectations().has100Continue());
         RUVIA_CHECK(parsed->bodyPlan().expectations().hasUnsupported());
     }
@@ -314,13 +358,13 @@ RUVIA_TEST(http1_parse_duplicate_range_rejected) {
     RUVIA_CHECK(isFailure(result, HttpParseError::kInvalidHeader));
 }
 
-RUVIA_TEST(http1_parse_duplicate_conditional_header_rejected) {
+RUVIA_TEST(http1_parse_repeated_etag_list_fields_accepted) {
     Http1ServerRequestParser parser;
     const auto result = parser.parseMessage(
         "GET /file HTTP/1.1\r\nHost: x\r\n"
         "If-None-Match: \"old\"\r\n"
         "If-None-Match: \"new\"\r\n\r\n");
-    RUVIA_CHECK(isFailure(result, HttpParseError::kInvalidHeader));
+    RUVIA_CHECK(result.messageReady());
 }
 
 RUVIA_TEST(http1_parse_duplicate_authorization_rejected) {
@@ -399,13 +443,24 @@ RUVIA_TEST(http1_parse_transfer_encoding_in_http10_rejected) {
     RUVIA_CHECK(isFailure(result, HttpParseError::kInvalidTransferEncoding));
 }
 
-RUVIA_TEST(http1_parse_absolute_uri_host_mismatch_rejected) {
-    // An absolute-form target whose authority disagrees with the Host header is
-    // rejected to prevent routing ambiguity.
+RUVIA_TEST(http1_parse_absolute_uri_uses_target_authority) {
+    // RFC 9112 section 3.2.2 requires an origin server to accept absolute-form,
+    // ignore Host, and use the request-target authority. The parsed request must
+    // expose one effective authority rather than preserve the conflicting field.
     Http1ServerRequestParser parser;
     const auto result = parser.parseMessage(
         "GET http://a.example/ HTTP/1.1\r\nHost: b.example\r\n\r\n");
-    RUVIA_CHECK(isFailure(result, HttpParseError::kInvalidHost));
+    RUVIA_CHECK(result.messageReady());
+    RUVIA_CHECK_EQ(result.request.target(), std::string_view("http://a.example/"));
+    RUVIA_CHECK_EQ(result.request.path(), std::string_view("/"));
+    RUVIA_CHECK_EQ(
+        result.request.header("Host").value_or(std::string_view{}),
+        std::string_view("a.example"));
+    for (const auto& header : result.request.headers()) {
+        if (header.name() == "Host") {
+            RUVIA_CHECK_EQ(header.value(), std::string_view("a.example"));
+        }
+    }
 }
 
 RUVIA_TEST(http1_parse_authority_uses_shared_uri_normalization) {
@@ -450,6 +505,25 @@ RUVIA_TEST(http1_parse_connect_requires_authority_form) {
     }
 }
 
+RUVIA_TEST(http1_parse_connect_uses_target_authority) {
+    Http1ServerRequestParser parser;
+    const auto result = parser.parseMessage(
+        "CONNECT tunnel.example:443 HTTP/1.1\r\n"
+        "Host: decoy.example\r\n\r\n");
+
+    RUVIA_CHECK(result.messageReady());
+    RUVIA_CHECK_EQ(
+        result.request.header("Host").value_or(std::string_view{}),
+        std::string_view("tunnel.example:443"));
+    for (const auto& header : result.request.headers()) {
+        if (header.name() == "Host") {
+            RUVIA_CHECK_EQ(
+                header.value(),
+                std::string_view("tunnel.example:443"));
+        }
+    }
+}
+
 RUVIA_TEST(http1_parse_http10_without_host_allowed) {
     // HTTP/1.0 does not require a Host header.
     Http1ServerRequestParser parser;
@@ -459,6 +533,21 @@ RUVIA_TEST(http1_parse_http10_without_host_allowed) {
     RUVIA_CHECK(result.request.knownMethod() == HttpKnownMethod::kGet);
     RUVIA_CHECK(
         result.request.protocolVersion() == HttpProtocolVersion::kHttp10);
+}
+
+RUVIA_TEST(http1_parse_http10_ignores_upgrade_field_semantics) {
+    Http1ServerRequestParser parser;
+    const auto result = parser.parseMessage(
+        "GET / HTTP/1.0\r\n"
+        "Connection: Upgrade\r\n"
+        "Upgrade: websocket/\r\n\r\n");
+
+    RUVIA_CHECK(result.messageReady());
+    RUVIA_CHECK(
+        result.request.protocolVersion() == HttpProtocolVersion::kHttp10);
+    RUVIA_CHECK_EQ(
+        result.request.header("Upgrade"),
+        std::optional<std::string_view>("websocket/"));
 }
 
 RUVIA_TEST(http1_parse_non_numeric_content_length_rejected) {
@@ -528,6 +617,17 @@ RUVIA_TEST(http1_server_head_ready_is_distinct_from_message_ready) {
             RUVIA_CHECK_EQ(*needBody->requiredTotalBytes(), request.size());
         }
     }
+}
+
+RUVIA_TEST(http1_response_coding_folds_all_accept_encoding_field_lines) {
+    Http1ServerRequestParser parser;
+    const auto parsed = parser.parseMessage(
+        "GET / HTTP/1.1\r\nHost: x\r\n"
+        "Accept-Encoding: identity;q=0, gzip;q=0.2\r\n"
+        "Accept-Encoding: br;q=0.8\r\n\r\n");
+    RUVIA_CHECK(parsed.messageReady() != nullptr);
+    RUVIA_CHECK(
+        parsed.responseCoding == ruvia::detail::HttpContentCoding::kBrotli);
 }
 
 RUVIA_TEST(http1_parse_header_block_too_large_rejected) {

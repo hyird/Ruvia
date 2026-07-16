@@ -9,7 +9,7 @@
 namespace {
 
 using ruvia::HttpParseError;
-using ruvia::httpParseErrorStatus;
+using ruvia::httpParseProtocolError;
 using ruvia::detail::HttpChunkScanError;
 using ruvia::detail::validateHttpChunkTrailers;
 
@@ -17,17 +17,17 @@ using ruvia::detail::validateHttpChunkTrailers;
 
 RUVIA_TEST(parse_error_status_mapping) {
     // Size limits map to their specific statuses.
-    RUVIA_CHECK_EQ(httpParseErrorStatus(HttpParseError::kHeaderTooLarge), std::uint16_t{431});
-    RUVIA_CHECK_EQ(httpParseErrorStatus(HttpParseError::kTooManyHeaders), std::uint16_t{431});
-    RUVIA_CHECK_EQ(httpParseErrorStatus(HttpParseError::kBodyTooLarge), std::uint16_t{413});
-    RUVIA_CHECK_EQ(httpParseErrorStatus(HttpParseError::kUnsupportedTransferEncoding), std::uint16_t{501});
-    RUVIA_CHECK_EQ(httpParseErrorStatus(HttpParseError::kUnsupportedHttpVersion), std::uint16_t{505});
+    RUVIA_CHECK_EQ(httpParseProtocolError(HttpParseError::kHeaderTooLarge).status(), std::uint16_t{431});
+    RUVIA_CHECK_EQ(httpParseProtocolError(HttpParseError::kTooManyHeaders).status(), std::uint16_t{431});
+    RUVIA_CHECK_EQ(httpParseProtocolError(HttpParseError::kBodyTooLarge).status(), std::uint16_t{413});
+    RUVIA_CHECK_EQ(httpParseProtocolError(HttpParseError::kUnsupportedTransferEncoding).status(), std::uint16_t{501});
+    RUVIA_CHECK_EQ(httpParseProtocolError(HttpParseError::kUnsupportedHttpVersion).status(), std::uint16_t{505});
     // Everything else is a 400 Bad Request.
-    RUVIA_CHECK_EQ(httpParseErrorStatus(HttpParseError::kMissingHost), std::uint16_t{400});
-    RUVIA_CHECK_EQ(httpParseErrorStatus(HttpParseError::kInvalidConnection), std::uint16_t{400});
-    RUVIA_CHECK_EQ(httpParseErrorStatus(HttpParseError::kInvalidUpgrade), std::uint16_t{400});
-    RUVIA_CHECK_EQ(httpParseErrorStatus(HttpParseError::kInvalidChunkSize), std::uint16_t{400});
-    RUVIA_CHECK_EQ(httpParseErrorStatus(HttpParseError::kConflictingContentLength), std::uint16_t{400});
+    RUVIA_CHECK_EQ(httpParseProtocolError(HttpParseError::kMissingHost).status(), std::uint16_t{400});
+    RUVIA_CHECK_EQ(httpParseProtocolError(HttpParseError::kInvalidConnection).status(), std::uint16_t{400});
+    RUVIA_CHECK_EQ(httpParseProtocolError(HttpParseError::kInvalidUpgrade).status(), std::uint16_t{400});
+    RUVIA_CHECK_EQ(httpParseProtocolError(HttpParseError::kInvalidChunkSize).status(), std::uint16_t{400});
+    RUVIA_CHECK_EQ(httpParseProtocolError(HttpParseError::kConflictingContentLength).status(), std::uint16_t{400});
 }
 
 RUVIA_TEST(chunk_trailers_accept_valid) {
@@ -66,6 +66,9 @@ RUVIA_TEST(chunk_trailers_reject_framing_and_routing_fields) {
     RUVIA_CHECK(validateHttpChunkTrailers("Connection: close\r\n") == HttpChunkScanError::kInvalidTrailer);
     RUVIA_CHECK(validateHttpChunkTrailers("Authorization: Bearer x\r\n") == HttpChunkScanError::kInvalidTrailer);
     RUVIA_CHECK(validateHttpChunkTrailers("Cookie: sid=1\r\n") == HttpChunkScanError::kInvalidTrailer);
+    RUVIA_CHECK(validateHttpChunkTrailers("Origin: https://app.example\r\n") == HttpChunkScanError::kInvalidTrailer);
+    RUVIA_CHECK(validateHttpChunkTrailers("Access-Control-Request-Method: POST\r\n") == HttpChunkScanError::kInvalidTrailer);
+    RUVIA_CHECK(validateHttpChunkTrailers("Access-Control-Request-Headers: X-One\r\n") == HttpChunkScanError::kInvalidTrailer);
     // The classification is case-insensitive, so a lowercase spelling is caught too.
     RUVIA_CHECK(validateHttpChunkTrailers("content-length: 10\r\n") == HttpChunkScanError::kInvalidTrailer);
 }

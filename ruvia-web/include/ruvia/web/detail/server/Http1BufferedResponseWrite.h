@@ -2,13 +2,16 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <optional>
 #include <system_error>
-#include <utility>
+#include <type_traits>
 #include <variant>
 
 #include "ruvia/http/detail/http1/Http1ResponseHeadPlan.h"
 
 namespace ruvia::detail {
+
+class Http1BufferedResponseWriteResult;
 
 class Http1BufferedResponseWriteCompleted final {
 public:
@@ -27,19 +30,9 @@ private:
 };
 
 class Http1BufferedResponseWriteFailedBeforeCommit final {
-public:
-    [[nodiscard]] const std::error_code& error() const noexcept {
-        return error_;
-    }
-
 private:
     friend class Http1BufferedResponseWriteResult;
-
-    explicit Http1BufferedResponseWriteFailedBeforeCommit(
-        std::error_code error) noexcept
-        : error_(error) {}
-
-    std::error_code error_;
+    constexpr Http1BufferedResponseWriteFailedBeforeCommit() noexcept = default;
 };
 
 class Http1BufferedResponseWriteFailedAfterCommit final {
@@ -48,45 +41,51 @@ public:
         return status_;
     }
 
-    [[nodiscard]] const std::error_code& error() const noexcept {
-        return error_;
-    }
-
 private:
     friend class Http1BufferedResponseWriteResult;
 
-    Http1BufferedResponseWriteFailedAfterCommit(
-        std::uint16_t status,
-        std::error_code error) noexcept
-        : status_(status),
-          error_(error) {}
+    explicit constexpr Http1BufferedResponseWriteFailedAfterCommit(
+        std::uint16_t status) noexcept
+        : status_(status) {}
 
     std::uint16_t status_;
-    std::error_code error_;
 };
 
-// A buffered HTTP/1 write has exactly one terminal outcome. A final response
-// status exists only after the complete response head has reached the transport;
-// a partial head is not an HTTP response and therefore carries no status. The
-// committed alternatives obtain their status from the exact write plan used to
-// serialize the head rather than reconstructing it from a mutable response.
+// The complete-head byte boundary produces exactly one terminal alternative.
+// Only alternatives reached after a complete head own a committed status, so a
+// failed-before-commit result cannot carry meaningless status storage.
 class Http1BufferedResponseWriteResult final {
 public:
-    [[nodiscard]] const Http1BufferedResponseWriteCompleted*
-    completed() const noexcept {
+    [[nodiscard]] constexpr const Http1BufferedResponseWriteCompleted*
+    completed() const & noexcept {
         return std::get_if<Http1BufferedResponseWriteCompleted>(&value_);
     }
+    const Http1BufferedResponseWriteCompleted* completed() const && = delete;
 
-    [[nodiscard]] const Http1BufferedResponseWriteFailedBeforeCommit*
-    failedBeforeCommit() const noexcept {
+    [[nodiscard]] constexpr const Http1BufferedResponseWriteFailedBeforeCommit*
+    failedBeforeCommit() const & noexcept {
         return std::get_if<Http1BufferedResponseWriteFailedBeforeCommit>(
             &value_);
     }
+    const Http1BufferedResponseWriteFailedBeforeCommit*
+    failedBeforeCommit() const && = delete;
 
-    [[nodiscard]] const Http1BufferedResponseWriteFailedAfterCommit*
-    failedAfterCommit() const noexcept {
-        return std::get_if<Http1BufferedResponseWriteFailedAfterCommit>(
-            &value_);
+    [[nodiscard]] constexpr const Http1BufferedResponseWriteFailedAfterCommit*
+    failedAfterCommit() const & noexcept {
+        return std::get_if<Http1BufferedResponseWriteFailedAfterCommit>(&value_);
+    }
+    const Http1BufferedResponseWriteFailedAfterCommit*
+    failedAfterCommit() const && = delete;
+
+    [[nodiscard]] constexpr std::optional<std::uint16_t>
+    committedStatus() const noexcept {
+        if (const auto* value = completed()) {
+            return value->status();
+        }
+        if (const auto* value = failedAfterCommit()) {
+            return value->status();
+        }
+        return std::nullopt;
     }
 
 private:
@@ -102,33 +101,34 @@ private:
         Http1BufferedResponseWriteFailedBeforeCommit,
         Http1BufferedResponseWriteFailedAfterCommit>;
 
-    [[nodiscard]] static Http1BufferedResponseWriteResult
+    [[nodiscard]] static constexpr Http1BufferedResponseWriteResult
     makeCompleted(std::uint16_t status) noexcept {
         return Http1BufferedResponseWriteResult(
             Http1BufferedResponseWriteCompleted(status));
     }
 
-    [[nodiscard]] static Http1BufferedResponseWriteResult
-    makeFailedBeforeCommit(std::error_code error) noexcept {
+    [[nodiscard]] static constexpr Http1BufferedResponseWriteResult
+    makeFailedBeforeCommit() noexcept {
         return Http1BufferedResponseWriteResult(
-            Http1BufferedResponseWriteFailedBeforeCommit(error));
+            Http1BufferedResponseWriteFailedBeforeCommit());
     }
 
-    [[nodiscard]] static Http1BufferedResponseWriteResult
-    makeFailedAfterCommit(
-        std::uint16_t status,
-        std::error_code error) noexcept {
+    [[nodiscard]] static constexpr Http1BufferedResponseWriteResult
+    makeFailedAfterCommit(std::uint16_t status) noexcept {
         return Http1BufferedResponseWriteResult(
-            Http1BufferedResponseWriteFailedAfterCommit(status, error));
+            Http1BufferedResponseWriteFailedAfterCommit(status));
     }
 
     template <typename Alternative>
-    explicit Http1BufferedResponseWriteResult(
+    explicit constexpr Http1BufferedResponseWriteResult(
         Alternative alternative) noexcept
-        : value_(std::move(alternative)) {}
+        : value_(alternative) {}
 
     Value value_;
 };
+
+static_assert(std::is_trivially_copyable_v<Http1BufferedResponseWriteResult>);
+static_assert(sizeof(Http1BufferedResponseWriteResult) <= 4);
 
 // `bytesTransferred` is the composed async-write prefix accepted before `error`.
 // Only a prefix containing the entire serialized head commits a final status.
@@ -138,22 +138,19 @@ classifyHttp1BufferedResponseWrite(
     std::size_t responseHeadBytes,
     std::error_code error,
     std::size_t bytesTransferred) noexcept {
-    const auto status = plan.writePlan().responseStatus();
+    const auto status = plan.responseStatus();
     if (!error) {
         if (responseHeadBytes == 0 ||
             bytesTransferred < responseHeadBytes) {
-            return Http1BufferedResponseWriteResult::makeFailedBeforeCommit(
-                std::make_error_code(std::errc::io_error));
+            return Http1BufferedResponseWriteResult::makeFailedBeforeCommit();
         }
         return Http1BufferedResponseWriteResult::makeCompleted(status);
     }
     if (responseHeadBytes != 0 &&
         bytesTransferred >= responseHeadBytes) {
-        return Http1BufferedResponseWriteResult::makeFailedAfterCommit(
-            status,
-            error);
+        return Http1BufferedResponseWriteResult::makeFailedAfterCommit(status);
     }
-    return Http1BufferedResponseWriteResult::makeFailedBeforeCommit(error);
+    return Http1BufferedResponseWriteResult::makeFailedBeforeCommit();
 }
 
 }  // namespace ruvia::detail

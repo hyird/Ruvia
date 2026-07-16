@@ -22,9 +22,11 @@ inline constexpr std::string_view kHttpCrlf = "\r\n";
 class HttpWebSocketServerHandshake final {
 public:
     [[nodiscard]] const WebSocketServerNegotiation&
-    negotiation() const noexcept {
+    negotiation() const & noexcept {
         return negotiation_;
     }
+    [[nodiscard]] const WebSocketServerNegotiation&
+    negotiation() const && = delete;
 
     template <typename Visitor>
     void forEachResponsePart(Visitor&& visitor) const {

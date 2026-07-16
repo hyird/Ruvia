@@ -47,7 +47,7 @@ constexpr std::string_view kMigrationsTable = "ruvia_pg_integration_migrations";
         throw std::invalid_argument("RUVIA_TEST_PG_PORT is outside the valid range");
     }
     config.port = static_cast<std::uint16_t>(parsedPort);
-    config.poolSize = 1;
+    config.poolSizePerWorker = 1;
     config.acquireTimeout = std::chrono::seconds(5);
     config.connectTimeout = std::chrono::seconds(5);
     config.queryTimeout = std::chrono::seconds(5);
@@ -69,7 +69,9 @@ void runTask(Factory&& factory) {
         asio::bind_executor(
             ioContext.get_executor(),
             [&exception](ruvia::detail::TaskCompletionResult<void> result) {
-                exception = std::move(result.exception);
+                if (const auto* failure = result.failure()) {
+                    exception = failure->exception();
+                }
             }));
     ioContext.run();
     if (exception != nullptr) {
@@ -86,7 +88,8 @@ ruvia::Task<void> withDatabase(
         ruvia::detail::DbDefinition{std::pmr::string("default", resource), config}};
     ruvia::detail::DbRegistry registry(ioContext, resource, definitions);
     co_await registry.connect();
-    auto db = registry.get(resource);
+    ruvia::detail::ScopedOperationScope operationScope;
+    auto db = registry.get(resource, operationScope);
 
     if (cleanupOnly) {
         (void)co_await db.execute("DROP TABLE IF EXISTS ruvia_pg_integration_items");
@@ -126,8 +129,11 @@ ruvia::Task<void> withDatabase(
             std::span<const ruvia::DbValue>(params.data(), 1));
         co_await transaction.commit();
     }
-    count = co_await db.query("SELECT count(*) FROM ruvia_pg_integration_items");
-    require(count.rows()[0][0].text() == "1", "commit did not persist state");
+    auto committedCount = co_await db.query(
+        "SELECT count(*) FROM ruvia_pg_integration_items");
+    require(
+        committedCount.rows()[0][0].text() == "1",
+        "commit did not persist state");
     auto updated = co_await db.execute(
         "UPDATE ruvia_pg_integration_items SET value = $1",
         std::span<const ruvia::DbValue>(params.data(), 1));

@@ -9,6 +9,7 @@
 #include "ruvia/http/HttpKnownMethod.h"
 #include "ruvia/http/detail/http2/Http2LocalContentState.h"
 #include "ruvia/http/detail/http2/Http2RemoteContentState.h"
+#include "ruvia/http/detail/http2/Http2ReceiveWindowCredit.h"
 #include "ruvia/http/detail/http2/Http2StreamFlowControl.h"
 #include "ruvia/http/detail/http2/Http2StreamHeaderBlocks.h"
 #include "ruvia/http/detail/http2/Http2StreamLifecycle.h"
@@ -30,6 +31,7 @@ class Http2StreamState final {
     Http2TunnelState tunnelState_;
     Http2StreamFlowControl flowControl_;
     std::uint32_t windowDebt_{0};
+    Http2ReceiveWindowCredit receiveWindowCredit_;
     Http2StreamHeaderBlocks headerBlocks_;
     Http2StreamRequestData requestData_;
 
@@ -71,6 +73,10 @@ public:
         const auto debt = windowDebt_;
         windowDebt_ = 0;
         return debt;
+    }
+
+    [[nodiscard]] Http2ReceiveWindowCredit& receiveWindowCredit() noexcept {
+        return receiveWindowCredit_;
     }
 
     void restoreReceiveWindow(std::int32_t bytes) noexcept {
@@ -277,16 +283,17 @@ public:
         expectations_.parseField(value);
     }
 
-    [[nodiscard]] const HttpRequestExpectations& requestExpectations() const noexcept {
+    [[nodiscard]] HttpRequestExpectations requestExpectations() const noexcept {
         return expectations_;
     }
 
-    [[nodiscard]] std::optional<HttpServerExpectationAction>
-    expectationAction() const noexcept {
-        return expectations_.serverAction(
+    [[nodiscard]] HttpServerExpectationPlan expectationPlan(
+        HttpUnsupportedExpectationPolicy unsupportedPolicy) const noexcept {
+        return expectations_.serverPlan(
             remoteReceive().contentOpen() != nullptr
                 ? HttpRequestContentIndication::kWillFollow
-                : HttpRequestContentIndication::kNoContent);
+                : HttpRequestContentIndication::kNoContent,
+            unsupportedPolicy);
     }
 
     [[nodiscard]] std::string_view requestMethod() const noexcept {
@@ -369,6 +376,14 @@ public:
 
     [[nodiscard]] bool hasScheme() const noexcept {
         return requestState_.hasScheme();
+    }
+
+    [[nodiscard]] std::string_view requestScheme() const noexcept {
+        return requestData_.scheme();
+    }
+
+    void assignRequestScheme(std::string_view value) {
+        requestData_.assignScheme(value);
     }
 
     void markScheme(std::uint16_t defaultPort) noexcept {

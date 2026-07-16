@@ -11,6 +11,7 @@ using ruvia::detail::http2IsForbiddenConnectionHeader;
 using ruvia::detail::http2IsForbiddenResponseConnectionField;
 using ruvia::detail::http2IsForbiddenTrailerHeader;
 using ruvia::detail::http2IsValidRegularHeader;
+using ruvia::detail::http2IsValidDecodedResponseHeader;
 
 }  // namespace
 
@@ -65,6 +66,9 @@ RUVIA_TEST(http2_valid_regular_header) {
     // TE may carry only "trailers".
     RUVIA_CHECK(http2IsValidRegularHeader("te", "trailers"));
     RUVIA_CHECK(!http2IsValidRegularHeader("te", "gzip"));
+    // That exception is request-only; responses cannot carry TE at all.
+    RUVIA_CHECK(!http2IsValidDecodedResponseHeader("te", "trailers"));
+    RUVIA_CHECK(http2IsValidDecodedResponseHeader("content-type", "text/plain"));
     // A value with CRLF is rejected.
     RUVIA_CHECK(!http2IsValidRegularHeader("x-custom", std::string_view("a\r\nb", 4)));
 }

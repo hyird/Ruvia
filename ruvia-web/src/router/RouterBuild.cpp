@@ -154,8 +154,7 @@ void detail::RouterImpl::validateNoDynamicRouteConflict(std::span<const PendingR
     }
 }
 
-detail::RouteTable detail::RouterImpl::buildRouteTable() const {
-    RouteTable table(resource_);
+void detail::RouterImpl::buildRouteTable(RouteTable& table) const {
     std::size_t headShadowCandidateCount = 0;
     std::size_t middlewareCount = 0;
     for (const auto& route : pendingRoutes_) {
@@ -238,7 +237,6 @@ detail::RouteTable detail::RouterImpl::buildRouteTable() const {
         table.buildRadix();
     }
     table.buildDynamicRoutes();
-    return table;
 }
 
 }  // namespace ruvia

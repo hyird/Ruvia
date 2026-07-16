@@ -51,7 +51,7 @@ void checkThrowsInvalidArgument(Callable&& callable) {
 
 // Full option serialization is deterministic: the fixed Expires renders a
 // fixed IMF-fixdate and typed attributes have one canonical wire spelling.
-void exerciseGenerateCookieSerialization(ruvia::RequestMemory& memory, const ruvia::HttpRequest& request) {
+void exerciseSetCookieSerialization(ruvia::RequestMemory& memory, const ruvia::HttpRequest& request) {
     auto context = ruvia::detail::ContextAccess::make(memory, request);
     ruvia::CookieOptions options;
     options.secure = true;
@@ -62,68 +62,69 @@ void exerciseGenerateCookieSerialization(ruvia::RequestMemory& memory, const ruv
     options.prefix = ruvia::CookiePrefix::kHost;
     options.expires = std::chrono::system_clock::from_time_t(259200);
     options.maxAge = std::chrono::seconds(3600);
-    const auto cookie = context.generateCookie("chip", "value", options);
-    check(std::string_view(cookie) ==
+    context.setCookie("chip", "value", options);
+    const auto response = context.text("ok");
+    check(response.header("Set-Cookie") ==
         "__Host-chip=value; Path=/; Max-Age=3600; Expires=Sun, 04 Jan 1970 00:00:00 GMT; "
         "HttpOnly; Secure; SameSite=None; Priority=High; Partitioned");
 }
 
-void exerciseSetCookieMatchesGenerate(ruvia::RequestMemory& memory, const ruvia::HttpRequest& request) {
+void exerciseSetCookieWritesResponseHeader(ruvia::RequestMemory& memory, const ruvia::HttpRequest& request) {
     auto context = ruvia::detail::ContextAccess::make(memory, request);
     ruvia::CookieOptions options;
     options.httpOnly = true;
     options.sameSite = ruvia::CookieSameSite::kLax;
     context.setCookie("session", "id", options);
     auto response = context.text("hi");
-    check(response.header("Set-Cookie") == std::string_view(context.generateCookie("session", "id", options)));
+    check(response.header("Set-Cookie") ==
+        "session=id; Path=/; HttpOnly; SameSite=Lax");
 }
 
 void exerciseCookieValidationThrows(ruvia::RequestMemory& memory, const ruvia::HttpRequest& request) {
     auto context = ruvia::detail::ContextAccess::make(memory, request);
-    checkThrowsInvalidArgument([&] { (void)context.generateCookie("bad;name", "v"); });
-    checkThrowsInvalidArgument([&] { (void)context.generateCookie("name", "va;lue"); });
+    checkThrowsInvalidArgument([&] { context.setCookie("bad;name", "v"); });
+    checkThrowsInvalidArgument([&] { context.setCookie("name", "va;lue"); });
 
     ruvia::CookieOptions hostWithoutSecure;
     hostWithoutSecure.prefix = ruvia::CookiePrefix::kHost;
-    checkThrowsInvalidArgument([&] { (void)context.generateCookie("n", "v", hostWithoutSecure); });
+    checkThrowsInvalidArgument([&] { context.setCookie("n", "v", hostWithoutSecure); });
 
     ruvia::CookieOptions hostWithDomain;
     hostWithDomain.prefix = ruvia::CookiePrefix::kHost;
     hostWithDomain.secure = true;
     hostWithDomain.domain = "example.com";
-    checkThrowsInvalidArgument([&] { (void)context.generateCookie("n", "v", hostWithDomain); });
+    checkThrowsInvalidArgument([&] { context.setCookie("n", "v", hostWithDomain); });
 
     ruvia::CookieOptions securePrefixWithoutSecure;
     securePrefixWithoutSecure.prefix = ruvia::CookiePrefix::kSecure;
-    checkThrowsInvalidArgument([&] { (void)context.generateCookie("n", "v", securePrefixWithoutSecure); });
+    checkThrowsInvalidArgument([&] { context.setCookie("n", "v", securePrefixWithoutSecure); });
 
     ruvia::CookieOptions partitionedWithoutSecure;
     partitionedWithoutSecure.partitioned = true;
-    checkThrowsInvalidArgument([&] { (void)context.generateCookie("n", "v", partitionedWithoutSecure); });
+    checkThrowsInvalidArgument([&] { context.setCookie("n", "v", partitionedWithoutSecure); });
 
     ruvia::CookieOptions maxAgeTooLong;
     maxAgeTooLong.maxAge = std::chrono::seconds(34560001);
-    checkThrowsInvalidArgument([&] { (void)context.generateCookie("n", "v", maxAgeTooLong); });
+    checkThrowsInvalidArgument([&] { context.setCookie("n", "v", maxAgeTooLong); });
 
     ruvia::CookieOptions negativeMaxAge;
     negativeMaxAge.maxAge = std::chrono::seconds(-1);
-    checkThrowsInvalidArgument([&] { (void)context.generateCookie("n", "v", negativeMaxAge); });
+    checkThrowsInvalidArgument([&] { context.setCookie("n", "v", negativeMaxAge); });
 
     ruvia::CookieOptions expiresTooFar;
     expiresTooFar.expires = std::chrono::system_clock::now() + std::chrono::hours(24 * 401);
-    checkThrowsInvalidArgument([&] { (void)context.generateCookie("n", "v", expiresTooFar); });
+    checkThrowsInvalidArgument([&] { context.setCookie("n", "v", expiresTooFar); });
 
-    checkThrowsInvalidArgument([&] { (void)context.generateSignedCookie("n", "v", ""); });
+    checkThrowsInvalidArgument([&] { context.setSignedCookie("n", "v", ""); });
 }
 
 void exerciseSignedCookieRoundtrip(ruvia::RequestMemory& memory, const ruvia::HttpRequest& request) {
     constexpr std::string_view kSecret = "guard-secret";
     auto writer = ruvia::detail::ContextAccess::make(memory, request);
-    const auto generated = writer.generateSignedCookie("sid", "hello", kSecret);
     writer.setSignedCookie("sid", "hello", kSecret);
     auto response = writer.text("x");
-    check(response.header("Set-Cookie") == std::string_view(generated));
-
+    const std::string generated(
+        response.header("Set-Cookie").value_or(std::string_view{}));
     const auto generatedView = std::string_view(generated);
     const auto cookiePair = generatedView.substr(0, generatedView.find(';'));
 
@@ -155,16 +156,18 @@ void exerciseSignedCookieRoundtrip(ruvia::RequestMemory& memory, const ruvia::Ht
     check(!malformedReader.req().signedCookie("sid", kSecret).has_value());
 }
 
-void exerciseDeleteCookieReturnsRequestValue(ruvia::RequestMemory& memory) {
+void exerciseDeleteCookieUsesRequestFacadeForPreviousValue(ruvia::RequestMemory& memory) {
     std::string raw("GET / HTTP/1.1\r\nHost: guard\r\nCookie: legacy=old\r\n\r\n");
     const auto parsed = parsePublicRequest(raw);
     auto context = ruvia::detail::ContextAccess::make(memory, parsed);
-    const auto deleted = context.deleteCookie("legacy");
-    check(deleted.has_value() && *deleted == "old");
+    const auto previous = context.req().cookie("legacy");
+    check(previous.has_value() && *previous == "old");
+    context.deleteCookie("legacy");
     auto response = context.text("x");
     const auto value = response.header("Set-Cookie");
-    check(value.starts_with("legacy=;"));
-    check(value.find("Max-Age=0") != std::string_view::npos);
+    check(value.has_value());
+    check(value->starts_with("legacy=;"));
+    check(value->find("Max-Age=0") != std::string_view::npos);
 }
 
 void exerciseByteSpanBody(ruvia::RequestMemory& memory, const ruvia::HttpRequest& request) {
@@ -173,14 +176,12 @@ void exerciseByteSpanBody(ruvia::RequestMemory& memory, const ruvia::HttpRequest
         std::byte{0x00},
         std::byte{0x41},
         std::byte{0xff}};
-    constexpr ruvia::HttpHeaderView headers[] = {{"X-Bin", "1"}};
-    auto response = context.body(
-        std::span<const std::byte>(bytes),
-        206,
-        headers);
+    context.status(206);
+    context.header("X-Bin", "1");
+    auto response = context.body(std::span<const std::byte>(bytes));
     check(response.status() == 206);
     check(response.header("X-Bin") == "1");
-    check(response.header("Content-Type").empty());
+    check(!response.header("Content-Type").has_value());
     const auto body = ruvia::detail::responseBody(response).bytes();
     check(body.size() == 3);
     check(body.size() == 3 && body[0] == '\0' && body[1] == 'A' &&
@@ -194,11 +195,11 @@ int main() {
     ruvia::RequestMemory memory(worker);
     auto request = makeRequest();
 
-    exerciseGenerateCookieSerialization(memory, request);
-    exerciseSetCookieMatchesGenerate(memory, request);
+    exerciseSetCookieSerialization(memory, request);
+    exerciseSetCookieWritesResponseHeader(memory, request);
     exerciseCookieValidationThrows(memory, request);
     exerciseSignedCookieRoundtrip(memory, request);
-    exerciseDeleteCookieReturnsRequestValue(memory);
+    exerciseDeleteCookieUsesRequestFacadeForPreviousValue(memory);
     exerciseByteSpanBody(memory, request);
 
     return failures;

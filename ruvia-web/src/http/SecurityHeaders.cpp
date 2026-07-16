@@ -1,5 +1,6 @@
 #include "ruvia/web/SecurityHeaders.h"
 
+#include "ruvia/web/ConnInfo.h"
 #include "ruvia/web/detail/http/ContextInternal.h"
 
 namespace ruvia {
@@ -10,11 +11,14 @@ namespace {
 }
 
 [[nodiscard]] bool hasSecurityHeader(HttpResponse& response, std::string_view name) noexcept {
-    return !response.header(name).empty();
+    return response.header(name).has_value();
 }
 
 template <typename Target>
-void applySecurityHeadersTo(Target& target, const SecurityHeadersOptions& options) {
+void applySecurityHeadersTo(
+    Target& target,
+    const SecurityHeadersOptions& options,
+    bool secureTransport) {
     const auto setHeader = [&target, &options](
                                std::string_view name,
                                std::string_view value,
@@ -34,11 +38,17 @@ void applySecurityHeadersTo(Target& target, const SecurityHeadersOptions& option
     if (options.frameOptions) {
         setHeader("X-Frame-Options", "DENY", true);
     }
-    if (options.strictTransportSecurity) {
+    // RFC 6797 section 7.2: an HSTS host MUST NOT send STS over a
+    // non-secure transport. This decision requires Context connection metadata.
+    if (options.strictTransportSecurity && secureTransport) {
         setHeader("Strict-Transport-Security", "max-age=31536000; includeSubDomains", true);
     }
-    if (options.xssProtection) {
-        setHeader("X-XSS-Protection", "0", true);
+    switch (options.legacyXssFilter) {
+        case LegacyXssFilterPolicy::kDisable:
+            setHeader("X-XSS-Protection", "0", true);
+            break;
+        case LegacyXssFilterPolicy::kOmitHeader:
+            break;
     }
 
     setHeader("Content-Security-Policy", options.contentSecurityPolicy, true);
@@ -53,17 +63,22 @@ void applySecurityHeadersTo(Target& target, const SecurityHeadersOptions& option
 }  // namespace
 
 void applySecurityHeaders(Context& context, const SecurityHeadersOptions& options) {
-    applySecurityHeadersTo(context, options);
-}
-
-void applySecurityHeaders(HttpResponse& response, const SecurityHeadersOptions& options) {
-    applySecurityHeadersTo(response, options);
+    const auto connection = getConnInfo(context);
+    applySecurityHeadersTo(
+        context,
+        options,
+        connection.tls() != nullptr);
 }
 
 Task<void> SecurityHeadersMiddleware::handle(Context& context, Next& next) {
-    applySecurityHeaders(context);
+    const auto connection = getConnInfo(context);
+    const bool secureTransport = connection.tls() != nullptr;
+    applySecurityHeadersTo(context, SecurityHeadersOptions{}, secureTransport);
     co_await next();
-    applySecurityHeaders(detail::ContextAccess::responseStorage(context));
+    applySecurityHeadersTo(
+        detail::ContextAccess::responseStorage(context),
+        SecurityHeadersOptions{},
+        secureTransport);
 }
 
 }  // namespace ruvia

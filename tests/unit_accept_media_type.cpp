@@ -57,12 +57,16 @@ RUVIA_TEST(quality_parameter_extracts_q_from_header_item) {
     RUVIA_CHECK_EQ(httpQualityParameter("gzip;q=2"), 0);
     RUVIA_CHECK_EQ(httpQualityParameter("gzip;q=bogus"), 0);
 
-    // The first q wins; parameters after it are accept-ext and do not override it.
-    RUVIA_CHECK_EQ(httpQualityParameter("gzip;q=0.3;q=0.9"), 300);
+    // A media parameter name cannot occur more than once; duplicate q is invalid.
+    RUVIA_CHECK_EQ(httpQualityParameter("gzip;q=0.3;q=0.9"), 0);
 
     // A ';' inside a quoted parameter value is not a parameter separator, so a
     // fake q smuggled inside quotes is ignored and the real trailing q is used.
     RUVIA_CHECK_EQ(httpQualityParameter(R"(a;note="x;q=1";q=0.4)"), 400);
+
+    // Parameter grammar never permits whitespace around '='.
+    RUVIA_CHECK_EQ(httpQualityParameter("text/html;q =1"), 0);
+    RUVIA_CHECK_EQ(httpQualityParameter("text/html;q= 1"), 0);
 }
 
 RUVIA_TEST(media_range_matches_type_subtype_and_wildcards) {
@@ -70,7 +74,19 @@ RUVIA_TEST(media_range_matches_type_subtype_and_wildcards) {
     RUVIA_CHECK(httpMediaRangeMatches("text/*", "text/html"));
     RUVIA_CHECK(httpMediaRangeMatches("*/*", "application/json"));
     RUVIA_CHECK(httpMediaRangeMatches("TEXT/HTML", "text/html"));                 // case-insensitive
-    RUVIA_CHECK(httpMediaRangeMatches("text/html;charset=utf-8", "text/html"));   // params ignored
+    RUVIA_CHECK(httpMediaRangeMatches(
+        "text/html;charset=utf-8", "text/html;charset=\"utf-8\""));
+    // Charset names are registered case-insensitively; quoted-string syntax
+    // does not change that comparison rule.
+    RUVIA_CHECK(httpMediaRangeMatches(
+        "text/html;charset=\"UTF-8\"", "text/html;CHARSET=utf-8"));
+    RUVIA_CHECK(!httpMediaRangeMatches(
+        "text/html;charset=utf-8", "text/html"));
+    RUVIA_CHECK(!httpMediaRangeMatches(
+        "text/html;charset=utf-8", "text/html;charset=iso-8859-1"));
+    // Other parameter values retain their registered case-sensitive semantics.
+    RUVIA_CHECK(!httpMediaRangeMatches(
+        "application/json;profile=Example", "application/json;profile=example"));
     RUVIA_CHECK(!httpMediaRangeMatches("text/*", "application/json"));            // type mismatch
     RUVIA_CHECK(!httpMediaRangeMatches("text/plain", "text/html"));              // subtype mismatch
     RUVIA_CHECK(!httpMediaRangeMatches("text", "text/html"));                    // no slash -> invalid
@@ -94,6 +110,40 @@ RUVIA_TEST(media_range_rejects_invalid_tokens) {
     RUVIA_CHECK(!httpAcceptsMediaType("*/json, */*;q=0", "application/json"));
 }
 
+RUVIA_TEST(media_range_rejects_whitespace_around_parameter_equals) {
+    RUVIA_CHECK(!httpAcceptsMediaType("text/html;q =1", "text/html"));
+    RUVIA_CHECK(!httpAcceptsMediaType(
+        "text/html;level =1", "text/html;level=1"));
+    RUVIA_CHECK(!httpAcceptsMediaType(
+        "text/html;charset=utf-8", "text/html;charset =utf-8"));
+
+    // OWS around the semicolon delimiter remains legal.
+    RUVIA_CHECK(httpAcceptsMediaType(
+        "text/html \t; \tq=0.5", "text/html"));
+}
+
+RUVIA_TEST(media_range_rejects_duplicate_parameter_names) {
+    RUVIA_CHECK(!httpAcceptsMediaType(
+        "text/html;level=1;LEVEL=1", "text/html;level=1"));
+    RUVIA_CHECK(!httpAcceptsMediaType(
+        "text/html;q=1;Q=0", "text/html"));
+    RUVIA_CHECK(!httpAcceptsMediaType(
+        "text/html;level=1", "text/html;level=1;LEVEL=2"));
+}
+
+RUVIA_TEST(media_range_rejects_invalid_offered_parameters) {
+    for (const std::string_view offered : {
+             "text/plain; charset",
+             "text/plain; charset=",
+             "text/plain; charset =utf-8",
+             "text/plain; charset=utf-8; CHARSET=latin1",
+             "text/plain; charset=\"unterminated"}) {
+        RUVIA_CHECK(!httpMediaRangeMatches("*/*", offered));
+        RUVIA_CHECK(!httpAcceptsMediaType("*/*", offered));
+        RUVIA_CHECK(!httpAcceptsMediaType("", offered));
+    }
+}
+
 RUVIA_TEST(accepts_media_type_basic) {
     RUVIA_CHECK(httpAcceptsMediaType("", "text/html"));                // absent Accept -> accept anything
     RUVIA_CHECK(httpAcceptsMediaType("text/html", "text/html"));
@@ -114,6 +164,36 @@ RUVIA_TEST(accepts_media_type_specificity_beats_quality) {
     RUVIA_CHECK(!httpAcceptsMediaType("*/*;q=0.5, text/html;q=0", "text/html"));
     // Highest q among equally-specific matches is taken.
     RUVIA_CHECK(httpAcceptsMediaType("text/plain;q=0.5, text/html;q=0.8", "text/html"));
+}
+
+RUVIA_TEST(accepts_media_type_parameters_participate_in_matching_and_precedence) {
+    // A parameterized range must not match a representation with a different
+    // parameter. The generic q=0 range therefore remains the winning match.
+    RUVIA_CHECK(!httpAcceptsMediaType(
+        "application/json;profile=v2;q=1, application/json;q=0",
+        "application/json;profile=v1"));
+
+    // When the parameter does match, that range is more specific than the bare
+    // media type and its quality controls acceptance.
+    RUVIA_CHECK(httpAcceptsMediaType(
+        "application/json;profile=v1;q=0.7, application/json;q=0",
+        "application/json;profile=v1"));
+    RUVIA_CHECK(!httpAcceptsMediaType(
+        "application/json;profile=v1;q=0, application/json;q=1",
+        "application/json;profile=v1"));
+
+    // Media-type parameter names are case-insensitive and quoted token-equivalent
+    // values compare after quoted-pair decoding. RFC 9110 removed accept-ext, so
+    // parameters after q still constrain the media range.
+    RUVIA_CHECK(httpAcceptsMediaType(
+        R"(text/plain;FORMAT="flowed";q=0.5;extension=ignored)",
+        "text/plain;format=flowed;extension=ignored"));
+    RUVIA_CHECK(!httpAcceptsMediaType(
+        R"(text/plain;q=0.5;format="flowed")",
+        "text/plain"));
+    RUVIA_CHECK(httpAcceptsMediaType(
+        R"(text/plain;q=0.5;format="flowed")",
+        "text/plain;format=flowed"));
 }
 
 RUVIA_TEST(context_request_accepts_merges_multiple_accept_field_lines) {
@@ -139,6 +219,11 @@ RUVIA_TEST(context_request_accepts_merges_multiple_accept_field_lines) {
 
     // No Accept header -> the client accepts anything.
     RUVIA_CHECK(accepts({}, "text/html"));
+    // A present but empty Accept list is distinct from an absent field: it has
+    // no matching media range. Empty members remain harmless when another field
+    // line supplies an actual range.
+    RUVIA_CHECK(!accepts({""}, "text/html"));
+    RUVIA_CHECK(accepts({"", "text/html"}, "text/html"));
     // A single line behaves as before.
     RUVIA_CHECK(accepts({"text/html"}, "text/html"));
     RUVIA_CHECK(!accepts({"text/html"}, "application/json"));

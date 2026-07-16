@@ -2,12 +2,14 @@
 
 #include <asio/co_spawn.hpp>
 #include <asio/io_context.hpp>
+#include <asio/post.hpp>
 #include <asio/use_future.hpp>
 
 #include <array>
 #include <chrono>
 #include <cstdint>
 #include <memory_resource>
+#include <memory>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -15,15 +17,61 @@
 #include <vector>
 
 #include "ruvia/web/detail/http/StreamingInternal.h"
+#include "ruvia/web/detail/body/HttpRequestBodyFacade.h"
 #include "ruvia/web/detail/server/HttpResponseStreamState.h"
+#include "ruvia/web/detail/websocket/WebSocketInternal.h"
 #include "ruvia/core/detail/AsioAwait.h"
+#include "ruvia/core/detail/WorkerSignal.h"
+#include "ruvia/core/detail/WorkerDispatcher.h"
 #include "ruvia/core/Task.h"
 #include "ruvia/web/Streaming.h"
 
 namespace {
 
+class TestScopedCapability final : private ruvia::detail::ScopedCapabilityNode {
+public:
+    TestScopedCapability(
+        ruvia::detail::ScopedOperationScope& scope,
+        int& expiredCount) noexcept
+        : ScopedCapabilityNode(scope, &TestScopedCapability::expire),
+          expiredCount_(&expiredCount) {}
+
+    TestScopedCapability(const TestScopedCapability& other) noexcept
+        : ScopedCapabilityNode(other),
+          expiredCount_(other.expiredCount_) {}
+
+    TestScopedCapability(TestScopedCapability&& other) noexcept
+        : ScopedCapabilityNode(std::move(other)),
+          expiredCount_(std::exchange(other.expiredCount_, nullptr)) {}
+
+    void use() const { requireActive(); }
+
+private:
+    static void expire(ruvia::detail::ScopedCapabilityNode& node) noexcept {
+        auto& capability = static_cast<TestScopedCapability&>(node);
+        ++*capability.expiredCount_;
+    }
+
+    int* expiredCount_;
+};
+
+struct ColdFrameProbe final {
+    bool* destroyed;
+    bool armed{true};
+
+    explicit ColdFrameProbe(bool& value) noexcept : destroyed(&value) {}
+    ColdFrameProbe(ColdFrameProbe&& other) noexcept
+        : destroyed(other.destroyed), armed(std::exchange(other.armed, false)) {}
+    ~ColdFrameProbe() {
+        if (armed) {
+            *destroyed = true;
+        }
+    }
+};
+
+ruvia::Task<void> coldFrameTask(ColdFrameProbe) { co_return; }
+
 struct CaptureStreamSink final {
-    std::pmr::string scratch{std::pmr::get_default_resource()};
     std::vector<std::string> writes;
     std::vector<std::string> trailers;
 };
@@ -49,10 +97,7 @@ ruvia::Task<void> sleepStream(void*, std::chrono::milliseconds) {
 }
 
 void bindContext(void*, ruvia::Context*, ruvia::HttpResponse (*)(ruvia::Context&)) noexcept {}
-
-std::pmr::string& scratch(void* target) noexcept {
-    return static_cast<CaptureStreamSink*>(target)->scratch;
-}
+void releaseContext(void*) noexcept {}
 
 bool committed(void*) noexcept {
     return false;
@@ -62,6 +107,10 @@ bool aborted(void*) noexcept {
     return false;
 }
 
+ruvia::HttpResponse unusedStreamingHead(ruvia::Context&) {
+    return ruvia::HttpResponse(std::pmr::get_default_resource());
+}
+
 ruvia::ResponseStreamWriter makeWriter(CaptureStreamSink& sink) noexcept {
     return ruvia::detail::StreamingAccess::makeResponseStreamWriter(
         &sink,
@@ -69,7 +118,7 @@ ruvia::ResponseStreamWriter makeWriter(CaptureStreamSink& sink) noexcept {
         &endStream,
         &sleepStream,
         &bindContext,
-        &scratch,
+        &releaseContext,
         &committed,
         &aborted);
 }
@@ -79,6 +128,82 @@ ruvia::Task<void> writeLines(ruvia::ResponseStreamWriter& writer) {
     co_await writer.writeln("second");
 }
 
+ruvia::Task<void> writeStoredLines(ruvia::ResponseStreamWriter& writer) {
+    auto first = writer.writeln(std::string("stored-first"));
+    auto second = writer.writeln(std::string("stored-second"));
+    co_await std::move(first);
+    co_await std::move(second);
+}
+
+ruvia::ScopedOperation<void> makeExpiredWrite(CaptureStreamSink& sink) {
+    auto writer = makeWriter(sink);
+    return writer.write(std::string("must-not-run"));
+}
+
+ruvia::Task<void> awaitExpiredWrite(
+    ruvia::ScopedOperation<void>& operation,
+    bool& rejected) {
+    try {
+        co_await std::move(operation);
+    } catch (const std::logic_error&) {
+        rejected = true;
+    }
+}
+
+struct CaptureWebSocket final {
+    std::vector<std::string> writes;
+};
+
+ruvia::Task<std::optional<ruvia::WebSocketMessage>> readSocket(void*) {
+    co_return std::nullopt;
+}
+
+ruvia::Task<void> writeSocket(
+    void* target,
+    ruvia::WebSocketOpcode,
+    std::string_view payload) {
+    static_cast<CaptureWebSocket*>(target)->writes.emplace_back(payload);
+    co_return;
+}
+
+ruvia::Task<void> closeSocket(void*, std::uint16_t, std::string_view) {
+    co_return;
+}
+
+ruvia::ScopedOperation<void> makeExpiredWebSocketWrite(
+    CaptureWebSocket& capture) {
+    auto socket = ruvia::detail::WebSocketAccess::make(
+        &capture, &readSocket, &writeSocket, &closeSocket);
+    return socket.text(std::string("expired-payload"));
+}
+
+ruvia::Task<void> writeStoredTemporaryWebSocketPayload(
+    ruvia::WebSocket& socket) {
+    auto operation = socket.text(std::string("owned-payload"));
+    co_await std::move(operation);
+}
+
+struct ImmediateBodySource final {
+    ruvia::Task<std::optional<std::string_view>> read() {
+        co_return std::string_view("must-not-read");
+    }
+};
+
+ruvia::ScopedOperation<std::optional<std::string_view>> makeExpiredBodyRead() {
+    ruvia::detail::BodyReaderBinding<ImmediateBodySource> binding;
+    return binding.facade().read();
+}
+
+ruvia::Task<void> awaitExpiredBodyRead(
+    ruvia::ScopedOperation<std::optional<std::string_view>>& operation,
+    bool& rejected) {
+    try {
+        (void)co_await std::move(operation);
+    } catch (const std::logic_error&) {
+        rejected = true;
+    }
+}
+
 ruvia::Task<void> endWithTrailers(ruvia::ResponseStreamWriter& writer) {
     const std::array<ruvia::HttpHeaderView, 2> trailers{
         ruvia::HttpHeaderView{"Digest", "sha-256=value"},
@@ -86,9 +211,235 @@ ruvia::Task<void> endWithTrailers(ruvia::ResponseStreamWriter& writer) {
     co_await writer.end(trailers);
 }
 
+ruvia::Task<void> endWithExpiredTrailerSources(
+    ruvia::ResponseStreamWriter& writer) {
+    auto operation = [&] {
+        std::string name = "X-Owned-Trailer";
+        std::string value = "temporary-value";
+        const std::array<ruvia::HttpHeaderView, 1> trailers{
+            ruvia::HttpHeaderView{name, value}};
+        return writer.end(trailers);
+    }();
+    co_await std::move(operation);
+}
+
+struct SuspendedBodySource final {
+    explicit SuspendedBodySource(asio::io_context& io)
+        : dispatcher(std::make_shared<ruvia::detail::WorkerDispatcher>(io, 8)),
+          worker(ruvia::detail::WorkerHandleAccess::make(dispatcher)),
+          signal(worker) {}
+
+    ruvia::Task<std::optional<std::string_view>> read() {
+        co_await signal.wait();
+        co_return std::nullopt;
+    }
+
+    std::shared_ptr<ruvia::detail::WorkerDispatcher> dispatcher;
+    ruvia::WorkerHandle worker;
+    ruvia::detail::WorkerSignal signal;
+};
+
+struct SuspendedStreamSink final {
+    explicit SuspendedStreamSink(asio::io_context& io)
+        : dispatcher(std::make_shared<ruvia::detail::WorkerDispatcher>(io, 8)),
+          worker(ruvia::detail::WorkerHandleAccess::make(dispatcher)),
+          signal(worker) {}
+
+    std::shared_ptr<ruvia::detail::WorkerDispatcher> dispatcher;
+    ruvia::WorkerHandle worker;
+    ruvia::detail::WorkerSignal signal;
+    std::vector<std::string> writes;
+    std::size_t ends{0};
+    bool suspendNextWrite{true};
+    bool failNextWrite{false};
+};
+
+ruvia::Task<void> writeSuspendedStream(
+    void* target,
+    std::string_view chunk) {
+    auto& sink = *static_cast<SuspendedStreamSink*>(target);
+    sink.writes.emplace_back(chunk);
+    if (std::exchange(sink.failNextWrite, false)) {
+        throw std::runtime_error("stream write failed");
+    }
+    if (std::exchange(sink.suspendNextWrite, false)) {
+        co_await sink.signal.wait();
+    }
+}
+
+ruvia::Task<void> endSuspendedStream(
+    void* target,
+    std::span<const ruvia::HttpHeaderView>) {
+    ++static_cast<SuspendedStreamSink*>(target)->ends;
+    co_return;
+}
+
+ruvia::ResponseStreamWriter makeSuspendedWriter(
+    SuspendedStreamSink& sink) noexcept {
+    return ruvia::detail::StreamingAccess::makeResponseStreamWriter(
+        &sink,
+        &writeSuspendedStream,
+        &endSuspendedStream,
+        &sleepStream,
+        &bindContext,
+        &releaseContext,
+        &committed,
+        &aborted);
+}
+
+ruvia::Task<void> completeBodyRead(
+    ruvia::BodyReader& reader,
+    bool& completed) {
+    (void)co_await reader.read();
+    completed = true;
+}
+
+ruvia::Task<void> rejectConcurrentBodyRead(
+    ruvia::BodyReader& reader,
+    bool& rejected) {
+    try {
+        (void)co_await reader.read();
+    } catch (const std::logic_error&) {
+        rejected = true;
+    }
+}
+
+ruvia::Task<void> completeStreamWrite(
+    ruvia::ResponseStreamWriter& writer,
+    std::string_view chunk,
+    bool& completed) {
+    co_await writer.write(chunk);
+    completed = true;
+}
+
+ruvia::Task<void> rejectConcurrentStreamWrite(
+    ruvia::ResponseStreamWriter& writer,
+    bool& rejected) {
+    try {
+        co_await writer.write("overlap");
+    } catch (const std::logic_error&) {
+        rejected = true;
+    }
+}
+
+ruvia::Task<void> rejectConcurrentStreamEnd(
+    ruvia::ResponseStreamWriter& writer,
+    bool& rejected) {
+    try {
+        co_await writer.end();
+    } catch (const std::logic_error&) {
+        rejected = true;
+    }
+}
+
+ruvia::Task<void> observeStreamWriteFailure(
+    ruvia::ResponseStreamWriter& writer,
+    bool& failed) {
+    try {
+        co_await writer.write("failed");
+    } catch (const std::runtime_error&) {
+        failed = true;
+    }
+}
+
 }  // namespace
 
-RUVIA_TEST(response_stream_writeln_reuses_scratch_without_leaking_previous_chunk) {
+RUVIA_TEST(body_reader_rejects_concurrent_consumers_of_one_borrowed_buffer) {
+    asio::io_context io(1);
+    auto binding =
+        ruvia::detail::BodyReaderBinding<SuspendedBodySource>(io);
+    bool firstCompleted = false;
+    bool secondRejected = false;
+
+    auto first = asio::co_spawn(
+        io,
+        ruvia::detail::taskAsAwaitable(
+            completeBodyRead(binding.facade(), firstCompleted)),
+        asio::use_future);
+    auto second = asio::co_spawn(
+        io,
+        ruvia::detail::taskAsAwaitable(
+            rejectConcurrentBodyRead(binding.facade(), secondRejected)),
+        asio::use_future);
+    asio::post(io, [&binding] { binding.reader().signal.notify(); });
+    io.run();
+    first.get();
+    second.get();
+
+    RUVIA_CHECK(firstCompleted);
+    RUVIA_CHECK(secondRejected);
+}
+
+RUVIA_TEST(response_stream_rejects_overlapping_output_operations) {
+    asio::io_context io(1);
+    SuspendedStreamSink sink(io);
+    auto writer = makeSuspendedWriter(sink);
+    bool firstCompleted = false;
+    bool writeRejected = false;
+    bool endRejected = false;
+    bool failureObserved = false;
+
+    auto first = asio::co_spawn(
+        io,
+        ruvia::detail::taskAsAwaitable(
+            completeStreamWrite(writer, "first", firstCompleted)),
+        asio::use_future);
+    io.poll();
+    RUVIA_CHECK_EQ(sink.writes.size(), std::size_t{1});
+    RUVIA_CHECK(!firstCompleted);
+
+    io.restart();
+    auto overlappingWrite = asio::co_spawn(
+        io,
+        ruvia::detail::taskAsAwaitable(
+            rejectConcurrentStreamWrite(writer, writeRejected)),
+        asio::use_future);
+    auto overlappingEnd = asio::co_spawn(
+        io,
+        ruvia::detail::taskAsAwaitable(
+            rejectConcurrentStreamEnd(writer, endRejected)),
+        asio::use_future);
+    io.poll();
+    overlappingWrite.get();
+    overlappingEnd.get();
+
+    asio::post(io, [&sink] { sink.signal.notify(); });
+    io.restart();
+    io.run();
+    first.get();
+
+    RUVIA_CHECK(firstCompleted);
+    RUVIA_CHECK(writeRejected);
+    RUVIA_CHECK(endRejected);
+    RUVIA_CHECK_EQ(sink.writes.size(), std::size_t{1});
+    RUVIA_CHECK_EQ(sink.ends, std::size_t{0});
+
+    sink.failNextWrite = true;
+    io.restart();
+    auto failing = asio::co_spawn(
+        io,
+        ruvia::detail::taskAsAwaitable(
+            observeStreamWriteFailure(writer, failureObserved)),
+        asio::use_future);
+    io.run();
+    failing.get();
+    RUVIA_CHECK(failureObserved);
+
+    io.restart();
+    auto following = asio::co_spawn(
+        io,
+        ruvia::detail::taskAsAwaitable(
+            completeStreamWrite(writer, "following", firstCompleted)),
+        asio::use_future);
+    io.run();
+    following.get();
+    RUVIA_CHECK_EQ(sink.writes.size(), std::size_t{3});
+    if (sink.writes.size() >= 3) {
+        RUVIA_CHECK_EQ(sink.writes[2], std::string("following"));
+    }
+}
+
+RUVIA_TEST(response_stream_writeln_emits_independent_lines) {
     CaptureStreamSink sink;
     auto writer = makeWriter(sink);
 
@@ -103,6 +454,87 @@ RUVIA_TEST(response_stream_writeln_reuses_scratch_without_leaking_previous_chunk
     RUVIA_CHECK_EQ(sink.writes.size(), std::size_t{2});
     RUVIA_CHECK_EQ(sink.writes[0], std::string("first\n"));
     RUVIA_CHECK_EQ(sink.writes[1], std::string("second\n"));
+}
+
+RUVIA_TEST(response_stream_stored_writeln_operations_own_independent_payloads) {
+    CaptureStreamSink sink;
+    auto writer = makeWriter(sink);
+
+    asio::io_context ctx(1);
+    auto future = asio::co_spawn(
+        ctx,
+        ruvia::detail::taskAsAwaitable(writeStoredLines(writer)),
+        asio::use_future);
+    ctx.run();
+    future.get();
+
+    RUVIA_CHECK_EQ(sink.writes.size(), std::size_t{2});
+    RUVIA_CHECK_EQ(sink.writes[0], std::string("stored-first\n"));
+    RUVIA_CHECK_EQ(sink.writes[1], std::string("stored-second\n"));
+}
+
+RUVIA_TEST(response_stream_cold_operation_rejects_after_capability_teardown) {
+    CaptureStreamSink sink;
+    auto operation = makeExpiredWrite(sink);
+    bool rejected = false;
+
+    asio::io_context ctx(1);
+    auto future = asio::co_spawn(
+        ctx,
+        ruvia::detail::taskAsAwaitable(
+            awaitExpiredWrite(operation, rejected)),
+        asio::use_future);
+    ctx.run();
+    future.get();
+
+    RUVIA_CHECK(rejected);
+    RUVIA_CHECK(sink.writes.empty());
+}
+
+RUVIA_TEST(websocket_stored_operation_owns_temporary_payload) {
+    CaptureWebSocket capture;
+    auto socket = ruvia::detail::WebSocketAccess::make(
+        &capture, &readSocket, &writeSocket, &closeSocket);
+    asio::io_context ctx(1);
+    auto future = asio::co_spawn(
+        ctx,
+        ruvia::detail::taskAsAwaitable(
+            writeStoredTemporaryWebSocketPayload(socket)),
+        asio::use_future);
+    ctx.run();
+    future.get();
+    RUVIA_CHECK_EQ(capture.writes.size(), std::size_t{1});
+    RUVIA_CHECK_EQ(capture.writes[0], std::string("owned-payload"));
+}
+
+RUVIA_TEST(websocket_cold_operation_rejects_after_facade_teardown) {
+    CaptureWebSocket capture;
+    auto operation = makeExpiredWebSocketWrite(capture);
+    bool rejected = false;
+    asio::io_context ctx(1);
+    auto future = asio::co_spawn(
+        ctx,
+        ruvia::detail::taskAsAwaitable(
+            awaitExpiredWrite(operation, rejected)),
+        asio::use_future);
+    ctx.run();
+    future.get();
+    RUVIA_CHECK(rejected);
+    RUVIA_CHECK(capture.writes.empty());
+}
+
+RUVIA_TEST(body_reader_cold_operation_rejects_after_facade_teardown) {
+    auto operation = makeExpiredBodyRead();
+    bool rejected = false;
+    asio::io_context ctx(1);
+    auto future = asio::co_spawn(
+        ctx,
+        ruvia::detail::taskAsAwaitable(
+            awaitExpiredBodyRead(operation, rejected)),
+        asio::use_future);
+    ctx.run();
+    future.get();
+    RUVIA_CHECK(rejected);
 }
 
 RUVIA_TEST(response_stream_end_submits_one_terminal_trailer_section) {
@@ -122,10 +554,26 @@ RUVIA_TEST(response_stream_end_submits_one_terminal_trailer_section) {
     RUVIA_CHECK_EQ(sink.trailers[1], std::string("Server-Timing=db;dur=7"));
 }
 
+RUVIA_TEST(response_stream_stored_end_owns_trailer_names_and_values) {
+    CaptureStreamSink sink;
+    auto writer = makeWriter(sink);
+    asio::io_context ctx(1);
+    auto future = asio::co_spawn(
+        ctx,
+        ruvia::detail::taskAsAwaitable(endWithExpiredTrailerSources(writer)),
+        asio::use_future);
+    ctx.run();
+    future.get();
+    RUVIA_CHECK_EQ(sink.trailers.size(), std::size_t{1});
+    RUVIA_CHECK_EQ(
+        sink.trailers[0],
+        std::string("X-Owned-Trailer=temporary-value"));
+}
+
 namespace {
 
 ruvia::Task<void> writeOneSse(ruvia::SseWriter& sse, ruvia::SseMessage message) {
-    co_await sse.writeSSE(message);
+    co_await sse.write(message);
 }
 
 }  // namespace
@@ -153,11 +601,10 @@ RUVIA_TEST(sse_writer_formats_event_id_retry_and_multiline_data) {
         std::string("event: update\nid: 7\nretry: 3000\ndata: line1\ndata: line2\n\n"));
 }
 
-RUVIA_TEST(sse_writer_omits_data_line_for_empty_data_no_phantom_event) {
-    // WHATWG HTML 9.2.6: a block whose data buffer is empty must NOT dispatch. An
-    // unconditional "data:" line makes the client's data buffer "\n" (non-empty),
-    // so it would strip the trailing LF and fire a phantom empty message event.
-    // An empty-data block must therefore emit no data field at all.
+RUVIA_TEST(sse_writer_distinguishes_absent_and_empty_data) {
+    // WHATWG HTML 9.2.6: a block whose data buffer is empty must NOT dispatch,
+    // while even an empty `data:` field appends LF and makes that buffer
+    // non-empty. The API must preserve that presence distinction.
     const auto render = [](ruvia::SseMessage message) {
         CaptureStreamSink sink;
         auto writer = makeWriter(sink);
@@ -176,9 +623,18 @@ RUVIA_TEST(sse_writer_omits_data_line_for_empty_data_no_phantom_event) {
     RUVIA_CHECK_EQ(render(ruvia::SseMessage{.event = "ping"}), std::string("event: ping\n\n"));
     // A bare block is a no-op keepalive: just the terminating blank line.
     RUVIA_CHECK_EQ(render(ruvia::SseMessage{}), std::string("\n"));
-    // Data present is unaffected: data lines are still emitted.
+    // A present empty data value is an event: the data field first makes the
+    // EventSource data buffer non-empty, then dispatch removes its final LF.
+    RUVIA_CHECK_EQ(
+        render(ruvia::SseMessage{.data = ""}),
+        std::string("data: \n\n"));
+    // A present-but-empty id resets the EventSource last-event-ID buffer.
+    RUVIA_CHECK_EQ(
+        render(ruvia::SseMessage{.id = std::string_view{}}),
+        std::string("id:\n\n"));
+    // Non-empty data is unaffected: data lines are still emitted.
     RUVIA_CHECK_EQ(render(ruvia::SseMessage{.data = "hi"}), std::string("data: hi\n\n"));
-    // No empty-data frame ever carries a "data:" line.
+    // No absent-data frame carries a "data:" line.
     RUVIA_CHECK(render(ruvia::SseMessage{.retry = 1}).find("data:") == std::string::npos);
 }
 
@@ -279,6 +735,43 @@ RUVIA_TEST(sse_writer_rejects_nul_in_id) {
 
 RUVIA_TEST(response_stream_state_drives_typed_post_head_phases) {
     using ruvia::detail::ResponseStreamState;
+    ResponseStreamState bound;
+    CaptureStreamSink opaqueContextStorage;
+    auto* opaqueContext =
+        reinterpret_cast<ruvia::Context*>(&opaqueContextStorage);
+    bound.bindContext(opaqueContext, &unusedStreamingHead);
+    bool rebindRejected = false;
+    try {
+        bound.bindContext(opaqueContext, &unusedStreamingHead);
+    } catch (const std::logic_error&) {
+        rebindRejected = true;
+    }
+    RUVIA_CHECK(rebindRejected);
+    ResponseStreamState detached;
+    detached.bindContext(opaqueContext, &unusedStreamingHead);
+    detached.releaseContext();
+    bool detachedContextRejected = false;
+    try {
+        (void)detached.streamingHead();
+    } catch (const std::logic_error&) {
+        detachedContextRejected = true;
+    }
+    RUVIA_CHECK(detachedContextRejected);
+    bound.markCommitted(ruvia::detail::httpResponseStreamCommitPlan(
+        ruvia::detail::ResponseStreamFraming::kHttp1Chunked,
+        ruvia::HttpKnownMethod::kGet,
+        200,
+        ruvia::detail::ResponseTrailerIntent::kNone));
+    bool committedContextReleased = false;
+    try {
+        (void)bound.streamingHead();
+    } catch (const std::logic_error& error) {
+        committedContextReleased =
+            std::string_view(error.what()) ==
+            "response stream is already committed";
+    }
+    RUVIA_CHECK(committedContextReleased);
+
     // A committed stream that allows a body accepts a chunk before end()...
     ResponseStreamState open;
     open.markCommitted(ruvia::detail::httpResponseStreamCommitPlan(
@@ -315,6 +808,7 @@ RUVIA_TEST(response_stream_state_drives_typed_post_head_phases) {
     // 0\r\n\r\n (HTTP/1.1) or END_STREAM (HTTP/2) and desync the connection, so
     // it must be rejected -- the same way a post-end trailer already is.
     open.markEnded();
+    open.markEnded();  // terminal transition is idempotent
     bool bodyAfterEnd = false;
     try {
         open.ensureBodyAllowed();
@@ -330,6 +824,38 @@ RUVIA_TEST(response_stream_state_drives_typed_post_head_phases) {
         trailerAfterEnd = true;
     }
     RUVIA_CHECK(trailerAfterEnd);
+
+    // Transport failure is a terminal alternative, not a second flag that can
+    // coexist with Ended. A post-commit abort retains the exact wire plan for
+    // dispatch accounting, while an uncommitted abort cannot manufacture one.
+    ResponseStreamState abortedOpen;
+    abortedOpen.markCommitted(ruvia::detail::httpResponseStreamCommitPlan(
+        ruvia::detail::ResponseStreamFraming::kHttp1Chunked,
+        ruvia::HttpKnownMethod::kGet,
+        206,
+        ruvia::detail::ResponseTrailerIntent::kNone));
+    abortedOpen.markAborted();
+    abortedOpen.markAborted();
+    RUVIA_CHECK(abortedOpen.aborted());
+    RUVIA_CHECK(!abortedOpen.ended());
+    RUVIA_CHECK(abortedOpen.committed());
+    RUVIA_CHECK_EQ(
+        abortedOpen.commitPlan()->responseStatus(),
+        std::uint16_t{206});
+    bool endAfterAbort = false;
+    try {
+        abortedOpen.markEnded();
+    } catch (const std::logic_error&) {
+        endAfterAbort = true;
+    }
+    RUVIA_CHECK(endAfterAbort);
+
+    ResponseStreamState abortedBeforeCommit;
+    abortedBeforeCommit.markAborted();
+    RUVIA_CHECK(abortedBeforeCommit.aborted());
+    RUVIA_CHECK(!abortedBeforeCommit.committed());
+    RUVIA_CHECK(!abortedBeforeCommit.ended());
+    RUVIA_CHECK(abortedBeforeCommit.commitPlan() == nullptr);
 
     // A suppressed body (e.g. HEAD, 204 or 304) still rejects a body chunk.
     ResponseStreamState suppressed;
@@ -365,6 +891,55 @@ RUVIA_TEST(response_stream_state_drives_typed_post_head_phases) {
     RUVIA_CHECK(trailersOnlyBodyRejected);
     trailersOnly.ensureTrailersAllowed(
         ruvia::detail::ResponseStreamTrailerFraming::kHttp2TrailingHeaders);
+}
+
+RUVIA_TEST(scoped_capability_move_relinks_and_parent_close_expires_destination) {
+    ruvia::detail::ScopedOperationScope scope;
+    int expiredCount = 0;
+    TestScopedCapability first(scope, expiredCount);
+    TestScopedCapability moved(std::move(first));
+    moved.use();
+    scope.close();
+    RUVIA_CHECK_EQ(expiredCount, 1);
+    bool rejected = false;
+    try {
+        moved.use();
+    } catch (const std::logic_error&) {
+        rejected = true;
+    }
+    RUVIA_CHECK(rejected);
+}
+
+RUVIA_TEST(scoped_capability_copy_relinks_and_early_destruction_unlinks) {
+    int expiredCount = 0;
+    ruvia::detail::ScopedOperationScope scope;
+    TestScopedCapability source(scope, expiredCount);
+    {
+        TestScopedCapability destroyedEarly(source);
+        destroyedEarly.use();
+    }
+    TestScopedCapability survivingCopy(source);
+    scope.close();
+    RUVIA_CHECK_EQ(expiredCount, 2);
+
+    bool sourceRejected = false;
+    try {
+        source.use();
+    } catch (const std::logic_error&) {
+        sourceRejected = true;
+    }
+    RUVIA_CHECK(sourceRejected);
+}
+
+RUVIA_TEST(scoped_operation_parent_close_destroys_cold_frame_immediately) {
+    ruvia::detail::ScopedOperationScope scope;
+    bool destroyed = false;
+    auto operation = ruvia::detail::makeScopedOperation(
+        scope, coldFrameTask(ColdFrameProbe(destroyed)));
+    RUVIA_CHECK(!destroyed);
+    scope.close();
+    RUVIA_CHECK(destroyed);
+    (void)operation;
 }
 
 RUVIA_TEST(response_stream_head_rejects_a_mismatched_status_plan) {

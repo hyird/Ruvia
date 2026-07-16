@@ -1,7 +1,11 @@
 #include "test_harness.h"
 
 #include <array>
+#include <concepts>
+#include <exception>
 #include <string_view>
+#include <type_traits>
+#include <utility>
 
 #include "ruvia/http/detail/server/HttpResponseTrailers.h"
 
@@ -12,6 +16,31 @@ using ruvia::detail::isValidResponseTrailerName;
 using ruvia::detail::isValidResponseTrailerValue;
 using ruvia::detail::responseTrailerFieldValid;
 using ruvia::detail::httpResponseTrailerSection;
+using ruvia::detail::HttpResponseTrailerSectionError;
+using ruvia::detail::HttpResponseTrailerSectionFailure;
+using ruvia::detail::HttpResponseTrailerSectionResult;
+
+template <typename T>
+concept HasAnyRvalueTrailerSectionAccessor =
+    requires(T&& result) { std::move(result).section(); } ||
+    requires(T&& result) { std::move(result).failure(); };
+
+static_assert(!HasAnyRvalueTrailerSectionAccessor<
+    HttpResponseTrailerSectionResult>);
+static_assert(std::derived_from<
+    HttpResponseTrailerSectionError,
+    std::exception>);
+static_assert(std::is_trivially_copyable_v<
+    HttpResponseTrailerSectionResult>);
+static_assert(sizeof(HttpResponseTrailerSectionResult) <= 24);
+
+template <typename T>
+concept HasRawTrailerSectionError = requires(const T& failure) {
+    failure.error();
+};
+
+static_assert(!HasRawTrailerSectionError<
+    HttpResponseTrailerSectionFailure>);
 
 }  // namespace
 
@@ -62,6 +91,29 @@ RUVIA_TEST(response_trailer_forbidden_names) {
     RUVIA_CHECK(isForbiddenResponseTrailerName("Set-Cookie"));
     RUVIA_CHECK(isForbiddenResponseTrailerName("Cache-Control"));
     RUVIA_CHECK(isForbiddenResponseTrailerName("Proxy-Authenticate"));
+    RUVIA_CHECK(isForbiddenResponseTrailerName("Server"));
+    RUVIA_CHECK(isForbiddenResponseTrailerName("Last-Modified"));
+    RUVIA_CHECK(isForbiddenResponseTrailerName("Allow"));
+    RUVIA_CHECK(isForbiddenResponseTrailerName("Access-Control-Allow-Origin"));
+    RUVIA_CHECK(isForbiddenResponseTrailerName("Access-Control-Allow-Credentials"));
+    RUVIA_CHECK(isForbiddenResponseTrailerName("Access-Control-Allow-Methods"));
+    RUVIA_CHECK(isForbiddenResponseTrailerName("Access-Control-Allow-Headers"));
+    RUVIA_CHECK(isForbiddenResponseTrailerName("Access-Control-Max-Age"));
+    RUVIA_CHECK(isForbiddenResponseTrailerName("Access-Control-Expose-Headers"));
+    for (const auto name : {
+             "X-Content-Type-Options",
+             "X-Frame-Options",
+             "Strict-Transport-Security",
+             "X-XSS-Protection",
+             "Content-Security-Policy",
+             "Content-Security-Policy-Report-Only",
+             "Referrer-Policy",
+             "Permissions-Policy",
+             "Clear-Site-Data",
+             "WWW-Authenticate",
+             "Content-Disposition"}) {
+        RUVIA_CHECK(isForbiddenResponseTrailerName(name));
+    }
     // Response control data (RFC 9110 §6.5.1) must be processed before the content
     // and thus cannot be trailered: a recipient may discard trailers, silently
     // dropping the redirect/cache/auth-timing control.
@@ -81,8 +133,9 @@ RUVIA_TEST(response_trailer_forbidden_names) {
     RUVIA_CHECK(isForbiddenResponseTrailerName("retry-after"));
     // An ordinary field is allowed.
     RUVIA_CHECK(!isForbiddenResponseTrailerName("X-Trace-Id"));
-    // Fields that are legitimately computed after the body stay allowed.
+    // RFC 9110 explicitly permits these fields in trailers.
     RUVIA_CHECK(!isForbiddenResponseTrailerName("ETag"));
+    RUVIA_CHECK(!isForbiddenResponseTrailerName("Accept-Ranges"));
     RUVIA_CHECK(!isForbiddenResponseTrailerName("Server-Timing"));
 }
 
@@ -96,6 +149,11 @@ RUVIA_TEST(response_trailer_field_combined_rule) {
     RUVIA_CHECK(!responseTrailerFieldValid("transfer-encoding", "chunked"));
     RUVIA_CHECK(!responseTrailerFieldValid("Content-Type", "text/plain"));
     RUVIA_CHECK(!responseTrailerFieldValid("Set-Cookie", "a=b"));
+    RUVIA_CHECK(!responseTrailerFieldValid("Allow", "GET, POST"));
+    RUVIA_CHECK(!responseTrailerFieldValid(
+        "Access-Control-Allow-Origin",
+        "*"));
+    RUVIA_CHECK(responseTrailerFieldValid("Accept-Ranges", "bytes"));
     // Invalid value.
     RUVIA_CHECK(!responseTrailerFieldValid("X-Trace-Id", std::string_view("a\r\nb", 4)));
 }
@@ -114,7 +172,11 @@ RUVIA_TEST(response_trailer_section_validation_is_all_fields_or_none) {
     const auto mixedResult = httpResponseTrailerSection(mixed);
     RUVIA_CHECK(mixedResult.section() == nullptr);
     RUVIA_CHECK(mixedResult.failure() != nullptr);
+    RUVIA_CHECK_EQ(
+        std::string_view(mixedResult.failure()->exception().what()),
+        std::string_view("invalid HTTP response trailer section"));
     // An empty field sequence is the valid absence of a trailer section; the
     // submission API reports kEmpty separately when asked to submit one.
-    RUVIA_CHECK(httpResponseTrailerSection({}).section() != nullptr);
+    const auto emptyResult = httpResponseTrailerSection({});
+    RUVIA_CHECK(emptyResult.section() != nullptr);
 }

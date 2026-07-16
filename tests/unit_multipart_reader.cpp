@@ -2,6 +2,7 @@
 
 #include <asio/co_spawn.hpp>
 #include <asio/io_context.hpp>
+#include <asio/post.hpp>
 #include <asio/use_future.hpp>
 
 #include <cstddef>
@@ -9,6 +10,7 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <type_traits>
 #include <utility>
 #include <vector>
 
@@ -19,12 +21,23 @@
 
 #include "ruvia/web/detail/body/HttpRequestBodyFacade.h"
 #include "ruvia/core/detail/AsioAwait.h"
+#include "ruvia/core/detail/WorkerSignal.h"
+#include "ruvia/core/detail/WorkerDispatcher.h"
 
 namespace {
 
 using ruvia::BodyReader;
 using ruvia::MultipartReader;
 using ruvia::Task;
+
+static_assert(!std::is_copy_constructible_v<ruvia::MultipartParser>);
+static_assert(!std::is_copy_assignable_v<ruvia::MultipartParser>);
+static_assert(!std::is_move_constructible_v<ruvia::MultipartParser>);
+static_assert(!std::is_move_assignable_v<ruvia::MultipartParser>);
+static_assert(!std::is_copy_constructible_v<MultipartReader>);
+static_assert(!std::is_copy_assignable_v<MultipartReader>);
+static_assert(!std::is_move_constructible_v<MultipartReader>);
+static_assert(!std::is_move_assignable_v<MultipartReader>);
 
 // A BodyReader source that yields a fixed list of chunks, then end-of-body. The
 // chunks vector must outlive the reads (string_views point into it).
@@ -39,6 +52,39 @@ struct ChunkSource final {
         co_return std::nullopt;
     }
 };
+
+struct SuspendedChunkSource final {
+    explicit SuspendedChunkSource(asio::io_context& io)
+        : dispatcher(std::make_shared<ruvia::detail::WorkerDispatcher>(io, 8)),
+          worker(ruvia::detail::WorkerHandleAccess::make(dispatcher)),
+          signal(worker) {}
+
+    Task<std::optional<std::string_view>> read() {
+        co_await signal.wait();
+        co_return std::nullopt;
+    }
+
+    std::shared_ptr<ruvia::detail::WorkerDispatcher> dispatcher;
+    ruvia::WorkerHandle worker;
+    ruvia::detail::WorkerSignal signal;
+};
+
+Task<void> completeMultipartRead(MultipartReader& reader, bool& completed) {
+    try {
+        (void)co_await reader.read();
+    } catch (const ruvia::HttpProtocolError&) {
+        // EOF without an opening boundary is expected after the suspended read.
+    }
+    completed = true;
+}
+
+Task<void> rejectConcurrentMultipartRead(MultipartReader& reader, bool& rejected) {
+    try {
+        (void)co_await reader.read();
+    } catch (const std::logic_error&) {
+        rejected = true;
+    }
+}
 
 struct CollectedPart final {
     std::string name;
@@ -120,6 +166,37 @@ RUVIA_TEST(multipart_reader_parses_parts_from_a_single_chunk) {
     RUVIA_CHECK_EQ(parts[1].filename, std::string("f.txt"));
     RUVIA_CHECK_EQ(parts[1].contentType, std::string("text/plain"));
     RUVIA_CHECK_EQ(parts[1].body, std::string("file content"));
+}
+
+RUVIA_TEST(multipart_reader_rejects_concurrent_consumers) {
+    asio::io_context io(1);
+    SuspendedChunkSource source(io);
+    std::optional<BodyReader> bodyReader;
+    ruvia::detail::emplaceBodyReaderFacade(bodyReader, source);
+    MultipartReader reader(
+        *bodyReader,
+        ruvia::MultipartBoundary("BOUNDARY"),
+        std::pmr::get_default_resource());
+    bool firstCompleted = false;
+    bool secondRejected = false;
+
+    auto first = asio::co_spawn(
+        io,
+        ruvia::detail::taskAsAwaitable(
+            completeMultipartRead(reader, firstCompleted)),
+        asio::use_future);
+    auto second = asio::co_spawn(
+        io,
+        ruvia::detail::taskAsAwaitable(
+            rejectConcurrentMultipartRead(reader, secondRejected)),
+        asio::use_future);
+    asio::post(io, [&source] { source.signal.notify(); });
+    io.run();
+    first.get();
+    second.get();
+
+    RUVIA_CHECK(firstCompleted);
+    RUVIA_CHECK(secondRejected);
 }
 
 RUVIA_TEST(multipart_reader_reassembles_across_chunk_boundaries) {
@@ -372,7 +449,7 @@ RUVIA_TEST(multipart_reader_rejects_invalid_boundary_terminator_without_bufferin
     try {
         future.get();
     } catch (const ruvia::HttpProtocolError& error) {
-        threw = error.status() == 400;
+        threw = error.status() == 413;
     }
     RUVIA_CHECK(threw);
     // Rejected without pulling the large trailing payload chunks. Without the fix the

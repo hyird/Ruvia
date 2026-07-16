@@ -9,6 +9,7 @@
 #include <string_view>
 #include <utility>
 
+#include "ruvia/http/detail/BorrowedView.h"
 #include "ruvia/http/detail/Hex.h"
 #include "ruvia/http/detail/PmrResource.h"
 
@@ -166,5 +167,11 @@ template <typename Visitor>
     });
     return result;
 }
+
+template <HttpTemporaryOwningCharString Input>
+std::optional<std::string_view> findUrlEncodedValue(
+    Input&&,
+    std::string_view,
+    UrlDecodeMode) = delete;
 
 }  // namespace ruvia::detail

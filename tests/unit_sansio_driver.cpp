@@ -16,6 +16,7 @@
 #include <chrono>
 #include <cstdint>
 #include <memory_resource>
+#include <memory>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -47,6 +48,11 @@
 
 namespace {
 
+ruvia::WorkerHandle testWorker(asio::io_context& io) {
+    return ruvia::detail::WorkerHandleAccess::make(
+        std::make_shared<ruvia::detail::WorkerDispatcher>(io, 64));
+}
+
 using asio::ip::tcp;
 using ruvia::detail::Http2Connection;
 using ruvia::detail::Http2DataSubmitStatus;
@@ -68,10 +74,11 @@ ruvia::Task<ruvia::HttpResponse> slowHandler(void* context, ruvia::Context& ctx)
     auto* io = static_cast<asio::io_context*>(context);
     asio::steady_timer timer(*io);
     timer.expires_after(std::chrono::milliseconds(30));
-    const auto waitEc = co_await ruvia::detail::asyncError([&timer](auto handler) mutable {
-        timer.async_wait(std::move(handler));
-    });
-    (void)waitEc;
+    const auto waitCompletion = co_await ruvia::detail::asyncAsio(
+        [&timer](auto handler) mutable {
+            timer.async_wait(std::move(handler));
+        });
+    (void)waitCompletion.errorCode();
     co_return ctx.text("slow");
 }
 
@@ -102,7 +109,7 @@ ruvia::Task<ruvia::HttpResponse> largeBufferedHandler(void*, ruvia::Context&) {
     ruvia::HttpResponse response(std::pmr::get_default_resource());
     response.status(200);
     std::string body(kLargeBufferedBytes, 'Q');
-    response.setBodyCopy(body);
+    response.body(body);
     co_return response;
 }
 
@@ -115,6 +122,34 @@ ruvia::Task<ruvia::HttpResponse> streamBodyCountHandler(void* ctx, ruvia::Contex
     }
     *out = bytes;
     co_return c.text("upload-done");
+}
+
+struct TerminatedBodyObservation final {
+    asio::io_context* io;
+    bool started{false};
+    bool sawTransportError{false};
+    bool handlerFinished{false};
+    bool sessionReturnedAfterHandler{false};
+};
+
+ruvia::Task<ruvia::HttpResponse> terminatedBodyHandler(
+    void* raw,
+    ruvia::Context& context) {
+    auto& observation = *static_cast<TerminatedBodyObservation*>(raw);
+    observation.started = true;
+    try {
+        (void)co_await context.req().bodyReader().read();
+    } catch (const std::system_error& error) {
+        observation.sawTransportError = static_cast<bool>(error.code());
+    }
+    asio::steady_timer completionDelay(*observation.io);
+    completionDelay.expires_after(std::chrono::milliseconds(5));
+    (void)co_await ruvia::detail::asyncAsio(
+        [&completionDelay](auto handler) mutable {
+            completionDelay.async_wait(std::move(handler));
+        });
+    observation.handlerFinished = true;
+    co_return context.text("transport-ended");
 }
 
 // Path + size of the large temp file the pacing test serves (set in the test body).
@@ -145,7 +180,7 @@ ruvia::Task<void> wsEchoHandler(void*, ruvia::Context& ctx) {
     }
 }
 
-// Returns without waiting for peer input so runWebSocketSession initiates the
+// Returns without waiting for peer input so session finalization initiates the
 // server side of the closing handshake.
 ruvia::Task<void> wsServerCloseHandler(void*, ruvia::Context&) {
     co_return;
@@ -191,19 +226,19 @@ RUVIA_TEST(sansio_driver_h2_inactivity_phase_counts_predispatch_runtime) {
 RUVIA_TEST(sansio_driver_h2_session_context_owns_complete_wiring) {
     ruvia::detail::HttpServerOptions options;
     ruvia::detail::ConnectionScanner::Entry scannerEntry;
-    bool workerRunning = true;
+    auto workerState = ruvia::detail::HttpServerWorkerState::kRunning;
     const ruvia::detail::Http2SansIoSessionContext session(
         ruvia::detail::ContextServices{}.withTlsTransport(
             "192.0.2.1",
             "CN=test-client"),
         options,
         scannerEntry,
-        workerRunning);
+        workerState);
 
     RUVIA_CHECK(&session.options() == &options);
     RUVIA_CHECK(&session.scannerEntry() == &scannerEntry);
     RUVIA_CHECK(session.workerRunning());
-    workerRunning = false;
+    workerState = ruvia::detail::HttpServerWorkerState::kDraining;
     RUVIA_CHECK(!session.workerRunning());
     const auto& services = session.services();
     RUVIA_CHECK(
@@ -246,19 +281,18 @@ RUVIA_TEST(sansio_driver_h2_get_round_trip) {
                         const auto streamId = messageEnd->streamId();
                         ruvia::HttpResponse response(&resource);
                         response.status(200);
-                        response.setBodyCopy("pong");
+                        response.body("pong");
                         const auto* stream = c.stream(streamId);
                         RUVIA_CHECK(stream != nullptr);
-                        RUVIA_CHECK(
-                            c.submitResponseHead(
-                                streamId,
-                                response,
-                                ruvia::detail::httpBufferedResponseWritePlan(
-                                    stream == nullptr
-                                        ? ruvia::HttpKnownMethod::kUnknown
-                                        : stream->requestKnownMethod(),
-                                    response)).submitted() !=
-                            nullptr);
+                        const auto submittedHead = c.submitResponseHead(
+                            streamId,
+                            response,
+                            ruvia::detail::httpBufferedResponseWritePlan(
+                                stream == nullptr
+                                    ? ruvia::HttpKnownMethod::kUnknown
+                                    : stream->requestKnownMethod(),
+                                response));
+                        RUVIA_CHECK(submittedHead.submitted() != nullptr);
                         RUVIA_CHECK(c.submitData(
                             streamId, "pong", Http2EndStream::kEndStream) ==
                             Http2DataSubmitStatus::kAccepted);
@@ -605,7 +639,7 @@ RUVIA_TEST(sansio_driver_h2_concurrent_streams_multiplex) {
 // client opens a tunnel to a registered WebSocket echo route, sends a masked text
 // frame as HTTP/2 DATA, and must get the unmasked echo back; a client Close is then
 // answered with the server's Close carrying END_STREAM. Proves the per-stream inbound
-// pipe + Http2SansIoWsTransport + the shared runWebSocketSession over the core.
+// pipe + Http2SansIoWsTransport + the shared session finalization over the core.
 RUVIA_TEST(sansio_driver_h2_websocket_echo) {
     asio::io_context io;
     tcp::acceptor acceptor(io, tcp::endpoint(asio::ip::make_address("127.0.0.1"), 0));
@@ -1047,6 +1081,7 @@ RUVIA_TEST(sansio_driver_h2_expectation_decision_precedes_request_content) {
                 std::span<const ruvia::detail::ControllerMiddlewareDescriptor>{});
             impl.finalize();
             ruvia::test::Http2SansIoSessionFixture fixture;
+            const auto workerHandle = testWorker(io);
             fixture.options.accessLog.callback =
                 ruvia::AccessLogCallback::bind(accessObservation);
             co_await ruvia::detail::taskAsAwaitable(
@@ -1056,7 +1091,8 @@ RUVIA_TEST(sansio_driver_h2_expectation_decision_precedes_request_content) {
                     worker,
                     fixture.context(
                         ruvia::detail::ContextServices{}
-                            .withPlainTransport("127.0.0.1"))));
+                            .withPlainTransport("127.0.0.1")
+                            .withWorker(workerHandle))));
         },
         asio::detached);
 
@@ -1235,6 +1271,7 @@ RUVIA_TEST(sansio_driver_h2_buffered_access_uses_only_committed_plan_status) {
             impl.finalize();
 
             ruvia::test::Http2SansIoSessionFixture fixture;
+            const auto workerHandle = testWorker(io);
             fixture.options.accessLog.callback =
                 ruvia::AccessLogCallback::bind(accessObservation);
             co_await ruvia::detail::taskAsAwaitable(
@@ -1244,7 +1281,8 @@ RUVIA_TEST(sansio_driver_h2_buffered_access_uses_only_committed_plan_status) {
                     worker,
                     fixture.context(
                         ruvia::detail::ContextServices{}
-                            .withPlainTransport("127.0.0.1"))));
+                            .withPlainTransport("127.0.0.1")
+                            .withWorker(workerHandle))));
         },
         asio::detached);
 
@@ -1380,6 +1418,7 @@ RUVIA_TEST(sansio_driver_h2_buffered_peer_abort_before_commit_has_no_status) {
                 std::span<const ruvia::detail::ControllerMiddlewareDescriptor>{});
             impl.finalize();
             ruvia::test::Http2SansIoSessionFixture fixture;
+            const auto workerHandle = testWorker(io);
             fixture.options.accessLog.callback =
                 ruvia::AccessLogCallback::bind(accessObservation);
             co_await ruvia::detail::taskAsAwaitable(
@@ -1389,7 +1428,8 @@ RUVIA_TEST(sansio_driver_h2_buffered_peer_abort_before_commit_has_no_status) {
                     worker,
                     fixture.context(
                         ruvia::detail::ContextServices{}
-                            .withPlainTransport("127.0.0.1"))));
+                            .withPlainTransport("127.0.0.1")
+                            .withWorker(workerHandle))));
         },
         asio::detached);
 
@@ -1474,6 +1514,7 @@ RUVIA_TEST(sansio_driver_h2_stream_trailers_emitted) {
                 std::span<const ruvia::detail::ControllerMiddlewareDescriptor>{});
             impl.finalize();
             ruvia::test::Http2SansIoSessionFixture fixture;
+            const auto workerHandle = testWorker(io);
             fixture.options.accessLog.callback =
                 ruvia::AccessLogCallback::bind(accessObservation);
             co_await ruvia::detail::taskAsAwaitable(
@@ -1483,7 +1524,8 @@ RUVIA_TEST(sansio_driver_h2_stream_trailers_emitted) {
                     worker,
                     fixture.context(
                         ruvia::detail::ContextServices{}
-                            .withPlainTransport("127.0.0.1"))));
+                            .withPlainTransport("127.0.0.1")
+                            .withWorker(workerHandle))));
         },
         asio::detached);
 
@@ -2007,6 +2049,93 @@ RUVIA_TEST(sansio_driver_h2_streaming_request_body) {
     RUVIA_CHECK(body == "upload-done");
 }
 
+RUVIA_TEST(sansio_driver_h2_transport_end_is_error_and_joins_handler) {
+    asio::io_context io;
+    tcp::acceptor acceptor(
+        io, tcp::endpoint(asio::ip::make_address("127.0.0.1"), 0));
+    const std::uint16_t port = acceptor.local_endpoint().port();
+    TerminatedBodyObservation observation{.io = &io};
+
+    asio::co_spawn(
+        io,
+        [&]() -> asio::awaitable<void> {
+            auto sock = co_await acceptor.async_accept(asio::use_awaitable);
+            ruvia::WorkerMemory worker;
+            ruvia::Router router;
+            auto& impl = ruvia::detail::RouterImpl::from(router);
+            impl.registerRoute(
+                ruvia::HttpKnownMethod::kPost,
+                std::pmr::string(
+                    "/upload", std::pmr::get_default_resource()),
+                ruvia::detail::RouteHandler(
+                    &observation, &terminatedBodyHandler),
+                ruvia::detail::RequestBodyMode::kStream,
+                std::span<const ruvia::detail::ControllerMiddlewareDescriptor>{},
+                std::span<const ruvia::detail::ControllerMiddlewareDescriptor>{});
+            impl.finalize();
+            co_await ruvia::detail::taskAsAwaitable(
+                ruvia::test::runBarePlainHttp2SansIoSession(
+                    sock,
+                    impl.routeTable(),
+                    worker,
+                    "127.0.0.1"));
+            observation.sessionReturnedAfterHandler =
+                observation.handlerFinished;
+        },
+        asio::detached);
+
+    asio::co_spawn(
+        io,
+        [&]() -> asio::awaitable<void> {
+            tcp::socket sock(io);
+            co_await sock.async_connect(
+                tcp::endpoint(
+                    asio::ip::make_address("127.0.0.1"), port),
+                asio::use_awaitable);
+            const auto writeAll = [&sock](
+                std::string_view bytes) -> asio::awaitable<bool> {
+                const auto [ec, count] = co_await asio::async_write(
+                    sock,
+                    asio::buffer(bytes.data(), bytes.size()),
+                    asio::as_tuple(asio::use_awaitable));
+                co_return !ec && count == bytes.size();
+            };
+            if (!co_await writeAll(kClientPreface) ||
+                !co_await writeAll(frame(0x4, 0, 0, {}))) {
+                co_return;
+            }
+            std::pmr::string headerBlock(
+                std::pmr::get_default_resource());
+            HpackEncoder::encodeHeader(headerBlock, ":method", "POST");
+            HpackEncoder::encodeHeader(headerBlock, ":path", "/upload");
+            HpackEncoder::encodeHeader(headerBlock, ":scheme", "http");
+            HpackEncoder::encodeHeader(
+                headerBlock, ":authority", "localhost");
+            if (!co_await writeAll(frame(
+                    0x1,
+                    ruvia::detail::kHttp2FlagEndHeaders,
+                    1,
+                    std::string_view(
+                        headerBlock.data(), headerBlock.size())))) {
+                co_return;
+            }
+            while (!observation.started) {
+                asio::steady_timer yield(io);
+                yield.expires_after(std::chrono::milliseconds(1));
+                (void)co_await yield.async_wait(
+                    asio::as_tuple(asio::use_awaitable));
+            }
+            std::error_code ignored;
+            sock.close(ignored);
+        },
+        asio::detached);
+
+    io.run();
+    RUVIA_CHECK(observation.sawTransportError);
+    RUVIA_CHECK(observation.handlerFinished);
+    RUVIA_CHECK(observation.sessionReturnedAfterHandler);
+}
+
 // P2 coverage: a server-role request framed with trailers (DATA then a trailing
 // HEADERS with END_STREAM, gRPC-style) must dispatch normally. Guards the
 // processTrailerHeaders server path (client-role trailers were the only coverage).
@@ -2328,13 +2457,16 @@ RUVIA_TEST(sansio_driver_h2_keepalive_requests_drains_connection) {
                 std::span<const ruvia::detail::ControllerMiddlewareDescriptor>{});
             impl.finalize();
             ruvia::test::Http2SansIoSessionFixture fixture;
+            const auto workerHandle = testWorker(io);
             fixture.options.keepaliveRequests = 1;
             co_await ruvia::detail::taskAsAwaitable(ruvia::detail::runHttp2SansIoSession(
                 sock,
                 impl.routeTable(),
                 worker,
                 fixture.context(
-                    ruvia::detail::ContextServices{}.withPlainTransport("127.0.0.1"))));
+                    ruvia::detail::ContextServices{}
+                        .withPlainTransport("127.0.0.1")
+                        .withWorker(workerHandle))));
         },
         asio::detached);
 

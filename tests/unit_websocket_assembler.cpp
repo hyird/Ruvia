@@ -28,9 +28,22 @@ using ruvia::detail::webSocketProtocolFailureCloseCode;
 WebSocketFrameView frame(
     WebSocketOpcode opcode, std::string_view payload, bool fin,
     bool continuation = false, bool rsv1 = false) {
-    return WebSocketFrameView{
-        .opcode = opcode, .payload = payload, .fin = fin,
-        .continuation = continuation, .rsv1 = rsv1};
+    if (continuation) {
+        return WebSocketFrameView::continuation(payload, fin);
+    }
+    switch (opcode) {
+        case WebSocketOpcode::kText:
+            return WebSocketFrameView::text(payload, fin, rsv1);
+        case WebSocketOpcode::kBinary:
+            return WebSocketFrameView::binary(payload, fin, rsv1);
+        case WebSocketOpcode::kClose:
+            return *WebSocketFrameView::close(payload);
+        case WebSocketOpcode::kPing:
+            return *WebSocketFrameView::ping(payload);
+        case WebSocketOpcode::kPong:
+            return *WebSocketFrameView::pong(payload);
+    }
+    return WebSocketFrameView::text(payload, fin, rsv1);
 }
 
 ProtocolByteLimit byteLimit(std::size_t bytes) {
@@ -70,6 +83,13 @@ concept HasInboundContentEncoding = requires(const T& result) {
         std::same_as<WebSocketInboundContentEncoding>;
 };
 
+template <typename T>
+concept HasAnyRvalueInboundAccessor =
+    requires(T&& result) { std::move(result).continueReading(); } ||
+    requires(T&& result) { std::move(result).controlFrame(); } ||
+    requires(T&& result) { std::move(result).message(); } ||
+    requires(T&& result) { std::move(result).failure(); };
+
 static_assert(!std::default_initializable<WebSocketInboundResult>);
 static_assert(std::same_as<
     decltype(std::declval<const WebSocketInboundResult&>().continueReading()),
@@ -85,6 +105,7 @@ static_assert(std::same_as<
     const ruvia::detail::WebSocketInboundFailure*>);
 static_assert(!HasInboundAction<WebSocketInboundResult>);
 static_assert(!HasInboundError<WebSocketInboundResult>);
+static_assert(!HasAnyRvalueInboundAccessor<WebSocketInboundResult>);
 static_assert(HasInboundOpcode<ruvia::detail::WebSocketInboundControlFrame>);
 static_assert(!HasInboundContentEncoding<
     ruvia::detail::WebSocketInboundControlFrame>);
@@ -93,6 +114,12 @@ static_assert(HasInboundContentEncoding<
     ruvia::detail::WebSocketInboundMessage>);
 static_assert(!HasInboundError<ruvia::detail::WebSocketInboundMessage>);
 static_assert(HasInboundError<ruvia::detail::WebSocketInboundFailure>);
+static_assert(std::same_as<
+    decltype(std::declval<const ruvia::detail::WebSocketInboundFragmented&>().opcode()),
+    WebSocketOpcode>);
+static_assert(std::same_as<
+    decltype(std::declval<const ruvia::detail::WebSocketInboundFragmented&>().encoding()),
+    WebSocketInboundContentEncoding>);
 
 }  // namespace
 

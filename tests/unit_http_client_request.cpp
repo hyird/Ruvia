@@ -4,10 +4,12 @@
 #include <array>
 #include <concepts>
 #include <cstddef>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <string_view>
 #include <type_traits>
+#include <utility>
 
 #include "ruvia/http/Http1ClientRequestWriter.h"
 #include "ruvia/http/Http1ClientResponseParser.h"
@@ -17,12 +19,90 @@ namespace {
 
 using ruvia::Http1ClientRequestClosePolicy;
 using ruvia::Http1ClientRequestPrepareError;
-using ruvia::Http1ClientRequestPrepareKind;
 using ruvia::Http1ClientRequestWirePolicy;
 using ruvia::Http1ClientRequestWriter;
 using ruvia::HttpClientRequest;
 using ruvia::HttpClientRequestContent;
 using ruvia::HttpOrigin;
+
+static_assert(std::same_as<
+    decltype(std::declval<const ruvia::detail::Http1ClientRequestContext&>()
+        .connectionOptions()),
+    ruvia::detail::HttpConnectionOptions>);
+static_assert(std::same_as<
+    decltype(std::declval<const ruvia::detail::Http1ClientRequestContext&&>()
+        .connectionOptions()),
+    ruvia::detail::HttpConnectionOptions>);
+
+template <typename T>
+concept HasAnyRvalueHttpClientRequestContentAccessor =
+    requires(T&& content) { std::move(content).withoutContent(); } ||
+    requires(T&& content) { std::move(content).borrowedBytes(); };
+
+template <typename T>
+concept HasAnyRvalueHttp1ClientRequestWirePolicyAccessor =
+    requires(T&& policy) { std::move(policy).noExpectation(); } ||
+    requires(T&& policy) { std::move(policy).continueExpectation(); };
+
+template <typename T>
+concept HasAnyRvalueHttp1ClientRequestContentPlanAccessor =
+    requires(T&& plan) { std::move(plan).withoutContent(); } ||
+    requires(T&& plan) { std::move(plan).immediate(); } ||
+    requires(T&& plan) { std::move(plan).continueGated(); };
+
+template <typename T>
+concept HasAnyRvalueHttp1ClientRequestPrepareAccessor =
+    requires(T&& result) { std::move(result).bufferTooSmall(); } ||
+    requires(T&& result) { std::move(result).prepared(); } ||
+    requires(T&& result) { std::move(result).failure(); };
+
+template <typename T>
+concept HasRvaluePreparedHttp1ClientRequestContentPlan =
+    requires(T&& prepared) { std::move(prepared).contentPlan(); };
+
+template <typename String>
+concept AcceptsAnyTemporaryHttpClientRequestText =
+    requires(String&& value) {
+        HttpClientRequest{.method = std::forward<String>(value)};
+    } ||
+    requires(String&& value) {
+        HttpClientRequest{.target = std::forward<String>(value)};
+    } ||
+    requires(HttpClientRequest& request, String&& value) {
+        request.method = std::forward<String>(value);
+    } ||
+    requires(HttpClientRequest& request, String&& value) {
+        request.target = std::forward<String>(value);
+    };
+
+template <typename String>
+concept AcceptsLvalueHttpClientRequestText =
+    requires(HttpClientRequest& request, String& value) {
+        HttpClientRequest{.method = value, .target = value};
+        request.method = value;
+        request.target = value;
+    };
+
+static_assert(!HasAnyRvalueHttp1ClientRequestPrepareAccessor<
+    ruvia::Http1ClientRequestPrepareResult>);
+static_assert(!HasAnyRvalueHttpClientRequestContentAccessor<
+    ruvia::HttpClientRequestContent>);
+static_assert(!HasAnyRvalueHttp1ClientRequestWirePolicyAccessor<
+    ruvia::Http1ClientRequestWirePolicy>);
+static_assert(!HasAnyRvalueHttp1ClientRequestContentPlanAccessor<
+    ruvia::Http1ClientRequestContentPlan>);
+static_assert(!HasRvaluePreparedHttp1ClientRequestContentPlan<
+    ruvia::PreparedHttp1ClientRequest>);
+static_assert(!AcceptsAnyTemporaryHttpClientRequestText<std::string>);
+static_assert(!AcceptsAnyTemporaryHttpClientRequestText<const std::string>);
+static_assert(!AcceptsAnyTemporaryHttpClientRequestText<std::pmr::string>);
+static_assert(AcceptsLvalueHttpClientRequestText<std::string>);
+static_assert(!std::is_constructible_v<
+    HttpClientRequest::HeaderInit,
+    std::array<ruvia::HttpHeaderView, 1>&&>);
+static_assert(!std::is_assignable_v<
+    HttpClientRequest::HeaderInit&,
+    std::array<ruvia::HttpHeaderView, 1>&&>);
 
 template <typename T>
 concept HasRequestContentMode = requires(const T& content) {
@@ -120,7 +200,6 @@ RUVIA_TEST(http1_client_request_writer_emits_one_canonical_scatter_gather_plan) 
         request,
         Http1ClientRequestWirePolicy::expectContinue());
     const auto* prepared = fixture.result.prepared();
-    RUVIA_CHECK(fixture.result.kind() == Http1ClientRequestPrepareKind::kPrepared);
     RUVIA_CHECK(prepared != nullptr);
     if (prepared == nullptr) {
         return;
@@ -311,16 +390,85 @@ RUVIA_TEST(http1_client_request_writer_owns_hop_by_hop_field_contracts) {
         RUVIA_CHECK(prepareError(request) == test.error);
     }
 
+    for (const std::string_view connectionOptions : {
+             "Host",
+             "close, content-length",
+             "EXPECT, keep-alive",
+             "Cache-Control",
+             "Trailer"}) {
+        const ruvia::HttpHeaderView connection(
+            "Connection", connectionOptions);
+        HttpClientRequest request;
+        request.method = "POST";
+        request.headers = std::span<const ruvia::HttpHeaderView>(&connection, 1);
+        request.content = HttpClientRequestContent::bytes("payload");
+        RUVIA_CHECK(
+            prepareError(request) ==
+            Http1ClientRequestPrepareError::kInvalidConnection);
+    }
+
     const ruvia::HttpHeaderView validHeaders[] = {
         {"Connection", "keep-alive"},
-        {"Connection", "Upgrade, TE"},
+        {"Connection", "Upgrade, TE, X-Hop"},
         {"Upgrade", "custom/1, websocket"},
         {"TE", "trailers"},
+        {"X-Hop", "value"},
     };
     HttpClientRequest valid;
     valid.headers = validHeaders;
     PreparedFixture fixture(HttpOrigin::https("example.test"), valid);
     RUVIA_CHECK(fixture.result.prepared() != nullptr);
+}
+
+RUVIA_TEST(http1_client_request_writer_validates_te_capabilities_and_weights) {
+    const auto prepareWithTe = [&ruvia_ctx](std::string_view value)
+        -> std::optional<Http1ClientRequestPrepareError> {
+        const std::array headers{
+            ruvia::HttpHeaderView("Connection", "TE"),
+            ruvia::HttpHeaderView("TE", value),
+        };
+        HttpClientRequest request;
+        request.headers = headers;
+        std::array<char, 512> buffer;
+        const auto result = Http1ClientRequestWriter().prepare(
+            HttpOrigin::https("example.test"), request, buffer);
+        if (const auto* failure = result.failure()) {
+            return failure->error();
+        }
+        RUVIA_CHECK(result.prepared() != nullptr);
+        return std::nullopt;
+    };
+
+    for (const std::string_view valid : {
+             "",
+             "trailers",
+             "gzip",
+             "deflate;q=0.5",
+             "x-gzip ; q=1.000",
+             "gzip;q=0, trailers"}) {
+        RUVIA_CHECK(!prepareWithTe(valid).has_value());
+    }
+
+    for (const std::string_view invalid : {
+             ",trailers",
+             "trailers,",
+             "trailers,,gzip",
+             "chunked",
+             "br",
+             "trailers;q=0.5",
+             "gzip;q=1.001",
+             "gzip;q=\"0.5\"",
+             "gzip;q =0.5",
+             "gzip;q= 0.5",
+             "gzip; q = 0.5",
+             "gzip;level=1",
+             "gzip;q=0.5;level=1",
+             "gzip; q",
+             "gzip;q="}) {
+        RUVIA_CHECK(
+            prepareWithTe(invalid) ==
+            Http1ClientRequestPrepareError::kInvalidHeader);
+    }
 }
 
 RUVIA_TEST(http1_client_request_writer_enforces_expect_content_semantics) {
@@ -390,6 +538,14 @@ RUVIA_TEST(http1_client_request_writer_enforces_method_content_semantics) {
         prepareError(options) ==
         Http1ClientRequestPrepareError::kOptionsContentTypeRequired);
 
+    // Content-Length signals request content even when its value is zero. An
+    // explicitly empty OPTIONS representation therefore has the same mandatory
+    // Content-Type contract as a non-empty one.
+    options.content = HttpClientRequestContent::bytes("");
+    RUVIA_CHECK(
+        prepareError(options) ==
+        Http1ClientRequestPrepareError::kOptionsContentTypeRequired);
+
     const ruvia::HttpHeaderView contentType("Content-Type", "application/json");
     options.headers = std::span<const ruvia::HttpHeaderView>(&contentType, 1);
     PreparedFixture fixture(HttpOrigin::https("example.test"), options);
@@ -402,6 +558,34 @@ RUVIA_TEST(http1_client_request_writer_enforces_method_content_semantics) {
         Http1ClientRequestPrepareError::kInvalidHeader);
 }
 
+RUVIA_TEST(http1_client_request_writer_rejects_invalid_content_type_parameters) {
+    for (const std::string_view value : {
+             "text/plain; charset",
+             "text/plain; charset=",
+             "text/plain; charset =utf-8",
+             "text/plain; charset=utf-8; CHARSET=latin1",
+             "text/plain; charset=\"unterminated"}) {
+        const ruvia::HttpHeaderView contentType("Content-Type", value);
+        HttpClientRequest request;
+        request.method = "POST";
+        request.headers = std::span<const ruvia::HttpHeaderView>(&contentType, 1);
+        request.content = HttpClientRequestContent::bytes("body");
+        RUVIA_CHECK(
+            prepareError(request) ==
+            Http1ClientRequestPrepareError::kInvalidHeader);
+    }
+
+    const ruvia::HttpHeaderView validContentType(
+        "Content-Type", "text/plain; charset=\"utf-8\"");
+    HttpClientRequest valid;
+    valid.method = "POST";
+    valid.headers =
+        std::span<const ruvia::HttpHeaderView>(&validContentType, 1);
+    valid.content = HttpClientRequestContent::bytes("body");
+    PreparedFixture fixture(HttpOrigin::https("example.test"), valid);
+    RUVIA_CHECK(fixture.result.prepared() != nullptr);
+}
+
 RUVIA_TEST(http1_client_request_writer_returns_exact_buffer_requirement_without_partial_output) {
     HttpClientRequest request;
     request.method = "POST";
@@ -412,8 +596,6 @@ RUVIA_TEST(http1_client_request_writer_returns_exact_buffer_requirement_without_
     small.fill('z');
     const auto tooSmall = Http1ClientRequestWriter().prepare(
         HttpOrigin::https("example.test"), request, small);
-    RUVIA_CHECK(
-        tooSmall.kind() == Http1ClientRequestPrepareKind::kBufferTooSmall);
     RUVIA_CHECK(tooSmall.bufferTooSmall() != nullptr);
     RUVIA_CHECK(std::ranges::all_of(small, [](char value) { return value == 'z'; }));
 

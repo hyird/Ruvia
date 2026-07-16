@@ -3,31 +3,35 @@
 namespace ruvia::detail {
 
 [[noreturn]] inline void throwRequestBodyTooLarge() {
-    throw HttpProtocolError(413, "request body is too large");
+    throw HttpRequestBodyFailure::tooLarge().protocolError();
 }
 
 [[noreturn]] inline void throwIncompleteRequestBody() {
-    throw HttpProtocolError(400, "incomplete request body");
+    throw HttpRequestBodyFailure::incomplete().protocolError();
 }
 
-[[noreturn]] inline void throwTransferCodingDecodeFailure(
-    TransferCodingDecodeError error) {
-    switch (error) {
-        case TransferCodingDecodeError::kInvalidContent:
-            throw HttpProtocolError(400, "invalid transfer-coding body");
-        case TransferCodingDecodeError::kDecodedSizeExceeded:
-            throwRequestBodyTooLarge();
-        case TransferCodingDecodeError::kDecoderFailure:
-            throw std::runtime_error("transfer-coding decoder failure");
-    }
+[[noreturn]] inline void throwTransferCodingProtocolFailure(
+    const TransferCodingDecodeProtocolFailure& failure) {
+    throw failure.protocolError();
+}
+
+[[noreturn]] inline void throwTransferCodingDecoderFailure() {
     throw std::runtime_error("transfer-coding decoder failure");
 }
 
 inline void requireCompleteTransferCoding(
     TransferCodingDecoder& decoder) {
-    if (decoder.finishInput().complete() == nullptr) {
-        throw HttpProtocolError(400, "incomplete transfer-coding body");
+    const auto finishResult = decoder.finishInput();
+    if (finishResult.complete() != nullptr) {
+        return;
     }
+    if (const auto* failure = finishResult.protocolFailure()) {
+        throwTransferCodingProtocolFailure(*failure);
+    }
+    if (finishResult.decoderFailure() != nullptr) {
+        throwTransferCodingDecoderFailure();
+    }
+    throw std::logic_error("unexpected transfer-coding finish result");
 }
 
 template <typename Stream>
@@ -41,7 +45,9 @@ StreamBodyReader<Stream>::StreamBodyReader(
     : stream_(stream),
       buffer_(allocator),
       transferOutput_(allocator),
-      transferDecoderAllocator_(allocator.resource()),
+      transferDecoder_(
+          nullptr,
+          PmrObjectDeleter<TransferCodingDecoder>{allocator.resource()}),
       initialBodyAndPipeline_(initialBodyAndPipeline),
       bodyPlan_(bodyPlan),
       bodyLimit_(bodyLimit),
@@ -50,26 +56,11 @@ StreamBodyReader<Stream>::StreamBodyReader(
       finished_(!bodyPlan_.requiresConsumption()) {
     const auto* chunked = bodyPlan_.chunked();
     if (chunked != nullptr && !chunked->transferCodings().empty()) {
-        transferDecoder_ = transferDecoderAllocator_.allocate(1);
-        try {
-            std::construct_at(
-                transferDecoder_,
-                chunked->transferCodings().values[0],
-                allocator.resource(),
-                bodyLimit);
-        } catch (...) {
-            transferDecoderAllocator_.deallocate(transferDecoder_, 1);
-            transferDecoder_ = nullptr;
-            throw;
-        }
-    }
-}
-
-template <typename Stream>
-StreamBodyReader<Stream>::~StreamBodyReader() {
-    if (transferDecoder_ != nullptr) {
-        std::destroy_at(transferDecoder_);
-        transferDecoderAllocator_.deallocate(transferDecoder_, 1);
+        transferDecoder_ = makePmrObject<TransferCodingDecoder>(
+            allocator.resource(),
+            chunked->transferCodings().values[0],
+            allocator.resource(),
+            bodyLimit);
     }
 }
 
@@ -81,9 +72,17 @@ Http1RequestBodyConsumption StreamBodyReader<Stream>::consumption() const noexce
 }
 
 template <typename Stream>
-void StreamBodyReader<Stream>::restorePipeline(std::pmr::string& readBuffer, std::size_t& usedBytes) {
+void StreamBodyReader<Stream>::takePipeline(std::pmr::string& stash) {
     compactPending();
-    restorePipelineBytes(readBuffer, usedBytes, initialPipelineRemainder(), bufferedPipelineRemainder());
+    // The remainder is split across at most two places: the bytes still sitting
+    // in the connection read buffer behind the body, and the bytes this reader
+    // over-read from the socket into its own buffer. Neither aliases `stash`.
+    const auto initialPipeline = initialPipelineRemainder();
+    const auto bufferedPipeline = bufferedPipelineRemainder();
+    stash.clear();
+    stash.reserve(initialPipeline.size() + bufferedPipeline.size());
+    stash.append(initialPipeline);
+    stash.append(bufferedPipeline);
     resetPipelineState();
 }
 
@@ -153,8 +152,11 @@ void StreamBodyReader<Stream>::decodeTransferAppend(
             continue;
         }
         target.resize(oldSize);
-        if (const auto* failure = result.failure()) {
-            throwTransferCodingDecodeFailure(failure->error());
+        if (const auto* failure = result.protocolFailure()) {
+            throwTransferCodingProtocolFailure(*failure);
+        }
+        if (result.decoderFailure() != nullptr) {
+            throwTransferCodingDecoderFailure();
         }
         if (result.complete() != nullptr) {
             return;
@@ -168,9 +170,9 @@ void StreamBodyReader<Stream>::decodeTransferAppend(
 
 template <typename Stream>
 Task<void> StreamBodyReader<Stream>::ensureContinue() {
-    if (bodyPlan_.expectationAction() ==
-            HttpServerExpectationAction::kSend100Continue &&
-        !continueSent_) {
+    const auto expectationPlan = bodyPlan_.expectationPlan(
+        HttpUnsupportedExpectationPolicy::kReject);
+    if (expectationPlan.send100Continue() != nullptr && !continueSent_) {
         co_await writeHttp1Continue(stream_);
         continueSent_ = true;
     }
@@ -198,12 +200,14 @@ Task<void> StreamBodyReader<Stream>::readMore() {
     resizePmrStringForOverwrite(buffer_, oldSize + writable);
 
     scannerEntry_.setPhase(ConnectionScanner::Phase::kReadingPayload);
-    const auto [ec, bytesRead] = co_await asyncResult<std::size_t>(
+    auto readCompletion = co_await asyncAsio<std::size_t>(
         [this, oldSize, writable](auto handler) mutable {
             stream_.async_read_some(
                 asio::buffer(buffer_.data() + oldSize, writable),
                 std::move(handler));
         });
+    const auto ec = readCompletion.errorCode();
+    const auto bytesRead = readCompletion.result();
     if (ec || bytesRead == 0) {
         throwIncompleteRequestBody();
     }

@@ -2,11 +2,11 @@
 
 #include <cstddef>
 #include <ctime>
-#include <filesystem>
 #include <memory_resource>
 #include <string>
 #include <string_view>
 
+#include "ruvia/http/detail/HttpConditionalRequest.h"
 #include "ruvia/http/detail/HttpDate.h"
 #include "ruvia/http/detail/HttpEntityTag.h"
 #include "ruvia/http/detail/HttpImfFixdate.h"
@@ -20,16 +20,58 @@ std::string formatDate(std::time_t time) {
     return std::string(out.data(), out.size());
 }
 
-std::string fileEtag(std::uint64_t size, std::filesystem::file_time_type::duration ticks) {
-    const auto out = ruvia::detail::makeStaticFileEtag(
-        std::pmr::get_default_resource(), size, std::filesystem::file_time_type{ticks});
+std::string fileEtag(
+    std::uint64_t size,
+    std::uint64_t modifiedToken,
+    ruvia::detail::ResponseFileIdentity identity) {
+    const auto out = ruvia::detail::makeStaticFileSnapshotEtag(
+        std::pmr::get_default_resource(), size, modifiedToken, identity);
     return std::string(out.data(), out.size());
 }
 
 }  // namespace
 
 // ETag comparison and IMF-fixdate parsing back the conditional-request handling
-// (If-Match / If-None-Match / If-Range, RFC 7232) for static file responses.
+// (If-Match / If-None-Match / If-Range, RFC 9110) for static file responses.
+
+RUVIA_TEST(conditional_method_plan_follows_precondition_and_range_semantics) {
+    using ruvia::detail::httpConditionalMethodPlan;
+
+    const auto get = httpConditionalMethodPlan(ruvia::HttpKnownMethod::kGet);
+    RUVIA_CHECK(get.evaluatesPreconditions);
+    RUVIA_CHECK(get.usesNotModifiedResponse);
+    RUVIA_CHECK(get.evaluatesIfModifiedSince);
+    RUVIA_CHECK(get.evaluatesRange);
+
+    const auto head = httpConditionalMethodPlan(ruvia::HttpKnownMethod::kHead);
+    RUVIA_CHECK(head.evaluatesPreconditions);
+    RUVIA_CHECK(head.usesNotModifiedResponse);
+    RUVIA_CHECK(head.evaluatesIfModifiedSince);
+    RUVIA_CHECK(!head.evaluatesRange);
+
+    for (const auto method : {
+             ruvia::HttpKnownMethod::kPost,
+             ruvia::HttpKnownMethod::kPut,
+             ruvia::HttpKnownMethod::kDelete,
+             ruvia::HttpKnownMethod::kPatch}) {
+        const auto plan = httpConditionalMethodPlan(method);
+        RUVIA_CHECK(plan.evaluatesPreconditions);
+        RUVIA_CHECK(!plan.usesNotModifiedResponse);
+        RUVIA_CHECK(!plan.evaluatesIfModifiedSince);
+        RUVIA_CHECK(!plan.evaluatesRange);
+    }
+
+    for (const auto method : {
+             ruvia::HttpKnownMethod::kOptions,
+             ruvia::HttpKnownMethod::kConnect,
+             ruvia::HttpKnownMethod::kUnknown}) {
+        const auto plan = httpConditionalMethodPlan(method);
+        RUVIA_CHECK(!plan.evaluatesPreconditions);
+        RUVIA_CHECK(!plan.usesNotModifiedResponse);
+        RUVIA_CHECK(!plan.evaluatesIfModifiedSince);
+        RUVIA_CHECK(!plan.evaluatesRange);
+    }
+}
 
 RUVIA_TEST(etag_strong_comparison) {
     using ruvia::detail::httpStrongEtagEquals;
@@ -54,6 +96,19 @@ RUVIA_TEST(etag_weak_prefix_detection) {
     RUVIA_CHECK(httpIsWeakEtag(R"(W/"abc")"));
     RUVIA_CHECK(!httpIsWeakEtag(R"("abc")"));
     RUVIA_CHECK(!httpIsWeakEtag("W"));  // too short to be the "W/" marker
+}
+
+RUVIA_TEST(etag_list_parses_opaque_commas_and_rejects_malformed_suffixes) {
+    using ruvia::detail::httpEtagListMatches;
+    using ruvia::detail::httpParseEtagListMatches;
+    RUVIA_CHECK(httpEtagListMatches(R"("stale,tag", "current")", R"("current")", true));
+    RUVIA_CHECK(httpEtagListMatches(R"("stale", W/"current")", R"("current")", false));
+    RUVIA_CHECK(!httpEtagListMatches(R"("stale, "current")", R"("current")", true));
+    RUVIA_CHECK(!httpEtagListMatches(R"("current" trailing)", R"("current")", false));
+    const auto malformedAfterMatch = httpParseEtagListMatches(
+        R"("current", malformed)", R"("current")", true);
+    RUVIA_CHECK(!malformedAfterMatch.valid);
+    RUVIA_CHECK(!malformedAfterMatch.matched);
 }
 
 RUVIA_TEST(imf_fixdate_parses_known_dates) {
@@ -106,6 +161,26 @@ RUVIA_TEST(imf_fixdate_leap_second_boundary) {
     RUVIA_CHECK(!httpParseImfFixdate("Thu, 01 Jan 1970 23:59:61 GMT").has_value());  // 61 rejected
 }
 
+RUVIA_TEST(http_date_rejects_nonexistent_calendar_days) {
+    using ruvia::detail::httpParseAsctimeDate;
+    using ruvia::detail::httpParseImfFixdate;
+    using ruvia::detail::httpParseRfc850Date;
+
+    // The civil-date conversion must not normalize impossible dates into the
+    // following month. All three HTTP-date syntaxes share this validation.
+    RUVIA_CHECK(!httpParseImfFixdate(
+        "Thu, 31 Apr 1970 00:00:00 GMT").has_value());
+    RUVIA_CHECK(!httpParseRfc850Date(
+        "Thursday, 31-Apr-70 00:00:00 GMT").has_value());
+    RUVIA_CHECK(!httpParseAsctimeDate(
+        "Thu Apr 31 00:00:00 1970").has_value());
+
+    RUVIA_CHECK(!httpParseImfFixdate(
+        "Mon, 29 Feb 1900 00:00:00 GMT").has_value());
+    RUVIA_CHECK(httpParseImfFixdate(
+        "Tue, 29 Feb 2000 00:00:00 GMT").has_value());
+}
+
 // httpFormatDate must emit RFC 7231 IMF-fixdate with English day/month names
 // independent of the process locale (regression: it used strftime %a/%b).
 RUVIA_TEST(http_format_date_known_vectors) {
@@ -137,14 +212,17 @@ RUVIA_TEST(http_format_date_round_trips_with_parse) {
 }
 
 RUVIA_TEST(file_etag_deterministic_and_sensitive) {
-    using Ticks = std::filesystem::file_time_type::duration;
-    const auto base = fileEtag(100, Ticks{123456});
-    // Exact wire format "<size>-<mtime-ticks>": stable across restarts/versions so
-    // client caches stay valid; a format change would silently invalidate them.
-    RUVIA_CHECK_EQ(base, std::string("\"100-123456\""));
-    RUVIA_CHECK_EQ(base, fileEtag(100, Ticks{123456}));       // deterministic
-    RUVIA_CHECK(base != fileEtag(101, Ticks{123456}));        // size-sensitive
-    RUVIA_CHECK(base != fileEtag(100, Ticks{123457}));        // mtime-sensitive
+    const auto identity = ruvia::detail::ResponseFileIdentity::checked(
+        {1, 2, 3, 4});
+    const auto replacement = ruvia::detail::ResponseFileIdentity::checked(
+        {1, 2, 3, 5});
+    const auto base = fileEtag(100, 123456, identity);
+    // The strong validator binds framing metadata and the exact indexed file.
+    RUVIA_CHECK_EQ(base, std::string("\"100-123456-1-2-3-4\""));
+    RUVIA_CHECK_EQ(base, fileEtag(100, 123456, identity));
+    RUVIA_CHECK(base != fileEtag(101, 123456, identity));
+    RUVIA_CHECK(base != fileEtag(100, 123457, identity));
+    RUVIA_CHECK(base != fileEtag(100, 123456, replacement));
     RUVIA_CHECK(base.size() >= 2 && base.front() == '"' && base.back() == '"');  // quoted-string
 }
 

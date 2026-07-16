@@ -5,12 +5,20 @@
 #include <fstream>
 #include <stdexcept>
 #include <string_view>
+#include <utility>
 
 #include "ruvia/web/detail/app/DotenvInternal.h"
 
 namespace {
 
 using ruvia::detail::readDotenvEntries;
+
+template <typename T>
+concept ExposesAnyRvalueEnvBorrow =
+    requires { std::declval<const T&&>().get("NAME"); } ||
+    requires { std::declval<const T&&>().template get<std::string_view>("NAME"); };
+
+static_assert(!ExposesAnyRvalueEnvBorrow<ruvia::Env>);
 
 std::filesystem::path writeTempEnv(std::string_view name, std::string_view contents) {
     const auto path = std::filesystem::temp_directory_path() / name;

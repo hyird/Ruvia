@@ -11,6 +11,9 @@
 #include <variant>
 #include <vector>
 
+#include "ruvia/http/HttpProtocolError.h"
+#include "ruvia/http/detail/BorrowedView.h"
+
 namespace ruvia {
 
 namespace detail {
@@ -22,13 +25,15 @@ struct MultipartStreamPartAccess;
 // content type and body remain borrowed views into the caller-owned request body.
 class MultipartPart final {
 public:
-    [[nodiscard]] std::string_view name() const noexcept {
+    [[nodiscard]] std::string_view name() const & noexcept {
         return std::string_view(name_.data(), name_.size());
     }
+    [[nodiscard]] std::string_view name() const && = delete;
 
-    [[nodiscard]] std::string_view filename() const noexcept {
+    [[nodiscard]] std::string_view filename() const & noexcept {
         return std::string_view(filename_.data(), filename_.size());
     }
+    [[nodiscard]] std::string_view filename() const && = delete;
 
     [[nodiscard]] std::string_view contentType() const noexcept {
         return contentType_;
@@ -69,9 +74,10 @@ public:
         assign(value);
     }
 
-    [[nodiscard]] constexpr std::string_view value() const noexcept {
+    [[nodiscard]] constexpr std::string_view value() const & noexcept {
         return std::string_view(bytes_.data(), size_);
     }
+    [[nodiscard]] std::string_view value() const && = delete;
 
 private:
     static constexpr std::size_t kMaxSize = 70;
@@ -176,22 +182,19 @@ enum class MultipartParseError : std::uint8_t {
     kInvalidDelimiter,
     kPreambleTooLarge,
     kPartHeadersTooLarge,
+    kInvalidPartHeaders,
     kInvalidContentDisposition,
     kMissingFieldName,
     kDelimiterLineTooLarge,
 };
 
-[[nodiscard]] std::string_view multipartParseErrorMessage(
-    MultipartParseError error) noexcept;
-
 class MultipartPollFailure final {
 public:
-    [[nodiscard]] constexpr MultipartParseError error() const noexcept {
-        return error_;
-    }
+    [[nodiscard]] HttpProtocolError protocolError() const noexcept;
 
 private:
     friend class MultipartPollResult;
+    friend class MultipartBodyParseResult;
 
     explicit constexpr MultipartPollFailure(MultipartParseError error) noexcept
         : error_(error) {}
@@ -207,22 +210,26 @@ private:
 class MultipartPollResult final {
 public:
     [[nodiscard]] constexpr const MultipartPollNeedInput*
-    needInput() const noexcept {
+    needInput() const & noexcept {
         return std::get_if<MultipartPollNeedInput>(&value_);
     }
+    const MultipartPollNeedInput* needInput() const && = delete;
 
-    [[nodiscard]] constexpr const MultipartStreamPart* part() const noexcept {
+    [[nodiscard]] constexpr const MultipartStreamPart* part() const & noexcept {
         return std::get_if<MultipartStreamPart>(&value_);
     }
+    const MultipartStreamPart* part() const && = delete;
 
-    [[nodiscard]] constexpr const MultipartPollDone* done() const noexcept {
+    [[nodiscard]] constexpr const MultipartPollDone* done() const & noexcept {
         return std::get_if<MultipartPollDone>(&value_);
     }
+    const MultipartPollDone* done() const && = delete;
 
     [[nodiscard]] constexpr const MultipartPollFailure*
-    failure() const noexcept {
+    failure() const & noexcept {
         return std::get_if<MultipartPollFailure>(&value_);
     }
+    const MultipartPollFailure* failure() const && = delete;
 
 private:
     friend class MultipartParser;
@@ -293,9 +300,7 @@ private:
 
 class MultipartBodyParseFailure final {
 public:
-    [[nodiscard]] constexpr MultipartParseError error() const noexcept {
-        return error_;
-    }
+    [[nodiscard]] HttpProtocolError protocolError() const noexcept;
 
 private:
     friend class MultipartBodyParseResult;
@@ -344,12 +349,73 @@ private:
         MultipartParseError error) noexcept
         : value_(MultipartBodyParseFailure(error)) {}
 
+    explicit MultipartBodyParseResult(
+        const MultipartPollFailure& failure) noexcept
+        : value_(MultipartBodyParseFailure(failure.error_)) {}
+
     Value value_;
 };
+
+namespace detail {
+
+struct MultipartBorrowedInput final {
+    std::string_view bytes;
+};
+
+struct MultipartStreamingInputOpen final {
+    explicit MultipartStreamingInputOpen(std::pmr::memory_resource* resource)
+        : bytes(resource) {}
+    std::pmr::string bytes;
+};
+
+struct MultipartStreamingInputEof final {
+    explicit MultipartStreamingInputEof(std::pmr::string&& input)
+        : bytes(std::move(input)) {}
+    std::pmr::string bytes;
+};
+
+// Owns the multipart byte source and its EOF lifecycle. Parser grammar progress
+// remains orthogonal in MultipartParser::state_.
+class MultipartInputLifecycle final {
+public:
+    explicit MultipartInputLifecycle(std::pmr::memory_resource* resource);
+    explicit MultipartInputLifecycle(MultipartBorrowedInput input) noexcept;
+
+    [[nodiscard]] const MultipartBorrowedInput* borrowed() const noexcept;
+    [[nodiscard]] const MultipartStreamingInputOpen* streamingOpen() const noexcept;
+    [[nodiscard]] const MultipartStreamingInputEof* streamingEof() const noexcept;
+    [[nodiscard]] bool eof() const noexcept;
+    [[nodiscard]] std::string_view view() const noexcept;
+
+    void feed(std::string_view chunk);
+    void finishInput() noexcept;
+    void consume(std::size_t bytes) noexcept;
+    void compactConsumedPrefix(std::size_t threshold);
+
+private:
+    static constexpr std::size_t kCompactConsumedPrefixBytes = 64 * 1024;
+    using Value = std::variant<
+        MultipartBorrowedInput,
+        MultipartStreamingInputOpen,
+        MultipartStreamingInputEof>;
+
+    [[nodiscard]] std::pmr::string* ownedBytes() noexcept;
+    [[nodiscard]] const std::pmr::string* ownedBytes() const noexcept;
+
+    Value value_;
+    std::size_t offset_{0};
+};
+
+}  // namespace detail
 
 class MultipartParser final {
 public:
     MultipartParser(MultipartBoundary boundary, std::pmr::memory_resource* resource);
+
+    MultipartParser(const MultipartParser&) = delete;
+    MultipartParser& operator=(const MultipartParser&) = delete;
+    MultipartParser(MultipartParser&&) = delete;
+    MultipartParser& operator=(MultipartParser&&) = delete;
 
     // Copies input into parser-owned PMR storage. finishInput() is required when
     // the enclosing HTTP body ends so a close delimiter ending exactly at EOF
@@ -384,47 +450,35 @@ private:
 
     using State = std::variant<ProgressState, MultipartParseError>;
 
-    enum class StepStatus : std::uint8_t {
+    enum class StepProgress : std::uint8_t {
         kNeedInput,
         kContinue,
         kDone,
-        kInvalidDelimiter,
-        kPreambleTooLarge,
-        kPartHeadersTooLarge,
-        kInvalidContentDisposition,
-        kMissingFieldName,
     };
 
-    static constexpr std::size_t kCompactConsumedPrefixBytes = 64 * 1024;
+    using StepResult = std::variant<StepProgress, MultipartParseError>;
 
     [[nodiscard]] std::string_view bufferView() const noexcept;
     void consume(std::size_t bytes) noexcept;
-    void compactConsumedPrefix();
     void compactPending();
-    [[nodiscard]] static MultipartParseError stepError(
-        StepStatus status) noexcept;
     [[nodiscard]] MultipartPollResult fail(
         MultipartParseError error) noexcept;
-    [[nodiscard]] StepStatus processBoundary();
-    [[nodiscard]] StepStatus processHeaders();
+    [[nodiscard]] StepResult processBoundary();
+    [[nodiscard]] StepResult processHeaders();
     [[nodiscard]] MultipartStreamPart makePart(std::string_view body, bool partEnd);
     [[nodiscard]] MultipartPollResult readBodyChunk();
 
     std::pmr::memory_resource* resource_;
     MultipartBoundary boundary_;
-    std::pmr::string buffer_;
+    detail::MultipartInputLifecycle input_;
     std::pmr::string currentName_;
     std::pmr::string currentFilename_;
     std::pmr::string currentContentType_;
     std::string_view currentContentTypeView_;
-    std::string_view borrowedInput_;
-    bool borrowedInputMode_{false};
     State state_{ProgressState::kBoundary};
-    std::size_t bufferOffset_{0};
     std::size_t pendingEraseBytes_{0};
     bool nextChunkIsFirst_{false};
     bool firstBoundary_{true};
-    bool inputFinished_{false};
 };
 
 // Parses a complete multipart/form-data body without I/O. Returned part bodies
@@ -433,5 +487,11 @@ private:
     std::string_view body,
     MultipartBoundary boundary,
     std::pmr::memory_resource* resource = nullptr);
+
+template <detail::HttpTemporaryOwningCharString Body>
+MultipartBodyParseResult parseMultipartBody(
+    Body&&,
+    MultipartBoundary,
+    std::pmr::memory_resource* = nullptr) = delete;
 
 }  // namespace ruvia

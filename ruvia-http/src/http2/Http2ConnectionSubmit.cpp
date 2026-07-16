@@ -5,6 +5,9 @@
 #include <charconv>
 #include <utility>
 
+#include "ruvia/http/detail/HeaderAcceptUtils.h"
+#include "ruvia/http/detail/HttpExpectations.h"
+#include "ruvia/http/detail/HttpRequestContentSemantics.h"
 #include "ruvia/http/detail/HttpResponseBodyAccess.h"
 #include "ruvia/http/detail/HttpResponseContentSemantics.h"
 #include "ruvia/http/detail/http2/Http2FlowControl.h"
@@ -20,18 +23,26 @@
 namespace ruvia::detail {
 namespace {
 
+struct Http2OutboundRequestHeaderFacts final {
+    bool hasContentType{false};
+};
+
 [[nodiscard]] bool http2IsValidOutboundMethod(std::string_view method) noexcept {
     return method != "CONNECT" && isValidHttpMethodToken(method);
 }
 
 [[nodiscard]] bool http2AreValidOutboundRequestHeaders(
-    std::string_view authority,
+    std::optional<std::string_view> authority,
     std::uint16_t defaultPort,
     std::span<const HttpHeaderView> headers,
     bool allowHost,
-    bool allowTrailers) noexcept {
+    bool allowTrailers,
+    HttpRequestContentIndication contentIndication,
+    Http2OutboundRequestHeaderFacts* facts = nullptr) noexcept {
     std::uint32_t singletonHeaders = 0;
     bool hostSeen = false;
+    bool hasContentType = false;
+    HttpRequestExpectations expectations;
     for (const auto& header : headers) {
         if (!http2IsValidRegularHeader(header.name(), header.value())) {
             return false;
@@ -48,10 +59,22 @@ namespace {
         }
         if (kind == RequestHeaderKind::kHost) {
             if (!allowHost || hostSeen || !isValidHostHeader(header.value()) ||
-                !authorityMatchesHost(authority, header.value(), defaultPort)) {
+                (authority.has_value() && !authorityMatchesHost(
+                    *authority, header.value(), defaultPort))) {
                 return false;
             }
             hostSeen = true;
+        }
+        if (kind == RequestHeaderKind::kContentType) {
+            HttpMediaTypeParts parts;
+            if (hasContentType ||
+                !httpParseMediaType(header.value(), false, parts)) {
+                return false;
+            }
+            hasContentType = true;
+        }
+        if (kind == RequestHeaderKind::kExpect) {
+            expectations.parseField(header.value());
         }
         if (const auto bit = singletonRequestHeaderBit(kind); bit != 0) {
             if ((singletonHeaders & bit) != 0) {
@@ -60,24 +83,55 @@ namespace {
             singletonHeaders |= bit;
         }
     }
+    if (!httpClientExpectationIsValid(
+            expectations.has100Continue(), contentIndication)) {
+        return false;
+    }
+    if (facts != nullptr) {
+        facts->hasContentType = hasContentType;
+    }
     return true;
 }
 
 [[nodiscard]] bool http2IsValidOutboundRegularRequestHead(
     std::string_view method,
     std::string_view scheme,
-    std::string_view authority,
+    std::optional<std::string_view> authority,
     std::string_view path,
-    std::span<const HttpHeaderView> headers) noexcept {
+    std::span<const HttpHeaderView> headers,
+    bool explicitContent,
+    HttpRequestContentIndication contentIndication) noexcept {
     if (!http2IsValidOutboundMethod(method) ||
-        (scheme != "http" && scheme != "https") ||
-        !isValidHostHeader(authority) ||
-        !isValidOriginFormTarget(path)) {
+        !isValidUriScheme(scheme) ||
+        (authority.has_value() &&
+         !http2IsValidRequestAuthority(scheme, *authority)) ||
+        !http2IsValidRegularRequestPath(
+            classifyHttpMethod(method), scheme, path) ||
+        (path == "*" && authority.has_value()) ||
+        (!authority.has_value() &&
+         http2RegularRequestRequiresAuthority(scheme, path))) {
         return false;
     }
-    const auto defaultPort = static_cast<std::uint16_t>(scheme == "https" ? 443 : 80);
-    return http2AreValidOutboundRequestHeaders(
-        authority, defaultPort, headers, /*allowHost=*/true, /*allowTrailers=*/true);
+    const auto defaultPort = httpUriSchemeDefaultPort(scheme);
+    Http2OutboundRequestHeaderFacts facts;
+    if (!http2AreValidOutboundRequestHeaders(
+            authority,
+            defaultPort,
+            headers,
+            /*allowHost=*/true,
+            /*allowTrailers=*/true,
+            contentIndication,
+            &facts)) {
+        return false;
+    }
+    if (!explicitContent) {
+        return true;
+    }
+    const auto contentSemantics = httpRequestContentSemantics(method);
+    return contentSemantics != HttpRequestContentSemantics::kForbidden &&
+        (contentSemantics !=
+             HttpRequestContentSemantics::kContentTypeRequired ||
+         facts.hasContentType);
 }
 
 [[nodiscard]] bool http2IsValidWebSocketConnectHeaders(
@@ -122,23 +176,13 @@ namespace {
 Http2RequestHeadSubmitResult Http2Connection::submitRegularRequestHead(
     std::string_view method,
     std::string_view scheme,
-    std::string_view authority,
+    std::optional<std::string_view> authority,
     std::string_view path,
     std::span<const HttpHeaderView> headers,
     Http2RequestContent content) {
     if (const auto error = localRequestAdmissionError()) {
         return Http2RequestHeadSubmitResult::makeFailure(*error);
     }
-    // Validate the entire semantic head before touching HPACK storage, outbound
-    // bytes, the stream method, local-content accounting, or lifecycle state.
-    if (!http2IsValidOutboundRegularRequestHead(method, scheme, authority, path, headers)) {
-        return Http2RequestHeadSubmitResult::makeFailure(
-            Http2RequestHeadSubmitError::kInvalidMessage);
-    }
-
-    Http2EndStream endStream = Http2EndStream::kKeepOpen;
-    std::array<char, 20> lengthBuffer{};
-    std::size_t lengthBytes = 0;
     const bool withoutContent = content.withoutContent() != nullptr;
     const auto* knownLengthContent = content.knownLengthContent();
     const bool streamingContent = content.streamingContent() != nullptr;
@@ -146,6 +190,29 @@ Http2RequestHeadSubmitResult Http2Connection::submitRegularRequestHead(
         return Http2RequestHeadSubmitResult::makeFailure(
             Http2RequestHeadSubmitError::kInvalidMessage);
     }
+    const bool contentWillFollow =
+        streamingContent ||
+        (knownLengthContent != nullptr && knownLengthContent->length() != 0);
+    const auto contentIndication = contentWillFollow
+        ? HttpRequestContentIndication::kWillFollow
+        : HttpRequestContentIndication::kNoContent;
+    // Validate the entire semantic head before touching HPACK storage, outbound
+    // bytes, the stream method, local-content accounting, or lifecycle state.
+    if (!http2IsValidOutboundRegularRequestHead(
+            method,
+            scheme,
+            authority,
+            path,
+            headers,
+            !withoutContent,
+            contentIndication)) {
+        return Http2RequestHeadSubmitResult::makeFailure(
+            Http2RequestHeadSubmitError::kInvalidMessage);
+    }
+
+    Http2EndStream endStream = Http2EndStream::kKeepOpen;
+    std::array<char, 20> lengthBuffer{};
+    std::size_t lengthBytes = 0;
     if (withoutContent) {
         endStream = Http2EndStream::kEndStream;
     } else if (knownLengthContent != nullptr) {
@@ -174,11 +241,14 @@ Http2RequestHeadSubmitResult Http2Connection::submitRegularRequestHead(
     const auto streamId = stream->id();
 
     stream->assignRequestMethod(method);
+    stream->assignRequestScheme(scheme);
     auto& block = stream->responseHeaderBlock();
     block.clear();
     HpackEncoder::encodeHeader(block, ":method", method);
     HpackEncoder::encodeHeader(block, ":scheme", scheme);
-    HpackEncoder::encodeHeader(block, ":authority", authority);
+    if (authority.has_value()) {
+        HpackEncoder::encodeHeader(block, ":authority", *authority);
+    }
     HpackEncoder::encodeHeader(block, ":path", path);
     for (const auto& header : headers) {
         HpackEncoder::encodeHeader(block, header.name(), header.value());
@@ -222,7 +292,8 @@ Http2RequestHeadSubmitResult Http2Connection::submitConnectRequestHead(
             0,
             headers,
             /*allowHost=*/false,
-            /*allowTrailers=*/false)) {
+            /*allowTrailers=*/false,
+            HttpRequestContentIndication::kNoContent)) {
         return Http2RequestHeadSubmitResult::makeFailure(
             Http2RequestHeadSubmitError::kInvalidMessage);
     }
@@ -269,16 +340,24 @@ Http2RequestHeadSubmitResult Http2Connection::submitExtendedConnectRequestHead(
     }
 
     const bool websocket = httpAsciiEqualsIgnoreCase(protocol, "websocket");
+    const bool websocketScheme =
+        httpAsciiEqualsIgnoreCase(scheme, "http") ||
+        httpAsciiEqualsIgnoreCase(scheme, "https");
+    const auto encodedProtocol = websocket
+        ? std::string_view("websocket")
+        : protocol;
     if (!isValidHttpHeaderName(protocol) ||
-        (scheme != "http" && scheme != "https") ||
-        !isValidHostHeader(authority) ||
-        !isValidOriginFormTarget(path) ||
+        !isValidUriScheme(scheme) ||
+        (websocket && !websocketScheme) ||
+        !http2IsValidRequestAuthority(scheme, authority) ||
+        !http2IsValidExtendedConnectPath(scheme, path) ||
         !http2AreValidOutboundRequestHeaders(
             authority,
-            static_cast<std::uint16_t>(scheme == "https" ? 443 : 80),
+            httpUriSchemeDefaultPort(scheme),
             headers,
             /*allowHost=*/!websocket,
-            /*allowTrailers=*/false) ||
+            /*allowTrailers=*/false,
+            HttpRequestContentIndication::kNoContent) ||
         (websocket && !http2IsValidWebSocketConnectHeaders(headers))) {
         return Http2RequestHeadSubmitResult::makeFailure(
             Http2RequestHeadSubmitError::kInvalidMessage);
@@ -295,7 +374,10 @@ Http2RequestHeadSubmitResult Http2Connection::submitExtendedConnectRequestHead(
     auto& block = stream->responseHeaderBlock();
     block.clear();
     HpackEncoder::encodeHeader(block, ":method", "CONNECT");
-    HpackEncoder::encodeHeader(block, ":protocol", protocol);
+    // RFC 8441 registers and requires the lowercase `websocket` value. HTTP
+    // protocol-name matching is case-insensitive, so accept caller spelling but
+    // never put a non-canonical WebSocket token on the wire or in stream state.
+    HpackEncoder::encodeHeader(block, ":protocol", encodedProtocol);
     HpackEncoder::encodeHeader(block, ":scheme", scheme);
     HpackEncoder::encodeHeader(block, ":authority", authority);
     HpackEncoder::encodeHeader(block, ":path", path);
@@ -307,7 +389,8 @@ Http2RequestHeadSubmitResult Http2Connection::submitExtendedConnectRequestHead(
         std::string_view(block.data(), block.size()),
         Http2EndStream::kKeepOpen);
     stream->assignRequestMethod("CONNECT");
-    stream->setProtocol(protocol);
+    stream->assignRequestScheme(scheme);
+    stream->setProtocol(encodedProtocol);
     stream->beginLocalContentForbidden();
     (void)stream->beginLocalConnectRequest();
     activateLocalRequestStream(*stream);
@@ -345,35 +428,28 @@ Http2BufferedResponseHeadSubmitResult Http2Connection::submitResponseHead(
     HttpBufferedResponseWritePlan writePlan) {
     auto* stream = findStream(streamId);
     if (stream == nullptr || stream->isAborted()) {
-        return Http2BufferedResponseHeadSubmitResult::makeFailure(
-            Http2ResponseHeadSubmitError::kClosed);
+        return Http2BufferedResponseHeadSubmitResult::makeClosedFailure();
     }
     if (role_ != Http2Role::kServer || !http2RemoteFinalHeadDecoded(*stream) ||
         stream->localSend().headPending() == nullptr) {
-        return Http2BufferedResponseHeadSubmitResult::makeFailure(
-            Http2ResponseHeadSubmitError::kInvalidState);
+        return Http2BufferedResponseHeadSubmitResult::makeInvalidStateFailure();
     }
     if (writePlan.requestMethod() != stream->requestKnownMethod() ||
         !writePlan.matchesResponse(response)) {
-        return Http2BufferedResponseHeadSubmitResult::makeFailure(
-            Http2ResponseHeadSubmitError::kResponsePlanMismatch);
+        return Http2BufferedResponseHeadSubmitResult::
+            makeResponsePlanMismatchFailure();
     }
     const bool successfulConnect =
         response.status() >= 200 && response.status() < 300 &&
         stream->tunnel().pending() != nullptr;
     if (successfulConnect) {
-        return Http2BufferedResponseHeadSubmitResult::makeFailure(
-            Http2ResponseHeadSubmitError::kInvalidState);
+        return Http2BufferedResponseHeadSubmitResult::makeInvalidStateFailure();
     }
-    const auto controlResult = httpFinalResponseControlPlan(
-        response,
-        HttpProtocolVersion::kHttp2);
-    const auto* controlPlan = controlResult.plan();
-    const auto* http2Control =
-        controlPlan == nullptr ? nullptr : controlPlan->http2();
+    const auto controlResult = http2FinalResponseControlPlan(response);
+    const auto* http2Control = controlResult.control();
     if (http2Control == nullptr) {
-        return Http2BufferedResponseHeadSubmitResult::makeFailure(
-            Http2ResponseHeadSubmitError::kInvalidMessage);
+        return Http2BufferedResponseHeadSubmitResult::
+            makeInvalidMessageFailure();
     }
 
     const auto headPlanResult = http2BufferedResponseHeadPlan(
@@ -386,10 +462,11 @@ Http2BufferedResponseHeadSubmitResult Http2Connection::submitResponseHead(
             error == Http2ResponseHeadPlanError::kResponseStatusMismatch ||
             error == Http2ResponseHeadPlanError::
                 kResponseRepresentationMismatch;
-        return Http2BufferedResponseHeadSubmitResult::makeFailure(
-            responsePlanMismatch
-                ? Http2ResponseHeadSubmitError::kResponsePlanMismatch
-                : Http2ResponseHeadSubmitError::kInvalidMessage);
+        return responsePlanMismatch
+            ? Http2BufferedResponseHeadSubmitResult::
+                makeResponsePlanMismatchFailure()
+            : Http2BufferedResponseHeadSubmitResult::
+                makeInvalidMessageFailure();
     }
     appendHttp2ResponseHeaders(
         *stream,
@@ -428,26 +505,20 @@ Http2StreamingResponseHeadSubmitResult Http2Connection::submitStreamingResponseH
     ResponseTrailerIntent trailerIntent) {
     auto* stream = findStream(streamId);
     if (stream == nullptr || stream->isAborted()) {
-        return Http2StreamingResponseHeadSubmitResult::makeFailure(
-            Http2ResponseHeadSubmitError::kClosed);
+        return Http2StreamingResponseHeadSubmitResult::makeClosedFailure();
     }
     const bool successfulConnect =
         head.status() >= 200 && head.status() < 300 &&
         stream->tunnel().pending() != nullptr;
     if (role_ != Http2Role::kServer || !http2RemoteFinalHeadDecoded(*stream) ||
         stream->localSend().headPending() == nullptr || successfulConnect) {
-        return Http2StreamingResponseHeadSubmitResult::makeFailure(
-            Http2ResponseHeadSubmitError::kInvalidState);
+        return Http2StreamingResponseHeadSubmitResult::makeInvalidStateFailure();
     }
-    const auto controlResult = httpFinalResponseControlPlan(
-        head,
-        HttpProtocolVersion::kHttp2);
-    const auto* controlPlan = controlResult.plan();
-    const auto* http2Control =
-        controlPlan == nullptr ? nullptr : controlPlan->http2();
+    const auto controlResult = http2FinalResponseControlPlan(head);
+    const auto* http2Control = controlResult.control();
     if (http2Control == nullptr) {
-        return Http2StreamingResponseHeadSubmitResult::makeFailure(
-            Http2ResponseHeadSubmitError::kInvalidMessage);
+        return Http2StreamingResponseHeadSubmitResult::
+            makeInvalidMessageFailure();
     }
     auto preparedCommitPlan = httpResponseStreamCommitPlan(
         ResponseStreamFraming::kHttp2Frames,
@@ -468,8 +539,8 @@ Http2StreamingResponseHeadSubmitResult Http2Connection::submitStreamingResponseH
         streamHead.response());
     const auto* headPlan = headPlanResult.plan();
     if (headPlan == nullptr) {
-        return Http2StreamingResponseHeadSubmitResult::makeFailure(
-            Http2ResponseHeadSubmitError::kInvalidMessage);
+        return Http2StreamingResponseHeadSubmitResult::
+            makeInvalidMessageFailure();
     }
     appendHttp2ResponseHeaders(
         *stream,
@@ -482,9 +553,9 @@ Http2StreamingResponseHeadSubmitResult Http2Connection::submitStreamingResponseH
         : Http2EndStream::kKeepOpen;
     if (headPlan->bodyPlan().bodySuppressed()) {
         stream->beginLocalContentForbidden();
-    } else if (const auto* explicitLength =
-                   headPlan->explicitContentLength()) {
-        stream->beginLocalContentKnownLength(explicitLength->value());
+    } else if (const auto contentLength =
+                   headPlan->streamingContentLength()) {
+        stream->beginLocalContentKnownLength(*contentLength);
     } else {
         stream->beginLocalContentUnbounded();
     }
@@ -627,12 +698,8 @@ Http2SubmitStatus Http2Connection::submitConnectResponseHead(
     if (!http2IsValidConnectResponseHead(response)) {
         return Http2SubmitStatus::kInvalidMessage;
     }
-    const auto controlResult = httpFinalResponseControlPlan(
-        response,
-        HttpProtocolVersion::kHttp2);
-    const auto* controlPlan = controlResult.plan();
-    const auto* http2Control =
-        controlPlan == nullptr ? nullptr : controlPlan->http2();
+    const auto controlResult = http2FinalResponseControlPlan(response);
+    const auto* http2Control = controlResult.control();
     if (http2Control == nullptr) {
         return Http2SubmitStatus::kInvalidMessage;
     }
@@ -771,8 +838,7 @@ Http2SubmitStatus Http2Connection::submitReset(
     if ((role_ == Http2Role::kClient &&
          stream->localSend().headPending() != nullptr) ||
         (role_ == Http2Role::kServer && !http2RemoteFinalHeadDecoded(*stream)) ||
-        (http2RemotePeerHalfClosed(*stream) &&
-         stream->localSend().endStreamCommitted() != nullptr)) {
+        http2StreamIsClosed(*stream)) {
         return Http2SubmitStatus::kInvalidState;
     }
     output_.appendRstStream(streamId, error);

@@ -32,8 +32,9 @@ Task<Http1SessionRequestCompletion> dispatchHttpStreamBodyRoute(
     RequestMemory& requestMemory,
     ContextServices baseRouteServices,
     const HttpServerOptions& options,
-    std::pmr::string& readBuffer,
-    std::size_t& usedBytes,
+    const std::pmr::string& readBuffer,
+    std::size_t usedBytes,
+    std::pmr::string& pipelineStash,
     HttpResponse& response,
     Http1RequestSequence& requestSequence) {
     const auto bodyAndPipeline = httpBodyAndPipeline(
@@ -42,10 +43,9 @@ Task<Http1SessionRequestCompletion> dispatchHttpStreamBodyRoute(
         usedBytes);
 
     std::exception_ptr exception;
-    std::optional<StreamBodyReader<Stream>> streamReader;
-    std::optional<BodyReader> bodyReader;
+    std::optional<BodyReaderBinding<StreamBodyReader<Stream>>> bodyReader;
     try {
-        streamReader.emplace(
+        bodyReader.emplace(
             stream,
             memory.allocator<char>(),
             bodyAndPipeline,
@@ -55,12 +55,12 @@ Task<Http1SessionRequestCompletion> dispatchHttpStreamBodyRoute(
                 options.maxStreamBodyBytes,
                 options.maxBufferedBodyBytes),
             scannerEntry);
-        emplaceBodyReaderFacade(bodyReader, *streamReader);
         response = co_await routes.dispatch(
             parsed.request,
             routeResolution,
             requestMemory,
-            baseRouteServices.withStreamingRequestBody(*bodyReader));
+            baseRouteServices.withStreamingRequestBody(
+                bodyReader->facade()));
     } catch (...) {
         exception = std::current_exception();
     }
@@ -68,7 +68,8 @@ Task<Http1SessionRequestCompletion> dispatchHttpStreamBodyRoute(
     if (exception != nullptr) {
         auto exceptionServices = baseRouteServices;
         if (bodyReader) {
-            exceptionServices = exceptionServices.withStreamingRequestBody(*bodyReader);
+            exceptionServices = exceptionServices.withStreamingRequestBody(
+                bodyReader->facade());
         }
         co_return co_await completeFailedHttpBodyRoute(
             scannerEntry,
@@ -85,11 +86,10 @@ Task<Http1SessionRequestCompletion> dispatchHttpStreamBodyRoute(
         response,
         parsed.connectionPlan,
         requestSequence,
-        streamReader->consumption(),
-        readBuffer,
-        usedBytes,
-        [&streamReader](std::pmr::string& buffer, std::size_t& size) {
-            streamReader->restorePipeline(buffer, size);
+        bodyReader->reader().consumption(),
+        pipelineStash,
+        [&bodyReader](std::pmr::string& stash) {
+            bodyReader->reader().takePipeline(stash);
         });
 }
 

@@ -48,7 +48,7 @@ RUVIA_TEST(default_error_response_does_not_set_transport_headers) {
     auto* resource = std::pmr::new_delete_resource();
     HttpErrorInfo error(500, "internal", "boom");
     const auto response = makeDefaultErrorResponse(resource, error);
-    RUVIA_CHECK(response.header("Connection").empty());
+    RUVIA_CHECK(!response.header("Connection").has_value());
 }
 
 RUVIA_TEST(default_error_response_coerces_invalid_status_and_status_text) {

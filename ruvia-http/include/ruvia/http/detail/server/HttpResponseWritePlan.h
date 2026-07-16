@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <type_traits>
 
 #include "ruvia/http/HttpKnownMethod.h"
 #include "ruvia/http/detail/HttpResponseBodyAccess.h"
@@ -20,7 +21,7 @@ public:
         return responseStatus_;
     }
 
-    [[nodiscard]] const ResponseWritePolicy& policy() const noexcept {
+    [[nodiscard]] ResponseWritePolicy policy() const noexcept {
         return policy_;
     }
 
@@ -30,17 +31,18 @@ public:
 
     [[nodiscard]] bool bodySuppressed() const noexcept {
         return !policy_.bodyAllowed() ||
-            semantics_.withContent() == nullptr;
+            semantics_ != HttpResponseContentSemantics::kWithContent;
     }
 
-    [[nodiscard]] const HttpResponseContentSemantics&
+    [[nodiscard]] HttpResponseContentSemantics
     contentSemantics() const noexcept {
         return semantics_;
     }
 
     [[nodiscard]] std::uint64_t bufferedRepresentationLength(
         const HttpResponse& response) const noexcept {
-        if (!statusAllowsBody() || semantics_.connectTunnel() != nullptr) {
+        if (!statusAllowsBody() ||
+            semantics_ == HttpResponseContentSemantics::kConnectTunnel) {
             return 0;
         }
         return static_cast<std::uint64_t>(responseBody(response).size());
@@ -66,6 +68,9 @@ private:
     HttpResponseContentSemantics semantics_;
 };
 
+static_assert(std::is_trivially_copyable_v<HttpResponseBodyPlan>);
+static_assert(sizeof(HttpResponseBodyPlan) <= 12);
+
 [[nodiscard]] inline HttpResponseBodyPlan httpResponseBodyPlan(
     HttpKnownMethod requestMethod,
     std::uint16_t statusCode) noexcept {
@@ -87,11 +92,11 @@ public:
         return bodyPlan_.responseStatus();
     }
 
-    [[nodiscard]] const HttpResponseBodyPlan& bodyPlan() const noexcept {
+    [[nodiscard]] HttpResponseBodyPlan bodyPlan() const noexcept {
         return bodyPlan_;
     }
 
-    [[nodiscard]] const ResponseWritePolicy& policy() const noexcept {
+    [[nodiscard]] ResponseWritePolicy policy() const noexcept {
         return bodyPlan_.policy();
     }
 

@@ -1,10 +1,6 @@
-Task<void> HttpServer::handleSession(TcpSocket socket) {
+Task<void> HttpServer::handleSession(AcceptedConnectionLease connection) {
+    auto& socket = connection.socket();
     try {
-        // Destroyed after connectionCount below, i.e. once this session has
-        // left the count, so a shutdown waiting on the grace period can
-        // force-close the moment the last session finishes.
-        SessionDrainGuard drainNotify{this};
-        ConnectionCountGuard connectionCount(activeConnectionCount_);
         std::pmr::string remoteAddress(memory_.allocator<char>());
         std::error_code remoteEc;
         const auto remoteEndpoint = socket.remote_endpoint(remoteEc);
@@ -15,14 +11,17 @@ Task<void> HttpServer::handleSession(TcpSocket socket) {
             &databases_,
             &redis_,
             &rateLimiter_,
-            options_.maxBufferedBodyBytes);
-        if (options_.tls.enabled) {
+            options_.maxBufferedBodyBytes,
+            &workerHandle_);
+        if (options_.tls() != nullptr) {
             ConnectionScanner::Entry handshakeEntry;
             {
                 ConnectionScanner::Guard handshakeGuard(&connectionScanner_, handshakeEntry, socket);
                 handshakeEntry.setPhase(ConnectionScanner::Phase::kReadingInitial);
                 asio::ssl::stream<TcpSocket&> tlsStream(socket, *tlsContext_);
-                const auto ec = co_await asyncError(TlsServerHandshakeInitiator{&tlsStream});
+                const auto handshakeCompletion = co_await asyncAsio(
+                    TlsServerHandshakeInitiator{&tlsStream});
+                const auto ec = handshakeCompletion.errorCode();
                 if (ec) {
                     closeSocket(socket);
                     co_return;
@@ -79,6 +78,6 @@ Task<void> HttpServer::handleHttp2Session(
         options_,
         scannerEntry,
         services,
-        workerRunning_,
+        workerState_,
         initialBytes);
 }

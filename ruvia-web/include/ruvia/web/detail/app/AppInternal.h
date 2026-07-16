@@ -8,6 +8,7 @@
 
 #include "ruvia/core/memory/PmrObject.h"
 #include "ruvia/web/Router.h"
+#include "ruvia/web/detail/app/AppLifecycle.h"
 #include "ruvia/web/detail/app/AppResource.h"
 #include "ruvia/web/detail/app/DotenvInternal.h"
 #include "ruvia/core/detail/NativePath.h"
@@ -33,13 +34,10 @@ struct AppState final {
     ~AppState();
 
     std::pmr::string listenAddress{appResource()};
-    std::optional<std::uint16_t> httpListenPort{8080};
-    std::optional<std::uint16_t> httpsListenPort;
-    bool autoHttps{false};
-    std::size_t threadNum;
+    ServerTopology topology;
+    std::size_t workersPerListener;
     HttpServerOptions options{};
     std::optional<AppDocumentRootConfig> documentRootConfig;
-    MemoryPoolConfig memoryConfig{};
     HttpErrorHandler errorHandler{nullptr};
     HttpNotFoundHandler notFoundHandler{nullptr};
     std::pmr::vector<AppHook> onStartHooks{appResource()};
@@ -52,18 +50,11 @@ struct AppState final {
 #endif
     Env env;
     ControllerStore controllerLifetimes;
+    std::unique_ptr<Router, PmrObjectDeleter<Router>> router;
     std::unique_ptr<AppRuntimeGraph, PmrObjectDeleter<AppRuntimeGraph>> runtime;
-    Router router;
 
     mutable std::mutex mutex;
-    bool autoControllersLoaded{false};
-    bool running{false};
-    // Set by stop() (including from the signal handler) so run()'s worker-start
-    // loop can observe a shutdown requested mid-startup and tear down the workers
-    // it started -- otherwise a stop() that lands before a worker is started is a
-    // no-op on that worker and run()'s join would hang. Reset under the lock at
-    // the top of run() because a completed run()/stop() cycle leaves it true.
-    bool stopRequested{false};
+    AppLifecycle lifecycle;
 };
 
 }  // namespace ruvia::detail

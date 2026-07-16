@@ -55,6 +55,90 @@ inline constexpr std::array<bool, 256> kRegNameCharTable = [] {
         (c >= 'a' && c <= 'f');
 }
 
+[[nodiscard]] bool isUriUnreserved(unsigned char byte) noexcept {
+    return (byte >= '0' && byte <= '9') ||
+        (byte >= 'A' && byte <= 'Z') ||
+        (byte >= 'a' && byte <= 'z') ||
+        byte == '-' || byte == '.' || byte == '_' || byte == '~';
+}
+
+[[nodiscard]] bool isUriSubDelimiter(unsigned char byte) noexcept {
+    switch (byte) {
+        case '!':
+        case '$':
+        case '&':
+        case '\'':
+        case '(':
+        case ')':
+        case '*':
+        case '+':
+        case ',':
+        case ';':
+        case '=':
+            return true;
+        default:
+            return false;
+    }
+}
+
+[[nodiscard]] bool isUriPchar(unsigned char byte) noexcept {
+    return isUriUnreserved(byte) || isUriSubDelimiter(byte) ||
+        byte == ':' || byte == '@';
+}
+
+[[nodiscard]] bool isValidUriComponent(
+    std::string_view value,
+    bool allowSlash,
+    bool allowQuestion) noexcept {
+    for (std::size_t i = 0; i < value.size(); ++i) {
+        const auto byte = static_cast<unsigned char>(value[i]);
+        if (byte == '%') {
+            if (i + 2 >= value.size() ||
+                decodeHexNibble(value[i + 1]) < 0 ||
+                decodeHexNibble(value[i + 2]) < 0) {
+                return false;
+            }
+            i += 2;
+            continue;
+        }
+        if (!isUriPchar(byte) &&
+            !(allowSlash && byte == '/') &&
+            !(allowQuestion && byte == '?')) {
+            return false;
+        }
+    }
+    return true;
+}
+
+[[nodiscard]] bool isValidUriUserinfo(std::string_view value) noexcept {
+    for (std::size_t i = 0; i < value.size(); ++i) {
+        const auto byte = static_cast<unsigned char>(value[i]);
+        if (byte == '%') {
+            if (i + 2 >= value.size() ||
+                decodeHexNibble(value[i + 1]) < 0 ||
+                decodeHexNibble(value[i + 2]) < 0) {
+                return false;
+            }
+            i += 2;
+            continue;
+        }
+        if (!isUriUnreserved(byte) && !isUriSubDelimiter(byte) &&
+            byte != ':') {
+            return false;
+        }
+    }
+    return true;
+}
+
+[[nodiscard]] bool isValidUriPort(std::string_view value) noexcept {
+    for (const auto byte : value) {
+        if (!isDecimalDigit(byte)) {
+            return false;
+        }
+    }
+    return true;
+}
+
 [[nodiscard]] bool parseIpv6HexGroup(std::string_view literal, std::size_t& offset) noexcept {
     std::size_t digits = 0;
     while (offset < literal.size() && digits < 4 && isHexDigit(literal[offset])) {
@@ -93,6 +177,140 @@ inline constexpr std::array<bool, 256> kRegNameCharTable = [] {
         ++offset;
     }
     return false;
+}
+
+[[nodiscard]] bool isLowerAlpha(char value) noexcept {
+    return value >= 'a' && value <= 'z';
+}
+
+[[nodiscard]] bool isLowerAlphaNumeric(char value) noexcept {
+    return isLowerAlpha(value) || isDecimalDigit(value);
+}
+
+[[nodiscard]] bool isLowerHexDigit(char value) noexcept {
+    return isDecimalDigit(value) || (value >= 'a' && value <= 'f');
+}
+
+[[nodiscard]] bool isValidSerializedOriginScheme(
+    std::string_view scheme) noexcept {
+    if (scheme.empty() || !isLowerAlpha(scheme.front())) {
+        return false;
+    }
+    for (const auto value : scheme.substr(1)) {
+        if (!isLowerAlphaNumeric(value) && value != '+' && value != '-' &&
+            value != '.') {
+            return false;
+        }
+    }
+    return true;
+}
+
+[[nodiscard]] bool isValidSerializedOriginDomain(
+    std::string_view domain) noexcept {
+    if (domain.empty()) {
+        return false;
+    }
+    std::size_t offset = 0;
+    while (offset < domain.size()) {
+        const auto separator = domain.find('.', offset);
+        const auto label = domain.substr(
+            offset,
+            separator == std::string_view::npos
+                ? std::string_view::npos
+                : separator - offset);
+        if (label.empty() || !isLowerAlphaNumeric(label.front()) ||
+            !isLowerAlphaNumeric(label.back())) {
+            return false;
+        }
+        for (const auto value : label) {
+            if (!isLowerAlphaNumeric(value) && value != '-') {
+                return false;
+            }
+        }
+        if (separator == std::string_view::npos) {
+            return true;
+        }
+        offset = separator + 1;
+    }
+    return false;
+}
+
+[[nodiscard]] bool isValidSerializedOriginH16(
+    std::string_view group) noexcept {
+    if (group.empty() || group.size() > 4 ||
+        (group.size() > 1 && group.front() == '0')) {
+        return false;
+    }
+    for (const auto value : group) {
+        if (!isLowerHexDigit(value)) {
+            return false;
+        }
+    }
+    return true;
+}
+
+[[nodiscard]] bool countSerializedOriginIpv6Groups(
+    std::string_view side,
+    std::size_t& count) noexcept {
+    count = 0;
+    if (side.empty()) {
+        return true;
+    }
+    std::size_t offset = 0;
+    for (;;) {
+        const auto separator = side.find(':', offset);
+        const auto group = side.substr(
+            offset,
+            separator == std::string_view::npos
+                ? std::string_view::npos
+                : separator - offset);
+        if (!isValidSerializedOriginH16(group)) {
+            return false;
+        }
+        ++count;
+        if (separator == std::string_view::npos) {
+            return true;
+        }
+        offset = separator + 1;
+        if (offset == side.size()) {
+            return false;
+        }
+    }
+}
+
+[[nodiscard]] bool isValidSerializedOriginIpv6(
+    std::string_view literal) noexcept {
+    const auto compression = literal.find("::");
+    if (compression == std::string_view::npos) {
+        std::size_t groups = 0;
+        return countSerializedOriginIpv6Groups(literal, groups) &&
+            groups == 8;
+    }
+    if (literal.find("::", compression + 2) != std::string_view::npos) {
+        return false;
+    }
+    std::size_t leftGroups = 0;
+    std::size_t rightGroups = 0;
+    return countSerializedOriginIpv6Groups(
+               literal.substr(0, compression),
+               leftGroups) &&
+        countSerializedOriginIpv6Groups(
+            literal.substr(compression + 2),
+            rightGroups) &&
+        leftGroups + rightGroups <= 6;
+}
+
+[[nodiscard]] bool isValidSerializedOriginPort(
+    std::string_view port) noexcept {
+    if (port.empty() || port.size() > 5) {
+        return false;
+    }
+    for (const auto value : port) {
+        if (!isDecimalDigit(value)) {
+            return false;
+        }
+    }
+    return true;
 }
 
 [[nodiscard]] bool isValidIpv6Literal(std::string_view literal) noexcept {
@@ -278,6 +496,61 @@ struct HttpAuthorityViewAccess final {
     }
 };
 
+bool isValidRequestTargetBytes(std::string_view target) noexcept {
+    if (target.empty()) {
+        return false;
+    }
+    for (std::size_t i = 0; i < target.size(); ++i) {
+        const auto byte = static_cast<unsigned char>(target[i]);
+        if (byte == '%') {
+            if (i + 2 >= target.size() ||
+                decodeHexNibble(target[i + 1]) < 0 ||
+                decodeHexNibble(target[i + 2]) < 0) {
+                return false;
+            }
+            i += 2;
+            continue;
+        }
+        // RFC 3986 URI-reference is ASCII and consists only of unreserved or
+        // reserved characters. A fragment delimiter is never part of an HTTP
+        // request target. Brackets are admitted here because this low-level
+        // union also covers an IP-literal authority; component validation below
+        // rejects them from path and query.
+        if (!isUriPchar(byte) && byte != '/' && byte != '?' &&
+            byte != '[' && byte != ']') {
+            return false;
+        }
+    }
+    return true;
+}
+
+bool isValidOriginFormTarget(std::string_view target) noexcept {
+    if (target.empty() || target.front() != '/') {
+        return false;
+    }
+    const auto separator = target.find('?');
+    const auto path = separator == std::string_view::npos
+        ? target
+        : target.substr(0, separator);
+    const auto query = separator == std::string_view::npos
+        ? std::string_view{}
+        : target.substr(separator + 1);
+    return isValidUriComponent(path, true, false) &&
+        isValidUriComponent(query, true, true);
+}
+
+bool isValidOriginOrAsteriskFormTarget(std::string_view target) noexcept {
+    return target == "*" || isValidOriginFormTarget(target);
+}
+
+bool isValidOriginOrAsteriskFormTarget(
+    HttpKnownMethod method,
+    std::string_view target) noexcept {
+    return target == "*"
+        ? method == HttpKnownMethod::kOptions
+        : isValidOriginFormTarget(target);
+}
+
 bool isValidHttpHost(std::string_view value) noexcept {
     if (value.empty()) {
         return false;
@@ -290,6 +563,59 @@ bool isValidHttpHost(std::string_view value) noexcept {
         return isValidIpv6Literal(literal) || isValidIpvFuture(literal);
     }
     return value.find(':') == std::string_view::npos && isValidRegName(value);
+}
+
+bool isValidHttpSerializedOrigin(std::string_view value) noexcept {
+    const auto schemeEnd = value.find("://");
+    if (schemeEnd == std::string_view::npos ||
+        !isValidSerializedOriginScheme(value.substr(0, schemeEnd))) {
+        return false;
+    }
+
+    const auto authority = value.substr(schemeEnd + 3);
+    if (authority.empty()) {
+        return false;
+    }
+
+    std::string_view host;
+    std::string_view port;
+    bool hasPort = false;
+    if (authority.front() == '[') {
+        const auto close = authority.find(']');
+        if (close == std::string_view::npos || close == 1) {
+            return false;
+        }
+        host = authority.substr(1, close - 1);
+        const auto remainder = authority.substr(close + 1);
+        if (!remainder.empty()) {
+            if (remainder.front() != ':') {
+                return false;
+            }
+            hasPort = true;
+            port = remainder.substr(1);
+        }
+        if (!isValidSerializedOriginIpv6(host)) {
+            return false;
+        }
+    } else {
+        const auto portSeparator = authority.find(':');
+        if (portSeparator == std::string_view::npos) {
+            host = authority;
+        } else {
+            if (authority.find(':', portSeparator + 1) !=
+                std::string_view::npos) {
+                return false;
+            }
+            host = authority.substr(0, portSeparator);
+            hasPort = true;
+            port = authority.substr(portSeparator + 1);
+        }
+        if (!parseIpv4Address(host) &&
+            !isValidSerializedOriginDomain(host)) {
+            return false;
+        }
+    }
+    return !hasPort || isValidSerializedOriginPort(port);
 }
 
 std::optional<HttpAuthorityView> parseHttpAuthority(std::string_view value) noexcept {
@@ -365,6 +691,80 @@ bool isValidHostHeader(std::string_view value) noexcept {
     return parseHttpAuthority(value).has_value();
 }
 
+bool isValidUriAuthority(std::string_view value) noexcept {
+    auto hostAndPort = value;
+    if (const auto delimiter = value.find('@');
+        delimiter != std::string_view::npos) {
+        if (!isValidUriUserinfo(value.substr(0, delimiter)) ||
+            value.find('@', delimiter + 1) != std::string_view::npos) {
+            return false;
+        }
+        hostAndPort = value.substr(delimiter + 1);
+    }
+
+    std::string_view host;
+    std::string_view port;
+    bool hasPort = false;
+    if (!hostAndPort.empty() && hostAndPort.front() == '[') {
+        const auto close = hostAndPort.find(']');
+        if (close == std::string_view::npos) {
+            return false;
+        }
+        host = hostAndPort.substr(0, close + 1);
+        const auto remainder = hostAndPort.substr(close + 1);
+        if (!remainder.empty()) {
+            if (remainder.front() != ':') {
+                return false;
+            }
+            hasPort = true;
+            port = remainder.substr(1);
+        }
+    } else {
+        const auto delimiter = hostAndPort.find(':');
+        host = delimiter == std::string_view::npos
+            ? hostAndPort
+            : hostAndPort.substr(0, delimiter);
+        if (delimiter != std::string_view::npos) {
+            hasPort = true;
+            port = hostAndPort.substr(delimiter + 1);
+            if (port.find(':') != std::string_view::npos) {
+                return false;
+            }
+        }
+    }
+
+    return (host.empty() || isValidHttpHost(host)) &&
+        (!hasPort || isValidUriPort(port));
+}
+
+bool isValidUriScheme(std::string_view value) noexcept {
+    const auto isAlpha = [](unsigned char byte) noexcept {
+        return (byte >= 'A' && byte <= 'Z') ||
+            (byte >= 'a' && byte <= 'z');
+    };
+    if (value.empty() || !isAlpha(static_cast<unsigned char>(value.front()))) {
+        return false;
+    }
+    for (const auto c : value.substr(1)) {
+        const auto byte = static_cast<unsigned char>(c);
+        if (!isAlpha(byte) && !(byte >= '0' && byte <= '9') &&
+            byte != '+' && byte != '-' && byte != '.') {
+            return false;
+        }
+    }
+    return true;
+}
+
+std::uint16_t httpUriSchemeDefaultPort(std::string_view scheme) noexcept {
+    if (httpAsciiEqualsIgnoreCase(scheme, "http")) {
+        return 80;
+    }
+    if (httpAsciiEqualsIgnoreCase(scheme, "https")) {
+        return 443;
+    }
+    return 0;
+}
+
 namespace {
 
 [[nodiscard]] bool parseAbsoluteTarget(std::string_view target, RequestTargetView& output) noexcept {
@@ -387,6 +787,7 @@ namespace {
     }
 
     output.authority = authority;
+    output.form = HttpRequestTargetForm::kAbsolute;
     if (separator == std::string_view::npos) {
         output.path = "/";
         output.query = {};
@@ -395,19 +796,30 @@ namespace {
 
     const auto pathBegin = authorityBegin + separator;
     if (target[pathBegin] == '?') {
+        const auto query = target.substr(pathBegin + 1);
+        if (!isValidUriComponent(query, true, true)) {
+            return false;
+        }
         output.path = "/";
-        output.query = target.substr(pathBegin + 1);
+        output.query = query;
         return true;
     }
 
     const auto querySeparator = target.find('?', pathBegin);
-    output.path = querySeparator == std::string_view::npos
+    const auto path = querySeparator == std::string_view::npos
         ? target.substr(pathBegin)
         : target.substr(pathBegin, querySeparator - pathBegin);
-    output.query = querySeparator == std::string_view::npos
+    const auto query = querySeparator == std::string_view::npos
         ? std::string_view{}
         : target.substr(querySeparator + 1);
-    return !output.path.empty() && output.path.front() == '/';
+    if (path.empty() || path.front() != '/' ||
+        !isValidUriComponent(path, true, false) ||
+        !isValidUriComponent(query, true, true)) {
+        return false;
+    }
+    output.path = path;
+    output.query = query;
+    return true;
 }
 
 }  // namespace
@@ -421,6 +833,19 @@ bool authorityMatchesHost(
     if (!authorityParts || !hostParts ||
         !httpUriHostEquals(authorityParts->host(), hostParts->host())) {
         return false;
+    }
+    // With no known scheme default, an omitted/empty port has no numeric value.
+    // In particular, it must not compare equal to the explicit port `:0` merely
+    // because zero is also our "unknown default" sentinel.
+    if (defaultPort == 0) {
+        const bool authorityHasPort =
+            authorityParts->portKind() == HttpAuthorityPortKind::kValue;
+        const bool hostHasPort =
+            hostParts->portKind() == HttpAuthorityPortKind::kValue;
+        if (authorityHasPort != hostHasPort) {
+            return false;
+        }
+        return !authorityHasPort || authorityParts->port() == hostParts->port();
     }
     return authorityParts->effectivePort(defaultPort) ==
         hostParts->effectivePort(defaultPort);
@@ -438,6 +863,7 @@ bool parseRequestTarget(
         output.query = {};
         output.authority = {};
         output.defaultPort = 0;
+        output.form = HttpRequestTargetForm::kAsterisk;
         return true;
     }
     if (method == HttpKnownMethod::kConnect) {
@@ -448,6 +874,7 @@ bool parseRequestTarget(
         output.query = {};
         output.authority = target;
         output.defaultPort = 0;
+        output.form = HttpRequestTargetForm::kAuthority;
         return true;
     }
     if (target.empty()) {
@@ -466,6 +893,7 @@ bool parseRequestTarget(
             : target.substr(querySeparator + 1);
         output.authority = {};
         output.defaultPort = 0;
+        output.form = HttpRequestTargetForm::kOrigin;
         return !output.path.empty();
     }
     if (!isValidRequestTargetBytes(target)) {

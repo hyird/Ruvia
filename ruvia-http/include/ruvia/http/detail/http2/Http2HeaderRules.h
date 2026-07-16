@@ -59,6 +59,16 @@ namespace ruvia::detail {
     return name != "te" || value == "trailers";
 }
 
+// Decoded HTTP/2 field names are already required to be lowercase. The TE
+// exception above belongs only to requests (RFC 9113 Section 8.2.2); a response
+// carrying TE is malformed even when its value is exactly "trailers".
+[[nodiscard]] inline bool http2IsValidDecodedResponseHeader(
+    std::string_view name,
+    std::string_view value) noexcept {
+    return http2IsValidRegularHeader(name, value) &&
+        !http2IsForbiddenResponseConnectionField(name);
+}
+
 [[nodiscard]] inline bool http2IsForbiddenTrailerHeader(std::string_view name) noexcept {
     switch (classifyRequestHeader(name)) {
         case RequestHeaderKind::kHost:
@@ -75,16 +85,16 @@ namespace ruvia::detail {
         case RequestHeaderKind::kIfUnmodifiedSince:
         case RequestHeaderKind::kRange:
         case RequestHeaderKind::kAuthorization:
+        case RequestHeaderKind::kAccessControlRequestHeaders:
+        case RequestHeaderKind::kAccessControlRequestMethod:
+        case RequestHeaderKind::kOrigin:
             return true;
         case RequestHeaderKind::kOther:
         case RequestHeaderKind::kAccept:
         case RequestHeaderKind::kAcceptEncoding:
-        case RequestHeaderKind::kAccessControlRequestHeaders:
-        case RequestHeaderKind::kAccessControlRequestMethod:
         case RequestHeaderKind::kTransferEncoding:
         case RequestHeaderKind::kUpgrade:
         case RequestHeaderKind::kUserAgent:
-        case RequestHeaderKind::kOrigin:
         case RequestHeaderKind::kSecWebSocketKey:
         case RequestHeaderKind::kSecWebSocketProtocol:
         case RequestHeaderKind::kSecWebSocketVersion:

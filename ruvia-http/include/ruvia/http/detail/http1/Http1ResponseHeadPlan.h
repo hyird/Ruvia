@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <type_traits>
 #include <variant>
 
 #include "ruvia/http/HttpProtocolVersion.h"
@@ -55,21 +56,27 @@ private:
 class Http1ResponseHeadPlan final {
 public:
     [[nodiscard]] constexpr const Http1BufferedResponseHead*
-    buffered() const noexcept {
+    buffered() const & noexcept {
         return std::get_if<Http1BufferedResponseHead>(&framing_);
     }
+    [[nodiscard]] constexpr const Http1BufferedResponseHead*
+    buffered() const && = delete;
 
     [[nodiscard]] constexpr const Http1ChunkedResponseStreamHead*
-    chunkedStream() const noexcept {
+    chunkedStream() const & noexcept {
         return std::get_if<Http1ChunkedResponseStreamHead>(&framing_);
     }
+    [[nodiscard]] constexpr const Http1ChunkedResponseStreamHead*
+    chunkedStream() const && = delete;
 
     [[nodiscard]] constexpr const Http1CloseDelimitedResponseStreamHead*
-    closeDelimitedStream() const noexcept {
+    closeDelimitedStream() const & noexcept {
         return std::get_if<Http1CloseDelimitedResponseStreamHead>(&framing_);
     }
+    [[nodiscard]] constexpr const Http1CloseDelimitedResponseStreamHead*
+    closeDelimitedStream() const && = delete;
 
-    [[nodiscard]] constexpr const HttpResponseBodyPlan& bodyPlan() const noexcept {
+    [[nodiscard]] constexpr HttpResponseBodyPlan bodyPlan() const noexcept {
         return bodyPlan_;
     }
 
@@ -139,40 +146,53 @@ http1CloseDelimitedResponseStreamHeadPlan(
         Http1ResponseHeadPlan::closeDelimitedStreamFraming());
 }
 
-// The runtime writes one inseparable HTTP/1 buffered response contract instead
-// of independently passing body and head plans that can disagree on version or
-// representation length.
+// The runtime writes one inseparable HTTP/1 buffered response contract. The
+// embedded head owns method/status/body semantics and representation length
+// exactly once; direct fact access avoids restoring a parallel write-plan copy.
 class Http1BufferedResponsePlan final {
 public:
-    [[nodiscard]] const HttpBufferedResponseWritePlan&
-    writePlan() const noexcept {
-        return writePlan_;
+    [[nodiscard]] constexpr HttpResponseBodyPlan bodyPlan() const noexcept {
+        return headPlan_.bodyPlan();
+    }
+
+    [[nodiscard]] std::uint16_t responseStatus() const noexcept {
+        return bodyPlan().responseStatus();
+    }
+
+    [[nodiscard]] constexpr std::uint64_t contentLength() const noexcept {
+        return headPlan_.buffered()->contentLength();
+    }
+
+    [[nodiscard]] bool sendBody() const noexcept {
+        return !bodyPlan().bodySuppressed() && contentLength() != 0;
     }
 
     [[nodiscard]] constexpr const Http1ResponseHeadPlan&
-    headPlan() const noexcept {
+    headPlan() const & noexcept {
         return headPlan_;
     }
+    [[nodiscard]] constexpr const Http1ResponseHeadPlan&
+    headPlan() const && = delete;
 
 private:
     friend Http1BufferedResponsePlan http1BufferedResponsePlan(
         HttpBufferedResponseWritePlan,
         Http1ServerConnectionPlan) noexcept;
 
-    Http1BufferedResponsePlan(
-        HttpBufferedResponseWritePlan writePlan,
+    explicit constexpr Http1BufferedResponsePlan(
         Http1ResponseHeadPlan headPlan) noexcept
-        : writePlan_(writePlan), headPlan_(headPlan) {}
+        : headPlan_(headPlan) {}
 
-    HttpBufferedResponseWritePlan writePlan_;
     Http1ResponseHeadPlan headPlan_;
 };
+
+static_assert(std::is_trivially_copyable_v<Http1BufferedResponsePlan>);
+static_assert(sizeof(Http1BufferedResponsePlan) == sizeof(Http1ResponseHeadPlan));
 
 [[nodiscard]] inline Http1BufferedResponsePlan http1BufferedResponsePlan(
     HttpBufferedResponseWritePlan writePlan,
     Http1ServerConnectionPlan connectionPlan) noexcept {
     return Http1BufferedResponsePlan(
-        writePlan,
         Http1ResponseHeadPlan(
             writePlan.bodyPlan(),
             connectionPlan.protocolVersion(),

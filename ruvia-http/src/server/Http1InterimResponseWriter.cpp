@@ -26,10 +26,10 @@ struct Http1InterimResponsePrepareResultAccess final {
 
     [[nodiscard]] static constexpr Http1InterimResponsePrepareResult prepared(
         std::string_view head,
-        bool requiresFinalConnectionClose) noexcept {
+        Http1InterimConnectionDisposition connectionDisposition) noexcept {
         return Http1InterimResponsePrepareResult(
             PreparedHttp1InterimResponse(
-                head, requiresFinalConnectionClose));
+                head, connectionDisposition));
     }
 };
 
@@ -85,7 +85,11 @@ struct Http1InterimHeaderFacts final {
         if (detail::httpAsciiEqualsIgnoreCase(name, "Connection")) {
             if (facts.connectionOptions.parseField(
                     header.value(),
-                    detail::HttpFieldListRole::kSender) !=
+                    detail::HttpFieldListRole::kSender,
+                    [](std::string_view option) noexcept {
+                        return !detail::httpConnectionOptionConflictsWithManagedField(
+                            option);
+                    }) !=
                 detail::HttpFieldListParseStatus::kOk) {
                 error = Http1InterimResponsePrepareError::kInvalidConnection;
                 return false;
@@ -215,7 +219,9 @@ Http1InterimResponsePrepareResult Http1InterimResponseWriter::prepare(
 
     return detail::Http1InterimResponsePrepareResultAccess::prepared(
         std::string_view(headBuffer.data(), facts.wireBytes),
-        facts.connectionOptions.close());
+        facts.connectionOptions.close()
+            ? Http1InterimConnectionDisposition::kCloseAfterInterimResponse
+            : Http1InterimConnectionDisposition::kUnchanged);
 }
 
 }  // namespace ruvia

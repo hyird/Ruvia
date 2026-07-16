@@ -135,7 +135,7 @@ Task<void> PostgreSqlPool::waitForPostgreSql(
         }
 
         void await_resume() const {
-            if (slot.timedOut) {
+            if (slot.deadline.expired()) {
                 throw std::runtime_error("PostgreSQL operation timed out");
             }
             if (error) {
@@ -145,7 +145,7 @@ Task<void> PostgreSqlPool::waitForPostgreSql(
     };
 
     try {
-        co_await SocketWaitAwaiter{slot, *slot.waitSocket, read};
+        co_await SocketWaitAwaiter{slot, *slot.waitSocket, read, {}, {}};
     } catch (...) {
         clearSlotDeadline(slot);
         throw;

@@ -88,7 +88,7 @@ RUVIA_TEST(cookie_value_char_validation) {
     RUVIA_CHECK(!isValidCookieValue(std::string_view("a\x7f" "b", 3)));  // DEL
 }
 
-RUVIA_TEST(cookie_attribute_char_validation) {
+RUVIA_TEST(cookie_path_octets_follow_set_cookie_grammar) {
     using ruvia::detail::isValidCookieAttribute;
     RUVIA_CHECK(isValidCookieAttribute("/path/to"));
     RUVIA_CHECK(isValidCookieAttribute("example.com"));
@@ -103,11 +103,39 @@ RUVIA_TEST(cookie_attribute_char_validation) {
     RUVIA_CHECK(!isValidCookieAttribute("a\x0c" "b"));  // form feed
     RUVIA_CHECK(!isValidCookieAttribute("a\x01" "b"));  // SOH
     RUVIA_CHECK(!isValidCookieAttribute("a\x7f" "b"));  // DEL
-    // But the legitimate field-value octets a path/domain may need stay allowed:
-    // SP, HTAB, and obs-text (0x80-0xFF) are valid HTTP field-value bytes.
-    RUVIA_CHECK(isValidCookieAttribute("/a path"));         // SP
-    RUVIA_CHECK(isValidCookieAttribute("a\tb"));            // HTAB
-    RUVIA_CHECK(isValidCookieAttribute("caf\xc3\xa9.com"));  // UTF-8 obs-text
+    // RFC 6265bis av-octet is ASCII %x20-3A / %x3C-7E. SP is
+    // valid, but HTAB and obs-text are not cookie Path bytes even though the
+    // surrounding HTTP field-value grammar can carry them.
+    RUVIA_CHECK(isValidCookieAttribute("/a path"));          // SP
+    RUVIA_CHECK(!isValidCookieAttribute("a\tb"));            // HTAB
+    RUVIA_CHECK(!isValidCookieAttribute("caf\xc3\xa9/path")); // obs-text
+}
+
+RUVIA_TEST(cookie_domain_requires_dns_subdomain_syntax) {
+    const auto acceptsDomain = [](std::string_view domain) {
+        ruvia::CookieOptions options;
+        options.domain = domain;
+        return !rejects(options);
+    };
+
+    RUVIA_CHECK(acceptsDomain("example.com"));
+    RUVIA_CHECK(acceptsDomain("EXAMPLE.com"));
+    RUVIA_CHECK(acceptsDomain("localhost"));
+    RUVIA_CHECK(acceptsDomain("3.example"));
+    RUVIA_CHECK(acceptsDomain("xn--bcher-kva.example"));
+
+    // Domain= is a DNS subdomain, not the generic Set-Cookie av-octet syntax
+    // used by Path. Emitting any of these values produces a non-conforming
+    // Set-Cookie field that user agents ignore or interpret inconsistently.
+    RUVIA_CHECK(!acceptsDomain(".example.com"));
+    RUVIA_CHECK(!acceptsDomain("example.com."));
+    RUVIA_CHECK(!acceptsDomain("bad domain.example"));
+    RUVIA_CHECK(!acceptsDomain("bad_domain.example"));
+    RUVIA_CHECK(!acceptsDomain("-bad.example"));
+    RUVIA_CHECK(!acceptsDomain("bad-.example"));
+    RUVIA_CHECK(!acceptsDomain("bad..example"));
+    RUVIA_CHECK(!acceptsDomain("caf\xc3\xa9.example"));
+    RUVIA_CHECK(!acceptsDomain(std::string(64, 'a') + ".example"));
 }
 
 RUVIA_TEST(cookie_priority_enum_maps_to_wire_tokens) {
@@ -197,27 +225,30 @@ RUVIA_TEST(cookie_literal_prefix_name_enforces_requirements) {
         }
     };
 
-    // RFC 6265bis §4.1.3: the prefix rules apply to the cookie's actual wire name,
-    // so a hand-typed "__Host-"/"__Secure-" name (with no CookiePrefix) must be
-    // enforced like the enum, case-insensitively -- not silently shipped for the
-    // browser to drop. Keying only on the enum let these through.
+    // RFC 6265bis user agents match these prefixes case-insensitively. Reject
+    // every spelling the UA would reject instead of emitting a silently dropped
+    // cookie.
     ruvia::CookieOptions insecure;  // secure defaults to false
     RUVIA_CHECK(rejectsWithName("__Secure-tok", insecure));    // __Secure- requires Secure
-    RUVIA_CHECK(rejectsWithName("__secure-tok", insecure));    // matched case-insensitively
+    RUVIA_CHECK(rejectsWithName("__secure-tok", insecure));
+    RUVIA_CHECK(rejectsWithName("__SeCuRe-tok", insecure));
 
     ruvia::CookieOptions hostBadDomain;
     hostBadDomain.secure = true;
     hostBadDomain.domain = "example.com";  // __Host- forbids Domain
     RUVIA_CHECK(rejectsWithName("__Host-sid", hostBadDomain));
-    RUVIA_CHECK(rejectsWithName("__HOST-sid", hostBadDomain));  // case-insensitive
+    RUVIA_CHECK(rejectsWithName("__HOST-sid", hostBadDomain));
+    RUVIA_CHECK(rejectsWithName("__hOsT-sid", hostBadDomain));
 
     // A literal-prefixed name that meets the constraints is accepted.
     ruvia::CookieOptions okSecure;
     okSecure.secure = true;
     RUVIA_CHECK(!rejectsWithName("__Secure-tok", okSecure));
+    RUVIA_CHECK(!rejectsWithName("__sEcUrE-tok", okSecure));
     ruvia::CookieOptions okHost;
     okHost.secure = true;  // path defaults to "/", domain empty
     RUVIA_CHECK(!rejectsWithName("__Host-sid", okHost));
+    RUVIA_CHECK(!rejectsWithName("__hOsT-sid", okHost));
 
     // A name that only resembles a prefix (missing the trailing '-') is unaffected.
     ruvia::CookieOptions plain;

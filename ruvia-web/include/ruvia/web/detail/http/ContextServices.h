@@ -4,10 +4,12 @@
 #include "ruvia/web/ErrorHandlers.h"
 #include "ruvia/web/detail/http/ContextCapabilities.h"
 #include "ruvia/http/HttpLimits.h"
+#include "ruvia/core/WorkerHandle.h"
 
 #include <cstddef>
 #include <string>
 #include <string_view>
+#include <utility>
 
 namespace ruvia::detail {
 
@@ -17,19 +19,21 @@ class RateLimiter;
 
 class ContextServices final {
 public:
-    constexpr ContextServices() noexcept
+    ContextServices() noexcept
         : connInfo_(ConnInfo::plain({})) {}
 
-    constexpr ContextServices(
+    ContextServices(
         DbRegistry* db,
         RedisRegistry* redis,
         RateLimiter* rateLimiter = nullptr,
         std::size_t maxDecodedBodyBytes =
-            kDefaultMaxBufferedBodyBytes) noexcept
+            kDefaultMaxBufferedBodyBytes,
+        const WorkerHandle* worker = nullptr) noexcept
         : db_(db),
           redis_(redis),
           rateLimiter_(rateLimiter),
           maxDecodedBodyBytes_(maxDecodedBodyBytes),
+          worker_(worker),
           connInfo_(ConnInfo::plain({})) {}
 
     [[nodiscard]] DbRegistry* db() const noexcept {
@@ -47,6 +51,23 @@ public:
     [[nodiscard]] constexpr std::size_t maxDecodedBodyBytes() const noexcept {
         return maxDecodedBodyBytes_;
     }
+
+    [[nodiscard]] const WorkerHandle& worker() const noexcept {
+        if (worker_ != nullptr) {
+            return *worker_;
+        }
+        static const WorkerHandle invalidWorker;
+        return invalidWorker;
+    }
+
+    // The handle is connection-owned and outlives every ContextServices copy.
+    [[nodiscard]] ContextServices withWorker(
+        const WorkerHandle& value) const noexcept {
+        auto services = *this;
+        services.worker_ = &value;
+        return services;
+    }
+    ContextServices withWorker(WorkerHandle&&) const = delete;
 
     [[nodiscard]] HttpErrorHandler errorHandler() const noexcept {
         return errorHandler_;
@@ -87,12 +108,6 @@ public:
     [[nodiscard]] ContextServices withResponseStream(ResponseStreamWriter& value) const noexcept {
         auto services = *this;
         services.responseOutput_ = ContextResponseOutput::responseStream(value);
-        return services;
-    }
-
-    [[nodiscard]] ContextServices withWebSocket(WebSocket& value) const noexcept {
-        auto services = *this;
-        services.responseOutput_ = ContextResponseOutput::webSocket(value);
         return services;
     }
 
@@ -146,6 +161,9 @@ private:
     RedisRegistry* redis_{nullptr};
     RateLimiter* rateLimiter_{nullptr};
     std::size_t maxDecodedBodyBytes_{kDefaultMaxBufferedBodyBytes};
+    // Request/session services borrow the address-stable server-owned handle.
+    // Every derived ContextServices value stays inside that server's dispatch.
+    const WorkerHandle* worker_{nullptr};
     HttpErrorHandler errorHandler_{nullptr};
     HttpNotFoundHandler notFoundHandler_{nullptr};
 

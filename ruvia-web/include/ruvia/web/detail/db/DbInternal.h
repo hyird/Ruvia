@@ -41,14 +41,16 @@ public:
 #include <cstdint>
 #include <memory>
 #include <memory_resource>
+#include <optional>
 #include <span>
 #include <string_view>
 #include <variant>
 #include <vector>
 
+#include "ruvia/core/detail/OperationDeadline.h"
+#include "ruvia/core/detail/PoolLeaseScheduler.h"
 #include "ruvia/core/memory/PmrObject.h"
 #include "ruvia/web/detail/db/DbPoolDeadline.h"
-#include "ruvia/web/detail/db/DbPoolScheduler.h"
 
 struct st_mysql;
 struct st_mysql_res;
@@ -106,13 +108,10 @@ public:
 
         st_mysql* connection{nullptr};
         std::unique_ptr<DbSlotSocket, SlotSocketDeleter> waitSocket;
-        std::chrono::steady_clock::time_point deadline{};
         std::coroutine_handle<> deadlineContinuation{};
         bool connected{false};
-        bool deadlineActive{false};
-        bool timedOut{false};
-        enum class DeadlineKind : std::uint8_t { kNone, kSocket, kSleep };
-        DeadlineKind deadlineKind{DeadlineKind::kNone};
+        enum class DeadlineKind : std::uint8_t { kSocket, kSleep };
+        OperationDeadline<DeadlineKind> deadline;
     };
 
 public:
@@ -134,7 +133,7 @@ public:
     Task<void> closeStream(std::size_t slot, void* result, std::pmr::memory_resource* resource);
     void abortStream(std::size_t slot, void* result) noexcept;
     Task<QueryResult> executeOnTransactionSlot(std::size_t slot, std::pmr::string sql, std::pmr::vector<DbValue> params, std::pmr::memory_resource* resource);
-    Task<DbTransaction> beginTransaction(std::pmr::memory_resource* resource, RequestMemory* requestMemory);
+    Task<DbTransaction> beginTransaction(std::pmr::memory_resource* resource);
     Task<void> commitTransaction(std::size_t slot, std::pmr::memory_resource* resource);
     Task<void> rollbackTransaction(std::size_t slot, std::pmr::memory_resource* resource);
     void abortTransaction(std::size_t slot) noexcept;
@@ -144,7 +143,7 @@ private:
     DbConfig config_;
     std::pmr::memory_resource* resource_;
     std::pmr::vector<ConnectionSlot> slots_;
-    DbPoolScheduler scheduler_;
+    PoolLeaseScheduler scheduler_;
 };
 
 #endif  // RUVIA_ENABLE_MARIADB
@@ -194,10 +193,9 @@ private:
 
         pg_conn* connection{nullptr};
         std::unique_ptr<DbSlotSocket, SlotSocketDeleter> waitSocket;
-        std::chrono::steady_clock::time_point deadline{};
         bool connected{false};
-        bool deadlineActive{false};
-        bool timedOut{false};
+        enum class DeadlineKind : std::uint8_t { kSocket };
+        OperationDeadline<DeadlineKind> deadline;
     };
 
 public:
@@ -220,7 +218,7 @@ public:
     Task<void> closeStream(std::size_t slot, void* result, std::pmr::memory_resource* resource);
     void abortStream(std::size_t slot, void* result) noexcept;
     Task<QueryResult> executeOnTransactionSlot(std::size_t slot, std::pmr::string sql, std::pmr::vector<DbValue> params, std::pmr::memory_resource* resource);
-    Task<DbTransaction> beginTransaction(std::pmr::memory_resource* resource, RequestMemory* requestMemory);
+    Task<DbTransaction> beginTransaction(std::pmr::memory_resource* resource);
     Task<void> commitTransaction(std::size_t slot, std::pmr::memory_resource* resource);
     Task<void> rollbackTransaction(std::size_t slot, std::pmr::memory_resource* resource);
     void abortTransaction(std::size_t slot) noexcept;
@@ -230,7 +228,7 @@ private:
     DbConfig config_;
     std::pmr::memory_resource* resource_;
     std::pmr::vector<ConnectionSlot> slots_;
-    DbPoolScheduler scheduler_;
+    PoolLeaseScheduler scheduler_;
 };
 
 #endif  // RUVIA_ENABLE_POSTGRESQL
@@ -248,8 +246,13 @@ public:
     void scanDeadlines() noexcept;
     [[nodiscard]] bool empty() const noexcept;
     [[nodiscard]] bool hasAnyTimeout() const noexcept;
-    [[nodiscard]] DbHandle get(std::pmr::memory_resource* resource, RequestMemory* requestMemory = nullptr) const;
-    [[nodiscard]] DbHandle get(std::string_view alias, std::pmr::memory_resource* resource, RequestMemory* requestMemory = nullptr) const;
+    [[nodiscard]] DbHandle get(
+        std::pmr::memory_resource* resource,
+        ScopedOperationScope& operationScope) const;
+    [[nodiscard]] DbHandle get(
+        std::string_view alias,
+        std::pmr::memory_resource* resource,
+        ScopedOperationScope& operationScope) const;
 
 public:
 #ifdef RUVIA_ENABLE_MARIADB
@@ -275,7 +278,7 @@ public:
 private:
     std::pmr::memory_resource* resource_;
     std::pmr::vector<Entry> clients_;
-    DbPoolRef defaultClient_{};
+    std::optional<std::size_t> defaultClientIndex_;
 };
 
 }  // namespace ruvia::detail

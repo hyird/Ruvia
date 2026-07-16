@@ -11,9 +11,9 @@
 namespace ruvia::detail {
 namespace {
 
-using ruvia::detail::authorityMatchesHost;
 using ruvia::detail::findHttpHeaderEnd;
 using ruvia::detail::HttpRequestAccess;
+using ruvia::detail::HttpRequestTargetForm;
 using ruvia::detail::parseHttpHeaderBlock;
 using ruvia::detail::parseRequestTarget;
 using ruvia::detail::ParsedRequestHeaderBlock;
@@ -98,12 +98,6 @@ void Http1ServerRequestParser::parseRequestHead(
         return fail(HttpParseError::kMissingHost);
     }
     const auto hostHeaderIndex = block.hostHeaderIndex;
-    if (!targetView.authority.empty() && hostHeaderIndex >= 0) {
-        const auto hostHeaderValue = block.headers[static_cast<std::size_t>(hostHeaderIndex)].value.bind(buffer);
-        if (!authorityMatchesHost(targetView.authority, hostHeaderValue, targetView.defaultPort)) {
-            return fail(HttpParseError::kInvalidHost);
-        }
-    }
 
     const auto contentLength = block.contentLength.value();
     const auto transferEncoding = block.transferEncoding.value();
@@ -127,14 +121,25 @@ void Http1ServerRequestParser::parseRequestHead(
 
     for (std::size_t i = 0; i < block.headerCount; ++i) {
         const auto& header = block.headers[i];
+        auto value = header.value.bind(buffer);
+        // RFC 9112 sections 3.2.2 and 3.3 make the request-target authoritative
+        // for absolute-form and authority-form. Rebind both headers() and the
+        // known-header cache so application code cannot observe a conflicting
+        // Host value as a second routing truth.
+        if ((targetView.form == HttpRequestTargetForm::kAbsolute ||
+             targetView.form == HttpRequestTargetForm::kAuthority) &&
+            hostHeaderIndex >= 0 &&
+            i == static_cast<std::size_t>(hostHeaderIndex)) {
+            value = targetView.authority;
+        }
         (void)HttpRequestAccess::addHeader(
             state.request,
-            HttpHeaderView{header.name.bind(buffer), header.value.bind(buffer)},
+            HttpHeaderView{header.name.bind(buffer), value},
             requestHeaderKindKnownSlot(header.kind));
     }
 
-    state.responseCoding = httpSelectResponseCodingFromQualities(
-        block.gzipEncoding, block.brotliEncoding, block.zstdEncoding);
+    state.responseCoding =
+        httpSelectResponseCodingFromQualities(block.responseCodingQualities);
     auto expectations = block.expectations;
     if (protocolVersion == HttpProtocolVersion::kHttp10) {
         expectations.ignore100Continue();
@@ -265,8 +270,7 @@ Http1RequestParseResult Http1RequestParser::parse(std::string_view buffer) const
             needBody->requiredTotalBytes());
     }
     if (const auto* failure = parsed.failure()) {
-        return detail::Http1RequestParseResultAccess::failure(
-            failure->error());
+        return detail::Http1RequestParseResultAccess::failure(*failure);
     }
     const auto* message = parsed.messageReady();
     if (message == nullptr) {

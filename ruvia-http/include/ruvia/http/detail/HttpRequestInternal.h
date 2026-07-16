@@ -65,6 +65,14 @@ struct HttpRequestAccess final {
             : std::string_view{};
     }
 
+    [[nodiscard]] static bool hasKnownHeader(
+        const HttpRequest& request,
+        RequestKnownHeader name) noexcept {
+        const auto slot = knownHeaderSlot(name);
+        return slot < kCachedHeaderSlots &&
+            (request.cachedHeaderBits_ & cachedHeaderBit(slot)) != 0;
+    }
+
     [[nodiscard]] static std::string_view bodyBytes(const HttpRequest& request) noexcept {
         return request.body_;
     }
@@ -154,6 +162,12 @@ static_assert(
     const HttpRequest& request,
     RequestKnownHeader name) noexcept {
     return HttpRequestAccess::knownHeader(request, name);
+}
+
+[[nodiscard]] inline bool requestHasKnownHeader(
+    const HttpRequest& request,
+    RequestKnownHeader name) noexcept {
+    return HttpRequestAccess::hasKnownHeader(request, name);
 }
 
 [[nodiscard]] inline std::string_view requestBodyBytes(const HttpRequest& request) noexcept {

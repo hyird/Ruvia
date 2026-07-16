@@ -3,10 +3,13 @@
 #include <cstddef>
 #include <cstdint>
 #include <string_view>
+#include <type_traits>
 
 #include "ruvia/http/HttpHeader.h"
 #include "ruvia/http/detail/AsciiCase.h"
 #include "ruvia/http/detail/HttpOws.h"
+#include "ruvia/http/detail/HttpResponseHeaderBits.h"
+#include "ruvia/http/detail/HttpResponseKnownHeaders.h"
 
 namespace ruvia::detail {
 
@@ -32,6 +35,19 @@ enum class HttpConnectionOption : std::uint8_t {
     kTe = 1U << 3
 };
 
+[[nodiscard]] inline bool httpConnectionOptionConflictsWithManagedField(
+    std::string_view option) noexcept {
+    if (httpAsciiEqualsIgnoreCase(option, "Host") ||
+        httpAsciiEqualsIgnoreCase(option, "Expect") ||
+        httpAsciiEqualsIgnoreCase(option, "Trailer")) {
+        return true;
+    }
+    const auto knownBit = classifyResponseHeaderName(option);
+    return knownBit != 0 &&
+        knownBit != kResponseHeaderConnection &&
+        knownBit != kResponseHeaderTransferEncoding;
+}
+
 // Incremental parser for the logical Connection field value. Repeated field
 // lines extend the same state, so a caller cannot accidentally let a later
 // occurrence erase an earlier close/Upgrade/TE signal.
@@ -40,7 +56,20 @@ public:
     [[nodiscard]] HttpFieldListParseStatus parseField(
         std::string_view fieldValue,
         HttpFieldListRole role) noexcept {
-        auto parsedBits = bits_;
+        return parseField(
+            fieldValue,
+            role,
+            [](std::string_view) noexcept {
+                return true;
+            });
+    }
+
+    template <typename Visitor>
+    [[nodiscard]] HttpFieldListParseStatus parseField(
+        std::string_view fieldValue,
+        HttpFieldListRole role,
+        Visitor&& visitor) noexcept {
+        auto parsedBits = state_;
         std::size_t start = 0;
         while (start <= fieldValue.size()) {
             const auto comma = fieldValue.find(',', start);
@@ -61,6 +90,9 @@ public:
                 if (!isValidHttpHeaderName(option)) {
                     return HttpFieldListParseStatus::kMalformed;
                 }
+                if (!visitor(option)) {
+                    return HttpFieldListParseStatus::kRejected;
+                }
                 if (httpAsciiEqualsIgnoreCase(option, "close")) {
                     parsedBits |= bit(HttpConnectionOption::kClose);
                 } else if (httpAsciiEqualsIgnoreCase(option, "keep-alive")) {
@@ -77,17 +109,16 @@ public:
             start = comma + 1;
         }
 
-        bits_ = parsedBits;
-        fieldPresent_ = true;
+        state_ = static_cast<std::uint8_t>(parsedBits | kFieldPresentBit);
         return HttpFieldListParseStatus::kOk;
     }
 
     [[nodiscard]] bool hasField() const noexcept {
-        return fieldPresent_;
+        return (state_ & kFieldPresentBit) != 0;
     }
 
     [[nodiscard]] bool contains(HttpConnectionOption option) const noexcept {
-        return (bits_ & bit(option)) != 0;
+        return (state_ & bit(option)) != 0;
     }
 
     [[nodiscard]] bool close() const noexcept {
@@ -107,14 +138,21 @@ public:
     }
 
 private:
+    static constexpr std::uint8_t kFieldPresentBit = 1U << 7;
+
     [[nodiscard]] static constexpr std::uint8_t bit(
         HttpConnectionOption option) noexcept {
         return static_cast<std::uint8_t>(option);
     }
 
-    std::uint8_t bits_{0};
-    bool fieldPresent_{false};
+    // Connection owns four recognised-token bits plus one orthogonal field
+    // presence bit. Keeping them in one committed byte makes absent, present
+    // empty/unknown, and present with recognised options impossible to tear.
+    std::uint8_t state_{0};
 };
+
+static_assert(std::is_trivially_copyable_v<HttpConnectionOptions>);
+static_assert(sizeof(HttpConnectionOptions) == 1);
 
 struct HttpUpgradeProtocol final {
     std::string_view name;
@@ -152,6 +190,12 @@ struct HttpUpgradeProtocol final {
 
 // Incremental Upgrade list parser. It owns repeated-field/list syntax, while
 // the visitor owns policy such as whether a selected protocol was offered.
+enum class HttpUpgradeFieldState : std::uint8_t {
+    kAbsent,
+    kPresentWithoutProtocol,
+    kPresentWithProtocol,
+};
+
 class HttpUpgradeProtocols final {
 public:
     template <typename Visitor>
@@ -188,22 +232,27 @@ public:
             start = comma + 1;
         }
 
-        fieldPresent_ = true;
-        hasProtocol_ = hasProtocol_ || parsedProtocol;
+        if (parsedProtocol) {
+            state_ = HttpUpgradeFieldState::kPresentWithProtocol;
+        } else if (state_ == HttpUpgradeFieldState::kAbsent) {
+            state_ = HttpUpgradeFieldState::kPresentWithoutProtocol;
+        }
         return HttpFieldListParseStatus::kOk;
     }
 
     [[nodiscard]] bool hasField() const noexcept {
-        return fieldPresent_;
+        return state_ != HttpUpgradeFieldState::kAbsent;
     }
 
     [[nodiscard]] bool hasProtocol() const noexcept {
-        return hasProtocol_;
+        return state_ == HttpUpgradeFieldState::kPresentWithProtocol;
     }
 
 private:
-    bool fieldPresent_{false};
-    bool hasProtocol_{false};
+    HttpUpgradeFieldState state_{HttpUpgradeFieldState::kAbsent};
 };
+
+static_assert(std::is_trivially_copyable_v<HttpUpgradeProtocols>);
+static_assert(sizeof(HttpUpgradeProtocols) == 1);
 
 }  // namespace ruvia::detail

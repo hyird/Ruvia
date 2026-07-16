@@ -39,10 +39,17 @@ concept HasChunkScanError = requires(const T& result) {
     { result.error() } -> std::same_as<ruvia::detail::HttpChunkScanError>;
 };
 
+template <typename T>
+concept HasAnyRvalueHttpChunkScanAccessor =
+    requires(T&& result) { std::move(result).needMore(); } ||
+    requires(T&& result) { std::move(result).complete(); } ||
+    requires(T&& result) { std::move(result).failure(); };
+
 static_assert(std::same_as<
     decltype(ruvia::detail::scanHttpChunkedBody(std::string_view{})),
     HttpChunkScanResult>);
 static_assert(!std::default_initializable<HttpChunkScanResult>);
+static_assert(!HasAnyRvalueHttpChunkScanAccessor<HttpChunkScanResult>);
 static_assert(!HasChunkScanConsumedBytes<HttpChunkScanNeedMore>);
 static_assert(HasChunkScanConsumedBytes<HttpChunkScanComplete>);
 static_assert(!HasChunkScanConsumedBytes<HttpChunkScanFailure>);
@@ -65,9 +72,29 @@ concept HasQueriesVectorAccessor = requires(const T& request) {
     request.queries(std::string_view{});
 };
 
+template <typename T>
+concept ParsesAnyRvalueOwningString =
+    requires(std::string&& body) {
+        T::parse(std::move(body), std::pmr::get_default_resource());
+    } ||
+    requires(const std::string&& body) {
+        T::parse(std::move(body), std::pmr::get_default_resource());
+    };
+
+template <typename T>
+concept ParsesLvalueOwningString = requires(const std::string& body) {
+    T::parse(body, std::pmr::get_default_resource());
+};
+
 static_assert(!HasCookiesAccessor<ruvia::HttpRequest>);
 static_assert(!HasQueryListAccessor<ruvia::HttpRequest>);
 static_assert(!HasQueriesVectorAccessor<ruvia::HttpRequest>);
+static_assert(!ParsesAnyRvalueOwningString<ruvia::JsonValue>);
+static_assert(!ParsesAnyRvalueOwningString<ruvia::JsonObject>);
+static_assert(!ParsesAnyRvalueOwningString<ruvia::FormObject>);
+static_assert(ParsesLvalueOwningString<ruvia::JsonValue>);
+static_assert(ParsesLvalueOwningString<ruvia::JsonObject>);
+static_assert(ParsesLvalueOwningString<ruvia::FormObject>);
 
 RUVIA_REQUEST_MODEL(AccessorSurfaceRequest,
     RUVIA_FIELD(message, ruvia::String)
@@ -77,12 +104,20 @@ RUVIA_RESPONSE_MODEL(AccessorSurfaceResponse,
     RUVIA_FIELD(message, ruvia::String)
 );
 
+template <typename T>
+concept ExposesAnyRvalueGeneratedMessageMember =
+    requires { std::declval<const T&&>().message(); } ||
+    requires { std::declval<T&&>().messageEnsure(); } ||
+    requires { std::declval<T&&>().message(std::string_view{}); };
+
 static_assert(std::same_as<
     std::remove_cvref_t<decltype(std::declval<AccessorSurfaceRequest&>().message())>,
     std::optional<ruvia::String>>);
 static_assert(std::same_as<
     std::remove_cvref_t<decltype(std::declval<const AccessorSurfaceRequest&>().message())>,
     std::optional<ruvia::String>>);
+static_assert(!ExposesAnyRvalueGeneratedMessageMember<AccessorSurfaceRequest>);
+static_assert(!ExposesAnyRvalueGeneratedMessageMember<AccessorSurfaceResponse>);
 
 std::optional<std::string> zstdRoundTrip(std::string_view plain, std::size_t truncateBy) {
     const std::size_t bound = ZSTD_compressBound(plain.size());
@@ -256,9 +291,9 @@ RUVIA_TEST(multipart_boundary_line_requires_delimiter_terminator) {
     }
     // A close delimiter ("--abc--") is a valid terminator too.
     const std::string_view closing = "--abc--\r\n";
-    RUVIA_CHECK(
-        httpFindInitialMultipartDelimiter(
-            closing, ruvia::MultipartBoundary("abc"), true).close() != nullptr);
+    const auto closeMatch = httpFindInitialMultipartDelimiter(
+        closing, ruvia::MultipartBoundary("abc"), true);
+    RUVIA_CHECK(closeMatch.close() != nullptr);
 }
 
 // --- zstd request-body decode: truncation must be rejected ---------------
@@ -285,7 +320,8 @@ RUVIA_TEST(accept_quality_quoted_semicolon_param) {
     // separator when locating q (RFC 7231 §5.3.2). Before unifying onto the quote-aware
     // scanner this mis-read "q=0" from inside the quotes and rejected the type.
     RUVIA_CHECK(httpAcceptsMediaType(
-        R"(application/json;version="a;q=0";q=0.9)", "application/json"));
+        R"(application/json;version="a;q=0";q=0.9)",
+        R"(application/json;version="a;q=0")"));
     // Regressions: a real q=0 still means "not accepted", and a normal q is honored.
     RUVIA_CHECK(!httpAcceptsMediaType("application/json;q=0", "application/json"));
     RUVIA_CHECK(httpAcceptsMediaType("text/html;q=0.8", "text/html"));
@@ -332,4 +368,76 @@ RUVIA_TEST(chunk_scan_result_is_discriminated) {
         ruvia::detail::HttpChunkScanError::kInvalidSize);
     RUVIA_CHECK(failure.needMore() == nullptr);
     RUVIA_CHECK(failure.complete() == nullptr);
+}
+
+RUVIA_TEST(chunk_trailer_section_enforces_field_and_byte_limits) {
+    std::string tooMany = "0\r\n";
+    for (std::size_t i = 0; i <= ruvia::kMaxHttpHeaderFields; ++i) {
+        tooMany.append("X-Trace: value\r\n");
+    }
+    tooMany.append("\r\n");
+    const auto tooManyResult = ruvia::detail::scanHttpChunkedBody(tooMany);
+    RUVIA_CHECK(tooManyResult.failure() != nullptr);
+    if (const auto* failure = tooManyResult.failure()) {
+        RUVIA_CHECK(
+            failure->error() ==
+            ruvia::detail::HttpChunkScanError::kTooLarge);
+    }
+
+    std::string oversized = "0\r\nX-Trace: ";
+    oversized.append(ruvia::kMaxHttpHeaderBytes, 'x');
+    oversized.append("\r\n\r\n");
+    const auto oversizedResult =
+        ruvia::detail::scanHttpChunkedBody(oversized);
+    RUVIA_CHECK(oversizedResult.failure() != nullptr);
+    if (const auto* failure = oversizedResult.failure()) {
+        RUVIA_CHECK(
+            failure->error() ==
+            ruvia::detail::HttpChunkScanError::kTooLarge);
+    }
+}
+
+RUVIA_TEST(chunk_scan_rejects_unterminated_framing_at_the_header_limit) {
+    std::string oversizedSizeLine(ruvia::kMaxHttpHeaderBytes, '1');
+    const auto sizeLineResult =
+        ruvia::detail::scanHttpChunkedBody(oversizedSizeLine);
+    RUVIA_CHECK(sizeLineResult.failure() != nullptr);
+    if (const auto* failure = sizeLineResult.failure()) {
+        RUVIA_CHECK(
+            failure->error() ==
+            ruvia::detail::HttpChunkScanError::kTooLarge);
+    }
+
+    std::string oversizedTerminatedSizeLine = "1;x=";
+    oversizedTerminatedSizeLine.append(
+        ruvia::kMaxHttpHeaderBytes, 'a');
+    oversizedTerminatedSizeLine.append("\r\n");
+    const auto terminatedSizeLineResult =
+        ruvia::detail::scanHttpChunkedBody(oversizedTerminatedSizeLine);
+    RUVIA_CHECK(terminatedSizeLineResult.failure() != nullptr);
+    if (const auto* failure = terminatedSizeLineResult.failure()) {
+        RUVIA_CHECK(
+            failure->error() ==
+            ruvia::detail::HttpChunkScanError::kTooLarge);
+    }
+
+    std::string oversizedTrailers = "0\r\nX-Trace: ";
+    oversizedTrailers.append(ruvia::kMaxHttpHeaderBytes, 'x');
+    const auto trailerResult =
+        ruvia::detail::scanHttpChunkedBody(oversizedTrailers);
+    RUVIA_CHECK(trailerResult.failure() != nullptr);
+    if (const auto* failure = trailerResult.failure()) {
+        RUVIA_CHECK(
+            failure->error() ==
+            ruvia::detail::HttpChunkScanError::kTooLarge);
+    }
+
+    std::string boundarySizeLine = "1;x=";
+    boundarySizeLine.append(
+        ruvia::kMaxHttpHeaderBytes - boundarySizeLine.size() - 2,
+        'a');
+    boundarySizeLine.append("\r\nx\r\n0\r\n\r\n");
+    const auto boundaryResult =
+        ruvia::detail::scanHttpChunkedBody(boundarySizeLine);
+    RUVIA_CHECK(boundaryResult.complete() != nullptr);
 }

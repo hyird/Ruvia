@@ -2,14 +2,18 @@
 
 #include <algorithm>
 #include <array>
+#include <bit>
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <limits>
 #include <memory_resource>
 #include <optional>
+#include <stdexcept>
 #include <string_view>
+#include <type_traits>
 #include <utility>
+#include <variant>
 #include <vector>
 
 #include "ruvia/core/memory/PmrResource.h"
@@ -17,12 +21,62 @@
 
 namespace ruvia::detail {
 
-inline constexpr std::size_t kDefaultRateLimitSlotsPerWorker = 8192;
-
-struct RateLimitCheck final {
-    bool allowed{true};
-    std::int64_t resetAfterMs{1};
+class RateLimitAllowed final {
+private:
+    constexpr RateLimitAllowed() noexcept = default;
+    friend class RateLimitDecision;
 };
+
+class RateLimitRejection final {
+public:
+    [[nodiscard]] constexpr std::chrono::milliseconds retryAfter() const noexcept {
+        return retryAfter_;
+    }
+
+private:
+    explicit constexpr RateLimitRejection(
+        std::chrono::milliseconds retryAfter) noexcept
+        : retryAfter_(retryAfter) {}
+
+    std::chrono::milliseconds retryAfter_;
+    friend class RateLimitDecision;
+};
+
+class RateLimitDecision final {
+public:
+    [[nodiscard]] static constexpr RateLimitDecision allow() noexcept {
+        return RateLimitDecision(RateLimitAllowed{});
+    }
+
+    [[nodiscard]] static constexpr RateLimitDecision reject(
+        std::chrono::milliseconds retryAfter) noexcept {
+        return RateLimitDecision(RateLimitRejection(retryAfter));
+    }
+
+    [[nodiscard]] constexpr const RateLimitAllowed* allowed() const & noexcept {
+        return std::get_if<RateLimitAllowed>(&value_);
+    }
+
+    [[nodiscard]] const RateLimitAllowed* allowed() const && = delete;
+
+    [[nodiscard]] constexpr const RateLimitRejection* rejection() const & noexcept {
+        return std::get_if<RateLimitRejection>(&value_);
+    }
+
+    [[nodiscard]] const RateLimitRejection* rejection() const && = delete;
+
+private:
+    explicit constexpr RateLimitDecision(RateLimitAllowed allowed) noexcept
+        : value_(allowed) {}
+
+    explicit constexpr RateLimitDecision(RateLimitRejection rejection) noexcept
+        : value_(rejection) {}
+
+    std::variant<RateLimitAllowed, RateLimitRejection> value_;
+};
+
+static_assert(std::is_trivially_copyable_v<RateLimitDecision>);
+static_assert(sizeof(RateLimitDecision) <= 2 * sizeof(std::chrono::milliseconds));
 
 [[nodiscard]] inline std::int64_t rateLimiterNowMs() noexcept {
     return std::chrono::duration_cast<std::chrono::milliseconds>(
@@ -36,6 +90,11 @@ struct SteadyRateLimiterClock final {
     }
 };
 
+enum class RouteRateLimitPresence : std::uint8_t {
+    kAbsent,
+    kPresent,
+};
+
 // One fixed-window table owned and accessed by exactly one HttpServer worker.
 // Startup allocates every slot from WorkerMemory; request-path lookup mutates
 // ordinary worker-local state and performs no allocation, locking, atomics, or
@@ -43,37 +102,41 @@ struct SteadyRateLimiterClock final {
 template <typename Clock>
 class BasicRateLimiter {
 public:
-    explicit BasicRateLimiter(
-        std::optional<RateLimitRule> appRule,
-        std::pmr::memory_resource* resource = nullptr)
-        : BasicRateLimiter(
-              appRule,
-              kDefaultRateLimitSlotsPerWorker,
-              resource) {}
-
     BasicRateLimiter(
-        std::optional<RateLimitRule> appRule,
+        std::optional<RateLimitRule> defaultRulePerWorker,
+        RouteRateLimitPresence routeRules,
         std::size_t slotCount,
         std::pmr::memory_resource* resource = nullptr)
-        : appRule_(std::move(appRule)),
+        : defaultRulePerWorker_(std::move(defaultRulePerWorker)),
           slots_(pmrResourceOrDefault(resource)) {
-        slots_.resize(nextPowerOfTwo(slotCount));
+        if (!std::has_single_bit(slotCount)) {
+            throw std::invalid_argument(
+                "rate-limit slot count must be a power of two");
+        }
+        if (defaultRulePerWorker_.has_value() ||
+            routeRules == RouteRateLimitPresence::kPresent) {
+            slots_.resize(slotCount);
+        }
     }
 
     BasicRateLimiter(const BasicRateLimiter&) = delete;
     BasicRateLimiter& operator=(const BasicRateLimiter&) = delete;
 
-    [[nodiscard]] bool enabled() const noexcept {
-        return appRule_.has_value();
+    [[nodiscard]] bool hasDefaultRule() const noexcept {
+        return defaultRulePerWorker_.has_value();
     }
 
-    [[nodiscard]] RateLimitCheck allowGlobal(std::string_view remoteAddress) noexcept {
-        return appRule_.has_value()
-            ? allow(kGlobalScope, remoteAddress, *appRule_)
-            : RateLimitCheck{};
+    [[nodiscard]] std::size_t slotCapacity() const noexcept {
+        return slots_.size();
     }
 
-    [[nodiscard]] RateLimitCheck allowRoute(
+    [[nodiscard]] RateLimitDecision allowDefault(std::string_view remoteAddress) noexcept {
+        return defaultRulePerWorker_.has_value()
+            ? allow(kDefaultScope, remoteAddress, *defaultRulePerWorker_)
+            : RateLimitDecision::allow();
+    }
+
+    [[nodiscard]] RateLimitDecision allowRoute(
         std::uintptr_t routeScope,
         std::string_view remoteAddress,
         const RateLimitRule& rule) noexcept {
@@ -88,7 +151,7 @@ private:
     // accommodates canonical peer strings carrying an IPv6 scope identifier.
     static constexpr std::size_t kMaxKeyBytes = 64;
     static constexpr std::uint64_t kEmptyHash = 0;
-    static constexpr std::uintptr_t kGlobalScope = 1;
+    static constexpr std::uintptr_t kDefaultScope = 1;
     static constexpr std::uintptr_t kFallbackRouteScope = 2;
 
     struct Slot final {
@@ -100,18 +163,6 @@ private:
         std::array<char, kMaxKeyBytes> key{};
     };
     static_assert(sizeof(Slot) <= 112, "worker rate-limit slots must stay compact");
-
-    [[nodiscard]] static std::size_t nextPowerOfTwo(std::size_t value) noexcept {
-        if (value <= 1) {
-            return 1;
-        }
-        std::size_t result = 1;
-        const auto largest = std::numeric_limits<std::size_t>::max() / 2 + 1;
-        while (result < value && result < largest) {
-            result <<= 1U;
-        }
-        return result;
-    }
 
     [[nodiscard]] static std::uint64_t keyHash(
         std::uintptr_t scope,
@@ -194,7 +245,7 @@ private:
         std::copy(key.begin(), key.end(), slot.key.begin());
     }
 
-    [[nodiscard]] static RateLimitCheck consume(
+    [[nodiscard]] static RateLimitDecision consume(
         Slot& slot,
         const RateLimitRule& rule,
         std::int64_t nowMs,
@@ -203,29 +254,31 @@ private:
         if (slot.resetAtMs <= now) {
             slot.resetAtMs = resetAtMs;
             slot.count = 1;
-            return RateLimitCheck{
-                .allowed = true,
-                .resetAfterMs = resetAfterMs(nowMs, resetAtMs)};
+            return RateLimitDecision::allow();
         }
         if (slot.count >= rule.maxRequests()) {
-            return RateLimitCheck{
-                .allowed = false,
-                .resetAfterMs = resetAfterMs(nowMs, slot.resetAtMs)};
+            return RateLimitDecision::reject(std::chrono::milliseconds(
+                resetAfterMs(nowMs, slot.resetAtMs)));
         }
         ++slot.count;
-        return RateLimitCheck{
-            .allowed = true,
-            .resetAfterMs = resetAfterMs(nowMs, slot.resetAtMs)};
+        return RateLimitDecision::allow();
     }
 
-    [[nodiscard]] RateLimitCheck allow(
+    [[nodiscard]] RateLimitDecision allow(
         std::uintptr_t scope,
         std::string_view key,
         const RateLimitRule& rule) noexcept {
         const bool allowOnOverflow =
             rule.overflowPolicy() == RateLimitOverflowPolicy::kAllow;
+        if (slots_.empty()) {
+            return allowOnOverflow
+                ? RateLimitDecision::allow()
+                : RateLimitDecision::reject(std::chrono::milliseconds(1));
+        }
         if (key.size() > kMaxKeyBytes) {
-            return RateLimitCheck{.allowed = allowOnOverflow, .resetAfterMs = 1};
+            return allowOnOverflow
+                ? RateLimitDecision::allow()
+                : RateLimitDecision::reject(std::chrono::milliseconds(1));
         }
 
         const auto nowMs = Clock::nowMs();
@@ -241,9 +294,7 @@ private:
             if (slot.keyHash == kEmptyHash) {
                 auto& target = reclaimable == nullptr ? slot : *reclaimable;
                 install(target, scope, key, hash, resetAtMs);
-                return RateLimitCheck{
-                    .allowed = true,
-                    .resetAfterMs = resetAfterMs(nowMs, resetAtMs)};
+                return RateLimitDecision::allow();
             }
             if (keyEquals(slot, scope, key, hash)) {
                 return consume(slot, rule, nowMs, resetAtMs);
@@ -255,14 +306,14 @@ private:
 
         if (reclaimable != nullptr) {
             install(*reclaimable, scope, key, hash, resetAtMs);
-            return RateLimitCheck{
-                .allowed = true,
-                .resetAfterMs = resetAfterMs(nowMs, resetAtMs)};
+            return RateLimitDecision::allow();
         }
-        return RateLimitCheck{.allowed = allowOnOverflow, .resetAfterMs = 1};
+        return allowOnOverflow
+            ? RateLimitDecision::allow()
+            : RateLimitDecision::reject(std::chrono::milliseconds(1));
     }
 
-    std::optional<RateLimitRule> appRule_;
+    std::optional<RateLimitRule> defaultRulePerWorker_;
     std::pmr::vector<Slot> slots_;
 };
 

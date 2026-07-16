@@ -5,6 +5,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <exception>
+#include <string_view>
 #include <utility>
 #include <variant>
 
@@ -38,31 +39,50 @@ private:
     std::size_t consumedBytes_;
 };
 
-// A request-body runtime has already restored the pipelined suffix to the
-// beginning of the connection read buffer and updated usedBytes.
-class Http1RequestBufferRestored final {
+// A request-body runtime handed its pipelined suffix over instead of writing it
+// into the connection read buffer, whose bytes still back every view in the
+// request being completed. The session installs these bytes at its single
+// buffer-cleanup point, once the response is written and the access log is
+// recorded. The view borrows request-scoped storage that outlives the
+// completion.
+class Http1RequestBufferPipelineRestore final {
+public:
+    [[nodiscard]] constexpr std::string_view pipeline() const noexcept {
+        return pipeline_;
+    }
+
 private:
     friend class Http1SessionRequestCompletion;
 
-    constexpr Http1RequestBufferRestored() noexcept = default;
+    explicit constexpr Http1RequestBufferPipelineRestore(
+        std::string_view pipeline) noexcept
+        : pipeline_(pipeline) {}
+
+    std::string_view pipeline_;
 };
 
 class Http1RequestBufferCompletion final {
 public:
     [[nodiscard]] constexpr const Http1RequestBufferDiscarded*
-    discarded() const noexcept {
+    discarded() const & noexcept {
         return std::get_if<Http1RequestBufferDiscarded>(&value_);
     }
+    [[nodiscard]] constexpr const Http1RequestBufferDiscarded*
+    discarded() const && = delete;
 
     [[nodiscard]] constexpr const Http1RequestBufferCompaction*
-    compaction() const noexcept {
+    compaction() const & noexcept {
         return std::get_if<Http1RequestBufferCompaction>(&value_);
     }
+    [[nodiscard]] constexpr const Http1RequestBufferCompaction*
+    compaction() const && = delete;
 
-    [[nodiscard]] constexpr const Http1RequestBufferRestored*
-    restored() const noexcept {
-        return std::get_if<Http1RequestBufferRestored>(&value_);
+    [[nodiscard]] constexpr const Http1RequestBufferPipelineRestore*
+    pipelineRestore() const & noexcept {
+        return std::get_if<Http1RequestBufferPipelineRestore>(&value_);
     }
+    [[nodiscard]] constexpr const Http1RequestBufferPipelineRestore*
+    pipelineRestore() const && = delete;
 
 private:
     friend class Http1SessionRequestCompletion;
@@ -70,7 +90,7 @@ private:
     using Value = std::variant<
         Http1RequestBufferDiscarded,
         Http1RequestBufferCompaction,
-        Http1RequestBufferRestored>;
+        Http1RequestBufferPipelineRestore>;
 
     template <typename Alternative>
     explicit constexpr Http1RequestBufferCompletion(
@@ -134,8 +154,10 @@ public:
             unshiftedBufferCompletion(connectionPlan, consumedBytes));
     }
 
-    [[nodiscard]] static Http1SessionRequestCompletion makeBufferedRestored(
-        Http1ServerConnectionPlan connectionPlan) noexcept {
+    [[nodiscard]] static Http1SessionRequestCompletion
+    makeBufferedPipelineRestore(
+        Http1ServerConnectionPlan connectionPlan,
+        std::string_view pipeline) noexcept {
         if (connectionPlan.disposition() !=
             Http1ConnectionDisposition::kReuse) {
             std::terminate();
@@ -144,7 +166,7 @@ public:
             Http1BufferedResponseReady{},
             connectionPlan,
             Http1RequestBufferCompletion(
-                Http1RequestBufferRestored{}));
+                Http1RequestBufferPipelineRestore(pipeline)));
     }
 
     [[nodiscard]] static Http1SessionRequestCompletion makeCommittedStream(
@@ -158,14 +180,18 @@ public:
     }
 
     [[nodiscard]] constexpr const Http1BufferedResponseReady*
-    bufferedResponse() const noexcept {
+    bufferedResponse() const & noexcept {
         return std::get_if<Http1BufferedResponseReady>(&value_);
     }
+    [[nodiscard]] constexpr const Http1BufferedResponseReady*
+    bufferedResponse() const && = delete;
 
     [[nodiscard]] constexpr const Http1CommittedStreamResponse*
-    committedStream() const noexcept {
+    committedStream() const & noexcept {
         return std::get_if<Http1CommittedStreamResponse>(&value_);
     }
+    [[nodiscard]] constexpr const Http1CommittedStreamResponse*
+    committedStream() const && = delete;
 
     [[nodiscard]] constexpr Http1ServerConnectionPlan
     connectionPlan() const noexcept {
@@ -173,9 +199,11 @@ public:
     }
 
     [[nodiscard]] constexpr const Http1RequestBufferCompletion&
-    bufferCompletion() const noexcept {
+    bufferCompletion() const & noexcept {
         return bufferCompletion_;
     }
+    [[nodiscard]] constexpr const Http1RequestBufferCompletion&
+    bufferCompletion() const && = delete;
 
 private:
     using Value = std::variant<

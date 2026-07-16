@@ -4,6 +4,7 @@
 #include <string_view>
 
 #include "ruvia/web/detail/http/SessionInternal.h"
+#include "ruvia/web/detail/http/CsrfInternal.h"
 #include "ruvia/http/HttpResponse.h"
 
 namespace {
@@ -48,19 +49,103 @@ RUVIA_TEST(session_cookie_secure_flag_appended_for_secure_requests) {
     RUVIA_CHECK_EQ(it->value(), std::string_view("sid=abcdef; Path=/; HttpOnly; Secure; SameSite=Lax"));
 }
 
-RUVIA_TEST(session_mint_decision_defends_fixation) {
-    using ruvia::detail::sessionShouldMintNewId;
+RUVIA_TEST(session_state_makes_persistence_decisions_exclusive) {
+    ruvia::detail::ContextSessionState state(std::pmr::new_delete_resource());
+    RUVIA_CHECK(state.untouched() != nullptr);
 
-    // A brand-new session (no id yet) always gets a server-chosen id.
-    RUVIA_CHECK(sessionShouldMintNewId(/*idEmpty=*/true, /*recognized=*/false, /*regen=*/false));
-    // An id the client presented that was NOT found in the store is never adopted
-    // (unrecognized-id fixation) -- a fresh id is minted.
-    RUVIA_CHECK(sessionShouldMintNewId(/*idEmpty=*/false, /*recognized=*/false, /*regen=*/false));
-    // A recognized session normally keeps its id (stable across requests).
-    RUVIA_CHECK(!sessionShouldMintNewId(/*idEmpty=*/false, /*recognized=*/true, /*regen=*/false));
-    // ...but regenerateSession() forces a fresh id even for a recognized session:
-    // this is the defense against an attacker-owned *recognized* planted id.
-    RUVIA_CHECK(sessionShouldMintNewId(/*idEmpty=*/false, /*recognized=*/true, /*regen=*/true));
+    state.observePresentedId("deadbeef");
+    RUVIA_CHECK(state.unrecognized() != nullptr);
+    state.set("user=1");
+    RUVIA_CHECK(state.persistNew() != nullptr);
+    RUVIA_CHECK_EQ(state.persistNew()->data, std::string_view("user=1"));
+
+    ruvia::detail::ContextSessionState recognized(std::pmr::new_delete_resource());
+    recognized.observePresentedId("abcdef");
+    recognized.loadRecognized("user=2");
+    RUVIA_CHECK(recognized.loaded() != nullptr);
+    recognized.regenerate();
+    RUVIA_CHECK(recognized.rotate() != nullptr);
+    RUVIA_CHECK_EQ(recognized.rotate()->oldId, std::string_view("abcdef"));
+    RUVIA_CHECK_EQ(recognized.rotate()->data, std::string_view("user=2"));
+}
+
+RUVIA_TEST(session_clear_never_requests_a_fresh_id) {
+    ruvia::detail::ContextSessionState absent(std::pmr::new_delete_resource());
+    absent.clear();
+    RUVIA_CHECK(absent.cleared() != nullptr);
+    RUVIA_CHECK(!absent.cleared()->oldId.has_value());
+    RUVIA_CHECK(absent.persistNew() == nullptr);
+
+    ruvia::detail::ContextSessionState recognized(std::pmr::new_delete_resource());
+    recognized.observePresentedId("abcdef");
+    recognized.loadRecognized("user=2");
+    recognized.clear();
+    RUVIA_CHECK(recognized.cleared() != nullptr);
+    RUVIA_CHECK_EQ(*recognized.cleared()->oldId, std::string_view("abcdef"));
+    RUVIA_CHECK(recognized.persistNew() == nullptr);
+}
+
+// The middleware deletes the server-side blob only when the cleared state still
+// carries the presented id, so no later call may drop it. A second clear() must be
+// idempotent -- otherwise logout silently degrades to expiring the cookie while the
+// session stays live in storage for the rest of its TTL.
+RUVIA_TEST(session_repeated_clear_keeps_the_id_to_delete) {
+    ruvia::detail::ContextSessionState recognized(std::pmr::new_delete_resource());
+    recognized.observePresentedId("abcdef");
+    recognized.loadRecognized("user=2");
+    recognized.clear();
+    recognized.clear();
+    RUVIA_CHECK(recognized.cleared() != nullptr);
+    RUVIA_CHECK(recognized.cleared()->oldId.has_value());
+    if (recognized.cleared()->oldId.has_value()) {
+        RUVIA_CHECK_EQ(*recognized.cleared()->oldId, std::string_view("abcdef"));
+    }
+
+    // Clearing without a presented id stays a plain clear, not a rotation.
+    ruvia::detail::ContextSessionState absent(std::pmr::new_delete_resource());
+    absent.clear();
+    absent.clear();
+    RUVIA_CHECK(absent.cleared() != nullptr);
+    RUVIA_CHECK(!absent.cleared()->oldId.has_value());
+}
+
+// clear() then set() is "drop the old session, start a fresh one". That is a
+// rotation: the new id must be minted AND the old blob deleted. Landing in
+// persistNew would mint the id but orphan the old blob.
+RUVIA_TEST(session_clear_then_set_rotates_instead_of_orphaning) {
+    ruvia::detail::ContextSessionState recognized(std::pmr::new_delete_resource());
+    recognized.observePresentedId("abcdef");
+    recognized.loadRecognized("user=2");
+    recognized.clear();
+    recognized.set("user=3");
+    RUVIA_CHECK(recognized.rotate() != nullptr);
+    RUVIA_CHECK(recognized.persistNew() == nullptr);
+    if (recognized.rotate() != nullptr) {
+        RUVIA_CHECK_EQ(recognized.rotate()->oldId, std::string_view("abcdef"));
+        RUVIA_CHECK_EQ(recognized.rotate()->data, std::string_view("user=3"));
+    }
+
+    // With no presented id there is nothing to delete, so a fresh session is right.
+    ruvia::detail::ContextSessionState absent(std::pmr::new_delete_resource());
+    absent.clear();
+    absent.set("user=4");
+    RUVIA_CHECK(absent.persistNew() != nullptr);
+    RUVIA_CHECK(absent.rotate() == nullptr);
+    if (absent.persistNew() != nullptr) {
+        RUVIA_CHECK_EQ(absent.persistNew()->data, std::string_view("user=4"));
+    }
+}
+
+RUVIA_TEST(secure_token_generation_reports_failure_as_a_type) {
+    char tooSmall[47];
+    const auto failure = ruvia::detail::generateSecureToken(tooSmall);
+    RUVIA_CHECK(failure.failure() != nullptr);
+    RUVIA_CHECK(failure.ready() == nullptr);
+
+    char storage[48];
+    const auto ready = ruvia::detail::generateSecureToken(storage);
+    RUVIA_CHECK(ready.ready() != nullptr);
+    RUVIA_CHECK_EQ(ready.ready()->value().size(), std::size_t{48});
 }
 
 RUVIA_TEST(session_id_validation_accepts_only_lowercase_hex) {

@@ -44,6 +44,21 @@ struct HttpResponseHeaderStateAccess final {
             key, valueSize, knownBit);
     }
 
+    [[nodiscard]] static HttpResponseHeader& upsertSetCookieUninitializedValue(
+        HttpResponse& response,
+        std::string_view wirePrefix,
+        std::string_view cookieName,
+        std::size_t valueSize) {
+        return response.upsertSetCookieHeaderUninitializedValue(
+            wirePrefix, cookieName, valueSize);
+    }
+
+    static void upsertSetCookieValidated(
+        HttpResponse& response,
+        std::string_view value) {
+        response.upsertSetCookieHeaderValidated(value);
+    }
+
     static void setUnsigned(
         HttpResponse& response,
         std::string_view key,
@@ -125,6 +140,21 @@ inline void appendResponseHeaderValidated(
     std::uint32_t knownBit) {
     return HttpResponseHeaderStateAccess::appendUninitializedValue(
         response, key, valueSize, knownBit);
+}
+
+[[nodiscard]] inline HttpResponseHeader& upsertResponseSetCookieUninitializedValue(
+    HttpResponse& response,
+    std::string_view wirePrefix,
+    std::string_view cookieName,
+    std::size_t valueSize) {
+    return HttpResponseHeaderStateAccess::upsertSetCookieUninitializedValue(
+        response, wirePrefix, cookieName, valueSize);
+}
+
+inline void upsertResponseSetCookieValidated(
+    HttpResponse& response,
+    std::string_view value) {
+    HttpResponseHeaderStateAccess::upsertSetCookieValidated(response, value);
 }
 
 inline void setResponseHeaderUnsigned(

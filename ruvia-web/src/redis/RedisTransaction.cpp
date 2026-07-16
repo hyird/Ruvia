@@ -9,18 +9,21 @@
 namespace ruvia {
 
 RedisTransaction::RedisTransaction(RedisPipeline pipeline) noexcept
-    : pipeline_(std::move(pipeline)),
-      watches_(pipeline_.resource_) {}
+    : detail::ScopedCapabilityNode(
+          pipeline.operationScope(), &RedisTransaction::expireCapability),
+      pipeline_(std::move(pipeline)),
+      watches_(pipeline_.resource()) {}
 
-RedisTransaction& RedisTransaction::markActive() noexcept {
-    discarded_ = false;
-    return *this;
+void RedisTransaction::expireCapability(detail::ScopedCapabilityNode& capability) noexcept {
+    auto& transaction = static_cast<RedisTransaction&>(capability);
+    std::pmr::vector<RedisPipeline::Command> empty(
+        transaction.watches_.get_allocator().resource());
+    transaction.watches_.swap(empty);
 }
-
 
 RedisTransaction& RedisTransaction::command(std::span<const std::string_view> args) {
     pipeline_.command(args);
-    return markActive();
+    return *this;
 }
 
 RedisTransaction& RedisTransaction::watch(std::string_view key) {
@@ -28,229 +31,223 @@ RedisTransaction& RedisTransaction::watch(std::string_view key) {
 }
 
 RedisTransaction& RedisTransaction::watch(std::span<const std::string_view> keys) {
+    pipeline_.requireActive();
     if (keys.empty()) {
         return *this;
     }
-    RedisPipeline::appendCommand(watches_, pipeline_.resource_, "WATCH", keys);
-    return markActive();
+    RedisPipeline::appendCommand(watches_, pipeline_.resource(), "WATCH", keys);
+    return *this;
 }
 
 RedisTransaction& RedisTransaction::unwatch() {
-    RedisPipeline::appendCommand(watches_, pipeline_.resource_, "UNWATCH");
-    return markActive();
-}
-
-RedisTransaction& RedisTransaction::discard() noexcept {
-    watches_.clear();
-    pipeline_.commands_.clear();
-    discarded_ = true;
+    pipeline_.requireActive();
+    RedisPipeline::appendCommand(watches_, pipeline_.resource(), "UNWATCH");
     return *this;
 }
 
 RedisTransaction& RedisTransaction::get(std::string_view key) {
     pipeline_.get(key);
-    return markActive();
+    return *this;
 }
 
 RedisTransaction& RedisTransaction::set(std::string_view key, std::string_view value) {
     pipeline_.set(key, value);
-    return markActive();
+    return *this;
 }
 
 RedisTransaction& RedisTransaction::getDel(std::string_view key) {
     pipeline_.getDel(key);
-    return markActive();
+    return *this;
 }
 
 RedisTransaction& RedisTransaction::getSet(std::string_view key, std::string_view value) {
     pipeline_.getSet(key, value);
-    return markActive();
+    return *this;
 }
 
 RedisTransaction& RedisTransaction::append(std::string_view key, std::string_view value) {
     pipeline_.append(key, value);
-    return markActive();
+    return *this;
 }
 
 RedisTransaction& RedisTransaction::strlen(std::string_view key) {
     pipeline_.strlen(key);
-    return markActive();
+    return *this;
 }
 
 RedisTransaction& RedisTransaction::del(std::string_view key) {
     pipeline_.del(key);
-    return markActive();
+    return *this;
 }
 
 RedisTransaction& RedisTransaction::unlink(std::string_view key) {
     pipeline_.unlink(key);
-    return markActive();
+    return *this;
 }
 
 RedisTransaction& RedisTransaction::exists(std::string_view key) {
     pipeline_.exists(key);
-    return markActive();
+    return *this;
 }
 
 RedisTransaction& RedisTransaction::touch(std::string_view key) {
     pipeline_.touch(key);
-    return markActive();
+    return *this;
 }
 
 RedisTransaction& RedisTransaction::type(std::string_view key) {
     pipeline_.type(key);
-    return markActive();
+    return *this;
 }
 
 RedisTransaction& RedisTransaction::rename(std::string_view key, std::string_view newKey) {
     pipeline_.rename(key, newKey);
-    return markActive();
+    return *this;
 }
 
 RedisTransaction& RedisTransaction::renameNx(std::string_view key, std::string_view newKey) {
     pipeline_.renameNx(key, newKey);
-    return markActive();
+    return *this;
 }
 
 RedisTransaction& RedisTransaction::incr(std::string_view key) {
     pipeline_.incr(key);
-    return markActive();
+    return *this;
 }
 
 RedisTransaction& RedisTransaction::incrBy(std::string_view key, std::int64_t value) {
     pipeline_.incrBy(key, value);
-    return markActive();
+    return *this;
 }
 
 RedisTransaction& RedisTransaction::decr(std::string_view key) {
     pipeline_.decr(key);
-    return markActive();
+    return *this;
 }
 
 RedisTransaction& RedisTransaction::decrBy(std::string_view key, std::int64_t value) {
     pipeline_.decrBy(key, value);
-    return markActive();
+    return *this;
 }
 
 RedisTransaction& RedisTransaction::hget(std::string_view key, std::string_view field) {
     pipeline_.hget(key, field);
-    return markActive();
+    return *this;
 }
 
 RedisTransaction& RedisTransaction::hset(std::string_view key, std::string_view field, std::string_view value) {
     pipeline_.hset(key, field, value);
-    return markActive();
+    return *this;
 }
 
 RedisTransaction& RedisTransaction::hdel(std::string_view key, std::string_view field) {
     pipeline_.hdel(key, field);
-    return markActive();
+    return *this;
 }
 
 RedisTransaction& RedisTransaction::hexists(std::string_view key, std::string_view field) {
     pipeline_.hexists(key, field);
-    return markActive();
+    return *this;
 }
 
 RedisTransaction& RedisTransaction::hlen(std::string_view key) {
     pipeline_.hlen(key);
-    return markActive();
+    return *this;
 }
 
 RedisTransaction& RedisTransaction::hgetAll(std::string_view key) {
     pipeline_.hgetAll(key);
-    return markActive();
+    return *this;
 }
 
 RedisTransaction& RedisTransaction::lpush(std::string_view key, std::string_view value) {
     pipeline_.lpush(key, value);
-    return markActive();
+    return *this;
 }
 
 RedisTransaction& RedisTransaction::rpush(std::string_view key, std::string_view value) {
     pipeline_.rpush(key, value);
-    return markActive();
+    return *this;
 }
 
 RedisTransaction& RedisTransaction::lpop(std::string_view key) {
     pipeline_.lpop(key);
-    return markActive();
+    return *this;
 }
 
 RedisTransaction& RedisTransaction::rpop(std::string_view key) {
     pipeline_.rpop(key);
-    return markActive();
+    return *this;
 }
 
 RedisTransaction& RedisTransaction::llen(std::string_view key) {
     pipeline_.llen(key);
-    return markActive();
+    return *this;
 }
 
 RedisTransaction& RedisTransaction::lrange(std::string_view key, std::int64_t start, std::int64_t stop) {
     pipeline_.lrange(key, start, stop);
-    return markActive();
+    return *this;
 }
 
 RedisTransaction& RedisTransaction::sadd(std::string_view key, std::string_view member) {
     pipeline_.sadd(key, member);
-    return markActive();
+    return *this;
 }
 
 RedisTransaction& RedisTransaction::srem(std::string_view key, std::string_view member) {
     pipeline_.srem(key, member);
-    return markActive();
+    return *this;
 }
 
 RedisTransaction& RedisTransaction::smembers(std::string_view key) {
     pipeline_.smembers(key);
-    return markActive();
+    return *this;
 }
 
 RedisTransaction& RedisTransaction::scard(std::string_view key) {
     pipeline_.scard(key);
-    return markActive();
+    return *this;
 }
 
 RedisTransaction& RedisTransaction::zadd(std::string_view key, double score, std::string_view member) {
     pipeline_.zadd(key, score, member);
-    return markActive();
+    return *this;
 }
 
 RedisTransaction& RedisTransaction::zrem(std::string_view key, std::string_view member) {
     pipeline_.zrem(key, member);
-    return markActive();
+    return *this;
 }
 
 RedisTransaction& RedisTransaction::zrange(std::string_view key, std::int64_t start, std::int64_t stop) {
     pipeline_.zrange(key, start, stop);
-    return markActive();
+    return *this;
 }
 
 RedisTransaction& RedisTransaction::zscore(std::string_view key, std::string_view member) {
     pipeline_.zscore(key, member);
-    return markActive();
+    return *this;
 }
 
 RedisTransaction& RedisTransaction::zcard(std::string_view key) {
     pipeline_.zcard(key);
-    return markActive();
+    return *this;
 }
 
-Task<std::pmr::vector<RedisValue>> RedisTransaction::exec() {
-    if (discarded_) {
-        co_return std::pmr::vector<RedisValue>(pipeline_.resource_);
-    }
-    auto& commands = pipeline_.commands_;
-    const auto resource = pipeline_.resource_;
+Task<std::pmr::vector<RedisValue>> RedisTransaction::executeOwned(
+    detail::RedisPool& pool,
+    std::pmr::memory_resource* resource,
+    std::pmr::vector<RedisPipeline::Command> watches,
+    std::pmr::vector<RedisPipeline::Command> commands) {
     std::pmr::vector<detail::RedisCommandArgsView> framed(resource);
-    framed.reserve(watches_.size() + commands.size() + 2);
+    framed.reserve(watches.size() + commands.size() + 2);
     auto appendCommandView = [&framed](const RedisPipeline::Command& command) {
         framed.emplace_back(std::span<const std::pmr::string>(command.args.data(), command.args.size()));
     };
     auto multi = RedisPipeline::makeCommand(resource, "MULTI");
     auto exec = RedisPipeline::makeCommand(resource, "EXEC");
-    for (const auto& command : watches_) {
+    for (const auto& command : watches) {
         appendCommandView(command);
     }
     appendCommandView(multi);
@@ -259,7 +256,7 @@ Task<std::pmr::vector<RedisValue>> RedisTransaction::exec() {
     }
     appendCommandView(exec);
 
-    auto replies = co_await pipeline_.pool_->executePipeline(
+    auto replies = co_await pool.executePipeline(
         std::span<const detail::RedisCommandArgsView>(framed.data(), framed.size()),
         resource);
     if (replies.empty() ||
@@ -285,6 +282,18 @@ Task<std::pmr::vector<RedisValue>> RedisTransaction::exec() {
         result.emplace_back(value);
     }
     co_return result;
+}
+
+ScopedOperation<std::pmr::vector<RedisValue>> RedisTransaction::exec() && {
+    auto* commandResource = pipeline_.resource();
+    auto& pool = pipeline_.consumePool();
+    return detail::makeScopedOperation(
+        pipeline_.operationScope(),
+        executeOwned(
+            pool,
+            commandResource,
+            std::move(watches_),
+            std::move(pipeline_.commands_)));
 }
 
 }  // namespace ruvia

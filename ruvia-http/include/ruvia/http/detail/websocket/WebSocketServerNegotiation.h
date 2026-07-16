@@ -2,8 +2,8 @@
 
 #include <string_view>
 
+#include "ruvia/http/detail/websocket/HttpWebSocketHandshakeFields.h"
 #include "ruvia/http/detail/websocket/HttpWebSocketPermessageDeflate.h"
-#include "ruvia/http/detail/websocket/HttpWebSocketUtils.h"
 
 namespace ruvia::detail {
 

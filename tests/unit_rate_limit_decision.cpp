@@ -1,16 +1,19 @@
 #include "test_harness.h"
 
 #include <chrono>
+#include <concepts>
 #include <cstdint>
 #include <optional>
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <utility>
 
 #include "ruvia/web/detail/http/ContextInternal.h"
 #include "ruvia/web/detail/http/ContextServices.h"
 #include "ruvia/http/detail/HttpRequestInternal.h"
 #include "ruvia/web/detail/server/RateLimitDecision.h"
+#include "ruvia/web/detail/server/Http1ClosingRejection.h"
 #include "ruvia/web/detail/server/RateLimitKey.h"
 #include "ruvia/web/RateLimitRule.h"
 #include "ruvia/web/Context.h"
@@ -29,9 +32,26 @@ using ruvia::detail::RouteRateLimitOptions;
 using ruvia::detail::ContextAccess;
 using ruvia::detail::ContextServices;
 using ruvia::detail::HttpRequestAccess;
+using ruvia::detail::RateLimitDecision;
 using ruvia::detail::RateLimiter;
+using ruvia::detail::RouteRateLimitPresence;
 using ruvia::detail::rateLimiterNowMs;
-using ruvia::detail::rateLimitRequestAllowed;
+using ruvia::detail::decideRequestRateLimit;
+
+bool rateLimitAllowed(RateLimitDecision decision) {
+    return decision.allowed() != nullptr;
+}
+
+template <typename Decision>
+concept HasTemporaryRateLimitAlternative = requires(Decision decision) {
+    std::move(decision).allowed();
+    std::move(decision).rejection();
+};
+
+static_assert(!std::default_initializable<RateLimitDecision>);
+static_assert(!std::default_initializable<ruvia::detail::RateLimitAllowed>);
+static_assert(!std::default_initializable<ruvia::detail::RateLimitRejection>);
+static_assert(!HasTemporaryRateLimitAlternative<RateLimitDecision>);
 
 struct RouteLimitResult final {
     bool allowed{false};
@@ -61,10 +81,14 @@ RouteLimitResult runRouteLimit(RateLimiter& limiter, std::uintptr_t scope,
     if (r.hasResponse) {
         auto response = ContextAccess::takeResponse(context);
         r.status = response.status();
-        r.retryAfter = std::string(response.header("Retry-After"));
-        r.limit = std::string(response.header("X-RateLimit-Limit"));
-        r.remaining = std::string(response.header("X-RateLimit-Remaining"));
-        r.reset = std::string(response.header("X-RateLimit-Reset"));
+        r.retryAfter = std::string(
+            response.header("Retry-After").value_or(std::string_view{}));
+        r.limit = std::string(
+            response.header("X-RateLimit-Limit").value_or(std::string_view{}));
+        r.remaining = std::string(
+            response.header("X-RateLimit-Remaining").value_or(std::string_view{}));
+        r.reset = std::string(
+            response.header("X-RateLimit-Reset").value_or(std::string_view{}));
     }
     return r;
 }
@@ -73,14 +97,67 @@ RouteLimitResult runRouteLimit(RateLimiter& limiter, std::uintptr_t scope,
 
 RUVIA_TEST(rate_limit_allowed_when_no_limiter) {
     // A null limiter means rate limiting is off: always allowed, no dereference.
-    const auto check = rateLimitRequestAllowed(nullptr, "1.2.3.4");
-    RUVIA_CHECK(check.allowed);
+    const auto decision = decideRequestRateLimit(nullptr, "1.2.3.4");
+    RUVIA_CHECK(decision.allowed() != nullptr);
+    RUVIA_CHECK(decision.rejection() == nullptr);
 }
 
 RUVIA_TEST(rate_limit_allowed_when_limiter_disabled) {
-    RateLimiter limiter(std::nullopt, 1);
-    RUVIA_CHECK(!limiter.enabled());
-    RUVIA_CHECK(rateLimitRequestAllowed(&limiter, "1.2.3.4").allowed);
+    RateLimiter limiter(
+        std::nullopt, RouteRateLimitPresence::kAbsent, 1);
+    RUVIA_CHECK(!limiter.hasDefaultRule());
+    const auto decision = decideRequestRateLimit(&limiter, "1.2.3.4");
+    RUVIA_CHECK(decision.allowed() != nullptr);
+}
+
+RUVIA_TEST(rate_limit_rejection_owns_web_error_and_retry_headers) {
+    const auto decision = RateLimitDecision::reject(
+        std::chrono::milliseconds(1'001));
+    const auto* rejection = decision.rejection();
+    RUVIA_CHECK(rejection != nullptr);
+
+    const auto error = ruvia::detail::rateLimitRejectionError();
+    RUVIA_CHECK_EQ(error.status(), std::uint16_t{429});
+    RUVIA_CHECK_EQ(error.code(), std::string_view("too_many_requests"));
+    RUVIA_CHECK_EQ(error.message(), std::string_view("rate limit exceeded"));
+
+    ruvia::HttpResponse response;
+    ruvia::detail::applyRateLimitRejectionHeaders(response, *rejection);
+    RUVIA_CHECK_EQ(response.header("Retry-After"), std::string_view("2"));
+    RUVIA_CHECK(!response.header("X-RateLimit-Limit").has_value());
+
+    ruvia::detail::applyRouteRateLimitRejectionHeaders(
+        response, *rejection, 7);
+    RUVIA_CHECK_EQ(response.header("Retry-After"), std::string_view("2"));
+    RUVIA_CHECK_EQ(response.header("X-RateLimit-Limit"), std::string_view("7"));
+    RUVIA_CHECK_EQ(response.header("X-RateLimit-Remaining"), std::string_view("0"));
+    RUVIA_CHECK_EQ(response.header("X-RateLimit-Reset"), std::string_view("2"));
+}
+
+RUVIA_TEST(http1_closing_rejection_has_exclusive_error_alternatives) {
+    using ruvia::detail::Http1ClosingRejection;
+
+    const Http1ClosingRejection none;
+    RUVIA_CHECK(none.error() == nullptr);
+    RUVIA_CHECK(none.rateLimit() == nullptr);
+
+    const auto ordinary = Http1ClosingRejection::error(
+        ruvia::HttpErrorInfo(400, {}, "bad request"));
+    RUVIA_CHECK(ordinary.error() != nullptr);
+    RUVIA_CHECK_EQ(ordinary.error()->status(), std::uint16_t{400});
+    RUVIA_CHECK(ordinary.rateLimit() == nullptr);
+
+    const auto decision = RateLimitDecision::reject(
+        std::chrono::milliseconds(125));
+    const auto limited = Http1ClosingRejection::rateLimit(
+        ruvia::detail::rateLimitRejectionError(),
+        *decision.rejection());
+    RUVIA_CHECK(limited.error() != nullptr);
+    RUVIA_CHECK_EQ(limited.error()->status(), std::uint16_t{429});
+    RUVIA_CHECK(limited.rateLimit() != nullptr);
+    RUVIA_CHECK_EQ(
+        limited.rateLimit()->retryAfter(),
+        std::chrono::milliseconds(125));
 }
 
 RUVIA_TEST(rate_limit_enforces_per_key_request_budget) {
@@ -90,19 +167,20 @@ RUVIA_TEST(rate_limit_enforces_per_key_request_budget) {
     // inside one window, so the outcome is deterministic without clock control.
     const auto rule = RateLimitRule::fixedWindow(
         3, std::chrono::seconds(60));
-    RateLimiter limiter(rule, 16);
-    RUVIA_CHECK(limiter.enabled());
+    RateLimiter limiter(rule, RouteRateLimitPresence::kAbsent, 16);
+    RUVIA_CHECK(limiter.hasDefaultRule());
 
-    RUVIA_CHECK(rateLimitRequestAllowed(&limiter, "10.0.0.1").allowed);
-    RUVIA_CHECK(rateLimitRequestAllowed(&limiter, "10.0.0.1").allowed);
-    RUVIA_CHECK(rateLimitRequestAllowed(&limiter, "10.0.0.1").allowed);
-    const auto denied = rateLimitRequestAllowed(&limiter, "10.0.0.1");
-    RUVIA_CHECK(!denied.allowed);
+    RUVIA_CHECK(rateLimitAllowed(decideRequestRateLimit(&limiter, "10.0.0.1")));
+    RUVIA_CHECK(rateLimitAllowed(decideRequestRateLimit(&limiter, "10.0.0.1")));
+    RUVIA_CHECK(rateLimitAllowed(decideRequestRateLimit(&limiter, "10.0.0.1")));
+    const auto denied = decideRequestRateLimit(&limiter, "10.0.0.1");
+    RUVIA_CHECK(denied.allowed() == nullptr);
     // A denied request reports a positive time until the window resets.
-    RUVIA_CHECK(denied.resetAfterMs > 0);
+    RUVIA_CHECK(denied.rejection() != nullptr);
+    RUVIA_CHECK(denied.rejection()->retryAfter().count() > 0);
 
     // A different address has its own budget and is still admitted.
-    RUVIA_CHECK(rateLimitRequestAllowed(&limiter, "10.0.0.2").allowed);
+    RUVIA_CHECK(rateLimitAllowed(decideRequestRateLimit(&limiter, "10.0.0.2")));
 }
 
 RUVIA_TEST(rate_limit_oversized_key_honors_fail_mode) {
@@ -113,17 +191,17 @@ RUVIA_TEST(rate_limit_oversized_key_honors_fail_mode) {
         5,
         std::chrono::seconds(1),
         RateLimitOverflowPolicy::kDeny);
-    RateLimiter closedLimiter(closed, 8);
+    RateLimiter closedLimiter(closed, RouteRateLimitPresence::kAbsent, 8);
     const std::string longKey(100, 'a');
-    RUVIA_CHECK(!rateLimitRequestAllowed(&closedLimiter, longKey).allowed);
+    RUVIA_CHECK(!rateLimitAllowed(decideRequestRateLimit(&closedLimiter, longKey)));
 
     // Under failOpen the same request is admitted (availability over strictness).
     const auto open = RateLimitRule::fixedWindow(
         5,
         std::chrono::seconds(1),
         RateLimitOverflowPolicy::kAllow);
-    RateLimiter openLimiter(open, 8);
-    RUVIA_CHECK(rateLimitRequestAllowed(&openLimiter, longKey).allowed);
+    RateLimiter openLimiter(open, RouteRateLimitPresence::kAbsent, 8);
+    RUVIA_CHECK(rateLimitAllowed(decideRequestRateLimit(&openLimiter, longKey)));
 }
 
 RUVIA_TEST(rate_limiter_now_ms_is_positive_and_monotonic) {
@@ -166,7 +244,11 @@ RUVIA_TEST(route_rate_limit_429_carries_retry_after_and_ratelimit_headers) {
     // The per-route limiter's rejection path (applyRouteRateLimit) had no coverage:
     // the RateLimiter core is tested, but not the 429 response it produces with the
     // Retry-After and X-RateLimit-* advisory headers a client relies on.
-    RateLimiter limiter(std::nullopt, std::pmr::get_default_resource());
+    RateLimiter limiter(
+        std::nullopt,
+        RouteRateLimitPresence::kPresent,
+        ruvia::kDefaultRateLimitSlotsPerWorker,
+        std::pmr::get_default_resource());
     const RouteRateLimitOptions options{
         .rule = RateLimitRule::fixedWindow(
             1, std::chrono::seconds(60))};

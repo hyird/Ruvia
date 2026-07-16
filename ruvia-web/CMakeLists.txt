@@ -3,6 +3,7 @@ set(RUVIA_WEB_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/src/app/DotenvParser.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/app/DotenvPaths.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/app/App.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/app/WebWorker.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/app/AppConfig.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/app/AppHttpConfig.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/app/AppIntegrationConfig.cpp
@@ -14,10 +15,12 @@ set(RUVIA_WEB_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/src/http/ContextRequestFacade.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/http/ContextRequestForm.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/http/ContextResponse.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/http/ContextSessionState.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/http/ContextStorage.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/http/Csrf.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/http/Health.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/http/HttpRuntimeFacades.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/http/ScopedOperation.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/http/MultipartReader.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/http/RateLimit.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/http/Streaming.cpp
@@ -26,9 +29,10 @@ set(RUVIA_WEB_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/src/http/HttpCors.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/server/HttpResponseCompression.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/server/Http2BufferedResponseWrite.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/server/Http2SansIoSendWindow.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/http/SecurityHeaders.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/http/Session.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/server/HttpFileZeroCopy.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/server/HttpFileWrite.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/server/HttpConnectionState.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/server/HttpServerAccept.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/server/HttpServer.cpp
@@ -50,7 +54,6 @@ if(RUVIA_ENABLE_MARIADB OR RUVIA_ENABLE_POSTGRESQL)
     list(APPEND RUVIA_WEB_SOURCES
         ${CMAKE_CURRENT_SOURCE_DIR}/src/db/DbHandle.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/src/db/DbMigration.cpp
-        ${CMAKE_CURRENT_SOURCE_DIR}/src/db/DbPoolScheduler.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/src/db/DbRegistry.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/src/db/DbSlotSocket.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/src/db/DbTypes.cpp)
@@ -154,8 +157,13 @@ endif()
 
 ruvia_install_target(ruvia-web web)
 
-# All Web-owned public and contract headers share one physical ownership root.
-ruvia_install_public_header_tree(web include/ruvia/web/detail)
+# Install the always-available Web contracts without leaking opt-in feature
+# contracts into a feature-off package. Feature subtrees are installed below
+# together with the public API that makes them usable.
+ruvia_install_public_header_tree(web include/ruvia/web/detail
+    PATTERN "auth" EXCLUDE
+    PATTERN "db" EXCLUDE
+    PATTERN "redis" EXCLUDE)
 
 ruvia_install_public_headers(web
     include/ruvia/web/App.h
@@ -183,21 +191,47 @@ ruvia_install_public_headers(web
     include/ruvia/web/RequestFields.h
     include/ruvia/web/SecurityHeaders.h
     include/ruvia/web/Session.h
+    include/ruvia/web/ScopedOperation.h
     include/ruvia/web/Streaming.h
     include/ruvia/web/Validation.h
     include/ruvia/web/ValidationTypes.h
     include/ruvia/web/WebSocket.h
+    include/ruvia/web/WebWorker.h
     include/ruvia/web/Router.h
 )
 
 if(RUVIA_ENABLE_MARIADB OR RUVIA_ENABLE_POSTGRESQL)
     ruvia_install_public_header_tree(web include/ruvia/web/db)
+    ruvia_install_public_headers(web
+        include/ruvia/web/detail/db/DbBackend.h
+        include/ruvia/web/detail/db/DbConfigValidation.h
+        include/ruvia/web/detail/db/DbInternal.h
+        include/ruvia/web/detail/db/DbMigrationValidation.h
+        include/ruvia/web/detail/db/DbOperationState.h
+        include/ruvia/web/detail/db/DbPoolDeadline.h
+        include/ruvia/web/detail/db/DbResultAccess.h
+        include/ruvia/web/detail/db/DbSlotSocket.h
+        include/ruvia/web/detail/db/DbUtils.h
+        include/ruvia/web/detail/db/DbValueAccess.h)
+endif()
+
+if(RUVIA_ENABLE_MARIADB)
+    ruvia_install_public_headers(web
+        include/ruvia/web/detail/db/DbMysqlRuntime.h
+        include/ruvia/web/detail/db/DbSql.h)
+endif()
+
+if(RUVIA_ENABLE_POSTGRESQL)
+    ruvia_install_public_headers(web
+        include/ruvia/web/detail/db/DbPostgreSql.h)
 endif()
 
 if(RUVIA_ENABLE_REDIS)
     ruvia_install_public_header_tree(web include/ruvia/web/redis)
+    ruvia_install_public_header_tree(web include/ruvia/web/detail/redis)
 endif()
 
 if(RUVIA_ENABLE_JWT)
     ruvia_install_public_header_tree(web include/ruvia/web/auth)
+    ruvia_install_public_header_tree(web include/ruvia/web/detail/auth)
 endif()

@@ -69,18 +69,26 @@ private:
 // protocol reason. There is no status/changed/delta tuple with invalid mixtures.
 class Http2PeerSettingApplyResult final {
 public:
-    [[nodiscard]] constexpr const Http2PeerSettingApplied* applied() const noexcept {
+    [[nodiscard]] constexpr const Http2PeerSettingApplied*
+    applied() const & noexcept {
         return std::get_if<Http2PeerSettingApplied>(&value_);
     }
+    [[nodiscard]] constexpr const Http2PeerSettingApplied*
+    applied() const && = delete;
 
     [[nodiscard]] constexpr const Http2PeerInitialWindowChange*
-    initialWindowChange() const noexcept {
+    initialWindowChange() const & noexcept {
         return std::get_if<Http2PeerInitialWindowChange>(&value_);
     }
+    [[nodiscard]] constexpr const Http2PeerInitialWindowChange*
+    initialWindowChange() const && = delete;
 
-    [[nodiscard]] constexpr const Http2PeerSettingFailure* failure() const noexcept {
+    [[nodiscard]] constexpr const Http2PeerSettingFailure*
+    failure() const & noexcept {
         return std::get_if<Http2PeerSettingFailure>(&value_);
     }
+    [[nodiscard]] constexpr const Http2PeerSettingFailure*
+    failure() const && = delete;
 
 private:
     friend class Http2PeerSettings;

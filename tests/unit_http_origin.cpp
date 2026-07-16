@@ -7,6 +7,7 @@
 #include <string_view>
 
 #include "ruvia/http/detail/client/HttpOrigin.h"
+#include "ruvia/http/detail/parser/HttpRequestTarget.h"
 #include "ruvia/http/HttpClient.h"
 
 namespace {
@@ -63,6 +64,30 @@ RUVIA_TEST(http_origin_factory_makes_an_invalid_host_unrepresentable) {
     RUVIA_CHECK(throwsOn([] {
         (void)originFor(std::string_view("api\0.internal", 13), 80);
     }));
+}
+
+RUVIA_TEST(http_serialized_origin_matches_fetch_wire_grammar) {
+    using ruvia::detail::isValidHttpSerializedOrigin;
+
+    RUVIA_CHECK(isValidHttpSerializedOrigin("https://example.com"));
+    RUVIA_CHECK(isValidHttpSerializedOrigin("http://127.0.0.1:8080"));
+    RUVIA_CHECK(isValidHttpSerializedOrigin("https://[::1]"));
+    RUVIA_CHECK(isValidHttpSerializedOrigin(
+        "custom+scheme://sub-domain.example:99999"));
+
+    RUVIA_CHECK(!isValidHttpSerializedOrigin(""));
+    RUVIA_CHECK(!isValidHttpSerializedOrigin("null"));
+    RUVIA_CHECK(!isValidHttpSerializedOrigin("HTTPS://example.com"));
+    RUVIA_CHECK(!isValidHttpSerializedOrigin("https://EXAMPLE.com"));
+    RUVIA_CHECK(!isValidHttpSerializedOrigin("https://example.com/"));
+    RUVIA_CHECK(!isValidHttpSerializedOrigin("https://exa%6dple.com"));
+    RUVIA_CHECK(!isValidHttpSerializedOrigin("https://[v1.future]"));
+    RUVIA_CHECK(!isValidHttpSerializedOrigin("https://[::A]"));
+    RUVIA_CHECK(!isValidHttpSerializedOrigin("https://[::0001]"));
+    RUVIA_CHECK(!isValidHttpSerializedOrigin(
+        "https://[1:2:3:4:5:6:7::]"));
+    RUVIA_CHECK(!isValidHttpSerializedOrigin("https://example.com:"));
+    RUVIA_CHECK(!isValidHttpSerializedOrigin("https://example.com:123456"));
 }
 
 RUVIA_TEST(http_origin_authority_brackets_ipv6_and_omits_default_port) {

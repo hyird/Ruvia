@@ -8,7 +8,9 @@
 #include "ruvia/web/detail/websocket/HttpWebSocketSession.h"
 #include "ruvia/web/detail/websocket/HttpWebSocketSocketTransport.h"
 #include "ruvia/web/detail/websocket/HttpWebSocketHandshake.h"
+#include "ruvia/web/detail/http/HttpProtocolErrorInfo.h"
 #include "ruvia/http/detail/websocket/HttpWebSocketUtils.h"
+#include "ruvia/http/detail/websocket/HttpWebSocketHandshakeValidation.h"
 #include "ruvia/http/detail/http1/Http1ServerRequestParser.h"
 #include "ruvia/web/detail/router/RouteTable.h"
 #include "ruvia/core/Task.h"
@@ -16,74 +18,17 @@
 #include "ruvia/http/HttpResponse.h"
 #include "ruvia/core/memory/MemoryPool.h"
 
+#include <exception>
+#include <optional>
 #include <string_view>
-#include <utility>
-#include <variant>
 
 namespace ruvia::detail {
 
-class HttpWebSocketBufferedResponse final {
-public:
-    [[nodiscard]] const Http1SessionRequestCompletion&
-    completion() const noexcept {
-        return completion_;
-    }
-
-private:
-    friend class HttpWebSocketRouteResult;
-
-    explicit HttpWebSocketBufferedResponse(
-        Http1SessionRequestCompletion completion) noexcept
-        : completion_(std::move(completion)) {}
-
-    Http1SessionRequestCompletion completion_;
-};
-
-class HttpWebSocketSessionFinished final {
-private:
-    friend class HttpWebSocketRouteResult;
-
-    constexpr HttpWebSocketSessionFinished() noexcept = default;
-};
-
-class HttpWebSocketRouteResult final {
-public:
-    [[nodiscard]] static HttpWebSocketRouteResult makeBuffered(
-        Http1SessionRequestCompletion completion) noexcept {
-        return HttpWebSocketRouteResult(
-            HttpWebSocketBufferedResponse(std::move(completion)));
-    }
-
-    [[nodiscard]] static HttpWebSocketRouteResult
-    makeSessionFinished() noexcept {
-        return HttpWebSocketRouteResult(
-            HttpWebSocketSessionFinished{});
-    }
-
-    [[nodiscard]] const HttpWebSocketBufferedResponse*
-    bufferedResponse() const noexcept {
-        return std::get_if<HttpWebSocketBufferedResponse>(&value_);
-    }
-
-    [[nodiscard]] const HttpWebSocketSessionFinished*
-    sessionFinished() const noexcept {
-        return std::get_if<HttpWebSocketSessionFinished>(&value_);
-    }
-
-private:
-    using Value = std::variant<
-        HttpWebSocketBufferedResponse,
-        HttpWebSocketSessionFinished>;
-
-    template <typename Alternative>
-    explicit HttpWebSocketRouteResult(Alternative alternative) noexcept
-        : value_(std::move(alternative)) {}
-
-    Value value_;
-};
-
+// A rejected upgrade returns the exact HTTP/1 request completion that the
+// session must write and clean up. A successful upgrade transfers transport
+// ownership to the WebSocket session, so no HTTP request completion remains.
 template <typename Stream>
-Task<HttpWebSocketRouteResult> dispatchHttpWebSocketRoute(
+Task<std::optional<Http1SessionRequestCompletion>> dispatchHttpWebSocketRoute(
     Stream& stream,
     WorkerMemory& memory,
     ConnectionScanner::Entry& scannerEntry,
@@ -95,47 +40,77 @@ Task<HttpWebSocketRouteResult> dispatchHttpWebSocketRoute(
     const HttpServerOptions& options,
     std::string_view pendingFrames,
     HttpResponse& response) {
-    if (!isValidWebSocketRequest(parsed.request) ||
-        parsed.bodyPlan.requiresConsumption()) {
+    const auto handshakeValidation = validateHttp1WebSocketHandshake(
+        parsed.request,
+        parsed.bodyPlan);
+    if (const auto* failure = handshakeValidation.failure()) {
         response = co_await routes.handleError(
             parsed.request,
             requestMemory,
-            HttpErrorInfo(400, {}, "invalid websocket upgrade"),
+            copyHttpProtocolErrorInfo(
+                requestMemory.resource(),
+                failure->protocolError()),
             baseRouteServices);
+        failure->applyRequiredResponseHeaders(response);
         const auto connectionPlan = requireHttp1FinalResponseCommit(
             response, parsed.connectionPlan.requireClose());
-        co_return HttpWebSocketRouteResult::makeBuffered(
-            Http1SessionRequestCompletion::makeBufferedClosing(
-                connectionPlan));
+        co_return Http1SessionRequestCompletion::makeBufferedClosing(
+            connectionPlan);
     }
     const auto& webSocketEndpoint =
         *resolved.route().endpoint().webSocket();
-    const auto handshake = makeHttpWebSocketServerHandshake(
-        parsed.request,
-        webSocketEndpoint.subprotocols());
-    if (!(co_await writeWebSocketHandshake(
-            stream,
-            handshake))) {
-        co_return HttpWebSocketRouteResult::makeSessionFinished();
+    using Connection = SocketWebSocketConnection<Stream>;
+    std::optional<Connection> webSocketConnection;
+    auto upgradeAndRun = [&](Context& context) -> Task<void> {
+        const auto handshake = makeHttpWebSocketServerHandshake(
+            parsed.request,
+            webSocketEndpoint.subprotocols());
+        if (const auto ec = co_await writeWebSocketHandshake(stream, handshake); ec) {
+            co_return;
+        }
+        webSocketConnection.emplace(
+            WebSocketSocketTransport<Stream>{stream},
+            baseRouteServices.worker(),
+            scannerEntry,
+            webSocketEndpoint.lifecycle(),
+            ProtocolByteLimit::limited(options.maxWebSocketMessageBytes),
+            memory.resource(),
+            pendingFrames,
+            handshake.negotiation().deflate());
+        co_await invokeWebSocketHandler(
+            *webSocketConnection,
+            scannerEntry,
+            webSocketEndpoint.handler(),
+            context);
+    };
+    const auto terminal = makeCallableRef<void, Context&>(upgradeAndRun);
+    std::optional<HttpResponse> buffered;
+    std::exception_ptr exception;
+    try {
+        buffered = co_await routes.dispatchWebSocket(
+            parsed.request,
+            resolved,
+            requestMemory,
+            terminal,
+            baseRouteServices);
+    } catch (...) {
+        exception = std::current_exception();
     }
-
-    SocketWebSocketConnection<Stream> webSocketConnection(
-        WebSocketSocketTransport<Stream>{stream},
-        scannerEntry,
-        webSocketEndpoint.lifecycle(),
-        ProtocolByteLimit::limited(options.maxWebSocketMessageBytes),
-        memory.resource(),
-        pendingFrames,
-        handshake.negotiation().deflate());
-    co_await runWebSocketSession(
-        webSocketConnection,
-        scannerEntry,
-        routes,
-        parsed.request,
-        resolved,
-        requestMemory,
-        baseRouteServices);
-    co_return HttpWebSocketRouteResult::makeSessionFinished();
+    if (webSocketConnection.has_value()) {
+        co_await finishWebSocketSession(*webSocketConnection, exception);
+        co_return std::nullopt;
+    }
+    if (exception != nullptr) {
+        std::rethrow_exception(exception);
+    }
+    if (buffered.has_value()) {
+        response = std::move(*buffered);
+        const auto connectionPlan = requireHttp1FinalResponseCommit(
+            response, parsed.connectionPlan.requireClose());
+        co_return Http1SessionRequestCompletion::makeBufferedClosing(
+            connectionPlan);
+    }
+    co_return std::nullopt;
 }
 
 }  // namespace ruvia::detail

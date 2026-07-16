@@ -3,6 +3,7 @@
 #include "ruvia/http/HttpStatus.h"
 #include "ruvia/http/detail/PmrResource.h"
 
+#include <memory>
 #include <stdexcept>
 #include <utility>
 
@@ -18,6 +19,21 @@ HttpResponse::HttpResponse(
     std::pmr::memory_resource* resource)
     : headers_(detail::HttpResolvedPmrResourceTag{}, resource) {}
 
+HttpResponse& HttpResponse::operator=(HttpResponse&& other) noexcept {
+    if (this == &other) {
+        return *this;
+    }
+
+    // A response is one resource domain. Member-wise assignment would retain the
+    // target allocator in PMR alternatives while HttpResponseHeaders follows the
+    // source resource, leaving one response split across unrelated request arenas.
+    // Reconstructing transfers every owning alternative together and does not
+    // allocate on the response hot path.
+    std::destroy_at(this);
+    std::construct_at(this, std::move(other));
+    return *this;
+}
+
 std::pmr::memory_resource* HttpResponse::resource() const noexcept {
     return headers_.resource_;
 }
@@ -26,7 +42,7 @@ std::uint16_t HttpResponse::status() const noexcept {
     return statusCode_;
 }
 
-const HttpResponseHeaders& HttpResponse::headers() const noexcept {
+const HttpResponseHeaders& HttpResponse::headers() const & noexcept {
     return headers_;
 }
 
@@ -41,11 +57,11 @@ void HttpResponse::status(std::uint16_t statusCode) {
     statusCode_ = statusCode;
 }
 
-void HttpResponse::setBodyCopy(std::string_view value) {
+void HttpResponse::body(std::string_view value) {
     body_.setCopy(resource(), value);
 }
 
-void HttpResponse::setBodyView(std::string_view value) noexcept {
+void HttpResponse::setBodyBorrowedView(std::string_view value) noexcept {
     body_.setBorrowed(value);
 }
 
@@ -66,6 +82,20 @@ void HttpResponse::setFileBody(std::filesystem::path file, std::uint64_t size) {
 }
 
 void HttpResponse::setFileBody(std::filesystem::path file, std::uint64_t size, std::uint64_t offset, std::uint64_t length) {
+    setFileBody(
+        std::move(file),
+        size,
+        offset,
+        length,
+        detail::ResponseFileIdentity::unchecked());
+}
+
+void HttpResponse::setFileBody(
+    std::filesystem::path file,
+    std::uint64_t size,
+    std::uint64_t offset,
+    std::uint64_t length,
+    detail::ResponseFileIdentity identity) {
     if (file.empty()) {
         throw std::invalid_argument("file response path must not be empty");
     }
@@ -73,7 +103,7 @@ void HttpResponse::setFileBody(std::filesystem::path file, std::uint64_t size, s
         throw std::invalid_argument("file response byte range is outside the file");
     }
 
-    body_.setOwnedFile(resource(), file, size, offset, length);
+    body_.setOwnedFile(resource(), file, size, offset, length, identity);
 }
 
 void HttpResponse::setBorrowedFileBody(const std::filesystem::path& file, std::uint64_t size) {

@@ -25,6 +25,37 @@ using ruvia::planHttpClientRedirectRequest;
 using ruvia::resolveHttpClientSameOriginRedirectTarget;
 
 template <typename T>
+concept HasAnyRvalueHttpClientHeaderLookupAccessor =
+    requires(T&& result) { std::move(result).absent(); } ||
+    requires(T&& result) { std::move(result).found(); } ||
+    requires(T&& result) { std::move(result).repeated(); };
+
+template <typename T>
+concept HasAnyRvalueHttpClientRedirectTargetAccessor =
+    requires(T&& result) { std::move(result).target(); } ||
+    requires(T&& result) { std::move(result).failure(); };
+
+template <typename T>
+concept ExposesRvalueHttpClientRedirectTargetView =
+    requires(T&& target) { std::move(target).value(); };
+
+template <typename T>
+concept AcceptsTemporaryHttpClientResponseHeaderLookup =
+    requires(T&& response) {
+        lookupUniqueHttpClientResponseHeader(
+            std::move(response), std::string_view{});
+    };
+
+static_assert(!HasAnyRvalueHttpClientHeaderLookupAccessor<
+    ruvia::HttpClientResponseHeaderLookupResult>);
+static_assert(!HasAnyRvalueHttpClientRedirectTargetAccessor<
+    ruvia::HttpClientRedirectTargetResult>);
+static_assert(!ExposesRvalueHttpClientRedirectTargetView<
+    ruvia::HttpClientRedirectTarget>);
+static_assert(!AcceptsTemporaryHttpClientResponseHeaderLookup<
+    ruvia::HttpClientResponseHead>);
+
+template <typename T>
 concept HasHeaderValue = requires(const T& value) {
     { value.value() } -> std::same_as<std::string_view>;
 };
@@ -189,24 +220,24 @@ RUVIA_TEST(http_client_redirect_request_plan_follows_rfc) {
 }
 
 RUVIA_TEST(http_client_response_header_lookup_distinguishes_empty_and_repeated) {
-    auto response = ruvia::detail::HttpClientResponseAccess::make(
+    auto head = ruvia::detail::HttpClientResponseHeadAccess::make(
         302,
         ruvia::HttpProtocolVersion::kHttp11,
         std::pmr::get_default_resource());
-    auto& headers = ruvia::detail::HttpClientResponseAccess::headers(response);
+    auto& headers = ruvia::detail::HttpClientResponseHeadAccess::headers(head);
     headers.emplace_back(ruvia::detail::HttpClientResponseHeaderAccess::make(
         "Location",
         "",
         std::pmr::get_default_resource()));
 
-    const auto empty = lookupUniqueHttpClientResponseHeader(response, "location");
+    const auto empty = lookupUniqueHttpClientResponseHeader(head, "location");
     RUVIA_CHECK(empty.absent() == nullptr);
     RUVIA_CHECK(empty.found() != nullptr);
     RUVIA_CHECK(empty.repeated() == nullptr);
     if (const auto* found = empty.found()) {
         RUVIA_CHECK(found->value().empty());
     }
-    const auto missing = lookupUniqueHttpClientResponseHeader(response, "missing");
+    const auto missing = lookupUniqueHttpClientResponseHeader(head, "missing");
     RUVIA_CHECK(missing.absent() != nullptr);
     RUVIA_CHECK(missing.found() == nullptr);
     RUVIA_CHECK(missing.repeated() == nullptr);
@@ -215,7 +246,7 @@ RUVIA_TEST(http_client_response_header_lookup_distinguishes_empty_and_repeated) 
         "LOCATION",
         "/second",
         std::pmr::get_default_resource()));
-    const auto repeated = lookupUniqueHttpClientResponseHeader(response, "Location");
+    const auto repeated = lookupUniqueHttpClientResponseHeader(head, "Location");
     RUVIA_CHECK(repeated.absent() == nullptr);
     RUVIA_CHECK(repeated.found() == nullptr);
     RUVIA_CHECK(repeated.repeated() != nullptr);
@@ -285,6 +316,12 @@ RUVIA_TEST(http_client_same_origin_redirect_resolves_uri_references) {
     checkResolvedTarget(
         ruvia_ctx, origin, current, "?new=2", "/base/dir/page?new=2");
     checkResolvedTarget(ruvia_ctx, origin, current, "#fragment", current);
+    checkResolvedTarget(
+        ruvia_ctx,
+        origin,
+        current,
+        "/next#part/one?x=%2F:@!$&'()*+,;=",
+        "/next");
     checkResolvedTarget(ruvia_ctx, origin, current, "", current);
     checkResolvedTarget(ruvia_ctx, origin, current, "/a/../b#section", "/b");
 }
@@ -309,7 +346,11 @@ RUVIA_TEST(http_client_same_origin_redirect_reports_rejection_reason) {
              "https://example.com:99999/next",
              "http://user@example.com/next",
              "http://example.com:99999/next",
-             "http:/broken"}) {
+             "http:/broken",
+             "/next#bad fragment",
+             "/next#%zz",
+             "/next#[bad]",
+             "/next#first#second"}) {
         checkRedirectTargetFailure(
             ruvia_ctx,
             origin,
@@ -367,6 +408,8 @@ RUVIA_TEST(http_client_redirect_relative_resolution_matches_rfc3986_examples) {
         {"g/./h", "/b/c/g/h"},
         {"g/../h", "/b/c/h"},
         {"g;x=1/../y", "/b/c/y"},
+        {"/a//.", "/a//"},
+        {"g//.", "/b/c/g//"},
         {"g?y/./x", "/b/c/g?y/./x"},
     };
 

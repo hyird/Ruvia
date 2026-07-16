@@ -103,6 +103,12 @@ WorkerMemory::WorkerMemory(const MemoryPoolConfig& config)
     ProcessMemory::instance().freeze();
 }
 
+WorkerMemory::WorkerMemory(
+    const MemoryPoolConfig& config,
+    detail::DeferProcessMemoryFreeze)
+    : config_(config),
+      resource_(detail::processResource()) {}
+
 std::pmr::memory_resource* WorkerMemory::resource() noexcept {
     return resource_;
 }
@@ -120,16 +126,6 @@ RequestMemory::RequestMemory(WorkerMemory& worker)
 
 RequestMemory::RequestMemory(WorkerMemory& worker, std::span<std::byte> initialBuffer)
     : arena_(initialBuffer.data(), initialBuffer.size(), worker.resource()) {}
-
-RequestMemory::~RequestMemory() {
-    while (cleanupHead_ != nullptr) {
-        auto* node = cleanupHead_;
-        cleanupHead_ = cleanupHead_->next;
-        if (node->destroy != nullptr) {
-            node->destroy(node->object);
-        }
-    }
-}
 
 std::pmr::memory_resource* RequestMemory::resource() noexcept {
     return &arena_;

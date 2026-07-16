@@ -25,6 +25,8 @@
 #include "ruvia/http/detail/http2/Http2FrameCodec.h"
 #include "ruvia/http/detail/http2/Http2FrameTypes.h"
 #include "ruvia/http/detail/http2/Http2Hpack.h"
+#include "ruvia/http/detail/http2/Http2LocalSettings.h"
+#include "ruvia/http/detail/http2/Http2ReceiveWindowCredit.h"
 #include "ruvia/http/detail/HttpResponseFileAccess.h"
 // The production session header owns every declaration needed by its templates;
 // this test intentionally must not rely on a server-wide include-order umbrella.
@@ -54,11 +56,10 @@ std::string frame(std::uint8_t type, std::uint8_t flags, std::uint32_t streamId,
 }
 
 // Drives the real sans-I/O h2 server session as the peer: completes the handshake, sends a
-// body-less request on stream 1, then sends a DATA frame on that now-ended stream.
-// That DATA frame is dropped by the server (RFC 9113 6.9.1: it is counted against
-// the connection flow-control window even though the stream is gone). Returns every
-// connection-level (stream 0) WINDOW_UPDATE increment the server emits, so the test
-// can assert the dropped frame's bytes were credited back to the peer.
+// body-less request on stream 1, then sends DATA on that now-ended stream. Those
+// frames are dropped by the server (RFC 9113 6.9.1: they still count against the
+// connection flow-control window). Returns every connection-level (stream 0)
+// WINDOW_UPDATE increment emitted by the real session.
 std::vector<std::uint32_t> collectConnectionWindowUpdatesForDroppedData(std::uint32_t dataBytes) {
     asio::io_context io;
     std::vector<std::uint32_t> increments;
@@ -119,10 +120,23 @@ std::vector<std::uint32_t> collectConnectionWindowUpdatesForDroppedData(std::uin
                 co_return;
             }
 
-            // DATA on the now-ended stream: the frame the server must drop yet still
-            // credit against the connection window.
-            std::string data(dataBytes, 'x');
-            if (!co_await writeAll(frame(0x0 /*DATA*/, 0, 1, data))) co_return;
+            // DATA on the now-ended stream: every frame must be dropped yet still
+            // join the connection credit batch. Keep each payload within the local
+            // SETTINGS_MAX_FRAME_SIZE advertised by the server.
+            std::string data(Http2LocalSettings::kMaxFrameSize, 'x');
+            auto remaining = dataBytes;
+            while (remaining != 0) {
+                const auto chunkBytes = static_cast<std::size_t>(
+                    remaining < data.size() ? remaining : data.size());
+                if (!co_await writeAll(frame(
+                        0x0 /*DATA*/,
+                        0,
+                        1,
+                        std::string_view(data.data(), chunkBytes)))) {
+                    co_return;
+                }
+                remaining -= static_cast<std::uint32_t>(chunkBytes);
+            }
 
             // Half-close so the server's read loop reaches EOF and tears down.
             asio::error_code ignore;
@@ -509,14 +523,16 @@ RUVIA_TEST(http2_bodyless_headers_with_content_length_is_rejected) {
 }
 
 RUVIA_TEST(http2_dropped_data_credits_connection_flow_window) {
-    // The distinctive 7-byte DATA frame is dropped (sent on an ended stream); RFC
-    // 9113 6.9.1 still requires its bytes to be returned to the peer at the
-    // connection level, or the peer's send window drains and stalls every stream.
-    // Before the fix no stream-0 WINDOW_UPDATE carried this credit.
-    const auto increments = collectConnectionWindowUpdatesForDroppedData(7);
+    // DATA sent on an ended stream is dropped, but RFC 9113 6.9.1 still requires
+    // its bytes to be returned at connection scope. The real session batches that
+    // credit to avoid per-frame output amplification, then restores one exact
+    // threshold when reached.
+    constexpr auto threshold = kHttp2ReceiveWindowUpdateThreshold;
+    const auto increments =
+        collectConnectionWindowUpdatesForDroppedData(threshold);
     bool credited = false;
     for (const auto increment : increments) {
-        if (increment == 7) {
+        if (increment == threshold) {
             credited = true;
         }
     }

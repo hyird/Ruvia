@@ -9,43 +9,28 @@ const Env& Context::env() const noexcept {
 }
 
 std::pmr::string& Context::decodedBody() const {
-    if (decodedBody_ == nullptr) {
-        decodedBody_ = &memory_.emplace<std::pmr::string>(resource());
+    auto& storage = requestStorage();
+    if (!storage.decodedBody) {
+        storage.decodedBody.emplace(resource());
     }
-    return *decodedBody_;
+    return *storage.decodedBody;
 }
 
-std::pmr::string& Context::sessionIdStorage() {
-    if (sessionId_ == nullptr) {
-        sessionId_ = &memory_.emplace<std::pmr::string>(resource());
+detail::ContextRequestStorage& Context::requestStorage() const {
+    if (!requestStorage_) {
+        requestStorage_ = detail::makePmrObject<detail::ContextRequestStorage>(
+            resource());
     }
-    return *sessionId_;
-}
-
-std::pmr::string& Context::sessionDataStorage() {
-    if (sessionData_ == nullptr) {
-        sessionData_ = &memory_.emplace<std::pmr::string>(resource());
-    }
-    return *sessionData_;
-}
-
-detail::ContextValueStore& Context::values() {
-    if (values_ == nullptr) {
-        values_ = &memory_.emplace<detail::ContextValueStore>(resource());
-    }
-    return *values_;
+    return *requestStorage_;
 }
 
 HttpResponse& Context::responseStorage() {
-    if (response_ == nullptr) {
-        response_ = &memory_.emplace<HttpResponse>(resource());
-        applyResponseState(*response_, std::nullopt, {});
-    }
-    return *response_;
+    return responseState_.materializeProvisional();
 }
 
 const HttpResponse* Context::response() const noexcept {
-    return response_;
+    const auto* final = responseState_.final();
+    return final == nullptr ? nullptr : &final->response();
 }
 
 void Context::respond(HttpResponse&& response) {
@@ -53,14 +38,7 @@ void Context::respond(HttpResponse&& response) {
 }
 
 HttpResponse Context::takeResponse() {
-    if (response_ == nullptr) {
-        return HttpResponse(resource());
-    }
-
-    auto response = std::move(*response_);
-    response_ = nullptr;
-    responseFinalized_ = false;
-    return response;
+    return responseState_.take();
 }
 
 }  // namespace ruvia

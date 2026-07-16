@@ -29,7 +29,7 @@ private:
         body.append("uploaded bytes=");
         appendUnsigned(body, bytes);
         body.push_back('\n');
-        co_return c.text(body);
+        co_return c.text(std::move(body));
     }
 
     ruvia::Task<ruvia::HttpResponse> uploadMultipart(ruvia::Context& c) {
@@ -50,7 +50,7 @@ private:
         body.append(" bytes=");
         appendUnsigned(body, bytes);
         body.push_back('\n');
-        co_return c.text(body);
+        co_return c.text(std::move(body));
     }
 
     ruvia::Task<void> chunks(ruvia::Context& c) {
@@ -64,11 +64,11 @@ private:
     }
 
     ruvia::Task<void> events(ruvia::Context& c) {
-        auto events = c.streamSSE();
-        co_await events.writeSSE({.data = "connected", .event = "open", .id = "1"});
+        auto events = c.streamSse();
+        co_await events.write({.data = "connected", .event = "open", .id = "1"});
         co_await events.sleep(std::chrono::milliseconds(20));
         if (!events.aborted()) {
-            co_await events.writeSSE({.data = "heartbeat", .event = "tick", .id = "2", .retry = 3000});
+            co_await events.write({.data = "heartbeat", .event = "tick", .id = "2", .retry = 3000});
         }
     }
 
@@ -84,8 +84,8 @@ private:
 int main() {
     ruvia::app()
         .setListenAddress("0.0.0.0")
-        .setHttpListenPort(8082)
-        .setThreadNum(2)
+        .setServerTopology(ruvia::ServerTopology::http(8082))
+        .setWorkersPerListener(2)
         .setMaxBufferedBodyBytes(16 * 1024 * 1024)
         .setMaxStreamBodyBytes(std::nullopt)
         .run();

@@ -6,6 +6,7 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <utility>
 
 #include "ruvia/web/Error.h"
 #include "ruvia/web/Validation.h"
@@ -16,6 +17,54 @@ namespace {
 using ruvia::Validator;
 
 }  // namespace
+
+template <typename T>
+concept ExposesAnyRvalueValidationIssueBorrow =
+    requires { std::declval<const T&&>().field(); } ||
+    requires { std::declval<const T&&>().code(); } ||
+    requires { std::declval<const T&&>().message(); };
+
+template <typename T>
+concept ExposesAnyRvalueValidationErrorBorrow =
+    requires { std::declval<const T&&>().issues(); } ||
+    requires { std::declval<const T&&>().info(); };
+
+template <typename T>
+concept ExposesRvalueValidatorIssues = requires {
+    std::declval<const T&&>().issues();
+};
+
+template <typename T>
+concept AcceptsAnyRvalueValidatorMutation =
+    requires { std::declval<T&&>().add("field", "code", "message"); } ||
+    requires(const std::optional<std::string>& value) {
+        std::declval<T&&>().required(value, "field");
+    } ||
+    requires(const std::optional<std::string>& value) {
+        std::declval<T&&>().minLength(value, "field", std::size_t{1});
+    } ||
+    requires(const std::optional<std::string>& value) {
+        std::declval<T&&>().maxLength(value, "field", std::size_t{1});
+    } ||
+    requires(const std::optional<int>& value) {
+        std::declval<T&&>().range(value, "field", 0, 1);
+    } ||
+    requires(const std::optional<std::string>& value) {
+        std::declval<T&&>().oneOf(value, "field", {"value"});
+    };
+
+static_assert(!ExposesAnyRvalueValidationIssueBorrow<ruvia::ValidationIssue>);
+static_assert(!ExposesAnyRvalueValidationErrorBorrow<ruvia::ValidationError>);
+static_assert(!ExposesRvalueValidatorIssues<ruvia::Validator>);
+static_assert(!AcceptsAnyRvalueValidatorMutation<ruvia::Validator>);
+static_assert(
+    sizeof(ruvia::detail::ValidatedModelBindings) == sizeof(void*));
+template <typename Bindings>
+concept AcceptsRvalueValidatedModel = requires(Bindings& bindings) {
+    bindings.bind(int{1});
+};
+static_assert(!AcceptsRvalueValidatedModel<
+    ruvia::detail::ValidatedModelBindings>);
 
 RUVIA_TEST(validator_required_flags_absent_values) {
     Validator v;
@@ -163,26 +212,54 @@ RUVIA_TEST(validator_throw_if_invalid_raises_on_issues) {
     RUVIA_CHECK(threw);
 }
 
-RUVIA_TEST(validated_values_are_keyed_only_by_model_type) {
-    ruvia::detail::ValidatedValueStore values;
-    values.set(int{42}, std::pmr::get_default_resource());
+RUVIA_TEST(validated_model_bindings_are_nested_scoped_borrows) {
+    ruvia::detail::ValidatedModelBindings values;
+    int number = 42;
+    {
+        auto numberBinding = values.bind(number);
+        RUVIA_CHECK_EQ(values.get<int>(), 42);
 
-    RUVIA_CHECK_EQ(values.get<int>(), 42);
+        {
+            std::string text = "nested";
+            auto textBinding = values.bind(text);
+            RUVIA_CHECK_EQ(values.get<std::string>(), std::string("nested"));
+            RUVIA_CHECK_EQ(values.get<int>(), 42);
+        }
+
+        // The inner borrow must unbind on its own and leave the outer one live.
+        bool nestedReleased = false;
+        try {
+            (void)values.get<std::string>();
+        } catch (const std::logic_error&) {
+            nestedReleased = true;
+        }
+        RUVIA_CHECK(nestedReleased);
+        RUVIA_CHECK_EQ(values.get<int>(), 42);
+    }
 
     bool missingRejected = false;
     try {
-        (void)values.get<std::string>();
+        (void)values.get<int>();
     } catch (const std::logic_error&) {
         missingRejected = true;
     }
     RUVIA_CHECK(missingRejected);
+}
 
-    bool duplicateRejected = false;
+RUVIA_TEST(validated_model_binding_unwinds_on_exception) {
+    ruvia::detail::ValidatedModelBindings values;
     try {
-        values.set(int{7}, std::pmr::get_default_resource());
-    } catch (const std::logic_error&) {
-        duplicateRejected = true;
+        int number = 7;
+        auto binding = values.bind(number);
+        throw std::runtime_error("leave validation scope");
+    } catch (const std::runtime_error&) {
     }
-    RUVIA_CHECK(duplicateRejected);
-    RUVIA_CHECK_EQ(values.get<int>(), 42);
+
+    bool missingRejected = false;
+    try {
+        (void)values.get<int>();
+    } catch (const std::logic_error&) {
+        missingRejected = true;
+    }
+    RUVIA_CHECK(missingRejected);
 }

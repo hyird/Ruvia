@@ -2,6 +2,7 @@
 
 #include "ruvia/http/detail/HeaderTokenUtils.h"
 #include "ruvia/http/detail/HttpTransferCoding.h"
+#include "ruvia/http/detail/parser/HttpParserSyntax.h"
 
 #include <cstdint>
 #include <optional>
@@ -9,6 +10,87 @@
 #include <variant>
 
 namespace ruvia::detail {
+
+[[nodiscard]] inline bool httpValidTransferParameterValue(
+    std::string_view value) noexcept {
+    if (value.empty()) {
+        return false;
+    }
+    if (value.front() != '"') {
+        for (const auto byte : value) {
+            if (!isHttpTokenChar(static_cast<unsigned char>(byte))) {
+                return false;
+            }
+        }
+        return true;
+    }
+    if (value.size() < 2 || value.back() != '"') {
+        return false;
+    }
+    const auto end = value.size() - 1;
+    for (std::size_t cursor = 1; cursor < end; ++cursor) {
+        auto byte = static_cast<unsigned char>(value[cursor]);
+        if (byte == '\\') {
+            if (++cursor == end) {
+                return false;
+            }
+            byte = static_cast<unsigned char>(value[cursor]);
+            if (byte != '\t' && byte != ' ' &&
+                (byte < 0x21 || byte > 0x7e) && byte < 0x80) {
+                return false;
+            }
+        } else if (byte == '"' ||
+                   (byte != '\t' && byte != ' ' && byte != 0x21 &&
+                    (byte < 0x23 || byte > 0x5b) &&
+                    (byte < 0x5d || byte > 0x7e) && byte < 0x80)) {
+            return false;
+        }
+    }
+    return true;
+}
+
+[[nodiscard]] inline bool httpParseTransferCodingSyntax(
+    std::string_view item,
+    std::string_view& coding,
+    bool& hasParameters) noexcept {
+    const auto firstSemicolon = httpFindUnquotedDelimiter(item, 0, ';');
+    coding = httpTrimOws(item.substr(0, firstSemicolon));
+    if (coding.empty()) {
+        return false;
+    }
+    for (const auto byte : coding) {
+        if (!isHttpTokenChar(static_cast<unsigned char>(byte))) {
+            return false;
+        }
+    }
+
+    hasParameters = firstSemicolon < item.size();
+    auto start = firstSemicolon;
+    while (start < item.size()) {
+        ++start;
+        const auto end = httpFindUnquotedDelimiter(item, start, ';');
+        const auto parameter = httpTrimOws(item.substr(start, end - start));
+        const auto equals = parameter.find('=');
+        if (equals == std::string_view::npos) {
+            return false;
+        }
+        const auto name = httpTrimOws(parameter.substr(0, equals));
+        const auto value = httpTrimOws(parameter.substr(equals + 1));
+        if (name.empty()) {
+            return false;
+        }
+        for (const auto byte : name) {
+            if (!isHttpTokenChar(static_cast<unsigned char>(byte))) {
+                return false;
+            }
+        }
+        if (!httpValidTransferParameterValue(value)) {
+            return false;
+        }
+        start = end;
+    }
+    return true;
+}
 
 enum class HttpTransferEncodingParseStatus : std::uint8_t {
     kOk,
@@ -18,7 +100,7 @@ enum class HttpTransferEncodingParseStatus : std::uint8_t {
 
 class HttpNonChunkedTransferEncoding final {
 public:
-    [[nodiscard]] const HttpTransferCodings& transferCodings() const noexcept {
+    [[nodiscard]] HttpTransferCodings transferCodings() const noexcept {
         return transferCodings_;
     }
 
@@ -34,7 +116,7 @@ private:
 
 class HttpFinalChunkedTransferEncoding final {
 public:
-    [[nodiscard]] const HttpTransferCodings& transferCodings() const noexcept {
+    [[nodiscard]] HttpTransferCodings transferCodings() const noexcept {
         return transferCodings_;
     }
 
@@ -120,15 +202,21 @@ public:
             [&codings, &finalChunked, &status, &sawItem](
                 std::string_view item) noexcept {
                 sawItem = true;
-                // gzip, deflate, and chunked define no transfer-coding parameters.
-                // A semicolon here is not a chunk extension; chunk extensions live
-                // on each chunk-size line inside the body.
-                if (item.empty() || item.find(';') != std::string_view::npos ||
-                    finalChunked) {
+                std::string_view coding;
+                bool hasParameters = false;
+                if (finalChunked ||
+                    !httpParseTransferCodingSyntax(item, coding, hasParameters)) {
                     status = HttpTransferEncodingParseStatus::kMalformed;
                     return false;
                 }
-                if (httpAsciiEqualsIgnoreCase(item, "chunked")) {
+                // RFC 9112 section 7.2: chunked and the compression transfer
+                // codings define no parameters. Unknown codings can define them,
+                // so valid extension syntax remains "unsupported", not malformed.
+                if (httpAsciiEqualsIgnoreCase(coding, "chunked")) {
+                    if (hasParameters) {
+                        status = HttpTransferEncodingParseStatus::kMalformed;
+                        return false;
+                    }
                     finalChunked = true;
                     return true;
                 }
@@ -136,12 +224,20 @@ public:
                     status = HttpTransferEncodingParseStatus::kUnsupported;
                     return false;
                 }
-                if (httpAsciiEqualsIgnoreCase(item, "gzip") ||
-                    httpAsciiEqualsIgnoreCase(item, "x-gzip")) {
+                if (httpAsciiEqualsIgnoreCase(coding, "gzip") ||
+                    httpAsciiEqualsIgnoreCase(coding, "x-gzip")) {
+                    if (hasParameters) {
+                        status = HttpTransferEncodingParseStatus::kMalformed;
+                        return false;
+                    }
                     codings.values[codings.count++] = HttpTransferCoding::kGzip;
                     return true;
                 }
-                if (httpAsciiEqualsIgnoreCase(item, "deflate")) {
+                if (httpAsciiEqualsIgnoreCase(coding, "deflate")) {
+                    if (hasParameters) {
+                        status = HttpTransferEncodingParseStatus::kMalformed;
+                        return false;
+                    }
                     codings.values[codings.count++] = HttpTransferCoding::kDeflate;
                     return true;
                 }

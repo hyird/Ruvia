@@ -7,6 +7,7 @@
 #include <memory>
 #include <optional>
 #include <string_view>
+#include <vector>
 
 #include "ruvia/web/AppHook.h"
 #include "ruvia/web/Dotenv.h"
@@ -14,6 +15,7 @@
 #include "ruvia/web/ErrorHandlers.h"
 #include "ruvia/web/ServerConfig.h"
 #include "ruvia/core/memory/MemoryPool.h"
+#include "ruvia/web/WebWorker.h"
 
 #ifdef RUVIA_ENABLE_DATABASE
 #include "ruvia/web/db/Db.h"
@@ -34,17 +36,15 @@ struct AppState;
 
 class App final {
 public:
-    static App& instance();
     ~App();
 
     [[nodiscard]] const Env& env() const noexcept;
     App& loadDotenv(DotenvOptions options = {});
     App& loadDotenv(const std::filesystem::path& path, DotenvOptions options = {});
     App& setListenAddress(std::string_view address);
-    App& setHttpListenPort(std::uint16_t port);
-    App& setHttpsListenPort(std::uint16_t port);
-    App& setAutoHttps(bool enabled = true);
-    App& setThreadNum(std::size_t threadNum);
+    App& setServerTopology(ServerTopology topology);
+    App& setWorkersPerListener(std::size_t workersPerListener);
+    App& setWorkerMailboxCapacity(std::size_t capacity);
     App& setKeepaliveTimeout(std::optional<std::chrono::milliseconds> timeout);
     App& setShutdownGracePeriod(std::chrono::milliseconds gracePeriod);
     App& setConnectionScanInterval(std::chrono::milliseconds interval);
@@ -56,15 +56,14 @@ public:
     App& setMaxBufferedBodyBytes(std::size_t bytes);
     App& setMaxStreamBodyBytes(std::optional<std::size_t> bytes);
     App& setMaxWebSocketMessageBytes(std::size_t bytes);
-    App& useTls(TlsConfig config);
-    App& addTlsCertificate(std::string_view host, TlsConfig config);
     App& setCompression(std::optional<CompressionConfig> config);
     App& setCors(std::optional<CorsConfig> config);
     App& setDocumentRoot(DocumentRootConfig config);
     App& setMemoryPoolConfig(MemoryPoolConfig config);
     App& onError(HttpErrorHandler handler);
     App& notFound(HttpNotFoundHandler handler);
-    App& setGlobalRateLimit(std::optional<RateLimitRule> rule);
+    App& setDefaultRateLimitPerWorker(std::optional<RateLimitRule> rule);
+    App& setRateLimitSlotsPerWorker(std::size_t slotsPerWorker);
     App& onAccess(AccessLogCallback callback);
     App& onStart(AppHook hook);
     App& onStop(AppHook hook);
@@ -78,8 +77,13 @@ public:
 #endif
     void run();
     void stop();
+    [[nodiscard]] std::vector<WebWorkerHandle> workers() const;
+    [[nodiscard]] WebWorkerHandle workerFor(std::uint64_t key) const;
+    [[nodiscard]] WebWorkerHandle workerFor(std::string_view key) const;
 
 private:
+    friend App& app();
+
     struct StateDeleter final {
         void operator()(detail::AppState* state) const noexcept;
     };

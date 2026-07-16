@@ -66,6 +66,42 @@ void validateConnectionControlField(
     }
 }
 
+[[nodiscard]] bool setCookieValueHasWireName(
+    std::string_view value,
+    std::string_view wirePrefix,
+    std::string_view cookieName) noexcept {
+    while (!value.empty() && (value.front() == ' ' || value.front() == '\t')) {
+        value.remove_prefix(1);
+    }
+    if (!value.starts_with(wirePrefix)) {
+        return false;
+    }
+    value.remove_prefix(wirePrefix.size());
+    if (!value.starts_with(cookieName)) {
+        return false;
+    }
+    value.remove_prefix(cookieName.size());
+    while (!value.empty() && (value.front() == ' ' || value.front() == '\t')) {
+        value.remove_prefix(1);
+    }
+    return !value.empty() && value.front() == '=';
+}
+
+[[nodiscard]] std::string_view setCookieWireName(std::string_view value) noexcept {
+    while (!value.empty() && (value.front() == ' ' || value.front() == '\t')) {
+        value.remove_prefix(1);
+    }
+    const auto equals = value.find('=');
+    if (equals == std::string_view::npos) {
+        return {};
+    }
+    auto name = value.substr(0, equals);
+    while (!name.empty() && (name.back() == ' ' || name.back() == '\t')) {
+        name.remove_suffix(1);
+    }
+    return isValidHttpHeaderName(name) ? name : std::string_view{};
+}
+
 void writeContentRangeHeaderValue(
     HttpResponseHeader& header,
     std::uint64_t offset,
@@ -162,7 +198,11 @@ HttpResponseHeader& HttpResponse::prepareHeaderValueStorage(
     std::size_t valueSize,
     std::uint32_t knownBit) {
     if (auto* const header = findHeaderForUpdate(key, knownBit)) {
-        return headers_.assignUninitializedValue(*header, key, valueSize, knownBit);
+        const bool wasAppended = detail::responseHeaderAppend(*header);
+        headers_.assignUninitializedValue(*header, key, valueSize, knownBit);
+        return wasAppended
+            ? collapseResponseHeaders(*header, key, knownBit)
+            : *header;
     }
 
     const auto index = headers_.size();
@@ -176,11 +216,12 @@ std::string_view HttpResponse::knownHeaderValue(std::uint32_t bit) const noexcep
     return header == nullptr ? std::string_view{} : header->value();
 }
 
-std::string_view HttpResponse::header(std::string_view name) const noexcept {
+std::optional<std::string_view>
+HttpResponse::header(std::string_view name) const & noexcept {
     if (const auto* const found = findHeaderForRead(name, detail::classifyResponseHeaderName(name))) {
         return found->value();
     }
-    return {};
+    return std::nullopt;
 }
 
 void HttpResponse::rebuildKnownHeaderIndex() noexcept {
@@ -218,7 +259,11 @@ void HttpResponse::header(std::string_view key, std::string_view value, HeaderOp
         if (detail::responseHeaderAppendForbidden(knownBit)) {
             throw std::invalid_argument("HTTP response header cannot be appended");
         }
-        appendHeaderValidated(key, value, knownBit);
+        if (knownBit == detail::kResponseHeaderSetCookie) {
+            upsertSetCookieHeaderValidated(value);
+        } else {
+            appendHeaderValidated(key, value, knownBit);
+        }
     } else {
         setHeaderValidated(key, value, knownBit);
     }
@@ -236,7 +281,11 @@ void HttpResponse::setHeaderValidated(
     std::string_view value,
     std::uint32_t knownBit) {
     if (auto* const header = findHeaderForUpdate(key, knownBit)) {
+        const bool wasAppended = detail::responseHeaderAppend(*header);
         headers_.assign(*header, key, value, knownBit);
+        if (wasAppended) {
+            (void)collapseResponseHeaders(*header, key, knownBit);
+        }
         return;
     }
 
@@ -251,6 +300,12 @@ void HttpResponse::appendHeaderValidated(
     std::uint32_t knownBit) {
     if (detail::responseHeaderAppendForbidden(knownBit)) {
         throw std::invalid_argument("HTTP response header cannot be appended");
+    }
+    // The index cache intentionally points at the first occurrence. Mark that
+    // retained slot as plural too, so a later plain set can detect multiplicity
+    // in O(1) and collapse the field without scanning every normal update.
+    if (auto* const existing = findHeaderForUpdate(key, knownBit)) {
+        detail::setResponseHeaderAppend(*existing, true);
     }
     const auto index = headers_.size();
     auto& header = headers_.add(key, value, knownBit);
@@ -270,6 +325,128 @@ HttpResponseHeader& HttpResponse::appendHeaderUninitializedValue(
     detail::setResponseHeaderAppend(header, true);
     recordKnownHeaderIndex(knownBit, index);
     return header;
+}
+
+HttpResponseHeader& HttpResponse::upsertSetCookieHeaderUninitializedValue(
+    std::string_view wirePrefix,
+    std::string_view cookieName,
+    std::size_t valueSize) {
+    auto* retained = findSetCookieHeader(wirePrefix, cookieName);
+    if (retained == nullptr) {
+        return appendHeaderUninitializedValue(
+            "Set-Cookie", valueSize, detail::kResponseHeaderSetCookie);
+    }
+
+    headers_.assignUninitializedValue(
+        *retained, "Set-Cookie", valueSize, detail::kResponseHeaderSetCookie);
+    detail::setResponseHeaderAppend(*retained, true);
+    eraseLaterSetCookieHeaders(*retained, wirePrefix, cookieName);
+    return *retained;
+}
+
+void HttpResponse::upsertSetCookieHeaderValidated(std::string_view value) {
+    const auto cookieName = setCookieWireName(value);
+    if (cookieName.empty()) {
+        appendHeaderValidated(
+            "Set-Cookie", value, detail::kResponseHeaderSetCookie);
+        return;
+    }
+
+    auto* retained = findSetCookieHeader({}, cookieName);
+    if (retained == nullptr) {
+        appendHeaderValidated(
+            "Set-Cookie", value, detail::kResponseHeaderSetCookie);
+        return;
+    }
+
+    headers_.assign(
+        *retained, "Set-Cookie", value, detail::kResponseHeaderSetCookie);
+    detail::setResponseHeaderAppend(*retained, true);
+    eraseLaterSetCookieHeaders(*retained, {}, cookieName);
+}
+
+HttpResponseHeader* HttpResponse::findSetCookieHeader(
+    std::string_view wirePrefix,
+    std::string_view cookieName) noexcept {
+    for (auto& header : headers_) {
+        if (detail::responseHeaderKnownBit(header) == detail::kResponseHeaderSetCookie &&
+            setCookieValueHasWireName(header.value(), wirePrefix, cookieName)) {
+            return &header;
+        }
+    }
+    return nullptr;
+}
+
+void HttpResponse::eraseLaterSetCookieHeaders(
+    HttpResponseHeader& retained,
+    std::string_view wirePrefix,
+    std::string_view cookieName) noexcept {
+    // A response might already contain duplicates introduced through the raw
+    // header API. Once an authoritative cookie path owns this name, collapse
+    // every later occurrence so the final response has one value.
+    auto* const begin = headers_.begin();
+    auto* const end = headers_.end();
+    auto* write = &retained + 1;
+    for (auto* read = &retained + 1; read != end; ++read) {
+        if (detail::responseHeaderKnownBit(*read) == detail::kResponseHeaderSetCookie &&
+            setCookieValueHasWireName(read->value(), wirePrefix, cookieName)) {
+            headers_.releaseHeader(*read);
+            continue;
+        }
+        if (write != read) {
+            *write = *read;
+        }
+        ++write;
+    }
+    if (write != end) {
+        if (headers_.spilled_) {
+            headers_.heap_.erase(
+                headers_.heap_.begin() + static_cast<std::ptrdiff_t>(write - begin),
+                headers_.heap_.end());
+        } else {
+            headers_.size_ = static_cast<std::size_t>(write - begin);
+        }
+    }
+    rebuildKnownHeaderIndex();
+}
+
+HttpResponseHeader& HttpResponse::collapseResponseHeaders(
+    HttpResponseHeader& retained,
+    std::string_view key,
+    std::uint32_t knownBit) noexcept {
+    auto* const begin = headers_.begin();
+    auto* const end = headers_.end();
+    auto* const retainedAddress = &retained;
+    auto* collapsedRetained = retainedAddress;
+    auto* write = begin;
+    for (auto* read = begin; read != end; ++read) {
+        const auto headerKnownBit = detail::responseHeaderKnownBit(*read);
+        const bool matches = knownBit != 0
+            ? headerKnownBit == knownBit
+            : detail::httpAsciiEqualsIgnoreCase(read->name(), key);
+        if (matches && read != retainedAddress) {
+            headers_.releaseHeader(*read);
+            continue;
+        }
+        if (read == retainedAddress) {
+            collapsedRetained = write;
+        }
+        if (write != read) {
+            *write = *read;
+        }
+        ++write;
+    }
+    if (write != end) {
+        if (headers_.spilled_) {
+            headers_.heap_.erase(
+                headers_.heap_.begin() + static_cast<std::ptrdiff_t>(write - begin),
+                headers_.heap_.end());
+        } else {
+            headers_.size_ = static_cast<std::size_t>(write - begin);
+        }
+    }
+    rebuildKnownHeaderIndex();
+    return *collapsedRetained;
 }
 
 bool HttpResponse::removeHeaderValidated(std::string_view key, std::uint32_t knownBit) noexcept {
@@ -312,7 +489,11 @@ bool HttpResponse::removeHeaderValidated(std::string_view key, std::uint32_t kno
 void HttpResponse::setHeaderStableView(std::string_view key, std::string_view value) {
     const auto knownBit = detail::classifyResponseHeaderName(key);
     if (auto* const header = findHeaderForUpdate(key, knownBit)) {
+        const bool wasAppended = detail::responseHeaderAppend(*header);
         headers_.assignStableView(*header, key, value, knownBit);
+        if (wasAppended) {
+            (void)collapseResponseHeaders(*header, key, knownBit);
+        }
         return;
     }
 
@@ -334,6 +515,9 @@ void HttpResponse::setAllowHeader(std::uint32_t methodMask) {
 void HttpResponse::setContentRange(std::uint64_t offset, std::uint64_t length, std::uint64_t size) {
     if (length == 0) {
         throw std::logic_error("file response byte range length must not be zero");
+    }
+    if (offset > size || length > size - offset) {
+        throw std::logic_error("file response byte range is outside the representation");
     }
     const auto endOffset = offset + length - 1;
     const auto valueSize = std::string_view("bytes ").size() +

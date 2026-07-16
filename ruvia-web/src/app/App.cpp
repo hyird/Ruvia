@@ -4,16 +4,19 @@
 
 #include <algorithm>
 #include <csignal>
+#include <exception>
 #include <memory_resource>
 #include <mutex>
 #include <stdexcept>
 #include <thread>
+#include <type_traits>
 #include <utility>
 #include <vector>
 
 #include "ruvia/web/detail/controller/ControllerRuntime.h"
 #include "ruvia/web/detail/app/AppConfigGuards.h"
 #include "ruvia/core/detail/NativePath.h"
+#include "ruvia/core/detail/WorkerSelection.h"
 #include "ruvia/web/detail/server/HttpServer.h"
 #include "ruvia/web/detail/router/RouterInternal.h"
 
@@ -30,16 +33,72 @@ void addShutdownSignals(asio::signal_set& signals) {
 
 [[nodiscard]] detail::HttpServerOptions makeListenerOptions(
     const detail::HttpServerOptions& base,
-    bool tlsEnabled,
-    bool autoHttpsEnabled,
-    std::uint16_t httpsPort,
+    detail::HttpServerOptions::ListenerTransport transport,
     const StaticRoot* documentRoot) {
     auto options = base;
-    options.tls.enabled = tlsEnabled;
-    options.autoHttps.enabled = autoHttpsEnabled;
-    options.autoHttps.httpsPort = httpsPort;
+    options.transport = std::move(transport);
     options.documentRoot.root = documentRoot;
     return options;
+}
+
+template <typename NativeChar>
+void assignTlsFileNameFromNative(
+    std::pmr::string& output,
+    std::basic_string_view<NativeChar> native) {
+    if constexpr (std::is_same_v<NativeChar, char>) {
+        output.assign(native.data(), native.size());
+    } else {
+        const auto name = std::filesystem::path(native.begin(), native.end()).string();
+        output.assign(name.data(), name.size());
+    }
+}
+
+void assignTlsFileName(
+    std::pmr::string& output,
+    const std::filesystem::path& path) {
+    assignTlsFileNameFromNative(output, detail::nativePathView(path));
+}
+
+[[nodiscard]] detail::HttpServerOptions::Tls makeTlsOptions(
+    const TlsConfig& config) {
+    detail::HttpServerOptions::Tls tls;
+    assignTlsFileName(
+        tls.identity.certificateChainFile,
+        config.identity().certificateChainFile());
+    assignTlsFileName(
+        tls.identity.privateKeyFile,
+        config.identity().privateKeyFile());
+    tls.identity.privateKeyPassword = config.identity().privateKeyPassword();
+    if (config.clientCertificatePolicy().has_value()) {
+        auto& policy = tls.clientCertificates.emplace(
+            std::pmr::string{},
+            config.clientCertificatePolicy()->requirement());
+        assignTlsFileName(
+            policy.verifyFile,
+            config.clientCertificatePolicy()->verifyFile());
+    }
+    tls.sniIdentities.reserve(config.sniIdentities().size());
+    for (const auto& configured : config.sniIdentities()) {
+        auto& sni = tls.sniIdentities.emplace_back();
+        sni.host = configured.host();
+        assignTlsFileName(
+            sni.identity.certificateChainFile,
+            configured.identity().certificateChainFile());
+        assignTlsFileName(
+            sni.identity.privateKeyFile,
+            configured.identity().privateKeyFile());
+        sni.identity.privateKeyPassword = configured.identity().privateKeyPassword();
+    }
+    return tls;
+}
+
+void invokeStopHooks(detail::AppState& state) noexcept {
+    for (auto& hook : state.onStopHooks) {
+        try {
+            hook();
+        } catch (...) {
+        }
+    }
 }
 
 }  // namespace
@@ -56,7 +115,8 @@ struct AppRuntimeGraph final {
 };
 
 AppState::AppState()
-    : threadNum(std::max(1U, std::thread::hardware_concurrency())),
+    : workersPerListener(std::max(1U, std::thread::hardware_concurrency())),
+      router(nullptr, PmrObjectDeleter<Router>{detail::appResource()}),
       runtime(nullptr, PmrObjectDeleter<AppRuntimeGraph>{detail::appResource()}) {
     listenAddress.assign("0.0.0.0");
 }
@@ -65,13 +125,9 @@ AppState::~AppState() = default;
 
 }  // namespace detail
 
-App& App::instance() {
+App& app() {
     static App instance;
     return instance;
-}
-
-App& app() {
-    return App::instance();
 }
 
 App::App()
@@ -87,34 +143,68 @@ const Env& App::env() const noexcept {
     return state_->env;
 }
 
+std::vector<WebWorkerHandle> App::workers() const {
+    auto& state = *state_;
+    std::lock_guard lock(state.mutex);
+    std::vector<WebWorkerHandle> result;
+    if (!state.runtime) {
+        return result;
+    }
+    result.reserve(state.runtime->workers.size());
+    for (const auto& worker : state.runtime->workers) {
+        result.push_back(worker->webWorker());
+    }
+    return result;
+}
+
+WebWorkerHandle App::workerFor(std::uint64_t key) const {
+    auto& state = *state_;
+    std::lock_guard lock(state.mutex);
+    if (!state.runtime || state.runtime->workers.empty()) {
+        return {};
+    }
+    return state.runtime->workers[key % state.runtime->workers.size()]->webWorker();
+}
+
+WebWorkerHandle App::workerFor(std::string_view key) const {
+    return workerFor(detail::workerSelectionHash(key));
+}
+
 void App::run() {
     auto& state = *state_;
     auto* runtimeResource = detail::appResource();
     std::pmr::vector<detail::HttpServer*> startedWorkers(runtimeResource);
     auto runtime = detail::makePmrObject<detail::AppRuntimeGraph>(runtimeResource, runtimeResource);
+    auto preparedRouter = std::unique_ptr<Router, detail::PmrObjectDeleter<Router>>(
+        nullptr,
+        detail::PmrObjectDeleter<Router>{runtimeResource});
+    detail::ControllerStore preparedControllerLifetimes;
 
     {
         std::lock_guard lock(state.mutex);
-        detail::ensureAppNotRunning(state.running, "app is already running");
+        detail::ensureAppNotRunning(state.lifecycle.active(), "app is already running");
 
-        if (!state.autoControllersLoaded) {
-            detail::registerControllers(state.router, state.controllerLifetimes);
-            state.autoControllersLoaded = true;
+        auto* routeOwner = state.router.get();
+        if (routeOwner == nullptr) {
+            preparedRouter = detail::makePmrObject<Router>(runtimeResource);
+            detail::registerControllers(
+                *preparedRouter,
+                preparedControllerLifetimes);
+            routeOwner = preparedRouter.get();
         }
-        auto& processMemory = ProcessMemory::instance();
-        if (processMemory.frozen()) {
-            if (processMemory.config().requestInitialBufferBytes != state.memoryConfig.requestInitialBufferBytes) {
-                throw std::logic_error("process memory configuration is already frozen with different values");
-            }
-        } else {
-            processMemory.configure(state.memoryConfig);
-            processMemory.freeze();
-        }
-        auto& routes = detail::RouterImpl::from(state.router);
+        auto& routes = detail::RouterImpl::from(*routeOwner);
         routes.setErrorHandler(state.errorHandler);
         routes.setNotFoundHandler(state.notFoundHandler);
         routes.finalize();
         const auto& routeTable = routes.routeTable();
+
+        auto preparedOptions = state.options;
+        preparedOptions.workerFailure = detail::WorkerFailureSink{
+            .target = this,
+            .invoke = [](void* target, std::exception_ptr) noexcept {
+                static_cast<App*>(target)->stop();
+            },
+        };
 
         if (state.documentRootConfig.has_value()) {
             const auto documentRootPath = detail::makePathFromNativePath(state.documentRootConfig->root);
@@ -124,38 +214,28 @@ void App::run() {
                 state.documentRootConfig->staticOptions);
         }
 
-        if (state.httpsListenPort.has_value() && !state.options.tls.enabled) {
-            throw std::invalid_argument("HTTPS listener requires TLS configuration");
-        }
-        if (!state.httpListenPort.has_value() && !state.httpsListenPort.has_value()) {
-            throw std::invalid_argument("at least one HTTP or HTTPS listener must be configured");
-        }
-        if (state.autoHttps) {
-            if (!state.httpListenPort.has_value() || !state.httpsListenPort.has_value()) {
-                throw std::invalid_argument("auto HTTPS requires both HTTP and HTTPS listeners");
-            }
-        }
-        if (state.httpListenPort.has_value() && state.httpsListenPort.has_value() &&
-            *state.httpListenPort == *state.httpsListenPort) {
-            throw std::invalid_argument("HTTP and HTTPS listen ports must be different");
-        }
-
         const auto address = asio::ip::make_address(state.listenAddress);
+        const auto hasTwoListeners = std::visit(
+            []<typename Topology>(const Topology&) {
+                return std::is_same_v<Topology, ServerTopology::HttpAndHttps> ||
+                       std::is_same_v<Topology, ServerTopology::RedirectHttpToHttps>;
+            },
+            state.topology.topology_);
         const auto workerCount =
-            (state.httpListenPort.has_value() ? state.threadNum : 0) +
-            (state.httpsListenPort.has_value() ? state.threadNum : 0);
+            state.workersPerListener * (hasTwoListeners ? 2 : 1);
         runtime->workers.reserve(workerCount);
 
-        const auto addWorkers = [&](std::uint16_t port, bool tlsEnabled, bool autoHttpsEnabled) {
+        const auto addWorkers = [&state, &address, &runtime, &routeTable,
+                                 &preparedOptions, runtimeResource](
+                                    std::uint16_t port,
+                                    detail::HttpServerOptions::ListenerTransport transport) {
             const asio::ip::tcp::endpoint endpoint(address, port);
             auto listenerOptions = makeListenerOptions(
-                state.options,
-                tlsEnabled,
-                autoHttpsEnabled,
-                state.httpsListenPort.value_or(443),
+                preparedOptions,
+                std::move(transport),
                 runtime->documentRoot.get());
-            for (std::size_t i = 0; i < state.threadNum; ++i) {
-                auto workerOptions = i + 1 == state.threadNum
+            for (std::size_t i = 0; i < state.workersPerListener; ++i) {
+                auto workerOptions = i + 1 == state.workersPerListener
                     ? std::move(listenerOptions)
                     : listenerOptions;
                 runtime->workers.push_back(detail::makePmrObject<detail::HttpServer>(
@@ -176,16 +256,59 @@ void App::run() {
             }
         };
 
-        if (state.httpListenPort.has_value()) {
-            addWorkers(*state.httpListenPort, false, state.autoHttps);
-        }
-        if (state.httpsListenPort.has_value()) {
-            addWorkers(*state.httpsListenPort, true, false);
-        }
+        std::visit(
+            [&]<typename Topology>(const Topology& topology) {
+                if constexpr (std::is_same_v<Topology, ServerTopology::Http>) {
+                    addWorkers(
+                        topology.port,
+                        detail::HttpServerOptions::PlainHttp{});
+                } else if constexpr (
+                    std::is_same_v<Topology, ServerTopology::Https>) {
+                    addWorkers(
+                        topology.port,
+                        makeTlsOptions(topology.tls));
+                } else if constexpr (
+                    std::is_same_v<Topology, ServerTopology::HttpAndHttps>) {
+                    addWorkers(
+                        topology.httpPort,
+                        detail::HttpServerOptions::PlainHttp{});
+                    addWorkers(
+                        topology.httpsPort,
+                        makeTlsOptions(topology.tls));
+                } else {
+                    addWorkers(
+                        topology.httpPort,
+                        detail::HttpServerOptions::RedirectHttpToHttps{
+                            topology.httpsPort});
+                    addWorkers(
+                        topology.httpsPort,
+                        makeTlsOptions(topology.tls));
+                }
+            },
+            state.topology.topology_);
 
+        // All fallible startup preparation is complete. Freeze the process-wide
+        // arena configuration and publish prepared ownership only at commit.
+        auto& processMemory = ProcessMemory::instance();
+        if (processMemory.frozen()) {
+            if (processMemory.config().requestInitialBufferBytes !=
+                preparedOptions.memoryConfig.requestInitialBufferBytes) {
+                throw std::logic_error(
+                    "process memory configuration is already frozen with different values");
+            }
+        } else {
+            processMemory.configure(preparedOptions.memoryConfig);
+            processMemory.freeze();
+        }
+        if (preparedRouter) {
+            state.controllerLifetimes =
+                std::move(preparedControllerLifetimes);
+            state.router = std::move(preparedRouter);
+        }
         state.runtime = std::move(runtime);
-        state.stopRequested = false;
-        state.running = true;
+        if (!state.lifecycle.beginRun()) {
+            std::terminate();
+        }
     }
 
     asio::io_context signalContext(1);
@@ -196,9 +319,6 @@ void App::run() {
         addShutdownSignals(signals);
         signals.async_wait([this](const std::error_code& ec, int) {
             if (!ec) {
-                for (auto& hook : state_->onStopHooks) {
-                    try { hook(); } catch (...) {}
-                }
                 stop();
             }
         });
@@ -207,7 +327,7 @@ void App::run() {
         for (const auto& worker : state.runtime->workers) {
             {
                 std::lock_guard lock(state.mutex);
-                if (state.stopRequested) {
+                if (state.lifecycle.stopRequested()) {
                     break;
                 }
             }
@@ -226,7 +346,7 @@ void App::run() {
         bool shutdownRequestedDuringStartup = false;
         {
             std::lock_guard lock(state.mutex);
-            shutdownRequestedDuringStartup = state.stopRequested;
+            shutdownRequestedDuringStartup = state.lifecycle.stopRequested();
         }
         if (shutdownRequestedDuringStartup) {
             for (auto* worker : startedWorkers) {
@@ -234,14 +354,43 @@ void App::run() {
             }
         }
 
-        for (auto& hook : state.onStartHooks) {
-            hook();
+        bool runStartHooks = false;
+        {
+            std::lock_guard lock(state.mutex);
+            runStartHooks = state.lifecycle.beginStartHooks();
+        }
+
+        std::exception_ptr startHookFailure;
+        if (runStartHooks) {
+            try {
+                for (auto& hook : state.onStartHooks) {
+                    hook();
+                }
+            } catch (...) {
+                startHookFailure = std::current_exception();
+            }
+        }
+
+        bool runDeferredStopHooks = false;
+        {
+            std::lock_guard lock(state.mutex);
+            if (runStartHooks) {
+                runDeferredStopHooks = state.lifecycle.completeStartHooks() ==
+                    detail::AppStartHooksCompletion::kRunDeferredStopHooks;
+            }
+        }
+        if (runDeferredStopHooks) {
+            invokeStopHooks(state);
+        }
+        if (startHookFailure) {
+            std::rethrow_exception(startHookFailure);
         }
 
         for (const auto& worker : state.runtime->workers) {
             worker->join();
         }
     } catch (...) {
+        stop();
         for (auto* worker : startedWorkers) {
             worker->stop();
         }
@@ -250,7 +399,7 @@ void App::run() {
 
         std::lock_guard lock(state.mutex);
         state.runtime.reset();
-        state.running = false;
+        state.lifecycle.completeRun();
         throw;
     }
 
@@ -259,30 +408,34 @@ void App::run() {
 
     std::lock_guard lock(state.mutex);
     state.runtime.reset();
-    state.running = false;
+    state.lifecycle.completeRun();
 }
 void App::stop() {
     auto& state = *state_;
     std::pmr::vector<detail::HttpServer*> workers(detail::appResource());
+    bool runStopHooks = false;
 
     {
         std::lock_guard lock(state.mutex);
-        if (!state.running) {
+        const auto request = state.lifecycle.requestStop();
+        if (request == detail::AppStopRequest::kIgnored) {
             return;
         }
         // Record the request durably so run()'s startup loop tears down any worker
         // it starts after this snapshot -- stop() below is a no-op on a worker that
         // is not started yet.
-        state.stopRequested = true;
+        runStopHooks = request == detail::AppStopRequest::kStopWorkersAndRunHooks;
 
-        if (!state.runtime) {
-            return;
+        if (state.runtime) {
+            workers.reserve(state.runtime->workers.size());
+            for (const auto& worker : state.runtime->workers) {
+                workers.push_back(worker.get());
+            }
         }
+    }
 
-        workers.reserve(state.runtime->workers.size());
-        for (const auto& worker : state.runtime->workers) {
-            workers.push_back(worker.get());
-        }
+    if (runStopHooks) {
+        invokeStopHooks(state);
     }
 
     for (auto* worker : workers) {

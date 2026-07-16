@@ -40,10 +40,11 @@ void appendUnsigned(std::pmr::string& frame, std::uint32_t value) {
 
 void formatSseMessage(std::pmr::string& frame, const SseMessage& message) {
     if (message.event.find_first_of("\r\n") != std::string_view::npos ||
-        message.id.find_first_of("\r\n") != std::string_view::npos) {
+        (message.id.has_value() &&
+         message.id->find_first_of("\r\n") != std::string_view::npos)) {
         throw std::invalid_argument("SSE event and id must not contain CR or LF");
     }
-    if (message.id.find('\0') != std::string_view::npos) {
+    if (message.id.has_value() && message.id->find('\0') != std::string_view::npos) {
         throw std::invalid_argument("SSE id must not contain a NUL character");
     }
 
@@ -53,9 +54,12 @@ void formatSseMessage(std::pmr::string& frame, const SseMessage& message) {
         frame.append(message.event.data(), message.event.size());
         frame.push_back('\n');
     }
-    if (!message.id.empty()) {
-        frame.append("id: ");
-        frame.append(message.id.data(), message.id.size());
+    if (message.id.has_value()) {
+        frame.append("id:");
+        if (!message.id->empty()) {
+            frame.push_back(' ');
+            frame.append(message.id->data(), message.id->size());
+        }
         frame.push_back('\n');
     }
     if (message.retry.has_value()) {
@@ -63,8 +67,8 @@ void formatSseMessage(std::pmr::string& frame, const SseMessage& message) {
         appendUnsigned(frame, *message.retry);
         frame.push_back('\n');
     }
-    if (!message.data.empty()) {
-        appendSseData(frame, message.data);
+    if (message.data.has_value()) {
+        appendSseData(frame, *message.data);
     }
     frame.push_back('\n');
 }

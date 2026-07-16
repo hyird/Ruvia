@@ -372,28 +372,54 @@ void gzipZfree(voidpf, voidpf address) noexcept {
     std::size_t maxEncodedBytes,
     std::pmr::memory_resource* resource) {
     std::pmr::string output(httpPmrResourceOrDefault(resource));
-    const auto bound = BrotliEncoderMaxCompressedSize(input.size());
-    bool ok = false;
-    output.resize_and_overwrite(
-        maxEncodedBytes,
-        [&input, &ok](char* data, std::size_t count) noexcept {
-            std::size_t encodedSize = count;
-            ok = BrotliEncoderCompress(
-                     5,
-                     BROTLI_DEFAULT_WINDOW,
-                     BROTLI_MODE_GENERIC,
-                     input.size(),
-                     reinterpret_cast<const std::uint8_t*>(input.data()),
-                     &encodedSize,
-                     reinterpret_cast<std::uint8_t*>(data)) == BROTLI_TRUE;
-            return ok ? encodedSize : std::size_t{0};
-        });
-    if (ok) {
-        return output;
+    auto* state = BrotliEncoderCreateInstance(nullptr, nullptr, nullptr);
+    if (state == nullptr) {
+        return HttpContentEncodeError::kEncoderFailure;
     }
-    return bound != 0 && bound > maxEncodedBytes
-        ? ContentEncodeAttempt(HttpContentEncodeError::kEncodedSizeExceeded)
-        : ContentEncodeAttempt(HttpContentEncodeError::kEncoderFailure);
+    struct Guard final {
+        BrotliEncoderState* state;
+        ~Guard() { BrotliEncoderDestroyInstance(state); }
+    } guard{state};
+    if (BrotliEncoderSetParameter(
+            state,
+            BROTLI_PARAM_QUALITY,
+            5) != BROTLI_TRUE) {
+        return HttpContentEncodeError::kEncoderFailure;
+    }
+
+    std::size_t availableInput = input.size();
+    const auto* nextInput = reinterpret_cast<const std::uint8_t*>(
+        input.data());
+    std::uint8_t buffer[8192];
+    for (;;) {
+        const auto beforeInput = availableInput;
+        std::size_t availableOutput = sizeof(buffer);
+        auto* nextOutput = buffer;
+        if (BrotliEncoderCompressStream(
+                state,
+                BROTLI_OPERATION_FINISH,
+                &availableInput,
+                &nextInput,
+                &availableOutput,
+                &nextOutput,
+                nullptr) != BROTLI_TRUE) {
+            return HttpContentEncodeError::kEncoderFailure;
+        }
+        const auto produced = sizeof(buffer) - availableOutput;
+        if (output.size() > maxEncodedBytes ||
+            produced > maxEncodedBytes - output.size()) {
+            return HttpContentEncodeError::kEncodedSizeExceeded;
+        }
+        output.append(
+            reinterpret_cast<const char*>(buffer),
+            produced);
+        if (BrotliEncoderIsFinished(state) == BROTLI_TRUE) {
+            return output;
+        }
+        if (produced == 0 && availableInput == beforeInput) {
+            return HttpContentEncodeError::kEncoderFailure;
+        }
+    }
 }
 
 [[nodiscard]] ContentEncodeAttempt encodeZstdContent(
@@ -491,6 +517,9 @@ std::string_view httpContentCodingToken(HttpContentCoding coding) noexcept {
 }
 
 void HttpContentCodingFieldParser::update(std::string_view value) noexcept {
+    if (std::get_if<HttpUnsupportedContentCoding>(&state_) != nullptr) {
+        return;
+    }
     std::size_t begin = 0;
     while (begin <= value.size()) {
         const auto comma = value.find(',', begin);
@@ -500,20 +529,23 @@ void HttpContentCodingFieldParser::update(std::string_view value) noexcept {
                 ? std::string_view::npos
                 : comma - begin));
         if (!token.empty()) {
-            ++codingCount_;
-            if (codingCount_ > 1) {
-                unsupported_ = true;
+            auto* supported = std::get_if<Supported>(&state_);
+            ++supported->codingCount;
+            if (supported->codingCount > 1) {
+                state_.template emplace<HttpUnsupportedContentCoding>();
+                return;
             } else if (httpAsciiEqualsIgnoreCase(token, "identity")) {
-                coding_ = HttpContentCoding::kIdentity;
+                supported->coding = HttpContentCoding::kIdentity;
             } else if (httpAsciiEqualsIgnoreCase(token, "gzip") ||
                        httpAsciiEqualsIgnoreCase(token, "x-gzip")) {
-                coding_ = HttpContentCoding::kGzip;
+                supported->coding = HttpContentCoding::kGzip;
             } else if (httpAsciiEqualsIgnoreCase(token, "br")) {
-                coding_ = HttpContentCoding::kBrotli;
+                supported->coding = HttpContentCoding::kBrotli;
             } else if (httpAsciiEqualsIgnoreCase(token, "zstd")) {
-                coding_ = HttpContentCoding::kZstd;
+                supported->coding = HttpContentCoding::kZstd;
             } else {
-                unsupported_ = true;
+                state_.template emplace<HttpUnsupportedContentCoding>();
+                return;
             }
         }
         if (comma == std::string_view::npos) {
@@ -524,10 +556,10 @@ void HttpContentCodingFieldParser::update(std::string_view value) noexcept {
 }
 
 HttpContentCodingFieldResult HttpContentCodingFieldParser::finish() const noexcept {
-    if (unsupported_) {
+    if (std::get_if<HttpUnsupportedContentCoding>(&state_) != nullptr) {
         return HttpContentCodingFieldResult(HttpUnsupportedContentCoding{});
     }
-    return HttpContentCodingFieldResult(coding_);
+    return HttpContentCodingFieldResult(std::get<Supported>(state_).coding);
 }
 
 HttpContentCodingFieldResult httpContentCodingFromFieldValue(
@@ -563,11 +595,12 @@ HttpContentDecodeResult decodeHttpContent(
                 resource);
             break;
         case HttpContentCoding::kIdentity: {
-            std::pmr::string decoded(input, resource);
-            if (decoded.size() > maxDecodedBytes) {
+            if (input.size() > maxDecodedBytes) {
                 attempt = HttpContentDecodeError::kDecodedSizeExceeded;
             } else {
-                attempt = std::move(decoded);
+                attempt = std::pmr::string(
+                    input,
+                    httpPmrResourceOrDefault(resource));
             }
             break;
         }
@@ -605,11 +638,12 @@ HttpContentEncodeResult encodeHttpContent(
                 resource);
             break;
         case HttpContentCoding::kIdentity: {
-            std::pmr::string encoded(input, resource);
-            if (encoded.size() > maxEncodedBytes) {
+            if (input.size() > maxEncodedBytes) {
                 attempt = HttpContentEncodeError::kEncodedSizeExceeded;
             } else {
-                attempt = std::move(encoded);
+                attempt = std::pmr::string(
+                    input,
+                    httpPmrResourceOrDefault(resource));
             }
             break;
         }

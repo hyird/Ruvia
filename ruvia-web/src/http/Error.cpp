@@ -99,7 +99,7 @@ const char* HttpError::what() const noexcept {
     return message_.c_str();
 }
 
-HttpErrorInfo HttpError::info() const noexcept {
+HttpErrorInfo HttpError::info() const & noexcept {
     return HttpErrorInfo(status_, code_, message_, statusText_);
 }
 

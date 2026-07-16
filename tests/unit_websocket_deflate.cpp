@@ -65,9 +65,8 @@ std::string patterned(std::size_t n) {
 
 }  // namespace
 
-RUVIA_TEST(websocket_deflate_constructs_ok) {
+RUVIA_TEST(websocket_deflate_construction_yields_a_valid_codec) {
     WebSocketDeflate codec;
-    RUVIA_CHECK(codec.ok());
 }
 
 RUVIA_TEST(websocket_deflate_round_trips_various_sizes) {
@@ -153,9 +152,53 @@ RUVIA_TEST(websocket_deflate_offer_accepts_server_max_window_bits_15) {
 }
 
 RUVIA_TEST(websocket_deflate_offer_ignores_unrelated_parameters) {
-    // Parameter names must be parsed as tokens; a substring match would reject
-    // this even though it does not constrain our server window.
-    RUVIA_CHECK(offersDeflate("permessage-deflate; xserver_max_window_bits=10"));
+    // RFC 7692 defines the complete parameter set. Unknown parameters make one
+    // permessage-deflate offer invalid instead of being silently ignored.
+    RUVIA_CHECK(!offersDeflate(
+        "permessage-deflate; xserver_max_window_bits=10"));
+    // An invalid offer can still be followed by a separate valid offer.
+    RUVIA_CHECK(offersDeflate(
+        "permessage-deflate; unknown=value, permessage-deflate"));
+
+    // A syntactically malformed extension list invalidates the entire opening
+    // handshake; negotiation must not skip it and honor a later offer.
+    RUVIA_CHECK(!offersDeflate(
+        "x-test; value=\"bad value\", permessage-deflate"));
+}
+
+RUVIA_TEST(websocket_deflate_offer_rejects_malformed_parameters) {
+    RUVIA_CHECK(!offersDeflate(
+        "permessage-deflate; server_max_window_bits"));
+    RUVIA_CHECK(!offersDeflate(
+        "permessage-deflate; server_max_window_bits=16"));
+    RUVIA_CHECK(!offersDeflate(
+        "permessage-deflate; client_max_window_bits=7"));
+    RUVIA_CHECK(!offersDeflate(
+        "permessage-deflate; client_max_window_bits=08"));
+    RUVIA_CHECK(!offersDeflate(
+        "permessage-deflate; client_max_window_bits=\"09\""));
+    RUVIA_CHECK(!offersDeflate(
+        "permessage-deflate; server_no_context_takeover=true"));
+    RUVIA_CHECK(!offersDeflate(
+        "permessage-deflate; client_no_context_takeover=1"));
+    RUVIA_CHECK(!offersDeflate(
+        "permessage-deflate; client_max_window_bits=15; "
+        "client_max_window_bits=14"));
+    RUVIA_CHECK(!offersDeflate(
+        "permessage-deflate; server_max_window_bits=15; "
+        "server_max_window_bits=15"));
+
+    // Quoted-pairs are decoded before the numeric range check.
+    RUVIA_CHECK(
+        negotiateDeflate(
+            "permessage-deflate; server_max_window_bits=\"1\\5\"") ==
+        WebSocketDeflateNegotiation::kAcceptedWithServerMaxWindowBits);
+
+    // A malformed offer does not poison the comma list: a later conforming
+    // offer remains independently negotiable.
+    RUVIA_CHECK(offersDeflate(
+        "permessage-deflate; client_max_window_bits=08, "
+        "permessage-deflate; client_max_window_bits=8"));
 }
 
 RUVIA_TEST(websocket_deflate_offer_picks_first_honorable_offer) {
@@ -213,4 +256,20 @@ RUVIA_TEST(websocket_deflate_rejects_corrupt_input) {
         restored,
         ProtocolByteLimit::unlimited());
     RUVIA_CHECK(result == WebSocketInflateResult::kError);
+
+    // 03 00 is a complete raw-DEFLATE empty stream (BFINAL=1). A WebSocket
+    // permessage-deflate payload must instead be the non-terminating prefix of
+    // a Z_SYNC_FLUSH stream; accepting this would also let zlib ignore bytes
+    // appended after the early stream end.
+    std::pmr::string finalStreamOutput(std::pmr::get_default_resource());
+    RUVIA_CHECK(codec.decompress(
+        std::string_view("\x03\x00", 2),
+        finalStreamOutput,
+        ProtocolByteLimit::unlimited()) == WebSocketInflateResult::kError);
+
+    std::pmr::string trailingOutput(std::pmr::get_default_resource());
+    RUVIA_CHECK(codec.decompress(
+        std::string_view("\x03\x00junk", 6),
+        trailingOutput,
+        ProtocolByteLimit::unlimited()) == WebSocketInflateResult::kError);
 }

@@ -11,6 +11,7 @@
 #include "ruvia/web/detail/server/HttpResponseStreamState.h"
 #include "ruvia/web/detail/server/HttpServerResponseState.h"
 #include "ruvia/core/Task.h"
+#include "ruvia/core/Timer.h"
 #include "ruvia/web/Context.h"
 #include "ruvia/http/detail/PmrString.h"
 #include "ruvia/core/memory/MemoryPool.h"
@@ -38,24 +39,36 @@ public:
         WorkerMemory& memory,
         ResponseHeadBuffer& head,
         ScannerEntry& scannerEntry,
+        const WorkerHandle& worker,
         ResponseStreamKind kind,
         Http1ResponseStreamPlan plan) noexcept
         : stream_(stream),
           head_(head),
-          scratch_(memory.resource()),
           trailers_(memory.resource()),
           scannerEntry_(scannerEntry),
+          worker_(&worker),
           kind_(kind),
           plan_(plan),
           connectionPlan_(plan.requestConnectionPlan().requireClose()) {}
 
+    ResponseStreamSink(
+        Stream&,
+        WorkerMemory&,
+        ResponseHeadBuffer&,
+        ScannerEntry&,
+        WorkerHandle&&,
+        ResponseStreamKind,
+        Http1ResponseStreamPlan) = delete;
+
     [[nodiscard]] bool committed() const noexcept { return state_.committed(); }
 
-    [[nodiscard]] const ResponseStreamCommitPlan* commitPlan() const noexcept {
+    [[nodiscard]] const ResponseStreamCommitPlan*
+    commitPlan() const & noexcept {
         return state_.commitPlan();
     }
+    const ResponseStreamCommitPlan* commitPlan() const && = delete;
 
-    [[nodiscard]] bool aborted() const noexcept { return aborted_; }
+    [[nodiscard]] bool aborted() const noexcept { return state_.aborted(); }
 
     [[nodiscard]] Http1ServerConnectionPlan connectionPlan() const noexcept {
         return connectionPlan_;
@@ -68,19 +81,18 @@ public:
     template <typename Sink>
     friend Task<void> responseStreamSleepThunk(void*, std::chrono::milliseconds);
     template <typename Sink>
-    friend void responseStreamBindContextThunk(void*, Context*, ResponseStreamState::StreamingHeadThunk) noexcept;
+    friend void responseStreamBindContextThunk(
+        void*, Context*, ResponseStreamState::StreamingHeadThunk);
     template <typename Sink>
-    friend std::pmr::string& responseStreamScratchThunk(void*) noexcept;
-
+    friend void responseStreamReleaseContextThunk(void*) noexcept;
 private:
-    void bindContext(Context* context, ResponseStreamState::StreamingHeadThunk streamingHead) noexcept {
+    void bindContext(
+        Context* context,
+        ResponseStreamState::StreamingHeadThunk streamingHead) {
         state_.bindContext(context, streamingHead);
     }
 
-    [[nodiscard]] std::pmr::string& scratch() noexcept {
-        clearPmrStringRetainingSmall(scratch_);
-        return scratch_;
-    }
+    void releaseContext() noexcept { state_.releaseContext(); }
 
     Task<void> commit(ResponseTrailerIntent trailerIntent) {
         if (state_.committed()) {
@@ -97,9 +109,14 @@ private:
             plan_,
             trailerIntent);
         if (const auto* failure = prepareResult.failure()) {
-            throwHttp1FinalResponseCommitFailure(failure->error());
+            throw failure->exception();
         }
-        auto streamHead = std::move(prepareResult).takePrepared();
+        auto* prepared = prepareResult.prepared();
+        if (prepared == nullptr) {
+            throw std::logic_error(
+                "HTTP/1 stream preparation returned no terminal alternative");
+        }
+        auto streamHead = std::move(*prepared);
         if (trailerIntent == ResponseTrailerIntent::kPresent &&
             streamHead.commitPlan().trailerFraming() !=
                 ResponseStreamTrailerFraming::kHttp1Chunked) {
@@ -115,24 +132,21 @@ private:
         // Mark committed before the write; a partial header flush must never be
         // followed by the normal error-response path on the same socket.
         state_.markCommitted(streamHead.commitPlan());
-        auto ec = co_await asyncError([this, headView = head_.view()](auto handler) mutable {
-            asio::async_write(stream_, asio::buffer(headView), std::move(handler));
-        });
+        const auto writeCompletion = co_await asyncAsio(
+            [this, headView = head_.view()](auto handler) mutable {
+                asio::async_write(
+                    stream_, asio::buffer(headView), std::move(handler));
+            });
+        const auto ec = writeCompletion.errorCode();
         if (ec) {
-            aborted_ = true;
+            state_.markAborted();
             throw std::system_error(ec);
         }
         scannerEntry_.touch();
     }
 
     Task<void> sleep(std::chrono::milliseconds duration) {
-        asio::steady_timer timer(stream_.get_executor(), duration);
-        const auto ec = co_await asyncError([&timer](auto handler) mutable {
-            timer.async_wait(std::move(handler));
-        });
-        if (ec) {
-            throw std::system_error(ec);
-        }
+        co_await sleepFor(*worker_, duration);
         scannerEntry_.touch();
     }
 
@@ -146,11 +160,14 @@ private:
         if (plan_.framing() == ResponseStreamFraming::kHttp1CloseDelimited) {
             // No chunk framing: write the raw body bytes. The connection close
             // (forced once the stream ends) is what delimits the message.
-            const auto rawEc = co_await asyncError([this, chunk](auto handler) mutable {
-                asio::async_write(stream_, asio::buffer(chunk), std::move(handler));
-            });
+            const auto writeCompletion = co_await asyncAsio(
+                [this, chunk](auto handler) mutable {
+                    asio::async_write(
+                        stream_, asio::buffer(chunk), std::move(handler));
+                });
+            const auto rawEc = writeCompletion.errorCode();
             if (rawEc) {
-                aborted_ = true;
+                state_.markAborted();
                 throw std::system_error(rawEc);
             }
             scannerEntry_.touch();
@@ -162,11 +179,13 @@ private:
             asio::buffer(chunkHeader.view()),
             asio::buffer(chunk),
             asio::buffer(kHttp1ChunkDataTerminator)};
-        const auto writeEc = co_await asyncError([this, &buffers](auto handler) mutable {
-            asio::async_write(stream_, buffers, std::move(handler));
-        });
+        const auto writeCompletion = co_await asyncAsio(
+            [this, &buffers](auto handler) mutable {
+                asio::async_write(stream_, buffers, std::move(handler));
+            });
+        const auto writeEc = writeCompletion.errorCode();
         if (writeEc) {
-            aborted_ = true;
+            state_.markAborted();
             throw std::system_error(writeEc);
         }
         scannerEntry_.touch();
@@ -181,8 +200,8 @@ private:
         }
 
         const auto trailerResult = httpResponseTrailerSection(trailers);
-        if (trailerResult.failure() != nullptr) {
-            throw std::invalid_argument("invalid response trailer section");
+        if (const auto* failure = trailerResult.failure()) {
+            throw failure->exception();
         }
         const auto& trailerSection = *trailerResult.section();
         const auto trailerIntent = trailerSection.empty()
@@ -211,27 +230,30 @@ private:
             asio::buffer(kHttp1LastChunkPrefix),
             asio::buffer(trailers_),
             asio::buffer(kHttp1TrailerSectionTerminator)};
-        const auto ec = co_await asyncError([this, &buffers](auto handler) mutable {
-            asio::async_write(stream_, buffers, std::move(handler));
-        });
-        state_.markEnded();
+        const auto writeCompletion = co_await asyncAsio(
+            [this, &buffers](auto handler) mutable {
+                asio::async_write(stream_, buffers, std::move(handler));
+            });
+        const auto ec = writeCompletion.errorCode();
         if (ec) {
-            aborted_ = true;
+            state_.markAborted();
             throw std::system_error(ec);
         }
+        state_.markEnded();
         scannerEntry_.touch();
     }
 
     Stream& stream_;
     ResponseHeadBuffer& head_;
-    std::pmr::string scratch_;
     std::pmr::string trailers_;
     ScannerEntry& scannerEntry_;
+    // The connection/server owns an address-stable handle for the complete
+    // route dispatch. Streaming must not acquire shared ownership per request.
+    const WorkerHandle* worker_;
     ResponseStreamKind kind_;
     Http1ResponseStreamPlan plan_;
     Http1ServerConnectionPlan connectionPlan_;
     ResponseStreamState state_;
-    bool aborted_{false};
 };
 
 }  // namespace ruvia::detail

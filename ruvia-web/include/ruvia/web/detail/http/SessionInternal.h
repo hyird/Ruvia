@@ -5,6 +5,7 @@
 #include "ruvia/http/detail/SetCookiePlan.h"
 
 #include <cstddef>
+#include <chrono>
 #include <memory_resource>
 #include <string_view>
 
@@ -13,42 +14,18 @@ namespace ruvia::detail {
 // Privileged access to a Context's session slot, used by the session middleware
 // to load the stored blob and read what the handler left behind.
 struct SessionAccess final {
-    static void setId(Context& context, std::string_view id) {
-        context.sessionIdStorage().assign(id.data(), id.size());
+    static void observePresentedId(Context& context, std::string_view id) {
+        context.sessionState_.observePresentedId(id);
     }
 
     static void load(Context& context, std::string_view data) {
-        assignStableString(context.sessionDataStorage(), data);
+        context.sessionState_.loadRecognized(data);
     }
 
-    [[nodiscard]] static bool dirty(const Context& context) noexcept {
-        return context.sessionDirty_;
-    }
-
-    [[nodiscard]] static bool regenerateRequested(const Context& context) noexcept {
-        return context.sessionRegenerate_;
-    }
-
-    [[nodiscard]] static std::string_view id(const Context& context) noexcept {
-        return context.sessionId();
-    }
-
-    [[nodiscard]] static std::string_view data(const Context& context) noexcept {
-        return context.session();
+    [[nodiscard]] static const ContextSessionState& state(const Context& context) noexcept {
+        return context.sessionState_;
     }
 };
-
-// Decide whether the session middleware must mint a fresh server-chosen id when
-// persisting. A brand-new session (no id yet) and a client id that was NOT found
-// in the store both get a fresh id -- adopting an unrecognized client id would be
-// session fixation. A recognized session normally keeps its id, EXCEPT when the
-// handler called regenerateSession() (a privilege change), which forces a new id
-// so an attacker who planted a known-but-recognized id cannot ride the victim's
-// authenticated session. Pure so the security decision is unit-testable.
-[[nodiscard]] inline bool sessionShouldMintNewId(
-    bool idEmpty, bool recognized, bool regenerateRequested) noexcept {
-    return idEmpty || !recognized || regenerateRequested;
-}
 
 [[nodiscard]] inline bool isValidSessionId(std::string_view id) noexcept {
     if (id.empty() || id.size() > 128) {
@@ -73,6 +50,24 @@ inline void appendSessionCookieHeader(
     options.secure = secure;
     options.sameSite = CookieSameSite::kLax;
     const SetCookiePlan plan("sid", id, options);
+    std::pmr::string setCookie(resource);
+    setCookie.resize_and_overwrite(plan.size(), [&](char* out, std::size_t size) {
+        plan.write(out);
+        return size;
+    });
+    response.header("Set-Cookie", setCookie, {.append = true});
+}
+
+inline void appendExpiredSessionCookieHeader(
+    HttpResponse& response,
+    std::pmr::memory_resource* resource,
+    bool secure) {
+    CookieOptions options;
+    options.httpOnly = true;
+    options.secure = secure;
+    options.sameSite = CookieSameSite::kLax;
+    options.maxAge = std::chrono::seconds(0);
+    const SetCookiePlan plan("sid", "", options);
     std::pmr::string setCookie(resource);
     setCookie.resize_and_overwrite(plan.size(), [&](char* out, std::size_t size) {
         plan.write(out);

@@ -98,6 +98,8 @@ RUVIA_TEST(http_parse_imf_fixdate) {
 
     // Malformed inputs are rejected.
     RUVIA_CHECK(!httpParseImfFixdate("bad").has_value());                          // wrong length
+    RUVIA_CHECK(!httpParseImfFixdate("Foo, 06 Nov 1994 08:49:37 GMT").has_value());  // bad day-name
+    RUVIA_CHECK(!httpParseImfFixdate("sun, 06 Nov 1994 08:49:37 GMT").has_value());  // case-sensitive
     RUVIA_CHECK(!httpParseImfFixdate("Sun  06 Nov 1994 08:49:37 GMT").has_value());  // bad separators
     RUVIA_CHECK(!httpParseImfFixdate("Sun, 06 Xxx 1994 08:49:37 GMT").has_value());  // bad month
     RUVIA_CHECK(!httpParseImfFixdate("Sun, 32 Nov 1994 08:49:37 GMT").has_value());  // day out of range
@@ -116,13 +118,18 @@ RUVIA_TEST(http_parse_http_date_accepts_all_three_formats) {
     // asctime with a two-digit day is not space-padded.
     RUVIA_CHECK(httpParseHttpDate("Sun Nov 16 08:49:37 1994").has_value());
 
-    // The two-digit RFC 850 year uses the POSIX pivot: 68 => 2068 (future),
-    // 69 => 1969 (before the Unix epoch).
-    RUVIA_CHECK(httpParseHttpDate("Wed, 01-Jan-68 00:00:00 GMT").value_or(-1) > canonical);
-    RUVIA_CHECK(httpParseHttpDate("Wed, 01-Jan-69 00:00:00 GMT").value_or(0) < std::time_t{0});
+    // RFC 9110 uses a rolling 50-year pivot, not the POSIX 68/69 split.
+    using ruvia::detail::httpResolveRfc850Year;
+    RUVIA_CHECK_EQ(httpResolveRfc850Year(70, 2026), 2070);
+    RUVIA_CHECK_EQ(httpResolveRfc850Year(76, 2026), 2076);
+    RUVIA_CHECK_EQ(httpResolveRfc850Year(77, 2026), 1977);
+    RUVIA_CHECK_EQ(httpResolveRfc850Year(99, 2090), 2099);
+    RUVIA_CHECK_EQ(httpResolveRfc850Year(0, 2090), 2000);
 
     // A malformed instance of each obsolete format is rejected, not silently
     // coerced through the shared assembler.
+    RUVIA_CHECK(!httpParseHttpDate("Funday, 06-Nov-94 08:49:37 GMT").has_value());  // bad long day-name
+    RUVIA_CHECK(!httpParseHttpDate("Foo Nov  6 08:49:37 1994").has_value());       // bad short day-name
     RUVIA_CHECK(!httpParseHttpDate("Sunday, 06-Xxx-94 08:49:37 GMT").has_value());  // bad month (RFC 850)
     RUVIA_CHECK(!httpParseHttpDate("Sunday, 06-Nov-94 08:49:37 UTC").has_value());  // not GMT (RFC 850)
     RUVIA_CHECK(!httpParseHttpDate("Sun Xxx  6 08:49:37 1994").has_value());        // bad month (asctime)

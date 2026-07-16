@@ -1,5 +1,6 @@
 #include "test_harness.h"
 
+#include <concepts>
 #include <cstddef>
 #include <cstdint>
 #include <memory_resource>
@@ -12,7 +13,8 @@ namespace {
 
 using ruvia::detail::Http2HeaderDecodeContext;
 using ruvia::detail::Http2StreamState;
-using ruvia::detail::HttpServerExpectationAction;
+using ruvia::detail::HttpRequestExpectations;
+using ruvia::detail::HttpUnsupportedExpectationPolicy;
 using ruvia::detail::http2AccumulateHeaderListBytes;
 using ruvia::detail::http2OnDecodedInitialHeader;
 using ruvia::detail::http2OnDecodedTrailer;
@@ -20,6 +22,14 @@ using ruvia::detail::http2OnDecodedTrailer;
 std::pmr::memory_resource* res() noexcept {
     return std::pmr::new_delete_resource();
 }
+
+template <typename T>
+concept HasValueSemanticRequestExpectations = requires(const T& value, const T&& temporary) {
+    { value.requestExpectations() } -> std::same_as<HttpRequestExpectations>;
+    { temporary.requestExpectations() } -> std::same_as<HttpRequestExpectations>;
+};
+
+static_assert(HasValueSemanticRequestExpectations<Http2StreamState>);
 
 }  // namespace
 
@@ -78,18 +88,32 @@ RUVIA_TEST(h2_headers_empty_and_unknown_pseudo_rejected) {
         Http2HeaderDecodeContext ctx{stream};
         RUVIA_CHECK(!http2OnDecodedInitialHeader(ctx, ":scheme", ""));  // empty scheme
     }
-    {
+    for (const auto malformed : {"1ftp", "bad scheme", "ftp:"}) {
         Http2StreamState stream(1, res());
         Http2HeaderDecodeContext ctx{stream};
-        RUVIA_CHECK(!http2OnDecodedInitialHeader(ctx, ":scheme", "ftp"));  // unsupported scheme
+        RUVIA_CHECK(!http2OnDecodedInitialHeader(ctx, ":scheme", malformed));
     }
     Http2StreamState stream(1, res());
     Http2HeaderDecodeContext ctx{stream};
-    RUVIA_CHECK(!http2OnDecodedInitialHeader(ctx, ":path", ""));      // empty path
-    RUVIA_CHECK(!http2OnDecodedInitialHeader(ctx, ":authority", "")); // empty authority
     RUVIA_CHECK(!http2OnDecodedInitialHeader(ctx, ":protocol", ""));  // empty protocol
     RUVIA_CHECK(!http2OnDecodedInitialHeader(ctx, ":unknown", "x"));  // unknown pseudo-header
     RUVIA_CHECK(!http2OnDecodedInitialHeader(ctx, "", "x"));          // empty name
+}
+
+RUVIA_TEST(h2_headers_empty_path_is_present_and_deferred_to_scheme) {
+    Http2StreamState stream(1, res());
+    Http2HeaderDecodeContext ctx{stream};
+    RUVIA_CHECK(http2OnDecodedInitialHeader(ctx, ":path", ""));
+    RUVIA_CHECK(stream.hasPath());
+    RUVIA_CHECK(stream.requestPath().empty());
+}
+
+RUVIA_TEST(h2_headers_empty_generic_authority_is_deferred_to_scheme) {
+    Http2StreamState stream(1, res());
+    Http2HeaderDecodeContext ctx{stream};
+    RUVIA_CHECK(http2OnDecodedInitialHeader(ctx, ":authority", ""));
+    RUVIA_CHECK(stream.hasAuthority());
+    RUVIA_CHECK(stream.requestAuthority().empty());
 }
 
 RUVIA_TEST(h2_headers_extension_method_is_valid_and_preserved) {
@@ -159,9 +183,39 @@ RUVIA_TEST(h2_headers_authority_host_match_uses_scheme_default_port) {
         RUVIA_CHECK(http2OnDecodedInitialHeader(ctx, ":authority", "example.com:80"));
         RUVIA_CHECK(!http2OnDecodedInitialHeader(ctx, "host", "example.com"));
     }
+    {
+        Http2StreamState stream(1, res());
+        Http2HeaderDecodeContext ctx{stream};
+        RUVIA_CHECK(http2OnDecodedInitialHeader(ctx, ":scheme", "ftp"));
+        RUVIA_CHECK_EQ(stream.requestScheme(), std::string_view("ftp"));
+        RUVIA_CHECK_EQ(stream.schemeDefaultPort(), std::uint16_t{0});
+        RUVIA_CHECK(http2OnDecodedInitialHeader(ctx, ":authority", "example.com"));
+        RUVIA_CHECK(http2OnDecodedInitialHeader(ctx, "host", "example.com:"));
+    }
+    {
+        Http2StreamState stream(1, res());
+        Http2HeaderDecodeContext ctx{stream};
+        RUVIA_CHECK(http2OnDecodedInitialHeader(ctx, ":scheme", "ftp"));
+        RUVIA_CHECK(http2OnDecodedInitialHeader(ctx, ":authority", "example.com:21"));
+        RUVIA_CHECK(!http2OnDecodedInitialHeader(ctx, "host", "example.com"));
+    }
+    {
+        Http2StreamState stream(1, res());
+        Http2HeaderDecodeContext ctx{stream};
+        RUVIA_CHECK(http2OnDecodedInitialHeader(ctx, ":scheme", "ftp"));
+        RUVIA_CHECK(http2OnDecodedInitialHeader(ctx, ":authority", "example.com:21"));
+        RUVIA_CHECK(http2OnDecodedInitialHeader(ctx, "host", "example.com:21"));
+    }
 }
 
 RUVIA_TEST(h2_headers_path_rejects_malformed_origin_target) {
+    {
+        Http2StreamState stream(1, res());
+        Http2HeaderDecodeContext ctx{stream};
+        // Method can follow :path, so field-level decoding accepts the
+        // asterisk syntax and final head validation enforces OPTIONS-only.
+        RUVIA_CHECK(http2OnDecodedInitialHeader(ctx, ":path", "*"));
+    }
     {
         Http2StreamState stream(1, res());
         Http2HeaderDecodeContext ctx{stream};
@@ -268,11 +322,12 @@ RUVIA_TEST(h2_headers_duplicate_singleton_regular_headers_rejected) {
     }
 }
 
-RUVIA_TEST(h2_headers_duplicate_conditional_header_rejected) {
+RUVIA_TEST(h2_headers_repeated_etag_list_fields_accepted) {
     Http2StreamState stream(1, res());
     Http2HeaderDecodeContext ctx{stream};
     RUVIA_CHECK(http2OnDecodedInitialHeader(ctx, "if-none-match", R"("old")"));
-    RUVIA_CHECK(!http2OnDecodedInitialHeader(ctx, "if-none-match", R"("new")"));
+    RUVIA_CHECK(http2OnDecodedInitialHeader(ctx, "if-none-match", R"("new")"));
+    RUVIA_CHECK_EQ(stream.requestHeaderCount(), std::size_t{2});
 }
 
 RUVIA_TEST(h2_headers_duplicate_auth_and_cors_singletons_rejected) {
@@ -294,6 +349,32 @@ RUVIA_TEST(h2_headers_duplicate_auth_and_cors_singletons_rejected) {
         RUVIA_CHECK(http2OnDecodedInitialHeader(ctx, "access-control-request-method", "GET"));
         RUVIA_CHECK(!http2OnDecodedInitialHeader(ctx, "access-control-request-method", "POST"));
     }
+}
+
+RUVIA_TEST(h2_headers_enforce_cors_request_field_grammar) {
+    const auto accepts = [](std::string_view name, std::string_view value) {
+        Http2StreamState stream(1, res());
+        Http2HeaderDecodeContext ctx{stream};
+        return http2OnDecodedInitialHeader(ctx, name, value);
+    };
+
+    RUVIA_CHECK(accepts("origin", "null"));
+    RUVIA_CHECK(accepts(
+        "origin",
+        "https://first.example https://second.example"));
+    RUVIA_CHECK(accepts("access-control-request-method", "PATCH"));
+    RUVIA_CHECK(accepts(
+        "access-control-request-headers",
+        ", x-one,, x-two,"));
+
+    RUVIA_CHECK(!accepts("origin", "*"));
+    RUVIA_CHECK(!accepts("origin", "https://app.example/"));
+    RUVIA_CHECK(!accepts("origin", "https://APP.example"));
+    RUVIA_CHECK(!accepts("access-control-request-method", "POST, DELETE"));
+    RUVIA_CHECK(!accepts("access-control-request-method", "POST /admin"));
+    RUVIA_CHECK(!accepts("access-control-request-headers", ""));
+    RUVIA_CHECK(!accepts("access-control-request-headers", ", ,"));
+    RUVIA_CHECK(!accepts("access-control-request-headers", "x-good, x bad"));
 }
 
 RUVIA_TEST(h2_headers_content_length_and_cookie) {
@@ -320,21 +401,23 @@ RUVIA_TEST(h2_headers_expect_is_an_extensible_repeated_list) {
     RUVIA_CHECK(http2OnDecodedInitialHeader(
         supportedContext, "expect", "100-Continue"));
     RUVIA_CHECK(supported.finalizeRemoteContentHead());
-    RUVIA_CHECK(
-        supported.expectationAction() ==
-        HttpServerExpectationAction::kSend100Continue);
+    const auto supportedPlan = supported.expectationPlan(
+        HttpUnsupportedExpectationPolicy::kReject);
+    RUVIA_CHECK(supportedPlan.send100Continue() != nullptr);
 
     RUVIA_CHECK(supported.finishRemoteContent());
-    RUVIA_CHECK(!supported.expectationAction());
+    const auto completedPlan = supported.expectationPlan(
+        HttpUnsupportedExpectationPolicy::kReject);
+    RUVIA_CHECK(completedPlan.noAction() != nullptr);
 
     Http2StreamState extension(3, res());
     Http2HeaderDecodeContext extensionContext{extension};
     RUVIA_CHECK(http2OnDecodedInitialHeader(
         extensionContext, "expect", "100-continue, custom-feature"));
     RUVIA_CHECK(extension.finalizeRemoteContentHead());
-    RUVIA_CHECK(
-        extension.expectationAction() ==
-        HttpServerExpectationAction::kUnsupported);
+    const auto extensionPlan = extension.expectationPlan(
+        HttpUnsupportedExpectationPolicy::kReject);
+    RUVIA_CHECK(extensionPlan.rejection() != nullptr);
     RUVIA_CHECK(extension.requestExpectations().has100Continue());
     RUVIA_CHECK(extension.requestExpectations().hasUnsupported());
 }
@@ -350,6 +433,15 @@ RUVIA_TEST(h2_headers_trailer_rejects_pseudo_and_invalid) {
     RUVIA_CHECK(!http2OnDecodedTrailer(ctx, "te", "trailers"));       // connection option is header-only
     RUVIA_CHECK(!http2OnDecodedTrailer(ctx, "trailer", "x-checksum"));
     RUVIA_CHECK(!http2OnDecodedTrailer(ctx, "content-type", "text/plain"));
+    RUVIA_CHECK(!http2OnDecodedTrailer(ctx, "origin", "https://app.example"));
+    RUVIA_CHECK(!http2OnDecodedTrailer(
+        ctx,
+        "access-control-request-method",
+        "POST"));
+    RUVIA_CHECK(!http2OnDecodedTrailer(
+        ctx,
+        "access-control-request-headers",
+        "x-one"));
 }
 
 RUVIA_TEST(h2_headers_list_byte_limit) {

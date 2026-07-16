@@ -5,6 +5,7 @@
 
 #include <libpq-fe.h>
 
+#include <exception>
 #include <stdexcept>
 #include <utility>
 
@@ -26,13 +27,13 @@ PostgreSqlPool::PostgreSqlPool(
       config_(std::move(config)),
       resource_(pmrResourceOrDefault(resource)),
       slots_(resource_),
-      scheduler_(config_.poolSize, resource_) {
+      scheduler_(config_.poolSizePerWorker, resource_) {
     validateDbConfig(config_);
     if (config_.driver != DbDriver::kPostgreSql) {
         throw std::invalid_argument("PostgreSQL pool requires the PostgreSQL driver");
     }
-    slots_.reserve(config_.poolSize);
-    for (std::size_t i = 0; i < config_.poolSize; ++i) {
+    slots_.reserve(config_.poolSizePerWorker);
+    for (std::size_t i = 0; i < config_.poolSizePerWorker; ++i) {
         slots_.emplace_back(resource_);
     }
 }
@@ -62,10 +63,9 @@ void PostgreSqlPool::scanDeadlines(
         scheduler_.scanDeadlines(now);
     }
     for (auto& slot : slots_) {
-        if (!slot.deadlineActive || slot.deadline > now) {
+        if (!slot.deadline.expire(now).has_value()) {
             continue;
         }
-        slot.timedOut = true;
         if (slot.waitSocket != nullptr) {
             slot.waitSocket->cancel();
         }
@@ -81,11 +81,23 @@ bool PostgreSqlPool::hasAnyTimeout() const noexcept {
 }
 
 Task<std::size_t> PostgreSqlPool::acquireSlot() {
-    return scheduler_.acquire(config_.acquireTimeout);
+    const auto result = co_await scheduler_.acquire(config_.acquireTimeout);
+    if (const auto* acquired = result.acquired()) {
+        co_return acquired->index();
+    }
+    if (result.timedOut() != nullptr) {
+        throw std::runtime_error(
+            "database connection pool acquire timed out");
+    }
+    throw std::runtime_error("database client is closing");
 }
 
 void PostgreSqlPool::releaseSlot(std::size_t slot) noexcept {
-    scheduler_.release(slot);
+    const auto status = scheduler_.release(slot);
+    if (status == PoolLeaseReleaseStatus::kInvalidSlot ||
+        status == PoolLeaseReleaseStatus::kAlreadyReleased) {
+        std::terminate();
+    }
 }
 
 void PostgreSqlPool::closeSlot(ConnectionSlot& slot) noexcept {
@@ -105,18 +117,17 @@ void PostgreSqlPool::closeSlot(ConnectionSlot& slot) noexcept {
 void PostgreSqlPool::setSlotDeadline(
     ConnectionSlot& slot,
     std::optional<std::chrono::milliseconds> timeout) noexcept {
-    slot.timedOut = false;
     if (!timeout.has_value() || timeout->count() <= 0) {
-        slot.deadlineActive = false;
+        slot.deadline.reset();
         return;
     }
-    slot.deadline = std::chrono::steady_clock::now() + *timeout;
-    slot.deadlineActive = true;
+    slot.deadline.arm(
+        workerTimerDeadlineAfter(*timeout),
+        ConnectionSlot::DeadlineKind::kSocket);
 }
 
 void PostgreSqlPool::clearSlotDeadline(ConnectionSlot& slot) noexcept {
-    slot.deadlineActive = false;
-    slot.timedOut = false;
+    (void)slot.deadline.clear();
 }
 
 PostgreSqlPool::SlotGuard::SlotGuard(

@@ -35,6 +35,7 @@ END_STREAM = 0x1
 ACK = 0x1
 END_HEADERS = 0x4
 PADDED = 0x8
+HEADERS_PRIORITY = 0x20
 
 NO_ERROR = 0x0
 PROTOCOL_ERROR = 0x1
@@ -305,6 +306,22 @@ def priority_self_dependency(host: str, port: int) -> None:
         connection.expect_alive()
 
 
+@case("6.3", "malformed PRIORITY length is a stream FRAME_SIZE_ERROR")
+def priority_invalid_length(host: str, port: int) -> None:
+    with H2Connection(host, port) as connection:
+        connection.send(request_headers(1, end_stream=False))
+        connection.send(frame(PRIORITY, 0, 1, b"\x00\x00\x00\x00"))
+        connection.expect_rst(1, FRAME_SIZE_ERROR)
+        connection.expect_alive()
+
+
+@case("5.1/6.3/6.4", "malformed PRIORITY on idle stream is connection-fatal")
+def priority_invalid_length_idle_stream(host: str, port: int) -> None:
+    with H2Connection(host, port) as connection:
+        connection.send(frame(PRIORITY, 0, 1, b"\x00\x00\x00\x00"))
+        connection.expect_goaway(FRAME_SIZE_ERROR)
+
+
 @case("6.1", "DATA stream identifier must be nonzero")
 def data_stream_zero(host: str, port: int) -> None:
     with H2Connection(host, port) as connection:
@@ -327,6 +344,20 @@ def headers_stream_zero(host: str, port: int) -> None:
         connection.expect_goaway(PROTOCOL_ERROR)
 
 
+@case("4.2", "truncated HEADERS priority fields cause FRAME_SIZE_ERROR")
+def headers_priority_too_short(host: str, port: int) -> None:
+    with H2Connection(host, port) as connection:
+        connection.send(frame(HEADERS, END_HEADERS | HEADERS_PRIORITY, 1, b"\x00" * 4))
+        connection.expect_goaway(FRAME_SIZE_ERROR)
+
+
+@case("6.2", "invalid HEADERS padding causes PROTOCOL_ERROR")
+def invalid_headers_padding(host: str, port: int) -> None:
+    with H2Connection(host, port) as connection:
+        connection.send(frame(HEADERS, END_HEADERS | PADDED, 1))
+        connection.expect_goaway(PROTOCOL_ERROR)
+
+
 @case("6.4", "RST_STREAM stream identifier must be nonzero")
 def rst_stream_zero(host: str, port: int) -> None:
     with H2Connection(host, port) as connection:
@@ -339,6 +370,50 @@ def rst_idle_stream(host: str, port: int) -> None:
     with H2Connection(host, port) as connection:
         connection.send(frame(RST_STREAM, 0, 1, PROTOCOL_ERROR.to_bytes(4, "big")))
         connection.expect_goaway(PROTOCOL_ERROR)
+
+
+@case("5.1/6.4", "DATA after the peer sends RST_STREAM closes the connection")
+def data_after_peer_reset(host: str, port: int) -> None:
+    with H2Connection(host, port) as connection:
+        # Keep the request half open so the peer reset, rather than ordinary
+        # response completion, is the stream's authoritative close source. On
+        # this ordered connection the following DATA cannot predate that reset.
+        connection.send(
+            request_headers(1, end_stream=False)
+            + frame(RST_STREAM, 0, 1, PROTOCOL_ERROR.to_bytes(4, "big"))
+            + frame(DATA, 0, 1, b"")
+        )
+        connection.expect_goaway(STREAM_CLOSED)
+
+
+@case("5.1/6.4", "repeated peer RST_STREAM closes the connection")
+def repeated_peer_reset(host: str, port: int) -> None:
+    with H2Connection(host, port) as connection:
+        reset = frame(RST_STREAM, 0, 1, PROTOCOL_ERROR.to_bytes(4, "big"))
+        connection.send(request_headers(1, end_stream=False) + reset + reset)
+        connection.expect_goaway(STREAM_CLOSED)
+
+
+@case("6.4/6.9", "zero WINDOW_UPDATE after peer RST_STREAM is connection-fatal")
+def zero_window_update_after_peer_reset(host: str, port: int) -> None:
+    with H2Connection(host, port) as connection:
+        connection.send(
+            request_headers(1, end_stream=False)
+            + frame(RST_STREAM, 0, 1, PROTOCOL_ERROR.to_bytes(4, "big"))
+            + frame(WINDOW_UPDATE, 0, 1, b"\x00" * 4)
+        )
+        connection.expect_goaway(PROTOCOL_ERROR)
+
+
+@case("6.3/6.4", "malformed PRIORITY after peer RST_STREAM is connection-fatal")
+def malformed_priority_after_peer_reset(host: str, port: int) -> None:
+    with H2Connection(host, port) as connection:
+        connection.send(
+            request_headers(1, end_stream=False)
+            + frame(RST_STREAM, 0, 1, PROTOCOL_ERROR.to_bytes(4, "big"))
+            + frame(PRIORITY, 0, 1, b"\x00" * 4)
+        )
+        connection.expect_goaway(FRAME_SIZE_ERROR)
 
 
 @case("6.5", "SETTINGS ACK payload causes FRAME_SIZE_ERROR")
@@ -424,6 +499,14 @@ def window_update_bad_length(host: str, port: int) -> None:
     with H2Connection(host, port) as connection:
         connection.send(frame(WINDOW_UPDATE, 0, 0, b"\x00" * 3))
         connection.expect_goaway(FRAME_SIZE_ERROR)
+
+
+@case("5.1.1/6.9", "zero WINDOW_UPDATE on a skipped closed stream is connection-fatal")
+def window_update_zero_on_skipped_stream(host: str, port: int) -> None:
+    with H2Connection(host, port) as connection:
+        connection.send(request_headers(3))
+        connection.send(frame(WINDOW_UPDATE, 0, 1, b"\x00" * 4))
+        connection.expect_goaway(PROTOCOL_ERROR)
 
 
 @case("6.10", "CONTINUATION without an open field block causes PROTOCOL_ERROR")

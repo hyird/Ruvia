@@ -65,7 +65,7 @@ public:
         return framing_;
     }
 
-    [[nodiscard]] const HttpResponseBodyPlan& bodyPlan() const noexcept {
+    [[nodiscard]] HttpResponseBodyPlan bodyPlan() const noexcept {
         return bodyPlan_;
     }
 
@@ -135,17 +135,20 @@ public:
         : response_(std::move(response)),
           commitPlan_(std::move(commitPlan)) {}
 
-    [[nodiscard]] HttpResponse& response() noexcept {
+    [[nodiscard]] HttpResponse& response() & noexcept {
         return response_;
     }
+    [[nodiscard]] HttpResponse& response() && = delete;
 
-    [[nodiscard]] const HttpResponse& response() const noexcept {
+    [[nodiscard]] const HttpResponse& response() const & noexcept {
         return response_;
     }
+    [[nodiscard]] const HttpResponse& response() const && = delete;
 
-    [[nodiscard]] const ResponseStreamCommitPlan& commitPlan() const noexcept {
+    [[nodiscard]] const ResponseStreamCommitPlan& commitPlan() const & noexcept {
         return commitPlan_;
     }
+    [[nodiscard]] const ResponseStreamCommitPlan& commitPlan() const && = delete;
 
 private:
     HttpResponse response_;
@@ -161,8 +164,8 @@ private:
             "response stream commit plan status does not match response");
     }
     const auto framing = commitPlan.framing();
-    const auto& bodyPlan = commitPlan.bodyPlan();
-    const auto& policy = bodyPlan.policy();
+    const auto bodyPlan = commitPlan.bodyPlan();
+    const auto policy = bodyPlan.policy();
     const bool writerOwnsHttp1Chunked =
         framing == ResponseStreamFraming::kHttp1Chunked &&
         policy.transferEncodingAllowed();

@@ -24,15 +24,16 @@
 #include <string_view>
 #include <system_error>
 
-#include <asio/steady_timer.hpp>
-
 #include "ruvia/http/detail/http2/Http2Connection.h"
 #include "ruvia/http/detail/server/HttpResponseTrailers.h"
+#include "ruvia/web/detail/http2/Http2SansIoSendWindow.h"
 #include "ruvia/web/detail/http2/Http2SansIoStreamRuntime.h"
 #include "ruvia/http/detail/server/HttpResponseStreamHead.h"
 #include "ruvia/web/detail/server/HttpResponseStreamState.h"
 #include "ruvia/core/detail/AsioAwait.h"
 #include "ruvia/core/Task.h"
+#include "ruvia/core/Timer.h"
+#include "ruvia/core/detail/WorkerSignal.h"
 #include "ruvia/http/detail/PmrString.h"
 
 namespace ruvia {
@@ -41,46 +42,54 @@ class Context;  // only forwarded as Context* via the type-erased bindContext th
 
 namespace ruvia::detail {
 
-template <typename Executor>
 class Http2SansIoResponseStreamSink final {
 public:
     Http2SansIoResponseStreamSink(
         Http2Connection& connection,
         std::uint32_t streamId,
         ResponseStreamKind kind,
-        std::pmr::memory_resource* resource,
-        Executor executor,
-        asio::steady_timer& writeSignal,
+        const WorkerHandle& worker,
+        WorkerSignal& writeSignal,
         Http2SansIoStreamSignal& streamSignal) noexcept
         : connection_(connection),
           streamId_(streamId),
           kind_(kind),
-          scratch_(resource),
-          executor_(executor),
+          worker_(&worker),
           writeSignal_(writeSignal),
           streamSignal_(streamSignal) {}
 
+    Http2SansIoResponseStreamSink(
+        Http2Connection&,
+        std::uint32_t,
+        ResponseStreamKind,
+        WorkerHandle&&,
+        WorkerSignal&,
+        Http2SansIoStreamSignal&) = delete;
+
     [[nodiscard]] bool committed() const noexcept { return state_.committed(); }
 
-    [[nodiscard]] const ResponseStreamCommitPlan* commitPlan() const noexcept {
+    [[nodiscard]] const ResponseStreamCommitPlan*
+    commitPlan() const & noexcept {
         return state_.commitPlan();
     }
+    const ResponseStreamCommitPlan* commitPlan() const && = delete;
 
     [[nodiscard]] bool aborted() const noexcept {
         auto* stream = connection_.stream(streamId_);
-        return stream == nullptr || stream->isAborted();
+        return stream == nullptr || stream->isAborted() ||
+            streamSignal_.terminated();
     }
 
-    void bindContext(Context* context, ResponseStreamState::StreamingHeadThunk streamingHead) noexcept {
+    void bindContext(
+        Context* context,
+        ResponseStreamState::StreamingHeadThunk streamingHead) {
         state_.bindContext(context, streamingHead);
     }
 
-    [[nodiscard]] std::pmr::string& scratch() noexcept {
-        clearPmrStringRetainingSmall(scratch_);
-        return scratch_;
-    }
+    void releaseContext() noexcept { state_.releaseContext(); }
 
     Task<void> write(std::string_view chunk) {
+        throwIfTerminated();
         if (chunk.empty()) {
             co_return;
         }
@@ -105,8 +114,12 @@ public:
             if (result == Http2DataSubmitStatus::kContentLengthIncomplete) {
                 throw std::length_error("HTTP/2 response ended before Content-Length");
             }
-            if (!(co_await awaitSendWindow())) {
-                throw std::system_error(std::make_error_code(std::errc::connection_reset));
+            const auto waitResult = co_await awaitHttp2SendWindow(
+                connection_, streamId_, &streamSignal_);
+            if (waitResult.aborted() != nullptr) {
+                throw std::system_error(streamSignal_.terminated()
+                    ? streamSignal_.terminalError()
+                    : std::make_error_code(std::errc::connection_reset));
             }
             if (result == Http2DataSubmitStatus::kQueued) {
                 co_return;  // the core already owned and drained this input
@@ -116,16 +129,12 @@ public:
     }
 
     Task<void> sleep(std::chrono::milliseconds duration) {
-        asio::steady_timer timer(executor_, duration);
-        const auto ec = co_await asyncError([&timer](auto handler) mutable {
-            timer.async_wait(std::move(handler));
-        });
-        if (ec) {
-            throw std::system_error(ec);
-        }
+        co_await Http2SansIoSleepAwaiter(
+            *worker_, streamSignal_.termination(), duration);
     }
 
     Task<void> end(std::span<const HttpHeaderView> trailers) {
+        throwIfTerminated();
         if (state_.ended()) {
             if (!trailers.empty()) {
                 throw std::logic_error("response stream is already ended");
@@ -134,8 +143,8 @@ public:
         }
 
         const auto trailerResult = httpResponseTrailerSection(trailers);
-        if (trailerResult.failure() != nullptr) {
-            throw std::invalid_argument("invalid response trailer section");
+        if (const auto* failure = trailerResult.failure()) {
+            throw failure->exception();
         }
         const auto& trailerSection = *trailerResult.section();
         const auto trailerIntent = trailerSection.empty()
@@ -163,15 +172,21 @@ public:
         if (result == Http2FinishSubmitStatus::kContentLengthIncomplete) {
             throw std::length_error("HTTP/2 response ended before Content-Length");
         }
-        if (result == Http2FinishSubmitStatus::kQueued &&
-            !(co_await awaitSendWindow())) {
-            throw std::system_error(std::make_error_code(std::errc::connection_reset));
+        if (result == Http2FinishSubmitStatus::kQueued) {
+            const auto waitResult = co_await awaitHttp2SendWindow(
+                connection_, streamId_, &streamSignal_);
+            if (waitResult.aborted() != nullptr) {
+                throw std::system_error(streamSignal_.terminated()
+                    ? streamSignal_.terminalError()
+                    : std::make_error_code(std::errc::connection_reset));
+            }
         }
         state_.markEnded();
     }
 
 private:
     Task<void> commit(ResponseTrailerIntent trailerIntent) {
+        throwIfTerminated();
         if (state_.committed()) {
             if (trailerIntent == ResponseTrailerIntent::kPresent) {
                 state_.ensureTrailersAllowed(
@@ -186,15 +201,13 @@ private:
             trailerIntent);
         const auto* submittedHead = headResult.submitted();
         if (submittedHead == nullptr) {
-            if (headResult.failure()->error() ==
-                Http2ResponseHeadSubmitError::kClosed) {
+            if (headResult.failure()->peerClosed()) {
                 throw std::system_error(
                     std::make_error_code(std::errc::connection_reset));
             }
-            throw std::logic_error(
-                "invalid HTTP/2 response stream head state");
+            throw headResult.failure()->exception();
         }
-        state_.markCommitted(submittedHead->plan());
+        state_.markCommitted(*submittedHead);
         wakeWriter();
     }
 
@@ -202,34 +215,23 @@ private:
     // this, output produced between inbound frames sits in the core's buffer until
     // the peer happens to send something (SSE over a quiet connection stalls).
     void wakeWriter() noexcept {
-        asio::error_code ignored;
-        writeSignal_.cancel(ignored);
+        writeSignal_.notify();
     }
 
-    // Park until the reader reports the window-blocked remainder drained. A spurious
-    // wake just re-checks; if the stream dies or the session tears down, stop waiting
-    // (the dispatch wrapper observes the abort via peerAborted / isAborted).
-    Task<bool> awaitSendWindow() {
-        while (connection_.hasQueuedData(streamId_)) {
-            auto* stream = connection_.stream(streamId_);
-            if (stream == nullptr || stream->isAborted() ||
-                streamSignal_.ended()) {
-                co_return false;
-            }
-            co_await streamSignal_.wait();
+    void throwIfTerminated() const {
+        if (streamSignal_.terminated()) {
+            throw std::system_error(streamSignal_.terminalError());
         }
-        auto* stream = connection_.stream(streamId_);
-        co_return stream != nullptr && !stream->isAborted() &&
-            !streamSignal_.ended();
     }
 
     Http2Connection& connection_;
     std::uint32_t streamId_;
     ResponseStreamKind kind_;
     ResponseStreamState state_;
-    std::pmr::string scratch_;
-    Executor executor_;
-    asio::steady_timer& writeSignal_;
+    // Borrow the stable server-owned handle. Holding a value here would add a
+    // shared ownership operation for every streaming HTTP/2 request.
+    const WorkerHandle* worker_;
+    WorkerSignal& writeSignal_;
     Http2SansIoStreamSignal& streamSignal_;
 };
 

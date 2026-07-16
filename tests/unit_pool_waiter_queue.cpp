@@ -24,8 +24,15 @@ using Clock = std::chrono::steady_clock;
 // A far-future deadline so a waiter never expires during a resume/close test.
 constexpr Clock::time_point kNever = Clock::time_point::max();
 
+template <typename T>
+concept HasAnyRvaluePoolWaiterAccessor =
+    requires(T&& result) { std::move(result).acquired(); } ||
+    requires(T&& result) { std::move(result).timedOut(); } ||
+    requires(T&& result) { std::move(result).closed(); };
+
 static_assert(!std::default_initializable<PoolWaiter>);
 static_assert(!std::default_initializable<PoolWaiterResult>);
+static_assert(!HasAnyRvaluePoolWaiterAccessor<PoolWaiterResult>);
 static_assert(std::same_as<
     decltype(std::declval<const PoolWaiterResult&>().acquired()),
     const PoolWaiterAcquired*>);
@@ -144,6 +151,11 @@ RUVIA_TEST(pool_waiter_queue_fifo_resume) {
     RUVIA_CHECK(firstResult->closed() == nullptr);
     RUVIA_CHECK(!waiters[1].await_ready());
 
+    // A completed waiter cannot re-enter the intrusive queue or lose its result.
+    queue.enqueue(waiters[0]);
+    queue.remove(waiters[0]);
+    RUVIA_CHECK(&waiters[0].await_resume() == firstResult);
+
     RUVIA_CHECK(queue.resumeNext(6));
     const auto* secondResult = &waiters[1].await_resume();
     RUVIA_CHECK(secondResult->acquired() != nullptr);
@@ -228,6 +240,21 @@ RUVIA_TEST(pool_waiter_queue_remove_head) {
         waiters[1].await_resume().acquired()->index(),
         std::size_t{4});
     RUVIA_CHECK(!waiters[0].await_ready());
+}
+
+RUVIA_TEST(pool_waiter_queue_removed_waiter_can_reenter_from_idle) {
+    PoolWaiterQueue queue;
+    PoolWaiter waiter(kNever);
+    queue.enqueue(waiter);
+    queue.remove(waiter);
+    queue.enqueue(waiter);
+
+    RUVIA_CHECK(queue.resumeNext(8));
+    RUVIA_CHECK(waiter.await_resume().acquired() != nullptr);
+    RUVIA_CHECK_EQ(
+        waiter.await_resume().acquired()->index(),
+        std::size_t{8});
+    RUVIA_CHECK(queue.empty());
 }
 
 RUVIA_TEST(pool_waiter_queue_close_all_wakes_with_closed_result) {

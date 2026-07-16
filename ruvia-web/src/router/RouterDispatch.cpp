@@ -42,8 +42,6 @@ Context makeRouteContext(
             memory,
             request,
             route.path(),
-            route.method(),
-            route.middlewareCount(),
             routeRateLimitScope,
             services);
     }
@@ -55,8 +53,6 @@ Context makeRouteContext(
         route.paramNames().data(),
         values.data(),
         values.size(),
-        route.method(),
-        route.middlewareCount(),
         routeRateLimitScope,
         services);
 }
@@ -69,6 +65,24 @@ detail::ContextServices withRouteHandlers(
         .withErrorHandler(errorHandler)
         .withNotFoundHandler(notFoundHandler);
 }
+
+class ResponseStreamContextBinding final {
+public:
+    explicit ResponseStreamContextBinding(ResponseStreamWriter* writer) noexcept
+        : writer_(writer) {}
+
+    ~ResponseStreamContextBinding() {
+        if (writer_ != nullptr) {
+            detail::StreamingAccess::releaseContext(*writer_);
+        }
+    }
+
+    ResponseStreamContextBinding(const ResponseStreamContextBinding&) = delete;
+    ResponseStreamContextBinding& operator=(const ResponseStreamContextBinding&) = delete;
+
+private:
+    ResponseStreamWriter* writer_;
+};
 
 struct OwnedHttpErrorInfo;
 void assignExceptionError(OwnedHttpErrorInfo& errorInfo, std::exception_ptr exception);
@@ -114,7 +128,7 @@ void assignExceptionError(OwnedHttpErrorInfo& errorInfo, std::exception_ptr exce
         errorInfo.assign(error.info());
     } catch (const detail::UnsupportedRequestContentCoding& error) {
         errorInfo.assign(HttpErrorInfo(
-            error.status(),
+            detail::HttpUnsupportedContentCoding::status(),
             "unsupported_content_coding",
             error.what()));
     } catch (const HttpError& error) {
@@ -171,7 +185,7 @@ Task<HttpResponse> detail::RouteTable::dispatch(
     co_return co_await dispatch(request, resolution, memory, services);
 }
 
-Task<detail::StreamDispatchResult> detail::RouteTable::dispatchResponseStream(
+Task<std::optional<HttpResponse>> detail::RouteTable::dispatchResponseStream(
     const HttpRequest& request,
     const ResolvedRoute& resolved,
     RequestMemory& memory,
@@ -181,20 +195,23 @@ Task<detail::StreamDispatchResult> detail::RouteTable::dispatchResponseStream(
         throw std::logic_error("route is not a response stream route");
     }
     return dispatchStreamRoute(
-        request, resolved, memory, services.withResponseStream(responseStream));
+        request,
+        resolved,
+        memory,
+        resolved.route().endpoint().responseStream()->handler(),
+        services.withResponseStream(responseStream));
 }
 
-Task<detail::StreamDispatchResult> detail::RouteTable::dispatchWebSocket(
+Task<std::optional<HttpResponse>> detail::RouteTable::dispatchWebSocket(
     const HttpRequest& request,
     const ResolvedRoute& resolved,
     RequestMemory& memory,
-    WebSocket& webSocket,
+    const RouteStreamHandler& handler,
     ContextServices services) const {
     if (resolved.route().endpoint().webSocket() == nullptr) {
         throw std::logic_error("route is not a websocket route");
     }
-    return dispatchStreamRoute(
-        request, resolved, memory, services.withWebSocket(webSocket));
+    return dispatchStreamRoute(request, resolved, memory, handler, services);
 }
 
 namespace {
@@ -206,10 +223,11 @@ namespace {
 }
 }  // namespace
 
-Task<detail::StreamDispatchResult> detail::RouteTable::dispatchStreamRoute(
+Task<std::optional<HttpResponse>> detail::RouteTable::dispatchStreamRoute(
     const HttpRequest& request,
     const ResolvedRoute& resolved,
     RequestMemory& memory,
+    const RouteStreamHandler& handler,
     ContextServices services) const {
     const auto& route = resolved.route();
     StreamMiddlewareChainState middlewareChain;
@@ -219,7 +237,9 @@ Task<detail::StreamDispatchResult> detail::RouteTable::dispatchStreamRoute(
         resolved,
         withRouteHandlers(services, errorHandler_, notFoundHandler_));
     const auto* responseStreamOutput = services.responseOutput().responseStream();
-    const auto* webSocketOutput = services.responseOutput().webSocket();
+    const bool webSocketRoute = route.endpoint().webSocket() != nullptr;
+    ResponseStreamContextBinding streamContextBinding(
+        responseStreamOutput != nullptr ? &responseStreamOutput->writer() : nullptr);
     if (responseStreamOutput != nullptr) {
         detail::StreamingAccess::bindContext(
             responseStreamOutput->writer(), context, &streamingHeadThunk);
@@ -228,23 +248,15 @@ Task<detail::StreamDispatchResult> detail::RouteTable::dispatchStreamRoute(
     std::exception_ptr exception;
     try {
         if (!route.hasMiddleware()) {
-            const auto& endpoint = route.endpoint();
-            const auto* responseStream = endpoint.responseStream();
-            const auto* webSocket = endpoint.webSocket();
-            if (responseStream == nullptr && webSocket == nullptr) {
-                throw std::logic_error("route is not a stream-handler route");
-            }
-            const auto& handler = responseStream != nullptr
-                ? responseStream->handler()
-                : webSocket->handler();
-            co_await handler(context);
             middlewareChain.markHandlerInvoked();
+            co_await handler(context);
         } else {
             co_await invokeStreamMiddlewareAt(
                 route,
                 0,
                 context,
-                middlewareChain);
+                middlewareChain,
+                handler);
             if (!detail::ContextAccess::hasResponse(context)) {
                 if (auto contextException = context.error()) {
                     std::rethrow_exception(contextException);
@@ -264,13 +276,13 @@ Task<detail::StreamDispatchResult> detail::RouteTable::dispatchStreamRoute(
     }
 
     if (exception != nullptr) {
-        if (webSocketOutput != nullptr ||
+        if ((webSocketRoute && middlewareChain.handlerInvoked()) ||
             (responseStreamOutput != nullptr &&
              detail::StreamingAccess::committed(responseStreamOutput->writer()))) {
             std::rethrow_exception(exception);
         }
         auto response = co_await handleException(context, exception);
-        co_return StreamDispatchResult::makeBuffered(std::move(response));
+        co_return std::move(response);
     }
 
     // The middleware chain converts a handler exception into a buffered error
@@ -281,7 +293,7 @@ Task<detail::StreamDispatchResult> detail::RouteTable::dispatchStreamRoute(
     // the stream with a clean terminator would frame a truncated body as complete.
     // Rethrow so the driver aborts (connection close / RST_STREAM), exactly as the
     // no-middleware path does through the committed check above.
-    if (webSocketOutput != nullptr ||
+    if (webSocketRoute ||
         (responseStreamOutput != nullptr &&
          detail::StreamingAccess::committed(responseStreamOutput->writer()))) {
         if (auto contextException = context.error()) {
@@ -294,16 +306,14 @@ Task<detail::StreamDispatchResult> detail::RouteTable::dispatchStreamRoute(
         detail::StreamingAccess::committed(
             responseStreamOutput->writer());
     const bool handlerInvoked = middlewareChain.handlerInvoked();
-    const bool webSocketHandled =
-        webSocketOutput != nullptr && handlerInvoked;
+    const bool webSocketHandled = webSocketRoute && handlerInvoked;
     // Middleware may replace an uncommitted response stream with a buffered
     // response after `next()`. A WebSocket handler, however, owns its upgraded
     // session as soon as it is invoked and cannot return to HTTP response mode.
     if (detail::ContextAccess::hasResponse(context) &&
         !streamCommitted &&
         !webSocketHandled) {
-        co_return StreamDispatchResult::makeBuffered(
-            detail::ContextAccess::takeResponse(context));
+        co_return detail::ContextAccess::takeResponse(context);
     }
     if (handlerInvoked || streamCommitted) {
         // The bound Context is local to this coroutine. Finish a response stream
@@ -315,7 +325,7 @@ Task<detail::StreamDispatchResult> detail::RouteTable::dispatchStreamRoute(
         if (responseStreamOutput != nullptr) {
             co_await responseStreamOutput->writer().end();
         }
-        co_return StreamDispatchResult::makeHandled();
+        co_return std::nullopt;
     }
     throw std::logic_error(
         "stream route completed without a response or handled output");

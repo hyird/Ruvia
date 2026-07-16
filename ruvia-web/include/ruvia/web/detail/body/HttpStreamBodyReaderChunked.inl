@@ -2,19 +2,6 @@
 
 namespace ruvia::detail {
 
-[[noreturn]] inline void throwHttp1ChunkDecodeFailure(
-    Http1ChunkDecodeError error) {
-    switch (error) {
-        case Http1ChunkDecodeError::kInvalidFraming:
-            throw HttpProtocolError(400, "invalid chunked request body");
-        case Http1ChunkDecodeError::kBodyTooLarge:
-            throw HttpProtocolError(413, "request body is too large");
-        case Http1ChunkDecodeError::kFramingTooLarge:
-            throw HttpProtocolError(413, "request body framing is too large");
-    }
-    throw HttpProtocolError(400, "invalid chunked request body");
-}
-
 template <typename Stream>
 Task<std::optional<std::string_view>> StreamBodyReader<Stream>::readChunked() {
     compactPending();
@@ -38,7 +25,7 @@ Task<std::optional<std::string_view>> StreamBodyReader<Stream>::readChunked() {
             co_return std::nullopt;
         }
         if (const auto* failure = result.failure()) {
-            throwHttp1ChunkDecodeFailure(failure->error());
+            throw failure->protocolError();
         }
         if (result.needMore() == nullptr) {
             throw std::logic_error("unexpected HTTP/1 chunk decode result");
@@ -77,8 +64,11 @@ Task<std::optional<std::string_view>> StreamBodyReader<Stream>::readTransferDeco
         if (const auto* output = result.output()) {
             co_return output->bytes();
         }
-        if (const auto* failure = result.failure()) {
-            throwTransferCodingDecodeFailure(failure->error());
+        if (const auto* failure = result.protocolFailure()) {
+            throwTransferCodingProtocolFailure(*failure);
+        }
+        if (result.decoderFailure() != nullptr) {
+            throwTransferCodingDecoderFailure();
         }
         if (result.complete() == nullptr &&
             result.needInput() == nullptr) {

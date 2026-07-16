@@ -37,11 +37,47 @@ enum class WebSocketProtocolFailure : std::uint16_t {
     return static_cast<std::uint16_t>(failure);
 }
 
-struct WebSocketFrameStart final {
-    WebSocketOpcode opcode;
-    bool fin{false};
-    bool continuation{false};
-    bool rsv1{false};
+enum class WebSocketFrameKind : std::uint8_t {
+    kContinuation = 0x0,
+    kText = 0x1,
+    kBinary = 0x2,
+    kClose = 0x8,
+    kPing = 0x9,
+    kPong = 0xA,
+};
+
+// Validated first-byte semantics. The raw continuation opcode is preserved as
+// its own kind instead of being normalized to Text plus an independent boolean;
+// compression is likewise admitted only where RFC 7692 permits RSV1.
+class WebSocketFrameStart final {
+public:
+    [[nodiscard]] constexpr WebSocketFrameKind kind() const noexcept {
+        return kind_;
+    }
+
+    [[nodiscard]] constexpr bool final() const noexcept {
+        return final_;
+    }
+
+    [[nodiscard]] constexpr bool compressed() const noexcept {
+        return compressed_;
+    }
+
+private:
+    friend std::optional<WebSocketFrameStart> decodeWebSocketFrameStart(
+        unsigned char,
+        unsigned char,
+        bool) noexcept;
+
+    constexpr WebSocketFrameStart(
+        WebSocketFrameKind kind,
+        bool final,
+        bool compressed) noexcept
+        : kind_(kind), final_(final), compressed_(compressed) {}
+
+    WebSocketFrameKind kind_;
+    bool final_;
+    bool compressed_;
 };
 
 [[nodiscard]] inline bool isInvalidWebSocketRawOpcode(std::uint8_t rawOpcode) noexcept {
@@ -52,34 +88,38 @@ struct WebSocketFrameStart final {
     return static_cast<std::uint8_t>(opcode) >= 0x8;
 }
 
+[[nodiscard]] inline bool isWebSocketControlFrameKind(
+    WebSocketFrameKind kind) noexcept {
+    return static_cast<std::uint8_t>(kind) >= 0x8;
+}
+
 // allowRsv1 enables the RSV1 (compressed) bit when permessage-deflate is
 // negotiated; it is valid only on the first frame of a data message, never on a
 // continuation or control frame (RFC 7692 §6.1). RSV2/RSV3 are always rejected.
-[[nodiscard]] inline bool decodeWebSocketFrameStart(
+[[nodiscard]] inline std::optional<WebSocketFrameStart>
+decodeWebSocketFrameStart(
     unsigned char first,
     unsigned char second,
-    WebSocketFrameStart& frame,
     bool allowRsv1) noexcept {
     const auto rawOpcode = static_cast<std::uint8_t>(first & 0x0FU);
     const bool rsv1 = (first & 0x40U) != 0;
     if ((first & 0x30U) != 0 || (second & 0x80U) == 0 || isInvalidWebSocketRawOpcode(rawOpcode)) {
-        return false;
+        return std::nullopt;
     }
     if (rsv1 && (!allowRsv1 || rawOpcode == 0 || rawOpcode >= 0x8)) {
-        return false;
+        return std::nullopt;
     }
-    frame = WebSocketFrameStart{
-        .opcode = static_cast<WebSocketOpcode>(rawOpcode == 0 ? 0x1 : rawOpcode),
-        .fin = (first & 0x80U) != 0,
-        .continuation = rawOpcode == 0,
-        .rsv1 = rsv1};
-    return true;
+    return WebSocketFrameStart(
+        static_cast<WebSocketFrameKind>(rawOpcode),
+        (first & 0x80U) != 0,
+        rsv1);
 }
 
 [[nodiscard]] inline bool isInvalidWebSocketControlFrame(
     const WebSocketFrameStart& frame,
     std::uint64_t payloadSize) noexcept {
-    return isWebSocketControlOpcode(frame.opcode) && (!frame.fin || payloadSize > 125);
+    return isWebSocketControlFrameKind(frame.kind()) &&
+        (!frame.final() || payloadSize > 125);
 }
 
 [[nodiscard]] inline bool webSocketMessageExceedsLimit(
@@ -111,10 +151,10 @@ struct WebSocketFrameStart final {
 // reason phrase, once maxMessageBytes drops below 125 -- silently breaking the
 // close handshake and keepalive on a small-message configuration.
 [[nodiscard]] inline bool webSocketFrameExceedsMessageLimit(
-    WebSocketOpcode opcode,
+    WebSocketFrameKind kind,
     std::uint64_t payloadSize,
     ProtocolByteLimit messageLimit) noexcept {
-    return !isWebSocketControlOpcode(opcode) &&
+    return !isWebSocketControlFrameKind(kind) &&
         webSocketFrameLengthExceedsLimit(payloadSize, messageLimit);
 }
 
@@ -222,8 +262,6 @@ inline void compactWebSocketReadBuffer(
 }
 
 void encodeWebSocketAccept(WebSocketAcceptKey& output, std::string_view key);
-[[nodiscard]] bool webSocketProtocolOffered(const HttpRequest& request, std::string_view protocol) noexcept;
-[[nodiscard]] bool isValidWebSocketRequest(const HttpRequest& request) noexcept;
 [[nodiscard]] bool isValidWebSocketCloseCode(std::uint16_t code) noexcept;
 [[nodiscard]] bool isValidUtf8(std::string_view value) noexcept;
 
@@ -278,14 +316,18 @@ private:
 class WebSocketClosePayloadEncodeResult final {
 public:
     [[nodiscard]] constexpr const WebSocketEncodedClosePayload* encoded()
-        const noexcept {
+        const & noexcept {
         return std::get_if<WebSocketEncodedClosePayload>(&value_);
     }
+    [[nodiscard]] constexpr const WebSocketEncodedClosePayload* encoded()
+        const && = delete;
 
     [[nodiscard]] constexpr const WebSocketClosePayloadEncodeFailure* failure()
-        const noexcept {
+        const & noexcept {
         return std::get_if<WebSocketClosePayloadEncodeFailure>(&value_);
     }
+    [[nodiscard]] constexpr const WebSocketClosePayloadEncodeFailure* failure()
+        const && = delete;
 
 private:
     friend WebSocketClosePayloadEncodeResult encodeWebSocketClosePayload(
@@ -311,16 +353,102 @@ private:
     std::string_view reason) noexcept;
 [[nodiscard]] std::optional<WebSocketProtocolFailure>
 webSocketClosePayloadFailure(std::string_view payload) noexcept;
-[[nodiscard]] std::string_view chooseWebSocketSubprotocol(
-    const HttpRequest& request,
-    std::string_view supported) noexcept;
+// One borrowed frame with validated metadata combinations. Named factories keep
+// continuation and control frames from acquiring an impossible data opcode or
+// compression bit; the wire reader additionally owns masking, length, and Close
+// payload validation before publishing the same type.
+class WebSocketFrameView final {
+public:
+    [[nodiscard]] static constexpr WebSocketFrameView text(
+        std::string_view payload,
+        bool final,
+        bool compressed = false) noexcept {
+        return WebSocketFrameView(
+            WebSocketFrameKind::kText, payload, final, compressed);
+    }
 
-struct WebSocketFrameView final {
-    WebSocketOpcode opcode{WebSocketOpcode::kText};
-    std::string_view payload;
-    bool fin{true};
-    bool continuation{false};
-    bool rsv1{false};
+    [[nodiscard]] static constexpr WebSocketFrameView binary(
+        std::string_view payload,
+        bool final,
+        bool compressed = false) noexcept {
+        return WebSocketFrameView(
+            WebSocketFrameKind::kBinary, payload, final, compressed);
+    }
+
+    [[nodiscard]] static constexpr WebSocketFrameView continuation(
+        std::string_view payload,
+        bool final) noexcept {
+        return WebSocketFrameView(
+            WebSocketFrameKind::kContinuation, payload, final, false);
+    }
+
+    [[nodiscard]] static std::optional<WebSocketFrameView> close(
+        std::string_view payload) noexcept {
+        if (payload.size() > 125 ||
+            webSocketClosePayloadFailure(payload).has_value()) {
+            return std::nullopt;
+        }
+        return WebSocketFrameView(
+            WebSocketFrameKind::kClose, payload, true, false);
+    }
+
+    [[nodiscard]] static constexpr std::optional<WebSocketFrameView> ping(
+        std::string_view payload) noexcept {
+        if (payload.size() > 125) {
+            return std::nullopt;
+        }
+        return WebSocketFrameView(
+            WebSocketFrameKind::kPing, payload, true, false);
+    }
+
+    [[nodiscard]] static constexpr std::optional<WebSocketFrameView> pong(
+        std::string_view payload) noexcept {
+        if (payload.size() > 125) {
+            return std::nullopt;
+        }
+        return WebSocketFrameView(
+            WebSocketFrameKind::kPong, payload, true, false);
+    }
+
+    [[nodiscard]] constexpr WebSocketFrameKind kind() const noexcept {
+        return kind_;
+    }
+
+    [[nodiscard]] constexpr std::string_view payload() const noexcept {
+        return payload_;
+    }
+
+    [[nodiscard]] constexpr bool final() const noexcept {
+        return final_;
+    }
+
+    [[nodiscard]] constexpr bool compressed() const noexcept {
+        return compressed_;
+    }
+
+private:
+    friend class WebSocketFrameReadResult;
+
+    constexpr WebSocketFrameView(
+        const WebSocketFrameStart& start,
+        std::string_view payload) noexcept
+        : WebSocketFrameView(
+              start.kind(), payload, start.final(), start.compressed()) {}
+
+    constexpr WebSocketFrameView(
+        WebSocketFrameKind kind,
+        std::string_view payload,
+        bool final,
+        bool compressed) noexcept
+        : kind_(kind),
+          payload_(payload),
+          final_(final),
+          compressed_(compressed) {}
+
+    WebSocketFrameKind kind_;
+    std::string_view payload_;
+    bool final_;
+    bool compressed_;
 };
 
 class WebSocketInboundResult;
@@ -403,24 +531,32 @@ private:
 class WebSocketInboundResult final {
 public:
     [[nodiscard]] constexpr const WebSocketInboundContinue*
-    continueReading() const noexcept {
+    continueReading() const & noexcept {
         return std::get_if<WebSocketInboundContinue>(&value_);
     }
+    [[nodiscard]] constexpr const WebSocketInboundContinue*
+    continueReading() const && = delete;
 
     [[nodiscard]] constexpr const WebSocketInboundControlFrame*
-    controlFrame() const noexcept {
+    controlFrame() const & noexcept {
         return std::get_if<WebSocketInboundControlFrame>(&value_);
     }
+    [[nodiscard]] constexpr const WebSocketInboundControlFrame*
+    controlFrame() const && = delete;
 
     [[nodiscard]] constexpr const WebSocketInboundMessage*
-    message() const noexcept {
+    message() const & noexcept {
         return std::get_if<WebSocketInboundMessage>(&value_);
     }
+    [[nodiscard]] constexpr const WebSocketInboundMessage*
+    message() const && = delete;
 
     [[nodiscard]] constexpr const WebSocketInboundFailure*
-    failure() const noexcept {
+    failure() const & noexcept {
         return std::get_if<WebSocketInboundFailure>(&value_);
     }
+    [[nodiscard]] constexpr const WebSocketInboundFailure*
+    failure() const && = delete;
 
 private:
     friend class WebSocketInboundAssembler;
@@ -469,6 +605,27 @@ private:
 // 6455 §5.4): control-frame dispatch, fragmentation across continuation frames,
 // per-message size limits and UTF-8 validation. Every wire failure is returned as
 // a typed alternative carrying the exact RFC Close reason; none is thrown.
+struct WebSocketInboundIdle final {};
+
+class WebSocketInboundFragmented final {
+public:
+    constexpr WebSocketInboundFragmented(
+        WebSocketOpcode opcode,
+        WebSocketInboundContentEncoding encoding) noexcept
+        : opcode_(opcode), encoding_(encoding) {}
+
+    [[nodiscard]] constexpr WebSocketOpcode opcode() const noexcept {
+        return opcode_;
+    }
+    [[nodiscard]] constexpr WebSocketInboundContentEncoding encoding() const noexcept {
+        return encoding_;
+    }
+
+private:
+    WebSocketOpcode opcode_;
+    WebSocketInboundContentEncoding encoding_;
+};
+
 class WebSocketInboundAssembler final {
 public:
     explicit WebSocketInboundAssembler(std::pmr::memory_resource* resource)
@@ -477,37 +634,38 @@ public:
     [[nodiscard]] WebSocketInboundResult accept(
         const WebSocketFrameView& frame,
         ProtocolByteLimit messageLimit) {
-        if (frame.opcode == WebSocketOpcode::kPing ||
-            frame.opcode == WebSocketOpcode::kPong ||
-            frame.opcode == WebSocketOpcode::kClose) {
+        if (isWebSocketControlFrameKind(frame.kind())) {
+            const auto opcode = static_cast<WebSocketOpcode>(frame.kind());
             return WebSocketInboundResult::makeControlFrame(
-                frame.opcode, frame.payload);
+                opcode, frame.payload());
         }
-        if (frame.continuation) {
-            if (!fragmented_) {
+        if (frame.kind() == WebSocketFrameKind::kContinuation) {
+            const auto* fragmented = std::get_if<WebSocketInboundFragmented>(&state_);
+            if (fragmented == nullptr) {
                 return WebSocketInboundResult::makeFailure(
                     WebSocketProtocolFailure::kProtocolError);
             }
             if (webSocketAppendExceedsLimit(
-                    message_.size(), frame.payload.size(), messageLimit)) {
+                    message_.size(), frame.payload().size(), messageLimit)) {
                 return WebSocketInboundResult::makeFailure(
                     WebSocketProtocolFailure::kMessageTooLarge);
             }
-            message_.append(frame.payload.data(), frame.payload.size());
-            if (!frame.fin) {
+            message_.append(frame.payload().data(), frame.payload().size());
+            if (!frame.final()) {
                 return WebSocketInboundResult::makeContinue();
             }
-            fragmented_ = false;
+            const auto opcode = fragmented->opcode();
+            const auto encoding = fragmented->encoding();
+            state_.template emplace<WebSocketInboundIdle>();
             const auto message = WebSocketMessageAccess::make(
-                opcode_,
+                opcode,
                 std::string_view(message_.data(), message_.size()));
-            if (compressed_) {
-                compressed_ = false;
+            if (encoding == WebSocketInboundContentEncoding::kPerMessageDeflate) {
                 return WebSocketInboundResult::makeMessage(
                     message,
                     WebSocketInboundContentEncoding::kPerMessageDeflate);
             }
-            if (opcode_ == WebSocketOpcode::kText && !isValidUtf8(message_)) {
+            if (opcode == WebSocketOpcode::kText && !isValidUtf8(message_)) {
                 return WebSocketInboundResult::makeFailure(
                     WebSocketProtocolFailure::kInvalidPayloadData);
             }
@@ -515,27 +673,28 @@ public:
                 message,
                 WebSocketInboundContentEncoding::kIdentity);
         }
-        if (frame.opcode == WebSocketOpcode::kText ||
-            frame.opcode == WebSocketOpcode::kBinary) {
-            if (fragmented_) {
+        if (frame.kind() == WebSocketFrameKind::kText ||
+            frame.kind() == WebSocketFrameKind::kBinary) {
+            if (std::get_if<WebSocketInboundFragmented>(&state_) != nullptr) {
                 return WebSocketInboundResult::makeFailure(
                     WebSocketProtocolFailure::kProtocolError);
             }
             if (webSocketMessageExceedsLimit(
-                    frame.payload.size(), messageLimit)) {
+                    frame.payload().size(), messageLimit)) {
                 return WebSocketInboundResult::makeFailure(
                     WebSocketProtocolFailure::kMessageTooLarge);
             }
-            if (frame.fin) {
+            const auto opcode = static_cast<WebSocketOpcode>(frame.kind());
+            if (frame.final()) {
                 const auto message = WebSocketMessageAccess::make(
-                    frame.opcode, frame.payload);
-                if (frame.rsv1) {
+                    opcode, frame.payload());
+                if (frame.compressed()) {
                     return WebSocketInboundResult::makeMessage(
                         message,
                         WebSocketInboundContentEncoding::kPerMessageDeflate);
                 }
-                if (frame.opcode == WebSocketOpcode::kText &&
-                    !isValidUtf8(frame.payload)) {
+                if (opcode == WebSocketOpcode::kText &&
+                    !isValidUtf8(frame.payload())) {
                     return WebSocketInboundResult::makeFailure(
                         WebSocketProtocolFailure::kInvalidPayloadData);
                 }
@@ -543,19 +702,19 @@ public:
                     message,
                     WebSocketInboundContentEncoding::kIdentity);
             }
-            fragmented_ = true;
-            opcode_ = frame.opcode;
-            compressed_ = frame.rsv1;
-            message_.assign(frame.payload.data(), frame.payload.size());
+            state_.template emplace<WebSocketInboundFragmented>(
+                opcode,
+                frame.compressed()
+                    ? WebSocketInboundContentEncoding::kPerMessageDeflate
+                    : WebSocketInboundContentEncoding::kIdentity);
+            message_.assign(frame.payload().data(), frame.payload().size());
         }
         return WebSocketInboundResult::makeContinue();
     }
 
 private:
     std::pmr::string message_;
-    WebSocketOpcode opcode_{WebSocketOpcode::kText};
-    bool fragmented_{false};
-    bool compressed_{false};
+    std::variant<WebSocketInboundIdle, WebSocketInboundFragmented> state_;
 };
 
 class WebSocketFrameReadResult;
@@ -588,19 +747,25 @@ private:
 class WebSocketFrameReadResult final {
 public:
     [[nodiscard]] constexpr const WebSocketFrameNeedInput*
-    needInput() const noexcept {
+    needInput() const & noexcept {
         return std::get_if<WebSocketFrameNeedInput>(&value_);
     }
+    [[nodiscard]] constexpr const WebSocketFrameNeedInput*
+    needInput() const && = delete;
 
     [[nodiscard]] constexpr const WebSocketFrameView*
-    frame() const noexcept {
+    frame() const & noexcept {
         return std::get_if<WebSocketFrameView>(&value_);
     }
+    [[nodiscard]] constexpr const WebSocketFrameView*
+    frame() const && = delete;
 
     [[nodiscard]] constexpr const WebSocketFrameReadFailure*
-    failure() const noexcept {
+    failure() const & noexcept {
         return std::get_if<WebSocketFrameReadFailure>(&value_);
     }
+    [[nodiscard]] constexpr const WebSocketFrameReadFailure*
+    failure() const && = delete;
 
 private:
     friend WebSocketFrameReadResult webSocketTryReadFrame(
@@ -626,8 +791,10 @@ private:
     }
 
     [[nodiscard]] static constexpr WebSocketFrameReadResult
-    makeFrame(WebSocketFrameView frame) noexcept {
-        return WebSocketFrameReadResult(frame);
+    makeFrame(
+        const WebSocketFrameStart& start,
+        std::string_view payload) noexcept {
+        return WebSocketFrameReadResult(WebSocketFrameView(start, payload));
     }
 
     [[nodiscard]] static constexpr WebSocketFrameReadResult
@@ -655,11 +822,12 @@ private:
     }
     const auto first = static_cast<unsigned char>(buffer[offset]);
     const auto second = static_cast<unsigned char>(buffer[offset + 1]);
-    WebSocketFrameStart frameStart;
     std::uint64_t length = second & 0x7FU;
     std::size_t headerSize = 2;
 
-    if (!decodeWebSocketFrameStart(first, second, frameStart, permessageDeflate)) {
+    const auto frameStart =
+        decodeWebSocketFrameStart(first, second, permessageDeflate);
+    if (!frameStart.has_value()) {
         return WebSocketFrameReadResult::makeFailure(
             WebSocketProtocolFailure::kProtocolError);
     }
@@ -693,11 +861,12 @@ private:
         }
     }
 
-    if (isInvalidWebSocketControlFrame(frameStart, length)) {
+    if (isInvalidWebSocketControlFrame(*frameStart, length)) {
         return WebSocketFrameReadResult::makeFailure(
             WebSocketProtocolFailure::kProtocolError);
     }
-    if (webSocketFrameExceedsMessageLimit(frameStart.opcode, length, messageLimit)) {
+    if (webSocketFrameExceedsMessageLimit(
+            frameStart->kind(), length, messageLimit)) {
         return WebSocketFrameReadResult::makeFailure(
             WebSocketProtocolFailure::kMessageTooLarge);
     }
@@ -716,20 +885,14 @@ private:
     auto* payload = buffer.data() + payloadOffset;
     decodeMaskedWebSocketPayload(payload, payloadSize, buffer.data() + maskOffset);
     const auto payloadView = std::string_view(payload, payloadSize);
-    if (frameStart.opcode == WebSocketOpcode::kClose) {
+    if (frameStart->kind() == WebSocketFrameKind::kClose) {
         if (const auto failure = webSocketClosePayloadFailure(payloadView)) {
             return WebSocketFrameReadResult::makeFailure(*failure);
         }
     }
     offset = payloadOffset + payloadSize;
     pendingCompactUntil = offset;
-    return WebSocketFrameReadResult::makeFrame(
-        WebSocketFrameView{
-            .opcode = frameStart.opcode,
-            .payload = payloadView,
-            .fin = frameStart.fin,
-            .continuation = frameStart.continuation,
-            .rsv1 = frameStart.rsv1});
+    return WebSocketFrameReadResult::makeFrame(*frameStart, payloadView);
 }
 
 }  // namespace detail

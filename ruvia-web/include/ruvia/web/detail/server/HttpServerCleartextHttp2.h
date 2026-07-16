@@ -1,10 +1,10 @@
 #pragma once
 
+#include "ruvia/http/detail/http1/Http1ServerRequestParser.h"
 #include "ruvia/http/detail/http2/Http2FrameTypes.h"
 #include "ruvia/web/detail/server/Http2SansIoSession.h"
 #include "ruvia/web/detail/server/HttpServerOptions.h"
 #include "ruvia/web/detail/router/RouteTable.h"
-#include "ruvia/http/HttpParseError.h"
 #include "ruvia/core/detail/AsioAwait.h"
 #include "ruvia/core/Task.h"
 
@@ -37,9 +37,8 @@ enum class CleartextHttp2DispatchResult {
 // obvious non-HTTP traffic is dropped without reflecting an error response.
 [[nodiscard]] inline bool shouldDropInvalidCleartextHttp1Input(
     std::string_view buffer,
-    HttpParseError error) noexcept {
-    if (error != HttpParseError::kInvalidRequestLine &&
-        error != HttpParseError::kUnsupportedHttpVersion) {
+    Http1ServerRequestParseFailureSource failureSource) noexcept {
+    if (failureSource != Http1ServerRequestParseFailureSource::kRequestLine) {
         return false;
     }
 
@@ -92,7 +91,7 @@ Task<void> runHttp2ServerSession(
     const HttpServerOptions& options,
     ConnectionScanner::Entry& scannerEntry,
     ContextServices services,
-    const bool& workerRunning,
+    const HttpServerWorkerState& workerState,
     std::string_view initialBytes = {}) {
     (void)socket;  // the sans-I/O session needs only the (possibly TLS) stream
     co_await runHttp2SansIoSession(
@@ -103,7 +102,7 @@ Task<void> runHttp2ServerSession(
             services,
             options,
             scannerEntry,
-            workerRunning),
+            workerState),
         initialBytes);
 }
 
@@ -118,9 +117,9 @@ Task<CleartextHttp2DispatchResult> dispatchCleartextHttp2Preface(
     const ContextServices& services,
     std::pmr::string& readBuffer,
     std::size_t& usedBytes,
-    const bool& workerRunning) {
+    const HttpServerWorkerState& workerState) {
     const auto current = std::string_view(readBuffer.data(), usedBytes);
-    switch (probeCleartextHttp2Preface(current, options.autoHttps.enabled)) {
+    switch (probeCleartextHttp2Preface(current, options.redirect() != nullptr)) {
     case CleartextHttp2Probe::kHttp1:
         co_return CleartextHttp2DispatchResult::kContinueHttp1;
     case CleartextHttp2Probe::kCompletePreface:
@@ -132,17 +131,19 @@ Task<CleartextHttp2DispatchResult> dispatchCleartextHttp2Preface(
             options,
             scannerEntry,
             services,
-            workerRunning,
+            workerState,
             current);
         co_return CleartextHttp2DispatchResult::kSessionFinished;
     case CleartextHttp2Probe::kNeedMorePreface: {
         scannerEntry.setPhase(ConnectionScanner::Phase::kReadingInitial);
-        auto [ec, bytesRead] = co_await asyncResult<std::size_t>(
+        auto readCompletion = co_await asyncAsio<std::size_t>(
             [&stream, &readBuffer, usedBytes](auto handler) mutable {
                 stream.async_read_some(
                     asio::buffer(readBuffer.data() + usedBytes, readBuffer.size() - usedBytes),
                     std::move(handler));
             });
+        const auto ec = readCompletion.errorCode();
+        const auto bytesRead = readCompletion.result();
         if (ec) {
             co_return CleartextHttp2DispatchResult::kSessionFinished;
         }

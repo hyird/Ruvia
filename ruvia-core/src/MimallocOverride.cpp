@@ -1,6 +1,6 @@
 #include <mimalloc.h>
 
-#if defined(_WIN32)
+#if defined(_WIN32) && RUVIA_ENABLE_MIMALLOC_OVERRIDE
 #include <mimalloc-new-delete.h>
 #endif
 

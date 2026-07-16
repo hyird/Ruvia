@@ -3,9 +3,10 @@
 // Outbound HTTP client protocol models.
 //
 // OWNERSHIP: these are transport-free HTTP values. HttpOrigin and
-// HttpClientRequest borrow their string storage; HttpClientResponse owns parsed
-// header/body storage through PMR. Socket/TLS configuration, pools, redirect
-// limits, timeouts, and streaming drivers belong to the external I/O owner.
+// HttpClientRequest borrow their string storage; HttpClientResponseHead owns
+// parsed header storage through PMR. Response content remains owned by the
+// external sans-I/O driver that follows the framing plan. Socket/TLS
+// configuration, pools, redirect limits, and timeouts also belong there.
 
 #include <array>
 #include <cstddef>
@@ -20,12 +21,13 @@
 #include <vector>
 
 #include "ruvia/http/HttpHeader.h"
+#include "ruvia/http/detail/BorrowedView.h"
 #include "ruvia/http/HttpProtocolVersion.h"
 #include "ruvia/http/detail/PmrResource.h"
 
 namespace ruvia::detail {
 struct HttpClientResponseHeaderAccess;
-struct HttpClientResponseAccess;
+struct HttpClientResponseHeadAccess;
 }  // namespace ruvia::detail
 
 namespace ruvia {
@@ -96,13 +98,15 @@ private:
 
 class HttpClientResponseHeader final {
 public:
-    [[nodiscard]] std::string_view name() const noexcept {
+    [[nodiscard]] std::string_view name() const & noexcept {
         return std::string_view(name_.data(), name_.size());
     }
+    [[nodiscard]] std::string_view name() const && = delete;
 
-    [[nodiscard]] std::string_view value() const noexcept {
+    [[nodiscard]] std::string_view value() const & noexcept {
         return std::string_view(value_.data(), value_.size());
     }
+    [[nodiscard]] std::string_view value() const && = delete;
 
 private:
     friend struct detail::HttpClientResponseHeaderAccess;
@@ -171,14 +175,16 @@ public:
         const std::basic_string<char, Traits, Allocator>&&) = delete;
 
     [[nodiscard]] constexpr const HttpClientRequestWithoutContent*
-    withoutContent() const noexcept {
+    withoutContent() const & noexcept {
         return std::get_if<HttpClientRequestWithoutContent>(&content_);
     }
+    const HttpClientRequestWithoutContent* withoutContent() const && = delete;
 
     [[nodiscard]] constexpr const HttpClientRequestBytes*
-    borrowedBytes() const noexcept {
+    borrowedBytes() const & noexcept {
         return std::get_if<HttpClientRequestBytes>(&content_);
     }
+    const HttpClientRequestBytes* borrowedBytes() const && = delete;
 
 private:
     using Content = std::variant<
@@ -197,6 +203,70 @@ private:
 };
 
 struct HttpClientRequest {
+    // Zero-cost field wrapper for request text retained by the sans-I/O
+    // request/response transaction. String literals, string_view values, and
+    // owning-string lvalues remain valid inputs; owning-string temporaries are
+    // rejected before they can leave a dangling view in the request.
+    class BorrowedText final {
+    public:
+        constexpr BorrowedText() noexcept = default;
+
+        constexpr BorrowedText(std::string_view value) noexcept
+            : value_(value) {}
+
+        template <typename Traits, typename Allocator>
+        constexpr BorrowedText(
+            const std::basic_string<char, Traits, Allocator>& value) noexcept
+            : value_(value.data(), value.size()) {}
+
+        template <detail::HttpTemporaryOwningCharString String>
+        BorrowedText(String&&) = delete;
+
+        constexpr BorrowedText& operator=(std::string_view value) noexcept {
+            value_ = value;
+            return *this;
+        }
+
+        template <typename Traits, typename Allocator>
+        constexpr BorrowedText& operator=(
+            const std::basic_string<char, Traits, Allocator>& value) noexcept {
+            value_ = std::string_view(value.data(), value.size());
+            return *this;
+        }
+
+        template <detail::HttpTemporaryOwningCharString String>
+        BorrowedText& operator=(String&&) = delete;
+
+        [[nodiscard]] constexpr std::string_view view() const noexcept {
+            return value_;
+        }
+
+        [[nodiscard]] constexpr operator std::string_view() const noexcept {
+            return value_;
+        }
+
+        friend constexpr bool operator==(
+            BorrowedText lhs,
+            BorrowedText rhs) noexcept {
+            return lhs.value_ == rhs.value_;
+        }
+
+        friend constexpr bool operator==(
+            BorrowedText lhs,
+            std::string_view rhs) noexcept {
+            return lhs.value_ == rhs;
+        }
+
+        friend constexpr bool operator==(
+            std::string_view lhs,
+            BorrowedText rhs) noexcept {
+            return lhs == rhs.value_;
+        }
+
+    private:
+        std::string_view value_;
+    };
+
     class HeaderInit final {
     public:
         constexpr HeaderInit() noexcept = default;
@@ -211,6 +281,9 @@ struct HttpClientRequest {
         template <std::size_t N>
         constexpr HeaderInit(const std::array<HttpHeaderView, N>& headers) noexcept
             : headers_(headers.data(), headers.size()) {}
+
+        template <std::size_t N>
+        HeaderInit(std::array<HttpHeaderView, N>&&) = delete;
 
         template <typename Allocator>
         HeaderInit(const std::vector<HttpHeaderView, Allocator>&) = delete;
@@ -233,6 +306,9 @@ struct HttpClientRequest {
             headers_ = std::span<const HttpHeaderView>(headers.data(), headers.size());
             return *this;
         }
+
+        template <std::size_t N>
+        HeaderInit& operator=(std::array<HttpHeaderView, N>&&) = delete;
 
         template <typename Allocator>
         HeaderInit& operator=(const std::vector<HttpHeaderView, Allocator>&) = delete;
@@ -263,8 +339,8 @@ struct HttpClientRequest {
         std::span<const HttpHeaderView> headers_{};
     };
 
-    std::string_view method{"GET"};
-    std::string_view target{"/"};
+    BorrowedText method{"GET"};
+    BorrowedText target{"/"};
     // Borrowed header table; its elements and their strings must remain alive
     // and unchanged through request preparation and any corresponding HTTP/1
     // response-head decision that inspects the prepared request context.
@@ -272,12 +348,15 @@ struct HttpClientRequest {
     HttpClientRequestContent content{HttpClientRequestContent::none()};
 };
 
-class HttpClientResponse final {
+static_assert(
+    sizeof(HttpClientRequest::BorrowedText) == sizeof(std::string_view));
+
+class HttpClientResponseHead final {
 public:
-    HttpClientResponse(const HttpClientResponse&) = delete;
-    HttpClientResponse& operator=(const HttpClientResponse&) = delete;
-    HttpClientResponse(HttpClientResponse&&) noexcept = default;
-    HttpClientResponse& operator=(HttpClientResponse&&) noexcept = default;
+    HttpClientResponseHead(const HttpClientResponseHead&) = delete;
+    HttpClientResponseHead& operator=(const HttpClientResponseHead&) = delete;
+    HttpClientResponseHead(HttpClientResponseHead&&) noexcept = default;
+    HttpClientResponseHead& operator=(HttpClientResponseHead&&) = delete;
 
     [[nodiscard]] std::uint16_t status() const noexcept {
         return status_;
@@ -287,41 +366,38 @@ public:
         return protocolVersion_;
     }
 
-    [[nodiscard]] std::span<const HttpClientResponseHeader> headers() const noexcept {
+    [[nodiscard]] std::span<const HttpClientResponseHeader>
+    headers() const & noexcept {
         return std::span<const HttpClientResponseHeader>(headers_.data(), headers_.size());
     }
-
-    [[nodiscard]] std::string_view body() const noexcept {
-        return std::string_view(body_.data(), body_.size());
-    }
+    [[nodiscard]] std::span<const HttpClientResponseHeader>
+    headers() const && = delete;
 
 private:
-    friend struct detail::HttpClientResponseAccess;
+    friend struct detail::HttpClientResponseHeadAccess;
 
-    HttpClientResponse(
+    HttpClientResponseHead(
         std::uint16_t status,
         HttpProtocolVersion protocolVersion,
         std::pmr::memory_resource* resource)
-        : HttpClientResponse(
+        : HttpClientResponseHead(
               detail::HttpResolvedPmrResourceTag{},
               status,
               protocolVersion,
               detail::httpPmrResourceOrDefault(resource)) {}
 
-    HttpClientResponse(
+    HttpClientResponseHead(
         detail::HttpResolvedPmrResourceTag,
         std::uint16_t status,
         HttpProtocolVersion protocolVersion,
         std::pmr::memory_resource* resource)
         : status_(status),
           protocolVersion_(protocolVersion),
-          headers_(resource),
-          body_(resource) {}
+          headers_(resource) {}
 
     std::uint16_t status_;
     HttpProtocolVersion protocolVersion_;
     std::pmr::vector<HttpClientResponseHeader> headers_;
-    std::pmr::string body_;
 };
 
 }  // namespace ruvia

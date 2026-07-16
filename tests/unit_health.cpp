@@ -32,7 +32,7 @@ RUVIA_TEST(health_responses_use_context_response_state) {
     RUVIA_CHECK_EQ(response.status(), std::uint16_t{200});
     RUVIA_CHECK_EQ(response.header("Content-Type"), std::string_view("application/json"));
     RUVIA_CHECK_EQ(response.header("X-Trace"), std::string_view("health"));
-    RUVIA_CHECK(response.header("Set-Cookie").starts_with("probe=ok;"));
+    RUVIA_CHECK(response.header("Set-Cookie").value_or(std::string_view{}).starts_with("probe=ok;"));
     RUVIA_CHECK_EQ(
         ruvia::detail::responseBody(response).bytes(),
         std::string_view("{\"status\":\"ok\"}"));

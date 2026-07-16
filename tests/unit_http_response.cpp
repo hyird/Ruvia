@@ -6,12 +6,15 @@
 #include <memory_resource>
 #include <optional>
 #include <stdexcept>
+#include <string>
 #include <string_view>
 #include <type_traits>
+#include <utility>
 #include <vector>
 
 #include "ruvia/http/HttpInterimResponse.h"
 #include "ruvia/http/HttpResponse.h"
+#include "ruvia/http/detail/AsciiCase.h"
 #include "ruvia/http/detail/HttpResponseHeaderAccess.h"
 
 namespace {
@@ -24,6 +27,52 @@ concept HasCustomReasonPhraseSetter = requires(T& response) {
 };
 
 static_assert(!HasCustomReasonPhraseSetter<HttpResponse>);
+static_assert(!std::is_copy_constructible_v<HttpResponse>);
+static_assert(!std::is_copy_assignable_v<HttpResponse>);
+static_assert(std::is_nothrow_move_constructible_v<HttpResponse>);
+static_assert(std::is_nothrow_move_assignable_v<HttpResponse>);
+
+template <typename T>
+concept ExposesAnyRvalueResponseView =
+    requires(T&& value) { std::move(value).headers(); } ||
+    requires(T&& value) { std::move(value).header(std::string_view{}); } ||
+    requires(T&& value) { std::move(value).begin(); } ||
+    requires(T&& value) { std::move(value).end(); } ||
+    requires(T&& value) { std::move(value).cbegin(); } ||
+    requires(T&& value) { std::move(value).cend(); };
+
+static_assert(!ExposesAnyRvalueResponseView<ruvia::HttpResponse>);
+static_assert(!ExposesAnyRvalueResponseView<ruvia::HttpResponseHeaders>);
+static_assert(std::same_as<
+    decltype(std::declval<const HttpResponse&>().header(std::string_view{})),
+    std::optional<std::string_view>>);
+
+class CountingMemoryResource final : public std::pmr::memory_resource {
+public:
+    [[nodiscard]] std::size_t allocations() const noexcept {
+        return allocations_;
+    }
+
+private:
+    void* do_allocate(std::size_t bytes, std::size_t alignment) override {
+        ++allocations_;
+        return std::pmr::new_delete_resource()->allocate(bytes, alignment);
+    }
+
+    void do_deallocate(
+        void* pointer,
+        std::size_t bytes,
+        std::size_t alignment) override {
+        std::pmr::new_delete_resource()->deallocate(pointer, bytes, alignment);
+    }
+
+    [[nodiscard]] bool do_is_equal(
+        const std::pmr::memory_resource& other) const noexcept override {
+        return this == &other;
+    }
+
+    std::size_t allocations_{0};
+};
 
 static_assert(!std::is_constructible_v<
     ruvia::HttpInterimResponseHead::HeaderInit,
@@ -60,6 +109,51 @@ RUVIA_TEST(response_status_is_version_neutral_code_only) {
     RUVIA_CHECK_EQ(response.status(), std::uint16_t{599});
     response.status(299);
     RUVIA_CHECK_EQ(response.status(), std::uint16_t{299});
+}
+
+RUVIA_TEST(response_header_distinguishes_missing_from_present_empty) {
+    auto response = makeResponse();
+    RUVIA_CHECK(!response.header("X-Empty").has_value());
+
+    response.header("X-Empty", "");
+    const auto presentEmpty = response.header("x-empty");
+    RUVIA_CHECK(presentEmpty.has_value());
+    RUVIA_CHECK(presentEmpty.value_or("missing").empty());
+}
+
+RUVIA_TEST(response_move_assignment_transfers_one_resource_domain) {
+    CountingMemoryResource sourceResource;
+    CountingMemoryResource targetResource;
+    HttpResponse source(&sourceResource);
+    HttpResponse target(&targetResource);
+
+    source.body(std::string(4096, 's'));
+    target.body(std::string(64, 't'));
+    const auto targetAllocationsBeforeAssignment = targetResource.allocations();
+
+    target = std::move(source);
+
+    RUVIA_CHECK_EQ(
+        targetResource.allocations(),
+        targetAllocationsBeforeAssignment);
+
+    // The inline header table spills on the ninth field. Its PMR vector must have
+    // moved to the same source resource as the body and owned header bytes.
+    target.header("X-Ruvia-0", "0");
+    target.header("X-Ruvia-1", "1");
+    target.header("X-Ruvia-2", "2");
+    target.header("X-Ruvia-3", "3");
+    target.header("X-Ruvia-4", "4");
+    target.header("X-Ruvia-5", "5");
+    target.header("X-Ruvia-6", "6");
+    target.header("X-Ruvia-7", "7");
+    target.header("X-Ruvia-8", "8");
+
+    RUVIA_CHECK_EQ(target.headers().size(), std::size_t{9});
+    RUVIA_CHECK_EQ(
+        targetResource.allocations(),
+        targetAllocationsBeforeAssignment);
+    RUVIA_CHECK(sourceResource.allocations() > 0);
 }
 
 RUVIA_TEST(response_status_code_range_validated) {
@@ -121,7 +215,68 @@ RUVIA_TEST(response_header_replace_append_and_remove) {
 
     // Passing nullopt removes the header entirely.
     response.header("X-Test", std::nullopt);
-    RUVIA_CHECK(response.header("X-Test").empty());
+    RUVIA_CHECK(!response.header("X-Test").has_value());
+}
+
+RUVIA_TEST(response_set_cookie_append_replaces_same_wire_name) {
+    auto response = makeResponse();
+    response.header("Set-Cookie", "session=old; Path=/");
+    response.header(
+        "Set-Cookie", "theme=dark; Path=/", HttpResponse::HeaderOptions{true});
+    response.header(
+        "Set-Cookie", "session=new; Path=/", HttpResponse::HeaderOptions{true});
+    response.header(
+        "Set-Cookie", "Session=upper; Path=/", HttpResponse::HeaderOptions{true});
+
+    std::size_t count = 0;
+    bool hasOld = false;
+    bool hasNew = false;
+    bool hasTheme = false;
+    bool hasUpper = false;
+    for (const auto& header : response.headers()) {
+        if (header.name() != std::string_view("Set-Cookie")) {
+            continue;
+        }
+        ++count;
+        hasOld = hasOld || header.value() == "session=old; Path=/";
+        hasNew = hasNew || header.value() == "session=new; Path=/";
+        hasTheme = hasTheme || header.value() == "theme=dark; Path=/";
+        hasUpper = hasUpper || header.value() == "Session=upper; Path=/";
+    }
+    RUVIA_CHECK_EQ(count, std::size_t{3});
+    RUVIA_CHECK(!hasOld);
+    RUVIA_CHECK(hasNew);
+    RUVIA_CHECK(hasTheme);
+    RUVIA_CHECK(hasUpper);  // cookie-name is case-sensitive
+}
+
+RUVIA_TEST(response_plain_set_collapses_prior_appended_fields) {
+    auto response = makeResponse();
+    response.header("Link", "</a>", HttpResponse::HeaderOptions{true});
+    response.header("link", "</b>", HttpResponse::HeaderOptions{true});
+    response.header("LINK", "</final>");
+
+    std::size_t linkCount = 0;
+    for (const auto& header : response.headers()) {
+        if (ruvia::detail::httpAsciiEqualsIgnoreCase(header.name(), "Link")) {
+            ++linkCount;
+            RUVIA_CHECK_EQ(header.value(), std::string_view("</final>"));
+            RUVIA_CHECK(!ruvia::detail::responseHeaderAppend(header));
+        }
+    }
+    RUVIA_CHECK_EQ(linkCount, std::size_t{1});
+
+    response.header("Set-Cookie", "a=1");
+    response.header("Set-Cookie", "b=2", HttpResponse::HeaderOptions{true});
+    response.header("Set-Cookie", "c=3");
+    std::size_t cookieCount = 0;
+    for (const auto& header : response.headers()) {
+        if (header.name() == std::string_view("Set-Cookie")) {
+            ++cookieCount;
+            RUVIA_CHECK_EQ(header.value(), std::string_view("c=3"));
+        }
+    }
+    RUVIA_CHECK_EQ(cookieCount, std::size_t{1});
 }
 
 RUVIA_TEST(response_appended_header_carries_append_flag) {
@@ -162,7 +317,7 @@ RUVIA_TEST(response_header_remove_known_header_rebuilds_index) {
     RUVIA_CHECK_EQ(response.header("Content-Type"), std::string_view("text/plain"));
 
     response.header("Content-Type", std::nullopt);
-    RUVIA_CHECK(response.header("Content-Type").empty());   // gone, not a stale index hit
+    RUVIA_CHECK(!response.header("Content-Type").has_value());  // gone, not a stale index hit
 
     // Re-adding after removal replaces cleanly and leaves exactly one header line --
     // no duplicate resurrected from a stale index entry.

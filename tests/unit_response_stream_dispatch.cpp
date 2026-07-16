@@ -25,6 +25,7 @@
 #include "ruvia/web/detail/router/RouterInternal.h"
 #include "ruvia/web/detail/router/RouteTable.h"
 #include "ruvia/web/detail/server/HttpResponseStreamDispatch.h"
+#include "ruvia/web/detail/server/HttpResponseStreamSink.h"
 
 namespace {
 
@@ -42,6 +43,35 @@ using ruvia::detail::ResponseStreamKind;
 using ruvia::detail::ResponseTrailerIntent;
 using ruvia::detail::RouteStreamHandler;
 
+struct BorrowTestStream final {};
+
+struct BorrowTestScannerEntry final {
+    void touch() noexcept {}
+};
+
+using Http1BorrowTestSink = ruvia::detail::ResponseStreamSink<
+    BorrowTestStream,
+    BorrowTestScannerEntry>;
+
+static_assert(std::constructible_from<
+    Http1BorrowTestSink,
+    BorrowTestStream&,
+    ruvia::WorkerMemory&,
+    ruvia::detail::ResponseHeadBuffer&,
+    BorrowTestScannerEntry&,
+    const ruvia::WorkerHandle&,
+    ResponseStreamKind,
+    ruvia::detail::Http1ResponseStreamPlan>);
+static_assert(!std::constructible_from<
+    Http1BorrowTestSink,
+    BorrowTestStream&,
+    ruvia::WorkerMemory&,
+    ruvia::detail::ResponseHeadBuffer&,
+    BorrowTestScannerEntry&,
+    ruvia::WorkerHandle&&,
+    ResponseStreamKind,
+    ruvia::detail::Http1ResponseStreamPlan>);
+
 template <typename Result>
 concept HasLegacyStreamedPredicate = requires(const Result& result) {
     { result.streamed() } -> std::same_as<bool>;
@@ -52,9 +82,26 @@ concept HasLegacySharedResponseTake = requires(Result& result) {
     { result.takeResponse() } -> std::same_as<HttpResponse>;
 };
 
+template <typename Result>
+concept HasLegacyNestedStreamOutcome = requires(const Result& result) {
+    result.outcome();
+};
+
+template <typename Result>
+concept HasAnyRvalueResponseStreamDispatchBorrow =
+    requires(Result&& value) { std::move(value).completed(); } ||
+    requires(Result&& value) { std::move(value).peerAbortedBeforeCommit(); } ||
+    requires(Result&& value) { std::move(value).peerAbortedAfterCommit(); } ||
+    requires(Result&& value) { std::move(value).failedAfterCommit(); } ||
+    requires(Result&& value) { std::move(value).routeResponse(); } ||
+    requires(Result&& value) { std::move(value).recoveredFailure(); };
+
 static_assert(!std::default_initializable<ResponseStreamDispatchResult>);
+static_assert(!HasAnyRvalueResponseStreamDispatchBorrow<
+    ResponseStreamDispatchResult>);
 static_assert(!HasLegacyStreamedPredicate<ResponseStreamDispatchResult>);
 static_assert(!HasLegacySharedResponseTake<ResponseStreamDispatchResult>);
+static_assert(!HasLegacyNestedStreamOutcome<ResponseStreamDispatchResult>);
 static_assert(std::same_as<
     decltype(std::declval<const ResponseStreamDispatchResult&>().completed()),
     const ruvia::detail::ResponseStreamCompleted*>);
@@ -62,6 +109,21 @@ static_assert(std::same_as<
     decltype(std::declval<const ResponseStreamDispatchResult&>()
                  .peerAbortedBeforeCommit()),
     const ruvia::detail::ResponseStreamPeerAbortedBeforeCommit*>);
+static_assert(std::same_as<
+    decltype(std::declval<const ResponseStreamDispatchResult&>()
+                 .peerAbortedAfterCommit()),
+    const ruvia::detail::ResponseStreamPeerAbortedAfterCommit*>);
+static_assert(std::same_as<
+    decltype(std::declval<const ResponseStreamDispatchResult&>()
+                 .failedAfterCommit()),
+    const ruvia::detail::ResponseStreamFailedAfterCommit*>);
+static_assert(std::same_as<
+    decltype(std::declval<ResponseStreamDispatchResult&>().routeResponse()),
+    ruvia::detail::ResponseStreamRouteResponse*>);
+static_assert(std::same_as<
+    decltype(std::declval<ResponseStreamDispatchResult&>()
+                 .recoveredFailure()),
+    ruvia::detail::ResponseStreamRecoveredFailure*>);
 
 class CapturingStreamSink final {
 public:
@@ -77,9 +139,9 @@ public:
         streamingHead_ = streamingHead;
     }
 
-    [[nodiscard]] std::pmr::string& scratch() noexcept {
-        scratch_.clear();
-        return scratch_;
+    void releaseContext() noexcept {
+        context_ = nullptr;
+        streamingHead_ = nullptr;
     }
 
     [[nodiscard]] bool committed() const noexcept {
@@ -136,7 +198,6 @@ private:
     Context* context_{nullptr};
     StreamingHeadThunk streamingHead_{nullptr};
     std::optional<ResponseStreamCommitPlan> commitPlan_;
-    std::pmr::string scratch_{std::pmr::get_default_resource()};
     bool failUncommittedEnd_{false};
 };
 
@@ -230,8 +291,11 @@ RUVIA_TEST(response_stream_dispatch_preserves_exact_committed_status) {
         false);
     const auto* completed = result.completed();
     RUVIA_CHECK(completed != nullptr);
-    RUVIA_CHECK_EQ(completed->status(), status);
-    RUVIA_CHECK(result.buffered() == nullptr);
+    if (completed != nullptr) {
+        RUVIA_CHECK_EQ(completed->status(), status);
+    }
+    RUVIA_CHECK(result.routeResponse() == nullptr);
+    RUVIA_CHECK(result.recoveredFailure() == nullptr);
 }
 
 RUVIA_TEST(response_stream_dispatch_distinguishes_precommit_peer_abort) {
@@ -240,8 +304,7 @@ RUVIA_TEST(response_stream_dispatch_distinguishes_precommit_peer_abort) {
         RouteStreamHandler(&status, &streamWithoutCommit),
         true);
     RUVIA_CHECK(result.peerAbortedBeforeCommit() != nullptr);
-    RUVIA_CHECK(result.peerAbortedAfterCommit() == nullptr);
-    RUVIA_CHECK(result.completed() == nullptr);
+    RUVIA_CHECK(!result.committedStatus().has_value());
 }
 
 RUVIA_TEST(response_stream_dispatch_distinguishes_committed_peer_abort) {
@@ -249,9 +312,11 @@ RUVIA_TEST(response_stream_dispatch_distinguishes_committed_peer_abort) {
     auto result = dispatchStream(
         RouteStreamHandler(&status, &streamWithStatus),
         true);
-    const auto* peer = result.peerAbortedAfterCommit();
-    RUVIA_CHECK(peer != nullptr);
-    RUVIA_CHECK_EQ(peer->status(), status);
+    const auto* aborted = result.peerAbortedAfterCommit();
+    RUVIA_CHECK(aborted != nullptr);
+    if (aborted != nullptr) {
+        RUVIA_CHECK_EQ(aborted->status(), status);
+    }
     RUVIA_CHECK(result.peerAbortedBeforeCommit() == nullptr);
 }
 
@@ -263,10 +328,8 @@ RUVIA_TEST(response_stream_dispatch_end_commits_bodyless_status) {
     const auto* completed = result.completed();
     RUVIA_CHECK(completed != nullptr);
     RUVIA_CHECK(result.peerAbortedBeforeCommit() == nullptr);
-    RUVIA_CHECK(result.peerAbortedAfterCommit() == nullptr);
-    RUVIA_CHECK(result.failedAfterCommit() == nullptr);
-    RUVIA_CHECK(result.buffered() == nullptr);
-    RUVIA_CHECK(result.failedBeforeCommit() == nullptr);
+    RUVIA_CHECK(result.routeResponse() == nullptr);
+    RUVIA_CHECK(result.recoveredFailure() == nullptr);
     if (completed != nullptr) {
         RUVIA_CHECK_EQ(completed->status(), status);
     }
@@ -279,6 +342,23 @@ RUVIA_TEST(response_stream_dispatch_preserves_committed_failure_status) {
         false);
     const auto* failed = result.failedAfterCommit();
     RUVIA_CHECK(failed != nullptr);
-    RUVIA_CHECK_EQ(failed->status(), status);
-    RUVIA_CHECK(result.failedBeforeCommit() == nullptr);
+    if (failed != nullptr) {
+        RUVIA_CHECK_EQ(failed->status(), status);
+    }
+}
+
+RUVIA_TEST(response_stream_dispatch_types_precommit_failure_response) {
+    HttpResponse response(std::pmr::get_default_resource());
+    response.status(502);
+    auto result = ResponseStreamDispatchResult::makeRecoveredFailure(
+        std::move(response));
+
+    auto* recoveredFailure = result.recoveredFailure();
+    RUVIA_CHECK(recoveredFailure != nullptr);
+    RUVIA_CHECK(!result.committedStatus().has_value());
+    RUVIA_CHECK(result.peerAbortedBeforeCommit() == nullptr);
+    if (recoveredFailure != nullptr) {
+        const auto recovered = std::move(*recoveredFailure).takeResponse();
+        RUVIA_CHECK_EQ(recovered.status(), std::uint16_t{502});
+    }
 }

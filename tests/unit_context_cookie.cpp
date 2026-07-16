@@ -6,6 +6,7 @@
 #include <asio/io_context.hpp>
 
 #include <chrono>
+#include <stdexcept>
 #include <string>
 #include <string_view>
 
@@ -30,42 +31,52 @@ using ruvia::detail::ContextAccess;
 using ruvia::detail::HttpRequestAccess;
 using ruvia::detail::RequestKnownHeader;
 
-asio::awaitable<void> cloneHeaderValue(ruvia::Context& context, std::string& output) {
-    auto clone = co_await ruvia::detail::taskAsAwaitable(ruvia::cloneRawRequest(context.req()));
-    const auto value = clone.header("X-Trace");
-    output.assign(value.data(), value.size());
+asio::awaitable<void> readHeaderValue(ruvia::Context& context, std::string& output) {
+    const auto value = context.req().header("X-Trace");
+    if (value) {
+        output.assign(value->data(), value->size());
+    }
+    co_return;
 }
 
-struct CloneMethodObservation final {
+struct MethodObservation final {
     std::string method;
     HttpKnownMethod knownMethod{HttpKnownMethod::kGet};
 };
 
-asio::awaitable<void> cloneMethod(
+ruvia::Task<ruvia::ContextRequest::RequestFormData> parseRequestBody(
     ruvia::Context& context,
-    CloneMethodObservation& observation) {
-    auto clone = co_await ruvia::detail::taskAsAwaitable(
-        ruvia::cloneRawRequest(context.req()));
-    observation.method.assign(clone.method().data(), clone.method().size());
-    observation.knownMethod = clone.knownMethod();
+    ruvia::ContextRequest::ParseBodyOptions options) {
+    co_return co_await context.req().parseBody(options);
 }
 
-asio::awaitable<void> cloneParseProtoBody(ruvia::Context& context, bool& safeOk, bool& protoDropped) {
-    auto clone = co_await ruvia::detail::taskAsAwaitable(ruvia::cloneRawRequest(context.req()));
-    const auto form = clone.parseBody({.dot = true});
+asio::awaitable<void> readMethod(
+    ruvia::Context& context,
+    MethodObservation& observation) {
+    const auto request = context.req();
+    observation.method.assign(request.method().data(), request.method().size());
+    observation.knownMethod = request.knownMethod();
+    co_return;
+}
+
+asio::awaitable<void> parseProtoBody(ruvia::Context& context, bool& safeOk, bool& protoDropped) {
+    const auto form = co_await ruvia::detail::taskAsAwaitable(
+        parseRequestBody(context, {
+            .dottedNames = ruvia::ContextRequest::DottedNamePolicy::kExpandPath,
+        }));
     const auto safe = form.get("safe").value();
     safeOk = safe.has_value() && *safe == std::string_view("ok");
     protoDropped = !static_cast<bool>(form.get("__proto__"));
 }
 
-asio::awaitable<void> cloneParseArrayForm(
+asio::awaitable<void> parseArrayForm(
     ruvia::Context& context,
     std::size_t& tagsSize,
     bool& tagsArray,
     std::size_t& xSize,
     std::string& xValue) {
-    auto clone = co_await ruvia::detail::taskAsAwaitable(ruvia::cloneRawRequest(context.req()));
-    const auto form = clone.parseBody({});
+    const auto form = co_await ruvia::detail::taskAsAwaitable(
+        parseRequestBody(context, {}));
     const auto tags = form.get("tags[]");
     tagsSize = tags.size();
     tagsArray = tags.array();
@@ -76,13 +87,14 @@ asio::awaitable<void> cloneParseArrayForm(
     }
 }
 
-asio::awaitable<void> cloneParseAllRepeatedScalar(
+asio::awaitable<void> parseAllRepeatedScalar(
     ruvia::Context& context,
     std::size_t& valueCount,
     std::string& selectedValue) {
-    auto clone = co_await ruvia::detail::taskAsAwaitable(
-        ruvia::cloneRawRequest(context.req()));
-    const auto form = clone.parseBody({.all = true});
+    const auto form = co_await ruvia::detail::taskAsAwaitable(
+        parseRequestBody(context, {
+            .repeatedScalars = ruvia::ContextRequest::RepeatedScalarPolicy::kRetainAll,
+        }));
     const auto value = form.get("x");
     valueCount = value.size();
     if (const auto selected = value.value()) {
@@ -90,14 +102,14 @@ asio::awaitable<void> cloneParseAllRepeatedScalar(
     }
 }
 
-asio::awaitable<void> cloneParseMultipart(
+asio::awaitable<void> parseMultipart(
     ruvia::Context& context,
     std::string& nameValue,
     std::string& fileName,
     std::string& fileType,
     std::string& fileData) {
-    auto clone = co_await ruvia::detail::taskAsAwaitable(ruvia::cloneRawRequest(context.req()));
-    const auto form = clone.parseBody({});
+    const auto form = co_await ruvia::detail::taskAsAwaitable(
+        parseRequestBody(context, {}));
     if (const auto nv = form.get("name").value(); nv.has_value()) {
         nameValue.assign(nv->data(), nv->size());
     }
@@ -106,24 +118,23 @@ asio::awaitable<void> cloneParseMultipart(
         fileName.assign(f->filename().data(), f->filename().size());
     }
     if (const auto b = file.blob(); b.has_value()) {
-        fileType.assign(b->type().data(), b->type().size());
+        fileType.assign(b->contentType().data(), b->contentType().size());
         fileData.assign(b->text().data(), b->text().size());
     }
 }
 
-asio::awaitable<void> cloneParseBodyDiscard(ruvia::Context& context) {
-    auto clone = co_await ruvia::detail::taskAsAwaitable(ruvia::cloneRawRequest(context.req()));
-    (void)clone.parseBody({});
+asio::awaitable<void> parseBodyDiscard(ruvia::Context& context) {
+    (void)co_await ruvia::detail::taskAsAwaitable(parseRequestBody(context, {}));
 }
 
-asio::awaitable<void> cloneParseScalarPair(
+asio::awaitable<void> parseScalarPair(
     ruvia::Context& context,
     std::string& aValue,
     bool& aPresent,
     std::string& bValue,
     bool& bPresent) {
-    auto clone = co_await ruvia::detail::taskAsAwaitable(ruvia::cloneRawRequest(context.req()));
-    const auto form = clone.parseBody({});
+    const auto form = co_await ruvia::detail::taskAsAwaitable(
+        parseRequestBody(context, {}));
     if (const auto v = form.get("a").value(); v.has_value()) {
         aValue.assign(v->data(), v->size());
         aPresent = true;
@@ -198,11 +209,11 @@ RUVIA_TEST(context_request_cookie_fields_include_repeated_cookie_headers) {
     RUVIA_CHECK_EQ(*latest, std::string_view("3"));
 }
 
-RUVIA_TEST(context_request_query_single_lookup_decodes_without_materializing_query_tables) {
+RUVIA_TEST(context_request_query_single_lookup_materializes_one_shared_cache) {
     WorkerMemory worker;
     HttpRequest request = HttpRequestAccess::make();
     HttpRequestAccess::reset(request);
-    HttpRequestAccess::setQueryString(request, "a=one+two&b=2&a=3");
+    HttpRequestAccess::setQueryString(request, "a=first&b=2&a=one+two");
 
     RequestMemory requestMemory(worker);
     HttpRequestAccess::setResource(request, requestMemory.resource());
@@ -210,8 +221,21 @@ RUVIA_TEST(context_request_query_single_lookup_decodes_without_materializing_que
 
     const auto query = context.req().query("a");
     RUVIA_CHECK(query.has_value());
-    RUVIA_CHECK_EQ(*query, std::string_view("3"));
-    RUVIA_CHECK(!ContextAccess::requestQueryMaterialized(context));
+    RUVIA_CHECK_EQ(*query, std::string_view("one two"));
+    RUVIA_CHECK(ContextAccess::requestQueryMaterialized(context));
+
+    // Scalar, multivalue and field-binding access all borrow the same cache.
+    // In particular, repeated encoded lookup must not append another arena list
+    // node or return a different backing allocation.
+    const auto* const stableData = query->data();
+    const auto all = context.req().queries("a");
+    RUVIA_CHECK_EQ(all.size(), std::size_t{2});
+    RUVIA_CHECK_EQ(all.back(), std::string_view("one two"));
+    const auto& fields = ruvia::detail::requestQueryFields(context.req());
+    RUVIA_CHECK_EQ(*fields.get("a"), std::string_view("one two"));
+    const auto repeated = context.req().query("a");
+    RUVIA_CHECK(repeated.has_value());
+    RUVIA_CHECK(repeated->data() == stableData);
 }
 
 RUVIA_TEST(context_request_query_list_uses_last_duplicate_like_single_lookup) {
@@ -240,13 +264,33 @@ RUVIA_TEST(context_request_query_list_uses_last_duplicate_like_single_lookup) {
 
     // queries() still exposes every value in order (getAll semantics).
     const auto all = context.req().queries("a");
-    RUVIA_CHECK(all.has_value());
-    RUVIA_CHECK_EQ(all->size(), std::size_t{2});
-    RUVIA_CHECK_EQ((*all)[0], std::string_view("1"));
-    RUVIA_CHECK_EQ((*all)[1], std::string_view("3"));
+    RUVIA_CHECK_EQ(all.size(), std::size_t{2});
+    RUVIA_CHECK_EQ(all[0], std::string_view("1"));
+    RUVIA_CHECK_EQ(all[1], std::string_view("3"));
 }
 
-RUVIA_TEST(context_request_param_single_lookup_decodes_without_materializing_param_table) {
+RUVIA_TEST(context_request_queries_use_empty_span_only_for_missing_name) {
+    WorkerMemory worker;
+    HttpRequest request = HttpRequestAccess::make();
+    HttpRequestAccess::reset(request);
+    HttpRequestAccess::setQueryString(request, "empty=&flag&value=x");
+
+    RequestMemory requestMemory(worker);
+    HttpRequestAccess::setResource(request, requestMemory.resource());
+    auto context = ContextAccess::make(requestMemory, request);
+
+    const auto emptyValue = context.req().queries("empty");
+    RUVIA_CHECK_EQ(emptyValue.size(), std::size_t{1});
+    RUVIA_CHECK(emptyValue.front().empty());
+
+    const auto valueless = context.req().queries("flag");
+    RUVIA_CHECK_EQ(valueless.size(), std::size_t{1});
+    RUVIA_CHECK(valueless.front().empty());
+
+    RUVIA_CHECK(context.req().queries("missing").empty());
+}
+
+RUVIA_TEST(context_request_param_single_lookup_materializes_one_shared_cache) {
     WorkerMemory worker;
     HttpRequest request = HttpRequestAccess::make();
     HttpRequestAccess::reset(request);
@@ -262,17 +306,80 @@ RUVIA_TEST(context_request_param_single_lookup_decodes_without_materializing_par
         names,
         values,
         std::size(names),
-        ruvia::HttpKnownMethod::kGet,
-        0,
         0);
 
     const auto param = context.req().param("id");
     RUVIA_CHECK(param.has_value());
     RUVIA_CHECK_EQ(*param, std::string_view("one two"));
-    RUVIA_CHECK(!ContextAccess::routeParamsMaterialized(context));
+    RUVIA_CHECK(ContextAccess::routeParamsMaterialized(context));
+
+    const auto* const stableData = param->data();
+    const auto& fields = ruvia::detail::requestParamFields(context.req());
+    RUVIA_CHECK_EQ(*fields.get("id"), std::string_view("one two"));
+    const auto repeated = context.req().param("id");
+    RUVIA_CHECK(repeated.has_value());
+    RUVIA_CHECK(repeated->data() == stableData);
 }
 
-RUVIA_TEST(raw_request_clone_header_lookup_uses_last_match) {
+RUVIA_TEST(context_request_query_rejects_and_remembers_malformed_percent_encoding) {
+    WorkerMemory worker;
+    HttpRequest request = HttpRequestAccess::make();
+    HttpRequestAccess::reset(request);
+    HttpRequestAccess::setQueryString(request, "safe=1&bad=%zz");
+
+    RequestMemory requestMemory(worker);
+    HttpRequestAccess::setResource(request, requestMemory.resource());
+    auto context = ContextAccess::make(requestMemory, request);
+
+    for (int attempt = 0; attempt < 2; ++attempt) {
+        bool threw = false;
+        try {
+            (void)context.req().query("safe");
+        } catch (const std::invalid_argument&) {
+            threw = true;
+        }
+        RUVIA_CHECK(threw);
+    }
+    const auto* storage = ContextAccess::requestStorage(context);
+    RUVIA_CHECK(storage != nullptr);
+    RUVIA_CHECK(storage->queryInvalid);
+    RUVIA_CHECK(!storage->query.has_value());
+}
+
+RUVIA_TEST(context_request_param_rejects_and_remembers_malformed_percent_encoding) {
+    WorkerMemory worker;
+    HttpRequest request = HttpRequestAccess::make();
+    HttpRequestAccess::reset(request);
+    const std::string_view names[] = {"id"};
+    const std::string_view values[] = {"bad%zz"};
+
+    RequestMemory requestMemory(worker);
+    HttpRequestAccess::setResource(request, requestMemory.resource());
+    auto context = ContextAccess::make(
+        requestMemory,
+        request,
+        "/items/:id",
+        names,
+        values,
+        std::size(names),
+        0);
+
+    for (int attempt = 0; attempt < 2; ++attempt) {
+        bool threw = false;
+        try {
+            (void)context.req().param("id");
+        } catch (const std::invalid_argument&) {
+            threw = true;
+        }
+        RUVIA_CHECK(threw);
+    }
+    const auto* storage = ContextAccess::requestStorage(context);
+    RUVIA_CHECK(storage != nullptr);
+    RUVIA_CHECK(storage->routeParamsInvalid);
+    RUVIA_CHECK(!storage->routeParams.has_value());
+}
+
+RUVIA_TEST(context_request_header_lookup_uses_last_match) {
     WorkerMemory worker;
     HttpRequest request = HttpRequestAccess::make();
     HttpRequestAccess::reset(request);
@@ -285,13 +392,29 @@ RUVIA_TEST(raw_request_clone_header_lookup_uses_last_match) {
 
     asio::io_context io;
     std::string header;
-    asio::co_spawn(io, cloneHeaderValue(context, header), asio::detached);
+    asio::co_spawn(io, readHeaderValue(context, header), asio::detached);
     io.run();
 
     RUVIA_CHECK_EQ(header, std::string("second"));
 }
 
-RUVIA_TEST(raw_request_clone_owns_exact_extension_method_token) {
+RUVIA_TEST(context_request_header_lookup_is_case_insensitive_and_presence_aware) {
+    WorkerMemory worker;
+    HttpRequest request = HttpRequestAccess::make();
+    HttpRequestAccess::reset(request);
+    RUVIA_CHECK(HttpRequestAccess::addHeader(request, HttpHeaderView{"X-Empty", ""}));
+
+    RequestMemory requestMemory(worker);
+    HttpRequestAccess::setResource(request, requestMemory.resource());
+    auto context = ContextAccess::make(requestMemory, request);
+
+    const auto presentEmpty = context.req().header("x-EMPTY");
+    RUVIA_CHECK(presentEmpty.has_value());
+    RUVIA_CHECK(presentEmpty.value_or("missing").empty());
+    RUVIA_CHECK(!context.req().header("X-Missing").has_value());
+}
+
+RUVIA_TEST(context_request_preserves_exact_extension_method_token) {
     WorkerMemory worker;
     HttpRequest request = HttpRequestAccess::make();
     HttpRequestAccess::reset(request);
@@ -302,15 +425,15 @@ RUVIA_TEST(raw_request_clone_owns_exact_extension_method_token) {
     auto context = ContextAccess::make(requestMemory, request);
 
     asio::io_context io;
-    CloneMethodObservation observation;
-    asio::co_spawn(io, cloneMethod(context, observation), asio::detached);
+    MethodObservation observation;
+    asio::co_spawn(io, readMethod(context, observation), asio::detached);
     io.run();
 
     RUVIA_CHECK_EQ(observation.method, std::string("PROPFIND"));
     RUVIA_CHECK(observation.knownMethod == HttpKnownMethod::kUnknown);
 }
 
-RUVIA_TEST(context_clone_parse_body_drops_prototype_pollution_keys) {
+RUVIA_TEST(context_parse_body_drops_prototype_pollution_keys) {
     WorkerMemory worker;
     HttpRequest request = HttpRequestAccess::make();
     HttpRequestAccess::reset(request);
@@ -330,7 +453,7 @@ RUVIA_TEST(context_clone_parse_body_drops_prototype_pollution_keys) {
     asio::io_context io;
     bool safeOk = false;
     bool protoDropped = false;
-    asio::co_spawn(io, cloneParseProtoBody(context, safeOk, protoDropped), asio::detached);
+    asio::co_spawn(io, parseProtoBody(context, safeOk, protoDropped), asio::detached);
     io.run();
 
     RUVIA_CHECK(safeOk);
@@ -358,7 +481,7 @@ RUVIA_TEST(context_parse_body_groups_arrays_and_compacts_repeated_scalars) {
     bool tagsArray = false;
     std::size_t xSize = 0;
     std::string xValue;
-    asio::co_spawn(io, cloneParseArrayForm(context, tagsSize, tagsArray, xSize, xValue), asio::detached);
+    asio::co_spawn(io, parseArrayForm(context, tagsSize, tagsArray, xSize, xValue), asio::detached);
     io.run();
 
     RUVIA_CHECK_EQ(tagsSize, std::size_t{2});   // both array elements kept
@@ -386,7 +509,7 @@ RUVIA_TEST(context_parse_body_all_retains_duplicates_and_selects_last_value) {
     asio::io_context io;
     asio::co_spawn(
         io,
-        cloneParseAllRepeatedScalar(context, valueCount, selectedValue),
+        parseAllRepeatedScalar(context, valueCount, selectedValue),
         asio::detached);
     io.run();
 
@@ -423,7 +546,7 @@ RUVIA_TEST(context_parse_body_multipart_yields_text_field_and_file_blob) {
     // content type, and bytes are all preserved through the RequestBlob.
     asio::io_context io;
     std::string nameValue, fileName, fileType, fileData;
-    asio::co_spawn(io, cloneParseMultipart(context, nameValue, fileName, fileType, fileData), asio::detached);
+    asio::co_spawn(io, parseMultipart(context, nameValue, fileName, fileType, fileData), asio::detached);
     io.run();
 
     RUVIA_CHECK_EQ(nameValue, std::string("value"));
@@ -449,7 +572,7 @@ RUVIA_TEST(context_parse_body_rejects_malformed_urlencoded) {
     // A malformed body must surface as an exception (the handler maps it to a 400)
     // rather than a silently-empty form or a crash.
     asio::io_context io;
-    auto future = asio::co_spawn(io, cloneParseBodyDiscard(context), asio::use_future);
+    auto future = asio::co_spawn(io, parseBodyDiscard(context), asio::use_future);
     io.run();
     bool threw = false;
     try {
@@ -480,7 +603,7 @@ RUVIA_TEST(context_parse_body_maps_multipart_failure_to_http_protocol_error) {
 
     asio::io_context io;
     auto future = asio::co_spawn(
-        io, cloneParseBodyDiscard(context), asio::use_future);
+        io, parseBodyDiscard(context), asio::use_future);
     io.run();
     bool mapped = false;
     try {
@@ -517,7 +640,7 @@ RUVIA_TEST(context_parse_body_skips_empty_urlencoded_segments) {
     bool bPresent = false;
     asio::io_context io;
     auto future = asio::co_spawn(
-        io, cloneParseScalarPair(context, aValue, aPresent, bValue, bPresent), asio::use_future);
+        io, parseScalarPair(context, aValue, aPresent, bValue, bPresent), asio::use_future);
     io.run();
     future.get();
     RUVIA_CHECK(aPresent);
@@ -526,7 +649,7 @@ RUVIA_TEST(context_parse_body_skips_empty_urlencoded_segments) {
     RUVIA_CHECK_EQ(bValue, std::string("2"));
 }
 
-RUVIA_TEST(context_generate_cookie_serializes_all_attributes) {
+RUVIA_TEST(context_set_cookie_serializes_all_attributes) {
     WorkerMemory worker;
     HttpRequest request = HttpRequestAccess::make();
     HttpRequestAccess::reset(request);
@@ -550,9 +673,10 @@ RUVIA_TEST(context_generate_cookie_serializes_all_attributes) {
     host.maxAge = std::chrono::seconds(3600);
     host.priority = ruvia::CookiePriority::kHigh;
     host.partitioned = true;
-    const auto hostCookie = context.generateCookie("id", "abc", host);
+    context.setCookie("id", "abc", host);
+    const auto hostResponse = context.text("ok");
     RUVIA_CHECK_EQ(
-        std::string_view(hostCookie.data(), hostCookie.size()),
+        hostResponse.header("Set-Cookie"),
         std::string_view("__Host-id=abc; Path=/; Max-Age=3600; HttpOnly; Secure; "
                          "SameSite=Strict; Priority=High; Partitioned"));
 
@@ -567,9 +691,15 @@ RUVIA_TEST(context_generate_cookie_serializes_all_attributes) {
     secure.domain = "example.com";
     secure.sameSite = ruvia::CookieSameSite::kNone;
     secure.expires = std::chrono::system_clock::time_point(std::chrono::seconds(1234567890));
-    const auto secureCookie = context.generateCookie("sess", "xyz", secure);
+    HttpRequest secureRequest = HttpRequestAccess::make();
+    HttpRequestAccess::reset(secureRequest);
+    RequestMemory secureMemory(worker);
+    HttpRequestAccess::setResource(secureRequest, secureMemory.resource());
+    auto secureContext = ContextAccess::make(secureMemory, secureRequest);
+    secureContext.setCookie("sess", "xyz", secure);
+    const auto secureResponse = secureContext.text("ok");
     RUVIA_CHECK_EQ(
-        std::string_view(secureCookie.data(), secureCookie.size()),
+        secureResponse.header("Set-Cookie"),
         std::string_view("__Secure-sess=xyz; Path=/app; Domain=example.com; "
                          "Expires=Fri, 13 Feb 2009 23:31:30 GMT; Secure; SameSite=None"));
 }
@@ -590,9 +720,11 @@ RUVIA_TEST(context_signed_cookie_with_prefix_verifies_round_trip) {
     options.prefix = ruvia::CookiePrefix::kHost;
     options.secure = true;
     options.path = "/";
-    const auto setCookie = writeContext.generateSignedCookie(
-        "session", "user-1", "secret", options);
-    const std::string_view line(setCookie.data(), setCookie.size());
+    writeContext.setSignedCookie("session", "user-1", "secret", options);
+    const auto writeResponse = writeContext.text("ok");
+    const std::string setCookie(
+        writeResponse.header("Set-Cookie").value_or(std::string_view{}));
+    const std::string_view line(setCookie);
     const auto pair = line.substr(0, line.find(';'));
     RUVIA_CHECK(pair.starts_with("__Host-session="));
 
@@ -613,9 +745,16 @@ RUVIA_TEST(context_signed_cookie_with_prefix_verifies_round_trip) {
     RUVIA_CHECK_EQ(*verified, std::string_view("user-1"));
 
     // An unprefixed signed cookie keeps verifying under its own name.
-    const auto bare = writeContext.generateSignedCookie(
-        "plain", "user-2", "secret", ruvia::CookieOptions{});
-    const std::string_view bareLine(bare.data(), bare.size());
+    HttpRequest bareWriteRequest = HttpRequestAccess::make();
+    HttpRequestAccess::reset(bareWriteRequest);
+    RequestMemory bareWriteMemory(worker);
+    HttpRequestAccess::setResource(bareWriteRequest, bareWriteMemory.resource());
+    auto bareWriteContext = ContextAccess::make(bareWriteMemory, bareWriteRequest);
+    bareWriteContext.setSignedCookie("plain", "user-2", "secret");
+    const auto bareWriteResponse = bareWriteContext.text("ok");
+    const std::string bare(
+        bareWriteResponse.header("Set-Cookie").value_or(std::string_view{}));
+    const std::string_view bareLine(bare);
     const std::string bareField(bareLine.substr(0, bareLine.find(';')));
     HttpRequest bareRequest = HttpRequestAccess::make();
     HttpRequestAccess::reset(bareRequest);
@@ -631,10 +770,9 @@ RUVIA_TEST(context_signed_cookie_with_prefix_verifies_round_trip) {
     RUVIA_CHECK_EQ(*bareVerified, std::string_view("user-2"));
 }
 
-// deleteCookie reports the value being deleted. A prefixed cookie lives in the
-// request under its wire name, so the lookup has to use it -- the bare-name
-// lookup always came back empty for prefixed cookies.
-RUVIA_TEST(context_delete_cookie_with_prefix_returns_previous_value) {
+// Request observation stays on req(); deleteCookie only queues the response
+// mutation, including the configured wire-name prefix.
+RUVIA_TEST(context_delete_cookie_with_prefix_is_response_only) {
     WorkerMemory worker;
     HttpRequest request = HttpRequestAccess::make();
     HttpRequestAccess::reset(request);
@@ -650,7 +788,14 @@ RUVIA_TEST(context_delete_cookie_with_prefix_returns_previous_value) {
     options.prefix = ruvia::CookiePrefix::kHost;
     options.secure = true;
     options.path = "/";
-    const auto previous = context.deleteCookie("session", options);
+    const auto previous = context.req().cookie("__Host-session");
     RUVIA_CHECK(previous.has_value());
     RUVIA_CHECK_EQ(*previous, std::string_view("user-1"));
+    context.deleteCookie("session", options);
+    const auto response = context.text("deleted");
+    const auto setCookie = response.header("Set-Cookie");
+    RUVIA_CHECK(setCookie.has_value());
+    RUVIA_CHECK(setCookie.value_or(std::string_view{}).starts_with("__Host-session=;"));
+    RUVIA_CHECK(
+        setCookie.value_or(std::string_view{}).find("Max-Age=0") != std::string_view::npos);
 }

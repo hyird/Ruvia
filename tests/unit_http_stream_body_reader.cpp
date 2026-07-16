@@ -101,6 +101,34 @@ std::string chunked(std::string_view input) {
     return wire;
 }
 
+std::string chunkedParts(
+    std::string_view first,
+    std::string_view second) {
+    const auto appendWireChunk = [](std::string& wire, std::string_view input) {
+        std::array<char, 2 * sizeof(std::size_t)> sizeBytes{};
+        const auto [end, ec] = std::to_chars(
+            sizeBytes.data(),
+            sizeBytes.data() + sizeBytes.size(),
+            input.size(),
+            16);
+        if (ec != std::errc{}) {
+            return false;
+        }
+        wire.append(sizeBytes.data(), end);
+        wire.append("\r\n");
+        wire.append(input);
+        wire.append("\r\n");
+        return true;
+    };
+
+    std::string wire;
+    if (!appendWireChunk(wire, first) || !appendWireChunk(wire, second)) {
+        return {};
+    }
+    wire.append("0\r\n\r\n");
+    return wire;
+}
+
 struct TransferBodyObservation final {
     std::string body;
     std::string pipeline;
@@ -153,9 +181,8 @@ TransferBodyObservation readTransferBody(
 
     observation.consumption = reader.consumption();
     std::pmr::string pipeline(&resource);
-    std::size_t usedBytes = 0;
-    reader.restorePipeline(pipeline, usedBytes);
-    observation.pipeline.assign(pipeline.data(), usedBytes);
+    reader.takePipeline(pipeline);
+    observation.pipeline.assign(pipeline.data(), pipeline.size());
     return observation;
 }
 
@@ -180,12 +207,10 @@ RUVIA_TEST(http1_without_body_plan_preserves_the_entire_pipeline) {
         reader.consumption() ==
         ruvia::detail::Http1RequestBodyConsumption::kComplete);
 
-    std::pmr::string restored(&resource);
-    std::size_t usedBytes = 0;
-    reader.restorePipeline(restored, usedBytes);
-    RUVIA_CHECK_EQ(usedBytes, restored.size());
+    std::pmr::string taken(&resource);
+    reader.takePipeline(taken);
     RUVIA_CHECK_EQ(
-        std::string_view(restored.data(), restored.size()),
+        std::string_view(taken.data(), taken.size()),
         std::string_view("GET /next HTTP/1.1\r\nHost: x\r\n\r\n"));
 }
 
@@ -201,6 +226,26 @@ RUVIA_TEST(http1_transfer_coding_uses_one_decoder_for_streaming_and_buffered_rea
         const auto observation = readTransferBody(initial, streaming);
         RUVIA_CHECK_EQ(observation.errorStatus, std::uint16_t{0});
         RUVIA_CHECK_EQ(observation.body, std::string(plain));
+        RUVIA_CHECK_EQ(observation.pipeline, std::string(pipeline));
+        RUVIA_CHECK(observation.consumption ==
+            ruvia::detail::Http1RequestBodyConsumption::kComplete);
+    }
+}
+
+RUVIA_TEST(http1_transfer_coding_preserves_gzip_members_across_chunks) {
+    constexpr std::string_view pipeline =
+        "GET /next HTTP/1.1\r\nHost: x\r\n\r\n";
+    const auto first = gzipCompress("first-");
+    const auto second = gzipCompress("second");
+    const auto initial =
+        chunkedParts(first, second) + std::string(pipeline);
+    RUVIA_CHECK(!first.empty());
+    RUVIA_CHECK(!second.empty());
+
+    for (const bool streaming : {false, true}) {
+        const auto observation = readTransferBody(initial, streaming);
+        RUVIA_CHECK_EQ(observation.errorStatus, std::uint16_t{0});
+        RUVIA_CHECK_EQ(observation.body, std::string("first-second"));
         RUVIA_CHECK_EQ(observation.pipeline, std::string(pipeline));
         RUVIA_CHECK(observation.consumption ==
             ruvia::detail::Http1RequestBodyConsumption::kComplete);

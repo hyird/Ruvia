@@ -5,6 +5,8 @@
 #include <optional>
 #include <string_view>
 
+#include "ruvia/http/HttpStatus.h"
+#include "ruvia/http/detail/HttpInterimResponseValidation.h"
 #include "ruvia/http/detail/HttpResponseContentSemantics.h"
 #include "ruvia/http/detail/http2/Http2FramePayload.h"
 #include "ruvia/http/detail/http2/Http2HeaderBlock.h"
@@ -35,7 +37,18 @@ HeaderDecodeStatus Http2Connection::decodeHeaderBlock(Http2StreamState& stream) 
             !stream.hasScheme() ||
             !stream.hasPath() ||
             !stream.hasAuthority() ||
+            !http2IsValidRequestAuthority(
+                stream.requestScheme(), stream.requestAuthority()) ||
+            !http2IsValidExtendedConnectPath(
+                stream.requestScheme(), stream.requestPath()) ||
             stream.remoteContent().allowedKnownLength() != nullptr) {
+            return HeaderDecodeStatus::kProtocolError;
+        }
+        // RFC 8441 defines WebSocket extended CONNECT only for HTTP(S) URI
+        // schemes. Other extended protocols retain the full RFC 3986 space.
+        if (stream.protocolIsWebSocket() &&
+            !httpAsciiEqualsIgnoreCase(stream.requestScheme(), "http") &&
+            !httpAsciiEqualsIgnoreCase(stream.requestScheme(), "https")) {
             return HeaderDecodeStatus::kProtocolError;
         }
         if (!stream.beginExtendedConnect()) {
@@ -54,7 +67,16 @@ HeaderDecodeStatus Http2Connection::decodeHeaderBlock(Http2StreamState& stream) 
         if (!stream.beginStandardConnect()) {
             return HeaderDecodeStatus::kProtocolError;
         }
-    } else if (!stream.hasScheme() || !stream.hasPath()) {
+    } else if (!stream.hasScheme() || !stream.hasPath() ||
+        (stream.hasAuthority() && !http2IsValidRequestAuthority(
+            stream.requestScheme(), stream.requestAuthority())) ||
+        !http2IsValidRegularRequestPath(
+            stream.requestKnownMethod(),
+            stream.requestScheme(),
+            stream.requestPath()) ||
+        (stream.requestPath() == "*" && stream.hasAuthority()) ||
+        (!stream.hasAuthority() && http2RegularRequestRequiresAuthority(
+            stream.requestScheme(), stream.requestPath()))) {
         return HeaderDecodeStatus::kProtocolError;
     }
     const bool remoteHeadFinalized = stream.tunnel().pending() != nullptr
@@ -77,6 +99,7 @@ constexpr std::uint8_t kMaxHttp2InterimResponses = 8;
 
 struct Http2ResponseDecodeContext final {
     Http2HeaderDecodeContext base;
+    HttpInterimResponseHeaderValidator interimHeaders;
     std::optional<std::uint16_t> status;
     bool sawRegular{false};
 };
@@ -99,25 +122,33 @@ bool http2OnDecodedResponseHeader(void* target, std::string_view name, std::stri
         int parsedStatus = 0;
         const auto [ptr, ec] = std::from_chars(
             value.data(), value.data() + value.size(), parsedStatus);
-        if (value.size() != 3 || ec != std::errc{} || ptr != value.data() + value.size() ||
-            parsedStatus < 100 || parsedStatus > 999 || parsedStatus == 101) {
+        if (value.size() != 3 || ec != std::errc{} ||
+            ptr != value.data() + value.size()) {
             return false;
         }
-        context->status = static_cast<std::uint16_t>(parsedStatus);
+        const auto status = static_cast<std::uint16_t>(parsedStatus);
+        if (!httpStatusCodeValid(status) || status == 101) {
+            return false;
+        }
+        context->status = status;
         return true;
     }
-    if (!context->status || !http2IsValidRegularHeader(name, value)) {
+    if (!context->status || !http2IsValidDecodedResponseHeader(name, value)) {
         return false;
     }
     context->sawRegular = true;
     if (*context->status < 200) {
-        return true;  // interim head: validate only, never stored
+        // Interim fields are validated but not stored. The shared incremental
+        // validator keeps receive acceptance identical to both response writers.
+        return context->interimHeaders.validate(name, value) ==
+            HttpInterimResponseHeaderValidationStatus::kOk;
     }
     const auto kind = classifyRequestHeader(name);
+    const auto responseContentSemantics = httpResponseContentSemantics(
+        stream.requestKnownMethod(), *context->status);
     const bool successfulConnect =
-        httpResponseContentSemantics(
-            stream.requestKnownMethod(), *context->status)
-            .connectTunnel() != nullptr;
+        responseContentSemantics ==
+        HttpResponseContentSemantics::kConnectTunnel;
     if (kind == RequestHeaderKind::kContentLength && successfulConnect) {
         // RFC 9110 9.3.6: a client ignores Content-Length on a successful CONNECT
         // response. It describes neither HTTP content nor the following tunnel DATA.
@@ -145,7 +176,7 @@ bool http2OnDecodedResponseHeader(void* target, std::string_view name, std::stri
 
 HeaderDecodeStatus Http2Connection::decodeResponseHeaderBlock(Http2StreamState& stream) {
     Http2ResponseDecodeContext context{
-        Http2HeaderDecodeContext{stream}, std::nullopt, false};
+        Http2HeaderDecodeContext{stream}, {}, std::nullopt, false};
     const auto result = decoder_.decode(
         stream.requestHeaderBlock(), &context,
         [](void* target, std::string_view name, std::string_view value) {
@@ -175,12 +206,13 @@ HeaderDecodeStatus Http2Connection::decodeResponseHeaderBlock(Http2StreamState& 
     }
     const auto contentSemantics = httpResponseContentSemantics(
         stream.requestKnownMethod(), *context.status);
-    if (contentSemantics.withoutContent() != nullptr &&
+    if (contentSemantics == HttpResponseContentSemantics::kWithoutContent &&
         !stream.selectRemoteContentMetadataOnly()) {
         return HeaderDecodeStatus::kProtocolError;
     }
     if (stream.tunnel().pending() != nullptr) {
-        if (contentSemantics.connectTunnel() != nullptr) {
+        if (contentSemantics ==
+            HttpResponseContentSemantics::kConnectTunnel) {
             if (!stream.acceptConnect()) {
                 return HeaderDecodeStatus::kProtocolError;
             }
@@ -383,9 +415,20 @@ bool Http2Connection::processHeaders(const Http2FrameHeader& header, std::string
     }
 
     std::string_view fragment;
-    if (!http2DecodeHeadersPayload(header, payload, fragment)) {
-        appendGoaway(Http2ErrorCode::kProtocolError, "invalid HEADERS priority");
-        return false;
+    switch (http2DecodeHeadersPayload(header, payload, fragment)) {
+        case Http2FramePayloadStatus::kDecoded:
+            break;
+        case Http2FramePayloadStatus::kInvalidPadding:
+            appendGoaway(Http2ErrorCode::kProtocolError, "invalid HEADERS padding");
+            return false;
+        case Http2FramePayloadStatus::kMissingPriorityFields:
+            // HEADERS carries a field block and can alter HPACK state, so a payload
+            // too short for its mandatory fields is a connection FRAME_SIZE_ERROR
+            // (RFC 9113 §4.2), unlike the stream-scoped standalone PRIORITY frame.
+            appendGoaway(
+                Http2ErrorCode::kFrameSizeError,
+                "HEADERS priority fields are incomplete");
+            return false;
     }
 
     Http2StreamState* stream = nullptr;
@@ -401,6 +444,11 @@ bool Http2Connection::processHeaders(const Http2FrameHeader& header, std::string
             }
             // After WE sent RST_STREAM, any peer frames already in flight must be
             // minimally processed and discarded. Do not send a second RST.
+            discardedAction = DiscardedHeaderAction::kIgnore;
+        } else if (http2StreamIsClosed(*existing)) {
+            // A pin can retain normally completed request storage after both
+            // protocol halves have closed. Decode for HPACK synchronization,
+            // but never make storage retention authorize another stream frame.
             discardedAction = DiscardedHeaderAction::kIgnore;
         } else if (http2RemoteFinalHeadDecoded(*existing) &&
                    (existing->tunnel().open() != nullptr ||
@@ -459,7 +507,10 @@ bool Http2Connection::processHeaders(const Http2FrameHeader& header, std::string
             // Record every genuinely new peer stream ID, even when it is malformed or
             // refused, so a later lower ID cannot be reopened as idle.
             lastStreamId_ = header.streamId;
-            const bool drainRefused = draining_ && header.streamId > goawayLastStreamId_;
+            const auto* gracefulDrain =
+                localConnectionState_.gracefulDrain();
+            const bool drainRefused = gracefulDrain != nullptr &&
+                header.streamId > gracefulDrain->lastStreamId();
             stream = drainRefused ? nullptr : createStream(header.streamId);
             if (stream == nullptr) {
                 discardedAction = DiscardedHeaderAction::kRefuseStream;

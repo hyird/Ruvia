@@ -46,6 +46,7 @@ enum class WsFrameSubmitStatus : std::uint8_t {
     kNotOpen,
     kInvalidOpcode,
     kMessageTooLarge,
+    kInvalidTextPayload,
     kControlFrameTooLarge,
 };
 
@@ -61,6 +62,12 @@ enum class WsCloseSubmitStatus : std::uint8_t {
 enum class WsAbortDisposition : std::uint8_t {
     kAbortTransport,
     kNoTransportAction,
+};
+
+enum class WsOutputConsumeStatus : std::uint8_t {
+    kPending,
+    kDrained,
+    kOutOfRange,
 };
 
 class WsOutputPlan final {
@@ -100,14 +107,15 @@ public:
     [[nodiscard]] std::optional<WsEvent> poll();
 
     [[nodiscard]] WsOutputPlan outputPlan() const noexcept;
-    void consumeOutput(std::size_t n) noexcept;
+    [[nodiscard]] WsOutputConsumeStatus consumeOutput(std::size_t n) noexcept;
     void commitTransportEnd() noexcept;
     void notifyTransportEof() noexcept;
     [[nodiscard]] WsAbortDisposition abort() noexcept;
     [[nodiscard]] WsLivenessMode livenessMode() const noexcept;
 
-    // Submit one already-formed logical frame payload. Server masking, optional
-    // data-message compression and wire header encoding stay inside the core.
+    // Submit one complete logical message/control payload. Server masking,
+    // outbound text UTF-8 validation, optional data-message compression and
+    // wire header encoding stay inside the core.
     // Close has a separate typed entry because it owns code/reason validation
     // and close-handshake state rather than accepting a pre-encoded payload.
     [[nodiscard]] WsFrameSubmitStatus submitFrame(

@@ -33,7 +33,7 @@ private:
 
 class HttpClientResponseHeaderFound final {
 public:
-    // Borrowed from the owning HttpClientResponse passed to the lookup.
+    // Borrowed from the owning HttpClientResponseHead passed to the lookup.
     [[nodiscard]] constexpr std::string_view value() const noexcept {
         return value_;
     }
@@ -60,24 +60,27 @@ private:
 class HttpClientResponseHeaderLookupResult final {
 public:
     [[nodiscard]] constexpr const HttpClientResponseHeaderAbsent*
-    absent() const noexcept {
+    absent() const & noexcept {
         return std::get_if<HttpClientResponseHeaderAbsent>(&value_);
     }
+    const HttpClientResponseHeaderAbsent* absent() const && = delete;
 
     [[nodiscard]] constexpr const HttpClientResponseHeaderFound*
-    found() const noexcept {
+    found() const & noexcept {
         return std::get_if<HttpClientResponseHeaderFound>(&value_);
     }
+    const HttpClientResponseHeaderFound* found() const && = delete;
 
     [[nodiscard]] constexpr const HttpClientResponseHeaderRepeated*
-    repeated() const noexcept {
+    repeated() const & noexcept {
         return std::get_if<HttpClientResponseHeaderRepeated>(&value_);
     }
+    const HttpClientResponseHeaderRepeated* repeated() const && = delete;
 
 private:
     friend HttpClientResponseHeaderLookupResult
     lookupUniqueHttpClientResponseHeader(
-        const HttpClientResponse&,
+        const HttpClientResponseHead&,
         std::string_view) noexcept;
 
     using Value = std::variant<
@@ -113,8 +116,12 @@ private:
 
 [[nodiscard]] HttpClientResponseHeaderLookupResult
 lookupUniqueHttpClientResponseHeader(
-    const HttpClientResponse& response,
+    const HttpClientResponseHead& head,
     std::string_view name) noexcept;
+[[nodiscard]] HttpClientResponseHeaderLookupResult
+lookupUniqueHttpClientResponseHeader(
+    const HttpClientResponseHead&& head,
+    std::string_view name) = delete;
 
 enum class HttpClientRedirectContentDisposition : std::uint8_t {
     kPreserve,
@@ -178,11 +185,12 @@ public:
     HttpClientRedirectTarget(const HttpClientRedirectTarget&) = delete;
     HttpClientRedirectTarget& operator=(const HttpClientRedirectTarget&) = delete;
     HttpClientRedirectTarget(HttpClientRedirectTarget&&) noexcept = default;
-    HttpClientRedirectTarget& operator=(HttpClientRedirectTarget&&) noexcept = default;
+    HttpClientRedirectTarget& operator=(HttpClientRedirectTarget&&) = delete;
 
-    [[nodiscard]] std::string_view value() const noexcept {
+    [[nodiscard]] std::string_view value() const & noexcept {
         return std::string_view(value_.data(), value_.size());
     }
+    [[nodiscard]] std::string_view value() const && = delete;
 
 private:
     friend class HttpClientRedirectTargetResult;
@@ -219,16 +227,18 @@ public:
         const HttpClientRedirectTargetResult&) = delete;
     HttpClientRedirectTargetResult(HttpClientRedirectTargetResult&&) noexcept = default;
     HttpClientRedirectTargetResult& operator=(
-        HttpClientRedirectTargetResult&&) noexcept = default;
+        HttpClientRedirectTargetResult&&) = delete;
 
-    [[nodiscard]] const HttpClientRedirectTarget* target() const noexcept {
+    [[nodiscard]] const HttpClientRedirectTarget* target() const & noexcept {
         return std::get_if<HttpClientRedirectTarget>(&value_);
     }
+    const HttpClientRedirectTarget* target() const && = delete;
 
     [[nodiscard]] constexpr const HttpClientRedirectTargetFailure*
-    failure() const noexcept {
+    failure() const & noexcept {
         return std::get_if<HttpClientRedirectTargetFailure>(&value_);
     }
+    const HttpClientRedirectTargetFailure* failure() const && = delete;
 
 private:
     friend HttpClientRedirectTargetResult

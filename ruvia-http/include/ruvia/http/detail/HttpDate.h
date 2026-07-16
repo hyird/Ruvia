@@ -37,6 +37,31 @@ namespace ruvia::detail {
     return 0;
 }
 
+[[nodiscard]] inline bool httpIsShortWeekday(
+    std::string_view value) noexcept {
+    constexpr std::array<std::string_view, 7> weekdays{
+        "Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"};
+    for (const auto weekday : weekdays) {
+        if (value == weekday) {
+            return true;
+        }
+    }
+    return false;
+}
+
+[[nodiscard]] inline bool httpIsLongWeekday(
+    std::string_view value) noexcept {
+    constexpr std::array<std::string_view, 7> weekdays{
+        "Monday", "Tuesday", "Wednesday", "Thursday",
+        "Friday", "Saturday", "Sunday"};
+    for (const auto weekday : weekdays) {
+        if (value == weekday) {
+            return true;
+        }
+    }
+    return false;
+}
+
 [[nodiscard]] inline std::optional<int> httpParseFixedDigits(std::string_view value) noexcept {
     if (value.empty()) {
         return std::nullopt;
@@ -70,8 +95,17 @@ namespace ruvia::detail {
     int hour,
     int minute,
     int second) noexcept {
-    if (month < 1 || month > 12 || day < 1 || day > 31 ||
+    if (month < 1 || month > 12 || day < 1 ||
         hour < 0 || hour > 23 || minute < 0 || minute > 59 || second < 0 || second > 60) {
+        return std::nullopt;
+    }
+    constexpr std::array<int, 12> daysPerMonth{
+        31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31};
+    const bool leapYear =
+        year % 4 == 0 && (year % 100 != 0 || year % 400 == 0);
+    const auto maxDay = daysPerMonth[static_cast<std::size_t>(month - 1)] +
+        (month == 2 && leapYear ? 1 : 0);
+    if (day > maxDay) {
         return std::nullopt;
     }
     const auto days = httpDaysFromCivil(year, static_cast<unsigned>(month), static_cast<unsigned>(day));
@@ -95,6 +129,7 @@ namespace ruvia::detail {
 [[nodiscard]] inline std::optional<std::time_t> httpParseImfFixdate(
     std::string_view value) noexcept {
     if (value.size() != 29 ||
+        !httpIsShortWeekday(value.substr(0, 3)) ||
         value[3] != ',' || value[4] != ' ' || value[7] != ' ' || value[11] != ' ' ||
         value[16] != ' ' || value[19] != ':' || value[22] != ':' || value[25] != ' ' ||
         value.substr(26, 3) != "GMT") {
@@ -115,7 +150,8 @@ namespace ruvia::detail {
 [[nodiscard]] inline std::optional<std::time_t> httpParseAsctimeDate(
     std::string_view value) noexcept {
     if (value.size() != 24 || value[3] != ' ' || value[7] != ' ' || value[10] != ' ' ||
-        value[13] != ':' || value[16] != ':' || value[19] != ' ') {
+        value[13] != ':' || value[16] != ':' || value[19] != ' ' ||
+        !httpIsShortWeekday(value.substr(0, 3))) {
         return std::nullopt;
     }
     const auto month = httpMonthIndex(value.substr(4, 3));
@@ -134,10 +170,26 @@ namespace ruvia::detail {
     return httpCivilToTimeT(*year, month, *day, *hour, *minute, *second);
 }
 
+[[nodiscard]] inline int httpResolveRfc850Year(
+    int shortYear,
+    int currentYear) noexcept {
+    const auto currentCentury = currentYear - currentYear % 100;
+    auto year = currentCentury + shortYear;
+    // RFC 9110 section 5.6.7: an obsolete two-digit date that appears more
+    // than 50 years in the future denotes the most recent past year with the
+    // same final two digits. This is a rolling pivot, not the fixed POSIX
+    // 68/69 split.
+    if (year > currentYear + 50) {
+        year -= 100;
+    }
+    return year;
+}
+
 [[nodiscard]] inline std::optional<std::time_t> httpParseRfc850Date(
     std::string_view value) noexcept {
     const auto comma = value.find(", ");
-    if (comma == std::string_view::npos || comma == 0) {
+    if (comma == std::string_view::npos ||
+        !httpIsLongWeekday(value.substr(0, comma))) {
         return std::nullopt;
     }
     const auto body = value.substr(comma + 2);
@@ -154,7 +206,9 @@ namespace ruvia::detail {
     if (!day || month == 0 || !shortYear || !hour || !minute || !second) {
         return std::nullopt;
     }
-    const int year = *shortYear <= 68 ? 2000 + *shortYear : 1900 + *shortYear;
+    const auto currentUtc = httpUtcTm(std::time(nullptr));
+    const int currentYear = currentUtc.tm_year + 1900;
+    const int year = httpResolveRfc850Year(*shortYear, currentYear);
     return httpCivilToTimeT(year, month, *day, *hour, *minute, *second);
 }
 

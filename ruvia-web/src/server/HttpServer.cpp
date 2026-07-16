@@ -8,7 +8,9 @@
 
 #include "ruvia/core/detail/ConnectionScanner.h"
 #include "ruvia/http/detail/HttpRequestInternal.h"
+#include "ruvia/web/detail/http/HttpProtocolErrorInfo.h"
 #include "ruvia/web/detail/server/Http1SessionRequestCompletion.h"
+#include "ruvia/web/detail/server/Http1ClosingRejection.h"
 #include "ruvia/web/detail/server/HttpBufferedResponse.h"
 #include "ruvia/web/detail/server/HttpConnectionState.h"
 #include "ruvia/web/detail/server/HttpResponseWriter.h"

@@ -53,9 +53,7 @@ inline constexpr std::size_t kRequestHeaderKindCount =
         case RequestHeaderKind::kAccessControlRequestMethod:
         case RequestHeaderKind::kAuthorization:
         case RequestHeaderKind::kContentType:
-        case RequestHeaderKind::kIfMatch:
         case RequestHeaderKind::kIfModifiedSince:
-        case RequestHeaderKind::kIfNoneMatch:
         case RequestHeaderKind::kIfRange:
         case RequestHeaderKind::kIfUnmodifiedSince:
         case RequestHeaderKind::kOrigin:
@@ -71,6 +69,8 @@ inline constexpr std::size_t kRequestHeaderKindCount =
         case RequestHeaderKind::kCookie:
         case RequestHeaderKind::kExpect:
         case RequestHeaderKind::kHost:
+        case RequestHeaderKind::kIfMatch:
+        case RequestHeaderKind::kIfNoneMatch:
         case RequestHeaderKind::kSecWebSocketKey:
         case RequestHeaderKind::kSecWebSocketProtocol:
         case RequestHeaderKind::kSecWebSocketVersion:

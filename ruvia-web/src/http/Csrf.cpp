@@ -11,20 +11,20 @@
 
 namespace ruvia::detail {
 
-std::string_view generateCsrfToken(std::span<char> buffer) noexcept {
+SecureTokenResult generateSecureToken(std::span<char> buffer) noexcept {
     constexpr std::size_t kRandomBytes = 24;  // 24 bytes -> 48 hex characters
     if (buffer.size() < kRandomBytes * 2) {
-        return {};
+        return SecureTokenResult::makeFailure();
     }
     unsigned char raw[kRandomBytes];
     if (RAND_bytes(raw, static_cast<int>(kRandomBytes)) != 1) {
-        return {};
+        return SecureTokenResult::makeFailure();
     }
     for (std::size_t i = 0; i < kRandomBytes; ++i) {
         buffer[i * 2] = lowerHexDigit(raw[i] >> 4);
         buffer[i * 2 + 1] = lowerHexDigit(raw[i]);
     }
-    return std::string_view(buffer.data(), kRandomBytes * 2);
+    return SecureTokenResult::makeReady(std::string_view(buffer.data(), kRandomBytes * 2));
 }
 
 }  // namespace ruvia::detail
@@ -53,13 +53,18 @@ Task<void> CsrfProtection::handle(Context& c, Next& next) {
         // absent and empty identically here keeps the issue and validation sides
         // of the double-submit symmetric.
         std::array<char, 64> buffer;
-        const auto token = detail::generateCsrfToken(buffer);
+        const auto tokenResult = detail::generateSecureToken(buffer);
+        const auto* token = tokenResult.ready();
+        if (token == nullptr) {
+            c.respond(c.error(500, "secure_random_failed", "secure token generation failed"));
+            co_return;
+        }
         CookieOptions options;
         options.path = "/";
         options.sameSite = CookieSameSite::kLax;
         const auto connection = getConnInfo(c);
         options.secure = connection.tls() != nullptr;
-        c.setCookie("XSRF-TOKEN", token, options);
+        c.setCookie("XSRF-TOKEN", token->value(), options);
     }
     co_await next();
 }

@@ -4,6 +4,7 @@
 #include "ruvia/web/detail/redis/RedisUtils.h"
 
 #include <stdexcept>
+#include <utility>
 
 namespace ruvia {
 
@@ -19,10 +20,50 @@ RedisPipeline& appendCommandArgs(RedisPipeline& pipeline, Args&&... args) {
 
 RedisPipeline::RedisPipeline(
     detail::RedisPool& pool,
-    std::pmr::memory_resource* resource) noexcept
-    : pool_(&pool),
-      resource_(detail::pmrResourceOrDefault(resource)),
-      commands_(resource_) {}
+    std::pmr::memory_resource* resource,
+    detail::ScopedOperationScope& operationScope) noexcept
+    : detail::ScopedCapabilityNode(operationScope, &RedisPipeline::expireCapability),
+      state_(std::in_place_type<Ready>, pool),
+      commands_(detail::pmrResourceOrDefault(resource)) {}
+
+RedisPipeline::RedisPipeline(RedisPipeline&& other) noexcept
+    : detail::ScopedCapabilityNode(std::move(other)),
+      state_(std::move(other.state_)),
+      commands_(std::move(other.commands_)) {
+    other.state_.template emplace<Consumed>();
+}
+
+void RedisPipeline::requireActive() const {
+    detail::ScopedCapabilityNode::requireActive();
+    if (!std::holds_alternative<Ready>(state_)) {
+        throw std::logic_error("redis pipeline has already been consumed");
+    }
+}
+
+void RedisPipeline::expireCapability(detail::ScopedCapabilityNode& capability) noexcept {
+    auto& pipeline = static_cast<RedisPipeline&>(capability);
+    pipeline.state_.template emplace<Consumed>();
+    std::pmr::vector<Command> empty(pipeline.commands_.get_allocator().resource());
+    pipeline.commands_.swap(empty);
+}
+
+detail::RedisPool& RedisPipeline::consumePool() {
+    auto* ready = std::get_if<Ready>(&state_);
+    if (ready == nullptr) {
+        throw std::logic_error("redis pipeline has already been consumed");
+    }
+    auto& pool = ready->pool.get();
+    state_.template emplace<Consumed>();
+    return pool;
+}
+
+std::pmr::memory_resource* RedisPipeline::resource() const noexcept {
+    return commands_.get_allocator().resource();
+}
+
+detail::ScopedOperationScope& RedisPipeline::operationScope() const {
+    return detail::ScopedCapabilityNode::operationScope();
+}
 
 RedisPipeline::Command RedisPipeline::makeCommand(
     std::pmr::memory_resource* resource,
@@ -65,7 +106,8 @@ void RedisPipeline::appendCommand(
 
 
 RedisPipeline& RedisPipeline::command(std::span<const std::string_view> args) {
-    appendCommand(commands_, resource_, args);
+    requireActive();
+    appendCommand(commands_, resource(), args);
     return *this;
 }
 
@@ -126,7 +168,8 @@ RedisPipeline& RedisPipeline::incr(std::string_view key) {
 }
 
 RedisPipeline& RedisPipeline::incrBy(std::string_view key, std::int64_t value) {
-    auto amount = detail::redisIntString(value, resource_);
+    requireActive();
+    auto amount = detail::redisIntString(value, resource());
     return appendCommandArgs(*this, "INCRBY", key, std::string_view(amount));
 }
 
@@ -135,7 +178,8 @@ RedisPipeline& RedisPipeline::decr(std::string_view key) {
 }
 
 RedisPipeline& RedisPipeline::decrBy(std::string_view key, std::int64_t value) {
-    auto amount = detail::redisIntString(value, resource_);
+    requireActive();
+    auto amount = detail::redisIntString(value, resource());
     return appendCommandArgs(*this, "DECRBY", key, std::string_view(amount));
 }
 
@@ -184,8 +228,9 @@ RedisPipeline& RedisPipeline::llen(std::string_view key) {
 }
 
 RedisPipeline& RedisPipeline::lrange(std::string_view key, std::int64_t start, std::int64_t stop) {
-    auto startValue = detail::redisIntString(start, resource_);
-    auto stopValue = detail::redisIntString(stop, resource_);
+    requireActive();
+    auto startValue = detail::redisIntString(start, resource());
+    auto stopValue = detail::redisIntString(stop, resource());
     return appendCommandArgs(*this, "LRANGE", key, std::string_view(startValue), std::string_view(stopValue));
 }
 
@@ -206,7 +251,8 @@ RedisPipeline& RedisPipeline::scard(std::string_view key) {
 }
 
 RedisPipeline& RedisPipeline::zadd(std::string_view key, double score, std::string_view member) {
-    auto scoreValue = detail::redisScoreString(score, resource_);
+    requireActive();
+    auto scoreValue = detail::redisScoreString(score, resource());
     return appendCommandArgs(*this, "ZADD", key, std::string_view(scoreValue), member);
 }
 
@@ -215,8 +261,9 @@ RedisPipeline& RedisPipeline::zrem(std::string_view key, std::string_view member
 }
 
 RedisPipeline& RedisPipeline::zrange(std::string_view key, std::int64_t start, std::int64_t stop) {
-    auto startValue = detail::redisIntString(start, resource_);
-    auto stopValue = detail::redisIntString(stop, resource_);
+    requireActive();
+    auto startValue = detail::redisIntString(start, resource());
+    auto stopValue = detail::redisIntString(stop, resource());
     return appendCommandArgs(*this, "ZRANGE", key, std::string_view(startValue), std::string_view(stopValue));
 }
 
@@ -228,11 +275,22 @@ RedisPipeline& RedisPipeline::zcard(std::string_view key) {
     return appendCommandArgs(*this, "ZCARD", key);
 }
 
-Task<std::pmr::vector<RedisValue>> RedisPipeline::exec() {
-    if (pool_ == nullptr) {
-        throw std::logic_error("redis pipeline is empty");
-    }
-    co_return co_await pool_->executePipeline(std::span<const Command>(commands_.data(), commands_.size()), resource_);
+Task<std::pmr::vector<RedisValue>> RedisPipeline::executeOwned(
+    detail::RedisPool& pool,
+    std::pmr::vector<Command> commands,
+    std::pmr::memory_resource* resource) {
+    co_return co_await pool.executePipeline(
+        std::span<const Command>(commands.data(), commands.size()),
+        resource);
+}
+
+ScopedOperation<std::pmr::vector<RedisValue>> RedisPipeline::exec() && {
+    requireActive();
+    auto* commandResource = resource();
+    auto& pool = consumePool();
+    return detail::makeScopedOperation(
+        operationScope(),
+        executeOwned(pool, std::move(commands_), commandResource));
 }
 
 }  // namespace ruvia

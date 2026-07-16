@@ -11,7 +11,7 @@
 #include <variant>
 
 namespace ruvia {
-class HttpClientResponse;
+class HttpClientResponseHead;
 }
 
 namespace ruvia::detail {
@@ -63,14 +63,20 @@ private:
 // than one coding is explicit unsupported metadata.
 class HttpContentCodingFieldParser final {
 public:
+    HttpContentCodingFieldParser() noexcept
+        : state_(std::in_place_type<Supported>) {}
+
     void update(std::string_view value) noexcept;
 
     [[nodiscard]] HttpContentCodingFieldResult finish() const noexcept;
 
 private:
-    HttpContentCoding coding_{HttpContentCoding::kIdentity};
-    std::size_t codingCount_{0};
-    bool unsupported_{false};
+    struct Supported final {
+        HttpContentCoding coding{HttpContentCoding::kIdentity};
+        std::size_t codingCount{0};
+    };
+
+    std::variant<Supported, HttpUnsupportedContentCoding> state_;
 };
 
 [[nodiscard]] HttpContentCodingFieldResult httpContentCodingFromFieldValue(
@@ -273,7 +279,8 @@ public:
 
 private:
     friend HttpContentDecodeResult decodeHttpClientResponseContentEncoding(
-        const HttpClientResponse&,
+        const HttpClientResponseHead&,
+        std::string_view,
         std::size_t,
         std::pmr::memory_resource*);
     friend HttpContentDecodeResult decodeHttpContent(

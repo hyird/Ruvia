@@ -3,11 +3,15 @@
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
+#include <exception>
 #include <memory_resource>
 #include <optional>
 #include <string>
+#include <utility>
+#include <variant>
 #include <vector>
 
+#include "ruvia/core/memory/MemoryPool.h"
 #include "ruvia/http/HttpLimits.h"
 #include "ruvia/web/RateLimitRule.h"
 #include "ruvia/web/ServerConfig.h"
@@ -22,34 +26,56 @@ struct AccessLogSink final {
     }
 };
 
+struct WorkerFailureSink final {
+    using Invoke = void (*)(void*, std::exception_ptr) noexcept;
+
+    void* target{nullptr};
+    Invoke invoke{nullptr};
+
+    void notify(std::exception_ptr failure) const noexcept {
+        if (invoke != nullptr) {
+            invoke(target, std::move(failure));
+        }
+    }
+};
+
 // Fully normalized, worker-owned runtime options. Public callers configure App
 // with ServerConfig.h values; only the Web runtime constructs this state.
 struct HttpServerOptions final {
-    struct Tls final {
-        // An additional certificate selected by SNI server name (RFC 6066).
-        struct SniCertificate final {
-            std::pmr::string host;
-            std::pmr::string certificateChainFile;
-            std::pmr::string privateKeyFile;
-            std::pmr::string privateKeyPassword;
-        };
-
-        bool enabled{false};
+    struct TlsIdentity final {
         std::pmr::string certificateChainFile;
         std::pmr::string privateKeyFile;
         std::pmr::string privateKeyPassword;
-        std::pmr::string verifyFile;
-        bool requireClientCertificate{false};
-        std::pmr::vector<SniCertificate> sniCertificates;
     };
+
+    struct TlsClientCertificatePolicy final {
+        std::pmr::string verifyFile;
+        ruvia::TlsClientCertificateRequirement requirement{
+            ruvia::TlsClientCertificateRequirement::kOptional};
+    };
+
+    struct Tls final {
+        // An additional certificate selected by SNI server name (RFC 6066).
+        struct SniIdentity final {
+            std::pmr::string host;
+            TlsIdentity identity;
+        };
+
+        TlsIdentity identity;
+        std::optional<TlsClientCertificatePolicy> clientCertificates;
+        std::pmr::vector<SniIdentity> sniIdentities;
+    };
+
+    struct PlainHttp final {};
+
+    struct RedirectHttpToHttps final {
+        std::uint16_t httpsPort;
+    };
+
+    using ListenerTransport = std::variant<PlainHttp, Tls, RedirectHttpToHttps>;
 
     struct DocumentRoot final {
         const StaticRoot* root{nullptr};
-    };
-
-    struct AutoHttps final {
-        bool enabled{false};
-        std::uint16_t httpsPort{443};
     };
 
     // nginx-aligned inactivity timeouts. Absence disables a phase timeout;
@@ -57,6 +83,9 @@ struct HttpServerOptions final {
     std::optional<std::chrono::milliseconds> keepaliveTimeout{std::chrono::seconds(75)};
     std::chrono::milliseconds shutdownGracePeriod{0};
     std::chrono::milliseconds scanInterval{std::chrono::seconds(1)};
+    // Capacity of the explicit cross-thread queue for this Web worker.
+    std::size_t workerMailboxCapacity{1024};
+    MemoryPoolConfig memoryConfig{};
     std::optional<std::chrono::milliseconds> clientHeaderTimeout{std::chrono::seconds(60)};
     std::optional<std::chrono::milliseconds> clientBodyTimeout{std::chrono::seconds(60)};
     std::optional<std::chrono::milliseconds> sendTimeout{std::chrono::seconds(60)};
@@ -71,15 +100,26 @@ struct HttpServerOptions final {
     std::optional<std::size_t> maxStreamBodyBytes;
     // WebSocket messages are assembled before delivery; this must be greater than 0.
     std::size_t maxWebSocketMessageBytes{kDefaultMaxWebSocketMessageBytes};
-    Tls tls;
+    ListenerTransport transport;
     // Presence enables the policy; absence bypasses it without retaining an
     // inactive configuration state.
     std::optional<CompressionConfig> compression{std::in_place};
     std::optional<CorsConfig> cors;
     DocumentRoot documentRoot;
-    AutoHttps autoHttps;
     AccessLogSink accessLog;
-    std::optional<RateLimitRule> rateLimit;
+    WorkerFailureSink workerFailure;
+    std::optional<RateLimitRule> defaultRateLimitPerWorker;
+    std::size_t rateLimitSlotsPerWorker{kDefaultRateLimitSlotsPerWorker};
+
+    [[nodiscard]] const Tls* tls() const & noexcept {
+        return std::get_if<Tls>(&transport);
+    }
+    const Tls* tls() const && = delete;
+
+    [[nodiscard]] const RedirectHttpToHttps* redirect() const & noexcept {
+        return std::get_if<RedirectHttpToHttps>(&transport);
+    }
+    const RedirectHttpToHttps* redirect() const && = delete;
 };
 
 }  // namespace ruvia::detail

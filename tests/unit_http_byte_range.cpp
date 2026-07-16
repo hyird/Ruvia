@@ -2,6 +2,7 @@
 
 #include <concepts>
 #include <cstdint>
+#include <string_view>
 #include <type_traits>
 #include <utility>
 
@@ -35,7 +36,29 @@ concept HasByteRangeLengthAccessor = requires(const T& value) {
     { value.length() } -> std::same_as<std::uint64_t>;
 };
 
+template <typename T>
+concept HasAnyRvalueByteRangeResolutionAccessor =
+    requires(T&& value) { std::move(value).ignored(); } ||
+    requires(T&& value) { std::move(value).unsatisfiable(); } ||
+    requires(T&& value) { std::move(value).resolved(); };
+
+[[nodiscard]] bool isIgnoredRange(
+    std::string_view value,
+    std::uint64_t representationLength) {
+    const auto resolution = resolveHttpByteRange(value, representationLength);
+    return resolution.ignored() != nullptr;
+}
+
+[[nodiscard]] bool isUnsatisfiableRange(
+    std::string_view value,
+    std::uint64_t representationLength) {
+    const auto resolution = resolveHttpByteRange(value, representationLength);
+    return resolution.unsatisfiable() != nullptr;
+}
+
 static_assert(!std::default_initializable<HttpByteRangeResolution>);
+static_assert(!HasAnyRvalueByteRangeResolutionAccessor<
+    HttpByteRangeResolution>);
 static_assert(std::same_as<
     decltype(std::declval<const HttpByteRangeResolution&>().ignored()),
     const HttpByteRangeIgnored*>);
@@ -135,24 +158,24 @@ RUVIA_TEST(byte_range_suffix) {
 }
 
 RUVIA_TEST(byte_range_unsatisfiable_is_payload_free) {
-    RUVIA_CHECK(resolveHttpByteRange("bytes=1000-", 1000).unsatisfiable() != nullptr);
-    RUVIA_CHECK(resolveHttpByteRange("bytes=1500-1600", 1000).unsatisfiable() != nullptr);
-    RUVIA_CHECK(resolveHttpByteRange("bytes=-0", 1000).unsatisfiable() != nullptr);
+    RUVIA_CHECK(isUnsatisfiableRange("bytes=1000-", 1000));
+    RUVIA_CHECK(isUnsatisfiableRange("bytes=1500-1600", 1000));
+    RUVIA_CHECK(isUnsatisfiableRange("bytes=-0", 1000));
 }
 
 RUVIA_TEST(byte_range_invalid_unknown_and_multiple_are_ignored) {
     // Unknown units MUST be ignored. This single-range resolver also chooses the
     // RFC-permitted ignore policy for invalid or unsupported range sets.
-    RUVIA_CHECK(resolveHttpByteRange("items=0-99", 1000).ignored() != nullptr);
-    RUVIA_CHECK(resolveHttpByteRange("0-99", 1000).ignored() != nullptr);
-    RUVIA_CHECK(resolveHttpByteRange("bytes=500-100", 1000).ignored() != nullptr);
-    RUVIA_CHECK(resolveHttpByteRange("bytes=abc", 1000).ignored() != nullptr);
-    RUVIA_CHECK(resolveHttpByteRange("bytes=x-9", 1000).ignored() != nullptr);
-    RUVIA_CHECK(resolveHttpByteRange("bytes=0-x", 1000).ignored() != nullptr);
-    RUVIA_CHECK(resolveHttpByteRange("bytes=-x", 1000).ignored() != nullptr);
-    RUVIA_CHECK(resolveHttpByteRange("bytes=-", 1000).ignored() != nullptr);
-    RUVIA_CHECK(resolveHttpByteRange("bytes=", 1000).ignored() != nullptr);
-    RUVIA_CHECK(resolveHttpByteRange("bytes=0-99,200-299", 1000).ignored() != nullptr);
+    RUVIA_CHECK(isIgnoredRange("items=0-99", 1000));
+    RUVIA_CHECK(isIgnoredRange("0-99", 1000));
+    RUVIA_CHECK(isIgnoredRange("bytes=500-100", 1000));
+    RUVIA_CHECK(isIgnoredRange("bytes=abc", 1000));
+    RUVIA_CHECK(isIgnoredRange("bytes=x-9", 1000));
+    RUVIA_CHECK(isIgnoredRange("bytes=0-x", 1000));
+    RUVIA_CHECK(isIgnoredRange("bytes=-x", 1000));
+    RUVIA_CHECK(isIgnoredRange("bytes=-", 1000));
+    RUVIA_CHECK(isIgnoredRange("bytes=", 1000));
+    RUVIA_CHECK(isIgnoredRange("bytes=0-99,200-299", 1000));
 }
 
 RUVIA_TEST(byte_range_unit_is_case_insensitive) {
@@ -167,6 +190,16 @@ RUVIA_TEST(byte_range_unit_is_case_insensitive) {
     if (upperCase.resolved() != nullptr) {
         RUVIA_CHECK_EQ(upperCase.resolved()->offset(), std::uint64_t{90});
         RUVIA_CHECK_EQ(upperCase.resolved()->length(), std::uint64_t{10});
+    }
+}
+
+RUVIA_TEST(byte_range_allows_ows_after_equals) {
+    const auto spaced = resolveHttpByteRange("bytes= \t10-19", 100);
+    const auto* range = spaced.resolved();
+    RUVIA_CHECK(range != nullptr);
+    if (range != nullptr) {
+        RUVIA_CHECK_EQ(range->offset(), std::uint64_t{10});
+        RUVIA_CHECK_EQ(range->length(), std::uint64_t{10});
     }
 }
 
@@ -196,14 +229,19 @@ RUVIA_TEST(byte_range_huge_decimal_numerals_preserve_semantics) {
         RUVIA_CHECK_EQ(hugeSuffixRange->length(), std::uint64_t{1000});
     }
 
-    RUVIA_CHECK(resolveHttpByteRange(
-        "bytes=184467440737095516160x-", 1000).ignored() != nullptr);
+    RUVIA_CHECK(isIgnoredRange(
+        "bytes=184467440737095516160x-", 1000));
+
+    // Saturating both numerals must not erase their relative order. This is an
+    // invalid int-range (last-pos < first-pos), not a valid unsatisfiable range.
+    RUVIA_CHECK(isIgnoredRange(
+        "bytes=184467440737095516160-184467440737095516159", 1000));
 }
 
 RUVIA_TEST(byte_range_empty_representation_uses_ignore_policy) {
     // RFC 9110 §14.2 permits ignoring Range when the representation has no
     // content. This prevents a 206 with an impossible zero-length Content-Range.
-    RUVIA_CHECK(resolveHttpByteRange("bytes=0-99", 0).ignored() != nullptr);
-    RUVIA_CHECK(resolveHttpByteRange("bytes=-1", 0).ignored() != nullptr);
-    RUVIA_CHECK(resolveHttpByteRange("BYTES=0-", 0).ignored() != nullptr);
+    RUVIA_CHECK(isIgnoredRange("bytes=0-99", 0));
+    RUVIA_CHECK(isIgnoredRange("bytes=-1", 0));
+    RUVIA_CHECK(isIgnoredRange("BYTES=0-", 0));
 }

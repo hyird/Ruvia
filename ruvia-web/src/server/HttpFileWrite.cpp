@@ -1,4 +1,4 @@
-#include "ruvia/web/detail/server/HttpFileZeroCopy.h"
+#include "ruvia/web/detail/server/HttpFileWrite.h"
 
 #include "ruvia/core/detail/AsioAwait.h"
 #include "ruvia/web/detail/server/HttpNativeFile.h"
@@ -18,14 +18,18 @@
 
 namespace ruvia::detail {
 
-#if defined(__linux__)
-Task<HttpFileZeroCopyResult> writeFileZeroCopy(
+Task<std::error_code> writeHttpResponseFile(
     asio::ip::tcp::socket& socket,
+    WorkerMemory& memory,
+    std::pmr::string* reusableChunk,
     ResponseFileBody file) {
+#if defined(__linux__)
+    static_cast<void>(memory);
+    static_cast<void>(reusableChunk);
     std::error_code error;
     auto input = openNativeFileForRead(file, error);
     if (error) {
-        co_return HttpFileZeroCopyResult::makeFailed(error);
+        co_return error;
     }
     auto offset = static_cast<off_t>(file.offset());
     std::uint64_t remaining = file.length();
@@ -42,44 +46,41 @@ Task<HttpFileZeroCopyResult> writeFileZeroCopy(
             continue;
         }
         if (sent == 0) {
-            co_return HttpFileZeroCopyResult::makeFailed(
-                asio::error::operation_aborted);
+            co_return asio::error::operation_aborted;
         }
         if (errno == EINTR) {
             continue;
         }
         if (errno == EAGAIN || errno == EWOULDBLOCK) {
-            error = co_await asyncError(
+            const auto waitCompletion = co_await asyncAsio(
                 [&socket](auto handler) mutable {
                     socket.async_wait(
                         asio::ip::tcp::socket::wait_write,
                         std::move(handler));
                 });
+            error = waitCompletion.errorCode();
             if (error) {
-                co_return HttpFileZeroCopyResult::makeFailed(error);
+                co_return error;
             }
             continue;
         }
-        co_return HttpFileZeroCopyResult::makeFailed(
-            std::error_code(errno, std::system_category()));
+        co_return std::error_code(errno, std::system_category());
     }
-    co_return HttpFileZeroCopyResult::makeCompleted();
-}
+    co_return std::error_code{};
 #elif defined(_WIN32)
-Task<HttpFileZeroCopyResult> writeFileZeroCopy(
-    asio::ip::tcp::socket& socket,
-    ResponseFileBody file) {
+    static_cast<void>(memory);
+    static_cast<void>(reusableChunk);
     std::error_code error;
     auto input = openNativeFileForRead(file, error);
     if (error) {
-        co_return HttpFileZeroCopyResult::makeFailed(error);
+        co_return error;
     }
     LARGE_INTEGER position;
     position.QuadPart = static_cast<LONGLONG>(file.offset());
     if (::SetFilePointerEx(input.get(), position, nullptr, FILE_BEGIN) == 0) {
-        co_return HttpFileZeroCopyResult::makeFailed(std::error_code(
+        co_return std::error_code(
             static_cast<int>(::GetLastError()),
-            std::system_category()));
+            std::system_category());
     }
     std::uint64_t remaining = file.length();
     while (remaining > 0) {
@@ -101,28 +102,28 @@ Task<HttpFileZeroCopyResult> writeFileZeroCopy(
         }
         const auto socketError = ::WSAGetLastError();
         if (socketError == WSAEWOULDBLOCK) {
-            const auto waitError = co_await asyncError(
+            const auto waitCompletion = co_await asyncAsio(
                 [&socket](auto handler) mutable {
                     socket.async_wait(
                         asio::ip::tcp::socket::wait_write,
                         std::move(handler));
                 });
+            const auto waitError = waitCompletion.errorCode();
             if (waitError) {
-                co_return HttpFileZeroCopyResult::makeFailed(waitError);
+                co_return waitError;
             }
             continue;
         }
-        co_return HttpFileZeroCopyResult::makeFailed(
-            std::error_code(socketError, std::system_category()));
+        co_return std::error_code(socketError, std::system_category());
     }
-    co_return HttpFileZeroCopyResult::makeCompleted();
-}
+    co_return std::error_code{};
 #else
-Task<HttpFileZeroCopyResult> writeFileZeroCopy(
-    asio::ip::tcp::socket&,
-    ResponseFileBody) {
-    co_return HttpFileZeroCopyResult::makeUnavailable();
-}
+    co_return co_await writeFileFallback(
+        socket,
+        memory,
+        reusableChunk,
+        file);
 #endif
+}
 
 }  // namespace ruvia::detail

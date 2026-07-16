@@ -36,7 +36,8 @@ void Env::StateDeleter::operator()(detail::EnvState* state) const noexcept {
     detail::destroyPmrObject(state, detail::appResource());
 }
 
-std::optional<std::string_view> Env::get(std::string_view name) const noexcept {
+std::optional<std::string_view> Env::get(
+    std::string_view name) const & noexcept {
     const auto& variables = state_->variables;
     const auto it = findVariableSlot(variables, name);
     if (it == variables.end() || std::string_view(it->name) != name) {

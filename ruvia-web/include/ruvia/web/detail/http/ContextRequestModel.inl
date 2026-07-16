@@ -10,13 +10,13 @@
 namespace ruvia {
 
 template <typename T>
-Task<T> ContextRequest::json() const {
+Task<T> ContextRequest::jsonModelTask(const Context* context) {
     static_assert(JsonBody<T>::value, "JSON body type must use RUVIA_REQUEST_MODEL");
-    if (!contentTypeMatches("application/json")) {
+    if (!contextContentTypeMatches(context, "application/json")) {
         detail::throwInvalidJsonContentType();
     }
-    const auto requestBody = co_await text();
-    auto parsed = JsonBody<T>::parse(requestBody, resource());
+    const auto requestBody = co_await contextTextTask(context);
+    auto parsed = JsonBody<T>::parse(requestBody, contextResource(context));
     if (!parsed) {
         detail::throwInvalidJsonBody();
     }
@@ -24,13 +24,19 @@ Task<T> ContextRequest::json() const {
 }
 
 template <typename T>
-Task<T> ContextRequest::form() const {
+ScopedOperation<T> ContextRequest::json() const {
+    return detail::makeScopedOperation(
+        contextOperationScope(context_), jsonModelTask<T>(context_));
+}
+
+template <typename T>
+Task<T> ContextRequest::formModelTask(const Context* context) {
     static_assert(FormBody<T>::value, "form body type must use RUVIA_REQUEST_MODEL");
-    if (!contentTypeMatches("application/x-www-form-urlencoded")) {
+    if (!contextContentTypeMatches(context, "application/x-www-form-urlencoded")) {
         detail::throwInvalidFormContentType();
     }
-    const auto requestBody = co_await text();
-    auto parsed = FormBody<T>::parse(requestBody, resource());
+    const auto requestBody = co_await contextTextTask(context);
+    auto parsed = FormBody<T>::parse(requestBody, contextResource(context));
     if (!parsed) {
         detail::throwInvalidFormBody();
     }
@@ -38,13 +44,14 @@ Task<T> ContextRequest::form() const {
 }
 
 template <typename T>
-inline const T& ContextRequest::valid() const {
-    return validatedValues().get<T>();
+ScopedOperation<T> ContextRequest::form() const {
+    return detail::makeScopedOperation(
+        contextOperationScope(context_), formModelTask<T>(context_));
 }
 
 template <typename T>
-inline void ContextRequest::addValidatedData(T&& data) const {
-    validatedValues().set(std::forward<T>(data), resource());
+inline const T& ContextRequest::valid() const {
+    return validatedModels().get<T>();
 }
 
 }  // namespace ruvia

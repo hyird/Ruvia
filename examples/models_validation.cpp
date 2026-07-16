@@ -1,8 +1,5 @@
-#include <charconv>
 #include <cstdint>
-#include <optional>
 #include <string_view>
-#include <system_error>
 
 #include "ruvia/web/App.h"
 #include "ruvia/web/Controller.h"
@@ -64,21 +61,6 @@ RUVIA_RESPONSE_MODEL(Category,
 
 static bool hasRuviaCodePrefix(const ruvia::String& code) {
     return code.view().starts_with("CY-");
-}
-
-std::optional<std::uint32_t> parseUInt32(std::optional<std::string_view> input) noexcept {
-    if (!input || input->empty()) {
-        return std::nullopt;
-    }
-
-    std::uint32_t value{};
-    const auto* const begin = input->data();
-    const auto* const end = begin + input->size();
-    const auto [ptr, ec] = std::from_chars(begin, end, value);
-    if (ec != std::errc{} || ptr != end) {
-        return std::nullopt;
-    }
-    return value;
 }
 
 class ProfileValidator final : public ruvia::Middleware<ProfileValidator> {
@@ -152,19 +134,6 @@ public:
             RUVIA_MIN(1, "page is too small")))
 };
 
-class ManualSearchQueryValidator final : public ruvia::Middleware<ManualSearchQueryValidator> {
-public:
-    ruvia::Task<void> handle(ruvia::Context& c, ruvia::Next& next) {
-        SearchQuery query(c);
-        query.q(c.req().query("q").value_or("manual"));
-        if (auto page = parseUInt32(c.req().query("page"))) {
-            query.page(ruvia::UInt32{*page});
-        }
-        c.req().addValidatedData(std::move(query));
-        co_await next();
-    }
-};
-
 class CategoryParamValidator final : public ruvia::Middleware<CategoryParamValidator> {
 public:
     RUVIA_VALIDATE_PARAM(CategoryParams,
@@ -197,7 +166,6 @@ public:
     RUVIA_POST("/register", registerUser, RegisterValidator);
     RUVIA_POST("/contact", contact, ContactFormValidator);
     RUVIA_GET("/search", search, SearchQueryValidator);
-    RUVIA_GET("/manual-search", search, ManualSearchQueryValidator);
     RUVIA_GET("/category", category);
     RUVIA_GET("/category/:id", categoryById, CategoryParamValidator);
     RUVIA_GET("/headers", headers, RequestHeaderValidator);
@@ -217,7 +185,8 @@ private:
         }
         response.tagsEnsure().emplace_back(ruvia::String("created", c.resource()));
         response.tagsEnsure().emplace_back(ruvia::String("validated", c.resource()));
-        co_return c.json(response, 201);
+        c.status(201);
+        co_return c.json(response);
     }
 
     ruvia::Task<ruvia::HttpResponse> contact(ruvia::Context& c) {
@@ -227,7 +196,7 @@ private:
         const auto& name = form.name();
         body.append(name->view());
         body.push_back('\n');
-        co_return c.text(body);
+        co_return c.text(std::move(body));
     }
 
     ruvia::Task<ruvia::HttpResponse> search(ruvia::Context& c) {
@@ -253,7 +222,7 @@ private:
             }
         }
         body.push_back('\n');
-        co_return c.text(body);
+        co_return c.text(std::move(body));
     }
 
     ruvia::Task<ruvia::HttpResponse> category(ruvia::Context& c) {
@@ -270,7 +239,7 @@ private:
         const auto& id = params.id();
         body.append(id->view());
         body.push_back('\n');
-        co_return c.text(body);
+        co_return c.text(std::move(body));
     }
 
     ruvia::Task<ruvia::HttpResponse> headers(ruvia::Context& c) {
@@ -280,7 +249,7 @@ private:
         const auto& requestId = headers.requestId();
         body.append(requestId->view());
         body.push_back('\n');
-        co_return c.text(body);
+        co_return c.text(std::move(body));
     }
 
     ruvia::Task<ruvia::HttpResponse> cookies(ruvia::Context& c) {
@@ -290,14 +259,14 @@ private:
         const auto& theme = cookies.theme();
         body.append(theme->view());
         body.push_back('\n');
-        co_return c.text(body);
+        co_return c.text(std::move(body));
     }
 };
 
 int main() {
     ruvia::app()
         .setListenAddress("0.0.0.0")
-        .setHttpListenPort(8081)
-        .setThreadNum(2)
+        .setServerTopology(ruvia::ServerTopology::http(8081))
+        .setWorkersPerListener(2)
         .run();
 }

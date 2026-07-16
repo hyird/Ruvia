@@ -12,6 +12,7 @@
 #include "ruvia/http/HttpResponse.h"
 
 #include <cstdint>
+#include <exception>
 #include <optional>
 #include <utility>
 #include <variant>
@@ -119,59 +120,76 @@ inline void http1MarkConnectionClose(
 }
 
 class Http1FinalResponseCommitResult;
+class Http1FinalResponseCommitFailure;
 
-class Http1FinalResponseCommit final {
+class Http1FinalResponseCommitError final : public std::exception {
 public:
-    [[nodiscard]] Http1ServerConnectionPlan connectionPlan() const noexcept {
-        return connectionPlan_;
+    [[nodiscard]] const char* what() const noexcept override {
+        switch (error_) {
+            case Http1FinalResponseControlPlanError::kInvalidStatus:
+                return "invalid final HTTP response status";
+            case Http1FinalResponseControlPlanError::kInvalidConnectionField:
+                return "invalid HTTP Connection header";
+            case Http1FinalResponseControlPlanError::kInvalidUpgradeField:
+                return "invalid HTTP Upgrade header";
+            case Http1FinalResponseControlPlanError::kUpgradeRequired:
+                return "426 response requires an Upgrade protocol";
+        }
+        return "unknown HTTP final response commit failure";
     }
 
 private:
-    friend class Http1FinalResponseCommitResult;
+    friend class Http1FinalResponseCommitFailure;
 
-    explicit Http1FinalResponseCommit(
-        Http1ServerConnectionPlan connectionPlan) noexcept
-        : connectionPlan_(connectionPlan) {}
+    explicit Http1FinalResponseCommitError(
+        Http1FinalResponseControlPlanError error) noexcept
+        : error_(error) {}
 
-    Http1ServerConnectionPlan connectionPlan_;
+    Http1FinalResponseControlPlanError error_;
 };
 
 class Http1FinalResponseCommitFailure final {
 public:
-    [[nodiscard]] HttpFinalResponseControlPlanError error() const noexcept {
-        return error_;
+    [[nodiscard]] Http1FinalResponseCommitError exception() const noexcept {
+        return Http1FinalResponseCommitError(error_);
     }
 
 private:
     friend class Http1FinalResponseCommitResult;
 
     explicit Http1FinalResponseCommitFailure(
-        HttpFinalResponseControlPlanError error) noexcept
-        : error_(error) {}
+        const Http1FinalResponseControlPlanFailure& failure) noexcept
+        : error_(failure.error_) {}
 
-    HttpFinalResponseControlPlanError error_;
+    Http1FinalResponseControlPlanError error_;
 };
 
-// A final response commit either owns the authoritative connection contract or
-// one typed message failure. Validation completes before Connection is mutated,
-// so callers cannot observe a half-committed response after a protocol failure.
+// A final response commit directly owns the authoritative connection contract
+// or one typed message failure. Validation completes before Connection is
+// mutated, so callers cannot observe a half-committed response after a protocol
+// failure or unwrap a second success container.
 class Http1FinalResponseCommitResult final {
 public:
-    [[nodiscard]] const Http1FinalResponseCommit* committed() const noexcept {
-        return std::get_if<Http1FinalResponseCommit>(&value_);
+    [[nodiscard]] const Http1ServerConnectionPlan*
+    committed() const & noexcept {
+        return std::get_if<Http1ServerConnectionPlan>(&value_);
     }
+    [[nodiscard]] const Http1ServerConnectionPlan*
+    committed() const && = delete;
 
     [[nodiscard]] const Http1FinalResponseCommitFailure*
-    failure() const noexcept {
+    failure() const & noexcept {
         return std::get_if<Http1FinalResponseCommitFailure>(&value_);
     }
+    [[nodiscard]] const Http1FinalResponseCommitFailure*
+    failure() const && = delete;
 
 private:
     friend Http1FinalResponseCommitResult http1CommitFinalResponse(
         HttpResponse&, Http1ServerConnectionPlan);
 
     using Value = std::variant<
-        Http1FinalResponseCommit,
+        Http1ServerConnectionPlan,
         Http1FinalResponseCommitFailure>;
 
     template <typename Alternative>
@@ -180,14 +198,13 @@ private:
 
     [[nodiscard]] static Http1FinalResponseCommitResult committed(
         Http1ServerConnectionPlan connectionPlan) noexcept {
-        return Http1FinalResponseCommitResult(
-            Http1FinalResponseCommit(connectionPlan));
+        return Http1FinalResponseCommitResult(connectionPlan);
     }
 
     [[nodiscard]] static Http1FinalResponseCommitResult failure(
-        HttpFinalResponseControlPlanError error) noexcept {
+        const Http1FinalResponseControlPlanFailure& failure) noexcept {
         return Http1FinalResponseCommitResult(
-            Http1FinalResponseCommitFailure(error));
+            Http1FinalResponseCommitFailure(failure));
     }
 
     Value value_;
@@ -201,18 +218,13 @@ private:
 [[nodiscard]] inline Http1FinalResponseCommitResult http1CommitFinalResponse(
     HttpResponse& response,
     Http1ServerConnectionPlan plan) {
-    const auto controlResult = httpFinalResponseControlPlan(
-        response,
-        plan.protocolVersion());
+    const auto controlResult = http1FinalResponseControlPlan(response);
     if (const auto* failure = controlResult.failure()) {
-        return Http1FinalResponseCommitResult::failure(failure->error());
+        return Http1FinalResponseCommitResult::failure(*failure);
     }
-    const auto* controlPlan = controlResult.plan();
-    // Http1ServerConnectionPlan can only retain HTTP/1.0 or HTTP/1.1, so the
-    // shared control planner must produce its HTTP/1 alternative here.
-    const auto& http1Control = *controlPlan->http1();
-    const auto& responseOptions = http1Control.connectionOptions();
-    const auto& upgradeProtocols = http1Control.upgradeProtocols();
+    const auto& http1Control = *controlResult.control();
+    const auto responseOptions = http1Control.connectionOptions();
+    const auto upgradeProtocols = http1Control.upgradeProtocols();
     const bool preserveUpgrade = upgradeProtocols.hasField();
     const bool generateUpgradeOption =
         preserveUpgrade && !responseOptions.upgrade();
@@ -256,21 +268,27 @@ class PreparedHttp1ResponseStreamResult;
 // bytes to the authoritative connection disposition.
 class PreparedHttp1ResponseStream final {
 public:
-    [[nodiscard]] HttpResponse& response() noexcept {
+    [[nodiscard]] HttpResponse& response() & noexcept {
         return head_.response();
     }
+    [[nodiscard]] HttpResponse& response() && = delete;
 
-    [[nodiscard]] const HttpResponse& response() const noexcept {
+    [[nodiscard]] const HttpResponse& response() const & noexcept {
         return head_.response();
     }
+    [[nodiscard]] const HttpResponse& response() const && = delete;
 
-    [[nodiscard]] const Http1ResponseHeadPlan& responseHeadPlan() const noexcept {
+    [[nodiscard]] const Http1ResponseHeadPlan&
+    responseHeadPlan() const & noexcept {
         return responseHeadPlan_;
     }
+    [[nodiscard]] const Http1ResponseHeadPlan&
+    responseHeadPlan() const && = delete;
 
-    [[nodiscard]] const ResponseStreamCommitPlan& commitPlan() const noexcept {
+    [[nodiscard]] const ResponseStreamCommitPlan& commitPlan() const & noexcept {
         return head_.commitPlan();
     }
+    [[nodiscard]] const ResponseStreamCommitPlan& commitPlan() const && = delete;
 
     [[nodiscard]] Http1ServerConnectionPlan connectionPlan() const noexcept {
         return connectionPlan_;
@@ -299,22 +317,24 @@ private:
 
 class PreparedHttp1ResponseStreamResult final {
 public:
-    [[nodiscard]] const PreparedHttp1ResponseStream* prepared() const noexcept {
+    [[nodiscard]] const PreparedHttp1ResponseStream*
+    prepared() const & noexcept {
         return std::get_if<PreparedHttp1ResponseStream>(&value_);
     }
+    [[nodiscard]] const PreparedHttp1ResponseStream*
+    prepared() const && = delete;
 
-    [[nodiscard]] PreparedHttp1ResponseStream* prepared() noexcept {
+    [[nodiscard]] PreparedHttp1ResponseStream* prepared() & noexcept {
         return std::get_if<PreparedHttp1ResponseStream>(&value_);
     }
+    [[nodiscard]] PreparedHttp1ResponseStream* prepared() && = delete;
 
     [[nodiscard]] const Http1FinalResponseCommitFailure*
-    failure() const noexcept {
+    failure() const & noexcept {
         return std::get_if<Http1FinalResponseCommitFailure>(&value_);
     }
-
-    [[nodiscard]] PreparedHttp1ResponseStream takePrepared() && {
-        return std::move(std::get<PreparedHttp1ResponseStream>(value_));
-    }
+    [[nodiscard]] const Http1FinalResponseCommitFailure*
+    failure() const && = delete;
 
 private:
     friend PreparedHttp1ResponseStreamResult prepareHttp1ResponseStreamHead(
@@ -345,7 +365,7 @@ prepareHttp1ResponseStreamHead(
         plan.requestMethod(),
         response.status(),
         trailerIntent);
-    const auto& bodyPlan = commitPlan.bodyPlan();
+    const auto bodyPlan = commitPlan.bodyPlan();
     // HTTP/1.0 cannot delimit an open-ended response stream without closing the
     // connection, but a response whose method/status forbids payload is already
     // self-delimited. Make this decision at head commit, when the response status is
@@ -363,8 +383,7 @@ prepareHttp1ResponseStreamHead(
     if (const auto* failure = commitResult.failure()) {
         return PreparedHttp1ResponseStreamResult(*failure);
     }
-    const auto connectionPlan =
-        commitResult.committed()->connectionPlan();
+    const auto connectionPlan = *commitResult.committed();
     auto head = prepareResponseStreamHead(
         std::move(response), kind, std::move(commitPlan));
     const auto responseHeadPlan =

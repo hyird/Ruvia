@@ -21,17 +21,20 @@ namespace ruvia {
 
 class ValidationIssue final {
 public:
-    [[nodiscard]] std::string_view field() const noexcept {
+    [[nodiscard]] std::string_view field() const & noexcept {
         return field_;
     }
+    [[nodiscard]] std::string_view field() const && = delete;
 
-    [[nodiscard]] std::string_view code() const noexcept {
+    [[nodiscard]] std::string_view code() const & noexcept {
         return code_;
     }
+    [[nodiscard]] std::string_view code() const && = delete;
 
-    [[nodiscard]] std::string_view message() const noexcept {
+    [[nodiscard]] std::string_view message() const & noexcept {
         return message_;
     }
+    [[nodiscard]] std::string_view message() const && = delete;
 
 private:
     friend class ValidationError;
@@ -124,13 +127,15 @@ public:
         return message_.c_str();
     }
 
-    [[nodiscard]] const IssueList& issues() const noexcept {
+    [[nodiscard]] const IssueList& issues() const & noexcept {
         return issues_;
     }
+    [[nodiscard]] const IssueList& issues() const && = delete;
 
-    [[nodiscard]] HttpErrorInfo info() const noexcept {
+    [[nodiscard]] HttpErrorInfo info() const & noexcept {
         return HttpErrorInfo(statusCode_, code_, message_, {}, detailsJson_);
     }
+    [[nodiscard]] HttpErrorInfo info() const && = delete;
 
 private:
     void buildDetailsJson() {
@@ -185,7 +190,7 @@ public:
     Validator& add(
         std::string_view field,
         std::string_view code,
-        std::string_view message) {
+        std::string_view message) & {
         issues_.push_back(ValidationIssue(field, code, message, resource_));
         return *this;
     }
@@ -194,7 +199,7 @@ public:
     Validator& required(
         const OptionalT& value,
         std::string_view field,
-        std::string_view message = "is required") {
+        std::string_view message = "is required") & {
         if (!value) {
             add(field, "required", message);
         }
@@ -206,7 +211,7 @@ public:
         const OptionalT& value,
         std::string_view field,
         std::size_t min,
-        std::string_view message = "is too short") {
+        std::string_view message = "is too short") & {
         if (value && detail::validationStringView(*value).size() < min) {
             add(field, "min_length", message);
         }
@@ -218,7 +223,7 @@ public:
         const OptionalT& value,
         std::string_view field,
         std::size_t max,
-        std::string_view message = "is too long") {
+        std::string_view message = "is too long") & {
         if (value && detail::validationStringView(*value).size() > max) {
             add(field, "max_length", message);
         }
@@ -231,7 +236,7 @@ public:
         std::string_view field,
         MinT min,
         MaxT max,
-        std::string_view message = "is out of range") {
+        std::string_view message = "is out of range") & {
         if (value && (*value < min || *value > max)) {
             add(field, "range", message);
         }
@@ -243,7 +248,7 @@ public:
         const OptionalT& value,
         std::string_view field,
         std::initializer_list<std::string_view> allowed,
-        std::string_view message = "is not allowed") {
+        std::string_view message = "is not allowed") & {
         if (!value) {
             return *this;
         }
@@ -263,9 +268,10 @@ public:
         return issues_.empty();
     }
 
-    [[nodiscard]] const IssueList& issues() const noexcept {
+    [[nodiscard]] const IssueList& issues() const & noexcept {
         return issues_;
     }
+    [[nodiscard]] const IssueList& issues() const && = delete;
 
     [[nodiscard]] std::pmr::memory_resource* resource() const noexcept {
         return resource_;

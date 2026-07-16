@@ -42,7 +42,7 @@ public:
     NextControlScope& operator=(const NextControlScope&) = delete;
 
     ~NextControlScope() {
-        control_->active = false;
+        control_->expire();
     }
 
 private:
@@ -115,7 +115,7 @@ Task<void> detail::RouteTable::invokeMiddlewareAt(
 
 Task<void> detail::RouteTable::invokeMiddlewareContinuation(NextState state) {
     auto* context = state.context;
-    if (state.repeated) {
+    if (state.invocation != detail::NextState::Invocation::kReady) {
         storeRepeatedNextError(*context);
         co_return;
     }
@@ -139,19 +139,11 @@ Task<void> detail::RouteTable::invokeStreamMiddlewareAt(
     const RouteEntry& route,
     std::size_t index,
     Context& context,
-    StreamMiddlewareChainState& chain) const {
+    StreamMiddlewareChainState& chain,
+    const RouteStreamHandler& handler) const {
     if (index >= route.middlewareCount()) {
-        const auto& endpoint = route.endpoint();
-        const auto* responseStream = endpoint.responseStream();
-        const auto* webSocket = endpoint.webSocket();
-        if (responseStream == nullptr && webSocket == nullptr) {
-            throw std::logic_error("route is not a stream-handler route");
-        }
-        const auto& handler = responseStream != nullptr
-            ? responseStream->handler()
-            : webSocket->handler();
-        co_await handler(context);
         chain.markHandlerInvoked();
+        co_await handler(context);
         co_return;
     }
 
@@ -165,6 +157,7 @@ Task<void> detail::RouteTable::invokeStreamMiddlewareAt(
             .route = &route,
             .context = &context,
             .streamChain = &chain,
+            .streamHandler = &handler,
             .control = &control,
             .index = index + 1},
         &RouteTable::invokeStreamMiddlewareContinuation);
@@ -175,7 +168,7 @@ Task<void> detail::RouteTable::invokeStreamMiddlewareAt(
 
 Task<void> detail::RouteTable::invokeStreamMiddlewareContinuation(NextState state) {
     auto* context = state.context;
-    if (state.repeated) {
+    if (state.invocation != detail::NextState::Invocation::kReady) {
         storeRepeatedNextError(*context);
         co_return;
     }
@@ -188,7 +181,8 @@ Task<void> detail::RouteTable::invokeStreamMiddlewareContinuation(NextState stat
             *route,
             state.index,
             *context,
-            *chain);
+            *chain,
+            *state.streamHandler);
     } catch (...) {
         exception = std::current_exception();
     }

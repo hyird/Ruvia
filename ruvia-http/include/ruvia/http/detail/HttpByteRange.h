@@ -69,18 +69,22 @@ private:
 // No status can be paired with default offset/length coordinates.
 class HttpByteRangeResolution final {
 public:
-    [[nodiscard]] constexpr const HttpByteRangeIgnored* ignored() const noexcept {
+    [[nodiscard]] constexpr const HttpByteRangeIgnored* ignored() const & noexcept {
         return std::get_if<HttpByteRangeIgnored>(&value_);
     }
+    [[nodiscard]] constexpr const HttpByteRangeIgnored* ignored() const && = delete;
 
     [[nodiscard]] constexpr const HttpByteRangeUnsatisfiable*
-    unsatisfiable() const noexcept {
+    unsatisfiable() const & noexcept {
         return std::get_if<HttpByteRangeUnsatisfiable>(&value_);
     }
+    [[nodiscard]] constexpr const HttpByteRangeUnsatisfiable*
+    unsatisfiable() const && = delete;
 
-    [[nodiscard]] constexpr const HttpResolvedByteRange* resolved() const noexcept {
+    [[nodiscard]] constexpr const HttpResolvedByteRange* resolved() const & noexcept {
         return std::get_if<HttpResolvedByteRange>(&value_);
     }
+    [[nodiscard]] constexpr const HttpResolvedByteRange* resolved() const && = delete;
 
 private:
     friend HttpByteRangeResolution resolveHttpByteRange(
@@ -154,7 +158,12 @@ private:
             : std::nullopt;
     };
 
-    const auto spec = fieldValue.substr(separatorOffset + 1);
+    auto spec = fieldValue.substr(separatorOffset + 1);
+    // RFC 9110 erratum 7306 restores the OWS that is shown by the normative
+    // examples after '=' but was accidentally omitted from the published ABNF.
+    while (!spec.empty() && (spec.front() == ' ' || spec.front() == '\t')) {
+        spec.remove_prefix(1);
+    }
     // This helper deliberately resolves one range. A valid range set requiring
     // multipart/byteranges is ignored as an unsupported server capability.
     if (spec.find(',') != std::string_view::npos) {
@@ -168,6 +177,17 @@ private:
 
     const auto first = spec.substr(0, dash);
     const auto last = spec.substr(dash + 1);
+    const auto decimalLess = [](std::string_view left, std::string_view right) noexcept {
+        while (left.size() > 1 && left.front() == '0') {
+            left.remove_prefix(1);
+        }
+        while (right.size() > 1 && right.front() == '0') {
+            right.remove_prefix(1);
+        }
+        return left.size() != right.size()
+            ? left.size() < right.size()
+            : left < right;
+    };
     if (first.empty()) {
         const auto suffix = parseDecimal(last);
         if (!suffix) {
@@ -188,7 +208,7 @@ private:
     std::uint64_t end = 0;
     if (!last.empty()) {
         const auto parsedEnd = parseDecimal(last);
-        if (!parsedEnd || *parsedEnd < *start) {
+        if (!parsedEnd || decimalLess(last, first)) {
             return HttpByteRangeResolution::makeIgnored();
         }
         end = *parsedEnd;

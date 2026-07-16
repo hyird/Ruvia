@@ -7,6 +7,7 @@
 #include <optional>
 #include <span>
 #include <stdexcept>
+#include <string>
 #include <string_view>
 
 #include "ruvia/web/detail/http/ContextInternal.h"
@@ -67,7 +68,6 @@ RUVIA_TEST(context_connection_info_is_adapter_owned) {
     RUVIA_CHECK_EQ(
         info.tls()->clientCertificateSubject(),
         std::string_view("/CN=client"));
-    RUVIA_CHECK(context.req().url() == std::string_view("https://example.test/secure"));
 }
 
 RUVIA_TEST(context_redirect_sets_verbatim_ascii_location_and_status) {
@@ -123,52 +123,43 @@ RUVIA_TEST(context_redirect_rejects_crlf_header_injection) {
 
 RUVIA_TEST(context_body_sets_body_and_status) {
     RUVIA_MAKE_CONTEXT(worker, memory, request, context);
-    const auto response = context.body("hello world", Context::ResponseInit{.status = 201});
+    context.status(201);
+    const auto response = context.body("hello world");
     RUVIA_CHECK_EQ(response.status(), std::uint16_t{201});
     RUVIA_CHECK_EQ(responseBody(response).bytes(), std::string_view("hello world"));
 }
 
+RUVIA_TEST(context_dynamic_body_owns_input_and_preserves_lvalue) {
+    RUVIA_MAKE_CONTEXT(worker, memory, request, context);
+    std::pmr::string source("dynamic body", memory.resource());
+
+    const auto response = context.body(source);
+    source[0] = 'X';
+
+    RUVIA_CHECK(responseBody(response).ownedBytes() != nullptr);
+    RUVIA_CHECK(responseBody(response).borrowedBytes() == nullptr);
+    RUVIA_CHECK_EQ(responseBody(response).bytes(), std::string_view("dynamic body"));
+    RUVIA_CHECK_EQ(source, std::string_view("Xynamic body"));
+}
+
+RUVIA_TEST(context_literal_builders_keep_static_storage) {
+    RUVIA_MAKE_CONTEXT(worker, memory, request, context);
+
+    const auto bodyResponse = context.body("body");
+    const auto textResponse = context.text("text");
+    const auto htmlResponse = context.html("<b>html</b>");
+
+    RUVIA_CHECK(responseBody(bodyResponse).staticBytes() != nullptr);
+    RUVIA_CHECK(responseBody(textResponse).staticBytes() != nullptr);
+    RUVIA_CHECK(responseBody(htmlResponse).staticBytes() != nullptr);
+}
+
 RUVIA_TEST(context_rejects_informational_and_non_http_final_statuses) {
-    static_assert(std::same_as<
-        decltype(Context::ResponseInit{}.status),
-        std::optional<std::uint16_t>>);
     {
         RUVIA_MAKE_CONTEXT(worker, memory, request, context);
         bool threw = false;
         try {
             context.status(103);
-        } catch (const std::invalid_argument&) {
-            threw = true;
-        }
-        RUVIA_CHECK(threw);
-    }
-    {
-        RUVIA_MAKE_CONTEXT(worker, memory, request, context);
-        bool threw = false;
-        try {
-            (void)context.body("not final", Context::ResponseInit{.status = 103});
-        } catch (const std::invalid_argument&) {
-            threw = true;
-        }
-        RUVIA_CHECK(threw);
-    }
-    {
-        RUVIA_MAKE_CONTEXT(worker, memory, request, context);
-        bool threw = false;
-        try {
-            (void)context.body("zero", std::uint16_t{0});
-        } catch (const std::invalid_argument&) {
-            threw = true;
-        }
-        RUVIA_CHECK(threw);
-    }
-    {
-        RUVIA_MAKE_CONTEXT(worker, memory, request, context);
-        bool threw = false;
-        try {
-            (void)context.body(
-                "zero",
-                Context::ResponseInit{.status = std::uint16_t{0}});
         } catch (const std::invalid_argument&) {
             threw = true;
         }
@@ -200,23 +191,26 @@ RUVIA_TEST(context_response_metadata_uses_http_response_validation) {
     }
     RUVIA_CHECK(threw);
     const auto response = context.body("unchanged");
-    RUVIA_CHECK(response.header("Connection").empty());
+    RUVIA_CHECK(!response.header("Connection").has_value());
 }
 
-RUVIA_TEST(context_body_applies_init_headers) {
+RUVIA_TEST(context_body_applies_context_headers) {
     RUVIA_MAKE_CONTEXT(worker, memory, request, context);
-    const HttpHeaderView headers[] = {{"Content-Type", "text/plain"}, {"X-Custom", "v"}};
-    const auto response = context.body("data", Context::ResponseInit{.status = 200, .headers = headers});
+    context.status(200);
+    context.header("Content-Type", "text/plain");
+    context.header("X-Custom", "v");
+    const auto response = context.body("data");
     RUVIA_CHECK_EQ(response.status(), std::uint16_t{200});
     RUVIA_CHECK_EQ(responseBody(response).bytes(), std::string_view("data"));
     RUVIA_CHECK_EQ(response.header("Content-Type"), std::string_view("text/plain"));
     RUVIA_CHECK_EQ(response.header("X-Custom"), std::string_view("v"));
 }
 
-RUVIA_TEST(context_response_init_preserves_repeated_set_cookie_headers) {
+RUVIA_TEST(context_metadata_preserves_repeated_set_cookie_headers) {
     RUVIA_MAKE_CONTEXT(worker, memory, request, context);
-    const HttpHeaderView headers[] = {{"Set-Cookie", "a=1"}, {"Set-Cookie", "b=2"}};
-    const auto response = context.body("data", Context::ResponseInit{.headers = headers});
+    context.header("Set-Cookie", "a=1", {.append = true});
+    context.header("Set-Cookie", "b=2", {.append = true});
+    const auto response = context.body("data");
 
     std::size_t setCookieCount = 0;
     for (const auto& header : response.headers()) {
@@ -229,7 +223,8 @@ RUVIA_TEST(context_response_init_preserves_repeated_set_cookie_headers) {
 
 RUVIA_TEST(context_body_null_gives_empty_body_with_status) {
     RUVIA_MAKE_CONTEXT(worker, memory, request, context);
-    const auto response = context.body(nullptr, std::uint16_t{204});
+    context.status(204);
+    const auto response = context.body(nullptr);
     RUVIA_CHECK_EQ(response.status(), std::uint16_t{204});
     RUVIA_CHECK(responseBody(response).bytes().empty());
 }
@@ -253,7 +248,7 @@ RUVIA_TEST(context_body_byte_span_copies_into_response_storage) {
 
 RUVIA_TEST(context_text_sets_plain_content_type) {
     RUVIA_MAKE_CONTEXT(worker, memory, request, context);
-    const auto response = context.text("hello", 200);
+    const auto response = context.text("hello");
     RUVIA_CHECK_EQ(response.status(), std::uint16_t{200});
     RUVIA_CHECK_EQ(response.header("Content-Type"), std::string_view("text/plain; charset=UTF-8"));
     RUVIA_CHECK_EQ(responseBody(response).bytes(), std::string_view("hello"));
@@ -261,7 +256,7 @@ RUVIA_TEST(context_text_sets_plain_content_type) {
 
 RUVIA_TEST(context_html_sets_html_content_type) {
     RUVIA_MAKE_CONTEXT(worker, memory, request, context);
-    const auto response = context.html("<h1>hi</h1>", 200);
+    const auto response = context.html("<h1>hi</h1>");
     RUVIA_CHECK_EQ(response.status(), std::uint16_t{200});
     RUVIA_CHECK_EQ(response.header("Content-Type"), std::string_view("text/html; charset=UTF-8"));
     RUVIA_CHECK_EQ(responseBody(response).bytes(), std::string_view("<h1>hi</h1>"));
@@ -281,7 +276,7 @@ RUVIA_TEST(context_param_lookup_handles_unencoded_and_missing) {
     HttpRequestAccess::setResource(request, memory.resource());
     auto context = ContextAccess::make(
         memory, request, "/p/:slug/:id", names, values, std::size(names),
-        ruvia::HttpKnownMethod::kGet, 0, 0);
+        0);
 
     const auto slug = context.req().param("slug");
     RUVIA_CHECK(slug.has_value());
@@ -291,21 +286,21 @@ RUVIA_TEST(context_param_lookup_handles_unencoded_and_missing) {
     RUVIA_CHECK_EQ(*id, std::string_view("42"));
     // An unknown parameter name is a clean miss.
     RUVIA_CHECK(!context.req().param("missing").has_value());
-    // Neither single lookup materializes the full parameter table.
-    RUVIA_CHECK(!ContextAccess::routeParamsMaterialized(context));
+    // Every lookup shares the one typed parameter cache used by field binding.
+    RUVIA_CHECK(ContextAccess::routeParamsMaterialized(context));
 }
 
 RUVIA_TEST(context_json_serializes_scalars_with_json_content_type) {
     RUVIA_MAKE_CONTEXT(worker, memory, request, context);
 
-    const auto number = context.json(42, std::uint16_t{200});
+    const auto number = context.json(42);
     RUVIA_CHECK_EQ(number.status(), std::uint16_t{200});
     RUVIA_CHECK_EQ(number.header("Content-Type"), std::string_view("application/json"));
     RUVIA_CHECK_EQ(responseBody(number).bytes(), std::string_view("42"));
 
-    const auto boolean = context.json(true, std::uint16_t{200});
+    const auto boolean = context.json(true);
     RUVIA_CHECK_EQ(responseBody(boolean).bytes(), std::string_view("true"));
 
-    const auto real = context.json(3.5, std::uint16_t{200});
+    const auto real = context.json(3.5);
     RUVIA_CHECK_EQ(responseBody(real).bytes(), std::string_view("3.5"));
 }

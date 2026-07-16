@@ -62,6 +62,15 @@ inline void addVaryTokens(
     }
 
     const auto vary = responseKnownHeader(response, kResponseHeaderVary);
+    if (httpTrimOws(vary) == "*") {
+        return;
+    }
+    for (std::size_t i = 0; i < tokenCount; ++i) {
+        if (httpTrimOws(tokens[i]) == "*") {
+            setResponseHeaderStableView(response, "Vary", "*");
+            return;
+        }
+    }
     const bool useAddMask = tokenCount <= 64;
     std::uint64_t addMask = 0;
     std::size_t addedCount = 0;

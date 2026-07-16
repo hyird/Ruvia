@@ -48,19 +48,26 @@ void validateUniqueValidatedModelTypes(
     }
 }
 
+[[nodiscard]] bool usesRouteRateLimit(
+    std::span<const ControllerMiddlewareDescriptor> descriptors) noexcept {
+    for (const auto& descriptor : descriptors) {
+        if (descriptor.usesRouteRateLimit()) {
+            return true;
+        }
+    }
+    return false;
+}
+
 }  // namespace
 
 Next::Awaitable Next::operator()() & {
     auto state = state_;
     auto* control = state.control;
-    if (control == nullptr || !control->active) {
-        state.repeated = true;
+    state.invocation = control == nullptr
+        ? detail::NextState::Invocation::kExpired
+        : control->beginInvocation();
+    if (state.invocation == detail::NextState::Invocation::kExpired) {
         return Awaitable(state, &ignoreExpiredNext);
-    }
-
-    state.repeated = control->invoked;
-    if (!control->invoked) {
-        control->invoked = true;
     }
     return Awaitable(state, invoke_);
 }
@@ -168,6 +175,8 @@ std::pmr::vector<detail::RouteMiddleware> detail::RouterImpl::materializeMiddlew
     std::span<const ControllerMiddlewareDescriptor> first,
     std::span<const ControllerMiddlewareDescriptor> second) {
     validateUniqueValidatedModelTypes(first, second);
+    hasRouteRateLimit_ = hasRouteRateLimit_ ||
+        usesRouteRateLimit(first) || usesRouteRateLimit(second);
     std::pmr::vector<RouteMiddleware> frames(resource_);
     frames.reserve(first.size() + second.size());
     appendMaterializedMiddlewares(frames, first);
@@ -188,16 +197,19 @@ void detail::RouterImpl::validateRouteTarget(HttpKnownMethod method, std::string
 }
 
 void detail::RouterImpl::finalize() {
-    if (finalized_) {
+    if (routeTable_) {
         return;
     }
 
     validateNoDynamicRouteConflict(pendingRoutes_);
-    routeTable_.reset(constructPmrObject<RouteTable>(resource_, buildRouteTable()));
-    routeTable_.get_deleter().resource = resource_;
-    routeTable_->setErrorHandler(errorHandler_);
-    routeTable_->setNotFoundHandler(notFoundHandler_);
-    finalized_ = true;
+    std::unique_ptr<RouteTable, RouteTableDeleter> table(
+        constructPmrObject<RouteTable>(resource_, resource_),
+        RouteTableDeleter{resource_});
+    buildRouteTable(*table);
+    table->hasRouteRateLimit_ = hasRouteRateLimit_;
+    table->setErrorHandler(errorHandler_);
+    table->setNotFoundHandler(notFoundHandler_);
+    routeTable_ = std::move(table);
 }
 
 const detail::RouteTable& detail::RouterImpl::routeTable() const {

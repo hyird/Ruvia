@@ -1,7 +1,12 @@
 #include "test_harness.h"
 
 #include <cstddef>
+#include <memory_resource>
+#include <optional>
+#include <string>
 #include <string_view>
+#include <type_traits>
+#include <utility>
 
 #include "ruvia/http/detail/HttpRequestInternal.h"
 #include "ruvia/http/detail/RequestBodyDecoding.h"
@@ -21,6 +26,38 @@ using ruvia::detail::RequestKnownHeader;
 using ruvia::detail::requestContentCoding;
 using ruvia::detail::requestBodyBytes;
 using ruvia::detail::requestKnownHeader;
+
+static_assert(std::same_as<
+    decltype(std::declval<const HttpRequest&>().header(std::string_view{})),
+    std::optional<std::string_view>>);
+static_assert(std::is_constructible_v<
+    HttpHeaderView,
+    const std::string&,
+    const std::string&>);
+static_assert(!std::is_constructible_v<
+    HttpHeaderView,
+    std::string&&,
+    std::string_view>);
+static_assert(!std::is_constructible_v<
+    HttpHeaderView,
+    std::string_view,
+    std::string&&>);
+static_assert(!std::is_constructible_v<
+    HttpHeaderView,
+    const std::string&&,
+    std::string_view>);
+static_assert(!std::is_constructible_v<
+    HttpHeaderView,
+    std::string_view,
+    const std::string&&>);
+static_assert(!std::is_constructible_v<
+    HttpHeaderView,
+    std::pmr::string&&,
+    std::string_view>);
+static_assert(!std::is_constructible_v<
+    HttpHeaderView,
+    std::string_view,
+    const std::pmr::string&&>);
 
 }  // namespace
 
@@ -96,6 +133,23 @@ RUVIA_TEST(request_access_unknown_header_lookup_uses_last_match) {
     RUVIA_CHECK(HttpRequestAccess::addHeader(request, HttpHeaderView{"x-trace", "second"}));
 
     RUVIA_CHECK_EQ(request.header("X-Trace"), std::string_view("second"));
+}
+
+RUVIA_TEST(request_header_distinguishes_missing_from_present_empty) {
+    HttpRequest request = HttpRequestAccess::make();
+    HttpRequestAccess::reset(request);
+
+    RUVIA_CHECK(!request.header("X-Empty").has_value());
+    RUVIA_CHECK(HttpRequestAccess::addHeader(request, HttpHeaderView{"X-Empty", ""}));
+    const auto presentEmpty = request.header("x-empty");
+    RUVIA_CHECK(presentEmpty.has_value());
+    RUVIA_CHECK(presentEmpty.value_or("missing").empty());
+
+    const auto hostSlot = HttpRequestAccess::knownHeaderSlot(RequestKnownHeader::kHost);
+    RUVIA_CHECK(HttpRequestAccess::addHeader(request, HttpHeaderView{"Host", ""}, hostSlot));
+    const auto knownPresentEmpty = request.header("HOST");
+    RUVIA_CHECK(knownPresentEmpty.has_value());
+    RUVIA_CHECK(knownPresentEmpty.value_or("missing").empty());
 }
 
 RUVIA_TEST(request_access_known_header_lookup_uses_last_match) {

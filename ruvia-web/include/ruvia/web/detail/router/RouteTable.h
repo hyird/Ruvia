@@ -6,6 +6,7 @@
 #include <exception>
 #include <memory_resource>
 #include <new>
+#include <optional>
 #include <span>
 #include <stdexcept>
 #include <string>
@@ -15,12 +16,13 @@
 #include <vector>
 
 #include "ruvia/http/HttpKnownMethod.h"
+#include "ruvia/http/detail/websocket/HttpWebSocketHandshakeFields.h"
 #include "ruvia/web/detail/http/ContextServices.h"
 #include "ruvia/web/Context.h"
 #include "ruvia/web/detail/CallableRef.h"
 #include "ruvia/web/detail/router/RouteResolution.h"
 #include "ruvia/web/detail/router/RouteModes.h"
-#include "ruvia/web/detail/router/RouteStreamResult.h"
+#include "ruvia/web/detail/router/RouteStreamState.h"
 #include "ruvia/web/Error.h"
 #include "ruvia/web/ErrorHandlers.h"
 #include "ruvia/web/Next.h"
@@ -140,7 +142,7 @@ public:
     RouteEndpoint(const RouteEndpoint&) = delete;
     RouteEndpoint& operator=(const RouteEndpoint&) = delete;
     RouteEndpoint(RouteEndpoint&&) noexcept = default;
-    RouteEndpoint& operator=(RouteEndpoint&&) noexcept = default;
+    RouteEndpoint& operator=(RouteEndpoint&&) = delete;
 
     [[nodiscard]] static RouteEndpoint buffered(
         RouteHandler handler,
@@ -179,6 +181,11 @@ public:
             options.lifecycle.closeHandshakeTimeout->count() <= 0) {
             throw std::invalid_argument(
                 "websocket close-handshake timeout must be greater than zero");
+        }
+        if (!options.subprotocols.empty() &&
+            !isValidWebSocketSubprotocolList(options.subprotocols)) {
+            throw std::invalid_argument(
+                "websocket subprotocols must be a list of at most 64 unique HTTP tokens");
         }
         return RouteEndpoint(WebSocketRouteEndpoint(
             pmrResourceOrDefault(resource), handler, options));
@@ -251,7 +258,7 @@ public:
     RouteEntry(const RouteEntry&) = delete;
     RouteEntry& operator=(const RouteEntry&) = delete;
     RouteEntry(RouteEntry&&) noexcept = default;
-    RouteEntry& operator=(RouteEntry&&) noexcept = default;
+    RouteEntry& operator=(RouteEntry&&) = delete;
 
     [[nodiscard]] HttpKnownMethod method() const noexcept {
         return method_;
@@ -318,11 +325,14 @@ public:
     explicit RouteTable(std::pmr::memory_resource* resource);
     RouteTable(const RouteTable&) = delete;
     RouteTable& operator=(const RouteTable&) = delete;
-    RouteTable(RouteTable&&) noexcept = default;
-    RouteTable& operator=(RouteTable&&) noexcept = default;
+    RouteTable(RouteTable&&) = delete;
+    RouteTable& operator=(RouteTable&&) = delete;
 
     void setErrorHandler(HttpErrorHandler handler) noexcept;
     void setNotFoundHandler(HttpNotFoundHandler handler) noexcept;
+    [[nodiscard]] bool hasRouteRateLimit() const noexcept {
+        return hasRouteRateLimit_;
+    }
     [[nodiscard]] RouteResolution resolve(const HttpRequest& request) const noexcept;
     [[nodiscard]] RouteResolution resolve(
         HttpKnownMethod method,
@@ -357,17 +367,19 @@ public:
         RequestMemory& memory,
         std::exception_ptr exception,
         ContextServices services = {}) const;
-    Task<StreamDispatchResult> dispatchResponseStream(
+    // Absence means the bound output handled the request; a value is the one
+    // buffered response produced before a response-stream commit.
+    Task<std::optional<HttpResponse>> dispatchResponseStream(
         const HttpRequest& request,
         const ResolvedRoute& route,
         RequestMemory& memory,
         ResponseStreamWriter& responseStream,
         ContextServices services = {}) const;
-    Task<StreamDispatchResult> dispatchWebSocket(
+    Task<std::optional<HttpResponse>> dispatchWebSocket(
         const HttpRequest& request,
         const ResolvedRoute& route,
         RequestMemory& memory,
-        WebSocket& webSocket,
+        const RouteStreamHandler& handler,
         ContextServices services = {}) const;
 
 private:
@@ -491,16 +503,18 @@ private:
         std::size_t index,
         Context& context) const;
     [[nodiscard]] static Task<void> invokeMiddlewareContinuation(NextState state);
-    [[nodiscard]] Task<StreamDispatchResult> dispatchStreamRoute(
+    [[nodiscard]] Task<std::optional<HttpResponse>> dispatchStreamRoute(
         const HttpRequest& request,
         const ResolvedRoute& route,
         RequestMemory& memory,
+        const RouteStreamHandler& handler,
         ContextServices services) const;
     [[nodiscard]] Task<void> invokeStreamMiddlewareAt(
         const RouteEntry& route,
         std::size_t index,
         Context& context,
-        StreamMiddlewareChainState& chain) const;
+        StreamMiddlewareChainState& chain,
+        const RouteStreamHandler& handler) const;
     [[nodiscard]] static Task<void> invokeStreamMiddlewareContinuation(NextState state);
     [[nodiscard]] Task<void> storeMiddlewareExceptionResponse(
         Context& context,
@@ -531,6 +545,7 @@ private:
     std::size_t exactMask_{0};
     HttpErrorHandler errorHandler_{nullptr};
     HttpNotFoundHandler notFoundHandler_{nullptr};
+    bool hasRouteRateLimit_{false};
 };
 
 }  // namespace ruvia::detail

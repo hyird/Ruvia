@@ -92,7 +92,7 @@ private:
         body.append("wildcard=");
         body.append(c.req().param("*").value_or(""));
         body.push_back('\n');
-        co_return c.text(body);
+        co_return c.text(std::move(body));
     }
 
     ruvia::Task<ruvia::HttpResponse> inputs(ruvia::Context& c) {
@@ -112,15 +112,16 @@ private:
         body.append("\nsession=");
         body.append(c.req().cookie("session").value_or(""));
         body.push_back('\n');
-        co_return c.text(body);
+        co_return c.text(std::move(body));
     }
 
     ruvia::Task<ruvia::HttpResponse> echo(ruvia::Context& c) {
         const auto body = co_await c.req().text();
         std::pmr::string owned(c.allocator<char>());
         owned.assign(body.data(), body.size());
-        constexpr ruvia::HttpHeaderView headers[] = {{"X-Echo", "true"}};
-        co_return c.text(owned, 201, headers);
+        c.status(201);
+        c.header("X-Echo", "true");
+        co_return c.text(std::move(owned));
     }
 
     ruvia::Task<ruvia::HttpResponse> redirect(ruvia::Context& c) {
@@ -152,8 +153,8 @@ int main() {
 
     ruvia::app()
         .setListenAddress("0.0.0.0")
-        .setHttpListenPort(8080)
-        .setThreadNum(2)
+        .setServerTopology(ruvia::ServerTopology::http(8080))
+        .setWorkersPerListener(2)
         .setKeepaliveTimeout(std::chrono::seconds(75))
         .setClientHeaderTimeout(std::chrono::seconds(60))
         .setClientBodyTimeout(std::chrono::seconds(60))

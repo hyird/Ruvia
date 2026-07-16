@@ -37,6 +37,7 @@
 #include <variant>
 #include <vector>
 
+#include "ruvia/http/detail/BorrowedView.h"
 #include "ruvia/http/detail/http2/Http2ClosedStreams.h"
 #include "ruvia/http/detail/http2/Http2Event.h"
 #include "ruvia/http/detail/http2/Http2FrameTypes.h"
@@ -44,8 +45,10 @@
 #include "ruvia/http/detail/http2/Http2HeaderDecode.h"
 #include "ruvia/http/detail/http2/Http2Hpack.h"
 #include "ruvia/http/detail/http2/Http2LocalSettings.h"
+#include "ruvia/http/detail/http2/Http2LocalConnectionState.h"
 #include "ruvia/http/detail/http2/Http2OutputBuffer.h"
 #include "ruvia/http/detail/http2/Http2PeerSettings.h"
+#include "ruvia/http/detail/http2/Http2ReceiveWindowCredit.h"
 #include "ruvia/http/detail/http2/Http2ReadyQueue.h"
 #include "ruvia/http/detail/http2/Http2RequestContent.h"
 #include "ruvia/http/detail/http2/Http2Role.h"
@@ -106,22 +109,6 @@ enum class Http2WebSocketHandshakeSubmitError : std::uint8_t {
 
 class Http2WebSocketHandshakeSubmitResult;
 
-class Http2SubmittedWebSocketHandshake final {
-public:
-    [[nodiscard]] const WebSocketServerNegotiation& negotiation() const noexcept {
-        return negotiation_;
-    }
-
-private:
-    friend class Http2WebSocketHandshakeSubmitResult;
-
-    explicit Http2SubmittedWebSocketHandshake(
-        WebSocketServerNegotiation negotiation) noexcept
-        : negotiation_(negotiation) {}
-
-    WebSocketServerNegotiation negotiation_;
-};
-
 class Http2WebSocketHandshakeSubmitFailure final {
 public:
     [[nodiscard]] constexpr Http2WebSocketHandshakeSubmitError
@@ -139,26 +126,30 @@ private:
     Http2WebSocketHandshakeSubmitError error_;
 };
 
-// Only the submitted alternative owns the exact negotiation encoded in the 200
-// response. The runtime must configure WsConnection from that committed value,
-// never from a separately recomputed compression/subprotocol tuple.
+// The successful alternative directly owns the exact negotiation encoded in
+// the 200 response. The runtime must configure WsConnection from that committed
+// value, never from a separately recomputed compression/subprotocol tuple.
 class Http2WebSocketHandshakeSubmitResult final {
 public:
-    [[nodiscard]] const Http2SubmittedWebSocketHandshake*
-    submitted() const noexcept {
-        return std::get_if<Http2SubmittedWebSocketHandshake>(&value_);
+    [[nodiscard]] const WebSocketServerNegotiation*
+    submitted() const & noexcept {
+        return std::get_if<WebSocketServerNegotiation>(&value_);
     }
+    [[nodiscard]] const WebSocketServerNegotiation*
+    submitted() const && = delete;
 
     [[nodiscard]] const Http2WebSocketHandshakeSubmitFailure*
-    failure() const noexcept {
+    failure() const & noexcept {
         return std::get_if<Http2WebSocketHandshakeSubmitFailure>(&value_);
     }
+    [[nodiscard]] const Http2WebSocketHandshakeSubmitFailure*
+    failure() const && = delete;
 
 private:
     friend class Http2Connection;
 
     using Value = std::variant<
-        Http2SubmittedWebSocketHandshake,
+        WebSocketServerNegotiation,
         Http2WebSocketHandshakeSubmitFailure>;
 
     template <typename Alternative>
@@ -169,7 +160,7 @@ private:
     [[nodiscard]] static Http2WebSocketHandshakeSubmitResult
     makeSubmitted(WebSocketServerNegotiation negotiation) noexcept {
         return Http2WebSocketHandshakeSubmitResult(
-            Http2SubmittedWebSocketHandshake(negotiation));
+            negotiation);
     }
 
     [[nodiscard]] static Http2WebSocketHandshakeSubmitResult
@@ -240,14 +231,18 @@ private:
 class Http2RequestHeadSubmitResult final {
 public:
     [[nodiscard]] constexpr const Http2SubmittedRequestHead*
-    submitted() const noexcept {
+    submitted() const & noexcept {
         return std::get_if<Http2SubmittedRequestHead>(&value_);
     }
+    [[nodiscard]] constexpr const Http2SubmittedRequestHead*
+    submitted() const && = delete;
 
     [[nodiscard]] constexpr const Http2RequestHeadSubmitFailure*
-    failure() const noexcept {
+    failure() const & noexcept {
         return std::get_if<Http2RequestHeadSubmitFailure>(&value_);
     }
+    [[nodiscard]] constexpr const Http2RequestHeadSubmitFailure*
+    failure() const && = delete;
 
 private:
     friend class Http2Connection;
@@ -310,37 +305,52 @@ enum class Http2FinishSubmitStatus : std::uint8_t {
 
 // A final response HEADERS transaction either commits one body/stream plan or
 // rejects the submission without exposing a plan that was never committed.
-enum class Http2ResponseHeadSubmitError : std::uint8_t {
-    kClosed,
-    kInvalidState,
-    kResponsePlanMismatch,
-    kInvalidMessage,
-};
-
+class Http2ResponseHeadSubmitFailure;
 template <typename Plan>
 class Http2ResponseHeadSubmitResult;
 
-template <typename Plan>
-class Http2SubmittedResponseHead final {
+class Http2ResponseHeadSubmitError final : public std::exception {
 public:
-    [[nodiscard]] const Plan& plan() const noexcept {
-        return plan_;
+    [[nodiscard]] const char* what() const noexcept override {
+        switch (kind_) {
+            case Kind::kClosed:
+                return "HTTP/2 response stream is closed";
+            case Kind::kInvalidState:
+                return "invalid HTTP/2 response head submission state";
+            case Kind::kResponsePlanMismatch:
+                return "HTTP/2 response head does not match its write plan";
+            case Kind::kInvalidMessage:
+                return "invalid HTTP/2 response head message";
+        }
+        return "unknown HTTP/2 response head submission failure";
     }
 
 private:
+    friend class Http2ResponseHeadSubmitFailure;
     template <typename>
     friend class Http2ResponseHeadSubmitResult;
 
-    explicit Http2SubmittedResponseHead(Plan plan)
-        : plan_(std::move(plan)) {}
+    enum class Kind : std::uint8_t {
+        kClosed,
+        kInvalidState,
+        kResponsePlanMismatch,
+        kInvalidMessage,
+    };
 
-    Plan plan_;
+    explicit Http2ResponseHeadSubmitError(Kind kind) noexcept
+        : kind_(kind) {}
+
+    Kind kind_;
 };
 
 class Http2ResponseHeadSubmitFailure final {
 public:
-    [[nodiscard]] constexpr Http2ResponseHeadSubmitError error() const noexcept {
-        return error_;
+    [[nodiscard]] constexpr bool peerClosed() const noexcept {
+        return kind_ == Http2ResponseHeadSubmitError::Kind::kClosed;
+    }
+
+    [[nodiscard]] Http2ResponseHeadSubmitError exception() const noexcept {
+        return Http2ResponseHeadSubmitError(kind_);
     }
 
 private:
@@ -348,33 +358,34 @@ private:
     friend class Http2ResponseHeadSubmitResult;
 
     explicit constexpr Http2ResponseHeadSubmitFailure(
-        Http2ResponseHeadSubmitError error) noexcept
-        : error_(error) {}
+        Http2ResponseHeadSubmitError::Kind kind) noexcept
+        : kind_(kind) {}
 
-    Http2ResponseHeadSubmitError error_;
+    Http2ResponseHeadSubmitError::Kind kind_;
 };
 
-// Only submitted() owns the plan that now governs DATA/END_STREAM. A failure
-// owns only its refusal reason, so callers cannot observe body metadata from a
-// rejected HEADERS transaction or forget to check a parallel status first.
+// The successful alternative directly owns the plan that now governs
+// DATA/END_STREAM. A failure owns only its refusal reason, so callers cannot
+// observe body metadata from a rejected transaction or forget a parallel status.
 template <typename Plan>
 class Http2ResponseHeadSubmitResult final {
 public:
-    using Submitted = Http2SubmittedResponseHead<Plan>;
-
-    [[nodiscard]] const Submitted* submitted() const noexcept {
-        return std::get_if<Submitted>(&value_);
+    [[nodiscard]] const Plan* submitted() const & noexcept {
+        return std::get_if<Plan>(&value_);
     }
+    [[nodiscard]] const Plan* submitted() const && = delete;
 
     [[nodiscard]] constexpr const Http2ResponseHeadSubmitFailure*
-    failure() const noexcept {
+    failure() const & noexcept {
         return std::get_if<Http2ResponseHeadSubmitFailure>(&value_);
     }
+    [[nodiscard]] constexpr const Http2ResponseHeadSubmitFailure*
+    failure() const && = delete;
 
 private:
     friend class Http2Connection;
 
-    using Value = std::variant<Submitted, Http2ResponseHeadSubmitFailure>;
+    using Value = std::variant<Plan, Http2ResponseHeadSubmitFailure>;
 
     template <typename Alternative>
     explicit Http2ResponseHeadSubmitResult(Alternative alternative)
@@ -383,22 +394,39 @@ private:
     [[nodiscard]] static Http2ResponseHeadSubmitResult
     makeSubmitted(Plan plan) {
         return Http2ResponseHeadSubmitResult(
-            Submitted(std::move(plan)));
+            std::move(plan));
+    }
+
+    [[nodiscard]] static Http2ResponseHeadSubmitResult makeClosedFailure() {
+        return Http2ResponseHeadSubmitResult(
+            Http2ResponseHeadSubmitFailure(
+                Http2ResponseHeadSubmitError::Kind::kClosed));
     }
 
     [[nodiscard]] static Http2ResponseHeadSubmitResult
-    makeFailure(Http2ResponseHeadSubmitError error) {
+    makeInvalidStateFailure() {
         return Http2ResponseHeadSubmitResult(
-            Http2ResponseHeadSubmitFailure(error));
+            Http2ResponseHeadSubmitFailure(
+                Http2ResponseHeadSubmitError::Kind::kInvalidState));
+    }
+
+    [[nodiscard]] static Http2ResponseHeadSubmitResult
+    makeResponsePlanMismatchFailure() {
+        return Http2ResponseHeadSubmitResult(
+            Http2ResponseHeadSubmitFailure(
+                Http2ResponseHeadSubmitError::Kind::kResponsePlanMismatch));
+    }
+
+    [[nodiscard]] static Http2ResponseHeadSubmitResult
+    makeInvalidMessageFailure() {
+        return Http2ResponseHeadSubmitResult(
+            Http2ResponseHeadSubmitFailure(
+                Http2ResponseHeadSubmitError::Kind::kInvalidMessage));
     }
 
     Value value_;
 };
 
-using Http2SubmittedBufferedResponseHead =
-    Http2SubmittedResponseHead<HttpBufferedResponseWritePlan>;
-using Http2SubmittedStreamingResponseHead =
-    Http2SubmittedResponseHead<ResponseStreamCommitPlan>;
 using Http2BufferedResponseHeadSubmitResult =
     Http2ResponseHeadSubmitResult<HttpBufferedResponseWritePlan>;
 using Http2StreamingResponseHeadSubmitResult =
@@ -444,6 +472,8 @@ public:
     // is terminal, so that input must be dropped. Every accepted call can emit events,
     // which must be drained before the next input is offered.
     [[nodiscard]] Http2FeedResult feed(std::string_view in);
+    template <HttpTemporaryOwningCharString Input>
+    Http2FeedResult feed(Input&&) = delete;
     // Pull the next protocol event. nullopt means the queue is drained; every
     // materialized event contains exactly one typed payload.
     [[nodiscard]] std::optional<Http2Event> nextEvent();
@@ -535,7 +565,10 @@ public:
     // deliberately absent from this value; those connections keep established streams
     // alive while draining.
     [[nodiscard]] std::optional<Http2ErrorCode> connectionError() const noexcept {
-        return connectionError_;
+        const auto* failure = localConnectionState_.fatalFailure();
+        return failure != nullptr
+            ? std::optional<Http2ErrorCode>(failure->error())
+            : std::nullopt;
     }
 
     // Graceful local drain: advertise GOAWAY(NO_ERROR) at the current last peer stream
@@ -543,7 +576,9 @@ public:
     // advertised id are refused (RST_STREAM(REFUSED_STREAM)). Idempotent. Receiving a
     // valid peer GOAWAY enters this state through the same path so shutdown is bilateral.
     void beginDrain();
-    [[nodiscard]] bool draining() const noexcept { return draining_; }
+    [[nodiscard]] bool draining() const noexcept {
+        return localConnectionState_.gracefulDrain() != nullptr;
+    }
 
     // True while a HEADERS block is still being assembled (awaiting CONTINUATION); the
     // I/O layer maps this to its tight header-read inactivity timeout.
@@ -562,11 +597,17 @@ public:
     // slot. `content` is the sole Content-Length/END_STREAM contract; later content
     // flows via submitData(result.submitted()->streamId(), ...).
     // CONNECT has different pseudo-header and tunnel semantics and is deliberately
-    // rejected here; it uses the dedicated CONNECT submission path.
+    // rejected here; it uses the dedicated CONNECT submission path. `scheme`
+    // accepts the complete RFC 3986 grammar, including non-HTTP schemes. `path`
+    // is origin-form, except that only OPTIONS can use asterisk-form. `authority`
+    // is absent exactly when the target URI has no authority information. HTTP(S)
+    // origin-form requires Host-compatible authority without userinfo; other
+    // schemes use the complete RFC 3986 authority grammar and may carry an empty
+    // path. Asterisk-form OPTIONS requires std::nullopt.
     [[nodiscard]] Http2RequestHeadSubmitResult submitRegularRequestHead(
         std::string_view method,
         std::string_view scheme,
-        std::string_view authority,
+        std::optional<std::string_view> authority,
         std::string_view path,
         std::span<const HttpHeaderView> headers,
         Http2RequestContent content);
@@ -577,7 +618,10 @@ public:
         std::span<const HttpHeaderView> headers = {});
     // RFC 8441 Extended CONNECT. The peer must first advertise
     // SETTINGS_ENABLE_CONNECT_PROTOCOL=1. :protocol is a protocol-name token and the
-    // ordinary target pseudo-headers are generated by the core.
+    // ordinary target pseudo-headers are generated by the core. Generic protocols
+    // accept any RFC 3986 scheme and allow its path to be empty; otherwise the path
+    // is origin-form. WebSocket requires an HTTP(S) scheme. WebSocket protocol names
+    // are matched case-insensitively and encoded as `websocket`.
     [[nodiscard]] Http2RequestHeadSubmitResult submitExtendedConnectRequestHead(
         std::string_view protocol,
         std::string_view scheme,
@@ -586,8 +630,9 @@ public:
         std::span<const HttpHeaderView> headers = {});
     // A DATA event borrows bytes from the accepted input and retains the matching
     // receive-window debt. Once the owner has copied/consumed every currently
-    // delivered DATA event for this stream, release the debt and queue the required
-    // connection/stream WINDOW_UPDATE frames. Safe when the stream is gone.
+    // delivered DATA event for this stream, transfer the debt into batched
+    // connection/stream credit. WINDOW_UPDATE is emitted only at the shared
+    // half-window threshold. Safe when the stream is gone.
     void releaseReceivedData(std::uint32_t streamId);
     // True while submitData left a window-blocked remainder queued for this stream
     // (the owner waits for the drain report before pulling its next body chunk).
@@ -643,7 +688,8 @@ private:
     // caller's bytes) and slow (parse the buffered input_) paths.
     [[nodiscard]] bool consumeFrames(std::string_view buffer, std::size_t& offset);
     // Synchronous per-frame dispatch (ported 1:1 from processFrame/*; returns false
-    // on a fatal protocol error, having appended GOAWAY and set connectionError_).
+    // on a fatal protocol error, having appended GOAWAY and transitioned the
+    // local connection state to fatal failure).
     [[nodiscard]] bool processFrame(const Http2FrameHeader& header, std::string_view payload);
     [[nodiscard]] bool processSettings(const Http2FrameHeader& header, std::string_view payload);
     [[nodiscard]] bool processPing(const Http2FrameHeader& header, std::string_view payload);
@@ -659,6 +705,9 @@ private:
     // Release a successfully debited DATA payload that protocol semantics discard.
     // Only connection credit survives because the stream is closed/being abandoned.
     void releaseDroppedDataConnectionWindow(std::int32_t flowBytes);
+    void queueConsumedDataCredit(
+        Http2StreamState* stream,
+        std::uint32_t bytes);
     [[nodiscard]] bool applySettingsPayload(std::string_view payload);
 
     // HPACK header-block decode (all pure; ported 1:1 from the coroutine session but
@@ -728,8 +777,11 @@ private:
         Http2StreamCloseSource source,
         Http2ErrorCode error);
     bool closeStreamByOwner(std::uint32_t streamId);
+    [[nodiscard]] bool wasClosedByPeerReset(
+        std::uint32_t streamId,
+        const Http2StreamState* retainedStream) const noexcept;
     void discardDeferredStreamState(std::uint32_t streamId);
-    // Return a stream's banked receive-window debt to the connection window on removal.
+    // Preserve a removed stream's banked debt as batched connection credit.
     void flushWindowDebt(Http2StreamState& stream);
 
     std::pmr::memory_resource* resource_;
@@ -766,8 +818,7 @@ private:
 
     std::uint32_t localMaxFrameSize_{Http2LocalSettings::kMaxFrameSize};
     std::uint32_t lastStreamId_{0};
-    bool draining_{false};
-    std::uint32_t goawayLastStreamId_{0};
+    Http2LocalConnectionState localConnectionState_;
     Http2Role role_{Http2Role::kServer};
     std::uint32_t nextLocalStreamId_{1};  // client role: next odd stream id to open
     std::uint32_t activeLocalRequestStreams_{0};
@@ -775,16 +826,15 @@ private:
     std::int32_t connectionSendWindow_{kHttp2DefaultInitialWindowSize};
     std::int32_t connectionReceiveWindow_{
         static_cast<std::int32_t>(Http2LocalSettings::kInitialWindowSize)};
+    Http2ReceiveWindowCredit connectionReceiveCredit_;
     PrefacePhase prefacePhase_{PrefacePhase::kNotStarted};
-    std::optional<Http2ErrorCode> connectionError_;
 
     // Defense-in-depth flood budgets (see Http2Connection.cpp). No clock in the core, so
     // these are per-connection counters that trip GOAWAY(ENHANCE_YOUR_CALM).
-    std::uint32_t peerResetStreams_{0};    // inbound RST_STREAM count (rapid-reset budget)
+    std::uint32_t peerResetStreams_{0};    // new stream aborts from peer RST_STREAM
     std::uint32_t completedResponses_{0};  // streams finished without reset (refills budget)
     std::uint32_t consecutivePings_{0};    // inbound PINGs since output was last drained
     std::uint32_t consecutiveSettings_{0}; // inbound non-ACK SETTINGS since output drained
-    std::uint32_t consecutiveClosedStreamResets_{0};  // closed-stream DATA RSTs since drain
 };
 
 }  // namespace ruvia::detail

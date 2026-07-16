@@ -105,24 +105,28 @@ private:
 class HttpMultipartDelimiterResult final {
 public:
     [[nodiscard]] constexpr const HttpMultipartDelimiterNoMatch*
-    noMatch() const noexcept {
+    noMatch() const & noexcept {
         return std::get_if<HttpMultipartDelimiterNoMatch>(&value_);
     }
+    const HttpMultipartDelimiterNoMatch* noMatch() const && = delete;
 
     [[nodiscard]] constexpr const HttpMultipartDelimiterNeedInput*
-    needInput() const noexcept {
+    needInput() const & noexcept {
         return std::get_if<HttpMultipartDelimiterNeedInput>(&value_);
     }
+    const HttpMultipartDelimiterNeedInput* needInput() const && = delete;
 
     [[nodiscard]] constexpr const HttpMultipartPartDelimiter*
-    part() const noexcept {
+    part() const & noexcept {
         return std::get_if<HttpMultipartPartDelimiter>(&value_);
     }
+    const HttpMultipartPartDelimiter* part() const && = delete;
 
     [[nodiscard]] constexpr const HttpMultipartCloseDelimiter*
-    close() const noexcept {
+    close() const & noexcept {
         return std::get_if<HttpMultipartCloseDelimiter>(&value_);
     }
+    const HttpMultipartCloseDelimiter* close() const && = delete;
 
 private:
     friend HttpMultipartDelimiterResult httpMatchMultipartDelimiterLine(
@@ -330,6 +334,11 @@ private:
     return result;
 }
 
+template <HttpTemporaryOwningCharString Headers>
+std::optional<std::string_view> httpHeaderValueInBlock(
+    Headers&&,
+    std::string_view) = delete;
+
 [[nodiscard]] inline std::optional<std::string_view> httpDispositionParameter(
     std::string_view disposition,
     std::string_view name) noexcept {
@@ -341,17 +350,17 @@ private:
     return value ? std::optional<std::string_view>(httpTrimQuotes(*value)) : std::nullopt;
 }
 
+template <HttpTemporaryOwningCharString Disposition>
+std::optional<std::string_view> httpDispositionParameter(
+    Disposition&&,
+    std::string_view) = delete;
+
 [[nodiscard]] inline bool httpIsFormDataDisposition(std::string_view disposition) noexcept {
     const auto value = httpTrimOws(disposition);
     const auto semicolon = value.find(';');
     const auto type = httpTrimOws(semicolon == std::string_view::npos ? value : value.substr(0, semicolon));
     return httpAsciiEqualsIgnoreCase(type, "form-data");
 }
-
-enum class HttpMultipartPartHeaderParseError : std::uint8_t {
-    kInvalidDisposition,
-    kMissingName,
-};
 
 class HttpMultipartPartHeaderParseResult;
 
@@ -385,8 +394,7 @@ private:
 
 class HttpMultipartPartHeaderParseFailure final {
 public:
-    [[nodiscard]] constexpr HttpMultipartPartHeaderParseError
-    error() const noexcept {
+    [[nodiscard]] constexpr MultipartParseError parseError() const noexcept {
         return error_;
     }
 
@@ -394,23 +402,25 @@ private:
     friend class HttpMultipartPartHeaderParseResult;
 
     explicit constexpr HttpMultipartPartHeaderParseFailure(
-        HttpMultipartPartHeaderParseError error) noexcept
+        MultipartParseError error) noexcept
         : error_(error) {}
 
-    HttpMultipartPartHeaderParseError error_;
+    MultipartParseError error_;
 };
 
 class HttpMultipartPartHeaderParseResult final {
 public:
     [[nodiscard]] constexpr const HttpMultipartPartHeaders*
-    headers() const noexcept {
+    headers() const & noexcept {
         return std::get_if<HttpMultipartPartHeaders>(&value_);
     }
+    const HttpMultipartPartHeaders* headers() const && = delete;
 
     [[nodiscard]] constexpr const HttpMultipartPartHeaderParseFailure*
-    failure() const noexcept {
+    failure() const & noexcept {
         return std::get_if<HttpMultipartPartHeaderParseFailure>(&value_);
     }
+    const HttpMultipartPartHeaderParseFailure* failure() const && = delete;
 
 private:
     friend HttpMultipartPartHeaderParseResult httpParseMultipartPartHeaders(
@@ -420,9 +430,13 @@ private:
         HttpMultipartPartHeaders,
         HttpMultipartPartHeaderParseFailure>;
 
-    template <typename Result>
-    explicit constexpr HttpMultipartPartHeaderParseResult(Result result) noexcept
-        : value_(result) {}
+    explicit constexpr HttpMultipartPartHeaderParseResult(
+        HttpMultipartPartHeaders headers) noexcept
+        : value_(headers) {}
+
+    explicit constexpr HttpMultipartPartHeaderParseResult(
+        HttpMultipartPartHeaderParseFailure failure) noexcept
+        : value_(failure) {}
 
     [[nodiscard]] static constexpr HttpMultipartPartHeaderParseResult
     makeHeaders(
@@ -434,7 +448,7 @@ private:
     }
 
     [[nodiscard]] static constexpr HttpMultipartPartHeaderParseResult
-    makeFailure(HttpMultipartPartHeaderParseError error) noexcept {
+    makeFailure(MultipartParseError error) noexcept {
         return HttpMultipartPartHeaderParseResult(
             HttpMultipartPartHeaderParseFailure(error));
     }
@@ -442,58 +456,76 @@ private:
     Value value_;
 };
 
-enum class HttpMultipartBoundaryParseError : std::uint8_t {
-    kInvalidContentType,
-    kInvalidBoundary,
+class HttpMultipartBoundaryNotApplicable final {
+private:
+    friend class HttpMultipartBoundaryParseResult;
+
+    constexpr HttpMultipartBoundaryNotApplicable() noexcept = default;
 };
 
 class HttpMultipartBoundaryParseFailure final {
 public:
-    [[nodiscard]] constexpr HttpMultipartBoundaryParseError
-    error() const noexcept {
-        return error_;
+    [[nodiscard]] HttpProtocolError protocolError() const noexcept {
+        return HttpProtocolError(400, "invalid multipart boundary");
     }
 
 private:
     friend class HttpMultipartBoundaryParseResult;
 
-    explicit constexpr HttpMultipartBoundaryParseFailure(
-        HttpMultipartBoundaryParseError error) noexcept
-        : error_(error) {}
-
-    HttpMultipartBoundaryParseError error_;
+    constexpr HttpMultipartBoundaryParseFailure() noexcept = default;
 };
 
 class HttpMultipartBoundaryParseResult final {
 public:
-    [[nodiscard]] constexpr const MultipartBoundary* boundary() const noexcept {
+    [[nodiscard]] constexpr const MultipartBoundary*
+    boundary() const & noexcept {
         return std::get_if<MultipartBoundary>(&value_);
     }
+    const MultipartBoundary* boundary() const && = delete;
+
+    [[nodiscard]] constexpr const HttpMultipartBoundaryNotApplicable*
+    notApplicable() const & noexcept {
+        return std::get_if<HttpMultipartBoundaryNotApplicable>(&value_);
+    }
+    const HttpMultipartBoundaryNotApplicable*
+    notApplicable() const && = delete;
 
     [[nodiscard]] constexpr const HttpMultipartBoundaryParseFailure*
-    failure() const noexcept {
+    failure() const & noexcept {
         return std::get_if<HttpMultipartBoundaryParseFailure>(&value_);
     }
+    const HttpMultipartBoundaryParseFailure* failure() const && = delete;
 
 private:
     friend HttpMultipartBoundaryParseResult httpParseMultipartBoundary(std::string_view);
 
     using Value = std::variant<
         MultipartBoundary,
+        HttpMultipartBoundaryNotApplicable,
         HttpMultipartBoundaryParseFailure>;
 
     explicit HttpMultipartBoundaryParseResult(MultipartBoundary boundary)
         : value_(std::move(boundary)) {}
 
+    [[nodiscard]] static constexpr HttpMultipartBoundaryParseResult
+    makeNotApplicable() noexcept {
+        return HttpMultipartBoundaryParseResult(
+            HttpMultipartBoundaryNotApplicable());
+    }
+
+    [[nodiscard]] static constexpr HttpMultipartBoundaryParseResult
+    makeFailure() noexcept {
+        return HttpMultipartBoundaryParseResult(
+            HttpMultipartBoundaryParseFailure());
+    }
+
+    explicit constexpr HttpMultipartBoundaryParseResult(
+        HttpMultipartBoundaryNotApplicable notApplicable) noexcept
+        : value_(notApplicable) {}
+
     explicit constexpr HttpMultipartBoundaryParseResult(
         HttpMultipartBoundaryParseFailure failure) noexcept
         : value_(failure) {}
-
-    [[nodiscard]] static constexpr HttpMultipartBoundaryParseResult
-    makeFailure(HttpMultipartBoundaryParseError error) noexcept {
-        return HttpMultipartBoundaryParseResult(
-            HttpMultipartBoundaryParseFailure(error));
-    }
 
     Value value_;
 };
@@ -523,6 +555,146 @@ private:
         default:
             return true;
     }
+}
+
+[[nodiscard]] inline bool httpValidMimeFieldName(
+    std::string_view value) noexcept {
+    if (value.empty()) {
+        return false;
+    }
+    return std::all_of(value.begin(), value.end(), [](char byte) {
+        const auto character = static_cast<unsigned char>(byte);
+        return character >= 33 && character <= 126 && byte != ':';
+    });
+}
+
+[[nodiscard]] inline bool httpValidMimeFieldBody(
+    std::string_view value) noexcept {
+    return std::all_of(value.begin(), value.end(), [](char byte) {
+        const auto character = static_cast<unsigned char>(byte);
+        return character == '\t' ||
+            (character >= 0x20 && character != 0x7F);
+    });
+}
+
+[[nodiscard]] inline bool httpValidMimeParameterValue(
+    std::string_view value) noexcept {
+    if (value.empty()) {
+        return false;
+    }
+    if (value.front() != '"') {
+        return std::all_of(value.begin(), value.end(), httpMimeTokenChar);
+    }
+    if (value.size() < 2 || value.back() != '"') {
+        return false;
+    }
+
+    const auto last = value.size() - 1;
+    for (std::size_t index = 1; index < last; ++index) {
+        const auto byte = static_cast<unsigned char>(value[index]);
+        if (value[index] == '\\') {
+            if (++index >= last) {
+                return false;
+            }
+            const auto escaped = static_cast<unsigned char>(value[index]);
+            if (escaped != '\t' && (escaped < 0x20 || escaped == 0x7F)) {
+                return false;
+            }
+            continue;
+        }
+        if (value[index] == '"' || byte == 0 || byte == '\r' ||
+            byte == '\n' || byte == 0x7F || (byte < 0x20 && byte != '\t')) {
+            return false;
+        }
+    }
+    return true;
+}
+
+[[nodiscard]] inline bool httpParseMimeParameter(
+    std::string_view parameter,
+    std::string_view& name,
+    std::string_view& value,
+    bool strictEquals = true) noexcept {
+    const auto equals = parameter.find('=');
+    if (parameter.empty() || equals == std::string_view::npos) {
+        return false;
+    }
+
+    const auto rawName = parameter.substr(0, equals);
+    const auto rawValue = parameter.substr(equals + 1);
+    name = httpTrimOws(rawName);
+    value = httpTrimOws(rawValue);
+    // Top-level HTTP media-type parameters forbid OWS around '=' (RFC 9110
+    // section 5.6.6). MIME body-part structured fields retain RFC 822's
+    // separator whitespace and opt out while sharing the remaining checks.
+    return (!strictEquals ||
+            (name.size() == rawName.size() && value.size() == rawValue.size())) &&
+        !name.empty() &&
+        std::all_of(name.begin(), name.end(), httpMimeTokenChar) &&
+        httpValidMimeParameterValue(value);
+}
+
+class HttpMimeParameterNames final {
+public:
+    [[nodiscard]] bool record(std::string_view name) noexcept {
+        for (std::size_t index = 0; index < size_; ++index) {
+            if (httpAsciiEqualsIgnoreCase(names_[index], name)) {
+                return false;
+            }
+        }
+        // Parameter-heavy input is hostile in practice. A fixed bound keeps
+        // duplicate detection allocation-free and its worst-case work constant.
+        if (size_ == names_.size()) {
+            return false;
+        }
+        names_[size_++] = name;
+        return true;
+    }
+
+private:
+    std::array<std::string_view, 64> names_{};
+    std::size_t size_ = 0;
+};
+
+[[nodiscard]] inline bool httpValidMimeMediaType(
+    std::string_view value) noexcept {
+    const auto parameters = httpFindUnquotedDelimiter(value, 0, ';');
+    const auto mediaType = httpTrimOws(value.substr(0, parameters));
+    const auto slash = mediaType.find('/');
+    if (slash == std::string_view::npos ||
+        mediaType.find('/', slash + 1) != std::string_view::npos) {
+        return false;
+    }
+    const auto type = mediaType.substr(0, slash);
+    const auto subtype = mediaType.substr(slash + 1);
+    if (type == "*" || subtype == "*" ||
+        !std::all_of(type.begin(), type.end(), httpMimeTokenChar) ||
+        !std::all_of(subtype.begin(), subtype.end(), httpMimeTokenChar) ||
+        type.empty() || subtype.empty()) {
+        return false;
+    }
+    if (parameters >= value.size()) {
+        return true;
+    }
+
+    HttpMimeParameterNames parameterNames;
+    std::size_t start = parameters + 1;
+    while (start <= value.size()) {
+        const auto end = httpFindUnquotedDelimiter(value, start, ';');
+        const auto parameter = httpTrimOws(value.substr(start, end - start));
+        std::string_view name;
+        std::string_view parameterValue;
+        if (!httpParseMimeParameter(
+                parameter, name, parameterValue, false) ||
+            !parameterNames.record(name)) {
+            return false;
+        }
+        if (end >= value.size()) {
+            return true;
+        }
+        start = end + 1;
+    }
+    return true;
 }
 
 [[nodiscard]] inline std::optional<MultipartBoundary>
@@ -575,53 +747,132 @@ httpDecodeMultipartBoundaryParameter(std::string_view parameter) {
     const auto mediaType = httpTrimOws(
         mediaEnd == std::string_view::npos ? contentType : contentType.substr(0, mediaEnd));
     if (!httpAsciiEqualsIgnoreCase(mediaType, "multipart/form-data")) {
-        return HttpMultipartBoundaryParseResult::makeFailure(
-            HttpMultipartBoundaryParseError::kInvalidContentType);
+        return HttpMultipartBoundaryParseResult::makeNotApplicable();
     }
     if (mediaEnd == std::string_view::npos) {
-        return HttpMultipartBoundaryParseResult::makeFailure(
-            HttpMultipartBoundaryParseError::kInvalidBoundary);
+        return HttpMultipartBoundaryParseResult::makeFailure();
     }
 
-    contentType.remove_prefix(mediaEnd + 1);
     std::optional<MultipartBoundary> boundary;
-    bool repeated = false;
-    httpVisitSemicolonParametersQuoted(
-        contentType,
-        [&boundary, &repeated](std::string_view key, std::string_view value) {
-            if (!httpAsciiEqualsIgnoreCase(key, "boundary")) {
-                return true;
-            }
-            if (boundary) {
-                repeated = true;
-                return false;
-            }
+    HttpMimeParameterNames parameterNames;
+    const auto parameters = contentType.substr(mediaEnd + 1);
+    std::size_t start = 0;
+    while (start <= parameters.size()) {
+        const auto end = httpFindUnquotedDelimiter(parameters, start, ';');
+        const auto parameter = httpTrimOws(parameters.substr(start, end - start));
+        std::string_view key;
+        std::string_view value;
+        if (!httpParseMimeParameter(parameter, key, value) ||
+            !parameterNames.record(key)) {
+            return HttpMultipartBoundaryParseResult::makeFailure();
+        }
+        if (httpAsciiEqualsIgnoreCase(key, "boundary")) {
             boundary = httpDecodeMultipartBoundaryParameter(value);
-            return boundary.has_value();
-        });
-    if (!boundary || repeated) {
-        return HttpMultipartBoundaryParseResult::makeFailure(
-            HttpMultipartBoundaryParseError::kInvalidBoundary);
+            if (!boundary) {
+                return HttpMultipartBoundaryParseResult::makeFailure();
+            }
+        }
+
+        if (end >= parameters.size()) {
+            break;
+        }
+        start = end + 1;
+    }
+    if (!boundary) {
+        return HttpMultipartBoundaryParseResult::makeFailure();
     }
     return HttpMultipartBoundaryParseResult(std::move(*boundary));
 }
 
 [[nodiscard]] inline HttpMultipartPartHeaderParseResult
 httpParseMultipartPartHeaders(std::string_view headers) noexcept {
-    const auto disposition = httpHeaderValueInBlock(headers, "Content-Disposition");
+    std::optional<std::string_view> disposition;
+    std::optional<std::string_view> contentType;
+    auto remainingHeaders = headers;
+    while (!remainingHeaders.empty()) {
+        const auto lineEnd = remainingHeaders.find("\r\n");
+        const auto line = lineEnd == std::string_view::npos
+            ? remainingHeaders
+            : remainingHeaders.substr(0, lineEnd);
+        const auto colon = line.find(':');
+        if (colon == std::string_view::npos ||
+            !httpValidMimeFieldName(line.substr(0, colon)) ||
+            !httpValidMimeFieldBody(line.substr(colon + 1))) {
+            return HttpMultipartPartHeaderParseResult::makeFailure(
+                MultipartParseError::kInvalidPartHeaders);
+        }
+        const auto key = line.substr(0, colon);
+        const auto value = httpTrimOws(line.substr(colon + 1));
+        if (httpAsciiEqualsIgnoreCase(key, "Content-Disposition")) {
+            if (disposition) {
+                return HttpMultipartPartHeaderParseResult::makeFailure(
+                    MultipartParseError::kInvalidContentDisposition);
+            }
+            disposition = value;
+        } else if (httpAsciiEqualsIgnoreCase(key, "Content-Type")) {
+            if (contentType || !httpValidMimeMediaType(value)) {
+                return HttpMultipartPartHeaderParseResult::makeFailure(
+                    MultipartParseError::kInvalidPartHeaders);
+            }
+            contentType = value;
+        }
+        if (lineEnd == std::string_view::npos) {
+            break;
+        }
+        remainingHeaders.remove_prefix(lineEnd + 2);
+    }
+
     if (!disposition || !httpIsFormDataDisposition(*disposition)) {
         return HttpMultipartPartHeaderParseResult::makeFailure(
-            HttpMultipartPartHeaderParseError::kInvalidDisposition);
+            MultipartParseError::kInvalidContentDisposition);
     }
 
-    const auto name = httpDispositionParameter(*disposition, "name");
+    const auto parameters = disposition->find(';');
+    if (parameters == std::string_view::npos) {
+        return HttpMultipartPartHeaderParseResult::makeFailure(
+            MultipartParseError::kMissingFieldName);
+    }
+
+    std::optional<std::string_view> name;
+    std::optional<std::string_view> filename;
+    HttpMimeParameterNames parameterNames;
+    auto remaining = disposition->substr(parameters + 1);
+    std::size_t start = 0;
+    while (start <= remaining.size()) {
+        const auto end = httpFindUnquotedDelimiter(remaining, start, ';');
+        const auto parameter = httpTrimOws(remaining.substr(start, end - start));
+        std::string_view key;
+        std::string_view value;
+        if (!httpParseMimeParameter(parameter, key, value, false) ||
+            !parameterNames.record(key)) {
+            return HttpMultipartPartHeaderParseResult::makeFailure(
+                MultipartParseError::kInvalidContentDisposition);
+        }
+        // RFC 7578 section 4.2 forbids RFC 5987's filename* parameter in
+        // multipart/form-data; accepting and ignoring it loses the filename.
+        if (httpAsciiEqualsIgnoreCase(key, "filename*")) {
+            return HttpMultipartPartHeaderParseResult::makeFailure(
+                MultipartParseError::kInvalidContentDisposition);
+        }
+
+        const auto decoded = httpTrimQuotes(value);
+        if (httpAsciiEqualsIgnoreCase(key, "name")) {
+            name = decoded;
+        } else if (httpAsciiEqualsIgnoreCase(key, "filename")) {
+            filename = decoded;
+        }
+
+        if (end >= remaining.size()) {
+            break;
+        }
+        start = end + 1;
+    }
+
     if (!name) {
         return HttpMultipartPartHeaderParseResult::makeFailure(
-            HttpMultipartPartHeaderParseError::kMissingName);
+            MultipartParseError::kMissingFieldName);
     }
 
-    const auto filename = httpDispositionParameter(*disposition, "filename");
-    const auto contentType = httpHeaderValueInBlock(headers, "Content-Type");
     return HttpMultipartPartHeaderParseResult::makeHeaders(
         *name,
         filename.value_or(std::string_view{}),

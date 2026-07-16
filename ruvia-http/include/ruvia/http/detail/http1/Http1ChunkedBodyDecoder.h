@@ -9,6 +9,9 @@
 #include <variant>
 
 #include "ruvia/http/HttpLimits.h"
+#include "ruvia/http/HttpProtocolError.h"
+#include "ruvia/http/detail/BorrowedView.h"
+#include "ruvia/http/detail/HttpRequestBodyFailure.h"
 #include "ruvia/http/ProtocolByteLimit.h"
 #include "ruvia/http/detail/parser/HttpChunkParser.h"
 
@@ -80,8 +83,17 @@ public:
         return consumedBytes_;
     }
 
-    [[nodiscard]] constexpr Http1ChunkDecodeError error() const noexcept {
-        return error_;
+    [[nodiscard]] HttpProtocolError protocolError() const noexcept {
+        switch (error_) {
+            case Http1ChunkDecodeError::kInvalidFraming:
+                return HttpProtocolError(400, "invalid chunked request body");
+            case Http1ChunkDecodeError::kBodyTooLarge:
+                return HttpRequestBodyFailure::tooLarge().protocolError();
+            case Http1ChunkDecodeError::kFramingTooLarge:
+                return HttpProtocolError(
+                    413, "request body framing is too large");
+        }
+        return HttpProtocolError(400, "invalid chunked request body");
     }
 
 private:
@@ -108,21 +120,25 @@ public:
             value_);
     }
 
-    [[nodiscard]] const Http1ChunkDecodeNeedMore* needMore() const noexcept {
+    [[nodiscard]] const Http1ChunkDecodeNeedMore* needMore() const & noexcept {
         return std::get_if<Http1ChunkDecodeNeedMore>(&value_);
     }
+    const Http1ChunkDecodeNeedMore* needMore() const && = delete;
 
-    [[nodiscard]] const Http1ChunkDecodeBodyChunk* bodyChunk() const noexcept {
+    [[nodiscard]] const Http1ChunkDecodeBodyChunk* bodyChunk() const & noexcept {
         return std::get_if<Http1ChunkDecodeBodyChunk>(&value_);
     }
+    const Http1ChunkDecodeBodyChunk* bodyChunk() const && = delete;
 
-    [[nodiscard]] const Http1ChunkDecodeComplete* complete() const noexcept {
+    [[nodiscard]] const Http1ChunkDecodeComplete* complete() const & noexcept {
         return std::get_if<Http1ChunkDecodeComplete>(&value_);
     }
+    const Http1ChunkDecodeComplete* complete() const && = delete;
 
-    [[nodiscard]] const Http1ChunkDecodeFailure* failure() const noexcept {
+    [[nodiscard]] const Http1ChunkDecodeFailure* failure() const & noexcept {
         return std::get_if<Http1ChunkDecodeFailure>(&value_);
     }
+    const Http1ChunkDecodeFailure* failure() const && = delete;
 
 private:
     friend class Http1ChunkedBodyDecoder;
@@ -170,6 +186,8 @@ private:
 // input buffer and removes result.consumedBytes() only after a returned body
 // view is no longer needed. Framing, trailer validation, and size accounting
 // remain protocol-owned; a runtime only refills input on a need-more result.
+// Representation bytes use the configured body limit, while chunk-size lines,
+// delimiters, and trailers share an independent fixed framing budget.
 class Http1ChunkedBodyDecoder final {
 public:
     explicit Http1ChunkedBodyDecoder(ProtocolByteLimit bodyLimit) noexcept
@@ -193,6 +211,11 @@ public:
                                 Http1ChunkDecodeError::kFramingTooLarge);
                         }
                         return Http1ChunkDecodeResult::makeNeedMore(cursor);
+                    }
+                    if (lineEnd - cursor + 2 > kMaxHttpHeaderBytes) {
+                        return fail(
+                            cursor,
+                            Http1ChunkDecodeError::kFramingTooLarge);
                     }
                     std::size_t chunkSize = 0;
                     if (!parseHttpChunkSize(
@@ -299,6 +322,9 @@ public:
         }
     }
 
+    template <HttpTemporaryOwningCharString Input>
+    Http1ChunkDecodeResult decode(Input&&) = delete;
+
 private:
     enum class ProgressState : std::uint8_t {
         kSizeLine,
@@ -315,7 +341,8 @@ private:
 
     [[nodiscard]] std::optional<Http1ChunkDecodeError> accountFraming(
         std::size_t bytes) noexcept {
-        if (bodyLimit_.additionExceeds(encodedOverheadBytes_, bytes)) {
+        if (encodedOverheadBytes_ > kMaxHttpHeaderBytes ||
+            bytes > kMaxHttpHeaderBytes - encodedOverheadBytes_) {
             return Http1ChunkDecodeError::kFramingTooLarge;
         }
         encodedOverheadBytes_ += bytes;

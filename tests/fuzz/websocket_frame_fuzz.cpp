@@ -69,7 +69,7 @@ void drive(
         // accumulate, and exercise the output-plan accessors on every step.
         const auto plan = connection.outputPlan();
         if (!plan.bytes().empty()) {
-            connection.consumeOutput(plan.bytes().size());
+            (void)connection.consumeOutput(plan.bytes().size());
         }
         (void)connection.livenessMode();
 

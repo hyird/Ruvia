@@ -1,5 +1,6 @@
 #include "test_harness.h"
 
+#include <concepts>
 #include <cstddef>
 #include <cstdint>
 #include <memory_resource>
@@ -22,7 +23,7 @@ namespace {
 using ruvia::ProtocolByteLimit;
 using ruvia::detail::appendHttpsPort;
 using ruvia::detail::appendResponseHead;
-using ruvia::detail::contentLengthExceedsLimit;
+using ruvia::detail::contentLengthLimitFailure;
 using ruvia::detail::hostWithoutExplicitPort;
 using ruvia::detail::Http1ConnectionDisposition;
 using ruvia::detail::Http1ServerClosePolicy;
@@ -35,8 +36,39 @@ using ruvia::detail::ResponseStreamFraming;
 using ruvia::detail::ResponseStreamHeadDisposition;
 using ruvia::detail::ResponseStreamKind;
 using ruvia::detail::ResponseStreamTrailerFraming;
-using ruvia::detail::HttpServerExpectationAction;
+using ruvia::detail::HttpUnsupportedExpectationPolicy;
 using ruvia::detail::ResponseHeadBuffer;
+
+template <typename T>
+concept HasAnyRvaluePreparedResponseStreamBorrow =
+    requires(T&& prepared) { std::move(prepared).response(); } ||
+    requires(const T&& prepared) { std::move(prepared).response(); } ||
+    requires(T&& prepared) { std::move(prepared).responseHeadPlan(); } ||
+    requires(T&& prepared) { std::move(prepared).commitPlan(); };
+
+template <typename T>
+concept HasUncheckedPreparedStreamExtraction = requires(T&& result) {
+    std::move(result).takePrepared();
+};
+
+template <typename T>
+concept HasValueSemanticResponseBodyPlan = requires(
+    const T& plan,
+    const T&& temporary) {
+    { plan.bodyPlan() } ->
+        std::same_as<ruvia::detail::HttpResponseBodyPlan>;
+    { temporary.bodyPlan() } ->
+        std::same_as<ruvia::detail::HttpResponseBodyPlan>;
+};
+
+static_assert(!HasAnyRvaluePreparedResponseStreamBorrow<
+    ruvia::detail::ResponseStreamHead>);
+static_assert(!HasAnyRvaluePreparedResponseStreamBorrow<
+    ruvia::detail::PreparedHttp1ResponseStream>);
+static_assert(!HasUncheckedPreparedStreamExtraction<
+    ruvia::detail::PreparedHttp1ResponseStreamResult>);
+static_assert(HasValueSemanticResponseBodyPlan<
+    ruvia::detail::ResponseStreamCommitPlan>);
 
 ruvia::detail::PreparedHttp1ResponseStream prepareStream(
     ruvia::HttpResponse response,
@@ -45,10 +77,11 @@ ruvia::detail::PreparedHttp1ResponseStream prepareStream(
     ResponseTrailerIntent trailerIntent) {
     auto result = ruvia::detail::prepareHttp1ResponseStreamHead(
         std::move(response), kind, plan, trailerIntent);
-    if (result.failure() != nullptr || result.prepared() == nullptr) {
+    auto* prepared = result.prepared();
+    if (result.failure() != nullptr || prepared == nullptr) {
         throw std::logic_error("expected prepared HTTP/1 response stream");
     }
-    return std::move(result).takePrepared();
+    return std::move(*prepared);
 }
 
 std::string withHttpsPort(std::string_view base, std::uint16_t port) {
@@ -67,13 +100,13 @@ RUVIA_TEST(request_body_limit_distinguishes_absence_from_finite_values) {
 
     const auto streamLimit = requestBodyByteLimit(
         RequestBodyMode::kStream, std::size_t{512}, 1024);
-    RUVIA_CHECK(streamLimit.maximum() != nullptr);
-    RUVIA_CHECK_EQ(*streamLimit.maximum(), std::size_t{512});
+    RUVIA_CHECK(streamLimit.maximum().has_value());
+    RUVIA_CHECK_EQ(streamLimit.maximum().value(), std::size_t{512});
 
     const auto bufferedLimit = requestBodyByteLimit(
         RequestBodyMode::kBuffered, std::nullopt, 1024);
-    RUVIA_CHECK(bufferedLimit.maximum() != nullptr);
-    RUVIA_CHECK_EQ(*bufferedLimit.maximum(), std::size_t{1024});
+    RUVIA_CHECK(bufferedLimit.maximum().has_value());
+    RUVIA_CHECK_EQ(bufferedLimit.maximum().value(), std::size_t{1024});
 }
 
 RUVIA_TEST(request_state_content_length_exceeds_limit) {
@@ -86,13 +119,17 @@ RUVIA_TEST(request_state_content_length_exceeds_limit) {
         "POST / HTTP/1.1\r\nHost: x\r\nContent-Length: 1000000\r\n\r\n").bodyPlan;
     const auto chunked = parser.parseMessage(
         "POST / HTTP/1.1\r\nHost: x\r\nTransfer-Encoding: chunked\r\n\r\n").bodyPlan;
-    RUVIA_CHECK(contentLengthExceedsLimit(
-        over, ProtocolByteLimit::limited(100)));
-    RUVIA_CHECK(!contentLengthExceedsLimit(
+    const auto overFailure = contentLengthLimitFailure(
+        over, ProtocolByteLimit::limited(100));
+    RUVIA_CHECK(overFailure.has_value());
+    if (overFailure) {
+        RUVIA_CHECK_EQ(overFailure->protocolError().status(), 413);
+    }
+    RUVIA_CHECK(!contentLengthLimitFailure(
         exact, ProtocolByteLimit::limited(100)));
-    RUVIA_CHECK(!contentLengthExceedsLimit(
+    RUVIA_CHECK(!contentLengthLimitFailure(
         unlimited, ProtocolByteLimit::unlimited()));
-    RUVIA_CHECK(!contentLengthExceedsLimit(
+    RUVIA_CHECK(!contentLengthLimitFailure(
         chunked, ProtocolByteLimit::limited(1)));
 }
 
@@ -164,35 +201,40 @@ RUVIA_TEST(request_state_wants_continue) {
         "POST / HTTP/1.1\r\nHost: x\r\n"
         "Expect: 100-continue\r\nContent-Length: 0\r\n\r\n");
     RUVIA_CHECK(empty.bodyPlan.expectations().has100Continue());
-    RUVIA_CHECK(!empty.bodyPlan.expectationAction());
+    const auto emptyPlan = empty.bodyPlan.expectationPlan(
+        HttpUnsupportedExpectationPolicy::kReject);
+    RUVIA_CHECK(emptyPlan.noAction() != nullptr);
 
     const auto body = parser.parseMessage(
         "POST / HTTP/1.1\r\nHost: x\r\n"
         "Expect: 100-continue\r\nContent-Length: 1\r\n\r\nx");
     RUVIA_CHECK(body.bodyPlan.expectations().has100Continue());
-    RUVIA_CHECK(
-        body.bodyPlan.expectationAction() ==
-        HttpServerExpectationAction::kSend100Continue);
+    const auto bodyExpectationPlan = body.bodyPlan.expectationPlan(
+        HttpUnsupportedExpectationPolicy::kReject);
+    RUVIA_CHECK(bodyExpectationPlan.send100Continue() != nullptr);
 
-    RUVIA_CHECK(!parser.parseMessage(
-        "GET / HTTP/1.1\r\nHost: x\r\n\r\n")
-        .bodyPlan.expectations().has100Continue());
+    const auto withoutExpectation = parser.parseMessage(
+        "GET / HTTP/1.1\r\nHost: x\r\n\r\n");
+    RUVIA_CHECK(
+        !withoutExpectation.bodyPlan.expectations().has100Continue());
     // A 100-continue expectation from an HTTP/1.0 client MUST be ignored: RFC 9110
     // §15.2 forbids sending any 1xx response to an HTTP/1.0 client, which would
     // misread the interim 100 as the final response.
-    RUVIA_CHECK(!parser.parseMessage(
+    const auto http10 = parser.parseMessage(
         "POST / HTTP/1.0\r\nHost: x\r\n"
-        "Expect: 100-continue\r\nContent-Length: 0\r\n\r\n")
-        .bodyPlan.expectationAction());
+        "Expect: 100-continue\r\nContent-Length: 0\r\n\r\n");
+    const auto http10Plan = http10.bodyPlan.expectationPlan(
+        HttpUnsupportedExpectationPolicy::kReject);
+    RUVIA_CHECK(http10Plan.noAction() != nullptr);
 
     const auto extension = parser.parseMessage(
         "POST / HTTP/1.1\r\nHost: x\r\n"
         "Expect: 100-continue, custom-feature\r\n"
         "Content-Length: 1\r\n\r\nx");
     RUVIA_CHECK(extension.messageReady());
-    RUVIA_CHECK(
-        extension.bodyPlan.expectationAction() ==
-        HttpServerExpectationAction::kUnsupported);
+    const auto extensionPlan = extension.bodyPlan.expectationPlan(
+        HttpUnsupportedExpectationPolicy::kReject);
+    RUVIA_CHECK(extensionPlan.rejection() != nullptr);
 }
 
 RUVIA_TEST(http1_response_stream_plan_owns_version_body_and_persistence_semantics) {
@@ -258,8 +300,9 @@ RUVIA_TEST(http1_prepared_stream_head_binds_wire_signal_to_final_connection_disp
             ResponseTrailerIntent::kNone);
         return std::tuple(
             prepared.connectionPlan().disposition(),
-            std::string(prepared.response().header("Connection")),
-            std::string(prepared.response().header("Transfer-Encoding")));
+            std::string(prepared.response().header("Connection").value_or(std::string_view{})),
+            std::string(
+                prepared.response().header("Transfer-Encoding").value_or(std::string_view{})));
     };
 
     constexpr std::string_view http11 = "GET / HTTP/1.1\r\nHost: x\r\n\r\n";
@@ -318,8 +361,8 @@ RUVIA_TEST(http1_prepared_stream_head_owns_exact_wire_framing) {
     auto http10 = prepare("GET / HTTP/1.0\r\nConnection: keep-alive\r\n\r\n");
     RUVIA_CHECK(http10.responseHeadPlan().closeDelimitedStream() != nullptr);
     RUVIA_CHECK(http10.responseHeadPlan().chunkedStream() == nullptr);
-    RUVIA_CHECK(http10.response().header("Transfer-Encoding").empty());
-    RUVIA_CHECK(http10.response().header("Content-Length").empty());
+    RUVIA_CHECK(!http10.response().header("Transfer-Encoding").has_value());
+    RUVIA_CHECK(!http10.response().header("Content-Length").has_value());
     RUVIA_CHECK(
         http10.connectionPlan().disposition() == Http1ConnectionDisposition::kClose);
     ResponseHeadBuffer http10Buffer(std::pmr::get_default_resource());
@@ -336,9 +379,10 @@ RUVIA_TEST(http1_prepared_stream_head_owns_exact_wire_framing) {
     RUVIA_CHECK(http11.responseHeadPlan().chunkedStream() != nullptr);
     RUVIA_CHECK(http11.responseHeadPlan().closeDelimitedStream() == nullptr);
     RUVIA_CHECK_EQ(
-        std::string(http11.response().header("Transfer-Encoding")),
+        std::string(
+            http11.response().header("Transfer-Encoding").value_or(std::string_view{})),
         std::string("chunked"));
-    RUVIA_CHECK(http11.response().header("Content-Length").empty());
+    RUVIA_CHECK(!http11.response().header("Content-Length").has_value());
     ResponseHeadBuffer http11Buffer(std::pmr::get_default_resource());
     appendResponseHead(
         http11.response(), http11Buffer, http11.responseHeadPlan());
@@ -381,7 +425,7 @@ RUVIA_TEST(http1_prepared_body_suppressed_stream_is_self_delimited) {
     RUVIA_CHECK(
         http11.commitPlan().trailerFraming() ==
         ResponseStreamTrailerFraming::kUnavailable);
-    RUVIA_CHECK(http11.response().header("Transfer-Encoding").empty());
+    RUVIA_CHECK(!http11.response().header("Transfer-Encoding").has_value());
     RUVIA_CHECK(
         http11.connectionPlan().disposition() == Http1ConnectionDisposition::kReuse);
 
@@ -390,11 +434,11 @@ RUVIA_TEST(http1_prepared_body_suppressed_stream_is_self_delimited) {
         205,
         Http1ServerClosePolicy::kAllowReuse);
     RUVIA_CHECK(http10.commitPlan().bodyPlan().bodySuppressed());
-    RUVIA_CHECK(http10.response().header("Transfer-Encoding").empty());
+    RUVIA_CHECK(!http10.response().header("Transfer-Encoding").has_value());
     RUVIA_CHECK(
         http10.connectionPlan().disposition() == Http1ConnectionDisposition::kReuse);
     RUVIA_CHECK_EQ(
-        std::string(http10.response().header("Connection")),
+        std::string(http10.response().header("Connection").value_or(std::string_view{})),
         std::string("keep-alive"));
 
     auto http10Head = prepare(
@@ -413,7 +457,8 @@ RUVIA_TEST(http1_prepared_body_suppressed_stream_is_self_delimited) {
     RUVIA_CHECK(
         limitedHttp10.connectionPlan().disposition() == Http1ConnectionDisposition::kClose);
     RUVIA_CHECK_EQ(
-        std::string(limitedHttp10.response().header("Connection")),
+        std::string(
+            limitedHttp10.response().header("Connection").value_or(std::string_view{})),
         std::string("close"));
 }
 
@@ -496,12 +541,32 @@ RUVIA_TEST(auto_https_redirect_response_is_private_and_well_formed) {
     const auto parsed = parser.parseMessage(request);
     ruvia::WorkerMemory worker;
     ruvia::RequestMemory memory(worker);
-    const auto response = ruvia::detail::makeAutoHttpsRedirectResponse(parsed.request, memory, 443);
+    auto response = ruvia::detail::makeAutoHttpsRedirectResponse(parsed.request, memory, 443);
 
     RUVIA_CHECK_EQ(response.status(), std::uint16_t{308});
-    RUVIA_CHECK_EQ(std::string(response.header("Location")), std::string("https://example.com/a/b?x=1"));
+    RUVIA_CHECK_EQ(
+        std::string(response.header("Location").value_or(std::string_view{})),
+        std::string("https://example.com/a/b?x=1"));
     // The Location is Host-derived, so the redirect must be private: a shared cache
     // must not store one Host's redirect and replay it for another.
-    RUVIA_CHECK_EQ(std::string(response.header("Cache-Control")), std::string("private"));
-    RUVIA_CHECK_EQ(std::string(response.header("Connection")), std::string("close"));
+    RUVIA_CHECK_EQ(
+        std::string(response.header("Cache-Control").value_or(std::string_view{})),
+        std::string("private"));
+    // AutoHTTPS owns redirect product policy only. It must not pre-commit an
+    // HTTP/1 connection field before the runtime combines request persistence
+    // and its explicit close policy in the protocol plan.
+    RUVIA_CHECK(!response.header("Connection").has_value());
+    const auto commit = ruvia::detail::http1CommitFinalResponse(
+        response,
+        parsed.connectionPlan.requireClose());
+    RUVIA_CHECK(commit.committed() != nullptr);
+    if (commit.committed() == nullptr) {
+        return;
+    }
+    RUVIA_CHECK(
+        commit.committed()->disposition() ==
+        ruvia::detail::Http1ConnectionDisposition::kClose);
+    RUVIA_CHECK_EQ(
+        std::string(response.header("Connection").value_or(std::string_view{})),
+        std::string("close"));
 }

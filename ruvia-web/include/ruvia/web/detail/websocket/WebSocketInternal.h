@@ -5,12 +5,23 @@
 namespace ruvia::detail {
 
 struct WebSocketAccess final {
-    [[nodiscard]] static constexpr WebSocket make(
+    static void noopAbort(void*) noexcept {}
+
+    [[nodiscard]] static WebSocket make(
         void* target,
         WebSocket::Read read,
         WebSocket::Write write,
         WebSocket::Close close) noexcept {
-        return WebSocket(target, read, write, close);
+        return WebSocket(target, read, write, close, &noopAbort);
+    }
+
+    [[nodiscard]] static WebSocket make(
+        void* target,
+        WebSocket::Read read,
+        WebSocket::Write write,
+        WebSocket::Close close,
+        WebSocket::Abort abort) noexcept {
+        return WebSocket(target, read, write, close, abort);
     }
 };
 

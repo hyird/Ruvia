@@ -50,12 +50,16 @@ public:
 #include <string_view>
 #include <vector>
 
+#include "ruvia/core/detail/OperationDeadline.h"
+#include "ruvia/core/detail/PoolLeaseScheduler.h"
 #include "ruvia/core/memory/PmrObject.h"
-#include "ruvia/core/detail/PoolWaiterQueue.h"
 
 struct redisReader;
 
 namespace ruvia::detail {
+
+template <typename Result>
+class AsioCompletion;
 
 struct RedisReaderDeleter final {
     void operator()(redisReader* reader) const noexcept;
@@ -115,17 +119,12 @@ private:
         std::array<char, kRedisReadBufferBytes> readBuffer;
         std::unique_ptr<redisReader, RedisReaderDeleter> reader;
         std::size_t replyBytes{0};
-        std::chrono::steady_clock::time_point deadline{};
-        bool busy{false};
         bool connected{false};
-        bool deadlineActive{false};
-        bool timedOut{false};
         enum class DeadlineKind : std::uint8_t {
-            kNone,
             kResolve,
             kSocket
         };
-        DeadlineKind deadlineKind{DeadlineKind::kNone};
+        OperationDeadline<DeadlineKind> deadline;
     };
 
     class ConnectionGuard final {
@@ -139,7 +138,7 @@ private:
         void discard() noexcept;
 
     private:
-        RedisPool* pool_{nullptr};
+        RedisPool& pool_;
         std::size_t index_{0};
         bool discard_{false};
     };
@@ -153,7 +152,7 @@ private:
         Connection& connection,
         std::optional<std::chrono::milliseconds> timeout,
         Connection::DeadlineKind kind) noexcept;
-    void clearDeadline(Connection& connection) noexcept;
+    [[nodiscard]] bool clearDeadline(Connection& connection) noexcept;
     Task<void> connect(Connection& connection);
     Task<void> authenticate(Connection& connection);
     Task<RedisValue> readReply(
@@ -172,7 +171,7 @@ private:
     Task<std::error_code> asyncSocketWrite(
         Connection& connection,
         std::optional<std::chrono::milliseconds> timeout);
-    Task<std::pair<std::error_code, std::size_t>> asyncSocketReadSome(
+    Task<AsioCompletion<std::size_t>> asyncSocketReadSome(
         Connection& connection,
         std::span<char> buffer,
         std::optional<std::chrono::milliseconds> timeout);
@@ -180,9 +179,7 @@ private:
     RedisConfig config_;
     std::pmr::memory_resource* resource_;
     std::pmr::vector<Connection> connections_;
-    std::pmr::vector<std::size_t> free_;
-    PoolWaiterQueue waiters_;
-    bool closing_{false};
+    PoolLeaseScheduler scheduler_;
 };
 
 class RedisRegistry final {
@@ -201,10 +198,13 @@ public:
 
     [[nodiscard]] bool empty() const noexcept;
     [[nodiscard]] bool hasAnyTimeout() const noexcept;
-    [[nodiscard]] RedisHandle get(std::pmr::memory_resource* resource) const;
+    [[nodiscard]] RedisHandle get(
+        std::pmr::memory_resource* resource,
+        ScopedOperationScope& operationScope) const;
     [[nodiscard]] RedisHandle get(
         std::string_view alias,
-        std::pmr::memory_resource* resource) const;
+        std::pmr::memory_resource* resource,
+        ScopedOperationScope& operationScope) const;
     void scanDeadlines() noexcept;
 
 private:
@@ -217,7 +217,7 @@ private:
 
     std::pmr::memory_resource* resource_;
     std::pmr::vector<Entry> pools_;
-    RedisPool* defaultPool_{nullptr};
+    std::optional<std::size_t> defaultPoolIndex_;
 };
 
 }  // namespace ruvia::detail

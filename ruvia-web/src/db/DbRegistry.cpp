@@ -140,10 +140,9 @@ detail::DbRegistry::DbRegistry(
         clients_.push_back(Entry{
             std::pmr::string(definition.alias, resource_),
             std::move(owner)});
-        const auto clientRef = poolRef(clients_.back().client);
         if (std::string_view(clients_.back().alias.data(), clients_.back().alias.size()) ==
             kDefaultDbAlias) {
-            defaultClient_ = clientRef;
+            defaultClientIndex_ = clients_.size() - 1;
         }
     }
 }
@@ -182,20 +181,23 @@ bool detail::DbRegistry::hasAnyTimeout() const noexcept {
 
 DbHandle detail::DbRegistry::get(
     std::pmr::memory_resource* resource,
-    RequestMemory* requestMemory) const {
-    if (detail::dbPoolRefEmpty(defaultClient_)) {
+    ScopedOperationScope& operationScope) const {
+    if (!defaultClientIndex_.has_value()) {
         throw std::logic_error("default database is not configured");
     }
-    return DbHandle(defaultClient_, resource, requestMemory);
+    return DbHandle(
+        poolRef(clients_[*defaultClientIndex_].client),
+        resource,
+        operationScope);
 }
 
 DbHandle detail::DbRegistry::get(
     std::string_view alias,
     std::pmr::memory_resource* resource,
-    RequestMemory* requestMemory) const {
+    ScopedOperationScope& operationScope) const {
     for (const auto& entry : clients_) {
         if (std::string_view(entry.alias.data(), entry.alias.size()) == alias) {
-            return DbHandle(poolRef(entry.client), resource, requestMemory);
+            return DbHandle(poolRef(entry.client), resource, operationScope);
         }
     }
     throw std::logic_error("database is not configured");
@@ -205,14 +207,14 @@ DbHandle Context::db() const {
     if (db_ == nullptr) {
         throw std::logic_error("database is not configured");
     }
-    return db_->get(resource(), const_cast<RequestMemory*>(&memory_));
+    return db_->get(resource(), operationScope_);
 }
 
 DbHandle Context::db(std::string_view alias) const {
     if (db_ == nullptr) {
         throw std::logic_error("database is not configured");
     }
-    return db_->get(alias, resource(), const_cast<RequestMemory*>(&memory_));
+    return db_->get(alias, resource(), operationScope_);
 }
 
 }  // namespace ruvia

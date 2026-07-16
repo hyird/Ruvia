@@ -22,12 +22,12 @@ detail::MariaDbPool::MariaDbPool(asio::io_context& ioContext, DbConfig config, s
       config_(std::move(config)),
       resource_(detail::pmrResourceOrDefault(resource)),
       slots_(resource_),
-      scheduler_(config_.poolSize, resource_) {
+      scheduler_(config_.poolSizePerWorker, resource_) {
     detail::validateDbConfig(config_);
     if (config_.driver != DbDriver::kMariaDb) {
         throw std::invalid_argument("MariaDB pool requires the MariaDB driver");
     }
-    const auto poolSize = config_.poolSize;
+    const auto poolSize = config_.poolSizePerWorker;
     slots_.reserve(poolSize);
     for (std::size_t i = 0; i < poolSize; ++i) {
         slots_.emplace_back(resource_);
@@ -59,15 +59,15 @@ void detail::MariaDbPool::scanDeadlines(std::chrono::steady_clock::time_point no
     }
 
     for (auto& slot : slots_) {
-        if (!slot.deadlineActive || slot.deadline > now) {
+        const auto kind = slot.deadline.expire(now);
+        if (!kind.has_value()) {
             continue;
         }
-        slot.timedOut = true;
-        if (slot.deadlineKind == ConnectionSlot::DeadlineKind::kSocket) {
+        if (*kind == ConnectionSlot::DeadlineKind::kSocket) {
             if (slot.waitSocket != nullptr) {
                 slot.waitSocket->cancel();
             }
-        } else if (slot.deadlineKind == ConnectionSlot::DeadlineKind::kSleep) {
+        } else if (*kind == ConnectionSlot::DeadlineKind::kSleep) {
             auto handle = slot.deadlineContinuation;
             slot.deadlineContinuation = {};
             if (handle) {
@@ -86,9 +86,13 @@ bool detail::MariaDbPool::hasAnyTimeout() const noexcept {
 }
 
 void detail::MariaDbPool::closeSlot(ConnectionSlot& slot) noexcept {
-    if (slot.deadlineKind == ConnectionSlot::DeadlineKind::kSocket && slot.waitSocket != nullptr) {
+    const auto* kind = slot.deadline.kind();
+    if (kind != nullptr &&
+        *kind == ConnectionSlot::DeadlineKind::kSocket &&
+        slot.waitSocket != nullptr) {
         slot.waitSocket->cancel();
-    } else if (slot.deadlineKind == ConnectionSlot::DeadlineKind::kSleep) {
+    } else if (kind != nullptr &&
+               *kind == ConnectionSlot::DeadlineKind::kSleep) {
         auto handle = slot.deadlineContinuation;
         slot.deadlineContinuation = {};
         if (handle) {
@@ -112,19 +116,17 @@ void detail::MariaDbPool::setSlotDeadline(
     ConnectionSlot& slot,
     std::chrono::milliseconds timeout,
     ConnectionSlot::DeadlineKind kind) noexcept {
-    slot.deadlineKind = kind;
-    slot.timedOut = false;
     if (timeout.count() <= 0) {
-        slot.deadlineActive = false;
+        slot.deadline.reset();
         return;
     }
-    slot.deadline = std::chrono::steady_clock::now() + timeout;
-    slot.deadlineActive = true;
+    slot.deadline.arm(
+        detail::workerTimerDeadlineAfter(timeout),
+        kind);
 }
 
 void detail::MariaDbPool::clearSlotDeadline(ConnectionSlot& slot) noexcept {
-    slot.deadlineActive = false;
-    slot.deadlineKind = ConnectionSlot::DeadlineKind::kNone;
+    (void)slot.deadline.clear();
     slot.deadlineContinuation = {};
 }
 

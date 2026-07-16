@@ -1,9 +1,11 @@
 #include "test_harness.h"
 
+#include <concepts>
 #include <cstdint>
 #include <optional>
 #include <string>
 #include <string_view>
+#include <utility>
 
 #include "ruvia/http/detail/websocket/HttpWebSocketUtils.h"
 
@@ -11,9 +13,18 @@ namespace {
 
 using ruvia::detail::encodeWebSocketClosePayload;
 using ruvia::detail::WebSocketClosePayloadEncodeError;
+using ruvia::detail::WebSocketClosePayloadEncodeResult;
 using ruvia::detail::WebSocketProtocolFailure;
 using ruvia::detail::webSocketClosePayloadFailure;
 using ruvia::detail::webSocketProtocolFailureCloseCode;
+
+template <typename T>
+concept HasAnyRvalueClosePayloadAccessor =
+    requires(T&& result) { std::move(result).encoded(); } ||
+    requires(T&& result) { std::move(result).failure(); };
+
+static_assert(!HasAnyRvalueClosePayloadAccessor<
+    WebSocketClosePayloadEncodeResult>);
 
 std::string closeBody(std::uint16_t code, std::string_view reason) {
     std::string body;

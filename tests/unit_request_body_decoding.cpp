@@ -7,6 +7,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <memory_resource>
+#include <new>
 #include <optional>
 #include <span>
 #include <stdexcept>
@@ -27,6 +28,7 @@
 #include "ruvia/http/ProtocolByteLimit.h"
 #include "ruvia/http/detail/HttpRequestInternal.h"
 #include "ruvia/http/detail/RequestBodyDecoding.h"
+#include "ruvia/http/detail/HttpRequestBodyFailure.h"
 #include "ruvia/http/detail/http1/Http1ChunkedBodyDecoder.h"
 #include "ruvia/http/detail/http1/Http1ServerRequestParser.h"
 #include "ruvia/http/detail/body/HttpTransferCodingDecoder.h"
@@ -48,29 +50,95 @@ using ruvia::detail::HttpContentDecodeFailure;
 using ruvia::detail::HttpContentDecodeResult;
 using ruvia::detail::HttpDecodedContent;
 using ruvia::detail::HttpEncodedContent;
+using ruvia::detail::HttpRequestContentDecodeProtocolFailure;
+using ruvia::detail::HttpRequestContentDecoderFailure;
+using ruvia::detail::HttpRequestContentDecodeResult;
 using ruvia::detail::Http1ChunkedBodyDecoder;
 using ruvia::detail::Http1RequestBodyPlan;
 using ruvia::detail::Http1ServerRequestParser;
-using ruvia::detail::HttpServerExpectationAction;
+using ruvia::detail::HttpUnsupportedExpectationPolicy;
 using ruvia::detail::HttpTransferCoding;
 using ruvia::detail::HttpTransferCodings;
 using ruvia::detail::TransferCodingDecoder;
-using ruvia::detail::TransferCodingDecodeError;
-using ruvia::detail::TransferCodingDecodeFailure;
+using ruvia::detail::TransferCodingDecodeProtocolFailure;
+using ruvia::detail::TransferCodingDecoderFailure;
 using ruvia::detail::TransferCodingDecodeNeedInput;
 using ruvia::detail::TransferCodingDecodeOutput;
 using ruvia::detail::TransferCodingDecodeResult;
 using ruvia::detail::decodeHttpContent;
+using ruvia::detail::decodeHttpRequestContent;
 using ruvia::detail::encodeHttpContent;
 using ruvia::detail::httpContentCodingFromFieldValue;
 
 inline constexpr std::size_t kDecodedBodyLimit = 16 * 1024 * 1024;
+
+class RejectLargeAllocationResource final : public std::pmr::memory_resource {
+public:
+    explicit RejectLargeAllocationResource(std::size_t maximumBlockBytes)
+        : maximumBlockBytes_(maximumBlockBytes) {}
+
+private:
+    void* do_allocate(std::size_t bytes, std::size_t alignment) override {
+        if (bytes > maximumBlockBytes_) {
+            throw std::bad_alloc();
+        }
+        return std::pmr::get_default_resource()->allocate(bytes, alignment);
+    }
+
+    void do_deallocate(
+        void* pointer,
+        std::size_t bytes,
+        std::size_t alignment) override {
+        std::pmr::get_default_resource()->deallocate(
+            pointer, bytes, alignment);
+    }
+
+    [[nodiscard]] bool do_is_equal(
+        const std::pmr::memory_resource& other) const noexcept override {
+        return this == &other;
+    }
+
+    std::size_t maximumBlockBytes_;
+};
 
 static_assert(std::same_as<
     decltype(std::declval<TransferCodingDecoder&>().decode(
         std::string_view{}, std::span<char>{})),
     TransferCodingDecodeResult>);
 static_assert(!std::default_initializable<TransferCodingDecodeResult>);
+
+template <typename T>
+concept HasAnyRvalueTransferCodingDecodeAccessor =
+    requires(T&& result) { std::move(result).needInput(); } ||
+    requires(T&& result) { std::move(result).output(); } ||
+    requires(T&& result) { std::move(result).complete(); } ||
+    requires(T&& result) { std::move(result).protocolFailure(); } ||
+    requires(T&& result) { std::move(result).decoderFailure(); };
+
+static_assert(!HasAnyRvalueTransferCodingDecodeAccessor<
+    TransferCodingDecodeResult>);
+
+template <typename T>
+concept HasRawTransferDecodeError = requires(const T& result) {
+    result.error();
+};
+
+template <typename T>
+concept HasRawRequestContentDecodeError = requires(const T& result) {
+    result.error();
+};
+
+static_assert(!HasRawTransferDecodeError<TransferCodingDecodeProtocolFailure>);
+static_assert(std::same_as<
+    decltype(std::declval<const TransferCodingDecodeProtocolFailure&>()
+        .protocolError()),
+    ruvia::HttpProtocolError>);
+static_assert(!HasRawRequestContentDecodeError<
+    HttpRequestContentDecodeProtocolFailure>);
+static_assert(std::same_as<
+    decltype(std::declval<const HttpRequestContentDecodeProtocolFailure&>()
+        .protocolError()),
+    ruvia::HttpProtocolError>);
 
 std::string gzipCompress(std::string_view data) {
     z_stream stream{};
@@ -92,7 +160,12 @@ std::string gzipCompress(std::string_view data) {
     return out;
 }
 
-std::optional<TransferCodingDecodeError> appendTransferDecoded(
+struct TransferDecodeObservation final {
+    bool failed{false};
+    std::optional<ruvia::HttpProtocolError> protocolError;
+};
+
+TransferDecodeObservation appendTransferDecoded(
     TransferCodingDecoder& decoder,
     std::string_view input,
     std::pmr::string& output) {
@@ -104,10 +177,13 @@ std::optional<TransferCodingDecodeError> appendTransferDecoded(
             output.append(decoded->bytes());
             continue;
         }
-        if (const auto* failure = result.failure()) {
-            return failure->error();
+        if (const auto* failure = result.protocolFailure()) {
+            return {true, failure->protocolError()};
         }
-        return std::nullopt;
+        if (result.decoderFailure() != nullptr) {
+            return {true, std::nullopt};
+        }
+        return {};
     }
 }
 
@@ -208,6 +284,34 @@ struct ContextBodyReadObservation final {
     std::uint16_t errorStatus{0};
 };
 
+ruvia::Task<std::string_view> readContextText(ruvia::Context& context) {
+    co_return co_await context.req().text();
+}
+
+ruvia::ScopedOperation<std::string_view> makeExpiredContextTextRead() {
+    ruvia::WorkerMemory worker;
+    ruvia::RequestMemory memory(worker);
+    auto request = ruvia::detail::HttpRequestAccess::make();
+    ruvia::detail::HttpRequestAccess::reset(request);
+    ruvia::detail::HttpRequestAccess::setResource(request, memory.resource());
+    ruvia::detail::HttpRequestAccess::setBody(request, "body");
+    auto context = ruvia::detail::ContextAccess::make(
+        memory,
+        request,
+        ruvia::detail::ContextServices(nullptr, nullptr, nullptr, 1024));
+    return context.req().text();
+}
+
+ruvia::Task<void> awaitExpiredContextTextRead(
+    ruvia::ScopedOperation<std::string_view>& operation,
+    bool& rejected) {
+    try {
+        (void)co_await std::move(operation);
+    } catch (const std::logic_error&) {
+        rejected = true;
+    }
+}
+
 ContextBodyReadObservation readContextGzipBody(
     std::string_view encoded,
     std::size_t maxDecodedBodyBytes) {
@@ -241,15 +345,15 @@ ContextBodyReadObservation readContextGzipBody(
     asio::io_context io(1);
     auto future = asio::co_spawn(
         io,
-        ruvia::detail::taskAsAwaitable(context.req().text()),
+        ruvia::detail::taskAsAwaitable(readContextText(context)),
         asio::use_future);
     io.run();
 
     ContextBodyReadObservation observation;
     try {
         observation.body = future.get();
-    } catch (const ruvia::HttpError& error) {
-        observation.errorStatus = error.info().status();
+    } catch (const ruvia::HttpProtocolError& error) {
+        observation.errorStatus = error.status();
     }
     return observation;
 }
@@ -283,8 +387,21 @@ concept HasRequestContentLength = requires(const T& value) {
 
 template <typename T>
 concept HasRequestTransferCodings = requires(const T& value) {
-    value.transferCodings();
+    { value.transferCodings() } -> std::same_as<HttpTransferCodings>;
+} && requires(const T&& value) {
+    { std::move(value).transferCodings() } -> std::same_as<HttpTransferCodings>;
 };
+
+template <typename T>
+concept HasValueSemanticRequestExpectations =
+    requires(const T& value) {
+        { value.expectations() } ->
+            std::same_as<ruvia::detail::HttpRequestExpectations>;
+    } &&
+    requires(const T&& value) {
+        { std::move(value).expectations() } ->
+            std::same_as<ruvia::detail::HttpRequestExpectations>;
+    };
 
 template <typename T>
 concept HasPublicRequestBodyPlanFactories = requires {
@@ -324,6 +441,7 @@ static_assert(!HasRequestTransferCodings<Http1RequestBodyPlan>);
 static_assert(HasRequestContentLength<ruvia::detail::Http1KnownLengthRequestBody>);
 static_assert(!HasRequestContentLength<ruvia::detail::Http1ChunkedRequestBody>);
 static_assert(HasRequestTransferCodings<ruvia::detail::Http1ChunkedRequestBody>);
+static_assert(HasValueSemanticRequestExpectations<Http1RequestBodyPlan>);
 static_assert(!HasRequestTransferCodings<
     ruvia::detail::Http1KnownLengthRequestBody>);
 static_assert(std::same_as<
@@ -357,6 +475,28 @@ static_assert(std::same_as<
         std::size_t{},
         static_cast<std::pmr::memory_resource*>(nullptr))),
     HttpContentDecodeResult>);
+static_assert(!std::default_initializable<HttpRequestContentDecodeResult>);
+static_assert(!std::copy_constructible<HttpRequestContentDecodeResult>);
+static_assert(std::move_constructible<HttpRequestContentDecodeResult>);
+static_assert(!std::is_move_assignable_v<HttpRequestContentDecodeResult>);
+static_assert(std::same_as<
+    decltype(std::declval<HttpRequestContentDecodeResult&>().decoded()),
+    HttpDecodedContent*>);
+static_assert(std::same_as<
+    decltype(std::declval<const HttpRequestContentDecodeResult&>()
+        .protocolFailure()),
+    const HttpRequestContentDecodeProtocolFailure*>);
+static_assert(std::same_as<
+    decltype(std::declval<const HttpRequestContentDecodeResult&>()
+        .decoderFailure()),
+    const HttpRequestContentDecoderFailure*>);
+static_assert(std::same_as<
+    decltype(decodeHttpRequestContent(
+        HttpContentCoding::kGzip,
+        std::string_view{},
+        std::size_t{},
+        static_cast<std::pmr::memory_resource*>(nullptr))),
+    HttpRequestContentDecodeResult>);
 static_assert(!std::default_initializable<HttpContentEncodeResult>);
 static_assert(!std::copy_constructible<HttpContentEncodeResult>);
 static_assert(std::move_constructible<HttpContentEncodeResult>);
@@ -384,6 +524,30 @@ static_assert(std::same_as<
 
 }  // namespace
 
+RUVIA_TEST(request_body_failures_own_cross_runtime_http_errors) {
+    const auto tooLarge = ruvia::detail::httpRequestBodySizeFailure(
+        5, ProtocolByteLimit::limited(4));
+    RUVIA_CHECK(tooLarge.has_value());
+    if (tooLarge) {
+        const auto error = tooLarge->protocolError();
+        RUVIA_CHECK_EQ(error.status(), 413);
+        RUVIA_CHECK_EQ(
+            std::string_view(error.what()),
+            std::string_view("request body is too large"));
+    }
+    RUVIA_CHECK(!ruvia::detail::httpRequestBodyAdditionFailure(
+        2, 2, ProtocolByteLimit::limited(4)));
+    RUVIA_CHECK(ruvia::detail::httpRequestBodyAdditionFailure(
+        2, 3, ProtocolByteLimit::limited(4)).has_value());
+
+    const auto incomplete =
+        ruvia::detail::HttpRequestBodyFailure::incomplete().protocolError();
+    RUVIA_CHECK_EQ(incomplete.status(), 400);
+    RUVIA_CHECK_EQ(
+        std::string_view(incomplete.what()),
+        std::string_view("incomplete request body"));
+}
+
 RUVIA_TEST(http1_request_body_plan_has_one_framing_truth) {
     Http1ServerRequestParser parser;
     const auto noneState = parser.parseMessage(
@@ -407,7 +571,9 @@ RUVIA_TEST(http1_request_body_plan_has_one_framing_truth) {
     }
     RUVIA_CHECK(!emptyLength.requiresConsumption());
     RUVIA_CHECK(emptyLength.expectations().has100Continue());
-    RUVIA_CHECK(!emptyLength.expectationAction());
+    const auto emptyExpectationPlan = emptyLength.expectationPlan(
+        HttpUnsupportedExpectationPolicy::kReject);
+    RUVIA_CHECK(emptyExpectationPlan.noAction() != nullptr);
 
     const auto compressedChunkedState = parser.parseMessage(
         "POST / HTTP/1.1\r\nHost: x\r\n"
@@ -419,9 +585,9 @@ RUVIA_TEST(http1_request_body_plan_has_one_framing_truth) {
     RUVIA_CHECK(compressedChunked.withoutBody() == nullptr);
     RUVIA_CHECK(compressedChunked.knownLength() == nullptr);
     RUVIA_CHECK(compressedChunked.requiresConsumption());
-    RUVIA_CHECK(
-        compressedChunked.expectationAction() ==
-        HttpServerExpectationAction::kSend100Continue);
+    const auto compressedExpectationPlan = compressedChunked.expectationPlan(
+        HttpUnsupportedExpectationPolicy::kReject);
+    RUVIA_CHECK(compressedExpectationPlan.send100Continue() != nullptr);
     if (chunkedBody != nullptr) {
         RUVIA_CHECK_EQ(
             chunkedBody->transferCodings().count,
@@ -450,6 +616,21 @@ RUVIA_TEST(http_content_coding_field_mapping_is_protocol_generic) {
     const auto stacked = httpContentCodingFromFieldValue("gzip, br");
     RUVIA_CHECK(unsupported.unsupported() != nullptr);
     RUVIA_CHECK(stacked.unsupported() != nullptr);
+}
+
+RUVIA_TEST(http_content_coding_parser_has_a_terminal_unsupported_state) {
+    ruvia::detail::HttpContentCodingFieldParser unknown;
+    unknown.update("deflate");
+    unknown.update("gzip");
+    const auto unknownResult = unknown.finish();
+    RUVIA_CHECK(unknownResult.unsupported() != nullptr);
+
+    ruvia::detail::HttpContentCodingFieldParser stacked;
+    stacked.update("gzip");
+    stacked.update("");
+    stacked.update("br");
+    const auto stackedResult = stacked.finish();
+    RUVIA_CHECK(stackedResult.unsupported() != nullptr);
 }
 
 RUVIA_TEST(request_body_gzip_round_trip) {
@@ -648,6 +829,92 @@ RUVIA_TEST(http_content_encode_enforces_exact_cap_without_partial_output) {
     }
 }
 
+RUVIA_TEST(http_brotli_encode_does_not_reserve_the_output_cap) {
+    const std::string input(1u << 20, 'b');
+    RejectLargeAllocationResource resource(4096);
+    bool completed = false;
+    bool roundTripped = false;
+    try {
+        auto result = encodeHttpContent(
+            HttpContentCoding::kBrotli,
+            input,
+            input.size() - 1,
+            &resource);
+        completed = result.encoded() != nullptr;
+        if (const auto* encoded = result.encoded()) {
+            roundTripped = decoded(
+                HttpContentCoding::kBrotli,
+                encoded->bytes(),
+                input.size()) == input;
+        }
+    } catch (const std::bad_alloc&) {
+    }
+    RUVIA_CHECK(completed);
+    RUVIA_CHECK(roundTripped);
+}
+
+RUVIA_TEST(http_identity_content_uses_the_default_resource_when_none_is_supplied) {
+    const std::string input(1024, 'i');
+
+    auto decoded = decodeHttpContent(
+        HttpContentCoding::kIdentity,
+        input,
+        input.size(),
+        nullptr);
+    RUVIA_CHECK(decoded.decoded() != nullptr);
+    if (decoded.decoded() != nullptr) {
+        auto bytes = std::move(*decoded.decoded()).takeBytes();
+        RUVIA_CHECK_EQ(std::string_view(bytes), std::string_view(input));
+        RUVIA_CHECK(
+            bytes.get_allocator().resource() ==
+            std::pmr::get_default_resource());
+    }
+
+    auto encoded = encodeHttpContent(
+        HttpContentCoding::kIdentity,
+        input,
+        input.size(),
+        nullptr);
+    RUVIA_CHECK(encoded.encoded() != nullptr);
+    if (encoded.encoded() != nullptr) {
+        auto bytes = std::move(*encoded.encoded()).takeBytes();
+        RUVIA_CHECK_EQ(std::string_view(bytes), std::string_view(input));
+        RUVIA_CHECK(
+            bytes.get_allocator().resource() ==
+            std::pmr::get_default_resource());
+    }
+}
+
+RUVIA_TEST(http_identity_content_rejects_oversize_before_allocating) {
+    const std::string input(1024, 'i');
+
+    const auto decoded = decodeHttpContent(
+        HttpContentCoding::kIdentity,
+        input,
+        input.size() - 1,
+        std::pmr::null_memory_resource());
+    RUVIA_CHECK(decoded.decoded() == nullptr);
+    RUVIA_CHECK(decoded.failure() != nullptr);
+    if (decoded.failure() != nullptr) {
+        RUVIA_CHECK(
+            decoded.failure()->error() ==
+            HttpContentDecodeError::kDecodedSizeExceeded);
+    }
+
+    const auto encoded = encodeHttpContent(
+        HttpContentCoding::kIdentity,
+        input,
+        input.size() - 1,
+        std::pmr::null_memory_resource());
+    RUVIA_CHECK(encoded.encoded() == nullptr);
+    RUVIA_CHECK(encoded.failure() != nullptr);
+    if (encoded.failure() != nullptr) {
+        RUVIA_CHECK(
+            encoded.failure()->error() ==
+            HttpContentEncodeError::kEncodedSizeExceeded);
+    }
+}
+
 RUVIA_TEST(http_content_decode_rejects_empty_encoded_input) {
     RUVIA_CHECK(
         decodeError(HttpContentCoding::kGzip, {}) ==
@@ -716,6 +983,37 @@ RUVIA_TEST(web_request_decode_rejects_empty_encoded_representation) {
     RUVIA_CHECK(observation.body.empty());
 }
 
+RUVIA_TEST(http_request_content_decoder_owns_protocol_failure_status) {
+    auto* resource = std::pmr::get_default_resource();
+
+    const auto invalid = decodeHttpRequestContent(
+        HttpContentCoding::kGzip,
+        "not-gzip",
+        1024,
+        resource);
+    RUVIA_CHECK(invalid.protocolFailure() != nullptr);
+    RUVIA_CHECK(invalid.decoderFailure() == nullptr);
+    RUVIA_CHECK_EQ(invalid.protocolFailure()->protocolError().status(), 400);
+
+    const auto oversized = decodeHttpRequestContent(
+        HttpContentCoding::kIdentity,
+        "too large",
+        4,
+        resource);
+    RUVIA_CHECK(oversized.protocolFailure() != nullptr);
+    RUVIA_CHECK(oversized.decoderFailure() == nullptr);
+    RUVIA_CHECK_EQ(oversized.protocolFailure()->protocolError().status(), 413);
+
+    const auto unsupported = decodeHttpRequestContent(
+        static_cast<HttpContentCoding>(255),
+        {},
+        1024,
+        resource);
+    RUVIA_CHECK(unsupported.protocolFailure() != nullptr);
+    RUVIA_CHECK(unsupported.decoderFailure() == nullptr);
+    RUVIA_CHECK_EQ(unsupported.protocolFailure()->protocolError().status(), 415);
+}
+
 RUVIA_TEST(transfer_coding_decoder_gzip_round_trip) {
     auto* resource = std::pmr::get_default_resource();
     TransferCodingDecoder decoder(
@@ -726,9 +1024,46 @@ RUVIA_TEST(transfer_coding_decoder_gzip_round_trip) {
     const std::string plain = "transfer-encoding gzip body content, repeated repeated repeated";
     const std::string gz = gzipCompress(plain);
     std::pmr::string output(resource);
-    RUVIA_CHECK(!appendTransferDecoded(decoder, gz, output).has_value());
-    RUVIA_CHECK(decoder.finishInput().complete() != nullptr);
+    RUVIA_CHECK(!appendTransferDecoded(decoder, gz, output).failed);
+    const auto finishResult = decoder.finishInput();
+    RUVIA_CHECK(finishResult.complete() != nullptr);
     RUVIA_CHECK_EQ(std::string_view(output.data(), output.size()), std::string_view(plain));
+}
+
+RUVIA_TEST(transfer_coding_decoder_gzip_decodes_every_rfc1952_member) {
+    auto* resource = std::pmr::get_default_resource();
+    const std::string first = gzipCompress("first-");
+    const std::string second = gzipCompress("second");
+    RUVIA_CHECK(!first.empty());
+    RUVIA_CHECK(!second.empty());
+
+    TransferCodingDecoder contiguous(
+        HttpTransferCoding::kGzip,
+        resource,
+        ProtocolByteLimit::limited(1024));
+    std::pmr::string contiguousOutput(resource);
+    RUVIA_CHECK(!appendTransferDecoded(
+        contiguous, first + second, contiguousOutput).failed);
+    const auto contiguousFinish = contiguous.finishInput();
+    RUVIA_CHECK(contiguousFinish.complete() != nullptr);
+    RUVIA_CHECK_EQ(
+        std::string_view(contiguousOutput.data(), contiguousOutput.size()),
+        std::string_view("first-second"));
+
+    TransferCodingDecoder fragmented(
+        HttpTransferCoding::kGzip,
+        resource,
+        ProtocolByteLimit::limited(1024));
+    std::pmr::string fragmentedOutput(resource);
+    RUVIA_CHECK(!appendTransferDecoded(
+        fragmented, first, fragmentedOutput).failed);
+    RUVIA_CHECK(!appendTransferDecoded(
+        fragmented, second, fragmentedOutput).failed);
+    const auto fragmentedFinish = fragmented.finishInput();
+    RUVIA_CHECK(fragmentedFinish.complete() != nullptr);
+    RUVIA_CHECK_EQ(
+        std::string_view(fragmentedOutput.data(), fragmentedOutput.size()),
+        std::string_view("first-second"));
 }
 
 RUVIA_TEST(transfer_coded_chunked_request_plan_drives_decode_order) {
@@ -771,14 +1106,15 @@ RUVIA_TEST(transfer_coded_chunked_request_plan_drives_decode_order) {
         }
         if (const auto* bodyChunk = result.bodyChunk()) {
             RUVIA_CHECK(!appendTransferDecoded(
-                transfer, bodyChunk->bytes(), output).has_value());
+                transfer, bodyChunk->bytes(), output).failed);
         } else if (result.complete() != nullptr) {
             complete = true;
         }
         pending.remove_prefix(result.consumedBytes());
     }
     RUVIA_CHECK(complete);
-    RUVIA_CHECK(transfer.finishInput().complete() != nullptr);
+    const auto finishResult = transfer.finishInput();
+    RUVIA_CHECK(finishResult.complete() != nullptr);
     RUVIA_CHECK_EQ(
         std::string_view(output.data(), output.size()),
         std::string_view(plain));
@@ -797,16 +1133,29 @@ RUVIA_TEST(transfer_coding_decoder_rejects_bomb) {
     const std::string gz = gzipCompress(big);
     std::pmr::string output(resource);
     const auto error = appendTransferDecoded(decoder, gz, output);
-    RUVIA_CHECK(error.has_value());
-    RUVIA_CHECK(*error ==
-        TransferCodingDecodeError::kDecodedSizeExceeded);
+    RUVIA_CHECK(error.failed);
+    RUVIA_CHECK(error.protocolError.has_value());
+    RUVIA_CHECK_EQ(error.protocolError->status(), 413);
     const auto finish = decoder.finishInput();
-    RUVIA_CHECK(finish.failure() != nullptr);
-    if (finish.failure() != nullptr) {
+    RUVIA_CHECK(finish.protocolFailure() != nullptr);
+    if (finish.protocolFailure() != nullptr) {
         RUVIA_CHECK(
-            finish.failure()->error() ==
-            TransferCodingDecodeError::kDecodedSizeExceeded);
+            finish.protocolFailure()->protocolError().status() == 413);
     }
+}
+
+RUVIA_TEST(context_request_cold_operation_rejects_after_request_scope_closes) {
+    auto operation = makeExpiredContextTextRead();
+    bool rejected = false;
+    asio::io_context io(1);
+    auto future = asio::co_spawn(
+        io,
+        ruvia::detail::taskAsAwaitable(
+            awaitExpiredContextTextRead(operation, rejected)),
+        asio::use_future);
+    io.run();
+    future.get();
+    RUVIA_CHECK(rejected);
 }
 
 RUVIA_TEST(transfer_coding_decoder_reports_typed_wire_failures) {
@@ -818,9 +1167,10 @@ RUVIA_TEST(transfer_coding_decoder_reports_typed_wire_failures) {
         resource,
         ProtocolByteLimit::limited(1024));
     const auto invalidResult = invalid.decode("not-gzip", window);
-    RUVIA_CHECK(invalidResult.failure() != nullptr);
-    RUVIA_CHECK(invalidResult.failure()->error() ==
-        TransferCodingDecodeError::kInvalidContent);
+    RUVIA_CHECK(invalidResult.protocolFailure() != nullptr);
+    RUVIA_CHECK(invalidResult.decoderFailure() == nullptr);
+    RUVIA_CHECK_EQ(
+        invalidResult.protocolFailure()->protocolError().status(), 400);
 
     std::string truncated = gzipCompress("truncated");
     truncated.resize(truncated.size() - 4);
@@ -830,21 +1180,30 @@ RUVIA_TEST(transfer_coding_decoder_reports_typed_wire_failures) {
         ProtocolByteLimit::limited(1024));
     std::pmr::string ignored(resource);
     RUVIA_CHECK(!appendTransferDecoded(
-        incomplete, truncated, ignored).has_value());
+        incomplete, truncated, ignored).failed);
     const auto incompleteFinish = incomplete.finishInput();
-    RUVIA_CHECK(incompleteFinish.failure() != nullptr);
-    if (incompleteFinish.failure() != nullptr) {
+    RUVIA_CHECK(incompleteFinish.protocolFailure() != nullptr);
+    if (incompleteFinish.protocolFailure() != nullptr) {
         RUVIA_CHECK(
-            incompleteFinish.failure()->error() ==
-            TransferCodingDecodeError::kInvalidContent);
+            incompleteFinish.protocolFailure()->protocolError().status() == 400);
     }
     const auto repeatedFinish = incomplete.finishInput();
-    RUVIA_CHECK(repeatedFinish.failure() != nullptr);
-    if (repeatedFinish.failure() != nullptr) {
+    RUVIA_CHECK(repeatedFinish.protocolFailure() != nullptr);
+    if (repeatedFinish.protocolFailure() != nullptr) {
         RUVIA_CHECK(
-            repeatedFinish.failure()->error() ==
-            TransferCodingDecodeError::kInvalidContent);
+            repeatedFinish.protocolFailure()->protocolError().status() == 400);
     }
+
+    TransferCodingDecoder internalFailure(
+        HttpTransferCoding::kGzip,
+        resource,
+        ProtocolByteLimit::limited(1024));
+    const auto decoderFailure = internalFailure.decode("input", {});
+    RUVIA_CHECK(decoderFailure.protocolFailure() == nullptr);
+    RUVIA_CHECK(decoderFailure.decoderFailure() != nullptr);
+    const auto repeatedDecoderFailure = internalFailure.finishInput();
+    RUVIA_CHECK(repeatedDecoderFailure.protocolFailure() == nullptr);
+    RUVIA_CHECK(repeatedDecoderFailure.decoderFailure() != nullptr);
 
     std::string trailing = gzipCompress("complete");
     trailing.push_back('x');
@@ -854,7 +1213,12 @@ RUVIA_TEST(transfer_coding_decoder_reports_typed_wire_failures) {
         ProtocolByteLimit::limited(1024));
     const auto trailingError = appendTransferDecoded(
         extra, trailing, ignored);
-    RUVIA_CHECK(trailingError.has_value());
-    RUVIA_CHECK(*trailingError ==
-        TransferCodingDecodeError::kInvalidContent);
+    // A short prefix of another member can remain ambiguous until framing EOF.
+    // It must not make the first valid member terminal, but EOF must reject it.
+    RUVIA_CHECK(!trailingError.failed);
+    const auto trailingFinish = extra.finishInput();
+    RUVIA_CHECK(trailingFinish.protocolFailure() != nullptr);
+    if (const auto* failure = trailingFinish.protocolFailure()) {
+        RUVIA_CHECK_EQ(failure->protocolError().status(), 400);
+    }
 }

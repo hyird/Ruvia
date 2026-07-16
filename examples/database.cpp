@@ -31,8 +31,9 @@ ruvia::DbConfig dbConfigFromEnv(const ruvia::Env& env) {
     if (const auto port = env.get<std::uint16_t>("RUVIA_DB_PORT")) {
         config.port = *port;
     }
-    if (const auto poolSize = env.get<std::uint32_t>("RUVIA_DB_POOL_SIZE")) {
-        config.poolSize = *poolSize;
+    if (const auto poolSize =
+            env.get<std::uint32_t>("RUVIA_DB_POOL_SIZE_PER_WORKER")) {
+        config.poolSizePerWorker = *poolSize;
     }
     config.acquireTimeout = std::chrono::seconds(2);
     config.connectTimeout = std::chrono::seconds(5);
@@ -63,13 +64,14 @@ private:
         co_await loadUserFound(c, found);
         std::pmr::string body(c.allocator<char>());
         body.append(found ? "found\n" : "not found\n");
-        co_return c.text(body, found ? 200 : 404);
+        c.status(found ? 200 : 404);
+        co_return c.text(std::move(body));
     }
 
     ruvia::Task<ruvia::HttpResponse> streamUsers(ruvia::Context& c) {
         std::pmr::string body(c.allocator<char>());
         co_await appendUsers(c, body);
-        co_return c.text(body);
+        co_return c.text(std::move(body));
     }
 
     ruvia::Task<ruvia::HttpResponse> createUser(ruvia::Context& c) {
@@ -80,7 +82,8 @@ private:
         body.append("created id=");
         appendUnsigned(body, id);
         body.push_back('\n');
-        co_return c.text(body, 201);
+        c.status(201);
+        co_return c.text(std::move(body));
     }
 
     ruvia::Task<ruvia::HttpResponse> transfer(ruvia::Context& c) {
@@ -212,7 +215,7 @@ int main() {
 
     app
         .setListenAddress("0.0.0.0")
-        .setHttpListenPort(8086)
-        .setThreadNum(2)
+        .setServerTopology(ruvia::ServerTopology::http(8086))
+        .setWorkersPerListener(2)
         .run();
 }

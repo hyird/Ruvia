@@ -9,9 +9,12 @@
 namespace ruvia {
 
 struct SseMessage final {
-    std::string_view data;
+    // Absence emits no data field, so an event/id/retry-only block does not
+    // dispatch a MessageEvent. A present empty value emits `data:` and therefore
+    // dispatches one event whose data is empty.
+    std::optional<std::string_view> data;
     std::string_view event;
-    std::string_view id;
+    std::optional<std::string_view> id;
     std::optional<std::uint32_t> retry;
 };
 

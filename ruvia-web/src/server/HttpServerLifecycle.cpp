@@ -1,10 +1,14 @@
 #include "ruvia/web/detail/server/HttpServer.h"
+#include "ruvia/core/detail/WorkerDispatcher.h"
+#include "ruvia/web/detail/app/WebWorkerDispatch.h"
 
 #include "ruvia/web/detail/server/HttpServerTlsVerify.h"
 
+#include <asio/bind_allocator.hpp>
 #include <asio/co_spawn.hpp>
 #include <asio/detached.hpp>
 #include <asio/post.hpp>
+#include <asio/recycling_allocator.hpp>
 #include <asio/ssl/context.hpp>
 #include <asio/ssl/error.hpp>
 #include <asio/system_error.hpp>
@@ -25,6 +29,7 @@
 #include "ruvia/core/detail/ConnectionScanner.h"
 #include "ruvia/web/detail/server/HttpConnectionState.h"
 #include "ruvia/web/detail/server/HttpServerOptionsValidation.h"
+#include "ruvia/web/detail/router/RouteTable.h"
 #include "ruvia/http/detail/HeaderTokenUtils.h"
 #include "ruvia/core/detail/AsioAwait.h"
 #include "ruvia/http/detail/AsciiCase.h"
@@ -34,6 +39,20 @@ namespace ruvia::detail {
 using TcpEndpoint = asio::ip::tcp::endpoint;
 
 namespace {
+
+void freezeProcessMemoryForWorker(const MemoryPoolConfig& config) {
+    auto& processMemory = ProcessMemory::instance();
+    if (processMemory.frozen()) {
+        if (processMemory.config().requestInitialBufferBytes !=
+            config.requestInitialBufferBytes) {
+            throw std::logic_error(
+                "process memory configuration is already frozen with different values");
+        }
+        return;
+    }
+    processMemory.configure(config);
+    processMemory.freeze();
+}
 
 int selectAlpnProtocol(
     SSL*,
@@ -158,78 +177,123 @@ HttpServer::HttpServer(
     std::span<const DbDefinition> databases,
     std::span<const RedisDefinition> redis,
     HttpServerOptions options)
+    : HttpServer(
+          ValidatedOptionsTag{},
+          std::move(endpoint),
+          routes,
+          databases,
+          redis,
+          validatedHttpServerOptions(std::move(options))) {}
+
+HttpServer::HttpServer(
+    ValidatedOptionsTag,
+    TcpEndpoint endpoint,
+    const RouteTable& routes,
+    std::span<const DbDefinition> databases,
+    std::span<const RedisDefinition> redis,
+    HttpServerOptions validatedOptions)
     // One worker thread runs all I/O on this context; cross-thread access is
     // limited to stop()'s asio::post, which UNSAFE_IO keeps locked. Only the
     // reactor's per-descriptor I/O locking is elided.
     : ioContext_(ASIO_CONCURRENCY_HINT_UNSAFE_IO),
+      workerDispatcher_(std::make_shared<WorkerDispatcher>(
+          ioContext_, validatedOptions.workerMailboxCapacity)),
+      workerHandle_(WorkerHandleAccess::make(workerDispatcher_)),
       acceptor_(ioContext_),
-      drainTimer_(ioContext_),
       endpoint_(std::move(endpoint)),
       routes_(routes),
+      memory_(
+          validatedOptions.memoryConfig,
+          DeferProcessMemoryFreeze{}),
       sniContexts_(memory_.resource()),
       sniLookup_(memory_.resource()),
-      options_(validatedHttpServerOptions(std::move(options))),
+      options_(std::move(validatedOptions)),
       databases_(ioContext_, memory_.resource(), databases),
       redis_(ioContext_, memory_.resource(), redis),
-      rateLimiter_(options_.rateLimit, memory_.resource()),
-      connectionScanner_(ioContext_.get_executor(), makeConnectionScannerOptions(options_)),
+      webWorkerDispatch_(std::make_shared<WebWorkerDispatch>(
+          ioContext_.get_executor(),
+          workerHandle_,
+          memory_.resource(),
+          databases_,
+          redis_,
+          [this] { maybeFinishDrain(); },
+          [this](std::exception_ptr failure) {
+              failWorker(std::move(failure));
+          })),
+      rateLimiter_(
+          options_.defaultRateLimitPerWorker,
+          routes_.hasRouteRateLimit()
+              ? RouteRateLimitPresence::kPresent
+              : RouteRateLimitPresence::kAbsent,
+          options_.rateLimitSlotsPerWorker,
+          memory_.resource()),
+      connectionScanner_(workerHandle_, makeConnectionScannerOptions(options_)),
       workSetPool_(memory_) {
     if (databases_.hasAnyTimeout()) {
-        connectionScanner_.setWorkerScanner(&databases_, [](void* target) noexcept {
-            static_cast<DbRegistry*>(target)->scanDeadlines();
-        });
+        connectionScanner_.registerWorkerMaintenance(
+            databaseDeadlineCheck_,
+            &databases_,
+            [](void* target) noexcept {
+                static_cast<DbRegistry*>(target)->scanDeadlines();
+            });
     }
     if (redis_.hasAnyTimeout()) {
-        connectionScanner_.setWorkerScanner(&redis_, [](void* target) noexcept {
-            static_cast<RedisRegistry*>(target)->scanDeadlines();
-        });
+        connectionScanner_.registerWorkerMaintenance(
+            redisDeadlineCheck_,
+            &redis_,
+            [](void* target) noexcept {
+                static_cast<RedisRegistry*>(target)->scanDeadlines();
+            });
     }
 }
 
 HttpServer::~HttpServer() {
     stop();
+    try {
+        join();
+    } catch (...) {
+    }
+    webWorkerDispatch_->retire();
+    // Public worker handles may outlive this server. Leave them a detached
+    // terminal endpoint before ioContext_ and its Asio objects are destroyed.
+    workerDispatcher_->detachContext();
 }
 
 void HttpServer::start() {
-    auto expected = LifecycleState::kFresh;
-    if (!lifecycleState_.compare_exchange_strong(
-            expected,
-            LifecycleState::kRunning)) {
+    freezeProcessMemoryForWorker(options_.memoryConfig);
+    if (!lifecycle_.start()) {
         throw std::logic_error("http server worker cannot be restarted");
     }
-    workerRunning_ = true;
+    workerState_ = HttpServerWorkerState::kRunning;
 
     try {
-        resetStartupState();
         configureAcceptor();
         configureTlsContext();
-        connectionScanner_.start();
         asio::co_spawn(
             ioContext_,
             taskAsAwaitable(runWorker()),
             asio::bind_allocator(asio::recycling_allocator<void>(), asio::detached));
         workerThread_ = std::jthread([this] { runIoContext(); });
-        waitForStartupReady();
+        workerCompletion_.waitForStartup();
     } catch (...) {
-        lifecycleState_.store(LifecycleState::kStopped, std::memory_order_relaxed);
+        (void)lifecycle_.requestStop();
         if (workerThread_.joinable()) {
             workerThread_.join();
         } else {
-            workerRunning_ = false;
             stopOnContext(/*honorGracePeriod=*/false);
         }
+        lifecycle_.completeStop();
         throw;
     }
 }
 
 void HttpServer::stop() {
-    auto expected = LifecycleState::kRunning;
-    if (!lifecycleState_.compare_exchange_strong(
-            expected,
-            LifecycleState::kStopping)) {
+    if (!lifecycle_.requestStop()) {
         return;
     }
 
+    webWorkerDispatch_->close();
+    workerDispatcher_->close();
     asio::post(ioContext_, [this] { stopOnContext(); });
 }
 
@@ -237,10 +301,19 @@ void HttpServer::join() {
     if (workerThread_.joinable()) {
         workerThread_.join();
     }
+    lifecycle_.completeStop();
+    const auto failure = workerCompletion_.workerFailure();
+    if (failure != nullptr) {
+        std::rethrow_exception(failure);
+    }
 }
 
 TcpEndpoint HttpServer::localEndpoint() const {
     return endpoint_;
+}
+
+WebWorkerHandle HttpServer::webWorker() const {
+    return webWorkerDispatch_->handle();
 }
 void HttpServer::configureAcceptor() {
     std::error_code ec;
@@ -283,15 +356,17 @@ void HttpServer::configureAcceptor() {
 void HttpServer::configureTlsContext() {
     sniContexts_.clear();
     sniLookup_.clear();
-    if (!options_.tls.enabled) {
+    const auto* tls = options_.tls();
+    if (tls == nullptr) {
         tlsContext_.reset();
         return;
     }
-    if (options_.tls.certificateChainFile.empty() || options_.tls.privateKeyFile.empty()) {
+    if (tls->identity.certificateChainFile.empty() ||
+        tls->identity.privateKeyFile.empty()) {
         throw std::invalid_argument("TLS requires certificate chain and private key files");
     }
 
-    const auto configure = [this](
+    const auto configure = [tls](
                                asio::ssl::context& context,
                                const std::pmr::string& certificateChainFile,
                                const std::pmr::string& privateKeyFile,
@@ -312,27 +387,35 @@ void HttpServer::configureTlsContext() {
         }
         useCertificateChainFile(context, certificateChainFile);
         usePrivateKeyFile(context, privateKeyFile);
-        if (!options_.tls.verifyFile.empty()) {
-            loadVerifyFile(context, options_.tls.verifyFile);
+        if (tls->clientCertificates.has_value()) {
+            loadVerifyFile(context, tls->clientCertificates->verifyFile);
             context.set_verify_mode(
-                httpServerTlsVerifyMode(options_.tls.requireClientCertificate));
+                httpServerTlsVerifyMode(tls->clientCertificates->requirement));
         }
     };
 
     // Per-host SNI certificates first, so the lookup can point at stable storage.
-    sniContexts_.reserve(options_.tls.sniCertificates.size());
-    for (const auto& certificate : options_.tls.sniCertificates) {
+    sniContexts_.reserve(tls->sniIdentities.size());
+    for (const auto& sni : tls->sniIdentities) {
         auto& context = sniContexts_.emplace_back(asio::ssl::context::tls_server);
-        configure(context, certificate.certificateChainFile, certificate.privateKeyFile, certificate.privateKeyPassword);
+        configure(
+            context,
+            sni.identity.certificateChainFile,
+            sni.identity.privateKeyFile,
+            sni.identity.privateKeyPassword);
     }
-    sniLookup_.reserve(options_.tls.sniCertificates.size());
-    for (std::size_t i = 0; i < options_.tls.sniCertificates.size(); ++i) {
-        sniLookup_.emplace_back(options_.tls.sniCertificates[i].host, &sniContexts_[i]);
+    sniLookup_.reserve(tls->sniIdentities.size());
+    for (std::size_t i = 0; i < tls->sniIdentities.size(); ++i) {
+        sniLookup_.emplace_back(tls->sniIdentities[i].host, &sniContexts_[i]);
     }
 
     tlsContext_.emplace(asio::ssl::context::tls_server);
     auto& context = *tlsContext_;
-    configure(context, options_.tls.certificateChainFile, options_.tls.privateKeyFile, options_.tls.privateKeyPassword);
+    configure(
+        context,
+        tls->identity.certificateChainFile,
+        tls->identity.privateKeyFile,
+        tls->identity.privateKeyPassword);
     if (!sniLookup_.empty()) {
         SSL_CTX_set_tlsext_servername_callback(context.native_handle(), &selectSniContext);
         SSL_CTX_set_tlsext_servername_arg(context.native_handle(), &sniLookup_);
@@ -340,41 +423,66 @@ void HttpServer::configureTlsContext() {
 }
 
 void HttpServer::stopOnContext(bool honorGracePeriod) noexcept {
-    workerRunning_ = false;
+    if (!httpServerWorkerRunning(workerState_)) {
+        if (!honorGracePeriod &&
+            workerState_ == HttpServerWorkerState::kDraining) {
+            finishStopOnContext();
+        }
+        return;
+    }
+
+    workerState_ = HttpServerWorkerState::kDraining;
+    webWorkerDispatch_->close();
+    workerDispatcher_->close();
     std::error_code ignored;
     acceptor_.cancel(ignored);
     acceptor_.close(ignored);
     connectionScanner_.stop();
 
-    // workerRunning_ is now false, so sessions close after their current
+    // workerState_ is now draining, so sessions close after their current
     // request. With a grace period, hold the force-close for that long so
     // in-flight requests can finish; otherwise close immediately. A teardown
     // triggered by a startup failure or a worker crash (honorGracePeriod=false)
     // has no in-flight requests to drain -- honoring the grace period there would
     // only stall the failure report (and the worker join) for the full period.
     if (honorGracePeriod && options_.shutdownGracePeriod.count() > 0 &&
-        activeConnectionCount_ != 0) {
-        drainPending_ = true;
-        drainTimer_.expires_after(options_.shutdownGracePeriod);
-        drainTimer_.async_wait([this](const std::error_code& ec) {
-            if (drainPending_ && ec != asio::error::operation_aborted) {
-                drainPending_ = false;
-                forceCloseAll();
-            }
-        });
-        return;
+        (activeConnectionCount_ != 0 || webWorkerDispatch_->outstanding() != 0)) {
+        try {
+            WorkerHandleAccess::scheduleTimer(
+                workerHandle_, drainTimer_,
+                workerTimerDeadlineAfter(options_.shutdownGracePeriod),
+                [this](WorkerTimerOutcome outcome) {
+                    if (workerState_ == HttpServerWorkerState::kDraining &&
+                        outcome == WorkerTimerOutcome::kExpired) {
+                        finishStopOnContext();
+                    }
+                });
+            return;
+        } catch (...) {
+            // Shutdown must remain noexcept even if the one-shot drain timer
+            // cannot allocate or the timer queue is already stopping.
+        }
     }
-    forceCloseAll();
+    finishStopOnContext();
 }
 
 void HttpServer::maybeFinishDrain() noexcept {
-    if (!drainPending_ || activeConnectionCount_ != 0) {
+    if (workerState_ != HttpServerWorkerState::kDraining ||
+        activeConnectionCount_ != 0 ||
+        webWorkerDispatch_->outstanding() != 0) {
         return;
     }
     // Every session finished before the grace period elapsed. Release the
     // timer now: a pending wait would hold the io_context (and the worker
     // join) for the full remaining period.
-    drainPending_ = false;
+    finishStopOnContext();
+}
+
+void HttpServer::finishStopOnContext() noexcept {
+    if (workerState_ == HttpServerWorkerState::kStopped) {
+        return;
+    }
+    workerState_ = HttpServerWorkerState::kStopped;
     drainTimer_.cancel();
     forceCloseAll();
 }
@@ -383,65 +491,51 @@ void HttpServer::forceCloseAll() noexcept {
     connectionScanner_.closeAll();
     databases_.closeNow();
     redis_.closeNow();
+    workerDispatcher_->stopTimers();
 }
 
-void HttpServer::resetStartupState() {
-    std::lock_guard lock(startupMutex_);
-    startupException_ = nullptr;
-    startupReady_ = false;
-}
-
-void HttpServer::completeStartup(std::exception_ptr exception) noexcept {
-    {
-        std::lock_guard lock(startupMutex_);
-        if (startupReady_) {
-            return;
-        }
-
-        startupException_ = exception;
-        startupReady_ = true;
+void HttpServer::failWorker(std::exception_ptr failure) noexcept {
+    if (!workerCompletion_.recordWorkerFailure(failure)) {
+        return;
     }
-    startupCv_.notify_all();
-}
-
-void HttpServer::waitForStartupReady() {
-    std::unique_lock lock(startupMutex_);
-    startupCv_.wait(lock, [this] { return startupReady_; });
-    if (startupException_ != nullptr) {
-        std::rethrow_exception(startupException_);
-    }
+    (void)lifecycle_.requestStop();
+    options_.workerFailure.notify(failure);
+    stopOnContext(/*honorGracePeriod=*/false);
 }
 
 void HttpServer::runIoContext() noexcept {
     try {
-        ioContext_.run();
+        workerDispatcher_->runContext();
     } catch (...) {
-        lifecycleState_.store(LifecycleState::kStopped, std::memory_order_relaxed);
-        stopOnContext(/*honorGracePeriod=*/false);
-        completeStartup(std::current_exception());
+        const auto failure = std::current_exception();
+        (void)workerCompletion_.markStartupFailed(failure);
+        failWorker(failure);
+        lifecycle_.completeStop();
+        workerState_ = HttpServerWorkerState::kStopped;
         return;
     }
 
-    lifecycleState_.store(LifecycleState::kStopped, std::memory_order_relaxed);
-    workerRunning_ = false;
-    completeStartup(std::make_exception_ptr(
+    lifecycle_.completeStop();
+    workerState_ = HttpServerWorkerState::kStopped;
+    (void)workerCompletion_.markStartupFailed(std::make_exception_ptr(
         std::runtime_error("http server worker stopped before startup completed")));
 }
 
 Task<void> HttpServer::runWorker() {
     try {
+        connectionScanner_.start();
         if (!databases_.empty()) {
             co_await databases_.connect();
         }
         if (!redis_.empty()) {
             co_await redis_.connect();
         }
-        completeStartup();
+        (void)workerCompletion_.markStartupReady();
         co_await acceptLoop();
     } catch (...) {
-        lifecycleState_.store(LifecycleState::kStopped, std::memory_order_relaxed);
-        stopOnContext(/*honorGracePeriod=*/false);
-        completeStartup(std::current_exception());
+        const auto failure = std::current_exception();
+        (void)workerCompletion_.markStartupFailed(failure);
+        failWorker(failure);
     }
 }
 

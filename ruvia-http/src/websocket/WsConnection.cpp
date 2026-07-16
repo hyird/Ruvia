@@ -35,18 +35,24 @@ WsOutputPlan WsConnection::outputPlan() const noexcept {
     return WsOutputPlan(bytes, disposition);
 }
 
-void WsConnection::consumeOutput(std::size_t n) noexcept {
+WsOutputConsumeStatus WsConnection::consumeOutput(std::size_t n) noexcept {
     const auto remaining = outBuffer_.size() - outOffset_;
-    outOffset_ += n < remaining ? n : remaining;
-    if (outOffset_ >= outBuffer_.size()) {
-        outBuffer_.clear();
-        outOffset_ = 0;
-        if (closePhase_ == ClosePhase::kLocalCloseQueued) {
-            closePhase_ = ClosePhase::kAwaitingPeerClose;
-        } else if (closePhase_ == ClosePhase::kFinalCloseQueued) {
-            closePhase_ = ClosePhase::kTransportEndReady;
-        }
+    if (n > remaining) {
+        return WsOutputConsumeStatus::kOutOfRange;
     }
+    if (n < remaining) {
+        outOffset_ += n;
+        return WsOutputConsumeStatus::kPending;
+    }
+
+    outBuffer_.clear();
+    outOffset_ = 0;
+    if (closePhase_ == ClosePhase::kLocalCloseQueued) {
+        closePhase_ = ClosePhase::kAwaitingPeerClose;
+    } else if (closePhase_ == ClosePhase::kFinalCloseQueued) {
+        closePhase_ = ClosePhase::kTransportEndReady;
+    }
+    return WsOutputConsumeStatus::kDrained;
 }
 
 void WsConnection::commitTransportEnd() noexcept {
@@ -133,6 +139,9 @@ WsFrameSubmitStatus WsConnection::submitFrame(
     }
     if (dataFrame && webSocketMessageExceedsLimit(payload.size(), messageLimit_)) {
         return WsFrameSubmitStatus::kMessageTooLarge;
+    }
+    if (opcode == WebSocketOpcode::kText && !isValidUtf8(payload)) {
+        return WsFrameSubmitStatus::kInvalidTextPayload;
     }
     if (controlFrame && payload.size() > 125) {
         return WsFrameSubmitStatus::kControlFrameTooLarge;
@@ -248,6 +257,12 @@ std::optional<WsEvent> WsConnection::poll() {
             return WsEvent::message(message.opcode(), message.payload());
         }
 
+        // decompress() only appends, so the buffer must be emptied per MESSAGE, not
+        // per poll(): one poll() drains several frames, and a message suppressed
+        // during the closing handshake (below) returns via `continue` with its bytes
+        // still here. Inheriting them would make the next message's UTF-8 check read
+        // the concatenation, and would charge its decompression-bomb limit for both.
+        inboundInflated_.clear();
         const auto inflateResult = deflate_.has_value()
             ? deflate_->decompress(
                 message.payload(), inboundInflated_, messageLimit_)

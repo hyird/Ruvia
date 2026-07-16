@@ -10,6 +10,8 @@
 #include "ruvia/http/HttpLimits.h"
 #include "ruvia/http/detail/HeaderAcceptUtils.h"
 #include "ruvia/http/detail/HeaderTokenUtils.h"
+#include "ruvia/http/detail/HttpExpectations.h"
+#include "ruvia/http/detail/HttpRequestContentSemantics.h"
 #include "ruvia/http/detail/client/HttpOrigin.h"
 #include "ruvia/http/detail/parser/HttpRequestTarget.h"
 
@@ -118,6 +120,89 @@ struct RequestHeaderFacts final {
     return true;
 }
 
+[[nodiscard]] bool isValidClientTeItem(std::string_view item) noexcept {
+    std::size_t cursor = 0;
+    const auto skipOws = [&item, &cursor]() noexcept {
+        while (cursor < item.size() &&
+               (item[cursor] == ' ' || item[cursor] == '\t')) {
+            ++cursor;
+        }
+    };
+    const auto parseToken = [&item, &cursor]() noexcept {
+        const auto begin = cursor;
+        while (cursor < item.size() &&
+               detail::isHttpTokenChar(
+                   static_cast<unsigned char>(item[cursor]))) {
+            ++cursor;
+        }
+        return item.substr(begin, cursor - begin);
+    };
+
+    const auto coding = parseToken();
+    if (coding.empty()) {
+        return false;
+    }
+    const bool trailers =
+        detail::httpAsciiEqualsIgnoreCase(coding, "trailers");
+    const bool supportedCoding =
+        detail::httpAsciiEqualsIgnoreCase(coding, "gzip") ||
+        detail::httpAsciiEqualsIgnoreCase(coding, "x-gzip") ||
+        detail::httpAsciiEqualsIgnoreCase(coding, "deflate");
+    if (!trailers && !supportedCoding) {
+        // The paired response parser cannot represent any other transfer
+        // coding. Advertising one here would make the client claim a decoding
+        // capability it does not have. "chunked" is never listed in TE because
+        // every HTTP/1.1 recipient already accepts it as message framing.
+        return false;
+    }
+
+    skipOws();
+    if (cursor == item.size()) {
+        return true;
+    }
+    if (trailers || item[cursor] != ';') {
+        return false;
+    }
+    ++cursor;
+    skipOws();
+    // RFC 9110 section 12.4.2 defines weight with the exact `q=` literal.
+    // BWS around '=' belongs to transfer-parameter syntax instead; treating
+    // `q =` as a weight would emit an undefined gzip/deflate parameter.
+    if (cursor + 2 > item.size() ||
+        detail::httpAsciiToLower(static_cast<unsigned char>(item[cursor])) != 'q' ||
+        item[cursor + 1] != '=') {
+        return false;
+    }
+    cursor += 2;
+    const auto quality = parseToken();
+    if (quality.empty() || detail::httpParseQualityValue(quality) < 0) {
+        return false;
+    }
+    skipOws();
+    return cursor == item.size();
+}
+
+[[nodiscard]] bool isValidClientTeField(std::string_view value) noexcept {
+    // RFC 9112 section 7.4 explicitly permits an empty TE field. It advertises
+    // no optional transfer coding; chunked remains implicitly acceptable.
+    if (detail::httpTrimOws(value).empty()) {
+        return true;
+    }
+    bool valid = true;
+    bool sawItem = false;
+    detail::httpVisitCommaSeparatedQuotedItems(
+        value,
+        [&valid, &sawItem](std::string_view item) noexcept {
+            sawItem = true;
+            if (!isValidClientTeItem(item)) {
+                valid = false;
+                return false;
+            }
+            return true;
+        });
+    return valid && sawItem;
+}
+
 [[nodiscard]] std::size_t authorityLength(
     const HttpOrigin& origin,
     bool forcePort) noexcept {
@@ -161,8 +246,11 @@ struct RequestHeaderFacts final {
         if (detail::httpAsciiEqualsIgnoreCase(name, "Connection")) {
             if (facts.connectionOptions.parseField(
                     value,
-                    detail::HttpFieldListRole::kSender) !=
-                detail::HttpFieldListParseStatus::kOk) {
+                    detail::HttpFieldListRole::kSender,
+                    [](std::string_view option) noexcept {
+                        return !detail::httpConnectionOptionConflictsWithManagedField(
+                            option);
+                    }) != detail::HttpFieldListParseStatus::kOk) {
                 error = Http1ClientRequestPrepareError::kInvalidConnection;
                 return false;
             }
@@ -177,11 +265,15 @@ struct RequestHeaderFacts final {
                 return false;
             }
         } else if (detail::httpAsciiEqualsIgnoreCase(name, "TE")) {
+            if (!isValidClientTeField(value)) {
+                error = Http1ClientRequestPrepareError::kInvalidHeader;
+                return false;
+            }
             facts.hasTe = true;
         } else if (detail::httpAsciiEqualsIgnoreCase(name, "Content-Type")) {
             detail::HttpMediaTypeParts parts;
             if (facts.hasContentType ||
-                !detail::httpParseMediaTypeParts(value, false, parts)) {
+                !detail::httpParseMediaType(value, false, parts)) {
                 error = Http1ClientRequestPrepareError::kInvalidHeader;
                 return false;
             }
@@ -269,20 +361,29 @@ void appendHeaders(
     }
     const bool expectContinue =
         policy.continueExpectation() != nullptr;
-    if (expectContinue &&
-        (!explicitContent || contentBytes->value().empty())) {
+    const auto contentIndication =
+        explicitContent && !contentBytes->value().empty()
+        ? detail::HttpRequestContentIndication::kWillFollow
+        : detail::HttpRequestContentIndication::kNoContent;
+    if (!detail::httpClientExpectationIsValid(
+            expectContinue, contentIndication)) {
         return detail::Http1ClientRequestPrepareResultAccess::failure(
             Http1ClientRequestPrepareError::kExpectationWithoutContent);
     }
-    if (method == "TRACE" && explicitContent) {
-        return detail::Http1ClientRequestPrepareResultAccess::failure(
-            Http1ClientRequestPrepareError::kContentForbiddenForMethod);
-    }
-    if (method == "OPTIONS" && explicitContent &&
-        !contentBytes->value().empty() &&
-        !headerFacts.hasContentType) {
-        return detail::Http1ClientRequestPrepareResultAccess::failure(
-            Http1ClientRequestPrepareError::kOptionsContentTypeRequired);
+    if (explicitContent) {
+        const auto contentSemantics =
+            detail::httpRequestContentSemantics(method);
+        if (contentSemantics ==
+            detail::HttpRequestContentSemantics::kForbidden) {
+            return detail::Http1ClientRequestPrepareResultAccess::failure(
+                Http1ClientRequestPrepareError::kContentForbiddenForMethod);
+        }
+        if (contentSemantics ==
+                detail::HttpRequestContentSemantics::kContentTypeRequired &&
+            !headerFacts.hasContentType) {
+            return detail::Http1ClientRequestPrepareResultAccess::failure(
+                Http1ClientRequestPrepareError::kOptionsContentTypeRequired);
+        }
     }
 
     const bool generateConnectionClose =
@@ -433,8 +534,8 @@ Http1ClientRequestPrepareResult Http1ClientRequestWriter::prepare(
         return detail::Http1ClientRequestPrepareResultAccess::failure(
             Http1ClientRequestPrepareError::kConnectRequiresDedicatedEntry);
     }
-    if ((request.target == "*" && request.method != "OPTIONS") ||
-        !detail::isValidOriginFormTarget(request.target)) {
+    if (!detail::isValidOriginOrAsteriskFormTarget(
+            classifyHttpMethod(request.method), request.target)) {
         return detail::Http1ClientRequestPrepareResultAccess::failure(
             Http1ClientRequestPrepareError::kInvalidTarget);
     }

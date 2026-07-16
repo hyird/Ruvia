@@ -28,6 +28,14 @@ enum class Http1InterimResponsePrepareError : std::uint8_t {
     kHeaderTooLarge,
 };
 
+// Connection lifecycle after the encoded interim response. RFC 9112 requires
+// a sender of Connection: close to begin closing after the response containing
+// that option, even though doing so leaves the request without a final response.
+enum class Http1InterimConnectionDisposition : std::uint8_t {
+    kUnchanged,
+    kCloseAfterInterimResponse,
+};
+
 [[nodiscard]] std::string_view http1InterimResponsePrepareErrorMessage(
     Http1InterimResponsePrepareError error) noexcept;
 
@@ -48,17 +56,17 @@ private:
 };
 
 // A transactionally encoded HTTP/1.1 interim head. The byte view points into
-// the caller's output buffer. A Connection: close option cannot terminate the
-// interim message; the owner must remember it and close after the required
-// final response instead.
+// the caller's output buffer. When Connection: close is present, the owner must
+// initiate connection closure as soon as this interim head has been written.
 class PreparedHttp1InterimResponse final {
 public:
     [[nodiscard]] constexpr std::string_view head() const noexcept {
         return head_;
     }
 
-    [[nodiscard]] constexpr bool requiresFinalConnectionClose() const noexcept {
-        return requiresFinalConnectionClose_;
+    [[nodiscard]] constexpr Http1InterimConnectionDisposition
+    connectionDisposition() const noexcept {
+        return connectionDisposition_;
     }
 
 private:
@@ -66,12 +74,12 @@ private:
 
     constexpr PreparedHttp1InterimResponse(
         std::string_view head,
-        bool requiresFinalConnectionClose) noexcept
+        Http1InterimConnectionDisposition connectionDisposition) noexcept
         : head_(head),
-          requiresFinalConnectionClose_(requiresFinalConnectionClose) {}
+          connectionDisposition_(connectionDisposition) {}
 
     std::string_view head_;
-    bool requiresFinalConnectionClose_{false};
+    Http1InterimConnectionDisposition connectionDisposition_;
 };
 
 class Http1InterimResponsePrepareFailure final {
@@ -90,36 +98,25 @@ private:
     Http1InterimResponsePrepareError error_;
 };
 
-enum class Http1InterimResponsePrepareKind : std::uint8_t {
-    kBufferTooSmall,
-    kPrepared,
-    kFailure,
-};
-
 class Http1InterimResponsePrepareResult final {
 public:
-    [[nodiscard]] constexpr Http1InterimResponsePrepareKind kind() const noexcept {
-        if (std::holds_alternative<PreparedHttp1InterimResponse>(state_)) {
-            return Http1InterimResponsePrepareKind::kPrepared;
-        }
-        return std::holds_alternative<Http1InterimResponsePrepareFailure>(state_)
-            ? Http1InterimResponsePrepareKind::kFailure
-            : Http1InterimResponsePrepareKind::kBufferTooSmall;
-    }
-
     [[nodiscard]] constexpr const Http1InterimResponseBufferTooSmall*
-    bufferTooSmall() const noexcept {
+    bufferTooSmall() const & noexcept {
         return std::get_if<Http1InterimResponseBufferTooSmall>(&state_);
     }
+    const Http1InterimResponseBufferTooSmall* bufferTooSmall() const && = delete;
 
-    [[nodiscard]] constexpr const PreparedHttp1InterimResponse* prepared() const noexcept {
+    [[nodiscard]] constexpr const PreparedHttp1InterimResponse*
+    prepared() const & noexcept {
         return std::get_if<PreparedHttp1InterimResponse>(&state_);
     }
+    const PreparedHttp1InterimResponse* prepared() const && = delete;
 
     [[nodiscard]] constexpr const Http1InterimResponsePrepareFailure*
-    failure() const noexcept {
+    failure() const & noexcept {
         return std::get_if<Http1InterimResponsePrepareFailure>(&state_);
     }
+    const Http1InterimResponsePrepareFailure* failure() const && = delete;
 
 private:
     friend struct detail::Http1InterimResponsePrepareResultAccess;
