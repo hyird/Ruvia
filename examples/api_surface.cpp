@@ -13,6 +13,7 @@
 #include <system_error>
 #include <type_traits>
 #include <utility>
+#include <vector>
 
 #include "ruvia/web/App.h"
 #include "ruvia/web/auth/Jwt.h"
@@ -1981,6 +1982,18 @@ concept HasHttp1ClientRequestWriterContract = requires(
         std::same_as<ruvia::Http1ClientRequestPrepareResult>;
 };
 
+template <typename Headers>
+concept AcceptsHttp1ConnectHeaders = requires(
+    const ruvia::Http1ClientRequestWriter& writer,
+    const ruvia::HttpOrigin& origin,
+    std::array<char, 512>& buffer,
+    Headers&& headers) {
+    writer.prepareConnect(
+        origin,
+        std::forward<Headers>(headers),
+        buffer);
+};
+
 template <typename T>
 concept HasHttp1ClientResponseParserContract = requires(
     T& parser,
@@ -2828,6 +2841,20 @@ static_assert(!std::is_default_constructible_v<
     ruvia::Http1ClientRequestWirePolicy>);
 static_assert(HasHttp1ClientRequestWriterContract<
     ruvia::Http1ClientRequestWriter>);
+static_assert(AcceptsHttp1ConnectHeaders<
+    std::vector<ruvia::HttpHeaderView>&>);
+static_assert(AcceptsHttp1ConnectHeaders<
+    std::array<ruvia::HttpHeaderView, 1>&>);
+static_assert(AcceptsHttp1ConnectHeaders<
+    std::span<const ruvia::HttpHeaderView>>);
+static_assert(!AcceptsHttp1ConnectHeaders<
+    std::vector<ruvia::HttpHeaderView>>);
+static_assert(!AcceptsHttp1ConnectHeaders<
+    const std::vector<ruvia::HttpHeaderView>>);
+static_assert(!AcceptsHttp1ConnectHeaders<
+    std::array<ruvia::HttpHeaderView, 1>>);
+static_assert(!AcceptsHttp1ConnectHeaders<
+    const std::array<ruvia::HttpHeaderView, 1>>);
 static_assert(!std::is_default_constructible_v<ruvia::Http1ClientResponseParseResult>);
 static_assert(!std::is_copy_constructible_v<ruvia::Http1ClientResponseParseResult>);
 static_assert(std::is_move_constructible_v<ruvia::Http1ClientResponseParseResult>);

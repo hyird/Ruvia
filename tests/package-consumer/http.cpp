@@ -11,6 +11,7 @@
 #include <string_view>
 #include <type_traits>
 #include <utility>
+#include <vector>
 
 #include <ruvia/http/HttpCache.h>
 #include <ruvia/http/Cookies.h>
@@ -1000,6 +1001,18 @@ concept AcceptsLvalueHttpClientRequestText =
         request.method = value;
         request.target = value;
     };
+
+template <typename Headers>
+concept AcceptsHttp1ConnectHeaders = requires(
+    const ruvia::Http1ClientRequestWriter& writer,
+    const ruvia::HttpOrigin& origin,
+    std::array<char, 512>& buffer,
+    Headers&& headers) {
+    writer.prepareConnect(
+        origin,
+        std::forward<Headers>(headers),
+        buffer);
+};
 
 template <typename T>
 concept HasStaleHttpClientContentMode = requires(const T& content) {
@@ -3422,6 +3435,20 @@ static_assert(!AcceptsAnyTemporaryHttpClientRequestText<std::string>);
 static_assert(!AcceptsAnyTemporaryHttpClientRequestText<const std::string>);
 static_assert(!AcceptsAnyTemporaryHttpClientRequestText<std::pmr::string>);
 static_assert(AcceptsLvalueHttpClientRequestText<std::string>);
+static_assert(AcceptsHttp1ConnectHeaders<
+    std::vector<ruvia::HttpHeaderView>&>);
+static_assert(AcceptsHttp1ConnectHeaders<
+    std::array<ruvia::HttpHeaderView, 1>&>);
+static_assert(AcceptsHttp1ConnectHeaders<
+    std::span<const ruvia::HttpHeaderView>>);
+static_assert(!AcceptsHttp1ConnectHeaders<
+    std::vector<ruvia::HttpHeaderView>>);
+static_assert(!AcceptsHttp1ConnectHeaders<
+    const std::vector<ruvia::HttpHeaderView>>);
+static_assert(!AcceptsHttp1ConnectHeaders<
+    std::array<ruvia::HttpHeaderView, 1>>);
+static_assert(!AcceptsHttp1ConnectHeaders<
+    const std::array<ruvia::HttpHeaderView, 1>>);
 constexpr ruvia::HttpClientRequest kLiteralHttpClientRequest{
     .method = "POST",
     .target = "/items"};
