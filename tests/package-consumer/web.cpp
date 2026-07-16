@@ -598,6 +598,20 @@ concept AcceptsFormScalarOutputParameter = requires(Value& value) {
     ruvia::detail::parseFormBool(std::string_view{}, value);
 };
 
+template <typename T>
+concept ParsesAnyRvalueOwningString =
+    requires(std::string&& body) {
+        T::parse(std::move(body), std::pmr::get_default_resource());
+    } ||
+    requires(const std::string&& body) {
+        T::parse(std::move(body), std::pmr::get_default_resource());
+    };
+
+template <typename T>
+concept ParsesLvalueOwningString = requires(const std::string& body) {
+    T::parse(body, std::pmr::get_default_resource());
+};
+
 template <typename Services>
 concept HasSplitContextCapabilityAccessors = requires(
     const Services& services) {
@@ -1817,6 +1831,12 @@ static_assert(std::is_nothrow_move_constructible_v<ruvia::String>);
 static_assert(std::is_nothrow_move_assignable_v<ruvia::String>);
 static_assert(!AcceptsFormValueOutputParameter<ruvia::String>);
 static_assert(!AcceptsFormScalarOutputParameter<bool>);
+static_assert(!ParsesAnyRvalueOwningString<ruvia::JsonValue>);
+static_assert(!ParsesAnyRvalueOwningString<ruvia::JsonObject>);
+static_assert(!ParsesAnyRvalueOwningString<ruvia::FormObject>);
+static_assert(ParsesLvalueOwningString<ruvia::JsonValue>);
+static_assert(ParsesLvalueOwningString<ruvia::JsonObject>);
+static_assert(ParsesLvalueOwningString<ruvia::FormObject>);
 static_assert(std::same_as<
     decltype(ruvia::detail::parseFormBool(std::string_view{})),
     std::optional<bool>>);

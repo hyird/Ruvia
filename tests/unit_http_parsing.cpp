@@ -72,9 +72,29 @@ concept HasQueriesVectorAccessor = requires(const T& request) {
     request.queries(std::string_view{});
 };
 
+template <typename T>
+concept ParsesAnyRvalueOwningString =
+    requires(std::string&& body) {
+        T::parse(std::move(body), std::pmr::get_default_resource());
+    } ||
+    requires(const std::string&& body) {
+        T::parse(std::move(body), std::pmr::get_default_resource());
+    };
+
+template <typename T>
+concept ParsesLvalueOwningString = requires(const std::string& body) {
+    T::parse(body, std::pmr::get_default_resource());
+};
+
 static_assert(!HasCookiesAccessor<ruvia::HttpRequest>);
 static_assert(!HasQueryListAccessor<ruvia::HttpRequest>);
 static_assert(!HasQueriesVectorAccessor<ruvia::HttpRequest>);
+static_assert(!ParsesAnyRvalueOwningString<ruvia::JsonValue>);
+static_assert(!ParsesAnyRvalueOwningString<ruvia::JsonObject>);
+static_assert(!ParsesAnyRvalueOwningString<ruvia::FormObject>);
+static_assert(ParsesLvalueOwningString<ruvia::JsonValue>);
+static_assert(ParsesLvalueOwningString<ruvia::JsonObject>);
+static_assert(ParsesLvalueOwningString<ruvia::FormObject>);
 
 RUVIA_REQUEST_MODEL(AccessorSurfaceRequest,
     RUVIA_FIELD(message, ruvia::String)
