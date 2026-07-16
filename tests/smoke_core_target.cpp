@@ -3,8 +3,17 @@
 #include "ruvia/core/version.h"
 #include "ruvia/core/memory/MemoryPool.h"
 
+#include <concepts>
 #include <memory_resource>
 #include <string_view>
+#include <utility>
+
+template <typename T>
+concept ExposesRvalueRequestMemoryBorrow =
+    requires(T&& memory) { std::move(memory).resource(); } ||
+    requires(T&& memory) { std::move(memory).template allocator<>(); };
+
+static_assert(!ExposesRvalueRequestMemoryBorrow<ruvia::RequestMemory>);
 
 static_assert(RUVIA_VERSION_MAJOR == RUVIA_EXPECTED_VERSION_MAJOR);
 static_assert(RUVIA_VERSION_MINOR == RUVIA_EXPECTED_VERSION_MINOR);

@@ -86,6 +86,13 @@ concept HasLegacyResponseBodyCopy = requires(T& response) {
     response.setBodyCopy(std::string_view{});
 };
 
+template <typename T>
+concept ExposesRvalueHttpRequestHeaders = requires(T&& request) {
+    std::move(request).headers();
+};
+
+static_assert(!ExposesRvalueHttpRequestHeaders<ruvia::HttpRequest>);
+
 template <typename Input>
 concept AcceptsHttp1BorrowedParseInput = requires(
     const ruvia::Http1RequestParser& parser,

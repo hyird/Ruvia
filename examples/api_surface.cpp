@@ -454,6 +454,26 @@ concept HasHttpRequestDecodedPathAlias = requires(const T& request) {
 };
 
 template <typename T>
+concept ExposesRvalueHttpRequestHeaders = requires(T&& request) {
+    std::move(request).headers();
+};
+
+template <typename T>
+concept ExposesRvalueRequestMemoryBorrow =
+    requires(T&& memory) { std::move(memory).resource(); } ||
+    requires(T&& memory) { std::move(memory).template allocator<>(); };
+
+template <typename T>
+concept ExposesRvalueRouteListIterator =
+    requires(T&& list) { std::move(list).begin(); } ||
+    requires(T&& list) { std::move(list).end(); };
+
+template <typename String>
+concept AcceptsTemporaryRoutePath = requires(String&& path) {
+    ruvia::detail::RuviaPathList(std::forward<String>(path));
+};
+
+template <typename T>
 concept HasFormDataGetAllAlias = requires(const T& form) {
     form.getAll(std::string_view{});
 };
@@ -2263,6 +2283,15 @@ static_assert(std::is_nothrow_constructible_v<
     std::string_view>);
 static_assert(HasHttpRequestQueryGetter<ruvia::HttpRequest>);
 static_assert(!HasHttpRequestDecodedPathAlias<ruvia::HttpRequest>);
+static_assert(!ExposesRvalueHttpRequestHeaders<ruvia::HttpRequest>);
+static_assert(!ExposesRvalueRequestMemoryBorrow<ruvia::RequestMemory>);
+static_assert(!ExposesRvalueRouteListIterator<
+    ruvia::detail::RuviaMethodList>);
+static_assert(!ExposesRvalueRouteListIterator<
+    ruvia::detail::RuviaPathList>);
+static_assert(!AcceptsTemporaryRoutePath<std::string>);
+static_assert(!AcceptsTemporaryRoutePath<const std::string>);
+static_assert(!AcceptsTemporaryRoutePath<std::pmr::string>);
 static_assert(!HasRequestRemoteAddressAlias<ruvia::HttpRequest>);
 static_assert(!HasRequestClientCertificateAlias<ruvia::HttpRequest>);
 static_assert(!HasRequestIsSecureAlias<ruvia::HttpRequest>);

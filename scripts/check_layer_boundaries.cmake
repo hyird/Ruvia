@@ -1635,6 +1635,18 @@ set(WEB_STALE_STREAM_KIND_ADAPTER
     "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/server/HttpResponseStreamKindAdapter.h")
 set(WEB_ROUTE_RESOLUTION_TEST
     "${RUVIA_ROOT}/tests/unit_route_resolution.cpp")
+set(CORE_OWNER_BORROW_TEST
+    "${RUVIA_ROOT}/tests/smoke_core_target.cpp")
+set(HTTP_OWNER_BORROW_TEST
+    "${RUVIA_ROOT}/tests/unit_request_access.cpp")
+set(WEB_OWNER_BORROW_TEST
+    "${RUVIA_ROOT}/tests/unit_routing.cpp")
+set(PUBLIC_OWNER_BORROW_API_SURFACE
+    "${RUVIA_ROOT}/examples/api_surface.cpp")
+set(HTTP_OWNER_BORROW_PACKAGE_CONSUMER
+    "${RUVIA_ROOT}/tests/package-consumer/http.cpp")
+set(WEB_OWNER_BORROW_PACKAGE_CONSUMER
+    "${RUVIA_ROOT}/tests/package-consumer/web.cpp")
 foreach(route_contract_file IN ITEMS
         "${WEB_ROUTE_MODES}"
         "${WEB_ROUTE_LIMITS}"
@@ -1652,6 +1664,118 @@ foreach(route_contract_file IN ITEMS
             "${relative} is required")
     endif()
 endforeach()
+if(EXISTS "${CORE_REQUEST_MEMORY}" AND
+   EXISTS "${HTTP_REQUEST_MODEL}" AND
+   EXISTS "${WEB_CONTROLLER_MACROS}" AND
+   EXISTS "${CORE_OWNER_BORROW_TEST}" AND
+   EXISTS "${HTTP_OWNER_BORROW_TEST}" AND
+   EXISTS "${WEB_OWNER_BORROW_TEST}" AND
+   EXISTS "${PUBLIC_OWNER_BORROW_API_SURFACE}" AND
+   EXISTS "${HTTP_OWNER_BORROW_PACKAGE_CONSUMER}" AND
+   EXISTS "${WEB_OWNER_BORROW_PACKAGE_CONSUMER}")
+    file(READ "${CORE_REQUEST_MEMORY}" core_owner_borrow_contract)
+    file(READ "${HTTP_REQUEST_MODEL}" http_owner_borrow_contract)
+    file(READ "${WEB_CONTROLLER_MACROS}" web_owner_borrow_contract)
+    file(READ "${CORE_OWNER_BORROW_TEST}" core_owner_borrow_test)
+    file(READ "${HTTP_OWNER_BORROW_TEST}" http_owner_borrow_test)
+    file(READ "${WEB_OWNER_BORROW_TEST}" web_owner_borrow_test)
+    file(READ "${PUBLIC_OWNER_BORROW_API_SURFACE}"
+        public_owner_borrow_api_surface)
+    file(READ "${HTTP_OWNER_BORROW_PACKAGE_CONSUMER}"
+        http_owner_borrow_package_consumer)
+    file(READ "${WEB_OWNER_BORROW_PACKAGE_CONSUMER}"
+        web_owner_borrow_package_consumer)
+    if(NOT core_owner_borrow_contract MATCHES
+           "allocator[(][)] &[ \t]+noexcept" OR
+       NOT core_owner_borrow_contract MATCHES
+           "allocator[(][)] &&[ \t]*=[ \t]*delete" OR
+       NOT core_owner_borrow_contract MATCHES
+           "resource[(][)] &[ \t]+noexcept" OR
+       NOT core_owner_borrow_contract MATCHES
+           "resource[(][)] const &[ \t]+noexcept" OR
+       NOT core_owner_borrow_contract MATCHES
+           "resource[(][)] &&[ \t]*=[ \t]*delete" OR
+       NOT core_owner_borrow_contract MATCHES
+           "resource[(][)] const &&[ \t]*=[ \t]*delete")
+        boundary_error("RequestMemory exposes its arena from temporary owners"
+            "allocator and resource must remain lvalue-only because they point into RequestMemory")
+    endif()
+    if(NOT http_owner_borrow_contract MATCHES
+           "headers[(][)] const &[ \t]+noexcept" OR
+       NOT http_owner_borrow_contract MATCHES
+           "headers[(][)] const &&[ \t]*=[ \t]*delete")
+        boundary_error("HttpRequest exposes its header table from temporary owners"
+            "headers must remain lvalue-only because its span points into HttpRequest")
+    endif()
+    string(REGEX MATCHALL
+        "(begin|end)[ \t\r\n]*[(][)][ \t\r\n]*const &[ \t]+noexcept"
+        web_owner_borrow_lvalue_iterators
+        "${web_owner_borrow_contract}")
+    list(LENGTH web_owner_borrow_lvalue_iterators
+        web_owner_borrow_lvalue_iterator_count)
+    string(REGEX MATCHALL
+        "(begin|end)[ \t\r\n]*[(][)][ \t\r\n]*const &&[ \t]*=[ \t]*delete"
+        web_owner_borrow_deleted_rvalue_iterators
+        "${web_owner_borrow_contract}")
+    list(LENGTH web_owner_borrow_deleted_rvalue_iterators
+        web_owner_borrow_deleted_rvalue_iterator_count)
+    if(web_owner_borrow_lvalue_iterator_count LESS 4 OR
+       web_owner_borrow_deleted_rvalue_iterator_count LESS 4)
+        boundary_error("route macro lists expose iterators from temporary owners"
+            "method and path list iterators must remain lvalue-only")
+    endif()
+    if(NOT web_owner_borrow_contract MATCHES
+           "ruvia/web/detail/BorrowedView[.]h" OR
+       NOT web_owner_borrow_contract MATCHES
+           "RvalueCharBasicString<Paths>[ 	]*[|][|][ 	]*[.][.][.]" OR
+       NOT web_owner_borrow_contract MATCHES
+           "RuviaPathList[(]Paths&&[.][.][.][)][ 	]*=[ 	]*delete")
+        boundary_error("route macro path lists accept temporary owning strings"
+            "RUVIA_ON paths may borrow literals and owning-string lvalues, but must reject owning-string rvalues")
+    endif()
+    if(NOT core_owner_borrow_test MATCHES
+           "static_assert[(]!ExposesRvalueRequestMemoryBorrow<ruvia::RequestMemory>[)]" OR
+       NOT core_package_contract MATCHES
+           "static_assert[(]!ExposesRvalueRequestMemoryBorrow<ruvia::RequestMemory>[)]" OR
+       NOT http_owner_borrow_test MATCHES
+           "static_assert[(]!ExposesRvalueHttpRequestHeaders<HttpRequest>[)]" OR
+       NOT http_owner_borrow_package_consumer MATCHES
+           "static_assert[(]!ExposesRvalueHttpRequestHeaders<ruvia::HttpRequest>[)]" OR
+       NOT web_owner_borrow_test MATCHES
+           "ExposesRvalueRouteListIterator<ruvia::detail::RuviaMethodList>" OR
+       NOT web_owner_borrow_test MATCHES
+           "ExposesRvalueRouteListIterator<ruvia::detail::RuviaPathList>" OR
+       NOT web_owner_borrow_package_consumer MATCHES
+           "ExposesRvalueRouteListIterator<[ \t\r\n]*ruvia::detail::RuviaMethodList>" OR
+       NOT web_owner_borrow_package_consumer MATCHES
+           "ExposesRvalueRouteListIterator<[ \t\r\n]*ruvia::detail::RuviaPathList>" OR
+       NOT public_owner_borrow_api_surface MATCHES
+           "static_assert[(]!ExposesRvalueRequestMemoryBorrow<ruvia::RequestMemory>[)]" OR
+       NOT public_owner_borrow_api_surface MATCHES
+           "static_assert[(]!ExposesRvalueHttpRequestHeaders<ruvia::HttpRequest>[)]" OR
+       NOT public_owner_borrow_api_surface MATCHES
+           "ExposesRvalueRouteListIterator<[ \t\r\n]*ruvia::detail::RuviaMethodList>" OR
+       NOT public_owner_borrow_api_surface MATCHES
+           "ExposesRvalueRouteListIterator<[ \t\r\n]*ruvia::detail::RuviaPathList>")
+        boundary_error("owner-backed public borrow coverage is incomplete"
+            "direct, API-surface, and installed-package probes must reject every confirmed temporary owner")
+    endif()
+    foreach(route_path_lifetime_coverage IN ITEMS
+            "${web_owner_borrow_test}"
+            "${web_owner_borrow_package_consumer}"
+            "${public_owner_borrow_api_surface}")
+        if(NOT route_path_lifetime_coverage MATCHES
+               "static_assert[(]!AcceptsTemporaryRoutePath<std::string>[)]" OR
+           NOT route_path_lifetime_coverage MATCHES
+               "static_assert[(]!AcceptsTemporaryRoutePath<const std::string>[)]" OR
+           NOT route_path_lifetime_coverage MATCHES
+               "static_assert[(]!AcceptsTemporaryRoutePath<std::pmr::string>[)]")
+            boundary_error("route path temporary-string coverage is incomplete"
+                "direct, API-surface, and installed-package probes must reject standard and PMR owning-string rvalues")
+            break()
+        endif()
+    endforeach()
+endif()
 if(EXISTS "${WEB_STALE_STREAM_KIND_ADAPTER}")
     boundary_error("split response route-mode adapter was restored"
         "stream sinks must consume the ResponseStreamKind owned by the typed endpoint")

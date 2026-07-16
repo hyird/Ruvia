@@ -127,11 +127,11 @@ RequestMemory::RequestMemory(WorkerMemory& worker)
 RequestMemory::RequestMemory(WorkerMemory& worker, std::span<std::byte> initialBuffer)
     : arena_(initialBuffer.data(), initialBuffer.size(), worker.resource()) {}
 
-std::pmr::memory_resource* RequestMemory::resource() noexcept {
+std::pmr::memory_resource* RequestMemory::resource() & noexcept {
     return &arena_;
 }
 
-std::pmr::memory_resource* RequestMemory::resource() const noexcept {
+std::pmr::memory_resource* RequestMemory::resource() const & noexcept {
     return const_cast<std::pmr::monotonic_buffer_resource*>(&arena_);
 }
 

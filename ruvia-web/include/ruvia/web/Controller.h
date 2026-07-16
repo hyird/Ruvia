@@ -2,6 +2,7 @@
 
 #include "ruvia/http/HttpKnownMethod.h"
 #include "ruvia/web/Middleware.h"
+#include "ruvia/web/detail/BorrowedView.h"
 #include "ruvia/web/detail/controller/ControllerRuntime.h"
 
 #include <concepts>
@@ -31,13 +32,15 @@ public:
         static_assert(sizeof...(Methods) > 0, "RUVIA_ON requires at least one method");
     }
 
-    [[nodiscard]] constexpr const HttpKnownMethod* begin() const noexcept {
+    [[nodiscard]] constexpr const HttpKnownMethod* begin() const & noexcept {
         return methods_;
     }
+    [[nodiscard]] constexpr const HttpKnownMethod* begin() const && = delete;
 
-    [[nodiscard]] constexpr const HttpKnownMethod* end() const noexcept {
+    [[nodiscard]] constexpr const HttpKnownMethod* end() const & noexcept {
         return methods_ + count_;
     }
+    [[nodiscard]] constexpr const HttpKnownMethod* end() const && = delete;
 
 private:
     HttpKnownMethod methods_[9]{};
@@ -48,20 +51,29 @@ private:
 // parenthesized list as a constructor call.
 class RuviaPathList final {
 public:
-    template <std::convertible_to<std::string_view>... Paths>
-    constexpr explicit RuviaPathList(Paths... paths) noexcept
-        : paths_{paths...},
+    template <typename... Paths>
+        requires ((std::convertible_to<Paths&&, std::string_view> && ...) &&
+                  (!RvalueCharBasicString<Paths> && ...))
+    constexpr explicit RuviaPathList(Paths&&... paths) noexcept
+        : paths_{std::string_view(std::forward<Paths>(paths))...},
           count_(sizeof...(Paths)) {
         static_assert(sizeof...(Paths) > 0, "RUVIA_ON requires at least one path");
     }
 
-    [[nodiscard]] constexpr const std::string_view* begin() const noexcept {
+    template <typename... Paths>
+        requires ((std::convertible_to<Paths&&, std::string_view> && ...) &&
+                  (RvalueCharBasicString<Paths> || ...))
+    explicit RuviaPathList(Paths&&...) = delete;
+
+    [[nodiscard]] constexpr const std::string_view* begin() const & noexcept {
         return paths_;
     }
+    [[nodiscard]] constexpr const std::string_view* begin() const && = delete;
 
-    [[nodiscard]] constexpr const std::string_view* end() const noexcept {
+    [[nodiscard]] constexpr const std::string_view* end() const & noexcept {
         return paths_ + count_;
     }
+    [[nodiscard]] constexpr const std::string_view* end() const && = delete;
 
 private:
     std::string_view paths_[8]{};

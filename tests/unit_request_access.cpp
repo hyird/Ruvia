@@ -27,6 +27,12 @@ using ruvia::detail::requestContentCoding;
 using ruvia::detail::requestBodyBytes;
 using ruvia::detail::requestKnownHeader;
 
+template <typename T>
+concept ExposesRvalueHttpRequestHeaders = requires(T&& request) {
+    std::move(request).headers();
+};
+
+static_assert(!ExposesRvalueHttpRequestHeaders<HttpRequest>);
 static_assert(std::same_as<
     decltype(std::declval<const HttpRequest&>().header(std::string_view{})),
     std::optional<std::string_view>>);

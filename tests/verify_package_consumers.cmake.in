@@ -552,9 +552,47 @@ if(_built_components_csv MATCHES "(^|,)core(,|$)")
         message(FATAL_ERROR
             "installed connection scanner regained a fixed check ceiling")
     endif()
+
+    set(_installed_request_memory_path
+        "${_install_prefix}/include/ruvia/core/memory/MemoryPool.h")
+    if(NOT EXISTS "${_installed_request_memory_path}")
+        message(FATAL_ERROR
+            "installed core package is missing RequestMemory")
+    endif()
+    file(READ "${_installed_request_memory_path}"
+        _installed_request_memory)
+    if(NOT _installed_request_memory MATCHES
+           "allocator[(][)] &[ \t]+noexcept" OR
+       NOT _installed_request_memory MATCHES
+           "allocator[(][)] &&[ \t]*=[ \t]*delete" OR
+       NOT _installed_request_memory MATCHES
+           "resource[(][)] &[ \t]+noexcept" OR
+       NOT _installed_request_memory MATCHES
+           "resource[(][)] const &[ \t]+noexcept" OR
+       NOT _installed_request_memory MATCHES
+           "resource[(][)] &&[ \t]*=[ \t]*delete" OR
+       NOT _installed_request_memory MATCHES
+           "resource[(][)] const &&[ \t]*=[ \t]*delete")
+        message(FATAL_ERROR
+            "installed RequestMemory exposes its arena from temporary owners")
+    endif()
 endif()
 
 if(_built_components_csv MATCHES "(^|,)http(,|$)")
+set(_installed_http_request_path
+    "${_install_prefix}/include/ruvia/http/HttpRequest.h")
+if(NOT EXISTS "${_installed_http_request_path}")
+    message(FATAL_ERROR
+        "installed HTTP package is missing HttpRequest")
+endif()
+file(READ "${_installed_http_request_path}" _installed_http_request)
+if(NOT _installed_http_request MATCHES
+       "headers[(][)] const &[ \t]+noexcept" OR
+   NOT _installed_http_request MATCHES
+       "headers[(][)] const &&[ \t]*=[ \t]*delete")
+    message(FATAL_ERROR
+        "installed HttpRequest exposes its header table from temporary owners")
+endif()
 set(_installed_http_operation_h1
     "${_install_prefix}/include/ruvia/http/detail/http1/Http1ServerSemantics.h")
 set(_installed_http_operation_h2_connection
@@ -2397,14 +2435,18 @@ set(_installed_rate_limit_decision_path
 if(_built_components_csv MATCHES "(^|,)web(,|$)")
     set(_installed_app_api_path
         "${_install_prefix}/include/ruvia/web/App.h")
+    set(_installed_controller_api_path
+        "${_install_prefix}/include/ruvia/web/Controller.h")
     set(_installed_rate_limit_rule_path
         "${_install_prefix}/include/ruvia/web/RateLimitRule.h")
     if(NOT EXISTS "${_installed_app_api_path}" OR
+       NOT EXISTS "${_installed_controller_api_path}" OR
        NOT EXISTS "${_installed_rate_limit_rule_path}")
         message(FATAL_ERROR
             "installed Web package is missing App rate-limit configuration")
     endif()
     file(READ "${_installed_app_api_path}" _installed_app_api)
+    file(READ "${_installed_controller_api_path}" _installed_controller_api)
     file(READ "${_installed_rate_limit_rule_path}" _installed_rate_limit_rule)
     if(_installed_app_api MATCHES "setThreadNum|setGlobalRateLimit" OR
        NOT _installed_app_api MATCHES "setWorkersPerListener" OR
@@ -2413,6 +2455,32 @@ if(_built_components_csv MATCHES "(^|,)web(,|$)")
        NOT _installed_rate_limit_rule MATCHES "kDefaultRateLimitSlotsPerWorker")
         message(FATAL_ERROR
             "installed Web package retained stale worker/rate-limit configuration")
+    endif()
+    string(REGEX MATCHALL
+        "(begin|end)[ \t\r\n]*[(][)][ \t\r\n]*const &[ \t]+noexcept"
+        _installed_route_list_lvalue_iterators
+        "${_installed_controller_api}")
+    list(LENGTH _installed_route_list_lvalue_iterators
+        _installed_route_list_lvalue_iterator_count)
+    string(REGEX MATCHALL
+        "(begin|end)[ \t\r\n]*[(][)][ \t\r\n]*const &&[ \t]*=[ \t]*delete"
+        _installed_route_list_deleted_rvalue_iterators
+        "${_installed_controller_api}")
+    list(LENGTH _installed_route_list_deleted_rvalue_iterators
+        _installed_route_list_deleted_rvalue_iterator_count)
+    if(_installed_route_list_lvalue_iterator_count LESS 4 OR
+       _installed_route_list_deleted_rvalue_iterator_count LESS 4)
+        message(FATAL_ERROR
+            "installed route macro lists expose iterators from temporary owners")
+    endif()
+    if(NOT _installed_controller_api MATCHES
+           "ruvia/web/detail/BorrowedView[.]h" OR
+       NOT _installed_controller_api MATCHES
+           "RvalueCharBasicString<Paths>[ 	]*[|][|][ 	]*[.][.][.]" OR
+       NOT _installed_controller_api MATCHES
+           "RuviaPathList[(]Paths&&[.][.][.][)][ 	]*=[ 	]*delete")
+        message(FATAL_ERROR
+            "installed route macro path lists accept temporary owning strings")
     endif()
     set(_installed_validated_models_path
         "${_install_prefix}/include/ruvia/web/detail/ValidatedValues.h")

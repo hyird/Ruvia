@@ -123,6 +123,16 @@ concept ExposesRvalueResponseOutputAlternative =
     requires(Output&& output) { std::move(output).responseStream(); } ||
     requires(Output&& output) { std::move(output).webSocket(); };
 
+template <typename T>
+concept ExposesRvalueRouteListIterator =
+    requires(T&& list) { std::move(list).begin(); } ||
+    requires(T&& list) { std::move(list).end(); };
+
+template <typename String>
+concept AcceptsTemporaryRoutePath = requires(String&& path) {
+    ruvia::detail::RuviaPathList(std::forward<String>(path));
+};
+
 static_assert(!ExposesRvalueSecureTokenAlternative<
     ruvia::detail::SecureTokenResult>);
 static_assert(!ExposesRvalueSessionState<
@@ -135,6 +145,13 @@ static_assert(!ExposesRvalueRequestBodyAlternative<
     ruvia::detail::ContextRequestBodySource>);
 static_assert(!ExposesRvalueResponseOutputAlternative<
     ruvia::detail::ContextResponseOutput>);
+static_assert(!ExposesRvalueRouteListIterator<
+    ruvia::detail::RuviaMethodList>);
+static_assert(!ExposesRvalueRouteListIterator<
+    ruvia::detail::RuviaPathList>);
+static_assert(!AcceptsTemporaryRoutePath<std::string>);
+static_assert(!AcceptsTemporaryRoutePath<const std::string>);
+static_assert(!AcceptsTemporaryRoutePath<std::pmr::string>);
 static_assert(std::same_as<
     decltype(std::declval<const ruvia::detail::ContextSessionState&>().persistNew()),
     const ruvia::detail::SessionPersistNew*>);

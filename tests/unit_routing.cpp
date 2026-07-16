@@ -47,6 +47,22 @@ using ruvia::detail::RouteHandler;
 using ruvia::detail::RouteMatch;
 using ruvia::detail::RequestBodyMode;
 
+template <typename T>
+concept ExposesRvalueRouteListIterator =
+    requires(T&& list) { std::move(list).begin(); } ||
+    requires(T&& list) { std::move(list).end(); };
+
+template <typename String>
+concept AcceptsTemporaryRoutePath = requires(String&& path) {
+    ruvia::detail::RuviaPathList(std::forward<String>(path));
+};
+
+static_assert(!ExposesRvalueRouteListIterator<ruvia::detail::RuviaMethodList>);
+static_assert(!ExposesRvalueRouteListIterator<ruvia::detail::RuviaPathList>);
+static_assert(!AcceptsTemporaryRoutePath<std::string>);
+static_assert(!AcceptsTemporaryRoutePath<const std::string>);
+static_assert(!AcceptsTemporaryRoutePath<std::pmr::string>);
+
 class FirstIntValidator final : public ruvia::Middleware<FirstIntValidator> {
 public:
     using RuviaValidationBody = int;
