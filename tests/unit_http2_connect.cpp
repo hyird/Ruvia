@@ -86,6 +86,7 @@ struct HeaderObservation final {
     std::string path;
     std::string status;
     std::size_t contentLengthCount{0};
+    std::size_t pathCount{0};
 };
 
 bool observeHeader(void* target, std::string_view name, std::string_view value) {
@@ -102,6 +103,7 @@ bool observeHeader(void* target, std::string_view name, std::string_view value) 
     } else if (name == ":authority") {
         assign(observation.authority);
     } else if (name == ":path") {
+        ++observation.pathCount;
         assign(observation.path);
     } else if (name == ":status") {
         assign(observation.status);
@@ -335,6 +337,10 @@ RUVIA_TEST(http2_connect_client_extended_head_requires_setting_and_protocol_cont
         Http2RequestHeadSubmitError::kInvalidMessage);
     RUVIA_CHECK(requestHeadSubmitError(
         client.submitExtendedConnectRequestHead(
+            "example-tunnel", "https", "example.test", "")) ==
+        Http2RequestHeadSubmitError::kInvalidMessage);
+    RUVIA_CHECK(requestHeadSubmitError(
+        client.submitExtendedConnectRequestHead(
             "example-tunnel", "https", "user@example.test", "/tunnel")) ==
         Http2RequestHeadSubmitError::kInvalidMessage);
     RUVIA_CHECK(requestHeadSubmitError(
@@ -346,7 +352,7 @@ RUVIA_TEST(http2_connect_client_extended_head_requires_setting_and_protocol_cont
 
     const auto generic = client.submitExtendedConnectRequestHead(
         "example-tunnel", "custom+transport",
-        "user:secret@example.test", "/tunnel");
+        "user:secret@example.test", "");
     RUVIA_CHECK(generic.submitted() != nullptr);
     const auto genericStream = submittedRequestStreamId(generic);
     RUVIA_CHECK_EQ(genericStream, std::uint32_t{1});
@@ -359,7 +365,8 @@ RUVIA_TEST(http2_connect_client_extended_head_requires_setting_and_protocol_cont
     RUVIA_CHECK_EQ(observed.scheme, std::string("custom+transport"));
     RUVIA_CHECK_EQ(
         observed.authority, std::string("user:secret@example.test"));
-    RUVIA_CHECK_EQ(observed.path, std::string("/tunnel"));
+    RUVIA_CHECK_EQ(observed.pathCount, std::size_t{1});
+    RUVIA_CHECK(observed.path.empty());
     const auto* genericPending =
         client.stream(genericStream)->tunnel().pending();
     RUVIA_CHECK(genericPending != nullptr);
@@ -836,7 +843,7 @@ RUVIA_TEST(http2_connect_server_retains_generic_extended_protocol) {
     HpackEncoder::encodeHeader(block, ":scheme", "custom+transport");
     HpackEncoder::encodeHeader(
         block, ":authority", "user:secret@example.test");
-    HpackEncoder::encodeHeader(block, ":path", "/tunnel");
+    HpackEncoder::encodeHeader(block, ":path", "");
     const auto request = frame(
         &resource,
         Http2FrameType::kHeaders,
@@ -858,7 +865,8 @@ RUVIA_TEST(http2_connect_server_retains_generic_extended_protocol) {
     RUVIA_CHECK_EQ(
         stream->requestAuthority(),
         std::string_view("user:secret@example.test"));
-    RUVIA_CHECK_EQ(stream->requestPath(), std::string_view("/tunnel"));
+    RUVIA_CHECK(stream->hasPath());
+    RUVIA_CHECK(stream->requestPath().empty());
 }
 
 RUVIA_TEST(http2_connect_server_rejects_non_http_websocket_scheme) {

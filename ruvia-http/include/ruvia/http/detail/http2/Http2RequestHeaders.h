@@ -19,22 +19,44 @@ struct Http2HeaderDecodeContext final {
     std::size_t decodedHeaderListBytes{0};
 };
 
+[[nodiscard]] inline bool http2IsHttpRequestScheme(
+    std::string_view scheme) noexcept {
+    return httpAsciiEqualsIgnoreCase(scheme, "http") ||
+        httpAsciiEqualsIgnoreCase(scheme, "https");
+}
+
 // RFC 9110 defines both http-URI and https-URI with a mandatory authority.
 // Asterisk-form OPTIONS is server-wide and is the deliberate exception: its
 // target contains no authority information (RFC 9113 section 8.3.1).
 [[nodiscard]] inline bool http2RegularRequestRequiresAuthority(
     std::string_view scheme,
     std::string_view path) noexcept {
-    return path != "*" &&
-        (httpAsciiEqualsIgnoreCase(scheme, "http") ||
-         httpAsciiEqualsIgnoreCase(scheme, "https"));
+    return path != "*" && http2IsHttpRequestScheme(scheme);
+}
+
+[[nodiscard]] inline bool http2IsValidRegularRequestPath(
+    HttpKnownMethod method,
+    std::string_view scheme,
+    std::string_view path) noexcept {
+    if (path.empty()) {
+        return !http2IsHttpRequestScheme(scheme);
+    }
+    return isValidOriginOrAsteriskFormTarget(method, path);
+}
+
+[[nodiscard]] inline bool http2IsValidExtendedConnectPath(
+    std::string_view scheme,
+    std::string_view path) noexcept {
+    if (path.empty()) {
+        return !http2IsHttpRequestScheme(scheme);
+    }
+    return isValidOriginFormTarget(path);
 }
 
 [[nodiscard]] inline bool http2IsValidRequestAuthority(
     std::string_view scheme,
     std::string_view authority) noexcept {
-    if (httpAsciiEqualsIgnoreCase(scheme, "http") ||
-        httpAsciiEqualsIgnoreCase(scheme, "https")) {
+    if (http2IsHttpRequestScheme(scheme)) {
         return isValidHostHeader(authority);
     }
     return isValidUriAuthority(authority);
@@ -126,7 +148,8 @@ struct Http2HeaderDecodeContext final {
         }
         if (name == ":path") {
             if (stream.hasPath() ||
-                !isValidOriginOrAsteriskFormTarget(value)) {
+                (!value.empty() &&
+                 !isValidOriginOrAsteriskFormTarget(value))) {
                 return false;
             }
             stream.assignRequestPath(value);

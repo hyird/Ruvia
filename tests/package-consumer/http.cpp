@@ -3969,7 +3969,7 @@ int main() {
         "PROPFIND",
         "git+ssh",
         "deploy:secret@example.test:9418",
-        "/",
+        "",
         {},
         h2WithoutContent);
     const auto* submittedRequest = request.submitted();

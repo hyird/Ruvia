@@ -37,7 +37,8 @@ HeaderDecodeStatus Http2Connection::decodeHeaderBlock(Http2StreamState& stream) 
             !stream.hasAuthority() ||
             !http2IsValidRequestAuthority(
                 stream.requestScheme(), stream.requestAuthority()) ||
-            !isValidOriginFormTarget(stream.requestPath()) ||
+            !http2IsValidExtendedConnectPath(
+                stream.requestScheme(), stream.requestPath()) ||
             stream.remoteContent().allowedKnownLength() != nullptr) {
             return HeaderDecodeStatus::kProtocolError;
         }
@@ -67,8 +68,10 @@ HeaderDecodeStatus Http2Connection::decodeHeaderBlock(Http2StreamState& stream) 
     } else if (!stream.hasScheme() || !stream.hasPath() ||
         (stream.hasAuthority() && !http2IsValidRequestAuthority(
             stream.requestScheme(), stream.requestAuthority())) ||
-        !isValidOriginOrAsteriskFormTarget(
-            stream.requestKnownMethod(), stream.requestPath()) ||
+        !http2IsValidRegularRequestPath(
+            stream.requestKnownMethod(),
+            stream.requestScheme(),
+            stream.requestPath()) ||
         (stream.requestPath() == "*" && stream.hasAuthority()) ||
         (!stream.hasAuthority() && http2RegularRequestRequiresAuthority(
             stream.requestScheme(), stream.requestPath()))) {

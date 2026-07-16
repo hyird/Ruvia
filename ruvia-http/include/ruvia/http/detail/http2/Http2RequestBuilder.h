@@ -11,6 +11,7 @@
 #include "ruvia/http/HttpProtocolError.h"
 #include "ruvia/http/HttpProtocolVersion.h"
 #include "ruvia/http/detail/HttpRequestInternal.h"
+#include "ruvia/http/detail/http2/Http2RequestHeaders.h"
 #include "ruvia/http/detail/http2/Http2StreamState.h"
 #include "ruvia/http/detail/parser/HttpRequestTarget.h"
 #include "ruvia/http/detail/parser/HttpParserSyntax.h"
@@ -135,19 +136,33 @@ public:
             return Http2RequestBuildResult::makeFailure(
                 Http2RequestBuildFailure::Kind::kMissingMethod);
         }
-        const auto target = requestTarget(stream);
-        if (target.empty()) {
-            return Http2RequestBuildResult::makeFailure(
-                Http2RequestBuildFailure::Kind::kMissingTarget);
-        }
         const auto* pending = stream.tunnel().pending();
         const bool standardConnect = pending != nullptr &&
             pending->form() == Http2ConnectForm::kStandard;
         const bool extendedConnect = pending != nullptr &&
             pending->form() == Http2ConnectForm::kExtended;
+        const auto target = requestTarget(stream);
+        if (target.empty() && (standardConnect || !stream.hasPath())) {
+            return Http2RequestBuildResult::makeFailure(
+                Http2RequestBuildFailure::Kind::kMissingTarget);
+        }
         RequestTargetParts targetParts;
         if (standardConnect) {
             targetParts = splitRequestTarget(target);
+        } else if (target.empty()) {
+            const bool validEmptyTarget = stream.hasScheme() &&
+                (extendedConnect
+                    ? http2IsValidExtendedConnectPath(
+                          stream.requestScheme(), target)
+                    : http2IsValidRegularRequestPath(
+                          stream.requestKnownMethod(),
+                          stream.requestScheme(),
+                          target));
+            if (!validEmptyTarget) {
+                return Http2RequestBuildResult::makeFailure(
+                    Http2RequestBuildFailure::Kind::kInvalidTarget);
+            }
+            targetParts = RequestTargetParts{};
         } else {
             RequestTargetView targetView;
             // Extended CONNECT retains normal :scheme/:path target components. GET

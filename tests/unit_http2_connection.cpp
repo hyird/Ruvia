@@ -366,6 +366,7 @@ const auto& submittedResponsePlan(const Result& result) {
 struct RequestContentLengthObservation final {
     std::size_t count{0};
     std::size_t authorityCount{0};
+    std::size_t pathCount{0};
     std::string value;
     std::string authority;
     std::string scheme;
@@ -386,6 +387,7 @@ bool observeRequestContentLength(
         ++observation.authorityCount;
         observation.authority.assign(value.data(), value.size());
     } else if (name == ":path") {
+        ++observation.pathCount;
         observation.path.assign(value.data(), value.size());
     }
     return true;
@@ -1169,6 +1171,65 @@ RUVIA_TEST(http2_connection_feed_accepts_non_http_request_scheme) {
         RUVIA_CHECK_EQ(stream->requestScheme(), std::string_view("gemini"));
         RUVIA_CHECK_EQ(stream->schemeDefaultPort(), std::uint16_t{0});
         RUVIA_CHECK(!stream->hasAuthority());
+    }
+}
+
+RUVIA_TEST(http2_connection_feed_preserves_empty_non_http_path) {
+    std::pmr::monotonic_buffer_resource resource;
+    Http2Connection conn(&resource);
+    handshake(conn);
+
+    std::pmr::string block(&resource);
+    encodeRequest(block, "GET", "git+ssh", "", std::nullopt);
+    const auto frame = headersFrame(
+        &resource, 1,
+        ruvia::detail::kHttp2FlagEndHeaders |
+            ruvia::detail::kHttp2FlagEndStream,
+        std::string_view(block.data(), block.size()));
+
+    RUVIA_CHECK(conn.feed(std::string_view(frame.data(), frame.size())) ==
+        Http2FeedResult::kAccepted);
+    RUVIA_CHECK(!conn.connectionError().has_value());
+    RUVIA_CHECK(conn.nextEvent().value().kind() == Http2EventKind::kMessageHead);
+    RUVIA_CHECK(conn.nextEvent().value().kind() == Http2EventKind::kMessageEnd);
+    const auto* stream = conn.stream(1);
+    RUVIA_CHECK(stream != nullptr);
+    if (stream != nullptr) {
+        RUVIA_CHECK(stream->hasPath());
+        RUVIA_CHECK(stream->requestPath().empty());
+    }
+}
+
+RUVIA_TEST(http2_connection_feed_rejects_empty_http_path) {
+    std::pmr::monotonic_buffer_resource resource;
+    constexpr std::string_view schemes[] = {"http", "HTTPS"};
+    for (const auto scheme : schemes) {
+        Http2Connection conn(&resource);
+        handshake(conn);
+        std::pmr::string block(&resource);
+        encodeRequest(block, "GET", scheme, "", "example.test");
+        const auto frame = headersFrame(
+            &resource, 1,
+            ruvia::detail::kHttp2FlagEndHeaders |
+                ruvia::detail::kHttp2FlagEndStream,
+            std::string_view(block.data(), block.size()));
+
+        RUVIA_CHECK(conn.feed(std::string_view(frame.data(), frame.size())) ==
+            Http2FeedResult::kAccepted);
+        RUVIA_CHECK(!conn.connectionError().has_value());
+        RUVIA_CHECK(conn.nextEvent().value().kind() ==
+            Http2EventKind::kStreamClosed);
+        RUVIA_CHECK(!conn.nextEvent().has_value());
+        const auto out = conn.pendingOutput();
+        const auto reset =
+            ruvia::detail::http2ParseFrameHeader(out.substr(0, 9));
+        RUVIA_CHECK_EQ(
+            reset.type,
+            static_cast<std::uint8_t>(Http2FrameType::kRstStream));
+        RUVIA_CHECK_EQ(
+            ruvia::detail::http2Read32(
+                reinterpret_cast<const unsigned char*>(out.data() + 9)),
+            static_cast<std::uint32_t>(Http2ErrorCode::kProtocolError));
     }
 }
 
@@ -2287,6 +2348,7 @@ RUVIA_TEST(http2_connection_rejects_invalid_request_head_before_hpack) {
     reject("GET", "HTTP", std::nullopt, "/", matchingHost);
     reject("GET", "https", "user@example.test", "/", {});
     reject("GET", "https", "example.test", "relative", {});
+    reject("GET", "https", "example.test", "", {});
     reject("GET", "https", "example.test", "/", uppercase);
     reject("GET", "https", "example.test", "/", connection);
     reject("GET", "https", "example.test", "/", mismatchedHost);
@@ -2308,7 +2370,7 @@ RUVIA_TEST(http2_connection_encodes_non_http_request_without_authority) {
     beginClient(client);
 
     const auto submitted = client.submitRegularRequestHead(
-        "GET", "git+ssh", std::nullopt, "/repository", {},
+        "GET", "git+ssh", std::nullopt, "", {},
         Http2RequestContent::none());
     RUVIA_CHECK(submitted.submitted() != nullptr);
     RUVIA_CHECK_EQ(submittedRequestStreamId(submitted), std::uint32_t{1});
@@ -2323,6 +2385,8 @@ RUVIA_TEST(http2_connection_encodes_non_http_request_without_authority) {
     RUVIA_CHECK(decoded.decoded() != nullptr);
     RUVIA_CHECK_EQ(observation.scheme, std::string("git+ssh"));
     RUVIA_CHECK_EQ(observation.authorityCount, std::size_t{0});
+    RUVIA_CHECK_EQ(observation.pathCount, std::size_t{1});
+    RUVIA_CHECK(observation.path.empty());
     const auto* stream = client.stream(1);
     RUVIA_CHECK(stream != nullptr);
     if (stream != nullptr) {

@@ -74,8 +74,8 @@ namespace {
         !isValidUriScheme(scheme) ||
         (authority.has_value() &&
          !http2IsValidRequestAuthority(scheme, *authority)) ||
-        !isValidOriginOrAsteriskFormTarget(
-            classifyHttpMethod(method), path) ||
+        !http2IsValidRegularRequestPath(
+            classifyHttpMethod(method), scheme, path) ||
         (path == "*" && authority.has_value()) ||
         (!authority.has_value() &&
          http2RegularRequestRequiresAuthority(scheme, path))) {
@@ -288,7 +288,7 @@ Http2RequestHeadSubmitResult Http2Connection::submitExtendedConnectRequestHead(
         !isValidUriScheme(scheme) ||
         (websocket && !websocketScheme) ||
         !http2IsValidRequestAuthority(scheme, authority) ||
-        !isValidOriginFormTarget(path) ||
+        !http2IsValidExtendedConnectPath(scheme, path) ||
         !http2AreValidOutboundRequestHeaders(
             authority,
             httpUriSchemeDefaultPort(scheme),
