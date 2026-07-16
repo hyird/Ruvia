@@ -787,6 +787,7 @@ namespace {
     }
 
     output.authority = authority;
+    output.form = HttpRequestTargetForm::kAbsolute;
     if (separator == std::string_view::npos) {
         output.path = "/";
         output.query = {};
@@ -862,6 +863,7 @@ bool parseRequestTarget(
         output.query = {};
         output.authority = {};
         output.defaultPort = 0;
+        output.form = HttpRequestTargetForm::kAsterisk;
         return true;
     }
     if (method == HttpKnownMethod::kConnect) {
@@ -872,6 +874,7 @@ bool parseRequestTarget(
         output.query = {};
         output.authority = target;
         output.defaultPort = 0;
+        output.form = HttpRequestTargetForm::kAuthority;
         return true;
     }
     if (target.empty()) {
@@ -890,6 +893,7 @@ bool parseRequestTarget(
             : target.substr(querySeparator + 1);
         output.authority = {};
         output.defaultPort = 0;
+        output.form = HttpRequestTargetForm::kOrigin;
         return !output.path.empty();
     }
     if (!isValidRequestTargetBytes(target)) {

@@ -11,11 +11,19 @@
 
 namespace ruvia::detail {
 
+enum class HttpRequestTargetForm : std::uint8_t {
+    kOrigin,
+    kAbsolute,
+    kAuthority,
+    kAsterisk,
+};
+
 struct RequestTargetView {
     std::string_view path;
     std::string_view query;
     std::string_view authority;
     std::uint16_t defaultPort{0};
+    HttpRequestTargetForm form{HttpRequestTargetForm::kOrigin};
 };
 
 enum class HttpAuthorityPortKind : std::uint8_t {

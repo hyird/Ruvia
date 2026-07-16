@@ -443,13 +443,24 @@ RUVIA_TEST(http1_parse_transfer_encoding_in_http10_rejected) {
     RUVIA_CHECK(isFailure(result, HttpParseError::kInvalidTransferEncoding));
 }
 
-RUVIA_TEST(http1_parse_absolute_uri_host_mismatch_rejected) {
-    // An absolute-form target whose authority disagrees with the Host header is
-    // rejected to prevent routing ambiguity.
+RUVIA_TEST(http1_parse_absolute_uri_uses_target_authority) {
+    // RFC 9112 section 3.2.2 requires an origin server to accept absolute-form,
+    // ignore Host, and use the request-target authority. The parsed request must
+    // expose one effective authority rather than preserve the conflicting field.
     Http1ServerRequestParser parser;
     const auto result = parser.parseMessage(
         "GET http://a.example/ HTTP/1.1\r\nHost: b.example\r\n\r\n");
-    RUVIA_CHECK(isFailure(result, HttpParseError::kInvalidHost));
+    RUVIA_CHECK(result.messageReady());
+    RUVIA_CHECK_EQ(result.request.target(), std::string_view("http://a.example/"));
+    RUVIA_CHECK_EQ(result.request.path(), std::string_view("/"));
+    RUVIA_CHECK_EQ(
+        result.request.header("Host").value_or(std::string_view{}),
+        std::string_view("a.example"));
+    for (const auto& header : result.request.headers()) {
+        if (header.name() == "Host") {
+            RUVIA_CHECK_EQ(header.value(), std::string_view("a.example"));
+        }
+    }
 }
 
 RUVIA_TEST(http1_parse_authority_uses_shared_uri_normalization) {

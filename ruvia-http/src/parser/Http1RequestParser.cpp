@@ -11,9 +11,9 @@
 namespace ruvia::detail {
 namespace {
 
-using ruvia::detail::authorityMatchesHost;
 using ruvia::detail::findHttpHeaderEnd;
 using ruvia::detail::HttpRequestAccess;
+using ruvia::detail::HttpRequestTargetForm;
 using ruvia::detail::parseHttpHeaderBlock;
 using ruvia::detail::parseRequestTarget;
 using ruvia::detail::ParsedRequestHeaderBlock;
@@ -98,12 +98,6 @@ void Http1ServerRequestParser::parseRequestHead(
         return fail(HttpParseError::kMissingHost);
     }
     const auto hostHeaderIndex = block.hostHeaderIndex;
-    if (!targetView.authority.empty() && hostHeaderIndex >= 0) {
-        const auto hostHeaderValue = block.headers[static_cast<std::size_t>(hostHeaderIndex)].value.bind(buffer);
-        if (!authorityMatchesHost(targetView.authority, hostHeaderValue, targetView.defaultPort)) {
-            return fail(HttpParseError::kInvalidHost);
-        }
-    }
 
     const auto contentLength = block.contentLength.value();
     const auto transferEncoding = block.transferEncoding.value();
@@ -127,9 +121,19 @@ void Http1ServerRequestParser::parseRequestHead(
 
     for (std::size_t i = 0; i < block.headerCount; ++i) {
         const auto& header = block.headers[i];
+        auto value = header.value.bind(buffer);
+        // RFC 9112 section 3.2.2 requires an origin server receiving
+        // absolute-form to ignore Host and use the request-target authority.
+        // Rebind both headers() and the known-header cache to that one effective
+        // authority so application code cannot observe two routing truths.
+        if (targetView.form == HttpRequestTargetForm::kAbsolute &&
+            hostHeaderIndex >= 0 &&
+            i == static_cast<std::size_t>(hostHeaderIndex)) {
+            value = targetView.authority;
+        }
         (void)HttpRequestAccess::addHeader(
             state.request,
-            HttpHeaderView{header.name.bind(buffer), header.value.bind(buffer)},
+            HttpHeaderView{header.name.bind(buffer), value},
             requestHeaderKindKnownSlot(header.kind));
     }
 

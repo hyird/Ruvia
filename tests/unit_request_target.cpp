@@ -7,8 +7,9 @@
 namespace {
 
 using ruvia::HttpKnownMethod;
-using ruvia::detail::RequestTargetView;
 using ruvia::detail::HttpAuthorityPortKind;
+using ruvia::detail::HttpRequestTargetForm;
+using ruvia::detail::RequestTargetView;
 using ruvia::detail::authorityMatchesHost;
 using ruvia::detail::httpUriSchemeDefaultPort;
 using ruvia::detail::httpUriHostEquals;
@@ -177,6 +178,7 @@ RUVIA_TEST(parse_request_target_origin_form) {
     RUVIA_CHECK(parseRequestTarget(HttpKnownMethod::kGet, "/path?q=1&r=2", out));
     RUVIA_CHECK_EQ(out.path, std::string_view("/path"));
     RUVIA_CHECK_EQ(out.query, std::string_view("q=1&r=2"));
+    RUVIA_CHECK(out.form == HttpRequestTargetForm::kOrigin);
 
     RUVIA_CHECK(parseRequestTarget(HttpKnownMethod::kGet, "/only/path", out));
     RUVIA_CHECK_EQ(out.path, std::string_view("/only/path"));
@@ -193,6 +195,7 @@ RUVIA_TEST(parse_request_target_absolute_form) {
     RUVIA_CHECK_EQ(out.path, std::string_view("/path"));
     RUVIA_CHECK_EQ(out.query, std::string_view("q=1"));
     RUVIA_CHECK_EQ(out.defaultPort, std::uint16_t{80});
+    RUVIA_CHECK(out.form == HttpRequestTargetForm::kAbsolute);
 
     // No path component defaults the path to "/".
     RUVIA_CHECK(parseRequestTarget(HttpKnownMethod::kGet, "http://example.com", out));
@@ -229,6 +232,7 @@ RUVIA_TEST(parse_request_target_connect_authority_form) {
 
     RUVIA_CHECK(parseRequestTarget(HttpKnownMethod::kConnect, "example.com:443", out));
     RUVIA_CHECK_EQ(out.authority, std::string_view("example.com:443"));
+    RUVIA_CHECK(out.form == HttpRequestTargetForm::kAuthority);
     RUVIA_CHECK_EQ(out.path, std::string_view("example.com:443"));
     RUVIA_CHECK_EQ(out.query, std::string_view(""));
 
@@ -250,6 +254,7 @@ RUVIA_TEST(parse_request_target_asterisk_and_rejections) {
     // Asterisk-form is valid only for OPTIONS.
     RUVIA_CHECK(parseRequestTarget(HttpKnownMethod::kOptions, "*", out));
     RUVIA_CHECK_EQ(out.path, std::string_view("*"));
+    RUVIA_CHECK(out.form == HttpRequestTargetForm::kAsterisk);
     RUVIA_CHECK(!parseRequestTarget(HttpKnownMethod::kGet, "*", out));
     // Empty, control/whitespace bytes and fragments are rejected.
     RUVIA_CHECK(!parseRequestTarget(HttpKnownMethod::kGet, "", out));
