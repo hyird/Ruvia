@@ -40,9 +40,10 @@ public:
         return kind_;
     }
 
-    [[nodiscard]] constexpr std::span<const std::pmr::string> extensions() const noexcept {
+    [[nodiscard]] constexpr std::span<const std::pmr::string> extensions() const & noexcept {
         return extensions_;
     }
+    std::span<const std::pmr::string> extensions() const && = delete;
 
 private:
     explicit StaticFileTypePolicy(Kind kind) : kind_(kind) {}

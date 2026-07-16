@@ -102,7 +102,8 @@ private:
 
 class TlsSniIdentity final {
 public:
-    [[nodiscard]] std::string_view host() const noexcept { return host_; }
+    [[nodiscard]] std::string_view host() const & noexcept { return host_; }
+    std::string_view host() const && = delete;
     [[nodiscard]] const TlsIdentity& identity() const & noexcept { return identity_; }
     const TlsIdentity& identity() const && = delete;
 
@@ -213,9 +214,10 @@ public:
     [[nodiscard]] static CorsOrigin serialized(std::string_view value);
     [[nodiscard]] static CorsOrigin opaque();
 
-    [[nodiscard]] std::string_view value() const noexcept {
+    [[nodiscard]] std::string_view value() const & noexcept {
         return value_;
     }
+    std::string_view value() const && = delete;
 
 private:
     friend class CorsOriginPolicy;
@@ -252,9 +254,10 @@ public:
         return kind_;
     }
 
-    [[nodiscard]] constexpr std::string_view origin() const noexcept {
+    [[nodiscard]] constexpr std::string_view origin() const & noexcept {
         return value_;
     }
+    std::string_view origin() const && = delete;
 
 private:
     CorsOriginPolicy(Kind kind, std::pmr::string value) noexcept
@@ -275,9 +278,10 @@ public:
         return of(std::span<const std::string_view>(names.begin(), names.size()));
     }
 
-    [[nodiscard]] std::string_view value() const noexcept {
+    [[nodiscard]] std::string_view value() const & noexcept {
         return value_;
     }
+    std::string_view value() const && = delete;
 
     [[nodiscard]] bool empty() const noexcept {
         return value_.empty();
@@ -326,9 +330,10 @@ public:
         return kind_;
     }
 
-    [[nodiscard]] std::string_view headers() const noexcept {
+    [[nodiscard]] std::string_view headers() const & noexcept {
         return headers_.value();
     }
+    std::string_view headers() const && = delete;
 
 private:
     CorsRequestHeadersPolicy(Kind kind, CorsHeaderNames headers) noexcept

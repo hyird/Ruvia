@@ -7,11 +7,31 @@
 #include <stdexcept>
 #include <string_view>
 #include <type_traits>
+#include <utility>
 
 #include "ruvia/web/detail/http/HttpCors.h"
 #include "ruvia/http/detail/http1/Http1ServerRequestParser.h"
 #include "ruvia/web/App.h"
 #include "ruvia/http/HttpResponse.h"
+
+namespace {
+
+template <typename T>
+concept ExposesRvalueOwnedConfigBorrow =
+    requires(T&& value) { std::move(value).host(); } ||
+    requires(T&& value) { std::move(value).value(); } ||
+    requires(T&& value) { std::move(value).origin(); } ||
+    requires(T&& value) { std::move(value).headers(); } ||
+    requires(T&& value) { std::move(value).extensions(); };
+
+static_assert(!ExposesRvalueOwnedConfigBorrow<ruvia::TlsSniIdentity>);
+static_assert(!ExposesRvalueOwnedConfigBorrow<ruvia::CorsOrigin>);
+static_assert(!ExposesRvalueOwnedConfigBorrow<ruvia::CorsOriginPolicy>);
+static_assert(!ExposesRvalueOwnedConfigBorrow<ruvia::CorsHeaderNames>);
+static_assert(!ExposesRvalueOwnedConfigBorrow<ruvia::CorsRequestHeadersPolicy>);
+static_assert(!ExposesRvalueOwnedConfigBorrow<ruvia::StaticFileTypePolicy>);
+
+}  // namespace
 
 RUVIA_TEST(cors_origin_policy_has_explicit_legal_alternatives) {
     static_assert(!std::default_initializable<ruvia::CorsOriginPolicy>);
