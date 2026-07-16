@@ -3974,6 +3974,18 @@ int main() {
         return 8;
     }
 
+    const auto serverOptions = h2.submitRegularRequestHead(
+        "OPTIONS",
+        "https",
+        std::nullopt,
+        "*",
+        {},
+        h2WithoutContent);
+    if (serverOptions.submitted() == nullptr ||
+        serverOptions.failure() != nullptr) {
+        return 50;
+    }
+
     const auto connect = h2.submitConnectRequestHead("example.test:443");
     const auto* submittedConnect = connect.submitted();
     const auto* connectStream = submittedConnect == nullptr

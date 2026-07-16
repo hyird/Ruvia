@@ -25,7 +25,7 @@ namespace {
 }
 
 [[nodiscard]] bool http2AreValidOutboundRequestHeaders(
-    std::string_view authority,
+    std::optional<std::string_view> authority,
     std::uint16_t defaultPort,
     std::span<const HttpHeaderView> headers,
     bool allowHost,
@@ -48,7 +48,8 @@ namespace {
         }
         if (kind == RequestHeaderKind::kHost) {
             if (!allowHost || hostSeen || !isValidHostHeader(header.value()) ||
-                !authorityMatchesHost(authority, header.value(), defaultPort)) {
+                (authority.has_value() && !authorityMatchesHost(
+                    *authority, header.value(), defaultPort))) {
                 return false;
             }
             hostSeen = true;
@@ -66,14 +67,15 @@ namespace {
 [[nodiscard]] bool http2IsValidOutboundRegularRequestHead(
     std::string_view method,
     std::string_view scheme,
-    std::string_view authority,
+    std::optional<std::string_view> authority,
     std::string_view path,
     std::span<const HttpHeaderView> headers) noexcept {
     if (!http2IsValidOutboundMethod(method) ||
         !isValidUriScheme(scheme) ||
-        !isValidHostHeader(authority) ||
+        (authority.has_value() && !isValidHostHeader(*authority)) ||
         !isValidOriginOrAsteriskFormTarget(
-            classifyHttpMethod(method), path)) {
+            classifyHttpMethod(method), path) ||
+        (path == "*" && authority.has_value())) {
         return false;
     }
     const auto defaultPort = httpUriSchemeDefaultPort(scheme);
@@ -123,7 +125,7 @@ namespace {
 Http2RequestHeadSubmitResult Http2Connection::submitRegularRequestHead(
     std::string_view method,
     std::string_view scheme,
-    std::string_view authority,
+    std::optional<std::string_view> authority,
     std::string_view path,
     std::span<const HttpHeaderView> headers,
     Http2RequestContent content) {
@@ -180,7 +182,9 @@ Http2RequestHeadSubmitResult Http2Connection::submitRegularRequestHead(
     block.clear();
     HpackEncoder::encodeHeader(block, ":method", method);
     HpackEncoder::encodeHeader(block, ":scheme", scheme);
-    HpackEncoder::encodeHeader(block, ":authority", authority);
+    if (authority.has_value()) {
+        HpackEncoder::encodeHeader(block, ":authority", *authority);
+    }
     HpackEncoder::encodeHeader(block, ":path", path);
     for (const auto& header : headers) {
         HpackEncoder::encodeHeader(block, header.name(), header.value());

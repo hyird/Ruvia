@@ -365,6 +365,7 @@ const auto& submittedResponsePlan(const Result& result) {
 
 struct RequestContentLengthObservation final {
     std::size_t count{0};
+    std::size_t authorityCount{0};
     std::string value;
     std::string scheme;
     std::string path;
@@ -380,6 +381,8 @@ bool observeRequestContentLength(
         observation.value.assign(value.data(), value.size());
     } else if (name == ":scheme") {
         observation.scheme.assign(value.data(), value.size());
+    } else if (name == ":authority") {
+        ++observation.authorityCount;
     } else if (name == ":path") {
         observation.path.assign(value.data(), value.size());
     }
@@ -391,11 +394,14 @@ void encodeRequest(
     std::pmr::string& block,
     std::string_view method,
     std::string_view scheme = "https",
-    std::string_view path = "/") {
+    std::string_view path = "/",
+    std::optional<std::string_view> authority = "example.com") {
     HpackEncoder::encodeHeader(block, ":method", method);
     HpackEncoder::encodeHeader(block, ":scheme", scheme);
     HpackEncoder::encodeHeader(block, ":path", path);
-    HpackEncoder::encodeHeader(block, ":authority", "example.com");
+    if (authority.has_value()) {
+        HpackEncoder::encodeHeader(block, ":authority", *authority);
+    }
 }
 
 void encodeGetRequest(std::pmr::string& block) {
@@ -1163,7 +1169,7 @@ RUVIA_TEST(http2_connection_feed_accepts_non_http_request_scheme) {
     }
 }
 
-RUVIA_TEST(http2_connection_asterisk_path_is_options_only) {
+RUVIA_TEST(http2_connection_asterisk_path_requires_options_without_authority) {
     std::pmr::monotonic_buffer_resource resource;
     {
         Http2Connection server(&resource);
@@ -1197,6 +1203,33 @@ RUVIA_TEST(http2_connection_asterisk_path_is_options_only) {
         handshake(server);
         std::pmr::string block(&resource);
         encodeRequest(block, "OPTIONS", "https", "*");
+        const auto request = headersFrame(
+            &resource, 1,
+            ruvia::detail::kHttp2FlagEndHeaders |
+                ruvia::detail::kHttp2FlagEndStream,
+            std::string_view(block.data(), block.size()));
+
+        RUVIA_CHECK(server.feed(
+            std::string_view(request.data(), request.size())) ==
+            Http2FeedResult::kAccepted);
+        RUVIA_CHECK(!server.connectionError().has_value());
+        RUVIA_CHECK(server.nextEvent().value().kind() ==
+            Http2EventKind::kStreamClosed);
+        RUVIA_CHECK(!server.nextEvent().has_value());
+        const auto out = server.pendingOutput();
+        const auto reset = ruvia::detail::http2ParseFrameHeader(out.substr(0, 9));
+        RUVIA_CHECK_EQ(
+            reset.type, static_cast<std::uint8_t>(Http2FrameType::kRstStream));
+        RUVIA_CHECK_EQ(
+            ruvia::detail::http2Read32(
+                reinterpret_cast<const unsigned char*>(out.data() + 9)),
+            static_cast<std::uint32_t>(Http2ErrorCode::kProtocolError));
+    }
+    {
+        Http2Connection server(&resource);
+        handshake(server);
+        std::pmr::string block(&resource);
+        encodeRequest(block, "OPTIONS", "https", "*", std::nullopt);
         const auto request = headersFrame(
             &resource, 1,
             ruvia::detail::kHttp2FlagEndHeaders |
@@ -2122,7 +2155,7 @@ RUVIA_TEST(http2_connection_rejects_invalid_request_head_before_hpack) {
     beginClient(client);
     const auto reject = [&](std::string_view method,
                             std::string_view scheme,
-                            std::string_view authority,
+                            std::optional<std::string_view> authority,
                             std::string_view path,
                             std::span<const ruvia::HttpHeaderView> headers) {
         const auto result = client.submitRegularRequestHead(
@@ -2146,6 +2179,7 @@ RUVIA_TEST(http2_connection_rejects_invalid_request_head_before_hpack) {
     reject("GET bad", "https", "example.test", "/", {});
     reject("GET", "1ftp", "example.test", "/", {});
     reject("GET", "https", "example.test", "*", {});
+    reject("OPTIONS", "https", "example.test", "*", {});
     reject("GET", "https", "example.test", "relative", {});
     reject("GET", "https", "example.test", "/", uppercase);
     reject("GET", "https", "example.test", "/", connection);
@@ -2162,13 +2196,13 @@ RUVIA_TEST(http2_connection_rejects_invalid_request_head_before_hpack) {
     RUVIA_CHECK_EQ(submittedRequestStreamId(accepted), std::uint32_t{1});
 }
 
-RUVIA_TEST(http2_connection_encodes_non_http_request_scheme) {
+RUVIA_TEST(http2_connection_encodes_non_http_request_without_authority) {
     std::pmr::monotonic_buffer_resource resource;
     Http2Connection client(&resource, ruvia::detail::Http2Role::kClient);
     beginClient(client);
 
     const auto submitted = client.submitRegularRequestHead(
-        "GET", "git+ssh", "example.test", "/repository", {},
+        "GET", "git+ssh", std::nullopt, "/repository", {},
         Http2RequestContent::none());
     RUVIA_CHECK(submitted.submitted() != nullptr);
     RUVIA_CHECK_EQ(submittedRequestStreamId(submitted), std::uint32_t{1});
@@ -2182,6 +2216,7 @@ RUVIA_TEST(http2_connection_encodes_non_http_request_scheme) {
         &observeRequestContentLength);
     RUVIA_CHECK(decoded.decoded() != nullptr);
     RUVIA_CHECK_EQ(observation.scheme, std::string("git+ssh"));
+    RUVIA_CHECK_EQ(observation.authorityCount, std::size_t{0});
     const auto* stream = client.stream(1);
     RUVIA_CHECK(stream != nullptr);
     if (stream != nullptr) {
@@ -2195,7 +2230,7 @@ RUVIA_TEST(http2_connection_encodes_options_asterisk_path) {
     beginClient(client);
 
     const auto submitted = client.submitRegularRequestHead(
-        "OPTIONS", "https", "example.test", "*", {},
+        "OPTIONS", "https", std::nullopt, "*", {},
         Http2RequestContent::none());
     RUVIA_CHECK(submitted.submitted() != nullptr);
     RUVIA_CHECK_EQ(submittedRequestStreamId(submitted), std::uint32_t{1});
@@ -2208,6 +2243,7 @@ RUVIA_TEST(http2_connection_encodes_options_asterisk_path) {
         &observeRequestContentLength);
     RUVIA_CHECK(decoded.decoded() != nullptr);
     RUVIA_CHECK_EQ(observation.path, std::string("*"));
+    RUVIA_CHECK_EQ(observation.authorityCount, std::size_t{0});
 }
 
 RUVIA_TEST(http2_connection_exposes_negotiated_extended_connect_capability) {

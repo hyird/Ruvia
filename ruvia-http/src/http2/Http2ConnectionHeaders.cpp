@@ -64,7 +64,8 @@ HeaderDecodeStatus Http2Connection::decodeHeaderBlock(Http2StreamState& stream) 
         }
     } else if (!stream.hasScheme() || !stream.hasPath() ||
         !isValidOriginOrAsteriskFormTarget(
-            stream.requestKnownMethod(), stream.requestPath())) {
+            stream.requestKnownMethod(), stream.requestPath()) ||
+        (stream.requestPath() == "*" && stream.hasAuthority())) {
         return HeaderDecodeStatus::kProtocolError;
     }
     const bool remoteHeadFinalized = stream.tunnel().pending() != nullptr
