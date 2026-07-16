@@ -60,12 +60,28 @@ concept HasWithBodyLoader = requires(
     services.withBodyLoader(loader);
 };
 
+template <typename Source>
+concept ExposesRvalueRequestBodyAlternative =
+    requires(Source&& source) { std::move(source).buffered(); } ||
+    requires(Source&& source) { std::move(source).lazy(); } ||
+    requires(Source&& source) { std::move(source).streaming(); };
+
+template <typename Output>
+concept ExposesRvalueResponseOutputAlternative =
+    requires(Output&& output) { std::move(output).buffered(); } ||
+    requires(Output&& output) { std::move(output).responseStream(); } ||
+    requires(Output&& output) { std::move(output).webSocket(); };
+
 static_assert(!HasBodyReaderAccessor<ruvia::detail::ContextServices>);
 static_assert(!HasBodyLoaderAccessor<ruvia::detail::ContextServices>);
 static_assert(!HasWebSocketAccessor<ruvia::detail::ContextServices>);
 static_assert(!HasResponseStreamAccessor<ruvia::detail::ContextServices>);
 static_assert(!HasWithBodyReader<ruvia::detail::ContextServices>);
 static_assert(!HasWithBodyLoader<ruvia::detail::ContextServices>);
+static_assert(!ExposesRvalueRequestBodyAlternative<
+    ruvia::detail::ContextRequestBodySource>);
+static_assert(!ExposesRvalueResponseOutputAlternative<
+    ruvia::detail::ContextResponseOutput>);
 static_assert(std::is_same_v<
     decltype(std::declval<const ruvia::detail::ContextServices&>()
                  .requestBodySource()),

@@ -2060,6 +2060,23 @@ if(EXISTS "${WEB_CONTEXT_CAPABILITIES}" AND
         boundary_error("Context capabilities lost their exclusive alternatives"
             "request body and response output must each be one explicit discriminated value")
     endif()
+    string(REGEX MATCHALL
+        "(buffered|lazy|streaming|responseStream|webSocket)[ \t\r\n]*[(][)][ \t\r\n]*const[ \t\r\n]*&[ \t\r\n]*noexcept"
+        context_capability_lvalue_accessors
+        "${web_context_capabilities}")
+    list(LENGTH context_capability_lvalue_accessors
+        context_capability_lvalue_accessor_count)
+    string(REGEX MATCHALL
+        "(buffered|lazy|streaming|responseStream|webSocket)[ \t\r\n]*[(][)][ \t\r\n]*const[ \t\r\n]*&&[ \t\r\n]*=[ \t\r\n]*delete"
+        context_capability_deleted_rvalue_accessors
+        "${web_context_capabilities}")
+    list(LENGTH context_capability_deleted_rvalue_accessors
+        context_capability_deleted_rvalue_accessor_count)
+    if(context_capability_lvalue_accessor_count LESS 6 OR
+       context_capability_deleted_rvalue_accessor_count LESS 6)
+        boundary_error("Context capability alternatives expose temporary owners"
+            "all request-body and response-output alternatives must be lvalue-only")
+    endif()
     if(web_context_services MATCHES
            "${RULE_STALE_CONTEXT_CAPABILITY_SPLIT}" OR
        web_context_services MATCHES "withWebSocket" OR
@@ -2122,11 +2139,19 @@ if(EXISTS "${WEB_CONTEXT_CAPABILITIES}" AND
            "context_copies_typed_capabilities_into_public_facades" OR
        NOT web_context_package_consumer MATCHES
            "HasSplitContextCapabilityAccessors" OR
+       NOT web_context_capability_test MATCHES
+           "ExposesRvalueRequestBodyAlternative" OR
+       NOT web_context_capability_test MATCHES
+           "ExposesRvalueResponseOutputAlternative" OR
+       NOT web_context_package_consumer MATCHES
+           "ExposesRvalueRequestBodyAlternative" OR
+       NOT web_context_package_consumer MATCHES
+           "ExposesRvalueResponseOutputAlternative" OR
        NOT web_context_package_consumer MATCHES
            "ContextRequestBodySource" OR
        NOT web_context_package_consumer MATCHES "ContextResponseOutput")
         boundary_error("typed Context capabilities lack regression coverage"
-            "unit and installed-package tests must pin exclusivity, propagation, and removal of split accessors")
+            "unit and installed-package tests must pin exclusivity, propagation, temporary-owner safety, and removal of split accessors")
     endif()
 endif()
 

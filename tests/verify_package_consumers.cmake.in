@@ -3803,6 +3803,23 @@ if(_built_components_csv MATCHES "(^|,)web(,|$)")
         message(FATAL_ERROR
             "installed Context capabilities lost their exclusive alternatives")
     endif()
+    string(REGEX MATCHALL
+        "(buffered|lazy|streaming|responseStream|webSocket)[ \t\r\n]*[(][)][ \t\r\n]*const[ \t\r\n]*&[ \t\r\n]*noexcept"
+        _installed_context_capability_lvalue_accessors
+        "${_installed_context_capabilities}")
+    list(LENGTH _installed_context_capability_lvalue_accessors
+        _installed_context_capability_lvalue_accessor_count)
+    string(REGEX MATCHALL
+        "(buffered|lazy|streaming|responseStream|webSocket)[ \t\r\n]*[(][)][ \t\r\n]*const[ \t\r\n]*&&[ \t\r\n]*=[ \t\r\n]*delete"
+        _installed_context_capability_deleted_rvalue_accessors
+        "${_installed_context_capabilities}")
+    list(LENGTH _installed_context_capability_deleted_rvalue_accessors
+        _installed_context_capability_deleted_rvalue_accessor_count)
+    if(_installed_context_capability_lvalue_accessor_count LESS 6 OR
+       _installed_context_capability_deleted_rvalue_accessor_count LESS 6)
+        message(FATAL_ERROR
+            "installed Context capability alternatives expose temporary owners")
+    endif()
     if(_installed_context_services MATCHES
            "withBodyReader|withBodyLoader|withWebSocket|BodyReader[ \t]*[*][ \t]*bodyReader_|RequestBodyLoader[ \t]*[*][ \t]*bodyLoader_|WebSocket[ \t]*[*][ \t]*webSocket_|ResponseStreamWriter[ \t]*[*][ \t]*responseStream_" OR
        _installed_context_header MATCHES
