@@ -75,7 +75,9 @@
 #include <ruvia/http/detail/http2/Http2StreamState.h>
 #include <ruvia/http/detail/http2/Http2StreamTable.h>
 #include <ruvia/http/detail/http2/Http2TunnelState.h>
+#include <ruvia/http/detail/MultipartPartAccess.h>
 #include <ruvia/http/detail/MultipartParsing.h>
+#include <ruvia/http/detail/MultipartReaderInternal.h>
 #include <ruvia/http/detail/SetCookiePlan.h>
 #include <ruvia/http/detail/parser/HttpChunkParser.h>
 #include <ruvia/http/detail/parser/HttpHeaderBlockParser.h>
@@ -270,6 +272,68 @@ concept AcceptsMultipartBorrowedInput = requires(Input&& input) {
 };
 
 template <typename Input>
+concept AcceptsCopiedMultipartMetadata = requires(Input&& input) {
+    ruvia::detail::MultipartPartAccess::make(
+        std::forward<Input>(input), {}, {}, {},
+        std::pmr::get_default_resource());
+    ruvia::detail::MultipartPartAccess::make(
+        {}, std::forward<Input>(input), {}, {},
+        std::pmr::get_default_resource());
+    ruvia::detail::MultipartPartAccess::makeDecoded(
+        std::forward<Input>(input), {}, {}, {},
+        std::pmr::get_default_resource());
+    ruvia::detail::MultipartPartAccess::makeDecoded(
+        {}, std::forward<Input>(input), {}, {},
+        std::pmr::get_default_resource());
+};
+
+template <typename Input>
+concept AcceptsAnyBufferedMultipartBorrow =
+    requires(Input&& input) {
+        ruvia::detail::MultipartPartAccess::make(
+            {}, {}, std::forward<Input>(input), {},
+            std::pmr::get_default_resource());
+    } ||
+    requires(Input&& input) {
+        ruvia::detail::MultipartPartAccess::make(
+            {}, {}, {}, std::forward<Input>(input),
+            std::pmr::get_default_resource());
+    } ||
+    requires(Input&& input) {
+        ruvia::detail::MultipartPartAccess::makeDecoded(
+            {}, {}, std::forward<Input>(input), {},
+            std::pmr::get_default_resource());
+    } ||
+    requires(Input&& input) {
+        ruvia::detail::MultipartPartAccess::makeDecoded(
+            {}, {}, {}, std::forward<Input>(input),
+            std::pmr::get_default_resource());
+    };
+
+template <typename Input>
+concept AcceptsAnyStreamMultipartBorrow =
+    requires(Input&& input) {
+        ruvia::detail::MultipartStreamPartAccess::make(
+            std::forward<Input>(input), {}, {}, {},
+            ruvia::MultipartChunkPhase::kComplete);
+    } ||
+    requires(Input&& input) {
+        ruvia::detail::MultipartStreamPartAccess::make(
+            {}, std::forward<Input>(input), {}, {},
+            ruvia::MultipartChunkPhase::kComplete);
+    } ||
+    requires(Input&& input) {
+        ruvia::detail::MultipartStreamPartAccess::make(
+            {}, {}, std::forward<Input>(input), {},
+            ruvia::MultipartChunkPhase::kComplete);
+    } ||
+    requires(Input&& input) {
+        ruvia::detail::MultipartStreamPartAccess::make(
+            {}, {}, {}, std::forward<Input>(input),
+            ruvia::MultipartChunkPhase::kComplete);
+    };
+
+template <typename Input>
 concept AcceptsAuthorityBorrowedInput = requires(Input&& input) {
     ruvia::detail::parseHttpAuthority(std::forward<Input>(input));
 };
@@ -348,6 +412,20 @@ static_assert(AcceptsMultipartBorrowedInput<std::string&>);
 static_assert(AcceptsMultipartBorrowedInput<std::string_view>);
 static_assert(!AcceptsMultipartBorrowedInput<std::string>);
 static_assert(!AcceptsMultipartBorrowedInput<std::pmr::string>);
+static_assert(AcceptsCopiedMultipartMetadata<std::string>);
+static_assert(AcceptsCopiedMultipartMetadata<std::pmr::string>);
+static_assert(AcceptsAnyBufferedMultipartBorrow<std::string&>);
+static_assert(AcceptsAnyBufferedMultipartBorrow<std::pmr::string&>);
+static_assert(AcceptsAnyBufferedMultipartBorrow<std::string_view>);
+static_assert(!AcceptsAnyBufferedMultipartBorrow<std::string>);
+static_assert(!AcceptsAnyBufferedMultipartBorrow<const std::string>);
+static_assert(!AcceptsAnyBufferedMultipartBorrow<std::pmr::string>);
+static_assert(AcceptsAnyStreamMultipartBorrow<std::string&>);
+static_assert(AcceptsAnyStreamMultipartBorrow<std::pmr::string&>);
+static_assert(AcceptsAnyStreamMultipartBorrow<std::string_view>);
+static_assert(!AcceptsAnyStreamMultipartBorrow<std::string>);
+static_assert(!AcceptsAnyStreamMultipartBorrow<const std::string>);
+static_assert(!AcceptsAnyStreamMultipartBorrow<std::pmr::string>);
 static_assert(AcceptsAuthorityBorrowedInput<std::string&>);
 static_assert(AcceptsAuthorityBorrowedInput<std::string_view>);
 static_assert(!AcceptsAuthorityBorrowedInput<std::string>);

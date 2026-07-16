@@ -10,9 +10,130 @@
 
 #include "ruvia/http/detail/MultipartPartAccess.h"
 #include "ruvia/http/detail/MultipartParsing.h"
+#include "ruvia/http/detail/MultipartReaderInternal.h"
 #include "ruvia/http/MultipartParser.h"
 
 namespace {
+
+template <typename Input>
+concept AcceptsMultipartPartName = requires(Input&& input) {
+    ruvia::detail::MultipartPartAccess::make(
+        std::forward<Input>(input), {}, {}, {},
+        std::pmr::get_default_resource());
+    ruvia::detail::MultipartPartAccess::makeDecoded(
+        std::forward<Input>(input), {}, {}, {},
+        std::pmr::get_default_resource());
+};
+
+template <typename Input>
+concept AcceptsMultipartPartFilename = requires(Input&& input) {
+    ruvia::detail::MultipartPartAccess::make(
+        {}, std::forward<Input>(input), {}, {},
+        std::pmr::get_default_resource());
+    ruvia::detail::MultipartPartAccess::makeDecoded(
+        {}, std::forward<Input>(input), {}, {},
+        std::pmr::get_default_resource());
+};
+
+template <typename Input>
+concept AcceptsMultipartPartContentType = requires(Input&& input) {
+    ruvia::detail::MultipartPartAccess::make(
+        {}, {}, std::forward<Input>(input), {},
+        std::pmr::get_default_resource());
+};
+
+template <typename Input>
+concept AcceptsMultipartPartBody = requires(Input&& input) {
+    ruvia::detail::MultipartPartAccess::make(
+        {}, {}, {}, std::forward<Input>(input),
+        std::pmr::get_default_resource());
+};
+
+template <typename Input>
+concept AcceptsDecodedMultipartPartContentType = requires(Input&& input) {
+    ruvia::detail::MultipartPartAccess::makeDecoded(
+        {}, {}, std::forward<Input>(input), {},
+        std::pmr::get_default_resource());
+};
+
+template <typename Input>
+concept AcceptsDecodedMultipartPartBody = requires(Input&& input) {
+    ruvia::detail::MultipartPartAccess::makeDecoded(
+        {}, {}, {}, std::forward<Input>(input),
+        std::pmr::get_default_resource());
+};
+
+template <typename Input>
+concept AcceptsMultipartStreamName = requires(Input&& input) {
+    ruvia::detail::MultipartStreamPartAccess::make(
+        std::forward<Input>(input), {}, {}, {},
+        ruvia::MultipartChunkPhase::kComplete);
+};
+
+template <typename Input>
+concept AcceptsMultipartStreamFilename = requires(Input&& input) {
+    ruvia::detail::MultipartStreamPartAccess::make(
+        {}, std::forward<Input>(input), {}, {},
+        ruvia::MultipartChunkPhase::kComplete);
+};
+
+template <typename Input>
+concept AcceptsMultipartStreamContentType = requires(Input&& input) {
+    ruvia::detail::MultipartStreamPartAccess::make(
+        {}, {}, std::forward<Input>(input), {},
+        ruvia::MultipartChunkPhase::kComplete);
+};
+
+template <typename Input>
+concept AcceptsMultipartStreamBody = requires(Input&& input) {
+    ruvia::detail::MultipartStreamPartAccess::make(
+        {}, {}, {}, std::forward<Input>(input),
+        ruvia::MultipartChunkPhase::kComplete);
+};
+
+static_assert(AcceptsMultipartPartName<std::string>);
+static_assert(AcceptsMultipartPartName<std::pmr::string>);
+static_assert(AcceptsMultipartPartFilename<std::string>);
+static_assert(AcceptsMultipartPartFilename<std::pmr::string>);
+
+#define RUVIA_ASSERT_REJECTS_TEMPORARY_MULTIPART_FIELD(Concept) \
+    static_assert(!Concept<std::string>);                          \
+    static_assert(!Concept<const std::string>);                    \
+    static_assert(!Concept<std::pmr::string>)
+
+RUVIA_ASSERT_REJECTS_TEMPORARY_MULTIPART_FIELD(
+    AcceptsMultipartPartContentType);
+RUVIA_ASSERT_REJECTS_TEMPORARY_MULTIPART_FIELD(AcceptsMultipartPartBody);
+RUVIA_ASSERT_REJECTS_TEMPORARY_MULTIPART_FIELD(
+    AcceptsDecodedMultipartPartContentType);
+RUVIA_ASSERT_REJECTS_TEMPORARY_MULTIPART_FIELD(
+    AcceptsDecodedMultipartPartBody);
+RUVIA_ASSERT_REJECTS_TEMPORARY_MULTIPART_FIELD(AcceptsMultipartStreamName);
+RUVIA_ASSERT_REJECTS_TEMPORARY_MULTIPART_FIELD(AcceptsMultipartStreamFilename);
+RUVIA_ASSERT_REJECTS_TEMPORARY_MULTIPART_FIELD(
+    AcceptsMultipartStreamContentType);
+RUVIA_ASSERT_REJECTS_TEMPORARY_MULTIPART_FIELD(AcceptsMultipartStreamBody);
+
+#undef RUVIA_ASSERT_REJECTS_TEMPORARY_MULTIPART_FIELD
+
+#define RUVIA_ASSERT_ACCEPTS_STABLE_MULTIPART_FIELD(Concept) \
+    static_assert(Concept<std::string&>);                       \
+    static_assert(Concept<std::pmr::string&>);                  \
+    static_assert(Concept<std::string_view>)
+
+RUVIA_ASSERT_ACCEPTS_STABLE_MULTIPART_FIELD(
+    AcceptsMultipartPartContentType);
+RUVIA_ASSERT_ACCEPTS_STABLE_MULTIPART_FIELD(AcceptsMultipartPartBody);
+RUVIA_ASSERT_ACCEPTS_STABLE_MULTIPART_FIELD(
+    AcceptsDecodedMultipartPartContentType);
+RUVIA_ASSERT_ACCEPTS_STABLE_MULTIPART_FIELD(AcceptsDecodedMultipartPartBody);
+RUVIA_ASSERT_ACCEPTS_STABLE_MULTIPART_FIELD(AcceptsMultipartStreamName);
+RUVIA_ASSERT_ACCEPTS_STABLE_MULTIPART_FIELD(AcceptsMultipartStreamFilename);
+RUVIA_ASSERT_ACCEPTS_STABLE_MULTIPART_FIELD(
+    AcceptsMultipartStreamContentType);
+RUVIA_ASSERT_ACCEPTS_STABLE_MULTIPART_FIELD(AcceptsMultipartStreamBody);
+
+#undef RUVIA_ASSERT_ACCEPTS_STABLE_MULTIPART_FIELD
 
 template <typename T>
 concept HasMultipartStatus = requires(const T& result) {
