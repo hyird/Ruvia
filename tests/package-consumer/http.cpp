@@ -37,6 +37,7 @@
 #include <ruvia/http/detail/HttpContentCoding.h>
 #include <ruvia/http/detail/HttpContentLength.h>
 #include <ruvia/http/detail/HttpRequestBodyFailure.h>
+#include <ruvia/http/detail/HttpRequestContentSemantics.h>
 #include <ruvia/http/detail/HttpTransferEncoding.h>
 #include <ruvia/http/detail/HttpResponseBody.h>
 #include <ruvia/http/detail/HttpResponseBodyAccess.h>
@@ -1819,6 +1820,18 @@ static_assert(std::same_as<
 static_assert(std::is_enum_v<
     ruvia::detail::HttpResponseContentSemantics>);
 static_assert(sizeof(ruvia::detail::HttpResponseContentSemantics) == 1);
+static_assert(std::is_enum_v<
+    ruvia::detail::HttpRequestContentSemantics>);
+static_assert(sizeof(ruvia::detail::HttpRequestContentSemantics) == 1);
+static_assert(
+    ruvia::detail::httpRequestContentSemantics("TRACE") ==
+    ruvia::detail::HttpRequestContentSemantics::kForbidden);
+static_assert(
+    ruvia::detail::httpRequestContentSemantics("OPTIONS") ==
+    ruvia::detail::HttpRequestContentSemantics::kContentTypeRequired);
+static_assert(
+    ruvia::detail::httpRequestContentSemantics("POST") ==
+    ruvia::detail::HttpRequestContentSemantics::kNoAdditionalRequirements);
 static_assert(std::is_trivially_copyable_v<
     ruvia::detail::HttpResponseBodyPlan>);
 static_assert(sizeof(ruvia::detail::HttpResponseBodyPlan) <= 12);

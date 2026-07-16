@@ -5,6 +5,8 @@
 #include <charconv>
 #include <utility>
 
+#include "ruvia/http/detail/HeaderAcceptUtils.h"
+#include "ruvia/http/detail/HttpRequestContentSemantics.h"
 #include "ruvia/http/detail/HttpResponseBodyAccess.h"
 #include "ruvia/http/detail/HttpResponseContentSemantics.h"
 #include "ruvia/http/detail/http2/Http2FlowControl.h"
@@ -20,6 +22,10 @@
 namespace ruvia::detail {
 namespace {
 
+struct Http2OutboundRequestHeaderFacts final {
+    bool hasContentType{false};
+};
+
 [[nodiscard]] bool http2IsValidOutboundMethod(std::string_view method) noexcept {
     return method != "CONNECT" && isValidHttpMethodToken(method);
 }
@@ -29,9 +35,11 @@ namespace {
     std::uint16_t defaultPort,
     std::span<const HttpHeaderView> headers,
     bool allowHost,
-    bool allowTrailers) noexcept {
+    bool allowTrailers,
+    Http2OutboundRequestHeaderFacts* facts = nullptr) noexcept {
     std::uint32_t singletonHeaders = 0;
     bool hostSeen = false;
+    bool hasContentType = false;
     for (const auto& header : headers) {
         if (!http2IsValidRegularHeader(header.name(), header.value())) {
             return false;
@@ -54,12 +62,23 @@ namespace {
             }
             hostSeen = true;
         }
+        if (kind == RequestHeaderKind::kContentType) {
+            HttpMediaTypeParts parts;
+            if (hasContentType ||
+                !httpParseMediaType(header.value(), false, parts)) {
+                return false;
+            }
+            hasContentType = true;
+        }
         if (const auto bit = singletonRequestHeaderBit(kind); bit != 0) {
             if ((singletonHeaders & bit) != 0) {
                 return false;
             }
             singletonHeaders |= bit;
         }
+    }
+    if (facts != nullptr) {
+        facts->hasContentType = hasContentType;
     }
     return true;
 }
@@ -69,7 +88,8 @@ namespace {
     std::string_view scheme,
     std::optional<std::string_view> authority,
     std::string_view path,
-    std::span<const HttpHeaderView> headers) noexcept {
+    std::span<const HttpHeaderView> headers,
+    bool explicitContent) noexcept {
     if (!http2IsValidOutboundMethod(method) ||
         !isValidUriScheme(scheme) ||
         (authority.has_value() &&
@@ -82,8 +102,24 @@ namespace {
         return false;
     }
     const auto defaultPort = httpUriSchemeDefaultPort(scheme);
-    return http2AreValidOutboundRequestHeaders(
-        authority, defaultPort, headers, /*allowHost=*/true, /*allowTrailers=*/true);
+    Http2OutboundRequestHeaderFacts facts;
+    if (!http2AreValidOutboundRequestHeaders(
+            authority,
+            defaultPort,
+            headers,
+            /*allowHost=*/true,
+            /*allowTrailers=*/true,
+            &facts)) {
+        return false;
+    }
+    if (!explicitContent) {
+        return true;
+    }
+    const auto contentSemantics = httpRequestContentSemantics(method);
+    return contentSemantics != HttpRequestContentSemantics::kForbidden &&
+        (contentSemantics !=
+             HttpRequestContentSemantics::kContentTypeRequired ||
+         facts.hasContentType);
 }
 
 [[nodiscard]] bool http2IsValidWebSocketConnectHeaders(
@@ -135,16 +171,6 @@ Http2RequestHeadSubmitResult Http2Connection::submitRegularRequestHead(
     if (const auto error = localRequestAdmissionError()) {
         return Http2RequestHeadSubmitResult::makeFailure(*error);
     }
-    // Validate the entire semantic head before touching HPACK storage, outbound
-    // bytes, the stream method, local-content accounting, or lifecycle state.
-    if (!http2IsValidOutboundRegularRequestHead(method, scheme, authority, path, headers)) {
-        return Http2RequestHeadSubmitResult::makeFailure(
-            Http2RequestHeadSubmitError::kInvalidMessage);
-    }
-
-    Http2EndStream endStream = Http2EndStream::kKeepOpen;
-    std::array<char, 20> lengthBuffer{};
-    std::size_t lengthBytes = 0;
     const bool withoutContent = content.withoutContent() != nullptr;
     const auto* knownLengthContent = content.knownLengthContent();
     const bool streamingContent = content.streamingContent() != nullptr;
@@ -152,6 +178,22 @@ Http2RequestHeadSubmitResult Http2Connection::submitRegularRequestHead(
         return Http2RequestHeadSubmitResult::makeFailure(
             Http2RequestHeadSubmitError::kInvalidMessage);
     }
+    // Validate the entire semantic head before touching HPACK storage, outbound
+    // bytes, the stream method, local-content accounting, or lifecycle state.
+    if (!http2IsValidOutboundRegularRequestHead(
+            method,
+            scheme,
+            authority,
+            path,
+            headers,
+            !withoutContent)) {
+        return Http2RequestHeadSubmitResult::makeFailure(
+            Http2RequestHeadSubmitError::kInvalidMessage);
+    }
+
+    Http2EndStream endStream = Http2EndStream::kKeepOpen;
+    std::array<char, 20> lengthBuffer{};
+    std::size_t lengthBytes = 0;
     if (withoutContent) {
         endStream = Http2EndStream::kEndStream;
     } else if (knownLengthContent != nullptr) {

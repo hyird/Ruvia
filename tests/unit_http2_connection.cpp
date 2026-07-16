@@ -2551,6 +2551,84 @@ RUVIA_TEST(http2_connection_request_content_alternatives_own_wire_framing) {
         });
 }
 
+RUVIA_TEST(http2_connection_enforces_request_method_content_semantics_transactionally) {
+    std::pmr::monotonic_buffer_resource resource;
+
+    const auto checkRejected = [&resource, &ruvia_ctx](
+                                   std::string_view method,
+                                   std::span<const ruvia::HttpHeaderView> headers,
+                                   Http2RequestContent content) {
+        Http2Connection client(
+            &resource, ruvia::detail::Http2Role::kClient);
+        beginClient(client);
+
+        const auto rejected = client.submitRegularRequestHead(
+            method,
+            "https",
+            "example.test",
+            "/diagnostics",
+            headers,
+            content);
+        RUVIA_CHECK(rejected.submitted() == nullptr);
+        RUVIA_CHECK(requestHeadSubmitError(rejected) ==
+            Http2RequestHeadSubmitError::kInvalidMessage);
+        RUVIA_CHECK(client.pendingOutput().empty());
+        RUVIA_CHECK(client.stream(1) == nullptr);
+
+        const auto accepted = client.submitRegularRequestHead(
+            "GET",
+            "https",
+            "example.test",
+            "/",
+            {},
+            Http2RequestContent::none());
+        RUVIA_CHECK(accepted.submitted() != nullptr);
+        RUVIA_CHECK_EQ(submittedRequestStreamId(accepted), std::uint32_t{1});
+    };
+
+    checkRejected("TRACE", {}, Http2RequestContent::knownLength(0));
+    checkRejected("TRACE", {}, Http2RequestContent::knownLength(1));
+    checkRejected("TRACE", {}, Http2RequestContent::streaming());
+    checkRejected("OPTIONS", {}, Http2RequestContent::knownLength(0));
+    checkRejected("OPTIONS", {}, Http2RequestContent::knownLength(1));
+    checkRejected("OPTIONS", {}, Http2RequestContent::streaming());
+
+    const ruvia::HttpHeaderView invalidContentType[] = {
+        {"content-type", "not a media type"}};
+    checkRejected(
+        "OPTIONS",
+        invalidContentType,
+        Http2RequestContent::knownLength(1));
+
+    Http2Connection traceClient(
+        &resource, ruvia::detail::Http2Role::kClient);
+    beginClient(traceClient);
+    const auto trace = traceClient.submitRegularRequestHead(
+        "TRACE",
+        "https",
+        "example.test",
+        "/diagnostics",
+        {},
+        Http2RequestContent::none());
+    RUVIA_CHECK(trace.submitted() != nullptr);
+    RUVIA_CHECK_EQ(submittedRequestStreamId(trace), std::uint32_t{1});
+
+    Http2Connection client(
+        &resource, ruvia::detail::Http2Role::kClient);
+    beginClient(client);
+    const ruvia::HttpHeaderView contentType[] = {
+        {"content-type", "application/json"}};
+    const auto accepted = client.submitRegularRequestHead(
+        "OPTIONS",
+        "https",
+        "example.test",
+        "/diagnostics",
+        contentType,
+        Http2RequestContent::knownLength(1));
+    RUVIA_CHECK(accepted.submitted() != nullptr);
+    RUVIA_CHECK_EQ(submittedRequestStreamId(accepted), std::uint32_t{1});
+}
+
 RUVIA_TEST(http2_connection_rejects_raw_request_content_length_transactionally) {
     std::pmr::monotonic_buffer_resource resource;
     const auto checkRejected =

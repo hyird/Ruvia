@@ -6647,6 +6647,12 @@ set(HTTP2_HEADER_RULES
     "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/detail/http2/Http2HeaderRules.h")
 set(HTTP_RESPONSE_CONTENT_SEMANTICS
     "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/detail/HttpResponseContentSemantics.h")
+set(HTTP_REQUEST_CONTENT_SEMANTICS
+    "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/detail/HttpRequestContentSemantics.h")
+set(HTTP1_CLIENT_REQUEST_SEMANTICS_SOURCE
+    "${RUVIA_ROOT}/ruvia-http/src/client/Http1ClientRequestWriter.cpp")
+set(HTTP2_CLIENT_REQUEST_SEMANTICS_SOURCE
+    "${RUVIA_ROOT}/ruvia-http/src/http2/Http2ConnectionSubmit.cpp")
 set(HTTP_RESPONSE_WRITE_PLAN
     "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/detail/server/HttpResponseWritePlan.h")
 if(NOT EXISTS "${HTTP_FINAL_RESPONSE_CONTROL_PLAN}" OR
@@ -7031,6 +7037,34 @@ else()
        http_response_write_plan MATCHES "bodySuppressed_")
         boundary_error("response content semantics split by protocol direction"
             "informational, switch, CONNECT, without-content, and with-content alternatives must drive H1 client, H2 client, and server body plans as cheap value facts")
+    endif()
+endif()
+if(NOT EXISTS "${HTTP_REQUEST_CONTENT_SEMANTICS}" OR
+   NOT EXISTS "${HTTP1_CLIENT_REQUEST_SEMANTICS_SOURCE}" OR
+   NOT EXISTS "${HTTP2_CLIENT_REQUEST_SEMANTICS_SOURCE}")
+    boundary_error("shared request-content semantics contract is missing"
+        "HTTP/1 and HTTP/2 client writers must consume one sender-side method/content classification")
+else()
+    file(READ "${HTTP_REQUEST_CONTENT_SEMANTICS}"
+        http_request_content_semantics)
+    file(READ "${HTTP1_CLIENT_REQUEST_SEMANTICS_SOURCE}"
+        http1_client_request_semantics)
+    file(READ "${HTTP2_CLIENT_REQUEST_SEMANTICS_SOURCE}"
+        http2_client_request_semantics)
+    if(NOT http_request_content_semantics MATCHES
+           "enum class HttpRequestContentSemantics : std::uint8_t" OR
+       NOT http_request_content_semantics MATCHES
+           "kNoAdditionalRequirements" OR
+       NOT http_request_content_semantics MATCHES "kForbidden" OR
+       NOT http_request_content_semantics MATCHES "kContentTypeRequired" OR
+       NOT http_request_content_semantics MATCHES
+           "httpRequestContentSemantics" OR
+       NOT http1_client_request_semantics MATCHES
+           "detail::httpRequestContentSemantics" OR
+       NOT http2_client_request_semantics MATCHES
+           "httpRequestContentSemantics")
+        boundary_error("request content semantics split by HTTP version"
+            "TRACE content prohibition and OPTIONS Content-Type requirements must drive both client serializers")
     endif()
 endif()
 if(NOT EXISTS "${HTTP2_LOCAL_SEND_STATE}" OR
@@ -7680,6 +7714,30 @@ set(HTTP2_WEB_STREAM_RUNTIME_TEST
 set(HTTP2_CONNECT_TEST
     "${RUVIA_ROOT}/tests/unit_http2_connect.cpp")
 set(HTTP_PACKAGE_CONSUMER "${RUVIA_ROOT}/tests/package-consumer/http.cpp")
+if(NOT EXISTS "${HTTP2_EVENT_TEST}" OR
+   NOT EXISTS "${HTTP_PACKAGE_CONSUMER}")
+    boundary_error("shared request-content semantics are untested"
+        "HTTP/2 transactional rejection and installed value facts must remain pinned")
+else()
+    file(READ "${HTTP2_EVENT_TEST}" http_request_content_semantics_test)
+    file(READ "${HTTP_PACKAGE_CONSUMER}"
+        http_request_content_semantics_package_test)
+    if(NOT http_request_content_semantics_test MATCHES
+           "http2_connection_enforces_request_method_content_semantics_transactionally" OR
+       NOT http_request_content_semantics_test MATCHES
+           "TRACE.*Http2RequestContent::knownLength" OR
+       NOT http_request_content_semantics_test MATCHES
+           "OPTIONS.*Http2RequestContent::streaming" OR
+       NOT http_request_content_semantics_package_test MATCHES
+           "is_enum_v<[\r\n \t]*ruvia::detail::HttpRequestContentSemantics>" OR
+       NOT http_request_content_semantics_package_test MATCHES
+           "httpRequestContentSemantics[(][\"]TRACE[\"][)][ \t\r\n]*==" OR
+       NOT http_request_content_semantics_package_test MATCHES
+           "httpRequestContentSemantics[(][\"]OPTIONS[\"][)][ \t\r\n]*==")
+        boundary_error("shared request-content semantics ownership is under-tested"
+            "TRACE, OPTIONS, transactional HTTP/2 rejection, and installed value facts must remain explicit")
+    endif()
+endif()
 if(NOT EXISTS "${HTTP_RESPONSE_CONTENT_SEMANTICS_TEST}" OR
    NOT EXISTS "${HTTP_PACKAGE_CONSUMER}")
     boundary_error("shared response-content semantics are untested"
@@ -9177,8 +9235,12 @@ else()
        NOT http1_client_request_writer MATCHES "preparedImmediateContent" OR
        NOT http1_client_request_writer MATCHES
            "preparedContinueGatedContent" OR
-       NOT http1_client_request_writer MATCHES "method == \"TRACE\"" OR
-       NOT http1_client_request_writer MATCHES "method == \"OPTIONS\"" OR
+       NOT http1_client_request_writer MATCHES
+           "detail::httpRequestContentSemantics" OR
+       NOT http1_client_request_writer MATCHES
+           "HttpRequestContentSemantics::kForbidden" OR
+       NOT http1_client_request_writer MATCHES
+           "HttpRequestContentSemantics::kContentTypeRequired" OR
        NOT http1_client_request_writer MATCHES
            "headBuffer[.]size[(][)] < headBytes" OR
        http1_client_request_writer MATCHES "httpHasToken" OR

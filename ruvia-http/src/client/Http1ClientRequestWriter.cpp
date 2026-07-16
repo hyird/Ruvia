@@ -10,6 +10,7 @@
 #include "ruvia/http/HttpLimits.h"
 #include "ruvia/http/detail/HeaderAcceptUtils.h"
 #include "ruvia/http/detail/HeaderTokenUtils.h"
+#include "ruvia/http/detail/HttpRequestContentSemantics.h"
 #include "ruvia/http/detail/client/HttpOrigin.h"
 #include "ruvia/http/detail/parser/HttpRequestTarget.h"
 
@@ -364,14 +365,20 @@ void appendHeaders(
         return detail::Http1ClientRequestPrepareResultAccess::failure(
             Http1ClientRequestPrepareError::kExpectationWithoutContent);
     }
-    if (method == "TRACE" && explicitContent) {
-        return detail::Http1ClientRequestPrepareResultAccess::failure(
-            Http1ClientRequestPrepareError::kContentForbiddenForMethod);
-    }
-    if (method == "OPTIONS" && explicitContent &&
-        !headerFacts.hasContentType) {
-        return detail::Http1ClientRequestPrepareResultAccess::failure(
-            Http1ClientRequestPrepareError::kOptionsContentTypeRequired);
+    if (explicitContent) {
+        const auto contentSemantics =
+            detail::httpRequestContentSemantics(method);
+        if (contentSemantics ==
+            detail::HttpRequestContentSemantics::kForbidden) {
+            return detail::Http1ClientRequestPrepareResultAccess::failure(
+                Http1ClientRequestPrepareError::kContentForbiddenForMethod);
+        }
+        if (contentSemantics ==
+                detail::HttpRequestContentSemantics::kContentTypeRequired &&
+            !headerFacts.hasContentType) {
+            return detail::Http1ClientRequestPrepareResultAccess::failure(
+                Http1ClientRequestPrepareError::kOptionsContentTypeRequired);
+        }
     }
 
     const bool generateConnectionClose =
