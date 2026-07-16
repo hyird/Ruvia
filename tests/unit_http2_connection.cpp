@@ -5196,6 +5196,82 @@ RUVIA_TEST(http2_connection_data_after_peer_reset_is_connection_error) {
     }
 }
 
+RUVIA_TEST(http2_connection_repeated_peer_reset_is_connection_error) {
+    for (const bool pinned : {false, true}) {
+        std::pmr::monotonic_buffer_resource resource;
+        Http2Connection conn(&resource);
+        handshake(conn);
+        openThenPeerReset(conn, &resource, pinned);
+
+        // The second reset is ordered after the reset that this peer already
+        // sent. Unlike a reset racing with one sent by us, it cannot predate
+        // the peer's knowledge that the stream is closed.
+        char rst[9 + 4];
+        ruvia::detail::http2EncodeFrameHeader(
+            rst, 4, Http2FrameType::kRstStream, 0, 1);
+        ruvia::detail::http2Write32(
+            rst + 9, static_cast<std::uint32_t>(Http2ErrorCode::kCancel));
+        RUVIA_CHECK(
+            conn.feed(std::string_view(rst, sizeof(rst))) ==
+            ruvia::detail::Http2FeedResult::kProtocolFailure);
+        RUVIA_CHECK(
+            conn.connectionError() == Http2ErrorCode::kStreamClosed);
+        RUVIA_CHECK_EQ(
+            firstGoawayError(conn.pendingOutput()),
+            static_cast<std::uint32_t>(Http2ErrorCode::kStreamClosed));
+
+        if (pinned) {
+            conn.unpinStream(1);
+        }
+    }
+}
+
+RUVIA_TEST(http2_connection_racing_reset_does_not_spend_rapid_reset_budget) {
+    std::pmr::monotonic_buffer_resource resource;
+    Http2Connection conn(&resource);
+    handshake(conn);
+    openThenLocalReset(conn, &resource);
+
+    // A reset that raced with the reset sent by this endpoint closes no live
+    // stream and spawned no new handler. It is required minimal processing,
+    // not one unit of the rapid-reset lifecycle budget.
+    char rst[9 + 4];
+    ruvia::detail::http2EncodeFrameHeader(
+        rst, 4, Http2FrameType::kRstStream, 0, 1);
+    ruvia::detail::http2Write32(
+        rst + 9, static_cast<std::uint32_t>(Http2ErrorCode::kCancel));
+    RUVIA_CHECK(
+        conn.feed(std::string_view(rst, sizeof(rst))) ==
+        ruvia::detail::Http2FeedResult::kAccepted);
+
+    std::pmr::string block(&resource);
+    encodeGetRequest(block);
+    for (std::uint32_t sid = 3; sid < 3U + 2U * 1000U; sid += 2) {
+        const auto head = headersFrame(
+            &resource,
+            sid,
+            ruvia::detail::kHttp2FlagEndHeaders |
+                ruvia::detail::kHttp2FlagEndStream,
+            std::string_view(block.data(), block.size()));
+        RUVIA_CHECK(
+            conn.feed(std::string_view(head.data(), head.size())) ==
+            ruvia::detail::Http2FeedResult::kAccepted);
+        while (conn.nextEvent().has_value()) {
+        }
+        conn.consumeOutput(conn.pendingOutput().size());
+
+        ruvia::detail::http2EncodeFrameHeader(
+            rst, 4, Http2FrameType::kRstStream, 0, sid);
+        RUVIA_CHECK(
+            conn.feed(std::string_view(rst, sizeof(rst))) ==
+            ruvia::detail::Http2FeedResult::kAccepted);
+        while (conn.nextEvent().has_value()) {
+        }
+        conn.consumeOutput(conn.pendingOutput().size());
+    }
+    RUVIA_CHECK(!conn.connectionError().has_value());
+}
+
 RUVIA_TEST(http2_connection_window_update_after_peer_reset_never_reopens_stream) {
     for (const bool pinned : {false, true}) {
         std::pmr::monotonic_buffer_resource resource;

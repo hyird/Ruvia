@@ -379,6 +379,14 @@ def data_after_peer_reset(host: str, port: int) -> None:
         connection.expect_goaway(STREAM_CLOSED)
 
 
+@case("5.1/6.4", "repeated peer RST_STREAM closes the connection")
+def repeated_peer_reset(host: str, port: int) -> None:
+    with H2Connection(host, port) as connection:
+        reset = frame(RST_STREAM, 0, 1, PROTOCOL_ERROR.to_bytes(4, "big"))
+        connection.send(request_headers(1, end_stream=False) + reset + reset)
+        connection.expect_goaway(STREAM_CLOSED)
+
+
 @case("6.4/6.9", "zero WINDOW_UPDATE after peer RST_STREAM is connection-fatal")
 def zero_window_update_after_peer_reset(host: str, port: int) -> None:
     with H2Connection(host, port) as connection:

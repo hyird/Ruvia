@@ -521,9 +521,20 @@ bool Http2Connection::processRstStream(const Http2FrameHeader& header, std::stri
         appendGoaway(Http2ErrorCode::kProtocolError, "RST_STREAM stream id must be nonzero");
         return false;
     }
-    if (streams_.find(header.streamId) == nullptr &&
+    auto* const stream = streams_.find(header.streamId);
+    if (stream == nullptr &&
         isIdleStreamId(header.streamId)) {
         appendGoaway(Http2ErrorCode::kProtocolError, "RST_STREAM on idle stream");
+        return false;
+    }
+    if (wasClosedByPeerReset(header.streamId, stream)) {
+        // This peer's two resets are ordered on the same connection, so the
+        // second cannot have been sent before it knew that it had terminated
+        // the stream. Enforce the same peer-reset finality as DATA/HEADERS and
+        // avoid counting a duplicate as another rapid-reset lifecycle.
+        appendGoaway(
+            Http2ErrorCode::kStreamClosed,
+            "RST_STREAM after peer RST_STREAM");
         return false;
     }
     if (closedStreams_.source(header.streamId) ==
@@ -534,7 +545,13 @@ bool Http2Connection::processRstStream(const Http2FrameHeader& header, std::stri
     }
     const auto error = static_cast<Http2ErrorCode>(http2Read32(
         reinterpret_cast<const unsigned char*>(payload.data())));
-    closeStream(header.streamId, Http2StreamCloseSource::kPeer, error);
+    if (!closeStream(header.streamId, Http2StreamCloseSource::kPeer, error)) {
+        // A reset can race with one sent by this endpoint. RFC 9113 requires
+        // minimal processing in that state, but the no-op neither opened a
+        // handler slot nor freed one and therefore must not spend the
+        // rapid-reset lifecycle budget.
+        return true;
+    }
     // Rapid-reset budget (CVE-2023-44487): count peer resets and trip if they run too far
     // ahead of the responses this connection has actually let complete.
     ++peerResetStreams_;

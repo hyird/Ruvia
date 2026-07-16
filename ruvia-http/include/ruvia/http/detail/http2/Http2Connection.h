@@ -832,7 +832,7 @@ private:
 
     // Defense-in-depth flood budgets (see Http2Connection.cpp). No clock in the core, so
     // these are per-connection counters that trip GOAWAY(ENHANCE_YOUR_CALM).
-    std::uint32_t peerResetStreams_{0};    // inbound RST_STREAM count (rapid-reset budget)
+    std::uint32_t peerResetStreams_{0};    // new stream aborts from peer RST_STREAM
     std::uint32_t completedResponses_{0};  // streams finished without reset (refills budget)
     std::uint32_t consecutivePings_{0};    // inbound PINGs since output was last drained
     std::uint32_t consecutiveSettings_{0}; // inbound non-ACK SETTINGS since output drained
