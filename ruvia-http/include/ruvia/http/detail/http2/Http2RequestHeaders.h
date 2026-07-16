@@ -30,6 +30,16 @@ struct Http2HeaderDecodeContext final {
          httpAsciiEqualsIgnoreCase(scheme, "https"));
 }
 
+[[nodiscard]] inline bool http2IsValidRequestAuthority(
+    std::string_view scheme,
+    std::string_view authority) noexcept {
+    if (httpAsciiEqualsIgnoreCase(scheme, "http") ||
+        httpAsciiEqualsIgnoreCase(scheme, "https")) {
+        return isValidHostHeader(authority);
+    }
+    return isValidUriAuthority(authority);
+}
+
 [[nodiscard]] inline bool http2AccumulateHeaderListBytes(
     Http2HeaderDecodeContext& context,
     std::string_view name,
@@ -107,7 +117,7 @@ struct Http2HeaderDecodeContext final {
             return true;
         }
         if (name == ":authority") {
-            if (stream.hasAuthority() || !isValidHostHeader(value)) {
+            if (stream.hasAuthority() || !isValidUriAuthority(value)) {
                 return false;
             }
             stream.assignRequestAuthority(value);

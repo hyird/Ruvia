@@ -3946,6 +3946,12 @@ int main() {
             ruvia::HttpKnownMethod::kGet, "*")) {
         return 36;
     }
+    if (!ruvia::detail::isValidUriAuthority(
+            "deploy:secret@example.test:9418") ||
+        ruvia::detail::isValidHostHeader(
+            "deploy:secret@example.test:9418")) {
+        return 52;
+    }
     const auto missingHttpAuthority = h2.submitRegularRequestHead(
         "GET",
         "https",
@@ -3962,7 +3968,7 @@ int main() {
     const auto request = h2.submitRegularRequestHead(
         "PROPFIND",
         "git+ssh",
-        std::nullopt,
+        "deploy:secret@example.test:9418",
         "/",
         {},
         h2WithoutContent);

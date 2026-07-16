@@ -72,7 +72,8 @@ namespace {
     std::span<const HttpHeaderView> headers) noexcept {
     if (!http2IsValidOutboundMethod(method) ||
         !isValidUriScheme(scheme) ||
-        (authority.has_value() && !isValidHostHeader(*authority)) ||
+        (authority.has_value() &&
+         !http2IsValidRequestAuthority(scheme, *authority)) ||
         !isValidOriginOrAsteriskFormTarget(
             classifyHttpMethod(method), path) ||
         (path == "*" && authority.has_value()) ||
@@ -286,7 +287,7 @@ Http2RequestHeadSubmitResult Http2Connection::submitExtendedConnectRequestHead(
     if (!isValidHttpHeaderName(protocol) ||
         !isValidUriScheme(scheme) ||
         (websocket && !websocketScheme) ||
-        !isValidHostHeader(authority) ||
+        !http2IsValidRequestAuthority(scheme, authority) ||
         !isValidOriginFormTarget(path) ||
         !http2AreValidOutboundRequestHeaders(
             authority,

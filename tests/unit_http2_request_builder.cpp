@@ -215,6 +215,18 @@ RUVIA_TEST(h2_request_builder_standard_connect_keeps_authority_form_target) {
     RUVIA_CHECK_EQ(request.header("host"), std::string_view("proxy.example:443"));
 }
 
+RUVIA_TEST(h2_request_builder_does_not_forge_host_from_generic_authority) {
+    auto request = HttpRequestAccess::make();
+    auto stream = makeStream();
+    stream.assignRequestMethod("GET");
+    stream.assignRequestScheme("git+ssh");
+    stream.assignRequestAuthority("deploy:secret@example.test:9418");
+    stream.assignRequestPath("/repository");
+
+    RUVIA_CHECK(buildRequest(stream, request));
+    RUVIA_CHECK(!request.header("host").has_value());
+}
+
 RUVIA_TEST(h2_request_builder_generic_extended_connect_retains_connect_method) {
     auto request = HttpRequestAccess::make();
     auto stream = makeStream();

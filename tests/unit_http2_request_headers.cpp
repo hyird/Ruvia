@@ -96,10 +96,17 @@ RUVIA_TEST(h2_headers_empty_and_unknown_pseudo_rejected) {
     Http2StreamState stream(1, res());
     Http2HeaderDecodeContext ctx{stream};
     RUVIA_CHECK(!http2OnDecodedInitialHeader(ctx, ":path", ""));      // empty path
-    RUVIA_CHECK(!http2OnDecodedInitialHeader(ctx, ":authority", "")); // empty authority
     RUVIA_CHECK(!http2OnDecodedInitialHeader(ctx, ":protocol", ""));  // empty protocol
     RUVIA_CHECK(!http2OnDecodedInitialHeader(ctx, ":unknown", "x"));  // unknown pseudo-header
     RUVIA_CHECK(!http2OnDecodedInitialHeader(ctx, "", "x"));          // empty name
+}
+
+RUVIA_TEST(h2_headers_empty_generic_authority_is_deferred_to_scheme) {
+    Http2StreamState stream(1, res());
+    Http2HeaderDecodeContext ctx{stream};
+    RUVIA_CHECK(http2OnDecodedInitialHeader(ctx, ":authority", ""));
+    RUVIA_CHECK(stream.hasAuthority());
+    RUVIA_CHECK(stream.requestAuthority().empty());
 }
 
 RUVIA_TEST(h2_headers_extension_method_is_valid_and_preserved) {

@@ -87,6 +87,10 @@ private:
     std::string_view target) noexcept;
 
 [[nodiscard]] bool isValidHostHeader(std::string_view value) noexcept;
+// RFC 3986 authority = [ userinfo "@" ] host [ ":" port ]. Unlike an HTTP
+// Host field, the generic grammar permits userinfo, an empty reg-name, and a
+// syntactically unbounded decimal port. Scheme-specific rules remain separate.
+[[nodiscard]] bool isValidUriAuthority(std::string_view value) noexcept;
 // RFC 3986 `host` / HTTP `uri-host`, without a port. IP literals use their
 // standard bracketed form; IPv6 zone identifiers are not URI syntax (RFC 9844
 // reverted RFC 6874), while IPvFuture remains valid.

@@ -17,6 +17,7 @@ using ruvia::detail::isValidHttpHost;
 using ruvia::detail::isValidOriginFormTarget;
 using ruvia::detail::isValidOriginOrAsteriskFormTarget;
 using ruvia::detail::isValidRequestTargetBytes;
+using ruvia::detail::isValidUriAuthority;
 using ruvia::detail::isValidUriScheme;
 using ruvia::detail::parseHttpAuthority;
 using ruvia::detail::parseRequestTarget;
@@ -38,6 +39,24 @@ RUVIA_TEST(uri_scheme_uses_complete_rfc3986_grammar) {
     RUVIA_CHECK_EQ(httpUriSchemeDefaultPort("HTTP"), std::uint16_t{80});
     RUVIA_CHECK_EQ(httpUriSchemeDefaultPort("hTtPs"), std::uint16_t{443});
     RUVIA_CHECK_EQ(httpUriSchemeDefaultPort("ftp"), std::uint16_t{0});
+}
+
+RUVIA_TEST(uri_authority_uses_complete_rfc3986_generic_grammar) {
+    RUVIA_CHECK(isValidUriAuthority(""));
+    RUVIA_CHECK(isValidUriAuthority("example.com"));
+    RUVIA_CHECK(isValidUriAuthority("user@example.com"));
+    RUVIA_CHECK(isValidUriAuthority("user:secret@example.com:9418"));
+    RUVIA_CHECK(isValidUriAuthority("name%3Avalue@example.com"));
+    RUVIA_CHECK(isValidUriAuthority("@"));
+    RUVIA_CHECK(isValidUriAuthority(":70000"));
+    RUVIA_CHECK(isValidUriAuthority("[v1.future]:99999999999999999999"));
+
+    RUVIA_CHECK(!isValidUriAuthority("user@@example.com"));
+    RUVIA_CHECK(!isValidUriAuthority("bad%2@example.com"));
+    RUVIA_CHECK(!isValidUriAuthority("bad user@example.com"));
+    RUVIA_CHECK(!isValidUriAuthority("user@example.com:port"));
+    RUVIA_CHECK(!isValidUriAuthority("user@[::1"));
+    RUVIA_CHECK(!isValidUriAuthority("user@example.com/path"));
 }
 
 RUVIA_TEST(host_header_accepts_valid) {

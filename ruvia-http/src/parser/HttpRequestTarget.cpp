@@ -110,6 +110,35 @@ inline constexpr std::array<bool, 256> kRegNameCharTable = [] {
     return true;
 }
 
+[[nodiscard]] bool isValidUriUserinfo(std::string_view value) noexcept {
+    for (std::size_t i = 0; i < value.size(); ++i) {
+        const auto byte = static_cast<unsigned char>(value[i]);
+        if (byte == '%') {
+            if (i + 2 >= value.size() ||
+                decodeHexNibble(value[i + 1]) < 0 ||
+                decodeHexNibble(value[i + 2]) < 0) {
+                return false;
+            }
+            i += 2;
+            continue;
+        }
+        if (!isUriUnreserved(byte) && !isUriSubDelimiter(byte) &&
+            byte != ':') {
+            return false;
+        }
+    }
+    return true;
+}
+
+[[nodiscard]] bool isValidUriPort(std::string_view value) noexcept {
+    for (const auto byte : value) {
+        if (!isDecimalDigit(byte)) {
+            return false;
+        }
+    }
+    return true;
+}
+
 [[nodiscard]] bool parseIpv6HexGroup(std::string_view literal, std::size_t& offset) noexcept {
     std::size_t digits = 0;
     while (offset < literal.size() && digits < 4 && isHexDigit(literal[offset])) {
@@ -660,6 +689,52 @@ bool httpUriHostEquals(std::string_view left, std::string_view right) noexcept {
 
 bool isValidHostHeader(std::string_view value) noexcept {
     return parseHttpAuthority(value).has_value();
+}
+
+bool isValidUriAuthority(std::string_view value) noexcept {
+    auto hostAndPort = value;
+    if (const auto delimiter = value.find('@');
+        delimiter != std::string_view::npos) {
+        if (!isValidUriUserinfo(value.substr(0, delimiter)) ||
+            value.find('@', delimiter + 1) != std::string_view::npos) {
+            return false;
+        }
+        hostAndPort = value.substr(delimiter + 1);
+    }
+
+    std::string_view host;
+    std::string_view port;
+    bool hasPort = false;
+    if (!hostAndPort.empty() && hostAndPort.front() == '[') {
+        const auto close = hostAndPort.find(']');
+        if (close == std::string_view::npos) {
+            return false;
+        }
+        host = hostAndPort.substr(0, close + 1);
+        const auto remainder = hostAndPort.substr(close + 1);
+        if (!remainder.empty()) {
+            if (remainder.front() != ':') {
+                return false;
+            }
+            hasPort = true;
+            port = remainder.substr(1);
+        }
+    } else {
+        const auto delimiter = hostAndPort.find(':');
+        host = delimiter == std::string_view::npos
+            ? hostAndPort
+            : hostAndPort.substr(0, delimiter);
+        if (delimiter != std::string_view::npos) {
+            hasPort = true;
+            port = hostAndPort.substr(delimiter + 1);
+            if (port.find(':') != std::string_view::npos) {
+                return false;
+            }
+        }
+    }
+
+    return (host.empty() || isValidHttpHost(host)) &&
+        (!hasPort || isValidUriPort(port));
 }
 
 bool isValidUriScheme(std::string_view value) noexcept {
