@@ -499,13 +499,23 @@ bool Http2Connection::processRstStream(const Http2FrameHeader& header, std::stri
 }
 
 bool Http2Connection::processPriority(const Http2FrameHeader& header, std::string_view payload) {
-    if (payload.size() != 5) {
-        appendGoaway(Http2ErrorCode::kFrameSizeError, "invalid PRIORITY");
-        return false;
-    }
     if (header.streamId == 0) {
         appendGoaway(Http2ErrorCode::kProtocolError, "PRIORITY stream id must be nonzero");
         return false;
+    }
+    if (payload.size() != 5) {
+        // RFC 9113 section 6.3 makes malformed PRIORITY length a stream error,
+        // unlike most fixed-size connection-control frames. Do not terminate
+        // unrelated multiplexed streams for one bad advisory frame.
+        output_.appendRstStream(
+            header.streamId, Http2ErrorCode::kFrameSizeError);
+        if (findStream(header.streamId) != nullptr) {
+            closeStream(
+                header.streamId,
+                Http2StreamCloseSource::kLocal,
+                Http2ErrorCode::kFrameSizeError);
+        }
+        return true;
     }
     // RFC 9113 deprecates the RFC 7540 priority tree. Retain frame-shape validation,
     // then ignore the advisory dependency and weight on streams in every state.

@@ -305,6 +305,15 @@ def priority_self_dependency(host: str, port: int) -> None:
         connection.expect_alive()
 
 
+@case("6.3", "malformed PRIORITY length is a stream FRAME_SIZE_ERROR")
+def priority_invalid_length(host: str, port: int) -> None:
+    with H2Connection(host, port) as connection:
+        connection.send(request_headers(1, end_stream=False))
+        connection.send(frame(PRIORITY, 0, 1, b"\x00\x00\x00\x00"))
+        connection.expect_rst(1, FRAME_SIZE_ERROR)
+        connection.expect_alive()
+
+
 @case("6.1", "DATA stream identifier must be nonzero")
 def data_stream_zero(host: str, port: int) -> None:
     with H2Connection(host, port) as connection:
