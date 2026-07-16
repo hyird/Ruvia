@@ -53,6 +53,9 @@ public:
     ResponseStreamWriter(const ResponseStreamWriter&) = delete;
     ResponseStreamWriter& operator=(const ResponseStreamWriter&) = delete;
 
+    /// Writes one body chunk. write(), writeln(), and end() share one linear
+    /// output lane; starting another output operation before the current one
+    /// completes throws std::logic_error.
     ScopedOperation<void> write(std::string_view chunk);
 
     ScopedOperation<void> writeln(std::string_view chunk);
@@ -121,6 +124,7 @@ private:
     ReleaseContext releaseContext_;
     Committed committed_;
     Aborted aborted_;
+    bool outputActive_{false};
     detail::ScopedOperationScope operationScope_;
 
     friend class SseWriter;

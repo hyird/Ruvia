@@ -11,10 +11,32 @@
 
 namespace {
 
+class ResponseStreamOutputGuard final {
+public:
+    explicit ResponseStreamOutputGuard(bool& active) : active_(active) {
+        if (active_) {
+            throw std::logic_error(
+                "response stream output operation is already in progress");
+        }
+        active_ = true;
+    }
+
+    ~ResponseStreamOutputGuard() { active_ = false; }
+
+    ResponseStreamOutputGuard(const ResponseStreamOutputGuard&) = delete;
+    ResponseStreamOutputGuard& operator=(
+        const ResponseStreamOutputGuard&) = delete;
+
+private:
+    bool& active_;
+};
+
 ruvia::Task<void> writeOwned(
     void* target,
     ruvia::Task<void> (*write)(void*, std::string_view),
-    std::pmr::string chunk) {
+    std::pmr::string chunk,
+    bool& outputActive) {
+    ResponseStreamOutputGuard guard(outputActive);
     co_await write(target, chunk);
 }
 
@@ -41,7 +63,9 @@ struct OwnedTrailers final {
 ruvia::Task<void> endOwned(
     void* target,
     ruvia::Task<void> (*end)(void*, std::span<const ruvia::HttpHeaderView>),
-    OwnedTrailers trailers) {
+    OwnedTrailers trailers,
+    bool& outputActive) {
+    ResponseStreamOutputGuard guard(outputActive);
     co_await end(target, trailers.views);
 }
 
@@ -122,7 +146,8 @@ ScopedOperation<void> ResponseStreamWriter::write(std::string_view chunk) {
 
 ScopedOperation<void> ResponseStreamWriter::writeOwned(std::pmr::string chunk) {
     return detail::makeScopedOperation(
-        operationScope_, ::writeOwned(target_, write_, std::move(chunk)));
+        operationScope_,
+        ::writeOwned(target_, write_, std::move(chunk), outputActive_));
 }
 
 ScopedOperation<void> ResponseStreamWriter::writeln(std::string_view chunk) {
@@ -141,7 +166,8 @@ ScopedOperation<void> ResponseStreamWriter::end(std::span<const HttpHeaderView> 
         endOwned(
             target_,
             end_,
-            OwnedTrailers(trailers, detail::processResource())));
+            OwnedTrailers(trailers, detail::processResource()),
+            outputActive_));
 }
 
 ScopedOperation<void> SseWriter::sleep(std::chrono::milliseconds duration) {

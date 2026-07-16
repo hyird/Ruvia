@@ -239,6 +239,54 @@ struct SuspendedBodySource final {
     ruvia::detail::WorkerSignal signal;
 };
 
+struct SuspendedStreamSink final {
+    explicit SuspendedStreamSink(asio::io_context& io)
+        : dispatcher(std::make_shared<ruvia::detail::WorkerDispatcher>(io, 8)),
+          worker(ruvia::detail::WorkerHandleAccess::make(dispatcher)),
+          signal(worker) {}
+
+    std::shared_ptr<ruvia::detail::WorkerDispatcher> dispatcher;
+    ruvia::WorkerHandle worker;
+    ruvia::detail::WorkerSignal signal;
+    std::vector<std::string> writes;
+    std::size_t ends{0};
+    bool suspendNextWrite{true};
+    bool failNextWrite{false};
+};
+
+ruvia::Task<void> writeSuspendedStream(
+    void* target,
+    std::string_view chunk) {
+    auto& sink = *static_cast<SuspendedStreamSink*>(target);
+    sink.writes.emplace_back(chunk);
+    if (std::exchange(sink.failNextWrite, false)) {
+        throw std::runtime_error("stream write failed");
+    }
+    if (std::exchange(sink.suspendNextWrite, false)) {
+        co_await sink.signal.wait();
+    }
+}
+
+ruvia::Task<void> endSuspendedStream(
+    void* target,
+    std::span<const ruvia::HttpHeaderView>) {
+    ++static_cast<SuspendedStreamSink*>(target)->ends;
+    co_return;
+}
+
+ruvia::ResponseStreamWriter makeSuspendedWriter(
+    SuspendedStreamSink& sink) noexcept {
+    return ruvia::detail::StreamingAccess::makeResponseStreamWriter(
+        &sink,
+        &writeSuspendedStream,
+        &endSuspendedStream,
+        &sleepStream,
+        &bindContext,
+        &releaseContext,
+        &committed,
+        &aborted);
+}
+
 ruvia::Task<void> completeBodyRead(
     ruvia::BodyReader& reader,
     bool& completed) {
@@ -253,6 +301,44 @@ ruvia::Task<void> rejectConcurrentBodyRead(
         (void)co_await reader.read();
     } catch (const std::logic_error&) {
         rejected = true;
+    }
+}
+
+ruvia::Task<void> completeStreamWrite(
+    ruvia::ResponseStreamWriter& writer,
+    std::string_view chunk,
+    bool& completed) {
+    co_await writer.write(chunk);
+    completed = true;
+}
+
+ruvia::Task<void> rejectConcurrentStreamWrite(
+    ruvia::ResponseStreamWriter& writer,
+    bool& rejected) {
+    try {
+        co_await writer.write("overlap");
+    } catch (const std::logic_error&) {
+        rejected = true;
+    }
+}
+
+ruvia::Task<void> rejectConcurrentStreamEnd(
+    ruvia::ResponseStreamWriter& writer,
+    bool& rejected) {
+    try {
+        co_await writer.end();
+    } catch (const std::logic_error&) {
+        rejected = true;
+    }
+}
+
+ruvia::Task<void> observeStreamWriteFailure(
+    ruvia::ResponseStreamWriter& writer,
+    bool& failed) {
+    try {
+        co_await writer.write("failed");
+    } catch (const std::runtime_error&) {
+        failed = true;
     }
 }
 
@@ -282,6 +368,75 @@ RUVIA_TEST(body_reader_rejects_concurrent_consumers_of_one_borrowed_buffer) {
 
     RUVIA_CHECK(firstCompleted);
     RUVIA_CHECK(secondRejected);
+}
+
+RUVIA_TEST(response_stream_rejects_overlapping_output_operations) {
+    asio::io_context io(1);
+    SuspendedStreamSink sink(io);
+    auto writer = makeSuspendedWriter(sink);
+    bool firstCompleted = false;
+    bool writeRejected = false;
+    bool endRejected = false;
+    bool failureObserved = false;
+
+    auto first = asio::co_spawn(
+        io,
+        ruvia::detail::taskAsAwaitable(
+            completeStreamWrite(writer, "first", firstCompleted)),
+        asio::use_future);
+    io.poll();
+    RUVIA_CHECK_EQ(sink.writes.size(), std::size_t{1});
+    RUVIA_CHECK(!firstCompleted);
+
+    io.restart();
+    auto overlappingWrite = asio::co_spawn(
+        io,
+        ruvia::detail::taskAsAwaitable(
+            rejectConcurrentStreamWrite(writer, writeRejected)),
+        asio::use_future);
+    auto overlappingEnd = asio::co_spawn(
+        io,
+        ruvia::detail::taskAsAwaitable(
+            rejectConcurrentStreamEnd(writer, endRejected)),
+        asio::use_future);
+    io.poll();
+    overlappingWrite.get();
+    overlappingEnd.get();
+
+    asio::post(io, [&sink] { sink.signal.notify(); });
+    io.restart();
+    io.run();
+    first.get();
+
+    RUVIA_CHECK(firstCompleted);
+    RUVIA_CHECK(writeRejected);
+    RUVIA_CHECK(endRejected);
+    RUVIA_CHECK_EQ(sink.writes.size(), std::size_t{1});
+    RUVIA_CHECK_EQ(sink.ends, std::size_t{0});
+
+    sink.failNextWrite = true;
+    io.restart();
+    auto failing = asio::co_spawn(
+        io,
+        ruvia::detail::taskAsAwaitable(
+            observeStreamWriteFailure(writer, failureObserved)),
+        asio::use_future);
+    io.run();
+    failing.get();
+    RUVIA_CHECK(failureObserved);
+
+    io.restart();
+    auto following = asio::co_spawn(
+        io,
+        ruvia::detail::taskAsAwaitable(
+            completeStreamWrite(writer, "following", firstCompleted)),
+        asio::use_future);
+    io.run();
+    following.get();
+    RUVIA_CHECK_EQ(sink.writes.size(), std::size_t{3});
+    if (sink.writes.size() >= 3) {
+        RUVIA_CHECK_EQ(sink.writes[2], std::string("following"));
+    }
 }
 
 RUVIA_TEST(response_stream_writeln_emits_independent_lines) {
