@@ -2,12 +2,16 @@
 
 #include <chrono>
 #include <concepts>
+#include <memory_resource>
 #include <optional>
 #include <stdexcept>
+#include <string>
 #include <string_view>
+#include <utility>
 
 #include "ruvia/http/Cookies.h"
 #include "ruvia/http/detail/CookieValidation.h"
+#include "ruvia/http/detail/SetCookiePlan.h"
 
 namespace {
 
@@ -21,7 +25,67 @@ bool rejects(const ruvia::CookieOptions& options) {
     }
 }
 
+template <typename Text>
+concept CookiePathAccepts = requires(
+    ruvia::CookieOptions& options,
+    Text&& text) {
+    options.path = std::forward<Text>(text);
+};
+
+template <typename Text>
+concept CookieDomainAccepts = requires(
+    ruvia::CookieOptions& options,
+    Text&& text) {
+    options.domain = std::forward<Text>(text);
+};
+
+template <typename Name, typename Value, typename Options>
+concept CanConstructSetCookiePlan = requires(
+    Name&& name,
+    Value&& value,
+    Options&& options) {
+    ruvia::detail::SetCookiePlan(
+        std::forward<Name>(name),
+        std::forward<Value>(value),
+        std::forward<Options>(options));
+};
+
 }  // namespace
+
+static_assert(CookiePathAccepts<std::string&>);
+static_assert(CookieDomainAccepts<const std::string&>);
+static_assert(CookiePathAccepts<std::pmr::string&>);
+static_assert(CookieDomainAccepts<const std::pmr::string&>);
+static_assert(!CookiePathAccepts<std::string>);
+static_assert(!CookiePathAccepts<const std::string>);
+static_assert(!CookieDomainAccepts<std::string>);
+static_assert(!CookieDomainAccepts<const std::string>);
+static_assert(!CookiePathAccepts<std::pmr::string>);
+static_assert(!CookieDomainAccepts<std::pmr::string>);
+static_assert(CanConstructSetCookiePlan<
+    std::string&,
+    const std::string&,
+    ruvia::CookieOptions&>);
+static_assert(!CanConstructSetCookiePlan<
+    std::string,
+    std::string_view,
+    ruvia::CookieOptions&>);
+static_assert(!CanConstructSetCookiePlan<
+    std::string_view,
+    const std::string,
+    ruvia::CookieOptions&>);
+static_assert(!CanConstructSetCookiePlan<
+    std::pmr::string,
+    std::string_view,
+    ruvia::CookieOptions&>);
+static_assert(!CanConstructSetCookiePlan<
+    std::string_view,
+    std::string_view,
+    ruvia::CookieOptions>);
+static_assert(!CanConstructSetCookiePlan<
+    std::string_view,
+    std::string_view,
+    const ruvia::CookieOptions>);
 
 static_assert(std::same_as<
     decltype(ruvia::CookieOptions{}.sameSite),
@@ -35,6 +99,25 @@ static_assert(std::same_as<
 static_assert(std::same_as<
     decltype(ruvia::CookieOptions{}.maxAge),
     std::optional<std::chrono::seconds>>);
+
+RUVIA_TEST(cookie_borrowed_text_accepts_stable_string_owners) {
+    const std::string path = "/account";
+    const std::string domain = "example.com";
+    std::string name = "sid";
+    const std::string value = "value";
+
+    ruvia::CookieOptions options;
+    options.path = path;
+    options.domain = domain;
+    RUVIA_CHECK(!rejects(options));
+
+    const ruvia::detail::SetCookiePlan plan(name, value, options);
+    std::string wire(plan.size(), '\0');
+    plan.write(wire.data());
+    RUVIA_CHECK_EQ(
+        wire,
+        std::string("sid=value; Path=/account; Domain=example.com"));
+}
 
 RUVIA_TEST(cookie_samesite_enum_maps_to_wire_tokens) {
     ruvia::CookieOptions strict;

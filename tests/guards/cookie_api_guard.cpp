@@ -1,6 +1,7 @@
 #include "ruvia/web/detail/http/ContextInternal.h"
 #include "ruvia/http/detail/http1/Http1ServerRequestParser.h"
 #include "ruvia/http/detail/HttpResponseBodyAccess.h"
+#include "ruvia/http/detail/SetCookiePlan.h"
 
 #include "ruvia/http/Http1RequestParser.h"
 #include "ruvia/core/memory/MemoryPool.h"
@@ -8,14 +9,76 @@
 #include <array>
 #include <chrono>
 #include <cstddef>
+#include <memory_resource>
 #include <span>
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <utility>
 
 namespace {
 
 int failures = 0;
+
+template <typename Text>
+concept CookiePathAccepts = requires(
+    ruvia::CookieOptions& options,
+    Text&& text) {
+    options.path = std::forward<Text>(text);
+};
+
+template <typename Text>
+concept CookieDomainAccepts = requires(
+    ruvia::CookieOptions& options,
+    Text&& text) {
+    options.domain = std::forward<Text>(text);
+};
+
+template <typename Name, typename Value, typename Options>
+concept CanConstructSetCookiePlan = requires(
+    Name&& name,
+    Value&& value,
+    Options&& options) {
+    ruvia::detail::SetCookiePlan(
+        std::forward<Name>(name),
+        std::forward<Value>(value),
+        std::forward<Options>(options));
+};
+
+static_assert(CookiePathAccepts<std::string&>);
+static_assert(CookieDomainAccepts<const std::string&>);
+static_assert(CookiePathAccepts<std::pmr::string&>);
+static_assert(CookieDomainAccepts<const std::pmr::string&>);
+static_assert(!CookiePathAccepts<std::string>);
+static_assert(!CookiePathAccepts<const std::string>);
+static_assert(!CookieDomainAccepts<std::string>);
+static_assert(!CookieDomainAccepts<const std::string>);
+static_assert(!CookiePathAccepts<std::pmr::string>);
+static_assert(!CookieDomainAccepts<std::pmr::string>);
+static_assert(CanConstructSetCookiePlan<
+    std::string&,
+    const std::string&,
+    ruvia::CookieOptions&>);
+static_assert(!CanConstructSetCookiePlan<
+    std::string,
+    std::string_view,
+    ruvia::CookieOptions&>);
+static_assert(!CanConstructSetCookiePlan<
+    std::string_view,
+    const std::string,
+    ruvia::CookieOptions&>);
+static_assert(!CanConstructSetCookiePlan<
+    std::pmr::string,
+    std::string_view,
+    ruvia::CookieOptions&>);
+static_assert(!CanConstructSetCookiePlan<
+    std::string_view,
+    std::string_view,
+    ruvia::CookieOptions>);
+static_assert(!CanConstructSetCookiePlan<
+    std::string_view,
+    std::string_view,
+    const ruvia::CookieOptions>);
 
 void check(bool condition) {
     if (!condition) {

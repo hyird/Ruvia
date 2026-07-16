@@ -1304,6 +1304,9 @@ file(READ "${_install_prefix}/include/ruvia/http/Cookies.h"
 file(READ
     "${_install_prefix}/include/ruvia/http/detail/CookieValidation.h"
     _installed_cookie_validation)
+file(READ
+    "${_install_prefix}/include/ruvia/http/detail/SetCookiePlan.h"
+    _installed_set_cookie_plan)
 if(NOT _installed_cookie_options MATCHES
        "std::optional<CookiePrefix>[ \t]+prefix" OR
    NOT _installed_cookie_options MATCHES
@@ -1317,6 +1320,27 @@ if(NOT _installed_cookie_options MATCHES
    _installed_cookie_options MATCHES
        "enum class CookiePriority[^{]*[{][^}]*kUnspecified")
     message(FATAL_ERROR "installed Cookie options lost explicit optional attributes")
+endif()
+if(NOT _installed_cookie_options MATCHES
+       "class BorrowedText final" OR
+   NOT _installed_cookie_options MATCHES
+       "HttpTemporaryOwningCharString String" OR
+   NOT _installed_cookie_options MATCHES
+       "BorrowedText& operator=[(]String&&[)] = delete" OR
+   NOT _installed_cookie_options MATCHES
+       "BorrowedText[ \t]+path[{][\"]/[\"][}]" OR
+   NOT _installed_cookie_options MATCHES
+       "BorrowedText[ \t]+domain" OR
+   NOT _installed_set_cookie_plan MATCHES
+       "HttpTemporaryOwningCharString<Name>" OR
+   NOT _installed_set_cookie_plan MATCHES
+       "HttpTemporaryOwningCharString<Value>" OR
+   NOT _installed_set_cookie_plan MATCHES
+       "CookieOptions&&[)][ \t]*=[ \t]*delete" OR
+   NOT _installed_set_cookie_plan MATCHES
+       "const CookieOptions&&[)][ \t]*=[ \t]*delete")
+    message(FATAL_ERROR
+        "installed Set-Cookie plan restored temporary owning-string borrows")
 endif()
 if(NOT _installed_cookie_validation MATCHES
        "byte < 0x20 [|][|] byte > 0x7e [|][|] c == ';'" OR

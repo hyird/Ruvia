@@ -3,7 +3,10 @@
 #include <chrono>
 #include <cstdint>
 #include <optional>
+#include <string>
 #include <string_view>
+
+#include "ruvia/http/detail/BorrowedView.h"
 
 namespace ruvia {
 
@@ -25,8 +28,75 @@ enum class CookiePriority : std::uint8_t {
 };
 
 struct CookieOptions final {
-    std::string_view path{"/"};
-    std::string_view domain;
+    // Cookie attributes are retained by SetCookiePlan until serialization.
+    // Keep their zero-copy representation, but reject owning-string rvalues so
+    // a stored options value cannot silently contain an already-dangling view.
+    class BorrowedText final {
+    public:
+        constexpr BorrowedText() noexcept = default;
+
+        constexpr BorrowedText(std::string_view value) noexcept
+            : value_(value) {}
+
+        template <typename Traits, typename Allocator>
+        constexpr BorrowedText(
+            const std::basic_string<char, Traits, Allocator>& value) noexcept
+            : value_(value.data(), value.size()) {}
+
+        template <detail::HttpTemporaryOwningCharString String>
+        BorrowedText(String&&) = delete;
+
+        constexpr BorrowedText& operator=(std::string_view value) noexcept {
+            value_ = value;
+            return *this;
+        }
+
+        template <typename Traits, typename Allocator>
+        constexpr BorrowedText& operator=(
+            const std::basic_string<char, Traits, Allocator>& value) noexcept {
+            value_ = std::string_view(value.data(), value.size());
+            return *this;
+        }
+
+        template <detail::HttpTemporaryOwningCharString String>
+        BorrowedText& operator=(String&&) = delete;
+
+        [[nodiscard]] constexpr std::string_view view() const noexcept {
+            return value_;
+        }
+
+        [[nodiscard]] constexpr operator std::string_view() const noexcept {
+            return value_;
+        }
+
+        [[nodiscard]] constexpr bool empty() const noexcept {
+            return value_.empty();
+        }
+
+        friend constexpr bool operator==(
+            BorrowedText left,
+            BorrowedText right) noexcept {
+            return left.value_ == right.value_;
+        }
+
+        friend constexpr bool operator==(
+            BorrowedText left,
+            std::string_view right) noexcept {
+            return left.value_ == right;
+        }
+
+        friend constexpr bool operator==(
+            std::string_view left,
+            BorrowedText right) noexcept {
+            return left == right.value_;
+        }
+
+    private:
+        std::string_view value_;
+    };
+
+    BorrowedText path{"/"};
+    BorrowedText domain;
     std::optional<CookieSameSite> sameSite;
     std::optional<CookiePriority> priority;
     std::optional<std::chrono::system_clock::time_point> expires;
@@ -36,5 +106,7 @@ struct CookieOptions final {
     bool secure{false};
     bool partitioned{false};
 };
+
+static_assert(sizeof(CookieOptions::BorrowedText) == sizeof(std::string_view));
 
 }  // namespace ruvia

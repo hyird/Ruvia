@@ -1758,6 +1758,62 @@ static_assert(std::same_as<
 static_assert(std::same_as<
     decltype(ruvia::CookieOptions{}.maxAge),
     std::optional<std::chrono::seconds>>);
+template <typename Text>
+concept CookiePathAccepts = requires(
+    ruvia::CookieOptions& options,
+    Text&& text) {
+    options.path = std::forward<Text>(text);
+};
+template <typename Text>
+concept CookieDomainAccepts = requires(
+    ruvia::CookieOptions& options,
+    Text&& text) {
+    options.domain = std::forward<Text>(text);
+};
+template <typename Name, typename Value, typename Options>
+concept CanConstructSetCookiePlan = requires(
+    Name&& name,
+    Value&& value,
+    Options&& options) {
+    ruvia::detail::SetCookiePlan(
+        std::forward<Name>(name),
+        std::forward<Value>(value),
+        std::forward<Options>(options));
+};
+static_assert(CookiePathAccepts<std::string&>);
+static_assert(CookieDomainAccepts<const std::string&>);
+static_assert(CookiePathAccepts<std::pmr::string&>);
+static_assert(CookieDomainAccepts<const std::pmr::string&>);
+static_assert(!CookiePathAccepts<std::string>);
+static_assert(!CookiePathAccepts<const std::string>);
+static_assert(!CookieDomainAccepts<std::string>);
+static_assert(!CookieDomainAccepts<const std::string>);
+static_assert(!CookiePathAccepts<std::pmr::string>);
+static_assert(!CookieDomainAccepts<std::pmr::string>);
+static_assert(CanConstructSetCookiePlan<
+    std::string&,
+    const std::string&,
+    ruvia::CookieOptions&>);
+static_assert(!CanConstructSetCookiePlan<
+    std::string,
+    std::string_view,
+    ruvia::CookieOptions&>);
+static_assert(!CanConstructSetCookiePlan<
+    std::string_view,
+    const std::string,
+    ruvia::CookieOptions&>);
+static_assert(!CanConstructSetCookiePlan<
+    std::pmr::string,
+    std::string_view,
+    ruvia::CookieOptions&>);
+static_assert(!CanConstructSetCookiePlan<
+    std::string_view,
+    std::string_view,
+    ruvia::CookieOptions>);
+static_assert(!CanConstructSetCookiePlan<
+    std::string_view,
+    std::string_view,
+    const ruvia::CookieOptions>);
 static_assert(HasHttpClientRequestContentAlternatives<
     ruvia::HttpClientRequestContent>);
 static_assert(!HasStaleHttpClientContentMode<
