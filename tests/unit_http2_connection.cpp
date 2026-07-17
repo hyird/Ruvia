@@ -1,5 +1,6 @@
 #include "test_harness.h"
 
+#include <algorithm>
 #include <array>
 #include <concepts>
 #include <cstdint>
@@ -16,7 +17,9 @@
 #include "ruvia/http/detail/http1/Http1ServerRequestParser.h"
 #include "ruvia/http/detail/http2/Http2Connection.h"
 #include "ruvia/http/detail/http2/Http2FrameCodec.h"
+#include "ruvia/http/detail/http2/Http2HeaderBlock.h"
 #include "ruvia/http/detail/http2/Http2Hpack.h"
+#include "ruvia/http/detail/http2/Http2HpackHuffmanTables.h"
 #include "ruvia/http/detail/http2/Http2ReceiveWindowCredit.h"
 #include "ruvia/http/detail/http2/Http2WindowUpdate.h"
 #include "ruvia/http/HttpLimits.h"
@@ -481,6 +484,63 @@ void encodeShortDynamicHeader(
     block.append(name.data(), name.size());
     block.push_back(static_cast<char>(value.size()));
     block.append(value.data(), value.size());
+}
+
+void appendHpackInteger(
+    std::pmr::string& block,
+    std::size_t value,
+    std::uint8_t prefixBits,
+    std::uint8_t firstBits) {
+    const auto prefixMask = static_cast<std::uint8_t>((1U << prefixBits) - 1U);
+    if (value < prefixMask) {
+        block.push_back(static_cast<char>(firstBits | value));
+        return;
+    }
+
+    block.push_back(static_cast<char>(firstBits | prefixMask));
+    value -= prefixMask;
+    while (value >= 128) {
+        block.push_back(static_cast<char>((value & 0x7fU) | 0x80U));
+        value >>= 7;
+    }
+    block.push_back(static_cast<char>(value));
+}
+
+void encodeRepeatedHuffmanHeader(
+    std::pmr::string& block,
+    std::string_view name,
+    unsigned char value,
+    std::size_t count) {
+    appendHpackInteger(
+        block, 0, 4, ruvia::detail::kHpackLiteralWithoutIndexing);
+    appendHpackInteger(block, name.size(), 7, 0);
+    block.append(name.data(), name.size());
+
+    const auto code = ruvia::detail::kHpackHuffmanCodes[value];
+    const auto bitLength = ruvia::detail::kHpackHuffmanLengths[value];
+    const auto encodedBytes = (count * bitLength + 7) / 8;
+    appendHpackInteger(block, encodedBytes, 7, 0x80);
+
+    std::uint64_t pending = 0;
+    std::uint8_t pendingBits = 0;
+    for (std::size_t i = 0; i < count; ++i) {
+        pending = (pending << bitLength) | code;
+        pendingBits = static_cast<std::uint8_t>(pendingBits + bitLength);
+        while (pendingBits >= 8) {
+            pendingBits = static_cast<std::uint8_t>(pendingBits - 8);
+            block.push_back(static_cast<char>((pending >> pendingBits) & 0xffU));
+        }
+        if (pendingBits == 0) {
+            pending = 0;
+        } else {
+            pending &= (std::uint64_t{1} << pendingBits) - 1;
+        }
+    }
+    if (pendingBits != 0) {
+        const auto paddingBits = static_cast<std::uint8_t>(8 - pendingBits);
+        const auto padding = (std::uint16_t{1} << paddingBits) - 1;
+        block.push_back(static_cast<char>((pending << paddingBits) | padding));
+    }
 }
 
 // Start the role-specific preface and leave the connection ready to receive the
@@ -1743,6 +1803,72 @@ RUVIA_TEST(http2_connection_feed_headers_continuation_completes_head) {
         s->requestKnownMethod() == ruvia::HttpKnownMethod::kGet);
 }
 
+RUVIA_TEST(http2_connection_accepts_huffman_block_larger_than_decoded_field_section) {
+    std::pmr::monotonic_buffer_resource resource;
+    Http2Connection conn(&resource);
+    handshake(conn);
+
+    // obs-text is legal field-value data. HPACK byte 0xdc has a 28-bit Huffman
+    // code, so this 20 KiB decoded value expands to 70 KiB on the wire while
+    // remaining well below the advertised 64 KiB decoded field-section limit.
+    constexpr unsigned char kExpandedByte = 0xdc;
+    constexpr std::size_t kDecodedValueBytes = 20 * 1024;
+    std::pmr::string block(&resource);
+    encodeGetRequest(block);
+    encodeRepeatedHuffmanHeader(
+        block, "x-huffman-expanded", kExpandedByte, kDecodedValueBytes);
+    RUVIA_CHECK(block.size() > ruvia::kMaxHttpHeaderBytes);
+
+    std::size_t offset = 0;
+    const auto firstBytes = std::min(
+        block.size(),
+        static_cast<std::size_t>(Http2LocalSettings::kMaxFrameSize));
+    const auto first = headersFrame(
+        &resource,
+        1,
+        ruvia::detail::kHttp2FlagEndStream,
+        std::string_view(block.data(), firstBytes));
+    RUVIA_CHECK(conn.feed(std::string_view(first.data(), first.size())) ==
+        Http2FeedResult::kAccepted);
+    RUVIA_CHECK(!conn.nextEvent().has_value());
+    offset += firstBytes;
+
+    while (offset < block.size()) {
+        const auto fragmentBytes = std::min(
+            block.size() - offset,
+            static_cast<std::size_t>(Http2LocalSettings::kMaxFrameSize));
+        const auto flags = offset + fragmentBytes == block.size()
+            ? ruvia::detail::kHttp2FlagEndHeaders
+            : std::uint8_t{0};
+        const auto continuation = continuationFrame(
+            &resource,
+            1,
+            flags,
+            std::string_view(block.data() + offset, fragmentBytes));
+        RUVIA_CHECK(conn.feed(std::string_view(
+            continuation.data(), continuation.size())) ==
+            Http2FeedResult::kAccepted);
+        offset += fragmentBytes;
+    }
+
+    RUVIA_CHECK(!conn.connectionError().has_value());
+    RUVIA_CHECK(conn.nextEvent().value().kind() == Http2EventKind::kMessageHead);
+    RUVIA_CHECK(conn.nextEvent().value().kind() == Http2EventKind::kMessageEnd);
+    RUVIA_CHECK(!conn.nextEvent().has_value());
+    const auto* stream = conn.stream(1);
+    RUVIA_CHECK(stream != nullptr);
+    RUVIA_CHECK_EQ(stream->requestHeaderCount(), std::size_t{1});
+    const auto expanded = stream->requestHeaderAt(0);
+    RUVIA_CHECK_EQ(expanded.name, std::string_view("x-huffman-expanded"));
+    RUVIA_CHECK_EQ(expanded.value.size(), kDecodedValueBytes);
+    RUVIA_CHECK(std::all_of(
+        expanded.value.begin(),
+        expanded.value.end(),
+        [](char byte) {
+            return static_cast<unsigned char>(byte) == kExpandedByte;
+        }));
+}
+
 // RFC 9113 requires field blocks received after our RST_STREAM to be minimally
 // processed. A pinned reset stream must not capture the fragments, and the dynamic
 // entry created by the discarded block must remain usable by the next stream.
@@ -1811,7 +1937,14 @@ RUVIA_TEST(http2_connection_undecodable_discarded_block_is_compression_error) {
     const auto first = headersFrame(&resource, 1, 0, fullFrame);
     RUVIA_CHECK(conn.feed(std::string_view(first.data(), first.size())) ==
         ruvia::detail::Http2FeedResult::kAccepted);
-    for (int i = 0; i < 3; ++i) {
+    constexpr auto kFullFrameCount =
+        ruvia::detail::kMaxHttp2EncodedHeaderBlockBytes /
+        ruvia::detail::kHttp2DefaultMaxFrameSize;
+    static_assert(
+        ruvia::detail::kMaxHttp2EncodedHeaderBlockBytes %
+            ruvia::detail::kHttp2DefaultMaxFrameSize ==
+        0);
+    for (std::size_t i = 1; i < kFullFrameCount; ++i) {
         const auto continuation = continuationFrame(&resource, 1, 0, fullFrame);
         RUVIA_CHECK(conn.feed(
             std::string_view(continuation.data(), continuation.size())) ==
