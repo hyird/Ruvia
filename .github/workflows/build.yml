@@ -202,9 +202,12 @@ jobs:
           fi
           "$VCPKG_ROOT/bootstrap-vcpkg.sh" -disableMetrics
 
-      # UBSan covers the complete test executable and protocol library. ASan is
-      # deliberately excluded because Linux mimalloc's global override owns the
-      # same allocation symbols. libFuzzer still drives the protocol entrypoints.
+      # UBSan covers the complete test executable and protocol library, sharing
+      # the build with the libFuzzer targets (fuzzer,undefined). AddressSanitizer
+      # runs in the separate ubuntu_address_sanitizer job instead of here: the
+      # build auto-disables the mimalloc global override under any sanitizer, so
+      # ASan is compatible, but it cannot share this configure because the fuzz
+      # targets link -fsanitize=fuzzer,undefined without address.
       - name: Configure
         run: |
           cmake -S . -B build/protocol-sanitizers -G Ninja \
@@ -248,6 +251,75 @@ jobs:
           path: build/fuzz-artifacts
           if-no-files-found: ignore
           retention-days: 30
+
+  ubuntu_address_sanitizer:
+    name: Ubuntu ASan + UBSan
+    runs-on: ubuntu-24.04
+    env:
+      CC: gcc-13
+      CXX: g++-13
+      GIT_CONFIG_COUNT: 1
+      GIT_CONFIG_KEY_0: init.defaultBranch
+      GIT_CONFIG_VALUE_0: main
+      VCPKG_ROOT: ${{ github.workspace }}/vcpkg
+      BUILD_TYPE: RelWithDebInfo
+    steps:
+      - name: Checkout ruvia
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - name: Install toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc-13 g++-13 ninja-build curl zip unzip tar
+          g++-13 --version
+
+      - name: Cache vcpkg
+        uses: actions/cache@v5
+        with:
+          path: |
+            ${{ env.VCPKG_ROOT }}
+            ~/.cache/vcpkg/archives
+            ${{ github.workspace }}/build/asan/vcpkg_installed
+          key: vcpkg-asan-${{ runner.os }}-${{ hashFiles('vcpkg.json', 'vcpkg-configuration.json', 'triplets/**', 'CMakeLists.txt') }}
+          restore-keys: |
+            vcpkg-asan-${{ runner.os }}-
+
+      - name: Bootstrap vcpkg
+        run: |
+          set -euo pipefail
+          if [ ! -d "$VCPKG_ROOT/.git" ]; then
+            git clone --depth 1 https://github.com/microsoft/vcpkg.git "$VCPKG_ROOT"
+          else
+            git -C "$VCPKG_ROOT" fetch --depth 1 origin master
+            git -C "$VCPKG_ROOT" reset --hard origin/master
+          fi
+          "$VCPKG_ROOT/bootstrap-vcpkg.sh" -disableMetrics
+
+      # AddressSanitizer catches the memory-safety class (use-after-free,
+      # heap/stack overflow, leaks) that UBSan cannot. The build auto-disables the
+      # mimalloc global override once it sees -fsanitize=, so ASan owns the
+      # allocation symbols cleanly. Kept to the core test executable (no fuzzers,
+      # no optional DB/JWT features) so the ASan and fuzzer sanitizer flags never
+      # share a configure.
+      - name: Configure
+        run: |
+          cmake -S . -B build/asan -G Ninja \
+            -DCMAKE_BUILD_TYPE="$BUILD_TYPE" \
+            -DCMAKE_CXX_FLAGS="-fsanitize=address,undefined -fno-sanitize-recover=all -fno-omit-frame-pointer" \
+            -DCMAKE_EXE_LINKER_FLAGS="-fsanitize=address,undefined" \
+            -DRUVIA_BUILD_TESTS=ON \
+            -DCMAKE_TOOLCHAIN_FILE="$VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake"
+
+      - name: Build
+        run: cmake --build build/asan --config "$BUILD_TYPE"
+
+      - name: Test (unit, ASan + UBSan)
+        env:
+          ASAN_OPTIONS: halt_on_error=1:abort_on_error=1:detect_leaks=1
+          UBSAN_OPTIONS: print_stacktrace=1:halt_on_error=1
+        run: ctest --test-dir build/asan --output-on-failure --build-config "$BUILD_TYPE"
 
   windows_build:
     name: Windows build
