@@ -85,6 +85,9 @@ RUVIA_TEST(request_header_singleton_policy_table) {
         RequestHeaderKind::kIfUnmodifiedSince,
         RequestHeaderKind::kOrigin,
         RequestHeaderKind::kRange,
+        RequestHeaderKind::kSecWebSocketKey,
+        RequestHeaderKind::kSecWebSocketVersion,
+        RequestHeaderKind::kUserAgent,
     };
     for (const auto kind : singleton) {
         RUVIA_CHECK(singletonRequestHeaderBit(kind) == (1U << static_cast<unsigned>(kind)));
@@ -103,12 +106,9 @@ RUVIA_TEST(request_header_singleton_policy_table) {
         RequestHeaderKind::kHost,
         RequestHeaderKind::kIfMatch,
         RequestHeaderKind::kIfNoneMatch,
-        RequestHeaderKind::kSecWebSocketKey,
         RequestHeaderKind::kSecWebSocketProtocol,
-        RequestHeaderKind::kSecWebSocketVersion,
         RequestHeaderKind::kTransferEncoding,
         RequestHeaderKind::kUpgrade,
-        RequestHeaderKind::kUserAgent,
     };
     for (const auto kind : repeatableOrSpecial) {
         RUVIA_CHECK(singletonRequestHeaderBit(kind) == 0U);

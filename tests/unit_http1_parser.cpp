@@ -377,6 +377,25 @@ RUVIA_TEST(http1_parse_duplicate_authorization_rejected) {
     RUVIA_CHECK(isFailure(result, HttpParseError::kInvalidHeader));
 }
 
+RUVIA_TEST(http1_parse_duplicate_websocket_identity_and_user_agent_rejected) {
+    const std::string_view messages[] = {
+        "GET / HTTP/1.1\r\nHost: x\r\n"
+        "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n"
+        "Sec-WebSocket-Key: MDEyMzQ1Njc4OWFiY2RlZg==\r\n\r\n",
+        "GET / HTTP/1.1\r\nHost: x\r\n"
+        "Sec-WebSocket-Version: 13\r\n"
+        "Sec-WebSocket-Version: 13\r\n\r\n",
+        "GET / HTTP/1.1\r\nHost: x\r\n"
+        "User-Agent: first/1\r\n"
+        "User-Agent: second/2\r\n\r\n",
+    };
+    for (const auto message : messages) {
+        Http1ServerRequestParser parser;
+        const auto result = parser.parseMessage(message);
+        RUVIA_CHECK(isFailure(result, HttpParseError::kInvalidHeader));
+    }
+}
+
 RUVIA_TEST(http1_parse_chunked_body) {
     Http1ServerRequestParser parser;
     const auto result = parser.parseMessage(

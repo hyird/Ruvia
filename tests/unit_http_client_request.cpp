@@ -407,6 +407,9 @@ RUVIA_TEST(http1_client_request_writer_rejects_repeated_singleton_fields) {
          "Mon, 07 Nov 1994 08:49:37 GMT"},
         {"Origin", "https://first.test", "https://second.test"},
         {"Range", "bytes=0-1", "bytes=2-3"},
+        {"Sec-WebSocket-Key", "first", "second"},
+        {"Sec-WebSocket-Version", "13", "12"},
+        {"User-Agent", "first/1", "second/2"},
     };
     for (const auto& test : cases) {
         const ruvia::HttpHeaderView headers[] = {

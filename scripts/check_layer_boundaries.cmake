@@ -9967,6 +9967,64 @@ if(EXISTS "${HTTP2_CLIENT_REQUEST_WRITER}" AND
             "both client writers must reject malformed Origin and CORS request fields before committing wire output")
     endif()
 endif()
+
+set(REQUEST_SINGLETON_POLICY
+    "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/detail/parser/HttpParserSyntax.h")
+set(HTTP2_STREAM_STATE
+    "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/detail/http2/Http2StreamState.h")
+set(HTTP2_CONNECTION_HEADERS
+    "${RUVIA_ROOT}/ruvia-http/src/http2/Http2ConnectionHeaders.cpp")
+set(REQUEST_SINGLETON_CLASSIFICATION_TEST
+    "${RUVIA_ROOT}/tests/unit_header_classification.cpp")
+set(HTTP1_REQUEST_SINGLETON_TEST
+    "${RUVIA_ROOT}/tests/unit_http1_parser.cpp")
+set(HTTP2_REQUEST_SINGLETON_TEST
+    "${RUVIA_ROOT}/tests/unit_http2_request_headers.cpp")
+if(EXISTS "${REQUEST_SINGLETON_POLICY}" AND
+   EXISTS "${HTTP2_STREAM_STATE}" AND
+   EXISTS "${HTTP2_CONNECTION_HEADERS}" AND
+   EXISTS "${REQUEST_SINGLETON_CLASSIFICATION_TEST}" AND
+   EXISTS "${HTTP1_REQUEST_SINGLETON_TEST}" AND
+   EXISTS "${HTTP2_REQUEST_SINGLETON_TEST}" AND
+   EXISTS "${HTTP1_CLIENT_REQUEST_TEST}" AND
+   EXISTS "${HTTP2_CLIENT_REQUEST_WRITER_TEST}")
+    file(READ "${REQUEST_SINGLETON_POLICY}" request_singleton_policy)
+    file(READ "${HTTP2_STREAM_STATE}" request_singleton_http2_stream)
+    file(READ "${HTTP2_CONNECTION_HEADERS}"
+        request_singleton_http2_headers)
+    file(READ "${REQUEST_SINGLETON_CLASSIFICATION_TEST}"
+        request_singleton_classification_test)
+    file(READ "${HTTP1_REQUEST_SINGLETON_TEST}"
+        request_singleton_http1_test)
+    file(READ "${HTTP2_REQUEST_SINGLETON_TEST}"
+        request_singleton_http2_test)
+    if(NOT request_singleton_policy MATCHES "kSecWebSocketKey" OR
+       NOT request_singleton_policy MATCHES "kSecWebSocketVersion" OR
+       NOT request_singleton_policy MATCHES "kUserAgent" OR
+       NOT request_singleton_http2_stream MATCHES
+           "markSingletonResponseHeader" OR
+       NOT request_singleton_http2_headers MATCHES
+           "classifyResponseHeaderName" OR
+       NOT request_singleton_http2_headers MATCHES
+           "markSingletonResponseHeader" OR
+       NOT request_singleton_classification_test MATCHES
+           "request_header_singleton_policy_table" OR
+       NOT request_singleton_http1_test MATCHES
+           "http1_parse_duplicate_websocket_identity_and_user_agent_rejected" OR
+       NOT request_singleton_http2_test MATCHES
+           "h2_headers_duplicate_websocket_identity_and_user_agent_rejected" OR
+       NOT http1_client_request_test MATCHES
+           "Sec-WebSocket-Key" OR
+       NOT http1_client_request_test MATCHES
+           "User-Agent" OR
+       NOT http2_client_request_writer_test MATCHES
+           "http2_connection_rejects_repeated_websocket_identity_and_user_agent_fields_transactionally" OR
+       NOT http2_client_request_writer_test MATCHES
+           "http2_connection_client_accepts_repeated_websocket_version_response_fields")
+        boundary_error("request singleton fields or HTTP/2 response directionality drifted"
+            "both protocols must reject repeated WebSocket request identity and User-Agent fields without rejecting repeatable Sec-WebSocket-Version response fields")
+    endif()
+endif()
 set(HTTP1_CLIENT_API_SURFACE "${RUVIA_ROOT}/examples/api_surface.cpp")
 set(HTTP1_CLIENT_PACKAGE_CONSUMER "${RUVIA_ROOT}/tests/package-consumer/http.cpp")
 if(EXISTS "${HTTP1_CLIENT_API_SURFACE}" AND

@@ -232,6 +232,9 @@ std::optional<HttpParseError> parseHttpHeaderBlock(
             case RequestHeaderKind::kIfRange:
             case RequestHeaderKind::kIfUnmodifiedSince:
             case RequestHeaderKind::kRange:
+            case RequestHeaderKind::kSecWebSocketKey:
+            case RequestHeaderKind::kSecWebSocketVersion:
+            case RequestHeaderKind::kUserAgent:
                 if (const auto bit = singletonRequestHeaderBit(kind); bit != 0) {
                     if ((block.seenHeaderBits & bit) != 0) {
                         return HttpParseError::kInvalidHeader;
@@ -242,10 +245,7 @@ std::optional<HttpParseError> parseHttpHeaderBlock(
             case RequestHeaderKind::kOther:
             case RequestHeaderKind::kAccept:
             case RequestHeaderKind::kCookie:
-            case RequestHeaderKind::kSecWebSocketKey:
             case RequestHeaderKind::kSecWebSocketProtocol:
-            case RequestHeaderKind::kSecWebSocketVersion:
-            case RequestHeaderKind::kUserAgent:
                 break;
             case RequestHeaderKind::kAccessControlRequestHeaders:
                 if (!isValidHttpCorsRequestHeaderNames(value)) {

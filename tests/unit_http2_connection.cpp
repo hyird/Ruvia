@@ -3122,6 +3122,41 @@ RUVIA_TEST(http2_connection_validates_outbound_cors_fields_transactionally) {
     RUVIA_CHECK_EQ(submittedRequestStreamId(accepted), std::uint32_t{1});
 }
 
+RUVIA_TEST(http2_connection_rejects_repeated_websocket_identity_and_user_agent_fields_transactionally) {
+    struct Case final {
+        std::string_view name;
+        std::string_view first;
+        std::string_view second;
+    };
+    const Case cases[] = {
+        {"sec-websocket-key", "first", "second"},
+        {"sec-websocket-version", "13", "12"},
+        {"user-agent", "first/1", "second/2"},
+    };
+    std::pmr::monotonic_buffer_resource resource;
+    for (const auto& test : cases) {
+        Http2Connection client(
+            &resource, ruvia::detail::Http2Role::kClient);
+        beginClient(client);
+        const ruvia::HttpHeaderView headers[] = {
+            {test.name, test.first},
+            {test.name, test.second},
+        };
+        const auto rejected = client.submitRegularRequestHead(
+            "GET",
+            "https",
+            "example.test",
+            "/resource",
+            headers,
+            Http2RequestContent::none());
+        RUVIA_CHECK(rejected.submitted() == nullptr);
+        RUVIA_CHECK(requestHeadSubmitError(rejected) ==
+            Http2RequestHeadSubmitError::kInvalidMessage);
+        RUVIA_CHECK(client.pendingOutput().empty());
+        RUVIA_CHECK(client.stream(1) == nullptr);
+    }
+}
+
 RUVIA_TEST(http2_connection_rejects_100_continue_without_following_content_transactionally) {
     std::pmr::monotonic_buffer_resource resource;
     const ruvia::HttpHeaderView expectContinue[] = {
@@ -5033,6 +5068,48 @@ RUVIA_TEST(http2_connection_client_rejects_invalid_content_encoding_syntax) {
     RUVIA_CHECK(sawProtocolError);
     RUVIA_CHECK(client.stream(streamId) == nullptr);
     RUVIA_CHECK(!client.connectionError().has_value());
+}
+
+RUVIA_TEST(http2_connection_client_accepts_repeated_websocket_version_response_fields) {
+    std::pmr::monotonic_buffer_resource resource;
+    Http2Connection client(&resource, Http2Role::kClient);
+    handshake(client);
+
+    const auto request = client.submitRegularRequestHead(
+        "GET", "https", "example.test", "/", {},
+        Http2RequestContent::none());
+    RUVIA_CHECK(request.submitted() != nullptr);
+    const auto streamId = submittedRequestStreamId(request);
+    client.pinStream(streamId);
+    client.consumeOutput(client.pendingOutput().size());
+
+    std::pmr::string response(&resource);
+    HpackEncoder::encodeHeader(response, ":status", "400");
+    HpackEncoder::encodeHeader(response, "sec-websocket-version", "13");
+    HpackEncoder::encodeHeader(response, "sec-websocket-version", "8, 7");
+    const auto responseHead = headersFrame(
+        &resource,
+        streamId,
+        ruvia::detail::kHttp2FlagEndHeaders |
+            ruvia::detail::kHttp2FlagEndStream,
+        std::string_view(response.data(), response.size()));
+    RUVIA_CHECK(client.feed(
+        std::string_view(responseHead.data(), responseHead.size())) ==
+        Http2FeedResult::kAccepted);
+
+    bool sawHead = false;
+    bool sawEnd = false;
+    bool sawClosed = false;
+    while (const auto event = client.nextEvent()) {
+        sawHead = sawHead || event->messageHead() != nullptr;
+        sawEnd = sawEnd || event->messageEnd() != nullptr;
+        sawClosed = sawClosed || event->streamClosed() != nullptr;
+    }
+    RUVIA_CHECK(sawHead);
+    RUVIA_CHECK(sawEnd);
+    RUVIA_CHECK(!sawClosed);
+    RUVIA_CHECK(!client.connectionError().has_value());
+    client.unpinStream(streamId);
 }
 
 // A HEAD response's Content-Length is representation metadata, not a DATA

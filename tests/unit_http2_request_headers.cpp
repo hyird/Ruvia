@@ -395,6 +395,27 @@ RUVIA_TEST(h2_headers_duplicate_auth_and_cors_singletons_rejected) {
     }
 }
 
+RUVIA_TEST(h2_headers_duplicate_websocket_identity_and_user_agent_rejected) {
+    struct Case final {
+        std::string_view name;
+        std::string_view first;
+        std::string_view second;
+    };
+    const Case cases[] = {
+        {"sec-websocket-key", "first", "second"},
+        {"sec-websocket-version", "13", "12"},
+        {"user-agent", "first/1", "second/2"},
+    };
+    for (const auto& test : cases) {
+        Http2StreamState stream(1, res());
+        Http2HeaderDecodeContext ctx{stream};
+        RUVIA_CHECK(http2OnDecodedInitialHeader(
+            ctx, test.name, test.first));
+        RUVIA_CHECK(!http2OnDecodedInitialHeader(
+            ctx, test.name, test.second));
+    }
+}
+
 RUVIA_TEST(h2_headers_enforce_cors_request_field_grammar) {
     const auto accepts = [](std::string_view name, std::string_view value) {
         Http2StreamState stream(1, res());

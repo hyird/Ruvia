@@ -8,6 +8,8 @@
 #include "ruvia/http/HttpStatus.h"
 #include "ruvia/http/detail/HttpInterimResponseValidation.h"
 #include "ruvia/http/detail/HttpRequestContentSemantics.h"
+#include "ruvia/http/detail/HttpResponseHeaderBits.h"
+#include "ruvia/http/detail/HttpResponseKnownHeaders.h"
 #include "ruvia/http/detail/HttpResponseContentSemantics.h"
 #include "ruvia/http/detail/http2/Http2FramePayload.h"
 #include "ruvia/http/detail/http2/Http2HeaderBlock.h"
@@ -174,31 +176,30 @@ bool http2OnDecodedResponseHeader(void* target, std::string_view name, std::stri
             HttpInterimResponseHeaderValidationStatus::kOk;
     }
     const auto kind = classifyRequestHeader(name);
+    const auto responseKnownBit = classifyResponseHeaderName(name);
     const auto responseContentSemantics = httpResponseContentSemantics(
         stream.requestKnownMethod(), *context->status);
     const bool successfulConnect =
         responseContentSemantics ==
         HttpResponseContentSemantics::kConnectTunnel;
-    if (kind == RequestHeaderKind::kContentLength && successfulConnect) {
+    if (responseKnownBit == kResponseHeaderContentLength &&
+        successfulConnect) {
         // RFC 9110 9.3.6: a client ignores Content-Length on a successful CONNECT
         // response. It describes neither HTTP content nor the following tunnel DATA.
         return true;
     }
-    if (kind == RequestHeaderKind::kContentType &&
-        !isValidHttpContentTypeFieldValue(value)) {
-        return false;
+    if (responseKnownBit == kResponseHeaderContentType) {
+        if (!isValidHttpContentTypeFieldValue(value) ||
+            !stream.markSingletonResponseHeader(responseKnownBit)) {
+            return false;
+        }
     }
-    if (kind == RequestHeaderKind::kContentEncoding &&
+    if (responseKnownBit == kResponseHeaderContentEncoding &&
         !isValidHttpContentEncodingFieldValue(
             value, HttpFieldListRole::kRecipient)) {
         return false;
     }
-    if (const auto singletonBit = singletonRequestHeaderBit(kind); singletonBit != 0) {
-        if (!stream.markSingletonRequestHeader(singletonBit)) {
-            return false;
-        }
-    }
-    if (kind == RequestHeaderKind::kContentLength) {
+    if (responseKnownBit == kResponseHeaderContentLength) {
         std::size_t parsed = 0;
         const auto [ptr, ec] = std::from_chars(value.data(), value.data() + value.size(), parsed);
         if (ec != std::errc{} || ptr != value.data() + value.size()) {
