@@ -158,7 +158,7 @@ jobs:
           ctest --test-dir build/http-only --output-on-failure --build-config "$BUILD_TYPE"
 
   ubuntu_protocol_sanitizers:
-    name: Ubuntu protocol UBSan + fuzz
+    name: Ubuntu protocol ASan + UBSan + fuzz
     runs-on: ubuntu-24.04
     env:
       CC: clang-18
@@ -202,17 +202,19 @@ jobs:
           fi
           "$VCPKG_ROOT/bootstrap-vcpkg.sh" -disableMetrics
 
-      # UBSan covers the complete test executable and protocol library, sharing
-      # the build with the libFuzzer targets (fuzzer,undefined). AddressSanitizer
-      # runs in the separate ubuntu_address_sanitizer job instead of here: the
-      # build auto-disables the mimalloc global override under any sanitizer, so
-      # ASan is compatible, but it cannot share this configure because the fuzz
-      # targets link -fsanitize=fuzzer,undefined without address.
+      # ASan+UBSan cover the complete test executable and protocol library, and
+      # -- critically -- the libFuzzer targets, which also link
+      # fuzzer,address,undefined. Fuzzing without AddressSanitizer is blind to the
+      # heap-buffer-overflow / use-after-free class it is best at finding, so the
+      # whole tree is address-instrumented here (the build auto-disables the
+      # mimalloc override under any sanitizer). The gcc RelWithDebInfo
+      # ubuntu_address_sanitizer job stays as complementary cross-compiler
+      # coverage.
       - name: Configure
         run: |
           cmake -S . -B build/protocol-sanitizers -G Ninja \
             -DCMAKE_BUILD_TYPE="$BUILD_TYPE" \
-            -DCMAKE_CXX_FLAGS="-fsanitize=undefined -fno-sanitize-recover=all -fno-omit-frame-pointer" \
+            -DCMAKE_CXX_FLAGS="-fsanitize=address,undefined -fno-sanitize-recover=all -fno-omit-frame-pointer" \
             -DRUVIA_BUILD_TESTS=ON \
             -DRUVIA_BUILD_FUZZERS=ON \
             -DCMAKE_TOOLCHAIN_FILE="$VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake"
@@ -220,13 +222,15 @@ jobs:
       - name: Build
         run: cmake --build build/protocol-sanitizers --config "$BUILD_TYPE"
 
-      - name: Test (unit, UBSan)
+      - name: Test (unit, ASan + UBSan)
         env:
+          ASAN_OPTIONS: halt_on_error=1:abort_on_error=1:detect_leaks=1
           UBSAN_OPTIONS: print_stacktrace=1:halt_on_error=1
         run: ctest --test-dir build/protocol-sanitizers --output-on-failure --build-config "$BUILD_TYPE"
 
       - name: Protocol fuzz smoke
         env:
+          ASAN_OPTIONS: halt_on_error=1:abort_on_error=1
           UBSAN_OPTIONS: print_stacktrace=1:halt_on_error=1
         run: |
           set -euo pipefail

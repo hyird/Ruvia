@@ -1,13 +1,18 @@
+# AddressSanitizer is part of the fuzzing flags: fuzzing without it is blind to
+# the heap-buffer-overflow / use-after-free class it is best at surfacing. For the
+# library under test to be instrumented too (not just the harness), configure the
+# build with -DCMAKE_CXX_FLAGS=-fsanitize=address,undefined so ruvia::http carries
+# the same instrumentation -- see the ubuntu_protocol_sanitizers CI job.
 function(ruvia_add_protocol_fuzzer name source)
     add_executable(${name} ${source})
     target_link_libraries(${name} PRIVATE ruvia::http)
     target_compile_options(${name} PRIVATE
-        -fsanitize=fuzzer,undefined
+        -fsanitize=fuzzer,address,undefined
         -fno-sanitize-recover=all
         -fno-omit-frame-pointer
     )
     target_link_options(${name} PRIVATE
-        -fsanitize=fuzzer,undefined
+        -fsanitize=fuzzer,address,undefined
         -fno-sanitize-recover=all
     )
 endfunction()
