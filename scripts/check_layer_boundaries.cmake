@@ -10066,6 +10066,9 @@ elseif(EXISTS "${HTTP1_CLIENT_RESPONSE_PARSER}")
     endif()
     if(NOT http1_client_response_parser MATCHES "findHttpHeaderEnd" OR
        NOT http1_client_response_parser MATCHES "Http1ClientResponsePlanAccess::withoutContent" OR
+       NOT http1_client_response_parser MATCHES "Http1ClientResponsePlanAccess::[\r\n \t]*zeroContentKnownLength" OR
+       NOT http1_client_response_parser MATCHES "Http1ClientResponsePlanAccess::[\r\n \t]*zeroContentChunked" OR
+       NOT http1_client_response_parser MATCHES "Http1ClientResponsePlanAccess::[\r\n \t]*zeroContentCloseDelimited" OR
        NOT http1_client_response_parser MATCHES "Http1ClientResponsePlanAccess::knownLength" OR
        NOT http1_client_response_parser MATCHES "Http1ClientResponsePlanAccess::chunked" OR
        NOT http1_client_response_parser MATCHES "Http1ClientResponsePlanAccess::closeDelimited" OR
@@ -10227,6 +10230,8 @@ if(NOT public_http_client_value_api MATCHES
        "informational[(][)] const &&[ \\t]*=[ \\t]*delete" OR
    NOT public_http1_client_response_value_api MATCHES
        "withoutContent[(][)] const &&[ \\t]*=[ \\t]*delete" OR
+   NOT public_http1_client_response_value_api MATCHES
+       "zeroContent[(][)] const &&[ \\t]*=[ \\t]*delete" OR
    NOT public_http1_client_response_value_api MATCHES
        "knownLength[(][)] const &&[ \\t]*=[ \\t]*delete" OR
    NOT public_http1_client_response_value_api MATCHES
@@ -10390,7 +10395,7 @@ if(EXISTS "${HTTP1_CLIENT_RESPONSE_TEST}")
        NOT http1_client_response_test MATCHES
            "http_client_no_body_precedence_ignores_framing_fields" OR
        NOT http1_client_response_test MATCHES
-           "http_client_205_uses_normal_http1_message_framing" OR
+           "http_client_205_owns_zero_content_framing" OR
        NOT http1_client_response_test MATCHES
            "http_client_switching_protocols_is_an_exclusive_upgrade_transition" OR
        NOT http1_client_response_test MATCHES
@@ -10416,11 +10421,15 @@ if(EXISTS "${HTTP1_CLIENT_RESPONSE_TEST}")
        NOT http1_client_response_test MATCHES
            "HasResponseTransferCodings<ruvia::Http1ClientChunkedResponse>" OR
        NOT http1_client_response_test MATCHES
+           "Http1ClientResponseWithZeroContent" OR
+       NOT http1_client_response_test MATCHES
+           "Content-Length: 3" OR
+       NOT http1_client_response_test MATCHES
            "!HasResponsePersistence<[\r\n \t]*ruvia::Http1ClientCloseDelimitedResponse>" OR
        NOT http1_client_response_test MATCHES
            "!std::is_default_constructible_v<ruvia::Http1ClientResponsePlan>")
         boundary_error("HTTP/1 client response plan invariants are under-tested"
-            "tests must pin exclusive framing/lifecycle payload ownership, tri-state/stateful parsing, Expect progress, transactional ownership, close delimiting, CONNECT, Upgrade agreement/order, transfer order, and full Content-Length lists")
+            "tests must pin exclusive framing/lifecycle payload ownership, 205 zero-content framing, tri-state/stateful parsing, Expect progress, transactional ownership, close delimiting, CONNECT, Upgrade agreement/order, transfer order, and full Content-Length lists")
     endif()
 endif()
 

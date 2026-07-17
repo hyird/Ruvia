@@ -2842,6 +2842,8 @@ concept HasHttp1ClientResponsePlanAlternatives = requires(const T& plan) {
         std::same_as<const ruvia::Http1ClientInformationalResponse*>;
     { plan.withoutContent() } ->
         std::same_as<const ruvia::Http1ClientResponseWithoutContent*>;
+    { plan.zeroContent() } ->
+        std::same_as<const ruvia::Http1ClientResponseWithZeroContent*>;
     { plan.knownLength() } ->
         std::same_as<const ruvia::Http1ClientKnownLengthResponse*>;
     { plan.chunked() } ->
@@ -2858,9 +2860,20 @@ concept HasHttp1ClientResponsePlanAlternatives = requires(const T& plan) {
 };
 
 template <typename T>
+concept HasHttp1ClientZeroContentFraming = requires(const T& plan) {
+    { plan.knownLength() } ->
+        std::same_as<const ruvia::Http1ClientKnownLengthResponse*>;
+    { plan.chunked() } ->
+        std::same_as<const ruvia::Http1ClientChunkedResponse*>;
+    { plan.closeDelimited() } ->
+        std::same_as<const ruvia::Http1ClientCloseDelimitedResponse*>;
+};
+
+template <typename T>
 concept HasAnyRvalueHttp1ClientResponsePlanAccessor =
     requires(T&& plan) { std::move(plan).informational(); } ||
     requires(T&& plan) { std::move(plan).withoutContent(); } ||
+    requires(T&& plan) { std::move(plan).zeroContent(); } ||
     requires(T&& plan) { std::move(plan).knownLength(); } ||
     requires(T&& plan) { std::move(plan).chunked(); } ||
     requires(T&& plan) { std::move(plan).closeDelimited(); } ||
@@ -2930,6 +2943,8 @@ concept HasHttp1ClientResponsePersistence = requires(const T& framing) {
 
 static_assert(HasHttp1ClientResponsePlanAlternatives<
     ruvia::Http1ClientResponsePlan>);
+static_assert(HasHttp1ClientZeroContentFraming<
+    ruvia::Http1ClientResponseWithZeroContent>);
 static_assert(!HasHttp1ClientResponseMode<ruvia::Http1ClientResponsePlan>);
 static_assert(!HasHttp1ClientResponseConnectionAccessor<
     ruvia::Http1ClientResponsePlan>);
@@ -2960,6 +2975,8 @@ static_assert(!std::default_initializable<
     ruvia::Http1ClientInformationalResponse>);
 static_assert(!std::default_initializable<
     ruvia::Http1ClientResponseWithoutContent>);
+static_assert(!std::default_initializable<
+    ruvia::Http1ClientResponseWithZeroContent>);
 static_assert(!std::default_initializable<
     ruvia::Http1ClientKnownLengthResponse>);
 static_assert(!std::default_initializable<
@@ -4487,6 +4504,17 @@ int main() {
     if (clientHead == nullptr ||
         clientHead->plan().closeDelimited() == nullptr ||
         clientHead->consumedBytes() != closeDelimitedHead.size()) {
+        return 15;
+    }
+    ruvia::Http1ClientResponseParser resetContentParser(*getWire);
+    const auto resetContentResult = resetContentParser.parse(
+        "HTTP/1.1 205 Reset Content\r\nContent-Length: 0\r\n\r\n");
+    const auto* resetContentHead = resetContentResult.parsed();
+    const auto* resetContent = resetContentHead == nullptr
+        ? nullptr
+        : resetContentHead->plan().zeroContent();
+    if (resetContent == nullptr || resetContent->knownLength() == nullptr ||
+        resetContent->knownLength()->contentLength() != 0) {
         return 15;
     }
 

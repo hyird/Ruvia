@@ -45,6 +45,41 @@ struct Http1ClientResponsePlanAccess final {
             requestContentSignal);
     }
 
+    [[nodiscard]] static Http1ClientResponsePlan zeroContentKnownLength(
+        Http1ClientResponsePersistence persistence,
+        RequestContentSignal requestContentSignal) noexcept {
+        return Http1ClientResponsePlan(
+            Http1ClientResponsePlan::State(
+                Http1ClientResponseWithZeroContent(
+                    Http1ClientResponseWithZeroContent::Framing(
+                        Http1ClientKnownLengthResponse(0, persistence)))),
+            requestContentSignal);
+    }
+
+    [[nodiscard]] static Http1ClientResponsePlan zeroContentChunked(
+        HttpTransferCodings transferCodings,
+        Http1ClientResponsePersistence persistence,
+        RequestContentSignal requestContentSignal) noexcept {
+        return Http1ClientResponsePlan(
+            Http1ClientResponsePlan::State(
+                Http1ClientResponseWithZeroContent(
+                    Http1ClientResponseWithZeroContent::Framing(
+                        Http1ClientChunkedResponse(
+                            transferCodings, persistence)))),
+            requestContentSignal);
+    }
+
+    [[nodiscard]] static Http1ClientResponsePlan zeroContentCloseDelimited(
+        HttpTransferCodings transferCodings,
+        RequestContentSignal requestContentSignal) noexcept {
+        return Http1ClientResponsePlan(
+            Http1ClientResponsePlan::State(
+                Http1ClientResponseWithZeroContent(
+                    Http1ClientResponseWithZeroContent::Framing(
+                        Http1ClientCloseDelimitedResponse(transferCodings)))),
+            requestContentSignal);
+    }
+
     [[nodiscard]] static Http1ClientResponsePlan knownLength(
         std::size_t contentLength,
         Http1ClientResponsePersistence persistence,
@@ -362,6 +397,10 @@ receiveContinue(
     const bool framingFieldsApply =
         contentSemantics ==
         detail::HttpResponseContentSemantics::kWithContent;
+    const bool resetContentRequiresEmpty =
+        output.statusCode == 205 &&
+        contentSemantics !=
+            detail::HttpResponseContentSemantics::kConnectTunnel;
 
     auto remaining = firstLineEnd == std::string_view::npos
         ? std::string_view{}
@@ -398,7 +437,7 @@ receiveContinue(
             // Content-Length parsing. HEAD, non-101 informational, 204, 304,
             // and successful CONNECT therefore ignore this field for framing.
             // A 101 still records its forbidden presence for handshake checks.
-            if (framingFieldsApply) {
+            if (framingFieldsApply || resetContentRequiresEmpty) {
                 switch (output.contentLength.parseField(value)) {
                     case detail::HttpContentLengthParseStatus::kOk:
                         break;
@@ -508,6 +547,13 @@ receiveContinue(
             std::nullopt);
     }
 
+    const bool resetContentRequiresEmpty = response.statusCode == 205;
+    const auto contentLength = response.contentLength.value();
+    if (resetContentRequiresEmpty &&
+        contentLength.has_value() && *contentLength != 0) {
+        return Http1ClientResponseParseError::kInvalidContentLength;
+    }
+
     const auto persistence = finalResponsePersistence(request, response);
     const auto persistentContentSignal = requestContentSignal(
         requestContentPhase,
@@ -520,7 +566,6 @@ receiveContinue(
             persistentContentSignal);
     }
 
-    const auto contentLength = response.contentLength.value();
     const auto transferEncoding = response.transferEncoding.value();
     if (response.sawTransferEncoding) {
         if (contentLength.has_value()) {
@@ -531,10 +576,24 @@ receiveContinue(
             return Http1ClientResponseParseError::kInvalidTransferEncoding;
         }
         if (const auto* finalChunked = transferEncoding->finalChunked()) {
+            if (resetContentRequiresEmpty) {
+                return detail::Http1ClientResponsePlanAccess::
+                    zeroContentChunked(
+                        finalChunked->transferCodings(),
+                        persistence,
+                        persistentContentSignal);
+            }
             return detail::Http1ClientResponsePlanAccess::chunked(
                 finalChunked->transferCodings(),
                 persistence,
                 persistentContentSignal);
+        }
+        if (resetContentRequiresEmpty) {
+            return detail::Http1ClientResponsePlanAccess::
+                zeroContentCloseDelimited(
+                    transferEncoding->nonChunked()->transferCodings(),
+                    requestContentSignal(
+                        requestContentPhase, response.statusCode, true));
         }
         return detail::Http1ClientResponsePlanAccess::closeDelimited(
             transferEncoding->nonChunked()->transferCodings(),
@@ -543,6 +602,11 @@ receiveContinue(
     }
 
     if (contentLength.has_value()) {
+        if (resetContentRequiresEmpty) {
+            return detail::Http1ClientResponsePlanAccess::
+                zeroContentKnownLength(
+                    persistence, persistentContentSignal);
+        }
         return detail::Http1ClientResponsePlanAccess::knownLength(
             *contentLength,
             persistence,
@@ -551,6 +615,13 @@ receiveContinue(
 
     // RFC 9112 section 6.3: a body-allowed response with no declared
     // length is delimited by server close and cannot return to a pool.
+    if (resetContentRequiresEmpty) {
+        return detail::Http1ClientResponsePlanAccess::
+            zeroContentCloseDelimited(
+                {},
+                requestContentSignal(
+                    requestContentPhase, response.statusCode, true));
+    }
     return detail::Http1ClientResponsePlanAccess::closeDelimited(
         {},
         requestContentSignal(

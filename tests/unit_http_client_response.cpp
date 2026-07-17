@@ -44,6 +44,7 @@ template <typename T>
 concept HasAnyRvalueHttp1ClientResponsePlanAccessor =
     requires(T&& plan) { std::move(plan).informational(); } ||
     requires(T&& plan) { std::move(plan).withoutContent(); } ||
+    requires(T&& plan) { std::move(plan).zeroContent(); } ||
     requires(T&& plan) { std::move(plan).knownLength(); } ||
     requires(T&& plan) { std::move(plan).chunked(); } ||
     requires(T&& plan) { std::move(plan).closeDelimited(); } ||
@@ -59,6 +60,8 @@ static_assert(!HasAnyRvalueHttp1ClientResponseParseAccessor<
     Http1ClientResponseParseResult>);
 static_assert(!HasAnyRvalueHttp1ClientResponsePlanAccessor<
     ruvia::Http1ClientResponsePlan>);
+static_assert(!HasAnyRvalueHttp1ClientResponsePlanAccessor<
+    ruvia::Http1ClientResponseWithZeroContent>);
 static_assert(!HasAnyRvalueHttp1ParsedClientResponseBorrow<
     Http1ParsedClientResponseHead>);
 
@@ -187,10 +190,21 @@ const ruvia::Http1ClientResponseWithoutContent& requireWithoutContent(
     return *withoutContent;
 }
 
+const ruvia::Http1ClientResponseWithZeroContent& requireZeroContent(
+    const ruvia::Http1ClientResponsePlan& plan) {
+    const auto* zeroContent = plan.zeroContent();
+    if (zeroContent == nullptr) {
+        throw std::runtime_error(
+            "test expected a response with framed zero content");
+    }
+    return *zeroContent;
+}
+
 std::size_t activePlanAlternativeCount(
     const ruvia::Http1ClientResponsePlan& plan) noexcept {
     return static_cast<std::size_t>(plan.informational() != nullptr) +
         static_cast<std::size_t>(plan.withoutContent() != nullptr) +
+        static_cast<std::size_t>(plan.zeroContent() != nullptr) +
         static_cast<std::size_t>(plan.knownLength() != nullptr) +
         static_cast<std::size_t>(plan.chunked() != nullptr) +
         static_cast<std::size_t>(plan.closeDelimited() != nullptr) +
@@ -302,6 +316,8 @@ static_assert(!std::is_default_constructible_v<
 static_assert(!std::is_default_constructible_v<
     ruvia::Http1ClientResponseWithoutContent>);
 static_assert(!std::is_default_constructible_v<
+    ruvia::Http1ClientResponseWithZeroContent>);
+static_assert(!std::is_default_constructible_v<
     ruvia::Http1ClientKnownLengthResponse>);
 static_assert(!std::is_default_constructible_v<
     ruvia::Http1ClientChunkedResponse>);
@@ -331,6 +347,9 @@ static_assert(HasResponsePersistence<ruvia::Http1ClientKnownLengthResponse>);
 static_assert(HasResponsePersistence<ruvia::Http1ClientChunkedResponse>);
 static_assert(!HasResponsePersistence<
     ruvia::Http1ClientCloseDelimitedResponse>);
+static_assert(std::same_as<
+    decltype(std::declval<const ruvia::Http1ClientResponsePlan&>().zeroContent()),
+    const ruvia::Http1ClientResponseWithZeroContent*>);
 static_assert(std::same_as<
     decltype(std::declval<const ruvia::Http1ClientResponsePlan&>().knownLength()),
     const ruvia::Http1ClientKnownLengthResponse*>);
@@ -521,27 +540,69 @@ RUVIA_TEST(http_client_no_body_precedence_ignores_framing_fields) {
     RUVIA_CHECK(noContent.plan().withoutContent() != nullptr);
 }
 
-RUVIA_TEST(http_client_205_uses_normal_http1_message_framing) {
+RUVIA_TEST(http_client_205_owns_zero_content_framing) {
     const auto zeroLength = parseHead(
         "GET", "HTTP/1.1 205 Reset Content\r\nContent-Length: 0");
-    const auto& zeroLengthBody = requireKnownLength(zeroLength.plan());
-    RUVIA_CHECK(!zeroLengthBody.requiresBodyConsumption());
+    const auto* zeroLengthBody =
+        requireZeroContent(zeroLength.plan()).knownLength();
+    RUVIA_CHECK(zeroLengthBody != nullptr);
+    if (zeroLengthBody == nullptr) {
+        return;
+    }
+    RUVIA_CHECK(!zeroLengthBody->requiresBodyConsumption());
     RUVIA_CHECK(
-        zeroLengthBody.persistence() == Http1ClientResponsePersistence::kReuse);
+        zeroLengthBody->persistence() ==
+        Http1ClientResponsePersistence::kReuse);
+    RUVIA_CHECK_EQ(activePlanAlternativeCount(zeroLength.plan()), std::size_t{1});
 
-    const auto nonzeroLength = parseHead(
-        "GET", "HTTP/1.1 205 Reset Content\r\nContent-Length: 3");
-    const auto& nonzeroLengthBody = requireKnownLength(nonzeroLength.plan());
-    RUVIA_CHECK_EQ(nonzeroLengthBody.contentLength(), std::size_t{3});
-    RUVIA_CHECK(nonzeroLengthBody.requiresBodyConsumption());
+    RUVIA_CHECK(parseFails(
+        "GET", "HTTP/1.1 205 Reset Content\r\nContent-Length: 3"));
+    RUVIA_CHECK(parseFails(
+        "HEAD", "HTTP/1.1 205 Reset Content\r\nContent-Length: 3"));
 
     const auto chunked = parseHead(
-        "GET", "HTTP/1.1 205 Reset Content\r\nTransfer-Encoding: chunked");
-    RUVIA_CHECK(chunked.plan().chunked() != nullptr);
+        "GET",
+        "HTTP/1.1 205 Reset Content\r\n"
+        "Transfer-Encoding: gzip, chunked");
+    const auto& chunkedZero = requireZeroContent(chunked.plan());
+    RUVIA_CHECK(chunkedZero.chunked() != nullptr);
+    RUVIA_CHECK(chunkedZero.closeDelimited() == nullptr);
+    if (chunkedZero.chunked() != nullptr) {
+        RUVIA_CHECK_EQ(
+            chunkedZero.chunked()->transferCodings().count,
+            std::size_t{1});
+        RUVIA_CHECK(
+            chunkedZero.chunked()->transferCodings().values[0] ==
+            ruvia::detail::HttpTransferCoding::kGzip);
+    }
+    RUVIA_CHECK_EQ(activePlanAlternativeCount(chunked.plan()), std::size_t{1});
+
+    const auto transferCoded = parseHead(
+        "GET",
+        "HTTP/1.1 205 Reset Content\r\nTransfer-Encoding: gzip");
+    const auto& transferCodedZero = requireZeroContent(transferCoded.plan());
+    RUVIA_CHECK(transferCodedZero.closeDelimited() != nullptr);
+    if (transferCodedZero.closeDelimited() != nullptr) {
+        RUVIA_CHECK_EQ(
+            transferCodedZero.closeDelimited()->transferCodings().count,
+            std::size_t{1});
+        RUVIA_CHECK(
+            transferCodedZero.closeDelimited()->transferCodings().values[0] ==
+            ruvia::detail::HttpTransferCoding::kGzip);
+    }
 
     const auto unframed = parseHead(
         "GET", "HTTP/1.1 205 Reset Content");
-    RUVIA_CHECK(unframed.plan().closeDelimited() != nullptr);
+    const auto& closeZero = requireZeroContent(unframed.plan());
+    RUVIA_CHECK(closeZero.closeDelimited() != nullptr);
+    RUVIA_CHECK(closeZero.chunked() == nullptr);
+    RUVIA_CHECK_EQ(activePlanAlternativeCount(unframed.plan()), std::size_t{1});
+
+    const auto connect = parseHead(
+        "CONNECT",
+        "HTTP/1.1 205 Reset Content\r\nContent-Length: invalid");
+    RUVIA_CHECK(connect.plan().connectTunnel() != nullptr);
+    RUVIA_CHECK(connect.plan().zeroContent() == nullptr);
 }
 
 RUVIA_TEST(http_client_informational_response_enforces_shared_field_contract) {

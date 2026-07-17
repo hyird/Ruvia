@@ -1215,6 +1215,8 @@ if(NOT _installed_http1_client_response_parser_content MATCHES
    NOT _installed_http1_client_response_parser_content MATCHES
        "class Http1ClientResponseWithoutContent final" OR
    NOT _installed_http1_client_response_parser_content MATCHES
+       "class Http1ClientResponseWithZeroContent final" OR
+   NOT _installed_http1_client_response_parser_content MATCHES
        "class Http1ClientKnownLengthResponse final" OR
    NOT _installed_http1_client_response_parser_content MATCHES
        "class Http1ClientChunkedResponse final" OR
@@ -1230,6 +1232,8 @@ if(NOT _installed_http1_client_response_parser_content MATCHES
        "informational[(][)]" OR
    NOT _installed_http1_client_response_parser_content MATCHES
        "withoutContent[(][)]" OR
+   NOT _installed_http1_client_response_parser_content MATCHES
+       "zeroContent[(][)]" OR
    NOT _installed_http1_client_response_parser_content MATCHES
        "knownLength[(][)]" OR
    NOT _installed_http1_client_response_parser_content MATCHES
