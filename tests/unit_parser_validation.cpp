@@ -80,7 +80,7 @@ RUVIA_TEST(chunk_trailers_reject_remaining_forbidden_fields) {
     // that "dropping one reopens trailer smuggling". Cover them all here.
     //
     // Upgrade is a NOTABLE case: the HTTP/1 list forbids it as a trailer, but the
-    // HTTP/2 forbidden-trailer set (http2IsForbiddenTrailerHeader) omits it,
+    // HTTP/2 request-trailer set (http2IsForbiddenRequestTrailerHeader) omits it,
     // because HTTP/2 already bans Upgrade as a connection-specific regular header
     // upstream. Over HTTP/1 there is no such upstream ban, so the trailer check is
     // the guard that stops a smuggled protocol-switch request modifier -- pin it.

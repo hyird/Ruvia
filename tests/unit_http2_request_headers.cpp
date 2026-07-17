@@ -20,7 +20,7 @@ using ruvia::detail::HttpRequestExpectations;
 using ruvia::detail::HttpUnsupportedExpectationPolicy;
 using ruvia::detail::http2AccumulateHeaderListBytes;
 using ruvia::detail::http2OnDecodedInitialHeader;
-using ruvia::detail::http2OnDecodedTrailer;
+using ruvia::detail::http2OnDecodedRequestTrailer;
 
 std::pmr::memory_resource* res() noexcept {
     return std::pmr::new_delete_resource();
@@ -531,20 +531,20 @@ RUVIA_TEST(h2_headers_expect_is_an_extensible_repeated_list) {
 RUVIA_TEST(h2_headers_trailer_rejects_pseudo_and_invalid) {
     Http2StreamState stream(1, res());
     Http2HeaderDecodeContext ctx{stream};
-    RUVIA_CHECK(http2OnDecodedTrailer(ctx, "x-trace-id", "abc"));
-    RUVIA_CHECK(!http2OnDecodedTrailer(ctx, ":method", "GET"));      // no pseudo-headers in trailers
-    RUVIA_CHECK(!http2OnDecodedTrailer(ctx, "connection", "close"));  // forbidden framing field
-    RUVIA_CHECK(!http2OnDecodedTrailer(ctx, "host", "example.com"));  // routing is header-only
-    RUVIA_CHECK(!http2OnDecodedTrailer(ctx, "content-length", "0"));  // framing is header-only
-    RUVIA_CHECK(!http2OnDecodedTrailer(ctx, "te", "trailers"));       // connection option is header-only
-    RUVIA_CHECK(!http2OnDecodedTrailer(ctx, "trailer", "x-checksum"));
-    RUVIA_CHECK(!http2OnDecodedTrailer(ctx, "content-type", "text/plain"));
-    RUVIA_CHECK(!http2OnDecodedTrailer(ctx, "origin", "https://app.example"));
-    RUVIA_CHECK(!http2OnDecodedTrailer(
+    RUVIA_CHECK(http2OnDecodedRequestTrailer(ctx, "x-trace-id", "abc"));
+    RUVIA_CHECK(!http2OnDecodedRequestTrailer(ctx, ":method", "GET"));      // no pseudo-headers in trailers
+    RUVIA_CHECK(!http2OnDecodedRequestTrailer(ctx, "connection", "close"));  // forbidden framing field
+    RUVIA_CHECK(!http2OnDecodedRequestTrailer(ctx, "host", "example.com"));  // routing is header-only
+    RUVIA_CHECK(!http2OnDecodedRequestTrailer(ctx, "content-length", "0"));  // framing is header-only
+    RUVIA_CHECK(!http2OnDecodedRequestTrailer(ctx, "te", "trailers"));       // connection option is header-only
+    RUVIA_CHECK(!http2OnDecodedRequestTrailer(ctx, "trailer", "x-checksum"));
+    RUVIA_CHECK(!http2OnDecodedRequestTrailer(ctx, "content-type", "text/plain"));
+    RUVIA_CHECK(!http2OnDecodedRequestTrailer(ctx, "origin", "https://app.example"));
+    RUVIA_CHECK(!http2OnDecodedRequestTrailer(
         ctx,
         "access-control-request-method",
         "POST"));
-    RUVIA_CHECK(!http2OnDecodedTrailer(
+    RUVIA_CHECK(!http2OnDecodedRequestTrailer(
         ctx,
         "access-control-request-headers",
         "x-one"));
@@ -554,10 +554,10 @@ RUVIA_TEST(h2_headers_trailer_enforces_field_count_without_storing_fields) {
     Http2StreamState stream(1, res());
     Http2HeaderDecodeContext context{stream};
     for (std::size_t i = 0; i < ruvia::kMaxHttpHeaderFields; ++i) {
-        RUVIA_CHECK(http2OnDecodedTrailer(
+        RUVIA_CHECK(http2OnDecodedRequestTrailer(
             context, "x-trace", "value"));
     }
-    RUVIA_CHECK(!http2OnDecodedTrailer(
+    RUVIA_CHECK(!http2OnDecodedRequestTrailer(
         context, "x-trace", "value"));
 }
 

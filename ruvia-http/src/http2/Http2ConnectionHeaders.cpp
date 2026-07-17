@@ -11,6 +11,7 @@
 #include "ruvia/http/detail/HttpResponseHeaderBits.h"
 #include "ruvia/http/detail/HttpResponseKnownHeaders.h"
 #include "ruvia/http/detail/HttpResponseContentSemantics.h"
+#include "ruvia/http/detail/server/HttpResponseTrailers.h"
 #include "ruvia/http/detail/http2/Http2FramePayload.h"
 #include "ruvia/http/detail/http2/Http2HeaderBlock.h"
 #include "ruvia/http/detail/http2/Http2HeaderRules.h"
@@ -215,6 +216,25 @@ bool http2OnDecodedResponseHeader(void* target, std::string_view name, std::stri
     return stream.appendRequestHeader(name, value, kind);
 }
 
+bool http2OnDecodedResponseTrailer(
+    void* target,
+    std::string_view name,
+    std::string_view value) {
+    auto& context = *static_cast<Http2HeaderDecodeContext*>(target);
+    if (!http2AccumulateHeaderListBytes(context, name, value)) {
+        return false;
+    }
+
+    // Response trailers have different field semantics from request trailers.
+    // Reuse the same response-specific permission table that proves outbound
+    // trailer sections, after applying HTTP/2's lowercase and connection-field
+    // rules. In particular, Accept-Ranges and ETag are explicitly trailer-safe,
+    // while response controls such as Date and Location are not.
+    return context.acceptRegularField() &&
+        http2IsValidDecodedResponseHeader(name, value) &&
+        !isForbiddenResponseTrailerName(name);
+}
+
 }  // namespace
 
 HeaderDecodeStatus Http2Connection::decodeResponseHeaderBlock(Http2StreamState& stream) {
@@ -381,12 +401,20 @@ bool Http2Connection::finishDiscardedHeaderBlock() {
 
 HeaderDecodeStatus Http2Connection::finishTrailerBlock(Http2StreamState& stream) {
     Http2HeaderDecodeContext context{stream};
-    const auto result = decoder_.decode(
-        stream.requestHeaderBlock(), &context,
-        [](void* target, std::string_view name, std::string_view value) {
-            return http2OnDecodedTrailer(
-                *static_cast<Http2HeaderDecodeContext*>(target), name, value);
-        });
+    const auto result = role_ == Http2Role::kServer
+        ? decoder_.decode(
+              stream.requestHeaderBlock(),
+              &context,
+              [](void* target, std::string_view name, std::string_view value) {
+                  return http2OnDecodedRequestTrailer(
+                      *static_cast<Http2HeaderDecodeContext*>(target),
+                      name,
+                      value);
+              })
+        : decoder_.decode(
+              stream.requestHeaderBlock(),
+              &context,
+              http2OnDecodedResponseTrailer);
     http2ResetHeaderBlock(stream);
     if (const auto status = http2ClassifyHeaderDecodeResult(result); status != HeaderDecodeStatus::kOk) {
         return status;

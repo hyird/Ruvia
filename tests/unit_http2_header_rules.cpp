@@ -9,7 +9,7 @@ namespace {
 using ruvia::detail::http2HeaderNameHasUppercase;
 using ruvia::detail::http2IsForbiddenConnectionHeader;
 using ruvia::detail::http2IsForbiddenResponseConnectionField;
-using ruvia::detail::http2IsForbiddenTrailerHeader;
+using ruvia::detail::http2IsForbiddenRequestTrailerHeader;
 using ruvia::detail::http2IsValidRegularHeader;
 using ruvia::detail::http2IsValidDecodedResponseHeader;
 
@@ -73,7 +73,7 @@ RUVIA_TEST(http2_valid_regular_header) {
     RUVIA_CHECK(!http2IsValidRegularHeader("x-custom", std::string_view("a\r\nb", 4)));
 }
 
-RUVIA_TEST(http2_forbidden_trailer_headers) {
+RUVIA_TEST(http2_forbidden_request_trailer_headers) {
     // Fields that govern framing, routing, auth, caching, or state must not appear in
     // an HTTP/2 trailer section -- they are only meaningful in the header block.
     for (const char* name : {"host", "content-length", "connection", "content-encoding",
@@ -83,10 +83,10 @@ RUVIA_TEST(http2_forbidden_trailer_headers) {
                              "te", "trailer", "keep-alive", "set-cookie", "max-forwards",
                              "cache-control", "accept-ranges", "content-range",
                              "proxy-authenticate", "proxy-authorization"}) {
-        RUVIA_CHECK(http2IsForbiddenTrailerHeader(name));
+        RUVIA_CHECK(http2IsForbiddenRequestTrailerHeader(name));
     }
     // Ordinary content trailers (a checksum, a signature, a trace id) are permitted.
-    RUVIA_CHECK(!http2IsForbiddenTrailerHeader("x-checksum"));
-    RUVIA_CHECK(!http2IsForbiddenTrailerHeader("accept"));
-    RUVIA_CHECK(!http2IsForbiddenTrailerHeader("user-agent"));
+    RUVIA_CHECK(!http2IsForbiddenRequestTrailerHeader("x-checksum"));
+    RUVIA_CHECK(!http2IsForbiddenRequestTrailerHeader("accept"));
+    RUVIA_CHECK(!http2IsForbiddenRequestTrailerHeader("user-agent"));
 }

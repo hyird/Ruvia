@@ -124,7 +124,8 @@ namespace ruvia::detail {
                 httpAsciiEqualsIgnoreCase(name, "Clear-Site-Data");
         case 16:
             return httpAsciiEqualsIgnoreCase(name, "X-XSS-Protection") ||
-                httpAsciiEqualsIgnoreCase(name, "WWW-Authenticate");
+                httpAsciiEqualsIgnoreCase(name, "WWW-Authenticate") ||
+                httpAsciiEqualsIgnoreCase(name, "Proxy-Connection");
         case 18:
             return httpAsciiEqualsIgnoreCase(name, "Proxy-Authenticate") ||
                 httpAsciiEqualsIgnoreCase(name, "Permissions-Policy");

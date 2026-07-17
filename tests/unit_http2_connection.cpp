@@ -5518,6 +5518,82 @@ RUVIA_TEST(http2_connection_client_head_representation_length_survives_trailer_t
     RUVIA_CHECK(client.stream(streamId) == nullptr);
 }
 
+RUVIA_TEST(http2_connection_applies_response_specific_trailer_rules) {
+    struct Case final {
+        std::string_view name;
+        std::string_view value;
+        bool accepted;
+    };
+    constexpr Case cases[] = {
+        // RFC 9110 Section 14.3 explicitly permits Accept-Ranges in a trailer.
+        {"accept-ranges", "bytes", true},
+        // Date is response control data that has to be known before content.
+        {"date", "Sun, 06 Nov 1994 08:49:37 GMT", false},
+    };
+
+    for (const auto& test : cases) {
+        std::pmr::monotonic_buffer_resource resource;
+        Http2Connection client(&resource, Http2Role::kClient);
+        handshake(client);
+
+        const auto request = client.submitRegularRequestHead(
+            "GET",
+            "https",
+            "example.test",
+            "/",
+            {},
+            Http2RequestContent::none());
+        RUVIA_CHECK(request.submitted() != nullptr);
+        const auto streamId = submittedRequestStreamId(request);
+        client.consumeOutput(client.pendingOutput().size());
+
+        std::pmr::string response(&resource);
+        HpackEncoder::encodeHeader(response, ":status", "200");
+        const auto responseHead = headersFrame(
+            &resource,
+            streamId,
+            ruvia::detail::kHttp2FlagEndHeaders,
+            std::string_view(response.data(), response.size()));
+        RUVIA_CHECK(client.feed(std::string_view(
+            responseHead.data(), responseHead.size())) ==
+            Http2FeedResult::kAccepted);
+        RUVIA_CHECK(client.nextEvent().value().kind() ==
+            Http2EventKind::kMessageHead);
+        RUVIA_CHECK(!client.nextEvent().has_value());
+
+        std::pmr::string trailers(&resource);
+        HpackEncoder::encodeHeader(
+            trailers,
+            test.name,
+            test.value);
+        const auto trailerHead = headersFrame(
+            &resource,
+            streamId,
+            static_cast<std::uint8_t>(
+                ruvia::detail::kHttp2FlagEndHeaders |
+                ruvia::detail::kHttp2FlagEndStream),
+            std::string_view(trailers.data(), trailers.size()));
+        RUVIA_CHECK(client.feed(std::string_view(
+            trailerHead.data(), trailerHead.size())) ==
+            Http2FeedResult::kAccepted);
+
+        bool sawMessageEnd = false;
+        bool sawProtocolClose = false;
+        while (const auto event = client.nextEvent()) {
+            sawMessageEnd = sawMessageEnd || event->messageEnd() != nullptr;
+            if (const auto* closed = event->streamClosed()) {
+                sawProtocolClose =
+                    closed->source() == Http2StreamCloseSource::kLocal &&
+                    closed->error() == Http2ErrorCode::kProtocolError;
+            }
+        }
+        RUVIA_CHECK_EQ(sawMessageEnd, test.accepted);
+        RUVIA_CHECK_EQ(sawProtocolClose, !test.accepted);
+        RUVIA_CHECK_EQ(client.pendingOutput().empty(), test.accepted);
+        RUVIA_CHECK(!client.connectionError().has_value());
+    }
+}
+
 // RFC 9110 Section 15.3.6 requires every 205 response to have zero-length
 // content. Unlike HEAD/204/304, 205 still has an ordinary content phase, but a
 // peer cannot use that phase to transfer any non-empty DATA. HTTP/2 can reject

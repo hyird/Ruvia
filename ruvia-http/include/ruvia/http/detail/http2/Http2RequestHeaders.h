@@ -218,7 +218,7 @@ struct Http2HeaderDecodeContext final {
     return stream.appendRequestHeader(name, value, kind);
 }
 
-[[nodiscard]] inline bool http2OnDecodedTrailer(
+[[nodiscard]] inline bool http2OnDecodedRequestTrailer(
     Http2HeaderDecodeContext& context,
     std::string_view name,
     std::string_view value) {
@@ -228,7 +228,7 @@ struct Http2HeaderDecodeContext final {
 
     return context.acceptRegularField() &&
         http2IsValidRegularHeader(name, value) &&
-        !http2IsForbiddenTrailerHeader(name);
+        !http2IsForbiddenRequestTrailerHeader(name);
 }
 
 }  // namespace ruvia::detail

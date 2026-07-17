@@ -85,6 +85,7 @@ RUVIA_TEST(response_trailer_forbidden_names) {
     RUVIA_CHECK(isForbiddenResponseTrailerName("Host"));
     RUVIA_CHECK(isForbiddenResponseTrailerName("TE"));
     RUVIA_CHECK(isForbiddenResponseTrailerName("Connection"));
+    RUVIA_CHECK(isForbiddenResponseTrailerName("Proxy-Connection"));
     RUVIA_CHECK(isForbiddenResponseTrailerName("Trailer"));
     RUVIA_CHECK(isForbiddenResponseTrailerName("Upgrade"));
     RUVIA_CHECK(isForbiddenResponseTrailerName("Content-Type"));
@@ -149,6 +150,9 @@ RUVIA_TEST(response_trailer_field_combined_rule) {
     // Forbidden name.
     RUVIA_CHECK(!responseTrailerFieldValid("Content-Length", "5"));
     RUVIA_CHECK(!responseTrailerFieldValid("transfer-encoding", "chunked"));
+    RUVIA_CHECK(!responseTrailerFieldValid(
+        "Proxy-Connection",
+        "keep-alive"));
     RUVIA_CHECK(!responseTrailerFieldValid("Content-Type", "text/plain"));
     RUVIA_CHECK(!responseTrailerFieldValid("Set-Cookie", "a=b"));
     RUVIA_CHECK(!responseTrailerFieldValid("Allow", "GET, POST"));
