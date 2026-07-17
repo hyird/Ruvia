@@ -7,6 +7,7 @@
 
 #include "ruvia/http/HttpStatus.h"
 #include "ruvia/http/detail/HttpInterimResponseValidation.h"
+#include "ruvia/http/detail/HttpRequestContentSemantics.h"
 #include "ruvia/http/detail/HttpResponseContentSemantics.h"
 #include "ruvia/http/detail/http2/Http2FramePayload.h"
 #include "ruvia/http/detail/http2/Http2HeaderBlock.h"
@@ -78,6 +79,18 @@ HeaderDecodeStatus Http2Connection::decodeHeaderBlock(Http2StreamState& stream) 
         (!stream.hasAuthority() && http2RegularRequestRequiresAuthority(
             stream.requestScheme(), stream.requestPath()))) {
         return HeaderDecodeStatus::kProtocolError;
+    }
+    if (role_ == Http2Role::kServer &&
+        stream.requestKnownMethod() != HttpKnownMethod::kConnect &&
+        httpRequestContentSemantics(stream.requestMethod()) ==
+            HttpRequestContentSemantics::kForbidden) {
+        // A declared length is an explicit content signal, including zero.
+        // Without a length, retain the open remote half for a legal empty
+        // DATA(END_STREAM), but make non-empty DATA unrepresentable as content.
+        if (stream.remoteContent().allowedKnownLength() != nullptr ||
+            !stream.selectRemoteContentMetadataOnly()) {
+            return HeaderDecodeStatus::kProtocolError;
+        }
     }
     const bool remoteHeadFinalized = stream.tunnel().pending() != nullptr
         ? stream.finalizeRemoteConnectHead()

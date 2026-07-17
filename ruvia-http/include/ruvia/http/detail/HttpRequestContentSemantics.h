@@ -5,10 +5,10 @@
 
 namespace ruvia::detail {
 
-// Sender-side method requirements for a request that explicitly carries
-// content. This is shared by the HTTP/1 and HTTP/2 client serializers so the
-// selected wire version cannot change the request's method semantics. RFC 9110
-// Sections 9.3.7 and 9.3.8 define the OPTIONS and TRACE requirements below.
+// Method requirements for a request that explicitly carries content. This is
+// shared by senders and recipients so the selected wire version and endpoint
+// role cannot change the request's method semantics. RFC 9110 Sections 9.3.6,
+// 9.3.7, and 9.3.8 define the CONNECT, OPTIONS, and TRACE requirements below.
 enum class HttpRequestContentSemantics : std::uint8_t {
     kNoAdditionalRequirements,
     kForbidden,
@@ -17,7 +17,7 @@ enum class HttpRequestContentSemantics : std::uint8_t {
 
 [[nodiscard]] constexpr HttpRequestContentSemantics
 httpRequestContentSemantics(std::string_view method) noexcept {
-    if (method == "TRACE") {
+    if (method == "CONNECT" || method == "TRACE") {
         return HttpRequestContentSemantics::kForbidden;
     }
     if (method == "OPTIONS") {

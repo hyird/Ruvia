@@ -2,6 +2,7 @@
 
 #include "ruvia/http/Http1RequestParser.h"
 
+#include "ruvia/http/detail/HttpRequestContentSemantics.h"
 #include "ruvia/http/detail/HttpRequestInternal.h"
 #include "ruvia/http/detail/parser/HttpChunkParser.h"
 #include "ruvia/http/detail/parser/HttpHeaderBlockParser.h"
@@ -103,6 +104,20 @@ void Http1ServerRequestParser::parseRequestHead(
     const auto transferEncoding = block.transferEncoding.value();
     if (transferEncoding.has_value() && contentLength.has_value()) {
         return fail(HttpParseError::kInvalidTransferEncoding);
+    }
+
+    if (httpRequestContentSemantics(method) ==
+        HttpRequestContentSemantics::kForbidden) {
+        // CONNECT has no request content, and TRACE explicitly forbids it
+        // (RFC 9110 sections 9.3.6 and 9.3.8). Content-Length is an explicit
+        // content signal even at zero; accepting either framing field would
+        // give the runtime a body contract that the method does not have.
+        if (transferEncoding.has_value()) {
+            return fail(HttpParseError::kInvalidTransferEncoding);
+        }
+        if (contentLength.has_value()) {
+            return fail(HttpParseError::kInvalidContentLength);
+        }
     }
 
     const auto* finalChunked = transferEncoding.has_value()

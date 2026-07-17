@@ -563,6 +563,63 @@ RUVIA_TEST(http1_parse_connect_uses_target_authority) {
     }
 }
 
+RUVIA_TEST(http1_parse_methods_without_content_reject_framing_fields) {
+    const auto rejects = [&](std::string_view request, HttpParseError error) {
+        Http1ServerRequestParser parser;
+        const auto result = parser.parseMessage(request);
+        RUVIA_CHECK(isFailure(result, error));
+    };
+
+    // RFC 9110 sections 9.3.6 and 9.3.8 define CONNECT as having no request
+    // content and forbid a client from sending content in TRACE. A framing
+    // field is still an explicit content signal when its length is zero.
+    rejects(
+        "CONNECT tunnel.example:443 HTTP/1.1\r\n"
+        "Host: tunnel.example:443\r\nContent-Length: 0\r\n\r\n",
+        HttpParseError::kInvalidContentLength);
+    rejects(
+        "CONNECT tunnel.example:443 HTTP/1.1\r\n"
+        "Host: tunnel.example:443\r\nTransfer-Encoding: chunked\r\n\r\n"
+        "0\r\n\r\n",
+        HttpParseError::kInvalidTransferEncoding);
+    rejects(
+        "TRACE /diagnostic HTTP/1.1\r\n"
+        "Host: example.test\r\nContent-Length: 4\r\n\r\nbody",
+        HttpParseError::kInvalidContentLength);
+    rejects(
+        "TRACE /diagnostic HTTP/1.1\r\n"
+        "Host: example.test\r\nTransfer-Encoding: chunked\r\n\r\n"
+        "0\r\n\r\n",
+        HttpParseError::kInvalidTransferEncoding);
+
+    // Method tokens are case-sensitive. A lowercase extension method named
+    // "trace" does not acquire the registered TRACE method's semantics.
+    Http1ServerRequestParser extensionParser;
+    const auto extension = extensionParser.parseMessage(
+        "trace /diagnostic HTTP/1.1\r\n"
+        "Host: example.test\r\nContent-Length: 4\r\n\r\nbody");
+    RUVIA_CHECK(extension.messageReady());
+    RUVIA_CHECK_EQ(
+        requireKnownLength(extension.bodyPlan).contentLength(),
+        std::size_t{4});
+
+    // Unframed bytes following a CONNECT head are not request content. The
+    // whole-message parser returns the exact head boundary so a tunnel owner
+    // can retain those bytes for its post-response state transition.
+    constexpr std::string_view connectHead =
+        "CONNECT tunnel.example:443 HTTP/1.1\r\n"
+        "Host: tunnel.example:443\r\n\r\n";
+    std::string earlyTunnelBytes(connectHead);
+    earlyTunnelBytes += "opaque";
+    const auto parsed = ruvia::Http1RequestParser().parse(earlyTunnelBytes);
+    RUVIA_CHECK(parsed.parsed() != nullptr);
+    if (const auto* message = parsed.parsed()) {
+        RUVIA_CHECK(message->bodyPlan().withoutBody() != nullptr);
+        RUVIA_CHECK(message->wireBody().empty());
+        RUVIA_CHECK_EQ(message->consumedBytes(), connectHead.size());
+    }
+}
+
 RUVIA_TEST(http1_parse_http10_without_host_allowed) {
     // HTTP/1.0 does not require a Host header.
     Http1ServerRequestParser parser;

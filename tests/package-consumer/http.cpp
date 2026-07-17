@@ -2510,6 +2510,12 @@ static_assert(
     ruvia::detail::httpRequestContentSemantics("TRACE") ==
     ruvia::detail::HttpRequestContentSemantics::kForbidden);
 static_assert(
+    ruvia::detail::httpRequestContentSemantics("CONNECT") ==
+    ruvia::detail::HttpRequestContentSemantics::kForbidden);
+static_assert(
+    ruvia::detail::httpRequestContentSemantics("trace") ==
+    ruvia::detail::HttpRequestContentSemantics::kNoAdditionalRequirements);
+static_assert(
     ruvia::detail::httpRequestContentSemantics("OPTIONS") ==
     ruvia::detail::HttpRequestContentSemantics::kContentTypeRequired);
 static_assert(
