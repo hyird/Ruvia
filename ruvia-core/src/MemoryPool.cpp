@@ -2,11 +2,44 @@
 
 #include <mimalloc.h>
 
+#if defined(__SANITIZE_THREAD__) || \
+    (defined(__has_feature) && __has_feature(thread_sanitizer))
+#include <sanitizer/tsan_interface.h>
+#define RUVIA_TSAN_ALLOCATOR_ANNOTATIONS 1
+#endif
+
 namespace ruvia {
 
 namespace detail {
 
 void ensureMimallocGlobalOverrideLinked() noexcept;
+
+namespace {
+
+// mimalloc is not ThreadSanitizer-instrumented, so the happens-before edge it
+// establishes when memory freed on one worker is handed to another (its internal
+// free/alloc synchronization) is invisible to TSan. Under load that surfaces as
+// a false "data race" between the previous owner's writes and the new owner's
+// writes to the same reused address. Model the allocator's ordering explicitly:
+// release the block on free, acquire it on allocate, so a later owner
+// synchronizes-with the earlier one. Compiled out entirely without TSan.
+inline void tsanAllocatorAcquire([[maybe_unused]] void* pointer) noexcept {
+#if defined(RUVIA_TSAN_ALLOCATOR_ANNOTATIONS)
+    if (pointer != nullptr) {
+        __tsan_acquire(pointer);
+    }
+#endif
+}
+
+inline void tsanAllocatorRelease([[maybe_unused]] void* pointer) noexcept {
+#if defined(RUVIA_TSAN_ALLOCATOR_ANNOTATIONS)
+    if (pointer != nullptr) {
+        __tsan_release(pointer);
+    }
+#endif
+}
+
+}  // namespace
 
 }  // namespace detail
 
@@ -34,10 +67,12 @@ void* taskFrameAllocate(std::size_t bytes) {
     if (pointer == nullptr) {
         throw std::bad_alloc();
     }
+    tsanAllocatorAcquire(pointer);
     return pointer;
 }
 
 void taskFrameDeallocate(void* pointer) noexcept {
+    tsanAllocatorRelease(pointer);
     mi_free(pointer);
 }
 
@@ -49,10 +84,12 @@ void* MimallocMemoryResource::do_allocate(std::size_t bytes, std::size_t alignme
         throw std::bad_alloc();
     }
 
+    detail::tsanAllocatorAcquire(pointer);
     return pointer;
 }
 
 void MimallocMemoryResource::do_deallocate(void* pointer, std::size_t bytes, std::size_t alignment) {
+    detail::tsanAllocatorRelease(pointer);
     mi_free_aligned(pointer, alignment);
     (void)bytes;
 }
