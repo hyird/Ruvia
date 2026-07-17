@@ -544,7 +544,7 @@ RUVIA_TEST(http_client_205_uses_normal_http1_message_framing) {
     RUVIA_CHECK(unframed.plan().closeDelimited() != nullptr);
 }
 
-RUVIA_TEST(http_client_informational_response_awaits_final_response) {
+RUVIA_TEST(http_client_informational_response_enforces_shared_field_contract) {
     for (const auto status : {
              std::string_view("HTTP/1.1 100 Continue"),
              std::string_view("HTTP/1.1 103 Early Hints")}) {
@@ -552,11 +552,33 @@ RUVIA_TEST(http_client_informational_response_awaits_final_response) {
         RUVIA_CHECK(head.plan().informational() != nullptr);
     }
 
-    const auto ignoredFraming = parseHead(
+    const auto valid = parseHead(
         "GET",
-        "HTTP/1.1 103 Early Hints\r\nContent-Length: invalid\r\n"
-        "Transfer-Encoding: custom-coding");
-    RUVIA_CHECK(ignoredFraming.plan().informational() != nullptr);
+        "HTTP/1.1 103 Early Hints\r\n"
+        "Link: </style.css>; rel=preload\r\n"
+        "Content-Type: text/html; charset=utf-8");
+    RUVIA_CHECK(valid.plan().informational() != nullptr);
+
+    constexpr std::array invalidFields{
+        std::string_view("Content-Length: 0"),
+        std::string_view("Transfer-Encoding: chunked"),
+        std::string_view("Trailer: X-Checksum"),
+        std::string_view(
+            "Date: Thu, 01 Jan 1970 00:00:00 GMT\r\n"
+            "date: Thu, 01 Jan 1970 00:00:01 GMT"),
+    };
+    for (const auto fields : invalidFields) {
+        std::string head("HTTP/1.1 103 Early Hints\r\n");
+        head.append(fields);
+        const auto result = parseResult("GET", head);
+        RUVIA_CHECK(result.parsed() == nullptr);
+        RUVIA_CHECK(result.failure() != nullptr);
+        if (result.failure() != nullptr) {
+            RUVIA_CHECK(
+                result.failure()->error() ==
+                Http1ClientResponseParseError::kInvalidHeader);
+        }
+    }
 }
 
 RUVIA_TEST(http_client_limits_informational_responses_per_exchange) {

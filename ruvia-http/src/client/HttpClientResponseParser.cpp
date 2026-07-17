@@ -10,6 +10,7 @@
 #include "ruvia/http/detail/HttpConnectionFields.h"
 #include "ruvia/http/detail/HttpContentCoding.h"
 #include "ruvia/http/detail/HttpContentLength.h"
+#include "ruvia/http/detail/HttpInterimResponseValidation.h"
 #include "ruvia/http/detail/HttpResponseContentSemantics.h"
 #include "ruvia/http/detail/HttpTransferEncoding.h"
 #include "ruvia/http/detail/client/HttpClientAccess.h"
@@ -356,6 +357,8 @@ receiveContinue(
 
     const auto contentSemantics = detail::httpResponseContentSemantics(
         request.method(), output.statusCode);
+    detail::HttpInterimResponseHeaderValidator interimHeaders(
+        detail::HttpFieldListRole::kRecipient);
     const bool framingFieldsApply =
         contentSemantics ==
         detail::HttpResponseContentSemantics::kWithContent;
@@ -375,7 +378,13 @@ receiveContinue(
 
         const auto name = line.substr(0, colon);
         const auto value = detail::httpTrimOws(line.substr(colon + 1));
-        if (!isValidHttpHeaderName(name) || !isValidHttpHeaderValue(value)) {
+        const bool fieldsValid = contentSemantics ==
+                detail::HttpResponseContentSemantics::kInformational
+            ? interimHeaders.validate(name, value) ==
+                detail::HttpInterimResponseHeaderValidationStatus::kOk
+            : isValidHttpHeaderName(name) &&
+                isValidHttpHeaderValue(value);
+        if (!fieldsValid) {
             return Http1ClientResponseParseError::kInvalidHeader;
         }
         if (output.headerCount == kMaxHttpHeaderFields) {
