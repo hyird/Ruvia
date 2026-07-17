@@ -16,6 +16,7 @@
 #include "ruvia/http/detail/http2/Http2StreamState.h"
 #include "ruvia/http/detail/server/HttpFinalResponseControlPlan.h"
 #include "ruvia/http/HttpInterimResponse.h"
+#include "ruvia/http/HttpLimits.h"
 #include "ruvia/http/HttpResponse.h"
 
 namespace {
@@ -68,11 +69,13 @@ bool appendBufferedResponseHeaders(
     if (plan == nullptr || http2Control == nullptr) {
         return false;
     }
-    appendHttp2ResponseHeaders(
+    if (!appendHttp2ResponseHeaders(
         stream,
         response,
         *plan,
-        *http2Control);
+        *http2Control)) {
+        return false;
+    }
     return true;
 }
 
@@ -100,11 +103,13 @@ bool decodeResponseHeaders(
         if (plan == nullptr || http2Control == nullptr) {
             return false;
         }
-        appendHttp2ResponseHeaders(
+        if (!appendHttp2ResponseHeaders(
             stream,
             response,
             *plan,
-            *http2Control);
+            *http2Control)) {
+            return false;
+        }
     }
 
     HpackDecoder decoder(std::pmr::get_default_resource());
@@ -365,6 +370,20 @@ RUVIA_TEST(http2_interim_response_header_rejection_is_transactional) {
     RUVIA_CHECK(rejects(malformedContentType));
     RUVIA_CHECK(rejects(emptyContentType));
     RUVIA_CHECK(rejects(duplicateServer));
+
+    const std::string oversizedValue(ruvia::kMaxHttpHeaderBytes, 'x');
+    const ruvia::HttpHeaderView oversized[] = {
+        {"X-Oversized", oversizedValue},
+    };
+    RUVIA_CHECK(rejects(oversized));
+
+    std::array<
+        ruvia::HttpHeaderView,
+        ruvia::kMaxHttpHeaderFields + 1> tooMany{};
+    for (auto& header : tooMany) {
+        header = {"X-Many", "value"};
+    }
+    RUVIA_CHECK(rejects(tooMany));
 }
 
 RUVIA_TEST(http2_response_headers_keep_server_product_policy_explicit) {

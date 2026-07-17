@@ -2,6 +2,7 @@
 
 #include "ruvia/http/detail/HeaderTokenUtils.h"
 #include "ruvia/http/detail/HttpResponseHeaderBits.h"
+#include "ruvia/http/detail/HttpHeaderSectionSize.h"
 #include "ruvia/http/detail/HttpResponseKnownHeaders.h"
 #include "ruvia/http/detail/parser/HttpParserSyntax.h"
 #include "ruvia/http/HttpHeader.h"
@@ -241,8 +242,14 @@ private:
 [[nodiscard]] inline HttpResponseTrailerSectionResult
 httpResponseTrailerSection(
     std::span<const HttpHeaderView> trailers) noexcept {
+    if (trailers.size() > kMaxHttpHeaderFields) {
+        return HttpResponseTrailerSectionResult(
+            HttpResponseTrailerSectionFailure());
+    }
+    HttpHeaderSectionSize sectionSize;
     for (const auto& trailer : trailers) {
-        if (!responseTrailerFieldValid(trailer.name(), trailer.value())) {
+        if (!responseTrailerFieldValid(trailer.name(), trailer.value()) ||
+            !sectionSize.add(trailer.name(), trailer.value())) {
             return HttpResponseTrailerSectionResult(
                 HttpResponseTrailerSectionFailure());
         }

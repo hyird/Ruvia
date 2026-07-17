@@ -8,6 +8,7 @@
 #include "ruvia/http/detail/HeaderAcceptUtils.h"
 #include "ruvia/http/detail/HttpCorsFields.h"
 #include "ruvia/http/detail/HttpContentCoding.h"
+#include "ruvia/http/detail/HttpHeaderSectionSize.h"
 #include "ruvia/http/detail/http2/Http2HeaderRules.h"
 #include "ruvia/http/detail/http2/Http2StreamState.h"
 #include "ruvia/http/detail/parser/HttpRequestTarget.h"
@@ -17,8 +18,12 @@
 namespace ruvia::detail {
 
 struct Http2HeaderDecodeContext final {
+    explicit Http2HeaderDecodeContext(
+        Http2StreamState& streamValue) noexcept
+        : stream(streamValue) {}
+
     Http2StreamState& stream;
-    std::size_t decodedHeaderListBytes{0};
+    HttpHeaderSectionSize decodedHeaderListSize;
 };
 
 [[nodiscard]] inline bool http2IsHttpRequestScheme(
@@ -70,27 +75,7 @@ struct Http2HeaderDecodeContext final {
     Http2HeaderDecodeContext& context,
     std::string_view name,
     std::string_view value) noexcept {
-    constexpr std::size_t kHeaderListEntryOverhead = 32;
-
-    if (name.size() > kMaxHttpHeaderBytes ||
-        value.size() > kMaxHttpHeaderBytes ||
-        name.size() > kMaxHttpHeaderBytes - value.size()) {
-        return false;
-    }
-
-    auto fieldBytes = name.size() + value.size();
-    if (fieldBytes > kMaxHttpHeaderBytes - kHeaderListEntryOverhead) {
-        return false;
-    }
-    fieldBytes += kHeaderListEntryOverhead;
-
-    if (context.decodedHeaderListBytes > kMaxHttpHeaderBytes ||
-        fieldBytes > kMaxHttpHeaderBytes - context.decodedHeaderListBytes) {
-        return false;
-    }
-
-    context.decodedHeaderListBytes += fieldBytes;
-    return true;
+    return context.decodedHeaderListSize.add(name, value);
 }
 
 [[nodiscard]] inline bool http2AppendCookieHeaderValue(

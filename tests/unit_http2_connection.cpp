@@ -19,6 +19,7 @@
 #include "ruvia/http/detail/http2/Http2Hpack.h"
 #include "ruvia/http/detail/http2/Http2ReceiveWindowCredit.h"
 #include "ruvia/http/detail/http2/Http2WindowUpdate.h"
+#include "ruvia/http/HttpLimits.h"
 
 namespace {
 
@@ -3155,6 +3156,111 @@ RUVIA_TEST(http2_connection_rejects_repeated_websocket_identity_and_user_agent_f
         RUVIA_CHECK(client.pendingOutput().empty());
         RUVIA_CHECK(client.stream(1) == nullptr);
     }
+}
+
+RUVIA_TEST(http2_connection_rejects_oversized_outbound_request_heads_transactionally) {
+    std::pmr::monotonic_buffer_resource resource;
+
+    const auto checkRejected = [&resource, &ruvia_ctx](
+                                   std::string_view path,
+                                   std::span<const ruvia::HttpHeaderView> headers,
+                                   Http2RequestContent content) {
+        Http2Connection client(
+            &resource, ruvia::detail::Http2Role::kClient);
+        beginClient(client);
+        const auto rejected = client.submitRegularRequestHead(
+            "GET",
+            "https",
+            "example.test",
+            path,
+            headers,
+            content);
+        RUVIA_CHECK(rejected.submitted() == nullptr);
+        RUVIA_CHECK(requestHeadSubmitError(rejected) ==
+            Http2RequestHeadSubmitError::kInvalidMessage);
+        RUVIA_CHECK(client.pendingOutput().empty());
+        RUVIA_CHECK(client.stream(1) == nullptr);
+    };
+
+    const std::string oversizedValue(ruvia::kMaxHttpHeaderBytes, 'x');
+    const ruvia::HttpHeaderView oversized[] = {
+        {"x-oversized", oversizedValue},
+    };
+    checkRejected("/resource", oversized, Http2RequestContent::none());
+
+    const std::string oversizedPath(
+        ruvia::kMaxHttpHeaderBytes, 'p');
+    checkRejected(oversizedPath, {}, Http2RequestContent::none());
+
+    std::array<
+        ruvia::HttpHeaderView,
+        ruvia::kMaxHttpHeaderFields + 1> tooMany{};
+    for (auto& header : tooMany) {
+        header = {"x-many", "value"};
+    }
+    checkRejected("/resource", tooMany, Http2RequestContent::none());
+
+    std::array<
+        ruvia::HttpHeaderView,
+        ruvia::kMaxHttpHeaderFields> generatedOverflow{};
+    for (auto& header : generatedOverflow) {
+        header = {"x-generated", "value"};
+    }
+    checkRejected(
+        "/resource",
+        generatedOverflow,
+        Http2RequestContent::knownLength(0));
+
+    Http2Connection connectClient(
+        &resource, ruvia::detail::Http2Role::kClient);
+    beginClient(connectClient);
+    const auto rejectedConnect = connectClient.submitConnectRequestHead(
+        "example.test:443", oversized);
+    RUVIA_CHECK(rejectedConnect.submitted() == nullptr);
+    RUVIA_CHECK(requestHeadSubmitError(rejectedConnect) ==
+        Http2RequestHeadSubmitError::kInvalidMessage);
+    RUVIA_CHECK(connectClient.pendingOutput().empty());
+    RUVIA_CHECK(connectClient.stream(1) == nullptr);
+}
+
+RUVIA_TEST(http2_connection_rejects_oversized_response_heads_transactionally) {
+    std::pmr::monotonic_buffer_resource resource;
+
+    const auto checkRejected = [&resource, &ruvia_ctx](ruvia::HttpResponse response) {
+        Http2Connection connection(&resource);
+        handshake(connection);
+        driveGetRequest(connection, &resource);
+
+        const auto rejected = submitBufferedResponseHead(
+            connection, 1, response);
+        RUVIA_CHECK(rejected.submitted() == nullptr);
+        RUVIA_CHECK(
+            responseHeadSubmitFailureMessage(rejected) ==
+            "invalid HTTP/2 response head message");
+        RUVIA_CHECK(connection.pendingOutput().empty());
+        RUVIA_CHECK(connection.stream(1) != nullptr);
+        RUVIA_CHECK(
+            connection.stream(1)->localSend().headPending() != nullptr);
+    };
+
+    ruvia::HttpResponse oversized(&resource);
+    oversized.header(
+        "X-Oversized",
+        std::string(ruvia::kMaxHttpHeaderBytes, 'x'));
+    checkRejected(std::move(oversized));
+
+    ruvia::HttpResponse tooMany(&resource);
+    for (std::size_t i = 0; i <= ruvia::kMaxHttpHeaderFields; ++i) {
+        tooMany.header("X-Field-" + std::to_string(i), "value");
+    }
+    checkRejected(std::move(tooMany));
+
+    ruvia::HttpResponse generatedOverflow(&resource);
+    for (std::size_t i = 0; i < ruvia::kMaxHttpHeaderFields - 1; ++i) {
+        generatedOverflow.header(
+            "X-Generated-" + std::to_string(i), "value");
+    }
+    checkRejected(std::move(generatedOverflow));
 }
 
 RUVIA_TEST(http2_connection_rejects_100_continue_without_following_content_transactionally) {

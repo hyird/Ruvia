@@ -2,7 +2,6 @@
 
 #include <charconv>
 #include <cstring>
-#include <limits>
 #include <optional>
 #include <stdexcept>
 
@@ -10,6 +9,8 @@
 #include "ruvia/http/detail/HttpContentLength.h"
 #include "ruvia/http/detail/HttpResponseHeaderAccess.h"
 #include "ruvia/http/detail/HttpResponseHeaderState.h"
+#include "ruvia/http/HttpHeader.h"
+#include "ruvia/http/HttpLimits.h"
 #include "ruvia/http/HttpStatus.h"
 
 namespace ruvia::detail {
@@ -72,11 +73,20 @@ struct RawHeadSink {
     }
 };
 
-void addResponseHeadBound(std::size_t& bound, std::size_t bytes) {
-    if (bytes > std::numeric_limits<std::size_t>::max() - bound) {
+void addResponseHeadBytes(std::size_t& total, std::size_t bytes) {
+    if (bytes > kMaxHttpHeaderBytes - total) {
         throw std::length_error("HTTP response head is too large");
     }
-    bound += bytes;
+    total += bytes;
+}
+
+[[nodiscard]] std::size_t decimalDigits(std::uint64_t value) noexcept {
+    std::size_t digits = 1;
+    while (value >= 10) {
+        value /= 10;
+        ++digits;
+    }
+    return digits;
 }
 
 template <typename Sink>
@@ -182,30 +192,48 @@ void appendResponseHead(
     const auto reasonPhrase = httpReasonPhrase(responseStatus);
     const auto dateHeader = cachedDateHeader();
 
-    // Upper bound on emitted bytes (filtered headers are counted anyway; the
-    // numeric slots use the 20-digit std::uint64_t worst case). The raw stack
-    // sink below emits without per-append bounds checks, so this must never
-    // undercount the actual output.
-    std::size_t bound = 9 + 20 + 1;
-    addResponseHeadBound(bound, reasonPhrase.size());
-    addResponseHeadBound(bound, 2);
+    // Measure the exact emitted head before touching reusable output storage.
+    // This both bounds the unchecked raw stack sink and enforces the same 64 KiB
+    // field-section ceiling used by request and HTTP/2 paths.
+    std::size_t headBytes = 9;
+    addResponseHeadBytes(headBytes, decimalDigits(responseStatus));
+    addResponseHeadBytes(headBytes, 1);
+    addResponseHeadBytes(headBytes, reasonPhrase.size());
+    addResponseHeadBytes(headBytes, 2);
+    std::size_t fieldCount = 0;
     for (const auto& header : response.headers()) {
-        addResponseHeadBound(bound, header.name().size());
-        addResponseHeadBound(bound, header.value().size());
-        addResponseHeadBound(bound, 4);
+        const auto knownBit = responseHeaderKnownBit(header);
+        if (knownBit == kResponseHeaderTransferEncoding ||
+            knownBit == kResponseHeaderContentLength) {
+            continue;
+        }
+        ++fieldCount;
+        addResponseHeadBytes(headBytes, header.name().size());
+        addResponseHeadBytes(headBytes, header.value().size());
+        addResponseHeadBytes(headBytes, 4);
     }
     if ((knownBits & kResponseHeaderDate) == 0) {
-        addResponseHeadBound(bound, dateHeader.size());
+        ++fieldCount;
+        addResponseHeadBytes(headBytes, dateHeader.size());
     }
     if (emitChunkedTransferEncoding) {
-        addResponseHeadBound(bound, kChunkedTransferEncodingHeader.size());
+        ++fieldCount;
+        addResponseHeadBytes(
+            headBytes, kChunkedTransferEncodingHeader.size());
     }
     if (flags.emitContentLength) {
-        addResponseHeadBound(bound, 16 + 20 + 2);
+        ++fieldCount;
+        addResponseHeadBytes(headBytes, 16);
+        addResponseHeadBytes(
+            headBytes, decimalDigits(flags.canonicalContentLength));
+        addResponseHeadBytes(headBytes, 2);
     }
-    addResponseHeadBound(bound, 2);
+    if (fieldCount > kMaxHttpHeaderFields) {
+        throw std::length_error("too many HTTP response headers");
+    }
+    addResponseHeadBytes(headBytes, 2);
 
-    if (char* cursor = head.stackCursor(bound); cursor != nullptr) {
+    if (char* cursor = head.stackCursor(headBytes); cursor != nullptr) {
         RawHeadSink sink{cursor};
         emitResponseHead(
             response,
@@ -217,7 +245,7 @@ void appendResponseHead(
         head.commitStack(sink.out);
         return;
     }
-    head.reserveAdditional(bound);
+    head.reserveAdditional(headBytes);
     emitResponseHead(
         response,
         head,

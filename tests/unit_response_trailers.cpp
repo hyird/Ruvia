@@ -3,11 +3,13 @@
 #include <array>
 #include <concepts>
 #include <exception>
+#include <string>
 #include <string_view>
 #include <type_traits>
 #include <utility>
 
 #include "ruvia/http/detail/server/HttpResponseTrailers.h"
+#include "ruvia/http/HttpLimits.h"
 
 namespace {
 
@@ -179,4 +181,24 @@ RUVIA_TEST(response_trailer_section_validation_is_all_fields_or_none) {
     // submission API reports kEmpty separately when asked to submit one.
     const auto emptyResult = httpResponseTrailerSection({});
     RUVIA_CHECK(emptyResult.section() != nullptr);
+}
+
+RUVIA_TEST(response_trailer_section_enforces_field_limits) {
+    const std::string oversizedValue(ruvia::kMaxHttpHeaderBytes, 'x');
+    const std::array<ruvia::HttpHeaderView, 1> oversized{{
+        {"X-Oversized", oversizedValue},
+    }};
+    const auto oversizedResult = httpResponseTrailerSection(oversized);
+    RUVIA_CHECK(oversizedResult.section() == nullptr);
+    RUVIA_CHECK(oversizedResult.failure() != nullptr);
+
+    std::array<
+        ruvia::HttpHeaderView,
+        ruvia::kMaxHttpHeaderFields + 1> tooMany{};
+    for (auto& header : tooMany) {
+        header = {"X-Many", "value"};
+    }
+    const auto tooManyResult = httpResponseTrailerSection(tooMany);
+    RUVIA_CHECK(tooManyResult.section() == nullptr);
+    RUVIA_CHECK(tooManyResult.failure() != nullptr);
 }

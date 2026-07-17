@@ -12,6 +12,7 @@
 #include <utility>
 
 #include "ruvia/http/HttpResponse.h"
+#include "ruvia/http/HttpLimits.h"
 #include "ruvia/http/detail/server/HttpResponseHead.h"
 #include "ruvia/http/detail/server/HttpResponseHeadBuffer.h"
 #include "ruvia/http/detail/http1/Http1ServerSemantics.h"
@@ -143,6 +144,16 @@ bool throwsInvalid(Fn&& fn) {
         fn();
         return false;
     } catch (const std::invalid_argument&) {
+        return true;
+    }
+}
+
+template <typename Fn>
+bool throwsLength(Fn&& fn) {
+    try {
+        fn();
+        return false;
+    } catch (const std::length_error&) {
         return true;
     }
 }
@@ -713,4 +724,32 @@ RUVIA_TEST(response_head_heap_spill_preserves_full_output) {
     }
     RUVIA_CHECK(head.find("Content-Length: 4\r\n") != std::string::npos);
     RUVIA_CHECK(head.ends_with("\r\n\r\n"));
+}
+
+RUVIA_TEST(response_head_rejects_oversized_field_section) {
+    HttpResponse oversized(std::pmr::new_delete_resource());
+    oversized.header(
+        "X-Oversized",
+        std::string(ruvia::kMaxHttpHeaderBytes, 'v'));
+    RUVIA_CHECK(throwsLength([&] {
+        (void)emitBufferedHead(oversized);
+    }));
+
+    HttpResponse tooMany(std::pmr::new_delete_resource());
+    for (std::size_t i = 0; i <= ruvia::kMaxHttpHeaderFields; ++i) {
+        tooMany.header("X-Field-" + std::to_string(i), "value");
+    }
+    RUVIA_CHECK(throwsLength([&] {
+        (void)emitBufferedHead(tooMany);
+    }));
+
+    HttpResponse generatedOverflow(std::pmr::new_delete_resource());
+    for (std::size_t i = 0; i < ruvia::kMaxHttpHeaderFields - 1; ++i) {
+        generatedOverflow.header(
+            "X-Generated-" + std::to_string(i), "value");
+    }
+    RUVIA_CHECK(throwsLength([&] {
+        // The generated Date and Content-Length fields also consume slots.
+        (void)emitBufferedHead(generatedOverflow);
+    }));
 }

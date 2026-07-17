@@ -543,7 +543,7 @@ RUVIA_TEST(h2_headers_list_byte_limit) {
     Http2StreamState stream(1, res());
     Http2HeaderDecodeContext ctx{stream};
     RUVIA_CHECK(http2AccumulateHeaderListBytes(ctx, "accept", "text/html"));
-    RUVIA_CHECK(ctx.decodedHeaderListBytes > 0);
+    RUVIA_CHECK(ctx.decodedHeaderListSize.bytes() > 0);
     // A single field larger than the whole header budget is rejected.
     const std::string big(64 * 1024, 'x');
     RUVIA_CHECK(!http2AccumulateHeaderListBytes(ctx, "name", big));
@@ -562,5 +562,5 @@ RUVIA_TEST(h2_headers_list_byte_limit_accumulates_across_entries) {
         rejected = !http2AccumulateHeaderListBytes(ctx, "x-pad", value);
     }
     RUVIA_CHECK(rejected);                                    // the running total is bounded
-    RUVIA_CHECK(ctx.decodedHeaderListBytes <= 64 * 1024);    // never exceeds the budget
+    RUVIA_CHECK(ctx.decodedHeaderListSize.bytes() <= 64 * 1024);    // never exceeds the budget
 }

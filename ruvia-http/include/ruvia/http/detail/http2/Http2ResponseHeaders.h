@@ -12,6 +12,7 @@
 #include "ruvia/http/detail/HttpResponseHeaderAccess.h"
 #include "ruvia/http/detail/HttpResponseHeaderState.h"
 #include "ruvia/http/detail/HttpInterimResponseValidation.h"
+#include "ruvia/http/detail/HttpHeaderSectionSize.h"
 #include "ruvia/http/detail/http2/Http2Hpack.h"
 #include "ruvia/http/detail/http2/Http2HeaderRules.h"
 #include "ruvia/http/detail/http2/Http2ResponseHeadPlan.h"
@@ -140,16 +141,34 @@ inline void appendHttp2EncodedResponseHeader(
 [[nodiscard]] inline Http2InterimResponseHeaderEncodeStatus
 validateHttp2InterimResponseHeaders(
     const HttpInterimResponseHead& response) noexcept {
+    if (response.headers().size() > kMaxHttpHeaderFields) {
+        return Http2InterimResponseHeaderEncodeStatus::kInvalidHeader;
+    }
     const auto commonValidation = validateHttpInterimResponseHeaders(response);
     if (commonValidation !=
         HttpInterimResponseHeaderValidationStatus::kOk) {
+        return Http2InterimResponseHeaderEncodeStatus::kInvalidHeader;
+    }
+    std::array<char, 3> statusBytes{};
+    const auto [statusEnd, statusError] = std::to_chars(
+        statusBytes.data(), statusBytes.data() + statusBytes.size(),
+        response.status());
+    if (statusError != std::errc{} ||
+        statusEnd != statusBytes.data() + statusBytes.size()) {
+        return Http2InterimResponseHeaderEncodeStatus::kInvalidHeader;
+    }
+    HttpHeaderSectionSize sectionSize;
+    if (!sectionSize.add(
+            ":status",
+            std::string_view(statusBytes.data(), statusBytes.size()))) {
         return Http2InterimResponseHeaderEncodeStatus::kInvalidHeader;
     }
     for (const auto& header : response.headers()) {
         const auto name = header.name();
         // RFC 9113 forbids connection-specific fields in HTTP/2. Common 1xx
         // content/framing and singleton validation has already run above.
-        if (http2IsForbiddenResponseConnectionField(name)) {
+        if (http2IsForbiddenResponseConnectionField(name) ||
+            !sectionSize.add(name, header.value())) {
             return Http2InterimResponseHeaderEncodeStatus::kInvalidHeader;
         }
     }
@@ -182,7 +201,7 @@ appendHttp2InterimResponseHeaders(
     return Http2InterimResponseHeaderEncodeStatus::kOk;
 }
 
-inline void appendHttp2ResponseHeaders(
+[[nodiscard]] inline bool appendHttp2ResponseHeaders(
     Http2StreamState& stream,
     const HttpResponse& response,
     const Http2ResponseHeadPlan& plan,
@@ -192,6 +211,56 @@ inline void appendHttp2ResponseHeaders(
     // touch HPACK state. The encoder therefore has no silent filtering branch.
     (void)control;
     const auto knownBits = responseKnownHeaderBits(response);
+
+    std::array<char, 3> statusBytes{};
+    const auto [statusEnd, statusError] = std::to_chars(
+        statusBytes.data(), statusBytes.data() + statusBytes.size(),
+        plan.bodyPlan().responseStatus());
+    HttpHeaderSectionSize sectionSize;
+    if (statusError != std::errc{} ||
+        statusEnd != statusBytes.data() + statusBytes.size() ||
+        !sectionSize.add(
+            ":status",
+            std::string_view(statusBytes.data(), statusBytes.size()))) {
+        return false;
+    }
+    std::size_t fieldCount = 0;
+    for (const auto& header : response.headers()) {
+        if (responseHeaderKnownBit(header) == kResponseHeaderContentLength) {
+            continue;
+        }
+        ++fieldCount;
+        if (fieldCount > kMaxHttpHeaderFields ||
+            !sectionSize.add(header.name(), header.value())) {
+            return false;
+        }
+    }
+    if ((knownBits & kResponseHeaderDate) == 0) {
+        ++fieldCount;
+        if (fieldCount > kMaxHttpHeaderFields ||
+            !sectionSize.add("date", cachedDateValue())) {
+            return false;
+        }
+    }
+    std::array<char, 20> contentLengthBytes{};
+    std::string_view contentLengthValue;
+    if (const auto contentLength = plan.contentLength()) {
+        const auto [end, error] = std::to_chars(
+            contentLengthBytes.data(),
+            contentLengthBytes.data() + contentLengthBytes.size(),
+            *contentLength);
+        if (error != std::errc{}) {
+            return false;
+        }
+        contentLengthValue = std::string_view(
+            contentLengthBytes.data(),
+            static_cast<std::size_t>(end - contentLengthBytes.data()));
+        ++fieldCount;
+        if (fieldCount > kMaxHttpHeaderFields ||
+            !sectionSize.add("content-length", contentLengthValue)) {
+            return false;
+        }
+    }
 
     auto& headerBlock = stream.responseHeaderBlock();
     headerBlock.clear();
@@ -221,20 +290,13 @@ inline void appendHttp2ResponseHeaders(
             HpackStaticIndex::kDate,
             cachedDateValue());
     }
-    const auto emitContentLength = [&headerBlock](std::uint64_t value) {
-        std::array<char, 20> buffer{};
-        const auto [ptr, ec] = std::to_chars(
-            buffer.data(), buffer.data() + buffer.size(), value);
-        if (ec == std::errc{}) {
-            HpackEncoder::encodeHeaderWithNameIndex(
-                headerBlock,
-                HpackStaticIndex::kContentLength,
-                std::string_view(buffer.data(), static_cast<std::size_t>(ptr - buffer.data())));
-        }
-    };
-    if (const auto contentLength = plan.contentLength()) {
-        emitContentLength(*contentLength);
+    if (!contentLengthValue.empty()) {
+        HpackEncoder::encodeHeaderWithNameIndex(
+            headerBlock,
+            HpackStaticIndex::kContentLength,
+            contentLengthValue);
     }
+    return true;
 }
 
 inline void http2ReleaseResponseHeaderBlock(Http2StreamState& stream) {
