@@ -18,6 +18,7 @@ function(ruvia_add_protocol_fuzzer name source)
 endfunction()
 
 ruvia_add_protocol_fuzzer(ruvia_fuzz_http1_request http1_request_fuzz.cpp)
+ruvia_add_protocol_fuzzer(ruvia_fuzz_http1_request_roundtrip http1_request_roundtrip_fuzz.cpp)
 ruvia_add_protocol_fuzzer(ruvia_fuzz_http1_client_response http1_client_response_fuzz.cpp)
 ruvia_add_protocol_fuzzer(ruvia_fuzz_http2_connection http2_connection_fuzz.cpp)
 ruvia_add_protocol_fuzzer(ruvia_fuzz_hpack hpack_fuzz.cpp)
