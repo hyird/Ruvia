@@ -5,7 +5,11 @@
 # under-load path -- connection churn, HTTP/2 multiplexing, worker interleaving
 # -- where memory-safety and concurrency bugs actually surface.
 #
-# Usage: scripts/sanitizer_load_test.sh <asan|tsan> [duration_seconds]
+# Usage: scripts/sanitizer_load_test.sh <asan|tsan> [duration_seconds] [http|https]
+#
+# The https mode generates a throwaway self-signed cert and drives the TLS
+# handshake path (connection churn + h2-over-TLS), which the http mode never
+# touches.
 #
 # Requires a C++ toolchain, CMake+Ninja, VCPKG_ROOT, and a load generator
 # (wrk and/or h2load). Missing load generators are reported, not silently
@@ -16,11 +20,19 @@ set -euo pipefail
 
 sanitizer="${1:-}"
 duration="${2:-15}"
+scheme="${3:-http}"
 case "$sanitizer" in
     asan) flags="-fsanitize=address,undefined" ;;
     tsan) flags="-fsanitize=thread" ;;
     *)
-        echo "usage: $0 <asan|tsan> [duration_seconds]" >&2
+        echo "usage: $0 <asan|tsan> [duration_seconds] [http|https]" >&2
+        exit 2
+        ;;
+esac
+case "$scheme" in
+    http|https) ;;
+    *)
+        echo "usage: $0 <asan|tsan> [duration_seconds] [http|https]" >&2
         exit 2
         ;;
 esac
@@ -52,8 +64,21 @@ else
     export TSAN_OPTIONS="halt_on_error=1:second_deadlock_stack=1:log_path=$logdir/san"
 fi
 
-echo "== starting server on :$port =="
-PORT="$port" "$server" &
+# https drives the TLS handshake path -- the highest-churn TLS surface -- with a
+# throwaway self-signed cert. bench_server switches to TLS when TLS_CERT/TLS_KEY
+# are set; wrk and h2load talk to it over ALPN (h2 preferred).
+tls_env=()
+curl_insecure=()
+if [ "$scheme" = "https" ]; then
+    command -v openssl >/dev/null 2>&1 || { echo "https mode needs openssl" >&2; exit 1; }
+    openssl req -x509 -newkey rsa:2048 -keyout "$logdir/key.pem" \
+        -out "$logdir/cert.pem" -days 1 -nodes -subj "/CN=localhost" >/dev/null 2>&1
+    tls_env=(TLS_CERT="$logdir/cert.pem" TLS_KEY="$logdir/key.pem")
+    curl_insecure=(-k)
+fi
+
+echo "== starting $scheme server on :$port =="
+env PORT="$port" "${tls_env[@]}" "$server" &
 server_pid=$!
 sleep 3
 if ! kill -0 "$server_pid" 2>/dev/null; then
@@ -61,7 +86,7 @@ if ! kill -0 "$server_pid" 2>/dev/null; then
     exit 1
 fi
 
-base="http://127.0.0.1:$port"
+base="$scheme://127.0.0.1:$port"
 ran_any=0
 if command -v wrk >/dev/null 2>&1; then
     ran_any=1
@@ -85,7 +110,7 @@ if [ "$ran_any" -eq 0 ]; then
 fi
 
 # The server must still be serving, and no sanitizer report may have been logged.
-if ! curl -fsS -m 5 "$base/api/status" >/dev/null 2>&1; then
+if ! curl -fsS "${curl_insecure[@]}" -m 5 "$base/api/status" >/dev/null 2>&1; then
     echo "FAIL: server unresponsive after load (check $logdir)" >&2
     kill "$server_pid" 2>/dev/null || true
     exit 1
