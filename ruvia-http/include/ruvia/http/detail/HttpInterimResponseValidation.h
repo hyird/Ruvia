@@ -6,6 +6,7 @@
 #include "ruvia/http/HttpHeader.h"
 #include "ruvia/http/HttpInterimResponse.h"
 #include "ruvia/http/detail/AsciiCase.h"
+#include "ruvia/http/detail/HeaderAcceptUtils.h"
 #include "ruvia/http/detail/HttpContentCoding.h"
 #include "ruvia/http/detail/HttpResponseHeaderBits.h"
 #include "ruvia/http/detail/HttpResponseKnownHeaders.h"
@@ -43,6 +44,10 @@ public:
         const auto knownBit = classifyResponseHeaderName(name);
         if (knownBit == kResponseHeaderContentEncoding &&
             !isValidHttpContentEncodingFieldValue(value, role_)) {
+            return HttpInterimResponseHeaderValidationStatus::kInvalidHeader;
+        }
+        if (knownBit == kResponseHeaderContentType &&
+            !isValidHttpContentTypeFieldValue(value)) {
             return HttpInterimResponseHeaderValidationStatus::kInvalidHeader;
         }
         if (knownBit == kResponseHeaderContentLength) {

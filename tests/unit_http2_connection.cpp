@@ -4682,8 +4682,9 @@ RUVIA_TEST(http2_connection_client_rejects_forbidden_interim_fields) {
     }
 }
 
-RUVIA_TEST(http2_connection_client_validates_interim_content_encoding_syntax) {
+RUVIA_TEST(http2_connection_client_validates_interim_representation_field_syntax) {
     const auto check = [&ruvia_ctx](
+                           std::string_view name,
                            std::string_view value,
                            bool rejected) {
         std::pmr::monotonic_buffer_resource resource;
@@ -4699,7 +4700,7 @@ RUVIA_TEST(http2_connection_client_validates_interim_content_encoding_syntax) {
 
         std::pmr::string interim(&resource);
         HpackEncoder::encodeHeader(interim, ":status", "103");
-        HpackEncoder::encodeHeader(interim, "content-encoding", value);
+        HpackEncoder::encodeHeader(interim, name, value);
         const auto frame = headersFrame(
             &resource,
             streamId,
@@ -4723,8 +4724,10 @@ RUVIA_TEST(http2_connection_client_validates_interim_content_encoding_syntax) {
         RUVIA_CHECK((client.stream(streamId) == nullptr) == rejected);
     };
 
-    check("gzip;level=9", true);
-    check(", gzip,,", false);
+    check("content-encoding", "gzip;level=9", true);
+    check("content-encoding", ", gzip,,", false);
+    check("content-type", "not a media type", true);
+    check("content-type", "text/html; charset=utf-8", false);
 }
 
 RUVIA_TEST(http2_connection_client_rejects_status_outside_http_range) {

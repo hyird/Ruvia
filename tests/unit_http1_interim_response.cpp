@@ -76,6 +76,7 @@ RUVIA_TEST(http1_interim_response_writer_emits_exact_typed_head) {
 
     const HttpHeaderView hints[] = {
         {"Link", "</style.css>; rel=preload"},
+        {"Content-Type", "text/html; charset=utf-8"},
         {"X-Hint", "warm"},
     };
     std::array<char, 256> hintsBuffer{};
@@ -89,6 +90,7 @@ RUVIA_TEST(http1_interim_response_writer_emits_exact_typed_head) {
             std::string_view(
                 "HTTP/1.1 103 Early Hints\r\n"
                 "Link: </style.css>; rel=preload\r\n"
+                "Content-Type: text/html; charset=utf-8\r\n"
                 "X-Hint: warm\r\n\r\n"));
         RUVIA_CHECK(
             preparedHints->head().find("Server:") == std::string_view::npos);
@@ -167,6 +169,10 @@ RUVIA_TEST(http1_interim_response_writer_rejects_invalid_fields_transactionally)
         {"Content-Encoding", "gzip;level=9"}};
     const HttpHeaderView emptyContentEncoding[] = {
         {"Content-Encoding", ""}};
+    const HttpHeaderView malformedContentType[] = {
+        {"Content-Type", "not a media type"}};
+    const HttpHeaderView emptyContentType[] = {
+        {"Content-Type", ""}};
     const HttpHeaderView contentLength[] = {{"Content-Length", "0"}};
     const HttpHeaderView transferEncoding[] = {{"Transfer-Encoding", "chunked"}};
     const HttpHeaderView trailer[] = {{"Trailer", "X-Checksum"}};
@@ -194,6 +200,12 @@ RUVIA_TEST(http1_interim_response_writer_rejects_invalid_fields_transactionally)
         Http1InterimResponsePrepareError::kInvalidHeader));
     RUVIA_CHECK(rejects(
         emptyContentEncoding,
+        Http1InterimResponsePrepareError::kInvalidHeader));
+    RUVIA_CHECK(rejects(
+        malformedContentType,
+        Http1InterimResponsePrepareError::kInvalidHeader));
+    RUVIA_CHECK(rejects(
+        emptyContentType,
         Http1InterimResponsePrepareError::kInvalidHeader));
     RUVIA_CHECK(rejects(
         contentLength,

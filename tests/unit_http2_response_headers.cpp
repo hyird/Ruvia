@@ -298,6 +298,7 @@ RUVIA_TEST(http2_response_head_rejects_representation_plan_mismatch) {
 RUVIA_TEST(http2_interim_response_headers_are_bodyless_exact_and_normalized) {
     const ruvia::HttpHeaderView fields[] = {
         {"Link", "</style.css>; rel=preload"},
+        {"Content-Type", "text/html; charset=utf-8"},
         {"X-Hint", "warm"},
     };
     const HttpInterimResponseHead response(103, fields);
@@ -306,6 +307,8 @@ RUVIA_TEST(http2_interim_response_headers_are_bodyless_exact_and_normalized) {
     RUVIA_CHECK(decodeInterimResponseHeaders(response, headers));
     RUVIA_CHECK(hasHeader(headers, ":status", "103"));
     RUVIA_CHECK(hasHeader(headers, "link", "</style.css>; rel=preload"));
+    RUVIA_CHECK(hasHeader(
+        headers, "content-type", "text/html; charset=utf-8"));
     RUVIA_CHECK(hasHeader(headers, "x-hint", "warm"));
     // Protocol encoding is exact: product policy must add optional Server/Date
     // explicitly instead of the generic HTTP core inventing fields.
@@ -341,6 +344,12 @@ RUVIA_TEST(http2_interim_response_header_rejection_is_transactional) {
     const ruvia::HttpHeaderView emptyContentEncoding[] = {
         {"Content-Encoding", ""},
     };
+    const ruvia::HttpHeaderView malformedContentType[] = {
+        {"Content-Type", "not a media type"},
+    };
+    const ruvia::HttpHeaderView emptyContentType[] = {
+        {"Content-Type", ""},
+    };
     const ruvia::HttpHeaderView duplicateServer[] = {
         {"Server", "one"},
         {"server", "two"},
@@ -353,6 +362,8 @@ RUVIA_TEST(http2_interim_response_header_rejection_is_transactional) {
     RUVIA_CHECK(rejects(malformed));
     RUVIA_CHECK(rejects(malformedContentEncoding));
     RUVIA_CHECK(rejects(emptyContentEncoding));
+    RUVIA_CHECK(rejects(malformedContentType));
+    RUVIA_CHECK(rejects(emptyContentType));
     RUVIA_CHECK(rejects(duplicateServer));
 }
 
