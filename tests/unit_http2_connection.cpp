@@ -3074,6 +3074,54 @@ RUVIA_TEST(http2_connection_rejects_invalid_outbound_content_encoding_transactio
     check("gzip, br", false);
 }
 
+RUVIA_TEST(http2_connection_validates_outbound_cors_fields_transactionally) {
+    std::pmr::monotonic_buffer_resource resource;
+
+    const auto checkRejected = [&resource, &ruvia_ctx](
+                                   std::string_view name,
+                                   std::string_view value) {
+        Http2Connection client(
+            &resource, ruvia::detail::Http2Role::kClient);
+        beginClient(client);
+        const ruvia::HttpHeaderView header[] = {{name, value}};
+        const auto rejected = client.submitRegularRequestHead(
+            "OPTIONS",
+            "https",
+            "example.test",
+            "/resource",
+            header,
+            Http2RequestContent::none());
+        RUVIA_CHECK(rejected.submitted() == nullptr);
+        RUVIA_CHECK(requestHeadSubmitError(rejected) ==
+            Http2RequestHeadSubmitError::kInvalidMessage);
+        RUVIA_CHECK(client.pendingOutput().empty());
+        RUVIA_CHECK(client.stream(1) == nullptr);
+    };
+
+    checkRejected("origin", "https://example.test/path");
+    checkRejected("access-control-request-method", "GET, POST");
+    checkRejected("access-control-request-headers", "x-good, bad header");
+
+    Http2Connection client(
+        &resource, ruvia::detail::Http2Role::kClient);
+    beginClient(client);
+    const ruvia::HttpHeaderView validHeaders[] = {
+        {"origin", "https://first.test https://second.test"},
+        {"access-control-request-method", "GET"},
+        {"access-control-request-headers", "x-first"},
+        {"access-control-request-headers", "x-second, x-third"},
+    };
+    const auto accepted = client.submitRegularRequestHead(
+        "OPTIONS",
+        "https",
+        "example.test",
+        "/resource",
+        validHeaders,
+        Http2RequestContent::none());
+    RUVIA_CHECK(accepted.submitted() != nullptr);
+    RUVIA_CHECK_EQ(submittedRequestStreamId(accepted), std::uint32_t{1});
+}
+
 RUVIA_TEST(http2_connection_rejects_100_continue_without_following_content_transactionally) {
     std::pmr::monotonic_buffer_resource resource;
     const ruvia::HttpHeaderView expectContinue[] = {

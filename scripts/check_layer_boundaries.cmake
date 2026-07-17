@@ -9838,6 +9838,14 @@ else()
     if(NOT http1_client_request_writer MATCHES "isValidHttpMethodToken" OR
        NOT http1_client_request_writer MATCHES
            "isValidOriginOrAsteriskFormTarget" OR
+       NOT http1_client_request_writer MATCHES
+           "singletonRequestHeaderBit" OR
+       NOT http1_client_request_writer MATCHES
+           "isValidHttpOriginFieldValue" OR
+       NOT http1_client_request_writer MATCHES
+           "isValidHttpCorsRequestMethod" OR
+       NOT http1_client_request_writer MATCHES
+           "isValidHttpCorsRequestHeaderNames" OR
        NOT http1_client_request_writer MATCHES "kHostPrefix" OR
        NOT http1_client_request_writer MATCHES "kContentLengthPrefix" OR
        NOT http1_client_request_writer MATCHES "kConnectionClose" OR
@@ -9867,7 +9875,7 @@ else()
        http1_client_request_writer MATCHES "throw[ \t]" OR
        http1_client_request_writer MATCHES "std::pmr::string")
         boundary_error("HTTP/1 client request serialization split or became allocating"
-            "one allocation-free writer must validate target/fields/method content, generate Host/framing/close, and size before writing")
+            "one allocation-free writer must validate target/singleton/CORS fields/method content, generate Host/framing/close, and size before writing")
     endif()
     if(http1_client_request_writer_header MATCHES
            "Http1ClientRequestExpectation" OR
@@ -9888,6 +9896,10 @@ if(EXISTS "${HTTP1_CLIENT_REQUEST_TEST}")
        NOT http1_client_request_test MATCHES
            "http1_client_request_writer_is_the_only_host_and_framing_owner" OR
        NOT http1_client_request_test MATCHES
+           "http1_client_request_writer_rejects_repeated_singleton_fields" OR
+       NOT http1_client_request_test MATCHES
+           "http1_client_request_writer_validates_cors_fields" OR
+       NOT http1_client_request_test MATCHES
            "http1_client_request_writer_enforces_expect_content_semantics" OR
        NOT http1_client_request_test MATCHES
            "http1_client_request_writer_enforces_method_content_semantics" OR
@@ -9896,7 +9908,7 @@ if(EXISTS "${HTTP1_CLIENT_REQUEST_TEST}")
        NOT http1_client_request_test MATCHES
            "http1_client_request_context_binds_the_actual_close_signal")
         boundary_error("HTTP/1 client request writer invariants are under-tested"
-            "tests must pin content presence/gating, target forms, Host/framing/Expect ownership, buffer atomicity, method semantics, and Prepared-bound response state")
+            "tests must pin content presence/gating, target forms, singleton/CORS fields, Host/framing/Expect ownership, buffer atomicity, method semantics, and Prepared-bound response state")
     endif()
     if(NOT http1_client_request_test MATCHES
            "kWithoutExpectation[.]noExpectation[(][)] != nullptr" OR
@@ -9930,6 +9942,29 @@ if(EXISTS "${HTTP1_CLIENT_REQUEST_TEST}")
            "continueGated[(][)][ 	]*==[ 	]*nullptr")
         boundary_error("HTTP/1 outbound request-content alternatives are under-tested"
             "tests must reject plan-wide mode/payload access and prove absent, immediate-empty, and continue-gated exclusivity")
+    endif()
+endif()
+
+set(HTTP2_CLIENT_REQUEST_WRITER
+    "${RUVIA_ROOT}/ruvia-http/src/http2/Http2ConnectionSubmit.cpp")
+set(HTTP2_CLIENT_REQUEST_WRITER_TEST
+    "${RUVIA_ROOT}/tests/unit_http2_connection.cpp")
+if(EXISTS "${HTTP2_CLIENT_REQUEST_WRITER}" AND
+   EXISTS "${HTTP2_CLIENT_REQUEST_WRITER_TEST}")
+    file(READ "${HTTP2_CLIENT_REQUEST_WRITER}"
+        http2_client_request_writer)
+    file(READ "${HTTP2_CLIENT_REQUEST_WRITER_TEST}"
+        http2_client_request_writer_test)
+    if(NOT http2_client_request_writer MATCHES
+           "isValidHttpOriginFieldValue" OR
+       NOT http2_client_request_writer MATCHES
+           "isValidHttpCorsRequestMethod" OR
+       NOT http2_client_request_writer MATCHES
+           "isValidHttpCorsRequestHeaderNames" OR
+       NOT http2_client_request_writer_test MATCHES
+           "http2_connection_validates_outbound_cors_fields_transactionally")
+        boundary_error("outbound CORS field validation split by HTTP version"
+            "both client writers must reject malformed Origin and CORS request fields before committing wire output")
     endif()
 endif()
 set(HTTP1_CLIENT_API_SURFACE "${RUVIA_ROOT}/examples/api_surface.cpp")

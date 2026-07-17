@@ -6,6 +6,7 @@
 #include <utility>
 
 #include "ruvia/http/detail/HeaderAcceptUtils.h"
+#include "ruvia/http/detail/HttpCorsFields.h"
 #include "ruvia/http/detail/HttpExpectations.h"
 #include "ruvia/http/detail/HttpContentCoding.h"
 #include "ruvia/http/detail/HttpRequestContentSemantics.h"
@@ -50,6 +51,14 @@ struct Http2OutboundRequestHeaderFacts final {
             return false;
         }
         const auto kind = classifyRequestHeader(header.name());
+        if ((kind == RequestHeaderKind::kOrigin &&
+             !isValidHttpOriginFieldValue(header.value())) ||
+            (kind == RequestHeaderKind::kAccessControlRequestMethod &&
+             !isValidHttpCorsRequestMethod(header.value())) ||
+            (kind == RequestHeaderKind::kAccessControlRequestHeaders &&
+             !isValidHttpCorsRequestHeaderNames(header.value()))) {
+            return false;
+        }
         // Content-Length belongs exclusively to Http2RequestContent, even when a raw
         // value happens to match. Accepting both would restore two framing truths.
         if (kind == RequestHeaderKind::kContentLength) {

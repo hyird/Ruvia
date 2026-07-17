@@ -388,6 +388,66 @@ RUVIA_TEST(http1_client_request_writer_is_the_only_host_and_framing_owner) {
     }
 }
 
+RUVIA_TEST(http1_client_request_writer_rejects_repeated_singleton_fields) {
+    struct Case final {
+        std::string_view name;
+        std::string_view first;
+        std::string_view second;
+    };
+    const Case cases[] = {
+        {"Access-Control-Request-Method", "GET", "POST"},
+        {"Authorization", "Bearer first", "Bearer second"},
+        {"Content-Type", "text/plain", "application/json"},
+        {"If-Modified-Since",
+         "Sun, 06 Nov 1994 08:49:37 GMT",
+         "Mon, 07 Nov 1994 08:49:37 GMT"},
+        {"If-Range", "\"first\"", "\"second\""},
+        {"If-Unmodified-Since",
+         "Sun, 06 Nov 1994 08:49:37 GMT",
+         "Mon, 07 Nov 1994 08:49:37 GMT"},
+        {"Origin", "https://first.test", "https://second.test"},
+        {"Range", "bytes=0-1", "bytes=2-3"},
+    };
+    for (const auto& test : cases) {
+        const ruvia::HttpHeaderView headers[] = {
+            {test.name, test.first},
+            {test.name, test.second},
+        };
+        HttpClientRequest request;
+        request.headers = headers;
+
+        RUVIA_CHECK(
+            prepareError(request) ==
+            Http1ClientRequestPrepareError::kInvalidHeader);
+    }
+}
+
+RUVIA_TEST(http1_client_request_writer_validates_cors_fields) {
+    const ruvia::HttpHeaderView invalidHeaders[] = {
+        {"Origin", "https://example.test/path"},
+        {"Access-Control-Request-Method", "GET, POST"},
+        {"Access-Control-Request-Headers", "X-Good, Bad Header"},
+    };
+    for (const auto& header : invalidHeaders) {
+        HttpClientRequest request;
+        request.headers = std::span<const ruvia::HttpHeaderView>(&header, 1);
+        RUVIA_CHECK(
+            prepareError(request) ==
+            Http1ClientRequestPrepareError::kInvalidHeader);
+    }
+
+    const ruvia::HttpHeaderView validHeaders[] = {
+        {"Origin", "https://first.test https://second.test"},
+        {"Access-Control-Request-Method", "GET"},
+        {"Access-Control-Request-Headers", "X-First"},
+        {"Access-Control-Request-Headers", "X-Second, X-Third"},
+    };
+    HttpClientRequest valid;
+    valid.headers = validHeaders;
+    PreparedFixture fixture(HttpOrigin::https("example.test"), valid);
+    RUVIA_CHECK(fixture.result.prepared() != nullptr);
+}
+
 RUVIA_TEST(http1_client_request_writer_owns_hop_by_hop_field_contracts) {
     struct FailureCase final {
         std::array<ruvia::HttpHeaderView, 2> headers;

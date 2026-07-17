@@ -2,6 +2,7 @@
 
 #include <array>
 #include <charconv>
+#include <cstdint>
 #include <cstring>
 #include <system_error>
 
@@ -10,10 +11,12 @@
 #include "ruvia/http/HttpLimits.h"
 #include "ruvia/http/detail/HeaderAcceptUtils.h"
 #include "ruvia/http/detail/HeaderTokenUtils.h"
+#include "ruvia/http/detail/HttpCorsFields.h"
 #include "ruvia/http/detail/HttpExpectations.h"
 #include "ruvia/http/detail/HttpContentCoding.h"
 #include "ruvia/http/detail/HttpRequestContentSemantics.h"
 #include "ruvia/http/detail/client/HttpOrigin.h"
+#include "ruvia/http/detail/parser/HttpParserSyntax.h"
 #include "ruvia/http/detail/parser/HttpRequestTarget.h"
 
 namespace ruvia::detail {
@@ -96,6 +99,7 @@ constexpr std::string_view kCrlf = "\r\n";
 
 struct RequestHeaderFacts final {
     std::size_t wireBytes{0};
+    std::uint32_t singletonHeaders{0};
     detail::HttpConnectionOptions connectionOptions;
     detail::HttpUpgradeProtocols upgradeProtocols;
     bool hasContentType{false};
@@ -224,6 +228,7 @@ struct RequestHeaderFacts final {
             error = Http1ClientRequestPrepareError::kInvalidHeader;
             return false;
         }
+        const auto kind = detail::classifyRequestHeader(name);
         if (detail::httpAsciiEqualsIgnoreCase(name, "Host")) {
             error = Http1ClientRequestPrepareError::kHostHeaderManagedByWriter;
             return false;
@@ -243,6 +248,22 @@ struct RequestHeaderFacts final {
         if (detail::httpAsciiEqualsIgnoreCase(name, "Expect")) {
             error = Http1ClientRequestPrepareError::kExpectHeaderManagedByWriter;
             return false;
+        }
+        if ((kind == detail::RequestHeaderKind::kOrigin &&
+             !detail::isValidHttpOriginFieldValue(value)) ||
+            (kind == detail::RequestHeaderKind::kAccessControlRequestMethod &&
+             !detail::isValidHttpCorsRequestMethod(value)) ||
+            (kind == detail::RequestHeaderKind::kAccessControlRequestHeaders &&
+             !detail::isValidHttpCorsRequestHeaderNames(value))) {
+            error = Http1ClientRequestPrepareError::kInvalidHeader;
+            return false;
+        }
+        if (const auto bit = detail::singletonRequestHeaderBit(kind); bit != 0) {
+            if ((facts.singletonHeaders & bit) != 0) {
+                error = Http1ClientRequestPrepareError::kInvalidHeader;
+                return false;
+            }
+            facts.singletonHeaders |= bit;
         }
         if (detail::httpAsciiEqualsIgnoreCase(name, "Connection")) {
             if (facts.connectionOptions.parseField(
@@ -272,8 +293,7 @@ struct RequestHeaderFacts final {
             }
             facts.hasTe = true;
         } else if (detail::httpAsciiEqualsIgnoreCase(name, "Content-Type")) {
-            if (facts.hasContentType ||
-                !detail::isValidHttpContentTypeFieldValue(value)) {
+            if (!detail::isValidHttpContentTypeFieldValue(value)) {
                 error = Http1ClientRequestPrepareError::kInvalidHeader;
                 return false;
             }
