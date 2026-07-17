@@ -4760,6 +4760,62 @@ RUVIA_TEST(http2_connection_client_rejects_te_in_every_response_head) {
     }
 }
 
+RUVIA_TEST(http2_connection_client_rejects_invalid_content_type_syntax) {
+    std::pmr::monotonic_buffer_resource resource;
+    Http2Connection client(&resource, Http2Role::kClient);
+    handshake(client);
+
+    const auto request = client.submitRegularRequestHead(
+        "GET", "https", "example.test", "/", {},
+        Http2RequestContent::none());
+    RUVIA_CHECK(request.submitted() != nullptr);
+    const auto streamId = submittedRequestStreamId(request);
+    client.consumeOutput(client.pendingOutput().size());
+
+    std::pmr::string response(&resource);
+    HpackEncoder::encodeHeader(response, ":status", "200");
+    HpackEncoder::encodeHeader(
+        response, "content-type", "not a media type");
+    HpackEncoder::encodeHeader(response, "content-length", "0");
+    const auto responseHead = headersFrame(
+        &resource,
+        streamId,
+        ruvia::detail::kHttp2FlagEndHeaders |
+            ruvia::detail::kHttp2FlagEndStream,
+        std::string_view(response.data(), response.size()));
+    RUVIA_CHECK(client.feed(
+        std::string_view(responseHead.data(), responseHead.size())) ==
+        Http2FeedResult::kAccepted);
+
+    bool sawProtocolError = false;
+    while (const auto event = client.nextEvent()) {
+        RUVIA_CHECK(event->messageHead() == nullptr);
+        RUVIA_CHECK(event->messageEnd() == nullptr);
+        if (const auto* closed = event->streamClosed()) {
+            sawProtocolError =
+                closed->source() == Http2StreamCloseSource::kLocal &&
+                closed->error() == Http2ErrorCode::kProtocolError;
+        }
+    }
+    RUVIA_CHECK(sawProtocolError);
+    RUVIA_CHECK(client.stream(streamId) == nullptr);
+    RUVIA_CHECK(!client.connectionError().has_value());
+
+    const auto resetBytes = client.pendingOutput();
+    RUVIA_CHECK_EQ(resetBytes.size(), static_cast<std::size_t>(13));
+    const auto reset = ruvia::detail::http2ParseFrameHeader(
+        resetBytes.substr(0, 9));
+    RUVIA_CHECK_EQ(
+        reset.type,
+        static_cast<std::uint8_t>(Http2FrameType::kRstStream));
+    RUVIA_CHECK_EQ(reset.streamId, streamId);
+    RUVIA_CHECK_EQ(
+        ruvia::detail::http2Read32(
+            reinterpret_cast<const unsigned char*>(
+                resetBytes.data() + 9)),
+        static_cast<std::uint32_t>(Http2ErrorCode::kProtocolError));
+}
+
 // A HEAD response's Content-Length is representation metadata, not a DATA
 // contract. The same exemption must apply when trailing HEADERS, rather than the
 // initial response HEADERS, carries END_STREAM.

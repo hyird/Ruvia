@@ -1488,6 +1488,43 @@ RUVIA_TEST(http_client_rejects_malformed_status_and_length_fields) {
         Http1ClientResponseParseError::kInvalidStatusCode).empty());
 }
 
+RUVIA_TEST(http_client_rejects_invalid_or_repeated_content_type) {
+    const auto invalid = parseResult(
+        "GET",
+        "HTTP/1.1 200 OK\r\n"
+        "Content-Type: not a media type\r\n"
+        "Content-Length: 0");
+    RUVIA_CHECK(invalid.failure() != nullptr);
+    if (invalid.failure() != nullptr) {
+        RUVIA_CHECK(
+            invalid.failure()->error() ==
+            Http1ClientResponseParseError::kInvalidHeader);
+    }
+
+    const auto repeated = parseResult(
+        "GET",
+        "HTTP/1.1 200 OK\r\n"
+        "Content-Type: text/plain\r\n"
+        "Content-Type: text/plain\r\n"
+        "Content-Length: 0");
+    RUVIA_CHECK(repeated.failure() != nullptr);
+    if (repeated.failure() != nullptr) {
+        RUVIA_CHECK(
+            repeated.failure()->error() ==
+            Http1ClientResponseParseError::kInvalidHeader);
+    }
+
+    const auto valid = parseResponse(
+        "GET",
+        "HTTP/1.1 200 OK\r\n"
+        "Content-Type: application/json; charset=utf-8\r\n"
+        "Content-Length: 0");
+    RUVIA_CHECK_EQ(valid.head.headers().size(), std::size_t{2});
+    RUVIA_CHECK_EQ(
+        valid.head.headers().front().value(),
+        std::string_view("application/json; charset=utf-8"));
+}
+
 RUVIA_TEST(http_client_response_parser_need_more_is_distinct) {
     const auto result = parseWire(
         "GET", "HTTP/1.1 200 OK\r\nContent-Length: 5\r\n");

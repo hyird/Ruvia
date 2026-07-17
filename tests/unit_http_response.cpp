@@ -380,6 +380,28 @@ RUVIA_TEST(response_header_append_rejects_single_value_headers) {
     }));
 }
 
+RUVIA_TEST(response_header_rejects_invalid_content_type_syntax) {
+    auto response = makeResponse();
+
+    for (const std::string_view invalid : {
+             "not a media type",
+             "text/",
+             "*/plain",
+             "text/plain; charset"}) {
+        RUVIA_CHECK(throwsInvalid([&] {
+            response.header("Content-Type", invalid);
+        }));
+    }
+
+    RUVIA_CHECK(!throwsInvalid([&] {
+        response.header(
+            "Content-Type", "application/json; charset=utf-8");
+    }));
+    RUVIA_CHECK_EQ(
+        response.header("Content-Type").value_or(std::string_view{}),
+        std::string_view("application/json; charset=utf-8"));
+}
+
 RUVIA_TEST(response_header_rejects_name_and_value_injection) {
     auto response = makeResponse();
     // The developer-facing header setter is the header-injection chokepoint: a CR or

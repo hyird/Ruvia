@@ -67,9 +67,8 @@ struct Http2OutboundRequestHeaderFacts final {
             hostSeen = true;
         }
         if (kind == RequestHeaderKind::kContentType) {
-            HttpMediaTypeParts parts;
             if (hasContentType ||
-                !httpParseMediaType(header.value(), false, parts)) {
+                !isValidHttpContentTypeFieldValue(header.value())) {
                 return false;
             }
             hasContentType = true;

@@ -526,6 +526,15 @@ bool httpParseMediaTypeParts(Value&&, bool, HttpMediaTypeParts&) = delete;
 template <HttpTemporaryOwningCharString Value>
 bool httpParseMediaType(Value&&, bool, HttpMediaTypeParts&) = delete;
 
+[[nodiscard]] inline bool isValidHttpContentTypeFieldValue(
+    std::string_view value) noexcept {
+    HttpMediaTypeParts parts;
+    return httpParseMediaType(value, false, parts);
+}
+
+template <HttpTemporaryOwningCharString Value>
+bool isValidHttpContentTypeFieldValue(Value&&) = delete;
+
 [[nodiscard]] inline bool httpMediaRangeMatchesValidOffered(
     std::string_view range,
     std::string_view offered,

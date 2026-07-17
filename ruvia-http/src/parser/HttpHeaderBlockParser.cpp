@@ -208,8 +208,7 @@ std::optional<HttpParseError> parseHttpHeaderBlock(
                 // Content-Type is a typed field, not an arbitrary singleton.
                 // Validate its media-type grammar at the protocol boundary so
                 // recipients and both request writers accept the same values.
-                HttpMediaTypeParts parts;
-                if (!httpParseMediaType(value, false, parts)) {
+                if (!isValidHttpContentTypeFieldValue(value)) {
                     return HttpParseError::kInvalidHeader;
                 }
                 const auto bit = singletonRequestHeaderBit(kind);

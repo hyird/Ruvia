@@ -5,6 +5,7 @@
 #include <system_error>
 #include <variant>
 
+#include "ruvia/http/detail/HeaderAcceptUtils.h"
 #include "ruvia/http/detail/HeaderTokenUtils.h"
 #include "ruvia/http/detail/HttpConnectionFields.h"
 #include "ruvia/http/detail/HttpContentLength.h"
@@ -127,6 +128,7 @@ struct ParsedResponseHead final {
     std::uint16_t statusCode;
     HttpProtocolVersion protocolVersion;
     bool contentLengthFieldPresent{false};
+    bool contentTypeFieldPresent{false};
     bool sawTransferEncoding{false};
     detail::HttpConnectionOptions connectionOptions;
     detail::HttpUpgradeProtocols upgradeProtocols;
@@ -396,6 +398,12 @@ receiveContinue(
                         return Http1ClientResponseParseError::kConflictingContentLength;
                 }
             }
+        } else if (detail::httpAsciiEqualsIgnoreCase(name, "Content-Type")) {
+            if (output.contentTypeFieldPresent ||
+                !detail::isValidHttpContentTypeFieldValue(value)) {
+                return Http1ClientResponseParseError::kInvalidHeader;
+            }
+            output.contentTypeFieldPresent = true;
         } else if (detail::httpAsciiEqualsIgnoreCase(name, "Connection")) {
             if (output.connectionOptions.parseField(
                     value,

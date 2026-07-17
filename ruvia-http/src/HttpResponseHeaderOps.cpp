@@ -1,11 +1,12 @@
 #include "ruvia/http/HttpResponse.h"
 #include "ruvia/http/HttpKnownMethod.h"
 
+#include "ruvia/http/detail/HeaderAcceptUtils.h"
+#include "ruvia/http/detail/HttpConnectionFields.h"
+#include "ruvia/http/detail/HttpNumberFormat.h"
 #include "ruvia/http/detail/HttpResponseHeaderAccess.h"
 #include "ruvia/http/detail/HttpResponseHeaderBits.h"
 #include "ruvia/http/detail/HttpResponseKnownHeaders.h"
-#include "ruvia/http/detail/HttpConnectionFields.h"
-#include "ruvia/http/detail/HttpNumberFormat.h"
 #include "ruvia/http/detail/ResponseHeaderIndexCache.h"
 
 #include <charconv>
@@ -255,6 +256,10 @@ void HttpResponse::header(std::string_view key, std::string_view value, HeaderOp
     }
     validateConnectionControlField(key, value);
     const auto knownBit = detail::classifyResponseHeaderName(key);
+    if (knownBit == detail::kResponseHeaderContentType &&
+        !detail::isValidHttpContentTypeFieldValue(value)) {
+        throw std::invalid_argument("invalid HTTP Content-Type header");
+    }
     if (options.append) {
         if (detail::responseHeaderAppendForbidden(knownBit)) {
             throw std::invalid_argument("HTTP response header cannot be appended");

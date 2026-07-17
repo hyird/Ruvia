@@ -195,8 +195,7 @@ struct Http2HeaderDecodeContext final {
         stream.parseRequestExpectationField(value);
     }
     if (kind == RequestHeaderKind::kContentType) {
-        HttpMediaTypeParts parts;
-        if (!httpParseMediaType(value, false, parts)) {
+        if (!isValidHttpContentTypeFieldValue(value)) {
             return false;
         }
     }

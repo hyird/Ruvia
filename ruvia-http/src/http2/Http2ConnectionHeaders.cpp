@@ -184,6 +184,10 @@ bool http2OnDecodedResponseHeader(void* target, std::string_view name, std::stri
         // response. It describes neither HTTP content nor the following tunnel DATA.
         return true;
     }
+    if (kind == RequestHeaderKind::kContentType &&
+        !isValidHttpContentTypeFieldValue(value)) {
+        return false;
+    }
     if (const auto singletonBit = singletonRequestHeaderBit(kind); singletonBit != 0) {
         if (!stream.markSingletonRequestHeader(singletonBit)) {
             return false;
