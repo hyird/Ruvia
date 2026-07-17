@@ -76,6 +76,10 @@ public:
         return true;
     }
 
+    [[nodiscard]] bool hasSingletonHeader(std::uint32_t bit) const noexcept {
+        return (singletonHeaderBits_ & bit) != 0;
+    }
+
     // Client role: nullptr until the final response :status is committed once for
     // a stream this endpoint opened. The owner bounds preceding 1xx heads.
     [[nodiscard]] const std::uint16_t* responseStatus() const & noexcept {

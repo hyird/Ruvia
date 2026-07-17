@@ -475,6 +475,11 @@ public:
         return requestState_.markSingletonHeader(bit);
     }
 
+    [[nodiscard]] bool hasSingletonRequestHeader(
+        std::uint32_t bit) const noexcept {
+        return requestState_.hasSingletonHeader(bit);
+    }
+
     [[nodiscard]] bool beginStandardConnect() noexcept {
         return tunnelState_.begin(Http2ConnectForm::kStandard);
     }

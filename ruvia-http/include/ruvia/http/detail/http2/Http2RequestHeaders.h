@@ -5,6 +5,7 @@
 
 #include "ruvia/http/HttpHeader.h"
 #include "ruvia/http/HttpKnownMethod.h"
+#include "ruvia/http/detail/HeaderAcceptUtils.h"
 #include "ruvia/http/detail/HttpCorsFields.h"
 #include "ruvia/http/detail/http2/Http2HeaderRules.h"
 #include "ruvia/http/detail/http2/Http2StreamState.h"
@@ -192,6 +193,12 @@ struct Http2HeaderDecodeContext final {
         // validity condition. Preserve unsupported members for the Web product's
         // 417 policy while still accepting the conformant header section.
         stream.parseRequestExpectationField(value);
+    }
+    if (kind == RequestHeaderKind::kContentType) {
+        HttpMediaTypeParts parts;
+        if (!httpParseMediaType(value, false, parts)) {
+            return false;
+        }
     }
     if (const auto singletonBit = singletonRequestHeaderBit(kind); singletonBit != 0) {
         if (!stream.markSingletonRequestHeader(singletonBit)) {

@@ -204,8 +204,22 @@ std::optional<HttpParseError> parseHttpHeaderBlock(
                     block.seenHeaderBits |= bit;
                 }
                 break;
+            case RequestHeaderKind::kContentType: {
+                // Content-Type is a typed field, not an arbitrary singleton.
+                // Validate its media-type grammar at the protocol boundary so
+                // recipients and both request writers accept the same values.
+                HttpMediaTypeParts parts;
+                if (!httpParseMediaType(value, false, parts)) {
+                    return HttpParseError::kInvalidHeader;
+                }
+                const auto bit = singletonRequestHeaderBit(kind);
+                if ((block.seenHeaderBits & bit) != 0) {
+                    return HttpParseError::kInvalidHeader;
+                }
+                block.seenHeaderBits |= bit;
+                break;
+            }
             case RequestHeaderKind::kAuthorization:
-            case RequestHeaderKind::kContentType:
             case RequestHeaderKind::kIfMatch:
             case RequestHeaderKind::kIfModifiedSince:
             case RequestHeaderKind::kIfNoneMatch:

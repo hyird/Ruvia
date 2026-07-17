@@ -502,6 +502,68 @@ RUVIA_TEST(http1_parse_absolute_options_empty_path_is_server_wide) {
         std::string_view("api.example"));
 }
 
+RUVIA_TEST(http1_parse_options_content_requires_valid_content_type) {
+    Http1ServerRequestParser parser;
+
+    const auto missingForEmptyContent = parser.parseMessage(
+        "OPTIONS /diagnostics HTTP/1.1\r\n"
+        "Host: example.com\r\n"
+        "Content-Length: 0\r\n\r\n");
+    RUVIA_CHECK(isFailure(
+        missingForEmptyContent, HttpParseError::kInvalidHeader));
+
+    const auto missingForChunkedContent = parser.parseMessage(
+        "OPTIONS /diagnostics HTTP/1.1\r\n"
+        "Host: example.com\r\n"
+        "Transfer-Encoding: chunked\r\n\r\n"
+        "0\r\n\r\n");
+    RUVIA_CHECK(isFailure(
+        missingForChunkedContent, HttpParseError::kInvalidHeader));
+
+    const auto invalid = parser.parseMessage(
+        "OPTIONS /diagnostics HTTP/1.1\r\n"
+        "Host: example.com\r\n"
+        "Content-Type: not a media type\r\n"
+        "Content-Length: 0\r\n\r\n");
+    RUVIA_CHECK(isFailure(invalid, HttpParseError::kInvalidHeader));
+
+    const auto valid = parser.parseMessage(
+        "OPTIONS /diagnostics HTTP/1.1\r\n"
+        "Host: example.com\r\n"
+        "Content-Type: application/json; charset=utf-8\r\n"
+        "Content-Length: 0\r\n\r\n");
+    RUVIA_CHECK(valid.messageReady());
+
+    const auto validChunked = parser.parseMessage(
+        "OPTIONS /diagnostics HTTP/1.1\r\n"
+        "Host: example.com\r\n"
+        "Content-Type: application/octet-stream\r\n"
+        "Transfer-Encoding: chunked\r\n\r\n"
+        "1\r\nx\r\n0\r\n\r\n");
+    RUVIA_CHECK(validChunked.messageReady());
+
+    const auto noContent = parser.parseMessage(
+        "OPTIONS /diagnostics HTTP/1.1\r\n"
+        "Host: example.com\r\n\r\n");
+    RUVIA_CHECK(noContent.messageReady());
+
+    const auto extensionMethod = parser.parseMessage(
+        "options /diagnostics HTTP/1.1\r\n"
+        "Host: example.com\r\n"
+        "Content-Length: 0\r\n\r\n");
+    RUVIA_CHECK(extensionMethod.messageReady());
+}
+
+RUVIA_TEST(http1_parse_rejects_invalid_content_type_syntax) {
+    Http1ServerRequestParser parser;
+    const auto result = parser.parseMessage(
+        "POST /items HTTP/1.1\r\n"
+        "Host: example.com\r\n"
+        "Content-Type: not a media type\r\n"
+        "Content-Length: 0\r\n\r\n");
+    RUVIA_CHECK(isFailure(result, HttpParseError::kInvalidHeader));
+}
+
 RUVIA_TEST(http1_parse_authority_uses_shared_uri_normalization) {
     Http1ServerRequestParser parser;
     // RFC 9110 section 4.2.3: an empty port is the scheme default, host is

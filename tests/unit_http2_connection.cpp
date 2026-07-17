@@ -2154,6 +2154,160 @@ RUVIA_TEST(http2_connection_trace_allows_empty_terminal_framing) {
     RUVIA_CHECK(!conn.connectionError().has_value());
 }
 
+RUVIA_TEST(http2_connection_options_content_requires_valid_content_type) {
+    const auto checkRejected = [&ruvia_ctx](
+                                   std::string_view method,
+                                   std::optional<std::string_view> contentType,
+                                   std::optional<std::string_view> contentLength,
+                                   bool endStream) {
+        std::pmr::monotonic_buffer_resource resource;
+        Http2Connection conn(&resource);
+        handshake(conn);
+
+        std::pmr::string block(&resource);
+        encodeRequest(block, method, "https", "/diagnostics");
+        if (contentType.has_value()) {
+            HpackEncoder::encodeHeader(block, "content-type", *contentType);
+        }
+        if (contentLength.has_value()) {
+            HpackEncoder::encodeHeader(
+                block, "content-length", *contentLength);
+        }
+        auto flags = ruvia::detail::kHttp2FlagEndHeaders;
+        if (endStream) {
+            flags |= ruvia::detail::kHttp2FlagEndStream;
+        }
+        const auto head = headersFrame(
+            &resource,
+            1,
+            flags,
+            std::string_view(block.data(), block.size()));
+        RUVIA_CHECK(conn.feed(std::string_view(head.data(), head.size())) ==
+            Http2FeedResult::kAccepted);
+
+        bool sawProtocolError = false;
+        while (const auto event = conn.nextEvent()) {
+            RUVIA_CHECK(event->messageHead() == nullptr);
+            RUVIA_CHECK(event->messageEnd() == nullptr);
+            if (const auto* closed = event->streamClosed()) {
+                sawProtocolError =
+                    closed->source() == Http2StreamCloseSource::kLocal &&
+                    closed->error() == Http2ErrorCode::kProtocolError;
+            }
+        }
+        RUVIA_CHECK(sawProtocolError);
+        RUVIA_CHECK(conn.stream(1) == nullptr);
+    };
+
+    checkRejected("OPTIONS", std::nullopt, "0", true);
+    checkRejected("OPTIONS", std::nullopt, std::nullopt, false);
+    checkRejected("OPTIONS", "not a media type", "0", true);
+
+    {
+        std::pmr::monotonic_buffer_resource resource;
+        Http2Connection conn(&resource);
+        handshake(conn);
+
+        std::pmr::string block(&resource);
+        encodeRequest(block, "OPTIONS", "https", "/diagnostics");
+        HpackEncoder::encodeHeader(
+            block, "content-type", "application/json; charset=utf-8");
+        HpackEncoder::encodeHeader(block, "content-length", "0");
+        const auto head = headersFrame(
+            &resource,
+            1,
+            ruvia::detail::kHttp2FlagEndHeaders |
+                ruvia::detail::kHttp2FlagEndStream,
+            std::string_view(block.data(), block.size()));
+        RUVIA_CHECK(conn.feed(std::string_view(head.data(), head.size())) ==
+            Http2FeedResult::kAccepted);
+        RUVIA_CHECK(conn.nextEvent().value().kind() ==
+            Http2EventKind::kMessageHead);
+        RUVIA_CHECK(conn.nextEvent().value().kind() ==
+            Http2EventKind::kMessageEnd);
+        RUVIA_CHECK(!conn.nextEvent().has_value());
+    }
+
+    {
+        std::pmr::monotonic_buffer_resource resource;
+        Http2Connection conn(&resource);
+        handshake(conn);
+
+        std::pmr::string block(&resource);
+        encodeRequest(block, "OPTIONS", "https", "/diagnostics");
+        HpackEncoder::encodeHeader(
+            block, "content-type", "application/octet-stream");
+        const auto head = headersFrame(
+            &resource,
+            1,
+            ruvia::detail::kHttp2FlagEndHeaders,
+            std::string_view(block.data(), block.size()));
+        RUVIA_CHECK(conn.feed(std::string_view(head.data(), head.size())) ==
+            Http2FeedResult::kAccepted);
+        RUVIA_CHECK(conn.nextEvent().value().kind() ==
+            Http2EventKind::kMessageHead);
+
+        const auto body = dataFrame(
+            &resource,
+            1,
+            ruvia::detail::kHttp2FlagEndStream,
+            "x");
+        RUVIA_CHECK(conn.feed(std::string_view(body.data(), body.size())) ==
+            Http2FeedResult::kAccepted);
+        RUVIA_CHECK(conn.nextEvent().value().kind() ==
+            Http2EventKind::kMessageBodyChunk);
+        RUVIA_CHECK(conn.nextEvent().value().kind() ==
+            Http2EventKind::kMessageEnd);
+        RUVIA_CHECK(!conn.nextEvent().has_value());
+        conn.releaseReceivedData(1);
+    }
+
+    {
+        std::pmr::monotonic_buffer_resource resource;
+        Http2Connection conn(&resource);
+        handshake(conn);
+
+        std::pmr::string block(&resource);
+        encodeRequest(block, "options", "https", "/diagnostics");
+        HpackEncoder::encodeHeader(block, "content-length", "0");
+        const auto head = headersFrame(
+            &resource,
+            1,
+            ruvia::detail::kHttp2FlagEndHeaders |
+                ruvia::detail::kHttp2FlagEndStream,
+            std::string_view(block.data(), block.size()));
+        RUVIA_CHECK(conn.feed(std::string_view(head.data(), head.size())) ==
+            Http2FeedResult::kAccepted);
+        RUVIA_CHECK(conn.nextEvent().value().kind() ==
+            Http2EventKind::kMessageHead);
+        RUVIA_CHECK(conn.nextEvent().value().kind() ==
+            Http2EventKind::kMessageEnd);
+        RUVIA_CHECK(!conn.nextEvent().has_value());
+    }
+}
+
+RUVIA_TEST(http2_connection_rejects_invalid_content_type_syntax) {
+    std::pmr::monotonic_buffer_resource resource;
+    Http2Connection conn(&resource);
+    handshake(conn);
+
+    std::pmr::string block(&resource);
+    encodeRequest(block, "POST", "https", "/items");
+    HpackEncoder::encodeHeader(block, "content-type", "not a media type");
+    HpackEncoder::encodeHeader(block, "content-length", "0");
+    const auto head = headersFrame(
+        &resource,
+        1,
+        ruvia::detail::kHttp2FlagEndHeaders |
+            ruvia::detail::kHttp2FlagEndStream,
+        std::string_view(block.data(), block.size()));
+    RUVIA_CHECK(conn.feed(std::string_view(head.data(), head.size())) ==
+        Http2FeedResult::kAccepted);
+    RUVIA_CHECK(conn.nextEvent().value().kind() ==
+        Http2EventKind::kStreamClosed);
+    RUVIA_CHECK(!conn.nextEvent().has_value());
+}
+
 // A DATA frame is protocol progress even when its Data field is empty, but it is not
 // an application body chunk. Padding still consumes both flow-control windows and
 // queues batched credit, while END_STREAM still emits the terminal message event.

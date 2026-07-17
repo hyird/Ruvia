@@ -134,6 +134,17 @@ void Http1ServerRequestParser::parseRequestHead(
         return fail(HttpParseError::kInvalidTransferEncoding);
     }
 
+    if (httpRequestContentSemantics(method) ==
+            HttpRequestContentSemantics::kContentTypeRequired &&
+        (contentLength.has_value() || transferEncoding.has_value()) &&
+        (block.seenHeaderBits & singletonRequestHeaderBit(
+             RequestHeaderKind::kContentType)) == 0) {
+        // RFC 9110 section 9.3.7 requires a valid Content-Type when OPTIONS
+        // explicitly carries content. A zero Content-Length still declares an
+        // empty representation and therefore retains this metadata contract.
+        return fail(HttpParseError::kInvalidHeader);
+    }
+
     for (std::size_t i = 0; i < block.headerCount; ++i) {
         const auto& header = block.headers[i];
         auto value = header.value.bind(buffer);

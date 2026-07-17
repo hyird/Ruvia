@@ -81,15 +81,32 @@ HeaderDecodeStatus Http2Connection::decodeHeaderBlock(Http2StreamState& stream) 
         return HeaderDecodeStatus::kProtocolError;
     }
     if (role_ == Http2Role::kServer &&
-        stream.requestKnownMethod() != HttpKnownMethod::kConnect &&
-        httpRequestContentSemantics(stream.requestMethod()) ==
+        stream.requestKnownMethod() != HttpKnownMethod::kConnect) {
+        const auto contentSemantics =
+            httpRequestContentSemantics(stream.requestMethod());
+        if (contentSemantics ==
             HttpRequestContentSemantics::kForbidden) {
-        // A declared length is an explicit content signal, including zero.
-        // Without a length, retain the open remote half for a legal empty
-        // DATA(END_STREAM), but make non-empty DATA unrepresentable as content.
-        if (stream.remoteContent().allowedKnownLength() != nullptr ||
-            !stream.selectRemoteContentMetadataOnly()) {
-            return HeaderDecodeStatus::kProtocolError;
+            // A declared length is an explicit content signal, including zero.
+            // Without a length, retain the open remote half for a legal empty
+            // DATA(END_STREAM), but make non-empty DATA unrepresentable as content.
+            if (stream.remoteContent().allowedKnownLength() != nullptr ||
+                !stream.selectRemoteContentMetadataOnly()) {
+                return HeaderDecodeStatus::kProtocolError;
+            }
+        } else if (contentSemantics ==
+            HttpRequestContentSemantics::kContentTypeRequired) {
+            // A declared length (including zero) or an open peer send half is
+            // explicit OPTIONS content in the same cases modeled by the HTTP/2
+            // request writer. RFC 9110 section 9.3.7 requires a valid media type.
+            const bool explicitContent =
+                stream.remoteContent().allowedKnownLength() != nullptr ||
+                stream.remoteReceive().headPending() != nullptr;
+            if (explicitContent &&
+                !stream.hasSingletonRequestHeader(
+                    singletonRequestHeaderBit(
+                        RequestHeaderKind::kContentType))) {
+                return HeaderDecodeStatus::kProtocolError;
+            }
         }
     }
     const bool remoteHeadFinalized = stream.tunnel().pending() != nullptr
