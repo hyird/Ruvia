@@ -180,6 +180,7 @@ RUVIA_TEST(request_content_coding_rejects_repeated_header_fields) {
     RUVIA_CHECK_EQ(requestKnownHeader(request, RequestKnownHeader::kContentEncoding), std::string_view("gzip"));
     const auto coding = requestContentCoding(request);
     RUVIA_CHECK(coding.coding() == nullptr);
+    RUVIA_CHECK(coding.invalid() == nullptr);
     RUVIA_CHECK(coding.unsupported() != nullptr);
 }
 
@@ -198,6 +199,7 @@ RUVIA_TEST(request_content_coding_combines_field_lines_with_list_semantics) {
         slot));
 
     const auto coding = requestContentCoding(request);
+    RUVIA_CHECK(coding.invalid() == nullptr);
     RUVIA_CHECK(coding.unsupported() == nullptr);
     RUVIA_CHECK(coding.coding() != nullptr);
     if (coding.coding() != nullptr) {

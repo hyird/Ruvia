@@ -11,6 +11,7 @@
 #include "ruvia/http/detail/HeaderAcceptUtils.h"
 #include "ruvia/http/detail/HeaderTokenUtils.h"
 #include "ruvia/http/detail/HttpExpectations.h"
+#include "ruvia/http/detail/HttpContentCoding.h"
 #include "ruvia/http/detail/HttpRequestContentSemantics.h"
 #include "ruvia/http/detail/client/HttpOrigin.h"
 #include "ruvia/http/detail/parser/HttpRequestTarget.h"
@@ -277,6 +278,13 @@ struct RequestHeaderFacts final {
                 return false;
             }
             facts.hasContentType = true;
+        } else if (detail::httpAsciiEqualsIgnoreCase(
+                       name, "Content-Encoding")) {
+            if (!detail::isValidHttpContentEncodingFieldValue(
+                    value, detail::HttpFieldListRole::kSender)) {
+                error = Http1ClientRequestPrepareError::kInvalidHeader;
+                return false;
+            }
         }
 
         if (!addHeadBytes(facts.wireBytes, name.size()) ||

@@ -922,15 +922,17 @@ if(NOT _installed_http_content_coding_contract MATCHES
    NOT _installed_http_content_coding_contract MATCHES
        "HttpUnsupportedContentCoding::status|static constexpr std::uint16_t status" OR
    NOT _installed_http_content_coding_contract MATCHES
+       "class HttpInvalidContentCodingField final" OR
+   NOT _installed_http_content_coding_contract MATCHES
        "httpSupportedRequestContentCodings" OR
    NOT _installed_http_content_coding_contract MATCHES
        "class HttpContentCodingFieldResult final" OR
    NOT _installed_http_content_coding_contract MATCHES
-       "std::variant<Supported, HttpUnsupportedContentCoding> state_" OR
+       "HttpInvalidContentCodingField> state_" OR
    _installed_http_content_coding_contract MATCHES
        "codingCount_|unsupported_" OR
    NOT _installed_http_content_coding_contract MATCHES
-       "std::variant<HttpContentCoding, HttpUnsupportedContentCoding>" OR
+       "HttpInvalidContentCodingField> value_" OR
    NOT _installed_http_content_coding_contract MATCHES
        "class HttpDecodedContent final" OR
    NOT _installed_http_content_coding_contract MATCHES

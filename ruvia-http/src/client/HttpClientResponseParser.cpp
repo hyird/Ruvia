@@ -8,6 +8,7 @@
 #include "ruvia/http/detail/HeaderAcceptUtils.h"
 #include "ruvia/http/detail/HeaderTokenUtils.h"
 #include "ruvia/http/detail/HttpConnectionFields.h"
+#include "ruvia/http/detail/HttpContentCoding.h"
 #include "ruvia/http/detail/HttpContentLength.h"
 #include "ruvia/http/detail/HttpResponseContentSemantics.h"
 #include "ruvia/http/detail/HttpTransferEncoding.h"
@@ -404,6 +405,12 @@ receiveContinue(
                 return Http1ClientResponseParseError::kInvalidHeader;
             }
             output.contentTypeFieldPresent = true;
+        } else if (detail::httpAsciiEqualsIgnoreCase(
+                       name, "Content-Encoding")) {
+            if (!detail::isValidHttpContentEncodingFieldValue(
+                    value, detail::HttpFieldListRole::kRecipient)) {
+                return Http1ClientResponseParseError::kInvalidHeader;
+            }
         } else if (detail::httpAsciiEqualsIgnoreCase(name, "Connection")) {
             if (output.connectionOptions.parseField(
                     value,

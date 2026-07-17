@@ -3499,13 +3499,15 @@ if(EXISTS "${HTTP_CONTENT_CODING_CONTRACT}" AND
        NOT http_content_coding_contract MATCHES
            "class HttpUnsupportedContentCoding final" OR
        NOT http_content_coding_contract MATCHES
+           "class HttpInvalidContentCodingField final" OR
+       NOT http_content_coding_contract MATCHES
            "static constexpr std::uint16_t status" OR
        NOT http_content_coding_contract MATCHES
            "httpSupportedRequestContentCodings" OR
        NOT http_content_coding_contract MATCHES
            "class HttpContentCodingFieldResult final" OR
        NOT http_content_coding_contract MATCHES
-           "std::variant<HttpContentCoding, HttpUnsupportedContentCoding>" OR
+           "HttpInvalidContentCodingField> value_" OR
        NOT http_content_coding_contract MATCHES
            "class HttpEncodedContent final" OR
        NOT http_content_coding_contract MATCHES
@@ -13318,10 +13320,10 @@ set(WEBSOCKET_INBOUND_HEADER
 file(READ "${HTTP_CONTENT_CODING_HEADER}" http_content_coding_state_content)
 file(READ "${WEBSOCKET_INBOUND_HEADER}" websocket_inbound_state_content)
 if(NOT http_content_coding_state_content MATCHES
-       "std::variant<Supported, HttpUnsupportedContentCoding> state_" OR
+       "HttpInvalidContentCodingField> state_" OR
    http_content_coding_state_content MATCHES "codingCount_|unsupported_")
     boundary_error("Content-Encoding field parsing restored parallel terminal state"
-        "Supported coding accumulation and unsupported terminal state must be exclusive")
+        "supported accumulation, unsupported capability, and malformed syntax must remain exclusive")
 endif()
 if(NOT websocket_inbound_state_content MATCHES
        "class WebSocketInboundFragmented final" OR

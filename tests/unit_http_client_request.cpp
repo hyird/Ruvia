@@ -618,6 +618,39 @@ RUVIA_TEST(http1_client_request_writer_rejects_invalid_content_type_parameters) 
     RUVIA_CHECK(fixture.result.prepared() != nullptr);
 }
 
+RUVIA_TEST(http1_client_request_writer_rejects_invalid_content_encoding_syntax) {
+    for (const std::string_view value : {
+             "gzip;level=9",
+             "bad coding",
+             "",
+             ",gzip",
+             "gzip,"}) {
+        const ruvia::HttpHeaderView contentEncoding(
+            "Content-Encoding", value);
+        HttpClientRequest request;
+        request.method = "POST";
+        request.headers =
+            std::span<const ruvia::HttpHeaderView>(&contentEncoding, 1);
+        request.content = HttpClientRequestContent::bytes("body");
+        RUVIA_CHECK(
+            prepareError(request) ==
+            Http1ClientRequestPrepareError::kInvalidHeader);
+    }
+
+    for (const std::string_view value : {"deflate", "gzip, br"}) {
+        const ruvia::HttpHeaderView contentEncoding(
+            "Content-Encoding", value);
+        HttpClientRequest request;
+        request.method = "POST";
+        request.headers =
+            std::span<const ruvia::HttpHeaderView>(&contentEncoding, 1);
+        request.content = HttpClientRequestContent::bytes("body");
+        PreparedFixture fixture(
+            HttpOrigin::https("example.test"), request);
+        RUVIA_CHECK(fixture.result.prepared() != nullptr);
+    }
+}
+
 RUVIA_TEST(http1_client_request_writer_returns_exact_buffer_requirement_without_partial_output) {
     HttpClientRequest request;
     request.method = "POST";

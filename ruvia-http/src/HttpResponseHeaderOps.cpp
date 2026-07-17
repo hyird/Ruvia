@@ -3,6 +3,7 @@
 
 #include "ruvia/http/detail/HeaderAcceptUtils.h"
 #include "ruvia/http/detail/HttpConnectionFields.h"
+#include "ruvia/http/detail/HttpContentCoding.h"
 #include "ruvia/http/detail/HttpNumberFormat.h"
 #include "ruvia/http/detail/HttpResponseHeaderAccess.h"
 #include "ruvia/http/detail/HttpResponseHeaderBits.h"
@@ -259,6 +260,11 @@ void HttpResponse::header(std::string_view key, std::string_view value, HeaderOp
     if (knownBit == detail::kResponseHeaderContentType &&
         !detail::isValidHttpContentTypeFieldValue(value)) {
         throw std::invalid_argument("invalid HTTP Content-Type header");
+    }
+    if (knownBit == detail::kResponseHeaderContentEncoding &&
+        !detail::isValidHttpContentEncodingFieldValue(
+            value, detail::HttpFieldListRole::kSender)) {
+        throw std::invalid_argument("invalid HTTP Content-Encoding header");
     }
     if (options.append) {
         if (detail::responseHeaderAppendForbidden(knownBit)) {

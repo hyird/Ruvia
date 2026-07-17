@@ -598,6 +598,7 @@ RUVIA_TEST(http1_request_body_plan_has_one_framing_truth) {
 RUVIA_TEST(http_content_coding_field_mapping_is_protocol_generic) {
     const auto checkCoding = [&](std::string_view value, HttpContentCoding expected) {
         const auto parsed = httpContentCodingFromFieldValue(value);
+        RUVIA_CHECK(parsed.invalid() == nullptr);
         RUVIA_CHECK(parsed.unsupported() == nullptr);
         RUVIA_CHECK(parsed.coding() != nullptr);
         if (parsed.coding() != nullptr) {
@@ -614,15 +615,29 @@ RUVIA_TEST(http_content_coding_field_mapping_is_protocol_generic) {
 
     const auto unsupported = httpContentCodingFromFieldValue("deflate");
     const auto stacked = httpContentCodingFromFieldValue("gzip, br");
+    RUVIA_CHECK(unsupported.invalid() == nullptr);
+    RUVIA_CHECK(stacked.invalid() == nullptr);
     RUVIA_CHECK(unsupported.unsupported() != nullptr);
     RUVIA_CHECK(stacked.unsupported() != nullptr);
+
+    for (const std::string_view value : {
+             "gzip;level=9", "bad coding", "gzip/deflate"}) {
+        const auto invalid = httpContentCodingFromFieldValue(value);
+        RUVIA_CHECK(invalid.coding() == nullptr);
+        RUVIA_CHECK(invalid.unsupported() == nullptr);
+        RUVIA_CHECK(invalid.invalid() != nullptr);
+        if (invalid.invalid() != nullptr) {
+            RUVIA_CHECK_EQ(invalid.invalid()->status(), std::uint16_t{400});
+        }
+    }
 }
 
-RUVIA_TEST(http_content_coding_parser_has_a_terminal_unsupported_state) {
+RUVIA_TEST(http_content_coding_parser_separates_capability_from_syntax) {
     ruvia::detail::HttpContentCodingFieldParser unknown;
     unknown.update("deflate");
     unknown.update("gzip");
     const auto unknownResult = unknown.finish();
+    RUVIA_CHECK(unknownResult.invalid() == nullptr);
     RUVIA_CHECK(unknownResult.unsupported() != nullptr);
 
     ruvia::detail::HttpContentCodingFieldParser stacked;
@@ -630,7 +645,31 @@ RUVIA_TEST(http_content_coding_parser_has_a_terminal_unsupported_state) {
     stacked.update("");
     stacked.update("br");
     const auto stackedResult = stacked.finish();
+    RUVIA_CHECK(stackedResult.invalid() == nullptr);
     RUVIA_CHECK(stackedResult.unsupported() != nullptr);
+
+    ruvia::detail::HttpContentCodingFieldParser malformedAfterUnknown;
+    malformedAfterUnknown.update("deflate");
+    malformedAfterUnknown.update("gzip;level=9");
+    const auto malformedResult = malformedAfterUnknown.finish();
+    RUVIA_CHECK(malformedResult.coding() == nullptr);
+    RUVIA_CHECK(malformedResult.unsupported() == nullptr);
+    RUVIA_CHECK(malformedResult.invalid() != nullptr);
+}
+
+RUVIA_TEST(http_content_coding_empty_members_follow_field_list_role) {
+    for (const std::string_view value : {
+             "", ",gzip", "gzip,", "gzip,,br", "deflate,"}) {
+        RUVIA_CHECK(ruvia::detail::isValidHttpContentEncodingFieldValue(
+            value, ruvia::detail::HttpFieldListRole::kRecipient));
+        RUVIA_CHECK(!ruvia::detail::isValidHttpContentEncodingFieldValue(
+            value, ruvia::detail::HttpFieldListRole::kSender));
+    }
+
+    RUVIA_CHECK(ruvia::detail::isValidHttpContentEncodingFieldValue(
+        "deflate", ruvia::detail::HttpFieldListRole::kSender));
+    RUVIA_CHECK(ruvia::detail::isValidHttpContentEncodingFieldValue(
+        "gzip, br", ruvia::detail::HttpFieldListRole::kSender));
 }
 
 RUVIA_TEST(request_body_gzip_round_trip) {

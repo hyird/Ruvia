@@ -1335,11 +1335,41 @@ RUVIA_TEST(http_client_content_encoding_has_one_authoritative_path) {
         auto parsed = parseResponse("GET", test.headers);
         RUVIA_CHECK_EQ(parsed.head.status(), std::uint16_t{200});
         const auto coding = httpClientResponseContentCoding(parsed.head);
+        RUVIA_CHECK(coding.invalid() == nullptr);
         RUVIA_CHECK((coding.coding() != nullptr) == test.expected.has_value());
         RUVIA_CHECK((coding.unsupported() != nullptr) == !test.expected.has_value());
         if (coding.coding() != nullptr && test.expected.has_value()) {
             RUVIA_CHECK(*coding.coding() == *test.expected);
         }
+    }
+}
+
+RUVIA_TEST(http_client_rejects_invalid_content_encoding_syntax) {
+    for (const std::string_view value : {
+             "gzip;level=9",
+             "bad coding",
+             "gzip/deflate"}) {
+        std::string response =
+            "HTTP/1.1 200 OK\r\nContent-Encoding: ";
+        response.append(value);
+        response.append("\r\nContent-Length: 0");
+        RUVIA_CHECK(
+            parseFailureError("GET", response) ==
+            Http1ClientResponseParseError::kInvalidHeader);
+    }
+
+    const auto tolerant = parseResponse(
+        "GET",
+        "HTTP/1.1 200 OK\r\n"
+        "Content-Encoding: , gzip,,\r\n"
+        "Content-Length: 0");
+    const auto coding =
+        ruvia::detail::httpClientResponseContentCoding(tolerant.head);
+    RUVIA_CHECK(coding.unsupported() == nullptr);
+    RUVIA_CHECK(coding.coding() != nullptr);
+    if (coding.coding() != nullptr) {
+        RUVIA_CHECK(
+            *coding.coding() == ruvia::detail::HttpContentCoding::kGzip);
     }
 }
 

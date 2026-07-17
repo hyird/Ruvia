@@ -903,6 +903,11 @@ concept ExposesRvalueUnsupportedContentCoding = requires(const T&& result) {
 };
 
 template <typename T>
+concept ExposesRvalueInvalidContentCoding = requires(const T&& result) {
+    std::move(result).invalid();
+};
+
+template <typename T>
 concept HasContentLengthPresent = requires(const T& state) {
     state.present();
 };
@@ -3924,11 +3929,15 @@ static_assert(!std::default_initializable<
 static_assert(
     ruvia::detail::HttpUnsupportedContentCoding::status() == 415);
 static_assert(
+    ruvia::detail::HttpInvalidContentCodingField::status() == 400);
+static_assert(
     ruvia::detail::httpSupportedRequestContentCodings() ==
     std::string_view("gzip, br, zstd"));
 static_assert(!ExposesRvalueContentCoding<
     ruvia::detail::HttpContentCodingFieldResult>);
 static_assert(!ExposesRvalueUnsupportedContentCoding<
+    ruvia::detail::HttpContentCodingFieldResult>);
+static_assert(!ExposesRvalueInvalidContentCoding<
     ruvia::detail::HttpContentCodingFieldResult>);
 static_assert(std::same_as<
     decltype(ruvia::detail::httpContentCodingFromFieldValue(

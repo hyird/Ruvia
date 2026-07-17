@@ -188,6 +188,11 @@ bool http2OnDecodedResponseHeader(void* target, std::string_view name, std::stri
         !isValidHttpContentTypeFieldValue(value)) {
         return false;
     }
+    if (kind == RequestHeaderKind::kContentEncoding &&
+        !isValidHttpContentEncodingFieldValue(
+            value, HttpFieldListRole::kRecipient)) {
+        return false;
+    }
     if (const auto singletonBit = singletonRequestHeaderBit(kind); singletonBit != 0) {
         if (!stream.markSingletonRequestHeader(singletonBit)) {
             return false;
@@ -210,7 +215,10 @@ bool http2OnDecodedResponseHeader(void* target, std::string_view name, std::stri
 
 HeaderDecodeStatus Http2Connection::decodeResponseHeaderBlock(Http2StreamState& stream) {
     Http2ResponseDecodeContext context{
-        Http2HeaderDecodeContext{stream}, {}, std::nullopt, false};
+        Http2HeaderDecodeContext{stream},
+        HttpInterimResponseHeaderValidator(HttpFieldListRole::kRecipient),
+        std::nullopt,
+        false};
     const auto result = decoder_.decode(
         stream.requestHeaderBlock(), &context,
         [](void* target, std::string_view name, std::string_view value) {

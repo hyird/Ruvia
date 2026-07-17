@@ -2308,6 +2308,50 @@ RUVIA_TEST(http2_connection_rejects_invalid_content_type_syntax) {
     RUVIA_CHECK(!conn.nextEvent().has_value());
 }
 
+RUVIA_TEST(http2_connection_rejects_invalid_content_encoding_syntax) {
+    const auto check = [&ruvia_ctx](
+                           std::string_view value,
+                           bool rejected) {
+        std::pmr::monotonic_buffer_resource resource;
+        Http2Connection conn(&resource);
+        handshake(conn);
+
+        std::pmr::string block(&resource);
+        encodeRequest(block, "POST", "https", "/items");
+        HpackEncoder::encodeHeader(block, "content-encoding", value);
+        HpackEncoder::encodeHeader(block, "content-length", "0");
+        const auto head = headersFrame(
+            &resource,
+            1,
+            ruvia::detail::kHttp2FlagEndHeaders |
+                ruvia::detail::kHttp2FlagEndStream,
+            std::string_view(block.data(), block.size()));
+        RUVIA_CHECK(conn.feed(
+            std::string_view(head.data(), head.size())) ==
+            Http2FeedResult::kAccepted);
+
+        bool sawHead = false;
+        bool sawProtocolError = false;
+        while (const auto event = conn.nextEvent()) {
+            sawHead = sawHead || event->messageHead() != nullptr;
+            if (const auto* closed = event->streamClosed()) {
+                sawProtocolError =
+                    closed->source() == Http2StreamCloseSource::kLocal &&
+                    closed->error() == Http2ErrorCode::kProtocolError;
+            }
+        }
+        RUVIA_CHECK(sawProtocolError == rejected);
+        RUVIA_CHECK(sawHead != rejected);
+    };
+
+    check("gzip;level=9", true);
+    check("bad coding", true);
+    check("gzip/deflate", true);
+    check(", gzip,,", false);
+    check("deflate", false);
+    check("gzip, br", false);
+}
+
 // A DATA frame is protocol progress even when its Data field is empty, but it is not
 // an application body chunk. Padding still consumes both flow-control windows and
 // queues batched credit, while END_STREAM still emits the terminal message event.
@@ -2991,6 +3035,43 @@ RUVIA_TEST(http2_connection_enforces_request_method_content_semantics_transactio
         Http2RequestContent::knownLength(1));
     RUVIA_CHECK(accepted.submitted() != nullptr);
     RUVIA_CHECK_EQ(submittedRequestStreamId(accepted), std::uint32_t{1});
+}
+
+RUVIA_TEST(http2_connection_rejects_invalid_outbound_content_encoding_transactionally) {
+    std::pmr::monotonic_buffer_resource resource;
+
+    const auto check = [&resource, &ruvia_ctx](
+                           std::string_view value,
+                           bool rejected) {
+        Http2Connection client(
+            &resource, ruvia::detail::Http2Role::kClient);
+        beginClient(client);
+        const ruvia::HttpHeaderView contentEncoding[] = {
+            {"content-encoding", value}};
+        const auto result = client.submitRegularRequestHead(
+            "POST",
+            "https",
+            "example.test",
+            "/upload",
+            contentEncoding,
+            Http2RequestContent::knownLength(1));
+        const bool failed = result.submitted() == nullptr;
+        RUVIA_CHECK(failed == rejected);
+        if (rejected && failed) {
+            RUVIA_CHECK(requestHeadSubmitError(result) ==
+                Http2RequestHeadSubmitError::kInvalidMessage);
+            RUVIA_CHECK(client.pendingOutput().empty());
+            RUVIA_CHECK(client.stream(1) == nullptr);
+        }
+    };
+
+    check("gzip;level=9", true);
+    check("bad coding", true);
+    check("", true);
+    check(",gzip", true);
+    check("gzip,", true);
+    check("deflate", false);
+    check("gzip, br", false);
 }
 
 RUVIA_TEST(http2_connection_rejects_100_continue_without_following_content_transactionally) {
@@ -4601,6 +4682,51 @@ RUVIA_TEST(http2_connection_client_rejects_forbidden_interim_fields) {
     }
 }
 
+RUVIA_TEST(http2_connection_client_validates_interim_content_encoding_syntax) {
+    const auto check = [&ruvia_ctx](
+                           std::string_view value,
+                           bool rejected) {
+        std::pmr::monotonic_buffer_resource resource;
+        Http2Connection client(&resource, Http2Role::kClient);
+        handshake(client);
+
+        const auto request = client.submitRegularRequestHead(
+            "GET", "https", "example.test", "/", {},
+            Http2RequestContent::none());
+        RUVIA_CHECK(request.submitted() != nullptr);
+        const auto streamId = submittedRequestStreamId(request);
+        client.consumeOutput(client.pendingOutput().size());
+
+        std::pmr::string interim(&resource);
+        HpackEncoder::encodeHeader(interim, ":status", "103");
+        HpackEncoder::encodeHeader(interim, "content-encoding", value);
+        const auto frame = headersFrame(
+            &resource,
+            streamId,
+            ruvia::detail::kHttp2FlagEndHeaders,
+            std::string_view(interim.data(), interim.size()));
+        RUVIA_CHECK(client.feed(
+            std::string_view(frame.data(), frame.size())) ==
+            Http2FeedResult::kAccepted);
+
+        bool sawProtocolError = false;
+        while (const auto event = client.nextEvent()) {
+            if (const auto* closed = event->streamClosed()) {
+                sawProtocolError =
+                    closed->source() == Http2StreamCloseSource::kLocal &&
+                    closed->error() == Http2ErrorCode::kProtocolError;
+            } else {
+                RUVIA_CHECK(false);
+            }
+        }
+        RUVIA_CHECK(sawProtocolError == rejected);
+        RUVIA_CHECK((client.stream(streamId) == nullptr) == rejected);
+    };
+
+    check("gzip;level=9", true);
+    check(", gzip,,", false);
+}
+
 RUVIA_TEST(http2_connection_client_rejects_status_outside_http_range) {
     {
         std::pmr::monotonic_buffer_resource resource;
@@ -4814,6 +4940,48 @@ RUVIA_TEST(http2_connection_client_rejects_invalid_content_type_syntax) {
             reinterpret_cast<const unsigned char*>(
                 resetBytes.data() + 9)),
         static_cast<std::uint32_t>(Http2ErrorCode::kProtocolError));
+}
+
+RUVIA_TEST(http2_connection_client_rejects_invalid_content_encoding_syntax) {
+    std::pmr::monotonic_buffer_resource resource;
+    Http2Connection client(&resource, Http2Role::kClient);
+    handshake(client);
+
+    const auto request = client.submitRegularRequestHead(
+        "GET", "https", "example.test", "/", {},
+        Http2RequestContent::none());
+    RUVIA_CHECK(request.submitted() != nullptr);
+    const auto streamId = submittedRequestStreamId(request);
+    client.consumeOutput(client.pendingOutput().size());
+
+    std::pmr::string response(&resource);
+    HpackEncoder::encodeHeader(response, ":status", "200");
+    HpackEncoder::encodeHeader(
+        response, "content-encoding", "gzip;level=9");
+    HpackEncoder::encodeHeader(response, "content-length", "0");
+    const auto responseHead = headersFrame(
+        &resource,
+        streamId,
+        ruvia::detail::kHttp2FlagEndHeaders |
+            ruvia::detail::kHttp2FlagEndStream,
+        std::string_view(response.data(), response.size()));
+    RUVIA_CHECK(client.feed(
+        std::string_view(responseHead.data(), responseHead.size())) ==
+        Http2FeedResult::kAccepted);
+
+    bool sawProtocolError = false;
+    while (const auto event = client.nextEvent()) {
+        RUVIA_CHECK(event->messageHead() == nullptr);
+        RUVIA_CHECK(event->messageEnd() == nullptr);
+        if (const auto* closed = event->streamClosed()) {
+            sawProtocolError =
+                closed->source() == Http2StreamCloseSource::kLocal &&
+                closed->error() == Http2ErrorCode::kProtocolError;
+        }
+    }
+    RUVIA_CHECK(sawProtocolError);
+    RUVIA_CHECK(client.stream(streamId) == nullptr);
+    RUVIA_CHECK(!client.connectionError().has_value());
 }
 
 // A HEAD response's Content-Length is representation metadata, not a DATA

@@ -517,7 +517,7 @@ std::string_view httpContentCodingToken(HttpContentCoding coding) noexcept {
 }
 
 void HttpContentCodingFieldParser::update(std::string_view value) noexcept {
-    if (std::get_if<HttpUnsupportedContentCoding>(&state_) != nullptr) {
+    if (std::get_if<HttpInvalidContentCodingField>(&state_) != nullptr) {
         return;
     }
     std::size_t begin = 0;
@@ -528,12 +528,18 @@ void HttpContentCodingFieldParser::update(std::string_view value) noexcept {
             comma == std::string_view::npos
                 ? std::string_view::npos
                 : comma - begin));
-        if (!token.empty()) {
-            auto* supported = std::get_if<Supported>(&state_);
+        if (token.empty()) {
+            if (role_ == HttpFieldListRole::kSender) {
+                state_.template emplace<HttpInvalidContentCodingField>();
+                return;
+            }
+        } else if (!isValidHttpHeaderName(token)) {
+            state_.template emplace<HttpInvalidContentCodingField>();
+            return;
+        } else if (auto* supported = std::get_if<Supported>(&state_)) {
             ++supported->codingCount;
             if (supported->codingCount > 1) {
                 state_.template emplace<HttpUnsupportedContentCoding>();
-                return;
             } else if (httpAsciiEqualsIgnoreCase(token, "identity")) {
                 supported->coding = HttpContentCoding::kIdentity;
             } else if (httpAsciiEqualsIgnoreCase(token, "gzip") ||
@@ -545,7 +551,6 @@ void HttpContentCodingFieldParser::update(std::string_view value) noexcept {
                 supported->coding = HttpContentCoding::kZstd;
             } else {
                 state_.template emplace<HttpUnsupportedContentCoding>();
-                return;
             }
         }
         if (comma == std::string_view::npos) {
@@ -556,10 +561,22 @@ void HttpContentCodingFieldParser::update(std::string_view value) noexcept {
 }
 
 HttpContentCodingFieldResult HttpContentCodingFieldParser::finish() const noexcept {
+    if (std::get_if<HttpInvalidContentCodingField>(&state_) != nullptr) {
+        return HttpContentCodingFieldResult(HttpInvalidContentCodingField{});
+    }
     if (std::get_if<HttpUnsupportedContentCoding>(&state_) != nullptr) {
         return HttpContentCodingFieldResult(HttpUnsupportedContentCoding{});
     }
     return HttpContentCodingFieldResult(std::get<Supported>(state_).coding);
+}
+
+bool isValidHttpContentEncodingFieldValue(
+    std::string_view value,
+    HttpFieldListRole role) noexcept {
+    HttpContentCodingFieldParser parser(role);
+    parser.update(value);
+    const auto result = parser.finish();
+    return result.invalid() == nullptr;
 }
 
 HttpContentCodingFieldResult httpContentCodingFromFieldValue(

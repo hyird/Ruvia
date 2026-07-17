@@ -1,6 +1,7 @@
 #include "ruvia/http/detail/parser/HttpHeaderBlockParser.h"
 
 #include "ruvia/http/detail/HttpCorsFields.h"
+#include "ruvia/http/detail/HttpContentCoding.h"
 #include "ruvia/http/detail/parser/HttpRequestTarget.h"
 
 #include <algorithm>
@@ -218,6 +219,12 @@ std::optional<HttpParseError> parseHttpHeaderBlock(
                 block.seenHeaderBits |= bit;
                 break;
             }
+            case RequestHeaderKind::kContentEncoding:
+                if (!isValidHttpContentEncodingFieldValue(
+                        value, HttpFieldListRole::kRecipient)) {
+                    return HttpParseError::kInvalidHeader;
+                }
+                break;
             case RequestHeaderKind::kAuthorization:
             case RequestHeaderKind::kIfMatch:
             case RequestHeaderKind::kIfModifiedSince:
@@ -234,7 +241,6 @@ std::optional<HttpParseError> parseHttpHeaderBlock(
                 break;
             case RequestHeaderKind::kOther:
             case RequestHeaderKind::kAccept:
-            case RequestHeaderKind::kContentEncoding:
             case RequestHeaderKind::kCookie:
             case RequestHeaderKind::kSecWebSocketKey:
             case RequestHeaderKind::kSecWebSocketProtocol:

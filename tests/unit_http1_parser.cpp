@@ -564,6 +564,31 @@ RUVIA_TEST(http1_parse_rejects_invalid_content_type_syntax) {
     RUVIA_CHECK(isFailure(result, HttpParseError::kInvalidHeader));
 }
 
+RUVIA_TEST(http1_parse_rejects_invalid_content_encoding_syntax) {
+    for (const std::string_view value : {
+             "gzip;level=9",
+             "bad coding",
+             "gzip/deflate"}) {
+        Http1ServerRequestParser parser;
+        std::string request =
+            "POST /items HTTP/1.1\r\n"
+            "Host: example.com\r\n"
+            "Content-Encoding: ";
+        request.append(value);
+        request.append("\r\nContent-Length: 0\r\n\r\n");
+        const auto result = parser.parseMessage(request);
+        RUVIA_CHECK(isFailure(result, HttpParseError::kInvalidHeader));
+    }
+
+    Http1ServerRequestParser tolerant;
+    const auto accepted = tolerant.parseMessage(
+        "POST /items HTTP/1.1\r\n"
+        "Host: example.com\r\n"
+        "Content-Encoding: , gzip,,\r\n"
+        "Content-Length: 0\r\n\r\n");
+    RUVIA_CHECK(accepted.messageReady());
+}
+
 RUVIA_TEST(http1_parse_authority_uses_shared_uri_normalization) {
     Http1ServerRequestParser parser;
     // RFC 9110 section 4.2.3: an empty port is the scheme default, host is

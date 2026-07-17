@@ -689,6 +689,10 @@ Task<std::string_view> Context::requestBody() const {
     // Transparently decode a request body whose Content-Encoding we understand,
     // so handlers always see the decoded representation (RFC 9110 §8.4).
     const auto parsedCoding = detail::requestContentCoding(request_);
+    if (const auto* invalid = parsedCoding.invalid()) {
+        throw HttpProtocolError(
+            invalid->status(), "invalid request Content-Encoding");
+    }
     if (const auto* unsupported = parsedCoding.unsupported()) {
         throw detail::UnsupportedRequestContentCoding(*unsupported);
     }

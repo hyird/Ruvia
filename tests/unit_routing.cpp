@@ -1312,6 +1312,17 @@ RUVIA_TEST(dispatch_rejects_unsupported_request_content_coding_with_advertisemen
         result.body.find("unsupported_content_coding") != std::string::npos);
 }
 
+RUVIA_TEST(dispatch_defensively_rejects_malformed_request_content_coding) {
+    const auto result = dispatchOneToken(
+        RouteHandler(nullptr, &readsRequestBodyHandler),
+        "GET",
+        "/x",
+        "gzip;level=9",
+        "encoded");
+    RUVIA_CHECK_EQ(result.status, std::uint16_t{400});
+    RUVIA_CHECK(result.acceptEncoding.empty());
+}
+
 RUVIA_TEST(dispatch_produces_404_and_405_for_unmatched_routes) {
     // A path with no route -> 404.
     RUVIA_CHECK_EQ(dispatchOne(RouteHandler(nullptr, &okHandler), HttpKnownMethod::kGet, "/nope").status,

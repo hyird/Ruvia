@@ -335,6 +335,12 @@ RUVIA_TEST(http2_interim_response_header_rejection_is_transactional) {
     const ruvia::HttpHeaderView te[] = {{"TE", "trailers"}};
     const ruvia::HttpHeaderView trailer[] = {{"Trailer", "X-Checksum"}};
     const ruvia::HttpHeaderView malformed[] = {{"Bad Name", "value"}};
+    const ruvia::HttpHeaderView malformedContentEncoding[] = {
+        {"Content-Encoding", "gzip;level=9"},
+    };
+    const ruvia::HttpHeaderView emptyContentEncoding[] = {
+        {"Content-Encoding", ""},
+    };
     const ruvia::HttpHeaderView duplicateServer[] = {
         {"Server", "one"},
         {"server", "two"},
@@ -345,6 +351,8 @@ RUVIA_TEST(http2_interim_response_header_rejection_is_transactional) {
     RUVIA_CHECK(rejects(te));
     RUVIA_CHECK(rejects(trailer));
     RUVIA_CHECK(rejects(malformed));
+    RUVIA_CHECK(rejects(malformedContentEncoding));
+    RUVIA_CHECK(rejects(emptyContentEncoding));
     RUVIA_CHECK(rejects(duplicateServer));
 }
 

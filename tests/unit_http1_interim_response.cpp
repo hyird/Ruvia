@@ -163,6 +163,10 @@ RUVIA_TEST(http1_interim_response_writer_rejects_invalid_fields_transactionally)
 
     const HttpHeaderView malformedName[] = {{"Bad Name", "value"}};
     const HttpHeaderView malformedValue[] = {{"X-Test", "a\r\nb"}};
+    const HttpHeaderView malformedContentEncoding[] = {
+        {"Content-Encoding", "gzip;level=9"}};
+    const HttpHeaderView emptyContentEncoding[] = {
+        {"Content-Encoding", ""}};
     const HttpHeaderView contentLength[] = {{"Content-Length", "0"}};
     const HttpHeaderView transferEncoding[] = {{"Transfer-Encoding", "chunked"}};
     const HttpHeaderView trailer[] = {{"Trailer", "X-Checksum"}};
@@ -185,6 +189,12 @@ RUVIA_TEST(http1_interim_response_writer_rejects_invalid_fields_transactionally)
         malformedName, Http1InterimResponsePrepareError::kInvalidHeader));
     RUVIA_CHECK(rejects(
         malformedValue, Http1InterimResponsePrepareError::kInvalidHeader));
+    RUVIA_CHECK(rejects(
+        malformedContentEncoding,
+        Http1InterimResponsePrepareError::kInvalidHeader));
+    RUVIA_CHECK(rejects(
+        emptyContentEncoding,
+        Http1InterimResponsePrepareError::kInvalidHeader));
     RUVIA_CHECK(rejects(
         contentLength,
         Http1InterimResponsePrepareError::kContentLengthForbidden));

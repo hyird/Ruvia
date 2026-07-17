@@ -7,6 +7,7 @@
 
 #include "ruvia/http/detail/HeaderAcceptUtils.h"
 #include "ruvia/http/detail/HttpExpectations.h"
+#include "ruvia/http/detail/HttpContentCoding.h"
 #include "ruvia/http/detail/HttpRequestContentSemantics.h"
 #include "ruvia/http/detail/HttpResponseBodyAccess.h"
 #include "ruvia/http/detail/HttpResponseContentSemantics.h"
@@ -72,6 +73,11 @@ struct Http2OutboundRequestHeaderFacts final {
                 return false;
             }
             hasContentType = true;
+        }
+        if (kind == RequestHeaderKind::kContentEncoding &&
+            !isValidHttpContentEncodingFieldValue(
+                header.value(), HttpFieldListRole::kSender)) {
+            return false;
         }
         if (kind == RequestHeaderKind::kExpect) {
             expectations.parseField(header.value());

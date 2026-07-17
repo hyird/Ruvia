@@ -7,6 +7,7 @@
 #include "ruvia/http/HttpKnownMethod.h"
 #include "ruvia/http/detail/HeaderAcceptUtils.h"
 #include "ruvia/http/detail/HttpCorsFields.h"
+#include "ruvia/http/detail/HttpContentCoding.h"
 #include "ruvia/http/detail/http2/Http2HeaderRules.h"
 #include "ruvia/http/detail/http2/Http2StreamState.h"
 #include "ruvia/http/detail/parser/HttpRequestTarget.h"
@@ -198,6 +199,11 @@ struct Http2HeaderDecodeContext final {
         if (!isValidHttpContentTypeFieldValue(value)) {
             return false;
         }
+    }
+    if (kind == RequestHeaderKind::kContentEncoding &&
+        !isValidHttpContentEncodingFieldValue(
+            value, HttpFieldListRole::kRecipient)) {
+        return false;
     }
     if (const auto singletonBit = singletonRequestHeaderBit(kind); singletonBit != 0) {
         if (!stream.markSingletonRequestHeader(singletonBit)) {

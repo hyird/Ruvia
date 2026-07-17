@@ -402,6 +402,31 @@ RUVIA_TEST(response_header_rejects_invalid_content_type_syntax) {
         std::string_view("application/json; charset=utf-8"));
 }
 
+RUVIA_TEST(response_header_rejects_invalid_content_encoding_syntax) {
+    auto response = makeResponse();
+
+    for (const std::string_view invalid : {
+             "gzip;level=9",
+             "bad coding",
+             "gzip/deflate",
+             "",
+             ",gzip",
+             "gzip,",
+             "gzip,,br"}) {
+        RUVIA_CHECK(throwsInvalid([&] {
+            response.header("Content-Encoding", invalid);
+        }));
+    }
+
+    for (const std::string_view valid : {
+             "deflate",
+             "gzip, br"}) {
+        RUVIA_CHECK(!throwsInvalid([&] {
+            response.header("Content-Encoding", valid);
+        }));
+    }
+}
+
 RUVIA_TEST(response_header_rejects_name_and_value_injection) {
     auto response = makeResponse();
     // The developer-facing header setter is the header-injection chokepoint: a CR or
