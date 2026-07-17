@@ -488,6 +488,20 @@ RUVIA_TEST(http1_parse_absolute_uri_accepts_generic_schemes_and_empty_host) {
     RUVIA_CHECK(withoutAuthority.request.header("Host")->empty());
 }
 
+RUVIA_TEST(http1_parse_absolute_options_empty_path_is_server_wide) {
+    Http1ServerRequestParser parser;
+
+    const auto result = parser.parseMessage(
+        "OPTIONS http://api.example HTTP/1.1\r\n"
+        "Host: stale.example\r\n\r\n");
+    RUVIA_CHECK(result.messageReady());
+    RUVIA_CHECK_EQ(result.request.path(), std::string_view("*"));
+    RUVIA_CHECK(result.request.queryString().empty());
+    RUVIA_CHECK_EQ(
+        result.request.header("Host").value_or(std::string_view{}),
+        std::string_view("api.example"));
+}
+
 RUVIA_TEST(http1_parse_authority_uses_shared_uri_normalization) {
     Http1ServerRequestParser parser;
     // RFC 9110 section 4.2.3: an empty port is the scheme default, host is

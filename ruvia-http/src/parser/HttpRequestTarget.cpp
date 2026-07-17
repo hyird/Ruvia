@@ -794,7 +794,10 @@ std::uint16_t httpUriSchemeDefaultPort(std::string_view scheme) noexcept {
 
 namespace {
 
-[[nodiscard]] bool parseAbsoluteTarget(std::string_view target, RequestTargetView& output) noexcept {
+[[nodiscard]] bool parseAbsoluteTarget(
+    HttpKnownMethod method,
+    std::string_view target,
+    RequestTargetView& output) noexcept {
     // RFC 9112 section 3.2.2 defines absolute-form as the complete RFC 3986
     // absolute-URI grammar. Restricting this to HTTP(S) rejects valid proxy
     // requests such as ftp:// targets and every authority-less scheme.
@@ -863,9 +866,22 @@ namespace {
         path = hierarchy;
     }
 
-    output.path = path.empty() && hierarchy.starts_with("//")
-        ? std::string_view("/")
-        : path;
+    if (path.empty() &&
+        method == HttpKnownMethod::kOptions && query.empty()) {
+        // RFC 9112 section 3.2.4: a proxy forwarding an absolute-form
+        // OPTIONS target with an empty path and no query to the final origin
+        // must use asterisk-form. Expose that route semantic directly even
+        // when this parser itself is the origin-facing recipient.
+        output.path = "*";
+    } else if (path.empty() &&
+               httpScheme && method != HttpKnownMethod::kOptions) {
+        // RFC 9110 section 4.2.3 permits this normalization only for HTTP(S)
+        // targets that are not OPTIONS. Generic schemes retain their exact
+        // empty path, and an OPTIONS target with a query remains distinct.
+        output.path = "/";
+    } else {
+        output.path = path;
+    }
     output.query = query;
     output.authority = authority;
     output.defaultPort = httpUriSchemeDefaultPort(scheme);
@@ -950,7 +966,7 @@ bool parseRequestTarget(
     if (!isValidRequestTargetBytes(target)) {
         return false;
     }
-    return parseAbsoluteTarget(target, output);
+    return parseAbsoluteTarget(method, target, output);
 }
 
 }  // namespace ruvia::detail
