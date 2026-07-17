@@ -294,6 +294,15 @@ RUVIA_TEST(compress_respects_no_transform) {
     RUVIA_CHECK(!tryCompress(response, Compression{.minBytes = 16}));
 }
 
+RUVIA_TEST(compress_ignores_no_transform_inside_quoted_extension) {
+    auto response = responseWithBody(kCompressibleBody);
+    response.header(
+        "Cache-Control",
+        R"(extension="a, no-transform, b")");
+    RUVIA_CHECK(tryCompress(response, Compression{.minBytes = 16}));
+    RUVIA_CHECK_EQ(response.header("Content-Encoding"), std::string_view("gzip"));
+}
+
 RUVIA_TEST(compress_skips_already_encoded_body) {
     auto response = responseWithBody(kCompressibleBody);
     response.header("Content-Encoding", "gzip");  // already encoded upstream

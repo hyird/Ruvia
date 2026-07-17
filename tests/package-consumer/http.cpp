@@ -2134,6 +2134,9 @@ static_assert(std::same_as<
     decltype(ruvia::CacheControl::sMaxAge),
     std::optional<std::uint64_t>>);
 static_assert(std::same_as<
+    decltype(ruvia::CacheControl::noTransform),
+    bool>);
+static_assert(std::same_as<
     decltype(ruvia::CookieOptions{}.sameSite),
     std::optional<ruvia::CookieSameSite>>);
 static_assert(std::same_as<

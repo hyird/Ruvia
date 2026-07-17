@@ -3525,6 +3525,15 @@ if(EXISTS "${HTTP_CONTENT_CODING_CONTRACT}" AND
         boundary_error("HTTP response compression lost encoded-byte ownership"
             "the HTTP encoder must return one owning alternative and Web must move it into HttpResponse")
     endif()
+    if(NOT web_response_compression_source MATCHES
+           "parseCacheControl" OR
+       NOT web_response_compression_source MATCHES
+           "[.]noTransform" OR
+       NOT web_response_compression_test MATCHES
+           "compress_ignores_no_transform_inside_quoted_extension")
+        boundary_error("Web response compression bypassed Cache-Control parsing"
+            "no-transform must be recognized by the quote-aware HTTP parser, not a generic comma token scan")
+    endif()
     if(web_unsupported_content_coding_signal MATCHES
            "status_|HttpUnsupportedContentCoding::status|std::uint16_t[ \t]+status" OR
        NOT web_router_dispatch_source MATCHES

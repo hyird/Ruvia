@@ -24,6 +24,18 @@ RUVIA_TEST(parse_cache_control_no_store_and_private) {
     RUVIA_CHECK(!cc.maxAge.has_value());
 }
 
+RUVIA_TEST(parse_cache_control_no_transform_is_bare_and_quote_aware) {
+    const auto present = ruvia::parseCacheControl("NO-TRANSFORM");
+    RUVIA_CHECK(present.noTransform);
+
+    const auto quoted = ruvia::parseCacheControl(
+        R"(extension="a, no-transform, b")");
+    RUVIA_CHECK(!quoted.noTransform);
+
+    const auto qualified = ruvia::parseCacheControl("no-transform=ignored");
+    RUVIA_CHECK(!qualified.noTransform);
+}
+
 RUVIA_TEST(parse_cache_control_quoted_and_case_insensitive_and_unknown) {
     // Directive names are case-insensitive; a quoted delta-seconds is accepted; unknown ignored.
     const auto cc = ruvia::parseCacheControl("Max-Age=\"45\" , surrogate-control=foo, No-Cache");
@@ -120,11 +132,12 @@ RUVIA_TEST(parse_cache_control_does_not_split_quoted_extension_values) {
 RUVIA_TEST(parse_cache_control_ignores_arguments_on_bare_directives) {
     const auto cc = ruvia::parseCacheControl(
         "public=ignored, no-store=ignored, must-revalidate=x, "
-        "proxy-revalidate=\"x\", immutable=");
+        "proxy-revalidate=\"x\", no-transform=ignored, immutable=");
     RUVIA_CHECK(!cc.isPublic);
     RUVIA_CHECK(!cc.noStore);
     RUVIA_CHECK(!cc.mustRevalidate);
     RUVIA_CHECK(!cc.proxyRevalidate);
+    RUVIA_CHECK(!cc.noTransform);
     RUVIA_CHECK(!cc.immutable);
 
     // no-cache and private are different: their response forms can carry a

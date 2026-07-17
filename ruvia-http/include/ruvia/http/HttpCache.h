@@ -13,6 +13,7 @@ namespace ruvia {
 struct CacheControl {
     bool noStore{false};
     bool noCache{false};            // bare or field-name form -- both require revalidation
+    bool noTransform{false};        // intermediaries must not transform the content
     bool mustRevalidate{false};
     bool proxyRevalidate{false};
     bool isPrivate{false};          // "private" (not for a shared cache)

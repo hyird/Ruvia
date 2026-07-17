@@ -1,5 +1,6 @@
 #include "ruvia/web/detail/server/HttpResponseCompression.h"
 
+#include "ruvia/http/HttpCache.h"
 #include "ruvia/http/detail/HttpResponseBodyAccess.h"
 #include "ruvia/http/detail/HeaderTokenUtils.h"
 #include "ruvia/http/detail/HttpContentCoding.h"
@@ -113,7 +114,7 @@ void applyResponseCompression(
         responseHasKnownHeader(response, kResponseHeaderContentEncoding) ||
         responseHasKnownHeader(response, kResponseHeaderContentRange) ||
         responseContentTypeSkipsCompression(responseKnownHeader(response, kResponseHeaderContentType)) ||
-        httpHasToken(responseKnownHeader(response, kResponseHeaderCacheControl), "no-transform")) {
+        parseCacheControl(responseKnownHeader(response, kResponseHeaderCacheControl)).noTransform) {
         return;
     }
 

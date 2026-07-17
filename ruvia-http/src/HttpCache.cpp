@@ -142,6 +142,8 @@ CacheControl parseCacheControl(std::string_view value) noexcept {
         } else if ((!hasArgument || isValidCacheDirectiveArgument(arg)) &&
                    detail::httpAsciiEqualsIgnoreCase(name, "no-cache")) {
             result.noCache = true;
+        } else if (!hasArgument && detail::httpAsciiEqualsIgnoreCase(name, "no-transform")) {
+            result.noTransform = true;
         } else if (!hasArgument && detail::httpAsciiEqualsIgnoreCase(name, "must-revalidate")) {
             result.mustRevalidate = true;
         } else if (!hasArgument && detail::httpAsciiEqualsIgnoreCase(name, "proxy-revalidate")) {
