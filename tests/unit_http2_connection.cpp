@@ -2122,6 +2122,7 @@ RUVIA_TEST(http2_connection_trace_allows_empty_terminal_framing) {
 
     std::pmr::string block(&resource);
     encodeRequest(block, "TRACE", "https", "/diagnostic");
+    HpackEncoder::encodeHeader(block, "expect", "100-continue");
     const auto head = headersFrame(
         &resource,
         1,
@@ -2131,6 +2132,14 @@ RUVIA_TEST(http2_connection_trace_allows_empty_terminal_framing) {
         Http2FeedResult::kAccepted);
     RUVIA_CHECK(conn.nextEvent().value().kind() ==
         Http2EventKind::kMessageHead);
+    const auto* stream = conn.stream(1);
+    RUVIA_CHECK(stream != nullptr);
+    if (stream != nullptr) {
+        const auto expectation = stream->expectationPlan(
+            ruvia::detail::HttpUnsupportedExpectationPolicy::kReject);
+        RUVIA_CHECK(expectation.noAction() != nullptr);
+        RUVIA_CHECK(expectation.send100Continue() == nullptr);
+    }
 
     const auto end = dataFrame(
         &resource,

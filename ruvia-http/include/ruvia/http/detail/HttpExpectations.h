@@ -12,7 +12,8 @@ namespace ruvia::detail {
 
 // Whether the framing/lifecycle owner has established that request content will
 // follow the initial head. Keep this typed: HTTP/1 derives it from its body plan,
-// while HTTP/2 derives it from END_STREAM rather than from Content-Length alone.
+// while HTTP/2 combines its receive-half and remaining-content states so an open
+// metadata-only or known-empty stream cannot masquerade as pending content.
 enum class HttpRequestContentIndication : std::uint8_t {
     kNoContent,
     kWillFollow

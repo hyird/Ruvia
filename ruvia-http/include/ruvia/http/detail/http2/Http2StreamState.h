@@ -308,8 +308,17 @@ public:
 
     [[nodiscard]] HttpServerExpectationPlan expectationPlan(
         HttpUnsupportedExpectationPolicy unsupportedPolicy) const noexcept {
+        const auto* knownLength = remoteContent_.allowedKnownLength();
+        // An open HTTP/2 receive half can still be metadata-only, known-empty,
+        // or awaiting only an empty END_STREAM frame. None of those states may
+        // invite request content with a 100 response.
+        const bool contentCanFollow =
+            lifecycle_.remoteReceive().contentOpen() != nullptr &&
+            (remoteContent_.allowedWithoutLength() != nullptr ||
+             (knownLength != nullptr &&
+              knownLength->receivedBytes() < knownLength->declaredLength()));
         return expectations_.serverPlan(
-            remoteReceive().contentOpen() != nullptr
+            contentCanFollow
                 ? HttpRequestContentIndication::kWillFollow
                 : HttpRequestContentIndication::kNoContent,
             unsupportedPolicy);
