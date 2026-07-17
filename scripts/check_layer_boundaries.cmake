@@ -3544,6 +3544,38 @@ if(EXISTS "${HTTP_CONTENT_CODING_CONTRACT}" AND
             "the Web signal must carry no status copy and Router dispatch must map the protocol status while preserving its 415/Accept-Encoding behavior test")
     endif()
 endif()
+set(HTTP_RESPONSE_VARY_UTILS
+    "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/detail/ResponseHeaderUtils.h")
+set(HTTP_RESPONSE_VARY_TEST
+    "${RUVIA_ROOT}/tests/unit_vary_headers.cpp")
+foreach(http_response_vary_contract IN ITEMS
+        "${HTTP_RESPONSE_VARY_UTILS}"
+        "${HTTP_RESPONSE_VARY_TEST}")
+    if(NOT EXISTS "${http_response_vary_contract}")
+        file(RELATIVE_PATH relative "${RUVIA_ROOT}"
+            "${http_response_vary_contract}")
+        boundary_error("response Vary combination contract is incomplete"
+            "${relative} is required")
+    endif()
+endforeach()
+if(EXISTS "${HTTP_RESPONSE_VARY_UTILS}" AND
+   EXISTS "${HTTP_RESPONSE_VARY_TEST}")
+    file(READ "${HTTP_RESPONSE_VARY_UTILS}"
+        http_response_vary_utils)
+    file(READ "${HTTP_RESPONSE_VARY_TEST}"
+        http_response_vary_test)
+    if(NOT http_response_vary_utils MATCHES
+           "responseVaryHasToken" OR
+       NOT http_response_vary_utils MATCHES
+           "for [(]const auto& header : response[.]headers[(][)][)]" OR
+       NOT http_response_vary_test MATCHES
+           "vary_add_preserves_repeated_field_lines_in_combined_order" OR
+       NOT http_response_vary_test MATCHES
+           "vary_wildcard_in_later_repeated_field_line_dominates")
+        boundary_error("response Vary mutation lost repeated field semantics"
+            "Vary token checks and rewrites must consume every field line in wire order, including a later wildcard")
+    endif()
+endif()
 set(HTTP_REQUEST_CONTENT_DECODING_CONTRACT
     "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/detail/RequestBodyDecoding.h")
 set(HTTP_CLIENT_CONTENT_DECODING_CONTRACT
