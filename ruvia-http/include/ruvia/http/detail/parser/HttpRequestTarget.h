@@ -94,6 +94,9 @@ private:
     HttpKnownMethod method,
     std::string_view target) noexcept;
 
+// Host field syntax. An empty field is valid when the target URI has no
+// authority (RFC 9112 section 3.2); callers that require a usable HTTP origin
+// must additionally require a non-empty value.
 [[nodiscard]] bool isValidHostHeader(std::string_view value) noexcept;
 // RFC 3986 authority = [ userinfo "@" ] host [ ":" port ]. Unlike an HTTP
 // Host field, the generic grammar permits userinfo, an empty reg-name, and a

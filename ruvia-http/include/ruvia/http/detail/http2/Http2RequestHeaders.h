@@ -57,7 +57,9 @@ struct Http2HeaderDecodeContext final {
     std::string_view scheme,
     std::string_view authority) noexcept {
     if (http2IsHttpRequestScheme(scheme)) {
-        return isValidHostHeader(authority);
+        // HTTP(S) URI authority is mandatory even though an empty Host field is
+        // valid HTTP/1 wire syntax for target URIs of other schemes.
+        return !authority.empty() && isValidHostHeader(authority);
     }
     return isValidUriAuthority(authority);
 }

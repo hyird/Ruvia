@@ -464,6 +464,30 @@ RUVIA_TEST(http1_parse_absolute_uri_uses_target_authority) {
     }
 }
 
+RUVIA_TEST(http1_parse_absolute_uri_accepts_generic_schemes_and_empty_host) {
+    Http1ServerRequestParser parser;
+
+    const auto hierarchical = parser.parseMessage(
+        "GET ftp://archive.example/pub/file HTTP/1.1\r\n"
+        "Host: stale.example\r\n\r\n");
+    RUVIA_CHECK(hierarchical.messageReady());
+    RUVIA_CHECK_EQ(
+        hierarchical.request.path(), std::string_view("/pub/file"));
+    RUVIA_CHECK_EQ(
+        hierarchical.request.header("Host").value_or(std::string_view{}),
+        std::string_view("archive.example"));
+
+    const auto withoutAuthority = parser.parseMessage(
+        "GET urn:example:animal:ferret:nose HTTP/1.1\r\n"
+        "Host:\r\n\r\n");
+    RUVIA_CHECK(withoutAuthority.messageReady());
+    RUVIA_CHECK_EQ(
+        withoutAuthority.request.path(),
+        std::string_view("example:animal:ferret:nose"));
+    RUVIA_CHECK(withoutAuthority.request.header("Host").has_value());
+    RUVIA_CHECK(withoutAuthority.request.header("Host")->empty());
+}
+
 RUVIA_TEST(http1_parse_authority_uses_shared_uri_normalization) {
     Http1ServerRequestParser parser;
     // RFC 9110 section 4.2.3: an empty port is the scheme default, host is

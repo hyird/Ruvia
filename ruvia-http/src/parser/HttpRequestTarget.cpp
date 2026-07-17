@@ -711,7 +711,11 @@ bool httpUriHostEquals(std::string_view left, std::string_view right) noexcept {
 }
 
 bool isValidHostHeader(std::string_view value) noexcept {
-    return parseHttpAuthority(value).has_value();
+    // RFC 9112 section 3.2 requires an empty Host field when the target URI
+    // has no authority component. Keep that wire-valid state distinct from a
+    // usable network authority: parseHttpAuthority() intentionally continues
+    // to require a host.
+    return value.empty() || parseHttpAuthority(value).has_value();
 }
 
 bool isValidUriAuthority(std::string_view value) noexcept {
@@ -791,57 +795,81 @@ std::uint16_t httpUriSchemeDefaultPort(std::string_view scheme) noexcept {
 namespace {
 
 [[nodiscard]] bool parseAbsoluteTarget(std::string_view target, RequestTargetView& output) noexcept {
-    std::size_t authorityBegin = 0;
-    if (target.size() >= 7 && httpAsciiEqualsIgnoreCase(target.substr(0, 7), "http://")) {
-        authorityBegin = 7;
-        output.defaultPort = 80;
-    } else if (target.size() >= 8 && httpAsciiEqualsIgnoreCase(target.substr(0, 8), "https://")) {
-        authorityBegin = 8;
-        output.defaultPort = 443;
-    } else {
+    // RFC 9112 section 3.2.2 defines absolute-form as the complete RFC 3986
+    // absolute-URI grammar. Restricting this to HTTP(S) rejects valid proxy
+    // requests such as ftp:// targets and every authority-less scheme.
+    const auto schemeEnd = target.find(':');
+    if (schemeEnd == std::string_view::npos ||
+        !isValidUriScheme(target.substr(0, schemeEnd))) {
         return false;
     }
 
-    const auto rest = target.substr(authorityBegin);
-    const auto separator = rest.find_first_of("/?");
-    const auto authority = separator == std::string_view::npos ? rest : rest.substr(0, separator);
-    if (!isValidHostHeader(authority)) {
-        return false;
-    }
-
-    output.authority = authority;
-    output.form = HttpRequestTargetForm::kAbsolute;
-    if (separator == std::string_view::npos) {
-        output.path = "/";
-        output.query = {};
-        return true;
-    }
-
-    const auto pathBegin = authorityBegin + separator;
-    if (target[pathBegin] == '?') {
-        const auto query = target.substr(pathBegin + 1);
-        if (!isValidUriComponent(query, true, true)) {
-            return false;
-        }
-        output.path = "/";
-        output.query = query;
-        return true;
-    }
-
-    const auto querySeparator = target.find('?', pathBegin);
-    const auto path = querySeparator == std::string_view::npos
-        ? target.substr(pathBegin)
-        : target.substr(pathBegin, querySeparator - pathBegin);
+    const auto scheme = target.substr(0, schemeEnd);
+    const bool httpScheme = httpAsciiEqualsIgnoreCase(scheme, "http") ||
+        httpAsciiEqualsIgnoreCase(scheme, "https");
+    const auto remainder = target.substr(schemeEnd + 1);
+    const auto querySeparator = remainder.find('?');
+    const auto hierarchy = querySeparator == std::string_view::npos
+        ? remainder
+        : remainder.substr(0, querySeparator);
     const auto query = querySeparator == std::string_view::npos
         ? std::string_view{}
-        : target.substr(querySeparator + 1);
-    if (path.empty() || path.front() != '/' ||
-        !isValidUriComponent(path, true, false) ||
-        !isValidUriComponent(query, true, true)) {
+        : remainder.substr(querySeparator + 1);
+    if (!isValidUriComponent(query, true, true)) {
         return false;
     }
-    output.path = path;
+
+    std::string_view authority;
+    std::string_view path;
+    if (hierarchy.starts_with("//")) {
+        const auto authorityAndPath = hierarchy.substr(2);
+        const auto pathSeparator = authorityAndPath.find('/');
+        const auto uriAuthority = pathSeparator == std::string_view::npos
+            ? authorityAndPath
+            : authorityAndPath.substr(0, pathSeparator);
+        path = pathSeparator == std::string_view::npos
+            ? std::string_view{}
+            : authorityAndPath.substr(pathSeparator);
+        if (!isValidUriAuthority(uriAuthority) ||
+            !isValidUriComponent(path, true, false)) {
+            return false;
+        }
+
+        const auto userinfoDelimiter = uriAuthority.find('@');
+        authority = userinfoDelimiter == std::string_view::npos
+            ? uriAuthority
+            : uriAuthority.substr(userinfoDelimiter + 1);
+        // Host is the public, authoritative routing value installed by the
+        // HTTP/1 parser. It therefore still has to fit the validated HTTP
+        // authority representation even when the URI scheme is generic.
+        if (!isValidHostHeader(authority)) {
+            return false;
+        }
+
+        // HTTP(S) URI syntax has a mandatory, non-empty authority. Userinfo in
+        // an HTTP URI is rejected at this trust boundary (RFC 9110 section
+        // 4.2.4) instead of being silently stripped into a routing identity.
+        if (httpScheme &&
+            (authority.empty() ||
+             userinfoDelimiter != std::string_view::npos)) {
+            return false;
+        }
+    } else {
+        // RFC 9110 defines HTTP(S) URI with "//" authority. Other registered
+        // schemes may use path-absolute, path-rootless, or path-empty.
+        if (httpScheme || !isValidUriComponent(hierarchy, true, false)) {
+            return false;
+        }
+        path = hierarchy;
+    }
+
+    output.path = path.empty() && hierarchy.starts_with("//")
+        ? std::string_view("/")
+        : path;
     output.query = query;
+    output.authority = authority;
+    output.defaultPort = httpUriSchemeDefaultPort(scheme);
+    output.form = HttpRequestTargetForm::kAbsolute;
     return true;
 }
 

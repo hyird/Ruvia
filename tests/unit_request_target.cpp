@@ -81,6 +81,9 @@ RUVIA_TEST(uri_authority_uses_complete_rfc3986_generic_grammar) {
 }
 
 RUVIA_TEST(host_header_accepts_valid) {
+    // RFC 9112 section 3.2 permits an empty Host field when the target URI has
+    // no authority component.
+    RUVIA_CHECK(isValidHostHeader(""));
     RUVIA_CHECK(isValidHostHeader("example.com"));
     RUVIA_CHECK(isValidHostHeader("example.com:8080"));
     RUVIA_CHECK(isValidHostHeader("localhost"));
@@ -103,7 +106,6 @@ RUVIA_TEST(host_header_accepts_valid) {
 }
 
 RUVIA_TEST(host_header_rejects_invalid) {
-    RUVIA_CHECK(!isValidHostHeader(""));
     RUVIA_CHECK(!isValidHostHeader("example.com:65536"));   // one past the maximum port
     RUVIA_CHECK(!isValidHostHeader("example.com:70000"));   // port > 65535
     RUVIA_CHECK(!isValidHostHeader("example.com:8o80"));    // non-digit in port
@@ -239,8 +241,49 @@ RUVIA_TEST(parse_request_target_absolute_form) {
     RUVIA_CHECK(parseRequestTarget(HttpKnownMethod::kGet, "http://[v1.future]/x", out));
     RUVIA_CHECK_EQ(out.authority, std::string_view("[v1.future]"));
 
-    // Unknown scheme, empty authority, and an invalid authority are all rejected.
-    RUVIA_CHECK(!parseRequestTarget(HttpKnownMethod::kGet, "ftp://example.com/x", out));
+    // Absolute-form is the complete RFC 3986 absolute-URI grammar, not only
+    // HTTP(S). Unknown schemes retain an unknown default port.
+    RUVIA_CHECK(parseRequestTarget(
+        HttpKnownMethod::kGet, "ftp://example.com/pub/archive", out));
+    RUVIA_CHECK_EQ(out.path, std::string_view("/pub/archive"));
+    RUVIA_CHECK_EQ(out.authority, std::string_view("example.com"));
+    RUVIA_CHECK_EQ(out.defaultPort, std::uint16_t{0});
+    RUVIA_CHECK(out.form == HttpRequestTargetForm::kAbsolute);
+
+    RUVIA_CHECK(parseRequestTarget(
+        HttpKnownMethod::kGet,
+        "custom://user:secret@example.com/resource",
+        out));
+    RUVIA_CHECK_EQ(out.path, std::string_view("/resource"));
+    // RFC 9112 section 3.2 excludes userinfo from the effective Host value.
+    RUVIA_CHECK_EQ(out.authority, std::string_view("example.com"));
+
+    RUVIA_CHECK(parseRequestTarget(
+        HttpKnownMethod::kGet, "urn:example:animal:ferret:nose", out));
+    RUVIA_CHECK_EQ(out.path, std::string_view("example:animal:ferret:nose"));
+    RUVIA_CHECK(out.query.empty());
+    RUVIA_CHECK(out.authority.empty());
+    RUVIA_CHECK_EQ(out.defaultPort, std::uint16_t{0});
+    RUVIA_CHECK(out.form == HttpRequestTargetForm::kAbsolute);
+
+    RUVIA_CHECK(parseRequestTarget(
+        HttpKnownMethod::kGet, "file:///etc/hosts", out));
+    RUVIA_CHECK_EQ(out.path, std::string_view("/etc/hosts"));
+    RUVIA_CHECK(out.authority.empty());
+
+    RUVIA_CHECK(parseRequestTarget(
+        HttpKnownMethod::kGet, "custom:?name=value", out));
+    RUVIA_CHECK(out.path.empty());
+    RUVIA_CHECK_EQ(out.query, std::string_view("name=value"));
+    RUVIA_CHECK(out.authority.empty());
+
+    // Generic absolute-URI syntax does not make malformed HTTP(S) URI forms
+    // valid: those schemes still require // followed by a non-empty authority.
+    RUVIA_CHECK(!parseRequestTarget(HttpKnownMethod::kGet, "http:/x", out));
+    RUVIA_CHECK(!parseRequestTarget(HttpKnownMethod::kGet, "https:x", out));
+    RUVIA_CHECK(!parseRequestTarget(HttpKnownMethod::kGet, "1custom:/x", out));
+    RUVIA_CHECK(!parseRequestTarget(
+        HttpKnownMethod::kGet, "custom://user@@example.com/x", out));
     RUVIA_CHECK(!parseRequestTarget(HttpKnownMethod::kGet, "http://", out));
     RUVIA_CHECK(!parseRequestTarget(HttpKnownMethod::kGet, "http://exa@mple.com/x", out));
     RUVIA_CHECK(!parseRequestTarget(HttpKnownMethod::kGet, "http://example.com/[x]", out));
