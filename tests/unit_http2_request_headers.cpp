@@ -460,6 +460,17 @@ RUVIA_TEST(h2_headers_content_length_and_cookie) {
     RUVIA_CHECK_EQ(stream2.requestCookie(), std::string_view("a=1; b=2"));
 }
 
+RUVIA_TEST(h2_headers_field_limit_counts_coalesced_cookie_lines) {
+    Http2StreamState stream(1, res());
+    Http2HeaderDecodeContext context{stream};
+    for (std::size_t i = 0; i < ruvia::kMaxHttpHeaderFields; ++i) {
+        RUVIA_CHECK(http2OnDecodedInitialHeader(
+            context, "cookie", "a=1"));
+    }
+    RUVIA_CHECK(!http2OnDecodedInitialHeader(
+        context, "cookie", "a=1"));
+}
+
 RUVIA_TEST(h2_headers_expect_is_an_extensible_repeated_list) {
     Http2StreamState supported(1, res());
     Http2HeaderDecodeContext supportedContext{supported};
@@ -537,6 +548,17 @@ RUVIA_TEST(h2_headers_trailer_rejects_pseudo_and_invalid) {
         ctx,
         "access-control-request-headers",
         "x-one"));
+}
+
+RUVIA_TEST(h2_headers_trailer_enforces_field_count_without_storing_fields) {
+    Http2StreamState stream(1, res());
+    Http2HeaderDecodeContext context{stream};
+    for (std::size_t i = 0; i < ruvia::kMaxHttpHeaderFields; ++i) {
+        RUVIA_CHECK(http2OnDecodedTrailer(
+            context, "x-trace", "value"));
+    }
+    RUVIA_CHECK(!http2OnDecodedTrailer(
+        context, "x-trace", "value"));
 }
 
 RUVIA_TEST(h2_headers_list_byte_limit) {

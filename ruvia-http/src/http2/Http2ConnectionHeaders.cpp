@@ -144,7 +144,7 @@ bool http2OnDecodedResponseHeader(void* target, std::string_view name, std::stri
         return false;
     }
     auto& stream = context->base.stream;
-    if (name.empty() || stream.requestHeadersFull()) {
+    if (name.empty()) {
         return false;
     }
     if (name.front() == ':') {
@@ -166,6 +166,9 @@ bool http2OnDecodedResponseHeader(void* target, std::string_view name, std::stri
         return true;
     }
     if (!context->status || !http2IsValidDecodedResponseHeader(name, value)) {
+        return false;
+    }
+    if (!context->base.acceptRegularField()) {
         return false;
     }
     context->sawRegular = true;

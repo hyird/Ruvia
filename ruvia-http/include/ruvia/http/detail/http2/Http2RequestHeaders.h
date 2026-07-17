@@ -22,8 +22,17 @@ struct Http2HeaderDecodeContext final {
         Http2StreamState& streamValue) noexcept
         : stream(streamValue) {}
 
+    [[nodiscard]] bool acceptRegularField() noexcept {
+        if (regularFieldCount == kMaxHttpHeaderFields) {
+            return false;
+        }
+        ++regularFieldCount;
+        return true;
+    }
+
     Http2StreamState& stream;
     HttpHeaderSectionSize decodedHeaderListSize;
+    std::size_t regularFieldCount{0};
 };
 
 [[nodiscard]] inline bool http2IsHttpRequestScheme(
@@ -97,7 +106,7 @@ struct Http2HeaderDecodeContext final {
     }
 
     auto& stream = context.stream;
-    if (name.empty() || stream.requestHeadersFull()) {
+    if (name.empty()) {
         return false;
     }
 
@@ -148,7 +157,8 @@ struct Http2HeaderDecodeContext final {
         return false;
     }
 
-    if (!http2IsValidRegularHeader(name, value)) {
+    if (!context.acceptRegularField() ||
+        !http2IsValidRegularHeader(name, value)) {
         return false;
     }
     stream.markRegularHeaderSeen();
@@ -216,7 +226,8 @@ struct Http2HeaderDecodeContext final {
         return false;
     }
 
-    return http2IsValidRegularHeader(name, value) &&
+    return context.acceptRegularField() &&
+        http2IsValidRegularHeader(name, value) &&
         !http2IsForbiddenTrailerHeader(name);
 }
 
