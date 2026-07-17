@@ -294,6 +294,16 @@ RUVIA_TEST(compress_respects_no_transform) {
     RUVIA_CHECK(!tryCompress(response, Compression{.minBytes = 16}));
 }
 
+RUVIA_TEST(compress_respects_no_transform_in_later_cache_control_field) {
+    auto response = responseWithBody(kCompressibleBody);
+    response.header("Cache-Control", "public");
+    response.header(
+        "Cache-Control",
+        "no-transform",
+        HttpResponse::HeaderOptions{.append = true});
+    RUVIA_CHECK(!tryCompress(response, Compression{.minBytes = 16}));
+}
+
 RUVIA_TEST(compress_ignores_no_transform_inside_quoted_extension) {
     auto response = responseWithBody(kCompressibleBody);
     response.header(

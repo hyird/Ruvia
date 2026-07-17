@@ -3526,13 +3526,17 @@ if(EXISTS "${HTTP_CONTENT_CODING_CONTRACT}" AND
             "the HTTP encoder must return one owning alternative and Web must move it into HttpResponse")
     endif()
     if(NOT web_response_compression_source MATCHES
-           "parseCacheControl" OR
+           "CacheControlFieldParser" OR
+       NOT web_response_compression_source MATCHES
+           "for [(]const auto& header : response[.]headers[(][)][)]" OR
        NOT web_response_compression_source MATCHES
            "[.]noTransform" OR
        NOT web_response_compression_test MATCHES
-           "compress_ignores_no_transform_inside_quoted_extension")
+           "compress_ignores_no_transform_inside_quoted_extension" OR
+       NOT web_response_compression_test MATCHES
+           "compress_respects_no_transform_in_later_cache_control_field")
         boundary_error("Web response compression bypassed Cache-Control parsing"
-            "no-transform must be recognized by the quote-aware HTTP parser, not a generic comma token scan")
+            "no-transform must be recognized across every field line by the quote-aware HTTP parser")
     endif()
     if(web_unsupported_content_coding_signal MATCHES
            "status_|HttpUnsupportedContentCoding::status|std::uint16_t[ \t]+status" OR

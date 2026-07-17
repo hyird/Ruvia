@@ -97,6 +97,19 @@ RUVIA_TEST(parse_cache_control_freshness_uses_first_occurrence) {
     RUVIA_CHECK(!invalidFirst.sMaxAge.has_value());
 }
 
+RUVIA_TEST(cache_control_field_parser_combines_repeated_lines) {
+    ruvia::CacheControlFieldParser parser;
+    parser.update("public, max-age=invalid, s-maxage=120");
+    parser.update(
+        R"(extension="a, no-transform, b", no-transform, max-age=3600, s-maxage=7200)");
+
+    const auto cc = parser.finish();
+    RUVIA_CHECK(cc.isPublic);
+    RUVIA_CHECK(cc.noTransform);
+    RUVIA_CHECK(!cc.maxAge.has_value());
+    RUVIA_CHECK_EQ(cc.sMaxAge.value_or(0), std::uint64_t{120});
+}
+
 RUVIA_TEST(parse_cache_control_delta_seconds_overflow_saturates) {
     const auto cc = ruvia::parseCacheControl(
         "max-age=184467440737095516150, "

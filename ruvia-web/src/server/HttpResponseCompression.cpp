@@ -2,6 +2,7 @@
 
 #include "ruvia/http/HttpCache.h"
 #include "ruvia/http/detail/HttpResponseBodyAccess.h"
+#include "ruvia/http/detail/HttpResponseHeaderAccess.h"
 #include "ruvia/http/detail/HeaderTokenUtils.h"
 #include "ruvia/http/detail/HttpContentCoding.h"
 #include "ruvia/http/detail/ResponseHeaderUtils.h"
@@ -55,6 +56,17 @@ void setCompressedContentLength(HttpResponse& response, std::size_t size) {
         httpAsciiEqualsIgnoreCase(mediaType, "application/zstd") ||
         httpAsciiEqualsIgnoreCase(mediaType, "application/pdf") ||
         httpAsciiEqualsIgnoreCase(mediaType, "application/octet-stream");
+}
+
+[[nodiscard]] CacheControl responseCacheControl(
+    const HttpResponse& response) noexcept {
+    CacheControlFieldParser parser;
+    for (const auto& header : response.headers()) {
+        if (responseHeaderKnownBit(header) == kResponseHeaderCacheControl) {
+            parser.update(header.value());
+        }
+    }
+    return parser.finish();
 }
 
 // The handler's ETag validates its (identity) representation. Once the body is
@@ -114,7 +126,7 @@ void applyResponseCompression(
         responseHasKnownHeader(response, kResponseHeaderContentEncoding) ||
         responseHasKnownHeader(response, kResponseHeaderContentRange) ||
         responseContentTypeSkipsCompression(responseKnownHeader(response, kResponseHeaderContentType)) ||
-        parseCacheControl(responseKnownHeader(response, kResponseHeaderCacheControl)).noTransform) {
+        responseCacheControl(response).noTransform) {
         return;
     }
 

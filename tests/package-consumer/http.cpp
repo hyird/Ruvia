@@ -2137,6 +2137,13 @@ static_assert(std::same_as<
     decltype(ruvia::CacheControl::noTransform),
     bool>);
 static_assert(std::same_as<
+    decltype(std::declval<ruvia::CacheControlFieldParser&>().update(
+        std::string_view{})),
+    void>);
+static_assert(std::same_as<
+    decltype(std::declval<const ruvia::CacheControlFieldParser&>().finish()),
+    ruvia::CacheControl>);
+static_assert(std::same_as<
     decltype(ruvia::CookieOptions{}.sameSite),
     std::optional<ruvia::CookieSameSite>>);
 static_assert(std::same_as<
@@ -4096,6 +4103,15 @@ static_assert(std::same_as<
     std::optional<std::pmr::string>>);
 
 int main() {
+    ruvia::CacheControlFieldParser cacheControlParser;
+    cacheControlParser.update("public, max-age=invalid");
+    cacheControlParser.update("no-transform, max-age=60");
+    const auto installedCacheControl = cacheControlParser.finish();
+    if (!installedCacheControl.isPublic ||
+        !installedCacheControl.noTransform ||
+        installedCacheControl.maxAge.has_value()) {
+        return 54;
+    }
     if (!ruvia::detail::isValidCookieAttribute("/a path") ||
         ruvia::detail::isValidCookieAttribute("/a\tpath") ||
         ruvia::detail::isValidCookieAttribute("/caf\xc3\xa9") ||
