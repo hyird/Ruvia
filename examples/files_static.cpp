@@ -1,3 +1,6 @@
+// Static files: c.file(...), c.staticFile(...), StaticRoot, a document root,
+// validators/ranges and gzip configuration.
+
 #include <filesystem>
 #include <memory>
 

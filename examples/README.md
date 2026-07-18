@@ -5,6 +5,7 @@ These examples are built when `RUVIA_BUILD_EXAMPLES` is enabled and double as co
 | Target | Source | Covers |
 | --- | --- | --- |
 | `ruvia_example_basic_http` | `basic_http.cpp` | Controller/group macros, middleware, params, wildcard routes, query/header/cookie helpers, body reads, text/JSON/redirect/error responses, HEAD and OPTIONS. |
+| `ruvia_example_bench_server` | `bench_server.cpp` | Benchmark server mirroring the hical bench endpoints for throughput comparisons. |
 | `ruvia_example_api_surface` | `api_surface.cpp` | Hono-like C++ context/request/response facades, discriminated HTTP/1 parse outcomes, route metadata, decoded paths, Accept checks, buffered multipart, explicit body discard, response cookies, manual `HttpResponse` body ownership and PUT/PATCH streaming. |
 | `ruvia_example_models_validation` | `models_validation.cpp` | Separate request/response models, JSON/form bodies, nested models, arrays, recursive lists, defaults, validation middleware and rules. |
 | `ruvia_example_streaming` | `streaming.cpp` | Streaming request bodies, typed multipart chunk phases, chunked response streaming and SSE. |

@@ -1,3 +1,7 @@
+// Database: unified MariaDB/PostgreSQL configuration, query, execute,
+// streaming query, transaction and optional migration. Built with either
+// database feature.
+
 #include <array>
 #include <charconv>
 #include <chrono>

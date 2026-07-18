@@ -1,3 +1,7 @@
+// Redis: configuration, aliases, strings, hashes, lists, sets, sorted sets,
+// scans, scripts, blocking pops, pipelines and transactions. Built only with
+// RUVIA_ENABLE_REDIS=ON.
+
 #include <array>
 #include <charconv>
 #include <chrono>

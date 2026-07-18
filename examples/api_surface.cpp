@@ -1,3 +1,8 @@
+// HTTP context/request/response API surface: discriminated HTTP/1 parse
+// outcomes, route metadata, decoded paths, Accept checks, buffered multipart,
+// explicit body discard, response cookies, manual HttpResponse body ownership
+// and PUT/PATCH streaming.
+
 #include <array>
 #include <charconv>
 #include <chrono>

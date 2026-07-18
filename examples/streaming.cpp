@@ -1,3 +1,6 @@
+// Streaming: streaming request bodies, typed multipart chunk phases, chunked
+// response streaming and server-sent events.
+
 #include <charconv>
 #include <chrono>
 #include <cstddef>

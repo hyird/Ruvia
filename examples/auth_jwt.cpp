@@ -1,3 +1,6 @@
+// JWT auth: signing, verification, bearer-token middleware and protected
+// routes. Built only with RUVIA_ENABLE_JWT=ON.
+
 #include <chrono>
 #include <string_view>
 

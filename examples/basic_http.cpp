@@ -1,3 +1,7 @@
+// Basic HTTP server: controller/group macros, middleware, path params,
+// wildcard routes, query/header/cookie helpers, body reads, and
+// text/JSON/redirect/error responses including HEAD and OPTIONS.
+
 #include <charconv>
 #include <chrono>
 #include <cstddef>

@@ -1,3 +1,7 @@
+// Typed models and validation: separate request/response models, JSON and
+// form bodies, nested models, arrays, recursive lists, defaults, and
+// validation middleware and rules.
+
 #include <cstdint>
 #include <string_view>
 

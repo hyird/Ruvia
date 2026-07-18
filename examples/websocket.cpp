@@ -1,3 +1,6 @@
+// WebSocket: upgrade routes, subprotocol options, lifecycle timeouts,
+// text/binary echo and the RFC close handshake.
+
 #include <chrono>
 
 #include "ruvia/web/App.h"

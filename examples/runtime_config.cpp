@@ -1,3 +1,6 @@
+// Runtime configuration: dotenv, global middleware, memory pool, timeouts,
+// limits, compression and optional TLS.
+
 #include <chrono>
 #include <filesystem>
 #include <optional>
