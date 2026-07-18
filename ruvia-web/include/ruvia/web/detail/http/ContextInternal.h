@@ -41,6 +41,7 @@ inline Context::Context(
       rateLimiter_(services.rateLimiter()),
       errorHandler_(services.errorHandler()),
       notFoundHandler_(services.notFoundHandler()),
+      routes_(services.routes()),
       routeRateLimitScope_(routeRateLimitScope),
       maxDecodedBodyBytes_(services.maxDecodedBodyBytes()),
       requestBodySource_(services.requestBodySource()),

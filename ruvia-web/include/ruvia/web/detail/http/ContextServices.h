@@ -16,6 +16,7 @@ namespace ruvia::detail {
 class DbRegistry;
 class RedisRegistry;
 class RateLimiter;
+class RouteTable;
 
 class ContextServices final {
 public:
@@ -123,6 +124,17 @@ public:
         return services;
     }
 
+    [[nodiscard]] const RouteTable* routes() const noexcept {
+        return routes_;
+    }
+
+    // The route table is server-owned and outlives every dispatched request.
+    [[nodiscard]] ContextServices withRoutes(const RouteTable& value) const noexcept {
+        auto services = *this;
+        services.routes_ = &value;
+        return services;
+    }
+
     // Views borrow connection-owned storage and remain valid for every Context
     // created while that connection is dispatched.
     [[nodiscard]] ContextServices withPlainTransport(
@@ -166,6 +178,7 @@ private:
     const WorkerHandle* worker_{nullptr};
     HttpErrorHandler errorHandler_{nullptr};
     HttpNotFoundHandler notFoundHandler_{nullptr};
+    const RouteTable* routes_{nullptr};
 
     ContextRequestBodySource requestBodySource_;
     ContextResponseOutput responseOutput_;

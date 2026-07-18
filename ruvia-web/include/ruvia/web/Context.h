@@ -4,6 +4,7 @@
 #include <cstdint>
 #include <exception>
 #include <filesystem>
+#include <initializer_list>
 #include <memory>
 #include <memory_resource>
 #include <optional>
@@ -56,6 +57,7 @@ namespace detail {
 class DbRegistry;
 class RedisRegistry;
 class RateLimiter;
+class RouteTable;
 struct ContextAccess;
 class ContextServices;
 struct SessionAccess;
@@ -140,6 +142,17 @@ public:
     }
 
     [[nodiscard]] const Env& env() const noexcept;
+
+    // Builds a request path from a registered route pattern; the pattern is
+    // the route's identity: c.urlFor("/users/:id", {"42"}) -> "/users/42".
+    // ":name" values are percent-encoded path segments and must be non-empty;
+    // the value for a trailing "*" keeps its slashes and may be empty. Throws
+    // std::invalid_argument for an unregistered pattern or a value-count
+    // mismatch, and std::logic_error when the context carries no route table
+    // (for example a hand-built test context).
+    [[nodiscard]] std::pmr::string urlFor(
+        std::string_view pattern,
+        std::initializer_list<std::string_view> values = {}) const;
 
 #ifdef RUVIA_ENABLE_DATABASE
     [[nodiscard]] DbHandle db() const;
@@ -308,6 +321,7 @@ private:
     detail::RateLimiter* rateLimiter_{nullptr};
     HttpErrorHandler errorHandler_{nullptr};
     HttpNotFoundHandler notFoundHandler_{nullptr};
+    const detail::RouteTable* routes_{nullptr};
     std::uintptr_t routeRateLimitScope_{0};
     std::size_t maxDecodedBodyBytes_{0};
     detail::ContextRequestBodySource requestBodySource_;

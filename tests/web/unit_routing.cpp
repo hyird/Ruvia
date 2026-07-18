@@ -1585,6 +1585,76 @@ DispatchResult dispatchOn(
 
 }  // namespace
 
+namespace {
+
+ruvia::Task<ruvia::HttpResponse> urlForEchoHandler(void*, ruvia::Context& context) {
+    co_return context.body(context.urlFor("/users/:id", {"7"}));
+}
+
+}  // namespace
+
+RUVIA_TEST(url_for_builds_paths_from_registered_patterns) {
+    ruvia::Router router;
+    auto& impl = ruvia::detail::RouterImpl::from(router);
+    for (const auto route : {"/users/:id", "/files/*", "/about", "/a/:x/b/:y"}) {
+        impl.registerRoute(HttpKnownMethod::kGet, path(route), RouteHandler(nullptr, &okHandler),
+                           RequestBodyMode::kBuffered, std::span<const ControllerMiddlewareDescriptor>{},
+                           std::span<const ControllerMiddlewareDescriptor>{});
+    }
+    impl.finalize();
+    const auto& table = impl.routeTable();
+    auto* resource = std::pmr::get_default_resource();
+
+    const auto urlFor = [&](std::string_view pattern,
+                            std::initializer_list<std::string_view> values) {
+        return std::string(table.urlFor(
+            pattern,
+            std::span<const std::string_view>(values.begin(), values.size()),
+            resource));
+    };
+
+    RUVIA_CHECK_EQ(urlFor("/users/:id", {"42"}), std::string("/users/42"));
+    // Parameter values are percent-encoded as one path segment.
+    RUVIA_CHECK_EQ(urlFor("/users/:id", {"a b/c"}), std::string("/users/a%20b%2Fc"));
+    // A wildcard value keeps its slashes; other bytes are still encoded.
+    RUVIA_CHECK_EQ(urlFor("/files/*", {"x/y z"}), std::string("/files/x/y%20z"));
+    // An empty wildcard capture addresses the bare mount path.
+    RUVIA_CHECK_EQ(urlFor("/files/*", {""}), std::string("/files"));
+    RUVIA_CHECK_EQ(urlFor("/about", {}), std::string("/about"));
+    RUVIA_CHECK_EQ(urlFor("/a/:x/b/:y", {"1", "2"}), std::string("/a/1/b/2"));
+
+    const auto throws = [&](std::string_view pattern,
+                            std::initializer_list<std::string_view> values) {
+        try {
+            (void)urlFor(pattern, values);
+        } catch (const std::invalid_argument&) {
+            return true;
+        }
+        return false;
+    };
+    // The pattern is the route's identity: unregistered patterns are refused.
+    RUVIA_CHECK(throws("/users/:name", {"42"}));
+    RUVIA_CHECK(throws("/users/:id", {}));
+    RUVIA_CHECK(throws("/about", {"extra"}));
+    // A dynamic segment never matches empty, so building one is refused too.
+    RUVIA_CHECK(throws("/users/:id", {""}));
+}
+
+RUVIA_TEST(context_url_for_uses_dispatch_bound_route_table) {
+    ruvia::Router router;
+    auto& impl = ruvia::detail::RouterImpl::from(router);
+    impl.registerRoute(HttpKnownMethod::kGet, path("/echo"), RouteHandler(nullptr, &urlForEchoHandler),
+                       RequestBodyMode::kBuffered, std::span<const ControllerMiddlewareDescriptor>{},
+                       std::span<const ControllerMiddlewareDescriptor>{});
+    impl.registerRoute(HttpKnownMethod::kGet, path("/users/:id"), RouteHandler(nullptr, &okHandler),
+                       RequestBodyMode::kBuffered, std::span<const ControllerMiddlewareDescriptor>{},
+                       std::span<const ControllerMiddlewareDescriptor>{});
+    impl.finalize();
+    const auto& table = impl.routeTable();
+
+    RUVIA_CHECK_EQ(dispatchOn(table, "GET", "/echo").body, std::string("/users/7"));
+}
+
 RUVIA_TEST(prefix_not_found_handler_scopes_by_longest_segment_prefix) {
     ruvia::Router router;
     auto& impl = ruvia::detail::RouterImpl::from(router);

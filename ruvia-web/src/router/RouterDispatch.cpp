@@ -59,9 +59,11 @@ Context makeRouteContext(
 
 detail::ContextServices withRouteHandlers(
     detail::ContextServices services,
+    const detail::RouteTable& routes,
     HttpErrorHandler errorHandler,
     HttpNotFoundHandler notFoundHandler) noexcept {
     return services
+        .withRoutes(routes)
         .withErrorHandler(errorHandler)
         .withNotFoundHandler(notFoundHandler);
 }
@@ -237,6 +239,7 @@ Task<std::optional<HttpResponse>> detail::RouteTable::dispatchStreamRoute(
         resolved,
         withRouteHandlers(
             services,
+            *this,
             errorHandlerFor(request.path()),
             notFoundHandlerFor(request.path())));
     const auto* responseStreamOutput = services.responseOutput().responseStream();
@@ -380,6 +383,7 @@ Task<HttpResponse> detail::RouteTable::dispatch(
             *resolved,
             withRouteHandlers(
                 services,
+                *this,
                 errorHandlerFor(request.path()),
                 notFoundHandlerFor(request.path())));
         std::exception_ptr exception;
@@ -428,7 +432,7 @@ Task<HttpResponse> detail::RouteTable::handleError(
         memory,
         request,
         withRouteHandlers(
-            services, errorHandler, notFoundHandlerFor(request.path())));
+            services, *this, errorHandler, notFoundHandlerFor(request.path())));
     co_return co_await handleError(context, error);
 }
 
@@ -449,6 +453,7 @@ Task<HttpResponse> detail::RouteTable::handleException(
         request,
         withRouteHandlers(
             services,
+            *this,
             errorHandlerFor(request.path()),
             notFoundHandlerFor(request.path())));
     co_return co_await handleException(context, exception);
@@ -478,7 +483,7 @@ Task<HttpResponse> detail::RouteTable::handleNotFound(
         memory,
         request,
         withRouteHandlers(
-            services, errorHandlerFor(request.path()), notFoundHandler));
+            services, *this, errorHandlerFor(request.path()), notFoundHandler));
 
     std::exception_ptr exception;
     try {

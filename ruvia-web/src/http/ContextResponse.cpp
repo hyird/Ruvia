@@ -1,5 +1,6 @@
 #include "ruvia/web/Context.h"
 
+#include "ruvia/web/detail/router/RouteTable.h"
 #include "ruvia/web/detail/CookieSignature.h"
 #include "ruvia/http/detail/HttpRequestInternal.h"
 #include "ruvia/http/detail/HttpResponseBodyAccess.h"
@@ -209,6 +210,18 @@ void appendPercentEncodedByte(std::pmr::string& output, unsigned char ch) {
 
 void Context::status(std::uint16_t statusCode) {
     responseState_.activeResponse().status(statusCode);
+}
+
+std::pmr::string Context::urlFor(
+    std::string_view pattern,
+    std::initializer_list<std::string_view> values) const {
+    if (routes_ == nullptr) {
+        throw std::logic_error("urlFor requires a route table bound to this context");
+    }
+    return routes_->urlFor(
+        pattern,
+        std::span<const std::string_view>(values.begin(), values.size()),
+        resource());
 }
 
 Context& Context::removeResponseHeader(std::string_view name) {

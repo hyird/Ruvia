@@ -356,6 +356,15 @@ public:
     [[nodiscard]] bool hasRouteRateLimit() const noexcept {
         return hasRouteRateLimit_;
     }
+    // Builds a request path from a registered route pattern: ":name" segments
+    // take the next value (percent-encoded, non-empty), a trailing "*" takes
+    // the final value (slashes preserved, may be empty). The pattern is the
+    // route's identity -- an unregistered pattern or a value-count mismatch is
+    // a programming error and throws std::invalid_argument.
+    [[nodiscard]] std::pmr::string urlFor(
+        std::string_view pattern,
+        std::span<const std::string_view> values,
+        std::pmr::memory_resource* resource) const;
     [[nodiscard]] RouteResolution resolve(const HttpRequest& request) const noexcept;
     [[nodiscard]] RouteResolution resolve(
         HttpKnownMethod method,
