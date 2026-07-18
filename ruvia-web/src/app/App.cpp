@@ -195,6 +195,9 @@ void App::run() {
         auto& routes = detail::RouterImpl::from(*routeOwner);
         routes.setErrorHandler(state.errorHandler);
         routes.setNotFoundHandler(state.notFoundHandler);
+        if (!state.globalMiddlewares.empty()) {
+            routes.setGlobalMiddlewares(state.globalMiddlewares);
+        }
         routes.finalize();
         const auto& routeTable = routes.routeTable();
 

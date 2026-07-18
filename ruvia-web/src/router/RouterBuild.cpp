@@ -162,7 +162,8 @@ void detail::RouterImpl::buildRouteTable(RouteTable& table) const {
             route.endpoint().buffered() != nullptr) {
             ++headShadowCandidateCount;
         }
-        middlewareCount += route.middlewares().size();
+        middlewareCount +=
+            globalMiddlewareFrames_.size() + route.middlewares().size();
     }
     table.routes_.reserve(pendingRoutes_.size() + headShadowCandidateCount);
     table.middlewareFrames_.reserve(middlewareCount);
@@ -176,7 +177,16 @@ void detail::RouterImpl::buildRouteTable(RouteTable& table) const {
             .dynamic = pending.dynamic(),
             .middlewareOffset = 0,
             .middlewareCount = 0});
-        route.setMiddlewareRange(table.middlewareFrames_.size(), pendingMiddlewares.size());
+        // App-wide middleware runs before controller/route middleware on every
+        // matched route: each route's contiguous frame range starts with the
+        // shared global instances.
+        route.setMiddlewareRange(
+            table.middlewareFrames_.size(),
+            globalMiddlewareFrames_.size() + pendingMiddlewares.size());
+        table.middlewareFrames_.insert(
+            table.middlewareFrames_.end(),
+            globalMiddlewareFrames_.begin(),
+            globalMiddlewareFrames_.end());
         table.middlewareFrames_.insert(
             table.middlewareFrames_.end(),
             pendingMiddlewares.begin(),

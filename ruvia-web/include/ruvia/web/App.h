@@ -16,6 +16,7 @@
 #include "ruvia/web/ServerConfig.h"
 #include "ruvia/core/memory/MemoryPool.h"
 #include "ruvia/web/WebWorker.h"
+#include "ruvia/web/detail/middleware/MiddlewareRegistration.h"
 
 #ifdef RUVIA_ENABLE_DATABASE
 #include "ruvia/web/db/Db.h"
@@ -60,6 +61,17 @@ public:
     App& setCors(std::optional<CorsConfig> config);
     App& setDocumentRoot(DocumentRootConfig config);
     App& setMemoryPoolConfig(MemoryPoolConfig config);
+    // Hono app.use analog: registers one app-wide middleware instance that
+    // runs before every matched route's controller and route middlewares, in
+    // use() registration order. It participates only in routed dispatch;
+    // requests that end in 404/405 without matching a route never enter a
+    // middleware chain. Validator middlewares (RUVIA_VALIDATE_*) bind one
+    // model to one route and are rejected here.
+    template <typename MiddlewareT>
+    App& use() {
+        return useMiddleware(detail::makeMiddlewareDescriptor<MiddlewareT>());
+    }
+
     App& onError(HttpErrorHandler handler);
     App& notFound(HttpNotFoundHandler handler);
     App& setDefaultRateLimitPerWorker(std::optional<RateLimitRule> rule);
@@ -83,6 +95,8 @@ public:
 
 private:
     friend App& app();
+
+    App& useMiddleware(detail::ControllerMiddlewareDescriptor descriptor);
 
     struct StateDeleter final {
         void operator()(detail::AppState* state) const noexcept;

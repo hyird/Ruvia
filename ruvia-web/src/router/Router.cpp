@@ -3,6 +3,7 @@
 #include "ruvia/web/detail/RegistrationResource.h"
 #include "ruvia/core/memory/PmrObject.h"
 
+#include <algorithm>
 #include <stdexcept>
 
 namespace ruvia {
@@ -77,6 +78,8 @@ detail::RouterImpl::RouterImpl(Router& router) noexcept
       resource_(registrationResource()),
       pendingRoutes_(resource_),
       middlewareLifetimes_(resource_),
+      globalMiddlewareDescriptors_(resource_),
+      globalMiddlewareFrames_(resource_),
       routeTable_(nullptr, RouteTableDeleter{resource_}) {}
 
 void Router::ImplDeleter::operator()(detail::RouterImpl* impl) const noexcept {
@@ -196,11 +199,37 @@ void detail::RouterImpl::validateRouteTarget(HttpKnownMethod method, std::string
     }
 }
 
+void detail::RouterImpl::setGlobalMiddlewares(
+    std::span<const ControllerMiddlewareDescriptor> descriptors) {
+    if (routeTable_) {
+        // A finalized table's middleware ranges are immutable. Re-applying the
+        // identical set (an app stop()/run() cycle) is a no-op; changing it
+        // requires a fresh router.
+        const bool unchanged =
+            descriptors.size() == globalMiddlewareDescriptors_.size() &&
+            std::equal(
+                descriptors.begin(),
+                descriptors.end(),
+                globalMiddlewareDescriptors_.begin(),
+                [](const auto& left, const auto& right) noexcept {
+                    return left.invoke() == right.invoke() &&
+                        left.create() == right.create() &&
+                        left.destroy() == right.destroy();
+                });
+        if (unchanged) {
+            return;
+        }
+        throw std::logic_error("cannot change app middleware after router finalize");
+    }
+    globalMiddlewareDescriptors_.assign(descriptors.begin(), descriptors.end());
+}
+
 void detail::RouterImpl::finalize() {
     if (routeTable_) {
         return;
     }
 
+    globalMiddlewareFrames_ = materializeMiddlewares(globalMiddlewareDescriptors_);
     validateNoDynamicRouteConflict(pendingRoutes_);
     std::unique_ptr<RouteTable, RouteTableDeleter> table(
         constructPmrObject<RouteTable>(resource_, resource_),

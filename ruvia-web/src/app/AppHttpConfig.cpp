@@ -172,6 +172,27 @@ App& App::setDocumentRoot(DocumentRootConfig config) {
         });
 }
 
+App& App::useMiddleware(detail::ControllerMiddlewareDescriptor descriptor) {
+    if (!descriptor.valid() || descriptor.create() == nullptr ||
+        descriptor.destroy() == nullptr) {
+        throw std::invalid_argument("app middleware must be constructible and invocable");
+    }
+    if (descriptor.validatedModelTypeKey() != nullptr) {
+        // A validator binds one model type to one route's body/fields; running
+        // it for every route would fail requests that legitimately carry no
+        // such payload. Attach RUVIA_VALIDATE_* middlewares per route instead.
+        throw std::invalid_argument(
+            "validator middleware binds to a route and cannot be app-wide");
+    }
+    return detail::mutateStoppedApp(
+        *this,
+        *state_,
+        "cannot add app middleware while app is running",
+        [descriptor](detail::AppState& state) {
+            state.globalMiddlewares.push_back(descriptor);
+        });
+}
+
 App& App::onError(HttpErrorHandler handler) {
     return detail::mutateStoppedApp(
         *this,

@@ -61,6 +61,12 @@ public:
 
     Router& setErrorHandler(HttpErrorHandler handler) noexcept;
     Router& setNotFoundHandler(HttpNotFoundHandler handler) noexcept;
+    // App-wide middleware, prepended to every route's chain at finalize. Each
+    // descriptor is materialized exactly once; the single instance serves all
+    // routes, matching the per-route materialization model (one instance per
+    // registration, shared across workers).
+    void setGlobalMiddlewares(
+        std::span<const ControllerMiddlewareDescriptor> descriptors);
     void finalize();
     [[nodiscard]] const RouteTable& routeTable() const;
 
@@ -189,6 +195,8 @@ private:
     std::pmr::memory_resource* resource_{nullptr};
     std::pmr::vector<PendingRoute> pendingRoutes_;
     std::pmr::vector<MiddlewareLifetime> middlewareLifetimes_;
+    std::pmr::vector<ControllerMiddlewareDescriptor> globalMiddlewareDescriptors_;
+    std::pmr::vector<RouteMiddleware> globalMiddlewareFrames_;
     std::unique_ptr<RouteTable, RouteTableDeleter> routeTable_;
     HttpErrorHandler errorHandler_{nullptr};
     HttpNotFoundHandler notFoundHandler_{nullptr};

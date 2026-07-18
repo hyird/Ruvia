@@ -995,6 +995,87 @@ RUVIA_TEST(middleware_chain_rejects_calling_next_twice) {
     RUVIA_CHECK(body != std::string("ok"));
 }
 
+RUVIA_TEST(global_middleware_prepends_to_every_route_chain) {
+    // App-wide middleware (App::use) materializes once and runs before the
+    // route's own middleware on EVERY matched route.
+    ruvia::Router router;
+    auto& impl = ruvia::detail::RouterImpl::from(router);
+    const ControllerMiddlewareDescriptor routeMws[] = {
+        ruvia::detail::makeMiddlewareDescriptor<ChainMwB>(),
+    };
+    impl.registerRoute(
+        HttpKnownMethod::kGet, path("/with-route-mw"), RouteHandler(nullptr, &chainHandler),
+        RequestBodyMode::kBuffered, {}, std::span<const ControllerMiddlewareDescriptor>(routeMws, 1));
+    impl.registerRoute(
+        HttpKnownMethod::kGet, path("/bare"), RouteHandler(nullptr, &chainHandler),
+        RequestBodyMode::kBuffered, {}, {});
+    const ControllerMiddlewareDescriptor globals[] = {
+        ruvia::detail::makeMiddlewareDescriptor<ChainMwA>(),
+    };
+    impl.setGlobalMiddlewares(std::span<const ControllerMiddlewareDescriptor>(globals, 1));
+    impl.finalize();
+    const auto& table = impl.routeTable();
+
+    const auto dispatchPath = [&table](std::string_view requestPath) {
+        ruvia::WorkerMemory worker;
+        ruvia::RequestMemory memory(worker);
+        ruvia::HttpRequest request = ruvia::detail::HttpRequestAccess::make();
+        ruvia::detail::HttpRequestAccess::reset(request);
+        ruvia::detail::HttpRequestAccess::setMethod(request, "GET");
+        ruvia::detail::HttpRequestAccess::setPath(request, requestPath);
+        ruvia::detail::HttpRequestAccess::setResource(request, memory.resource());
+
+        asio::io_context ctx(1);
+        auto future = asio::co_spawn(
+            ctx, ruvia::detail::taskAsAwaitable(table.dispatch(request, memory, {})),
+            asio::use_future);
+        ctx.run();
+        auto response = future.get();
+        const auto body = ruvia::detail::responseBody(response).bytes();
+        return std::string(body.data(), body.size());
+    };
+
+    g_chainOrder.clear();
+    RUVIA_CHECK_EQ(dispatchPath("/with-route-mw"), std::string("ok"));
+    // Global A wraps route-level B: A pre, B pre, handler, B post, A post.
+    const std::vector<int> withRouteMw{1, 2, 0, -2, -1};
+    RUVIA_CHECK(g_chainOrder == withRouteMw);
+
+    g_chainOrder.clear();
+    RUVIA_CHECK_EQ(dispatchPath("/bare"), std::string("ok"));
+    // A route with no middleware of its own still runs the global.
+    const std::vector<int> bare{1, 0, -1};
+    RUVIA_CHECK(g_chainOrder == bare);
+}
+
+RUVIA_TEST(global_middleware_registration_rejected_after_finalize) {
+    ruvia::Router router;
+    auto& impl = ruvia::detail::RouterImpl::from(router);
+    impl.registerRoute(
+        HttpKnownMethod::kGet, path("/sealed"), RouteHandler(nullptr, &chainHandler),
+        RequestBodyMode::kBuffered, {}, {});
+    const ControllerMiddlewareDescriptor globals[] = {
+        ruvia::detail::makeMiddlewareDescriptor<ChainMwA>(),
+    };
+    impl.setGlobalMiddlewares(std::span<const ControllerMiddlewareDescriptor>(globals, 1));
+    impl.finalize();
+
+    // Re-applying the identical set is the app stop()/run() restart path.
+    impl.setGlobalMiddlewares(std::span<const ControllerMiddlewareDescriptor>(globals, 1));
+
+    // Changing the set after finalize must fail loudly.
+    const ControllerMiddlewareDescriptor changed[] = {
+        ruvia::detail::makeMiddlewareDescriptor<ChainMwB>(),
+    };
+    bool threw = false;
+    try {
+        impl.setGlobalMiddlewares(std::span<const ControllerMiddlewareDescriptor>(changed, 1));
+    } catch (const std::logic_error&) {
+        threw = true;
+    }
+    RUVIA_CHECK(threw);
+}
+
 RUVIA_TEST(stream_route_middleware_mid_stream_failure_propagates_like_no_middleware) {
     // A stream handler on a route WITH middleware that commits the stream (writes a
     // chunk) then throws must surface the failure, exactly as the no-middleware path
