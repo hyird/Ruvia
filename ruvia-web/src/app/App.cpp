@@ -271,6 +271,7 @@ void App::run() {
                         state.redis
 #endif
                     },
+                    state.workerStates,
                     std::move(workerOptions)));
             }
         };

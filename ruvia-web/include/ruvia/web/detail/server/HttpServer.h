@@ -28,6 +28,7 @@
 #include "ruvia/web/detail/server/HttpServerOptions.h"
 #include "ruvia/web/detail/server/HttpServerWorkerState.h"
 #include "ruvia/web/detail/server/HttpServerWorkerCompletion.h"
+#include "ruvia/web/detail/WorkerState.h"
 #include "ruvia/web/detail/db/DbInternal.h"
 #include "ruvia/web/detail/redis/RedisInternal.h"
 #include "ruvia/web/detail/server/RateLimitDecision.h"
@@ -56,6 +57,13 @@ public:
         std::span<const DbDefinition> databases,
         std::span<const RedisDefinition> redis,
         HttpServerOptions options = {});
+    HttpServer(
+        asio::ip::tcp::endpoint endpoint,
+        const RouteTable& routes,
+        std::span<const DbDefinition> databases,
+        std::span<const RedisDefinition> redis,
+        std::span<const WorkerStateDefinition> workerStates,
+        HttpServerOptions options = {});
     ~HttpServer();
 
     HttpServer(const HttpServer&) = delete;
@@ -79,6 +87,7 @@ private:
         const RouteTable& routes,
         std::span<const DbDefinition> databases,
         std::span<const RedisDefinition> redis,
+        std::span<const WorkerStateDefinition> workerStates,
         HttpServerOptions validatedOptions);
 
     void configureAcceptor();
@@ -123,6 +132,7 @@ private:
     HttpServerOptions options_;
     DbRegistry databases_;
     RedisRegistry redis_;
+    WorkerStateRegistry workerStates_;
     std::shared_ptr<WebWorkerDispatch> webWorkerDispatch_;
     RateLimiter rateLimiter_;
     ConnectionScanner connectionScanner_;

@@ -9,6 +9,7 @@
 
 #include "ruvia/core/detail/AsioAwait.h"
 #include "ruvia/core/memory/PmrResource.h"
+#include "ruvia/web/detail/WorkerState.h"
 #include "ruvia/web/detail/app/WebWorkerDispatch.h"
 #include "ruvia/web/detail/db/DbInternal.h"
 #include "ruvia/web/detail/redis/RedisInternal.h"
@@ -20,12 +21,25 @@ WebWorkerContext::WebWorkerContext(
     std::pmr::memory_resource* resource,
     detail::DbRegistry* databases,
     detail::RedisRegistry* redis,
+    const detail::WorkerStateRegistry* workerStates,
     std::stop_token stopToken) noexcept
     : worker_(std::move(worker)),
       resource_(detail::pmrResourceOrDefault(resource)),
       databases_(databases),
       redis_(redis),
+      workerStates_(workerStates),
       stopToken_(stopToken) {}
+
+void* WebWorkerContext::workerStateInstance(const void* typeKey) const {
+    auto* instance = workerStates_ == nullptr
+        ? nullptr
+        : workerStates_->instance(typeKey);
+    if (instance == nullptr) {
+        throw std::logic_error(
+            "worker state type is not registered: call app().useWorkerState<T>() before app().run()");
+    }
+    return instance;
+}
 
 const WorkerHandle& WebWorkerContext::worker() const & noexcept {
     return worker_;
@@ -96,6 +110,7 @@ WebWorkerDispatch::WebWorkerDispatch(
     std::pmr::memory_resource* resource,
     DbRegistry& databases,
     RedisRegistry& redis,
+    const WorkerStateRegistry& workerStates,
     std::move_only_function<void()> drained,
     std::move_only_function<void(std::exception_ptr)> failed)
     : executor_(std::move(executor)),
@@ -103,6 +118,7 @@ WebWorkerDispatch::WebWorkerDispatch(
       resource_(pmrResourceOrDefault(resource)),
       databases_(&databases),
       redis_(&redis),
+      workerStates_(&workerStates),
       drained_(std::move(drained)),
       failed_(std::move(failed)) {}
 
@@ -219,7 +235,8 @@ void WebWorkerDispatch::start(Task task) {
 
 ruvia::Task<void> WebWorkerDispatch::run(Task task) {
     WebWorkerContext context(
-        worker_, resource_, databases_, redis_, stopSource_.get_token());
+        worker_, resource_, databases_, redis_, workerStates_,
+        stopSource_.get_token());
     co_await task(context);
 }
 

@@ -17,6 +17,7 @@
 #include "ruvia/core/memory/MemoryPool.h"
 #include "ruvia/web/WebWorker.h"
 #include "ruvia/web/detail/middleware/MiddlewareRegistration.h"
+#include "ruvia/web/detail/WorkerState.h"
 
 #ifdef RUVIA_ENABLE_DATABASE
 #include "ruvia/web/db/Db.h"
@@ -72,6 +73,30 @@ public:
         return useMiddleware(detail::makeMiddlewareDescriptor<MiddlewareT>());
     }
 
+    // Worker-local user state, generalizing the per-worker db()/redis()
+    // registries to application types: every worker builds its own T from the
+    // registered factory at startup, and Context::workerState<T>() /
+    // WebWorkerContext::workerState<T>() return that worker's instance.
+    // Workers are single-threaded, so the instance needs no synchronization;
+    // it must not be shared across workers by the application. One
+    // registration per type; the factory runs once per worker on the startup
+    // thread and a throwing factory fails run() before any request is served.
+    template <typename T, typename Factory>
+    App& useWorkerState(Factory&& factory) {
+        return useWorkerStateDefinition(
+            detail::WorkerStateDefinition::make<T>(
+                std::forward<Factory>(factory)));
+    }
+
+    template <typename T>
+    App& useWorkerState() {
+        static_assert(
+            std::is_default_constructible_v<T>,
+            "useWorkerState<T>() without a factory requires T to be default "
+            "constructible; pass a factory otherwise");
+        return useWorkerState<T>([] { return T(); });
+    }
+
     App& onError(HttpErrorHandler handler);
     App& notFound(HttpNotFoundHandler handler);
     // Path-prefix-scoped fallbacks, the Hono sub-app scoping analog: the
@@ -104,6 +129,7 @@ private:
     friend App& app();
 
     App& useMiddleware(detail::ControllerMiddlewareDescriptor descriptor);
+    App& useWorkerStateDefinition(detail::WorkerStateDefinition definition);
 
     struct StateDeleter final {
         void operator()(detail::AppState* state) const noexcept;

@@ -46,6 +46,7 @@ struct AppState final {
     std::pmr::vector<std::pair<std::pmr::string, HttpNotFoundHandler>>
         prefixNotFoundHandlers{appResource()};
     std::pmr::vector<ControllerMiddlewareDescriptor> globalMiddlewares{appResource()};
+    std::pmr::vector<WorkerStateDefinition> workerStates{appResource()};
     std::pmr::vector<AppHook> onStartHooks{appResource()};
     std::pmr::vector<AppHook> onStopHooks{appResource()};
 #ifdef RUVIA_ENABLE_DATABASE

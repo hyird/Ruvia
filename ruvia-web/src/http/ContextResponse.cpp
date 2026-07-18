@@ -212,6 +212,17 @@ void Context::status(std::uint16_t statusCode) {
     responseState_.activeResponse().status(statusCode);
 }
 
+void* Context::workerStateInstance(const void* typeKey) const {
+    auto* instance = workerStates_ == nullptr
+        ? nullptr
+        : workerStates_->instance(typeKey);
+    if (instance == nullptr) {
+        throw std::logic_error(
+            "worker state type is not registered: call app().useWorkerState<T>() before app().run()");
+    }
+    return instance;
+}
+
 std::pmr::string Context::urlFor(
     std::string_view pattern,
     std::initializer_list<std::string_view> values) const {

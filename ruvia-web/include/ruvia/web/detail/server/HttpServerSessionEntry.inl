@@ -7,12 +7,14 @@ Task<void> HttpServer::handleSession(AcceptedConnectionLease connection) {
         if (!remoteEc) {
             assignRemoteAddress(remoteAddress, remoteEndpoint.address());
         }
-        const ContextServices baseServices(
-            &databases_,
-            &redis_,
-            &rateLimiter_,
-            options_.maxBufferedBodyBytes,
-            &workerHandle_);
+        const ContextServices baseServices =
+            ContextServices(
+                &databases_,
+                &redis_,
+                &rateLimiter_,
+                options_.maxBufferedBodyBytes,
+                &workerHandle_)
+                .withWorkerStates(workerStates_);
         if (options_.tls() != nullptr) {
             ConnectionScanner::Entry handshakeEntry;
             {

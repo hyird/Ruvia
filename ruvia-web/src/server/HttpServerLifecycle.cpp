@@ -178,11 +178,24 @@ HttpServer::HttpServer(
     std::span<const RedisDefinition> redis,
     HttpServerOptions options)
     : HttpServer(
+          std::move(endpoint), routes, databases, redis,
+          std::span<const WorkerStateDefinition>{},
+          std::move(options)) {}
+
+HttpServer::HttpServer(
+    TcpEndpoint endpoint,
+    const RouteTable& routes,
+    std::span<const DbDefinition> databases,
+    std::span<const RedisDefinition> redis,
+    std::span<const WorkerStateDefinition> workerStates,
+    HttpServerOptions options)
+    : HttpServer(
           ValidatedOptionsTag{},
           std::move(endpoint),
           routes,
           databases,
           redis,
+          workerStates,
           validatedHttpServerOptions(std::move(options))) {}
 
 HttpServer::HttpServer(
@@ -191,6 +204,7 @@ HttpServer::HttpServer(
     const RouteTable& routes,
     std::span<const DbDefinition> databases,
     std::span<const RedisDefinition> redis,
+    std::span<const WorkerStateDefinition> workerStates,
     HttpServerOptions validatedOptions)
     // One worker thread runs all I/O on this context; cross-thread access is
     // limited to stop()'s asio::post, which UNSAFE_IO keeps locked. Only the
@@ -210,12 +224,14 @@ HttpServer::HttpServer(
       options_(std::move(validatedOptions)),
       databases_(ioContext_, memory_.resource(), databases),
       redis_(ioContext_, memory_.resource(), redis),
+      workerStates_(memory_.resource(), workerStates),
       webWorkerDispatch_(std::make_shared<WebWorkerDispatch>(
           ioContext_.get_executor(),
           workerHandle_,
           memory_.resource(),
           databases_,
           redis_,
+          workerStates_,
           [this] { maybeFinishDrain(); },
           [this](std::exception_ptr failure) {
               failWorker(std::move(failure));

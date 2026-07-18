@@ -30,6 +30,7 @@
 #include "ruvia/web/ValidationTypes.h"
 #include "ruvia/web/WebSocket.h"
 #include "ruvia/web/detail/ValidatedValues.h"
+#include "ruvia/web/detail/WorkerState.h"
 #include "ruvia/web/detail/http/ContextCapabilities.h"
 #include "ruvia/web/detail/http/ContextResponseState.h"
 #include "ruvia/web/detail/http/ContextRequestStorage.h"
@@ -58,6 +59,7 @@ class DbRegistry;
 class RedisRegistry;
 class RateLimiter;
 class RouteTable;
+class WorkerStateRegistry;
 struct ContextAccess;
 class ContextServices;
 struct SessionAccess;
@@ -153,6 +155,16 @@ public:
     [[nodiscard]] std::pmr::string urlFor(
         std::string_view pattern,
         std::initializer_list<std::string_view> values = {}) const;
+
+    // This worker's instance of an App::useWorkerState<T>() registration.
+    // The reference is worker-local: it stays valid for the worker's lifetime
+    // but must never be handed to another worker. Throws std::logic_error for
+    // a type that was not registered before app().run().
+    template <typename T>
+    [[nodiscard]] T& workerState() const {
+        return *static_cast<T*>(
+            workerStateInstance(detail::workerStateTypeKey<T>()));
+    }
 
 #ifdef RUVIA_ENABLE_DATABASE
     [[nodiscard]] DbHandle db() const;
@@ -305,6 +317,7 @@ private:
         return responseState_.final() != nullptr;
     }
     [[nodiscard]] HttpResponse takeResponse();
+    [[nodiscard]] void* workerStateInstance(const void* typeKey) const;
 
     RequestMemory& memory_;
     const HttpRequest& request_;
@@ -322,6 +335,7 @@ private:
     HttpErrorHandler errorHandler_{nullptr};
     HttpNotFoundHandler notFoundHandler_{nullptr};
     const detail::RouteTable* routes_{nullptr};
+    const detail::WorkerStateRegistry* workerStates_{nullptr};
     std::uintptr_t routeRateLimitScope_{0};
     std::size_t maxDecodedBodyBytes_{0};
     detail::ContextRequestBodySource requestBodySource_;
