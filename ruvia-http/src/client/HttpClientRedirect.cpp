@@ -96,6 +96,75 @@ void removeHttpClientLastPathSegment(std::pmr::string& path) noexcept {
     return true;
 }
 
+// Merges the reference's path/query with the current origin-form target per
+// RFC 3986 section 5.3 and validates the resolved origin-form target. Returns
+// false when the location's path or the merged product is not a valid target.
+// `reference` is the URI-reference with any scheme/authority prefix and the
+// fragment already removed.
+[[nodiscard]] bool resolveHttpClientRedirectPathAndQuery(
+    bool hasAuthority,
+    std::string_view reference,
+    std::string_view currentTarget,
+    std::pmr::memory_resource* targetResource,
+    std::pmr::string& resolved) {
+    const auto queryAt = reference.find('?');
+    const bool hasReferenceQuery = queryAt != std::string_view::npos;
+    const auto referencePath = hasReferenceQuery
+        ? reference.substr(0, queryAt)
+        : reference;
+    const auto referenceQuery = hasReferenceQuery
+        ? reference.substr(queryAt + 1)
+        : std::string_view{};
+
+    std::pmr::string mergedPath(targetResource);
+    std::string_view selectedQuery;
+    bool hasSelectedQuery = hasReferenceQuery;
+
+    if (hasAuthority) {
+        if (!referencePath.empty() && referencePath.front() != '/') {
+            return false;
+        }
+        mergedPath.assign(referencePath.empty() ? "/" : referencePath);
+        selectedQuery = referenceQuery;
+    } else {
+        const auto baseQueryAt = currentTarget.find('?');
+        const bool hasBaseQuery = baseQueryAt != std::string_view::npos;
+        const auto basePath = hasBaseQuery
+            ? currentTarget.substr(0, baseQueryAt)
+            : currentTarget;
+        const auto baseQuery = hasBaseQuery
+            ? currentTarget.substr(baseQueryAt + 1)
+            : std::string_view{};
+
+        if (referencePath.empty()) {
+            mergedPath.assign(basePath);
+            if (hasReferenceQuery) {
+                selectedQuery = referenceQuery;
+            } else {
+                hasSelectedQuery = hasBaseQuery;
+                selectedQuery = baseQuery;
+            }
+        } else if (referencePath.front() == '/') {
+            mergedPath.assign(referencePath);
+            selectedQuery = referenceQuery;
+        } else {
+            const auto lastSlash = basePath.rfind('/');
+            mergedPath.assign(basePath.substr(0, lastSlash + 1));
+            mergedPath.append(referencePath.data(), referencePath.size());
+            selectedQuery = referenceQuery;
+        }
+    }
+
+    if (!normalizeHttpClientAbsolutePath(mergedPath, resolved)) {
+        return false;
+    }
+    if (hasSelectedQuery) {
+        resolved.push_back('?');
+        resolved.append(selectedQuery.data(), selectedQuery.size());
+    }
+    return isValidHttpClientOriginTarget(resolved);
+}
+
 }  // namespace
 
 bool isValidHttpClientOriginTarget(std::string_view target) noexcept {
@@ -253,71 +322,116 @@ HttpClientRedirectTargetResult resolveHttpClientSameOriginRedirectTarget(
             : reference.substr(authorityEnd);
     }
 
-    const auto queryAt = reference.find('?');
-    const bool hasReferenceQuery = queryAt != std::string_view::npos;
-    const auto referencePath = hasReferenceQuery
-        ? reference.substr(0, queryAt)
-        : reference;
-    const auto referenceQuery = hasReferenceQuery
-        ? reference.substr(queryAt + 1)
-        : std::string_view{};
-
     auto* const targetResource = detail::httpPmrResourceOrDefault(resource);
-    std::pmr::string mergedPath(targetResource);
-    std::string_view selectedQuery;
-    bool hasSelectedQuery = hasReferenceQuery;
-
-    if (hasAuthority) {
-        if (!referencePath.empty() && referencePath.front() != '/') {
-            return HttpClientRedirectTargetResult::makeFailure(
-                HttpClientRedirectTargetError::kInvalidLocation);
-        }
-        mergedPath.assign(referencePath.empty() ? "/" : referencePath);
-        selectedQuery = referenceQuery;
-    } else {
-        const auto baseQueryAt = currentTarget.find('?');
-        const bool hasBaseQuery = baseQueryAt != std::string_view::npos;
-        const auto basePath = hasBaseQuery
-            ? currentTarget.substr(0, baseQueryAt)
-            : currentTarget;
-        const auto baseQuery = hasBaseQuery
-            ? currentTarget.substr(baseQueryAt + 1)
-            : std::string_view{};
-
-        if (referencePath.empty()) {
-            mergedPath.assign(basePath);
-            if (hasReferenceQuery) {
-                selectedQuery = referenceQuery;
-            } else {
-                hasSelectedQuery = hasBaseQuery;
-                selectedQuery = baseQuery;
-            }
-        } else if (referencePath.front() == '/') {
-            mergedPath.assign(referencePath);
-            selectedQuery = referenceQuery;
-        } else {
-            const auto lastSlash = basePath.rfind('/');
-            mergedPath.assign(basePath.substr(0, lastSlash + 1));
-            mergedPath.append(referencePath.data(), referencePath.size());
-            selectedQuery = referenceQuery;
-        }
-    }
-
     std::pmr::string resolved(targetResource);
-    if (!normalizeHttpClientAbsolutePath(mergedPath, resolved)) {
-        return HttpClientRedirectTargetResult::makeFailure(
-            HttpClientRedirectTargetError::kInvalidLocation);
-    }
-    if (hasSelectedQuery) {
-        resolved.push_back('?');
-        resolved.append(selectedQuery.data(), selectedQuery.size());
-    }
-    if (!isValidHttpClientOriginTarget(resolved)) {
+    if (!resolveHttpClientRedirectPathAndQuery(
+            hasAuthority, reference, currentTarget, targetResource, resolved)) {
         return HttpClientRedirectTargetResult::makeFailure(
             HttpClientRedirectTargetError::kInvalidLocation);
     }
 
     return HttpClientRedirectTargetResult::makeTarget(std::move(resolved));
+}
+
+HttpOrigin HttpClientResolvedRedirect::origin() const & {
+    return scheme_ == HttpScheme::kHttps
+        ? HttpOrigin::https(host(), port_)
+        : HttpOrigin::http(host(), port_);
+}
+
+HttpClientRedirectResolutionResult resolveHttpClientRedirectTarget(
+    const HttpOrigin& origin,
+    std::string_view currentTarget,
+    std::string_view location,
+    std::pmr::memory_resource* resource) {
+    if (currentTarget.empty() || currentTarget.front() != '/' ||
+        !isValidHttpClientOriginTarget(currentTarget)) {
+        return HttpClientRedirectResolutionResult::makeFailure(
+            HttpClientRedirectResolutionError::kInvalidCurrentTarget);
+    }
+
+    location = detail::httpTrimOws(location);
+    if (const auto hash = location.find('#'); hash != std::string_view::npos) {
+        if (!isValidHttpClientUriFragment(location.substr(hash + 1))) {
+            return HttpClientRedirectResolutionResult::makeFailure(
+                HttpClientRedirectResolutionError::kInvalidLocation);
+        }
+        location = location.substr(0, hash);
+    }
+
+    bool hasAuthority = false;
+    auto targetScheme = origin.scheme();
+    std::string_view reference = location;
+    const auto colon = reference.find(':');
+    const auto firstPathOrQuery = reference.find_first_of("/?");
+    if (colon != std::string_view::npos &&
+        (firstPathOrQuery == std::string_view::npos || colon < firstPathOrQuery)) {
+        const auto scheme = reference.substr(0, colon);
+        if (!isHttpClientUriScheme(scheme)) {
+            return HttpClientRedirectResolutionResult::makeFailure(
+                HttpClientRedirectResolutionError::kInvalidLocation);
+        }
+        const bool isHttps = detail::httpAsciiEqualsIgnoreCase(scheme, "https");
+        if (!isHttps && !detail::httpAsciiEqualsIgnoreCase(scheme, "http")) {
+            return HttpClientRedirectResolutionResult::makeFailure(
+                HttpClientRedirectResolutionError::kUnsupportedScheme);
+        }
+        targetScheme = isHttps ? HttpScheme::kHttps : HttpScheme::kHttp;
+        reference.remove_prefix(colon + 1);
+        if (!reference.starts_with("//")) {
+            return HttpClientRedirectResolutionResult::makeFailure(
+                HttpClientRedirectResolutionError::kInvalidLocation);
+        }
+        reference.remove_prefix(2);
+        hasAuthority = true;
+    } else if (reference.starts_with("//")) {
+        reference.remove_prefix(2);
+        hasAuthority = true;
+    }
+
+    auto* const targetResource = detail::httpPmrResourceOrDefault(resource);
+    std::pmr::string host(targetResource);
+    auto port = origin.port();
+    bool crossOrigin = targetScheme != origin.scheme();
+    if (hasAuthority) {
+        const auto authorityEnd = reference.find_first_of("/?");
+        const auto authority = authorityEnd == std::string_view::npos
+            ? reference
+            : reference.substr(0, authorityEnd);
+        if (authority.find('@') != std::string_view::npos) {
+            return HttpClientRedirectResolutionResult::makeFailure(
+                HttpClientRedirectResolutionError::kInvalidLocation);
+        }
+        const auto parsed = detail::parseHttpAuthority(authority);
+        if (!parsed) {
+            return HttpClientRedirectResolutionResult::makeFailure(
+                HttpClientRedirectResolutionError::kInvalidLocation);
+        }
+        host.assign(parsed->host().data(), parsed->host().size());
+        port = parsed->effectivePort(
+            detail::httpSchemeDefaultPort(targetScheme));
+        crossOrigin = crossOrigin || port != origin.port() ||
+            !detail::httpUriHostEquals(parsed->host(), origin.host());
+        reference = authorityEnd == std::string_view::npos
+            ? std::string_view{}
+            : reference.substr(authorityEnd);
+    } else {
+        host.assign(origin.host().data(), origin.host().size());
+    }
+
+    std::pmr::string resolved(targetResource);
+    if (!resolveHttpClientRedirectPathAndQuery(
+            hasAuthority, reference, currentTarget, targetResource, resolved)) {
+        return HttpClientRedirectResolutionResult::makeFailure(
+            HttpClientRedirectResolutionError::kInvalidLocation);
+    }
+
+    return HttpClientRedirectResolutionResult::makeResolved(
+        targetScheme,
+        std::move(host),
+        port,
+        std::move(resolved),
+        crossOrigin);
 }
 
 }  // namespace ruvia

@@ -445,3 +445,179 @@ RUVIA_TEST(http_client_redirect_relative_resolution_matches_rfc3986_examples) {
             ruvia_ctx, origin, current, example.reference, example.target);
     }
 }
+
+namespace {
+
+using ruvia::HttpClientRedirectResolutionError;
+using ruvia::resolveHttpClientRedirectTarget;
+
+struct ExpectedResolvedRedirect final {
+    HttpScheme scheme;
+    std::string_view host;
+    std::uint16_t port;
+    std::string_view target;
+    bool crossOrigin;
+};
+
+void checkResolvedRedirect(
+    ruvia::testing::TestContext& ruvia_ctx,
+    const HttpOrigin& origin,
+    std::string_view currentTarget,
+    std::string_view location,
+    const ExpectedResolvedRedirect& expected) {
+    const auto result = resolveHttpClientRedirectTarget(
+        origin,
+        currentTarget,
+        location,
+        std::pmr::get_default_resource());
+    RUVIA_CHECK(result.failure() == nullptr);
+    RUVIA_CHECK(result.resolved() != nullptr);
+    if (const auto* resolved = result.resolved()) {
+        RUVIA_CHECK(resolved->scheme() == expected.scheme);
+        RUVIA_CHECK_EQ(resolved->host(), expected.host);
+        RUVIA_CHECK_EQ(resolved->port(), expected.port);
+        RUVIA_CHECK_EQ(resolved->target(), expected.target);
+        RUVIA_CHECK_EQ(resolved->crossOrigin(), expected.crossOrigin);
+    }
+}
+
+void checkRedirectResolutionFailure(
+    ruvia::testing::TestContext& ruvia_ctx,
+    const HttpOrigin& origin,
+    std::string_view currentTarget,
+    std::string_view location,
+    HttpClientRedirectResolutionError expected) {
+    const auto result = resolveHttpClientRedirectTarget(
+        origin,
+        currentTarget,
+        location,
+        std::pmr::get_default_resource());
+    RUVIA_CHECK(result.resolved() == nullptr);
+    RUVIA_CHECK(result.failure() != nullptr);
+    if (const auto* failure = result.failure()) {
+        RUVIA_CHECK(failure->error() == expected);
+    }
+}
+
+}  // namespace
+
+RUVIA_TEST(http_client_redirect_resolution_same_origin_stays_relative) {
+    const auto origin = originFor("example.com", 80);
+    checkResolvedRedirect(
+        ruvia_ctx,
+        origin,
+        "/a/b?old=1",
+        "c?x=1",
+        {HttpScheme::kHttp, "example.com", 80, "/a/c?x=1", false});
+    checkResolvedRedirect(
+        ruvia_ctx,
+        origin,
+        "/a/b",
+        "http://example.com/x",
+        {HttpScheme::kHttp, "example.com", 80, "/x", false});
+    // Explicit default port and a case-different host are the same origin.
+    checkResolvedRedirect(
+        ruvia_ctx,
+        origin,
+        "/a/b",
+        "HTTP://EXAMPLE.COM:80/x",
+        {HttpScheme::kHttp, "EXAMPLE.COM", 80, "/x", false});
+}
+
+RUVIA_TEST(http_client_redirect_resolution_classifies_cross_origin) {
+    const auto origin = originFor("example.com", 80);
+    // Different host, default port for the located scheme.
+    checkResolvedRedirect(
+        ruvia_ctx,
+        origin,
+        "/a/b",
+        "https://other.example/path?q=1",
+        {HttpScheme::kHttps, "other.example", 443, "/path?q=1", true});
+    // Same host, different port.
+    checkResolvedRedirect(
+        ruvia_ctx,
+        origin,
+        "/a/b",
+        "http://example.com:8080/x",
+        {HttpScheme::kHttp, "example.com", 8080, "/x", true});
+    // Scheme change alone crosses the origin even on the same host.
+    checkResolvedRedirect(
+        ruvia_ctx,
+        origin,
+        "/a/b",
+        "https://example.com/x",
+        {HttpScheme::kHttps, "example.com", 443, "/x", true});
+    // A protocol-relative reference keeps the scheme but moves authority.
+    checkResolvedRedirect(
+        ruvia_ctx,
+        origin,
+        "/a/b",
+        "//other.example/p",
+        {HttpScheme::kHttp, "other.example", 80, "/p", true});
+    // Path normalization and fragment stripping apply across origins too.
+    checkResolvedRedirect(
+        ruvia_ctx,
+        origin,
+        "/a/b",
+        "https://other.example/a/../b#frag",
+        {HttpScheme::kHttps, "other.example", 443, "/b", true});
+    // IPv6 literals keep their brackets, matching the HttpOrigin contract.
+    checkResolvedRedirect(
+        ruvia_ctx,
+        origin,
+        "/a/b",
+        "http://[::1]:8080/x",
+        {HttpScheme::kHttp, "[::1]", 8080, "/x", true});
+}
+
+RUVIA_TEST(http_client_redirect_resolution_builds_borrowing_origin) {
+    const auto origin = originFor("example.com", 80);
+    const auto result = resolveHttpClientRedirectTarget(
+        origin,
+        "/a/b",
+        "https://other.example:8443/x",
+        std::pmr::get_default_resource());
+    RUVIA_CHECK(result.resolved() != nullptr);
+    if (const auto* resolved = result.resolved()) {
+        const auto nextOrigin = resolved->origin();
+        RUVIA_CHECK(nextOrigin.scheme() == HttpScheme::kHttps);
+        RUVIA_CHECK_EQ(nextOrigin.host(), std::string_view("other.example"));
+        RUVIA_CHECK_EQ(nextOrigin.port(), std::uint16_t{8443});
+    }
+}
+
+RUVIA_TEST(http_client_redirect_resolution_reports_typed_failures) {
+    const auto origin = originFor("example.com", 80);
+    checkRedirectResolutionFailure(
+        ruvia_ctx,
+        origin,
+        "/a/b",
+        "ftp://example.com/file",
+        HttpClientRedirectResolutionError::kUnsupportedScheme);
+    checkRedirectResolutionFailure(
+        ruvia_ctx,
+        origin,
+        "/a/b",
+        "mailto:someone@example.com",
+        HttpClientRedirectResolutionError::kUnsupportedScheme);
+    // Userinfo remains rejected: RFC 9110 deprecates it and clients must not
+    // leak credentials embedded by the peer.
+    checkRedirectResolutionFailure(
+        ruvia_ctx,
+        origin,
+        "/a/b",
+        "https://user@other.example/",
+        HttpClientRedirectResolutionError::kInvalidLocation);
+    checkRedirectResolutionFailure(
+        ruvia_ctx,
+        origin,
+        "/a/b",
+        "http:opaque-without-authority",
+        HttpClientRedirectResolutionError::kInvalidLocation);
+    checkRedirectResolutionFailure(
+        ruvia_ctx,
+        origin,
+        "not-a-target",
+        "/x",
+        HttpClientRedirectResolutionError::kInvalidCurrentTarget);
+}
