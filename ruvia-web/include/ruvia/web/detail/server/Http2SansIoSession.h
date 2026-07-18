@@ -54,6 +54,7 @@
 #include "ruvia/http/detail/http2/Http2WebSocketHandshake.h"
 #include "ruvia/core/detail/ConnectionScanner.h"
 #include "ruvia/web/detail/server/HttpBufferedResponse.h"
+#include "ruvia/web/detail/server/HttpServerDocumentRoot.h"
 #include "ruvia/web/detail/server/Http2BufferedResponseWrite.h"
 #include "ruvia/web/detail/server/Http2SansIoSessionLifecycle.h"
 #include "ruvia/http/detail/server/HttpResponseHeadPolicy.h"
@@ -524,6 +525,17 @@ Task<void> runHttp2SansIoSession(
                     throw std::logic_error(
                         "response stream dispatch returned no HTTP/2 terminal alternative");
                 }
+            } else if (auto documentResponse =
+                           resolved == nullptr
+                               ? tryStaticDocumentResponse(
+                                     options.documentRoot.root,
+                                     request,
+                                     requestMemory)
+                               : std::nullopt) {
+                // Unmatched path: serve it from the static document root just
+                // like the HTTP/1 session does, so the same files are reachable
+                // over both protocols instead of 404-ing only on HTTP/2.
+                response = std::move(*documentResponse);
             } else {
                 response = co_await routes.dispatchBuffered(
                     request, resolution, requestMemory, dispatchServices);

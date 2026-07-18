@@ -1,3 +1,5 @@
+#include "ruvia/web/detail/server/HttpServerDocumentRoot.h"
+
 #include "ruvia/web/detail/server/HttpServer.h"
 
 #include "ruvia/web/detail/http/ContextInternal.h"
@@ -5,10 +7,10 @@
 
 namespace ruvia::detail {
 
-std::optional<HttpResponse> HttpServer::tryDocumentRootResponse(
+std::optional<HttpResponse> tryStaticDocumentResponse(
+    const StaticRoot* const root,
     const HttpRequest& request,
-    RequestMemory& memory) const {
-    const auto* const root = options_.documentRoot.root;
+    RequestMemory& memory) {
     if (root == nullptr) {
         return std::nullopt;
     }
@@ -27,6 +29,13 @@ std::optional<HttpResponse> HttpServer::tryDocumentRootResponse(
     } catch (const HttpError&) {
         return std::nullopt;
     }
+}
+
+std::optional<HttpResponse> HttpServer::tryDocumentRootResponse(
+    const HttpRequest& request,
+    RequestMemory& memory) const {
+    return tryStaticDocumentResponse(
+        options_.documentRoot.root, request, memory);
 }
 
 }  // namespace ruvia::detail
