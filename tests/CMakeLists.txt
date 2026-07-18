@@ -1,3 +1,39 @@
+# One registration helper for every standalone test executable. It links the
+# requested library (ruvia::web by default), puts this directory on the include
+# path so a test can pull in test_harness.h from any subdirectory, applies the
+# MSVC large-object flags uniformly, registers the ctest, and sets the optional
+# TIMEOUT / WILL_FAIL / RUN_SERIAL / LABELS properties. Aggregated suites and the
+# few multi-registration probes below stay explicit.
+function(ruvia_add_test name source)
+    cmake_parse_arguments(T "WILL_FAIL;SERIAL" "LIB;TIMEOUT;LABELS" "" ${ARGN})
+    if(NOT DEFINED T_LIB)
+        set(T_LIB ruvia::web)
+    endif()
+    add_executable(${name} ${source})
+    target_link_libraries(${name} PRIVATE ${T_LIB})
+    target_include_directories(${name} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+    if(MSVC)
+        target_compile_options(${name} PRIVATE /bigobj /FS)
+    endif()
+    add_test(NAME ${name} COMMAND ${name})
+    set(_props "")
+    if(DEFINED T_TIMEOUT)
+        list(APPEND _props TIMEOUT ${T_TIMEOUT})
+    endif()
+    if(T_WILL_FAIL)
+        list(APPEND _props WILL_FAIL TRUE)
+    endif()
+    if(T_SERIAL)
+        list(APPEND _props RUN_SERIAL TRUE)
+    endif()
+    if(DEFINED T_LABELS)
+        list(APPEND _props LABELS "${T_LABELS}")
+    endif()
+    if(_props)
+        set_tests_properties(${name} PROPERTIES ${_props})
+    endif()
+endfunction()
+
 if(RUVIA_BUILD_WEB)
 add_executable(ruvia_unit_tests
     test_main.cpp
@@ -172,19 +208,12 @@ if(RUVIA_ENABLE_POSTGRESQL)
 endif()
 
 if(RUVIA_ENABLE_POSTGRESQL_INTEGRATION_TESTS)
-    add_executable(ruvia_postgresql_integration postgresql_integration.cpp)
-    target_link_libraries(ruvia_postgresql_integration PRIVATE ruvia::web)
-    if(MSVC)
-        target_compile_options(ruvia_postgresql_integration PRIVATE /bigobj /FS)
-    endif()
-    add_test(NAME ruvia_postgresql_integration COMMAND ruvia_postgresql_integration)
-    set_tests_properties(ruvia_postgresql_integration PROPERTIES
-        LABELS "database;postgresql;integration"
-        RUN_SERIAL TRUE
-        TIMEOUT 60)
+    ruvia_add_test(ruvia_postgresql_integration postgresql_integration.cpp
+        TIMEOUT 60 SERIAL LABELS "database;postgresql;integration")
 endif()
 
 target_link_libraries(ruvia_unit_tests PRIVATE ruvia::web)
+target_include_directories(ruvia_unit_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 
 if(MSVC)
     target_compile_options(ruvia_unit_tests PRIVATE /bigobj /FS)
@@ -226,29 +255,12 @@ if(RUVIA_BUILD_CORE)
         RUVIA_EXPECTED_VERSION_STRING="${PROJECT_VERSION}")
     add_test(NAME ruvia_smoke_core_target COMMAND ruvia_smoke_core_target)
 
-    add_executable(ruvia_connection_scanner_lifetime connection_scanner_lifetime.cpp)
-    target_link_libraries(ruvia_connection_scanner_lifetime PRIVATE ruvia::core)
-    add_test(NAME ruvia_connection_scanner_lifetime COMMAND ruvia_connection_scanner_lifetime)
-
-    add_executable(ruvia_event_loop_pool runtime_worker.cpp)
-    target_link_libraries(ruvia_event_loop_pool PRIVATE ruvia::core)
-    add_test(NAME ruvia_event_loop_pool COMMAND ruvia_event_loop_pool)
-
-    add_executable(ruvia_operation_deadline operation_deadline.cpp)
-    target_link_libraries(ruvia_operation_deadline PRIVATE ruvia::core)
-    add_test(NAME ruvia_operation_deadline COMMAND ruvia_operation_deadline)
-
-    add_executable(ruvia_pool_lease_scheduler pool_lease_scheduler.cpp)
-    target_link_libraries(ruvia_pool_lease_scheduler PRIVATE ruvia::core)
-    add_test(NAME ruvia_pool_lease_scheduler COMMAND ruvia_pool_lease_scheduler)
-
-    add_executable(ruvia_task_scope task_scope.cpp)
-    target_link_libraries(ruvia_task_scope PRIVATE ruvia::core)
-    add_test(NAME ruvia_task_scope COMMAND ruvia_task_scope)
-
-    add_executable(ruvia_task_completion task_completion.cpp)
-    target_link_libraries(ruvia_task_completion PRIVATE ruvia::core)
-    add_test(NAME ruvia_task_completion COMMAND ruvia_task_completion)
+    ruvia_add_test(ruvia_connection_scanner_lifetime connection_scanner_lifetime.cpp LIB ruvia::core)
+    ruvia_add_test(ruvia_event_loop_pool runtime_worker.cpp LIB ruvia::core)
+    ruvia_add_test(ruvia_operation_deadline operation_deadline.cpp LIB ruvia::core)
+    ruvia_add_test(ruvia_pool_lease_scheduler pool_lease_scheduler.cpp LIB ruvia::core)
+    ruvia_add_test(ruvia_task_scope task_scope.cpp LIB ruvia::core)
+    ruvia_add_test(ruvia_task_completion task_completion.cpp LIB ruvia::core)
 
     add_executable(ruvia_task_lifetime_violation task_lifetime_violation.cpp)
     target_link_libraries(ruvia_task_lifetime_violation PRIVATE ruvia::core)
@@ -261,33 +273,14 @@ if(RUVIA_BUILD_CORE)
         ruvia_task_lifetime_violation_value PROPERTIES WILL_FAIL TRUE)
 
     if(RUVIA_BUILD_WEB)
-        add_executable(
-            ruvia_scoped_operation_lifetime_violation
-            scoped_operation_lifetime_violation.cpp)
-        target_link_libraries(
-            ruvia_scoped_operation_lifetime_violation PRIVATE ruvia::web)
-        add_test(
-            NAME ruvia_scoped_operation_lifetime_violation
-            COMMAND ruvia_scoped_operation_lifetime_violation)
-        set_tests_properties(
-            ruvia_scoped_operation_lifetime_violation PROPERTIES WILL_FAIL TRUE)
+        ruvia_add_test(ruvia_scoped_operation_lifetime_violation
+            scoped_operation_lifetime_violation.cpp WILL_FAIL)
     endif()
 
-    add_executable(ruvia_channel channel.cpp)
-    target_link_libraries(ruvia_channel PRIVATE ruvia::core)
-    add_test(NAME ruvia_channel COMMAND ruvia_channel)
-
-    add_executable(ruvia_one_shot one_shot.cpp)
-    target_link_libraries(ruvia_one_shot PRIVATE ruvia::core)
-    add_test(NAME ruvia_one_shot COMMAND ruvia_one_shot)
-
-    add_executable(ruvia_worker_timer worker_timer.cpp)
-    target_link_libraries(ruvia_worker_timer PRIVATE ruvia::core)
-    add_test(NAME ruvia_worker_timer COMMAND ruvia_worker_timer)
-
-    add_executable(ruvia_worker_dispatch_failure worker_dispatch_failure.cpp)
-    target_link_libraries(ruvia_worker_dispatch_failure PRIVATE ruvia::core)
-    add_test(NAME ruvia_worker_dispatch_failure COMMAND ruvia_worker_dispatch_failure)
+    ruvia_add_test(ruvia_channel channel.cpp LIB ruvia::core)
+    ruvia_add_test(ruvia_one_shot one_shot.cpp LIB ruvia::core)
+    ruvia_add_test(ruvia_worker_timer worker_timer.cpp LIB ruvia::core)
+    ruvia_add_test(ruvia_worker_dispatch_failure worker_dispatch_failure.cpp LIB ruvia::core)
 
     add_executable(ruvia_worker_signal_violation worker_signal_violation.cpp)
     target_link_libraries(ruvia_worker_signal_violation PRIVATE ruvia::core)
@@ -301,9 +294,7 @@ if(RUVIA_BUILD_CORE)
 endif()
 
 if(RUVIA_BUILD_HTTP)
-    add_executable(ruvia_smoke_http_target smoke_http_target.cpp)
-    target_link_libraries(ruvia_smoke_http_target PRIVATE ruvia::http)
-    add_test(NAME ruvia_smoke_http_target COMMAND ruvia_smoke_http_target)
+    ruvia_add_test(ruvia_smoke_http_target smoke_http_target.cpp LIB ruvia::http)
 
     # Compile the exhaustive public/detail HTTP contract once in the normal build.
     # MSVC gets a focused regression guard for private parser construction: the
@@ -315,76 +306,27 @@ if(RUVIA_BUILD_HTTP)
     else()
         set(RUVIA_HTTP_API_CONTRACT_SOURCE package-consumer/http.cpp)
     endif()
-    add_executable(ruvia_guard_http_api_contract ${RUVIA_HTTP_API_CONTRACT_SOURCE})
-    target_link_libraries(ruvia_guard_http_api_contract PRIVATE ruvia::http)
-    if(MSVC)
-        target_compile_options(ruvia_guard_http_api_contract PRIVATE /bigobj /FS)
-    endif()
-    add_test(NAME ruvia_guard_http_api_contract COMMAND ruvia_guard_http_api_contract)
+    ruvia_add_test(ruvia_guard_http_api_contract ${RUVIA_HTTP_API_CONTRACT_SOURCE} LIB ruvia::http)
 endif()
 
 if(RUVIA_BUILD_WEB)
-function(ruvia_add_internal_guard name source)
-    add_executable(${name} ${source})
-    target_link_libraries(${name} PRIVATE ruvia::web)
-    if(MSVC)
-        target_compile_options(${name} PRIVATE /bigobj /FS)
-    endif()
-    add_test(NAME ${name} COMMAND ${name})
-endfunction()
+ruvia_add_test(ruvia_guard_middleware_next guards/middleware_next_guard.cpp)
+ruvia_add_test(ruvia_guard_http2_stream_table guards/http2_stream_table_guard.cpp)
+ruvia_add_test(ruvia_guard_context_response_state guards/context_response_state_guard.cpp)
+ruvia_add_test(ruvia_guard_context_request_header guards/context_request_header_guard.cpp)
+ruvia_add_test(ruvia_guard_cookie_api guards/cookie_api_guard.cpp)
+ruvia_add_test(ruvia_guard_app_lifecycle guards/app_lifecycle_guard.cpp)
+ruvia_add_test(ruvia_guard_http2_session_lifecycle guards/http2_session_lifecycle_guard.cpp)
 
-ruvia_add_internal_guard(ruvia_guard_middleware_next guards/middleware_next_guard.cpp)
-ruvia_add_internal_guard(ruvia_guard_http2_stream_table guards/http2_stream_table_guard.cpp)
-ruvia_add_internal_guard(ruvia_guard_context_response_state guards/context_response_state_guard.cpp)
-ruvia_add_internal_guard(ruvia_guard_context_request_header guards/context_request_header_guard.cpp)
-ruvia_add_internal_guard(ruvia_guard_cookie_api guards/cookie_api_guard.cpp)
-ruvia_add_internal_guard(ruvia_guard_app_lifecycle guards/app_lifecycle_guard.cpp)
-ruvia_add_internal_guard(ruvia_guard_http2_session_lifecycle guards/http2_session_lifecycle_guard.cpp)
-
-add_executable(ruvia_server_shutdown_drain server_shutdown_drain.cpp)
-target_link_libraries(ruvia_server_shutdown_drain PRIVATE ruvia::web)
-add_test(NAME ruvia_server_shutdown_drain COMMAND ruvia_server_shutdown_drain)
-set_tests_properties(ruvia_server_shutdown_drain PROPERTIES TIMEOUT 90)
-
-add_executable(ruvia_server_max_connections server_max_connections.cpp)
-target_link_libraries(ruvia_server_max_connections PRIVATE ruvia::web)
-add_test(NAME ruvia_server_max_connections COMMAND ruvia_server_max_connections)
-set_tests_properties(ruvia_server_max_connections PROPERTIES TIMEOUT 60)
-
-add_executable(ruvia_server_notfound_keepalive server_notfound_keepalive.cpp)
-target_link_libraries(ruvia_server_notfound_keepalive PRIVATE ruvia::web)
-add_test(NAME ruvia_server_notfound_keepalive COMMAND ruvia_server_notfound_keepalive)
-set_tests_properties(ruvia_server_notfound_keepalive PROPERTIES TIMEOUT 60)
-
-add_executable(ruvia_server_http2_document_root server_http2_document_root.cpp)
-target_link_libraries(ruvia_server_http2_document_root PRIVATE ruvia::web)
-add_test(NAME ruvia_server_http2_document_root COMMAND ruvia_server_http2_document_root)
-set_tests_properties(ruvia_server_http2_document_root PROPERTIES TIMEOUT 60)
-
-add_executable(ruvia_server_head_document_root server_head_document_root.cpp)
-target_link_libraries(ruvia_server_head_document_root PRIVATE ruvia::web)
-add_test(NAME ruvia_server_head_document_root COMMAND ruvia_server_head_document_root)
-set_tests_properties(ruvia_server_head_document_root PROPERTIES TIMEOUT 60)
-
-add_executable(ruvia_server_pipeline_request_views server_pipeline_request_views.cpp)
-target_link_libraries(ruvia_server_pipeline_request_views PRIVATE ruvia::web)
-add_test(NAME ruvia_server_pipeline_request_views COMMAND ruvia_server_pipeline_request_views)
-set_tests_properties(ruvia_server_pipeline_request_views PROPERTIES TIMEOUT 60)
-
-add_executable(ruvia_web_worker web_worker.cpp)
-target_link_libraries(ruvia_web_worker PRIVATE ruvia::web)
-add_test(NAME ruvia_web_worker COMMAND ruvia_web_worker)
-set_tests_properties(ruvia_web_worker PROPERTIES TIMEOUT 30)
-
-add_executable(ruvia_app_web_worker app_web_worker.cpp)
-target_link_libraries(ruvia_app_web_worker PRIVATE ruvia::web)
-add_test(NAME ruvia_app_web_worker COMMAND ruvia_app_web_worker)
-set_tests_properties(ruvia_app_web_worker PROPERTIES TIMEOUT 30)
-
-add_executable(ruvia_app_startup_retry app_startup_retry.cpp)
-target_link_libraries(ruvia_app_startup_retry PRIVATE ruvia::web)
-add_test(NAME ruvia_app_startup_retry COMMAND ruvia_app_startup_retry)
-set_tests_properties(ruvia_app_startup_retry PROPERTIES TIMEOUT 30)
+ruvia_add_test(ruvia_server_shutdown_drain server_shutdown_drain.cpp TIMEOUT 90)
+ruvia_add_test(ruvia_server_max_connections server_max_connections.cpp TIMEOUT 60)
+ruvia_add_test(ruvia_server_notfound_keepalive server_notfound_keepalive.cpp TIMEOUT 60)
+ruvia_add_test(ruvia_server_http2_document_root server_http2_document_root.cpp TIMEOUT 60)
+ruvia_add_test(ruvia_server_head_document_root server_head_document_root.cpp TIMEOUT 60)
+ruvia_add_test(ruvia_server_pipeline_request_views server_pipeline_request_views.cpp TIMEOUT 60)
+ruvia_add_test(ruvia_web_worker web_worker.cpp TIMEOUT 30)
+ruvia_add_test(ruvia_app_web_worker app_web_worker.cpp TIMEOUT 30)
+ruvia_add_test(ruvia_app_startup_retry app_startup_retry.cpp TIMEOUT 30)
 endif()
 
 configure_file(
