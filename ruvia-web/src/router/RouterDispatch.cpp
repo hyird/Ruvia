@@ -9,6 +9,7 @@
 #include "ruvia/web/detail/http/ContextInternal.h"
 #include "ruvia/http/detail/HttpResponseHeaderState.h"
 #include "ruvia/web/detail/http/StreamingInternal.h"
+#include "ruvia/web/detail/server/HttpResponseStreamState.h"
 #include "ruvia/http/HttpProtocolError.h"
 #include "ruvia/web/Error.h"
 #include "ruvia/web/Validation.h"
@@ -282,6 +283,24 @@ Task<std::optional<HttpResponse>> detail::RouteTable::dispatchStreamRoute(
     }
 
     if (exception != nullptr) {
+        // Head-only completion is a control signal from the writer, not a
+        // failure: the committed head already ended the message (HEAD served
+        // by a streaming GET route), the handler was merely stopped at its
+        // first body write. Finish the stream as a normal head-only success.
+        bool headOnlyComplete = false;
+        if (responseStreamOutput != nullptr &&
+            detail::StreamingAccess::committed(responseStreamOutput->writer())) {
+            try {
+                std::rethrow_exception(exception);
+            } catch (const detail::ResponseStreamHeadOnlyComplete&) {
+                headOnlyComplete = true;
+            } catch (...) {
+            }
+        }
+        if (headOnlyComplete) {
+            co_await responseStreamOutput->writer().end();
+            co_return std::nullopt;
+        }
         if ((webSocketRoute && middlewareChain.handlerInvoked()) ||
             (responseStreamOutput != nullptr &&
              detail::StreamingAccess::committed(responseStreamOutput->writer()))) {

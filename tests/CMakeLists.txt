@@ -323,6 +323,8 @@ ruvia_add_test(ruvia_server_max_connections server/server_max_connections.cpp TI
 ruvia_add_test(ruvia_server_notfound_keepalive server/server_notfound_keepalive.cpp TIMEOUT 60)
 ruvia_add_test(ruvia_server_http2_document_root server/server_http2_document_root.cpp TIMEOUT 60)
 ruvia_add_test(ruvia_server_head_document_root server/server_head_document_root.cpp TIMEOUT 60)
+ruvia_add_test(ruvia_server_head_stream_route server/server_head_stream_route.cpp TIMEOUT 60)
+ruvia_add_test(ruvia_server_http2_head_stream_route server/server_http2_head_stream_route.cpp TIMEOUT 60)
 ruvia_add_test(ruvia_server_pipeline_request_views server/server_pipeline_request_views.cpp TIMEOUT 60)
 ruvia_add_test(ruvia_web_worker server/web_worker.cpp TIMEOUT 30)
 ruvia_add_test(ruvia_app_web_worker server/app_web_worker.cpp TIMEOUT 30)

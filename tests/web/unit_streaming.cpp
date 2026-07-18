@@ -928,7 +928,10 @@ RUVIA_TEST(response_stream_state_drives_typed_post_head_phases) {
     RUVIA_CHECK(!abortedBeforeCommit.ended());
     RUVIA_CHECK(abortedBeforeCommit.commitPlan() == nullptr);
 
-    // A suppressed body (e.g. HEAD, 204 or 304) still rejects a body chunk.
+    // A suppressed body (e.g. HEAD, 204 or 304) still refuses to accept a body
+    // chunk, but with the head-only completion signal: writing the body a GET
+    // would have produced is correct handler behavior there, so dispatch must
+    // be able to tell it apart from a post-end() sequencing bug.
     ResponseStreamState suppressed;
     suppressed.markCommitted(ruvia::detail::httpResponseStreamCommitPlan(
         ruvia::detail::ResponseStreamFraming::kHttp1Chunked,
@@ -938,7 +941,7 @@ RUVIA_TEST(response_stream_state_drives_typed_post_head_phases) {
     bool bodyRejected = false;
     try {
         suppressed.ensureBodyAllowed();
-    } catch (const std::logic_error&) {
+    } catch (const ruvia::detail::ResponseStreamHeadOnlyComplete&) {
         bodyRejected = true;
     }
     RUVIA_CHECK(bodyRejected);

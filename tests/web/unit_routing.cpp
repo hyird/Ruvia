@@ -22,6 +22,7 @@
 #include "ruvia/http/detail/HttpResponseBodyAccess.h"
 #include "ruvia/http/HttpProtocolError.h"
 #include "ruvia/web/detail/http/StreamingInternal.h"
+#include "ruvia/web/detail/server/HttpResponseStreamState.h"
 #include "ruvia/web/Streaming.h"
 #include "ruvia/core/detail/AsioAwait.h"
 #include "ruvia/web/Context.h"
@@ -947,6 +948,152 @@ ruvia::Task<void> streamCommitThenThrow(void*, ruvia::Context& context) {
 }
 
 }  // namespace
+
+namespace {
+
+// Simulates the real sinks' body-suppressed commit (a HEAD request served by a
+// streaming GET route): the head commits, then the first body write raises the
+// head-only completion signal instead of accepting the chunk.
+bool g_headOnlyHandlerResumedPastFirstWrite = false;
+
+ruvia::Task<void> headOnlyWrite(void* target, std::string_view) {
+    static_cast<StreamCaptureSink*>(target)->committedFlag = true;
+    throw ruvia::detail::ResponseStreamHeadOnlyComplete();
+    co_return;  // unreachable
+}
+
+ruvia::ResponseStreamWriter makeHeadOnlyWriter(StreamCaptureSink& sink) noexcept {
+    return ruvia::detail::StreamingAccess::makeResponseStreamWriter(
+        &sink, &headOnlyWrite, &scEnd, &scSleep, &scBind, &scReleaseContext,
+        &scCommitted, &scAborted);
+}
+
+ruvia::Task<void> headOnlyProbeStreamHandler(void*, ruvia::Context& context) {
+    g_chainOrder.push_back(0);
+    co_await context.stream().write("event-1");
+    g_headOnlyHandlerResumedPastFirstWrite = true;
+    co_await context.stream().write("event-2");
+}
+
+struct HeadOnlyDispatchObservation final {
+    bool handled{false};
+    bool buffered{false};
+    bool threw{false};
+    bool ended{false};
+};
+
+HeadOnlyDispatchObservation dispatchHeadOnlyStream(
+    std::span<const ControllerMiddlewareDescriptor> middlewares) {
+    ruvia::Router router;
+    auto& impl = ruvia::detail::RouterImpl::from(router);
+    impl.registerResponseStreamRoute(
+        HttpKnownMethod::kGet,
+        path("/head-only-stream"),
+        ruvia::detail::RouteStreamHandler(nullptr, &headOnlyProbeStreamHandler),
+        std::span<const ControllerMiddlewareDescriptor>{},
+        middlewares);
+    impl.finalize();
+    const auto& table = impl.routeTable();
+
+    ruvia::WorkerMemory worker;
+    ruvia::RequestMemory memory(worker);
+    ruvia::HttpRequest request = ruvia::detail::HttpRequestAccess::make();
+    ruvia::detail::HttpRequestAccess::reset(request);
+    ruvia::detail::HttpRequestAccess::setMethod(request, "HEAD");
+    ruvia::detail::HttpRequestAccess::setPath(request, "/head-only-stream");
+    ruvia::detail::HttpRequestAccess::setResource(request, memory.resource());
+
+    const auto resolution = table.resolve(HttpKnownMethod::kHead, "/head-only-stream");
+    const auto* resolved = resolution.resolved();
+    if (resolved == nullptr) {
+        throw std::logic_error("head-only stream test route did not resolve for HEAD");
+    }
+
+    StreamCaptureSink sink;
+    auto writer = makeHeadOnlyWriter(sink);
+    HeadOnlyDispatchObservation observation;
+    asio::io_context context(1);
+    asio::co_spawn(
+        context,
+        [&]() -> asio::awaitable<void> {
+            try {
+                auto result = co_await ruvia::detail::taskAsAwaitable(
+                    table.dispatchResponseStream(
+                        request, *resolved, memory, writer, {}));
+                observation.handled = !result.has_value();
+                observation.buffered = result.has_value();
+            } catch (...) {
+                observation.threw = true;
+            }
+        },
+        asio::detached);
+    context.run();
+    observation.ended = sink.endedFlag;
+    return observation;
+}
+
+}  // namespace
+
+RUVIA_TEST(head_only_stream_completion_is_success_not_error) {
+    g_chainOrder.clear();
+    g_headOnlyHandlerResumedPastFirstWrite = false;
+    const auto observation = dispatchHeadOnlyStream({});
+    // The signal ends the dispatch as a handled head-only stream: no error
+    // response, no rethrow to the driver, and the stream is finished.
+    RUVIA_CHECK(observation.handled);
+    RUVIA_CHECK(!observation.buffered);
+    RUVIA_CHECK(!observation.threw);
+    RUVIA_CHECK(observation.ended);
+    // The handler stopped deterministically at its first body write.
+    RUVIA_CHECK(!g_headOnlyHandlerResumedPastFirstWrite);
+}
+
+RUVIA_TEST(head_only_stream_completion_unwinds_middleware_as_success) {
+    g_chainOrder.clear();
+    g_headOnlyHandlerResumedPastFirstWrite = false;
+    const ControllerMiddlewareDescriptor mws[] = {
+        ruvia::detail::makeMiddlewareDescriptor<ChainMwA>(),
+    };
+    const auto observation = dispatchHeadOnlyStream(
+        std::span<const ControllerMiddlewareDescriptor>(mws, 1));
+    RUVIA_CHECK(observation.handled);
+    RUVIA_CHECK(!observation.threw);
+    RUVIA_CHECK(observation.ended);
+    // The middleware ran its pre-next() side, the handler started, and the
+    // signal unwound the chain without converting into an error response
+    // (which could no longer be sent past the committed head).
+    const std::vector<int> expected{1, 0};
+    RUVIA_CHECK(g_chainOrder == expected);
+}
+
+RUVIA_TEST(streaming_get_routes_gain_head_shadow) {
+    ruvia::Router router;
+    auto& impl = ruvia::detail::RouterImpl::from(router);
+    impl.registerResponseStreamRoute(
+        HttpKnownMethod::kGet, path("/events"),
+        ruvia::detail::RouteStreamHandler(nullptr, &dummyStreamHandler), {}, {});
+    impl.registerSseRoute(
+        HttpKnownMethod::kGet, path("/sse"),
+        ruvia::detail::RouteStreamHandler(nullptr, &dummyStreamHandler), {}, {});
+    impl.registerWebSocketRoute(
+        HttpKnownMethod::kGet, path("/ws"),
+        ruvia::detail::RouteStreamHandler(nullptr, &dummyStreamHandler), {}, {});
+    impl.finalize();
+    const auto& table = impl.routeTable();
+
+    // Streaming and SSE GET routes answer HEAD via an auto shadow, like
+    // buffered GET routes do.
+    const auto events = table.resolve(HttpKnownMethod::kHead, "/events");
+    RUVIA_CHECK(events.resolved() != nullptr);
+    if (const auto* resolved = events.resolved()) {
+        RUVIA_CHECK(resolved->route().endpoint().responseStream() != nullptr);
+    }
+    const auto sse = table.resolve(HttpKnownMethod::kHead, "/sse");
+    RUVIA_CHECK(sse.resolved() != nullptr);
+    // A WebSocket handshake is GET-only; no HEAD shadow may reach it.
+    const auto ws = table.resolve(HttpKnownMethod::kHead, "/ws");
+    RUVIA_CHECK(ws.resolved() == nullptr);
+}
 
 RUVIA_TEST(middleware_chain_runs_in_onion_order) {
     g_chainOrder.clear();

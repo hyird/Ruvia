@@ -154,12 +154,21 @@ void detail::RouterImpl::validateNoDynamicRouteConflict(std::span<const PendingR
     }
 }
 
+// HEAD mirrors GET for buffered AND response-stream routes (RFC 9110 9.3.2:
+// same header section, no content). Buffered responses strip the body at the
+// writer; a streaming route runs its handler until the first body write, which
+// completes head-only. WebSocket routes stay GET-only: their handshake is an
+// upgrade, and a HEAD probe must not enter it.
+[[nodiscard]] static bool eligibleForHeadShadow(const detail::RouteEndpoint& endpoint) noexcept {
+    return endpoint.buffered() != nullptr || endpoint.responseStream() != nullptr;
+}
+
 void detail::RouterImpl::buildRouteTable(RouteTable& table) const {
     std::size_t headShadowCandidateCount = 0;
     std::size_t middlewareCount = 0;
     for (const auto& route : pendingRoutes_) {
         if (route.method() == HttpKnownMethod::kGet &&
-            route.endpoint().buffered() != nullptr) {
+            eligibleForHeadShadow(route.endpoint())) {
             ++headShadowCandidateCount;
         }
         middlewareCount +=
@@ -218,7 +227,7 @@ void detail::RouterImpl::buildRouteTable(RouteTable& table) const {
     for (std::size_t i = 0; i < originalRouteCount; ++i) {
         const auto& source = table.routes_[i];
         if (source.method() != HttpKnownMethod::kGet ||
-            source.endpoint().buffered() == nullptr) {
+            !eligibleForHeadShadow(source.endpoint())) {
             continue;
         }
         bool conflictsWithExistingHead = false;

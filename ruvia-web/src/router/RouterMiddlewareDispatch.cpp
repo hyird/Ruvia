@@ -1,6 +1,7 @@
 #include "ruvia/web/detail/router/RouteTable.h"
 
 #include "ruvia/web/detail/http/ContextInternal.h"
+#include "ruvia/web/detail/server/HttpResponseStreamState.h"
 #include "ruvia/web/Error.h"
 #include "ruvia/web/detail/http/HttpErrorResponse.h"
 
@@ -183,6 +184,13 @@ Task<void> detail::RouteTable::invokeStreamMiddlewareContinuation(NextState stat
             *context,
             *chain,
             *state.streamHandler);
+    } catch (const ResponseStreamHeadOnlyComplete&) {
+        // Not a failure: the committed head already completed a
+        // body-suppressed message (HEAD on a streaming route). Let the signal
+        // unwind through every middleware frame so dispatchStreamRoute can
+        // finish the stream as a head-only success instead of rendering a
+        // buffered error response that can no longer be sent.
+        throw;
     } catch (...) {
         exception = std::current_exception();
     }
