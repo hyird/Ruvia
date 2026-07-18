@@ -42,6 +42,20 @@ public:
             std::holds_alternative<AbortedAfterCommit>(state_);
     }
 
+    // True once a body-suppressed head (HEAD / 304 semantics) has completed the
+    // message: the next body write is the one ensureBodyAllowed() answers with
+    // ResponseStreamHeadOnlyComplete. Sinks check this to suspend once before
+    // that synchronous throw, so a handler that catches the control signal and
+    // keeps writing yields the worker thread each pass instead of hard-spinning
+    // the event loop -- other connections on the worker keep being served.
+    [[nodiscard]] bool bodySuppressedComplete() const noexcept {
+        if (!ended()) {
+            return false;
+        }
+        const auto* plan = commitPlan();
+        return plan != nullptr && plan->bodyPlan().bodySuppressed();
+    }
+
     [[nodiscard]] const ResponseStreamCommitPlan*
     commitPlan() const & noexcept {
         if (const auto* value = std::get_if<BodyOpen>(&state_)) {
