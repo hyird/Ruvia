@@ -120,6 +120,122 @@ void detail::RouteTable::setNotFoundHandler(HttpNotFoundHandler handler) noexcep
     notFoundHandler_ = handler;
 }
 
+namespace {
+
+// Normalizes one prefix registration ("/api/" and "/api" are the same scope)
+// and validates the shape shared by both fallback kinds. "/" stays "/" and
+// scopes every path; plain setErrorHandler/setNotFoundHandler remain the
+// simpler spelling for that.
+[[nodiscard]] std::string_view normalizeFallbackPrefix(std::string_view prefix) {
+    if (prefix.empty() || prefix.front() != '/') {
+        throw std::invalid_argument("fallback prefix must start with '/'");
+    }
+    while (prefix.size() > 1 && prefix.back() == '/') {
+        prefix.remove_suffix(1);
+    }
+    return prefix;
+}
+
+template <typename Stored, typename Registration>
+void replacePrefixHandlers(
+    std::pmr::vector<Stored>& stored,
+    std::pmr::memory_resource* resource,
+    std::span<const Registration> handlers) {
+    std::pmr::vector<Stored> normalized(resource);
+    normalized.reserve(handlers.size());
+    for (const auto& registration : handlers) {
+        if (registration.handler == nullptr) {
+            throw std::invalid_argument("fallback handler must not be null");
+        }
+        const auto prefix = normalizeFallbackPrefix(registration.prefix);
+        for (const auto& existing : normalized) {
+            if (std::string_view(existing.prefix) == prefix) {
+                throw std::invalid_argument("duplicate fallback prefix");
+            }
+        }
+        normalized.emplace_back(resource, prefix, registration.handler);
+    }
+    // Longest prefix first: selection is a first-match scan. Equal lengths
+    // cannot nest, so their relative order is irrelevant; keep it stable.
+    std::stable_sort(
+        normalized.begin(),
+        normalized.end(),
+        [](const Stored& left, const Stored& right) noexcept {
+            return left.prefix.size() > right.prefix.size();
+        });
+    stored = std::move(normalized);
+}
+
+// Longest-first stored order: the first hit is the tightest scope. A prefix
+// matches on whole path segments only, so "/api" scopes "/api" and "/api/x"
+// but never "/apix".
+template <typename Stored>
+[[nodiscard]] auto selectPrefixHandler(
+    const std::pmr::vector<Stored>& stored,
+    std::string_view path) noexcept {
+    for (const auto& candidate : stored) {
+        const std::string_view prefix(candidate.prefix);
+        if (prefix == "/" || path == prefix ||
+            (path.size() > prefix.size() && path.starts_with(prefix) &&
+             path[prefix.size()] == '/')) {
+            return candidate.handler;
+        }
+    }
+    return decltype(stored.front().handler){nullptr};
+}
+
+}  // namespace
+
+void detail::RouteTable::setPrefixErrorHandlers(
+    std::span<const HttpPrefixErrorHandler> handlers) {
+    replacePrefixHandlers(prefixErrorHandlers_, resource_, handlers);
+}
+
+void detail::RouteTable::setPrefixNotFoundHandlers(
+    std::span<const HttpPrefixNotFoundHandler> handlers) {
+    replacePrefixHandlers(prefixNotFoundHandlers_, resource_, handlers);
+}
+
+HttpErrorHandler detail::RouteTable::errorHandlerFor(
+    std::string_view path) const noexcept {
+    const auto handler = selectPrefixHandler(prefixErrorHandlers_, path);
+    return handler != nullptr ? handler : errorHandler_;
+}
+
+HttpNotFoundHandler detail::RouteTable::notFoundHandlerFor(
+    std::string_view path) const noexcept {
+    const auto handler = selectPrefixHandler(prefixNotFoundHandlers_, path);
+    return handler != nullptr ? handler : notFoundHandler_;
+}
+
+Router& detail::RouterImpl::setPrefixErrorHandlers(
+    std::span<const HttpPrefixErrorHandler> handlers) {
+    if (routeTable_) {
+        routeTable_->setPrefixErrorHandlers(handlers);
+    }
+    prefixErrorHandlers_.clear();
+    prefixErrorHandlers_.reserve(handlers.size());
+    for (const auto& handler : handlers) {
+        prefixErrorHandlers_.emplace_back(
+            std::pmr::string(handler.prefix, resource_), handler.handler);
+    }
+    return owner;
+}
+
+Router& detail::RouterImpl::setPrefixNotFoundHandlers(
+    std::span<const HttpPrefixNotFoundHandler> handlers) {
+    if (routeTable_) {
+        routeTable_->setPrefixNotFoundHandlers(handlers);
+    }
+    prefixNotFoundHandlers_.clear();
+    prefixNotFoundHandlers_.reserve(handlers.size());
+    for (const auto& handler : handlers) {
+        prefixNotFoundHandlers_.emplace_back(
+            std::pmr::string(handler.prefix, resource_), handler.handler);
+    }
+    return owner;
+}
+
 detail::RouterImpl::MiddlewareLifetime::MiddlewareLifetime(
     void* targetValue,
     ControllerMiddlewareDescriptor::Destroy destroyValue) noexcept
@@ -238,6 +354,22 @@ void detail::RouterImpl::finalize() {
     table->hasRouteRateLimit_ = hasRouteRateLimit_;
     table->setErrorHandler(errorHandler_);
     table->setNotFoundHandler(notFoundHandler_);
+    if (!prefixErrorHandlers_.empty()) {
+        std::pmr::vector<HttpPrefixErrorHandler> views(resource_);
+        views.reserve(prefixErrorHandlers_.size());
+        for (const auto& [prefix, handler] : prefixErrorHandlers_) {
+            views.push_back({std::string_view(prefix), handler});
+        }
+        table->setPrefixErrorHandlers(views);
+    }
+    if (!prefixNotFoundHandlers_.empty()) {
+        std::pmr::vector<HttpPrefixNotFoundHandler> views(resource_);
+        views.reserve(prefixNotFoundHandlers_.size());
+        for (const auto& [prefix, handler] : prefixNotFoundHandlers_) {
+            views.push_back({std::string_view(prefix), handler});
+        }
+        table->setPrefixNotFoundHandlers(views);
+    }
     routeTable_ = std::move(table);
 }
 

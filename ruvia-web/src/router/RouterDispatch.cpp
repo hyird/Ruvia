@@ -235,7 +235,10 @@ Task<std::optional<HttpResponse>> detail::RouteTable::dispatchStreamRoute(
         memory,
         request,
         resolved,
-        withRouteHandlers(services, errorHandler_, notFoundHandler_));
+        withRouteHandlers(
+            services,
+            errorHandlerFor(request.path()),
+            notFoundHandlerFor(request.path())));
     const auto* responseStreamOutput = services.responseOutput().responseStream();
     const bool webSocketRoute = route.endpoint().webSocket() != nullptr;
     ResponseStreamContextBinding streamContextBinding(
@@ -375,7 +378,10 @@ Task<HttpResponse> detail::RouteTable::dispatch(
             memory,
             request,
             *resolved,
-            withRouteHandlers(services, errorHandler_, notFoundHandler_));
+            withRouteHandlers(
+                services,
+                errorHandlerFor(request.path()),
+                notFoundHandlerFor(request.path())));
         std::exception_ptr exception;
         try {
             const auto& route = resolved->route();
@@ -413,14 +419,16 @@ Task<HttpResponse> detail::RouteTable::handleError(
     RequestMemory& memory,
     HttpErrorInfo error,
     ContextServices services) const {
-    if (errorHandler_ == nullptr) {
+    const auto errorHandler = errorHandlerFor(request.path());
+    if (errorHandler == nullptr) {
         co_return makeDefaultErrorResponse(memory.resource(), error);
     }
 
     auto context = detail::ContextAccess::make(
         memory,
         request,
-        withRouteHandlers(services, errorHandler_, notFoundHandler_));
+        withRouteHandlers(
+            services, errorHandler, notFoundHandlerFor(request.path())));
     co_return co_await handleError(context, error);
 }
 
@@ -429,7 +437,7 @@ Task<HttpResponse> detail::RouteTable::handleException(
     RequestMemory& memory,
     std::exception_ptr exception,
     ContextServices services) const {
-    if (errorHandler_ == nullptr) {
+    if (errorHandlerFor(request.path()) == nullptr) {
         OwnedHttpErrorInfo errorInfo(memory.resource(), exception);
         auto response = makeDefaultErrorResponse(memory.resource(), errorInfo.info);
         applyExceptionResponseMetadata(response, exception);
@@ -439,21 +447,28 @@ Task<HttpResponse> detail::RouteTable::handleException(
     auto context = detail::ContextAccess::make(
         memory,
         request,
-        withRouteHandlers(services, errorHandler_, notFoundHandler_));
+        withRouteHandlers(
+            services,
+            errorHandlerFor(request.path()),
+            notFoundHandlerFor(request.path())));
     co_return co_await handleException(context, exception);
 }
 
 Task<HttpResponse> detail::RouteTable::handleError(
     Context& context,
     HttpErrorInfo error) const {
-    return invokeErrorHandler(context, error, errorHandler_);
+    return invokeErrorHandler(
+        context,
+        error,
+        errorHandlerFor(detail::ContextAccess::request(context).path()));
 }
 
 Task<HttpResponse> detail::RouteTable::handleNotFound(
     const HttpRequest& request,
     RequestMemory& memory,
     ContextServices services) const {
-    if (notFoundHandler_ == nullptr) {
+    const auto notFoundHandler = notFoundHandlerFor(request.path());
+    if (notFoundHandler == nullptr) {
         co_return makeDefaultErrorResponse(
             memory.resource(),
             HttpErrorInfo(404, {}, "route not found"));
@@ -462,11 +477,12 @@ Task<HttpResponse> detail::RouteTable::handleNotFound(
     auto context = detail::ContextAccess::make(
         memory,
         request,
-        withRouteHandlers(services, errorHandler_, notFoundHandler_));
+        withRouteHandlers(
+            services, errorHandlerFor(request.path()), notFoundHandler));
 
     std::exception_ptr exception;
     try {
-        co_return co_await notFoundHandler_(context);
+        co_return co_await notFoundHandler(context);
     } catch (...) {
         exception = std::current_exception();
     }

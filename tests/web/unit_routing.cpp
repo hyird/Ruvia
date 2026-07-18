@@ -1544,6 +1544,103 @@ RUVIA_TEST(dispatch_routes_unimplemented_method_through_custom_error_handler) {
     RUVIA_CHECK_EQ(result.body, std::string("custom-error"));
 }
 
+namespace {
+
+ruvia::Task<ruvia::HttpResponse> apiScopedNotFound(ruvia::Context& context) {
+    context.status(404);
+    co_return context.body("api-scope-404");
+}
+
+ruvia::Task<ruvia::HttpResponse> v2ScopedNotFound(ruvia::Context& context) {
+    context.status(404);
+    co_return context.body("v2-scope-404");
+}
+
+ruvia::Task<ruvia::HttpResponse> apiScopedError(
+    ruvia::Context& context,
+    HttpErrorInfo info) {
+    context.status(info.status());
+    co_return context.body("api-scope-error");
+}
+
+DispatchResult dispatchOn(
+    const ruvia::detail::RouteTable& table,
+    std::string_view method,
+    std::string_view p) {
+    ruvia::WorkerMemory worker;
+    ruvia::RequestMemory memory(worker);
+    ruvia::HttpRequest request = ruvia::detail::HttpRequestAccess::make();
+    ruvia::detail::HttpRequestAccess::reset(request);
+    ruvia::detail::HttpRequestAccess::setMethod(request, method);
+    ruvia::detail::HttpRequestAccess::setPath(request, p);
+    ruvia::detail::HttpRequestAccess::setResource(request, memory.resource());
+
+    asio::io_context ctx(1);
+    auto future = asio::co_spawn(
+        ctx, ruvia::detail::taskAsAwaitable(table.dispatch(request, memory, {})),
+        asio::use_future);
+    ctx.run();
+    return extractDispatchResult(future.get());  // arena still alive here
+}
+
+}  // namespace
+
+RUVIA_TEST(prefix_not_found_handler_scopes_by_longest_segment_prefix) {
+    ruvia::Router router;
+    auto& impl = ruvia::detail::RouterImpl::from(router);
+    impl.registerRoute(HttpKnownMethod::kGet, path("/api/real"), RouteHandler(nullptr, &okHandler),
+                       RequestBodyMode::kBuffered, std::span<const ControllerMiddlewareDescriptor>{},
+                       std::span<const ControllerMiddlewareDescriptor>{});
+    impl.setNotFoundHandler(&customNotFound);
+    const ruvia::detail::HttpPrefixNotFoundHandler scoped[] = {
+        {"/api", &apiScopedNotFound},
+        // Trailing slash normalizes away; this is the same scope as "/api/v2".
+        {"/api/v2/", &v2ScopedNotFound},
+    };
+    impl.setPrefixNotFoundHandlers(std::span<const ruvia::detail::HttpPrefixNotFoundHandler>(scoped, 2));
+    impl.finalize();
+    const auto& table = impl.routeTable();
+
+    // Inside the scope: the prefix handler renders the miss.
+    RUVIA_CHECK_EQ(dispatchOn(table, "GET", "/api/missing").body, std::string("api-scope-404"));
+    // The mount path itself belongs to the scope.
+    RUVIA_CHECK_EQ(dispatchOn(table, "GET", "/api").body, std::string("api-scope-404"));
+    // The longest matching prefix wins over an enclosing one.
+    RUVIA_CHECK_EQ(dispatchOn(table, "GET", "/api/v2/missing").body, std::string("v2-scope-404"));
+    // Segment boundary: "/apix" is not under "/api".
+    RUVIA_CHECK_EQ(dispatchOn(table, "GET", "/apix").body, std::string("custom-not-found"));
+    // Outside every scope the app-wide handler still runs.
+    RUVIA_CHECK_EQ(dispatchOn(table, "GET", "/other").body, std::string("custom-not-found"));
+}
+
+RUVIA_TEST(prefix_error_handler_scopes_thrown_route_failures) {
+    ruvia::Router router;
+    auto& impl = ruvia::detail::RouterImpl::from(router);
+    impl.registerRoute(HttpKnownMethod::kGet, path("/api/boom"),
+                       RouteHandler(nullptr, &throwsHttpErrorHandler),
+                       RequestBodyMode::kBuffered, std::span<const ControllerMiddlewareDescriptor>{},
+                       std::span<const ControllerMiddlewareDescriptor>{});
+    impl.registerRoute(HttpKnownMethod::kGet, path("/boom"),
+                       RouteHandler(nullptr, &throwsHttpErrorHandler),
+                       RequestBodyMode::kBuffered, std::span<const ControllerMiddlewareDescriptor>{},
+                       std::span<const ControllerMiddlewareDescriptor>{});
+    impl.setErrorHandler(&customError);
+    const ruvia::detail::HttpPrefixErrorHandler scoped[] = {
+        {"/api", &apiScopedError},
+    };
+    impl.setPrefixErrorHandlers(std::span<const ruvia::detail::HttpPrefixErrorHandler>(scoped, 1));
+    impl.finalize();
+    const auto& table = impl.routeTable();
+
+    const auto scopedResult = dispatchOn(table, "GET", "/api/boom");
+    RUVIA_CHECK_EQ(scopedResult.status, std::uint16_t{403});
+    RUVIA_CHECK_EQ(scopedResult.body, std::string("api-scope-error"));
+
+    const auto globalResult = dispatchOn(table, "GET", "/boom");
+    RUVIA_CHECK_EQ(globalResult.status, std::uint16_t{403});
+    RUVIA_CHECK_EQ(globalResult.body, std::string("custom-error"));
+}
+
 RUVIA_TEST(dispatch_options_asterisk_returns_server_wide_allow) {
     // A server-wide OPTIONS * request is answered with 204 and an Allow header
     // listing every method registered anywhere on the server, not per-route.

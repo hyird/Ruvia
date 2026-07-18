@@ -107,6 +107,10 @@ struct ContextAccess final {
             services);
     }
 
+    [[nodiscard]] static const HttpRequest& request(const Context& context) noexcept {
+        return context.request_;
+    }
+
     [[nodiscard]] static RateLimiter* rateLimiter(Context& context) noexcept {
         return context.rateLimiter_;
     }

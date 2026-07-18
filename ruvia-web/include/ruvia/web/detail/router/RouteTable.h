@@ -325,6 +325,19 @@ enum class RouteDispatchFailure : std::uint8_t {
     kRespond,
 };
 
+// One path-prefix-scoped fallback registration (Hono sub-app scoping analog).
+// The prefix is a borrowed view during registration; RouteTable copies it into
+// owned storage. Selection is longest-prefix-first on whole path segments.
+struct HttpPrefixErrorHandler final {
+    std::string_view prefix;
+    HttpErrorHandler handler{nullptr};
+};
+
+struct HttpPrefixNotFoundHandler final {
+    std::string_view prefix;
+    HttpNotFoundHandler handler{nullptr};
+};
+
 class RouteTable final {
 public:
     explicit RouteTable(std::pmr::memory_resource* resource);
@@ -335,6 +348,11 @@ public:
 
     void setErrorHandler(HttpErrorHandler handler) noexcept;
     void setNotFoundHandler(HttpNotFoundHandler handler) noexcept;
+    // Wholesale replacement (idempotent for an app stop()/run() cycle). The
+    // stored set is normalized (trailing slash stripped) and ordered longest
+    // prefix first so selection is a first-match scan.
+    void setPrefixErrorHandlers(std::span<const HttpPrefixErrorHandler> handlers);
+    void setPrefixNotFoundHandlers(std::span<const HttpPrefixNotFoundHandler> handlers);
     [[nodiscard]] bool hasRouteRateLimit() const noexcept {
         return hasRouteRateLimit_;
     }
@@ -535,6 +553,23 @@ private:
         Context& context,
         std::exception_ptr exception) const;
 
+    template <typename Handler>
+    struct StoredPrefixHandler final {
+        StoredPrefixHandler(
+            std::pmr::memory_resource* resource,
+            std::string_view prefixValue,
+            Handler handlerValue)
+            : prefix(prefixValue, resource), handler(handlerValue) {}
+
+        std::pmr::string prefix;
+        Handler handler{nullptr};
+    };
+
+    [[nodiscard]] HttpErrorHandler errorHandlerFor(
+        std::string_view path) const noexcept;
+    [[nodiscard]] HttpNotFoundHandler notFoundHandlerFor(
+        std::string_view path) const noexcept;
+
     std::pmr::memory_resource* resource_;
     std::pmr::vector<RouteEntry> routes_;
     std::pmr::vector<RouteMiddleware> middlewareFrames_;
@@ -550,6 +585,10 @@ private:
     std::size_t exactMask_{0};
     HttpErrorHandler errorHandler_{nullptr};
     HttpNotFoundHandler notFoundHandler_{nullptr};
+    std::pmr::vector<StoredPrefixHandler<HttpErrorHandler>>
+        prefixErrorHandlers_{resource_};
+    std::pmr::vector<StoredPrefixHandler<HttpNotFoundHandler>>
+        prefixNotFoundHandlers_{resource_};
     bool hasRouteRateLimit_{false};
 };
 

@@ -4,6 +4,7 @@
 
 #include <mutex>
 #include <optional>
+#include <utility>
 #include <vector>
 
 #include "ruvia/core/memory/PmrObject.h"
@@ -40,6 +41,10 @@ struct AppState final {
     std::optional<AppDocumentRootConfig> documentRootConfig;
     HttpErrorHandler errorHandler{nullptr};
     HttpNotFoundHandler notFoundHandler{nullptr};
+    std::pmr::vector<std::pair<std::pmr::string, HttpErrorHandler>>
+        prefixErrorHandlers{appResource()};
+    std::pmr::vector<std::pair<std::pmr::string, HttpNotFoundHandler>>
+        prefixNotFoundHandlers{appResource()};
     std::pmr::vector<ControllerMiddlewareDescriptor> globalMiddlewares{appResource()};
     std::pmr::vector<AppHook> onStartHooks{appResource()};
     std::pmr::vector<AppHook> onStopHooks{appResource()};

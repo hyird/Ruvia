@@ -74,6 +74,13 @@ public:
 
     App& onError(HttpErrorHandler handler);
     App& notFound(HttpNotFoundHandler handler);
+    // Path-prefix-scoped fallbacks, the Hono sub-app scoping analog: the
+    // longest matching registered prefix wins, matching on whole path
+    // segments ("/api" scopes "/api" and "/api/x", never "/apix"); the
+    // prefix-less onError/notFound remain the app-wide fallback. A trailing
+    // slash is ignored and re-registering a prefix replaces its handler.
+    App& onError(std::string_view prefix, HttpErrorHandler handler);
+    App& notFound(std::string_view prefix, HttpNotFoundHandler handler);
     App& setDefaultRateLimitPerWorker(std::optional<RateLimitRule> rule);
     App& setRateLimitSlotsPerWorker(std::size_t slotsPerWorker);
     App& onAccess(AccessLogCallback callback);
