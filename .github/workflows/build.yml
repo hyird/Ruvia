@@ -39,8 +39,9 @@ concurrency:
   cancel-in-progress: true
 
 # CI is deliberately just two full-feature compile-verification jobs -- Linux
-# (gcc) and Windows (MSVC) -- with every optional feature enabled. Sanitizer,
-# fuzz, and benchmark runs are done locally rather than on every push.
+# (gcc) and Windows (MSVC) -- with every optional feature enabled, plus a
+# cleanup job that prunes old runs. Sanitizer, fuzz, and benchmark runs are done
+# locally rather than on every push.
 jobs:
   ubuntu_build:
     name: Ubuntu build
@@ -162,3 +163,34 @@ jobs:
       - name: Test
         shell: pwsh
         run: ctest --test-dir build/test --output-on-failure --build-config "$env:BUILD_TYPE"
+
+  cleanup:
+    name: Prune old runs
+    needs: [ubuntu_build, windows_build]
+    # Run after both builds regardless of their result, but never on pull
+    # requests (a fork's token is read-only and must not prune main's history).
+    if: ${{ always() && github.event_name != 'pull_request' }}
+    runs-on: ubuntu-24.04
+    permissions:
+      actions: write
+    steps:
+      - name: Keep only the 3 most recent runs
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          # This run is still in progress and cannot be deleted, so it is not
+          # counted here: keeping the 2 newest completed runs leaves exactly 3
+          # once this one finishes.
+          stale=$(gh api "repos/$GH_REPO/actions/workflows/build.yml/runs?per_page=100" \
+            --jq '.workflow_runs
+                  | map(select(.status == "completed"))
+                  | sort_by(.created_at)
+                  | reverse
+                  | .[2:]
+                  | .[].id' || true)
+          for id in $stale; do
+            echo "Deleting old run $id"
+            gh api --method DELETE "repos/$GH_REPO/actions/runs/$id" || true
+          done
