@@ -2,6 +2,7 @@
 
 #include "ruvia/http/detail/HeaderAcceptUtils.h"
 #include "ruvia/http/detail/HttpConnectionFields.h"
+#include "ruvia/http/HttpStatus.h"
 
 #include <cstddef>
 #include <cstdint>
@@ -21,15 +22,15 @@ namespace ruvia::detail {
 
 class HttpUnsupportedContentCoding final {
 public:
-    [[nodiscard]] static constexpr std::uint16_t status() noexcept {
-        return 415;
+    [[nodiscard]] static constexpr HttpStatusCode status() noexcept {
+        return http_status::kUnsupportedMediaType;
     }
 };
 
 class HttpInvalidContentCodingField final {
 public:
-    [[nodiscard]] static constexpr std::uint16_t status() noexcept {
-        return 400;
+    [[nodiscard]] static constexpr HttpStatusCode status() noexcept {
+        return http_status::kBadRequest;
     }
 };
 

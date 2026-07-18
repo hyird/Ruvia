@@ -125,7 +125,7 @@ RUVIA_TEST(final_response_control_failure_never_exposes_protocol_alternative) {
         Http1FinalResponseControlPlanError::kInvalidUpgradeField));
 
     HttpResponse missingUpgrade(std::pmr::get_default_resource());
-    missingUpgrade.status(426);
+    missingUpgrade.status(ruvia::http_status::kUpgradeRequired);
     RUVIA_CHECK(isHttp1Failure(
         missingUpgrade,
         Http1FinalResponseControlPlanError::kUpgradeRequired));

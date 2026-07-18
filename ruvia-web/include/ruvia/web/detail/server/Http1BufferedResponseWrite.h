@@ -15,7 +15,7 @@ class Http1BufferedResponseWriteResult;
 
 class Http1BufferedResponseWriteCompleted final {
 public:
-    [[nodiscard]] constexpr std::uint16_t status() const noexcept {
+    [[nodiscard]] constexpr HttpStatusCode status() const noexcept {
         return status_;
     }
 
@@ -23,10 +23,10 @@ private:
     friend class Http1BufferedResponseWriteResult;
 
     explicit constexpr Http1BufferedResponseWriteCompleted(
-        std::uint16_t status) noexcept
+        HttpStatusCode status) noexcept
         : status_(status) {}
 
-    std::uint16_t status_;
+    HttpStatusCode status_;
 };
 
 class Http1BufferedResponseWriteFailedBeforeCommit final {
@@ -37,7 +37,7 @@ private:
 
 class Http1BufferedResponseWriteFailedAfterCommit final {
 public:
-    [[nodiscard]] constexpr std::uint16_t status() const noexcept {
+    [[nodiscard]] constexpr HttpStatusCode status() const noexcept {
         return status_;
     }
 
@@ -45,10 +45,10 @@ private:
     friend class Http1BufferedResponseWriteResult;
 
     explicit constexpr Http1BufferedResponseWriteFailedAfterCommit(
-        std::uint16_t status) noexcept
+        HttpStatusCode status) noexcept
         : status_(status) {}
 
-    std::uint16_t status_;
+    HttpStatusCode status_;
 };
 
 // The complete-head byte boundary produces exactly one terminal alternative.
@@ -77,7 +77,7 @@ public:
     const Http1BufferedResponseWriteFailedAfterCommit*
     failedAfterCommit() const && = delete;
 
-    [[nodiscard]] constexpr std::optional<std::uint16_t>
+    [[nodiscard]] constexpr std::optional<HttpStatusCode>
     committedStatus() const noexcept {
         if (const auto* value = completed()) {
             return value->status();
@@ -102,7 +102,7 @@ private:
         Http1BufferedResponseWriteFailedAfterCommit>;
 
     [[nodiscard]] static constexpr Http1BufferedResponseWriteResult
-    makeCompleted(std::uint16_t status) noexcept {
+    makeCompleted(HttpStatusCode status) noexcept {
         return Http1BufferedResponseWriteResult(
             Http1BufferedResponseWriteCompleted(status));
     }
@@ -114,7 +114,7 @@ private:
     }
 
     [[nodiscard]] static constexpr Http1BufferedResponseWriteResult
-    makeFailedAfterCommit(std::uint16_t status) noexcept {
+    makeFailedAfterCommit(HttpStatusCode status) noexcept {
         return Http1BufferedResponseWriteResult(
             Http1BufferedResponseWriteFailedAfterCommit(status));
     }

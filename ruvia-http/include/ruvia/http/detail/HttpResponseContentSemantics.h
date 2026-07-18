@@ -3,6 +3,7 @@
 #include <cstdint>
 
 #include "ruvia/http/HttpKnownMethod.h"
+#include "ruvia/http/HttpStatus.h"
 
 namespace ruvia::detail {
 
@@ -22,19 +23,20 @@ enum class HttpResponseContentSemantics : std::uint8_t {
 [[nodiscard]] constexpr HttpResponseContentSemantics
 httpResponseContentSemantics(
     HttpKnownMethod requestMethod,
-    std::uint16_t statusCode) noexcept {
-    if (statusCode == 101) {
+    HttpStatusCode statusCode) noexcept {
+    if (statusCode == http_status::kSwitchingProtocols) {
         return HttpResponseContentSemantics::kProtocolSwitch;
     }
-    if (statusCode >= 100 && statusCode < 200) {
+    if (statusCode.isInformational()) {
         return HttpResponseContentSemantics::kInformational;
     }
     if (requestMethod == HttpKnownMethod::kConnect &&
-        statusCode >= 200 && statusCode < 300) {
+        statusCode.isSuccessful()) {
         return HttpResponseContentSemantics::kConnectTunnel;
     }
     if (requestMethod == HttpKnownMethod::kHead ||
-        statusCode == 204 || statusCode == 304) {
+        statusCode == http_status::kNoContent ||
+        statusCode == http_status::kNotModified) {
         return HttpResponseContentSemantics::kWithoutContent;
     }
     return HttpResponseContentSemantics::kWithContent;
@@ -43,7 +45,7 @@ httpResponseContentSemantics(
 [[nodiscard]] inline HttpResponseContentSemantics
 httpResponseContentSemantics(
     std::string_view requestMethod,
-    std::uint16_t statusCode) noexcept {
+    HttpStatusCode statusCode) noexcept {
     return httpResponseContentSemantics(
         classifyHttpMethod(requestMethod), statusCode);
 }

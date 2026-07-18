@@ -192,7 +192,7 @@ void openStandardTunnel(
     feedStandardConnect(server, resource);
     drainEvents(server);
     ruvia::HttpResponse response(resource);
-    response.status(200);
+    response.status(ruvia::http_status::kOk);
     (void)server.submitConnectResponseHead(1, response);
     server.consumeOutput(server.pendingOutput().size());
 }
@@ -494,17 +494,17 @@ RUVIA_TEST(http2_connect_server_accepts_standard_tunnel_and_preserves_half_close
     RUVIA_CHECK(pending->form() == Http2ConnectForm::kStandard);
 
     ruvia::HttpResponse invalidBody(&resource);
-    invalidBody.status(200);
+    invalidBody.status(ruvia::http_status::kOk);
     invalidBody.body("not tunnel metadata");
     RUVIA_CHECK(server.submitConnectResponseHead(1, invalidBody) ==
         Http2SubmitStatus::kInvalidMessage);
     ruvia::HttpResponse invalidLength(&resource);
-    invalidLength.status(200);
+    invalidLength.status(ruvia::http_status::kOk);
     invalidLength.header("Content-Length", "0");
     RUVIA_CHECK(server.submitConnectResponseHead(1, invalidLength) ==
         Http2SubmitStatus::kInvalidMessage);
     ruvia::HttpResponse invalidConnection(&resource);
-    invalidConnection.status(200);
+    invalidConnection.status(ruvia::http_status::kOk);
     invalidConnection.header("Connection", "close");
     RUVIA_CHECK(server.submitConnectResponseHead(1, invalidConnection) ==
         Http2SubmitStatus::kInvalidMessage);
@@ -512,7 +512,7 @@ RUVIA_TEST(http2_connect_server_accepts_standard_tunnel_and_preserves_half_close
     RUVIA_CHECK(stream->tunnel().pending() != nullptr);
 
     ruvia::HttpResponse accepted(&resource);
-    accepted.status(200);
+    accepted.status(ruvia::http_status::kOk);
     accepted.header("X-Tunnel", "ready");
     RUVIA_CHECK(server.submitConnectResponseHead(1, accepted) ==
         Http2SubmitStatus::kAccepted);
@@ -669,7 +669,7 @@ RUVIA_TEST(http2_connect_server_rejection_accepts_empty_terminal_data) {
     RUVIA_CHECK(stream->remoteReceive().connectPending() != nullptr);
 
     ruvia::HttpResponse rejected(&resource);
-    rejected.status(403);
+    rejected.status(ruvia::http_status::kForbidden);
     const auto submitted = server.submitResponseHead(
         1,
         rejected,
@@ -731,7 +731,7 @@ RUVIA_TEST(http2_connect_pending_accepts_empty_request_half_close) {
         stream->remoteReceive().connectPendingEndStream() != nullptr);
 
     ruvia::HttpResponse accepted(&resource);
-    accepted.status(200);
+    accepted.status(ruvia::http_status::kOk);
     RUVIA_CHECK(server.submitConnectResponseHead(1, accepted) ==
         Http2SubmitStatus::kAccepted);
     RUVIA_CHECK(stream->remoteReceive().endStream() != nullptr);

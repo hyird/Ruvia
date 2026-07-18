@@ -24,7 +24,7 @@ namespace ruvia::detail {
     std::pmr::polymorphic_allocator<char> allocator) {
     if (!input.empty() &&
         (input.front() == '/' || input.front() == '\\' || isWindowsDrivePath(input))) {
-        throw HttpError(403, "forbidden", "invalid static file path");
+        throw HttpError(ruvia::http_status::kForbidden, "forbidden", "invalid static file path");
     }
 
     std::pmr::string output(allocator);
@@ -38,7 +38,7 @@ namespace ruvia::detail {
         if (!segment.empty() && segment != ".") {
             if (segment == "..") {
                 if (output.empty()) {
-                    throw HttpError(403, "forbidden", "invalid static file path");
+                    throw HttpError(ruvia::http_status::kForbidden, "forbidden", "invalid static file path");
                 }
                 const auto previousSlash = output.rfind('/');
                 if (previousSlash == std::pmr::string::npos) {

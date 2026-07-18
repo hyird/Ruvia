@@ -49,7 +49,7 @@ void exerciseTypedResponsePhases(ruvia::RequestMemory& memory) {
     check(state.provisional() == nullptr);
     check(state.final() == nullptr);
 
-    state.materializeProvisional().status(202);
+    state.materializeProvisional().status(ruvia::http_status::kAccepted);
     check(state.pending() == nullptr);
     check(state.provisional() != nullptr);
     state.finalize(ruvia::HttpResponse(memory.resource()));
@@ -136,14 +136,14 @@ void exercisePendingStateMergesIntoRawResponse(
     ruvia::RequestMemory& memory,
     const ruvia::HttpRequest& request) {
     auto context = ruvia::detail::ContextAccess::make(memory, request);
-    context.status(404);
+    context.status(ruvia::http_status::kNotFound);
     context.header("X-Pending", "yes");
     ruvia::detail::ContextAccess::setResponse(
         context,
         ruvia::HttpResponse(context.resource()));
     auto response = ruvia::detail::ContextAccess::takeResponse(context);
     // A raw response owns its status, while pending headers still decorate it.
-    check(response.status() == 200);
+    check(response.status() == ruvia::http_status::kOk);
     check(response.header("X-Pending") == "yes");
 }
 
@@ -171,17 +171,17 @@ void exerciseActiveStorageCanFinalizeInPlace(
 
 void exerciseContextStatusOnReturn(ruvia::RequestMemory& memory, const ruvia::HttpRequest& request) {
     auto context = ruvia::detail::ContextAccess::make(memory, request);
-    context.status(404);
+    context.status(ruvia::http_status::kNotFound);
     ruvia::detail::ContextAccess::setResponse(context, context.text("ok"));
     auto response = ruvia::detail::ContextAccess::takeResponse(context);
-    check(response.status() == 404);
+    check(response.status() == ruvia::http_status::kNotFound);
 }
 
 void exerciseContextStatusOnAssign(ruvia::RequestMemory& memory, const ruvia::HttpRequest& request) {
     auto context = ruvia::detail::ContextAccess::make(memory, request);
-    context.status(500);
+    context.status(ruvia::http_status::kInternalServerError);
     context.respond(context.text("failed"));
-    check(context.response() != nullptr && context.response()->status() == 500);
+    check(context.response() != nullptr && context.response()->status() == ruvia::http_status::kInternalServerError);
     (void)ruvia::detail::ContextAccess::takeResponse(context);
     check(context.response() == nullptr);
 }
@@ -190,31 +190,31 @@ void exerciseContextStatusOnAssign(ruvia::RequestMemory& memory, const ruvia::Ht
 void exerciseRedirectLocationWins(ruvia::RequestMemory& memory, const ruvia::HttpRequest& request) {
     auto context = ruvia::detail::ContextAccess::make(memory, request);
     context.header("Location", "/wrong");
-    auto response = context.redirect("/right", 302);
+    auto response = context.redirect("/right", ruvia::http_status::kFound);
     check(countHeaders(response, "Location") == 1);
     check(response.header("Location") == "/right");
 }
 
 void exerciseContextStatusAppliesAsDefault(ruvia::RequestMemory& memory, const ruvia::HttpRequest& request) {
     auto context = ruvia::detail::ContextAccess::make(memory, request);
-    context.status(404);
+    context.status(ruvia::http_status::kNotFound);
     ruvia::detail::ContextAccess::setResponse(
         context,
         context.text("not found"));
     auto response = ruvia::detail::ContextAccess::takeResponse(context);
-    check(response.status() == 404);
+    check(response.status() == ruvia::http_status::kNotFound);
 }
 
 void exerciseRawResponseStatusIsNotReinterpreted(
     ruvia::RequestMemory& memory,
     const ruvia::HttpRequest& request) {
     auto context = ruvia::detail::ContextAccess::make(memory, request);
-    context.status(404);
+    context.status(ruvia::http_status::kNotFound);
     ruvia::detail::ContextAccess::setResponse(
         context,
         ruvia::HttpResponse(context.resource()));
     auto response = ruvia::detail::ContextAccess::takeResponse(context);
-    check(response.status() == 200);
+    check(response.status() == ruvia::http_status::kOk);
 }
 
 }  // namespace

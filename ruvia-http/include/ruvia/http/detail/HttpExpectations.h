@@ -54,7 +54,7 @@ private:
 class HttpUnsupportedExpectationRejection final {
 public:
     [[nodiscard]] HttpProtocolError protocolError() const noexcept {
-        return HttpProtocolError(417, "unsupported Expect header");
+        return HttpProtocolError(http_status::kExpectationFailed, "unsupported Expect header");
     }
 
 private:

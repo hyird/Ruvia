@@ -50,7 +50,7 @@ void setUnsignedHeader(HttpResponse& response, std::string_view name, std::uint6
 }  // namespace
 
 HttpErrorInfo rateLimitRejectionError() noexcept {
-    return HttpErrorInfo(429, "too_many_requests", "rate limit exceeded");
+    return HttpErrorInfo(ruvia::http_status::kTooManyRequests, "too_many_requests", "rate limit exceeded");
 }
 
 void applyRateLimitRejectionHeaders(

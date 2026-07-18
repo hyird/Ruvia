@@ -93,7 +93,7 @@ template <typename Sink>
 void emitResponseHead(
     const HttpResponse& response,
     Sink& sink,
-    std::uint16_t responseStatus,
+    HttpStatusCode responseStatus,
     std::string_view reasonPhrase,
     std::string_view dateHeader,
     ResponseHeadFlags flags) {
@@ -101,7 +101,7 @@ void emitResponseHead(
         flags.protocolVersion == HttpProtocolVersion::kHttp10
             ? std::string_view("HTTP/1.0 ")
             : std::string_view("HTTP/1.1 "));
-    sink.appendUnsigned(responseStatus);
+    sink.appendUnsigned(responseStatus.value());
     // RFC 9112 requires this SP even when the optional reason phrase is empty.
     sink.append(' ');
     sink.append(reasonPhrase);
@@ -196,7 +196,7 @@ void appendResponseHead(
     // This both bounds the unchecked raw stack sink and enforces the same 64 KiB
     // field-section ceiling used by request and HTTP/2 paths.
     std::size_t headBytes = 9;
-    addResponseHeadBytes(headBytes, decimalDigits(responseStatus));
+    addResponseHeadBytes(headBytes, decimalDigits(responseStatus.value()));
     addResponseHeadBytes(headBytes, 1);
     addResponseHeadBytes(headBytes, reasonPhrase.size());
     addResponseHeadBytes(headBytes, 2);

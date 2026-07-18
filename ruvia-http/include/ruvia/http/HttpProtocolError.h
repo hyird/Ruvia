@@ -7,6 +7,8 @@
 #include <exception>
 #include <string_view>
 
+#include "ruvia/http/HttpStatus.h"
+
 namespace ruvia {
 
 // An HTTP protocol primitive rejected input with a response status that a
@@ -14,7 +16,7 @@ namespace ruvia {
 // copied into fixed exception storage, so reporting never allocates or borrows.
 class HttpProtocolError final : public std::exception {
 public:
-    HttpProtocolError(std::uint16_t status, std::string_view message) noexcept
+    HttpProtocolError(HttpStatusCode status, std::string_view message) noexcept
         : status_(status) {
         const auto size = (std::min)(message.size(), message_.size() - 1);
         if (size != 0) {
@@ -23,7 +25,7 @@ public:
         message_[size] = '\0';
     }
 
-    [[nodiscard]] std::uint16_t status() const noexcept {
+    [[nodiscard]] HttpStatusCode status() const noexcept {
         return status_;
     }
 
@@ -32,7 +34,7 @@ public:
     }
 
 private:
-    std::uint16_t status_;
+    HttpStatusCode status_;
     std::array<char, 128> message_{};
 };
 

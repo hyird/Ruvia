@@ -254,7 +254,7 @@ std::optional<std::uint32_t> rstErrorForBodylessContentLengthRequest() {
 ruvia::Task<ruvia::HttpResponse> largeHeaderNotFoundHandler(ruvia::Context& context) {
     (void)context;
     ruvia::HttpResponse response(std::pmr::get_default_resource());
-    response.status(404);
+    response.status(ruvia::http_status::kNotFound);
     static const std::string bigValue(40000, 'a');
     response.header("x-large", bigValue);
     co_return response;
@@ -361,7 +361,7 @@ std::string& truncatedFileBodyPath() {
 ruvia::Task<ruvia::HttpResponse> truncatedFileBodyHandler(ruvia::Context& context) {
     (void)context;
     ruvia::HttpResponse response(std::pmr::get_default_resource());
-    response.status(200);
+    response.status(ruvia::http_status::kOk);
     constexpr std::uint64_t declaredLength = 40000;
     ruvia::detail::setResponseFileBody(
         response, std::filesystem::path(truncatedFileBodyPath()), declaredLength, 0, declaredLength);
@@ -380,7 +380,7 @@ std::string& missingFileBodyPath() {
 ruvia::Task<ruvia::HttpResponse> missingFileBodyHandler(ruvia::Context& context) {
     (void)context;
     ruvia::HttpResponse response(std::pmr::get_default_resource());
-    response.status(200);
+    response.status(ruvia::http_status::kOk);
     constexpr std::uint64_t declaredLength = 40000;
     ruvia::detail::setResponseFileBody(
         response, std::filesystem::path(missingFileBodyPath()), declaredLength, 0, declaredLength);

@@ -133,7 +133,7 @@ constexpr std::uint8_t kMaxHttp2InterimResponses = 8;
 struct Http2ResponseDecodeContext final {
     Http2HeaderDecodeContext base;
     HttpInterimResponseHeaderValidator interimHeaders;
-    std::optional<std::uint16_t> status;
+    std::optional<HttpStatusCode> status;
     bool sawRegular{false};
 };
 
@@ -159,11 +159,12 @@ bool http2OnDecodedResponseHeader(void* target, std::string_view name, std::stri
             ptr != value.data() + value.size()) {
             return false;
         }
-        const auto status = static_cast<std::uint16_t>(parsedStatus);
-        if (!httpStatusCodeValid(status) || status == 101) {
+        const auto status = HttpStatusCode::tryFromValue(
+            static_cast<std::uint16_t>(parsedStatus));
+        if (!status || *status == http_status::kSwitchingProtocols) {
             return false;
         }
-        context->status = status;
+        context->status = *status;
         return true;
     }
     if (!context->status || !http2IsValidDecodedResponseHeader(name, value)) {
@@ -173,7 +174,7 @@ bool http2OnDecodedResponseHeader(void* target, std::string_view name, std::stri
         return false;
     }
     context->sawRegular = true;
-    if (*context->status < 200) {
+    if (context->status->isInformational()) {
         // Interim fields are validated but not stored. The shared incremental
         // validator keeps receive acceptance identical to both response writers.
         return context->interimHeaders.validate(name, value) ==
@@ -255,7 +256,7 @@ HeaderDecodeStatus Http2Connection::decodeResponseHeaderBlock(Http2StreamState& 
     if (!context.status) {
         return HeaderDecodeStatus::kProtocolError;
     }
-    if (*context.status < 200) {
+    if (context.status->isInformational()) {
         // 1xx interim head cannot carry END_STREAM. Without it, the remote receive
         // state remains head-pending so the next HEADERS is decoded as another head.
         if (stream.remoteReceive().headEndStreamPending() != nullptr) {
@@ -278,7 +279,7 @@ HeaderDecodeStatus Http2Connection::decodeResponseHeaderBlock(Http2StreamState& 
     // same byte-accounting state that validates DATA and Content-Length. A
     // successful CONNECT takes precedence because its following bytes are a
     // tunnel, not response content.
-    if (*context.status == 205 &&
+    if (*context.status == http_status::kResetContent &&
         contentSemantics != HttpResponseContentSemantics::kConnectTunnel &&
         !stream.declareRemoteContentLength(0)) {
         return HeaderDecodeStatus::kProtocolError;

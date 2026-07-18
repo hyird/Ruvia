@@ -171,9 +171,12 @@ bool isValidHttpClientOriginTarget(std::string_view target) noexcept {
     return detail::isValidOriginFormTarget(target);
 }
 
-bool isHttpClientRedirectStatus(std::uint16_t status) noexcept {
-    return status == 301 || status == 302 || status == 303 ||
-        status == 307 || status == 308;
+bool isHttpClientRedirectStatus(HttpStatusCode status) noexcept {
+    return status == http_status::kMovedPermanently ||
+        status == http_status::kFound ||
+        status == http_status::kSeeOther ||
+        status == http_status::kTemporaryRedirect ||
+        status == http_status::kPermanentRedirect;
 }
 
 HttpClientResponseHeaderLookupResult lookupUniqueHttpClientResponseHeader(
@@ -205,9 +208,9 @@ HttpClientRedirectRequestPlan::HttpClientRedirectRequestPlan(
 
 HttpClientRedirectRequestPlan planHttpClientRedirectRequest(
     const HttpClientRequest& request,
-    std::uint16_t status,
+    HttpStatusCode status,
     std::pmr::memory_resource* resource) {
-    if (status == 303) {
+    if (status == http_status::kSeeOther) {
         return HttpClientRedirectRequestPlan(
             request.method == "HEAD"
                 ? request.method.view()
@@ -215,7 +218,9 @@ HttpClientRedirectRequestPlan planHttpClientRedirectRequest(
             HttpClientRedirectContentDisposition::kDrop,
             resource);
     }
-    if ((status == 301 || status == 302) && request.method == "POST") {
+    if ((status == http_status::kMovedPermanently ||
+         status == http_status::kFound) &&
+        request.method == "POST") {
         return HttpClientRedirectRequestPlan(
             "GET",
             HttpClientRedirectContentDisposition::kDrop,

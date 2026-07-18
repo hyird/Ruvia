@@ -21,6 +21,7 @@
 #include <vector>
 
 #include "ruvia/http/HttpHeader.h"
+#include "ruvia/http/HttpStatus.h"
 #include "ruvia/http/detail/BorrowedView.h"
 #include "ruvia/http/HttpProtocolVersion.h"
 #include "ruvia/http/detail/PmrResource.h"
@@ -378,7 +379,7 @@ public:
     HttpClientResponseHead(HttpClientResponseHead&&) noexcept = default;
     HttpClientResponseHead& operator=(HttpClientResponseHead&&) = delete;
 
-    [[nodiscard]] std::uint16_t status() const noexcept {
+    [[nodiscard]] HttpStatusCode status() const noexcept {
         return status_;
     }
 
@@ -397,7 +398,7 @@ private:
     friend struct detail::HttpClientResponseHeadAccess;
 
     HttpClientResponseHead(
-        std::uint16_t status,
+        HttpStatusCode status,
         HttpProtocolVersion protocolVersion,
         std::pmr::memory_resource* resource)
         : HttpClientResponseHead(
@@ -408,14 +409,14 @@ private:
 
     HttpClientResponseHead(
         detail::HttpResolvedPmrResourceTag,
-        std::uint16_t status,
+        HttpStatusCode status,
         HttpProtocolVersion protocolVersion,
         std::pmr::memory_resource* resource)
         : status_(status),
           protocolVersion_(protocolVersion),
           headers_(resource) {}
 
-    std::uint16_t status_;
+    HttpStatusCode status_;
     HttpProtocolVersion protocolVersion_;
     std::pmr::vector<HttpClientResponseHeader> headers_;
 };

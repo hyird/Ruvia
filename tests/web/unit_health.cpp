@@ -29,7 +29,7 @@ RUVIA_TEST(health_responses_use_context_response_state) {
     context.setCookie("probe", "ok");
 
     const auto response = ruvia::makeHealthResponse(context);
-    RUVIA_CHECK_EQ(response.status(), std::uint16_t{200});
+    RUVIA_CHECK_EQ(response.status(), ruvia::http_status::kOk);
     RUVIA_CHECK_EQ(response.header("Content-Type"), std::string_view("application/json"));
     RUVIA_CHECK_EQ(response.header("X-Trace"), std::string_view("health"));
     RUVIA_CHECK(response.header("Set-Cookie").value_or(std::string_view{}).starts_with("probe=ok;"));
@@ -43,10 +43,10 @@ RUVIA_TEST(ready_response_keeps_explicit_failure_status) {
     ruvia::RequestMemory memory(worker);
     auto request = ruvia::detail::HttpRequestAccess::make();
     auto context = makeContext(memory, request);
-    context.status(201);
+    context.status(ruvia::http_status::kCreated);
 
     const auto response = ruvia::makeReadyResponse(context, false, "database is unavailable");
-    RUVIA_CHECK_EQ(response.status(), std::uint16_t{503});
+    RUVIA_CHECK_EQ(response.status(), ruvia::http_status::kServiceUnavailable);
     RUVIA_CHECK_EQ(response.header("Content-Type"), std::string_view("application/json"));
     RUVIA_CHECK_EQ(
         ruvia::detail::responseBody(response).bytes(),

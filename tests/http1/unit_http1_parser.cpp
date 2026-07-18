@@ -92,7 +92,7 @@ RUVIA_TEST(http1_public_parse_outcome_exposes_only_its_active_alternative) {
     RUVIA_CHECK(failureState != nullptr);
     if (failureState != nullptr) {
         const auto error = failureState->protocolError();
-        RUVIA_CHECK_EQ(error.status(), 400);
+        RUVIA_CHECK_EQ(error.status(), ruvia::http_status::kBadRequest);
         RUVIA_CHECK_EQ(
             std::string_view(error.what()),
             std::string_view("missing Host header"));

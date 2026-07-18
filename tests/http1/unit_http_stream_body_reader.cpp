@@ -134,7 +134,7 @@ struct TransferBodyObservation final {
     std::string pipeline;
     ruvia::detail::Http1RequestBodyConsumption consumption{
         ruvia::detail::Http1RequestBodyConsumption::kIncomplete};
-    std::uint16_t errorStatus{0};
+    std::optional<ruvia::HttpStatusCode> errorStatus;
 };
 
 TransferBodyObservation readTransferBody(
@@ -224,7 +224,7 @@ RUVIA_TEST(http1_transfer_coding_uses_one_decoder_for_streaming_and_buffered_rea
 
     for (const bool streaming : {false, true}) {
         const auto observation = readTransferBody(initial, streaming);
-        RUVIA_CHECK_EQ(observation.errorStatus, std::uint16_t{0});
+        RUVIA_CHECK(!observation.errorStatus.has_value());
         RUVIA_CHECK_EQ(observation.body, std::string(plain));
         RUVIA_CHECK_EQ(observation.pipeline, std::string(pipeline));
         RUVIA_CHECK(observation.consumption ==
@@ -244,7 +244,7 @@ RUVIA_TEST(http1_transfer_coding_preserves_gzip_members_across_chunks) {
 
     for (const bool streaming : {false, true}) {
         const auto observation = readTransferBody(initial, streaming);
-        RUVIA_CHECK_EQ(observation.errorStatus, std::uint16_t{0});
+        RUVIA_CHECK(!observation.errorStatus.has_value());
         RUVIA_CHECK_EQ(observation.body, std::string("first-second"));
         RUVIA_CHECK_EQ(observation.pipeline, std::string(pipeline));
         RUVIA_CHECK(observation.consumption ==
@@ -256,7 +256,8 @@ RUVIA_TEST(http1_transfer_coding_failure_maps_once_for_both_read_surfaces) {
     const auto initial = chunked("not-gzip");
     for (const bool streaming : {false, true}) {
         const auto observation = readTransferBody(initial, streaming);
-        RUVIA_CHECK_EQ(observation.errorStatus, std::uint16_t{400});
+        RUVIA_CHECK_EQ(
+            observation.errorStatus, ruvia::http_status::kBadRequest);
         RUVIA_CHECK(observation.consumption ==
             ruvia::detail::Http1RequestBodyConsumption::kIncomplete);
     }
@@ -268,7 +269,8 @@ RUVIA_TEST(http1_transfer_coding_eof_commits_only_the_complete_decode_pipeline) 
     const auto initial = chunked(incomplete);
     for (const bool streaming : {false, true}) {
         const auto observation = readTransferBody(initial, streaming);
-        RUVIA_CHECK_EQ(observation.errorStatus, std::uint16_t{400});
+        RUVIA_CHECK_EQ(
+            observation.errorStatus, ruvia::http_status::kBadRequest);
         RUVIA_CHECK(observation.consumption ==
             ruvia::detail::Http1RequestBodyConsumption::kIncomplete);
     }

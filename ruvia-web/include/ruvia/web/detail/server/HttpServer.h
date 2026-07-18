@@ -21,8 +21,6 @@
 #include "ruvia/core/memory/MemoryPool.h"
 #include "ruvia/core/detail/ConnectionScanner.h"
 #include "ruvia/web/WebWorker.h"
-#include "ruvia/http/HttpRequest.h"
-#include "ruvia/http/HttpResponse.h"
 #include "ruvia/web/detail/server/HttpConnectionState.h"
 #include "ruvia/web/detail/server/RateLimiter.h"
 #include "ruvia/web/detail/server/HttpServerOptions.h"
@@ -112,10 +110,6 @@ private:
         asio::ip::tcp::socket& socket,
         ContextServices services,
         std::string_view initialBytes = {});
-    [[nodiscard]] std::optional<HttpResponse> tryDocumentRootResponse(
-        const HttpRequest& request,
-        RequestMemory& memory) const;
-
     asio::io_context ioContext_;
     std::shared_ptr<WorkerDispatcher> workerDispatcher_;
     WorkerHandle workerHandle_;

@@ -102,13 +102,13 @@ bool throwsInvalid(Fn&& fn) {
 
 RUVIA_TEST(response_status_is_version_neutral_code_only) {
     auto response = makeResponse();
-    RUVIA_CHECK_EQ(response.status(), std::uint16_t{200});
-    response.status(404);
-    RUVIA_CHECK_EQ(response.status(), std::uint16_t{404});
-    response.status(599);
-    RUVIA_CHECK_EQ(response.status(), std::uint16_t{599});
-    response.status(299);
-    RUVIA_CHECK_EQ(response.status(), std::uint16_t{299});
+    RUVIA_CHECK_EQ(response.status(), ruvia::http_status::kOk);
+    response.status(ruvia::http_status::kNotFound);
+    RUVIA_CHECK_EQ(response.status(), ruvia::http_status::kNotFound);
+    response.status(ruvia::HttpStatusCode::fromValue(599));
+    RUVIA_CHECK_EQ(response.status(), ruvia::HttpStatusCode::fromValue(599));
+    response.status(ruvia::HttpStatusCode::fromValue(299));
+    RUVIA_CHECK_EQ(response.status(), ruvia::HttpStatusCode::fromValue(299));
 }
 
 RUVIA_TEST(response_header_distinguishes_missing_from_present_empty) {
@@ -158,35 +158,31 @@ RUVIA_TEST(response_move_assignment_transfers_one_resource_domain) {
 
 RUVIA_TEST(response_status_code_range_validated) {
     auto response = makeResponse();
-    RUVIA_CHECK(throwsInvalid([&] { response.status(99); }));
-    RUVIA_CHECK(throwsInvalid([&] { response.status(100); }));
-    RUVIA_CHECK(throwsInvalid([&] { response.status(199); }));
-    RUVIA_CHECK(throwsInvalid([&] { response.status(600); }));
-    RUVIA_CHECK(throwsInvalid([&] { response.status(999); }));
-    RUVIA_CHECK(!throwsInvalid([&] { response.status(200); }));  // lower boundary
-    RUVIA_CHECK(!throwsInvalid([&] { response.status(599); }));  // upper boundary
+    RUVIA_CHECK(throwsInvalid([&] { response.status(ruvia::http_status::kContinue); }));
+    RUVIA_CHECK(throwsInvalid([&] { response.status(ruvia::HttpStatusCode::fromValue(199)); }));
+    RUVIA_CHECK(!throwsInvalid([&] { response.status(ruvia::http_status::kOk); }));  // lower boundary
+    RUVIA_CHECK(!throwsInvalid([&] { response.status(ruvia::HttpStatusCode::fromValue(599)); }));  // upper boundary
 }
 
 RUVIA_TEST(response_switching_protocols_requires_a_dedicated_driver) {
     auto response = makeResponse();
-    RUVIA_CHECK(throwsInvalid([&] { response.status(101); }));
-    RUVIA_CHECK_EQ(response.status(), std::uint16_t{200});
+    RUVIA_CHECK(throwsInvalid([&] { response.status(ruvia::http_status::kSwitchingProtocols); }));
+    RUVIA_CHECK_EQ(response.status(), ruvia::http_status::kOk);
 }
 
 RUVIA_TEST(interim_response_head_owns_the_non_switching_1xx_status_space) {
     const ruvia::HttpHeaderView headers[] = {
         {"Link", "</style.css>; rel=preload"},
     };
-    const ruvia::HttpInterimResponseHead earlyHints(103, headers);
-    RUVIA_CHECK_EQ(earlyHints.status(), std::uint16_t{103});
+    const ruvia::HttpInterimResponseHead earlyHints(ruvia::http_status::kEarlyHints, headers);
+    RUVIA_CHECK_EQ(earlyHints.status(), ruvia::http_status::kEarlyHints);
     RUVIA_CHECK_EQ(earlyHints.headers().size(), std::size_t{1});
     RUVIA_CHECK_EQ(earlyHints.headers()[0].name(), std::string_view("Link"));
 
-    for (const std::uint16_t status : {
-             std::uint16_t{99},
-             std::uint16_t{101},
-             std::uint16_t{200},
-             std::uint16_t{600}}) {
+    for (const ruvia::HttpStatusCode status : {
+             ruvia::http_status::kSwitchingProtocols,
+             ruvia::http_status::kOk,
+             ruvia::HttpStatusCode::fromValue(599)}) {
         RUVIA_CHECK(throwsInvalid([&] {
             (void)ruvia::HttpInterimResponseHead(status);
         }));

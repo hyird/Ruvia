@@ -189,7 +189,7 @@ public:
 
     // Route handlers construct one final response, so Context accepts only
     // 200..599. Informational heads belong to a dedicated protocol submit path.
-    void status(std::uint16_t statusCode);
+    void status(HttpStatusCode statusCode);
 
     void header(std::string_view name, std::string_view value) {
         header(name, value, HeaderOptions{});
@@ -248,7 +248,7 @@ public:
 
     [[nodiscard]] HttpResponse redirect(
         std::string_view location,
-        std::uint16_t statusCode = 302) const;
+        HttpStatusCode statusCode = http_status::kFound) const;
 
     [[nodiscard]] HttpResponse file(
         const std::filesystem::path& path,
@@ -260,7 +260,7 @@ public:
         std::string_view contentType = {}) const;
 
     [[nodiscard]] HttpResponse error(
-        std::uint16_t statusCode,
+        HttpStatusCode statusCode,
         std::string_view code,
         std::string_view message,
         std::string_view statusText = {}) const;
@@ -294,7 +294,7 @@ private:
     Context& removeResponseHeader(std::string_view name);
     void applyResponseState(
         HttpResponse& response,
-        std::optional<std::uint16_t> statusCode) const;
+        std::optional<HttpStatusCode> statusCode) const;
 
     [[nodiscard]] HttpResponse bodyStaticView(std::string_view body) const;
     [[nodiscard]] HttpResponse textStaticView(std::string_view body) const;

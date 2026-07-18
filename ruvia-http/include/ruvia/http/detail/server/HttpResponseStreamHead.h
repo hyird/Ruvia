@@ -57,7 +57,7 @@ enum class ResponseStreamHeadDisposition : std::uint8_t {
 
 class ResponseStreamCommitPlan final {
 public:
-    [[nodiscard]] std::uint16_t responseStatus() const noexcept {
+    [[nodiscard]] HttpStatusCode responseStatus() const noexcept {
         return bodyPlan_.responseStatus();
     }
 
@@ -81,7 +81,7 @@ private:
     friend ResponseStreamCommitPlan httpResponseStreamCommitPlan(
         ResponseStreamFraming,
         HttpKnownMethod,
-        std::uint16_t,
+        HttpStatusCode,
         ResponseTrailerIntent) noexcept;
 
     ResponseStreamCommitPlan(
@@ -103,7 +103,7 @@ private:
 [[nodiscard]] inline ResponseStreamCommitPlan httpResponseStreamCommitPlan(
     ResponseStreamFraming framing,
     HttpKnownMethod requestMethod,
-    std::uint16_t responseStatus,
+    HttpStatusCode responseStatus,
     ResponseTrailerIntent trailerIntent) noexcept {
     const auto bodyPlan = httpResponseBodyPlan(requestMethod, responseStatus);
     if (framing == ResponseStreamFraming::kHttp2Frames) {

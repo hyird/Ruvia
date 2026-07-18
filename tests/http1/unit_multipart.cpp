@@ -428,7 +428,7 @@ RUVIA_TEST(multipart_boundary_from_content_type) {
         RUVIA_CHECK(result.failure() != nullptr);
         if (result.failure() != nullptr) {
             const auto error = result.failure()->protocolError();
-            RUVIA_CHECK_EQ(error.status(), 400);
+            RUVIA_CHECK_EQ(error.status(), ruvia::http_status::kBadRequest);
             RUVIA_CHECK_EQ(
                 std::string_view(error.what()),
                 std::string_view("invalid multipart boundary"));
@@ -548,7 +548,7 @@ RUVIA_TEST(multipart_parser_reports_typed_incomplete_body) {
     RUVIA_CHECK(result.done() == nullptr);
     if (result.failure() != nullptr) {
         const auto error = result.failure()->protocolError();
-        RUVIA_CHECK_EQ(error.status(), 400);
+        RUVIA_CHECK_EQ(error.status(), ruvia::http_status::kBadRequest);
         RUVIA_CHECK_EQ(
             std::string_view(error.what()),
             std::string_view("incomplete multipart body"));
@@ -625,7 +625,7 @@ RUVIA_TEST(multipart_part_header_rejects_ambiguous_disposition_parameters) {
             std::pmr::get_default_resource());
         RUVIA_CHECK(complete.failure() != nullptr);
         if (complete.failure() != nullptr) {
-            RUVIA_CHECK_EQ(complete.failure()->protocolError().status(), 400);
+            RUVIA_CHECK_EQ(complete.failure()->protocolError().status(), ruvia::http_status::kBadRequest);
             RUVIA_CHECK_EQ(
                 std::string_view(complete.failure()->protocolError().what()),
                 std::string_view("invalid multipart content disposition"));
@@ -681,7 +681,7 @@ RUVIA_TEST(multipart_part_header_rejects_ambiguous_header_blocks) {
             std::pmr::get_default_resource());
         RUVIA_CHECK(complete.failure() != nullptr);
         if (complete.failure() != nullptr) {
-            RUVIA_CHECK_EQ(complete.failure()->protocolError().status(), 400);
+            RUVIA_CHECK_EQ(complete.failure()->protocolError().status(), ruvia::http_status::kBadRequest);
             RUVIA_CHECK_EQ(
                 std::string_view(complete.failure()->protocolError().what()),
                 std::string_view("invalid multipart part headers"));
@@ -843,7 +843,7 @@ RUVIA_TEST(multipart_complete_body_parser_rejects_malformed_body) {
         std::pmr::get_default_resource());
     RUVIA_CHECK(parsed.body() == nullptr);
     RUVIA_CHECK(parsed.failure() != nullptr);
-    RUVIA_CHECK_EQ(parsed.failure()->protocolError().status(), 400);
+    RUVIA_CHECK_EQ(parsed.failure()->protocolError().status(), ruvia::http_status::kBadRequest);
     RUVIA_CHECK_EQ(
         std::string_view(parsed.failure()->protocolError().what()),
         std::string_view("incomplete multipart body"));
@@ -856,7 +856,7 @@ RUVIA_TEST(multipart_complete_body_parser_shares_incremental_limits) {
         ruvia::MultipartBoundary("BOUNDARY"),
         std::pmr::get_default_resource());
     RUVIA_CHECK(complete.failure() != nullptr);
-    RUVIA_CHECK_EQ(complete.failure()->protocolError().status(), 413);
+    RUVIA_CHECK_EQ(complete.failure()->protocolError().status(), ruvia::http_status::kContentTooLarge);
     RUVIA_CHECK_EQ(
         std::string_view(complete.failure()->protocolError().what()),
         std::string_view("multipart preamble exceeds limit"));
@@ -867,7 +867,7 @@ RUVIA_TEST(multipart_complete_body_parser_shares_incremental_limits) {
     incremental.feed(oversizedPreamble);
     const auto streamed = incremental.poll();
     RUVIA_CHECK(streamed.failure() != nullptr);
-    RUVIA_CHECK_EQ(streamed.failure()->protocolError().status(), 413);
+    RUVIA_CHECK_EQ(streamed.failure()->protocolError().status(), ruvia::http_status::kContentTooLarge);
     RUVIA_CHECK_EQ(
         std::string_view(streamed.failure()->protocolError().what()),
         std::string_view(complete.failure()->protocolError().what()));
@@ -899,7 +899,7 @@ RUVIA_TEST(multipart_complete_limits_cannot_be_bypassed_by_terminators) {
         const auto result = parse(body);
         RUVIA_CHECK(result.failure() != nullptr);
         if (const auto* failure = result.failure()) {
-            RUVIA_CHECK_EQ(failure->protocolError().status(), 413);
+            RUVIA_CHECK_EQ(failure->protocolError().status(), ruvia::http_status::kContentTooLarge);
             RUVIA_CHECK_EQ(
                 std::string_view(failure->protocolError().what()),
                 message);
@@ -912,7 +912,7 @@ RUVIA_TEST(multipart_complete_limits_cannot_be_bypassed_by_terminators) {
         const auto streamed = incremental.poll();
         RUVIA_CHECK(streamed.failure() != nullptr);
         if (const auto* failure = streamed.failure()) {
-            RUVIA_CHECK_EQ(failure->protocolError().status(), 413);
+            RUVIA_CHECK_EQ(failure->protocolError().status(), ruvia::http_status::kContentTooLarge);
             RUVIA_CHECK_EQ(
                 std::string_view(failure->protocolError().what()),
                 message);

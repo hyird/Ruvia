@@ -15,7 +15,7 @@ namespace ruvia::detail {
 template <typename Stream>
 Task<void> writeHttp1Continue(Stream& stream) {
     std::array<char, 32> headBuffer{};
-    const HttpInterimResponseHead response(100);
+    const HttpInterimResponseHead response(http_status::kContinue);
     const auto result = Http1InterimResponseWriter().prepare(
         response, headBuffer);
     const auto* const prepared = result.prepared();

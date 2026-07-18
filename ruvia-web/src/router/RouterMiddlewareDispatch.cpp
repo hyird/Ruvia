@@ -22,7 +22,7 @@ void storeRepeatedNextError(Context& context) {
         context,
         detail::makeDefaultErrorResponse(
             context.resource(),
-            HttpErrorInfo(500, "next_called_multiple_times", "next() called multiple times")));
+            HttpErrorInfo(ruvia::http_status::kInternalServerError, "next_called_multiple_times", "next() called multiple times")));
 }
 
 detail::NextState::Control* makeNextControl(Context& context) {

@@ -123,7 +123,7 @@ RUVIA_TEST(request_state_content_length_exceeds_limit) {
         over, ProtocolByteLimit::limited(100));
     RUVIA_CHECK(overFailure.has_value());
     if (overFailure) {
-        RUVIA_CHECK_EQ(overFailure->protocolError().status(), 413);
+        RUVIA_CHECK_EQ(overFailure->protocolError().status(), ruvia::http_status::kContentTooLarge);
     }
     RUVIA_CHECK(!contentLengthLimitFailure(
         exact, ProtocolByteLimit::limited(100)));
@@ -289,7 +289,7 @@ RUVIA_TEST(http1_prepared_stream_head_binds_wire_signal_to_final_connection_disp
                              std::string_view responseConnection) {
         const auto plan = http1PlanResponseStream(parser.parseMessage(request), closePolicy);
         ruvia::HttpResponse response(std::pmr::get_default_resource());
-        response.status(200);
+        response.status(ruvia::http_status::kOk);
         if (!responseConnection.empty()) {
             response.header("Connection", responseConnection);
         }
@@ -348,7 +348,7 @@ RUVIA_TEST(http1_prepared_stream_head_owns_exact_wire_framing) {
             parser.parseMessage(request),
             Http1ServerClosePolicy::kAllowReuse);
         ruvia::HttpResponse response(std::pmr::get_default_resource());
-        response.status(200);
+        response.status(ruvia::http_status::kOk);
         response.header("Transfer-Encoding", "gzip, chunked");
         response.header("Content-Length", "99");
         return prepareStream(
@@ -401,7 +401,7 @@ RUVIA_TEST(http1_prepared_body_suppressed_stream_is_self_delimited) {
     Http1ServerRequestParser parser;
     const auto prepare = [&](
                              std::string_view request,
-                             std::uint16_t status,
+                             ruvia::HttpStatusCode status,
                              Http1ServerClosePolicy closePolicy) {
         const auto plan = http1PlanResponseStream(
             parser.parseMessage(request), closePolicy);
@@ -416,7 +416,7 @@ RUVIA_TEST(http1_prepared_body_suppressed_stream_is_self_delimited) {
 
     auto http11 = prepare(
         "GET / HTTP/1.1\r\nHost: x\r\n\r\n",
-        205,
+        ruvia::http_status::kResetContent,
         Http1ServerClosePolicy::kAllowReuse);
     RUVIA_CHECK(http11.commitPlan().bodyPlan().bodySuppressed());
     RUVIA_CHECK(
@@ -431,7 +431,7 @@ RUVIA_TEST(http1_prepared_body_suppressed_stream_is_self_delimited) {
 
     auto http10 = prepare(
         "GET / HTTP/1.0\r\nConnection: keep-alive\r\n\r\n",
-        205,
+        ruvia::http_status::kResetContent,
         Http1ServerClosePolicy::kAllowReuse);
     RUVIA_CHECK(http10.commitPlan().bodyPlan().bodySuppressed());
     RUVIA_CHECK(!http10.response().header("Transfer-Encoding").has_value());
@@ -443,7 +443,7 @@ RUVIA_TEST(http1_prepared_body_suppressed_stream_is_self_delimited) {
 
     auto http10Head = prepare(
         "HEAD / HTTP/1.0\r\nConnection: keep-alive\r\n\r\n",
-        200,
+        ruvia::http_status::kOk,
         Http1ServerClosePolicy::kAllowReuse);
     RUVIA_CHECK(http10Head.commitPlan().bodyPlan().bodySuppressed());
     RUVIA_CHECK(
@@ -451,7 +451,7 @@ RUVIA_TEST(http1_prepared_body_suppressed_stream_is_self_delimited) {
 
     auto limitedHttp10 = prepare(
         "GET / HTTP/1.0\r\nConnection: keep-alive\r\n\r\n",
-        205,
+        ruvia::http_status::kResetContent,
         Http1ServerClosePolicy::kCloseAfterResponse);
     RUVIA_CHECK(limitedHttp10.commitPlan().bodyPlan().bodySuppressed());
     RUVIA_CHECK(
@@ -469,7 +469,7 @@ RUVIA_TEST(http1_stream_commit_plan_exposes_exact_trailer_capability) {
             parser.parseMessage(request),
             Http1ServerClosePolicy::kAllowReuse);
         ruvia::HttpResponse response(std::pmr::get_default_resource());
-        response.status(200);
+        response.status(ruvia::http_status::kOk);
         return prepareStream(
             std::move(response),
             ResponseStreamKind::kGeneric,
@@ -543,7 +543,7 @@ RUVIA_TEST(auto_https_redirect_response_is_private_and_well_formed) {
     ruvia::RequestMemory memory(worker);
     auto response = ruvia::detail::makeAutoHttpsRedirectResponse(parsed.request, memory, 443);
 
-    RUVIA_CHECK_EQ(response.status(), std::uint16_t{308});
+    RUVIA_CHECK_EQ(response.status(), ruvia::http_status::kPermanentRedirect);
     RUVIA_CHECK_EQ(
         std::string(response.header("Location").value_or(std::string_view{})),
         std::string("https://example.com/a/b?x=1"));

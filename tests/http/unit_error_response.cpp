@@ -20,10 +20,13 @@ RUVIA_TEST(default_error_response_escapes_message_in_json_body) {
     auto* resource = std::pmr::new_delete_resource();
     // A custom message carrying quotes must be JSON-escaped in the error body so
     // it cannot break out of the string and corrupt the response.
-    HttpErrorInfo error(400, "bad_request", "invalid \"input\"");
+    HttpErrorInfo error(
+        ruvia::http_status::kBadRequest,
+        "bad_request",
+        "invalid \"input\"");
     const auto response = makeDefaultErrorResponse(resource, error);
 
-    RUVIA_CHECK_EQ(response.status(), std::uint16_t{400});
+    RUVIA_CHECK_EQ(response.status(), ruvia::http_status::kBadRequest);
     RUVIA_CHECK_EQ(response.header("Content-Type"), std::string_view("application/json"));
 
     const auto body = ruvia::detail::responseBody(response).bytes();
@@ -34,8 +37,12 @@ RUVIA_TEST(default_error_response_escapes_message_in_json_body) {
 
 RUVIA_TEST(default_error_response_embeds_details_json) {
     auto* resource = std::pmr::new_delete_resource();
-    HttpErrorInfo error(422, "validation_failed", "failed", "Unprocessable Entity",
-                        R"([{"field":"x","code":"required","message":"m"}])");
+    HttpErrorInfo error(
+        ruvia::http_status::kUnprocessableContent,
+        "validation_failed",
+        "failed",
+        "Unprocessable Content",
+        R"([{"field":"x","code":"required","message":"m"}])");
     const auto response = makeDefaultErrorResponse(resource, error);
 
     const auto body = ruvia::detail::responseBody(response).bytes();
@@ -46,38 +53,41 @@ RUVIA_TEST(default_error_response_embeds_details_json) {
 
 RUVIA_TEST(default_error_response_does_not_set_transport_headers) {
     auto* resource = std::pmr::new_delete_resource();
-    HttpErrorInfo error(500, "internal", "boom");
+    HttpErrorInfo error(
+        ruvia::http_status::kInternalServerError, "internal", "boom");
     const auto response = makeDefaultErrorResponse(resource, error);
     RUVIA_CHECK(!response.header("Connection").has_value());
 }
 
-RUVIA_TEST(default_error_response_coerces_invalid_status_and_status_text) {
+RUVIA_TEST(default_error_response_normalizes_non_error_status_and_status_text) {
     auto* resource = std::pmr::new_delete_resource();
 
-    // An out-of-range status (a typo like 4004, or a code copied from an upstream
-    // response) must NOT throw on the never-throws error path: HttpResponse::status
-    // rejects it, and the default factory is called outside the transport try-guard,
-    // so the throw would drop the connection with no body. It is coerced to 500.
+    // An informational status is valid HTTP metadata but cannot terminate an
+    // application error response, so the Web normalization maps it to 500.
     {
-        const auto response = makeDefaultErrorResponse(resource, HttpErrorInfo(4004, "x", "y"));
-        RUVIA_CHECK_EQ(response.status(), std::uint16_t{500});
+        const auto response = makeDefaultErrorResponse(resource, HttpErrorInfo(ruvia::http_status::kEarlyHints, "x", "y"));
+        RUVIA_CHECK_EQ(response.status(), ruvia::http_status::kInternalServerError);
     }
-    // 600..999 are three-digit library sentinels rather than HTTP status codes,
-    // and an informational status cannot terminate an application error response.
-    {
-        const auto response = makeDefaultErrorResponse(resource, HttpErrorInfo(600, "x", "y"));
-        RUVIA_CHECK_EQ(response.status(), std::uint16_t{500});
-    }
-    {
-        const auto response = makeDefaultErrorResponse(resource, HttpErrorInfo(103, "x", "y"));
-        RUVIA_CHECK_EQ(response.status(), std::uint16_t{500});
+    // Successful and redirection statuses are final responses, but they cannot
+    // describe an application error either.
+    for (const auto status : {
+             ruvia::http_status::kOk,
+             ruvia::http_status::kTemporaryRedirect}) {
+        const auto response =
+            makeDefaultErrorResponse(resource, HttpErrorInfo(status, "x", "y"));
+        RUVIA_CHECK_EQ(
+            response.status(), ruvia::http_status::kInternalServerError);
     }
     // A Web error label carrying CR/LF is replaced before JSON serialization.
     // It is presentation data only and never becomes an HTTP/1 reason phrase.
     {
-        HttpErrorInfo error(400, "bad", "msg", std::string_view("Bad\r\nRequest", 12));
+        HttpErrorInfo error(
+            ruvia::http_status::kBadRequest,
+            "bad",
+            "msg",
+            std::string_view("Bad\r\nRequest", 12));
         const auto response = makeDefaultErrorResponse(resource, error);
-        RUVIA_CHECK_EQ(response.status(), std::uint16_t{400});
+        RUVIA_CHECK_EQ(response.status(), ruvia::http_status::kBadRequest);
         const auto body = ruvia::detail::responseBody(response).bytes();
         RUVIA_CHECK(body.find(R"("error":"Bad Request")") != std::string_view::npos);
         RUVIA_CHECK(body.find('\r') == std::string_view::npos);
@@ -86,14 +96,14 @@ RUVIA_TEST(default_error_response_coerces_invalid_status_and_status_text) {
     // An extension status has no conventional reason phrase. The Web JSON
     // envelope gets its own neutral label instead of inventing wire semantics.
     {
-        const auto response = makeDefaultErrorResponse(resource, HttpErrorInfo(599));
-        RUVIA_CHECK_EQ(response.status(), std::uint16_t{599});
+        const auto response = makeDefaultErrorResponse(resource, HttpErrorInfo(ruvia::HttpStatusCode::fromValue(599)));
+        RUVIA_CHECK_EQ(response.status(), ruvia::HttpStatusCode::fromValue(599));
         const auto body = ruvia::detail::responseBody(response).bytes();
         RUVIA_CHECK(body.find(R"("error":"HTTP Error")") != std::string_view::npos);
     }
     // A valid in-range status is preserved unchanged.
     {
-        const auto response = makeDefaultErrorResponse(resource, HttpErrorInfo(404, "not_found", "nope"));
-        RUVIA_CHECK_EQ(response.status(), std::uint16_t{404});
+        const auto response = makeDefaultErrorResponse(resource, HttpErrorInfo(ruvia::http_status::kNotFound, "not_found", "nope"));
+        RUVIA_CHECK_EQ(response.status(), ruvia::http_status::kNotFound);
     }
 }

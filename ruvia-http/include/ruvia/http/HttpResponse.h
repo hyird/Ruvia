@@ -2,6 +2,7 @@
 
 #include "ruvia/http/detail/PmrResource.h"
 #include "ruvia/http/detail/HttpResponseBody.h"
+#include "ruvia/http/HttpStatus.h"
 
 #include <array>
 #include <cstddef>
@@ -161,7 +162,7 @@ public:
     HttpResponse(HttpResponse&&) noexcept = default;
     HttpResponse& operator=(HttpResponse&& other) noexcept;
 
-    [[nodiscard]] std::uint16_t status() const noexcept;
+    [[nodiscard]] HttpStatusCode status() const noexcept;
     [[nodiscard]] const HttpResponseHeaders& headers() const & noexcept;
     [[nodiscard]] const HttpResponseHeaders& headers() const && = delete;
     [[nodiscard]] std::optional<std::string_view> header(
@@ -170,7 +171,7 @@ public:
         std::string_view name) const && = delete;
     // A generic HttpResponse is always final (200..599). Interim 1xx progress
     // messages use HttpInterimResponseHead; 101 uses a dedicated protocol driver.
-    void status(std::uint16_t statusCode);
+    void status(HttpStatusCode statusCode);
     void header(std::string_view key, std::string_view value);
     void header(std::string_view key, std::string_view value, HeaderOptions options);
     void header(std::string_view key, std::nullopt_t);
@@ -241,7 +242,7 @@ private:
     HttpResponseHeader& prepareHeaderValueStorage(std::string_view key, std::size_t valueSize, std::uint32_t knownBit);
     void recordKnownHeaderIndex(std::uint32_t knownBit, std::size_t index) noexcept;
 
-    std::uint16_t statusCode_{200};
+    HttpStatusCode statusCode_{http_status::kOk};
     std::uint32_t knownHeaderBits_{0};
     std::array<std::int16_t, kKnownHeaderCount> knownHeaderIndexes_{};
     HttpResponseHeaders headers_;

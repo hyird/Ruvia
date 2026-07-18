@@ -275,8 +275,11 @@ RUVIA_TEST(compress_skips_when_no_coding_but_preserves_head_metadata) {
 
 RUVIA_TEST(compress_skips_non_compressible_status_codes) {
     // 206/204/205/304 and any 1xx must never carry a compressed representation.
-    for (const std::uint16_t status : {std::uint16_t{206}, std::uint16_t{204},
-                                       std::uint16_t{205}, std::uint16_t{304}}) {
+    for (const ruvia::HttpStatusCode status : {
+             ruvia::http_status::kPartialContent,
+             ruvia::http_status::kNoContent,
+             ruvia::http_status::kResetContent,
+             ruvia::http_status::kNotModified}) {
         auto response = responseWithBody(kCompressibleBody);
         response.status(status);
         RUVIA_CHECK(!tryCompress(response, Compression{.minBytes = 16}));

@@ -145,7 +145,7 @@ Task<void> HttpServer::handleStreamSession(
                 if (const auto* redirect = options_.redirect()) {
                     if (requestKnownHeader(parsed.request, RequestKnownHeader::kHost).empty()) {
                         closingRejection = Http1ClosingRejection::error(
-                            HttpErrorInfo(400, {}, "missing Host header"));
+                            HttpErrorInfo(ruvia::http_status::kBadRequest, {}, "missing Host header"));
                         break;
                     }
                     response = makeAutoHttpsRedirectResponse(
@@ -181,36 +181,15 @@ Task<void> HttpServer::handleStreamSession(
                                 bodyFailure->protocolError()));
                         break;
                     }
-                    if (auto documentResponse = tryDocumentRootResponse(parsed.request, requestMemory)) {
-                        response = std::move(*documentResponse);
-                        auto connectionPlan = http1ApplyRequestBodyConsumption(
-                            parsed.connectionPlan,
-                            parsed.bodyPlan.requiresConsumption()
-                                ? Http1RequestBodyConsumption::kIncomplete
-                                : Http1RequestBodyConsumption::kComplete);
-                        connectionPlan = finalizeBufferedRouteResponse(
-                            response,
-                            connectionPlan,
-                            requestSequence);
-                        requestCompletion.emplace(
-                            Http1SessionRequestCompletion::makeBufferedUnrestored(
-                                connectionPlan,
-                                requestHead->headerBytes()));
-                        scannerEntry.touch();
-                        break;
-                    }
-                    response = co_await routes.dispatch(
+                    response = co_await routes.dispatchBufferedResponse(
                         parsed.request,
                         routeResolution,
                         requestMemory,
+                        options_.documentRoot.root,
                         baseRouteServices);
-                    // A not-found response never consumes the request body, so it
-                    // follows the same body-aware keep-alive rule as the static
-                    // miss path above: a bodyless request keeps the connection
-                    // alive, but one that still owes body bytes must close to
-                    // avoid desyncing the next request. Previously every 404 closed
-                    // the connection, so clients hitting missing paths could not
-                    // reuse it.
+                    // An unresolved request never consumes its body, regardless
+                    // of whether the shared Web dispatch selected a document-root
+                    // file, 404, 405, or OPTIONS response.
                     auto connectionPlan = http1ApplyRequestBodyConsumption(
                         parsed.connectionPlan,
                         parsed.bodyPlan.requiresConsumption()
@@ -322,8 +301,8 @@ Task<void> HttpServer::handleStreamSession(
                     // The body reader/loader setup can throw (e.g. constructing a
                     // transfer-coding decoder for a bad Transfer-Encoding), so it
                     // stays guarded. The dispatch itself never throws:
-                    // dispatchBuffered turns any handler or routing failure into
-                    // a response, so it sits outside the guard.
+                    // dispatchBufferedResponse turns any handler or routing
+                    // failure into a response, so it sits outside the guard.
                     std::exception_ptr bodySetupException;
                     HttpLazyBufferedBodyRouteState<Stream> bodyState;
                     try {
@@ -352,10 +331,11 @@ Task<void> HttpServer::handleStreamSession(
                         break;
                     }
 
-                    response = co_await routes.dispatchBuffered(
+                    response = co_await routes.dispatchBufferedResponse(
                         parsed.request,
                         routeResolution,
                         requestMemory,
+                        options_.documentRoot.root,
                         bodyState.withLoader(baseRouteServices));
 
                     requestCompletion.emplace(completeSuccessfulHttpBodyRoute(

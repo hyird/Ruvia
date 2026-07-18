@@ -205,7 +205,7 @@ Http1InterimResponsePrepareResult Http1InterimResponseWriter::prepare(
 
     char* cursor = headBuffer.data();
     appendView(cursor, kHttp11StatusPrefix);
-    appendStatusCode(cursor, response.status());
+    appendStatusCode(cursor, response.status().value());
     *cursor++ = ' ';
     appendView(cursor, reasonPhrase);
     appendView(cursor, kCrlf);

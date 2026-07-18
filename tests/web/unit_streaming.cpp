@@ -831,7 +831,7 @@ RUVIA_TEST(response_stream_state_drives_typed_post_head_phases) {
     bound.markCommitted(ruvia::detail::httpResponseStreamCommitPlan(
         ruvia::detail::ResponseStreamFraming::kHttp1Chunked,
         ruvia::HttpKnownMethod::kGet,
-        200,
+        ruvia::http_status::kOk,
         ruvia::detail::ResponseTrailerIntent::kNone));
     bool committedContextReleased = false;
     try {
@@ -848,12 +848,12 @@ RUVIA_TEST(response_stream_state_drives_typed_post_head_phases) {
     open.markCommitted(ruvia::detail::httpResponseStreamCommitPlan(
         ruvia::detail::ResponseStreamFraming::kHttp1Chunked,
         ruvia::HttpKnownMethod::kGet,
-        207,
+        ruvia::http_status::kMultiStatus,
         ruvia::detail::ResponseTrailerIntent::kNone));
     RUVIA_CHECK(open.commitPlan() != nullptr);
     RUVIA_CHECK_EQ(
         open.commitPlan()->responseStatus(),
-        std::uint16_t{207});
+        ruvia::http_status::kMultiStatus);
     RUVIA_CHECK(
         open.commitPlan()->framing() ==
         ruvia::detail::ResponseStreamFraming::kHttp1Chunked);
@@ -862,7 +862,7 @@ RUVIA_TEST(response_stream_state_drives_typed_post_head_phases) {
         open.markCommitted(ruvia::detail::httpResponseStreamCommitPlan(
             ruvia::detail::ResponseStreamFraming::kHttp2Frames,
             ruvia::HttpKnownMethod::kGet,
-            418,
+            ruvia::HttpStatusCode::fromValue(418),
             ruvia::detail::ResponseTrailerIntent::kNone));
     } catch (const std::logic_error&) {
         recommitRejected = true;
@@ -870,7 +870,7 @@ RUVIA_TEST(response_stream_state_drives_typed_post_head_phases) {
     RUVIA_CHECK(recommitRejected);
     RUVIA_CHECK_EQ(
         open.commitPlan()->responseStatus(),
-        std::uint16_t{207});
+        ruvia::http_status::kMultiStatus);
     open.ensureBodyAllowed();  // no throw
     open.ensureTrailersAllowed(
         ruvia::detail::ResponseStreamTrailerFraming::kHttp1Chunked);
@@ -903,7 +903,7 @@ RUVIA_TEST(response_stream_state_drives_typed_post_head_phases) {
     abortedOpen.markCommitted(ruvia::detail::httpResponseStreamCommitPlan(
         ruvia::detail::ResponseStreamFraming::kHttp1Chunked,
         ruvia::HttpKnownMethod::kGet,
-        206,
+        ruvia::http_status::kPartialContent,
         ruvia::detail::ResponseTrailerIntent::kNone));
     abortedOpen.markAborted();
     abortedOpen.markAborted();
@@ -912,7 +912,7 @@ RUVIA_TEST(response_stream_state_drives_typed_post_head_phases) {
     RUVIA_CHECK(abortedOpen.committed());
     RUVIA_CHECK_EQ(
         abortedOpen.commitPlan()->responseStatus(),
-        std::uint16_t{206});
+        ruvia::http_status::kPartialContent);
     bool endAfterAbort = false;
     try {
         abortedOpen.markEnded();
@@ -936,7 +936,7 @@ RUVIA_TEST(response_stream_state_drives_typed_post_head_phases) {
     suppressed.markCommitted(ruvia::detail::httpResponseStreamCommitPlan(
         ruvia::detail::ResponseStreamFraming::kHttp1Chunked,
         ruvia::HttpKnownMethod::kHead,
-        200,
+        ruvia::http_status::kOk,
         ruvia::detail::ResponseTrailerIntent::kNone));
     bool bodyRejected = false;
     try {
@@ -952,7 +952,7 @@ RUVIA_TEST(response_stream_state_drives_typed_post_head_phases) {
     trailersOnly.markCommitted(ruvia::detail::httpResponseStreamCommitPlan(
         ruvia::detail::ResponseStreamFraming::kHttp2Frames,
         ruvia::HttpKnownMethod::kHead,
-        200,
+        ruvia::http_status::kOk,
         ruvia::detail::ResponseTrailerIntent::kPresent));
     RUVIA_CHECK(trailersOnly.committed());
     RUVIA_CHECK(!trailersOnly.ended());
@@ -1018,11 +1018,11 @@ RUVIA_TEST(scoped_operation_parent_close_destroys_cold_frame_immediately) {
 
 RUVIA_TEST(response_stream_head_rejects_a_mismatched_status_plan) {
     ruvia::HttpResponse response(std::pmr::get_default_resource());
-    response.status(201);
+    response.status(ruvia::http_status::kCreated);
     auto plan = ruvia::detail::httpResponseStreamCommitPlan(
         ruvia::detail::ResponseStreamFraming::kHttp1Chunked,
         ruvia::HttpKnownMethod::kGet,
-        202,
+        ruvia::http_status::kAccepted,
         ruvia::detail::ResponseTrailerIntent::kNone);
     bool rejected = false;
     try {

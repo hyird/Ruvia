@@ -89,7 +89,7 @@ ruvia::Task<ruvia::HttpResponse> fastHandler(void*, ruvia::Context& ctx) {
 ruvia::Task<ruvia::HttpResponse> bufferedStatusHandler(
     void*,
     ruvia::Context& ctx) {
-    ctx.status(207);
+    ctx.status(ruvia::http_status::kMultiStatus);
     co_return ctx.text("buffered-status");
 }
 
@@ -107,7 +107,7 @@ ruvia::Task<ruvia::HttpResponse> invalidHttp2ResponseHandler(
 constexpr std::size_t kLargeBufferedBytes = 100000;
 ruvia::Task<ruvia::HttpResponse> largeBufferedHandler(void*, ruvia::Context&) {
     ruvia::HttpResponse response(std::pmr::get_default_resource());
-    response.status(200);
+    response.status(ruvia::http_status::kOk);
     std::string body(kLargeBufferedBytes, 'Q');
     response.body(body);
     co_return response;
@@ -163,7 +163,7 @@ constexpr std::uint64_t kLargeFileBytes = 200000;  // > default send window (655
 // the path that had NO stream signal, so a window block could never be woken.
 ruvia::Task<ruvia::HttpResponse> largeFileHandler(void*, ruvia::Context&) {
     ruvia::HttpResponse response(std::pmr::get_default_resource());
-    response.status(200);
+    response.status(ruvia::http_status::kOk);
     ruvia::detail::setResponseFileBody(
         response, std::filesystem::path(largeFilePath()), kLargeFileBytes, 0, kLargeFileBytes);
     co_return response;
@@ -280,7 +280,7 @@ RUVIA_TEST(sansio_driver_h2_get_round_trip) {
                     if (const auto* messageEnd = event->messageEnd()) {
                         const auto streamId = messageEnd->streamId();
                         ruvia::HttpResponse response(&resource);
-                        response.status(200);
+                        response.status(ruvia::http_status::kOk);
                         response.body("pong");
                         const auto* stream = c.stream(streamId);
                         RUVIA_CHECK(stream != nullptr);
@@ -372,7 +372,7 @@ RUVIA_TEST(sansio_driver_h2_get_round_trip) {
 
 // End-to-end proof that REAL framework dispatch runs over the sans-I/O core: onReadable
 // builds an HttpRequest from the stream (Http2RequestBuilder), resolves it against a
-// RouteTable, and runs the actual dispatchBuffered pipeline (which 404s an empty table),
+// RouteTable, and runs the actual dispatchBufferedResponse pipeline (which 404s an empty table),
 // then submits the response. The client verifies a response HEADERS frame comes back --
 // proving request-build -> resolve -> dispatch -> submit works with no coroutine session.
 RUVIA_TEST(sansio_driver_h2_real_dispatch_round_trip) {
@@ -1011,7 +1011,7 @@ namespace {
 // Streaming handler that atomically ends with a trailer section: the h2 stream must
 // end with trailing HEADERS (END_STREAM) instead of an empty DATA frame.
 ruvia::Task<void> streamTrailerHandler(void*, ruvia::Context& c) {
-    c.status(207);
+    c.status(ruvia::http_status::kMultiStatus);
     auto& stream = c.streamText();
     co_await stream.write("body-part");
     const std::array<ruvia::HttpHeaderView, 1> trailers{
@@ -1027,7 +1027,7 @@ struct StreamAccessObservation final {
 
     void operator()(const ruvia::AccessLogRecord& record) noexcept {
         ++calls;
-        status = record.status();
+        status = record.status().value();
         protocolVersion = record.protocolVersion();
     }
 };

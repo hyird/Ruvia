@@ -238,7 +238,7 @@ RUVIA_TEST(multipart_reader_does_not_commit_ambiguous_close_before_more_input) {
         // accepted as complete and the invalid suffix was silently ignored.
         (void)parseMultipart({prefix, "X"}, "BOUNDARY");
     } catch (const ruvia::HttpProtocolError& error) {
-        threw = error.status() == 400;
+        threw = error.status() == ruvia::http_status::kBadRequest;
     }
     RUVIA_CHECK(threw);
 }
@@ -449,7 +449,7 @@ RUVIA_TEST(multipart_reader_rejects_invalid_boundary_terminator_without_bufferin
     try {
         future.get();
     } catch (const ruvia::HttpProtocolError& error) {
-        threw = error.status() == 413;
+        threw = error.status() == ruvia::http_status::kContentTooLarge;
     }
     RUVIA_CHECK(threw);
     // Rejected without pulling the large trailing payload chunks. Without the fix the

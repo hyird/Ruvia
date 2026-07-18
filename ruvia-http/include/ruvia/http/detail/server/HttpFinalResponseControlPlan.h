@@ -208,7 +208,8 @@ http1FinalResponseControlPlan(const HttpResponse& response) noexcept {
             }
         }
     }
-    if (statusCode == 426 && !upgradeProtocols.hasProtocol()) {
+    if (statusCode == http_status::kUpgradeRequired &&
+        !upgradeProtocols.hasProtocol()) {
         return Http1FinalResponseControlPlanResult(
             Http1FinalResponseControlPlanFailure(
                 Http1FinalResponseControlPlanError::kUpgradeRequired));
@@ -228,7 +229,7 @@ http2FinalResponseControlPlan(const HttpResponse& response) noexcept {
             Http2FinalResponseControlPlanFailure(
                 Http2FinalResponseControlPlanError::kInvalidStatus));
     }
-    if (statusCode == 426) {
+    if (statusCode == http_status::kUpgradeRequired) {
         return Http2FinalResponseControlPlanResult(
             Http2FinalResponseControlPlanFailure(
                 Http2FinalResponseControlPlanError::kUpgradeUnavailable));

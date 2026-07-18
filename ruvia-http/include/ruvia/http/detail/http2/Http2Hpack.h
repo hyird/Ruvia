@@ -9,6 +9,8 @@
 #include <variant>
 #include <vector>
 
+#include "ruvia/http/HttpStatus.h"
+
 namespace ruvia::detail {
 
 enum class HpackDecodeError {
@@ -200,7 +202,7 @@ public:
         std::uint32_t nameIndex,
         std::string_view value,
         bool neverIndexed = false);
-    static void encodeStatus(std::pmr::string& out, std::uint16_t status);
+    static void encodeStatus(std::pmr::string& out, HttpStatusCode status);
 
 private:
     static void encodeInteger(

@@ -111,7 +111,8 @@ void applyResponseCompression(
     }
 
     const auto statusCode = response.status();
-    if (statusCode == 206 || statusCode == 205) {
+    if (statusCode == http_status::kPartialContent ||
+        statusCode == http_status::kResetContent) {
         return;
     }
 

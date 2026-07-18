@@ -23,7 +23,7 @@ class HttpBufferedResponseWritePlan;
 
 class Http2BufferedResponseWriteCompleted final {
 public:
-    [[nodiscard]] constexpr std::uint16_t status() const noexcept {
+    [[nodiscard]] constexpr HttpStatusCode status() const noexcept {
         return status_;
     }
 
@@ -31,10 +31,10 @@ private:
     friend class Http2BufferedResponseWriteResult;
 
     explicit constexpr Http2BufferedResponseWriteCompleted(
-        std::uint16_t status) noexcept
+        HttpStatusCode status) noexcept
         : status_(status) {}
 
-    std::uint16_t status_;
+    HttpStatusCode status_;
 };
 
 class Http2BufferedResponseWritePeerAbortedBeforeCommit final {
@@ -46,7 +46,7 @@ private:
 
 class Http2BufferedResponseWritePeerAbortedAfterCommit final {
 public:
-    [[nodiscard]] constexpr std::uint16_t status() const noexcept {
+    [[nodiscard]] constexpr HttpStatusCode status() const noexcept {
         return status_;
     }
 
@@ -54,10 +54,10 @@ private:
     friend class Http2BufferedResponseWriteResult;
 
     explicit constexpr Http2BufferedResponseWritePeerAbortedAfterCommit(
-        std::uint16_t status) noexcept
+        HttpStatusCode status) noexcept
         : status_(status) {}
 
-    std::uint16_t status_;
+    HttpStatusCode status_;
 };
 
 class Http2BufferedResponseWriteFailedBeforeCommit final {
@@ -68,7 +68,7 @@ private:
 
 class Http2BufferedResponseWriteFailedAfterCommit final {
 public:
-    [[nodiscard]] constexpr std::uint16_t status() const noexcept {
+    [[nodiscard]] constexpr HttpStatusCode status() const noexcept {
         return status_;
     }
 
@@ -76,10 +76,10 @@ private:
     friend class Http2BufferedResponseWriteResult;
 
     explicit constexpr Http2BufferedResponseWriteFailedAfterCommit(
-        std::uint16_t status) noexcept
+        HttpStatusCode status) noexcept
         : status_(status) {}
 
-    std::uint16_t status_;
+    HttpStatusCode status_;
 };
 
 // The writer completes transport recovery (including RESET_STREAM) before
@@ -88,7 +88,7 @@ private:
 class Http2BufferedResponseWriteResult final {
 public:
     [[nodiscard]] static constexpr Http2BufferedResponseWriteResult
-    makeCompleted(std::uint16_t status) noexcept {
+    makeCompleted(HttpStatusCode status) noexcept {
         return Http2BufferedResponseWriteResult(
             Http2BufferedResponseWriteCompleted(status));
     }
@@ -100,7 +100,7 @@ public:
     }
 
     [[nodiscard]] static constexpr Http2BufferedResponseWriteResult
-    makePeerAbortedAfterCommit(std::uint16_t status) noexcept {
+    makePeerAbortedAfterCommit(HttpStatusCode status) noexcept {
         return Http2BufferedResponseWriteResult(
             Http2BufferedResponseWritePeerAbortedAfterCommit(status));
     }
@@ -112,7 +112,7 @@ public:
     }
 
     [[nodiscard]] static constexpr Http2BufferedResponseWriteResult
-    makeFailedAfterCommit(std::uint16_t status) noexcept {
+    makeFailedAfterCommit(HttpStatusCode status) noexcept {
         return Http2BufferedResponseWriteResult(
             Http2BufferedResponseWriteFailedAfterCommit(status));
     }
@@ -156,7 +156,7 @@ public:
     const Http2BufferedResponseWriteFailedAfterCommit*
     failedAfterCommit() const && = delete;
 
-    [[nodiscard]] constexpr std::optional<std::uint16_t>
+    [[nodiscard]] constexpr std::optional<HttpStatusCode>
     committedStatus() const noexcept {
         if (const auto* value = completed()) {
             return value->status();

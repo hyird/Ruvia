@@ -145,23 +145,23 @@ void checkRedirectTargetFailure(
 }  // namespace
 
 RUVIA_TEST(http_client_redirect_status_set) {
-    for (const std::uint16_t status : {
-             std::uint16_t{301},
-             std::uint16_t{302},
-             std::uint16_t{303},
-             std::uint16_t{307},
-             std::uint16_t{308}}) {
+    for (const ruvia::HttpStatusCode status : {
+             ruvia::http_status::kMovedPermanently,
+             ruvia::http_status::kFound,
+             ruvia::http_status::kSeeOther,
+             ruvia::http_status::kTemporaryRedirect,
+             ruvia::http_status::kPermanentRedirect}) {
         RUVIA_CHECK(isHttpClientRedirectStatus(status));
     }
-    for (const std::uint16_t status : {
-             std::uint16_t{200},
-             std::uint16_t{204},
-             std::uint16_t{300},
-             std::uint16_t{304},
-             std::uint16_t{305},
-             std::uint16_t{306},
-             std::uint16_t{399},
-             std::uint16_t{404}}) {
+    for (const ruvia::HttpStatusCode status : {
+             ruvia::http_status::kOk,
+             ruvia::http_status::kNoContent,
+             ruvia::http_status::kMultipleChoices,
+             ruvia::http_status::kNotModified,
+             ruvia::http_status::kUseProxy,
+             ruvia::HttpStatusCode::fromValue(306),
+             ruvia::HttpStatusCode::fromValue(399),
+             ruvia::http_status::kNotFound}) {
         RUVIA_CHECK(!isHttpClientRedirectStatus(status));
     }
 }
@@ -173,7 +173,8 @@ RUVIA_TEST(http_client_redirect_request_plan_follows_rfc) {
         HttpClientRequest request;
         request.method = "PUT";
         request.content = ruvia::HttpClientRequestContent::bytes("payload");
-        const auto plan = planHttpClientRedirectRequest(request, 303);
+        const auto plan = planHttpClientRedirectRequest(
+            request, ruvia::http_status::kSeeOther);
         RUVIA_CHECK_EQ(plan.method(), std::string_view("GET"));
         RUVIA_CHECK(
             plan.contentDisposition() == HttpClientRedirectContentDisposition::kDrop);
@@ -181,7 +182,8 @@ RUVIA_TEST(http_client_redirect_request_plan_follows_rfc) {
     {
         HttpClientRequest request;
         request.method = "HEAD";
-        const auto plan = planHttpClientRedirectRequest(request, 303);
+        const auto plan = planHttpClientRedirectRequest(
+            request, ruvia::http_status::kSeeOther);
         RUVIA_CHECK_EQ(plan.method(), std::string_view("HEAD"));
         RUVIA_CHECK(
             plan.contentDisposition() == HttpClientRedirectContentDisposition::kDrop);
@@ -193,7 +195,8 @@ RUVIA_TEST(http_client_redirect_request_plan_follows_rfc) {
         HttpClientRequest request;
         request.method = "POST";
         request.content = ruvia::HttpClientRequestContent::bytes("payload");
-        const auto plan = planHttpClientRedirectRequest(request, 302);
+        const auto plan = planHttpClientRedirectRequest(
+            request, ruvia::http_status::kFound);
         RUVIA_CHECK_EQ(plan.method(), std::string_view("GET"));
         RUVIA_CHECK(
             plan.contentDisposition() == HttpClientRedirectContentDisposition::kDrop);
@@ -202,7 +205,8 @@ RUVIA_TEST(http_client_redirect_request_plan_follows_rfc) {
         HttpClientRequest request;
         request.method = "PUT";
         request.content = ruvia::HttpClientRequestContent::bytes("payload");
-        const auto plan = planHttpClientRedirectRequest(request, 301);
+        const auto plan = planHttpClientRedirectRequest(
+            request, ruvia::http_status::kMovedPermanently);
         RUVIA_CHECK_EQ(plan.method(), std::string_view("PUT"));
         RUVIA_CHECK(
             plan.contentDisposition() == HttpClientRedirectContentDisposition::kPreserve);
@@ -212,14 +216,17 @@ RUVIA_TEST(http_client_redirect_request_plan_follows_rfc) {
     {
         HttpClientRequest request;
         request.method = "post";
-        const auto plan = planHttpClientRedirectRequest(request, 301);
+        const auto plan = planHttpClientRedirectRequest(
+            request, ruvia::http_status::kMovedPermanently);
         RUVIA_CHECK_EQ(plan.method(), std::string_view("post"));
         RUVIA_CHECK(
             plan.contentDisposition() == HttpClientRedirectContentDisposition::kPreserve);
     }
 
     // 307/308 never change method or content.
-    for (const std::uint16_t status : {std::uint16_t{307}, std::uint16_t{308}}) {
+    for (const ruvia::HttpStatusCode status : {
+             ruvia::http_status::kTemporaryRedirect,
+             ruvia::http_status::kPermanentRedirect}) {
         HttpClientRequest request;
         request.method = "POST";
         request.content = ruvia::HttpClientRequestContent::bytes("payload");
@@ -235,7 +242,8 @@ RUVIA_TEST(http_client_redirect_request_plan_owns_preserved_method) {
     HttpClientRequest request;
     request.method = method;
 
-    const auto plan = planHttpClientRedirectRequest(request, 307);
+    const auto plan = planHttpClientRedirectRequest(
+        request, ruvia::http_status::kTemporaryRedirect);
     for (char& ch : method) {
         ch = 'X';
     }
@@ -248,7 +256,7 @@ RUVIA_TEST(http_client_redirect_request_plan_owns_preserved_method) {
 
 RUVIA_TEST(http_client_response_header_lookup_distinguishes_empty_and_repeated) {
     auto head = ruvia::detail::HttpClientResponseHeadAccess::make(
-        302,
+        ruvia::http_status::kFound,
         ruvia::HttpProtocolVersion::kHttp11,
         std::pmr::get_default_resource());
     auto& headers = ruvia::detail::HttpClientResponseHeadAccess::headers(head);

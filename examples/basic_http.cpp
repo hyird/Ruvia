@@ -26,7 +26,7 @@ class AdminAuthMiddleware final : public ruvia::Middleware<AdminAuthMiddleware> 
 public:
     ruvia::Task<void> handle(ruvia::Context& c, ruvia::Next& next) {
         if (c.req().header("X-Admin-Token").value_or("") != "secret") {
-            c.respond(c.error(401, "unauthorized", "missing admin token"));
+            c.respond(c.error(ruvia::http_status::kUnauthorized, "unauthorized", "missing admin token"));
             co_return;
         }
         co_await next();
@@ -123,17 +123,17 @@ private:
         const auto body = co_await c.req().text();
         std::pmr::string owned(c.allocator<char>());
         owned.assign(body.data(), body.size());
-        c.status(201);
+        c.status(ruvia::http_status::kCreated);
         c.header("X-Echo", "true");
         co_return c.text(std::move(owned));
     }
 
     ruvia::Task<ruvia::HttpResponse> redirect(ruvia::Context& c) {
-        co_return c.redirect("/api/hello", 302);
+        co_return c.redirect("/api/hello", ruvia::http_status::kFound);
     }
 
     ruvia::Task<ruvia::HttpResponse> fail(ruvia::Context&) {
-        throw ruvia::HttpError(418, "teapot", "the example handler threw an HttpError");
+        throw ruvia::HttpError(ruvia::HttpStatusCode::fromValue(418), "teapot", "the example handler threw an HttpError");
     }
 
     ruvia::Task<ruvia::HttpResponse> health(ruvia::Context& c) {
@@ -141,7 +141,7 @@ private:
     }
 
     ruvia::Task<ruvia::HttpResponse> options(ruvia::Context& c) {
-        c.status(204);
+        c.status(ruvia::http_status::kNoContent);
         c.header("Allow", "GET, HEAD, OPTIONS");
         co_return c.text("");
     }

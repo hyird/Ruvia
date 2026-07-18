@@ -123,7 +123,7 @@ static_assert(sizeof(ruvia::detail::HttpResponseBodyPlan) <= 12);
 RUVIA_TEST(response_write_plan_unifies_method_status_and_body_size) {
     std::pmr::monotonic_buffer_resource resource;
     ruvia::HttpResponse response(&resource);
-    response.status(200);
+    response.status(ruvia::http_status::kOk);
     response.body("hello");
 
     const auto getPlan = ruvia::detail::httpBufferedResponseWritePlan(
@@ -134,10 +134,10 @@ RUVIA_TEST(response_write_plan_unifies_method_status_and_body_size) {
         getPlan.bodyPlan().requestMethod() ==
         ruvia::HttpKnownMethod::kGet);
     RUVIA_CHECK(getPlan.matchesResponse(response));
-    RUVIA_CHECK_EQ(getPlan.responseStatus(), std::uint16_t{200});
+    RUVIA_CHECK_EQ(getPlan.responseStatus(), ruvia::http_status::kOk);
     RUVIA_CHECK_EQ(
         getPlan.bodyPlan().responseStatus(),
-        std::uint16_t{200});
+        ruvia::http_status::kOk);
     RUVIA_CHECK(getPlan.statusAllowsBody());
     RUVIA_CHECK(
         getPlan.bodyPlan().contentSemantics() ==
@@ -148,7 +148,7 @@ RUVIA_TEST(response_write_plan_unifies_method_status_and_body_size) {
 
     const auto headPlan = ruvia::detail::httpBufferedResponseWritePlan(
         ruvia::HttpKnownMethod::kHead, response);
-    RUVIA_CHECK_EQ(headPlan.responseStatus(), std::uint16_t{200});
+    RUVIA_CHECK_EQ(headPlan.responseStatus(), ruvia::http_status::kOk);
     RUVIA_CHECK(headPlan.bodyPlan().statusAllowsBody());
     RUVIA_CHECK(
         headPlan.bodyPlan().contentSemantics() ==
@@ -157,10 +157,10 @@ RUVIA_TEST(response_write_plan_unifies_method_status_and_body_size) {
     RUVIA_CHECK(!headPlan.sendBody());
     RUVIA_CHECK_EQ(headPlan.contentLength(), static_cast<std::uint64_t>(5));
 
-    response.status(204);
+    response.status(ruvia::http_status::kNoContent);
     const auto noContentPlan = ruvia::detail::httpBufferedResponseWritePlan(
         ruvia::HttpKnownMethod::kGet, response);
-    RUVIA_CHECK_EQ(noContentPlan.responseStatus(), std::uint16_t{204});
+    RUVIA_CHECK_EQ(noContentPlan.responseStatus(), ruvia::http_status::kNoContent);
     RUVIA_CHECK(!noContentPlan.bodyPlan().statusAllowsBody());
     RUVIA_CHECK(
         noContentPlan.bodyPlan().contentSemantics() ==
@@ -169,7 +169,7 @@ RUVIA_TEST(response_write_plan_unifies_method_status_and_body_size) {
     RUVIA_CHECK(!noContentPlan.sendBody());
     RUVIA_CHECK_EQ(noContentPlan.contentLength(), static_cast<std::uint64_t>(0));
 
-    response.status(205);
+    response.status(ruvia::http_status::kResetContent);
     const auto resetContentPlan = ruvia::detail::httpBufferedResponseWritePlan(
         ruvia::HttpKnownMethod::kGet, response);
     RUVIA_CHECK(!resetContentPlan.bodyPlan().statusAllowsBody());
@@ -180,7 +180,7 @@ RUVIA_TEST(response_write_plan_unifies_method_status_and_body_size) {
     RUVIA_CHECK(!resetContentPlan.sendBody());
     RUVIA_CHECK_EQ(resetContentPlan.contentLength(), static_cast<std::uint64_t>(0));
 
-    response.status(200);
+    response.status(ruvia::http_status::kOk);
     const auto connectPlan = ruvia::detail::httpBufferedResponseWritePlan(
         ruvia::HttpKnownMethod::kConnect, response);
     RUVIA_CHECK(connectPlan.statusAllowsBody());
@@ -195,7 +195,7 @@ RUVIA_TEST(response_write_plan_unifies_method_status_and_body_size) {
 RUVIA_TEST(response_write_plan_rejects_mutated_response_snapshot) {
     std::pmr::monotonic_buffer_resource resource;
     ruvia::HttpResponse response(&resource);
-    response.status(207);
+    response.status(ruvia::http_status::kMultiStatus);
     response.body("old");
     const auto plan = ruvia::detail::httpBufferedResponseWritePlan(
         ruvia::HttpKnownMethod::kGet,
@@ -205,13 +205,16 @@ RUVIA_TEST(response_write_plan_rejects_mutated_response_snapshot) {
     response.body("longer");
     RUVIA_CHECK(!plan.matchesResponse(response));
     response.body("old");
-    response.status(208);
+    response.status(ruvia::http_status::kAlreadyReported);
     RUVIA_CHECK(!plan.matchesResponse(response));
 }
 
 RUVIA_TEST(response_policy_normal_status_allows_everything) {
-    for (std::uint16_t status : {std::uint16_t{200}, std::uint16_t{206},
-                                 std::uint16_t{404}, std::uint16_t{500}}) {
+    for (const ruvia::HttpStatusCode status : {
+             ruvia::http_status::kOk,
+             ruvia::http_status::kPartialContent,
+             ruvia::http_status::kNotFound,
+             ruvia::http_status::kInternalServerError}) {
         const auto policy = responseWritePolicy(status);
         RUVIA_CHECK(policy.normal() != nullptr);
         RUVIA_CHECK(policy.bodyForbidden() == nullptr);
@@ -227,8 +230,11 @@ RUVIA_TEST(response_policy_normal_status_allows_everything) {
 RUVIA_TEST(response_policy_bodyless_statuses_forbid_all_framing) {
     // 1xx informational and 204 are terminated by the empty line regardless of
     // headers (RFC 9112 §6.3 rule 1), so they carry no body and no framing headers.
-    for (std::uint16_t status : {std::uint16_t{100}, std::uint16_t{101},
-                                 std::uint16_t{199}, std::uint16_t{204}}) {
+    for (const ruvia::HttpStatusCode status : {
+             ruvia::http_status::kContinue,
+             ruvia::http_status::kSwitchingProtocols,
+             ruvia::HttpStatusCode::fromValue(199),
+             ruvia::http_status::kNoContent}) {
         const auto policy = responseWritePolicy(status);
         RUVIA_CHECK(policy.normal() == nullptr);
         RUVIA_CHECK(policy.bodyForbidden() != nullptr);
@@ -245,7 +251,7 @@ RUVIA_TEST(response_policy_reset_content_owns_zero_length_framing) {
     // RFC 9110 §15.3.6 forbids content in 205. HTTP/1 does not infer a zero
     // length from that status, so the writer owns one canonical Content-Length:
     // 0 and rejects both caller-owned length and transfer coding declarations.
-    const auto policy = responseWritePolicy(205);
+    const auto policy = responseWritePolicy(ruvia::http_status::kResetContent);
     RUVIA_CHECK(policy.normal() == nullptr);
     RUVIA_CHECK(policy.bodyForbidden() == nullptr);
     RUVIA_CHECK(policy.zeroLength() != nullptr);
@@ -259,7 +265,7 @@ RUVIA_TEST(response_policy_reset_content_owns_zero_length_framing) {
 RUVIA_TEST(response_policy_not_modified_keeps_explicit_content_length) {
     // 304 has no body, but may echo the Content-Length of the selected
     // representation; auto length and transfer-encoding stay forbidden.
-    const auto policy = responseWritePolicy(304);
+    const auto policy = responseWritePolicy(ruvia::http_status::kNotModified);
     RUVIA_CHECK(policy.normal() == nullptr);
     RUVIA_CHECK(policy.bodyForbidden() == nullptr);
     RUVIA_CHECK(policy.zeroLength() == nullptr);
@@ -274,7 +280,7 @@ RUVIA_TEST(http1_response_head_framing_is_an_exclusive_plan) {
     ruvia::HttpResponse response(std::pmr::get_default_resource());
     response.body("hello");
     const auto bodyPlan = ruvia::detail::httpResponseBodyPlan(
-        ruvia::HttpKnownMethod::kGet, 200);
+        ruvia::HttpKnownMethod::kGet, ruvia::http_status::kOk);
     const auto connectionPlan =
         ruvia::detail::http1PlanHttp11RequestConnection(
             ruvia::detail::HttpConnectionOptions{});
@@ -310,7 +316,7 @@ RUVIA_TEST(http1_response_head_framing_is_an_exclusive_plan) {
         buffered.buffered()->contentLength(),
         std::uint64_t{5});
     RUVIA_CHECK_EQ(combined.contentLength(), std::uint64_t{5});
-    RUVIA_CHECK_EQ(combined.responseStatus(), std::uint16_t{200});
+    RUVIA_CHECK_EQ(combined.responseStatus(), ruvia::http_status::kOk);
     RUVIA_CHECK(combined.sendBody());
     RUVIA_CHECK(
         combined.bodyPlan().requestMethod() == ruvia::HttpKnownMethod::kGet);

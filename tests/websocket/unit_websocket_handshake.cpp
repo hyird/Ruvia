@@ -327,7 +327,7 @@ RUVIA_TEST(ws_valid_request_requires_all_conditions) {
     RUVIA_CHECK(unsupportedVersion.failure() != nullptr);
     if (const auto* failure = unsupportedVersion.failure()) {
         const auto error = failure->protocolError();
-        RUVIA_CHECK_EQ(error.status(), 400);
+        RUVIA_CHECK_EQ(error.status(), ruvia::http_status::kBadRequest);
         RUVIA_CHECK_EQ(
             std::string_view(error.what()),
             std::string_view("unsupported WebSocket version"));

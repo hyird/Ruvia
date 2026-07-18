@@ -21,6 +21,7 @@
 #include "ruvia/http/HttpHeader.h"
 #include "ruvia/http/HttpProtocolVersion.h"
 #include "ruvia/http/HttpRequest.h"
+#include "ruvia/http/HttpStatus.h"
 #include "ruvia/web/StaticFiles.h"
 
 namespace ruvia {
@@ -394,7 +395,7 @@ public:
         return remoteAddress_;
     }
 
-    [[nodiscard]] constexpr std::uint16_t status() const noexcept {
+    [[nodiscard]] constexpr HttpStatusCode status() const noexcept {
         return status_;
     }
 
@@ -412,7 +413,7 @@ private:
     constexpr AccessLogRecord(
         const HttpRequest& request,
         std::string_view remoteAddress,
-        std::uint16_t status,
+        HttpStatusCode status,
         std::uint64_t durationMicros) noexcept
         : request_(request),
           remoteAddress_(remoteAddress),
@@ -421,7 +422,7 @@ private:
 
     const HttpRequest& request_;
     std::string_view remoteAddress_;
-    std::uint16_t status_;
+    HttpStatusCode status_;
     std::uint64_t durationMicros_;
 };
 

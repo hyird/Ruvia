@@ -62,7 +62,7 @@ static_assert(std::same_as<
 RUVIA_TEST(http1_interim_response_writer_emits_exact_typed_head) {
     std::array<char, 64> buffer{};
     const auto result = Http1InterimResponseWriter().prepare(
-        HttpInterimResponseHead(100), buffer);
+        HttpInterimResponseHead(ruvia::http_status::kContinue), buffer);
     const auto* const prepared = result.prepared();
     RUVIA_CHECK(prepared != nullptr);
     if (prepared != nullptr) {
@@ -81,7 +81,7 @@ RUVIA_TEST(http1_interim_response_writer_emits_exact_typed_head) {
     };
     std::array<char, 256> hintsBuffer{};
     const auto hintsResult = Http1InterimResponseWriter().prepare(
-        HttpInterimResponseHead(103, hints), hintsBuffer);
+        HttpInterimResponseHead(ruvia::http_status::kEarlyHints, hints), hintsBuffer);
     const auto* const preparedHints = hintsResult.prepared();
     RUVIA_CHECK(preparedHints != nullptr);
     if (preparedHints != nullptr) {
@@ -102,7 +102,7 @@ RUVIA_TEST(http1_interim_response_writer_emits_exact_typed_head) {
 RUVIA_TEST(http1_interim_response_writer_preserves_required_status_line_space) {
     std::array<char, 32> buffer{};
     const auto result = Http1InterimResponseWriter().prepare(
-        HttpInterimResponseHead(199), buffer);
+        HttpInterimResponseHead(ruvia::HttpStatusCode::fromValue(199)), buffer);
     const auto* const prepared = result.prepared();
     RUVIA_CHECK(prepared != nullptr);
     if (prepared != nullptr) {
@@ -121,7 +121,7 @@ RUVIA_TEST(http1_interim_response_writer_closes_after_containing_response) {
     };
     std::array<char, 128> buffer{};
     const auto result = Http1InterimResponseWriter().prepare(
-        HttpInterimResponseHead(103, fields), buffer);
+        HttpInterimResponseHead(ruvia::http_status::kEarlyHints, fields), buffer);
     const auto* const prepared = result.prepared();
     RUVIA_CHECK(prepared != nullptr);
     if (prepared != nullptr) {
@@ -138,7 +138,7 @@ RUVIA_TEST(http1_interim_response_writer_buffer_too_small_is_transactional) {
     std::array<char, 8> buffer;
     buffer.fill('#');
     const auto result = Http1InterimResponseWriter().prepare(
-        HttpInterimResponseHead(100), buffer);
+        HttpInterimResponseHead(ruvia::http_status::kContinue), buffer);
     const auto* const tooSmall = result.bufferTooSmall();
     RUVIA_CHECK(tooSmall != nullptr);
     if (tooSmall != nullptr) {
@@ -156,7 +156,7 @@ RUVIA_TEST(http1_interim_response_writer_rejects_invalid_fields_transactionally)
         std::array<char, 64> buffer;
         buffer.fill('@');
         const auto result = Http1InterimResponseWriter().prepare(
-            HttpInterimResponseHead(103, fields), buffer);
+            HttpInterimResponseHead(ruvia::http_status::kEarlyHints, fields), buffer);
         const auto* const failure = result.failure();
         return failure != nullptr &&
             failure->error() == expected &&
@@ -241,7 +241,7 @@ RUVIA_TEST(http1_interim_response_writer_enforces_field_and_size_limits) {
     buffer.fill('!');
     const auto tooManyResult = Http1InterimResponseWriter().prepare(
         HttpInterimResponseHead(
-            103,
+            ruvia::http_status::kEarlyHints,
             std::span<const HttpHeaderView>(tooMany)),
         buffer);
     RUVIA_CHECK(tooManyResult.failure() != nullptr);
@@ -255,7 +255,7 @@ RUVIA_TEST(http1_interim_response_writer_enforces_field_and_size_limits) {
     const std::string oversizedValue(ruvia::kMaxHttpHeaderBytes, 'x');
     const HttpHeaderView oversized[] = {{"X-Hint", oversizedValue}};
     const auto oversizedResult = Http1InterimResponseWriter().prepare(
-        HttpInterimResponseHead(103, oversized), buffer);
+        HttpInterimResponseHead(ruvia::http_status::kEarlyHints, oversized), buffer);
     RUVIA_CHECK(oversizedResult.failure() != nullptr);
     if (oversizedResult.failure() != nullptr) {
         RUVIA_CHECK_EQ(

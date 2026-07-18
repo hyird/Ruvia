@@ -62,7 +62,7 @@ using ruvia::detail::writeResponseWithScratch;
 
 template <typename Alternative>
 concept HasStatus = requires(const Alternative& alternative) {
-    { alternative.status() } -> std::same_as<std::uint16_t>;
+    { alternative.status() } -> std::same_as<ruvia::HttpStatusCode>;
 };
 
 template <typename Alternative>
@@ -119,7 +119,7 @@ static_assert(std::same_as<
 static_assert(std::same_as<
     decltype(std::declval<const Http1BufferedResponseWriteResult&>()
                  .committedStatus()),
-    std::optional<std::uint16_t>>);
+    std::optional<ruvia::HttpStatusCode>>);
 static_assert(std::is_trivially_copyable_v<
     Http1BufferedResponseWriteResult>);
 static_assert(sizeof(Http1BufferedResponseWriteResult) <= 4);
@@ -272,7 +272,7 @@ enum class WriteScenario {
     std::size_t bodyBytes = 7) {
     WorkerMemory memory;
     HttpResponse response(std::pmr::get_default_resource());
-    response.status(207);
+    response.status(ruvia::http_status::kMultiStatus);
     const std::string body(bodyBytes, 'x');
     ruvia::detail::setResponseBodyBorrowedView(response, body);
     const auto responsePlan = http1BufferedResponsePlan(
@@ -321,7 +321,7 @@ enum class WriteScenario {
     std::uint64_t size) {
     WorkerMemory memory;
     HttpResponse response(std::pmr::get_default_resource());
-    response.status(207);
+    response.status(ruvia::http_status::kMultiStatus);
     setResponseFileBody(response, path, size);
     const auto responsePlan = http1BufferedResponsePlan(
         httpBufferedResponseWritePlan(HttpKnownMethod::kGet, response),
@@ -355,9 +355,11 @@ RUVIA_TEST(http1_buffered_write_completion_owns_plan_status) {
     RUVIA_CHECK(result.completed() != nullptr);
     RUVIA_CHECK(result.failedBeforeCommit() == nullptr);
     RUVIA_CHECK(result.failedAfterCommit() == nullptr);
-    RUVIA_CHECK_EQ(result.completed()->status(), std::uint16_t{207});
+    RUVIA_CHECK_EQ(result.completed()->status(), ruvia::http_status::kMultiStatus);
     RUVIA_CHECK(result.committedStatus().has_value());
-    RUVIA_CHECK_EQ(result.committedStatus().value_or(0), std::uint16_t{207});
+    RUVIA_CHECK_EQ(
+        result.committedStatus(),
+        std::optional<ruvia::HttpStatusCode>{ruvia::http_status::kMultiStatus});
 }
 
 RUVIA_TEST(http1_buffered_write_partial_head_has_no_status) {
@@ -375,9 +377,11 @@ RUVIA_TEST(http1_buffered_write_body_failure_keeps_committed_status) {
     RUVIA_CHECK(result.completed() == nullptr);
     RUVIA_CHECK(result.failedBeforeCommit() == nullptr);
     RUVIA_CHECK(result.failedAfterCommit() != nullptr);
-    RUVIA_CHECK_EQ(result.failedAfterCommit()->status(), std::uint16_t{207});
+    RUVIA_CHECK_EQ(result.failedAfterCommit()->status(), ruvia::http_status::kMultiStatus);
     RUVIA_CHECK(result.committedStatus().has_value());
-    RUVIA_CHECK_EQ(result.committedStatus().value_or(0), std::uint16_t{207});
+    RUVIA_CHECK_EQ(
+        result.committedStatus(),
+        std::optional<ruvia::HttpStatusCode>{ruvia::http_status::kMultiStatus});
 }
 
 RUVIA_TEST(http1_buffered_scatter_write_keeps_committed_status) {
@@ -388,12 +392,14 @@ RUVIA_TEST(http1_buffered_scatter_write_keeps_committed_status) {
     RUVIA_CHECK(result.failedBeforeCommit() == nullptr);
     RUVIA_CHECK(result.failedAfterCommit() != nullptr);
     RUVIA_CHECK(result.committedStatus().has_value());
-    RUVIA_CHECK_EQ(result.committedStatus().value_or(0), std::uint16_t{207});
+    RUVIA_CHECK_EQ(
+        result.committedStatus(),
+        std::optional<ruvia::HttpStatusCode>{ruvia::http_status::kMultiStatus});
 }
 
 RUVIA_TEST(http1_buffered_write_cannot_complete_without_a_full_head) {
     HttpResponse response(std::pmr::get_default_resource());
-    response.status(207);
+    response.status(ruvia::http_status::kMultiStatus);
     const auto responsePlan = http1BufferedResponsePlan(
         httpBufferedResponseWritePlan(HttpKnownMethod::kGet, response),
         Http1ServerConnectionPlan::http11Close());
@@ -491,7 +497,9 @@ RUVIA_TEST(http1_buffered_file_fallback_completion_owns_status) {
     RUVIA_CHECK(result.failedBeforeCommit() == nullptr);
     RUVIA_CHECK(result.failedAfterCommit() == nullptr);
     RUVIA_CHECK(result.committedStatus().has_value());
-    RUVIA_CHECK_EQ(result.committedStatus().value_or(0), std::uint16_t{207});
+    RUVIA_CHECK_EQ(
+        result.committedStatus(),
+        std::optional<ruvia::HttpStatusCode>{ruvia::http_status::kMultiStatus});
 }
 
 RUVIA_TEST(http1_buffered_file_open_failure_preserves_committed_status) {
@@ -505,5 +513,7 @@ RUVIA_TEST(http1_buffered_file_open_failure_preserves_committed_status) {
     RUVIA_CHECK(result.failedBeforeCommit() == nullptr);
     RUVIA_CHECK(result.failedAfterCommit() != nullptr);
     RUVIA_CHECK(result.committedStatus().has_value());
-    RUVIA_CHECK_EQ(result.committedStatus().value_or(0), std::uint16_t{207});
+    RUVIA_CHECK_EQ(
+        result.committedStatus(),
+        std::optional<ruvia::HttpStatusCode>{ruvia::http_status::kMultiStatus});
 }

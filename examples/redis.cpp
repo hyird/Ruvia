@@ -88,7 +88,7 @@ public:
     ruvia::Task<ruvia::HttpResponse> getValue(ruvia::Context& c) {
         auto value = co_await c.redis().get(c.req().param("key").value_or(""));
         if (!value) {
-            co_return c.error(404, "not_found", "redis key not found");
+            co_return c.error(ruvia::http_status::kNotFound, "not_found", "redis key not found");
         }
         co_return c.text(std::move(*value));
     }

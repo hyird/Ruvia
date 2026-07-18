@@ -156,7 +156,7 @@ concept HasUnaryContextParam = requires(const T& context) {
 
 template <typename T>
 concept HasContextStatusTextSetter = requires(T& context) {
-    context.status(200, std::string_view{});
+    context.status(ruvia::http_status::kOk, std::string_view{});
 };
 
 template <typename T>
@@ -845,7 +845,7 @@ concept HasResponseSetStatusAlias = requires(T& response) {
 
 template <typename T>
 concept HasResponseStatusSetter = requires(T& response) {
-    { response.status(std::uint16_t{200}) } -> std::same_as<void>;
+    { response.status(ruvia::http_status::kOk) } -> std::same_as<void>;
 };
 
 template <typename T>
@@ -860,7 +860,7 @@ concept HasResponseStatusCodeAlias = requires(const T& response) {
 
 template <typename T>
 concept HasResponseStatusGetter = requires(const T& response) {
-    { response.status() } -> std::same_as<std::uint16_t>;
+    { response.status() } -> std::same_as<ruvia::HttpStatusCode>;
 };
 
 using ResponseHeadersGetter = const ruvia::HttpResponseHeaders& (
@@ -892,7 +892,7 @@ concept HasHttpClientResponseHeadStatusCodeField = requires {
 
 template <typename T>
 concept HasHttpClientResponseHeadStatusGetter = requires(const T& head) {
-    { head.status() } -> std::same_as<std::uint16_t>;
+    { head.status() } -> std::same_as<ruvia::HttpStatusCode>;
 };
 
 template <typename T>
@@ -1791,7 +1791,7 @@ concept HasAccessLogRecordCanonicalReadAccessors = requires(const T& record) {
     { record.knownMethod() } -> std::same_as<ruvia::HttpKnownMethod>;
     { record.path() } -> std::same_as<std::string_view>;
     { record.remoteAddress() } -> std::same_as<std::string_view>;
-    { record.status() } -> std::same_as<std::uint16_t>;
+    { record.status() } -> std::same_as<ruvia::HttpStatusCode>;
     { record.durationMicros() } -> std::same_as<std::uint64_t>;
     { record.protocolVersion() } -> std::same_as<ruvia::HttpProtocolVersion>;
 };
@@ -1826,7 +1826,7 @@ concept HasHttpErrorInfoPublicFields = requires(T& info) {
 
 template <typename T>
 concept HasHttpErrorInfoCanonicalReadAccessors = requires(const T& info) {
-    { info.status() } -> std::same_as<std::uint16_t>;
+    { info.status() } -> std::same_as<ruvia::HttpStatusCode>;
     { info.statusText() } -> std::same_as<std::string_view>;
     { info.code() } -> std::same_as<std::string_view>;
     { info.message() } -> std::same_as<std::string_view>;
@@ -2329,6 +2329,10 @@ static_assert(!std::is_default_constructible_v<ruvia::HttpRequest>);
 static_assert(std::derived_from<ruvia::HttpProtocolError, std::exception>);
 static_assert(std::is_nothrow_constructible_v<
     ruvia::HttpProtocolError,
+    ruvia::HttpStatusCode,
+    std::string_view>);
+static_assert(!std::is_constructible_v<
+    ruvia::HttpProtocolError,
     std::uint16_t,
     std::string_view>);
 static_assert(HasHttpRequestQueryGetter<ruvia::HttpRequest>);
@@ -2646,7 +2650,7 @@ static_assert(std::same_as<
     decltype(ruvia::RateLimitRule::fixedWindow(
         std::size_t{1}, std::chrono::seconds(1))),
     ruvia::RateLimitRule>);
-static_assert(!HasAppUseMiddlewareTemplate<ruvia::App>);
+static_assert(HasAppUseMiddlewareTemplate<ruvia::App>);
 static_assert(!std::is_constructible_v<ruvia::detail::ControllerRouteBuilder, ruvia::Router&, std::string_view>);
 #ifndef _MSC_VER
 static_assert(!HasControllerRouteBuilderPublicRegisterRoute<ruvia::detail::ControllerRouteBuilder>);
@@ -2972,7 +2976,7 @@ static_assert(!HasHttpClientRedirectStatus<
 static_assert(std::same_as<
     decltype(ruvia::planHttpClientRedirectRequest(
         std::declval<const ruvia::HttpClientRequest&>(),
-        std::uint16_t{},
+        ruvia::http_status::kFound,
         std::declval<std::pmr::memory_resource*>())),
     ruvia::HttpClientRedirectRequestPlan>);
 static_assert(!std::is_copy_constructible_v<
@@ -3018,7 +3022,7 @@ static_assert(HasDotenvResultCanonicalReadAccessors<ruvia::DotenvResult>);
 static_assert(!ExposesAnyRvalueEnvBorrow<ruvia::Env>);
 static_assert(!HasContextRenderPipeline<ruvia::Context>);
 static_assert(std::is_same_v<
-    decltype(std::declval<ruvia::Context&>().status(204)),
+    decltype(std::declval<ruvia::Context&>().status(ruvia::http_status::kNoContent)),
     void>);
 static_assert(std::is_same_v<
     decltype(std::declval<ruvia::Context&>().header(std::string_view{}, std::string_view{})),
@@ -3133,7 +3137,7 @@ std::string_view jsonKindName(ruvia::JsonValue::Kind kind) noexcept {
 }  // namespace
 
 ruvia::Task<ruvia::HttpResponse> surfaceNotFound(ruvia::Context& c) {
-    c.status(404);
+    c.status(ruvia::http_status::kNotFound);
     c.header("X-Surface-Not-Found", "true");
     co_return c.text("surface not found\n");
 }
@@ -3145,10 +3149,11 @@ public:
         if (c.error()) {
             const auto* downstreamResponse = c.response();
             const bool hadDownstreamErrorResponse = downstreamResponse != nullptr;
-            const auto downstreamStatus = downstreamResponse == nullptr
-                ? 0
-                : downstreamResponse->status();
-            c.status(500);
+            const bool downstreamWasInternalError =
+                downstreamResponse != nullptr &&
+                downstreamResponse->status() ==
+                    ruvia::http_status::kInternalServerError;
+            c.status(ruvia::http_status::kInternalServerError);
             auto response = c.text("caught by middleware\n");
             response.header("X-Surface-Error", "true");
             response.header(
@@ -3156,7 +3161,7 @@ public:
                 hadDownstreamErrorResponse ? "true" : "false");
             response.header(
                 "X-Surface-Error-Status",
-                downstreamStatus == 500 ? "500" : "other");
+                downstreamWasInternalError ? "500" : "other");
             c.respond(std::move(response));
             co_return;
         }
@@ -3168,7 +3173,7 @@ public:
 class SurfaceReturnMiddleware final : public ruvia::Middleware<SurfaceReturnMiddleware> {
 public:
     ruvia::Task<ruvia::HttpResponse> handle(ruvia::Context& c, ruvia::Next&) {
-        c.status(209);
+        c.status(ruvia::HttpStatusCode::fromValue(209));
         co_return c.text("returned by middleware\n");
     }
 };
@@ -3290,7 +3295,7 @@ private:
     }
 
     ruvia::Task<ruvia::HttpResponse> rawBody(ruvia::Context& c) {
-        c.status(202);
+        c.status(ruvia::http_status::kAccepted);
         c.header("X-Raw", "first");
         c.header("X-Raw", "second", {.append = true});
         c.header("X-Raw-Init", "true");
@@ -3300,7 +3305,7 @@ private:
     ruvia::Task<ruvia::HttpResponse> responseSlot(ruvia::Context& c) {
         c.header("X-Response-Prepared", "true");
         ruvia::HttpResponse response(c.resource());
-        response.status(203);
+        response.status(ruvia::http_status::kNonAuthoritativeInformation);
         response.header("X-Response-Remove", "drop");
         response.body("response slot\n");
         response.header("X-Response-Slot", "true", {.append = true});
@@ -3309,7 +3314,7 @@ private:
     }
 
     ruvia::Task<ruvia::HttpResponse> resSlotOnly(ruvia::Context& c) {
-        c.status(500);
+        c.status(ruvia::http_status::kInternalServerError);
         co_return c.text("handler should not run\n");
     }
 
@@ -3324,7 +3329,7 @@ private:
     }
 
     ruvia::Task<ruvia::HttpResponse> nullBody(ruvia::Context& c) {
-        c.status(202);
+        c.status(ruvia::http_status::kAccepted);
         c.header("X-Null-Body", "true");
         co_return c.body(nullptr);
     }
@@ -3334,7 +3339,7 @@ private:
             std::byte{0x00},
             std::byte{0x41},
             std::byte{0xff}};
-        c.status(206);
+        c.status(ruvia::http_status::kPartialContent);
         c.header("X-Binary-Body", "true");
         co_return c.body(std::span<const std::byte>(bytes));
     }
@@ -3349,17 +3354,17 @@ private:
     }
 
     ruvia::Task<ruvia::HttpResponse> redirectUnicode(ruvia::Context& c) {
-        co_return c.redirect("/目标?x=值", 303);
+        co_return c.redirect("/目标?x=值", ruvia::http_status::kSeeOther);
     }
 
     ruvia::Task<ruvia::HttpResponse> redirectPreparedLocation(ruvia::Context& c) {
         c.header("Location", "/surface/wrong");
-        co_return c.redirect("/surface/right", 302);
+        co_return c.redirect("/surface/right", ruvia::http_status::kFound);
     }
 
     ruvia::Task<ruvia::HttpResponse> appError(ruvia::Context& c) {
         c.header("X-Error-Prepared", "true");
-        co_return c.error(418, "teapot", "short and stout", "I'm a Teapot");
+        co_return c.error(ruvia::HttpStatusCode::fromValue(418), "teapot", "short and stout", "I'm a Teapot");
     }
 
     ruvia::Task<ruvia::HttpResponse> throwError(ruvia::Context&) {
@@ -3376,7 +3381,7 @@ private:
     }
 
     ruvia::Task<ruvia::HttpResponse> middlewareReturnHandler(ruvia::Context& c) {
-        c.status(500);
+        c.status(ruvia::http_status::kInternalServerError);
         co_return c.text("handler should not run\n");
     }
 
@@ -3585,7 +3590,7 @@ private:
 
     ruvia::Task<ruvia::HttpResponse> discard(ruvia::Context& c) {
         co_await c.req().discardBody();
-        c.status(204);
+        c.status(ruvia::http_status::kNoContent);
         co_return c.text("");
     }
 
@@ -3678,7 +3683,7 @@ private:
 
     ruvia::Task<ruvia::HttpResponse> manualBody(ruvia::Context& c) {
         ruvia::HttpResponse response(c.resource());
-        response.status(202);
+        response.status(ruvia::http_status::kAccepted);
         response.header("Content-Type", "text/plain; charset=UTF-8");
         response.header("X-Manual-Body", "owned");
         response.body("copied body\n");
@@ -3737,7 +3742,7 @@ private:
     }
 
     ruvia::Task<ruvia::HttpResponse> bodyResponse(ruvia::Context& c) {
-        c.status(201);
+        c.status(ruvia::http_status::kCreated);
         c.header("X-Body-Prepared", "true");
         c.header("X-Body-Response", "true");
         co_return c.body("body response\n");

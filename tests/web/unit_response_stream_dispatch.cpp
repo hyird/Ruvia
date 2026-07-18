@@ -202,17 +202,17 @@ private:
 };
 
 Task<void> streamWithStatus(void* target, Context& context) {
-    context.status(*static_cast<const std::uint16_t*>(target));
+    context.status(*static_cast<const ruvia::HttpStatusCode*>(target));
     co_await context.stream().write("payload");
 }
 
 Task<void> streamWithoutCommit(void* target, Context& context) {
-    context.status(*static_cast<const std::uint16_t*>(target));
+    context.status(*static_cast<const ruvia::HttpStatusCode*>(target));
     co_return;
 }
 
 Task<void> failAfterCommit(void* target, Context& context) {
-    context.status(*static_cast<const std::uint16_t*>(target));
+    context.status(*static_cast<const ruvia::HttpStatusCode*>(target));
     co_await context.stream().write("partial");
     throw std::runtime_error("stream failed after commit");
 }
@@ -285,7 +285,7 @@ Task<void> failAfterCommit(void* target, Context& context) {
 }  // namespace
 
 RUVIA_TEST(response_stream_dispatch_preserves_exact_committed_status) {
-    std::uint16_t status = 207;
+    ruvia::HttpStatusCode status = ruvia::http_status::kMultiStatus;
     auto result = dispatchStream(
         RouteStreamHandler(&status, &streamWithStatus),
         false);
@@ -299,7 +299,7 @@ RUVIA_TEST(response_stream_dispatch_preserves_exact_committed_status) {
 }
 
 RUVIA_TEST(response_stream_dispatch_distinguishes_precommit_peer_abort) {
-    std::uint16_t status = 202;
+    ruvia::HttpStatusCode status = ruvia::http_status::kAccepted;
     auto result = dispatchStream(
         RouteStreamHandler(&status, &streamWithoutCommit),
         true);
@@ -308,7 +308,7 @@ RUVIA_TEST(response_stream_dispatch_distinguishes_precommit_peer_abort) {
 }
 
 RUVIA_TEST(response_stream_dispatch_distinguishes_committed_peer_abort) {
-    std::uint16_t status = 206;
+    ruvia::HttpStatusCode status = ruvia::http_status::kPartialContent;
     auto result = dispatchStream(
         RouteStreamHandler(&status, &streamWithStatus),
         true);
@@ -321,7 +321,7 @@ RUVIA_TEST(response_stream_dispatch_distinguishes_committed_peer_abort) {
 }
 
 RUVIA_TEST(response_stream_dispatch_end_commits_bodyless_status) {
-    std::uint16_t status = 204;
+    ruvia::HttpStatusCode status = ruvia::http_status::kNoContent;
     auto result = dispatchStream(
         RouteStreamHandler(&status, &streamWithoutCommit),
         false);
@@ -336,7 +336,7 @@ RUVIA_TEST(response_stream_dispatch_end_commits_bodyless_status) {
 }
 
 RUVIA_TEST(response_stream_dispatch_preserves_committed_failure_status) {
-    std::uint16_t status = 503;
+    ruvia::HttpStatusCode status = ruvia::http_status::kServiceUnavailable;
     auto result = dispatchStream(
         RouteStreamHandler(&status, &failAfterCommit),
         false);
@@ -349,7 +349,7 @@ RUVIA_TEST(response_stream_dispatch_preserves_committed_failure_status) {
 
 RUVIA_TEST(response_stream_dispatch_types_precommit_failure_response) {
     HttpResponse response(std::pmr::get_default_resource());
-    response.status(502);
+    response.status(ruvia::http_status::kBadGateway);
     auto result = ResponseStreamDispatchResult::makeRecoveredFailure(
         std::move(response));
 
@@ -359,6 +359,6 @@ RUVIA_TEST(response_stream_dispatch_types_precommit_failure_response) {
     RUVIA_CHECK(result.peerAbortedBeforeCommit() == nullptr);
     if (recoveredFailure != nullptr) {
         const auto recovered = std::move(*recoveredFailure).takeResponse();
-        RUVIA_CHECK_EQ(recovered.status(), std::uint16_t{502});
+        RUVIA_CHECK_EQ(recovered.status(), ruvia::http_status::kBadGateway);
     }
 }

@@ -10,13 +10,13 @@
 #include "ruvia/http/HttpResponse.h"
 
 int main() {
-    const ruvia::HttpInterimResponseHead earlyHints(103);
-    if (earlyHints.status() != 103 || !earlyHints.headers().empty()) {
+    const ruvia::HttpInterimResponseHead earlyHints(ruvia::http_status::kEarlyHints);
+    if (earlyHints.status() != ruvia::http_status::kEarlyHints || !earlyHints.headers().empty()) {
         return 4;
     }
     std::array<char, 32> interimHeadBuffer{};
     const auto interimResult = ruvia::Http1InterimResponseWriter().prepare(
-        ruvia::HttpInterimResponseHead(100), interimHeadBuffer);
+        ruvia::HttpInterimResponseHead(ruvia::http_status::kContinue), interimHeadBuffer);
     if (interimResult.prepared() == nullptr ||
         interimResult.prepared()->head() !=
             "HTTP/1.1 100 Continue\r\n\r\n") {
@@ -53,7 +53,7 @@ int main() {
     return origin.host().empty() || origin.port() != 443 ||
             origin.scheme() != ruvia::HttpScheme::kHttps ||
             responseHead == nullptr ||
-            responseHead->head().status() != 204 ||
+            responseHead->head().status() != ruvia::http_status::kNoContent ||
             responseHead->plan().withoutContent() == nullptr
         ? 3
         : 0;

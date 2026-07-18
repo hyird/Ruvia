@@ -80,7 +80,7 @@ RouteLimitResult runRouteLimit(RateLimiter& limiter, std::uintptr_t scope,
     r.hasResponse = ContextAccess::hasResponse(context);
     if (r.hasResponse) {
         auto response = ContextAccess::takeResponse(context);
-        r.status = response.status();
+        r.status = response.status().value();
         r.retryAfter = std::string(
             response.header("Retry-After").value_or(std::string_view{}));
         r.limit = std::string(
@@ -117,7 +117,7 @@ RUVIA_TEST(rate_limit_rejection_owns_web_error_and_retry_headers) {
     RUVIA_CHECK(rejection != nullptr);
 
     const auto error = ruvia::detail::rateLimitRejectionError();
-    RUVIA_CHECK_EQ(error.status(), std::uint16_t{429});
+    RUVIA_CHECK_EQ(error.status(), ruvia::http_status::kTooManyRequests);
     RUVIA_CHECK_EQ(error.code(), std::string_view("too_many_requests"));
     RUVIA_CHECK_EQ(error.message(), std::string_view("rate limit exceeded"));
 
@@ -142,9 +142,9 @@ RUVIA_TEST(http1_closing_rejection_has_exclusive_error_alternatives) {
     RUVIA_CHECK(none.rateLimit() == nullptr);
 
     const auto ordinary = Http1ClosingRejection::error(
-        ruvia::HttpErrorInfo(400, {}, "bad request"));
+        ruvia::HttpErrorInfo(ruvia::http_status::kBadRequest, {}, "bad request"));
     RUVIA_CHECK(ordinary.error() != nullptr);
-    RUVIA_CHECK_EQ(ordinary.error()->status(), std::uint16_t{400});
+    RUVIA_CHECK_EQ(ordinary.error()->status(), ruvia::http_status::kBadRequest);
     RUVIA_CHECK(ordinary.rateLimit() == nullptr);
 
     const auto decision = RateLimitDecision::reject(
@@ -153,7 +153,7 @@ RUVIA_TEST(http1_closing_rejection_has_exclusive_error_alternatives) {
         ruvia::detail::rateLimitRejectionError(),
         *decision.rejection());
     RUVIA_CHECK(limited.error() != nullptr);
-    RUVIA_CHECK_EQ(limited.error()->status(), std::uint16_t{429});
+    RUVIA_CHECK_EQ(limited.error()->status(), ruvia::http_status::kTooManyRequests);
     RUVIA_CHECK(limited.rateLimit() != nullptr);
     RUVIA_CHECK_EQ(
         limited.rateLimit()->retryAfter(),

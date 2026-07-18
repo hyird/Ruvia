@@ -152,7 +152,7 @@ validateHttp2InterimResponseHeaders(
     std::array<char, 3> statusBytes{};
     const auto [statusEnd, statusError] = std::to_chars(
         statusBytes.data(), statusBytes.data() + statusBytes.size(),
-        response.status());
+        response.status().value());
     if (statusError != std::errc{} ||
         statusEnd != statusBytes.data() + statusBytes.size()) {
         return Http2InterimResponseHeaderEncodeStatus::kInvalidHeader;
@@ -215,7 +215,7 @@ appendHttp2InterimResponseHeaders(
     std::array<char, 3> statusBytes{};
     const auto [statusEnd, statusError] = std::to_chars(
         statusBytes.data(), statusBytes.data() + statusBytes.size(),
-        plan.bodyPlan().responseStatus());
+        plan.bodyPlan().responseStatus().value());
     HttpHeaderSectionSize sectionSize;
     if (statusError != std::errc{} ||
         statusEnd != statusBytes.data() + statusBytes.size() ||

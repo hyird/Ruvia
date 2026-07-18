@@ -22,11 +22,11 @@ Task<HttpResponse> detail::invokeErrorHandler(
             // and avoid echoing exception detail to the client.
             co_return makeDefaultErrorResponse(
                 context.resource(),
-                HttpErrorInfo(500, "error_handler_failed", "error handler failed"));
+                HttpErrorInfo(ruvia::http_status::kInternalServerError, "error_handler_failed", "error handler failed"));
         } catch (...) {
             co_return makeDefaultErrorResponse(
                 context.resource(),
-                HttpErrorInfo(500, "error_handler_failed", "error handler failed"));
+                HttpErrorInfo(ruvia::http_status::kInternalServerError, "error_handler_failed", "error handler failed"));
         }
     }
 

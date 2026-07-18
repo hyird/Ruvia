@@ -281,7 +281,7 @@ HttpContentDecodeError decodeError(
 
 struct ContextBodyReadObservation final {
     std::string body;
-    std::uint16_t errorStatus{0};
+    std::optional<ruvia::HttpStatusCode> errorStatus;
 };
 
 ruvia::Task<std::string_view> readContextText(ruvia::Context& context) {
@@ -530,7 +530,7 @@ RUVIA_TEST(request_body_failures_own_cross_runtime_http_errors) {
     RUVIA_CHECK(tooLarge.has_value());
     if (tooLarge) {
         const auto error = tooLarge->protocolError();
-        RUVIA_CHECK_EQ(error.status(), 413);
+        RUVIA_CHECK_EQ(error.status(), ruvia::http_status::kContentTooLarge);
         RUVIA_CHECK_EQ(
             std::string_view(error.what()),
             std::string_view("request body is too large"));
@@ -542,7 +542,7 @@ RUVIA_TEST(request_body_failures_own_cross_runtime_http_errors) {
 
     const auto incomplete =
         ruvia::detail::HttpRequestBodyFailure::incomplete().protocolError();
-    RUVIA_CHECK_EQ(incomplete.status(), 400);
+    RUVIA_CHECK_EQ(incomplete.status(), ruvia::http_status::kBadRequest);
     RUVIA_CHECK_EQ(
         std::string_view(incomplete.what()),
         std::string_view("incomplete request body"));
@@ -627,7 +627,9 @@ RUVIA_TEST(http_content_coding_field_mapping_is_protocol_generic) {
         RUVIA_CHECK(invalid.unsupported() == nullptr);
         RUVIA_CHECK(invalid.invalid() != nullptr);
         if (invalid.invalid() != nullptr) {
-            RUVIA_CHECK_EQ(invalid.invalid()->status(), std::uint16_t{400});
+            RUVIA_CHECK_EQ(
+                invalid.invalid()->status(),
+                ruvia::http_status::kBadRequest);
         }
     }
 }
@@ -1002,7 +1004,9 @@ RUVIA_TEST(web_request_decode_uses_the_configured_buffered_body_limit) {
     const std::string encoded = gzipCompress(plain);
     RUVIA_CHECK(!encoded.empty());
     const auto observation = readContextGzipBody(encoded, 1024);
-    RUVIA_CHECK_EQ(observation.errorStatus, std::uint16_t{413});
+    RUVIA_CHECK_EQ(
+        observation.errorStatus,
+        ruvia::http_status::kContentTooLarge);
     RUVIA_CHECK(observation.body.empty());
 }
 
@@ -1012,13 +1016,13 @@ RUVIA_TEST(web_request_decode_accepts_content_at_the_configured_limit) {
     const auto observation = readContextGzipBody(
         encoded,
         plain.size());
-    RUVIA_CHECK_EQ(observation.errorStatus, std::uint16_t{0});
+    RUVIA_CHECK(!observation.errorStatus.has_value());
     RUVIA_CHECK_EQ(observation.body, plain);
 }
 
 RUVIA_TEST(web_request_decode_rejects_empty_encoded_representation) {
     const auto observation = readContextGzipBody({}, 1024);
-    RUVIA_CHECK_EQ(observation.errorStatus, std::uint16_t{400});
+    RUVIA_CHECK_EQ(observation.errorStatus, ruvia::http_status::kBadRequest);
     RUVIA_CHECK(observation.body.empty());
 }
 
@@ -1032,7 +1036,7 @@ RUVIA_TEST(http_request_content_decoder_owns_protocol_failure_status) {
         resource);
     RUVIA_CHECK(invalid.protocolFailure() != nullptr);
     RUVIA_CHECK(invalid.decoderFailure() == nullptr);
-    RUVIA_CHECK_EQ(invalid.protocolFailure()->protocolError().status(), 400);
+    RUVIA_CHECK_EQ(invalid.protocolFailure()->protocolError().status(), ruvia::http_status::kBadRequest);
 
     const auto oversized = decodeHttpRequestContent(
         HttpContentCoding::kIdentity,
@@ -1041,7 +1045,7 @@ RUVIA_TEST(http_request_content_decoder_owns_protocol_failure_status) {
         resource);
     RUVIA_CHECK(oversized.protocolFailure() != nullptr);
     RUVIA_CHECK(oversized.decoderFailure() == nullptr);
-    RUVIA_CHECK_EQ(oversized.protocolFailure()->protocolError().status(), 413);
+    RUVIA_CHECK_EQ(oversized.protocolFailure()->protocolError().status(), ruvia::http_status::kContentTooLarge);
 
     const auto unsupported = decodeHttpRequestContent(
         static_cast<HttpContentCoding>(255),
@@ -1050,7 +1054,7 @@ RUVIA_TEST(http_request_content_decoder_owns_protocol_failure_status) {
         resource);
     RUVIA_CHECK(unsupported.protocolFailure() != nullptr);
     RUVIA_CHECK(unsupported.decoderFailure() == nullptr);
-    RUVIA_CHECK_EQ(unsupported.protocolFailure()->protocolError().status(), 415);
+    RUVIA_CHECK_EQ(unsupported.protocolFailure()->protocolError().status(), ruvia::http_status::kUnsupportedMediaType);
 }
 
 RUVIA_TEST(transfer_coding_decoder_gzip_round_trip) {
@@ -1174,12 +1178,12 @@ RUVIA_TEST(transfer_coding_decoder_rejects_bomb) {
     const auto error = appendTransferDecoded(decoder, gz, output);
     RUVIA_CHECK(error.failed);
     RUVIA_CHECK(error.protocolError.has_value());
-    RUVIA_CHECK_EQ(error.protocolError->status(), 413);
+    RUVIA_CHECK_EQ(error.protocolError->status(), ruvia::http_status::kContentTooLarge);
     const auto finish = decoder.finishInput();
     RUVIA_CHECK(finish.protocolFailure() != nullptr);
     if (finish.protocolFailure() != nullptr) {
         RUVIA_CHECK(
-            finish.protocolFailure()->protocolError().status() == 413);
+            finish.protocolFailure()->protocolError().status() == ruvia::http_status::kContentTooLarge);
     }
 }
 
@@ -1209,7 +1213,7 @@ RUVIA_TEST(transfer_coding_decoder_reports_typed_wire_failures) {
     RUVIA_CHECK(invalidResult.protocolFailure() != nullptr);
     RUVIA_CHECK(invalidResult.decoderFailure() == nullptr);
     RUVIA_CHECK_EQ(
-        invalidResult.protocolFailure()->protocolError().status(), 400);
+        invalidResult.protocolFailure()->protocolError().status(), ruvia::http_status::kBadRequest);
 
     std::string truncated = gzipCompress("truncated");
     truncated.resize(truncated.size() - 4);
@@ -1224,13 +1228,13 @@ RUVIA_TEST(transfer_coding_decoder_reports_typed_wire_failures) {
     RUVIA_CHECK(incompleteFinish.protocolFailure() != nullptr);
     if (incompleteFinish.protocolFailure() != nullptr) {
         RUVIA_CHECK(
-            incompleteFinish.protocolFailure()->protocolError().status() == 400);
+            incompleteFinish.protocolFailure()->protocolError().status() == ruvia::http_status::kBadRequest);
     }
     const auto repeatedFinish = incomplete.finishInput();
     RUVIA_CHECK(repeatedFinish.protocolFailure() != nullptr);
     if (repeatedFinish.protocolFailure() != nullptr) {
         RUVIA_CHECK(
-            repeatedFinish.protocolFailure()->protocolError().status() == 400);
+            repeatedFinish.protocolFailure()->protocolError().status() == ruvia::http_status::kBadRequest);
     }
 
     TransferCodingDecoder internalFailure(
@@ -1258,6 +1262,6 @@ RUVIA_TEST(transfer_coding_decoder_reports_typed_wire_failures) {
     const auto trailingFinish = extra.finishInput();
     RUVIA_CHECK(trailingFinish.protocolFailure() != nullptr);
     if (const auto* failure = trailingFinish.protocolFailure()) {
-        RUVIA_CHECK_EQ(failure->protocolError().status(), 400);
+        RUVIA_CHECK_EQ(failure->protocolError().status(), ruvia::http_status::kBadRequest);
     }
 }

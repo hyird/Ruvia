@@ -151,7 +151,7 @@ namespace ruvia {
 namespace {
 
 struct ParsedStatusLine final {
-    std::uint16_t statusCode;
+    HttpStatusCode statusCode;
     HttpProtocolVersion protocolVersion;
 };
 
@@ -162,7 +162,7 @@ struct ParsedResponseHead final {
 
     std::array<HttpHeaderView, kMaxHttpHeaderFields> headers;
     std::size_t headerCount{0};
-    std::uint16_t statusCode;
+    HttpStatusCode statusCode;
     HttpProtocolVersion protocolVersion;
     bool contentLengthFieldPresent{false};
     bool contentTypeFieldPresent{false};
@@ -206,9 +206,12 @@ using ResponsePlanningResult = std::variant<
     const auto code = statusLine.substr(separator + 1, 3);
     const auto [end, ec] = std::from_chars(
         code.data(), code.data() + code.size(), statusCode);
-    if (ec != std::errc{} || end != code.data() + code.size() ||
-        !detail::httpStatusCodeValid(
-            static_cast<std::uint16_t>(statusCode))) {
+    if (ec != std::errc{} || end != code.data() + code.size()) {
+        return Http1ClientResponseParseError::kInvalidStatusCode;
+    }
+    const auto parsedStatus = HttpStatusCode::tryFromValue(
+        static_cast<std::uint16_t>(statusCode));
+    if (!parsedStatus) {
         return Http1ClientResponseParseError::kInvalidStatusCode;
     }
 
@@ -221,7 +224,7 @@ using ResponsePlanningResult = std::variant<
     }
 
     return ParsedStatusLine{
-        .statusCode = static_cast<std::uint16_t>(statusCode),
+        .statusCode = *parsedStatus,
         .protocolVersion = version == "HTTP/1.1"
             ? HttpProtocolVersion::kHttp11
             : HttpProtocolVersion::kHttp10};
@@ -295,7 +298,7 @@ using ResponsePlanningResult = std::variant<
 [[nodiscard]] std::optional<Http1ClientRequestContentSignal>
 requestContentSignal(
     detail::Http1ClientRequestContentPhase phase,
-    std::uint16_t statusCode,
+    HttpStatusCode statusCode,
     bool responseWillClose) noexcept {
     if (responseWillClose &&
         (phase ==
@@ -305,14 +308,14 @@ requestContentSignal(
              detail::Http1ClientRequestContentPhase::kContinueReceived)) {
         return Http1ClientRequestContentSignal::kExchangeComplete;
     }
-    if (statusCode == 100) {
+    if (statusCode == http_status::kContinue) {
         return phase ==
                 detail::Http1ClientRequestContentPhase::kAwaitingContinue
             ? std::optional<Http1ClientRequestContentSignal>(
                   Http1ClientRequestContentSignal::kContinue)
             : std::nullopt;
     }
-    if (statusCode >= 200) {
+    if (statusCode.isFinal()) {
         // A final response cancels content only while Expect still gates it.
         // Once 100 Continue releases the writer, RFC 9110 section 7.5 says the
         // client should keep sending the request unless the server explicitly
@@ -398,7 +401,7 @@ receiveContinue(
         contentSemantics ==
         detail::HttpResponseContentSemantics::kWithContent;
     const bool resetContentRequiresEmpty =
-        output.statusCode == 205 &&
+        output.statusCode == http_status::kResetContent &&
         contentSemantics !=
             detail::HttpResponseContentSemantics::kConnectTunnel;
 
@@ -547,7 +550,8 @@ receiveContinue(
             std::nullopt);
     }
 
-    const bool resetContentRequiresEmpty = response.statusCode == 205;
+    const bool resetContentRequiresEmpty =
+        response.statusCode == http_status::kResetContent;
     const auto contentLength = response.contentLength.value();
     if (resetContentRequiresEmpty &&
         contentLength.has_value() && *contentLength != 0) {
@@ -752,11 +756,13 @@ Http1ClientResponseParseResult Http1ClientResponseParser::parse(
     if (informational) {
         ++informationalResponseCount_;
     }
-    if (parsed.statusCode == 100 && !closingInformational) {
+    if (parsed.statusCode == http_status::kContinue &&
+        !closingInformational) {
         requestContentPhase_ = receiveContinue(requestContentPhase_);
     }
     if (closingInformational ||
-        parsed.statusCode == 101 || parsed.statusCode >= 200) {
+        parsed.statusCode == http_status::kSwitchingProtocols ||
+        parsed.statusCode.isFinal()) {
         phase_ = Phase::kComplete;
     }
     return result;

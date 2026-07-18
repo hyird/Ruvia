@@ -334,7 +334,8 @@ RUVIA_TEST(validated_model_binding_spans_next_and_unwinds_before_upstream_resume
         const auto response = future.get();
         RUVIA_CHECK_EQ(
             response.status(),
-            handlerThrows ? std::uint16_t{500} : std::uint16_t{200});
+            handlerThrows ? ruvia::http_status::kInternalServerError
+                          : ruvia::http_status::kOk);
         RUVIA_CHECK(scopedValidationHandlerRead);
         RUVIA_CHECK(ValidationScopeProbe::releasedAfterNext);
     }
@@ -699,7 +700,7 @@ public:
 class ChainMwThrows final : public ruvia::Middleware<ChainMwThrows> {
 public:
     ruvia::Task<void> handle(ruvia::Context&, ruvia::Next&) {
-        throw ruvia::HttpError(401, "mw_rejected", "middleware rejected the request");
+        throw ruvia::HttpError(ruvia::http_status::kUnauthorized, "mw_rejected", "middleware rejected the request");
         co_return;  // unreachable
     }
 };
@@ -1410,7 +1411,7 @@ RUVIA_TEST(middleware_chain_controller_middleware_wraps_route_middleware) {
 namespace {
 
 ruvia::Task<ruvia::HttpResponse> throwsHttpErrorHandler(void*, ruvia::Context&) {
-    throw ruvia::HttpError(403, "forbidden", "nope");
+    throw ruvia::HttpError(ruvia::http_status::kForbidden, "forbidden", "nope");
     co_return ruvia::HttpResponse(std::pmr::get_default_resource());  // unreachable
 }
 
@@ -1420,7 +1421,9 @@ ruvia::Task<ruvia::HttpResponse> throwsGenericHandler(void*, ruvia::Context&) {
 }
 
 ruvia::Task<ruvia::HttpResponse> throwsProtocolErrorHandler(void*, ruvia::Context&) {
-    throw ruvia::HttpProtocolError(413, "request body is too large");
+    throw ruvia::HttpProtocolError(
+        ruvia::http_status::kContentTooLarge,
+        "request body is too large");
     co_return ruvia::HttpResponse(std::pmr::get_default_resource());  // unreachable
 }
 
@@ -1448,7 +1451,7 @@ struct DispatchResult final {
 
 DispatchResult extractDispatchResult(const ruvia::HttpResponse& response) {
     DispatchResult result;
-    result.status = response.status();
+    result.status = response.status().value();
     const auto body = ruvia::detail::responseBody(response).bytes();
     result.body.assign(body.data(), body.size());
     const auto allow = response.header("Allow").value_or(std::string_view{});
@@ -1585,7 +1588,7 @@ using ruvia::HttpErrorInfo;
 using ruvia::HttpNotFoundHandler;
 
 ruvia::Task<ruvia::HttpResponse> customNotFound(ruvia::Context& context) {
-    context.status(404);
+    context.status(ruvia::http_status::kNotFound);
     co_return context.body("custom-not-found");
 }
 
@@ -1694,12 +1697,12 @@ RUVIA_TEST(dispatch_routes_unimplemented_method_through_custom_error_handler) {
 namespace {
 
 ruvia::Task<ruvia::HttpResponse> apiScopedNotFound(ruvia::Context& context) {
-    context.status(404);
+    context.status(ruvia::http_status::kNotFound);
     co_return context.body("api-scope-404");
 }
 
 ruvia::Task<ruvia::HttpResponse> v2ScopedNotFound(ruvia::Context& context) {
-    context.status(404);
+    context.status(ruvia::http_status::kNotFound);
     co_return context.body("v2-scope-404");
 }
 
@@ -2025,7 +2028,7 @@ RUVIA_TEST(dispatch_options_asterisk_returns_server_wide_allow) {
     ctx.run();
     const auto response = future.get();
 
-    RUVIA_CHECK_EQ(response.status(), std::uint16_t{204});
+    RUVIA_CHECK_EQ(response.status(), ruvia::http_status::kNoContent);
     const auto allow = response.header("Allow").value_or(std::string_view{});
     RUVIA_CHECK(allow.find("GET") != std::string_view::npos);
     RUVIA_CHECK(allow.find("POST") != std::string_view::npos);

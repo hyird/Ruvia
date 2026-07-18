@@ -32,7 +32,7 @@ struct HttpClientResponseHeaderAccess final {
 
 struct HttpClientResponseHeadAccess final {
     [[nodiscard]] static HttpClientResponseHead make(
-        std::uint16_t status,
+        HttpStatusCode status,
         HttpProtocolVersion protocolVersion,
         std::pmr::memory_resource* resource) {
         return HttpClientResponseHead(status, protocolVersion, resource);

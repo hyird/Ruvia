@@ -12,6 +12,7 @@
 #include "ruvia/web/detail/server/HttpResponseStreamState.h"
 #include "ruvia/http/HttpProtocolError.h"
 #include "ruvia/web/Error.h"
+#include "ruvia/web/StaticFiles.h"
 #include "ruvia/web/Validation.h"
 #include "ruvia/web/detail/http/HttpErrorResponse.h"
 #include "ruvia/web/detail/http/UnsupportedRequestContentCoding.h"
@@ -25,7 +26,7 @@ void setAllowHeader(HttpResponse& response, std::uint32_t methodMask) {
 
 HttpResponse makeAllowNoContentResponse(RequestMemory& memory, std::uint32_t methodMask) {
     HttpResponse response(memory.resource());
-    response.status(204);
+    response.status(ruvia::http_status::kNoContent);
     setAllowHeader(response, methodMask);
     return response;
 }
@@ -107,7 +108,7 @@ struct OwnedHttpErrorInfo final {
 
     OwnedHttpErrorInfo(std::pmr::memory_resource* resource, std::exception_ptr exception)
         : OwnedHttpErrorInfo(
-              HttpErrorInfo(500, {}, "unhandled exception"),
+              HttpErrorInfo(ruvia::http_status::kInternalServerError, {}, "unhandled exception"),
               resource) {
         assignExceptionError(*this, exception);
     }
@@ -142,16 +143,16 @@ void assignExceptionError(OwnedHttpErrorInfo& errorInfo, std::exception_ptr exce
         // invalid_argument is the framework's own request-validation signal (bad
         // cookie/json/form); its message describes the request, so it is safe to
         // surface to the client as a 400.
-        errorInfo.assign(HttpErrorInfo(400, {}, error.what()));
+        errorInfo.assign(HttpErrorInfo(ruvia::http_status::kBadRequest, {}, error.what()));
     } catch (const std::exception&) {
         // An unexpected exception (e.g. a database/library error) may carry
         // internal detail -- table names, query fragments, file paths. Do NOT echo
         // what() to the client: normalizeError renders a generic "Internal Server
         // Error" body. The exception_ptr is still set on the Context, so an onError
         // handler can log or inspect the full detail server-side.
-        errorInfo.assign(HttpErrorInfo(500, {}, {}));
+        errorInfo.assign(HttpErrorInfo(ruvia::http_status::kInternalServerError, {}, {}));
     } catch (...) {
-        errorInfo.assign(HttpErrorInfo(500, {}, {}));
+        errorInfo.assign(HttpErrorInfo(ruvia::http_status::kInternalServerError, {}, {}));
     }
 }
 
@@ -175,6 +176,29 @@ void applyExceptionResponseMetadata(
         response.header(
             "Accept-Encoding",
             detail::httpSupportedRequestContentCodings());
+    }
+}
+
+[[nodiscard]] std::optional<HttpResponse> selectDocumentRootFallback(
+    const StaticRoot* root,
+    const HttpRequest& request,
+    RequestMemory& memory) {
+    if (root == nullptr ||
+        (request.knownMethod() != HttpKnownMethod::kGet &&
+         request.knownMethod() != HttpKnownMethod::kHead)) {
+        return std::nullopt;
+    }
+
+    auto relative = request.path();
+    if (!relative.empty() && relative.front() == '/') {
+        relative.remove_prefix(1);
+    }
+
+    auto context = detail::ContextAccess::make(memory, request);
+    try {
+        return context.staticFile(*root, relative);
+    } catch (const HttpError&) {
+        return std::nullopt;
     }
 }
 
@@ -360,12 +384,31 @@ Task<HttpResponse> detail::RouteTable::dispatch(
     const HttpRequest& request,
     const RouteResolution& resolution,
     RequestMemory& memory,
+    ContextServices services) const {
+    return dispatchRequest(
+        request,
+        resolution,
+        memory,
+        services,
+        nullptr,
+        DispatchFailure::kPropagate);
+}
+
+Task<HttpResponse> detail::RouteTable::dispatchRequest(
+    const HttpRequest& request,
+    const RouteResolution& resolution,
+    RequestMemory& memory,
     ContextServices services,
-    RouteDispatchFailure failure) const {
+    const StaticRoot* documentRoot,
+    DispatchFailure failure) const {
     std::exception_ptr dispatchException;
     try {
         const auto* resolved = resolution.resolved();
         if (resolved == nullptr) {
+            if (auto documentResponse = selectDocumentRootFallback(
+                    documentRoot, request, memory)) {
+                co_return std::move(*documentResponse);
+            }
             // One handleError co_await serves both rejection kinds: each
             // co_await expression reserves its own slots for the call's
             // temporaries in the frame, so distinct inline sites would each
@@ -373,7 +416,7 @@ Task<HttpResponse> detail::RouteTable::dispatch(
             std::optional<HttpErrorInfo> error;
             std::uint32_t allowedMethods = 0;
             if (request.knownMethod() == HttpKnownMethod::kUnknown) {
-                error = HttpErrorInfo(501, {}, "method not implemented");
+                error = HttpErrorInfo(ruvia::http_status::kNotImplemented, {}, "method not implemented");
             } else if (request.knownMethod() == HttpKnownMethod::kOptions && request.path() == "*") {
                 co_return makeAllowNoContentResponse(memory, allowedMethodsForServer());
             } else if (const auto* methodNotAllowed = resolution.methodNotAllowed()) {
@@ -381,7 +424,7 @@ Task<HttpResponse> detail::RouteTable::dispatch(
                     co_return makeAllowNoContentResponse(
                         memory, methodNotAllowed->allowedMethods());
                 }
-                error = HttpErrorInfo(405, {}, "method not allowed");
+                error = HttpErrorInfo(ruvia::http_status::kMethodNotAllowed, {}, "method not allowed");
                 allowedMethods = methodNotAllowed->allowedMethods();
             }
 
@@ -418,7 +461,7 @@ Task<HttpResponse> detail::RouteTable::dispatch(
         }
         co_return co_await handleException(context, exception);
     } catch (...) {
-        if (failure == RouteDispatchFailure::kPropagate) {
+        if (failure == DispatchFailure::kPropagate) {
             throw;
         }
         dispatchException = std::current_exception();
@@ -426,15 +469,22 @@ Task<HttpResponse> detail::RouteTable::dispatch(
     co_return co_await handleException(request, memory, dispatchException, services);
 }
 
-Task<HttpResponse> detail::RouteTable::dispatchBuffered(
+Task<HttpResponse> detail::RouteTable::dispatchBufferedResponse(
     const HttpRequest& request,
     const RouteResolution& resolution,
     RequestMemory& memory,
+    const StaticRoot* documentRoot,
     ContextServices services) const {
-    // Plain forwarding, not a coroutine: the failure policy folds the old
-    // wrapper's try/catch into dispatch itself, so no extra frame is paid.
-    return dispatch(
-        request, resolution, memory, services, RouteDispatchFailure::kRespond);
+    // Plain forwarding, not a coroutine: document-root selection and the
+    // failure policy live in the existing dispatch frame, so the unified
+    // application entry adds no request-path allocation.
+    return dispatchRequest(
+        request,
+        resolution,
+        memory,
+        services,
+        documentRoot,
+        DispatchFailure::kRespond);
 }
 
 Task<HttpResponse> detail::RouteTable::handleError(
@@ -495,7 +545,7 @@ Task<HttpResponse> detail::RouteTable::handleNotFound(
     if (notFoundHandler == nullptr) {
         co_return makeDefaultErrorResponse(
             memory.resource(),
-            HttpErrorInfo(404, {}, "route not found"));
+            HttpErrorInfo(ruvia::http_status::kNotFound, {}, "route not found"));
     }
 
     auto context = detail::ContextAccess::make(

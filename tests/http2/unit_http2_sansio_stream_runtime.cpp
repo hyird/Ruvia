@@ -304,7 +304,7 @@ RUVIA_TEST(http2_web_request_body_runtime_enforces_total_and_backlog_limits) {
         "67", ProtocolByteLimit::limited(5), 0);
     RUVIA_CHECK(totalLimitFailure.protocolFailure() != nullptr);
     if (const auto* failure = totalLimitFailure.protocolFailure()) {
-        RUVIA_CHECK_EQ(failure->protocolError().status(), 413);
+        RUVIA_CHECK_EQ(failure->protocolError().status(), ruvia::http_status::kContentTooLarge);
     }
     RUVIA_CHECK_EQ(bufferedBody.receivedBytes(), std::size_t{4});
     RUVIA_CHECK_EQ(buffered->bytes(), std::string_view("1234"));

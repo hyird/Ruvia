@@ -31,6 +31,10 @@
 #include "ruvia/core/memory/PmrResource.h"
 #include "ruvia/web/Router.h"
 
+namespace ruvia {
+class StaticRoot;
+}
+
 namespace ruvia::detail {
 
 class DbRegistry;
@@ -316,15 +320,6 @@ private:
     std::size_t middlewareCount_{0};
 };
 
-// How dispatch treats a failure escaping the routing machinery itself (the
-// handler's own exceptions are always turned into responses inside dispatch):
-// kPropagate rethrows to the caller, kRespond routes it through the
-// request-level exception handler so the coroutine never throws.
-enum class RouteDispatchFailure : std::uint8_t {
-    kPropagate,
-    kRespond,
-};
-
 // One path-prefix-scoped fallback registration (Hono sub-app scoping analog).
 // The prefix is a borrowed view during registration; RouteTable copies it into
 // owned storage. Selection is longest-prefix-first on whole path segments.
@@ -377,17 +372,17 @@ public:
         const HttpRequest& request,
         const RouteResolution& resolution,
         RequestMemory& memory,
-        ContextServices services = {},
-        RouteDispatchFailure failure = RouteDispatchFailure::kPropagate) const;
-    // Never throws: dispatches a resolved route and turns any failure -- a
-    // handler exception (already handled inside dispatch) or one escaping the
-    // routing machinery itself -- into an error response. It never decides
-    // connection persistence; the HTTP/1 driver finalizes that after request-body
-    // state is known, while HTTP/2 has no Connection header semantics.
-    Task<HttpResponse> dispatchBuffered(
+        ContextServices services = {}) const;
+    // Canonical buffered-response application dispatch for every server
+    // protocol. An unresolved route first consults the configured document
+    // root, then falls through to 404/405/OPTIONS handling. Any failure escaping
+    // the routing machinery becomes an error response. Connection persistence
+    // and wire framing remain the protocol driver's responsibility.
+    Task<HttpResponse> dispatchBufferedResponse(
         const HttpRequest& request,
         const RouteResolution& resolution,
         RequestMemory& memory,
+        const StaticRoot* documentRoot,
         ContextServices services = {}) const;
     Task<HttpResponse> handleError(
         const HttpRequest& request,
@@ -416,6 +411,13 @@ public:
 
 private:
     friend class RouterImpl;
+
+    // How dispatchRequest treats a failure escaping the routing machinery
+    // itself. Handler exceptions are already converted inside the route path.
+    enum class DispatchFailure : std::uint8_t {
+        kPropagate,
+        kRespond,
+    };
 
     static constexpr std::size_t kRoutableMethodCount = 7;
 
@@ -528,6 +530,13 @@ private:
         RouteMatch& match) const noexcept;
     [[nodiscard]] std::uint32_t allowedMethods(std::string_view path, HttpKnownMethod requestedMethod) const noexcept;
     [[nodiscard]] std::uint32_t allowedMethodsForServer() const noexcept;
+    [[nodiscard]] Task<HttpResponse> dispatchRequest(
+        const HttpRequest& request,
+        const RouteResolution& resolution,
+        RequestMemory& memory,
+        ContextServices services,
+        const StaticRoot* documentRoot,
+        DispatchFailure failure) const;
     [[nodiscard]] Task<HttpResponse> invokeRoute(const RouteEntry& route, Context& context) const;
     [[nodiscard]] Task<HttpResponse> invokeRouteWithMiddleware(const RouteEntry& route, Context& context) const;
     [[nodiscard]] Task<void> invokeMiddlewareAt(

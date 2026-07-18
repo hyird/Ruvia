@@ -364,10 +364,10 @@ static_assert(std::same_as<
 
 RUVIA_TEST(http_client_response_head_commits_status_and_version_at_construction) {
     auto head = ruvia::detail::HttpClientResponseHeadAccess::make(
-        207,
+        ruvia::http_status::kMultiStatus,
         HttpProtocolVersion::kHttp10,
         std::pmr::get_default_resource());
-    RUVIA_CHECK_EQ(head.status(), std::uint16_t{207});
+    RUVIA_CHECK_EQ(head.status(), ruvia::http_status::kMultiStatus);
     RUVIA_CHECK(head.protocolVersion() == HttpProtocolVersion::kHttp10);
 }
 
@@ -1170,7 +1170,7 @@ RUVIA_TEST(http_client_switching_protocols_is_an_exclusive_upgrade_transition) {
         "Connection: Upgrade\r\nUpgrade: WebSocket",
         Http1ClientRequestClosePolicy::kAllowReuse,
         requestHeaders);
-    RUVIA_CHECK(upgraded.head().status() == std::uint16_t{101});
+    RUVIA_CHECK(upgraded.head().status() == ruvia::http_status::kSwitchingProtocols);
     RUVIA_CHECK(upgraded.plan().protocolUpgrade() != nullptr);
     RUVIA_CHECK(upgraded.plan().connectTunnel() == nullptr);
 
@@ -1416,7 +1416,7 @@ RUVIA_TEST(http_client_content_encoding_has_one_authoritative_path) {
 
     for (const auto& test : cases) {
         auto parsed = parseResponse("GET", test.headers);
-        RUVIA_CHECK_EQ(parsed.head.status(), std::uint16_t{200});
+        RUVIA_CHECK_EQ(parsed.head.status(), ruvia::http_status::kOk);
         const auto coding = httpClientResponseContentCoding(parsed.head);
         RUVIA_CHECK(coding.invalid() == nullptr);
         RUVIA_CHECK((coding.coding() != nullptr) == test.expected.has_value());
@@ -1568,7 +1568,7 @@ RUVIA_TEST(http_client_content_decode_failure_preserves_encoded_body) {
 RUVIA_TEST(http_client_rejects_malformed_status_and_length_fields) {
     const auto upperBoundary = parseHead(
         "GET", "HTTP/1.1 599 Extension Status\r\nContent-Length: 0");
-    RUVIA_CHECK_EQ(upperBoundary.head().status(), std::uint16_t{599});
+    RUVIA_CHECK_EQ(upperBoundary.head().status(), ruvia::HttpStatusCode::fromValue(599));
     RUVIA_CHECK(
         parseFailureError("GET", "HTTP/2 200 OK") ==
         Http1ClientResponseParseError::kUnsupportedHttpVersion);
@@ -1658,7 +1658,7 @@ RUVIA_TEST(http_client_response_parser_owns_exact_head_boundary) {
         return;
     }
     RUVIA_CHECK_EQ(parsed->consumedBytes(), expectedConsumed);
-    RUVIA_CHECK_EQ(parsed->head().status(), std::uint16_t{200});
+    RUVIA_CHECK_EQ(parsed->head().status(), ruvia::http_status::kOk);
     RUVIA_CHECK(
         parsed->head().protocolVersion() ==
         HttpProtocolVersion::kHttp11);

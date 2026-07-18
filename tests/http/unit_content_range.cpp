@@ -360,7 +360,7 @@ RUVIA_TEST(static_file_range_serving_status_and_content_range) {
         auto context = ContextAccess::make(memory, request);
         const auto response = context.staticFile(root, path, "text/plain");
         // Copy out before the request arena unwinds.
-        return std::pair<std::uint16_t, std::string>(
+        return std::pair<ruvia::HttpStatusCode, std::string>(
             response.status(), std::string(response.header("Content-Range").value_or("")));
     };
     const auto serveFile = [&serveMethod](
@@ -374,42 +374,42 @@ RUVIA_TEST(static_file_range_serving_status_and_content_range) {
 
     // A valid single range -> 206 with the byte range echoed.
     const auto ok = serve("bytes=0-4");
-    RUVIA_CHECK_EQ(ok.first, std::uint16_t{206});
+    RUVIA_CHECK_EQ(ok.first, ruvia::http_status::kPartialContent);
     RUVIA_CHECK_EQ(ok.second, std::string("bytes 0-4/100"));
 
     // Multiple ranges are not supported, so the whole file is served (RFC 7233).
     const auto multi = serve("bytes=0-9,20-29");
-    RUVIA_CHECK_EQ(multi.first, std::uint16_t{200});
+    RUVIA_CHECK_EQ(multi.first, ruvia::http_status::kOk);
 
     // A wholly unsatisfiable range -> 416 with "bytes */size".
     const auto bad = serve("bytes=1000-2000");
-    RUVIA_CHECK_EQ(bad.first, std::uint16_t{416});
+    RUVIA_CHECK_EQ(bad.first, ruvia::http_status::kRangeNotSatisfiable);
     RUVIA_CHECK_EQ(bad.second, std::string("bytes */100"));
 
     // An unknown range unit MUST be ignored (RFC 9110 §14.2) -> full 200, not 416.
     const auto unknownUnit = serve("items=0-9");
-    RUVIA_CHECK_EQ(unknownUnit.first, std::uint16_t{200});
+    RUVIA_CHECK_EQ(unknownUnit.first, ruvia::http_status::kOk);
 
     // A syntactically malformed byte range is likewise ignored -> full 200.
     const auto malformed = serve("bytes=abc");
-    RUVIA_CHECK_EQ(malformed.first, std::uint16_t{200});
+    RUVIA_CHECK_EQ(malformed.first, ruvia::http_status::kOk);
 
     // Range units are case-insensitive (RFC 9110 §14.1); this is still a 206.
     const auto caseInsensitiveUnit = serve("Bytes=5-9");
-    RUVIA_CHECK_EQ(caseInsensitiveUnit.first, std::uint16_t{206});
+    RUVIA_CHECK_EQ(caseInsensitiveUnit.first, ruvia::http_status::kPartialContent);
     RUVIA_CHECK_EQ(caseInsensitiveUnit.second, std::string("bytes 5-9/100"));
 
     // RFC 9110 §14.2 defines Range handling only for GET. A HEAD request
     // carrying the same field must describe the full representation with 200,
     // not invent a partial 206 response with Content-Range metadata.
     const auto head = serveMethod("HEAD", "data.txt", "bytes=0-4");
-    RUVIA_CHECK_EQ(head.first, std::uint16_t{200});
+    RUVIA_CHECK_EQ(head.first, ruvia::http_status::kOk);
     RUVIA_CHECK(head.second.empty());
 
     // This server uses RFC 9110 §14.2's permitted ignore policy for a selected
     // representation with no content, avoiding an invalid zero-length 206 range.
     const auto empty = serveFile("empty.txt", "bytes=0-0");
-    RUVIA_CHECK_EQ(empty.first, std::uint16_t{200});
+    RUVIA_CHECK_EQ(empty.first, ruvia::http_status::kOk);
     RUVIA_CHECK(empty.second.empty());
 
     fs::remove_all(dir);
@@ -441,7 +441,7 @@ RUVIA_TEST(static_file_resolves_percent_encoded_name_and_stays_traversal_safe) {
         HttpRequestAccess::setMethod(request, "GET");
         HttpRequestAccess::setResource(request, memory.resource());
         auto context = ContextAccess::make(memory, request);
-        std::uint16_t status = 0;
+        ruvia::HttpStatusCode status = ruvia::http_status::kInternalServerError;
         try {
             status = context.staticFile(root, path, "text/plain").status();
         } catch (const ruvia::HttpError& error) {
@@ -453,16 +453,16 @@ RUVIA_TEST(static_file_resolves_percent_encoded_name_and_stays_traversal_safe) {
     // "%20" resolves to the space in the real on-disk name (RFC 3986 percent
     // equivalence). Before decoding this 404'd: the raw bytes "my%20report.txt"
     // were compared against the decoded index key "my report.txt".
-    RUVIA_CHECK_EQ(serve("my%20report.txt"), std::uint16_t{200});
+    RUVIA_CHECK_EQ(serve("my%20report.txt"), ruvia::http_status::kOk);
 
     // Decoding must not open a traversal hole: "%2e%2e%2f" -> "../" is still
     // clamped at the root (403), and encoded separators plus dot-segments cannot
     // ascend past it either.
-    RUVIA_CHECK_EQ(serve("%2e%2e%2fetc%2fpasswd"), std::uint16_t{403});
-    RUVIA_CHECK_EQ(serve("sub%2f%2e%2e%2f%2e%2e%2fetc"), std::uint16_t{403});
+    RUVIA_CHECK_EQ(serve("%2e%2e%2fetc%2fpasswd"), ruvia::http_status::kForbidden);
+    RUVIA_CHECK_EQ(serve("sub%2f%2e%2e%2f%2e%2e%2fetc"), ruvia::http_status::kForbidden);
 
     // A decoded NUL ("%00") cannot occur in a filename and is rejected outright.
-    RUVIA_CHECK_EQ(serve("my%00report.txt"), std::uint16_t{403});
+    RUVIA_CHECK_EQ(serve("my%00report.txt"), ruvia::http_status::kForbidden);
 
     fs::remove_all(dir);
 }
@@ -500,14 +500,14 @@ RUVIA_TEST(static_file_declares_vary_accept_encoding_but_context_file_does_not) 
     // reuse this identity body for everyone (RFC 9110 12.5.5 / RFC 9111 4.1). The
     // identity body carries no Content-Encoding.
     const auto served = context.staticFile(root, "app.js", "text/javascript");
-    RUVIA_CHECK_EQ(served.status(), std::uint16_t{200});
+    RUVIA_CHECK_EQ(served.status(), ruvia::http_status::kOk);
     RUVIA_CHECK(served.header("Vary").value_or("").find("Accept-Encoding") != std::string_view::npos);
     RUVIA_CHECK(!served.header("Content-Encoding").has_value());
 
     // Context::file serves a single path with no encoding negotiation, so it must
     // NOT declare Vary: Accept-Encoding (which would needlessly fragment caches).
     const auto direct = context.file(filePath);
-    RUVIA_CHECK_EQ(direct.status(), std::uint16_t{200});
+    RUVIA_CHECK_EQ(direct.status(), ruvia::http_status::kOk);
     RUVIA_CHECK(!direct.header("Vary").has_value());
     RUVIA_CHECK_EQ(
         direct.header("Content-Type").value_or(""),
@@ -580,7 +580,7 @@ RUVIA_TEST(sse_stream_head_defaults_cache_control_but_honors_a_caller_value) {
             ruvia::detail::httpResponseStreamCommitPlan(
                 ResponseStreamFraming::kHttp1Chunked,
                 HttpKnownMethod::kGet,
-                200,
+                ruvia::http_status::kOk,
                 ResponseTrailerIntent::kNone));
         return std::string(streamHead.response().header("Cache-Control").value_or(""));
     };
@@ -631,13 +631,13 @@ RUVIA_TEST(static_file_if_range_date_requires_exact_match) {
         }
         auto ctx = ContextAccess::make(memory, request);
         const auto response = ctx.staticFile(root, "data.txt", "text/plain");
-        return std::pair<std::uint16_t, std::string>(
+        return std::pair<ruvia::HttpStatusCode, std::string>(
             response.status(), std::string(response.header("Last-Modified").value_or("")));
     };
 
     // Discover the representation's current Last-Modified via a bare range request.
     const auto base = serve(std::nullopt);
-    RUVIA_CHECK_EQ(base.first, std::uint16_t{206});
+    RUVIA_CHECK_EQ(base.first, ruvia::http_status::kPartialContent);
     RUVIA_CHECK(!base.second.empty());
     const auto lastModified = ruvia::detail::httpParseHttpDate(base.second);
     RUVIA_CHECK(lastModified.has_value());
@@ -649,21 +649,21 @@ RUVIA_TEST(static_file_if_range_date_requires_exact_match) {
     };
 
     // Exact match -> the representation is unchanged, so the range is honored (206).
-    RUVIA_CHECK_EQ(serve(fmt(modified)).first, std::uint16_t{206});
+    RUVIA_CHECK_EQ(serve(fmt(modified)).first, ruvia::http_status::kPartialContent);
 
     // A present empty If-Range is not an entity-tag or HTTP-date. Its condition
     // is therefore false, so it must suppress the Range rather than being
     // confused with an absent field and producing a partial response.
-    RUVIA_CHECK_EQ(serve(std::string_view{}).first, std::uint16_t{200});
+    RUVIA_CHECK_EQ(serve(std::string_view{}).first, ruvia::http_status::kOk);
 
     // If-Range date NEWER than Last-Modified: the file's mtime is older, so it is a
     // DIFFERENT representation than the client holds. RFC 9110 §13.1.5 requires an
     // exact match, so the range MUST be refused and the full 200 served. (The old
     // "<=" comparison wrongly returned 206 here -- the corruption path.)
-    RUVIA_CHECK_EQ(serve(fmt(modified + 86400)).first, std::uint16_t{200});
+    RUVIA_CHECK_EQ(serve(fmt(modified + 86400)).first, ruvia::http_status::kOk);
 
     // If-Range date OLDER than Last-Modified: representation has since changed -> 200.
-    RUVIA_CHECK_EQ(serve(fmt(modified - 86400)).first, std::uint16_t{200});
+    RUVIA_CHECK_EQ(serve(fmt(modified - 86400)).first, ruvia::http_status::kOk);
 
     fs::remove_all(dir);
 }
@@ -712,7 +712,7 @@ RUVIA_TEST(static_file_clamps_future_last_modified_and_rejects_it_for_if_range) 
         }
         auto context = ContextAccess::make(memory, request);
         const auto response = context.staticFile(root, "data.txt", "text/plain");
-        return std::pair<std::uint16_t, std::string>(
+        return std::pair<ruvia::HttpStatusCode, std::string>(
             response.status(),
             std::string(response.header("Last-Modified").value_or("")));
     };
@@ -720,7 +720,7 @@ RUVIA_TEST(static_file_clamps_future_last_modified_and_rejects_it_for_if_range) 
     const auto before = std::time(nullptr);
     const auto base = serve(std::nullopt);
     const auto after = std::time(nullptr);
-    RUVIA_CHECK_EQ(base.first, std::uint16_t{206});
+    RUVIA_CHECK_EQ(base.first, ruvia::http_status::kPartialContent);
     const auto lastModified = ruvia::detail::httpParseHttpDate(base.second);
     RUVIA_CHECK(lastModified.has_value());
     RUVIA_CHECK(lastModified.value_or(after + 1) >= before);
@@ -729,7 +729,7 @@ RUVIA_TEST(static_file_clamps_future_last_modified_and_rejects_it_for_if_range) 
     // The clamped wire date is the response time, not the file's actual
     // validator. It is therefore weak and cannot authorize stitching a partial
     // response into the client's stored representation.
-    RUVIA_CHECK_EQ(serve(base.second).first, std::uint16_t{200});
+    RUVIA_CHECK_EQ(serve(base.second).first, ruvia::http_status::kOk);
 
     fs::remove_all(dir);
 }
@@ -776,16 +776,16 @@ RUVIA_TEST(static_file_without_response_validators_still_enforces_preconditions)
     };
 
     // A plain range with no If-Range is still honored without validators -> 206.
-    RUVIA_CHECK_EQ(serve(""), std::uint16_t{206});
+    RUVIA_CHECK_EQ(serve(""), ruvia::http_status::kPartialContent);
     // A range WITH If-Range but no server validator cannot be confirmed, so the
     // Range MUST be ignored and the full representation served (RFC 9110 13.1.5) --
     // not a 206 stitched from bytes the client cannot verify it still holds.
     // (Gating the If-Range check on enableValidators skipped it and returned 206.)
-    RUVIA_CHECK_EQ(serve("\"stale-etag\""), std::uint16_t{200});
-    RUVIA_CHECK_EQ(serve("Wed, 21 Oct 2015 07:28:00 GMT"), std::uint16_t{200});
+    RUVIA_CHECK_EQ(serve("\"stale-etag\""), ruvia::http_status::kOk);
+    RUVIA_CHECK_EQ(serve("Wed, 21 Oct 2015 07:28:00 GMT"), ruvia::http_status::kOk);
 
     struct ConditionalResult final {
-        std::uint16_t status;
+        ruvia::HttpStatusCode status;
         bool hasEtag;
         bool hasLastModified;
     };
@@ -820,7 +820,7 @@ RUVIA_TEST(static_file_without_response_validators_still_enforces_preconditions)
     };
 
     const auto plain = serveConditional("GET", std::nullopt, {}, {});
-    RUVIA_CHECK_EQ(plain.status, std::uint16_t{200});
+    RUVIA_CHECK_EQ(plain.status, ruvia::http_status::kOk);
     RUVIA_CHECK(!plain.hasEtag);
     RUVIA_CHECK(!plain.hasLastModified);
 
@@ -830,35 +830,35 @@ RUVIA_TEST(static_file_without_response_validators_still_enforces_preconditions)
     // origin's file metadata even when Last-Modified is not emitted.
     const auto getExisting = serveConditional(
         "GET", RequestKnownHeader::kIfNoneMatch, "If-None-Match", "*");
-    RUVIA_CHECK_EQ(getExisting.status, std::uint16_t{304});
+    RUVIA_CHECK_EQ(getExisting.status, ruvia::http_status::kNotModified);
     RUVIA_CHECK(!getExisting.hasEtag);
     RUVIA_CHECK(!getExisting.hasLastModified);
     RUVIA_CHECK_EQ(
         serveConditional(
             "POST", RequestKnownHeader::kIfNoneMatch, "If-None-Match", "*").status,
-        std::uint16_t{412});
+        ruvia::http_status::kPreconditionFailed);
     RUVIA_CHECK_EQ(
         serveConditional(
             "POST", RequestKnownHeader::kIfMatch, "If-Match", "*").status,
-        std::uint16_t{200});
+        ruvia::http_status::kOk);
     RUVIA_CHECK_EQ(
         serveConditional(
             "POST", RequestKnownHeader::kIfMatch, "If-Match", "\"stale\"").status,
-        std::uint16_t{412});
+        ruvia::http_status::kPreconditionFailed);
     RUVIA_CHECK_EQ(
         serveConditional(
             "POST",
             RequestKnownHeader::kIfUnmodifiedSince,
             "If-Unmodified-Since",
             "Thu, 01 Jan 1970 00:00:00 GMT").status,
-        std::uint16_t{412});
+        ruvia::http_status::kPreconditionFailed);
     RUVIA_CHECK_EQ(
         serveConditional(
             "GET",
             RequestKnownHeader::kIfModifiedSince,
             "If-Modified-Since",
             "Fri, 31 Dec 9999 23:59:59 GMT").status,
-        std::uint16_t{304});
+        ruvia::http_status::kNotModified);
 
     fs::remove_all(dir);
 }
@@ -903,7 +903,7 @@ RUVIA_TEST(static_file_if_match_takes_precedence_over_if_unmodified_since) {
                 HttpRequestAccess::knownHeaderSlot(header.slot));
         }
         auto context = ContextAccess::make(memory, request);
-        std::uint16_t status = 0;
+        ruvia::HttpStatusCode status = ruvia::http_status::kInternalServerError;
         std::string etag;
         try {
             const auto response = context.staticFile(root, "data.txt", "text/plain");
@@ -912,7 +912,7 @@ RUVIA_TEST(static_file_if_match_takes_precedence_over_if_unmodified_since) {
         } catch (const ruvia::HttpError& error) {
             status = error.info().status();
         }
-        return std::pair<std::uint16_t, std::string>(status, std::move(etag));
+        return std::pair<ruvia::HttpStatusCode, std::string>(status, std::move(etag));
     };
     const auto serve = [&serveMethod](std::initializer_list<Header> headers) {
         return serveMethod("GET", headers);
@@ -920,7 +920,7 @@ RUVIA_TEST(static_file_if_match_takes_precedence_over_if_unmodified_since) {
 
     // Discover the current strong ETag with a bare request.
     const auto base = serve({});
-    RUVIA_CHECK_EQ(base.first, std::uint16_t{200});
+    RUVIA_CHECK_EQ(base.first, ruvia::http_status::kOk);
     const std::string etag = base.second;
     RUVIA_CHECK(!etag.empty());
     // A date well before the file's mtime -> If-Unmodified-Since fails on its own.
@@ -929,33 +929,33 @@ RUVIA_TEST(static_file_if_match_takes_precedence_over_if_unmodified_since) {
     // If-Unmodified-Since alone (stale date) is a 412 precondition failure.
     RUVIA_CHECK_EQ(
         serve({{RequestKnownHeader::kIfUnmodifiedSince, "If-Unmodified-Since", kOldDate}}).first,
-        std::uint16_t{412});
+        ruvia::http_status::kPreconditionFailed);
 
     // With a matching If-Match present, RFC 9110 §13.2.2 requires If-Unmodified-Since
     // to be ignored -- the strong validator matched, so serve 200 rather than 412.
     RUVIA_CHECK_EQ(
         serve({{RequestKnownHeader::kIfMatch, "If-Match", etag},
                {RequestKnownHeader::kIfUnmodifiedSince, "If-Unmodified-Since", kOldDate}}).first,
-        std::uint16_t{200});
+        ruvia::http_status::kOk);
 
     // Presence is distinct from a non-empty field value. The empty #entity-tag
     // list matches no current representation, so an empty If-Match fails rather
     // than being treated as if the field were absent.
     RUVIA_CHECK_EQ(
         serve({{RequestKnownHeader::kIfMatch, "If-Match", ""}}).first,
-        std::uint16_t{412});
+        ruvia::http_status::kPreconditionFailed);
 
     constexpr std::string_view kFutureDate =
         "Fri, 31 Dec 9999 23:59:59 GMT";
     RUVIA_CHECK_EQ(
         serve({{RequestKnownHeader::kIfModifiedSince, "If-Modified-Since", kFutureDate}}).first,
-        std::uint16_t{304});
+        ruvia::http_status::kNotModified);
     // Even an empty If-None-Match is present and therefore takes precedence over
     // If-Modified-Since. Its empty list does not match, so the response is 200.
     RUVIA_CHECK_EQ(
         serve({{RequestKnownHeader::kIfNoneMatch, "If-None-Match", ""},
                {RequestKnownHeader::kIfModifiedSince, "If-Modified-Since", kFutureDate}}).first,
-        std::uint16_t{200});
+        ruvia::http_status::kOk);
 
     // If-Match and If-None-Match are list fields. Repeated field lines are
     // equivalent to one comma-joined value, so a match on the first line must
@@ -963,39 +963,39 @@ RUVIA_TEST(static_file_if_match_takes_precedence_over_if_unmodified_since) {
     RUVIA_CHECK_EQ(
         serve({{RequestKnownHeader::kIfMatch, "If-Match", etag},
                {RequestKnownHeader::kIfMatch, "If-Match", "\"stale\""}}).first,
-        std::uint16_t{200});
+        ruvia::http_status::kOk);
     RUVIA_CHECK_EQ(
         serve({{RequestKnownHeader::kIfNoneMatch, "If-None-Match", etag},
                {RequestKnownHeader::kIfNoneMatch, "If-None-Match", "\"stale\""}}).first,
-        std::uint16_t{304});
+        ruvia::http_status::kNotModified);
 
     // Preconditions protect unsafe methods too. A matching If-None-Match or a
     // stale If-Match / If-Unmodified-Since on POST must fail with 412 instead of
     // serving the file as an unconditional 200.
     RUVIA_CHECK_EQ(
         serveMethod("POST", {{RequestKnownHeader::kIfNoneMatch, "If-None-Match", etag}}).first,
-        std::uint16_t{412});
+        ruvia::http_status::kPreconditionFailed);
     RUVIA_CHECK_EQ(
         serveMethod("POST", {{RequestKnownHeader::kIfMatch, "If-Match", "\"stale\""}}).first,
-        std::uint16_t{412});
+        ruvia::http_status::kPreconditionFailed);
     RUVIA_CHECK_EQ(
         serveMethod("POST", {{RequestKnownHeader::kIfUnmodifiedSince, "If-Unmodified-Since", kOldDate}}).first,
-        std::uint16_t{412});
+        ruvia::http_status::kPreconditionFailed);
     RUVIA_CHECK_EQ(
         serveMethod("POST", {{RequestKnownHeader::kIfMatch, "If-Match", etag}}).first,
-        std::uint16_t{200});
+        ruvia::http_status::kOk);
     RUVIA_CHECK_EQ(
         serveMethod("POST", {{RequestKnownHeader::kIfNoneMatch, "If-None-Match", "\"stale\""}}).first,
-        std::uint16_t{200});
+        ruvia::http_status::kOk);
     RUVIA_CHECK_EQ(
         serveMethod("POST", {{RequestKnownHeader::kIfModifiedSince, "If-Modified-Since", kFutureDate}}).first,
-        std::uint16_t{200});
+        ruvia::http_status::kOk);
 
     // OPTIONS does not select or modify a representation, so RFC 9110 §13.2.1
     // requires these conditional fields to be ignored for that method.
     RUVIA_CHECK_EQ(
         serveMethod("OPTIONS", {{RequestKnownHeader::kIfMatch, "If-Match", "\"stale\""}}).first,
-        std::uint16_t{200});
+        ruvia::http_status::kOk);
 
     fs::remove_all(dir);
 }
@@ -1033,19 +1033,19 @@ RUVIA_TEST(static_file_conditional_request_serving) {
         }
         auto context = ContextAccess::make(memory, request);
         const auto response = context.staticFile(root, "data.txt", "text/plain");
-        return std::pair<std::uint16_t, std::string>(
+        return std::pair<ruvia::HttpStatusCode, std::string>(
             response.status(), std::string(response.header("ETag").value_or("")));
     };
 
     // An unconditional GET yields 200 and a strong ETag validator.
     const auto plain = serve(ruvia::detail::RequestKnownHeader::kIfNoneMatch, "", "");
-    RUVIA_CHECK_EQ(plain.first, std::uint16_t{200});
+    RUVIA_CHECK_EQ(plain.first, ruvia::http_status::kOk);
     RUVIA_CHECK(!plain.second.empty());
     const std::string etag = plain.second;
 
     // If-None-Match with the current ETag -> 304; a stale one falls through to 200.
-    RUVIA_CHECK_EQ(serve(ruvia::detail::RequestKnownHeader::kIfNoneMatch, "If-None-Match", etag).first, std::uint16_t{304});
-    RUVIA_CHECK_EQ(serve(ruvia::detail::RequestKnownHeader::kIfNoneMatch, "If-None-Match", "\"stale\"").first, std::uint16_t{200});
+    RUVIA_CHECK_EQ(serve(ruvia::detail::RequestKnownHeader::kIfNoneMatch, "If-None-Match", etag).first, ruvia::http_status::kNotModified);
+    RUVIA_CHECK_EQ(serve(ruvia::detail::RequestKnownHeader::kIfNoneMatch, "If-None-Match", "\"stale\"").first, ruvia::http_status::kOk);
 
     // A comma inside an opaque tag is data, not a list separator. This malformed
     // value closes that tag immediately before the current ETag and must not let
@@ -1053,14 +1053,14 @@ RUVIA_TEST(static_file_conditional_request_serving) {
     const std::string malformedList = std::string("\"stale, ") + etag;
     RUVIA_CHECK_EQ(
         serve(ruvia::detail::RequestKnownHeader::kIfNoneMatch, "If-None-Match", malformedList).first,
-        std::uint16_t{200});
+        ruvia::http_status::kOk);
 
     // If-Match against a non-matching ETag is a 412 precondition failure (thrown).
     bool precondition = false;
     try {
         (void)serve(ruvia::detail::RequestKnownHeader::kIfMatch, "If-Match", "\"stale\"");
     } catch (const ruvia::HttpError& error) {
-        precondition = error.info().status() == 412;
+        precondition = error.info().status() == ruvia::http_status::kPreconditionFailed;
     }
     RUVIA_CHECK(precondition);
 
@@ -1068,7 +1068,7 @@ RUVIA_TEST(static_file_conditional_request_serving) {
     try {
         (void)serve(ruvia::detail::RequestKnownHeader::kIfMatch, "If-Match", malformedList);
     } catch (const ruvia::HttpError& error) {
-        precondition = error.info().status() == 412;
+        precondition = error.info().status() == ruvia::http_status::kPreconditionFailed;
     }
     RUVIA_CHECK(precondition);
 
@@ -1230,7 +1230,7 @@ RUVIA_TEST(static_file_internal_sidecar_does_not_bypass_file_type_policy) {
     };
 
     const auto negotiated = serve(root, "app.js", "gzip");
-    RUVIA_CHECK_EQ(std::get<0>(negotiated), std::uint16_t{200});
+    RUVIA_CHECK_EQ(std::get<0>(negotiated), ruvia::http_status::kOk);
     RUVIA_CHECK_EQ(std::get<1>(negotiated), std::string("gzip"));
     RUVIA_CHECK_EQ(std::get<2>(negotiated), std::uint64_t{4});
 
@@ -1239,7 +1239,7 @@ RUVIA_TEST(static_file_internal_sidecar_does_not_bypass_file_type_policy) {
     // raw compressed bytes as an identity application/octet-stream response.
     RUVIA_CHECK_EQ(
         std::get<0>(serve(root, "app.js.gz", "")),
-        std::uint16_t{404});
+        ruvia::http_status::kNotFound);
 
     // A policy that explicitly allows .gz still exposes it as a normal file;
     // only entries admitted solely because their base type is allowed are
@@ -1249,7 +1249,7 @@ RUVIA_TEST(static_file_internal_sidecar_does_not_bypass_file_type_policy) {
     StaticRoot gzipRoot(dir, std::move(gzipOptions));
     RUVIA_CHECK_EQ(
         std::get<0>(serve(gzipRoot, "app.js.gz", "")),
-        std::uint16_t{200});
+        ruvia::http_status::kOk);
 
     fs::remove_all(dir);
 }
@@ -1324,8 +1324,8 @@ RUVIA_TEST(static_file_if_modified_since_serving) {
     // The file was just written, so an If-Modified-Since far in the future means
     // "not modified since then" -> 304; one far in the past means it HAS changed
     // -> 200.
-    RUVIA_CHECK_EQ(serve("Fri, 01 Jan 2100 00:00:00 GMT"), std::uint16_t{304});
-    RUVIA_CHECK_EQ(serve("Sat, 01 Jan 2000 00:00:00 GMT"), std::uint16_t{200});
+    RUVIA_CHECK_EQ(serve("Fri, 01 Jan 2100 00:00:00 GMT"), ruvia::http_status::kNotModified);
+    RUVIA_CHECK_EQ(serve("Sat, 01 Jan 2000 00:00:00 GMT"), ruvia::http_status::kOk);
 
     fs::remove_all(dir);
 }
@@ -1344,7 +1344,7 @@ RUVIA_TEST(static_file_directory_root_index_and_403) {
         out << "x";
     }
 
-    const auto serveRoot = [](StaticRoot& root) -> std::uint16_t {
+    const auto serveRoot = [](StaticRoot& root) -> ruvia::HttpStatusCode {
         ruvia::WorkerMemory worker;
         ruvia::RequestMemory memory(worker);
         ruvia::HttpRequest request = HttpRequestAccess::make();
@@ -1364,7 +1364,7 @@ RUVIA_TEST(static_file_directory_root_index_and_403) {
         StaticRootOptions options;
         options.fileTypes = ruvia::StaticFileTypePolicy::all();
         StaticRoot root(dir, std::move(options));
-        RUVIA_CHECK_EQ(serveRoot(root), std::uint16_t{403});
+        RUVIA_CHECK_EQ(serveRoot(root), ruvia::http_status::kForbidden);
     }
 
     // With an index file configured (and present), the directory root serves it.
@@ -1376,7 +1376,7 @@ RUVIA_TEST(static_file_directory_root_index_and_403) {
         options.fileTypes = ruvia::StaticFileTypePolicy::all();
         options.indexFile = "index.html";
         StaticRoot root(dir, std::move(options));
-        RUVIA_CHECK_EQ(serveRoot(root), std::uint16_t{200});
+        RUVIA_CHECK_EQ(serveRoot(root), ruvia::http_status::kOk);
     }
 
     fs::remove_all(dir);

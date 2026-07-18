@@ -7,13 +7,13 @@
 namespace ruvia {
 
 HttpInterimResponseHead::HttpInterimResponseHead(
-    std::uint16_t statusCode,
+    HttpStatusCode statusCode,
     HeaderInit headers)
     : statusCode_(statusCode),
       headers_(headers) {
     if (!detail::httpInterimStatusCodeValid(statusCode)) {
         throw std::invalid_argument(
-            statusCode == 101
+            statusCode == http_status::kSwitchingProtocols
                 ? "101 Switching Protocols requires a dedicated protocol driver"
                 : "invalid interim HTTP status code");
     }

@@ -194,7 +194,7 @@ struct Http2OutboundRequestHeaderFacts final {
 [[nodiscard]] bool http2IsValidConnectResponseHead(
     const HttpResponse& response) noexcept {
     const auto& body = responseBody(response);
-    if (response.status() < 200 || response.status() >= 300 ||
+    if (!response.status().isSuccessful() ||
         body.size() != 0 || body.file().has_value()) {
         return false;
     }
@@ -506,7 +506,7 @@ Http2BufferedResponseHeadSubmitResult Http2Connection::submitResponseHead(
             makeResponsePlanMismatchFailure();
     }
     const bool successfulConnect =
-        response.status() >= 200 && response.status() < 300 &&
+        response.status().isSuccessful() &&
         stream->tunnel().pending() != nullptr;
     if (successfulConnect) {
         return Http2BufferedResponseHeadSubmitResult::makeInvalidStateFailure();
@@ -577,7 +577,7 @@ Http2StreamingResponseHeadSubmitResult Http2Connection::submitStreamingResponseH
         return Http2StreamingResponseHeadSubmitResult::makeClosedFailure();
     }
     const bool successfulConnect =
-        head.status() >= 200 && head.status() < 300 &&
+        head.status().isSuccessful() &&
         stream->tunnel().pending() != nullptr;
     if (role_ != Http2Role::kServer || !http2RemoteFinalHeadDecoded(*stream) ||
         stream->localSend().headPending() == nullptr || successfulConnect) {

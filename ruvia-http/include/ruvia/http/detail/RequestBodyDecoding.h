@@ -24,11 +24,9 @@ public:
     [[nodiscard]] HttpProtocolError protocolError() const noexcept {
         switch (error_) {
             case HttpContentDecodeError::kUnsupportedCoding:
-                return HttpProtocolError(
-                    415, "request Content-Encoding is not supported");
+                return HttpProtocolError(http_status::kUnsupportedMediaType, "request Content-Encoding is not supported");
             case HttpContentDecodeError::kInvalidContent:
-                return HttpProtocolError(
-                    400, "failed to decode request body");
+                return HttpProtocolError(http_status::kBadRequest, "failed to decode request body");
             case HttpContentDecodeError::kDecodedSizeExceeded:
                 return HttpRequestBodyFailure::tooLarge().protocolError();
             case HttpContentDecodeError::kDecoderFailure:

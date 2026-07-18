@@ -41,7 +41,7 @@ using ruvia::kMaxHttpHeaderBytes;
 
 template <typename Alternative>
 concept HasCompletionStatus = requires(const Alternative& value) {
-    { value.status() } -> std::same_as<std::uint16_t>;
+    { value.status() } -> std::same_as<ruvia::HttpStatusCode>;
 };
 
 template <typename Alternative>
@@ -152,13 +152,13 @@ RUVIA_TEST(http1_session_request_completion_owns_wire_and_buffer_outcome) {
     const auto committed =
         Http1SessionRequestCompletion::makeCommittedStream(
             reusablePlan,
-            207,
+            ruvia::http_status::kMultiStatus,
             19);
     RUVIA_CHECK(committed.bufferedResponse() == nullptr);
     RUVIA_CHECK(committed.committedStream() != nullptr);
     RUVIA_CHECK_EQ(
         committed.committedStream()->status(),
-        std::uint16_t{207});
+        ruvia::http_status::kMultiStatus);
     RUVIA_CHECK_EQ(
         committed.bufferCompletion().compaction()->consumedBytes(),
         std::size_t{19});
@@ -187,7 +187,7 @@ RUVIA_TEST(http1_session_request_completion_discriminates_close_and_restore) {
     const auto committedClosing =
         Http1SessionRequestCompletion::makeCommittedStream(
             closePlan,
-            503,
+            ruvia::http_status::kServiceUnavailable,
             999);
     RUVIA_CHECK(committedClosing.committedStream() != nullptr);
     RUVIA_CHECK(committedClosing.bufferCompletion().discarded() != nullptr);

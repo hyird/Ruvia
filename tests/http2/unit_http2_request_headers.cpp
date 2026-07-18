@@ -80,17 +80,17 @@ static_assert(!ExposesRvalueHttp2StreamStateStorage<Http2StreamState>);
 RUVIA_TEST(h2_response_status_is_optional_and_single_assignment) {
     Http2StreamState stream(1, res());
     RUVIA_CHECK(stream.responseStatus() == nullptr);
-    RUVIA_CHECK(stream.setResponseStatus(200));
+    RUVIA_CHECK(stream.setResponseStatus(ruvia::http_status::kOk));
     const auto* status = stream.responseStatus();
     RUVIA_CHECK(status != nullptr);
     if (status != nullptr) {
-        RUVIA_CHECK_EQ(*status, std::uint16_t{200});
+        RUVIA_CHECK_EQ(*status, ruvia::http_status::kOk);
     }
-    RUVIA_CHECK(!stream.setResponseStatus(204));
+    RUVIA_CHECK(!stream.setResponseStatus(ruvia::http_status::kNoContent));
     status = stream.responseStatus();
     RUVIA_CHECK(status != nullptr);
     if (status != nullptr) {
-        RUVIA_CHECK_EQ(*status, std::uint16_t{200});
+        RUVIA_CHECK_EQ(*status, ruvia::http_status::kOk);
     }
 }
 

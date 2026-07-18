@@ -1461,7 +1461,7 @@ template <typename T>
 concept HasHttp1BufferedPlanContract = requires(const T& plan) {
     { plan.bodyPlan() } ->
         std::same_as<ruvia::detail::HttpResponseBodyPlan>;
-    { plan.responseStatus() } -> std::same_as<std::uint16_t>;
+    { plan.responseStatus() } -> std::same_as<ruvia::HttpStatusCode>;
     { plan.contentLength() } -> std::same_as<std::uint64_t>;
     { plan.sendBody() } -> std::same_as<bool>;
     { plan.headPlan() } -> std::same_as<const
@@ -2422,7 +2422,7 @@ static_assert(std::same_as<
 static_assert(std::same_as<
     decltype(std::declval<const ruvia::detail::Http2StreamState&>()
         .responseStatus()),
-    const std::uint16_t*>);
+    const ruvia::HttpStatusCode*>);
 static_assert(std::same_as<
     decltype(std::declval<const ruvia::detail::Http2ClosedStreamHistory&>()
         .source(std::uint32_t{})),
@@ -3217,7 +3217,7 @@ using ResponseStreamCommitPlanner =
     ruvia::detail::ResponseStreamCommitPlan (*)(
         ruvia::detail::ResponseStreamFraming,
         ruvia::HttpKnownMethod,
-        std::uint16_t,
+        ruvia::HttpStatusCode,
         ruvia::detail::ResponseTrailerIntent) noexcept;
 using ResponseStreamHeadPreparer =
     ruvia::detail::ResponseStreamHead (*)(
@@ -3240,7 +3240,7 @@ static_assert(std::same_as<
 static_assert(std::same_as<
     decltype(std::declval<const ruvia::detail::ResponseStreamCommitPlan&>()
                  .responseStatus()),
-    std::uint16_t>);
+    ruvia::HttpStatusCode>);
 static_assert(std::same_as<
     decltype(std::declval<const ruvia::detail::ResponseStreamCommitPlan&>()
                  .framing()),
@@ -3248,11 +3248,11 @@ static_assert(std::same_as<
 static_assert(std::same_as<
     decltype(std::declval<const ruvia::detail::HttpResponseBodyPlan&>()
                  .responseStatus()),
-    std::uint16_t>);
+    ruvia::HttpStatusCode>);
 static_assert(std::same_as<
     decltype(std::declval<const ruvia::detail::HttpBufferedResponseWritePlan&>()
                  .responseStatus()),
-    std::uint16_t>);
+    ruvia::HttpStatusCode>);
 template <typename Plan>
 concept HasValueSemanticResponseWritePolicy =
     requires(const Plan& plan) {
@@ -3882,7 +3882,7 @@ static_assert(!HasHttpClientRedirectStatus<
 static_assert(std::same_as<
     decltype(ruvia::planHttpClientRedirectRequest(
         std::declval<const ruvia::HttpClientRequest&>(),
-        std::uint16_t{},
+        ruvia::http_status::kTemporaryRedirect,
         std::declval<std::pmr::memory_resource*>())),
     ruvia::HttpClientRedirectRequestPlan>);
 static_assert(!std::copy_constructible<
@@ -3954,9 +3954,9 @@ static_assert(!std::default_initializable<
 static_assert(!std::default_initializable<
     ruvia::detail::HttpContentCodingFieldResult>);
 static_assert(
-    ruvia::detail::HttpUnsupportedContentCoding::status() == 415);
+    ruvia::detail::HttpUnsupportedContentCoding::status() == ruvia::http_status::kUnsupportedMediaType);
 static_assert(
-    ruvia::detail::HttpInvalidContentCodingField::status() == 400);
+    ruvia::detail::HttpInvalidContentCodingField::status() == ruvia::http_status::kBadRequest);
 static_assert(
     ruvia::detail::httpSupportedRequestContentCodings() ==
     std::string_view("gzip, br, zstd"));
@@ -4264,9 +4264,9 @@ int main() {
     }
 
     const auto headSemantics = ruvia::detail::httpResponseContentSemantics(
-        ruvia::HttpKnownMethod::kHead, 200);
+        ruvia::HttpKnownMethod::kHead, ruvia::http_status::kOk);
     const auto tunnelSemantics = ruvia::detail::httpResponseContentSemantics(
-        ruvia::HttpKnownMethod::kConnect, 200);
+        ruvia::HttpKnownMethod::kConnect, ruvia::http_status::kOk);
     if (headSemantics !=
             ruvia::detail::HttpResponseContentSemantics::kWithoutContent ||
         tunnelSemantics !=
@@ -4357,7 +4357,7 @@ int main() {
 
     const auto redirectRequestPlan = ruvia::planHttpClientRedirectRequest(
         outboundRequest,
-        307,
+        ruvia::http_status::kTemporaryRedirect,
         std::pmr::get_default_resource());
     if (redirectRequestPlan.method() != "POST" ||
         redirectRequestPlan.contentDisposition() !=
@@ -4388,8 +4388,10 @@ int main() {
         return 29;
     }
 
-    const ruvia::HttpProtocolError error(400, "bad request");
-    if (error.status() != 400) {
+    const ruvia::HttpProtocolError error(
+        ruvia::http_status::kBadRequest,
+        "bad request");
+    if (error.status() != ruvia::http_status::kBadRequest) {
         return 2;
     }
     std::pmr::string wsInput(std::pmr::get_default_resource());
@@ -4433,7 +4435,7 @@ int main() {
     const auto repeatedMultipartFailure = failedMultipartParser.poll();
     if (multipartFailure.failure() == nullptr ||
         repeatedMultipartFailure.failure() == nullptr ||
-        multipartFailure.failure()->protocolError().status() != 413 ||
+        multipartFailure.failure()->protocolError().status() != ruvia::http_status::kContentTooLarge ||
         std::string_view(
             repeatedMultipartFailure.failure()->protocolError().what()) !=
             multipartFailure.failure()->protocolError().what()) {
@@ -4614,7 +4616,7 @@ int main() {
             "GET / HTTP/1.0\r\nConnection: keep-alive\r\n\r\n"),
         ruvia::detail::Http1ServerClosePolicy::kAllowReuse);
     ruvia::HttpResponse resetContentStream;
-    resetContentStream.status(205);
+    resetContentStream.status(ruvia::http_status::kResetContent);
     const auto preparedHttp10Result =
         ruvia::detail::prepareHttp1ResponseStreamHead(
         std::move(resetContentStream),
@@ -4655,7 +4657,7 @@ int main() {
     if (bufferedHeadPlan.buffered() == nullptr ||
         bufferedHeadPlan.buffered()->contentLength() != 4 ||
         bufferedResponsePlan.contentLength() != 4 ||
-        bufferedResponsePlan.responseStatus() != 200 ||
+        bufferedResponsePlan.responseStatus() != ruvia::http_status::kOk ||
         bufferedResponsePlan.sendBody() ||
         bufferedHeadPlan.protocolVersion() !=
             ruvia::HttpProtocolVersion::kHttp11 ||
@@ -4737,7 +4739,7 @@ int main() {
         return 44;
     }
 
-    response.status(205);
+    response.status(ruvia::http_status::kResetContent);
     const auto resetContentPlan = ruvia::detail::httpBufferedResponseWritePlan(
         ruvia::HttpKnownMethod::kGet, response);
     if (resetContentPlan.statusAllowsBody() ||
@@ -4750,8 +4752,8 @@ int main() {
     const ruvia::HttpHeaderView earlyHintFields[] = {
         {"Link", "</style.css>; rel=preload"},
     };
-    const ruvia::HttpInterimResponseHead earlyHints(103, earlyHintFields);
-    if (earlyHints.status() != 103 || earlyHints.headers().size() != 1) {
+    const ruvia::HttpInterimResponseHead earlyHints(ruvia::http_status::kEarlyHints, earlyHintFields);
+    if (earlyHints.status() != ruvia::http_status::kEarlyHints || earlyHints.headers().size() != 1) {
         return 26;
     }
     std::array<char, 128> earlyHintsWireBuffer{};

@@ -48,17 +48,15 @@ constexpr std::size_t kMaxMultipartDelimiterLineBytes = 64 * 1024;
         case MultipartParseError::kPreambleTooLarge:
         case MultipartParseError::kPartHeadersTooLarge:
         case MultipartParseError::kDelimiterLineTooLarge:
-            return HttpProtocolError(
-                413, multipartParseErrorMessage(error));
+            return HttpProtocolError(http_status::kContentTooLarge, multipartParseErrorMessage(error));
         case MultipartParseError::kIncompleteBody:
         case MultipartParseError::kInvalidDelimiter:
         case MultipartParseError::kInvalidPartHeaders:
         case MultipartParseError::kInvalidContentDisposition:
         case MultipartParseError::kMissingFieldName:
-            return HttpProtocolError(
-                400, multipartParseErrorMessage(error));
+            return HttpProtocolError(http_status::kBadRequest, multipartParseErrorMessage(error));
     }
-    return HttpProtocolError(400, "invalid multipart body");
+    return HttpProtocolError(http_status::kBadRequest, "invalid multipart body");
 }
 
 }  // namespace

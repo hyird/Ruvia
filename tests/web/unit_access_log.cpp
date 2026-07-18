@@ -35,7 +35,7 @@ using RecordHttpAccessFunction = void (*)(
     const AccessLogSink&,
     const HttpRequest&,
     std::string_view,
-    std::uint16_t,
+    ruvia::HttpStatusCode,
     std::chrono::steady_clock::time_point) noexcept;
 
 static_assert(std::is_same_v<
@@ -55,7 +55,7 @@ struct AccessLogObservation final {
     HttpKnownMethod knownMethod{HttpKnownMethod::kUnknown};
     std::string_view path;
     std::string_view remoteAddress;
-    std::uint16_t status{0};
+    ruvia::HttpStatusCode status{ruvia::http_status::kOk};
     std::uint64_t durationMicros{0};
     std::array<HttpProtocolVersion, 3> versions{};
 
@@ -101,7 +101,7 @@ RUVIA_TEST(access_log_record_borrows_one_typed_request) {
         accessLog,
         request,
         "192.0.2.80",
-        207,
+        ruvia::http_status::kMultiStatus,
         std::chrono::steady_clock::now());
 
     RUVIA_CHECK_EQ(observation.calls, std::size_t{1});
@@ -111,7 +111,7 @@ RUVIA_TEST(access_log_record_borrows_one_typed_request) {
     RUVIA_CHECK_EQ(
         observation.remoteAddress,
         std::string_view("192.0.2.80"));
-    RUVIA_CHECK_EQ(observation.status, std::uint16_t{207});
+    RUVIA_CHECK_EQ(observation.status, ruvia::http_status::kMultiStatus);
     RUVIA_CHECK(
         observation.versions[0] == HttpProtocolVersion::kHttp10);
 }
@@ -131,7 +131,7 @@ RUVIA_TEST(access_log_preserves_all_protocol_versions_without_transport_bool) {
             accessLog,
             request,
             "198.51.100.81",
-            200,
+            ruvia::http_status::kOk,
             std::chrono::steady_clock::now());
     }
 

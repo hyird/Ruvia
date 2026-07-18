@@ -609,7 +609,7 @@ RUVIA_TEST(context_parse_body_maps_multipart_failure_to_http_protocol_error) {
     try {
         future.get();
     } catch (const ruvia::HttpProtocolError& error) {
-        mapped = error.status() == 400 &&
+        mapped = error.status() == ruvia::http_status::kBadRequest &&
             error.what() == std::string_view("incomplete multipart body");
     }
     RUVIA_CHECK(mapped);

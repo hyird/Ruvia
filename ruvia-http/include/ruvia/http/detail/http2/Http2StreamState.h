@@ -520,12 +520,12 @@ public:
     }
     [[nodiscard]] const Http2TunnelState& tunnel() const && = delete;
 
-    [[nodiscard]] const std::uint16_t* responseStatus() const & noexcept {
+    [[nodiscard]] const HttpStatusCode* responseStatus() const & noexcept {
         return requestState_.responseStatus();
     }
-    [[nodiscard]] const std::uint16_t* responseStatus() const && = delete;
+    [[nodiscard]] const HttpStatusCode* responseStatus() const && = delete;
 
-    [[nodiscard]] bool setResponseStatus(std::uint16_t status) noexcept {
+    [[nodiscard]] bool setResponseStatus(HttpStatusCode status) noexcept {
         return requestState_.setResponseStatus(status);
     }
 

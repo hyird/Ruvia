@@ -208,7 +208,7 @@ void appendPercentEncodedByte(std::pmr::string& output, unsigned char ch) {
 
 }  // namespace
 
-void Context::status(std::uint16_t statusCode) {
+void Context::status(HttpStatusCode statusCode) {
     responseState_.activeResponse().status(statusCode);
 }
 
@@ -430,7 +430,7 @@ HttpResponse Context::htmlStaticView(std::string_view body) const {
 
 HttpResponse Context::redirect(
     std::string_view location,
-    std::uint16_t statusCode) const {
+    HttpStatusCode statusCode) const {
     HttpResponse response(resource());
     applyResponseState(response, statusCode);
     if (redirectLocationNeedsEncoding(location)) {
@@ -443,7 +443,7 @@ HttpResponse Context::redirect(
 }
 
 HttpResponse Context::error(
-    std::uint16_t statusCode,
+    HttpStatusCode statusCode,
     std::string_view code,
     std::string_view message,
     std::string_view statusText) const {
@@ -461,8 +461,8 @@ Task<HttpResponse> Context::notFound() {
 
     auto response = detail::makeDefaultErrorResponse(
         resource(),
-        HttpErrorInfo(404, {}, "route not found"));
-    applyResponseState(response, 404);
+        HttpErrorInfo(http_status::kNotFound, {}, "route not found"));
+    applyResponseState(response, http_status::kNotFound);
     co_return response;
 }
 
@@ -482,7 +482,7 @@ Context& Context::setStableResponseHeader(std::string_view name, std::string_vie
 
 void Context::applyResponseState(
     HttpResponse& response,
-    std::optional<std::uint16_t> statusCode) const {
+    std::optional<HttpStatusCode> statusCode) const {
     const auto& activeResponse = responseState_.activeResponse();
     const auto finalStatusCode = statusCode.value_or(activeResponse.status());
     response.status(finalStatusCode);

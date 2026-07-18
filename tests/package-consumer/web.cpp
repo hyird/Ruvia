@@ -241,6 +241,29 @@ concept ExposesRvalueSendWindowAlternative = requires(Result result) {
     std::move(result).aborted();
 };
 
+template <typename Table>
+concept HasLegacyDispatchBuffered = requires(
+    const Table& table,
+    const ruvia::HttpRequest& request,
+    const ruvia::detail::RouteResolution& resolution,
+    ruvia::RequestMemory& memory,
+    ruvia::detail::ContextServices services) {
+    table.dispatchBuffered(request, resolution, memory, services);
+};
+
+using DispatchBufferedResponseFunction =
+    ruvia::Task<ruvia::HttpResponse> (ruvia::detail::RouteTable::*)(
+        const ruvia::HttpRequest&,
+        const ruvia::detail::RouteResolution&,
+        ruvia::RequestMemory&,
+        const ruvia::StaticRoot*,
+        ruvia::detail::ContextServices) const;
+
+static_assert(!HasLegacyDispatchBuffered<ruvia::detail::RouteTable>);
+static_assert(std::same_as<
+    decltype(&ruvia::detail::RouteTable::dispatchBufferedResponse),
+    DispatchBufferedResponseFunction>);
+
 static_assert(!std::default_initializable<
     ruvia::detail::Http2SendWindowWaitResult>);
 static_assert(std::same_as<
@@ -394,21 +417,21 @@ concept ExposesRvalueHttpErrorInfo = requires {
 template <typename String>
 concept AcceptsAnyRvalueHttpErrorInfoText =
     requires(String&& value) {
-        ruvia::HttpErrorInfo(400, std::forward<String>(value));
+        ruvia::HttpErrorInfo(ruvia::http_status::kBadRequest, std::forward<String>(value));
     } ||
     requires(String&& value) {
-        ruvia::HttpErrorInfo(400, {}, std::forward<String>(value));
+        ruvia::HttpErrorInfo(ruvia::http_status::kBadRequest, {}, std::forward<String>(value));
     } ||
     requires(String&& value) {
-        ruvia::HttpErrorInfo(400, {}, {}, std::forward<String>(value));
+        ruvia::HttpErrorInfo(ruvia::http_status::kBadRequest, {}, {}, std::forward<String>(value));
     } ||
     requires(String&& value) {
-        ruvia::HttpErrorInfo(400, {}, {}, {}, std::forward<String>(value));
+        ruvia::HttpErrorInfo(ruvia::http_status::kBadRequest, {}, {}, {}, std::forward<String>(value));
     };
 
 template <typename String>
 concept AcceptsLvalueHttpErrorInfoText = requires(String& value) {
-    ruvia::HttpErrorInfo(400, value, value, value, value);
+    ruvia::HttpErrorInfo(ruvia::http_status::kBadRequest, value, value, value, value);
 };
 
 static_assert(!ExposesAnyRvalueRequestNameValueListBorrow<
@@ -1210,7 +1233,7 @@ concept HasLegacyAccessLogHttp2Flag = requires(const Record& record) {
 
 template <typename Alternative>
 concept HasResponseStatus = requires(const Alternative& value) {
-    { value.status() } -> std::same_as<std::uint16_t>;
+    { value.status() } -> std::same_as<ruvia::HttpStatusCode>;
 };
 
 template <typename Alternative>
@@ -1467,7 +1490,7 @@ using RecordHttpAccessFunction = void (*)(
     const ruvia::detail::AccessLogSink&,
     const ruvia::HttpRequest&,
     std::string_view,
-    std::uint16_t,
+    ruvia::HttpStatusCode,
     std::chrono::steady_clock::time_point) noexcept;
 using AppOnAccessFunction = ruvia::App& (ruvia::App::*)(
     ruvia::AccessLogCallback);
@@ -1862,7 +1885,7 @@ static_assert(std::same_as<
 static_assert(std::same_as<
     decltype(std::declval<const ruvia::detail::
         ResponseStreamDispatchResult&>().committedStatus()),
-    std::optional<std::uint16_t>>);
+    std::optional<ruvia::HttpStatusCode>>);
 static_assert(std::same_as<
     decltype(std::declval<const ruvia::detail::ResponseStreamState&>()
                  .commitPlan()),
@@ -1913,7 +1936,7 @@ static_assert(std::same_as<
 static_assert(std::same_as<
     decltype(std::declval<const ruvia::detail::
         Http1BufferedResponseWriteResult&>().committedStatus()),
-    std::optional<std::uint16_t>>);
+    std::optional<ruvia::HttpStatusCode>>);
 static_assert(std::is_trivially_copyable_v<
     ruvia::detail::Http1BufferedResponseWriteResult>);
 static_assert(sizeof(
@@ -1968,7 +1991,7 @@ static_assert(std::same_as<
 static_assert(std::same_as<
     decltype(std::declval<const ruvia::detail::
         Http2BufferedResponseWriteResult&>().committedStatus()),
-    std::optional<std::uint16_t>>);
+    std::optional<ruvia::HttpStatusCode>>);
 static_assert(std::is_trivially_copyable_v<
     ruvia::detail::Http2BufferedResponseWriteResult>);
 static_assert(sizeof(
@@ -2307,8 +2330,9 @@ std::string_view peerAddress(const ruvia::Context& context) {
 }
 
 int main() {
-    const ruvia::HttpErrorInfo error(500);
-    if (error.status() != 500) {
+    const ruvia::HttpErrorInfo error(
+        ruvia::http_status::kInternalServerError);
+    if (error.status() != ruvia::http_status::kInternalServerError) {
         return 2;
     }
     const ruvia::detail::HttpServerOptions defaultOptions;

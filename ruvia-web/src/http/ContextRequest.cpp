@@ -39,7 +39,9 @@ namespace detail {
 // malformed body of the RIGHT type earns below.
 [[noreturn]] void throwInvalidJsonContentType() {
     throw HttpError(
-        415, "unsupported_media_type", "request body must be application/json");
+        http_status::kUnsupportedMediaType,
+        "unsupported_media_type",
+        "request body must be application/json");
 }
 
 [[noreturn]] void throwInvalidJsonBody() {
@@ -48,7 +50,7 @@ namespace detail {
 
 [[noreturn]] void throwInvalidFormContentType() {
     throw HttpError(
-        415,
+        http_status::kUnsupportedMediaType,
         "unsupported_media_type",
         "request body must be application/x-www-form-urlencoded");
 }

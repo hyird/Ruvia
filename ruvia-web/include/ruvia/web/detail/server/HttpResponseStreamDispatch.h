@@ -77,17 +77,17 @@ template <typename Sink>
 
 class ResponseStreamCompleted final {
 public:
-    [[nodiscard]] constexpr std::uint16_t status() const noexcept {
+    [[nodiscard]] constexpr HttpStatusCode status() const noexcept {
         return status_;
     }
 
 private:
     friend class ResponseStreamDispatchResult;
 
-    explicit constexpr ResponseStreamCompleted(std::uint16_t status) noexcept
+    explicit constexpr ResponseStreamCompleted(HttpStatusCode status) noexcept
         : status_(status) {}
 
-    std::uint16_t status_;
+    HttpStatusCode status_;
 };
 
 class ResponseStreamPeerAbortedBeforeCommit final {
@@ -99,7 +99,7 @@ private:
 
 class ResponseStreamPeerAbortedAfterCommit final {
 public:
-    [[nodiscard]] constexpr std::uint16_t status() const noexcept {
+    [[nodiscard]] constexpr HttpStatusCode status() const noexcept {
         return status_;
     }
 
@@ -107,15 +107,15 @@ private:
     friend class ResponseStreamDispatchResult;
 
     explicit constexpr ResponseStreamPeerAbortedAfterCommit(
-        std::uint16_t status) noexcept
+        HttpStatusCode status) noexcept
         : status_(status) {}
 
-    std::uint16_t status_;
+    HttpStatusCode status_;
 };
 
 class ResponseStreamFailedAfterCommit final {
 public:
-    [[nodiscard]] constexpr std::uint16_t status() const noexcept {
+    [[nodiscard]] constexpr HttpStatusCode status() const noexcept {
         return status_;
     }
 
@@ -123,10 +123,10 @@ private:
     friend class ResponseStreamDispatchResult;
 
     explicit constexpr ResponseStreamFailedAfterCommit(
-        std::uint16_t status) noexcept
+        HttpStatusCode status) noexcept
         : status_(status) {}
 
-    std::uint16_t status_;
+    HttpStatusCode status_;
 };
 
 class ResponseStreamRouteResponse final {
@@ -166,7 +166,7 @@ private:
 class ResponseStreamDispatchResult final {
 public:
     [[nodiscard]] static ResponseStreamDispatchResult makeCompleted(
-        std::uint16_t status) noexcept {
+        HttpStatusCode status) noexcept {
         return ResponseStreamDispatchResult(
             ResponseStreamCompleted(status));
     }
@@ -178,13 +178,13 @@ public:
     }
 
     [[nodiscard]] static ResponseStreamDispatchResult
-    makePeerAbortedAfterCommit(std::uint16_t status) noexcept {
+    makePeerAbortedAfterCommit(HttpStatusCode status) noexcept {
         return ResponseStreamDispatchResult(
             ResponseStreamPeerAbortedAfterCommit(status));
     }
 
     [[nodiscard]] static ResponseStreamDispatchResult
-    makeFailedAfterCommit(std::uint16_t status) noexcept {
+    makeFailedAfterCommit(HttpStatusCode status) noexcept {
         return ResponseStreamDispatchResult(
             ResponseStreamFailedAfterCommit(status));
     }
@@ -237,7 +237,7 @@ public:
     }
     ResponseStreamRecoveredFailure* recoveredFailure() && = delete;
 
-    [[nodiscard]] std::optional<std::uint16_t>
+    [[nodiscard]] std::optional<HttpStatusCode>
     committedStatus() const noexcept {
         if (const auto* value = completed()) {
             return value->status();
@@ -268,7 +268,7 @@ private:
 };
 
 template <typename Sink>
-[[nodiscard]] std::uint16_t committedResponseStreamStatus(
+[[nodiscard]] HttpStatusCode committedResponseStreamStatus(
     const Sink& sink) {
     const auto* plan = sink.commitPlan();
     if (plan == nullptr) {

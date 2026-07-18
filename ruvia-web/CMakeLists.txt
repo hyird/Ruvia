@@ -50,7 +50,6 @@ set(RUVIA_WEB_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/src/server/HttpConnectionState.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/server/HttpServerAccept.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/server/HttpServer.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/server/HttpServerDocumentRoot.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/server/HttpServerLifecycle.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/router/ControllerRegistry.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/router/RouterBuild.cpp

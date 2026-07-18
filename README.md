@@ -83,6 +83,9 @@ Handlers use `ruvia::Task<T>`, read HTTP input through `c.req()`, and build
 responses through `Context`. Set response metadata through `c.status()`,
 `c.header()`, and `c.setCookie()` before selecting one body builder such as
 `c.text()` or `c.json()`; body builders do not accept a second metadata path.
+HTTP status APIs use `ruvia::HttpStatusCode`: prefer named values such as
+`ruvia::http_status::kCreated`, and use `HttpStatusCode::fromValue()` only for
+validated extension codes.
 `ServerTopology` atomically selects HTTP, HTTPS, dual-listener, or redirect operation; HTTPS requires a validated `TlsIdentity`, and `setWorkersPerListener()` makes dual-listener topologies own twice the configured workers.
 Default rate limiting is worker-local via `setDefaultRateLimitPerWorker()`; `setRateLimitSlotsPerWorker()` selects its power-of-two startup capacity (`kDefaultRateLimitSlotsPerWorker` by default), and workers with neither a default nor route-specific rule allocate no table.
 

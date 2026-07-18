@@ -63,7 +63,7 @@ inline void http2EncodeWebSocketHandshakeHeaders(
     std::pmr::string& headerBlock,
     const WebSocketServerNegotiation& negotiation) {
     headerBlock.clear();
-    HpackEncoder::encodeStatus(headerBlock, 200);
+    HpackEncoder::encodeStatus(headerBlock, http_status::kOk);
     HpackEncoder::encodeHeaderWithNameIndex(headerBlock, HpackStaticIndex::kDate, cachedDateValue());
     if (!negotiation.subprotocol().empty()) {
         HpackEncoder::encodeHeader(

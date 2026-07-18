@@ -26,11 +26,11 @@ public:
     [[nodiscard]] HttpProtocolError protocolError() const noexcept {
         switch (kind_) {
             case Kind::kTooLarge:
-                return HttpProtocolError(413, "request body is too large");
+                return HttpProtocolError(http_status::kContentTooLarge, "request body is too large");
             case Kind::kIncomplete:
-                return HttpProtocolError(400, "incomplete request body");
+                return HttpProtocolError(http_status::kBadRequest, "incomplete request body");
         }
-        return HttpProtocolError(400, "invalid request body");
+        return HttpProtocolError(http_status::kBadRequest, "invalid request body");
     }
 
 private:

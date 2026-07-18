@@ -189,7 +189,7 @@ private:
         }
         response.tagsEnsure().emplace_back(ruvia::String("created", c.resource()));
         response.tagsEnsure().emplace_back(ruvia::String("validated", c.resource()));
-        c.status(201);
+        c.status(ruvia::http_status::kCreated);
         co_return c.json(response);
     }
 

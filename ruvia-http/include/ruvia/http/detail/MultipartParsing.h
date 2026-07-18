@@ -466,7 +466,7 @@ private:
 class HttpMultipartBoundaryParseFailure final {
 public:
     [[nodiscard]] HttpProtocolError protocolError() const noexcept {
-        return HttpProtocolError(400, "invalid multipart boundary");
+        return HttpProtocolError(http_status::kBadRequest, "invalid multipart boundary");
     }
 
 private:

@@ -37,7 +37,7 @@ Http2StreamState makeStream() {
 void checkBuildFailure(
     ruvia::testing::TestContext& ruvia_ctx,
     const Http2RequestBuildResult& result,
-    std::uint16_t expectedStatus,
+    ruvia::HttpStatusCode expectedStatus,
     std::string_view expectedMessage) {
     RUVIA_CHECK(result.built() == nullptr);
     RUVIA_CHECK(result.failure() != nullptr);
@@ -144,7 +144,7 @@ RUVIA_TEST(h2_request_builder_rejects_explicit_empty_http_path) {
             request,
             std::pmr::new_delete_resource(),
             {}),
-        400,
+        ruvia::http_status::kBadRequest,
         "invalid HTTP/2 request target");
 }
 
@@ -165,7 +165,7 @@ RUVIA_TEST(h2_request_builder_rejects_non_options_asterisk_target) {
     checkBuildFailure(
         ruvia_ctx,
         failure,
-        400,
+        ruvia::http_status::kBadRequest,
         "invalid HTTP/2 request target");
 
     auto optionsRequest = HttpRequestAccess::make();
@@ -188,7 +188,7 @@ RUVIA_TEST(h2_request_builder_failure_owns_protocol_status_and_diagnostic) {
             request,
             std::pmr::new_delete_resource(),
             {}),
-        400,
+        ruvia::http_status::kBadRequest,
         "missing HTTP/2 :method");
 
     auto missingTarget = makeStream();
@@ -200,7 +200,7 @@ RUVIA_TEST(h2_request_builder_failure_owns_protocol_status_and_diagnostic) {
             request,
             std::pmr::new_delete_resource(),
             {}),
-        400,
+        ruvia::http_status::kBadRequest,
         "missing HTTP/2 request target");
 
     auto tooManyHeaders = makeStream();
@@ -220,7 +220,7 @@ RUVIA_TEST(h2_request_builder_failure_owns_protocol_status_and_diagnostic) {
             request,
             std::pmr::new_delete_resource(),
             {}),
-        431,
+        ruvia::http_status::kRequestHeaderFieldsTooLarge,
         "too many HTTP/2 request headers");
 }
 

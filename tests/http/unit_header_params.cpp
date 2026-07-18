@@ -76,7 +76,7 @@ RUVIA_TEST(expectations_preserve_unsupported_extensions_as_semantics) {
         HttpUnsupportedExpectationPolicy::kReject);
     RUVIA_CHECK(rejected.rejection() != nullptr);
     if (const auto* rejection = rejected.rejection()) {
-        RUVIA_CHECK_EQ(rejection->protocolError().status(), 417);
+        RUVIA_CHECK_EQ(rejection->protocolError().status(), ruvia::http_status::kExpectationFailed);
     }
     const auto ignored = expectations.serverPlan(
         HttpRequestContentIndication::kWillFollow,

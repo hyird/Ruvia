@@ -8,6 +8,7 @@
 #include <vector>
 
 #include "ruvia/http/HttpHeader.h"
+#include "ruvia/http/HttpStatus.h"
 
 namespace ruvia {
 
@@ -51,10 +52,10 @@ public:
     };
 
     explicit HttpInterimResponseHead(
-        std::uint16_t statusCode,
+        HttpStatusCode statusCode,
         HeaderInit headers = {});
 
-    [[nodiscard]] constexpr std::uint16_t status() const noexcept {
+    [[nodiscard]] constexpr HttpStatusCode status() const noexcept {
         return statusCode_;
     }
 
@@ -63,7 +64,7 @@ public:
     }
 
 private:
-    std::uint16_t statusCode_;
+    HttpStatusCode statusCode_;
     std::span<const HttpHeaderView> headers_;
 };
 

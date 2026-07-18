@@ -239,10 +239,10 @@ void exerciseByteSpanBody(ruvia::RequestMemory& memory, const ruvia::HttpRequest
         std::byte{0x00},
         std::byte{0x41},
         std::byte{0xff}};
-    context.status(206);
+    context.status(ruvia::http_status::kPartialContent);
     context.header("X-Bin", "1");
     auto response = context.body(std::span<const std::byte>(bytes));
-    check(response.status() == 206);
+    check(response.status() == ruvia::http_status::kPartialContent);
     check(response.header("X-Bin") == "1");
     check(!response.header("Content-Type").has_value());
     const auto body = ruvia::detail::responseBody(response).bytes();

@@ -21,7 +21,7 @@ namespace ruvia {
 [[nodiscard]] bool isValidHttpClientOriginTarget(
     std::string_view target) noexcept;
 
-[[nodiscard]] bool isHttpClientRedirectStatus(std::uint16_t status) noexcept;
+[[nodiscard]] bool isHttpClientRedirectStatus(HttpStatusCode status) noexcept;
 
 class HttpClientResponseHeaderLookupResult;
 
@@ -154,7 +154,7 @@ public:
 private:
     friend HttpClientRedirectRequestPlan planHttpClientRedirectRequest(
         const HttpClientRequest&,
-        std::uint16_t,
+        HttpStatusCode,
         std::pmr::memory_resource*);
 
     HttpClientRedirectRequestPlan(
@@ -168,7 +168,7 @@ private:
 
 [[nodiscard]] HttpClientRedirectRequestPlan planHttpClientRedirectRequest(
     const HttpClientRequest& request,
-    std::uint16_t status,
+    HttpStatusCode status,
     std::pmr::memory_resource* resource = nullptr);
 
 // This classification has no alternative-specific payload, so an enum is the

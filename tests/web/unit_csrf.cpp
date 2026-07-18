@@ -120,7 +120,7 @@ CsrfOutcome runCsrf(HttpKnownMethod method, bool withCookie, std::string_view co
     out.reseeded = ContextAccess::hasPendingSetCookie(context, "XSRF-TOKEN=");
     out.hasResponse = ContextAccess::hasResponse(context);
     if (out.hasResponse) {
-        out.status = ContextAccess::takeResponse(context).status();
+        out.status = ContextAccess::takeResponse(context).status().value();
     }
     return out;
 }

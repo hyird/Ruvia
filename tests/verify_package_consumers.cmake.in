@@ -579,6 +579,27 @@ if(_built_components_csv MATCHES "(^|,)core(,|$)")
 endif()
 
 if(_built_components_csv MATCHES "(^|,)http(,|$)")
+set(_installed_http_status_path
+    "${_install_prefix}/include/ruvia/http/HttpStatus.h")
+if(NOT EXISTS "${_installed_http_status_path}")
+    message(FATAL_ERROR
+        "installed HTTP package is missing HttpStatusCode")
+endif()
+file(READ "${_installed_http_status_path}" _installed_http_status)
+if(NOT _installed_http_status MATCHES "class HttpStatusCode final" OR
+   NOT _installed_http_status MATCHES
+       "static constexpr HttpStatusCode fromValue" OR
+   NOT _installed_http_status MATCHES
+       "static constexpr std::optional<HttpStatusCode> tryFromValue" OR
+   NOT _installed_http_status MATCHES
+       "namespace http_status" OR
+   NOT _installed_http_status MATCHES
+       "HttpStatusCode status" OR
+   _installed_http_status MATCHES
+       "operator std::uint16_t|HttpStatusCode[(]std::uint16_t value[)]")
+    message(FATAL_ERROR
+        "installed HTTP status API lost its validated strong-type contract")
+endif()
 set(_installed_http_request_path
     "${_install_prefix}/include/ruvia/http/HttpRequest.h")
 if(NOT EXISTS "${_installed_http_request_path}")
@@ -867,7 +888,7 @@ file(READ "${_installed_response_stream_commit_path}"
 file(READ "${_installed_http1_response_stream_path}"
     _installed_http1_response_stream)
 if(NOT _installed_response_stream_commit MATCHES
-       "std::uint16_t responseStatus[(][)] const noexcept" OR
+       "HttpStatusCode responseStatus[(][)] const noexcept" OR
    NOT _installed_response_stream_commit MATCHES
        "HttpResponseBodyPlan bodyPlan[(][)] const noexcept" OR
    NOT _installed_response_stream_commit MATCHES
@@ -920,7 +941,7 @@ file(READ "${_installed_http_request_content_decoding}"
 if(NOT _installed_http_content_coding_contract MATCHES
        "class HttpUnsupportedContentCoding final" OR
    NOT _installed_http_content_coding_contract MATCHES
-       "HttpUnsupportedContentCoding::status|static constexpr std::uint16_t status" OR
+       "static constexpr HttpStatusCode status" OR
    NOT _installed_http_content_coding_contract MATCHES
        "class HttpInvalidContentCodingField final" OR
    NOT _installed_http_content_coding_contract MATCHES
@@ -1514,9 +1535,9 @@ if(NOT _installed_http_request_body_failure MATCHES
    NOT _installed_http_request_body_failure MATCHES "incomplete[(][)]" OR
    NOT _installed_http_request_body_failure MATCHES "protocolError[(][)]" OR
    NOT _installed_http_request_body_failure MATCHES
-       "HttpProtocolError[(]413, [\"]request body is too large[\"]" OR
+       "HttpProtocolError[(]http_status::kContentTooLarge, [\"]request body is too large[\"]" OR
    NOT _installed_http_request_body_failure MATCHES
-       "HttpProtocolError[(]400, [\"]incomplete request body[\"]" OR
+       "HttpProtocolError[(]http_status::kBadRequest, [\"]incomplete request body[\"]" OR
    NOT _installed_http_request_body_failure MATCHES
        "httpRequestBodySizeFailure" OR
    NOT _installed_http_request_body_failure MATCHES
@@ -1542,7 +1563,7 @@ if(NOT _installed_http_expectations MATCHES "kNoContent" OR
    NOT _installed_http_expectations MATCHES "std::variant" OR
    NOT _installed_http_expectations MATCHES "protocolError" OR
    NOT _installed_http_expectations MATCHES
-       "HttpProtocolError[(]417, [\"]unsupported Expect header[\"]" OR
+       "HttpProtocolError[(]http_status::kExpectationFailed, [\"]unsupported Expect header[\"]" OR
    NOT _installed_http1_request_body_plan_expectations MATCHES
        "HttpServerExpectationPlan expectationPlan" OR
    NOT _installed_http2_stream_state_expectations MATCHES
@@ -2482,10 +2503,10 @@ if(NOT _installed_http_client MATCHES "enum class HttpScheme" OR
    NOT _installed_http_client MATCHES "struct HttpClientRequest" OR
    NOT _installed_http_client MATCHES "class HttpClientResponseHead final" OR
    NOT _installed_http_client MATCHES
-       "HttpClientResponseHead[(][ \t\r\n]*std::uint16_t status" OR
+       "HttpClientResponseHead[(][ \t\r\n]*HttpStatusCode status" OR
    _installed_http_client MATCHES "status_[ \t]*[{][ \t]*0[ \t]*[}]" OR
    NOT _installed_http_client_access MATCHES
-       "make[(][ \t\r\n]*std::uint16_t status" OR
+       "make[(][ \t\r\n]*HttpStatusCode status" OR
    _installed_http_client_access MATCHES "setStatus[(]")
     message(FATAL_ERROR "installed outbound client model lost its typed sans-I/O API")
 endif()
@@ -3781,7 +3802,7 @@ if(_built_components_csv MATCHES "(^|,)web(,|$)")
        _installed_http1_buffered_response_result MATCHES
            "enum class Http1BufferedResponseWriteOutcome|outcome[(][)] const noexcept|bool completed[(][)] const noexcept" OR
        NOT _installed_http1_buffered_response_result MATCHES
-           "std::optional<std::uint16_t>[ \t\r\n]+committedStatus[(][)] const noexcept" OR
+           "std::optional<HttpStatusCode>[ \t\r\n]+committedStatus[(][)] const noexcept" OR
        NOT _installed_http1_buffered_response_result MATCHES
            "is_trivially_copyable_v<Http1BufferedResponseWriteResult>" OR
        NOT _installed_http1_buffered_response_result MATCHES
@@ -4712,7 +4733,7 @@ if(NOT _installed_response_content_semantics MATCHES
    NOT _installed_response_write_plan MATCHES
        "HttpResponseContentSemantics semantics_" OR
    NOT _installed_response_write_plan MATCHES
-       "std::uint16_t responseStatus[(][)] const noexcept" OR
+       "HttpStatusCode responseStatus[(][)] const noexcept" OR
    NOT _installed_response_write_plan MATCHES
        "HttpKnownMethod requestMethod[(][)] const noexcept" OR
    NOT _installed_response_write_plan MATCHES
@@ -4807,7 +4828,7 @@ if(NOT _installed_http1_response_head_plan MATCHES
    NOT _installed_http1_response_head_plan MATCHES
        "class Http1BufferedResponsePlan final" OR
    NOT _installed_http1_response_head_plan MATCHES
-       "std::uint16_t responseStatus[(][)] const noexcept" OR
+       "HttpStatusCode responseStatus[(][)] const noexcept" OR
    NOT _installed_http1_response_head_plan MATCHES
        "std::uint64_t contentLength[(][)] const noexcept" OR
    NOT _installed_http1_response_head_plan MATCHES
@@ -5184,11 +5205,11 @@ if(NOT _installed_http2_remote_receive MATCHES
    NOT _installed_http2_stream_state MATCHES "finishRemotePendingConnect" OR
    NOT _installed_http2_stream_state MATCHES "finishRemoteRejectedConnect" OR
    NOT _installed_http2_request_state MATCHES
-       "const std::uint16_t[*] responseStatus[(][)] const & noexcept" OR
+       "const HttpStatusCode[*] responseStatus[(][)] const & noexcept" OR
    NOT _installed_http2_request_state MATCHES
-       "bool setResponseStatus[(]std::uint16_t status[)] noexcept" OR
+       "bool setResponseStatus[(]HttpStatusCode status[)] noexcept" OR
    NOT _installed_http2_request_state MATCHES
-       "std::optional<std::uint16_t> responseStatus_" OR
+       "std::optional<HttpStatusCode> responseStatus_" OR
    NOT _installed_http2_request_state MATCHES
        "if [(]responseStatus_[)]" OR
    _installed_http2_lifecycle MATCHES
