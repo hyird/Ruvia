@@ -13,9 +13,11 @@
 #
 # Requires a C++ toolchain, CMake+Ninja, VCPKG_ROOT, and a load generator
 # (wrk and/or h2load). Missing load generators are reported, not silently
-# skipped. ASan finds use-after-free / overflow; TSan finds data races -- note
-# the allocator annotations in ruvia-core/src/MemoryPool.cpp keep mimalloc block
-# reuse from showing up as false races under TSan.
+# skipped. ASan finds use-after-free / overflow; TSan finds data races. The
+# tsan mode builds everything with clang and builds mimalloc itself with
+# MI_DEBUG_TSAN (scripts/vcpkg-triplets/x64-linux-tsan.cmake), so the
+# allocator's internal synchronization is visible to TSan and no suppression
+# file is needed -- every report this script surfaces is a real finding.
 set -euo pipefail
 
 sanitizer="${1:-}"
@@ -44,6 +46,22 @@ port="${PORT:-18080}"
 logdir="$(mktemp -d)"
 trap 'rm -rf "$logdir"; [ -n "${server_pid:-}" ] && kill "$server_pid" 2>/dev/null || true' EXIT
 
+# TSan needs mimalloc compiled WITH TSan instrumentation (otherwise its
+# internal thread-heap/meta/block reuse shows up as false races in consumer
+# frames). mimalloc only accepts MI_DEBUG_TSAN under clang, so the tsan build
+# uses clang end to end plus the x64-linux-tsan triplet, which rebuilds the
+# mimalloc port with MI_DEBUG_TSAN=ON.
+extra_configure=()
+if [ "$sanitizer" = "tsan" ]; then
+    command -v clang++-19 >/dev/null 2>&1 || { echo "tsan mode needs clang-19" >&2; exit 1; }
+    extra_configure=(
+        -DCMAKE_C_COMPILER=clang-19
+        -DCMAKE_CXX_COMPILER=clang++-19
+        -DVCPKG_TARGET_TRIPLET=x64-linux-tsan
+        -DVCPKG_OVERLAY_TRIPLETS="$root/scripts/vcpkg-triplets"
+    )
+fi
+
 echo "== configuring $sanitizer build =="
 cmake -S "$root" -B "$build" -G Ninja \
     -DCMAKE_BUILD_TYPE=RelWithDebInfo \
@@ -51,6 +69,7 @@ cmake -S "$root" -B "$build" -G Ninja \
     -DRUVIA_BUILD_EXAMPLES=ON \
     -DCMAKE_CXX_FLAGS="$flags -fno-sanitize-recover=all -fno-omit-frame-pointer" \
     -DCMAKE_EXE_LINKER_FLAGS="$flags" \
+    "${extra_configure[@]}" \
     -DCMAKE_TOOLCHAIN_FILE="$VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake"
 
 echo "== building bench_server =="
@@ -61,9 +80,9 @@ if [ "$sanitizer" = "asan" ]; then
     export ASAN_OPTIONS="halt_on_error=1:abort_on_error=1:detect_leaks=0:log_path=$logdir/san"
     export UBSAN_OPTIONS="halt_on_error=1:print_stacktrace=1:log_path=$logdir/san"
 else
-    # Suppress mimalloc's internal thread-heap/meta races (false positives; see
-    # scripts/tsan.supp). Ruvia's own frames are never suppressed.
-    export TSAN_OPTIONS="halt_on_error=1:second_deadlock_stack=1:log_path=$logdir/san:suppressions=$root/scripts/tsan.supp"
+    # mimalloc is TSan-instrumented in this build (see the x64-linux-tsan
+    # triplet), so no suppressions: every report is a real race.
+    export TSAN_OPTIONS="halt_on_error=1:second_deadlock_stack=1:log_path=$logdir/san"
 fi
 
 # https drives the TLS handshake path -- the highest-churn TLS surface -- with a
