@@ -58,6 +58,13 @@ RUVIA_TEST(validate_server_options_accepts_defaults) {
     RUVIA_CHECK_EQ(
         HttpServerOptions{}.rateLimitSlotsPerWorker,
         ruvia::kDefaultRateLimitSlotsPerWorker);
+    // An unconfigured server is bounded by default (connection-flood defense) and
+    // drains in-flight requests on shutdown; both remain explicitly opt-out-able.
+    RUVIA_CHECK(HttpServerOptions{}.maxConnections.has_value());
+    RUVIA_CHECK_EQ(*HttpServerOptions{}.maxConnections, std::size_t{1024});
+    RUVIA_CHECK_EQ(
+        HttpServerOptions{}.shutdownGracePeriod,
+        std::chrono::seconds(30));
     RUVIA_CHECK(!throwsInvalid([] { validateHttpServerOptions(HttpServerOptions{}); }));
 }
 
