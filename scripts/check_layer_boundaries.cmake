@@ -164,7 +164,7 @@ file(READ "${RUVIA_ROOT}/ruvia-core/include/ruvia/core/TaskScope.h"
     core_task_scope_contract)
 file(READ "${RUVIA_ROOT}/ruvia-core/src/TaskScope.cpp"
     core_task_scope_implementation)
-file(READ "${RUVIA_ROOT}/tests/task_scope.cpp"
+file(READ "${RUVIA_ROOT}/tests/core/task_scope.cpp"
     core_task_scope_test_contract)
 file(READ "${RUVIA_ROOT}/ruvia-core/include/ruvia/core/detail/TaskPromise.h"
     core_task_promise_contract)
@@ -188,13 +188,13 @@ file(READ "${RUVIA_ROOT}/ruvia-core/include/ruvia/core/detail/RuntimeLifecycle.h
     core_runtime_lifecycle_contract)
 file(READ "${RUVIA_ROOT}/ruvia-core/src/EventLoopPool.cpp"
     core_runtime_implementation)
-file(READ "${RUVIA_ROOT}/tests/runtime_worker.cpp"
+file(READ "${RUVIA_ROOT}/tests/core/runtime_worker.cpp"
     core_runtime_test_contract)
-file(READ "${RUVIA_ROOT}/tests/worker_timer.cpp"
+file(READ "${RUVIA_ROOT}/tests/core/worker_timer.cpp"
     core_worker_timer_test_contract)
-file(READ "${RUVIA_ROOT}/tests/worker_dispatch_failure.cpp"
+file(READ "${RUVIA_ROOT}/tests/core/worker_dispatch_failure.cpp"
     core_worker_dispatch_failure_test_contract)
-file(READ "${RUVIA_ROOT}/tests/operation_deadline.cpp"
+file(READ "${RUVIA_ROOT}/tests/core/operation_deadline.cpp"
     core_operation_deadline_test_contract)
 file(READ "${RUVIA_ROOT}/tests/package-consumer/core.cpp"
     core_linear_receiver_package_contract)
@@ -812,9 +812,9 @@ file(READ "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/controller/Controlle
     web_validated_model_runtime)
 file(READ "${RUVIA_ROOT}/ruvia-web/src/router/Router.cpp"
     web_validated_model_registration)
-file(READ "${RUVIA_ROOT}/tests/unit_validator.cpp"
+file(READ "${RUVIA_ROOT}/tests/web/unit_validator.cpp"
     web_validated_model_test)
-file(READ "${RUVIA_ROOT}/tests/unit_routing.cpp"
+file(READ "${RUVIA_ROOT}/tests/web/unit_routing.cpp"
     web_validated_model_routing_test)
 if(NOT web_validated_model_bindings MATCHES
        "struct ValidatedModelBindingNode final" OR
@@ -915,7 +915,7 @@ set(WEB_AUTO_HTTPS_POLICY
 set(WEB_AUTO_HTTPS_SESSION
     "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/server/HttpServerStreamSession.inl")
 set(WEB_AUTO_HTTPS_TEST
-    "${RUVIA_ROOT}/tests/unit_http_server_request_state.cpp")
+    "${RUVIA_ROOT}/tests/web/unit_http_server_request_state.cpp")
 if(EXISTS "${WEB_AUTO_HTTPS_POLICY}" AND
    EXISTS "${WEB_AUTO_HTTPS_SESSION}" AND
    EXISTS "${WEB_AUTO_HTTPS_TEST}")
@@ -1010,9 +1010,9 @@ set(WEB_HTTP_SERVER_WORKER_STATE
 set(WEB_HTTP_SERVER_WORKER_COMPLETION
     "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/server/HttpServerWorkerCompletion.h")
 set(WEB_HTTP_SERVER_SHUTDOWN_TEST
-    "${RUVIA_ROOT}/tests/server_shutdown_drain.cpp")
+    "${RUVIA_ROOT}/tests/server/server_shutdown_drain.cpp")
 set(WEB_HTTP_SERVER_WORKER_COMPLETION_TEST
-    "${RUVIA_ROOT}/tests/unit_http_server_worker_completion.cpp")
+    "${RUVIA_ROOT}/tests/web/unit_http_server_worker_completion.cpp")
 foreach(worker_lifecycle_file IN ITEMS
         "${WEB_HTTP_SERVER_LIFECYCLE}"
         "${WEB_HTTP_SERVER_ACCEPT}"
@@ -1148,13 +1148,13 @@ check_files_no_match("Cookie attribute enums restored absence sentinels"
     "${COOKIE_OPTIONS_HEADER}"
     "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/detail/CookieValidation.h"
     "${RUVIA_ROOT}/ruvia-http/src/Cookies.cpp"
-    "${RUVIA_ROOT}/tests/unit_cookie_validation.cpp"
+    "${RUVIA_ROOT}/tests/web/unit_cookie_validation.cpp"
     "${RUVIA_ROOT}/tests/package-consumer/http.cpp"
     "${RUVIA_ROOT}/examples/api_surface.cpp")
 set(HTTP_COOKIE_VALIDATION
     "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/detail/CookieValidation.h")
 set(HTTP_COOKIE_VALIDATION_TEST
-    "${RUVIA_ROOT}/tests/unit_cookie_validation.cpp")
+    "${RUVIA_ROOT}/tests/web/unit_cookie_validation.cpp")
 set(HTTP_COOKIE_PACKAGE_CONSUMER
     "${RUVIA_ROOT}/tests/package-consumer/http.cpp")
 if(EXISTS "${HTTP_COOKIE_VALIDATION}" AND
@@ -1214,7 +1214,7 @@ check_files_no_match("redirect results must remain public discriminated values"
     "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/HttpClientRedirect.h"
     "${RUVIA_ROOT}/ruvia-http/src/client/HttpClientRedirect.cpp"
     "${RUVIA_ROOT}/ruvia-http/CMakeLists.txt"
-    "${RUVIA_ROOT}/tests/unit_http_client_redirect.cpp"
+    "${RUVIA_ROOT}/tests/http/unit_http_client_redirect.cpp"
     "${RUVIA_ROOT}/tests/package-consumer/http.cpp"
     "${RUVIA_ROOT}/examples/api_surface.cpp")
 check_files_no_match("host comparison must preserve encoded reserved characters"
@@ -1225,7 +1225,7 @@ check_files_no_match("public HTTP/1 parsing must keep discriminated outcomes"
     ${HTTP_SOURCE}
     "${RUVIA_ROOT}/ruvia-http/CMakeLists.txt"
     "${RUVIA_ROOT}/examples/api_surface.cpp"
-    "${RUVIA_ROOT}/tests/smoke_http_target.cpp"
+    "${RUVIA_ROOT}/tests/server/smoke_http_target.cpp"
     "${RUVIA_ROOT}/tests/guards/cookie_api_guard.cpp"
     "${RUVIA_ROOT}/tests/package-consumer/http.cpp")
 check_files_no_match("HTTP/1 parse state must separate message and required bytes"
@@ -1251,8 +1251,8 @@ check_files_no_match("HTTP byte ranges must use one discriminated resolution"
     "${RULE_STALE_HTTP_BYTE_RANGE_RESULT}"
     "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/detail/HttpByteRange.h"
     "${RUVIA_ROOT}/ruvia-web/src/http/ContextFileResponse.cpp"
-    "${RUVIA_ROOT}/tests/unit_http_byte_range.cpp"
-    "${RUVIA_ROOT}/tests/unit_content_range.cpp"
+    "${RUVIA_ROOT}/tests/http/unit_http_byte_range.cpp"
+    "${RUVIA_ROOT}/tests/http/unit_content_range.cpp"
     "${RUVIA_ROOT}/tests/package-consumer/http.cpp")
 check_files_no_match("HTTP method wire tokens must not collapse back into a closed enum"
     "${RULE_STALE_HTTP_METHOD_DOMAIN}"
@@ -1518,9 +1518,9 @@ file(READ "${RUVIA_ROOT}/ruvia-web/src/http/ContextStorage.cpp"
 file(READ "${RUVIA_ROOT}/ruvia-web/src/http/ContextRequest.cpp"
     web_context_request_impl)
 file(READ "${CORE_REQUEST_MEMORY}" core_request_memory)
-file(READ "${RUVIA_ROOT}/tests/unit_context_capabilities.cpp"
+file(READ "${RUVIA_ROOT}/tests/web/unit_context_capabilities.cpp"
     context_capability_tests)
-file(READ "${RUVIA_ROOT}/tests/unit_context_cookie.cpp"
+file(READ "${RUVIA_ROOT}/tests/web/unit_context_cookie.cpp"
     context_request_cache_tests)
 file(READ "${RUVIA_ROOT}/tests/package-consumer/core.cpp"
     core_package_contract)
@@ -1634,13 +1634,13 @@ set(WEB_ROUTE_HTTP1_WEBSOCKET
 set(WEB_STALE_STREAM_KIND_ADAPTER
     "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/server/HttpResponseStreamKindAdapter.h")
 set(WEB_ROUTE_RESOLUTION_TEST
-    "${RUVIA_ROOT}/tests/unit_route_resolution.cpp")
+    "${RUVIA_ROOT}/tests/web/unit_route_resolution.cpp")
 set(CORE_OWNER_BORROW_TEST
-    "${RUVIA_ROOT}/tests/smoke_core_target.cpp")
+    "${RUVIA_ROOT}/tests/core/smoke_core_target.cpp")
 set(HTTP_OWNER_BORROW_TEST
-    "${RUVIA_ROOT}/tests/unit_request_access.cpp")
+    "${RUVIA_ROOT}/tests/http/unit_request_access.cpp")
 set(WEB_OWNER_BORROW_TEST
-    "${RUVIA_ROOT}/tests/unit_routing.cpp")
+    "${RUVIA_ROOT}/tests/web/unit_routing.cpp")
 set(PUBLIC_OWNER_BORROW_API_SURFACE
     "${RUVIA_ROOT}/examples/api_surface.cpp")
 set(HTTP_OWNER_BORROW_PACKAGE_CONSUMER
@@ -2107,7 +2107,7 @@ set(WEB_CONTEXT_STREAM_BODY_ROUTE
 set(WEB_CONTEXT_HTTP2_SESSION
     "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/server/Http2SansIoSession.h")
 set(WEB_CONTEXT_CAPABILITY_TEST
-    "${RUVIA_ROOT}/tests/unit_context_capabilities.cpp")
+    "${RUVIA_ROOT}/tests/web/unit_context_capabilities.cpp")
 set(WEB_CONTEXT_PACKAGE_CONSUMER
     "${RUVIA_ROOT}/tests/package-consumer/web.cpp")
 foreach(context_capability_file IN ITEMS
@@ -2319,8 +2319,8 @@ set(WEB_CONN_HTTP2_ENTRY
     "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/server/HttpServerCleartextHttp2.h")
 set(WEB_CONN_HTTP2_SESSION
     "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/server/Http2SansIoSession.h")
-set(WEB_CONN_TEST "${RUVIA_ROOT}/tests/unit_conn_info.cpp")
-set(WEB_CONN_TLS_TEST "${RUVIA_ROOT}/tests/unit_sansio_tls.cpp")
+set(WEB_CONN_TEST "${RUVIA_ROOT}/tests/web/unit_conn_info.cpp")
+set(WEB_CONN_TLS_TEST "${RUVIA_ROOT}/tests/http2/unit_sansio_tls.cpp")
 set(WEB_CONN_PACKAGE_CONSUMER
     "${RUVIA_ROOT}/tests/package-consumer/web.cpp")
 set(WEB_CONN_API_SURFACE "${RUVIA_ROOT}/examples/api_surface.cpp")
@@ -2570,13 +2570,13 @@ check_files_no_match("HTTP/1 client response status recovered mutation, output p
     "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/HttpClient.h"
     "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/detail/client/HttpClientAccess.h"
     "${HTTP1_CLIENT_RESPONSE_SOURCE}")
-file(READ "${RUVIA_ROOT}/tests/unit_request_access.cpp"
+file(READ "${RUVIA_ROOT}/tests/http/unit_request_access.cpp"
     http_protocol_request_tests)
-file(READ "${RUVIA_ROOT}/tests/unit_http1_parser.cpp"
+file(READ "${RUVIA_ROOT}/tests/http1/unit_http1_parser.cpp"
     http_protocol_http1_tests)
-file(READ "${RUVIA_ROOT}/tests/unit_http2_request_builder.cpp"
+file(READ "${RUVIA_ROOT}/tests/http2/unit_http2_request_builder.cpp"
     http_protocol_http2_tests)
-file(READ "${RUVIA_ROOT}/tests/unit_http_client_response.cpp"
+file(READ "${RUVIA_ROOT}/tests/http/unit_http_client_response.cpp"
     http_protocol_client_tests)
 if(NOT http_protocol_request_tests MATCHES
        "request_access_protocol_version_is_typed_control_data" OR
@@ -2600,7 +2600,7 @@ set(WEB_ACCESS_LOG_HTTP1
     "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/server/HttpServerStreamSession.inl")
 set(WEB_ACCESS_LOG_HTTP2
     "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/server/Http2SansIoSession.h")
-set(WEB_ACCESS_LOG_TEST "${RUVIA_ROOT}/tests/unit_access_log.cpp")
+set(WEB_ACCESS_LOG_TEST "${RUVIA_ROOT}/tests/web/unit_access_log.cpp")
 set(WEB_ACCESS_LOG_PACKAGE_CONSUMER
     "${RUVIA_ROOT}/tests/package-consumer/web.cpp")
 set(WEB_ACCESS_LOG_API_SURFACE "${RUVIA_ROOT}/examples/api_surface.cpp")
@@ -2780,9 +2780,9 @@ set(HTTP_BYTE_RANGE_HEADER
 set(WEB_FILE_RESPONSE_SOURCE
     "${RUVIA_ROOT}/ruvia-web/src/http/ContextFileResponse.cpp")
 set(HTTP_BYTE_RANGE_TEST
-    "${RUVIA_ROOT}/tests/unit_http_byte_range.cpp")
+    "${RUVIA_ROOT}/tests/http/unit_http_byte_range.cpp")
 set(HTTP_CONTENT_RANGE_TEST
-    "${RUVIA_ROOT}/tests/unit_content_range.cpp")
+    "${RUVIA_ROOT}/tests/http/unit_content_range.cpp")
 set(HTTP_PACKAGE_CONSUMER
     "${RUVIA_ROOT}/tests/package-consumer/http.cpp")
 foreach(byte_range_contract_file IN ITEMS
@@ -2916,7 +2916,7 @@ if(NOT multipart_public_api MATCHES "class MultipartBoundary final" OR
 endif()
 file(READ "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/MultipartReader.h"
     multipart_web_api)
-file(READ "${RUVIA_ROOT}/tests/unit_multipart_reader.cpp"
+file(READ "${RUVIA_ROOT}/tests/http1/unit_multipart_reader.cpp"
     multipart_lifetime_test)
 file(READ "${RUVIA_ROOT}/tests/package-consumer/http.cpp"
     multipart_http_package_test)
@@ -2955,7 +2955,7 @@ file(READ "${RUVIA_ROOT}/ruvia-http/src/HttpResponse.cpp"
     pmr_http_response_impl)
 file(READ "${RUVIA_ROOT}/ruvia-http/src/HttpResponseHeadersStorage.cpp"
     pmr_http_response_headers_impl)
-file(READ "${RUVIA_ROOT}/tests/unit_http_response.cpp"
+file(READ "${RUVIA_ROOT}/tests/http/unit_http_response.cpp"
     pmr_http_response_test)
 file(READ "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/RequestFields.h"
     pmr_request_fields_api)
@@ -2973,7 +2973,7 @@ file(READ "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/db/DbResultAccess.h"
     pmr_db_result_access)
 file(READ "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/db/DbValueAccess.h"
     pmr_db_value_access)
-file(READ "${RUVIA_ROOT}/tests/unit_db_api_surface.cpp"
+file(READ "${RUVIA_ROOT}/tests/web/unit_db_api_surface.cpp"
     pmr_db_types_test)
 file(READ "${RUVIA_ROOT}/examples/api_surface.cpp"
     pmr_db_api_surface)
@@ -3272,7 +3272,7 @@ if(NOT multipart_buffered_web_driver MATCHES
     boundary_error("buffered multipart Web facade bypasses the typed parser result"
         "Context request parsing must map one HTTP result and consume its owned part vector")
 endif()
-file(READ "${RUVIA_ROOT}/tests/unit_multipart.cpp" multipart_unit_test)
+file(READ "${RUVIA_ROOT}/tests/http1/unit_multipart.cpp" multipart_unit_test)
 file(READ "${RUVIA_ROOT}/tests/package-consumer/http.cpp"
     multipart_package_consumer)
 file(READ "${RUVIA_ROOT}/examples/api_surface.cpp" multipart_api_surface)
@@ -3370,7 +3370,7 @@ check_files_no_match("WebSocket close and transport end must use one typed proto
     "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/websocket/HttpWebSocketConnectionWrite.inl"
     "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/websocket/HttpWebSocketSocketTransport.h"
     "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/http2/Http2SansIoWsTransport.h"
-    "${RUVIA_ROOT}/tests/unit_ws_connection.cpp")
+    "${RUVIA_ROOT}/tests/websocket/unit_ws_connection.cpp")
 check_files_no_match("WebSocket events must remain optional and discriminated"
     "${RULE_STALE_WS_EVENT_TUPLE}"
     "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/detail/websocket/WsEvent.h"
@@ -3392,10 +3392,10 @@ check_files_no_match("WebSocket inbound parsing must remain nonthrowing and disc
     "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/detail/websocket/HttpWebSocketUtils.h"
     "${RUVIA_ROOT}/ruvia-http/src/websocket/HttpWebSocketValidation.cpp"
     "${RUVIA_ROOT}/ruvia-http/src/websocket/WsConnection.cpp"
-    "${RUVIA_ROOT}/tests/unit_websocket_frame.cpp"
-    "${RUVIA_ROOT}/tests/unit_websocket_assembler.cpp"
-    "${RUVIA_ROOT}/tests/unit_websocket_close.cpp"
-    "${RUVIA_ROOT}/tests/unit_ws_connection.cpp"
+    "${RUVIA_ROOT}/tests/websocket/unit_websocket_frame.cpp"
+    "${RUVIA_ROOT}/tests/websocket/unit_websocket_assembler.cpp"
+    "${RUVIA_ROOT}/tests/websocket/unit_websocket_close.cpp"
+    "${RUVIA_ROOT}/tests/websocket/unit_ws_connection.cpp"
     "${RUVIA_ROOT}/tests/package-consumer/http.cpp"
     "${RUVIA_ROOT}/README.md"
     "${RUVIA_ROOT}/AGENTS.md")
@@ -3422,8 +3422,8 @@ check_files_no_match("HTTP/1 connection lifetime must use one typed plan"
     "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/server/HttpServerStreamSession.inl"
     "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/server/HttpServerWebSocketRoute.h"
     "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/server/HttpResponseStreamSink.h"
-    "${RUVIA_ROOT}/tests/unit_http_server_request_state.cpp"
-    "${RUVIA_ROOT}/tests/unit_response_head_emit.cpp"
+    "${RUVIA_ROOT}/tests/web/unit_http_server_request_state.cpp"
+    "${RUVIA_ROOT}/tests/http/unit_response_head_emit.cpp"
     "${RUVIA_ROOT}/tests/package-consumer/http.cpp")
 check_files_no_match("HTTP connection fields must use the shared typed state"
     "${RULE_STALE_HTTP_CONNECTION_FIELD_STATE}"
@@ -3469,13 +3469,13 @@ set(HTTP_CONTENT_CODING_CONTRACT
 set(WEB_RESPONSE_COMPRESSION_SOURCE
     "${RUVIA_ROOT}/ruvia-web/src/server/HttpResponseCompression.cpp")
 set(WEB_RESPONSE_COMPRESSION_TEST
-    "${RUVIA_ROOT}/tests/unit_response_compression.cpp")
+    "${RUVIA_ROOT}/tests/http/unit_response_compression.cpp")
 set(WEB_UNSUPPORTED_CONTENT_CODING_SIGNAL
     "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/http/UnsupportedRequestContentCoding.h")
 set(WEB_ROUTER_DISPATCH_SOURCE
     "${RUVIA_ROOT}/ruvia-web/src/router/RouterDispatch.cpp")
 set(WEB_ROUTER_DISPATCH_TEST
-    "${RUVIA_ROOT}/tests/unit_routing.cpp")
+    "${RUVIA_ROOT}/tests/web/unit_routing.cpp")
 if(EXISTS "${HTTP_CONTENT_CODING_CONTRACT}" AND
    EXISTS "${WEB_RESPONSE_COMPRESSION_SOURCE}" AND
    EXISTS "${WEB_RESPONSE_COMPRESSION_TEST}" AND
@@ -3551,7 +3551,7 @@ endif()
 set(HTTP_RESPONSE_VARY_UTILS
     "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/detail/ResponseHeaderUtils.h")
 set(HTTP_RESPONSE_VARY_TEST
-    "${RUVIA_ROOT}/tests/unit_vary_headers.cpp")
+    "${RUVIA_ROOT}/tests/http/unit_vary_headers.cpp")
 foreach(http_response_vary_contract IN ITEMS
         "${HTTP_RESPONSE_VARY_UTILS}"
         "${HTTP_RESPONSE_VARY_TEST}")
@@ -3587,7 +3587,7 @@ set(HTTP_CLIENT_CONTENT_DECODING_CONTRACT
 set(WEB_CONTEXT_REQUEST_SOURCE
     "${RUVIA_ROOT}/ruvia-web/src/http/ContextRequest.cpp")
 set(REQUEST_CONTENT_DECODING_TEST
-    "${RUVIA_ROOT}/tests/unit_request_body_decoding.cpp")
+    "${RUVIA_ROOT}/tests/http1/unit_request_body_decoding.cpp")
 set(HTTP_CONTENT_PACKAGE_CONSUMER
     "${RUVIA_ROOT}/tests/package-consumer/http.cpp")
 foreach(request_content_decode_contract IN ITEMS
@@ -3697,7 +3697,7 @@ set(WEB_NATIVE_FILE_CONTRACT
 set(WEB_FILE_INPUT_CONTRACT
     "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/server/HttpFileOpen.h")
 set(WEB_STATIC_FILE_REPRESENTATION_TEST
-    "${RUVIA_ROOT}/tests/unit_content_range.cpp")
+    "${RUVIA_ROOT}/tests/http/unit_content_range.cpp")
 set(WEB_STATIC_FILE_PACKAGE_CONSUMER
     "${RUVIA_ROOT}/tests/package-consumer/web.cpp")
 check_files_no_match("static file representation must use one typed selection"
@@ -3799,7 +3799,7 @@ set(WEB_JSON_OBJECT_FIELDS
 set(WEB_JSON_MODEL_PARSER
     "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/model/JsonParser.h")
 set(WEB_JSON_STRING_TEST
-    "${RUVIA_ROOT}/tests/unit_json.cpp")
+    "${RUVIA_ROOT}/tests/web/unit_json.cpp")
 set(WEB_JSON_PACKAGE_CONSUMER
     "${RUVIA_ROOT}/tests/package-consumer/web.cpp")
 check_files_no_match("JSON string decoding must return one owning transactional result"
@@ -3871,7 +3871,7 @@ endif()
 set(WEB_MODEL_TYPES_CONTRACT
     "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/ModelTypes.h")
 set(WEB_MODEL_LIST_TEST
-    "${RUVIA_ROOT}/tests/unit_model_list.cpp")
+    "${RUVIA_ROOT}/tests/web/unit_model_list.cpp")
 check_files_no_match("model List must own and release its PMR elements"
     "${RULE_STALE_MODEL_LIST_OWNERSHIP}"
     "${WEB_MODEL_TYPES_CONTRACT}")
@@ -3903,7 +3903,7 @@ if(EXISTS "${WEB_MODEL_TYPES_CONTRACT}" AND
     endif()
 endif()
 set(WEB_MODEL_STRING_TEST
-    "${RUVIA_ROOT}/tests/unit_model_string.cpp")
+    "${RUVIA_ROOT}/tests/web/unit_model_string.cpp")
 set(WEB_MODEL_VALIDATION_CONTRACT
     "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/Validation.h")
 check_files_no_match("model String must use one exclusive storage alternative"
@@ -3944,7 +3944,7 @@ set(WEB_MODEL_MACROS_CONTRACT
 set(WEB_MODEL_FIELD_OPS_CONTRACT
     "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/model/MacroFieldOps.h")
 set(WEB_MODEL_MATERIALIZATION_TEST
-    "${RUVIA_ROOT}/tests/unit_http_parsing.cpp")
+    "${RUVIA_ROOT}/tests/http1/unit_http_parsing.cpp")
 set(WEB_MODEL_OBJECT_CONTRACT
     "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/ModelObject.h")
 set(WEB_MODEL_API_SURFACE
@@ -4272,9 +4272,9 @@ set(WEB_DIAGNOSTIC_ERROR_CONTRACT
 set(WEB_DIAGNOSTIC_ERROR_SOURCE
     "${RUVIA_ROOT}/ruvia-web/src/http/Error.cpp")
 set(WEB_DIAGNOSTIC_VALIDATOR_TEST
-    "${RUVIA_ROOT}/tests/unit_validator.cpp")
+    "${RUVIA_ROOT}/tests/web/unit_validator.cpp")
 set(WEB_DIAGNOSTIC_ERROR_TEST
-    "${RUVIA_ROOT}/tests/unit_error.cpp")
+    "${RUVIA_ROOT}/tests/http/unit_error.cpp")
 set(WEB_DIAGNOSTIC_REQUEST_GUARD
     "${RUVIA_ROOT}/tests/guards/context_request_header_guard.cpp")
 if(EXISTS "${WEB_REQUEST_FIELDS}" AND
@@ -4380,7 +4380,7 @@ set(WEB_FORM_DECODING_CONTRACT
 set(WEB_FORM_DECODING_VISITOR
     "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/model/RequestFieldVisitors.h")
 set(WEB_FORM_DECODING_TEST
-    "${RUVIA_ROOT}/tests/unit_form_parser.cpp")
+    "${RUVIA_ROOT}/tests/http1/unit_form_parser.cpp")
 set(WEB_FORM_MODEL_OBJECT
     "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/ModelObject.h")
 set(WEB_FORM_MODEL_MACROS
@@ -4463,9 +4463,9 @@ check_files_no_match("HTTP/1 request-body plans must use exclusive alternatives"
     "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/body/HttpStreamBodyReaderContentLength.inl"
     "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/body/HttpStreamBodyReaderPipeline.inl"
     "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/server/HttpServerRequestState.h"
-    "${RUVIA_ROOT}/tests/unit_http1_parser.cpp"
-    "${RUVIA_ROOT}/tests/unit_request_body_decoding.cpp"
-    "${RUVIA_ROOT}/tests/unit_http_server_request_state.cpp"
+    "${RUVIA_ROOT}/tests/http1/unit_http1_parser.cpp"
+    "${RUVIA_ROOT}/tests/http1/unit_request_body_decoding.cpp"
+    "${RUVIA_ROOT}/tests/web/unit_http_server_request_state.cpp"
     "${RUVIA_ROOT}/tests/package-consumer/http.cpp"
     "${RUVIA_ROOT}/examples/api_surface.cpp")
 check_files_no_match("HTTP/1 request-body plans must use parser-only constructors"
@@ -4501,7 +4501,7 @@ check_files_no_match("HTTP message protocol version must use one typed control d
     "${RUVIA_ROOT}/ruvia-http/src/http2/Http2Connection.cpp"
     "${RUVIA_ROOT}/ruvia-http/src/websocket/HttpWebSocketValidation.cpp"
     "${RUVIA_ROOT}/examples/api_surface.cpp"
-    "${RUVIA_ROOT}/tests/unit_request_access.cpp")
+    "${RUVIA_ROOT}/tests/http/unit_request_access.cpp")
 check_files_no_match("HTTP/1 client requests must use one typed writer contract"
     "${RULE_STALE_HTTP1_CLIENT_REQUEST_SPLIT}"
     "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/HttpClient.h"
@@ -4509,11 +4509,11 @@ check_files_no_match("HTTP/1 client requests must use one typed writer contract"
     "${RUVIA_ROOT}/ruvia-http/src/client/Http1ClientRequestWriter.cpp"
     "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/Http1ClientResponseParser.h"
     "${RUVIA_ROOT}/ruvia-http/src/client/HttpClientResponseParser.cpp"
-    "${RUVIA_ROOT}/tests/unit_http_client_request.cpp"
-    "${RUVIA_ROOT}/tests/unit_http_client_response.cpp"
-    "${RUVIA_ROOT}/tests/unit_http_client_redirect.cpp"
+    "${RUVIA_ROOT}/tests/http/unit_http_client_request.cpp"
+    "${RUVIA_ROOT}/tests/http/unit_http_client_response.cpp"
+    "${RUVIA_ROOT}/tests/http/unit_http_client_redirect.cpp"
     "${RUVIA_ROOT}/tests/package-consumer/http.cpp"
-    "${RUVIA_ROOT}/tests/smoke_http_target.cpp")
+    "${RUVIA_ROOT}/tests/server/smoke_http_target.cpp")
 check_files_no_match("outbound request content must use exclusive alternatives"
     "${RULE_STALE_OUTBOUND_REQUEST_CONTENT_MODE_TUPLE}"
     "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/HttpClient.h"
@@ -4521,32 +4521,32 @@ check_files_no_match("outbound request content must use exclusive alternatives"
     "${RUVIA_ROOT}/ruvia-http/src/client/Http1ClientRequestWriter.cpp"
     "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/detail/http2/Http2RequestContent.h"
     "${RUVIA_ROOT}/ruvia-http/src/http2/Http2Connection.cpp"
-    "${RUVIA_ROOT}/tests/unit_http_client_request.cpp"
-    "${RUVIA_ROOT}/tests/unit_http_client_response.cpp"
-    "${RUVIA_ROOT}/tests/unit_http2_connection.cpp"
+    "${RUVIA_ROOT}/tests/http/unit_http_client_request.cpp"
+    "${RUVIA_ROOT}/tests/http/unit_http_client_response.cpp"
+    "${RUVIA_ROOT}/tests/http2/unit_http2_connection.cpp"
     "${RUVIA_ROOT}/tests/package-consumer/http.cpp"
     "${RUVIA_ROOT}/examples/api_surface.cpp")
 check_files_no_match("HTTP/1 client response framing must use one typed plan"
     "${RULE_STALE_HTTP1_CLIENT_RESPONSE_SPLIT}"
     "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/Http1ClientResponseParser.h"
     "${RUVIA_ROOT}/ruvia-http/src/client/HttpClientResponseParser.cpp"
-    "${RUVIA_ROOT}/tests/unit_http_client_response.cpp"
+    "${RUVIA_ROOT}/tests/http/unit_http_client_response.cpp"
     "${RUVIA_ROOT}/tests/package-consumer/http.cpp")
 check_files_no_match("HTTP/1 client response plans must use exclusive alternatives"
     "${RULE_STALE_HTTP1_CLIENT_RESPONSE_MODE_TUPLE}"
     "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/Http1ClientResponseParser.h"
     "${RUVIA_ROOT}/ruvia-http/src/client/HttpClientResponseParser.cpp"
-    "${RUVIA_ROOT}/tests/unit_http_client_response.cpp"
-    "${RUVIA_ROOT}/tests/unit_http_client_request.cpp"
+    "${RUVIA_ROOT}/tests/http/unit_http_client_response.cpp"
+    "${RUVIA_ROOT}/tests/http/unit_http_client_request.cpp"
     "${RUVIA_ROOT}/tests/package-consumer/http.cpp"
-    "${RUVIA_ROOT}/tests/smoke_http_target.cpp")
+    "${RUVIA_ROOT}/tests/server/smoke_http_target.cpp")
 check_files_no_match("HTTP/1 client response parsing must use the public discriminated API"
     "${RULE_STALE_HTTP1_CLIENT_RESPONSE_PARSER_API}"
     "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/HttpClient.h"
     "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/detail/client/HttpClientAccess.h"
     "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/Http1ClientResponseParser.h"
     "${RUVIA_ROOT}/ruvia-http/src/client/HttpClientResponseParser.cpp"
-    "${RUVIA_ROOT}/tests/unit_http_client_response.cpp"
+    "${RUVIA_ROOT}/tests/http/unit_http_client_response.cpp"
     "${RUVIA_ROOT}/tests/package-consumer/http.cpp")
 check_files_no_match("HTTP/1 request and response must share Content-Length parsing"
     "${RULE_STALE_HTTP_CONTENT_LENGTH_SPLIT}"
@@ -4595,9 +4595,9 @@ set(WEB_RESPONSE_COMPRESSION
 set(WEB_RESPONSE_H2_WRITER
     "${RUVIA_ROOT}/ruvia-web/src/server/Http2BufferedResponseWrite.cpp")
 set(HTTP_RESPONSE_BODY_TEST
-    "${RUVIA_ROOT}/tests/unit_http_response_body.cpp")
+    "${RUVIA_ROOT}/tests/http/unit_http_response_body.cpp")
 set(HTTP_RESPONSE_PUBLIC_TEST
-    "${RUVIA_ROOT}/tests/unit_http_response.cpp")
+    "${RUVIA_ROOT}/tests/http/unit_http_response.cpp")
 set(HTTP_RESPONSE_PACKAGE_CONSUMER
     "${RUVIA_ROOT}/tests/package-consumer/http.cpp")
 foreach(response_body_contract_file IN ITEMS
@@ -4814,8 +4814,8 @@ check_files_no_match("HTTP/2 send path must not restore ambiguous retry ownershi
     "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/server/Http2SansIoSession.h"
     "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/http2/Http2SansIoResponseStreamSink.h"
     "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/http2/Http2SansIoWsTransport.h"
-    "${RUVIA_ROOT}/tests/unit_http2_connection.cpp"
-    "${RUVIA_ROOT}/tests/unit_sansio_driver.cpp")
+    "${RUVIA_ROOT}/tests/http2/unit_http2_connection.cpp"
+    "${RUVIA_ROOT}/tests/http2/unit_sansio_driver.cpp")
 check_files_no_match("HTTP/2 local content accounting must use exclusive alternatives"
     "${RULE_STALE_H2_LOCAL_CONTENT_MODE_TUPLE}"
     "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/detail/http2/Http2LocalContentState.h"
@@ -4856,9 +4856,9 @@ check_files_no_match("response trailers must remain one terminal section"
     "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/server/HttpResponseStreamDispatch.h"
     "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/server/HttpResponseStreamSink.h"
     "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/http2/Http2SansIoResponseStreamSink.h"
-    "${RUVIA_ROOT}/tests/unit_streaming.cpp"
-    "${RUVIA_ROOT}/tests/unit_http2_connection.cpp"
-    "${RUVIA_ROOT}/tests/unit_sansio_driver.cpp")
+    "${RUVIA_ROOT}/tests/web/unit_streaming.cpp"
+    "${RUVIA_ROOT}/tests/http2/unit_http2_connection.cpp"
+    "${RUVIA_ROOT}/tests/http2/unit_sansio_driver.cpp")
 check_files_no_match("HTTP/2 response trailers must not have staged per-stream ownership"
     "${RULE_STALE_H2_RESPONSE_TRAILER_STAGING}"
     "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/detail/http2/Http2Connection.h"
@@ -4866,13 +4866,13 @@ check_files_no_match("HTTP/2 response trailers must not have staged per-stream o
     "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/detail/http2/Http2StreamState.h"
     "${RUVIA_ROOT}/ruvia-http/src/http2/Http2Connection.cpp"
     "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/http2/Http2SansIoResponseStreamSink.h"
-    "${RUVIA_ROOT}/tests/unit_http2_connection.cpp")
+    "${RUVIA_ROOT}/tests/http2/unit_http2_connection.cpp")
 check_files_no_match("HTTP/2 response finish must receive the complete terminal section explicitly"
     "${RULE_IMPLICIT_H2_RESPONSE_FINISH}"
     "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/detail/http2/Http2Connection.h"
     "${RUVIA_ROOT}/ruvia-http/src/http2/Http2Connection.cpp"
     "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/http2/Http2SansIoResponseStreamSink.h"
-    "${RUVIA_ROOT}/tests/unit_http2_connection.cpp")
+    "${RUVIA_ROOT}/tests/http2/unit_http2_connection.cpp")
 check_files_no_match("response-stream runtime must consume the typed commit plan"
     "${RULE_STALE_RESPONSE_STREAM_COMMIT_BOOL}"
     "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/server/HttpResponseStreamState.h"
@@ -4915,7 +4915,7 @@ set(WEB_ENV_CONTRACT
 set(WEB_ENV_SOURCE
     "${RUVIA_ROOT}/ruvia-web/src/app/Dotenv.cpp")
 set(WEB_ENV_TEST
-    "${RUVIA_ROOT}/tests/unit_dotenv_parser.cpp")
+    "${RUVIA_ROOT}/tests/web/unit_dotenv_parser.cpp")
 if(EXISTS "${WEB_ENV_CONTRACT}" AND
    EXISTS "${WEB_ENV_SOURCE}" AND
    EXISTS "${WEB_ENV_TEST}" AND
@@ -4973,11 +4973,11 @@ check_files_no_match("HTTP/1 request limit must use one connection-private seque
     "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/server/HttpServerStreamBodyRoute.h"
     "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/server/HttpServerResponseStreamRoute.h"
     "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/server/HttpServerStreamSession.inl"
-    "${RUVIA_ROOT}/tests/unit_response_head_emit.cpp")
+    "${RUVIA_ROOT}/tests/http/unit_response_head_emit.cpp")
 set(WEB_HTTP1_REQUEST_SEQUENCE
     "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/server/Http1RequestSequence.h")
 set(WEB_HTTP1_REQUEST_SEQUENCE_TEST
-    "${RUVIA_ROOT}/tests/unit_response_head_emit.cpp")
+    "${RUVIA_ROOT}/tests/http/unit_response_head_emit.cpp")
 if(EXISTS "${WEB_HTTP1_REQUEST_SEQUENCE}" AND
    EXISTS "${WEB_HTTP1_REQUEST_SEQUENCE_TEST}" AND
    EXISTS "${WEB_SERVER_OPTIONS_MODEL}" AND
@@ -5037,13 +5037,13 @@ set(WEB_HTTP1_STREAM_SESSION
 set(WEB_HTTP2_STREAM_SESSION
     "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/server/Http2SansIoSession.h")
 set(RESPONSE_STREAM_STATUS_TEST
-    "${RUVIA_ROOT}/tests/unit_response_stream_dispatch.cpp")
+    "${RUVIA_ROOT}/tests/web/unit_response_stream_dispatch.cpp")
 set(RESPONSE_STREAM_LIFECYCLE_TEST
-    "${RUVIA_ROOT}/tests/unit_streaming.cpp")
+    "${RUVIA_ROOT}/tests/web/unit_streaming.cpp")
 set(HTTP1_SESSION_COMPLETION_TEST
-    "${RUVIA_ROOT}/tests/unit_connection_read_buffer.cpp")
+    "${RUVIA_ROOT}/tests/http/unit_connection_read_buffer.cpp")
 set(RESPONSE_STREAM_H2_RUNTIME_TEST
-    "${RUVIA_ROOT}/tests/unit_sansio_driver.cpp")
+    "${RUVIA_ROOT}/tests/http2/unit_sansio_driver.cpp")
 set(RESPONSE_STREAM_HTTP_PACKAGE_CONSUMER
     "${RUVIA_ROOT}/tests/package-consumer/http.cpp")
 set(RESPONSE_STREAM_WEB_PACKAGE_CONSUMER
@@ -5423,7 +5423,7 @@ set(WEB_REDIS_TRANSACTION_API
 set(WEB_REDIS_TRANSACTION_IMPL
     "${RUVIA_ROOT}/ruvia-web/src/redis/RedisTransaction.cpp")
 set(WEB_REDIS_LINEAR_API_TEST
-    "${RUVIA_ROOT}/tests/unit_redis_api_surface.cpp")
+    "${RUVIA_ROOT}/tests/web/unit_redis_api_surface.cpp")
 set(WEB_REDIS_LINEAR_PACKAGE_TEST
     "${RUVIA_ROOT}/tests/package-consumer/web.cpp")
 if(EXISTS "${WEB_REDIS_PIPELINE_API}" AND
@@ -5513,7 +5513,7 @@ file(READ "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/SecurityHeaders.h"
     security_headers_public_contract)
 file(READ "${RUVIA_ROOT}/ruvia-web/src/http/SecurityHeaders.cpp"
     security_headers_wire_contract)
-file(READ "${RUVIA_ROOT}/tests/unit_security_headers.cpp"
+file(READ "${RUVIA_ROOT}/tests/web/unit_security_headers.cpp"
     security_headers_unit_contract)
 file(READ "${RUVIA_ROOT}/examples/api_surface.cpp"
     security_headers_api_surface_contract)
@@ -5617,7 +5617,7 @@ check_files_no_match("request blobs must use the shared contentType vocabulary"
 set(DB_MIGRATION_SOURCE
     "${RUVIA_ROOT}/ruvia-web/src/db/DbMigration.cpp")
 set(DB_MIGRATION_TEST
-    "${RUVIA_ROOT}/tests/unit_db_api_surface.cpp")
+    "${RUVIA_ROOT}/tests/web/unit_db_api_surface.cpp")
 if(EXISTS "${DB_MIGRATION_SOURCE}" AND EXISTS "${DB_MIGRATION_TEST}")
     file(READ "${DB_MIGRATION_SOURCE}" db_migration_source)
     file(READ "${DB_MIGRATION_TEST}" db_migration_test)
@@ -5666,19 +5666,19 @@ set(WEB_HTTP1_BUFFERED_RESPONSE_SESSION
 set(WEB_BUFFERED_RESPONSE_PREPARATION
     "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/server/HttpBufferedResponse.h")
 set(BUFFERED_RESPONSE_PLAN_TEST
-    "${RUVIA_ROOT}/tests/unit_response_head_policy.cpp")
+    "${RUVIA_ROOT}/tests/http/unit_response_head_policy.cpp")
 set(BUFFERED_RESPONSE_H1_TEST
-    "${RUVIA_ROOT}/tests/unit_response_head_emit.cpp")
+    "${RUVIA_ROOT}/tests/http/unit_response_head_emit.cpp")
 set(BUFFERED_RESPONSE_H1_RESULT_TEST
-    "${RUVIA_ROOT}/tests/unit_http1_buffered_response_write.cpp")
+    "${RUVIA_ROOT}/tests/http1/unit_http1_buffered_response_write.cpp")
 set(BUFFERED_RESPONSE_H2_PLAN_TEST
-    "${RUVIA_ROOT}/tests/unit_http2_response_headers.cpp")
+    "${RUVIA_ROOT}/tests/http2/unit_http2_response_headers.cpp")
 set(BUFFERED_RESPONSE_H2_RESULT_TEST
-    "${RUVIA_ROOT}/tests/unit_http2_buffered_response_write.cpp")
+    "${RUVIA_ROOT}/tests/http2/unit_http2_buffered_response_write.cpp")
 set(BUFFERED_RESPONSE_H2_RUNTIME_TEST
-    "${RUVIA_ROOT}/tests/unit_sansio_driver.cpp")
+    "${RUVIA_ROOT}/tests/http2/unit_sansio_driver.cpp")
 set(BUFFERED_RESPONSE_H2_CONNECTION_TEST
-    "${RUVIA_ROOT}/tests/unit_http2_connection.cpp")
+    "${RUVIA_ROOT}/tests/http2/unit_http2_connection.cpp")
 set(BUFFERED_RESPONSE_HTTP_PACKAGE_CONSUMER
     "${RUVIA_ROOT}/tests/package-consumer/http.cpp")
 set(BUFFERED_RESPONSE_WEB_PACKAGE_CONSUMER
@@ -6037,8 +6037,8 @@ check_files_no_match("HTTP/2 client request heads must allocate and submit atomi
     "${RULE_STALE_H2_CLIENT_STREAM_API}"
     "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/detail/http2/Http2Connection.h"
     "${RUVIA_ROOT}/ruvia-http/src/http2/Http2Connection.cpp"
-    "${RUVIA_ROOT}/tests/unit_http2_connection.cpp"
-    "${RUVIA_ROOT}/tests/unit_http2_connect.cpp"
+    "${RUVIA_ROOT}/tests/http2/unit_http2_connection.cpp"
+    "${RUVIA_ROOT}/tests/http2/unit_http2_connect.cpp"
     "${RUVIA_ROOT}/tests/package-consumer/http.cpp")
 check_files_no_match("HTTP/2 GOAWAY lifecycle must remain typed and core-owned"
     "${RULE_STALE_H2_GOAWAY_API}"
@@ -6046,8 +6046,8 @@ check_files_no_match("HTTP/2 GOAWAY lifecycle must remain typed and core-owned"
     "${RUVIA_ROOT}/ruvia-http/src/http2/Http2Connection.cpp"
     "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/server/Http2SansIoSession.h"
     "${RUVIA_ROOT}/ruvia-core/include/ruvia/core/detail/SansIoDriver.h"
-    "${RUVIA_ROOT}/tests/unit_http2_connection.cpp"
-    "${RUVIA_ROOT}/tests/unit_sansio_driver.cpp"
+    "${RUVIA_ROOT}/tests/http2/unit_http2_connection.cpp"
+    "${RUVIA_ROOT}/tests/http2/unit_sansio_driver.cpp"
     "${RUVIA_ROOT}/tests/package-consumer/http.cpp")
 check_files_no_match("HTTP/2 events must remain optional and discriminated"
     "${RULE_STALE_H2_EVENT_TUPLE}"
@@ -6060,15 +6060,15 @@ check_files_no_match("HTTP/2 feed must remain a direct all-or-nothing ownership 
     "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/detail/http2/Http2Connection.h"
     "${RUVIA_ROOT}/ruvia-http/src/http2/Http2Connection.cpp"
     "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/server/Http2SansIoSession.h"
-    "${RUVIA_ROOT}/tests/unit_http2_connection.cpp"
-    "${RUVIA_ROOT}/tests/unit_http2_connect.cpp"
+    "${RUVIA_ROOT}/tests/http2/unit_http2_connection.cpp"
+    "${RUVIA_ROOT}/tests/http2/unit_http2_connect.cpp"
     "${RUVIA_ROOT}/tests/package-consumer/http.cpp")
 check_files_no_match("HTTP/2 request-head submission must remain discriminated"
     "${RULE_STALE_H2_REQUEST_HEAD_SUBMIT_TUPLE}"
     "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/detail/http2/Http2Connection.h"
     "${RUVIA_ROOT}/ruvia-http/src/http2/Http2Connection.cpp"
-    "${RUVIA_ROOT}/tests/unit_http2_connection.cpp"
-    "${RUVIA_ROOT}/tests/unit_http2_connect.cpp"
+    "${RUVIA_ROOT}/tests/http2/unit_http2_connection.cpp"
+    "${RUVIA_ROOT}/tests/http2/unit_http2_connect.cpp"
     "${RUVIA_ROOT}/tests/package-consumer/http.cpp"
     "${RUVIA_ROOT}/README.md"
     "${RUVIA_ROOT}/AGENTS.md")
@@ -6078,8 +6078,8 @@ check_files_no_match("HTTP/2 response-head submission must remain discriminated"
     "${RUVIA_ROOT}/ruvia-http/src/http2/Http2Connection.cpp"
     "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/server/Http2SansIoSession.h"
     "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/http2/Http2SansIoResponseStreamSink.h"
-    "${RUVIA_ROOT}/tests/unit_http2_connection.cpp"
-    "${RUVIA_ROOT}/tests/unit_sansio_driver.cpp"
+    "${RUVIA_ROOT}/tests/http2/unit_http2_connection.cpp"
+    "${RUVIA_ROOT}/tests/http2/unit_sansio_driver.cpp"
     "${RUVIA_ROOT}/tests/package-consumer/http.cpp")
 check_files_no_match("HTTP/2 peer-setting application must remain discriminated"
     "${RULE_STALE_H2_PEER_SETTING_APPLY_TUPLE}"
@@ -6092,12 +6092,12 @@ check_files_no_match("HTTP/2 DATA must keep connection-first receive-window acco
     "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/detail/http2/Http2FlowControl.h"
     "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/detail/http2/Http2Connection.h"
     "${RUVIA_ROOT}/ruvia-http/src/http2/Http2Connection.cpp"
-    "${RUVIA_ROOT}/tests/unit_http2_flow_control.cpp"
-    "${RUVIA_ROOT}/tests/unit_http2_connection.cpp")
+    "${RUVIA_ROOT}/tests/http2/unit_http2_flow_control.cpp"
+    "${RUVIA_ROOT}/tests/http2/unit_http2_connection.cpp")
 check_files_no_match("205 Reset Content must not regain a sendable body"
     "${RULE_STALE_205_RESPONSE_BODY}"
     "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/detail/server/HttpResponseHeadPolicy.h"
-    "${RUVIA_ROOT}/tests/unit_response_head_policy.cpp")
+    "${RUVIA_ROOT}/tests/http/unit_response_head_policy.cpp")
 
 set(HTTP_RESPONSE_HEAD_POLICY
     "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/detail/server/HttpResponseHeadPolicy.h")
@@ -6635,9 +6635,9 @@ endif()
 set(HTTP2_CLIENT_RESPONSE_HEADERS_SOURCE
     "${RUVIA_ROOT}/ruvia-http/src/http2/Http2ConnectionHeaders.cpp")
 set(HTTP1_CLIENT_RESPONSE_STATUS_TEST
-    "${RUVIA_ROOT}/tests/unit_http_client_response.cpp")
+    "${RUVIA_ROOT}/tests/http/unit_http_client_response.cpp")
 set(HTTP2_CLIENT_RESPONSE_STATUS_TEST
-    "${RUVIA_ROOT}/tests/unit_http2_connection.cpp")
+    "${RUVIA_ROOT}/tests/http2/unit_http2_connection.cpp")
 foreach(http_client_status_contract_file IN ITEMS
         "${HTTP_STATUS_HEADER}"
         "${HTTP1_CLIENT_RESPONSE_SOURCE}"
@@ -6727,13 +6727,13 @@ if(EXISTS "${WEB_CONTEXT_HEADER}" AND
 endif()
 
 set(RESPONSE_STATUS_MODEL_TEST
-    "${RUVIA_ROOT}/tests/unit_http_response.cpp")
+    "${RUVIA_ROOT}/tests/http/unit_http_response.cpp")
 set(RESPONSE_REASON_PHRASE_TEST
-    "${RUVIA_ROOT}/tests/unit_error.cpp")
+    "${RUVIA_ROOT}/tests/http/unit_error.cpp")
 set(RESPONSE_HEAD_REASON_PHRASE_TEST
-    "${RUVIA_ROOT}/tests/unit_response_head_emit.cpp")
+    "${RUVIA_ROOT}/tests/http/unit_response_head_emit.cpp")
 set(RESPONSE_ERROR_LABEL_TEST
-    "${RUVIA_ROOT}/tests/unit_error_response.cpp")
+    "${RUVIA_ROOT}/tests/http/unit_error_response.cpp")
 set(RESPONSE_API_SURFACE_TEST
     "${RUVIA_ROOT}/examples/api_surface.cpp")
 if(EXISTS "${RESPONSE_STATUS_MODEL_TEST}" AND
@@ -6761,9 +6761,9 @@ if(EXISTS "${RESPONSE_STATUS_MODEL_TEST}" AND
 endif()
 
 set(HTTP1_RESPONSE_HEAD_POLICY_TEST
-    "${RUVIA_ROOT}/tests/unit_response_head_policy.cpp")
+    "${RUVIA_ROOT}/tests/http/unit_response_head_policy.cpp")
 set(HTTP1_RESPONSE_STREAM_PLAN_TEST
-    "${RUVIA_ROOT}/tests/unit_http_server_request_state.cpp")
+    "${RUVIA_ROOT}/tests/web/unit_http_server_request_state.cpp")
 set(HTTP_PACKAGE_CONSUMER
     "${RUVIA_ROOT}/tests/package-consumer/http.cpp")
 if(EXISTS "${RESPONSE_HEAD_REASON_PHRASE_TEST}" AND
@@ -6820,9 +6820,9 @@ if(EXISTS "${RESPONSE_HEAD_REASON_PHRASE_TEST}" AND
 endif()
 
 set(HTTP2_RESPONSE_HEAD_PLAN_TEST
-    "${RUVIA_ROOT}/tests/unit_http2_response_headers.cpp")
+    "${RUVIA_ROOT}/tests/http2/unit_http2_response_headers.cpp")
 set(HTTP2_RESPONSE_HEAD_CONNECTION_TEST
-    "${RUVIA_ROOT}/tests/unit_http2_connection.cpp")
+    "${RUVIA_ROOT}/tests/http2/unit_http2_connection.cpp")
 if(EXISTS "${HTTP2_RESPONSE_HEAD_PLAN_TEST}" AND
    EXISTS "${HTTP2_RESPONSE_HEAD_CONNECTION_TEST}" AND
    EXISTS "${HTTP_PACKAGE_CONSUMER}")
@@ -6975,13 +6975,13 @@ else()
     endif()
 endif()
 set(FINAL_RESPONSE_CONTROL_TEST
-    "${RUVIA_ROOT}/tests/unit_final_response_control.cpp")
+    "${RUVIA_ROOT}/tests/http/unit_final_response_control.cpp")
 set(HTTP2_FINAL_RESPONSE_HEADER_TEST
-    "${RUVIA_ROOT}/tests/unit_http2_response_headers.cpp")
+    "${RUVIA_ROOT}/tests/http2/unit_http2_response_headers.cpp")
 set(HTTP2_FINAL_RESPONSE_CONNECTION_TEST
-    "${RUVIA_ROOT}/tests/unit_http2_connection.cpp")
+    "${RUVIA_ROOT}/tests/http2/unit_http2_connection.cpp")
 set(HTTP2_CONNECT_RESPONSE_TEST
-    "${RUVIA_ROOT}/tests/unit_http2_connect.cpp")
+    "${RUVIA_ROOT}/tests/http2/unit_http2_connect.cpp")
 set(HTTP_FINAL_CONTROL_PACKAGE_TEST
     "${RUVIA_ROOT}/tests/package-consumer/http.cpp")
 foreach(final_control_test_file IN ITEMS
@@ -7052,7 +7052,7 @@ set(HTTP2_CONNECTION_HEADER
 set(HTTP2_INTERIM_RESPONSE_RECEIVER
     "${RUVIA_ROOT}/ruvia-http/src/http2/Http2ConnectionHeaders.cpp")
 set(HTTP2_INTERIM_RESPONSE_TEST
-    "${RUVIA_ROOT}/tests/unit_http2_connection.cpp")
+    "${RUVIA_ROOT}/tests/http2/unit_http2_connection.cpp")
 if(NOT EXISTS "${HTTP_INTERIM_RESPONSE_HEADER}" OR
    NOT EXISTS "${HTTP_INTERIM_RESPONSE_SOURCE}" OR
    NOT EXISTS "${HTTP1_INTERIM_RESPONSE_WRITER}" OR
@@ -7128,15 +7128,15 @@ set(HTTP2_CONNECTION_BUFFER_API
 set(WEBSOCKET_CLOSE_BUFFER
     "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/detail/websocket/HttpWebSocketUtils.h")
 set(HTTP1_CHUNK_HEADER_BUFFER_TEST
-    "${RUVIA_ROOT}/tests/unit_http1_chunked_framing.cpp")
+    "${RUVIA_ROOT}/tests/http1/unit_http1_chunked_framing.cpp")
 set(HTTP_RESPONSE_HEAD_BUFFER_TEST
-    "${RUVIA_ROOT}/tests/unit_response_head_buffer.cpp")
+    "${RUVIA_ROOT}/tests/http/unit_response_head_buffer.cpp")
 set(HTTP2_OUTPUT_BUFFER_TEST
-    "${RUVIA_ROOT}/tests/unit_http2_output_buffer.cpp")
+    "${RUVIA_ROOT}/tests/http2/unit_http2_output_buffer.cpp")
 set(HTTP2_CONNECTION_BUFFER_TEST
-    "${RUVIA_ROOT}/tests/unit_http2_connection.cpp")
+    "${RUVIA_ROOT}/tests/http2/unit_http2_connection.cpp")
 set(WEBSOCKET_CLOSE_BUFFER_TEST
-    "${RUVIA_ROOT}/tests/unit_websocket_close.cpp")
+    "${RUVIA_ROOT}/tests/websocket/unit_websocket_close.cpp")
 set(PROTOCOL_BUFFER_PACKAGE_CONSUMER
     "${RUVIA_ROOT}/tests/package-consumer/http.cpp")
 foreach(protocol_buffer_contract IN ITEMS
@@ -7272,15 +7272,15 @@ set(HTTP2_STREAM_STATE_OWNER
 set(HTTP2_STREAM_TABLE_OWNER
     "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/detail/http2/Http2StreamTable.h")
 set(HTTP2_HEADER_LIST_OWNER_TEST
-    "${RUVIA_ROOT}/tests/unit_http2_header_list.cpp")
+    "${RUVIA_ROOT}/tests/http2/unit_http2_header_list.cpp")
 set(HTTP2_STREAM_REQUEST_DATA_OWNER_TEST
-    "${RUVIA_ROOT}/tests/unit_http2_stream_request_data.cpp")
+    "${RUVIA_ROOT}/tests/http2/unit_http2_stream_request_data.cpp")
 set(HTTP2_STREAM_REQUEST_STATE_OWNER_TEST
-    "${RUVIA_ROOT}/tests/unit_http2_request_headers.cpp")
+    "${RUVIA_ROOT}/tests/http2/unit_http2_request_headers.cpp")
 set(HTTP2_STREAM_LIFECYCLE_OWNER_TEST
-    "${RUVIA_ROOT}/tests/unit_http2_stream_lifecycle.cpp")
+    "${RUVIA_ROOT}/tests/http2/unit_http2_stream_lifecycle.cpp")
 set(HTTP2_STREAM_TABLE_OWNER_TEST
-    "${RUVIA_ROOT}/tests/unit_http2_stream_table.cpp")
+    "${RUVIA_ROOT}/tests/http2/unit_http2_stream_table.cpp")
 foreach(http2_stream_owner_contract IN ITEMS
         "${HTTP2_HEADER_LIST_OWNER}"
         "${HTTP2_STREAM_REQUEST_DATA_OWNER}"
@@ -7466,7 +7466,7 @@ check_files_no_match("obsolete untyped informational response submit API was res
     "submitInformationalResponseHead"
     "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/detail/http2/Http2Connection.h"
     "${RUVIA_ROOT}/ruvia-http/src/http2/Http2Connection.cpp"
-    "${RUVIA_ROOT}/tests/unit_http2_connection.cpp")
+    "${RUVIA_ROOT}/tests/http2/unit_http2_connection.cpp")
 check_files_no_match("raw HTTP/1 100 Continue bytes escaped the protocol writer"
     "HTTP/1[.]1 100 Continue"
     ${WEB_SOURCE})
@@ -8260,20 +8260,20 @@ else()
     endif()
 endif()
 
-set(HTTP2_EVENT_TEST "${RUVIA_ROOT}/tests/unit_http2_connection.cpp")
+set(HTTP2_EVENT_TEST "${RUVIA_ROOT}/tests/http2/unit_http2_connection.cpp")
 set(HTTP_RESPONSE_CONTENT_SEMANTICS_TEST
-    "${RUVIA_ROOT}/tests/unit_http_response_content_semantics.cpp")
-set(HTTP2_PEER_SETTINGS_TEST "${RUVIA_ROOT}/tests/unit_http2_peer_settings.cpp")
+    "${RUVIA_ROOT}/tests/http/unit_http_response_content_semantics.cpp")
+set(HTTP2_PEER_SETTINGS_TEST "${RUVIA_ROOT}/tests/http2/unit_http2_peer_settings.cpp")
 set(HTTP2_LOCAL_CONTENT_TEST
-    "${RUVIA_ROOT}/tests/unit_http2_local_content_state.cpp")
+    "${RUVIA_ROOT}/tests/http2/unit_http2_local_content_state.cpp")
 set(HTTP2_LOCAL_SEND_TEST
-    "${RUVIA_ROOT}/tests/unit_http2_stream_lifecycle.cpp")
+    "${RUVIA_ROOT}/tests/http2/unit_http2_stream_lifecycle.cpp")
 set(HTTP2_REMOTE_CONTENT_TEST
-    "${RUVIA_ROOT}/tests/unit_http2_remote_content_state.cpp")
+    "${RUVIA_ROOT}/tests/http2/unit_http2_remote_content_state.cpp")
 set(HTTP2_WEB_STREAM_RUNTIME_TEST
-    "${RUVIA_ROOT}/tests/unit_http2_sansio_stream_runtime.cpp")
+    "${RUVIA_ROOT}/tests/http2/unit_http2_sansio_stream_runtime.cpp")
 set(HTTP2_CONNECT_TEST
-    "${RUVIA_ROOT}/tests/unit_http2_connect.cpp")
+    "${RUVIA_ROOT}/tests/http2/unit_http2_connect.cpp")
 set(HTTP_PACKAGE_CONSUMER "${RUVIA_ROOT}/tests/package-consumer/http.cpp")
 if(NOT EXISTS "${HTTP2_EVENT_TEST}" OR
    NOT EXISTS "${HTTP_PACKAGE_CONSUMER}")
@@ -8997,7 +8997,7 @@ set(WEB_HTTP2_SESSION
 set(WEB_HTTP2_SERVER_ENTRY
     "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/server/HttpServerCleartextHttp2.h")
 set(WEB_HTTP2_SESSION_FIXTURE
-    "${RUVIA_ROOT}/tests/http2_sansio_session_fixture.h")
+    "${RUVIA_ROOT}/tests/support/http2_sansio_session_fixture.h")
 set(WEB_HTTP2_PACKAGE_CONSUMER
     "${RUVIA_ROOT}/tests/package-consumer/web.cpp")
 if(NOT EXISTS "${WEB_HTTP2_SESSION}" OR
@@ -9011,7 +9011,7 @@ else()
     file(READ "${WEB_HTTP2_SERVER_ENTRY}" web_http2_server_entry)
     file(READ "${WEB_HTTP2_SESSION_FIXTURE}" web_http2_session_fixture)
     file(READ "${WEB_HTTP2_PACKAGE_CONSUMER}" web_http2_package_consumer)
-    file(READ "${RUVIA_ROOT}/tests/unit_sansio_driver.cpp"
+    file(READ "${RUVIA_ROOT}/tests/http2/unit_sansio_driver.cpp"
         web_http2_session_test)
     if(NOT web_http2_session MATCHES
            "class Http2SansIoSessionContext final" OR
@@ -9209,7 +9209,7 @@ set(WEB_HTTP1_FINAL_RESPONSE_COMMIT
 set(WEB_HTTP1_STREAM_SINK
     "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/server/HttpResponseStreamSink.h")
 set(HTTP1_FINAL_COMMIT_TEST
-    "${RUVIA_ROOT}/tests/unit_response_head_emit.cpp")
+    "${RUVIA_ROOT}/tests/http/unit_response_head_emit.cpp")
 set(HTTP1_FINAL_COMMIT_PACKAGE_CONSUMER
     "${RUVIA_ROOT}/tests/package-consumer/http.cpp")
 if(EXISTS "${WEB_HTTP1_FINAL_RESPONSE_COMMIT}" AND
@@ -9580,9 +9580,9 @@ check_files_no_match("request-body 413 mapping duplicated outside its HTTP failu
     "${HTTP1_WEB_STREAM_SESSION}")
 
 set(HTTP_REQUEST_BODY_FAILURE_TEST
-    "${RUVIA_ROOT}/tests/unit_request_body_decoding.cpp")
+    "${RUVIA_ROOT}/tests/http1/unit_request_body_decoding.cpp")
 set(WEB_HTTP2_REQUEST_BODY_TEST
-    "${RUVIA_ROOT}/tests/unit_http2_sansio_stream_runtime.cpp")
+    "${RUVIA_ROOT}/tests/http2/unit_http2_sansio_stream_runtime.cpp")
 if(EXISTS "${HTTP_REQUEST_BODY_FAILURE_TEST}" AND
    EXISTS "${WEB_HTTP2_REQUEST_BODY_TEST}")
     file(READ "${HTTP_REQUEST_BODY_FAILURE_TEST}" http_request_body_failure_test)
@@ -9698,17 +9698,17 @@ check_files_no_match("server Expect plans restored weak enum or optional actions
     "${HTTP2_STREAM_STATE}"
     "${WEB_HTTP1_SESSION}"
     "${WEB_HTTP2_SESSION}"
-    "${RUVIA_ROOT}/tests/unit_header_params.cpp"
-    "${RUVIA_ROOT}/tests/unit_http_server_request_state.cpp"
-    "${RUVIA_ROOT}/tests/unit_http2_request_headers.cpp"
+    "${RUVIA_ROOT}/tests/http/unit_header_params.cpp"
+    "${RUVIA_ROOT}/tests/web/unit_http_server_request_state.cpp"
+    "${RUVIA_ROOT}/tests/http2/unit_http2_request_headers.cpp"
     "${RUVIA_ROOT}/tests/package-consumer/http.cpp")
 
-set(HTTP_EXPECTATION_LIST_TEST "${RUVIA_ROOT}/tests/unit_header_params.cpp")
-set(HTTP1_EXPECTATION_TEST "${RUVIA_ROOT}/tests/unit_http1_parser.cpp")
-set(HTTP2_EXPECTATION_HEADER_TEST "${RUVIA_ROOT}/tests/unit_http2_request_headers.cpp")
-set(HTTP2_EXPECTATION_RUNTIME_TEST "${RUVIA_ROOT}/tests/unit_sansio_driver.cpp")
+set(HTTP_EXPECTATION_LIST_TEST "${RUVIA_ROOT}/tests/http/unit_header_params.cpp")
+set(HTTP1_EXPECTATION_TEST "${RUVIA_ROOT}/tests/http1/unit_http1_parser.cpp")
+set(HTTP2_EXPECTATION_HEADER_TEST "${RUVIA_ROOT}/tests/http2/unit_http2_request_headers.cpp")
+set(HTTP2_EXPECTATION_RUNTIME_TEST "${RUVIA_ROOT}/tests/http2/unit_sansio_driver.cpp")
 set(HTTP2_CLIENT_EXPECTATION_TEST
-    "${RUVIA_ROOT}/tests/unit_http2_connection.cpp")
+    "${RUVIA_ROOT}/tests/http2/unit_http2_connection.cpp")
 set(HTTP_EXPECTATION_PACKAGE_CONSUMER
     "${RUVIA_ROOT}/tests/package-consumer/http.cpp")
 if(EXISTS "${HTTP_EXPECTATION_LIST_TEST}" AND
@@ -9747,7 +9747,7 @@ if(EXISTS "${HTTP_EXPECTATION_LIST_TEST}" AND
 endif()
 
 set(HTTP1_REQUEST_BODY_TEST
-    "${RUVIA_ROOT}/tests/unit_request_body_decoding.cpp")
+    "${RUVIA_ROOT}/tests/http1/unit_request_body_decoding.cpp")
 if(EXISTS "${HTTP1_REQUEST_BODY_TEST}")
     file(READ "${HTTP1_REQUEST_BODY_TEST}" http1_request_body_test)
     if(NOT http1_request_body_test MATCHES
@@ -9774,7 +9774,7 @@ set(HTTP1_CLIENT_REQUEST_WRITER_HEADER
 set(HTTP1_CLIENT_REQUEST_WRITER
     "${RUVIA_ROOT}/ruvia-http/src/client/Http1ClientRequestWriter.cpp")
 set(HTTP1_CLIENT_REQUEST_TEST
-    "${RUVIA_ROOT}/tests/unit_http_client_request.cpp")
+    "${RUVIA_ROOT}/tests/http/unit_http_client_request.cpp")
 if(NOT EXISTS "${HTTP1_CLIENT_REQUEST_WRITER_HEADER}" OR
    NOT EXISTS "${HTTP1_CLIENT_REQUEST_WRITER}")
     boundary_error("public HTTP/1 client request writer is missing"
@@ -9948,7 +9948,7 @@ endif()
 set(HTTP2_CLIENT_REQUEST_WRITER
     "${RUVIA_ROOT}/ruvia-http/src/http2/Http2ConnectionSubmit.cpp")
 set(HTTP2_CLIENT_REQUEST_WRITER_TEST
-    "${RUVIA_ROOT}/tests/unit_http2_connection.cpp")
+    "${RUVIA_ROOT}/tests/http2/unit_http2_connection.cpp")
 if(EXISTS "${HTTP2_CLIENT_REQUEST_WRITER}" AND
    EXISTS "${HTTP2_CLIENT_REQUEST_WRITER_TEST}")
     file(READ "${HTTP2_CLIENT_REQUEST_WRITER}"
@@ -9975,11 +9975,11 @@ set(HTTP2_STREAM_STATE
 set(HTTP2_CONNECTION_HEADERS
     "${RUVIA_ROOT}/ruvia-http/src/http2/Http2ConnectionHeaders.cpp")
 set(REQUEST_SINGLETON_CLASSIFICATION_TEST
-    "${RUVIA_ROOT}/tests/unit_header_classification.cpp")
+    "${RUVIA_ROOT}/tests/http/unit_header_classification.cpp")
 set(HTTP1_REQUEST_SINGLETON_TEST
-    "${RUVIA_ROOT}/tests/unit_http1_parser.cpp")
+    "${RUVIA_ROOT}/tests/http1/unit_http1_parser.cpp")
 set(HTTP2_REQUEST_SINGLETON_TEST
-    "${RUVIA_ROOT}/tests/unit_http2_request_headers.cpp")
+    "${RUVIA_ROOT}/tests/http2/unit_http2_request_headers.cpp")
 if(EXISTS "${REQUEST_SINGLETON_POLICY}" AND
    EXISTS "${HTTP2_STREAM_STATE}" AND
    EXISTS "${HTTP2_CONNECTION_HEADERS}" AND
@@ -10289,7 +10289,7 @@ elseif(EXISTS "${HTTP1_CLIENT_RESPONSE_PARSER}")
             "only found may expose a borrowed field value, only target may own PMR bytes, and only failure may expose an error")
     endif()
     file(READ "${RUVIA_ROOT}/ruvia-http/CMakeLists.txt" http_client_redirect_cmake)
-    file(READ "${RUVIA_ROOT}/tests/unit_http_client_redirect.cpp" http_client_redirect_tests)
+    file(READ "${RUVIA_ROOT}/tests/http/unit_http_client_redirect.cpp" http_client_redirect_tests)
     file(READ "${RUVIA_ROOT}/tests/package-consumer/http.cpp" http_package_consumer)
     file(READ "${RUVIA_ROOT}/examples/api_surface.cpp" api_surface)
     if(NOT http_client_redirect_cmake MATCHES "src/client/HttpClientRedirect[.]cpp" OR
@@ -10318,9 +10318,9 @@ file(READ "${RUVIA_ROOT}/tests/package-consumer/http.cpp"
     public_http_value_package_contract)
 file(READ "${RUVIA_ROOT}/examples/api_surface.cpp"
     public_http_value_api_surface)
-file(READ "${RUVIA_ROOT}/tests/unit_http_client_response.cpp"
+file(READ "${RUVIA_ROOT}/tests/http/unit_http_client_response.cpp"
     public_http_client_response_owned_view_test)
-file(READ "${RUVIA_ROOT}/tests/unit_http_client_redirect.cpp"
+file(READ "${RUVIA_ROOT}/tests/http/unit_http_client_redirect.cpp"
     public_http_client_redirect_owned_view_test)
 if(NOT public_http_client_value_api MATCHES
        "withoutContent[(][)] const &&[ \\t]*=[ \\t]*delete" OR
@@ -10517,7 +10517,7 @@ if(EXISTS "${HTTP1_SERVER_PARSER}" AND EXISTS "${HTTP1_CLIENT_RESPONSE_PARSER}")
     endif()
 endif()
 set(HTTP1_CLIENT_RESPONSE_TEST
-    "${RUVIA_ROOT}/tests/unit_http_client_response.cpp")
+    "${RUVIA_ROOT}/tests/http/unit_http_client_response.cpp")
 if(EXISTS "${HTTP1_CLIENT_RESPONSE_TEST}")
     file(READ "${HTTP1_CLIENT_RESPONSE_TEST}" http1_client_response_test)
     if(NOT http1_client_response_test MATCHES
@@ -10599,8 +10599,8 @@ if(EXISTS "${WEB_HTTP1_STREAM_ROUTE}")
     endif()
 endif()
 
-set(RESPONSE_TRAILER_H2_TEST "${RUVIA_ROOT}/tests/unit_http2_connection.cpp")
-set(RESPONSE_TRAILER_H1_TEST "${RUVIA_ROOT}/tests/unit_http_server_request_state.cpp")
+set(RESPONSE_TRAILER_H2_TEST "${RUVIA_ROOT}/tests/http2/unit_http2_connection.cpp")
+set(RESPONSE_TRAILER_H1_TEST "${RUVIA_ROOT}/tests/web/unit_http_server_request_state.cpp")
 set(RESPONSE_TRAILER_H2_CONNECTION
     "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/detail/http2/Http2Connection.h")
 set(RESPONSE_TRAILER_H2_CONNECTION_SOURCE
@@ -10709,9 +10709,9 @@ set(WEB_REDIS_SET_HANDLE
 set(WEB_REDIS_SET_ARGS
     "${RUVIA_ROOT}/ruvia-web/src/redis/RedisCommandArgs.cpp")
 set(WEB_REDIS_SET_API_TEST
-    "${RUVIA_ROOT}/tests/unit_redis_api_surface.cpp")
+    "${RUVIA_ROOT}/tests/web/unit_redis_api_surface.cpp")
 set(WEB_REDIS_SET_WIRE_TEST
-    "${RUVIA_ROOT}/tests/unit_redis_protocol.cpp")
+    "${RUVIA_ROOT}/tests/web/unit_redis_protocol.cpp")
 set(WEB_REDIS_SET_PACKAGE_TEST
     "${RUVIA_ROOT}/tests/package-consumer/web.cpp")
 foreach(redis_set_contract IN ITEMS
@@ -10786,8 +10786,8 @@ set(WEB_DB_TIMEOUT_MODEL
     "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/db/DbTypes.h")
 set(WEB_REDIS_TIMEOUT_MODEL
     "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/redis/RedisTypes.h")
-set(WEB_DB_TIMEOUT_TEST "${RUVIA_ROOT}/tests/unit_db_sql.cpp")
-set(WEB_REDIS_TIMEOUT_TEST "${RUVIA_ROOT}/tests/unit_redis_protocol.cpp")
+set(WEB_DB_TIMEOUT_TEST "${RUVIA_ROOT}/tests/web/unit_db_sql.cpp")
+set(WEB_REDIS_TIMEOUT_TEST "${RUVIA_ROOT}/tests/web/unit_redis_protocol.cpp")
 set(WEB_TIMEOUT_PACKAGE_TEST
     "${RUVIA_ROOT}/tests/package-consumer/web.cpp")
 foreach(timeout_contract IN ITEMS
@@ -10921,7 +10921,7 @@ set(WEB_REDIS_OPTIONAL_LIMIT_ARGS
 set(WEB_REDIS_OPTIONAL_LIMIT_IO
     "${RUVIA_ROOT}/ruvia-web/src/redis/RedisPoolIo.cpp")
 set(WEB_REDIS_OPTIONAL_LIMIT_TEST
-    "${RUVIA_ROOT}/tests/unit_redis_protocol.cpp")
+    "${RUVIA_ROOT}/tests/web/unit_redis_protocol.cpp")
 set(WEB_REDIS_OPTIONAL_LIMIT_PACKAGE
     "${RUVIA_ROOT}/tests/package-consumer/web.cpp")
 if(EXISTS "${WEB_REDIS_OPTIONAL_LIMIT_MODEL}" AND
@@ -11011,7 +11011,7 @@ if(EXISTS "${CONNECTION_TIMEOUT_CORE_MODEL}" AND
 endif()
 
 set(CONNECTION_PERIODIC_TEST
-    "${RUVIA_ROOT}/tests/connection_scanner_lifetime.cpp")
+    "${RUVIA_ROOT}/tests/core/connection_scanner_lifetime.cpp")
 set(CONNECTION_PERIODIC_WS
     "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/websocket/HttpWebSocketConnection.h")
 set(CONNECTION_PERIODIC_WS_HEARTBEAT
@@ -11113,8 +11113,8 @@ set(POOL_WAITER_REDIS_SLOTS
     "${RUVIA_ROOT}/ruvia-web/src/redis/RedisPoolSlots.cpp")
 set(POOL_WAITER_REDIS_LIFECYCLE
     "${RUVIA_ROOT}/ruvia-web/src/redis/RedisPoolLifecycle.cpp")
-set(POOL_WAITER_TEST "${RUVIA_ROOT}/tests/unit_pool_waiter_queue.cpp")
-set(POOL_LEASE_TEST "${RUVIA_ROOT}/tests/pool_lease_scheduler.cpp")
+set(POOL_WAITER_TEST "${RUVIA_ROOT}/tests/web/unit_pool_waiter_queue.cpp")
+set(POOL_LEASE_TEST "${RUVIA_ROOT}/tests/core/pool_lease_scheduler.cpp")
 set(POOL_WAITER_PACKAGE_CONSUMER
     "${RUVIA_ROOT}/tests/package-consumer/core.cpp")
 foreach(required IN ITEMS
@@ -11564,7 +11564,7 @@ set(WS_H2_TRANSPORT
 set(WS_LIVENESS_POLICY
     "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/websocket/HttpWebSocketLiveness.h")
 set(WS_PUBLIC_CONFIG "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/WebSocket.h")
-set(WS_PROTOCOL_TEST "${RUVIA_ROOT}/tests/unit_ws_connection.cpp")
+set(WS_PROTOCOL_TEST "${RUVIA_ROOT}/tests/websocket/unit_ws_connection.cpp")
 set(WS_PACKAGE_CONSUMER "${RUVIA_ROOT}/tests/package-consumer/http.cpp")
 foreach(required IN ITEMS
     "${WS_PROTOCOL_HEADER}"
@@ -11773,8 +11773,8 @@ if(EXISTS "${WS_PROTOCOL_HEADER}" AND EXISTS "${WS_EVENT_HEADER}" AND
     endif()
 endif()
 
-set(WS_RUNTIME_TEST "${RUVIA_ROOT}/tests/unit_websocket_connection.cpp")
-set(WS_H2_DRIVER_TEST "${RUVIA_ROOT}/tests/unit_sansio_driver.cpp")
+set(WS_RUNTIME_TEST "${RUVIA_ROOT}/tests/websocket/unit_websocket_connection.cpp")
+set(WS_H2_DRIVER_TEST "${RUVIA_ROOT}/tests/http2/unit_sansio_driver.cpp")
 if(EXISTS "${WS_PROTOCOL_TEST}" AND EXISTS "${WS_RUNTIME_TEST}" AND
    EXISTS "${WS_H2_DRIVER_TEST}" AND EXISTS "${WS_PACKAGE_CONSUMER}")
     file(READ "${WS_PROTOCOL_TEST}" ws_protocol_test)
@@ -11801,11 +11801,11 @@ if(EXISTS "${WS_PROTOCOL_TEST}" AND EXISTS "${WS_RUNTIME_TEST}" AND
 endif()
 
 set(WS_H1_HANDSHAKE_TEST
-    "${RUVIA_ROOT}/tests/unit_websocket_handshake.cpp")
+    "${RUVIA_ROOT}/tests/websocket/unit_websocket_handshake.cpp")
 set(WS_H2_HANDSHAKE_TEST
-    "${RUVIA_ROOT}/tests/unit_http2_websocket_handshake.cpp")
+    "${RUVIA_ROOT}/tests/http2/unit_http2_websocket_handshake.cpp")
 set(WS_H2_CONNECTION_TEST
-    "${RUVIA_ROOT}/tests/unit_http2_connection.cpp")
+    "${RUVIA_ROOT}/tests/http2/unit_http2_connection.cpp")
 if(EXISTS "${WS_H1_HANDSHAKE_TEST}" AND
    EXISTS "${WS_H2_HANDSHAKE_TEST}" AND
    EXISTS "${WS_H2_CONNECTION_TEST}" AND
@@ -11853,9 +11853,9 @@ if(EXISTS "${WS_H1_HANDSHAKE_TEST}" AND
     endif()
 endif()
 
-set(WS_FRAME_RESULT_TEST "${RUVIA_ROOT}/tests/unit_websocket_frame.cpp")
-set(WS_ASSEMBLER_RESULT_TEST "${RUVIA_ROOT}/tests/unit_websocket_assembler.cpp")
-set(WS_CLOSE_RESULT_TEST "${RUVIA_ROOT}/tests/unit_websocket_close.cpp")
+set(WS_FRAME_RESULT_TEST "${RUVIA_ROOT}/tests/websocket/unit_websocket_frame.cpp")
+set(WS_ASSEMBLER_RESULT_TEST "${RUVIA_ROOT}/tests/websocket/unit_websocket_assembler.cpp")
+set(WS_CLOSE_RESULT_TEST "${RUVIA_ROOT}/tests/websocket/unit_websocket_close.cpp")
 if(EXISTS "${WS_FRAME_RESULT_TEST}" AND
    EXISTS "${WS_ASSEMBLER_RESULT_TEST}" AND
    EXISTS "${WS_CLOSE_RESULT_TEST}" AND
@@ -11930,8 +11930,8 @@ set(HTTP1_CHUNK_WEB_DRIVER
     "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/body/HttpStreamBodyReaderChunked.inl")
 set(HTTP1_CHUNK_DECODER
     "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/detail/http1/Http1ChunkedBodyDecoder.h")
-set(HTTP1_CHUNK_DECODER_TEST "${RUVIA_ROOT}/tests/unit_chunk_decoder.cpp")
-set(HTTP1_CHUNK_SCANNER_TEST "${RUVIA_ROOT}/tests/unit_http_parsing.cpp")
+set(HTTP1_CHUNK_DECODER_TEST "${RUVIA_ROOT}/tests/http1/unit_chunk_decoder.cpp")
+set(HTTP1_CHUNK_SCANNER_TEST "${RUVIA_ROOT}/tests/http1/unit_http_parsing.cpp")
 set(HTTP1_CHUNK_PACKAGE_CONSUMER "${RUVIA_ROOT}/tests/package-consumer/http.cpp")
 foreach(http1_chunk_driver_contract IN ITEMS
         "${HTTP1_CHUNK_DECODER}"
@@ -12014,9 +12014,9 @@ set(WEB_BODY_READER_HEADER
 set(WEB_BODY_READER_CHUNKED
     "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/body/HttpStreamBodyReaderChunked.inl")
 set(HTTP_TRANSFER_DECODER_TEST
-    "${RUVIA_ROOT}/tests/unit_request_body_decoding.cpp")
+    "${RUVIA_ROOT}/tests/http1/unit_request_body_decoding.cpp")
 set(WEB_BODY_READER_TEST
-    "${RUVIA_ROOT}/tests/unit_http_stream_body_reader.cpp")
+    "${RUVIA_ROOT}/tests/http1/unit_http_stream_body_reader.cpp")
 if(EXISTS "${HTTP_TRANSFER_DECODER}" AND
    EXISTS "${HTTP_TRANSFER_DECODER_SOURCE}" AND
    EXISTS "${WEB_BODY_READER_CORE}" AND
@@ -12185,7 +12185,7 @@ set(CORE_BASE64URL
     "${RUVIA_ROOT}/ruvia-core/include/ruvia/core/detail/Base64Url.h")
 set(WEB_JWT_ENCODING "${RUVIA_ROOT}/ruvia-web/src/auth/JwtEncoding.cpp")
 set(WEB_JWT_JSON "${RUVIA_ROOT}/ruvia-web/src/auth/JwtJson.cpp")
-set(WEB_JWT_TEST "${RUVIA_ROOT}/tests/unit_jwt.cpp")
+set(WEB_JWT_TEST "${RUVIA_ROOT}/tests/web/unit_jwt.cpp")
 check_files_no_match("JWT optional timestamps must not recover zero sentinels"
     "std::chrono::seconds[ \t]+(expiresIn|notBeforeDelay)"
     "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/auth/Jwt.h")
@@ -12382,7 +12382,7 @@ set(HTTP2_STREAM_STATE
 set(HTTP2_CONNECTION_SOURCE
     "${RUVIA_ROOT}/ruvia-http/src/http2/Http2Connection.cpp")
 set(HTTP2_RESPONSE_STATUS_TEST
-    "${RUVIA_ROOT}/tests/unit_http2_request_headers.cpp")
+    "${RUVIA_ROOT}/tests/http2/unit_http2_request_headers.cpp")
 set(HTTP_PACKAGE_VERIFY
     "${RUVIA_ROOT}/tests/verify_package_consumers.cmake.in")
 if(EXISTS "${HTTP2_STREAM_REQUEST_STATE}" AND
@@ -12434,7 +12434,7 @@ set(HTTP2_HPACK_SOURCES
     "${RUVIA_ROOT}/ruvia-http/src/http2/Http2Hpack.cpp"
     "${RUVIA_ROOT}/ruvia-http/src/http2/Http2HpackDynamic.cpp"
     "${RUVIA_ROOT}/ruvia-http/src/http2/Http2HpackHuffman.cpp")
-set(HTTP2_HPACK_TEST "${RUVIA_ROOT}/tests/unit_hpack.cpp")
+set(HTTP2_HPACK_TEST "${RUVIA_ROOT}/tests/http2/unit_hpack.cpp")
 if(EXISTS "${HTTP2_HPACK}" AND
    EXISTS "${HTTP2_HPACK_HEADER_DECODE}" AND
    EXISTS "${HTTP2_HPACK_TEST}" AND
@@ -12907,13 +12907,13 @@ set(WEB_DB_OWNED_VIEW_MIGRATION
 set(WEB_DB_OWNED_VIEW_SOURCE
     "${RUVIA_ROOT}/ruvia-web/src/db/DbTypes.cpp")
 set(WEB_DB_OWNED_VIEW_TEST
-    "${RUVIA_ROOT}/tests/unit_db_api_surface.cpp")
+    "${RUVIA_ROOT}/tests/web/unit_db_api_surface.cpp")
 set(WEB_REDIS_OWNED_VIEW_TYPES
     "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/redis/RedisTypes.h")
 set(WEB_REDIS_OWNED_VIEW_SOURCE
     "${RUVIA_ROOT}/ruvia-web/src/redis/RedisTypes.cpp")
 set(WEB_REDIS_OWNED_VIEW_TEST
-    "${RUVIA_ROOT}/tests/unit_redis_api_surface.cpp")
+    "${RUVIA_ROOT}/tests/web/unit_redis_api_surface.cpp")
 set(WEB_INTEGRATION_OWNED_VIEW_CONSUMER
     "${RUVIA_ROOT}/tests/package-consumer/web.cpp")
 foreach(integration_owned_view_contract IN ITEMS
@@ -13322,7 +13322,7 @@ endif()
 set(MULTIPART_INPUT_LIFECYCLE_HEADER
     "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/MultipartParser.h")
 set(MULTIPART_INPUT_LIFECYCLE_TEST
-    "${RUVIA_ROOT}/tests/unit_multipart.cpp")
+    "${RUVIA_ROOT}/tests/http1/unit_multipart.cpp")
 set(MULTIPART_INPUT_LIFECYCLE_PACKAGE_CONSUMER
     "${RUVIA_ROOT}/tests/package-consumer/http.cpp")
 file(READ "${MULTIPART_INPUT_LIFECYCLE_HEADER}"
