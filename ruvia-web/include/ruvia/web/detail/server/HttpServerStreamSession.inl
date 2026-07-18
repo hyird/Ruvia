@@ -204,11 +204,27 @@ Task<void> HttpServer::handleStreamSession(
                         routeResolution,
                         requestMemory,
                         baseRouteServices);
-                    const auto connectionPlan = requireHttp1FinalResponseCommit(
-                        response, parsed.connectionPlan.requireClose());
+                    // A not-found response never consumes the request body, so it
+                    // follows the same body-aware keep-alive rule as the static
+                    // miss path above: a bodyless request keeps the connection
+                    // alive, but one that still owes body bytes must close to
+                    // avoid desyncing the next request. Previously every 404 closed
+                    // the connection, so clients hitting missing paths could not
+                    // reuse it.
+                    auto connectionPlan = http1ApplyRequestBodyConsumption(
+                        parsed.connectionPlan,
+                        parsed.bodyPlan.requiresConsumption()
+                            ? Http1RequestBodyConsumption::kIncomplete
+                            : Http1RequestBodyConsumption::kComplete);
+                    connectionPlan = finalizeBufferedRouteResponse(
+                        response,
+                        connectionPlan,
+                        requestSequence);
                     requestCompletion.emplace(
-                        Http1SessionRequestCompletion::makeBufferedClosing(
-                            connectionPlan));
+                        Http1SessionRequestCompletion::makeBufferedUnrestored(
+                            connectionPlan,
+                            requestHead->headerBytes()));
+                    scannerEntry.touch();
                     break;
                 }
 
