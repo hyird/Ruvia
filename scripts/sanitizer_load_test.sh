@@ -61,7 +61,9 @@ if [ "$sanitizer" = "asan" ]; then
     export ASAN_OPTIONS="halt_on_error=1:abort_on_error=1:detect_leaks=0:log_path=$logdir/san"
     export UBSAN_OPTIONS="halt_on_error=1:print_stacktrace=1:log_path=$logdir/san"
 else
-    export TSAN_OPTIONS="halt_on_error=1:second_deadlock_stack=1:log_path=$logdir/san"
+    # Suppress mimalloc's internal thread-heap/meta races (false positives; see
+    # scripts/tsan.supp). Ruvia's own frames are never suppressed.
+    export TSAN_OPTIONS="halt_on_error=1:second_deadlock_stack=1:log_path=$logdir/san:suppressions=$root/scripts/tsan.supp"
 fi
 
 # https drives the TLS handshake path -- the highest-churn TLS surface -- with a

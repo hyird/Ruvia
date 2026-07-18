@@ -1,0 +1,22 @@
+# ThreadSanitizer suppressions for the concurrent load test (scripts/sanitizer_load_test.sh tsan).
+#
+# mimalloc 3.x manages its per-thread heap and internal metadata with lock-free
+# atomics whose happens-before edges ThreadSanitizer does not fully model, so it
+# reports benign races inside the allocator's own thread-heap/meta bookkeeping
+# when many worker threads allocate concurrently under load. mimalloc is
+# thread-safe; these are false positives in the third-party allocator's
+# internals, not defects in Ruvia code.
+#
+# The tsanAllocatorAcquire/Release annotations in ruvia-core/src/MemoryPool.cpp
+# already teach TSan about the mi_malloc/mi_free BLOCK reuse path; that path is
+# NOT suppressed here. This file covers only mimalloc's internal META/thread-heap
+# path, which those annotations cannot reach.
+#
+# Scope is deliberately narrow -- only mimalloc's own internal frames (the
+# underscore-prefixed internals Ruvia never calls directly). A genuine Ruvia
+# data race surfaces in ruvia:: frames and is never hidden by these entries.
+# The proper long-term fix is to build mimalloc with MI_TSAN=1; until the vcpkg
+# port exposes that, these suppressions keep the load test usable.
+race:_mi_theap_init
+race:_mi_meta_alloc
+race:_mi_meta_free
