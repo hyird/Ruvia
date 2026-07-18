@@ -579,6 +579,20 @@ public:
     template <typename T>
     [[nodiscard]] ScopedOperation<T> form() const;
 
+    // Non-throwing variants of json()/form() for endpoints that want to fall
+    // back instead of failing the request: nullopt when the Content-Type is
+    // not the consumed media type or the body does not parse as it. Transport
+    // and protocol failures (unreadable body, unsupported Content-Encoding,
+    // decoded size over the limit) still throw -- those describe the request
+    // stream, not its format.
+    [[nodiscard]] ScopedOperation<std::optional<JsonValue>> jsonIf() const;
+
+    template <typename T>
+    [[nodiscard]] ScopedOperation<std::optional<T>> jsonIf() const;
+
+    template <typename T>
+    [[nodiscard]] ScopedOperation<std::optional<T>> formIf() const;
+
     template <typename T>
     [[nodiscard]] const T& valid() const;
 
@@ -615,10 +629,18 @@ private:
     [[nodiscard]] static Task<std::span<const std::byte>> bytesTask(const Context* context);
     [[nodiscard]] static Task<RequestBlob> blobTask(const Context* context);
     [[nodiscard]] static Task<JsonValue> jsonTask(const Context* context);
+    [[nodiscard]] static Task<std::optional<JsonValue>> jsonIfTask(
+        const Context* context);
     template <typename T>
     [[nodiscard]] static Task<T> jsonModelTask(const Context* context);
     template <typename T>
+    [[nodiscard]] static Task<std::optional<T>> jsonIfModelTask(
+        const Context* context);
+    template <typename T>
     [[nodiscard]] static Task<T> formModelTask(const Context* context);
+    template <typename T>
+    [[nodiscard]] static Task<std::optional<T>> formIfModelTask(
+        const Context* context);
     [[nodiscard]] static Task<std::string_view> contextTextTask(const Context* context);
     [[nodiscard]] static bool contextContentTypeMatches(
         const Context* context,

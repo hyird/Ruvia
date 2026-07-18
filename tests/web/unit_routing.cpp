@@ -1738,7 +1738,145 @@ ruvia::Task<ruvia::HttpResponse> urlForEchoHandler(void*, ruvia::Context& contex
     co_return context.body(context.urlFor("/users/:id", {"7"}));
 }
 
+ruvia::Task<ruvia::HttpResponse> jsonModelEchoHandler(void*, ruvia::Context& context) {
+    const auto body = co_await context.req().json<ScopedValidationRequest>();
+    co_return context.body(
+        body.value().has_value() ? body.value()->view() : "missing");
+}
+
+ruvia::Task<ruvia::HttpResponse> formModelEchoHandler(void*, ruvia::Context& context) {
+    const auto body = co_await context.req().form<ScopedValidationRequest>();
+    co_return context.body(
+        body.value().has_value() ? body.value()->view() : "missing");
+}
+
+ruvia::Task<ruvia::HttpResponse> jsonIfEchoHandler(void*, ruvia::Context& context) {
+    const auto body = co_await context.req().jsonIf<ScopedValidationRequest>();
+    co_return context.body(
+        body.has_value() && body->value().has_value()
+            ? body->value()->view()
+            : "no-json");
+}
+
+ruvia::Task<ruvia::HttpResponse> formIfEchoHandler(void*, ruvia::Context& context) {
+    const auto body = co_await context.req().formIf<ScopedValidationRequest>();
+    co_return context.body(
+        body.has_value() && body->value().has_value()
+            ? body->value()->view()
+            : "no-form");
+}
+
+ruvia::Task<ruvia::HttpResponse> jsonValueIfEchoHandler(void*, ruvia::Context& context) {
+    const auto body = co_await context.req().jsonIf();
+    co_return context.body(std::string_view(body.has_value() ? "json" : "no-json"));
+}
+
+// Dispatches one GET /x with an optional Content-Type header and body.
+DispatchResult dispatchBodyRequest(
+    RouteHandler handler,
+    std::string_view contentType,
+    std::string_view body) {
+    ruvia::Router router;
+    auto& impl = ruvia::detail::RouterImpl::from(router);
+    impl.registerRoute(HttpKnownMethod::kGet, path("/x"), handler, RequestBodyMode::kBuffered,
+                       std::span<const ControllerMiddlewareDescriptor>{},
+                       std::span<const ControllerMiddlewareDescriptor>{});
+    impl.finalize();
+    const auto& table = impl.routeTable();
+
+    ruvia::WorkerMemory worker;
+    ruvia::RequestMemory memory(worker);
+    ruvia::HttpRequest request = ruvia::detail::HttpRequestAccess::make();
+    ruvia::detail::HttpRequestAccess::reset(request);
+    ruvia::detail::HttpRequestAccess::setMethod(request, "GET");
+    ruvia::detail::HttpRequestAccess::setPath(request, "/x");
+    ruvia::detail::HttpRequestAccess::setResource(request, memory.resource());
+    if (!contentType.empty()) {
+        const auto slot = ruvia::detail::HttpRequestAccess::knownHeaderSlot(
+            ruvia::detail::RequestKnownHeader::kContentType);
+        (void)ruvia::detail::HttpRequestAccess::addHeader(
+            request,
+            ruvia::HttpHeaderView{"Content-Type", contentType},
+            slot);
+    }
+    ruvia::detail::HttpRequestAccess::setBody(request, body);
+
+    asio::io_context ctx(1);
+    auto future = asio::co_spawn(
+        ctx, ruvia::detail::taskAsAwaitable(table.dispatch(request, memory, {})),
+        asio::use_future);
+    ctx.run();
+    return extractDispatchResult(future.get());
+}
+
 }  // namespace
+
+RUVIA_TEST(request_json_form_map_media_type_mismatch_to_415) {
+    // Sanity: the right media type with a parsable body reaches the handler.
+    const auto ok = dispatchBodyRequest(
+        RouteHandler(nullptr, &jsonModelEchoHandler),
+        "application/json", R"({"value":"hi"})");
+    RUVIA_CHECK_EQ(ok.status, std::uint16_t{200});
+    RUVIA_CHECK_EQ(ok.body, std::string("hi"));
+
+    // The wrong media type is the client's format mistake: 415, not 400.
+    const auto wrongType = dispatchBodyRequest(
+        RouteHandler(nullptr, &jsonModelEchoHandler),
+        "text/plain", R"({"value":"hi"})");
+    RUVIA_CHECK_EQ(wrongType.status, std::uint16_t{415});
+    const auto missingType = dispatchBodyRequest(
+        RouteHandler(nullptr, &jsonModelEchoHandler), "", R"({"value":"hi"})");
+    RUVIA_CHECK_EQ(missingType.status, std::uint16_t{415});
+    const auto formWrongType = dispatchBodyRequest(
+        RouteHandler(nullptr, &formModelEchoHandler),
+        "application/json", "value=hi");
+    RUVIA_CHECK_EQ(formWrongType.status, std::uint16_t{415});
+
+    // A malformed body of the RIGHT type stays 400.
+    const auto badBody = dispatchBodyRequest(
+        RouteHandler(nullptr, &jsonModelEchoHandler),
+        "application/json", "{not-json");
+    RUVIA_CHECK_EQ(badBody.status, std::uint16_t{400});
+
+    const auto formOk = dispatchBodyRequest(
+        RouteHandler(nullptr, &formModelEchoHandler),
+        "application/x-www-form-urlencoded", "value=hi");
+    RUVIA_CHECK_EQ(formOk.status, std::uint16_t{200});
+    RUVIA_CHECK_EQ(formOk.body, std::string("hi"));
+}
+
+RUVIA_TEST(request_json_if_and_form_if_fall_back_instead_of_failing) {
+    // Format problems yield nullopt so the handler can fall back...
+    const auto wrongType = dispatchBodyRequest(
+        RouteHandler(nullptr, &jsonIfEchoHandler), "text/plain", "x");
+    RUVIA_CHECK_EQ(wrongType.status, std::uint16_t{200});
+    RUVIA_CHECK_EQ(wrongType.body, std::string("no-json"));
+    const auto badBody = dispatchBodyRequest(
+        RouteHandler(nullptr, &jsonIfEchoHandler),
+        "application/json", "{not-json");
+    RUVIA_CHECK_EQ(badBody.status, std::uint16_t{200});
+    RUVIA_CHECK_EQ(badBody.body, std::string("no-json"));
+    const auto formWrongType = dispatchBodyRequest(
+        RouteHandler(nullptr, &formIfEchoHandler), "text/plain", "value=hi");
+    RUVIA_CHECK_EQ(formWrongType.status, std::uint16_t{200});
+    RUVIA_CHECK_EQ(formWrongType.body, std::string("no-form"));
+    const auto jsonValueWrongType = dispatchBodyRequest(
+        RouteHandler(nullptr, &jsonValueIfEchoHandler), "text/plain", "{}");
+    RUVIA_CHECK_EQ(jsonValueWrongType.status, std::uint16_t{200});
+    RUVIA_CHECK_EQ(jsonValueWrongType.body, std::string("no-json"));
+
+    // ...and a well-formed body of the right type still parses.
+    const auto ok = dispatchBodyRequest(
+        RouteHandler(nullptr, &jsonIfEchoHandler),
+        "application/json", R"({"value":"hi"})");
+    RUVIA_CHECK_EQ(ok.status, std::uint16_t{200});
+    RUVIA_CHECK_EQ(ok.body, std::string("hi"));
+    const auto formOk = dispatchBodyRequest(
+        RouteHandler(nullptr, &formIfEchoHandler),
+        "application/x-www-form-urlencoded", "value=hi");
+    RUVIA_CHECK_EQ(formOk.status, std::uint16_t{200});
+    RUVIA_CHECK_EQ(formOk.body, std::string("hi"));
+}
 
 RUVIA_TEST(url_for_builds_paths_from_registered_patterns) {
     ruvia::Router router;

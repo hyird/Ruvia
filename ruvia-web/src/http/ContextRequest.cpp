@@ -34,8 +34,12 @@ ConnInfo getConnInfo(const Context& context) noexcept {
 
 namespace detail {
 
+// A media-type mismatch is the client speaking the wrong format at a valid
+// endpoint: RFC 9110 15.5.16 assigns that 415, distinct from the 400 a
+// malformed body of the RIGHT type earns below.
 [[noreturn]] void throwInvalidJsonContentType() {
-    throw std::invalid_argument("invalid json content type");
+    throw HttpError(
+        415, "unsupported_media_type", "request body must be application/json");
 }
 
 [[noreturn]] void throwInvalidJsonBody() {
@@ -43,7 +47,10 @@ namespace detail {
 }
 
 [[noreturn]] void throwInvalidFormContentType() {
-    throw std::invalid_argument("invalid form content type");
+    throw HttpError(
+        415,
+        "unsupported_media_type",
+        "request body must be application/x-www-form-urlencoded");
 }
 
 [[noreturn]] void throwInvalidFormBody() {
@@ -83,6 +90,23 @@ Task<JsonValue> ContextRequest::jsonTask(const Context* context) {
 ScopedOperation<JsonValue> ContextRequest::json() const {
     return detail::makeScopedOperation(
         context_->operationScope_, jsonTask(context_));
+}
+
+Task<std::optional<JsonValue>> ContextRequest::jsonIfTask(const Context* context) {
+    if (!contextContentTypeMatches(context, "application/json")) {
+        co_return std::nullopt;
+    }
+    const auto requestBody = co_await contextTextTask(context);
+    auto parsed = JsonValue::parse(requestBody, contextResource(context));
+    if (!parsed) {
+        co_return std::nullopt;
+    }
+    co_return std::move(*parsed);
+}
+
+ScopedOperation<std::optional<JsonValue>> ContextRequest::jsonIf() const {
+    return detail::makeScopedOperation(
+        context_->operationScope_, jsonIfTask(context_));
 }
 
 namespace {
