@@ -361,6 +361,11 @@ target_link_libraries(ruvia_server_http2_document_root PRIVATE ruvia::web)
 add_test(NAME ruvia_server_http2_document_root COMMAND ruvia_server_http2_document_root)
 set_tests_properties(ruvia_server_http2_document_root PROPERTIES TIMEOUT 60)
 
+add_executable(ruvia_server_head_document_root server_head_document_root.cpp)
+target_link_libraries(ruvia_server_head_document_root PRIVATE ruvia::web)
+add_test(NAME ruvia_server_head_document_root COMMAND ruvia_server_head_document_root)
+set_tests_properties(ruvia_server_head_document_root PROPERTIES TIMEOUT 60)
+
 add_executable(ruvia_server_pipeline_request_views server_pipeline_request_views.cpp)
 target_link_libraries(ruvia_server_pipeline_request_views PRIVATE ruvia::web)
 add_test(NAME ruvia_server_pipeline_request_views COMMAND ruvia_server_pipeline_request_views)

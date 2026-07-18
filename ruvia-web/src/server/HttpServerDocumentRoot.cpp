@@ -14,7 +14,14 @@ std::optional<HttpResponse> tryStaticDocumentResponse(
     if (root == nullptr) {
         return std::nullopt;
     }
-    if (request.knownMethod() != HttpKnownMethod::kGet) {
+    // HEAD must serve whatever GET serves, only without the body (RFC 9110
+    // §9.3.2). Context::staticFile already builds a HEAD-correct response --
+    // full-representation metadata, no Range, 304 on a matching precondition --
+    // and the response writer suppresses the body for HEAD. Rejecting HEAD here
+    // instead 404s a document-root file that answers 200 to GET, which breaks
+    // caches, health checks, and link checkers that probe with HEAD.
+    if (request.knownMethod() != HttpKnownMethod::kGet &&
+        request.knownMethod() != HttpKnownMethod::kHead) {
         return std::nullopt;
     }
 

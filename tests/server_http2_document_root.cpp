@@ -2,7 +2,8 @@
 // not only HTTP/1: the sans-I/O h2 session used to skip the document-root
 // fallback that the HTTP/1 session applies, so files reachable over HTTP/1
 // returned 404 over HTTP/2. Drives the real h2 server session over a socket
-// pair and asserts a GET for an unrouted path yields the file's bytes.
+// pair and asserts a GET for an unrouted path yields the file's bytes, and that
+// a HEAD for the same path yields 200 with the metadata but no DATA body.
 
 #include "http2_sansio_session_fixture.h"
 
@@ -54,9 +55,11 @@ std::string frame(
     return bytes;
 }
 
-struct DecodedResponse {
+struct StreamResult {
     std::string status;
     std::string body;
+    bool sawData{false};
+    bool ended{false};
 };
 
 }  // namespace
@@ -97,7 +100,8 @@ int main() {
         },
         asio::detached);
 
-    DecodedResponse decoded;
+    StreamResult getStream;
+    StreamResult headStream;
 
     asio::co_spawn(
         io,
@@ -120,25 +124,27 @@ int main() {
                     asio::as_tuple(asio::use_awaitable));
                 co_return !ec && n == size;
             };
+            auto requestHeaders =
+                [&writeAll](std::string_view method,
+                            std::uint32_t streamId) -> asio::awaitable<bool> {
+                std::pmr::string headerBlock(std::pmr::get_default_resource());
+                HpackEncoder::encodeHeader(headerBlock, ":method", method);
+                HpackEncoder::encodeHeader(headerBlock, ":path", "/asset.txt");
+                HpackEncoder::encodeHeader(headerBlock, ":scheme", "http");
+                HpackEncoder::encodeHeader(headerBlock, ":authority", "localhost");
+                co_return co_await writeAll(frame(
+                    0x1 /*HEADERS*/,
+                    kHttp2FlagEndStream | kHttp2FlagEndHeaders, streamId,
+                    std::string_view(headerBlock.data(), headerBlock.size())));
+            };
 
             if (!co_await writeAll(kClientPreface)) co_return;
             if (!co_await writeAll(frame(0x4 /*SETTINGS*/, 0, 0, {}))) co_return;
-
-            std::pmr::string headerBlock(std::pmr::get_default_resource());
-            HpackEncoder::encodeHeader(headerBlock, ":method", "GET");
-            HpackEncoder::encodeHeader(headerBlock, ":path", "/asset.txt");
-            HpackEncoder::encodeHeader(headerBlock, ":scheme", "http");
-            HpackEncoder::encodeHeader(headerBlock, ":authority", "localhost");
-            if (!co_await writeAll(frame(
-                    0x1 /*HEADERS*/,
-                    kHttp2FlagEndStream | kHttp2FlagEndHeaders, 1,
-                    std::string_view(headerBlock.data(), headerBlock.size())))) {
-                co_return;
-            }
+            if (!co_await requestHeaders("GET", 1)) co_return;
+            if (!co_await requestHeaders("HEAD", 3)) co_return;
 
             HpackDecoder decoder(std::pmr::get_default_resource());
-            bool sawEndStream = false;
-            for (;;) {
+            while (!getStream.ended || !headStream.ended) {
                 char headerBytes[kHttp2FrameHeaderBytes];
                 if (!co_await readExact(headerBytes, sizeof(headerBytes))) break;
                 const auto header = http2ParseFrameHeader(
@@ -148,31 +154,33 @@ int main() {
                     !co_await readExact(payload.data(), payload.size())) {
                     break;
                 }
-                if (header.streamId != 1) {
+                StreamResult* stream = header.streamId == 1 ? &getStream
+                    : header.streamId == 3                  ? &headStream
+                                                            : nullptr;
+                if (stream == nullptr) {
                     continue;
                 }
                 if (header.type == 0x1 /*HEADERS*/) {
                     (void)decoder.decode(
                         std::string_view(payload.data(), payload.size()),
-                        &decoded,
+                        stream,
                         [](void* target, std::string_view name,
                            std::string_view value) {
                             if (name == ":status") {
-                                static_cast<DecodedResponse*>(target)->status =
+                                static_cast<StreamResult*>(target)->status =
                                     std::string(value);
                             }
                             return true;
                         });
                 } else if (header.type == 0x0 /*DATA*/) {
-                    decoded.body.append(payload);
+                    stream->sawData = true;
+                    stream->body.append(payload);
                 }
                 if ((header.flags & kHttp2FlagEndStream) != 0 &&
                     (header.type == 0x0 || header.type == 0x1)) {
-                    sawEndStream = true;
-                    break;
+                    stream->ended = true;
                 }
             }
-            (void)sawEndStream;
             asio::error_code ignore;
             sock.shutdown(tcp::socket::shutdown_both, ignore);
         },
@@ -181,16 +189,29 @@ int main() {
     io.run();
     fs::remove_all(dir);
 
-    if (decoded.status != "200") {
+    if (getStream.status != "200") {
         std::fprintf(stderr,
-            "document root not served over HTTP/2: status='%s'\n",
-            decoded.status.c_str());
+            "document root not served over HTTP/2: GET status='%s'\n",
+            getStream.status.c_str());
         return 1;
     }
-    if (decoded.body != kFileBody) {
+    if (getStream.body != kFileBody) {
         std::fprintf(stderr,
-            "HTTP/2 document-root body mismatch: '%s'\n", decoded.body.c_str());
+            "HTTP/2 document-root body mismatch: '%s'\n", getStream.body.c_str());
         return 2;
+    }
+    // HEAD must answer 200 for the same file GET serves, but carry no DATA body.
+    if (headStream.status != "200") {
+        std::fprintf(stderr,
+            "HEAD of a document-root file over HTTP/2 was not 200: status='%s'\n",
+            headStream.status.c_str());
+        return 3;
+    }
+    if (headStream.sawData || !headStream.body.empty()) {
+        std::fprintf(stderr,
+            "HEAD over HTTP/2 must send no body, got '%s'\n",
+            headStream.body.c_str());
+        return 4;
     }
     return 0;
 }
