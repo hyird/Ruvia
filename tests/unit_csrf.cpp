@@ -39,11 +39,18 @@ using ruvia::detail::HttpRequestAccess;
 using ruvia::detail::NextAccess;
 using ruvia::detail::RequestKnownHeader;
 
+// Naming a private member inside a requires-expression is an unsatisfied
+// constraint on gcc but a hard error on clang, so this can only assert the
+// private makeReady factory on gcc. The clang-portable
+// std::constructible_from check below covers the same "cannot forge" invariant
+// through the private SecureTokenReady constructor.
+#if defined(__GNUC__) && !defined(__clang__)
 template <typename Value>
 concept CanForgeSecureTokenResult = requires(Value&& value) {
     ruvia::detail::SecureTokenResult::makeReady(
         std::forward<Value>(value));
 };
+#endif
 
 template <typename Result>
 concept ExposesRvalueSecureTokenAlternative =
@@ -55,7 +62,9 @@ static_assert(!ExposesRvalueSecureTokenAlternative<
 static_assert(!std::constructible_from<
     ruvia::detail::SecureTokenReady,
     std::string_view>);
+#if defined(__GNUC__) && !defined(__clang__)
 static_assert(!CanForgeSecureTokenResult<std::string_view>);
+#endif
 
 bool isLowerHex(char c) noexcept {
     return (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f');
