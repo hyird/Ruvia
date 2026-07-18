@@ -2,10 +2,20 @@
 
 #include <mimalloc.h>
 
-#if defined(__SANITIZE_THREAD__) || \
-    (defined(__has_feature) && __has_feature(thread_sanitizer))
-#include <sanitizer/tsan_interface.h>
+// gcc signals TSan via __SANITIZE_THREAD__; clang via __has_feature. __has_feature
+// must stay nested under its own defined() guard: gcc has no such builtin and
+// would expand the bare token to 0, making `0(thread_sanitizer)` a preprocessor
+// syntax error even though the && would short-circuit.
+#if defined(__SANITIZE_THREAD__)
 #define RUVIA_TSAN_ALLOCATOR_ANNOTATIONS 1
+#elif defined(__has_feature)
+#if __has_feature(thread_sanitizer)
+#define RUVIA_TSAN_ALLOCATOR_ANNOTATIONS 1
+#endif
+#endif
+
+#if defined(RUVIA_TSAN_ALLOCATOR_ANNOTATIONS)
+#include <sanitizer/tsan_interface.h>
 #endif
 
 namespace ruvia {
