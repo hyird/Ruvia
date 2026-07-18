@@ -135,6 +135,15 @@ endif()
 
 include(GNUInstallDirs)
 include(CMakePackageConfigHelpers)
+# Shared build/install/export helpers. Each component's CMakeLists finds its own
+# dependencies and installs and exports itself using these; the root adds no
+# per-target build logic beyond wiring the components together below.
+include(${CMAKE_CURRENT_SOURCE_DIR}/cmake/RuviaHelpers.cmake)
+
+# Each component runs find_package() in its own subdirectory now, so make the
+# resulting imported targets global: a sibling component (e.g. web resolving
+# core's transitive asio link) must see targets another component discovered.
+set(CMAKE_FIND_PACKAGE_TARGETS_GLOBAL ON)
 
 set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -143,248 +152,6 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 if(MSVC AND NOT DEFINED CMAKE_MSVC_RUNTIME_LIBRARY)
     set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
 endif()
-
-if(RUVIA_BUILD_CORE)
-    find_package(asio CONFIG REQUIRED)
-    find_package(Threads REQUIRED)
-    find_package(mimalloc CONFIG REQUIRED)
-endif()
-
-if(RUVIA_BUILD_HTTP)
-    find_package(ZLIB REQUIRED)
-    find_package(unofficial-brotli CONFIG REQUIRED)
-    find_package(zstd CONFIG REQUIRED)
-
-    if(TARGET zstd::libzstd)
-        set(RUVIA_ZSTD_TARGET zstd::libzstd)
-    elseif(TARGET zstd::libzstd_static)
-        set(RUVIA_ZSTD_TARGET zstd::libzstd_static)
-    else()
-        set(RUVIA_ZSTD_TARGET zstd::libzstd_shared)
-    endif()
-endif()
-
-if(RUVIA_BUILD_WEB)
-    find_package(OpenSSL REQUIRED)
-endif()
-
-if(RUVIA_ENABLE_MARIADB)
-    find_package(unofficial-libmariadb CONFIG REQUIRED)
-endif()
-
-if(RUVIA_ENABLE_POSTGRESQL)
-    find_package(PostgreSQL REQUIRED)
-endif()
-
-if(RUVIA_ENABLE_REDIS)
-    find_package(hiredis CONFIG REQUIRED)
-endif()
-
-function(ruvia_deduplicate_link_interface target)
-    if(NOT TARGET ${target})
-        return()
-    endif()
-
-    get_target_property(_ruvia_link_interface ${target} INTERFACE_LINK_LIBRARIES)
-    if(NOT _ruvia_link_interface)
-        return()
-    endif()
-
-    list(REMOVE_DUPLICATES _ruvia_link_interface)
-    set_target_properties(${target} PROPERTIES
-        INTERFACE_LINK_LIBRARIES "${_ruvia_link_interface}")
-endfunction()
-
-if(RUVIA_ENABLE_MARIADB)
-    ruvia_deduplicate_link_interface(unofficial::libmariadb)
-endif()
-if(RUVIA_ENABLE_POSTGRESQL)
-    ruvia_deduplicate_link_interface(PostgreSQL::PostgreSQL)
-endif()
-
-function(ruvia_configure_library target)
-    target_compile_features(${target} PUBLIC cxx_std_23)
-
-    target_include_directories(${target}
-        PUBLIC
-            $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
-            $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>
-        PRIVATE
-            ${CMAKE_CURRENT_SOURCE_DIR}/src
-    )
-    if(WIN32)
-        target_compile_definitions(${target} PUBLIC _WIN32_WINNT=0x0A00)
-    endif()
-
-    if(MSVC)
-        target_compile_options(${target} PUBLIC /utf-8 /Zc:preprocessor)
-        target_compile_options(${target} PRIVATE /W4 /permissive- /bigobj /FS)
-        if(CMAKE_MSVC_RUNTIME_LIBRARY MATCHES "^MultiThreaded")
-            target_compile_options(${target}
-                INTERFACE
-                    "$<$<CXX_COMPILER_ID:MSVC>:/MT$<$<CONFIG:Debug>:d>>"
-            )
-        endif()
-    else()
-        target_compile_options(${target} PRIVATE -Wall -Wextra -Wpedantic)
-    endif()
-endfunction()
-
-function(ruvia_configure_runtime_library target)
-    target_compile_definitions(${target}
-        PUBLIC
-            ASIO_STANDALONE
-    )
-    target_precompile_headers(${target} PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src/pch.h")
-endfunction()
-
-if(RUVIA_BUILD_CORE)
-    set(RUVIA_MIMALLOC_TARGET mimalloc)
-    if(TARGET mimalloc-static)
-        get_target_property(_ruvia_mimalloc_static_type mimalloc-static TYPE)
-        if(NOT _ruvia_mimalloc_static_type STREQUAL "INTERFACE_LIBRARY")
-            set(RUVIA_MIMALLOC_TARGET mimalloc-static)
-        endif()
-    endif()
-endif()
-
-function(ruvia_install_target target component)
-    install(
-        TARGETS ${target}
-        EXPORT ruvia_${component}_targets
-        ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR} COMPONENT ${component}
-        LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR} COMPONENT ${component} NAMELINK_COMPONENT ${component}
-        RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR} COMPONENT ${component}
-        INCLUDES DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}
-    )
-endfunction()
-
-function(ruvia_assert_component_header_path component relative_path)
-    set(_ruvia_expected_header_root "include/ruvia/${component}")
-    if(NOT relative_path MATCHES "^${_ruvia_expected_header_root}(/|$)")
-        message(FATAL_ERROR
-            "${component} cannot install a header outside ${_ruvia_expected_header_root}: ${relative_path}")
-    endif()
-
-    set(_ruvia_header_root "${CMAKE_CURRENT_SOURCE_DIR}/${_ruvia_expected_header_root}")
-    set(_ruvia_header_path "${CMAKE_CURRENT_SOURCE_DIR}/${relative_path}")
-    cmake_path(NORMAL_PATH _ruvia_header_root OUTPUT_VARIABLE _ruvia_header_root_normalized)
-    cmake_path(IS_PREFIX _ruvia_header_root_normalized
-        "${_ruvia_header_path}" NORMALIZE _ruvia_header_is_owned)
-    if(NOT _ruvia_header_is_owned)
-        message(FATAL_ERROR
-            "${component} header path escapes its target directory: ${relative_path}")
-    endif()
-endfunction()
-
-function(ruvia_install_public_headers component)
-    foreach(_ruvia_header ${ARGN})
-        ruvia_assert_component_header_path(${component} "${_ruvia_header}")
-        get_filename_component(_ruvia_header_dir "${_ruvia_header}" DIRECTORY)
-        file(
-            RELATIVE_PATH
-            _ruvia_header_install_subdir
-            "${CMAKE_CURRENT_SOURCE_DIR}/include"
-            "${CMAKE_CURRENT_SOURCE_DIR}/${_ruvia_header_dir}"
-        )
-        install(
-            FILES "${CMAKE_CURRENT_SOURCE_DIR}/${_ruvia_header}"
-            DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}/${_ruvia_header_install_subdir}"
-            COMPONENT ${component}
-        )
-    endforeach()
-endfunction()
-
-function(ruvia_install_public_header_tree component relative_dir)
-    ruvia_assert_component_header_path(${component} "${relative_dir}")
-    file(
-        RELATIVE_PATH
-        _ruvia_header_tree_install_dir
-        "${CMAKE_CURRENT_SOURCE_DIR}/include"
-        "${CMAKE_CURRENT_SOURCE_DIR}/${relative_dir}"
-    )
-    install(
-        DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/${relative_dir}/"
-        DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}/${_ruvia_header_tree_install_dir}"
-        COMPONENT ${component}
-        FILES_MATCHING
-            PATTERN "*.h"
-            PATTERN "*.inl"
-            ${ARGN}
-    )
-endfunction()
-
-function(ruvia_install_generated_public_header component generated_header relative_path)
-    set(_ruvia_expected_header_root "ruvia/${component}")
-    if(NOT relative_path MATCHES "^${_ruvia_expected_header_root}(/|$)")
-        message(FATAL_ERROR
-            "${component} cannot install a generated header outside ${_ruvia_expected_header_root}: ${relative_path}")
-    endif()
-
-    set(_ruvia_target_binary_dir "${CMAKE_CURRENT_BINARY_DIR}")
-    cmake_path(NORMAL_PATH _ruvia_target_binary_dir
-        OUTPUT_VARIABLE _ruvia_target_binary_root)
-    cmake_path(IS_PREFIX _ruvia_target_binary_root
-        "${generated_header}" NORMALIZE _ruvia_generated_header_is_owned)
-    if(NOT _ruvia_generated_header_is_owned)
-        message(FATAL_ERROR
-            "${component} generated header is outside its target build directory: ${generated_header}")
-    endif()
-
-    get_filename_component(_ruvia_header_install_subdir "${relative_path}" DIRECTORY)
-    install(
-        FILES "${generated_header}"
-        DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}/${_ruvia_header_install_subdir}"
-        COMPONENT ${component}
-    )
-endfunction()
-
-function(ruvia_assert_target_file_ownership target)
-    get_target_property(_ruvia_target_source_dir ${target} SOURCE_DIR)
-    cmake_path(NORMAL_PATH _ruvia_target_source_dir OUTPUT_VARIABLE _ruvia_target_root)
-    get_target_property(_ruvia_target_binary_dir ${target} BINARY_DIR)
-    cmake_path(NORMAL_PATH _ruvia_target_binary_dir
-        OUTPUT_VARIABLE _ruvia_target_binary_root)
-
-    get_target_property(_ruvia_target_sources ${target} SOURCES)
-    foreach(_ruvia_source IN LISTS _ruvia_target_sources)
-        if(_ruvia_source MATCHES "^\\$<")
-            continue()
-        endif()
-        if(IS_ABSOLUTE "${_ruvia_source}")
-            set(_ruvia_source_path "${_ruvia_source}")
-        else()
-            set(_ruvia_source_path "${_ruvia_target_source_dir}/${_ruvia_source}")
-        endif()
-        cmake_path(IS_PREFIX _ruvia_target_root
-            "${_ruvia_source_path}" NORMALIZE _ruvia_source_is_owned)
-        if(NOT _ruvia_source_is_owned)
-            message(FATAL_ERROR
-                "${target} cannot compile another target's source: ${_ruvia_source}")
-        endif()
-    endforeach()
-
-    get_target_property(_ruvia_target_include_dirs ${target} INCLUDE_DIRECTORIES)
-    foreach(_ruvia_include_dir IN LISTS _ruvia_target_include_dirs)
-        if(_ruvia_include_dir MATCHES "^\\$<INSTALL_INTERFACE:")
-            continue()
-        elseif(_ruvia_include_dir MATCHES "^\\$<BUILD_INTERFACE:(.*)>$")
-            set(_ruvia_include_path "${CMAKE_MATCH_1}")
-        elseif(_ruvia_include_dir MATCHES "^\\$<")
-            continue()
-        else()
-            set(_ruvia_include_path "${_ruvia_include_dir}")
-        endif()
-        cmake_path(IS_PREFIX _ruvia_target_root
-            "${_ruvia_include_path}" NORMALIZE _ruvia_include_is_owned)
-        cmake_path(IS_PREFIX _ruvia_target_binary_root
-            "${_ruvia_include_path}" NORMALIZE _ruvia_generated_include_is_owned)
-        if(NOT _ruvia_include_is_owned AND NOT _ruvia_generated_include_is_owned)
-            message(FATAL_ERROR
-                "${target} cannot add another target's private include directory: ${_ruvia_include_dir}")
-        endif()
-    endforeach()
-endfunction()
 
 set(RUVIA_BUILT_COMPONENTS)
 if(RUVIA_BUILD_CORE)
@@ -401,29 +168,6 @@ if(RUVIA_BUILD_WEB)
 endif()
 string(JOIN "," RUVIA_BUILT_COMPONENTS_CSV ${RUVIA_BUILT_COMPONENTS})
 
-foreach(_ruvia_owned_target IN ITEMS ruvia-core ruvia-http ruvia-web)
-    if(TARGET ${_ruvia_owned_target})
-        ruvia_assert_target_file_ownership(${_ruvia_owned_target})
-    endif()
-endforeach()
-
-foreach(_ruvia_target IN ITEMS ruvia-core ruvia-http ruvia-web)
-    if(TARGET ${_ruvia_target})
-        target_link_options(${_ruvia_target}
-            INTERFACE
-                $<$<PLATFORM_ID:Darwin>:LINKER:-no_warn_duplicate_libraries>
-        )
-    endif()
-endforeach()
-
-if(WIN32 AND RUVIA_BUILD_CORE)
-    target_link_libraries(ruvia-core PUBLIC Mswsock Ws2_32)
-    set_target_properties(ruvia-core PROPERTIES
-        INTERFACE_LINK_LIBRARIES_DIRECT "$<TARGET_LINKER_FILE:${RUVIA_MIMALLOC_TARGET}>"
-    )
-    target_link_options(ruvia-core INTERFACE "$<$<CXX_COMPILER_ID:MSVC>:/INCLUDE:mi_version>")
-endif()
-
 if(RUVIA_BUILD_EXAMPLES)
     add_subdirectory(examples)
 endif()
@@ -438,21 +182,12 @@ if(RUVIA_BUILD_BENCHMARKS)
 endif()
 
 if(RUVIA_BUILD_FUZZERS)
-    # Instrument the protocol library itself, not only the thin fuzz entrypoints.
-    # The sanitizer runtime link flags propagate to every executable that consumes
-    # the instrumented static library in this opt-in build.
-    target_compile_options(ruvia-http PRIVATE
-        -fsanitize=fuzzer-no-link,undefined
-        -fno-sanitize-recover=all
-        -fno-omit-frame-pointer
-    )
-    target_link_options(ruvia-http INTERFACE
-        -fsanitize=undefined
-        -fno-sanitize-recover=all
-    )
     add_subdirectory(tests/fuzz)
 endif()
 
+# Umbrella package config: the shared find_package(ruvia) entry point that loads
+# whichever component export sets are present in an install prefix. The component
+# targets files themselves are installed by each component's own CMakeLists.
 set(_ruvia_config [=[
 include(CMakeFindDependencyMacro)
 
@@ -602,13 +337,3 @@ install(
     DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/ruvia
     COMPONENT Development
 )
-
-foreach(_ruvia_component IN LISTS RUVIA_BUILT_COMPONENTS)
-    install(
-        EXPORT ruvia_${_ruvia_component}_targets
-        FILE ruvia-${_ruvia_component}-targets.cmake
-        NAMESPACE ruvia::
-        DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/ruvia
-        COMPONENT ${_ruvia_component}
-    )
-endforeach()
