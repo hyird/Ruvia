@@ -1,1 +1,8 @@
 * text=auto eol=lf
+
+# check_layer_boundaries.cmake is an architectural-boundary test fixture: most of
+# its size is embedded C++ code samples that each boundary regex is proven
+# against, not build logic. Exclude it from GitHub's language statistics so this
+# one file does not dominate the repository's CMake percentage. It remains a
+# normal, reviewed ctest.
+scripts/check_layer_boundaries.cmake linguist-generated=true
