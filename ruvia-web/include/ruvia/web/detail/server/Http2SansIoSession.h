@@ -714,7 +714,7 @@ Task<void> runHttp2SansIoSession(
                 }
                 const auto expectationPlan = streamState->expectationPlan(
                     HttpUnsupportedExpectationPolicy::kReject);
-                if (expectationPlan.send100Continue() != nullptr) {
+                if (expectationPlan.sendContinue() != nullptr) {
                     const auto status = connection.submitInterimResponseHead(
                         streamId,
                         HttpInterimResponseHead(ruvia::http_status::kContinue));

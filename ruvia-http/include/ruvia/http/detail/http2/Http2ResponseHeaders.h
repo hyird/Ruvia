@@ -149,18 +149,11 @@ validateHttp2InterimResponseHeaders(
         HttpInterimResponseHeaderValidationStatus::kOk) {
         return Http2InterimResponseHeaderEncodeStatus::kInvalidHeader;
     }
-    std::array<char, 3> statusBytes{};
-    const auto [statusEnd, statusError] = std::to_chars(
-        statusBytes.data(), statusBytes.data() + statusBytes.size(),
-        response.status().value());
-    if (statusError != std::errc{} ||
-        statusEnd != statusBytes.data() + statusBytes.size()) {
-        return Http2InterimResponseHeaderEncodeStatus::kInvalidHeader;
-    }
+    const auto statusToken = httpStatusCodeToken(response.status());
     HttpHeaderSectionSize sectionSize;
     if (!sectionSize.add(
             ":status",
-            std::string_view(statusBytes.data(), statusBytes.size()))) {
+            httpStatusCodeTokenView(statusToken))) {
         return Http2InterimResponseHeaderEncodeStatus::kInvalidHeader;
     }
     for (const auto& header : response.headers()) {
@@ -212,16 +205,12 @@ appendHttp2InterimResponseHeaders(
     (void)control;
     const auto knownBits = responseKnownHeaderBits(response);
 
-    std::array<char, 3> statusBytes{};
-    const auto [statusEnd, statusError] = std::to_chars(
-        statusBytes.data(), statusBytes.data() + statusBytes.size(),
-        plan.bodyPlan().responseStatus().value());
+    const auto statusToken =
+        httpStatusCodeToken(plan.bodyPlan().responseStatus());
     HttpHeaderSectionSize sectionSize;
-    if (statusError != std::errc{} ||
-        statusEnd != statusBytes.data() + statusBytes.size() ||
-        !sectionSize.add(
+    if (!sectionSize.add(
             ":status",
-            std::string_view(statusBytes.data(), statusBytes.size()))) {
+            httpStatusCodeTokenView(statusToken))) {
         return false;
     }
     std::size_t fieldCount = 0;

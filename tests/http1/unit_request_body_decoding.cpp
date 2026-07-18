@@ -570,7 +570,7 @@ RUVIA_TEST(http1_request_body_plan_has_one_framing_truth) {
         RUVIA_CHECK_EQ(knownLength->contentLength(), std::size_t{0});
     }
     RUVIA_CHECK(!emptyLength.requiresConsumption());
-    RUVIA_CHECK(emptyLength.expectations().has100Continue());
+    RUVIA_CHECK(emptyLength.expectations().hasContinue());
     const auto emptyExpectationPlan = emptyLength.expectationPlan(
         HttpUnsupportedExpectationPolicy::kReject);
     RUVIA_CHECK(emptyExpectationPlan.noAction() != nullptr);
@@ -587,7 +587,7 @@ RUVIA_TEST(http1_request_body_plan_has_one_framing_truth) {
     RUVIA_CHECK(compressedChunked.requiresConsumption());
     const auto compressedExpectationPlan = compressedChunked.expectationPlan(
         HttpUnsupportedExpectationPolicy::kReject);
-    RUVIA_CHECK(compressedExpectationPlan.send100Continue() != nullptr);
+    RUVIA_CHECK(compressedExpectationPlan.sendContinue() != nullptr);
     if (chunkedBody != nullptr) {
         RUVIA_CHECK_EQ(
             chunkedBody->transferCodings().count,

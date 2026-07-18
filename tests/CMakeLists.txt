@@ -294,6 +294,15 @@ if(RUVIA_BUILD_CORE)
 endif()
 
 if(RUVIA_BUILD_HTTP)
+    configure_file(
+        ${CMAKE_CURRENT_SOURCE_DIR}/verify_http_status_literals.cmake.in
+        ${CMAKE_CURRENT_BINARY_DIR}/verify_http_status_literals.cmake
+        @ONLY)
+    add_test(
+        NAME ruvia_guard_http_status_literals
+        COMMAND ${CMAKE_COMMAND}
+            -P ${CMAKE_CURRENT_BINARY_DIR}/verify_http_status_literals.cmake)
+
     ruvia_add_test(ruvia_smoke_http_target server/smoke_http_target.cpp LIB ruvia::http)
 
     # Compile the exhaustive public/detail HTTP contract once in the normal build.

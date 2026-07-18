@@ -17,6 +17,9 @@ using ruvia::HttpError;
 using ruvia::HttpProtocolError;
 using ruvia::httpReasonPhrase;
 
+inline constexpr auto kOkStatusToken =
+    ruvia::detail::httpStatusCodeToken(ruvia::http_status::kOk);
+
 }  // namespace
 
 template <typename T>
@@ -61,6 +64,9 @@ static_assert(ruvia::http_status::kBadRequest.isClientError());
 static_assert(ruvia::http_status::kInternalServerError.isServerError());
 static_assert(ruvia::http_status::kBadRequest.isError());
 static_assert(!ruvia::http_status::kOk.isError());
+static_assert(
+    ruvia::detail::httpStatusCodeTokenView(kOkStatusToken) ==
+    std::string_view("200"));
 
 RUVIA_TEST(http_status_code_validates_the_wire_value_boundary) {
     RUVIA_CHECK(
@@ -79,6 +85,14 @@ RUVIA_TEST(http_status_code_validates_the_wire_value_boundary) {
         threw = true;
     }
     RUVIA_CHECK(threw);
+}
+
+RUVIA_TEST(http_status_code_wire_token_is_derived_from_the_strong_type) {
+    const auto token = ruvia::detail::httpStatusCodeToken(
+        ruvia::HttpStatusCode::fromValue(599));
+    RUVIA_CHECK_EQ(
+        ruvia::detail::httpStatusCodeTokenView(token),
+        std::string_view("599"));
 }
 
 RUVIA_TEST(http_reason_phrase_is_conventional_http1_presentation) {

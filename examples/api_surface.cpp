@@ -797,10 +797,10 @@ concept HasResponseHeaderRemoveSetter = requires(T& response) {
 
 template <typename T>
 concept HasContextBuilderMetadataArguments = requires(const T& context) {
-    context.body(std::string_view{}, std::uint16_t{200});
-    context.text(std::string_view{}, std::uint16_t{200});
-    context.html(std::string_view{}, std::uint16_t{200});
-    context.json(std::uint32_t{1}, std::uint16_t{200});
+    context.body(std::string_view{}, std::uint16_t{});
+    context.text(std::string_view{}, std::uint16_t{});
+    context.html(std::string_view{}, std::uint16_t{});
+    context.json(std::uint32_t{1}, std::uint16_t{});
 };
 
 template <typename T>
@@ -840,7 +840,7 @@ concept HasResponseHeadersRemoveAlias = requires(T& response) {
 
 template <typename T>
 concept HasResponseSetStatusAlias = requires(T& response) {
-    response.setStatus(std::uint16_t{200}, std::string_view{});
+    response.setStatus(std::uint16_t{}, std::string_view{});
 };
 
 template <typename T>
@@ -850,7 +850,7 @@ concept HasResponseStatusSetter = requires(T& response) {
 
 template <typename T>
 concept HasResponseReasonPhraseSetter = requires(T& response) {
-    response.status(std::uint16_t{200}, std::string_view{});
+    response.status(std::uint16_t{}, std::string_view{});
 };
 
 template <typename T>
@@ -1244,7 +1244,7 @@ concept HasConstContextVarHasAlias = requires(const T& context) {
 
 template <typename T>
 concept HasContextJsonErrorAlias = requires(const T& context) {
-    context.jsonError(std::uint16_t{500}, std::string_view{}, std::string_view{});
+    context.jsonError(std::uint16_t{}, std::string_view{}, std::string_view{});
 };
 
 template <typename T>
@@ -3161,7 +3161,7 @@ public:
                 hadDownstreamErrorResponse ? "true" : "false");
             response.header(
                 "X-Surface-Error-Status",
-                downstreamWasInternalError ? "500" : "other");
+                downstreamWasInternalError ? "internal-server-error" : "other");
             c.respond(std::move(response));
             co_return;
         }
@@ -3173,7 +3173,7 @@ public:
 class SurfaceReturnMiddleware final : public ruvia::Middleware<SurfaceReturnMiddleware> {
 public:
     ruvia::Task<ruvia::HttpResponse> handle(ruvia::Context& c, ruvia::Next&) {
-        c.status(ruvia::HttpStatusCode::fromValue(209));
+        c.status(ruvia::http_status::kAccepted);
         co_return c.text("returned by middleware\n");
     }
 };
@@ -3364,7 +3364,10 @@ private:
 
     ruvia::Task<ruvia::HttpResponse> appError(ruvia::Context& c) {
         c.header("X-Error-Prepared", "true");
-        co_return c.error(ruvia::HttpStatusCode::fromValue(418), "teapot", "short and stout", "I'm a Teapot");
+        co_return c.error(
+            ruvia::http_status::kBadRequest,
+            "example_error",
+            "the example request was rejected");
     }
 
     ruvia::Task<ruvia::HttpResponse> throwError(ruvia::Context&) {

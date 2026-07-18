@@ -1,9 +1,6 @@
 #include "ruvia/http/detail/http2/Http2Hpack.h"
 #include "ruvia/http/detail/http2/Http2HpackStaticTable.h"
 
-#include <array>
-#include <charconv>
-
 namespace ruvia::detail {
 
 void HpackEncoder::encodeInteger(
@@ -75,41 +72,35 @@ void HpackEncoder::encodeHeaderWithNameIndex(
 void HpackEncoder::encodeStatus(std::pmr::string& out, HttpStatusCode status) {
     switch (status.value()) {
         case http_status::kOk.value():
-            encodeIndexed(out, HpackStaticIndex::kStatus200);
+            encodeIndexed(out, HpackStaticIndex::kStatusOk);
             return;
         case http_status::kNoContent.value():
-            encodeIndexed(out, HpackStaticIndex::kStatus204);
+            encodeIndexed(out, HpackStaticIndex::kStatusNoContent);
             return;
         case http_status::kPartialContent.value():
-            encodeIndexed(out, HpackStaticIndex::kStatus206);
+            encodeIndexed(out, HpackStaticIndex::kStatusPartialContent);
             return;
         case http_status::kNotModified.value():
-            encodeIndexed(out, HpackStaticIndex::kStatus304);
+            encodeIndexed(out, HpackStaticIndex::kStatusNotModified);
             return;
         case http_status::kBadRequest.value():
-            encodeIndexed(out, HpackStaticIndex::kStatus400);
+            encodeIndexed(out, HpackStaticIndex::kStatusBadRequest);
             return;
         case http_status::kNotFound.value():
-            encodeIndexed(out, HpackStaticIndex::kStatus404);
+            encodeIndexed(out, HpackStaticIndex::kStatusNotFound);
             return;
         case http_status::kInternalServerError.value():
-            encodeIndexed(out, HpackStaticIndex::kStatus500);
+            encodeIndexed(out, HpackStaticIndex::kStatusInternalServerError);
             return;
         default:
             break;
     }
 
-    std::array<char, 3> buffer{};
-    const auto [ptr, ec] = std::to_chars(
-        buffer.data(), buffer.data() + buffer.size(), status.value());
-    if (ec != std::errc{}) {
-        encodeIndexed(out, HpackStaticIndex::kStatus500);
-        return;
-    }
+    const auto token = httpStatusCodeToken(status);
     encodeHeaderWithNameIndex(
         out,
-        HpackStaticIndex::kStatus200,
-        std::string_view(buffer.data(), static_cast<std::size_t>(ptr - buffer.data())));
+        HpackStaticIndex::kStatusOk,
+        httpStatusCodeTokenView(token));
 }
 
 }  // namespace ruvia::detail

@@ -49,7 +49,7 @@ const HttpResponseHeaders& HttpResponse::headers() const & noexcept {
 void HttpResponse::status(HttpStatusCode statusCode) {
     if (statusCode == http_status::kSwitchingProtocols) {
         throw std::invalid_argument(
-            "101 Switching Protocols requires a dedicated protocol driver");
+            "Switching Protocols requires a dedicated protocol driver");
     }
     if (!detail::httpFinalStatusCodeValid(statusCode)) {
         throw std::invalid_argument("invalid final HTTP status code");

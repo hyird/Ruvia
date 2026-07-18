@@ -2698,15 +2698,15 @@ concept HasTypedHttpServerExpectationPlan = requires(const T& state) {
 template <typename T>
 concept ExposesRvalueHttpServerExpectationAlternative =
     requires(T&& plan) { std::move(plan).noAction(); } ||
-    requires(T&& plan) { std::move(plan).send100Continue(); } ||
+    requires(T&& plan) { std::move(plan).sendContinue(); } ||
     requires(T&& plan) { std::move(plan).rejection(); };
 
 template <typename T>
 concept HasHttpServerExpectationAlternatives = requires(const T& plan) {
     { plan.noAction() } -> std::same_as<const
         ruvia::detail::HttpNoServerExpectationAction*>;
-    { plan.send100Continue() } -> std::same_as<const
-        ruvia::detail::HttpSend100Continue*>;
+    { plan.sendContinue() } -> std::same_as<const
+        ruvia::detail::HttpSendContinue*>;
     { plan.rejection() } -> std::same_as<const
         ruvia::detail::HttpUnsupportedExpectationRejection*>;
 };
@@ -2785,7 +2785,7 @@ static_assert(!std::default_initializable<
 static_assert(!std::default_initializable<
     ruvia::detail::HttpNoServerExpectationAction>);
 static_assert(!std::default_initializable<
-    ruvia::detail::HttpSend100Continue>);
+    ruvia::detail::HttpSendContinue>);
 static_assert(!std::default_initializable<
     ruvia::detail::HttpUnsupportedExpectationRejection>);
 static_assert(std::same_as<

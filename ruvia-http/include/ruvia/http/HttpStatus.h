@@ -1,6 +1,8 @@
 #pragma once
 
+#include <array>
 #include <compare>
+#include <cstddef>
 #include <cstdint>
 #include <optional>
 #include <stdexcept>
@@ -81,6 +83,31 @@ private:
 
 static_assert(std::is_trivially_copyable_v<HttpStatusCode>);
 static_assert(sizeof(HttpStatusCode) == sizeof(std::uint16_t));
+
+namespace detail {
+
+inline constexpr std::size_t kHttpStatusCodeTokenSize = 3;
+using HttpStatusCodeToken =
+    std::array<char, kHttpStatusCodeTokenSize>;
+
+[[nodiscard]] inline constexpr HttpStatusCodeToken httpStatusCodeToken(
+    HttpStatusCode status) noexcept {
+    const auto value = status.value();
+    return {
+        static_cast<char>('0' + value / 100),
+        static_cast<char>('0' + (value / 10) % 10),
+        static_cast<char>('0' + value % 10)};
+}
+
+[[nodiscard]] inline constexpr std::string_view httpStatusCodeTokenView(
+    const HttpStatusCodeToken& token) noexcept {
+    return std::string_view(token.data(), token.size());
+}
+
+[[nodiscard]] std::string_view httpStatusCodeTokenView(
+    HttpStatusCodeToken&&) = delete;
+
+}  // namespace detail
 
 // Stable RFC-assigned names are defined once here. Unknown extension codes and
 // temporary draft registrations remain available through fromValue() and

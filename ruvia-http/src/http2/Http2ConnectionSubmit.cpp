@@ -107,7 +107,7 @@ struct Http2OutboundRequestHeaderFacts final {
         }
     }
     if (!httpClientExpectationIsValid(
-            expectations.has100Continue(), contentIndication)) {
+            expectations.hasContinue(), contentIndication)) {
         return false;
     }
     if (facts != nullptr) {

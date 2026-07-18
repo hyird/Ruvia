@@ -172,7 +172,7 @@ template <typename Stream>
 Task<void> StreamBodyReader<Stream>::ensureContinue() {
     const auto expectationPlan = bodyPlan_.expectationPlan(
         HttpUnsupportedExpectationPolicy::kReject);
-    if (expectationPlan.send100Continue() != nullptr && !continueSent_) {
+    if (expectationPlan.sendContinue() != nullptr && !continueSent_) {
         co_await writeHttp1Continue(stream_);
         continueSent_ = true;
     }

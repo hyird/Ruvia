@@ -101,7 +101,8 @@ void emitResponseHead(
         flags.protocolVersion == HttpProtocolVersion::kHttp10
             ? std::string_view("HTTP/1.0 ")
             : std::string_view("HTTP/1.1 "));
-    sink.appendUnsigned(responseStatus.value());
+    const auto statusToken = httpStatusCodeToken(responseStatus);
+    sink.append(httpStatusCodeTokenView(statusToken));
     // RFC 9112 requires this SP even when the optional reason phrase is empty.
     sink.append(' ');
     sink.append(reasonPhrase);
@@ -196,7 +197,7 @@ void appendResponseHead(
     // This both bounds the unchecked raw stack sink and enforces the same 64 KiB
     // field-section ceiling used by request and HTTP/2 paths.
     std::size_t headBytes = 9;
-    addResponseHeadBytes(headBytes, decimalDigits(responseStatus.value()));
+    addResponseHeadBytes(headBytes, kHttpStatusCodeTokenSize);
     addResponseHeadBytes(headBytes, 1);
     addResponseHeadBytes(headBytes, reasonPhrase.size());
     addResponseHeadBytes(headBytes, 2);

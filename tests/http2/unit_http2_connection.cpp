@@ -2326,7 +2326,7 @@ RUVIA_TEST(http2_connection_trace_allows_empty_terminal_framing) {
         const auto expectation = stream->expectationPlan(
             ruvia::detail::HttpUnsupportedExpectationPolicy::kReject);
         RUVIA_CHECK(expectation.noAction() != nullptr);
-        RUVIA_CHECK(expectation.send100Continue() == nullptr);
+        RUVIA_CHECK(expectation.sendContinue() == nullptr);
     }
 
     const auto end = dataFrame(

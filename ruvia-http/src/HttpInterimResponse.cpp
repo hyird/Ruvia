@@ -14,7 +14,7 @@ HttpInterimResponseHead::HttpInterimResponseHead(
     if (!detail::httpInterimStatusCodeValid(statusCode)) {
         throw std::invalid_argument(
             statusCode == http_status::kSwitchingProtocols
-                ? "101 Switching Protocols requires a dedicated protocol driver"
+                ? "Switching Protocols requires a dedicated protocol driver"
                 : "invalid interim HTTP status code");
     }
 }

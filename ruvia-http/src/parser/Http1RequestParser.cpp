@@ -168,7 +168,7 @@ void Http1ServerRequestParser::parseRequestHead(
         httpSelectResponseCodingFromQualities(block.responseCodingQualities);
     auto expectations = block.expectations;
     if (protocolVersion == HttpProtocolVersion::kHttp10) {
-        expectations.ignore100Continue();
+        expectations.ignoreContinue();
     }
     if (finalChunked != nullptr) {
         state.bodyPlan = Http1RequestBodyPlan(

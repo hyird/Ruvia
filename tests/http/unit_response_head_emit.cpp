@@ -384,7 +384,8 @@ RUVIA_TEST(http1_protocol_finalizer_rejects_upgrade_required_without_protocol) {
     RUVIA_CHECK(result.failure() != nullptr);
     RUVIA_CHECK_EQ(
         std::string_view(result.failure()->exception().what()),
-        std::string_view("426 response requires an Upgrade protocol"));
+        std::string_view(
+            "Upgrade Required response requires an Upgrade protocol"));
     RUVIA_CHECK(!missingUpgrade.header("Connection").has_value());
 
     HttpResponse propagated(std::pmr::new_delete_resource());
@@ -395,7 +396,7 @@ RUVIA_TEST(http1_protocol_finalizer_rejects_upgrade_required_without_protocol) {
             propagated, requestPlan);
     } catch (const Http1FinalResponseCommitError& error) {
         caughtTypedFailure = std::string_view(error.what()) ==
-            "426 response requires an Upgrade protocol";
+            "Upgrade Required response requires an Upgrade protocol";
     }
     RUVIA_CHECK(caughtTypedFailure);
 }
@@ -417,7 +418,8 @@ RUVIA_TEST(http1_stream_prepare_preserves_typed_final_commit_failure) {
     RUVIA_CHECK(result.failure() != nullptr);
     RUVIA_CHECK_EQ(
         std::string_view(result.failure()->exception().what()),
-        std::string_view("426 response requires an Upgrade protocol"));
+        std::string_view(
+            "Upgrade Required response requires an Upgrade protocol"));
 }
 
 RUVIA_TEST(http1_buffered_request_limit_closes_the_typed_connection_plan) {

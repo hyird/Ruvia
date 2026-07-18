@@ -192,7 +192,7 @@ RUVIA_TEST(http1_public_parser_preserves_expect_extensions_as_semantics) {
         const auto plan = parsed->bodyPlan().expectationPlan(
             HttpUnsupportedExpectationPolicy::kReject);
         RUVIA_CHECK(plan.rejection() != nullptr);
-        RUVIA_CHECK(parsed->bodyPlan().expectations().has100Continue());
+        RUVIA_CHECK(parsed->bodyPlan().expectations().hasContinue());
         RUVIA_CHECK(parsed->bodyPlan().expectations().hasUnsupported());
     }
 }

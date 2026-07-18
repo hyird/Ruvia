@@ -52,7 +52,7 @@ RUVIA_TEST(expectations_parse_one_logical_recipient_list) {
     expectations.parseField(" , 100-continue, , 100-Continue, ");
     expectations.parseField(" 100-CONTINUE ");
 
-    RUVIA_CHECK(expectations.has100Continue());
+    RUVIA_CHECK(expectations.hasContinue());
     RUVIA_CHECK(!expectations.hasUnsupported());
     const auto noContent = expectations.serverPlan(
         HttpRequestContentIndication::kNoContent,
@@ -61,7 +61,7 @@ RUVIA_TEST(expectations_parse_one_logical_recipient_list) {
     const auto withContent = expectations.serverPlan(
         HttpRequestContentIndication::kWillFollow,
         HttpUnsupportedExpectationPolicy::kReject);
-    RUVIA_CHECK(withContent.send100Continue() != nullptr);
+    RUVIA_CHECK(withContent.sendContinue() != nullptr);
 }
 
 RUVIA_TEST(expectations_preserve_unsupported_extensions_as_semantics) {
@@ -69,7 +69,7 @@ RUVIA_TEST(expectations_preserve_unsupported_extensions_as_semantics) {
     expectations.parseField("100-continue");
     expectations.parseField(R"(custom="a,b")");
 
-    RUVIA_CHECK(expectations.has100Continue());
+    RUVIA_CHECK(expectations.hasContinue());
     RUVIA_CHECK(expectations.hasUnsupported());
     const auto rejected = expectations.serverPlan(
         HttpRequestContentIndication::kWillFollow,
@@ -81,10 +81,10 @@ RUVIA_TEST(expectations_preserve_unsupported_extensions_as_semantics) {
     const auto ignored = expectations.serverPlan(
         HttpRequestContentIndication::kWillFollow,
         HttpUnsupportedExpectationPolicy::kIgnore);
-    RUVIA_CHECK(ignored.send100Continue() != nullptr);
+    RUVIA_CHECK(ignored.sendContinue() != nullptr);
 
-    expectations.ignore100Continue();
-    RUVIA_CHECK(!expectations.has100Continue());
+    expectations.ignoreContinue();
+    RUVIA_CHECK(!expectations.hasContinue());
     RUVIA_CHECK(expectations.hasUnsupported());
 }
 

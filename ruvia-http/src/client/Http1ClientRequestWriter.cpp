@@ -93,7 +93,7 @@ namespace {
 constexpr std::string_view kHttp11RequestLineSuffix = " HTTP/1.1\r\n";
 constexpr std::string_view kHostPrefix = "Host: ";
 constexpr std::string_view kContentLengthPrefix = "Content-Length: ";
-constexpr std::string_view kExpectContinue = "Expect: 100-continue\r\n";
+constexpr std::string_view kExpectPrefix = "Expect: ";
 constexpr std::string_view kConnectionClose = "Connection: close\r\n";
 constexpr std::string_view kCrlf = "\r\n";
 
@@ -444,7 +444,11 @@ void appendHeaders(
          (!addHeadBytes(headBytes, kContentLengthPrefix.size()) ||
           !addHeadBytes(headBytes, decimalDigits(contentBytes->value().size())) ||
           !addHeadBytes(headBytes, kCrlf.size()))) ||
-        (expectContinue && !addHeadBytes(headBytes, kExpectContinue.size())) ||
+        (expectContinue &&
+         (!addHeadBytes(headBytes, kExpectPrefix.size()) ||
+          !addHeadBytes(
+              headBytes, detail::kHttpContinueExpectationToken.size()) ||
+          !addHeadBytes(headBytes, kCrlf.size()))) ||
         (generateConnectionClose &&
          !addHeadBytes(headBytes, kConnectionClose.size())) ||
         !addHeadBytes(headBytes, kCrlf.size())) {
@@ -475,7 +479,9 @@ void appendHeaders(
         appendView(cursor, kCrlf);
     }
     if (expectContinue) {
-        appendView(cursor, kExpectContinue);
+        appendView(cursor, kExpectPrefix);
+        appendView(cursor, detail::kHttpContinueExpectationToken);
+        appendView(cursor, kCrlf);
     }
     if (generateConnectionClose) {
         appendView(cursor, kConnectionClose);
@@ -537,7 +543,7 @@ std::string_view http1ClientRequestPrepareErrorMessage(
         case Http1ClientRequestPrepareError::kTeConnectionOptionRequired:
             return "HTTP/1 TE requires Connection: TE";
         case Http1ClientRequestPrepareError::kExpectationWithoutContent:
-            return "100-continue requires non-empty request content";
+            return "Continue expectation requires non-empty request content";
         case Http1ClientRequestPrepareError::kContentForbiddenForMethod:
             return "request method forbids content";
         case Http1ClientRequestPrepareError::kOptionsContentTypeRequired:

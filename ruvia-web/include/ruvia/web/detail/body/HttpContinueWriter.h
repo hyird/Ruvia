@@ -20,7 +20,8 @@ Task<void> writeHttp1Continue(Stream& stream) {
         response, headBuffer);
     const auto* const prepared = result.prepared();
     if (prepared == nullptr) {
-        throw std::logic_error("failed to prepare HTTP/1 100 Continue");
+        throw std::logic_error(
+            "failed to prepare HTTP/1 interim Continue response");
     }
 
     const auto writeCompletion = co_await asyncAsio(
@@ -32,7 +33,8 @@ Task<void> writeHttp1Continue(Stream& stream) {
         });
     const auto ec = writeCompletion.errorCode();
     if (ec) {
-        throw std::system_error(ec, "failed to write HTTP/1 100 Continue");
+        throw std::system_error(
+            ec, "failed to write HTTP/1 interim Continue response");
     }
 }
 

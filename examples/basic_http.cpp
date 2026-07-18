@@ -133,7 +133,10 @@ private:
     }
 
     ruvia::Task<ruvia::HttpResponse> fail(ruvia::Context&) {
-        throw ruvia::HttpError(ruvia::HttpStatusCode::fromValue(418), "teapot", "the example handler threw an HttpError");
+        throw ruvia::HttpError(
+            ruvia::http_status::kBadRequest,
+            "example_error",
+            "the example handler threw an HttpError");
     }
 
     ruvia::Task<ruvia::HttpResponse> health(ruvia::Context& c) {

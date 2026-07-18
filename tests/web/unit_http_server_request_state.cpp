@@ -200,7 +200,7 @@ RUVIA_TEST(request_state_wants_continue) {
     const auto empty = parser.parseMessage(
         "POST / HTTP/1.1\r\nHost: x\r\n"
         "Expect: 100-continue\r\nContent-Length: 0\r\n\r\n");
-    RUVIA_CHECK(empty.bodyPlan.expectations().has100Continue());
+    RUVIA_CHECK(empty.bodyPlan.expectations().hasContinue());
     const auto emptyPlan = empty.bodyPlan.expectationPlan(
         HttpUnsupportedExpectationPolicy::kReject);
     RUVIA_CHECK(emptyPlan.noAction() != nullptr);
@@ -208,15 +208,15 @@ RUVIA_TEST(request_state_wants_continue) {
     const auto body = parser.parseMessage(
         "POST / HTTP/1.1\r\nHost: x\r\n"
         "Expect: 100-continue\r\nContent-Length: 1\r\n\r\nx");
-    RUVIA_CHECK(body.bodyPlan.expectations().has100Continue());
+    RUVIA_CHECK(body.bodyPlan.expectations().hasContinue());
     const auto bodyExpectationPlan = body.bodyPlan.expectationPlan(
         HttpUnsupportedExpectationPolicy::kReject);
-    RUVIA_CHECK(bodyExpectationPlan.send100Continue() != nullptr);
+    RUVIA_CHECK(bodyExpectationPlan.sendContinue() != nullptr);
 
     const auto withoutExpectation = parser.parseMessage(
         "GET / HTTP/1.1\r\nHost: x\r\n\r\n");
     RUVIA_CHECK(
-        !withoutExpectation.bodyPlan.expectations().has100Continue());
+        !withoutExpectation.bodyPlan.expectations().hasContinue());
     // A 100-continue expectation from an HTTP/1.0 client MUST be ignored: RFC 9110
     // §15.2 forbids sending any 1xx response to an HTTP/1.0 client, which would
     // misread the interim 100 as the final response.

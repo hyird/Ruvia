@@ -1,5 +1,6 @@
 #pragma once
 
+#include "ruvia/http/HttpStatus.h"
 #include "ruvia/http/detail/HttpRequestInternal.h"
 #include "ruvia/http/detail/websocket/HttpWebSocketUtils.h"
 #include "ruvia/http/detail/websocket/WebSocketServerNegotiation.h"
@@ -10,11 +11,33 @@
 
 namespace ruvia::detail {
 
-inline constexpr std::string_view kHttpWebSocketSwitchingProtocolsPrefix =
-    "HTTP/1.1 101 Switching Protocols\r\n"
-    "Upgrade: websocket\r\n"
-    "Connection: Upgrade\r\n"
-    "Sec-WebSocket-Accept: ";
+inline constexpr auto kHttpWebSocketSwitchingProtocolsPrefix = [] {
+    constexpr std::string_view protocol = "HTTP/1.1 ";
+    constexpr auto status =
+        httpStatusCodeToken(http_status::kSwitchingProtocols);
+    constexpr auto reason =
+        httpReasonPhrase(http_status::kSwitchingProtocols);
+    constexpr std::string_view suffix =
+        "\r\n"
+        "Upgrade: websocket\r\n"
+        "Connection: Upgrade\r\n"
+        "Sec-WebSocket-Accept: ";
+    std::array<char,
+        protocol.size() + status.size() + 1 + reason.size() + suffix.size()>
+        result{};
+    std::size_t cursor = 0;
+    const auto append = [&result, &cursor](std::string_view part) {
+        for (const char value : part) {
+            result[cursor++] = value;
+        }
+    };
+    append(protocol);
+    append(httpStatusCodeTokenView(status));
+    append(" ");
+    append(reason);
+    append(suffix);
+    return result;
+}();
 inline constexpr std::string_view kHttpWebSocketSubprotocolHeaderPrefix =
     "Sec-WebSocket-Protocol: ";
 inline constexpr std::string_view kHttpWebSocketExtensionsHeaderPrefix =
@@ -39,7 +62,9 @@ public:
 
     template <typename Visitor>
     void forEachResponsePart(Visitor&& visitor) const {
-        visitor(kHttpWebSocketSwitchingProtocolsPrefix);
+        visitor(std::string_view(
+            kHttpWebSocketSwitchingProtocolsPrefix.data(),
+            kHttpWebSocketSwitchingProtocolsPrefix.size()));
         visitor(std::string_view(accept_.data(), accept_.size()));
         visitor(kHttpCrlf);
         if (!negotiation_.subprotocol().empty()) {

@@ -481,7 +481,7 @@ RUVIA_TEST(h2_headers_expect_is_an_extensible_repeated_list) {
     RUVIA_CHECK(supported.finalizeRemoteContentHead());
     const auto supportedPlan = supported.expectationPlan(
         HttpUnsupportedExpectationPolicy::kReject);
-    RUVIA_CHECK(supportedPlan.send100Continue() != nullptr);
+    RUVIA_CHECK(supportedPlan.sendContinue() != nullptr);
 
     RUVIA_CHECK(supported.finishRemoteContent());
     const auto completedPlan = supported.expectationPlan(
@@ -498,7 +498,7 @@ RUVIA_TEST(h2_headers_expect_is_an_extensible_repeated_list) {
     const auto zeroLengthPlan = zeroLength.expectationPlan(
         HttpUnsupportedExpectationPolicy::kReject);
     RUVIA_CHECK(zeroLengthPlan.noAction() != nullptr);
-    RUVIA_CHECK(zeroLengthPlan.send100Continue() == nullptr);
+    RUVIA_CHECK(zeroLengthPlan.sendContinue() == nullptr);
 
     Http2StreamState completedLength(4, res());
     Http2HeaderDecodeContext completedLengthContext{completedLength};
@@ -509,7 +509,7 @@ RUVIA_TEST(h2_headers_expect_is_an_extensible_repeated_list) {
     RUVIA_CHECK(completedLength.finalizeRemoteContentHead());
     const auto pendingLengthPlan = completedLength.expectationPlan(
         HttpUnsupportedExpectationPolicy::kReject);
-    RUVIA_CHECK(pendingLengthPlan.send100Continue() != nullptr);
+    RUVIA_CHECK(pendingLengthPlan.sendContinue() != nullptr);
     RUVIA_CHECK(completedLength.accountRemoteContent(1) ==
         ruvia::detail::Http2RemoteContentAccountingResult::kAccepted);
     const auto completedLengthPlan = completedLength.expectationPlan(
@@ -524,7 +524,7 @@ RUVIA_TEST(h2_headers_expect_is_an_extensible_repeated_list) {
     const auto extensionPlan = extension.expectationPlan(
         HttpUnsupportedExpectationPolicy::kReject);
     RUVIA_CHECK(extensionPlan.rejection() != nullptr);
-    RUVIA_CHECK(extension.requestExpectations().has100Continue());
+    RUVIA_CHECK(extension.requestExpectations().hasContinue());
     RUVIA_CHECK(extension.requestExpectations().hasUnsupported());
 }
 

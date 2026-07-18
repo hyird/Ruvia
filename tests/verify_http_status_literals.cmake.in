@@ -1,0 +1,79 @@
+set(_ruvia_source_root "@CMAKE_SOURCE_DIR@")
+set(_status_registry
+    "${_ruvia_source_root}/ruvia-http/include/ruvia/http/HttpStatus.h")
+
+set(_source_files)
+foreach(_source_root IN ITEMS
+        "${_ruvia_source_root}/ruvia-http/include"
+        "${_ruvia_source_root}/ruvia-http/src"
+        "${_ruvia_source_root}/ruvia-web/include"
+        "${_ruvia_source_root}/ruvia-web/src"
+        "${_ruvia_source_root}/examples")
+    file(GLOB_RECURSE _root_files LIST_DIRECTORIES FALSE
+        "${_source_root}/*.h"
+        "${_source_root}/*.cpp"
+        "${_source_root}/*.inl")
+    list(APPEND _source_files ${_root_files})
+endforeach()
+
+# HttpStatus.h is the sole registry for numeric status definitions. The parser
+# boundaries may convert parsed variables through tryFromValue(), but semantic
+# code and wire writers must use the named constants and the central token
+# encoder instead of reconstructing a status literal.
+set(_forbidden_status_patterns
+    [=[HttpStatusCode::(fromValue|tryFromValue)[ \t\r\n]*[(][ \t\r\n]*[1-5][0-9][0-9]([^0-9]|$)]=]
+    [=[(HttpProtocolError|HttpErrorInfo|HttpError)[ \t\r\n]*[(][ \t\r\n]*[1-5][0-9][0-9]([^0-9]|$)]=]
+    [=[[.](status(Code)?|error|redirect)[ \t\r\n]*[(][ \t\r\n]*[1-5][0-9][0-9]([^0-9]|$)]=]
+    [=[[.]status(Code)?[ \t\r\n]*=[ \t\r\n]*[1-5][0-9][0-9]([^0-9]|$)]=]
+    [=[case[ \t\r\n]+[1-5][0-9][0-9][ \t\r\n]*:]=]
+    [=["HTTP/1[.][01][ \t]+[1-5][0-9][0-9]([^0-9]|$)]=]
+    [=[":status"[ \t\r\n]*,[ \t\r\n]*"[1-5][0-9][0-9]"]=]
+    [=[kStatus[1-5][0-9][0-9]]=]
+    [=[(send|has|ignore|HttpSend)[1-5][0-9][0-9]Continue]=])
+
+foreach(_source_file IN LISTS _source_files)
+    if(_source_file STREQUAL _status_registry)
+        continue()
+    endif()
+    file(READ "${_source_file}" _source_text)
+    foreach(_pattern IN LISTS _forbidden_status_patterns)
+        string(REGEX MATCH "${_pattern}" _match "${_source_text}")
+        if(_match)
+            file(RELATIVE_PATH _relative_source
+                "${_ruvia_source_root}" "${_source_file}")
+            string(REPLACE "\n" "\\n" _printable_match "${_match}")
+            message(FATAL_ERROR
+                "hard-coded HTTP status outside HttpStatus.h: "
+                "${_relative_source}: ${_printable_match}")
+        endif()
+    endforeach()
+endforeach()
+
+# Tests may contain literal wire fixtures and deliberately exercise extension
+# boundaries through fromValue(). Their semantic calls still have to use named
+# statuses, so test only the call-site forms that cannot be protocol fixtures.
+file(GLOB_RECURSE _test_source_files LIST_DIRECTORIES FALSE
+    "${_ruvia_source_root}/tests/*.h"
+    "${_ruvia_source_root}/tests/*.cpp"
+    "${_ruvia_source_root}/tests/*.inl")
+set(_forbidden_test_status_patterns
+    [=[(HttpProtocolError|HttpErrorInfo|HttpError)[ \t\r\n]*[(][ \t\r\n]*[1-5][0-9][0-9]([^0-9]|$)]=]
+    [=[[.](status(Code)?|error|redirect)[ \t\r\n]*[(][ \t\r\n]*[1-5][0-9][0-9]([^0-9]|$)]=]
+    [=[[.]status(Code)?[ \t\r\n]*=[ \t\r\n]*[1-5][0-9][0-9]([^0-9]|$)]=]
+    [=[kStatus[1-5][0-9][0-9]]=]
+    [=[(send|has|ignore|HttpSend)[1-5][0-9][0-9]Continue]=])
+
+foreach(_source_file IN LISTS _test_source_files)
+    file(READ "${_source_file}" _source_text)
+    foreach(_pattern IN LISTS _forbidden_test_status_patterns)
+        string(REGEX MATCH "${_pattern}" _match "${_source_text}")
+        if(_match)
+            file(RELATIVE_PATH _relative_source
+                "${_ruvia_source_root}" "${_source_file}")
+            string(REPLACE "\n" "\\n" _printable_match "${_match}")
+            message(FATAL_ERROR
+                "hard-coded semantic HTTP status in test: "
+                "${_relative_source}: ${_printable_match}")
+        endif()
+    endforeach()
+endforeach()

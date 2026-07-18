@@ -70,13 +70,13 @@ private:
 };
 
 struct HpackStaticIndex final {
-    static constexpr std::uint32_t kStatus200 = 8;
-    static constexpr std::uint32_t kStatus204 = 9;
-    static constexpr std::uint32_t kStatus206 = 10;
-    static constexpr std::uint32_t kStatus304 = 11;
-    static constexpr std::uint32_t kStatus400 = 12;
-    static constexpr std::uint32_t kStatus404 = 13;
-    static constexpr std::uint32_t kStatus500 = 14;
+    static constexpr std::uint32_t kStatusOk = 8;
+    static constexpr std::uint32_t kStatusNoContent = 9;
+    static constexpr std::uint32_t kStatusPartialContent = 10;
+    static constexpr std::uint32_t kStatusNotModified = 11;
+    static constexpr std::uint32_t kStatusBadRequest = 12;
+    static constexpr std::uint32_t kStatusNotFound = 13;
+    static constexpr std::uint32_t kStatusInternalServerError = 14;
     static constexpr std::uint32_t kAcceptRanges = 18;
     static constexpr std::uint32_t kAccessControlAllowOrigin = 20;
     static constexpr std::uint32_t kAllow = 22;
