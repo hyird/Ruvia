@@ -1,5 +1,7 @@
 #include "ruvia/core/memory/MemoryPool.h"
 
+#include <array>
+
 #include <mimalloc.h>
 
 // gcc signals TSan via __SANITIZE_THREAD__; clang via __has_feature. __has_feature
@@ -72,8 +74,84 @@ std::pmr::memory_resource* processResource() noexcept {
     return ProcessMemory::instance().upstreamResource();
 }
 
+namespace {
+
+// Coroutine frames come and go several times per request, always in a handful
+// of recurring sizes. A thread-local LIFO cache keyed by 128-byte size class
+// hands a just-freed frame straight to the next allocation of the same class,
+// so the request hot path skips the general allocator and reuses cache-warm
+// memory. Blocks are allocated at the class ceiling, which keeps every cached
+// block large enough for any request that maps to its bin. Only the sized
+// deallocation path may cache: the unsized fallback cannot know the class.
+constexpr std::size_t kTaskFrameCacheGranularity = 128;
+constexpr std::size_t kTaskFrameCacheMaxBlockBytes = 8 * 1024;
+constexpr std::size_t kTaskFrameCacheBudgetBytes = 128 * 1024;
+constexpr std::size_t kTaskFrameCacheBinCount =
+    kTaskFrameCacheMaxBlockBytes / kTaskFrameCacheGranularity;
+
+[[nodiscard]] constexpr std::size_t taskFrameClassBytes(std::size_t bytes) noexcept {
+    return (bytes + kTaskFrameCacheGranularity - 1) & ~(kTaskFrameCacheGranularity - 1);
+}
+
+class TaskFrameCache final {
+public:
+    TaskFrameCache() noexcept = default;
+    TaskFrameCache(const TaskFrameCache&) = delete;
+    TaskFrameCache& operator=(const TaskFrameCache&) = delete;
+
+    ~TaskFrameCache() {
+        for (void*& head : bins_) {
+            while (head != nullptr) {
+                void* next = *static_cast<void**>(head);
+                mi_free(head);
+                head = next;
+            }
+        }
+    }
+
+    [[nodiscard]] void* takeBlock(std::size_t classBytes) noexcept {
+        void*& head = bins_[binIndex(classBytes)];
+        void* block = head;
+        if (block != nullptr) {
+            head = *static_cast<void**>(block);
+            cachedBytes_ -= classBytes;
+        }
+        return block;
+    }
+
+    [[nodiscard]] bool storeBlock(void* block, std::size_t classBytes) noexcept {
+        if (cachedBytes_ + classBytes > kTaskFrameCacheBudgetBytes) {
+            return false;
+        }
+        void*& head = bins_[binIndex(classBytes)];
+        *static_cast<void**>(block) = head;
+        head = block;
+        cachedBytes_ += classBytes;
+        return true;
+    }
+
+private:
+    [[nodiscard]] static constexpr std::size_t binIndex(std::size_t classBytes) noexcept {
+        return classBytes / kTaskFrameCacheGranularity - 1;
+    }
+
+    std::array<void*, kTaskFrameCacheBinCount> bins_{};
+    std::size_t cachedBytes_{0};
+};
+
+thread_local TaskFrameCache taskFrameCache;
+
+}  // namespace
+
 void* taskFrameAllocate(std::size_t bytes) {
-    void* pointer = mi_malloc(bytes == 0 ? 1 : bytes);
+    const std::size_t classBytes = taskFrameClassBytes(bytes == 0 ? 1 : bytes);
+    if (classBytes <= kTaskFrameCacheMaxBlockBytes) {
+        if (void* cached = taskFrameCache.takeBlock(classBytes)) {
+            tsanAllocatorAcquire(cached);
+            return cached;
+        }
+    }
+    void* pointer = mi_malloc(classBytes);
     if (pointer == nullptr) {
         throw std::bad_alloc();
     }
@@ -83,6 +161,16 @@ void* taskFrameAllocate(std::size_t bytes) {
 
 void taskFrameDeallocate(void* pointer) noexcept {
     tsanAllocatorRelease(pointer);
+    mi_free(pointer);
+}
+
+void taskFrameDeallocateSized(void* pointer, std::size_t bytes) noexcept {
+    tsanAllocatorRelease(pointer);
+    const std::size_t classBytes = taskFrameClassBytes(bytes == 0 ? 1 : bytes);
+    if (classBytes <= kTaskFrameCacheMaxBlockBytes
+        && taskFrameCache.storeBlock(pointer, classBytes)) {
+        return;
+    }
     mi_free(pointer);
 }
 
