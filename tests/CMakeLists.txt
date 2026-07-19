@@ -176,6 +176,7 @@ add_executable(ruvia_unit_tests
     http/unit_http_origin.cpp
     http/unit_http_client_redirect.cpp
     web/unit_routing.cpp
+    web/unit_testing_facade.cpp
     web/unit_cors.cpp
 )
 
