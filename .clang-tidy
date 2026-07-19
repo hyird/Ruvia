@@ -1,0 +1,39 @@
+# Ruvia clang-tidy profile -- bug-finding first, style noise off.
+# Docs: https://clang.llvm.org/extra/clang-tidy/checks/list.html
+#
+# Scope: warnings only (no WarningsAsErrors yet). Run against a compile database:
+#   cmake -S . -B build -DCMAKE_EXPORT_COMPILE_COMMANDS=ON ...
+#   clang-tidy -p build <files>
+#
+# Deliberately excluded groups:
+# - identifier naming: the tree is already uniform; enabling the matrix would
+#   only produce churn.
+# - checks that misfire on C++20/23 coroutines (reference parameters and
+#   captured lifetimes are structurally owned by the frame here).
+Checks: >-
+  -*,
+  bugprone-*,
+  -bugprone-easily-swappable-parameters,
+  -bugprone-exception-escape,
+  performance-*,
+  -performance-avoid-endl,
+  misc-*,
+  -misc-non-private-member-variables-in-classes,
+  -misc-no-recursion,
+  -misc-include-cleaner,
+  -misc-const-correctness,
+  modernize-use-nullptr,
+  modernize-use-override,
+  modernize-use-equals-default,
+  modernize-use-starts-ends-with,
+  modernize-redundant-void-arg,
+  readability-container-size-empty,
+  readability-redundant-string-cstr,
+  readability-static-accessed-through-instance,
+  cppcoreguidelines-slicing,
+  cppcoreguidelines-interfaces-global-init,
+  cppcoreguidelines-no-suspend-with-lock
+
+WarningsAsErrors: ''
+HeaderFilterRegex: '(ruvia-core|ruvia-http|ruvia-web|ruvia-edge)/(include|src)/.*'
+FormatStyle: none

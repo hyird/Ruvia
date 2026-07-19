@@ -1,5 +1,7 @@
 #include "ruvia/core/memory/MemoryPool.h"
 
+#include "ruvia/core/detail/TaskPromise.h"
+
 #include <array>
 
 #include <mimalloc.h>

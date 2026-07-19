@@ -43,6 +43,10 @@ if(_ruvia_sanitizer_flags AND RUVIA_ENABLE_MIMALLOC_OVERRIDE)
 endif()
 unset(_ruvia_sanitizer_flags)
 
+# Emitted for clangd and clang-tidy (.clang-tidy at the repo root); harmless
+# for generators that do not support it.
+set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
+
 option(RUVIA_ENABLE_MARIADB "Build MariaDB-compatible database support" OFF)
 option(RUVIA_ENABLE_POSTGRESQL "Build PostgreSQL database support" OFF)
 option(RUVIA_ENABLE_REDIS "Build Redis support" OFF)
