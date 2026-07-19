@@ -100,12 +100,12 @@ private:
 class HttpClientResponseHeader final {
 public:
     [[nodiscard]] std::string_view name() const & noexcept {
-        return std::string_view(name_.data(), name_.size());
+        return name_;
     }
     [[nodiscard]] std::string_view name() const && = delete;
 
     [[nodiscard]] std::string_view value() const & noexcept {
-        return std::string_view(value_.data(), value_.size());
+        return value_;
     }
     [[nodiscard]] std::string_view value() const && = delete;
 
@@ -221,7 +221,7 @@ struct HttpClientRequest {
         template <typename Traits, typename Allocator>
         constexpr BorrowedText(
             const std::basic_string<char, Traits, Allocator>& value) noexcept
-            : value_(value.data(), value.size()) {}
+            : value_(value) {}
 
         template <detail::HttpTemporaryOwningCharString String>
         BorrowedText(String&&) = delete;
@@ -239,7 +239,7 @@ struct HttpClientRequest {
         template <typename Traits, typename Allocator>
         constexpr BorrowedText& operator=(
             const std::basic_string<char, Traits, Allocator>& value) noexcept {
-            value_ = std::string_view(value.data(), value.size());
+            value_ = std::string_view(value);
             return *this;
         }
 
@@ -267,21 +267,9 @@ struct HttpClientRequest {
         }
 
         friend constexpr bool operator==(
-            std::string_view lhs,
-            BorrowedText rhs) noexcept {
-            return lhs == rhs.value_;
-        }
-
-        friend constexpr bool operator==(
             BorrowedText lhs,
             const char* rhs) noexcept {
             return lhs.value_ == rhs;
-        }
-
-        friend constexpr bool operator==(
-            const char* lhs,
-            BorrowedText rhs) noexcept {
-            return lhs == rhs.value_;
         }
 
     private:
@@ -301,7 +289,7 @@ struct HttpClientRequest {
 
         template <std::size_t N>
         constexpr HeaderInit(const std::array<HttpHeaderView, N>& headers) noexcept
-            : headers_(headers.data(), headers.size()) {}
+            : headers_(headers) {}
 
         template <std::size_t N>
         HeaderInit(std::array<HttpHeaderView, N>&&) = delete;
@@ -324,7 +312,7 @@ struct HttpClientRequest {
 
         template <std::size_t N>
         constexpr HeaderInit& operator=(const std::array<HttpHeaderView, N>& headers) noexcept {
-            headers_ = std::span<const HttpHeaderView>(headers.data(), headers.size());
+            headers_ = std::span<const HttpHeaderView>(headers);
             return *this;
         }
 
@@ -389,7 +377,7 @@ public:
 
     [[nodiscard]] std::span<const HttpClientResponseHeader>
     headers() const & noexcept {
-        return std::span<const HttpClientResponseHeader>(headers_.data(), headers_.size());
+        return headers_;
     }
     [[nodiscard]] std::span<const HttpClientResponseHeader>
     headers() const && = delete;

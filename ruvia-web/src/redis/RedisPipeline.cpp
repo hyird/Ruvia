@@ -280,7 +280,7 @@ Task<std::pmr::vector<RedisValue>> RedisPipeline::executeOwned(
     std::pmr::vector<Command> commands,
     std::pmr::memory_resource* resource) {
     co_return co_await pool.executePipeline(
-        std::span<const Command>(commands.data(), commands.size()),
+        std::span<const Command>(commands),
         resource);
 }
 

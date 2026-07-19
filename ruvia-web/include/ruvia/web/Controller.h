@@ -5,6 +5,7 @@
 #include "ruvia/web/detail/BorrowedView.h"
 #include "ruvia/web/detail/controller/ControllerRuntime.h"
 
+#include <array>
 #include <concepts>
 #include <cstddef>
 #include <string_view>
@@ -13,7 +14,7 @@
 namespace ruvia::detail {
 
 // Methods covered by RUVIA_ALL; HEAD is served by the implicit GET fallback.
-inline constexpr HttpKnownMethod kRuviaAllRouteMethods[] = {
+inline constexpr std::array kRuviaAllRouteMethods = {
     HttpKnownMethod::kGet,
     HttpKnownMethod::kPost,
     HttpKnownMethod::kPut,
@@ -33,17 +34,17 @@ public:
     }
 
     [[nodiscard]] constexpr const HttpKnownMethod* begin() const & noexcept {
-        return methods_;
+        return methods_.data();
     }
     [[nodiscard]] constexpr const HttpKnownMethod* begin() const && = delete;
 
     [[nodiscard]] constexpr const HttpKnownMethod* end() const & noexcept {
-        return methods_ + count_;
+        return methods_.data() + count_;
     }
     [[nodiscard]] constexpr const HttpKnownMethod* end() const && = delete;
 
 private:
-    HttpKnownMethod methods_[9]{};
+    std::array<HttpKnownMethod, 9> methods_{};
     std::size_t count_{0};
 };
 
@@ -66,17 +67,17 @@ public:
     explicit RuviaPathList(Paths&&...) = delete;
 
     [[nodiscard]] constexpr const std::string_view* begin() const & noexcept {
-        return paths_;
+        return paths_.data();
     }
     [[nodiscard]] constexpr const std::string_view* begin() const && = delete;
 
     [[nodiscard]] constexpr const std::string_view* end() const & noexcept {
-        return paths_ + count_;
+        return paths_.data() + count_;
     }
     [[nodiscard]] constexpr const std::string_view* end() const && = delete;
 
 private:
-    std::string_view paths_[8]{};
+    std::array<std::string_view, 8> paths_{};
     std::size_t count_{0};
 };
 

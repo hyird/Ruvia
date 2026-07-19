@@ -1,6 +1,7 @@
 #include "ruvia/http/detail/websocket/HttpWebSocketUtils.h"
 
 #include <array>
+#include <bit>
 #include <span>
 
 #include "ruvia/http/detail/HttpBase64.h"
@@ -10,10 +11,6 @@ namespace ruvia::detail {
 namespace {
 
 constexpr std::string_view kWebSocketGuid = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
-
-[[nodiscard]] std::uint32_t sha1RotateLeft(std::uint32_t value, std::uint32_t bits) noexcept {
-    return (value << bits) | (value >> (32 - bits));
-}
 
 [[nodiscard]] std::array<std::uint8_t, 20> sha1(std::string_view first, std::string_view second) noexcept {
     std::uint32_t h0 = 0x67452301U;
@@ -41,7 +38,7 @@ constexpr std::string_view kWebSocketGuid = "258EAFA5-E914-47DA-95CA-C5AB0DC85B1
                 static_cast<std::uint32_t>(data[i * 4 + 3]);
         }
         for (std::size_t i = 16; i < 80; ++i) {
-            w[i] = sha1RotateLeft(w[i - 3] ^ w[i - 8] ^ w[i - 14] ^ w[i - 16], 1);
+            w[i] = std::rotl(w[i - 3] ^ w[i - 8] ^ w[i - 14] ^ w[i - 16], 1);
         }
         auto a = h0;
         auto b = h1;
@@ -64,10 +61,10 @@ constexpr std::string_view kWebSocketGuid = "258EAFA5-E914-47DA-95CA-C5AB0DC85B1
                 f = b ^ c ^ d;
                 k = 0xCA62C1D6U;
             }
-            const auto temp = sha1RotateLeft(a, 5) + f + e + k + w[i];
+            const auto temp = std::rotl(a, 5) + f + e + k + w[i];
             e = d;
             d = c;
-            c = sha1RotateLeft(b, 30);
+            c = std::rotl(b, 30);
             b = a;
             a = temp;
         }
@@ -116,7 +113,7 @@ constexpr std::string_view kWebSocketGuid = "258EAFA5-E914-47DA-95CA-C5AB0DC85B1
 void encodeWebSocketAccept(WebSocketAcceptKey& output, std::string_view key) {
     key = detail::httpTrimOws(key);
     const auto digest = sha1(key, kWebSocketGuid);
-    encodeHttpBase64(output.data(), std::span<const std::uint8_t>(digest.data(), digest.size()));
+    encodeHttpBase64(output.data(), std::span<const std::uint8_t>(digest));
 }
 
 }  // namespace ruvia::detail

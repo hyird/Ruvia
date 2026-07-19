@@ -70,7 +70,7 @@ void Http1ServerRequestParser::parseRequestHead(
     HttpRequestAccess::setTarget(state.request, target);
 
     if (version.size() != 8 ||
-        version.substr(0, 5) != "HTTP/" ||
+        !version.starts_with("HTTP/") ||
         version[5] < '0' ||
         version[5] > '9' ||
         version[6] != '.') {

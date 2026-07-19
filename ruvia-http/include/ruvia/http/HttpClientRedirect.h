@@ -142,7 +142,7 @@ public:
         HttpClientRedirectRequestPlan&&) = delete;
 
     [[nodiscard]] std::string_view method() const & noexcept {
-        return std::string_view(method_.data(), method_.size());
+        return method_;
     }
     std::string_view method() const && = delete;
 
@@ -200,7 +200,7 @@ public:
     HttpClientRedirectTarget& operator=(HttpClientRedirectTarget&&) = delete;
 
     [[nodiscard]] std::string_view value() const & noexcept {
-        return std::string_view(value_.data(), value_.size());
+        return value_;
     }
     [[nodiscard]] std::string_view value() const && = delete;
 
@@ -321,7 +321,7 @@ public:
         HttpClientResolvedRedirect&&) = delete;
 
     [[nodiscard]] std::string_view target() const & noexcept {
-        return std::string_view(target_.data(), target_.size());
+        return target_;
     }
     std::string_view target() const && = delete;
 
@@ -332,7 +332,7 @@ public:
     // RFC 3986 uri-host of the destination; IP literals keep their brackets,
     // matching the HttpOrigin factory contract.
     [[nodiscard]] std::string_view host() const & noexcept {
-        return std::string_view(host_.data(), host_.size());
+        return host_;
     }
     std::string_view host() const && = delete;
 

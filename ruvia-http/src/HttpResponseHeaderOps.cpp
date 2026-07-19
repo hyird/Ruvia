@@ -16,6 +16,7 @@
 #include <cstring>
 #include <stdexcept>
 #include <system_error>
+#include <utility>
 
 namespace ruvia {
 namespace {
@@ -177,7 +178,7 @@ void HttpResponse::recordKnownHeaderIndex(std::uint32_t knownBit, std::size_t in
 
 HttpResponseHeader* HttpResponse::findHeaderForUpdate(std::string_view key, std::uint32_t knownBit) noexcept {
     return const_cast<HttpResponseHeader*>(
-        static_cast<const HttpResponse&>(*this).findHeaderForRead(key, knownBit));
+        std::as_const(*this).findHeaderForRead(key, knownBit));
 }
 
 const HttpResponseHeader* HttpResponse::findHeaderForRead(

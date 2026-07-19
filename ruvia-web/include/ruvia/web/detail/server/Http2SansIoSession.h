@@ -28,6 +28,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <optional>
+#include <span>
 #include <string_view>
 #include <type_traits>
 #include <utility>
@@ -268,7 +269,7 @@ Task<void> runHttp2SansIoSession(
         std::optional<RequestMemory> requestMemoryStorage;
         RequestMemory& requestMemory = emplaceRequestMemory(
             requestMemoryStorage, worker,
-            std::span<std::byte>(arenaBlock.data(), arenaBlock.size()));
+            std::span<std::byte>(arenaBlock));
         auto* streamState = connection.stream(streamId);
         if (streamState == nullptr) {
             co_return;
@@ -650,9 +651,9 @@ Task<void> runHttp2SansIoSession(
             copiedBodyStreams{};
         std::size_t copiedBodyStreamCount = 0;
         const auto markBufferedBodyCopied = [&](std::uint32_t streamId) {
-            const auto end = copiedBodyStreams.begin() +
-                static_cast<std::ptrdiff_t>(copiedBodyStreamCount);
-            if (std::find(copiedBodyStreams.begin(), end, streamId) == end) {
+            const auto copied =
+                std::span(copiedBodyStreams).first(copiedBodyStreamCount);
+            if (!std::ranges::contains(copied, streamId)) {
                 if (copiedBodyStreamCount == copiedBodyStreams.size()) {
                     return false;
                 }
@@ -661,11 +662,10 @@ Task<void> runHttp2SansIoSession(
             return true;
         };
         const auto unmarkBufferedBodyCopied = [&](std::uint32_t streamId) {
-            const auto end = copiedBodyStreams.begin() +
-                static_cast<std::ptrdiff_t>(copiedBodyStreamCount);
-            const auto found = std::find(
-                copiedBodyStreams.begin(), end, streamId);
-            if (found == end) {
+            const auto copied =
+                std::span(copiedBodyStreams).first(copiedBodyStreamCount);
+            const auto found = std::ranges::find(copied, streamId);
+            if (found == copied.end()) {
                 return;
             }
             --copiedBodyStreamCount;

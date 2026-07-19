@@ -104,7 +104,7 @@ using TlsStream = asio::ssl::stream<asio::ip::tcp::socket>;
 // `carry`, leaving any surplus bytes for a later call. Returns false if the peer
 // closed the connection before a full response arrived.
 bool readResponse(TlsStream& stream, std::string& carry, std::error_code& ec) {
-    while (carry.find("\r\n\r\n") == std::string::npos) {
+    while (!carry.contains("\r\n\r\n")) {
         char buffer[1024];
         const auto n = stream.read_some(asio::buffer(buffer), ec);
         if (ec) {

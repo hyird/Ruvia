@@ -208,10 +208,7 @@ private:
     TestApp& useWorkerStateDefinition(detail::WorkerStateDefinition definition);
 
     struct Impl;
-    struct ImplDeleter final {
-        void operator()(Impl* impl) const noexcept;
-    };
-    std::unique_ptr<Impl, ImplDeleter> impl_;
+    std::unique_ptr<Impl> impl_;
 };
 
 }  // namespace ruvia

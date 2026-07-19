@@ -33,7 +33,7 @@ public:
 
         template <std::size_t N>
         constexpr HeaderInit(const std::array<HttpHeaderView, N>& headers) noexcept
-            : headers_(headers.data(), headers.size()) {}
+            : headers_(headers) {}
 
         template <std::size_t N>
         HeaderInit(std::array<HttpHeaderView, N>&&) = delete;

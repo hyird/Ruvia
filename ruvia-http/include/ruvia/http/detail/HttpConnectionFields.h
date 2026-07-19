@@ -4,6 +4,7 @@
 #include <cstdint>
 #include <string_view>
 #include <type_traits>
+#include <utility>
 
 #include "ruvia/http/HttpHeader.h"
 #include "ruvia/http/detail/AsciiCase.h"
@@ -142,7 +143,7 @@ private:
 
     [[nodiscard]] static constexpr std::uint8_t bit(
         HttpConnectionOption option) noexcept {
-        return static_cast<std::uint8_t>(option);
+        return std::to_underlying(option);
     }
 
     // Connection owns four recognised-token bits plus one orthogonal field
@@ -172,7 +173,7 @@ struct HttpUpgradeProtocol final {
     if (!isValidHttpHeaderName(name) ||
         (slash != std::string_view::npos &&
          (!isValidHttpHeaderName(version) ||
-          version.find('/') != std::string_view::npos))) {
+          version.contains('/')))) {
         return false;
     }
     output = HttpUpgradeProtocol{.name = name, .version = version};

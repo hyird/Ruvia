@@ -28,7 +28,7 @@ struct SseMessage final {
         template <typename Traits, typename Allocator>
         constexpr BorrowedText(
             const std::basic_string<char, Traits, Allocator>& value) noexcept
-            : value_(value.data(), value.size()) {}
+            : value_(value) {}
 
         template <detail::HttpTemporaryOwningCharString String>
         BorrowedText(String&&) = delete;
@@ -46,7 +46,7 @@ struct SseMessage final {
         template <typename Traits, typename Allocator>
         constexpr BorrowedText& operator=(
             const std::basic_string<char, Traits, Allocator>& value) noexcept {
-            value_ = std::string_view(value.data(), value.size());
+            value_ = std::string_view(value);
             return *this;
         }
 
@@ -98,35 +98,16 @@ struct SseMessage final {
         }
 
         friend constexpr bool operator==(
-            std::string_view left,
-            BorrowedText right) noexcept {
-            return left == right.value_;
-        }
-
-        friend constexpr bool operator==(
             BorrowedText left,
             const char* right) noexcept {
             return left.value_ == right;
-        }
-
-        friend constexpr bool operator==(
-            const char* left,
-            BorrowedText right) noexcept {
-            return left == right.value_;
         }
 
         template <typename Traits, typename Allocator>
         friend constexpr bool operator==(
             BorrowedText left,
             const std::basic_string<char, Traits, Allocator>& right) noexcept {
-            return left.value_ == std::string_view(right.data(), right.size());
-        }
-
-        template <typename Traits, typename Allocator>
-        friend constexpr bool operator==(
-            const std::basic_string<char, Traits, Allocator>& left,
-            BorrowedText right) noexcept {
-            return std::string_view(left.data(), left.size()) == right.value_;
+            return left.value_ == std::string_view(right);
         }
 
     private:

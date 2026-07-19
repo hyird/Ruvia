@@ -112,7 +112,7 @@ public:
     }
 
     [[nodiscard]] std::span<const RequestNameValueView> entries() const & noexcept {
-        return std::span<const RequestNameValueView>(items_.data(), items_.size());
+        return items_;
     }
     [[nodiscard]] std::span<const RequestNameValueView> entries() const && = delete;
 

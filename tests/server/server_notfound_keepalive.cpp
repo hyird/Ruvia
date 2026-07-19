@@ -73,14 +73,14 @@ void registerRoute(
     sock.connect(endpoint, ec);
 
     asio::write(sock, asio::buffer(firstRequest), ec);
-    if (readResponseHead(sock, ec).rfind(status, 0) != 0) {
+    if (!readResponseHead(sock, ec).starts_with(status)) {
         return errBase;
     }
     asio::write(sock, asio::buffer(secondRequest), ec);
     if (ec) {
         return errBase + 1;  // connection closed -> no keep-alive
     }
-    if (readResponseHead(sock, ec).rfind(status, 0) != 0) {
+    if (!readResponseHead(sock, ec).starts_with(status)) {
         return errBase + 2;
     }
     return 0;
@@ -139,7 +139,7 @@ int main() {
         asio::write(sock, asio::buffer(std::string_view(
             "POST /missing HTTP/1.1\r\nHost: localhost\r\n"
             "Content-Length: 8\r\n\r\n")), ec);
-        if (readResponseHead(sock, ec).rfind("HTTP/1.1 404", 0) != 0) {
+        if (!readResponseHead(sock, ec).starts_with("HTTP/1.1 404")) {
             std::fputs("bodied not-found did not get a 404\n", stderr);
             server.stop();
             server.join();

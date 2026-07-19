@@ -138,7 +138,7 @@ public:
     HttpEncodedContent& operator=(HttpEncodedContent&&) = delete;
 
     [[nodiscard]] std::string_view bytes() const & noexcept {
-        return std::string_view(bytes_.data(), bytes_.size());
+        return bytes_;
     }
     std::string_view bytes() const && = delete;
 
@@ -250,7 +250,7 @@ public:
     HttpDecodedContent& operator=(HttpDecodedContent&&) = delete;
 
     [[nodiscard]] std::string_view bytes() const & noexcept {
-        return std::string_view(bytes_.data(), bytes_.size());
+        return bytes_;
     }
     std::string_view bytes() const && = delete;
 

@@ -107,7 +107,7 @@ inline constexpr std::size_t kHttp2LowerHeaderStackBytes = 64;
             writeLower(name, stack.data());
             return std::string_view(stack.data(), name.size());
         }
-        scratch.resize(name.size());
+        resizePmrStringForOverwrite(scratch, name.size());
         writeLower(name, scratch.data());
         return scratch;
     }

@@ -11,8 +11,8 @@ Task<std::optional<std::string_view>> StreamBodyReader<Stream>::readChunked() {
 
     for (;;) {
         const auto source = !initialBodyAndPipeline_.empty()
-            ? std::string_view(initialBodyAndPipeline_.data(), initialBodyAndPipeline_.size())
-            : std::string_view(buffer_.data(), buffer_.size());
+            ? std::string_view(initialBodyAndPipeline_)
+            : std::string_view(buffer_);
         const auto result = chunkDecoder_.decode(source.substr(readCursor_));
         if (result.consumedBytes() != 0) {
             pendingCompactUntil_ = readCursor_ + result.consumedBytes();
@@ -57,8 +57,7 @@ Task<std::optional<std::string_view>> StreamBodyReader<Stream>::readTransferDeco
     for (;;) {
         const auto result = transferDecoder_->decode(
             transferInput_,
-            std::span<char>(
-                transferOutput_.data(), transferOutput_.size()));
+            std::span<char>(transferOutput_));
         transferInput_.remove_prefix(
             std::min(transferInput_.size(), result.consumedBytes()));
         if (const auto* output = result.output()) {

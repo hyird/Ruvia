@@ -4,6 +4,7 @@
 #include <asio/io_context.hpp>
 #include <asio/use_future.hpp>
 
+#include <memory>
 #include <memory_resource>
 #include <optional>
 #include <stdexcept>
@@ -81,11 +82,7 @@ struct TestApp::Impl final {
     }
 };
 
-void TestApp::ImplDeleter::operator()(Impl* impl) const noexcept {
-    delete impl;
-}
-
-TestApp::TestApp() : impl_(new Impl()) {}
+TestApp::TestApp() : impl_(std::make_unique<Impl>()) {}
 
 TestApp::~TestApp() = default;
 

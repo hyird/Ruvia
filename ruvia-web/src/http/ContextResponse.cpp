@@ -12,6 +12,7 @@
 #include "ruvia/http/detail/Hex.h"
 #include "ruvia/web/detail/http/HttpErrorResponse.h"
 
+#include <algorithm>
 #include <chrono>
 #include <stdexcept>
 #include <string_view>
@@ -30,12 +31,11 @@ namespace {
 [[nodiscard]] bool responseHasHeaderName(
     const HttpResponse& response,
     std::string_view name) noexcept {
-    for (const auto& header : response.headers()) {
-        if (detail::httpAsciiEqualsIgnoreCase(header.name(), name)) {
-            return true;
-        }
-    }
-    return false;
+    return std::ranges::any_of(
+        response.headers(),
+        [name](const auto& header) noexcept {
+            return detail::httpAsciiEqualsIgnoreCase(header.name(), name);
+        });
 }
 
 [[nodiscard]] std::size_t responseHeaderValueCount(
@@ -125,12 +125,9 @@ void assignActiveResponseHeaders(HttpResponse& response, const HttpResponse& act
 }
 
 [[nodiscard]] bool redirectLocationNeedsEncoding(std::string_view location) noexcept {
-    for (const auto ch : location) {
-        if (static_cast<unsigned char>(ch) >= 0x80) {
-            return true;
-        }
-    }
-    return false;
+    return std::ranges::any_of(location, [](char ch) noexcept {
+        return static_cast<unsigned char>(ch) >= 0x80;
+    });
 }
 
 [[nodiscard]] bool encodeUriKeepsByte(unsigned char ch) noexcept {

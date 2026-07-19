@@ -269,7 +269,7 @@ RUVIA_TEST(cached_date_header_framing_and_validity) {
     const std::string header(cachedDateHeader());
     RUVIA_CHECK_EQ(header.size(), std::size_t{37});  // "Date: " (6) + date (29) + CRLF (2)
     RUVIA_CHECK(header.starts_with("Date: "));
-    RUVIA_CHECK(std::string_view(header).substr(header.size() - 2) == "\r\n");
+    RUVIA_CHECK(std::string_view(header).ends_with("\r\n"));
 
     // The 29-char value must parse as a valid IMF-fixdate; a localized or
     // malformed date (the pre-fix strftime %a/%b risk) would fail to parse.

@@ -300,8 +300,7 @@ Http2RequestHeadSubmitResult Http2Connection::submitRegularRequestHead(
             HpackStaticIndex::kContentLength,
             std::string_view(lengthBuffer.data(), lengthBytes));
     }
-    appendResponseHeaderFrames(
-        *stream, std::string_view(block.data(), block.size()), endStream);
+    appendResponseHeaderFrames(*stream, std::string_view(block), endStream);
     if (withoutContent) {
         stream->beginLocalContentForbidden();
     } else if (knownLengthContent != nullptr) {
@@ -360,7 +359,7 @@ Http2RequestHeadSubmitResult Http2Connection::submitConnectRequestHead(
     }
     appendResponseHeaderFrames(
         *stream,
-        std::string_view(block.data(), block.size()),
+        std::string_view(block),
         Http2EndStream::kKeepOpen);
     stream->assignRequestMethod("CONNECT");
     stream->beginLocalContentForbidden();
@@ -438,7 +437,7 @@ Http2RequestHeadSubmitResult Http2Connection::submitExtendedConnectRequestHead(
     }
     appendResponseHeaderFrames(
         *stream,
-        std::string_view(block.data(), block.size()),
+        std::string_view(block),
         Http2EndStream::kKeepOpen);
     stream->assignRequestMethod("CONNECT");
     stream->assignRequestScheme(scheme);
@@ -469,7 +468,7 @@ void Http2Connection::appendResponseHeaderFrames(
     while (offset < headerBlock.size() ||
            (first && !tableSizeUpdate.empty())) {
         const auto prefix = first
-            ? std::string_view(tableSizeUpdate.data(), tableSizeUpdate.size())
+            ? std::string_view(tableSizeUpdate)
             : std::string_view{};
         const auto chunk = std::min<std::size_t>(
             headerBlock.size() - offset, maxFrame - prefix.size());
@@ -552,7 +551,7 @@ Http2BufferedResponseHeadSubmitResult Http2Connection::submitResponseHead(
     }
     appendResponseHeaderFrames(
         *stream,
-        std::string_view(stream->responseHeaderBlock().data(), stream->responseHeaderBlock().size()),
+        std::string_view(stream->responseHeaderBlock()),
         endStream);
     if (http2EndsStream(endStream)) {
         (void)stream->commitLocalHeadEndStream();
@@ -633,7 +632,7 @@ Http2StreamingResponseHeadSubmitResult Http2Connection::submitStreamingResponseH
     }
     appendResponseHeaderFrames(
         *stream,
-        std::string_view(stream->responseHeaderBlock().data(), stream->responseHeaderBlock().size()),
+        std::string_view(stream->responseHeaderBlock()),
         endStream);
     if (commitPlan.headDisposition() ==
         ResponseStreamHeadDisposition::kTrailersOnly) {
@@ -669,7 +668,7 @@ Http2SubmitStatus Http2Connection::submitInterimResponseHead(
     }
     appendResponseHeaderFrames(
         *stream,
-        std::string_view(stream->responseHeaderBlock().data(), stream->responseHeaderBlock().size()),
+        std::string_view(stream->responseHeaderBlock()),
         Http2EndStream::kKeepOpen);
     http2ReleaseResponseHeaderBlock(*stream);
     return Http2SubmitStatus::kAccepted;
@@ -790,9 +789,7 @@ Http2SubmitStatus Http2Connection::submitConnectResponseHead(
     }
     appendResponseHeaderFrames(
         *stream,
-        std::string_view(
-            stream->responseHeaderBlock().data(),
-            stream->responseHeaderBlock().size()),
+        std::string_view(stream->responseHeaderBlock()),
         Http2EndStream::kKeepOpen);
     (void)stream->acceptConnect();
     stream->beginLocalContentUnbounded();
@@ -824,7 +821,7 @@ Http2Connection::submitWebSocketHandshake(
         negotiation);
     appendResponseHeaderFrames(
         *stream,
-        std::string_view(stream->responseHeaderBlock().data(), stream->responseHeaderBlock().size()),
+        std::string_view(stream->responseHeaderBlock()),
         Http2EndStream::kKeepOpen);
     (void)stream->acceptConnect();
     stream->beginLocalContentUnbounded();
@@ -885,7 +882,7 @@ Http2FinishSubmitStatus Http2Connection::finishResponse(
     }
     appendResponseHeaderFrames(
         *stream,
-        std::string_view(trailerBlock.data(), trailerBlock.size()),
+        std::string_view(trailerBlock),
         Http2EndStream::kEndStream);
     (void)stream->commitLocalEndStream();
     return Http2FinishSubmitStatus::kAccepted;

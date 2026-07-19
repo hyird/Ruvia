@@ -31,8 +31,8 @@ RUVIA_TEST(default_error_response_escapes_message_in_json_body) {
 
     const auto body = ruvia::detail::responseBody(response).bytes();
     RUVIA_CHECK(body.starts_with("{") && body.ends_with("}"));
-    RUVIA_CHECK(body.find(R"("code":"bad_request")") != std::string_view::npos);
-    RUVIA_CHECK(body.find(R"("message":"invalid \"input\"")") != std::string_view::npos);
+    RUVIA_CHECK(body.contains(R"("code":"bad_request")"));
+    RUVIA_CHECK(body.contains(R"("message":"invalid \"input\"")"));
 }
 
 RUVIA_TEST(default_error_response_embeds_details_json) {
@@ -47,8 +47,7 @@ RUVIA_TEST(default_error_response_embeds_details_json) {
 
     const auto body = ruvia::detail::responseBody(response).bytes();
     // The already-valid details JSON is embedded verbatim under "details".
-    RUVIA_CHECK(body.find(R"("details":[{"field":"x","code":"required","message":"m"}])") !=
-                std::string_view::npos);
+    RUVIA_CHECK(body.contains(R"("details":[{"field":"x","code":"required","message":"m"}])"));
 }
 
 RUVIA_TEST(default_error_response_does_not_set_transport_headers) {
@@ -89,9 +88,9 @@ RUVIA_TEST(default_error_response_normalizes_non_error_status_and_status_text) {
         const auto response = makeDefaultErrorResponse(resource, error);
         RUVIA_CHECK_EQ(response.status(), ruvia::http_status::kBadRequest);
         const auto body = ruvia::detail::responseBody(response).bytes();
-        RUVIA_CHECK(body.find(R"("error":"Bad Request")") != std::string_view::npos);
-        RUVIA_CHECK(body.find('\r') == std::string_view::npos);
-        RUVIA_CHECK(body.find('\n') == std::string_view::npos);
+        RUVIA_CHECK(body.contains(R"("error":"Bad Request")"));
+        RUVIA_CHECK(!body.contains('\r'));
+        RUVIA_CHECK(!body.contains('\n'));
     }
     // An extension status has no conventional reason phrase. The Web JSON
     // envelope gets its own neutral label instead of inventing wire semantics.
@@ -99,7 +98,7 @@ RUVIA_TEST(default_error_response_normalizes_non_error_status_and_status_text) {
         const auto response = makeDefaultErrorResponse(resource, HttpErrorInfo(ruvia::HttpStatusCode::fromValue(599)));
         RUVIA_CHECK_EQ(response.status(), ruvia::HttpStatusCode::fromValue(599));
         const auto body = ruvia::detail::responseBody(response).bytes();
-        RUVIA_CHECK(body.find(R"("error":"HTTP Error")") != std::string_view::npos);
+        RUVIA_CHECK(body.contains(R"("error":"HTTP Error")"));
     }
     // A valid in-range status is preserved unchanged.
     {

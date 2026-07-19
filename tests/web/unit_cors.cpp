@@ -194,7 +194,7 @@ RUVIA_TEST(cors_runtime_sets_static_configured_origin) {
                    std::string_view("https://app.example"));
     // A configured origin is static across requests, so it does not vary by
     // the presence or value of Origin.
-    RUVIA_CHECK(response.header("Vary").value_or("").find("Origin") == std::string_view::npos);
+    RUVIA_CHECK(!response.header("Vary").value_or("").contains("Origin"));
     RUVIA_CHECK(!response.header("Access-Control-Allow-Credentials").has_value());
 }
 
@@ -206,7 +206,7 @@ RUVIA_TEST(cors_runtime_wildcard_has_no_vary_origin) {
     applyCorsHeaders(result.request, response, corsOptions("*", false));
 
     RUVIA_CHECK_EQ(response.header("Access-Control-Allow-Origin").value_or(""), std::string_view("*"));
-    RUVIA_CHECK(response.header("Vary").value_or("").find("Origin") == std::string_view::npos);
+    RUVIA_CHECK(!response.header("Vary").value_or("").contains("Origin"));
 }
 
 RUVIA_TEST(cors_runtime_credentials_belong_to_specific_origin) {
@@ -265,11 +265,11 @@ RUVIA_TEST(cors_options_variants_declare_every_request_dependency) {
     applyCorsHeaders(result.request, response, corsOptions("*", false));
 
     const auto vary = response.header("Vary").value_or("");
-    RUVIA_CHECK(vary.find("Origin") != std::string_view::npos);
+    RUVIA_CHECK(vary.contains("Origin"));
     RUVIA_CHECK(
-        vary.find("Access-Control-Request-Method") != std::string_view::npos);
+        vary.contains("Access-Control-Request-Method"));
     RUVIA_CHECK(
-        vary.find("Access-Control-Request-Headers") != std::string_view::npos);
+        vary.contains("Access-Control-Request-Headers"));
     RUVIA_CHECK(!response.header("Access-Control-Allow-Methods").has_value());
 }
 
@@ -291,8 +291,8 @@ RUVIA_TEST(cors_preflight_reflects_methods_and_requested_headers) {
                    std::string_view("GET, POST, OPTIONS"));
     RUVIA_CHECK_EQ(response.header("Access-Control-Allow-Headers").value_or(""), std::string_view("X-Custom"));
     RUVIA_CHECK_EQ(response.header("Access-Control-Max-Age").value_or(""), std::string_view("600"));
-    RUVIA_CHECK(response.header("Vary").value_or("").find("Access-Control-Request-Method") != std::string_view::npos);
-    RUVIA_CHECK(response.header("Vary").value_or("").find("Access-Control-Request-Headers") != std::string_view::npos);
+    RUVIA_CHECK(response.header("Vary").value_or("").contains("Access-Control-Request-Method"));
+    RUVIA_CHECK(response.header("Vary").value_or("").contains("Access-Control-Request-Headers"));
 }
 
 RUVIA_TEST(cors_preflight_reflects_every_request_header_field_line) {

@@ -26,7 +26,7 @@ public:
         WebSocketServerNegotiation&&) = delete;
 
     [[nodiscard]] std::string_view subprotocol() const & noexcept {
-        return std::string_view(subprotocol_.data(), subprotocol_.size());
+        return subprotocol_;
     }
     std::string_view subprotocol() const && = delete;
 

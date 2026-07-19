@@ -2,7 +2,7 @@
 
 #include <cstddef>
 #include <cstdint>
-#include <limits>
+#include <utility>
 
 #include "ruvia/http/detail/http2/Http2LocalSettings.h"
 
@@ -20,8 +20,7 @@ public:
 
     [[nodiscard]] bool addSendWindow(std::int64_t delta) noexcept {
         const auto updated = static_cast<std::int64_t>(sendWindow_) + delta;
-        if (updated > std::numeric_limits<std::int32_t>::max() ||
-            updated < std::numeric_limits<std::int32_t>::min()) {
+        if (!std::in_range<std::int32_t>(updated)) {
             return false;
         }
         sendWindow_ = static_cast<std::int32_t>(updated);

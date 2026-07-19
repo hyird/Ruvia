@@ -21,7 +21,7 @@ namespace {
 
 [[nodiscard]] std::span<const std::pmr::string> redisArgSpan(
     const std::pmr::vector<std::pmr::string>& args) noexcept {
-    return std::span<const std::pmr::string>(args.data(), args.size());
+    return args;
 }
 
 }  // namespace
@@ -93,13 +93,13 @@ Task<std::pmr::vector<RedisValue>> RedisPool::executePipelineImpl(
         connection.writeBuffer.clear();
         std::size_t serializedBytes = 0;
         for (const auto& command : commands) {
-            const auto args = std::span<const std::pmr::string>(command.args.data(), command.args.size());
+            const std::span<const std::pmr::string> args = command.args;
             serializedBytes += respCommandSerializedSize(
                 args);
         }
         connection.writeBuffer.reserve(serializedBytes);
         for (const auto& command : commands) {
-            const auto args = std::span<const std::pmr::string>(command.args.data(), command.args.size());
+            const std::span<const std::pmr::string> args = command.args;
             appendRespCommand(
                 connection.writeBuffer,
                 args);

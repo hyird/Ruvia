@@ -97,8 +97,7 @@ Http2Connection::takeDrainedDataStreams() & noexcept {
     // valid until the next call (double buffer, no allocation churn).
     takenDrainedDataStreams_.swap(drainedDataStreams_);
     drainedDataStreams_.clear();
-    return std::span<const std::uint32_t>(
-        takenDrainedDataStreams_.data(), takenDrainedDataStreams_.size());
+    return takenDrainedDataStreams_;
 }
 
 // =============================================================================
@@ -240,7 +239,7 @@ void Http2Connection::markSendWindowOpened() {
             continue;
         }
         pending.offset = sendDataUpToWindow(
-            *stream, std::string_view(pending.bytes.data(), pending.bytes.size()),
+            *stream, std::string_view(pending.bytes),
             pending.offset, pending.endStream);
         if (pending.offset >= pending.bytes.size()) {
             // The body fully drained. If a trailer block was queued behind it, emit it
@@ -248,7 +247,7 @@ void Http2Connection::markSendWindowOpened() {
             if (!pending.trailerBlock.empty() && !stream->isAborted()) {
                 appendResponseHeaderFrames(
                     *stream,
-                    std::string_view(pending.trailerBlock.data(), pending.trailerBlock.size()),
+                    std::string_view(pending.trailerBlock),
                     Http2EndStream::kEndStream);
             }
             if (http2EndsStream(pending.endStream) || !pending.trailerBlock.empty()) {
@@ -336,7 +335,7 @@ bool Http2Connection::processWindowUpdate(const Http2FrameHeader& header, std::s
 }
 
 bool Http2Connection::isPinned(std::uint32_t streamId) const noexcept {
-    return std::ranges::find(pinnedStreams_, streamId) != pinnedStreams_.end();
+    return std::ranges::contains(pinnedStreams_, streamId);
 }
 
 void Http2Connection::pinStream(std::uint32_t streamId) {
@@ -631,10 +630,8 @@ bool Http2Connection::processGoaway(
                 "GOAWAY excludes a started response");
             return false;
         }
-        std::sort(
-            unprocessedStreamIds.begin(),
-            unprocessedStreamIds.begin() +
-                static_cast<std::ptrdiff_t>(unprocessedCount));
+        std::ranges::sort(
+            std::span(unprocessedStreamIds).first(unprocessedCount));
     }
 
     peerGoaway_ = goaway;
@@ -763,12 +760,8 @@ void Http2Connection::releaseReceivedData(std::uint32_t streamId) {
 }
 
 bool Http2Connection::hasQueuedData(std::uint32_t streamId) const noexcept {
-    for (const auto& pending : pendingSends_) {
-        if (pending.streamId == streamId) {
-            return true;
-        }
-    }
-    return false;
+    return std::ranges::contains(
+        pendingSends_, streamId, &Http2PendingSend::streamId);
 }
 
 void Http2Connection::queueConsumedDataCredit(
@@ -1200,7 +1193,7 @@ Http2FeedResult Http2Connection::feed(std::string_view in) {
         prefacePhase_ = PrefacePhase::kAwaitingPeerSettings;
     }
 
-    if (!consumeFrames(std::string_view(input_.data(), input_.size()), inputOffset_)) {
+    if (!consumeFrames(std::string_view(input_), inputOffset_)) {
         return Http2FeedResult::kProtocolFailure;
     }
     // NOTE: the consumed prefix is reclaimed at the START of the next feed (see above),

@@ -150,7 +150,7 @@ WsFrameSubmitStatus WsConnection::submitFrame(
     if (dataFrame && deflate_.has_value()) {
         outboundDeflated_.clear();
         if (deflate_->compress(payload, outboundDeflated_) && outboundDeflated_.size() < payload.size()) {
-            payload = std::string_view(outboundDeflated_.data(), outboundDeflated_.size());
+            payload = outboundDeflated_;
             rsv1 = true;
         }
     }
@@ -282,8 +282,7 @@ std::optional<WsEvent> WsConnection::poll() & {
             return protocolFailureEvent(
                 WebSocketProtocolFailure::kProtocolError);
         }
-        const auto view = std::string_view(
-            inboundInflated_.data(), inboundInflated_.size());
+        const std::string_view view = inboundInflated_;
         if (message.opcode() == WebSocketOpcode::kText && !isValidUtf8(view)) {
             return protocolFailureEvent(
                 WebSocketProtocolFailure::kInvalidPayloadData);

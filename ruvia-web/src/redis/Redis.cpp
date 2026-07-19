@@ -24,7 +24,7 @@ RedisRegistry::RedisRegistry(
         if (std::ranges::any_of(
                 pools_,
                 [&definition](const Entry& entry) {
-                    return std::string_view(entry.alias.data(), entry.alias.size()) ==
+                    return std::string_view(entry.alias) ==
                         std::string_view(definition.alias);
                 })) {
             throw std::invalid_argument("duplicate redis alias");
@@ -33,7 +33,7 @@ RedisRegistry::RedisRegistry(
         pools_.push_back(Entry{
             std::pmr::string(definition.alias, resource_),
             std::move(pool)});
-        if (std::string_view(pools_.back().alias.data(), pools_.back().alias.size()) == kDefaultRedisAlias) {
+        if (std::string_view(pools_.back().alias) == kDefaultRedisAlias) {
             defaultPoolIndex_ = pools_.size() - 1;
         }
     }
@@ -78,7 +78,7 @@ RedisHandle RedisRegistry::get(
     std::pmr::memory_resource* resource,
     ScopedOperationScope& operationScope) const {
     for (const auto& entry : pools_) {
-        if (std::string_view(entry.alias.data(), entry.alias.size()) == alias) {
+        if (std::string_view(entry.alias) == alias) {
             return RedisHandle(*entry.pool, resource, operationScope);
         }
     }

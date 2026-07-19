@@ -265,8 +265,7 @@ RUVIA_TEST(http1_client_request_content_distinguishes_absent_from_explicit_empty
             absentPrepared->contentPlan().withoutContent() != nullptr);
         RUVIA_CHECK(absentPrepared->contentPlan().immediate() == nullptr);
         RUVIA_CHECK(absentPrepared->contentPlan().continueGated() == nullptr);
-        RUVIA_CHECK(absentPrepared->head().find("Content-Length") ==
-                    std::string_view::npos);
+        RUVIA_CHECK(!absentPrepared->head().contains("Content-Length"));
     }
 
     HttpClientRequest empty;
@@ -288,8 +287,7 @@ RUVIA_TEST(http1_client_request_content_distinguishes_absent_from_explicit_empty
         if (immediate != nullptr) {
             RUVIA_CHECK(immediate->bytes().empty());
         }
-        RUVIA_CHECK(emptyPrepared->head().find("Content-Length: 0\r\n") !=
-                    std::string_view::npos);
+        RUVIA_CHECK(emptyPrepared->head().contains("Content-Length: 0\r\n"));
     }
 }
 

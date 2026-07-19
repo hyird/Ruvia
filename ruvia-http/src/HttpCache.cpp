@@ -1,5 +1,6 @@
 #include "ruvia/http/HttpCache.h"
 
+#include <algorithm>
 #include <limits>
 
 #include "ruvia/http/detail/HeaderTokenUtils.h"       // httpTrimOws, httpAsciiEqualsIgnoreCase
@@ -57,12 +58,9 @@ namespace {
         return false;
     }
     if (value.front() != '"') {
-        for (const auto ch : value) {
-            if (!detail::isHttpTokenChar(static_cast<unsigned char>(ch))) {
-                return false;
-            }
-        }
-        return true;
+        return std::ranges::all_of(value, [](char ch) noexcept {
+            return detail::isHttpTokenChar(static_cast<unsigned char>(ch));
+        });
     }
     if (value.size() < 2 || value.back() != '"') {
         return false;

@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <utility>
 
 #include "ruvia/http/detail/http2/Http2LocalSettings.h"
 
@@ -25,9 +26,7 @@ public:
     }
 
     [[nodiscard]] std::uint32_t take() noexcept {
-        const auto result = pending_;
-        pending_ = 0;
-        return result;
+        return std::exchange(pending_, 0);
     }
 
 private:

@@ -501,7 +501,7 @@ RUVIA_TEST(static_file_declares_vary_accept_encoding_but_context_file_does_not) 
     // identity body carries no Content-Encoding.
     const auto served = context.staticFile(root, "app.js", "text/javascript");
     RUVIA_CHECK_EQ(served.status(), ruvia::http_status::kOk);
-    RUVIA_CHECK(served.header("Vary").value_or("").find("Accept-Encoding") != std::string_view::npos);
+    RUVIA_CHECK(served.header("Vary").value_or("").contains("Accept-Encoding"));
     RUVIA_CHECK(!served.header("Content-Encoding").has_value());
 
     // Context::file serves a single path with no encoding negotiation, so it must
@@ -1143,7 +1143,7 @@ RUVIA_TEST(static_file_selects_precompressed_representation_atomically) {
     const auto gz = serve("gzip");
     RUVIA_CHECK_EQ(gz.contentEncoding, std::string("gzip"));
     RUVIA_CHECK_EQ(gz.size, std::uint64_t{20});
-    RUVIA_CHECK(gz.vary.find("Accept-Encoding") != std::string::npos);
+    RUVIA_CHECK(gz.vary.contains("Accept-Encoding"));
 
     const auto br = serve("br");
     RUVIA_CHECK_EQ(br.contentEncoding, std::string("br"));

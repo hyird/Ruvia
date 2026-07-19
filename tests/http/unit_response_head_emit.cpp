@@ -228,16 +228,14 @@ RUVIA_TEST(http1_buffered_response_plan_owns_request_version_and_length) {
     RUVIA_CHECK(http10Version == ruvia::HttpProtocolVersion::kHttp10);
     RUVIA_CHECK(http10Head.starts_with("HTTP/1.0 200 OK\r\n"));
     RUVIA_CHECK(
-        http10Head.find("Content-Length: 5\r\n") != std::string::npos);
-    RUVIA_CHECK(
-        http10Head.find("Connection: keep-alive\r\n") !=
-        std::string::npos);
+        http10Head.contains("Content-Length: 5\r\n"));
+    RUVIA_CHECK(http10Head.contains("Connection: keep-alive\r\n"));
 
     const auto [http11Head, http11Version] = emitFor(
         "GET / HTTP/1.1\r\nHost: x\r\n\r\n");
     RUVIA_CHECK(http11Version == ruvia::HttpProtocolVersion::kHttp11);
     RUVIA_CHECK(http11Head.starts_with("HTTP/1.1 200 OK\r\n"));
-    RUVIA_CHECK(http11Head.find("Connection:") == std::string::npos);
+    RUVIA_CHECK(!http11Head.contains("Connection:"));
 }
 
 RUVIA_TEST(http1_response_head_rejects_status_plan_mismatch) {
@@ -303,9 +301,9 @@ RUVIA_TEST(http1_protocol_finalizer_returns_the_authoritative_reuse_verdict) {
         http10UpgradePlan.disposition() == Http1ConnectionDisposition::kReuse);
     const auto http10UpgradeHead = emitBufferedHead(http10Upgrade);
     RUVIA_CHECK(
-        http10UpgradeHead.find("Connection: upgrade\r\n") != std::string::npos);
+        http10UpgradeHead.contains("Connection: upgrade\r\n"));
     RUVIA_CHECK(
-        http10UpgradeHead.find("Connection: keep-alive\r\n") != std::string::npos);
+        http10UpgradeHead.contains("Connection: keep-alive\r\n"));
 
     HttpResponse applicationClose(std::pmr::new_delete_resource());
     applicationClose.header("Connection", "upgrade");
@@ -567,10 +565,10 @@ RUVIA_TEST(response_head_emits_well_formed_normal) {
     const auto head = emitBufferedHead(response);
 
     RUVIA_CHECK(head.starts_with("HTTP/1.1 200 OK\r\n"));
-    RUVIA_CHECK(head.find("X-Foo: bar\r\n") != std::string::npos);
-    RUVIA_CHECK(head.find("Server:") == std::string::npos);                 // product policy is explicit
-    RUVIA_CHECK(head.find("Date: ") != std::string::npos);                   // auto-injected
-    RUVIA_CHECK(head.find("Content-Length: 5\r\n") != std::string::npos);    // auto, body size
+    RUVIA_CHECK(head.contains("X-Foo: bar\r\n"));
+    RUVIA_CHECK(!head.contains("Server:"));                 // product policy is explicit
+    RUVIA_CHECK(head.contains("Date: "));                   // auto-injected
+    RUVIA_CHECK(head.contains("Content-Length: 5\r\n"));    // auto, body size
     RUVIA_CHECK(head.ends_with("\r\n\r\n"));                                  // blank-line terminator
 }
 
@@ -582,7 +580,7 @@ RUVIA_TEST(response_head_extension_status_uses_an_empty_reason_phrase) {
     // RFC 9112 section 4 keeps the SP before the optional reason-phrase.
     // An unregistered status must not be mislabeled as a generic client error.
     RUVIA_CHECK(head.starts_with("HTTP/1.1 299 \r\n"));
-    RUVIA_CHECK(head.find("Bad Request") == std::string::npos);
+    RUVIA_CHECK(!head.contains("Bad Request"));
 }
 
 RUVIA_TEST(response_head_preserves_explicit_server_and_does_not_duplicate_date) {
@@ -592,7 +590,7 @@ RUVIA_TEST(response_head_preserves_explicit_server_and_does_not_duplicate_date) 
     response.body("x");
     const auto head = emitBufferedHead(response);
 
-    RUVIA_CHECK(head.find("Server: custom\r\n") != std::string::npos);
+    RUVIA_CHECK(head.contains("Server: custom\r\n"));
     RUVIA_CHECK_EQ(countOccurrences(head, "Server: "), std::size_t{1});
     RUVIA_CHECK_EQ(countOccurrences(head, "Date: "), std::size_t{1});   // exactly one Date
 }
@@ -605,9 +603,9 @@ RUVIA_TEST(response_head_suppresses_auto_content_length) {
     response.header("Transfer-Encoding", "gzip, chunked");
     response.header("Content-Length", "999");
     const auto head = emitChunkedStreamHead(response);
-    RUVIA_CHECK(head.find("Content-Length:") == std::string::npos);
-    RUVIA_CHECK(head.find("Transfer-Encoding: chunked\r\n") != std::string::npos);
-    RUVIA_CHECK(head.find("gzip") == std::string::npos);
+    RUVIA_CHECK(!head.contains("Content-Length:"));
+    RUVIA_CHECK(head.contains("Transfer-Encoding: chunked\r\n"));
+    RUVIA_CHECK(!head.contains("gzip"));
     RUVIA_CHECK_EQ(
         countOccurrences(head, "Transfer-Encoding: "),
         std::size_t{1});
@@ -620,25 +618,23 @@ RUVIA_TEST(response_head_close_delimited_stream_rejects_declared_framing) {
     response.header("Content-Length", "8");
 
     const auto head = emitCloseDelimitedStreamHead(response);
-    RUVIA_CHECK(head.find("Transfer-Encoding:") == std::string::npos);
-    RUVIA_CHECK(head.find("Content-Length:") == std::string::npos);
+    RUVIA_CHECK(!head.contains("Transfer-Encoding:"));
+    RUVIA_CHECK(!head.contains("Content-Length:"));
 
     // A HEAD response has no payload and may retain representation length
     // metadata, but HTTP/1.0 still cannot carry Transfer-Encoding.
     const auto metadataHead = emitCloseDelimitedStreamHead(
         response, HttpKnownMethod::kHead);
-    RUVIA_CHECK(metadataHead.find("Transfer-Encoding:") == std::string::npos);
-    RUVIA_CHECK(metadataHead.find("Content-Length: 8\r\n") != std::string::npos);
+    RUVIA_CHECK(!metadataHead.contains("Transfer-Encoding:"));
+    RUVIA_CHECK(metadataHead.contains("Content-Length: 8\r\n"));
 
     HttpResponse notModified(std::pmr::new_delete_resource());
     notModified.status(ruvia::http_status::kNotModified);
     notModified.header("Transfer-Encoding", "chunked");
     notModified.header("Content-Length", "123");
     const auto notModifiedHead = emitCloseDelimitedStreamHead(notModified);
-    RUVIA_CHECK(notModifiedHead.find("Transfer-Encoding:") == std::string::npos);
-    RUVIA_CHECK(
-        notModifiedHead.find("Content-Length: 123\r\n") !=
-        std::string::npos);
+    RUVIA_CHECK(!notModifiedHead.contains("Transfer-Encoding:"));
+    RUVIA_CHECK(notModifiedHead.contains("Content-Length: 123\r\n"));
 }
 
 RUVIA_TEST(response_head_validates_explicit_content_length_metadata) {
@@ -663,9 +659,7 @@ RUVIA_TEST(response_head_validates_explicit_content_length_metadata) {
     RUVIA_CHECK_EQ(
         countOccurrences(canonical, "Content-Length: "),
         std::size_t{1});
-    RUVIA_CHECK(
-        canonical.find("Content-Length: 7\r\n") !=
-        std::string::npos);
+    RUVIA_CHECK(canonical.contains("Content-Length: 7\r\n"));
 
     HttpResponse headMetadata(std::pmr::new_delete_resource());
     headMetadata.header("Content-Length", "bad");
@@ -680,7 +674,7 @@ RUVIA_TEST(response_head_bodyless_status_omits_auto_content_length) {
     response.status(ruvia::http_status::kNoContent);
     const auto head = emitBufferedHead(response);
     RUVIA_CHECK(head.starts_with("HTTP/1.1 204 No Content\r\n"));
-    RUVIA_CHECK(head.find("Content-Length:") == std::string::npos);
+    RUVIA_CHECK(!head.contains("Content-Length:"));
     RUVIA_CHECK(head.ends_with("\r\n\r\n"));
 }
 
@@ -699,9 +693,9 @@ RUVIA_TEST(response_head_reset_content_canonicalizes_zero_length) {
             : emitBufferedHead(response);
         RUVIA_CHECK(head.starts_with("HTTP/1.1 205 Reset Content\r\n"));
         RUVIA_CHECK_EQ(countOccurrences(head, "Content-Length: "), std::size_t{1});
-        RUVIA_CHECK(head.find("Content-Length: 0\r\n") != std::string::npos);
-        RUVIA_CHECK(head.find("Content-Length: 16\r\n") == std::string::npos);
-        RUVIA_CHECK(head.find("Transfer-Encoding:") == std::string::npos);
+        RUVIA_CHECK(head.contains("Content-Length: 0\r\n"));
+        RUVIA_CHECK(!head.contains("Content-Length: 16\r\n"));
+        RUVIA_CHECK(!head.contains("Transfer-Encoding:"));
         RUVIA_CHECK(head.ends_with("\r\n\r\n"));
     }
 }
@@ -722,9 +716,9 @@ RUVIA_TEST(response_head_heap_spill_preserves_full_output) {
 
     RUVIA_CHECK(head.starts_with("HTTP/1.1 200 OK\r\n"));
     for (int i = 0; i < 10; ++i) {
-        RUVIA_CHECK(head.find("X-Pad-" + std::to_string(i) + ": " + big + "\r\n") != std::string::npos);
+        RUVIA_CHECK(head.contains("X-Pad-" + std::to_string(i) + ": " + big + "\r\n"));
     }
-    RUVIA_CHECK(head.find("Content-Length: 4\r\n") != std::string::npos);
+    RUVIA_CHECK(head.contains("Content-Length: 4\r\n"));
     RUVIA_CHECK(head.ends_with("\r\n\r\n"));
 }
 

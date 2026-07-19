@@ -30,12 +30,9 @@ inline constexpr std::string_view kDefaultStaticFileTypes[] = {
 };
 
 [[nodiscard]] bool validHeaderValue(std::string_view value) noexcept {
-    for (const auto c : value) {
-        if (c == '\r' || c == '\n' || c == '\0') {
-            return false;
-        }
-    }
-    return true;
+    return std::ranges::none_of(value, [](char c) noexcept {
+        return c == '\r' || c == '\n' || c == '\0';
+    });
 }
 
 void validateOptions(const StaticRootOptions& options) {
@@ -48,8 +45,8 @@ void validateOptions(const StaticRootOptions& options) {
             throw std::invalid_argument("invalid static file mime type");
         }
     }
-    if (options.indexFile.find('/') != std::pmr::string::npos ||
-        options.indexFile.find('\\') != std::pmr::string::npos ||
+    if (options.indexFile.contains('/') ||
+        options.indexFile.contains('\\') ||
         options.indexFile == "." ||
         options.indexFile == "..") {
         throw std::invalid_argument("invalid static file index name");
@@ -117,12 +114,12 @@ bool fileTypeAllowed(
         return nullptr;
     }
 
-    const auto iter = std::lower_bound(
-        mimeTypes.begin(),
-        mimeTypes.end(),
+    const auto iter = std::ranges::lower_bound(
+        mimeTypes,
         extension,
-        [](const StaticMimeType& mime, std::string_view value) {
-            return std::string_view(mime.extension) < value;
+        std::ranges::less{},
+        [](const StaticMimeType& mime) noexcept {
+            return std::string_view(mime.extension);
         });
     if (iter == mimeTypes.end() || std::string_view(iter->extension) != extension) {
         return nullptr;
@@ -163,12 +160,12 @@ std::pmr::string contentTypeFor(
         return nullptr;
     }
 
-    const auto iter = std::lower_bound(
-        entries.begin(),
-        entries.end(),
+    const auto iter = std::ranges::lower_bound(
+        entries,
         relativePath,
-        [](const detail::StaticRootEntry& entry, std::string_view value) {
-            return std::string_view(entry.relativePath) < value;
+        std::ranges::less{},
+        [](const detail::StaticRootEntry& entry) noexcept {
+            return std::string_view(entry.relativePath);
         });
     if (iter == entries.end() || std::string_view(iter->relativePath) != relativePath) {
         return nullptr;
@@ -180,12 +177,12 @@ std::pmr::string contentTypeFor(
     const std::pmr::vector<std::pmr::string>& directories,
     std::string_view relativePath) noexcept {
     if (directories.size() <= kStaticRootLinearLookupLimit) {
-        for (const auto& directory : directories) {
-            if (directory == relativePath) {
-                return true;
-            }
-        }
-        return false;
+        return std::ranges::contains(
+            directories,
+            relativePath,
+            [](const auto& directory) noexcept {
+                return std::string_view(directory);
+            });
     }
 
     return std::ranges::binary_search(
@@ -220,8 +217,7 @@ StaticFileTypePolicy StaticFileTypePolicy::only(
     StaticFileTypePolicy result(Kind::kOnly);
     result.extensions_.reserve(extensions.size());
     for (const auto extension : extensions) {
-        if (extension.empty() || extension.find('/') != std::string_view::npos ||
-            extension.find('\\') != std::string_view::npos) {
+        if (extension.empty() || extension.contains('/') || extension.contains('\\')) {
             throw std::invalid_argument("invalid static file type");
         }
         result.extensions_.emplace_back(extension);

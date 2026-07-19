@@ -36,7 +36,7 @@ enum class WebSocketProtocolFailure : std::uint16_t {
 
 [[nodiscard]] constexpr std::uint16_t webSocketProtocolFailureCloseCode(
     WebSocketProtocolFailure failure) noexcept {
-    return static_cast<std::uint16_t>(failure);
+    return std::to_underlying(failure);
 }
 
 enum class WebSocketFrameKind : std::uint8_t {
@@ -243,8 +243,7 @@ inline void compactWebSocketReadBuffer(
         return;
     }
 
-    const auto consumed = pendingCompactUntil;
-    pendingCompactUntil = 0;
+    const auto consumed = std::exchange(pendingCompactUntil, 0);
     if (consumed >= buffer.size()) {
         buffer.clear();
         offset = 0;
@@ -688,7 +687,7 @@ public:
             state_.template emplace<WebSocketInboundIdle>();
             const auto message = WebSocketMessageAccess::make(
                 opcode,
-                std::string_view(message_.data(), message_.size()));
+                std::string_view(message_));
             if (encoding == WebSocketInboundContentEncoding::kPerMessageDeflate) {
                 return WebSocketInboundResult::makeMessage(
                     message,

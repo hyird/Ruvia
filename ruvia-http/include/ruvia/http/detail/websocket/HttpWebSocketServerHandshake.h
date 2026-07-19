@@ -62,10 +62,8 @@ public:
 
     template <typename Visitor>
     void forEachResponsePart(Visitor&& visitor) const {
-        visitor(std::string_view(
-            kHttpWebSocketSwitchingProtocolsPrefix.data(),
-            kHttpWebSocketSwitchingProtocolsPrefix.size()));
-        visitor(std::string_view(accept_.data(), accept_.size()));
+        visitor(std::string_view(kHttpWebSocketSwitchingProtocolsPrefix));
+        visitor(std::string_view(accept_));
         visitor(kHttpCrlf);
         if (!negotiation_.subprotocol().empty()) {
             visitor(kHttpWebSocketSubprotocolHeaderPrefix);

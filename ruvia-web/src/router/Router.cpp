@@ -51,12 +51,9 @@ void validateUniqueValidatedModelTypes(
 
 [[nodiscard]] bool usesRouteRateLimit(
     std::span<const ControllerMiddlewareDescriptor> descriptors) noexcept {
-    for (const auto& descriptor : descriptors) {
-        if (descriptor.usesRouteRateLimit()) {
-            return true;
-        }
-    }
-    return false;
+    return std::ranges::any_of(descriptors, [](const auto& descriptor) noexcept {
+        return descriptor.usesRouteRateLimit();
+    });
 }
 
 }  // namespace
@@ -157,9 +154,8 @@ void replacePrefixHandlers(
     }
     // Longest prefix first: selection is a first-match scan. Equal lengths
     // cannot nest, so their relative order is irrelevant; keep it stable.
-    std::stable_sort(
-        normalized.begin(),
-        normalized.end(),
+    std::ranges::stable_sort(
+        normalized,
         [](const Stored& left, const Stored& right) noexcept {
             return left.prefix.size() > right.prefix.size();
         });
@@ -426,10 +422,9 @@ void detail::RouterImpl::setGlobalMiddlewares(
         // requires a fresh router.
         const bool unchanged =
             descriptors.size() == globalMiddlewareDescriptors_.size() &&
-            std::equal(
-                descriptors.begin(),
-                descriptors.end(),
-                globalMiddlewareDescriptors_.begin(),
+            std::ranges::equal(
+                descriptors,
+                globalMiddlewareDescriptors_,
                 [](const auto& left, const auto& right) noexcept {
                     return left.invoke() == right.invoke() &&
                         left.create() == right.create() &&

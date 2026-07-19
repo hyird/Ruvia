@@ -110,7 +110,7 @@ detail::DbRegistry::DbRegistry(
         if (std::ranges::any_of(
                 clients_,
                 [&definition](const Entry& entry) {
-                    return std::string_view(entry.alias.data(), entry.alias.size()) ==
+                    return std::string_view(entry.alias) ==
                         std::string_view(definition.alias);
                 })) {
             throw std::invalid_argument("duplicate database alias");
@@ -140,7 +140,7 @@ detail::DbRegistry::DbRegistry(
         clients_.push_back(Entry{
             std::pmr::string(definition.alias, resource_),
             std::move(owner)});
-        if (std::string_view(clients_.back().alias.data(), clients_.back().alias.size()) ==
+        if (std::string_view(clients_.back().alias) ==
             kDefaultDbAlias) {
             defaultClientIndex_ = clients_.size() - 1;
         }
@@ -196,7 +196,7 @@ DbHandle detail::DbRegistry::get(
     std::pmr::memory_resource* resource,
     ScopedOperationScope& operationScope) const {
     for (const auto& entry : clients_) {
-        if (std::string_view(entry.alias.data(), entry.alias.size()) == alias) {
+        if (std::string_view(entry.alias) == alias) {
             return DbHandle(poolRef(entry.client), resource, operationScope);
         }
     }

@@ -7,6 +7,7 @@
 #include "ruvia/http/detail/parser/HttpParserSyntax.h"
 #include "ruvia/http/HttpHeader.h"
 
+#include <algorithm>
 #include <exception>
 #include <span>
 #include <string_view>
@@ -21,12 +22,9 @@ namespace ruvia::detail {
     if (name.empty()) {
         return false;
     }
-    for (const char ch : name) {
-        if (!isHttpTokenChar(static_cast<unsigned char>(ch))) {
-            return false;
-        }
-    }
-    return true;
+    return std::ranges::all_of(name, [](char ch) noexcept {
+        return isHttpTokenChar(static_cast<unsigned char>(ch));
+    });
 }
 
 // A trailer value must be a valid HTTP field value (RFC 9110 §5.5): field-vchar
@@ -36,12 +34,9 @@ namespace ruvia::detail {
 // field-value. Enforce the shared field-value rule so this matches the request
 // trailer path and every other header-value check (isHttpFieldValueChar).
 [[nodiscard]] inline bool isValidResponseTrailerValue(std::string_view value) noexcept {
-    for (const char ch : value) {
-        if (!isHttpFieldValueChar(static_cast<unsigned char>(ch))) {
-            return false;
-        }
-    }
-    return true;
+    return std::ranges::all_of(value, [](char ch) noexcept {
+        return isHttpFieldValueChar(static_cast<unsigned char>(ch));
+    });
 }
 
 // Fields that must never appear in a trailer section because they govern message

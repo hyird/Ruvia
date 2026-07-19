@@ -112,7 +112,7 @@ Task<std::string_view> StreamBodyReader<Stream>::readAll(std::pmr::string& body)
             knownLength->contentLength());
     }
     if (bodyPlan_.withoutBody() != nullptr) {
-        co_return std::string_view(body.data(), body.size());
+        co_return std::string_view(body);
     }
 
     co_await ensureContinue();
@@ -130,7 +130,7 @@ Task<std::string_view> StreamBodyReader<Stream>::readAll(std::pmr::string& body)
         requireCompleteTransferCoding(*transferDecoder_);
     }
     markFinished();
-    co_return std::string_view(body.data(), body.size());
+    co_return std::string_view(body);
 }
 
 template <typename Stream>

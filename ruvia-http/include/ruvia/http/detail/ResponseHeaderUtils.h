@@ -1,7 +1,9 @@
 #pragma once
 
+#include <algorithm>
 #include <cstddef>
 #include <cstdint>
+#include <span>
 #include <string>
 #include <string_view>
 
@@ -26,12 +28,11 @@ inline bool setKnownStaticVaryToken(HttpResponse& response, std::string_view tok
 inline bool varyTokenRepeatedInBatch(
     const std::string_view* tokens,
     std::size_t current) noexcept {
-    for (std::size_t i = 0; i < current; ++i) {
-        if (httpAsciiEqualsIgnoreCase(tokens[i], tokens[current])) {
-            return true;
-        }
-    }
-    return false;
+    return std::ranges::any_of(
+        std::span(tokens, current),
+        [candidate = tokens[current]](std::string_view token) noexcept {
+            return httpAsciiEqualsIgnoreCase(token, candidate);
+        });
 }
 
 [[nodiscard]] inline bool responseVaryHasToken(

@@ -119,7 +119,7 @@ int main() {
     asio::write(sock, asio::buffer(std::string_view(
         "HEAD /asset.txt HTTP/1.1\r\nHost: localhost\r\n\r\n")), ec);
     const std::string headHead = readHead(sock, buffer, ec);
-    if (headHead.rfind("HTTP/1.1 200", 0) != 0) {
+    if (!headHead.starts_with("HTTP/1.1 200")) {
         fail(1, "HEAD of a document-root file was not 200");
     } else if (contentLength(headHead) != kFileBody.size()) {
         fail(2, "HEAD Content-Length did not describe the full representation");
@@ -134,7 +134,7 @@ int main() {
         asio::write(sock, asio::buffer(std::string_view(
             "GET /asset.txt HTTP/1.1\r\nHost: localhost\r\n\r\n")), ec);
         const std::string getHead = readHead(sock, buffer, ec);
-        if (getHead.rfind("HTTP/1.1 200", 0) != 0) {
+        if (!getHead.starts_with("HTTP/1.1 200")) {
             fail(4, "GET after HEAD did not parse as a clean 200 response");
         } else {
             const std::size_t length = contentLength(getHead);

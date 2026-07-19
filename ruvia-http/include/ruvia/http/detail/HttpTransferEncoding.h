@@ -4,6 +4,7 @@
 #include "ruvia/http/detail/HttpTransferCoding.h"
 #include "ruvia/http/detail/parser/HttpParserSyntax.h"
 
+#include <algorithm>
 #include <cstdint>
 #include <optional>
 #include <string_view>
@@ -17,12 +18,9 @@ namespace ruvia::detail {
         return false;
     }
     if (value.front() != '"') {
-        for (const auto byte : value) {
-            if (!isHttpTokenChar(static_cast<unsigned char>(byte))) {
-                return false;
-            }
-        }
-        return true;
+        return std::ranges::all_of(value, [](char byte) noexcept {
+            return isHttpTokenChar(static_cast<unsigned char>(byte));
+        });
     }
     if (value.size() < 2 || value.back() != '"') {
         return false;

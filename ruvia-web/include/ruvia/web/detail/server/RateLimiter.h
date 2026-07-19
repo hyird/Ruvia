@@ -9,6 +9,7 @@
 #include <limits>
 #include <memory_resource>
 #include <optional>
+#include <span>
 #include <stdexcept>
 #include <string_view>
 #include <type_traits>
@@ -222,7 +223,9 @@ private:
         return slot.keyHash == hash &&
             slot.scope == scope &&
             slot.keySize == key.size() &&
-            std::equal(key.begin(), key.end(), slot.key.begin());
+            std::ranges::equal(
+                key,
+                std::span(slot.key).first(slot.keySize));
     }
 
     [[nodiscard]] static bool expired(

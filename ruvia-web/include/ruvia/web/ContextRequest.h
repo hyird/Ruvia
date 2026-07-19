@@ -119,27 +119,27 @@ public:
         RequestFormField& operator=(RequestFormField&&) = delete;
 
         [[nodiscard]] std::string_view name() const & noexcept {
-            return std::string_view(name_.data(), name_.size());
+            return name_;
         }
         [[nodiscard]] std::string_view name() const && = delete;
 
         [[nodiscard]] std::string_view value() const & noexcept {
-            return std::string_view(value_.data(), value_.size());
+            return value_;
         }
         [[nodiscard]] std::string_view value() const && = delete;
 
         [[nodiscard]] std::string_view filename() const & noexcept {
-            return std::string_view(filename_.data(), filename_.size());
+            return filename_;
         }
         [[nodiscard]] std::string_view filename() const && = delete;
 
         [[nodiscard]] std::string_view contentType() const & noexcept {
-            return std::string_view(contentType_.data(), contentType_.size());
+            return contentType_;
         }
         [[nodiscard]] std::string_view contentType() const && = delete;
 
         [[nodiscard]] std::span<const std::pmr::string> path() const & noexcept {
-            return std::span<const std::pmr::string>(path_.data(), path_.size());
+            return path_;
         }
         [[nodiscard]] std::span<const std::pmr::string> path() const && = delete;
 
@@ -153,10 +153,8 @@ public:
 
         [[nodiscard]] RequestBlob blob() const & noexcept {
             return RequestBlob(
-                std::span<const std::byte>(
-                    reinterpret_cast<const std::byte*>(value_.data()),
-                    value_.size()),
-                std::string_view(contentType_.data(), contentType_.size()));
+                std::as_bytes(std::span(value_)),
+                std::string_view(contentType_));
         }
         [[nodiscard]] RequestBlob blob() const && = delete;
 
@@ -212,8 +210,7 @@ public:
 
             [[nodiscard]] std::span<const RequestFormField* const>
             fields() const & noexcept {
-                return std::span<const RequestFormField* const>(
-                    fields_.data(), fields_.size());
+                return fields_;
             }
             [[nodiscard]] std::span<const RequestFormField* const>
             fields() const && = delete;
@@ -343,7 +340,7 @@ public:
             }
 
             [[nodiscard]] std::span<const Entry> groups() const & noexcept {
-                return std::span<const Entry>(entries_.data(), entries_.size());
+                return entries_;
             }
             [[nodiscard]] std::span<const Entry> groups() const && = delete;
 
@@ -364,11 +361,11 @@ public:
             }
 
             [[nodiscard]] std::string_view path() const noexcept {
-                return std::string_view(dotPath_.data(), dotPath_.size());
+                return dotPath_;
             }
 
             [[nodiscard]] static bool hasNestedName(std::string_view name) noexcept {
-                return name.find('.') != std::string_view::npos;
+                return name.contains('.');
             }
 
             [[nodiscard]] const Entry* findEntry(std::string_view name) const noexcept {
@@ -446,7 +443,7 @@ public:
         }
 
         [[nodiscard]] static bool isPathName(std::string_view name) noexcept {
-            return name.find('.') != std::string_view::npos;
+            return name.contains('.');
         }
 
         [[nodiscard]] static bool consumePath(
@@ -518,9 +515,9 @@ public:
                 return pathName == name;
             }
             return pathName.size() == dotPath.size() + 1 + name.size() &&
-                pathName.substr(0, dotPath.size()) == dotPath &&
+                pathName.starts_with(dotPath) &&
                 pathName[dotPath.size()] == '.' &&
-                pathName.substr(dotPath.size() + 1) == name;
+                pathName.ends_with(name);
         }
 
         [[nodiscard]] std::size_t countAtChild(
@@ -533,10 +530,10 @@ public:
         void rebuildEntries();
 
         [[nodiscard]] static std::string_view entryName(const RequestFormField& field) noexcept {
-            const auto path = field.path();
-            if (!path.empty()) {
-                const auto& name = path.front();
-                return std::string_view(name.data(), name.size());
+                const auto path = field.path();
+                if (!path.empty()) {
+                    const auto& name = path.front();
+                    return name;
             }
             return field.name();
         }

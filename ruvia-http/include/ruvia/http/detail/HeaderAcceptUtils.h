@@ -1,5 +1,6 @@
 #pragma once
 
+#include <algorithm>
 #include <array>
 #include <cstddef>
 #include <cstdint>
@@ -290,12 +291,9 @@ std::string_view httpMediaTypeOnly(Value&&) = delete;
     if (token.empty()) {
         return false;
     }
-    for (const auto ch : token) {
-        if (!isHttpTokenChar(static_cast<unsigned char>(ch))) {
-            return false;
-        }
-    }
-    return true;
+    return std::ranges::all_of(token, [](char ch) noexcept {
+        return isHttpTokenChar(static_cast<unsigned char>(ch));
+    });
 }
 
 struct HttpMediaTypeParts final {

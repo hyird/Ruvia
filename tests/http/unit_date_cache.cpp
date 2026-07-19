@@ -20,8 +20,8 @@ RUVIA_TEST(cached_date_header_is_well_formed) {
     const auto header = cachedDateHeader();
     // "Date: " (6) + IMF-fixdate (29) + CRLF (2) = 37 bytes.
     RUVIA_CHECK_EQ(header.size(), std::size_t{37});
-    RUVIA_CHECK(header.substr(0, 6) == std::string_view("Date: "));
-    RUVIA_CHECK(header.substr(35) == std::string_view("\r\n"));
+    RUVIA_CHECK(header.starts_with("Date: "));
+    RUVIA_CHECK(header.ends_with("\r\n"));
     RUVIA_CHECK_EQ(cachedDateValue().size(), std::size_t{29});
 }
 

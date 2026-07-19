@@ -3,6 +3,7 @@
 #include "ruvia/http/detail/parser/HttpParserSyntax.h"
 #include "ruvia/http/detail/HeaderTokenUtils.h"
 
+#include <algorithm>
 #include <array>
 #include <charconv>
 #include <system_error>
@@ -131,12 +132,7 @@ inline constexpr std::array<bool, 256> kRegNameCharTable = [] {
 }
 
 [[nodiscard]] bool isValidUriPort(std::string_view value) noexcept {
-    for (const auto byte : value) {
-        if (!isDecimalDigit(byte)) {
-            return false;
-        }
-    }
-    return true;
+    return std::ranges::all_of(value, isDecimalDigit);
 }
 
 [[nodiscard]] bool parseIpv6HexGroup(std::string_view literal, std::size_t& offset) noexcept {
@@ -241,12 +237,7 @@ inline constexpr std::array<bool, 256> kRegNameCharTable = [] {
         (group.size() > 1 && group.front() == '0')) {
         return false;
     }
-    for (const auto value : group) {
-        if (!isLowerHexDigit(value)) {
-            return false;
-        }
-    }
-    return true;
+    return std::ranges::all_of(group, isLowerHexDigit);
 }
 
 [[nodiscard]] bool countSerializedOriginIpv6Groups(
@@ -576,7 +567,7 @@ bool isValidHttpHost(std::string_view value) noexcept {
         const auto literal = value.substr(1, value.size() - 2);
         return isValidIpv6Literal(literal) || isValidIpvFuture(literal);
     }
-    return value.find(':') == std::string_view::npos && isValidRegName(value);
+    return !value.contains(':') && isValidRegName(value);
 }
 
 bool isValidHttpSerializedOrigin(std::string_view value) noexcept {
@@ -754,7 +745,7 @@ bool isValidUriAuthority(std::string_view value) noexcept {
         if (delimiter != std::string_view::npos) {
             hasPort = true;
             port = hostAndPort.substr(delimiter + 1);
-            if (port.find(':') != std::string_view::npos) {
+            if (port.contains(':')) {
                 return false;
             }
         }

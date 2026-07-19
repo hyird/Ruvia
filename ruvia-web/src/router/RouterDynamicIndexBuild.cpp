@@ -164,9 +164,8 @@ void detail::RouteTable::insertDynamic(DynamicNode& root, RouteEntry& route) {
 }
 
 void detail::RouteTable::sortDynamicNode(DynamicNode& node) {
-    std::sort(
-        node.staticChildren.begin(),
-        node.staticChildren.end(),
+    std::ranges::sort(
+        node.staticChildren,
         [](const DynamicStaticChild& left, const DynamicStaticChild& right) {
             return std::string_view(left.segment) < std::string_view(right.segment);
         });

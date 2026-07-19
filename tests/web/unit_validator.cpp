@@ -191,8 +191,8 @@ RUVIA_TEST(validation_error_json_escapes_special_characters) {
         RUVIA_CHECK(false);
     } catch (const ruvia::ValidationError& error) {
         const auto json = error.info().detailsJson();
-        RUVIA_CHECK(json.find(R"("field":"f\"x")") != std::string_view::npos);
-        RUVIA_CHECK(json.find(R"("message":"a\"b\\c")") != std::string_view::npos);
+        RUVIA_CHECK(json.contains(R"("field":"f\"x")"));
+        RUVIA_CHECK(json.contains(R"("message":"a\"b\\c")"));
     }
 }
 

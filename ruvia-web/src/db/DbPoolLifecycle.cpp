@@ -68,8 +68,7 @@ void detail::MariaDbPool::scanDeadlines(std::chrono::steady_clock::time_point no
                 slot.waitSocket->cancel();
             }
         } else if (*kind == ConnectionSlot::DeadlineKind::kSleep) {
-            auto handle = slot.deadlineContinuation;
-            slot.deadlineContinuation = {};
+            auto handle = std::exchange(slot.deadlineContinuation, {});
             if (handle) {
                 handle.resume();
             }
@@ -93,8 +92,7 @@ void detail::MariaDbPool::closeSlot(ConnectionSlot& slot) noexcept {
         slot.waitSocket->cancel();
     } else if (kind != nullptr &&
                *kind == ConnectionSlot::DeadlineKind::kSleep) {
-        auto handle = slot.deadlineContinuation;
-        slot.deadlineContinuation = {};
+        auto handle = std::exchange(slot.deadlineContinuation, {});
         if (handle) {
             handle.resume();
         }

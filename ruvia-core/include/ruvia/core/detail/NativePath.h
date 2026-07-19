@@ -13,7 +13,7 @@ using NativePathView = std::basic_string_view<NativePathChar>;
 
 [[nodiscard]] inline NativePathView nativePathView(const std::filesystem::path& path) noexcept {
     const auto& native = path.native();
-    return NativePathView(native.data(), native.size());
+    return NativePathView(native);
 }
 
 inline void assignNativePath(NativePathString& output, const std::filesystem::path& path) {

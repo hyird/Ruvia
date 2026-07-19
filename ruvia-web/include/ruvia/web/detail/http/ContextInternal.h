@@ -4,6 +4,7 @@
 #include "ruvia/web/detail/http/ContextServices.h"
 #include "ruvia/web/detail/router/RouteLimits.h"
 
+#include <algorithm>
 #include <cstddef>
 #include <exception>
 #include <utility>
@@ -183,12 +184,12 @@ struct ContextAccess final {
     [[nodiscard]] static bool hasPendingSetCookie(
         const Context& context,
         std::string_view valuePrefix) noexcept {
-        for (const auto& header : context.responseState_.activeResponse().headers()) {
-            if (header.name() == "Set-Cookie" && header.value().starts_with(valuePrefix)) {
-                return true;
-            }
-        }
-        return false;
+        return std::ranges::any_of(
+            context.responseState_.activeResponse().headers(),
+            [valuePrefix](const auto& header) noexcept {
+                return header.name() == "Set-Cookie" &&
+                    header.value().starts_with(valuePrefix);
+            });
     }
 
 private:

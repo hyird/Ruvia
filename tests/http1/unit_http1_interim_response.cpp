@@ -92,10 +92,8 @@ RUVIA_TEST(http1_interim_response_writer_emits_exact_typed_head) {
                 "Link: </style.css>; rel=preload\r\n"
                 "Content-Type: text/html; charset=utf-8\r\n"
                 "X-Hint: warm\r\n\r\n"));
-        RUVIA_CHECK(
-            preparedHints->head().find("Server:") == std::string_view::npos);
-        RUVIA_CHECK(
-            preparedHints->head().find("Date:") == std::string_view::npos);
+        RUVIA_CHECK(!preparedHints->head().contains("Server:"));
+        RUVIA_CHECK(!preparedHints->head().contains("Date:"));
     }
 }
 
@@ -128,9 +126,7 @@ RUVIA_TEST(http1_interim_response_writer_closes_after_containing_response) {
         RUVIA_CHECK_EQ(
             prepared->connectionDisposition(),
             Http1InterimConnectionDisposition::kCloseAfterInterimResponse);
-        RUVIA_CHECK(
-            prepared->head().find("Upgrade: example/1\r\n") !=
-            std::string_view::npos);
+        RUVIA_CHECK(prepared->head().contains("Upgrade: example/1\r\n"));
     }
 }
 

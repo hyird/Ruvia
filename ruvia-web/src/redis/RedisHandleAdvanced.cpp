@@ -82,7 +82,7 @@ Task<std::optional<RedisKeyValue>> executeRedisBlockingPop(
     std::chrono::seconds timeout,
     std::pmr::memory_resource* resource) {
     auto reply = co_await pool.executeWithTimeout(
-        std::span<const std::pmr::string>(args.data(), args.size()),
+        std::span<const std::pmr::string>(args),
         redisBlockingPopClientTimeout(timeout),
         resource);
     co_return detail::parseRedisBlockingPopReply(reply, resource);

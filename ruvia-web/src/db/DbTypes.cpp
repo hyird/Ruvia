@@ -233,7 +233,7 @@ QueryResult::~QueryResult() {
 }
 
 std::span<const DbRow> QueryResult::rows() const & noexcept {
-    return std::span<const DbRow>(rows_.data(), rows_.size());
+    return rows_;
 }
 
 std::uint64_t QueryResult::affectedRows() const noexcept {
@@ -253,12 +253,12 @@ DbMigrationReport::DbMigrationReport(detail::ResolvedPmrResourceTag, std::pmr::m
 
 std::span<const std::pmr::string>
 DbMigrationReport::applied() const & noexcept {
-    return std::span<const std::pmr::string>(applied_.data(), applied_.size());
+    return applied_;
 }
 
 std::span<const std::pmr::string>
 DbMigrationReport::skipped() const & noexcept {
-    return std::span<const std::pmr::string>(skipped_.data(), skipped_.size());
+    return skipped_;
 }
 
 bool DbMigrationReport::changed() const noexcept {

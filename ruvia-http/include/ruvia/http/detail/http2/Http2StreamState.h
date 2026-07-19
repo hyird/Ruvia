@@ -5,6 +5,7 @@
 #include <memory_resource>
 #include <optional>
 #include <string_view>
+#include <utility>
 
 #include "ruvia/http/HttpKnownMethod.h"
 #include "ruvia/http/detail/http2/Http2LocalContentState.h"
@@ -70,9 +71,7 @@ public:
     }
 
     [[nodiscard]] std::uint32_t takeWindowDebt() noexcept {
-        const auto debt = windowDebt_;
-        windowDebt_ = 0;
-        return debt;
+        return std::exchange(windowDebt_, 0);
     }
 
     [[nodiscard]] Http2ReceiveWindowCredit& receiveWindowCredit() & noexcept {

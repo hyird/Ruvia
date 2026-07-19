@@ -167,7 +167,7 @@ void appendLowerAscii(std::pmr::string& output, std::string_view input) {
 }
 
 [[nodiscard]] bool fieldNameIsArray(std::string_view name) noexcept {
-    return name.size() >= 2 && name.substr(name.size() - 2) == "[]";
+    return name.ends_with("[]");
 }
 
 [[nodiscard]] bool fieldNameHasProtoObject(std::string_view name) noexcept {
@@ -204,7 +204,7 @@ void assignDotPath(
 }
 
 [[nodiscard]] std::string_view storedStringView(const std::pmr::string& value) noexcept {
-    return std::string_view(value.data(), value.size());
+    return value;
 }
 
 [[nodiscard]] std::string_view pairNameAt(
@@ -389,7 +389,7 @@ void compactParsedBodyFields(
         const auto partFilename = part.filename();
         const auto partContentType = part.contentType();
         std::pmr::string name(partName.data(), partName.size(), resource);
-        const bool array = fieldNameIsArray(std::string_view(name.data(), name.size()));
+        const bool array = fieldNameIsArray(std::string_view(name));
         appendParsedBodyField(
             fields,
             detail::RequestFormFieldAccess::make(
@@ -449,7 +449,7 @@ const RequestNameValueList& Context::requestHeaders() const {
             detail::RequestNameValueListAccess::pushBack(
                 headers,
                 detail::RequestNameValueViewAccess::make(
-                    std::string_view(name.data(), name.size()),
+                    std::string_view(name),
                     rawHeader.value()));
         }
         cache.emplace(std::move(names), std::move(headers));
@@ -516,7 +516,7 @@ void Context::ensureRequestQuery() const {
         } while (offset < order.size() && pairNameAt(storage, order[offset]) == name);
         builds.push_back(QueryBuild{.firstIndex = firstIndex, .begin = begin, .end = offset});
     }
-    std::sort(builds.begin(), builds.end(), [](const QueryBuild& left, const QueryBuild& right) noexcept {
+    std::ranges::sort(builds, [](const QueryBuild& left, const QueryBuild& right) noexcept {
         return left.firstIndex < right.firstIndex;
     });
 
@@ -700,7 +700,7 @@ bool Context::requestAccepts(std::string_view mediaType) const noexcept {
 Task<std::string_view> Context::requestBody() const {
     if (bodyDecoded_) {
         const auto& decoded = *requestStorage_->decodedBody;
-        co_return std::string_view(decoded.data(), decoded.size());
+        co_return std::string_view(decoded);
     }
 
     std::string_view raw;
@@ -744,7 +744,7 @@ Task<std::string_view> Context::requestBody() const {
     auto& decoded = decodedBody();
     decoded = std::move(*decodedContent).takeBytes();
     bodyDecoded_ = true;
-    co_return std::string_view(decoded.data(), decoded.size());
+    co_return std::string_view(decoded);
 }
 
 std::optional<std::string_view> ContextRequest::signedCookie(

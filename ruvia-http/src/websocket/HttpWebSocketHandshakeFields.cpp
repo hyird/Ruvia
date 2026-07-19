@@ -4,7 +4,9 @@
 #include "ruvia/http/detail/websocket/HttpWebSocketPermessageDeflate.h"
 #include "ruvia/http/detail/websocket/WebSocketServerNegotiation.h"
 
+#include <algorithm>
 #include <array>
+#include <span>
 
 #include "ruvia/http/detail/HeaderTokenUtils.h"
 #include "ruvia/http/detail/parser/HttpParserSyntax.h"
@@ -33,12 +35,8 @@ public:
     }
 
     [[nodiscard]] bool contains(std::string_view protocol) const noexcept {
-        for (std::size_t i = 0; i < size_; ++i) {
-            if (protocols_[i] == protocol) {
-                return true;
-            }
-        }
-        return false;
+        return std::ranges::contains(
+            std::span(protocols_).first(size_), protocol);
     }
 
     [[nodiscard]] bool empty() const noexcept {
@@ -96,12 +94,9 @@ private:
     if (protocol.empty()) {
         return false;
     }
-    for (const auto ch : protocol) {
-        if (!isHttpTokenChar(static_cast<unsigned char>(ch))) {
-            return false;
-        }
-    }
-    return true;
+    return std::ranges::all_of(protocol, [](char ch) noexcept {
+        return isHttpTokenChar(static_cast<unsigned char>(ch));
+    });
 }
 
 void skipWebSocketExtensionOws(
