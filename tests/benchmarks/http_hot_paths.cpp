@@ -4,11 +4,11 @@
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
+#include <cstdio>
 #include <cstdlib>
 #include <fstream>
 #include <iomanip>
 #include <iostream>
-#include <print>
 #include <memory_resource>
 #include <sstream>
 #include <stdexcept>
@@ -420,14 +420,14 @@ int main(int argc, char** argv) {
             requestHeadFeed));
 
         const auto json = renderJson(options, results);
-        std::print("{}", std::string_view(json));
+        std::fwrite(json.data(), 1, json.size(), stdout);
         if (!options.outputPath.empty()) {
             std::ofstream output(options.outputPath, std::ios::binary);
             output.exceptions(std::ios::failbit | std::ios::badbit);
             output << json;
         }
     } catch (const std::exception& error) {
-        std::println(stderr, "benchmark failed: {}", error.what());
+        std::fprintf(stderr, "benchmark failed: %s\n", error.what());
         return EXIT_FAILURE;
     }
     return EXIT_SUCCESS;

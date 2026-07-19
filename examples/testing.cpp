@@ -4,7 +4,7 @@
 // pattern an application's own test suite uses; the example doubles as a
 // runnable check and exits non-zero on any mismatch.
 
-#include <print>
+#include <cstdio>
 #include <string_view>
 
 #include "ruvia/web/App.h"
@@ -76,7 +76,7 @@ int g_failures = 0;
 void expect(bool condition, const char* what) {
     if (!condition) {
         ++g_failures;
-        std::println(stderr, "FAILED: {}", what);
+        std::fprintf(stderr, "FAILED: %s\n", what);
     }
 }
 
@@ -116,7 +116,7 @@ int main() {
     expect(missing.body() == "no such note", "prefix notFound rendered the miss");
 
     if (g_failures == 0) {
-        std::println("testing facade example: all checks passed");
+        std::puts("testing facade example: all checks passed");
     }
     return g_failures == 0 ? 0 : 1;
 }

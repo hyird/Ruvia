@@ -7,10 +7,10 @@
 
 #include <array>
 #include <chrono>
+#include <cstdio>
 #include <cstdlib>
 #include <exception>
 #include <iostream>
-#include <print>
 #include <memory_resource>
 #include <optional>
 #include <span>
@@ -185,10 +185,13 @@ int main() {
         runTask([&](asio::io_context& ioContext) {
             return withDatabase(ioContext, config, true);
         });
-        std::println("PostgreSQL integration passed");
+        std::puts("PostgreSQL integration passed");
         return 0;
     } catch (const std::exception& error) {
-        std::println(stderr, "PostgreSQL integration failed: {}", error.what());
+        std::fprintf(
+            stderr,
+            "PostgreSQL integration failed: %s\n",
+            error.what());
         return 1;
     }
 }

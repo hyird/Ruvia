@@ -19,7 +19,7 @@
 #include <asio/write.hpp>
 
 #include <cstdint>
-#include <print>
+#include <cstdio>
 #include <memory>
 #include <memory_resource>
 #include <string>
@@ -189,27 +189,31 @@ int main() {
     io.run();
 
     if (getStream.status != "200") {
-        std::println(stderr,
-            "streaming GET over HTTP/2 was not 200: status='{}'",
-            getStream.status);
+        std::fprintf(
+            stderr,
+            "streaming GET over HTTP/2 was not 200: status='%s'\n",
+            getStream.status.c_str());
         return 1;
     }
     if (getStream.body != "tick-1tick-2") {
-        std::println(stderr,
-            "streaming GET body mismatch over HTTP/2: '{}'",
-            getStream.body);
+        std::fprintf(
+            stderr,
+            "streaming GET body mismatch over HTTP/2: '%s'\n",
+            getStream.body.c_str());
         return 2;
     }
     if (headStream.status != "200") {
-        std::println(stderr,
-            "HEAD of a streaming route over HTTP/2 was not 200: status='{}'",
-            headStream.status);
+        std::fprintf(
+            stderr,
+            "HEAD of a streaming route over HTTP/2 was not 200: status='%s'\n",
+            headStream.status.c_str());
         return 3;
     }
     if (headStream.sawData || !headStream.body.empty()) {
-        std::println(stderr,
-            "HEAD of a streaming route over HTTP/2 must send no DATA, got '{}'",
-            headStream.body);
+        std::fprintf(
+            stderr,
+            "HEAD of a streaming route over HTTP/2 must send no DATA, got '%s'\n",
+            headStream.body.c_str());
         return 4;
     }
     return 0;
