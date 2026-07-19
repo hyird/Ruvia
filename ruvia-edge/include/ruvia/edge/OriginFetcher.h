@@ -7,11 +7,13 @@
 #include <span>
 #include <string>
 #include <string_view>
+#include <unordered_map>
 #include <utility>
 #include <vector>
 
 #include <asio/any_io_executor.hpp>
 #include <asio/awaitable.hpp>
+#include <asio/ip/tcp.hpp>
 
 #include "ruvia/http/HttpHeader.h"
 
@@ -58,16 +60,22 @@ struct OriginFetchResult final {
     OriginResponse response;  // meaningful only when outcome == kOk
 };
 
-// Fetches a single response from an origin over a fresh plaintext HTTP/1.1
-// connection, driving ruvia-http's sans-I/O request writer and response parser
-// with asio socket I/O on the caller's executor. The connection is not pooled:
-// one request, read the whole response, close. Handles the four response body
-// framings (no-content, exact length, chunked, close-delimited); protocol
-// upgrades, CONNECT and TLS origins are reported as unsupported.
+// Fetches a response from an origin over plaintext HTTP/1.1, driving ruvia-http's
+// sans-I/O request writer and response parser with asio socket I/O on the
+// caller's executor. Keep-alive origin connections are pooled and reused: a fetch
+// takes an idle connection to the same host:port when one is available and
+// returns it afterward if the response allows reuse, so back-to-back requests to
+// an origin avoid a fresh TCP handshake. A reused connection the origin has since
+// closed is detected and the request is retried once on a fresh connection.
+// Handles the four response body framings (no-content, exact length, chunked,
+// close-delimited); protocol upgrades, CONNECT and TLS origins are unsupported.
 //
 // Every network step is bounded by a deadline: resolve+connect share the connect
 // timeout, and each read/write resets an inactivity timeout, so a slow or hung
 // origin ends the fetch with kTimeout instead of stalling the connection.
+//
+// This type is stateful (it owns the connection pool) and single-threaded: it
+// must be used only from the one io_context thread whose executor it is given.
 class OriginFetcher final {
 public:
     struct Limits final {
@@ -77,6 +85,10 @@ public:
         std::chrono::milliseconds connectTimeout{5000};
         // Inactivity deadline for each subsequent read/write step.
         std::chrono::milliseconds ioTimeout{30000};
+        // How long an idle pooled connection may be reused before it is dropped.
+        std::chrono::milliseconds idleTimeout{15000};
+        // Maximum idle connections kept per origin host:port.
+        std::size_t maxIdlePerHost{8};
     };
 
     explicit OriginFetcher(Limits limits) noexcept : limits_(limits) {}
@@ -88,10 +100,19 @@ public:
         asio::any_io_executor executor,
         std::string_view host,
         std::uint16_t port,
-        const OriginRequest& request) const;
+        const OriginRequest& request);
+
+    // Number of idle pooled connections (for observability and tests).
+    [[nodiscard]] std::size_t idleConnectionCount() const noexcept;
 
 private:
+    struct PooledConnection final {
+        asio::ip::tcp::socket socket;
+        std::chrono::steady_clock::time_point idleSince;
+    };
+
     Limits limits_;
+    std::unordered_map<std::string, std::vector<PooledConnection>> idlePool_;
 };
 
 }  // namespace ruvia::edge

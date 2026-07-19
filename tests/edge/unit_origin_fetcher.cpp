@@ -105,7 +105,7 @@ CaseResult runCase(
     asio::co_spawn(
         io,
         [&]() -> asio::awaitable<void> {
-            const OriginFetcher fetcher(limits);
+            OriginFetcher fetcher(limits);
             const HttpHeaderView headers[] = {HttpHeaderView("accept", "*/*")};
             OriginRequest request;
             request.method = "GET";
@@ -207,6 +207,89 @@ int main() {
         const auto r = runCase("", /*silent=*/true, limits);
         check(r.outcome == OriginFetchOutcome::kTimeout,
               "a non-responding origin times out");
+    }
+
+    // Connection pooling: two sequential fetches to a keep-alive origin reuse one
+    // TCP connection.
+    {
+        asio::io_context io;
+        tcp::acceptor acceptor(io, tcp::endpoint(tcp::v4(), 0));
+        const std::uint16_t port = acceptor.local_endpoint().port();
+        int connectionsAccepted = 0;
+
+        asio::co_spawn(
+            io,
+            [&]() -> asio::awaitable<void> {
+                for (;;) {
+                    auto [aec, socket] =
+                        co_await acceptor.async_accept(asio::as_tuple(asio::use_awaitable));
+                    if (aec) {
+                        co_return;
+                    }
+                    ++connectionsAccepted;
+                    // Serve keep-alive requests on this one connection.
+                    asio::co_spawn(
+                        io,
+                        [sock = std::move(socket)]() mutable -> asio::awaitable<void> {
+                            std::string request;
+                            char buffer[1024];
+                            for (;;) {
+                                while (request.find("\r\n\r\n") == std::string::npos) {
+                                    auto [ec, n] = co_await sock.async_read_some(
+                                        asio::buffer(buffer),
+                                        asio::as_tuple(asio::use_awaitable));
+                                    if (n > 0) {
+                                        request.append(buffer, n);
+                                    }
+                                    if (ec) {
+                                        co_return;
+                                    }
+                                }
+                                static constexpr std::string_view kResponse =
+                                    "HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nhi";
+                                co_await asio::async_write(
+                                    sock, asio::buffer(kResponse),
+                                    asio::as_tuple(asio::use_awaitable));
+                                request.erase(0, request.find("\r\n\r\n") + 4);
+                            }
+                        },
+                        asio::detached);
+                }
+            },
+            asio::detached);
+
+        OriginFetchOutcome outcome1 = OriginFetchOutcome::kConnectFailed;
+        OriginFetchOutcome outcome2 = OriginFetchOutcome::kConnectFailed;
+        std::size_t idleAfterFirst = 0;
+
+        asio::co_spawn(
+            io,
+            [&]() -> asio::awaitable<void> {
+                OriginFetcher fetcher(OriginFetcher::Limits{});
+                const HttpHeaderView headers[] = {HttpHeaderView("accept", "*/*")};
+                OriginRequest request;
+                request.method = "GET";
+                request.headers = std::span<const HttpHeaderView>(headers);
+
+                request.target = "/first";
+                auto r1 = co_await fetcher.fetch(io.get_executor(), "127.0.0.1", port, request);
+                outcome1 = r1.outcome;
+                idleAfterFirst = fetcher.idleConnectionCount();
+
+                request.target = "/second";
+                auto r2 = co_await fetcher.fetch(io.get_executor(), "127.0.0.1", port, request);
+                outcome2 = r2.outcome;
+
+                io.stop();
+                co_return;
+            },
+            asio::detached);
+
+        io.run();
+        check(outcome1 == OriginFetchOutcome::kOk, "first pooled fetch succeeds");
+        check(outcome2 == OriginFetchOutcome::kOk, "second pooled fetch succeeds");
+        check(idleAfterFirst == 1, "connection is pooled after the first fetch");
+        check(connectionsAccepted == 1, "second fetch reused the pooled connection");
     }
 
     if (failures == 0) {

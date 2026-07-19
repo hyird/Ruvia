@@ -2,6 +2,8 @@
 
 #include <array>
 #include <charconv>
+#include <chrono>
+#include <optional>
 #include <string>
 #include <system_error>
 #include <tuple>
@@ -43,59 +45,84 @@ enum class BodyFraming : std::uint8_t {
     kCloseDelimited  // read until the origin closes the connection
 };
 
-}  // namespace
+// The result of running one request/response exchange over an existing socket.
+struct ExchangeOutcome final {
+    OriginFetchResult result{OriginFetchOutcome::kConnectFailed, {}};
+    // The origin allows this connection to be reused for another request.
+    bool reusable{false};
+    // A connect-level failure (write/read error before a valid response head).
+    // On a reused pooled connection this signals a stale connection worth
+    // retrying on a fresh one.
+    bool transportFailed{false};
+};
 
-asio::awaitable<OriginFetchResult> OriginFetcher::fetch(
-    asio::any_io_executor executor,
-    std::string_view host,
-    std::uint16_t port,
-    const OriginRequest& request) const {
-    // 1. Prepare the request head. This validates the whole request (method,
-    // target, headers) before any I/O and generates Host/Content-Length.
-    const HttpOrigin origin = HttpOrigin::http(host, port);
-    HttpClientRequest clientRequest;
-    clientRequest.method = request.method;
-    clientRequest.target = request.target;
-    clientRequest.headers = request.headers;
-    clientRequest.content = request.body
-        ? HttpClientRequestContent::bytes(*request.body)
-        : HttpClientRequestContent::none();
+// Send the prepared request on `socket` and read the whole response, bounded by
+// the inactivity deadline. Does not close the socket; the caller decides pooling.
+asio::awaitable<ExchangeOutcome> runExchange(
+    asio::ip::tcp::socket& socket,
+    const PreparedHttp1ClientRequest& prepared,
+    const OriginFetcher::Limits& limits) {
+    const auto tuple = asio::as_tuple(asio::use_awaitable);
+    asio::steady_timer deadline(socket.get_executor());
 
-    std::array<char, kHeadBufferBytes> headBuffer;
-    const Http1ClientRequestWriter writer;
-    const auto prepareResult = writer.prepare(
-        origin,
-        clientRequest,
-        headBuffer,
-        Http1ClientRequestWirePolicy::withoutExpectation(
-            Http1ClientRequestClosePolicy::kCloseAfterResponse));
-    const auto* prepared = prepareResult.prepared();
-    if (prepared == nullptr) {
-        co_return failure(OriginFetchOutcome::kUnsupported);
+    ExchangeOutcome out;
+    const auto fail = [&](OriginFetchOutcome outcome, bool transport) {
+        out.result = failure(outcome);
+        out.transportFailed = transport;
+    };
+
+    // Send the request head (and immediate content, if any).
+    deadline.expires_after(limits.ioTimeout);
+    {
+        auto raced = co_await (
+            asio::async_write(
+                socket,
+                asio::buffer(prepared.head().data(), prepared.head().size()),
+                tuple) ||
+            deadline.async_wait(tuple));
+        if (raced.index() == 1) {
+            fail(OriginFetchOutcome::kTimeout, false);
+            co_return out;
+        }
+        if (std::get<0>(std::get<0>(raced))) {
+            fail(OriginFetchOutcome::kWriteFailed, true);
+            co_return out;
+        }
+    }
+    if (const auto* immediate = prepared.contentPlan().immediate();
+        immediate != nullptr && !immediate->bytes().empty()) {
+        deadline.expires_after(limits.ioTimeout);
+        auto raced = co_await (
+            asio::async_write(
+                socket,
+                asio::buffer(immediate->bytes().data(), immediate->bytes().size()),
+                tuple) ||
+            deadline.async_wait(tuple));
+        if (raced.index() == 1) {
+            fail(OriginFetchOutcome::kTimeout, false);
+            co_return out;
+        }
+        if (std::get<0>(std::get<0>(raced))) {
+            fail(OriginFetchOutcome::kWriteFailed, true);
+            co_return out;
+        }
     }
 
-    const auto tuple = asio::as_tuple(asio::use_awaitable);
-    asio::steady_timer deadline(executor);
-    asio::ip::tcp::resolver resolver(executor);
-    asio::ip::tcp::socket socket(executor);
     std::string inbound;
     std::array<char, kReadChunkBytes> readBuffer;
     bool timedOut = false;
     bool readError = false;
     bool eof = false;
-
-    // One read step, bounded by the inactivity deadline. Appends to `inbound`
-    // and sets the timedOut/readError/eof flags the callers check.
     const auto readOnce = [&]() -> asio::awaitable<void> {
-        deadline.expires_after(limits_.ioTimeout);
-        auto readRaced = co_await (
+        deadline.expires_after(limits.ioTimeout);
+        auto raced = co_await (
             socket.async_read_some(asio::buffer(readBuffer), tuple) ||
             deadline.async_wait(tuple));
-        if (readRaced.index() == 1) {
+        if (raced.index() == 1) {
             timedOut = true;
             co_return;
         }
-        auto& [ec, n] = std::get<0>(readRaced);
+        auto& [ec, n] = std::get<0>(raced);
         if (n > 0) {
             inbound.append(readBuffer.data(), n);
         }
@@ -106,80 +133,20 @@ asio::awaitable<OriginFetchResult> OriginFetcher::fetch(
         }
     };
 
-    // 2. Resolve and connect a fresh plaintext connection, under one deadline.
-    std::array<char, 8> portText;
-    const auto [portEnd, portEc] =
-        std::to_chars(portText.data(), portText.data() + portText.size(), port);
-    if (portEc != std::errc{}) {
-        co_return failure(OriginFetchOutcome::kConnectFailed);
-    }
-    const std::string hostText(host);
-    const std::string_view portView(
-        portText.data(), static_cast<std::size_t>(portEnd - portText.data()));
-
-    deadline.expires_after(limits_.connectTimeout);
-    auto resolveRaced = co_await (
-        resolver.async_resolve(hostText, portView, tuple) ||
-        deadline.async_wait(tuple));
-    if (resolveRaced.index() == 1) {
-        co_return failure(OriginFetchOutcome::kTimeout);
-    }
-    if (std::get<0>(std::get<0>(resolveRaced))) {
-        co_return failure(OriginFetchOutcome::kConnectFailed);
-    }
-    const auto endpoints = std::move(std::get<1>(std::get<0>(resolveRaced)));
-
-    auto connectRaced = co_await (
-        asio::async_connect(socket, endpoints, tuple) ||
-        deadline.async_wait(tuple));
-    if (connectRaced.index() == 1) {
-        co_return failure(OriginFetchOutcome::kTimeout);
-    }
-    if (std::get<0>(std::get<0>(connectRaced))) {
-        co_return failure(OriginFetchOutcome::kConnectFailed);
-    }
-
-    // 3. Send the request head (and immediate content, if any).
-    deadline.expires_after(limits_.ioTimeout);
-    auto writeRaced = co_await (
-        asio::async_write(
-            socket,
-            asio::buffer(prepared->head().data(), prepared->head().size()),
-            tuple) ||
-        deadline.async_wait(tuple));
-    if (writeRaced.index() == 1) {
-        co_return failure(OriginFetchOutcome::kTimeout);
-    }
-    if (std::get<0>(std::get<0>(writeRaced))) {
-        co_return failure(OriginFetchOutcome::kWriteFailed);
-    }
-    if (const auto* immediate = prepared->contentPlan().immediate();
-        immediate != nullptr && !immediate->bytes().empty()) {
-        deadline.expires_after(limits_.ioTimeout);
-        auto contentRaced = co_await (
-            asio::async_write(
-                socket,
-                asio::buffer(immediate->bytes().data(), immediate->bytes().size()),
-                tuple) ||
-            deadline.async_wait(tuple));
-        if (contentRaced.index() == 1) {
-            co_return failure(OriginFetchOutcome::kTimeout);
-        }
-        if (std::get<0>(std::get<0>(contentRaced))) {
-            co_return failure(OriginFetchOutcome::kWriteFailed);
-        }
-    }
-
-    // 4. Read and parse the response head, advancing past any 1xx responses.
-    Http1ClientResponseParser parser(*prepared);
+    // Read and parse the response head, past any informational (1xx) responses.
+    // Failures here happen before any valid response, so a reused connection can
+    // be retried.
+    Http1ClientResponseParser parser(prepared);
     OriginResponse response;
     BodyFraming framing = BodyFraming::kNone;
     std::size_t knownLength = 0;
+    bool reusable = false;
 
     for (;;) {
         auto parseResult = parser.parse(inbound);
         if (parseResult.failure() != nullptr) {
-            co_return failure(OriginFetchOutcome::kProtocolError);
+            fail(OriginFetchOutcome::kProtocolError, false);
+            co_return out;
         }
         if (auto* parsed = parseResult.parsed(); parsed != nullptr) {
             const auto& plan = parsed->plan();
@@ -193,17 +160,24 @@ asio::awaitable<OriginFetchResult> OriginFetcher::fetch(
                     std::string(field.name()), std::string(field.value()));
             }
             const std::size_t consumed = parsed->consumedBytes();
-            if (plan.withoutContent() != nullptr || plan.zeroContent() != nullptr) {
+            using Persistence = Http1ClientResponsePersistence;
+            if (const auto* without = plan.withoutContent()) {
                 framing = BodyFraming::kNone;
+                reusable = without->persistence() == Persistence::kReuse;
+            } else if (plan.zeroContent() != nullptr) {
+                framing = BodyFraming::kNone;  // conservative: do not pool
             } else if (const auto* known = plan.knownLength()) {
                 framing = BodyFraming::kKnownLength;
                 knownLength = known->contentLength();
-            } else if (plan.chunked() != nullptr) {
+                reusable = known->persistence() == Persistence::kReuse;
+            } else if (const auto* chunked = plan.chunked()) {
                 framing = BodyFraming::kChunked;
+                reusable = chunked->persistence() == Persistence::kReuse;
             } else if (plan.closeDelimited() != nullptr) {
-                framing = BodyFraming::kCloseDelimited;
+                framing = BodyFraming::kCloseDelimited;  // always closes
             } else {
-                co_return failure(OriginFetchOutcome::kUnsupported);
+                fail(OriginFetchOutcome::kUnsupported, false);
+                co_return out;
             }
             inbound.erase(0, consumed);
             break;
@@ -211,29 +185,35 @@ asio::awaitable<OriginFetchResult> OriginFetcher::fetch(
 
         co_await readOnce();
         if (timedOut) {
-            co_return failure(OriginFetchOutcome::kTimeout);
+            fail(OriginFetchOutcome::kTimeout, false);
+            co_return out;
         }
         if (readError || eof) {
-            co_return failure(OriginFetchOutcome::kReadFailed);
+            fail(OriginFetchOutcome::kReadFailed, true);  // no head yet: retryable
+            co_return out;
         }
     }
 
-    // 5. Read the body according to its framing.
+    // Read the body according to its framing. Errors here are post-head, so the
+    // request is not retried on a fresh connection.
     switch (framing) {
         case BodyFraming::kNone:
             break;
 
         case BodyFraming::kKnownLength: {
-            if (knownLength > limits_.maxResponseBytes) {
-                co_return failure(OriginFetchOutcome::kTooLarge);
+            if (knownLength > limits.maxResponseBytes) {
+                fail(OriginFetchOutcome::kTooLarge, false);
+                co_return out;
             }
             while (inbound.size() < knownLength) {
                 co_await readOnce();
                 if (timedOut) {
-                    co_return failure(OriginFetchOutcome::kTimeout);
+                    fail(OriginFetchOutcome::kTimeout, false);
+                    co_return out;
                 }
                 if (readError || eof) {
-                    co_return failure(OriginFetchOutcome::kReadFailed);
+                    fail(OriginFetchOutcome::kReadFailed, false);
+                    co_return out;
                 }
             }
             inbound.resize(knownLength);
@@ -245,16 +225,19 @@ asio::awaitable<OriginFetchResult> OriginFetcher::fetch(
             for (;;) {
                 co_await readOnce();
                 if (timedOut) {
-                    co_return failure(OriginFetchOutcome::kTimeout);
+                    fail(OriginFetchOutcome::kTimeout, false);
+                    co_return out;
                 }
-                if (inbound.size() > limits_.maxResponseBytes) {
-                    co_return failure(OriginFetchOutcome::kTooLarge);
+                if (inbound.size() > limits.maxResponseBytes) {
+                    fail(OriginFetchOutcome::kTooLarge, false);
+                    co_return out;
                 }
                 if (eof) {
-                    break;  // EOF terminates a close-delimited message
+                    break;
                 }
                 if (readError) {
-                    co_return failure(OriginFetchOutcome::kReadFailed);
+                    fail(OriginFetchOutcome::kReadFailed, false);
+                    co_return out;
                 }
             }
             response.body = std::move(inbound);
@@ -263,17 +246,19 @@ asio::awaitable<OriginFetchResult> OriginFetcher::fetch(
 
         case BodyFraming::kChunked: {
             ruvia::detail::Http1ChunkedBodyDecoder decoder(
-                ProtocolByteLimit::limited(limits_.maxResponseBytes));
+                ProtocolByteLimit::limited(limits.maxResponseBytes));
             for (;;) {
                 const auto decoded = decoder.decode(inbound);
                 if (decoded.failure() != nullptr) {
-                    co_return failure(OriginFetchOutcome::kProtocolError);
+                    fail(OriginFetchOutcome::kProtocolError, false);
+                    co_return out;
                 }
                 if (const auto* chunk = decoded.bodyChunk()) {
                     response.body.append(chunk->bytes());
                     inbound.erase(0, decoded.consumedBytes());
-                    if (response.body.size() > limits_.maxResponseBytes) {
-                        co_return failure(OriginFetchOutcome::kTooLarge);
+                    if (response.body.size() > limits.maxResponseBytes) {
+                        fail(OriginFetchOutcome::kTooLarge, false);
+                        co_return out;
                     }
                     continue;
                 }
@@ -283,17 +268,147 @@ asio::awaitable<OriginFetchResult> OriginFetcher::fetch(
                 inbound.erase(0, decoded.consumedBytes());
                 co_await readOnce();
                 if (timedOut) {
-                    co_return failure(OriginFetchOutcome::kTimeout);
+                    fail(OriginFetchOutcome::kTimeout, false);
+                    co_return out;
                 }
                 if (readError || eof) {
-                    co_return failure(OriginFetchOutcome::kReadFailed);
+                    fail(OriginFetchOutcome::kReadFailed, false);
+                    co_return out;
                 }
             }
             break;
         }
     }
 
-    co_return OriginFetchResult{OriginFetchOutcome::kOk, std::move(response)};
+    out.result = OriginFetchResult{OriginFetchOutcome::kOk, std::move(response)};
+    out.reusable = reusable;
+    co_return out;
+}
+
+}  // namespace
+
+std::size_t OriginFetcher::idleConnectionCount() const noexcept {
+    std::size_t total = 0;
+    for (const auto& [key, bucket] : idlePool_) {
+        total += bucket.size();
+    }
+    return total;
+}
+
+asio::awaitable<OriginFetchResult> OriginFetcher::fetch(
+    asio::any_io_executor executor,
+    std::string_view host,
+    std::uint16_t port,
+    const OriginRequest& request) {
+    // Prepare the request head once. kAllowReuse omits Connection: close so the
+    // origin may keep the connection open for pooling.
+    const HttpOrigin origin = HttpOrigin::http(host, port);
+    HttpClientRequest clientRequest;
+    clientRequest.method = request.method;
+    clientRequest.target = request.target;
+    clientRequest.headers = request.headers;
+    clientRequest.content = request.body
+        ? HttpClientRequestContent::bytes(*request.body)
+        : HttpClientRequestContent::none();
+
+    std::array<char, kHeadBufferBytes> headBuffer;
+    const Http1ClientRequestWriter writer;
+    const auto prepareResult = writer.prepare(
+        origin, clientRequest, headBuffer,
+        Http1ClientRequestWirePolicy::withoutExpectation(
+            Http1ClientRequestClosePolicy::kAllowReuse));
+    const auto* prepared = prepareResult.prepared();
+    if (prepared == nullptr) {
+        co_return failure(OriginFetchOutcome::kUnsupported);
+    }
+
+    std::string key(host);
+    key.push_back(':');
+    {
+        std::array<char, 8> portText;
+        const auto [end, ec] =
+            std::to_chars(portText.data(), portText.data() + portText.size(), port);
+        if (ec != std::errc{}) {
+            co_return failure(OriginFetchOutcome::kConnectFailed);
+        }
+        key.append(portText.data(), static_cast<std::size_t>(end - portText.data()));
+    }
+
+    const auto tuple = asio::as_tuple(asio::use_awaitable);
+
+    for (int attempt = 0; attempt < 2; ++attempt) {
+        // Acquire a connection: reuse a fresh-enough pooled one, else connect.
+        // The retry attempt (attempt > 0) always connects fresh.
+        asio::ip::tcp::socket socket(executor);
+        bool reused = false;
+        if (auto it = attempt == 0 ? idlePool_.find(key) : idlePool_.end();
+            it != idlePool_.end()) {
+            auto& bucket = it->second;
+            const auto now = std::chrono::steady_clock::now();
+            while (!bucket.empty()) {
+                auto pooled = std::move(bucket.back());
+                bucket.pop_back();
+                if (now - pooled.idleSince <= limits_.idleTimeout) {
+                    socket = std::move(pooled.socket);
+                    reused = true;
+                    break;
+                }
+                std::error_code ignore;
+                pooled.socket.close(ignore);  // idle too long
+            }
+        }
+
+        if (!reused) {
+            asio::ip::tcp::resolver resolver(executor);
+            asio::steady_timer deadline(executor);
+            deadline.expires_after(limits_.connectTimeout);
+            auto resolveRaced = co_await (
+                resolver.async_resolve(host, std::string_view(key).substr(host.size() + 1),
+                                       tuple) ||
+                deadline.async_wait(tuple));
+            if (resolveRaced.index() == 1) {
+                co_return failure(OriginFetchOutcome::kTimeout);
+            }
+            if (std::get<0>(std::get<0>(resolveRaced))) {
+                co_return failure(OriginFetchOutcome::kConnectFailed);
+            }
+            const auto endpoints = std::move(std::get<1>(std::get<0>(resolveRaced)));
+
+            auto connectRaced = co_await (
+                asio::async_connect(socket, endpoints, tuple) ||
+                deadline.async_wait(tuple));
+            if (connectRaced.index() == 1) {
+                co_return failure(OriginFetchOutcome::kTimeout);
+            }
+            if (std::get<0>(std::get<0>(connectRaced))) {
+                co_return failure(OriginFetchOutcome::kConnectFailed);
+            }
+        }
+
+        auto exchange = co_await runExchange(socket, *prepared, limits_);
+
+        // A reused pooled connection the origin had closed: retry once fresh.
+        if (exchange.transportFailed && reused && attempt == 0) {
+            std::error_code ignore;
+            socket.close(ignore);
+            continue;
+        }
+
+        if (exchange.result.outcome == OriginFetchOutcome::kOk && exchange.reusable) {
+            auto& bucket = idlePool_[key];
+            if (bucket.size() < limits_.maxIdlePerHost) {
+                bucket.push_back(
+                    PooledConnection{std::move(socket), std::chrono::steady_clock::now()});
+            } else {
+                std::error_code ignore;
+                socket.close(ignore);
+            }
+        }
+
+        co_return std::move(exchange.result);
+    }
+
+    co_return failure(OriginFetchOutcome::kConnectFailed);
 }
 
 }  // namespace ruvia::edge
