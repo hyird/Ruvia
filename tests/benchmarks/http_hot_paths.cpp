@@ -8,6 +8,7 @@
 #include <fstream>
 #include <iomanip>
 #include <iostream>
+#include <print>
 #include <memory_resource>
 #include <sstream>
 #include <stdexcept>
@@ -419,14 +420,14 @@ int main(int argc, char** argv) {
             requestHeadFeed));
 
         const auto json = renderJson(options, results);
-        std::cout << json;
+        std::print("{}", std::string_view(json));
         if (!options.outputPath.empty()) {
             std::ofstream output(options.outputPath, std::ios::binary);
             output.exceptions(std::ios::failbit | std::ios::badbit);
             output << json;
         }
     } catch (const std::exception& error) {
-        std::cerr << "benchmark failed: " << error.what() << '\n';
+        std::println(stderr, "benchmark failed: {}", error.what());
         return EXIT_FAILURE;
     }
     return EXIT_SUCCESS;

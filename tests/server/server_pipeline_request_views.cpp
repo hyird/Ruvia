@@ -11,7 +11,7 @@
 // sitting in the read buffer while the first is still being completed.
 
 #include <chrono>
-#include <cstdio>
+#include <print>
 #include <mutex>
 #include <string>
 #include <string_view>
@@ -162,9 +162,9 @@ int main() {
                            std::string_view wantFirst,
                            std::string_view wantSecond) {
         if (got.size() < at + 2) {
-            std::fprintf(
+            std::println(
                 stderr,
-                "%s: expected at least %zu access log records, got %zu\n",
+                "{}: expected at least {} access log records, got {}",
                 label,
                 at + 2,
                 got.size());
@@ -174,17 +174,15 @@ int main() {
         if (got[at] == wantFirst && got[at + 1] == wantSecond) {
             return;
         }
-        std::fprintf(
+        std::println(
             stderr,
-            "%s: pipelined request corrupted the logged path: got {\"%s\", "
-            "\"%s\"}, want {\"%.*s\", \"%.*s\"}\n",
+            "{}: pipelined request corrupted the logged path: got {{\"{}\", "
+            "\"{}\"}}, want {{\"{}\", \"{}\"}}",
             label,
-            got[at].c_str(),
-            got[at + 1].c_str(),
-            static_cast<int>(wantFirst.size()),
-            wantFirst.data(),
-            static_cast<int>(wantSecond.size()),
-            wantSecond.data());
+            got[at],
+            got[at + 1],
+            wantFirst,
+            wantSecond);
         ++failures;
     };
 

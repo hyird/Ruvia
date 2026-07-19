@@ -18,7 +18,7 @@
 #include <asio/write.hpp>
 
 #include <cstdint>
-#include <cstdio>
+#include <print>
 #include <filesystem>
 #include <fstream>
 #include <memory>
@@ -190,27 +190,27 @@ int main() {
     fs::remove_all(dir);
 
     if (getStream.status != "200") {
-        std::fprintf(stderr,
-            "document root not served over HTTP/2: GET status='%s'\n",
-            getStream.status.c_str());
+        std::println(stderr,
+            "document root not served over HTTP/2: GET status='{}'",
+            getStream.status);
         return 1;
     }
     if (getStream.body != kFileBody) {
-        std::fprintf(stderr,
-            "HTTP/2 document-root body mismatch: '%s'\n", getStream.body.c_str());
+        std::println(stderr,
+            "HTTP/2 document-root body mismatch: '{}'", getStream.body);
         return 2;
     }
     // HEAD must answer 200 for the same file GET serves, but carry no DATA body.
     if (headStream.status != "200") {
-        std::fprintf(stderr,
-            "HEAD of a document-root file over HTTP/2 was not 200: status='%s'\n",
-            headStream.status.c_str());
+        std::println(stderr,
+            "HEAD of a document-root file over HTTP/2 was not 200: status='{}'",
+            headStream.status);
         return 3;
     }
     if (headStream.sawData || !headStream.body.empty()) {
-        std::fprintf(stderr,
-            "HEAD over HTTP/2 must send no body, got '%s'\n",
-            headStream.body.c_str());
+        std::println(stderr,
+            "HEAD over HTTP/2 must send no body, got '{}'",
+            headStream.body);
         return 4;
     }
     return 0;

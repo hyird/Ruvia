@@ -10,6 +10,7 @@
 #include <cstdlib>
 #include <exception>
 #include <iostream>
+#include <print>
 #include <memory_resource>
 #include <optional>
 #include <span>
@@ -184,10 +185,10 @@ int main() {
         runTask([&](asio::io_context& ioContext) {
             return withDatabase(ioContext, config, true);
         });
-        std::cout << "PostgreSQL integration passed\n";
+        std::println("PostgreSQL integration passed");
         return 0;
     } catch (const std::exception& error) {
-        std::cerr << "PostgreSQL integration failed: " << error.what() << '\n';
+        std::println(stderr, "PostgreSQL integration failed: {}", error.what());
         return 1;
     }
 }
