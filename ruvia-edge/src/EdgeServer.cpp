@@ -247,6 +247,15 @@ asio::awaitable<void> EdgeServer::handleSession(asio::ip::tcp::socket socket) {
         socket.shutdown(asio::ip::tcp::socket::shutdown_both, ignore);
     };
 
+    std::string clientAddress;
+    {
+        asio::error_code ec;
+        const auto remote = socket.remote_endpoint(ec);
+        if (!ec) {
+            clientAddress = remote.address().to_string();
+        }
+    }
+
     // 1. Read and frame the client request.
     std::string inbound;
     std::array<char, 8192> buffer;
@@ -312,10 +321,45 @@ asio::awaitable<void> EdgeServer::handleSession(asio::ip::tcp::socket socket) {
             co_return;
         }
 
-        // 5. Miss (or stale): fetch from the origin.
+        // 5. Miss (or stale): fetch from the origin. Forward the client's request
+        // headers minus hop-by-hop fields, Host (regenerated for the upstream),
+        // and fields that would break MVP caching -- Accept-Encoding is dropped so
+        // the origin sends identity (no Vary handling yet), and Range plus client
+        // conditionals are dropped. Client-supplied forwarding headers are dropped
+        // and replaced so a client cannot spoof them.
+        std::vector<HttpHeaderView> forwardHeaders;
+        for (const auto& field : request.headers()) {
+            std::string lower;
+            lower.reserve(field.name().size());
+            for (const char c : field.name()) {
+                lower.push_back(toLowerAscii(c));
+            }
+            if (isConnectionOrFramingField(lower) || lower == "host" ||
+                lower == "accept-encoding" || lower == "range" ||
+                lower == "if-none-match" || lower == "if-modified-since" ||
+                lower == "if-match" || lower == "if-unmodified-since" ||
+                lower == "if-range" || lower == "via" || lower == "forwarded" ||
+                lower.starts_with("x-forwarded-")) {
+                continue;
+            }
+            forwardHeaders.push_back(field);
+        }
+        if (!clientAddress.empty()) {
+            forwardHeaders.emplace_back(
+                std::string_view("X-Forwarded-For"), std::string_view(clientAddress));
+        }
+        if (!frontHost.empty()) {
+            forwardHeaders.emplace_back(std::string_view("X-Forwarded-Host"), frontHost);
+        }
+        forwardHeaders.emplace_back(
+            std::string_view("X-Forwarded-Proto"), std::string_view("http"));
+        forwardHeaders.emplace_back(
+            std::string_view("Via"), std::string_view("1.1 ruvia-edge"));
+
         OriginRequest originRequest;
         originRequest.method = "GET";
         originRequest.target = target;
+        originRequest.headers = forwardHeaders;
         auto fetch = co_await fetcher_.fetch(
             ioContext_.get_executor(), origin->upstreamHost, origin->upstreamPort,
             originRequest);

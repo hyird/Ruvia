@@ -8,6 +8,7 @@
 
 #include <atomic>
 #include <cstdio>
+#include <mutex>
 #include <string>
 #include <string_view>
 #include <thread>
@@ -58,6 +59,10 @@ public:
 
     [[nodiscard]] std::uint16_t port() const { return acceptor_.local_endpoint().port(); }
     [[nodiscard]] int hits() const { return hits_.load(); }
+    [[nodiscard]] std::string lastRequest() {
+        std::lock_guard<std::mutex> guard(mutex_);
+        return lastRequest_;
+    }
 
 private:
     asio::awaitable<void> acceptLoop() {
@@ -84,6 +89,10 @@ private:
                 co_return;
             }
         }
+        {
+            std::lock_guard<std::mutex> guard(mutex_);
+            lastRequest_ = request;
+        }
         hits_.fetch_add(1);
         static constexpr std::string_view kResponse =
             "HTTP/1.1 200 OK\r\n"
@@ -101,6 +110,8 @@ private:
     asio::io_context io_;
     tcp::acceptor acceptor_;
     std::atomic<int> hits_{0};
+    std::mutex mutex_;
+    std::string lastRequest_;
     std::jthread thread_;
 };
 
@@ -131,6 +142,9 @@ std::string httpGet(std::uint16_t port, std::string_view host, std::string_view 
     request.append(target);
     request.append(" HTTP/1.1\r\nHost: ");
     request.append(host);
+    // A header worth forwarding, and one the edge should strip for MVP caching.
+    request.append("\r\nUser-Agent: probe-agent");
+    request.append("\r\nAccept-Encoding: gzip");
     request.append("\r\nConnection: close\r\n\r\n");
     return httpRaw(port, request);
 }
@@ -175,6 +189,20 @@ int main() {
         check(bodyOf(r) == "hello", "origin body proxied to the client");
         check(contains(r, "X-Cache: MISS"), "first request is a cache MISS");
         check(origin.hits() == 1, "origin was contacted once");
+
+        // The origin sees a curated, forwarded request.
+        const auto seen = origin.lastRequest();
+        check(contains(seen, "User-Agent: probe-agent"),
+              "a forwardable client header reaches the origin");
+        check(!contains(seen, "Accept-Encoding"),
+              "Accept-Encoding is stripped so the origin sends identity");
+        check(contains(seen, "X-Forwarded-For: 127.0.0.1"),
+              "X-Forwarded-For carries the client address");
+        check(contains(seen, "X-Forwarded-Host: front.local"),
+              "X-Forwarded-Host carries the front host");
+        check(contains(seen, "X-Forwarded-Proto: http"),
+              "X-Forwarded-Proto is set");
+        check(contains(seen, "Via: 1.1 ruvia-edge"), "a Via header is added");
     }
 
     // Second request: served from cache, the origin is not contacted again.
