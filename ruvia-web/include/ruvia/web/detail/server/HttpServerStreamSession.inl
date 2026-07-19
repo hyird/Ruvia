@@ -22,6 +22,14 @@ Task<void> HttpServer::handleStreamSession(
     // arrives while the connection holds no work set (see the idle wait below).
     std::array<char, kIdleResidentReadBytes> idleReadBuffer;
     std::size_t idleReadBytes = 0;
+    // nginx-aligned wait semantics. The first request on a connection, and any
+    // partially-received request header, are bounded by clientHeaderTimeout
+    // (kReadingInitial). The idle wait for the *next* request on a reused
+    // keep-alive connection -- no bytes of it received yet -- is bounded by
+    // keepaliveTimeout (kIdle), matching nginx keepalive_timeout. Flips true
+    // once a request has been served so later idle waits use the keepalive
+    // deadline instead of the header deadline.
+    bool servedKeepaliveRequest = false;
 
     constexpr bool kPlainTcp = std::is_same_v<std::remove_cvref_t<Stream>, TcpSocket>;
     for (;;) {
@@ -41,7 +49,12 @@ Task<void> HttpServer::handleStreamSession(
         if constexpr (kPlainTcp) {
             if (plainTcpShouldWaitForNextRequest(usedBytes)) {
                 releaseIdleWorkSet(workSetPool_, workSet);
-                scannerEntry.setPhase(ConnectionScanner::Phase::kReadingInitial);
+                // Idle wait for the next keep-alive request uses keepaliveTimeout;
+                // the connection's first request uses clientHeaderTimeout.
+                scannerEntry.setPhase(
+                    servedKeepaliveRequest
+                        ? ConnectionScanner::Phase::kIdle
+                        : ConnectionScanner::Phase::kReadingInitial);
                 auto idleCompletion = co_await asyncAsio<std::size_t>(
                     [&socket, &idleReadBuffer](auto handler) mutable {
                         socket.async_read_some(
@@ -371,7 +384,13 @@ Task<void> HttpServer::handleStreamSession(
 
             headerSearchOffset = usedBytes > 3 ? usedBytes - 3 : 0;
 
-            scannerEntry.setPhase(ConnectionScanner::Phase::kReadingInitial);
+            // With no request bytes yet on a reused connection this read is the
+            // keepalive idle wait (keepaliveTimeout); once any header bytes are
+            // buffered, or on the first request, clientHeaderTimeout governs.
+            scannerEntry.setPhase(
+                (usedBytes == 0 && servedKeepaliveRequest)
+                    ? ConnectionScanner::Phase::kIdle
+                    : ConnectionScanner::Phase::kReadingInitial);
             growReadBuffer(readBuffer, usedBytes);
             if (usedBytes == readBuffer.size()) {
                 const auto error = httpParseProtocolError(
@@ -473,5 +492,8 @@ Task<void> HttpServer::handleStreamSession(
             readBuffer,
             usedBytes);
         trimReadBufferStorage(readBuffer, usedBytes);
+        // A request completed and the connection is being reused: the next
+        // wait with no buffered bytes is a keepalive idle wait.
+        servedKeepaliveRequest = true;
     }
 }
