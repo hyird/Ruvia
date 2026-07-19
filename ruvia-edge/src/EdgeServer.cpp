@@ -2,6 +2,7 @@
 
 #include <array>
 #include <charconv>
+#include <chrono>
 #include <ctime>
 #include <memory>
 #include <optional>
@@ -14,6 +15,8 @@
 #include <asio/buffer.hpp>
 #include <asio/co_spawn.hpp>
 #include <asio/detached.hpp>
+#include <asio/experimental/awaitable_operators.hpp>
+#include <asio/steady_timer.hpp>
 #include <asio/use_awaitable.hpp>
 #include <asio/write.hpp>
 
@@ -34,6 +37,9 @@ using Headers = std::vector<std::pair<std::string, std::string>>;
 
 // Upper bound on a whole buffered client request (head plus any forwarded body).
 constexpr std::size_t kMaxRequestBytes = 1u * 1024u * 1024u;
+
+// How long a persistent client connection may sit idle awaiting its next request.
+constexpr std::chrono::seconds kKeepAliveIdleTimeout{60};
 
 [[nodiscard]] char toLowerAscii(char c) noexcept {
     return (c >= 'A' && c <= 'Z') ? static_cast<char>(c - 'A' + 'a') : c;
@@ -70,10 +76,32 @@ void appendDecimal(std::string& out, std::uint64_t value) {
     out.append(digits.data(), static_cast<std::size_t>(end - digits.data()));
 }
 
+// Whether to keep the connection open after this request (RFC 9112 section 9.3):
+// HTTP/1.1 persists unless Connection: close; HTTP/1.0 closes unless
+// Connection: keep-alive.
+[[nodiscard]] bool clientWantsKeepAlive(const HttpRequest& request) {
+    const bool http11 = request.protocolVersion() == HttpProtocolVersion::kHttp11;
+    const auto connection = request.header("connection");
+    if (!connection) {
+        return http11;
+    }
+    std::string lower(*connection);
+    for (auto& c : lower) {
+        c = toLowerAscii(c);
+    }
+    if (lower.find("close") != std::string::npos) {
+        return false;
+    }
+    if (lower.find("keep-alive") != std::string::npos) {
+        return true;
+    }
+    return http11;
+}
+
 // Serialize a response for the client: status line, curated headers, a fresh
-// Content-Length, Connection: close (one request per connection), an X-Cache
-// marker, and -- when the edge computes its own age for a cache hit -- an Age
-// header (dropping any inherited one).
+// Content-Length, a Connection header reflecting keep-alive, an X-Cache marker,
+// and -- when the edge computes its own age for a cache hit -- an Age header
+// (dropping any inherited one).
 //
 // omitBody serves a HEAD response: no message body is appended, and the resource
 // length is reported by keeping the origin's Content-Length when present, else
@@ -85,7 +113,8 @@ void appendDecimal(std::string& out, std::uint64_t value) {
     std::string_view body,
     std::string_view xCache,
     std::optional<std::uint64_t> ageOverride,
-    bool omitBody = false) {
+    bool omitBody = false,
+    bool keepAlive = false) {
     std::string out;
     out.reserve((omitBody ? 0 : body.size()) + 256);
 
@@ -126,7 +155,7 @@ void appendDecimal(std::string& out, std::uint64_t value) {
         appendDecimal(out, body.size());
         out.append("\r\n");
     }
-    out.append("Connection: close\r\n");
+    out.append(keepAlive ? "Connection: keep-alive\r\n" : "Connection: close\r\n");
     out.append("X-Cache: ");
     out.append(xCache);
     out.append("\r\n");
@@ -318,15 +347,7 @@ asio::awaitable<void> EdgeServer::acceptLoop() {
 }
 
 asio::awaitable<void> EdgeServer::handleSession(asio::ip::tcp::socket socket) {
-    const auto writeAll = [&socket](std::string wire) -> asio::awaitable<void> {
-        co_await asio::async_write(
-            socket, asio::buffer(wire.data(), wire.size()),
-            asio::as_tuple(asio::use_awaitable));
-    };
-    const auto finish = [&socket]() {
-        asio::error_code ignore;
-        socket.shutdown(asio::ip::tcp::socket::shutdown_both, ignore);
-    };
+    using namespace asio::experimental::awaitable_operators;
 
     std::string clientAddress;
     {
@@ -337,43 +358,85 @@ asio::awaitable<void> EdgeServer::handleSession(asio::ip::tcp::socket socket) {
         }
     }
 
-    // 1. Read and frame the client request.
+    const auto tuple = asio::as_tuple(asio::use_awaitable);
+    const auto writeStatus = [&socket, tuple](std::string wire) -> asio::awaitable<void> {
+        co_await asio::async_write(socket, asio::buffer(wire.data(), wire.size()), tuple);
+    };
+
     std::string inbound;
     std::array<char, 8192> buffer;
     const Http1RequestParser parser;
+    asio::steady_timer idleTimer(ioContext_);
 
-    for (;;) {
-        auto parseResult = parser.parse(inbound);
-        if (parseResult.failure() != nullptr) {
-            co_await writeAll(buildStatusWire(400));
-            finish();
-            co_return;
-        }
-        const auto* parsed = parseResult.parsed();
-        if (parsed == nullptr) {
-            if (inbound.size() > kMaxRequestBytes) {
-                co_await writeAll(buildStatusWire(413));
-                finish();
-                co_return;
+    // Serve requests on this connection until one closes it, the client goes
+    // away, or the connection sits idle past the keep-alive timeout.
+    bool keepGoing = true;
+    while (keepGoing) {
+        std::size_t consumed = 0;
+        bool framed = false;
+        for (;;) {
+            auto parseResult = parser.parse(inbound);
+            if (parseResult.failure() != nullptr) {
+                co_await writeStatus(buildStatusWire(400));
+                keepGoing = false;
+                break;
             }
-            auto [ec, n] = co_await socket.async_read_some(
-                asio::buffer(buffer), asio::as_tuple(asio::use_awaitable));
+            if (const auto* parsed = parseResult.parsed(); parsed != nullptr) {
+                consumed = parsed->consumedBytes();
+                const bool keepAlive = clientWantsKeepAlive(parsed->request());
+                keepGoing = co_await handleFramedRequest(
+                    socket, *parsed, clientAddress, keepAlive);
+                framed = true;
+                break;
+            }
+            if (inbound.size() > kMaxRequestBytes) {
+                co_await writeStatus(buildStatusWire(413));
+                keepGoing = false;
+                break;
+            }
+            idleTimer.expires_after(kKeepAliveIdleTimeout);
+            auto raced = co_await (
+                socket.async_read_some(asio::buffer(buffer), tuple) ||
+                idleTimer.async_wait(tuple));
+            if (raced.index() == 1) {
+                keepGoing = false;  // idle too long
+                break;
+            }
+            auto& [ec, n] = std::get<0>(raced);
             if (n > 0) {
                 inbound.append(buffer.data(), n);
             }
             if (ec) {
-                co_return;  // client vanished before sending a full request
+                keepGoing = false;  // client closed or read error
+                break;
             }
-            continue;
         }
+        if (framed) {
+            inbound.erase(0, consumed);  // keep any pipelined bytes for the next request
+        }
+    }
 
-        // 2. A framed request. GET and HEAD take the cache path; other methods
-        // are not handled yet.
-        const auto& request = parsed->request();
-        const bool isGet = request.knownMethod() == HttpKnownMethod::kGet;
-        const bool isHead = request.knownMethod() == HttpKnownMethod::kHead;
+    asio::error_code ignore;
+    socket.shutdown(asio::ip::tcp::socket::shutdown_both, ignore);
+}
 
-        const std::string_view frontHost = request.header("host").value_or("");
+asio::awaitable<bool> EdgeServer::handleFramedRequest(
+    asio::ip::tcp::socket& socket,
+    const Http1ParsedRequest& parsed,
+    std::string_view clientAddress,
+    bool keepAlive) {
+    const auto writeAll = [&socket](std::string wire) -> asio::awaitable<void> {
+        co_await asio::async_write(
+            socket, asio::buffer(wire.data(), wire.size()),
+            asio::as_tuple(asio::use_awaitable));
+    };
+
+    // GET and HEAD take the cache path; other methods are proxied (pass-through).
+    const auto& request = parsed.request();
+    const bool isGet = request.knownMethod() == HttpKnownMethod::kGet;
+    const bool isHead = request.knownMethod() == HttpKnownMethod::kHead;
+
+    const std::string_view frontHost = request.header("host").value_or("");
         const std::string_view target = request.target();
 
         // 3. Resolve the origin from the current published config snapshot.
@@ -381,8 +444,7 @@ asio::awaitable<void> EdgeServer::handleSession(asio::ip::tcp::socket socket) {
         const OriginSettings* origin = snapshot->findOrigin(frontHost);
         if (origin == nullptr) {
             co_await writeAll(buildStatusWire(502));
-            finish();
-            co_return;
+            co_return false;
         }
 
         // Non-GET/HEAD methods bypass the cache: forward the request and its body
@@ -391,15 +453,15 @@ asio::awaitable<void> EdgeServer::handleSession(asio::ip::tcp::socket socket) {
         if (!isGet && !isHead) {
             std::optional<std::string_view> requestBody;
             std::string decodedBody;
-            const auto& bodyPlan = parsed->bodyPlan();
+            const auto& bodyPlan = parsed.bodyPlan();
             if (bodyPlan.knownLength() != nullptr) {
-                requestBody = parsed->wireBody();
+                requestBody = parsed.wireBody();
             } else if (bodyPlan.chunked() != nullptr) {
                 // De-chunk the request body so it can be forwarded with a
                 // Content-Length; the whole message is already buffered.
                 ruvia::detail::Http1ChunkedBodyDecoder decoder(
                     ProtocolByteLimit::limited(kMaxRequestBytes));
-                std::string chunkBuffer(parsed->wireBody());
+                std::string chunkBuffer(parsed.wireBody());
                 bool decodeOk = true;
                 for (;;) {
                     const auto decoded = decoder.decode(chunkBuffer);
@@ -420,8 +482,7 @@ asio::awaitable<void> EdgeServer::handleSession(asio::ip::tcp::socket socket) {
                 }
                 if (!decodeOk) {
                     co_await writeAll(buildStatusWire(400));
-                    finish();
-                    co_return;
+                    co_return false;
                 }
                 requestBody = decodedBody;
             }
@@ -464,17 +525,15 @@ asio::awaitable<void> EdgeServer::handleSession(asio::ip::tcp::socket socket) {
                 const std::uint16_t gatewayStatus =
                     passFetch.outcome == OriginFetchOutcome::kTimeout ? 504 : 502;
                 co_await writeAll(buildStatusWire(gatewayStatus));
-                finish();
-                co_return;
+                co_return false;
             }
             if (passFetch.response.status < 400) {
                 cache_.purge(cacheKey("GET", frontHost, target));
             }
             co_await writeAll(buildResponseWire(
                 passFetch.response.status, passFetch.response.headers,
-                passFetch.response.body, "BYPASS", std::nullopt));
-            finish();
-            co_return;
+                passFetch.response.body, "BYPASS", std::nullopt, false, keepAlive));
+            co_return keepAlive;
         }
 
         const std::time_t now = std::time(nullptr);
@@ -488,9 +547,8 @@ asio::awaitable<void> EdgeServer::handleSession(asio::ip::tcp::socket socket) {
                 ? static_cast<std::uint64_t>(now - entry.storedAt)
                 : std::uint64_t{0};
             co_await writeAll(buildResponseWire(
-                entry.status, entry.headers, entry.body, "HIT", age, isHead));
-            finish();
-            co_return;
+                entry.status, entry.headers, entry.body, "HIT", age, isHead, keepAlive));
+            co_return keepAlive;
         }
         // A stale entry may still be revalidated with the origin below.
         const std::shared_ptr<const CachedResponse> staleEntry =
@@ -564,28 +622,25 @@ asio::awaitable<void> EdgeServer::handleSession(asio::ip::tcp::socket socket) {
                 : std::uint64_t{0};
             co_await writeAll(buildResponseWire(
                 staleEntry->status, staleEntry->headers, staleEntry->body, "STALE", age,
-                isHead));
+                isHead, keepAlive));
         };
 
         if (fetch.outcome != OriginFetchOutcome::kOk) {
             if (serveStaleOnError()) {
                 co_await writeStale();
-                finish();
-                co_return;
+                co_return keepAlive;
             }
             // A timeout is a gateway timeout; every other failure is a bad gateway.
             const std::uint16_t gatewayStatus =
                 fetch.outcome == OriginFetchOutcome::kTimeout ? 504 : 502;
             co_await writeAll(buildStatusWire(gatewayStatus));
-            finish();
-            co_return;
+            co_return false;
         }
 
         // A 5xx from the origin is also an error stale-if-error can paper over.
         if (fetch.response.status >= 500 && serveStaleOnError()) {
             co_await writeStale();
-            finish();
-            co_return;
+            co_return keepAlive;
         }
 
         // 6a. A 304 confirms the stale entry is still good: refresh its freshness
@@ -609,9 +664,8 @@ asio::awaitable<void> EdgeServer::handleSession(asio::ip::tcp::socket socket) {
             }
             co_await writeAll(buildResponseWire(
                 refreshed->status, refreshed->headers, refreshed->body, "REVALIDATED",
-                std::uint64_t{0}, isHead));
-            finish();
-            co_return;
+                std::uint64_t{0}, isHead, keepAlive));
+            co_return keepAlive;
         }
 
         // 6b. A full response: store it if a shared cache is allowed to (replacing
@@ -633,10 +687,8 @@ asio::awaitable<void> EdgeServer::handleSession(asio::ip::tcp::socket socket) {
         // 7. Serve the freshly fetched response.
         co_await writeAll(buildResponseWire(
             fetch.response.status, fetch.response.headers, fetch.response.body, "MISS",
-            std::nullopt, isHead));
-        finish();
-        co_return;
-    }
+            std::nullopt, isHead, keepAlive));
+        co_return keepAlive;
 }
 
 asio::awaitable<void> EdgeServer::adminAcceptLoop() {

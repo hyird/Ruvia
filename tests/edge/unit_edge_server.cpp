@@ -13,6 +13,7 @@
 #include <string>
 #include <string_view>
 #include <thread>
+#include <utility>
 
 #include <asio/as_tuple.hpp>
 #include <asio/awaitable.hpp>
@@ -221,6 +222,72 @@ std::string httpPost(
     return httpRaw(port, request);
 }
 
+// Read exactly one HTTP/1.1 response (headers plus its Content-Length body) from
+// a connection that stays open, so a second request can follow.
+std::string readOneResponse(asio::ip::tcp::socket& socket) {
+    std::string response;
+    char buffer[4096];
+    asio::error_code ec;
+    std::size_t headerEnd = std::string::npos;
+    while (headerEnd == std::string::npos) {
+        const std::size_t n = socket.read_some(asio::buffer(buffer), ec);
+        if (n > 0) {
+            response.append(buffer, n);
+        }
+        headerEnd = response.find("\r\n\r\n");
+        if (ec) {
+            return response;
+        }
+    }
+    const std::size_t bodyStart = headerEnd + 4;
+    std::size_t contentLength = 0;
+    if (const auto p = response.find("Content-Length: "); p != std::string::npos && p < headerEnd) {
+        std::size_t i = p + 16;
+        while (i < response.size() && response[i] >= '0' && response[i] <= '9') {
+            contentLength = contentLength * 10 + static_cast<std::size_t>(response[i] - '0');
+            ++i;
+        }
+    }
+    while (response.size() - bodyStart < contentLength) {
+        const std::size_t n = socket.read_some(asio::buffer(buffer), ec);
+        if (n > 0) {
+            response.append(buffer, n);
+        }
+        if (ec) {
+            break;
+        }
+    }
+    return response;
+}
+
+// Send two GET requests on a single persistent connection (the first keep-alive,
+// the second closing) and return both raw responses.
+std::pair<std::string, std::string> httpKeepAliveTwo(
+    std::uint16_t port,
+    std::string_view host,
+    std::string_view target) {
+    asio::io_context io;
+    tcp::socket socket(io);
+    socket.connect(tcp::endpoint(asio::ip::make_address("127.0.0.1"), port));
+
+    const auto send = [&](std::string_view connection) {
+        std::string request = "GET ";
+        request.append(target);
+        request.append(" HTTP/1.1\r\nHost: ");
+        request.append(host);
+        request.append("\r\nConnection: ");
+        request.append(connection);
+        request.append("\r\n\r\n");
+        asio::write(socket, asio::buffer(request));
+    };
+
+    send("keep-alive");
+    std::string first = readOneResponse(socket);
+    send("close");
+    std::string second = readOneResponse(socket);
+    return {first, second};
+}
+
 [[nodiscard]] int statusOf(const std::string& raw) {
     // "HTTP/1.1 " is 9 bytes; the status code is the next three digits.
     if (raw.size() < 12 || !raw.starts_with("HTTP/1.1 ")) {
@@ -363,6 +430,20 @@ int main() {
 
         const auto gone = httpGet(edgePort, "admin.local", "/admin-page");
         check(statusOf(gone) == 502, "removed origin is no longer routable");
+    }
+
+    // Keep-alive: two requests are served on one persistent connection.
+    {
+        const auto [first, second] = httpKeepAliveTwo(edgePort, "front.local", "/page");
+        check(statusOf(first) == 200, "keep-alive request 1 served");
+        check(contains(first, "Connection: keep-alive"),
+              "response 1 signals the connection stays open");
+        check(bodyOf(first) == "hello", "keep-alive body 1 is correct");
+        check(statusOf(second) == 200,
+              "keep-alive request 2 served on the same connection");
+        check(bodyOf(second) == "hello", "keep-alive body 2 is correct");
+        check(contains(second, "Connection: close"),
+              "response 2 closes the connection as requested");
     }
 
     // Conditional revalidation: a short-lived entry goes stale, is revalidated

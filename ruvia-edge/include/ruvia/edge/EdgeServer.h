@@ -14,6 +14,10 @@
 #include "ruvia/edge/EdgeConfig.h"
 #include "ruvia/edge/OriginFetcher.h"
 
+namespace ruvia {
+class Http1ParsedRequest;
+}
+
 namespace ruvia::edge {
 
 struct EdgeServerOptions final {
@@ -93,6 +97,13 @@ private:
 
     asio::awaitable<void> acceptLoop();
     asio::awaitable<void> handleSession(asio::ip::tcp::socket socket);
+    // Handle one framed request. Returns true to keep the connection open for a
+    // next request (keep-alive), false to close it.
+    asio::awaitable<bool> handleFramedRequest(
+        asio::ip::tcp::socket& socket,
+        const Http1ParsedRequest& parsed,
+        std::string_view clientAddress,
+        bool keepAlive);
     asio::awaitable<void> adminAcceptLoop();
     asio::awaitable<void> handleAdminSession(asio::ip::tcp::socket socket);
 
