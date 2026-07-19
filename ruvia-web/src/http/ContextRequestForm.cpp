@@ -68,7 +68,7 @@ void ContextRequest::RequestFormData::Object::rebuildEntries() {
         return;
     }
 
-    std::stable_sort(order.begin(), order.end(), [this](std::size_t left, std::size_t right) noexcept {
+    std::ranges::stable_sort(order, [this](std::size_t left, std::size_t right) noexcept {
         const auto leftName = directChildName(form_->fields_[left], path());
         const auto rightName = directChildName(form_->fields_[right], path());
         if (leftName == rightName) {
@@ -162,7 +162,7 @@ void ContextRequest::RequestFormData::rebuildEntries() {
     for (std::size_t i = 0; i < fields_.size(); ++i) {
         order.push_back(i);
     }
-    std::stable_sort(order.begin(), order.end(), [this](std::size_t left, std::size_t right) noexcept {
+    std::ranges::stable_sort(order, [this](std::size_t left, std::size_t right) noexcept {
         const auto leftName = entryName(fields_[left]);
         const auto rightName = entryName(fields_[right]);
         if (leftName == rightName) {
@@ -220,7 +220,7 @@ void ContextRequest::RequestFormData::rebuildPathEntries(
         return;
     }
 
-    std::stable_sort(order.begin(), order.end(), [this](std::size_t left, std::size_t right) noexcept {
+    std::ranges::stable_sort(order, [this](std::size_t left, std::size_t right) noexcept {
         const auto leftName = pathEntryName(fields_[left]);
         const auto rightName = pathEntryName(fields_[right]);
         if (leftName == rightName) {

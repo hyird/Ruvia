@@ -99,13 +99,10 @@ bool fileTypeAllowed(
     }
     const auto value = extension.substr(1);
     if (options.fileTypes.kind() == StaticFileTypePolicy::Kind::kDefaults) {
-        return std::binary_search(
-            std::begin(kDefaultStaticFileTypes),
-            std::end(kDefaultStaticFileTypes),
-            value);
+        return std::ranges::binary_search(kDefaultStaticFileTypes, value);
     }
     const auto extensions = options.fileTypes.extensions();
-    return std::binary_search(extensions.begin(), extensions.end(), value);
+    return std::ranges::binary_search(extensions, value);
 }
 
 [[nodiscard]] const StaticMimeType* findStaticMimeType(
@@ -191,9 +188,8 @@ std::pmr::string contentTypeFor(
         return false;
     }
 
-    return std::binary_search(
-        directories.begin(),
-        directories.end(),
+    return std::ranges::binary_search(
+        directories,
         relativePath,
         [](const auto& left, const auto& right) {
             return std::string_view(left) < std::string_view(right);

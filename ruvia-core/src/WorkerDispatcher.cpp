@@ -249,7 +249,7 @@ void WorkerDispatcher::scheduleTimer(
         impl_->freeTimerSlot = slotIndex;
         throw;
     }
-    std::push_heap(impl_->timers.begin(), impl_->timers.end(), TimerEntryLater{});
+    std::ranges::push_heap(impl_->timers, TimerEntryLater{});
     registration.bind(*this, slotIndex, slot.generation);
     if (!impl_->dispatchingTimers) {
         armTimer();
@@ -307,7 +307,7 @@ void WorkerDispatcher::cancelTimer(
         std::erase_if(impl_->timers, [this](const TimerEntry& entry) {
             return !hasTimer(entry.slot, entry.generation);
         });
-        std::make_heap(impl_->timers.begin(), impl_->timers.end(), TimerEntryLater{});
+        std::ranges::make_heap(impl_->timers, TimerEntryLater{});
         impl_->staleTimerCount = 0;
     }
     if (!impl_->dispatchingTimers) {
@@ -486,7 +486,7 @@ void WorkerDispatcher::armTimer() {
     while (!impl_->timers.empty() &&
            !hasTimer(impl_->timers.front().slot,
                      impl_->timers.front().generation)) {
-        std::pop_heap(impl_->timers.begin(), impl_->timers.end(), TimerEntryLater{});
+        std::ranges::pop_heap(impl_->timers, TimerEntryLater{});
         impl_->timers.pop_back();
         if (impl_->staleTimerCount != 0) {
             --impl_->staleTimerCount;
@@ -510,7 +510,7 @@ void WorkerDispatcher::fireTimers() {
     impl_->dispatchingTimers = true;
     while (!impl_->timers.empty() &&
            impl_->timers.front().deadline <= std::chrono::steady_clock::now()) {
-        std::pop_heap(impl_->timers.begin(), impl_->timers.end(), TimerEntryLater{});
+        std::ranges::pop_heap(impl_->timers, TimerEntryLater{});
         auto entry = std::move(impl_->timers.back());
         impl_->timers.pop_back();
         if (!hasTimer(entry.slot, entry.generation)) {
