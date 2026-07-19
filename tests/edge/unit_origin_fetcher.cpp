@@ -5,6 +5,7 @@
 // check that the request the origin receives is well-formed (request line and a
 // writer-generated Host header).
 
+#include <chrono>
 #include <cstdio>
 #include <span>
 #include <string>
@@ -18,11 +19,11 @@
 #include <asio/io_context.hpp>
 #include <asio/ip/tcp.hpp>
 #include <asio/read.hpp>
+#include <asio/steady_timer.hpp>
 #include <asio/write.hpp>
 #include <asio/as_tuple.hpp>
 #include <asio/use_awaitable.hpp>
 
-#include "ruvia/core/detail/AsioAwait.h"
 #include "ruvia/edge/OriginFetcher.h"
 #include "ruvia/http/HttpHeader.h"
 
@@ -51,8 +52,13 @@ struct CaseResult final {
     std::string requestSeenByOrigin;
 };
 
-// Run one fetch against a loopback origin that replies with `responseBytes`.
-CaseResult runCase(std::string responseBytes) {
+// Run one fetch against a loopback origin. When `silent`, the origin accepts and
+// reads the request but never replies, holding the connection open so the fetch
+// hits its read deadline.
+CaseResult runCase(
+    std::string responseBytes,
+    bool silent = false,
+    OriginFetcher::Limits limits = {}) {
     asio::io_context io;
     tcp::acceptor acceptor(io, tcp::endpoint(tcp::v4(), 0));
     const std::uint16_t port = acceptor.local_endpoint().port();
@@ -79,6 +85,13 @@ CaseResult runCase(std::string responseBytes) {
                 }
             }
             out.requestSeenByOrigin = request;
+            if (silent) {
+                // Hold the connection open without responding.
+                asio::steady_timer hold(io);
+                hold.expires_after(std::chrono::seconds(5));
+                co_await hold.async_wait(asio::as_tuple(asio::use_awaitable));
+                co_return;
+            }
             co_await asio::async_write(
                 socket,
                 asio::buffer(responseBytes),
@@ -92,18 +105,19 @@ CaseResult runCase(std::string responseBytes) {
     asio::co_spawn(
         io,
         [&]() -> asio::awaitable<void> {
-            const OriginFetcher fetcher(OriginFetcher::Limits{});
+            const OriginFetcher fetcher(limits);
             const HttpHeaderView headers[] = {HttpHeaderView("accept", "*/*")};
             OriginRequest request;
             request.method = "GET";
             request.target = "/thing";
             request.headers = std::span<const HttpHeaderView>(headers);
-            auto result = co_await ruvia::detail::taskAsAwaitable(
-                fetcher.fetch(io.get_executor(), "127.0.0.1", port, request));
+            auto result =
+                co_await fetcher.fetch(io.get_executor(), "127.0.0.1", port, request);
             out.outcome = result.outcome;
             out.status = result.response.status;
             out.body = std::move(result.response.body);
             out.headers = std::move(result.response.headers);
+            io.stop();  // done measuring; do not wait on a held-open origin
             co_return;
         },
         asio::detached);
@@ -183,6 +197,16 @@ int main() {
         check(r.outcome == OriginFetchOutcome::kOk, "no-content fetch succeeds");
         check(r.status == 204, "no-content status is 204");
         check(r.body.empty(), "no-content body is empty");
+    }
+
+    // An origin that accepts but never replies trips the read deadline.
+    {
+        OriginFetcher::Limits limits;
+        limits.connectTimeout = std::chrono::milliseconds(200);
+        limits.ioTimeout = std::chrono::milliseconds(200);
+        const auto r = runCase("", /*silent=*/true, limits);
+        check(r.outcome == OriginFetchOutcome::kTimeout,
+              "a non-responding origin times out");
     }
 
     if (failures == 0) {

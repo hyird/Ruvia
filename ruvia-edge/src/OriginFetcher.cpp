@@ -4,13 +4,18 @@
 #include <charconv>
 #include <string>
 #include <system_error>
+#include <tuple>
+#include <variant>
 
+#include <asio/as_tuple.hpp>
 #include <asio/buffer.hpp>
 #include <asio/connect.hpp>
+#include <asio/experimental/awaitable_operators.hpp>
 #include <asio/ip/tcp.hpp>
+#include <asio/steady_timer.hpp>
+#include <asio/use_awaitable.hpp>
 #include <asio/write.hpp>
 
-#include "ruvia/core/detail/AsioAwait.h"
 #include "ruvia/http/HttpClient.h"
 #include "ruvia/http/Http1ClientRequestWriter.h"
 #include "ruvia/http/Http1ClientResponseParser.h"
@@ -21,7 +26,7 @@ namespace ruvia::edge {
 
 namespace {
 
-using ruvia::detail::asyncAsio;
+using namespace asio::experimental::awaitable_operators;
 
 constexpr std::size_t kHeadBufferBytes = 16u * 1024u;
 constexpr std::size_t kReadChunkBytes = 64u * 1024u;
@@ -40,7 +45,7 @@ enum class BodyFraming : std::uint8_t {
 
 }  // namespace
 
-Task<OriginFetchResult> OriginFetcher::fetch(
+asio::awaitable<OriginFetchResult> OriginFetcher::fetch(
     asio::any_io_executor executor,
     std::string_view host,
     std::uint16_t port,
@@ -67,8 +72,39 @@ Task<OriginFetchResult> OriginFetcher::fetch(
         co_return failure(OriginFetchOutcome::kUnsupported);
     }
 
-    // 2. Resolve and connect a fresh plaintext connection.
+    const auto tuple = asio::as_tuple(asio::use_awaitable);
+    asio::steady_timer deadline(executor);
     asio::ip::tcp::resolver resolver(executor);
+    asio::ip::tcp::socket socket(executor);
+    std::string inbound;
+    std::array<char, kReadChunkBytes> readBuffer;
+    bool timedOut = false;
+    bool readError = false;
+    bool eof = false;
+
+    // One read step, bounded by the inactivity deadline. Appends to `inbound`
+    // and sets the timedOut/readError/eof flags the callers check.
+    const auto readOnce = [&]() -> asio::awaitable<void> {
+        deadline.expires_after(limits_.ioTimeout);
+        auto readRaced = co_await (
+            socket.async_read_some(asio::buffer(readBuffer), tuple) ||
+            deadline.async_wait(tuple));
+        if (readRaced.index() == 1) {
+            timedOut = true;
+            co_return;
+        }
+        auto& [ec, n] = std::get<0>(readRaced);
+        if (n > 0) {
+            inbound.append(readBuffer.data(), n);
+        }
+        if (ec == asio::error::eof) {
+            eof = true;
+        } else if (ec) {
+            readError = true;
+        }
+    };
+
+    // 2. Resolve and connect a fresh plaintext connection, under one deadline.
     std::array<char, 8> portText;
     const auto [portEnd, portEc] =
         std::to_chars(portText.data(), portText.data() + portText.size(), port);
@@ -79,56 +115,61 @@ Task<OriginFetchResult> OriginFetcher::fetch(
     const std::string_view portView(
         portText.data(), static_cast<std::size_t>(portEnd - portText.data()));
 
-    auto resolveCompletion =
-        co_await asyncAsio<asio::ip::tcp::resolver::results_type>(
-            [&](auto handler) mutable {
-                resolver.async_resolve(hostText, portView, std::move(handler));
-            });
-    if (resolveCompletion.errorCode()) {
+    deadline.expires_after(limits_.connectTimeout);
+    auto resolveRaced = co_await (
+        resolver.async_resolve(hostText, portView, tuple) ||
+        deadline.async_wait(tuple));
+    if (resolveRaced.index() == 1) {
+        co_return failure(OriginFetchOutcome::kTimeout);
+    }
+    if (std::get<0>(std::get<0>(resolveRaced))) {
         co_return failure(OriginFetchOutcome::kConnectFailed);
     }
-    const auto endpoints = std::move(resolveCompletion).takeResult();
+    const auto endpoints = std::move(std::get<1>(std::get<0>(resolveRaced)));
 
-    asio::ip::tcp::socket socket(executor);
-    const auto connectCompletion = co_await asyncAsio(
-        [&](auto handler) mutable {
-            asio::async_connect(socket, endpoints, std::move(handler));
-        });
-    if (connectCompletion.errorCode()) {
+    auto connectRaced = co_await (
+        asio::async_connect(socket, endpoints, tuple) ||
+        deadline.async_wait(tuple));
+    if (connectRaced.index() == 1) {
+        co_return failure(OriginFetchOutcome::kTimeout);
+    }
+    if (std::get<0>(std::get<0>(connectRaced))) {
         co_return failure(OriginFetchOutcome::kConnectFailed);
     }
 
-    // 3. Send the request head (the MVP sends only bodyless requests, but honor
-    // an immediate content plan if one was produced).
-    const auto writeCompletion = co_await asyncAsio(
-        [&](auto handler) mutable {
-            asio::async_write(
-                socket,
-                asio::buffer(prepared->head().data(), prepared->head().size()),
-                std::move(handler));
-        });
-    if (writeCompletion.errorCode()) {
+    // 3. Send the request head (and immediate content, if any).
+    deadline.expires_after(limits_.ioTimeout);
+    auto writeRaced = co_await (
+        asio::async_write(
+            socket,
+            asio::buffer(prepared->head().data(), prepared->head().size()),
+            tuple) ||
+        deadline.async_wait(tuple));
+    if (writeRaced.index() == 1) {
+        co_return failure(OriginFetchOutcome::kTimeout);
+    }
+    if (std::get<0>(std::get<0>(writeRaced))) {
         co_return failure(OriginFetchOutcome::kWriteFailed);
     }
     if (const auto* immediate = prepared->contentPlan().immediate();
         immediate != nullptr && !immediate->bytes().empty()) {
-        const auto contentCompletion = co_await asyncAsio(
-            [&](auto handler) mutable {
-                asio::async_write(
-                    socket,
-                    asio::buffer(immediate->bytes().data(), immediate->bytes().size()),
-                    std::move(handler));
-            });
-        if (contentCompletion.errorCode()) {
+        deadline.expires_after(limits_.ioTimeout);
+        auto contentRaced = co_await (
+            asio::async_write(
+                socket,
+                asio::buffer(immediate->bytes().data(), immediate->bytes().size()),
+                tuple) ||
+            deadline.async_wait(tuple));
+        if (contentRaced.index() == 1) {
+            co_return failure(OriginFetchOutcome::kTimeout);
+        }
+        if (std::get<0>(std::get<0>(contentRaced))) {
             co_return failure(OriginFetchOutcome::kWriteFailed);
         }
     }
 
-    // 4. Read and parse the response head, advancing past any informational
-    // (1xx) responses until the final head arrives.
+    // 4. Read and parse the response head, advancing past any 1xx responses.
     Http1ClientResponseParser parser(*prepared);
-    std::string inbound;
-    std::array<char, kReadChunkBytes> readBuffer;
     OriginResponse response;
     BodyFraming framing = BodyFraming::kNone;
     std::size_t knownLength = 0;
@@ -141,18 +182,15 @@ Task<OriginFetchResult> OriginFetcher::fetch(
         if (auto* parsed = parseResult.parsed(); parsed != nullptr) {
             const auto& plan = parsed->plan();
             if (plan.informational() != nullptr) {
-                // Not the final response: drop its bytes and keep parsing.
                 inbound.erase(0, parsed->consumedBytes());
                 continue;
             }
-
             response.status = parsed->head().status().value();
             for (const auto& field : parsed->head().headers()) {
                 response.headers.emplace_back(
                     std::string(field.name()), std::string(field.value()));
             }
             const std::size_t consumed = parsed->consumedBytes();
-
             if (plan.withoutContent() != nullptr || plan.zeroContent() != nullptr) {
                 framing = BodyFraming::kNone;
             } else if (const auto* known = plan.knownLength()) {
@@ -163,22 +201,17 @@ Task<OriginFetchResult> OriginFetcher::fetch(
             } else if (plan.closeDelimited() != nullptr) {
                 framing = BodyFraming::kCloseDelimited;
             } else {
-                // CONNECT tunnel or protocol upgrade: not an MVP cache path.
                 co_return failure(OriginFetchOutcome::kUnsupported);
             }
-            inbound.erase(0, consumed);  // inbound now holds only body bytes
+            inbound.erase(0, consumed);
             break;
         }
 
-        // Need more bytes to complete the head.
-        auto readResult = co_await asyncAsio<std::size_t>(
-            [&](auto handler) mutable {
-                socket.async_read_some(asio::buffer(readBuffer), std::move(handler));
-            });
-        if (readResult.result() > 0) {
-            inbound.append(readBuffer.data(), readResult.result());
+        co_await readOnce();
+        if (timedOut) {
+            co_return failure(OriginFetchOutcome::kTimeout);
         }
-        if (readResult.errorCode()) {
+        if (readError || eof) {
             co_return failure(OriginFetchOutcome::kReadFailed);
         }
     }
@@ -193,15 +226,11 @@ Task<OriginFetchResult> OriginFetcher::fetch(
                 co_return failure(OriginFetchOutcome::kTooLarge);
             }
             while (inbound.size() < knownLength) {
-                auto readResult = co_await asyncAsio<std::size_t>(
-                    [&](auto handler) mutable {
-                        socket.async_read_some(
-                            asio::buffer(readBuffer), std::move(handler));
-                    });
-                if (readResult.result() > 0) {
-                    inbound.append(readBuffer.data(), readResult.result());
+                co_await readOnce();
+                if (timedOut) {
+                    co_return failure(OriginFetchOutcome::kTimeout);
                 }
-                if (readResult.errorCode()) {
+                if (readError || eof) {
                     co_return failure(OriginFetchOutcome::kReadFailed);
                 }
             }
@@ -212,21 +241,17 @@ Task<OriginFetchResult> OriginFetcher::fetch(
 
         case BodyFraming::kCloseDelimited: {
             for (;;) {
-                auto readResult = co_await asyncAsio<std::size_t>(
-                    [&](auto handler) mutable {
-                        socket.async_read_some(
-                            asio::buffer(readBuffer), std::move(handler));
-                    });
-                if (readResult.result() > 0) {
-                    inbound.append(readBuffer.data(), readResult.result());
-                    if (inbound.size() > limits_.maxResponseBytes) {
-                        co_return failure(OriginFetchOutcome::kTooLarge);
-                    }
+                co_await readOnce();
+                if (timedOut) {
+                    co_return failure(OriginFetchOutcome::kTimeout);
                 }
-                if (readResult.errorCode() == asio::error::eof) {
-                    break;  // EOF is the message terminator here
+                if (inbound.size() > limits_.maxResponseBytes) {
+                    co_return failure(OriginFetchOutcome::kTooLarge);
                 }
-                if (readResult.errorCode()) {
+                if (eof) {
+                    break;  // EOF terminates a close-delimited message
+                }
+                if (readError) {
                     co_return failure(OriginFetchOutcome::kReadFailed);
                 }
             }
@@ -253,17 +278,12 @@ Task<OriginFetchResult> OriginFetcher::fetch(
                 if (decoded.complete() != nullptr) {
                     break;
                 }
-                // Need more bytes for the next chunk.
                 inbound.erase(0, decoded.consumedBytes());
-                auto readResult = co_await asyncAsio<std::size_t>(
-                    [&](auto handler) mutable {
-                        socket.async_read_some(
-                            asio::buffer(readBuffer), std::move(handler));
-                    });
-                if (readResult.result() > 0) {
-                    inbound.append(readBuffer.data(), readResult.result());
+                co_await readOnce();
+                if (timedOut) {
+                    co_return failure(OriginFetchOutcome::kTimeout);
                 }
-                if (readResult.errorCode()) {
+                if (readError || eof) {
                     co_return failure(OriginFetchOutcome::kReadFailed);
                 }
             }

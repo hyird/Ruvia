@@ -17,7 +17,6 @@
 #include <asio/use_awaitable.hpp>
 #include <asio/write.hpp>
 
-#include "ruvia/core/detail/AsioAwait.h"
 #include "ruvia/edge/EdgeFreshness.h"
 #include "ruvia/http/Http1RequestParser.h"
 #include "ruvia/http/HttpCache.h"
@@ -317,11 +316,14 @@ asio::awaitable<void> EdgeServer::handleSession(asio::ip::tcp::socket socket) {
         OriginRequest originRequest;
         originRequest.method = "GET";
         originRequest.target = target;
-        auto fetch = co_await ruvia::detail::taskAsAwaitable(fetcher_.fetch(
+        auto fetch = co_await fetcher_.fetch(
             ioContext_.get_executor(), origin->upstreamHost, origin->upstreamPort,
-            originRequest));
+            originRequest);
         if (fetch.outcome != OriginFetchOutcome::kOk) {
-            co_await writeAll(buildStatusWire(502));
+            // A timeout is a gateway timeout; every other failure is a bad gateway.
+            const std::uint16_t gatewayStatus =
+                fetch.outcome == OriginFetchOutcome::kTimeout ? 504 : 502;
+            co_await writeAll(buildStatusWire(gatewayStatus));
             finish();
             co_return;
         }

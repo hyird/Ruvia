@@ -1,5 +1,6 @@
 #pragma once
 
+#include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <span>
@@ -9,8 +10,8 @@
 #include <vector>
 
 #include <asio/any_io_executor.hpp>
+#include <asio/awaitable.hpp>
 
-#include "ruvia/core/Task.h"
 #include "ruvia/http/HttpHeader.h"
 
 namespace ruvia::edge {
@@ -35,6 +36,7 @@ enum class OriginFetchOutcome : std::uint8_t {
     kReadFailed,      // reading the response failed (including premature EOF)
     kProtocolError,   // the origin's response was malformed
     kTooLarge,        // the response exceeded the configured byte ceiling
+    kTimeout,         // the connect or an I/O step exceeded its deadline
     kUnsupported,     // a framing the MVP does not handle (upgrade / CONNECT / TLS origin)
 };
 
@@ -59,11 +61,19 @@ struct OriginFetchResult final {
 // one request, read the whole response, close. Handles the four response body
 // framings (no-content, exact length, chunked, close-delimited); protocol
 // upgrades, CONNECT and TLS origins are reported as unsupported.
+//
+// Every network step is bounded by a deadline: resolve+connect share the connect
+// timeout, and each read/write resets an inactivity timeout, so a slow or hung
+// origin ends the fetch with kTimeout instead of stalling the connection.
 class OriginFetcher final {
 public:
     struct Limits final {
         // Upper bound on the decoded response body the edge will hold in memory.
         std::size_t maxResponseBytes{8u * 1024u * 1024u};
+        // Deadline for resolving and connecting to the origin.
+        std::chrono::milliseconds connectTimeout{5000};
+        // Inactivity deadline for each subsequent read/write step.
+        std::chrono::milliseconds ioTimeout{30000};
     };
 
     explicit OriginFetcher(Limits limits) noexcept : limits_(limits) {}
@@ -71,7 +81,7 @@ public:
     OriginFetcher(const OriginFetcher&) = delete;
     OriginFetcher& operator=(const OriginFetcher&) = delete;
 
-    [[nodiscard]] Task<OriginFetchResult> fetch(
+    [[nodiscard]] asio::awaitable<OriginFetchResult> fetch(
         asio::any_io_executor executor,
         std::string_view host,
         std::uint16_t port,
