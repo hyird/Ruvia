@@ -176,6 +176,15 @@ std::string httpGet(std::uint16_t port, std::string_view host, std::string_view 
     return httpRaw(port, request);
 }
 
+std::string httpHead(std::uint16_t port, std::string_view host, std::string_view target) {
+    std::string request = "HEAD ";
+    request.append(target);
+    request.append(" HTTP/1.1\r\nHost: ");
+    request.append(host);
+    request.append("\r\nConnection: close\r\n\r\n");
+    return httpRaw(port, request);
+}
+
 [[nodiscard]] int statusOf(const std::string& raw) {
     // "HTTP/1.1 " is 9 bytes; the status code is the next three digits.
     if (raw.size() < 12 || !raw.starts_with("HTTP/1.1 ")) {
@@ -257,6 +266,18 @@ int main() {
         const auto r = httpGet(edgePort, "front.local", "/page");
         check(contains(r, "X-Cache: MISS"), "post-purge request is a MISS");
         check(origin.hits() == 2, "post-purge request re-contacted the origin");
+    }
+
+    // HEAD is answered from the cached GET: status and headers with the resource
+    // length, but no message body, and without contacting the origin.
+    {
+        const int before = origin.hits();
+        const auto r = httpHead(edgePort, "front.local", "/page");
+        check(statusOf(r) == 200, "HEAD served 200");
+        check(contains(r, "X-Cache: HIT"), "HEAD served from the cached GET");
+        check(contains(r, "Content-Length: 5"), "HEAD reports the resource length");
+        check(bodyOf(r).empty(), "HEAD response carries no body");
+        check(origin.hits() == before, "HEAD hit did not contact the origin");
     }
 
     // Conditional revalidation: a short-lived entry goes stale, is revalidated

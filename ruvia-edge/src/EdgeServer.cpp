@@ -71,14 +71,20 @@ void appendDecimal(std::string& out, std::uint64_t value) {
 // Content-Length, Connection: close (one request per connection), an X-Cache
 // marker, and -- when the edge computes its own age for a cache hit -- an Age
 // header (dropping any inherited one).
+//
+// omitBody serves a HEAD response: no message body is appended, and the resource
+// length is reported by keeping the origin's Content-Length when present, else
+// computing it from `body` (which for HEAD is the full representation used only
+// for its size). Transfer-Encoding is still dropped in both modes.
 [[nodiscard]] std::string buildResponseWire(
     std::uint16_t status,
     const Headers& headers,
     std::string_view body,
     std::string_view xCache,
-    std::optional<std::uint64_t> ageOverride) {
+    std::optional<std::uint64_t> ageOverride,
+    bool omitBody = false) {
     std::string out;
-    out.reserve(body.size() + 256);
+    out.reserve((omitBody ? 0 : body.size()) + 256);
 
     out.append("HTTP/1.1 ");
     appendDecimal(out, status);
@@ -88,13 +94,20 @@ void appendDecimal(std::string& out, std::uint64_t value) {
     }
     out.append("\r\n");
 
+    bool keptContentLength = false;
     for (const auto& [name, value] : headers) {
         std::string lower(name);
         for (auto& c : lower) {
             c = toLowerAscii(c);
         }
         if (isConnectionOrFramingField(lower)) {
-            continue;
+            // For a HEAD response keep the origin's Content-Length; otherwise the
+            // edge emits its own from the body length.
+            if (omitBody && lower == "content-length") {
+                keptContentLength = true;
+            } else {
+                continue;
+            }
         }
         if (ageOverride && lower == "age") {
             continue;
@@ -105,9 +118,11 @@ void appendDecimal(std::string& out, std::uint64_t value) {
         out.append("\r\n");
     }
 
-    out.append("Content-Length: ");
-    appendDecimal(out, body.size());
-    out.append("\r\n");
+    if (!omitBody || !keptContentLength) {
+        out.append("Content-Length: ");
+        appendDecimal(out, body.size());
+        out.append("\r\n");
+    }
     out.append("Connection: close\r\n");
     out.append("X-Cache: ");
     out.append(xCache);
@@ -118,7 +133,9 @@ void appendDecimal(std::string& out, std::uint64_t value) {
         out.append("\r\n");
     }
     out.append("\r\n");
-    out.append(body);
+    if (!omitBody) {
+        out.append(body);
+    }
     return out;
 }
 
@@ -317,9 +334,11 @@ asio::awaitable<void> EdgeServer::handleSession(asio::ip::tcp::socket socket) {
             continue;
         }
 
-        // 2. A framed request. The MVP proxies GET only.
+        // 2. A framed request. GET and HEAD take the cache path; other methods
+        // are not handled yet.
         const auto& request = parsed->request();
-        if (request.knownMethod() != HttpKnownMethod::kGet) {
+        const bool isHead = request.knownMethod() == HttpKnownMethod::kHead;
+        if (request.knownMethod() != HttpKnownMethod::kGet && !isHead) {
             co_await writeAll(buildStatusWire(501));
             finish();
             co_return;
@@ -347,8 +366,8 @@ asio::awaitable<void> EdgeServer::handleSession(asio::ip::tcp::socket socket) {
             const auto age = entry.storedAt <= now
                 ? static_cast<std::uint64_t>(now - entry.storedAt)
                 : std::uint64_t{0};
-            co_await writeAll(
-                buildResponseWire(entry.status, entry.headers, entry.body, "HIT", age));
+            co_await writeAll(buildResponseWire(
+                entry.status, entry.headers, entry.body, "HIT", age, isHead));
             finish();
             co_return;
         }
@@ -404,7 +423,7 @@ asio::awaitable<void> EdgeServer::handleSession(asio::ip::tcp::socket socket) {
         }
 
         OriginRequest originRequest;
-        originRequest.method = "GET";
+        originRequest.method = request.method();  // GET or HEAD
         originRequest.target = target;
         originRequest.headers = forwardHeaders;
         auto fetch = co_await fetcher_.fetch(
@@ -423,7 +442,8 @@ asio::awaitable<void> EdgeServer::handleSession(asio::ip::tcp::socket socket) {
                 ? static_cast<std::uint64_t>(now - staleEntry->storedAt)
                 : std::uint64_t{0};
             co_await writeAll(buildResponseWire(
-                staleEntry->status, staleEntry->headers, staleEntry->body, "STALE", age));
+                staleEntry->status, staleEntry->headers, staleEntry->body, "STALE", age,
+                isHead));
         };
 
         if (fetch.outcome != OriginFetchOutcome::kOk) {
@@ -468,16 +488,16 @@ asio::awaitable<void> EdgeServer::handleSession(asio::ip::tcp::socket socket) {
             }
             co_await writeAll(buildResponseWire(
                 refreshed->status, refreshed->headers, refreshed->body, "REVALIDATED",
-                std::uint64_t{0}));
+                std::uint64_t{0}, isHead));
             finish();
             co_return;
         }
 
         // 6b. A full response: store it if a shared cache is allowed to (replacing
-        // any stale entry under this key).
+        // any stale entry under this key). A HEAD response has no body to cache.
         const auto decision = evaluateFreshness(
             buildFreshnessInput(fetch.response.status, fetch.response.headers, now));
-        if (decision.cacheable) {
+        if (!isHead && decision.cacheable) {
             auto entry = std::make_shared<CachedResponse>();
             entry->status = fetch.response.status;
             entry->headers = fetch.response.headers;
@@ -492,7 +512,7 @@ asio::awaitable<void> EdgeServer::handleSession(asio::ip::tcp::socket socket) {
         // 7. Serve the freshly fetched response.
         co_await writeAll(buildResponseWire(
             fetch.response.status, fetch.response.headers, fetch.response.body, "MISS",
-            std::nullopt));
+            std::nullopt, isHead));
         finish();
         co_return;
     }
