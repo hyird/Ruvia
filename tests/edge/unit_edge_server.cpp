@@ -247,12 +247,15 @@ int main() {
     OriginServer origin;
     origin.start();
 
-    EdgeServer edge(tcp::endpoint(tcp::v4(), 0));
+    ruvia::edge::EdgeServerOptions options;
+    options.adminEndpoint = tcp::endpoint(tcp::v4(), 0);
+    EdgeServer edge(tcp::endpoint(tcp::v4(), 0), options);
     edge.start();
     check(edge.addOrigin("front.local",
                          OriginSettings{"127.0.0.1", origin.port(), false}),
           "addOrigin maps the front host at runtime");
     const std::uint16_t edgePort = edge.localEndpoint().port();
+    const std::uint16_t adminPort = edge.localAdminEndpoint().value().port();
 
     // First request: a proxied cache miss reaches the origin.
     {
@@ -332,6 +335,34 @@ int main() {
         const auto get = httpGet(edgePort, "front.local", "/page");
         check(contains(get, "X-Cache: MISS"),
               "the unsafe method invalidated the cached GET");
+    }
+
+    // Management API: add an origin over HTTP, use it on the data port, read
+    // stats, then remove it -- the operator face of the dynamic config.
+    {
+        const std::string put =
+            "PUT /origins/admin.local?upstream=127.0.0.1&port=" +
+            std::to_string(origin.port()) +
+            " HTTP/1.1\r\nHost: admin\r\nConnection: close\r\n\r\n";
+        const auto putResp = httpRaw(adminPort, put);
+        check(statusOf(putResp) == 200, "admin PUT /origins adds a mapping");
+        check(contains(putResp, "created"), "admin reports the mapping was created");
+
+        const auto proxied = httpGet(edgePort, "admin.local", "/admin-page");
+        check(statusOf(proxied) == 200, "the admin-added origin proxies requests");
+
+        const auto stats = httpRaw(
+            adminPort, "GET /stats HTTP/1.1\r\nHost: admin\r\nConnection: close\r\n\r\n");
+        check(statusOf(stats) == 200, "admin GET /stats works");
+        check(contains(stats, "entries="), "stats reports cache entries");
+
+        const auto del = httpRaw(
+            adminPort,
+            "DELETE /origins/admin.local HTTP/1.1\r\nHost: admin\r\nConnection: close\r\n\r\n");
+        check(statusOf(del) == 200, "admin DELETE /origins removes the mapping");
+
+        const auto gone = httpGet(edgePort, "admin.local", "/admin-page");
+        check(statusOf(gone) == 502, "removed origin is no longer routable");
     }
 
     // Conditional revalidation: a short-lived entry goes stale, is revalidated

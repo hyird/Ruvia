@@ -147,6 +147,22 @@ void appendDecimal(std::string& out, std::uint64_t value) {
     return buildResponseWire(status, Headers{}, {}, "MISS", std::nullopt);
 }
 
+// A plain-text response for the management API.
+[[nodiscard]] std::string buildAdminResponse(std::uint16_t status, std::string_view body) {
+    std::string out;
+    out.append("HTTP/1.1 ");
+    appendDecimal(out, status);
+    out.push_back(' ');
+    if (const auto code = HttpStatusCode::tryFromValue(status)) {
+        out.append(httpReasonPhrase(*code));
+    }
+    out.append("\r\nContent-Type: text/plain\r\nContent-Length: ");
+    appendDecimal(out, body.size());
+    out.append("\r\nConnection: close\r\n\r\n");
+    out.append(body);
+    return out;
+}
+
 [[nodiscard]] std::optional<std::string_view> findHeaderValue(
     const Headers& headers,
     std::string_view name) {
@@ -212,7 +228,11 @@ void appendDecimal(std::string& out, std::uint64_t value) {
 EdgeServer::EdgeServer(const asio::ip::tcp::endpoint& endpoint, EdgeServerOptions options)
     : acceptor_(ioContext_, endpoint),
       cache_(options.cache),
-      fetcher_(options.fetch) {}
+      fetcher_(options.fetch) {
+    if (options.adminEndpoint) {
+        adminAcceptor_.emplace(ioContext_, *options.adminEndpoint);
+    }
+}
 
 EdgeServer::~EdgeServer() {
     ioContext_.stop();
@@ -223,6 +243,9 @@ EdgeServer::~EdgeServer() {
 
 void EdgeServer::start() {
     asio::co_spawn(ioContext_, acceptLoop(), asio::detached);
+    if (adminAcceptor_) {
+        asio::co_spawn(ioContext_, adminAcceptLoop(), asio::detached);
+    }
     worker_ = std::jthread([this] { ioContext_.run(); });
 }
 
@@ -241,6 +264,13 @@ void EdgeServer::join() {
 
 asio::ip::tcp::endpoint EdgeServer::localEndpoint() const {
     return acceptor_.local_endpoint();
+}
+
+std::optional<asio::ip::tcp::endpoint> EdgeServer::localAdminEndpoint() const {
+    if (adminAcceptor_) {
+        return adminAcceptor_->local_endpoint();
+    }
+    return std::nullopt;
 }
 
 bool EdgeServer::addOrigin(std::string frontHost, OriginSettings settings) {
@@ -604,6 +634,124 @@ asio::awaitable<void> EdgeServer::handleSession(asio::ip::tcp::socket socket) {
         co_await writeAll(buildResponseWire(
             fetch.response.status, fetch.response.headers, fetch.response.body, "MISS",
             std::nullopt, isHead));
+        finish();
+        co_return;
+    }
+}
+
+asio::awaitable<void> EdgeServer::adminAcceptLoop() {
+    for (;;) {
+        auto [ec, socket] =
+            co_await adminAcceptor_->async_accept(asio::as_tuple(asio::use_awaitable));
+        if (ec) {
+            if (ec == asio::error::operation_aborted) {
+                break;
+            }
+            continue;
+        }
+        asio::co_spawn(
+            ioContext_, handleAdminSession(std::move(socket)), asio::detached);
+    }
+}
+
+asio::awaitable<void> EdgeServer::handleAdminSession(asio::ip::tcp::socket socket) {
+    const auto writeAll = [&socket](std::string wire) -> asio::awaitable<void> {
+        co_await asio::async_write(
+            socket, asio::buffer(wire.data(), wire.size()),
+            asio::as_tuple(asio::use_awaitable));
+    };
+    const auto finish = [&socket]() {
+        asio::error_code ignore;
+        socket.shutdown(asio::ip::tcp::socket::shutdown_both, ignore);
+    };
+
+    std::string inbound;
+    std::array<char, 4096> buffer;
+    const Http1RequestParser parser;
+
+    for (;;) {
+        auto parseResult = parser.parse(inbound);
+        if (parseResult.failure() != nullptr) {
+            co_await writeAll(buildAdminResponse(400, "bad request"));
+            finish();
+            co_return;
+        }
+        const auto* parsed = parseResult.parsed();
+        if (parsed == nullptr) {
+            if (inbound.size() > kMaxRequestBytes) {
+                co_await writeAll(buildAdminResponse(413, "request too large"));
+                finish();
+                co_return;
+            }
+            auto [ec, n] = co_await socket.async_read_some(
+                asio::buffer(buffer), asio::as_tuple(asio::use_awaitable));
+            if (n > 0) {
+                inbound.append(buffer.data(), n);
+            }
+            if (ec) {
+                co_return;
+            }
+            continue;
+        }
+
+        const auto& request = parsed->request();
+        const auto method = request.knownMethod();
+        const std::string_view path = request.path();
+        const auto query = [&](std::string_view name) -> std::string_view {
+            return request.query(name).value_or(std::string_view{});
+        };
+
+        std::uint16_t status = 404;
+        std::string body = "not found";
+
+        if (path == "/stats" && method == HttpKnownMethod::kGet) {
+            body = "entries=";
+            appendDecimal(body, cache_.entryCount());
+            body += " bytes=";
+            appendDecimal(body, cache_.byteSize());
+            status = 200;
+        } else if (path.starts_with("/origins/")) {
+            const std::string_view host = path.substr(std::string_view("/origins/").size());
+            if (host.empty()) {
+                status = 400;
+                body = "missing host";
+            } else if (method == HttpKnownMethod::kPut) {
+                const std::string_view upstream = query("upstream");
+                const std::string_view portText = query("port");
+                std::uint16_t port = 0;
+                const bool portOk = !portText.empty() &&
+                    std::from_chars(portText.data(), portText.data() + portText.size(), port)
+                            .ec == std::errc{};
+                if (upstream.empty() || !portOk) {
+                    status = 400;
+                    body = "need upstream and port";
+                } else {
+                    const bool created = config_.addOrigin(
+                        std::string(host),
+                        OriginSettings{std::string(upstream), port, false});
+                    status = 200;
+                    body = created ? "created" : "updated";
+                }
+            } else if (method == HttpKnownMethod::kDelete) {
+                const bool removed = config_.removeOrigin(host);
+                status = removed ? 200 : 404;
+                body = removed ? "removed" : "not found";
+            } else {
+                status = 405;
+                body = "method not allowed";
+            }
+        } else if (path == "/purge" &&
+                   (method == HttpKnownMethod::kPost || method == HttpKnownMethod::kDelete)) {
+            const bool purged = cache_.purge(cacheKey("GET", query("host"), query("target")));
+            status = purged ? 200 : 404;
+            body = purged ? "purged" : "not found";
+        } else if (path == "/cache" && method == HttpKnownMethod::kDelete) {
+            cache_.clear();
+            status = 200;
+            body = "cleared";
+        }
+
+        co_await writeAll(buildAdminResponse(status, body));
         finish();
         co_return;
     }
