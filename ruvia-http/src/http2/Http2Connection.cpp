@@ -384,8 +384,7 @@ void Http2Connection::detachActiveHeaderBlock(Http2StreamState& stream) {
 }
 
 void Http2Connection::unpinStream(std::uint32_t streamId) {
-    pinnedStreams_.erase(
-        std::remove(pinnedStreams_.begin(), pinnedStreams_.end(), streamId), pinnedStreams_.end());
+    std::erase(pinnedStreams_, streamId);
     auto* stream = streams_.find(streamId);
     if (stream == nullptr) {
         return;  // never created, or already removed
@@ -422,16 +421,12 @@ void Http2Connection::unpinStream(std::uint32_t streamId) {
 }
 
 void Http2Connection::discardDeferredStreamState(std::uint32_t streamId) {
-    pendingSends_.erase(
-        std::remove_if(
-            pendingSends_.begin(), pendingSends_.end(),
-            [streamId](const Http2PendingSend& pending) {
-                return pending.streamId == streamId;
-            }),
-        pendingSends_.end());
-    drainedDataStreams_.erase(
-        std::remove(drainedDataStreams_.begin(), drainedDataStreams_.end(), streamId),
-        drainedDataStreams_.end());
+    std::erase_if(
+        pendingSends_,
+        [streamId](const Http2PendingSend& pending) {
+            return pending.streamId == streamId;
+        });
+    std::erase(drainedDataStreams_, streamId);
     if (auto* stream = streams_.find(streamId); stream != nullptr) {
         http2ReleaseResponseHeaderBlock(*stream);
     }
