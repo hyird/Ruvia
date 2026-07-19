@@ -56,6 +56,10 @@ public:
         if (thread_.joinable()) {
             thread_.join();
         }
+        // Close the listener so later connects are refused promptly (the
+        // stale-if-error test relies on a fast connection failure).
+        asio::error_code ignore;
+        acceptor_.close(ignore);
     }
 
     [[nodiscard]] std::uint16_t port() const { return acceptor_.local_endpoint().port(); }
@@ -108,7 +112,9 @@ private:
                 "\r\n";
         } else {
             hits_.fetch_add(1);
-            const bool shortLived = request.find("GET /rev ") != std::string::npos;
+            const bool shortLived = request.find("GET /rev ") != std::string::npos ||
+                request.find("GET /sie ") != std::string::npos;
+            const bool staleIfError = request.find("GET /sie ") != std::string::npos;
             response =
                 "HTTP/1.1 200 OK\r\n"
                 "Content-Type: text/plain\r\n"
@@ -116,6 +122,9 @@ private:
                 "ETag: \"v1\"\r\n"
                 "Cache-Control: max-age=";
             response += shortLived ? "1" : "60";
+            if (staleIfError) {
+                response += ", stale-if-error=300";
+            }
             response += "\r\n\r\nhello";
         }
         co_await asio::async_write(
@@ -270,6 +279,23 @@ int main() {
 
         const auto c = httpGet(edgePort, "front.local", "/rev");
         check(contains(c, "X-Cache: HIT"), "refreshed entry is a hit again");
+    }
+
+    // stale-if-error: once the origin is unreachable, a stale entry within its
+    // stale-if-error window is served instead of a gateway error.
+    {
+        const auto a = httpGet(edgePort, "front.local", "/sie");
+        check(contains(a, "X-Cache: MISS"), "first /sie request is a MISS");
+        check(bodyOf(a) == "hello", "/sie body proxied");
+
+        std::this_thread::sleep_for(std::chrono::milliseconds(1100));  // go stale
+        origin.stop();  // the origin is now unreachable
+
+        const auto b = httpGet(edgePort, "front.local", "/sie");
+        check(contains(b, "X-Cache: STALE"),
+              "unreachable origin falls back to the stale copy");
+        check(statusOf(b) == 200, "stale fallback keeps the stored status");
+        check(bodyOf(b) == "hello", "stale body served on origin error");
     }
 
     // Removing the origin mapping at runtime makes the host unroutable.

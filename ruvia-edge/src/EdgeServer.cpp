@@ -410,11 +410,39 @@ asio::awaitable<void> EdgeServer::handleSession(asio::ip::tcp::socket socket) {
         auto fetch = co_await fetcher_.fetch(
             ioContext_.get_executor(), origin->upstreamHost, origin->upstreamPort,
             originRequest);
+
+        // stale-if-error: a stale copy within its stale-if-error window is served
+        // when the origin cannot be reached, instead of a gateway error.
+        const auto serveStaleOnError = [&]() -> bool {
+            return staleEntry != nullptr && staleEntry->staleIfError > 0 &&
+                now <= staleEntry->expiresAt +
+                           static_cast<std::time_t>(staleEntry->staleIfError);
+        };
+        const auto writeStale = [&]() -> asio::awaitable<void> {
+            const auto age = staleEntry->storedAt <= now
+                ? static_cast<std::uint64_t>(now - staleEntry->storedAt)
+                : std::uint64_t{0};
+            co_await writeAll(buildResponseWire(
+                staleEntry->status, staleEntry->headers, staleEntry->body, "STALE", age));
+        };
+
         if (fetch.outcome != OriginFetchOutcome::kOk) {
+            if (serveStaleOnError()) {
+                co_await writeStale();
+                finish();
+                co_return;
+            }
             // A timeout is a gateway timeout; every other failure is a bad gateway.
             const std::uint16_t gatewayStatus =
                 fetch.outcome == OriginFetchOutcome::kTimeout ? 504 : 502;
             co_await writeAll(buildStatusWire(gatewayStatus));
+            finish();
+            co_return;
+        }
+
+        // A 5xx from the origin is also an error stale-if-error can paper over.
+        if (fetch.response.status >= 500 && serveStaleOnError()) {
+            co_await writeStale();
             finish();
             co_return;
         }
