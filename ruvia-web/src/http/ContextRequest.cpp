@@ -225,7 +225,7 @@ void assignDotPath(
     // The original position is an explicit tie-breaker, so an in-place sort has
     // the same deterministic order as stable_sort without its non-PMR scratch
     // allocation on the request path.
-    std::sort(order.begin(), order.end(), [&storage](std::size_t left, std::size_t right) noexcept {
+    std::ranges::sort(order, [&storage](std::size_t left, std::size_t right) noexcept {
         const auto leftName = pairNameAt(storage, left);
         const auto rightName = pairNameAt(storage, right);
         if (leftName == rightName) {
@@ -244,7 +244,7 @@ void assignDotPath(
     for (std::size_t i = 0; i < fields.size(); ++i) {
         order.push_back(i);
     }
-    std::sort(order.begin(), order.end(), [&fields](std::size_t left, std::size_t right) noexcept {
+    std::ranges::sort(order, [&fields](std::size_t left, std::size_t right) noexcept {
         const auto leftName = fields[left].name();
         const auto rightName = fields[right].name();
         if (leftName == rightName) {

@@ -242,7 +242,7 @@ private:
         slot.resetAtMs = resetAtMs;
         slot.count = 1;
         slot.keySize = static_cast<std::uint8_t>(key.size());
-        std::copy(key.begin(), key.end(), slot.key.begin());
+        std::ranges::copy(key, slot.key.begin());
     }
 
     [[nodiscard]] static RateLimitDecision consume(

@@ -336,7 +336,7 @@ bool Http2Connection::processWindowUpdate(const Http2FrameHeader& header, std::s
 }
 
 bool Http2Connection::isPinned(std::uint32_t streamId) const noexcept {
-    return std::find(pinnedStreams_.begin(), pinnedStreams_.end(), streamId) != pinnedStreams_.end();
+    return std::ranges::find(pinnedStreams_, streamId) != pinnedStreams_.end();
 }
 
 void Http2Connection::pinStream(std::uint32_t streamId) {

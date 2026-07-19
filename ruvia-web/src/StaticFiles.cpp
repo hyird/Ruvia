@@ -67,7 +67,7 @@ void normalizeMimeTypes(std::pmr::vector<StaticMimeType>& mimeTypes) {
             }
         }
     }
-    std::sort(mimeTypes.begin(), mimeTypes.end(), [](const StaticMimeType& left, const StaticMimeType& right) {
+    std::ranges::sort(mimeTypes, [](const StaticMimeType& left, const StaticMimeType& right) {
         return left.extension < right.extension;
     });
 }
@@ -83,8 +83,8 @@ void normalizeFileTypes(std::pmr::vector<std::pmr::string>& fileTypes) {
             }
         }
     }
-    std::sort(fileTypes.begin(), fileTypes.end());
-    fileTypes.erase(std::unique(fileTypes.begin(), fileTypes.end()), fileTypes.end());
+    std::ranges::sort(fileTypes);
+    fileTypes.erase(std::ranges::unique(fileTypes).begin(), fileTypes.end());
 }
 
 bool fileTypeAllowed(
@@ -374,11 +374,11 @@ StaticRoot::StaticRoot(const std::filesystem::path& root, StaticRootOptions opti
         }
         state.entries.push_back(std::move(entry));
     }
-    std::sort(state.entries.begin(), state.entries.end(), [](const detail::StaticRootEntry& left, const detail::StaticRootEntry& right) {
+    std::ranges::sort(state.entries, [](const detail::StaticRootEntry& left, const detail::StaticRootEntry& right) {
         return left.relativePath < right.relativePath;
     });
-    std::sort(state.directories.begin(), state.directories.end());
-    state.directories.erase(std::unique(state.directories.begin(), state.directories.end()), state.directories.end());
+    std::ranges::sort(state.directories);
+    state.directories.erase(std::ranges::unique(state.directories).begin(), state.directories.end());
 }
 
 StaticRoot::~StaticRoot() = default;
