@@ -9,9 +9,11 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <variant>
 
 #include "ruvia/http/ProtocolByteLimit.h"
+#include "ruvia/http/detail/BorrowedView.h"
 #include "ruvia/http/detail/websocket/HttpWebSocketMessageAccess.h"
 #include "ruvia/http/WebSocketProtocol.h"
 
@@ -34,7 +36,7 @@ enum class WebSocketProtocolFailure : std::uint16_t {
 
 [[nodiscard]] constexpr std::uint16_t webSocketProtocolFailureCloseCode(
     WebSocketProtocolFailure failure) noexcept {
-    return static_cast<std::uint16_t>(failure);
+    return std::to_underlying(failure);
 }
 
 enum class WebSocketFrameKind : std::uint8_t {
@@ -85,12 +87,12 @@ private:
 }
 
 [[nodiscard]] inline bool isWebSocketControlOpcode(WebSocketOpcode opcode) noexcept {
-    return static_cast<std::uint8_t>(opcode) >= 0x8;
+    return std::to_underlying(opcode) >= 0x8;
 }
 
 [[nodiscard]] inline bool isWebSocketControlFrameKind(
     WebSocketFrameKind kind) noexcept {
-    return static_cast<std::uint8_t>(kind) >= 0x8;
+    return std::to_underlying(kind) >= 0x8;
 }
 
 // allowRsv1 enables the RSV1 (compressed) bit when permessage-deflate is
@@ -191,7 +193,7 @@ decodeWebSocketFrameStart(
     bool rsv1 = false) noexcept {
     std::size_t headerSize = 0;
     header[headerSize++] = static_cast<char>(
-        0x80U | (rsv1 ? 0x40U : 0U) | static_cast<std::uint8_t>(opcode));
+        0x80U | (rsv1 ? 0x40U : 0U) | std::to_underlying(opcode));
     if (payloadSize <= 125) {
         header[headerSize++] = static_cast<char>(payloadSize);
     } else if (payloadSize <= 0xFFFF) {
@@ -241,8 +243,7 @@ inline void compactWebSocketReadBuffer(
         return;
     }
 
-    const auto consumed = pendingCompactUntil;
-    pendingCompactUntil = 0;
+    const auto consumed = std::exchange(pendingCompactUntil, 0);
     if (consumed >= buffer.size()) {
         buffer.clear();
         offset = 0;
@@ -275,9 +276,10 @@ class WebSocketClosePayloadEncodeResult;
 
 class WebSocketEncodedClosePayload final {
 public:
-    [[nodiscard]] constexpr std::string_view bytes() const noexcept {
+    [[nodiscard]] constexpr std::string_view bytes() const & noexcept {
         return std::string_view(bytes_.data(), size_);
     }
+    [[nodiscard]] constexpr std::string_view bytes() const && = delete;
 
 private:
     friend class WebSocketClosePayloadEncodeResult;
@@ -353,10 +355,11 @@ private:
     std::string_view reason) noexcept;
 [[nodiscard]] std::optional<WebSocketProtocolFailure>
 webSocketClosePayloadFailure(std::string_view payload) noexcept;
-// One borrowed frame with validated metadata combinations. Named factories keep
-// continuation and control frames from acquiring an impossible data opcode or
-// compression bit; the wire reader additionally owns masking, length, and Close
-// payload validation before publishing the same type.
+// One borrowed frame with validated metadata combinations. Payload storage must
+// outlive the view, so named factories reject owning-string rvalues. They also
+// keep continuation and control frames from acquiring an impossible data opcode
+// or compression bit; the wire reader additionally owns masking, length, and
+// Close payload validation before publishing the same type.
 class WebSocketFrameView final {
 public:
     [[nodiscard]] static constexpr WebSocketFrameView text(
@@ -367,6 +370,12 @@ public:
             WebSocketFrameKind::kText, payload, final, compressed);
     }
 
+    template <HttpTemporaryOwningCharString String>
+    static WebSocketFrameView text(
+        String&&,
+        bool,
+        bool = false) = delete;
+
     [[nodiscard]] static constexpr WebSocketFrameView binary(
         std::string_view payload,
         bool final,
@@ -375,12 +384,21 @@ public:
             WebSocketFrameKind::kBinary, payload, final, compressed);
     }
 
+    template <HttpTemporaryOwningCharString String>
+    static WebSocketFrameView binary(
+        String&&,
+        bool,
+        bool = false) = delete;
+
     [[nodiscard]] static constexpr WebSocketFrameView continuation(
         std::string_view payload,
         bool final) noexcept {
         return WebSocketFrameView(
             WebSocketFrameKind::kContinuation, payload, final, false);
     }
+
+    template <HttpTemporaryOwningCharString String>
+    static WebSocketFrameView continuation(String&&, bool) = delete;
 
     [[nodiscard]] static std::optional<WebSocketFrameView> close(
         std::string_view payload) noexcept {
@@ -392,6 +410,9 @@ public:
             WebSocketFrameKind::kClose, payload, true, false);
     }
 
+    template <HttpTemporaryOwningCharString String>
+    static std::optional<WebSocketFrameView> close(String&&) = delete;
+
     [[nodiscard]] static constexpr std::optional<WebSocketFrameView> ping(
         std::string_view payload) noexcept {
         if (payload.size() > 125) {
@@ -401,6 +422,9 @@ public:
             WebSocketFrameKind::kPing, payload, true, false);
     }
 
+    template <HttpTemporaryOwningCharString String>
+    static std::optional<WebSocketFrameView> ping(String&&) = delete;
+
     [[nodiscard]] static constexpr std::optional<WebSocketFrameView> pong(
         std::string_view payload) noexcept {
         if (payload.size() > 125) {
@@ -409,6 +433,9 @@ public:
         return WebSocketFrameView(
             WebSocketFrameKind::kPong, payload, true, false);
     }
+
+    template <HttpTemporaryOwningCharString String>
+    static std::optional<WebSocketFrameView> pong(String&&) = delete;
 
     [[nodiscard]] constexpr WebSocketFrameKind kind() const noexcept {
         return kind_;
@@ -488,9 +515,10 @@ enum class WebSocketInboundContentEncoding : std::uint8_t {
 
 class WebSocketInboundMessage final {
 public:
-    [[nodiscard]] constexpr const WebSocketMessage& message() const noexcept {
+    [[nodiscard]] constexpr const WebSocketMessage& message() const & noexcept {
         return message_;
     }
+    [[nodiscard]] constexpr const WebSocketMessage& message() const && = delete;
 
     [[nodiscard]] constexpr WebSocketInboundContentEncoding
     contentEncoding() const noexcept {
@@ -659,7 +687,7 @@ public:
             state_.template emplace<WebSocketInboundIdle>();
             const auto message = WebSocketMessageAccess::make(
                 opcode,
-                std::string_view(message_.data(), message_.size()));
+                std::string_view(message_));
             if (encoding == WebSocketInboundContentEncoding::kPerMessageDeflate) {
                 return WebSocketInboundResult::makeMessage(
                     message,

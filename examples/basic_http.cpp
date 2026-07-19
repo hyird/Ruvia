@@ -1,3 +1,8 @@
+// Basic HTTP server: controller/group macros, middleware, path params,
+// wildcard routes, query/header/cookie helpers, body reads, urlFor links,
+// text/JSON/redirect/error responses including HEAD and OPTIONS, and
+// prefix-scoped notFound/onError fallbacks layered under the app-wide one.
+
 #include <charconv>
 #include <chrono>
 #include <cstddef>
@@ -22,7 +27,7 @@ class AdminAuthMiddleware final : public ruvia::Middleware<AdminAuthMiddleware> 
 public:
     ruvia::Task<void> handle(ruvia::Context& c, ruvia::Next& next) {
         if (c.req().header("X-Admin-Token").value_or("") != "secret") {
-            c.respond(c.error(401, "unauthorized", "missing admin token"));
+            c.respond(c.error(ruvia::http_status::kUnauthorized, "unauthorized", "missing admin token"));
             co_return;
         }
         co_await next();
@@ -36,6 +41,20 @@ RUVIA_RESPONSE_MODEL(UserResponse,
 );
 
 ruvia::Task<ruvia::HttpResponse> exampleErrorHandler(ruvia::Context& c, ruvia::HttpErrorInfo error) {
+    co_return c.error(error.status(), error.code(), error.message(), error.statusText());
+}
+
+// Prefix-scoped fallbacks: the longest matching registered prefix wins, on
+// whole path segments ("/api" scopes "/api/x" but never "/apix"); requests
+// outside every prefix keep using the app-wide handlers above.
+ruvia::Task<ruvia::HttpResponse> apiNotFound(ruvia::Context& c) {
+    c.status(ruvia::http_status::kNotFound);
+    co_return c.error(
+        ruvia::http_status::kNotFound, "api_not_found", "no such API endpoint");
+}
+
+ruvia::Task<ruvia::HttpResponse> apiError(ruvia::Context& c, ruvia::HttpErrorInfo error) {
+    c.header("X-Api-Error", "true");
     co_return c.error(error.status(), error.code(), error.message(), error.statusText());
 }
 
@@ -65,6 +84,7 @@ public:
     RUVIA_GET("/inputs", inputs);
     RUVIA_POST("/echo", echo);
     RUVIA_GET("/redirect", redirect);
+    RUVIA_GET("/links/:id", links);
     RUVIA_GET("/fail", fail);
     RUVIA_HEAD("/health", health);
     RUVIA_OPTIONS("/health", options);
@@ -119,17 +139,34 @@ private:
         const auto body = co_await c.req().text();
         std::pmr::string owned(c.allocator<char>());
         owned.assign(body.data(), body.size());
-        c.status(201);
+        c.status(ruvia::http_status::kCreated);
         c.header("X-Echo", "true");
         co_return c.text(std::move(owned));
     }
 
     ruvia::Task<ruvia::HttpResponse> redirect(ruvia::Context& c) {
-        co_return c.redirect("/api/hello", 302);
+        co_return c.redirect("/api/hello", ruvia::http_status::kFound);
+    }
+
+    // urlFor builds request paths from registered route patterns -- the
+    // pattern is the route's identity, values are percent-encoded, and an
+    // unregistered pattern throws at build time instead of emitting a dead
+    // link. Works in handlers, middleware and fallback handlers alike.
+    ruvia::Task<ruvia::HttpResponse> links(ruvia::Context& c) {
+        std::pmr::string body(c.allocator<char>());
+        body.append("user=");
+        body.append(c.urlFor("/api/users/:id", {c.req().param("id").value_or("0")}));
+        body.append("\nfile=");
+        body.append(c.urlFor("/api/files/*", {"docs/guide.md"}));
+        body.push_back('\n');
+        co_return c.text(std::move(body));
     }
 
     ruvia::Task<ruvia::HttpResponse> fail(ruvia::Context&) {
-        throw ruvia::HttpError(418, "teapot", "the example handler threw an HttpError");
+        throw ruvia::HttpError(
+            ruvia::http_status::kBadRequest,
+            "example_error",
+            "the example handler threw an HttpError");
     }
 
     ruvia::Task<ruvia::HttpResponse> health(ruvia::Context& c) {
@@ -137,7 +174,7 @@ private:
     }
 
     ruvia::Task<ruvia::HttpResponse> options(ruvia::Context& c) {
-        c.status(204);
+        c.status(ruvia::http_status::kNoContent);
         c.header("Allow", "GET, HEAD, OPTIONS");
         co_return c.text("");
     }
@@ -163,5 +200,7 @@ int main() {
         .setKeepaliveRequests(1000)
         .setMemoryPoolConfig(memory)
         .onError(&exampleErrorHandler)
+        .onError("/api", &apiError)
+        .notFound("/api", &apiNotFound)
         .run();
 }

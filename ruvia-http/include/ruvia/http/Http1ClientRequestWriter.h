@@ -1,9 +1,12 @@
 #pragma once
 
+#include <concepts>
 #include <cstddef>
 #include <cstdint>
+#include <ranges>
 #include <span>
 #include <string_view>
+#include <type_traits>
 #include <variant>
 
 #include "ruvia/http/HttpClient.h"
@@ -87,6 +90,15 @@ private:
 namespace detail {
 
 struct Http1ClientRequestPrepareResultAccess;
+
+template <typename Range>
+concept HttpTemporaryOwningHeaderRange =
+    !std::is_lvalue_reference_v<Range&&> &&
+    std::ranges::contiguous_range<Range> &&
+    !std::ranges::borrowed_range<Range> &&
+    std::same_as<
+        std::remove_cv_t<std::ranges::range_value_t<Range>>,
+        HttpHeaderView>;
 
 // Exact sent-request facts needed to interpret the corresponding HTTP/1
 // response. Only a successfully prepared request can create this context, so
@@ -375,6 +387,18 @@ public:
         std::span<char> headBuffer,
         Http1ClientRequestWirePolicy policy =
             Http1ClientRequestWirePolicy::withoutExpectation()) const noexcept;
+
+    // The prepared response context retains the header table through the final
+    // response or protocol-switch decision. A temporary owning contiguous
+    // range would be destroyed as prepareConnect() returns; borrowed ranges
+    // such as std::span remain valid inputs.
+    template <detail::HttpTemporaryOwningHeaderRange Headers>
+    Http1ClientRequestPrepareResult prepareConnect(
+        const HttpOrigin&,
+        Headers&&,
+        std::span<char>,
+        Http1ClientRequestWirePolicy =
+            Http1ClientRequestWirePolicy::withoutExpectation()) const = delete;
 };
 
 }  // namespace ruvia

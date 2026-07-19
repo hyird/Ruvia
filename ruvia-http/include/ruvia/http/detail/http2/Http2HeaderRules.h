@@ -69,7 +69,8 @@ namespace ruvia::detail {
         !http2IsForbiddenResponseConnectionField(name);
 }
 
-[[nodiscard]] inline bool http2IsForbiddenTrailerHeader(std::string_view name) noexcept {
+[[nodiscard]] inline bool http2IsForbiddenRequestTrailerHeader(
+    std::string_view name) noexcept {
     switch (classifyRequestHeader(name)) {
         case RequestHeaderKind::kHost:
         case RequestHeaderKind::kContentLength:

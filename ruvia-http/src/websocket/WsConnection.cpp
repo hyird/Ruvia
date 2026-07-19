@@ -17,7 +17,7 @@ WsConnection::WsConnection(
     }
 }
 
-WsOutputPlan WsConnection::outputPlan() const noexcept {
+WsOutputPlan WsConnection::outputPlan() const & noexcept {
     // EOF/abort may race an async transport write. Keep the backing allocation
     // untouched until destruction, but make discarded bytes unreachable from the
     // protocol driver once transport termination has become authoritative.
@@ -150,7 +150,7 @@ WsFrameSubmitStatus WsConnection::submitFrame(
     if (dataFrame && deflate_.has_value()) {
         outboundDeflated_.clear();
         if (deflate_->compress(payload, outboundDeflated_) && outboundDeflated_.size() < payload.size()) {
-            payload = std::string_view(outboundDeflated_.data(), outboundDeflated_.size());
+            payload = outboundDeflated_;
             rsv1 = true;
         }
     }
@@ -166,6 +166,13 @@ WsCloseSubmitStatus WsConnection::submitClose(
     }
     if (closePhase_ != ClosePhase::kOpen) {
         return WsCloseSubmitStatus::kAlreadyClosing;
+    }
+    // RFC 6455 §7.4.1 reserves 1010 for a client reporting extensions that
+    // were absent from the server handshake. This core emits server frames;
+    // a server must reject that mismatch during the opening handshake rather
+    // than initiate a Close frame with the client-only status code.
+    if (code == 1010) {
+        return WsCloseSubmitStatus::kInvalidCode;
     }
     const auto payload = encodeWebSocketClosePayload(code, reason);
     if (const auto* failure = payload.failure()) {
@@ -183,7 +190,7 @@ WsCloseSubmitStatus WsConnection::submitClose(
     return WsCloseSubmitStatus::kAccepted;
 }
 
-std::optional<WsEvent> WsConnection::poll() {
+std::optional<WsEvent> WsConnection::poll() & {
     inboundInflated_.clear();
     if (closePhase_ == ClosePhase::kFinalCloseQueued ||
         closePhase_ == ClosePhase::kTransportEndReady ||
@@ -275,8 +282,7 @@ std::optional<WsEvent> WsConnection::poll() {
             return protocolFailureEvent(
                 WebSocketProtocolFailure::kProtocolError);
         }
-        const auto view = std::string_view(
-            inboundInflated_.data(), inboundInflated_.size());
+        const std::string_view view = inboundInflated_;
         if (message.opcode() == WebSocketOpcode::kText && !isValidUtf8(view)) {
             return protocolFailureEvent(
                 WebSocketProtocolFailure::kInvalidPayloadData);

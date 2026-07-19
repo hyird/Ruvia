@@ -36,11 +36,11 @@ public:
     [[nodiscard]] HttpProtocolError protocolError() const noexcept {
         switch (kind_) {
             case Kind::kInvalidRequest:
-                return HttpProtocolError(400, "invalid WebSocket handshake");
+                return HttpProtocolError(http_status::kBadRequest, "invalid WebSocket handshake");
             case Kind::kUnsupportedVersion:
-                return HttpProtocolError(400, "unsupported WebSocket version");
+                return HttpProtocolError(http_status::kBadRequest, "unsupported WebSocket version");
         }
-        return HttpProtocolError(400, "invalid WebSocket handshake");
+        return HttpProtocolError(http_status::kBadRequest, "invalid WebSocket handshake");
     }
 
     // RFC 6455 section 4.4 requires a server to advertise every supported

@@ -2,11 +2,54 @@
 
 #include <mimalloc.h>
 
+// gcc signals TSan via __SANITIZE_THREAD__; clang via __has_feature. __has_feature
+// must stay nested under its own defined() guard: gcc has no such builtin and
+// would expand the bare token to 0, making `0(thread_sanitizer)` a preprocessor
+// syntax error even though the && would short-circuit.
+#if defined(__SANITIZE_THREAD__)
+#define RUVIA_TSAN_ALLOCATOR_ANNOTATIONS 1
+#elif defined(__has_feature)
+#if __has_feature(thread_sanitizer)
+#define RUVIA_TSAN_ALLOCATOR_ANNOTATIONS 1
+#endif
+#endif
+
+#if defined(RUVIA_TSAN_ALLOCATOR_ANNOTATIONS)
+#include <sanitizer/tsan_interface.h>
+#endif
+
 namespace ruvia {
 
 namespace detail {
 
 void ensureMimallocGlobalOverrideLinked() noexcept;
+
+namespace {
+
+// mimalloc is not ThreadSanitizer-instrumented, so the happens-before edge it
+// establishes when memory freed on one worker is handed to another (its internal
+// free/alloc synchronization) is invisible to TSan. Under load that surfaces as
+// a false "data race" between the previous owner's writes and the new owner's
+// writes to the same reused address. Model the allocator's ordering explicitly:
+// release the block on free, acquire it on allocate, so a later owner
+// synchronizes-with the earlier one. Compiled out entirely without TSan.
+inline void tsanAllocatorAcquire([[maybe_unused]] void* pointer) noexcept {
+#if defined(RUVIA_TSAN_ALLOCATOR_ANNOTATIONS)
+    if (pointer != nullptr) {
+        __tsan_acquire(pointer);
+    }
+#endif
+}
+
+inline void tsanAllocatorRelease([[maybe_unused]] void* pointer) noexcept {
+#if defined(RUVIA_TSAN_ALLOCATOR_ANNOTATIONS)
+    if (pointer != nullptr) {
+        __tsan_release(pointer);
+    }
+#endif
+}
+
+}  // namespace
 
 }  // namespace detail
 
@@ -34,10 +77,12 @@ void* taskFrameAllocate(std::size_t bytes) {
     if (pointer == nullptr) {
         throw std::bad_alloc();
     }
+    tsanAllocatorAcquire(pointer);
     return pointer;
 }
 
 void taskFrameDeallocate(void* pointer) noexcept {
+    tsanAllocatorRelease(pointer);
     mi_free(pointer);
 }
 
@@ -49,10 +94,12 @@ void* MimallocMemoryResource::do_allocate(std::size_t bytes, std::size_t alignme
         throw std::bad_alloc();
     }
 
+    detail::tsanAllocatorAcquire(pointer);
     return pointer;
 }
 
 void MimallocMemoryResource::do_deallocate(void* pointer, std::size_t bytes, std::size_t alignment) {
+    detail::tsanAllocatorRelease(pointer);
     mi_free_aligned(pointer, alignment);
     (void)bytes;
 }
@@ -127,11 +174,11 @@ RequestMemory::RequestMemory(WorkerMemory& worker)
 RequestMemory::RequestMemory(WorkerMemory& worker, std::span<std::byte> initialBuffer)
     : arena_(initialBuffer.data(), initialBuffer.size(), worker.resource()) {}
 
-std::pmr::memory_resource* RequestMemory::resource() noexcept {
+std::pmr::memory_resource* RequestMemory::resource() & noexcept {
     return &arena_;
 }
 
-std::pmr::memory_resource* RequestMemory::resource() const noexcept {
+std::pmr::memory_resource* RequestMemory::resource() const & noexcept {
     return const_cast<std::pmr::monotonic_buffer_resource*>(&arena_);
 }
 

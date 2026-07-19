@@ -5,6 +5,7 @@
 #include <variant>
 
 #include "ruvia/http/detail/HttpResponseHeaderBits.h"
+#include "ruvia/http/HttpStatus.h"
 
 namespace ruvia::detail {
 
@@ -80,8 +81,7 @@ public:
     }
 
 private:
-    friend ResponseWritePolicy responseWritePolicy(
-        std::uint16_t) noexcept;
+    friend ResponseWritePolicy responseWritePolicy(HttpStatusCode) noexcept;
 
     using State = std::variant<
         ResponseNormalWrite,
@@ -119,14 +119,14 @@ static_assert(std::is_trivially_copyable_v<ResponseWritePolicy>);
 static_assert(sizeof(ResponseWritePolicy) <= 2);
 
 [[nodiscard]] inline ResponseWritePolicy responseWritePolicy(
-    std::uint16_t statusCode) noexcept {
-    if (statusCode >= 100 && statusCode < 200) {
+    HttpStatusCode statusCode) noexcept {
+    if (statusCode.isInformational()) {
         return ResponseWritePolicy::makeBodyForbidden();
     }
-    if (statusCode == 204) {
+    if (statusCode == http_status::kNoContent) {
         return ResponseWritePolicy::makeBodyForbidden();
     }
-    if (statusCode == 205) {
+    if (statusCode == http_status::kResetContent) {
         // RFC 9110 15.3.6 forbids content in a 205 response. Unlike 1xx/204/304,
         // HTTP/1.1 message framing does not make 205 self-delimiting from the
         // status alone, so the writer owns a canonical Content-Length: 0. A
@@ -134,7 +134,7 @@ static_assert(sizeof(ResponseWritePolicy) <= 2);
         // creating a second, potentially contradictory framing declaration.
         return ResponseWritePolicy::makeZeroLength();
     }
-    if (statusCode == 304) {
+    if (statusCode == http_status::kNotModified) {
         return ResponseWritePolicy::makeNotModified();
     }
     return ResponseWritePolicy::makeNormal();

@@ -16,9 +16,10 @@ public:
     explicit Http2StreamRequestData(std::pmr::memory_resource* resource = nullptr)
         : Http2StreamRequestData(HttpResolvedPmrResourceTag{}, httpPmrResourceOrDefault(resource)) {}
 
-    [[nodiscard]] std::string_view method() const noexcept {
+    [[nodiscard]] std::string_view method() const & noexcept {
         return method_;
     }
+    [[nodiscard]] std::string_view method() const && = delete;
 
     [[nodiscard]] HttpKnownMethod knownMethod() const noexcept {
         return knownMethod_;
@@ -29,41 +30,46 @@ public:
         knownMethod_ = classifyHttpMethod(method);
     }
 
-    [[nodiscard]] std::string_view scheme() const noexcept {
+    [[nodiscard]] std::string_view scheme() const & noexcept {
         return scheme_;
     }
+    [[nodiscard]] std::string_view scheme() const && = delete;
 
     void assignScheme(std::string_view value) {
         scheme_.assign(value.data(), value.size());
     }
 
-    [[nodiscard]] std::string_view authority() const noexcept {
+    [[nodiscard]] std::string_view authority() const & noexcept {
         return authority_;
     }
+    [[nodiscard]] std::string_view authority() const && = delete;
 
     void assignAuthority(std::string_view value) {
         authority_.assign(value.data(), value.size());
     }
 
-    [[nodiscard]] std::string_view path() const noexcept {
+    [[nodiscard]] std::string_view path() const & noexcept {
         return path_;
     }
+    [[nodiscard]] std::string_view path() const && = delete;
 
     void assignPath(std::string_view value) {
         path_.assign(value.data(), value.size());
     }
 
-    [[nodiscard]] std::string_view protocol() const noexcept {
+    [[nodiscard]] std::string_view protocol() const & noexcept {
         return protocol_;
     }
+    [[nodiscard]] std::string_view protocol() const && = delete;
 
     void assignProtocol(std::string_view value) {
         protocol_.assign(value.data(), value.size());
     }
 
-    [[nodiscard]] std::string_view cookie() const noexcept {
+    [[nodiscard]] std::string_view cookie() const & noexcept {
         return cookie_;
     }
+    [[nodiscard]] std::string_view cookie() const && = delete;
 
     [[nodiscard]] bool appendCookieHeaderValue(
         std::string_view value,
@@ -93,9 +99,11 @@ public:
         return headers_.size();
     }
 
-    [[nodiscard]] Http2StoredHeaderView headerAt(std::size_t index) const noexcept {
+    [[nodiscard]] Http2StoredHeaderView headerAt(
+        std::size_t index) const & noexcept {
         return headers_.at(index);
     }
+    [[nodiscard]] Http2StoredHeaderView headerAt(std::size_t) const && = delete;
 
     [[nodiscard]] bool appendHeader(
         std::string_view name,

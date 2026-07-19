@@ -8,7 +8,7 @@ Task<std::string_view> StreamBodyReader<Stream>::readKnownLengthAll(
     std::size_t contentLength) {
     compactPending();
     if (finished_) {
-        co_return std::string_view(body.data(), body.size());
+        co_return std::string_view(body);
     }
     if (exceedsLimit(contentLength)) {
         throwRequestBodyTooLarge();
@@ -47,7 +47,7 @@ Task<std::string_view> StreamBodyReader<Stream>::readKnownLengthAll(
 
     deliveredBytes_ = contentLength;
     markFinished();
-    co_return std::string_view(body.data(), body.size());
+    co_return std::string_view(body);
 }
 
 template <typename Stream>

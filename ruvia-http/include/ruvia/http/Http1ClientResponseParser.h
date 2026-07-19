@@ -166,6 +166,47 @@ private:
     detail::HttpTransferCodings transferCodings_;
 };
 
+// A 205 response has an ordinary HTTP/1 message-body framing phase, unlike
+// HEAD/204/304, but RFC 9110 requires its decoded content to remain empty. The
+// nested framing alternative tells the runtime how to reach the message end;
+// the outer type prevents that framing from being mistaken for ordinary
+// content that an application may consume.
+class Http1ClientResponseWithZeroContent final {
+public:
+    [[nodiscard]] constexpr const Http1ClientKnownLengthResponse*
+    knownLength() const & noexcept {
+        return std::get_if<Http1ClientKnownLengthResponse>(&framing_);
+    }
+    const Http1ClientKnownLengthResponse* knownLength() const && = delete;
+
+    [[nodiscard]] constexpr const Http1ClientChunkedResponse*
+    chunked() const & noexcept {
+        return std::get_if<Http1ClientChunkedResponse>(&framing_);
+    }
+    const Http1ClientChunkedResponse* chunked() const && = delete;
+
+    [[nodiscard]] constexpr const Http1ClientCloseDelimitedResponse*
+    closeDelimited() const & noexcept {
+        return std::get_if<Http1ClientCloseDelimitedResponse>(&framing_);
+    }
+    const Http1ClientCloseDelimitedResponse*
+    closeDelimited() const && = delete;
+
+private:
+    friend struct detail::Http1ClientResponsePlanAccess;
+
+    using Framing = std::variant<
+        Http1ClientKnownLengthResponse,
+        Http1ClientChunkedResponse,
+        Http1ClientCloseDelimitedResponse>;
+
+    explicit constexpr Http1ClientResponseWithZeroContent(
+        Framing framing) noexcept
+        : framing_(std::move(framing)) {}
+
+    Framing framing_;
+};
+
 class Http1ClientConnectTunnel final {
 private:
     friend struct detail::Http1ClientResponsePlanAccess;
@@ -178,11 +219,12 @@ private:
     constexpr Http1ClientProtocolUpgrade() noexcept = default;
 };
 
-// Immutable RFC 9110/9112 response framing and lifecycle contract. The seven
-// alternatives mirror the message-length precedence directly: informational,
-// no-content final, exact-length final, final-chunked, close-delimited, CONNECT
-// tunnel, or protocol upgrade. Alternative-specific payload is only reachable
-// from the alternative that owns it.
+// Immutable RFC 9110/9112 response framing and lifecycle contract. The eight
+// alternatives mirror message-length precedence and content semantics directly:
+// informational, no-content final, zero-content-with-framing, exact-length,
+// final-chunked, close-delimited, CONNECT tunnel, or protocol upgrade.
+// Alternative-specific payload is only reachable from the alternative that owns
+// it.
 class Http1ClientResponsePlan final {
 public:
     [[nodiscard]] constexpr const Http1ClientInformationalResponse*
@@ -196,6 +238,13 @@ public:
         return std::get_if<Http1ClientResponseWithoutContent>(&state_);
     }
     const Http1ClientResponseWithoutContent* withoutContent() const && = delete;
+
+    [[nodiscard]] constexpr const Http1ClientResponseWithZeroContent*
+    zeroContent() const & noexcept {
+        return std::get_if<Http1ClientResponseWithZeroContent>(&state_);
+    }
+    const Http1ClientResponseWithZeroContent*
+    zeroContent() const && = delete;
 
     [[nodiscard]] constexpr const Http1ClientKnownLengthResponse*
     knownLength() const & noexcept {
@@ -239,6 +288,7 @@ private:
     using State = std::variant<
         Http1ClientInformationalResponse,
         Http1ClientResponseWithoutContent,
+        Http1ClientResponseWithZeroContent,
         Http1ClientKnownLengthResponse,
         Http1ClientChunkedResponse,
         Http1ClientCloseDelimitedResponse,

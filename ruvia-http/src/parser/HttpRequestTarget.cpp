@@ -3,6 +3,7 @@
 #include "ruvia/http/detail/parser/HttpParserSyntax.h"
 #include "ruvia/http/detail/HeaderTokenUtils.h"
 
+#include <algorithm>
 #include <array>
 #include <charconv>
 #include <system_error>
@@ -131,12 +132,7 @@ inline constexpr std::array<bool, 256> kRegNameCharTable = [] {
 }
 
 [[nodiscard]] bool isValidUriPort(std::string_view value) noexcept {
-    for (const auto byte : value) {
-        if (!isDecimalDigit(byte)) {
-            return false;
-        }
-    }
-    return true;
+    return std::ranges::all_of(value, isDecimalDigit);
 }
 
 [[nodiscard]] bool parseIpv6HexGroup(std::string_view literal, std::size_t& offset) noexcept {
@@ -241,12 +237,7 @@ inline constexpr std::array<bool, 256> kRegNameCharTable = [] {
         (group.size() > 1 && group.front() == '0')) {
         return false;
     }
-    for (const auto value : group) {
-        if (!isLowerHexDigit(value)) {
-            return false;
-        }
-    }
-    return true;
+    return std::ranges::all_of(group, isLowerHexDigit);
 }
 
 [[nodiscard]] bool countSerializedOriginIpv6Groups(
@@ -300,17 +291,31 @@ inline constexpr std::array<bool, 256> kRegNameCharTable = [] {
         leftGroups + rightGroups <= 6;
 }
 
-[[nodiscard]] bool isValidSerializedOriginPort(
-    std::string_view port) noexcept {
-    if (port.empty() || port.size() > 5) {
+[[nodiscard]] bool parseSerializedOriginPort(
+    std::string_view value,
+    std::uint16_t& port) noexcept {
+    // A serialized URL port is the shortest decimal form of the URL record's
+    // 16-bit port. Merely accepting five digits admits values such as 99999,
+    // while accepting leading zeroes admits spellings no serializer can emit.
+    if (value.empty() ||
+        (value.size() > 1 && value.front() == '0')) {
         return false;
     }
-    for (const auto value : port) {
-        if (!isDecimalDigit(value)) {
-            return false;
-        }
+    return parsePortValue(value, port);
+}
+
+[[nodiscard]] std::optional<std::uint16_t>
+serializedOriginDefaultPort(std::string_view scheme) noexcept {
+    if (scheme == "ftp") {
+        return 21;
     }
-    return true;
+    if (scheme == "http" || scheme == "ws") {
+        return 80;
+    }
+    if (scheme == "https" || scheme == "wss") {
+        return 443;
+    }
+    return std::nullopt;
 }
 
 [[nodiscard]] bool isValidIpv6Literal(std::string_view literal) noexcept {
@@ -562,13 +567,14 @@ bool isValidHttpHost(std::string_view value) noexcept {
         const auto literal = value.substr(1, value.size() - 2);
         return isValidIpv6Literal(literal) || isValidIpvFuture(literal);
     }
-    return value.find(':') == std::string_view::npos && isValidRegName(value);
+    return !value.contains(':') && isValidRegName(value);
 }
 
 bool isValidHttpSerializedOrigin(std::string_view value) noexcept {
     const auto schemeEnd = value.find("://");
+    const auto scheme = value.substr(0, schemeEnd);
     if (schemeEnd == std::string_view::npos ||
-        !isValidSerializedOriginScheme(value.substr(0, schemeEnd))) {
+        !isValidSerializedOriginScheme(scheme)) {
         return false;
     }
 
@@ -615,7 +621,15 @@ bool isValidHttpSerializedOrigin(std::string_view value) noexcept {
             return false;
         }
     }
-    return !hasPort || isValidSerializedOriginPort(port);
+    if (!hasPort) {
+        return true;
+    }
+    std::uint16_t portValue = 0;
+    if (!parseSerializedOriginPort(port, portValue)) {
+        return false;
+    }
+    const auto defaultPort = serializedOriginDefaultPort(scheme);
+    return !defaultPort.has_value() || portValue != *defaultPort;
 }
 
 std::optional<HttpAuthorityView> parseHttpAuthority(std::string_view value) noexcept {
@@ -688,7 +702,11 @@ bool httpUriHostEquals(std::string_view left, std::string_view right) noexcept {
 }
 
 bool isValidHostHeader(std::string_view value) noexcept {
-    return parseHttpAuthority(value).has_value();
+    // RFC 9112 section 3.2 requires an empty Host field when the target URI
+    // has no authority component. Keep that wire-valid state distinct from a
+    // usable network authority: parseHttpAuthority() intentionally continues
+    // to require a host.
+    return value.empty() || parseHttpAuthority(value).has_value();
 }
 
 bool isValidUriAuthority(std::string_view value) noexcept {
@@ -727,7 +745,7 @@ bool isValidUriAuthority(std::string_view value) noexcept {
         if (delimiter != std::string_view::npos) {
             hasPort = true;
             port = hostAndPort.substr(delimiter + 1);
-            if (port.find(':') != std::string_view::npos) {
+            if (port.contains(':')) {
                 return false;
             }
         }
@@ -767,58 +785,98 @@ std::uint16_t httpUriSchemeDefaultPort(std::string_view scheme) noexcept {
 
 namespace {
 
-[[nodiscard]] bool parseAbsoluteTarget(std::string_view target, RequestTargetView& output) noexcept {
-    std::size_t authorityBegin = 0;
-    if (target.size() >= 7 && httpAsciiEqualsIgnoreCase(target.substr(0, 7), "http://")) {
-        authorityBegin = 7;
-        output.defaultPort = 80;
-    } else if (target.size() >= 8 && httpAsciiEqualsIgnoreCase(target.substr(0, 8), "https://")) {
-        authorityBegin = 8;
-        output.defaultPort = 443;
-    } else {
+[[nodiscard]] bool parseAbsoluteTarget(
+    HttpKnownMethod method,
+    std::string_view target,
+    RequestTargetView& output) noexcept {
+    // RFC 9112 section 3.2.2 defines absolute-form as the complete RFC 3986
+    // absolute-URI grammar. Restricting this to HTTP(S) rejects valid proxy
+    // requests such as ftp:// targets and every authority-less scheme.
+    const auto schemeEnd = target.find(':');
+    if (schemeEnd == std::string_view::npos ||
+        !isValidUriScheme(target.substr(0, schemeEnd))) {
         return false;
     }
 
-    const auto rest = target.substr(authorityBegin);
-    const auto separator = rest.find_first_of("/?");
-    const auto authority = separator == std::string_view::npos ? rest : rest.substr(0, separator);
-    if (!isValidHostHeader(authority)) {
-        return false;
-    }
-
-    output.authority = authority;
-    output.form = HttpRequestTargetForm::kAbsolute;
-    if (separator == std::string_view::npos) {
-        output.path = "/";
-        output.query = {};
-        return true;
-    }
-
-    const auto pathBegin = authorityBegin + separator;
-    if (target[pathBegin] == '?') {
-        const auto query = target.substr(pathBegin + 1);
-        if (!isValidUriComponent(query, true, true)) {
-            return false;
-        }
-        output.path = "/";
-        output.query = query;
-        return true;
-    }
-
-    const auto querySeparator = target.find('?', pathBegin);
-    const auto path = querySeparator == std::string_view::npos
-        ? target.substr(pathBegin)
-        : target.substr(pathBegin, querySeparator - pathBegin);
+    const auto scheme = target.substr(0, schemeEnd);
+    const bool httpScheme = httpAsciiEqualsIgnoreCase(scheme, "http") ||
+        httpAsciiEqualsIgnoreCase(scheme, "https");
+    const auto remainder = target.substr(schemeEnd + 1);
+    const auto querySeparator = remainder.find('?');
+    const auto hierarchy = querySeparator == std::string_view::npos
+        ? remainder
+        : remainder.substr(0, querySeparator);
     const auto query = querySeparator == std::string_view::npos
         ? std::string_view{}
-        : target.substr(querySeparator + 1);
-    if (path.empty() || path.front() != '/' ||
-        !isValidUriComponent(path, true, false) ||
-        !isValidUriComponent(query, true, true)) {
+        : remainder.substr(querySeparator + 1);
+    if (!isValidUriComponent(query, true, true)) {
         return false;
     }
-    output.path = path;
+
+    std::string_view authority;
+    std::string_view path;
+    if (hierarchy.starts_with("//")) {
+        const auto authorityAndPath = hierarchy.substr(2);
+        const auto pathSeparator = authorityAndPath.find('/');
+        const auto uriAuthority = pathSeparator == std::string_view::npos
+            ? authorityAndPath
+            : authorityAndPath.substr(0, pathSeparator);
+        path = pathSeparator == std::string_view::npos
+            ? std::string_view{}
+            : authorityAndPath.substr(pathSeparator);
+        if (!isValidUriAuthority(uriAuthority) ||
+            !isValidUriComponent(path, true, false)) {
+            return false;
+        }
+
+        const auto userinfoDelimiter = uriAuthority.find('@');
+        authority = userinfoDelimiter == std::string_view::npos
+            ? uriAuthority
+            : uriAuthority.substr(userinfoDelimiter + 1);
+        // Host is the public, authoritative routing value installed by the
+        // HTTP/1 parser. It therefore still has to fit the validated HTTP
+        // authority representation even when the URI scheme is generic.
+        if (!isValidHostHeader(authority)) {
+            return false;
+        }
+
+        // HTTP(S) URI syntax has a mandatory, non-empty authority. Userinfo in
+        // an HTTP URI is rejected at this trust boundary (RFC 9110 section
+        // 4.2.4) instead of being silently stripped into a routing identity.
+        if (httpScheme &&
+            (authority.empty() ||
+             userinfoDelimiter != std::string_view::npos)) {
+            return false;
+        }
+    } else {
+        // RFC 9110 defines HTTP(S) URI with "//" authority. Other registered
+        // schemes may use path-absolute, path-rootless, or path-empty.
+        if (httpScheme || !isValidUriComponent(hierarchy, true, false)) {
+            return false;
+        }
+        path = hierarchy;
+    }
+
+    if (path.empty() &&
+        method == HttpKnownMethod::kOptions && query.empty()) {
+        // RFC 9112 section 3.2.4: a proxy forwarding an absolute-form
+        // OPTIONS target with an empty path and no query to the final origin
+        // must use asterisk-form. Expose that route semantic directly even
+        // when this parser itself is the origin-facing recipient.
+        output.path = "*";
+    } else if (path.empty() &&
+               httpScheme && method != HttpKnownMethod::kOptions) {
+        // RFC 9110 section 4.2.3 permits this normalization only for HTTP(S)
+        // targets that are not OPTIONS. Generic schemes retain their exact
+        // empty path, and an OPTIONS target with a query remains distinct.
+        output.path = "/";
+    } else {
+        output.path = path;
+    }
     output.query = query;
+    output.authority = authority;
+    output.defaultPort = httpUriSchemeDefaultPort(scheme);
+    output.form = HttpRequestTargetForm::kAbsolute;
     return true;
 }
 
@@ -899,7 +957,7 @@ bool parseRequestTarget(
     if (!isValidRequestTargetBytes(target)) {
         return false;
     }
-    return parseAbsoluteTarget(target, output);
+    return parseAbsoluteTarget(method, target, output);
 }
 
 }  // namespace ruvia::detail

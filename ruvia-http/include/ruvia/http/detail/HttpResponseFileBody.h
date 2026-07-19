@@ -28,9 +28,11 @@ public:
     }
 
     [[nodiscard]] constexpr const std::array<std::uint64_t, 4>& words()
-        const noexcept {
+        const & noexcept {
         return words_;
     }
+    [[nodiscard]] constexpr const std::array<std::uint64_t, 4>& words()
+        const && = delete;
 
     friend constexpr bool operator==(
         const ResponseFileIdentity&,

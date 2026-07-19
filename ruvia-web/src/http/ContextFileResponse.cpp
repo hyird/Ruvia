@@ -308,7 +308,7 @@ template <typename ApplyResponseState>
     };
     auto applyFileResponseState = [&](
         HttpResponse& response,
-        std::optional<std::uint16_t> statusCode) {
+        std::optional<HttpStatusCode> statusCode) {
         applyResponseState(response, statusCode);
         // Declare the negotiation dimension after Context response metadata is
         // applied. A caller-provided Vary value must be merged, not allowed to
@@ -326,14 +326,14 @@ template <typename ApplyResponseState>
         filePath.setFullBody(response, size);
     };
     auto makeHeaderOnlyResponse = [&](
-        std::optional<std::uint16_t> statusCode) {
+        std::optional<HttpStatusCode> statusCode) {
         HttpResponse response(context.resource());
         addFileHeaders(response);
         applyFileResponseState(response, statusCode);
         return response;
     };
     auto makeFullFileResponse = [&](
-        std::optional<std::uint16_t> statusCode) {
+        std::optional<HttpStatusCode> statusCode) {
         HttpResponse response(context.resource());
         addFileHeaders(response);
         setFullFileBody(response);
@@ -352,7 +352,7 @@ template <typename ApplyResponseState>
         const auto etagConditions = fileEtagConditions(request, etag);
         if (etagConditions.ifMatch.present &&
             !etagConditions.ifMatch.matches()) {
-            throw HttpError(412, "precondition_failed", "file precondition failed");
+            throw HttpError(ruvia::http_status::kPreconditionFailed, "precondition_failed", "file precondition failed");
         }
         // RFC 9110 §13.2.2 step 2: If-Unmodified-Since is evaluated only when If-Match
         // is absent -- a present If-Match takes precedence and the (weaker) date
@@ -363,14 +363,14 @@ template <typename ApplyResponseState>
             !conditional.ifUnmodifiedSince.empty() &&
             !httpDateUnmodified(
                 conditional.ifUnmodifiedSince, validatorModifiedSeconds)) {
-            throw HttpError(412, "precondition_failed", "file precondition failed");
+            throw HttpError(ruvia::http_status::kPreconditionFailed, "precondition_failed", "file precondition failed");
         }
 
         if (etagConditions.ifNoneMatch.matches()) {
             if (methodPlan.usesNotModifiedResponse) {
-                return makeHeaderOnlyResponse(304);
+                return makeHeaderOnlyResponse(http_status::kNotModified);
             }
-            throw HttpError(412, "precondition_failed", "file precondition failed");
+            throw HttpError(ruvia::http_status::kPreconditionFailed, "precondition_failed", "file precondition failed");
         }
 
         if (methodPlan.evaluatesIfModifiedSince &&
@@ -378,7 +378,7 @@ template <typename ApplyResponseState>
             !conditional.ifModifiedSince.empty() &&
             httpDateNotModified(
                 conditional.ifModifiedSince, validatorModifiedSeconds)) {
-            return makeHeaderOnlyResponse(304);
+            return makeHeaderOnlyResponse(http_status::kNotModified);
         }
     }
 
@@ -415,7 +415,8 @@ template <typename ApplyResponseState>
             HttpResponse response(context.resource());
             detail::setResponseContentRangeUnsatisfied(response, size);
             addFileHeaders(response);
-            applyFileResponseState(response, 416);
+            applyFileResponseState(
+                response, http_status::kRangeNotSatisfiable);
             return response;
         }
 
@@ -425,7 +426,7 @@ template <typename ApplyResponseState>
         detail::setResponseContentRange(
             response, resolved.offset(), resolved.length(), size);
         setFileBody(response, resolved.offset(), resolved.length());
-        applyFileResponseState(response, 206);
+        applyFileResponseState(response, http_status::kPartialContent);
         return response;
     }
 
@@ -440,12 +441,12 @@ HttpResponse Context::file(
     std::error_code ec;
     const auto snapshot = detail::snapshotResponseFile(path.c_str(), ec);
     if (ec) {
-        throw HttpError(404, "not_found", "file not found");
+        throw HttpError(ruvia::http_status::kNotFound, "not_found", "file not found");
     }
 
     const auto applyState = [this](
         HttpResponse& response,
-        std::optional<std::uint16_t> statusCode) {
+        std::optional<HttpStatusCode> statusCode) {
         applyResponseState(response, statusCode);
     };
     return makeFileResponse(
@@ -573,13 +574,13 @@ HttpResponse Context::staticFile(
     const std::string_view lookupPath = decodedPath.has_value()
         ? std::string_view(*decodedPath)
         : relativePath;
-    if (lookupPath.find('\0') != std::string_view::npos) {
-        throw HttpError(403, "forbidden", "invalid static file path");
+    if (lookupPath.contains('\0')) {
+        throw HttpError(ruvia::http_status::kForbidden, "forbidden", "invalid static file path");
     }
     auto relative = detail::normalizeStaticRelativePath(lookupPath, allocator<char>());
 
     if (relative.empty() && !detail::StaticRootAccess::hasDirectoryIndex(root)) {
-        throw HttpError(403, "forbidden", "invalid static file path");
+        throw HttpError(ruvia::http_status::kForbidden, "forbidden", "invalid static file path");
     }
 
     auto entry = detail::StaticRootAccess::find(root, relative);
@@ -593,7 +594,7 @@ HttpResponse Context::staticFile(
         entry = detail::StaticRootAccess::find(root, relative);
     }
     if (!entry.has_value()) {
-        throw HttpError(404, "not_found", "file not found");
+        throw HttpError(ruvia::http_status::kNotFound, "not_found", "file not found");
     }
     const auto& baseEntry = *entry;
 
@@ -609,7 +610,7 @@ HttpResponse Context::staticFile(
 
     const auto applyState = [this](
         HttpResponse& response,
-        std::optional<std::uint16_t> statusCode) {
+        std::optional<HttpStatusCode> statusCode) {
         applyResponseState(response, statusCode);
     };
     return makeFileResponse(

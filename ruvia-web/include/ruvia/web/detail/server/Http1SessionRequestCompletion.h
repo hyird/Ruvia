@@ -1,6 +1,7 @@
 #pragma once
 
 #include "ruvia/http/detail/http1/Http1ServerConnectionPlan.h"
+#include "ruvia/web/detail/BorrowedView.h"
 
 #include <cstddef>
 #include <cstdint>
@@ -112,7 +113,7 @@ private:
 // alternative exposes the exact wire status used by access logging.
 class Http1CommittedStreamResponse final {
 public:
-    [[nodiscard]] constexpr std::uint16_t status() const noexcept {
+    [[nodiscard]] constexpr HttpStatusCode status() const noexcept {
         return status_;
     }
 
@@ -120,10 +121,10 @@ private:
     friend class Http1SessionRequestCompletion;
 
     explicit constexpr Http1CommittedStreamResponse(
-        std::uint16_t status) noexcept
+        HttpStatusCode status) noexcept
         : status_(status) {}
 
-    std::uint16_t status_;
+    HttpStatusCode status_;
 };
 
 // One terminal result for a dispatched HTTP/1 request. Wire ownership,
@@ -169,9 +170,14 @@ public:
                 Http1RequestBufferPipelineRestore(pipeline)));
     }
 
+    template <RvalueCharBasicString Pipeline>
+    static Http1SessionRequestCompletion makeBufferedPipelineRestore(
+        Http1ServerConnectionPlan,
+        Pipeline&&) = delete;
+
     [[nodiscard]] static Http1SessionRequestCompletion makeCommittedStream(
         Http1ServerConnectionPlan connectionPlan,
-        std::uint16_t status,
+        HttpStatusCode status,
         std::size_t consumedBytes) noexcept {
         return Http1SessionRequestCompletion(
             Http1CommittedStreamResponse(status),

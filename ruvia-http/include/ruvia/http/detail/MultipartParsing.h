@@ -466,7 +466,7 @@ private:
 class HttpMultipartBoundaryParseFailure final {
 public:
     [[nodiscard]] HttpProtocolError protocolError() const noexcept {
-        return HttpProtocolError(400, "invalid multipart boundary");
+        return HttpProtocolError(http_status::kBadRequest, "invalid multipart boundary");
     }
 
 private:
@@ -562,7 +562,7 @@ private:
     if (value.empty()) {
         return false;
     }
-    return std::all_of(value.begin(), value.end(), [](char byte) {
+    return std::ranges::all_of(value, [](char byte) {
         const auto character = static_cast<unsigned char>(byte);
         return character >= 33 && character <= 126 && byte != ':';
     });
@@ -570,7 +570,7 @@ private:
 
 [[nodiscard]] inline bool httpValidMimeFieldBody(
     std::string_view value) noexcept {
-    return std::all_of(value.begin(), value.end(), [](char byte) {
+    return std::ranges::all_of(value, [](char byte) {
         const auto character = static_cast<unsigned char>(byte);
         return character == '\t' ||
             (character >= 0x20 && character != 0x7F);
@@ -583,7 +583,7 @@ private:
         return false;
     }
     if (value.front() != '"') {
-        return std::all_of(value.begin(), value.end(), httpMimeTokenChar);
+        return std::ranges::all_of(value, httpMimeTokenChar);
     }
     if (value.size() < 2 || value.back() != '"') {
         return false;
@@ -630,9 +630,16 @@ private:
     return (!strictEquals ||
             (name.size() == rawName.size() && value.size() == rawValue.size())) &&
         !name.empty() &&
-        std::all_of(name.begin(), name.end(), httpMimeTokenChar) &&
+        std::ranges::all_of(name, httpMimeTokenChar) &&
         httpValidMimeParameterValue(value);
 }
+
+template <HttpTemporaryOwningCharString Parameter>
+bool httpParseMimeParameter(
+    Parameter&&,
+    std::string_view&,
+    std::string_view&,
+    bool = true) = delete;
 
 class HttpMimeParameterNames final {
 public:
@@ -668,8 +675,8 @@ private:
     const auto type = mediaType.substr(0, slash);
     const auto subtype = mediaType.substr(slash + 1);
     if (type == "*" || subtype == "*" ||
-        !std::all_of(type.begin(), type.end(), httpMimeTokenChar) ||
-        !std::all_of(subtype.begin(), subtype.end(), httpMimeTokenChar) ||
+        !std::ranges::all_of(type, httpMimeTokenChar) ||
+        !std::ranges::all_of(subtype, httpMimeTokenChar) ||
         type.empty() || subtype.empty()) {
         return false;
     }

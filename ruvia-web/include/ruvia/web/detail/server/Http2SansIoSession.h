@@ -28,6 +28,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <optional>
+#include <span>
 #include <string_view>
 #include <type_traits>
 #include <utility>
@@ -268,7 +269,7 @@ Task<void> runHttp2SansIoSession(
         std::optional<RequestMemory> requestMemoryStorage;
         RequestMemory& requestMemory = emplaceRequestMemory(
             requestMemoryStorage, worker,
-            std::span<std::byte>(arenaBlock.data(), arenaBlock.size()));
+            std::span<std::byte>(arenaBlock));
         auto* streamState = connection.stream(streamId);
         if (streamState == nullptr) {
             co_return;
@@ -395,13 +396,14 @@ Task<void> runHttp2SansIoSession(
                     auto upgradeAndRun = [&](Context& context) -> Task<void> {
                         // HTTP/1 and RFC 8441 consume the same immutable
                         // negotiation only after middleware reaches the handler.
-                        const auto negotiation = makeWebSocketServerNegotiation(
+                        auto negotiation = makeWebSocketServerNegotiation(
                             request,
-                            webSocketEndpoint->subprotocols());
+                            webSocketEndpoint->subprotocols(),
+                            requestMemory.resource());
                         const auto handshakeResult =
                             connection.submitWebSocketHandshake(
                                 streamId,
-                                negotiation);
+                                std::move(negotiation));
                         const auto* submittedHandshake =
                             handshakeResult.submitted();
                         if (submittedHandshake == nullptr) {
@@ -524,8 +526,12 @@ Task<void> runHttp2SansIoSession(
                         "response stream dispatch returned no HTTP/2 terminal alternative");
                 }
             } else {
-                response = co_await routes.dispatchBuffered(
-                    request, resolution, requestMemory, dispatchServices);
+                response = co_await routes.dispatchBufferedResponse(
+                    request,
+                    resolution,
+                    requestMemory,
+                    options.documentRoot.root,
+                    dispatchServices);
             }
         } while (false);
 
@@ -645,9 +651,9 @@ Task<void> runHttp2SansIoSession(
             copiedBodyStreams{};
         std::size_t copiedBodyStreamCount = 0;
         const auto markBufferedBodyCopied = [&](std::uint32_t streamId) {
-            const auto end = copiedBodyStreams.begin() +
-                static_cast<std::ptrdiff_t>(copiedBodyStreamCount);
-            if (std::find(copiedBodyStreams.begin(), end, streamId) == end) {
+            const auto copied =
+                std::span(copiedBodyStreams).first(copiedBodyStreamCount);
+            if (!std::ranges::contains(copied, streamId)) {
                 if (copiedBodyStreamCount == copiedBodyStreams.size()) {
                     return false;
                 }
@@ -656,11 +662,10 @@ Task<void> runHttp2SansIoSession(
             return true;
         };
         const auto unmarkBufferedBodyCopied = [&](std::uint32_t streamId) {
-            const auto end = copiedBodyStreams.begin() +
-                static_cast<std::ptrdiff_t>(copiedBodyStreamCount);
-            const auto found = std::find(
-                copiedBodyStreams.begin(), end, streamId);
-            if (found == end) {
+            const auto copied =
+                std::span(copiedBodyStreams).first(copiedBodyStreamCount);
+            const auto found = std::ranges::find(copied, streamId);
+            if (found == copied.end()) {
                 return;
             }
             --copiedBodyStreamCount;
@@ -709,10 +714,10 @@ Task<void> runHttp2SansIoSession(
                 }
                 const auto expectationPlan = streamState->expectationPlan(
                     HttpUnsupportedExpectationPolicy::kReject);
-                if (expectationPlan.send100Continue() != nullptr) {
+                if (expectationPlan.sendContinue() != nullptr) {
                     const auto status = connection.submitInterimResponseHead(
                         streamId,
-                        HttpInterimResponseHead(100));
+                        HttpInterimResponseHead(ruvia::http_status::kContinue));
                     if (status == Http2SubmitStatus::kAccepted) {
                         wakeWriter();
                     } else {

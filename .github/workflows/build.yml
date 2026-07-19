@@ -38,6 +38,10 @@ concurrency:
   group: build-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
+# CI is deliberately just two full-feature compile-verification jobs -- Linux
+# (gcc) and Windows (MSVC) -- with every optional feature enabled, plus a
+# cleanup job that prunes old runs. Sanitizer, fuzz, and benchmark runs are done
+# locally rather than on every push.
 jobs:
   ubuntu_build:
     name: Ubuntu build
@@ -103,152 +107,6 @@ jobs:
       - name: Test
         run: ctest --test-dir build/test --output-on-failure --build-config "$BUILD_TYPE"
 
-      - name: Configure HTTP hot-path benchmarks
-        run: |
-          cmake -S . -B build/benchmarks -G Ninja \
-            -DCMAKE_BUILD_TYPE=Release \
-            -DRUVIA_BUILD_CORE=OFF \
-            -DRUVIA_BUILD_HTTP=ON \
-            -DRUVIA_BUILD_WEB=OFF \
-            -DRUVIA_BUILD_BENCHMARKS=ON \
-            -DCMAKE_TOOLCHAIN_FILE="$VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake"
-
-      - name: Record HTTP hot-path benchmarks
-        run: |
-          cmake --build build/benchmarks --target ruvia_benchmarks
-          build/benchmarks/tests/benchmarks/ruvia_benchmark_http_hot_paths \
-            --warmup-ms 50 \
-            --duration-ms 250 \
-            --output build/benchmarks/http-hot-paths.json
-
-      - name: Upload HTTP hot-path benchmark record
-        uses: actions/upload-artifact@v4
-        with:
-          name: http-hot-paths-${{ github.sha }}
-          path: build/benchmarks/http-hot-paths.json
-          retention-days: 30
-
-      - name: Verify component-only builds
-        run: |
-          cmake -S . -B build/core-only -G Ninja \
-            -DCMAKE_BUILD_TYPE="$BUILD_TYPE" \
-            -DRUVIA_BUILD_CORE=ON \
-            -DRUVIA_BUILD_HTTP=OFF \
-            -DRUVIA_BUILD_WEB=OFF \
-            -DRUVIA_BUILD_TESTS=ON \
-            -DCMAKE_DISABLE_FIND_PACKAGE_OpenSSL=ON \
-            -DCMAKE_DISABLE_FIND_PACKAGE_ZLIB=ON \
-            -DCMAKE_DISABLE_FIND_PACKAGE_unofficial-brotli=ON \
-            -DCMAKE_DISABLE_FIND_PACKAGE_zstd=ON \
-            -DCMAKE_TOOLCHAIN_FILE="$VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake"
-          cmake --build build/core-only --config "$BUILD_TYPE"
-          ctest --test-dir build/core-only --output-on-failure --build-config "$BUILD_TYPE"
-
-          cmake -S . -B build/http-only -G Ninja \
-            -DCMAKE_BUILD_TYPE="$BUILD_TYPE" \
-            -DRUVIA_BUILD_CORE=OFF \
-            -DRUVIA_BUILD_HTTP=ON \
-            -DRUVIA_BUILD_WEB=OFF \
-            -DRUVIA_BUILD_TESTS=ON \
-            -DCMAKE_DISABLE_FIND_PACKAGE_asio=ON \
-            -DCMAKE_DISABLE_FIND_PACKAGE_mimalloc=ON \
-            -DCMAKE_DISABLE_FIND_PACKAGE_OpenSSL=ON \
-            -DCMAKE_TOOLCHAIN_FILE="$VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake"
-          cmake --build build/http-only --config "$BUILD_TYPE"
-          ctest --test-dir build/http-only --output-on-failure --build-config "$BUILD_TYPE"
-
-  ubuntu_protocol_sanitizers:
-    name: Ubuntu protocol UBSan + fuzz
-    runs-on: ubuntu-24.04
-    env:
-      CC: clang-18
-      CXX: clang++-18
-      GIT_CONFIG_COUNT: 1
-      GIT_CONFIG_KEY_0: init.defaultBranch
-      GIT_CONFIG_VALUE_0: main
-      VCPKG_ROOT: ${{ github.workspace }}/vcpkg
-      BUILD_TYPE: Debug
-    steps:
-      - name: Checkout ruvia
-        uses: actions/checkout@v6
-        with:
-          persist-credentials: false
-
-      - name: Install toolchain
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y clang-18 ninja-build curl zip unzip tar
-          clang++-18 --version
-
-      - name: Cache vcpkg
-        uses: actions/cache@v5
-        with:
-          path: |
-            ${{ env.VCPKG_ROOT }}
-            ~/.cache/vcpkg/archives
-            ${{ github.workspace }}/build/protocol-sanitizers/vcpkg_installed
-          key: vcpkg-protocol-sanitizers-${{ runner.os }}-${{ hashFiles('vcpkg.json', 'vcpkg-configuration.json', 'triplets/**', 'CMakeLists.txt') }}
-          restore-keys: |
-            vcpkg-protocol-sanitizers-${{ runner.os }}-
-
-      - name: Bootstrap vcpkg
-        run: |
-          set -euo pipefail
-          if [ ! -d "$VCPKG_ROOT/.git" ]; then
-            git clone --depth 1 https://github.com/microsoft/vcpkg.git "$VCPKG_ROOT"
-          else
-            git -C "$VCPKG_ROOT" fetch --depth 1 origin master
-            git -C "$VCPKG_ROOT" reset --hard origin/master
-          fi
-          "$VCPKG_ROOT/bootstrap-vcpkg.sh" -disableMetrics
-
-      # UBSan covers the complete test executable and protocol library. ASan is
-      # deliberately excluded because Linux mimalloc's global override owns the
-      # same allocation symbols. libFuzzer still drives the protocol entrypoints.
-      - name: Configure
-        run: |
-          cmake -S . -B build/protocol-sanitizers -G Ninja \
-            -DCMAKE_BUILD_TYPE="$BUILD_TYPE" \
-            -DCMAKE_CXX_FLAGS="-fsanitize=undefined -fno-sanitize-recover=all -fno-omit-frame-pointer" \
-            -DRUVIA_BUILD_TESTS=ON \
-            -DRUVIA_BUILD_FUZZERS=ON \
-            -DCMAKE_TOOLCHAIN_FILE="$VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake"
-
-      - name: Build
-        run: cmake --build build/protocol-sanitizers --config "$BUILD_TYPE"
-
-      - name: Test (unit, UBSan)
-        env:
-          UBSAN_OPTIONS: print_stacktrace=1:halt_on_error=1
-        run: ctest --test-dir build/protocol-sanitizers --output-on-failure --build-config "$BUILD_TYPE"
-
-      - name: Protocol fuzz smoke
-        env:
-          UBSAN_OPTIONS: print_stacktrace=1:halt_on_error=1
-        run: |
-          set -euo pipefail
-          mkdir -p build/fuzz-artifacts
-          for target in \
-            ruvia_fuzz_http1_request \
-            ruvia_fuzz_http2_connection \
-            ruvia_fuzz_hpack
-          do
-            "build/protocol-sanitizers/tests/fuzz/$target" \
-              -max_total_time=20 \
-              -timeout=5 \
-              -rss_limit_mb=2048 \
-              -artifact_prefix=build/fuzz-artifacts/
-          done
-
-      - name: Upload fuzz findings
-        if: failure()
-        uses: actions/upload-artifact@v4
-        with:
-          name: protocol-fuzz-findings-${{ github.sha }}
-          path: build/fuzz-artifacts
-          if-no-files-found: ignore
-          retention-days: 30
-
   windows_build:
     name: Windows build
     runs-on: windows-2025-vs2026
@@ -305,3 +163,34 @@ jobs:
       - name: Test
         shell: pwsh
         run: ctest --test-dir build/test --output-on-failure --build-config "$env:BUILD_TYPE"
+
+  cleanup:
+    name: Prune old runs
+    needs: [ubuntu_build, windows_build]
+    # Run after both builds regardless of their result, but never on pull
+    # requests (a fork's token is read-only and must not prune main's history).
+    if: ${{ always() && github.event_name != 'pull_request' }}
+    runs-on: ubuntu-24.04
+    permissions:
+      actions: write
+    steps:
+      - name: Keep only the 3 most recent runs
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          # This run is still in progress and cannot be deleted, so it is not
+          # counted here: keeping the 2 newest completed runs leaves exactly 3
+          # once this one finishes.
+          stale=$(gh api "repos/$GH_REPO/actions/workflows/build.yml/runs?per_page=100" \
+            --jq '.workflow_runs
+                  | map(select(.status == "completed"))
+                  | sort_by(.created_at)
+                  | reverse
+                  | .[2:]
+                  | .[].id' || true)
+          for id in $stale; do
+            echo "Deleting old run $id"
+            gh api --method DELETE "repos/$GH_REPO/actions/runs/$id" || true
+          done

@@ -63,7 +63,7 @@ private:
 class HttpOwnedResponseBytes final {
 public:
     [[nodiscard]] std::string_view bytes() const & noexcept {
-        return std::string_view(bytes_.data(), bytes_.size());
+        return bytes_;
     }
     [[nodiscard]] std::string_view bytes() const && = delete;
 

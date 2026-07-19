@@ -14,6 +14,7 @@
 #include "ruvia/core/Task.h"
 #include "ruvia/core/WorkerHandle.h"
 #include "ruvia/web/ScopedOperation.h"
+#include "ruvia/web/detail/WorkerState.h"
 
 #ifdef RUVIA_ENABLE_DATABASE
 #include "ruvia/web/db/DbHandle.h"
@@ -30,6 +31,7 @@ class DbRegistry;
 class HttpServer;
 class RedisRegistry;
 class WebWorkerDispatch;
+class WorkerStateRegistry;
 }
 
 class WebWorkerContext final {
@@ -43,6 +45,16 @@ public:
     const WorkerHandle& worker() const && = delete;
     [[nodiscard]] std::pmr::memory_resource* resource() const noexcept;
     [[nodiscard]] std::stop_token stopToken() const noexcept;
+
+    // This worker's instance of an App::useWorkerState<T>() registration --
+    // the same instance Context::workerState<T>() returns for HTTP requests
+    // dispatched on this worker. Throws std::logic_error for an unregistered
+    // type.
+    template <typename T>
+    [[nodiscard]] T& workerState() const {
+        return *static_cast<T*>(
+            workerStateInstance(detail::workerStateTypeKey<T>()));
+    }
 
 #ifdef RUVIA_ENABLE_DATABASE
     [[nodiscard]] DbHandle db() const;
@@ -61,12 +73,16 @@ private:
         std::pmr::memory_resource* resource,
         detail::DbRegistry* databases,
         detail::RedisRegistry* redis,
+        const detail::WorkerStateRegistry* workerStates,
         std::stop_token stopToken) noexcept;
+
+    [[nodiscard]] void* workerStateInstance(const void* typeKey) const;
 
     WorkerHandle worker_;
     std::pmr::memory_resource* resource_;
     detail::DbRegistry* databases_;
     detail::RedisRegistry* redis_;
+    const detail::WorkerStateRegistry* workerStates_;
     std::stop_token stopToken_;
     // Each posted callback gets an independent operation lifetime. Declared
     // last so cold frames are destroyed before the callback context disappears.

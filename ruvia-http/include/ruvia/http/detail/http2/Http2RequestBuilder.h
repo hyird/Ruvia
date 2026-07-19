@@ -33,15 +33,15 @@ public:
     [[nodiscard]] HttpProtocolError protocolError() const noexcept {
         switch (kind_) {
             case Kind::kMissingMethod:
-                return HttpProtocolError(400, "missing HTTP/2 :method");
+                return HttpProtocolError(http_status::kBadRequest, "missing HTTP/2 :method");
             case Kind::kMissingTarget:
-                return HttpProtocolError(400, "missing HTTP/2 request target");
+                return HttpProtocolError(http_status::kBadRequest, "missing HTTP/2 request target");
             case Kind::kInvalidTarget:
-                return HttpProtocolError(400, "invalid HTTP/2 request target");
+                return HttpProtocolError(http_status::kBadRequest, "invalid HTTP/2 request target");
             case Kind::kTooManyHeaders:
-                return HttpProtocolError(431, "too many HTTP/2 request headers");
+                return HttpProtocolError(http_status::kRequestHeaderFieldsTooLarge, "too many HTTP/2 request headers");
         }
-        return HttpProtocolError(400, "invalid HTTP/2 request");
+        return HttpProtocolError(http_status::kBadRequest, "invalid HTTP/2 request");
     }
 
 private:

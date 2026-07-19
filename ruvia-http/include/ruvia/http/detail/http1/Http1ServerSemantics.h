@@ -133,7 +133,7 @@ public:
             case Http1FinalResponseControlPlanError::kInvalidUpgradeField:
                 return "invalid HTTP Upgrade header";
             case Http1FinalResponseControlPlanError::kUpgradeRequired:
-                return "426 response requires an Upgrade protocol";
+                return "Upgrade Required response requires an Upgrade protocol";
         }
         return "unknown HTTP final response commit failure";
     }

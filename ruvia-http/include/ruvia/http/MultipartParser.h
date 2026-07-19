@@ -1,5 +1,6 @@
 #pragma once
 
+#include <algorithm>
 #include <array>
 #include <cstddef>
 #include <cstdint>
@@ -26,12 +27,12 @@ struct MultipartStreamPartAccess;
 class MultipartPart final {
 public:
     [[nodiscard]] std::string_view name() const & noexcept {
-        return std::string_view(name_.data(), name_.size());
+        return name_;
     }
     [[nodiscard]] std::string_view name() const && = delete;
 
     [[nodiscard]] std::string_view filename() const & noexcept {
-        return std::string_view(filename_.data(), filename_.size());
+        return filename_;
     }
     [[nodiscard]] std::string_view filename() const && = delete;
 
@@ -95,12 +96,9 @@ private:
         if (value.empty() || value.size() > kMaxSize || value.back() == ' ') {
             return false;
         }
-        for (const char byte : value) {
-            if (byte != ' ' && !nonSpaceChar(byte)) {
-                return false;
-            }
-        }
-        return true;
+        return std::ranges::all_of(value, [](char byte) noexcept {
+            return byte == ' ' || nonSpaceChar(byte);
+        });
     }
 
     constexpr void assign(std::string_view value) noexcept {
@@ -381,11 +379,19 @@ public:
     explicit MultipartInputLifecycle(std::pmr::memory_resource* resource);
     explicit MultipartInputLifecycle(MultipartBorrowedInput input) noexcept;
 
-    [[nodiscard]] const MultipartBorrowedInput* borrowed() const noexcept;
-    [[nodiscard]] const MultipartStreamingInputOpen* streamingOpen() const noexcept;
-    [[nodiscard]] const MultipartStreamingInputEof* streamingEof() const noexcept;
+    [[nodiscard]] const MultipartBorrowedInput* borrowed() const & noexcept;
+    [[nodiscard]] const MultipartBorrowedInput* borrowed() const && = delete;
+    [[nodiscard]] const MultipartStreamingInputOpen*
+    streamingOpen() const & noexcept;
+    [[nodiscard]] const MultipartStreamingInputOpen*
+    streamingOpen() const && = delete;
+    [[nodiscard]] const MultipartStreamingInputEof*
+    streamingEof() const & noexcept;
+    [[nodiscard]] const MultipartStreamingInputEof*
+    streamingEof() const && = delete;
     [[nodiscard]] bool eof() const noexcept;
-    [[nodiscard]] std::string_view view() const noexcept;
+    [[nodiscard]] std::string_view view() const & noexcept;
+    [[nodiscard]] std::string_view view() const && = delete;
 
     void feed(std::string_view chunk);
     void finishInput() noexcept;

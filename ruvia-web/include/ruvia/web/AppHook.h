@@ -16,14 +16,10 @@ public:
     AppHook() noexcept = default;
     AppHook(std::nullptr_t) noexcept {}
 
-    template <
-        typename Callable,
-        typename Stored = std::decay_t<Callable>,
-        std::enable_if_t<
-            !std::is_same_v<Stored, AppHook> &&
-            std::is_copy_constructible_v<Stored> &&
-            std::is_invocable_r_v<void, Stored&>,
-            int> = 0>
+    template <typename Callable, typename Stored = std::decay_t<Callable>>
+        requires (!std::is_same_v<Stored, AppHook> &&
+                  std::is_copy_constructible_v<Stored> &&
+                  std::is_invocable_r_v<void, Stored&>)
     AppHook(Callable&& callable)
         : resource_(detail::processResource()) {
         emplace<Stored>(std::forward<Callable>(callable));

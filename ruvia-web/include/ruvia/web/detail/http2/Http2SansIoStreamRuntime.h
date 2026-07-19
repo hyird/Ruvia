@@ -104,7 +104,7 @@ public:
     }
 
     // The returned view remains valid until the next pop().
-    [[nodiscard]] std::string_view pop() {
+    [[nodiscard]] std::string_view pop() & {
         clearPmrStringRetainingSmall(activeChunk_);
         if (!queuedChunk_.empty()) {
             activeChunk_.swap(queuedChunk_);
@@ -120,6 +120,7 @@ public:
         compactOverflow();
         return std::string_view(activeChunk_);
     }
+    std::string_view pop() && = delete;
 
 private:
     [[nodiscard]] bool hasOverflowChunk() const noexcept {
@@ -406,13 +407,15 @@ public:
         return signal() != nullptr;
     }
 
-    [[nodiscard]] Http2SansIoStreamSignal* signal() noexcept {
+    [[nodiscard]] Http2SansIoStreamSignal* signal() & noexcept {
         return std::get_if<Http2SansIoStreamSignal>(&dispatch_);
     }
+    [[nodiscard]] Http2SansIoStreamSignal* signal() && = delete;
 
-    [[nodiscard]] const Http2SansIoStreamSignal* signal() const noexcept {
+    [[nodiscard]] const Http2SansIoStreamSignal* signal() const & noexcept {
         return std::get_if<Http2SansIoStreamSignal>(&dispatch_);
     }
+    [[nodiscard]] const Http2SansIoStreamSignal* signal() const && = delete;
 
 private:
     friend class Http2SansIoStreamRuntime;

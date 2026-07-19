@@ -94,6 +94,17 @@ public:
             co_return;
         }
         co_await commit(ResponseTrailerIntent::kNone);
+        if (state_.bodySuppressedComplete()) {
+            // Same head-only guard as the HTTP/1 sink: suspend once before the
+            // synchronous ResponseStreamHeadOnlyComplete throw so a handler that
+            // catches it and keeps writing yields the worker thread each pass
+            // rather than hard-spinning the event loop. A zero duration is
+            // await_ready, so the minimal positive tick is what forces the
+            // suspension (termination short-circuits it back to ready).
+            co_await Http2SansIoSleepAwaiter(
+                *worker_, streamSignal_.termination(),
+                std::chrono::steady_clock::duration(1));
+        }
         state_.ensureBodyAllowed();
         for (;;) {
             const auto result = connection_.submitData(

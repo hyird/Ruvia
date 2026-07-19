@@ -158,29 +158,39 @@ inline Http1RequestParseResult Http1RequestParseResultAccess::failure(
 class Http1ServerRequestParseState final {
 public:
     [[nodiscard]] const Http1ServerNeedRequestHead*
-    needRequestHead() const noexcept {
+    needRequestHead() const & noexcept {
         return std::get_if<Http1ServerNeedRequestHead>(&progress_);
     }
+    [[nodiscard]] const Http1ServerNeedRequestHead*
+    needRequestHead() const && = delete;
 
     [[nodiscard]] const Http1ServerRequestHeadReady*
-    headReady() const noexcept {
+    headReady() const & noexcept {
         return std::get_if<Http1ServerRequestHeadReady>(&progress_);
     }
+    [[nodiscard]] const Http1ServerRequestHeadReady*
+    headReady() const && = delete;
 
     [[nodiscard]] const Http1ServerNeedRequestBody*
-    needRequestBody() const noexcept {
+    needRequestBody() const & noexcept {
         return std::get_if<Http1ServerNeedRequestBody>(&progress_);
     }
+    [[nodiscard]] const Http1ServerNeedRequestBody*
+    needRequestBody() const && = delete;
 
     [[nodiscard]] const Http1ServerRequestMessageReady*
-    messageReady() const noexcept {
+    messageReady() const & noexcept {
         return std::get_if<Http1ServerRequestMessageReady>(&progress_);
     }
+    [[nodiscard]] const Http1ServerRequestMessageReady*
+    messageReady() const && = delete;
 
     [[nodiscard]] const Http1ServerRequestParseFailure*
-    failure() const noexcept {
+    failure() const & noexcept {
         return std::get_if<Http1ServerRequestParseFailure>(&progress_);
     }
+    [[nodiscard]] const Http1ServerRequestParseFailure*
+    failure() const && = delete;
 
     HttpRequest request{HttpRequestAccess::make()};
     Http1RequestBodyPlan bodyPlan{

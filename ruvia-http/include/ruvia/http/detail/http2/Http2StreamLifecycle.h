@@ -13,13 +13,15 @@ public:
         return localSend_.aborted() != nullptr;
     }
 
-    [[nodiscard]] const Http2LocalSendState& localSend() const noexcept {
+    [[nodiscard]] const Http2LocalSendState& localSend() const & noexcept {
         return localSend_;
     }
+    [[nodiscard]] const Http2LocalSendState& localSend() const && = delete;
 
-    [[nodiscard]] const Http2RemoteReceiveState& remoteReceive() const noexcept {
+    [[nodiscard]] const Http2RemoteReceiveState& remoteReceive() const & noexcept {
         return remoteReceive_;
     }
+    [[nodiscard]] const Http2RemoteReceiveState& remoteReceive() const && = delete;
 
     [[nodiscard]] bool queued() const noexcept {
         return queued_;

@@ -42,7 +42,13 @@ concept HasErasedArenaEmplace = requires(T& memory) {
     memory.template emplace<int>(1);
 };
 
+template <typename T>
+concept ExposesRvalueRequestMemoryBorrow =
+    requires(T&& memory) { std::move(memory).resource(); } ||
+    requires(T&& memory) { std::move(memory).template allocator<>(); };
+
 static_assert(!HasErasedArenaEmplace<ruvia::RequestMemory>);
+static_assert(!ExposesRvalueRequestMemoryBorrow<ruvia::RequestMemory>);
 
 template <typename T>
 concept AcceptsLoosePoolWaiterTuple = requires(

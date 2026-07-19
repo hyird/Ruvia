@@ -552,9 +552,68 @@ if(_built_components_csv MATCHES "(^|,)core(,|$)")
         message(FATAL_ERROR
             "installed connection scanner regained a fixed check ceiling")
     endif()
+
+    set(_installed_request_memory_path
+        "${_install_prefix}/include/ruvia/core/memory/MemoryPool.h")
+    if(NOT EXISTS "${_installed_request_memory_path}")
+        message(FATAL_ERROR
+            "installed core package is missing RequestMemory")
+    endif()
+    file(READ "${_installed_request_memory_path}"
+        _installed_request_memory)
+    if(NOT _installed_request_memory MATCHES
+           "allocator[(][)] &[ \t]+noexcept" OR
+       NOT _installed_request_memory MATCHES
+           "allocator[(][)] &&[ \t]*=[ \t]*delete" OR
+       NOT _installed_request_memory MATCHES
+           "resource[(][)] &[ \t]+noexcept" OR
+       NOT _installed_request_memory MATCHES
+           "resource[(][)] const &[ \t]+noexcept" OR
+       NOT _installed_request_memory MATCHES
+           "resource[(][)] &&[ \t]*=[ \t]*delete" OR
+       NOT _installed_request_memory MATCHES
+           "resource[(][)] const &&[ \t]*=[ \t]*delete")
+        message(FATAL_ERROR
+            "installed RequestMemory exposes its arena from temporary owners")
+    endif()
 endif()
 
 if(_built_components_csv MATCHES "(^|,)http(,|$)")
+set(_installed_http_status_path
+    "${_install_prefix}/include/ruvia/http/HttpStatus.h")
+if(NOT EXISTS "${_installed_http_status_path}")
+    message(FATAL_ERROR
+        "installed HTTP package is missing HttpStatusCode")
+endif()
+file(READ "${_installed_http_status_path}" _installed_http_status)
+if(NOT _installed_http_status MATCHES "class HttpStatusCode final" OR
+   NOT _installed_http_status MATCHES
+       "static constexpr HttpStatusCode fromValue" OR
+   NOT _installed_http_status MATCHES
+       "static constexpr std::optional<HttpStatusCode> tryFromValue" OR
+   NOT _installed_http_status MATCHES
+       "namespace http_status" OR
+   NOT _installed_http_status MATCHES
+       "HttpStatusCode status" OR
+   _installed_http_status MATCHES
+       "operator std::uint16_t|HttpStatusCode[(]std::uint16_t value[)]")
+    message(FATAL_ERROR
+        "installed HTTP status API lost its validated strong-type contract")
+endif()
+set(_installed_http_request_path
+    "${_install_prefix}/include/ruvia/http/HttpRequest.h")
+if(NOT EXISTS "${_installed_http_request_path}")
+    message(FATAL_ERROR
+        "installed HTTP package is missing HttpRequest")
+endif()
+file(READ "${_installed_http_request_path}" _installed_http_request)
+if(NOT _installed_http_request MATCHES
+       "headers[(][)] const &[ \t]+noexcept" OR
+   NOT _installed_http_request MATCHES
+       "headers[(][)] const &&[ \t]*=[ \t]*delete")
+    message(FATAL_ERROR
+        "installed HttpRequest exposes its header table from temporary owners")
+endif()
 set(_installed_http_operation_h1
     "${_install_prefix}/include/ruvia/http/detail/http1/Http1ServerSemantics.h")
 set(_installed_http_operation_h2_connection
@@ -829,7 +888,7 @@ file(READ "${_installed_response_stream_commit_path}"
 file(READ "${_installed_http1_response_stream_path}"
     _installed_http1_response_stream)
 if(NOT _installed_response_stream_commit MATCHES
-       "std::uint16_t responseStatus[(][)] const noexcept" OR
+       "HttpStatusCode responseStatus[(][)] const noexcept" OR
    NOT _installed_response_stream_commit MATCHES
        "HttpResponseBodyPlan bodyPlan[(][)] const noexcept" OR
    NOT _installed_response_stream_commit MATCHES
@@ -882,17 +941,19 @@ file(READ "${_installed_http_request_content_decoding}"
 if(NOT _installed_http_content_coding_contract MATCHES
        "class HttpUnsupportedContentCoding final" OR
    NOT _installed_http_content_coding_contract MATCHES
-       "HttpUnsupportedContentCoding::status|static constexpr std::uint16_t status" OR
+       "static constexpr HttpStatusCode status" OR
+   NOT _installed_http_content_coding_contract MATCHES
+       "class HttpInvalidContentCodingField final" OR
    NOT _installed_http_content_coding_contract MATCHES
        "httpSupportedRequestContentCodings" OR
    NOT _installed_http_content_coding_contract MATCHES
        "class HttpContentCodingFieldResult final" OR
    NOT _installed_http_content_coding_contract MATCHES
-       "std::variant<Supported, HttpUnsupportedContentCoding> state_" OR
+       "HttpInvalidContentCodingField> state_" OR
    _installed_http_content_coding_contract MATCHES
        "codingCount_|unsupported_" OR
    NOT _installed_http_content_coding_contract MATCHES
-       "std::variant<HttpContentCoding, HttpUnsupportedContentCoding>" OR
+       "HttpInvalidContentCodingField> value_" OR
    NOT _installed_http_content_coding_contract MATCHES
        "class HttpDecodedContent final" OR
    NOT _installed_http_content_coding_contract MATCHES
@@ -1175,6 +1236,8 @@ if(NOT _installed_http1_client_response_parser_content MATCHES
    NOT _installed_http1_client_response_parser_content MATCHES
        "class Http1ClientResponseWithoutContent final" OR
    NOT _installed_http1_client_response_parser_content MATCHES
+       "class Http1ClientResponseWithZeroContent final" OR
+   NOT _installed_http1_client_response_parser_content MATCHES
        "class Http1ClientKnownLengthResponse final" OR
    NOT _installed_http1_client_response_parser_content MATCHES
        "class Http1ClientChunkedResponse final" OR
@@ -1190,6 +1253,8 @@ if(NOT _installed_http1_client_response_parser_content MATCHES
        "informational[(][)]" OR
    NOT _installed_http1_client_response_parser_content MATCHES
        "withoutContent[(][)]" OR
+   NOT _installed_http1_client_response_parser_content MATCHES
+       "zeroContent[(][)]" OR
    NOT _installed_http1_client_response_parser_content MATCHES
        "knownLength[(][)]" OR
    NOT _installed_http1_client_response_parser_content MATCHES
@@ -1266,6 +1331,9 @@ file(READ "${_install_prefix}/include/ruvia/http/Cookies.h"
 file(READ
     "${_install_prefix}/include/ruvia/http/detail/CookieValidation.h"
     _installed_cookie_validation)
+file(READ
+    "${_install_prefix}/include/ruvia/http/detail/SetCookiePlan.h"
+    _installed_set_cookie_plan)
 if(NOT _installed_cookie_options MATCHES
        "std::optional<CookiePrefix>[ \t]+prefix" OR
    NOT _installed_cookie_options MATCHES
@@ -1279,6 +1347,27 @@ if(NOT _installed_cookie_options MATCHES
    _installed_cookie_options MATCHES
        "enum class CookiePriority[^{]*[{][^}]*kUnspecified")
     message(FATAL_ERROR "installed Cookie options lost explicit optional attributes")
+endif()
+if(NOT _installed_cookie_options MATCHES
+       "class BorrowedText final" OR
+   NOT _installed_cookie_options MATCHES
+       "HttpTemporaryOwningCharString String" OR
+   NOT _installed_cookie_options MATCHES
+       "BorrowedText& operator=[(]String&&[)] = delete" OR
+   NOT _installed_cookie_options MATCHES
+       "BorrowedText[ \t]+path[{][\"]/[\"][}]" OR
+   NOT _installed_cookie_options MATCHES
+       "BorrowedText[ \t]+domain" OR
+   NOT _installed_set_cookie_plan MATCHES
+       "HttpTemporaryOwningCharString<Name>" OR
+   NOT _installed_set_cookie_plan MATCHES
+       "HttpTemporaryOwningCharString<Value>" OR
+   NOT _installed_set_cookie_plan MATCHES
+       "CookieOptions&&[)][ \t]*=[ \t]*delete" OR
+   NOT _installed_set_cookie_plan MATCHES
+       "const CookieOptions&&[)][ \t]*=[ \t]*delete")
+    message(FATAL_ERROR
+        "installed Set-Cookie plan restored temporary owning-string borrows")
 endif()
 if(NOT _installed_cookie_validation MATCHES
        "byte < 0x20 [|][|] byte > 0x7e [|][|] c == ';'" OR
@@ -1446,9 +1535,9 @@ if(NOT _installed_http_request_body_failure MATCHES
    NOT _installed_http_request_body_failure MATCHES "incomplete[(][)]" OR
    NOT _installed_http_request_body_failure MATCHES "protocolError[(][)]" OR
    NOT _installed_http_request_body_failure MATCHES
-       "HttpProtocolError[(]413, [\"]request body is too large[\"]" OR
+       "HttpProtocolError[(]http_status::kContentTooLarge, [\"]request body is too large[\"]" OR
    NOT _installed_http_request_body_failure MATCHES
-       "HttpProtocolError[(]400, [\"]incomplete request body[\"]" OR
+       "HttpProtocolError[(]http_status::kBadRequest, [\"]incomplete request body[\"]" OR
    NOT _installed_http_request_body_failure MATCHES
        "httpRequestBodySizeFailure" OR
    NOT _installed_http_request_body_failure MATCHES
@@ -1474,7 +1563,7 @@ if(NOT _installed_http_expectations MATCHES "kNoContent" OR
    NOT _installed_http_expectations MATCHES "std::variant" OR
    NOT _installed_http_expectations MATCHES "protocolError" OR
    NOT _installed_http_expectations MATCHES
-       "HttpProtocolError[(]417, [\"]unsupported Expect header[\"]" OR
+       "HttpProtocolError[(]http_status::kExpectationFailed, [\"]unsupported Expect header[\"]" OR
    NOT _installed_http1_request_body_plan_expectations MATCHES
        "HttpServerExpectationPlan expectationPlan" OR
    NOT _installed_http2_stream_state_expectations MATCHES
@@ -1764,6 +1853,14 @@ file(READ "${_installed_ws_event_path}" _installed_ws_event)
 file(READ "${_installed_ws_inbound_path}" _installed_ws_inbound)
 if(NOT _installed_ws_connection MATCHES
        "std::optional<WsEvent>[ \t]+poll" OR
+   NOT _installed_ws_connection MATCHES
+       "poll[(][)][ \\t]*&[ \\t]*[;]" OR
+   NOT _installed_ws_connection MATCHES
+       "poll[(][)][ \\t]*&&[ \\t]*=[ \\t]*delete" OR
+   NOT _installed_ws_connection MATCHES
+       "outputPlan[(][)] const &[ \\t]+noexcept" OR
+   NOT _installed_ws_connection MATCHES
+       "outputPlan[(][)] const &&[ \\t]*=[ \\t]*delete" OR
    NOT _installed_ws_event MATCHES "enum class WsEventKind" OR
    NOT _installed_ws_event MATCHES "using Value = std::variant" OR
    NOT _installed_ws_event MATCHES "class WsMessageEvent final" OR
@@ -1899,6 +1996,12 @@ if(NOT _installed_ws_deflate_negotiation MATCHES
    NOT _installed_ws_server_negotiation MATCHES
        "class WebSocketServerNegotiation final" OR
    NOT _installed_ws_server_negotiation MATCHES
+       "std::pmr::string subprotocol_" OR
+   NOT _installed_ws_server_negotiation MATCHES
+       "subprotocol[(][)] const [&] noexcept" OR
+   NOT _installed_ws_server_negotiation MATCHES
+       "subprotocol[(][)] const && = delete" OR
+   NOT _installed_ws_server_negotiation MATCHES
        "makeWebSocketServerNegotiation" OR
    NOT _installed_ws_server_negotiation MATCHES
        "WebSocketDeflateNegotiation deflate[(][)]" OR
@@ -1935,11 +2038,11 @@ if(NOT _installed_ws_deflate_negotiation MATCHES
    NOT _installed_http2_connection MATCHES
        "std::get_if<WebSocketServerNegotiation>" OR
    NOT _installed_http2_connection MATCHES
-       "WebSocketServerNegotiation negotiation" OR
+       "WebSocketServerNegotiation&& negotiation" OR
    NOT _installed_ws_connection MATCHES
        "WebSocketDeflateNegotiation deflate")
     message(FATAL_ERROR
-        "installed WebSocket handshake lost its immutable negotiation contract")
+        "installed WebSocket handshake lost its owned immutable negotiation contract")
 endif()
 if(_installed_ws_deflate_negotiation MATCHES
        "bool[ \t]+(enabled|echoServerMaxWindowBits)" OR
@@ -2154,6 +2257,195 @@ if(NOT _installed_http_response_head_buffer MATCHES
     message(FATAL_ERROR
         "installed HTTP response-head scratch buffer lost exclusive storage state")
 endif()
+set(_installed_http1_chunk_header_buffer_path
+    "${_install_prefix}/include/ruvia/http/detail/http1/Http1ChunkedFraming.h")
+set(_installed_http2_output_buffer_path
+    "${_install_prefix}/include/ruvia/http/detail/http2/Http2OutputBuffer.h")
+set(_installed_http2_connection_buffer_path
+    "${_install_prefix}/include/ruvia/http/detail/http2/Http2Connection.h")
+set(_installed_websocket_close_buffer_path
+    "${_install_prefix}/include/ruvia/http/detail/websocket/HttpWebSocketUtils.h")
+foreach(_installed_protocol_buffer_path IN ITEMS
+        "${_installed_http1_chunk_header_buffer_path}"
+        "${_installed_http2_output_buffer_path}"
+        "${_installed_http2_connection_buffer_path}"
+        "${_installed_websocket_close_buffer_path}")
+    if(NOT EXISTS "${_installed_protocol_buffer_path}")
+        message(FATAL_ERROR
+            "installed HTTP package is missing an owned protocol buffer")
+    endif()
+endforeach()
+file(READ "${_installed_http1_chunk_header_buffer_path}"
+    _installed_http1_chunk_header_buffer)
+file(READ "${_installed_http2_output_buffer_path}"
+    _installed_http2_output_buffer)
+file(READ "${_installed_http2_connection_buffer_path}"
+    _installed_http2_connection_buffer)
+file(READ "${_installed_websocket_close_buffer_path}"
+    _installed_websocket_close_buffer)
+if(NOT _installed_http1_chunk_header_buffer MATCHES
+       "view[(][)] const &[ 	]+noexcept" OR
+   NOT _installed_http1_chunk_header_buffer MATCHES
+       "view[(][)] const &&[ 	]*=[ 	]*delete" OR
+   NOT _installed_http_response_head_buffer MATCHES
+       "view[(][)] const &[ 	]+noexcept" OR
+   NOT _installed_http_response_head_buffer MATCHES
+       "view[(][)] const &&[ 	]*=[ 	]*delete" OR
+   NOT _installed_http_response_head_buffer MATCHES
+       "stackCursor[(]std::size_t bound[)] &[ 	]+noexcept" OR
+   NOT _installed_http_response_head_buffer MATCHES
+       "stackCursor[(]std::size_t[)][ 	]*&&[ 	]*=[ 	]*delete" OR
+   NOT _installed_http2_output_buffer MATCHES
+       "pending[(][)] const &[ 	]+noexcept" OR
+   NOT _installed_http2_output_buffer MATCHES
+       "pending[(][)] const &&[ 	]*=[ 	]*delete" OR
+   NOT _installed_http2_connection_buffer MATCHES
+       "pendingOutput[(][)] const &[ 	]+noexcept" OR
+   NOT _installed_http2_connection_buffer MATCHES
+       "pendingOutput[(][)] const &&[ 	]*=[ 	]*delete" OR
+   NOT _installed_http2_connection_buffer MATCHES
+       "takeDrainedDataStreams[(][)] &[ 	]+noexcept" OR
+   NOT _installed_http2_connection_buffer MATCHES
+       "takeDrainedDataStreams[(][)] &&[ 	]*=[ 	]*delete" OR
+   NOT _installed_websocket_close_buffer MATCHES
+       "bytes[(][)] const &[ 	]+noexcept" OR
+   NOT _installed_websocket_close_buffer MATCHES
+       "bytes[(][)] const &&[ 	]*=[ 	]*delete")
+    message(FATAL_ERROR
+        "installed protocol buffers expose storage from temporary owners")
+endif()
+set(_installed_http2_header_list_owner_path
+    "${_install_prefix}/include/ruvia/http/detail/http2/Http2HeaderList.h")
+set(_installed_http2_stream_request_data_owner_path
+    "${_install_prefix}/include/ruvia/http/detail/http2/Http2StreamRequestData.h")
+set(_installed_http2_stream_request_state_owner_path
+    "${_install_prefix}/include/ruvia/http/detail/http2/Http2StreamRequestState.h")
+set(_installed_http2_stream_header_blocks_owner_path
+    "${_install_prefix}/include/ruvia/http/detail/http2/Http2StreamHeaderBlocks.h")
+set(_installed_http2_stream_lifecycle_owner_path
+    "${_install_prefix}/include/ruvia/http/detail/http2/Http2StreamLifecycle.h")
+set(_installed_http2_stream_state_owner_path
+    "${_install_prefix}/include/ruvia/http/detail/http2/Http2StreamState.h")
+set(_installed_http2_stream_table_owner_path
+    "${_install_prefix}/include/ruvia/http/detail/http2/Http2StreamTable.h")
+foreach(_installed_http2_stream_owner_path IN ITEMS
+        "${_installed_http2_header_list_owner_path}"
+        "${_installed_http2_stream_request_data_owner_path}"
+        "${_installed_http2_stream_request_state_owner_path}"
+        "${_installed_http2_stream_header_blocks_owner_path}"
+        "${_installed_http2_stream_lifecycle_owner_path}"
+        "${_installed_http2_stream_state_owner_path}"
+        "${_installed_http2_stream_table_owner_path}")
+    if(NOT EXISTS "${_installed_http2_stream_owner_path}")
+        message(FATAL_ERROR
+            "installed HTTP package is missing an HTTP/2 stream owner")
+    endif()
+endforeach()
+file(READ "${_installed_http2_header_list_owner_path}"
+    _installed_http2_header_list_owner)
+file(READ "${_installed_http2_stream_request_data_owner_path}"
+    _installed_http2_stream_request_data_owner)
+file(READ "${_installed_http2_stream_request_state_owner_path}"
+    _installed_http2_stream_request_state_owner)
+file(READ "${_installed_http2_stream_header_blocks_owner_path}"
+    _installed_http2_stream_header_blocks_owner)
+file(READ "${_installed_http2_stream_lifecycle_owner_path}"
+    _installed_http2_stream_lifecycle_owner)
+file(READ "${_installed_http2_stream_state_owner_path}"
+    _installed_http2_stream_state_owner)
+file(READ "${_installed_http2_stream_table_owner_path}"
+    _installed_http2_stream_table_owner)
+if(NOT _installed_http2_header_list_owner MATCHES
+       "at[(][^)]*[)][\\r\\n \\t]*const &[\\r\\n \\t]+noexcept" OR
+   NOT _installed_http2_header_list_owner MATCHES
+       "at[(][^)]*[)][\\r\\n \\t]*const &&[\\r\\n \\t]*=[\\r\\n \\t]*delete")
+    message(FATAL_ERROR
+        "installed HTTP/2 header list exposes views from temporary owners")
+endif()
+foreach(_installed_http2_request_data_borrow IN ITEMS
+        method scheme authority path protocol cookie headerAt)
+    if(NOT _installed_http2_stream_request_data_owner MATCHES
+           "${_installed_http2_request_data_borrow}[(][^)]*[)][\\r\\n \\t]*const &[\\r\\n \\t]+noexcept" OR
+       NOT _installed_http2_stream_request_data_owner MATCHES
+           "${_installed_http2_request_data_borrow}[(][^)]*[)][\\r\\n \\t]*const &&[\\r\\n \\t]*=[\\r\\n \\t]*delete")
+        message(FATAL_ERROR
+            "installed HTTP/2 request data exposes views from temporary owners")
+    endif()
+endforeach()
+if(NOT _installed_http2_stream_request_state_owner MATCHES
+       "responseStatus[(][)][\\r\\n \\t]*const &[\\r\\n \\t]+noexcept" OR
+   NOT _installed_http2_stream_request_state_owner MATCHES
+       "responseStatus[(][)][\\r\\n \\t]*const &&[\\r\\n \\t]*=[\\r\\n \\t]*delete")
+    message(FATAL_ERROR
+        "installed HTTP/2 request state exposes pointers from temporary owners")
+endif()
+foreach(_installed_http2_header_block_borrow IN ITEMS request response)
+    if(NOT _installed_http2_stream_header_blocks_owner MATCHES
+           "${_installed_http2_header_block_borrow}[(][)][\\r\\n \\t]*&[\\r\\n \\t]+noexcept" OR
+       NOT _installed_http2_stream_header_blocks_owner MATCHES
+           "${_installed_http2_header_block_borrow}[(][)][\\r\\n \\t]*&&[\\r\\n \\t]*=[\\r\\n \\t]*delete" OR
+       NOT _installed_http2_stream_header_blocks_owner MATCHES
+           "${_installed_http2_header_block_borrow}[(][)][\\r\\n \\t]*const &[\\r\\n \\t]+noexcept" OR
+       NOT _installed_http2_stream_header_blocks_owner MATCHES
+           "${_installed_http2_header_block_borrow}[(][)][\\r\\n \\t]*const &&[\\r\\n \\t]*=[\\r\\n \\t]*delete")
+        message(FATAL_ERROR
+            "installed HTTP/2 header blocks expose references from temporary owners")
+    endif()
+endforeach()
+foreach(_installed_http2_lifecycle_borrow IN ITEMS localSend remoteReceive)
+    if(NOT _installed_http2_stream_lifecycle_owner MATCHES
+           "${_installed_http2_lifecycle_borrow}[(][)][\\r\\n \\t]*const &[\\r\\n \\t]+noexcept" OR
+       NOT _installed_http2_stream_lifecycle_owner MATCHES
+           "${_installed_http2_lifecycle_borrow}[(][)][\\r\\n \\t]*const &&[\\r\\n \\t]*=[\\r\\n \\t]*delete")
+        message(FATAL_ERROR
+            "installed HTTP/2 lifecycle exposes references from temporary owners")
+    endif()
+endforeach()
+foreach(_installed_http2_stream_mutable_borrow IN ITEMS
+        receiveWindowCredit requestHeaderBlock responseHeaderBlock)
+    if(NOT _installed_http2_stream_state_owner MATCHES
+           "${_installed_http2_stream_mutable_borrow}[(][^)]*[)][\\r\\n \\t]*&[\\r\\n \\t]+noexcept" OR
+       NOT _installed_http2_stream_state_owner MATCHES
+           "${_installed_http2_stream_mutable_borrow}[(][^)]*[)][\\r\\n \\t]*&&[\\r\\n \\t]*=[\\r\\n \\t]*delete")
+        message(FATAL_ERROR
+            "installed HTTP/2 stream exposes mutable storage from temporary owners")
+    endif()
+endforeach()
+foreach(_installed_http2_stream_const_borrow IN ITEMS
+        requestHeaderBlock responseHeaderBlock remoteContent localContent
+        localSend remoteReceive requestMethod requestAuthority requestPath
+        requestProtocol requestCookie requestHeaderAt requestScheme tunnel
+        responseStatus)
+    if(NOT _installed_http2_stream_state_owner MATCHES
+           "${_installed_http2_stream_const_borrow}[(][^)]*[)][\\r\\n \\t]*const &[\\r\\n \\t]+noexcept" OR
+       NOT _installed_http2_stream_state_owner MATCHES
+           "${_installed_http2_stream_const_borrow}[(][^)]*[)][\\r\\n \\t]*const &&[\\r\\n \\t]*=[\\r\\n \\t]*delete")
+        message(FATAL_ERROR
+            "installed HTTP/2 stream exposes storage from temporary owners")
+    endif()
+endforeach()
+if(NOT _installed_http2_stream_table_owner MATCHES
+       "find[(][^)]*[)][\\r\\n \\t]*&[\\r\\n \\t]+noexcept" OR
+   NOT _installed_http2_stream_table_owner MATCHES
+       "find[(][^)]*[)][\\r\\n \\t]*&&[\\r\\n \\t]*=[\\r\\n \\t]*delete" OR
+   NOT _installed_http2_stream_table_owner MATCHES
+       "find[(][^)]*[)][\\r\\n \\t]*const &[\\r\\n \\t]+noexcept" OR
+   NOT _installed_http2_stream_table_owner MATCHES
+       "find[(][^)]*[)][\\r\\n \\t]*const &&[\\r\\n \\t]*=[\\r\\n \\t]*delete" OR
+   NOT _installed_http2_stream_table_owner MATCHES
+       "create[(][^)]*[)][\\r\\n \\t]*&[\\r\\n \\t]*[{]" OR
+   NOT _installed_http2_stream_table_owner MATCHES
+       "create[(][^)]*[)][\\r\\n \\t]*&&[\\r\\n \\t]*=[\\r\\n \\t]*delete")
+    message(FATAL_ERROR
+        "installed HTTP/2 stream table exposes pointers from temporary owners")
+endif()
+if(NOT _installed_http2_connection_buffer MATCHES
+       "stream[(][^)]*[)][\\r\\n \\t]*&[\\r\\n \\t]+noexcept" OR
+   NOT _installed_http2_connection_buffer MATCHES
+       "stream[(][^)]*[)][\\r\\n \\t]*&&[\\r\\n \\t]*=[\\r\\n \\t]*delete")
+    message(FATAL_ERROR
+        "installed HTTP/2 connection exposes streams from temporary owners")
+endif()
 if(NOT _installed_http1_request_parser MATCHES "class Http1RequestNeedMore final" OR
    NOT _installed_http1_request_parser MATCHES "class Http1ParsedRequest final" OR
    NOT _installed_http1_request_parser MATCHES "class Http1RequestParseFailure final" OR
@@ -2173,7 +2465,9 @@ if(NOT _installed_http1_request_parser MATCHES "class Http1RequestNeedMore final
    _installed_http1_request_parser MATCHES "HttpParseError::kNone" OR
    _installed_http_parse_error MATCHES "kNone" OR
    NOT _installed_http1_server_request_parser MATCHES
-       "const Http1ServerRequestParseFailure[*][\r\n \t]*failure[(][)] const noexcept" OR
+       "const Http1ServerRequestParseFailure[*][\r\n \t]*failure[(][)] const [&] noexcept" OR
+   NOT _installed_http1_server_request_parser MATCHES
+       "failure[(][)] const && = delete" OR
    NOT _installed_http1_server_request_parser MATCHES
        "HttpProtocolError protocolError[(][)] const noexcept" OR
    NOT _installed_http1_server_request_parser MATCHES
@@ -2209,10 +2503,10 @@ if(NOT _installed_http_client MATCHES "enum class HttpScheme" OR
    NOT _installed_http_client MATCHES "struct HttpClientRequest" OR
    NOT _installed_http_client MATCHES "class HttpClientResponseHead final" OR
    NOT _installed_http_client MATCHES
-       "HttpClientResponseHead[(][ \t\r\n]*std::uint16_t status" OR
+       "HttpClientResponseHead[(][ \t\r\n]*HttpStatusCode status" OR
    _installed_http_client MATCHES "status_[ \t]*[{][ \t]*0[ \t]*[}]" OR
    NOT _installed_http_client_access MATCHES
-       "make[(][ \t\r\n]*std::uint16_t status" OR
+       "make[(][ \t\r\n]*HttpStatusCode status" OR
    _installed_http_client_access MATCHES "setStatus[(]")
     message(FATAL_ERROR "installed outbound client model lost its typed sans-I/O API")
 endif()
@@ -2348,7 +2642,7 @@ if(_installed_http2_local_content MATCHES "Http2LocalContentMode" OR
        "std::get_if<Http2LocalContentKnownLength>" OR
    NOT _installed_http2_local_content MATCHES "kNotStarted" OR
    NOT _installed_http2_stream_state MATCHES
-       "const Http2LocalContentState& localContent[(][)] const noexcept" OR
+       "const Http2LocalContentState&[ \t\r\n]+localContent[(][)] const & noexcept" OR
    NOT _installed_http2_stream_state MATCHES
        "HttpRequestExpectations requestExpectations[(][)] const noexcept" OR
    _installed_http2_stream_state MATCHES
@@ -2389,14 +2683,18 @@ set(_installed_rate_limit_decision_path
 if(_built_components_csv MATCHES "(^|,)web(,|$)")
     set(_installed_app_api_path
         "${_install_prefix}/include/ruvia/web/App.h")
+    set(_installed_controller_api_path
+        "${_install_prefix}/include/ruvia/web/Controller.h")
     set(_installed_rate_limit_rule_path
         "${_install_prefix}/include/ruvia/web/RateLimitRule.h")
     if(NOT EXISTS "${_installed_app_api_path}" OR
+       NOT EXISTS "${_installed_controller_api_path}" OR
        NOT EXISTS "${_installed_rate_limit_rule_path}")
         message(FATAL_ERROR
             "installed Web package is missing App rate-limit configuration")
     endif()
     file(READ "${_installed_app_api_path}" _installed_app_api)
+    file(READ "${_installed_controller_api_path}" _installed_controller_api)
     file(READ "${_installed_rate_limit_rule_path}" _installed_rate_limit_rule)
     if(_installed_app_api MATCHES "setThreadNum|setGlobalRateLimit" OR
        NOT _installed_app_api MATCHES "setWorkersPerListener" OR
@@ -2405,6 +2703,32 @@ if(_built_components_csv MATCHES "(^|,)web(,|$)")
        NOT _installed_rate_limit_rule MATCHES "kDefaultRateLimitSlotsPerWorker")
         message(FATAL_ERROR
             "installed Web package retained stale worker/rate-limit configuration")
+    endif()
+    string(REGEX MATCHALL
+        "(begin|end)[ \t\r\n]*[(][)][ \t\r\n]*const &[ \t]+noexcept"
+        _installed_route_list_lvalue_iterators
+        "${_installed_controller_api}")
+    list(LENGTH _installed_route_list_lvalue_iterators
+        _installed_route_list_lvalue_iterator_count)
+    string(REGEX MATCHALL
+        "(begin|end)[ \t\r\n]*[(][)][ \t\r\n]*const &&[ \t]*=[ \t]*delete"
+        _installed_route_list_deleted_rvalue_iterators
+        "${_installed_controller_api}")
+    list(LENGTH _installed_route_list_deleted_rvalue_iterators
+        _installed_route_list_deleted_rvalue_iterator_count)
+    if(_installed_route_list_lvalue_iterator_count LESS 4 OR
+       _installed_route_list_deleted_rvalue_iterator_count LESS 4)
+        message(FATAL_ERROR
+            "installed route macro lists expose iterators from temporary owners")
+    endif()
+    if(NOT _installed_controller_api MATCHES
+           "ruvia/web/detail/BorrowedView[.]h" OR
+       NOT _installed_controller_api MATCHES
+           "RvalueCharBasicString<Paths>[ 	]*[|][|][ 	]*[.][.][.]" OR
+       NOT _installed_controller_api MATCHES
+           "RuviaPathList[(]Paths&&[.][.][.][)][ 	]*=[ 	]*delete")
+        message(FATAL_ERROR
+            "installed route macro path lists accept temporary owning strings")
     endif()
     set(_installed_validated_models_path
         "${_install_prefix}/include/ruvia/web/detail/ValidatedValues.h")
@@ -3478,7 +3802,7 @@ if(_built_components_csv MATCHES "(^|,)web(,|$)")
        _installed_http1_buffered_response_result MATCHES
            "enum class Http1BufferedResponseWriteOutcome|outcome[(][)] const noexcept|bool completed[(][)] const noexcept" OR
        NOT _installed_http1_buffered_response_result MATCHES
-           "std::optional<std::uint16_t>[ \t\r\n]+committedStatus[(][)] const noexcept" OR
+           "std::optional<HttpStatusCode>[ \t\r\n]+committedStatus[(][)] const noexcept" OR
        NOT _installed_http1_buffered_response_result MATCHES
            "is_trivially_copyable_v<Http1BufferedResponseWriteResult>" OR
        NOT _installed_http1_buffered_response_result MATCHES
@@ -3794,6 +4118,23 @@ if(_built_components_csv MATCHES "(^|,)web(,|$)")
            "std::get_if<ContextWebSocketOutput>")
         message(FATAL_ERROR
             "installed Context capabilities lost their exclusive alternatives")
+    endif()
+    string(REGEX MATCHALL
+        "(buffered|lazy|streaming|responseStream|webSocket)[ \t\r\n]*[(][)][ \t\r\n]*const[ \t\r\n]*&[ \t\r\n]*noexcept"
+        _installed_context_capability_lvalue_accessors
+        "${_installed_context_capabilities}")
+    list(LENGTH _installed_context_capability_lvalue_accessors
+        _installed_context_capability_lvalue_accessor_count)
+    string(REGEX MATCHALL
+        "(buffered|lazy|streaming|responseStream|webSocket)[ \t\r\n]*[(][)][ \t\r\n]*const[ \t\r\n]*&&[ \t\r\n]*=[ \t\r\n]*delete"
+        _installed_context_capability_deleted_rvalue_accessors
+        "${_installed_context_capabilities}")
+    list(LENGTH _installed_context_capability_deleted_rvalue_accessors
+        _installed_context_capability_deleted_rvalue_accessor_count)
+    if(_installed_context_capability_lvalue_accessor_count LESS 6 OR
+       _installed_context_capability_deleted_rvalue_accessor_count LESS 6)
+        message(FATAL_ERROR
+            "installed Context capability alternatives expose temporary owners")
     endif()
     if(_installed_context_services MATCHES
            "withBodyReader|withBodyLoader|withWebSocket|BodyReader[ \t]*[*][ \t]*bodyReader_|RequestBodyLoader[ \t]*[*][ \t]*bodyLoader_|WebSocket[ \t]*[*][ \t]*webSocket_|ResponseStreamWriter[ \t]*[*][ \t]*responseStream_" OR
@@ -4238,7 +4579,7 @@ if(_installed_http2_remote_content MATCHES
    NOT _installed_http2_remote_content MATCHES "account[(]" OR
    NOT _installed_http2_remote_content MATCHES "terminalLengthValid" OR
    NOT _installed_http2_stream_state MATCHES
-       "const Http2RemoteContentState&[ \t\r\n]+remoteContent[(][)] const noexcept" OR
+       "const Http2RemoteContentState&[ \t\r\n]+remoteContent[(][)] const & noexcept" OR
    NOT _installed_http2_stream_state MATCHES "accountRemoteContent" OR
    NOT _installed_http2_stream_state MATCHES
        "selectRemoteContentMetadataOnly" OR
@@ -4392,7 +4733,7 @@ if(NOT _installed_response_content_semantics MATCHES
    NOT _installed_response_write_plan MATCHES
        "HttpResponseContentSemantics semantics_" OR
    NOT _installed_response_write_plan MATCHES
-       "std::uint16_t responseStatus[(][)] const noexcept" OR
+       "HttpStatusCode responseStatus[(][)] const noexcept" OR
    NOT _installed_response_write_plan MATCHES
        "HttpKnownMethod requestMethod[(][)] const noexcept" OR
    NOT _installed_response_write_plan MATCHES
@@ -4487,7 +4828,7 @@ if(NOT _installed_http1_response_head_plan MATCHES
    NOT _installed_http1_response_head_plan MATCHES
        "class Http1BufferedResponsePlan final" OR
    NOT _installed_http1_response_head_plan MATCHES
-       "std::uint16_t responseStatus[(][)] const noexcept" OR
+       "HttpStatusCode responseStatus[(][)] const noexcept" OR
    NOT _installed_http1_response_head_plan MATCHES
        "std::uint64_t contentLength[(][)] const noexcept" OR
    NOT _installed_http1_response_head_plan MATCHES
@@ -4688,7 +5029,7 @@ if(_installed_http2_tunnel_state MATCHES
    NOT _installed_http2_tunnel_state MATCHES
        "form != Http2ConnectForm::kExtended" OR
    NOT _installed_http2_stream_state MATCHES
-       "const Http2TunnelState& tunnel[(][)] const noexcept" OR
+       "const Http2TunnelState& tunnel[(][)] const & noexcept" OR
    _installed_http2_stream_state MATCHES
        "(standardConnect|extendedConnect|extendedConnectWebSocket|connectRequest|connectPending|tunnelOpen|connectRejected)[(]")
     message(FATAL_ERROR "installed HTTP/2 tunnel state retained a kind/phase product or stream forwarding accessors")
@@ -4775,7 +5116,7 @@ if(NOT _installed_http2_close_source MATCHES
    NOT _installed_http2_local_send MATCHES
        "Http2StreamCloseSource source[(][)] const noexcept" OR
    NOT _installed_http2_lifecycle MATCHES
-       "const Http2LocalSendState& localSend[(][)] const noexcept" OR
+       "const Http2LocalSendState& localSend[(][)] const & noexcept" OR
    NOT _installed_http2_lifecycle MATCHES
        "private:[\r\n \t]+friend class Http2StreamState" OR
    NOT _installed_http2_lifecycle MATCHES "bool aborted[(][)] const noexcept" OR
@@ -4783,7 +5124,7 @@ if(NOT _installed_http2_close_source MATCHES
        "bool abort[(]Http2StreamCloseSource source[)] noexcept" OR
    NOT _installed_http2_lifecycle MATCHES "queued_ = false" OR
    NOT _installed_http2_stream_state MATCHES
-       "const Http2LocalSendState& localSend[(][)] const noexcept" OR
+       "const Http2LocalSendState& localSend[(][)] const & noexcept" OR
    NOT _installed_http2_stream_state MATCHES "bool isAborted[(][)] const noexcept" OR
    NOT _installed_http2_stream_state MATCHES
        "bool abort[(]Http2StreamCloseSource source[)] noexcept" OR
@@ -4856,19 +5197,19 @@ if(NOT _installed_http2_remote_receive MATCHES
    NOT _installed_http2_remote_receive MATCHES
        "std::get_if<Http2RemoteEndStream>" OR
    NOT _installed_http2_lifecycle MATCHES
-       "const Http2RemoteReceiveState& remoteReceive[(][)] const noexcept" OR
+       "const Http2RemoteReceiveState& remoteReceive[(][)] const & noexcept" OR
    NOT _installed_http2_lifecycle MATCHES "remoteReceive_[.]abort[(][)]" OR
    NOT _installed_http2_stream_state MATCHES
-       "const Http2RemoteReceiveState& remoteReceive[(][)] const noexcept" OR
+       "const Http2RemoteReceiveState&[ \t\r\n]+remoteReceive[(][)] const & noexcept" OR
    NOT _installed_http2_stream_state MATCHES "finalizeRemoteConnectHead" OR
    NOT _installed_http2_stream_state MATCHES "finishRemotePendingConnect" OR
    NOT _installed_http2_stream_state MATCHES "finishRemoteRejectedConnect" OR
    NOT _installed_http2_request_state MATCHES
-       "const std::uint16_t[*] responseStatus[(][)] const noexcept" OR
+       "const HttpStatusCode[*] responseStatus[(][)] const & noexcept" OR
    NOT _installed_http2_request_state MATCHES
-       "bool setResponseStatus[(]std::uint16_t status[)] noexcept" OR
+       "bool setResponseStatus[(]HttpStatusCode status[)] noexcept" OR
    NOT _installed_http2_request_state MATCHES
-       "std::optional<std::uint16_t> responseStatus_" OR
+       "std::optional<HttpStatusCode> responseStatus_" OR
    NOT _installed_http2_request_state MATCHES
        "if [(]responseStatus_[)]" OR
    _installed_http2_lifecycle MATCHES
@@ -4917,9 +5258,15 @@ if(NOT _installed_http_client_redirect MATCHES
    NOT _installed_http_client_redirect MATCHES
        "value[(][)] const && = delete" OR
    NOT _installed_http_client_redirect MATCHES
+       "method[(][)] const [&] noexcept" OR
+   NOT _installed_http_client_redirect MATCHES
+       "method[(][)] const && = delete" OR
+   NOT _installed_http_client_redirect MATCHES
+       "std::pmr::string method_" OR
+   NOT _installed_http_client_redirect MATCHES
        "lookupUniqueHttpClientResponseHeader[\r\n \t]*[(][\r\n \t]*const HttpClientResponseHead&&")
     message(FATAL_ERROR
-        "installed redirect helper accepts temporary response owners or exposes temporary target storage")
+        "installed redirect helper borrows request methods, accepts temporary response owners, or exposes temporary owned storage")
 endif()
 file(READ "${_install_prefix}/include/ruvia/http/MultipartParser.h"
     _installed_multipart_parser)
@@ -4953,6 +5300,22 @@ if(NOT _installed_multipart_parser MATCHES "class MultipartBoundary final" OR
    _installed_multipart_parser MATCHES
        "MultipartParseError error[(][)] const noexcept" OR
    NOT _installed_multipart_parser MATCHES "void finishInput[(][)] noexcept" OR
+   NOT _installed_multipart_parser MATCHES
+       "borrowed[(][)] const &[ \\t]+noexcept" OR
+   NOT _installed_multipart_parser MATCHES
+       "borrowed[(][)] const &&[ \\t]*=[ \\t]*delete" OR
+   NOT _installed_multipart_parser MATCHES
+       "streamingOpen[(][)] const &[ \\t]+noexcept" OR
+   NOT _installed_multipart_parser MATCHES
+       "streamingOpen[(][)] const &&[ \\t]*=[ \\t]*delete" OR
+   NOT _installed_multipart_parser MATCHES
+       "streamingEof[(][)] const &[ \\t]+noexcept" OR
+   NOT _installed_multipart_parser MATCHES
+       "streamingEof[(][)] const &&[ \\t]*=[ \\t]*delete" OR
+   NOT _installed_multipart_parser MATCHES
+       "view[(][)] const &[ \\t]+noexcept" OR
+   NOT _installed_multipart_parser MATCHES
+       "view[(][)] const &&[ \\t]*=[ \\t]*delete" OR
    _installed_multipart_parser MATCHES
        "enum class[ \t]+State[ \t\r\n]*[{]" OR
    NOT _installed_multipart_parsing MATCHES "class HttpMultipartDelimiterNoMatch final" OR
@@ -5347,6 +5710,14 @@ if("web" IN_LIST _built_components)
            "SessionClear" OR
        NOT _installed_secure_token_result_content MATCHES
            "class SecureTokenResult final" OR
+       NOT _installed_secure_token_result_content MATCHES
+           "ready[(][)] const [&] noexcept" OR
+       NOT _installed_secure_token_result_content MATCHES
+           "ready[(][)] const && = delete" OR
+       NOT _installed_secure_token_result_content MATCHES
+           "failure[(][)] const [&] noexcept" OR
+       NOT _installed_secure_token_result_content MATCHES
+           "failure[(][)] const && = delete" OR
        _installed_secure_token_result_content MATCHES
            "generateCsrfToken" OR
        NOT _installed_http1_closing_rejection_content MATCHES

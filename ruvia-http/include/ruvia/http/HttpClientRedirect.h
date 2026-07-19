@@ -21,7 +21,7 @@ namespace ruvia {
 [[nodiscard]] bool isValidHttpClientOriginTarget(
     std::string_view target) noexcept;
 
-[[nodiscard]] bool isHttpClientRedirectStatus(std::uint16_t status) noexcept;
+[[nodiscard]] bool isHttpClientRedirectStatus(HttpStatusCode status) noexcept;
 
 class HttpClientResponseHeaderLookupResult;
 
@@ -130,11 +130,21 @@ enum class HttpClientRedirectContentDisposition : std::uint8_t {
     kDrop,
 };
 
+// The method is copied into caller-selected PMR storage so the plan does not
+// inherit the request or request-method backing storage lifetime.
 class HttpClientRedirectRequestPlan final {
 public:
-    [[nodiscard]] constexpr std::string_view method() const noexcept {
+    HttpClientRedirectRequestPlan(const HttpClientRedirectRequestPlan&) = delete;
+    HttpClientRedirectRequestPlan& operator=(
+        const HttpClientRedirectRequestPlan&) = delete;
+    HttpClientRedirectRequestPlan(HttpClientRedirectRequestPlan&&) noexcept = default;
+    HttpClientRedirectRequestPlan& operator=(
+        HttpClientRedirectRequestPlan&&) = delete;
+
+    [[nodiscard]] std::string_view method() const & noexcept {
         return method_;
     }
+    std::string_view method() const && = delete;
 
     [[nodiscard]] constexpr HttpClientRedirectContentDisposition
     contentDisposition() const noexcept {
@@ -144,20 +154,22 @@ public:
 private:
     friend HttpClientRedirectRequestPlan planHttpClientRedirectRequest(
         const HttpClientRequest&,
-        std::uint16_t) noexcept;
+        HttpStatusCode,
+        std::pmr::memory_resource*);
 
-    constexpr HttpClientRedirectRequestPlan(
+    HttpClientRedirectRequestPlan(
         std::string_view method,
-        HttpClientRedirectContentDisposition contentDisposition) noexcept
-        : method_(method), contentDisposition_(contentDisposition) {}
+        HttpClientRedirectContentDisposition contentDisposition,
+        std::pmr::memory_resource* resource);
 
-    std::string_view method_;
+    std::pmr::string method_;
     HttpClientRedirectContentDisposition contentDisposition_;
 };
 
 [[nodiscard]] HttpClientRedirectRequestPlan planHttpClientRedirectRequest(
     const HttpClientRequest& request,
-    std::uint16_t status) noexcept;
+    HttpStatusCode status,
+    std::pmr::memory_resource* resource = nullptr);
 
 // This classification has no alternative-specific payload, so an enum is the
 // complete result rather than a status coupled to unrelated fields.
@@ -188,7 +200,7 @@ public:
     HttpClientRedirectTarget& operator=(HttpClientRedirectTarget&&) = delete;
 
     [[nodiscard]] std::string_view value() const & noexcept {
-        return std::string_view(value_.data(), value_.size());
+        return value_;
     }
     [[nodiscard]] std::string_view value() const && = delete;
 
@@ -277,6 +289,172 @@ private:
 
 [[nodiscard]] HttpClientRedirectTargetResult
 resolveHttpClientSameOriginRedirectTarget(
+    const HttpOrigin& origin,
+    std::string_view currentTarget,
+    std::string_view location,
+    std::pmr::memory_resource* resource = nullptr);
+
+enum class HttpClientRedirectResolutionError : std::uint8_t {
+    kInvalidCurrentTarget,
+    kInvalidLocation,
+    // The Location names a scheme this client cannot follow (anything other
+    // than http/https). The response itself is well-formed; the I/O owner
+    // decides whether to surface the response or fail the exchange.
+    kUnsupportedScheme,
+};
+
+class HttpClientRedirectResolutionResult;
+
+// A followable redirect destination: the resolved origin plus the origin-form
+// target on that origin. `crossOrigin()` is true whenever the destination
+// scheme/host/port triple differs from the request origin; RFC 9110 Section
+// 15.4 and the fetch specification require the I/O owner to drop credentials
+// (Authorization, Proxy-Authorization, cookie material not scoped to the new
+// origin) before following a cross-origin redirect.
+class HttpClientResolvedRedirect final {
+public:
+    HttpClientResolvedRedirect(const HttpClientResolvedRedirect&) = delete;
+    HttpClientResolvedRedirect& operator=(
+        const HttpClientResolvedRedirect&) = delete;
+    HttpClientResolvedRedirect(HttpClientResolvedRedirect&&) noexcept = default;
+    HttpClientResolvedRedirect& operator=(
+        HttpClientResolvedRedirect&&) = delete;
+
+    [[nodiscard]] std::string_view target() const & noexcept {
+        return target_;
+    }
+    std::string_view target() const && = delete;
+
+    [[nodiscard]] HttpScheme scheme() const noexcept {
+        return scheme_;
+    }
+
+    // RFC 3986 uri-host of the destination; IP literals keep their brackets,
+    // matching the HttpOrigin factory contract.
+    [[nodiscard]] std::string_view host() const & noexcept {
+        return host_;
+    }
+    std::string_view host() const && = delete;
+
+    [[nodiscard]] std::uint16_t port() const noexcept {
+        return port_;
+    }
+
+    [[nodiscard]] bool crossOrigin() const noexcept {
+        return crossOrigin_;
+    }
+
+    // Borrows host() storage: the returned origin is valid only while this
+    // resolved redirect is alive.
+    [[nodiscard]] HttpOrigin origin() const &;
+    HttpOrigin origin() const && = delete;
+
+private:
+    friend class HttpClientRedirectResolutionResult;
+
+    HttpClientResolvedRedirect(
+        HttpScheme scheme,
+        std::pmr::string host,
+        std::uint16_t port,
+        std::pmr::string target,
+        bool crossOrigin) noexcept
+        : scheme_(scheme),
+          host_(std::move(host)),
+          port_(port),
+          target_(std::move(target)),
+          crossOrigin_(crossOrigin) {}
+
+    HttpScheme scheme_;
+    std::pmr::string host_;
+    std::uint16_t port_;
+    std::pmr::string target_;
+    bool crossOrigin_;
+};
+
+class HttpClientRedirectResolutionFailure final {
+public:
+    [[nodiscard]] constexpr HttpClientRedirectResolutionError
+    error() const noexcept {
+        return error_;
+    }
+
+private:
+    friend class HttpClientRedirectResolutionResult;
+
+    explicit constexpr HttpClientRedirectResolutionFailure(
+        HttpClientRedirectResolutionError error) noexcept
+        : error_(error) {}
+
+    HttpClientRedirectResolutionError error_;
+};
+
+// Cross-origin-capable resolution: either one owned followable destination or
+// one typed failure. Unlike resolveHttpClientSameOriginRedirectTarget, a
+// different http/https origin is a success alternative here; the I/O owner
+// applies its own cross-origin policy (credential strip, TLS-downgrade
+// refusal) on top of the classified destination.
+class HttpClientRedirectResolutionResult final {
+public:
+    HttpClientRedirectResolutionResult(
+        const HttpClientRedirectResolutionResult&) = delete;
+    HttpClientRedirectResolutionResult& operator=(
+        const HttpClientRedirectResolutionResult&) = delete;
+    HttpClientRedirectResolutionResult(
+        HttpClientRedirectResolutionResult&&) noexcept = default;
+    HttpClientRedirectResolutionResult& operator=(
+        HttpClientRedirectResolutionResult&&) = delete;
+
+    [[nodiscard]] const HttpClientResolvedRedirect* resolved() const & noexcept {
+        return std::get_if<HttpClientResolvedRedirect>(&value_);
+    }
+    const HttpClientResolvedRedirect* resolved() const && = delete;
+
+    [[nodiscard]] constexpr const HttpClientRedirectResolutionFailure*
+    failure() const & noexcept {
+        return std::get_if<HttpClientRedirectResolutionFailure>(&value_);
+    }
+    const HttpClientRedirectResolutionFailure* failure() const && = delete;
+
+private:
+    friend HttpClientRedirectResolutionResult resolveHttpClientRedirectTarget(
+        const HttpOrigin&,
+        std::string_view,
+        std::string_view,
+        std::pmr::memory_resource*);
+
+    using Value = std::variant<
+        HttpClientResolvedRedirect,
+        HttpClientRedirectResolutionFailure>;
+
+    explicit HttpClientRedirectResolutionResult(
+        HttpClientResolvedRedirect resolved) noexcept
+        : value_(std::move(resolved)) {}
+
+    explicit constexpr HttpClientRedirectResolutionResult(
+        HttpClientRedirectResolutionFailure failure) noexcept
+        : value_(failure) {}
+
+    [[nodiscard]] static HttpClientRedirectResolutionResult makeResolved(
+        HttpScheme scheme,
+        std::pmr::string host,
+        std::uint16_t port,
+        std::pmr::string target,
+        bool crossOrigin) noexcept {
+        return HttpClientRedirectResolutionResult(HttpClientResolvedRedirect(
+            scheme, std::move(host), port, std::move(target), crossOrigin));
+    }
+
+    [[nodiscard]] static constexpr HttpClientRedirectResolutionResult
+    makeFailure(HttpClientRedirectResolutionError error) noexcept {
+        return HttpClientRedirectResolutionResult(
+            HttpClientRedirectResolutionFailure(error));
+    }
+
+    Value value_;
+};
+
+[[nodiscard]] HttpClientRedirectResolutionResult
+resolveHttpClientRedirectTarget(
     const HttpOrigin& origin,
     std::string_view currentTarget,
     std::string_view location,

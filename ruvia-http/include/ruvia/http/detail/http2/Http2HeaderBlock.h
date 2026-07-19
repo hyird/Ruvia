@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstddef>
 #include <string_view>
 
 #include "ruvia/http/detail/http2/Http2StreamState.h"
@@ -8,6 +9,15 @@
 
 namespace ruvia::detail {
 
+// SETTINGS_MAX_HEADER_LIST_SIZE limits the decoded field section, not the
+// serialized HPACK block. An HPACK Huffman code can consume up to 30 bits per
+// decoded octet, so a valid block can be larger than kMaxHttpHeaderBytes. Four
+// encoded bytes per decoded-budget byte cover that expansion plus the bounded
+// representation overhead while retaining a hard memory limit for incomplete
+// CONTINUATION sequences.
+inline constexpr std::size_t kMaxHttp2EncodedHeaderBlockBytes =
+    4 * kMaxHttpHeaderBytes;
+
 inline void http2ResetHeaderBlock(Http2StreamState& stream) {
     clearPmrStringRetainingSmall(stream.requestHeaderBlock());
 }
@@ -15,7 +25,8 @@ inline void http2ResetHeaderBlock(Http2StreamState& stream) {
 [[nodiscard]] inline bool http2AppendHeaderBlock(Http2StreamState& stream, std::string_view fragment) {
     auto& headerBlock = stream.requestHeaderBlock();
     const auto current = headerBlock.size();
-    if (current > kMaxHttpHeaderBytes || fragment.size() > kMaxHttpHeaderBytes - current) {
+    if (current > kMaxHttp2EncodedHeaderBlockBytes ||
+        fragment.size() > kMaxHttp2EncodedHeaderBlockBytes - current) {
         return false;
     }
     headerBlock.append(fragment.data(), fragment.size());

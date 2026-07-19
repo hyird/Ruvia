@@ -1,5 +1,6 @@
 #pragma once
 
+#include "ruvia/http/detail/BorrowedView.h"
 #include "ruvia/http/detail/http2/Http2FrameCodec.h"
 
 #include <cstddef>
@@ -51,12 +52,26 @@ enum class Http2FramePayloadStatus : std::uint8_t {
     return Http2FramePayloadStatus::kDecoded;
 }
 
+template <HttpTemporaryOwningCharString Payload>
+Http2FramePayloadStatus http2StripPadAndPriority(
+    const Http2FrameHeader&,
+    Payload&&,
+    bool,
+    std::string_view&,
+    std::uint32_t* = nullptr) = delete;
+
 [[nodiscard]] inline Http2FramePayloadStatus http2DecodeHeadersPayload(
     const Http2FrameHeader& header,
     std::string_view payload,
     std::string_view& fragment) noexcept {
     return http2StripPadAndPriority(header, payload, true, fragment);
 }
+
+template <HttpTemporaryOwningCharString Payload>
+Http2FramePayloadStatus http2DecodeHeadersPayload(
+    const Http2FrameHeader&,
+    Payload&&,
+    std::string_view&) = delete;
 
 [[nodiscard]] inline Http2FramePayloadStatus http2HeadersPriorityDependency(
     const Http2FrameHeader& header,
@@ -74,5 +89,11 @@ enum class Http2FramePayloadStatus : std::uint8_t {
     return http2StripPadAndPriority(header, payload, false, data) ==
            Http2FramePayloadStatus::kDecoded;
 }
+
+template <HttpTemporaryOwningCharString Payload>
+bool http2DecodeDataPayload(
+    const Http2FrameHeader&,
+    Payload&&,
+    std::string_view&) = delete;
 
 }  // namespace ruvia::detail

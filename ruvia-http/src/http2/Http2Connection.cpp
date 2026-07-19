@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <array>
+#include <utility>
 
 #include "ruvia/http/detail/http2/Http2FlowControl.h"
 #include "ruvia/http/detail/http2/Http2FrameCodec.h"
@@ -59,7 +60,7 @@ Http2Connection::Http2Connection(
 
 // --- outbound byte buffer (batched writes) ------------------------------------
 
-std::string_view Http2Connection::pendingOutput() const noexcept {
+std::string_view Http2Connection::pendingOutput() const & noexcept {
     return output_.pending();
 }
 
@@ -90,13 +91,13 @@ std::optional<Http2Event> Http2Connection::nextEvent() {
     return std::nullopt;
 }
 
-std::span<const std::uint32_t> Http2Connection::takeDrainedDataStreams() noexcept {
+std::span<const std::uint32_t>
+Http2Connection::takeDrainedDataStreams() & noexcept {
     // Swap-and-clear so each drain is reported exactly once; the returned span stays
     // valid until the next call (double buffer, no allocation churn).
     takenDrainedDataStreams_.swap(drainedDataStreams_);
     drainedDataStreams_.clear();
-    return std::span<const std::uint32_t>(
-        takenDrainedDataStreams_.data(), takenDrainedDataStreams_.size());
+    return takenDrainedDataStreams_;
 }
 
 // =============================================================================
@@ -144,6 +145,15 @@ bool Http2Connection::applySettingsPayload(std::string_view payload) {
                 http2PeerSettingErrorCode(failure->error()),
                 http2PeerSettingErrorMessage(failure->error()));
             return false;
+        }
+        if (entry.id == Http2SettingId::kHeaderTableSize &&
+            entry.value < encoderDynamicTableSize_) {
+            // RFC 9113 §4.3.1 requires the next field block after our SETTINGS ACK
+            // to begin with a conformant table-size update. This encoder never uses
+            // dynamic entries, so permanently selecting zero is both exact and avoids
+            // carrying a fictitious compression capacity through later SETTINGS.
+            encoderDynamicTableSize_ = 0;
+            encoderTableSizeUpdatePending_ = true;
         }
         const auto* initialWindowChange = result.initialWindowChange();
         if (initialWindowChange &&
@@ -229,7 +239,7 @@ void Http2Connection::markSendWindowOpened() {
             continue;
         }
         pending.offset = sendDataUpToWindow(
-            *stream, std::string_view(pending.bytes.data(), pending.bytes.size()),
+            *stream, std::string_view(pending.bytes),
             pending.offset, pending.endStream);
         if (pending.offset >= pending.bytes.size()) {
             // The body fully drained. If a trailer block was queued behind it, emit it
@@ -237,7 +247,7 @@ void Http2Connection::markSendWindowOpened() {
             if (!pending.trailerBlock.empty() && !stream->isAborted()) {
                 appendResponseHeaderFrames(
                     *stream,
-                    std::string_view(pending.trailerBlock.data(), pending.trailerBlock.size()),
+                    std::string_view(pending.trailerBlock),
                     Http2EndStream::kEndStream);
             }
             if (http2EndsStream(pending.endStream) || !pending.trailerBlock.empty()) {
@@ -325,7 +335,7 @@ bool Http2Connection::processWindowUpdate(const Http2FrameHeader& header, std::s
 }
 
 bool Http2Connection::isPinned(std::uint32_t streamId) const noexcept {
-    return std::find(pinnedStreams_.begin(), pinnedStreams_.end(), streamId) != pinnedStreams_.end();
+    return std::ranges::contains(pinnedStreams_, streamId);
 }
 
 void Http2Connection::pinStream(std::uint32_t streamId) {
@@ -373,8 +383,7 @@ void Http2Connection::detachActiveHeaderBlock(Http2StreamState& stream) {
 }
 
 void Http2Connection::unpinStream(std::uint32_t streamId) {
-    pinnedStreams_.erase(
-        std::remove(pinnedStreams_.begin(), pinnedStreams_.end(), streamId), pinnedStreams_.end());
+    std::erase(pinnedStreams_, streamId);
     auto* stream = streams_.find(streamId);
     if (stream == nullptr) {
         return;  // never created, or already removed
@@ -411,16 +420,12 @@ void Http2Connection::unpinStream(std::uint32_t streamId) {
 }
 
 void Http2Connection::discardDeferredStreamState(std::uint32_t streamId) {
-    pendingSends_.erase(
-        std::remove_if(
-            pendingSends_.begin(), pendingSends_.end(),
-            [streamId](const Http2PendingSend& pending) {
-                return pending.streamId == streamId;
-            }),
-        pendingSends_.end());
-    drainedDataStreams_.erase(
-        std::remove(drainedDataStreams_.begin(), drainedDataStreams_.end(), streamId),
-        drainedDataStreams_.end());
+    std::erase_if(
+        pendingSends_,
+        [streamId](const Http2PendingSend& pending) {
+            return pending.streamId == streamId;
+        });
+    std::erase(drainedDataStreams_, streamId);
     if (auto* stream = streams_.find(streamId); stream != nullptr) {
         http2ReleaseResponseHeaderBlock(*stream);
     }
@@ -625,10 +630,8 @@ bool Http2Connection::processGoaway(
                 "GOAWAY excludes a started response");
             return false;
         }
-        std::sort(
-            unprocessedStreamIds.begin(),
-            unprocessedStreamIds.begin() +
-                static_cast<std::ptrdiff_t>(unprocessedCount));
+        std::ranges::sort(
+            std::span(unprocessedStreamIds).first(unprocessedCount));
     }
 
     peerGoaway_ = goaway;
@@ -757,12 +760,8 @@ void Http2Connection::releaseReceivedData(std::uint32_t streamId) {
 }
 
 bool Http2Connection::hasQueuedData(std::uint32_t streamId) const noexcept {
-    for (const auto& pending : pendingSends_) {
-        if (pending.streamId == streamId) {
-            return true;
-        }
-    }
-    return false;
+    return std::ranges::contains(
+        pendingSends_, streamId, &Http2PendingSend::streamId);
 }
 
 void Http2Connection::queueConsumedDataCredit(
@@ -1046,7 +1045,7 @@ bool Http2Connection::processData(const Http2FrameHeader& header, std::string_vi
 
 bool Http2Connection::processFrame(const Http2FrameHeader& header, std::string_view payload) {
     if (prefacePhase_ == PrefacePhase::kAwaitingPeerSettings &&
-        header.type != static_cast<std::uint8_t>(Http2FrameType::kSettings)) {
+        header.type != std::to_underlying(Http2FrameType::kSettings)) {
         appendGoaway(Http2ErrorCode::kProtocolError, "first frame must be SETTINGS");
         return false;
     }
@@ -1194,7 +1193,7 @@ Http2FeedResult Http2Connection::feed(std::string_view in) {
         prefacePhase_ = PrefacePhase::kAwaitingPeerSettings;
     }
 
-    if (!consumeFrames(std::string_view(input_.data(), input_.size()), inputOffset_)) {
+    if (!consumeFrames(std::string_view(input_), inputOffset_)) {
         return Http2FeedResult::kProtocolFailure;
     }
     // NOTE: the consumed prefix is reclaimed at the START of the next feed (see above),
@@ -1207,7 +1206,8 @@ Http2FeedResult Http2Connection::feed(std::string_view in) {
         : Http2FeedResult::kAccepted;
 }
 
-Http2StreamState* Http2Connection::stream(std::uint32_t streamId) noexcept {
+Http2StreamState* Http2Connection::stream(
+    std::uint32_t streamId) & noexcept {
     return streams_.find(streamId);
 }
 

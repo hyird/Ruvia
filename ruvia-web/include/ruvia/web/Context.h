@@ -4,6 +4,7 @@
 #include <cstdint>
 #include <exception>
 #include <filesystem>
+#include <initializer_list>
 #include <memory>
 #include <memory_resource>
 #include <optional>
@@ -29,6 +30,7 @@
 #include "ruvia/web/ValidationTypes.h"
 #include "ruvia/web/WebSocket.h"
 #include "ruvia/web/detail/ValidatedValues.h"
+#include "ruvia/web/detail/WorkerState.h"
 #include "ruvia/web/detail/http/ContextCapabilities.h"
 #include "ruvia/web/detail/http/ContextResponseState.h"
 #include "ruvia/web/detail/http/ContextRequestStorage.h"
@@ -56,6 +58,8 @@ namespace detail {
 class DbRegistry;
 class RedisRegistry;
 class RateLimiter;
+class RouteTable;
+class WorkerStateRegistry;
 struct ContextAccess;
 class ContextServices;
 struct SessionAccess;
@@ -141,6 +145,27 @@ public:
 
     [[nodiscard]] const Env& env() const noexcept;
 
+    // Builds a request path from a registered route pattern; the pattern is
+    // the route's identity: c.urlFor("/users/:id", {"42"}) -> "/users/42".
+    // ":name" values are percent-encoded path segments and must be non-empty;
+    // the value for a trailing "*" keeps its slashes and may be empty. Throws
+    // std::invalid_argument for an unregistered pattern or a value-count
+    // mismatch, and std::logic_error when the context carries no route table
+    // (for example a hand-built test context).
+    [[nodiscard]] std::pmr::string urlFor(
+        std::string_view pattern,
+        std::initializer_list<std::string_view> values = {}) const;
+
+    // This worker's instance of an App::useWorkerState<T>() registration.
+    // The reference is worker-local: it stays valid for the worker's lifetime
+    // but must never be handed to another worker. Throws std::logic_error for
+    // a type that was not registered before app().run().
+    template <typename T>
+    [[nodiscard]] T& workerState() const {
+        return *static_cast<T*>(
+            workerStateInstance(detail::workerStateTypeKey<T>()));
+    }
+
 #ifdef RUVIA_ENABLE_DATABASE
     [[nodiscard]] DbHandle db() const;
     [[nodiscard]] DbHandle db(std::string_view alias) const;
@@ -164,7 +189,7 @@ public:
 
     // Route handlers construct one final response, so Context accepts only
     // 200..599. Informational heads belong to a dedicated protocol submit path.
-    void status(std::uint16_t statusCode);
+    void status(HttpStatusCode statusCode);
 
     void header(std::string_view name, std::string_view value) {
         header(name, value, HeaderOptions{});
@@ -223,7 +248,7 @@ public:
 
     [[nodiscard]] HttpResponse redirect(
         std::string_view location,
-        std::uint16_t statusCode = 302) const;
+        HttpStatusCode statusCode = http_status::kFound) const;
 
     [[nodiscard]] HttpResponse file(
         const std::filesystem::path& path,
@@ -235,7 +260,7 @@ public:
         std::string_view contentType = {}) const;
 
     [[nodiscard]] HttpResponse error(
-        std::uint16_t statusCode,
+        HttpStatusCode statusCode,
         std::string_view code,
         std::string_view message,
         std::string_view statusText = {}) const;
@@ -269,7 +294,7 @@ private:
     Context& removeResponseHeader(std::string_view name);
     void applyResponseState(
         HttpResponse& response,
-        std::optional<std::uint16_t> statusCode) const;
+        std::optional<HttpStatusCode> statusCode) const;
 
     [[nodiscard]] HttpResponse bodyStaticView(std::string_view body) const;
     [[nodiscard]] HttpResponse textStaticView(std::string_view body) const;
@@ -292,6 +317,7 @@ private:
         return responseState_.final() != nullptr;
     }
     [[nodiscard]] HttpResponse takeResponse();
+    [[nodiscard]] void* workerStateInstance(const void* typeKey) const;
 
     RequestMemory& memory_;
     const HttpRequest& request_;
@@ -308,6 +334,8 @@ private:
     detail::RateLimiter* rateLimiter_{nullptr};
     HttpErrorHandler errorHandler_{nullptr};
     HttpNotFoundHandler notFoundHandler_{nullptr};
+    const detail::RouteTable* routes_{nullptr};
+    const detail::WorkerStateRegistry* workerStates_{nullptr};
     std::uintptr_t routeRateLimitScope_{0};
     std::size_t maxDecodedBodyBytes_{0};
     detail::ContextRequestBodySource requestBodySource_;

@@ -68,7 +68,7 @@ void formatSseMessage(std::pmr::string& frame, const SseMessage& message) {
         frame.push_back('\n');
     }
     if (message.data.has_value()) {
-        appendSseData(frame, *message.data);
+        appendSseData(frame, message.data->view());
     }
     frame.push_back('\n');
 }

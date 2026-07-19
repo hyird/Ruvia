@@ -6,6 +6,8 @@
 #include "ruvia/http/HttpHeader.h"
 #include "ruvia/http/HttpInterimResponse.h"
 #include "ruvia/http/detail/AsciiCase.h"
+#include "ruvia/http/detail/HeaderAcceptUtils.h"
+#include "ruvia/http/detail/HttpContentCoding.h"
 #include "ruvia/http/detail/HttpResponseHeaderBits.h"
 #include "ruvia/http/detail/HttpResponseKnownHeaders.h"
 
@@ -27,6 +29,10 @@ enum class HttpInterimResponseHeaderValidationStatus : std::uint8_t {
 // field and singleton rules with subtly different wire acceptance.
 class HttpInterimResponseHeaderValidator final {
 public:
+    explicit HttpInterimResponseHeaderValidator(
+        HttpFieldListRole role) noexcept
+        : role_(role) {}
+
     [[nodiscard]] HttpInterimResponseHeaderValidationStatus validate(
         std::string_view name,
         std::string_view value) noexcept {
@@ -36,6 +42,14 @@ public:
         }
 
         const auto knownBit = classifyResponseHeaderName(name);
+        if (knownBit == kResponseHeaderContentEncoding &&
+            !isValidHttpContentEncodingFieldValue(value, role_)) {
+            return HttpInterimResponseHeaderValidationStatus::kInvalidHeader;
+        }
+        if (knownBit == kResponseHeaderContentType &&
+            !isValidHttpContentTypeFieldValue(value)) {
+            return HttpInterimResponseHeaderValidationStatus::kInvalidHeader;
+        }
         if (knownBit == kResponseHeaderContentLength) {
             return HttpInterimResponseHeaderValidationStatus::
                 kContentLengthForbidden;
@@ -59,6 +73,7 @@ public:
     }
 
 private:
+    HttpFieldListRole role_;
     std::uint32_t knownBits_{0};
 };
 
@@ -70,7 +85,8 @@ private:
 [[nodiscard]] inline HttpInterimResponseHeaderValidationStatus
 validateHttpInterimResponseHeaders(
     const HttpInterimResponseHead& response) noexcept {
-    HttpInterimResponseHeaderValidator validator;
+    HttpInterimResponseHeaderValidator validator(
+        HttpFieldListRole::kSender);
     for (const auto& header : response.headers()) {
         const auto status = validator.validate(
             header.name(), header.value());

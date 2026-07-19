@@ -135,51 +135,9 @@ endif()
 
 include(GNUInstallDirs)
 include(CMakePackageConfigHelpers)
-
-set(CMAKE_CXX_STANDARD 23)
-set(CMAKE_CXX_STANDARD_REQUIRED ON)
-set(CMAKE_CXX_EXTENSIONS OFF)
-
-if(MSVC AND NOT DEFINED CMAKE_MSVC_RUNTIME_LIBRARY)
-    set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
-endif()
-
-if(RUVIA_BUILD_CORE)
-    find_package(asio CONFIG REQUIRED)
-    find_package(Threads REQUIRED)
-    find_package(mimalloc CONFIG REQUIRED)
-endif()
-
-if(RUVIA_BUILD_HTTP)
-    find_package(ZLIB REQUIRED)
-    find_package(unofficial-brotli CONFIG REQUIRED)
-    find_package(zstd CONFIG REQUIRED)
-
-    if(TARGET zstd::libzstd)
-        set(RUVIA_ZSTD_TARGET zstd::libzstd)
-    elseif(TARGET zstd::libzstd_static)
-        set(RUVIA_ZSTD_TARGET zstd::libzstd_static)
-    else()
-        set(RUVIA_ZSTD_TARGET zstd::libzstd_shared)
-    endif()
-endif()
-
-if(RUVIA_BUILD_WEB)
-    find_package(OpenSSL REQUIRED)
-endif()
-
-if(RUVIA_ENABLE_MARIADB)
-    find_package(unofficial-libmariadb CONFIG REQUIRED)
-endif()
-
-if(RUVIA_ENABLE_POSTGRESQL)
-    find_package(PostgreSQL REQUIRED)
-endif()
-
-if(RUVIA_ENABLE_REDIS)
-    find_package(hiredis CONFIG REQUIRED)
-endif()
-
+# Shared build/install/export helpers remain in the root build description so
+# component CMakeLists files can stay self-contained without extra repository
+# CMake fragments.
 function(ruvia_deduplicate_link_interface target)
     if(NOT TARGET ${target})
         return()
@@ -194,13 +152,6 @@ function(ruvia_deduplicate_link_interface target)
     set_target_properties(${target} PROPERTIES
         INTERFACE_LINK_LIBRARIES "${_ruvia_link_interface}")
 endfunction()
-
-if(RUVIA_ENABLE_MARIADB)
-    ruvia_deduplicate_link_interface(unofficial::libmariadb)
-endif()
-if(RUVIA_ENABLE_POSTGRESQL)
-    ruvia_deduplicate_link_interface(PostgreSQL::PostgreSQL)
-endif()
 
 function(ruvia_configure_library target)
     target_compile_features(${target} PUBLIC cxx_std_23)
@@ -228,6 +179,11 @@ function(ruvia_configure_library target)
     else()
         target_compile_options(${target} PRIVATE -Wall -Wextra -Wpedantic)
     endif()
+
+    target_link_options(${target}
+        INTERFACE
+            $<$<PLATFORM_ID:Darwin>:LINKER:-no_warn_duplicate_libraries>
+    )
 endfunction()
 
 function(ruvia_configure_runtime_library target)
@@ -238,16 +194,6 @@ function(ruvia_configure_runtime_library target)
     target_precompile_headers(${target} PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src/pch.h")
 endfunction()
 
-if(RUVIA_BUILD_CORE)
-    set(RUVIA_MIMALLOC_TARGET mimalloc)
-    if(TARGET mimalloc-static)
-        get_target_property(_ruvia_mimalloc_static_type mimalloc-static TYPE)
-        if(NOT _ruvia_mimalloc_static_type STREQUAL "INTERFACE_LIBRARY")
-            set(RUVIA_MIMALLOC_TARGET mimalloc-static)
-        endif()
-    endif()
-endif()
-
 function(ruvia_install_target target component)
     install(
         TARGETS ${target}
@@ -256,6 +202,19 @@ function(ruvia_install_target target component)
         LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR} COMPONENT ${component} NAMELINK_COMPONENT ${component}
         RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR} COMPONENT ${component}
         INCLUDES DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}
+    )
+endfunction()
+
+# Install the export set for a component. Each component calls this itself so its
+# targets file lives with the component that produced it; a partial prefix never
+# imports libraries that were not installed.
+function(ruvia_install_export component)
+    install(
+        EXPORT ruvia_${component}_targets
+        FILE ruvia-${component}-targets.cmake
+        NAMESPACE ruvia::
+        DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/ruvia
+        COMPONENT ${component}
     )
 endfunction()
 
@@ -386,6 +345,19 @@ function(ruvia_assert_target_file_ownership target)
     endforeach()
 endfunction()
 
+# Each component runs find_package() in its own subdirectory now, so make the
+# resulting imported targets global: a sibling component (e.g. web resolving
+# core's transitive asio link) must see targets another component discovered.
+set(CMAKE_FIND_PACKAGE_TARGETS_GLOBAL ON)
+
+set(CMAKE_CXX_STANDARD 23)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_CXX_EXTENSIONS OFF)
+
+if(MSVC AND NOT DEFINED CMAKE_MSVC_RUNTIME_LIBRARY)
+    set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+endif()
+
 set(RUVIA_BUILT_COMPONENTS)
 if(RUVIA_BUILD_CORE)
     add_subdirectory(ruvia-core)
@@ -401,29 +373,6 @@ if(RUVIA_BUILD_WEB)
 endif()
 string(JOIN "," RUVIA_BUILT_COMPONENTS_CSV ${RUVIA_BUILT_COMPONENTS})
 
-foreach(_ruvia_owned_target IN ITEMS ruvia-core ruvia-http ruvia-web)
-    if(TARGET ${_ruvia_owned_target})
-        ruvia_assert_target_file_ownership(${_ruvia_owned_target})
-    endif()
-endforeach()
-
-foreach(_ruvia_target IN ITEMS ruvia-core ruvia-http ruvia-web)
-    if(TARGET ${_ruvia_target})
-        target_link_options(${_ruvia_target}
-            INTERFACE
-                $<$<PLATFORM_ID:Darwin>:LINKER:-no_warn_duplicate_libraries>
-        )
-    endif()
-endforeach()
-
-if(WIN32 AND RUVIA_BUILD_CORE)
-    target_link_libraries(ruvia-core PUBLIC Mswsock Ws2_32)
-    set_target_properties(ruvia-core PROPERTIES
-        INTERFACE_LINK_LIBRARIES_DIRECT "$<TARGET_LINKER_FILE:${RUVIA_MIMALLOC_TARGET}>"
-    )
-    target_link_options(ruvia-core INTERFACE "$<$<CXX_COMPILER_ID:MSVC>:/INCLUDE:mi_version>")
-endif()
-
 if(RUVIA_BUILD_EXAMPLES)
     add_subdirectory(examples)
 endif()
@@ -438,21 +387,12 @@ if(RUVIA_BUILD_BENCHMARKS)
 endif()
 
 if(RUVIA_BUILD_FUZZERS)
-    # Instrument the protocol library itself, not only the thin fuzz entrypoints.
-    # The sanitizer runtime link flags propagate to every executable that consumes
-    # the instrumented static library in this opt-in build.
-    target_compile_options(ruvia-http PRIVATE
-        -fsanitize=fuzzer-no-link,undefined
-        -fno-sanitize-recover=all
-        -fno-omit-frame-pointer
-    )
-    target_link_options(ruvia-http INTERFACE
-        -fsanitize=undefined
-        -fno-sanitize-recover=all
-    )
     add_subdirectory(tests/fuzz)
 endif()
 
+# Umbrella package config: the shared find_package(ruvia) entry point that loads
+# whichever component export sets are present in an install prefix. The component
+# targets files themselves are installed by each component's own CMakeLists.
 set(_ruvia_config [=[
 include(CMakeFindDependencyMacro)
 
@@ -602,13 +542,3 @@ install(
     DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/ruvia
     COMPONENT Development
 )
-
-foreach(_ruvia_component IN LISTS RUVIA_BUILT_COMPONENTS)
-    install(
-        EXPORT ruvia_${_ruvia_component}_targets
-        FILE ruvia-${_ruvia_component}-targets.cmake
-        NAMESPACE ruvia::
-        DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/ruvia
-        COMPONENT ${_ruvia_component}
-    )
-endforeach()

@@ -1,12 +1,15 @@
 #pragma once
 
+#include <algorithm>
 #include <cstddef>
 #include <cstdint>
+#include <span>
 #include <string>
 #include <string_view>
 
-#include "ruvia/http/detail/HttpResponseHeaderState.h"
 #include "ruvia/http/detail/HeaderTokenUtils.h"
+#include "ruvia/http/detail/HttpResponseHeaderAccess.h"
+#include "ruvia/http/detail/HttpResponseHeaderState.h"
 #include "ruvia/http/HttpResponse.h"
 
 namespace ruvia::detail {
@@ -25,8 +28,19 @@ inline bool setKnownStaticVaryToken(HttpResponse& response, std::string_view tok
 inline bool varyTokenRepeatedInBatch(
     const std::string_view* tokens,
     std::size_t current) noexcept {
-    for (std::size_t i = 0; i < current; ++i) {
-        if (httpAsciiEqualsIgnoreCase(tokens[i], tokens[current])) {
+    return std::ranges::any_of(
+        std::span(tokens, current),
+        [candidate = tokens[current]](std::string_view token) noexcept {
+            return httpAsciiEqualsIgnoreCase(token, candidate);
+        });
+}
+
+[[nodiscard]] inline bool responseVaryHasToken(
+    const HttpResponse& response,
+    std::string_view token) noexcept {
+    for (const auto& header : response.headers()) {
+        if (responseHeaderKnownBit(header) == kResponseHeaderVary &&
+            httpHasToken(header.value(), token)) {
             return true;
         }
     }
@@ -61,8 +75,11 @@ inline void addVaryTokens(
         return;
     }
 
-    const auto vary = responseKnownHeader(response, kResponseHeaderVary);
-    if (httpTrimOws(vary) == "*") {
+    // RFC 9110 sections 5.2-5.3 define repeated Vary field lines as one
+    // comma-joined value in wire order. Inspect every line: the O(1) known-header
+    // lookup intentionally returns only the first occurrence and cannot decide
+    // wildcard or token membership for this list-based field.
+    if (responseVaryHasToken(response, "*")) {
         return;
     }
     for (std::size_t i = 0; i < tokenCount; ++i) {
@@ -79,7 +96,7 @@ inline void addVaryTokens(
     for (std::size_t i = 0; i < tokenCount; ++i) {
         const auto token = tokens[i];
         if (token.empty() ||
-            (!vary.empty() && httpHasToken(vary, token)) ||
+            responseVaryHasToken(response, token) ||
             varyTokenRepeatedInBatch(tokens, i)) {
             continue;
         }
@@ -96,16 +113,37 @@ inline void addVaryTokens(
         return;
     }
 
-    if (vary.empty()) {
+    std::size_t existingValueCount = 0;
+    std::size_t existingBytes = 0;
+    for (const auto& header : response.headers()) {
+        if (responseHeaderKnownBit(header) != kResponseHeaderVary ||
+            httpTrimOws(header.value()).empty()) {
+            continue;
+        }
+        ++existingValueCount;
+        existingBytes += header.value().size();
+    }
+
+    if (existingValueCount == 0) {
         if (addedCount == 1 && setKnownStaticVaryToken(response, firstAdded)) {
             return;
         }
     }
 
     std::pmr::string updated(responseResource(response));
-    updated.reserve(vary.size() + addedBytes + (vary.empty() ? (addedCount - 1) : addedCount) * 2);
-    if (!vary.empty()) {
-        updated.append(vary);
+    const auto partCount = existingValueCount + addedCount;
+    updated.reserve(
+        existingBytes + addedBytes +
+        (partCount == 0 ? 0 : (partCount - 1) * 2));
+    for (const auto& header : response.headers()) {
+        if (responseHeaderKnownBit(header) != kResponseHeaderVary ||
+            httpTrimOws(header.value()).empty()) {
+            continue;
+        }
+        if (!updated.empty()) {
+            updated.append(", ");
+        }
+        updated.append(header.value());
     }
     for (std::size_t i = 0; i < tokenCount; ++i) {
         const auto token = tokens[i];
@@ -115,7 +153,7 @@ inline void addVaryTokens(
             }
         } else {
             if (token.empty() ||
-                (!vary.empty() && httpHasToken(vary, token)) ||
+                responseVaryHasToken(response, token) ||
                 varyTokenRepeatedInBatch(tokens, i)) {
                 continue;
             }

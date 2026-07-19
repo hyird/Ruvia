@@ -1,6 +1,8 @@
 #pragma once
 
 #include "ruvia/http/detail/HeaderAcceptUtils.h"
+#include "ruvia/http/detail/HttpConnectionFields.h"
+#include "ruvia/http/HttpStatus.h"
 
 #include <cstddef>
 #include <cstdint>
@@ -20,8 +22,15 @@ namespace ruvia::detail {
 
 class HttpUnsupportedContentCoding final {
 public:
-    [[nodiscard]] static constexpr std::uint16_t status() noexcept {
-        return 415;
+    [[nodiscard]] static constexpr HttpStatusCode status() noexcept {
+        return http_status::kUnsupportedMediaType;
+    }
+};
+
+class HttpInvalidContentCodingField final {
+public:
+    [[nodiscard]] static constexpr HttpStatusCode status() noexcept {
+        return http_status::kBadRequest;
     }
 };
 
@@ -31,9 +40,9 @@ httpSupportedRequestContentCodings() noexcept {
 }
 
 // A Content-Encoding field section is either one coding this library can
-// decode (including the identity representation), or a coding stack it cannot
-// decode completely. The result cannot collapse unsupported wire metadata into
-// identity.
+// decode (including the identity representation), a syntactically valid coding
+// stack it cannot decode completely, or malformed wire metadata. Syntax and
+// implementation capability are deliberately distinct protocol states.
 class HttpContentCodingFieldResult final {
 public:
     explicit HttpContentCodingFieldResult(HttpContentCoding coding) noexcept
@@ -42,6 +51,10 @@ public:
     explicit HttpContentCodingFieldResult(
         HttpUnsupportedContentCoding unsupported) noexcept
         : value_(unsupported) {}
+
+    explicit HttpContentCodingFieldResult(
+        HttpInvalidContentCodingField invalid) noexcept
+        : value_(invalid) {}
 
     [[nodiscard]] const HttpContentCoding* coding() const & noexcept {
         return std::get_if<HttpContentCoding>(&value_);
@@ -53,18 +66,28 @@ public:
     }
     const HttpUnsupportedContentCoding* unsupported() const && = delete;
 
+    [[nodiscard]] const HttpInvalidContentCodingField* invalid() const & noexcept {
+        return std::get_if<HttpInvalidContentCodingField>(&value_);
+    }
+    const HttpInvalidContentCodingField* invalid() const && = delete;
+
 private:
-    std::variant<HttpContentCoding, HttpUnsupportedContentCoding> value_;
+    std::variant<
+        HttpContentCoding,
+        HttpUnsupportedContentCoding,
+        HttpInvalidContentCodingField> value_;
 };
 
 // Accumulates the list grammar across every Content-Encoding field line (RFC
-// 9110 section 8.4). Empty list members are ignored. Ruvia currently decodes
-// exactly one gzip, br, or zstd coding; an unknown token or a stack with more
-// than one coding is explicit unsupported metadata.
+// 9110 sections 5.6.1 and 8.4). Recipients ignore empty list members, while
+// senders cannot generate them. Ruvia currently decodes exactly one gzip, br,
+// or zstd coding; an unknown token or a stack with more than one coding is
+// explicit unsupported metadata, not malformed syntax.
 class HttpContentCodingFieldParser final {
 public:
-    HttpContentCodingFieldParser() noexcept
-        : state_(std::in_place_type<Supported>) {}
+    explicit HttpContentCodingFieldParser(
+        HttpFieldListRole role = HttpFieldListRole::kRecipient) noexcept
+        : role_(role), state_(std::in_place_type<Supported>) {}
 
     void update(std::string_view value) noexcept;
 
@@ -76,8 +99,16 @@ private:
         std::size_t codingCount{0};
     };
 
-    std::variant<Supported, HttpUnsupportedContentCoding> state_;
+    HttpFieldListRole role_;
+    std::variant<
+        Supported,
+        HttpUnsupportedContentCoding,
+        HttpInvalidContentCodingField> state_;
 };
+
+[[nodiscard]] bool isValidHttpContentEncodingFieldValue(
+    std::string_view value,
+    HttpFieldListRole role) noexcept;
 
 [[nodiscard]] HttpContentCodingFieldResult httpContentCodingFromFieldValue(
     std::string_view value) noexcept;
@@ -107,7 +138,7 @@ public:
     HttpEncodedContent& operator=(HttpEncodedContent&&) = delete;
 
     [[nodiscard]] std::string_view bytes() const & noexcept {
-        return std::string_view(bytes_.data(), bytes_.size());
+        return bytes_;
     }
     std::string_view bytes() const && = delete;
 
@@ -219,7 +250,7 @@ public:
     HttpDecodedContent& operator=(HttpDecodedContent&&) = delete;
 
     [[nodiscard]] std::string_view bytes() const & noexcept {
-        return std::string_view(bytes_.data(), bytes_.size());
+        return bytes_;
     }
     std::string_view bytes() const && = delete;
 

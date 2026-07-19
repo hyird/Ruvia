@@ -76,7 +76,7 @@ void ResponseHeadBuffer::reserveAdditional(std::size_t size) {
     spillToHeap(used + size);
 }
 
-std::string_view ResponseHeadBuffer::view() const noexcept {
+std::string_view ResponseHeadBuffer::view() const & noexcept {
     if (const auto* const stackState = std::get_if<StackState>(&state_)) {
         return std::string_view(stack_.data(), stackState->used);
     }

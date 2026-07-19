@@ -7,42 +7,52 @@ Task<void> HttpServer::handleSession(AcceptedConnectionLease connection) {
         if (!remoteEc) {
             assignRemoteAddress(remoteAddress, remoteEndpoint.address());
         }
-        const ContextServices baseServices(
-            &databases_,
-            &redis_,
-            &rateLimiter_,
-            options_.maxBufferedBodyBytes,
-            &workerHandle_);
+        const ContextServices baseServices =
+            ContextServices(
+                &databases_,
+                &redis_,
+                &rateLimiter_,
+                options_.maxBufferedBodyBytes,
+                &workerHandle_)
+                .withWorkerStates(workerStates_);
         if (options_.tls() != nullptr) {
-            ConnectionScanner::Entry handshakeEntry;
+            asio::ssl::stream<TcpSocket&> tlsStream(socket, *tlsContext_);
             {
-                ConnectionScanner::Guard handshakeGuard(&connectionScanner_, handshakeEntry, socket);
+                // The TLS handshake has its own initial-read deadline. It must be
+                // released the moment the handshake resolves and before the
+                // session is dispatched: the session installs and continuously
+                // refreshes its own scanner entry, but this handshake entry stays
+                // pinned at kReadingInitial with a frozen last-active time. Left
+                // registered across the session, the scanner would close an active
+                // connection's socket one clientHeaderTimeout after the handshake
+                // regardless of session activity -- severing long-lived TLS
+                // sessions (WebSocket, keep-alive, slow uploads, streaming).
+                ConnectionScanner::Entry handshakeEntry;
+                ConnectionScanner::Guard handshakeGuard(
+                    &connectionScanner_, handshakeEntry, socket);
                 handshakeEntry.setPhase(ConnectionScanner::Phase::kReadingInitial);
-                asio::ssl::stream<TcpSocket&> tlsStream(socket, *tlsContext_);
                 const auto handshakeCompletion = co_await asyncAsio(
                     TlsServerHandshakeInitiator{&tlsStream});
-                const auto ec = handshakeCompletion.errorCode();
-                if (ec) {
+                if (handshakeCompletion.errorCode()) {
                     closeSocket(socket);
                     co_return;
                 }
-                handshakeEntry.touch();
-                std::pmr::string clientCertificate(memory_.allocator<char>());
-                extractTlsClientCertificate(tlsStream.native_handle(), clientCertificate);
-                const auto tlsServices = baseServices.withTlsTransport(
-                    remoteAddress,
-                    clientCertificate);
-                if (isHttp2AlpnSelected(tlsStream)) {
-                    co_await handleHttp2Session(
-                        tlsStream,
-                        socket,
-                        tlsServices);
-                } else {
-                    co_await handleStreamSession(
-                        tlsStream,
-                        socket,
-                        tlsServices);
-                }
+            }
+            std::pmr::string clientCertificate(memory_.allocator<char>());
+            extractTlsClientCertificate(tlsStream.native_handle(), clientCertificate);
+            const auto tlsServices = baseServices.withTlsTransport(
+                remoteAddress,
+                clientCertificate);
+            if (isHttp2AlpnSelected(tlsStream)) {
+                co_await handleHttp2Session(
+                    tlsStream,
+                    socket,
+                    tlsServices);
+            } else {
+                co_await handleStreamSession(
+                    tlsStream,
+                    socket,
+                    tlsServices);
             }
             closeSocket(socket);
             co_return;

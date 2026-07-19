@@ -48,17 +48,15 @@ constexpr std::size_t kMaxMultipartDelimiterLineBytes = 64 * 1024;
         case MultipartParseError::kPreambleTooLarge:
         case MultipartParseError::kPartHeadersTooLarge:
         case MultipartParseError::kDelimiterLineTooLarge:
-            return HttpProtocolError(
-                413, multipartParseErrorMessage(error));
+            return HttpProtocolError(http_status::kContentTooLarge, multipartParseErrorMessage(error));
         case MultipartParseError::kIncompleteBody:
         case MultipartParseError::kInvalidDelimiter:
         case MultipartParseError::kInvalidPartHeaders:
         case MultipartParseError::kInvalidContentDisposition:
         case MultipartParseError::kMissingFieldName:
-            return HttpProtocolError(
-                400, multipartParseErrorMessage(error));
+            return HttpProtocolError(http_status::kBadRequest, multipartParseErrorMessage(error));
     }
-    return HttpProtocolError(400, "invalid multipart body");
+    return HttpProtocolError(http_status::kBadRequest, "invalid multipart body");
 }
 
 }  // namespace
@@ -82,17 +80,17 @@ detail::MultipartInputLifecycle::MultipartInputLifecycle(
     : value_(input) {}
 
 const detail::MultipartBorrowedInput*
-detail::MultipartInputLifecycle::borrowed() const noexcept {
+detail::MultipartInputLifecycle::borrowed() const & noexcept {
     return std::get_if<MultipartBorrowedInput>(&value_);
 }
 
 const detail::MultipartStreamingInputOpen*
-detail::MultipartInputLifecycle::streamingOpen() const noexcept {
+detail::MultipartInputLifecycle::streamingOpen() const & noexcept {
     return std::get_if<MultipartStreamingInputOpen>(&value_);
 }
 
 const detail::MultipartStreamingInputEof*
-detail::MultipartInputLifecycle::streamingEof() const noexcept {
+detail::MultipartInputLifecycle::streamingEof() const & noexcept {
     return std::get_if<MultipartStreamingInputEof>(&value_);
 }
 
@@ -120,7 +118,7 @@ const std::pmr::string* detail::MultipartInputLifecycle::ownedBytes() const noex
     return nullptr;
 }
 
-std::string_view detail::MultipartInputLifecycle::view() const noexcept {
+std::string_view detail::MultipartInputLifecycle::view() const & noexcept {
     const auto source = borrowed() != nullptr
         ? borrowed()->bytes
         : std::string_view(ownedBytes()->data(), ownedBytes()->size());

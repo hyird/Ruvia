@@ -1,5 +1,6 @@
 #pragma once
 
+#include <algorithm>
 #include <concepts>
 #include <cstddef>
 #include <cstdint>
@@ -33,13 +34,11 @@ struct ResponseModelSchemaTag : ModelSchemaTag {};
 }  // namespace detail
 
 template <typename T, typename = void>
-struct JsonBody {
-    static constexpr bool value = false;
-};
+struct JsonBody : std::false_type {};
 
 template <typename T>
-struct JsonBody<T, std::enable_if_t<std::is_base_of_v<detail::RequestModelSchemaTag, T>>> {
-    static constexpr bool value = true;
+    requires std::is_base_of_v<detail::RequestModelSchemaTag, T>
+struct JsonBody<T, void> : std::true_type {
 
     static std::optional<T> parse(
         std::string_view body,
@@ -61,13 +60,11 @@ struct JsonBody<T, std::enable_if_t<std::is_base_of_v<detail::RequestModelSchema
 };
 
 template <typename T, typename = void>
-struct FormBody {
-    static constexpr bool value = false;
-};
+struct FormBody : std::false_type {};
 
 template <typename T>
-struct FormBody<T, std::enable_if_t<std::is_base_of_v<detail::RequestModelSchemaTag, T>>> {
-    static constexpr bool value = true;
+    requires std::is_base_of_v<detail::RequestModelSchemaTag, T>
+struct FormBody<T, void> : std::true_type {
 
     static std::optional<T> parse(
         std::string_view body,
@@ -114,12 +111,7 @@ template <std::size_t LeftN, std::size_t RightN>
     if constexpr (LeftN != RightN) {
         return false;
     } else {
-        for (std::size_t i = 0; i < LeftN; ++i) {
-            if (left.value[i] != right.value[i]) {
-                return false;
-            }
-        }
-        return true;
+        return std::ranges::equal(left.value, right.value);
     }
 }
 
@@ -160,7 +152,7 @@ public:
             return *borrowed;
         }
         const auto& owned = std::get<std::pmr::string>(storage_);
-        return std::string_view(owned.data(), owned.size());
+        return std::string_view(owned);
     }
     [[nodiscard]] std::string_view view() const && = delete;
 

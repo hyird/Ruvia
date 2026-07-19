@@ -2,6 +2,7 @@
 
 #include "ruvia/http/detail/server/HttpResponseStreamHead.h"
 
+#include <exception>
 #include <stdexcept>
 #include <utility>
 #include <variant>
@@ -11,6 +12,20 @@ namespace ruvia {
 class Context;
 
 namespace detail {
+
+// Raised by a body write on a stream whose committed head already completed
+// the message because the request method/response status suppresses content
+// (a HEAD request served by a GET streaming route, a 304, ...). This is a
+// control signal, not an error: the response head on the wire is complete and
+// correct. It deterministically stops the handler -- including an infinite
+// SSE loop -- at its first body write; dispatch recognizes the type and
+// finishes the stream as a normal head-only success.
+class ResponseStreamHeadOnlyComplete final : public std::exception {
+public:
+    [[nodiscard]] const char* what() const noexcept override {
+        return "response stream completed head-only; the body is suppressed";
+    }
+};
 
 class ResponseStreamState final {
 public:
@@ -25,6 +40,20 @@ public:
     [[nodiscard]] bool aborted() const noexcept {
         return std::holds_alternative<AbortedBeforeCommit>(state_) ||
             std::holds_alternative<AbortedAfterCommit>(state_);
+    }
+
+    // True once a body-suppressed head (HEAD / 304 semantics) has completed the
+    // message: the next body write is the one ensureBodyAllowed() answers with
+    // ResponseStreamHeadOnlyComplete. Sinks check this to suspend once before
+    // that synchronous throw, so a handler that catches the control signal and
+    // keeps writing yields the worker thread each pass instead of hard-spinning
+    // the event loop -- other connections on the worker keep being served.
+    [[nodiscard]] bool bodySuppressedComplete() const noexcept {
+        if (!ended()) {
+            return false;
+        }
+        const auto* plan = commitPlan();
+        return plan != nullptr && plan->bodyPlan().bodySuppressed();
     }
 
     [[nodiscard]] const ResponseStreamCommitPlan*
@@ -133,6 +162,14 @@ public:
             throw std::logic_error("response stream is aborted");
         }
         if (ended()) {
+            // A body-suppressed commit (HEAD/304 semantics) lands in Ended
+            // directly, so the handler's first write arrives here. Writing
+            // the body a GET would have is correct handler behavior, not a
+            // sequencing bug -- signal head-only completion instead.
+            const auto* plan = commitPlan();
+            if (plan != nullptr && plan->bodyPlan().bodySuppressed()) {
+                throw ResponseStreamHeadOnlyComplete();
+            }
             throw std::logic_error("response stream is already ended");
         }
         if (!std::holds_alternative<BodyOpen>(state_)) {

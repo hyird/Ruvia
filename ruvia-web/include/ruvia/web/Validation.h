@@ -91,7 +91,7 @@ public:
 
     explicit ValidationError(
         const IssueList& issues,
-        std::uint16_t statusCode = 400,
+        HttpStatusCode statusCode = http_status::kBadRequest,
         std::string_view code = "validation_failed",
         std::string_view message = "request validation failed",
         std::pmr::memory_resource* resource = nullptr)
@@ -110,7 +110,7 @@ public:
 
     explicit ValidationError(
         IssueList&& issues,
-        std::uint16_t statusCode = 400,
+        HttpStatusCode statusCode = http_status::kBadRequest,
         std::string_view code = "validation_failed",
         std::string_view message = "request validation failed",
         std::pmr::memory_resource* resource = nullptr)
@@ -173,7 +173,7 @@ private:
 
     std::pmr::memory_resource* resource_;
     IssueList issues_;
-    std::uint16_t statusCode_{400};
+    HttpStatusCode statusCode_{http_status::kBadRequest};
     std::pmr::string code_;
     std::pmr::string message_;
     std::pmr::string detailsJson_;
@@ -278,7 +278,7 @@ public:
     }
 
     void throwIfInvalid(
-        std::uint16_t statusCode = 400,
+        HttpStatusCode statusCode = http_status::kBadRequest,
         std::string_view code = "validation_failed",
         std::string_view message = "request validation failed") const & {
         if (!ok()) {
@@ -287,7 +287,7 @@ public:
     }
 
     void throwIfInvalid(
-        std::uint16_t statusCode = 400,
+        HttpStatusCode statusCode = http_status::kBadRequest,
         std::string_view code = "validation_failed",
         std::string_view message = "request validation failed") && {
         if (!ok()) {

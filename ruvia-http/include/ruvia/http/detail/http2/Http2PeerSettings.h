@@ -4,6 +4,7 @@
 #include <cstdint>
 #include <limits>
 #include <string_view>
+#include <utility>
 #include <variant>
 
 #include "ruvia/http/detail/http2/Http2FrameCodec.h"
@@ -196,7 +197,7 @@ public:
                 maxConcurrentStreams_ = value;
                 return Http2PeerSettingApplyResult::makeApplied();
             case Http2SettingId::kInitialWindowSize: {
-                if (value > static_cast<std::uint32_t>(std::numeric_limits<std::int32_t>::max())) {
+                if (!std::in_range<std::int32_t>(value)) {
                     return Http2PeerSettingApplyResult::makeFailure(
                         Http2PeerSettingError::kInvalidInitialWindow);
                 }

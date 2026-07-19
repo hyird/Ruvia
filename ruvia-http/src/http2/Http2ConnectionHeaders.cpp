@@ -7,7 +7,11 @@
 
 #include "ruvia/http/HttpStatus.h"
 #include "ruvia/http/detail/HttpInterimResponseValidation.h"
+#include "ruvia/http/detail/HttpRequestContentSemantics.h"
+#include "ruvia/http/detail/HttpResponseHeaderBits.h"
+#include "ruvia/http/detail/HttpResponseKnownHeaders.h"
 #include "ruvia/http/detail/HttpResponseContentSemantics.h"
+#include "ruvia/http/detail/server/HttpResponseTrailers.h"
 #include "ruvia/http/detail/http2/Http2FramePayload.h"
 #include "ruvia/http/detail/http2/Http2HeaderBlock.h"
 #include "ruvia/http/detail/http2/Http2HeaderRules.h"
@@ -79,6 +83,35 @@ HeaderDecodeStatus Http2Connection::decodeHeaderBlock(Http2StreamState& stream) 
             stream.requestScheme(), stream.requestPath()))) {
         return HeaderDecodeStatus::kProtocolError;
     }
+    if (role_ == Http2Role::kServer &&
+        stream.requestKnownMethod() != HttpKnownMethod::kConnect) {
+        const auto contentSemantics =
+            httpRequestContentSemantics(stream.requestMethod());
+        if (contentSemantics ==
+            HttpRequestContentSemantics::kForbidden) {
+            // A declared length is an explicit content signal, including zero.
+            // Without a length, retain the open remote half for a legal empty
+            // DATA(END_STREAM), but make non-empty DATA unrepresentable as content.
+            if (stream.remoteContent().allowedKnownLength() != nullptr ||
+                !stream.selectRemoteContentMetadataOnly()) {
+                return HeaderDecodeStatus::kProtocolError;
+            }
+        } else if (contentSemantics ==
+            HttpRequestContentSemantics::kContentTypeRequired) {
+            // A declared length (including zero) or an open peer send half is
+            // explicit OPTIONS content in the same cases modeled by the HTTP/2
+            // request writer. RFC 9110 section 9.3.7 requires a valid media type.
+            const bool explicitContent =
+                stream.remoteContent().allowedKnownLength() != nullptr ||
+                stream.remoteReceive().headPending() != nullptr;
+            if (explicitContent &&
+                !stream.hasSingletonRequestHeader(
+                    singletonRequestHeaderBit(
+                        RequestHeaderKind::kContentType))) {
+                return HeaderDecodeStatus::kProtocolError;
+            }
+        }
+    }
     const bool remoteHeadFinalized = stream.tunnel().pending() != nullptr
         ? stream.finalizeRemoteConnectHead()
         : stream.finalizeRemoteContentHead();
@@ -100,7 +133,7 @@ constexpr std::uint8_t kMaxHttp2InterimResponses = 8;
 struct Http2ResponseDecodeContext final {
     Http2HeaderDecodeContext base;
     HttpInterimResponseHeaderValidator interimHeaders;
-    std::optional<std::uint16_t> status;
+    std::optional<HttpStatusCode> status;
     bool sawRegular{false};
 };
 
@@ -112,7 +145,7 @@ bool http2OnDecodedResponseHeader(void* target, std::string_view name, std::stri
         return false;
     }
     auto& stream = context->base.stream;
-    if (name.empty() || stream.requestHeadersFull()) {
+    if (name.empty()) {
         return false;
     }
     if (name.front() == ':') {
@@ -126,40 +159,52 @@ bool http2OnDecodedResponseHeader(void* target, std::string_view name, std::stri
             ptr != value.data() + value.size()) {
             return false;
         }
-        const auto status = static_cast<std::uint16_t>(parsedStatus);
-        if (!httpStatusCodeValid(status) || status == 101) {
+        const auto status = HttpStatusCode::tryFromValue(
+            static_cast<std::uint16_t>(parsedStatus));
+        if (!status || *status == http_status::kSwitchingProtocols) {
             return false;
         }
-        context->status = status;
+        context->status = *status;
         return true;
     }
     if (!context->status || !http2IsValidDecodedResponseHeader(name, value)) {
         return false;
     }
+    if (!context->base.acceptRegularField()) {
+        return false;
+    }
     context->sawRegular = true;
-    if (*context->status < 200) {
+    if (context->status->isInformational()) {
         // Interim fields are validated but not stored. The shared incremental
         // validator keeps receive acceptance identical to both response writers.
         return context->interimHeaders.validate(name, value) ==
             HttpInterimResponseHeaderValidationStatus::kOk;
     }
     const auto kind = classifyRequestHeader(name);
+    const auto responseKnownBit = classifyResponseHeaderName(name);
     const auto responseContentSemantics = httpResponseContentSemantics(
         stream.requestKnownMethod(), *context->status);
     const bool successfulConnect =
         responseContentSemantics ==
         HttpResponseContentSemantics::kConnectTunnel;
-    if (kind == RequestHeaderKind::kContentLength && successfulConnect) {
+    if (responseKnownBit == kResponseHeaderContentLength &&
+        successfulConnect) {
         // RFC 9110 9.3.6: a client ignores Content-Length on a successful CONNECT
         // response. It describes neither HTTP content nor the following tunnel DATA.
         return true;
     }
-    if (const auto singletonBit = singletonRequestHeaderBit(kind); singletonBit != 0) {
-        if (!stream.markSingletonRequestHeader(singletonBit)) {
+    if (responseKnownBit == kResponseHeaderContentType) {
+        if (!isValidHttpContentTypeFieldValue(value) ||
+            !stream.markSingletonResponseHeader(responseKnownBit)) {
             return false;
         }
     }
-    if (kind == RequestHeaderKind::kContentLength) {
+    if (responseKnownBit == kResponseHeaderContentEncoding &&
+        !isValidHttpContentEncodingFieldValue(
+            value, HttpFieldListRole::kRecipient)) {
+        return false;
+    }
+    if (responseKnownBit == kResponseHeaderContentLength) {
         std::size_t parsed = 0;
         const auto [ptr, ec] = std::from_chars(value.data(), value.data() + value.size(), parsed);
         if (ec != std::errc{} || ptr != value.data() + value.size()) {
@@ -172,11 +217,33 @@ bool http2OnDecodedResponseHeader(void* target, std::string_view name, std::stri
     return stream.appendRequestHeader(name, value, kind);
 }
 
+bool http2OnDecodedResponseTrailer(
+    void* target,
+    std::string_view name,
+    std::string_view value) {
+    auto& context = *static_cast<Http2HeaderDecodeContext*>(target);
+    if (!http2AccumulateHeaderListBytes(context, name, value)) {
+        return false;
+    }
+
+    // Response trailers have different field semantics from request trailers.
+    // Reuse the same response-specific permission table that proves outbound
+    // trailer sections, after applying HTTP/2's lowercase and connection-field
+    // rules. In particular, Accept-Ranges and ETag are explicitly trailer-safe,
+    // while response controls such as Date and Location are not.
+    return context.acceptRegularField() &&
+        http2IsValidDecodedResponseHeader(name, value) &&
+        !isForbiddenResponseTrailerName(name);
+}
+
 }  // namespace
 
 HeaderDecodeStatus Http2Connection::decodeResponseHeaderBlock(Http2StreamState& stream) {
     Http2ResponseDecodeContext context{
-        Http2HeaderDecodeContext{stream}, {}, std::nullopt, false};
+        Http2HeaderDecodeContext{stream},
+        HttpInterimResponseHeaderValidator(HttpFieldListRole::kRecipient),
+        std::nullopt,
+        false};
     const auto result = decoder_.decode(
         stream.requestHeaderBlock(), &context,
         [](void* target, std::string_view name, std::string_view value) {
@@ -189,7 +256,7 @@ HeaderDecodeStatus Http2Connection::decodeResponseHeaderBlock(Http2StreamState& 
     if (!context.status) {
         return HeaderDecodeStatus::kProtocolError;
     }
-    if (*context.status < 200) {
+    if (context.status->isInformational()) {
         // 1xx interim head cannot carry END_STREAM. Without it, the remote receive
         // state remains head-pending so the next HEADERS is decoded as another head.
         if (stream.remoteReceive().headEndStreamPending() != nullptr) {
@@ -206,6 +273,17 @@ HeaderDecodeStatus Http2Connection::decodeResponseHeaderBlock(Http2StreamState& 
     }
     const auto contentSemantics = httpResponseContentSemantics(
         stream.requestKnownMethod(), *context.status);
+    // RFC 9110 section 15.3.6 gives 205 an ordinary, zero-length content
+    // phase (unlike HEAD/204/304 representation metadata), but forbids a
+    // server from generating any content. Bind that semantic limit into the
+    // same byte-accounting state that validates DATA and Content-Length. A
+    // successful CONNECT takes precedence because its following bytes are a
+    // tunnel, not response content.
+    if (*context.status == http_status::kResetContent &&
+        contentSemantics != HttpResponseContentSemantics::kConnectTunnel &&
+        !stream.declareRemoteContentLength(0)) {
+        return HeaderDecodeStatus::kProtocolError;
+    }
     if (contentSemantics == HttpResponseContentSemantics::kWithoutContent &&
         !stream.selectRemoteContentMetadataOnly()) {
         return HeaderDecodeStatus::kProtocolError;
@@ -324,12 +402,20 @@ bool Http2Connection::finishDiscardedHeaderBlock() {
 
 HeaderDecodeStatus Http2Connection::finishTrailerBlock(Http2StreamState& stream) {
     Http2HeaderDecodeContext context{stream};
-    const auto result = decoder_.decode(
-        stream.requestHeaderBlock(), &context,
-        [](void* target, std::string_view name, std::string_view value) {
-            return http2OnDecodedTrailer(
-                *static_cast<Http2HeaderDecodeContext*>(target), name, value);
-        });
+    const auto result = role_ == Http2Role::kServer
+        ? decoder_.decode(
+              stream.requestHeaderBlock(),
+              &context,
+              [](void* target, std::string_view name, std::string_view value) {
+                  return http2OnDecodedRequestTrailer(
+                      *static_cast<Http2HeaderDecodeContext*>(target),
+                      name,
+                      value);
+              })
+        : decoder_.decode(
+              stream.requestHeaderBlock(),
+              &context,
+              http2OnDecodedResponseTrailer);
     http2ResetHeaderBlock(stream);
     if (const auto status = http2ClassifyHeaderDecodeResult(result); status != HeaderDecodeStatus::kOk) {
         return status;

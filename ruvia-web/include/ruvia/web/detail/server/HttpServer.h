@@ -21,13 +21,12 @@
 #include "ruvia/core/memory/MemoryPool.h"
 #include "ruvia/core/detail/ConnectionScanner.h"
 #include "ruvia/web/WebWorker.h"
-#include "ruvia/http/HttpRequest.h"
-#include "ruvia/http/HttpResponse.h"
 #include "ruvia/web/detail/server/HttpConnectionState.h"
 #include "ruvia/web/detail/server/RateLimiter.h"
 #include "ruvia/web/detail/server/HttpServerOptions.h"
 #include "ruvia/web/detail/server/HttpServerWorkerState.h"
 #include "ruvia/web/detail/server/HttpServerWorkerCompletion.h"
+#include "ruvia/web/detail/WorkerState.h"
 #include "ruvia/web/detail/db/DbInternal.h"
 #include "ruvia/web/detail/redis/RedisInternal.h"
 #include "ruvia/web/detail/server/RateLimitDecision.h"
@@ -56,6 +55,13 @@ public:
         std::span<const DbDefinition> databases,
         std::span<const RedisDefinition> redis,
         HttpServerOptions options = {});
+    HttpServer(
+        asio::ip::tcp::endpoint endpoint,
+        const RouteTable& routes,
+        std::span<const DbDefinition> databases,
+        std::span<const RedisDefinition> redis,
+        std::span<const WorkerStateDefinition> workerStates,
+        HttpServerOptions options = {});
     ~HttpServer();
 
     HttpServer(const HttpServer&) = delete;
@@ -79,6 +85,7 @@ private:
         const RouteTable& routes,
         std::span<const DbDefinition> databases,
         std::span<const RedisDefinition> redis,
+        std::span<const WorkerStateDefinition> workerStates,
         HttpServerOptions validatedOptions);
 
     void configureAcceptor();
@@ -103,10 +110,6 @@ private:
         asio::ip::tcp::socket& socket,
         ContextServices services,
         std::string_view initialBytes = {});
-    [[nodiscard]] std::optional<HttpResponse> tryDocumentRootResponse(
-        const HttpRequest& request,
-        RequestMemory& memory) const;
-
     asio::io_context ioContext_;
     std::shared_ptr<WorkerDispatcher> workerDispatcher_;
     WorkerHandle workerHandle_;
@@ -123,6 +126,7 @@ private:
     HttpServerOptions options_;
     DbRegistry databases_;
     RedisRegistry redis_;
+    WorkerStateRegistry workerStates_;
     std::shared_ptr<WebWorkerDispatch> webWorkerDispatch_;
     RateLimiter rateLimiter_;
     ConnectionScanner connectionScanner_;

@@ -3,11 +3,13 @@
 #include "ruvia/core/Task.h"
 #include "ruvia/http/WebSocketProtocol.h"
 #include "ruvia/web/ScopedOperation.h"
+#include "ruvia/web/detail/BorrowedView.h"
 
 #include <chrono>
 #include <cstdint>
 #include <optional>
 #include <stdexcept>
+#include <string>
 #include <string_view>
 
 namespace ruvia {
@@ -59,9 +61,88 @@ struct WebSocketLifecycleOptions final {
 };
 
 struct WebSocketRouteOptions final {
-    std::string_view subprotocols;
+    // Route registration copies this list into startup-owned PMR storage, but
+    // the options value itself can be retained before registration. Preserve
+    // the zero-copy input while rejecting owning-string rvalues that would
+    // leave it with an already-dangling view.
+    class BorrowedText final {
+    public:
+        constexpr BorrowedText() noexcept = default;
+
+        constexpr BorrowedText(std::string_view value) noexcept
+            : value_(value) {}
+
+        constexpr BorrowedText(const char* value) noexcept
+            : value_(value) {}
+
+        template <typename Traits, typename Allocator>
+        constexpr BorrowedText(
+            const std::basic_string<char, Traits, Allocator>& value) noexcept
+            : value_(value) {}
+
+        template <detail::RvalueCharBasicString String>
+        BorrowedText(String&&) = delete;
+
+        constexpr BorrowedText& operator=(std::string_view value) noexcept {
+            value_ = value;
+            return *this;
+        }
+
+        constexpr BorrowedText& operator=(const char* value) noexcept {
+            value_ = std::string_view(value);
+            return *this;
+        }
+
+        template <typename Traits, typename Allocator>
+        constexpr BorrowedText& operator=(
+            const std::basic_string<char, Traits, Allocator>& value) noexcept {
+            value_ = std::string_view(value);
+            return *this;
+        }
+
+        template <detail::RvalueCharBasicString String>
+        BorrowedText& operator=(String&&) = delete;
+
+        [[nodiscard]] constexpr std::string_view view() const noexcept {
+            return value_;
+        }
+
+        [[nodiscard]] constexpr operator std::string_view() const noexcept {
+            return value_;
+        }
+
+        [[nodiscard]] constexpr bool empty() const noexcept {
+            return value_.empty();
+        }
+
+        friend constexpr bool operator==(
+            BorrowedText left,
+            BorrowedText right) noexcept {
+            return left.value_ == right.value_;
+        }
+
+        friend constexpr bool operator==(
+            BorrowedText left,
+            std::string_view right) noexcept {
+            return left.value_ == right;
+        }
+
+        friend constexpr bool operator==(
+            BorrowedText left,
+            const char* right) noexcept {
+            return left.value_ == right;
+        }
+
+    private:
+        std::string_view value_;
+    };
+
+    BorrowedText subprotocols;
     WebSocketLifecycleOptions lifecycle{};
 };
+
+static_assert(
+    sizeof(WebSocketRouteOptions::BorrowedText) == sizeof(std::string_view));
 
 namespace detail {
 struct WebSocketAccess;

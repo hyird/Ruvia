@@ -10,9 +10,15 @@
 
 namespace ruvia::detail {
 
+// The standardized Expect field member is defined once so parsers and writers
+// cannot drift on its wire spelling.
+inline constexpr std::string_view kHttpContinueExpectationToken =
+    "100-continue";
+
 // Whether the framing/lifecycle owner has established that request content will
 // follow the initial head. Keep this typed: HTTP/1 derives it from its body plan,
-// while HTTP/2 derives it from END_STREAM rather than from Content-Length alone.
+// while HTTP/2 combines its receive-half and remaining-content states so an open
+// metadata-only or known-empty stream cannot masquerade as pending content.
 enum class HttpRequestContentIndication : std::uint8_t {
     kNoContent,
     kWillFollow
@@ -22,9 +28,9 @@ enum class HttpRequestContentIndication : std::uint8_t {
 // the request has no content. Keep this sender check next to the recipient-side
 // expectation state so HTTP/1 and HTTP/2 cannot derive different answers.
 [[nodiscard]] constexpr bool httpClientExpectationIsValid(
-    bool has100Continue,
+    bool hasContinue,
     HttpRequestContentIndication content) noexcept {
-    return !has100Continue ||
+    return !hasContinue ||
         content == HttpRequestContentIndication::kWillFollow;
 }
 
@@ -44,16 +50,16 @@ private:
     constexpr HttpNoServerExpectationAction() noexcept = default;
 };
 
-class HttpSend100Continue final {
+class HttpSendContinue final {
 private:
     friend class HttpServerExpectationPlan;
-    constexpr HttpSend100Continue() noexcept = default;
+    constexpr HttpSendContinue() noexcept = default;
 };
 
 class HttpUnsupportedExpectationRejection final {
 public:
     [[nodiscard]] HttpProtocolError protocolError() const noexcept {
-        return HttpProtocolError(417, "unsupported Expect header");
+        return HttpProtocolError(http_status::kExpectationFailed, "unsupported Expect header");
     }
 
 private:
@@ -72,11 +78,11 @@ public:
     }
     const HttpNoServerExpectationAction* noAction() const && = delete;
 
-    [[nodiscard]] constexpr const HttpSend100Continue*
-    send100Continue() const & noexcept {
-        return std::get_if<HttpSend100Continue>(&value_);
+    [[nodiscard]] constexpr const HttpSendContinue*
+    sendContinue() const & noexcept {
+        return std::get_if<HttpSendContinue>(&value_);
     }
-    const HttpSend100Continue* send100Continue() const && = delete;
+    const HttpSendContinue* sendContinue() const && = delete;
 
     [[nodiscard]] constexpr const HttpUnsupportedExpectationRejection*
     rejection() const & noexcept {
@@ -89,7 +95,7 @@ private:
 
     using Value = std::variant<
         HttpNoServerExpectationAction,
-        HttpSend100Continue,
+        HttpSendContinue,
         HttpUnsupportedExpectationRejection>;
 
     template <typename Alternative>
@@ -104,7 +110,7 @@ private:
 
     [[nodiscard]] static constexpr HttpServerExpectationPlan continuePlan()
         noexcept {
-        return HttpServerExpectationPlan(HttpSend100Continue());
+        return HttpServerExpectationPlan(HttpSendContinue());
     }
 
     [[nodiscard]] static constexpr HttpServerExpectationPlan rejectionPlan()
@@ -126,8 +132,9 @@ public:
         httpVisitCommaSeparatedQuoted(
             value,
             [this](std::string_view member) noexcept {
-                if (httpAsciiEqualsIgnoreCase(member, "100-continue")) {
-                    flags_ |= k100Continue;
+                if (httpAsciiEqualsIgnoreCase(
+                        member, kHttpContinueExpectationToken)) {
+                    flags_ |= kContinue;
                 } else {
                     flags_ |= kUnsupported;
                 }
@@ -135,8 +142,8 @@ public:
             });
     }
 
-    [[nodiscard]] bool has100Continue() const noexcept {
-        return (flags_ & k100Continue) != 0;
+    [[nodiscard]] bool hasContinue() const noexcept {
+        return (flags_ & kContinue) != 0;
     }
 
     [[nodiscard]] bool hasUnsupported() const noexcept {
@@ -146,8 +153,8 @@ public:
     // RFC 9110 requires an HTTP/1.0 recipient to ignore 100-continue. Preserve
     // the independent unsupported-member fact so the Web product can still apply
     // its chosen extension-support policy.
-    void ignore100Continue() noexcept {
-        flags_ &= static_cast<std::uint8_t>(~k100Continue);
+    void ignoreContinue() noexcept {
+        flags_ &= static_cast<std::uint8_t>(~kContinue);
     }
 
     [[nodiscard]] HttpServerExpectationPlan serverPlan(
@@ -157,7 +164,7 @@ public:
             unsupportedPolicy == HttpUnsupportedExpectationPolicy::kReject) {
             return HttpServerExpectationPlan::rejectionPlan();
         }
-        if (has100Continue() &&
+        if (hasContinue() &&
             content == HttpRequestContentIndication::kWillFollow) {
             return HttpServerExpectationPlan::continuePlan();
         }
@@ -165,7 +172,7 @@ public:
     }
 
 private:
-    static constexpr std::uint8_t k100Continue = 1U << 0;
+    static constexpr std::uint8_t kContinue = 1U << 0;
     static constexpr std::uint8_t kUnsupported = 1U << 1;
 
     std::uint8_t flags_{0};

@@ -195,6 +195,25 @@ void App::run() {
         auto& routes = detail::RouterImpl::from(*routeOwner);
         routes.setErrorHandler(state.errorHandler);
         routes.setNotFoundHandler(state.notFoundHandler);
+        if (!state.prefixErrorHandlers.empty()) {
+            std::pmr::vector<detail::HttpPrefixErrorHandler> views(runtimeResource);
+            views.reserve(state.prefixErrorHandlers.size());
+            for (const auto& [prefix, handler] : state.prefixErrorHandlers) {
+                views.push_back({std::string_view(prefix), handler});
+            }
+            routes.setPrefixErrorHandlers(views);
+        }
+        if (!state.prefixNotFoundHandlers.empty()) {
+            std::pmr::vector<detail::HttpPrefixNotFoundHandler> views(runtimeResource);
+            views.reserve(state.prefixNotFoundHandlers.size());
+            for (const auto& [prefix, handler] : state.prefixNotFoundHandlers) {
+                views.push_back({std::string_view(prefix), handler});
+            }
+            routes.setPrefixNotFoundHandlers(views);
+        }
+        if (!state.globalMiddlewares.empty()) {
+            routes.setGlobalMiddlewares(state.globalMiddlewares);
+        }
         routes.finalize();
         const auto& routeTable = routes.routeTable();
 
@@ -252,6 +271,7 @@ void App::run() {
                         state.redis
 #endif
                     },
+                    state.workerStates,
                     std::move(workerOptions)));
             }
         };

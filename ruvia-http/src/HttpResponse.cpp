@@ -38,7 +38,7 @@ std::pmr::memory_resource* HttpResponse::resource() const noexcept {
     return headers_.resource_;
 }
 
-std::uint16_t HttpResponse::status() const noexcept {
+HttpStatusCode HttpResponse::status() const noexcept {
     return statusCode_;
 }
 
@@ -46,10 +46,10 @@ const HttpResponseHeaders& HttpResponse::headers() const & noexcept {
     return headers_;
 }
 
-void HttpResponse::status(std::uint16_t statusCode) {
-    if (statusCode == 101) {
+void HttpResponse::status(HttpStatusCode statusCode) {
+    if (statusCode == http_status::kSwitchingProtocols) {
         throw std::invalid_argument(
-            "101 Switching Protocols requires a dedicated protocol driver");
+            "Switching Protocols requires a dedicated protocol driver");
     }
     if (!detail::httpFinalStatusCodeValid(statusCode)) {
         throw std::invalid_argument("invalid final HTTP status code");

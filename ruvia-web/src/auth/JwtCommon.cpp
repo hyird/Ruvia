@@ -1,5 +1,6 @@
 #include "ruvia/web/detail/auth/JwtInternal.h"
 
+#include <algorithm>
 #include <chrono>
 #include <stdexcept>
 
@@ -26,12 +27,8 @@ std::chrono::system_clock::time_point jwtFromEpochSeconds(std::int64_t value) {
         std::chrono::duration_cast<std::chrono::seconds>(Clock::duration::max()).count();
     constexpr std::int64_t kMinSeconds =
         std::chrono::duration_cast<std::chrono::seconds>(Clock::duration::min()).count();
-    if (value > kMaxSeconds) {
-        value = kMaxSeconds;
-    } else if (value < kMinSeconds) {
-        value = kMinSeconds;
-    }
-    return Clock::time_point(std::chrono::seconds(value));
+    return Clock::time_point(
+        std::chrono::seconds(std::clamp(value, kMinSeconds, kMaxSeconds)));
 }
 
 std::chrono::system_clock::time_point jwtTimeWithOffset(

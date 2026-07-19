@@ -1,5 +1,6 @@
 #include "ruvia/web/Context.h"
 
+#include "ruvia/web/detail/router/RouteTable.h"
 #include "ruvia/web/detail/CookieSignature.h"
 #include "ruvia/http/detail/HttpRequestInternal.h"
 #include "ruvia/http/detail/HttpResponseBodyAccess.h"
@@ -11,6 +12,7 @@
 #include "ruvia/http/detail/Hex.h"
 #include "ruvia/web/detail/http/HttpErrorResponse.h"
 
+#include <algorithm>
 #include <chrono>
 #include <stdexcept>
 #include <string_view>
@@ -29,12 +31,11 @@ namespace {
 [[nodiscard]] bool responseHasHeaderName(
     const HttpResponse& response,
     std::string_view name) noexcept {
-    for (const auto& header : response.headers()) {
-        if (detail::httpAsciiEqualsIgnoreCase(header.name(), name)) {
-            return true;
-        }
-    }
-    return false;
+    return std::ranges::any_of(
+        response.headers(),
+        [name](const auto& header) noexcept {
+            return detail::httpAsciiEqualsIgnoreCase(header.name(), name);
+        });
 }
 
 [[nodiscard]] std::size_t responseHeaderValueCount(
@@ -124,12 +125,9 @@ void assignActiveResponseHeaders(HttpResponse& response, const HttpResponse& act
 }
 
 [[nodiscard]] bool redirectLocationNeedsEncoding(std::string_view location) noexcept {
-    for (const auto ch : location) {
-        if (static_cast<unsigned char>(ch) >= 0x80) {
-            return true;
-        }
-    }
-    return false;
+    return std::ranges::any_of(location, [](char ch) noexcept {
+        return static_cast<unsigned char>(ch) >= 0x80;
+    });
 }
 
 [[nodiscard]] bool encodeUriKeepsByte(unsigned char ch) noexcept {
@@ -207,8 +205,31 @@ void appendPercentEncodedByte(std::pmr::string& output, unsigned char ch) {
 
 }  // namespace
 
-void Context::status(std::uint16_t statusCode) {
+void Context::status(HttpStatusCode statusCode) {
     responseState_.activeResponse().status(statusCode);
+}
+
+void* Context::workerStateInstance(const void* typeKey) const {
+    auto* instance = workerStates_ == nullptr
+        ? nullptr
+        : workerStates_->instance(typeKey);
+    if (instance == nullptr) {
+        throw std::logic_error(
+            "worker state type is not registered: call app().useWorkerState<T>() before app().run()");
+    }
+    return instance;
+}
+
+std::pmr::string Context::urlFor(
+    std::string_view pattern,
+    std::initializer_list<std::string_view> values) const {
+    if (routes_ == nullptr) {
+        throw std::logic_error("urlFor requires a route table bound to this context");
+    }
+    return routes_->urlFor(
+        pattern,
+        std::span<const std::string_view>(values.begin(), values.size()),
+        resource());
 }
 
 Context& Context::removeResponseHeader(std::string_view name) {
@@ -406,7 +427,7 @@ HttpResponse Context::htmlStaticView(std::string_view body) const {
 
 HttpResponse Context::redirect(
     std::string_view location,
-    std::uint16_t statusCode) const {
+    HttpStatusCode statusCode) const {
     HttpResponse response(resource());
     applyResponseState(response, statusCode);
     if (redirectLocationNeedsEncoding(location)) {
@@ -419,7 +440,7 @@ HttpResponse Context::redirect(
 }
 
 HttpResponse Context::error(
-    std::uint16_t statusCode,
+    HttpStatusCode statusCode,
     std::string_view code,
     std::string_view message,
     std::string_view statusText) const {
@@ -437,8 +458,8 @@ Task<HttpResponse> Context::notFound() {
 
     auto response = detail::makeDefaultErrorResponse(
         resource(),
-        HttpErrorInfo(404, {}, "route not found"));
-    applyResponseState(response, 404);
+        HttpErrorInfo(http_status::kNotFound, {}, "route not found"));
+    applyResponseState(response, http_status::kNotFound);
     co_return response;
 }
 
@@ -458,7 +479,7 @@ Context& Context::setStableResponseHeader(std::string_view name, std::string_vie
 
 void Context::applyResponseState(
     HttpResponse& response,
-    std::optional<std::uint16_t> statusCode) const {
+    std::optional<HttpStatusCode> statusCode) const {
     const auto& activeResponse = responseState_.activeResponse();
     const auto finalStatusCode = statusCode.value_or(activeResponse.status());
     response.status(finalStatusCode);

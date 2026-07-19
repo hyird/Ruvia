@@ -61,6 +61,19 @@ public:
 
     Router& setErrorHandler(HttpErrorHandler handler) noexcept;
     Router& setNotFoundHandler(HttpNotFoundHandler handler) noexcept;
+    // Path-prefix-scoped fallbacks (Hono sub-app scoping analog): wholesale
+    // replacement, owned copies; applied to the table at finalize or, when the
+    // table already exists, immediately (both are idempotent for restarts).
+    Router& setPrefixErrorHandlers(
+        std::span<const HttpPrefixErrorHandler> handlers);
+    Router& setPrefixNotFoundHandlers(
+        std::span<const HttpPrefixNotFoundHandler> handlers);
+    // App-wide middleware, prepended to every route's chain at finalize. Each
+    // descriptor is materialized exactly once; the single instance serves all
+    // routes, matching the per-route materialization model (one instance per
+    // registration, shared across workers).
+    void setGlobalMiddlewares(
+        std::span<const ControllerMiddlewareDescriptor> descriptors);
     void finalize();
     [[nodiscard]] const RouteTable& routeTable() const;
 
@@ -189,9 +202,15 @@ private:
     std::pmr::memory_resource* resource_{nullptr};
     std::pmr::vector<PendingRoute> pendingRoutes_;
     std::pmr::vector<MiddlewareLifetime> middlewareLifetimes_;
+    std::pmr::vector<ControllerMiddlewareDescriptor> globalMiddlewareDescriptors_;
+    std::pmr::vector<RouteMiddleware> globalMiddlewareFrames_;
     std::unique_ptr<RouteTable, RouteTableDeleter> routeTable_;
     HttpErrorHandler errorHandler_{nullptr};
     HttpNotFoundHandler notFoundHandler_{nullptr};
+    std::pmr::vector<std::pair<std::pmr::string, HttpErrorHandler>>
+        prefixErrorHandlers_{registrationResource()};
+    std::pmr::vector<std::pair<std::pmr::string, HttpNotFoundHandler>>
+        prefixNotFoundHandlers_{registrationResource()};
     bool hasRouteRateLimit_{false};
 };
 

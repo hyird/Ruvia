@@ -1,6 +1,7 @@
 #pragma once
 
 #include "ruvia/web/detail/BorrowedView.h"
+#include "ruvia/http/HttpStatus.h"
 
 #include <cstdint>
 #include <exception>
@@ -17,7 +18,7 @@ namespace ruvia {
 class HttpErrorInfo final {
 public:
     constexpr HttpErrorInfo(
-        std::uint16_t status = 500,
+        HttpStatusCode status = http_status::kInternalServerError,
         std::string_view code = {},
         std::string_view message = {},
         std::string_view statusText = {},
@@ -30,7 +31,7 @@ public:
 
     template <detail::RvalueCharBasicString String>
     HttpErrorInfo(
-        std::uint16_t,
+        HttpStatusCode,
         String&&,
         std::string_view = {},
         std::string_view = {},
@@ -38,7 +39,7 @@ public:
 
     template <detail::RvalueCharBasicString String>
     HttpErrorInfo(
-        std::uint16_t,
+        HttpStatusCode,
         std::string_view,
         String&&,
         std::string_view = {},
@@ -46,7 +47,7 @@ public:
 
     template <detail::RvalueCharBasicString String>
     HttpErrorInfo(
-        std::uint16_t,
+        HttpStatusCode,
         std::string_view,
         std::string_view,
         String&&,
@@ -54,13 +55,13 @@ public:
 
     template <detail::RvalueCharBasicString String>
     HttpErrorInfo(
-        std::uint16_t,
+        HttpStatusCode,
         std::string_view,
         std::string_view,
         std::string_view,
         String&&) = delete;
 
-    [[nodiscard]] constexpr std::uint16_t status() const noexcept {
+    [[nodiscard]] constexpr HttpStatusCode status() const noexcept {
         return status_;
     }
 
@@ -81,7 +82,7 @@ public:
     }
 
 private:
-    std::uint16_t status_{500};
+    HttpStatusCode status_{http_status::kInternalServerError};
     std::string_view statusText_{};
     std::string_view code_{};
     std::string_view message_{};
@@ -91,7 +92,7 @@ private:
 class HttpError final : public std::exception {
 public:
     HttpError(
-        std::uint16_t status,
+        HttpStatusCode status,
         std::string_view code,
         std::string_view message,
         std::string_view statusText = {});
@@ -105,12 +106,12 @@ public:
     [[nodiscard]] HttpErrorInfo info() const && = delete;
 
 private:
-    std::uint16_t status_{500};
+    HttpStatusCode status_{http_status::kInternalServerError};
     std::pmr::string statusText_;
     std::pmr::string code_;
     std::pmr::string message_;
 };
 
-[[nodiscard]] std::string_view defaultErrorCode(std::uint16_t status) noexcept;
+[[nodiscard]] std::string_view defaultErrorCode(HttpStatusCode status) noexcept;
 
 }  // namespace ruvia

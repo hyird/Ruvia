@@ -85,8 +85,7 @@ public:
     [[nodiscard]] HttpProtocolError protocolError() const noexcept {
         switch (error_) {
             case TransferCodingDecodeError::kInvalidContent:
-                return HttpProtocolError(
-                    400, "invalid transfer-coding body");
+                return HttpProtocolError(http_status::kBadRequest, "invalid transfer-coding body");
             case TransferCodingDecodeError::kDecodedSizeExceeded:
                 return HttpRequestBodyFailure::tooLarge().protocolError();
             case TransferCodingDecodeError::kDecoderFailure:

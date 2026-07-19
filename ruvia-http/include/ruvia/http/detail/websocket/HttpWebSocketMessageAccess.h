@@ -1,5 +1,6 @@
 #pragma once
 
+#include "ruvia/http/detail/BorrowedView.h"
 #include "ruvia/http/WebSocketProtocol.h"
 
 namespace ruvia::detail {
@@ -10,6 +11,9 @@ struct WebSocketMessageAccess final {
         std::string_view payload) noexcept {
         return WebSocketMessage(opcode, payload);
     }
+
+    template <HttpTemporaryOwningCharString Payload>
+    static WebSocketMessage make(WebSocketOpcode, Payload&&) = delete;
 };
 
 }  // namespace ruvia::detail

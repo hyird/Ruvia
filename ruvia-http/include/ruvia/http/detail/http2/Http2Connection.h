@@ -131,6 +131,15 @@ private:
 // value, never from a separately recomputed compression/subprotocol tuple.
 class Http2WebSocketHandshakeSubmitResult final {
 public:
+    Http2WebSocketHandshakeSubmitResult(
+        const Http2WebSocketHandshakeSubmitResult&) = delete;
+    Http2WebSocketHandshakeSubmitResult& operator=(
+        const Http2WebSocketHandshakeSubmitResult&) = delete;
+    Http2WebSocketHandshakeSubmitResult(
+        Http2WebSocketHandshakeSubmitResult&&) noexcept = default;
+    Http2WebSocketHandshakeSubmitResult& operator=(
+        Http2WebSocketHandshakeSubmitResult&&) = delete;
+
     [[nodiscard]] const WebSocketServerNegotiation*
     submitted() const & noexcept {
         return std::get_if<WebSocketServerNegotiation>(&value_);
@@ -154,13 +163,13 @@ private:
 
     template <typename Alternative>
     explicit Http2WebSocketHandshakeSubmitResult(
-        Alternative alternative) noexcept
-        : value_(std::move(alternative)) {}
+        Alternative&& alternative) noexcept
+        : value_(std::forward<Alternative>(alternative)) {}
 
     [[nodiscard]] static Http2WebSocketHandshakeSubmitResult
-    makeSubmitted(WebSocketServerNegotiation negotiation) noexcept {
+    makeSubmitted(WebSocketServerNegotiation&& negotiation) noexcept {
         return Http2WebSocketHandshakeSubmitResult(
-            negotiation);
+            std::move(negotiation));
     }
 
     [[nodiscard]] static Http2WebSocketHandshakeSubmitResult
@@ -479,11 +488,14 @@ public:
     [[nodiscard]] std::optional<Http2Event> nextEvent();
 
     // Access an assembled request head / stream for the owner to build an HttpRequest.
-    [[nodiscard]] Http2StreamState* stream(std::uint32_t streamId) noexcept;
+    [[nodiscard]] Http2StreamState* stream(
+        std::uint32_t streamId) & noexcept;
+    [[nodiscard]] Http2StreamState* stream(std::uint32_t) && = delete;
 
     // --- outbound --------------------------------------------------------------
     // Bytes the core wants written to the peer (frame headers + payloads, batched).
-    [[nodiscard]] std::string_view pendingOutput() const noexcept;
+    [[nodiscard]] std::string_view pendingOutput() const & noexcept;
+    [[nodiscard]] std::string_view pendingOutput() const && = delete;
     // Acknowledges at most the current pending size. An out-of-range count is
     // rejected without clearing bytes or advancing the cursor.
     Http2OutputConsumeStatus consumeOutput(std::size_t bytes) noexcept;
@@ -534,10 +546,12 @@ public:
     // Queue the RFC 8441 successful response (:status 200, Date and the exact
     // negotiated fields, without END_STREAM) and open the stream as a tunnel.
     // Only the submitted alternative exposes the negotiation committed on wire.
+    // Ownership moves into that alternative only after validation succeeds; a
+    // rejected submission leaves the caller's negotiation unchanged.
     [[nodiscard]] Http2WebSocketHandshakeSubmitResult
     submitWebSocketHandshake(
         std::uint32_t streamId,
-        WebSocketServerNegotiation negotiation);
+        WebSocketServerNegotiation&& negotiation);
     // Accept a pending standard or extended CONNECT with a successful final response.
     // The head must be bodyless and contain neither Content-Length nor
     // Transfer-Encoding. DATA becomes opaque tunnel bytes only after this succeeds.
@@ -557,7 +571,10 @@ public:
 
     // Returns streams whose core-owned DATA remainder just fully drained after a
     // WINDOW_UPDATE/SETTINGS change. Their owner may now submit the next source chunk.
-    [[nodiscard]] std::span<const std::uint32_t> takeDrainedDataStreams() noexcept;
+    [[nodiscard]] std::span<const std::uint32_t>
+    takeDrainedDataStreams() & noexcept;
+    [[nodiscard]] std::span<const std::uint32_t>
+    takeDrainedDataStreams() && = delete;
 
     // --- lifecycle / timeout ---------------------------------------------------
     // A local connection error is terminal: its GOAWAY has been queued and the I/O
@@ -801,6 +818,11 @@ private:
     HpackDecoder decoder_;
     Http2HeaderContinuation headerContinuation_;
     Http2PeerSettings peerSettings_;
+    // The static-only encoder starts with HPACK's implicit 4096-byte maximum even
+    // though it never inserts entries. A peer reduction below this value must still
+    // be acknowledged on the wire at the beginning of the next field block.
+    std::uint32_t encoderDynamicTableSize_{Http2LocalSettings::kHeaderTableSize};
+    bool encoderTableSizeUpdatePending_{false};
     std::optional<Http2StreamState> discardedHeaderStream_;
     DiscardedHeaderAction discardedHeaderAction_{DiscardedHeaderAction::kIgnore};
 

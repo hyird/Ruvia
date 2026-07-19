@@ -243,7 +243,7 @@ Task<std::pmr::vector<RedisValue>> RedisTransaction::executeOwned(
     std::pmr::vector<detail::RedisCommandArgsView> framed(resource);
     framed.reserve(watches.size() + commands.size() + 2);
     auto appendCommandView = [&framed](const RedisPipeline::Command& command) {
-        framed.emplace_back(std::span<const std::pmr::string>(command.args.data(), command.args.size()));
+        framed.emplace_back(command.args);
     };
     auto multi = RedisPipeline::makeCommand(resource, "MULTI");
     auto exec = RedisPipeline::makeCommand(resource, "EXEC");
@@ -257,7 +257,7 @@ Task<std::pmr::vector<RedisValue>> RedisTransaction::executeOwned(
     appendCommandView(exec);
 
     auto replies = co_await pool.executePipeline(
-        std::span<const detail::RedisCommandArgsView>(framed.data(), framed.size()),
+        std::span<const detail::RedisCommandArgsView>(framed),
         resource);
     if (replies.empty() ||
         replies.back().kind() == RedisValue::Kind::kError) {

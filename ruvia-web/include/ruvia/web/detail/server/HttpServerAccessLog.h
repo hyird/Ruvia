@@ -18,7 +18,7 @@ inline void recordHttpAccess(
     const AccessLogSink& accessLog,
     const HttpRequest& request,
     std::string_view remoteAddress,
-    std::uint16_t status,
+    HttpStatusCode status,
     std::chrono::steady_clock::time_point start) noexcept {
     if (!accessLog.callback) {
         return;

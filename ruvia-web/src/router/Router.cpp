@@ -3,6 +3,7 @@
 #include "ruvia/web/detail/RegistrationResource.h"
 #include "ruvia/core/memory/PmrObject.h"
 
+#include <algorithm>
 #include <stdexcept>
 
 namespace ruvia {
@@ -50,12 +51,9 @@ void validateUniqueValidatedModelTypes(
 
 [[nodiscard]] bool usesRouteRateLimit(
     std::span<const ControllerMiddlewareDescriptor> descriptors) noexcept {
-    for (const auto& descriptor : descriptors) {
-        if (descriptor.usesRouteRateLimit()) {
-            return true;
-        }
-    }
-    return false;
+    return std::ranges::any_of(descriptors, [](const auto& descriptor) noexcept {
+        return descriptor.usesRouteRateLimit();
+    });
 }
 
 }  // namespace
@@ -77,6 +75,8 @@ detail::RouterImpl::RouterImpl(Router& router) noexcept
       resource_(registrationResource()),
       pendingRoutes_(resource_),
       middlewareLifetimes_(resource_),
+      globalMiddlewareDescriptors_(resource_),
+      globalMiddlewareFrames_(resource_),
       routeTable_(nullptr, RouteTableDeleter{resource_}) {}
 
 void Router::ImplDeleter::operator()(detail::RouterImpl* impl) const noexcept {
@@ -115,6 +115,224 @@ void detail::RouteTable::setErrorHandler(HttpErrorHandler handler) noexcept {
 
 void detail::RouteTable::setNotFoundHandler(HttpNotFoundHandler handler) noexcept {
     notFoundHandler_ = handler;
+}
+
+namespace {
+
+// Normalizes one prefix registration ("/api/" and "/api" are the same scope)
+// and validates the shape shared by both fallback kinds. "/" stays "/" and
+// scopes every path; plain setErrorHandler/setNotFoundHandler remain the
+// simpler spelling for that.
+[[nodiscard]] std::string_view normalizeFallbackPrefix(std::string_view prefix) {
+    if (prefix.empty() || prefix.front() != '/') {
+        throw std::invalid_argument("fallback prefix must start with '/'");
+    }
+    while (prefix.size() > 1 && prefix.back() == '/') {
+        prefix.remove_suffix(1);
+    }
+    return prefix;
+}
+
+template <typename Stored, typename Registration>
+void replacePrefixHandlers(
+    std::pmr::vector<Stored>& stored,
+    std::pmr::memory_resource* resource,
+    std::span<const Registration> handlers) {
+    std::pmr::vector<Stored> normalized(resource);
+    normalized.reserve(handlers.size());
+    for (const auto& registration : handlers) {
+        if (registration.handler == nullptr) {
+            throw std::invalid_argument("fallback handler must not be null");
+        }
+        const auto prefix = normalizeFallbackPrefix(registration.prefix);
+        for (const auto& existing : normalized) {
+            if (std::string_view(existing.prefix) == prefix) {
+                throw std::invalid_argument("duplicate fallback prefix");
+            }
+        }
+        normalized.emplace_back(resource, prefix, registration.handler);
+    }
+    // Longest prefix first: selection is a first-match scan. Equal lengths
+    // cannot nest, so their relative order is irrelevant; keep it stable.
+    std::ranges::stable_sort(
+        normalized,
+        [](const Stored& left, const Stored& right) noexcept {
+            return left.prefix.size() > right.prefix.size();
+        });
+    stored = std::move(normalized);
+}
+
+// Longest-first stored order: the first hit is the tightest scope. A prefix
+// matches on whole path segments only, so "/api" scopes "/api" and "/api/x"
+// but never "/apix".
+template <typename Stored>
+[[nodiscard]] auto selectPrefixHandler(
+    const std::pmr::vector<Stored>& stored,
+    std::string_view path) noexcept {
+    for (const auto& candidate : stored) {
+        const std::string_view prefix(candidate.prefix);
+        if (prefix == "/" || path == prefix ||
+            (path.size() > prefix.size() && path.starts_with(prefix) &&
+             path[prefix.size()] == '/')) {
+            return candidate.handler;
+        }
+    }
+    return decltype(stored.front().handler){nullptr};
+}
+
+}  // namespace
+
+void detail::RouteTable::setPrefixErrorHandlers(
+    std::span<const HttpPrefixErrorHandler> handlers) {
+    replacePrefixHandlers(prefixErrorHandlers_, resource_, handlers);
+}
+
+void detail::RouteTable::setPrefixNotFoundHandlers(
+    std::span<const HttpPrefixNotFoundHandler> handlers) {
+    replacePrefixHandlers(prefixNotFoundHandlers_, resource_, handlers);
+}
+
+HttpErrorHandler detail::RouteTable::errorHandlerFor(
+    std::string_view path) const noexcept {
+    const auto handler = selectPrefixHandler(prefixErrorHandlers_, path);
+    return handler != nullptr ? handler : errorHandler_;
+}
+
+HttpNotFoundHandler detail::RouteTable::notFoundHandlerFor(
+    std::string_view path) const noexcept {
+    const auto handler = selectPrefixHandler(prefixNotFoundHandlers_, path);
+    return handler != nullptr ? handler : notFoundHandler_;
+}
+
+namespace {
+
+// RFC 3986 pchar minus pct-encoded: bytes a path segment may carry verbatim.
+[[nodiscard]] constexpr bool isUrlForSegmentByte(char value) noexcept {
+    return (value >= 'A' && value <= 'Z') || (value >= 'a' && value <= 'z') ||
+        (value >= '0' && value <= '9') ||
+        value == '-' || value == '.' || value == '_' || value == '~' ||
+        value == '!' || value == '$' || value == '&' || value == '\'' ||
+        value == '(' || value == ')' || value == '*' || value == '+' ||
+        value == ',' || value == ';' || value == '=' || value == ':' ||
+        value == '@';
+}
+
+void appendUrlForValue(
+    std::pmr::string& output,
+    std::string_view value,
+    bool keepSlashes) {
+    static constexpr char kHexDigits[] = "0123456789ABCDEF";
+    for (const char byte : value) {
+        if (isUrlForSegmentByte(byte) || (keepSlashes && byte == '/')) {
+            output.push_back(byte);
+            continue;
+        }
+        const auto raw = static_cast<unsigned char>(byte);
+        output.push_back('%');
+        output.push_back(kHexDigits[raw >> 4]);
+        output.push_back(kHexDigits[raw & 0x0F]);
+    }
+}
+
+}  // namespace
+
+std::pmr::string detail::RouteTable::urlFor(
+    std::string_view pattern,
+    std::span<const std::string_view> values,
+    std::pmr::memory_resource* resource) const {
+    bool registered = false;
+    for (const auto& route : routes_) {
+        if (route.path() == pattern) {
+            registered = true;
+            break;
+        }
+    }
+    if (!registered) {
+        throw std::invalid_argument("urlFor pattern is not a registered route");
+    }
+
+    auto* const targetResource = pmrResourceOrDefault(resource);
+    std::pmr::string url(targetResource);
+    url.reserve(pattern.size() + 16);
+
+    std::size_t nextValue = 0;
+    auto remaining = pattern;
+    if (remaining.starts_with('/')) {
+        remaining.remove_prefix(1);
+    }
+    if (remaining.empty()) {
+        url.push_back('/');
+    }
+    while (!remaining.empty()) {
+        const auto slash = remaining.find('/');
+        const auto segment = slash == std::string_view::npos
+            ? remaining
+            : remaining.substr(0, slash);
+        remaining = slash == std::string_view::npos
+            ? std::string_view{}
+            : remaining.substr(slash + 1);
+
+        if (segment == "*" && remaining.empty()) {
+            if (nextValue >= values.size()) {
+                throw std::invalid_argument("urlFor is missing a value for '*'");
+            }
+            const auto value = values[nextValue++];
+            // An empty capture addresses the bare mount path itself, which is
+            // exactly what the wildcard route matches for it.
+            if (!value.empty()) {
+                url.push_back('/');
+                appendUrlForValue(url, value, /*keepSlashes=*/true);
+            } else if (url.empty()) {
+                url.push_back('/');
+            }
+            continue;
+        }
+        url.push_back('/');
+        if (!segment.empty() && segment.front() == ':') {
+            if (nextValue >= values.size()) {
+                throw std::invalid_argument("urlFor is missing a route parameter value");
+            }
+            const auto value = values[nextValue++];
+            if (value.empty()) {
+                throw std::invalid_argument("urlFor route parameter value must not be empty");
+            }
+            appendUrlForValue(url, value, /*keepSlashes=*/false);
+        } else {
+            url.append(segment.data(), segment.size());
+        }
+    }
+    if (nextValue != values.size()) {
+        throw std::invalid_argument("urlFor received more values than the pattern has parameters");
+    }
+    return url;
+}
+
+Router& detail::RouterImpl::setPrefixErrorHandlers(
+    std::span<const HttpPrefixErrorHandler> handlers) {
+    if (routeTable_) {
+        routeTable_->setPrefixErrorHandlers(handlers);
+    }
+    prefixErrorHandlers_.clear();
+    prefixErrorHandlers_.reserve(handlers.size());
+    for (const auto& handler : handlers) {
+        prefixErrorHandlers_.emplace_back(
+            std::pmr::string(handler.prefix, resource_), handler.handler);
+    }
+    return owner;
+}
+
+Router& detail::RouterImpl::setPrefixNotFoundHandlers(
+    std::span<const HttpPrefixNotFoundHandler> handlers) {
+    if (routeTable_) {
+        routeTable_->setPrefixNotFoundHandlers(handlers);
+    }
+    prefixNotFoundHandlers_.clear();
+    prefixNotFoundHandlers_.reserve(handlers.size());
+    for (const auto& handler : handlers) {
+        prefixNotFoundHandlers_.emplace_back(
+            std::pmr::string(handler.prefix, resource_), handler.handler);
+    }
+    return owner;
 }
 
 detail::RouterImpl::MiddlewareLifetime::MiddlewareLifetime(
@@ -196,11 +414,36 @@ void detail::RouterImpl::validateRouteTarget(HttpKnownMethod method, std::string
     }
 }
 
+void detail::RouterImpl::setGlobalMiddlewares(
+    std::span<const ControllerMiddlewareDescriptor> descriptors) {
+    if (routeTable_) {
+        // A finalized table's middleware ranges are immutable. Re-applying the
+        // identical set (an app stop()/run() cycle) is a no-op; changing it
+        // requires a fresh router.
+        const bool unchanged =
+            descriptors.size() == globalMiddlewareDescriptors_.size() &&
+            std::ranges::equal(
+                descriptors,
+                globalMiddlewareDescriptors_,
+                [](const auto& left, const auto& right) noexcept {
+                    return left.invoke() == right.invoke() &&
+                        left.create() == right.create() &&
+                        left.destroy() == right.destroy();
+                });
+        if (unchanged) {
+            return;
+        }
+        throw std::logic_error("cannot change app middleware after router finalize");
+    }
+    globalMiddlewareDescriptors_.assign(descriptors.begin(), descriptors.end());
+}
+
 void detail::RouterImpl::finalize() {
     if (routeTable_) {
         return;
     }
 
+    globalMiddlewareFrames_ = materializeMiddlewares(globalMiddlewareDescriptors_);
     validateNoDynamicRouteConflict(pendingRoutes_);
     std::unique_ptr<RouteTable, RouteTableDeleter> table(
         constructPmrObject<RouteTable>(resource_, resource_),
@@ -209,6 +452,22 @@ void detail::RouterImpl::finalize() {
     table->hasRouteRateLimit_ = hasRouteRateLimit_;
     table->setErrorHandler(errorHandler_);
     table->setNotFoundHandler(notFoundHandler_);
+    if (!prefixErrorHandlers_.empty()) {
+        std::pmr::vector<HttpPrefixErrorHandler> views(resource_);
+        views.reserve(prefixErrorHandlers_.size());
+        for (const auto& [prefix, handler] : prefixErrorHandlers_) {
+            views.push_back({std::string_view(prefix), handler});
+        }
+        table->setPrefixErrorHandlers(views);
+    }
+    if (!prefixNotFoundHandlers_.empty()) {
+        std::pmr::vector<HttpPrefixNotFoundHandler> views(resource_);
+        views.reserve(prefixNotFoundHandlers_.size());
+        for (const auto& [prefix, handler] : prefixNotFoundHandlers_) {
+            views.push_back({std::string_view(prefix), handler});
+        }
+        table->setPrefixNotFoundHandlers(views);
+    }
     routeTable_ = std::move(table);
 }
 

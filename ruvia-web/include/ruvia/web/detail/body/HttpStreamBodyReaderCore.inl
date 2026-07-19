@@ -112,7 +112,7 @@ Task<std::string_view> StreamBodyReader<Stream>::readAll(std::pmr::string& body)
             knownLength->contentLength());
     }
     if (bodyPlan_.withoutBody() != nullptr) {
-        co_return std::string_view(body.data(), body.size());
+        co_return std::string_view(body);
     }
 
     co_await ensureContinue();
@@ -130,7 +130,7 @@ Task<std::string_view> StreamBodyReader<Stream>::readAll(std::pmr::string& body)
         requireCompleteTransferCoding(*transferDecoder_);
     }
     markFinished();
-    co_return std::string_view(body.data(), body.size());
+    co_return std::string_view(body);
 }
 
 template <typename Stream>
@@ -172,7 +172,7 @@ template <typename Stream>
 Task<void> StreamBodyReader<Stream>::ensureContinue() {
     const auto expectationPlan = bodyPlan_.expectationPlan(
         HttpUnsupportedExpectationPolicy::kReject);
-    if (expectationPlan.send100Continue() != nullptr && !continueSent_) {
+    if (expectationPlan.sendContinue() != nullptr && !continueSent_) {
         co_await writeHttp1Continue(stream_);
         continueSent_ = true;
     }

@@ -94,6 +94,9 @@ private:
     HttpKnownMethod method,
     std::string_view target) noexcept;
 
+// Host field syntax. An empty field is valid when the target URI has no
+// authority (RFC 9112 section 3.2); callers that require a usable HTTP origin
+// must additionally require a non-empty value.
 [[nodiscard]] bool isValidHostHeader(std::string_view value) noexcept;
 // RFC 3986 authority = [ userinfo "@" ] host [ ":" port ]. Unlike an HTTP
 // Host field, the generic grammar permits userinfo, an empty reg-name, and a
@@ -105,8 +108,9 @@ private:
 [[nodiscard]] bool isValidHttpHost(std::string_view value) noexcept;
 // WHATWG Fetch `serialized-origin` syntax. Unlike an RFC 3986 uri-host, this
 // wire value requires lowercase scheme/domain bytes and canonical IPv6 groups,
-// and never contains a path. The opaque-origin literal `null` is deliberately
-// not a serialized origin.
+// a canonical 16-bit decimal port with known defaults omitted, and never
+// contains a path. The opaque-origin literal `null` is deliberately not a
+// serialized origin.
 [[nodiscard]] bool isValidHttpSerializedOrigin(
     std::string_view value) noexcept;
 [[nodiscard]] std::optional<HttpAuthorityView> parseHttpAuthority(
@@ -120,6 +124,11 @@ std::optional<HttpAuthorityView> parseHttpAuthority(Value&&) = delete;
     HttpKnownMethod method,
     std::string_view target,
     RequestTargetView& output) noexcept;
+template <HttpTemporaryOwningCharString Target>
+bool parseRequestTarget(
+    HttpKnownMethod,
+    Target&&,
+    RequestTargetView&) = delete;
 [[nodiscard]] bool authorityMatchesHost(
     std::string_view authority,
     std::string_view host,

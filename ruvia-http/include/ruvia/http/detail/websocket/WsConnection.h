@@ -104,9 +104,11 @@ public:
     // more input is required (nullopt). Every materialized event contains one
     // typed payload. Application data received after a local Close is validated
     // but not delivered while the peer Close is awaited.
-    [[nodiscard]] std::optional<WsEvent> poll();
+    [[nodiscard]] std::optional<WsEvent> poll() &;
+    [[nodiscard]] std::optional<WsEvent> poll() && = delete;
 
-    [[nodiscard]] WsOutputPlan outputPlan() const noexcept;
+    [[nodiscard]] WsOutputPlan outputPlan() const & noexcept;
+    [[nodiscard]] WsOutputPlan outputPlan() const && = delete;
     [[nodiscard]] WsOutputConsumeStatus consumeOutput(std::size_t n) noexcept;
     void commitTransportEnd() noexcept;
     void notifyTransportEof() noexcept;

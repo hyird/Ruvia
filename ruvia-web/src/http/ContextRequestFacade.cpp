@@ -88,9 +88,7 @@ ScopedOperation<std::string_view> ContextRequest::text() const {
 
 Task<std::span<const std::byte>> ContextRequest::bytesTask(const Context* context) {
     const auto body = co_await contextTextTask(context);
-    co_return std::span<const std::byte>(
-        reinterpret_cast<const std::byte*>(body.data()),
-        body.size());
+    co_return std::as_bytes(std::span(body));
 }
 
 ScopedOperation<std::span<const std::byte>> ContextRequest::bytes() const {

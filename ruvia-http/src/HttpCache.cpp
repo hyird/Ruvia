@@ -1,5 +1,6 @@
 #include "ruvia/http/HttpCache.h"
 
+#include <algorithm>
 #include <limits>
 
 #include "ruvia/http/detail/HeaderTokenUtils.h"       // httpTrimOws, httpAsciiEqualsIgnoreCase
@@ -57,12 +58,9 @@ namespace {
         return false;
     }
     if (value.front() != '"') {
-        for (const auto ch : value) {
-            if (!detail::isHttpTokenChar(static_cast<unsigned char>(ch))) {
-                return false;
-            }
-        }
-        return true;
+        return std::ranges::all_of(value, [](char ch) noexcept {
+            return detail::isHttpTokenChar(static_cast<unsigned char>(ch));
+        });
     }
     if (value.size() < 2 || value.back() != '"') {
         return false;
@@ -116,12 +114,7 @@ namespace {
 
 }  // namespace
 
-CacheControl parseCacheControl(std::string_view value) noexcept {
-    CacheControl result;
-    bool maxAgeSeen = false;
-    bool sMaxAgeSeen = false;
-    bool staleWhileRevalidateSeen = false;
-    bool staleIfErrorSeen = false;
+void CacheControlFieldParser::update(std::string_view value) noexcept {
     std::size_t pos = 0;
     while (pos < value.size()) {
         const auto comma = cacheDirectiveEnd(value, pos);
@@ -138,44 +131,51 @@ CacheControl parseCacheControl(std::string_view value) noexcept {
         const auto arg = eq == std::string_view::npos ? std::string_view{} : token.substr(eq + 1);
 
         if (!hasArgument && detail::httpAsciiEqualsIgnoreCase(name, "no-store")) {
-            result.noStore = true;
+            value_.noStore = true;
         } else if ((!hasArgument || isValidCacheDirectiveArgument(arg)) &&
                    detail::httpAsciiEqualsIgnoreCase(name, "no-cache")) {
-            result.noCache = true;
+            value_.noCache = true;
+        } else if (!hasArgument && detail::httpAsciiEqualsIgnoreCase(name, "no-transform")) {
+            value_.noTransform = true;
         } else if (!hasArgument && detail::httpAsciiEqualsIgnoreCase(name, "must-revalidate")) {
-            result.mustRevalidate = true;
+            value_.mustRevalidate = true;
         } else if (!hasArgument && detail::httpAsciiEqualsIgnoreCase(name, "proxy-revalidate")) {
-            result.proxyRevalidate = true;
+            value_.proxyRevalidate = true;
         } else if ((!hasArgument || isValidCacheDirectiveArgument(arg)) &&
                    detail::httpAsciiEqualsIgnoreCase(name, "private")) {
-            result.isPrivate = true;
+            value_.isPrivate = true;
         } else if (!hasArgument && detail::httpAsciiEqualsIgnoreCase(name, "public")) {
-            result.isPublic = true;
+            value_.isPublic = true;
         } else if (!hasArgument && detail::httpAsciiEqualsIgnoreCase(name, "immutable")) {
-            result.immutable = true;
+            value_.immutable = true;
         } else if (detail::httpAsciiEqualsIgnoreCase(name, "max-age")) {
-            if (!maxAgeSeen) {
-                maxAgeSeen = true;
-                result.maxAge = parseDeltaSeconds(arg);
+            if (!maxAgeSeen_) {
+                maxAgeSeen_ = true;
+                value_.maxAge = parseDeltaSeconds(arg);
             }
         } else if (detail::httpAsciiEqualsIgnoreCase(name, "s-maxage")) {
-            if (!sMaxAgeSeen) {
-                sMaxAgeSeen = true;
-                result.sMaxAge = parseDeltaSeconds(arg);
+            if (!sMaxAgeSeen_) {
+                sMaxAgeSeen_ = true;
+                value_.sMaxAge = parseDeltaSeconds(arg);
             }
         } else if (detail::httpAsciiEqualsIgnoreCase(name, "stale-while-revalidate")) {
-            if (!staleWhileRevalidateSeen) {
-                staleWhileRevalidateSeen = true;
-                result.staleWhileRevalidate = parseDeltaSeconds(arg);
+            if (!staleWhileRevalidateSeen_) {
+                staleWhileRevalidateSeen_ = true;
+                value_.staleWhileRevalidate = parseDeltaSeconds(arg);
             }
         } else if (detail::httpAsciiEqualsIgnoreCase(name, "stale-if-error")) {
-            if (!staleIfErrorSeen) {
-                staleIfErrorSeen = true;
-                result.staleIfError = parseDeltaSeconds(arg);
+            if (!staleIfErrorSeen_) {
+                staleIfErrorSeen_ = true;
+                value_.staleIfError = parseDeltaSeconds(arg);
             }
         }
     }
-    return result;
+}
+
+CacheControl parseCacheControl(std::string_view value) noexcept {
+    CacheControlFieldParser parser;
+    parser.update(value);
+    return parser.finish();
 }
 
 std::optional<std::time_t> parseHttpDate(std::string_view value) noexcept {

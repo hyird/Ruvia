@@ -23,6 +23,10 @@ static_assert(!std::default_initializable<
     ruvia::detail::Http1ChunkedRequestBody>);
 static_assert(!std::default_initializable<
     ruvia::detail::WebSocketServerNegotiation>);
+static_assert(!std::copy_constructible<
+    ruvia::detail::WebSocketServerNegotiation>);
+static_assert(std::move_constructible<
+    ruvia::detail::WebSocketServerNegotiation>);
 static_assert(!std::constructible_from<
     ruvia::detail::WebSocketDeflateNegotiation,
     bool>);

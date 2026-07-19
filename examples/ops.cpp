@@ -1,3 +1,6 @@
+// Operational middleware: security headers, route-level per-IP rate limiting,
+// and health/readiness response helpers wired through controller macros.
+
 #include <string_view>
 
 #include "ruvia/web/App.h"

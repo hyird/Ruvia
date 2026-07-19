@@ -22,6 +22,14 @@ Task<void> HttpServer::handleStreamSession(
     // arrives while the connection holds no work set (see the idle wait below).
     std::array<char, kIdleResidentReadBytes> idleReadBuffer;
     std::size_t idleReadBytes = 0;
+    // nginx-aligned wait semantics. The first request on a connection, and any
+    // partially-received request header, are bounded by clientHeaderTimeout
+    // (kReadingInitial). The idle wait for the *next* request on a reused
+    // keep-alive connection -- no bytes of it received yet -- is bounded by
+    // keepaliveTimeout (kIdle), matching nginx keepalive_timeout. Flips true
+    // once a request has been served so later idle waits use the keepalive
+    // deadline instead of the header deadline.
+    bool servedKeepaliveRequest = false;
 
     constexpr bool kPlainTcp = std::is_same_v<std::remove_cvref_t<Stream>, TcpSocket>;
     for (;;) {
@@ -41,7 +49,12 @@ Task<void> HttpServer::handleStreamSession(
         if constexpr (kPlainTcp) {
             if (plainTcpShouldWaitForNextRequest(usedBytes)) {
                 releaseIdleWorkSet(workSetPool_, workSet);
-                scannerEntry.setPhase(ConnectionScanner::Phase::kReadingInitial);
+                // Idle wait for the next keep-alive request uses keepaliveTimeout;
+                // the connection's first request uses clientHeaderTimeout.
+                scannerEntry.setPhase(
+                    servedKeepaliveRequest
+                        ? ConnectionScanner::Phase::kIdle
+                        : ConnectionScanner::Phase::kReadingInitial);
                 auto idleCompletion = co_await asyncAsio<std::size_t>(
                     [&socket, &idleReadBuffer](auto handler) mutable {
                         socket.async_read_some(
@@ -145,7 +158,7 @@ Task<void> HttpServer::handleStreamSession(
                 if (const auto* redirect = options_.redirect()) {
                     if (requestKnownHeader(parsed.request, RequestKnownHeader::kHost).empty()) {
                         closingRejection = Http1ClosingRejection::error(
-                            HttpErrorInfo(400, {}, "missing Host header"));
+                            HttpErrorInfo(ruvia::http_status::kBadRequest, {}, "missing Host header"));
                         break;
                     }
                     response = makeAutoHttpsRedirectResponse(
@@ -181,34 +194,29 @@ Task<void> HttpServer::handleStreamSession(
                                 bodyFailure->protocolError()));
                         break;
                     }
-                    if (auto documentResponse = tryDocumentRootResponse(parsed.request, requestMemory)) {
-                        response = std::move(*documentResponse);
-                        auto connectionPlan = http1ApplyRequestBodyConsumption(
-                            parsed.connectionPlan,
-                            parsed.bodyPlan.requiresConsumption()
-                                ? Http1RequestBodyConsumption::kIncomplete
-                                : Http1RequestBodyConsumption::kComplete);
-                        connectionPlan = finalizeBufferedRouteResponse(
-                            response,
-                            connectionPlan,
-                            requestSequence);
-                        requestCompletion.emplace(
-                            Http1SessionRequestCompletion::makeBufferedUnrestored(
-                                connectionPlan,
-                                requestHead->headerBytes()));
-                        scannerEntry.touch();
-                        break;
-                    }
-                    response = co_await routes.dispatch(
+                    response = co_await routes.dispatchBufferedResponse(
                         parsed.request,
                         routeResolution,
                         requestMemory,
+                        options_.documentRoot.root,
                         baseRouteServices);
-                    const auto connectionPlan = requireHttp1FinalResponseCommit(
-                        response, parsed.connectionPlan.requireClose());
+                    // An unresolved request never consumes its body, regardless
+                    // of whether the shared Web dispatch selected a document-root
+                    // file, 404, 405, or OPTIONS response.
+                    auto connectionPlan = http1ApplyRequestBodyConsumption(
+                        parsed.connectionPlan,
+                        parsed.bodyPlan.requiresConsumption()
+                            ? Http1RequestBodyConsumption::kIncomplete
+                            : Http1RequestBodyConsumption::kComplete);
+                    connectionPlan = finalizeBufferedRouteResponse(
+                        response,
+                        connectionPlan,
+                        requestSequence);
                     requestCompletion.emplace(
-                        Http1SessionRequestCompletion::makeBufferedClosing(
-                            connectionPlan));
+                        Http1SessionRequestCompletion::makeBufferedUnrestored(
+                            connectionPlan,
+                            requestHead->headerBytes()));
+                    scannerEntry.touch();
                     break;
                 }
 
@@ -306,8 +314,8 @@ Task<void> HttpServer::handleStreamSession(
                     // The body reader/loader setup can throw (e.g. constructing a
                     // transfer-coding decoder for a bad Transfer-Encoding), so it
                     // stays guarded. The dispatch itself never throws:
-                    // dispatchBuffered turns any handler or routing failure into
-                    // a response, so it sits outside the guard.
+                    // dispatchBufferedResponse turns any handler or routing
+                    // failure into a response, so it sits outside the guard.
                     std::exception_ptr bodySetupException;
                     HttpLazyBufferedBodyRouteState<Stream> bodyState;
                     try {
@@ -336,10 +344,11 @@ Task<void> HttpServer::handleStreamSession(
                         break;
                     }
 
-                    response = co_await routes.dispatchBuffered(
+                    response = co_await routes.dispatchBufferedResponse(
                         parsed.request,
                         routeResolution,
                         requestMemory,
+                        options_.documentRoot.root,
                         bodyState.withLoader(baseRouteServices));
 
                     requestCompletion.emplace(completeSuccessfulHttpBodyRoute(
@@ -375,7 +384,13 @@ Task<void> HttpServer::handleStreamSession(
 
             headerSearchOffset = usedBytes > 3 ? usedBytes - 3 : 0;
 
-            scannerEntry.setPhase(ConnectionScanner::Phase::kReadingInitial);
+            // With no request bytes yet on a reused connection this read is the
+            // keepalive idle wait (keepaliveTimeout); once any header bytes are
+            // buffered, or on the first request, clientHeaderTimeout governs.
+            scannerEntry.setPhase(
+                (usedBytes == 0 && servedKeepaliveRequest)
+                    ? ConnectionScanner::Phase::kIdle
+                    : ConnectionScanner::Phase::kReadingInitial);
             growReadBuffer(readBuffer, usedBytes);
             if (usedBytes == readBuffer.size()) {
                 const auto error = httpParseProtocolError(
@@ -477,5 +492,8 @@ Task<void> HttpServer::handleStreamSession(
             readBuffer,
             usedBytes);
         trimReadBufferStorage(readBuffer, usedBytes);
+        // A request completed and the connection is being reused: the next
+        // wait with no buffered bytes is a keepalive idle wait.
+        servedKeepaliveRequest = true;
     }
 }

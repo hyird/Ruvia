@@ -4,6 +4,7 @@
 #include "ruvia/web/detail/http/ContextServices.h"
 #include "ruvia/web/detail/router/RouteLimits.h"
 
+#include <algorithm>
 #include <cstddef>
 #include <exception>
 #include <utility>
@@ -41,6 +42,8 @@ inline Context::Context(
       rateLimiter_(services.rateLimiter()),
       errorHandler_(services.errorHandler()),
       notFoundHandler_(services.notFoundHandler()),
+      routes_(services.routes()),
+      workerStates_(services.workerStates()),
       routeRateLimitScope_(routeRateLimitScope),
       maxDecodedBodyBytes_(services.maxDecodedBodyBytes()),
       requestBodySource_(services.requestBodySource()),
@@ -105,6 +108,10 @@ struct ContextAccess final {
             paramCount,
             routeRateLimitScope,
             services);
+    }
+
+    [[nodiscard]] static const HttpRequest& request(const Context& context) noexcept {
+        return context.request_;
     }
 
     [[nodiscard]] static RateLimiter* rateLimiter(Context& context) noexcept {
@@ -177,12 +184,12 @@ struct ContextAccess final {
     [[nodiscard]] static bool hasPendingSetCookie(
         const Context& context,
         std::string_view valuePrefix) noexcept {
-        for (const auto& header : context.responseState_.activeResponse().headers()) {
-            if (header.name() == "Set-Cookie" && header.value().starts_with(valuePrefix)) {
-                return true;
-            }
-        }
-        return false;
+        return std::ranges::any_of(
+            context.responseState_.activeResponse().headers(),
+            [valuePrefix](const auto& header) noexcept {
+                return header.name() == "Set-Cookie" &&
+                    header.value().starts_with(valuePrefix);
+            });
     }
 
 private:

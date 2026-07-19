@@ -155,6 +155,16 @@ private:
             co_return;
         }
         co_await commit(ResponseTrailerIntent::kNone);
+        if (state_.bodySuppressedComplete()) {
+            // ensureBodyAllowed() is about to throw ResponseStreamHeadOnlyComplete
+            // synchronously (commit() returned without suspending on an already
+            // body-suppressed head). Suspend once first: a handler that catches
+            // the control signal and keeps writing (an SSE loop answering a HEAD
+            // or 304) then yields the worker thread each pass instead of
+            // hard-spinning the event loop with no suspension point. The minimal
+            // positive delay is required because a zero duration is await_ready.
+            co_await sleepFor(*worker_, std::chrono::steady_clock::duration(1));
+        }
         state_.ensureBodyAllowed();
 
         if (plan_.framing() == ResponseStreamFraming::kHttp1CloseDelimited) {

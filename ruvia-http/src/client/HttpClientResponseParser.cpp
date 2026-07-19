@@ -5,9 +5,12 @@
 #include <system_error>
 #include <variant>
 
+#include "ruvia/http/detail/HeaderAcceptUtils.h"
 #include "ruvia/http/detail/HeaderTokenUtils.h"
 #include "ruvia/http/detail/HttpConnectionFields.h"
+#include "ruvia/http/detail/HttpContentCoding.h"
 #include "ruvia/http/detail/HttpContentLength.h"
+#include "ruvia/http/detail/HttpInterimResponseValidation.h"
 #include "ruvia/http/detail/HttpResponseContentSemantics.h"
 #include "ruvia/http/detail/HttpTransferEncoding.h"
 #include "ruvia/http/detail/client/HttpClientAccess.h"
@@ -39,6 +42,41 @@ struct Http1ClientResponsePlanAccess final {
         return Http1ClientResponsePlan(
             Http1ClientResponsePlan::State(
                 Http1ClientResponseWithoutContent(persistence)),
+            requestContentSignal);
+    }
+
+    [[nodiscard]] static Http1ClientResponsePlan zeroContentKnownLength(
+        Http1ClientResponsePersistence persistence,
+        RequestContentSignal requestContentSignal) noexcept {
+        return Http1ClientResponsePlan(
+            Http1ClientResponsePlan::State(
+                Http1ClientResponseWithZeroContent(
+                    Http1ClientResponseWithZeroContent::Framing(
+                        Http1ClientKnownLengthResponse(0, persistence)))),
+            requestContentSignal);
+    }
+
+    [[nodiscard]] static Http1ClientResponsePlan zeroContentChunked(
+        HttpTransferCodings transferCodings,
+        Http1ClientResponsePersistence persistence,
+        RequestContentSignal requestContentSignal) noexcept {
+        return Http1ClientResponsePlan(
+            Http1ClientResponsePlan::State(
+                Http1ClientResponseWithZeroContent(
+                    Http1ClientResponseWithZeroContent::Framing(
+                        Http1ClientChunkedResponse(
+                            transferCodings, persistence)))),
+            requestContentSignal);
+    }
+
+    [[nodiscard]] static Http1ClientResponsePlan zeroContentCloseDelimited(
+        HttpTransferCodings transferCodings,
+        RequestContentSignal requestContentSignal) noexcept {
+        return Http1ClientResponsePlan(
+            Http1ClientResponsePlan::State(
+                Http1ClientResponseWithZeroContent(
+                    Http1ClientResponseWithZeroContent::Framing(
+                        Http1ClientCloseDelimitedResponse(transferCodings)))),
             requestContentSignal);
     }
 
@@ -113,7 +151,7 @@ namespace ruvia {
 namespace {
 
 struct ParsedStatusLine final {
-    std::uint16_t statusCode;
+    HttpStatusCode statusCode;
     HttpProtocolVersion protocolVersion;
 };
 
@@ -124,9 +162,10 @@ struct ParsedResponseHead final {
 
     std::array<HttpHeaderView, kMaxHttpHeaderFields> headers;
     std::size_t headerCount{0};
-    std::uint16_t statusCode;
+    HttpStatusCode statusCode;
     HttpProtocolVersion protocolVersion;
     bool contentLengthFieldPresent{false};
+    bool contentTypeFieldPresent{false};
     bool sawTransferEncoding{false};
     detail::HttpConnectionOptions connectionOptions;
     detail::HttpUpgradeProtocols upgradeProtocols;
@@ -167,9 +206,12 @@ using ResponsePlanningResult = std::variant<
     const auto code = statusLine.substr(separator + 1, 3);
     const auto [end, ec] = std::from_chars(
         code.data(), code.data() + code.size(), statusCode);
-    if (ec != std::errc{} || end != code.data() + code.size() ||
-        !detail::httpStatusCodeValid(
-            static_cast<std::uint16_t>(statusCode))) {
+    if (ec != std::errc{} || end != code.data() + code.size()) {
+        return Http1ClientResponseParseError::kInvalidStatusCode;
+    }
+    const auto parsedStatus = HttpStatusCode::tryFromValue(
+        static_cast<std::uint16_t>(statusCode));
+    if (!parsedStatus) {
         return Http1ClientResponseParseError::kInvalidStatusCode;
     }
 
@@ -182,7 +224,7 @@ using ResponsePlanningResult = std::variant<
     }
 
     return ParsedStatusLine{
-        .statusCode = static_cast<std::uint16_t>(statusCode),
+        .statusCode = *parsedStatus,
         .protocolVersion = version == "HTTP/1.1"
             ? HttpProtocolVersion::kHttp11
             : HttpProtocolVersion::kHttp10};
@@ -256,7 +298,7 @@ using ResponsePlanningResult = std::variant<
 [[nodiscard]] std::optional<Http1ClientRequestContentSignal>
 requestContentSignal(
     detail::Http1ClientRequestContentPhase phase,
-    std::uint16_t statusCode,
+    HttpStatusCode statusCode,
     bool responseWillClose) noexcept {
     if (responseWillClose &&
         (phase ==
@@ -266,14 +308,14 @@ requestContentSignal(
              detail::Http1ClientRequestContentPhase::kContinueReceived)) {
         return Http1ClientRequestContentSignal::kExchangeComplete;
     }
-    if (statusCode == 100) {
+    if (statusCode == http_status::kContinue) {
         return phase ==
                 detail::Http1ClientRequestContentPhase::kAwaitingContinue
             ? std::optional<Http1ClientRequestContentSignal>(
                   Http1ClientRequestContentSignal::kContinue)
             : std::nullopt;
     }
-    if (statusCode >= 200) {
+    if (statusCode.isFinal()) {
         // A final response cancels content only while Expect still gates it.
         // Once 100 Continue releases the writer, RFC 9110 section 7.5 says the
         // client should keep sending the request unless the server explicitly
@@ -353,9 +395,15 @@ receiveContinue(
 
     const auto contentSemantics = detail::httpResponseContentSemantics(
         request.method(), output.statusCode);
+    detail::HttpInterimResponseHeaderValidator interimHeaders(
+        detail::HttpFieldListRole::kRecipient);
     const bool framingFieldsApply =
         contentSemantics ==
         detail::HttpResponseContentSemantics::kWithContent;
+    const bool resetContentRequiresEmpty =
+        output.statusCode == http_status::kResetContent &&
+        contentSemantics !=
+            detail::HttpResponseContentSemantics::kConnectTunnel;
 
     auto remaining = firstLineEnd == std::string_view::npos
         ? std::string_view{}
@@ -372,7 +420,13 @@ receiveContinue(
 
         const auto name = line.substr(0, colon);
         const auto value = detail::httpTrimOws(line.substr(colon + 1));
-        if (!isValidHttpHeaderName(name) || !isValidHttpHeaderValue(value)) {
+        const bool fieldsValid = contentSemantics ==
+                detail::HttpResponseContentSemantics::kInformational
+            ? interimHeaders.validate(name, value) ==
+                detail::HttpInterimResponseHeaderValidationStatus::kOk
+            : isValidHttpHeaderName(name) &&
+                isValidHttpHeaderValue(value);
+        if (!fieldsValid) {
             return Http1ClientResponseParseError::kInvalidHeader;
         }
         if (output.headerCount == kMaxHttpHeaderFields) {
@@ -386,7 +440,7 @@ receiveContinue(
             // Content-Length parsing. HEAD, non-101 informational, 204, 304,
             // and successful CONNECT therefore ignore this field for framing.
             // A 101 still records its forbidden presence for handshake checks.
-            if (framingFieldsApply) {
+            if (framingFieldsApply || resetContentRequiresEmpty) {
                 switch (output.contentLength.parseField(value)) {
                     case detail::HttpContentLengthParseStatus::kOk:
                         break;
@@ -395,6 +449,18 @@ receiveContinue(
                     case detail::HttpContentLengthParseStatus::kConflicting:
                         return Http1ClientResponseParseError::kConflictingContentLength;
                 }
+            }
+        } else if (detail::httpAsciiEqualsIgnoreCase(name, "Content-Type")) {
+            if (output.contentTypeFieldPresent ||
+                !detail::isValidHttpContentTypeFieldValue(value)) {
+                return Http1ClientResponseParseError::kInvalidHeader;
+            }
+            output.contentTypeFieldPresent = true;
+        } else if (detail::httpAsciiEqualsIgnoreCase(
+                       name, "Content-Encoding")) {
+            if (!detail::isValidHttpContentEncodingFieldValue(
+                    value, detail::HttpFieldListRole::kRecipient)) {
+                return Http1ClientResponseParseError::kInvalidHeader;
             }
         } else if (detail::httpAsciiEqualsIgnoreCase(name, "Connection")) {
             if (output.connectionOptions.parseField(
@@ -484,6 +550,14 @@ receiveContinue(
             std::nullopt);
     }
 
+    const bool resetContentRequiresEmpty =
+        response.statusCode == http_status::kResetContent;
+    const auto contentLength = response.contentLength.value();
+    if (resetContentRequiresEmpty &&
+        contentLength.has_value() && *contentLength != 0) {
+        return Http1ClientResponseParseError::kInvalidContentLength;
+    }
+
     const auto persistence = finalResponsePersistence(request, response);
     const auto persistentContentSignal = requestContentSignal(
         requestContentPhase,
@@ -496,7 +570,6 @@ receiveContinue(
             persistentContentSignal);
     }
 
-    const auto contentLength = response.contentLength.value();
     const auto transferEncoding = response.transferEncoding.value();
     if (response.sawTransferEncoding) {
         if (contentLength.has_value()) {
@@ -507,10 +580,24 @@ receiveContinue(
             return Http1ClientResponseParseError::kInvalidTransferEncoding;
         }
         if (const auto* finalChunked = transferEncoding->finalChunked()) {
+            if (resetContentRequiresEmpty) {
+                return detail::Http1ClientResponsePlanAccess::
+                    zeroContentChunked(
+                        finalChunked->transferCodings(),
+                        persistence,
+                        persistentContentSignal);
+            }
             return detail::Http1ClientResponsePlanAccess::chunked(
                 finalChunked->transferCodings(),
                 persistence,
                 persistentContentSignal);
+        }
+        if (resetContentRequiresEmpty) {
+            return detail::Http1ClientResponsePlanAccess::
+                zeroContentCloseDelimited(
+                    transferEncoding->nonChunked()->transferCodings(),
+                    requestContentSignal(
+                        requestContentPhase, response.statusCode, true));
         }
         return detail::Http1ClientResponsePlanAccess::closeDelimited(
             transferEncoding->nonChunked()->transferCodings(),
@@ -519,6 +606,11 @@ receiveContinue(
     }
 
     if (contentLength.has_value()) {
+        if (resetContentRequiresEmpty) {
+            return detail::Http1ClientResponsePlanAccess::
+                zeroContentKnownLength(
+                    persistence, persistentContentSignal);
+        }
         return detail::Http1ClientResponsePlanAccess::knownLength(
             *contentLength,
             persistence,
@@ -527,6 +619,13 @@ receiveContinue(
 
     // RFC 9112 section 6.3: a body-allowed response with no declared
     // length is delimited by server close and cannot return to a pool.
+    if (resetContentRequiresEmpty) {
+        return detail::Http1ClientResponsePlanAccess::
+            zeroContentCloseDelimited(
+                {},
+                requestContentSignal(
+                    requestContentPhase, response.statusCode, true));
+    }
     return detail::Http1ClientResponsePlanAccess::closeDelimited(
         {},
         requestContentSignal(
@@ -657,11 +756,13 @@ Http1ClientResponseParseResult Http1ClientResponseParser::parse(
     if (informational) {
         ++informationalResponseCount_;
     }
-    if (parsed.statusCode == 100 && !closingInformational) {
+    if (parsed.statusCode == http_status::kContinue &&
+        !closingInformational) {
         requestContentPhase_ = receiveContinue(requestContentPhase_);
     }
     if (closingInformational ||
-        parsed.statusCode == 101 || parsed.statusCode >= 200) {
+        parsed.statusCode == http_status::kSwitchingProtocols ||
+        parsed.statusCode.isFinal()) {
         phase_ = Phase::kComplete;
     }
     return result;

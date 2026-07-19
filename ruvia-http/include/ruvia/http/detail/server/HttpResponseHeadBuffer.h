@@ -28,12 +28,13 @@ public:
     void append(char value);
     void appendUnsigned(std::uint64_t value);
     void reserveAdditional(std::size_t size);
-    [[nodiscard]] std::string_view view() const noexcept;
+    [[nodiscard]] std::string_view view() const & noexcept;
+    [[nodiscard]] std::string_view view() const && = delete;
     [[nodiscard]] bool canAppendOnStack(std::size_t size) const noexcept;
 
     // Bulk fast path: returns a raw cursor when `bound` bytes are guaranteed to
     // fit in the stack buffer, so callers can emit without per-append checks.
-    [[nodiscard]] char* stackCursor(std::size_t bound) noexcept {
+    [[nodiscard]] char* stackCursor(std::size_t bound) & noexcept {
         auto* const stackState = std::get_if<StackState>(&state_);
         if (stackState == nullptr ||
             bound > stack_.size() - stackState->used) {
@@ -41,6 +42,7 @@ public:
         }
         return stack_.data() + stackState->used;
     }
+    [[nodiscard]] char* stackCursor(std::size_t) && = delete;
 
     void commitStack(const char* end) noexcept {
         std::get<StackState>(state_).used =

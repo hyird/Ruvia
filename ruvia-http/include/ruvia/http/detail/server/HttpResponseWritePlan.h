@@ -17,7 +17,7 @@ public:
         return requestMethod_;
     }
 
-    [[nodiscard]] std::uint16_t responseStatus() const noexcept {
+    [[nodiscard]] HttpStatusCode responseStatus() const noexcept {
         return responseStatus_;
     }
 
@@ -49,12 +49,13 @@ public:
     }
 
 private:
-    friend HttpResponseBodyPlan httpResponseBodyPlan(HttpKnownMethod, std::uint16_t) noexcept;
+    friend HttpResponseBodyPlan httpResponseBodyPlan(
+        HttpKnownMethod, HttpStatusCode) noexcept;
     friend class HttpBufferedResponseWritePlan;
 
     constexpr HttpResponseBodyPlan(
         HttpKnownMethod requestMethod,
-        std::uint16_t responseStatus,
+        HttpStatusCode responseStatus,
         ResponseWritePolicy policy,
         HttpResponseContentSemantics semantics) noexcept
         : requestMethod_(requestMethod),
@@ -63,7 +64,7 @@ private:
           semantics_(semantics) {}
 
     HttpKnownMethod requestMethod_;
-    std::uint16_t responseStatus_;
+    HttpStatusCode responseStatus_;
     ResponseWritePolicy policy_;
     HttpResponseContentSemantics semantics_;
 };
@@ -73,7 +74,7 @@ static_assert(sizeof(HttpResponseBodyPlan) <= 12);
 
 [[nodiscard]] inline HttpResponseBodyPlan httpResponseBodyPlan(
     HttpKnownMethod requestMethod,
-    std::uint16_t statusCode) noexcept {
+    HttpStatusCode statusCode) noexcept {
     const auto policy = responseWritePolicy(statusCode);
     return HttpResponseBodyPlan(
         requestMethod,
@@ -88,7 +89,7 @@ public:
         return bodyPlan_.requestMethod();
     }
 
-    [[nodiscard]] std::uint16_t responseStatus() const noexcept {
+    [[nodiscard]] HttpStatusCode responseStatus() const noexcept {
         return bodyPlan_.responseStatus();
     }
 

@@ -2,6 +2,7 @@
 
 #include <array>
 #include <charconv>
+#include <cstdint>
 #include <cstring>
 #include <system_error>
 
@@ -10,9 +11,12 @@
 #include "ruvia/http/HttpLimits.h"
 #include "ruvia/http/detail/HeaderAcceptUtils.h"
 #include "ruvia/http/detail/HeaderTokenUtils.h"
+#include "ruvia/http/detail/HttpCorsFields.h"
 #include "ruvia/http/detail/HttpExpectations.h"
+#include "ruvia/http/detail/HttpContentCoding.h"
 #include "ruvia/http/detail/HttpRequestContentSemantics.h"
 #include "ruvia/http/detail/client/HttpOrigin.h"
+#include "ruvia/http/detail/parser/HttpParserSyntax.h"
 #include "ruvia/http/detail/parser/HttpRequestTarget.h"
 
 namespace ruvia::detail {
@@ -89,12 +93,13 @@ namespace {
 constexpr std::string_view kHttp11RequestLineSuffix = " HTTP/1.1\r\n";
 constexpr std::string_view kHostPrefix = "Host: ";
 constexpr std::string_view kContentLengthPrefix = "Content-Length: ";
-constexpr std::string_view kExpectContinue = "Expect: 100-continue\r\n";
+constexpr std::string_view kExpectPrefix = "Expect: ";
 constexpr std::string_view kConnectionClose = "Connection: close\r\n";
 constexpr std::string_view kCrlf = "\r\n";
 
 struct RequestHeaderFacts final {
     std::size_t wireBytes{0};
+    std::uint32_t singletonHeaders{0};
     detail::HttpConnectionOptions connectionOptions;
     detail::HttpUpgradeProtocols upgradeProtocols;
     bool hasContentType{false};
@@ -223,6 +228,7 @@ struct RequestHeaderFacts final {
             error = Http1ClientRequestPrepareError::kInvalidHeader;
             return false;
         }
+        const auto kind = detail::classifyRequestHeader(name);
         if (detail::httpAsciiEqualsIgnoreCase(name, "Host")) {
             error = Http1ClientRequestPrepareError::kHostHeaderManagedByWriter;
             return false;
@@ -242,6 +248,22 @@ struct RequestHeaderFacts final {
         if (detail::httpAsciiEqualsIgnoreCase(name, "Expect")) {
             error = Http1ClientRequestPrepareError::kExpectHeaderManagedByWriter;
             return false;
+        }
+        if ((kind == detail::RequestHeaderKind::kOrigin &&
+             !detail::isValidHttpOriginFieldValue(value)) ||
+            (kind == detail::RequestHeaderKind::kAccessControlRequestMethod &&
+             !detail::isValidHttpCorsRequestMethod(value)) ||
+            (kind == detail::RequestHeaderKind::kAccessControlRequestHeaders &&
+             !detail::isValidHttpCorsRequestHeaderNames(value))) {
+            error = Http1ClientRequestPrepareError::kInvalidHeader;
+            return false;
+        }
+        if (const auto bit = detail::singletonRequestHeaderBit(kind); bit != 0) {
+            if ((facts.singletonHeaders & bit) != 0) {
+                error = Http1ClientRequestPrepareError::kInvalidHeader;
+                return false;
+            }
+            facts.singletonHeaders |= bit;
         }
         if (detail::httpAsciiEqualsIgnoreCase(name, "Connection")) {
             if (facts.connectionOptions.parseField(
@@ -271,13 +293,18 @@ struct RequestHeaderFacts final {
             }
             facts.hasTe = true;
         } else if (detail::httpAsciiEqualsIgnoreCase(name, "Content-Type")) {
-            detail::HttpMediaTypeParts parts;
-            if (facts.hasContentType ||
-                !detail::httpParseMediaType(value, false, parts)) {
+            if (!detail::isValidHttpContentTypeFieldValue(value)) {
                 error = Http1ClientRequestPrepareError::kInvalidHeader;
                 return false;
             }
             facts.hasContentType = true;
+        } else if (detail::httpAsciiEqualsIgnoreCase(
+                       name, "Content-Encoding")) {
+            if (!detail::isValidHttpContentEncodingFieldValue(
+                    value, detail::HttpFieldListRole::kSender)) {
+                error = Http1ClientRequestPrepareError::kInvalidHeader;
+                return false;
+            }
         }
 
         if (!addHeadBytes(facts.wireBytes, name.size()) ||
@@ -417,7 +444,11 @@ void appendHeaders(
          (!addHeadBytes(headBytes, kContentLengthPrefix.size()) ||
           !addHeadBytes(headBytes, decimalDigits(contentBytes->value().size())) ||
           !addHeadBytes(headBytes, kCrlf.size()))) ||
-        (expectContinue && !addHeadBytes(headBytes, kExpectContinue.size())) ||
+        (expectContinue &&
+         (!addHeadBytes(headBytes, kExpectPrefix.size()) ||
+          !addHeadBytes(
+              headBytes, detail::kHttpContinueExpectationToken.size()) ||
+          !addHeadBytes(headBytes, kCrlf.size()))) ||
         (generateConnectionClose &&
          !addHeadBytes(headBytes, kConnectionClose.size())) ||
         !addHeadBytes(headBytes, kCrlf.size())) {
@@ -448,7 +479,9 @@ void appendHeaders(
         appendView(cursor, kCrlf);
     }
     if (expectContinue) {
-        appendView(cursor, kExpectContinue);
+        appendView(cursor, kExpectPrefix);
+        appendView(cursor, detail::kHttpContinueExpectationToken);
+        appendView(cursor, kCrlf);
     }
     if (generateConnectionClose) {
         appendView(cursor, kConnectionClose);
@@ -510,7 +543,7 @@ std::string_view http1ClientRequestPrepareErrorMessage(
         case Http1ClientRequestPrepareError::kTeConnectionOptionRequired:
             return "HTTP/1 TE requires Connection: TE";
         case Http1ClientRequestPrepareError::kExpectationWithoutContent:
-            return "100-continue requires non-empty request content";
+            return "Continue expectation requires non-empty request content";
         case Http1ClientRequestPrepareError::kContentForbiddenForMethod:
             return "request method forbids content";
         case Http1ClientRequestPrepareError::kOptionsContentTypeRequired:

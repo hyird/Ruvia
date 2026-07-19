@@ -163,26 +163,34 @@ public:
     }
 
     [[nodiscard]] constexpr const Http2RemoteContentAllowedWithoutLength*
-    allowedWithoutLength() const noexcept {
+    allowedWithoutLength() const & noexcept {
         return std::get_if<Http2RemoteContentAllowedWithoutLength>(&state_);
     }
+    [[nodiscard]] constexpr const Http2RemoteContentAllowedWithoutLength*
+    allowedWithoutLength() const && = delete;
 
     [[nodiscard]] constexpr const Http2RemoteContentAllowedKnownLength*
-    allowedKnownLength() const noexcept {
+    allowedKnownLength() const & noexcept {
         return std::get_if<Http2RemoteContentAllowedKnownLength>(&state_);
     }
+    [[nodiscard]] constexpr const Http2RemoteContentAllowedKnownLength*
+    allowedKnownLength() const && = delete;
 
     [[nodiscard]] constexpr const Http2RemoteContentMetadataOnlyWithoutLength*
-    metadataOnlyWithoutLength() const noexcept {
+    metadataOnlyWithoutLength() const & noexcept {
         return std::get_if<
             Http2RemoteContentMetadataOnlyWithoutLength>(&state_);
     }
+    [[nodiscard]] constexpr const Http2RemoteContentMetadataOnlyWithoutLength*
+    metadataOnlyWithoutLength() const && = delete;
 
     [[nodiscard]] constexpr const Http2RemoteContentMetadataOnlyKnownLength*
-    metadataOnlyKnownLength() const noexcept {
+    metadataOnlyKnownLength() const & noexcept {
         return std::get_if<
             Http2RemoteContentMetadataOnlyKnownLength>(&state_);
     }
+    [[nodiscard]] constexpr const Http2RemoteContentMetadataOnlyKnownLength*
+    metadataOnlyKnownLength() const && = delete;
 
     [[nodiscard]] bool terminalLengthValid() const noexcept {
         const auto* known = allowedKnownLength();

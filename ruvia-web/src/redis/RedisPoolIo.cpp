@@ -123,7 +123,7 @@ Task<RedisValue> RedisPool::readReply(
 
         auto readCompletion = co_await asyncSocketReadSome(
             connection,
-            std::span<char>(connection.readBuffer.data(), connection.readBuffer.size()),
+            std::span<char>(connection.readBuffer),
             timeout);
         const auto readEc = readCompletion.errorCode();
         const auto bytesRead = readCompletion.result();

@@ -2,6 +2,8 @@
 
 #include <string_view>
 
+#include "ruvia/http/detail/BorrowedView.h"
+
 namespace ruvia::detail {
 
 [[nodiscard]] inline std::string_view httpTrimWeakEtagPrefix(std::string_view value) noexcept {
@@ -10,6 +12,9 @@ namespace ruvia::detail {
     }
     return value;
 }
+
+template <HttpTemporaryOwningCharString Value>
+std::string_view httpTrimWeakEtagPrefix(Value&&) = delete;
 
 [[nodiscard]] inline bool httpIsWeakEtag(std::string_view value) noexcept {
     return value.size() >= 2 && value[0] == 'W' && value[1] == '/';

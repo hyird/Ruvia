@@ -25,8 +25,8 @@ Task<QueryResult> detail::MariaDbPool::execute(
     try {
         co_return co_await executeOnSlot(
             slots_[slotIndex],
-            std::string_view(sql.data(), sql.size()),
-            std::span<const DbValue>(params.data(), params.size()),
+            std::string_view(sql),
+            std::span<const DbValue>(params),
             resource);
     } catch (...) {
         closeSlot(slots_[slotIndex]);
@@ -54,13 +54,13 @@ Task<DbStreamResult> detail::MariaDbPool::stream(
         if (!params.empty()) {
             interpolatedSql = interpolateSql(
                 *slot.connection,
-                std::string_view(sql.data(), sql.size()),
-                std::span<const DbValue>(params.data(), params.size()),
+                std::string_view(sql),
+                std::span<const DbValue>(params),
                 resource);
             sql = std::move(interpolatedSql);
         }
 
-        co_await runMysqlQuery(slot, std::string_view(sql.data(), sql.size()), deadline);
+        co_await runMysqlQuery(slot, std::string_view(sql), deadline);
         auto* rawResult = mysql_use_result(slot.connection);
         if (rawResult == nullptr) {
             if (mysql_field_count(slot.connection) != 0) {
@@ -168,8 +168,8 @@ Task<QueryResult> detail::MariaDbPool::executeOnTransactionSlot(
     try {
         co_return co_await executeOnSlot(
             slots_[slot],
-            std::string_view(sql.data(), sql.size()),
-            std::span<const DbValue>(params.data(), params.size()),
+            std::string_view(sql),
+            std::span<const DbValue>(params),
             resource);
     } catch (...) {
         closeSlot(slots_[slot]);
@@ -198,7 +198,7 @@ Task<QueryResult> detail::MariaDbPool::executeOnSlot(
             sql,
             params,
             resource);
-        sql = std::string_view(interpolatedSql.data(), interpolatedSql.size());
+        sql = interpolatedSql;
     }
 
     auto& connection = *slot.connection;

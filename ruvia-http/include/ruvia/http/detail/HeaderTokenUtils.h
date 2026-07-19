@@ -34,6 +34,9 @@ inline void httpAppendDecodedQuotedPairs(std::pmr::string& out, std::string_view
     return value;
 }
 
+template <HttpTemporaryOwningCharString Value>
+std::string_view httpTrimQuotes(Value&&) = delete;
+
 template <typename Predicate>
 [[nodiscard]] inline std::string_view httpFindHeaderToken(std::string_view value, Predicate&& predicate) noexcept {
     while (!value.empty()) {
@@ -49,6 +52,9 @@ template <typename Predicate>
     }
     return {};
 }
+
+template <HttpTemporaryOwningCharString Value, typename Predicate>
+std::string_view httpFindHeaderToken(Value&&, Predicate&&) = delete;
 
 // Index of the next `delimiter` in `value` at/after `start` that is not inside an
 // RFC quoted-string (honoring quoted-pairs, so a `\"` does not end the string), or

@@ -1,3 +1,6 @@
+// Runtime configuration: dotenv, app-wide middleware via App::use, memory
+// pool, timeouts, limits, compression and optional TLS.
+
 #include <chrono>
 #include <filesystem>
 #include <optional>
@@ -23,6 +26,9 @@ std::filesystem::path pathOrEmpty(std::optional<std::string_view> value) {
 
 }  // namespace
 
+// Registered app-wide below (App::use): one shared instance runs before the
+// controller and route middlewares of EVERY matched route, in use() order.
+// Requests that match no route (404/405) never enter a middleware chain.
 class GlobalHeaderMiddleware final : public ruvia::Middleware<GlobalHeaderMiddleware> {
 public:
     ruvia::Task<void> handle(ruvia::Context& c, ruvia::Next& next) {
@@ -33,7 +39,7 @@ public:
 
 class RuntimeController final : public ruvia::Controller<RuntimeController> {
 public:
-    RUVIA_CONTROLLER_GROUP("/runtime", GlobalHeaderMiddleware)
+    RUVIA_CONTROLLER_GROUP("/runtime")
     RUVIA_ROUTES_BEGIN
     RUVIA_GET("/", runtime);
     RUVIA_ROUTES_END
@@ -47,6 +53,7 @@ private:
 int main() {
     auto& app = ruvia::app();
     app.loadDotenv();
+    app.use<GlobalHeaderMiddleware>();
 
     ruvia::MemoryPoolConfig memory;
     memory.requestInitialBufferBytes = 4096;

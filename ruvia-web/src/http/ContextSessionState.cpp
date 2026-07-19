@@ -121,7 +121,7 @@ void ContextSessionState::regenerate() {
     }
 }
 
-std::string_view ContextSessionState::data() const noexcept {
+std::string_view ContextSessionState::data() const & noexcept {
     if (const auto* state = std::get_if<SessionLoaded>(&value_)) {
         return state->data;
     }

@@ -6,7 +6,10 @@
 #include <utility>
 
 #include "ruvia/http/detail/HeaderAcceptUtils.h"
+#include "ruvia/http/detail/HttpCorsFields.h"
 #include "ruvia/http/detail/HttpExpectations.h"
+#include "ruvia/http/detail/HttpHeaderSectionSize.h"
+#include "ruvia/http/detail/HttpContentCoding.h"
 #include "ruvia/http/detail/HttpRequestContentSemantics.h"
 #include "ruvia/http/detail/HttpResponseBodyAccess.h"
 #include "ruvia/http/detail/HttpResponseContentSemantics.h"
@@ -19,6 +22,7 @@
 #include "ruvia/http/detail/parser/HttpRequestTarget.h"
 #include "ruvia/http/detail/server/HttpFinalResponseControlPlan.h"
 #include "ruvia/http/detail/server/HttpResponseTrailers.h"
+#include "ruvia/http/detail/websocket/HttpWebSocketHandshakeFields.h"
 
 namespace ruvia::detail {
 namespace {
@@ -38,16 +42,31 @@ struct Http2OutboundRequestHeaderFacts final {
     bool allowHost,
     bool allowTrailers,
     HttpRequestContentIndication contentIndication,
+    HttpHeaderSectionSize& sectionSize,
+    std::size_t generatedFields = 0,
     Http2OutboundRequestHeaderFacts* facts = nullptr) noexcept {
+    if (generatedFields > kMaxHttpHeaderFields ||
+        headers.size() > kMaxHttpHeaderFields - generatedFields) {
+        return false;
+    }
     std::uint32_t singletonHeaders = 0;
     bool hostSeen = false;
     bool hasContentType = false;
     HttpRequestExpectations expectations;
     for (const auto& header : headers) {
-        if (!http2IsValidRegularHeader(header.name(), header.value())) {
+        if (!http2IsValidRegularHeader(header.name(), header.value()) ||
+            !sectionSize.add(header.name(), header.value())) {
             return false;
         }
         const auto kind = classifyRequestHeader(header.name());
+        if ((kind == RequestHeaderKind::kOrigin &&
+             !isValidHttpOriginFieldValue(header.value())) ||
+            (kind == RequestHeaderKind::kAccessControlRequestMethod &&
+             !isValidHttpCorsRequestMethod(header.value())) ||
+            (kind == RequestHeaderKind::kAccessControlRequestHeaders &&
+             !isValidHttpCorsRequestHeaderNames(header.value()))) {
+            return false;
+        }
         // Content-Length belongs exclusively to Http2RequestContent, even when a raw
         // value happens to match. Accepting both would restore two framing truths.
         if (kind == RequestHeaderKind::kContentLength) {
@@ -66,12 +85,16 @@ struct Http2OutboundRequestHeaderFacts final {
             hostSeen = true;
         }
         if (kind == RequestHeaderKind::kContentType) {
-            HttpMediaTypeParts parts;
             if (hasContentType ||
-                !httpParseMediaType(header.value(), false, parts)) {
+                !isValidHttpContentTypeFieldValue(header.value())) {
                 return false;
             }
             hasContentType = true;
+        }
+        if (kind == RequestHeaderKind::kContentEncoding &&
+            !isValidHttpContentEncodingFieldValue(
+                header.value(), HttpFieldListRole::kSender)) {
+            return false;
         }
         if (kind == RequestHeaderKind::kExpect) {
             expectations.parseField(header.value());
@@ -84,7 +107,7 @@ struct Http2OutboundRequestHeaderFacts final {
         }
     }
     if (!httpClientExpectationIsValid(
-            expectations.has100Continue(), contentIndication)) {
+            expectations.hasContinue(), contentIndication)) {
         return false;
     }
     if (facts != nullptr) {
@@ -100,7 +123,8 @@ struct Http2OutboundRequestHeaderFacts final {
     std::string_view path,
     std::span<const HttpHeaderView> headers,
     bool explicitContent,
-    HttpRequestContentIndication contentIndication) noexcept {
+    HttpRequestContentIndication contentIndication,
+    std::string_view contentLengthValue) noexcept {
     if (!http2IsValidOutboundMethod(method) ||
         !isValidUriScheme(scheme) ||
         (authority.has_value() &&
@@ -113,6 +137,14 @@ struct Http2OutboundRequestHeaderFacts final {
         return false;
     }
     const auto defaultPort = httpUriSchemeDefaultPort(scheme);
+    HttpHeaderSectionSize sectionSize;
+    if (!sectionSize.add(":method", method) ||
+        !sectionSize.add(":scheme", scheme) ||
+        (authority.has_value() &&
+         !sectionSize.add(":authority", *authority)) ||
+        !sectionSize.add(":path", path)) {
+        return false;
+    }
     Http2OutboundRequestHeaderFacts facts;
     if (!http2AreValidOutboundRequestHeaders(
             authority,
@@ -121,7 +153,13 @@ struct Http2OutboundRequestHeaderFacts final {
             /*allowHost=*/true,
             /*allowTrailers=*/true,
             contentIndication,
+            sectionSize,
+            contentLengthValue.empty() ? 0 : 1,
             &facts)) {
+        return false;
+    }
+    if (!contentLengthValue.empty() &&
+        !sectionSize.add("content-length", contentLengthValue)) {
         return false;
     }
     if (!explicitContent) {
@@ -150,13 +188,13 @@ struct Http2OutboundRequestHeaderFacts final {
             sawVersion = true;
         }
     }
-    return sawVersion;
+    return sawVersion && webSocketClientOfferHeadersValid(headers);
 }
 
 [[nodiscard]] bool http2IsValidConnectResponseHead(
     const HttpResponse& response) noexcept {
     const auto& body = responseBody(response);
-    if (response.status() < 200 || response.status() >= 300 ||
+    if (!response.status().isSuccessful() ||
         body.size() != 0 || body.file().has_value()) {
         return false;
     }
@@ -196,20 +234,6 @@ Http2RequestHeadSubmitResult Http2Connection::submitRegularRequestHead(
     const auto contentIndication = contentWillFollow
         ? HttpRequestContentIndication::kWillFollow
         : HttpRequestContentIndication::kNoContent;
-    // Validate the entire semantic head before touching HPACK storage, outbound
-    // bytes, the stream method, local-content accounting, or lifecycle state.
-    if (!http2IsValidOutboundRegularRequestHead(
-            method,
-            scheme,
-            authority,
-            path,
-            headers,
-            !withoutContent,
-            contentIndication)) {
-        return Http2RequestHeadSubmitResult::makeFailure(
-            Http2RequestHeadSubmitError::kInvalidMessage);
-    }
-
     Http2EndStream endStream = Http2EndStream::kKeepOpen;
     std::array<char, 20> lengthBuffer{};
     std::size_t lengthBytes = 0;
@@ -231,6 +255,23 @@ Http2RequestHeadSubmitResult Http2Connection::submitRegularRequestHead(
             return Http2RequestHeadSubmitResult::makeFailure(
                 Http2RequestHeadSubmitError::kInvalidMessage);
         }
+    }
+
+    const auto contentLengthValue = std::string_view(
+        lengthBuffer.data(), lengthBytes);
+    // Validate the entire semantic head and decoded-size budget before touching
+    // HPACK storage, outbound bytes, stream metadata, or lifecycle state.
+    if (!http2IsValidOutboundRegularRequestHead(
+            method,
+            scheme,
+            authority,
+            path,
+            headers,
+            !withoutContent,
+            contentIndication,
+            contentLengthValue)) {
+        return Http2RequestHeadSubmitResult::makeFailure(
+            Http2RequestHeadSubmitError::kInvalidMessage);
     }
 
     auto* stream = admitLocalRequestStream();
@@ -259,8 +300,7 @@ Http2RequestHeadSubmitResult Http2Connection::submitRegularRequestHead(
             HpackStaticIndex::kContentLength,
             std::string_view(lengthBuffer.data(), lengthBytes));
     }
-    appendResponseHeaderFrames(
-        *stream, std::string_view(block.data(), block.size()), endStream);
+    appendResponseHeaderFrames(*stream, std::string_view(block), endStream);
     if (withoutContent) {
         stream->beginLocalContentForbidden();
     } else if (knownLengthContent != nullptr) {
@@ -286,14 +326,18 @@ Http2RequestHeadSubmitResult Http2Connection::submitConnectRequestHead(
     }
 
     RequestTargetView target;
+    HttpHeaderSectionSize sectionSize;
     if (!parseRequestTarget(HttpKnownMethod::kConnect, authority, target) ||
+        !sectionSize.add(":method", "CONNECT") ||
+        !sectionSize.add(":authority", authority) ||
         !http2AreValidOutboundRequestHeaders(
             authority,
             0,
             headers,
             /*allowHost=*/false,
             /*allowTrailers=*/false,
-            HttpRequestContentIndication::kNoContent)) {
+            HttpRequestContentIndication::kNoContent,
+            sectionSize)) {
         return Http2RequestHeadSubmitResult::makeFailure(
             Http2RequestHeadSubmitError::kInvalidMessage);
     }
@@ -315,7 +359,7 @@ Http2RequestHeadSubmitResult Http2Connection::submitConnectRequestHead(
     }
     appendResponseHeaderFrames(
         *stream,
-        std::string_view(block.data(), block.size()),
+        std::string_view(block),
         Http2EndStream::kKeepOpen);
     stream->assignRequestMethod("CONNECT");
     stream->beginLocalContentForbidden();
@@ -346,18 +390,25 @@ Http2RequestHeadSubmitResult Http2Connection::submitExtendedConnectRequestHead(
     const auto encodedProtocol = websocket
         ? std::string_view("websocket")
         : protocol;
+    HttpHeaderSectionSize sectionSize;
     if (!isValidHttpHeaderName(protocol) ||
         !isValidUriScheme(scheme) ||
         (websocket && !websocketScheme) ||
         !http2IsValidRequestAuthority(scheme, authority) ||
         !http2IsValidExtendedConnectPath(scheme, path) ||
+        !sectionSize.add(":method", "CONNECT") ||
+        !sectionSize.add(":protocol", encodedProtocol) ||
+        !sectionSize.add(":scheme", scheme) ||
+        !sectionSize.add(":authority", authority) ||
+        !sectionSize.add(":path", path) ||
         !http2AreValidOutboundRequestHeaders(
             authority,
             httpUriSchemeDefaultPort(scheme),
             headers,
             /*allowHost=*/!websocket,
             /*allowTrailers=*/false,
-            HttpRequestContentIndication::kNoContent) ||
+            HttpRequestContentIndication::kNoContent,
+            sectionSize) ||
         (websocket && !http2IsValidWebSocketConnectHeaders(headers))) {
         return Http2RequestHeadSubmitResult::makeFailure(
             Http2RequestHeadSubmitError::kInvalidMessage);
@@ -386,7 +437,7 @@ Http2RequestHeadSubmitResult Http2Connection::submitExtendedConnectRequestHead(
     }
     appendResponseHeaderFrames(
         *stream,
-        std::string_view(block.data(), block.size()),
+        std::string_view(block),
         Http2EndStream::kKeepOpen);
     stream->assignRequestMethod("CONNECT");
     stream->assignRequestScheme(scheme);
@@ -405,20 +456,34 @@ void Http2Connection::appendResponseHeaderFrames(
     // A HEADERS + CONTINUATION run must be an uninterrupted frame sequence for the same
     // stream (RFC 9113 §6.10). Appending them contiguously to the single outbound buffer
     // guarantees that ordering (replacing the coroutine writeHeaders' atomic write).
+    std::pmr::string tableSizeUpdate(resource_);
+    if (encoderTableSizeUpdatePending_) {
+        HpackEncoder::encodeDynamicTableSizeUpdate(
+            tableSizeUpdate, encoderDynamicTableSize_);
+    }
+
     const std::size_t maxFrame = peerSettings_.maxFrameSize();
     std::size_t offset = 0;
     bool first = true;
-    while (offset < headerBlock.size()) {
-        const auto chunk = std::min<std::size_t>(headerBlock.size() - offset, maxFrame);
+    while (offset < headerBlock.size() ||
+           (first && !tableSizeUpdate.empty())) {
+        const auto prefix = first
+            ? std::string_view(tableSizeUpdate)
+            : std::string_view{};
+        const auto chunk = std::min<std::size_t>(
+            headerBlock.size() - offset, maxFrame - prefix.size());
         const bool last = offset + chunk == headerBlock.size();
         const auto flags = static_cast<std::uint8_t>(
             (last ? kHttp2FlagEndHeaders : 0) |
             (first && http2EndsStream(endStream) ? kHttp2FlagEndStream : 0));
         output_.appendFrame(
             first ? Http2FrameType::kHeaders : Http2FrameType::kContinuation,
-            flags, stream.id(), headerBlock.substr(offset, chunk));
+            flags, stream.id(), prefix, headerBlock.substr(offset, chunk));
         offset += chunk;
         first = false;
+    }
+    if (!tableSizeUpdate.empty()) {
+        encoderTableSizeUpdatePending_ = false;
     }
 }
 
@@ -440,7 +505,7 @@ Http2BufferedResponseHeadSubmitResult Http2Connection::submitResponseHead(
             makeResponsePlanMismatchFailure();
     }
     const bool successfulConnect =
-        response.status() >= 200 && response.status() < 300 &&
+        response.status().isSuccessful() &&
         stream->tunnel().pending() != nullptr;
     if (successfulConnect) {
         return Http2BufferedResponseHeadSubmitResult::makeInvalidStateFailure();
@@ -468,11 +533,14 @@ Http2BufferedResponseHeadSubmitResult Http2Connection::submitResponseHead(
             : Http2BufferedResponseHeadSubmitResult::
                 makeInvalidMessageFailure();
     }
-    appendHttp2ResponseHeaders(
+    if (!appendHttp2ResponseHeaders(
         *stream,
         response,
         *headPlan,
-        *http2Control);
+        *http2Control)) {
+        return Http2BufferedResponseHeadSubmitResult::
+            makeInvalidMessageFailure();
+    }
     const auto endStream = writePlan.sendBody()
         ? Http2EndStream::kKeepOpen
         : Http2EndStream::kEndStream;
@@ -483,7 +551,7 @@ Http2BufferedResponseHeadSubmitResult Http2Connection::submitResponseHead(
     }
     appendResponseHeaderFrames(
         *stream,
-        std::string_view(stream->responseHeaderBlock().data(), stream->responseHeaderBlock().size()),
+        std::string_view(stream->responseHeaderBlock()),
         endStream);
     if (http2EndsStream(endStream)) {
         (void)stream->commitLocalHeadEndStream();
@@ -508,7 +576,7 @@ Http2StreamingResponseHeadSubmitResult Http2Connection::submitStreamingResponseH
         return Http2StreamingResponseHeadSubmitResult::makeClosedFailure();
     }
     const bool successfulConnect =
-        head.status() >= 200 && head.status() < 300 &&
+        head.status().isSuccessful() &&
         stream->tunnel().pending() != nullptr;
     if (role_ != Http2Role::kServer || !http2RemoteFinalHeadDecoded(*stream) ||
         stream->localSend().headPending() == nullptr || successfulConnect) {
@@ -542,11 +610,14 @@ Http2StreamingResponseHeadSubmitResult Http2Connection::submitStreamingResponseH
         return Http2StreamingResponseHeadSubmitResult::
             makeInvalidMessageFailure();
     }
-    appendHttp2ResponseHeaders(
+    if (!appendHttp2ResponseHeaders(
         *stream,
         streamHead.response(),
         *headPlan,
-        *http2Control);
+        *http2Control)) {
+        return Http2StreamingResponseHeadSubmitResult::
+            makeInvalidMessageFailure();
+    }
     const auto endStream =
         commitPlan.headDisposition() == ResponseStreamHeadDisposition::kMessageEnded
         ? Http2EndStream::kEndStream
@@ -561,7 +632,7 @@ Http2StreamingResponseHeadSubmitResult Http2Connection::submitStreamingResponseH
     }
     appendResponseHeaderFrames(
         *stream,
-        std::string_view(stream->responseHeaderBlock().data(), stream->responseHeaderBlock().size()),
+        std::string_view(stream->responseHeaderBlock()),
         endStream);
     if (commitPlan.headDisposition() ==
         ResponseStreamHeadDisposition::kTrailersOnly) {
@@ -597,7 +668,7 @@ Http2SubmitStatus Http2Connection::submitInterimResponseHead(
     }
     appendResponseHeaderFrames(
         *stream,
-        std::string_view(stream->responseHeaderBlock().data(), stream->responseHeaderBlock().size()),
+        std::string_view(stream->responseHeaderBlock()),
         Http2EndStream::kKeepOpen);
     http2ReleaseResponseHeaderBlock(*stream);
     return Http2SubmitStatus::kAccepted;
@@ -709,16 +780,16 @@ Http2SubmitStatus Http2Connection::submitConnectResponseHead(
     if (headPlan == nullptr) {
         return Http2SubmitStatus::kInvalidMessage;
     }
-    appendHttp2ResponseHeaders(
+    if (!appendHttp2ResponseHeaders(
         *stream,
         response,
         *headPlan,
-        *http2Control);
+        *http2Control)) {
+        return Http2SubmitStatus::kInvalidMessage;
+    }
     appendResponseHeaderFrames(
         *stream,
-        std::string_view(
-            stream->responseHeaderBlock().data(),
-            stream->responseHeaderBlock().size()),
+        std::string_view(stream->responseHeaderBlock()),
         Http2EndStream::kKeepOpen);
     (void)stream->acceptConnect();
     stream->beginLocalContentUnbounded();
@@ -733,7 +804,7 @@ Http2SubmitStatus Http2Connection::submitConnectResponseHead(
 Http2WebSocketHandshakeSubmitResult
 Http2Connection::submitWebSocketHandshake(
     std::uint32_t streamId,
-    WebSocketServerNegotiation negotiation) {
+    WebSocketServerNegotiation&& negotiation) {
     auto* stream = findStream(streamId);
     if (stream == nullptr || stream->isAborted()) {
         return Http2WebSocketHandshakeSubmitResult::makeFailure(
@@ -750,7 +821,7 @@ Http2Connection::submitWebSocketHandshake(
         negotiation);
     appendResponseHeaderFrames(
         *stream,
-        std::string_view(stream->responseHeaderBlock().data(), stream->responseHeaderBlock().size()),
+        std::string_view(stream->responseHeaderBlock()),
         Http2EndStream::kKeepOpen);
     (void)stream->acceptConnect();
     stream->beginLocalContentUnbounded();
@@ -759,7 +830,8 @@ Http2Connection::submitWebSocketHandshake(
     if (http2RemotePeerHalfClosed(*stream)) {
         events_.push_back(Http2Event::tunnelEnd(streamId));
     }
-    return Http2WebSocketHandshakeSubmitResult::makeSubmitted(negotiation);
+    return Http2WebSocketHandshakeSubmitResult::makeSubmitted(
+        std::move(negotiation));
 }
 
 Http2FinishSubmitStatus Http2Connection::finishResponse(
@@ -810,7 +882,7 @@ Http2FinishSubmitStatus Http2Connection::finishResponse(
     }
     appendResponseHeaderFrames(
         *stream,
-        std::string_view(trailerBlock.data(), trailerBlock.size()),
+        std::string_view(trailerBlock),
         Http2EndStream::kEndStream);
     (void)stream->commitLocalEndStream();
     return Http2FinishSubmitStatus::kAccepted;

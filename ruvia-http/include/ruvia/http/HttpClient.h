@@ -21,6 +21,7 @@
 #include <vector>
 
 #include "ruvia/http/HttpHeader.h"
+#include "ruvia/http/HttpStatus.h"
 #include "ruvia/http/detail/BorrowedView.h"
 #include "ruvia/http/HttpProtocolVersion.h"
 #include "ruvia/http/detail/PmrResource.h"
@@ -99,12 +100,12 @@ private:
 class HttpClientResponseHeader final {
 public:
     [[nodiscard]] std::string_view name() const & noexcept {
-        return std::string_view(name_.data(), name_.size());
+        return name_;
     }
     [[nodiscard]] std::string_view name() const && = delete;
 
     [[nodiscard]] std::string_view value() const & noexcept {
-        return std::string_view(value_.data(), value_.size());
+        return value_;
     }
     [[nodiscard]] std::string_view value() const && = delete;
 
@@ -214,10 +215,13 @@ struct HttpClientRequest {
         constexpr BorrowedText(std::string_view value) noexcept
             : value_(value) {}
 
+        constexpr BorrowedText(const char* value) noexcept
+            : value_(value) {}
+
         template <typename Traits, typename Allocator>
         constexpr BorrowedText(
             const std::basic_string<char, Traits, Allocator>& value) noexcept
-            : value_(value.data(), value.size()) {}
+            : value_(value) {}
 
         template <detail::HttpTemporaryOwningCharString String>
         BorrowedText(String&&) = delete;
@@ -227,10 +231,15 @@ struct HttpClientRequest {
             return *this;
         }
 
+        constexpr BorrowedText& operator=(const char* value) noexcept {
+            value_ = std::string_view(value);
+            return *this;
+        }
+
         template <typename Traits, typename Allocator>
         constexpr BorrowedText& operator=(
             const std::basic_string<char, Traits, Allocator>& value) noexcept {
-            value_ = std::string_view(value.data(), value.size());
+            value_ = std::string_view(value);
             return *this;
         }
 
@@ -258,9 +267,9 @@ struct HttpClientRequest {
         }
 
         friend constexpr bool operator==(
-            std::string_view lhs,
-            BorrowedText rhs) noexcept {
-            return lhs == rhs.value_;
+            BorrowedText lhs,
+            const char* rhs) noexcept {
+            return lhs.value_ == rhs;
         }
 
     private:
@@ -280,7 +289,7 @@ struct HttpClientRequest {
 
         template <std::size_t N>
         constexpr HeaderInit(const std::array<HttpHeaderView, N>& headers) noexcept
-            : headers_(headers.data(), headers.size()) {}
+            : headers_(headers) {}
 
         template <std::size_t N>
         HeaderInit(std::array<HttpHeaderView, N>&&) = delete;
@@ -303,7 +312,7 @@ struct HttpClientRequest {
 
         template <std::size_t N>
         constexpr HeaderInit& operator=(const std::array<HttpHeaderView, N>& headers) noexcept {
-            headers_ = std::span<const HttpHeaderView>(headers.data(), headers.size());
+            headers_ = std::span<const HttpHeaderView>(headers);
             return *this;
         }
 
@@ -358,7 +367,7 @@ public:
     HttpClientResponseHead(HttpClientResponseHead&&) noexcept = default;
     HttpClientResponseHead& operator=(HttpClientResponseHead&&) = delete;
 
-    [[nodiscard]] std::uint16_t status() const noexcept {
+    [[nodiscard]] HttpStatusCode status() const noexcept {
         return status_;
     }
 
@@ -368,7 +377,7 @@ public:
 
     [[nodiscard]] std::span<const HttpClientResponseHeader>
     headers() const & noexcept {
-        return std::span<const HttpClientResponseHeader>(headers_.data(), headers_.size());
+        return headers_;
     }
     [[nodiscard]] std::span<const HttpClientResponseHeader>
     headers() const && = delete;
@@ -377,7 +386,7 @@ private:
     friend struct detail::HttpClientResponseHeadAccess;
 
     HttpClientResponseHead(
-        std::uint16_t status,
+        HttpStatusCode status,
         HttpProtocolVersion protocolVersion,
         std::pmr::memory_resource* resource)
         : HttpClientResponseHead(
@@ -388,14 +397,14 @@ private:
 
     HttpClientResponseHead(
         detail::HttpResolvedPmrResourceTag,
-        std::uint16_t status,
+        HttpStatusCode status,
         HttpProtocolVersion protocolVersion,
         std::pmr::memory_resource* resource)
         : status_(status),
           protocolVersion_(protocolVersion),
           headers_(resource) {}
 
-    std::uint16_t status_;
+    HttpStatusCode status_;
     HttpProtocolVersion protocolVersion_;
     std::pmr::vector<HttpClientResponseHeader> headers_;
 };

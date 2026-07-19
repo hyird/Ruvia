@@ -1,3 +1,15 @@
+find_package(asio CONFIG REQUIRED)
+find_package(Threads REQUIRED)
+find_package(mimalloc CONFIG REQUIRED)
+
+set(RUVIA_MIMALLOC_TARGET mimalloc)
+if(TARGET mimalloc-static)
+    get_target_property(_ruvia_mimalloc_static_type mimalloc-static TYPE)
+    if(NOT _ruvia_mimalloc_static_type STREQUAL "INTERFACE_LIBRARY")
+        set(RUVIA_MIMALLOC_TARGET mimalloc-static)
+    endif()
+endif()
+
 set(_ruvia_core_generated_include_dir "${CMAKE_CURRENT_BINARY_DIR}/include")
 set(_ruvia_core_version_header
     "${_ruvia_core_generated_include_dir}/ruvia/core/version.h")
@@ -66,3 +78,14 @@ ruvia_install_public_headers(core
 )
 
 ruvia_install_public_header_tree(core include/ruvia/core/detail)
+
+if(WIN32)
+    target_link_libraries(ruvia-core PUBLIC Mswsock Ws2_32)
+    set_target_properties(ruvia-core PROPERTIES
+        INTERFACE_LINK_LIBRARIES_DIRECT "$<TARGET_LINKER_FILE:${RUVIA_MIMALLOC_TARGET}>"
+    )
+    target_link_options(ruvia-core INTERFACE "$<$<CXX_COMPILER_ID:MSVC>:/INCLUDE:mi_version>")
+endif()
+
+ruvia_install_export(core)
+ruvia_assert_target_file_ownership(ruvia-core)

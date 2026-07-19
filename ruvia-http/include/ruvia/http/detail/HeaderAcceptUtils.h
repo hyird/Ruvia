@@ -1,5 +1,6 @@
 #pragma once
 
+#include <algorithm>
 #include <array>
 #include <cstddef>
 #include <cstdint>
@@ -114,6 +115,9 @@ enum class HttpContentCoding : std::uint8_t {
     const auto semicolon = value.find(';');
     return httpTrimOws(semicolon == std::string_view::npos ? value : value.substr(0, semicolon));
 }
+
+template <HttpTemporaryOwningCharString Value>
+std::string_view httpHeaderTokenBeforeParameters(Value&&) = delete;
 
 // Accept-Encoding uses `codings [ weight ]`, not the arbitrary parameter list
 // accepted by media ranges. Validate that optional weight without normalizing
@@ -280,16 +284,16 @@ struct HttpResponseCodingQualities final {
     return httpHeaderTokenBeforeParameters(value);
 }
 
+template <HttpTemporaryOwningCharString Value>
+std::string_view httpMediaTypeOnly(Value&&) = delete;
+
 [[nodiscard]] inline bool httpMediaToken(std::string_view token) noexcept {
     if (token.empty()) {
         return false;
     }
-    for (const auto ch : token) {
-        if (!isHttpTokenChar(static_cast<unsigned char>(ch))) {
-            return false;
-        }
-    }
-    return true;
+    return std::ranges::all_of(token, [](char ch) noexcept {
+        return isHttpTokenChar(static_cast<unsigned char>(ch));
+    });
 }
 
 struct HttpMediaTypeParts final {
@@ -501,6 +505,9 @@ template <typename Visitor>
         (subtypeWildcard || httpMediaToken(parts.subtype));
 }
 
+template <HttpTemporaryOwningCharString Value>
+bool httpParseMediaTypeParts(Value&&, bool, HttpMediaTypeParts&) = delete;
+
 [[nodiscard]] inline bool httpParseMediaType(
     std::string_view value,
     bool allowWildcard,
@@ -513,6 +520,18 @@ template <typename Visitor>
                 return true;
             });
 }
+
+template <HttpTemporaryOwningCharString Value>
+bool httpParseMediaType(Value&&, bool, HttpMediaTypeParts&) = delete;
+
+[[nodiscard]] inline bool isValidHttpContentTypeFieldValue(
+    std::string_view value) noexcept {
+    HttpMediaTypeParts parts;
+    return httpParseMediaType(value, false, parts);
+}
+
+template <HttpTemporaryOwningCharString Value>
+bool isValidHttpContentTypeFieldValue(Value&&) = delete;
 
 [[nodiscard]] inline bool httpMediaRangeMatchesValidOffered(
     std::string_view range,

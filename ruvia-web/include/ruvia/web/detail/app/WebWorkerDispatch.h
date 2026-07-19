@@ -15,6 +15,7 @@ namespace ruvia::detail {
 
 class DbRegistry;
 class RedisRegistry;
+class WorkerStateRegistry;
 
 class WebWorkerDispatch final
     : public std::enable_shared_from_this<WebWorkerDispatch> {
@@ -27,6 +28,7 @@ public:
         std::pmr::memory_resource* resource,
         DbRegistry& databases,
         RedisRegistry& redis,
+        const WorkerStateRegistry& workerStates,
         std::move_only_function<void()> drained,
         std::move_only_function<void(std::exception_ptr)> failed);
     ~WebWorkerDispatch();
@@ -54,6 +56,7 @@ private:
     std::pmr::memory_resource* resource_;
     DbRegistry* databases_;
     RedisRegistry* redis_;
+    const WorkerStateRegistry* workerStates_;
     std::move_only_function<void()> drained_;
     std::move_only_function<void(std::exception_ptr)> failed_;
     mutable std::mutex submitMutex_;

@@ -9,9 +9,9 @@
 #include <array>
 #include <charconv>
 #include <coroutine>
-#include <limits>
 #include <stdexcept>
 #include <system_error>
+#include <utility>
 
 namespace ruvia::detail {
 namespace {
@@ -188,10 +188,10 @@ Task<void> PostgreSqlPool::sendQuery(
     if (sql.empty()) {
         throw std::invalid_argument("SQL must not be empty");
     }
-    if (sql.find('\0') != std::pmr::string::npos) {
+    if (sql.contains('\0')) {
         throw std::invalid_argument("SQL must not contain NUL bytes");
     }
-    if (params.size() > static_cast<std::size_t>(std::numeric_limits<int>::max())) {
+    if (!std::in_range<int>(params.size())) {
         throw std::invalid_argument("too many PostgreSQL query parameters");
     }
     auto encoded = encodePostgreSqlParams(params, resource_);

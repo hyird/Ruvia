@@ -64,7 +64,8 @@ Task<std::optional<Http1SessionRequestCompletion>> dispatchHttpWebSocketRoute(
     auto upgradeAndRun = [&](Context& context) -> Task<void> {
         const auto handshake = makeHttpWebSocketServerHandshake(
             parsed.request,
-            webSocketEndpoint.subprotocols());
+            webSocketEndpoint.subprotocols(),
+            memory.resource());
         if (const auto ec = co_await writeWebSocketHandshake(stream, handshake); ec) {
             co_return;
         }

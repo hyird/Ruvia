@@ -21,15 +21,15 @@ public:
     }
 
     [[nodiscard]] constexpr bool emitNull() const noexcept {
-        return containsOption<EmitNull>(std::index_sequence_for<OptionTs...>{});
+        return containsOption<EmitNull>();
     }
 
     [[nodiscard]] constexpr bool omitEmpty() const noexcept {
-        return containsOption<OmitEmpty>(std::index_sequence_for<OptionTs...>{});
+        return containsOption<OmitEmpty>();
     }
 
     [[nodiscard]] constexpr bool hasDefault() const noexcept {
-        return containsDefault(std::index_sequence_for<OptionTs...>{});
+        return containsDefault();
     }
 
     template <typename OptionalT>
@@ -45,14 +45,13 @@ public:
     }
 
 private:
-    template <typename OptionT, std::size_t... Indexes>
-    [[nodiscard]] constexpr bool containsOption(std::index_sequence<Indexes...>) const noexcept {
-        return ((std::is_same_v<std::remove_cvref_t<decltype(std::get<Indexes>(options_))>, OptionT>) || ... || false);
+    template <typename OptionT>
+    [[nodiscard]] static constexpr bool containsOption() noexcept {
+        return (std::is_same_v<std::remove_cvref_t<OptionTs>, OptionT> || ... || false);
     }
 
-    template <std::size_t... Indexes>
-    [[nodiscard]] constexpr bool containsDefault(std::index_sequence<Indexes...>) const noexcept {
-        return ((isDefaultRule<std::remove_cvref_t<decltype(std::get<Indexes>(options_))>>()) || ... || false);
+    [[nodiscard]] static constexpr bool containsDefault() noexcept {
+        return (isDefaultRule<std::remove_cvref_t<OptionTs>>() || ... || false);
     }
 
     template <typename OptionalT, typename OptionT>

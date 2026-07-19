@@ -34,8 +34,14 @@ ConnInfo getConnInfo(const Context& context) noexcept {
 
 namespace detail {
 
+// A media-type mismatch is the client speaking the wrong format at a valid
+// endpoint: RFC 9110 15.5.16 assigns that 415, distinct from the 400 a
+// malformed body of the RIGHT type earns below.
 [[noreturn]] void throwInvalidJsonContentType() {
-    throw std::invalid_argument("invalid json content type");
+    throw HttpError(
+        http_status::kUnsupportedMediaType,
+        "unsupported_media_type",
+        "request body must be application/json");
 }
 
 [[noreturn]] void throwInvalidJsonBody() {
@@ -43,7 +49,10 @@ namespace detail {
 }
 
 [[noreturn]] void throwInvalidFormContentType() {
-    throw std::invalid_argument("invalid form content type");
+    throw HttpError(
+        http_status::kUnsupportedMediaType,
+        "unsupported_media_type",
+        "request body must be application/x-www-form-urlencoded");
 }
 
 [[noreturn]] void throwInvalidFormBody() {
@@ -83,6 +92,23 @@ Task<JsonValue> ContextRequest::jsonTask(const Context* context) {
 ScopedOperation<JsonValue> ContextRequest::json() const {
     return detail::makeScopedOperation(
         context_->operationScope_, jsonTask(context_));
+}
+
+Task<std::optional<JsonValue>> ContextRequest::jsonIfTask(const Context* context) {
+    if (!contextContentTypeMatches(context, "application/json")) {
+        co_return std::nullopt;
+    }
+    const auto requestBody = co_await contextTextTask(context);
+    auto parsed = JsonValue::parse(requestBody, contextResource(context));
+    if (!parsed) {
+        co_return std::nullopt;
+    }
+    co_return std::move(*parsed);
+}
+
+ScopedOperation<std::optional<JsonValue>> ContextRequest::jsonIf() const {
+    return detail::makeScopedOperation(
+        context_->operationScope_, jsonIfTask(context_));
 }
 
 namespace {
@@ -141,7 +167,7 @@ void appendLowerAscii(std::pmr::string& output, std::string_view input) {
 }
 
 [[nodiscard]] bool fieldNameIsArray(std::string_view name) noexcept {
-    return name.size() >= 2 && name.substr(name.size() - 2) == "[]";
+    return name.ends_with("[]");
 }
 
 [[nodiscard]] bool fieldNameHasProtoObject(std::string_view name) noexcept {
@@ -178,7 +204,7 @@ void assignDotPath(
 }
 
 [[nodiscard]] std::string_view storedStringView(const std::pmr::string& value) noexcept {
-    return std::string_view(value.data(), value.size());
+    return value;
 }
 
 [[nodiscard]] std::string_view pairNameAt(
@@ -199,7 +225,7 @@ void assignDotPath(
     // The original position is an explicit tie-breaker, so an in-place sort has
     // the same deterministic order as stable_sort without its non-PMR scratch
     // allocation on the request path.
-    std::sort(order.begin(), order.end(), [&storage](std::size_t left, std::size_t right) noexcept {
+    std::ranges::sort(order, [&storage](std::size_t left, std::size_t right) noexcept {
         const auto leftName = pairNameAt(storage, left);
         const auto rightName = pairNameAt(storage, right);
         if (leftName == rightName) {
@@ -218,7 +244,7 @@ void assignDotPath(
     for (std::size_t i = 0; i < fields.size(); ++i) {
         order.push_back(i);
     }
-    std::sort(order.begin(), order.end(), [&fields](std::size_t left, std::size_t right) noexcept {
+    std::ranges::sort(order, [&fields](std::size_t left, std::size_t right) noexcept {
         const auto leftName = fields[left].name();
         const auto rightName = fields[right].name();
         if (leftName == rightName) {
@@ -363,7 +389,7 @@ void compactParsedBodyFields(
         const auto partFilename = part.filename();
         const auto partContentType = part.contentType();
         std::pmr::string name(partName.data(), partName.size(), resource);
-        const bool array = fieldNameIsArray(std::string_view(name.data(), name.size()));
+        const bool array = fieldNameIsArray(std::string_view(name));
         appendParsedBodyField(
             fields,
             detail::RequestFormFieldAccess::make(
@@ -423,7 +449,7 @@ const RequestNameValueList& Context::requestHeaders() const {
             detail::RequestNameValueListAccess::pushBack(
                 headers,
                 detail::RequestNameValueViewAccess::make(
-                    std::string_view(name.data(), name.size()),
+                    std::string_view(name),
                     rawHeader.value()));
         }
         cache.emplace(std::move(names), std::move(headers));
@@ -490,7 +516,7 @@ void Context::ensureRequestQuery() const {
         } while (offset < order.size() && pairNameAt(storage, order[offset]) == name);
         builds.push_back(QueryBuild{.firstIndex = firstIndex, .begin = begin, .end = offset});
     }
-    std::sort(builds.begin(), builds.end(), [](const QueryBuild& left, const QueryBuild& right) noexcept {
+    std::ranges::sort(builds, [](const QueryBuild& left, const QueryBuild& right) noexcept {
         return left.firstIndex < right.firstIndex;
     });
 
@@ -674,7 +700,7 @@ bool Context::requestAccepts(std::string_view mediaType) const noexcept {
 Task<std::string_view> Context::requestBody() const {
     if (bodyDecoded_) {
         const auto& decoded = *requestStorage_->decodedBody;
-        co_return std::string_view(decoded.data(), decoded.size());
+        co_return std::string_view(decoded);
     }
 
     std::string_view raw;
@@ -689,6 +715,10 @@ Task<std::string_view> Context::requestBody() const {
     // Transparently decode a request body whose Content-Encoding we understand,
     // so handlers always see the decoded representation (RFC 9110 §8.4).
     const auto parsedCoding = detail::requestContentCoding(request_);
+    if (const auto* invalid = parsedCoding.invalid()) {
+        throw HttpProtocolError(
+            invalid->status(), "invalid request Content-Encoding");
+    }
     if (const auto* unsupported = parsedCoding.unsupported()) {
         throw detail::UnsupportedRequestContentCoding(*unsupported);
     }
@@ -714,7 +744,7 @@ Task<std::string_view> Context::requestBody() const {
     auto& decoded = decodedBody();
     decoded = std::move(*decodedContent).takeBytes();
     bodyDecoded_ = true;
-    co_return std::string_view(decoded.data(), decoded.size());
+    co_return std::string_view(decoded);
 }
 
 std::optional<std::string_view> ContextRequest::signedCookie(

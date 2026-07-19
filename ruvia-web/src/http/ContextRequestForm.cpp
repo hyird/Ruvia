@@ -33,7 +33,7 @@ ContextRequest::RequestFormData::Object::object(
         childPath.push_back('.');
         childPath.append(name);
     }
-    return Object(*form_, std::string_view(childPath.data(), childPath.size()));
+    return Object(*form_, std::string_view(childPath));
 }
 
 std::string_view ContextRequest::RequestFormData::Object::directChildName(
@@ -51,7 +51,7 @@ std::string_view ContextRequest::RequestFormData::Object::directChildName(
     }
 
     const auto& child = path[index];
-    return std::string_view(child.data(), child.size());
+    return child;
 }
 
 void ContextRequest::RequestFormData::Object::rebuildEntries() {
@@ -68,7 +68,7 @@ void ContextRequest::RequestFormData::Object::rebuildEntries() {
         return;
     }
 
-    std::stable_sort(order.begin(), order.end(), [this](std::size_t left, std::size_t right) noexcept {
+    std::ranges::stable_sort(order, [this](std::size_t left, std::size_t right) noexcept {
         const auto leftName = directChildName(form_->fields_[left], path());
         const auto rightName = directChildName(form_->fields_[right], path());
         if (leftName == rightName) {
@@ -94,7 +94,7 @@ void ContextRequest::RequestFormData::Object::rebuildEntries() {
             directChildName(form_->fields_[order[offset]], path()) == name);
         builds.push_back(EntryBuild{.firstIndex = firstIndex, .begin = begin, .end = offset});
     }
-    std::stable_sort(builds.begin(), builds.end(), [](const EntryBuild& left, const EntryBuild& right) noexcept {
+    std::ranges::stable_sort(builds, [](const EntryBuild& left, const EntryBuild& right) noexcept {
         return left.firstIndex < right.firstIndex;
     });
 
@@ -137,7 +137,7 @@ bool ContextRequest::RequestFormData::consumePath(
         if (segment.empty() || index >= path.size()) {
             return false;
         }
-        const auto stored = std::string_view(path[index].data(), path[index].size());
+        const std::string_view stored = path[index];
         if (stored != segment) {
             return false;
         }
@@ -162,7 +162,7 @@ void ContextRequest::RequestFormData::rebuildEntries() {
     for (std::size_t i = 0; i < fields_.size(); ++i) {
         order.push_back(i);
     }
-    std::stable_sort(order.begin(), order.end(), [this](std::size_t left, std::size_t right) noexcept {
+    std::ranges::stable_sort(order, [this](std::size_t left, std::size_t right) noexcept {
         const auto leftName = entryName(fields_[left]);
         const auto rightName = entryName(fields_[right]);
         if (leftName == rightName) {
@@ -188,7 +188,7 @@ void ContextRequest::RequestFormData::rebuildEntries() {
             entryName(fields_[order[offset]]) == name);
         builds.push_back(EntryBuild{.firstIndex = firstIndex, .begin = begin, .end = offset});
     }
-    std::stable_sort(builds.begin(), builds.end(), [](const EntryBuild& left, const EntryBuild& right) noexcept {
+    std::ranges::stable_sort(builds, [](const EntryBuild& left, const EntryBuild& right) noexcept {
         return left.firstIndex < right.firstIndex;
     });
 
@@ -220,7 +220,7 @@ void ContextRequest::RequestFormData::rebuildPathEntries(
         return;
     }
 
-    std::stable_sort(order.begin(), order.end(), [this](std::size_t left, std::size_t right) noexcept {
+    std::ranges::stable_sort(order, [this](std::size_t left, std::size_t right) noexcept {
         const auto leftName = pathEntryName(fields_[left]);
         const auto rightName = pathEntryName(fields_[right]);
         if (leftName == rightName) {
@@ -246,7 +246,7 @@ void ContextRequest::RequestFormData::rebuildPathEntries(
             pathEntryName(fields_[order[offset]]) == name);
         builds.push_back(EntryBuild{.firstIndex = firstIndex, .begin = begin, .end = offset});
     }
-    std::stable_sort(builds.begin(), builds.end(), [](const EntryBuild& left, const EntryBuild& right) noexcept {
+    std::ranges::stable_sort(builds, [](const EntryBuild& left, const EntryBuild& right) noexcept {
         return left.firstIndex < right.firstIndex;
     });
 

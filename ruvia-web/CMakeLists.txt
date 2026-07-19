@@ -1,3 +1,17 @@
+find_package(OpenSSL REQUIRED)
+
+if(RUVIA_ENABLE_MARIADB)
+    find_package(unofficial-libmariadb CONFIG REQUIRED)
+    ruvia_deduplicate_link_interface(unofficial::libmariadb)
+endif()
+if(RUVIA_ENABLE_POSTGRESQL)
+    find_package(PostgreSQL REQUIRED)
+    ruvia_deduplicate_link_interface(PostgreSQL::PostgreSQL)
+endif()
+if(RUVIA_ENABLE_REDIS)
+    find_package(hiredis CONFIG REQUIRED)
+endif()
+
 set(RUVIA_WEB_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/src/app/Dotenv.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/app/DotenvParser.cpp
@@ -7,6 +21,7 @@ set(RUVIA_WEB_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/src/app/AppConfig.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/app/AppHttpConfig.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/app/AppIntegrationConfig.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/app/Testing.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/ruvia.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/http/Error.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/http/ContextErrorResponse.cpp
@@ -36,7 +51,6 @@ set(RUVIA_WEB_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/src/server/HttpConnectionState.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/server/HttpServerAccept.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/server/HttpServer.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/server/HttpServerDocumentRoot.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/server/HttpServerLifecycle.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/router/ControllerRegistry.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/router/RouterBuild.cpp
@@ -235,3 +249,6 @@ if(RUVIA_ENABLE_JWT)
     ruvia_install_public_header_tree(web include/ruvia/web/auth)
     ruvia_install_public_header_tree(web include/ruvia/web/detail/auth)
 endif()
+
+ruvia_install_export(web)
+ruvia_assert_target_file_ownership(ruvia-web)

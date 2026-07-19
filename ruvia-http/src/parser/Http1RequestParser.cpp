@@ -2,6 +2,7 @@
 
 #include "ruvia/http/Http1RequestParser.h"
 
+#include "ruvia/http/detail/HttpRequestContentSemantics.h"
 #include "ruvia/http/detail/HttpRequestInternal.h"
 #include "ruvia/http/detail/parser/HttpChunkParser.h"
 #include "ruvia/http/detail/parser/HttpHeaderBlockParser.h"
@@ -69,7 +70,7 @@ void Http1ServerRequestParser::parseRequestHead(
     HttpRequestAccess::setTarget(state.request, target);
 
     if (version.size() != 8 ||
-        version.substr(0, 5) != "HTTP/" ||
+        !version.starts_with("HTTP/") ||
         version[5] < '0' ||
         version[5] > '9' ||
         version[6] != '.') {
@@ -105,6 +106,20 @@ void Http1ServerRequestParser::parseRequestHead(
         return fail(HttpParseError::kInvalidTransferEncoding);
     }
 
+    if (httpRequestContentSemantics(method) ==
+        HttpRequestContentSemantics::kForbidden) {
+        // CONNECT has no request content, and TRACE explicitly forbids it
+        // (RFC 9110 sections 9.3.6 and 9.3.8). Content-Length is an explicit
+        // content signal even at zero; accepting either framing field would
+        // give the runtime a body contract that the method does not have.
+        if (transferEncoding.has_value()) {
+            return fail(HttpParseError::kInvalidTransferEncoding);
+        }
+        if (contentLength.has_value()) {
+            return fail(HttpParseError::kInvalidContentLength);
+        }
+    }
+
     const auto* finalChunked = transferEncoding.has_value()
         ? transferEncoding->finalChunked()
         : nullptr;
@@ -117,6 +132,17 @@ void Http1ServerRequestParser::parseRequestHead(
     if (transferEncoding.has_value() &&
         protocolVersion == HttpProtocolVersion::kHttp10) {
         return fail(HttpParseError::kInvalidTransferEncoding);
+    }
+
+    if (httpRequestContentSemantics(method) ==
+            HttpRequestContentSemantics::kContentTypeRequired &&
+        (contentLength.has_value() || transferEncoding.has_value()) &&
+        (block.seenHeaderBits & singletonRequestHeaderBit(
+             RequestHeaderKind::kContentType)) == 0) {
+        // RFC 9110 section 9.3.7 requires a valid Content-Type when OPTIONS
+        // explicitly carries content. A zero Content-Length still declares an
+        // empty representation and therefore retains this metadata contract.
+        return fail(HttpParseError::kInvalidHeader);
     }
 
     for (std::size_t i = 0; i < block.headerCount; ++i) {
@@ -142,7 +168,7 @@ void Http1ServerRequestParser::parseRequestHead(
         httpSelectResponseCodingFromQualities(block.responseCodingQualities);
     auto expectations = block.expectations;
     if (protocolVersion == HttpProtocolVersion::kHttp10) {
-        expectations.ignore100Continue();
+        expectations.ignoreContinue();
     }
     if (finalChunked != nullptr) {
         state.bodyPlan = Http1RequestBodyPlan(

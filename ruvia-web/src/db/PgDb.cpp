@@ -88,7 +88,7 @@ Task<QueryResult> PostgreSqlPool::execute(
         co_return co_await executeOnSlot(
             slots_[slotIndex],
             sql,
-            std::span<const DbValue>(params.data(), params.size()),
+            std::span<const DbValue>(params),
             resource);
     } catch (...) {
         closeSlot(slots_[slotIndex]);
@@ -158,7 +158,7 @@ Task<DbStreamResult> PostgreSqlPool::stream(
         co_await sendQuery(
             slot,
             sql,
-            std::span<const DbValue>(params.data(), params.size()),
+            std::span<const DbValue>(params),
             deadline,
             true);
         co_return DbStreamResult(DbPoolRef{this}, slotIndex, nullptr, resource);
@@ -258,7 +258,7 @@ Task<QueryResult> PostgreSqlPool::executeOnTransactionSlot(
         co_return co_await executeOnSlot(
             slots_[slot],
             sql,
-            std::span<const DbValue>(params.data(), params.size()),
+            std::span<const DbValue>(params),
             resource);
     } catch (...) {
         closeSlot(slots_[slot]);

@@ -2,6 +2,7 @@
 
 #include "ruvia/web/detail/auth/JwtInternal.h"
 
+#include <algorithm>
 #include <stdexcept>
 
 namespace ruvia {
@@ -36,19 +37,17 @@ std::string_view JwtPayload::audience() const & noexcept {
     return audiences_.empty() ? std::string_view{} : std::string_view(audiences_.front());
 }
 bool JwtPayload::hasAudience(std::string_view audience) const noexcept {
-    for (const auto& value : audiences_) {
-        if (std::string_view(value) == audience) {
-            return true;
-        }
-    }
-    return false;
+    return std::ranges::contains(
+        audiences_,
+        audience,
+        [](const auto& value) noexcept { return std::string_view(value); });
 }
 std::string_view JwtPayload::id() const & noexcept { return id_; }
 std::optional<std::chrono::system_clock::time_point> JwtPayload::expiresAt() const noexcept { return expiresAt_; }
 std::optional<std::chrono::system_clock::time_point> JwtPayload::notBefore() const noexcept { return notBefore_; }
 std::optional<std::chrono::system_clock::time_point> JwtPayload::issuedAt() const noexcept { return issuedAt_; }
 std::span<const JwtClaim> JwtPayload::claims() const & noexcept {
-    return {claims_.data(), claims_.size()};
+    return claims_;
 }
 
 std::optional<std::string_view>

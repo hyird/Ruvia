@@ -87,24 +87,32 @@ public:
     }
 
     [[nodiscard]] constexpr const Http2NotConnect*
-    notConnect() const noexcept {
+    notConnect() const & noexcept {
         return std::get_if<Http2NotConnect>(&state_);
     }
+    [[nodiscard]] constexpr const Http2NotConnect*
+    notConnect() const && = delete;
 
     [[nodiscard]] constexpr const Http2ConnectPending*
-    pending() const noexcept {
+    pending() const & noexcept {
         return std::get_if<Http2ConnectPending>(&state_);
     }
+    [[nodiscard]] constexpr const Http2ConnectPending*
+    pending() const && = delete;
 
     [[nodiscard]] constexpr const Http2TunnelOpen*
-    open() const noexcept {
+    open() const & noexcept {
         return std::get_if<Http2TunnelOpen>(&state_);
     }
+    [[nodiscard]] constexpr const Http2TunnelOpen*
+    open() const && = delete;
 
     [[nodiscard]] constexpr const Http2ConnectRejected*
-    rejected() const noexcept {
+    rejected() const & noexcept {
         return std::get_if<Http2ConnectRejected>(&state_);
     }
+    [[nodiscard]] constexpr const Http2ConnectRejected*
+    rejected() const && = delete;
 
 private:
     using State = std::variant<

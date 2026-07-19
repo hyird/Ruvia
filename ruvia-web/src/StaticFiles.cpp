@@ -30,12 +30,9 @@ inline constexpr std::string_view kDefaultStaticFileTypes[] = {
 };
 
 [[nodiscard]] bool validHeaderValue(std::string_view value) noexcept {
-    for (const auto c : value) {
-        if (c == '\r' || c == '\n' || c == '\0') {
-            return false;
-        }
-    }
-    return true;
+    return std::ranges::none_of(value, [](char c) noexcept {
+        return c == '\r' || c == '\n' || c == '\0';
+    });
 }
 
 void validateOptions(const StaticRootOptions& options) {
@@ -48,8 +45,8 @@ void validateOptions(const StaticRootOptions& options) {
             throw std::invalid_argument("invalid static file mime type");
         }
     }
-    if (options.indexFile.find('/') != std::pmr::string::npos ||
-        options.indexFile.find('\\') != std::pmr::string::npos ||
+    if (options.indexFile.contains('/') ||
+        options.indexFile.contains('\\') ||
         options.indexFile == "." ||
         options.indexFile == "..") {
         throw std::invalid_argument("invalid static file index name");
@@ -67,7 +64,7 @@ void normalizeMimeTypes(std::pmr::vector<StaticMimeType>& mimeTypes) {
             }
         }
     }
-    std::sort(mimeTypes.begin(), mimeTypes.end(), [](const StaticMimeType& left, const StaticMimeType& right) {
+    std::ranges::sort(mimeTypes, [](const StaticMimeType& left, const StaticMimeType& right) {
         return left.extension < right.extension;
     });
 }
@@ -83,8 +80,8 @@ void normalizeFileTypes(std::pmr::vector<std::pmr::string>& fileTypes) {
             }
         }
     }
-    std::sort(fileTypes.begin(), fileTypes.end());
-    fileTypes.erase(std::unique(fileTypes.begin(), fileTypes.end()), fileTypes.end());
+    std::ranges::sort(fileTypes);
+    fileTypes.erase(std::ranges::unique(fileTypes).begin(), fileTypes.end());
 }
 
 bool fileTypeAllowed(
@@ -99,13 +96,10 @@ bool fileTypeAllowed(
     }
     const auto value = extension.substr(1);
     if (options.fileTypes.kind() == StaticFileTypePolicy::Kind::kDefaults) {
-        return std::binary_search(
-            std::begin(kDefaultStaticFileTypes),
-            std::end(kDefaultStaticFileTypes),
-            value);
+        return std::ranges::binary_search(kDefaultStaticFileTypes, value);
     }
     const auto extensions = options.fileTypes.extensions();
-    return std::binary_search(extensions.begin(), extensions.end(), value);
+    return std::ranges::binary_search(extensions, value);
 }
 
 [[nodiscard]] const StaticMimeType* findStaticMimeType(
@@ -120,12 +114,12 @@ bool fileTypeAllowed(
         return nullptr;
     }
 
-    const auto iter = std::lower_bound(
-        mimeTypes.begin(),
-        mimeTypes.end(),
+    const auto iter = std::ranges::lower_bound(
+        mimeTypes,
         extension,
-        [](const StaticMimeType& mime, std::string_view value) {
-            return std::string_view(mime.extension) < value;
+        std::ranges::less{},
+        [](const StaticMimeType& mime) noexcept {
+            return std::string_view(mime.extension);
         });
     if (iter == mimeTypes.end() || std::string_view(iter->extension) != extension) {
         return nullptr;
@@ -166,12 +160,12 @@ std::pmr::string contentTypeFor(
         return nullptr;
     }
 
-    const auto iter = std::lower_bound(
-        entries.begin(),
-        entries.end(),
+    const auto iter = std::ranges::lower_bound(
+        entries,
         relativePath,
-        [](const detail::StaticRootEntry& entry, std::string_view value) {
-            return std::string_view(entry.relativePath) < value;
+        std::ranges::less{},
+        [](const detail::StaticRootEntry& entry) noexcept {
+            return std::string_view(entry.relativePath);
         });
     if (iter == entries.end() || std::string_view(iter->relativePath) != relativePath) {
         return nullptr;
@@ -183,17 +177,16 @@ std::pmr::string contentTypeFor(
     const std::pmr::vector<std::pmr::string>& directories,
     std::string_view relativePath) noexcept {
     if (directories.size() <= kStaticRootLinearLookupLimit) {
-        for (const auto& directory : directories) {
-            if (directory == relativePath) {
-                return true;
-            }
-        }
-        return false;
+        return std::ranges::contains(
+            directories,
+            relativePath,
+            [](const auto& directory) noexcept {
+                return std::string_view(directory);
+            });
     }
 
-    return std::binary_search(
-        directories.begin(),
-        directories.end(),
+    return std::ranges::binary_search(
+        directories,
         relativePath,
         [](const auto& left, const auto& right) {
             return std::string_view(left) < std::string_view(right);
@@ -224,8 +217,7 @@ StaticFileTypePolicy StaticFileTypePolicy::only(
     StaticFileTypePolicy result(Kind::kOnly);
     result.extensions_.reserve(extensions.size());
     for (const auto extension : extensions) {
-        if (extension.empty() || extension.find('/') != std::string_view::npos ||
-            extension.find('\\') != std::string_view::npos) {
+        if (extension.empty() || extension.contains('/') || extension.contains('\\')) {
             throw std::invalid_argument("invalid static file type");
         }
         result.extensions_.emplace_back(extension);
@@ -374,11 +366,11 @@ StaticRoot::StaticRoot(const std::filesystem::path& root, StaticRootOptions opti
         }
         state.entries.push_back(std::move(entry));
     }
-    std::sort(state.entries.begin(), state.entries.end(), [](const detail::StaticRootEntry& left, const detail::StaticRootEntry& right) {
+    std::ranges::sort(state.entries, [](const detail::StaticRootEntry& left, const detail::StaticRootEntry& right) {
         return left.relativePath < right.relativePath;
     });
-    std::sort(state.directories.begin(), state.directories.end());
-    state.directories.erase(std::unique(state.directories.begin(), state.directories.end()), state.directories.end());
+    std::ranges::sort(state.directories);
+    state.directories.erase(std::ranges::unique(state.directories).begin(), state.directories.end());
 }
 
 StaticRoot::~StaticRoot() = default;

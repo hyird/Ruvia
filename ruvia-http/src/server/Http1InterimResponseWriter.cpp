@@ -133,12 +133,6 @@ void appendView(char*& cursor, std::string_view value) noexcept {
     }
 }
 
-void appendStatusCode(char*& cursor, std::uint16_t statusCode) noexcept {
-    *cursor++ = static_cast<char>('0' + statusCode / 100);
-    *cursor++ = static_cast<char>('0' + (statusCode / 10) % 10);
-    *cursor++ = static_cast<char>('0' + statusCode % 10);
-}
-
 }  // namespace
 
 std::string_view http1InterimResponsePrepareErrorMessage(
@@ -186,9 +180,11 @@ Http1InterimResponsePrepareResult Http1InterimResponseWriter::prepare(
     }
 
     const auto reasonPhrase = httpReasonPhrase(response.status());
+    const auto statusToken = detail::httpStatusCodeToken(response.status());
     Http1InterimHeaderFacts facts;
     facts.wireBytes =
-        kHttp11StatusPrefix.size() + 3 + 1 + reasonPhrase.size() + kCrlf.size();
+        kHttp11StatusPrefix.size() + statusToken.size() + 1 +
+        reasonPhrase.size() + kCrlf.size();
     Http1InterimResponsePrepareError error =
         Http1InterimResponsePrepareError::kInvalidHeader;
     if (!analyzeHttp1Fields(response, facts, error)) {
@@ -205,7 +201,7 @@ Http1InterimResponsePrepareResult Http1InterimResponseWriter::prepare(
 
     char* cursor = headBuffer.data();
     appendView(cursor, kHttp11StatusPrefix);
-    appendStatusCode(cursor, response.status());
+    appendView(cursor, detail::httpStatusCodeTokenView(statusToken));
     *cursor++ = ' ';
     appendView(cursor, reasonPhrase);
     appendView(cursor, kCrlf);

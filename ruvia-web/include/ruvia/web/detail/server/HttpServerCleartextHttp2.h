@@ -57,7 +57,7 @@ enum class CleartextHttp2DispatchResult {
         return false;
     }
     const auto version = line.substr(versionStart + 1);
-    return version.size() < 5 || version.substr(0, 5) != "HTTP/";
+    return !version.starts_with("HTTP/");
 }
 
 [[nodiscard]] inline CleartextHttp2Probe probeCleartextHttp2Preface(
@@ -67,14 +67,14 @@ enum class CleartextHttp2DispatchResult {
         return CleartextHttp2Probe::kHttp1;
     }
 
-    const auto prefixSize = std::min(current.size(), kHttp2ClientPreface.size());
-    if (current.substr(0, prefixSize) == kHttp2ClientPreface.substr(0, prefixSize)) {
+    if (current.starts_with(kHttp2ClientPreface) ||
+        kHttp2ClientPreface.starts_with(current)) {
         return current.size() >= kHttp2ClientPreface.size()
             ? CleartextHttp2Probe::kCompletePreface
             : CleartextHttp2Probe::kNeedMorePreface;
     }
 
-    if (current.size() >= 4 && current.substr(0, 4) == "PRI ") {
+    if (current.starts_with("PRI ")) {
         return CleartextHttp2Probe::kDropConnection;
     }
     return CleartextHttp2Probe::kHttp1;

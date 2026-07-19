@@ -155,7 +155,7 @@ public:
         return headPlan_.bodyPlan();
     }
 
-    [[nodiscard]] std::uint16_t responseStatus() const noexcept {
+    [[nodiscard]] HttpStatusCode responseStatus() const noexcept {
         return bodyPlan().responseStatus();
     }
 

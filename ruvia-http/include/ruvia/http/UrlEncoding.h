@@ -1,5 +1,6 @@
 #pragma once
 
+#include <algorithm>
 #include <concepts>
 #include <cstddef>
 #include <cstdint>
@@ -21,12 +22,9 @@ enum class UrlDecodeMode : std::uint8_t {
 };
 
 [[nodiscard]] inline bool hasUrlEncoding(std::string_view value, UrlDecodeMode mode) noexcept {
-    for (const char c : value) {
-        if (c == '%' || (mode == UrlDecodeMode::kForm && c == '+')) {
-            return true;
-        }
-    }
-    return false;
+    return std::ranges::any_of(value, [mode](char c) noexcept {
+        return c == '%' || (mode == UrlDecodeMode::kForm && c == '+');
+    });
 }
 
 // Decode the percent-escape at position i, where input[i] == '%'. Returns the

@@ -2,10 +2,12 @@
 
 #include "ruvia/http/detail/HeaderTokenUtils.h"
 #include "ruvia/http/detail/HttpResponseHeaderBits.h"
+#include "ruvia/http/detail/HttpHeaderSectionSize.h"
 #include "ruvia/http/detail/HttpResponseKnownHeaders.h"
 #include "ruvia/http/detail/parser/HttpParserSyntax.h"
 #include "ruvia/http/HttpHeader.h"
 
+#include <algorithm>
 #include <exception>
 #include <span>
 #include <string_view>
@@ -20,12 +22,9 @@ namespace ruvia::detail {
     if (name.empty()) {
         return false;
     }
-    for (const char ch : name) {
-        if (!isHttpTokenChar(static_cast<unsigned char>(ch))) {
-            return false;
-        }
-    }
-    return true;
+    return std::ranges::all_of(name, [](char ch) noexcept {
+        return isHttpTokenChar(static_cast<unsigned char>(ch));
+    });
 }
 
 // A trailer value must be a valid HTTP field value (RFC 9110 §5.5): field-vchar
@@ -35,12 +34,9 @@ namespace ruvia::detail {
 // field-value. Enforce the shared field-value rule so this matches the request
 // trailer path and every other header-value check (isHttpFieldValueChar).
 [[nodiscard]] inline bool isValidResponseTrailerValue(std::string_view value) noexcept {
-    for (const char ch : value) {
-        if (!isHttpFieldValueChar(static_cast<unsigned char>(ch))) {
-            return false;
-        }
-    }
-    return true;
+    return std::ranges::all_of(value, [](char ch) noexcept {
+        return isHttpFieldValueChar(static_cast<unsigned char>(ch));
+    });
 }
 
 // Fields that must never appear in a trailer section because they govern message
@@ -123,7 +119,8 @@ namespace ruvia::detail {
                 httpAsciiEqualsIgnoreCase(name, "Clear-Site-Data");
         case 16:
             return httpAsciiEqualsIgnoreCase(name, "X-XSS-Protection") ||
-                httpAsciiEqualsIgnoreCase(name, "WWW-Authenticate");
+                httpAsciiEqualsIgnoreCase(name, "WWW-Authenticate") ||
+                httpAsciiEqualsIgnoreCase(name, "Proxy-Connection");
         case 18:
             return httpAsciiEqualsIgnoreCase(name, "Proxy-Authenticate") ||
                 httpAsciiEqualsIgnoreCase(name, "Permissions-Policy");
@@ -241,8 +238,14 @@ private:
 [[nodiscard]] inline HttpResponseTrailerSectionResult
 httpResponseTrailerSection(
     std::span<const HttpHeaderView> trailers) noexcept {
+    if (trailers.size() > kMaxHttpHeaderFields) {
+        return HttpResponseTrailerSectionResult(
+            HttpResponseTrailerSectionFailure());
+    }
+    HttpHeaderSectionSize sectionSize;
     for (const auto& trailer : trailers) {
-        if (!responseTrailerFieldValid(trailer.name(), trailer.value())) {
+        if (!responseTrailerFieldValid(trailer.name(), trailer.value()) ||
+            !sectionSize.add(trailer.name(), trailer.value())) {
             return HttpResponseTrailerSectionResult(
                 HttpResponseTrailerSectionFailure());
         }

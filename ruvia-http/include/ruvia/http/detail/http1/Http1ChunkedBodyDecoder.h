@@ -86,14 +86,13 @@ public:
     [[nodiscard]] HttpProtocolError protocolError() const noexcept {
         switch (error_) {
             case Http1ChunkDecodeError::kInvalidFraming:
-                return HttpProtocolError(400, "invalid chunked request body");
+                return HttpProtocolError(http_status::kBadRequest, "invalid chunked request body");
             case Http1ChunkDecodeError::kBodyTooLarge:
                 return HttpRequestBodyFailure::tooLarge().protocolError();
             case Http1ChunkDecodeError::kFramingTooLarge:
-                return HttpProtocolError(
-                    413, "request body framing is too large");
+                return HttpProtocolError(http_status::kContentTooLarge, "request body framing is too large");
         }
-        return HttpProtocolError(400, "invalid chunked request body");
+        return HttpProtocolError(http_status::kBadRequest, "invalid chunked request body");
     }
 
 private:

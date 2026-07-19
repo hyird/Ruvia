@@ -1,6 +1,7 @@
 #include "ruvia/http/detail/parser/HttpHeaderBlockParser.h"
 
 #include "ruvia/http/detail/HttpCorsFields.h"
+#include "ruvia/http/detail/HttpContentCoding.h"
 #include "ruvia/http/detail/parser/HttpRequestTarget.h"
 
 #include <algorithm>
@@ -204,14 +205,36 @@ std::optional<HttpParseError> parseHttpHeaderBlock(
                     block.seenHeaderBits |= bit;
                 }
                 break;
+            case RequestHeaderKind::kContentType: {
+                // Content-Type is a typed field, not an arbitrary singleton.
+                // Validate its media-type grammar at the protocol boundary so
+                // recipients and both request writers accept the same values.
+                if (!isValidHttpContentTypeFieldValue(value)) {
+                    return HttpParseError::kInvalidHeader;
+                }
+                const auto bit = singletonRequestHeaderBit(kind);
+                if ((block.seenHeaderBits & bit) != 0) {
+                    return HttpParseError::kInvalidHeader;
+                }
+                block.seenHeaderBits |= bit;
+                break;
+            }
+            case RequestHeaderKind::kContentEncoding:
+                if (!isValidHttpContentEncodingFieldValue(
+                        value, HttpFieldListRole::kRecipient)) {
+                    return HttpParseError::kInvalidHeader;
+                }
+                break;
             case RequestHeaderKind::kAuthorization:
-            case RequestHeaderKind::kContentType:
             case RequestHeaderKind::kIfMatch:
             case RequestHeaderKind::kIfModifiedSince:
             case RequestHeaderKind::kIfNoneMatch:
             case RequestHeaderKind::kIfRange:
             case RequestHeaderKind::kIfUnmodifiedSince:
             case RequestHeaderKind::kRange:
+            case RequestHeaderKind::kSecWebSocketKey:
+            case RequestHeaderKind::kSecWebSocketVersion:
+            case RequestHeaderKind::kUserAgent:
                 if (const auto bit = singletonRequestHeaderBit(kind); bit != 0) {
                     if ((block.seenHeaderBits & bit) != 0) {
                         return HttpParseError::kInvalidHeader;
@@ -221,12 +244,8 @@ std::optional<HttpParseError> parseHttpHeaderBlock(
                 break;
             case RequestHeaderKind::kOther:
             case RequestHeaderKind::kAccept:
-            case RequestHeaderKind::kContentEncoding:
             case RequestHeaderKind::kCookie:
-            case RequestHeaderKind::kSecWebSocketKey:
             case RequestHeaderKind::kSecWebSocketProtocol:
-            case RequestHeaderKind::kSecWebSocketVersion:
-            case RequestHeaderKind::kUserAgent:
                 break;
             case RequestHeaderKind::kAccessControlRequestHeaders:
                 if (!isValidHttpCorsRequestHeaderNames(value)) {
