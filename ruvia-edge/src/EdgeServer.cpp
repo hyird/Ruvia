@@ -127,16 +127,47 @@ void appendDecimal(std::string& out, std::uint64_t value) {
     return buildResponseWire(status, Headers{}, {}, "MISS", std::nullopt);
 }
 
-// Assemble the RFC 9111 freshness inputs from the origin response headers.
+[[nodiscard]] std::optional<std::string_view> findHeaderValue(
+    const Headers& headers,
+    std::string_view name) {
+    for (const auto& [n, v] : headers) {
+        if (iequals(n, name)) {
+            return std::string_view(v);
+        }
+    }
+    return std::nullopt;
+}
+
+// Update a stored response's headers with those from a 304 (RFC 9111 section
+// 4.3.4): keep the stored fields, but replace any also present in the 304, and
+// ignore the 304's connection/framing fields.
+[[nodiscard]] Headers mergeStoredHeaders(const Headers& stored, const Headers& updates) {
+    Headers merged = stored;
+    for (const auto& [name, value] : updates) {
+        std::string lower(name);
+        for (auto& c : lower) {
+            c = toLowerAscii(c);
+        }
+        if (isConnectionOrFramingField(lower)) {
+            continue;
+        }
+        std::erase_if(merged, [&](const auto& field) { return iequals(field.first, name); });
+        merged.emplace_back(name, value);
+    }
+    return merged;
+}
+
+// Assemble the RFC 9111 freshness inputs from a response's status and headers.
 [[nodiscard]] FreshnessInput buildFreshnessInput(
-    const OriginResponse& response,
+    std::uint16_t status,
+    const Headers& headers,
     std::time_t now) {
     FreshnessInput input;
-    input.status = response.status;
+    input.status = status;
     input.now = now;
 
     CacheControlFieldParser cacheControl;
-    for (const auto& [name, value] : response.headers) {
+    for (const auto& [name, value] : headers) {
         if (iequals(name, "cache-control")) {
             cacheControl.update(value);
         } else if (iequals(name, "date")) {
@@ -310,7 +341,8 @@ asio::awaitable<void> EdgeServer::handleSession(asio::ip::tcp::socket socket) {
         const std::string key = cacheKey("GET", frontHost, target);
 
         // 4. Serve a fresh cache hit without touching the origin.
-        if (auto hit = cache_.lookup(key, now); hit.status == CacheLookupStatus::kFresh) {
+        auto hit = cache_.lookup(key, now);
+        if (hit.status == CacheLookupStatus::kFresh) {
             const auto& entry = *hit.entry;
             const auto age = entry.storedAt <= now
                 ? static_cast<std::uint64_t>(now - entry.storedAt)
@@ -320,6 +352,9 @@ asio::awaitable<void> EdgeServer::handleSession(asio::ip::tcp::socket socket) {
             finish();
             co_return;
         }
+        // A stale entry may still be revalidated with the origin below.
+        const std::shared_ptr<const CachedResponse> staleEntry =
+            hit.status == CacheLookupStatus::kStale ? hit.entry : nullptr;
 
         // 5. Miss (or stale): fetch from the origin. Forward the client's request
         // headers minus hop-by-hop fields, Host (regenerated for the upstream),
@@ -356,6 +391,18 @@ asio::awaitable<void> EdgeServer::handleSession(asio::ip::tcp::socket socket) {
         forwardHeaders.emplace_back(
             std::string_view("Via"), std::string_view("1.1 ruvia-edge"));
 
+        // Revalidate a stale entry with a conditional request when it carries a
+        // validator, so an unchanged resource comes back as a bodyless 304.
+        if (staleEntry) {
+            if (const auto etag = findHeaderValue(staleEntry->headers, "etag")) {
+                forwardHeaders.emplace_back(std::string_view("If-None-Match"), *etag);
+            } else if (const auto lastModified =
+                           findHeaderValue(staleEntry->headers, "last-modified")) {
+                forwardHeaders.emplace_back(
+                    std::string_view("If-Modified-Since"), *lastModified);
+            }
+        }
+
         OriginRequest originRequest;
         originRequest.method = "GET";
         originRequest.target = target;
@@ -372,8 +419,36 @@ asio::awaitable<void> EdgeServer::handleSession(asio::ip::tcp::socket socket) {
             co_return;
         }
 
-        // 6. Store the response if a shared cache is allowed to.
-        const auto decision = evaluateFreshness(buildFreshnessInput(fetch.response, now));
+        // 6a. A 304 confirms the stale entry is still good: refresh its freshness
+        // from the (merged) headers and serve the stored body -- no full transfer.
+        if (staleEntry && fetch.response.status == 304) {
+            Headers merged = mergeStoredHeaders(staleEntry->headers, fetch.response.headers);
+            const auto decision =
+                evaluateFreshness(buildFreshnessInput(staleEntry->status, merged, now));
+            auto refreshed = std::make_shared<CachedResponse>();
+            refreshed->status = staleEntry->status;
+            refreshed->body = staleEntry->body;
+            refreshed->storedAt = now;
+            refreshed->expiresAt = decision.cacheable ? decision.expiresAt : now;
+            refreshed->staleWhileRevalidate = decision.staleWhileRevalidate;
+            refreshed->staleIfError = decision.staleIfError;
+            refreshed->headers = std::move(merged);
+            if (decision.cacheable) {
+                cache_.store(key, refreshed);
+            } else {
+                cache_.purge(key);  // no longer has usable freshness
+            }
+            co_await writeAll(buildResponseWire(
+                refreshed->status, refreshed->headers, refreshed->body, "REVALIDATED",
+                std::uint64_t{0}));
+            finish();
+            co_return;
+        }
+
+        // 6b. A full response: store it if a shared cache is allowed to (replacing
+        // any stale entry under this key).
+        const auto decision = evaluateFreshness(
+            buildFreshnessInput(fetch.response.status, fetch.response.headers, now));
         if (decision.cacheable) {
             auto entry = std::make_shared<CachedResponse>();
             entry->status = fetch.response.status;

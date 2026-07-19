@@ -7,6 +7,7 @@
 // whole feature is about.
 
 #include <atomic>
+#include <chrono>
 #include <cstdio>
 #include <mutex>
 #include <string>
@@ -58,7 +59,8 @@ public:
     }
 
     [[nodiscard]] std::uint16_t port() const { return acceptor_.local_endpoint().port(); }
-    [[nodiscard]] int hits() const { return hits_.load(); }
+    [[nodiscard]] int hits() const { return hits_.load(); }              // full 200s served
+    [[nodiscard]] int notModified() const { return notModified_.load(); }  // 304s served
     [[nodiscard]] std::string lastRequest() {
         std::lock_guard<std::mutex> guard(mutex_);
         return lastRequest_;
@@ -93,16 +95,31 @@ private:
             std::lock_guard<std::mutex> guard(mutex_);
             lastRequest_ = request;
         }
-        hits_.fetch_add(1);
-        static constexpr std::string_view kResponse =
-            "HTTP/1.1 200 OK\r\n"
-            "Content-Type: text/plain\r\n"
-            "Content-Length: 5\r\n"
-            "Cache-Control: max-age=60\r\n"
-            "\r\n"
-            "hello";
+        // Respond conditionally: a matching If-None-Match yields a bodyless 304;
+        // otherwise a full 200 with an ETag, short-lived (max-age=1) for /rev so
+        // it can be driven stale, and long-lived (max-age=60) elsewhere.
+        std::string response;
+        if (request.find("If-None-Match: \"v1\"") != std::string::npos) {
+            notModified_.fetch_add(1);
+            response =
+                "HTTP/1.1 304 Not Modified\r\n"
+                "ETag: \"v1\"\r\n"
+                "Cache-Control: max-age=1\r\n"
+                "\r\n";
+        } else {
+            hits_.fetch_add(1);
+            const bool shortLived = request.find("GET /rev ") != std::string::npos;
+            response =
+                "HTTP/1.1 200 OK\r\n"
+                "Content-Type: text/plain\r\n"
+                "Content-Length: 5\r\n"
+                "ETag: \"v1\"\r\n"
+                "Cache-Control: max-age=";
+            response += shortLived ? "1" : "60";
+            response += "\r\n\r\nhello";
+        }
         co_await asio::async_write(
-            socket, asio::buffer(kResponse), asio::as_tuple(asio::use_awaitable));
+            socket, asio::buffer(response), asio::as_tuple(asio::use_awaitable));
         asio::error_code ignore;
         socket.shutdown(tcp::socket::shutdown_both, ignore);
     }
@@ -110,6 +127,7 @@ private:
     asio::io_context io_;
     tcp::acceptor acceptor_;
     std::atomic<int> hits_{0};
+    std::atomic<int> notModified_{0};
     std::mutex mutex_;
     std::string lastRequest_;
     std::jthread thread_;
@@ -230,6 +248,28 @@ int main() {
         const auto r = httpGet(edgePort, "front.local", "/page");
         check(contains(r, "X-Cache: MISS"), "post-purge request is a MISS");
         check(origin.hits() == 2, "post-purge request re-contacted the origin");
+    }
+
+    // Conditional revalidation: a short-lived entry goes stale, is revalidated
+    // with the origin, comes back 304, and is served from cache without a full
+    // transfer -- then a follow-up is a plain hit again.
+    {
+        const auto a = httpGet(edgePort, "front.local", "/rev");
+        check(contains(a, "X-Cache: MISS"), "first /rev request is a MISS");
+        check(bodyOf(a) == "hello", "/rev body proxied");
+
+        std::this_thread::sleep_for(std::chrono::milliseconds(1100));  // let it go stale
+
+        const int fullBefore = origin.hits();
+        const auto b = httpGet(edgePort, "front.local", "/rev");
+        check(contains(b, "X-Cache: REVALIDATED"), "stale entry is revalidated");
+        check(statusOf(b) == 200, "revalidated response is 200 from cache");
+        check(bodyOf(b) == "hello", "revalidated body served from cache");
+        check(origin.notModified() == 1, "origin answered the conditional with 304");
+        check(origin.hits() == fullBefore, "revalidation sent no full response");
+
+        const auto c = httpGet(edgePort, "front.local", "/rev");
+        check(contains(c, "X-Cache: HIT"), "refreshed entry is a hit again");
     }
 
     // Removing the origin mapping at runtime makes the host unroutable.
