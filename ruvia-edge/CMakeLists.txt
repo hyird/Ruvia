@@ -2,6 +2,7 @@ set(RUVIA_EDGE_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/src/EdgeConfig.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/EdgeFreshness.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/EdgeCache.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/OriginFetcher.cpp
 )
 
 add_library(ruvia-edge ${RUVIA_EDGE_SOURCES})
@@ -17,14 +18,17 @@ ruvia_configure_runtime_library(ruvia-edge)
 
 target_compile_definitions(ruvia-edge PUBLIC RUVIA_ENABLE_EDGE)
 
-# The edge node is a caching reverse proxy: it reuses the web server (accept
-# loop, sessions, TLS) to face clients, the sans-I/O HTTP/1 client in ruvia-http
-# to fetch from origins, and the core async/socket primitives to drive that I/O.
+# The edge node is a caching reverse proxy running its own event loop: ruvia-core
+# supplies the async/socket primitives (Task, asyncAsio) that drive both the
+# client-facing accept loop and the origin connections on one io_context, and
+# ruvia-http supplies the sans-I/O HTTP/1 request parser (client side) and
+# request writer / response parser (origin side). It deliberately does not depend
+# on ruvia-web: the app framework hides the worker executor an edge needs to open
+# outbound origin sockets, so the edge owns its own loop instead.
 target_link_libraries(ruvia-edge
     PUBLIC
         ruvia::core
         ruvia::http
-        ruvia::web
 )
 
 ruvia_install_target(ruvia-edge edge)
