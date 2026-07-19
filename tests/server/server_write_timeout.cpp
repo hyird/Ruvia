@@ -1,9 +1,9 @@
 // Regression: sendTimeout must bound the response-write phase (kWriting), so a
 // slow-read client -- one that sends a request then stops reading -- cannot pin a
-// connection (and its response buffer) open indefinitely. A handler returns a
-// body far larger than the socket buffers; the client sends the request, stops
-// reading past sendTimeout, then drains. The server must have closed the stuck
-// write, observed as an eof after the buffered prefix rather than a stall.
+// connection open indefinitely. A handler streams more data than any practical
+// socket buffer can hold; the client stops reading past sendTimeout, then drains.
+// The server must have closed the stuck write, observed as an eof after the
+// buffered prefix rather than a stall.
 
 #include <chrono>
 #include <cstdio>
@@ -24,7 +24,7 @@
 
 #include "ruvia/web/Context.h"
 #include "ruvia/web/Router.h"
-#include "ruvia/web/detail/CallableRef.h"
+#include "ruvia/web/Streaming.h"
 #include "ruvia/web/detail/router/RouterInternal.h"
 #include "ruvia/web/detail/server/HttpServer.h"
 
@@ -35,23 +35,28 @@ constexpr auto kSendTimeout = 200ms;
 // Past sendTimeout, so a stuck write is already closed when the client drains.
 constexpr auto kStallBeforeDrain = 700ms;
 constexpr int kClientReceiveBufferBytes = 1024;
-// Keep the advertised receive window explicitly small so loopback auto-tuning
-// cannot absorb the whole response before the write timeout starts measuring.
-std::string bigBody(4 * 1024 * 1024, 'x');
+constexpr std::size_t kMaxResponseChunks = 1024;
+// Reuse one chunk and keep writing until the transport blocks. This avoids
+// assuming a fixed response size exceeds every platform's loopback buffers.
+std::string responseChunk(1024 * 1024, 'x');
 char drainBuf[65536];
+
+ruvia::Task<void> writeUntilBlocked(void*, ruvia::Context& context) {
+    for (std::size_t i = 0; i < kMaxResponseChunks; ++i) {
+        co_await context.stream().write(std::string_view(responseChunk));
+    }
+    co_await context.stream().end();
+}
 }  // namespace
 
 int main() {
     ruvia::Router router;
     auto& routerImpl = ruvia::detail::RouterImpl::from(router);
-    auto handler = [](ruvia::Context& c) -> ruvia::Task<ruvia::HttpResponse> {
-        co_return c.text(std::string_view(bigBody));
-    };
-    routerImpl.registerRoute(
+    routerImpl.registerResponseStreamRoute(
         ruvia::HttpKnownMethod::kGet,
         std::pmr::string("/big", std::pmr::get_default_resource()),
-        ruvia::detail::makeCallableRef<ruvia::HttpResponse, ruvia::Context&>(handler),
-        ruvia::detail::RequestBodyMode::kBuffered, {}, {});
+        ruvia::detail::RouteStreamHandler(nullptr, &writeUntilBlocked),
+        {}, {});
     routerImpl.finalize();
 
     ruvia::detail::HttpServerOptions options;
