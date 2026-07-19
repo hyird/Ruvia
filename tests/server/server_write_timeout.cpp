@@ -18,6 +18,7 @@
 #include <asio/io_context.hpp>
 #include <asio/ip/tcp.hpp>
 #include <asio/read.hpp>
+#include <asio/socket_base.hpp>
 #include <asio/steady_timer.hpp>
 #include <asio/write.hpp>
 
@@ -33,8 +34,9 @@ namespace {
 constexpr auto kSendTimeout = 200ms;
 // Past sendTimeout, so a stuck write is already closed when the client drains.
 constexpr auto kStallBeforeDrain = 700ms;
-// A body that comfortably exceeds the combined kernel send+receive buffers, so
-// the write cannot complete without the client reading.
+constexpr int kClientReceiveBufferBytes = 1024;
+// Keep the advertised receive window explicitly small so loopback auto-tuning
+// cannot absorb the whole response before the write timeout starts measuring.
 std::string bigBody(4 * 1024 * 1024, 'x');
 char drainBuf[65536];
 }  // namespace
@@ -68,10 +70,28 @@ int main() {
         asio::io_context ctx;
         asio::ip::tcp::socket socket(ctx);
         std::error_code ec;
-        socket.connect(endpoint, ec);
+        socket.open(endpoint.protocol(), ec);
         if (ec) {
-            std::fputs("connect failed\n", stderr);
+            std::fputs("socket open failed\n", stderr);
             result = 1;
+        }
+
+        if (result == 0) {
+            socket.set_option(
+                asio::socket_base::receive_buffer_size(kClientReceiveBufferBytes),
+                ec);
+            if (ec) {
+                std::fputs("receive buffer setup failed\n", stderr);
+                result = 1;
+            }
+        }
+
+        if (result == 0) {
+            socket.connect(endpoint, ec);
+            if (ec) {
+                std::fputs("connect failed\n", stderr);
+                result = 1;
+            }
         }
 
         if (result == 0) {
