@@ -38,7 +38,8 @@ struct JsonBody {
 };
 
 template <typename T>
-struct JsonBody<T, std::enable_if_t<std::is_base_of_v<detail::RequestModelSchemaTag, T>>> {
+    requires std::is_base_of_v<detail::RequestModelSchemaTag, T>
+struct JsonBody<T, void> {
     static constexpr bool value = true;
 
     static std::optional<T> parse(
@@ -66,7 +67,8 @@ struct FormBody {
 };
 
 template <typename T>
-struct FormBody<T, std::enable_if_t<std::is_base_of_v<detail::RequestModelSchemaTag, T>>> {
+    requires std::is_base_of_v<detail::RequestModelSchemaTag, T>
+struct FormBody<T, void> {
     static constexpr bool value = true;
 
     static std::optional<T> parse(
