@@ -1,0 +1,89 @@
+#pragma once
+
+#include <cstdint>
+#include <string>
+#include <string_view>
+#include <thread>
+
+#include <asio/awaitable.hpp>
+#include <asio/io_context.hpp>
+#include <asio/ip/tcp.hpp>
+
+#include "ruvia/edge/EdgeCache.h"
+#include "ruvia/edge/EdgeConfig.h"
+#include "ruvia/edge/OriginFetcher.h"
+
+namespace ruvia::edge {
+
+struct EdgeServerOptions final {
+    EdgeCache::Limits cache{};
+    OriginFetcher::Limits fetch{};
+};
+
+// A caching reverse-proxy edge node running its own single-thread event loop.
+// It faces clients over plaintext HTTP/1.1, resolves each request's Host against
+// a dynamically mutable origin table, serves fresh responses from an in-memory
+// LRU cache, and fetches from the mapped origin on a miss (caching the result
+// when the response's Cache-Control allows a shared cache to store it).
+//
+// The origin table and the cache are the control plane: addOrigin/removeOrigin
+// and purge/clearCache are safe to call at runtime from any thread while the
+// server is running -- the origin table is published copy-on-write and the cache
+// is mutex-guarded, so a request in flight never observes a half-applied change.
+//
+// The MVP scope is deliberately narrow: plaintext HTTP/1.1 on both sides, GET
+// only (other methods get 501), one request per client connection, and no origin
+// connection pooling. TLS, keep-alive, and multi-worker scaling are future work.
+class EdgeServer final {
+public:
+    EdgeServer(const asio::ip::tcp::endpoint& endpoint, EdgeServerOptions options = {});
+    ~EdgeServer();
+
+    EdgeServer(const EdgeServer&) = delete;
+    EdgeServer& operator=(const EdgeServer&) = delete;
+
+    // Launch the worker thread that runs the event loop. Idempotent-unsafe: call
+    // once. localEndpoint() is valid before start() because the acceptor binds in
+    // the constructor.
+    void start();
+
+    // Stop accepting and unwind the event loop, then join the worker thread.
+    void stop();
+    void join();
+
+    [[nodiscard]] asio::ip::tcp::endpoint localEndpoint() const;
+
+    // --- Control plane (thread-safe; callable while running) ---
+
+    // Map (or replace) a front-facing Host to an origin. Returns true if this
+    // created a new mapping, false if it replaced an existing one.
+    bool addOrigin(std::string frontHost, OriginSettings settings);
+
+    // Remove a Host mapping. Returns true if a mapping was removed.
+    bool removeOrigin(std::string_view frontHost);
+
+    // Drop the cached GET response for one Host+target. Returns true if an entry
+    // was removed.
+    bool purge(std::string_view frontHost, std::string_view target);
+
+    // Drop every cached response.
+    void clearCache();
+
+private:
+    [[nodiscard]] static std::string cacheKey(
+        std::string_view method,
+        std::string_view frontHost,
+        std::string_view target);
+
+    asio::awaitable<void> acceptLoop();
+    asio::awaitable<void> handleSession(asio::ip::tcp::socket socket);
+
+    asio::io_context ioContext_;
+    asio::ip::tcp::acceptor acceptor_;
+    EdgeConfig config_;
+    EdgeCache cache_;
+    OriginFetcher fetcher_;
+    std::jthread worker_;
+};
+
+}  // namespace ruvia::edge

@@ -3,6 +3,7 @@ set(RUVIA_EDGE_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/src/EdgeFreshness.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/EdgeCache.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/OriginFetcher.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/EdgeServer.cpp
 )
 
 add_library(ruvia-edge ${RUVIA_EDGE_SOURCES})
