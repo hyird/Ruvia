@@ -29,23 +29,25 @@ inline constexpr std::string_view kChunkedTransferEncodingHeader =
 
 [[nodiscard]] std::optional<std::uint64_t> explicitContentLength(
     const HttpResponse& response) {
+    // A kOk parseField always populates the state's value, and a Content-Length
+    // that fails to parse throws below, so the accumulated optional already
+    // encodes presence: empty means no Content-Length line was seen.
     HttpContentLengthState state;
-    bool present = false;
     for (const auto& header : response.headers()) {
         if (responseHeaderKnownBit(header) != kResponseHeaderContentLength) {
             continue;
         }
-        present = true;
         if (state.parseField(header.value()) !=
             HttpContentLengthParseStatus::kOk) {
             throw std::invalid_argument(
                 "invalid explicit HTTP response Content-Length");
         }
     }
-    if (!present) {
+    const auto value = state.value();
+    if (!value.has_value()) {
         return std::nullopt;
     }
-    return static_cast<std::uint64_t>(*state.value());
+    return static_cast<std::uint64_t>(*value);
 }
 
 // Unchecked sink writing through a raw cursor; the caller guarantees capacity
