@@ -340,6 +340,10 @@ ruvia_add_test(ruvia_server_pipeline_request_views server/server_pipeline_reques
 ruvia_add_test(ruvia_server_tls_keepalive_deadline server/server_tls_keepalive_deadline.cpp TIMEOUT 60)
 ruvia_add_test(ruvia_server_keepalive_idle_timeout server/server_keepalive_idle_timeout.cpp TIMEOUT 60)
 ruvia_add_test(ruvia_server_write_timeout server/server_write_timeout.cpp TIMEOUT 60)
+
+if(RUVIA_BUILD_EDGE)
+    ruvia_add_test(ruvia_edge_config edge/unit_edge_config.cpp LIB ruvia::edge TIMEOUT 30)
+endif()
 ruvia_add_test(ruvia_web_worker server/web_worker.cpp TIMEOUT 30)
 ruvia_add_test(ruvia_app_web_worker server/app_web_worker.cpp TIMEOUT 30)
 ruvia_add_test(ruvia_app_startup_retry server/app_startup_retry.cpp TIMEOUT 30)
