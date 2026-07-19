@@ -4,7 +4,7 @@
 // themselves with RUVIA_TEST; the shared main() in test_main.cpp runs them all
 // and reports pass/fail counts, returning non-zero if anything failed.
 
-#include <cstdio>
+#include <print>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -34,8 +34,8 @@ struct Registrar {
 
 inline void reportFailure(TestContext& ctx, const char* file, int line, std::string_view expr) {
     ++ctx.failures;
-    std::fprintf(stderr, "  [FAIL] %s\n    at %s:%d\n    check: %.*s\n",
-                 ctx.current, file, line, static_cast<int>(expr.size()), expr.data());
+    std::print(stderr, "  [FAIL] {}\n    at {}:{}\n    check: {}\n",
+               ctx.current, file, line, expr);
 }
 
 }  // namespace ruvia::testing
