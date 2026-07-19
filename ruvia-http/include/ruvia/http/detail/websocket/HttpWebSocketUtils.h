@@ -9,6 +9,7 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <variant>
 
 #include "ruvia/http/ProtocolByteLimit.h"
@@ -86,12 +87,12 @@ private:
 }
 
 [[nodiscard]] inline bool isWebSocketControlOpcode(WebSocketOpcode opcode) noexcept {
-    return static_cast<std::uint8_t>(opcode) >= 0x8;
+    return std::to_underlying(opcode) >= 0x8;
 }
 
 [[nodiscard]] inline bool isWebSocketControlFrameKind(
     WebSocketFrameKind kind) noexcept {
-    return static_cast<std::uint8_t>(kind) >= 0x8;
+    return std::to_underlying(kind) >= 0x8;
 }
 
 // allowRsv1 enables the RSV1 (compressed) bit when permessage-deflate is
@@ -192,7 +193,7 @@ decodeWebSocketFrameStart(
     bool rsv1 = false) noexcept {
     std::size_t headerSize = 0;
     header[headerSize++] = static_cast<char>(
-        0x80U | (rsv1 ? 0x40U : 0U) | static_cast<std::uint8_t>(opcode));
+        0x80U | (rsv1 ? 0x40U : 0U) | std::to_underlying(opcode));
     if (payloadSize <= 125) {
         header[headerSize++] = static_cast<char>(payloadSize);
     } else if (payloadSize <= 0xFFFF) {
