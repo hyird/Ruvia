@@ -3,6 +3,7 @@
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
+#include <optional>
 #include <span>
 #include <string>
 #include <string_view>
@@ -16,15 +17,17 @@
 
 namespace ruvia::edge {
 
-// One origin request the edge issues on a cache miss. All views are borrowed and
-// must outlive the fetch. The header list is forwarded verbatim to the origin,
-// so the caller must have already stripped hop-by-hop fields and any Host header
-// (the writer generates Host and Content-Length itself). The MVP issues only
-// bodyless requests (GET/HEAD), so there is no request content here.
+// One origin request the edge issues. All views are borrowed and must outlive
+// the fetch. The header list is forwarded verbatim to the origin, so the caller
+// must have already stripped hop-by-hop fields and any Host header (the writer
+// generates Host and Content-Length itself). `body` is the already-decoded
+// request payload for methods that carry one (POST/PUT/...); leave it empty for
+// bodyless requests (GET/HEAD/DELETE) so no content framing is sent.
 struct OriginRequest final {
     std::string_view method{"GET"};
     std::string_view target{"/"};
     std::span<const HttpHeaderView> headers{};
+    std::optional<std::string_view> body{};
 };
 
 // How a fetch ended. Only kOk carries a usable response; every other value means

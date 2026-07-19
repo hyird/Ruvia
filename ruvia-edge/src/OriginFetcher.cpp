@@ -57,7 +57,9 @@ asio::awaitable<OriginFetchResult> OriginFetcher::fetch(
     clientRequest.method = request.method;
     clientRequest.target = request.target;
     clientRequest.headers = request.headers;
-    clientRequest.content = HttpClientRequestContent::none();
+    clientRequest.content = request.body
+        ? HttpClientRequestContent::bytes(*request.body)
+        : HttpClientRequestContent::none();
 
     std::array<char, kHeadBufferBytes> headBuffer;
     const Http1ClientRequestWriter writer;

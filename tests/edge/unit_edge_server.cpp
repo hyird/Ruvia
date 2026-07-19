@@ -95,6 +95,26 @@ private:
                 co_return;
             }
         }
+        // Read any Content-Length body so a forwarded request is captured whole.
+        const std::size_t headEnd = request.find("\r\n\r\n") + 4;
+        std::size_t contentLength = 0;
+        if (const auto p = request.find("Content-Length: "); p != std::string::npos) {
+            std::size_t i = p + 16;
+            while (i < request.size() && request[i] >= '0' && request[i] <= '9') {
+                contentLength = contentLength * 10 + static_cast<std::size_t>(request[i] - '0');
+                ++i;
+            }
+        }
+        while (request.size() - headEnd < contentLength) {
+            auto [ec, n] = co_await socket.async_read_some(
+                asio::buffer(buffer), asio::as_tuple(asio::use_awaitable));
+            if (n > 0) {
+                request.append(buffer, n);
+            }
+            if (ec) {
+                break;
+            }
+        }
         {
             std::lock_guard<std::mutex> guard(mutex_);
             lastRequest_ = request;
@@ -185,6 +205,22 @@ std::string httpHead(std::uint16_t port, std::string_view host, std::string_view
     return httpRaw(port, request);
 }
 
+std::string httpPost(
+    std::uint16_t port,
+    std::string_view host,
+    std::string_view target,
+    std::string_view body) {
+    std::string request = "POST ";
+    request.append(target);
+    request.append(" HTTP/1.1\r\nHost: ");
+    request.append(host);
+    request.append("\r\nContent-Type: text/plain\r\nContent-Length: ");
+    request.append(std::to_string(body.size()));
+    request.append("\r\nConnection: close\r\n\r\n");
+    request.append(body);
+    return httpRaw(port, request);
+}
+
 [[nodiscard]] int statusOf(const std::string& raw) {
     // "HTTP/1.1 " is 9 bytes; the status code is the next three digits.
     if (raw.size() < 12 || !raw.starts_with("HTTP/1.1 ")) {
@@ -251,21 +287,25 @@ int main() {
         check(origin.hits() == 1, "cache hit did not contact the origin");
     }
 
-    // A non-GET method is rejected before any origin work.
+    // A bodyless non-GET method is proxied to the origin and bypasses the cache.
+    // (Uses a different target so it does not disturb the cached /page.)
     {
+        const int before = origin.hits();
         const auto r = httpRaw(edgePort,
-                               "DELETE /page HTTP/1.1\r\nHost: front.local\r\n"
+                               "DELETE /thing HTTP/1.1\r\nHost: front.local\r\n"
                                "Connection: close\r\n\r\n");
-        check(statusOf(r) == 501, "non-GET method is rejected with 501");
-        check(origin.hits() == 1, "rejected method did not contact the origin");
+        check(statusOf(r) == 200, "DELETE is proxied to the origin");
+        check(contains(r, "X-Cache: BYPASS"), "DELETE bypasses the cache");
+        check(origin.hits() == before + 1, "DELETE contacted the origin");
     }
 
     // Purging the entry forces the next request back to the origin.
     {
         check(edge.purge("front.local", "/page"), "purge reports a removed entry");
+        const int before = origin.hits();
         const auto r = httpGet(edgePort, "front.local", "/page");
         check(contains(r, "X-Cache: MISS"), "post-purge request is a MISS");
-        check(origin.hits() == 2, "post-purge request re-contacted the origin");
+        check(origin.hits() == before + 1, "post-purge request re-contacted the origin");
     }
 
     // HEAD is answered from the cached GET: status and headers with the resource
@@ -278,6 +318,20 @@ int main() {
         check(contains(r, "Content-Length: 5"), "HEAD reports the resource length");
         check(bodyOf(r).empty(), "HEAD response carries no body");
         check(origin.hits() == before, "HEAD hit did not contact the origin");
+    }
+
+    // A non-GET method bypasses the cache, forwards its body to the origin, and
+    // invalidates the cached GET for the same target on success.
+    {
+        const auto post = httpPost(edgePort, "front.local", "/page", "payload=42");
+        check(statusOf(post) == 200, "POST proxied with the origin status");
+        check(contains(post, "X-Cache: BYPASS"), "POST bypasses the cache");
+        check(contains(origin.lastRequest(), "payload=42"),
+              "request body is forwarded to the origin");
+
+        const auto get = httpGet(edgePort, "front.local", "/page");
+        check(contains(get, "X-Cache: MISS"),
+              "the unsafe method invalidated the cached GET");
     }
 
     // Conditional revalidation: a short-lived entry goes stale, is revalidated

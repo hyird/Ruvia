@@ -23,6 +23,8 @@
 #include "ruvia/http/HttpHeader.h"
 #include "ruvia/http/HttpKnownMethod.h"
 #include "ruvia/http/HttpStatus.h"
+#include "ruvia/http/ProtocolByteLimit.h"
+#include "ruvia/http/detail/http1/Http1ChunkedBodyDecoder.h"
 
 namespace ruvia::edge {
 
@@ -30,7 +32,8 @@ namespace {
 
 using Headers = std::vector<std::pair<std::string, std::string>>;
 
-constexpr std::size_t kMaxRequestHeadBytes = 64u * 1024u;
+// Upper bound on a whole buffered client request (head plus any forwarded body).
+constexpr std::size_t kMaxRequestBytes = 1u * 1024u * 1024u;
 
 [[nodiscard]] char toLowerAscii(char c) noexcept {
     return (c >= 'A' && c <= 'Z') ? static_cast<char>(c - 'A' + 'a') : c;
@@ -318,8 +321,8 @@ asio::awaitable<void> EdgeServer::handleSession(asio::ip::tcp::socket socket) {
         }
         const auto* parsed = parseResult.parsed();
         if (parsed == nullptr) {
-            if (inbound.size() > kMaxRequestHeadBytes) {
-                co_await writeAll(buildStatusWire(431));
+            if (inbound.size() > kMaxRequestBytes) {
+                co_await writeAll(buildStatusWire(413));
                 finish();
                 co_return;
             }
@@ -337,12 +340,8 @@ asio::awaitable<void> EdgeServer::handleSession(asio::ip::tcp::socket socket) {
         // 2. A framed request. GET and HEAD take the cache path; other methods
         // are not handled yet.
         const auto& request = parsed->request();
+        const bool isGet = request.knownMethod() == HttpKnownMethod::kGet;
         const bool isHead = request.knownMethod() == HttpKnownMethod::kHead;
-        if (request.knownMethod() != HttpKnownMethod::kGet && !isHead) {
-            co_await writeAll(buildStatusWire(501));
-            finish();
-            co_return;
-        }
 
         const std::string_view frontHost = request.header("host").value_or("");
         const std::string_view target = request.target();
@@ -352,6 +351,98 @@ asio::awaitable<void> EdgeServer::handleSession(asio::ip::tcp::socket socket) {
         const OriginSettings* origin = snapshot->findOrigin(frontHost);
         if (origin == nullptr) {
             co_await writeAll(buildStatusWire(502));
+            finish();
+            co_return;
+        }
+
+        // Non-GET/HEAD methods bypass the cache: forward the request and its body
+        // to the origin, return the response, and on a successful unsafe method
+        // invalidate any cached GET for this target (RFC 9111 section 4.4).
+        if (!isGet && !isHead) {
+            std::optional<std::string_view> requestBody;
+            std::string decodedBody;
+            const auto& bodyPlan = parsed->bodyPlan();
+            if (bodyPlan.knownLength() != nullptr) {
+                requestBody = parsed->wireBody();
+            } else if (bodyPlan.chunked() != nullptr) {
+                // De-chunk the request body so it can be forwarded with a
+                // Content-Length; the whole message is already buffered.
+                ruvia::detail::Http1ChunkedBodyDecoder decoder(
+                    ProtocolByteLimit::limited(kMaxRequestBytes));
+                std::string chunkBuffer(parsed->wireBody());
+                bool decodeOk = true;
+                for (;;) {
+                    const auto decoded = decoder.decode(chunkBuffer);
+                    if (decoded.failure() != nullptr) {
+                        decodeOk = false;
+                        break;
+                    }
+                    if (const auto* chunk = decoded.bodyChunk()) {
+                        decodedBody.append(chunk->bytes());
+                        chunkBuffer.erase(0, decoded.consumedBytes());
+                        continue;
+                    }
+                    if (decoded.complete() != nullptr) {
+                        break;
+                    }
+                    decodeOk = false;  // need-more is impossible: message is complete
+                    break;
+                }
+                if (!decodeOk) {
+                    co_await writeAll(buildStatusWire(400));
+                    finish();
+                    co_return;
+                }
+                requestBody = decodedBody;
+            }
+
+            std::vector<HttpHeaderView> passHeaders;
+            for (const auto& field : request.headers()) {
+                std::string lower;
+                lower.reserve(field.name().size());
+                for (const char c : field.name()) {
+                    lower.push_back(toLowerAscii(c));
+                }
+                if (isConnectionOrFramingField(lower) || lower == "host" ||
+                    lower == "via" || lower == "forwarded" ||
+                    lower.starts_with("x-forwarded-")) {
+                    continue;
+                }
+                passHeaders.push_back(field);
+            }
+            if (!clientAddress.empty()) {
+                passHeaders.emplace_back(
+                    std::string_view("X-Forwarded-For"), std::string_view(clientAddress));
+            }
+            if (!frontHost.empty()) {
+                passHeaders.emplace_back(std::string_view("X-Forwarded-Host"), frontHost);
+            }
+            passHeaders.emplace_back(
+                std::string_view("X-Forwarded-Proto"), std::string_view("http"));
+            passHeaders.emplace_back(
+                std::string_view("Via"), std::string_view("1.1 ruvia-edge"));
+
+            OriginRequest passRequest;
+            passRequest.method = request.method();
+            passRequest.target = target;
+            passRequest.headers = passHeaders;
+            passRequest.body = requestBody;
+            auto passFetch = co_await fetcher_.fetch(
+                ioContext_.get_executor(), origin->upstreamHost, origin->upstreamPort,
+                passRequest);
+            if (passFetch.outcome != OriginFetchOutcome::kOk) {
+                const std::uint16_t gatewayStatus =
+                    passFetch.outcome == OriginFetchOutcome::kTimeout ? 504 : 502;
+                co_await writeAll(buildStatusWire(gatewayStatus));
+                finish();
+                co_return;
+            }
+            if (passFetch.response.status < 400) {
+                cache_.purge(cacheKey("GET", frontHost, target));
+            }
+            co_await writeAll(buildResponseWire(
+                passFetch.response.status, passFetch.response.headers,
+                passFetch.response.body, "BYPASS", std::nullopt));
             finish();
             co_return;
         }
