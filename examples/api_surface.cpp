@@ -3008,6 +3008,50 @@ static_assert(!HasAnyRvalueHttpClientRedirectTargetAccessor<
     ruvia::HttpClientRedirectTargetResult>);
 static_assert(!ExposesAnyRvalueHttpClientOwnedView<
     ruvia::HttpClientRedirectTarget>);
+
+// Cross-origin-capable resolution: a different http/https origin is a success
+// alternative carrying the destination origin plus crossOrigin(), so the I/O
+// owner can apply RFC 9110 15.4 credential stripping before following.
+static_assert(std::same_as<
+    decltype(ruvia::resolveHttpClientRedirectTarget(
+        std::declval<const ruvia::HttpOrigin&>(),
+        std::string_view{},
+        std::string_view{},
+        std::declval<std::pmr::memory_resource*>())),
+    ruvia::HttpClientRedirectResolutionResult>);
+static_assert(!std::is_copy_constructible_v<
+    ruvia::HttpClientRedirectResolutionResult>);
+static_assert(std::is_move_constructible_v<
+    ruvia::HttpClientRedirectResolutionResult>);
+static_assert(!std::is_copy_constructible_v<ruvia::HttpClientResolvedRedirect>);
+static_assert(std::is_move_constructible_v<ruvia::HttpClientResolvedRedirect>);
+
+[[maybe_unused]] void classifyCrossOriginRedirect(
+    const ruvia::HttpOrigin& origin,
+    std::string_view currentTarget,
+    std::string_view location) {
+    const auto result = ruvia::resolveHttpClientRedirectTarget(
+        origin, currentTarget, location);
+    if (const auto* resolved = result.resolved()) {
+        [[maybe_unused]] const auto scheme = resolved->scheme();
+        [[maybe_unused]] const auto host = resolved->host();
+        [[maybe_unused]] const auto port = resolved->port();
+        [[maybe_unused]] const auto target = resolved->target();
+        if (!resolved->crossOrigin()) {
+            return;  // same origin: reuse the connection and credentials
+        }
+        // Cross-origin: drop Authorization/Proxy-Authorization and cookie
+        // material before following, then connect to resolved->origin().
+        [[maybe_unused]] const auto nextOrigin = resolved->origin();
+        return;
+    }
+    switch (result.failure()->error()) {
+        case ruvia::HttpClientRedirectResolutionError::kInvalidCurrentTarget:
+        case ruvia::HttpClientRedirectResolutionError::kInvalidLocation:
+        case ruvia::HttpClientRedirectResolutionError::kUnsupportedScheme:
+            break;
+    }
+}
 static_assert(!HasHttpClientRedirectError<
     ruvia::HttpClientRedirectTarget>);
 static_assert(HasHttpClientRedirectError<

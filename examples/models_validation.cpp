@@ -1,6 +1,7 @@
 // Typed models and validation: separate request/response models, JSON and
-// form bodies, nested models, arrays, recursive lists, defaults, and
-// validation middleware and rules.
+// form bodies, nested models, arrays, recursive lists, defaults, validation
+// middleware and rules, and the non-throwing jsonIf/formIf fallbacks (wrong
+// media type or unparsable body yield nullopt instead of 415/400).
 
 #include <cstdint>
 #include <string_view>
@@ -174,6 +175,7 @@ public:
     RUVIA_GET("/category/:id", categoryById, CategoryParamValidator);
     RUVIA_GET("/headers", headers, RequestHeaderValidator);
     RUVIA_GET("/cookies", cookies, PreferencesCookieValidator);
+    RUVIA_POST("/feedback", feedback);
     RUVIA_ROUTES_END
 
 private:
@@ -191,6 +193,29 @@ private:
         response.tagsEnsure().emplace_back(ruvia::String("validated", c.resource()));
         c.status(ruvia::http_status::kCreated);
         co_return c.json(response);
+    }
+
+    // json<T>()/form<T>() answer a wrong Content-Type with 415 and a
+    // malformed body of the right type with 400. When the endpoint prefers
+    // to fall back instead of failing -- optional bodies, content
+    // negotiation -- the *If variants return nullopt for exactly those two
+    // format problems while transport/protocol failures still throw.
+    ruvia::Task<ruvia::HttpResponse> feedback(ruvia::Context& c) {
+        if (const auto json = co_await c.req().jsonIf<ContactForm>()) {
+            std::pmr::string body(c.allocator<char>());
+            body.append("json feedback from ");
+            body.append(json->name().has_value() ? json->name()->view() : "anonymous");
+            body.push_back('\n');
+            co_return c.text(std::move(body));
+        }
+        if (const auto form = co_await c.req().formIf<ContactForm>()) {
+            std::pmr::string body(c.allocator<char>());
+            body.append("form feedback from ");
+            body.append(form->name().has_value() ? form->name()->view() : "anonymous");
+            body.push_back('\n');
+            co_return c.text(std::move(body));
+        }
+        co_return c.text("no feedback body\n");
     }
 
     ruvia::Task<ruvia::HttpResponse> contact(ruvia::Context& c) {
