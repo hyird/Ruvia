@@ -25,7 +25,7 @@ endif()
 if(EXISTS "${_install_prefix}/@CMAKE_INSTALL_LIBDIR@/cmake/ruvia/ruviaTargets.cmake")
     message(FATAL_ERROR "obsolete monolithic Ruvia target export was installed")
 endif()
-foreach(_ruvia_component IN ITEMS core http web)
+foreach(_ruvia_component IN ITEMS core http web edge)
     if(_ruvia_component IN_LIST _built_components AND
        NOT EXISTS
            "${_install_prefix}/@CMAKE_INSTALL_LIBDIR@/cmake/ruvia/ruvia-${_ruvia_component}-targets.cmake")
@@ -36,6 +36,11 @@ endforeach()
 if(_built_components_csv MATCHES "(^|,)core(,|$)" AND
    NOT EXISTS "${_install_prefix}/include/ruvia/core/detail/Base64Url.h")
     message(FATAL_ERROR "core base64url helper was not installed")
+endif()
+
+if(_built_components_csv MATCHES "(^|,)web(,|$)" AND
+   NOT EXISTS "${_install_prefix}/include/ruvia/web/Testing.h")
+    message(FATAL_ERROR "web in-memory testing facade was not installed")
 endif()
 
 if(_built_components_csv MATCHES "(^|,)core(,|$)")
@@ -5438,7 +5443,7 @@ function(ruvia_install_component_package name components_csv)
             "Ruvia '${name}' Development install failed: ${_development_install_result}")
     endif()
 
-    foreach(_component IN ITEMS core http web)
+    foreach(_component IN ITEMS core http web edge)
         set(_export
             "${_prefix}/@CMAKE_INSTALL_LIBDIR@/cmake/ruvia/ruvia-${_component}-targets.cmake")
         if(_component IN_LIST _components)

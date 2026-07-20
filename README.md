@@ -354,8 +354,9 @@ target_link_libraries(protocol_tool PRIVATE ruvia::http)
 ```
 
 The package imports only the requested dependency closure: core and HTTP are
-independent, while Web imports core, HTTP, and Web. Component-scoped
-installation uses `core`, `http`, `web`, and `Development` install components.
+independent, while Web and Edge each import core and HTTP alongside their own
+targets. Component-scoped installation uses `core`, `http`, `web`, `edge`, and
+`Development` install components.
 
 ## Web API Shape
 
