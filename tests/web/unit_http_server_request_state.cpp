@@ -372,8 +372,8 @@ RUVIA_TEST(http1_prepared_stream_head_owns_exact_wire_framing) {
     RUVIA_CHECK(http10.responseHeadPlan().protocolVersion() ==
         ruvia::HttpProtocolVersion::kHttp10);
     RUVIA_CHECK(http10Wire.starts_with("HTTP/1.0 200 OK\r\n"));
-    RUVIA_CHECK(!http10Wire.contains("Transfer-Encoding:"));
-    RUVIA_CHECK(!http10Wire.contains("Content-Length:"));
+    RUVIA_CHECK(http10Wire.find("Transfer-Encoding:") == std::string_view::npos);
+    RUVIA_CHECK(http10Wire.find("Content-Length:") == std::string_view::npos);
 
     auto http11 = prepare("GET / HTTP/1.1\r\nHost: x\r\n\r\n");
     RUVIA_CHECK(http11.responseHeadPlan().chunkedStream() != nullptr);
@@ -390,9 +390,9 @@ RUVIA_TEST(http1_prepared_stream_head_owns_exact_wire_framing) {
     RUVIA_CHECK(http11.responseHeadPlan().protocolVersion() ==
         ruvia::HttpProtocolVersion::kHttp11);
     RUVIA_CHECK(http11Wire.starts_with("HTTP/1.1 200 OK\r\n"));
-    RUVIA_CHECK(http11Wire.contains("Transfer-Encoding: chunked\r\n"));
-    RUVIA_CHECK(!http11Wire.contains("gzip"));
-    RUVIA_CHECK(!http11Wire.contains("Content-Length:"));
+    RUVIA_CHECK(http11Wire.find("Transfer-Encoding: chunked\r\n") != std::string_view::npos);
+    RUVIA_CHECK(http11Wire.find("gzip") == std::string_view::npos);
+    RUVIA_CHECK(http11Wire.find("Content-Length:") == std::string_view::npos);
 }
 
 RUVIA_TEST(http1_prepared_body_suppressed_stream_is_self_delimited) {

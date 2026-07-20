@@ -3,7 +3,6 @@
 #include <concepts>
 #include <cstddef>
 #include <cstdint>
-#include <functional>
 #include <memory>
 #include <memory_resource>
 #include <stop_token>
@@ -80,8 +79,8 @@ private:
 
     WorkerHandle worker_;
     std::pmr::memory_resource* resource_;
-    detail::DbRegistry* databases_;
-    detail::RedisRegistry* redis_;
+    [[maybe_unused]] detail::DbRegistry* databases_;
+    [[maybe_unused]] detail::RedisRegistry* redis_;
     const detail::WorkerStateRegistry* workerStates_;
     std::stop_token stopToken_;
     // Each posted callback gets an independent operation lifetime. Declared
@@ -113,7 +112,7 @@ public:
                      std::invoke_result_t<std::decay_t<Fn>&, WebWorkerContext&>,
                      Task<void>>
     [[nodiscard]] PostResult post(Fn&& fn) const {
-        return postTask(std::move_only_function<Task<void>(WebWorkerContext&)>(
+        return postTask(MoveOnlyFunction<Task<void>(WebWorkerContext&)>(
             std::forward<Fn>(fn)));
     }
 
@@ -124,7 +123,7 @@ private:
         std::shared_ptr<detail::WebWorkerDispatch> dispatch) noexcept;
 
     [[nodiscard]] PostResult postTask(
-        std::move_only_function<Task<void>(WebWorkerContext&)> task) const;
+        MoveOnlyFunction<Task<void>(WebWorkerContext&)> task) const;
 
     // The handle owns a stable terminal endpoint. Server shutdown closes it;
     // retaining a handle cannot retain the server or its io_context.

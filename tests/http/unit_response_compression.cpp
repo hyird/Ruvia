@@ -157,7 +157,8 @@ RUVIA_TEST(compress_happy_path_sets_encoding_and_vary) {
     RUVIA_CHECK_EQ(response.header("Content-Encoding"), std::string_view("gzip"));
     // Compressing on Accept-Encoding must advertise the variance.
     RUVIA_CHECK(
-        response.header("Vary").value_or(std::string_view{}).contains("Accept-Encoding"));
+        response.header("Vary").value_or(std::string_view{}).find("Accept-Encoding") !=
+            std::string_view::npos);
 }
 
 RUVIA_TEST(compress_weakens_strong_etag_but_leaves_weak_and_absent) {
@@ -204,7 +205,8 @@ RUVIA_TEST(compress_brotli_and_zstd_emit_their_content_encoding) {
         RUVIA_CHECK(tryCompress(response, Compression{.minBytes = 16}, HttpContentCoding::kBrotli));
         RUVIA_CHECK_EQ(response.header("Content-Encoding"), std::string_view("br"));
         RUVIA_CHECK(
-            response.header("Vary").value_or(std::string_view{}).contains("Accept-Encoding"));
+            response.header("Vary").value_or(std::string_view{}).find("Accept-Encoding") !=
+                std::string_view::npos);
     }
     {
         auto response = responseWithBody(kCompressibleBody);
@@ -266,7 +268,8 @@ RUVIA_TEST(compress_skips_when_no_coding_but_preserves_head_metadata) {
         RUVIA_CHECK(!writePlan.sendBody());
         RUVIA_CHECK_EQ(response.header("Content-Encoding"), std::string_view("gzip"));
         RUVIA_CHECK(
-            response.header("Vary").value_or(std::string_view{}).contains("Accept-Encoding"));
+            response.header("Vary").value_or(std::string_view{}).find("Accept-Encoding") !=
+                std::string_view::npos);
     }
 }
 
@@ -321,7 +324,8 @@ RUVIA_TEST(compress_skips_already_encoded_body) {
 
 RUVIA_TEST(compress_declares_vary_for_negotiated_but_uncompressed_responses) {
     const auto varies = [](HttpResponse& r) {
-        return r.header("Vary").value_or(std::string_view{}).contains("Accept-Encoding");
+        return r.header("Vary").value_or(std::string_view{}).find("Accept-Encoding") !=
+            std::string_view::npos;
     };
 
     // A compressible representation is selected by Accept-Encoding, so it must carry

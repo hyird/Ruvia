@@ -251,7 +251,7 @@ RUVIA_TEST(hpack_indexed_name_referencing_the_evicted_entry_is_safe) {
     // (20 bytes, past any small-string buffer) and the insertion fully evicts it,
     // so addDynamic must copy the name BEFORE eviction frees that heap buffer --
     // otherwise the copy reads freed memory (a remotely reachable heap
-    // use-after-free during HPACK decode). Under AddressSanitizer this block
+    // use-after-free during HPACK decode). This block
     // aborts without the fix; it also pins the functional invariant that the
     // newly inserted entry resolves to the correct (uncorrupted) name.
     const std::string name(20, 'a');

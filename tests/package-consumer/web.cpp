@@ -94,9 +94,9 @@ concept ExposesRvalueSecureTokenAlternative =
     requires(Result&& result) { std::move(result).ready(); } ||
     requires(Result&& result) { std::move(result).failure(); };
 
-template <typename Value>
+template <typename Value, typename Result = ruvia::detail::SecureTokenResult>
 concept CanForgeSecureTokenResult = requires(Value&& value) {
-    ruvia::detail::SecureTokenResult::makeReady(
+    Result::makeReady(
         std::forward<Value>(value));
 };
 
@@ -536,26 +536,26 @@ static_assert(!AcceptsTemporaryDbValueText<std::string>);
 static_assert(!AcceptsTemporaryDbValueText<const std::string>);
 static_assert(AcceptsLvalueDbValueText<std::string>);
 
-template <typename String>
+template <typename String, typename Migration = ruvia::DbMigration>
 concept AcceptsAnyTemporaryDbMigrationText =
     requires(String&& value) {
-        ruvia::DbMigration{
+        Migration{
             std::forward<String>(value), "SELECT 1"};
     } ||
     requires(String&& value) {
-        ruvia::DbMigration{
+        Migration{
             "migration", std::forward<String>(value)};
     } ||
-    requires(ruvia::DbMigration& migration, String&& value) {
+    requires(Migration& migration, String&& value) {
         migration.id = std::forward<String>(value);
     } ||
-    requires(ruvia::DbMigration& migration, String&& value) {
+    requires(Migration& migration, String&& value) {
         migration.sql = std::forward<String>(value);
     };
 
-template <typename String>
+template <typename String, typename Migration = ruvia::DbMigration>
 concept AcceptsLvalueDbMigrationText = requires(String& value) {
-    ruvia::DbMigration{value, value};
+    Migration{value, value};
 };
 
 template <typename T>

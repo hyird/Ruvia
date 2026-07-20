@@ -1322,8 +1322,8 @@ concept HasRequestNameValueViewCanonicalAccessors = requires(const T& entry) {
 template <typename T>
 concept HasRequestNameValueListPublicMutators = requires(T& list) {
     list.reserve(std::size_t{1});
-    list.push_back(ruvia::RequestNameValueView{});
-    list.emplace_back(ruvia::RequestNameValueView{});
+    list.push_back(typename T::value_type{});
+    list.emplace_back(typename T::value_type{});
 };
 
 template <typename T>
@@ -1527,20 +1527,20 @@ concept AcceptsLvalueDbValueText = requires(String& value) {
     ruvia::DbValue(value);
 };
 
-template <typename String>
+template <typename String, typename Migration = ruvia::DbMigration>
 concept AcceptsAnyTemporaryDbMigrationText =
     requires(String&& value) {
-        ruvia::DbMigration{
+        Migration{
             std::forward<String>(value), "SELECT 1"};
     } ||
     requires(String&& value) {
-        ruvia::DbMigration{
+        Migration{
             "migration", std::forward<String>(value)};
     } ||
-    requires(ruvia::DbMigration& migration, String&& value) {
+    requires(Migration& migration, String&& value) {
         migration.id = std::forward<String>(value);
     } ||
-    requires(ruvia::DbMigration& migration, String&& value) {
+    requires(Migration& migration, String&& value) {
         migration.sql = std::forward<String>(value);
     };
 

@@ -110,11 +110,17 @@ template <typename T>
     } else if constexpr (isRuviaScalar<FieldT>) {
         using ScalarT = typename RuviaScalarTraits<FieldT>::value_type;
         if constexpr (std::is_same_v<ScalarT, bool>) {
-            return parseFormBool(decoded).transform(
-                [](bool parsed) { return FieldT(parsed); });
+            const auto parsed = parseFormBool(decoded);
+            if (!parsed.has_value()) {
+                return std::nullopt;
+            }
+            return FieldT(*parsed);
         } else {
-            return parseFormNumber<ScalarT>(decoded).transform(
-                [](ScalarT parsed) { return FieldT(parsed); });
+            const auto parsed = parseFormNumber<ScalarT>(decoded);
+            if (!parsed.has_value()) {
+                return std::nullopt;
+            }
+            return FieldT(*parsed);
         }
     } else {
         static_assert(alwaysFalse<FieldT>, "RUVIA_REQUEST_MODEL form field type is not supported");

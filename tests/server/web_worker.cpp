@@ -86,7 +86,9 @@ int testGraceDeadlineCancelsTimer() {
     auto worker = server.webWorker();
     server.start();
     if (worker.post([](ruvia::WebWorkerContext& context) -> ruvia::Task<void> {
-            co_await ruvia::sleepFor(context.worker(), std::chrono::hours(1));
+            static_cast<void>(
+                co_await ruvia::sleepFor(
+                    context.worker(), std::chrono::hours(1)));
         }) != ruvia::PostResult::kAccepted) {
         server.stop();
         server.join();
@@ -128,8 +130,8 @@ int testGracefulDrain() {
                     context.worker().id() == webWorker.id() &&
                     context.resource() != nullptr && *value == 42,
                 std::memory_order_release);
-            co_await ruvia::sleepFor(
-                context.worker(), std::chrono::milliseconds(50));
+            static_cast<void>(co_await ruvia::sleepFor(
+                context.worker(), std::chrono::milliseconds(50)));
             sawStop.store(context.stopToken().stop_requested(),
                           std::memory_order_release);
             completed.set_value();

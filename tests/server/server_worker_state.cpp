@@ -160,13 +160,13 @@ int main() {
             asio::streambuf buffer;
             asio::write(sock, asio::buffer(std::string_view(
                 "GET /count HTTP/1.1\r\nHost: localhost\r\n\r\n")), ec);
-            if (!readResponse(sock, buffer, ec).contains("count:1")) {
+            if (readResponse(sock, buffer, ec).find("count:1") == std::string::npos) {
                 fail(1, "first request did not see a fresh worker state");
             }
             asio::write(sock, asio::buffer(std::string_view(
                 "GET /count HTTP/1.1\r\nHost: localhost\r\n\r\n")), ec);
             if (rc == 0 &&
-                !readResponse(sock, buffer, ec).contains("count:2")) {
+                readResponse(sock, buffer, ec).find("count:2") == std::string::npos) {
                 fail(2, "second request did not see the first request's mutation");
             }
             sock.close(ec);
@@ -177,7 +177,7 @@ int main() {
             asio::streambuf buffer;
             asio::write(sock, asio::buffer(std::string_view(
                 "GET /count HTTP/1.1\r\nHost: localhost\r\n\r\n")), ec);
-            if (!readResponse(sock, buffer, ec).contains("count:3")) {
+            if (readResponse(sock, buffer, ec).find("count:3") == std::string::npos) {
                 fail(3, "a new connection did not see the worker-scoped state");
             }
 
@@ -200,7 +200,7 @@ int main() {
                 asio::write(sock, asio::buffer(std::string_view(
                     "GET /count HTTP/1.1\r\nHost: localhost\r\n\r\n")), ec);
                 if (rc == 0 &&
-                    !readResponse(sock, buffer, ec).contains("count:14")) {
+                    readResponse(sock, buffer, ec).find("count:14") == std::string::npos) {
                     fail(5, "HTTP and dispatch paths did not share one instance");
                 }
             }

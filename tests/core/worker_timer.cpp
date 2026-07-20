@@ -218,7 +218,8 @@ ruvia::Task<void> exercise(
         co_return;
     }
     cancelledTimer.cancel();
-    co_await ruvia::sleepFor(worker, std::chrono::milliseconds(1));
+    static_cast<void>(
+        co_await ruvia::sleepFor(worker, std::chrono::milliseconds(1)));
 
     bool cancelledSleepResumed = false;
     bool cancelledSleepReportedElapsed = true;
@@ -278,7 +279,8 @@ ruvia::Task<void> exerciseSlotReuse(
                 }
             });
     }
-    co_await ruvia::sleepFor(worker, std::chrono::milliseconds(1));
+    static_cast<void>(
+        co_await ruvia::sleepFor(worker, std::chrono::milliseconds(1)));
     success = rejectedActiveReuse && cancelled == kTimerCount &&
         expired == kTimerCount;
 }

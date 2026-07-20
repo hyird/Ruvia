@@ -180,19 +180,23 @@ class Http2RequestBodyStoreResult final {
 public:
     [[nodiscard]] constexpr const Http2RequestBodyStored*
     stored() const & noexcept {
-        return std::get_if<Http2RequestBodyStored>(&value_);
+        return state_ == State::kStored ? &value_.stored : nullptr;
     }
     const Http2RequestBodyStored* stored() const && = delete;
 
     [[nodiscard]] constexpr const HttpRequestBodyFailure*
     protocolFailure() const & noexcept {
-        return std::get_if<HttpRequestBodyFailure>(&value_);
+        return state_ == State::kProtocolFailure
+            ? &value_.protocolFailure
+            : nullptr;
     }
     const HttpRequestBodyFailure* protocolFailure() const && = delete;
 
     [[nodiscard]] constexpr const Http2RequestBodyBacklogOverflow*
     backlogOverflow() const & noexcept {
-        return std::get_if<Http2RequestBodyBacklogOverflow>(&value_);
+        return state_ == State::kBacklogOverflow
+            ? &value_.backlogOverflow
+            : nullptr;
     }
     const Http2RequestBodyBacklogOverflow* backlogOverflow() const && = delete;
 
@@ -200,15 +204,35 @@ private:
     friend class Http2BufferedRequestBody;
     friend class Http2StreamingRequestBody;
 
-    using Value = std::variant<
-        Http2RequestBodyStored,
-        HttpRequestBodyFailure,
-        Http2RequestBodyBacklogOverflow>;
+    enum class State : std::uint8_t {
+        kStored,
+        kProtocolFailure,
+        kBacklogOverflow
+    };
 
-    template <typename Alternative>
+    union Value {
+        constexpr explicit Value(Http2RequestBodyStored value) noexcept
+            : stored(value) {}
+        constexpr explicit Value(HttpRequestBodyFailure value) noexcept
+            : protocolFailure(value) {}
+        constexpr explicit Value(
+            Http2RequestBodyBacklogOverflow value) noexcept
+            : backlogOverflow(value) {}
+
+        Http2RequestBodyStored stored;
+        HttpRequestBodyFailure protocolFailure;
+        Http2RequestBodyBacklogOverflow backlogOverflow;
+    };
+
     explicit constexpr Http2RequestBodyStoreResult(
-        Alternative alternative) noexcept
-        : value_(alternative) {}
+        Http2RequestBodyStored value) noexcept
+        : value_(value), state_(State::kStored) {}
+    explicit constexpr Http2RequestBodyStoreResult(
+        HttpRequestBodyFailure value) noexcept
+        : value_(value), state_(State::kProtocolFailure) {}
+    explicit constexpr Http2RequestBodyStoreResult(
+        Http2RequestBodyBacklogOverflow value) noexcept
+        : value_(value), state_(State::kBacklogOverflow) {}
 
     [[nodiscard]] static constexpr Http2RequestBodyStoreResult makeStored()
         noexcept {
@@ -227,6 +251,7 @@ private:
     }
 
     Value value_;
+    State state_;
 };
 
 static_assert(std::is_trivially_copyable_v<Http2RequestBodyStoreResult>);

@@ -100,7 +100,7 @@ int main() {
         fail(1, "HEAD of a streaming route was not 200");
     } else if (buffer.size() != 0) {
         fail(2, "HEAD of a streaming route sent body bytes");
-    } else if (eventsHead.contains("connection: close")) {
+    } else if (eventsHead.find("connection: close") != std::string_view::npos) {
         fail(3, "HEAD of a streaming route forced the connection closed");
     }
 
@@ -111,7 +111,7 @@ int main() {
         const auto sseHead = lowered(readHead(sock, buffer, ec));
         if (!sseHead.starts_with("http/1.1 200")) {
             fail(4, "HEAD of an SSE route was not 200");
-        } else if (!sseHead.contains("content-type: text/event-stream")) {
+        } else if (sseHead.find("content-type: text/event-stream") == std::string_view::npos) {
             fail(5, "HEAD of an SSE route lost the SSE content type");
         } else if (buffer.size() != 0) {
             fail(6, "HEAD of an SSE route sent body bytes");
@@ -126,15 +126,15 @@ int main() {
         const auto getHead = lowered(readHead(sock, buffer, ec));
         if (!getHead.starts_with("http/1.1 200")) {
             fail(7, "GET after HEAD did not parse as a clean 200 response");
-        } else if (!getHead.contains("transfer-encoding: chunked")) {
+        } else if (getHead.find("transfer-encoding: chunked") == std::string_view::npos) {
             fail(8, "streaming GET after HEAD was not chunked");
         } else {
             asio::read_until(sock, buffer, "0\r\n\r\n", ec);
             const std::string body(
                 asio::buffers_begin(buffer.data()),
                 asio::buffers_begin(buffer.data()) + buffer.size());
-            if (!body.contains("tick-1") ||
-                !body.contains("tick-2")) {
+            if (body.find("tick-1") == std::string_view::npos ||
+                body.find("tick-2") == std::string_view::npos) {
                 fail(9, "streaming GET body after HEAD was incomplete");
             }
         }

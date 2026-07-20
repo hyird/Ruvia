@@ -1176,7 +1176,7 @@ RUVIA_TEST(sansio_driver_h2_expectation_decision_precedes_request_content) {
                         break;
                     }
                     if (header.streamId == 1 &&
-                        fields.joined.contains(":status=100;")) {
+                        fields.joined.find(":status=100;") != std::string_view::npos) {
                         gotContinue = true;
                         continueEndedStream =
                             (header.flags & ruvia::detail::kHttp2FlagEndStream) != 0;
@@ -1595,7 +1595,7 @@ RUVIA_TEST(sansio_driver_h2_stream_trailers_emitted) {
     io.run();
     RUVIA_CHECK(body == "body-part");
     RUVIA_CHECK(
-        headFields.contains(":status=207;"));
+        headFields.find(":status=207;") != std::string_view::npos);
     RUVIA_CHECK(trailerFields == "x-checksum=abc123;");
     RUVIA_CHECK(trailerEndStream);
     RUVIA_CHECK_EQ(accessObservation.calls, std::size_t{1});
@@ -1725,7 +1725,7 @@ RUVIA_TEST(sansio_driver_h2_websocket_permessage_deflate) {
         asio::detached);
 
     io.run();
-    RUVIA_CHECK(handshakeFields.contains("sec-websocket-extensions=permessage-deflate"));
+    RUVIA_CHECK(handshakeFields.find("sec-websocket-extensions=permessage-deflate") != std::string_view::npos);
     // 13-byte echo does not shrink under deflate, so it comes back as a plain frame.
     RUVIA_CHECK_EQ(echoedFrame.size(), static_cast<std::size_t>(15));
     RUVIA_CHECK_EQ(static_cast<unsigned char>(echoedFrame[0]), static_cast<unsigned char>(0x81));

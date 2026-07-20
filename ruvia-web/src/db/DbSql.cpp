@@ -16,16 +16,13 @@ namespace {
 void appendStringLiteral(st_mysql& connection, std::pmr::string& output, std::string_view value) {
     output.push_back('\'');
     const auto offset = output.size();
-    output.resize_and_overwrite(
-        offset + value.size() * 2 + 1,
-        [&connection, value, offset](char* data, std::size_t) noexcept {
-            const auto length = mysql_real_escape_string(
-                &connection,
-                data + offset,
-                value.empty() ? "" : value.data(),
-                static_cast<unsigned long>(value.size()));
-            return offset + length;
-        });
+    output.resize(offset + value.size() * 2 + 1);
+    const auto length = mysql_real_escape_string(
+        &connection,
+        output.data() + offset,
+        value.empty() ? "" : value.data(),
+        static_cast<unsigned long>(value.size()));
+    output.resize(offset + length);
     output.push_back('\'');
 }
 

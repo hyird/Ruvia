@@ -948,5 +948,7 @@ RUVIA_TEST(context_delete_cookie_with_prefix_is_response_only) {
     const auto setCookie = response.header("Set-Cookie");
     RUVIA_CHECK(setCookie.has_value());
     RUVIA_CHECK(setCookie.value_or(std::string_view{}).starts_with("__Host-session=;"));
-    RUVIA_CHECK(setCookie.value_or(std::string_view{}).contains("Max-Age=0"));
+    RUVIA_CHECK(
+        setCookie.value_or(std::string_view{}).find("Max-Age=0") !=
+        std::string_view::npos);
 }

@@ -59,7 +59,7 @@ struct SelfSignedPem {
 };
 
 // Ephemeral RSA-2048 self-signed cert + key, PEM into memory (frees everything
-// so the sanitizer build stays leak-clean).
+// so the test process releases all server resources).
 SelfSignedPem makeSelfSignedPem() {
     EVP_PKEY* pkey = EVP_RSA_gen(2048);
     X509* x509 = X509_new();
@@ -104,7 +104,7 @@ using TlsStream = asio::ssl::stream<asio::ip::tcp::socket>;
 // `carry`, leaving any surplus bytes for a later call. Returns false if the peer
 // closed the connection before a full response arrived.
 bool readResponse(TlsStream& stream, std::string& carry, std::error_code& ec) {
-    while (!carry.contains("\r\n\r\n")) {
+    while (carry.find("\r\n\r\n") == std::string_view::npos) {
         char buffer[1024];
         const auto n = stream.read_some(asio::buffer(buffer), ec);
         if (ec) {

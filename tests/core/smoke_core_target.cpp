@@ -1,9 +1,12 @@
 #include "ruvia/core/Task.h"
 #include "ruvia/core/EventLoopPool.h"
+#include "ruvia/core/MoveOnlyFunction.h"
 #include "ruvia/core/version.h"
 #include "ruvia/core/memory/MemoryPool.h"
 
+#include <array>
 #include <concepts>
+#include <memory>
 #include <memory_resource>
 #include <string_view>
 #include <utility>
@@ -27,6 +30,31 @@ ruvia::Task<int> smokeTask() {
 }
 
 int main() {
+    ruvia::MoveOnlyFunction<int(int)> add(
+        [offset = std::make_unique<int>(4)](int value) {
+            return value + *offset;
+        });
+    auto moved = std::move(add);
+    if (add || !moved || moved(3) != 7) {
+        return 1;
+    }
+
+    struct LargeCallable final {
+        std::array<std::uint64_t, 8> padding{};
+        int* calls;
+
+        void operator()() {
+            ++*calls;
+        }
+    };
+    int calls = 0;
+    ruvia::MoveOnlyFunction<void()> large(LargeCallable{{}, &calls});
+    auto movedLarge = std::move(large);
+    movedLarge();
+    if (large || calls != 1) {
+        return 1;
+    }
+
     ruvia::WorkerMemory worker;
     std::pmr::memory_resource* resource = worker.resource();
     ruvia::EventLoopPool loops({.loopCount = 1, .mailboxCapacity = 1});

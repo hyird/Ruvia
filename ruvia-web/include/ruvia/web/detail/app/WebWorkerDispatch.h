@@ -3,7 +3,6 @@
 #include <asio/any_io_executor.hpp>
 
 #include <atomic>
-#include <functional>
 #include <memory>
 #include <memory_resource>
 #include <mutex>
@@ -20,7 +19,7 @@ class WorkerStateRegistry;
 class WebWorkerDispatch final
     : public std::enable_shared_from_this<WebWorkerDispatch> {
 public:
-    using Task = std::move_only_function<ruvia::Task<void>(WebWorkerContext&)>;
+    using Task = MoveOnlyFunction<ruvia::Task<void>(WebWorkerContext&)>;
 
     WebWorkerDispatch(
         asio::any_io_executor executor,
@@ -29,8 +28,8 @@ public:
         DbRegistry& databases,
         RedisRegistry& redis,
         const WorkerStateRegistry& workerStates,
-        std::move_only_function<void()> drained,
-        std::move_only_function<void(std::exception_ptr)> failed);
+        MoveOnlyFunction<void()> drained,
+        MoveOnlyFunction<void(std::exception_ptr)> failed);
     ~WebWorkerDispatch();
 
     WebWorkerDispatch(const WebWorkerDispatch&) = delete;
@@ -63,8 +62,8 @@ private:
     DbRegistry* databases_;
     RedisRegistry* redis_;
     const WorkerStateRegistry* workerStates_;
-    std::move_only_function<void()> drained_;
-    std::move_only_function<void(std::exception_ptr)> failed_;
+    MoveOnlyFunction<void()> drained_;
+    MoveOnlyFunction<void(std::exception_ptr)> failed_;
     mutable std::mutex submitMutex_;
     std::stop_source stopSource_;
     std::atomic_size_t outstanding_{0};

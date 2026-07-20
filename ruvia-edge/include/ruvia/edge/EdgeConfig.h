@@ -87,7 +87,7 @@ public:
 
 private:
     std::mutex writeMutex_;
-    std::atomic<std::shared_ptr<const EdgeConfigSnapshot>> current_;
+    std::shared_ptr<const EdgeConfigSnapshot> current_;
 };
 
 }  // namespace ruvia::edge

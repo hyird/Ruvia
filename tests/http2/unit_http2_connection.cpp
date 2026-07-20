@@ -6727,8 +6727,8 @@ RUVIA_TEST(http2_connection_trailers_wait_for_blocked_body) {
     RUVIA_CHECK((th.flags & ruvia::detail::kHttp2FlagEndStream) != 0);  // END_STREAM here
     RUVIA_CHECK_EQ(stream->localContent().committedBytes(), std::uint64_t{8});
     const auto trailerPayload = out.substr(9, th.length);
-    RUVIA_CHECK(trailerPayload.contains("x-checksum"));
-    RUVIA_CHECK(!trailerPayload.contains("X-Checksum"));
+    RUVIA_CHECK(trailerPayload.find("x-checksum") != std::string_view::npos);
+    RUVIA_CHECK(trailerPayload.find("X-Checksum") == std::string_view::npos);
 }
 
 // --- flood defense-in-depth budgets (GOAWAY ENHANCE_YOUR_CALM) -----------------

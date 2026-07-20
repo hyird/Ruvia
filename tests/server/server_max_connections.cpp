@@ -69,7 +69,7 @@ int main() {
         asio::ip::tcp::socket first(clientContext);
         connectAndHold(clientContext, first, endpoint);
         // Let the accept loop admit and count the first connection before the
-        // second races in (generous for a loaded, sanitized CI runner).
+        // second races in (generous for a loaded CI runner).
         std::this_thread::sleep_for(std::chrono::milliseconds(500));
 
         // Over-limit connection must be closed promptly, not held for a request.

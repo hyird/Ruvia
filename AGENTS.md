@@ -6,7 +6,7 @@ README 面向使用者，说明构建、安装和公开能力；AGENTS 面向贡
 
 ## 项目定位
 
-Ruvia 是 C++23 HTTP/Web 框架仓库，采用 monorepo + 多 CMake target：
+Ruvia 是 C++20 HTTP/Web 框架仓库，采用 monorepo + 多 CMake target：
 
 ```text
 ruvia-core  -> ruvia::core
@@ -83,7 +83,7 @@ tests/
 可以包含：
 
 - `ruvia::Task<T>`、coroutine promise/awaiter、Asio awaiter/driver glue。
-- PMR、memory resource、mimalloc 包装、对象生命周期 helper。
+- PMR、memory resource、对象生命周期 helper。
 - worker/request memory、connection scanner、socket/runtime helper。
 - ASCII、base64/base64url、constant-time、number/path 等小型通用 helper。
 
@@ -189,8 +189,7 @@ Router/error handler 不得设置 `Connection: close` 或接收 `closeConnection
 - 公开 API 输入优先使用 `std::string_view`、`std::span`、`std::filesystem::path` 或值类型配置。
 - 请求热路径 PMR 容器使用请求 arena；Worker 层容器使用 `WorkerMemory`。
 - `RequestMemory` 只提供 arena resource，不拥有任意 C++ 对象的 erased cleanup 链；非平凡惰性对象必须由其职责明确的持有者通过 typed RAII 统一拥有和析构。
-- 启动期容器使用 mimalloc-backed 默认 resource。
-- 不要让 `std::pmr::new_delete_resource()` 成为生产默认路径。
+- 启动期容器使用进程级同步 PMR pool。
 - `Context::text(std::string&)`、`std::string&&`、`const std::string&` 入口保持 deleted。
 
 ## HTTP 解析和响应
@@ -261,7 +260,6 @@ rg -n '<stale split terms>' README.md AGENTS.md CMakeLists.txt ruvia-core ruvia-
 ```powershell
 cmake -S . -B build `
   -DCMAKE_TOOLCHAIN_FILE="$env:VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake" `
-  -DVCPKG_TARGET_TRIPLET=x64-windows-static `
   -DRUVIA_BUILD_TESTS=ON `
   -DRUVIA_BUILD_EXAMPLES=ON
 cmake --build build --config Debug

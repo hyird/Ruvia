@@ -54,7 +54,7 @@ struct TimerSlot final {
     std::uint64_t generation{0};
     bool active{false};
     std::size_t nextFree{kNoTimerSlot};
-    std::move_only_function<void(WorkerTimerOutcome)> completion;
+    MoveOnlyFunction<void(WorkerTimerOutcome)> completion;
 };
 
 struct TimerEntryLater final {
@@ -82,7 +82,7 @@ struct WorkerDispatcher::Impl {
 
     asio::io_context& ioContext;
     std::unique_ptr<asio::steady_timer> timer;
-    std::vector<std::optional<std::move_only_function<void()>>> slots;
+    std::vector<std::optional<MoveOnlyFunction<void()>>> slots;
     std::mutex mutex;
     std::size_t head{0};
     std::size_t tail{0};
@@ -141,7 +141,7 @@ WorkerDispatcher::WorkerDispatcher(asio::io_context& ioContext, std::size_t capa
 
 WorkerDispatcher::~WorkerDispatcher() = default;
 
-PostResult WorkerDispatcher::post(std::move_only_function<void()> task) {
+PostResult WorkerDispatcher::post(MoveOnlyFunction<void()> task) {
     std::lock_guard lock(impl_->mutex);
     if (!impl_->contextAttached || !impl_->accepting) {
         return PostResult::kWorkerStopping;
@@ -171,7 +171,7 @@ PostResult WorkerDispatcher::post(std::move_only_function<void()> task) {
     return PostResult::kAccepted;
 }
 
-void WorkerDispatcher::defer(std::move_only_function<void()> task) {
+void WorkerDispatcher::defer(MoveOnlyFunction<void()> task) {
     std::lock_guard lock(impl_->mutex);
     if (!impl_->contextAttached) {
         throw std::runtime_error("worker execution context is detached");
@@ -181,7 +181,7 @@ void WorkerDispatcher::defer(std::move_only_function<void()> task) {
 }
 
 void WorkerDispatcher::deferOrTerminate(
-    std::move_only_function<void()> task) noexcept {
+    MoveOnlyFunction<void()> task) noexcept {
     try {
         defer(std::move(task));
     } catch (...) {
@@ -202,7 +202,7 @@ void WorkerDispatcher::registerShutdownListener(
 void WorkerDispatcher::scheduleTimer(
     WorkerTimerRegistration& registration,
     std::chrono::steady_clock::time_point deadline,
-    std::move_only_function<void(WorkerTimerOutcome)> completion) {
+    MoveOnlyFunction<void(WorkerTimerOutcome)> completion) {
     if (!isCurrent()) {
         throw std::logic_error("worker timers must be scheduled on their worker");
     }
@@ -367,7 +367,7 @@ void WorkerDispatcher::close() noexcept {
 }
 
 void WorkerDispatcher::detachContext() noexcept {
-    std::vector<std::optional<std::move_only_function<void()>>> abandonedSlots;
+    std::vector<std::optional<MoveOnlyFunction<void()>>> abandonedSlots;
     ShutdownListeners abandonedListeners;
     std::pmr::vector<TimerEntry> abandonedTimers(impl_->timers.get_allocator());
     std::pmr::vector<TimerSlot> abandonedTimerSlots(
@@ -456,7 +456,7 @@ WorkerId WorkerDispatcher::id() const noexcept {
 
 void WorkerDispatcher::drain() {
     for (;;) {
-        std::move_only_function<void()> task;
+        MoveOnlyFunction<void()> task;
         {
             std::lock_guard lock(impl_->mutex);
             if (impl_->size == 0) {

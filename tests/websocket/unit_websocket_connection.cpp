@@ -99,7 +99,8 @@ public:
     void abort() noexcept {
         state_->aborted = true;
         if (state_->completeWrite != nullptr) {
-            auto completion = std::move(state_->completeWrite);
+            auto completion = std::exchange(
+                state_->completeWrite, std::function<void()>{});
             completion();
         }
     }

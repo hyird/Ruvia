@@ -42,11 +42,8 @@ concurrency:
   group: build-${{ github.workflow }}-${{ github.sha }}
   cancel-in-progress: true
 
-# CI is deliberately just two compile-verification jobs plus a cleanup job that
-# prunes old runs. Linux (gcc) enables every optional feature and target;
-# Windows (MSVC) covers the portable feature set and does not yet exercise edge
-# or PostgreSQL. Sanitizer, fuzz, and benchmark runs are done locally rather
-# than on every push.
+# Linux GCC and macOS AppleClang enable every optional feature and target.
+# Windows uses the MSYS2 UCRT64 GCC toolchain for the portable feature set.
 jobs:
   ubuntu_build:
     name: Ubuntu build
@@ -68,7 +65,7 @@ jobs:
       - name: Install toolchain
         run: |
           sudo apt-get update
-          sudo apt-get install -y gcc-13 g++-13 ninja-build curl zip unzip tar
+          sudo apt-get install -y gcc-13 g++-13 ninja-build nghttp2-client curl zip unzip tar
           gcc-13 --version
           g++-13 --version
 
@@ -114,9 +111,70 @@ jobs:
       - name: Test
         run: ctest --test-dir build/test --output-on-failure --build-config "$BUILD_TYPE"
 
+  macos_build:
+    name: macOS build
+    runs-on: macos-15
+    env:
+      GIT_CONFIG_COUNT: 1
+      GIT_CONFIG_KEY_0: init.defaultBranch
+      GIT_CONFIG_VALUE_0: main
+      VCPKG_ROOT: ${{ github.workspace }}/vcpkg
+      BUILD_TYPE: Debug
+    steps:
+      - name: Checkout ruvia
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - name: Install toolchain
+        run: |
+          brew install ninja nghttp2
+          clang++ --version
+
+      - name: Cache vcpkg
+        uses: actions/cache@v5
+        with:
+          path: |
+            ${{ env.VCPKG_ROOT }}
+            ~/.cache/vcpkg/archives
+            ${{ github.workspace }}/build/test/vcpkg_installed
+          key: vcpkg-build-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('vcpkg.json', 'vcpkg-configuration.json', 'triplets/**', 'CMakeLists.txt') }}
+          restore-keys: |
+            vcpkg-build-${{ runner.os }}-${{ runner.arch }}-
+
+      - name: Bootstrap vcpkg
+        run: |
+          set -euo pipefail
+          if [ ! -d "$VCPKG_ROOT/.git" ]; then
+            git clone --depth 1 https://github.com/microsoft/vcpkg.git "$VCPKG_ROOT"
+          else
+            git -C "$VCPKG_ROOT" fetch --depth 1 origin master
+            git -C "$VCPKG_ROOT" reset --hard origin/master
+          fi
+          "$VCPKG_ROOT/bootstrap-vcpkg.sh" -disableMetrics
+
+      - name: Configure
+        run: |
+          cmake -S . -B build/test -G Ninja \
+            -DCMAKE_BUILD_TYPE="$BUILD_TYPE" \
+            -DRUVIA_ENABLE_MARIADB=ON \
+            -DRUVIA_ENABLE_POSTGRESQL=ON \
+            -DRUVIA_ENABLE_REDIS=ON \
+            -DRUVIA_ENABLE_JWT=ON \
+            -DRUVIA_BUILD_EXAMPLES=ON \
+            -DRUVIA_BUILD_TESTS=ON \
+            -DRUVIA_BUILD_EDGE=ON \
+            -DCMAKE_TOOLCHAIN_FILE="$VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake"
+
+      - name: Build
+        run: cmake --build build/test --config "$BUILD_TYPE"
+
+      - name: Test
+        run: ctest --test-dir build/test --output-on-failure --build-config "$BUILD_TYPE"
+
   windows_build:
-    name: Windows build
-    runs-on: windows-2025-vs2026
+    name: Windows UCRT64 GCC build
+    runs-on: windows-2025
     env:
       GIT_CONFIG_COUNT: 1
       GIT_CONFIG_KEY_0: init.defaultBranch
@@ -130,51 +188,71 @@ jobs:
         with:
           persist-credentials: false
 
+      - name: Set up MSYS2 UCRT64 GCC
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: UCRT64
+          update: true
+          install: git
+          pacboy: >-
+            toolchain:p
+            cmake:p
+            ninja:p
+            nghttp2:p
+
       - name: Cache vcpkg
         uses: actions/cache@v5
         with:
           path: |
             ${{ env.VCPKG_ROOT }}
             ${{ github.workspace }}\build\test\vcpkg_installed
-          key: vcpkg-build-${{ runner.os }}-${{ hashFiles('vcpkg.json', 'vcpkg-configuration.json', 'triplets/**', 'CMakeLists.txt') }}
+          key: vcpkg-build-${{ runner.os }}-ucrt64-gcc-${{ hashFiles('vcpkg.json', 'vcpkg-configuration.json', 'triplets/**', 'CMakeLists.txt') }}
           restore-keys: |
-            vcpkg-build-${{ runner.os }}-
+            vcpkg-build-${{ runner.os }}-ucrt64-gcc-
 
       - name: Bootstrap vcpkg
-        shell: pwsh
+        shell: msys2 {0}
         run: |
-          if (-not (Test-Path -LiteralPath "$env:VCPKG_ROOT\.git")) {
-            git clone --depth 1 https://github.com/microsoft/vcpkg.git "$env:VCPKG_ROOT"
-          } else {
-            git -C "$env:VCPKG_ROOT" fetch --depth 1 origin master
-            git -C "$env:VCPKG_ROOT" reset --hard origin/master
-          }
-          & "$env:VCPKG_ROOT\bootstrap-vcpkg.bat" -disableMetrics
+          set -euo pipefail
+          vcpkg_root_msys="$(cygpath -u "$VCPKG_ROOT")"
+          if [ ! -d "$vcpkg_root_msys/.git" ]; then
+            git clone --depth 1 https://github.com/microsoft/vcpkg.git "$vcpkg_root_msys"
+          else
+            git -C "$vcpkg_root_msys" fetch --depth 1 origin master
+            git -C "$vcpkg_root_msys" reset --hard origin/master
+          fi
+          cmd.exe //c "$(cygpath -w "$vcpkg_root_msys/bootstrap-vcpkg.bat") -disableMetrics"
 
       - name: Configure
-        shell: pwsh
+        shell: msys2 {0}
         run: |
-          cmake -S . -B build/test `
-            -DCMAKE_BUILD_TYPE="$env:BUILD_TYPE" `
-            -DRUVIA_ENABLE_MARIADB=ON `
-            -DRUVIA_ENABLE_REDIS=ON `
-            -DRUVIA_ENABLE_JWT=ON `
-            -DRUVIA_BUILD_EXAMPLES=ON `
-            -DRUVIA_BUILD_TESTS=ON `
-            -DCMAKE_TOOLCHAIN_FILE="$env:VCPKG_ROOT\scripts\buildsystems\vcpkg.cmake"
+          vcpkg_root_msys="$(cygpath -u "$VCPKG_ROOT")"
+          gcc --version
+          g++ --version
+          cmake -S . -B build/test -G Ninja \
+            -DCMAKE_BUILD_TYPE="$BUILD_TYPE" \
+            -DCMAKE_CXX_COMPILER=g++ \
+            -DVCPKG_TARGET_TRIPLET=x64-mingw-static \
+            -DRUVIA_ENABLE_MARIADB=ON \
+            -DRUVIA_ENABLE_REDIS=ON \
+            -DRUVIA_ENABLE_JWT=ON \
+            -DRUVIA_BUILD_EXAMPLES=ON \
+            -DRUVIA_BUILD_TESTS=ON \
+            -DRUVIA_BUILD_EDGE=ON \
+            -DCMAKE_TOOLCHAIN_FILE="$vcpkg_root_msys/scripts/buildsystems/vcpkg.cmake"
 
       - name: Build
-        shell: pwsh
-        run: cmake --build build/test --config "$env:BUILD_TYPE"
+        shell: msys2 {0}
+        run: cmake --build build/test --config "$BUILD_TYPE"
 
       - name: Test
-        shell: pwsh
-        run: ctest --test-dir build/test --output-on-failure --build-config "$env:BUILD_TYPE"
+        shell: msys2 {0}
+        run: ctest --test-dir build/test --output-on-failure --build-config "$BUILD_TYPE"
 
   cleanup:
     name: Prune old runs
-    needs: [ubuntu_build, windows_build]
-    # Run after both builds regardless of their result, but never on pull
+    needs: [ubuntu_build, macos_build, windows_build]
+    # Run after all builds regardless of their result, but never on pull
     # requests (a fork's token is read-only and must not prune main's history).
     if: ${{ always() && github.event_name != 'pull_request' }}
     runs-on: ubuntu-24.04

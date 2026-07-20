@@ -264,7 +264,7 @@ private:
     int liveSessions_{0};
     // Server TLS context, swappable at runtime (null when TLS is disabled). A new
     // connection loads the current one; in-flight sessions keep their own.
-    std::atomic<std::shared_ptr<asio::ssl::context>> tlsContext_;
+    std::shared_ptr<asio::ssl::context> tlsContext_;
     // One origin fetch in progress for a cache key, with the requests waiting on
     // it (request coalescing / single-flight). The waiter timers are cancelled to
     // wake the followers when the leader's fetch completes.

@@ -95,7 +95,7 @@ WebWorkerStats WebWorkerHandle::stats() const noexcept {
 }
 
 PostResult WebWorkerHandle::postTask(
-    std::move_only_function<Task<void>(WebWorkerContext&)> task) const {
+    MoveOnlyFunction<Task<void>(WebWorkerContext&)> task) const {
     return dispatch_
         ? dispatch_->post(std::move(task))
         : PostResult::kWorkerStopping;
@@ -109,7 +109,7 @@ namespace {
 
 // A move-safe reservation for the outstanding_ count post() takes before the
 // start-lambda runs. It rides inside the posted lambda; unique_ptr move semantics
-// keep exactly one owner as std::move_only_function relocates the lambda. If the
+// keep exactly one owner as MoveOnlyFunction relocates the lambda. If the
 // lambda runs it release()s the reservation and complete() owns the decrement; if
 // the lambda is destroyed unrun (rejected post, or shutdown abandoning queued
 // mailbox work), the deleter reconciles the count.
@@ -130,8 +130,8 @@ WebWorkerDispatch::WebWorkerDispatch(
     DbRegistry& databases,
     RedisRegistry& redis,
     const WorkerStateRegistry& workerStates,
-    std::move_only_function<void()> drained,
-    std::move_only_function<void(std::exception_ptr)> failed)
+    MoveOnlyFunction<void()> drained,
+    MoveOnlyFunction<void(std::exception_ptr)> failed)
     : executor_(std::move(executor)),
       worker_(std::move(worker)),
       resource_(pmrResourceOrDefault(resource)),

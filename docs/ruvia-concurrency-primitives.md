@@ -139,7 +139,7 @@ if (const auto* value = event.value()) {
 
 首版是单 consumer、有界 FIFO、`kRejectNewest`：
 
-- 控制块和 ring 在创建期一次分配，默认使用进程级 mimalloc PMR，也可传请求/业务 PMR。
+- 控制块和 ring 在创建期一次分配，默认使用进程级 PMR pool，也可传请求/业务 PMR。
 - producer 可来自任意线程；receiver 只能在绑定 worker 使用。
 - `send()` 不直接恢复协程，而是由 worker continuation 唤醒。
 - receiver close/析构幂等并唤醒 pending receive。

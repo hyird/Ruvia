@@ -1331,7 +1331,7 @@ RUVIA_TEST(websocket_middleware_pre_upgrade_failure_stays_http_buffered) {
     const auto observation = dispatchWebSocketWith(middleware);
     RUVIA_CHECK(!observation.terminalInvoked);
     RUVIA_CHECK(observation.buffered);
-    RUVIA_CHECK(observation.bufferedBody.contains("\"code\":\"mw_rejected\""));
+    RUVIA_CHECK(observation.bufferedBody.find("\"code\":\"mw_rejected\"") != std::string_view::npos);
 }
 
 RUVIA_TEST(websocket_middleware_wraps_upgrade_and_session_terminal) {
@@ -1382,7 +1382,7 @@ RUVIA_TEST(middleware_chain_maps_middleware_exception_to_error_response) {
     // response through the same handleException path as a handler exception -- its
     // "code" survives, so it is not swallowed into a generic 500.
     RUVIA_CHECK(g_chainOrder.empty());
-    RUVIA_CHECK(body.contains("\"code\":\"mw_rejected\""));
+    RUVIA_CHECK(body.find("\"code\":\"mw_rejected\"") != std::string_view::npos);
 }
 
 RUVIA_TEST(middleware_chain_controller_middleware_wraps_route_middleware) {
@@ -1524,8 +1524,8 @@ RUVIA_TEST(dispatch_maps_handler_exceptions_to_error_responses) {
     RUVIA_CHECK(generic.connection.empty());
     // The unexpected exception's message must NOT leak into the response body: a
     // library error (SQL text, paths) could otherwise be disclosed to the client.
-    RUVIA_CHECK(!generic.body.contains("boom"));
-    RUVIA_CHECK(generic.body.contains("Internal Server Error"));
+    RUVIA_CHECK(generic.body.find("boom") == std::string_view::npos);
+    RUVIA_CHECK(generic.body.find("Internal Server Error") != std::string_view::npos);
 }
 
 RUVIA_TEST(dispatch_rejects_unsupported_request_content_coding_with_advertisement) {
@@ -1538,7 +1538,7 @@ RUVIA_TEST(dispatch_rejects_unsupported_request_content_coding_with_advertisemen
     RUVIA_CHECK_EQ(result.status, std::uint16_t{415});
     RUVIA_CHECK_EQ(result.acceptEncoding, std::string("gzip, br, zstd"));
     RUVIA_CHECK(
-        result.body.contains("unsupported_content_coding"));
+        result.body.find("unsupported_content_coding") != std::string_view::npos);
 }
 
 RUVIA_TEST(dispatch_defensively_rejects_malformed_request_content_coding) {
@@ -1559,7 +1559,7 @@ RUVIA_TEST(dispatch_produces_404_and_405_for_unmatched_routes) {
     // The path exists but the method does not -> 405 with an Allow header listing GET.
     const auto notAllowed = dispatchOne(RouteHandler(nullptr, &okHandler), HttpKnownMethod::kPost, "/x");
     RUVIA_CHECK_EQ(notAllowed.status, std::uint16_t{405});
-    RUVIA_CHECK(notAllowed.allow.contains("GET"));
+    RUVIA_CHECK(notAllowed.allow.find("GET") != std::string_view::npos);
     // The registered method still works.
     RUVIA_CHECK_EQ(dispatchOne(RouteHandler(nullptr, &okHandler), HttpKnownMethod::kGet, "/x").status,
                    std::uint16_t{200});
@@ -2028,6 +2028,6 @@ RUVIA_TEST(dispatch_options_asterisk_returns_server_wide_allow) {
 
     RUVIA_CHECK_EQ(response.status(), ruvia::http_status::kNoContent);
     const auto allow = response.header("Allow").value_or(std::string_view{});
-    RUVIA_CHECK(allow.contains("GET"));
-    RUVIA_CHECK(allow.contains("POST"));
+    RUVIA_CHECK(allow.find("GET") != std::string_view::npos);
+    RUVIA_CHECK(allow.find("POST") != std::string_view::npos);
 }
