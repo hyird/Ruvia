@@ -11,7 +11,9 @@ function(ruvia_add_test name source)
     endif()
     add_executable(${name} ${source})
     target_link_libraries(${name} PRIVATE ${T_LIB})
-    target_include_directories(${name} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/support)
+    target_include_directories(${name} PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/support
+        ${CMAKE_CURRENT_SOURCE_DIR}/http/support)
     if(MSVC)
         target_compile_options(${name} PRIVATE /bigobj /FS)
     endif()
@@ -216,7 +218,9 @@ if(RUVIA_ENABLE_POSTGRESQL_INTEGRATION_TESTS)
 endif()
 
 target_link_libraries(ruvia_unit_tests PRIVATE ruvia::web)
-target_include_directories(ruvia_unit_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/support)
+target_include_directories(ruvia_unit_tests PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/support
+    ${CMAKE_CURRENT_SOURCE_DIR}/http/support)
 
 if(MSVC)
     target_compile_options(ruvia_unit_tests PRIVATE /bigobj /FS)
@@ -237,7 +241,7 @@ if(RUVIA_ENABLE_HTTP2_CONFORMANCE_TESTS)
         NAME ruvia_http2_conformance
         COMMAND
             ${Python3_EXECUTABLE}
-            ${CMAKE_CURRENT_SOURCE_DIR}/conformance/http2_wire_conformance.py
+            ${CMAKE_CURRENT_SOURCE_DIR}/http/conformance/http2_wire_conformance.py
             --server $<TARGET_FILE:ruvia_http2_conformance_server>
     )
     set_tests_properties(ruvia_http2_conformance PROPERTIES
@@ -298,7 +302,7 @@ endif()
 
 if(RUVIA_BUILD_HTTP)
     configure_file(
-        ${CMAKE_CURRENT_SOURCE_DIR}/verify_http_status_literals.cmake.in
+        ${CMAKE_CURRENT_SOURCE_DIR}/http/guards/verify_http_status_literals.cmake.in
         ${CMAKE_CURRENT_BINARY_DIR}/verify_http_status_literals.cmake
         @ONLY)
     add_test(
@@ -307,7 +311,7 @@ if(RUVIA_BUILD_HTTP)
             -P ${CMAKE_CURRENT_BINARY_DIR}/verify_http_status_literals.cmake)
 
     configure_file(
-        ${CMAKE_CURRENT_SOURCE_DIR}/verify_http_sansio.cmake.in
+        ${CMAKE_CURRENT_SOURCE_DIR}/http/guards/verify_http_sansio.cmake.in
         ${CMAKE_CURRENT_BINARY_DIR}/verify_http_sansio.cmake
         @ONLY)
     add_test(
@@ -323,21 +327,22 @@ if(RUVIA_BUILD_HTTP)
     # already compiler-checked by the regular unit sources plus non-MSVC CI.
     # The isolated package matrix below uses a small link smoke source on every host.
     if(MSVC)
-        set(RUVIA_HTTP_API_CONTRACT_SOURCE guards/http_msvc_api_contract.cpp)
+        set(RUVIA_HTTP_API_CONTRACT_SOURCE http/guards/http_msvc_api_contract.cpp)
     else()
         set(RUVIA_HTTP_API_CONTRACT_SOURCE package-consumer/http.cpp)
     endif()
     ruvia_add_test(ruvia_guard_http_api_contract ${RUVIA_HTTP_API_CONTRACT_SOURCE} LIB ruvia::http)
+    ruvia_add_test(ruvia_guard_http2_stream_table
+        http/guards/http2_stream_table_guard.cpp LIB ruvia::http)
 endif()
 
 if(RUVIA_BUILD_WEB)
-ruvia_add_test(ruvia_guard_middleware_next guards/middleware_next_guard.cpp)
-ruvia_add_test(ruvia_guard_http2_stream_table guards/http2_stream_table_guard.cpp)
-ruvia_add_test(ruvia_guard_context_response_state guards/context_response_state_guard.cpp)
-ruvia_add_test(ruvia_guard_context_request_header guards/context_request_header_guard.cpp)
-ruvia_add_test(ruvia_guard_cookie_api guards/cookie_api_guard.cpp)
-ruvia_add_test(ruvia_guard_app_lifecycle guards/app_lifecycle_guard.cpp)
-ruvia_add_test(ruvia_guard_http2_session_lifecycle guards/http2_session_lifecycle_guard.cpp)
+ruvia_add_test(ruvia_guard_middleware_next web/guards/middleware_next_guard.cpp)
+ruvia_add_test(ruvia_guard_context_response_state web/guards/context_response_state_guard.cpp)
+ruvia_add_test(ruvia_guard_context_request_header web/guards/context_request_header_guard.cpp)
+ruvia_add_test(ruvia_guard_cookie_api web/guards/cookie_api_guard.cpp)
+ruvia_add_test(ruvia_guard_app_lifecycle web/guards/app_lifecycle_guard.cpp)
+ruvia_add_test(ruvia_guard_http2_session_lifecycle web/guards/http2_session_lifecycle_guard.cpp)
 
 ruvia_add_test(ruvia_server_shutdown_drain web/server/server_shutdown_drain.cpp TIMEOUT 90)
 ruvia_add_test(ruvia_server_max_connections web/server/server_max_connections.cpp TIMEOUT 60)
@@ -360,16 +365,16 @@ endif()
 # Edge tests only need ruvia::edge; keep them outside the web gate so a
 # web-off edge build still runs them.
 if(RUVIA_BUILD_EDGE)
-    ruvia_add_test(ruvia_edge_config edge/unit_edge_config.cpp LIB ruvia::edge TIMEOUT 30)
-    ruvia_add_test(ruvia_edge_freshness edge/unit_edge_freshness.cpp LIB ruvia::edge TIMEOUT 30)
-    ruvia_add_test(ruvia_edge_cache edge/unit_edge_cache.cpp LIB ruvia::edge TIMEOUT 30)
-    ruvia_add_test(ruvia_disk_cache edge/unit_disk_cache.cpp LIB ruvia::edge TIMEOUT 30)
-    ruvia_add_test(ruvia_origin_fetcher edge/unit_origin_fetcher.cpp LIB ruvia::edge TIMEOUT 30)
-    ruvia_add_test(ruvia_edge_server edge/unit_edge_server.cpp LIB ruvia::edge TIMEOUT 30)
+    ruvia_add_test(ruvia_edge_config edge/unit/unit_edge_config.cpp LIB ruvia::edge TIMEOUT 30)
+    ruvia_add_test(ruvia_edge_freshness edge/unit/unit_edge_freshness.cpp LIB ruvia::edge TIMEOUT 30)
+    ruvia_add_test(ruvia_edge_cache edge/unit/unit_edge_cache.cpp LIB ruvia::edge TIMEOUT 30)
+    ruvia_add_test(ruvia_disk_cache edge/unit/unit_disk_cache.cpp LIB ruvia::edge TIMEOUT 30)
+    ruvia_add_test(ruvia_origin_fetcher edge/unit/unit_origin_fetcher.cpp LIB ruvia::edge TIMEOUT 30)
+    ruvia_add_test(ruvia_edge_server edge/unit/unit_edge_server.cpp LIB ruvia::edge TIMEOUT 30)
 endif()
 
 configure_file(
-    ${CMAKE_CURRENT_SOURCE_DIR}/verify_package_consumers.cmake.in
+    ${CMAKE_CURRENT_SOURCE_DIR}/package-consumer/verify_package_consumers.cmake.in
     ${CMAKE_CURRENT_BINARY_DIR}/verify_package_consumers.cmake
     @ONLY)
 # Opt-in rather than a ctest entry: the packaging contract pins installed file

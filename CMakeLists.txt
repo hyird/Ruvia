@@ -64,7 +64,7 @@ if(RUVIA_BUILD_TESTS)
     add_subdirectory(tests)
 endif()
 if(RUVIA_BUILD_BENCHMARKS)
-    add_subdirectory(tests/benchmarks)
+    add_subdirectory(tests/http/benchmarks)
 endif()
 
 configure_package_config_file(

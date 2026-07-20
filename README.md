@@ -310,7 +310,7 @@ ctest --test-dir build-conformance -C Debug -R ruvia_http2_conformance --output-
 ## Performance Baseline
 
 Release benchmark scope, commands, and comparison rules live with the benchmark
-sources in [tests/benchmarks/README.md](tests/benchmarks/README.md).
+sources in [tests/http/benchmarks/README.md](tests/http/benchmarks/README.md).
 
 ## Install and Consume
 

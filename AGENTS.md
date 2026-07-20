@@ -51,14 +51,15 @@ tests/
 ```text
 examples/web/
 tests/core/
-tests/http/{unit,http1,http2,websocket}/
-tests/web/{unit,server}/
-tests/edge/
-tests/{guards,support,package-consumer,conformance,benchmarks}/
+tests/http/{unit,http1,http2,websocket,guards,support,conformance,benchmarks}/
+tests/web/{unit,server,guards}/
+tests/edge/unit/
+tests/{support,package-consumer}/
 ```
 
 不要把 HTTP/1、HTTP/2、WebSocket 或 Web server 测试重新散放到 `tests/`
-根目录；跨 target 的边界守卫和支撑代码保留独立目录。
+根目录；target 专属的边界守卫、支撑代码、基准和一致性测试跟随所属
+target，只有跨 target 的通用支撑与 package consumer 保留在独立目录。
 
 仓库根目录不保留源码级 `include/`、`src/`、`fuzz/`、`core/`、`http/`、`web/` 或 `edge/`。
 

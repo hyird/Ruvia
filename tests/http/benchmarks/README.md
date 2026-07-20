@@ -15,7 +15,7 @@ cmake -S . -B build/bench -G Ninja `
   -DRUVIA_BUILD_CORE=OFF -DRUVIA_BUILD_WEB=OFF `
   -DRUVIA_BUILD_BENCHMARKS=ON
 cmake --build build/bench --target ruvia_benchmarks
-& ./build/bench/tests/benchmarks/ruvia_benchmark_http_hot_paths `
+& ./build/bench/tests/http/benchmarks/ruvia_benchmark_http_hot_paths `
   --output build/bench/http-hot-paths.json
 ```
 
