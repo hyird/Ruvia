@@ -2,6 +2,7 @@
 
 #include <atomic>
 #include <cstdint>
+#include <filesystem>
 #include <functional>
 #include <memory>
 #include <memory_resource>
@@ -18,7 +19,9 @@
 #include <asio/ip/tcp.hpp>
 #include <asio/ssl.hpp>
 #include <asio/steady_timer.hpp>
+#include <asio/thread_pool.hpp>
 
+#include "ruvia/edge/DiskCache.h"
 #include "ruvia/edge/EdgeCache.h"
 #include "ruvia/edge/EdgeConfig.h"
 #include "ruvia/edge/OriginFetcher.h"
@@ -111,6 +114,12 @@ struct EdgeServerOptions final {
     std::size_t maxCacheableBytes{8u * 1024u * 1024u};
     // When set, the data listener terminates TLS with this certificate/key.
     std::optional<EdgeTlsConfig> tls{};
+    // When set, responses are also cached on disk under this directory as a
+    // persistent second tier behind the memory cache: it survives restarts and
+    // holds far more than RAM. All disk I/O runs on a dedicated background thread,
+    // never on the event loop. Absent by default (memory-only, zero overhead).
+    std::optional<std::filesystem::path> cacheDirectory{};
+    std::size_t maxDiskCacheBytes{256u * 1024u * 1024u};
     // Invoked (on the event-loop thread) once per completed request. Optional.
     std::function<void(const AccessLogEntry&)> accessLog{};
 };
@@ -235,6 +244,15 @@ private:
     // waiting foreground misses.
     asio::awaitable<void> backgroundRefresh(RefreshJob job);
 
+    // Disk-tier helpers (no-ops when no cache directory is configured). The
+    // lookup runs the blocking read on diskPool_ and resumes on the event loop;
+    // the store/purge helpers post fire-and-forget work to diskPool_ so the
+    // request path never blocks on disk I/O.
+    asio::awaitable<std::shared_ptr<const CachedResponse>> diskLookup(std::string key);
+    void diskStore(std::string key, std::shared_ptr<const CachedResponse> entry);
+    void diskPurge(std::string key);
+    void diskPurgePrefix(std::string prefix);
+
     asio::io_context ioContext_;
     asio::ip::tcp::acceptor acceptor_;
     // Server TLS context, swappable at runtime (null when TLS is disabled). A new
@@ -249,6 +267,11 @@ private:
 
     EdgeConfig config_;
     EdgeCache cache_;
+    // Optional persistent disk tier and the single background thread all its I/O
+    // runs on. Declared after cache_ and before worker_ so, on teardown, the pool
+    // (and its in-flight disk tasks) is joined before disk_ is destroyed.
+    std::optional<DiskCache> disk_;
+    std::optional<asio::thread_pool> diskPool_;
     OriginFetcher fetcher_;
     std::size_t maxCacheableBytes_{8u * 1024u * 1024u};
     std::unordered_map<std::string, InFlightFetch> inFlight_;

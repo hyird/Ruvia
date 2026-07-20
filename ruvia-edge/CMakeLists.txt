@@ -5,6 +5,7 @@ set(RUVIA_EDGE_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/src/EdgeConfig.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/EdgeFreshness.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/EdgeCache.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/DiskCache.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/OriginFetcher.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/EdgeServer.cpp
 )

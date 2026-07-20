@@ -9,9 +9,11 @@
 #include <atomic>
 #include <chrono>
 #include <cstdio>
+#include <filesystem>
 #include <mutex>
 #include <string>
 #include <string_view>
+#include <system_error>
 #include <thread>
 #include <utility>
 
@@ -762,6 +764,46 @@ int main() {
         // A plaintext edge has no certificate to rotate.
         check(!edge.setTlsCertificate(fresh),
               "setTlsCertificate fails when TLS is not enabled");
+    }
+
+    // Persistent disk tier: an entry cached by one edge is served from disk by a
+    // second edge over the same directory -- a fresh, empty memory cache, and the
+    // origin is not re-contacted.
+    {
+        const std::filesystem::path diskDir =
+            std::filesystem::temp_directory_path() / "ruvia_edge_disk_test";
+        std::error_code ec;
+        std::filesystem::remove_all(diskDir, ec);
+
+        {
+            ruvia::edge::EdgeServerOptions diskOptions;
+            diskOptions.cacheDirectory = diskDir;
+            EdgeServer diskEdge(tcp::endpoint(tcp::v4(), 0), std::move(diskOptions));
+            diskEdge.start();
+            diskEdge.addOrigin("front.local",
+                               OriginSettings{"127.0.0.1", origin.port(), false});
+            const std::uint16_t diskPort = diskEdge.localEndpoint().port();
+            const auto miss = httpGet(diskPort, "front.local", "/diskpage");
+            check(contains(miss, "X-Cache: MISS"), "first disk-tier request is a MISS");
+            check(bodyOf(miss) == "hello", "disk-tier MISS proxied the origin body");
+            diskEdge.stop();  // drains the background disk write before we reopen
+        }
+
+        const int before = origin.hits();
+        ruvia::edge::EdgeServerOptions reopenOptions;
+        reopenOptions.cacheDirectory = diskDir;
+        EdgeServer reopened(tcp::endpoint(tcp::v4(), 0), std::move(reopenOptions));
+        reopened.start();
+        reopened.addOrigin("front.local",
+                           OriginSettings{"127.0.0.1", origin.port(), false});
+        const std::uint16_t reopenPort = reopened.localEndpoint().port();
+        const auto hit = httpGet(reopenPort, "front.local", "/diskpage");
+        check(contains(hit, "X-Cache: HIT"),
+              "a fresh edge serves the entry from the disk tier");
+        check(bodyOf(hit) == "hello", "disk-tier HIT body matches the origin");
+        check(origin.hits() == before, "disk-tier HIT did not re-contact the origin");
+        reopened.stop();
+        std::filesystem::remove_all(diskDir, ec);
     }
 
     // HTTP/2: curl negotiates h2 over ALPN and the edge serves it end to end.

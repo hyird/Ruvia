@@ -19,6 +19,7 @@
 #include <asio/co_spawn.hpp>
 #include <asio/detached.hpp>
 #include <asio/experimental/awaitable_operators.hpp>
+#include <asio/post.hpp>
 #include <asio/ssl.hpp>
 #include <asio/steady_timer.hpp>
 #include <asio/use_awaitable.hpp>
@@ -718,12 +719,22 @@ EdgeServer::EdgeServer(const asio::ip::tcp::endpoint& endpoint, EdgeServerOption
     if (options.tls) {
         tlsContext_.store(buildServerTlsContext(*options.tls));
     }
+    if (options.cacheDirectory) {
+        disk_.emplace(*options.cacheDirectory, options.maxDiskCacheBytes);
+        diskPool_.emplace(1);  // all disk I/O on one background thread, off the loop
+    }
 }
 
 EdgeServer::~EdgeServer() {
     ioContext_.stop();
     if (worker_.joinable()) {
         worker_.join();
+    }
+    // Drain queued disk writes before the pool is destroyed: ~thread_pool calls
+    // stop(), which abandons pending work, so an explicit join() (which waits for
+    // outstanding work) is what actually flushes the cache to disk.
+    if (diskPool_) {
+        diskPool_->join();
     }
 }
 
@@ -736,6 +747,11 @@ void EdgeServer::stop() {
     ioContext_.stop();
     if (worker_.joinable()) {
         worker_.join();
+    }
+    // The io thread is stopped, so no new disk work will be posted; drain what is
+    // already queued (join waits for outstanding work, unlike stop).
+    if (diskPool_) {
+        diskPool_->join();
     }
 }
 
@@ -771,11 +787,21 @@ bool EdgeServer::setTlsCertificate(const EdgeTlsConfig& tls) {
 
 bool EdgeServer::purge(std::string_view frontHost, std::string_view target) {
     // Remove every cached variant of the URL, not just one encoding.
-    return cache_.purgePrefix(cacheKey("GET", frontHost, target)) > 0;
+    const std::string prefix = cacheKey("GET", frontHost, target);
+    const bool removed = cache_.purgePrefix(prefix) > 0;
+    if (disk_) {
+        // Direct (thread-safe) call from the control-plane thread; blocks the
+        // caller, never the event loop.
+        return disk_->purgePrefix(prefix) > 0 || removed;
+    }
+    return removed;
 }
 
 void EdgeServer::clearCache() {
     cache_.clear();
+    if (disk_) {
+        disk_->clear();
+    }
 }
 
 void EdgeServer::recordRequest(const AccessLogEntry& entry) {
@@ -793,6 +819,44 @@ void EdgeServer::wakeInFlight(const std::string& key) {
         waiter->cancel();
     }
     inFlight_.erase(it);
+}
+
+asio::awaitable<std::shared_ptr<const CachedResponse>> EdgeServer::diskLookup(std::string key) {
+    if (!disk_ || !diskPool_) {
+        co_return nullptr;
+    }
+    // Run the blocking read on the disk pool; use_awaitable resumes this
+    // coroutine back on the event loop with the result.
+    co_return co_await asio::co_spawn(
+        *diskPool_,
+        [this, key = std::move(key)]()
+            -> asio::awaitable<std::shared_ptr<const CachedResponse>> {
+            co_return disk_->lookup(key);
+        },
+        asio::use_awaitable);
+}
+
+void EdgeServer::diskStore(std::string key, std::shared_ptr<const CachedResponse> entry) {
+    if (!disk_ || !diskPool_ || !entry) {
+        return;
+    }
+    asio::post(*diskPool_, [this, key = std::move(key), entry = std::move(entry)] {
+        disk_->store(key, *entry);
+    });
+}
+
+void EdgeServer::diskPurge(std::string key) {
+    if (!disk_ || !diskPool_) {
+        return;
+    }
+    asio::post(*diskPool_, [this, key = std::move(key)] { disk_->purge(key); });
+}
+
+void EdgeServer::diskPurgePrefix(std::string prefix) {
+    if (!disk_ || !diskPool_) {
+        return;
+    }
+    asio::post(*diskPool_, [this, prefix = std::move(prefix)] { disk_->purgePrefix(prefix); });
 }
 
 std::string EdgeServer::cacheKey(
@@ -1119,6 +1183,7 @@ asio::awaitable<bool> EdgeServer::serveRequest(
             // URI (RFC 9111 section 4.4).
             if (passStatus < 400) {
                 cache_.purgePrefix(cacheKey("GET", frontHost, target));
+                diskPurgePrefix(cacheKey("GET", frontHost, target));
             }
             resultLabel = "BYPASS";
             recordedStatus = passStatus;
@@ -1177,6 +1242,16 @@ asio::awaitable<bool> EdgeServer::serveRequest(
 
         // 4. Serve a fresh cache hit without touching the origin.
         auto hit = cache_.lookup(key, now);
+        if (hit.status == CacheLookupStatus::kMiss && disk_) {
+            // Memory miss: consult the persistent disk tier and, on a hit,
+            // promote the entry into the hot memory cache.
+            if (auto diskEntry = co_await diskLookup(key)) {
+                cache_.store(key, diskEntry);
+                hit.entry = diskEntry;
+                hit.status = now < diskEntry->expiresAt ? CacheLookupStatus::kFresh
+                                                        : CacheLookupStatus::kStale;
+            }
+        }
         if (hit.status == CacheLookupStatus::kFresh) {
             co_return co_await serveHit(*hit.entry);
         }
@@ -1408,9 +1483,11 @@ asio::awaitable<bool> EdgeServer::serveRequest(
                 refreshed->staleIfError = decision.staleIfError;
                 const bool storable = decision.cacheable && cacheableUnderVary(refreshed->headers);
                 if (storable) {
+                    diskStore(key, refreshed);
                     cache_.store(key, refreshed);
                 } else {
                     cache_.purge(key);  // no longer has usable freshness
+                    diskPurge(key);
                 }
                 resultLabel = "REVALIDATED";
                 recordedStatus = refreshed->status;
@@ -1437,6 +1514,7 @@ asio::awaitable<bool> EdgeServer::serveRequest(
             entry->expiresAt = cacheDecision.expiresAt;
             entry->staleWhileRevalidate = cacheDecision.staleWhileRevalidate;
             entry->staleIfError = cacheDecision.staleIfError;
+            diskStore(key, entry);
             cache_.store(key, std::move(entry));
         }
         resultLabel = "MISS";
@@ -1518,6 +1596,7 @@ asio::awaitable<void> EdgeServer::backgroundRefresh(RefreshJob job) {
             entry->staleWhileRevalidate = refreshed.staleWhileRevalidate;
             entry->staleIfError = refreshed.staleIfError;
             entry->headers = std::move(merged);
+            diskStore(job.key, entry);
             cache_.store(job.key, std::move(entry));
         }
         co_return;
@@ -1532,6 +1611,7 @@ asio::awaitable<void> EdgeServer::backgroundRefresh(RefreshJob job) {
         entry->expiresAt = decision.expiresAt;
         entry->staleWhileRevalidate = decision.staleWhileRevalidate;
         entry->staleIfError = decision.staleIfError;
+        diskStore(job.key, entry);
         cache_.store(job.key, std::move(entry));
     }
 }
