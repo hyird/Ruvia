@@ -350,6 +350,13 @@ ruvia_add_test(ruvia_server_tls_keepalive_deadline server/server_tls_keepalive_d
 ruvia_add_test(ruvia_server_keepalive_idle_timeout server/server_keepalive_idle_timeout.cpp TIMEOUT 60)
 ruvia_add_test(ruvia_server_write_timeout server/server_write_timeout.cpp TIMEOUT 60)
 
+ruvia_add_test(ruvia_web_worker server/web_worker.cpp TIMEOUT 30)
+ruvia_add_test(ruvia_app_web_worker server/app_web_worker.cpp TIMEOUT 30)
+ruvia_add_test(ruvia_app_startup_retry server/app_startup_retry.cpp TIMEOUT 30)
+endif()
+
+# Edge tests only need ruvia::edge; keep them outside the web gate so a
+# web-off edge build still runs them.
 if(RUVIA_BUILD_EDGE)
     ruvia_add_test(ruvia_edge_config edge/unit_edge_config.cpp LIB ruvia::edge TIMEOUT 30)
     ruvia_add_test(ruvia_edge_freshness edge/unit_edge_freshness.cpp LIB ruvia::edge TIMEOUT 30)
@@ -357,18 +364,14 @@ if(RUVIA_BUILD_EDGE)
     ruvia_add_test(ruvia_origin_fetcher edge/unit_origin_fetcher.cpp LIB ruvia::edge TIMEOUT 30)
     ruvia_add_test(ruvia_edge_server edge/unit_edge_server.cpp LIB ruvia::edge TIMEOUT 30)
 endif()
-ruvia_add_test(ruvia_web_worker server/web_worker.cpp TIMEOUT 30)
-ruvia_add_test(ruvia_app_web_worker server/app_web_worker.cpp TIMEOUT 30)
-ruvia_add_test(ruvia_app_startup_retry server/app_startup_retry.cpp TIMEOUT 30)
-endif()
 
 configure_file(
     ${CMAKE_CURRENT_SOURCE_DIR}/verify_package_consumers.cmake.in
     ${CMAKE_CURRENT_BINARY_DIR}/verify_package_consumers.cmake
     @ONLY)
-# Opt-in for the same reason as the layer-boundary check: the packaging
-# contract pins installed file names and literal signatures, which makes it
-# brittle across refactors. Run on demand with:
+# Opt-in rather than a ctest entry: the packaging contract pins installed file
+# names and literal signatures, which makes it brittle across refactors. Run on
+# demand with:
 #   cmake --build <build-dir> --target ruvia_package_consumers
 add_custom_target(ruvia_package_consumers
     COMMAND ${CMAKE_COMMAND}
