@@ -8,6 +8,7 @@
 
 #include "ruvia/edge/EdgeFreshness.h"
 #include "ruvia/http/HttpCache.h"
+#include "ruvia/http/HttpStatus.h"
 
 namespace {
 
@@ -35,7 +36,7 @@ int main() {
     // max-age gives a concrete freshness deadline.
     {
         FreshnessInput in;
-        in.status = 200;
+        in.status = ruvia::http_status::kOk.value();
         in.cacheControl = cc("max-age=60");
         in.now = kNow;
         const auto d = evaluateFreshness(in);
@@ -46,7 +47,7 @@ int main() {
     // s-maxage overrides max-age for a shared cache.
     {
         FreshnessInput in;
-        in.status = 200;
+        in.status = ruvia::http_status::kOk.value();
         in.cacheControl = cc("max-age=60, s-maxage=600");
         in.now = kNow;
         const auto d = evaluateFreshness(in);
@@ -57,7 +58,7 @@ int main() {
     // no-store, private, and no-cache are all refused by a shared cache.
     for (const char* directive : {"no-store", "private", "no-cache"}) {
         FreshnessInput in;
-        in.status = 200;
+        in.status = ruvia::http_status::kOk.value();
         in.cacheControl = cc(directive);
         in.now = kNow;
         // Even paired with a long max-age, the refusal wins.
@@ -69,7 +70,7 @@ int main() {
     // A response with no explicit freshness signal is not stored (no heuristics).
     {
         FreshnessInput in;
-        in.status = 200;
+        in.status = ruvia::http_status::kOk.value();
         in.now = kNow;
         const auto d = evaluateFreshness(in);
         check(!d.cacheable, "no freshness signal means not cacheable");
@@ -78,7 +79,7 @@ int main() {
     // A non-storable status is refused even when explicitly fresh.
     {
         FreshnessInput in;
-        in.status = 500;
+        in.status = ruvia::http_status::kInternalServerError.value();
         in.cacheControl = cc("max-age=60");
         in.now = kNow;
         const auto d = evaluateFreshness(in);
@@ -87,7 +88,7 @@ int main() {
     // ...but 404 is in the storable set.
     {
         FreshnessInput in;
-        in.status = 404;
+        in.status = ruvia::http_status::kNotFound.value();
         in.cacheControl = cc("max-age=30");
         in.now = kNow;
         const auto d = evaluateFreshness(in);
@@ -97,7 +98,7 @@ int main() {
     // Expires minus Date yields the lifetime when Cache-Control is absent.
     {
         FreshnessInput in;
-        in.status = 200;
+        in.status = ruvia::http_status::kOk.value();
         in.dateHeader = kNow;
         in.expiresHeader = kNow + 120;
         in.now = kNow;
@@ -109,7 +110,7 @@ int main() {
     // is already 40s old expires in 60s, not 100s.
     {
         FreshnessInput in;
-        in.status = 200;
+        in.status = ruvia::http_status::kOk.value();
         in.cacheControl = cc("max-age=100");
         in.ageHeader = 40;
         in.now = kNow;
@@ -121,7 +122,7 @@ int main() {
     // A response already older than its lifetime is not stored.
     {
         FreshnessInput in;
-        in.status = 200;
+        in.status = ruvia::http_status::kOk.value();
         in.cacheControl = cc("max-age=30");
         in.ageHeader = 30;
         in.now = kNow;
@@ -132,7 +133,7 @@ int main() {
     // stale-while-revalidate / stale-if-error windows are carried through.
     {
         FreshnessInput in;
-        in.status = 200;
+        in.status = ruvia::http_status::kOk.value();
         in.cacheControl = cc("max-age=60, stale-while-revalidate=30, stale-if-error=120");
         in.now = kNow;
         const auto d = evaluateFreshness(in);
