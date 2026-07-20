@@ -1,5 +1,6 @@
 #include "ruvia/http/detail/server/HttpResponseHead.h"
 
+#include <array>
 #include <charconv>
 #include <cstring>
 #include <optional>
@@ -71,7 +72,17 @@ struct RawHeadSink {
     }
 
     void appendUnsigned(std::uint64_t value) noexcept {
-        out = std::to_chars(out, out + 20, value).ptr;
+        // Format into a local buffer and copy. The measured head reserves only
+        // decimalDigits(value) bytes for these digits, so std::to_chars(out,
+        // out + 20, ...) would form a pointer past the 512-byte stack buffer's
+        // end (undefined per [expr.add]) when the head nearly fills it, even
+        // though no byte beyond the digits is written. Mirrors
+        // ResponseHeadBuffer::appendUnsigned.
+        std::array<char, 20> digits;
+        const auto end =
+            std::to_chars(digits.data(), digits.data() + digits.size(), value).ptr;
+        append(std::string_view(
+            digits.data(), static_cast<std::size_t>(end - digits.data())));
     }
 };
 
