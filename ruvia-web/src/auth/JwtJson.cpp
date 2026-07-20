@@ -1,6 +1,7 @@
 #include "ruvia/web/detail/auth/JwtInternal.h"
 
 #include "ruvia/http/detail/HttpNumberFormat.h"
+#include "ruvia/web/detail/DecimalNumber.h"
 #include "ruvia/web/detail/json/JsonObjectFields.h"
 #include "ruvia/web/detail/json/JsonString.h"
 
@@ -58,15 +59,13 @@ jwtParseJsonNumericDate(std::string_view value) {
     }
 
     double fractional = 0;
-    const auto [fractionalPtr, fractionalEc] = std::from_chars(
-        value.data(), value.data() + value.size(), fractional);
-    if (fractionalEc != std::errc{} || !std::isfinite(fractional)) {
-        return std::nullopt;
+    auto fractionalText = value;
+    while (!fractionalText.empty() &&
+           (fractionalText.back() == ' ' || fractionalText.back() == '\t' ||
+            fractionalText.back() == '\r' || fractionalText.back() == '\n')) {
+        fractionalText.remove_suffix(1);
     }
-    auto remaining = value.substr(
-        static_cast<std::size_t>(fractionalPtr - value.data()));
-    skipJsonWhitespace(remaining);
-    if (!remaining.empty()) {
+    if (!parseDecimalNumber(fractionalText, fractional) || !std::isfinite(fractional)) {
         return std::nullopt;
     }
 

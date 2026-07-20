@@ -48,7 +48,7 @@ RUVIA_TEST(form_number_floating_accepts_fraction_and_exponent) {
 }
 
 RUVIA_TEST(form_number_floating_rejects_non_finite) {
-    // std::from_chars accepts these, but the JSON grammar rejects them on input,
+    // The floating parser accepts these, but the JSON grammar rejects them on input,
     // the model JSON writer maps them to null, and the finite formatter throws --
     // so a bound floating field must never become inf/nan.
     RUVIA_CHECK(!parseFormNumber<double>("inf").has_value());

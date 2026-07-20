@@ -128,6 +128,18 @@ RUVIA_TEST(json_number_parse_type_boundaries) {
         RUVIA_CHECK(v == 100.0);
         RUVIA_CHECK(in.empty());
     }
+    {
+        std::string_view in = "1e39";
+        float v = 0;
+        RUVIA_CHECK(!parseJsonNumberValue(in, v));
+        RUVIA_CHECK_EQ(in, std::string_view("1e39"));
+    }
+    {
+        std::string_view in = "1e-999";
+        double v = 0;
+        RUVIA_CHECK(!parseJsonNumberValue(in, v));
+        RUVIA_CHECK_EQ(in, std::string_view("1e-999"));
+    }
 }
 
 // --- String token scanning -----------------------------------------------
