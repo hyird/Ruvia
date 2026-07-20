@@ -4,6 +4,7 @@
 #include <cstdint>
 #include <functional>
 #include <memory>
+#include <memory_resource>
 #include <optional>
 #include <span>
 #include <string>
@@ -26,7 +27,11 @@
 
 namespace ruvia {
 class Http1ParsedRequest;
-}
+namespace detail {
+class Http2Connection;
+class Http2StreamState;
+}  // namespace detail
+}  // namespace ruvia
 
 namespace ruvia::edge {
 
@@ -147,9 +152,10 @@ struct EdgeServerOptions final {
 //   GET    /stats                                     cache and traffic metrics
 // It is unauthenticated and must be bound to a trusted interface only.
 //
-// The data listener speaks HTTP/1.1 and can terminate TLS (EdgeServerOptions::
-// tls); origins are reached over HTTP or HTTPS per their config. HTTP/2 and
-// multi-worker scaling are future work.
+// The data listener speaks HTTP/1.1 and, when TLS is terminated (EdgeServerOptions
+// ::tls), negotiates HTTP/2 over ALPN -- an h2 client is served by the same cache
+// core, one stream at a time. Origins are reached over HTTP or HTTPS per their
+// config. Multiplexed h2 concurrency and multi-worker scaling are future work.
 class EdgeServer final {
 public:
     EdgeServer(const asio::ip::tcp::endpoint& endpoint, EdgeServerOptions options = {});
@@ -217,6 +223,18 @@ private:
         const Http1ParsedRequest& parsed,
         std::string_view clientAddress,
         bool keepAlive);
+    // Drive an HTTP/2 connection over `stream`: dispatch each completed stream to
+    // the serve core with an HTTP/2 response writer. Streams are served serially.
+    template <typename Stream>
+    asio::awaitable<void> handleHttp2Session(Stream stream, std::string clientAddress);
+    asio::awaitable<void> serveHttp2Stream(
+        detail::Http2Connection& connection,
+        std::uint32_t streamId,
+        detail::Http2StreamState& streamState,
+        std::string requestBody,
+        std::string_view clientAddress,
+        std::pmr::memory_resource* resource);
+
     asio::awaitable<void> adminAcceptLoop();
     asio::awaitable<void> handleAdminSession(asio::ip::tcp::socket socket);
 

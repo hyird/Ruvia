@@ -4,8 +4,10 @@
 #include <array>
 #include <charconv>
 #include <chrono>
+#include <cstring>
 #include <ctime>
 #include <memory>
+#include <memory_resource>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -22,14 +24,23 @@
 #include <asio/use_awaitable.hpp>
 #include <asio/write.hpp>
 
+#include <openssl/ssl.h>  // ALPN selection
+
 #include "ruvia/edge/EdgeFreshness.h"
 #include "ruvia/http/Http1RequestParser.h"
 #include "ruvia/http/HttpCache.h"
 #include "ruvia/http/HttpHeader.h"
 #include "ruvia/http/HttpKnownMethod.h"
+#include "ruvia/http/HttpRequest.h"
+#include "ruvia/http/HttpResponse.h"
 #include "ruvia/http/HttpStatus.h"
 #include "ruvia/http/ProtocolByteLimit.h"
+#include "ruvia/http/detail/HttpRequestInternal.h"
 #include "ruvia/http/detail/http1/Http1ChunkedBodyDecoder.h"
+#include "ruvia/http/detail/http2/Http2Connection.h"
+#include "ruvia/http/detail/http2/Http2Event.h"
+#include "ruvia/http/detail/http2/Http2RequestBuilder.h"
+#include "ruvia/http/detail/server/HttpResponseWritePlan.h"
 
 namespace ruvia::edge {
 
@@ -43,13 +54,29 @@ constexpr std::size_t kMaxRequestBytes = 1u * 1024u * 1024u;
 // How long a persistent client connection may sit idle awaiting its next request.
 constexpr std::chrono::seconds kKeepAliveIdleTimeout{60};
 
-// Build a server TLS context from PEM. Throws asio::system_error on invalid PEM.
+// ALPN wire list the edge advertises, in server-preference order: h2, http/1.1.
+constexpr unsigned char kAlpnProtocols[] = {
+    2, 'h', '2', 8, 'h', 't', 't', 'p', '/', '1', '.', '1'};
+
+extern "C" inline int edgeAlpnSelect(
+    SSL* /*ssl*/, const unsigned char** out, unsigned char* outlen,
+    const unsigned char* in, unsigned int inlen, void* /*arg*/) {
+    if (SSL_select_next_proto(const_cast<unsigned char**>(out), outlen, kAlpnProtocols,
+                              sizeof(kAlpnProtocols), in, inlen) != OPENSSL_NPN_NEGOTIATED) {
+        return SSL_TLSEXT_ERR_NOACK;  // no shared protocol: fall back to HTTP/1.1
+    }
+    return SSL_TLSEXT_ERR_OK;
+}
+
+// Build a server TLS context from PEM (advertising ALPN h2 / http/1.1). Throws
+// asio::system_error on invalid PEM.
 [[nodiscard]] std::shared_ptr<asio::ssl::context> buildServerTlsContext(
     const EdgeTlsConfig& config) {
     auto context = std::make_shared<asio::ssl::context>(asio::ssl::context::tls_server);
     context->use_certificate_chain(asio::buffer(config.certificateChainPem));
     context->use_private_key(
         asio::buffer(config.privateKeyPem), asio::ssl::context::pem);
+    SSL_CTX_set_alpn_select_cb(context->native_handle(), &edgeAlpnSelect, nullptr);
     return context;
 }
 
@@ -264,6 +291,20 @@ enum class ClientFraming : std::uint8_t {
 }
 
 // Look up a request header (case-insensitive) in a borrowed header span.
+// The host without its optional :port, for origin lookup and cache keys. An IPv6
+// literal keeps its brackets ("[::1]:443" -> "[::1]").
+[[nodiscard]] std::string_view hostWithoutPort(std::string_view host) noexcept {
+    if (host.empty()) {
+        return host;
+    }
+    if (host.front() == '[') {
+        const auto close = host.find(']');
+        return close == std::string_view::npos ? host : host.substr(0, close + 1);
+    }
+    const auto colon = host.rfind(':');
+    return colon == std::string_view::npos ? host : host.substr(0, colon);
+}
+
 [[nodiscard]] std::optional<std::string_view> findRequestHeader(
     std::span<const HttpHeaderView> headers,
     std::string_view name) {
@@ -337,6 +378,103 @@ private:
     Stream& stream_;
     std::size_t bytes_{0};
     bool chunked_{false};
+};
+
+// HTTP/2 response writer: buffers the serve core's response and submits it as one
+// HTTP/2 response (HEADERS + DATA) on the stream. The connection's pending output
+// is flushed by the session driver; streaming responses are buffered for now.
+class Http2ResponseWriter final : public ResponseWriter {
+public:
+    Http2ResponseWriter(detail::Http2Connection& connection, std::uint32_t streamId,
+                        HttpKnownMethod method, std::pmr::memory_resource* resource) noexcept
+        : connection_(connection), streamId_(streamId), method_(method), resource_(resource) {}
+
+    asio::awaitable<bool> respond(std::uint16_t status, const Headers& headers,
+                                  std::string_view body, std::string_view cacheResult,
+                                  std::optional<std::uint64_t> age, bool omitBody, bool) override {
+        submitBuffered(status, headers, body, cacheResult, age, omitBody);
+        co_return true;
+    }
+
+    asio::awaitable<bool> respondHead(std::uint16_t status, const Headers& headers,
+                                      std::string_view cacheResult, bool hasBody,
+                                      std::optional<std::size_t>, bool) override {
+        headStatus_ = status;
+        headHeaders_ = headers;
+        headCacheResult_.assign(cacheResult);
+        headHasBody_ = hasBody;
+        streaming_ = true;
+        co_return true;
+    }
+
+    asio::awaitable<bool> respondChunk(std::string_view chunk) override {
+        streamedBody_.append(chunk);
+        co_return true;
+    }
+
+    asio::awaitable<bool> respondEnd() override {
+        if (streaming_) {
+            submitBuffered(headStatus_, headHeaders_, streamedBody_, headCacheResult_,
+                           std::nullopt, !headHasBody_);
+        }
+        co_return true;
+    }
+
+    [[nodiscard]] std::size_t bytesWritten() const override { return bytes_; }
+
+private:
+    void submitBuffered(std::uint16_t status, const Headers& headers, std::string_view body,
+                        std::string_view cacheResult, std::optional<std::uint64_t> age,
+                        bool omitBody) {
+        HttpResponse response(resource_);
+        response.status(
+            HttpStatusCode::tryFromValue(status).value_or(http_status::kInternalServerError));
+        for (const auto& [name, value] : headers) {
+            std::string lower(name);
+            for (auto& c : lower) {
+                c = toLowerAscii(c);
+            }
+            if (isConnectionOrFramingField(lower)) {
+                if (!(omitBody && lower == "content-length")) {
+                    continue;
+                }
+            }
+            if (age && lower == "age") {
+                continue;
+            }
+            response.header(name, value);
+        }
+        response.header("X-Cache", cacheResult);
+        std::string ageText;  // must outlive submitResponseHead
+        if (age) {
+            ageText = std::to_string(*age);
+            response.header("Age", ageText);
+        }
+        if (!omitBody) {
+            response.body(body);
+        }
+        const auto plan = detail::httpBufferedResponseWritePlan(method_, response);
+        const auto submitted = connection_.submitResponseHead(streamId_, response, plan);
+        if (submitted.submitted() == nullptr) {
+            (void)connection_.submitReset(streamId_, detail::Http2ErrorCode::kInternalError);
+            return;
+        }
+        (void)connection_.submitData(streamId_, omitBody ? std::string_view{} : body,
+                                     detail::Http2EndStream::kEndStream);
+        bytes_ += omitBody ? 0 : body.size();
+    }
+
+    detail::Http2Connection& connection_;
+    std::uint32_t streamId_;
+    HttpKnownMethod method_;
+    std::pmr::memory_resource* resource_;
+    std::size_t bytes_{0};
+    bool streaming_{false};
+    bool headHasBody_{false};
+    std::uint16_t headStatus_{0};
+    Headers headHeaders_;
+    std::string headCacheResult_;
+    std::string streamedBody_;
 };
 
 // A plain-text response for the management API.
@@ -750,6 +888,21 @@ asio::awaitable<void> EdgeServer::handleTlsSession(asio::ip::tcp::socket socket)
         stream.lowest_layer().close(ignore);
         co_return;
     }
+
+    // Dispatch to HTTP/2 when ALPN negotiated it, otherwise HTTP/1.1.
+    const unsigned char* protocol = nullptr;
+    unsigned int protocolLength = 0;
+    SSL_get0_alpn_selected(stream.native_handle(), &protocol, &protocolLength);
+    if (protocolLength == 2 && protocol != nullptr && std::memcmp(protocol, "h2", 2) == 0) {
+        std::string clientAddress;
+        asio::error_code addressError;
+        const auto remote = stream.lowest_layer().remote_endpoint(addressError);
+        if (!addressError) {
+            clientAddress = remote.address().to_string();
+        }
+        co_await handleHttp2Session(std::move(stream), std::move(clientAddress));
+        co_return;
+    }
     co_await handleSession(std::move(stream));
 }
 
@@ -898,7 +1051,7 @@ asio::awaitable<bool> EdgeServer::serveRequest(
 
     const bool isGet = request.knownMethod == HttpKnownMethod::kGet;
     const bool isHead = request.knownMethod == HttpKnownMethod::kHead;
-    const std::string_view frontHost = request.host;
+    const std::string_view frontHost = hostWithoutPort(request.host);
     const std::string_view target = request.target;
     const bool keepAlive = request.keepAlive;
 
@@ -1425,6 +1578,100 @@ asio::awaitable<void> EdgeServer::backgroundRefresh(RefreshJob job) {
         entry->staleIfError = decision.staleIfError;
         cache_.store(job.key, std::move(entry));
     }
+}
+
+template <typename Stream>
+asio::awaitable<void> EdgeServer::handleHttp2Session(Stream stream, std::string clientAddress) {
+    const auto tuple = asio::as_tuple(asio::use_awaitable);
+    std::pmr::unsynchronized_pool_resource resource;
+    detail::Http2Connection connection(&resource, detail::Http2Role::kServer);
+    connection.beginConnection();
+
+    std::array<char, 16384> readBuffer;
+    std::unordered_map<std::uint32_t, std::string> requestBodies;
+
+    for (;;) {
+        // Flush queued output frames (SETTINGS, HEADERS, DATA, WINDOW_UPDATE, ...).
+        while (connection.wantsWrite()) {
+            std::pmr::string out(&resource);
+            connection.takeOutput(out);
+            auto [writeError, writeSize] = co_await asio::async_write(
+                stream, asio::buffer(out.data(), out.size()), tuple);
+            (void)writeSize;
+            if (writeError) {
+                co_return;
+            }
+        }
+        if (connection.connectionError().has_value()) {
+            co_return;  // terminal connection error; its GOAWAY is already flushed
+        }
+
+        auto [readError, readSize] = co_await stream.async_read_some(
+            asio::buffer(readBuffer), tuple);
+        if (readError) {
+            break;
+        }
+        (void)connection.feed(std::string_view(readBuffer.data(), readSize));
+
+        // Drain every event before feeding again (feed's contract).
+        for (;;) {
+            const auto event = connection.nextEvent();
+            if (!event.has_value()) {
+                break;
+            }
+            if (const auto* head = event->messageHead()) {
+                requestBodies.try_emplace(head->streamId());
+            } else if (const auto* chunk = event->messageBodyChunk()) {
+                requestBodies[chunk->streamId()].append(chunk->bytes());
+            } else if (const auto* end = event->messageEnd()) {
+                const auto streamId = end->streamId();
+                if (auto* streamState = connection.stream(streamId)) {
+                    std::string body;
+                    if (auto it = requestBodies.find(streamId); it != requestBodies.end()) {
+                        body = std::move(it->second);
+                        requestBodies.erase(it);
+                    }
+                    co_await serveHttp2Stream(connection, streamId, *streamState,
+                                              std::move(body), clientAddress, &resource);
+                }
+            }
+        }
+    }
+
+    asio::error_code ignore;
+    stream.lowest_layer().shutdown(asio::ip::tcp::socket::shutdown_both, ignore);
+}
+
+asio::awaitable<void> EdgeServer::serveHttp2Stream(
+    detail::Http2Connection& connection,
+    std::uint32_t streamId,
+    detail::Http2StreamState& streamState,
+    std::string requestBody,
+    std::string_view clientAddress,
+    std::pmr::memory_resource* resource) {
+    HttpRequest httpRequest = detail::HttpRequestAccess::make();
+    const auto buildResult =
+        detail::Http2RequestBuilder::build(streamState, httpRequest, resource, requestBody);
+    if (buildResult.built() == nullptr) {
+        (void)connection.submitReset(streamId, detail::Http2ErrorCode::kProtocolError);
+        co_return;
+    }
+
+    EdgeRequest edgeRequest;
+    edgeRequest.method = httpRequest.method();
+    edgeRequest.knownMethod = httpRequest.knownMethod();
+    edgeRequest.target = httpRequest.target();
+    edgeRequest.host = streamState.requestAuthority();
+    edgeRequest.headers = httpRequest.headers();
+    edgeRequest.clientAddress = clientAddress;
+    edgeRequest.keepAlive = true;
+    if (edgeRequest.knownMethod != HttpKnownMethod::kGet &&
+        edgeRequest.knownMethod != HttpKnownMethod::kHead && !requestBody.empty()) {
+        edgeRequest.body = std::string_view(requestBody);
+    }
+
+    Http2ResponseWriter writer(connection, streamId, edgeRequest.knownMethod, resource);
+    (void)co_await serveRequest(edgeRequest, writer);
 }
 
 asio::awaitable<void> EdgeServer::adminAcceptLoop() {

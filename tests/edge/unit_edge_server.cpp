@@ -414,6 +414,21 @@ std::string httpsGet(std::uint16_t port, std::string_view host, std::string_view
     return response;
 }
 
+// Run a shell command and capture its stdout (used to drive curl as an h2 client).
+std::string runShell(const std::string& command) {
+    std::string output;
+    FILE* pipe = popen(command.c_str(), "r");
+    if (pipe == nullptr) {
+        return output;
+    }
+    char buffer[512];
+    while (std::fgets(buffer, sizeof(buffer), pipe) != nullptr) {
+        output.append(buffer);
+    }
+    pclose(pipe);
+    return output;
+}
+
 [[nodiscard]] int statusOf(const std::string& raw) {
     // "HTTP/1.1 " is 9 bytes; the status code is the next three digits.
     if (raw.size() < 12 || !raw.starts_with("HTTP/1.1 ")) {
@@ -780,6 +795,29 @@ int main() {
             adminPort, "PUT /tls HTTP/1.1\r\nHost: a\r\nContent-Length: " +
                            std::to_string(pem.size()) + "\r\nConnection: close\r\n\r\n" + pem);
         check(statusOf(onPlaintext) == 400, "PUT /tls fails when TLS is not enabled");
+    }
+
+    // HTTP/2: curl negotiates h2 over ALPN and the edge serves it end to end.
+    {
+        ruvia::edge::EdgeServerOptions h2Options;
+        h2Options.tls = ruvia::edge::EdgeTlsConfig{
+            std::string(edge_test_tls::kCertPem), std::string(edge_test_tls::kKeyPem)};
+        EdgeServer h2Edge(tcp::endpoint(tcp::v4(), 0), std::move(h2Options));
+        h2Edge.start();
+        h2Edge.addOrigin("front.local",
+                         OriginSettings{"127.0.0.1", origin.port(), false});
+        const std::uint16_t h2Port = h2Edge.localEndpoint().port();
+        const std::string resolve =
+            " --resolve front.local:" + std::to_string(h2Port) + ":127.0.0.1 ";
+        const std::string url = "https://front.local:" + std::to_string(h2Port) + "/page";
+        const std::string got = runShell(
+            "curl --http2 -sk -o /tmp/edge_h2_body -w '%{http_version} %{http_code}'" +
+            resolve + url + " 2>/dev/null");
+        check(got == "2 200",
+              (std::string("h2 request served over ALPN (got: '") + got + "')").c_str());
+        check(runShell("cat /tmp/edge_h2_body 2>/dev/null") == "hello",
+              "h2 response body proxied from the origin");
+        h2Edge.stop();
     }
 
     // Conditional revalidation: a short-lived entry goes stale, is revalidated
