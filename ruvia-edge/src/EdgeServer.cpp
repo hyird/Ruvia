@@ -334,7 +334,8 @@ EdgeServer::EdgeServer(const asio::ip::tcp::endpoint& endpoint, EdgeServerOption
     : acceptor_(ioContext_, endpoint),
       cache_(options.cache),
       fetcher_(options.fetch),
-      maxCacheableBytes_(options.maxCacheableBytes) {
+      maxCacheableBytes_(options.maxCacheableBytes),
+      accessLog_(std::move(options.accessLog)) {
     if (options.tls) {
         tlsContext_.emplace(asio::ssl::context::tls_server);
         tlsContext_->use_certificate_chain(
@@ -400,6 +401,27 @@ bool EdgeServer::purge(std::string_view frontHost, std::string_view target) {
 
 void EdgeServer::clearCache() {
     cache_.clear();
+}
+
+void EdgeServer::recordRequest(const AccessLogEntry& entry) {
+    ++metrics_.requests;
+    metrics_.bytesToClient += entry.bytesToClient;
+    if (entry.cacheResult == "HIT") {
+        ++metrics_.hits;
+    } else if (entry.cacheResult == "MISS") {
+        ++metrics_.misses;
+    } else if (entry.cacheResult == "REVALIDATED") {
+        ++metrics_.revalidated;
+    } else if (entry.cacheResult == "STALE") {
+        ++metrics_.stale;
+    } else if (entry.cacheResult == "BYPASS") {
+        ++metrics_.bypass;
+    } else {
+        ++metrics_.errors;
+    }
+    if (accessLog_) {
+        accessLog_(entry);
+    }
 }
 
 void EdgeServer::wakeInFlight(const std::string& key) {
@@ -540,7 +562,14 @@ asio::awaitable<bool> EdgeServer::handleFramedRequest(
     const Http1ParsedRequest& parsed,
     std::string_view clientAddress,
     bool keepAlive) {
-    const auto writeAll = [&stream](std::string wire) -> asio::awaitable<bool> {
+    // Per-request accounting for the access log and metrics. Defaults to an
+    // error result; success paths set the label/status below.
+    std::size_t bytesToClient = 0;
+    std::string_view resultLabel = "ERROR";
+    std::uint16_t recordedStatus = 0;
+
+    const auto writeAll = [&stream, &bytesToClient](std::string wire) -> asio::awaitable<bool> {
+        bytesToClient += wire.size();
         auto [ec, n] = co_await asio::async_write(
             stream, asio::buffer(wire.data(), wire.size()),
             asio::as_tuple(asio::use_awaitable));
@@ -554,7 +583,26 @@ asio::awaitable<bool> EdgeServer::handleFramedRequest(
     const bool isHead = request.knownMethod() == HttpKnownMethod::kHead;
 
     const std::string_view frontHost = request.header("host").value_or("");
-        const std::string_view target = request.target();
+    const std::string_view target = request.target();
+
+    struct RequestRecord final {
+        EdgeServer* self;
+        std::string_view clientAddress;
+        std::string_view method;
+        std::string_view host;
+        std::string_view target;
+        const std::string_view* result;
+        const std::uint16_t* status;
+        const std::size_t* bytes;
+        ~RequestRecord() {
+            self->recordRequest(AccessLogEntry{
+                clientAddress, method, host, target, *status, *result, *bytes});
+        }
+    };
+    const RequestRecord record{this,          clientAddress, request.method(),
+                               frontHost,      target,        &resultLabel,
+                               &recordedStatus, &bytesToClient};
+    (void)record;
 
         // 3. Resolve the origin from the current published config snapshot.
         const auto snapshot = config_.snapshot();
@@ -692,6 +740,8 @@ asio::awaitable<bool> EdgeServer::handleFramedRequest(
             if (passStatus < 400) {
                 cache_.purge(cacheKey("GET", frontHost, target));
             }
+            resultLabel = "BYPASS";
+            recordedStatus = passStatus;
             co_return keepAlive;
         }
 
@@ -705,6 +755,8 @@ asio::awaitable<bool> EdgeServer::handleFramedRequest(
             const auto age = entry.storedAt <= now
                 ? static_cast<std::uint64_t>(now - entry.storedAt)
                 : std::uint64_t{0};
+            resultLabel = "HIT";
+            recordedStatus = entry.status;
             co_return co_await writeAll(buildResponseWire(
                 entry.status, entry.headers, entry.body, "HIT", age, isHead,
                 keepAlive)) && keepAlive;
@@ -736,6 +788,8 @@ asio::awaitable<bool> EdgeServer::handleFramedRequest(
                     const auto age = entry.storedAt <= now
                         ? static_cast<std::uint64_t>(now - entry.storedAt)
                         : std::uint64_t{0};
+                    resultLabel = "HIT";
+                    recordedStatus = entry.status;
                     co_return co_await writeAll(buildResponseWire(
                         entry.status, entry.headers, entry.body, "HIT", age, isHead,
                         keepAlive)) && keepAlive;
@@ -896,10 +950,13 @@ asio::awaitable<bool> EdgeServer::handleFramedRequest(
                 co_return false;  // partial response already sent; close
             }
             if (serveStaleOnError()) {
+                resultLabel = "STALE";
+                recordedStatus = staleEntry->status;
                 co_return co_await writeStale() && keepAlive;
             }
             const std::uint16_t gatewayStatus =
                 fetchResult.outcome == OriginFetchOutcome::kTimeout ? 504 : 502;
+            recordedStatus = gatewayStatus;
             co_await writeAll(buildStatusWire(gatewayStatus));
             co_return false;
         }
@@ -924,11 +981,15 @@ asio::awaitable<bool> EdgeServer::handleFramedRequest(
                 } else {
                     cache_.purge(key);  // no longer has usable freshness
                 }
+                resultLabel = "REVALIDATED";
+                recordedStatus = refreshed->status;
                 co_return co_await writeAll(buildResponseWire(
                     refreshed->status, refreshed->headers, refreshed->body, "REVALIDATED",
                     std::uint64_t{0}, isHead, keepAlive)) && keepAlive;
             }
-            co_return co_await writeStale() && keepAlive;  // 5xx covered by stale-if-error
+            resultLabel = "STALE";  // 5xx covered by stale-if-error
+            recordedStatus = staleEntry->status;
+            co_return co_await writeStale() && keepAlive;
         }
 
         // A full response streamed successfully: finish the framing and commit the
@@ -947,6 +1008,8 @@ asio::awaitable<bool> EdgeServer::handleFramedRequest(
             entry->staleIfError = cacheDecision.staleIfError;
             cache_.store(key, std::move(entry));
         }
+        resultLabel = "MISS";
+        recordedStatus = respStatus;
         co_return keepAlive;
 }
 
@@ -1016,10 +1079,25 @@ asio::awaitable<void> EdgeServer::handleAdminSession(asio::ip::tcp::socket socke
         std::string body = "not found";
 
         if (path == "/stats" && method == HttpKnownMethod::kGet) {
-            body = "entries=";
-            appendDecimal(body, cache_.entryCount());
-            body += " bytes=";
-            appendDecimal(body, cache_.byteSize());
+            const auto append = [&](std::string_view name, std::uint64_t value) {
+                body.append(name);
+                body.push_back('=');
+                appendDecimal(body, value);
+                body.push_back(' ');
+            };
+            append("entries", cache_.entryCount());
+            append("cache_bytes", cache_.byteSize());
+            append("requests", metrics_.requests);
+            append("hits", metrics_.hits);
+            append("misses", metrics_.misses);
+            append("revalidated", metrics_.revalidated);
+            append("stale", metrics_.stale);
+            append("bypass", metrics_.bypass);
+            append("errors", metrics_.errors);
+            append("bytes_to_client", metrics_.bytesToClient);
+            if (!body.empty()) {
+                body.pop_back();  // trailing space
+            }
             status = 200;
         } else if (path.starts_with("/origins/")) {
             const std::string_view host = path.substr(std::string_view("/origins/").size());

@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <functional>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -30,6 +31,32 @@ struct EdgeTlsConfig final {
     std::string privateKeyPem;
 };
 
+// One completed request, handed to the access-log callback. All string views are
+// borrowed and valid only for the duration of the callback; copy to retain.
+// cacheResult mirrors the X-Cache label (HIT/MISS/REVALIDATED/STALE/BYPASS) or
+// ERROR for an edge-generated error or an aborted response.
+struct AccessLogEntry final {
+    std::string_view clientAddress;
+    std::string_view method;
+    std::string_view host;
+    std::string_view target;
+    std::uint16_t status{0};
+    std::string_view cacheResult;
+    std::size_t bytesToClient{0};
+};
+
+// Aggregate counters since start, reported by the /stats management endpoint.
+struct EdgeMetrics final {
+    std::uint64_t requests{0};
+    std::uint64_t hits{0};
+    std::uint64_t misses{0};
+    std::uint64_t revalidated{0};
+    std::uint64_t stale{0};
+    std::uint64_t bypass{0};
+    std::uint64_t errors{0};
+    std::uint64_t bytesToClient{0};
+};
+
 struct EdgeServerOptions final {
     EdgeCache::Limits cache{};
     OriginFetcher::Limits fetch{};
@@ -42,6 +69,8 @@ struct EdgeServerOptions final {
     // the runtime control API over HTTP (see the class comment). It is
     // unauthenticated, so bind it to a trusted interface (e.g. loopback) only.
     std::optional<asio::ip::tcp::endpoint> adminEndpoint{};
+    // Invoked (on the event-loop thread) once per completed request. Optional.
+    std::function<void(const AccessLogEntry&)> accessLog{};
 };
 
 // A caching reverse-proxy edge node running its own single-thread event loop.
@@ -131,6 +160,9 @@ private:
     // entry (called when the leader's fetch finishes, however it ended).
     void wakeInFlight(const std::string& key);
 
+    // Count a completed request and emit its access-log entry.
+    void recordRequest(const AccessLogEntry& entry);
+
     asio::io_context ioContext_;
     asio::ip::tcp::acceptor acceptor_;
     std::optional<asio::ssl::context> tlsContext_;
@@ -147,6 +179,8 @@ private:
     OriginFetcher fetcher_;
     std::size_t maxCacheableBytes_{8u * 1024u * 1024u};
     std::unordered_map<std::string, InFlightFetch> inFlight_;
+    std::function<void(const AccessLogEntry&)> accessLog_;
+    EdgeMetrics metrics_;
     std::jthread worker_;
 };
 

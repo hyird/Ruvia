@@ -564,6 +564,44 @@ int main() {
               "concurrent misses coalesced into a single origin fetch");
     }
 
+    // Observability: an access-log callback sees each request's cache result, and
+    // /stats reports the aggregate counters.
+    {
+        std::mutex logMutex;
+        std::vector<std::string> logResults;
+        ruvia::edge::EdgeServerOptions obsOptions;
+        obsOptions.adminEndpoint = tcp::endpoint(tcp::v4(), 0);
+        obsOptions.accessLog = [&](const ruvia::edge::AccessLogEntry& e) {
+            std::lock_guard<std::mutex> guard(logMutex);
+            logResults.emplace_back(e.cacheResult);
+        };
+        EdgeServer obsEdge(tcp::endpoint(tcp::v4(), 0), std::move(obsOptions));
+        obsEdge.start();
+        obsEdge.addOrigin("front.local",
+                          OriginSettings{"127.0.0.1", origin.port(), false});
+        const std::uint16_t obsPort = obsEdge.localEndpoint().port();
+        const std::uint16_t obsAdmin = obsEdge.localAdminEndpoint().value().port();
+
+        (void)httpGet(obsPort, "front.local", "/page");  // MISS
+        (void)httpGet(obsPort, "front.local", "/page");  // HIT
+
+        {
+            std::lock_guard<std::mutex> guard(logMutex);
+            check(logResults.size() == 2, "each request produced an access-log entry");
+            check(logResults.size() == 2 && logResults[0] == "MISS",
+                  "first request logged as a MISS");
+            check(logResults.size() == 2 && logResults[1] == "HIT",
+                  "second request logged as a HIT");
+        }
+
+        const auto stats = httpRaw(
+            obsAdmin, "GET /stats HTTP/1.1\r\nHost: a\r\nConnection: close\r\n\r\n");
+        check(contains(stats, "requests=2"), "stats counts total requests");
+        check(contains(stats, "hits=1"), "stats counts cache hits");
+        check(contains(stats, "misses=1"), "stats counts cache misses");
+        obsEdge.stop();
+    }
+
     // Client-side TLS termination: a separate TLS edge in front of the same
     // origin serves an HTTPS request end to end.
     {
