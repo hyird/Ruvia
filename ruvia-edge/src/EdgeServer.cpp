@@ -16,6 +16,7 @@
 #include <asio/co_spawn.hpp>
 #include <asio/detached.hpp>
 #include <asio/experimental/awaitable_operators.hpp>
+#include <asio/ssl.hpp>
 #include <asio/steady_timer.hpp>
 #include <asio/use_awaitable.hpp>
 #include <asio/write.hpp>
@@ -258,6 +259,13 @@ EdgeServer::EdgeServer(const asio::ip::tcp::endpoint& endpoint, EdgeServerOption
     : acceptor_(ioContext_, endpoint),
       cache_(options.cache),
       fetcher_(options.fetch) {
+    if (options.tls) {
+        tlsContext_.emplace(asio::ssl::context::tls_server);
+        tlsContext_->use_certificate_chain(
+            asio::buffer(options.tls->certificateChainPem));
+        tlsContext_->use_private_key(
+            asio::buffer(options.tls->privateKeyPem), asio::ssl::context::pem);
+    }
     if (options.adminEndpoint) {
         adminAcceptor_.emplace(ioContext_, *options.adminEndpoint);
     }
@@ -342,25 +350,44 @@ asio::awaitable<void> EdgeServer::acceptLoop() {
             }
             continue;
         }
-        asio::co_spawn(ioContext_, handleSession(std::move(socket)), asio::detached);
+        if (tlsContext_) {
+            asio::co_spawn(
+                ioContext_, handleTlsSession(std::move(socket)), asio::detached);
+        } else {
+            asio::co_spawn(
+                ioContext_, handleSession(std::move(socket)), asio::detached);
+        }
     }
 }
 
-asio::awaitable<void> EdgeServer::handleSession(asio::ip::tcp::socket socket) {
+asio::awaitable<void> EdgeServer::handleTlsSession(asio::ip::tcp::socket socket) {
+    asio::ssl::stream<asio::ip::tcp::socket> stream(std::move(socket), *tlsContext_);
+    auto [ec] = co_await stream.async_handshake(
+        asio::ssl::stream_base::server, asio::as_tuple(asio::use_awaitable));
+    if (ec) {
+        asio::error_code ignore;
+        stream.lowest_layer().close(ignore);
+        co_return;
+    }
+    co_await handleSession(std::move(stream));
+}
+
+template <typename Stream>
+asio::awaitable<void> EdgeServer::handleSession(Stream stream) {
     using namespace asio::experimental::awaitable_operators;
 
     std::string clientAddress;
     {
         asio::error_code ec;
-        const auto remote = socket.remote_endpoint(ec);
+        const auto remote = stream.lowest_layer().remote_endpoint(ec);
         if (!ec) {
             clientAddress = remote.address().to_string();
         }
     }
 
     const auto tuple = asio::as_tuple(asio::use_awaitable);
-    const auto writeStatus = [&socket, tuple](std::string wire) -> asio::awaitable<void> {
-        co_await asio::async_write(socket, asio::buffer(wire.data(), wire.size()), tuple);
+    const auto writeStatus = [&stream, tuple](std::string wire) -> asio::awaitable<void> {
+        co_await asio::async_write(stream, asio::buffer(wire.data(), wire.size()), tuple);
     };
 
     std::string inbound;
@@ -385,7 +412,7 @@ asio::awaitable<void> EdgeServer::handleSession(asio::ip::tcp::socket socket) {
                 consumed = parsed->consumedBytes();
                 const bool keepAlive = clientWantsKeepAlive(parsed->request());
                 keepGoing = co_await handleFramedRequest(
-                    socket, *parsed, clientAddress, keepAlive);
+                    stream, *parsed, clientAddress, keepAlive);
                 framed = true;
                 break;
             }
@@ -396,7 +423,7 @@ asio::awaitable<void> EdgeServer::handleSession(asio::ip::tcp::socket socket) {
             }
             idleTimer.expires_after(kKeepAliveIdleTimeout);
             auto raced = co_await (
-                socket.async_read_some(asio::buffer(buffer), tuple) ||
+                stream.async_read_some(asio::buffer(buffer), tuple) ||
                 idleTimer.async_wait(tuple));
             if (raced.index() == 1) {
                 keepGoing = false;  // idle too long
@@ -417,17 +444,18 @@ asio::awaitable<void> EdgeServer::handleSession(asio::ip::tcp::socket socket) {
     }
 
     asio::error_code ignore;
-    socket.shutdown(asio::ip::tcp::socket::shutdown_both, ignore);
+    stream.lowest_layer().shutdown(asio::ip::tcp::socket::shutdown_both, ignore);
 }
 
+template <typename Stream>
 asio::awaitable<bool> EdgeServer::handleFramedRequest(
-    asio::ip::tcp::socket& socket,
+    Stream& stream,
     const Http1ParsedRequest& parsed,
     std::string_view clientAddress,
     bool keepAlive) {
-    const auto writeAll = [&socket](std::string wire) -> asio::awaitable<void> {
+    const auto writeAll = [&stream](std::string wire) -> asio::awaitable<void> {
         co_await asio::async_write(
-            socket, asio::buffer(wire.data(), wire.size()),
+            stream, asio::buffer(wire.data(), wire.size()),
             asio::as_tuple(asio::use_awaitable));
     };
 

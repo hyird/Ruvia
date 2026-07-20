@@ -22,9 +22,11 @@
 #include <asio/detached.hpp>
 #include <asio/io_context.hpp>
 #include <asio/ip/tcp.hpp>
+#include <asio/ssl.hpp>
 #include <asio/use_awaitable.hpp>
 #include <asio/write.hpp>
 
+#include "edge_tls_fixture.h"
 #include "ruvia/edge/EdgeServer.h"
 
 namespace {
@@ -288,6 +290,38 @@ std::pair<std::string, std::string> httpKeepAliveTwo(
     return {first, second};
 }
 
+// A synchronous one-shot HTTPS client: TLS-handshake (no verification), send one
+// GET, read until the server closes, return the raw response bytes.
+std::string httpsGet(std::uint16_t port, std::string_view host, std::string_view target) {
+    asio::io_context io;
+    asio::ssl::context ctx(asio::ssl::context::tls_client);
+    ctx.set_verify_mode(asio::ssl::verify_none);
+    asio::ssl::stream<tcp::socket> stream(io, ctx);
+    stream.lowest_layer().connect(tcp::endpoint(asio::ip::make_address("127.0.0.1"), port));
+    stream.handshake(asio::ssl::stream_base::client);
+
+    std::string request = "GET ";
+    request.append(target);
+    request.append(" HTTP/1.1\r\nHost: ");
+    request.append(host);
+    request.append("\r\nConnection: close\r\n\r\n");
+    asio::write(stream, asio::buffer(request));
+
+    std::string response;
+    char buffer[4096];
+    asio::error_code ec;
+    for (;;) {
+        const std::size_t n = stream.read_some(asio::buffer(buffer), ec);
+        if (n > 0) {
+            response.append(buffer, n);
+        }
+        if (ec) {
+            break;
+        }
+    }
+    return response;
+}
+
 [[nodiscard]] int statusOf(const std::string& raw) {
     // "HTTP/1.1 " is 9 bytes; the status code is the next three digits.
     if (raw.size() < 12 || !raw.starts_with("HTTP/1.1 ")) {
@@ -444,6 +478,24 @@ int main() {
         check(bodyOf(second) == "hello", "keep-alive body 2 is correct");
         check(contains(second, "Connection: close"),
               "response 2 closes the connection as requested");
+    }
+
+    // Client-side TLS termination: a separate TLS edge in front of the same
+    // origin serves an HTTPS request end to end.
+    {
+        ruvia::edge::EdgeServerOptions tlsOptions;
+        tlsOptions.tls = ruvia::edge::EdgeTlsConfig{
+            std::string(edge_test_tls::kCertPem), std::string(edge_test_tls::kKeyPem)};
+        EdgeServer tlsEdge(tcp::endpoint(tcp::v4(), 0), tlsOptions);
+        tlsEdge.start();
+        tlsEdge.addOrigin("front.local",
+                          OriginSettings{"127.0.0.1", origin.port(), false});
+        const std::uint16_t tlsPort = tlsEdge.localEndpoint().port();
+
+        const auto r = httpsGet(tlsPort, "front.local", "/page");
+        check(statusOf(r) == 200, "TLS-terminated request served with 200");
+        check(bodyOf(r) == "hello", "TLS request proxied to the origin");
+        tlsEdge.stop();
     }
 
     // Conditional revalidation: a short-lived entry goes stale, is revalidated

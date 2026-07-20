@@ -9,6 +9,7 @@
 #include <asio/awaitable.hpp>
 #include <asio/io_context.hpp>
 #include <asio/ip/tcp.hpp>
+#include <asio/ssl.hpp>
 
 #include "ruvia/edge/EdgeCache.h"
 #include "ruvia/edge/EdgeConfig.h"
@@ -20,9 +21,17 @@ class Http1ParsedRequest;
 
 namespace ruvia::edge {
 
+// PEM-encoded certificate chain and private key for terminating client TLS.
+struct EdgeTlsConfig final {
+    std::string certificateChainPem;
+    std::string privateKeyPem;
+};
+
 struct EdgeServerOptions final {
     EdgeCache::Limits cache{};
     OriginFetcher::Limits fetch{};
+    // When set, the data listener terminates TLS with this certificate/key.
+    std::optional<EdgeTlsConfig> tls{};
     // When set, a separate management listener is bound to this endpoint exposing
     // the runtime control API over HTTP (see the class comment). It is
     // unauthenticated, so bind it to a trusted interface (e.g. loopback) only.
@@ -49,9 +58,9 @@ struct EdgeServerOptions final {
 //   GET    /stats                                     cache entry count and bytes
 // It is unauthenticated and must be bound to a trusted interface only.
 //
-// The MVP scope is deliberately narrow: plaintext HTTP/1.1 on both sides, one
-// request per client connection, and no origin connection pooling. TLS,
-// keep-alive, and multi-worker scaling are future work.
+// The data listener speaks HTTP/1.1 and can terminate TLS (EdgeServerOptions::
+// tls); origins are reached over HTTP or HTTPS per their config. HTTP/2 and
+// multi-worker scaling are future work.
 class EdgeServer final {
 public:
     EdgeServer(const asio::ip::tcp::endpoint& endpoint, EdgeServerOptions options = {});
@@ -96,11 +105,16 @@ private:
         std::string_view target);
 
     asio::awaitable<void> acceptLoop();
-    asio::awaitable<void> handleSession(asio::ip::tcp::socket socket);
+    // Terminate TLS on an accepted socket, then run the session over it.
+    asio::awaitable<void> handleTlsSession(asio::ip::tcp::socket socket);
+    // Run the keep-alive session over any stream (plain TCP or TLS).
+    template <typename Stream>
+    asio::awaitable<void> handleSession(Stream stream);
     // Handle one framed request. Returns true to keep the connection open for a
     // next request (keep-alive), false to close it.
+    template <typename Stream>
     asio::awaitable<bool> handleFramedRequest(
-        asio::ip::tcp::socket& socket,
+        Stream& stream,
         const Http1ParsedRequest& parsed,
         std::string_view clientAddress,
         bool keepAlive);
@@ -109,6 +123,7 @@ private:
 
     asio::io_context ioContext_;
     asio::ip::tcp::acceptor acceptor_;
+    std::optional<asio::ssl::context> tlsContext_;
     std::optional<asio::ip::tcp::acceptor> adminAcceptor_;
     EdgeConfig config_;
     EdgeCache cache_;
