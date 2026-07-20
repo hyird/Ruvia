@@ -407,6 +407,12 @@ void compactParsedBodyFields(
         const auto partContentType = part.contentType();
         std::pmr::string name(partName.data(), partName.size(), resource);
         const bool array = fieldNameIsArray(std::string_view(name));
+        // RFC 7578 section 4.4: a part without a Content-Type defaults to
+        // text/plain. Surface that effective type to the form consumer rather
+        // than an empty string (the raw multipart parts API stays faithful).
+        std::pmr::string contentType = partContentType.empty()
+            ? std::pmr::string("text/plain", resource)
+            : std::pmr::string(partContentType.data(), partContentType.size(), resource);
         appendParsedBodyField(
             fields,
             detail::RequestFormFieldAccess::make(
@@ -414,7 +420,7 @@ void compactParsedBodyFields(
                 std::move(name),
                 std::pmr::string(partBody.data(), partBody.size(), resource),
                 std::pmr::string(partFilename.data(), partFilename.size(), resource),
-                std::pmr::string(partContentType.data(), partContentType.size(), resource),
+                std::move(contentType),
                 !partFilename.empty(),
                 array),
             options);

@@ -112,6 +112,18 @@ asio::awaitable<void> parseRepeatedFiles(
     }
 }
 
+asio::awaitable<void> parsePartContentType(
+    ruvia::Context& context,
+    std::string& contentType) {
+    const auto form = co_await ruvia::detail::taskAsAwaitable(
+        parseRequestBody(context, {}));
+    const auto upload = form.get("upload");
+    if (const auto* field = upload.field(); field != nullptr) {
+        const auto value = field->contentType();
+        contentType.assign(value.data(), value.size());
+    }
+}
+
 asio::awaitable<void> parseWithFieldCap(
     ruvia::Context& context,
     std::size_t maxFields,
@@ -527,6 +539,37 @@ RUVIA_TEST(context_parse_body_groups_arrays_and_compacts_repeated_scalars) {
     RUVIA_CHECK(tagsArray);                      // flagged as an array
     RUVIA_CHECK_EQ(xSize, std::size_t{1});       // repeated scalar compacted to one
     RUVIA_CHECK_EQ(xValue, std::string("2"));    // last value wins
+}
+
+RUVIA_TEST(context_parse_body_defaults_absent_part_content_type) {
+    WorkerMemory worker;
+    HttpRequest request = HttpRequestAccess::make();
+    HttpRequestAccess::reset(request);
+    HttpRequestAccess::addHeader(
+        request,
+        HttpHeaderView{"Content-Type", "multipart/form-data; boundary=BOUNDARY"},
+        HttpRequestAccess::knownHeaderSlot(RequestKnownHeader::kContentType));
+    // The "upload" part carries no Content-Type header.
+    HttpRequestAccess::setBody(
+        request,
+        "--BOUNDARY\r\n"
+        "Content-Disposition: form-data; name=\"upload\"; filename=\"note.txt\"\r\n"
+        "\r\n"
+        "hello\r\n"
+        "--BOUNDARY--\r\n");
+
+    RequestMemory requestMemory(worker);
+    HttpRequestAccess::setResource(request, requestMemory.resource());
+    auto context = ContextAccess::make(requestMemory, request);
+
+    asio::io_context io;
+    std::string contentType;
+    asio::co_spawn(
+        io, parsePartContentType(context, contentType), asio::detached);
+    io.run();
+
+    // RFC 7578 4.4: an absent part Content-Type defaults to text/plain.
+    RUVIA_CHECK_EQ(contentType, std::string("text/plain"));
 }
 
 RUVIA_TEST(context_parse_body_keeps_every_repeated_file_part) {
