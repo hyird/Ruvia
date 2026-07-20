@@ -5,6 +5,7 @@
 #include <functional>
 #include <memory>
 #include <optional>
+#include <span>
 #include <string>
 #include <string_view>
 #include <thread>
@@ -20,12 +21,62 @@
 #include "ruvia/edge/EdgeCache.h"
 #include "ruvia/edge/EdgeConfig.h"
 #include "ruvia/edge/OriginFetcher.h"
+#include "ruvia/http/HttpHeader.h"
+#include "ruvia/http/HttpKnownMethod.h"
 
 namespace ruvia {
 class Http1ParsedRequest;
 }
 
 namespace ruvia::edge {
+
+// A logical client request, independent of the wire protocol (HTTP/1 or HTTP/2).
+// All views are borrowed and must outlive the serve call.
+struct EdgeRequest final {
+    std::string_view method;
+    HttpKnownMethod knownMethod{HttpKnownMethod::kUnknown};
+    std::string_view target;
+    std::string_view host;
+    std::span<const HttpHeaderView> headers;
+    std::optional<std::string_view> body;  // already-decoded request body, if any
+    std::string_view clientAddress;
+    bool keepAlive{true};
+};
+
+// Wire adapter the serve core drives to emit a response, implemented once per
+// protocol. A response is either one buffered respond(), or respondHead() then
+// respondChunk()* then respondEnd(). Each call returns false if the client is
+// gone. The serve core supplies fully-curated headers plus the X-Cache label,
+// Age and keep-alive intent; the adapter adds protocol framing.
+class ResponseWriter {
+public:
+    ResponseWriter() = default;
+    virtual ~ResponseWriter() = default;
+    ResponseWriter(const ResponseWriter&) = delete;
+    ResponseWriter& operator=(const ResponseWriter&) = delete;
+
+    virtual asio::awaitable<bool> respond(
+        std::uint16_t status,
+        const std::vector<std::pair<std::string, std::string>>& headers,
+        std::string_view body,
+        std::string_view cacheResult,
+        std::optional<std::uint64_t> age,
+        bool omitBody,
+        bool keepAlive) = 0;
+
+    virtual asio::awaitable<bool> respondHead(
+        std::uint16_t status,
+        const std::vector<std::pair<std::string, std::string>>& headers,
+        std::string_view cacheResult,
+        bool hasBody,
+        std::optional<std::size_t> contentLength,
+        bool keepAlive) = 0;
+
+    virtual asio::awaitable<bool> respondChunk(std::string_view chunk) = 0;
+    virtual asio::awaitable<bool> respondEnd() = 0;
+
+    [[nodiscard]] virtual std::size_t bytesWritten() const = 0;
+};
 
 // PEM-encoded certificate chain and private key for terminating client TLS.
 struct EdgeTlsConfig final {
@@ -153,8 +204,13 @@ private:
     // Run the keep-alive session over any stream (plain TCP or TLS).
     template <typename Stream>
     asio::awaitable<void> handleSession(Stream stream);
-    // Handle one framed request. Returns true to keep the connection open for a
-    // next request (keep-alive), false to close it.
+    // Serve one logical request, emitting the response through `writer`. Returns
+    // true to keep the connection open (keep-alive), false to close it. This is
+    // the protocol-agnostic core shared by the HTTP/1 and HTTP/2 wire adapters.
+    asio::awaitable<bool> serveRequest(const EdgeRequest& request, ResponseWriter& writer);
+
+    // Handle one framed HTTP/1 request: build the logical request and drive the
+    // serve core with an HTTP/1 response writer over `stream`.
     template <typename Stream>
     asio::awaitable<bool> handleFramedRequest(
         Stream& stream,

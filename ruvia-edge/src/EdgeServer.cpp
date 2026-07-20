@@ -263,6 +263,82 @@ enum class ClientFraming : std::uint8_t {
     return out;
 }
 
+// Look up a request header (case-insensitive) in a borrowed header span.
+[[nodiscard]] std::optional<std::string_view> findRequestHeader(
+    std::span<const HttpHeaderView> headers,
+    std::string_view name) {
+    for (const auto& field : headers) {
+        if (iequals(field.name(), name)) {
+            return field.value();
+        }
+    }
+    return std::nullopt;
+}
+
+// HTTP/1 response writer: serializes the serve core's responses to wire bytes and
+// counts them. Framing (Content-Length vs chunked) and the chunked terminator are
+// this adapter's concern.
+template <typename Stream>
+class Http1ResponseWriter final : public ResponseWriter {
+public:
+    explicit Http1ResponseWriter(Stream& stream) noexcept : stream_(stream) {}
+
+    asio::awaitable<bool> respond(
+        std::uint16_t status,
+        const Headers& headers,
+        std::string_view body,
+        std::string_view cacheResult,
+        std::optional<std::uint64_t> age,
+        bool omitBody,
+        bool keepAlive) override {
+        co_return co_await write(
+            buildResponseWire(status, headers, body, cacheResult, age, omitBody, keepAlive));
+    }
+
+    asio::awaitable<bool> respondHead(
+        std::uint16_t status,
+        const Headers& headers,
+        std::string_view cacheResult,
+        bool hasBody,
+        std::optional<std::size_t> contentLength,
+        bool keepAlive) override {
+        ClientFraming framing = ClientFraming::kNoBody;
+        if (hasBody) {
+            framing = contentLength ? ClientFraming::kLength : ClientFraming::kChunked;
+        }
+        chunked_ = framing == ClientFraming::kChunked;
+        co_return co_await write(buildStreamingHead(
+            status, headers, cacheResult, framing, contentLength.value_or(0), keepAlive));
+    }
+
+    asio::awaitable<bool> respondChunk(std::string_view chunk) override {
+        co_return co_await write(chunked_ ? chunkFrame(chunk) : std::string(chunk));
+    }
+
+    asio::awaitable<bool> respondEnd() override {
+        if (chunked_) {
+            co_return co_await write("0\r\n\r\n");
+        }
+        co_return true;
+    }
+
+    [[nodiscard]] std::size_t bytesWritten() const override { return bytes_; }
+
+private:
+    asio::awaitable<bool> write(std::string wire) {
+        bytes_ += wire.size();
+        auto [ec, n] = co_await asio::async_write(
+            stream_, asio::buffer(wire.data(), wire.size()),
+            asio::as_tuple(asio::use_awaitable));
+        (void)n;
+        co_return !ec;
+    }
+
+    Stream& stream_;
+    std::size_t bytes_{0};
+    bool chunked_{false};
+};
+
 // A plain-text response for the management API.
 [[nodiscard]] std::string buildAdminResponse(std::uint16_t status, std::string_view body) {
     std::string out;
@@ -758,53 +834,94 @@ asio::awaitable<bool> EdgeServer::handleFramedRequest(
     const Http1ParsedRequest& parsed,
     std::string_view clientAddress,
     bool keepAlive) {
-    // Per-request accounting for the access log and metrics. Defaults to an
-    // error result; success paths set the label/status below.
-    std::size_t bytesToClient = 0;
+    const auto& request = parsed.request();
+    Http1ResponseWriter<Stream> writer(stream);
+
+    EdgeRequest edgeRequest;
+    edgeRequest.method = request.method();
+    edgeRequest.knownMethod = request.knownMethod();
+    edgeRequest.target = request.target();
+    edgeRequest.host = request.header("host").value_or("");
+    edgeRequest.headers = request.headers();
+    edgeRequest.clientAddress = clientAddress;
+    edgeRequest.keepAlive = keepAlive;
+
+    // Read and decode the request body for methods that carry one, so the serve
+    // core can forward it. `decodedBody` backs edgeRequest.body across the serve.
+    std::string decodedBody;
+    if (edgeRequest.knownMethod != HttpKnownMethod::kGet &&
+        edgeRequest.knownMethod != HttpKnownMethod::kHead) {
+        const auto& bodyPlan = parsed.bodyPlan();
+        if (bodyPlan.knownLength() != nullptr) {
+            edgeRequest.body = parsed.wireBody();
+        } else if (bodyPlan.chunked() != nullptr) {
+            ruvia::detail::Http1ChunkedBodyDecoder decoder(
+                ProtocolByteLimit::limited(kMaxRequestBytes));
+            std::string chunkBuffer(parsed.wireBody());
+            bool decodeOk = true;
+            for (;;) {
+                const auto decoded = decoder.decode(chunkBuffer);
+                if (decoded.failure() != nullptr) {
+                    decodeOk = false;
+                    break;
+                }
+                if (const auto* chunk = decoded.bodyChunk()) {
+                    decodedBody.append(chunk->bytes());
+                    chunkBuffer.erase(0, decoded.consumedBytes());
+                    continue;
+                }
+                if (decoded.complete() != nullptr) {
+                    break;
+                }
+                decodeOk = false;  // need-more is impossible: message is complete
+                break;
+            }
+            if (!decodeOk) {
+                const std::vector<std::pair<std::string, std::string>> noHeaders;
+                co_await writer.respond(400, noHeaders, {}, "ERROR", std::nullopt, false, false);
+                co_return false;
+            }
+            edgeRequest.body = decodedBody;
+        }
+    }
+
+    co_return co_await serveRequest(edgeRequest, writer);
+}
+
+asio::awaitable<bool> EdgeServer::serveRequest(
+    const EdgeRequest& request, ResponseWriter& writer) {
+    // Per-request accounting: defaults to an error result; success paths set the
+    // label/status below, and the byte count comes from the writer.
     std::string_view resultLabel = "ERROR";
     std::uint16_t recordedStatus = 0;
+    const Headers noHeaders;
 
-    const auto writeAll = [&stream, &bytesToClient](std::string wire) -> asio::awaitable<bool> {
-        bytesToClient += wire.size();
-        auto [ec, n] = co_await asio::async_write(
-            stream, asio::buffer(wire.data(), wire.size()),
-            asio::as_tuple(asio::use_awaitable));
-        (void)n;
-        co_return !ec;
-    };
-
-    // GET and HEAD take the cache path; other methods are proxied (pass-through).
-    const auto& request = parsed.request();
-    const bool isGet = request.knownMethod() == HttpKnownMethod::kGet;
-    const bool isHead = request.knownMethod() == HttpKnownMethod::kHead;
-
-    const std::string_view frontHost = request.header("host").value_or("");
-    const std::string_view target = request.target();
+    const bool isGet = request.knownMethod == HttpKnownMethod::kGet;
+    const bool isHead = request.knownMethod == HttpKnownMethod::kHead;
+    const std::string_view frontHost = request.host;
+    const std::string_view target = request.target;
+    const bool keepAlive = request.keepAlive;
 
     struct RequestRecord final {
         EdgeServer* self;
-        std::string_view clientAddress;
-        std::string_view method;
-        std::string_view host;
-        std::string_view target;
+        const EdgeRequest* request;
+        const ResponseWriter* writer;
         const std::string_view* result;
         const std::uint16_t* status;
-        const std::size_t* bytes;
         ~RequestRecord() {
             self->recordRequest(AccessLogEntry{
-                clientAddress, method, host, target, *status, *result, *bytes});
+                request->clientAddress, request->method, request->host, request->target,
+                *status, *result, writer->bytesWritten()});
         }
     };
-    const RequestRecord record{this,          clientAddress, request.method(),
-                               frontHost,      target,        &resultLabel,
-                               &recordedStatus, &bytesToClient};
+    const RequestRecord record{this, &request, &writer, &resultLabel, &recordedStatus};
     (void)record;
 
         // 3. Resolve the origin from the current published config snapshot.
         const auto snapshot = config_.snapshot();
         const OriginSettings* origin = snapshot->findOrigin(frontHost);
         if (origin == nullptr) {
-            co_await writeAll(buildStatusWire(502));
+            co_await writer.respond(502, noHeaders, {}, "ERROR", std::nullopt, false, false);
             co_return false;
         }
 
@@ -812,44 +929,8 @@ asio::awaitable<bool> EdgeServer::handleFramedRequest(
         // to the origin, return the response, and on a successful unsafe method
         // invalidate any cached GET for this target (RFC 9111 section 4.4).
         if (!isGet && !isHead) {
-            std::optional<std::string_view> requestBody;
-            std::string decodedBody;
-            const auto& bodyPlan = parsed.bodyPlan();
-            if (bodyPlan.knownLength() != nullptr) {
-                requestBody = parsed.wireBody();
-            } else if (bodyPlan.chunked() != nullptr) {
-                // De-chunk the request body so it can be forwarded with a
-                // Content-Length; the whole message is already buffered.
-                ruvia::detail::Http1ChunkedBodyDecoder decoder(
-                    ProtocolByteLimit::limited(kMaxRequestBytes));
-                std::string chunkBuffer(parsed.wireBody());
-                bool decodeOk = true;
-                for (;;) {
-                    const auto decoded = decoder.decode(chunkBuffer);
-                    if (decoded.failure() != nullptr) {
-                        decodeOk = false;
-                        break;
-                    }
-                    if (const auto* chunk = decoded.bodyChunk()) {
-                        decodedBody.append(chunk->bytes());
-                        chunkBuffer.erase(0, decoded.consumedBytes());
-                        continue;
-                    }
-                    if (decoded.complete() != nullptr) {
-                        break;
-                    }
-                    decodeOk = false;  // need-more is impossible: message is complete
-                    break;
-                }
-                if (!decodeOk) {
-                    co_await writeAll(buildStatusWire(400));
-                    co_return false;
-                }
-                requestBody = decodedBody;
-            }
-
             std::vector<HttpHeaderView> passHeaders;
-            for (const auto& field : request.headers()) {
+            for (const auto& field : request.headers) {
                 std::string lower;
                 lower.reserve(field.name().size());
                 for (const char c : field.name()) {
@@ -862,9 +943,10 @@ asio::awaitable<bool> EdgeServer::handleFramedRequest(
                 }
                 passHeaders.push_back(field);
             }
-            if (!clientAddress.empty()) {
+            if (!request.clientAddress.empty()) {
                 passHeaders.emplace_back(
-                    std::string_view("X-Forwarded-For"), std::string_view(clientAddress));
+                    std::string_view("X-Forwarded-For"),
+                    std::string_view(request.clientAddress));
             }
             if (!frontHost.empty()) {
                 passHeaders.emplace_back(std::string_view("X-Forwarded-Host"), frontHost);
@@ -875,29 +957,21 @@ asio::awaitable<bool> EdgeServer::handleFramedRequest(
                 std::string_view("Via"), std::string_view("1.1 ruvia-edge"));
 
             OriginRequest passRequest;
-            passRequest.method = request.method();
+            passRequest.method = request.method;
             passRequest.target = target;
             passRequest.headers = passHeaders;
-            passRequest.body = requestBody;
+            passRequest.body = request.body;
 
             // Stream the origin response straight through to the client (never
-            // cached). The response body is re-framed as chunked when its length
-            // is unknown.
+            // cached); the writer re-frames an unknown length as chunked.
             std::uint16_t passStatus = 0;
             bool passHeadSent = false;
-            bool passChunked = false;
             bool passAborted = false;
             ResponseSink passSink;
             passSink.onHead = [&](const OriginResponseHead& head) -> asio::awaitable<bool> {
                 passStatus = head.status;
-                ClientFraming framing = ClientFraming::kNoBody;
-                if (head.hasBody) {
-                    framing = head.contentLength ? ClientFraming::kLength : ClientFraming::kChunked;
-                }
-                passChunked = framing == ClientFraming::kChunked;
-                if (!co_await writeAll(buildStreamingHead(
-                        head.status, head.headers, "BYPASS", framing,
-                        head.contentLength.value_or(0), keepAlive))) {
+                if (!co_await writer.respondHead(head.status, head.headers, "BYPASS",
+                                                 head.hasBody, head.contentLength, keepAlive)) {
                     passAborted = true;
                     co_return false;
                 }
@@ -905,9 +979,7 @@ asio::awaitable<bool> EdgeServer::handleFramedRequest(
                 co_return true;
             };
             passSink.onBody = [&](std::string_view chunk) -> asio::awaitable<bool> {
-                const bool ok = passChunked ? co_await writeAll(chunkFrame(chunk))
-                                            : co_await writeAll(std::string(chunk));
-                if (!ok) {
+                if (!co_await writer.respondChunk(chunk)) {
                     passAborted = true;
                     co_return false;
                 }
@@ -926,10 +998,12 @@ asio::awaitable<bool> EdgeServer::handleFramedRequest(
                 }
                 const std::uint16_t gatewayStatus =
                     passStream.outcome == OriginFetchOutcome::kTimeout ? 504 : 502;
-                co_await writeAll(buildStatusWire(gatewayStatus));
+                recordedStatus = gatewayStatus;
+                co_await writer.respond(
+                    gatewayStatus, noHeaders, {}, "ERROR", std::nullopt, false, false);
                 co_return false;
             }
-            if (passChunked && !co_await writeAll("0\r\n\r\n")) {
+            if (!co_await writer.respondEnd()) {
                 co_return false;
             }
             // A successful unsafe method invalidates every cached variant of this
@@ -947,8 +1021,8 @@ asio::awaitable<bool> EdgeServer::handleFramedRequest(
         // and an identity variant of the same URL are cached separately. bareKey
         // (without it) is the prefix used to invalidate every variant of a URL.
         const std::string bareKey = cacheKey("GET", frontHost, target);
-        const std::string normAcceptEncoding =
-            normalizeAcceptEncoding(request.header("accept-encoding").value_or(""));
+        const std::string normAcceptEncoding = normalizeAcceptEncoding(
+            findRequestHeader(request.headers, "accept-encoding").value_or(""));
         const std::string key = bareKey + "\n" + normAcceptEncoding;
 
         // Serve a cached entry, honoring a single client byte-range (206, or 416
@@ -959,15 +1033,15 @@ asio::awaitable<bool> EdgeServer::handleFramedRequest(
                 ? static_cast<std::uint64_t>(now - entry.storedAt)
                 : std::uint64_t{0};
             if (!isHead) {
-                if (const auto rangeHeader = request.header("range")) {
+                if (const auto rangeHeader = findRequestHeader(request.headers, "range")) {
                     const auto range = parseSingleByteRange(*rangeHeader, entry.body.size());
                     if (range.unsatisfiable) {
                         recordedStatus = 416;
                         Headers headers;
                         headers.emplace_back(
                             "Content-Range", "bytes */" + std::to_string(entry.body.size()));
-                        co_return co_await writeAll(buildResponseWire(
-                                   416, headers, {}, "HIT", std::nullopt, false, keepAlive)) &&
+                        co_return co_await writer.respond(
+                                   416, headers, {}, "HIT", std::nullopt, false, keepAlive) &&
                             keepAlive;
                     }
                     if (range.satisfiable) {
@@ -980,15 +1054,15 @@ asio::awaitable<bool> EdgeServer::handleFramedRequest(
                                 std::to_string(entry.body.size()));
                         const std::string_view slice = std::string_view(entry.body).substr(
                             range.start, range.end - range.start + 1);
-                        co_return co_await writeAll(buildResponseWire(
-                                   206, headers, slice, "HIT", age, false, keepAlive)) &&
+                        co_return co_await writer.respond(
+                                   206, headers, slice, "HIT", age, false, keepAlive) &&
                             keepAlive;
                     }
                 }
             }
             recordedStatus = entry.status;
-            co_return co_await writeAll(buildResponseWire(
-                       entry.status, entry.headers, entry.body, "HIT", age, isHead, keepAlive)) &&
+            co_return co_await writer.respond(
+                       entry.status, entry.headers, entry.body, "HIT", age, isHead, keepAlive) &&
                 keepAlive;
         };
 
@@ -1022,9 +1096,9 @@ asio::awaitable<bool> EdgeServer::handleFramedRequest(
                 : std::uint64_t{0};
             resultLabel = "STALE";
             recordedStatus = staleEntry->status;
-            co_return co_await writeAll(buildResponseWire(
+            co_return co_await writer.respond(
                 staleEntry->status, staleEntry->headers, staleEntry->body, "STALE", age,
-                isHead, keepAlive)) && keepAlive;
+                isHead, keepAlive) && keepAlive;
         }
 
         // Request coalescing (GET only): if a fetch for this key is already in
@@ -1070,7 +1144,7 @@ asio::awaitable<bool> EdgeServer::handleFramedRequest(
         // the origin may compress; the cache key includes the normalized
         // Accept-Encoding so variants are stored separately.
         std::vector<HttpHeaderView> forwardHeaders;
-        for (const auto& field : request.headers()) {
+        for (const auto& field : request.headers) {
             std::string lower;
             lower.reserve(field.name().size());
             for (const char c : field.name()) {
@@ -1086,9 +1160,10 @@ asio::awaitable<bool> EdgeServer::handleFramedRequest(
             }
             forwardHeaders.push_back(field);
         }
-        if (!clientAddress.empty()) {
+        if (!request.clientAddress.empty()) {
             forwardHeaders.emplace_back(
-                std::string_view("X-Forwarded-For"), std::string_view(clientAddress));
+                std::string_view("X-Forwarded-For"),
+                std::string_view(request.clientAddress));
         }
         if (!frontHost.empty()) {
             forwardHeaders.emplace_back(std::string_view("X-Forwarded-Host"), frontHost);
@@ -1111,7 +1186,7 @@ asio::awaitable<bool> EdgeServer::handleFramedRequest(
         }
 
         OriginRequest originRequest;
-        originRequest.method = request.method();  // GET or HEAD
+        originRequest.method = request.method;  // GET or HEAD
         originRequest.target = target;
         originRequest.headers = forwardHeaders;
 
@@ -1126,9 +1201,9 @@ asio::awaitable<bool> EdgeServer::handleFramedRequest(
             const auto age = staleEntry->storedAt <= now
                 ? static_cast<std::uint64_t>(now - staleEntry->storedAt)
                 : std::uint64_t{0};
-            co_return co_await writeAll(buildResponseWire(
+            co_return co_await writer.respond(
                 staleEntry->status, staleEntry->headers, staleEntry->body, "STALE", age,
-                isHead, keepAlive));
+                isHead, keepAlive);
         };
 
         // Streaming sink: writes the client head then each body chunk as the
@@ -1138,7 +1213,6 @@ asio::awaitable<bool> EdgeServer::handleFramedRequest(
         std::uint16_t respStatus = 0;
         Headers respHeaders;
         bool headSent = false;
-        bool clientChunked = false;
         bool clientAborted = false;
         bool caching = false;
         std::string cacheBuffer;
@@ -1154,14 +1228,8 @@ asio::awaitable<bool> EdgeServer::handleFramedRequest(
             if (head.status >= 500 && serveStaleOnError()) {
                 co_return false;  // stale-if-error: serve the stored body below
             }
-            ClientFraming framing = ClientFraming::kNoBody;
-            if (head.hasBody) {
-                framing = head.contentLength ? ClientFraming::kLength : ClientFraming::kChunked;
-            }
-            clientChunked = framing == ClientFraming::kChunked;
-            if (!co_await writeAll(buildStreamingHead(
-                    head.status, head.headers, "MISS", framing,
-                    head.contentLength.value_or(0), keepAlive))) {
+            if (!co_await writer.respondHead(head.status, head.headers, "MISS",
+                                             head.hasBody, head.contentLength, keepAlive)) {
                 clientAborted = true;
                 co_return false;
             }
@@ -1183,9 +1251,7 @@ asio::awaitable<bool> EdgeServer::handleFramedRequest(
                     cacheBuffer.append(chunk);
                 }
             }
-            const bool ok = clientChunked ? co_await writeAll(chunkFrame(chunk))
-                                          : co_await writeAll(std::string(chunk));
-            if (!ok) {
+            if (!co_await writer.respondChunk(chunk)) {
                 clientAborted = true;
                 co_return false;
             }
@@ -1211,7 +1277,8 @@ asio::awaitable<bool> EdgeServer::handleFramedRequest(
             const std::uint16_t gatewayStatus =
                 fetchResult.outcome == OriginFetchOutcome::kTimeout ? 504 : 502;
             recordedStatus = gatewayStatus;
-            co_await writeAll(buildStatusWire(gatewayStatus));
+            co_await writer.respond(
+                gatewayStatus, noHeaders, {}, "ERROR", std::nullopt, false, false);
             co_return false;
         }
 
@@ -1238,9 +1305,9 @@ asio::awaitable<bool> EdgeServer::handleFramedRequest(
                 }
                 resultLabel = "REVALIDATED";
                 recordedStatus = refreshed->status;
-                co_return co_await writeAll(buildResponseWire(
+                co_return co_await writer.respond(
                     refreshed->status, refreshed->headers, refreshed->body, "REVALIDATED",
-                    std::uint64_t{0}, isHead, keepAlive)) && keepAlive;
+                    std::uint64_t{0}, isHead, keepAlive) && keepAlive;
             }
             resultLabel = "STALE";  // 5xx covered by stale-if-error
             recordedStatus = staleEntry->status;
@@ -1249,7 +1316,7 @@ asio::awaitable<bool> EdgeServer::handleFramedRequest(
 
         // A full response streamed successfully: finish the framing and commit the
         // cache if the whole body was accumulated within the size cap.
-        if (clientChunked && !co_await writeAll("0\r\n\r\n")) {
+        if (!co_await writer.respondEnd()) {
             co_return false;
         }
         if (caching) {
