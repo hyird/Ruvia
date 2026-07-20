@@ -35,6 +35,12 @@ namespace ruvia::detail {
     return size;
 }
 
+// Escapes and appends a JSON string. Bytes >= 0x20 (other than '"' and '\\')
+// are copied verbatim, including any 0x80..0xFF, without UTF-8 validation: this
+// is the response hot path, and validating every byte of every string is a cost
+// the framework deliberately avoids. RFC 8259 8.1 requires interchanged JSON to
+// be UTF-8, so the caller must supply valid UTF-8 in string values; an ill-formed
+// sequence is emitted as-is and yields a non-UTF-8 body.
 template <typename StringT>
 inline void appendJsonString(StringT& output, std::string_view value) {
     output.push_back('"');
