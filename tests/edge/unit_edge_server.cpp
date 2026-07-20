@@ -144,6 +144,28 @@ private:
                 "Cache-Control: max-age=60\r\n"
                 "\r\n"
                 "5\r\nhello\r\n6\r\n world\r\n0\r\n\r\n";
+        } else if (request.find("GET /vary ") != std::string::npos) {
+            // Varies on Accept-Encoding: the edge caches a variant per encoding.
+            hits_.fetch_add(1);
+            response =
+                "HTTP/1.1 200 OK\r\n"
+                "Content-Type: text/plain\r\n"
+                "Content-Length: 5\r\n"
+                "Vary: Accept-Encoding\r\n"
+                "Cache-Control: max-age=60\r\n"
+                "\r\n"
+                "hello";
+        } else if (request.find("GET /varycookie ") != std::string::npos) {
+            // Varies on a field the edge does not key on: must not be cached.
+            hits_.fetch_add(1);
+            response =
+                "HTTP/1.1 200 OK\r\n"
+                "Content-Type: text/plain\r\n"
+                "Content-Length: 5\r\n"
+                "Vary: Cookie\r\n"
+                "Cache-Control: max-age=60\r\n"
+                "\r\n"
+                "hello";
         } else if (request.find("GET /slow ") != std::string::npos) {
             // A slow response, so concurrent requests overlap in flight.
             hits_.fetch_add(1);
@@ -228,6 +250,24 @@ std::string httpHead(std::uint16_t port, std::string_view host, std::string_view
     request.append(target);
     request.append(" HTTP/1.1\r\nHost: ");
     request.append(host);
+    // Same Accept-Encoding as httpGet so HEAD shares the GET's cache variant.
+    request.append("\r\nAccept-Encoding: gzip");
+    request.append("\r\nConnection: close\r\n\r\n");
+    return httpRaw(port, request);
+}
+
+// GET with an explicit Accept-Encoding, to exercise variant caching.
+std::string httpGetEnc(
+    std::uint16_t port,
+    std::string_view host,
+    std::string_view target,
+    std::string_view acceptEncoding) {
+    std::string request = "GET ";
+    request.append(target);
+    request.append(" HTTP/1.1\r\nHost: ");
+    request.append(host);
+    request.append("\r\nAccept-Encoding: ");
+    request.append(acceptEncoding);
     request.append("\r\nConnection: close\r\n\r\n");
     return httpRaw(port, request);
 }
@@ -415,8 +455,8 @@ int main() {
         const auto seen = origin.lastRequest();
         check(contains(seen, "User-Agent: probe-agent"),
               "a forwardable client header reaches the origin");
-        check(!contains(seen, "Accept-Encoding"),
-              "Accept-Encoding is stripped so the origin sends identity");
+        check(contains(seen, "Accept-Encoding: gzip"),
+              "Accept-Encoding is forwarded so the origin may compress");
         check(contains(seen, "X-Forwarded-For: 127.0.0.1"),
               "X-Forwarded-For carries the client address");
         check(contains(seen, "X-Forwarded-Host: front.local"),
@@ -540,6 +580,26 @@ int main() {
         const auto r2 = httpGet(edgePort, "front.local", "/chunked");
         check(contains(r2, "X-Cache: HIT"), "chunked response was cached");
         check(bodyOf(r2) == "hello world", "cached body served buffered on the hit");
+    }
+
+    // Vary + compressed variants: distinct Accept-Encoding values cache
+    // separately, and a response that Varies on an uncovered field is not cached.
+    {
+        const int base = origin.hits();
+        (void)httpGetEnc(edgePort, "front.local", "/vary", "gzip");  // gzip variant MISS
+        (void)httpGetEnc(edgePort, "front.local", "/vary", "br");    // br variant MISS
+        check(origin.hits() == base + 2,
+              "distinct Accept-Encoding values fetch distinct variants");
+        const auto again = httpGetEnc(edgePort, "front.local", "/vary", "gzip");
+        check(contains(again, "X-Cache: HIT"), "the gzip variant was cached");
+        check(origin.hits() == base + 2, "a cached variant is not refetched");
+
+        const int base2 = origin.hits();
+        (void)httpGetEnc(edgePort, "front.local", "/varycookie", "gzip");
+        const auto cookie2 = httpGetEnc(edgePort, "front.local", "/varycookie", "gzip");
+        check(contains(cookie2, "X-Cache: MISS"),
+              "a Vary: Cookie response is not cached");
+        check(origin.hits() == base2 + 2, "Vary: Cookie is refetched every time");
     }
 
     // Request coalescing: many concurrent misses for the same (slow) origin key

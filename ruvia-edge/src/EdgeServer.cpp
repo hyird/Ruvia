@@ -1,5 +1,6 @@
 #include "ruvia/edge/EdgeServer.h"
 
+#include <algorithm>
 #include <array>
 #include <charconv>
 #include <chrono>
@@ -279,6 +280,89 @@ enum class ClientFraming : std::uint8_t {
     return std::nullopt;
 }
 
+// Canonicalize a request Accept-Encoding into a stable cache-key fragment: the
+// sorted set of acceptable encoding names (q=0 tokens dropped), or "identity"
+// when none. Requests with the same acceptable set share one cached variant.
+[[nodiscard]] std::string normalizeAcceptEncoding(std::string_view value) {
+    std::vector<std::string> names;
+    std::size_t start = 0;
+    while (start <= value.size()) {
+        const std::size_t comma = value.find(',', start);
+        const std::string_view token = value.substr(
+            start, comma == std::string_view::npos ? std::string_view::npos : comma - start);
+        start = comma == std::string_view::npos ? value.size() + 1 : comma + 1;
+
+        const std::size_t semi = token.find(';');
+        std::string name;
+        for (const char c : token.substr(0, semi)) {
+            if (c != ' ' && c != '\t') {
+                name.push_back(toLowerAscii(c));
+            }
+        }
+        if (name.empty()) {
+            continue;
+        }
+        std::string params;
+        if (semi != std::string_view::npos) {
+            for (const char c : token.substr(semi)) {
+                if (c != ' ' && c != '\t') {
+                    params.push_back(toLowerAscii(c));
+                }
+            }
+        }
+        // Drop an encoding the client explicitly refuses (q=0), keeping q=0.x.
+        if (params.find("q=0") != std::string::npos && params.find("q=0.") == std::string::npos) {
+            continue;
+        }
+        names.push_back(std::move(name));
+    }
+    std::sort(names.begin(), names.end());
+    names.erase(std::unique(names.begin(), names.end()), names.end());
+    if (names.empty()) {
+        return "identity";
+    }
+    std::string out;
+    for (const auto& name : names) {
+        if (!out.empty()) {
+            out.push_back(',');
+        }
+        out.append(name);
+    }
+    return out;
+}
+
+// Whether a response may be cached given its Vary header. Absent Vary or a Vary
+// of only Accept-Encoding is cacheable (the key already accounts for it); Vary:*
+// or any other varying field is not (this MVP keys only on Accept-Encoding).
+[[nodiscard]] bool cacheableUnderVary(const Headers& headers) {
+    for (const auto& [name, value] : headers) {
+        if (!iequals(name, "vary")) {
+            continue;
+        }
+        const std::string_view vary(value);
+        std::size_t start = 0;
+        while (start <= vary.size()) {
+            const std::size_t comma = vary.find(',', start);
+            const std::string_view token = vary.substr(
+                start, comma == std::string_view::npos ? std::string_view::npos : comma - start);
+            start = comma == std::string_view::npos ? vary.size() + 1 : comma + 1;
+            std::string field;
+            for (const char c : token) {
+                if (c != ' ' && c != '\t') {
+                    field.push_back(toLowerAscii(c));
+                }
+            }
+            if (field.empty()) {
+                continue;
+            }
+            if (field != "accept-encoding") {
+                return false;  // "*" or a field the cache key does not cover
+            }
+        }
+    }
+    return true;
+}
+
 // Update a stored response's headers with those from a 304 (RFC 9111 section
 // 4.3.4): keep the stored fields, but replace any also present in the 304, and
 // ignore the 304's connection/framing fields.
@@ -396,7 +480,8 @@ bool EdgeServer::removeOrigin(std::string_view frontHost) {
 }
 
 bool EdgeServer::purge(std::string_view frontHost, std::string_view target) {
-    return cache_.purge(cacheKey("GET", frontHost, target));
+    // Remove every cached variant of the URL, not just one encoding.
+    return cache_.purgePrefix(cacheKey("GET", frontHost, target)) > 0;
 }
 
 void EdgeServer::clearCache() {
@@ -736,9 +821,10 @@ asio::awaitable<bool> EdgeServer::handleFramedRequest(
             if (passChunked && !co_await writeAll("0\r\n\r\n")) {
                 co_return false;
             }
-            // A successful unsafe method invalidates the cached GET for this URI.
+            // A successful unsafe method invalidates every cached variant of this
+            // URI (RFC 9111 section 4.4).
             if (passStatus < 400) {
-                cache_.purge(cacheKey("GET", frontHost, target));
+                cache_.purgePrefix(cacheKey("GET", frontHost, target));
             }
             resultLabel = "BYPASS";
             recordedStatus = passStatus;
@@ -746,7 +832,13 @@ asio::awaitable<bool> EdgeServer::handleFramedRequest(
         }
 
         std::time_t now = std::time(nullptr);
-        const std::string key = cacheKey("GET", frontHost, target);
+        // The cache key carries the normalized Accept-Encoding, so a gzip variant
+        // and an identity variant of the same URL are cached separately. bareKey
+        // (without it) is the prefix used to invalidate every variant of a URL.
+        const std::string bareKey = cacheKey("GET", frontHost, target);
+        const std::string key =
+            bareKey + "\n" +
+            normalizeAcceptEncoding(request.header("accept-encoding").value_or(""));
 
         // 4. Serve a fresh cache hit without touching the origin.
         auto hit = cache_.lookup(key, now);
@@ -811,10 +903,10 @@ asio::awaitable<bool> EdgeServer::handleFramedRequest(
 
         // 5. Miss (or stale): fetch from the origin. Forward the client's request
         // headers minus hop-by-hop fields, Host (regenerated for the upstream),
-        // and fields that would break MVP caching -- Accept-Encoding is dropped so
-        // the origin sends identity (no Vary handling yet), and Range plus client
-        // conditionals are dropped. Client-supplied forwarding headers are dropped
-        // and replaced so a client cannot spoof them.
+        // Range plus client conditionals, and client-supplied forwarding headers
+        // (dropped so a client cannot spoof them). Accept-Encoding is forwarded so
+        // the origin may compress; the cache key includes the normalized
+        // Accept-Encoding so variants are stored separately.
         std::vector<HttpHeaderView> forwardHeaders;
         for (const auto& field : request.headers()) {
             std::string lower;
@@ -823,10 +915,10 @@ asio::awaitable<bool> EdgeServer::handleFramedRequest(
                 lower.push_back(toLowerAscii(c));
             }
             if (isConnectionOrFramingField(lower) || lower == "host" ||
-                lower == "accept-encoding" || lower == "range" ||
-                lower == "if-none-match" || lower == "if-modified-since" ||
-                lower == "if-match" || lower == "if-unmodified-since" ||
-                lower == "if-range" || lower == "via" || lower == "forwarded" ||
+                lower == "range" || lower == "if-none-match" ||
+                lower == "if-modified-since" || lower == "if-match" ||
+                lower == "if-unmodified-since" || lower == "if-range" ||
+                lower == "via" || lower == "forwarded" ||
                 lower.starts_with("x-forwarded-")) {
                 continue;
             }
@@ -915,7 +1007,7 @@ asio::awaitable<bool> EdgeServer::handleFramedRequest(
             if (!isHead) {
                 cacheDecision =
                     evaluateFreshness(buildFreshnessInput(head.status, head.headers, now));
-                caching = cacheDecision.cacheable;
+                caching = cacheDecision.cacheable && cacheableUnderVary(head.headers);
             }
             co_return true;
         };
@@ -975,8 +1067,8 @@ asio::awaitable<bool> EdgeServer::handleFramedRequest(
                 refreshed->expiresAt = decision.cacheable ? decision.expiresAt : now;
                 refreshed->staleWhileRevalidate = decision.staleWhileRevalidate;
                 refreshed->staleIfError = decision.staleIfError;
-                refreshed->headers = std::move(merged);
-                if (decision.cacheable) {
+                const bool storable = decision.cacheable && cacheableUnderVary(refreshed->headers);
+                if (storable) {
                     cache_.store(key, refreshed);
                 } else {
                     cache_.purge(key);  // no longer has usable freshness
@@ -1131,7 +1223,8 @@ asio::awaitable<void> EdgeServer::handleAdminSession(asio::ip::tcp::socket socke
             }
         } else if (path == "/purge" &&
                    (method == HttpKnownMethod::kPost || method == HttpKnownMethod::kDelete)) {
-            const bool purged = cache_.purge(cacheKey("GET", query("host"), query("target")));
+            const bool purged =
+                cache_.purgePrefix(cacheKey("GET", query("host"), query("target"))) > 0;
             status = purged ? 200 : 404;
             body = purged ? "purged" : "not found";
         } else if (path == "/cache" && method == HttpKnownMethod::kDelete) {

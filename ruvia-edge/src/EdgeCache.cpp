@@ -70,6 +70,22 @@ bool EdgeCache::purge(std::string_view key) {
     return true;
 }
 
+std::size_t EdgeCache::purgePrefix(std::string_view prefix) {
+    std::lock_guard<std::mutex> guard(mutex_);
+    std::size_t removed = 0;
+    for (auto it = recency_.begin(); it != recency_.end();) {
+        if (std::string_view(it->key).starts_with(prefix)) {
+            totalBytes_ -= it->bytes;
+            index_.erase(it->key);
+            it = recency_.erase(it);
+            ++removed;
+        } else {
+            ++it;
+        }
+    }
+    return removed;
+}
+
 void EdgeCache::clear() {
     std::lock_guard<std::mutex> guard(mutex_);
     index_.clear();

@@ -83,6 +83,10 @@ public:
     // Drop the entry for `key` if present. Returns true if something was removed.
     bool purge(std::string_view key);
 
+    // Drop every entry whose key begins with `prefix` (used to invalidate all
+    // cached variants of one URL). Returns the number of entries removed.
+    std::size_t purgePrefix(std::string_view prefix);
+
     // Remove every entry.
     void clear();
 
