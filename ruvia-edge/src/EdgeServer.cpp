@@ -11,6 +11,7 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <tuple>
 #include <utility>
 #include <vector>
 
@@ -56,6 +57,10 @@ constexpr std::size_t kMaxRequestBytes = 1u * 1024u * 1024u;
 
 // How long a persistent client connection may sit idle awaiting its next request.
 constexpr std::chrono::seconds kKeepAliveIdleTimeout{60};
+
+// How long a graceful stop() waits for in-flight requests to finish before it
+// forces the event loop down.
+constexpr std::chrono::seconds kDrainTimeout{10};
 
 // ALPN wire list the edge advertises, in server-preference order: h2, http/1.1.
 constexpr unsigned char kAlpnProtocols[] = {
@@ -831,10 +836,14 @@ struct ByteRange final {
 
 EdgeServer::EdgeServer(const asio::ip::tcp::endpoint& endpoint, EdgeServerOptions options)
     : acceptor_(ioContext_, endpoint),
+      drainSignal_(ioContext_),
+      drainDeadline_(ioContext_),
       cache_(options.cache),
       fetcher_(options.fetch),
       maxCacheableBytes_(options.maxCacheableBytes),
       accessLog_(std::move(options.accessLog)) {
+    // Armed to never expire on its own; stop() cancels it to wake idle sessions.
+    drainSignal_.expires_at((std::chrono::steady_clock::time_point::max)());
     if (options.tls) {
         tlsContext_.store(buildServerTlsContext(*options.tls));
     }
@@ -863,14 +872,44 @@ void EdgeServer::start() {
 }
 
 void EdgeServer::stop() {
-    ioContext_.stop();
     if (worker_.joinable()) {
+        // Graceful drain: stop accepting, let in-flight requests finish, and close
+        // idle connections. The event loop unwinds when the last session ends, or
+        // when the hard deadline forces it down -- whichever comes first.
+        asio::post(ioContext_, [this] {
+            if (draining_) {
+                return;
+            }
+            draining_ = true;
+            asio::error_code ignore;
+            acceptor_.close(ignore);  // refuse new connections
+            drainSignal_.cancel();    // wake idle keep-alive / HTTP/2 reads to close
+            drainDeadline_.expires_after(kDrainTimeout);
+            drainDeadline_.async_wait([this](const asio::error_code& ec) {
+                if (!ec) {
+                    ioContext_.stop();  // deadline hit: force the stragglers down
+                }
+            });
+            maybeCompleteDrain();  // nothing in flight -> stop immediately
+        });
         worker_.join();
     }
     // The io thread is stopped, so no new disk work will be posted; drain what is
     // already queued (join waits for outstanding work, unlike stop).
     if (diskPool_) {
         diskPool_->join();
+    }
+}
+
+void EdgeServer::onSessionFinished() {
+    --liveSessions_;
+    maybeCompleteDrain();
+}
+
+void EdgeServer::maybeCompleteDrain() {
+    if (draining_ && liveSessions_ == 0) {
+        drainDeadline_.cancel();
+        ioContext_.stop();
     }
 }
 
@@ -1002,12 +1041,12 @@ asio::awaitable<void> EdgeServer::acceptLoop() {
             }
             continue;
         }
+        ++liveSessions_;
+        const auto onDone = [this](std::exception_ptr) { onSessionFinished(); };
         if (tlsContext_.load() != nullptr) {
-            asio::co_spawn(
-                ioContext_, handleTlsSession(std::move(socket)), asio::detached);
+            asio::co_spawn(ioContext_, handleTlsSession(std::move(socket)), onDone);
         } else {
-            asio::co_spawn(
-                ioContext_, handleSession(std::move(socket)), asio::detached);
+            asio::co_spawn(ioContext_, handleSession(std::move(socket)), onDone);
         }
     }
 }
@@ -1072,6 +1111,9 @@ asio::awaitable<void> EdgeServer::handleSession(Stream stream) {
     // away, or the connection sits idle past the keep-alive timeout.
     bool keepGoing = true;
     while (keepGoing) {
+        if (draining_) {
+            break;  // draining: no new request on this connection, close it
+        }
         std::size_t consumed = 0;
         bool framed = false;
         for (;;) {
@@ -1097,9 +1139,14 @@ asio::awaitable<void> EdgeServer::handleSession(Stream stream) {
             idleTimer.expires_after(kKeepAliveIdleTimeout);
             auto raced = co_await (
                 stream.async_read_some(asio::buffer(buffer), tuple) ||
-                idleTimer.async_wait(tuple));
+                idleTimer.async_wait(tuple) ||
+                drainSignal_.async_wait(tuple));
             if (raced.index() == 1) {
                 keepGoing = false;  // idle too long
+                break;
+            }
+            if (raced.index() == 2) {
+                keepGoing = false;  // server is draining: close this idle connection
                 break;
             }
             auto& [ec, n] = std::get<0>(raced);
@@ -1746,6 +1793,9 @@ asio::awaitable<void> EdgeServer::handleHttp2Session(Stream stream, std::string 
     connection.beginConnection();
 
     asio::steady_timer writeWake(executor);
+    // Woken when a handler finishes, so the draining reader can notice the last
+    // in-flight stream completed even while it is blocked awaiting client frames.
+    asio::steady_timer handlersIdle(executor);
     std::unordered_map<std::uint32_t, asio::steady_timer*> drainWaiters;
     bool shuttingDown = false;
     int activeHandlers = 0;
@@ -1836,9 +1886,38 @@ asio::awaitable<void> EdgeServer::handleHttp2Session(Stream stream, std::string 
     std::unordered_map<std::uint32_t, std::string> requestBodies;
 
     auto reader = [&]() -> asio::awaitable<void> {
+        bool draining = draining_;  // a session accepted mid-drain drains at once
         for (;;) {
-            auto [readError, readSize] = co_await stream.async_read_some(
-                asio::buffer(readBuffer), tuple);
+            // Once draining, exit as soon as every in-flight stream has finished.
+            if (draining && activeHandlers == 0) {
+                break;
+            }
+            std::size_t readSize = 0;
+            asio::error_code readError;
+            if (!draining) {
+                // Race the read against the drain signal so an idle connection
+                // notices the shutdown instead of blocking until the client acts.
+                auto raced = co_await (
+                    stream.async_read_some(asio::buffer(readBuffer), tuple) ||
+                    drainSignal_.async_wait(tuple));
+                if (raced.index() == 1) {
+                    draining = true;
+                    continue;
+                }
+                std::tie(readError, readSize) = std::get<0>(raced);
+            } else {
+                // While draining, keep reading so in-flight streams' WINDOW_UPDATE
+                // and RST frames are still processed to completion; also wake when
+                // the last handler finishes so we can close.
+                handlersIdle.expires_at((std::chrono::steady_clock::time_point::max)());
+                auto raced = co_await (
+                    stream.async_read_some(asio::buffer(readBuffer), tuple) ||
+                    handlersIdle.async_wait(tuple));
+                if (raced.index() == 1) {
+                    continue;  // a handler finished; re-check the exit condition
+                }
+                std::tie(readError, readSize) = std::get<0>(raced);
+            }
             if (readError) {
                 break;
             }
@@ -1860,6 +1939,14 @@ asio::awaitable<void> EdgeServer::handleHttp2Session(Stream stream, std::string 
                     if (streamState == nullptr) {
                         continue;
                     }
+                    if (draining) {
+                        // Refuse new streams while draining; in-flight ones finish.
+                        (void)connection.submitReset(
+                            streamId, detail::Http2ErrorCode::kRefusedStream);
+                        requestBodies.erase(streamId);
+                        writeWake.cancel();
+                        continue;
+                    }
                     std::string body;
                     if (auto it = requestBodies.find(streamId); it != requestBodies.end()) {
                         body = std::move(it->second);
@@ -1875,7 +1962,8 @@ asio::awaitable<void> EdgeServer::handleHttp2Session(Stream stream, std::string 
                             connection.unpinStream(streamId);
                             drainWaiters.erase(streamId);
                             --activeHandlers;
-                            writeWake.cancel();  // let the writer re-check its exit
+                            writeWake.cancel();    // let the writer re-check its exit
+                            handlersIdle.cancel();  // wake a draining reader
                         });
                 } else if (const auto* closed = event->streamClosed()) {
                     // The peer reset/closed the stream: wake its parked handler so

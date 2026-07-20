@@ -783,6 +783,28 @@ int main() {
               "setTlsCertificate fails when TLS is not enabled");
     }
 
+    // Graceful shutdown: a request in flight when stop() is called still runs to
+    // completion (its response is not truncated), and stop() returns once it does
+    // rather than killing the connection mid-response.
+    {
+        EdgeServer drainEdge(tcp::endpoint(tcp::v4(), 0), {});
+        drainEdge.start();
+        drainEdge.addOrigin("front.local",
+                            OriginSettings{"127.0.0.1", origin.port(), false});
+        const std::uint16_t port = drainEdge.localEndpoint().port();
+
+        std::string result;
+        std::thread inflight([&] { result = httpGet(port, "front.local", "/slow"); });
+        // Let the request reach the origin (which delays 300ms) before draining.
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        drainEdge.stop();  // graceful: blocks until the in-flight request finishes
+        inflight.join();
+
+        check(statusOf(result) == 200,
+              "an in-flight request completes across a graceful stop");
+        check(bodyOf(result) == "hello", "the in-flight response was not truncated");
+    }
+
     // Persistent disk tier: an entry cached by one edge is served from disk by a
     // second edge over the same directory -- a fresh, empty memory cache, and the
     // origin is not re-contacted.

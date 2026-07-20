@@ -218,6 +218,12 @@ private:
     // entry (called when the leader's fetch finishes, however it ended).
     void wakeInFlight(const std::string& key);
 
+    // Session accounting for graceful shutdown: a session decrements the live
+    // count when it ends, and once a drain is in progress and the last session is
+    // gone the event loop is stopped.
+    void onSessionFinished();
+    void maybeCompleteDrain();
+
     // Emit the access-log entry for a completed request, if a callback is set.
     void recordRequest(const AccessLogEntry& entry);
 
@@ -249,6 +255,13 @@ private:
 
     asio::io_context ioContext_;
     asio::ip::tcp::acceptor acceptor_;
+    // Graceful-shutdown coordination (touched only on the event-loop thread).
+    // drainSignal_ (armed to never expire) is cancelled to wake idle keep-alive
+    // and HTTP/2 reads so they close; drainDeadline_ bounds the wait.
+    asio::steady_timer drainSignal_;
+    asio::steady_timer drainDeadline_;
+    bool draining_{false};
+    int liveSessions_{0};
     // Server TLS context, swappable at runtime (null when TLS is disabled). A new
     // connection loads the current one; in-flight sessions keep their own.
     std::atomic<std::shared_ptr<asio::ssl::context>> tlsContext_;
