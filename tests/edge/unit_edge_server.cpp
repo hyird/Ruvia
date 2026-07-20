@@ -166,6 +166,17 @@ private:
                 "Cache-Control: max-age=60\r\n"
                 "\r\n"
                 "hello";
+        } else if (request.find("GET /swr ") != std::string::npos) {
+            // Short freshness with a stale-while-revalidate window and a validator.
+            hits_.fetch_add(1);
+            response =
+                "HTTP/1.1 200 OK\r\n"
+                "Content-Type: text/plain\r\n"
+                "Content-Length: 5\r\n"
+                "ETag: \"v1\"\r\n"
+                "Cache-Control: max-age=1, stale-while-revalidate=30\r\n"
+                "\r\n"
+                "hello";
         } else if (request.find("GET /slow ") != std::string::npos) {
             // A slow response, so concurrent requests overlap in flight.
             hits_.fetch_add(1);
@@ -602,6 +613,31 @@ int main() {
         check(origin.hits() == base2 + 2, "Vary: Cookie is refetched every time");
     }
 
+    // stale-while-revalidate: a stale-but-in-window entry is served immediately
+    // while the origin is revalidated in the background, and the refreshed entry
+    // is then a fresh hit.
+    {
+        const auto r1 = httpGet(edgePort, "front.local", "/swr");
+        check(contains(r1, "X-Cache: MISS"), "first /swr request is a MISS");
+
+        std::this_thread::sleep_for(std::chrono::milliseconds(1100));  // now stale, in window
+
+        const int fullBefore = origin.hits();
+        const int notModifiedBefore = origin.notModified();
+        const auto r2 = httpGet(edgePort, "front.local", "/swr");
+        check(contains(r2, "X-Cache: STALE"),
+              "stale-while-revalidate serves the stale copy immediately");
+        check(bodyOf(r2) == "hello", "SWR serves the stale body");
+        check(origin.hits() == fullBefore, "SWR did not block on a foreground fetch");
+
+        std::this_thread::sleep_for(std::chrono::milliseconds(300));  // let it refresh
+        check(origin.notModified() == notModifiedBefore + 1,
+              "the background job revalidated with the origin");
+
+        const auto r3 = httpGet(edgePort, "front.local", "/swr");
+        check(contains(r3, "X-Cache: HIT"), "the background-refreshed entry is fresh");
+    }
+
     // Request coalescing: many concurrent misses for the same (slow) origin key
     // collapse into a single origin fetch, and every client still gets served.
     {
@@ -691,11 +727,13 @@ int main() {
         std::this_thread::sleep_for(std::chrono::milliseconds(1100));  // let it go stale
 
         const int fullBefore = origin.hits();
+        const int notModifiedBefore = origin.notModified();
         const auto b = httpGet(edgePort, "front.local", "/rev");
         check(contains(b, "X-Cache: REVALIDATED"), "stale entry is revalidated");
         check(statusOf(b) == 200, "revalidated response is 200 from cache");
         check(bodyOf(b) == "hello", "revalidated body served from cache");
-        check(origin.notModified() == 1, "origin answered the conditional with 304");
+        check(origin.notModified() == notModifiedBefore + 1,
+              "origin answered the conditional with 304");
         check(origin.hits() == fullBefore, "revalidation sent no full response");
 
         const auto c = httpGet(edgePort, "front.local", "/rev");

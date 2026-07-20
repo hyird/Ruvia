@@ -836,9 +836,9 @@ asio::awaitable<bool> EdgeServer::handleFramedRequest(
         // and an identity variant of the same URL are cached separately. bareKey
         // (without it) is the prefix used to invalidate every variant of a URL.
         const std::string bareKey = cacheKey("GET", frontHost, target);
-        const std::string key =
-            bareKey + "\n" +
+        const std::string normAcceptEncoding =
             normalizeAcceptEncoding(request.header("accept-encoding").value_or(""));
+        const std::string key = bareKey + "\n" + normAcceptEncoding;
 
         // 4. Serve a fresh cache hit without touching the origin.
         auto hit = cache_.lookup(key, now);
@@ -856,6 +856,32 @@ asio::awaitable<bool> EdgeServer::handleFramedRequest(
         // A stale entry may still be revalidated with the origin below.
         std::shared_ptr<const CachedResponse> staleEntry =
             hit.status == CacheLookupStatus::kStale ? hit.entry : nullptr;
+
+        // stale-while-revalidate: a stale entry still inside its stale-while-
+        // revalidate window is served immediately while a single background job
+        // refreshes it, so the client never waits on the origin.
+        if (isGet && staleEntry != nullptr && staleEntry->staleWhileRevalidate > 0 &&
+            now <= staleEntry->expiresAt +
+                       static_cast<std::time_t>(staleEntry->staleWhileRevalidate)) {
+            if (inFlight_.find(key) == inFlight_.end()) {
+                inFlight_.try_emplace(key);  // one refresh per key
+                asio::co_spawn(
+                    ioContext_,
+                    backgroundRefresh(RefreshJob{key, std::string(origin->upstreamHost),
+                                                 origin->upstreamPort, origin->https,
+                                                 std::string(target), normAcceptEncoding,
+                                                 staleEntry}),
+                    asio::detached);
+            }
+            const auto age = staleEntry->storedAt <= now
+                ? static_cast<std::uint64_t>(now - staleEntry->storedAt)
+                : std::uint64_t{0};
+            resultLabel = "STALE";
+            recordedStatus = staleEntry->status;
+            co_return co_await writeAll(buildResponseWire(
+                staleEntry->status, staleEntry->headers, staleEntry->body, "STALE", age,
+                isHead, keepAlive)) && keepAlive;
+        }
 
         // Request coalescing (GET only): if a fetch for this key is already in
         // flight, wait for it and re-check the cache instead of sending the origin
@@ -1103,6 +1129,98 @@ asio::awaitable<bool> EdgeServer::handleFramedRequest(
         resultLabel = "MISS";
         recordedStatus = respStatus;
         co_return keepAlive;
+}
+
+asio::awaitable<void> EdgeServer::backgroundRefresh(RefreshJob job) {
+    // Wake any foreground waiters and drop the in-flight entry however this ends.
+    struct Guard final {
+        EdgeServer* self;
+        const std::string* key;
+        ~Guard() { self->wakeInFlight(*key); }
+    } guard{this, &job.key};
+
+    // A conditional GET for the same variant (validator + the variant's encoding).
+    std::vector<HttpHeaderView> headers;
+    if (const auto etag = findHeaderValue(job.stored->headers, "etag")) {
+        headers.emplace_back(std::string_view("If-None-Match"), *etag);
+    } else if (const auto lastModified =
+                   findHeaderValue(job.stored->headers, "last-modified")) {
+        headers.emplace_back(std::string_view("If-Modified-Since"), *lastModified);
+    }
+    if (!job.acceptEncoding.empty()) {
+        headers.emplace_back(
+            std::string_view("Accept-Encoding"), std::string_view(job.acceptEncoding));
+    }
+    headers.emplace_back(std::string_view("Via"), std::string_view("1.1 ruvia-edge"));
+
+    OriginRequest request;
+    request.method = "GET";
+    request.target = job.target;
+    request.headers = headers;
+
+    // Background sink: accumulate a cacheable body; it never writes to a client.
+    std::uint16_t status = 0;
+    Headers respHeaders;
+    std::string body;
+    bool caching = false;
+    FreshnessDecision decision;
+    const std::time_t now = std::time(nullptr);
+
+    ResponseSink sink;
+    sink.onHead = [&](const OriginResponseHead& head) -> asio::awaitable<bool> {
+        status = head.status;
+        respHeaders = head.headers;
+        if (head.status == 304) {
+            co_return false;  // not modified: refresh freshness below
+        }
+        decision = evaluateFreshness(buildFreshnessInput(head.status, head.headers, now));
+        caching = decision.cacheable && cacheableUnderVary(head.headers);
+        co_return caching;  // only download a body we intend to cache
+    };
+    sink.onBody = [&](std::string_view chunk) -> asio::awaitable<bool> {
+        if (body.size() + chunk.size() > maxCacheableBytes_) {
+            caching = false;
+            co_return false;  // too big to cache: abandon the refresh
+        }
+        body.append(chunk);
+        co_return true;
+    };
+
+    auto result = co_await fetcher_.fetch(
+        ioContext_.get_executor(), job.host, job.port, job.https, request, sink);
+    if (result.outcome != OriginFetchOutcome::kOk) {
+        co_return;  // origin unreachable: leave the stale entry in place
+    }
+
+    if (status == 304) {
+        Headers merged = mergeStoredHeaders(job.stored->headers, respHeaders);
+        const auto refreshed =
+            evaluateFreshness(buildFreshnessInput(job.stored->status, merged, now));
+        if (refreshed.cacheable && cacheableUnderVary(merged)) {
+            auto entry = std::make_shared<CachedResponse>();
+            entry->status = job.stored->status;
+            entry->body = job.stored->body;
+            entry->storedAt = now;
+            entry->expiresAt = refreshed.expiresAt;
+            entry->staleWhileRevalidate = refreshed.staleWhileRevalidate;
+            entry->staleIfError = refreshed.staleIfError;
+            entry->headers = std::move(merged);
+            cache_.store(job.key, std::move(entry));
+        }
+        co_return;
+    }
+
+    if (caching) {
+        auto entry = std::make_shared<CachedResponse>();
+        entry->status = status;
+        entry->headers = std::move(respHeaders);
+        entry->body = std::move(body);
+        entry->storedAt = now;
+        entry->expiresAt = decision.expiresAt;
+        entry->staleWhileRevalidate = decision.staleWhileRevalidate;
+        entry->staleIfError = decision.staleIfError;
+        cache_.store(job.key, std::move(entry));
+    }
 }
 
 asio::awaitable<void> EdgeServer::adminAcceptLoop() {

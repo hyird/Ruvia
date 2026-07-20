@@ -163,6 +163,23 @@ private:
     // Count a completed request and emit its access-log entry.
     void recordRequest(const AccessLogEntry& entry);
 
+    // Everything a background stale-while-revalidate refresh needs, owned so it
+    // outlives the request that started it.
+    struct RefreshJob final {
+        std::string key;
+        std::string host;
+        std::uint16_t port{0};
+        bool https{false};
+        std::string target;
+        std::string acceptEncoding;  // the variant's normalized Accept-Encoding
+        std::shared_ptr<const CachedResponse> stored;
+    };
+
+    // Refresh one cache entry off the request path: conditionally re-fetch it and
+    // update the cache, registered in the in-flight map so it also serves any
+    // waiting foreground misses.
+    asio::awaitable<void> backgroundRefresh(RefreshJob job);
+
     asio::io_context ioContext_;
     asio::ip::tcp::acceptor acceptor_;
     std::optional<asio::ssl::context> tlsContext_;
