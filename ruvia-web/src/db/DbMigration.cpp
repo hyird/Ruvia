@@ -120,7 +120,6 @@ public:
                 "database migration lock timeout must be greater than zero");
         }
 
-        config.poolSizePerWorker = 1;
         if (!config.acquireTimeout.has_value()) {
             config.acquireTimeout = config.queryTimeout;
         }

@@ -859,44 +859,30 @@ int main() {
         h2Edge.addOrigin("127.0.0.1",
                          OriginSettings{"127.0.0.1", origin.port(), false});
         const std::uint16_t h2Port = h2Edge.localEndpoint().port();
-        const std::string resolve =
-            " --resolve front.local:" + std::to_string(h2Port) + ":127.0.0.1 ";
-        const std::string base = "https://front.local:" + std::to_string(h2Port);
+        const std::string base = "https://127.0.0.1:" + std::to_string(h2Port);
 
         // 1. Basic request served over an ALPN-negotiated h2 connection.
-        const std::string got = runShell(
-            "curl --http2 -sk -o /tmp/edge_h2_body -w '%{http_version} %{http_code}'" +
-            resolve + base + "/page 2>/dev/null");
-        check(got == "2 200",
-              (std::string("h2 request served over ALPN (got: '") + got + "')").c_str());
-        check(runShell("cat /tmp/edge_h2_body 2>/dev/null") == "hello",
-              "h2 response body proxied from the origin");
+        const std::string page = runShell("nghttp -y " + base + "/page");
+        check(page == "hello",
+              "h2 request served over ALPN and proxied the origin body");
 
         // 2. A chunked (unknown-length) origin response is streamed over h2.
-        const std::string chunked = runShell(
-            "curl --http2 -sk -w '%{http_version} %{http_code}' -o /tmp/edge_h2_chunked" +
-            resolve + base + "/chunked 2>/dev/null");
-        check(chunked == "2 200", "h2 streamed a chunked origin response");
-        check(runShell("cat /tmp/edge_h2_chunked 2>/dev/null") == "hello world",
+        const std::string chunked = runShell("nghttp -y " + base + "/chunked");
+        check(chunked == "hello world",
               "h2 streamed body reassembles to the origin content");
 
         // 3. A body far larger than the 65535-byte flow-control window streams in
         //    full, exercising window exhaustion and WINDOW_UPDATE-driven resume.
-        const std::string bigCode = runShell(
-            "curl --http2 -sk -w '%{http_code}' -o /tmp/edge_h2_big" +
-            resolve + base + "/bigchunk 2>/dev/null");
-        check(bigCode == "200", "h2 large streamed response completed");
-        check(runShell("wc -c < /tmp/edge_h2_big 2>/dev/null | tr -d ' \\n'") == "200000",
+        const std::string big = runShell("nghttp -y " + base + "/bigchunk");
+        check(big.size() == 200000,
               "h2 delivered the full flow-controlled body");
 
         // 4. True multiplexing: many concurrent streams on one connection all
-        //    complete (no head-of-line blocking, no deadlock, ASan-clean).
-        const std::string ip = "https://127.0.0.1:" + std::to_string(h2Port);
+        //    complete without head-of-line blocking or deadlock.
         const std::string mux = runShell(
-            "h2load -n16 -c1 -m8 " + ip +
-            "/bigchunk 2>/dev/null | grep -oE '[0-9]+ succeeded' | tr -d '\\n'");
-        check(mux == "16 succeeded",
-              (std::string("16 concurrent h2 streams all succeeded (got: '") + mux + "')").c_str());
+            "h2load -n16 -c1 -m8 " + base + "/bigchunk");
+        check(contains(mux, "16 succeeded"),
+              "16 concurrent h2 streams all succeeded");
         h2Edge.stop();
     }
 

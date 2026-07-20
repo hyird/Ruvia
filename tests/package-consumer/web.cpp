@@ -603,14 +603,11 @@ static_assert(std::same_as<
 static_assert(std::same_as<
     decltype(ruvia::DbConfig{}.acquireTimeout),
     std::optional<std::chrono::milliseconds>>);
-static_assert(std::same_as<
-    decltype(ruvia::DbConfig{}.poolSizePerWorker),
-    std::size_t>);
 template <typename T>
-concept HasLegacyDbPoolSize = requires(T& config) {
-    config.poolSize;
+concept HasConfigurableDbPoolSize = requires(T& config) {
+    config.poolSizePerWorker;
 };
-static_assert(!HasLegacyDbPoolSize<ruvia::DbConfig>);
+static_assert(!HasConfigurableDbPoolSize<ruvia::DbConfig>);
 static_assert(std::same_as<decltype(ruvia::DbConfig::mariaDb()), ruvia::DbConfig>);
 static_assert(std::same_as<decltype(ruvia::DbConfig::postgreSql()), ruvia::DbConfig>);
 static_assert(!ExposesAnyRvalueDbOwnedView<ruvia::DbValue>);

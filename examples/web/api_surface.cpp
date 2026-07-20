@@ -83,16 +83,12 @@ static_assert(std::same_as<
 static_assert(
     ruvia::SecurityHeadersOptions{}.legacyXssFilter ==
     ruvia::LegacyXssFilterPolicy::kDisable);
-static_assert(std::same_as<
-    decltype(ruvia::DbConfig{}.poolSizePerWorker),
-    std::size_t>);
-
 template <typename T>
-concept HasLegacyDbPoolSize = requires(T& config) {
-    config.poolSize;
+concept HasConfigurableDbPoolSize = requires(T& config) {
+    config.poolSizePerWorker;
 };
 
-static_assert(!HasLegacyDbPoolSize<ruvia::DbConfig>);
+static_assert(!HasConfigurableDbPoolSize<ruvia::DbConfig>);
 
 template <typename T>
 concept HasMisleadingXssProtectionOption = requires(T& options) {

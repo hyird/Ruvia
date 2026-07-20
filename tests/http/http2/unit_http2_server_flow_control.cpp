@@ -326,9 +326,10 @@ std::vector<EmittedFrame> framesForConcurrentLargeHeaderResponses() {
             both += frame(0x1 /*HEADERS*/, kHttp2FlagEndStream | kHttp2FlagEndHeaders, 3, reqView);
             if (!co_await writeAll(both)) co_return;
 
-            asio::error_code ignore;
-            sock.shutdown(tcp::socket::shutdown_send, ignore);
+            asio::error_code shutdownError;
+            sock.shutdown(tcp::socket::shutdown_send, shutdownError);
 
+            std::size_t completedResponses = 0;
             for (;;) {
                 char headerBytes[kHttp2FrameHeaderBytes];
                 if (!co_await readExact(headerBytes, sizeof(headerBytes))) break;
@@ -338,7 +339,17 @@ std::vector<EmittedFrame> framesForConcurrentLargeHeaderResponses() {
                 if (header.length != 0 && !co_await readExact(payload.data(), payload.size())) break;
                 frames.push_back(EmittedFrame{
                     static_cast<std::uint8_t>(header.type), header.streamId, header.flags});
+                if ((header.type == 0x1 /*HEADERS*/ ||
+                     header.type == 0x9 /*CONTINUATION*/) &&
+                    (header.flags & kHttp2FlagEndHeaders) != 0 &&
+                    (header.streamId == 1 || header.streamId == 3) &&
+                    ++completedResponses == 2) {
+                    break;
+                }
             }
+            asio::error_code ignore;
+            sock.close(ignore);
+            io.stop();
         },
         asio::detached);
 
