@@ -88,6 +88,30 @@ asio::awaitable<void> parseArrayForm(
     }
 }
 
+asio::awaitable<void> parseRepeatedFiles(
+    ruvia::Context& context,
+    std::size_t& count,
+    std::size_t& fileCount,
+    bool& sawA,
+    bool& sawB) {
+    const auto form = co_await ruvia::detail::taskAsAwaitable(
+        parseRequestBody(context, {}));
+    const auto photos = form.get("photos");
+    count = photos.size();
+    for (const auto* field : photos.fields()) {
+        if (field == nullptr || !field->file()) {
+            continue;
+        }
+        ++fileCount;
+        const auto name = field->filename();
+        if (name == std::string_view("a.txt")) {
+            sawA = true;
+        } else if (name == std::string_view("b.txt")) {
+            sawB = true;
+        }
+    }
+}
+
 asio::awaitable<void> parseWithFieldCap(
     ruvia::Context& context,
     std::size_t maxFields,
@@ -503,6 +527,50 @@ RUVIA_TEST(context_parse_body_groups_arrays_and_compacts_repeated_scalars) {
     RUVIA_CHECK(tagsArray);                      // flagged as an array
     RUVIA_CHECK_EQ(xSize, std::size_t{1});       // repeated scalar compacted to one
     RUVIA_CHECK_EQ(xValue, std::string("2"));    // last value wins
+}
+
+RUVIA_TEST(context_parse_body_keeps_every_repeated_file_part) {
+    WorkerMemory worker;
+    HttpRequest request = HttpRequestAccess::make();
+    HttpRequestAccess::reset(request);
+    HttpRequestAccess::addHeader(
+        request,
+        HttpHeaderView{"Content-Type", "multipart/form-data; boundary=BOUNDARY"},
+        HttpRequestAccess::knownHeaderSlot(RequestKnownHeader::kContentType));
+    // A standard <input type=file name="photos" multiple> emits several parts
+    // under one non-"[]" name; the default last-value policy must not collapse
+    // them and silently drop uploads.
+    HttpRequestAccess::setBody(
+        request,
+        "--BOUNDARY\r\n"
+        "Content-Disposition: form-data; name=\"photos\"; filename=\"a.txt\"\r\n"
+        "Content-Type: text/plain\r\n"
+        "\r\n"
+        "AAA\r\n"
+        "--BOUNDARY\r\n"
+        "Content-Disposition: form-data; name=\"photos\"; filename=\"b.txt\"\r\n"
+        "Content-Type: text/plain\r\n"
+        "\r\n"
+        "BBB\r\n"
+        "--BOUNDARY--\r\n");
+
+    RequestMemory requestMemory(worker);
+    HttpRequestAccess::setResource(request, requestMemory.resource());
+    auto context = ContextAccess::make(requestMemory, request);
+
+    asio::io_context io;
+    std::size_t count = 0;
+    std::size_t fileCount = 0;
+    bool sawA = false;
+    bool sawB = false;
+    asio::co_spawn(
+        io, parseRepeatedFiles(context, count, fileCount, sawA, sawB),
+        asio::detached);
+    io.run();
+
+    RUVIA_CHECK_EQ(count, std::size_t{2});      // both file parts retained
+    RUVIA_CHECK_EQ(fileCount, std::size_t{2});  // both flagged as files
+    RUVIA_CHECK(sawA && sawB);                  // neither upload dropped
 }
 
 RUVIA_TEST(context_parse_body_rejects_a_flood_of_fields) {

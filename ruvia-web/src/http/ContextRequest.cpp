@@ -299,7 +299,12 @@ void compactParsedBodyFields(
         std::optional<std::size_t> lastScalar;
         do {
             const auto index = order[offset];
-            if (fields[index].array()) {
+            // Retain every array ("name[]") field, and every file part: a
+            // standard <input type=file multiple> emits several parts under one
+            // non-"[]" name, and collapsing them as repeated scalars would
+            // silently drop all but the last upload. Only true repeated scalars
+            // (text fields) collapse to their last value.
+            if (fields[index].array() || fields[index].file()) {
                 keep[index] = 1;
             } else {
                 lastScalar = index;
