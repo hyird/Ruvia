@@ -879,7 +879,7 @@ EdgeServer::~EdgeServer() {
 
 void EdgeServer::start() {
     asio::co_spawn(ioContext_, acceptLoop(), asio::detached);
-    worker_ = std::jthread([this] { ioContext_.run(); });
+    worker_ = std::thread([this] { ioContext_.run(); });
 }
 
 void EdgeServer::stop() {

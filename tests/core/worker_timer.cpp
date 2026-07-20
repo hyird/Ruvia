@@ -171,15 +171,17 @@ bool detachedTimerCancellationRaceWorks() {
         workerThread.join();
 
         std::barrier gate(3);
-        std::jthread cancelling([&] {
+        std::thread cancelling([&] {
             gate.arrive_and_wait();
             registration.cancel();
         });
-        std::jthread detaching([&] {
+        std::thread detaching([&] {
             gate.arrive_and_wait();
             dispatcher->detachContext();
         });
         gate.arrive_and_wait();
+        cancelling.join();
+        detaching.join();
     }
     return true;
 }

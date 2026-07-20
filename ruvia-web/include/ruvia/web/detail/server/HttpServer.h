@@ -139,7 +139,7 @@ private:
     // observe workerState_, which is mutated only on this io_context.
     RuntimeLifecycle lifecycle_;
     HttpServerWorkerState workerState_{HttpServerWorkerState::kFresh};
-    std::jthread workerThread_;
+    std::thread workerThread_;
 
     HttpServerWorkerCompletion workerCompletion_;
 };

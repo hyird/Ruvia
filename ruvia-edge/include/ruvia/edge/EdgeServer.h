@@ -283,7 +283,7 @@ private:
     std::size_t maxCacheableBytes_{8u * 1024u * 1024u};
     std::unordered_map<std::string, InFlightFetch> inFlight_;
     std::function<void(const AccessLogEntry&)> accessLog_;
-    std::jthread worker_;
+    std::thread worker_;
 };
 
 }  // namespace ruvia::edge
