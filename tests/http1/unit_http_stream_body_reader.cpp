@@ -4,11 +4,14 @@
 #include <charconv>
 #include <cstddef>
 #include <cstdint>
+#include <cstring>
 #include <memory_resource>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <system_error>
 #include <utility>
+#include <vector>
 
 #include <asio.hpp>
 #include <zlib.h>
@@ -53,8 +56,126 @@ struct EofBodyStream final {
     }
 };
 
+// Delivers a queued list of socket reads, one segment per async_read_some (a
+// segment larger than the caller's buffer is split across reads). Once the
+// queue drains it returns EOF, letting a test reproduce a Content-Length body
+// arriving over several TCP segments.
+struct SegmentedBodyStream final {
+    asio::io_context* io;
+    std::vector<std::string> segments;
+    std::size_t index{0};
+    std::size_t offset{0};
+
+    using executor_type = asio::io_context::executor_type;
+
+    [[nodiscard]] executor_type get_executor() noexcept {
+        return io->get_executor();
+    }
+
+    template <typename Buffer, typename Handler>
+    void async_read_some(const Buffer& buffer, Handler handler) {
+        const auto capacity = asio::buffer_size(buffer);
+        if (index >= segments.size() || capacity == 0) {
+            asio::post(
+                *io,
+                [handler = std::move(handler)]() mutable {
+                    handler(asio::error::eof, std::size_t{0});
+                });
+            return;
+        }
+        auto& segment = segments[index];
+        const auto available = segment.size() - offset;
+        const auto count = std::min(capacity, available);
+        std::memcpy(
+            asio::buffer_cast<void*>(buffer), segment.data() + offset, count);
+        offset += count;
+        if (offset >= segment.size()) {
+            ++index;
+            offset = 0;
+        }
+        asio::post(
+            *io,
+            [handler = std::move(handler), count]() mutable {
+                handler(std::error_code{}, count);
+            });
+    }
+
+    template <typename Buffer, typename Handler>
+    void async_write_some(const Buffer& buffer, Handler handler) {
+        const auto bytes = asio::buffer_size(buffer);
+        asio::post(
+            *io,
+            [handler = std::move(handler), bytes]() mutable {
+                handler(std::error_code{}, bytes);
+            });
+    }
+};
+
 ruvia::detail::Http1RequestBodyPlan parseBodyPlan(std::string_view wire) {
     return ruvia::detail::Http1ServerRequestParser().parseMessage(wire).bodyPlan;
+}
+
+struct KnownLengthObservation final {
+    std::string body;
+    std::string pipeline;
+    ruvia::detail::Http1RequestBodyConsumption consumption{
+        ruvia::detail::Http1RequestBodyConsumption::kIncomplete};
+    std::optional<ruvia::HttpStatusCode> errorStatus;
+};
+
+// Streams a Content-Length body whose bytes are split as: an initial segment
+// carried alongside the request head (partial body prefix, plus any pipelined
+// trailer) followed by `socketSegments` delivered over the socket.
+KnownLengthObservation readKnownLengthBody(
+    std::size_t contentLength,
+    std::string initial,
+    std::vector<std::string> socketSegments) {
+    asio::io_context io;
+    SegmentedBodyStream stream{&io, std::move(socketSegments)};
+    ruvia::detail::ConnectionScanner::Entry scannerEntry;
+    std::pmr::monotonic_buffer_resource resource;
+    auto plan = parseBodyPlan(
+        "POST / HTTP/1.1\r\nHost: x\r\nContent-Length: " +
+        std::to_string(contentLength) + "\r\n\r\n");
+    ruvia::detail::StreamBodyReader<SegmentedBodyStream> reader(
+        stream,
+        std::pmr::polymorphic_allocator<char>(&resource),
+        initial,
+        plan,
+        ruvia::ProtocolByteLimit::limited(1u << 20),
+        scannerEntry);
+    KnownLengthObservation observation;
+
+    auto future = asio::co_spawn(
+        io,
+        [&]() -> asio::awaitable<void> {
+            try {
+                while (const auto part = co_await ruvia::detail::taskAsAwaitable(
+                           reader.read())) {
+                    observation.body.append(*part);
+                }
+            } catch (const ruvia::HttpProtocolError& error) {
+                observation.errorStatus = error.status();
+            }
+        },
+        asio::use_future);
+    io.run();
+    future.get();
+
+    observation.consumption = reader.consumption();
+    std::pmr::string pipeline(&resource);
+    reader.takePipeline(pipeline);
+    observation.pipeline.assign(pipeline.data(), pipeline.size());
+    return observation;
+}
+
+std::string distinctBytes(std::size_t count) {
+    std::string out;
+    out.reserve(count);
+    for (std::size_t i = 0; i < count; ++i) {
+        out.push_back(static_cast<char>('A' + (i % 26)));
+    }
+    return out;
 }
 
 std::string gzipCompress(std::string_view input) {
@@ -261,6 +382,41 @@ RUVIA_TEST(http1_transfer_coding_failure_maps_once_for_both_read_surfaces) {
         RUVIA_CHECK(observation.consumption ==
             ruvia::detail::Http1RequestBodyConsumption::kIncomplete);
     }
+}
+
+RUVIA_TEST(http1_streaming_content_length_body_split_across_socket_reads) {
+    // The head segment carries a 30-byte body prefix; the remaining 70 bytes
+    // arrive over two socket reads. Before the fix, the second read recorded a
+    // buffer_-relative compaction offset while the initial view was still live,
+    // so the next read re-exposed already-delivered bytes and dropped the tail.
+    const auto body = distinctBytes(100);
+    const auto observation = readKnownLengthBody(
+        100,
+        body.substr(0, 30),
+        {body.substr(30, 40), body.substr(70, 30)});
+    RUVIA_CHECK(!observation.errorStatus.has_value());
+    RUVIA_CHECK_EQ(observation.body, body);
+    RUVIA_CHECK(observation.pipeline.empty());
+    RUVIA_CHECK(observation.consumption ==
+        ruvia::detail::Http1RequestBodyConsumption::kComplete);
+}
+
+RUVIA_TEST(http1_streaming_content_length_keeps_pipelined_request_out_of_body) {
+    // The final socket read carries the last body bytes immediately followed by
+    // a pipelined request. The leftover must reach the pipeline stash verbatim,
+    // never prepended with body bytes (which would desync the next request).
+    constexpr std::string_view pipeline =
+        "GET /next HTTP/1.1\r\nHost: x\r\n\r\n";
+    const auto body = distinctBytes(100);
+    const auto observation = readKnownLengthBody(
+        100,
+        body.substr(0, 30),
+        {body.substr(30, 70) + std::string(pipeline)});
+    RUVIA_CHECK(!observation.errorStatus.has_value());
+    RUVIA_CHECK_EQ(observation.body, body);
+    RUVIA_CHECK_EQ(observation.pipeline, std::string(pipeline));
+    RUVIA_CHECK(observation.consumption ==
+        ruvia::detail::Http1RequestBodyConsumption::kComplete);
 }
 
 RUVIA_TEST(http1_transfer_coding_eof_commits_only_the_complete_decode_pipeline) {
