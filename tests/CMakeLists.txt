@@ -344,7 +344,7 @@ ruvia_add_test(ruvia_guard_cookie_api web/guards/cookie_api_guard.cpp)
 ruvia_add_test(ruvia_guard_app_lifecycle web/guards/app_lifecycle_guard.cpp)
 ruvia_add_test(ruvia_guard_http2_session_lifecycle web/guards/http2_session_lifecycle_guard.cpp)
 
-ruvia_add_test(ruvia_server_shutdown_drain web/server/server_shutdown_drain.cpp TIMEOUT 90)
+ruvia_add_test(ruvia_server_immediate_shutdown web/server/server_immediate_shutdown.cpp TIMEOUT 30)
 ruvia_add_test(ruvia_server_max_connections web/server/server_max_connections.cpp TIMEOUT 60)
 ruvia_add_test(ruvia_server_notfound_keepalive web/server/server_notfound_keepalive.cpp TIMEOUT 60)
 ruvia_add_test(ruvia_server_http2_document_root web/server/server_http2_document_root.cpp TIMEOUT 60)

@@ -10,8 +10,6 @@
 namespace {
 
 using ruvia::detail::ensureConfigHost;
-using ruvia::detail::ensureNonNegativeDuration;
-using ruvia::detail::ensureNonNegativeDurations;
 using ruvia::detail::ensureNonZeroPort;
 using ruvia::detail::ensurePositiveDuration;
 using ruvia::detail::ensurePositiveSize;
@@ -71,10 +69,6 @@ RUVIA_TEST(config_size_port_duration_guards) {
     RUVIA_CHECK(!throwsInvalid([] { ensureNonZeroPort(8080, "port"); }));
 
     using namespace std::chrono;
-    // All non-negative is fine; any single negative throws.
-    RUVIA_CHECK(!throwsInvalid([] { ensureNonNegativeDurations("d", seconds(0), seconds(5), milliseconds(1)); }));
-    RUVIA_CHECK(throwsInvalid([] { ensureNonNegativeDurations("d", seconds(5), seconds(-1)); }));
-
     // Positive means strictly greater than zero.
     RUVIA_CHECK(throwsInvalid([] { ensurePositiveDuration(seconds(0), "d"); }));
     RUVIA_CHECK(!throwsInvalid([] { ensurePositiveDuration(milliseconds(1), "d"); }));
@@ -88,11 +82,4 @@ RUVIA_TEST(config_ensure_host_throws_distinct_messages) {
     RUVIA_CHECK_EQ(caughtMessage([] { ensureConfigHost("bad host", "was-empty", "was-invalid"); }),
                    std::string("was-invalid"));
     RUVIA_CHECK(caughtMessage([] { ensureConfigHost("example.com", "was-empty", "was-invalid"); }).empty());
-}
-
-RUVIA_TEST(config_ensure_non_negative_duration_singular) {
-    using std::chrono::seconds;
-    RUVIA_CHECK(!throwsInvalid([] { ensureNonNegativeDuration(seconds(0), "d"); }));
-    RUVIA_CHECK(!throwsInvalid([] { ensureNonNegativeDuration(seconds(5), "d"); }));
-    RUVIA_CHECK(throwsInvalid([] { ensureNonNegativeDuration(seconds(-1), "d"); }));
 }

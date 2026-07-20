@@ -51,7 +51,6 @@ int main() {
     ruvia::detail::HttpServerOptions options;
     options.maxConnections = 1;
     options.clientHeaderTimeout = kHeaderTimeout;
-    options.shutdownGracePeriod = std::chrono::milliseconds(0);  // immediate stop
 
     ruvia::detail::HttpServer server(
         asio::ip::tcp::endpoint(asio::ip::make_address("127.0.0.1"), 0),

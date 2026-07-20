@@ -41,8 +41,8 @@ int testQueueFull() {
     server.start();
     server.stop();
     server.join();
-    const auto drainedStats = worker.stats();
-    if (drainedStats.completed != 1 || drainedStats.outstanding != 0) {
+    const auto stoppedStats = worker.stats();
+    if (stoppedStats.completed != 1 || stoppedStats.outstanding != 0) {
         return 3;
     }
     return 0;
@@ -74,10 +74,9 @@ int testFailureStopsWorker() {
     return 2;
 }
 
-int testGraceDeadlineCancelsTimer() {
+int testImmediateStopCancelsTimer() {
     ruvia::detail::RouteTable routes(std::pmr::get_default_resource());
     ruvia::detail::HttpServerOptions options;
-    options.shutdownGracePeriod = std::chrono::milliseconds(10);
     ruvia::detail::HttpServer server(
         asio::ip::tcp::endpoint(asio::ip::make_address("127.0.0.1"), 0),
         routes,
@@ -100,10 +99,9 @@ int testGraceDeadlineCancelsTimer() {
     return stats.completed == 1 && stats.outstanding == 0 ? 0 : 2;
 }
 
-int testGracefulDrain() {
+int testImmediateStopSignalsTask() {
     ruvia::detail::RouteTable routes(std::pmr::get_default_resource());
     ruvia::detail::HttpServerOptions options;
-    options.shutdownGracePeriod = std::chrono::seconds(2);
     ruvia::detail::HttpServer server(
         asio::ip::tcp::endpoint(asio::ip::make_address("127.0.0.1"), 0),
         routes,
@@ -236,10 +234,10 @@ int main() {
     if (testAbandonedMailboxTaskReconciledOnThrow() != 0) {
         return 6;
     }
-    if (testGracefulDrain() != 0) {
+    if (testImmediateStopSignalsTask() != 0) {
         return 3;
     }
-    if (testGraceDeadlineCancelsTimer() != 0) {
+    if (testImmediateStopCancelsTimer() != 0) {
         return 4;
     }
     if (testHandleOutlivesServerAsTerminalEndpoint() != 0) {

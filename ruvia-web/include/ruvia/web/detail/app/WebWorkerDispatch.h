@@ -27,7 +27,6 @@ public:
         DbRegistry& databases,
         RedisRegistry& redis,
         const WorkerStateRegistry& workerStates,
-        MoveOnlyFunction<void()> drained,
         MoveOnlyFunction<void(std::exception_ptr)> failed);
     ~WebWorkerDispatch();
 
@@ -41,7 +40,6 @@ public:
     void close() noexcept;
     void retire() noexcept;
     [[nodiscard]] bool accepting() const noexcept;
-    [[nodiscard]] std::size_t outstanding() const noexcept;
     [[nodiscard]] WebWorkerStats stats() const noexcept;
 
     // Reconcile the outstanding_ reservation post() took for a start-lambda that
@@ -61,7 +59,6 @@ private:
     DbRegistry* databases_;
     RedisRegistry* redis_;
     const WorkerStateRegistry* workerStates_;
-    MoveOnlyFunction<void()> drained_;
     MoveOnlyFunction<void(std::exception_ptr)> failed_;
     mutable std::mutex submitMutex_;
     StopSource stopSource_;

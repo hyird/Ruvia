@@ -1,8 +1,7 @@
-// A configured shutdownGracePeriod must delay force-close only while sessions
-// are still draining. Case 1: stopping an idle server joins immediately.
-// Case 2: the force-close fires as soon as the last session ends, not after
-// the full grace period. Case 3: worker failure overrides an already-posted
-// graceful stop. Each case must finish within the generous bound.
+// Web shutdown is immediate: stop the listener, active sockets, integrations,
+// worker tasks, and timers without waiting for request draining. Case 1 covers
+// an idle server, case 2 an idle keep-alive socket, and case 3 a worker failure
+// racing with the already-posted stop callback.
 
 #include <atomic>
 #include <chrono>
@@ -25,14 +24,7 @@
 
 namespace {
 
-constexpr auto kGracePeriod = std::chrono::seconds(30);
-constexpr auto kJoinBound = std::chrono::seconds(10);
-
-ruvia::detail::HttpServerOptions gracefulOptions() {
-    ruvia::detail::HttpServerOptions options;
-    options.shutdownGracePeriod = kGracePeriod;
-    return options;
-}
+constexpr auto kJoinBound = std::chrono::seconds(3);
 
 [[nodiscard]] std::chrono::steady_clock::duration stopAndJoin(
     ruvia::detail::HttpServer& server) {
@@ -48,29 +40,25 @@ int main() {
     std::pmr::memory_resource* resource = std::pmr::get_default_resource();
 
     {
-        // Case 1: no connections. The drain timer must not arm at all.
+        // Case 1: no connections.
         ruvia::detail::RouteTable routes(resource);
         ruvia::detail::HttpServer server(
             asio::ip::tcp::endpoint(asio::ip::make_address("127.0.0.1"), 0),
-            routes,
-            {},
-            gracefulOptions());
+            routes);
         server.start();
         if (stopAndJoin(server) >= kJoinBound) {
-            std::fputs("idle shutdown waited on the grace period\n", stderr);
+            std::fputs("idle shutdown did not finish immediately\n", stderr);
             return 1;
         }
     }
 
     {
-        // Case 2: one keep-alive session outlives stop(). Closing it must
-        // finish the drain early instead of waiting out the grace period.
+        // Case 2: stop() owns socket termination. It must not wait for an idle
+        // keep-alive client to close its side of the connection.
         ruvia::detail::RouteTable routes(resource);
         ruvia::detail::HttpServer server(
             asio::ip::tcp::endpoint(asio::ip::make_address("127.0.0.1"), 0),
-            routes,
-            {},
-            gracefulOptions());
+            routes);
         server.start();
 
         asio::io_context clientContext;
@@ -82,35 +70,19 @@ int main() {
         asio::streambuf response;
         asio::read_until(client, response, "\r\n\r\n");
 
-        server.stop();
-        // Let the posted stopOnContext run while the session still exists, so
-        // this case exercises the armed drain timer rather than the idle path.
-        std::this_thread::sleep_for(std::chrono::milliseconds(100));
-
-        // The response above proves the session is counted, so stop() has
-        // armed the drain timer. Ending the session must release it.
-        std::error_code ignored;
-        client.shutdown(asio::ip::tcp::socket::shutdown_both, ignored);
-        client.close(ignored);
-
-        const auto begin = std::chrono::steady_clock::now();
-        server.join();
-        if (std::chrono::steady_clock::now() - begin >= kJoinBound) {
-            std::fputs("drained shutdown waited on the grace period\n", stderr);
+        if (stopAndJoin(server) >= kJoinBound) {
+            std::fputs("idle keep-alive delayed shutdown\n", stderr);
             return 2;
         }
     }
 
     {
-        // Case 3: a worker failure may race with the already-posted graceful
-        // stop. The forced failure path must make the later graceful callback
-        // a no-op instead of trying to arm a timer after timers were stopped.
+        // Case 3: a worker failure may race with an already-posted stop. Both
+        // paths must converge on the same immediate terminal state.
         ruvia::detail::RouteTable routes(resource);
         ruvia::detail::HttpServer server(
             asio::ip::tcp::endpoint(asio::ip::make_address("127.0.0.1"), 0),
-            routes,
-            {},
-            gracefulOptions());
+            routes);
         server.start();
 
         asio::io_context clientContext;
@@ -131,7 +103,7 @@ int main() {
                     while (!releaseWorker.load(std::memory_order_acquire)) {
                         std::this_thread::yield();
                     }
-                    throw std::runtime_error("worker failed during graceful stop");
+                    throw std::runtime_error("worker failed during immediate stop");
                     co_return;
                 }) != ruvia::PostResult::kAccepted) {
             return 3;
@@ -146,14 +118,14 @@ int main() {
             server.join();
         } catch (const std::runtime_error& error) {
             sawWorkerFailure = std::string_view(error.what()) ==
-                "worker failed during graceful stop";
+                "worker failed during immediate stop";
         }
 
         std::error_code ignored;
         client.close(ignored);
         if (!sawWorkerFailure ||
             std::chrono::steady_clock::now() - begin >= kJoinBound) {
-            std::fputs("worker failure did not override graceful shutdown\n", stderr);
+            std::fputs("worker failure race delayed immediate shutdown\n", stderr);
             return 4;
         }
     }

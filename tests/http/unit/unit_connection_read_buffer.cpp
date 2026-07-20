@@ -342,34 +342,16 @@ RUVIA_TEST(accepted_connection_lease_acquires_moves_and_releases_once) {
     asio::ip::tcp::socket socket(ioContext);
     socket.open(asio::ip::tcp::v4());
     std::size_t count = 0;
-    struct ReleaseObservation final {
-        asio::ip::tcp::socket* socket{nullptr};
-        std::size_t notifications{0};
-        bool socketClosedBeforeNotification{false};
-    } observation;
     {
-        AcceptedConnectionLease admitted(
-            std::move(socket),
-            count,
-            &observation,
-            [](void* target) noexcept {
-                auto& observed = *static_cast<ReleaseObservation*>(target);
-                ++observed.notifications;
-                observed.socketClosedBeforeNotification =
-                    observed.socket != nullptr &&
-                    !observed.socket->is_open();
-            });
+        AcceptedConnectionLease admitted(std::move(socket), count);
         RUVIA_CHECK_EQ(count, std::size_t{1});
         RUVIA_CHECK(admitted.socket().is_open());
 
         AcceptedConnectionLease session(std::move(admitted));
-        observation.socket = &session.socket();
         RUVIA_CHECK_EQ(count, std::size_t{1});
         RUVIA_CHECK(session.socket().is_open());
     }
     RUVIA_CHECK_EQ(count, std::size_t{0});
-    RUVIA_CHECK_EQ(observation.notifications, std::size_t{1});
-    RUVIA_CHECK(observation.socketClosedBeforeNotification);
 }
 
 RUVIA_TEST(accepted_connection_lease_rolls_back_throwing_initiation) {
@@ -377,16 +359,9 @@ RUVIA_TEST(accepted_connection_lease_rolls_back_throwing_initiation) {
     asio::ip::tcp::socket socket(ioContext);
     socket.open(asio::ip::tcp::v4());
     std::size_t count = 0;
-    bool released = false;
 
     try {
-        AcceptedConnectionLease admitted(
-            std::move(socket),
-            count,
-            &released,
-            [](void* target) noexcept {
-                *static_cast<bool*>(target) = true;
-            });
+        AcceptedConnectionLease admitted(std::move(socket), count);
         RUVIA_CHECK_EQ(count, std::size_t{1});
 
         const auto throwingInitiation = [](
@@ -401,5 +376,4 @@ RUVIA_TEST(accepted_connection_lease_rolls_back_throwing_initiation) {
     }
 
     RUVIA_CHECK_EQ(count, std::size_t{0});
-    RUVIA_CHECK(released);
 }

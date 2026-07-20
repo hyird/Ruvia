@@ -62,7 +62,6 @@ int main() {
     ruvia::detail::HttpServerOptions options;
     options.sendTimeout = kSendTimeout;
     options.scanInterval = 50ms;
-    options.shutdownGracePeriod = 0ms;
 
     ruvia::detail::HttpServer server(
         asio::ip::tcp::endpoint(asio::ip::make_address("127.0.0.1"), 0),

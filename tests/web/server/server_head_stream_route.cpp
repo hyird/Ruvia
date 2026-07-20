@@ -72,7 +72,6 @@ int main() {
     impl.finalize();
 
     ruvia::detail::HttpServerOptions options;
-    options.shutdownGracePeriod = std::chrono::milliseconds(0);
     ruvia::detail::HttpServer server(
         asio::ip::tcp::endpoint(asio::ip::make_address("127.0.0.1"), 0),
         impl.routeTable(), {}, options);

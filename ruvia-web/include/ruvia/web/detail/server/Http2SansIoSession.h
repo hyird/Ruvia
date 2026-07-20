@@ -14,7 +14,7 @@
 // request-body size limits, streaming request bodies (BodyReader over the Web-owned
 // per-stream body queue), WebSocket tunnels (RFC 8441), streaming + buffered + file-body
 // responses with compression/CORS via prepareBufferedHttpResponse, access logging,
-// client certificates, connection-scanner inactivity phases, graceful drain on server
+// client certificates, connection-scanner inactivity phases, immediate server
 // shutdown, TLS ALPN, and cleartext prior-knowledge startup.
 //
 // Lifetime safety: a request/response holds VIEWS into its stream's decoded storage, so
@@ -80,7 +80,7 @@ namespace ruvia::detail {
 
 // Complete, non-null connection wiring captured by value in the session coroutine.
 // Optional product integrations remain explicit inside ContextServices, while
-// options, scanner ownership, and graceful-shutdown state are mandatory references.
+// options, scanner ownership, and shutdown state are mandatory references.
 class Http2SansIoSessionContext final {
 public:
     Http2SansIoSessionContext(
@@ -967,18 +967,14 @@ Task<void> runHttp2SansIoSession(
                     });
                 const auto ec = readCompletion.errorCode();
                 const auto bytesRead = readCompletion.result();
-                if (ec || bytesRead == 0) {
+                if (ec || bytesRead == 0 || !session.workerRunning()) {
                     readerTerminalError = ec ? ec : std::make_error_code(
-                        std::errc::connection_reset);
+                        session.workerRunning()
+                            ? std::errc::connection_reset
+                            : std::errc::operation_canceled);
                     break;
                 }
                 scannerEntry.touch();
-            // The server has begun draining: tell the peer to stop opening streams
-            // (RFC 9113 §6.8); streams already started keep running.
-                if (!connection.draining() &&
-                    !session.workerRunning()) {
-                    connection.beginDrain();
-                }
                 const auto result = feedAndDrain(
                     std::string_view(readBuffer.data(), bytesRead));
                 wakeWriter();  // feed may have produced ACKs / WINDOW_UPDATEs to flush

@@ -130,7 +130,6 @@ WebWorkerDispatch::WebWorkerDispatch(
     DbRegistry& databases,
     RedisRegistry& redis,
     const WorkerStateRegistry& workerStates,
-    MoveOnlyFunction<void()> drained,
     MoveOnlyFunction<void(std::exception_ptr)> failed)
     : executor_(std::move(executor)),
       worker_(std::move(worker)),
@@ -138,7 +137,6 @@ WebWorkerDispatch::WebWorkerDispatch(
       databases_(&databases),
       redis_(&redis),
       workerStates_(&workerStates),
-      drained_(std::move(drained)),
       failed_(std::move(failed)) {}
 
 WebWorkerDispatch::~WebWorkerDispatch() {
@@ -205,7 +203,6 @@ void WebWorkerDispatch::retire() noexcept {
     // A public handle may keep this terminal endpoint alive after HttpServer.
     // Remove every callback/pointer into server-owned state before that state is
     // destroyed; terminal queries use only atomics and the stable WorkerHandle.
-    drained_ = nullptr;
     failed_ = nullptr;
     databases_ = nullptr;
     redis_ = nullptr;
@@ -216,10 +213,6 @@ void WebWorkerDispatch::retire() noexcept {
 bool WebWorkerDispatch::accepting() const noexcept {
     std::lock_guard lock(submitMutex_);
     return accepting_ && worker_.accepting();
-}
-
-std::size_t WebWorkerDispatch::outstanding() const noexcept {
-    return outstanding_.load(std::memory_order_acquire);
 }
 
 WebWorkerStats WebWorkerDispatch::stats() const noexcept {
@@ -264,9 +257,7 @@ ruvia::Task<void> WebWorkerDispatch::run(Task task) {
 
 void WebWorkerDispatch::complete() {
     completed_.fetch_add(1, std::memory_order_relaxed);
-    if (outstanding_.fetch_sub(1, std::memory_order_acq_rel) == 1 && drained_) {
-        drained_();
-    }
+    outstanding_.fetch_sub(1, std::memory_order_acq_rel);
 }
 
 void WebWorkerDispatch::abandon() noexcept {

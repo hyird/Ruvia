@@ -238,7 +238,7 @@ RUVIA_TEST(sansio_driver_h2_session_context_owns_complete_wiring) {
     RUVIA_CHECK(&session.options() == &options);
     RUVIA_CHECK(&session.scannerEntry() == &scannerEntry);
     RUVIA_CHECK(session.workerRunning());
-    workerState = ruvia::detail::HttpServerWorkerState::kDraining;
+    workerState = ruvia::detail::HttpServerWorkerState::kStopped;
     RUVIA_CHECK(!session.workerRunning());
     const auto& services = session.services();
     RUVIA_CHECK(
