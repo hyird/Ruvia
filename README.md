@@ -70,7 +70,7 @@ int main() {
 ```
 
 The same route is part of the compiled
-[`basic_http.cpp`](examples/basic_http.cpp) example. Configure once with
+[`basic_http.cpp`](examples/web/basic_http.cpp) example. Configure once with
 `-DRUVIA_BUILD_EXAMPLES=ON` as shown in [Build](#build), then:
 
 ```bash
@@ -366,7 +366,7 @@ Request and response schemas are deliberately separate. Request models support
 JSON/form parsing and validation; response models provide typed setters and
 JSON serialization. Defaults apply to request fields, while omit-empty and
 emit-null apply to response fields. See the compiled
-[`models_validation.cpp`](examples/models_validation.cpp) example for the
+[`models_validation.cpp`](examples/web/models_validation.cpp) example for the
 complete API. `SecurityHeadersOptions` defaults to `LegacyXssFilterPolicy::kDisable`, emitting `X-XSS-Protection: 0` because obsolete browser filters can create security issues; `kOmitHeader` omits that header, while Content Security Policy remains the modern content control.
 
 ## HTTP Protocol Library

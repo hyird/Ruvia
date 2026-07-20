@@ -46,6 +46,20 @@ examples/
 tests/
 ```
 
+示例和测试按 target/协议层级归档：
+
+```text
+examples/web/
+tests/core/
+tests/http/{unit,http1,http2,websocket}/
+tests/web/{unit,server}/
+tests/edge/
+tests/{guards,support,package-consumer,conformance,benchmarks}/
+```
+
+不要把 HTTP/1、HTTP/2、WebSocket 或 Web server 测试重新散放到 `tests/`
+根目录；跨 target 的边界守卫和支撑代码保留独立目录。
+
 仓库根目录不保留源码级 `include/`、`src/`、`fuzz/`、`core/`、`http/`、`web/` 或 `edge/`。
 
 每个库目录必须自带：
