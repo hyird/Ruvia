@@ -61,6 +61,9 @@ void setCompressedContentLength(HttpResponse& response, std::size_t size) {
 [[nodiscard]] CacheControl responseCacheControl(
     const HttpResponse& response) noexcept {
     CacheControlFieldParser parser;
+    if (!responseHasKnownHeader(response, kResponseHeaderCacheControl)) {
+        return parser.finish();
+    }
     for (const auto& header : response.headers()) {
         if (responseHeaderKnownBit(header) == kResponseHeaderCacheControl) {
             parser.update(header.value());

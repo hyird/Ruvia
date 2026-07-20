@@ -62,6 +62,13 @@ public:
 
     ScopedOperation<void> sleep(std::chrono::milliseconds duration);
 
+    /// Whether the response stream can no longer be delivered. The signal is
+    /// transport-dependent: on HTTP/2 it also turns true when the peer resets or
+    /// terminates the stream, so a long-lived producer can observe a passive
+    /// client disconnect; on HTTP/1 it reflects only a prior failed write, so a
+    /// passive disconnect is not seen until the next write() fails. Treat a false
+    /// result as "no failure observed yet", not a guarantee the client is still
+    /// connected.
     [[nodiscard]] bool aborted() const noexcept {
         return aborted_(target_);
     }

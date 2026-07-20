@@ -1,0 +1,74 @@
+set(_ruvia_source_root "@CMAKE_SOURCE_DIR@")
+
+# ruvia-http is the pure sans-I/O protocol layer: it must never reach an OS or
+# network I/O primitive. Only ruvia-http is scanned — core, web, and edge
+# perform real I/O by design, and tests may exercise anything they need.
+set(_forbidden_io_patterns
+    [=[#[ \t]*include[ \t]*<(fstream|cstdio|stdio[.]h|fcntl[.]h|unistd[.]h|windows[.]h|winsock2[.]h|sys/[a-z_]+[.]h|asio[/.]|boost/asio|openssl/)]=]
+    [=[std::(i|o)?fstream]=]
+    [=[::open[ \t]*[(]]=]
+    [=[::CreateFile]=]
+    [=[::ReadFile[ \t]*[(]]=]
+    [=[::f?stat[ \t]*[(]]=]
+    [=[([^A-Za-z0-9_]|^)fopen[ \t]*[(]]=])
+
+# Index-aligned positive probes: a pattern that stops matching its probe has
+# rotted into a no-op, which this guard must report instead of silently passing.
+# Probes stay semicolon-free because CMake list elements cannot carry ';'.
+set(_probe_texts
+    "#include <fcntl.h>"
+    "std::ifstream in"
+    "int fd = ::open(path, O_RDONLY)"
+    "HANDLE h = ::CreateFileW(p, GENERIC_READ)"
+    "::ReadFile (h, buf, n, &got, nullptr)"
+    "::stat (p, &st)"
+    "FILE* f = fopen(p, \"rb\")")
+
+# Benign text every pattern must ignore: descriptor plumbing, status accessors,
+# and identifiers that merely embed a forbidden token.
+set(_benign_corpus
+    "std::filesystem::path p; response.status(x); auto s = ::status(v); reopen(q); xfopen(y); std::filesystem::file_status fs;")
+
+list(LENGTH _forbidden_io_patterns _pattern_count)
+math(EXPR _last_pattern_index "${_pattern_count} - 1")
+foreach(_pattern_index RANGE ${_last_pattern_index})
+    list(GET _forbidden_io_patterns ${_pattern_index} _pattern)
+    list(GET _probe_texts ${_pattern_index} _probe)
+    string(REGEX MATCH "${_pattern}" _match "${_probe}")
+    if(NOT _match)
+        message(FATAL_ERROR
+            "ruvia_guard_http_sansio self-test failed, pattern lost its probe: ${_pattern}")
+    endif()
+    string(REGEX MATCH "${_pattern}" _match "${_benign_corpus}")
+    if(_match)
+        message(FATAL_ERROR
+            "ruvia_guard_http_sansio self-test failed, pattern matched benign text: "
+            "${_pattern}: ${_match}")
+    endif()
+endforeach()
+
+set(_source_files)
+foreach(_source_root IN ITEMS
+        "${_ruvia_source_root}/ruvia-http/include"
+        "${_ruvia_source_root}/ruvia-http/src")
+    file(GLOB_RECURSE _root_files LIST_DIRECTORIES FALSE
+        "${_source_root}/*.h"
+        "${_source_root}/*.cpp"
+        "${_source_root}/*.inl")
+    list(APPEND _source_files ${_root_files})
+endforeach()
+
+foreach(_source_file IN LISTS _source_files)
+    file(READ "${_source_file}" _source_text)
+    foreach(_pattern IN LISTS _forbidden_io_patterns)
+        string(REGEX MATCH "${_pattern}" _match "${_source_text}")
+        if(_match)
+            file(RELATIVE_PATH _relative_source
+                "${_ruvia_source_root}" "${_source_file}")
+            string(REPLACE "\n" "\\n" _printable_match "${_match}")
+            message(FATAL_ERROR
+                "OS I/O primitive in sans-I/O ruvia-http: "
+                "${_relative_source}: ${_printable_match}")
+        endif()
+    endforeach()
+endforeach()

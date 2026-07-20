@@ -181,6 +181,47 @@ int testHandleOutlivesServerAsTerminalEndpoint() {
         : 1;
 }
 
+// A raw mailbox task that throws synchronously, queued ahead of a WebWorker
+// task, makes the dispatcher abandon the queued task when drain() rethrows. The
+// abandoned task's outstanding_ reservation must still be reconciled: otherwise
+// ~HttpServer's retire() sees a phantom in-flight task and std::terminate()s.
+// Reaching the end of this function runs ~HttpServer; on the buggy code it
+// aborts the process here.
+int testAbandonedMailboxTaskReconciledOnThrow() {
+    ruvia::detail::RouteTable routes(std::pmr::get_default_resource());
+    ruvia::detail::HttpServerOptions options;
+    options.workerMailboxCapacity = 4;
+    ruvia::detail::HttpServer server(
+        asio::ip::tcp::endpoint(asio::ip::make_address("127.0.0.1"), 0),
+        routes,
+        {},
+        options);
+    auto worker = server.webWorker();
+
+    if (server.worker().post([] {
+            throw std::runtime_error("raw mailbox task threw");
+        }) != ruvia::PostResult::kAccepted) {
+        return 1;
+    }
+    if (worker.post([](ruvia::WebWorkerContext&) -> ruvia::Task<void> {
+            co_return;
+        }) != ruvia::PostResult::kAccepted) {
+        return 2;
+    }
+
+    try {
+        server.start();
+    } catch (...) {
+        // Startup fails because the mailbox task threw before the worker signaled
+        // ready; the abandoned WebWorker task is what this test exercises.
+    }
+    try {
+        server.join();
+    } catch (...) {
+    }
+    return 0;
+}
+
 }  // namespace
 
 int main() {
@@ -189,6 +230,9 @@ int main() {
     }
     if (testFailureStopsWorker() != 0) {
         return 2;
+    }
+    if (testAbandonedMailboxTaskReconciledOnThrow() != 0) {
+        return 6;
     }
     if (testGracefulDrain() != 0) {
         return 3;

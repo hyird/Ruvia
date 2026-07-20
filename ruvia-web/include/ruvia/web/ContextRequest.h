@@ -70,6 +70,13 @@ public:
     struct ParseBodyOptions final {
         RepeatedScalarPolicy repeatedScalars{RepeatedScalarPolicy::kLastValue};
         DottedNamePolicy dottedNames{DottedNamePolicy::kLiteral};
+        // Upper bound on parsed form fields / multipart parts. A body of only
+        // delimiters (e.g. 16 MiB of "x[]=&") would otherwise build millions of
+        // heavy field objects from one request; rejecting past this many caps the
+        // amplification. Matches the PHP max_input_vars / Django
+        // DATA_UPLOAD_MAX_NUMBER_FIELDS default; raise it for forms that
+        // legitimately carry more fields.
+        std::size_t maxFields{1000};
     };
 
     struct RequestFormField;

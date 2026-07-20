@@ -60,6 +60,11 @@ struct StaticRootOptions final {
     StaticFileTypePolicy fileTypes{StaticFileTypePolicy::defaults()};
     bool enableRanges{true};
     bool enableValidators{true};
+    // Serve files and directories whose name begins with '.' (dotfiles). Off by
+    // default so a .env, .git/config, or .htpasswd sitting under the document
+    // root is never exposed. Enable it only for a root that intentionally
+    // publishes hidden paths (for example .well-known/ for ACME).
+    bool serveDotfiles{false};
 };
 
 namespace detail {

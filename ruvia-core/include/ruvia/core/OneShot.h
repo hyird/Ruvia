@@ -184,20 +184,15 @@ void wakeOneShotReceiver(OneShotAwaiter<T>* waiter) {
 
 template <typename T>
 void OneShotState<T>::workerStopping() noexcept {
-    OneShotAwaiter<T>* pending = nullptr;
-    bool wake = false;
-    {
-        std::lock_guard lock(mutex);
-        if (!std::holds_alternative<OneShotReady<T>>(lifecycle)) {
-            lifecycle.template emplace<OneShotWorkerStopping>();
-        }
-        pending = std::exchange(waiter, nullptr);
-        if (pending != nullptr) {
-            wake = pending->completion.complete(
-                WorkerWaitResultAccess::workerStopping<T>());
-        }
+    std::lock_guard lock(mutex);
+    if (!std::holds_alternative<OneShotReady<T>>(lifecycle)) {
+        lifecycle.template emplace<OneShotWorkerStopping>();
     }
-    if (wake) {
+    OneShotAwaiter<T>* pending = std::exchange(waiter, nullptr);
+    if (pending != nullptr &&
+        pending->completion.complete(
+            WorkerWaitResultAccess::workerStopping<T>())) {
+        // Wake under the mutex (see OneShotCompletion::complete).
         try {
             wakeOneShotReceiver(pending);
         } catch (...) {
@@ -241,6 +236,13 @@ public:
                     detail::WorkerWaitResultAccess::value(std::move(value)));
                 state_->lifecycle.template emplace<detail::OneShotConsumed>();
                 state_->waiter = nullptr;
+                // Wake the receiver while still holding the mutex. Once it is
+                // released, an already-in-flight timer expiry can resume the
+                // receiver on its worker and destroy this awaiter, so reading
+                // waiter->timer afterward would be a use-after-free.
+                if (wake) {
+                    detail::wakeOneShotReceiver(waiter);
+                }
             } else {
                 try {
                     state_->lifecycle.template emplace<detail::OneShotReady<T>>(
@@ -250,9 +252,6 @@ public:
                     throw;
                 }
             }
-        }
-        if (wake) {
-            detail::wakeOneShotReceiver(waiter);
         }
         return OneShotCompleteResult::kCompleted;
     }
@@ -304,10 +303,11 @@ public:
             if (waiter != nullptr) {
                 wake = waiter->completion.complete(
                     detail::WorkerWaitResultAccess::closed<T>());
+                // Wake under the mutex (see OneShotCompletion::complete).
+                if (wake) {
+                    detail::wakeOneShotReceiver(waiter);
+                }
             }
-        }
-        if (wake) {
-            detail::wakeOneShotReceiver(waiter);
         }
     }
 

@@ -84,6 +84,15 @@ void normalizeFileTypes(std::pmr::vector<std::pmr::string>& fileTypes) {
     fileTypes.erase(std::ranges::unique(fileTypes).begin(), fileTypes.end());
 }
 
+// A relative path (generic '/'-separated form) whose first component or any
+// component after a '/' begins with '.' is hidden. Serving these by default
+// leaks .env, .git/config, .htpasswd and similar secrets that happen to sit
+// under a document root.
+[[nodiscard]] bool hasHiddenPathSegment(std::string_view relativeGeneric) noexcept {
+    return relativeGeneric.starts_with('.') ||
+        relativeGeneric.find("/.") != std::string_view::npos;
+}
+
 bool fileTypeAllowed(
     std::string_view extension,
     const StaticRootOptions& options) {
@@ -317,6 +326,14 @@ StaticRoot::StaticRoot(const std::filesystem::path& root, StaticRootOptions opti
             .generic_string<char, std::char_traits<char>, std::pmr::polymorphic_allocator<char>>(
                 std::pmr::polymorphic_allocator<char>(upstream));
         if (relative.empty() || relative.starts_with("../")) {
+            continue;
+        }
+        // Default-deny hidden paths: skip dotfiles and do not descend into
+        // dot-directories (.git, .ssh, ...) so their contents are never indexed.
+        if (!options.serveDotfiles && hasHiddenPathSegment(relative)) {
+            if (std::filesystem::is_directory(status)) {
+                iter.disable_recursion_pending();
+            }
             continue;
         }
         if (std::filesystem::is_directory(status)) {

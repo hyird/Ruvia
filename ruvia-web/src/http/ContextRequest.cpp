@@ -59,6 +59,13 @@ namespace detail {
     throw std::invalid_argument("invalid form body");
 }
 
+[[noreturn]] void throwTooManyFormFields() {
+    throw HttpError(
+        http_status::kContentTooLarge,
+        "too_many_form_fields",
+        "request form has too many fields");
+}
+
 [[noreturn]] void throwInvalidQuery() {
     throw std::invalid_argument("invalid query");
 }
@@ -266,6 +273,11 @@ void appendParsedBodyField(
         assignDotPath(field, fields.get_allocator().resource());
     }
 
+    // Reject before the field vector (and the sorts over it) can grow without
+    // bound from an attacker-supplied body of many tiny fields.
+    if (fields.size() >= options.maxFields) {
+        detail::throwTooManyFormFields();
+    }
     fields.emplace_back(std::move(field));
 }
 
@@ -287,7 +299,12 @@ void compactParsedBodyFields(
         std::optional<std::size_t> lastScalar;
         do {
             const auto index = order[offset];
-            if (fields[index].array()) {
+            // Retain every array ("name[]") field, and every file part: a
+            // standard <input type=file multiple> emits several parts under one
+            // non-"[]" name, and collapsing them as repeated scalars would
+            // silently drop all but the last upload. Only true repeated scalars
+            // (text fields) collapse to their last value.
+            if (fields[index].array() || fields[index].file()) {
                 keep[index] = 1;
             } else {
                 lastScalar = index;
@@ -390,6 +407,12 @@ void compactParsedBodyFields(
         const auto partContentType = part.contentType();
         std::pmr::string name(partName.data(), partName.size(), resource);
         const bool array = fieldNameIsArray(std::string_view(name));
+        // RFC 7578 section 4.4: a part without a Content-Type defaults to
+        // text/plain. Surface that effective type to the form consumer rather
+        // than an empty string (the raw multipart parts API stays faithful).
+        std::pmr::string contentType = partContentType.empty()
+            ? std::pmr::string("text/plain", resource)
+            : std::pmr::string(partContentType.data(), partContentType.size(), resource);
         appendParsedBodyField(
             fields,
             detail::RequestFormFieldAccess::make(
@@ -397,7 +420,7 @@ void compactParsedBodyFields(
                 std::move(name),
                 std::pmr::string(partBody.data(), partBody.size(), resource),
                 std::pmr::string(partFilename.data(), partFilename.size(), resource),
-                std::pmr::string(partContentType.data(), partContentType.size(), resource),
+                std::move(contentType),
                 !partFilename.empty(),
                 array),
             options);
