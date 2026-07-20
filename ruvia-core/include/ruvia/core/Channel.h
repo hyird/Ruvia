@@ -179,18 +179,13 @@ void wakeChannelReceiver(ChannelReceiveAwaiter<T>* waiter) {
 
 template <typename T>
 void ChannelState<T>::workerStopping() noexcept {
-    ChannelReceiveAwaiter<T>* pending = nullptr;
-    bool wake = false;
-    {
-        std::lock_guard lock(mutex);
-        lifecycle.template emplace<ChannelWorkerStopping>();
-        pending = std::exchange(waiter, nullptr);
-        if (pending != nullptr) {
-            wake = pending->completion.complete(
-                WorkerWaitResultAccess::workerStopping<T>());
-        }
-    }
-    if (wake) {
+    std::lock_guard lock(mutex);
+    lifecycle.template emplace<ChannelWorkerStopping>();
+    ChannelReceiveAwaiter<T>* pending = std::exchange(waiter, nullptr);
+    if (pending != nullptr &&
+        pending->completion.complete(
+            WorkerWaitResultAccess::workerStopping<T>())) {
+        // Wake under the mutex (see ChannelSender::send).
         try {
             wakeChannelReceiver(pending);
         } catch (...) {
@@ -231,6 +226,13 @@ public:
                 wake = waiter->completion.complete(
                     detail::WorkerWaitResultAccess::value(std::move(value)));
                 state_->waiter = nullptr;
+                // Wake the receiver while still holding the mutex. Once it is
+                // released, an already-in-flight timer expiry can resume the
+                // receiver on its worker and destroy this awaiter, so reading
+                // waiter->timer afterward would be a use-after-free.
+                if (wake) {
+                    detail::wakeChannelReceiver(waiter);
+                }
             } else {
                 if (state_->size == state_->slots.size()) {
                     return ChannelSendResult::kFull;
@@ -239,9 +241,6 @@ public:
                 state_->tail = (state_->tail + 1) % state_->slots.size();
                 ++state_->size;
             }
-        }
-        if (wake) {
-            detail::wakeChannelReceiver(waiter);
         }
         return ChannelSendResult::kSent;
     }
@@ -263,10 +262,11 @@ public:
             if (waiter != nullptr) {
                 wake = waiter->completion.complete(
                     detail::WorkerWaitResultAccess::closed<T>());
+                // Wake under the mutex (see ChannelSender::send).
+                if (wake) {
+                    detail::wakeChannelReceiver(waiter);
+                }
             }
-        }
-        if (wake) {
-            detail::wakeChannelReceiver(waiter);
         }
     }
 

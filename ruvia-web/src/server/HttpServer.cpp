@@ -1,6 +1,8 @@
 #include "ruvia/web/detail/server/HttpServer.h"
 
 #include <asio/ssl.hpp>
+#include <openssl/bio.h>
+#include <openssl/x509.h>
 #include <array>
 #include <cstring>
 #include <memory>
@@ -49,10 +51,26 @@ inline void extractTlsClientCertificate(SSL* ssl, std::pmr::string& out) {
     if (certificate == nullptr) {
         return;
     }
-    char buffer[256];
     X509_NAME* subject = X509_get_subject_name(certificate.get());
-    if (subject != nullptr && X509_NAME_oneline(subject, buffer, sizeof(buffer)) != nullptr) {
-        out.assign(buffer);
+    if (subject == nullptr) {
+        return;
+    }
+    // Render the DN in RFC 2253 form through a memory BIO. Unlike
+    // X509_NAME_oneline into a fixed 256-byte buffer, this captures the full
+    // subject without silent truncation and produces the unambiguous,
+    // standard-parseable form recommended for authorization.
+    const auto bio = std::unique_ptr<BIO, decltype(&BIO_free)>(
+        BIO_new(BIO_s_mem()), &BIO_free);
+    if (bio == nullptr) {
+        return;
+    }
+    if (X509_NAME_print_ex(bio.get(), subject, 0, XN_FLAG_RFC2253) < 0) {
+        return;
+    }
+    char* data = nullptr;
+    const long length = BIO_get_mem_data(bio.get(), &data);
+    if (data != nullptr && length > 0) {
+        out.assign(data, static_cast<std::size_t>(length));
     }
 }
 

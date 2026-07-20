@@ -81,6 +81,16 @@ struct EventLoopAttachmentOptions final {
     std::size_t mailboxCapacity{1024};
 };
 
+// Binds a worker to an io_context the caller owns and drives with run(). The
+// attachment keeps the worker's endpoint valid for as long as it is alive.
+//
+// Teardown contract: before destroying the attachment, stop the worker (stop(),
+// or let the context run dry) AND let run() return on every thread driving the
+// context. Destroying the attachment while a thread is still inside run() races
+// the worker's timer teardown -- this is the same ordering EventLoopPool
+// guarantees internally by joining its threads before tearing a loop down.
+// stop() is safe from any thread; the destructor does not (and cannot) join a
+// context it does not own, so it does not wait for run() to return.
 class EventLoopAttachment final {
 public:
     ~EventLoopAttachment();
@@ -103,6 +113,9 @@ private:
         asio::io_context&, EventLoopAttachmentOptions);
 };
 
+// Attach a Ruvia worker to a caller-owned io_context. The caller drives the
+// context with run() on one or more threads. See EventLoopAttachment for the
+// teardown ordering the caller must honor before destroying the returned handle.
 [[nodiscard]] EventLoopAttachment attachEventLoop(
     asio::io_context& ioContext,
     EventLoopAttachmentOptions options = {});

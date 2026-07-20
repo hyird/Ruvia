@@ -78,6 +78,16 @@ Task<std::optional<std::string_view>> StreamBodyReader<Stream>::readKnownLength(
         co_return chunk;
     }
 
+    // The initial segment is now fully consumed as body: a partial-body prefix
+    // cannot be followed by pipelined bytes, so the whole borrowed view was
+    // body. Drop it before recording any buffer_-relative pendingCompactUntil_,
+    // so compactPending() compacts buffer_ instead of misreading that offset as
+    // an initial-view offset (mirrors the chunked path's
+    // materializeInitialRemainder()).
+    if (initialBodyBytes == initialBodyAndPipeline_.size()) {
+        initialBodyAndPipeline_ = {};
+    }
+
     while (buffer_.size() <= readCursor_) {
         co_await readMore();
     }

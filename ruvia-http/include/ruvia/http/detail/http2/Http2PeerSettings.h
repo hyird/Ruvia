@@ -233,6 +233,12 @@ public:
 private:
     const Http2Role localRole_;
     std::uint32_t maxFrameSize_{kHttp2DefaultMaxFrameSize};
+    // headerTableSize_ and maxHeaderListSize_ are parsed and stored to keep the
+    // peer-settings model complete, but no encode path reads them, by design. The
+    // encoder never indexes the HPACK dynamic table (static index + literal
+    // without indexing only), so the peer's table size cannot be exceeded; and
+    // SETTINGS_MAX_HEADER_LIST_SIZE is advisory (RFC 7540 6.5.2) while outbound
+    // header blocks are already bounded by the local kMaxHttpHeaderBytes cap.
     std::uint32_t headerTableSize_{4096};
     std::uint32_t maxConcurrentStreams_{std::numeric_limits<std::uint32_t>::max()};
     std::uint32_t maxHeaderListSize_{std::numeric_limits<std::uint32_t>::max()};

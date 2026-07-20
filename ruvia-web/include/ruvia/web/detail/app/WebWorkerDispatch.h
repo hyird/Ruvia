@@ -46,6 +46,12 @@ public:
     [[nodiscard]] std::size_t outstanding() const noexcept;
     [[nodiscard]] WebWorkerStats stats() const noexcept;
 
+    // Reconcile the outstanding_ reservation post() took for a start-lambda that
+    // is destroyed without running (a rejected post, or a shutdown that abandons
+    // queued mailbox work behind a task that threw). Public only so the post()
+    // reservation deleter can reach it; not a task-completion signal.
+    void abandon() noexcept;
+
 private:
     void start(Task task);
     [[nodiscard]] ruvia::Task<void> run(Task task);

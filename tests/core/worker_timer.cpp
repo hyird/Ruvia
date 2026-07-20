@@ -184,8 +184,9 @@ bool detachedTimerCancellationRaceWorks() {
     return true;
 }
 
-ruvia::Task<void> markAfterSleep(ruvia::WorkerHandle worker, bool& completed) {
-    co_await ruvia::sleepFor(worker, std::chrono::hours(1));
+ruvia::Task<void> markAfterSleep(
+    ruvia::WorkerHandle worker, bool& completed, bool& reportedElapsed) {
+    reportedElapsed = co_await ruvia::sleepFor(worker, std::chrono::hours(1));
     completed = true;
 }
 
@@ -193,7 +194,8 @@ ruvia::Task<void> exercise(
     const std::shared_ptr<ruvia::detail::WorkerDispatcher>& dispatcher,
     ruvia::WorkerHandle worker,
     bool& success) {
-    co_await ruvia::sleepFor(worker, std::chrono::milliseconds(1));
+    const bool firstSleepElapsed =
+        co_await ruvia::sleepFor(worker, std::chrono::milliseconds(1));
 
     bool expired = false;
     bool cancelled = false;
@@ -219,11 +221,16 @@ ruvia::Task<void> exercise(
     co_await ruvia::sleepFor(worker, std::chrono::milliseconds(1));
 
     bool cancelledSleepResumed = false;
+    bool cancelledSleepReportedElapsed = true;
     ruvia::TaskScope scope(worker);
-    scope.spawn(markAfterSleep(worker, cancelledSleepResumed));
+    scope.spawn(markAfterSleep(
+        worker, cancelledSleepResumed, cancelledSleepReportedElapsed));
     dispatcher->stopTimers();
     co_await scope.join();
-    success = expired && cancelled && cancelledSleepResumed;
+    // A normal sleep reports elapsed; a shutdown-cancelled sleep resumes but
+    // reports not-elapsed so a periodic loop can stop instead of re-sleeping.
+    success = expired && cancelled && firstSleepElapsed &&
+        cancelledSleepResumed && !cancelledSleepReportedElapsed;
 }
 
 ruvia::Task<void> exerciseSlotReuse(

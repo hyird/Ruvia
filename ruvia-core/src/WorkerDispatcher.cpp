@@ -389,9 +389,12 @@ void WorkerDispatcher::detachContext() noexcept {
         detachedTimer = std::move(impl_->timer);
     }
 
-    // detachContext runs only after the worker has joined, so the timer heap is
-    // exclusively owned here. All user-owned closures are destroyed outside mutex so
-    // a destructor that releases another worker primitive cannot deadlock.
+    // The caller guarantees no worker-thread timer activity runs concurrently
+    // with detachContext: EventLoopPool joins its threads first, and the
+    // attachEventLoop teardown contract requires run() to have returned before
+    // the attachment is destroyed. The timer heap is therefore exclusively owned
+    // here. All user-owned closures are destroyed outside the mutex so a
+    // destructor that releases another worker primitive cannot deadlock.
     abandonedTimers.swap(impl_->timers);
     abandonedTimerSlots.swap(impl_->timerSlots);
     impl_->freeTimerSlot = kNoTimerSlot;

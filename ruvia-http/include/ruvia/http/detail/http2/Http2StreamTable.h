@@ -168,7 +168,7 @@ private:
     // Two inline slots cover the typical request/response cadence without
     // paying the full concurrent-stream budget up front: each slot embeds a
     // ~1.3 KB Http2StreamState, and the table lives in the connection object
-    // for the connection's whole lifetime, so 16 inline slots put ~21 KB into
+    // for the connection's whole lifetime, so the two slots put ~2.6 KB into
     // every connection. Deeper multiplexing spills to the pmr overflow path.
     static constexpr std::size_t kInlineCapacity = 2;
     using OverflowStream = std::unique_ptr<Http2StreamState, HttpPmrObjectDeleter<Http2StreamState>>;

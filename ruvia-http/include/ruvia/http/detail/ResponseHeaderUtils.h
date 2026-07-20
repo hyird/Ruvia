@@ -38,6 +38,9 @@ inline bool varyTokenRepeatedInBatch(
 [[nodiscard]] inline bool responseVaryHasToken(
     const HttpResponse& response,
     std::string_view token) noexcept {
+    if (!responseHasKnownHeader(response, kResponseHeaderVary)) {
+        return false;
+    }
     for (const auto& header : response.headers()) {
         if (responseHeaderKnownBit(header) == kResponseHeaderVary &&
             httpHasToken(header.value(), token)) {
@@ -115,13 +118,15 @@ inline void addVaryTokens(
 
     std::size_t existingValueCount = 0;
     std::size_t existingBytes = 0;
-    for (const auto& header : response.headers()) {
-        if (responseHeaderKnownBit(header) != kResponseHeaderVary ||
-            httpTrimOws(header.value()).empty()) {
-            continue;
+    if (responseHasKnownHeader(response, kResponseHeaderVary)) {
+        for (const auto& header : response.headers()) {
+            if (responseHeaderKnownBit(header) != kResponseHeaderVary ||
+                httpTrimOws(header.value()).empty()) {
+                continue;
+            }
+            ++existingValueCount;
+            existingBytes += header.value().size();
         }
-        ++existingValueCount;
-        existingBytes += header.value().size();
     }
 
     if (existingValueCount == 0) {
@@ -135,15 +140,17 @@ inline void addVaryTokens(
     updated.reserve(
         existingBytes + addedBytes +
         (partCount == 0 ? 0 : (partCount - 1) * 2));
-    for (const auto& header : response.headers()) {
-        if (responseHeaderKnownBit(header) != kResponseHeaderVary ||
-            httpTrimOws(header.value()).empty()) {
-            continue;
+    if (existingValueCount != 0) {
+        for (const auto& header : response.headers()) {
+            if (responseHeaderKnownBit(header) != kResponseHeaderVary ||
+                httpTrimOws(header.value()).empty()) {
+                continue;
+            }
+            if (!updated.empty()) {
+                updated.append(", ");
+            }
+            updated.append(header.value());
         }
-        if (!updated.empty()) {
-            updated.append(", ");
-        }
-        updated.append(header.value());
     }
     for (std::size_t i = 0; i < tokenCount; ++i) {
         const auto token = tokens[i];
