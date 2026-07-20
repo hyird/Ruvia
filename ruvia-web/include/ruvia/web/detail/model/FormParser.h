@@ -130,7 +130,7 @@ template <typename T>
             return FieldT(*parsed);
         }
     } else {
-        static_assert(alwaysFalse<FieldT>, "RUVIA_REQUEST_MODEL form field type is not supported");
+        return std::nullopt;
     }
 }
 
