@@ -3,6 +3,7 @@
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <optional>
 #include <span>
 #include <string>
@@ -46,19 +47,32 @@ enum class OriginFetchOutcome : std::uint8_t {
     kUnsupported,     // a framing the MVP does not handle (upgrade / CONNECT / TLS origin)
 };
 
-// A fully materialized origin response: status, the origin's response headers
-// verbatim, and the decoded body (de-chunked, exact length). The serve path
-// curates the headers (drops hop-by-hop and framing fields, adds Age) when
-// replaying it to the client.
-struct OriginResponse final {
+// The head of an origin response, delivered to a sink before the body streams.
+// contentLength is set only for an exact-length body; a chunked or
+// close-delimited body reports std::nullopt (unknown total). hasBody is false
+// for responses that carry none (HEAD, 204, 304).
+struct OriginResponseHead final {
     std::uint16_t status{0};
     std::vector<std::pair<std::string, std::string>> headers;
-    std::string body;
+    bool hasBody{false};
+    std::optional<std::size_t> contentLength{};
 };
 
-struct OriginFetchResult final {
+// A destination for a streamed origin response. onHead is invoked once with the
+// parsed head; onBody is invoked for each decoded body chunk in order. Both are
+// asynchronous, so the origin read is backpressured by the client write, and both
+// return false to abort the fetch (for example, the client disconnected). The
+// sink is type-erased so the fetcher stays independent of the client stream type.
+struct ResponseSink final {
+    std::move_only_function<asio::awaitable<bool>(const OriginResponseHead&)> onHead;
+    std::move_only_function<asio::awaitable<bool>(std::string_view)> onBody;
+};
+
+// The outcome of a streaming fetch. A sink that aborts (returns false) is not an
+// error: the origin exchange itself succeeded, so the outcome is kOk and the
+// caller (which owns the sink) decides what the abort meant.
+struct StreamOutcome final {
     OriginFetchOutcome outcome{OriginFetchOutcome::kConnectFailed};
-    OriginResponse response;  // meaningful only when outcome == kOk
 };
 
 // Fetches a response from an origin over plaintext HTTP/1.1, driving ruvia-http's
@@ -103,14 +117,18 @@ public:
     OriginFetcher(const OriginFetcher&) = delete;
     OriginFetcher& operator=(const OriginFetcher&) = delete;
 
-    // Fetch from host:port. When https, the connection is TLS (with SNI set to
-    // host); TLS origin connections are not pooled.
-    [[nodiscard]] asio::awaitable<OriginFetchResult> fetch(
+    // Fetch from host:port, streaming the response to `sink`. When https, the
+    // connection is TLS (with SNI set to host); TLS origin connections are not
+    // pooled. The body is never buffered whole here: each decoded chunk is handed
+    // to the sink as it arrives. A pooled connection is only reused when the whole
+    // response was consumed and the sink did not abort.
+    [[nodiscard]] asio::awaitable<StreamOutcome> fetch(
         asio::any_io_executor executor,
         std::string_view host,
         std::uint16_t port,
         bool https,
-        const OriginRequest& request);
+        const OriginRequest& request,
+        ResponseSink& sink);
 
     // Number of idle pooled connections (for observability and tests).
     [[nodiscard]] std::size_t idleConnectionCount() const noexcept;

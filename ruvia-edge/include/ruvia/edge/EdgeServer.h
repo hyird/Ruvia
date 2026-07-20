@@ -30,6 +30,9 @@ struct EdgeTlsConfig final {
 struct EdgeServerOptions final {
     EdgeCache::Limits cache{};
     OriginFetcher::Limits fetch{};
+    // Largest response body the edge will accumulate to cache. A larger response
+    // still streams to the client; it just is not stored.
+    std::size_t maxCacheableBytes{8u * 1024u * 1024u};
     // When set, the data listener terminates TLS with this certificate/key.
     std::optional<EdgeTlsConfig> tls{};
     // When set, a separate management listener is bound to this endpoint exposing
@@ -128,6 +131,7 @@ private:
     EdgeConfig config_;
     EdgeCache cache_;
     OriginFetcher fetcher_;
+    std::size_t maxCacheableBytes_{8u * 1024u * 1024u};
     std::jthread worker_;
 };
 

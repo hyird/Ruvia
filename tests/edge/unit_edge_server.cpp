@@ -133,6 +133,16 @@ private:
                 "ETag: \"v1\"\r\n"
                 "Cache-Control: max-age=1\r\n"
                 "\r\n";
+        } else if (request.find("GET /chunked ") != std::string::npos) {
+            // An unknown-length (chunked) origin response.
+            hits_.fetch_add(1);
+            response =
+                "HTTP/1.1 200 OK\r\n"
+                "Content-Type: text/plain\r\n"
+                "Transfer-Encoding: chunked\r\n"
+                "Cache-Control: max-age=60\r\n"
+                "\r\n"
+                "5\r\nhello\r\n6\r\n world\r\n0\r\n\r\n";
         } else {
             hits_.fetch_add(1);
             const bool shortLived = request.find("GET /rev ") != std::string::npos ||
@@ -335,6 +345,27 @@ std::string httpsGet(std::uint16_t port, std::string_view host, std::string_view
     return pos == std::string::npos ? std::string{} : raw.substr(pos + 4);
 }
 
+// Decode an HTTP/1 chunked body (size lines in hex, CRLF-delimited, 0-terminated).
+[[nodiscard]] std::string dechunk(const std::string& framed) {
+    std::string out;
+    std::size_t pos = 0;
+    for (;;) {
+        const auto crlf = framed.find("\r\n", pos);
+        if (crlf == std::string::npos) {
+            break;
+        }
+        const std::size_t size =
+            static_cast<std::size_t>(std::stoul(framed.substr(pos, crlf - pos), nullptr, 16));
+        if (size == 0) {
+            break;
+        }
+        pos = crlf + 2;
+        out.append(framed, pos, size);
+        pos += size + 2;  // data plus trailing CRLF
+    }
+    return out;
+}
+
 [[nodiscard]] bool contains(const std::string& haystack, std::string_view needle) {
     return haystack.find(needle) != std::string::npos;
 }
@@ -478,6 +509,23 @@ int main() {
         check(bodyOf(second) == "hello", "keep-alive body 2 is correct");
         check(contains(second, "Connection: close"),
               "response 2 closes the connection as requested");
+    }
+
+    // Streaming: an unknown-length (chunked) origin response is streamed to the
+    // client re-chunked (not buffered), and is still cached; the cached hit is
+    // then served buffered.
+    {
+        const auto r = httpGet(edgePort, "front.local", "/chunked");
+        check(statusOf(r) == 200, "chunked response streamed with 200");
+        check(contains(r, "Transfer-Encoding: chunked"),
+              "unknown-length body is re-chunked to the client");
+        check(contains(r, "X-Cache: MISS"), "first chunked request is a MISS");
+        check(dechunk(bodyOf(r)) == "hello world",
+              "streamed chunked body decodes to the origin content");
+
+        const auto r2 = httpGet(edgePort, "front.local", "/chunked");
+        check(contains(r2, "X-Cache: HIT"), "chunked response was cached");
+        check(bodyOf(r2) == "hello world", "cached body served buffered on the hit");
     }
 
     // Client-side TLS termination: a separate TLS edge in front of the same

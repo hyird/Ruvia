@@ -45,6 +45,27 @@ using ruvia::HttpHeaderView;
 using ruvia::edge::OriginFetcher;
 using ruvia::edge::OriginFetchOutcome;
 using ruvia::edge::OriginRequest;
+using ruvia::edge::OriginResponseHead;
+using ruvia::edge::ResponseSink;
+
+// A sink that accumulates the streamed head and body so a test can inspect them.
+struct AccumulatingSink final {
+    OriginResponseHead head;
+    std::string body;
+
+    [[nodiscard]] ResponseSink make() {
+        ResponseSink sink;
+        sink.onHead = [this](const OriginResponseHead& h) -> asio::awaitable<bool> {
+            head = h;
+            co_return true;
+        };
+        sink.onBody = [this](std::string_view chunk) -> asio::awaitable<bool> {
+            body.append(chunk);
+            co_return true;
+        };
+        return sink;
+    }
+};
 
 struct CaseResult final {
     OriginFetchOutcome outcome{OriginFetchOutcome::kConnectFailed};
@@ -113,12 +134,14 @@ CaseResult runCase(
             request.method = "GET";
             request.target = "/thing";
             request.headers = std::span<const HttpHeaderView>(headers);
-            auto result =
-                co_await fetcher.fetch(io.get_executor(), "127.0.0.1", port, false, request);
+            AccumulatingSink acc;
+            auto sink = acc.make();
+            auto result = co_await fetcher.fetch(
+                io.get_executor(), "127.0.0.1", port, false, request, sink);
             out.outcome = result.outcome;
-            out.status = result.response.status;
-            out.body = std::move(result.response.body);
-            out.headers = std::move(result.response.headers);
+            out.status = acc.head.status;
+            out.body = std::move(acc.body);
+            out.headers = std::move(acc.head.headers);
             io.stop();  // done measuring; do not wait on a held-open origin
             co_return;
         },
@@ -274,12 +297,18 @@ int main() {
                 request.headers = std::span<const HttpHeaderView>(headers);
 
                 request.target = "/first";
-                auto r1 = co_await fetcher.fetch(io.get_executor(), "127.0.0.1", port, false, request);
+                AccumulatingSink acc1;
+                auto sink1 = acc1.make();
+                auto r1 = co_await fetcher.fetch(
+                    io.get_executor(), "127.0.0.1", port, false, request, sink1);
                 outcome1 = r1.outcome;
                 idleAfterFirst = fetcher.idleConnectionCount();
 
                 request.target = "/second";
-                auto r2 = co_await fetcher.fetch(io.get_executor(), "127.0.0.1", port, false, request);
+                AccumulatingSink acc2;
+                auto sink2 = acc2.make();
+                auto r2 = co_await fetcher.fetch(
+                    io.get_executor(), "127.0.0.1", port, false, request, sink2);
                 outcome2 = r2.outcome;
 
                 io.stop();
@@ -351,10 +380,12 @@ int main() {
                 request.method = "GET";
                 request.target = "/secure";
                 request.headers = std::span<const HttpHeaderView>(headers);
+                AccumulatingSink acc;
+                auto sink = acc.make();
                 auto r = co_await fetcher.fetch(
-                    io.get_executor(), "127.0.0.1", port, /*https=*/true, request);
+                    io.get_executor(), "127.0.0.1", port, /*https=*/true, request, sink);
                 outcome = r.outcome;
-                body = std::move(r.response.body);
+                body = std::move(acc.body);
                 io.stop();
                 co_return;
             },

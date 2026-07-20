@@ -177,6 +177,81 @@ void appendDecimal(std::string& out, std::uint64_t value) {
     return buildResponseWire(status, Headers{}, {}, "MISS", std::nullopt);
 }
 
+// How the edge frames a streamed response body to the client.
+enum class ClientFraming : std::uint8_t {
+    kNoBody,   // no message body (HEAD keeps the origin Content-Length; 204/304 none)
+    kLength,   // exact Content-Length, streamed straight through
+    kChunked,  // unknown length re-encoded as Transfer-Encoding: chunked
+};
+
+// Wrap one body chunk in HTTP/1 chunked framing.
+[[nodiscard]] std::string chunkFrame(std::string_view chunk) {
+    std::string out;
+    std::array<char, 16> hex;
+    const auto [end, ec] =
+        std::to_chars(hex.data(), hex.data() + hex.size(), chunk.size(), 16);
+    (void)ec;
+    out.append(hex.data(), static_cast<std::size_t>(end - hex.data()));
+    out.append("\r\n");
+    out.append(chunk);
+    out.append("\r\n");
+    return out;
+}
+
+// Serialize just the response head for a streamed response: status line, curated
+// headers, the chosen framing header, Connection and X-Cache. No body follows;
+// the caller streams it (raw for kLength, chunk-framed for kChunked).
+[[nodiscard]] std::string buildStreamingHead(
+    std::uint16_t status,
+    const Headers& headers,
+    std::string_view xCache,
+    ClientFraming framing,
+    std::size_t contentLength,
+    bool keepAlive) {
+    std::string out;
+    out.append("HTTP/1.1 ");
+    appendDecimal(out, status);
+    out.push_back(' ');
+    if (const auto code = HttpStatusCode::tryFromValue(status)) {
+        out.append(httpReasonPhrase(*code));
+    }
+    out.append("\r\n");
+
+    for (const auto& [name, value] : headers) {
+        std::string lower(name);
+        for (auto& c : lower) {
+            c = toLowerAscii(c);
+        }
+        if (isConnectionOrFramingField(lower)) {
+            // For a bodyless response keep the origin's Content-Length (HEAD);
+            // otherwise the edge emits its own framing below.
+            if (framing == ClientFraming::kNoBody && lower == "content-length") {
+                // keep it
+            } else {
+                continue;
+            }
+        }
+        out.append(name);
+        out.append(": ");
+        out.append(value);
+        out.append("\r\n");
+    }
+
+    if (framing == ClientFraming::kLength) {
+        out.append("Content-Length: ");
+        appendDecimal(out, contentLength);
+        out.append("\r\n");
+    } else if (framing == ClientFraming::kChunked) {
+        out.append("Transfer-Encoding: chunked\r\n");
+    }
+    out.append(keepAlive ? "Connection: keep-alive\r\n" : "Connection: close\r\n");
+    out.append("X-Cache: ");
+    out.append(xCache);
+    out.append("\r\n");
+    out.append("\r\n");
+    return out;
+}
+
 // A plain-text response for the management API.
 [[nodiscard]] std::string buildAdminResponse(std::uint16_t status, std::string_view body) {
     std::string out;
@@ -258,7 +333,8 @@ void appendDecimal(std::string& out, std::uint64_t value) {
 EdgeServer::EdgeServer(const asio::ip::tcp::endpoint& endpoint, EdgeServerOptions options)
     : acceptor_(ioContext_, endpoint),
       cache_(options.cache),
-      fetcher_(options.fetch) {
+      fetcher_(options.fetch),
+      maxCacheableBytes_(options.maxCacheableBytes) {
     if (options.tls) {
         tlsContext_.emplace(asio::ssl::context::tls_server);
         tlsContext_->use_certificate_chain(
@@ -453,10 +529,12 @@ asio::awaitable<bool> EdgeServer::handleFramedRequest(
     const Http1ParsedRequest& parsed,
     std::string_view clientAddress,
     bool keepAlive) {
-    const auto writeAll = [&stream](std::string wire) -> asio::awaitable<void> {
-        co_await asio::async_write(
+    const auto writeAll = [&stream](std::string wire) -> asio::awaitable<bool> {
+        auto [ec, n] = co_await asio::async_write(
             stream, asio::buffer(wire.data(), wire.size()),
             asio::as_tuple(asio::use_awaitable));
+        (void)n;
+        co_return !ec;
     };
 
     // GET and HEAD take the cache path; other methods are proxied (pass-through).
@@ -546,21 +624,63 @@ asio::awaitable<bool> EdgeServer::handleFramedRequest(
             passRequest.target = target;
             passRequest.headers = passHeaders;
             passRequest.body = requestBody;
-            auto passFetch = co_await fetcher_.fetch(
+
+            // Stream the origin response straight through to the client (never
+            // cached). The response body is re-framed as chunked when its length
+            // is unknown.
+            std::uint16_t passStatus = 0;
+            bool passHeadSent = false;
+            bool passChunked = false;
+            bool passAborted = false;
+            ResponseSink passSink;
+            passSink.onHead = [&](const OriginResponseHead& head) -> asio::awaitable<bool> {
+                passStatus = head.status;
+                ClientFraming framing = ClientFraming::kNoBody;
+                if (head.hasBody) {
+                    framing = head.contentLength ? ClientFraming::kLength : ClientFraming::kChunked;
+                }
+                passChunked = framing == ClientFraming::kChunked;
+                if (!co_await writeAll(buildStreamingHead(
+                        head.status, head.headers, "BYPASS", framing,
+                        head.contentLength.value_or(0), keepAlive))) {
+                    passAborted = true;
+                    co_return false;
+                }
+                passHeadSent = true;
+                co_return true;
+            };
+            passSink.onBody = [&](std::string_view chunk) -> asio::awaitable<bool> {
+                const bool ok = passChunked ? co_await writeAll(chunkFrame(chunk))
+                                            : co_await writeAll(std::string(chunk));
+                if (!ok) {
+                    passAborted = true;
+                    co_return false;
+                }
+                co_return true;
+            };
+
+            auto passStream = co_await fetcher_.fetch(
                 ioContext_.get_executor(), origin->upstreamHost, origin->upstreamPort,
-                origin->https, passRequest);
-            if (passFetch.outcome != OriginFetchOutcome::kOk) {
+                origin->https, passRequest, passSink);
+            if (passAborted) {
+                co_return false;
+            }
+            if (passStream.outcome != OriginFetchOutcome::kOk) {
+                if (passHeadSent) {
+                    co_return false;  // partial response already sent
+                }
                 const std::uint16_t gatewayStatus =
-                    passFetch.outcome == OriginFetchOutcome::kTimeout ? 504 : 502;
+                    passStream.outcome == OriginFetchOutcome::kTimeout ? 504 : 502;
                 co_await writeAll(buildStatusWire(gatewayStatus));
                 co_return false;
             }
-            if (passFetch.response.status < 400) {
+            if (passChunked && !co_await writeAll("0\r\n\r\n")) {
+                co_return false;
+            }
+            // A successful unsafe method invalidates the cached GET for this URI.
+            if (passStatus < 400) {
                 cache_.purge(cacheKey("GET", frontHost, target));
             }
-            co_await writeAll(buildResponseWire(
-                passFetch.response.status, passFetch.response.headers,
-                passFetch.response.body, "BYPASS", std::nullopt, false, keepAlive));
             co_return keepAlive;
         }
 
@@ -574,9 +694,9 @@ asio::awaitable<bool> EdgeServer::handleFramedRequest(
             const auto age = entry.storedAt <= now
                 ? static_cast<std::uint64_t>(now - entry.storedAt)
                 : std::uint64_t{0};
-            co_await writeAll(buildResponseWire(
-                entry.status, entry.headers, entry.body, "HIT", age, isHead, keepAlive));
-            co_return keepAlive;
+            co_return co_await writeAll(buildResponseWire(
+                entry.status, entry.headers, entry.body, "HIT", age, isHead,
+                keepAlive)) && keepAlive;
         }
         // A stale entry may still be revalidated with the origin below.
         const std::shared_ptr<const CachedResponse> staleEntry =
@@ -633,89 +753,147 @@ asio::awaitable<bool> EdgeServer::handleFramedRequest(
         originRequest.method = request.method();  // GET or HEAD
         originRequest.target = target;
         originRequest.headers = forwardHeaders;
-        auto fetch = co_await fetcher_.fetch(
-            ioContext_.get_executor(), origin->upstreamHost, origin->upstreamPort,
-            origin->https, originRequest);
 
         // stale-if-error: a stale copy within its stale-if-error window is served
-        // when the origin cannot be reached, instead of a gateway error.
+        // when the origin cannot be reached (or answers 5xx), instead of an error.
         const auto serveStaleOnError = [&]() -> bool {
             return staleEntry != nullptr && staleEntry->staleIfError > 0 &&
                 now <= staleEntry->expiresAt +
                            static_cast<std::time_t>(staleEntry->staleIfError);
         };
-        const auto writeStale = [&]() -> asio::awaitable<void> {
+        const auto writeStale = [&]() -> asio::awaitable<bool> {
             const auto age = staleEntry->storedAt <= now
                 ? static_cast<std::uint64_t>(now - staleEntry->storedAt)
                 : std::uint64_t{0};
-            co_await writeAll(buildResponseWire(
+            co_return co_await writeAll(buildResponseWire(
                 staleEntry->status, staleEntry->headers, staleEntry->body, "STALE", age,
                 isHead, keepAlive));
         };
 
-        if (fetch.outcome != OriginFetchOutcome::kOk) {
-            if (serveStaleOnError()) {
-                co_await writeStale();
-                co_return keepAlive;
+        // Streaming sink: writes the client head then each body chunk as the
+        // origin responds, and tees a cacheable body into cacheBuffer. A 304
+        // (revalidation) or a stale-if-error-covered 5xx declines streaming so the
+        // stored body is served after the fetch instead.
+        std::uint16_t respStatus = 0;
+        Headers respHeaders;
+        bool headSent = false;
+        bool clientChunked = false;
+        bool clientAborted = false;
+        bool caching = false;
+        std::string cacheBuffer;
+        FreshnessDecision cacheDecision;
+
+        ResponseSink sink;
+        sink.onHead = [&](const OriginResponseHead& head) -> asio::awaitable<bool> {
+            respStatus = head.status;
+            respHeaders = head.headers;
+            if (staleEntry != nullptr && head.status == 304) {
+                co_return false;  // revalidation: serve the stored body below
             }
-            // A timeout is a gateway timeout; every other failure is a bad gateway.
+            if (head.status >= 500 && serveStaleOnError()) {
+                co_return false;  // stale-if-error: serve the stored body below
+            }
+            ClientFraming framing = ClientFraming::kNoBody;
+            if (head.hasBody) {
+                framing = head.contentLength ? ClientFraming::kLength : ClientFraming::kChunked;
+            }
+            clientChunked = framing == ClientFraming::kChunked;
+            if (!co_await writeAll(buildStreamingHead(
+                    head.status, head.headers, "MISS", framing,
+                    head.contentLength.value_or(0), keepAlive))) {
+                clientAborted = true;
+                co_return false;
+            }
+            headSent = true;
+            if (!isHead) {
+                cacheDecision =
+                    evaluateFreshness(buildFreshnessInput(head.status, head.headers, now));
+                caching = cacheDecision.cacheable;
+            }
+            co_return true;
+        };
+        sink.onBody = [&](std::string_view chunk) -> asio::awaitable<bool> {
+            if (caching) {
+                if (cacheBuffer.size() + chunk.size() > maxCacheableBytes_) {
+                    caching = false;  // too big to cache; keep streaming
+                    cacheBuffer.clear();
+                    cacheBuffer.shrink_to_fit();
+                } else {
+                    cacheBuffer.append(chunk);
+                }
+            }
+            const bool ok = clientChunked ? co_await writeAll(chunkFrame(chunk))
+                                          : co_await writeAll(std::string(chunk));
+            if (!ok) {
+                clientAborted = true;
+                co_return false;
+            }
+            co_return true;
+        };
+
+        auto fetchResult = co_await fetcher_.fetch(
+            ioContext_.get_executor(), origin->upstreamHost, origin->upstreamPort,
+            origin->https, originRequest, sink);
+
+        if (clientAborted) {
+            co_return false;  // the client went away mid-response
+        }
+        if (fetchResult.outcome != OriginFetchOutcome::kOk) {
+            if (headSent) {
+                co_return false;  // partial response already sent; close
+            }
+            if (serveStaleOnError()) {
+                co_return co_await writeStale() && keepAlive;
+            }
             const std::uint16_t gatewayStatus =
-                fetch.outcome == OriginFetchOutcome::kTimeout ? 504 : 502;
+                fetchResult.outcome == OriginFetchOutcome::kTimeout ? 504 : 502;
             co_await writeAll(buildStatusWire(gatewayStatus));
             co_return false;
         }
 
-        // A 5xx from the origin is also an error stale-if-error can paper over.
-        if (fetch.response.status >= 500 && serveStaleOnError()) {
-            co_await writeStale();
-            co_return keepAlive;
-        }
-
-        // 6a. A 304 confirms the stale entry is still good: refresh its freshness
-        // from the (merged) headers and serve the stored body -- no full transfer.
-        if (staleEntry && fetch.response.status == 304) {
-            Headers merged = mergeStoredHeaders(staleEntry->headers, fetch.response.headers);
-            const auto decision =
-                evaluateFreshness(buildFreshnessInput(staleEntry->status, merged, now));
-            auto refreshed = std::make_shared<CachedResponse>();
-            refreshed->status = staleEntry->status;
-            refreshed->body = staleEntry->body;
-            refreshed->storedAt = now;
-            refreshed->expiresAt = decision.cacheable ? decision.expiresAt : now;
-            refreshed->staleWhileRevalidate = decision.staleWhileRevalidate;
-            refreshed->staleIfError = decision.staleIfError;
-            refreshed->headers = std::move(merged);
-            if (decision.cacheable) {
-                cache_.store(key, refreshed);
-            } else {
-                cache_.purge(key);  // no longer has usable freshness
+        // The sink declined to stream (304 revalidation, or a stale-if-error 5xx):
+        // serve the stored body instead.
+        if (!headSent && staleEntry != nullptr) {
+            if (respStatus == 304) {
+                Headers merged = mergeStoredHeaders(staleEntry->headers, respHeaders);
+                const auto decision =
+                    evaluateFreshness(buildFreshnessInput(staleEntry->status, merged, now));
+                auto refreshed = std::make_shared<CachedResponse>();
+                refreshed->status = staleEntry->status;
+                refreshed->body = staleEntry->body;
+                refreshed->storedAt = now;
+                refreshed->expiresAt = decision.cacheable ? decision.expiresAt : now;
+                refreshed->staleWhileRevalidate = decision.staleWhileRevalidate;
+                refreshed->staleIfError = decision.staleIfError;
+                refreshed->headers = std::move(merged);
+                if (decision.cacheable) {
+                    cache_.store(key, refreshed);
+                } else {
+                    cache_.purge(key);  // no longer has usable freshness
+                }
+                co_return co_await writeAll(buildResponseWire(
+                    refreshed->status, refreshed->headers, refreshed->body, "REVALIDATED",
+                    std::uint64_t{0}, isHead, keepAlive)) && keepAlive;
             }
-            co_await writeAll(buildResponseWire(
-                refreshed->status, refreshed->headers, refreshed->body, "REVALIDATED",
-                std::uint64_t{0}, isHead, keepAlive));
-            co_return keepAlive;
+            co_return co_await writeStale() && keepAlive;  // 5xx covered by stale-if-error
         }
 
-        // 6b. A full response: store it if a shared cache is allowed to (replacing
-        // any stale entry under this key). A HEAD response has no body to cache.
-        const auto decision = evaluateFreshness(
-            buildFreshnessInput(fetch.response.status, fetch.response.headers, now));
-        if (!isHead && decision.cacheable) {
+        // A full response streamed successfully: finish the framing and commit the
+        // cache if the whole body was accumulated within the size cap.
+        if (clientChunked && !co_await writeAll("0\r\n\r\n")) {
+            co_return false;
+        }
+        if (caching) {
             auto entry = std::make_shared<CachedResponse>();
-            entry->status = fetch.response.status;
-            entry->headers = fetch.response.headers;
-            entry->body = fetch.response.body;
+            entry->status = respStatus;
+            entry->headers = std::move(respHeaders);
+            entry->body = std::move(cacheBuffer);
             entry->storedAt = now;
-            entry->expiresAt = decision.expiresAt;
-            entry->staleWhileRevalidate = decision.staleWhileRevalidate;
-            entry->staleIfError = decision.staleIfError;
+            entry->expiresAt = cacheDecision.expiresAt;
+            entry->staleWhileRevalidate = cacheDecision.staleWhileRevalidate;
+            entry->staleIfError = cacheDecision.staleIfError;
             cache_.store(key, std::move(entry));
         }
-
-        // 7. Serve the freshly fetched response.
-        co_await writeAll(buildResponseWire(
-            fetch.response.status, fetch.response.headers, fetch.response.body, "MISS",
-            std::nullopt, isHead, keepAlive));
         co_return keepAlive;
 }
 
