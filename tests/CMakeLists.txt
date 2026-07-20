@@ -70,6 +70,7 @@ add_executable(ruvia_unit_tests
     web/unit_json_object_fields.cpp
     http/unit_response_header_index_cache.cpp
     web/unit_file_response_helpers.cpp
+    web/unit_static_files.cpp
     web/unit_json_writer.cpp
     http2/unit_hpack.cpp
     http2/unit_http2_frame.cpp
