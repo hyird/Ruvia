@@ -172,47 +172,13 @@ endif()
 ruvia_install_target(ruvia-web web)
 
 # Install the always-available Web contracts without leaking opt-in feature
-# contracts into a feature-off package. Feature subtrees are installed below
-# together with the public API that makes them usable.
-ruvia_install_public_header_tree(web include/ruvia/web/detail
+# contracts into a feature-off package. The whole-tree install keeps every new
+# public header packaged by construction; feature subtrees are pruned here and
+# installed below together with the public API that makes them usable.
+ruvia_install_public_header_tree(web include/ruvia/web
     PATTERN "auth" EXCLUDE
     PATTERN "db" EXCLUDE
     PATTERN "redis" EXCLUDE)
-
-ruvia_install_public_headers(web
-    include/ruvia/web/App.h
-    include/ruvia/web/AppHook.h
-    include/ruvia/web/Dotenv.h
-    include/ruvia/web/Error.h
-    include/ruvia/web/RateLimitRule.h
-    include/ruvia/web/StaticFiles.h
-    include/ruvia/web/ConnInfo.h
-    include/ruvia/web/Context.h
-    include/ruvia/web/ContextRequest.h
-    include/ruvia/web/Controller.h
-    include/ruvia/web/Csrf.h
-    include/ruvia/web/ErrorHandlers.h
-    include/ruvia/web/Health.h
-    include/ruvia/web/ServerConfig.h
-    include/ruvia/web/Middleware.h
-    include/ruvia/web/Model.h
-    include/ruvia/web/ModelJson.h
-    include/ruvia/web/ModelObject.h
-    include/ruvia/web/ModelTypes.h
-    include/ruvia/web/MultipartReader.h
-    include/ruvia/web/Next.h
-    include/ruvia/web/RateLimit.h
-    include/ruvia/web/RequestFields.h
-    include/ruvia/web/SecurityHeaders.h
-    include/ruvia/web/Session.h
-    include/ruvia/web/ScopedOperation.h
-    include/ruvia/web/Streaming.h
-    include/ruvia/web/Validation.h
-    include/ruvia/web/ValidationTypes.h
-    include/ruvia/web/WebSocket.h
-    include/ruvia/web/WebWorker.h
-    include/ruvia/web/Router.h
-)
 
 if(RUVIA_ENABLE_MARIADB OR RUVIA_ENABLE_POSTGRESQL)
     ruvia_install_public_header_tree(web include/ruvia/web/db)
