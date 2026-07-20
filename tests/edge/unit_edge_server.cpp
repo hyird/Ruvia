@@ -128,11 +128,12 @@ private:
         // it can be driven stale, and long-lived (max-age=60) elsewhere.
         std::string response;
         if (request.find("If-None-Match: \"v1\"") != std::string::npos) {
+            // Revalidation refreshes the entry with a longer, stable freshness.
             notModified_.fetch_add(1);
             response =
                 "HTTP/1.1 304 Not Modified\r\n"
                 "ETag: \"v1\"\r\n"
-                "Cache-Control: max-age=1\r\n"
+                "Cache-Control: max-age=60\r\n"
                 "\r\n";
         } else if (request.find("GET /chunked ") != std::string::npos) {
             // An unknown-length (chunked) origin response.
@@ -704,16 +705,41 @@ int main() {
         ruvia::edge::EdgeServerOptions tlsOptions;
         tlsOptions.tls = ruvia::edge::EdgeTlsConfig{
             std::string(edge_test_tls::kCertPem), std::string(edge_test_tls::kKeyPem)};
-        EdgeServer tlsEdge(tcp::endpoint(tcp::v4(), 0), tlsOptions);
+        tlsOptions.adminEndpoint = tcp::endpoint(tcp::v4(), 0);
+        EdgeServer tlsEdge(tcp::endpoint(tcp::v4(), 0), std::move(tlsOptions));
         tlsEdge.start();
         tlsEdge.addOrigin("front.local",
                           OriginSettings{"127.0.0.1", origin.port(), false});
         const std::uint16_t tlsPort = tlsEdge.localEndpoint().port();
+        const std::uint16_t tlsAdmin = tlsEdge.localAdminEndpoint().value().port();
 
         const auto r = httpsGet(tlsPort, "front.local", "/page");
         check(statusOf(r) == 200, "TLS-terminated request served with 200");
         check(bodyOf(r) == "hello", "TLS request proxied to the origin");
+
+        // Rotate the certificate over the admin API; HTTPS keeps working.
+        const std::string pem =
+            std::string(edge_test_tls::kCertPem) + std::string(edge_test_tls::kKeyPem);
+        const auto rotate = httpRaw(
+            tlsAdmin, "PUT /tls HTTP/1.1\r\nHost: a\r\nContent-Length: " +
+                          std::to_string(pem.size()) + "\r\nConnection: close\r\n\r\n" + pem);
+        check(statusOf(rotate) == 200, "PUT /tls rotates the certificate");
+        const auto afterRotate = httpsGet(tlsPort, "front.local", "/page");
+        check(statusOf(afterRotate) == 200, "HTTPS still works after rotation");
+
+        // Invalid PEM is rejected.
+        const std::string junk = "not a certificate";
+        const auto bad = httpRaw(
+            tlsAdmin, "PUT /tls HTTP/1.1\r\nHost: a\r\nContent-Length: " +
+                          std::to_string(junk.size()) + "\r\nConnection: close\r\n\r\n" + junk);
+        check(statusOf(bad) == 400, "PUT /tls rejects invalid PEM");
         tlsEdge.stop();
+
+        // A plaintext edge has no certificate to rotate.
+        const auto onPlaintext = httpRaw(
+            adminPort, "PUT /tls HTTP/1.1\r\nHost: a\r\nContent-Length: " +
+                           std::to_string(pem.size()) + "\r\nConnection: close\r\n\r\n" + pem);
+        check(statusOf(onPlaintext) == 400, "PUT /tls fails when TLS is not enabled");
     }
 
     // Conditional revalidation: a short-lived entry goes stale, is revalidated

@@ -43,6 +43,16 @@ constexpr std::size_t kMaxRequestBytes = 1u * 1024u * 1024u;
 // How long a persistent client connection may sit idle awaiting its next request.
 constexpr std::chrono::seconds kKeepAliveIdleTimeout{60};
 
+// Build a server TLS context from PEM. Throws asio::system_error on invalid PEM.
+[[nodiscard]] std::shared_ptr<asio::ssl::context> buildServerTlsContext(
+    const EdgeTlsConfig& config) {
+    auto context = std::make_shared<asio::ssl::context>(asio::ssl::context::tls_server);
+    context->use_certificate_chain(asio::buffer(config.certificateChainPem));
+    context->use_private_key(
+        asio::buffer(config.privateKeyPem), asio::ssl::context::pem);
+    return context;
+}
+
 [[nodiscard]] char toLowerAscii(char c) noexcept {
     return (c >= 'A' && c <= 'Z') ? static_cast<char>(c - 'A' + 'a') : c;
 }
@@ -421,11 +431,7 @@ EdgeServer::EdgeServer(const asio::ip::tcp::endpoint& endpoint, EdgeServerOption
       maxCacheableBytes_(options.maxCacheableBytes),
       accessLog_(std::move(options.accessLog)) {
     if (options.tls) {
-        tlsContext_.emplace(asio::ssl::context::tls_server);
-        tlsContext_->use_certificate_chain(
-            asio::buffer(options.tls->certificateChainPem));
-        tlsContext_->use_private_key(
-            asio::buffer(options.tls->privateKeyPem), asio::ssl::context::pem);
+        tlsContext_.store(buildServerTlsContext(*options.tls));
     }
     if (options.adminEndpoint) {
         adminAcceptor_.emplace(ioContext_, *options.adminEndpoint);
@@ -477,6 +483,18 @@ bool EdgeServer::addOrigin(std::string frontHost, OriginSettings settings) {
 
 bool EdgeServer::removeOrigin(std::string_view frontHost) {
     return config_.removeOrigin(frontHost);
+}
+
+bool EdgeServer::setTlsCertificate(const EdgeTlsConfig& tls) {
+    if (tlsContext_.load() == nullptr) {
+        return false;  // TLS was not enabled at startup; the listener is plaintext
+    }
+    try {
+        tlsContext_.store(buildServerTlsContext(tls));
+        return true;
+    } catch (...) {
+        return false;  // invalid PEM
+    }
 }
 
 bool EdgeServer::purge(std::string_view frontHost, std::string_view target) {
@@ -544,7 +562,7 @@ asio::awaitable<void> EdgeServer::acceptLoop() {
             }
             continue;
         }
-        if (tlsContext_) {
+        if (tlsContext_.load() != nullptr) {
             asio::co_spawn(
                 ioContext_, handleTlsSession(std::move(socket)), asio::detached);
         } else {
@@ -555,7 +573,13 @@ asio::awaitable<void> EdgeServer::acceptLoop() {
 }
 
 asio::awaitable<void> EdgeServer::handleTlsSession(asio::ip::tcp::socket socket) {
-    asio::ssl::stream<asio::ip::tcp::socket> stream(std::move(socket), *tlsContext_);
+    // Pin the current context for this session's lifetime; a runtime rotation
+    // only affects connections accepted afterward.
+    const auto context = tlsContext_.load();
+    if (context == nullptr) {
+        co_return;
+    }
+    asio::ssl::stream<asio::ip::tcp::socket> stream(std::move(socket), *context);
     auto [ec] = co_await stream.async_handshake(
         asio::ssl::stream_base::server, asio::as_tuple(asio::use_awaitable));
     if (ec) {
@@ -1349,6 +1373,20 @@ asio::awaitable<void> EdgeServer::handleAdminSession(asio::ip::tcp::socket socke
             cache_.clear();
             status = 200;
             body = "cleared";
+        } else if (path == "/tls" && method == HttpKnownMethod::kPut) {
+            // Body is the PEM certificate chain followed by the private key; each
+            // loader reads its own section from the same buffer.
+            const std::string pem(parsed->wireBody());
+            if (pem.empty()) {
+                status = 400;
+                body = "missing certificate";
+            } else if (setTlsCertificate(EdgeTlsConfig{pem, pem})) {
+                status = 200;
+                body = "rotated";
+            } else {
+                status = 400;
+                body = "invalid certificate, or TLS not enabled";
+            }
         }
 
         co_await writeAll(buildAdminResponse(status, body));

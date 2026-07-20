@@ -1,7 +1,9 @@
 #pragma once
 
+#include <atomic>
 #include <cstdint>
 #include <functional>
+#include <memory>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -90,7 +92,8 @@ struct EdgeServerOptions final {
 //   DELETE /origins/<host>                            remove an origin
 //   POST   /purge?host=<host>&target=<path>           drop one cached entry
 //   DELETE /cache                                     drop every cached entry
-//   GET    /stats                                     cache entry count and bytes
+//   PUT    /tls        (body: cert chain PEM + key)   rotate the TLS certificate
+//   GET    /stats                                     cache and traffic metrics
 // It is unauthenticated and must be bound to a trusted interface only.
 //
 // The data listener speaks HTTP/1.1 and can terminate TLS (EdgeServerOptions::
@@ -125,6 +128,11 @@ public:
 
     // Remove a Host mapping. Returns true if a mapping was removed.
     bool removeOrigin(std::string_view frontHost);
+
+    // Replace the certificate/key used to terminate client TLS, taking effect for
+    // new connections. Returns false if TLS was not enabled at startup or the PEM
+    // is invalid. Thread-safe; callable while running.
+    bool setTlsCertificate(const EdgeTlsConfig& tls);
 
     // Drop the cached GET response for one Host+target. Returns true if an entry
     // was removed.
@@ -182,7 +190,9 @@ private:
 
     asio::io_context ioContext_;
     asio::ip::tcp::acceptor acceptor_;
-    std::optional<asio::ssl::context> tlsContext_;
+    // Server TLS context, swappable at runtime (null when TLS is disabled). A new
+    // connection loads the current one; in-flight sessions keep their own.
+    std::atomic<std::shared_ptr<asio::ssl::context>> tlsContext_;
     std::optional<asio::ip::tcp::acceptor> adminAcceptor_;
     // One origin fetch in progress for a cache key, with the requests waiting on
     // it (request coalescing / single-flight). The waiter timers are cancelled to
