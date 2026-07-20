@@ -103,18 +103,6 @@ struct AccessLogEntry final {
     std::size_t bytesToClient{0};
 };
 
-// Aggregate counters since start, reported by the /stats management endpoint.
-struct EdgeMetrics final {
-    std::uint64_t requests{0};
-    std::uint64_t hits{0};
-    std::uint64_t misses{0};
-    std::uint64_t revalidated{0};
-    std::uint64_t stale{0};
-    std::uint64_t bypass{0};
-    std::uint64_t errors{0};
-    std::uint64_t bytesToClient{0};
-};
-
 struct EdgeServerOptions final {
     EdgeCache::Limits cache{};
     OriginFetcher::Limits fetch{};
@@ -123,10 +111,6 @@ struct EdgeServerOptions final {
     std::size_t maxCacheableBytes{8u * 1024u * 1024u};
     // When set, the data listener terminates TLS with this certificate/key.
     std::optional<EdgeTlsConfig> tls{};
-    // When set, a separate management listener is bound to this endpoint exposing
-    // the runtime control API over HTTP (see the class comment). It is
-    // unauthenticated, so bind it to a trusted interface (e.g. loopback) only.
-    std::optional<asio::ip::tcp::endpoint> adminEndpoint{};
     // Invoked (on the event-loop thread) once per completed request. Optional.
     std::function<void(const AccessLogEntry&)> accessLog{};
 };
@@ -141,16 +125,9 @@ struct EdgeServerOptions final {
 // and purge/clearCache are safe to call at runtime from any thread while the
 // server is running -- the origin table is published copy-on-write and the cache
 // is mutex-guarded, so a request in flight never observes a half-applied change.
-//
-// An optional management listener (EdgeServerOptions::adminEndpoint) exposes the
-// same control plane over HTTP for operators and scripts:
-//   PUT    /origins/<host>?upstream=<host>&port=<n>   map/replace an origin
-//   DELETE /origins/<host>                            remove an origin
-//   POST   /purge?host=<host>&target=<path>           drop one cached entry
-//   DELETE /cache                                     drop every cached entry
-//   PUT    /tls        (body: cert chain PEM + key)   rotate the TLS certificate
-//   GET    /stats                                     cache and traffic metrics
-// It is unauthenticated and must be bound to a trusted interface only.
+// This is a library: the control plane is exposed only as these member functions,
+// so an embedding application wires up its own management surface (an HTTP admin
+// API, a config-file reload, health checks, load balancing) on top of them.
 //
 // The data listener speaks HTTP/1.1 and, when TLS is terminated (EdgeServerOptions
 // ::tls), negotiates HTTP/2 over ALPN -- an h2 client is served by the same cache
@@ -174,8 +151,6 @@ public:
     void join();
 
     [[nodiscard]] asio::ip::tcp::endpoint localEndpoint() const;
-    // The bound management endpoint, if an adminEndpoint was configured.
-    [[nodiscard]] std::optional<asio::ip::tcp::endpoint> localAdminEndpoint() const;
 
     // --- Control plane (thread-safe; callable while running) ---
 
@@ -235,14 +210,12 @@ private:
         std::string_view clientAddress,
         std::pmr::memory_resource* resource);
 
-    asio::awaitable<void> adminAcceptLoop();
-    asio::awaitable<void> handleAdminSession(asio::ip::tcp::socket socket);
 
     // Wake every request waiting on an in-flight fetch for `key` and drop the
     // entry (called when the leader's fetch finishes, however it ended).
     void wakeInFlight(const std::string& key);
 
-    // Count a completed request and emit its access-log entry.
+    // Emit the access-log entry for a completed request, if a callback is set.
     void recordRequest(const AccessLogEntry& entry);
 
     // Everything a background stale-while-revalidate refresh needs, owned so it
@@ -267,7 +240,6 @@ private:
     // Server TLS context, swappable at runtime (null when TLS is disabled). A new
     // connection loads the current one; in-flight sessions keep their own.
     std::atomic<std::shared_ptr<asio::ssl::context>> tlsContext_;
-    std::optional<asio::ip::tcp::acceptor> adminAcceptor_;
     // One origin fetch in progress for a cache key, with the requests waiting on
     // it (request coalescing / single-flight). The waiter timers are cancelled to
     // wake the followers when the leader's fetch completes.
@@ -281,7 +253,6 @@ private:
     std::size_t maxCacheableBytes_{8u * 1024u * 1024u};
     std::unordered_map<std::string, InFlightFetch> inFlight_;
     std::function<void(const AccessLogEntry&)> accessLog_;
-    EdgeMetrics metrics_;
     std::jthread worker_;
 };
 

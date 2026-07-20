@@ -477,14 +477,12 @@ int main() {
     origin.start();
 
     ruvia::edge::EdgeServerOptions options;
-    options.adminEndpoint = tcp::endpoint(tcp::v4(), 0);
     EdgeServer edge(tcp::endpoint(tcp::v4(), 0), options);
     edge.start();
     check(edge.addOrigin("front.local",
                          OriginSettings{"127.0.0.1", origin.port(), false}),
           "addOrigin maps the front host at runtime");
     const std::uint16_t edgePort = edge.localEndpoint().port();
-    const std::uint16_t adminPort = edge.localAdminEndpoint().value().port();
 
     // First request: a proxied cache miss reaches the origin.
     {
@@ -590,30 +588,17 @@ int main() {
               "the unsafe method invalidated the cached GET");
     }
 
-    // Management API: add an origin over HTTP, use it on the data port, read
-    // stats, then remove it -- the operator face of the dynamic config.
+    // Control plane: the origin table mutates at runtime through the member
+    // functions (the library exposes no built-in HTTP admin surface -- an
+    // embedding app builds one on top of these if it wants one).
     {
-        const std::string put =
-            "PUT /origins/admin.local?upstream=127.0.0.1&port=" +
-            std::to_string(origin.port()) +
-            " HTTP/1.1\r\nHost: admin\r\nConnection: close\r\n\r\n";
-        const auto putResp = httpRaw(adminPort, put);
-        check(statusOf(putResp) == 200, "admin PUT /origins adds a mapping");
-        check(contains(putResp, "created"), "admin reports the mapping was created");
-
+        check(edge.addOrigin("admin.local",
+                             OriginSettings{"127.0.0.1", origin.port(), false}),
+              "addOrigin maps a second host at runtime");
         const auto proxied = httpGet(edgePort, "admin.local", "/admin-page");
-        check(statusOf(proxied) == 200, "the admin-added origin proxies requests");
+        check(statusOf(proxied) == 200, "the newly added origin proxies requests");
 
-        const auto stats = httpRaw(
-            adminPort, "GET /stats HTTP/1.1\r\nHost: admin\r\nConnection: close\r\n\r\n");
-        check(statusOf(stats) == 200, "admin GET /stats works");
-        check(contains(stats, "entries="), "stats reports cache entries");
-
-        const auto del = httpRaw(
-            adminPort,
-            "DELETE /origins/admin.local HTTP/1.1\r\nHost: admin\r\nConnection: close\r\n\r\n");
-        check(statusOf(del) == 200, "admin DELETE /origins removes the mapping");
-
+        check(edge.removeOrigin("admin.local"), "removeOrigin drops the mapping");
         const auto gone = httpGet(edgePort, "admin.local", "/admin-page");
         check(statusOf(gone) == 502, "removed origin is no longer routable");
     }
@@ -716,13 +701,12 @@ int main() {
               "concurrent misses coalesced into a single origin fetch");
     }
 
-    // Observability: an access-log callback sees each request's cache result, and
-    // /stats reports the aggregate counters.
+    // Observability: the access-log callback sees each request's cache result,
+    // giving an embedding app the raw material to build metrics of its own.
     {
         std::mutex logMutex;
         std::vector<std::string> logResults;
         ruvia::edge::EdgeServerOptions obsOptions;
-        obsOptions.adminEndpoint = tcp::endpoint(tcp::v4(), 0);
         obsOptions.accessLog = [&](const ruvia::edge::AccessLogEntry& e) {
             std::lock_guard<std::mutex> guard(logMutex);
             logResults.emplace_back(e.cacheResult);
@@ -732,7 +716,6 @@ int main() {
         obsEdge.addOrigin("front.local",
                           OriginSettings{"127.0.0.1", origin.port(), false});
         const std::uint16_t obsPort = obsEdge.localEndpoint().port();
-        const std::uint16_t obsAdmin = obsEdge.localAdminEndpoint().value().port();
 
         (void)httpGet(obsPort, "front.local", "/page");  // MISS
         (void)httpGet(obsPort, "front.local", "/page");  // HIT
@@ -745,12 +728,6 @@ int main() {
             check(logResults.size() == 2 && logResults[1] == "HIT",
                   "second request logged as a HIT");
         }
-
-        const auto stats = httpRaw(
-            obsAdmin, "GET /stats HTTP/1.1\r\nHost: a\r\nConnection: close\r\n\r\n");
-        check(contains(stats, "requests=2"), "stats counts total requests");
-        check(contains(stats, "hits=1"), "stats counts cache hits");
-        check(contains(stats, "misses=1"), "stats counts cache misses");
         obsEdge.stop();
     }
 
@@ -760,41 +737,31 @@ int main() {
         ruvia::edge::EdgeServerOptions tlsOptions;
         tlsOptions.tls = ruvia::edge::EdgeTlsConfig{
             std::string(edge_test_tls::kCertPem), std::string(edge_test_tls::kKeyPem)};
-        tlsOptions.adminEndpoint = tcp::endpoint(tcp::v4(), 0);
         EdgeServer tlsEdge(tcp::endpoint(tcp::v4(), 0), std::move(tlsOptions));
         tlsEdge.start();
         tlsEdge.addOrigin("front.local",
                           OriginSettings{"127.0.0.1", origin.port(), false});
         const std::uint16_t tlsPort = tlsEdge.localEndpoint().port();
-        const std::uint16_t tlsAdmin = tlsEdge.localAdminEndpoint().value().port();
 
         const auto r = httpsGet(tlsPort, "front.local", "/page");
         check(statusOf(r) == 200, "TLS-terminated request served with 200");
         check(bodyOf(r) == "hello", "TLS request proxied to the origin");
 
-        // Rotate the certificate over the admin API; HTTPS keeps working.
-        const std::string pem =
-            std::string(edge_test_tls::kCertPem) + std::string(edge_test_tls::kKeyPem);
-        const auto rotate = httpRaw(
-            tlsAdmin, "PUT /tls HTTP/1.1\r\nHost: a\r\nContent-Length: " +
-                          std::to_string(pem.size()) + "\r\nConnection: close\r\n\r\n" + pem);
-        check(statusOf(rotate) == 200, "PUT /tls rotates the certificate");
+        // Rotate the certificate through the member API; HTTPS keeps working.
+        const ruvia::edge::EdgeTlsConfig fresh{
+            std::string(edge_test_tls::kCertPem), std::string(edge_test_tls::kKeyPem)};
+        check(tlsEdge.setTlsCertificate(fresh), "setTlsCertificate rotates the certificate");
         const auto afterRotate = httpsGet(tlsPort, "front.local", "/page");
         check(statusOf(afterRotate) == 200, "HTTPS still works after rotation");
 
         // Invalid PEM is rejected.
-        const std::string junk = "not a certificate";
-        const auto bad = httpRaw(
-            tlsAdmin, "PUT /tls HTTP/1.1\r\nHost: a\r\nContent-Length: " +
-                          std::to_string(junk.size()) + "\r\nConnection: close\r\n\r\n" + junk);
-        check(statusOf(bad) == 400, "PUT /tls rejects invalid PEM");
+        check(!tlsEdge.setTlsCertificate(ruvia::edge::EdgeTlsConfig{"not a cert", "not a key"}),
+              "setTlsCertificate rejects invalid PEM");
         tlsEdge.stop();
 
         // A plaintext edge has no certificate to rotate.
-        const auto onPlaintext = httpRaw(
-            adminPort, "PUT /tls HTTP/1.1\r\nHost: a\r\nContent-Length: " +
-                           std::to_string(pem.size()) + "\r\nConnection: close\r\n\r\n" + pem);
-        check(statusOf(onPlaintext) == 400, "PUT /tls fails when TLS is not enabled");
+        check(!edge.setTlsCertificate(fresh),
+              "setTlsCertificate fails when TLS is not enabled");
     }
 
     // HTTP/2: curl negotiates h2 over ALPN and the edge serves it end to end.
