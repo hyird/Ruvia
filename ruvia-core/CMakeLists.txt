@@ -51,6 +51,7 @@ ruvia_install_public_headers(core
     include/ruvia/core/Channel.h
     include/ruvia/core/OneShot.h
     include/ruvia/core/MoveOnlyFunction.h
+    include/ruvia/core/StopToken.h
     include/ruvia/core/TaskScope.h
     include/ruvia/core/Timer.h
     include/ruvia/core/EventLoopPool.h

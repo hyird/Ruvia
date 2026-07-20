@@ -184,7 +184,7 @@ co_await scope.join();
 
 - `spawn()` 只能在绑定 worker，子 Task 由 scope 持有，不 detached。
 - 首个子任务异常会请求协作停止；`join()` 等待全部子任务并重抛首个异常。
-- `requestStop()` 通过 `std::stop_token` 表达协作停止，不强制销毁仍被底层 callback 引用的帧。
+- `requestStop()` 通过轻量 `ruvia::StopToken` 表达协作停止，不强制销毁仍被底层 callback 引用的帧。
 - scope 有活动任务却析构会终止进程，强制调用方在拥有的 Context/WebSocket 销毁前 join。
 - TaskScope 不知道 HTTP、WebSocket 或 DB；transport 中断由 Web 层负责。
 

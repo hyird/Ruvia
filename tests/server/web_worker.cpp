@@ -132,7 +132,7 @@ int testGracefulDrain() {
                 std::memory_order_release);
             static_cast<void>(co_await ruvia::sleepFor(
                 context.worker(), std::chrono::milliseconds(50)));
-            sawStop.store(context.stopToken().stop_requested(),
+            sawStop.store(context.stopToken().stopRequested(),
                           std::memory_order_release);
             completed.set_value();
         });

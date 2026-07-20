@@ -128,10 +128,8 @@ jobs:
 
       - name: Install toolchain
         run: |
-          brew install ninja nghttp2 llvm
-          echo "CC=$(brew --prefix llvm)/bin/clang" >> "$GITHUB_ENV"
-          echo "CXX=$(brew --prefix llvm)/bin/clang++" >> "$GITHUB_ENV"
-          "$(brew --prefix llvm)/bin/clang++" --version
+          brew install ninja nghttp2
+          /usr/bin/c++ --version
 
       - name: Cache vcpkg
         uses: actions/cache@v5

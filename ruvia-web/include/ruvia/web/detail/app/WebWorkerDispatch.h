@@ -6,7 +6,6 @@
 #include <memory>
 #include <memory_resource>
 #include <mutex>
-#include <stop_token>
 
 #include "ruvia/web/WebWorker.h"
 
@@ -65,7 +64,7 @@ private:
     MoveOnlyFunction<void()> drained_;
     MoveOnlyFunction<void(std::exception_ptr)> failed_;
     mutable std::mutex submitMutex_;
-    std::stop_source stopSource_;
+    StopSource stopSource_;
     std::atomic_size_t outstanding_{0};
     std::atomic_uint64_t accepted_{0};
     std::atomic_uint64_t queueFull_{0};

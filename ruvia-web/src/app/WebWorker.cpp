@@ -23,7 +23,7 @@ WebWorkerContext::WebWorkerContext(
     detail::DbRegistry* databases,
     detail::RedisRegistry* redis,
     const detail::WorkerStateRegistry* workerStates,
-    std::stop_token stopToken) noexcept
+    StopToken stopToken) noexcept
     : worker_(std::move(worker)),
       resource_(detail::pmrResourceOrDefault(resource)),
       databases_(databases),
@@ -50,7 +50,7 @@ std::pmr::memory_resource* WebWorkerContext::resource() const noexcept {
     return resource_;
 }
 
-std::stop_token WebWorkerContext::stopToken() const noexcept {
+StopToken WebWorkerContext::stopToken() const noexcept {
     return stopToken_;
 }
 
@@ -192,13 +192,13 @@ PostResult WebWorkerDispatch::post(Task task) {
 void WebWorkerDispatch::close() noexcept {
     std::lock_guard lock(submitMutex_);
     accepting_ = false;
-    stopSource_.request_stop();
+    stopSource_.requestStop();
 }
 
 void WebWorkerDispatch::retire() noexcept {
     std::lock_guard lock(submitMutex_);
     accepting_ = false;
-    stopSource_.request_stop();
+    stopSource_.requestStop();
     if (outstanding_.load(std::memory_order_acquire) != 0) {
         std::terminate();
     }
@@ -258,7 +258,7 @@ void WebWorkerDispatch::start(Task task) {
 ruvia::Task<void> WebWorkerDispatch::run(Task task) {
     WebWorkerContext context(
         worker_, resource_, databases_, redis_, workerStates_,
-        stopSource_.get_token());
+        stopSource_.token());
     co_await task(context);
 }
 
