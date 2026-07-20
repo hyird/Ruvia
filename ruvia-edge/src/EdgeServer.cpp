@@ -341,6 +341,93 @@ enum class ClientFraming : std::uint8_t {
     return out;
 }
 
+[[nodiscard]] std::string_view trimSpace(std::string_view value) {
+    while (!value.empty() && (value.front() == ' ' || value.front() == '\t')) {
+        value.remove_prefix(1);
+    }
+    while (!value.empty() && (value.back() == ' ' || value.back() == '\t')) {
+        value.remove_suffix(1);
+    }
+    return value;
+}
+
+[[nodiscard]] bool parseWholeNumber(std::string_view value, std::size_t& out) {
+    if (value.empty()) {
+        return false;
+    }
+    const auto result = std::from_chars(value.data(), value.data() + value.size(), out);
+    return result.ec == std::errc{} && result.ptr == value.data() + value.size();
+}
+
+// A parsed single byte-range against a body of `length` bytes. `satisfiable`
+// carries a usable [start,end] (inclusive); `unsatisfiable` means the range lies
+// outside the body (416); neither set means "ignore the Range and serve fully".
+struct ByteRange final {
+    bool satisfiable{false};
+    bool unsatisfiable{false};
+    std::size_t start{0};
+    std::size_t end{0};
+};
+
+[[nodiscard]] ByteRange parseSingleByteRange(std::string_view header, std::size_t length) {
+    ByteRange range;
+    constexpr std::string_view prefix = "bytes=";
+    if (!header.starts_with(prefix)) {
+        return range;
+    }
+    std::string_view spec = trimSpace(header.substr(prefix.size()));
+    if (spec.find(',') != std::string_view::npos) {
+        return range;  // multi-range: not supported, serve full
+    }
+    const auto dash = spec.find('-');
+    if (dash == std::string_view::npos) {
+        return range;
+    }
+    const std::string_view startText = trimSpace(spec.substr(0, dash));
+    const std::string_view endText = trimSpace(spec.substr(dash + 1));
+
+    if (startText.empty()) {
+        // Suffix range: the last N bytes.
+        std::size_t suffix = 0;
+        if (!parseWholeNumber(endText, suffix)) {
+            return range;
+        }
+        if (suffix == 0 || length == 0) {
+            range.unsatisfiable = true;
+            return range;
+        }
+        range.start = suffix >= length ? 0 : length - suffix;
+        range.end = length - 1;
+        range.satisfiable = true;
+        return range;
+    }
+
+    std::size_t start = 0;
+    if (!parseWholeNumber(startText, start)) {
+        return range;
+    }
+    if (start >= length) {
+        range.unsatisfiable = true;
+        return range;
+    }
+    std::size_t end = length - 1;
+    if (!endText.empty()) {
+        if (!parseWholeNumber(endText, end)) {
+            return range;
+        }
+        if (end >= length) {
+            end = length - 1;
+        }
+        if (end < start) {
+            return range;  // malformed
+        }
+    }
+    range.start = start;
+    range.end = end;
+    range.satisfiable = true;
+    return range;
+}
+
 // Whether a response may be cached given its Vary header. Absent Vary or a Vary
 // of only Accept-Encoding is cacheable (the key already accounts for it); Vary:*
 // or any other varying field is not (this MVP keys only on Accept-Encoding).
@@ -864,18 +951,51 @@ asio::awaitable<bool> EdgeServer::handleFramedRequest(
             normalizeAcceptEncoding(request.header("accept-encoding").value_or(""));
         const std::string key = bareKey + "\n" + normAcceptEncoding;
 
-        // 4. Serve a fresh cache hit without touching the origin.
-        auto hit = cache_.lookup(key, now);
-        if (hit.status == CacheLookupStatus::kFresh) {
-            const auto& entry = *hit.entry;
+        // Serve a cached entry, honoring a single client byte-range (206, or 416
+        // when unsatisfiable) served from the full cached body.
+        const auto serveHit = [&](const CachedResponse& entry) -> asio::awaitable<bool> {
+            resultLabel = "HIT";
             const auto age = entry.storedAt <= now
                 ? static_cast<std::uint64_t>(now - entry.storedAt)
                 : std::uint64_t{0};
-            resultLabel = "HIT";
+            if (!isHead) {
+                if (const auto rangeHeader = request.header("range")) {
+                    const auto range = parseSingleByteRange(*rangeHeader, entry.body.size());
+                    if (range.unsatisfiable) {
+                        recordedStatus = 416;
+                        Headers headers;
+                        headers.emplace_back(
+                            "Content-Range", "bytes */" + std::to_string(entry.body.size()));
+                        co_return co_await writeAll(buildResponseWire(
+                                   416, headers, {}, "HIT", std::nullopt, false, keepAlive)) &&
+                            keepAlive;
+                    }
+                    if (range.satisfiable) {
+                        recordedStatus = 206;
+                        Headers headers = entry.headers;
+                        headers.emplace_back(
+                            "Content-Range",
+                            "bytes " + std::to_string(range.start) + "-" +
+                                std::to_string(range.end) + "/" +
+                                std::to_string(entry.body.size()));
+                        const std::string_view slice = std::string_view(entry.body).substr(
+                            range.start, range.end - range.start + 1);
+                        co_return co_await writeAll(buildResponseWire(
+                                   206, headers, slice, "HIT", age, false, keepAlive)) &&
+                            keepAlive;
+                    }
+                }
+            }
             recordedStatus = entry.status;
             co_return co_await writeAll(buildResponseWire(
-                entry.status, entry.headers, entry.body, "HIT", age, isHead,
-                keepAlive)) && keepAlive;
+                       entry.status, entry.headers, entry.body, "HIT", age, isHead, keepAlive)) &&
+                keepAlive;
+        };
+
+        // 4. Serve a fresh cache hit without touching the origin.
+        auto hit = cache_.lookup(key, now);
+        if (hit.status == CacheLookupStatus::kFresh) {
+            co_return co_await serveHit(*hit.entry);
         }
         // A stale entry may still be revalidated with the origin below.
         std::shared_ptr<const CachedResponse> staleEntry =
@@ -926,15 +1046,7 @@ asio::awaitable<bool> EdgeServer::handleFramedRequest(
                 now = std::time(nullptr);
                 auto woken = cache_.lookup(key, now);
                 if (woken.status == CacheLookupStatus::kFresh) {
-                    const auto& entry = *woken.entry;
-                    const auto age = entry.storedAt <= now
-                        ? static_cast<std::uint64_t>(now - entry.storedAt)
-                        : std::uint64_t{0};
-                    resultLabel = "HIT";
-                    recordedStatus = entry.status;
-                    co_return co_await writeAll(buildResponseWire(
-                        entry.status, entry.headers, entry.body, "HIT", age, isHead,
-                        keepAlive)) && keepAlive;
+                    co_return co_await serveHit(*woken.entry);
                 }
                 staleEntry =
                     woken.status == CacheLookupStatus::kStale ? woken.entry : nullptr;

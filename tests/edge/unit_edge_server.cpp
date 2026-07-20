@@ -268,6 +268,22 @@ std::string httpHead(std::uint16_t port, std::string_view host, std::string_view
     return httpRaw(port, request);
 }
 
+// GET with a Range header (same Accept-Encoding as httpGet, so it hits that variant).
+std::string httpGetRange(
+    std::uint16_t port,
+    std::string_view host,
+    std::string_view target,
+    std::string_view range) {
+    std::string request = "GET ";
+    request.append(target);
+    request.append(" HTTP/1.1\r\nHost: ");
+    request.append(host);
+    request.append("\r\nAccept-Encoding: gzip\r\nRange: ");
+    request.append(range);
+    request.append("\r\nConnection: close\r\n\r\n");
+    return httpRaw(port, request);
+}
+
 // GET with an explicit Accept-Encoding, to exercise variant caching.
 std::string httpGetEnc(
     std::uint16_t port,
@@ -486,6 +502,30 @@ int main() {
         check(contains(r, "X-Cache: HIT"), "second request is a cache HIT");
         check(contains(r, "Age: "), "cache hit carries an Age header");
         check(origin.hits() == 1, "cache hit did not contact the origin");
+    }
+
+    // Range: partial content served from the cached full body (no origin hit).
+    {
+        const int before = origin.hits();
+        const auto r1 = httpGetRange(edgePort, "front.local", "/page", "bytes=0-1");
+        check(statusOf(r1) == 206, "range request returns 206");
+        check(contains(r1, "Content-Range: bytes 0-1/5"),
+              "Content-Range reflects the served slice");
+        check(bodyOf(r1) == "he", "range body is the requested slice");
+
+        const auto r2 = httpGetRange(edgePort, "front.local", "/page", "bytes=2-");
+        check(statusOf(r2) == 206, "open-ended range returns 206");
+        check(bodyOf(r2) == "llo", "open-ended range body is correct");
+
+        const auto r3 = httpGetRange(edgePort, "front.local", "/page", "bytes=-2");
+        check(statusOf(r3) == 206, "suffix range returns 206");
+        check(bodyOf(r3) == "lo", "suffix range body is the last bytes");
+
+        const auto r4 = httpGetRange(edgePort, "front.local", "/page", "bytes=10-20");
+        check(statusOf(r4) == 416, "unsatisfiable range returns 416");
+        check(contains(r4, "Content-Range: bytes */5"),
+              "416 reports the full representation length");
+        check(origin.hits() == before, "ranges are served from cache");
     }
 
     // A bodyless non-GET method is proxied to the origin and bypasses the cache.
