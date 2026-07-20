@@ -95,6 +95,14 @@ constexpr std::size_t kTaskFrameCacheBinCount =
     return (bytes + kTaskFrameCacheGranularity - 1) & ~(kTaskFrameCacheGranularity - 1);
 }
 
+// True once this thread's cache has been destroyed. Coroutine frames can be
+// freed during thread or static teardown after ~TaskFrameCache has run; touching
+// the cache then would use an object whose lifetime has ended. This flag is
+// trivially destructible, so its storage outlives the cache's destructor and
+// stays readable through teardown. The allocate/free paths fall back to the raw
+// allocator once it is set.
+thread_local bool taskFrameCacheDestroyed = false;
+
 class TaskFrameCache final {
 public:
     TaskFrameCache() noexcept = default;
@@ -102,6 +110,7 @@ public:
     TaskFrameCache& operator=(const TaskFrameCache&) = delete;
 
     ~TaskFrameCache() {
+        taskFrameCacheDestroyed = true;
         for (void*& head : bins_) {
             while (head != nullptr) {
                 void* next = *static_cast<void**>(head);
@@ -147,7 +156,7 @@ thread_local TaskFrameCache taskFrameCache;
 
 void* taskFrameAllocate(std::size_t bytes) {
     const std::size_t classBytes = taskFrameClassBytes(bytes == 0 ? 1 : bytes);
-    if (classBytes <= kTaskFrameCacheMaxBlockBytes) {
+    if (!taskFrameCacheDestroyed && classBytes <= kTaskFrameCacheMaxBlockBytes) {
         if (void* cached = taskFrameCache.takeBlock(classBytes)) {
             tsanAllocatorAcquire(cached);
             return cached;
@@ -169,7 +178,7 @@ void taskFrameDeallocate(void* pointer) noexcept {
 void taskFrameDeallocateSized(void* pointer, std::size_t bytes) noexcept {
     tsanAllocatorRelease(pointer);
     const std::size_t classBytes = taskFrameClassBytes(bytes == 0 ? 1 : bytes);
-    if (classBytes <= kTaskFrameCacheMaxBlockBytes
+    if (!taskFrameCacheDestroyed && classBytes <= kTaskFrameCacheMaxBlockBytes
         && taskFrameCache.storeBlock(pointer, classBytes)) {
         return;
     }
