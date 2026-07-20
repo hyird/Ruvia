@@ -147,6 +147,23 @@ private:
                 "Cache-Control: max-age=60\r\n"
                 "\r\n"
                 "5\r\nhello\r\n6\r\n world\r\n0\r\n\r\n";
+        } else if (request.find("GET /bigchunk ") != std::string::npos) {
+            // A chunked body far larger than the HTTP/2 flow-control window
+            // (65535 bytes), so streaming it exercises window exhaustion, the
+            // deferred-suffix drain, and WINDOW_UPDATE-driven resumption.
+            hits_.fetch_add(1);
+            response =
+                "HTTP/1.1 200 OK\r\n"
+                "Content-Type: application/octet-stream\r\n"
+                "Transfer-Encoding: chunked\r\n"
+                "Cache-Control: max-age=60\r\n"
+                "\r\n";
+            for (int i = 0; i < 40; ++i) {  // 40 x 5000 = 200000 bytes
+                response += "1388\r\n";     // 0x1388 == 5000
+                response += std::string(5000, 'A');
+                response += "\r\n";
+            }
+            response += "0\r\n\r\n";
         } else if (request.find("GET /vary ") != std::string::npos) {
             // Varies on Accept-Encoding: the edge caches a variant per encoding.
             hits_.fetch_add(1);
@@ -806,7 +823,8 @@ int main() {
         std::filesystem::remove_all(diskDir, ec);
     }
 
-    // HTTP/2: curl negotiates h2 over ALPN and the edge serves it end to end.
+    // HTTP/2: ALPN negotiation, streamed responses, flow control across a body
+    // larger than the window, and true multiplexing of concurrent streams.
     {
         ruvia::edge::EdgeServerOptions h2Options;
         h2Options.tls = ruvia::edge::EdgeTlsConfig{
@@ -815,17 +833,48 @@ int main() {
         h2Edge.start();
         h2Edge.addOrigin("front.local",
                          OriginSettings{"127.0.0.1", origin.port(), false});
+        // h2load addresses the edge by IP, so map that authority to the origin too.
+        h2Edge.addOrigin("127.0.0.1",
+                         OriginSettings{"127.0.0.1", origin.port(), false});
         const std::uint16_t h2Port = h2Edge.localEndpoint().port();
         const std::string resolve =
             " --resolve front.local:" + std::to_string(h2Port) + ":127.0.0.1 ";
-        const std::string url = "https://front.local:" + std::to_string(h2Port) + "/page";
+        const std::string base = "https://front.local:" + std::to_string(h2Port);
+
+        // 1. Basic request served over an ALPN-negotiated h2 connection.
         const std::string got = runShell(
             "curl --http2 -sk -o /tmp/edge_h2_body -w '%{http_version} %{http_code}'" +
-            resolve + url + " 2>/dev/null");
+            resolve + base + "/page 2>/dev/null");
         check(got == "2 200",
               (std::string("h2 request served over ALPN (got: '") + got + "')").c_str());
         check(runShell("cat /tmp/edge_h2_body 2>/dev/null") == "hello",
               "h2 response body proxied from the origin");
+
+        // 2. A chunked (unknown-length) origin response is streamed over h2.
+        const std::string chunked = runShell(
+            "curl --http2 -sk -w '%{http_version} %{http_code}' -o /tmp/edge_h2_chunked" +
+            resolve + base + "/chunked 2>/dev/null");
+        check(chunked == "2 200", "h2 streamed a chunked origin response");
+        check(runShell("cat /tmp/edge_h2_chunked 2>/dev/null") == "hello world",
+              "h2 streamed body reassembles to the origin content");
+
+        // 3. A body far larger than the 65535-byte flow-control window streams in
+        //    full, exercising window exhaustion and WINDOW_UPDATE-driven resume.
+        const std::string bigCode = runShell(
+            "curl --http2 -sk -w '%{http_code}' -o /tmp/edge_h2_big" +
+            resolve + base + "/bigchunk 2>/dev/null");
+        check(bigCode == "200", "h2 large streamed response completed");
+        check(runShell("wc -c < /tmp/edge_h2_big 2>/dev/null | tr -d ' \\n'") == "200000",
+              "h2 delivered the full flow-controlled body");
+
+        // 4. True multiplexing: many concurrent streams on one connection all
+        //    complete (no head-of-line blocking, no deadlock, ASan-clean).
+        const std::string ip = "https://127.0.0.1:" + std::to_string(h2Port);
+        const std::string mux = runShell(
+            "h2load -n16 -c1 -m8 " + ip +
+            "/bigchunk 2>/dev/null | grep -oE '[0-9]+ succeeded' | tr -d '\\n'");
+        check(mux == "16 succeeded",
+              (std::string("16 concurrent h2 streams all succeeded (got: '") + mux + "')").c_str());
         h2Edge.stop();
     }
 

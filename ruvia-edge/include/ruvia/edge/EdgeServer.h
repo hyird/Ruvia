@@ -207,17 +207,11 @@ private:
         const Http1ParsedRequest& parsed,
         std::string_view clientAddress,
         bool keepAlive);
-    // Drive an HTTP/2 connection over `stream`: dispatch each completed stream to
-    // the serve core with an HTTP/2 response writer. Streams are served serially.
+    // Drive an HTTP/2 connection over `stream`: each completed request runs in its
+    // own handler coroutine (true multiplexing), sharing the connection and a
+    // single writer coroutine; streamed responses are written incrementally.
     template <typename Stream>
     asio::awaitable<void> handleHttp2Session(Stream stream, std::string clientAddress);
-    asio::awaitable<void> serveHttp2Stream(
-        detail::Http2Connection& connection,
-        std::uint32_t streamId,
-        detail::Http2StreamState& streamState,
-        std::string requestBody,
-        std::string_view clientAddress,
-        std::pmr::memory_resource* resource);
 
 
     // Wake every request waiting on an in-flight fetch for `key` and drop the
