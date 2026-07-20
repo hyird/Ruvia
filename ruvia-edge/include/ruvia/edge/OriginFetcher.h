@@ -104,14 +104,19 @@ public:
         std::chrono::milliseconds idleTimeout{15000};
         // Maximum idle connections kept per origin host:port.
         std::size_t maxIdlePerHost{8};
+        // Verify the origin's TLS certificate chain against the system trust store
+        // and check its host name. Disable only for trusted/self-signed upstreams.
+        bool verifyOriginCertificate{true};
     };
 
     explicit OriginFetcher(Limits limits)
         : limits_(limits), originTlsContext_(asio::ssl::context::tls_client) {
-        // MVP: origin certificates are not verified, so a self-signed origin
-        // works out of the box. A production edge should verify the upstream.
-        originTlsContext_.set_verify_mode(asio::ssl::verify_none);
-        originTlsContext_.set_default_verify_paths();
+        if (limits_.verifyOriginCertificate) {
+            originTlsContext_.set_verify_mode(asio::ssl::verify_peer);
+            originTlsContext_.set_default_verify_paths();
+        } else {
+            originTlsContext_.set_verify_mode(asio::ssl::verify_none);
+        }
     }
 
     OriginFetcher(const OriginFetcher&) = delete;

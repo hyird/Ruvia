@@ -399,6 +399,10 @@ asio::awaitable<StreamOutcome> OriginFetcher::fetch(
 
         asio::ssl::stream<asio::ip::tcp::socket> tls(std::move(tcpSocket), originTlsContext_);
         const std::string hostString(host);
+        if (limits_.verifyOriginCertificate) {
+            std::error_code verifyError;
+            tls.set_verify_callback(asio::ssl::host_name_verification(hostString), verifyError);
+        }
         SSL_set_tlsext_host_name(tls.native_handle(), hostString.c_str());
 
         deadline.expires_after(limits_.connectTimeout);

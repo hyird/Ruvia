@@ -323,77 +323,93 @@ int main() {
         check(connectionsAccepted == 1, "second fetch reused the pooled connection");
     }
 
-    // TLS origin: the fetch handshakes and reads the response over an encrypted
-    // connection.
+    // TLS origin: fetch over an encrypted connection. Run once with verification
+    // off (a self-signed origin is accepted and the body decoded) and once with
+    // verification on (the self-signed / host-mismatched origin is rejected).
     {
-        asio::io_context io;
-        tcp::acceptor acceptor(io, tcp::endpoint(tcp::v4(), 0));
-        const std::uint16_t port = acceptor.local_endpoint().port();
+        struct TlsFetchResult {
+            OriginFetchOutcome outcome{OriginFetchOutcome::kConnectFailed};
+            std::string body;
+        };
+        const auto runTlsFetch = [](bool verify) -> TlsFetchResult {
+            asio::io_context io;
+            tcp::acceptor acceptor(io, tcp::endpoint(tcp::v4(), 0));
+            const std::uint16_t port = acceptor.local_endpoint().port();
 
-        asio::ssl::context serverContext(asio::ssl::context::tls_server);
-        serverContext.use_certificate_chain(asio::buffer(edge_test_tls::kCertPem));
-        serverContext.use_private_key(
-            asio::buffer(edge_test_tls::kKeyPem), asio::ssl::context::pem);
+            asio::ssl::context serverContext(asio::ssl::context::tls_server);
+            serverContext.use_certificate_chain(asio::buffer(edge_test_tls::kCertPem));
+            serverContext.use_private_key(
+                asio::buffer(edge_test_tls::kKeyPem), asio::ssl::context::pem);
 
-        asio::co_spawn(
-            io,
-            [&]() -> asio::awaitable<void> {
-                auto [aec, socket] =
-                    co_await acceptor.async_accept(asio::as_tuple(asio::use_awaitable));
-                if (aec) {
-                    co_return;
-                }
-                asio::ssl::stream<tcp::socket> tls(std::move(socket), serverContext);
-                auto [hec] = co_await tls.async_handshake(
-                    asio::ssl::stream_base::server, asio::as_tuple(asio::use_awaitable));
-                if (hec) {
-                    co_return;
-                }
-                std::string request;
-                char buffer[1024];
-                while (request.find("\r\n\r\n") == std::string::npos) {
-                    auto [ec, n] = co_await tls.async_read_some(
-                        asio::buffer(buffer), asio::as_tuple(asio::use_awaitable));
-                    if (n > 0) {
-                        request.append(buffer, n);
-                    }
-                    if (ec) {
+            asio::co_spawn(
+                io,
+                [&]() -> asio::awaitable<void> {
+                    auto [aec, socket] =
+                        co_await acceptor.async_accept(asio::as_tuple(asio::use_awaitable));
+                    if (aec) {
                         co_return;
                     }
-                }
-                static constexpr std::string_view kResponse =
-                    "HTTP/1.1 200 OK\r\nContent-Length: 6\r\nConnection: close\r\n\r\nsecure";
-                co_await asio::async_write(
-                    tls, asio::buffer(kResponse), asio::as_tuple(asio::use_awaitable));
-                co_return;
-            },
-            asio::detached);
+                    asio::ssl::stream<tcp::socket> tls(std::move(socket), serverContext);
+                    auto [hec] = co_await tls.async_handshake(
+                        asio::ssl::stream_base::server, asio::as_tuple(asio::use_awaitable));
+                    if (hec) {
+                        co_return;  // client rejected the certificate
+                    }
+                    std::string request;
+                    char buffer[1024];
+                    while (request.find("\r\n\r\n") == std::string::npos) {
+                        auto [ec, n] = co_await tls.async_read_some(
+                            asio::buffer(buffer), asio::as_tuple(asio::use_awaitable));
+                        if (n > 0) {
+                            request.append(buffer, n);
+                        }
+                        if (ec) {
+                            co_return;
+                        }
+                    }
+                    static constexpr std::string_view kResponse =
+                        "HTTP/1.1 200 OK\r\nContent-Length: 6\r\nConnection: close\r\n\r\nsecure";
+                    co_await asio::async_write(
+                        tls, asio::buffer(kResponse), asio::as_tuple(asio::use_awaitable));
+                    co_return;
+                },
+                asio::detached);
 
-        OriginFetchOutcome outcome = OriginFetchOutcome::kConnectFailed;
-        std::string body;
-        asio::co_spawn(
-            io,
-            [&]() -> asio::awaitable<void> {
-                OriginFetcher fetcher(OriginFetcher::Limits{});
-                const HttpHeaderView headers[] = {HttpHeaderView("accept", "*/*")};
-                OriginRequest request;
-                request.method = "GET";
-                request.target = "/secure";
-                request.headers = std::span<const HttpHeaderView>(headers);
-                AccumulatingSink acc;
-                auto sink = acc.make();
-                auto r = co_await fetcher.fetch(
-                    io.get_executor(), "127.0.0.1", port, /*https=*/true, request, sink);
-                outcome = r.outcome;
-                body = std::move(acc.body);
-                io.stop();
-                co_return;
-            },
-            asio::detached);
+            TlsFetchResult out;
+            asio::co_spawn(
+                io,
+                [&]() -> asio::awaitable<void> {
+                    OriginFetcher::Limits limits;
+                    limits.verifyOriginCertificate = verify;
+                    OriginFetcher fetcher(limits);
+                    const HttpHeaderView headers[] = {HttpHeaderView("accept", "*/*")};
+                    OriginRequest request;
+                    request.method = "GET";
+                    request.target = "/secure";
+                    request.headers = std::span<const HttpHeaderView>(headers);
+                    AccumulatingSink acc;
+                    auto sink = acc.make();
+                    auto r = co_await fetcher.fetch(
+                        io.get_executor(), "127.0.0.1", port, /*https=*/true, request, sink);
+                    out.outcome = r.outcome;
+                    out.body = std::move(acc.body);
+                    io.stop();
+                    co_return;
+                },
+                asio::detached);
 
-        io.run();
-        check(outcome == OriginFetchOutcome::kOk, "https origin fetch succeeds over TLS");
-        check(body == "secure", "https origin body decoded over TLS");
+            io.run();
+            return out;
+        };
+
+        const auto trusting = runTlsFetch(/*verify=*/false);
+        check(trusting.outcome == OriginFetchOutcome::kOk,
+              "https origin fetch succeeds with verification off");
+        check(trusting.body == "secure", "https origin body decoded over TLS");
+
+        const auto verifying = runTlsFetch(/*verify=*/true);
+        check(verifying.outcome == OriginFetchOutcome::kConnectFailed,
+              "certificate verification rejects the untrusted origin");
     }
 
     if (failures == 0) {
