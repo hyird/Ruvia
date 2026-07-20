@@ -23,6 +23,7 @@
 #include <asio/io_context.hpp>
 #include <asio/ip/tcp.hpp>
 #include <asio/ssl.hpp>
+#include <asio/steady_timer.hpp>
 #include <asio/use_awaitable.hpp>
 #include <asio/write.hpp>
 
@@ -143,6 +144,19 @@ private:
                 "Cache-Control: max-age=60\r\n"
                 "\r\n"
                 "5\r\nhello\r\n6\r\n world\r\n0\r\n\r\n";
+        } else if (request.find("GET /slow ") != std::string::npos) {
+            // A slow response, so concurrent requests overlap in flight.
+            hits_.fetch_add(1);
+            asio::steady_timer delay(io_);
+            delay.expires_after(std::chrono::milliseconds(300));
+            co_await delay.async_wait(asio::as_tuple(asio::use_awaitable));
+            response =
+                "HTTP/1.1 200 OK\r\n"
+                "Content-Type: text/plain\r\n"
+                "Content-Length: 5\r\n"
+                "Cache-Control: max-age=60\r\n"
+                "\r\n"
+                "hello";
         } else {
             hits_.fetch_add(1);
             const bool shortLived = request.find("GET /rev ") != std::string::npos ||
@@ -526,6 +540,28 @@ int main() {
         const auto r2 = httpGet(edgePort, "front.local", "/chunked");
         check(contains(r2, "X-Cache: HIT"), "chunked response was cached");
         check(bodyOf(r2) == "hello world", "cached body served buffered on the hit");
+    }
+
+    // Request coalescing: many concurrent misses for the same (slow) origin key
+    // collapse into a single origin fetch, and every client still gets served.
+    {
+        const int before = origin.hits();
+        constexpr int kClients = 5;
+        std::vector<std::thread> clients;
+        std::vector<std::string> responses(kClients);
+        for (int i = 0; i < kClients; ++i) {
+            clients.emplace_back(
+                [&, i] { responses[i] = httpGet(edgePort, "front.local", "/slow"); });
+        }
+        for (auto& t : clients) {
+            t.join();
+        }
+        for (const auto& r : responses) {
+            check(statusOf(r) == 200, "coalesced client received 200");
+            check(bodyOf(r) == "hello", "coalesced client received the body");
+        }
+        check(origin.hits() == before + 1,
+              "concurrent misses coalesced into a single origin fetch");
     }
 
     // Client-side TLS termination: a separate TLS edge in front of the same

@@ -402,6 +402,17 @@ void EdgeServer::clearCache() {
     cache_.clear();
 }
 
+void EdgeServer::wakeInFlight(const std::string& key) {
+    const auto it = inFlight_.find(key);
+    if (it == inFlight_.end()) {
+        return;
+    }
+    for (auto* waiter : it->second.waiters) {
+        waiter->cancel();
+    }
+    inFlight_.erase(it);
+}
+
 std::string EdgeServer::cacheKey(
     std::string_view method,
     std::string_view frontHost,
@@ -684,7 +695,7 @@ asio::awaitable<bool> EdgeServer::handleFramedRequest(
             co_return keepAlive;
         }
 
-        const std::time_t now = std::time(nullptr);
+        std::time_t now = std::time(nullptr);
         const std::string key = cacheKey("GET", frontHost, target);
 
         // 4. Serve a fresh cache hit without touching the origin.
@@ -699,8 +710,50 @@ asio::awaitable<bool> EdgeServer::handleFramedRequest(
                 keepAlive)) && keepAlive;
         }
         // A stale entry may still be revalidated with the origin below.
-        const std::shared_ptr<const CachedResponse> staleEntry =
+        std::shared_ptr<const CachedResponse> staleEntry =
             hit.status == CacheLookupStatus::kStale ? hit.entry : nullptr;
+
+        // Request coalescing (GET only): if a fetch for this key is already in
+        // flight, wait for it and re-check the cache instead of sending the origin
+        // a duplicate request. Whoever finds no in-flight fetch becomes the leader
+        // and registers one; leaderGuard wakes the followers when it finishes.
+        bool becameLeader = false;
+        if (isGet) {
+            for (;;) {
+                if (inFlight_.find(key) == inFlight_.end()) {
+                    inFlight_.try_emplace(key);
+                    becameLeader = true;
+                    break;
+                }
+                asio::steady_timer waitTimer(ioContext_);
+                waitTimer.expires_at((std::chrono::steady_clock::time_point::max)());
+                inFlight_[key].waiters.push_back(&waitTimer);
+                co_await waitTimer.async_wait(asio::as_tuple(asio::use_awaitable));
+                now = std::time(nullptr);
+                auto woken = cache_.lookup(key, now);
+                if (woken.status == CacheLookupStatus::kFresh) {
+                    const auto& entry = *woken.entry;
+                    const auto age = entry.storedAt <= now
+                        ? static_cast<std::uint64_t>(now - entry.storedAt)
+                        : std::uint64_t{0};
+                    co_return co_await writeAll(buildResponseWire(
+                        entry.status, entry.headers, entry.body, "HIT", age, isHead,
+                        keepAlive)) && keepAlive;
+                }
+                staleEntry =
+                    woken.status == CacheLookupStatus::kStale ? woken.entry : nullptr;
+            }
+        }
+        struct LeaderGuard final {
+            EdgeServer* self;
+            const std::string* key;
+            bool active;
+            ~LeaderGuard() {
+                if (active) {
+                    self->wakeInFlight(*key);
+                }
+            }
+        } leaderGuard{this, &key, becameLeader};
 
         // 5. Miss (or stale): fetch from the origin. Forward the client's request
         // headers minus hop-by-hop fields, Host (regenerated for the upstream),

@@ -5,11 +5,14 @@
 #include <string>
 #include <string_view>
 #include <thread>
+#include <unordered_map>
+#include <vector>
 
 #include <asio/awaitable.hpp>
 #include <asio/io_context.hpp>
 #include <asio/ip/tcp.hpp>
 #include <asio/ssl.hpp>
+#include <asio/steady_timer.hpp>
 
 #include "ruvia/edge/EdgeCache.h"
 #include "ruvia/edge/EdgeConfig.h"
@@ -124,14 +127,26 @@ private:
     asio::awaitable<void> adminAcceptLoop();
     asio::awaitable<void> handleAdminSession(asio::ip::tcp::socket socket);
 
+    // Wake every request waiting on an in-flight fetch for `key` and drop the
+    // entry (called when the leader's fetch finishes, however it ended).
+    void wakeInFlight(const std::string& key);
+
     asio::io_context ioContext_;
     asio::ip::tcp::acceptor acceptor_;
     std::optional<asio::ssl::context> tlsContext_;
     std::optional<asio::ip::tcp::acceptor> adminAcceptor_;
+    // One origin fetch in progress for a cache key, with the requests waiting on
+    // it (request coalescing / single-flight). The waiter timers are cancelled to
+    // wake the followers when the leader's fetch completes.
+    struct InFlightFetch final {
+        std::vector<asio::steady_timer*> waiters;
+    };
+
     EdgeConfig config_;
     EdgeCache cache_;
     OriginFetcher fetcher_;
     std::size_t maxCacheableBytes_{8u * 1024u * 1024u};
+    std::unordered_map<std::string, InFlightFetch> inFlight_;
     std::jthread worker_;
 };
 
