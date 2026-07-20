@@ -78,7 +78,7 @@ class EventLoopStopListener final : public detail::WorkerShutdownListener {
 public:
     EventLoopStopListener(
         WorkerHandle worker,
-        std::move_only_function<void()> callback)
+        MoveOnlyFunction<void()> callback)
         : worker_(std::move(worker)), callback_(std::move(callback)) {}
 
     void workerStopping() noexcept override {
@@ -108,7 +108,7 @@ public:
 
 private:
     WorkerHandle worker_;
-    std::move_only_function<void()> callback_;
+    MoveOnlyFunction<void()> callback_;
 };
 
 }
@@ -219,7 +219,7 @@ WorkerHandle EventLoop::handle() const noexcept {
 }
 
 EventLoopStopRegistration EventLoop::registerStopCallback(
-    std::move_only_function<void()> callback) const {
+    MoveOnlyFunction<void()> callback) const {
     if (!state_) {
         throw std::logic_error("cannot register a stop callback on an invalid event loop");
     }

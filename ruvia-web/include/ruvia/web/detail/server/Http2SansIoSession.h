@@ -653,7 +653,7 @@ Task<void> runHttp2SansIoSession(
         const auto markBufferedBodyCopied = [&](std::uint32_t streamId) {
             const auto copied =
                 std::span(copiedBodyStreams).first(copiedBodyStreamCount);
-            if (!std::ranges::contains(copied, streamId)) {
+            if (std::ranges::find(copied, streamId) == copied.end()) {
                 if (copiedBodyStreamCount == copiedBodyStreams.size()) {
                     return false;
                 }

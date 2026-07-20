@@ -57,7 +57,7 @@ jwtParseJsonNumericDate(std::string_view value) {
         }
     }
 
-    long double fractional = 0;
+    double fractional = 0;
     const auto [fractionalPtr, fractionalEc] = std::from_chars(
         value.data(), value.data() + value.size(), fractional);
     if (fractionalEc != std::errc{} || !std::isfinite(fractional)) {

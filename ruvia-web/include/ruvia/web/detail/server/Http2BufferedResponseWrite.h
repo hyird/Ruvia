@@ -5,7 +5,6 @@
 #include <optional>
 #include <string_view>
 #include <type_traits>
-#include <variant>
 
 #include "ruvia/core/detail/WorkerSignal.h"
 
@@ -119,15 +118,16 @@ public:
 
     [[nodiscard]] constexpr const Http2BufferedResponseWriteCompleted*
     completed() const & noexcept {
-        return std::get_if<Http2BufferedResponseWriteCompleted>(&value_);
+        return state_ == State::kCompleted ? &value_.completed : nullptr;
     }
     const Http2BufferedResponseWriteCompleted* completed() const && = delete;
 
     [[nodiscard]] constexpr const
     Http2BufferedResponseWritePeerAbortedBeforeCommit*
     peerAbortedBeforeCommit() const & noexcept {
-        return std::get_if<
-            Http2BufferedResponseWritePeerAbortedBeforeCommit>(&value_);
+        return state_ == State::kPeerAbortedBeforeCommit
+            ? &value_.peerAbortedBeforeCommit
+            : nullptr;
     }
     const Http2BufferedResponseWritePeerAbortedBeforeCommit*
     peerAbortedBeforeCommit() const && = delete;
@@ -135,23 +135,27 @@ public:
     [[nodiscard]] constexpr const
     Http2BufferedResponseWritePeerAbortedAfterCommit*
     peerAbortedAfterCommit() const & noexcept {
-        return std::get_if<
-            Http2BufferedResponseWritePeerAbortedAfterCommit>(&value_);
+        return state_ == State::kPeerAbortedAfterCommit
+            ? &value_.peerAbortedAfterCommit
+            : nullptr;
     }
     const Http2BufferedResponseWritePeerAbortedAfterCommit*
     peerAbortedAfterCommit() const && = delete;
 
     [[nodiscard]] constexpr const Http2BufferedResponseWriteFailedBeforeCommit*
     failedBeforeCommit() const & noexcept {
-        return std::get_if<Http2BufferedResponseWriteFailedBeforeCommit>(
-            &value_);
+        return state_ == State::kFailedBeforeCommit
+            ? &value_.failedBeforeCommit
+            : nullptr;
     }
     const Http2BufferedResponseWriteFailedBeforeCommit*
     failedBeforeCommit() const && = delete;
 
     [[nodiscard]] constexpr const Http2BufferedResponseWriteFailedAfterCommit*
     failedAfterCommit() const & noexcept {
-        return std::get_if<Http2BufferedResponseWriteFailedAfterCommit>(&value_);
+        return state_ == State::kFailedAfterCommit
+            ? &value_.failedAfterCommit
+            : nullptr;
     }
     const Http2BufferedResponseWriteFailedAfterCommit*
     failedAfterCommit() const && = delete;
@@ -171,19 +175,56 @@ public:
     }
 
 private:
-    using Value = std::variant<
-        Http2BufferedResponseWriteCompleted,
-        Http2BufferedResponseWritePeerAbortedBeforeCommit,
-        Http2BufferedResponseWritePeerAbortedAfterCommit,
-        Http2BufferedResponseWriteFailedBeforeCommit,
-        Http2BufferedResponseWriteFailedAfterCommit>;
+    enum class State : std::uint8_t {
+        kCompleted,
+        kPeerAbortedBeforeCommit,
+        kPeerAbortedAfterCommit,
+        kFailedBeforeCommit,
+        kFailedAfterCommit
+    };
 
-    template <typename Alternative>
+    union Value {
+        constexpr explicit Value(
+            Http2BufferedResponseWriteCompleted value) noexcept
+            : completed(value) {}
+        constexpr explicit Value(
+            Http2BufferedResponseWritePeerAbortedBeforeCommit value) noexcept
+            : peerAbortedBeforeCommit(value) {}
+        constexpr explicit Value(
+            Http2BufferedResponseWritePeerAbortedAfterCommit value) noexcept
+            : peerAbortedAfterCommit(value) {}
+        constexpr explicit Value(
+            Http2BufferedResponseWriteFailedBeforeCommit value) noexcept
+            : failedBeforeCommit(value) {}
+        constexpr explicit Value(
+            Http2BufferedResponseWriteFailedAfterCommit value) noexcept
+            : failedAfterCommit(value) {}
+
+        Http2BufferedResponseWriteCompleted completed;
+        Http2BufferedResponseWritePeerAbortedBeforeCommit peerAbortedBeforeCommit;
+        Http2BufferedResponseWritePeerAbortedAfterCommit peerAbortedAfterCommit;
+        Http2BufferedResponseWriteFailedBeforeCommit failedBeforeCommit;
+        Http2BufferedResponseWriteFailedAfterCommit failedAfterCommit;
+    };
+
     explicit constexpr Http2BufferedResponseWriteResult(
-        Alternative alternative) noexcept
-        : value_(alternative) {}
+        Http2BufferedResponseWriteCompleted value) noexcept
+        : value_(value), state_(State::kCompleted) {}
+    explicit constexpr Http2BufferedResponseWriteResult(
+        Http2BufferedResponseWritePeerAbortedBeforeCommit value) noexcept
+        : value_(value), state_(State::kPeerAbortedBeforeCommit) {}
+    explicit constexpr Http2BufferedResponseWriteResult(
+        Http2BufferedResponseWritePeerAbortedAfterCommit value) noexcept
+        : value_(value), state_(State::kPeerAbortedAfterCommit) {}
+    explicit constexpr Http2BufferedResponseWriteResult(
+        Http2BufferedResponseWriteFailedBeforeCommit value) noexcept
+        : value_(value), state_(State::kFailedBeforeCommit) {}
+    explicit constexpr Http2BufferedResponseWriteResult(
+        Http2BufferedResponseWriteFailedAfterCommit value) noexcept
+        : value_(value), state_(State::kFailedAfterCommit) {}
 
     Value value_;
+    State state_;
 };
 
 static_assert(std::is_trivially_copyable_v<Http2BufferedResponseWriteResult>);

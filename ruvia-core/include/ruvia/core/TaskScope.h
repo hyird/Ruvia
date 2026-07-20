@@ -4,10 +4,10 @@
 #include <cstddef>
 #include <exception>
 #include <memory_resource>
-#include <stop_token>
 #include <utility>
 #include <variant>
 
+#include <ruvia/core/StopToken.h>
 #include <ruvia/core/Task.h>
 #include <ruvia/core/WorkerHandle.h>
 
@@ -25,7 +25,7 @@ public:
 
     void spawn(Task<void> task);
     void requestStop() noexcept;
-    [[nodiscard]] std::stop_token stopToken() const noexcept;
+    [[nodiscard]] StopToken stopToken() const noexcept;
     [[nodiscard]] bool stopRequested() const noexcept;
     [[nodiscard]] std::size_t size() const noexcept;
     [[nodiscard]] Task<void> join();
@@ -106,7 +106,7 @@ private:
 
     WorkerHandle worker_;
     std::pmr::memory_resource* resource_;
-    std::stop_source stopSource_;
+    detail::StopSource stopSource_;
     Node* head_{nullptr};
     std::size_t active_{0};
     Lifecycle lifecycle_;

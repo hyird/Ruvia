@@ -23,7 +23,7 @@ WebWorkerContext::WebWorkerContext(
     detail::DbRegistry* databases,
     detail::RedisRegistry* redis,
     const detail::WorkerStateRegistry* workerStates,
-    std::stop_token stopToken) noexcept
+    StopToken stopToken) noexcept
     : worker_(std::move(worker)),
       resource_(detail::pmrResourceOrDefault(resource)),
       databases_(databases),
@@ -50,7 +50,7 @@ std::pmr::memory_resource* WebWorkerContext::resource() const noexcept {
     return resource_;
 }
 
-std::stop_token WebWorkerContext::stopToken() const noexcept {
+StopToken WebWorkerContext::stopToken() const noexcept {
     return stopToken_;
 }
 
@@ -95,7 +95,7 @@ WebWorkerStats WebWorkerHandle::stats() const noexcept {
 }
 
 PostResult WebWorkerHandle::postTask(
-    std::move_only_function<Task<void>(WebWorkerContext&)> task) const {
+    MoveOnlyFunction<Task<void>(WebWorkerContext&)> task) const {
     return dispatch_
         ? dispatch_->post(std::move(task))
         : PostResult::kWorkerStopping;
@@ -109,7 +109,7 @@ namespace {
 
 // A move-safe reservation for the outstanding_ count post() takes before the
 // start-lambda runs. It rides inside the posted lambda; unique_ptr move semantics
-// keep exactly one owner as std::move_only_function relocates the lambda. If the
+// keep exactly one owner as MoveOnlyFunction relocates the lambda. If the
 // lambda runs it release()s the reservation and complete() owns the decrement; if
 // the lambda is destroyed unrun (rejected post, or shutdown abandoning queued
 // mailbox work), the deleter reconciles the count.
@@ -130,8 +130,8 @@ WebWorkerDispatch::WebWorkerDispatch(
     DbRegistry& databases,
     RedisRegistry& redis,
     const WorkerStateRegistry& workerStates,
-    std::move_only_function<void()> drained,
-    std::move_only_function<void(std::exception_ptr)> failed)
+    MoveOnlyFunction<void()> drained,
+    MoveOnlyFunction<void(std::exception_ptr)> failed)
     : executor_(std::move(executor)),
       worker_(std::move(worker)),
       resource_(pmrResourceOrDefault(resource)),
@@ -192,13 +192,13 @@ PostResult WebWorkerDispatch::post(Task task) {
 void WebWorkerDispatch::close() noexcept {
     std::lock_guard lock(submitMutex_);
     accepting_ = false;
-    stopSource_.request_stop();
+    stopSource_.requestStop();
 }
 
 void WebWorkerDispatch::retire() noexcept {
     std::lock_guard lock(submitMutex_);
     accepting_ = false;
-    stopSource_.request_stop();
+    stopSource_.requestStop();
     if (outstanding_.load(std::memory_order_acquire) != 0) {
         std::terminate();
     }
@@ -258,7 +258,7 @@ void WebWorkerDispatch::start(Task task) {
 ruvia::Task<void> WebWorkerDispatch::run(Task task) {
     WebWorkerContext context(
         worker_, resource_, databases_, redis_, workerStates_,
-        stopSource_.get_token());
+        stopSource_.token());
     co_await task(context);
 }
 

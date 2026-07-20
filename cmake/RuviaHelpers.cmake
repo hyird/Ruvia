@@ -20,7 +20,7 @@ function(ruvia_deduplicate_link_interface target)
 endfunction()
 
 function(ruvia_configure_library target)
-    target_compile_features(${target} PUBLIC cxx_std_23)
+    target_compile_features(${target} PUBLIC cxx_std_20)
 
     target_include_directories(${target}
         PUBLIC

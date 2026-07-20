@@ -101,7 +101,7 @@ using HttpStatusCodeToken =
 
 [[nodiscard]] inline constexpr std::string_view httpStatusCodeTokenView(
     const HttpStatusCodeToken& token) noexcept {
-    return std::string_view(token);
+    return std::string_view(token.data(), token.size());
 }
 
 [[nodiscard]] std::string_view httpStatusCodeTokenView(

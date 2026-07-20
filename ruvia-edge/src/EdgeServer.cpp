@@ -856,7 +856,7 @@ EdgeServer::EdgeServer(const asio::ip::tcp::endpoint& endpoint, EdgeServerOption
     // Armed to never expire on its own; stop() cancels it to wake idle sessions.
     drainSignal_.expires_at((std::chrono::steady_clock::time_point::max)());
     if (options.tls) {
-        tlsContext_.store(buildServerTlsContext(*options.tls));
+        std::atomic_store(&tlsContext_, buildServerTlsContext(*options.tls));
     }
     if (options.cacheDirectory) {
         disk_.emplace(*options.cacheDirectory, options.maxDiskCacheBytes);
@@ -943,11 +943,11 @@ bool EdgeServer::removeOrigin(std::string_view frontHost) {
 }
 
 bool EdgeServer::setTlsCertificate(const EdgeTlsConfig& tls) {
-    if (tlsContext_.load() == nullptr) {
+    if (std::atomic_load(&tlsContext_) == nullptr) {
         return false;  // TLS was not enabled at startup; the listener is plaintext
     }
     try {
-        tlsContext_.store(buildServerTlsContext(tls));
+        std::atomic_store(&tlsContext_, buildServerTlsContext(tls));
         return true;
     } catch (...) {
         return false;  // invalid PEM
@@ -1054,7 +1054,7 @@ asio::awaitable<void> EdgeServer::acceptLoop() {
         }
         ++liveSessions_;
         const auto onDone = [this](std::exception_ptr) { onSessionFinished(); };
-        if (tlsContext_.load() != nullptr) {
+        if (std::atomic_load(&tlsContext_) != nullptr) {
             asio::co_spawn(ioContext_, handleTlsSession(std::move(socket)), onDone);
         } else {
             asio::co_spawn(ioContext_, handleSession(std::move(socket)), onDone);
@@ -1065,7 +1065,7 @@ asio::awaitable<void> EdgeServer::acceptLoop() {
 asio::awaitable<void> EdgeServer::handleTlsSession(asio::ip::tcp::socket socket) {
     // Pin the current context for this session's lifetime; a runtime rotation
     // only affects connections accepted afterward.
-    const auto context = tlsContext_.load();
+    const auto context = std::atomic_load(&tlsContext_);
     if (context == nullptr) {
         co_return;
     }

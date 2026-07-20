@@ -5,7 +5,6 @@
 #include <optional>
 #include <system_error>
 #include <type_traits>
-#include <variant>
 
 #include "ruvia/http/detail/http1/Http1ResponseHeadPlan.h"
 
@@ -58,21 +57,24 @@ class Http1BufferedResponseWriteResult final {
 public:
     [[nodiscard]] constexpr const Http1BufferedResponseWriteCompleted*
     completed() const & noexcept {
-        return std::get_if<Http1BufferedResponseWriteCompleted>(&value_);
+        return state_ == State::kCompleted ? &value_.completed : nullptr;
     }
     const Http1BufferedResponseWriteCompleted* completed() const && = delete;
 
     [[nodiscard]] constexpr const Http1BufferedResponseWriteFailedBeforeCommit*
     failedBeforeCommit() const & noexcept {
-        return std::get_if<Http1BufferedResponseWriteFailedBeforeCommit>(
-            &value_);
+        return state_ == State::kFailedBeforeCommit
+            ? &value_.failedBeforeCommit
+            : nullptr;
     }
     const Http1BufferedResponseWriteFailedBeforeCommit*
     failedBeforeCommit() const && = delete;
 
     [[nodiscard]] constexpr const Http1BufferedResponseWriteFailedAfterCommit*
     failedAfterCommit() const & noexcept {
-        return std::get_if<Http1BufferedResponseWriteFailedAfterCommit>(&value_);
+        return state_ == State::kFailedAfterCommit
+            ? &value_.failedAfterCommit
+            : nullptr;
     }
     const Http1BufferedResponseWriteFailedAfterCommit*
     failedAfterCommit() const && = delete;
@@ -96,10 +98,27 @@ private:
         std::error_code,
         std::size_t) noexcept;
 
-    using Value = std::variant<
-        Http1BufferedResponseWriteCompleted,
-        Http1BufferedResponseWriteFailedBeforeCommit,
-        Http1BufferedResponseWriteFailedAfterCommit>;
+    enum class State : std::uint8_t {
+        kCompleted,
+        kFailedBeforeCommit,
+        kFailedAfterCommit
+    };
+
+    union Value {
+        constexpr explicit Value(
+            Http1BufferedResponseWriteCompleted value) noexcept
+            : completed(value) {}
+        constexpr explicit Value(
+            Http1BufferedResponseWriteFailedBeforeCommit value) noexcept
+            : failedBeforeCommit(value) {}
+        constexpr explicit Value(
+            Http1BufferedResponseWriteFailedAfterCommit value) noexcept
+            : failedAfterCommit(value) {}
+
+        Http1BufferedResponseWriteCompleted completed;
+        Http1BufferedResponseWriteFailedBeforeCommit failedBeforeCommit;
+        Http1BufferedResponseWriteFailedAfterCommit failedAfterCommit;
+    };
 
     [[nodiscard]] static constexpr Http1BufferedResponseWriteResult
     makeCompleted(HttpStatusCode status) noexcept {
@@ -119,12 +138,20 @@ private:
             Http1BufferedResponseWriteFailedAfterCommit(status));
     }
 
-    template <typename Alternative>
     explicit constexpr Http1BufferedResponseWriteResult(
-        Alternative alternative) noexcept
-        : value_(alternative) {}
+        Http1BufferedResponseWriteCompleted value) noexcept
+        : value_(value), state_(State::kCompleted) {}
+
+    explicit constexpr Http1BufferedResponseWriteResult(
+        Http1BufferedResponseWriteFailedBeforeCommit value) noexcept
+        : value_(value), state_(State::kFailedBeforeCommit) {}
+
+    explicit constexpr Http1BufferedResponseWriteResult(
+        Http1BufferedResponseWriteFailedAfterCommit value) noexcept
+        : value_(value), state_(State::kFailedAfterCommit) {}
 
     Value value_;
+    State state_;
 };
 
 static_assert(std::is_trivially_copyable_v<Http1BufferedResponseWriteResult>);

@@ -83,7 +83,7 @@ inline char* http2WriteFrameHeader(
 }
 
 inline char* http2WriteSettingsEntry(char* out, Http2SettingId id, std::uint32_t value) noexcept {
-    out = http2Write16(out, std::to_underlying(id));
+    out = http2Write16(out, static_cast<std::uint16_t>(id));
     return http2Write32(out, value);
 }
 
@@ -94,7 +94,7 @@ inline char* http2WriteWindowUpdate(char* out, std::uint32_t streamId, std::uint
 
 inline char* http2WriteGoawayPayload(char* out, std::uint32_t lastStreamId, Http2ErrorCode error) noexcept {
     out = http2Write32(out, lastStreamId & 0x7fffffffU);
-    return http2Write32(out, std::to_underlying(error));
+    return http2Write32(out, static_cast<std::uint32_t>(error));
 }
 
 }  // namespace ruvia::detail

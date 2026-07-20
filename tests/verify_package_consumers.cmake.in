@@ -271,9 +271,9 @@ if(_built_components_csv MATCHES "(^|,)core(,|$)")
        NOT _installed_worker_timer MATCHES
            "kCancelled" OR
        NOT _installed_worker_handle MATCHES
-           "move_only_function<void[(]WorkerTimerOutcome[)]>" OR
+           "MoveOnlyFunction<void[(]WorkerTimerOutcome[)]>" OR
        NOT _installed_worker_dispatcher MATCHES
-           "move_only_function<void[(]WorkerTimerOutcome[)]>" OR
+           "MoveOnlyFunction<void[(]WorkerTimerOutcome[)]>" OR
        _installed_channel MATCHES
            "[(]bool cancelled[)]" OR
        _installed_one_shot MATCHES
@@ -1565,7 +1565,7 @@ if(NOT _installed_http_expectations MATCHES "kNoContent" OR
        "HttpUnsupportedExpectationPolicy" OR
    NOT _installed_http_expectations MATCHES
        "HttpUnsupportedExpectationRejection" OR
-   NOT _installed_http_expectations MATCHES "std::variant" OR
+   NOT _installed_http_expectations MATCHES "enum class State" OR
    NOT _installed_http_expectations MATCHES "protocolError" OR
    NOT _installed_http_expectations MATCHES
        "HttpProtocolError[(]http_status::kExpectationFailed, [\"]unsupported Expect header[\"]" OR
@@ -1573,6 +1573,7 @@ if(NOT _installed_http_expectations MATCHES "kNoContent" OR
        "HttpServerExpectationPlan expectationPlan" OR
    NOT _installed_http2_stream_state_expectations MATCHES
        "HttpServerExpectationPlan expectationPlan" OR
+   _installed_http_expectations MATCHES "std::variant" OR
    _installed_http_expectations MATCHES "HttpServerExpectationAction" OR
    _installed_http_expectations MATCHES "serverAction" OR
    _installed_http_expectations MATCHES
@@ -3730,6 +3731,10 @@ if(_built_components_csv MATCHES "(^|,)web(,|$)")
        NOT _installed_http2_buffered_response_result MATCHES
            "Http2BufferedResponseWriteFailedAfterCommit" OR
        NOT _installed_http2_buffered_response_result MATCHES
+           "enum class State" OR
+       NOT _installed_http2_buffered_response_result MATCHES
+           "union Value" OR
+       _installed_http2_buffered_response_result MATCHES
            "std::variant" OR
        NOT _installed_http2_buffered_response_result MATCHES
            "peerAbortedBeforeCommit[(][)] const & noexcept" OR
@@ -3799,7 +3804,11 @@ if(_built_components_csv MATCHES "(^|,)web(,|$)")
        NOT _installed_http1_buffered_response_result MATCHES
            "class Http1BufferedResponseWriteFailedAfterCommit final" OR
        NOT _installed_http1_buffered_response_result MATCHES
-           "using Value = std::variant" OR
+           "enum class State" OR
+       NOT _installed_http1_buffered_response_result MATCHES
+           "union Value" OR
+       _installed_http1_buffered_response_result MATCHES
+           "std::variant" OR
        NOT _installed_http1_buffered_response_result MATCHES
            "completed[(][)] const [&] noexcept" OR
        NOT _installed_http1_buffered_response_result MATCHES
@@ -4768,7 +4777,9 @@ if(NOT _installed_response_content_semantics MATCHES
    NOT _installed_response_head_policy MATCHES
        "sizeof[(]ResponseWritePolicy[)] <= 2" OR
    NOT _installed_response_head_policy MATCHES
-       "using State = std::variant" OR
+       "enum class State" OR
+   _installed_response_head_policy MATCHES
+       "std::variant" OR
    NOT _installed_response_head_policy MATCHES
        "ResponseNormalWrite" OR
    NOT _installed_response_head_policy MATCHES
@@ -4921,7 +4932,9 @@ if(NOT _installed_final_response_control_plan MATCHES
    NOT _installed_final_response_control_plan MATCHES
        "using Http2FinalResponseControlPlanResult" OR
    NOT _installed_final_response_control_plan MATCHES
-       "using Value = std::variant<Control, Failure>" OR
+       "union Value" OR
+   _installed_final_response_control_plan MATCHES
+       "std::variant<Control, Failure>" OR
    NOT _installed_final_response_control_plan MATCHES
        "const Control[*] control[(][)] const [&] noexcept" OR
    NOT _installed_final_response_control_plan MATCHES
@@ -5362,12 +5375,16 @@ function(ruvia_verify_package_consumer
         -B "${_build_dir}"
         -G "@CMAKE_GENERATOR@"
         "-DCMAKE_PREFIX_PATH=${prefix}"
-        "-DCMAKE_CONFIGURATION_TYPES=${RUVIA_CONFIG}"
         "-DRUVIA_PACKAGE_COMPONENTS=${components}"
         "-DRUVIA_PACKAGE_OPTIONAL_COMPONENTS=${optional_components}"
         "-DRUVIA_EXPECT_VISIBLE_COMPONENTS=${visible_components}"
         "-DRUVIA_EXPECT_AVAILABLE_COMPONENTS=${available_components}"
         "-DRUVIA_EXPECT_PACKAGE_VERSION=@PROJECT_VERSION@")
+
+    if(NOT "@CMAKE_CONFIGURATION_TYPES@" STREQUAL "")
+        list(APPEND _configure_command
+            "-DCMAKE_CONFIGURATION_TYPES=${RUVIA_CONFIG}")
+    endif()
 
     if(NOT "@CMAKE_GENERATOR_PLATFORM@" STREQUAL "")
         list(APPEND _configure_command -A "@CMAKE_GENERATOR_PLATFORM@")
