@@ -4,6 +4,7 @@
 #include <asio/post.hpp>
 
 #include <cstdlib>
+#include <memory>
 #include <stdexcept>
 #include <utility>
 
@@ -104,6 +105,24 @@ PostResult WebWorkerHandle::postTask(
 
 namespace ruvia::detail {
 
+namespace {
+
+// A move-safe reservation for the outstanding_ count post() takes before the
+// start-lambda runs. It rides inside the posted lambda; unique_ptr move semantics
+// keep exactly one owner as std::move_only_function relocates the lambda. If the
+// lambda runs it release()s the reservation and complete() owns the decrement; if
+// the lambda is destroyed unrun (rejected post, or shutdown abandoning queued
+// mailbox work), the deleter reconciles the count.
+struct AbandonReservationDeleter {
+    void operator()(WebWorkerDispatch* dispatch) const noexcept {
+        dispatch->abandon();
+    }
+};
+using AbandonReservation =
+    std::unique_ptr<WebWorkerDispatch, AbandonReservationDeleter>;
+
+}  // namespace
+
 WebWorkerDispatch::WebWorkerDispatch(
     asio::any_io_executor executor,
     WorkerHandle worker,
@@ -148,11 +167,14 @@ PostResult WebWorkerDispatch::post(Task task) {
     }
 
     outstanding_.fetch_add(1, std::memory_order_acq_rel);
+    AbandonReservation reservation(this);
     const auto result = worker_.post(
-        [this, task = std::move(task)]() mutable { start(std::move(task)); });
-    if (result != PostResult::kAccepted) {
-        outstanding_.fetch_sub(1, std::memory_order_acq_rel);
-    }
+        [task = std::move(task), reservation = std::move(reservation)]() mutable {
+            WebWorkerDispatch* self = reservation.release();
+            self->start(std::move(task));
+        });
+    // A non-accepted post destroyed the lambda (and its reservation) already, so
+    // the reservation deleter has reconciled outstanding_; do not decrement again.
     switch (result) {
     case PostResult::kAccepted:
         accepted_.fetch_add(1, std::memory_order_relaxed);
@@ -245,6 +267,13 @@ void WebWorkerDispatch::complete() {
     if (outstanding_.fetch_sub(1, std::memory_order_acq_rel) == 1 && drained_) {
         drained_();
     }
+}
+
+void WebWorkerDispatch::abandon() noexcept {
+    // A start-lambda was destroyed without running. Reconcile only the reservation
+    // post() took; this is not a completion, so it fires no drained_ and records
+    // nothing (a rejected post is already counted via post()'s switch).
+    outstanding_.fetch_sub(1, std::memory_order_acq_rel);
 }
 
 }  // namespace ruvia::detail
