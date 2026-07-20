@@ -153,6 +153,7 @@ add_executable(ruvia_unit_tests
     http/unit_http_char_syntax.cpp
     web/unit_pattern_compiler.cpp
     web/unit_pattern_matcher.cpp
+    web/unit_regex_matcher.cpp
     web/unit_json_lex.cpp
     http/unit_content_type_match.cpp
     web/unit_email_like.cpp
