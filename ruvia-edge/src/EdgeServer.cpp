@@ -520,7 +520,7 @@ asio::awaitable<bool> EdgeServer::handleFramedRequest(
             passRequest.body = requestBody;
             auto passFetch = co_await fetcher_.fetch(
                 ioContext_.get_executor(), origin->upstreamHost, origin->upstreamPort,
-                passRequest);
+                origin->https, passRequest);
             if (passFetch.outcome != OriginFetchOutcome::kOk) {
                 const std::uint16_t gatewayStatus =
                     passFetch.outcome == OriginFetchOutcome::kTimeout ? 504 : 502;
@@ -607,7 +607,7 @@ asio::awaitable<bool> EdgeServer::handleFramedRequest(
         originRequest.headers = forwardHeaders;
         auto fetch = co_await fetcher_.fetch(
             ioContext_.get_executor(), origin->upstreamHost, origin->upstreamPort,
-            originRequest);
+            origin->https, originRequest);
 
         // stale-if-error: a stale copy within its stale-if-error window is served
         // when the origin cannot be reached, instead of a gateway error.

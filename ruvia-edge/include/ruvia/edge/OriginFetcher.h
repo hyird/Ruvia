@@ -14,6 +14,7 @@
 #include <asio/any_io_executor.hpp>
 #include <asio/awaitable.hpp>
 #include <asio/ip/tcp.hpp>
+#include <asio/ssl.hpp>
 
 #include "ruvia/http/HttpHeader.h"
 
@@ -91,15 +92,24 @@ public:
         std::size_t maxIdlePerHost{8};
     };
 
-    explicit OriginFetcher(Limits limits) noexcept : limits_(limits) {}
+    explicit OriginFetcher(Limits limits)
+        : limits_(limits), originTlsContext_(asio::ssl::context::tls_client) {
+        // MVP: origin certificates are not verified, so a self-signed origin
+        // works out of the box. A production edge should verify the upstream.
+        originTlsContext_.set_verify_mode(asio::ssl::verify_none);
+        originTlsContext_.set_default_verify_paths();
+    }
 
     OriginFetcher(const OriginFetcher&) = delete;
     OriginFetcher& operator=(const OriginFetcher&) = delete;
 
+    // Fetch from host:port. When https, the connection is TLS (with SNI set to
+    // host); TLS origin connections are not pooled.
     [[nodiscard]] asio::awaitable<OriginFetchResult> fetch(
         asio::any_io_executor executor,
         std::string_view host,
         std::uint16_t port,
+        bool https,
         const OriginRequest& request);
 
     // Number of idle pooled connections (for observability and tests).
@@ -112,6 +122,7 @@ private:
     };
 
     Limits limits_;
+    asio::ssl::context originTlsContext_;
     std::unordered_map<std::string, std::vector<PooledConnection>> idlePool_;
 };
 

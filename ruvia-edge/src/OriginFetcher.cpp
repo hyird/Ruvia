@@ -14,9 +14,12 @@
 #include <asio/connect.hpp>
 #include <asio/experimental/awaitable_operators.hpp>
 #include <asio/ip/tcp.hpp>
+#include <asio/ssl.hpp>
 #include <asio/steady_timer.hpp>
 #include <asio/use_awaitable.hpp>
 #include <asio/write.hpp>
+
+#include <openssl/ssl.h>  // SSL_set_tlsext_host_name (SNI)
 
 #include "ruvia/http/HttpClient.h"
 #include "ruvia/http/Http1ClientRequestWriter.h"
@@ -56,14 +59,16 @@ struct ExchangeOutcome final {
     bool transportFailed{false};
 };
 
-// Send the prepared request on `socket` and read the whole response, bounded by
-// the inactivity deadline. Does not close the socket; the caller decides pooling.
+// Send the prepared request on `stream` and read the whole response, bounded by
+// the inactivity deadline. Works over any async stream (plain TCP or TLS). Does
+// not close the stream; the caller decides pooling.
+template <typename Stream>
 asio::awaitable<ExchangeOutcome> runExchange(
-    asio::ip::tcp::socket& socket,
+    Stream& stream,
     const PreparedHttp1ClientRequest& prepared,
     const OriginFetcher::Limits& limits) {
     const auto tuple = asio::as_tuple(asio::use_awaitable);
-    asio::steady_timer deadline(socket.get_executor());
+    asio::steady_timer deadline(stream.get_executor());
 
     ExchangeOutcome out;
     const auto fail = [&](OriginFetchOutcome outcome, bool transport) {
@@ -76,7 +81,7 @@ asio::awaitable<ExchangeOutcome> runExchange(
     {
         auto raced = co_await (
             asio::async_write(
-                socket,
+                stream,
                 asio::buffer(prepared.head().data(), prepared.head().size()),
                 tuple) ||
             deadline.async_wait(tuple));
@@ -94,7 +99,7 @@ asio::awaitable<ExchangeOutcome> runExchange(
         deadline.expires_after(limits.ioTimeout);
         auto raced = co_await (
             asio::async_write(
-                socket,
+                stream,
                 asio::buffer(immediate->bytes().data(), immediate->bytes().size()),
                 tuple) ||
             deadline.async_wait(tuple));
@@ -116,7 +121,7 @@ asio::awaitable<ExchangeOutcome> runExchange(
     const auto readOnce = [&]() -> asio::awaitable<void> {
         deadline.expires_after(limits.ioTimeout);
         auto raced = co_await (
-            socket.async_read_some(asio::buffer(readBuffer), tuple) ||
+            stream.async_read_some(asio::buffer(readBuffer), tuple) ||
             deadline.async_wait(tuple));
         if (raced.index() == 1) {
             timedOut = true;
@@ -299,6 +304,7 @@ asio::awaitable<OriginFetchResult> OriginFetcher::fetch(
     asio::any_io_executor executor,
     std::string_view host,
     std::uint16_t port,
+    bool https,
     const OriginRequest& request) {
     // Prepare the request head once. kAllowReuse omits Connection: close so the
     // origin may keep the connection open for pooling.
@@ -335,6 +341,52 @@ asio::awaitable<OriginFetchResult> OriginFetcher::fetch(
     }
 
     const auto tuple = asio::as_tuple(asio::use_awaitable);
+    const std::string_view portView = std::string_view(key).substr(host.size() + 1);
+
+    // TLS origin: resolve, connect, TLS-handshake with SNI, then run the exchange
+    // over the encrypted stream. TLS origin connections are not pooled.
+    if (https) {
+        asio::steady_timer deadline(executor);
+        asio::ip::tcp::resolver resolver(executor);
+        deadline.expires_after(limits_.connectTimeout);
+        auto resolveRaced = co_await (
+            resolver.async_resolve(host, portView, tuple) || deadline.async_wait(tuple));
+        if (resolveRaced.index() == 1) {
+            co_return failure(OriginFetchOutcome::kTimeout);
+        }
+        if (std::get<0>(std::get<0>(resolveRaced))) {
+            co_return failure(OriginFetchOutcome::kConnectFailed);
+        }
+        const auto endpoints = std::move(std::get<1>(std::get<0>(resolveRaced)));
+
+        asio::ip::tcp::socket tcpSocket(executor);
+        auto connectRaced = co_await (
+            asio::async_connect(tcpSocket, endpoints, tuple) || deadline.async_wait(tuple));
+        if (connectRaced.index() == 1) {
+            co_return failure(OriginFetchOutcome::kTimeout);
+        }
+        if (std::get<0>(std::get<0>(connectRaced))) {
+            co_return failure(OriginFetchOutcome::kConnectFailed);
+        }
+
+        asio::ssl::stream<asio::ip::tcp::socket> tls(std::move(tcpSocket), originTlsContext_);
+        const std::string hostString(host);
+        SSL_set_tlsext_host_name(tls.native_handle(), hostString.c_str());
+
+        deadline.expires_after(limits_.connectTimeout);
+        auto handshakeRaced = co_await (
+            tls.async_handshake(asio::ssl::stream_base::client, tuple) ||
+            deadline.async_wait(tuple));
+        if (handshakeRaced.index() == 1) {
+            co_return failure(OriginFetchOutcome::kTimeout);
+        }
+        if (std::get<0>(std::get<0>(handshakeRaced))) {
+            co_return failure(OriginFetchOutcome::kConnectFailed);
+        }
+
+        auto exchange = co_await runExchange(tls, *prepared, limits_);
+        co_return std::move(exchange.result);
+    }
 
     for (int attempt = 0; attempt < 2; ++attempt) {
         // Acquire a connection: reuse a fresh-enough pooled one, else connect.

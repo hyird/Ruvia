@@ -1,0 +1,60 @@
+#pragma once
+
+#include <string_view>
+
+// A self-signed certificate and matching private key (CN=localhost) used only by
+// the edge TLS tests. Not a secret and not for any real deployment.
+namespace edge_test_tls {
+
+inline constexpr std::string_view kCertPem = R"pem(-----BEGIN CERTIFICATE-----
+MIIDCTCCAfGgAwIBAgIUeHO3aORW6q8+p6sq+bcet2rMOHkwDQYJKoZIhvcNAQEL
+BQAwFDESMBAGA1UEAwwJbG9jYWxob3N0MB4XDTI2MDcyMDAwMDkyOVoXDTM2MDcx
+NzAwMDkyOVowFDESMBAGA1UEAwwJbG9jYWxob3N0MIIBIjANBgkqhkiG9w0BAQEF
+AAOCAQ8AMIIBCgKCAQEAmnQ1Demh7Wv31eRIK/oZDnz/e7WRhjhxh3GGPrnuufxK
+TgkVxJ79kW0qlKE9BeobH6QuEVyQ9wPeBzoAix4pHlGVdNItePJ8qUdJSmJ5sGAn
+ba25ozQBhsPdaYlh0/cEkOlndiQfX4P8vAveHELK/Osob09kmN163wswWnKe/FPv
+nCbpreS0NYXibOu7rdGO51KU+Egp8Ntgi9nKklRrMQ7DMI7Rpmwo7vw/bj82aRZ8
+SUF30l+hB/P3BLXGsj00Wd4YVRECvQAS+JiyogAFvSeP+IcaoRvgkvLmpdmUDhxe
+4QwlmPf25Cu5GdEesRgG0rbEg+6PNzfSLkb/rkowRwIDAQABo1MwUTAdBgNVHQ4E
+FgQUj6DWJnH5Nfs/o3W+aC7WlQZPxkIwHwYDVR0jBBgwFoAUj6DWJnH5Nfs/o3W+
+aC7WlQZPxkIwDwYDVR0TAQH/BAUwAwEB/zANBgkqhkiG9w0BAQsFAAOCAQEANU0Y
+95n4vcwhJyFlCMvqN7SOWFAZ/32Rh/ATFIS9V1xTz9MHuj+5ug3D41Gxay+PoOgj
+x+Jbn0OoZBQ77UK3ri484FEzDiNwsj6a79GDLU2IgogEloeoIMwjCYydNKPhRAPG
+YIInxojtl1HitNjW5ASLzsxm095MVT/T+hZ3eip9cUZxKMSFomlAl3C4Iqg22gpO
+P7hBSmyCKdUasyewtaPYIpar8SkxHL8G+jf4ds3XHEBfw2CX9tI9fmeE1foFgel5
+SMqbMVqtfRXN+ihNkGePigCyh5KsvrlUBphxyGxSZTzBAGEl2ccBPO+MHIP9JdmQ
+9CmmAVRg6tneyjoONw==
+-----END CERTIFICATE-----
+)pem";
+
+inline constexpr std::string_view kKeyPem = R"pem(-----BEGIN PRIVATE KEY-----
+MIIEvgIBADANBgkqhkiG9w0BAQEFAASCBKgwggSkAgEAAoIBAQCadDUN6aHta/fV
+5Egr+hkOfP97tZGGOHGHcYY+ue65/EpOCRXEnv2RbSqUoT0F6hsfpC4RXJD3A94H
+OgCLHikeUZV00i148nypR0lKYnmwYCdtrbmjNAGGw91piWHT9wSQ6Wd2JB9fg/y8
+C94cQsr86yhvT2SY3XrfCzBacp78U++cJumt5LQ1heJs67ut0Y7nUpT4SCnw22CL
+2cqSVGsxDsMwjtGmbCju/D9uPzZpFnxJQXfSX6EH8/cEtcayPTRZ3hhVEQK9ABL4
+mLKiAAW9J4/4hxqhG+CS8ual2ZQOHF7hDCWY9/bkK7kZ0R6xGAbStsSD7o83N9Iu
+Rv+uSjBHAgMBAAECggEAHGLEB2ELQfOoUjaIrxBhP4DogUdezeCcuMw75FZOkf7U
+dyADUKX5qxr5iuRRLz+VqYyGbOlquQMMcJ6P0AGEhA5xXc1szwAdugygYxvTCn+5
+b1ZQujZKG4bur8EwagDJZYqH2bYM0ASVU8gIk4ARB0d+oGpibheyR8CqK81J+8x2
+EMQIDdTY0ZsdEiTMuwhSb0YlC7tP3rMIzY9UyUwFMd1AR1szy8BD/ApIq9reEnTs
+97rXXE3zNiJd77MBjhmIoQpoXW7p4kp1VD+yavEC8vOJgq5wHoBlzwrsbveGj3Kq
+WNMGgCxs03P3G62gEfNcQNy+vU+YxBLr+Ki9Qt1jkQKBgQDTT4W1+FERKa+MvF+t
+5Vc3ZsgajamU2X/mue3CyCZmTWCc888nwxyDkoqd/XoQ/FdiociikOctpMVSgJDJ
+Omd7Zt1CDqJGBjJzaL66KN/wdBOvhfb9NFbpiRVk1Us8Q934UbcQpe7MPHgp7BAN
+s+zIKOLwqiTKS80HE6Hzz6FxMQKBgQC7Hm5SkCkFZFI78ehPzZ7QtDV+74mfjxCV
+5Sz8zGesEbf8tt3tRAdKYqJEX+oZRVymoc/N+RTnpdhmpJSB1A5p/LSGUauXvMzj
+MHtc+5kAncGELVEcNDtmMLas8/pAY6zgFTIszaaT211skA0kQSnhUcfZNKeZ1/yO
+TcdSKrca9wKBgHXKOkq5ZNcgWY8l4l/ZG8jyLlE+7mze4QEIW5TcZStZrqVO8wbD
+KD3fjg2LomOdhkigzmpwQ62Zz7SxngPN3qlXKbcM2UAXbEAQ/2BeMJak3eRV1NxI
+NLpxg891Zj7txeoKAvXwyTBn9MPJpxk8Vp0szXRCI8fwgRWUyA5UizXBAoGBALSl
+blCbCF9COPnSUzsoAZjvQW4ohy7ZiWOM+t+b3sKJ4JxDVwGG2ZsAmjN0faakBgyA
+zwPE4l+5BrAhV5X3SWsdIpNCKWy2Qv9agN6Fr3Ke2oJm1ZVq/6VqhhF3ATREhlNX
+YzdJ2vWHpCv47hcAKhRzRYL2iI/HqvUfNbynrFqFAoGBAIdbTNmuWhhYkiDuMDx8
+sCwdeksoD8eSyuhLMPpeCT4NMFTiYDjY5C/iFqV+qmuU0B3D6UMq/sLhrB81H/TL
+72QciJMr3lnOxEvsgNkPDppJsrDbrjoHXTIO6rZdinGjskN3RFgWFDqxeT5JzeUg
+dNqwrw2PaHWNzv3SZO8V4EB4
+-----END PRIVATE KEY-----
+)pem";
+
+}  // namespace edge_test_tls

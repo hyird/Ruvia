@@ -1,3 +1,6 @@
+# TLS on both faces (client termination and https origins) uses asio::ssl.
+find_package(OpenSSL REQUIRED)
+
 set(RUVIA_EDGE_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/src/EdgeConfig.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/EdgeFreshness.cpp
@@ -30,6 +33,8 @@ target_link_libraries(ruvia-edge
     PUBLIC
         ruvia::core
         ruvia::http
+        OpenSSL::SSL
+        OpenSSL::Crypto
 )
 
 ruvia_install_target(ruvia-edge edge)
