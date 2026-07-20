@@ -48,7 +48,6 @@ constexpr std::string_view kMigrationsTable = "ruvia_pg_integration_migrations";
         throw std::invalid_argument("RUVIA_TEST_PG_PORT is outside the valid range");
     }
     config.port = static_cast<std::uint16_t>(parsedPort);
-    config.poolSizePerWorker = 1;
     config.acquireTimeout = std::chrono::seconds(5);
     config.connectTimeout = std::chrono::seconds(5);
     config.queryTimeout = std::chrono::seconds(5);

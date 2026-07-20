@@ -200,14 +200,9 @@ RUVIA_TEST(db_config_validation_checks_every_field) {
     // A default config is valid; absent timeouts are disabled explicitly.
     RUVIA_CHECK(!throwsOn([] { validateDbConfig(DbConfig{}); }));
 
-    // Host, port and pool size each have a required-value guard.
+    // Host and port each have a required-value guard.
     RUVIA_CHECK(throwsOn([] { DbConfig c; c.host.clear(); validateDbConfig(c); }));
     RUVIA_CHECK(throwsOn([] { DbConfig c; c.port = 0; validateDbConfig(c); }));
-    RUVIA_CHECK(throwsOn([] {
-        DbConfig c;
-        c.poolSizePerWorker = 0;
-        validateDbConfig(c);
-    }));
 
     // Every configured timeout must be positive. Zero cannot silently recover the
     // former sentinel convention, and the whole fold must validate every field.

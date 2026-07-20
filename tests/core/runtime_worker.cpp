@@ -13,7 +13,7 @@
 
 #include <atomic>
 #include <array>
-#include <barrier>
+#include <condition_variable>
 #include <future>
 #include <memory>
 #include <optional>
@@ -254,9 +254,18 @@ bool testExternalEventLoopAttachment() {
         }
 
         std::thread externalThread([&] { ioContext.run(); });
-        const bool dispatchedOnExternalThread = result.get();
-        attachment.stop();
-        externalThread.join();
+        bool dispatchedOnExternalThread = false;
+        try {
+            dispatchedOnExternalThread = result.get();
+            attachment.stop();
+            externalThread.join();
+        } catch (...) {
+            attachment.stop();
+            if (externalThread.joinable()) {
+                externalThread.join();
+            }
+            throw;
+        }
         if (!dispatchedOnExternalThread || !stopRegistration.valid() ||
             !stopCallbackRan || !stopCallbackOnLoop ||
             loop.post([] {}) != ruvia::PostResult::kWorkerStopping) {
@@ -411,22 +420,43 @@ bool testConcurrentStopHasOneInitiator() {
     }
 
     std::atomic<std::size_t> initiators{0};
-    std::barrier gate(kThreadCount + 1);
-    {
-        std::vector<std::thread> threads;
-        threads.reserve(kThreadCount);
+    std::mutex gateMutex;
+    std::condition_variable gateChanged;
+    bool start = false;
+    std::vector<std::thread> threads;
+    threads.reserve(kThreadCount);
+    try {
         for (std::size_t i = 0; i < kThreadCount; ++i) {
             threads.emplace_back([&] {
-                gate.arrive_and_wait();
+                {
+                    std::unique_lock lock(gateMutex);
+                    gateChanged.wait(lock, [&] { return start; });
+                }
                 if (lifecycle.requestStop()) {
                     initiators.fetch_add(1, std::memory_order_relaxed);
                 }
             });
         }
-        gate.arrive_and_wait();
-        for (auto& thread : threads) {
-            thread.join();
+    } catch (...) {
+        {
+            std::lock_guard lock(gateMutex);
+            start = true;
         }
+        gateChanged.notify_all();
+        for (auto& thread : threads) {
+            if (thread.joinable()) {
+                thread.join();
+            }
+        }
+        throw;
+    }
+    {
+        std::lock_guard lock(gateMutex);
+        start = true;
+    }
+    gateChanged.notify_all();
+    for (auto& thread : threads) {
+        thread.join();
     }
 
     lifecycle.completeStop();

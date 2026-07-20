@@ -95,6 +95,7 @@ jobs:
         run: |
           cmake -S . -B build/test -G Ninja \
             -DCMAKE_BUILD_TYPE="$BUILD_TYPE" \
+            -DCMAKE_COMPILE_WARNING_AS_ERROR=ON \
             -DRUVIA_ENABLE_MARIADB=ON \
             -DRUVIA_ENABLE_POSTGRESQL=ON \
             -DRUVIA_ENABLE_REDIS=ON \
@@ -126,8 +127,9 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Install toolchain
+      - name: Install build tools
         run: |
+          brew untap aws/tap
           brew install ninja nghttp2
           /usr/bin/c++ --version
 
@@ -157,6 +159,7 @@ jobs:
         run: |
           cmake -S . -B build/test -G Ninja \
             -DCMAKE_BUILD_TYPE="$BUILD_TYPE" \
+            -DCMAKE_COMPILE_WARNING_AS_ERROR=ON \
             -DRUVIA_ENABLE_MARIADB=ON \
             -DRUVIA_ENABLE_POSTGRESQL=ON \
             -DRUVIA_ENABLE_REDIS=ON \
@@ -231,6 +234,7 @@ jobs:
           g++ --version
           cmake -S . -B build/test -G Ninja \
             -DCMAKE_BUILD_TYPE="$BUILD_TYPE" \
+            -DCMAKE_COMPILE_WARNING_AS_ERROR=ON \
             -DCMAKE_CXX_COMPILER=g++ \
             -DVCPKG_TARGET_TRIPLET=x64-mingw-static \
             -DRUVIA_ENABLE_MARIADB=ON \
