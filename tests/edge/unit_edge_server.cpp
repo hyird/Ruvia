@@ -798,12 +798,16 @@ int main() {
         check(contains(b, "X-Cache: REVALIDATED"), "stale entry is revalidated");
         check(statusOf(b) == 200, "revalidated response is 200 from cache");
         check(bodyOf(b) == "hello", "revalidated body served from cache");
+        check(contains(b, "Content-Type: text/plain"),
+              "revalidated response keeps the stored representation headers");
         check(origin.notModified() == notModifiedBefore + 1,
               "origin answered the conditional with 304");
         check(origin.hits() == fullBefore, "revalidation sent no full response");
 
         const auto c = httpGet(edgePort, "front.local", "/rev");
         check(contains(c, "X-Cache: HIT"), "refreshed entry is a hit again");
+        check(contains(c, "Content-Type: text/plain"),
+              "the refreshed cache entry retained its headers");
     }
 
     // stale-if-error: once the origin is unreachable, a stale entry within its

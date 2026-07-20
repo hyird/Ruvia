@@ -1225,6 +1225,7 @@ asio::awaitable<bool> EdgeServer::handleFramedRequest(
                 auto refreshed = std::make_shared<CachedResponse>();
                 refreshed->status = staleEntry->status;
                 refreshed->body = staleEntry->body;
+                refreshed->headers = std::move(merged);
                 refreshed->storedAt = now;
                 refreshed->expiresAt = decision.cacheable ? decision.expiresAt : now;
                 refreshed->staleWhileRevalidate = decision.staleWhileRevalidate;
