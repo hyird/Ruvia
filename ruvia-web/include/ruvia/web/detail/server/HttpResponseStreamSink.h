@@ -146,7 +146,7 @@ private:
     }
 
     Task<void> sleep(std::chrono::milliseconds duration) {
-        co_await sleepFor(*worker_, duration);
+        static_cast<void>(co_await sleepFor(*worker_, duration));
         scannerEntry_.touch();
     }
 
@@ -163,7 +163,9 @@ private:
             // or 304) then yields the worker thread each pass instead of
             // hard-spinning the event loop with no suspension point. The minimal
             // positive delay is required because a zero duration is await_ready.
-            co_await sleepFor(*worker_, std::chrono::steady_clock::duration(1));
+            static_cast<void>(
+                co_await sleepFor(
+                    *worker_, std::chrono::steady_clock::duration(1)));
         }
         state_.ensureBodyAllowed();
 

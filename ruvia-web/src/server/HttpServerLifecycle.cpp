@@ -269,10 +269,14 @@ HttpServer::~HttpServer() {
         join();
     } catch (...) {
     }
-    webWorkerDispatch_->retire();
-    // Public worker handles may outlive this server. Leave them a detached
+    // Retire the execution context first: destroying the mailbox drops any tasks
+    // the dispatcher abandoned when a mailbox task threw, and each dropped
+    // WebWorker task reconciles its outstanding_ reservation. retire() then sees a
+    // settled count instead of terminating on a phantom in-flight task. Public
+    // worker handles may outlive this server, so this also leaves them a detached
     // terminal endpoint before ioContext_ and its Asio objects are destroyed.
     workerDispatcher_->detachContext();
+    webWorkerDispatch_->retire();
 }
 
 void HttpServer::start() {

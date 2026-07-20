@@ -25,6 +25,7 @@ enum class TaskFrameOwnership : std::uint8_t {
 
 [[nodiscard]] void* taskFrameAllocate(std::size_t bytes);
 void taskFrameDeallocate(void* pointer) noexcept;
+void taskFrameDeallocateSized(void* pointer, std::size_t bytes) noexcept;
 
 template <typename T>
 class TaskPromise;
@@ -107,8 +108,8 @@ public:
         taskFrameDeallocate(pointer);
     }
 
-    static void operator delete(void* pointer, std::size_t) noexcept {
-        taskFrameDeallocate(pointer);
+    static void operator delete(void* pointer, std::size_t size) noexcept {
+        taskFrameDeallocateSized(pointer, size);
     }
 
     [[nodiscard]] Task<T> get_return_object() noexcept;
@@ -194,8 +195,8 @@ public:
         taskFrameDeallocate(pointer);
     }
 
-    static void operator delete(void* pointer, std::size_t) noexcept {
-        taskFrameDeallocate(pointer);
+    static void operator delete(void* pointer, std::size_t size) noexcept {
+        taskFrameDeallocateSized(pointer, size);
     }
 
     [[nodiscard]] Task<void> get_return_object() noexcept;

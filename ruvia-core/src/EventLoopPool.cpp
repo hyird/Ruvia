@@ -134,13 +134,12 @@ struct EventLoopState final {
               std::in_place_type<ExternalContextClaim>, externalContext),
           ioContext(externalContext),
           work(asio::make_work_guard(ioContext)),
+          // WorkerDispatcher::Impl is the single authority that validates the
+          // mailbox capacity: it throws std::invalid_argument for a zero
+          // capacity while this member is constructed, before any body check
+          // here could run. The owned-context constructor relies on the same.
           dispatcher(std::make_shared<WorkerDispatcher>(ioContext, mailboxCapacity)),
-          handle(WorkerHandleAccess::make(dispatcher)) {
-        if (mailboxCapacity == 0) {
-            throw std::invalid_argument(
-                "event loop mailbox capacity must be greater than zero");
-        }
-    }
+          handle(WorkerHandleAccess::make(dispatcher)) {}
 
     ~EventLoopState() {
         // Dispatcher handles may escape EventLoop/EventLoopPool. Retire their

@@ -5,14 +5,15 @@
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 ![C++23](https://img.shields.io/badge/C%2B%2B-23-blue.svg)
 
-Ruvia is a C++23 HTTP/Web framework built as three independently consumable
+Ruvia is a C++23 HTTP/Web framework built as four independently consumable
 CMake targets. The repository is a monorepo, but its runtime foundation and
 protocol library do not require the full Web framework.
 
 ## Highlights
 
-- **Layered by design** — `ruvia::core` (runtime), `ruvia::http` (protocol), and
-  `ruvia::web` (framework) install and import as independent package components.
+- **Layered by design** — `ruvia::core` (runtime), `ruvia::http` (protocol),
+  `ruvia::web` (framework), and the opt-in `ruvia::edge` (CDN edge node)
+  install and import as independent package components.
 - **Sans-I/O protocol library** — one HTTP/1, HTTP/2, WebSocket, and HPACK
   implementation shared by the server and the outbound client; callers feed
   bytes and consume typed events. No sockets, no Asio, no TLS inside.
@@ -106,11 +107,13 @@ if (const auto* tls = info.tls()) {
 | `ruvia-core/` | `ruvia::core` | Coroutine tasks, Asio integration, PMR/mimalloc memory, connection scanning, and runtime helpers. |
 | `ruvia-http/` | `ruvia::http` | Pure sans-I/O HTTP, HTTP/2, WebSocket, multipart, SSE, content-coding, and outbound-client protocol primitives. |
 | `ruvia-web/` | `ruvia::web` | App, Context, Router, middleware, server I/O, TLS, streaming, WebSocket routes, validation, static files, and optional integrations. |
+| `ruvia-edge/` | `ruvia::edge` | Opt-in CDN edge node: a caching reverse proxy with its own event loop, dynamic origin configuration, and an admin API. |
 
 Dependency direction is fixed:
 
 ```text
-ruvia-web  ->  ruvia-core + ruvia-http
+ruvia-web   ->  ruvia-core + ruvia-http
+ruvia-edge  ->  ruvia-core + ruvia-http
 ```
 
 `ruvia-http` is core-free, Asio-free, and socket-free. Applications that need
@@ -262,6 +265,7 @@ ctest --test-dir build --output-on-failure   # add -C Debug on Windows
 | `RUVIA_BUILD_CORE` | `ON` | Build `ruvia::core`. |
 | `RUVIA_BUILD_HTTP` | `ON` | Build standalone `ruvia::http`. |
 | `RUVIA_BUILD_WEB` | `ON` | Build `ruvia::web`; requires core and HTTP. |
+| `RUVIA_BUILD_EDGE` | `OFF` | Build the `ruvia::edge` CDN edge node; requires core and HTTP. |
 | `RUVIA_BUILD_TESTS` | `OFF` | Build unit, guard, and package-consumer tests. |
 | `RUVIA_BUILD_BENCHMARKS` | `OFF` | Build Release-oriented HTTP hot-path benchmarks; requires HTTP. |
 | `RUVIA_BUILD_FUZZERS` | `OFF` | Build the Clang/libFuzzer protocol fuzz targets with UBSan; requires HTTP. |
@@ -354,8 +358,9 @@ target_link_libraries(protocol_tool PRIVATE ruvia::http)
 ```
 
 The package imports only the requested dependency closure: core and HTTP are
-independent, while Web imports core, HTTP, and Web. Component-scoped
-installation uses `core`, `http`, `web`, and `Development` install components.
+independent, while Web and Edge each import core and HTTP alongside their own
+targets. Component-scoped installation uses `core`, `http`, `web`, `edge`, and
+`Development` install components.
 
 ## Web API Shape
 

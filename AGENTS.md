@@ -12,12 +12,14 @@ Ruvia 是 C++23 HTTP/Web 框架仓库，采用 monorepo + 多 CMake target：
 ruvia-core  -> ruvia::core
 ruvia-http  -> ruvia::http
 ruvia-web   -> ruvia::web
+ruvia-edge  -> ruvia::edge
 ```
 
 依赖方向固定：
 
 ```text
-ruvia-web  -> ruvia-core + ruvia-http
+ruvia-web   -> ruvia-core + ruvia-http
+ruvia-edge  -> ruvia-core + ruvia-http
 ```
 
 新代码、新示例和新文档使用 `ruvia::web`，不保留历史 Web 框架别名。
@@ -39,6 +41,7 @@ ruvia-web  -> ruvia-core + ruvia-http
 ruvia-core/
 ruvia-http/
 ruvia-web/
+ruvia-edge/
 examples/
 tests/
 ```
@@ -54,11 +57,12 @@ tests/
   src/
 ```
 
-三个 target 的公开头和安装命名根严格对应：
+四个 target 的公开头和安装命名根严格对应：
 
 - `ruvia-core` 只能拥有并安装 `include/ruvia/core/**`。
 - `ruvia-http` 只能拥有并安装 `include/ruvia/http/**`。
 - `ruvia-web` 只能拥有并安装 `include/ruvia/web/**`。
+- `ruvia-edge` 只能拥有并安装 `include/ruvia/edge/**`。
 
 禁止在本 target 下创建或安装到另一个 target 的命名根，也禁止在 CMake source/header 列表中直接加入另一个 target 目录里的文件。
 
@@ -128,6 +132,12 @@ tests/
 - 可选 MariaDB、Redis、JWT 集成。
 
 不得把 Web-only API 下沉到 `ruvia-http`。
+
+### ruvia-edge
+
+`ruvia-edge` 是 CDN 边缘节点产品（缓存反向代理），依赖 `ruvia::core` 和 `ruvia::http`，默认不构建（`RUVIA_BUILD_EDGE`）。
+
+它自持事件循环：`ruvia-core` 提供 accept 与源站连接共用的异步/socket 原语，`ruvia-http` 提供两侧的 sans-I/O HTTP/1 协议。它不依赖 `ruvia-web`——App 框架隐藏了 edge 打开出站源站 socket 所需的 worker executor，因此 edge 拥有独立 loop。反向代理/缓存产品语义只放这里，不得下沉进 `ruvia-web` 或 `ruvia-http`。
 
 ### HTTP 协议与应用边界
 

@@ -70,6 +70,7 @@ add_executable(ruvia_unit_tests
     web/unit_json_object_fields.cpp
     http/unit_response_header_index_cache.cpp
     web/unit_file_response_helpers.cpp
+    web/unit_static_files.cpp
     web/unit_json_writer.cpp
     http2/unit_hpack.cpp
     http2/unit_http2_frame.cpp
@@ -152,6 +153,7 @@ add_executable(ruvia_unit_tests
     http/unit_http_char_syntax.cpp
     web/unit_pattern_compiler.cpp
     web/unit_pattern_matcher.cpp
+    web/unit_regex_matcher.cpp
     web/unit_json_lex.cpp
     http/unit_content_type_match.cpp
     web/unit_email_like.cpp
@@ -304,6 +306,15 @@ if(RUVIA_BUILD_HTTP)
         COMMAND ${CMAKE_COMMAND}
             -P ${CMAKE_CURRENT_BINARY_DIR}/verify_http_status_literals.cmake)
 
+    configure_file(
+        ${CMAKE_CURRENT_SOURCE_DIR}/verify_http_sansio.cmake.in
+        ${CMAKE_CURRENT_BINARY_DIR}/verify_http_sansio.cmake
+        @ONLY)
+    add_test(
+        NAME ruvia_guard_http_sansio
+        COMMAND ${CMAKE_COMMAND}
+            -P ${CMAKE_CURRENT_BINARY_DIR}/verify_http_sansio.cmake)
+
     ruvia_add_test(ruvia_smoke_http_target server/smoke_http_target.cpp LIB ruvia::http)
 
     # Compile the exhaustive public/detail HTTP contract once in the normal build.
@@ -340,18 +351,30 @@ ruvia_add_test(ruvia_server_pipeline_request_views server/server_pipeline_reques
 ruvia_add_test(ruvia_server_tls_keepalive_deadline server/server_tls_keepalive_deadline.cpp TIMEOUT 60)
 ruvia_add_test(ruvia_server_keepalive_idle_timeout server/server_keepalive_idle_timeout.cpp TIMEOUT 60)
 ruvia_add_test(ruvia_server_write_timeout server/server_write_timeout.cpp TIMEOUT 60)
+
 ruvia_add_test(ruvia_web_worker server/web_worker.cpp TIMEOUT 30)
 ruvia_add_test(ruvia_app_web_worker server/app_web_worker.cpp TIMEOUT 30)
 ruvia_add_test(ruvia_app_startup_retry server/app_startup_retry.cpp TIMEOUT 30)
+endif()
+
+# Edge tests only need ruvia::edge; keep them outside the web gate so a
+# web-off edge build still runs them.
+if(RUVIA_BUILD_EDGE)
+    ruvia_add_test(ruvia_edge_config edge/unit_edge_config.cpp LIB ruvia::edge TIMEOUT 30)
+    ruvia_add_test(ruvia_edge_freshness edge/unit_edge_freshness.cpp LIB ruvia::edge TIMEOUT 30)
+    ruvia_add_test(ruvia_edge_cache edge/unit_edge_cache.cpp LIB ruvia::edge TIMEOUT 30)
+    ruvia_add_test(ruvia_disk_cache edge/unit_disk_cache.cpp LIB ruvia::edge TIMEOUT 30)
+    ruvia_add_test(ruvia_origin_fetcher edge/unit_origin_fetcher.cpp LIB ruvia::edge TIMEOUT 30)
+    ruvia_add_test(ruvia_edge_server edge/unit_edge_server.cpp LIB ruvia::edge TIMEOUT 30)
 endif()
 
 configure_file(
     ${CMAKE_CURRENT_SOURCE_DIR}/verify_package_consumers.cmake.in
     ${CMAKE_CURRENT_BINARY_DIR}/verify_package_consumers.cmake
     @ONLY)
-# Opt-in for the same reason as the layer-boundary check: the packaging
-# contract pins installed file names and literal signatures, which makes it
-# brittle across refactors. Run on demand with:
+# Opt-in rather than a ctest entry: the packaging contract pins installed file
+# names and literal signatures, which makes it brittle across refactors. Run on
+# demand with:
 #   cmake --build <build-dir> --target ruvia_package_consumers
 add_custom_target(ruvia_package_consumers
     COMMAND ${CMAKE_COMMAND}

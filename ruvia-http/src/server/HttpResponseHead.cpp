@@ -1,5 +1,6 @@
 #include "ruvia/http/detail/server/HttpResponseHead.h"
 
+#include <array>
 #include <charconv>
 #include <cstring>
 #include <optional>
@@ -29,23 +30,25 @@ inline constexpr std::string_view kChunkedTransferEncodingHeader =
 
 [[nodiscard]] std::optional<std::uint64_t> explicitContentLength(
     const HttpResponse& response) {
+    // A kOk parseField always populates the state's value, and a Content-Length
+    // that fails to parse throws below, so the accumulated optional already
+    // encodes presence: empty means no Content-Length line was seen.
     HttpContentLengthState state;
-    bool present = false;
     for (const auto& header : response.headers()) {
         if (responseHeaderKnownBit(header) != kResponseHeaderContentLength) {
             continue;
         }
-        present = true;
         if (state.parseField(header.value()) !=
             HttpContentLengthParseStatus::kOk) {
             throw std::invalid_argument(
                 "invalid explicit HTTP response Content-Length");
         }
     }
-    if (!present) {
+    const auto value = state.value();
+    if (!value.has_value()) {
         return std::nullopt;
     }
-    return static_cast<std::uint64_t>(*state.value());
+    return static_cast<std::uint64_t>(*value);
 }
 
 // Unchecked sink writing through a raw cursor; the caller guarantees capacity
@@ -69,7 +72,17 @@ struct RawHeadSink {
     }
 
     void appendUnsigned(std::uint64_t value) noexcept {
-        out = std::to_chars(out, out + 20, value).ptr;
+        // Format into a local buffer and copy. The measured head reserves only
+        // decimalDigits(value) bytes for these digits, so std::to_chars(out,
+        // out + 20, ...) would form a pointer past the 512-byte stack buffer's
+        // end (undefined per [expr.add]) when the head nearly fills it, even
+        // though no byte beyond the digits is written. Mirrors
+        // ResponseHeadBuffer::appendUnsigned.
+        std::array<char, 20> digits;
+        const auto end =
+            std::to_chars(digits.data(), digits.data() + digits.size(), value).ptr;
+        append(std::string_view(
+            digits.data(), static_cast<std::size_t>(end - digits.data())));
     }
 };
 

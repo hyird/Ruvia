@@ -303,6 +303,10 @@ private:
 }  // namespace ruvia
 
 #define RUVIA_REQUIRED(message) ::ruvia::detail::model::Required{message}
+// RUVIA_MIN / RUVIA_MAX constrain a field's magnitude. For a number field this
+// is its value; for a string field it is the UTF-8 BYTE length, not the
+// codepoint count -- a three-emoji string is 12 bytes -- so choose bounds with
+// multibyte input in mind (for example a minimum-length rule on free text).
 #define RUVIA_MIN(value, message) ::ruvia::detail::model::Min{static_cast<long double>(value), message}
 #define RUVIA_MAX(value, message) ::ruvia::detail::model::Max{static_cast<long double>(value), message}
 #define RUVIA_ONE_OF(message, ...) ::ruvia::detail::model::OneOf<__VA_ARGS__>{message}

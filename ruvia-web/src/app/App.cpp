@@ -256,7 +256,7 @@ void App::run() {
             for (std::size_t i = 0; i < state.workersPerListener; ++i) {
                 auto workerOptions = i + 1 == state.workersPerListener
                     ? std::move(listenerOptions)
-                    : listenerOptions;
+                    : listenerOptions;  // NOLINT(bugprone-use-after-move): moved only on the final iteration
                 runtime->workers.push_back(detail::makePmrObject<detail::HttpServer>(
                     runtimeResource,
                     endpoint,

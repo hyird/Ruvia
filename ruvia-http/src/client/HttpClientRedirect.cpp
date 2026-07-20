@@ -85,7 +85,7 @@ void removeHttpClientLastPathSegment(std::pmr::string& path) noexcept {
             const auto segmentBytes = nextSlash == std::string_view::npos
                 ? remaining.size()
                 : nextSlash;
-            normalized.append(remaining.data(), segmentBytes);
+            normalized.append(remaining.substr(0, segmentBytes));
             remaining.remove_prefix(segmentBytes);
         }
     }

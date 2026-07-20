@@ -7,9 +7,11 @@ on:
     paths:
       - "CMakeLists.txt"
       - "vcpkg.json"
+      - "cmake/**"
       - "ruvia-core/**"
       - "ruvia-http/**"
       - "ruvia-web/**"
+      - "ruvia-edge/**"
       - "examples/**"
       - "tests/**"
       - "scripts/**"
@@ -21,9 +23,11 @@ on:
     paths:
       - "CMakeLists.txt"
       - "vcpkg.json"
+      - "cmake/**"
       - "ruvia-core/**"
       - "ruvia-http/**"
       - "ruvia-web/**"
+      - "ruvia-edge/**"
       - "examples/**"
       - "tests/**"
       - "scripts/**"
@@ -35,13 +39,14 @@ permissions:
   contents: read
 
 concurrency:
-  group: build-${{ github.workflow }}-${{ github.ref }}
+  group: build-${{ github.workflow }}-${{ github.sha }}
   cancel-in-progress: true
 
-# CI is deliberately just two full-feature compile-verification jobs -- Linux
-# (gcc) and Windows (MSVC) -- with every optional feature enabled, plus a
-# cleanup job that prunes old runs. Sanitizer, fuzz, and benchmark runs are done
-# locally rather than on every push.
+# CI is deliberately just two compile-verification jobs plus a cleanup job that
+# prunes old runs. Linux (gcc) enables every optional feature and target;
+# Windows (MSVC) covers the portable feature set and does not yet exercise edge
+# or PostgreSQL. Sanitizer, fuzz, and benchmark runs are done locally rather
+# than on every push.
 jobs:
   ubuntu_build:
     name: Ubuntu build
@@ -94,10 +99,12 @@ jobs:
           cmake -S . -B build/test -G Ninja \
             -DCMAKE_BUILD_TYPE="$BUILD_TYPE" \
             -DRUVIA_ENABLE_MARIADB=ON \
+            -DRUVIA_ENABLE_POSTGRESQL=ON \
             -DRUVIA_ENABLE_REDIS=ON \
             -DRUVIA_ENABLE_JWT=ON \
             -DRUVIA_BUILD_EXAMPLES=ON \
             -DRUVIA_BUILD_TESTS=ON \
+            -DRUVIA_BUILD_EDGE=ON \
             -DRUVIA_ENABLE_HTTP2_CONFORMANCE_TESTS=ON \
             -DCMAKE_TOOLCHAIN_FILE="$VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake"
 

@@ -1,6 +1,6 @@
 {
   "name": "ruvia",
-  "version-string": "0.1.3",
+  "version-string": "0.1.4",
   "default-features": [
     "runtime",
     "protocol",
@@ -36,6 +36,12 @@
     },
     "framework": {
       "description": "Dependencies for the complete ruvia-web framework.",
+      "dependencies": [
+        "openssl"
+      ]
+    },
+    "edge": {
+      "description": "Dependencies for the ruvia-edge CDN edge node library.",
       "dependencies": [
         "openssl"
       ]
