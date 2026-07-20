@@ -304,6 +304,15 @@ if(RUVIA_BUILD_HTTP)
         COMMAND ${CMAKE_COMMAND}
             -P ${CMAKE_CURRENT_BINARY_DIR}/verify_http_status_literals.cmake)
 
+    configure_file(
+        ${CMAKE_CURRENT_SOURCE_DIR}/verify_http_sansio.cmake.in
+        ${CMAKE_CURRENT_BINARY_DIR}/verify_http_sansio.cmake
+        @ONLY)
+    add_test(
+        NAME ruvia_guard_http_sansio
+        COMMAND ${CMAKE_COMMAND}
+            -P ${CMAKE_CURRENT_BINARY_DIR}/verify_http_sansio.cmake)
+
     ruvia_add_test(ruvia_smoke_http_target server/smoke_http_target.cpp LIB ruvia::http)
 
     # Compile the exhaustive public/detail HTTP contract once in the normal build.
