@@ -413,7 +413,7 @@ bool testConcurrentStopHasOneInitiator() {
     std::atomic<std::size_t> initiators{0};
     std::barrier gate(kThreadCount + 1);
     {
-        std::vector<std::jthread> threads;
+        std::vector<std::thread> threads;
         threads.reserve(kThreadCount);
         for (std::size_t i = 0; i < kThreadCount; ++i) {
             threads.emplace_back([&] {
@@ -424,6 +424,9 @@ bool testConcurrentStopHasOneInitiator() {
             });
         }
         gate.arrive_and_wait();
+        for (auto& thread : threads) {
+            thread.join();
+        }
     }
 
     lifecycle.completeStop();

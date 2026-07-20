@@ -293,7 +293,7 @@ void HttpServer::start() {
             ioContext_,
             taskAsAwaitable(runWorker()),
             asio::bind_allocator(asio::recycling_allocator<void>(), asio::detached));
-        workerThread_ = std::jthread([this] { runIoContext(); });
+        workerThread_ = std::thread([this] { runIoContext(); });
         workerCompletion_.waitForStartup();
     } catch (...) {
         (void)lifecycle_.requestStop();

@@ -54,7 +54,7 @@ public:
 
     void start() {
         asio::co_spawn(io_, acceptLoop(), asio::detached);
-        thread_ = std::jthread([this] { io_.run(); });
+        thread_ = std::thread([this] { io_.run(); });
     }
 
     void stop() {
@@ -239,7 +239,7 @@ private:
     std::atomic<int> notModified_{0};
     std::mutex mutex_;
     std::string lastRequest_;
-    std::jthread thread_;
+    std::thread thread_;
 };
 
 // A synchronous one-shot HTTP/1.1 client: send `request`, read until the server

@@ -19,7 +19,7 @@ RUVIA_TEST(http_server_worker_completion_is_monotonic) {
 
 RUVIA_TEST(http_server_worker_completion_propagates_startup_failure) {
     ruvia::detail::HttpServerWorkerCompletion completion;
-    std::jthread worker([&completion] {
+    std::thread worker([&completion] {
         (void)completion.markStartupFailed(
             std::make_exception_ptr(std::runtime_error("startup failed")));
     });
@@ -30,6 +30,7 @@ RUVIA_TEST(http_server_worker_completion_propagates_startup_failure) {
     } catch (const std::runtime_error& error) {
         RUVIA_CHECK(std::string_view(error.what()) == "startup failed");
     }
+    worker.join();
 }
 
 RUVIA_TEST(http_server_worker_completion_keeps_first_terminal_failure) {
