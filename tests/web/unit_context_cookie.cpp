@@ -17,6 +17,7 @@
 #include "ruvia/http/HttpHeader.h"
 #include "ruvia/http/HttpKnownMethod.h"
 #include "ruvia/http/HttpProtocolError.h"
+#include "ruvia/web/Error.h"
 #include "ruvia/core/memory/MemoryPool.h"
 
 namespace {
@@ -84,6 +85,20 @@ asio::awaitable<void> parseArrayForm(
     xSize = x.size();
     if (const auto xv = x.value(); xv.has_value()) {
         xValue.assign(xv->data(), xv->size());
+    }
+}
+
+asio::awaitable<void> parseWithFieldCap(
+    ruvia::Context& context,
+    std::size_t maxFields,
+    bool& rejected,
+    int& status) {
+    try {
+        (void)co_await ruvia::detail::taskAsAwaitable(parseRequestBody(
+            context, {.maxFields = maxFields}));
+    } catch (const ruvia::HttpError& error) {
+        rejected = true;
+        status = error.info().status().value();
     }
 }
 
@@ -488,6 +503,32 @@ RUVIA_TEST(context_parse_body_groups_arrays_and_compacts_repeated_scalars) {
     RUVIA_CHECK(tagsArray);                      // flagged as an array
     RUVIA_CHECK_EQ(xSize, std::size_t{1});       // repeated scalar compacted to one
     RUVIA_CHECK_EQ(xValue, std::string("2"));    // last value wins
+}
+
+RUVIA_TEST(context_parse_body_rejects_a_flood_of_fields) {
+    WorkerMemory worker;
+    HttpRequest request = HttpRequestAccess::make();
+    HttpRequestAccess::reset(request);
+    HttpRequestAccess::addHeader(
+        request,
+        HttpHeaderView{"Content-Type", "application/x-www-form-urlencoded"},
+        HttpRequestAccess::knownHeaderSlot(RequestKnownHeader::kContentType));
+    HttpRequestAccess::setBody(request, "a=1&b=2&c=3&d=4&e=5");  // five fields
+
+    RequestMemory requestMemory(worker);
+    HttpRequestAccess::setResource(request, requestMemory.resource());
+    auto context = ContextAccess::make(requestMemory, request);
+
+    // A body carrying more fields than maxFields is rejected with 413 before the
+    // field vector can grow without bound.
+    asio::io_context io;
+    bool rejected = false;
+    int status = 0;
+    asio::co_spawn(io, parseWithFieldCap(context, 3, rejected, status), asio::detached);
+    io.run();
+
+    RUVIA_CHECK(rejected);
+    RUVIA_CHECK_EQ(status, 413);
 }
 
 RUVIA_TEST(context_parse_body_all_retains_duplicates_and_selects_last_value) {

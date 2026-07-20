@@ -59,6 +59,13 @@ namespace detail {
     throw std::invalid_argument("invalid form body");
 }
 
+[[noreturn]] void throwTooManyFormFields() {
+    throw HttpError(
+        http_status::kContentTooLarge,
+        "too_many_form_fields",
+        "request form has too many fields");
+}
+
 [[noreturn]] void throwInvalidQuery() {
     throw std::invalid_argument("invalid query");
 }
@@ -266,6 +273,11 @@ void appendParsedBodyField(
         assignDotPath(field, fields.get_allocator().resource());
     }
 
+    // Reject before the field vector (and the sorts over it) can grow without
+    // bound from an attacker-supplied body of many tiny fields.
+    if (fields.size() >= options.maxFields) {
+        detail::throwTooManyFormFields();
+    }
     fields.emplace_back(std::move(field));
 }
 
