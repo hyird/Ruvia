@@ -24,7 +24,7 @@ inline constexpr std::size_t kRateLimitKeyBufferBytes = 19;
 // so that lightweight, widely-included header does not gain an asio dependency.
 [[nodiscard]] inline std::string_view rateLimitKeyFor(
     std::string_view remoteAddress, char (&buffer)[kRateLimitKeyBufferBytes]) noexcept {
-    if (!remoteAddress.contains(':')) {
+    if (remoteAddress.find(':') == std::string_view::npos) {
         return remoteAddress;  // no ':' -> IPv4 or empty; already a per-host key
     }
     std::error_code ec;

@@ -73,23 +73,6 @@ inline void ensureNonZeroPort(std::uint16_t port, const char* message) {
 }
 
 template <typename Rep, typename Period>
-void ensureNonNegativeDuration(std::chrono::duration<Rep, Period> value, const char* message) {
-    if (value.count() < 0) {
-        throw std::invalid_argument(message);
-    }
-}
-
-template <typename FirstDuration, typename... RestDurations>
-void ensureNonNegativeDurations(
-    const char* message,
-    FirstDuration first,
-    RestDurations... rest) {
-    if (first.count() < 0 || ((rest.count() < 0) || ...)) {
-        throw std::invalid_argument(message);
-    }
-}
-
-template <typename Rep, typename Period>
 void ensurePositiveDuration(std::chrono::duration<Rep, Period> value, const char* message) {
     if (value.count() <= 0) {
         throw std::invalid_argument(message);

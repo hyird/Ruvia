@@ -342,18 +342,13 @@ void gzipZfree(voidpf, voidpf address) noexcept {
             8192,
             maxEncodedBytes - offset);
         const auto beforeInput = stream.avail_in;
-        int status = Z_OK;
-        output.resize_and_overwrite(
-            offset + writable,
-            [&stream, &status, offset](char* data, std::size_t count) noexcept {
-                const auto available = count - offset;
-                stream.next_out = reinterpret_cast<Bytef*>(data + offset);
-                stream.avail_out = static_cast<uInt>(available);
-                status = deflate(
-                    &stream,
-                    stream.avail_in == 0 ? Z_FINISH : Z_NO_FLUSH);
-                return offset + (available - stream.avail_out);
-            });
+        output.resize(offset + writable);
+        stream.next_out = reinterpret_cast<Bytef*>(output.data() + offset);
+        stream.avail_out = static_cast<uInt>(writable);
+        const auto status = deflate(
+            &stream,
+            stream.avail_in == 0 ? Z_FINISH : Z_NO_FLUSH);
+        output.resize(offset + (writable - stream.avail_out));
         if (status == Z_STREAM_END) {
             return output;
         }
@@ -469,25 +464,15 @@ void gzipZfree(voidpf, voidpf address) noexcept {
             8192,
             maxEncodedBytes - offset);
         const auto beforeInput = in.pos;
-        std::size_t result = 0;
-        std::size_t produced = 0;
-        output.resize_and_overwrite(
-            offset + writable,
-            [&in, &produced, &result, context, offset](
-                char* data,
-                std::size_t count) noexcept {
-                ZSTD_outBuffer out{
-                    data + offset,
-                    count - offset,
-                    0};
-                result = ZSTD_compressStream2(
-                    context,
-                    &out,
-                    &in,
-                    ZSTD_e_end);
-                produced = out.pos;
-                return offset + out.pos;
-            });
+        output.resize(offset + writable);
+        ZSTD_outBuffer out{output.data() + offset, writable, 0};
+        const auto result = ZSTD_compressStream2(
+            context,
+            &out,
+            &in,
+            ZSTD_e_end);
+        const auto produced = out.pos;
+        output.resize(offset + produced);
         if (ZSTD_isError(result) != 0) {
             return HttpContentEncodeError::kEncoderFailure;
         }

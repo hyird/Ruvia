@@ -51,10 +51,8 @@ inline void appendSessionCookieHeader(
     options.sameSite = CookieSameSite::kLax;
     const SetCookiePlan plan("sid", id, options);
     std::pmr::string setCookie(resource);
-    setCookie.resize_and_overwrite(plan.size(), [&](char* out, std::size_t size) {
-        plan.write(out);
-        return size;
-    });
+    setCookie.resize(plan.size());
+    plan.write(setCookie.data());
     response.header("Set-Cookie", setCookie, {.append = true});
 }
 
@@ -69,10 +67,8 @@ inline void appendExpiredSessionCookieHeader(
     options.maxAge = std::chrono::seconds(0);
     const SetCookiePlan plan("sid", "", options);
     std::pmr::string setCookie(resource);
-    setCookie.resize_and_overwrite(plan.size(), [&](char* out, std::size_t size) {
-        plan.write(out);
-        return size;
-    });
+    setCookie.resize(plan.size());
+    plan.write(setCookie.data());
     response.header("Set-Cookie", setCookie, {.append = true});
 }
 

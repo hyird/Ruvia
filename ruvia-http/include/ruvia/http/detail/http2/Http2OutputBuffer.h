@@ -82,7 +82,7 @@ public:
             type,
             flags,
             streamId);
-        appendBytes(std::string_view(header));
+        appendBytes(std::string_view(header.data(), header.size()));
         appendBytes(first);
         appendBytes(second);
     }

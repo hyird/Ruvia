@@ -14,6 +14,14 @@ struct ModelValidationAccess final {
     [[nodiscard]] static ModelFieldState fieldState(const ModelT& model) {
         return model.template ruviaFieldState<Field>();
     }
+
+    template <typename ModelT, typename ValidatorT>
+    static void validateRequired(
+        const ModelT& model,
+        std::string_view prefix,
+        ValidatorT& validator) {
+        model.ruviaValidateRequired(prefix, validator);
+    }
 };
 
 }  // namespace ruvia::detail

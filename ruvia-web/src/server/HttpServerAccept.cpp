@@ -55,12 +55,7 @@ Task<void> HttpServer::acceptLoop() {
 
         configureAcceptedSocket(socket);
         AcceptedConnectionLease connection(
-            std::move(socket),
-            activeConnectionCount_,
-            this,
-            [](void* target) noexcept {
-                static_cast<HttpServer*>(target)->maybeFinishDrain();
-            });
+            std::move(socket), activeConnectionCount_);
         asio::co_spawn(
             ioContext_,
             taskAsAwaitable(handleSession(std::move(connection))),

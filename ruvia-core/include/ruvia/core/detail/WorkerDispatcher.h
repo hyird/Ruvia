@@ -2,7 +2,6 @@
 
 #include <cstddef>
 #include <chrono>
-#include <functional>
 #include <memory>
 #include <vector>
 
@@ -27,14 +26,14 @@ public:
     WorkerDispatcher(const WorkerDispatcher&) = delete;
     WorkerDispatcher& operator=(const WorkerDispatcher&) = delete;
 
-    [[nodiscard]] PostResult post(std::move_only_function<void()> task);
-    void defer(std::move_only_function<void()> task);
-    void deferOrTerminate(std::move_only_function<void()> task) noexcept;
+    [[nodiscard]] PostResult post(MoveOnlyFunction<void()> task);
+    void defer(MoveOnlyFunction<void()> task);
+    void deferOrTerminate(MoveOnlyFunction<void()> task) noexcept;
     void registerShutdownListener(const std::shared_ptr<WorkerShutdownListener>& listener);
     void scheduleTimer(
         WorkerTimerRegistration& registration,
         std::chrono::steady_clock::time_point deadline,
-        std::move_only_function<void(WorkerTimerOutcome)> completion);
+        MoveOnlyFunction<void(WorkerTimerOutcome)> completion);
     void requestTimerCancellation(
         std::size_t slot, std::uint64_t generation) noexcept;
     void cancelTimer(std::size_t slot, std::uint64_t generation) noexcept;

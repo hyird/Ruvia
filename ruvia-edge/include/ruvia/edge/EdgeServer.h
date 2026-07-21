@@ -15,6 +15,7 @@
 #include <vector>
 
 #include <asio/awaitable.hpp>
+#include <asio/cancellation_signal.hpp>
 #include <asio/io_context.hpp>
 #include <asio/ip/tcp.hpp>
 #include <asio/ssl.hpp>
@@ -25,6 +26,7 @@
 #include "ruvia/edge/EdgeCache.h"
 #include "ruvia/edge/EdgeConfig.h"
 #include "ruvia/edge/OriginFetcher.h"
+#include "ruvia/core/memory/MemoryPool.h"
 #include "ruvia/http/HttpHeader.h"
 #include "ruvia/http/HttpKnownMethod.h"
 
@@ -183,14 +185,21 @@ public:
     void clearCache();
 
 private:
+    using TlsContextPtr = std::shared_ptr<asio::ssl::context>;
+
     [[nodiscard]] static std::string cacheKey(
         std::string_view method,
         std::string_view frontHost,
         std::string_view target);
 
+    [[nodiscard]] TlsContextPtr loadTlsContext() const noexcept;
+    void storeTlsContext(TlsContextPtr context) noexcept;
+
     asio::awaitable<void> acceptLoop();
     // Terminate TLS on an accepted socket, then run the session over it.
-    asio::awaitable<void> handleTlsSession(asio::ip::tcp::socket socket);
+    asio::awaitable<void> handleTlsSession(
+        asio::ip::tcp::socket socket,
+        TlsContextPtr context);
     // Run the keep-alive session over any stream (plain TCP or TLS).
     template <typename Stream>
     asio::awaitable<void> handleSession(Stream stream);
@@ -217,12 +226,6 @@ private:
     // Wake every request waiting on an in-flight fetch for `key` and drop the
     // entry (called when the leader's fetch finishes, however it ended).
     void wakeInFlight(const std::string& key);
-
-    // Session accounting for graceful shutdown: a session decrements the live
-    // count when it ends, and once a drain is in progress and the last session is
-    // gone the event loop is stopped.
-    void onSessionFinished();
-    void maybeCompleteDrain();
 
     // Emit the access-log entry for a completed request, if a callback is set.
     void recordRequest(const AccessLogEntry& entry);
@@ -253,18 +256,21 @@ private:
     void diskPurge(std::string key);
     void diskPurgePrefix(std::string prefix);
 
+    // Single-thread request/session allocations belong to the edge worker.
+    WorkerMemory memory_;
     asio::io_context ioContext_;
     asio::ip::tcp::acceptor acceptor_;
-    // Graceful-shutdown coordination (touched only on the event-loop thread).
-    // drainSignal_ (armed to never expire) is cancelled to wake idle keep-alive
-    // and HTTP/2 reads so they close; drainDeadline_ bounds the wait.
-    asio::steady_timer drainSignal_;
-    asio::steady_timer drainDeadline_;
-    bool draining_{false};
-    int liveSessions_{0};
+    // Armed indefinitely during normal operation. stop() cancels it on the
+    // worker context so every idle HTTP/1 and HTTP/2 session wakes immediately.
+    asio::steady_timer shutdownSignal_;
+    std::pmr::vector<std::shared_ptr<asio::cancellation_signal>> activeSessions_;
     // Server TLS context, swappable at runtime (null when TLS is disabled). A new
     // connection loads the current one; in-flight sessions keep their own.
-    std::atomic<std::shared_ptr<asio::ssl::context>> tlsContext_;
+#if defined(__cpp_lib_atomic_shared_ptr)
+    std::atomic<TlsContextPtr> tlsContext_;
+#else
+    TlsContextPtr tlsContext_;
+#endif
     // One origin fetch in progress for a cache key, with the requests waiting on
     // it (request coalescing / single-flight). The waiter timers are cancelled to
     // wake the followers when the leader's fetch completes.
@@ -283,7 +289,7 @@ private:
     std::size_t maxCacheableBytes_{8u * 1024u * 1024u};
     std::unordered_map<std::string, InFlightFetch> inFlight_;
     std::function<void(const AccessLogEntry&)> accessLog_;
-    std::jthread worker_;
+    std::thread worker_;
 };
 
 }  // namespace ruvia::edge

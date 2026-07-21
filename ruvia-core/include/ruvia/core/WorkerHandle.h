@@ -3,9 +3,10 @@
 #include <concepts>
 #include <chrono>
 #include <cstdint>
-#include <functional>
 #include <memory>
 #include <utility>
+
+#include <ruvia/core/MoveOnlyFunction.h>
 
 namespace ruvia {
 
@@ -37,12 +38,12 @@ public:
     template <typename Fn>
         requires std::invocable<std::decay_t<Fn>&>
     [[nodiscard]] PostResult post(Fn&& fn) const {
-        return postTask(std::move_only_function<void()>(std::forward<Fn>(fn)));
+        return postTask(MoveOnlyFunction<void()>(std::forward<Fn>(fn)));
     }
 
 private:
     explicit WorkerHandle(std::shared_ptr<detail::WorkerDispatcher> dispatcher) noexcept;
-    [[nodiscard]] PostResult postTask(std::move_only_function<void()> task) const;
+    [[nodiscard]] PostResult postTask(MoveOnlyFunction<void()> task) const;
 
     // A handle owns the stable dispatcher endpoint, not the worker's io_context.
     // The worker detaches that endpoint before destroying its execution context.
@@ -55,10 +56,10 @@ namespace detail {
 struct WorkerHandleAccess {
     [[nodiscard]] static WorkerHandle
     make(const std::shared_ptr<WorkerDispatcher>& dispatcher) noexcept;
-    static void defer(const WorkerHandle& worker, std::move_only_function<void()> task);
+    static void defer(const WorkerHandle& worker, MoveOnlyFunction<void()> task);
     static void deferOrTerminate(
         const WorkerHandle& worker,
-        std::move_only_function<void()> task) noexcept;
+        MoveOnlyFunction<void()> task) noexcept;
     static void registerShutdownListener(
         const WorkerHandle& worker,
         const std::shared_ptr<WorkerShutdownListener>& listener);
@@ -66,7 +67,7 @@ struct WorkerHandleAccess {
         const WorkerHandle& worker,
         WorkerTimerRegistration& registration,
         std::chrono::steady_clock::time_point deadline,
-        std::move_only_function<void(WorkerTimerOutcome)> completion);
+        MoveOnlyFunction<void(WorkerTimerOutcome)> completion);
 };
 
 }

@@ -16,8 +16,7 @@ public:
     constexpr explicit ModelOptions(OptionTs... options) noexcept : options_(options...) {
         static_assert((isModelOption<OptionTs>() && ...),
             "RUVIA_FIELD accepts only model options: RUVIA_DEFAULT, RUVIA_OMIT_EMPTY, RUVIA_EMIT_NULL. "
-            "Use RUVIA_DEFAULT only in request models, response JSON options only in response models, "
-            "and move validation rules to RUVIA_VALIDATE_* with RUVIA_RULE.");
+            "Move validation rules to RUVIA_VALIDATE_* with RUVIA_RULE.");
     }
 
     [[nodiscard]] constexpr bool emitNull() const noexcept {

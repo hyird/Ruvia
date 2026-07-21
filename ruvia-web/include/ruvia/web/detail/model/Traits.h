@@ -75,11 +75,11 @@ inline constexpr bool isRequestModelField =
 
 template <typename T>
 inline constexpr bool isRequestModel =
-    std::is_base_of_v<RequestModelSchemaTag, std::remove_cvref_t<T>>;
+    JsonBody<std::remove_cvref_t<T>>::value;
 
 template <typename T>
 inline constexpr bool isResponseModel =
-    std::is_base_of_v<ResponseModelSchemaTag, std::remove_cvref_t<T>>;
+    JsonBody<std::remove_cvref_t<T>>::value;
 
 template <typename T>
 inline constexpr bool isResponseModelField =

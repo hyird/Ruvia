@@ -60,15 +60,15 @@ void TaskScope::spawn(Task<void> task) {
 }
 
 void TaskScope::requestStop() noexcept {
-    stopSource_.request_stop();
+    stopSource_.requestStop();
 }
 
-std::stop_token TaskScope::stopToken() const noexcept {
-    return stopSource_.get_token();
+StopToken TaskScope::stopToken() const noexcept {
+    return stopSource_.token();
 }
 
 bool TaskScope::stopRequested() const noexcept {
-    return stopSource_.stop_requested();
+    return stopSource_.stopRequested();
 }
 
 std::size_t TaskScope::size() const noexcept {

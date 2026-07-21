@@ -188,7 +188,7 @@ Task<void> PostgreSqlPool::sendQuery(
     if (sql.empty()) {
         throw std::invalid_argument("SQL must not be empty");
     }
-    if (sql.contains('\0')) {
+    if (sql.find('\0') != std::string_view::npos) {
         throw std::invalid_argument("SQL must not contain NUL bytes");
     }
     if (!std::in_range<int>(params.size())) {

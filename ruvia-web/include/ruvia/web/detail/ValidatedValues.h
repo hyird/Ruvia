@@ -3,7 +3,13 @@
 #include <cstddef>
 #include <exception>
 #include <stdexcept>
+#include <string_view>
 #include <type_traits>
+
+namespace ruvia {
+template <typename T>
+class ValidatedJson;
+}
 
 namespace ruvia::detail {
 
@@ -22,6 +28,7 @@ class ValidatedModelBindings;
 struct ValidatedModelBindingNode final {
     const void* typeKey;
     const void* value;
+    std::string_view rawJson;
     ValidatedModelBindingNode* previous;
 };
 
@@ -37,7 +44,10 @@ public:
 private:
     friend class ValidatedModelBindings;
 
-    ValidatedModelBinding(ValidatedModelBindings& bindings, const T& value) noexcept;
+    ValidatedModelBinding(
+        ValidatedModelBindings& bindings,
+        const T& value,
+        std::string_view rawJson) noexcept;
 
     ValidatedModelBindings* bindings_;
     ValidatedModelBindingNode node_;
@@ -72,8 +82,23 @@ public:
     }
 
     template <typename T>
-    [[nodiscard]] ValidatedModelBinding<T> bind(const T& value) {
-        return ValidatedModelBinding<T>(*this, value);
+    [[nodiscard]] ValidatedJson<std::remove_cvref_t<T>> getJson() const {
+        using ModelT = std::remove_cvref_t<T>;
+        const auto* key = validatedValueTypeKey<ModelT>();
+        for (auto* node = head_; node != nullptr; node = node->previous) {
+            if (node->typeKey == key && !node->rawJson.empty()) {
+                return ValidatedJson<ModelT>(
+                    *static_cast<const ModelT*>(node->value), node->rawJson);
+            }
+        }
+        throw std::logic_error("validated JSON request model is not available");
+    }
+
+    template <typename T>
+    [[nodiscard]] ValidatedModelBinding<T> bind(
+        const T& value,
+        std::string_view rawJson = {}) {
+        return ValidatedModelBinding<T>(*this, value, rawJson);
     }
 
     template <typename T>
@@ -102,9 +127,10 @@ private:
 template <typename T>
 ValidatedModelBinding<T>::ValidatedModelBinding(
     ValidatedModelBindings& bindings,
-    const T& value) noexcept
+    const T& value,
+    std::string_view rawJson) noexcept
     : bindings_(&bindings),
-      node_{validatedValueTypeKey<T>(), &value, nullptr} {
+      node_{validatedValueTypeKey<T>(), &value, rawJson, nullptr} {
     bindings_->push(node_);
 }
 

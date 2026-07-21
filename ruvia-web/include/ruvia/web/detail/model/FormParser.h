@@ -14,9 +14,10 @@
 
 #include "ruvia/core/memory/PmrResource.h"
 #include "ruvia/http/UrlEncoding.h"
+#include "ruvia/web/detail/DecimalNumber.h"
 #include "ruvia/web/detail/model/Traits.h"
 
-// Internal URL-encoded form parser for RUVIA_REQUEST_MODEL.
+// Internal URL-encoded form parser for RUVIA_MODEL.
 
 namespace ruvia::detail {
 
@@ -51,21 +52,27 @@ template <typename NumberT>
         return std::nullopt;
     }
     NumberT parsed{};
-    const auto [ptr, ec] = std::from_chars(
-        decoded.data(),
-        decoded.data() + decoded.size(),
-        parsed);
-    if (ec != std::errc{} || ptr != decoded.data() + decoded.size()) {
-        return std::nullopt;
-    }
     if constexpr (std::is_floating_point_v<NumberT>) {
-        // std::from_chars accepts "inf"/"nan", but the rest of the pipeline
+        double value = 0;
+        if (!parseDecimalNumber(decoded, value)) {
+            return std::nullopt;
+        }
+        parsed = static_cast<NumberT>(value);
+        // Floating parsers accept "inf"/"nan", but the rest of the pipeline
         // cannot round-trip them: the JSON number grammar rejects them on input,
         // the model JSON writer replaces them with null, and the finite number
         // formatter throws. Reject them here so a bound floating field is always
         // a finite value rather than one that silently changes or aborts the
         // response when serialized.
         if (!std::isfinite(parsed)) {
+            return std::nullopt;
+        }
+    } else {
+        const auto [ptr, ec] = std::from_chars(
+            decoded.data(),
+            decoded.data() + decoded.size(),
+            parsed);
+        if (ec != std::errc{} || ptr != decoded.data() + decoded.size()) {
             return std::nullopt;
         }
     }
@@ -110,14 +117,20 @@ template <typename T>
     } else if constexpr (isRuviaScalar<FieldT>) {
         using ScalarT = typename RuviaScalarTraits<FieldT>::value_type;
         if constexpr (std::is_same_v<ScalarT, bool>) {
-            return parseFormBool(decoded).transform(
-                [](bool parsed) { return FieldT(parsed); });
+            const auto parsed = parseFormBool(decoded);
+            if (!parsed.has_value()) {
+                return std::nullopt;
+            }
+            return FieldT(*parsed);
         } else {
-            return parseFormNumber<ScalarT>(decoded).transform(
-                [](ScalarT parsed) { return FieldT(parsed); });
+            const auto parsed = parseFormNumber<ScalarT>(decoded);
+            if (!parsed.has_value()) {
+                return std::nullopt;
+            }
+            return FieldT(*parsed);
         }
     } else {
-        static_assert(alwaysFalse<FieldT>, "RUVIA_REQUEST_MODEL form field type is not supported");
+        return std::nullopt;
     }
 }
 

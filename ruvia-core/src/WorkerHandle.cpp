@@ -26,7 +26,7 @@ WorkerId WorkerHandle::id() const noexcept {
     return dispatcher_ ? dispatcher_->id() : 0;
 }
 
-PostResult WorkerHandle::postTask(std::move_only_function<void()> task) const {
+PostResult WorkerHandle::postTask(MoveOnlyFunction<void()> task) const {
     return dispatcher_
         ? dispatcher_->post(std::move(task))
         : PostResult::kWorkerStopping;
@@ -39,7 +39,7 @@ WorkerHandle detail::WorkerHandleAccess::make(
 
 void detail::WorkerHandleAccess::defer(
     const WorkerHandle& worker,
-    std::move_only_function<void()> task) {
+    MoveOnlyFunction<void()> task) {
     const auto& dispatcher = worker.dispatcher_;
     if (!dispatcher) {
         throw std::runtime_error("worker stopped before internal continuation was scheduled");
@@ -49,7 +49,7 @@ void detail::WorkerHandleAccess::defer(
 
 void detail::WorkerHandleAccess::deferOrTerminate(
     const WorkerHandle& worker,
-    std::move_only_function<void()> task) noexcept {
+    MoveOnlyFunction<void()> task) noexcept {
     const auto& dispatcher = worker.dispatcher_;
     if (!dispatcher) {
         std::terminate();
@@ -71,7 +71,7 @@ void detail::WorkerHandleAccess::scheduleTimer(
     const WorkerHandle& worker,
     WorkerTimerRegistration& registration,
     std::chrono::steady_clock::time_point deadline,
-    std::move_only_function<void(WorkerTimerOutcome)> completion) {
+    MoveOnlyFunction<void(WorkerTimerOutcome)> completion) {
     const auto& dispatcher = worker.dispatcher_;
     if (!dispatcher) {
         throw std::runtime_error("cannot schedule a timer on a stopped worker");

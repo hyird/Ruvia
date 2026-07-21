@@ -7,7 +7,6 @@ namespace ruvia::detail {
 enum class HttpServerWorkerState : std::uint8_t {
     kFresh,
     kRunning,
-    kDraining,
     kStopped,
 };
 

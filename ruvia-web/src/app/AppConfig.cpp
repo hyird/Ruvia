@@ -84,17 +84,6 @@ App& App::setKeepaliveTimeout(std::optional<std::chrono::milliseconds> timeout) 
         });
 }
 
-App& App::setShutdownGracePeriod(std::chrono::milliseconds gracePeriod) {
-    return detail::mutateStoppedApp(
-        *this,
-        *state_,
-        "cannot change shutdown grace period while app is running",
-        [gracePeriod](detail::AppState& state) {
-            detail::ensureNonNegativeDuration(gracePeriod, "shutdown grace period must not be negative");
-            state.options.shutdownGracePeriod = gracePeriod;
-        });
-}
-
 App& App::setConnectionScanInterval(std::chrono::milliseconds interval) {
     return detail::mutateStoppedApp(
         *this,

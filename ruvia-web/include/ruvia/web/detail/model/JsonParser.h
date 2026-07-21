@@ -13,7 +13,7 @@
 #include "ruvia/web/detail/json/JsonString.h"
 #include "ruvia/web/detail/model/JsonWriter.h"
 
-// Internal JSON value parser for RUVIA_REQUEST_MODEL.
+// Internal JSON value parser for RUVIA_MODEL.
 
 namespace ruvia::detail {
 
@@ -165,7 +165,7 @@ template <typename T>
         input = remaining;
         return nested;
     } else {
-        static_assert(alwaysFalse<FieldT>, "RUVIA_REQUEST_MODEL JSON field type is not supported");
+        static_assert(alwaysFalse<FieldT>, "RUVIA_MODEL JSON field type is not supported");
     }
 }
 

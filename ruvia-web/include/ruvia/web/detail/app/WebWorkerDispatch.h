@@ -3,11 +3,9 @@
 #include <asio/any_io_executor.hpp>
 
 #include <atomic>
-#include <functional>
 #include <memory>
 #include <memory_resource>
 #include <mutex>
-#include <stop_token>
 
 #include "ruvia/web/WebWorker.h"
 
@@ -20,7 +18,7 @@ class WorkerStateRegistry;
 class WebWorkerDispatch final
     : public std::enable_shared_from_this<WebWorkerDispatch> {
 public:
-    using Task = std::move_only_function<ruvia::Task<void>(WebWorkerContext&)>;
+    using Task = MoveOnlyFunction<ruvia::Task<void>(WebWorkerContext&)>;
 
     WebWorkerDispatch(
         asio::any_io_executor executor,
@@ -29,8 +27,7 @@ public:
         DbRegistry& databases,
         RedisRegistry& redis,
         const WorkerStateRegistry& workerStates,
-        std::move_only_function<void()> drained,
-        std::move_only_function<void(std::exception_ptr)> failed);
+        MoveOnlyFunction<void(std::exception_ptr)> failed);
     ~WebWorkerDispatch();
 
     WebWorkerDispatch(const WebWorkerDispatch&) = delete;
@@ -43,7 +40,6 @@ public:
     void close() noexcept;
     void retire() noexcept;
     [[nodiscard]] bool accepting() const noexcept;
-    [[nodiscard]] std::size_t outstanding() const noexcept;
     [[nodiscard]] WebWorkerStats stats() const noexcept;
 
     // Reconcile the outstanding_ reservation post() took for a start-lambda that
@@ -63,10 +59,9 @@ private:
     DbRegistry* databases_;
     RedisRegistry* redis_;
     const WorkerStateRegistry* workerStates_;
-    std::move_only_function<void()> drained_;
-    std::move_only_function<void(std::exception_ptr)> failed_;
+    MoveOnlyFunction<void(std::exception_ptr)> failed_;
     mutable std::mutex submitMutex_;
-    std::stop_source stopSource_;
+    StopSource stopSource_;
     std::atomic_size_t outstanding_{0};
     std::atomic_uint64_t accepted_{0};
     std::atomic_uint64_t queueFull_{0};

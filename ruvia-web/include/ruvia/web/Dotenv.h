@@ -98,9 +98,11 @@ private:
 template <typename T>
 std::optional<std::remove_cvref_t<T>> Env::get(
     std::string_view name) const & noexcept {
-    return get(name).and_then([](std::string_view value) noexcept {
-        return parseTypedValue<T>(value);
-    });
+    const auto value = get(name);
+    if (!value.has_value()) {
+        return std::nullopt;
+    }
+    return parseTypedValue<T>(*value);
 }
 
 template <typename T>

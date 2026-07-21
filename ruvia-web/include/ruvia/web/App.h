@@ -48,7 +48,6 @@ public:
     App& setWorkersPerListener(std::size_t workersPerListener);
     App& setWorkerMailboxCapacity(std::size_t capacity);
     App& setKeepaliveTimeout(std::optional<std::chrono::milliseconds> timeout);
-    App& setShutdownGracePeriod(std::chrono::milliseconds gracePeriod);
     App& setConnectionScanInterval(std::chrono::milliseconds interval);
     App& setClientHeaderTimeout(std::optional<std::chrono::milliseconds> timeout);
     App& setClientBodyTimeout(std::optional<std::chrono::milliseconds> timeout);

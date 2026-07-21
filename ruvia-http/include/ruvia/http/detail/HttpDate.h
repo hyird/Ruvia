@@ -42,7 +42,7 @@ namespace ruvia::detail {
     std::string_view value) noexcept {
     constexpr std::array<std::string_view, 7> weekdays{
         "Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"};
-    return std::ranges::contains(weekdays, value);
+    return std::ranges::find(weekdays, value) != weekdays.end();
 }
 
 [[nodiscard]] inline bool httpIsLongWeekday(
@@ -50,7 +50,7 @@ namespace ruvia::detail {
     constexpr std::array<std::string_view, 7> weekdays{
         "Monday", "Tuesday", "Wednesday", "Thursday",
         "Friday", "Saturday", "Sunday"};
-    return std::ranges::contains(weekdays, value);
+    return std::ranges::find(weekdays, value) != weekdays.end();
 }
 
 [[nodiscard]] inline std::optional<int> httpParseFixedDigits(std::string_view value) noexcept {

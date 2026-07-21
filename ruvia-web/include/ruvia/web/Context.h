@@ -78,6 +78,12 @@ private:
     template <typename T>
     friend detail::ValidatedModelBinding<T>
     detail::bindValidatedModel(Context& context, const T& model);
+    template <typename T>
+    friend detail::ValidatedModelBinding<T>
+    detail::bindValidatedJsonModel(
+        Context& context,
+        const T& model,
+        std::string_view rawJson);
 
     Context(
         RequestMemory& memory,
@@ -363,6 +369,14 @@ namespace detail {
 template <typename T>
 ValidatedModelBinding<T> bindValidatedModel(Context& context, const T& model) {
     return context.validatedModels_.bind(model);
+}
+
+template <typename T>
+ValidatedModelBinding<T> bindValidatedJsonModel(
+    Context& context,
+    const T& model,
+    std::string_view rawJson) {
+    return context.validatedModels_.bind(model, rawJson);
 }
 
 }  // namespace detail

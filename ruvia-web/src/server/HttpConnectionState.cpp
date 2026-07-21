@@ -19,8 +19,7 @@ namespace {
 // two move together if that limit is ever retuned.
 constexpr std::size_t kReadBufferShrinkCapacityBytes = kMaxHttpHeaderBytes;
 // Upper bound on work sets retained per worker. Beyond this, returned work sets
-// free to the upstream (mimalloc) so the free list never grows unbounded under
-// a burst of idle transitions.
+// release upstream so the free list never grows unbounded after a burst.
 constexpr std::size_t kMaxPooledWorkSets = 64;
 
 }  // namespace

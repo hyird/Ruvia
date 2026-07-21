@@ -104,20 +104,5 @@ ruvia_install_public_headers(http
 
 ruvia_install_public_header_tree(http include/ruvia/http/detail)
 
-if(RUVIA_BUILD_FUZZERS)
-    # Instrument the protocol library itself, not only the thin fuzz entrypoints.
-    # The sanitizer runtime link flags propagate to every executable that consumes
-    # the instrumented static library in this opt-in build.
-    target_compile_options(ruvia-http PRIVATE
-        -fsanitize=fuzzer-no-link,undefined
-        -fno-sanitize-recover=all
-        -fno-omit-frame-pointer
-    )
-    target_link_options(ruvia-http INTERFACE
-        -fsanitize=undefined
-        -fno-sanitize-recover=all
-    )
-endif()
-
 ruvia_install_export(http)
 ruvia_assert_target_file_ownership(ruvia-http)

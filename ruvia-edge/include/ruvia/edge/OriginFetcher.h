@@ -3,7 +3,6 @@
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
-#include <functional>
 #include <optional>
 #include <span>
 #include <string>
@@ -18,6 +17,7 @@
 #include <asio/ssl.hpp>
 
 #include "ruvia/http/HttpHeader.h"
+#include "ruvia/core/MoveOnlyFunction.h"
 
 namespace ruvia::edge {
 
@@ -64,8 +64,8 @@ struct OriginResponseHead final {
 // return false to abort the fetch (for example, the client disconnected). The
 // sink is type-erased so the fetcher stays independent of the client stream type.
 struct ResponseSink final {
-    std::move_only_function<asio::awaitable<bool>(const OriginResponseHead&)> onHead;
-    std::move_only_function<asio::awaitable<bool>(std::string_view)> onBody;
+    MoveOnlyFunction<asio::awaitable<bool>(const OriginResponseHead&)> onHead;
+    MoveOnlyFunction<asio::awaitable<bool>(std::string_view)> onBody;
 };
 
 // The outcome of a streaming fetch. A sink that aborts (returns false) is not an

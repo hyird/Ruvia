@@ -37,10 +37,11 @@ std::string_view JwtPayload::audience() const & noexcept {
     return audiences_.empty() ? std::string_view{} : std::string_view(audiences_.front());
 }
 bool JwtPayload::hasAudience(std::string_view audience) const noexcept {
-    return std::ranges::contains(
-        audiences_,
-        audience,
-        [](const auto& value) noexcept { return std::string_view(value); });
+    return std::ranges::find(
+               audiences_,
+               audience,
+               [](const auto& value) noexcept { return std::string_view(value); }) !=
+        audiences_.end();
 }
 std::string_view JwtPayload::id() const & noexcept { return id_; }
 std::optional<std::chrono::system_clock::time_point> JwtPayload::expiresAt() const noexcept { return expiresAt_; }
