@@ -13,7 +13,8 @@
 
 #include <atomic>
 #include <array>
-#include <barrier>
+#include <condition_variable>
+#include <cstdio>
 #include <future>
 #include <memory>
 #include <optional>
@@ -26,13 +27,18 @@ namespace {
 
 ruvia::Task<void> waitForSignal(
     ruvia::detail::WorkerSignal& signal,
-    bool& resumed) {
+    bool& resumed,
+    std::size_t& remaining,
+    ruvia::EventLoopAttachment& attachment) {
     {
         auto discardedColdWait = signal.wait();
         static_cast<void>(discardedColdWait);
     }
     co_await signal.wait();
     resumed = true;
+    if (--remaining == 0) {
+        attachment.stop();
+    }
 }
 
 bool testWorkerSignalIsWorkerAffine() {
@@ -51,20 +57,20 @@ bool testWorkerSignalIsWorkerAffine() {
     ruvia::detail::WorkerSignal secondSignal(workerHandle);
     bool firstResumed = false;
     bool secondResumed = false;
+    std::size_t remaining = 2;
     asio::co_spawn(
         ioContext,
         ruvia::detail::taskAsAwaitable(
-            waitForSignal(firstSignal, firstResumed)),
+            waitForSignal(firstSignal, firstResumed, remaining, attachment)),
         asio::detached);
     asio::co_spawn(
         ioContext,
         ruvia::detail::taskAsAwaitable(
-            waitForSignal(secondSignal, secondResumed)),
+            waitForSignal(secondSignal, secondResumed, remaining, attachment)),
         asio::detached);
     asio::post(ioContext, [&] {
         firstSignal.notify();
         secondSignal.notify();
-        attachment.stop();
     });
     ioContext.run();
     return invalidWorkerRejected && firstResumed && secondResumed;
@@ -77,17 +83,17 @@ bool testWorkerSignalHasNoArbitraryWaiterLimit() {
     const auto workerHandle = attachment.loop().handle();
     ruvia::detail::WorkerSignal signal(workerHandle);
     std::array<bool, kWaiterCount> resumed{};
+    std::size_t remaining = kWaiterCount;
     for (std::size_t index = 0; index < resumed.size(); ++index) {
         asio::co_spawn(
             ioContext,
             ruvia::detail::taskAsAwaitable(
-                waitForSignal(signal, resumed[index])),
+                waitForSignal(signal, resumed[index], remaining, attachment)),
             asio::detached);
     }
 
     asio::post(ioContext, [&] {
         signal.notify();
-        attachment.stop();
     });
     ioContext.run();
     for (const bool value : resumed) {
@@ -254,9 +260,18 @@ bool testExternalEventLoopAttachment() {
         }
 
         std::thread externalThread([&] { ioContext.run(); });
-        const bool dispatchedOnExternalThread = result.get();
-        attachment.stop();
-        externalThread.join();
+        bool dispatchedOnExternalThread = false;
+        try {
+            dispatchedOnExternalThread = result.get();
+            attachment.stop();
+            externalThread.join();
+        } catch (...) {
+            attachment.stop();
+            if (externalThread.joinable()) {
+                externalThread.join();
+            }
+            throw;
+        }
         if (!dispatchedOnExternalThread || !stopRegistration.valid() ||
             !stopCallbackRan || !stopCallbackOnLoop ||
             loop.post([] {}) != ruvia::PostResult::kWorkerStopping) {
@@ -411,19 +426,43 @@ bool testConcurrentStopHasOneInitiator() {
     }
 
     std::atomic<std::size_t> initiators{0};
-    std::barrier gate(kThreadCount + 1);
-    {
-        std::vector<std::jthread> threads;
-        threads.reserve(kThreadCount);
+    std::mutex gateMutex;
+    std::condition_variable gateChanged;
+    bool start = false;
+    std::vector<std::thread> threads;
+    threads.reserve(kThreadCount);
+    try {
         for (std::size_t i = 0; i < kThreadCount; ++i) {
             threads.emplace_back([&] {
-                gate.arrive_and_wait();
+                {
+                    std::unique_lock lock(gateMutex);
+                    gateChanged.wait(lock, [&] { return start; });
+                }
                 if (lifecycle.requestStop()) {
                     initiators.fetch_add(1, std::memory_order_relaxed);
                 }
             });
         }
-        gate.arrive_and_wait();
+    } catch (...) {
+        {
+            std::lock_guard lock(gateMutex);
+            start = true;
+        }
+        gateChanged.notify_all();
+        for (auto& thread : threads) {
+            if (thread.joinable()) {
+                thread.join();
+            }
+        }
+        throw;
+    }
+    {
+        std::lock_guard lock(gateMutex);
+        start = true;
+    }
+    gateChanged.notify_all();
+    for (auto& thread : threads) {
+        thread.join();
     }
 
     lifecycle.completeStop();
@@ -435,16 +474,38 @@ bool testConcurrentStopHasOneInitiator() {
 }
 
 int main() {
-    return testWorkerSignalIsWorkerAffine() &&
-               testWorkerSignalHasNoArbitraryWaiterLimit() &&
-               testWorkerSignalRechecksAffinityWhenColdWaitStarts() &&
-               testDispatchAndAffinity() && testBoundedMailbox() &&
-               testExternalEventLoopAttachment() &&
-               testFailurePropagation() && testExpiredHandle() &&
-               testEscapedWorkerHandleBecomesDetachedEndpoint() &&
-               testDetachDestroysAbandonedMailboxTasks() &&
-               testLifecycleTransitionsAreMonotonic() &&
-               testConcurrentStopHasOneInitiator()
-               ? 0
-               : 1;
+    const auto run = [](const char* name, bool (*test)()) {
+        std::printf("[ RUN ] %s\n", name);
+        std::fflush(stdout);
+        const bool passed = test();
+        std::printf("[%s] %s\n", passed ? " ok " : "FAIL", name);
+        std::fflush(stdout);
+        return passed;
+    };
+    return run("worker_signal_is_worker_affine", testWorkerSignalIsWorkerAffine) &&
+               run(
+                   "worker_signal_has_no_waiter_limit",
+                   testWorkerSignalHasNoArbitraryWaiterLimit) &&
+               run(
+                   "worker_signal_rechecks_cold_wait_affinity",
+                   testWorkerSignalRechecksAffinityWhenColdWaitStarts) &&
+               run("dispatch_and_affinity", testDispatchAndAffinity) &&
+               run("bounded_mailbox", testBoundedMailbox) &&
+               run("external_event_loop_attachment", testExternalEventLoopAttachment) &&
+               run("failure_propagation", testFailurePropagation) &&
+               run("expired_handle", testExpiredHandle) &&
+               run(
+                   "escaped_worker_handle_detaches",
+                   testEscapedWorkerHandleBecomesDetachedEndpoint) &&
+               run(
+                   "detach_destroys_abandoned_mailbox_tasks",
+                   testDetachDestroysAbandonedMailboxTasks) &&
+               run(
+                   "lifecycle_transitions_are_monotonic",
+                   testLifecycleTransitionsAreMonotonic) &&
+               run(
+                   "concurrent_stop_has_one_initiator",
+                   testConcurrentStopHasOneInitiator)
+        ? 0
+        : 1;
 }

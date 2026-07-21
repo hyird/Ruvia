@@ -16,7 +16,6 @@
 
 #include "ruvia/core/Task.h"
 #include "ruvia/core/WorkerHandle.h"
-#include "ruvia/core/detail/WorkerTimer.h"
 #include "ruvia/core/detail/RuntimeLifecycle.h"
 #include "ruvia/core/memory/MemoryPool.h"
 #include "ruvia/core/detail/ConnectionScanner.h"
@@ -90,10 +89,7 @@ private:
 
     void configureAcceptor();
     void configureTlsContext();
-    void stopOnContext(bool honorGracePeriod = true) noexcept;
-    void finishStopOnContext() noexcept;
-    void maybeFinishDrain() noexcept;
-    void forceCloseAll() noexcept;
+    void stopOnContext() noexcept;
     void failWorker(std::exception_ptr failure) noexcept;
     void runIoContext() noexcept;
     Task<void> runWorker();
@@ -114,7 +110,6 @@ private:
     std::shared_ptr<WorkerDispatcher> workerDispatcher_;
     WorkerHandle workerHandle_;
     asio::ip::tcp::acceptor acceptor_;
-    WorkerTimerRegistration drainTimer_;
     std::optional<asio::ssl::context> tlsContext_;
     asio::ip::tcp::endpoint endpoint_;
     const RouteTable& routes_;
@@ -139,7 +134,7 @@ private:
     // observe workerState_, which is mutated only on this io_context.
     RuntimeLifecycle lifecycle_;
     HttpServerWorkerState workerState_{HttpServerWorkerState::kFresh};
-    std::jthread workerThread_;
+    std::thread workerThread_;
 
     HttpServerWorkerCompletion workerCompletion_;
 };

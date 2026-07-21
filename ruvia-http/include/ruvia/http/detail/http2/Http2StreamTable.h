@@ -57,15 +57,11 @@ public:
 
     // NOTE on slot reuse: a closed stream's Http2StreamState is destroyed here (inline
     // slot .reset() / overflow erase), freeing its per-stream pmr strings. We do NOT
-    // pool the storage and reset-in-place to retain capacity, deliberately: the streams
-    // run on the connection's mimalloc-backed resource, so those frees return blocks to
-    // mimalloc's thread-local free lists and the next stream's same-size-class alloc
-    // reuses them instantly (no syscall, no grow-from-empty) -- the churn the reuse
-    // would save is already near-free. Against that negligible gain, a correct
+    // pool the storage and reset-in-place to retain capacity, deliberately. A correct
     // resetForReuse would have to reinitialise ~85 fields across 8 sub-objects, and a
     // single missed field would leak one request's decoded headers / routing / body
     // into the next reused slot -- a cross-request data-disclosure risk not worth taking
-    // for a P3 micro-optimisation off the measured hot path.
+    // for a micro-optimisation off the measured hot path.
     [[nodiscard]] Http2StreamState* create(
         std::uint32_t streamId,
         std::int32_t peerInitialWindowSize) & {

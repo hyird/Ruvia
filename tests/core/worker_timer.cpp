@@ -9,7 +9,6 @@
 #include <asio/io_context.hpp>
 
 #include <chrono>
-#include <barrier>
 #include <future>
 #include <limits>
 #include <memory>
@@ -149,37 +148,31 @@ bool saturatingTimerDurationCastWorks() {
             Target::zero();
 }
 
-bool detachedTimerCancellationRaceWorks() {
+bool timerImmediateShutdownWorks() {
+    asio::io_context ioContext;
     for (int attempt = 0; attempt < 32; ++attempt) {
-        asio::io_context ioContext;
+        ioContext.restart();
         const auto dispatcher =
             std::make_shared<ruvia::detail::WorkerDispatcher>(ioContext, 2);
         const auto worker = ruvia::detail::WorkerHandleAccess::make(dispatcher);
         ruvia::detail::WorkerTimerRegistration registration;
-        std::promise<void> scheduled;
-        auto ready = scheduled.get_future();
+        std::promise<void> stopped;
+        auto stoppedReady = stopped.get_future();
         asio::post(ioContext, [&] {
             ruvia::detail::WorkerHandleAccess::scheduleTimer(
                 worker, registration,
                 std::chrono::steady_clock::now() + std::chrono::hours(1),
                 [](ruvia::detail::WorkerTimerOutcome) {});
-            scheduled.set_value();
+            dispatcher->stopTimers();
+            asio::post(ioContext, [&] {
+                stopped.set_value();
+                ioContext.stop();
+            });
         });
         std::thread workerThread([&] { ioContext.run(); });
-        ready.get();
-        ioContext.stop();
+        stoppedReady.get();
         workerThread.join();
-
-        std::barrier gate(3);
-        std::jthread cancelling([&] {
-            gate.arrive_and_wait();
-            registration.cancel();
-        });
-        std::jthread detaching([&] {
-            gate.arrive_and_wait();
-            dispatcher->detachContext();
-        });
-        gate.arrive_and_wait();
+        dispatcher->detachContext();
     }
     return true;
 }
@@ -218,7 +211,8 @@ ruvia::Task<void> exercise(
         co_return;
     }
     cancelledTimer.cancel();
-    co_await ruvia::sleepFor(worker, std::chrono::milliseconds(1));
+    static_cast<void>(
+        co_await ruvia::sleepFor(worker, std::chrono::milliseconds(1)));
 
     bool cancelledSleepResumed = false;
     bool cancelledSleepReportedElapsed = true;
@@ -278,7 +272,8 @@ ruvia::Task<void> exerciseSlotReuse(
                 }
             });
     }
-    co_await ruvia::sleepFor(worker, std::chrono::milliseconds(1));
+    static_cast<void>(
+        co_await ruvia::sleepFor(worker, std::chrono::milliseconds(1)));
     success = rejectedActiveReuse && cancelled == kTimerCount &&
         expired == kTimerCount;
 }
@@ -289,7 +284,7 @@ int main() {
     if (!discriminatedWaitStateWorks() ||
         !saturatingTimerDeadlineWorks() ||
         !saturatingTimerDurationCastWorks() ||
-        !detachedTimerCancellationRaceWorks()) {
+        !timerImmediateShutdownWorks()) {
         return 1;
     }
     asio::io_context ioContext;

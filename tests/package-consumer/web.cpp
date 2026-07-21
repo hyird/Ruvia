@@ -94,9 +94,9 @@ concept ExposesRvalueSecureTokenAlternative =
     requires(Result&& result) { std::move(result).ready(); } ||
     requires(Result&& result) { std::move(result).failure(); };
 
-template <typename Value>
+template <typename Value, typename Result = ruvia::detail::SecureTokenResult>
 concept CanForgeSecureTokenResult = requires(Value&& value) {
-    ruvia::detail::SecureTokenResult::makeReady(
+    Result::makeReady(
         std::forward<Value>(value));
 };
 
@@ -536,26 +536,26 @@ static_assert(!AcceptsTemporaryDbValueText<std::string>);
 static_assert(!AcceptsTemporaryDbValueText<const std::string>);
 static_assert(AcceptsLvalueDbValueText<std::string>);
 
-template <typename String>
+template <typename String, typename Migration = ruvia::DbMigration>
 concept AcceptsAnyTemporaryDbMigrationText =
     requires(String&& value) {
-        ruvia::DbMigration{
+        Migration{
             std::forward<String>(value), "SELECT 1"};
     } ||
     requires(String&& value) {
-        ruvia::DbMigration{
+        Migration{
             "migration", std::forward<String>(value)};
     } ||
-    requires(ruvia::DbMigration& migration, String&& value) {
+    requires(Migration& migration, String&& value) {
         migration.id = std::forward<String>(value);
     } ||
-    requires(ruvia::DbMigration& migration, String&& value) {
+    requires(Migration& migration, String&& value) {
         migration.sql = std::forward<String>(value);
     };
 
-template <typename String>
+template <typename String, typename Migration = ruvia::DbMigration>
 concept AcceptsLvalueDbMigrationText = requires(String& value) {
-    ruvia::DbMigration{value, value};
+    Migration{value, value};
 };
 
 template <typename T>
@@ -603,14 +603,11 @@ static_assert(std::same_as<
 static_assert(std::same_as<
     decltype(ruvia::DbConfig{}.acquireTimeout),
     std::optional<std::chrono::milliseconds>>);
-static_assert(std::same_as<
-    decltype(ruvia::DbConfig{}.poolSizePerWorker),
-    std::size_t>);
 template <typename T>
-concept HasLegacyDbPoolSize = requires(T& config) {
-    config.poolSize;
+concept HasConfigurableDbPoolSize = requires(T& config) {
+    config.poolSizePerWorker;
 };
-static_assert(!HasLegacyDbPoolSize<ruvia::DbConfig>);
+static_assert(!HasConfigurableDbPoolSize<ruvia::DbConfig>);
 static_assert(std::same_as<decltype(ruvia::DbConfig::mariaDb()), ruvia::DbConfig>);
 static_assert(std::same_as<decltype(ruvia::DbConfig::postgreSql()), ruvia::DbConfig>);
 static_assert(!ExposesAnyRvalueDbOwnedView<ruvia::DbValue>);
@@ -1146,15 +1143,17 @@ struct InstalledModelBodyDuckProbe final {
     static int ruviaParseFormBody(std::string_view, std::pmr::memory_resource*);
 };
 
-RUVIA_REQUEST_MODEL(InstalledPackageRequest,
-    RUVIA_FIELD(name, ruvia::String),
-    RUVIA_FIELD(count, ruvia::Int32)
-);
+struct InstalledPackageRequest final {
+    RUVIA_OPTIONAL_FIELD(name, ruvia::String);
+    RUVIA_OPTIONAL_FIELD(count, ruvia::Int32);
+    RUVIA_MODEL(InstalledPackageRequest, name, count);
+};
 
-RUVIA_RESPONSE_MODEL(InstalledPackageResponse,
-    RUVIA_FIELD(name, ruvia::String),
-    RUVIA_FIELD(count, ruvia::Int32)
-);
+struct InstalledPackageResponse final {
+    RUVIA_OPTIONAL_FIELD(name, ruvia::String);
+    RUVIA_OPTIONAL_FIELD(count, ruvia::Int32);
+    RUVIA_MODEL(InstalledPackageResponse, name, count);
+};
 
 static_assert(!std::copy_constructible<InstalledPackageRequest>);
 static_assert(std::movable<InstalledPackageRequest>);
@@ -1173,11 +1172,9 @@ static_assert(!ExposesRvalueFixedStringView<ruvia::FixedString<6>>);
 static_assert(!ExposesAnyRvalueModelListBorrow<ruvia::List<ruvia::Int32>>);
 static_assert(!ExposesAnyRvalueGeneratedNameMember<InstalledPackageRequest>);
 static_assert(!ExposesAnyRvalueGeneratedNameMember<InstalledPackageResponse>);
-static_assert(std::is_base_of_v<
-    ruvia::detail::RequestModelSchemaTag,
-    InstalledPackageRequest>);
-static_assert(!ruvia::JsonBody<InstalledPackageResponse>::value);
-static_assert(!ruvia::FormBody<InstalledPackageResponse>::value);
+static_assert(ruvia::JsonBody<InstalledPackageRequest>::value);
+static_assert(ruvia::JsonBody<InstalledPackageResponse>::value);
+static_assert(ruvia::FormBody<InstalledPackageResponse>::value);
 static_assert(ruvia::detail::isResponseModel<InstalledPackageResponse>);
 static_assert(!ruvia::JsonBody<InstalledModelBodyDuckProbe>::value);
 static_assert(!ruvia::FormBody<InstalledModelBodyDuckProbe>::value);

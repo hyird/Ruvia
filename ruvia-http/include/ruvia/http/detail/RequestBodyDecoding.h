@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstddef>
+#include <exception>
 #include <memory_resource>
 #include <stdexcept>
 #include <string_view>
@@ -30,9 +31,9 @@ public:
             case HttpContentDecodeError::kDecodedSizeExceeded:
                 return HttpRequestBodyFailure::tooLarge().protocolError();
             case HttpContentDecodeError::kDecoderFailure:
-                break;
+                std::terminate();
         }
-        std::unreachable();
+        std::terminate();
     }
 
 private:

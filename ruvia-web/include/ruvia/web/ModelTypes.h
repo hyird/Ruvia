@@ -27,9 +27,6 @@ namespace detail {
 
 class ModelInput;
 struct ModelValueFactory;
-struct ModelSchemaTag {};
-struct RequestModelSchemaTag : ModelSchemaTag {};
-struct ResponseModelSchemaTag : ModelSchemaTag {};
 
 }  // namespace detail
 
@@ -37,7 +34,7 @@ template <typename T, typename = void>
 struct JsonBody : std::false_type {};
 
 template <typename T>
-    requires std::is_base_of_v<detail::RequestModelSchemaTag, T>
+    requires requires { typename T::RuviaModelSchema; }
 struct JsonBody<T, void> : std::true_type {
 
     static std::optional<T> parse(
@@ -63,7 +60,7 @@ template <typename T, typename = void>
 struct FormBody : std::false_type {};
 
 template <typename T>
-    requires std::is_base_of_v<detail::RequestModelSchemaTag, T>
+    requires requires { typename T::RuviaModelSchema; }
 struct FormBody<T, void> : std::true_type {
 
     static std::optional<T> parse(

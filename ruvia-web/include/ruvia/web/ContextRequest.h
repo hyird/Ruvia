@@ -28,6 +28,8 @@ namespace ruvia {
 
 class Context;
 class ContextRequest;
+template <typename T>
+class ValidatedJson;
 
 namespace detail {
 struct RequestFormFieldAccess;
@@ -39,6 +41,13 @@ const RequestNameValueList& requestParamFields(const ContextRequest& request);
 template <typename T>
 [[nodiscard]] ValidatedModelBinding<T>
 bindValidatedModel(Context& context, const T& model);
+
+template <typename T>
+[[nodiscard]] ValidatedModelBinding<T>
+bindValidatedJsonModel(
+    Context& context,
+    const T& model,
+    std::string_view rawJson);
 
 template <typename T>
     requires (!std::is_lvalue_reference_v<T>)
@@ -372,7 +381,7 @@ public:
             }
 
             [[nodiscard]] static bool hasNestedName(std::string_view name) noexcept {
-                return name.contains('.');
+                return name.find('.') != std::string_view::npos;
             }
 
             [[nodiscard]] const Entry* findEntry(std::string_view name) const noexcept {
@@ -450,7 +459,7 @@ public:
         }
 
         [[nodiscard]] static bool isPathName(std::string_view name) noexcept {
-            return name.contains('.');
+            return name.find('.') != std::string_view::npos;
         }
 
         [[nodiscard]] static bool consumePath(
@@ -599,6 +608,9 @@ public:
 
     template <typename T>
     [[nodiscard]] const T& valid() const;
+
+    template <typename T>
+    [[nodiscard]] ValidatedJson<T> validJson() const;
 
     [[nodiscard]] ScopedOperation<std::pmr::vector<MultipartPart>> multipart() const;
 

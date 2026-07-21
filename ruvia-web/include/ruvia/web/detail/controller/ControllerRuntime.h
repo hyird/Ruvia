@@ -173,7 +173,7 @@ template <ValidationTarget Target>
 
 template <ValidationTarget Target, typename BodyT>
 [[nodiscard]] BodyT parseValidatedFields(Context& c, const RequestNameValueList& fields) {
-    static_assert(FormBody<BodyT>::value, "field validator body type must use RUVIA_REQUEST_MODEL");
+    static_assert(FormBody<BodyT>::value, "field validator body type must use RUVIA_MODEL");
     auto parsed = FormBody<BodyT>::parseFields(fields, c.resource());
     if (!parsed) {
         throwInvalidValidationTarget<Target>();
@@ -209,8 +209,14 @@ Task<void> invokeModelValidator(
     Validator validator(c.resource());
     validatorMiddleware.validate(body, validator);
     std::move(validator).throwIfInvalid();
-    auto binding = bindValidatedModel(c, body);
-    co_await next();
+    if constexpr (Target == ValidationTarget::kJson) {
+        const auto rawJson = co_await c.req().text();
+        auto binding = bindValidatedJsonModel(c, body, rawJson);
+        co_await next();
+    } else {
+        auto binding = bindValidatedModel(c, body);
+        co_await next();
+    }
 }
 
 template <typename ControllerT>

@@ -86,8 +86,18 @@ public:
     bool removeOrigin(std::string_view frontHost);
 
 private:
+    using SnapshotPtr = std::shared_ptr<const EdgeConfigSnapshot>;
+
+    [[nodiscard]] SnapshotPtr loadSnapshot(
+        std::memory_order order) const noexcept;
+    void storeSnapshot(SnapshotPtr snapshot, std::memory_order order) noexcept;
+
     std::mutex writeMutex_;
-    std::atomic<std::shared_ptr<const EdgeConfigSnapshot>> current_;
+#if defined(__cpp_lib_atomic_shared_ptr)
+    std::atomic<SnapshotPtr> current_;
+#else
+    SnapshotPtr current_;
+#endif
 };
 
 }  // namespace ruvia::edge

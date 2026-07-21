@@ -45,8 +45,8 @@ void validateOptions(const StaticRootOptions& options) {
             throw std::invalid_argument("invalid static file mime type");
         }
     }
-    if (options.indexFile.contains('/') ||
-        options.indexFile.contains('\\') ||
+    if (options.indexFile.find('/') != std::string_view::npos ||
+        options.indexFile.find('\\') != std::string_view::npos ||
         options.indexFile == "." ||
         options.indexFile == "..") {
         throw std::invalid_argument("invalid static file index name");
@@ -186,12 +186,12 @@ std::pmr::string contentTypeFor(
     const std::pmr::vector<std::pmr::string>& directories,
     std::string_view relativePath) noexcept {
     if (directories.size() <= kStaticRootLinearLookupLimit) {
-        return std::ranges::contains(
-            directories,
-            relativePath,
-            [](const auto& directory) noexcept {
-                return std::string_view(directory);
-            });
+        return std::ranges::find(
+                   directories,
+                   relativePath,
+                   [](const auto& directory) noexcept {
+                       return std::string_view(directory);
+                   }) != directories.end();
     }
 
     return std::ranges::binary_search(
@@ -226,7 +226,7 @@ StaticFileTypePolicy StaticFileTypePolicy::only(
     StaticFileTypePolicy result(Kind::kOnly);
     result.extensions_.reserve(extensions.size());
     for (const auto extension : extensions) {
-        if (extension.empty() || extension.contains('/') || extension.contains('\\')) {
+        if (extension.empty() || extension.find('/') != std::string_view::npos || extension.find('\\') != std::string_view::npos) {
             throw std::invalid_argument("invalid static file type");
         }
         result.extensions_.emplace_back(extension);

@@ -81,9 +81,6 @@ struct HttpServerOptions final {
     // nginx-aligned inactivity timeouts. Absence disables a phase timeout;
     // keepaliveRequests caps requests per reused connection.
     std::optional<std::chrono::milliseconds> keepaliveTimeout{std::chrono::seconds(75)};
-    // On shutdown, hold force-close this long so in-flight requests can finish
-    // (graceful drain). 0 keeps the old behavior of terminating them immediately.
-    std::chrono::milliseconds shutdownGracePeriod{std::chrono::seconds(30)};
     std::chrono::milliseconds scanInterval{std::chrono::seconds(1)};
     // Capacity of the explicit cross-thread queue for this Web worker.
     std::size_t workerMailboxCapacity{1024};

@@ -1,5 +1,6 @@
 #include "ruvia/web/detail/redis/RedisHandleHelpers.h"
 
+#include "ruvia/web/detail/DecimalNumber.h"
 #include "ruvia/web/detail/redis/RedisTypesAccess.h"
 #include "ruvia/web/detail/redis/RedisUtils.h"
 
@@ -21,8 +22,7 @@ namespace {
 
 double parseRedisDouble(std::string_view value, std::string_view context) {
     double output = 0;
-    const auto [ptr, ec] = std::from_chars(value.data(), value.data() + value.size(), output);
-    if (ec != std::errc{} || ptr != value.data() + value.size()) {
+    if (!parseDecimalNumber(value, output)) {
         throw RedisError(RedisError::Code::kProtocolError, context);
     }
     return output;
