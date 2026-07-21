@@ -1,6 +1,6 @@
 {
   "name": "ruvia",
-  "version-string": "0.1.4",
+  "version-string": "0.1.5",
   "default-features": [
     "runtime",
     "protocol",
@@ -10,20 +10,7 @@
     "runtime": {
       "description": "Dependencies for the ruvia-core runtime library.",
       "dependencies": [
-        "asio",
-        "mimalloc"
-      ]
-    },
-    "allocator-override": {
-      "description": "Override the process allocator with mimalloc.",
-      "dependencies": [
-        {
-          "name": "mimalloc",
-          "features": [
-            "override"
-          ],
-          "platform": "!windows | !static"
-        }
+        "asio"
       ]
     },
     "protocol": {

@@ -22,7 +22,8 @@ static_assert(!std::is_move_assignable_v<ruvia::Task<int>>);
 namespace {
 
 ruvia::Task<void> increment(ruvia::WorkerHandle worker, int& value) {
-    co_await ruvia::sleepFor(worker, std::chrono::milliseconds(1));
+    static_cast<void>(
+        co_await ruvia::sleepFor(worker, std::chrono::milliseconds(1)));
     ++value;
     co_return;
 }
@@ -97,7 +98,8 @@ ruvia::Task<void> exercise(ruvia::WorkerHandle worker, bool& success) {
     {
         ruvia::TaskScope completedFailureScope(worker);
         completedFailureScope.spawn(fail());
-        co_await ruvia::sleepFor(worker, std::chrono::milliseconds(1));
+        static_cast<void>(
+            co_await ruvia::sleepFor(worker, std::chrono::milliseconds(1)));
         if (completedFailureScope.size() != 0) {
             co_return;
         }

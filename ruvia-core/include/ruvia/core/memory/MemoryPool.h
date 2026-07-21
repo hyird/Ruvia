@@ -25,13 +25,6 @@ struct MemoryPoolConfig {
     std::size_t requestInitialBufferBytes{kRequestArenaInitialBytes};
 };
 
-class MimallocMemoryResource final : public std::pmr::memory_resource {
-private:
-    void* do_allocate(std::size_t bytes, std::size_t alignment) override;
-    void do_deallocate(void* pointer, std::size_t bytes, std::size_t alignment) override;
-    [[nodiscard]] bool do_is_equal(const std::pmr::memory_resource& other) const noexcept override;
-};
-
 class ProcessMemory final {
 public:
     [[nodiscard]] static ProcessMemory& instance() noexcept;
@@ -42,7 +35,6 @@ public:
     [[nodiscard]] MemoryPoolConfig config() const noexcept;
     [[nodiscard]] bool frozen() const noexcept;
     [[nodiscard]] std::pmr::memory_resource* upstreamResource() noexcept;
-    [[nodiscard]] MimallocMemoryResource& mimallocResource() noexcept;
 
     ProcessMemory(const ProcessMemory&) = delete;
     ProcessMemory& operator=(const ProcessMemory&) = delete;
@@ -51,7 +43,7 @@ private:
     ProcessMemory();
 
     MemoryPoolConfig config_;
-    MimallocMemoryResource upstream_;
+    std::pmr::synchronized_pool_resource upstream_;
     bool frozen_{false};
 };
 
@@ -67,7 +59,7 @@ public:
 
     template <typename T = std::byte>
     [[nodiscard]] std::pmr::polymorphic_allocator<T> allocator() noexcept {
-        return std::pmr::polymorphic_allocator<T>(resource_);
+        return std::pmr::polymorphic_allocator<T>(&resource_);
     }
 
     [[nodiscard]] std::pmr::memory_resource* resource() noexcept;
@@ -76,7 +68,7 @@ public:
 
 private:
     MemoryPoolConfig config_;
-    std::pmr::memory_resource* resource_;
+    std::pmr::unsynchronized_pool_resource resource_;
 };
 
 class RequestMemory final {

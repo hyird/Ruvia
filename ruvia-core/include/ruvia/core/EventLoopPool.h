@@ -3,7 +3,6 @@
 #include <concepts>
 #include <cstddef>
 #include <cstdint>
-#include <functional>
 #include <memory>
 #include <string_view>
 #include <type_traits>
@@ -64,13 +63,13 @@ public:
         requires std::invocable<std::decay_t<Fn>&>
     [[nodiscard]] EventLoopStopRegistration onStop(Fn&& fn) const {
         return registerStopCallback(
-            std::move_only_function<void()>(std::forward<Fn>(fn)));
+            MoveOnlyFunction<void()>(std::forward<Fn>(fn)));
     }
 
 private:
     explicit EventLoop(std::shared_ptr<detail::EventLoopState> state) noexcept;
     [[nodiscard]] EventLoopStopRegistration registerStopCallback(
-        std::move_only_function<void()> callback) const;
+        MoveOnlyFunction<void()> callback) const;
 
     std::shared_ptr<detail::EventLoopState> state_;
     friend class EventLoopPool;

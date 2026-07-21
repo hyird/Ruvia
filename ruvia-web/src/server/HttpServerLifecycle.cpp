@@ -232,7 +232,6 @@ HttpServer::HttpServer(
           databases_,
           redis_,
           workerStates_,
-          [this] { maybeFinishDrain(); },
           [this](std::exception_ptr failure) {
               failWorker(std::move(failure));
           })),
@@ -293,14 +292,14 @@ void HttpServer::start() {
             ioContext_,
             taskAsAwaitable(runWorker()),
             asio::bind_allocator(asio::recycling_allocator<void>(), asio::detached));
-        workerThread_ = std::jthread([this] { runIoContext(); });
+        workerThread_ = std::thread([this] { runIoContext(); });
         workerCompletion_.waitForStartup();
     } catch (...) {
         (void)lifecycle_.requestStop();
         if (workerThread_.joinable()) {
             workerThread_.join();
         } else {
-            stopOnContext(/*honorGracePeriod=*/false);
+            stopOnContext();
         }
         lifecycle_.completeStop();
         throw;
@@ -442,72 +441,18 @@ void HttpServer::configureTlsContext() {
     }
 }
 
-void HttpServer::stopOnContext(bool honorGracePeriod) noexcept {
+void HttpServer::stopOnContext() noexcept {
     if (!httpServerWorkerRunning(workerState_)) {
-        if (!honorGracePeriod &&
-            workerState_ == HttpServerWorkerState::kDraining) {
-            finishStopOnContext();
-        }
         return;
     }
 
-    workerState_ = HttpServerWorkerState::kDraining;
+    workerState_ = HttpServerWorkerState::kStopped;
     webWorkerDispatch_->close();
     workerDispatcher_->close();
     std::error_code ignored;
     acceptor_.cancel(ignored);
     acceptor_.close(ignored);
     connectionScanner_.stop();
-
-    // workerState_ is now draining, so sessions close after their current
-    // request. With a grace period, hold the force-close for that long so
-    // in-flight requests can finish; otherwise close immediately. A teardown
-    // triggered by a startup failure or a worker crash (honorGracePeriod=false)
-    // has no in-flight requests to drain -- honoring the grace period there would
-    // only stall the failure report (and the worker join) for the full period.
-    if (honorGracePeriod && options_.shutdownGracePeriod.count() > 0 &&
-        (activeConnectionCount_ != 0 || webWorkerDispatch_->outstanding() != 0)) {
-        try {
-            WorkerHandleAccess::scheduleTimer(
-                workerHandle_, drainTimer_,
-                workerTimerDeadlineAfter(options_.shutdownGracePeriod),
-                [this](WorkerTimerOutcome outcome) {
-                    if (workerState_ == HttpServerWorkerState::kDraining &&
-                        outcome == WorkerTimerOutcome::kExpired) {
-                        finishStopOnContext();
-                    }
-                });
-            return;
-        } catch (...) {
-            // Shutdown must remain noexcept even if the one-shot drain timer
-            // cannot allocate or the timer queue is already stopping.
-        }
-    }
-    finishStopOnContext();
-}
-
-void HttpServer::maybeFinishDrain() noexcept {
-    if (workerState_ != HttpServerWorkerState::kDraining ||
-        activeConnectionCount_ != 0 ||
-        webWorkerDispatch_->outstanding() != 0) {
-        return;
-    }
-    // Every session finished before the grace period elapsed. Release the
-    // timer now: a pending wait would hold the io_context (and the worker
-    // join) for the full remaining period.
-    finishStopOnContext();
-}
-
-void HttpServer::finishStopOnContext() noexcept {
-    if (workerState_ == HttpServerWorkerState::kStopped) {
-        return;
-    }
-    workerState_ = HttpServerWorkerState::kStopped;
-    drainTimer_.cancel();
-    forceCloseAll();
-}
-
-void HttpServer::forceCloseAll() noexcept {
     connectionScanner_.closeAll();
     databases_.closeNow();
     redis_.closeNow();
@@ -520,7 +465,7 @@ void HttpServer::failWorker(std::exception_ptr failure) noexcept {
     }
     (void)lifecycle_.requestStop();
     options_.workerFailure.notify(failure);
-    stopOnContext(/*honorGracePeriod=*/false);
+    stopOnContext();
 }
 
 void HttpServer::runIoContext() noexcept {

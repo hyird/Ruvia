@@ -14,7 +14,7 @@ namespace ruvia {
 
 template <typename T>
 Task<T> ContextRequest::jsonModelTask(const Context* context) {
-    static_assert(JsonBody<T>::value, "JSON body type must use RUVIA_REQUEST_MODEL");
+    static_assert(JsonBody<T>::value, "JSON body type must use RUVIA_MODEL");
     if (!contextContentTypeMatches(context, "application/json")) {
         detail::throwInvalidJsonContentType();
     }
@@ -34,7 +34,7 @@ ScopedOperation<T> ContextRequest::json() const {
 
 template <typename T>
 Task<std::optional<T>> ContextRequest::jsonIfModelTask(const Context* context) {
-    static_assert(JsonBody<T>::value, "JSON body type must use RUVIA_REQUEST_MODEL");
+    static_assert(JsonBody<T>::value, "JSON body type must use RUVIA_MODEL");
     if (!contextContentTypeMatches(context, "application/json")) {
         co_return std::nullopt;
     }
@@ -54,7 +54,7 @@ ScopedOperation<std::optional<T>> ContextRequest::jsonIf() const {
 
 template <typename T>
 Task<T> ContextRequest::formModelTask(const Context* context) {
-    static_assert(FormBody<T>::value, "form body type must use RUVIA_REQUEST_MODEL");
+    static_assert(FormBody<T>::value, "form body type must use RUVIA_MODEL");
     if (!contextContentTypeMatches(context, "application/x-www-form-urlencoded")) {
         detail::throwInvalidFormContentType();
     }
@@ -74,7 +74,7 @@ ScopedOperation<T> ContextRequest::form() const {
 
 template <typename T>
 Task<std::optional<T>> ContextRequest::formIfModelTask(const Context* context) {
-    static_assert(FormBody<T>::value, "form body type must use RUVIA_REQUEST_MODEL");
+    static_assert(FormBody<T>::value, "form body type must use RUVIA_MODEL");
     if (!contextContentTypeMatches(context, "application/x-www-form-urlencoded")) {
         co_return std::nullopt;
     }
@@ -95,6 +95,11 @@ ScopedOperation<std::optional<T>> ContextRequest::formIf() const {
 template <typename T>
 inline const T& ContextRequest::valid() const {
     return validatedModels().get<T>();
+}
+
+template <typename T>
+inline ValidatedJson<T> ContextRequest::validJson() const {
+    return validatedModels().getJson<T>();
 }
 
 }  // namespace ruvia

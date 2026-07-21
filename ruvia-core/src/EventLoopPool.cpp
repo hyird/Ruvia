@@ -78,7 +78,7 @@ class EventLoopStopListener final : public detail::WorkerShutdownListener {
 public:
     EventLoopStopListener(
         WorkerHandle worker,
-        std::move_only_function<void()> callback)
+        MoveOnlyFunction<void()> callback)
         : worker_(std::move(worker)), callback_(std::move(callback)) {}
 
     void workerStopping() noexcept override {
@@ -108,7 +108,7 @@ public:
 
 private:
     WorkerHandle worker_;
-    std::move_only_function<void()> callback_;
+    MoveOnlyFunction<void()> callback_;
 };
 
 }
@@ -147,12 +147,12 @@ struct EventLoopState final {
         dispatcher->detachContext();
     }
 
-    void stop() noexcept {
+    void stop(bool runtimeStarted) noexcept {
         if (stopping.exchange(true, std::memory_order_acq_rel)) {
             return;
         }
         dispatcher->close();
-        if (dispatcher->isCurrent()) {
+        if (!runtimeStarted || dispatcher->isCurrent()) {
             dispatcher->stopTimers();
         } else {
             dispatcher->deferOrTerminate(
@@ -219,7 +219,7 @@ WorkerHandle EventLoop::handle() const noexcept {
 }
 
 EventLoopStopRegistration EventLoop::registerStopCallback(
-    std::move_only_function<void()> callback) const {
+    MoveOnlyFunction<void()> callback) const {
     if (!state_) {
         throw std::logic_error("cannot register a stop callback on an invalid event loop");
     }
@@ -258,7 +258,7 @@ EventLoop EventLoopAttachment::loop() const noexcept {
 
 void EventLoopAttachment::stop() noexcept {
     if (state_) {
-        state_->stop();
+        state_->stop(true);
     }
 }
 
@@ -291,11 +291,13 @@ struct EventLoopPool::Impl {
     }
 
     void stop() noexcept {
+        const bool runtimeStarted =
+            lifecycle.state() != detail::RuntimeLifecycle::State::kReady;
         if (!lifecycle.requestStop()) {
             return;
         }
         for (const auto& loop : loops) {
-            loop->stop();
+            loop->stop(runtimeStarted);
         }
     }
 

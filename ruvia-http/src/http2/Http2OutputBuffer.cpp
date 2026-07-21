@@ -37,7 +37,7 @@ void Http2OutputBuffer::appendRstStream(
     Http2ErrorCode error) {
     std::array<char, 4> payload;
     auto* const end = http2Write32(
-        payload.data(), std::to_underlying(error));
+        payload.data(), static_cast<std::uint32_t>(error));
     appendFrame(
         Http2FrameType::kRstStream,
         0,

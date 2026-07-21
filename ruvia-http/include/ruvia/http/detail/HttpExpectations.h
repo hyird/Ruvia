@@ -3,7 +3,6 @@
 #include <cstdint>
 #include <string_view>
 #include <type_traits>
-#include <variant>
 
 #include "ruvia/http/HttpProtocolError.h"
 #include "ruvia/http/detail/HeaderTokenUtils.h"
@@ -74,52 +73,54 @@ class HttpServerExpectationPlan final {
 public:
     [[nodiscard]] constexpr const HttpNoServerExpectationAction*
     noAction() const & noexcept {
-        return std::get_if<HttpNoServerExpectationAction>(&value_);
+        return state_ == State::kNoAction ? &kNoAction : nullptr;
     }
     const HttpNoServerExpectationAction* noAction() const && = delete;
 
     [[nodiscard]] constexpr const HttpSendContinue*
     sendContinue() const & noexcept {
-        return std::get_if<HttpSendContinue>(&value_);
+        return state_ == State::kSendContinue ? &kSendContinue : nullptr;
     }
     const HttpSendContinue* sendContinue() const && = delete;
 
     [[nodiscard]] constexpr const HttpUnsupportedExpectationRejection*
     rejection() const & noexcept {
-        return std::get_if<HttpUnsupportedExpectationRejection>(&value_);
+        return state_ == State::kRejection ? &kRejection : nullptr;
     }
     const HttpUnsupportedExpectationRejection* rejection() const && = delete;
 
 private:
     friend class HttpRequestExpectations;
 
-    using Value = std::variant<
-        HttpNoServerExpectationAction,
-        HttpSendContinue,
-        HttpUnsupportedExpectationRejection>;
+    enum class State : std::uint8_t {
+        kNoAction,
+        kSendContinue,
+        kRejection
+    };
 
-    template <typename Alternative>
-    explicit constexpr HttpServerExpectationPlan(
-        Alternative alternative) noexcept
-        : value_(alternative) {}
+    explicit constexpr HttpServerExpectationPlan(State state) noexcept
+        : state_(state) {}
 
     [[nodiscard]] static constexpr HttpServerExpectationPlan noActionPlan()
         noexcept {
-        return HttpServerExpectationPlan(HttpNoServerExpectationAction());
+        return HttpServerExpectationPlan(State::kNoAction);
     }
 
     [[nodiscard]] static constexpr HttpServerExpectationPlan continuePlan()
         noexcept {
-        return HttpServerExpectationPlan(HttpSendContinue());
+        return HttpServerExpectationPlan(State::kSendContinue);
     }
 
     [[nodiscard]] static constexpr HttpServerExpectationPlan rejectionPlan()
         noexcept {
-        return HttpServerExpectationPlan(
-            HttpUnsupportedExpectationRejection());
+        return HttpServerExpectationPlan(State::kRejection);
     }
 
-    Value value_;
+    static inline constexpr HttpNoServerExpectationAction kNoAction{};
+    static inline constexpr HttpSendContinue kSendContinue{};
+    static inline constexpr HttpUnsupportedExpectationRejection kRejection{};
+
+    State state_;
 };
 
 // Incremental recipient-side state for the RFC 9110 Expect #list. Repeated field

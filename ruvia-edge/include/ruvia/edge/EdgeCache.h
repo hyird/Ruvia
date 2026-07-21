@@ -6,6 +6,7 @@
 #include <functional>
 #include <list>
 #include <memory>
+#include <memory_resource>
 #include <mutex>
 #include <string>
 #include <string_view>
@@ -64,7 +65,9 @@ public:
         std::size_t maxEntries{4096};
     };
 
-    explicit EdgeCache(Limits limits) noexcept;
+    explicit EdgeCache(
+        Limits limits,
+        std::pmr::memory_resource* resource = std::pmr::get_default_resource()) noexcept;
 
     EdgeCache(const EdgeCache&) = delete;
     EdgeCache& operator=(const EdgeCache&) = delete;
@@ -95,9 +98,18 @@ public:
 
 private:
     struct Node final {
-        std::string key;
+        std::pmr::string key;
         std::shared_ptr<const CachedResponse> value;
         std::size_t bytes{0};
+
+        Node(
+            std::string sourceKey,
+            std::shared_ptr<const CachedResponse> sourceValue,
+            std::size_t sourceBytes,
+            std::pmr::memory_resource* resource)
+            : key(std::move(sourceKey), resource),
+              value(std::move(sourceValue)),
+              bytes(sourceBytes) {}
     };
 
     // Heterogeneous hashing so a string_view key probes the map without
@@ -108,16 +120,28 @@ private:
             return std::hash<std::string_view>{}(v);
         }
     };
+    struct TransparentEqual final {
+        using is_transparent = void;
+        template <typename Left, typename Right>
+        [[nodiscard]] bool operator()(const Left& left, const Right& right) const noexcept {
+            return std::string_view(left) == std::string_view(right);
+        }
+    };
 
-    using RecencyList = std::list<Node>;
+    using RecencyList = std::pmr::list<Node>;
 
     void evictWhileOverBudget() noexcept;  // caller holds mutex_
 
     mutable std::mutex mutex_;
+    std::pmr::memory_resource* resource_;
     Limits limits_;
     std::size_t totalBytes_{0};
     RecencyList recency_;  // front = most recently used, back = least
-    std::unordered_map<std::string, RecencyList::iterator, TransparentHash, std::equal_to<>> index_;
+    std::pmr::unordered_map<
+        std::pmr::string,
+        RecencyList::iterator,
+        TransparentHash,
+        TransparentEqual> index_;
 };
 
 }  // namespace ruvia::edge

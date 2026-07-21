@@ -14,7 +14,7 @@
 // request-body size limits, streaming request bodies (BodyReader over the Web-owned
 // per-stream body queue), WebSocket tunnels (RFC 8441), streaming + buffered + file-body
 // responses with compression/CORS via prepareBufferedHttpResponse, access logging,
-// client certificates, connection-scanner inactivity phases, graceful drain on server
+// client certificates, connection-scanner inactivity phases, immediate server
 // shutdown, TLS ALPN, and cleartext prior-knowledge startup.
 //
 // Lifetime safety: a request/response holds VIEWS into its stream's decoded storage, so
@@ -80,7 +80,7 @@ namespace ruvia::detail {
 
 // Complete, non-null connection wiring captured by value in the session coroutine.
 // Optional product integrations remain explicit inside ContextServices, while
-// options, scanner ownership, and graceful-shutdown state are mandatory references.
+// options, scanner ownership, and shutdown state are mandatory references.
 class Http2SansIoSessionContext final {
 public:
     Http2SansIoSessionContext(
@@ -632,7 +632,9 @@ Task<void> runHttp2SansIoSession(
                                 std::errc::operation_canceled));
                         }
                         --activeHandlerTasks;
-                        handlerFinished.notify();
+                        if (activeHandlerTasks == 0) {
+                            handlerFinished.notify();
+                        }
                         writeSignal.notify();
                     }));
         } catch (...) {
@@ -653,7 +655,7 @@ Task<void> runHttp2SansIoSession(
         const auto markBufferedBodyCopied = [&](std::uint32_t streamId) {
             const auto copied =
                 std::span(copiedBodyStreams).first(copiedBodyStreamCount);
-            if (!std::ranges::contains(copied, streamId)) {
+            if (std::ranges::find(copied, streamId) == copied.end()) {
                 if (copiedBodyStreamCount == copiedBodyStreams.size()) {
                     return false;
                 }
@@ -944,18 +946,19 @@ Task<void> runHttp2SansIoSession(
         // Reader loop: feed inbound bytes, then act on the drained events.
         if (!connection.connectionError().has_value() && !initialInputRetained &&
             !termination.terminated()) {
-        // 4 KB read scratch. Requests are the small direction of HTTP/2
-        // traffic (responses never pass through here), so a max-size 16 KB
-        // frame arriving in several reads is the rare case, while the buffer
-        // is resident in every connection's coroutine frame for the whole
-        // connection.
+            // 4 KB read scratch. Requests are the small direction of HTTP/2
+            // traffic (responses never pass through here), so a max-size 16 KB
+            // frame arriving in several reads is the rare case, while the buffer
+            // is resident in every connection's coroutine frame for the whole
+            // connection.
             std::array<char, 4096> readBuffer;
             for (;;) {
-            // Pick the inactivity phase: mid-header-block -> the tight header timeout;
-            // no active Web runtime (including a pre-dispatch buffered request body)
-            // -> kIdle so a keep-alive connection between requests is governed by the
-            // keepalive timeout, NOT client_body_timeout; otherwise a body/response is
-            // in progress -> kReadingPayload. (WS tunnels carry their own heartbeat.)
+                // Pick the inactivity phase: mid-header-block -> the tight header
+                // timeout; no active Web runtime (including a pre-dispatch buffered
+                // request body) -> kIdle so a keep-alive connection between requests
+                // is governed by the keepalive timeout, not client_body_timeout;
+                // otherwise a body/response is in progress -> kReadingPayload.
+                // WebSocket tunnels carry their own heartbeat.
                 scannerEntry.setPhase(http2SansIoInactivityPhase(
                     connection.headerBlockInProgress(),
                     streamRuntimes.size()));
@@ -964,21 +967,18 @@ Task<void> runHttp2SansIoSession(
                         stream.async_read_some(
                             asio::buffer(readBuffer.data(), readBuffer.size()),
                             std::move(handler));
-                    });
+                });
                 const auto ec = readCompletion.errorCode();
                 const auto bytesRead = readCompletion.result();
-                if (ec || bytesRead == 0) {
+                const bool workerStopped = !session.workerRunning();
+                if (ec || bytesRead == 0 || workerStopped) {
                     readerTerminalError = ec ? ec : std::make_error_code(
-                        std::errc::connection_reset);
+                        workerStopped
+                            ? std::errc::operation_canceled
+                            : std::errc::connection_reset);
                     break;
                 }
                 scannerEntry.touch();
-            // The server has begun draining: tell the peer to stop opening streams
-            // (RFC 9113 §6.8); streams already started keep running.
-                if (!connection.draining() &&
-                    !session.workerRunning()) {
-                    connection.beginDrain();
-                }
                 const auto result = feedAndDrain(
                     std::string_view(readBuffer.data(), bytesRead));
                 wakeWriter();  // feed may have produced ACKs / WINDOW_UPDATEs to flush

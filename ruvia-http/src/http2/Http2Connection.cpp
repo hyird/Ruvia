@@ -335,7 +335,7 @@ bool Http2Connection::processWindowUpdate(const Http2FrameHeader& header, std::s
 }
 
 bool Http2Connection::isPinned(std::uint32_t streamId) const noexcept {
-    return std::ranges::contains(pinnedStreams_, streamId);
+    return std::ranges::find(pinnedStreams_, streamId) != pinnedStreams_.end();
 }
 
 void Http2Connection::pinStream(std::uint32_t streamId) {
@@ -760,8 +760,9 @@ void Http2Connection::releaseReceivedData(std::uint32_t streamId) {
 }
 
 bool Http2Connection::hasQueuedData(std::uint32_t streamId) const noexcept {
-    return std::ranges::contains(
-        pendingSends_, streamId, &Http2PendingSend::streamId);
+    return std::ranges::find(
+               pendingSends_, streamId, &Http2PendingSend::streamId) !=
+        pendingSends_.end();
 }
 
 void Http2Connection::queueConsumedDataCredit(
@@ -1045,7 +1046,7 @@ bool Http2Connection::processData(const Http2FrameHeader& header, std::string_vi
 
 bool Http2Connection::processFrame(const Http2FrameHeader& header, std::string_view payload) {
     if (prefacePhase_ == PrefacePhase::kAwaitingPeerSettings &&
-        header.type != std::to_underlying(Http2FrameType::kSettings)) {
+        header.type != static_cast<std::uint8_t>(Http2FrameType::kSettings)) {
         appendGoaway(Http2ErrorCode::kProtocolError, "first frame must be SETTINGS");
         return false;
     }

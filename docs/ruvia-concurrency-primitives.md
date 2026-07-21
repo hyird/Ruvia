@@ -139,7 +139,7 @@ if (const auto* value = event.value()) {
 
 首版是单 consumer、有界 FIFO、`kRejectNewest`：
 
-- 控制块和 ring 在创建期一次分配，默认使用进程级 mimalloc PMR，也可传请求/业务 PMR。
+- 控制块和 ring 在创建期一次分配，默认使用进程级 PMR pool，也可传请求/业务 PMR。
 - producer 可来自任意线程；receiver 只能在绑定 worker 使用。
 - `send()` 不直接恢复协程，而是由 worker continuation 唤醒。
 - receiver close/析构幂等并唤醒 pending receive。
@@ -184,7 +184,7 @@ co_await scope.join();
 
 - `spawn()` 只能在绑定 worker，子 Task 由 scope 持有，不 detached。
 - 首个子任务异常会请求协作停止；`join()` 等待全部子任务并重抛首个异常。
-- `requestStop()` 通过 `std::stop_token` 表达协作停止，不强制销毁仍被底层 callback 引用的帧。
+- `requestStop()` 通过轻量 `ruvia::StopToken` 表达协作停止，不强制销毁仍被底层 callback 引用的帧。
 - scope 有活动任务却析构会终止进程，强制调用方在拥有的 Context/WebSocket 销毁前 join。
 - TaskScope 不知道 HTTP、WebSocket 或 DB；transport 中断由 Web 层负责。
 

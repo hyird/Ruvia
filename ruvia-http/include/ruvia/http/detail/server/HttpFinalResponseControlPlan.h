@@ -2,7 +2,6 @@
 
 #include <cstdint>
 #include <type_traits>
-#include <variant>
 
 #include "ruvia/http/HttpResponse.h"
 #include "ruvia/http/HttpStatus.h"
@@ -130,13 +129,13 @@ template <typename Control, typename Failure>
 class HttpFinalResponseControlPlanResult final {
 public:
     [[nodiscard]] const Control* control() const & noexcept {
-        return std::get_if<Control>(&value_);
+        return hasControl_ ? &value_.control : nullptr;
     }
     [[nodiscard]] const Control* control() const && = delete;
 
     [[nodiscard]] const Failure*
     failure() const & noexcept {
-        return std::get_if<Failure>(&value_);
+        return hasControl_ ? nullptr : &value_.failure;
     }
     [[nodiscard]] const Failure*
     failure() const && = delete;
@@ -147,14 +146,26 @@ private:
     friend Http2FinalResponseControlPlanResult
     http2FinalResponseControlPlan(const HttpResponse&) noexcept;
 
-    using Value = std::variant<Control, Failure>;
+    union Value {
+        constexpr explicit Value(Control value) noexcept
+            : control(value) {}
+        constexpr explicit Value(Failure value) noexcept
+            : failure(value) {}
 
-    template <typename Alternative>
-    explicit HttpFinalResponseControlPlanResult(
-        Alternative alternative) noexcept
-        : value_(alternative) {}
+        Control control;
+        Failure failure;
+    };
+
+    explicit constexpr HttpFinalResponseControlPlanResult(
+        Control control) noexcept
+        : value_(control), hasControl_(true) {}
+
+    explicit constexpr HttpFinalResponseControlPlanResult(
+        Failure failure) noexcept
+        : value_(failure), hasControl_(false) {}
 
     Value value_;
+    bool hasControl_;
 };
 
 static_assert(std::is_trivially_copyable_v<

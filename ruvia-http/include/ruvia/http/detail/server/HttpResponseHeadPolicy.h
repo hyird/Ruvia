@@ -2,7 +2,6 @@
 
 #include <cstdint>
 #include <type_traits>
-#include <variant>
 
 #include "ruvia/http/detail/HttpResponseHeaderBits.h"
 #include "ruvia/http/HttpStatus.h"
@@ -42,25 +41,25 @@ class ResponseWritePolicy final {
 public:
     [[nodiscard]] constexpr const ResponseNormalWrite*
     normal() const & noexcept {
-        return std::get_if<ResponseNormalWrite>(&state_);
+        return state_ == State::kNormal ? &kNormal : nullptr;
     }
     const ResponseNormalWrite* normal() const && = delete;
 
     [[nodiscard]] constexpr const ResponseBodyForbiddenWrite*
     bodyForbidden() const & noexcept {
-        return std::get_if<ResponseBodyForbiddenWrite>(&state_);
+        return state_ == State::kBodyForbidden ? &kBodyForbidden : nullptr;
     }
     const ResponseBodyForbiddenWrite* bodyForbidden() const && = delete;
 
     [[nodiscard]] constexpr const ResponseZeroLengthWrite*
     zeroLength() const & noexcept {
-        return std::get_if<ResponseZeroLengthWrite>(&state_);
+        return state_ == State::kZeroLength ? &kZeroLength : nullptr;
     }
     const ResponseZeroLengthWrite* zeroLength() const && = delete;
 
     [[nodiscard]] constexpr const ResponseNotModifiedWrite*
     notModified() const & noexcept {
-        return std::get_if<ResponseNotModifiedWrite>(&state_);
+        return state_ == State::kNotModified ? &kNotModified : nullptr;
     }
     const ResponseNotModifiedWrite* notModified() const && = delete;
 
@@ -83,34 +82,39 @@ public:
 private:
     friend ResponseWritePolicy responseWritePolicy(HttpStatusCode) noexcept;
 
-    using State = std::variant<
-        ResponseNormalWrite,
-        ResponseBodyForbiddenWrite,
-        ResponseZeroLengthWrite,
-        ResponseNotModifiedWrite>;
+    enum class State : std::uint8_t {
+        kNormal,
+        kBodyForbidden,
+        kZeroLength,
+        kNotModified
+    };
 
-    template <typename Alternative>
-    explicit constexpr ResponseWritePolicy(Alternative alternative) noexcept
-        : state_(alternative) {}
+    explicit constexpr ResponseWritePolicy(State state) noexcept
+        : state_(state) {}
 
     [[nodiscard]] static constexpr ResponseWritePolicy makeNormal() noexcept {
-        return ResponseWritePolicy(ResponseNormalWrite());
+        return ResponseWritePolicy(State::kNormal);
     }
 
     [[nodiscard]] static constexpr ResponseWritePolicy
     makeBodyForbidden() noexcept {
-        return ResponseWritePolicy(ResponseBodyForbiddenWrite());
+        return ResponseWritePolicy(State::kBodyForbidden);
     }
 
     [[nodiscard]] static constexpr ResponseWritePolicy
     makeZeroLength() noexcept {
-        return ResponseWritePolicy(ResponseZeroLengthWrite());
+        return ResponseWritePolicy(State::kZeroLength);
     }
 
     [[nodiscard]] static constexpr ResponseWritePolicy
     makeNotModified() noexcept {
-        return ResponseWritePolicy(ResponseNotModifiedWrite());
+        return ResponseWritePolicy(State::kNotModified);
     }
+
+    static inline constexpr ResponseNormalWrite kNormal{};
+    static inline constexpr ResponseBodyForbiddenWrite kBodyForbidden{};
+    static inline constexpr ResponseZeroLengthWrite kZeroLength{};
+    static inline constexpr ResponseNotModifiedWrite kNotModified{};
 
     State state_;
 };

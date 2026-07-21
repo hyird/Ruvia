@@ -166,7 +166,7 @@ private:
     }
     // This helper deliberately resolves one range. A valid range set requiring
     // multipart/byteranges is ignored as an unsupported server capability.
-    if (spec.contains(',')) {
+    if (spec.find(',') != std::string_view::npos) {
         return HttpByteRangeResolution::makeIgnored();
     }
 

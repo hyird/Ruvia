@@ -27,8 +27,7 @@ enum class WebSocketInflateResult : std::uint8_t {
 // RFC 7692 permessage-deflate codec for one connection. The handshake negotiates
 // no-context-takeover in both directions, so the deflate/inflate state is reset
 // before every message and each message is an independent raw-DEFLATE block.
-// zlib's working memory comes from the global allocator, which this build routes
-// to mimalloc, so no custom resource plumbing is needed.
+// zlib owns its working memory, so no custom resource plumbing is needed.
 class WebSocketDeflate final {
 public:
     WebSocketDeflate() {

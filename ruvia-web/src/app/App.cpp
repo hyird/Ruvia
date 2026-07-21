@@ -333,7 +333,7 @@ void App::run() {
 
     asio::io_context signalContext(1);
     asio::signal_set signals(signalContext);
-    std::jthread signalThread;
+    std::thread signalThread;
 
     try {
         addShutdownSignals(signals);
@@ -342,7 +342,7 @@ void App::run() {
                 stop();
             }
         });
-        signalThread = std::jthread([&signalContext] { signalContext.run(); });
+        signalThread = std::thread([&signalContext] { signalContext.run(); });
 
         for (const auto& worker : state.runtime->workers) {
             {
@@ -416,6 +416,9 @@ void App::run() {
         }
         signals.cancel();
         signalContext.stop();
+        if (signalThread.joinable()) {
+            signalThread.join();
+        }
 
         std::lock_guard lock(state.mutex);
         state.runtime.reset();
@@ -425,6 +428,9 @@ void App::run() {
 
     signals.cancel();
     signalContext.stop();
+    if (signalThread.joinable()) {
+        signalThread.join();
+    }
 
     std::lock_guard lock(state.mutex);
     state.runtime.reset();

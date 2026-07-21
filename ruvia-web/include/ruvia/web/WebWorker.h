@@ -3,15 +3,14 @@
 #include <concepts>
 #include <cstddef>
 #include <cstdint>
-#include <functional>
 #include <memory>
 #include <memory_resource>
-#include <stop_token>
 #include <string_view>
 #include <type_traits>
 #include <utility>
 
 #include "ruvia/core/Task.h"
+#include "ruvia/core/StopToken.h"
 #include "ruvia/core/WorkerHandle.h"
 #include "ruvia/web/ScopedOperation.h"
 #include "ruvia/web/detail/WorkerState.h"
@@ -44,7 +43,7 @@ public:
     [[nodiscard]] const WorkerHandle& worker() const & noexcept;
     const WorkerHandle& worker() const && = delete;
     [[nodiscard]] std::pmr::memory_resource* resource() const noexcept;
-    [[nodiscard]] std::stop_token stopToken() const noexcept;
+    [[nodiscard]] StopToken stopToken() const noexcept;
 
     // This worker's instance of an App::useWorkerState<T>() registration --
     // the same instance Context::workerState<T>() returns for HTTP requests
@@ -74,16 +73,16 @@ private:
         detail::DbRegistry* databases,
         detail::RedisRegistry* redis,
         const detail::WorkerStateRegistry* workerStates,
-        std::stop_token stopToken) noexcept;
+        StopToken stopToken) noexcept;
 
     [[nodiscard]] void* workerStateInstance(const void* typeKey) const;
 
     WorkerHandle worker_;
     std::pmr::memory_resource* resource_;
-    detail::DbRegistry* databases_;
-    detail::RedisRegistry* redis_;
+    [[maybe_unused]] detail::DbRegistry* databases_;
+    [[maybe_unused]] detail::RedisRegistry* redis_;
     const detail::WorkerStateRegistry* workerStates_;
-    std::stop_token stopToken_;
+    StopToken stopToken_;
     // Each posted callback gets an independent operation lifetime. Declared
     // last so cold frames are destroyed before the callback context disappears.
     mutable detail::ScopedOperationScope operationScope_;
@@ -113,7 +112,7 @@ public:
                      std::invoke_result_t<std::decay_t<Fn>&, WebWorkerContext&>,
                      Task<void>>
     [[nodiscard]] PostResult post(Fn&& fn) const {
-        return postTask(std::move_only_function<Task<void>(WebWorkerContext&)>(
+        return postTask(MoveOnlyFunction<Task<void>(WebWorkerContext&)>(
             std::forward<Fn>(fn)));
     }
 
@@ -124,7 +123,7 @@ private:
         std::shared_ptr<detail::WebWorkerDispatch> dispatch) noexcept;
 
     [[nodiscard]] PostResult postTask(
-        std::move_only_function<Task<void>(WebWorkerContext&)> task) const;
+        MoveOnlyFunction<Task<void>(WebWorkerContext&)> task) const;
 
     // The handle owns a stable terminal endpoint. Server shutdown closes it;
     // retaining a handle cannot retain the server or its io_context.

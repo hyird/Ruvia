@@ -3,9 +3,9 @@
 [![Build](https://github.com/hyird/Ruvia/actions/workflows/build.yml/badge.svg)](https://github.com/hyird/Ruvia/actions/workflows/build.yml)
 [![Release](https://img.shields.io/github/v/release/hyird/Ruvia)](https://github.com/hyird/Ruvia/releases)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
-![C++23](https://img.shields.io/badge/C%2B%2B-23-blue.svg)
+![C++20](https://img.shields.io/badge/C%2B%2B-20-blue.svg)
 
-Ruvia is a C++23 HTTP/Web framework built as four independently consumable
+Ruvia is a C++20 HTTP/Web framework built as four independently consumable
 CMake targets. The repository is a monorepo, but its runtime foundation and
 protocol library do not require the full Web framework.
 
@@ -17,7 +17,7 @@ protocol library do not require the full Web framework.
 - **Sans-I/O protocol library** — one HTTP/1, HTTP/2, WebSocket, and HPACK
   implementation shared by the server and the outbound client; callers feed
   bytes and consume typed events. No sockets, no Asio, no TLS inside.
-- **Coroutine-first Web framework** — controllers, typed request/response
+- **Coroutine-first Web framework** — controllers, typed JSON
   models, validation, middleware, streaming, SSE, and WebSocket routes, all
   finalized at startup with no per-request rebuilding.
 - **Bounded, application-owned runtime** — explicit workers, bounded mailboxes,
@@ -27,9 +27,8 @@ protocol library do not require the full Web framework.
   request model.
 - **Optional integrations** — MariaDB, PostgreSQL, Redis, and JWT behind vcpkg
   features; both database drivers share one `DbHandle` API surface.
-- **Verified** — RFC 9113 wire conformance suite against a real h2c server,
-  libFuzzer targets for the parsing surface, and guard tests that pin the
-  public API contracts.
+- **Verified** — RFC 9113 wire conformance suite against a real h2c server and
+  guard tests that pin the public API contracts.
 
 ## Contents
 
@@ -39,7 +38,7 @@ protocol library do not require the full Web framework.
 - [Requirements](#requirements)
 - [Build](#build)
 - [Database Drivers](#database-drivers)
-- [Conformance and Fuzzing](#conformance-and-fuzzing)
+- [Conformance](#conformance)
 - [Performance Baseline](#performance-baseline)
 - [Install and Consume](#install-and-consume)
 - [Web API Shape](#web-api-shape)
@@ -71,7 +70,7 @@ int main() {
 ```
 
 The same route is part of the compiled
-[`basic_http.cpp`](examples/basic_http.cpp) example. Configure once with
+[`basic_http.cpp`](examples/web/basic_http.cpp) example. Configure once with
 `-DRUVIA_BUILD_EXAMPLES=ON` as shown in [Build](#build), then:
 
 ```bash
@@ -104,7 +103,7 @@ if (const auto* tls = info.tls()) {
 
 | Directory | CMake target | Purpose |
 | --- | --- | --- |
-| `ruvia-core/` | `ruvia::core` | Coroutine tasks, Asio integration, PMR/mimalloc memory, connection scanning, and runtime helpers. |
+| `ruvia-core/` | `ruvia::core` | Coroutine tasks, Asio integration, PMR memory, connection scanning, and runtime helpers. |
 | `ruvia-http/` | `ruvia::http` | Pure sans-I/O HTTP, HTTP/2, WebSocket, multipart, SSE, content-coding, and outbound-client protocol primitives. |
 | `ruvia-web/` | `ruvia::web` | App, Context, Router, middleware, server I/O, TLS, streaming, WebSocket routes, validation, static files, and optional integrations. |
 | `ruvia-edge/` | `ruvia::edge` | Opt-in CDN edge node: a caching reverse proxy with its own event loop, dynamic origin configuration, and an admin API. |
@@ -222,14 +221,11 @@ closed.
 ## Requirements
 
 - CMake 3.24 or newer.
-- A C++23 compiler.
+- A C++20 compiler.
 - vcpkg.
-- Component dependencies: core uses Asio and mimalloc; HTTP uses zlib, Brotli,
-  and zstd; Web adds OpenSSL.
+- Component dependencies: core uses Asio; HTTP uses zlib, Brotli, and zstd;
+  Web adds OpenSSL.
 - Optional vcpkg features: MariaDB, PostgreSQL, Redis, and JWT.
-
-On Windows, CMake defaults the vcpkg triplet to `x64-windows-static` unless the
-caller already selected one.
 
 ## Build
 
@@ -242,13 +238,14 @@ cmake -S . -B build -G Ninja \
 cmake --build build
 ```
 
-Windows:
+Windows with MSYS2 UCRT64 GCC:
 
-```powershell
-cmake -S . -B build `
-  -DCMAKE_TOOLCHAIN_FILE="$env:VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake" `
-  -DVCPKG_TARGET_TRIPLET=x64-windows-static
-cmake --build build --config Debug
+```bash
+cmake -S . -B build -G Ninja \
+  -DCMAKE_TOOLCHAIN_FILE="$VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake" \
+  -DVCPKG_TARGET_TRIPLET=x64-mingw-static \
+  -DCMAKE_BUILD_TYPE=Debug
+cmake --build build
 ```
 
 When needed, add `-DRUVIA_BUILD_TESTS=ON` and `-DRUVIA_BUILD_EXAMPLES=ON` to
@@ -268,7 +265,6 @@ ctest --test-dir build --output-on-failure   # add -C Debug on Windows
 | `RUVIA_BUILD_EDGE` | `OFF` | Build the `ruvia::edge` CDN edge node; requires core and HTTP. |
 | `RUVIA_BUILD_TESTS` | `OFF` | Build unit, guard, and package-consumer tests. |
 | `RUVIA_BUILD_BENCHMARKS` | `OFF` | Build Release-oriented HTTP hot-path benchmarks; requires HTTP. |
-| `RUVIA_BUILD_FUZZERS` | `OFF` | Build the Clang/libFuzzer protocol fuzz targets with UBSan; requires HTTP. |
 | `RUVIA_ENABLE_HTTP2_CONFORMANCE_TESTS` | `OFF` | Add the repository-owned RFC 9113 wire conformance suite against a real Ruvia h2c server; requires tests, Web, and Python 3. |
 | `RUVIA_ENABLE_POSTGRESQL_INTEGRATION_TESTS` | `OFF` | Add live PostgreSQL driver tests; requires tests and PostgreSQL support. |
 | `RUVIA_BUILD_EXAMPLES` | `OFF` | Build examples; requires Web. |
@@ -279,14 +275,13 @@ ctest --test-dir build --output-on-failure   # add -C Debug on Windows
 
 ## Database Drivers
 
-MariaDB and PostgreSQL use the same `DbHandle`, result, streaming, transaction, pool and migration APIs. Select the driver when constructing its configuration:
+MariaDB and PostgreSQL use the same `DbHandle`, result, streaming, transaction and migration APIs. Each worker owns exactly one database connection. Select the driver when constructing its configuration:
 
 ```cpp
 auto config = ruvia::DbConfig::postgreSql(); // port 5432
 config.username = "app";
 config.password = "secret";
 config.database = "app";
-config.poolSizePerWorker = 4; // total connection budget is 4 * listeners * workers per listener
 app.useDb(std::move(config));
 ```
 
@@ -294,7 +289,7 @@ Enable its matching CMake feature first. PostgreSQL parameters use `$1`, `$2`,
 and so on; MariaDB parameters use `?`. For generated PostgreSQL keys, use
 `INSERT ... RETURNING id` and read the returned row.
 
-## Conformance and Fuzzing
+## Conformance
 
 The regular Linux CI runs a repository-owned wire-level suite against Ruvia's
 actual cleartext HTTP/2 server. Its connection-per-case, handcrafted-frame, and
@@ -312,24 +307,10 @@ cmake --build build-conformance --config Debug --target ruvia_http2_conformance_
 ctest --test-dir build-conformance -C Debug -R ruvia_http2_conformance --output-on-failure
 ```
 
-Protocol fuzzing requires Clang with libFuzzer. Enabling the option instruments
-`ruvia-http` and builds independent fuzz targets covering HTTP/1, HTTP/2, HPACK,
-chunked transfer coding, multipart, and WebSocket frame decoding:
-
-```bash
-cmake -S . -B build-fuzz -G Ninja \
-  -DCMAKE_CXX_COMPILER=clang++ \
-  -DCMAKE_BUILD_TYPE=Debug \
-  -DRUVIA_BUILD_FUZZERS=ON \
-  -DCMAKE_TOOLCHAIN_FILE="$VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake"
-cmake --build build-fuzz
-build-fuzz/tests/fuzz/ruvia_fuzz_http2_connection -max_total_time=60
-```
-
 ## Performance Baseline
 
 Release benchmark scope, commands, and comparison rules live with the benchmark
-sources in [tests/benchmarks/README.md](tests/benchmarks/README.md).
+sources in [tests/http/benchmarks/README.md](tests/http/benchmarks/README.md).
 
 ## Install and Consume
 
@@ -373,18 +354,19 @@ Routes and schemas are registered at startup through macros:
 | HTTP methods | `RUVIA_GET`, `RUVIA_POST`, `RUVIA_PUT`, `RUVIA_PATCH`, `RUVIA_DELETE` |
 | Streaming / SSE | `RUVIA_GET_STREAM`, `RUVIA_GET_SSE` |
 | WebSocket | `RUVIA_GET_WS`, `RUVIA_GET_WS_OPTIONS` |
-| Models | `RUVIA_REQUEST_MODEL`, `RUVIA_RESPONSE_MODEL`, `RUVIA_FIELD`, `RUVIA_FIELD_NAME` |
+| Models | `RUVIA_MODEL`, `RUVIA_FIELD`, `RUVIA_OPTIONAL_FIELD`, `RUVIA_FIELD_NAME` |
 | Validation | `RUVIA_VALIDATE_JSON`, `RUVIA_VALIDATE_FORM`, `RUVIA_RULE` |
 
 Route tables, middleware chains, and controller factories are finalized before
 workers start. The request path does not rebuild them or use a per-request
 virtual dispatcher.
 
-Request and response schemas are deliberately separate. Request models support
-JSON/form parsing and validation; response models provide typed setters and
-JSON serialization. Defaults apply to request fields, while omit-empty and
-emit-null apply to response fields. See the compiled
-[`models_validation.cpp`](examples/models_validation.cpp) example for the
+Models are ordinary structs with one schema for JSON parsing, validation, and
+serialization. They support nested models and arrays; `RUVIA_FIELD` is required
+and `RUVIA_OPTIONAL_FIELD` may be absent. Route middleware keeps the Hono-style
+typed `c.req().valid<T>()` API, while `c.req().validJson<T>()` also exposes the
+validated original bytes through `raw()` for JSONB passthrough. See the compiled
+[`models_validation.cpp`](examples/web/models_validation.cpp) example for the
 complete API. `SecurityHeadersOptions` defaults to `LegacyXssFilterPolicy::kDisable`, emitting `X-XSS-Protection: 0` because obsolete browser filters can create security issues; `kOmitHeader` omits that header, while Content Security Policy remains the modern content control.
 
 ## HTTP Protocol Library

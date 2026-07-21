@@ -35,8 +35,8 @@ public:
     }
 
     [[nodiscard]] bool contains(std::string_view protocol) const noexcept {
-        return std::ranges::contains(
-            std::span(protocols_).first(size_), protocol);
+        const auto protocols = std::span(protocols_).first(size_);
+        return std::ranges::find(protocols, protocol) != protocols.end();
     }
 
     [[nodiscard]] bool empty() const noexcept {

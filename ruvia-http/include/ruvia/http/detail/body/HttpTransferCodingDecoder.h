@@ -6,6 +6,7 @@
 #include "ruvia/http/ProtocolByteLimit.h"
 
 #include <cstddef>
+#include <exception>
 #include <cstdint>
 #include <memory_resource>
 #include <span>
@@ -89,9 +90,9 @@ public:
             case TransferCodingDecodeError::kDecodedSizeExceeded:
                 return HttpRequestBodyFailure::tooLarge().protocolError();
             case TransferCodingDecodeError::kDecoderFailure:
-                break;
+                std::terminate();
         }
-        std::unreachable();
+        std::terminate();
     }
 
 private:

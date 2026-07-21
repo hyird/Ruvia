@@ -10,7 +10,8 @@ std::size_t CachedResponse::byteSize() const noexcept {
     return total;
 }
 
-EdgeCache::EdgeCache(Limits limits) noexcept : limits_(limits) {}
+EdgeCache::EdgeCache(Limits limits, std::pmr::memory_resource* resource) noexcept
+    : resource_(resource), limits_(limits), recency_(resource), index_(resource) {}
 
 CacheLookupResult EdgeCache::lookup(std::string_view key, std::time_t now) {
     std::lock_guard<std::mutex> guard(mutex_);
@@ -49,7 +50,7 @@ bool EdgeCache::store(std::string key, std::shared_ptr<const CachedResponse> ent
         totalBytes_ += bytes;
         recency_.splice(recency_.begin(), recency_, existing->second);
     } else {
-        recency_.push_front(Node{std::move(key), std::move(entry), bytes});
+        recency_.emplace_front(std::move(key), std::move(entry), bytes, resource_);
         index_.emplace(recency_.front().key, recency_.begin());
         totalBytes_ += bytes;
     }

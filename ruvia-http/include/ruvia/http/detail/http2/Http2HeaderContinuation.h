@@ -39,7 +39,8 @@ public:
     }
 
     [[nodiscard]] bool expectsFrameType(std::uint8_t frameType) const noexcept {
-        return !active() || frameType == std::to_underlying(Http2FrameType::kContinuation);
+        return !active() ||
+            frameType == static_cast<std::uint8_t>(Http2FrameType::kContinuation);
     }
 
     [[nodiscard]] bool matches(std::uint32_t streamId) const noexcept {

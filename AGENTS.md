@@ -6,7 +6,7 @@ README 面向使用者，说明构建、安装和公开能力；AGENTS 面向贡
 
 ## 项目定位
 
-Ruvia 是 C++23 HTTP/Web 框架仓库，采用 monorepo + 多 CMake target：
+Ruvia 是 C++20 HTTP/Web 框架仓库，采用 monorepo + 多 CMake target：
 
 ```text
 ruvia-core  -> ruvia::core
@@ -46,6 +46,21 @@ examples/
 tests/
 ```
 
+示例和测试按 target/协议层级归档：
+
+```text
+examples/web/
+tests/core/
+tests/http/{unit,http1,http2,websocket,guards,support,conformance,benchmarks}/
+tests/web/{unit,server,guards}/
+tests/edge/unit/
+tests/{support,package-consumer}/
+```
+
+不要把 HTTP/1、HTTP/2、WebSocket 或 Web server 测试重新散放到 `tests/`
+根目录；target 专属的边界守卫、支撑代码、基准和一致性测试跟随所属
+target，只有跨 target 的通用支撑与 package consumer 保留在独立目录。
+
 仓库根目录不保留源码级 `include/`、`src/`、`fuzz/`、`core/`、`http/`、`web/` 或 `edge/`。
 
 每个库目录必须自带：
@@ -83,7 +98,7 @@ tests/
 可以包含：
 
 - `ruvia::Task<T>`、coroutine promise/awaiter、Asio awaiter/driver glue。
-- PMR、memory resource、mimalloc 包装、对象生命周期 helper。
+- PMR、memory resource、对象生命周期 helper。
 - worker/request memory、connection scanner、socket/runtime helper。
 - ASCII、base64/base64url、constant-time、number/path 等小型通用 helper。
 
@@ -178,7 +193,7 @@ Router/error handler 不得设置 `Connection: close` 或接收 `closeConnection
 - `App::setWorkersPerListener()` 配置每个 listener 的 worker 数；双 listener topology 的总 worker 数是其两倍，禁止恢复含糊的总线程数命名。
 - `App::run()` 创建 acceptor/server/thread per worker。
 - 非 Windows 平台要求 `SO_REUSEPORT`；Windows 使用 `SO_REUSEADDR`。
-- graceful shutdown 只能在各 worker 自己的 `io_context` 上关闭 acceptor 和活跃 socket。
+- shutdown 只能在各 worker 自己的 `io_context` 上直接关闭 acceptor、活跃 socket 和 worker 资源；不等待请求优雅排空。
 - idle/header/body/write timeout、连接数限制和请求数限制保持 per-worker 所有权。
 - 默认限流规则和限流槽容量都显式保持 per-worker 语义；只有启动期路由元数据或默认规则证明需要限流时才预分配固定表，请求期不得惰性分配。
 - worker 内部唤醒原语只借用连接/会话稳定持有的有效 `WorkerHandle`，不得在请求热路径按值复制 handle；`wait/notify` 必须在所属 worker 执行，不得恢复 generic executor fallback。intrusive waiter 从挂链、调度到恢复前都必须有显式生命周期守卫，通知调度失败属于终止性契约违例。
@@ -189,8 +204,7 @@ Router/error handler 不得设置 `Connection: close` 或接收 `closeConnection
 - 公开 API 输入优先使用 `std::string_view`、`std::span`、`std::filesystem::path` 或值类型配置。
 - 请求热路径 PMR 容器使用请求 arena；Worker 层容器使用 `WorkerMemory`。
 - `RequestMemory` 只提供 arena resource，不拥有任意 C++ 对象的 erased cleanup 链；非平凡惰性对象必须由其职责明确的持有者通过 typed RAII 统一拥有和析构。
-- 启动期容器使用 mimalloc-backed 默认 resource。
-- 不要让 `std::pmr::new_delete_resource()` 成为生产默认路径。
+- 启动期容器使用进程级同步 PMR pool。
 - `Context::text(std::string&)`、`std::string&&`、`const std::string&` 入口保持 deleted。
 
 ## HTTP 解析和响应
@@ -228,10 +242,12 @@ Router/error handler 不得设置 `Connection: close` 或接收 `closeConnection
 
 ## Model 和校验
 
-- `RUVIA_REQUEST_MODEL` 是请求解析和校验 schema；`RUVIA_RESPONSE_MODEL` 只约束响应字段类型并生成 JSON，不参与请求解析或校验。
+- `RUVIA_MODEL` 在普通结构体内声明统一 JSON schema，同时支持解析、校验和序列化；不区分请求与响应模型。
+- `RUVIA_FIELD` 是 schema 必填字段，`RUVIA_OPTIONAL_FIELD` 是可选字段；模型支持嵌套模型与数组。
 - 字段必须使用 Ruvia 模型类型，不使用 raw `std::string`、`std::vector`、`std::string_view` 或基础整数。
 - 校验规则通过 route validation middleware 声明，不写进 `RUVIA_FIELD`。
-- 请求 JSON 只嵌套请求模型，响应 JSON 只嵌套响应模型；两者都支持数组。form 只支持扁平 key-value 基础字段。
+- JSON 可嵌套统一模型并支持数组。form 只支持扁平 key-value 基础字段。
+- JSON validation middleware 同时绑定 typed model 与原始 JSON view，供下游校验后直接透传 PostgreSQL JSONB；原始 view 不得逃逸请求作用域。
 - validation 不应为 invalid type 或 duplicate 再扫描 body。
 - 同一 `RUVIA_PATTERN` 只能编译一次并复用。
 - 已校验模型由 validation middleware 的 typed coroutine frame 持有，并在 `next()` 期间以 intrusive scoped borrow 绑定到 `Context`；请求期不得为模型另行分配、保存 destroy callback 或设置固定模型数量上限，异常展开必须自动解绑。
@@ -261,7 +277,6 @@ rg -n '<stale split terms>' README.md AGENTS.md CMakeLists.txt ruvia-core ruvia-
 ```powershell
 cmake -S . -B build `
   -DCMAKE_TOOLCHAIN_FILE="$env:VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake" `
-  -DVCPKG_TARGET_TRIPLET=x64-windows-static `
   -DRUVIA_BUILD_TESTS=ON `
   -DRUVIA_BUILD_EXAMPLES=ON
 cmake --build build --config Debug

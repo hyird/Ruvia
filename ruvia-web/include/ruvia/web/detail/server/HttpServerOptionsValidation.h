@@ -26,9 +26,6 @@ inline void validateHttpServerOptions(const HttpServerOptions& options) {
         options.clientBodyTimeout,
         options.sendTimeout);
     ensurePositiveDuration(options.scanInterval, "connection scan interval must be greater than 0");
-    ensureNonNegativeDuration(
-        options.shutdownGracePeriod,
-        "shutdown grace period must not be negative");
     ensurePositiveSize(
         options.workerMailboxCapacity,
         "worker mailbox capacity must be greater than 0");

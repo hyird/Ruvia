@@ -4294,7 +4294,7 @@ int main() {
     if (outboundOrigin.scheme() != ruvia::HttpScheme::kHttps ||
         outboundOrigin.host() != "example.test" || outboundOrigin.port() != 443 ||
         outboundRequest.target != "/submit" || outboundWire == nullptr ||
-        !outboundWire->head().contains("Content-Length: 7\r\n") ||
+        outboundWire->head().find("Content-Length: 7\r\n") == std::string_view::npos ||
         outboundImmediate == nullptr ||
         outboundImmediate->bytes() != "payload") {
         return 17;
@@ -4308,7 +4308,7 @@ int main() {
     const auto* expectWire = expectPrepared.prepared();
     if (expectWire == nullptr ||
         expectWire->contentPlan().continueGated() == nullptr ||
-        !expectWire->head().contains("Expect: 100-continue\r\n")) {
+        expectWire->head().find("Expect: 100-continue\r\n") == std::string_view::npos) {
         return 25;
     }
     ruvia::Http1ClientResponseParser expectParser(*expectWire);

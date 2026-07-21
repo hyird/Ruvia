@@ -574,7 +574,7 @@ HttpResponse Context::staticFile(
     const std::string_view lookupPath = decodedPath.has_value()
         ? std::string_view(*decodedPath)
         : relativePath;
-    if (lookupPath.contains('\0')) {
+    if (lookupPath.find('\0') != std::string_view::npos) {
         throw HttpError(ruvia::http_status::kForbidden, "forbidden", "invalid static file path");
     }
     auto relative = detail::normalizeStaticRelativePath(lookupPath, allocator<char>());
