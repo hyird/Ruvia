@@ -23,6 +23,8 @@ add_library(ruvia-http
     ${CMAKE_CURRENT_SOURCE_DIR}/src/HttpRequest.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/HttpResponse.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/HttpResponseHeaderOps.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/HttpResponseSetCookieOps.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/HttpResponseComputedHeaders.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/HttpResponseHeaders.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/HttpResponseHeadersStorage.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/HttpResponseKnownHeaders.cpp
