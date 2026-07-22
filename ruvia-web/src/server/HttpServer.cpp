@@ -1,4 +1,5 @@
 #include "ruvia/web/detail/server/HttpServer.h"
+#include "ruvia/web/detail/server/request/RequestMemoryArena.h"
 #include "ruvia/web/detail/server/request/HttpServerRequestState.h"
 #include "ruvia/web/detail/server/tls/HttpServerAlpn.h"
 
