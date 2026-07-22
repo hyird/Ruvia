@@ -53,9 +53,17 @@ examples/web/
 tests/core/
 tests/http/{unit,http1,http2,websocket,guards,support,conformance,benchmarks}/
 tests/web/{unit,server,guards}/
-tests/edge/unit/
+tests/edge/
 tests/support/
 ```
+
+只有需要区分多个测试类别的 target 才分子目录：`http` 和 `web` 分，
+`core` 和 `edge` 只有单元测试，直接平铺。
+
+测试文件名只描述被测对象，不重复所在目录已经表达的信息：
+`http/http2/hpack.cpp`，不是 `http/http2/unit_hpack.cpp`；
+`web/server/write_timeout.cpp`，不是 `web/server/server_write_timeout.cpp`。
+`ruvia_unit_tests` 的源码列表按目录分组、组内字母序，不要往末尾追加。
 
 不要把 HTTP/1、HTTP/2、WebSocket 或 Web server 测试重新散放到 `tests/`
 根目录；target 专属的边界守卫、支撑代码、基准和一致性测试跟随所属

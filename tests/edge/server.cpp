@@ -33,7 +33,7 @@
 #include <asio/use_awaitable.hpp>
 #include <asio/write.hpp>
 
-#include "edge_tls_fixture.h"
+#include "tls_fixture.h"
 #include "ruvia/edge/EdgeServer.h"
 
 namespace {
