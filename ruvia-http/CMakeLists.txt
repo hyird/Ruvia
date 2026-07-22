@@ -15,6 +15,10 @@ add_library(ruvia-http
     ${CMAKE_CURRENT_SOURCE_DIR}/src/HttpBasics.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/HttpCache.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/HttpContentCoding.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/codec/HttpContentCodecOutput.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/codec/HttpGzipCodec.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/codec/HttpBrotliCodec.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/codec/HttpZstdCodec.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/HttpInterimResponse.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/HttpRequest.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/HttpResponse.cpp
