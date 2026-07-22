@@ -5,8 +5,8 @@
 
 #include "ruvia/http/HttpResponse.h"
 #include "ruvia/web/Error.h"
-#include "ruvia/web/detail/server/RateLimitKey.h"
-#include "ruvia/web/detail/server/RateLimiter.h"
+#include "ruvia/web/detail/ratelimit/RateLimitKey.h"
+#include "ruvia/web/detail/ratelimit/RateLimiter.h"
 
 namespace ruvia::detail {
 

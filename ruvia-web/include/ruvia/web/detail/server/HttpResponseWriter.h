@@ -8,8 +8,8 @@
 
 #include <asio.hpp>
 
-#include "ruvia/web/detail/server/HttpFileWrite.h"
-#include "ruvia/web/detail/server/Http1BufferedResponseWrite.h"
+#include "ruvia/web/detail/server/file/HttpFileWrite.h"
+#include "ruvia/web/detail/server/http1/Http1BufferedResponseWrite.h"
 #include "ruvia/http/detail/server/HttpResponseHead.h"
 #include "ruvia/http/detail/server/HttpResponseHeadPolicy.h"
 #include "ruvia/http/detail/server/HttpResponseWritePlan.h"

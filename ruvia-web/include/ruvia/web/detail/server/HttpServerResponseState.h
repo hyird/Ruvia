@@ -3,7 +3,7 @@
 #include "ruvia/http/detail/HttpResponseBodyAccess.h"
 #include "ruvia/http/detail/http1/Http1ServerSemantics.h"
 #include "ruvia/http/HttpResponse.h"
-#include "ruvia/web/detail/server/Http1RequestSequence.h"
+#include "ruvia/web/detail/server/http1/Http1RequestSequence.h"
 
 namespace ruvia::detail {
 

@@ -34,7 +34,7 @@
 #include "ruvia/http/detail/http2/Http2Hpack.h"
 #include "ruvia/web/StaticFiles.h"
 #include "ruvia/web/detail/router/RouteTable.h"
-#include "ruvia/web/detail/server/Http2SansIoSession.h"
+#include "ruvia/web/detail/http2/Http2SansIoSession.h"
 
 namespace {
 

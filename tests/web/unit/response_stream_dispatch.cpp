@@ -24,8 +24,8 @@
 #include "ruvia/web/Router.h"
 #include "ruvia/web/detail/router/RouterImpl.h"
 #include "ruvia/web/detail/router/RouteTable.h"
-#include "ruvia/web/detail/server/HttpResponseStreamDispatch.h"
-#include "ruvia/web/detail/server/HttpResponseStreamSink.h"
+#include "ruvia/web/detail/server/stream/HttpResponseStreamDispatch.h"
+#include "ruvia/web/detail/server/stream/HttpResponseStreamSink.h"
 
 namespace {
 

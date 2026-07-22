@@ -3,7 +3,7 @@
 #include "ruvia/web/detail/body/HttpLazyBufferedBody.h"
 #include "ruvia/web/detail/body/HttpRequestBodyFacade.h"
 #include "ruvia/core/detail/ConnectionScanner.h"
-#include "ruvia/web/detail/server/Http1SessionRequestCompletion.h"
+#include "ruvia/web/detail/server/http1/Http1SessionRequestCompletion.h"
 #include "ruvia/web/detail/server/HttpServerRequestState.h"
 #include "ruvia/web/detail/server/HttpServerResponseState.h"
 #include "ruvia/web/detail/server/HttpServerOptions.h"

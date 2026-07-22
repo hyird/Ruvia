@@ -4,7 +4,7 @@
 #include <variant>
 
 #include "ruvia/web/Error.h"
-#include "ruvia/web/detail/server/RateLimiter.h"
+#include "ruvia/web/detail/ratelimit/RateLimiter.h"
 
 namespace ruvia::detail {
 

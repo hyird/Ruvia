@@ -5,7 +5,7 @@
 #include <exception>
 #include <memory>
 
-#include "ruvia/web/detail/server/Http1SessionRequestCompletion.h"
+#include "ruvia/web/detail/server/http1/Http1SessionRequestCompletion.h"
 #include "ruvia/http/HttpLimits.h"
 #include "ruvia/http/detail/PmrString.h"
 #include "ruvia/core/memory/PmrObject.h"

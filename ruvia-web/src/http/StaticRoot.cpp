@@ -16,7 +16,7 @@
 #include "ruvia/http/detail/HttpDate.h"
 #include "ruvia/web/detail/StaticFileMetadata.h"
 #include "ruvia/web/detail/http/StaticFileTypes.h"
-#include "ruvia/web/detail/server/HttpNativeFile.h"
+#include "ruvia/web/detail/server/file/HttpNativeFile.h"
 
 // A document root indexed once at construction: the directory is walked, every
 // servable file recorded with the metadata a response needs, and lookups after

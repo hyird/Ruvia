@@ -34,10 +34,10 @@
 #include "ruvia/http/detail/server/HttpResponseHead.h"
 #include "ruvia/http/detail/server/HttpResponseHeadBuffer.h"
 #include "ruvia/http/detail/server/HttpResponseWritePlan.h"
-#include "ruvia/web/detail/server/Http1BufferedResponseWrite.h"
-#include "ruvia/web/detail/server/HttpFileFallback.h"
-#include "ruvia/web/detail/server/HttpFileWrite.h"
-#include "ruvia/web/detail/server/HttpNativeFile.h"
+#include "ruvia/web/detail/server/http1/Http1BufferedResponseWrite.h"
+#include "ruvia/web/detail/server/file/HttpFileFallback.h"
+#include "ruvia/web/detail/server/file/HttpFileWrite.h"
+#include "ruvia/web/detail/server/file/HttpNativeFile.h"
 #include "ruvia/web/detail/server/HttpResponseWriter.h"
 
 namespace {

@@ -3,7 +3,7 @@
 #include "ruvia/web/detail/body/HttpRequestBodyFacade.h"
 #include "ruvia/web/detail/body/HttpStreamBodyReader.h"
 #include "ruvia/core/detail/ConnectionScanner.h"
-#include "ruvia/web/detail/server/HttpServerBodyRouteCompletion.h"
+#include "ruvia/web/detail/server/route/HttpServerBodyRouteCompletion.h"
 #include "ruvia/web/detail/server/HttpServerOptions.h"
 #include "ruvia/http/detail/http1/Http1ServerRequestParser.h"
 #include "ruvia/web/detail/router/RouteTable.h"

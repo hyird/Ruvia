@@ -22,7 +22,7 @@
 #include "ruvia/http/detail/HttpResponseBodyAccess.h"
 #include "ruvia/http/HttpProtocolError.h"
 #include "ruvia/web/detail/http/StreamingAccess.h"
-#include "ruvia/web/detail/server/HttpResponseStreamState.h"
+#include "ruvia/web/detail/server/stream/HttpResponseStreamState.h"
 #include "ruvia/web/Streaming.h"
 #include "ruvia/core/detail/AsioAwait.h"
 #include "ruvia/web/Context.h"

@@ -31,7 +31,7 @@
 #include "ruvia/http/detail/HttpResponseFileAccess.h"
 // The production session header owns every declaration needed by its templates;
 // this test intentionally must not rely on a server-wide include-order umbrella.
-#include "ruvia/web/detail/server/Http2SansIoSession.h"
+#include "ruvia/web/detail/http2/Http2SansIoSession.h"
 #include "ruvia/core/detail/ConnectionScanner.h"
 #include "ruvia/web/detail/router/RouteTable.h"
 #include "ruvia/core/detail/AsioAwait.h"

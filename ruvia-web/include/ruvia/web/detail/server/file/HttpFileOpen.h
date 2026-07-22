@@ -5,7 +5,7 @@
 // closing the stat/open replacement window.
 
 #include "ruvia/http/detail/HttpResponseFileBody.h"
-#include "ruvia/web/detail/server/HttpNativeFile.h"
+#include "ruvia/web/detail/server/file/HttpNativeFile.h"
 
 #include <algorithm>
 #include <cstdint>

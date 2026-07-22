@@ -31,7 +31,7 @@
 #include "ruvia/web/StaticFiles.h"
 #include "ruvia/web/detail/StaticFileMetadata.h"
 #include "ruvia/web/detail/http/StaticRootIndex.h"
-#include "ruvia/web/detail/server/HttpFileOpen.h"
+#include "ruvia/web/detail/server/file/HttpFileOpen.h"
 #include "ruvia/core/memory/MemoryPool.h"
 
 namespace {

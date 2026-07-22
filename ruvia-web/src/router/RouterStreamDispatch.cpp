@@ -6,7 +6,7 @@
 #include "ruvia/web/detail/http/ContextAccess.h"
 #include "ruvia/web/detail/http/StreamingAccess.h"
 #include "ruvia/web/detail/router/RouteDispatchServices.h"
-#include "ruvia/web/detail/server/HttpResponseStreamState.h"
+#include "ruvia/web/detail/server/stream/HttpResponseStreamState.h"
 
 // Running a route that streams its response: binding the writer to the Context
 // for the handler's lifetime, producing the head the h1/h2 sinks commit, and

@@ -11,7 +11,7 @@
 #include "ruvia/web/detail/http/StaticRootIndex.h"
 #include "ruvia/web/detail/http/FileConditionalRequest.h"
 #include "ruvia/web/detail/http/StaticFileVariant.h"
-#include "ruvia/web/detail/server/HttpNativeFile.h"
+#include "ruvia/web/detail/server/file/HttpNativeFile.h"
 #include "ruvia/web/detail/StaticPathNormalization.h"
 #include "ruvia/http/detail/HttpContentCoding.h"
 #include "ruvia/http/UrlEncoding.h"

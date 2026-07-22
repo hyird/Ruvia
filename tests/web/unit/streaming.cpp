@@ -20,7 +20,7 @@
 
 #include "ruvia/web/detail/http/StreamingAccess.h"
 #include "ruvia/web/detail/body/HttpRequestBodyFacade.h"
-#include "ruvia/web/detail/server/HttpResponseStreamState.h"
+#include "ruvia/web/detail/server/stream/HttpResponseStreamState.h"
 #include "ruvia/web/detail/websocket/WebSocketAccess.h"
 #include "ruvia/core/detail/AsioAwait.h"
 #include "ruvia/core/Task.h"

@@ -1,4 +1,4 @@
-#include "ruvia/web/detail/server/Http2BufferedResponseWrite.h"
+#include "ruvia/web/detail/http2/Http2BufferedResponseWrite.h"
 
 #include <algorithm>
 #include <cstddef>
@@ -16,8 +16,8 @@
 #include "ruvia/http/detail/server/HttpResponseWritePlan.h"
 #include "ruvia/web/detail/http2/Http2SansIoSendWindow.h"
 #include "ruvia/web/detail/http2/Http2SansIoStreamRuntime.h"
-#include "ruvia/web/detail/server/HttpFileChunkBuffer.h"
-#include "ruvia/web/detail/server/HttpFileOpen.h"
+#include "ruvia/web/detail/server/file/HttpFileChunkBuffer.h"
+#include "ruvia/web/detail/server/file/HttpFileOpen.h"
 
 namespace ruvia::detail {
 

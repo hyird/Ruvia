@@ -1,7 +1,7 @@
 #pragma once
 
 #include "ruvia/core/detail/ConnectionScanner.h"
-#include "ruvia/web/detail/server/Http1SessionRequestCompletion.h"
+#include "ruvia/web/detail/server/http1/Http1SessionRequestCompletion.h"
 #include "ruvia/web/detail/server/HttpServerResponseState.h"
 #include "ruvia/web/detail/server/HttpServerOptions.h"
 #include "ruvia/web/detail/websocket/HttpWebSocketConnection.h"
