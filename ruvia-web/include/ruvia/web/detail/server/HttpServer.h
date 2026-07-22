@@ -29,6 +29,8 @@
 #include "ruvia/web/detail/integration/WorkerState.h"
 namespace ruvia::detail {
 
+using TcpSocket = asio::ip::tcp::socket;
+
 class ContextServices;
 class AcceptedConnectionLease;
 class RouteTable;

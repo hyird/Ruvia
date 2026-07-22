@@ -1,3 +1,27 @@
+#pragma once
+
+#include <memory_resource>
+#include <system_error>
+#include <utility>
+
+#include <asio/ip/tcp.hpp>
+#include <asio/ssl.hpp>
+
+#include "ruvia/core/detail/io/AsioAwait.h"
+#include "ruvia/web/detail/server/session/HttpServerConnectionGuards.h"
+#include "ruvia/web/detail/http/context/ContextServices.h"
+#include "ruvia/web/detail/server/tls/HttpServerAlpn.h"
+#include "ruvia/web/detail/http2/Http2SansIoSession.h"
+#include "ruvia/web/detail/http2/CleartextUpgrade.h"
+#include "ruvia/web/detail/server/HttpServer.h"
+#include "ruvia/web/detail/server/tls/HttpServerTlsHandshake.h"
+
+// Member-template definitions for HttpServer, kept out of its header so the
+// class stays readable. Included as an ordinary header: everything used here is
+// included here.
+
+namespace ruvia::detail {
+
 Task<void> HttpServer::handleSession(AcceptedConnectionLease connection) {
     auto& socket = connection.socket();
     try {
@@ -94,3 +118,5 @@ Task<void> HttpServer::handleHttp2Session(
         workerState_,
         initialBytes);
 }
+
+}  // namespace ruvia::detail

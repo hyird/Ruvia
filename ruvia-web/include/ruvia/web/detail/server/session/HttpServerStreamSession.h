@@ -1,3 +1,35 @@
+#pragma once
+
+#include <chrono>
+#include <cstddef>
+#include <optional>
+#include <string_view>
+#include <type_traits>
+#include <utility>
+
+#include "ruvia/core/detail/io/AsioAwait.h"
+#include "ruvia/web/detail/http/context/ContextServices.h"
+#include "ruvia/web/detail/server/session/HttpServerConnectionGuards.h"
+#include "ruvia/web/detail/server/session/HttpServerIdleWorkSet.h"
+#include "ruvia/web/detail/server/http1/Http1RequestSequence.h"
+#include "ruvia/web/detail/server/route/HttpServerBodyRouteCompletion.h"
+#include "ruvia/web/detail/server/route/HttpServerStreamBodyRoute.h"
+#include "ruvia/web/detail/server/route/HttpServerWebSocketRoute.h"
+#include "ruvia/web/detail/server/stream/HttpServerResponseStreamRoute.h"
+#include "ruvia/web/detail/server/response/HttpServerResponseState.h"
+#include "ruvia/web/detail/server/request/RequestMemoryArena.h"
+#include "ruvia/web/detail/server/http1/Http1ClosingRejection.h"
+#include "ruvia/web/detail/http2/CleartextUpgrade.h"
+#include "ruvia/web/detail/server/tls/HttpServerAutoHttps.h"
+#include "ruvia/web/detail/server/request/HttpServerRequestState.h"
+#include "ruvia/web/detail/server/HttpServer.h"
+
+// Member-template definitions for HttpServer, kept out of its header so the
+// class stays readable. Included as an ordinary header: everything used here is
+// included here.
+
+namespace ruvia::detail {
+
 template <typename Stream>
 Task<void> HttpServer::handleStreamSession(
     Stream& stream,
@@ -497,3 +529,5 @@ Task<void> HttpServer::handleStreamSession(
         servedKeepaliveRequest = true;
     }
 }
+
+}  // namespace ruvia::detail
