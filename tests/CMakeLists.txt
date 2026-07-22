@@ -206,7 +206,9 @@ add_executable(ruvia_unit_tests
     web/unit/static_file_serving.cpp
     web/unit/static_files.cpp
     web/unit/static_path_normalization.cpp
-    web/unit/streaming.cpp
+    web/unit/response_stream.cpp
+    web/unit/scoped_operation_lifetime.cpp
+    web/unit/sse_writer.cpp
     web/unit/testing_facade.cpp
     web/unit/url_encoding_detect.cpp
     web/unit/validator.cpp
