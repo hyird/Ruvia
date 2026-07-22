@@ -135,377 +135,377 @@ asio::awaitable<bool> EdgeServer::Impl::serveRequest(
     const RequestRecord record{this, &request, &writer, &outcome};
     (void)record;
 
-        // 3. Resolve one stable owner-thread lease. It remains valid if a later
-        // control operation replaces or removes the mapping while this request
-        // is suspended in origin I/O.
-        auto origin = config_.findOrigin(frontHost);
-        if (!origin) {
-            co_await writer.respond(502, noHeaders, {}, "ERROR", std::nullopt, false, false);
-            co_return false;
-        }
+    // 3. Resolve one stable owner-thread lease. It remains valid if a later
+    // control operation replaces or removes the mapping while this request
+    // is suspended in origin I/O.
+    auto origin = config_.findOrigin(frontHost);
+    if (!origin) {
+        co_await writer.respond(502, noHeaders, {}, "ERROR", std::nullopt, false, false);
+        co_return false;
+    }
 
-        // Unsafe methods always write through. This MVP also conservatively
-        // forwards conditional and authenticated retrievals instead of trying
-        // to evaluate client validators or authenticated reuse locally; caching
-        // is optional, while changing either request's semantics is forbidden.
-        const bool cacheBypassMethod = !isGet && !isHead;
-        const bool cannotUseStoredResponse =
-            cacheBypassMethod || directives.hasCondition || requestHasAuthorization ||
-            directives.forcesValidation;
-        if (requestCacheControl.onlyIfCached && cannotUseStoredResponse) {
-            outcome.status = 504;
-            outcome.label = "MISS";
-            co_return co_await writer.respond(
-                       504, noHeaders, {}, "MISS", std::nullopt, false, keepAlive) &&
-                keepAlive;
-        }
-        if (cannotUseStoredResponse ||
-            (requestCacheControl.noStore && !requestCacheControl.onlyIfCached)) {
-            co_return co_await servePassThrough(request, writer, origin, outcome);
-        }
+    // Unsafe methods always write through. This MVP also conservatively
+    // forwards conditional and authenticated retrievals instead of trying
+    // to evaluate client validators or authenticated reuse locally; caching
+    // is optional, while changing either request's semantics is forbidden.
+    const bool cacheBypassMethod = !isGet && !isHead;
+    const bool cannotUseStoredResponse =
+        cacheBypassMethod || directives.hasCondition || requestHasAuthorization ||
+        directives.forcesValidation;
+    if (requestCacheControl.onlyIfCached && cannotUseStoredResponse) {
+        outcome.status = 504;
+        outcome.label = "MISS";
+        co_return co_await writer.respond(
+                   504, noHeaders, {}, "MISS", std::nullopt, false, keepAlive) &&
+            keepAlive;
+    }
+    if (cannotUseStoredResponse ||
+        (requestCacheControl.noStore && !requestCacheControl.onlyIfCached)) {
+        co_return co_await servePassThrough(request, writer, origin, outcome);
+    }
 
-        std::time_t now = std::time(nullptr);
-        // Preserve the complete Accept-Encoding field value. Dropping weights,
-        // repeated lines, or the absent-vs-empty distinction can make a shared
-        // cache serve a representation selected for a different request.
-        const std::string variantPrefix =
-            cacheVariantPrefix("GET", frontHost, target);
-        const auto acceptEncoding = combinedRequestFieldValue(
-            request.headers, "accept-encoding");
-        std::string key = variantPrefix;
-        // The primary cache key includes the complete request authority. The
-        // mapping host deliberately ignores a port for routing, but two target
-        // URIs with different ports are not the same cache key. ASCII case is
-        // canonicalized because URI hosts are case-insensitive.
-        for (const char byte : request.host) {
-            key.push_back(toLowerAscii(byte));
-        }
-        key.push_back('\n');
-        key.push_back(acceptEncoding ? '1' : '0');
-        if (acceptEncoding) {
-            key.append(*acceptEncoding);
-        }
+    std::time_t now = std::time(nullptr);
+    // Preserve the complete Accept-Encoding field value. Dropping weights,
+    // repeated lines, or the absent-vs-empty distinction can make a shared
+    // cache serve a representation selected for a different request.
+    const std::string variantPrefix =
+        cacheVariantPrefix("GET", frontHost, target);
+    const auto acceptEncoding = combinedRequestFieldValue(
+        request.headers, "accept-encoding");
+    std::string key = variantPrefix;
+    // The primary cache key includes the complete request authority. The
+    // mapping host deliberately ignores a port for routing, but two target
+    // URIs with different ports are not the same cache key. ASCII case is
+    // canonicalized because URI hosts are case-insensitive.
+    for (const char byte : request.host) {
+        key.push_back(toLowerAscii(byte));
+    }
+    key.push_back('\n');
+    key.push_back(acceptEncoding ? '1' : '0');
+    if (acceptEncoding) {
+        key.append(*acceptEncoding);
+    }
 
-        // Serve a cached entry, honoring a single client byte-range (206, or 416
-        // when unsatisfiable) served from the full cached body.
-        const auto serveHit = [&](const CachedResponse& entry) -> asio::awaitable<bool> {
-            outcome.label = "HIT";
-            const auto age = cachedResponseAge(entry, now);
-            if (!isHead) {
-                if (const auto rangeHeader = findRequestHeader(request.headers, "range")) {
-                    if (auto ranged = cachedRangeResponse(entry, *rangeHeader)) {
-                        outcome.status = ranged->status;
-                        co_return co_await writer.respond(
-                                   ranged->status,
-                                   ranged->headers,
-                                   ranged->body,
-                                   "HIT",
-                                   ranged->withAge ? std::optional<std::uint64_t>(age)
-                                                   : std::nullopt,
-                                   false,
-                                   keepAlive) &&
-                            keepAlive;
-                    }
+    // Serve a cached entry, honoring a single client byte-range (206, or 416
+    // when unsatisfiable) served from the full cached body.
+    const auto serveHit = [&](const CachedResponse& entry) -> asio::awaitable<bool> {
+        outcome.label = "HIT";
+        const auto age = cachedResponseAge(entry, now);
+        if (!isHead) {
+            if (const auto rangeHeader = findRequestHeader(request.headers, "range")) {
+                if (auto ranged = cachedRangeResponse(entry, *rangeHeader)) {
+                    outcome.status = ranged->status;
+                    co_return co_await writer.respond(
+                               ranged->status,
+                               ranged->headers,
+                               ranged->body,
+                               "HIT",
+                               ranged->withAge ? std::optional<std::uint64_t>(age)
+                                               : std::nullopt,
+                               false,
+                               keepAlive) &&
+                        keepAlive;
                 }
             }
-            outcome.status = entry.status;
-            co_return co_await writer.respond(
-                       entry.status, entry.headers, entry.body, "HIT", age, isHead, keepAlive) &&
-                keepAlive;
-        };
-
-        // 4. Serve a fresh cache hit without touching the origin.
-        auto hit = cache_.lookup(key, now);
-        if (hit.status == CacheLookupStatus::kMiss && disk_.enabled()) {
-            // Memory miss: consult the persistent disk tier and, on a hit,
-            // promote the entry into the hot memory cache.
-            if (auto diskEntry = co_await disk_.lookup(key)) {
-                cache_.store(key, std::move(*diskEntry));
-                hit = cache_.lookup(key, now);
-            }
         }
-        if (hit.status == CacheLookupStatus::kFresh) {
-            co_return co_await serveHit(*hit.entry);
-        }
-        // A stale entry may still be revalidated with the origin below.
-        CacheEntryLease staleEntry =
-            hit.status == CacheLookupStatus::kStale ? hit.entry : CacheEntryLease{};
+        outcome.status = entry.status;
+        co_return co_await writer.respond(
+                   entry.status, entry.headers, entry.body, "HIT", age, isHead, keepAlive) &&
+            keepAlive;
+    };
 
-        // stale-while-revalidate: a stale entry still inside its stale-while-
-        // revalidate window is served immediately while a single background job
-        // refreshes it, so the client never waits on the origin.
-        if (isGet && staleEntry && staleEntry->staleWhileRevalidate > 0 &&
-            now <= staleEntry->expiresAt +
-                       static_cast<std::time_t>(staleEntry->staleWhileRevalidate)) {
+    // 4. Serve a fresh cache hit without touching the origin.
+    auto hit = cache_.lookup(key, now);
+    if (hit.status == CacheLookupStatus::kMiss && disk_.enabled()) {
+        // Memory miss: consult the persistent disk tier and, on a hit,
+        // promote the entry into the hot memory cache.
+        if (auto diskEntry = co_await disk_.lookup(key)) {
+            cache_.store(key, std::move(*diskEntry));
+            hit = cache_.lookup(key, now);
+        }
+    }
+    if (hit.status == CacheLookupStatus::kFresh) {
+        co_return co_await serveHit(*hit.entry);
+    }
+    // A stale entry may still be revalidated with the origin below.
+    CacheEntryLease staleEntry =
+        hit.status == CacheLookupStatus::kStale ? hit.entry : CacheEntryLease{};
+
+    // stale-while-revalidate: a stale entry still inside its stale-while-
+    // revalidate window is served immediately while a single background job
+    // refreshes it, so the client never waits on the origin.
+    if (isGet && staleEntry && staleEntry->staleWhileRevalidate > 0 &&
+        now <= staleEntry->expiresAt +
+                   static_cast<std::time_t>(staleEntry->staleWhileRevalidate)) {
+        if (inFlight_.find(key) == inFlight_.end()) {
+            inFlight_.try_emplace(key);  // one refresh per key
+            spawnTracked(backgroundRefresh(RefreshJob{
+                key,
+                std::string(origin->upstreamHost),
+                origin->upstreamPort,
+                origin->https,
+                std::string(target),
+                acceptEncoding,
+                staleEntry}));
+        }
+        const auto age = cachedResponseAge(*staleEntry, now);
+        outcome.label = "STALE";
+        outcome.status = staleEntry->status;
+        co_return co_await writer.respond(
+            staleEntry->status, staleEntry->headers, staleEntry->body, "STALE", age,
+            isHead, keepAlive) && keepAlive;
+    }
+
+    // only-if-cached forbids contacting the origin. A fresh hit or an
+    // explicitly reusable stale hit has already returned above; everything
+    // left is a cache miss for this request's constraints.
+    if (requestCacheControl.onlyIfCached) {
+        outcome.status = 504;
+        outcome.label = "MISS";
+        co_return co_await writer.respond(
+                   504, noHeaders, {}, "MISS", std::nullopt, false, keepAlive) &&
+            keepAlive;
+    }
+
+    // Request coalescing (GET only): if a fetch for this key is already in
+    // flight, wait for it and re-check the cache instead of sending the origin
+    // a duplicate request. Whoever finds no in-flight fetch becomes the leader
+    // and registers one; leaderGuard wakes the followers when it finishes.
+    bool becameLeader = false;
+    if (isGet) {
+        for (;;) {
             if (inFlight_.find(key) == inFlight_.end()) {
-                inFlight_.try_emplace(key);  // one refresh per key
-                spawnTracked(backgroundRefresh(RefreshJob{
-                    key,
-                    std::string(origin->upstreamHost),
-                    origin->upstreamPort,
-                    origin->https,
-                    std::string(target),
-                    acceptEncoding,
-                    staleEntry}));
+                inFlight_.try_emplace(key);
+                becameLeader = true;
+                break;
             }
-            const auto age = cachedResponseAge(*staleEntry, now);
-            outcome.label = "STALE";
-            outcome.status = staleEntry->status;
-            co_return co_await writer.respond(
-                staleEntry->status, staleEntry->headers, staleEntry->body, "STALE", age,
-                isHead, keepAlive) && keepAlive;
-        }
-
-        // only-if-cached forbids contacting the origin. A fresh hit or an
-        // explicitly reusable stale hit has already returned above; everything
-        // left is a cache miss for this request's constraints.
-        if (requestCacheControl.onlyIfCached) {
-            outcome.status = 504;
-            outcome.label = "MISS";
-            co_return co_await writer.respond(
-                       504, noHeaders, {}, "MISS", std::nullopt, false, keepAlive) &&
-                keepAlive;
-        }
-
-        // Request coalescing (GET only): if a fetch for this key is already in
-        // flight, wait for it and re-check the cache instead of sending the origin
-        // a duplicate request. Whoever finds no in-flight fetch becomes the leader
-        // and registers one; leaderGuard wakes the followers when it finishes.
-        bool becameLeader = false;
-        if (isGet) {
-            for (;;) {
-                if (inFlight_.find(key) == inFlight_.end()) {
-                    inFlight_.try_emplace(key);
-                    becameLeader = true;
-                    break;
-                }
-                // A detached HTTP/2 handler whose client has gone is cancelled on
-                // session teardown; stop coalescing rather than wait for a leader
-                // that can no longer serve this dead connection. No-op for HTTP/1,
-                // whose handler carries no cancellation slot.
-                if ((co_await asio::this_coro::cancellation_state).cancelled() !=
-                    asio::cancellation_type::none) {
-                    co_return false;
-                }
-                asio::steady_timer waitTimer(ioContext_);
-                waitTimer.expires_at((std::chrono::steady_clock::time_point::max)());
-                inFlight_[key].waiters.push_back(&waitTimer);
-                co_await waitTimer.async_wait(asio::as_tuple(asio::use_awaitable));
-                // Drop our waiter before it can dangle. The leader's wakeInFlight()
-                // erases the whole entry when it finishes, so remove ours only if
-                // the entry is still present -- the teardown-cancel path, where
-                // wakeInFlight() has not run for this key.
-                if (const auto entry = inFlight_.find(key); entry != inFlight_.end()) {
-                    std::erase(entry->second.waiters, &waitTimer);
-                }
-                if ((co_await asio::this_coro::cancellation_state).cancelled() !=
-                    asio::cancellation_type::none) {
-                    co_return false;
-                }
-                now = std::time(nullptr);
-                auto woken = cache_.lookup(key, now);
-                if (woken.status == CacheLookupStatus::kFresh) {
-                    co_return co_await serveHit(*woken.entry);
-                }
-                staleEntry =
-                    woken.status == CacheLookupStatus::kStale
-                    ? woken.entry
-                    : CacheEntryLease{};
-            }
-        }
-        struct LeaderGuard final {
-            Impl* self;
-            const std::string* key;
-            bool active;
-            ~LeaderGuard() {
-                if (active) {
-                    self->wakeInFlight(*key);
-                }
-            }
-        } leaderGuard{this, &key, becameLeader};
-
-        // 5. Miss (or stale): fetch from the origin, forwarding the client's
-        // header section under the proxy rules in EdgeForwardHeaders.h.
-        const auto forwardHeaders = buildForwardHeaders(
-            request.headers,
-            request.clientAddress,
-            request.host,
-            tlsEnabled_,
-            staleEntry ? &*staleEntry : nullptr,
-            ForwardMode::kCache,
-            memory_.resource());
-
-        OriginRequest originRequest;
-        originRequest.method = request.method;  // GET or HEAD
-        originRequest.target = target;
-        originRequest.headers = forwardHeaders;
-
-        // stale-if-error: a stale copy within its stale-if-error window is served
-        // when the origin cannot be reached (or answers 5xx), instead of an error.
-        const auto serveStaleOnError = [&]() -> bool {
-            return staleEntry && staleEntry->staleIfError > 0 &&
-                now <= staleEntry->expiresAt +
-                           static_cast<std::time_t>(staleEntry->staleIfError);
-        };
-        const auto writeStale = [&]() -> asio::awaitable<bool> {
-            const auto age = cachedResponseAge(*staleEntry, now);
-            co_return co_await writer.respond(
-                staleEntry->status, staleEntry->headers, staleEntry->body, "STALE", age,
-                isHead, keepAlive);
-        };
-
-        // Streaming sink: writes the client head then each body chunk as the
-        // origin responds, and tees a cacheable body into cacheBuffer. A 304
-        // (revalidation) or a stale-if-error-covered 5xx declines streaming so the
-        // stored body is served after the fetch instead.
-        std::uint16_t respStatus = 0;
-        Headers respHeaders;
-        bool headSent = false;
-        bool clientAborted = false;
-        bool caching = false;
-        std::string cacheBuffer;
-        FreshnessDecision cacheDecision;
-        const std::time_t originRequestTime = std::time(nullptr);
-
-        ResponseSink sink;
-        sink.onHead = [&](const OriginResponseHead& head) -> asio::awaitable<bool> {
-            now = std::time(nullptr);
-            respStatus = head.status;
-            respHeaders = endToEndResponseHeaders(head.headers);
-            if (staleEntry && head.status == 304) {
-                co_return false;  // revalidation: serve the stored body below
-            }
-            if (head.status >= 500 && serveStaleOnError()) {
-                co_return false;  // stale-if-error: serve the stored body below
-            }
-            if (!co_await writer.respondHead(head.status, respHeaders, "MISS",
-                                             head.hasBody, head.contentLength, keepAlive)) {
-                clientAborted = true;
+            // A detached HTTP/2 handler whose client has gone is cancelled on
+            // session teardown; stop coalescing rather than wait for a leader
+            // that can no longer serve this dead connection. No-op for HTTP/1,
+            // whose handler carries no cancellation slot.
+            if ((co_await asio::this_coro::cancellation_state).cancelled() !=
+                asio::cancellation_type::none) {
                 co_return false;
             }
-            headSent = true;
-            if (!isHead) {
-                cacheDecision =
-                    evaluateFreshness(buildFreshnessInput(
-                        head.status,
-                        respHeaders,
-                        now,
-                        originRequestTime,
-                        requestHasAuthorization));
-                caching = cacheDecision.cacheable && cacheableUnderVary(respHeaders);
+            asio::steady_timer waitTimer(ioContext_);
+            waitTimer.expires_at((std::chrono::steady_clock::time_point::max)());
+            inFlight_[key].waiters.push_back(&waitTimer);
+            co_await waitTimer.async_wait(asio::as_tuple(asio::use_awaitable));
+            // Drop our waiter before it can dangle. The leader's wakeInFlight()
+            // erases the whole entry when it finishes, so remove ours only if
+            // the entry is still present -- the teardown-cancel path, where
+            // wakeInFlight() has not run for this key.
+            if (const auto entry = inFlight_.find(key); entry != inFlight_.end()) {
+                std::erase(entry->second.waiters, &waitTimer);
             }
-            co_return true;
-        };
-        sink.onBody = [&](std::string_view chunk) -> asio::awaitable<bool> {
-            if (caching) {
-                if (cacheBuffer.size() + chunk.size() > maxCacheableBytes_) {
-                    caching = false;  // too big to cache; keep streaming
-                    cacheBuffer.clear();
-                    cacheBuffer.shrink_to_fit();
-                } else {
-                    cacheBuffer.append(chunk);
-                }
-            }
-            if (!co_await writer.respondChunk(chunk)) {
-                clientAborted = true;
+            if ((co_await asio::this_coro::cancellation_state).cancelled() !=
+                asio::cancellation_type::none) {
                 co_return false;
             }
-            co_return true;
-        };
-
-        auto fetchResult = co_await fetcher_.fetch(
-            ioContext_.get_executor(), origin->upstreamHost, origin->upstreamPort,
-            origin->https, originRequest, sink);
-
-        if (clientAborted) {
-            co_return false;  // the client went away mid-response
-        }
-        if (fetchResult.outcome != OriginFetchOutcome::kOk) {
             now = std::time(nullptr);
-            if (headSent) {
-                co_return false;  // partial response already sent; close
+            auto woken = cache_.lookup(key, now);
+            if (woken.status == CacheLookupStatus::kFresh) {
+                co_return co_await serveHit(*woken.entry);
             }
-            if (serveStaleOnError()) {
-                outcome.label = "STALE";
-                outcome.status = staleEntry->status;
-                co_return co_await writeStale() && keepAlive;
+            staleEntry =
+                woken.status == CacheLookupStatus::kStale
+                ? woken.entry
+                : CacheEntryLease{};
+        }
+    }
+    struct LeaderGuard final {
+        Impl* self;
+        const std::string* key;
+        bool active;
+        ~LeaderGuard() {
+            if (active) {
+                self->wakeInFlight(*key);
             }
-            const std::uint16_t gatewayStatus =
-                fetchResult.outcome == OriginFetchOutcome::kTimeout ? 504 : 502;
-            outcome.status = gatewayStatus;
-            co_await writer.respond(
-                gatewayStatus, noHeaders, {}, "ERROR", std::nullopt, false, false);
+        }
+    } leaderGuard{this, &key, becameLeader};
+
+    // 5. Miss (or stale): fetch from the origin, forwarding the client's
+    // header section under the proxy rules in EdgeForwardHeaders.h.
+    const auto forwardHeaders = buildForwardHeaders(
+        request.headers,
+        request.clientAddress,
+        request.host,
+        tlsEnabled_,
+        staleEntry ? &*staleEntry : nullptr,
+        ForwardMode::kCache,
+        memory_.resource());
+
+    OriginRequest originRequest;
+    originRequest.method = request.method;  // GET or HEAD
+    originRequest.target = target;
+    originRequest.headers = forwardHeaders;
+
+    // stale-if-error: a stale copy within its stale-if-error window is served
+    // when the origin cannot be reached (or answers 5xx), instead of an error.
+    const auto serveStaleOnError = [&]() -> bool {
+        return staleEntry && staleEntry->staleIfError > 0 &&
+            now <= staleEntry->expiresAt +
+                       static_cast<std::time_t>(staleEntry->staleIfError);
+    };
+    const auto writeStale = [&]() -> asio::awaitable<bool> {
+        const auto age = cachedResponseAge(*staleEntry, now);
+        co_return co_await writer.respond(
+            staleEntry->status, staleEntry->headers, staleEntry->body, "STALE", age,
+            isHead, keepAlive);
+    };
+
+    // Streaming sink: writes the client head then each body chunk as the
+    // origin responds, and tees a cacheable body into cacheBuffer. A 304
+    // (revalidation) or a stale-if-error-covered 5xx declines streaming so the
+    // stored body is served after the fetch instead.
+    std::uint16_t respStatus = 0;
+    Headers respHeaders;
+    bool headSent = false;
+    bool clientAborted = false;
+    bool caching = false;
+    std::string cacheBuffer;
+    FreshnessDecision cacheDecision;
+    const std::time_t originRequestTime = std::time(nullptr);
+
+    ResponseSink sink;
+    sink.onHead = [&](const OriginResponseHead& head) -> asio::awaitable<bool> {
+        now = std::time(nullptr);
+        respStatus = head.status;
+        respHeaders = endToEndResponseHeaders(head.headers);
+        if (staleEntry && head.status == 304) {
+            co_return false;  // revalidation: serve the stored body below
+        }
+        if (head.status >= 500 && serveStaleOnError()) {
+            co_return false;  // stale-if-error: serve the stored body below
+        }
+        if (!co_await writer.respondHead(head.status, respHeaders, "MISS",
+                                         head.hasBody, head.contentLength, keepAlive)) {
+            clientAborted = true;
             co_return false;
         }
-
-        // The sink declined to stream (304 revalidation, or a stale-if-error 5xx):
-        // serve the stored body instead.
-        if (!headSent && staleEntry) {
-            if (respStatus == 304) {
-                Headers merged = mergeStoredHeaders(staleEntry->headers, respHeaders);
-                const auto decision =
-                    evaluateFreshness(buildFreshnessInput(
-                        staleEntry->status,
-                        merged,
-                        now,
-                        originRequestTime,
-                        requestHasAuthorization));
-                CachedResponse refreshed;
-                refreshed.status = staleEntry->status;
-                refreshed.body = staleEntry->body;
-                refreshed.headers = std::move(merged);
-                refreshed.storedAt = now;
-                refreshed.initialAge = decision.initialAge;
-                refreshed.expiresAt = decision.cacheable ? decision.expiresAt : now;
-                refreshed.staleWhileRevalidate = decision.staleWhileRevalidate;
-                refreshed.staleIfError = decision.staleIfError;
-                const bool storable = decision.cacheable && cacheableUnderVary(refreshed.headers);
-                if (storable) {
-                    disk_.store(key, refreshed);
-                    cache_.store(key, CachedResponse(refreshed));
-                } else {
-                    cache_.purge(key);  // no longer has usable freshness
-                    disk_.purge(key);
-                }
-                outcome.label = "REVALIDATED";
-                outcome.status = refreshed.status;
-                co_return co_await writer.respond(
-                    refreshed.status, refreshed.headers, refreshed.body, "REVALIDATED",
-                    refreshed.initialAge, isHead, keepAlive) && keepAlive;
+        headSent = true;
+        if (!isHead) {
+            cacheDecision =
+                evaluateFreshness(buildFreshnessInput(
+                    head.status,
+                    respHeaders,
+                    now,
+                    originRequestTime,
+                    requestHasAuthorization));
+            caching = cacheDecision.cacheable && cacheableUnderVary(respHeaders);
+        }
+        co_return true;
+    };
+    sink.onBody = [&](std::string_view chunk) -> asio::awaitable<bool> {
+        if (caching) {
+            if (cacheBuffer.size() + chunk.size() > maxCacheableBytes_) {
+                caching = false;  // too big to cache; keep streaming
+                cacheBuffer.clear();
+                cacheBuffer.shrink_to_fit();
+            } else {
+                cacheBuffer.append(chunk);
             }
-            outcome.label = "STALE";  // 5xx covered by stale-if-error
+        }
+        if (!co_await writer.respondChunk(chunk)) {
+            clientAborted = true;
+            co_return false;
+        }
+        co_return true;
+    };
+
+    auto fetchResult = co_await fetcher_.fetch(
+        ioContext_.get_executor(), origin->upstreamHost, origin->upstreamPort,
+        origin->https, originRequest, sink);
+
+    if (clientAborted) {
+        co_return false;  // the client went away mid-response
+    }
+    if (fetchResult.outcome != OriginFetchOutcome::kOk) {
+        now = std::time(nullptr);
+        if (headSent) {
+            co_return false;  // partial response already sent; close
+        }
+        if (serveStaleOnError()) {
+            outcome.label = "STALE";
             outcome.status = staleEntry->status;
             co_return co_await writeStale() && keepAlive;
         }
+        const std::uint16_t gatewayStatus =
+            fetchResult.outcome == OriginFetchOutcome::kTimeout ? 504 : 502;
+        outcome.status = gatewayStatus;
+        co_await writer.respond(
+            gatewayStatus, noHeaders, {}, "ERROR", std::nullopt, false, false);
+        co_return false;
+    }
 
-        // A full response streamed successfully: finish the framing and commit the
-        // cache if the whole body was accumulated within the size cap.
-        if (!co_await writer.respondEnd()) {
-            co_return false;
+    // The sink declined to stream (304 revalidation, or a stale-if-error 5xx):
+    // serve the stored body instead.
+    if (!headSent && staleEntry) {
+        if (respStatus == 304) {
+            Headers merged = mergeStoredHeaders(staleEntry->headers, respHeaders);
+            const auto decision =
+                evaluateFreshness(buildFreshnessInput(
+                    staleEntry->status,
+                    merged,
+                    now,
+                    originRequestTime,
+                    requestHasAuthorization));
+            CachedResponse refreshed;
+            refreshed.status = staleEntry->status;
+            refreshed.body = staleEntry->body;
+            refreshed.headers = std::move(merged);
+            refreshed.storedAt = now;
+            refreshed.initialAge = decision.initialAge;
+            refreshed.expiresAt = decision.cacheable ? decision.expiresAt : now;
+            refreshed.staleWhileRevalidate = decision.staleWhileRevalidate;
+            refreshed.staleIfError = decision.staleIfError;
+            const bool storable = decision.cacheable && cacheableUnderVary(refreshed.headers);
+            if (storable) {
+                disk_.store(key, refreshed);
+                cache_.store(key, CachedResponse(refreshed));
+            } else {
+                cache_.purge(key);  // no longer has usable freshness
+                disk_.purge(key);
+            }
+            outcome.label = "REVALIDATED";
+            outcome.status = refreshed.status;
+            co_return co_await writer.respond(
+                refreshed.status, refreshed.headers, refreshed.body, "REVALIDATED",
+                refreshed.initialAge, isHead, keepAlive) && keepAlive;
         }
-        if (caching) {
-            CachedResponse entry;
-            entry.status = respStatus;
-            entry.headers = std::move(respHeaders);
-            entry.body = std::move(cacheBuffer);
-            entry.storedAt = now;
-            entry.initialAge = cacheDecision.initialAge;
-            entry.expiresAt = cacheDecision.expiresAt;
-            entry.staleWhileRevalidate = cacheDecision.staleWhileRevalidate;
-            entry.staleIfError = cacheDecision.staleIfError;
-            disk_.store(key, entry);
-            cache_.store(key, std::move(entry));
-        } else if (staleEntry && respStatus < 500) {
-            // A successful/full replacement that is no longer storable (for
-            // example no-store/private, unsupported Vary, or an oversized new
-            // representation) supersedes the stale entry. Keeping it would let
-            // a later stale-if-error path resurrect data the origin withdrew.
-            cache_.purge(key);
-            disk_.purge(key);
-        }
-        outcome.label = "MISS";
-        outcome.status = respStatus;
-        co_return keepAlive;
+        outcome.label = "STALE";  // 5xx covered by stale-if-error
+        outcome.status = staleEntry->status;
+        co_return co_await writeStale() && keepAlive;
+    }
+
+    // A full response streamed successfully: finish the framing and commit the
+    // cache if the whole body was accumulated within the size cap.
+    if (!co_await writer.respondEnd()) {
+        co_return false;
+    }
+    if (caching) {
+        CachedResponse entry;
+        entry.status = respStatus;
+        entry.headers = std::move(respHeaders);
+        entry.body = std::move(cacheBuffer);
+        entry.storedAt = now;
+        entry.initialAge = cacheDecision.initialAge;
+        entry.expiresAt = cacheDecision.expiresAt;
+        entry.staleWhileRevalidate = cacheDecision.staleWhileRevalidate;
+        entry.staleIfError = cacheDecision.staleIfError;
+        disk_.store(key, entry);
+        cache_.store(key, std::move(entry));
+    } else if (staleEntry && respStatus < 500) {
+        // A successful/full replacement that is no longer storable (for
+        // example no-store/private, unsupported Vary, or an oversized new
+        // representation) supersedes the stale entry. Keeping it would let
+        // a later stale-if-error path resurrect data the origin withdrew.
+        cache_.purge(key);
+        disk_.purge(key);
+    }
+    outcome.label = "MISS";
+    outcome.status = respStatus;
+    co_return keepAlive;
 }
 
 asio::awaitable<void> EdgeServer::Impl::backgroundRefresh(RefreshJob job) {
