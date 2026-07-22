@@ -5,6 +5,8 @@
 #include <cstddef>
 #include <string_view>
 
+#include "ruvia/http/detail/field/HeaderTokenUtils.h"
+
 // The MIME entity grammar multipart bodies are validated against (RFC 2045
 // sections 5.1 and 5.3): which characters form a token, what a field name, field
 // body, parameter and media type may contain, and the duplicate-parameter guard
@@ -162,28 +164,16 @@ private:
         type.empty() || subtype.empty()) {
         return false;
     }
-    if (parameters >= value.size()) {
-        return true;
-    }
-
     HttpMimeParameterNames parameterNames;
-    std::size_t start = parameters + 1;
-    while (start <= value.size()) {
-        const auto end = httpFindUnquotedDelimiter(value, start, ';');
-        const auto parameter = httpTrimOws(value.substr(start, end - start));
-        std::string_view name;
-        std::string_view parameterValue;
-        if (!httpParseMimeParameter(
-                parameter, name, parameterValue, false) ||
-            !parameterNames.record(name)) {
-            return false;
-        }
-        if (end >= value.size()) {
-            return true;
-        }
-        start = end + 1;
-    }
-    return true;
+    return httpAllParameters(
+        value,
+        [&parameterNames](std::string_view parameter) noexcept {
+            std::string_view name;
+            std::string_view parameterValue;
+            return httpParseMimeParameter(
+                       parameter, name, parameterValue, false) &&
+                parameterNames.record(name);
+        });
 }
 
 }  // namespace ruvia::detail
