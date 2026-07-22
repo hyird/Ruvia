@@ -157,26 +157,12 @@ asio::awaitable<bool> EdgeServer::Impl::serveRequest(
     }
 
     std::time_t now = std::time(nullptr);
-    // Preserve the complete Accept-Encoding field value. Dropping weights,
-    // repeated lines, or the absent-vs-empty distinction can make a shared
-    // cache serve a representation selected for a different request.
     const std::string variantPrefix =
         cacheVariantPrefix("GET", frontHost, target);
     const auto acceptEncoding = combinedRequestFieldValue(
         request.headers, "accept-encoding");
-    std::string key = variantPrefix;
-    // The primary cache key includes the complete request authority. The
-    // mapping host deliberately ignores a port for routing, but two target
-    // URIs with different ports are not the same cache key. ASCII case is
-    // canonicalized because URI hosts are case-insensitive.
-    for (const char byte : request.host) {
-        key.push_back(toLowerAscii(byte));
-    }
-    key.push_back('\n');
-    key.push_back(acceptEncoding ? '1' : '0');
-    if (acceptEncoding) {
-        key.append(*acceptEncoding);
-    }
+    const std::string key =
+        cacheKeyFor(variantPrefix, request.host, acceptEncoding);
 
     // Serve a cached entry, honoring a single client byte-range (206, or 416
     // when unsatisfiable) served from the full cached body.

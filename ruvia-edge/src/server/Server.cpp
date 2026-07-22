@@ -366,25 +366,6 @@ void EdgeServer::Impl::wakeInFlight(const std::string& key) {
     inFlight_.erase(it);
 }
 
-std::string EdgeServer::Impl::cacheVariantPrefix(
-    std::string_view method,
-    std::string_view frontHost,
-    std::string_view target) {
-    std::string key;
-    key.reserve(method.size() + frontHost.size() + target.size() + 3);
-    key.append(method);
-    key.push_back('\n');
-    for (const char c : frontHost) {
-        key.push_back(toLowerAscii(c));
-    }
-    key.push_back('\n');
-    key.append(target);
-    // This terminal delimiter makes the prefix identify exactly one URI. A
-    // prefix for `/a` must never invalidate `/ab`.
-    key.push_back('\n');
-    return key;
-}
-
 EdgeServer::EdgeServer(EdgeEndpoint endpoint, EdgeServerOptions options)
     : impl_(std::make_unique<Impl>(std::move(endpoint), std::move(options))) {}
 
