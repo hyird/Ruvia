@@ -82,11 +82,15 @@ void detail::MariaDbPool::scanDeadlines(std::chrono::steady_clock::time_point no
 }
 
 bool detail::MariaDbPool::hasAnyTimeout() const noexcept {
-    return config_.connectTimeout.has_value() ||
-        config_.queryTimeout.has_value() ||
-        config_.readTimeout.has_value() ||
-        config_.writeTimeout.has_value() ||
-        config_.acquireTimeout.has_value();
+    return detail::dbConfigHasAnyTimeout(config_);
+}
+
+Task<std::size_t> detail::MariaDbPool::acquireSlot() {
+    return detail::acquireDbSlot(*this);
+}
+
+void detail::MariaDbPool::releaseSlot(std::size_t slot) noexcept {
+    detail::releaseDbSlot(*this, slot);
 }
 
 void detail::MariaDbPool::closeSlot(ConnectionSlot& slot) noexcept {

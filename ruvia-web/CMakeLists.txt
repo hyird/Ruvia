@@ -98,8 +98,7 @@ if(RUVIA_ENABLE_MARIADB)
         ${CMAKE_CURRENT_SOURCE_DIR}/src/db/DbMysqlRuntime.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/src/db/DbPoolIo.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/src/db/DbPoolLifecycle.cpp
-        ${CMAKE_CURRENT_SOURCE_DIR}/src/db/DbPoolSlots.cpp
-        ${CMAKE_CURRENT_SOURCE_DIR}/src/db/DbSql.cpp)
+            ${CMAKE_CURRENT_SOURCE_DIR}/src/db/DbSql.cpp)
 endif()
 
 if(RUVIA_ENABLE_POSTGRESQL)
@@ -204,9 +203,11 @@ if(RUVIA_ENABLE_MARIADB OR RUVIA_ENABLE_POSTGRESQL)
     ruvia_install_public_headers(web
         include/ruvia/web/detail/db/DbBackend.h
         include/ruvia/web/detail/db/DbConfigValidation.h
+        include/ruvia/web/detail/db/DbHostResolution.h
         include/ruvia/web/detail/db/DbRegistry.h
         include/ruvia/web/detail/db/DbMigrationValidation.h
         include/ruvia/web/detail/db/DbOperationState.h
+        include/ruvia/web/detail/db/DbPoolOperations.h
         include/ruvia/web/detail/db/DbResultAccess.h
         include/ruvia/web/detail/db/DbSlotSocket.h
         include/ruvia/web/detail/db/DbUtils.h
