@@ -94,7 +94,12 @@
 #include <ruvia/http/detail/websocket/HttpWebSocketHandshakeFields.h>
 #include <ruvia/http/detail/websocket/HttpWebSocketHandshakeValidation.h>
 #include <ruvia/http/detail/websocket/HttpWebSocketMessageAccess.h>
-#include <ruvia/http/detail/websocket/HttpWebSocketUtils.h>
+#include <ruvia/http/detail/websocket/HttpWebSocketClosePayload.h>
+#include <ruvia/http/detail/websocket/HttpWebSocketFrameCodec.h>
+#include <ruvia/http/detail/websocket/HttpWebSocketFrameReader.h>
+#include <ruvia/http/detail/websocket/HttpWebSocketFrameView.h>
+#include <ruvia/http/detail/websocket/HttpWebSocketInboundAssembler.h>
+#include <ruvia/http/detail/websocket/HttpWebSocketPayloadValidation.h>
 #include <ruvia/http/detail/websocket/WebSocketServerNegotiation.h>
 #include <ruvia/http/detail/websocket/WsConnection.h>
 #include <ruvia/http/detail/websocket/WsEvent.h>

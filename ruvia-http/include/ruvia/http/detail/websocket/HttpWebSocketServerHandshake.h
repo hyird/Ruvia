@@ -2,7 +2,7 @@
 
 #include "ruvia/http/HttpStatus.h"
 #include "ruvia/http/detail/HttpRequestInternal.h"
-#include "ruvia/http/detail/websocket/HttpWebSocketUtils.h"
+#include "ruvia/http/detail/websocket/HttpWebSocketAcceptKey.h"
 #include "ruvia/http/detail/websocket/WebSocketServerNegotiation.h"
 
 #include <memory_resource>

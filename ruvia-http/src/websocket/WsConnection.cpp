@@ -1,5 +1,7 @@
 #include "ruvia/http/detail/websocket/WsConnection.h"
 
+#include "ruvia/http/detail/websocket/HttpWebSocketClosePayload.h"
+
 namespace ruvia::detail {
 
 WsConnection::WsConnection(

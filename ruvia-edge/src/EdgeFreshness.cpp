@@ -1,7 +1,9 @@
 #include "ruvia/edge/detail/EdgeFreshness.h"
 
 #include <algorithm>
+#include <charconv>
 #include <limits>
+#include <system_error>
 
 namespace ruvia::edge {
 
@@ -112,6 +114,40 @@ FreshnessDecision evaluateFreshness(const FreshnessInput& input) noexcept {
     decision.staleWhileRevalidate = cc.staleWhileRevalidate.value_or(0);
     decision.staleIfError = cc.staleIfError.value_or(0);
     return decision;
+}
+
+FreshnessInput buildFreshnessInput(
+    std::uint16_t status,
+    const Headers& headers,
+    std::time_t now,
+    std::time_t requestTime,
+    bool requestHasAuthorization) {
+    FreshnessInput input;
+    input.status = status;
+    input.now = now;
+    input.requestTime = requestTime;
+    input.requestHasAuthorization = requestHasAuthorization;
+
+    CacheControlFieldParser cacheControl;
+    for (const auto& [name, value] : headers) {
+        if (iequals(name, "cache-control")) {
+            cacheControl.update(value);
+        } else if (iequals(name, "date")) {
+            input.dateHeader = parseHttpDate(value);
+        } else if (iequals(name, "expires")) {
+            input.expiresHeader = parseHttpDate(value);
+        } else if (iequals(name, "age")) {
+            std::uint64_t age = 0;
+            const char* begin = value.data();
+            const char* end = begin + value.size();
+            const auto parsed = std::from_chars(begin, end, age);
+            if (parsed.ec == std::errc{} && parsed.ptr == end) {
+                input.ageHeader = std::max(input.ageHeader, age);
+            }
+        }
+    }
+    input.cacheControl = cacheControl.finish();
+    return input;
 }
 
 }  // namespace ruvia::edge

@@ -8,7 +8,8 @@
 #include <string_view>
 
 #include "ruvia/http/ProtocolByteLimit.h"
-#include "ruvia/http/detail/websocket/HttpWebSocketUtils.h"
+#include "ruvia/http/detail/websocket/HttpWebSocketFrameCodec.h"
+#include "ruvia/http/detail/websocket/HttpWebSocketFrameReader.h"
 #include "ruvia/http/WebSocketProtocol.h"
 
 namespace {

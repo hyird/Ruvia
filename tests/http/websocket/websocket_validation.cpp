@@ -4,7 +4,7 @@
 #include <initializer_list>
 #include <string>
 
-#include "ruvia/http/detail/websocket/HttpWebSocketUtils.h"
+#include "ruvia/http/detail/websocket/HttpWebSocketPayloadValidation.h"
 
 namespace {
 
