@@ -39,6 +39,8 @@ add_library(ruvia-http
     ${CMAKE_CURRENT_SOURCE_DIR}/src/server/HttpResponseHeadBuffer.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/http2/Http2Connection.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/http2/Http2ConnectionHeaders.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/http2/Http2ConnectionHeaderFrames.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/http2/Http2ConnectionResponseHeaders.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/http2/Http2ConnectionStreams.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/http2/Http2ConnectionFlow.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/http2/Http2ConnectionData.cpp

@@ -306,4 +306,12 @@ inline void appendHttp2ResponseTrailers(
     }
 }
 
+// The HPACK decode callback for a client-role response trailer section, the
+// counterpart of http2OnDecodedRequestTrailer. Defined by the connection's
+// response-header decoding, which owns what a decoded response may carry.
+[[nodiscard]] bool http2OnDecodedResponseTrailer(
+    void* target,
+    std::string_view name,
+    std::string_view value);
+
 }  // namespace ruvia::detail
