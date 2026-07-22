@@ -362,7 +362,7 @@ ctest --test-dir build --output-on-failure
 | `RUVIA_BUILD_HTTP` | `ON` | Build standalone `ruvia::http`. |
 | `RUVIA_BUILD_WEB` | `ON` | Build `ruvia::web`; requires core and HTTP. |
 | `RUVIA_BUILD_EDGE` | `OFF` | Build the `ruvia::edge` CDN edge node; requires core and HTTP. |
-| `RUVIA_BUILD_TESTS` | `OFF` | Build unit, guard, and package-consumer tests. |
+| `RUVIA_BUILD_TESTS` | `OFF` | Build the unit and guard tests. |
 | `RUVIA_BUILD_BENCHMARKS` | `OFF` | Build Release-oriented HTTP hot-path benchmarks; requires HTTP. |
 | `RUVIA_ENABLE_HTTP2_CONFORMANCE_TESTS` | `OFF` | Add the repository-owned RFC 9113 wire conformance suite against a real Ruvia h2c server; requires tests, Web, and Python 3. |
 | `RUVIA_ENABLE_POSTGRESQL_INTEGRATION_TESTS` | `OFF` | Add live PostgreSQL driver tests; requires tests and PostgreSQL support. |

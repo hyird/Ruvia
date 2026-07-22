@@ -54,12 +54,16 @@ tests/core/
 tests/http/{unit,http1,http2,websocket,guards,support,conformance,benchmarks}/
 tests/web/{unit,server,guards}/
 tests/edge/unit/
-tests/{support,package-consumer}/
+tests/support/
 ```
 
 不要把 HTTP/1、HTTP/2、WebSocket 或 Web server 测试重新散放到 `tests/`
 根目录；target 专属的边界守卫、支撑代码、基准和一致性测试跟随所属
-target，只有跨 target 的通用支撑与 package consumer 保留在独立目录。
+target，只有跨 target 的通用支撑保留在独立目录。
+
+门禁必须是 ctest 条目。不要新增默认不执行的 opt-in 门禁：不跑的门禁
+守不住任何东西，只会随重构不断腐坏。契约优先用编译器验证（消费公开
+头的测试翻译单元），不要用正则匹配已安装文件的字面签名。
 
 仓库根目录不保留源码级 `include/`、`src/`、`fuzz/`、`core/`、`http/`、`web/` 或 `edge/`。
 

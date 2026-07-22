@@ -311,7 +311,8 @@ if(RUVIA_BUILD_HTTP)
     ruvia_add_test(ruvia_smoke_http_target http/unit/smoke_http_target.cpp LIB ruvia::http)
 
     # Compile the exhaustive public/detail HTTP contract once in the normal build.
-    ruvia_add_test(ruvia_guard_http_api_contract package-consumer/http.cpp LIB ruvia::http)
+    ruvia_add_test(ruvia_guard_http_api_contract
+        http/guards/http_api_contract_guard.cpp LIB ruvia::http)
     ruvia_add_test(ruvia_guard_http2_stream_table
         http/guards/http2_stream_table_guard.cpp LIB ruvia::http)
 endif()
@@ -368,17 +369,3 @@ if(RUVIA_BUILD_EDGE)
     endif()
 endif()
 
-configure_file(
-    ${CMAKE_CURRENT_SOURCE_DIR}/package-consumer/verify_package_consumers.cmake.in
-    ${CMAKE_CURRENT_BINARY_DIR}/verify_package_consumers.cmake
-    @ONLY)
-# Opt-in rather than a ctest entry: the packaging contract pins installed file
-# names and literal signatures, which makes it brittle across refactors. Run on
-# demand with:
-#   cmake --build <build-dir> --target ruvia_package_consumers
-add_custom_target(ruvia_package_consumers
-    COMMAND ${CMAKE_COMMAND}
-        -DRUVIA_CONFIG=$<CONFIG>
-        -P ${CMAKE_CURRENT_BINARY_DIR}/verify_package_consumers.cmake
-    COMMENT "Verifying installed Ruvia package consumers"
-    VERBATIM)

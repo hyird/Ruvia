@@ -248,15 +248,12 @@ function(ruvia_assert_target_file_ownership target)
 endfunction()
 
 
-set(RUVIA_BUILT_COMPONENTS)
 foreach(_ruvia_component IN ITEMS core http web edge)
     string(TOUPPER ${_ruvia_component} _ruvia_component_upper)
     if(RUVIA_BUILD_${_ruvia_component_upper})
         add_subdirectory(ruvia-${_ruvia_component})
-        list(APPEND RUVIA_BUILT_COMPONENTS ${_ruvia_component})
     endif()
 endforeach()
-string(JOIN "," RUVIA_BUILT_COMPONENTS_CSV ${RUVIA_BUILT_COMPONENTS})
 
 if(RUVIA_BUILD_EXAMPLES)
     add_subdirectory(examples)
