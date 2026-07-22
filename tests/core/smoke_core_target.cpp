@@ -55,8 +55,15 @@ int main() {
         return 1;
     }
 
-    ruvia::WorkerMemory worker;
+    auto* const defaultResource = std::pmr::get_default_resource();
+    ruvia::WorkerMemory worker({.requestInitialBufferBytes = 1024});
+    ruvia::WorkerMemory independent({.requestInitialBufferBytes = 8192});
     std::pmr::memory_resource* resource = worker.resource();
     ruvia::EventLoopPool loops({.loopCount = 1, .mailboxCapacity = 1});
-    return resource == nullptr || !loops.loop(0).valid() ? 1 : 0;
+    return resource == nullptr || !loops.loop(0).valid() ||
+            worker.requestInitialBufferBytes() != 1024 ||
+            independent.requestInitialBufferBytes() != 8192 ||
+            std::pmr::get_default_resource() != defaultResource
+        ? 1
+        : 0;
 }

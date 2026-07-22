@@ -1,7 +1,6 @@
 #pragma once
 
 #include "ruvia/http/detail/HttpResponseFileBody.h"
-#include "ruvia/http/detail/NativePath.h"
 
 #include <array>
 #include <charconv>
@@ -20,7 +19,7 @@ template <typename Char>
     std::basic_string_view<Char> path) noexcept {
     for (std::size_t i = path.size(); i > 0; --i) {
         const auto c = path[i - 1];
-        if (c == static_cast<Char>('/') || c == static_cast<Char>('\\')) {
+        if (c == static_cast<Char>('/')) {
             return {};
         }
         if (c == static_cast<Char>('.')) {
@@ -52,11 +51,8 @@ template <typename Char>
 [[nodiscard]] inline std::pmr::string lowerStaticFileExtension(
     const std::filesystem::path& path,
     std::pmr::memory_resource* resource) {
-    // On Windows the native path uses wchar_t. Narrowing those code units one
-    // by one can alias unrelated Unicode extensions to an ASCII allow-listed
-    // type (for example U+0168 has the same low byte as 'h'). Convert the full
-    // path to UTF-8 first so extension policy and MIME lookup compare the
-    // actual filename bytes on every platform.
+    // Convert the full path to UTF-8 so extension policy and MIME lookup compare
+    // the actual filename bytes instead of narrowed native code units.
     const auto utf8Path = path.generic_u8string();
     const auto source = staticFileExtension(
         std::u8string_view(utf8Path.data(), utf8Path.size()));
@@ -120,7 +116,8 @@ template <typename Char>
 
 [[nodiscard]] inline std::string_view guessStaticFileContentType(
     const std::filesystem::path& path) noexcept {
-    return guessStaticFileContentTypeFromPathView(httpNativePathView(path));
+    return guessStaticFileContentTypeFromPathView(
+        std::string_view(path.native()));
 }
 
 inline void appendStaticFileUnsigned(std::pmr::string& output, std::uint64_t value) {

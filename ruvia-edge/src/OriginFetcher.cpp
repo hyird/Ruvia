@@ -1,4 +1,4 @@
-#include "ruvia/edge/OriginFetcher.h"
+#include "ruvia/edge/detail/OriginFetcher.h"
 
 #include <array>
 #include <charconv>

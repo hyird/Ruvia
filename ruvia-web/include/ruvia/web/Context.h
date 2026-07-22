@@ -165,7 +165,7 @@ public:
     // This worker's instance of an App::useWorkerState<T>() registration.
     // The reference is worker-local: it stays valid for the worker's lifetime
     // but must never be handed to another worker. Throws std::logic_error for
-    // a type that was not registered before app().run().
+    // a type that was not registered before App::run().
     template <typename T>
     [[nodiscard]] T& workerState() const {
         return *static_cast<T*>(
@@ -338,6 +338,7 @@ private:
     [[maybe_unused]] detail::DbRegistry* db_{nullptr};
     [[maybe_unused]] detail::RedisRegistry* redis_{nullptr};
     detail::RateLimiter* rateLimiter_{nullptr};
+    const Env* env_{nullptr};
     HttpErrorHandler errorHandler_{nullptr};
     HttpNotFoundHandler notFoundHandler_{nullptr};
     const detail::RouteTable* routes_{nullptr};

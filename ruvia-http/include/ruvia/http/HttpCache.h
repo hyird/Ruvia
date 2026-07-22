@@ -19,7 +19,11 @@ struct CacheControl {
     bool isPrivate{false};          // "private" (not for a shared cache)
     bool isPublic{false};
     bool immutable{false};
+    bool onlyIfCached{false};       // request directive
+    bool maxStaleAny{false};        // bare request max-stale
     std::optional<std::uint64_t> maxAge;
+    std::optional<std::uint64_t> maxStale;
+    std::optional<std::uint64_t> minFresh;
     std::optional<std::uint64_t> sMaxAge;
     std::optional<std::uint64_t> staleWhileRevalidate;
     std::optional<std::uint64_t> staleIfError;
@@ -39,6 +43,8 @@ public:
 private:
     CacheControl value_;
     bool maxAgeSeen_{false};
+    bool maxStaleSeen_{false};
+    bool minFreshSeen_{false};
     bool sMaxAgeSeen_{false};
     bool staleWhileRevalidateSeen_{false};
     bool staleIfErrorSeen_{false};

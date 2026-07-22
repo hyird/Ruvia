@@ -95,7 +95,7 @@ private:
                     ++ctx.workerState<WorkerStats>().dispatched;
                     co_return;
                 });
-            if (posted == ruvia::PostResult::kAccepted) {
+            if (posted == ruvia::PostStatus::kAccepted) {
                 ++accepted;
             }
         }
@@ -111,6 +111,7 @@ int main() {
     ruvia::app()
         .setServerTopology(ruvia::ServerTopology::http(8090))
         .setWorkersPerListener(2)
+        .setSignalShutdown(true)
         // Each worker builds its own WorkerStats before serving; the factory
         // form (useWorkerState<T>(fn)) covers non-default-constructible types.
         .useWorkerState<WorkerStats>()

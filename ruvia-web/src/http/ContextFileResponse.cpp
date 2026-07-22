@@ -167,9 +167,9 @@ public:
     }
 
     [[nodiscard]] static FileResponsePath copyingNative(
-        const detail::NativePathChar* path,
+        const char* path,
         detail::ResponseFileIdentity identity) {
-        if (path == nullptr || *path == detail::NativePathChar{}) {
+        if (path == nullptr || *path == '\0') {
             throw std::logic_error("static file entry has no native path");
         }
         return copying(std::filesystem::path(path), identity);

@@ -13,10 +13,7 @@ set(RUVIA_EDGE_SOURCES
 add_library(ruvia-edge ${RUVIA_EDGE_SOURCES})
 add_library(ruvia::edge ALIAS ruvia-edge)
 
-set_target_properties(ruvia-edge PROPERTIES
-    EXPORT_NAME edge
-    WINDOWS_EXPORT_ALL_SYMBOLS ON
-)
+set_target_properties(ruvia-edge PROPERTIES EXPORT_NAME edge)
 
 ruvia_configure_library(ruvia-edge)
 ruvia_configure_runtime_library(ruvia-edge)

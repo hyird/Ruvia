@@ -36,7 +36,7 @@ public:
     [[nodiscard]] WebWorkerHandle handle();
     [[nodiscard]] bool valid() const noexcept;
     [[nodiscard]] WorkerId id() const noexcept;
-    [[nodiscard]] PostResult post(Task task);
+    [[nodiscard]] WebWorkerPostResult post(Task task);
     void close() noexcept;
     void retire() noexcept;
     [[nodiscard]] bool accepting() const noexcept;
@@ -51,7 +51,7 @@ public:
 private:
     void start(Task task);
     [[nodiscard]] ruvia::Task<void> run(Task task);
-    void complete();
+    void complete() noexcept;
 
     asio::any_io_executor executor_;
     WorkerHandle worker_;

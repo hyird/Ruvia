@@ -1,7 +1,6 @@
 #pragma once
 
 #include "ruvia/http/detail/HttpResponseFileBody.h"
-#include "ruvia/http/detail/NativePath.h"
 
 #include <cstddef>
 #include <cstdint>
@@ -87,11 +86,11 @@ private:
 
 class HttpOwnedResponseFile final {
 public:
-    [[nodiscard]] const HttpNativePathChar*
+    [[nodiscard]] const char*
     nativePathCStr() const & noexcept {
         return nativePath_.c_str();
     }
-    [[nodiscard]] const HttpNativePathChar*
+    [[nodiscard]] const char*
     nativePathCStr() const && = delete;
 
     [[nodiscard]] constexpr std::uint64_t size() const noexcept {
@@ -125,10 +124,11 @@ private:
           offset_(offset),
           length_(length),
           identity_(identity) {
-        assignHttpNativePath(nativePath_, file);
+        const auto& native = file.native();
+        nativePath_.assign(native.data(), native.size());
     }
 
-    HttpNativePathString nativePath_;
+    std::pmr::string nativePath_;
     std::uint64_t size_;
     std::uint64_t offset_;
     std::uint64_t length_;
@@ -137,7 +137,7 @@ private:
 
 class HttpBorrowedResponseFile final {
 public:
-    [[nodiscard]] constexpr const HttpNativePathChar* nativePathCStr()
+    [[nodiscard]] constexpr const char* nativePathCStr()
         const noexcept {
         return nativePath_;
     }
@@ -162,7 +162,7 @@ private:
     friend class HttpResponseBody;
 
     constexpr HttpBorrowedResponseFile(
-        const HttpNativePathChar* nativePath,
+        const char* nativePath,
         std::uint64_t size,
         std::uint64_t offset,
         std::uint64_t length,
@@ -173,7 +173,7 @@ private:
           length_(length),
           identity_(identity) {}
 
-    const HttpNativePathChar* nativePath_;
+    const char* nativePath_;
     std::uint64_t size_;
     std::uint64_t offset_;
     std::uint64_t length_;
@@ -353,7 +353,7 @@ private:
     }
 
     void setBorrowedFile(
-        const HttpNativePathChar* file,
+        const char* file,
         std::uint64_t size,
         std::uint64_t offset,
         std::uint64_t length,

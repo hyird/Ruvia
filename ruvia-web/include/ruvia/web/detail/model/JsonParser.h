@@ -21,7 +21,8 @@ template <typename T>
 [[nodiscard]] std::optional<T> parseJsonValue(
     std::string_view& input,
     std::pmr::memory_resource* resource,
-    std::size_t depth = 0);
+    std::size_t depth = 0,
+    ModelStringStorage stringStorage = ModelStringStorage::kBorrowed);
 
 template <typename SequenceT>
 struct JsonSequenceValueTraits;
@@ -48,7 +49,8 @@ template <typename SequenceT>
 [[nodiscard]] std::optional<SequenceT> parseJsonSequenceValue(
     std::string_view& input,
     std::pmr::memory_resource* resource,
-    std::size_t depth) {
+    std::size_t depth,
+    ModelStringStorage stringStorage) {
     using Traits = JsonSequenceValueTraits<std::remove_cvref_t<SequenceT>>;
     using ElementT = typename Traits::value_type;
 
@@ -69,7 +71,8 @@ template <typename SequenceT>
     }
 
     for (;;) {
-        auto element = parseJsonValue<ElementT>(remaining, resource, depth + 1);
+        auto element = parseJsonValue<ElementT>(
+            remaining, resource, depth + 1, stringStorage);
         if (!element.has_value()) {
             return std::nullopt;
         }
@@ -91,7 +94,8 @@ template <typename T>
 [[nodiscard]] std::optional<T> parseJsonValue(
     std::string_view& input,
     std::pmr::memory_resource* resource,
-    std::size_t depth) {
+    std::size_t depth,
+    ModelStringStorage stringStorage) {
     using FieldT = std::remove_cvref_t<T>;
     if (depth > kMaxJsonDepth) {
         return std::nullopt;
@@ -104,6 +108,9 @@ template <typename T>
         }
         if (parsed->encoding() == JsonStringEncoding::kLiteral) {
             input = remaining;
+            if (stringStorage == ModelStringStorage::kOwned) {
+                return FieldT(parsed->raw(), resource);
+            }
             return ModelValueFactory::makeString(parsed->raw(), resource);
         }
         auto decoded = decodeJsonString(parsed->raw(), resource);
@@ -123,7 +130,8 @@ template <typename T>
         input = remaining;
         return parsed->raw();
     } else if constexpr (isRuviaArray<FieldT> || isRuviaList<FieldT>) {
-        auto parsed = parseJsonSequenceValue<FieldT>(remaining, resource, depth);
+        auto parsed = parseJsonSequenceValue<FieldT>(
+            remaining, resource, depth, stringStorage);
         if (!parsed.has_value()) {
             return std::nullopt;
         }
@@ -158,7 +166,8 @@ template <typename T>
         auto nested = JsonBody<FieldT>::parseDepth(
             object,
             resource,
-            depth + 1);
+            depth + 1,
+            stringStorage);
         if (!nested.has_value()) {
             return std::nullopt;
         }

@@ -23,7 +23,7 @@
 
 namespace ruvia {
 
-enum class OneShotCompleteResult : std::uint8_t {
+enum class OneShotCompleteStatus : std::uint8_t {
     kCompleted,
     kAlreadyCompleted,
     kReceiverClosed,
@@ -32,6 +32,65 @@ enum class OneShotCompleteResult : std::uint8_t {
 
 template <typename T>
 class OneShotCompletion;
+
+template <typename T>
+class OneShotCompleteResult final {
+public:
+    OneShotCompleteResult(const OneShotCompleteResult&) = delete;
+    OneShotCompleteResult& operator=(const OneShotCompleteResult&) = delete;
+    OneShotCompleteResult(OneShotCompleteResult&&)
+        noexcept(std::is_nothrow_move_constructible_v<T>) = default;
+    OneShotCompleteResult& operator=(OneShotCompleteResult&&)
+        noexcept(std::is_nothrow_move_assignable_v<T>) = default;
+
+    [[nodiscard]] OneShotCompleteStatus status() const noexcept {
+        return status_;
+    }
+
+    [[nodiscard]] bool completed() const noexcept {
+        return status_ == OneShotCompleteStatus::kCompleted;
+    }
+
+    [[nodiscard]] T* rejected() & noexcept {
+        return rejected_ ? &*rejected_ : nullptr;
+    }
+
+    [[nodiscard]] const T* rejected() const & noexcept {
+        return rejected_ ? &*rejected_ : nullptr;
+    }
+
+    T* rejected() && = delete;
+    const T* rejected() const && = delete;
+
+    [[nodiscard]] std::optional<T> takeRejected() &&
+        noexcept(std::is_nothrow_move_constructible_v<T>) {
+        return std::move(rejected_);
+    }
+
+private:
+    friend class OneShotCompletion<T>;
+
+    explicit OneShotCompleteResult(OneShotCompleteStatus status) noexcept
+        : status_(status) {}
+
+    OneShotCompleteResult(OneShotCompleteStatus status, T&& rejected)
+        noexcept(std::is_nothrow_move_constructible_v<T>)
+        : status_(status), rejected_(std::move(rejected)) {}
+
+    [[nodiscard]] static OneShotCompleteResult accepted() noexcept {
+        return OneShotCompleteResult(OneShotCompleteStatus::kCompleted);
+    }
+
+    [[nodiscard]] static OneShotCompleteResult reject(
+        OneShotCompleteStatus status,
+        T&& value) noexcept(std::is_nothrow_move_constructible_v<T>) {
+        return OneShotCompleteResult(status, std::move(value));
+    }
+
+    OneShotCompleteStatus status_;
+    std::optional<T> rejected_;
+};
+
 template <typename T>
 class OneShotReceiver;
 
@@ -208,9 +267,10 @@ class OneShotCompletion final {
 public:
     OneShotCompletion() noexcept = default;
 
-    [[nodiscard]] OneShotCompleteResult complete(T value) const {
+    [[nodiscard]] OneShotCompleteResult<T> complete(T value) const {
         if (!state_) {
-            return OneShotCompleteResult::kReceiverClosed;
+            return OneShotCompleteResult<T>::reject(
+                OneShotCompleteStatus::kReceiverClosed, std::move(value));
         }
         detail::OneShotAwaiter<T>* waiter = nullptr;
         bool wake = false;
@@ -218,17 +278,21 @@ public:
             std::lock_guard lock(state_->mutex);
             if (std::holds_alternative<detail::OneShotReady<T>>(state_->lifecycle) ||
                 std::holds_alternative<detail::OneShotConsumed>(state_->lifecycle)) {
-                return OneShotCompleteResult::kAlreadyCompleted;
+                return OneShotCompleteResult<T>::reject(
+                    OneShotCompleteStatus::kAlreadyCompleted, std::move(value));
             }
             if (std::holds_alternative<detail::OneShotWorkerStopping>(state_->lifecycle)) {
-                return OneShotCompleteResult::kWorkerStopping;
+                return OneShotCompleteResult<T>::reject(
+                    OneShotCompleteStatus::kWorkerStopping, std::move(value));
             }
             if (std::holds_alternative<detail::OneShotReceiverClosed>(state_->lifecycle)) {
-                return OneShotCompleteResult::kReceiverClosed;
+                return OneShotCompleteResult<T>::reject(
+                    OneShotCompleteStatus::kReceiverClosed, std::move(value));
             }
             assert(std::holds_alternative<detail::OneShotPending>(state_->lifecycle));
             if (!state_->worker.accepting()) {
-                return OneShotCompleteResult::kWorkerStopping;
+                return OneShotCompleteResult<T>::reject(
+                    OneShotCompleteStatus::kWorkerStopping, std::move(value));
             }
             waiter = state_->waiter;
             if (waiter != nullptr) {
@@ -253,7 +317,7 @@ public:
                 }
             }
         }
-        return OneShotCompleteResult::kCompleted;
+        return OneShotCompleteResult<T>::accepted();
     }
 
 private:

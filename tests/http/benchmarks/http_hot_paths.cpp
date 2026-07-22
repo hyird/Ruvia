@@ -25,13 +25,7 @@ namespace {
 
 using Clock = std::chrono::steady_clock;
 
-#if defined(_MSC_VER)
-#define RUVIA_BENCHMARK_NOINLINE __declspec(noinline)
-#elif defined(__GNUC__) || defined(__clang__)
 #define RUVIA_BENCHMARK_NOINLINE __attribute__((noinline))
-#else
-#define RUVIA_BENCHMARK_NOINLINE
-#endif
 
 struct Options final {
     std::chrono::milliseconds warmup{100};

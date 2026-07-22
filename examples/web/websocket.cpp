@@ -53,6 +53,7 @@ int main() {
         .setListenAddress("0.0.0.0")
         .setServerTopology(ruvia::ServerTopology::http(8084))
         .setWorkersPerListener(2)
+        .setSignalShutdown(true)
         .setMaxWebSocketMessageBytes(16 * 1024 * 1024)
         .run();
 }

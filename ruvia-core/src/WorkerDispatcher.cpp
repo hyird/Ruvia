@@ -91,6 +91,7 @@ struct WorkerDispatcher::Impl {
     bool accepting{true};
     bool contextAttached{true};
     bool drainScheduled{false};
+    bool abandonDrain{false};
     std::vector<std::weak_ptr<WorkerShutdownListener>> shutdownListeners;
     std::pmr::vector<TimerEntry> timers;
     std::pmr::vector<TimerSlot> timerSlots;
@@ -144,31 +145,43 @@ WorkerDispatcher::~WorkerDispatcher() = default;
 PostResult WorkerDispatcher::post(MoveOnlyFunction<void()> task) {
     std::lock_guard lock(impl_->mutex);
     if (!impl_->contextAttached || !impl_->accepting) {
-        return PostResult::kWorkerStopping;
+        return PostResult::reject(
+            PostStatus::kWorkerStopping, std::move(task));
     }
     if (impl_->size == impl_->slots.size()) {
-        return PostResult::kQueueFull;
+        return PostResult::reject(PostStatus::kQueueFull, std::move(task));
     }
-    const auto insertedIndex = impl_->tail;
-    impl_->slots[insertedIndex].emplace(std::move(task));
-    impl_->tail = (impl_->tail + 1) % impl_->slots.size();
-    ++impl_->size;
-    if (impl_->drainScheduled) {
-        return PostResult::kAccepted;
-    }
-    impl_->drainScheduled = true;
-    try {
+    if (!impl_->drainScheduled) {
         asio::post(
             impl_->ioContext,
             [self = shared_from_this()] { self->drain(); });
-    } catch (...) {
-        impl_->slots[insertedIndex].reset();
-        impl_->tail = insertedIndex;
-        --impl_->size;
-        impl_->drainScheduled = false;
-        throw;
+        impl_->drainScheduled = true;
     }
-    return PostResult::kAccepted;
+    impl_->slots[impl_->tail].emplace(std::move(task));
+    impl_->tail = (impl_->tail + 1) % impl_->slots.size();
+    ++impl_->size;
+    return PostResult::accept();
+}
+
+PostStatus WorkerDispatcher::postFactory(
+    MoveOnlyFunction<MoveOnlyFunction<void()>()> factory) {
+    std::lock_guard lock(impl_->mutex);
+    if (!impl_->contextAttached || !impl_->accepting) {
+        return PostStatus::kWorkerStopping;
+    }
+    if (impl_->size == impl_->slots.size()) {
+        return PostStatus::kQueueFull;
+    }
+    if (!impl_->drainScheduled) {
+        asio::post(
+            impl_->ioContext,
+            [self = shared_from_this()] { self->drain(); });
+        impl_->drainScheduled = true;
+    }
+    impl_->slots[impl_->tail].emplace(factory());
+    impl_->tail = (impl_->tail + 1) % impl_->slots.size();
+    ++impl_->size;
+    return PostStatus::kAccepted;
 }
 
 void WorkerDispatcher::defer(MoveOnlyFunction<void()> task) {
@@ -358,8 +371,71 @@ void WorkerDispatcher::stopTimers() noexcept {
 }
 
 void WorkerDispatcher::runContext() {
+    std::exception_ptr failure;
+    runContext([&failure](std::exception_ptr value) noexcept {
+        failure = std::move(value);
+    });
+    if (failure != nullptr) {
+        std::rethrow_exception(failure);
+    }
+}
+
+void WorkerDispatcher::runContext(
+    MoveOnlyFunction<void(std::exception_ptr)> failureHandler) {
+    runContext({}, std::move(failureHandler), {});
+}
+
+void WorkerDispatcher::runContext(
+    MoveOnlyFunction<void()> startupHandler,
+    MoveOnlyFunction<void(std::exception_ptr)> failureHandler,
+    MoveOnlyFunction<void()> shutdownHandler) {
     CurrentWorkerGuard current(*this);
-    impl_->ioContext.run();
+    bool failureDelivered = false;
+    std::exception_ptr deferredFailure;
+    const auto handleFailure = [this, &failureDelivered, &deferredFailure,
+                                &failureHandler](std::exception_ptr failure) {
+        notifyStopping(beginStopping(true));
+        abandonQueued();
+        if (!failureDelivered) {
+            failureDelivered = true;
+            try {
+                if (failureHandler) {
+                    failureHandler(failure);
+                } else {
+                    deferredFailure = std::move(failure);
+                }
+            } catch (...) {
+                deferredFailure = std::current_exception();
+            }
+        }
+        stopTimers();
+    };
+
+    try {
+        if (startupHandler) {
+            startupHandler();
+        }
+    } catch (...) {
+        handleFailure(std::current_exception());
+    }
+    for (;;) {
+        try {
+            impl_->ioContext.run();
+            break;
+        } catch (...) {
+            handleFailure(std::current_exception());
+        }
+    }
+    if (shutdownHandler) {
+        try {
+            shutdownHandler();
+        } catch (...) {
+            std::terminate();
+        }
+    }
+    if (deferredFailure != nullptr) {
+        std::rethrow_exception(deferredFailure);
+    }
 }
 
 void WorkerDispatcher::close() noexcept {
@@ -381,6 +457,7 @@ void WorkerDispatcher::detachContext() noexcept {
         impl_->accepting = false;
         impl_->contextAttached = false;
         impl_->drainScheduled = false;
+        impl_->abandonDrain = true;
         impl_->head = 0;
         impl_->tail = 0;
         impl_->size = 0;
@@ -416,6 +493,7 @@ WorkerDispatcher::ShutdownListeners WorkerDispatcher::beginStopping(
         std::lock_guard lock(impl_->mutex);
         if (abandonDrain) {
             impl_->drainScheduled = false;
+            impl_->abandonDrain = true;
         }
         if (!impl_->accepting) {
             return listeners;
@@ -432,6 +510,26 @@ void WorkerDispatcher::notifyStopping(
         if (const auto listener = entry.lock()) {
             listener->workerStopping();
         }
+    }
+}
+
+void WorkerDispatcher::abandonQueued() noexcept {
+    for (;;) {
+        MoveOnlyFunction<void()> abandoned;
+        {
+            std::lock_guard lock(impl_->mutex);
+            if (impl_->size == 0) {
+                impl_->head = 0;
+                impl_->tail = 0;
+                return;
+            }
+            abandoned = std::move(*impl_->slots[impl_->head]);
+            impl_->slots[impl_->head].reset();
+            impl_->head = (impl_->head + 1) % impl_->slots.size();
+            --impl_->size;
+        }
+        // Destroy user closures outside the dispatcher mutex. Their destructors
+        // may reconcile higher-level outstanding-work reservations.
     }
 }
 
@@ -459,7 +557,7 @@ void WorkerDispatcher::drain() {
         MoveOnlyFunction<void()> task;
         {
             std::lock_guard lock(impl_->mutex);
-            if (impl_->size == 0) {
+            if (impl_->abandonDrain || impl_->size == 0) {
                 impl_->drainScheduled = false;
                 return;
             }
@@ -472,6 +570,7 @@ void WorkerDispatcher::drain() {
             task();
         } catch (...) {
             notifyStopping(beginStopping(true));
+            abandonQueued();
             throw;
         }
     }

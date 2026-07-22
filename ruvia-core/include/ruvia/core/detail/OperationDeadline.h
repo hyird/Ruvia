@@ -6,6 +6,8 @@
 #include <utility>
 #include <variant>
 
+#include "ruvia/core/detail/WorkerTimer.h"
+
 namespace ruvia::detail {
 
 // One allocation-free deadline lifecycle. A deadline is either absent, armed
@@ -77,6 +79,58 @@ private:
     using State = std::variant<Inactive, Active, Expired>;
 
     State state_;
+};
+
+// One absolute timeout shared by every asynchronous phase of a logical
+// operation. Callers re-arm their cancellation primitive with remaining()
+// instead of restarting the configured duration for every socket wait.
+class OperationTimeout final {
+public:
+    using Clock = std::chrono::steady_clock;
+
+    explicit OperationTimeout(
+        std::optional<std::chrono::milliseconds> timeout) noexcept {
+        if (timeout.has_value()) {
+            deadline_ = workerTimerDeadlineAfter(*timeout);
+        }
+    }
+
+    [[nodiscard]] std::optional<std::chrono::milliseconds>
+    remaining() const noexcept {
+        if (!deadline_.has_value()) {
+            return std::nullopt;
+        }
+        const auto now = Clock::now();
+        if (now >= *deadline_) {
+            return std::chrono::milliseconds(0);
+        }
+        return std::chrono::duration_cast<std::chrono::milliseconds>(
+            *deadline_ - now);
+    }
+
+    [[nodiscard]] bool expired() const noexcept {
+        const auto value = remaining();
+        return value.has_value() && value->count() == 0;
+    }
+
+    // Apply an additional relative limit without losing an existing absolute
+    // deadline. This lets a sub-operation honor both its own timeout and the
+    // total timeout of its parent operation.
+    [[nodiscard]] OperationTimeout constrainedBy(
+        std::optional<std::chrono::milliseconds> timeout) const noexcept {
+        OperationTimeout constrained(timeout);
+        if (!deadline_.has_value()) {
+            return constrained;
+        }
+        if (!constrained.deadline_.has_value() ||
+            *deadline_ < *constrained.deadline_) {
+            constrained.deadline_ = deadline_;
+        }
+        return constrained;
+    }
+
+private:
+    std::optional<Clock::time_point> deadline_;
 };
 
 }  // namespace ruvia::detail

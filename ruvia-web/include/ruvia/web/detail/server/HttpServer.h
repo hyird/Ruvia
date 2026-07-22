@@ -20,14 +20,13 @@
 #include "ruvia/core/memory/MemoryPool.h"
 #include "ruvia/core/detail/ConnectionScanner.h"
 #include "ruvia/web/WebWorker.h"
+#include "ruvia/web/detail/WorkerDataState.h"
 #include "ruvia/web/detail/server/HttpConnectionState.h"
 #include "ruvia/web/detail/server/RateLimiter.h"
 #include "ruvia/web/detail/server/HttpServerOptions.h"
 #include "ruvia/web/detail/server/HttpServerWorkerState.h"
 #include "ruvia/web/detail/server/HttpServerWorkerCompletion.h"
 #include "ruvia/web/detail/WorkerState.h"
-#include "ruvia/web/detail/db/DbInternal.h"
-#include "ruvia/web/detail/redis/RedisInternal.h"
 #include "ruvia/web/detail/server/RateLimitDecision.h"
 
 namespace ruvia::detail {
@@ -68,6 +67,8 @@ public:
 
     void start();
     void stop();
+    // Lifecycle owners join from outside the server worker. Reject self-join
+    // before touching std::thread so behavior is deterministic across platforms.
     void join();
     [[nodiscard]] asio::ip::tcp::endpoint localEndpoint() const;
     [[nodiscard]] const WorkerHandle& worker() const & noexcept {
@@ -119,14 +120,11 @@ private:
     SniContextStore sniContexts_;
     SniContextLookup sniLookup_;
     HttpServerOptions options_;
-    DbRegistry databases_;
-    RedisRegistry redis_;
+    ConnectionScanner connectionScanner_;
+    WorkerDataState workerData_;
     WorkerStateRegistry workerStates_;
     std::shared_ptr<WebWorkerDispatch> webWorkerDispatch_;
     RateLimiter rateLimiter_;
-    ConnectionScanner connectionScanner_;
-    ConnectionScanner::WorkerMaintenanceRegistration databaseDeadlineCheck_;
-    ConnectionScanner::WorkerMaintenanceRegistration redisDeadlineCheck_;
     ConnectionWorkSetPool workSetPool_;
     std::size_t activeConnectionCount_{0};
 
