@@ -31,10 +31,10 @@
 #include "ruvia/web/WebSocket.h"
 #include "ruvia/web/detail/model/ValidatedValues.h"
 #include "ruvia/web/detail/integration/WorkerState.h"
-#include "ruvia/web/detail/http/ContextCapabilities.h"
-#include "ruvia/web/detail/http/ContextResponseState.h"
-#include "ruvia/web/detail/http/ContextRequestStorage.h"
-#include "ruvia/web/detail/http/ContextSessionState.h"
+#include "ruvia/web/detail/http/context/ContextCapabilities.h"
+#include "ruvia/web/detail/http/context/ContextResponseState.h"
+#include "ruvia/web/detail/http/context/ContextRequestStorage.h"
+#include "ruvia/web/detail/http/context/ContextSessionState.h"
 #include "ruvia/core/memory/MemoryPool.h"
 #include "ruvia/core/memory/PmrObject.h"
 
@@ -384,5 +384,5 @@ ValidatedModelBinding<T> bindValidatedJsonModel(
 
 }  // namespace ruvia
 
-#include "ruvia/web/detail/http/Context.inl"
-#include "ruvia/web/detail/http/ContextModel.inl"
+#include "ruvia/web/detail/http/context/Context.inl"
+#include "ruvia/web/detail/http/context/ContextModel.inl"

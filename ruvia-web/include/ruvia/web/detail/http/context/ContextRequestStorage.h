@@ -1,7 +1,7 @@
 #pragma once
 
 #include "ruvia/web/RequestFields.h"
-#include "ruvia/web/detail/http/RequestQueryValues.h"
+#include "ruvia/web/detail/http/request/RequestQueryValues.h"
 
 #include <memory_resource>
 #include <optional>

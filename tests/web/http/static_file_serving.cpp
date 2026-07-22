@@ -16,7 +16,7 @@
 #include <type_traits>
 #include <utility>
 
-#include "ruvia/web/detail/http/ContextAccess.h"
+#include "ruvia/web/detail/http/context/ContextAccess.h"
 #include "ruvia/http/detail/field/HeaderTokenUtils.h"
 #include "ruvia/http/detail/field/HttpDate.h"
 #include "ruvia/http/detail/request/HttpRequestAccess.h"
@@ -29,8 +29,8 @@
 #include "ruvia/http/HttpKnownMethod.h"
 #include "ruvia/http/HttpResponse.h"
 #include "ruvia/web/StaticFiles.h"
-#include "ruvia/web/detail/http/StaticFileMetadata.h"
-#include "ruvia/web/detail/http/StaticRootIndex.h"
+#include "ruvia/web/detail/http/static/StaticFileMetadata.h"
+#include "ruvia/web/detail/http/static/StaticRootIndex.h"
 #include "ruvia/web/detail/server/file/HttpFileOpen.h"
 #include "ruvia/core/memory/MemoryPool.h"
 

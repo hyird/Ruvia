@@ -14,7 +14,7 @@
 #include <asio/io_context.hpp>
 
 #include "ruvia/web/detail/http/SecureToken.h"
-#include "ruvia/web/detail/http/ContextAccess.h"
+#include "ruvia/web/detail/http/context/ContextAccess.h"
 #include "ruvia/http/detail/request/HttpRequestAccess.h"
 #include "ruvia/web/detail/router/RouteTable.h"
 #include "ruvia/core/detail/io/AsioAwait.h"

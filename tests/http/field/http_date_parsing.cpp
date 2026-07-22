@@ -29,7 +29,7 @@ std::string formatDate(std::time_t time) {
 
 #include "ruvia/http/detail/field/HttpDate.h"
 #include "ruvia/http/detail/field/HttpEntityTag.h"
-#include "ruvia/web/detail/http/StaticFileMetadata.h"
+#include "ruvia/web/detail/http/static/StaticFileMetadata.h"
 
 namespace {
 

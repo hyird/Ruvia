@@ -37,8 +37,8 @@
 #include "ruvia/http/detail/http1/Http1RequestBodyPlan.h"
 #include "ruvia/web/Context.h"
 #include "ruvia/web/Error.h"
-#include "ruvia/web/detail/http/ContextAccess.h"
-#include "ruvia/web/detail/http/ContextServices.h"
+#include "ruvia/web/detail/http/context/ContextAccess.h"
+#include "ruvia/web/detail/http/context/ContextServices.h"
 
 namespace content_decoding_test {
 

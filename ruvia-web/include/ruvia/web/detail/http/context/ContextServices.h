@@ -2,7 +2,7 @@
 
 #include "ruvia/web/ConnInfo.h"
 #include "ruvia/web/ErrorHandlers.h"
-#include "ruvia/web/detail/http/ContextCapabilities.h"
+#include "ruvia/web/detail/http/context/ContextCapabilities.h"
 #include "ruvia/http/HttpLimits.h"
 #include "ruvia/core/WorkerHandle.h"
 

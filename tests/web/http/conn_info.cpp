@@ -5,8 +5,8 @@
 #include "ruvia/http/detail/request/HttpRequestAccess.h"
 #include "ruvia/web/ConnInfo.h"
 #include "ruvia/web/Context.h"
-#include "ruvia/web/detail/http/ContextAccess.h"
-#include "ruvia/web/detail/http/ContextServices.h"
+#include "ruvia/web/detail/http/context/ContextAccess.h"
+#include "ruvia/web/detail/http/context/ContextServices.h"
 
 #include <cstddef>
 #include <string>

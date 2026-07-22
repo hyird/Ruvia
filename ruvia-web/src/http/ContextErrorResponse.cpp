@@ -1,6 +1,6 @@
 #include "ruvia/web/Context.h"
-#include "ruvia/web/detail/http/HttpErrorNormalize.h"
-#include "ruvia/web/detail/http/HttpErrorResponse.h"
+#include "ruvia/web/detail/http/error/HttpErrorNormalize.h"
+#include "ruvia/web/detail/http/error/HttpErrorResponse.h"
 
 #include <exception>
 

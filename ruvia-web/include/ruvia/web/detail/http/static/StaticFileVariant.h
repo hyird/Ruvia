@@ -6,7 +6,7 @@
 #include "ruvia/http/HttpRequest.h"
 #include "ruvia/http/detail/coding/HttpContentCoding.h"
 #include "ruvia/web/StaticFiles.h"
-#include "ruvia/web/detail/http/StaticRootIndex.h"
+#include "ruvia/web/detail/http/static/StaticRootIndex.h"
 
 namespace ruvia {
 

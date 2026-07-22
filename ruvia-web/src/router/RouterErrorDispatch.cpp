@@ -9,9 +9,9 @@
 #include "ruvia/http/detail/response/HttpResponseHeaderState.h"
 #include "ruvia/web/Error.h"
 #include "ruvia/web/Validation.h"
-#include "ruvia/web/detail/http/ContextAccess.h"
-#include "ruvia/web/detail/http/HttpErrorResponse.h"
-#include "ruvia/web/detail/http/UnsupportedRequestContentCoding.h"
+#include "ruvia/web/detail/http/context/ContextAccess.h"
+#include "ruvia/web/detail/http/error/HttpErrorResponse.h"
+#include "ruvia/web/detail/http/request/UnsupportedRequestContentCoding.h"
 #include "ruvia/web/detail/router/RouteDispatchServices.h"
 
 // Turning a failed request into a response: the error a thrown exception really

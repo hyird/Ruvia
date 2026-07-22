@@ -7,7 +7,7 @@
 #include "ruvia/web/detail/server/HttpServerRequestState.h"
 #include "ruvia/web/detail/server/HttpServerResponseState.h"
 #include "ruvia/web/detail/server/HttpServerOptions.h"
-#include "ruvia/web/detail/http/RequestBodyLoader.h"
+#include "ruvia/web/detail/http/request/RequestBodyLoader.h"
 #include "ruvia/http/detail/http1/Http1ServerRequestParser.h"
 #include "ruvia/web/detail/router/RouteTable.h"
 #include "ruvia/core/Task.h"
