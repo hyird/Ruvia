@@ -95,6 +95,10 @@ public:
     friend Task<DbResolvedAddresses> resolveDbHost(
         Pool&, Slot&, const OperationTimeout&, std::string_view);
     template <typename Pool>
+    friend Task<QueryResult> executeOnDbTransactionSlot(
+        Pool&, std::size_t, std::pmr::string, std::pmr::vector<DbValue>,
+        std::pmr::memory_resource*);
+    template <typename Pool>
     friend Task<std::size_t> acquireDbSlot(Pool&);
     template <typename Pool>
     friend void releaseDbSlot(Pool&, std::size_t) noexcept;
@@ -199,6 +203,10 @@ private:
     template <typename Pool, typename Slot>
     friend Task<DbResolvedAddresses> resolveDbHost(
         Pool&, Slot&, const OperationTimeout&, std::string_view);
+    template <typename Pool>
+    friend Task<QueryResult> executeOnDbTransactionSlot(
+        Pool&, std::size_t, std::pmr::string, std::pmr::vector<DbValue>,
+        std::pmr::memory_resource*);
     template <typename Pool>
     friend Task<std::size_t> acquireDbSlot(Pool&);
     template <typename Pool>
