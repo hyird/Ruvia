@@ -9,65 +9,15 @@
 namespace ruvia {
 namespace {
 
-[[nodiscard]] bool splitBuildSegment(
-    std::string_view path,
-    std::string_view& segment,
-    std::string_view& rest) noexcept {
-    if (path.starts_with('/')) {
-        path.remove_prefix(1);
-    }
-    if (path.empty()) {
-        segment = {};
-        rest = {};
-        return false;
-    }
-
-    const auto slash = path.find('/');
-    if (slash == std::string_view::npos) {
-        segment = path;
-        rest = {};
-        return true;
-    }
-
-    segment = path.substr(0, slash);
-    rest = path.substr(slash + 1);
-    return true;
-}
-
-[[nodiscard]] bool splitRequestLikeSegment(
-    std::string_view path,
-    std::string_view& segment,
-    std::string_view& rest) noexcept {
-    if (path.empty()) {
-        segment = {};
-        rest = {};
-        return false;
-    }
-    if (path.front() == '/') {
-        path.remove_prefix(1);
-    }
-
-    const auto slash = path.find('/');
-    if (slash == std::string_view::npos) {
-        segment = path;
-        rest = {};
-        return true;
-    }
-
-    segment = path.substr(0, slash);
-    rest = path.substr(slash);
-    return true;
-}
-
 [[nodiscard]] bool dynamicRouteMatchesPath(std::string_view pattern, std::string_view path) noexcept {
     for (;;) {
         std::string_view patternSegment;
         std::string_view patternRest;
-        const auto hasPattern = splitBuildSegment(pattern, patternSegment, patternRest);
+        const auto hasPattern = detail::splitRoutePathSegment(pattern, patternSegment, patternRest);
         if (!hasPattern) {
             std::string_view pathSegment;
             std::string_view pathRest;
-            return !splitRequestLikeSegment(path, pathSegment, pathRest);
+            return !detail::splitRequestPathSegment(path, pathSegment, pathRest);
         }
 
         if (patternSegment == "*") {
@@ -76,7 +26,7 @@ namespace {
 
         std::string_view pathSegment;
         std::string_view pathRest;
-        if (!splitRequestLikeSegment(path, pathSegment, pathRest)) {
+        if (!detail::splitRequestPathSegment(path, pathSegment, pathRest)) {
             return false;
         }
 

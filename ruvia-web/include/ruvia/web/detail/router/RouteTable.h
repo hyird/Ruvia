@@ -17,6 +17,7 @@
 #include "ruvia/http/HttpKnownMethod.h"
 #include "ruvia/web/detail/http/ContextServices.h"
 #include "ruvia/web/Context.h"
+#include "ruvia/web/detail/router/PathSegments.h"
 #include "ruvia/web/detail/router/RouteEntry.h"
 #include "ruvia/web/detail/router/RouteResolution.h"
 #include "ruvia/web/Error.h"
@@ -234,21 +235,6 @@ private:
     [[nodiscard]] static bool addParam(
         RouteMatch& match,
         std::string_view value) noexcept;
-    [[nodiscard]] static bool splitSegment(
-        std::string_view path,
-        std::string_view& segment,
-        std::string_view& rest) noexcept;
-    // Strict segment split used only for REQUEST matching. Unlike splitSegment
-    // (build-time), it preserves empty segments and a trailing slash so dynamic
-    // matching is byte-exact like static matching: "/users/42/" and "/a//b" no
-    // longer collapse to "/users/42" / "/a/b". `path` is expected to start with
-    // '/' at each level; each returned `rest` keeps its leading '/'. Returns
-    // false only at true end-of-path (empty `path`); a lone "/" yields an empty
-    // segment that fails to match a param child.
-    [[nodiscard]] static bool splitSegmentStrict(
-        std::string_view path,
-        std::string_view& segment,
-        std::string_view& rest) noexcept;
     [[nodiscard]] static bool sameDynamicShape(std::string_view left, std::string_view right) noexcept;
 
     [[nodiscard]] const RouteEntry* findStaticRoute(HttpKnownMethod method, std::string_view path) const noexcept;

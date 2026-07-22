@@ -41,7 +41,7 @@ bool detail::RouteTable::isDynamicPath(std::string_view path) noexcept {
     while (!path.empty()) {
         std::string_view segment;
         std::string_view rest;
-        if (!splitSegment(path, segment, rest)) {
+        if (!splitRoutePathSegment(path, segment, rest)) {
             return false;
         }
         if (segment == "*" || (!segment.empty() && segment.front() == ':')) {
@@ -58,7 +58,7 @@ std::size_t detail::RouteTable::dynamicNodeUpperBound(std::string_view path) noe
     while (true) {
         std::string_view segment;
         std::string_view rest;
-        if (!splitSegment(path, segment, rest)) {
+        if (!splitRoutePathSegment(path, segment, rest)) {
             return count;
         }
         if (segment != "*") {
@@ -76,7 +76,7 @@ std::size_t detail::RouteTable::dynamicParamNameUpperBound(std::string_view path
     while (true) {
         std::string_view segment;
         std::string_view rest;
-        if (!splitSegment(path, segment, rest)) {
+        if (!splitRoutePathSegment(path, segment, rest)) {
             return count;
         }
         if (segment == "*" || (!segment.empty() && segment.front() == ':')) {
@@ -112,7 +112,7 @@ void detail::RouteTable::insertDynamic(DynamicNode& root, RouteEntry& route) {
     while (true) {
         std::string_view segment;
         std::string_view rest;
-        if (!splitSegment(path, segment, rest)) {
+        if (!splitRoutePathSegment(path, segment, rest)) {
             node->route = &route;
             return;
         }
@@ -192,8 +192,8 @@ bool detail::RouteTable::sameDynamicShape(std::string_view left, std::string_vie
         std::string_view leftRest;
         std::string_view rightSegment;
         std::string_view rightRest;
-        const auto hasLeft = splitSegment(left, leftSegment, leftRest);
-        const auto hasRight = splitSegment(right, rightSegment, rightRest);
+        const auto hasLeft = splitRoutePathSegment(left, leftSegment, leftRest);
+        const auto hasRight = splitRoutePathSegment(right, rightSegment, rightRest);
         if (!hasLeft || !hasRight) {
             return hasLeft == hasRight && priority == ForkPriority::kShared;
         }
