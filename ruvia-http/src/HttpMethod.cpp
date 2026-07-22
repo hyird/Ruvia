@@ -1,37 +1,14 @@
-#include "ruvia/http/HttpHeader.h"
 #include "ruvia/http/HttpKnownMethod.h"
 
 #include "ruvia/http/detail/parser/HttpParserSyntax.h"
 
 #include <algorithm>
 
+// The method vocabulary: recognising the standard tokens, spelling them back,
+// validating an unknown one, and the two properties -- safe and idempotent --
+// that decide what a recipient may do with a request (RFC 9110 section 9.2).
+
 namespace ruvia {
-
-bool isValidHttpHeaderName(std::string_view name) noexcept {
-    if (name.empty()) {
-        return false;
-    }
-    return std::ranges::all_of(name, [](char value) noexcept {
-        return detail::isHttpTokenChar(static_cast<unsigned char>(value));
-    });
-}
-
-bool isValidHttpHeaderValue(std::string_view value) noexcept {
-    if (!value.empty()) {
-        const auto first = static_cast<unsigned char>(value.front());
-        const auto last = static_cast<unsigned char>(value.back());
-        if (first == ' ' || first == '\t' || last == ' ' || last == '\t') {
-            return false;
-        }
-    }
-    return std::ranges::all_of(value, [](char c) noexcept {
-        return detail::isHttpFieldValueChar(static_cast<unsigned char>(c));
-    });
-}
-
-bool isValidHttpStatusText(std::string_view value) noexcept {
-    return isValidHttpHeaderValue(value);
-}
 
 HttpKnownMethod classifyHttpMethod(std::string_view method) noexcept {
     switch (method.size()) {

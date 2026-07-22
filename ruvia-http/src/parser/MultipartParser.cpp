@@ -1,16 +1,20 @@
 #include "ruvia/http/MultipartParser.h"
 
-#include "ruvia/http/detail/MultipartReaderInternal.h"
-#include "ruvia/http/detail/parser/MultipartDelimiter.h"
-#include "ruvia/http/detail/parser/MultipartPartHeaders.h"
-#include "ruvia/http/detail/MultipartPartAccess.h"
-#include "ruvia/http/detail/PmrResource.h"
-#include "ruvia/http/detail/PmrString.h"
-
 #include <algorithm>
 #include <cstring>
 #include <stdexcept>
 #include <utility>
+
+#include "ruvia/http/detail/MultipartPartAccess.h"
+#include "ruvia/http/detail/MultipartReaderInternal.h"
+#include "ruvia/http/detail/PmrResource.h"
+#include "ruvia/http/detail/PmrString.h"
+#include "ruvia/http/detail/parser/MultipartDelimiter.h"
+#include "ruvia/http/detail/parser/MultipartPartHeaders.h"
+
+// The multipart state machine: find the next delimiter, read one part's header
+// block, then hand out that part's body in chunks -- driven entirely by what is
+// currently buffered, so a caller may feed the body in any pieces.
 
 namespace ruvia {
 
@@ -68,98 +72,6 @@ HttpProtocolError MultipartPollFailure::protocolError() const noexcept {
 
 HttpProtocolError MultipartBodyParseFailure::protocolError() const noexcept {
     return multipartProtocolError(error_);
-}
-
-detail::MultipartInputLifecycle::MultipartInputLifecycle(
-    std::pmr::memory_resource* resource)
-    : value_(
-          std::in_place_type<MultipartStreamingInputOpen>,
-          detail::httpPmrResourceOrDefault(resource)) {}
-
-detail::MultipartInputLifecycle::MultipartInputLifecycle(
-    MultipartBorrowedInput input) noexcept
-    : value_(input) {}
-
-const detail::MultipartBorrowedInput*
-detail::MultipartInputLifecycle::borrowed() const & noexcept {
-    return std::get_if<MultipartBorrowedInput>(&value_);
-}
-
-const detail::MultipartStreamingInputOpen*
-detail::MultipartInputLifecycle::streamingOpen() const & noexcept {
-    return std::get_if<MultipartStreamingInputOpen>(&value_);
-}
-
-const detail::MultipartStreamingInputEof*
-detail::MultipartInputLifecycle::streamingEof() const & noexcept {
-    return std::get_if<MultipartStreamingInputEof>(&value_);
-}
-
-bool detail::MultipartInputLifecycle::eof() const noexcept {
-    return borrowed() != nullptr || streamingEof() != nullptr;
-}
-
-std::pmr::string* detail::MultipartInputLifecycle::ownedBytes() noexcept {
-    if (auto* open = std::get_if<MultipartStreamingInputOpen>(&value_)) {
-        return &open->bytes;
-    }
-    if (auto* eofState = std::get_if<MultipartStreamingInputEof>(&value_)) {
-        return &eofState->bytes;
-    }
-    return nullptr;
-}
-
-const std::pmr::string* detail::MultipartInputLifecycle::ownedBytes() const noexcept {
-    if (const auto* open = std::get_if<MultipartStreamingInputOpen>(&value_)) {
-        return &open->bytes;
-    }
-    if (const auto* eofState = std::get_if<MultipartStreamingInputEof>(&value_)) {
-        return &eofState->bytes;
-    }
-    return nullptr;
-}
-
-std::string_view detail::MultipartInputLifecycle::view() const & noexcept {
-    const auto source = borrowed() != nullptr
-        ? borrowed()->bytes
-        : std::string_view(ownedBytes()->data(), ownedBytes()->size());
-    return offset_ >= source.size() ? std::string_view{} : source.substr(offset_);
-}
-
-void detail::MultipartInputLifecycle::feed(std::string_view chunk) {
-    auto* open = std::get_if<MultipartStreamingInputOpen>(&value_);
-    if (open == nullptr) {
-        throw std::logic_error("multipart input is not open for feed");
-    }
-    compactConsumedPrefix(kCompactConsumedPrefixBytes);
-    open = std::get_if<MultipartStreamingInputOpen>(&value_);
-    open->bytes.append(chunk.data(), chunk.size());
-}
-
-void detail::MultipartInputLifecycle::finishInput() noexcept {
-    auto* open = std::get_if<MultipartStreamingInputOpen>(&value_);
-    if (open == nullptr) {
-        return;
-    }
-    auto bytes = std::move(open->bytes);
-    value_.template emplace<MultipartStreamingInputEof>(std::move(bytes));
-}
-
-void detail::MultipartInputLifecycle::consume(std::size_t bytes) noexcept {
-    const auto available = view().size();
-    offset_ += std::min(bytes, available);
-    auto* owned = ownedBytes();
-    if (owned != nullptr && offset_ == owned->size()) {
-        owned->clear();
-        offset_ = 0;
-    }
-}
-
-void detail::MultipartInputLifecycle::compactConsumedPrefix(std::size_t threshold) {
-    auto* owned = ownedBytes();
-    if (owned != nullptr) {
-        detail::compactConsumedPrefix(*owned, offset_, threshold);
-    }
 }
 
 MultipartParser::MultipartParser(MultipartBoundary boundary, std::pmr::memory_resource* resource)

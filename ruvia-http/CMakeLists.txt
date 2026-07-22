@@ -12,7 +12,8 @@ endif()
 
 add_library(ruvia-http
     ${CMAKE_CURRENT_SOURCE_DIR}/src/Cookies.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/HttpBasics.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/HttpFieldSyntax.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/HttpMethod.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/HttpCache.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/HttpContentCoding.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/codec/HttpContentCodecOutput.cpp
@@ -28,7 +29,8 @@ add_library(ruvia-http
     ${CMAKE_CURRENT_SOURCE_DIR}/src/HttpResponseHeaders.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/HttpResponseHeadersStorage.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/HttpResponseKnownHeaders.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/MultipartReader.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/parser/MultipartParser.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/parser/MultipartInput.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/Sse.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/body/HttpTransferCodingDecoder.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/parser/HttpChunkParser.cpp
