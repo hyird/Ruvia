@@ -1,6 +1,10 @@
 #include "ruvia/web/Error.h"
 
+#include "ruvia/web/Context.h"
+
 #include "ruvia/core/memory/ProcessResource.h"
+#include <exception>
+
 #include "ruvia/http/HttpStatus.h"
 #include "ruvia/http/detail/response/HttpResponseBodyAccess.h"
 #include "ruvia/http/detail/response/HttpResponseHeaderState.h"
@@ -218,6 +222,37 @@ HttpResponse detail::makeDefaultErrorResponse(
     appendErrorBody(body, error);
     setResponseBodyOwned(response, std::move(body));
     return response;
+}
+
+// Running the application's error handler, or the default response when there
+// is none. A handler that throws is answered with the default response too:
+// transport output stays deterministic and no exception detail reaches the
+// client.
+Task<HttpResponse> detail::invokeErrorHandler(
+    Context& context,
+    HttpErrorInfo error,
+    HttpErrorHandler handler) {
+    error = normalizeHttpErrorInfo(error);
+
+    if (handler != nullptr) {
+        try {
+            co_return co_await handler(context, error);
+        } catch (const HttpError& nested) {
+            co_return makeDefaultErrorResponse(context.resource(), nested.info());
+        } catch (const std::exception&) {
+            // The error handler itself threw; keep transport output deterministic
+            // and avoid echoing exception detail to the client.
+            co_return makeDefaultErrorResponse(
+                context.resource(),
+                HttpErrorInfo(ruvia::http_status::kInternalServerError, "error_handler_failed", "error handler failed"));
+        } catch (...) {
+            co_return makeDefaultErrorResponse(
+                context.resource(),
+                HttpErrorInfo(ruvia::http_status::kInternalServerError, "error_handler_failed", "error handler failed"));
+        }
+    }
+
+    co_return makeDefaultErrorResponse(context.resource(), error);
 }
 
 }  // namespace ruvia

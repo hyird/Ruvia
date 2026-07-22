@@ -30,7 +30,6 @@ set(RUVIA_WEB_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/src/integration/DataAccessDefinitions.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/ruvia.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/http/Error.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/http/ContextErrorResponse.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/http/ContextFileResponse.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/http/FileConditionalRequest.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/http/StaticFileVariant.cpp
@@ -50,7 +49,6 @@ set(RUVIA_WEB_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/src/http/ScopedOperation.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/http/MultipartReader.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/http/RateLimit.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/http/Streaming.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/auth/CookieSignature.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/http/StaticRoot.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/http/StaticFileTypes.cpp

@@ -87,6 +87,8 @@ ruvia::Task<void> closeWebSocketOwned(
 
 }  // namespace
 
+#include "ruvia/web/detail/http/StreamingAccess.h"
+
 namespace ruvia {
 
 WebSocket& Context::webSocket() const {
@@ -214,6 +216,12 @@ ScopedOperation<void> WebSocket::write(WebSocketOpcode opcode, std::string_view 
     return detail::makeScopedOperation(
         operationScope_,
         writeWebSocketOwned(target_, write_, opcode, std::move(owned)));
+}
+
+ScopedOperation<void> SseWriter::write(const SseMessage& message) {
+    std::pmr::string frame(detail::processResource());
+    detail::formatSseMessage(frame, message);
+    return writer_.writeOwned(std::move(frame));
 }
 
 }  // namespace ruvia
