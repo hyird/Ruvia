@@ -37,7 +37,7 @@
 #include "ruvia/http/detail/http2/hpack/Http2Hpack.h"
 #include "ruvia/http/detail/http2/message/Http2RequestBuilder.h"
 #include "ruvia/http/detail/http2/flow/Http2WindowUpdate.h"
-#include "ruvia/http/detail/websocket/HttpWebSocketPermessageDeflate.h"
+#include "ruvia/http/detail/websocket/message/HttpWebSocketPermessageDeflate.h"
 #include "ruvia/web/detail/http2/Http2SansIoSession.h"
 #include "ruvia/web/detail/router/RouteResolution.h"
 #include "ruvia/web/detail/router/RouterImpl.h"

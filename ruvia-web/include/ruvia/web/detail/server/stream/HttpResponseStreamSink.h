@@ -9,7 +9,7 @@
 #include "ruvia/http/detail/http1/Http1ChunkedFraming.h"
 #include "ruvia/http/detail/http1/Http1ServerSemantics.h"
 #include "ruvia/web/detail/server/stream/HttpResponseStreamState.h"
-#include "ruvia/web/detail/server/HttpServerResponseState.h"
+#include "ruvia/web/detail/server/response/HttpServerResponseState.h"
 #include "ruvia/core/Task.h"
 #include "ruvia/core/Timer.h"
 #include "ruvia/web/Context.h"

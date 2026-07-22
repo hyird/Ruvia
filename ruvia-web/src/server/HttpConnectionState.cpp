@@ -1,4 +1,4 @@
-#include "ruvia/web/detail/server/HttpConnectionState.h"
+#include "ruvia/web/detail/server/session/HttpConnectionState.h"
 
 #include <algorithm>
 #include <cstring>

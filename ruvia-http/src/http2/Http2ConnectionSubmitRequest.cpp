@@ -13,7 +13,7 @@
 #include "ruvia/http/detail/http2/message/Http2RequestHeaders.h"
 #include "ruvia/http/detail/http2/message/Http2WebSocketHandshake.h"
 #include "ruvia/http/detail/parser/HttpRequestTarget.h"
-#include "ruvia/http/detail/websocket/HttpWebSocketHandshakeFields.h"
+#include "ruvia/http/detail/websocket/handshake/HttpWebSocketHandshakeFields.h"
 
 // Submitting a request head as the client: what an outbound :method / :path /
 // :authority and its header section must satisfy before the connection will

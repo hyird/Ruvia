@@ -4,8 +4,8 @@
 #include <string_view>
 
 #include "ruvia/http/detail/util/BorrowedView.h"
-#include "ruvia/http/detail/websocket/HttpWebSocketFrameCodec.h"
-#include "ruvia/http/detail/websocket/HttpWebSocketPayloadValidation.h"
+#include "ruvia/http/detail/websocket/frame/HttpWebSocketFrameCodec.h"
+#include "ruvia/http/detail/websocket/frame/HttpWebSocketPayloadValidation.h"
 
 namespace ruvia::detail {
 

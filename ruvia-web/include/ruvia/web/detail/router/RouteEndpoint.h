@@ -3,7 +3,7 @@
 #include <utility>
 #include <variant>
 
-#include "ruvia/http/detail/websocket/HttpWebSocketHandshakeFields.h"
+#include "ruvia/http/detail/websocket/handshake/HttpWebSocketHandshakeFields.h"
 #include "ruvia/web/Context.h"
 #include "ruvia/web/Next.h"
 #include "ruvia/web/WebSocket.h"

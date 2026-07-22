@@ -1,3 +1,35 @@
+#pragma once
+
+#include <chrono>
+#include <cstddef>
+#include <optional>
+#include <string_view>
+#include <type_traits>
+#include <utility>
+
+#include "ruvia/core/detail/io/AsioAwait.h"
+#include "ruvia/web/detail/http/context/ContextServices.h"
+#include "ruvia/web/detail/server/session/HttpServerConnectionGuards.h"
+#include "ruvia/web/detail/server/session/HttpServerIdleWorkSet.h"
+#include "ruvia/web/detail/server/http1/Http1RequestSequence.h"
+#include "ruvia/web/detail/server/route/HttpServerBodyRouteCompletion.h"
+#include "ruvia/web/detail/server/route/HttpServerStreamBodyRoute.h"
+#include "ruvia/web/detail/server/route/HttpServerWebSocketRoute.h"
+#include "ruvia/web/detail/server/stream/HttpServerResponseStreamRoute.h"
+#include "ruvia/web/detail/server/response/HttpServerResponseState.h"
+#include "ruvia/web/detail/server/request/RequestMemoryArena.h"
+#include "ruvia/web/detail/server/http1/Http1ClosingRejection.h"
+#include "ruvia/web/detail/http2/CleartextUpgrade.h"
+#include "ruvia/web/detail/server/tls/HttpServerAutoHttps.h"
+#include "ruvia/web/detail/server/request/HttpServerRequestState.h"
+#include "ruvia/web/detail/server/HttpServer.h"
+
+// Member-template definitions for HttpServer, kept out of its header so the
+// class stays readable. Included as an ordinary header: everything used here is
+// included here.
+
+namespace ruvia::detail {
+
 template <typename Stream>
 Task<void> HttpServer::handleStreamSession(
     Stream& stream,
@@ -113,16 +145,18 @@ Task<void> HttpServer::handleStreamSession(
             if constexpr (kPlainTcp) {
                 if (usedBytes > 0) {
                     const auto h2Result = co_await dispatchCleartextHttp2Preface(
-                        stream,
-                        socket,
-                        memory_,
-                        routes_,
-                        options_,
-                        scannerEntry,
-                        baseRouteServices,
+                        Http2ServerSessionSetup<Stream>{
+                            .stream = stream,
+                            .socket = socket,
+                            .memory = memory_,
+                            .routes = routes_,
+                            .options = options_,
+                            .scannerEntry = scannerEntry,
+                            .services = baseRouteServices,
+                            .workerState = workerState_,
+                        },
                         readBuffer,
-                        usedBytes,
-                        workerState_);
+                        usedBytes);
                     if (h2Result == CleartextHttp2DispatchResult::kSessionFinished) {
                         co_return;
                     }
@@ -220,6 +254,23 @@ Task<void> HttpServer::handleStreamSession(
                     break;
                 }
 
+                // One bundle of what every route dispatch below needs from
+                // this session; each dispatcher adds only its own arguments.
+                const auto routeDispatch = [&] {
+                    return Http1RouteDispatch<Stream>{
+                        .stream = stream,
+                        .memory = memory_,
+                        .scannerEntry = scannerEntry,
+                        .parsed = parsed,
+                        .routes = routes,
+                        .requestMemory = requestMemory,
+                        .baseRouteServices = baseRouteServices,
+                        .options = options_,
+                        .response = response,
+                        .requestSequence = requestSequence,
+                    };
+                };
+
                 const auto& route = resolved->route();
                 const auto& endpoint = route.endpoint();
                 const auto maxRequestBodyBytes = requestBodyByteLimit(
@@ -241,17 +292,7 @@ Task<void> HttpServer::handleStreamSession(
                         readBuffer.data() + requestHead->headerBytes(),
                         usedBytes - requestHead->headerBytes());
                     auto webSocketCompletion = co_await dispatchHttpWebSocketRoute(
-                        stream,
-                        memory_,
-                        scannerEntry,
-                        parsed,
-                        *resolved,
-                        routes,
-                        requestMemory,
-                        baseRouteServices,
-                        options_,
-                        pendingFrames,
-                        response);
+                        routeDispatch(), *resolved, pendingFrames);
                     if (!webSocketCompletion.has_value()) {
                         co_return;
                     }
@@ -263,18 +304,10 @@ Task<void> HttpServer::handleStreamSession(
                 if (endpoint.responseStream() != nullptr) {
                     requestCompletion.emplace(
                         co_await dispatchHttpResponseStreamRoute(
-                        stream,
-                        memory_,
-                        responseHead,
-                        scannerEntry,
-                        parsed,
-                        *requestHead,
-                        *resolved,
-                        routes,
-                        requestMemory,
-                        baseRouteServices,
-                        response,
-                        requestSequence));
+                            routeDispatch(),
+                            responseHead,
+                            *requestHead,
+                            *resolved));
                     break;
                 }
                 const auto* bufferedEndpoint = endpoint.buffered();
@@ -283,21 +316,12 @@ Task<void> HttpServer::handleStreamSession(
                         RequestBodyMode::kStream) {
                     requestCompletion.emplace(
                         co_await dispatchHttpStreamBodyRoute(
-                        stream,
-                        memory_,
-                        scannerEntry,
-                        parsed,
-                        *requestHead,
-                        routeResolution,
-                        routes,
-                        requestMemory,
-                        baseRouteServices,
-                        options_,
-                        readBuffer,
-                        usedBytes,
-                        pipelineStash,
-                        response,
-                        requestSequence));
+                            routeDispatch(),
+                            *requestHead,
+                            routeResolution,
+                            readBuffer,
+                            usedBytes,
+                            pipelineStash));
                     break;
                 }
 
@@ -320,14 +344,7 @@ Task<void> HttpServer::handleStreamSession(
                     HttpLazyBufferedBodyRouteState<Stream> bodyState;
                     try {
                         prepareHttpLazyBufferedBodyRoute(
-                            bodyState,
-                            stream,
-                            memory_,
-                            requestMemory,
-                            bodyAndPipeline,
-                            parsed,
-                            options_,
-                            scannerEntry);
+                            bodyState, routeDispatch(), bodyAndPipeline);
                     } catch (...) {
                         bodySetupException = std::current_exception();
                     }
@@ -497,3 +514,5 @@ Task<void> HttpServer::handleStreamSession(
         servedKeepaliveRequest = true;
     }
 }
+
+}  // namespace ruvia::detail

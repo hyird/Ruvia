@@ -1,5 +1,5 @@
 #pragma once
-#include "ruvia/web/detail/server/HttpConnectionState.h"
+#include "ruvia/web/detail/server/session/HttpConnectionState.h"
 #include "ruvia/core/detail/io/AsioAwait.h"
 
 #include <asio/ip/tcp.hpp>

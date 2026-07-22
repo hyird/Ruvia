@@ -27,13 +27,10 @@ asio::awaitable<bool> EdgeServer::Impl::servePassThrough(
     ResponseWriter& writer,
     const OriginLease& origin,
     RequestOutcome& outcome) {
-    const Headers noHeaders;
     const bool keepAlive = request.keepAlive;
 
-    OriginRequest passRequest;
-    passRequest.method = request.method;
-    passRequest.target = request.target;
-    passRequest.headers = buildForwardHeaders(
+    // The header vector must outlive passRequest: its `headers` is a span.
+    const auto passHeaders = buildForwardHeaders(
         request.headers,
         request.clientAddress,
         request.host,
@@ -41,6 +38,11 @@ asio::awaitable<bool> EdgeServer::Impl::servePassThrough(
         nullptr,
         ForwardMode::kPassThrough,
         memory_.resource());
+
+    OriginRequest passRequest;
+    passRequest.method = request.method;
+    passRequest.target = request.target;
+    passRequest.headers = passHeaders;
     passRequest.body = request.body;
 
     // Stream the origin response straight through to the client (never
@@ -81,8 +83,7 @@ asio::awaitable<bool> EdgeServer::Impl::servePassThrough(
         const std::uint16_t gatewayStatus =
             passStream.outcome == OriginFetchOutcome::kTimeout ? 504 : 502;
         outcome.status = gatewayStatus;
-        co_await writer.respond(
-            gatewayStatus, noHeaders, {}, "ERROR", std::nullopt, false, false);
+        co_await respondStatusOnly(writer, gatewayStatus, "ERROR", false);
         co_return false;
     }
     if (!co_await writer.respondEnd()) {
@@ -106,7 +107,6 @@ asio::awaitable<bool> EdgeServer::Impl::serveRequest(
     // Per-request accounting: defaults to an error result; success paths set the
     // label/status below, and the byte count comes from the writer.
     RequestOutcome outcome;
-    const Headers noHeaders;
 
     const bool isGet = request.knownMethod == HttpKnownMethod::kGet;
     const bool isHead = request.knownMethod == HttpKnownMethod::kHead;
@@ -136,7 +136,7 @@ asio::awaitable<bool> EdgeServer::Impl::serveRequest(
     // is suspended in origin I/O.
     auto origin = config_.findOrigin(frontHost);
     if (!origin) {
-        co_await writer.respond(502, noHeaders, {}, "ERROR", std::nullopt, false, false);
+        co_await respondStatusOnly(writer, 502, "ERROR", false);
         co_return false;
     }
 
@@ -151,8 +151,7 @@ asio::awaitable<bool> EdgeServer::Impl::serveRequest(
     if (requestCacheControl.onlyIfCached && cannotUseStoredResponse) {
         outcome.status = 504;
         outcome.label = "MISS";
-        co_return co_await writer.respond(
-                   504, noHeaders, {}, "MISS", std::nullopt, false, keepAlive) &&
+        co_return co_await respondStatusOnly(writer, 504, "MISS", keepAlive) &&
             keepAlive;
     }
     if (cannotUseStoredResponse ||
@@ -161,26 +160,12 @@ asio::awaitable<bool> EdgeServer::Impl::serveRequest(
     }
 
     std::time_t now = std::time(nullptr);
-    // Preserve the complete Accept-Encoding field value. Dropping weights,
-    // repeated lines, or the absent-vs-empty distinction can make a shared
-    // cache serve a representation selected for a different request.
     const std::string variantPrefix =
         cacheVariantPrefix("GET", frontHost, target);
     const auto acceptEncoding = combinedRequestFieldValue(
         request.headers, "accept-encoding");
-    std::string key = variantPrefix;
-    // The primary cache key includes the complete request authority. The
-    // mapping host deliberately ignores a port for routing, but two target
-    // URIs with different ports are not the same cache key. ASCII case is
-    // canonicalized because URI hosts are case-insensitive.
-    for (const char byte : request.host) {
-        key.push_back(toLowerAscii(byte));
-    }
-    key.push_back('\n');
-    key.push_back(acceptEncoding ? '1' : '0');
-    if (acceptEncoding) {
-        key.append(*acceptEncoding);
-    }
+    const std::string key =
+        cacheKeyFor(variantPrefix, request.host, acceptEncoding);
 
     // Serve a cached entry, honoring a single client byte-range (206, or 416
     // when unsatisfiable) served from the full cached body.
@@ -258,8 +243,7 @@ asio::awaitable<bool> EdgeServer::Impl::serveRequest(
     if (requestCacheControl.onlyIfCached) {
         outcome.status = 504;
         outcome.label = "MISS";
-        co_return co_await writer.respond(
-                   504, noHeaders, {}, "MISS", std::nullopt, false, keepAlive) &&
+        co_return co_await respondStatusOnly(writer, 504, "MISS", keepAlive) &&
             keepAlive;
     }
 
@@ -429,8 +413,7 @@ asio::awaitable<bool> EdgeServer::Impl::serveRequest(
         const std::uint16_t gatewayStatus =
             fetchResult.outcome == OriginFetchOutcome::kTimeout ? 504 : 502;
         outcome.status = gatewayStatus;
-        co_await writer.respond(
-            gatewayStatus, noHeaders, {}, "ERROR", std::nullopt, false, false);
+        co_await respondStatusOnly(writer, gatewayStatus, "ERROR", false);
         co_return false;
     }
 

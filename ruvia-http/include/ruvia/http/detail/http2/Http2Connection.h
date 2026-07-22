@@ -57,7 +57,7 @@
 #include "ruvia/http/detail/server/HttpResponseStreamHead.h"
 #include "ruvia/http/detail/server/HttpResponseTrailers.h"
 #include "ruvia/http/detail/server/HttpResponseWritePlan.h"
-#include "ruvia/http/detail/websocket/WebSocketServerNegotiation.h"
+#include "ruvia/http/detail/websocket/handshake/WebSocketServerNegotiation.h"
 #include "ruvia/http/HttpInterimResponse.h"
 #include "ruvia/http/HttpResponse.h"
 

@@ -7,9 +7,9 @@
 #include <string_view>
 #include <utility>
 
-#include "ruvia/http/detail/websocket/HttpWebSocketClosePayload.h"
-#include "ruvia/http/detail/websocket/HttpWebSocketFrameCodec.h"
-#include "ruvia/http/detail/websocket/HttpWebSocketPayloadValidation.h"
+#include "ruvia/http/detail/websocket/frame/HttpWebSocketClosePayload.h"
+#include "ruvia/http/detail/websocket/frame/HttpWebSocketFrameCodec.h"
+#include "ruvia/http/detail/websocket/frame/HttpWebSocketPayloadValidation.h"
 
 namespace {
 

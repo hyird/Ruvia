@@ -16,7 +16,7 @@
 #include "ruvia/http/detail/server/HttpResponseHead.h"
 #include "ruvia/http/detail/server/HttpResponseHeadBuffer.h"
 #include "ruvia/http/detail/http1/Http1ServerSemantics.h"
-#include "ruvia/web/detail/server/HttpServerResponseState.h"
+#include "ruvia/web/detail/server/response/HttpServerResponseState.h"
 
 namespace {
 

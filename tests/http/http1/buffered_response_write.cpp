@@ -38,7 +38,7 @@
 #include "ruvia/web/detail/server/file/HttpFileFallback.h"
 #include "ruvia/web/detail/server/file/HttpFileWrite.h"
 #include "ruvia/web/detail/server/file/HttpNativeFile.h"
-#include "ruvia/web/detail/server/HttpResponseWriter.h"
+#include "ruvia/web/detail/server/response/HttpResponseWriter.h"
 
 namespace {
 

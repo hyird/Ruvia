@@ -1,4 +1,4 @@
-#include "ruvia/http/detail/websocket/HttpWebSocketAcceptKey.h"
+#include "ruvia/http/detail/websocket/handshake/HttpWebSocketAcceptKey.h"
 
 #include <array>
 #include <bit>

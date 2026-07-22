@@ -3,6 +3,7 @@ find_package(OpenSSL REQUIRED)
 
 set(RUVIA_EDGE_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/src/OriginFetcher.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/cache/CacheKey.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/cache/DiskCache.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/cache/DiskCacheFiles.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/cache/DiskCacheRecord.cpp

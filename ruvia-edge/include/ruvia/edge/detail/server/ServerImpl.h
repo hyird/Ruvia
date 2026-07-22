@@ -24,6 +24,7 @@
 
 #include "ruvia/core/memory/MemoryPool.h"
 #include "ruvia/edge/EdgeServer.h"
+#include "ruvia/edge/detail/cache/CacheKey.h"
 #include "ruvia/edge/detail/cache/EdgeCache.h"
 #include "ruvia/edge/detail/server/EdgeConfig.h"
 #include "ruvia/edge/detail/cache/DiskTier.h"
@@ -53,12 +54,12 @@ struct EdgeRequest final {
 // single translation unit because its members are defined across three, one per
 // concern:
 //
-//   EdgeServer.cpp         the public facade, construction, the lifecycle state
-//                          machine and the control plane serialized onto the worker
-//   EdgeServerSession.cpp  the accept loop, the TLS handshake and ALPN split, and
-//                          the HTTP/1 and HTTP/2 session drivers
-//   EdgeServerServe.cpp    the protocol-independent serve core: cache lookup,
-//                          revalidation, request coalescing and background refresh
+//   server/Server.cpp   the public facade, construction, the lifecycle state
+//                       machine and the control plane serialized onto the worker
+//   server/Session.cpp  the accept loop, the TLS handshake and ALPN split, and
+//                       the HTTP/1 and HTTP/2 session drivers
+//   server/Serve.cpp    the protocol-independent serve core: cache lookup,
+//                       revalidation, request coalescing and background refresh
 class EdgeServer::Impl final {
 public:
     Impl(EdgeEndpoint endpoint, EdgeServerOptions options);
@@ -87,11 +88,6 @@ private:
         kStopping,
         kStopped,
     };
-
-    [[nodiscard]] static std::string cacheVariantPrefix(
-        std::string_view method,
-        std::string_view frontHost,
-        std::string_view target);
 
     [[nodiscard]] TlsContextPtr loadTlsContext() const noexcept;
     void storeTlsContext(TlsContextPtr context) noexcept;

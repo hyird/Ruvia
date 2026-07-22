@@ -43,7 +43,7 @@ add_library(ruvia-http
     ${CMAKE_CURRENT_SOURCE_DIR}/src/http2/Http2HpackDynamic.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/http2/Http2HpackEncoder.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/http2/Http2HpackHuffman.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/parser/Http1RequestParser.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/parser/Http1ServerRequestParser.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/parser/HttpChunkParser.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/parser/HttpHeaderBlockParser.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/parser/HttpParseError.cpp

@@ -99,22 +99,29 @@ private:
     bool consumed_{false};
 };
 
+// What one file response describes: which bytes, when they last changed, and
+// the policy the serving route attached to them. Fifteen positional arguments
+// at a call site said none of that; designated initializers do.
+struct FileResponseSource final {
+    FileResponsePath path;
+    std::uint64_t size{0};
+    std::uint64_t modifiedToken{0};
+    std::time_t modifiedSeconds{0};
+    std::string_view contentType;
+    std::string_view cacheControl;
+    bool enableRanges{false};
+    bool enableValidators{false};
+    std::string_view precomputedEtag;
+    std::string_view precomputedLastModified;
+    detail::HttpContentCoding contentCoding{detail::HttpContentCoding::kIdentity};
+    bool negotiatesEncoding{false};
+};
+
 template <typename ApplyResponseState>
 [[nodiscard]] HttpResponse makeFileResponse(
     const Context& context,
     const HttpRequest& request,
-    FileResponsePath filePath,
-    std::uint64_t size,
-    std::uint64_t modifiedToken,
-    std::time_t modifiedSeconds,
-    std::string_view contentType,
-    std::string_view cacheControl,
-    bool enableRanges,
-    bool enableValidators,
-    std::string_view precomputedEtag,
-    std::string_view precomputedLastModified,
-    detail::HttpContentCoding contentCoding,
-    bool negotiatesEncoding,
+    FileResponseSource source,
     ApplyResponseState applyResponseState) {
     std::pmr::string etagStorage(context.resource());
     std::pmr::string lastModifiedStorage(context.resource());
@@ -128,57 +135,57 @@ template <typename ApplyResponseState>
     // value is not the representation's actual validator and therefore cannot
     // be a strong If-Range validator (RFC 9110 §13.1.5).
     const auto responseSeconds = std::time(nullptr);
-    const bool lastModifiedIsActual = modifiedSeconds <= responseSeconds;
+    const bool lastModifiedIsActual = source.modifiedSeconds <= responseSeconds;
     const auto validatorModifiedSeconds = lastModifiedIsActual
-        ? modifiedSeconds
+        ? source.modifiedSeconds
         : responseSeconds;
-    if (enableValidators) {
-        if (precomputedEtag.empty()) {
+    if (source.enableValidators) {
+        if (source.precomputedEtag.empty()) {
             etagStorage = detail::makeStaticFileSnapshotEtag(
                 context.resource(),
-                size,
-                modifiedToken,
-                filePath.identity());
+                source.size,
+                source.modifiedToken,
+                source.path.identity());
             etag = etagStorage;
         } else {
-            etag = precomputedEtag;
+            etag = source.precomputedEtag;
         }
-        if (precomputedLastModified.empty() || !lastModifiedIsActual) {
+        if (source.precomputedLastModified.empty() || !lastModifiedIsActual) {
             lastModifiedStorage = detail::httpFormatDate(
                 context.resource(), validatorModifiedSeconds);
             lastModified = lastModifiedStorage;
         } else {
-            lastModified = precomputedLastModified;
+            lastModified = source.precomputedLastModified;
         }
     }
 
     auto addFileHeaders = [&](HttpResponse& response) {
         detail::reserveResponseHeaders(response, kFileResponseHeaderReserve);
-        if (contentType.empty()) {
+        if (source.contentType.empty()) {
             detail::setResponseHeaderStableView(
                 response,
                 "Content-Type",
-                filePath.guessedContentType());
+                source.path.guessedContentType());
         } else {
-            response.header("Content-Type", contentType);
+            response.header("Content-Type", source.contentType);
         }
-        if (!cacheControl.empty()) {
-            response.header("Cache-Control", cacheControl);
+        if (!source.cacheControl.empty()) {
+            response.header("Cache-Control", source.cacheControl);
         }
         // A precompressed variant carries the original Content-Type with the
         // encoding declared here.
         const auto contentEncoding =
-            detail::httpContentCodingToken(contentCoding);
+            detail::httpContentCodingToken(source.contentCoding);
         if (!contentEncoding.empty()) {
             detail::setResponseHeaderStableView(
                 response,
                 "Content-Encoding",
                 contentEncoding);
         }
-        if (enableRanges) {
+        if (source.enableRanges) {
             detail::setResponseHeaderStableView(response, "Accept-Ranges", "bytes");
         }
-        if (enableValidators) {
+        if (source.enableValidators) {
             response.header("ETag", etag);
             response.header("Last-Modified", lastModified);
         }
@@ -192,15 +199,15 @@ template <typename ApplyResponseState>
         // overwrite Accept-Encoding and make differently encoded variants share
         // one cache entry (RFC 9110 12.5.5 / RFC 9111 4.1). Context::file does no
         // Accept-Encoding negotiation and stays Vary-free.
-        if (negotiatesEncoding) {
+        if (source.negotiatesEncoding) {
             detail::addVaryToken(response, "Accept-Encoding");
         }
     };
     auto setFileBody = [&](HttpResponse& response, std::uint64_t offset, std::uint64_t length) {
-        filePath.setBody(response, size, offset, length);
+        source.path.setBody(response, source.size, offset, length);
     };
     auto setFullFileBody = [&](HttpResponse& response) {
-        filePath.setFullBody(response, size);
+        source.path.setFullBody(response, source.size);
     };
     auto makeHeaderOnlyResponse = [&](
         std::optional<HttpStatusCode> statusCode) {
@@ -263,17 +270,17 @@ template <typename ApplyResponseState>
     // describe the full selected representation rather than returning partial
     // response metadata for content that will never be sent.
     if (methodPlan.evaluatesRange &&
-        enableRanges && !conditional.range.empty()) {
+        source.enableRanges && !conditional.range.empty()) {
         // RFC 9110 13.1.5: honor the Range only if a present If-Range matches
         // the current representation. When validators are disabled this root
         // exposes no ETag/Last-Modified, so an If-Range can never be confirmed
         // -- the condition MUST be treated as not matching and the full
         // representation served, rather than a 206 stitched from bytes the
-        // client cannot verify it still holds. Gating on enableValidators (as
+        // client cannot verify it still holds. Gating on source.enableValidators (as
         // before) skipped the check entirely and returned a 206. A range with
         // no If-Range is still honored without validators.
         if (conditional.hasIfRange &&
-            (!enableValidators || !ifRangeAllows(
+            (!source.enableValidators || !ifRangeAllows(
                 conditional.ifRange,
                 etag,
                 validatorModifiedSeconds,
@@ -282,7 +289,7 @@ template <typename ApplyResponseState>
         }
 
         const auto rangeResolution = detail::resolveHttpByteRange(
-            conditional.range, size);
+            conditional.range, source.size);
         if (rangeResolution.ignored()) {
             // Unknown units, invalid/unsupported sets, and ranges over an
             // empty representation follow the RFC 9110 §14.2 ignore policy.
@@ -290,7 +297,7 @@ template <typename ApplyResponseState>
         }
         if (rangeResolution.unsatisfiable()) {
             HttpResponse response(context.resource());
-            detail::setResponseContentRangeUnsatisfied(response, size);
+            detail::setResponseContentRangeUnsatisfied(response, source.size);
             addFileHeaders(response);
             applyFileResponseState(
                 response, http_status::kRangeNotSatisfiable);
@@ -301,7 +308,7 @@ template <typename ApplyResponseState>
         HttpResponse response(context.resource());
         addFileHeaders(response);
         detail::setResponseContentRange(
-            response, resolved.offset(), resolved.length(), size);
+            response, resolved.offset(), resolved.length(), source.size);
         setFileBody(response, resolved.offset(), resolved.length());
         applyFileResponseState(response, http_status::kPartialContent);
         return response;
@@ -329,18 +336,21 @@ HttpResponse Context::file(
     return makeFileResponse(
         *this,
         request_,
-        FileResponsePath::copying(path, snapshot.identity),
-        snapshot.size,
-        snapshot.modifiedToken,
-        snapshot.modifiedSeconds,
-        contentType,
-        {},
-        true,
-        true,
-        {},
-        {},
-        detail::HttpContentCoding::kIdentity,
-        false,  // Context::file serves one path with no Accept-Encoding negotiation
+        FileResponseSource{
+            .path = FileResponsePath::copying(path, snapshot.identity),
+            .size = snapshot.size,
+            .modifiedToken = snapshot.modifiedToken,
+            .modifiedSeconds = snapshot.modifiedSeconds,
+            .contentType = contentType,
+            .cacheControl = {},
+            .enableRanges = true,
+            .enableValidators = true,
+            .precomputedEtag = {},
+            .precomputedLastModified = {},
+            .contentCoding = detail::HttpContentCoding::kIdentity,
+            // Context::file serves one path with no Accept-Encoding negotiation.
+            .negotiatesEncoding = false,
+        },
         applyState);
 }
 
@@ -411,19 +421,23 @@ HttpResponse Context::staticFile(
     return makeFileResponse(
         *this,
         request_,
-        FileResponsePath::copyingNative(
-            servedEntry.filePath(), servedEntry.identity()),
-        servedEntry.size(),
-        servedEntry.modifiedToken(),
-        servedEntry.modifiedSeconds(),
-        contentType.empty() ? baseEntry.contentType() : contentType,
-        baseEntry.cacheControl(),
-        baseEntry.rangesEnabled(),
-        baseEntry.validatorsEnabled(),
-        servedEntry.etag(),
-        servedEntry.lastModified(),
-        served.contentCoding(),
-        true,  // staticFile negotiates the representation by Accept-Encoding
+        FileResponseSource{
+            .path = FileResponsePath::copyingNative(
+                servedEntry.filePath(), servedEntry.identity()),
+            .size = servedEntry.size(),
+            .modifiedToken = servedEntry.modifiedToken(),
+            .modifiedSeconds = servedEntry.modifiedSeconds(),
+            .contentType =
+                contentType.empty() ? baseEntry.contentType() : contentType,
+            .cacheControl = baseEntry.cacheControl(),
+            .enableRanges = baseEntry.rangesEnabled(),
+            .enableValidators = baseEntry.validatorsEnabled(),
+            .precomputedEtag = servedEntry.etag(),
+            .precomputedLastModified = servedEntry.lastModified(),
+            .contentCoding = served.contentCoding(),
+            // staticFile negotiates the representation by Accept-Encoding.
+            .negotiatesEncoding = true,
+        },
         applyState);
 }
 

@@ -237,20 +237,8 @@ Task<QueryResult> PostgreSqlPool::executeOnTransactionSlot(
     std::pmr::string sql,
     std::pmr::vector<DbValue> params,
     std::pmr::memory_resource* resource) {
-    if (slot >= slots_.size()) {
-        throw std::logic_error("database transaction slot is invalid");
-    }
-    try {
-        co_return co_await executeOnSlot(
-            slots_[slot],
-            sql,
-            std::span<const DbValue>(params),
-            resource);
-    } catch (...) {
-        closeSlot(slots_[slot]);
-        releaseSlot(slot);
-        throw;
-    }
+    return executeOnDbTransactionSlot(
+        *this, slot, std::move(sql), std::move(params), resource);
 }
 
 Task<DbTransaction> PostgreSqlPool::beginTransaction(

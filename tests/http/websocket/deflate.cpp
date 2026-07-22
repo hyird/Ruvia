@@ -6,7 +6,7 @@
 
 #include "ruvia/http/ProtocolByteLimit.h"
 #include "ruvia/http/detail/http1/Http1ServerRequestParser.h"
-#include "ruvia/http/detail/websocket/HttpWebSocketPermessageDeflate.h"
+#include "ruvia/http/detail/websocket/message/HttpWebSocketPermessageDeflate.h"
 
 namespace {
 

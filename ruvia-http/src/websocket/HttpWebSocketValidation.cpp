@@ -1,7 +1,7 @@
-#include "ruvia/http/detail/websocket/HttpWebSocketClosePayload.h"
-#include "ruvia/http/detail/websocket/HttpWebSocketFrameCodec.h"
-#include "ruvia/http/detail/websocket/HttpWebSocketPayloadValidation.h"
-#include "ruvia/http/detail/websocket/HttpWebSocketHandshakeFields.h"
+#include "ruvia/http/detail/websocket/frame/HttpWebSocketClosePayload.h"
+#include "ruvia/http/detail/websocket/frame/HttpWebSocketFrameCodec.h"
+#include "ruvia/http/detail/websocket/frame/HttpWebSocketPayloadValidation.h"
+#include "ruvia/http/detail/websocket/handshake/HttpWebSocketHandshakeFields.h"
 
 #include <array>
 #include <cstring>
@@ -11,7 +11,7 @@
 #include "ruvia/http/detail/field/HttpConnectionFields.h"
 #include "ruvia/http/detail/field/HeaderTokenUtils.h"
 #include "ruvia/http/detail/http1/Http1RequestBodyPlan.h"
-#include "ruvia/http/detail/websocket/HttpWebSocketHandshakeValidation.h"
+#include "ruvia/http/detail/websocket/handshake/HttpWebSocketHandshakeValidation.h"
 #include "ruvia/http/HttpRequest.h"
 
 namespace ruvia::detail {

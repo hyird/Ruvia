@@ -1,6 +1,7 @@
 #pragma once
 
 #include <asio/any_io_executor.hpp>
+#include "ruvia/core/detail/worker/WorkerPostCounters.h"
 
 #include <atomic>
 #include <memory>
@@ -63,9 +64,7 @@ private:
     mutable std::mutex submitMutex_;
     StopSource stopSource_;
     std::atomic_size_t outstanding_{0};
-    std::atomic_uint64_t accepted_{0};
-    std::atomic_uint64_t queueFull_{0};
-    std::atomic_uint64_t workerStopping_{0};
+    WorkerPostCounters postCounters_;
     std::atomic_uint64_t completed_{0};
     std::atomic_uint64_t failedCount_{0};
     bool accepting_{true};

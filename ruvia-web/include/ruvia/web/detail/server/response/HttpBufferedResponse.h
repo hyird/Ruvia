@@ -1,6 +1,6 @@
 #pragma once
 
-#include "ruvia/web/detail/server/HttpResponseCompression.h"
+#include "ruvia/web/detail/server/response/HttpResponseCompression.h"
 #include "ruvia/web/detail/server/HttpServerOptions.h"
 #include "ruvia/http/detail/coding/HttpAcceptEncoding.h"
 #include "ruvia/http/detail/coding/HttpContentCoding.h"
