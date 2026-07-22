@@ -5,8 +5,8 @@
 
 #include "ruvia/core/EventLoopPool.h"
 #include "ruvia/web/DataAccess.h"
-#include "ruvia/web/detail/db/DbRegistry.h"
-#include "ruvia/web/detail/redis/RedisRegistry.h"
+#include "ruvia/web/db/DbTypes.h"
+#include "ruvia/web/redis/RedisTypes.h"
 
 // Turning the user's DataAccessOptions into the definitions a worker-local
 // registry is built from. Every string the worker will keep is copied into the
