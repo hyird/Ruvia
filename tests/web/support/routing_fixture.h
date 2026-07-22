@@ -43,7 +43,7 @@ struct ScopedValidationRequest final {
     RUVIA_MODEL(ScopedValidationRequest, value);
 };
 
-namespace {
+namespace routing_test {
 
 using ruvia::HttpKnownMethod;
 using ruvia::detail::ControllerMiddlewareDescriptor;
@@ -107,11 +107,11 @@ public:
     static inline bool releasedAfterNext{false};
 };
 
-bool scopedValidationHandlerRead{false};
-bool scopedValidationRawRead{false};
-bool scopedValidationHandlerThrows{false};
+inline bool scopedValidationHandlerRead{false};
+inline bool scopedValidationRawRead{false};
+inline bool scopedValidationHandlerThrows{false};
 
-ruvia::Task<ruvia::HttpResponse> scopedValidationHandler(
+inline ruvia::Task<ruvia::HttpResponse> scopedValidationHandler(
     void*,
     ruvia::Context& context) {
     const auto& model = context.req().valid<ScopedValidationRequest>();
@@ -127,19 +127,19 @@ ruvia::Task<ruvia::HttpResponse> scopedValidationHandler(
 }
 
 // Never invoked — resolve() only needs a registered route with a valid handler.
-ruvia::Task<ruvia::HttpResponse> dummyHandler(void*, ruvia::Context&) {
+inline ruvia::Task<ruvia::HttpResponse> dummyHandler(void*, ruvia::Context&) {
     co_return ruvia::HttpResponse(std::pmr::get_default_resource());
 }
 
-ruvia::Task<void> dummyStreamHandler(void*, ruvia::Context&) {
+inline ruvia::Task<void> dummyStreamHandler(void*, ruvia::Context&) {
     co_return;
 }
 
-std::pmr::string path(std::string_view value) {
+inline std::pmr::string path(std::string_view value) {
     return std::pmr::string(value, std::pmr::get_default_resource());
 }
 
-void addRoute(ruvia::detail::RouterImpl& impl, HttpKnownMethod method, std::string_view route) {
+inline void addRoute(ruvia::detail::RouterImpl& impl, HttpKnownMethod method, std::string_view route) {
     impl.registerRoute(
         method,
         path(route),
@@ -149,13 +149,13 @@ void addRoute(ruvia::detail::RouterImpl& impl, HttpKnownMethod method, std::stri
         std::span<const ControllerMiddlewareDescriptor>{});
 }
 
-void addRoute(ruvia::detail::RouterImpl& impl, std::string_view route) {
+inline void addRoute(ruvia::detail::RouterImpl& impl, std::string_view route) {
     addRoute(impl, HttpKnownMethod::kGet, route);
 }
 
 // Registers the given routes and reports whether finalize() rejects them as a
 // dynamic route-shape conflict.
-bool finalizeConflicts(std::initializer_list<std::string_view> routes) {
+inline bool finalizeConflicts(std::initializer_list<std::string_view> routes) {
     ruvia::Router router;
     auto& impl = ruvia::detail::RouterImpl::from(router);
     for (const auto route : routes) {
@@ -202,13 +202,13 @@ struct Router final {
     }
 };
 
-}  // namespace
+}  // namespace routing_test
 
-namespace {
+namespace routing_test {
 
 // Records the order middlewares and the handler run: positive on entry (before
 // next()), negative on unwind (after next()), 0 for the handler.
-std::vector<int> g_chainOrder;
+inline std::vector<int> g_chainOrder;
 
 class ChainMwA final : public ruvia::Middleware<ChainMwA> {
 public:
@@ -258,7 +258,7 @@ public:
     }
 };
 
-bool g_webSocketUnavailableAfterNext = false;
+inline bool g_webSocketUnavailableAfterNext = false;
 
 class ChainMwProbeWebSocketAfterNext final
     : public ruvia::Middleware<ChainMwProbeWebSocketAfterNext> {
@@ -292,12 +292,12 @@ public:
     }
 };
 
-ruvia::Task<ruvia::HttpResponse> chainHandler(void*, ruvia::Context& context) {
+inline ruvia::Task<ruvia::HttpResponse> chainHandler(void*, ruvia::Context& context) {
     g_chainOrder.push_back(0);
     co_return context.body("ok");
 }
 
-std::string dispatchChain(
+inline std::string dispatchChain(
     std::span<const ControllerMiddlewareDescriptor> controllerMiddlewares,
     std::span<const ControllerMiddlewareDescriptor> routeMiddlewares = {}) {
     ruvia::Router router;
@@ -336,13 +336,13 @@ struct StreamCaptureSink final {
     std::vector<std::string> writes;
 };
 
-ruvia::Task<void> scWrite(void* target, std::string_view chunk) {
+inline ruvia::Task<void> scWrite(void* target, std::string_view chunk) {
     auto* sink = static_cast<StreamCaptureSink*>(target);
     sink->committedFlag = true;
     sink->writes.emplace_back(chunk);
     co_return;
 }
-ruvia::Task<void> scEnd(
+inline ruvia::Task<void> scEnd(
     void* target,
     std::span<const ruvia::HttpHeaderView>) {
     auto* sink = static_cast<StreamCaptureSink*>(target);
@@ -350,17 +350,17 @@ ruvia::Task<void> scEnd(
     sink->endedFlag = true;
     co_return;
 }
-ruvia::Task<void> scSleep(void*, std::chrono::milliseconds) { co_return; }
-void scBind(void*, ruvia::Context*, ruvia::HttpResponse (*)(ruvia::Context&)) noexcept {}
-void scReleaseContext(void* target) noexcept {
+inline ruvia::Task<void> scSleep(void*, std::chrono::milliseconds) { co_return; }
+inline void scBind(void*, ruvia::Context*, ruvia::HttpResponse (*)(ruvia::Context&)) noexcept {}
+inline void scReleaseContext(void* target) noexcept {
     static_cast<StreamCaptureSink*>(target)->contextReleased = true;
 }
-bool scCommitted(void* target) noexcept {
+inline bool scCommitted(void* target) noexcept {
     return static_cast<StreamCaptureSink*>(target)->committedFlag;
 }
-bool scAborted(void*) noexcept { return false; }
+inline bool scAborted(void*) noexcept { return false; }
 
-ruvia::ResponseStreamWriter scMakeWriter(StreamCaptureSink& sink) noexcept {
+inline ruvia::ResponseStreamWriter scMakeWriter(StreamCaptureSink& sink) noexcept {
     return ruvia::detail::StreamingAccess::makeResponseStreamWriter(
         &sink, &scWrite, &scEnd, &scSleep, &scBind, &scReleaseContext,
         &scCommitted, &scAborted);
@@ -376,7 +376,7 @@ struct EmptyStreamDispatchObservation final {
     std::string bufferedBody;
 };
 
-EmptyStreamDispatchObservation dispatchEmptyStreamWith(
+inline EmptyStreamDispatchObservation dispatchEmptyStreamWith(
     const ControllerMiddlewareDescriptor& middleware) {
     ruvia::Router router;
     auto& impl = ruvia::detail::RouterImpl::from(router);
@@ -456,7 +456,7 @@ struct WebSocketTerminalTarget final {
     ruvia::WebSocket* webSocket;
 };
 
-ruvia::Task<void> webSocketTerminal(
+inline ruvia::Task<void> webSocketTerminal(
     void* target,
     ruvia::Context& context) {
     auto& terminal = *static_cast<WebSocketTerminalTarget*>(target);
@@ -470,7 +470,7 @@ ruvia::Task<void> webSocketTerminal(
     co_return;
 }
 
-WebSocketDispatchObservation dispatchWebSocketWith(
+inline WebSocketDispatchObservation dispatchWebSocketWith(
     const ControllerMiddlewareDescriptor& middleware) {
     ruvia::Router router;
     auto& impl = ruvia::detail::RouterImpl::from(router);
@@ -530,33 +530,33 @@ WebSocketDispatchObservation dispatchWebSocketWith(
 }
 
 // Writes a chunk (committing the stream) then throws mid-body.
-ruvia::Task<void> streamCommitThenThrow(void*, ruvia::Context& context) {
+inline ruvia::Task<void> streamCommitThenThrow(void*, ruvia::Context& context) {
     co_await context.stream().write("partial");
     throw std::runtime_error("mid-stream handler failure");
 }
 
-}  // namespace
+}  // namespace routing_test
 
-namespace {
+namespace routing_test {
 
 // Simulates the real sinks' body-suppressed commit (a HEAD request served by a
 // streaming GET route): the head commits, then the first body write raises the
 // head-only completion signal instead of accepting the chunk.
-bool g_headOnlyHandlerResumedPastFirstWrite = false;
+inline bool g_headOnlyHandlerResumedPastFirstWrite = false;
 
-ruvia::Task<void> headOnlyWrite(void* target, std::string_view) {
+inline ruvia::Task<void> headOnlyWrite(void* target, std::string_view) {
     static_cast<StreamCaptureSink*>(target)->committedFlag = true;
     throw ruvia::detail::ResponseStreamHeadOnlyComplete();
     co_return;  // unreachable
 }
 
-ruvia::ResponseStreamWriter makeHeadOnlyWriter(StreamCaptureSink& sink) noexcept {
+inline ruvia::ResponseStreamWriter makeHeadOnlyWriter(StreamCaptureSink& sink) noexcept {
     return ruvia::detail::StreamingAccess::makeResponseStreamWriter(
         &sink, &headOnlyWrite, &scEnd, &scSleep, &scBind, &scReleaseContext,
         &scCommitted, &scAborted);
 }
 
-ruvia::Task<void> headOnlyProbeStreamHandler(void*, ruvia::Context& context) {
+inline ruvia::Task<void> headOnlyProbeStreamHandler(void*, ruvia::Context& context) {
     g_chainOrder.push_back(0);
     co_await context.stream().write("event-1");
     g_headOnlyHandlerResumedPastFirstWrite = true;
@@ -570,7 +570,7 @@ struct HeadOnlyDispatchObservation final {
     bool ended{false};
 };
 
-HeadOnlyDispatchObservation dispatchHeadOnlyStream(
+inline HeadOnlyDispatchObservation dispatchHeadOnlyStream(
     std::span<const ControllerMiddlewareDescriptor> middlewares) {
     ruvia::Router router;
     auto& impl = ruvia::detail::RouterImpl::from(router);
@@ -620,32 +620,32 @@ HeadOnlyDispatchObservation dispatchHeadOnlyStream(
     return observation;
 }
 
-}  // namespace
+}  // namespace routing_test
 
-namespace {
+namespace routing_test {
 
-ruvia::Task<ruvia::HttpResponse> throwsHttpErrorHandler(void*, ruvia::Context&) {
+inline ruvia::Task<ruvia::HttpResponse> throwsHttpErrorHandler(void*, ruvia::Context&) {
     throw ruvia::HttpError(ruvia::http_status::kForbidden, "forbidden", "nope");
     co_return ruvia::HttpResponse(std::pmr::get_default_resource());  // unreachable
 }
 
-ruvia::Task<ruvia::HttpResponse> throwsGenericHandler(void*, ruvia::Context&) {
+inline ruvia::Task<ruvia::HttpResponse> throwsGenericHandler(void*, ruvia::Context&) {
     throw std::runtime_error("boom");
     co_return ruvia::HttpResponse(std::pmr::get_default_resource());  // unreachable
 }
 
-ruvia::Task<ruvia::HttpResponse> throwsProtocolErrorHandler(void*, ruvia::Context&) {
+inline ruvia::Task<ruvia::HttpResponse> throwsProtocolErrorHandler(void*, ruvia::Context&) {
     throw ruvia::HttpProtocolError(
         ruvia::http_status::kContentTooLarge,
         "request body is too large");
     co_return ruvia::HttpResponse(std::pmr::get_default_resource());  // unreachable
 }
 
-ruvia::Task<ruvia::HttpResponse> okHandler(void*, ruvia::Context& context) {
+inline ruvia::Task<ruvia::HttpResponse> okHandler(void*, ruvia::Context& context) {
     co_return context.body("ok");
 }
 
-ruvia::Task<ruvia::HttpResponse> readsRequestBodyHandler(
+inline ruvia::Task<ruvia::HttpResponse> readsRequestBodyHandler(
     void*,
     ruvia::Context& context) {
     (void)co_await context.req().text();
@@ -663,7 +663,7 @@ struct DispatchResult final {
     std::string acceptEncoding;
 };
 
-DispatchResult extractDispatchResult(const ruvia::HttpResponse& response) {
+inline DispatchResult extractDispatchResult(const ruvia::HttpResponse& response) {
     DispatchResult result;
     result.status = response.status().value();
     const auto body = ruvia::detail::responseBody(response).bytes();
@@ -679,7 +679,7 @@ DispatchResult extractDispatchResult(const ruvia::HttpResponse& response) {
 
 // Registers GET /x with `handler`, dispatches the exact wire method token and
 // path, then returns the rendered result.
-DispatchResult dispatchOneToken(
+inline DispatchResult dispatchOneToken(
     RouteHandler handler,
     std::string_view method,
     std::string_view p,
@@ -718,29 +718,29 @@ DispatchResult dispatchOneToken(
     return extractDispatchResult(future.get());  // arena still alive here
 }
 
-DispatchResult dispatchOne(RouteHandler handler, HttpKnownMethod method, std::string_view p) {
+inline DispatchResult dispatchOne(RouteHandler handler, HttpKnownMethod method, std::string_view p) {
     return dispatchOneToken(handler, ruvia::knownHttpMethodToken(method), p);
 }
 
-}  // namespace
+}  // namespace routing_test
 
-namespace {
+namespace routing_test {
 
 using ruvia::HttpErrorHandler;
 using ruvia::HttpErrorInfo;
 using ruvia::HttpNotFoundHandler;
 
-ruvia::Task<ruvia::HttpResponse> customNotFound(ruvia::Context& context) {
+inline ruvia::Task<ruvia::HttpResponse> customNotFound(ruvia::Context& context) {
     context.status(ruvia::http_status::kNotFound);
     co_return context.body("custom-not-found");
 }
 
-ruvia::Task<ruvia::HttpResponse> customError(ruvia::Context& context, HttpErrorInfo info) {
+inline ruvia::Task<ruvia::HttpResponse> customError(ruvia::Context& context, HttpErrorInfo info) {
     context.status(info.status());
     co_return context.body("custom-error");
 }
 
-DispatchResult dispatchWithHandlersToken(
+inline DispatchResult dispatchWithHandlersToken(
     RouteHandler handler, HttpErrorHandler errorH, HttpNotFoundHandler notFoundH,
     std::string_view method, std::string_view p,
     std::string_view contentEncoding = {},
@@ -784,7 +784,7 @@ DispatchResult dispatchWithHandlersToken(
     return extractDispatchResult(future.get());  // arena still alive here
 }
 
-DispatchResult dispatchWithHandlers(
+inline DispatchResult dispatchWithHandlers(
     RouteHandler handler,
     HttpErrorHandler errorH,
     HttpNotFoundHandler notFoundH,
@@ -794,28 +794,28 @@ DispatchResult dispatchWithHandlers(
         handler, errorH, notFoundH, ruvia::knownHttpMethodToken(method), p);
 }
 
-}  // namespace
+}  // namespace routing_test
 
-namespace {
+namespace routing_test {
 
-ruvia::Task<ruvia::HttpResponse> apiScopedNotFound(ruvia::Context& context) {
+inline ruvia::Task<ruvia::HttpResponse> apiScopedNotFound(ruvia::Context& context) {
     context.status(ruvia::http_status::kNotFound);
     co_return context.body("api-scope-404");
 }
 
-ruvia::Task<ruvia::HttpResponse> v2ScopedNotFound(ruvia::Context& context) {
+inline ruvia::Task<ruvia::HttpResponse> v2ScopedNotFound(ruvia::Context& context) {
     context.status(ruvia::http_status::kNotFound);
     co_return context.body("v2-scope-404");
 }
 
-ruvia::Task<ruvia::HttpResponse> apiScopedError(
+inline ruvia::Task<ruvia::HttpResponse> apiScopedError(
     ruvia::Context& context,
     HttpErrorInfo info) {
     context.status(info.status());
     co_return context.body("api-scope-error");
 }
 
-DispatchResult dispatchOn(
+inline DispatchResult dispatchOn(
     const ruvia::detail::RouteTable& table,
     std::string_view method,
     std::string_view p) {
@@ -835,27 +835,27 @@ DispatchResult dispatchOn(
     return extractDispatchResult(future.get());  // arena still alive here
 }
 
-}  // namespace
+}  // namespace routing_test
 
-namespace {
+namespace routing_test {
 
-ruvia::Task<ruvia::HttpResponse> urlForEchoHandler(void*, ruvia::Context& context) {
+inline ruvia::Task<ruvia::HttpResponse> urlForEchoHandler(void*, ruvia::Context& context) {
     co_return context.body(context.urlFor("/users/:id", {"7"}));
 }
 
-ruvia::Task<ruvia::HttpResponse> jsonModelEchoHandler(void*, ruvia::Context& context) {
+inline ruvia::Task<ruvia::HttpResponse> jsonModelEchoHandler(void*, ruvia::Context& context) {
     const auto body = co_await context.req().json<ScopedValidationRequest>();
     co_return context.body(
         body.value().has_value() ? body.value()->view() : "missing");
 }
 
-ruvia::Task<ruvia::HttpResponse> formModelEchoHandler(void*, ruvia::Context& context) {
+inline ruvia::Task<ruvia::HttpResponse> formModelEchoHandler(void*, ruvia::Context& context) {
     const auto body = co_await context.req().form<ScopedValidationRequest>();
     co_return context.body(
         body.value().has_value() ? body.value()->view() : "missing");
 }
 
-ruvia::Task<ruvia::HttpResponse> jsonIfEchoHandler(void*, ruvia::Context& context) {
+inline ruvia::Task<ruvia::HttpResponse> jsonIfEchoHandler(void*, ruvia::Context& context) {
     const auto body = co_await context.req().jsonIf<ScopedValidationRequest>();
     co_return context.body(
         body.has_value() && body->value().has_value()
@@ -863,7 +863,7 @@ ruvia::Task<ruvia::HttpResponse> jsonIfEchoHandler(void*, ruvia::Context& contex
             : "no-json");
 }
 
-ruvia::Task<ruvia::HttpResponse> formIfEchoHandler(void*, ruvia::Context& context) {
+inline ruvia::Task<ruvia::HttpResponse> formIfEchoHandler(void*, ruvia::Context& context) {
     const auto body = co_await context.req().formIf<ScopedValidationRequest>();
     co_return context.body(
         body.has_value() && body->value().has_value()
@@ -871,13 +871,13 @@ ruvia::Task<ruvia::HttpResponse> formIfEchoHandler(void*, ruvia::Context& contex
             : "no-form");
 }
 
-ruvia::Task<ruvia::HttpResponse> jsonValueIfEchoHandler(void*, ruvia::Context& context) {
+inline ruvia::Task<ruvia::HttpResponse> jsonValueIfEchoHandler(void*, ruvia::Context& context) {
     const auto body = co_await context.req().jsonIf();
     co_return context.body(std::string_view(body.has_value() ? "json" : "no-json"));
 }
 
 // Dispatches one GET /x with an optional Content-Type header and body.
-DispatchResult dispatchBodyRequest(
+inline DispatchResult dispatchBodyRequest(
     RouteHandler handler,
     std::string_view contentType,
     std::string_view body) {
@@ -914,4 +914,6 @@ DispatchResult dispatchBodyRequest(
     return extractDispatchResult(future.get());
 }
 
-}  // namespace
+}  // namespace routing_test
+
+using namespace routing_test;  // NOLINT(google-build-using-namespace)

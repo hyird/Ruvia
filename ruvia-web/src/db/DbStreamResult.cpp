@@ -31,7 +31,7 @@ Task<std::optional<DbRow>> readPoolStream(
         return (*client)->readStreamRow(slot, result, resource);
     }
 #endif
-    throwUnavailableDbBackend();
+    detail::throwUnavailableDbBackend();
 }
 
 Task<void> closePoolStream(
@@ -51,7 +51,7 @@ Task<void> closePoolStream(
         return (*client)->closeStream(slot, result, resource);
     }
 #endif
-    throwUnavailableDbBackend();
+    detail::throwUnavailableDbBackend();
 }
 
 void abortPoolStream(detail::DbPoolRef pool, std::size_t slot, void* result) noexcept {
@@ -68,67 +68,6 @@ void abortPoolStream(detail::DbPoolRef pool, std::size_t slot, void* result) noe
         (*client)->abortStream(slot, result);
     }
 #endif
-}
-
-Task<QueryResult> executeTransactionPool(
-    detail::DbPoolRef pool,
-    std::size_t slot,
-    std::pmr::string sql,
-    std::pmr::vector<DbValue> params,
-    std::pmr::memory_resource* resource) {
-#ifdef RUVIA_ENABLE_MARIADB
-    if (const auto* client = std::get_if<detail::MariaDbPool*>(&pool);
-        client != nullptr && *client != nullptr) {
-        return (*client)->executeOnTransactionSlot(
-            slot, std::move(sql), std::move(params), resource);
-    }
-#endif
-#ifdef RUVIA_ENABLE_POSTGRESQL
-    if (const auto* client = std::get_if<detail::PostgreSqlPool*>(&pool);
-        client != nullptr && *client != nullptr) {
-        return (*client)->executeOnTransactionSlot(
-            slot, std::move(sql), std::move(params), resource);
-    }
-#endif
-    throwUnavailableDbBackend();
-}
-
-Task<void> commitPoolTransaction(
-    detail::DbPoolRef pool,
-    std::size_t slot,
-    std::pmr::memory_resource* resource) {
-#ifdef RUVIA_ENABLE_MARIADB
-    if (const auto* client = std::get_if<detail::MariaDbPool*>(&pool);
-        client != nullptr && *client != nullptr) {
-        return (*client)->commitTransaction(slot, resource);
-    }
-#endif
-#ifdef RUVIA_ENABLE_POSTGRESQL
-    if (const auto* client = std::get_if<detail::PostgreSqlPool*>(&pool);
-        client != nullptr && *client != nullptr) {
-        return (*client)->commitTransaction(slot, resource);
-    }
-#endif
-    throwUnavailableDbBackend();
-}
-
-Task<void> rollbackPoolTransaction(
-    detail::DbPoolRef pool,
-    std::size_t slot,
-    std::pmr::memory_resource* resource) {
-#ifdef RUVIA_ENABLE_MARIADB
-    if (const auto* client = std::get_if<detail::MariaDbPool*>(&pool);
-        client != nullptr && *client != nullptr) {
-        return (*client)->rollbackTransaction(slot, resource);
-    }
-#endif
-#ifdef RUVIA_ENABLE_POSTGRESQL
-    if (const auto* client = std::get_if<detail::PostgreSqlPool*>(&pool);
-        client != nullptr && *client != nullptr) {
-        return (*client)->rollbackTransaction(slot, resource);
-    }
-#endif
-    throwUnavailableDbBackend();
 }
 
 }  // namespace

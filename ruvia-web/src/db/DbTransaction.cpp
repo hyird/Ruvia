@@ -14,6 +14,67 @@
 namespace ruvia {
 namespace {
 
+Task<QueryResult> executeTransactionPool(
+    detail::DbPoolRef pool,
+    std::size_t slot,
+    std::pmr::string sql,
+    std::pmr::vector<DbValue> params,
+    std::pmr::memory_resource* resource) {
+#ifdef RUVIA_ENABLE_MARIADB
+    if (const auto* client = std::get_if<detail::MariaDbPool*>(&pool);
+        client != nullptr && *client != nullptr) {
+        return (*client)->executeOnTransactionSlot(
+            slot, std::move(sql), std::move(params), resource);
+    }
+#endif
+#ifdef RUVIA_ENABLE_POSTGRESQL
+    if (const auto* client = std::get_if<detail::PostgreSqlPool*>(&pool);
+        client != nullptr && *client != nullptr) {
+        return (*client)->executeOnTransactionSlot(
+            slot, std::move(sql), std::move(params), resource);
+    }
+#endif
+    detail::throwUnavailableDbBackend();
+}
+
+Task<void> commitPoolTransaction(
+    detail::DbPoolRef pool,
+    std::size_t slot,
+    std::pmr::memory_resource* resource) {
+#ifdef RUVIA_ENABLE_MARIADB
+    if (const auto* client = std::get_if<detail::MariaDbPool*>(&pool);
+        client != nullptr && *client != nullptr) {
+        return (*client)->commitTransaction(slot, resource);
+    }
+#endif
+#ifdef RUVIA_ENABLE_POSTGRESQL
+    if (const auto* client = std::get_if<detail::PostgreSqlPool*>(&pool);
+        client != nullptr && *client != nullptr) {
+        return (*client)->commitTransaction(slot, resource);
+    }
+#endif
+    detail::throwUnavailableDbBackend();
+}
+
+Task<void> rollbackPoolTransaction(
+    detail::DbPoolRef pool,
+    std::size_t slot,
+    std::pmr::memory_resource* resource) {
+#ifdef RUVIA_ENABLE_MARIADB
+    if (const auto* client = std::get_if<detail::MariaDbPool*>(&pool);
+        client != nullptr && *client != nullptr) {
+        return (*client)->rollbackTransaction(slot, resource);
+    }
+#endif
+#ifdef RUVIA_ENABLE_POSTGRESQL
+    if (const auto* client = std::get_if<detail::PostgreSqlPool*>(&pool);
+        client != nullptr && *client != nullptr) {
+        return (*client)->rollbackTransaction(slot, resource);
+    }
+#endif
+    detail::throwUnavailableDbBackend();
+}
+
 void abortPoolTransaction(detail::DbPoolRef pool, std::size_t slot) noexcept {
 #ifdef RUVIA_ENABLE_MARIADB
     if (const auto* client = std::get_if<detail::MariaDbPool*>(&pool);
@@ -157,7 +218,5 @@ void DbTransaction::OperationGuard::finishFailed() noexcept {
     owner_->state_.finishFailed();
     owner_ = nullptr;
 }
-
-}  // namespace ruvia
 
 }  // namespace ruvia
