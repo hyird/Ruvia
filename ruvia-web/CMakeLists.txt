@@ -78,6 +78,7 @@ set(RUVIA_WEB_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/src/router/RouterIndexBuild.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/router/RouterMiddlewareDispatch.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/router/RouterRegistration.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/router/RouterUrl.cpp
 )
 
 if(RUVIA_ENABLE_MARIADB OR RUVIA_ENABLE_POSTGRESQL)
