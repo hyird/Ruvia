@@ -95,49 +95,63 @@ add_executable(ruvia_unit_tests
     http/http1/request_target.cpp
     http/http1/transfer_coding_decoding.cpp
 
-    # http/http2
-    http/http2/hpack.cpp
-    http/http2/hpack_static_table.cpp
-    http/http2/http2_classify.cpp
-    http/http2/http2_closed_streams.cpp
-    http/http2/http2_connect.cpp
-    http/http2/http2_connection_data.cpp
-    http/http2/http2_connection_flow.cpp
-    http/http2/http2_connection_headers.cpp
-    http/http2/http2_connection_session.cpp
-    http/http2/http2_connection_streams.cpp
-    http/http2/http2_connection_submit.cpp
-    http/http2/http2_flow_control.cpp
-    http/http2/http2_frame.cpp
-    http/http2/http2_frame_codec.cpp
-    http/http2/http2_frame_payload.cpp
-    http/http2/http2_header_block.cpp
-    http/http2/http2_header_list.cpp
-    http/http2/http2_header_rules.cpp
-    http/http2/http2_local_content_state.cpp
-    http/http2/http2_local_settings.cpp
-    http/http2/http2_offset_vector.cpp
-    http/http2/http2_output_buffer.cpp
-    http/http2/http2_payload.cpp
-    http/http2/http2_payload_slice.cpp
-    http/http2/http2_peer_settings.cpp
-    http/http2/http2_ready_queue.cpp
-    http/http2/http2_remote_content_state.cpp
-    http/http2/http2_request_builder.cpp
-    http/http2/http2_request_headers.cpp
-    http/http2/http2_response_headers.cpp
-    http/http2/http2_sansio_stream_runtime.cpp
-    http/http2/http2_server_flow_control.cpp
-    http/http2/http2_settings.cpp
-    http/http2/http2_stream_flow.cpp
-    http/http2/http2_stream_lifecycle.cpp
-    http/http2/http2_stream_request_data.cpp
-    http/http2/http2_stream_table.cpp
-    http/http2/http2_websocket_handshake.cpp
-    http/http2/sansio_driver_body.cpp
-    http/http2/sansio_driver_session.cpp
-    http/http2/sansio_driver_websocket.cpp
-    http/http2/sansio_tls.cpp
+    # http/http2/connection
+    http/http2/connection/http2_connection_data.cpp
+    http/http2/connection/http2_connection_flow.cpp
+    http/http2/connection/http2_connection_headers.cpp
+    http/http2/connection/http2_connection_session.cpp
+    http/http2/connection/http2_connection_streams.cpp
+    http/http2/connection/http2_connection_submit.cpp
+
+    # http/http2/flow
+    http/http2/flow/http2_flow_control.cpp
+    http/http2/flow/http2_ready_queue.cpp
+    http/http2/flow/http2_server_flow_control.cpp
+    http/http2/flow/http2_stream_flow.cpp
+
+    # http/http2/frame
+    http/http2/frame/http2_frame.cpp
+    http/http2/frame/http2_frame_codec.cpp
+    http/http2/frame/http2_frame_payload.cpp
+    http/http2/frame/http2_offset_vector.cpp
+    http/http2/frame/http2_output_buffer.cpp
+    http/http2/frame/http2_payload.cpp
+    http/http2/frame/http2_payload_slice.cpp
+
+    # http/http2/hpack
+    http/http2/hpack/hpack.cpp
+    http/http2/hpack/hpack_static_table.cpp
+    http/http2/hpack/http2_header_block.cpp
+    http/http2/hpack/http2_header_list.cpp
+
+    # http/http2/message
+    http/http2/message/http2_connect.cpp
+    http/http2/message/http2_header_rules.cpp
+    http/http2/message/http2_local_content_state.cpp
+    http/http2/message/http2_remote_content_state.cpp
+    http/http2/message/http2_request_builder.cpp
+    http/http2/message/http2_request_headers.cpp
+    http/http2/message/http2_response_headers.cpp
+    http/http2/message/http2_websocket_handshake.cpp
+
+    # http/http2/session
+    http/http2/session/http2_sansio_stream_runtime.cpp
+    http/http2/session/sansio_driver_body.cpp
+    http/http2/session/sansio_driver_session.cpp
+    http/http2/session/sansio_driver_websocket.cpp
+    http/http2/session/sansio_tls.cpp
+
+    # http/http2/settings
+    http/http2/settings/http2_local_settings.cpp
+    http/http2/settings/http2_peer_settings.cpp
+    http/http2/settings/http2_settings.cpp
+
+    # http/http2/stream
+    http/http2/stream/http2_classify.cpp
+    http/http2/stream/http2_closed_streams.cpp
+    http/http2/stream/http2_stream_lifecycle.cpp
+    http/http2/stream/http2_stream_request_data.cpp
+    http/http2/stream/http2_stream_table.cpp
 
     # http/parser
     http/parser/error.cpp
