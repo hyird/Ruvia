@@ -40,122 +40,151 @@ endfunction()
 
 if(RUVIA_BUILD_WEB)
 add_executable(ruvia_unit_tests
-    support/test_main.cpp
+    # core
+    core/pool_waiter_queue.cpp
+
+    # http/client
+    http/client/http_client_redirect.cpp
+    http/client/http_client_request.cpp
+    http/client/http_client_response_coding.cpp
+    http/client/http_client_response_exchange.cpp
+    http/client/http_client_response_framing.cpp
+    http/client/http_client_response_parser.cpp
+    http/client/http_origin.cpp
+
+    # http/coding
+    http/coding/content_codec.cpp
+    http/coding/content_negotiation.cpp
+    http/coding/http_response_content_semantics.cpp
+    http/coding/response_compression.cpp
+
+    # http/cookie
+    http/cookie/cookie_validation.cpp
+
+    # http/field
+    http/field/accept_media_type.cpp
+    http/field/conditional_request.cpp
+    http/field/connection_fields.cpp
+    http/field/date_cache.cpp
+    http/field/expectations.cpp
+    http/field/field_value_primitives.cpp
+    http/field/header_tokens.cpp
+    http/field/http_byte_range.cpp
+    http/field/http_cache.cpp
+    http/field/http_date_parsing.cpp
+    http/field/http_field_syntax.cpp
+    http/field/http_method.cpp
+    http/field/quoted_field_values.cpp
+    http/field/semicolon_parameters.cpp
 
     # http/http1
     http/http1/chunk_decoder.cpp
+    http/http1/chunk_framing.cpp
     http/http1/chunk_size.cpp
-    http/http1/form_parser.cpp
+    http/http1/chunk_trailers.cpp
     http/http1/http1_buffered_response_write.cpp
     http/http1/http1_chunked_framing.cpp
     http/http1/http1_interim_response.cpp
     http/http1/http1_parser.cpp
-    http/http1/chunk_framing.cpp
-    http/http1/chunk_trailers.cpp
-    http/http1/multipart_quoting.cpp
     http/http1/http_stream_body_reader.cpp
     http/http1/multipart.cpp
+    http/http1/multipart_quoting.cpp
     http/http1/multipart_reader.cpp
     http/http1/request_body_decoding.cpp
-    http/http1/transfer_coding_decoding.cpp
     http/http1/request_body_loader.cpp
     http/http1/request_target.cpp
+    http/http1/transfer_coding_decoding.cpp
 
-    # http/http2
-    http/http2/hpack.cpp
-    http/http2/hpack_static_table.cpp
-    http/http2/http2_buffered_response_write.cpp
-    http/http2/http2_classify.cpp
-    http/http2/http2_closed_streams.cpp
-    http/http2/http2_connect.cpp
-    http/http2/http2_connection_data.cpp
-    http/http2/http2_connection_flow.cpp
-    http/http2/http2_connection_headers.cpp
-    http/http2/http2_connection_session.cpp
-    http/http2/http2_connection_streams.cpp
-    http/http2/http2_connection_submit.cpp
-    http/http2/http2_flow_control.cpp
-    http/http2/http2_frame.cpp
-    http/http2/http2_frame_codec.cpp
-    http/http2/http2_frame_payload.cpp
-    http/http2/http2_header_block.cpp
-    http/http2/http2_header_list.cpp
-    http/http2/http2_header_rules.cpp
-    http/http2/http2_local_content_state.cpp
-    http/http2/http2_local_settings.cpp
-    http/http2/http2_offset_vector.cpp
-    http/http2/http2_output_buffer.cpp
-    http/http2/http2_payload.cpp
-    http/http2/http2_payload_slice.cpp
-    http/http2/http2_peer_settings.cpp
-    http/http2/http2_ready_queue.cpp
-    http/http2/http2_remote_content_state.cpp
-    http/http2/http2_request_builder.cpp
-    http/http2/http2_request_headers.cpp
-    http/http2/http2_response_headers.cpp
-    http/http2/http2_sansio_stream_runtime.cpp
-    http/http2/http2_server_flow_control.cpp
-    http/http2/http2_settings.cpp
-    http/http2/http2_stream_flow.cpp
-    http/http2/http2_stream_lifecycle.cpp
-    http/http2/http2_stream_request_data.cpp
-    http/http2/http2_stream_table.cpp
-    http/http2/http2_websocket_handshake.cpp
-    http/http2/sansio_driver_session.cpp
-    http/http2/sansio_driver_body.cpp
-    http/http2/sansio_driver_websocket.cpp
-    http/http2/sansio_tls.cpp
+    # http/http2/connection
+    http/http2/connection/http2_connection_data.cpp
+    http/http2/connection/http2_connection_flow.cpp
+    http/http2/connection/http2_connection_headers.cpp
+    http/http2/connection/http2_connection_session.cpp
+    http/http2/connection/http2_connection_streams.cpp
+    http/http2/connection/http2_connection_submit.cpp
 
-    # http/unit
-    http/unit/accept_media_type.cpp
-    http/unit/conditional_request.cpp
-    http/unit/connection_read_buffer.cpp
-    http/unit/content_negotiation.cpp
-    http/unit/computed_response_headers.cpp
-    http/unit/content_codec.cpp
-    http/unit/quoted_field_values.cpp
-    http/unit/content_type_match.cpp
-    http/unit/date_cache.cpp
-    http/unit/error.cpp
-    http/unit/error_response.cpp
-    http/unit/final_response_control.cpp
-    http/unit/header_block_parser.cpp
-    http/unit/header_classification.cpp
-    http/unit/semicolon_parameters.cpp
-    http/unit/connection_fields.cpp
-    http/unit/expectations.cpp
-    http/unit/header_tokens.cpp
-    http/unit/byte_encoding.cpp
-    http/unit/url_encoding.cpp
-    http/unit/number_format.cpp
-    http/unit/http_date_parsing.cpp
-    http/unit/field_value_primitives.cpp
-    http/unit/http_field_syntax.cpp
-    http/unit/http_method.cpp
-    http/unit/http_byte_range.cpp
-    http/unit/http_cache.cpp
-    http/unit/http_char_syntax.cpp
-    http/unit/http_client_redirect.cpp
-    http/unit/http_client_request.cpp
-    http/unit/http_client_response_parser.cpp
-    http/unit/http_client_response_framing.cpp
-    http/unit/http_client_response_exchange.cpp
-    http/unit/http_client_response_coding.cpp
-    http/unit/http_origin.cpp
-    http/unit/http_response.cpp
-    http/unit/http_response_body.cpp
-    http/unit/http_response_content_semantics.cpp
-    http/unit/request_access.cpp
-    http/unit/response_compression.cpp
-    http/unit/response_head_buffer.cpp
-    http/unit/response_head_emit.cpp
-    http/unit/response_head_policy.cpp
-    http/unit/response_header_access.cpp
-    http/unit/response_header_classification.cpp
-    http/unit/response_header_index_cache.cpp
-    http/unit/response_trailers.cpp
-    http/unit/static_response_headers.cpp
-    http/unit/vary_headers.cpp
+    # http/http2/flow
+    http/http2/flow/http2_flow_control.cpp
+    http/http2/flow/http2_ready_queue.cpp
+    http/http2/flow/http2_server_flow_control.cpp
+    http/http2/flow/http2_stream_flow.cpp
+
+    # http/http2/frame
+    http/http2/frame/http2_frame.cpp
+    http/http2/frame/http2_frame_codec.cpp
+    http/http2/frame/http2_frame_payload.cpp
+    http/http2/frame/http2_offset_vector.cpp
+    http/http2/frame/http2_output_buffer.cpp
+    http/http2/frame/http2_payload.cpp
+    http/http2/frame/http2_payload_slice.cpp
+
+    # http/http2/hpack
+    http/http2/hpack/hpack.cpp
+    http/http2/hpack/hpack_static_table.cpp
+    http/http2/hpack/http2_header_block.cpp
+    http/http2/hpack/http2_header_list.cpp
+
+    # http/http2/message
+    http/http2/message/http2_connect.cpp
+    http/http2/message/http2_header_rules.cpp
+    http/http2/message/http2_local_content_state.cpp
+    http/http2/message/http2_remote_content_state.cpp
+    http/http2/message/http2_request_builder.cpp
+    http/http2/message/http2_request_headers.cpp
+    http/http2/message/http2_response_headers.cpp
+    http/http2/message/http2_websocket_handshake.cpp
+
+    # http/http2/session
+    http/http2/session/http2_sansio_stream_runtime.cpp
+    http/http2/session/sansio_driver_body.cpp
+    http/http2/session/sansio_driver_session.cpp
+    http/http2/session/sansio_driver_websocket.cpp
+    http/http2/session/sansio_tls.cpp
+
+    # http/http2/settings
+    http/http2/settings/http2_local_settings.cpp
+    http/http2/settings/http2_peer_settings.cpp
+    http/http2/settings/http2_settings.cpp
+
+    # http/http2/stream
+    http/http2/stream/http2_classify.cpp
+    http/http2/stream/http2_closed_streams.cpp
+    http/http2/stream/http2_stream_lifecycle.cpp
+    http/http2/stream/http2_stream_request_data.cpp
+    http/http2/stream/http2_stream_table.cpp
+
+    # http/parser
+    http/parser/error.cpp
+    http/parser/header_block_parser.cpp
+    http/parser/header_classification.cpp
+    http/parser/http_char_syntax.cpp
+
+    # http/request
+    http/request/connection_read_buffer.cpp
+    http/request/request_access.cpp
+
+    # http/response
+    http/response/computed_response_headers.cpp
+    http/response/error_response.cpp
+    http/response/final_response_control.cpp
+    http/response/http_response.cpp
+    http/response/http_response_body.cpp
+    http/response/response_head_buffer.cpp
+    http/response/response_head_emit.cpp
+    http/response/response_head_policy.cpp
+    http/response/response_header_access.cpp
+    http/response/response_header_classification.cpp
+    http/response/response_header_index_cache.cpp
+    http/response/response_trailers.cpp
+    http/response/static_response_headers.cpp
+    http/response/vary_headers.cpp
+
+    # http/util
+    http/util/byte_encoding.cpp
+    http/util/number_format.cpp
+    http/util/pmr_string.cpp
+    http/util/url_encoding.cpp
+    http/util/url_encoding_detect.cpp
 
     # http/websocket
     http/websocket/websocket_accept.cpp
@@ -165,94 +194,113 @@ add_executable(ruvia_unit_tests
     http/websocket/websocket_deflate.cpp
     http/websocket/websocket_frame.cpp
     http/websocket/websocket_handshake.cpp
-    http/websocket/websocket_heartbeat.cpp
     http/websocket/websocket_utils.cpp
     http/websocket/websocket_validation.cpp
     http/websocket/ws_connection.cpp
 
-    # web/unit
-    web/unit/access_log.cpp
-    web/unit/config_validation.cpp
-    web/unit/conn_info.cpp
-    web/unit/context_capabilities.cpp
-    web/unit/context_cookie.cpp
-    web/unit/context_request_lookups.cpp
-    web/unit/context_parse_body.cpp
-    web/unit/context_redirect.cpp
-    web/unit/cookie_signature.cpp
-    web/unit/cookie_validation.cpp
-    web/unit/cors.cpp
-    web/unit/csrf.cpp
-    web/unit/dotenv_parser.cpp
-    web/unit/email_like.cpp
+    # support
+    support/test_main.cpp
 
-    web/unit/static_file_metadata.cpp
-    web/unit/health.cpp
-    web/unit/http_server_request_state.cpp
-    web/unit/http_server_worker_completion.cpp
-    web/unit/json.cpp
-    web/unit/json_escape.cpp
-    web/unit/json_lex.cpp
-    web/unit/json_object_fields.cpp
-    web/unit/json_size_hint.cpp
-    web/unit/json_writer.cpp
-    web/unit/model_list.cpp
-    web/unit/model_last_match.cpp
-    web/unit/model_string.cpp
-    web/unit/pattern_compiler.cpp
-    web/unit/pattern_matcher.cpp
-    web/unit/pattern_types.cpp
-    web/unit/pmr_string.cpp
-    web/unit/pool_waiter_queue.cpp
-    web/unit/rate_limit_decision.cpp
-    web/unit/request_body_limits.cpp
-    web/unit/rate_limiter.cpp
-    web/unit/regex_matcher.cpp
-    web/unit/response_stream_dispatch.cpp
-    web/unit/route_resolution.cpp
-    web/unit/routing_matching.cpp
-    web/unit/routing_middleware.cpp
-    web/unit/routing_dispatch.cpp
-    web/unit/security_headers.cpp
-    web/unit/server_options_validation.cpp
-    web/unit/session.cpp
-    web/unit/static_file_serving.cpp
-    web/unit/static_files.cpp
-    web/unit/static_path_normalization.cpp
-    web/unit/response_stream.cpp
-    web/unit/scoped_operation_lifetime.cpp
-    web/unit/sse_writer.cpp
-    web/unit/testing_facade.cpp
-    web/unit/url_encoding_detect.cpp
-    web/unit/validator.cpp
+    # web/app
+    web/app/config_validation.cpp
+    web/app/dotenv_parser.cpp
+    web/app/server_options_validation.cpp
+    web/app/testing_facade.cpp
+
+    # web/auth
+    web/auth/cookie_signature.cpp
+
+    # web/http
+    web/http/conn_info.cpp
+    web/http/context_capabilities.cpp
+    web/http/context_cookie.cpp
+    web/http/context_parse_body.cpp
+    web/http/context_redirect.cpp
+    web/http/context_request_lookups.cpp
+    web/http/cors.cpp
+    web/http/csrf.cpp
+    web/http/health.cpp
+    web/http/request_body_limits.cpp
+    web/http/response_stream.cpp
+    web/http/scoped_operation_lifetime.cpp
+    web/http/security_headers.cpp
+    web/http/session.cpp
+    web/http/sse_writer.cpp
+    web/http/static_file_metadata.cpp
+    web/http/static_file_serving.cpp
+    web/http/static_files.cpp
+    web/http/static_path_normalization.cpp
+
+    # web/http2
+    web/http2/http2_buffered_response_write.cpp
+
+    # web/json
+    web/json/json.cpp
+    web/json/json_escape.cpp
+    web/json/json_lex.cpp
+    web/json/json_object_fields.cpp
+    web/json/json_size_hint.cpp
+
+    # web/model
+    web/model/content_type_match.cpp
+    web/model/email_like.cpp
+    web/model/form_parser.cpp
+    web/model/json_writer.cpp
+    web/model/model_last_match.cpp
+    web/model/model_list.cpp
+    web/model/model_string.cpp
+    web/model/pattern_compiler.cpp
+    web/model/pattern_matcher.cpp
+    web/model/pattern_types.cpp
+    web/model/regex_matcher.cpp
+    web/model/validator.cpp
+
+    # web/ratelimit
+    web/ratelimit/rate_limit_decision.cpp
+    web/ratelimit/rate_limiter.cpp
+
+    # web/router
+    web/router/response_stream_dispatch.cpp
+    web/router/route_resolution.cpp
+    web/router/routing_dispatch.cpp
+    web/router/routing_matching.cpp
+    web/router/routing_middleware.cpp
+
+    # web/server
+    web/server/access_log.cpp
+    web/server/http_server_request_state.cpp
+    web/server/http_server_worker_completion.cpp
+
+    # web/websocket
+    web/websocket/websocket_heartbeat.cpp
 )
 
 # The JWT suite links jwtSign/jwtVerify, which only exist when the optional JWT
 # module is compiled in, so gate it on the same flag.
 if(RUVIA_ENABLE_JWT)
-    target_sources(ruvia_unit_tests PRIVATE web/unit/jwt.cpp)
+    target_sources(ruvia_unit_tests PRIVATE web/auth/jwt.cpp)
 endif()
 
 # The Redis RESP-protocol suite links appendRespCommand, gated the same way.
 if(RUVIA_ENABLE_REDIS)
     target_sources(ruvia_unit_tests PRIVATE
-        web/unit/redis_api_surface.cpp
-        web/unit/redis_protocol.cpp
+        web/redis/redis_api_surface.cpp
+        web/redis/redis_protocol.cpp
     )
 endif()
 
 # The backend-neutral API suite is present for either database driver.
 if(RUVIA_ENABLE_MARIADB OR RUVIA_ENABLE_POSTGRESQL)
-    target_sources(ruvia_unit_tests PRIVATE web/unit/db_api_surface.cpp)
+    target_sources(ruvia_unit_tests PRIVATE web/db/db_api_surface.cpp)
 endif()
 
 # Driver-specific parameter encoding is tested against the same library that
 # performs it; neither suite pulls the other backend into a single-driver build.
 if(RUVIA_ENABLE_MARIADB)
-    target_sources(ruvia_unit_tests PRIVATE web/unit/db_sql.cpp)
+    target_sources(ruvia_unit_tests PRIVATE web/db/db_sql.cpp)
 endif()
 if(RUVIA_ENABLE_POSTGRESQL)
-    target_sources(ruvia_unit_tests PRIVATE web/unit/db_postgresql.cpp)
+    target_sources(ruvia_unit_tests PRIVATE web/db/db_postgresql.cpp)
 endif()
 
 if(RUVIA_ENABLE_POSTGRESQL_INTEGRATION_TESTS)
@@ -361,7 +409,7 @@ if(RUVIA_BUILD_HTTP)
         COMMAND ${CMAKE_COMMAND}
             -P ${CMAKE_CURRENT_BINARY_DIR}/verify_http_sansio.cmake)
 
-    ruvia_add_test(ruvia_smoke_http_target http/unit/smoke_http_target.cpp LIB ruvia::http)
+    ruvia_add_test(ruvia_smoke_http_target http/smoke_http_target.cpp LIB ruvia::http)
 
     # Compile the exhaustive public/detail HTTP contract once in the normal build.
     if(MSVC)

@@ -1,0 +1,244 @@
+#pragma once
+
+#include <cstddef>
+#include <cstdint>
+#include <memory_resource>
+#include <string_view>
+#include <variant>
+
+#include "ruvia/http/HttpHeader.h"
+#include "ruvia/http/HttpKnownMethod.h"
+#include "ruvia/http/HttpProtocolError.h"
+#include "ruvia/http/HttpProtocolVersion.h"
+#include "ruvia/http/detail/request/HttpRequestAccess.h"
+#include "ruvia/http/detail/http2/message/Http2RequestHeaders.h"
+#include "ruvia/http/detail/http2/stream/Http2StreamState.h"
+#include "ruvia/http/detail/parser/HttpRequestTarget.h"
+#include "ruvia/http/detail/parser/HttpParserSyntax.h"
+#include "ruvia/http/HttpRequest.h"
+
+namespace ruvia::detail {
+
+class Http2RequestBuilder;
+
+class Http2RequestBuilt final {
+private:
+    friend class Http2RequestBuildResult;
+
+    constexpr Http2RequestBuilt() noexcept = default;
+};
+
+class Http2RequestBuildFailure final {
+public:
+    [[nodiscard]] HttpProtocolError protocolError() const noexcept {
+        switch (kind_) {
+            case Kind::kMissingMethod:
+                return HttpProtocolError(http_status::kBadRequest, "missing HTTP/2 :method");
+            case Kind::kMissingTarget:
+                return HttpProtocolError(http_status::kBadRequest, "missing HTTP/2 request target");
+            case Kind::kInvalidTarget:
+                return HttpProtocolError(http_status::kBadRequest, "invalid HTTP/2 request target");
+            case Kind::kTooManyHeaders:
+                return HttpProtocolError(http_status::kRequestHeaderFieldsTooLarge, "too many HTTP/2 request headers");
+        }
+        return HttpProtocolError(http_status::kBadRequest, "invalid HTTP/2 request");
+    }
+
+private:
+    friend class Http2RequestBuildResult;
+    friend class Http2RequestBuilder;
+
+    enum class Kind : std::uint8_t {
+        kMissingMethod,
+        kMissingTarget,
+        kInvalidTarget,
+        kTooManyHeaders
+    };
+
+    explicit constexpr Http2RequestBuildFailure(Kind kind) noexcept
+        : kind_(kind) {}
+
+    Kind kind_;
+};
+
+// Building the runtime-facing HttpRequest either completes the whole borrowed
+// message view or returns one HTTP-owned protocol failure. The private failure
+// kind prevents runtimes from reconstructing status/message mappings.
+class Http2RequestBuildResult final {
+public:
+    [[nodiscard]] constexpr const Http2RequestBuilt* built() const & noexcept {
+        return std::get_if<Http2RequestBuilt>(&value_);
+    }
+    const Http2RequestBuilt* built() const && = delete;
+
+    [[nodiscard]] constexpr const Http2RequestBuildFailure*
+    failure() const & noexcept {
+        return std::get_if<Http2RequestBuildFailure>(&value_);
+    }
+    const Http2RequestBuildFailure* failure() const && = delete;
+
+private:
+    friend class Http2RequestBuilder;
+
+    using Value = std::variant<Http2RequestBuilt, Http2RequestBuildFailure>;
+
+    explicit constexpr Http2RequestBuildResult(Http2RequestBuilt built) noexcept
+        : value_(built) {}
+
+    explicit constexpr Http2RequestBuildResult(
+        Http2RequestBuildFailure failure) noexcept
+        : value_(failure) {}
+
+    [[nodiscard]] static constexpr Http2RequestBuildResult makeBuilt() noexcept {
+        return Http2RequestBuildResult(Http2RequestBuilt());
+    }
+
+    [[nodiscard]] static constexpr Http2RequestBuildResult makeFailure(
+        Http2RequestBuildFailure::Kind kind) noexcept {
+        return Http2RequestBuildResult(Http2RequestBuildFailure(kind));
+    }
+
+    Value value_;
+};
+
+class Http2RequestBuilder final {
+public:
+    // RFC 8441 WebSocket CONNECT binds to the framework's GET route shape, but this
+    // is route selection only. The HttpRequest built below preserves wire CONNECT.
+    [[nodiscard]] static HttpKnownMethod routeMethod(const Http2StreamState& stream) noexcept {
+        const auto* pending = stream.tunnel().pending();
+        const bool websocketConnect = pending != nullptr &&
+            pending->form() == Http2ConnectForm::kExtended &&
+            stream.protocolIsWebSocket();
+        return websocketConnect ? HttpKnownMethod::kGet : stream.requestKnownMethod();
+    }
+
+    [[nodiscard]] static std::string_view requestTarget(const Http2StreamState& stream) noexcept {
+        const auto* pending = stream.tunnel().pending();
+        const bool standardConnect = pending != nullptr &&
+            pending->form() == Http2ConnectForm::kStandard;
+        return standardConnect ? stream.requestAuthority() : stream.requestPath();
+    }
+
+    [[nodiscard]] static std::string_view requestPath(const Http2StreamState& stream) noexcept {
+        return splitRequestTarget(requestTarget(stream)).path;
+    }
+
+    [[nodiscard]] static Http2RequestBuildResult build(
+        Http2StreamState& stream,
+        HttpRequest& request,
+        std::pmr::memory_resource* resource,
+        std::string_view body) noexcept {
+        HttpRequestAccess::reset(request);
+        HttpRequestAccess::setResource(request, resource);
+        const auto method = stream.requestMethod();
+        if (method.empty()) {
+            return Http2RequestBuildResult::makeFailure(
+                Http2RequestBuildFailure::Kind::kMissingMethod);
+        }
+        const auto* pending = stream.tunnel().pending();
+        const bool standardConnect = pending != nullptr &&
+            pending->form() == Http2ConnectForm::kStandard;
+        const bool extendedConnect = pending != nullptr &&
+            pending->form() == Http2ConnectForm::kExtended;
+        const auto target = requestTarget(stream);
+        if (target.empty() && (standardConnect || !stream.hasPath())) {
+            return Http2RequestBuildResult::makeFailure(
+                Http2RequestBuildFailure::Kind::kMissingTarget);
+        }
+        RequestTargetParts targetParts;
+        if (standardConnect) {
+            targetParts = splitRequestTarget(target);
+        } else if (target.empty()) {
+            const bool validEmptyTarget = stream.hasScheme() &&
+                (extendedConnect
+                    ? http2IsValidExtendedConnectPath(
+                          stream.requestScheme(), target)
+                    : http2IsValidRegularRequestPath(
+                          stream.requestKnownMethod(),
+                          stream.requestScheme(),
+                          target));
+            if (!validEmptyTarget) {
+                return Http2RequestBuildResult::makeFailure(
+                    Http2RequestBuildFailure::Kind::kInvalidTarget);
+            }
+            targetParts = RequestTargetParts{};
+        } else {
+            RequestTargetView targetView;
+            // Extended CONNECT retains normal :scheme/:path target components. GET
+            // is used only to select the origin-form target grammar; it does not
+            // overwrite the wire method stored on HttpRequest.
+            const auto targetMethod = extendedConnect
+                ? HttpKnownMethod::kGet
+                : stream.requestKnownMethod();
+            if (!parseRequestTarget(targetMethod, target, targetView)) {
+                return Http2RequestBuildResult::makeFailure(
+                    Http2RequestBuildFailure::Kind::kInvalidTarget);
+            }
+            targetParts = RequestTargetParts{.path = targetView.path, .queryString = targetView.query};
+        }
+
+        HttpRequestAccess::setMethod(request, method);
+        HttpRequestAccess::setProtocolVersion(
+            request, HttpProtocolVersion::kHttp2);
+        HttpRequestAccess::setTarget(request, target);
+        HttpRequestAccess::setPath(request, targetParts.path);
+        HttpRequestAccess::setQueryString(request, targetParts.queryString);
+        HttpRequestAccess::setBody(request, body);
+
+        for (std::size_t i = 0; i < stream.requestHeaderCount(); ++i) {
+            const auto header = stream.requestHeaderAt(i);
+            if (!addHeader(request, header.name, header.value, header.kind)) {
+                return Http2RequestBuildResult::makeFailure(
+                    Http2RequestBuildFailure::Kind::kTooManyHeaders);
+            }
+        }
+        const auto authority = stream.requestAuthority();
+        // A non-HTTP target can carry RFC 3986 userinfo or another authority
+        // value that is not legal Host syntax. Never manufacture an invalid
+        // regular field from that distinct pseudo-header grammar.
+        if (!stream.hasHost() && isValidHostHeader(authority)) {
+            if (!addHeader(request, "host", authority, RequestHeaderKind::kHost)) {
+                return Http2RequestBuildResult::makeFailure(
+                    Http2RequestBuildFailure::Kind::kTooManyHeaders);
+            }
+        }
+        if (stream.hasCookie()) {
+            if (!addHeader(request, "cookie", stream.requestCookie(), RequestHeaderKind::kCookie)) {
+                return Http2RequestBuildResult::makeFailure(
+                    Http2RequestBuildFailure::Kind::kTooManyHeaders);
+            }
+        }
+        return Http2RequestBuildResult::makeBuilt();
+    }
+
+private:
+    struct RequestTargetParts final {
+        std::string_view path;
+        std::string_view queryString;
+    };
+
+    [[nodiscard]] static RequestTargetParts splitRequestTarget(std::string_view target) noexcept {
+        if (target == "*") {
+            return RequestTargetParts{.path = "*", .queryString = {}};
+        }
+        const auto query = target.find('?');
+        if (query == std::string_view::npos) {
+            return RequestTargetParts{.path = target, .queryString = {}};
+        }
+        return RequestTargetParts{.path = target.substr(0, query), .queryString = target.substr(query + 1)};
+    }
+
+    static bool addHeader(
+        HttpRequest& request,
+        std::string_view name,
+        std::string_view value,
+        RequestHeaderKind kind) noexcept {
+        return HttpRequestAccess::addHeader(
+            request,
+            HttpHeaderView{name, value},
+            requestHeaderKindKnownSlot(kind));
+    }
+};
+
+}  // namespace ruvia::detail

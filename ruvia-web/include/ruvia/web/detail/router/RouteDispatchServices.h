@@ -4,8 +4,8 @@
 
 #include "ruvia/web/Context.h"
 #include "ruvia/web/ErrorHandlers.h"
-#include "ruvia/web/detail/http/ContextAccess.h"
-#include "ruvia/web/detail/http/ContextServices.h"
+#include "ruvia/web/detail/http/context/ContextAccess.h"
+#include "ruvia/web/detail/http/context/ContextServices.h"
 #include "ruvia/web/detail/router/RouteTable.h"
 
 namespace ruvia {

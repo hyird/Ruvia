@@ -1,9 +1,9 @@
 #include "ruvia/web/detail/router/RouteTable.h"
 
-#include "ruvia/web/detail/http/ContextAccess.h"
+#include "ruvia/web/detail/http/context/ContextAccess.h"
 #include "ruvia/web/detail/server/stream/HttpResponseStreamState.h"
 #include "ruvia/web/Error.h"
-#include "ruvia/web/detail/http/HttpErrorResponse.h"
+#include "ruvia/web/detail/http/error/HttpErrorResponse.h"
 
 #include <exception>
 #include <memory>

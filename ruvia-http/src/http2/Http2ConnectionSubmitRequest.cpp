@@ -9,9 +9,9 @@
 #include "ruvia/http/detail/field/HttpHeaderSectionSize.h"
 #include "ruvia/http/detail/field/HttpMediaType.h"
 #include "ruvia/http/detail/coding/HttpRequestContentSemantics.h"
-#include "ruvia/http/detail/http2/Http2HeaderRules.h"
-#include "ruvia/http/detail/http2/Http2RequestHeaders.h"
-#include "ruvia/http/detail/http2/Http2WebSocketHandshake.h"
+#include "ruvia/http/detail/http2/message/Http2HeaderRules.h"
+#include "ruvia/http/detail/http2/message/Http2RequestHeaders.h"
+#include "ruvia/http/detail/http2/message/Http2WebSocketHandshake.h"
 #include "ruvia/http/detail/parser/HttpRequestTarget.h"
 #include "ruvia/http/detail/websocket/HttpWebSocketHandshakeFields.h"
 

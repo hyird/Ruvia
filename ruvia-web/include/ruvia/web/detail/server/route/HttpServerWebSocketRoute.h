@@ -8,7 +8,7 @@
 #include "ruvia/web/detail/websocket/HttpWebSocketSession.h"
 #include "ruvia/web/detail/websocket/HttpWebSocketSocketTransport.h"
 #include "ruvia/web/detail/websocket/HttpWebSocketHandshake.h"
-#include "ruvia/web/detail/http/HttpProtocolErrorInfo.h"
+#include "ruvia/web/detail/http/error/HttpProtocolErrorInfo.h"
 #include "ruvia/http/detail/websocket/HttpWebSocketHandshakeValidation.h"
 #include "ruvia/http/detail/http1/Http1ServerRequestParser.h"
 #include "ruvia/web/detail/router/RouteTable.h"

@@ -1,7 +1,7 @@
 #pragma once
 
 #include "ruvia/web/ModelTypes.h"
-#include "ruvia/web/detail/model/JsonWriter.h"
+#include "ruvia/web/detail/model/parse/JsonWriter.h"
 #include "ruvia/core/memory/PmrResource.h"
 
 #include <memory_resource>

@@ -11,7 +11,7 @@
 
 #include "ruvia/core/detail/io/ConnectionScanner.h"
 #include "ruvia/http/detail/request/HttpRequestAccess.h"
-#include "ruvia/web/detail/http/HttpProtocolErrorInfo.h"
+#include "ruvia/web/detail/http/error/HttpProtocolErrorInfo.h"
 #include "ruvia/web/detail/server/http1/Http1SessionRequestCompletion.h"
 #include "ruvia/web/detail/server/http1/Http1ClosingRejection.h"
 #include "ruvia/web/detail/server/HttpBufferedResponse.h"

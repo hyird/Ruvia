@@ -1,5 +1,5 @@
-#include "ruvia/http/detail/http2/Http2Hpack.h"
-#include "ruvia/http/detail/http2/Http2HpackHuffmanTables.h"
+#include "ruvia/http/detail/http2/hpack/Http2Hpack.h"
+#include "ruvia/http/detail/http2/hpack/Http2HpackHuffmanTables.h"
 
 #include <array>
 #include <cstddef>

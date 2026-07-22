@@ -1,6 +1,6 @@
 #include "ruvia/web/RateLimit.h"
 
-#include "ruvia/web/detail/http/ContextAccess.h"
+#include "ruvia/web/detail/http/context/ContextAccess.h"
 #include "ruvia/web/detail/ratelimit/RateLimitKey.h"
 #include "ruvia/web/detail/ratelimit/RateLimitDecision.h"
 

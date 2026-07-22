@@ -1,4 +1,4 @@
-#include "ruvia/http/detail/http2/Http2OutputBuffer.h"
+#include "ruvia/http/detail/http2/frame/Http2OutputBuffer.h"
 
 #include <array>
 #include <utility>

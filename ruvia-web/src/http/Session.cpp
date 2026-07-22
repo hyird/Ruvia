@@ -1,7 +1,7 @@
 #include "ruvia/web/detail/http/SessionAccess.h"
 
 #include "ruvia/web/Session.h"
-#include "ruvia/web/detail/http/ContextAccess.h"
+#include "ruvia/web/detail/http/context/ContextAccess.h"
 
 #ifdef RUVIA_ENABLE_REDIS
 

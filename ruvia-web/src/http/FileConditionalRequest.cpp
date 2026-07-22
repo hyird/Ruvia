@@ -1,4 +1,4 @@
-#include "ruvia/web/detail/http/FileConditionalRequest.h"
+#include "ruvia/web/detail/http/static/FileConditionalRequest.h"
 
 #include "ruvia/http/detail/field/HeaderTokenUtils.h"
 #include "ruvia/http/detail/field/HttpConditionalRequest.h"

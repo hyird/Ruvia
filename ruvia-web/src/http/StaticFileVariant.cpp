@@ -1,8 +1,8 @@
-#include "ruvia/web/detail/http/StaticFileVariant.h"
+#include "ruvia/web/detail/http/static/StaticFileVariant.h"
 
 #include "ruvia/http/detail/coding/HttpAcceptEncoding.h"
 #include "ruvia/http/detail/request/HttpRequestAccess.h"
-#include "ruvia/web/detail/http/StaticFileMetadata.h"
+#include "ruvia/web/detail/http/static/StaticFileMetadata.h"
 
 namespace ruvia {
 

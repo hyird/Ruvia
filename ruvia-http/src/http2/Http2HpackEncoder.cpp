@@ -1,5 +1,5 @@
-#include "ruvia/http/detail/http2/Http2Hpack.h"
-#include "ruvia/http/detail/http2/Http2HpackStaticTable.h"
+#include "ruvia/http/detail/http2/hpack/Http2Hpack.h"
+#include "ruvia/http/detail/http2/hpack/Http2HpackStaticTable.h"
 
 namespace ruvia::detail {
 

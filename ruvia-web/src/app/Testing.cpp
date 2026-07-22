@@ -20,7 +20,7 @@
 #include "ruvia/web/Router.h"
 #include "ruvia/web/Dotenv.h"
 #include "ruvia/web/detail/controller/ControllerRuntime.h"
-#include "ruvia/web/detail/http/ContextServices.h"
+#include "ruvia/web/detail/http/context/ContextServices.h"
 #include "ruvia/web/detail/router/RouterImpl.h"
 
 namespace ruvia {

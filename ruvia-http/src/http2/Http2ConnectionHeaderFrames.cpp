@@ -4,11 +4,11 @@
 #include <optional>
 #include <string_view>
 
-#include "ruvia/http/detail/http2/Http2FramePayload.h"
-#include "ruvia/http/detail/http2/Http2HeaderBlock.h"
-#include "ruvia/http/detail/http2/Http2HeaderRules.h"
-#include "ruvia/http/detail/http2/Http2RemoteReceiveSemantics.h"
-#include "ruvia/http/detail/http2/Http2RequestHeaders.h"
+#include "ruvia/http/detail/http2/frame/Http2FramePayload.h"
+#include "ruvia/http/detail/http2/hpack/Http2HeaderBlock.h"
+#include "ruvia/http/detail/http2/message/Http2HeaderRules.h"
+#include "ruvia/http/detail/http2/message/Http2RemoteReceiveSemantics.h"
+#include "ruvia/http/detail/http2/message/Http2RequestHeaders.h"
 
 // HEADERS and CONTINUATION as they arrive: padding and priority framing, whether
 // this stream may open at all, and keeping a header block contiguous until its
