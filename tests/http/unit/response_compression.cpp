@@ -14,7 +14,7 @@
 #include "ruvia/http/detail/http1/Http1ServerRequestParser.h"
 #include "ruvia/web/detail/server/HttpBufferedResponse.h"
 #include "ruvia/web/detail/server/HttpResponseCompression.h"
-#include "ruvia/http/detail/HeaderAcceptUtils.h"
+#include "ruvia/http/detail/HttpContentCoding.h"
 #include "ruvia/http/detail/HttpResponseBodyAccess.h"
 #include "ruvia/http/detail/server/HttpResponseWritePlan.h"
 

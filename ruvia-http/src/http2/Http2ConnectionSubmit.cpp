@@ -5,7 +5,7 @@
 #include <charconv>
 #include <utility>
 
-#include "ruvia/http/detail/HeaderAcceptUtils.h"
+#include "ruvia/http/detail/HttpMediaType.h"
 #include "ruvia/http/detail/HttpCorsFields.h"
 #include "ruvia/http/detail/HttpExpectations.h"
 #include "ruvia/http/detail/HttpHeaderSectionSize.h"

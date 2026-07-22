@@ -6,7 +6,7 @@
 #include "ruvia/http/HttpHeader.h"
 #include "ruvia/http/HttpInterimResponse.h"
 #include "ruvia/http/detail/AsciiCase.h"
-#include "ruvia/http/detail/HeaderAcceptUtils.h"
+#include "ruvia/http/detail/HttpMediaType.h"
 #include "ruvia/http/detail/HttpContentCoding.h"
 #include "ruvia/http/detail/HttpResponseHeaderBits.h"
 #include "ruvia/http/detail/HttpResponseKnownHeaders.h"

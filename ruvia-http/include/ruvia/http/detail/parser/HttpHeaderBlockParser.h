@@ -4,7 +4,7 @@
 #include "ruvia/http/detail/HttpContentLength.h"
 #include "ruvia/http/detail/HttpExpectations.h"
 #include "ruvia/http/detail/HttpTransferEncoding.h"
-#include "ruvia/http/detail/HeaderAcceptUtils.h"
+#include "ruvia/http/detail/HttpAcceptEncoding.h"
 #include "ruvia/http/detail/parser/HttpParserSyntax.h"
 #include "ruvia/http/HttpHeader.h"
 #include "ruvia/http/HttpLimits.h"

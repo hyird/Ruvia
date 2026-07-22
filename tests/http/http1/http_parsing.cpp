@@ -11,7 +11,9 @@
 
 #include <zstd.h>
 
-#include "ruvia/http/detail/HeaderAcceptUtils.h"
+#include "ruvia/http/detail/HttpAcceptEncoding.h"
+#include "ruvia/http/detail/HttpAcceptMediaType.h"
+#include "ruvia/http/detail/HttpContentCoding.h"
 #include "ruvia/http/detail/HeaderTokenUtils.h"
 #include "ruvia/http/detail/parser/HttpChunkParser.h"
 #include "ruvia/http/detail/MultipartParsing.h"

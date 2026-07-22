@@ -5,7 +5,7 @@
 #include <system_error>
 #include <variant>
 
-#include "ruvia/http/detail/HeaderAcceptUtils.h"
+#include "ruvia/http/detail/HttpMediaType.h"
 #include "ruvia/http/detail/HeaderTokenUtils.h"
 #include "ruvia/http/detail/HttpConnectionFields.h"
 #include "ruvia/http/detail/HttpContentCoding.h"

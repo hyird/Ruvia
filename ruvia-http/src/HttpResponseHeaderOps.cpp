@@ -1,7 +1,7 @@
 #include "ruvia/http/HttpResponse.h"
 #include "ruvia/http/HttpKnownMethod.h"
 
-#include "ruvia/http/detail/HeaderAcceptUtils.h"
+#include "ruvia/http/detail/HttpMediaType.h"
 #include "ruvia/http/detail/HttpConnectionFields.h"
 #include "ruvia/http/detail/HttpContentCoding.h"
 #include "ruvia/http/detail/HttpNumberFormat.h"

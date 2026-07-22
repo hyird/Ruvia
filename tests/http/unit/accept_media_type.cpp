@@ -5,7 +5,8 @@
 #include <vector>
 
 #include "ruvia/web/detail/http/ContextInternal.h"
-#include "ruvia/http/detail/HeaderAcceptUtils.h"
+#include "ruvia/http/detail/HttpAcceptMediaType.h"
+#include "ruvia/http/detail/HttpQualityValue.h"
 #include "ruvia/http/detail/HttpRequestInternal.h"
 #include "ruvia/web/Context.h"
 #include "ruvia/core/memory/MemoryPool.h"

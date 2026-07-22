@@ -35,7 +35,8 @@
 #include <ruvia/http/detail/AsciiCase.h>
 #include <ruvia/http/detail/BorrowedView.h>
 #include <ruvia/http/detail/CookieValidation.h>
-#include <ruvia/http/detail/HeaderAcceptUtils.h>
+#include <ruvia/http/detail/HttpMediaType.h>
+#include <ruvia/http/detail/HttpQualityValue.h>
 #include <ruvia/http/detail/HeaderTokenUtils.h>
 #include <ruvia/http/detail/HttpByteRange.h>
 #include <ruvia/http/detail/HttpContentCoding.h>

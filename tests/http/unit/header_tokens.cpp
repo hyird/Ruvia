@@ -5,7 +5,8 @@
 #include <string_view>
 #include <utility>
 
-#include "ruvia/http/detail/HeaderAcceptUtils.h"
+#include "ruvia/http/detail/HttpMediaType.h"
+#include "ruvia/http/detail/HttpQualityValue.h"
 #include "ruvia/http/detail/HeaderTokenUtils.h"
 #include "ruvia/http/detail/HttpConnectionFields.h"
 #include "ruvia/http/detail/HttpEntityTag.h"
