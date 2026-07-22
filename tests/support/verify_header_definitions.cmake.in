@@ -10,10 +10,16 @@ set(_source_root "@CMAKE_SOURCE_DIR@")
 # on its own cannot either: the definition is well-formed, and only the linker
 # ever sees the second copy. So this reads the headers.
 #
+# The same applies to a namespace-scope constant: without inline, every
+# translation unit gets its own copy, which is silent rather than a link error.
+# The tree spells these inline constexpr in 179 places; the guard keeps it that
+# way.
+#
 # Definitions inside a class body are implicitly inline and are not flagged;
 # only column-zero definitions are examined.
 
 set(_definition_pattern "^[A-Za-z_][^ \t].*\\(.*\\)[^;]*{[ \t]*$")
+set(_variable_pattern "^(constexpr|const)[ \t].*=.*;[ \t]*$")
 set(_exempt_pattern "(^|[^A-Za-z_])(inline|constexpr|consteval|static|template|if|for|while|switch|catch|else|return)([^A-Za-z_]|$)")
 
 # Self-test: the pattern must match the shape that has actually gone wrong here,
@@ -29,6 +35,19 @@ string(REGEX MATCH "${_exempt_pattern}" _probe_exempt "${_probe}")
 if(_probe_exempt)
     message(FATAL_ERROR
         "ruvia_guard_header_definitions self-test failed: the probe is treated as exempt")
+endif()
+
+set(_variable_probe "constexpr std::size_t kResponseHeadStackBytes = 512;")
+string(REGEX MATCH "${_variable_pattern}" _variable_match "${_variable_probe}")
+if(NOT _variable_match)
+    message(FATAL_ERROR
+        "ruvia_guard_header_definitions self-test failed: the constant pattern lost its probe")
+endif()
+string(REGEX MATCH "${_variable_pattern}" _inline_variable
+    "inline constexpr std::size_t kResponseHeadStackBytes = 512;")
+if(_inline_variable)
+    message(FATAL_ERROR
+        "ruvia_guard_header_definitions self-test failed: an inline constant is reported")
 endif()
 
 set(_safe_lines
@@ -65,6 +84,11 @@ foreach(_header IN LISTS _headers)
     file(STRINGS "${_header}" _lines)
     set(_previous "")
     foreach(_line IN LISTS _lines)
+        string(REGEX MATCH "${_variable_pattern}" _variable "${_line}")
+        if(_variable)
+            file(RELATIVE_PATH _relative "${_source_root}" "${_header}")
+            list(APPEND _violations "${_relative}: ${_line}")
+        endif()
         string(REGEX MATCH "${_definition_pattern}" _shape "${_line}")
         if(_shape)
             string(REGEX MATCH "${_exempt_pattern}" _exempt "${_line}")
@@ -88,12 +112,12 @@ if(_violations)
     list(JOIN _violations "\n  " _violation_text)
     list(LENGTH _violations _violation_count)
     message(FATAL_ERROR
-        "${_violation_count} header definition(s) link only while one translation "
-        "unit includes them:\n  ${_violation_text}\n"
-        "Mark the definition inline, make it a template, or move it into a source file.")
+        "${_violation_count} header definition(s) are not shared across translation "
+        "units:\n  ${_violation_text}\n"
+        "Mark it inline, make it a template, or move it into a source file.")
 endif()
 
 list(LENGTH _headers _header_count)
 message(STATUS
     "ruvia_guard_header_definitions: ${_header_count} headers, every namespace-scope "
-    "definition is inline, constexpr or a template")
+    "definition and constant is shared across translation units")
