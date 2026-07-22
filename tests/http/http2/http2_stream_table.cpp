@@ -6,7 +6,7 @@
 #include <utility>
 #include <vector>
 
-#include "ruvia/http/detail/http2/Http2StreamTable.h"
+#include "ruvia/http/detail/http2/stream/Http2StreamTable.h"
 
 namespace {
 

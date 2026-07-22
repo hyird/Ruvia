@@ -5,7 +5,7 @@
 #include <string_view>
 
 #include "ruvia/http/detail/request/HttpRequestAccess.h"
-#include "ruvia/http/detail/http2/Http2RequestBuilder.h"
+#include "ruvia/http/detail/http2/message/Http2RequestBuilder.h"
 
 namespace {
 

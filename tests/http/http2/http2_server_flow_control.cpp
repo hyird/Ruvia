@@ -23,11 +23,11 @@
 #include <string_view>
 #include <vector>
 
-#include "ruvia/http/detail/http2/Http2FrameCodec.h"
-#include "ruvia/http/detail/http2/Http2FrameTypes.h"
-#include "ruvia/http/detail/http2/Http2Hpack.h"
-#include "ruvia/http/detail/http2/Http2LocalSettings.h"
-#include "ruvia/http/detail/http2/Http2ReceiveWindowCredit.h"
+#include "ruvia/http/detail/http2/frame/Http2FrameCodec.h"
+#include "ruvia/http/detail/http2/frame/Http2FrameTypes.h"
+#include "ruvia/http/detail/http2/hpack/Http2Hpack.h"
+#include "ruvia/http/detail/http2/settings/Http2LocalSettings.h"
+#include "ruvia/http/detail/http2/flow/Http2ReceiveWindowCredit.h"
 #include "ruvia/http/detail/response/HttpResponseFileAccess.h"
 // The production session header owns every declaration needed by its templates;
 // this test intentionally must not rely on a server-wide include-order umbrella.

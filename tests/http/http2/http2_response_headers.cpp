@@ -11,9 +11,9 @@
 #include <utility>
 #include <vector>
 
-#include "ruvia/http/detail/http2/Http2Hpack.h"
-#include "ruvia/http/detail/http2/Http2ResponseHeaders.h"
-#include "ruvia/http/detail/http2/Http2StreamState.h"
+#include "ruvia/http/detail/http2/hpack/Http2Hpack.h"
+#include "ruvia/http/detail/http2/message/Http2ResponseHeaders.h"
+#include "ruvia/http/detail/http2/stream/Http2StreamState.h"
 #include "ruvia/http/detail/server/HttpFinalResponseControlPlan.h"
 #include "ruvia/http/HttpInterimResponse.h"
 #include "ruvia/http/HttpLimits.h"

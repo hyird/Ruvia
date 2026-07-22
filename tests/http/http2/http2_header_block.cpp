@@ -5,8 +5,8 @@
 #include <string>
 #include <string_view>
 
-#include "ruvia/http/detail/http2/Http2HeaderBlock.h"
-#include "ruvia/http/detail/http2/Http2HeaderContinuation.h"
+#include "ruvia/http/detail/http2/hpack/Http2HeaderBlock.h"
+#include "ruvia/http/detail/http2/hpack/Http2HeaderContinuation.h"
 
 namespace {
 

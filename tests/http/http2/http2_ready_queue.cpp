@@ -2,7 +2,7 @@
 
 #include <cstdint>
 
-#include "ruvia/http/detail/http2/Http2ReadyQueue.h"
+#include "ruvia/http/detail/http2/flow/Http2ReadyQueue.h"
 
 namespace {
 

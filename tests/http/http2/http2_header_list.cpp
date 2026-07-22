@@ -7,7 +7,7 @@
 #include <utility>
 #include <vector>
 
-#include "ruvia/http/detail/http2/Http2HeaderList.h"
+#include "ruvia/http/detail/http2/hpack/Http2HeaderList.h"
 
 namespace {
 

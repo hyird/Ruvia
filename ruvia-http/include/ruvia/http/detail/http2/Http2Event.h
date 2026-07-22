@@ -6,8 +6,8 @@
 #include <utility>
 #include <variant>
 
-#include "ruvia/http/detail/http2/Http2FrameTypes.h"
-#include "ruvia/http/detail/http2/Http2StreamCloseSource.h"
+#include "ruvia/http/detail/http2/frame/Http2FrameTypes.h"
+#include "ruvia/http/detail/http2/stream/Http2StreamCloseSource.h"
 
 namespace ruvia::detail {
 

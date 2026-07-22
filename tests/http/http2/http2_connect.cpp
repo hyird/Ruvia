@@ -10,11 +10,11 @@
 #include <type_traits>
 
 #include "ruvia/http/detail/http2/Http2Connection.h"
-#include "ruvia/http/detail/http2/Http2FrameCodec.h"
-#include "ruvia/http/detail/http2/Http2Hpack.h"
-#include "ruvia/http/detail/http2/Http2TunnelState.h"
-#include "ruvia/http/detail/http2/Http2WebSocketHandshake.h"
-#include "ruvia/http/detail/http2/Http2WindowUpdate.h"
+#include "ruvia/http/detail/http2/frame/Http2FrameCodec.h"
+#include "ruvia/http/detail/http2/hpack/Http2Hpack.h"
+#include "ruvia/http/detail/http2/stream/Http2TunnelState.h"
+#include "ruvia/http/detail/http2/message/Http2WebSocketHandshake.h"
+#include "ruvia/http/detail/http2/flow/Http2WindowUpdate.h"
 
 namespace {
 

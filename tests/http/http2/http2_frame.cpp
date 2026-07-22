@@ -5,8 +5,8 @@
 #include <string>
 #include <string_view>
 
-#include "ruvia/http/detail/http2/Http2FrameCodec.h"
-#include "ruvia/http/detail/http2/Http2FlowControl.h"
+#include "ruvia/http/detail/http2/frame/Http2FrameCodec.h"
+#include "ruvia/http/detail/http2/flow/Http2FlowControl.h"
 
 namespace {
 

@@ -4,7 +4,7 @@
 #include <string>
 #include <string_view>
 
-#include "ruvia/http/detail/http2/Http2FramePayload.h"
+#include "ruvia/http/detail/http2/frame/Http2FramePayload.h"
 
 namespace {
 

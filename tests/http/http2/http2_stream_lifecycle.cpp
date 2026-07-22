@@ -5,7 +5,7 @@
 #include <type_traits>
 #include <utility>
 
-#include "ruvia/http/detail/http2/Http2StreamState.h"
+#include "ruvia/http/detail/http2/stream/Http2StreamState.h"
 
 namespace {
 

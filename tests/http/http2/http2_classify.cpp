@@ -4,8 +4,8 @@
 #include <memory_resource>
 #include <string_view>
 
-#include "ruvia/http/detail/http2/Http2HeaderContinuation.h"
-#include "ruvia/http/detail/http2/Http2HeaderDecode.h"
+#include "ruvia/http/detail/http2/hpack/Http2HeaderContinuation.h"
+#include "ruvia/http/detail/http2/hpack/Http2HeaderDecode.h"
 #include "ruvia/web/detail/http2/CleartextUpgrade.h"
 
 namespace {

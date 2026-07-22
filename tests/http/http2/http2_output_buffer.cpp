@@ -7,8 +7,8 @@
 #include <string_view>
 #include <utility>
 
-#include "ruvia/http/detail/http2/Http2FrameCodec.h"
-#include "ruvia/http/detail/http2/Http2OutputBuffer.h"
+#include "ruvia/http/detail/http2/frame/Http2FrameCodec.h"
+#include "ruvia/http/detail/http2/frame/Http2OutputBuffer.h"
 
 namespace {
 

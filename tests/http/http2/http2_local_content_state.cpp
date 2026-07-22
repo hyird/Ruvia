@@ -4,7 +4,7 @@
 #include <cstddef>
 #include <cstdint>
 
-#include "ruvia/http/detail/http2/Http2LocalContentState.h"
+#include "ruvia/http/detail/http2/message/Http2LocalContentState.h"
 
 namespace {
 

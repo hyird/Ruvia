@@ -5,7 +5,7 @@
 #include <limits>
 #include <type_traits>
 
-#include "ruvia/http/detail/http2/Http2RemoteContentState.h"
+#include "ruvia/http/detail/http2/message/Http2RemoteContentState.h"
 
 namespace {
 

@@ -4,7 +4,7 @@
 #include <string>
 #include <vector>
 
-#include "ruvia/http/detail/http2/Http2OffsetVector.h"
+#include "ruvia/http/detail/http2/frame/Http2OffsetVector.h"
 
 namespace {
 

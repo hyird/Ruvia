@@ -1,7 +1,7 @@
 #pragma once
 
 #include "ruvia/http/detail/http1/Http1ServerRequestParser.h"
-#include "ruvia/http/detail/http2/Http2FrameTypes.h"
+#include "ruvia/http/detail/http2/frame/Http2FrameTypes.h"
 #include "ruvia/web/detail/http2/Http2SansIoSession.h"
 #include "ruvia/web/detail/server/HttpServerOptions.h"
 #include "ruvia/web/detail/router/RouteTable.h"

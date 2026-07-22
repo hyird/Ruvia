@@ -8,7 +8,7 @@
 #include <string_view>
 #include <utility>
 
-#include "ruvia/http/detail/http2/Http2RequestHeaders.h"
+#include "ruvia/http/detail/http2/message/Http2RequestHeaders.h"
 
 namespace {
 

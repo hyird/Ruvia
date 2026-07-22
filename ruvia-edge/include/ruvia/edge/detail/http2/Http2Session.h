@@ -22,7 +22,7 @@
 #include "ruvia/http/ProtocolByteLimit.h"
 #include "ruvia/http/detail/http2/Http2Connection.h"
 #include "ruvia/http/detail/http2/Http2Event.h"
-#include "ruvia/http/detail/http2/Http2RequestBuilder.h"
+#include "ruvia/http/detail/http2/message/Http2RequestBuilder.h"
 
 // The HTTP/2 client session: one reader loop draining connection events, one
 // writer coroutine owning all output, and one detached handler per stream. A

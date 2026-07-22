@@ -6,7 +6,7 @@
 #include <string_view>
 #include <utility>
 
-#include "ruvia/http/detail/http2/Http2PayloadSlice.h"
+#include "ruvia/http/detail/http2/frame/Http2PayloadSlice.h"
 
 namespace {
 

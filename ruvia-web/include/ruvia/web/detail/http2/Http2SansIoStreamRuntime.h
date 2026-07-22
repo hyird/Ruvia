@@ -14,7 +14,7 @@
 #include "ruvia/core/Task.h"
 #include "ruvia/core/memory/PmrObject.h"
 #include "ruvia/core/memory/PmrResource.h"
-#include "ruvia/http/detail/http2/Http2StreamState.h"
+#include "ruvia/http/detail/http2/stream/Http2StreamState.h"
 #include "ruvia/web/detail/http2/Http2SansIoRequestBody.h"
 #include "ruvia/web/detail/http2/Http2SansIoStreamSignal.h"
 #include "ruvia/web/detail/http2/Http2SansIoTermination.h"
