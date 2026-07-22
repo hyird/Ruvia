@@ -1,6 +1,7 @@
 #pragma once
 
 #include "ruvia/core/detail/io/ConnectionScanner.h"
+#include "ruvia/web/detail/server/route/Http1RouteDispatch.h"
 #include "ruvia/web/detail/server/http1/Http1SessionRequestCompletion.h"
 #include "ruvia/web/detail/server/response/HttpServerResponseState.h"
 #include "ruvia/web/detail/server/HttpServerOptions.h"
@@ -22,36 +23,29 @@
 
 namespace ruvia::detail {
 
+
 // A rejected upgrade returns the exact HTTP/1 request completion that the
 // session must write and clean up. A successful upgrade transfers transport
 // ownership to the WebSocket session, so no HTTP request completion remains.
 template <typename Stream>
 Task<std::optional<Http1SessionRequestCompletion>> dispatchHttpWebSocketRoute(
-    Stream& stream,
-    WorkerMemory& memory,
-    ConnectionScanner::Entry& scannerEntry,
-    const Http1ServerRequestParseState& parsed,
+    Http1RouteDispatch<Stream> d,
     const ResolvedRoute& resolved,
-    const RouteTable& routes,
-    RequestMemory& requestMemory,
-    ContextServices baseRouteServices,
-    const HttpServerOptions& options,
-    std::string_view pendingFrames,
-    HttpResponse& response) {
+    std::string_view pendingFrames) {
     const auto handshakeValidation = validateHttp1WebSocketHandshake(
-        parsed.request,
-        parsed.bodyPlan);
+        d.parsed.request,
+        d.parsed.bodyPlan);
     if (const auto* failure = handshakeValidation.failure()) {
-        response = co_await routes.handleError(
-            parsed.request,
-            requestMemory,
+        d.response = co_await d.routes.handleError(
+            d.parsed.request,
+            d.requestMemory,
             copyHttpProtocolErrorInfo(
-                requestMemory.resource(),
+                d.requestMemory.resource(),
                 failure->protocolError()),
-            baseRouteServices);
-        failure->applyRequiredResponseHeaders(response);
+            d.baseRouteServices);
+        failure->applyRequiredResponseHeaders(d.response);
         const auto connectionPlan = requireHttp1FinalResponseCommit(
-            response, parsed.connectionPlan.requireClose());
+            d.response, d.parsed.connectionPlan.requireClose());
         co_return Http1SessionRequestCompletion::makeBufferedClosing(
             connectionPlan);
     }
@@ -61,24 +55,24 @@ Task<std::optional<Http1SessionRequestCompletion>> dispatchHttpWebSocketRoute(
     std::optional<Connection> webSocketConnection;
     auto upgradeAndRun = [&](Context& context) -> Task<void> {
         const auto handshake = makeHttpWebSocketServerHandshake(
-            parsed.request,
+            d.parsed.request,
             webSocketEndpoint.subprotocols(),
-            memory.resource());
-        if (const auto ec = co_await writeWebSocketHandshake(stream, handshake); ec) {
+            d.memory.resource());
+        if (const auto ec = co_await writeWebSocketHandshake(d.stream, handshake); ec) {
             co_return;
         }
         webSocketConnection.emplace(
-            WebSocketSocketTransport<Stream>{stream},
-            baseRouteServices.worker(),
-            scannerEntry,
+            WebSocketSocketTransport<Stream>{d.stream},
+            d.baseRouteServices.worker(),
+            d.scannerEntry,
             webSocketEndpoint.lifecycle(),
-            ProtocolByteLimit::limited(options.maxWebSocketMessageBytes),
-            memory.resource(),
+            ProtocolByteLimit::limited(d.options.maxWebSocketMessageBytes),
+            d.memory.resource(),
             pendingFrames,
             handshake.negotiation().deflate());
         co_await invokeWebSocketHandler(
             *webSocketConnection,
-            scannerEntry,
+            d.scannerEntry,
             webSocketEndpoint.handler(),
             context);
     };
@@ -86,12 +80,12 @@ Task<std::optional<Http1SessionRequestCompletion>> dispatchHttpWebSocketRoute(
     std::optional<HttpResponse> buffered;
     std::exception_ptr exception;
     try {
-        buffered = co_await routes.dispatchWebSocket(
-            parsed.request,
+        buffered = co_await d.routes.dispatchWebSocket(
+            d.parsed.request,
             resolved,
-            requestMemory,
+            d.requestMemory,
             terminal,
-            baseRouteServices);
+            d.baseRouteServices);
     } catch (...) {
         exception = std::current_exception();
     }
@@ -103,9 +97,9 @@ Task<std::optional<Http1SessionRequestCompletion>> dispatchHttpWebSocketRoute(
         std::rethrow_exception(exception);
     }
     if (buffered.has_value()) {
-        response = std::move(*buffered);
+        d.response = std::move(*buffered);
         const auto connectionPlan = requireHttp1FinalResponseCommit(
-            response, parsed.connectionPlan.requireClose());
+            d.response, d.parsed.connectionPlan.requireClose());
         co_return Http1SessionRequestCompletion::makeBufferedClosing(
             connectionPlan);
     }

@@ -252,6 +252,23 @@ Task<void> HttpServer::handleStreamSession(
                     break;
                 }
 
+                // One bundle of what every route dispatch below needs from
+                // this session; each dispatcher adds only its own arguments.
+                const auto routeDispatch = [&] {
+                    return Http1RouteDispatch<Stream>{
+                        .stream = stream,
+                        .memory = memory_,
+                        .scannerEntry = scannerEntry,
+                        .parsed = parsed,
+                        .routes = routes,
+                        .requestMemory = requestMemory,
+                        .baseRouteServices = baseRouteServices,
+                        .options = options_,
+                        .response = response,
+                        .requestSequence = requestSequence,
+                    };
+                };
+
                 const auto& route = resolved->route();
                 const auto& endpoint = route.endpoint();
                 const auto maxRequestBodyBytes = requestBodyByteLimit(
@@ -273,17 +290,7 @@ Task<void> HttpServer::handleStreamSession(
                         readBuffer.data() + requestHead->headerBytes(),
                         usedBytes - requestHead->headerBytes());
                     auto webSocketCompletion = co_await dispatchHttpWebSocketRoute(
-                        stream,
-                        memory_,
-                        scannerEntry,
-                        parsed,
-                        *resolved,
-                        routes,
-                        requestMemory,
-                        baseRouteServices,
-                        options_,
-                        pendingFrames,
-                        response);
+                        routeDispatch(), *resolved, pendingFrames);
                     if (!webSocketCompletion.has_value()) {
                         co_return;
                     }
@@ -295,18 +302,10 @@ Task<void> HttpServer::handleStreamSession(
                 if (endpoint.responseStream() != nullptr) {
                     requestCompletion.emplace(
                         co_await dispatchHttpResponseStreamRoute(
-                        stream,
-                        memory_,
-                        responseHead,
-                        scannerEntry,
-                        parsed,
-                        *requestHead,
-                        *resolved,
-                        routes,
-                        requestMemory,
-                        baseRouteServices,
-                        response,
-                        requestSequence));
+                            routeDispatch(),
+                            responseHead,
+                            *requestHead,
+                            *resolved));
                     break;
                 }
                 const auto* bufferedEndpoint = endpoint.buffered();
@@ -315,21 +314,12 @@ Task<void> HttpServer::handleStreamSession(
                         RequestBodyMode::kStream) {
                     requestCompletion.emplace(
                         co_await dispatchHttpStreamBodyRoute(
-                        stream,
-                        memory_,
-                        scannerEntry,
-                        parsed,
-                        *requestHead,
-                        routeResolution,
-                        routes,
-                        requestMemory,
-                        baseRouteServices,
-                        options_,
-                        readBuffer,
-                        usedBytes,
-                        pipelineStash,
-                        response,
-                        requestSequence));
+                            routeDispatch(),
+                            *requestHead,
+                            routeResolution,
+                            readBuffer,
+                            usedBytes,
+                            pipelineStash));
                     break;
                 }
 

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "ruvia/core/detail/io/ConnectionScanner.h"
+#include "ruvia/web/detail/server/route/Http1RouteDispatch.h"
 #include "ruvia/web/detail/server/http1/Http1SessionRequestCompletion.h"
 #include "ruvia/web/detail/server/stream/HttpResponseStreamDispatch.h"
 #include "ruvia/web/detail/server/stream/HttpResponseStreamSink.h"
@@ -18,66 +19,59 @@
 
 namespace ruvia::detail {
 
+
 template <typename Stream>
 Task<Http1SessionRequestCompletion> dispatchHttpResponseStreamRoute(
-    Stream& stream,
-    WorkerMemory& memory,
+    Http1RouteDispatch<Stream> d,
     ResponseHeadBuffer& responseHead,
-    ConnectionScanner::Entry& scannerEntry,
-    const Http1ServerRequestParseState& parsed,
     const Http1ServerRequestHeadReady& requestHead,
-    const ResolvedRoute& resolved,
-    const RouteTable& routes,
-    RequestMemory& requestMemory,
-    ContextServices baseRouteServices,
-    HttpResponse& response,
-    Http1RequestSequence& requestSequence) {
+    const ResolvedRoute& resolved) {
     const auto streamPlan = http1PlanResponseStream(
-        parsed,
-        requestSequence.nextResponseClosePolicy());
+        d.parsed,
+        d.requestSequence.nextResponseClosePolicy());
     auto connectionPlan = streamPlan.requestConnectionPlan();
     using ResponseSink = ResponseStreamSink<Stream, ConnectionScanner::Entry>;
     const auto& route = resolved.route();
     const auto& endpoint = *route.endpoint().responseStream();
     ResponseSink responseSink(
-        stream,
-        memory,
+        d.stream,
+        d.memory,
         responseHead,
-        scannerEntry,
-        baseRouteServices.worker(),
+        d.scannerEntry,
+        d.baseRouteServices.worker(),
         endpoint.kind(),
         streamPlan);
 
-    scannerEntry.setPhase(ConnectionScanner::Phase::kWriting);
+    d.scannerEntry.setPhase(ConnectionScanner::Phase::kWriting);
     auto result = co_await dispatchResponseStreamWith(
         responseSink,
-        routes,
-        parsed.request,
+        d.routes,
+        d.parsed.request,
         resolved,
-        requestMemory,
-        baseRouteServices,
+        d.requestMemory,
+        d.baseRouteServices,
         /*peerAborted=*/[]() noexcept { return false; });
 
     if (result.peerAbortedBeforeCommit() != nullptr) {
         throw std::logic_error(
-            "HTTP/1 response stream reported an impossible peer-abort predicate");
+            "HTTP/1 d.response d.stream reported an impossible peer-abort predicate");
     }
     if (auto* recovered = result.recoveredFailure()) {
-        response = std::move(*recovered).takeResponse();
-        scannerEntry.touch();
+        d.response = std::move(*recovered).takeResponse();
+        d.scannerEntry.touch();
         connectionPlan = requireHttp1FinalResponseCommit(
-            response,
+            d.response,
             streamPlan.requestConnectionPlan().requireClose());
         co_return Http1SessionRequestCompletion::makeBufferedClosing(
             connectionPlan);
     }
     if (auto* routeResponse = result.routeResponse()) {
-        response = std::move(*routeResponse).takeResponse();
-        scannerEntry.touch();
+        d.response = std::move(*routeResponse).takeResponse();
+        d.scannerEntry.touch();
         connectionPlan = finalizeBufferedRouteResponse(
-            response,
+            d.response,
             connectionPlan,
-            requestSequence);
+            d.requestSequence);
         co_return Http1SessionRequestCompletion::makeBufferedUnrestored(
             connectionPlan,
             requestHead.headerBytes());
@@ -86,12 +80,12 @@ Task<Http1SessionRequestCompletion> dispatchHttpResponseStreamRoute(
     const auto committedStatus = result.committedStatus();
     if (!committedStatus.has_value()) {
         throw std::logic_error(
-            "response stream dispatch returned no H1 terminal alternative");
+            "d.response d.stream dispatch returned no H1 terminal alternative");
     }
 
     connectionPlan = responseSink.connectionPlan();
     if (result.completed() != nullptr) {
-        requestSequence.completeCommittedResponse(connectionPlan);
+        d.requestSequence.completeCommittedResponse(connectionPlan);
     } else {
         connectionPlan = connectionPlan.requireClose();
     }
