@@ -1,11 +1,11 @@
 #include "ruvia/edge/detail/DiskCache.h"
 
-#include <algorithm>
+#include "ruvia/edge/detail/DiskCacheFiles.h"
+#include "ruvia/edge/detail/DiskCacheRecord.h"
+
 #include <array>
 #include <cerrno>
-#include <cstring>
 #include <fstream>
-#include <limits>
 #include <memory>
 #include <stdexcept>
 #include <system_error>
@@ -28,339 +28,6 @@ namespace {
 // A stable 64-bit key hash (FNV-1a) for deriving on-disk file names. Stable
 // across runs and platforms so a scanned directory keeps naming its entries the
 // same way, unlike std::hash.
-[[nodiscard]] std::uint64_t stableHash(std::string_view key) noexcept {
-    std::uint64_t h = 0xcbf29ce484222325ULL;
-    for (const unsigned char c : key) {
-        h ^= c;
-        h *= 0x100000001b3ULL;
-    }
-    return h;
-}
-
-// The entry-file framing. Bump on any layout change so stale files from an older
-// format are ignored rather than misread.
-constexpr std::uint32_t kMagic = 0x52564334;  // 'RVC4'
-
-void appendU16(std::string& out, std::uint16_t v) {
-    out.push_back(static_cast<char>(v & 0xff));
-    out.push_back(static_cast<char>((v >> 8) & 0xff));
-}
-
-void appendU32(std::string& out, std::uint32_t v) {
-    for (int i = 0; i < 4; ++i) {
-        out.push_back(static_cast<char>((v >> (8 * i)) & 0xff));
-    }
-}
-
-void appendU64(std::string& out, std::uint64_t v) {
-    for (int i = 0; i < 8; ++i) {
-        out.push_back(static_cast<char>((v >> (8 * i)) & 0xff));
-    }
-}
-
-// A bounds-checked little-endian reader over a byte buffer.
-class Reader final {
-public:
-    explicit Reader(std::string_view data) noexcept : data_(data) {}
-
-    [[nodiscard]] bool readU16(std::uint16_t& out) noexcept {
-        if (remaining() < 2) {
-            return false;
-        }
-        out = static_cast<std::uint16_t>(byte(0)) |
-              static_cast<std::uint16_t>(byte(1) << 8);
-        pos_ += 2;
-        return true;
-    }
-
-    [[nodiscard]] bool readU32(std::uint32_t& out) noexcept {
-        if (remaining() < 4) {
-            return false;
-        }
-        out = 0;
-        for (int i = 0; i < 4; ++i) {
-            out |= static_cast<std::uint32_t>(byte(i)) << (8 * i);
-        }
-        pos_ += 4;
-        return true;
-    }
-
-    [[nodiscard]] bool readU64(std::uint64_t& out) noexcept {
-        if (remaining() < 8) {
-            return false;
-        }
-        out = 0;
-        for (int i = 0; i < 8; ++i) {
-            out |= static_cast<std::uint64_t>(byte(i)) << (8 * i);
-        }
-        pos_ += 8;
-        return true;
-    }
-
-    [[nodiscard]] bool readBytes(std::uint64_t n, std::string_view& out) noexcept {
-        if (remaining() < n) {
-            return false;
-        }
-        out = data_.substr(pos_, n);
-        pos_ += n;
-        return true;
-    }
-
-    [[nodiscard]] std::size_t remaining() const noexcept {
-        return data_.size() - pos_;
-    }
-
-private:
-    [[nodiscard]] unsigned char byte(std::size_t off) const noexcept {
-        return static_cast<unsigned char>(data_[pos_ + off]);
-    }
-
-    std::string_view data_;
-    std::size_t pos_{0};
-};
-
-[[nodiscard]] std::optional<std::string> serialize(
-    std::string_view key,
-    const CachedResponse& entry) {
-    constexpr auto kMaxU32 = (std::numeric_limits<std::uint32_t>::max)();
-    if (key.size() > kMaxU32 || entry.headers.size() > kMaxU32) {
-        return std::nullopt;
-    }
-    for (const auto& [name, value] : entry.headers) {
-        if (name.size() > kMaxU32 || value.size() > kMaxU32) {
-            return std::nullopt;
-        }
-    }
-
-    std::string out;
-    out.reserve(72 + key.size() + entry.body.size());
-    appendU32(out, kMagic);
-    appendU32(out, static_cast<std::uint32_t>(key.size()));
-    out.append(key);
-    appendU16(out, entry.status);
-    appendU64(out, static_cast<std::uint64_t>(entry.storedAt));
-    appendU64(out, entry.initialAge);
-    appendU64(out, static_cast<std::uint64_t>(entry.expiresAt));
-    appendU64(out, entry.staleWhileRevalidate);
-    appendU64(out, entry.staleIfError);
-    appendU32(out, static_cast<std::uint32_t>(entry.headers.size()));
-    for (const auto& [name, value] : entry.headers) {
-        appendU32(out, static_cast<std::uint32_t>(name.size()));
-        out.append(name);
-        appendU32(out, static_cast<std::uint32_t>(value.size()));
-        out.append(value);
-    }
-    appendU64(out, entry.body.size());
-    out.append(entry.body);
-    // Detect truncated/torn writes and silent payload corruption during the
-    // next startup scan. This is an integrity checksum, not an authenticity
-    // primitive: callers that can modify the cache directory are trusted.
-    appendU64(out, stableHash(out));
-    return out;
-}
-
-// Parse a serialized entry. On success fills `key` and, if `entry` is non-null,
-// the full payload; when `entry` is null only the key is decoded (used by the
-// startup scan, which does not need to materialize bodies).
-[[nodiscard]] bool deserialize(std::string_view data, std::string& key, CachedResponse* entry) {
-    if (data.size() < 8) {
-        return false;
-    }
-    std::uint64_t expectedChecksum = 0;
-    Reader trailer(data.substr(data.size() - 8));
-    if (!trailer.readU64(expectedChecksum) ||
-        expectedChecksum != stableHash(data.substr(0, data.size() - 8))) {
-        return false;
-    }
-
-    Reader reader(data);
-    std::uint32_t magic = 0;
-    if (!reader.readU32(magic) || magic != kMagic) {
-        return false;
-    }
-    std::uint32_t keyLen = 0;
-    std::string_view keyView;
-    if (!reader.readU32(keyLen) || !reader.readBytes(keyLen, keyView)) {
-        return false;
-    }
-    std::uint16_t status = 0;
-    std::uint64_t storedAt = 0;
-    std::uint64_t initialAge = 0;
-    std::uint64_t expiresAt = 0;
-    std::uint64_t swr = 0;
-    std::uint64_t sie = 0;
-    std::uint32_t headerCount = 0;
-    if (!reader.readU16(status) || !reader.readU64(storedAt) ||
-        !reader.readU64(initialAge) || !reader.readU64(expiresAt) ||
-        !reader.readU64(swr) || !reader.readU64(sie) || !reader.readU32(headerCount)) {
-        return false;
-    }
-    if (headerCount > reader.remaining() / 8) {
-        return false;  // every header needs at least two encoded lengths
-    }
-
-    CachedResponse parsed;
-    parsed.status = status;
-    parsed.storedAt = static_cast<std::time_t>(storedAt);
-    parsed.initialAge = initialAge;
-    parsed.expiresAt = static_cast<std::time_t>(expiresAt);
-    parsed.staleWhileRevalidate = swr;
-    parsed.staleIfError = sie;
-    if (entry != nullptr) {
-        parsed.headers.reserve(headerCount);
-    }
-    for (std::uint32_t i = 0; i < headerCount; ++i) {
-        std::uint32_t nameLen = 0;
-        std::string_view name;
-        std::uint32_t valueLen = 0;
-        std::string_view value;
-        if (!reader.readU32(nameLen) || !reader.readBytes(nameLen, name) ||
-            !reader.readU32(valueLen) || !reader.readBytes(valueLen, value)) {
-            return false;
-        }
-        if (entry != nullptr) {
-            parsed.headers.emplace_back(std::string(name), std::string(value));
-        }
-    }
-    std::uint64_t bodyLen = 0;
-    std::string_view body;
-    if (!reader.readU64(bodyLen) || !reader.readBytes(bodyLen, body)) {
-        return false;
-    }
-    std::uint64_t checksum = 0;
-    if (!reader.readU64(checksum) || reader.remaining() != 0 ||
-        checksum != expectedChecksum) {
-        return false;
-    }
-
-    key.assign(keyView);
-    if (entry != nullptr) {
-        parsed.body.assign(body);
-        *entry = std::move(parsed);
-    }
-    return true;
-}
-
-[[nodiscard]] bool readFile(
-    const std::filesystem::path& path,
-    std::size_t maxBytes,
-    std::string& out) {
-    std::error_code ec;
-    const auto fileBytes = std::filesystem::file_size(path, ec);
-    if (ec || fileBytes > maxBytes ||
-        fileBytes > static_cast<std::uintmax_t>(
-            (std::numeric_limits<std::streamsize>::max)())) {
-        return false;
-    }
-    std::ifstream in(path, std::ios::binary);
-    if (!in) {
-        return false;
-    }
-    const auto size = static_cast<std::size_t>(fileBytes);
-    out.resize(size);
-    if (size > 0 && !in.read(out.data(), static_cast<std::streamsize>(size))) {
-        return false;
-    }
-    // Reject a file that grew after file_size(): it did not come from this
-    // cache's atomic writer (or another writer violated the directory lease).
-    return in.peek() == std::char_traits<char>::eof();
-}
-
-[[nodiscard]] bool isLowerHex(char c) noexcept {
-    return (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f');
-}
-
-[[nodiscard]] bool isCommittedFileName(std::string_view name) noexcept {
-    return name.size() == 20 &&
-        std::all_of(name.begin(), name.begin() + 16, isLowerHex) &&
-        name.substr(16) == ".rvc";
-}
-
-[[nodiscard]] bool isOwnedTransientFileName(std::string_view name) noexcept {
-    return name.size() > 24 &&
-        std::all_of(name.begin(), name.begin() + 16, isLowerHex) &&
-        (name.substr(16).starts_with(".rvc.tmp") ||
-         name.substr(16).starts_with(".rvc.delete"));
-}
-
-void syncDirectoryBestEffort(const std::filesystem::path& directory) noexcept {
-#if !defined(_WIN32)
-    int flags = O_RDONLY;
-#ifdef O_CLOEXEC
-    flags |= O_CLOEXEC;
-#endif
-#ifdef O_DIRECTORY
-    flags |= O_DIRECTORY;
-#endif
-    const int descriptor = ::open(directory.c_str(), flags);
-    if (descriptor < 0) {
-        return;
-    }
-    (void)::fsync(descriptor);
-    (void)::close(descriptor);
-#else
-    (void)directory;
-#endif
-}
-
-[[nodiscard]] bool flushFileToDisk(const std::filesystem::path& path) noexcept {
-#if defined(_WIN32)
-    const HANDLE file = ::CreateFileW(
-        path.c_str(),
-        GENERIC_WRITE,
-        FILE_SHARE_READ,
-        nullptr,
-        OPEN_EXISTING,
-        FILE_ATTRIBUTE_NORMAL,
-        nullptr);
-    if (file == INVALID_HANDLE_VALUE) {
-        return false;
-    }
-    const bool flushed = ::FlushFileBuffers(file) != FALSE;
-    const bool closed = ::CloseHandle(file) != FALSE;
-    return flushed && closed;
-#else
-    int flags = O_RDWR;
-#ifdef O_CLOEXEC
-    flags |= O_CLOEXEC;
-#endif
-    const int descriptor = ::open(path.c_str(), flags);
-    if (descriptor < 0) {
-        return false;
-    }
-    const bool flushed = ::fsync(descriptor) == 0;
-    const bool closed = ::close(descriptor) == 0;
-    return flushed && closed;
-#endif
-}
-
-[[nodiscard]] bool commitReplacement(
-    const std::filesystem::path& temporary,
-    const std::filesystem::path& finalPath) noexcept {
-#if defined(_WIN32)
-    return ::MoveFileExW(
-               temporary.c_str(),
-               finalPath.c_str(),
-               MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH) != FALSE;
-#else
-    std::error_code ec;
-    std::filesystem::rename(temporary, finalPath, ec);
-    if (ec) {
-        return false;
-    }
-    syncDirectoryBestEffort(finalPath.parent_path());
-    return true;
-#endif
-}
-
-void removeOwnedFileBestEffort(const std::filesystem::path& path) noexcept {
-    std::error_code ec;
-    (void)std::filesystem::remove(path, ec);
-    if (!ec) {
-        syncDirectoryBestEffort(path.parent_path());
-    }
-}
-
 }  // namespace
 
 class DiskCache::DirectoryLease final {
@@ -430,7 +97,7 @@ private:
 
 std::string DiskCache::fileNameFor(std::string_view key) {
     std::array<char, 16> hex{};
-    std::uint64_t h = stableHash(key);
+    std::uint64_t h = diskCacheStableHash(key);
     static constexpr char kDigits[] = "0123456789abcdef";
     for (int i = 15; i >= 0; --i) {
         hex[static_cast<std::size_t>(i)] = kDigits[h & 0xf];
@@ -474,7 +141,7 @@ DiskCache::DiskCache(std::filesystem::path directory, std::size_t maxBytes)
         }
 
         if (std::filesystem::is_regular_file(status) &&
-            isOwnedTransientFileName(fileName)) {
+            isOwnedTransientDiskCacheFileName(fileName)) {
             removeOwnedFileBestEffort(path);
             current.increment(ec);
             if (ec) {
@@ -483,7 +150,7 @@ DiskCache::DiskCache(std::filesystem::path directory, std::size_t maxBytes)
             continue;
         }
         if (!std::filesystem::is_regular_file(status) ||
-            !isCommittedFileName(fileName)) {
+            !isCommittedDiskCacheFileName(fileName)) {
             current.increment(ec);
             if (ec) {
                 break;
@@ -492,7 +159,7 @@ DiskCache::DiskCache(std::filesystem::path directory, std::size_t maxBytes)
         }
 
         std::string data;
-        if (!readFile(path, maxBytes_, data)) {
+        if (!readDiskCacheFile(path, maxBytes_, data)) {
             removeOwnedFileBestEffort(path);
             current.increment(ec);
             if (ec) {
@@ -501,7 +168,7 @@ DiskCache::DiskCache(std::filesystem::path directory, std::size_t maxBytes)
             continue;
         }
         std::string key;
-        if (!deserialize(data, key, nullptr) || fileNameFor(key) != fileName) {
+        if (!deserializeDiskCacheRecord(data, key, nullptr) || fileNameFor(key) != fileName) {
             removeOwnedFileBestEffort(path);
             current.increment(ec);
             if (ec) {
@@ -544,13 +211,13 @@ std::optional<CachedResponse> DiskCache::lookup(std::string_view key) {
         return std::nullopt;
     }
     std::string data;
-    if (!readFile(directory_ / it->second.fileName, maxBytes_, data)) {
+    if (!readDiskCacheFile(directory_ / it->second.fileName, maxBytes_, data)) {
         (void)removeLocked(it);
         return std::nullopt;
     }
     CachedResponse entry;
     std::string storedKey;
-    if (!deserialize(data, storedKey, &entry) || storedKey != key) {
+    if (!deserializeDiskCacheRecord(data, storedKey, &entry) || storedKey != key) {
         (void)removeLocked(it);
         return std::nullopt;
     }
@@ -562,7 +229,7 @@ std::optional<CachedResponse> DiskCache::lookup(std::string_view key) {
 }
 
 bool DiskCache::store(std::string_view key, const CachedResponse& entry) {
-    const auto serialized = serialize(key, entry);
+    const auto serialized = serializeDiskCacheRecord(key, entry);
     if (!serialized || serialized->size() > maxBytes_) {
         return false;
     }
