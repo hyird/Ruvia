@@ -26,9 +26,9 @@
 #include <string_view>
 
 #include "ruvia/http/detail/http2/frame/Http2FrameCodec.h"
-#include "ruvia/web/detail/server/HttpServerTlsVerify.h"
+#include "ruvia/web/detail/server/tls/HttpServerTlsVerify.h"
 #include "ruvia/http/detail/http2/hpack/Http2Hpack.h"
-#include "ruvia/web/detail/server/HttpServerAlpn.h"
+#include "ruvia/web/detail/server/tls/HttpServerAlpn.h"
 #include "ruvia/web/detail/http2/Http2SansIoSession.h"
 #include "ruvia/web/detail/router/RouterImpl.h"
 #include "ruvia/core/detail/io/AsioAwait.h"

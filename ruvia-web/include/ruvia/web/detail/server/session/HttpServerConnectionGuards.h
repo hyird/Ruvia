@@ -1,7 +1,7 @@
 #pragma once
 
 #include "ruvia/core/detail/io/SocketUtils.h"
-#include "ruvia/web/detail/server/HttpConnectionState.h"
+#include "ruvia/web/detail/server/session/HttpConnectionState.h"
 
 #include <asio/ip/tcp.hpp>
 

@@ -4,7 +4,7 @@
 #include "ruvia/web/detail/server/http1/Http1SessionRequestCompletion.h"
 #include "ruvia/web/detail/server/stream/HttpResponseStreamDispatch.h"
 #include "ruvia/web/detail/server/stream/HttpResponseStreamSink.h"
-#include "ruvia/web/detail/server/HttpServerResponseState.h"
+#include "ruvia/web/detail/server/response/HttpServerResponseState.h"
 #include "ruvia/http/detail/http1/Http1ServerSemantics.h"
 #include "ruvia/http/detail/http1/Http1ServerRequestParser.h"
 #include "ruvia/web/detail/router/RouteTable.h"

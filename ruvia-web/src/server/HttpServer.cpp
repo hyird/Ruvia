@@ -1,6 +1,6 @@
 #include "ruvia/web/detail/server/HttpServer.h"
-#include "ruvia/web/detail/server/HttpServerRequestState.h"
-#include "ruvia/web/detail/server/HttpServerAlpn.h"
+#include "ruvia/web/detail/server/request/HttpServerRequestState.h"
+#include "ruvia/web/detail/server/tls/HttpServerAlpn.h"
 
 #include <asio/ssl.hpp>
 #include <openssl/bio.h>
@@ -13,15 +13,15 @@
 #include "ruvia/http/detail/request/HttpRequestAccess.h"
 #include "ruvia/web/detail/server/http1/Http1SessionRequestCompletion.h"
 #include "ruvia/web/detail/server/http1/Http1ClosingRejection.h"
-#include "ruvia/web/detail/server/HttpBufferedResponse.h"
-#include "ruvia/web/detail/server/HttpResponseWriter.h"
+#include "ruvia/web/detail/server/response/HttpBufferedResponse.h"
+#include "ruvia/web/detail/server/response/HttpResponseWriter.h"
 #include "ruvia/web/detail/server/HttpServerAccessLog.h"
-#include "ruvia/web/detail/server/HttpServerAutoHttps.h"
+#include "ruvia/web/detail/server/tls/HttpServerAutoHttps.h"
 #include "ruvia/web/detail/server/route/HttpServerBodyRouteCompletion.h"
 #include "ruvia/web/detail/http2/CleartextUpgrade.h"
-#include "ruvia/web/detail/server/HttpServerConnectionGuards.h"
-#include "ruvia/web/detail/server/HttpServerIdleWorkSet.h"
-#include "ruvia/web/detail/server/HttpServerResponseState.h"
+#include "ruvia/web/detail/server/session/HttpServerConnectionGuards.h"
+#include "ruvia/web/detail/server/session/HttpServerIdleWorkSet.h"
+#include "ruvia/web/detail/server/response/HttpServerResponseState.h"
 #include "ruvia/web/detail/server/stream/HttpServerResponseStreamRoute.h"
 #include "ruvia/web/detail/server/route/HttpServerStreamBodyRoute.h"
 #include "ruvia/web/detail/server/route/HttpServerWebSocketRoute.h"
@@ -77,7 +77,7 @@ struct TlsServerHandshakeInitiator final {
     }
 };
 
-#include "ruvia/web/detail/server/HttpServerSessionEntry.inl"
-#include "ruvia/web/detail/server/HttpServerStreamSession.inl"
+#include "ruvia/web/detail/server/session/HttpServerSessionEntry.inl"
+#include "ruvia/web/detail/server/session/HttpServerStreamSession.inl"
 
 }  // namespace ruvia::detail

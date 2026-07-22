@@ -2,7 +2,7 @@
 
 #include "ruvia/core/detail/io/ConnectionScanner.h"
 #include "ruvia/web/detail/server/http1/Http1SessionRequestCompletion.h"
-#include "ruvia/web/detail/server/HttpServerResponseState.h"
+#include "ruvia/web/detail/server/response/HttpServerResponseState.h"
 #include "ruvia/web/detail/server/HttpServerOptions.h"
 #include "ruvia/web/detail/websocket/HttpWebSocketConnection.h"
 #include "ruvia/web/detail/websocket/HttpWebSocketSession.h"

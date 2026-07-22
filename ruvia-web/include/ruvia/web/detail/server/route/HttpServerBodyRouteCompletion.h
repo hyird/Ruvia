@@ -4,7 +4,7 @@
 #include "ruvia/web/detail/body/HttpRequestBodyFacade.h"
 #include "ruvia/core/detail/io/ConnectionScanner.h"
 #include "ruvia/web/detail/server/http1/Http1SessionRequestCompletion.h"
-#include "ruvia/web/detail/server/HttpServerResponseState.h"
+#include "ruvia/web/detail/server/response/HttpServerResponseState.h"
 #include "ruvia/web/detail/server/HttpServerOptions.h"
 #include "ruvia/web/detail/http/request/RequestBodyLoader.h"
 #include "ruvia/http/detail/http1/Http1ServerRequestParser.h"

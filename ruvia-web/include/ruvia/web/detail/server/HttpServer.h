@@ -21,7 +21,7 @@
 #include "ruvia/core/detail/io/ConnectionScanner.h"
 #include "ruvia/web/WebWorker.h"
 #include "ruvia/web/detail/integration/DataAccessState.h"
-#include "ruvia/web/detail/server/HttpConnectionState.h"
+#include "ruvia/web/detail/server/session/HttpConnectionState.h"
 #include "ruvia/web/detail/ratelimit/RateLimiter.h"
 #include "ruvia/web/detail/server/HttpServerOptions.h"
 #include "ruvia/web/detail/server/HttpServerWorkerState.h"
