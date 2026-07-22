@@ -170,6 +170,7 @@ add_executable(ruvia_unit_tests
     http/util/number_format.cpp
     http/util/pmr_string.cpp
     http/util/url_encoding.cpp
+    http/util/url_encoding_detect.cpp
 
     # http/websocket
     http/websocket/websocket_accept.cpp
@@ -186,89 +187,106 @@ add_executable(ruvia_unit_tests
     # support
     support/test_main.cpp
 
-    # web/unit
-    web/unit/access_log.cpp
-    web/unit/config_validation.cpp
-    web/unit/conn_info.cpp
-    web/unit/content_type_match.cpp
-    web/unit/context_capabilities.cpp
-    web/unit/context_cookie.cpp
-    web/unit/context_parse_body.cpp
-    web/unit/context_redirect.cpp
-    web/unit/context_request_lookups.cpp
-    web/unit/cookie_signature.cpp
-    web/unit/cors.cpp
-    web/unit/csrf.cpp
-    web/unit/dotenv_parser.cpp
-    web/unit/email_like.cpp
-    web/unit/form_parser.cpp
-    web/unit/health.cpp
-    web/unit/http2_buffered_response_write.cpp
-    web/unit/http_server_request_state.cpp
-    web/unit/http_server_worker_completion.cpp
-    web/unit/json.cpp
-    web/unit/json_escape.cpp
-    web/unit/json_lex.cpp
-    web/unit/json_object_fields.cpp
-    web/unit/json_size_hint.cpp
-    web/unit/json_writer.cpp
-    web/unit/model_last_match.cpp
-    web/unit/model_list.cpp
-    web/unit/model_string.cpp
-    web/unit/pattern_compiler.cpp
-    web/unit/pattern_matcher.cpp
-    web/unit/pattern_types.cpp
-    web/unit/rate_limit_decision.cpp
-    web/unit/rate_limiter.cpp
-    web/unit/regex_matcher.cpp
-    web/unit/request_body_limits.cpp
-    web/unit/response_stream.cpp
-    web/unit/response_stream_dispatch.cpp
-    web/unit/route_resolution.cpp
-    web/unit/routing_dispatch.cpp
-    web/unit/routing_matching.cpp
-    web/unit/routing_middleware.cpp
-    web/unit/scoped_operation_lifetime.cpp
-    web/unit/security_headers.cpp
-    web/unit/server_options_validation.cpp
-    web/unit/session.cpp
-    web/unit/sse_writer.cpp
-    web/unit/static_file_metadata.cpp
-    web/unit/static_file_serving.cpp
-    web/unit/static_files.cpp
-    web/unit/static_path_normalization.cpp
-    web/unit/testing_facade.cpp
-    web/unit/url_encoding_detect.cpp
-    web/unit/validator.cpp
-    web/unit/websocket_heartbeat.cpp
+    # web/app
+    web/app/config_validation.cpp
+    web/app/dotenv_parser.cpp
+    web/app/server_options_validation.cpp
+    web/app/testing_facade.cpp
+
+    # web/auth
+    web/auth/cookie_signature.cpp
+
+    # web/http
+    web/http/conn_info.cpp
+    web/http/context_capabilities.cpp
+    web/http/context_cookie.cpp
+    web/http/context_parse_body.cpp
+    web/http/context_redirect.cpp
+    web/http/context_request_lookups.cpp
+    web/http/cors.cpp
+    web/http/csrf.cpp
+    web/http/health.cpp
+    web/http/request_body_limits.cpp
+    web/http/response_stream.cpp
+    web/http/scoped_operation_lifetime.cpp
+    web/http/security_headers.cpp
+    web/http/session.cpp
+    web/http/sse_writer.cpp
+    web/http/static_file_metadata.cpp
+    web/http/static_file_serving.cpp
+    web/http/static_files.cpp
+    web/http/static_path_normalization.cpp
+
+    # web/http2
+    web/http2/http2_buffered_response_write.cpp
+
+    # web/json
+    web/json/json.cpp
+    web/json/json_escape.cpp
+    web/json/json_lex.cpp
+    web/json/json_object_fields.cpp
+    web/json/json_size_hint.cpp
+
+    # web/model
+    web/model/content_type_match.cpp
+    web/model/email_like.cpp
+    web/model/form_parser.cpp
+    web/model/json_writer.cpp
+    web/model/model_last_match.cpp
+    web/model/model_list.cpp
+    web/model/model_string.cpp
+    web/model/pattern_compiler.cpp
+    web/model/pattern_matcher.cpp
+    web/model/pattern_types.cpp
+    web/model/regex_matcher.cpp
+    web/model/validator.cpp
+
+    # web/ratelimit
+    web/ratelimit/rate_limit_decision.cpp
+    web/ratelimit/rate_limiter.cpp
+
+    # web/router
+    web/router/response_stream_dispatch.cpp
+    web/router/route_resolution.cpp
+    web/router/routing_dispatch.cpp
+    web/router/routing_matching.cpp
+    web/router/routing_middleware.cpp
+
+    # web/server
+    web/server/access_log.cpp
+    web/server/http_server_request_state.cpp
+    web/server/http_server_worker_completion.cpp
+
+    # web/websocket
+    web/websocket/websocket_heartbeat.cpp
 )
 
 # The JWT suite links jwtSign/jwtVerify, which only exist when the optional JWT
 # module is compiled in, so gate it on the same flag.
 if(RUVIA_ENABLE_JWT)
-    target_sources(ruvia_unit_tests PRIVATE web/unit/jwt.cpp)
+    target_sources(ruvia_unit_tests PRIVATE web/auth/jwt.cpp)
 endif()
 
 # The Redis RESP-protocol suite links appendRespCommand, gated the same way.
 if(RUVIA_ENABLE_REDIS)
     target_sources(ruvia_unit_tests PRIVATE
-        web/unit/redis_api_surface.cpp
-        web/unit/redis_protocol.cpp
+        web/redis/redis_api_surface.cpp
+        web/redis/redis_protocol.cpp
     )
 endif()
 
 # The backend-neutral API suite is present for either database driver.
 if(RUVIA_ENABLE_MARIADB OR RUVIA_ENABLE_POSTGRESQL)
-    target_sources(ruvia_unit_tests PRIVATE web/unit/db_api_surface.cpp)
+    target_sources(ruvia_unit_tests PRIVATE web/db/db_api_surface.cpp)
 endif()
 
 # Driver-specific parameter encoding is tested against the same library that
 # performs it; neither suite pulls the other backend into a single-driver build.
 if(RUVIA_ENABLE_MARIADB)
-    target_sources(ruvia_unit_tests PRIVATE web/unit/db_sql.cpp)
+    target_sources(ruvia_unit_tests PRIVATE web/db/db_sql.cpp)
 endif()
 if(RUVIA_ENABLE_POSTGRESQL)
-    target_sources(ruvia_unit_tests PRIVATE web/unit/db_postgresql.cpp)
+    target_sources(ruvia_unit_tests PRIVATE web/db/db_postgresql.cpp)
 endif()
 
 if(RUVIA_ENABLE_POSTGRESQL_INTEGRATION_TESTS)
