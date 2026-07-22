@@ -14,7 +14,8 @@ function(ruvia_add_test name source)
     target_include_directories(${name} PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}/support
         ${CMAKE_CURRENT_SOURCE_DIR}/http/support
-        ${CMAKE_CURRENT_SOURCE_DIR}/web/support)
+        ${CMAKE_CURRENT_SOURCE_DIR}/web/support
+        ${CMAKE_CURRENT_SOURCE_DIR}/edge/support)
     if(MSVC)
         target_compile_options(${name} PRIVATE /bigobj /FS)
     endif()
