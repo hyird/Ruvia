@@ -124,7 +124,10 @@ add_executable(ruvia_unit_tests
     http/unit/http_char_syntax.cpp
     http/unit/http_client_redirect.cpp
     http/unit/http_client_request.cpp
-    http/unit/http_client_response.cpp
+    http/unit/http_client_response_parser.cpp
+    http/unit/http_client_response_framing.cpp
+    http/unit/http_client_response_exchange.cpp
+    http/unit/http_client_response_coding.cpp
     http/unit/http_origin.cpp
     http/unit/http_response.cpp
     http/unit/http_response_body.cpp
