@@ -111,14 +111,16 @@ Task<void> HttpServer::handleHttp2Session(
     ConnectionScanner::Guard scannerGuard(&connectionScanner_, scannerEntry, socket);
 
     co_await runHttp2ServerSession(
-        stream,
-        socket,
-        memory_,
-        routes_,
-        options_,
-        scannerEntry,
-        services,
-        workerState_,
+        Http2ServerSessionSetup<Stream>{
+            .stream = stream,
+            .socket = socket,
+            .memory = memory_,
+            .routes = routes_,
+            .options = options_,
+            .scannerEntry = scannerEntry,
+            .services = services,
+            .workerState = workerState_,
+        },
         initialBytes);
 }
 

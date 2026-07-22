@@ -145,16 +145,18 @@ Task<void> HttpServer::handleStreamSession(
             if constexpr (kPlainTcp) {
                 if (usedBytes > 0) {
                     const auto h2Result = co_await dispatchCleartextHttp2Preface(
-                        stream,
-                        socket,
-                        memory_,
-                        routes_,
-                        options_,
-                        scannerEntry,
-                        baseRouteServices,
+                        Http2ServerSessionSetup<Stream>{
+                            .stream = stream,
+                            .socket = socket,
+                            .memory = memory_,
+                            .routes = routes_,
+                            .options = options_,
+                            .scannerEntry = scannerEntry,
+                            .services = baseRouteServices,
+                            .workerState = workerState_,
+                        },
                         readBuffer,
-                        usedBytes,
-                        workerState_);
+                        usedBytes);
                     if (h2Result == CleartextHttp2DispatchResult::kSessionFinished) {
                         co_return;
                     }
