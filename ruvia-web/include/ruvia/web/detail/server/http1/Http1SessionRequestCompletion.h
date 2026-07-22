@@ -1,5 +1,6 @@
 #pragma once
 
+#include "ruvia/http/HttpStatus.h"
 #include "ruvia/http/detail/http1/Http1ServerConnectionPlan.h"
 #include "ruvia/http/detail/util/BorrowedView.h"
 

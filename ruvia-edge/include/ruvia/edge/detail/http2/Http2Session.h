@@ -9,6 +9,7 @@
 #include <vector>
 
 #include <asio/as_tuple.hpp>
+#include <asio/bind_cancellation_slot.hpp>
 #include <asio/awaitable.hpp>
 #include <asio/experimental/awaitable_operators.hpp>
 #include <asio/steady_timer.hpp>

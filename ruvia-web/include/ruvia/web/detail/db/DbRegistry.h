@@ -94,21 +94,15 @@ public:
     template <typename Pool, typename Slot>
     friend Task<DbResolvedAddresses> resolveDbHost(
         Pool&, Slot&, const OperationTimeout&, std::string_view);
+    template <typename Pool>
+    friend Task<std::size_t> acquireDbSlot(Pool&);
+    template <typename Pool>
+    friend void releaseDbSlot(Pool&, std::size_t) noexcept;
     friend class ::ruvia::DbHandle;
     friend class ::ruvia::DbTransaction;
     friend class ::ruvia::DbStreamResult;
 
-    class SlotGuard final {
-    public:
-        SlotGuard(MariaDbPool& client, std::size_t slot) noexcept;
-        SlotGuard(const SlotGuard&) = delete;
-        SlotGuard& operator=(const SlotGuard&) = delete;
-        ~SlotGuard();
-
-    private:
-        MariaDbPool* client_;
-        std::size_t slot_;
-    };
+    using SlotGuard = DbSlotGuard<MariaDbPool>;
 
     struct ConnectionSlot {
         ConnectionSlot(
@@ -205,21 +199,15 @@ private:
     template <typename Pool, typename Slot>
     friend Task<DbResolvedAddresses> resolveDbHost(
         Pool&, Slot&, const OperationTimeout&, std::string_view);
+    template <typename Pool>
+    friend Task<std::size_t> acquireDbSlot(Pool&);
+    template <typename Pool>
+    friend void releaseDbSlot(Pool&, std::size_t) noexcept;
     friend class ::ruvia::DbHandle;
     friend class ::ruvia::DbTransaction;
     friend class ::ruvia::DbStreamResult;
 
-    class SlotGuard final {
-    public:
-        SlotGuard(PostgreSqlPool& client, std::size_t slot) noexcept;
-        SlotGuard(const SlotGuard&) = delete;
-        SlotGuard& operator=(const SlotGuard&) = delete;
-        ~SlotGuard();
-
-    private:
-        PostgreSqlPool* client_;
-        std::size_t slot_;
-    };
+    using SlotGuard = DbSlotGuard<PostgreSqlPool>;
 
     struct ConnectionSlot {
         ConnectionSlot(

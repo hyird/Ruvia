@@ -17,8 +17,12 @@
 #include "ruvia/web/detail/app/EnvState.h"
 #include "ruvia/core/detail/util/NativePath.h"
 #include "ruvia/web/detail/controller/ControllerDescriptors.h"
-#include "ruvia/web/detail/db/DbRegistry.h"
-#include "ruvia/web/detail/redis/RedisRegistry.h"
+#ifdef RUVIA_ENABLE_DATABASE
+#include "ruvia/web/db/DbTypes.h"
+#endif
+#ifdef RUVIA_ENABLE_REDIS
+#include "ruvia/web/redis/RedisTypes.h"
+#endif
 #include "ruvia/web/detail/server/HttpServerOptions.h"
 
 namespace ruvia::detail {

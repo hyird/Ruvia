@@ -79,31 +79,15 @@ void PostgreSqlPool::scanDeadlines(
 }
 
 bool PostgreSqlPool::hasAnyTimeout() const noexcept {
-    return config_.connectTimeout.has_value() ||
-        config_.queryTimeout.has_value() ||
-        config_.readTimeout.has_value() ||
-        config_.writeTimeout.has_value() ||
-        config_.acquireTimeout.has_value();
+    return dbConfigHasAnyTimeout(config_);
 }
 
 Task<std::size_t> PostgreSqlPool::acquireSlot() {
-    const auto result = co_await scheduler_.acquire(config_.acquireTimeout);
-    if (const auto* acquired = result.acquired()) {
-        co_return acquired->index();
-    }
-    if (result.timedOut() != nullptr) {
-        throw std::runtime_error(
-            "database connection pool acquire timed out");
-    }
-    throw std::runtime_error("database client is closing");
+    return acquireDbSlot(*this);
 }
 
 void PostgreSqlPool::releaseSlot(std::size_t slot) noexcept {
-    const auto status = scheduler_.release(slot);
-    if (status == PoolLeaseReleaseStatus::kInvalidSlot ||
-        status == PoolLeaseReleaseStatus::kAlreadyReleased) {
-        std::terminate();
-    }
+    releaseDbSlot(*this, slot);
 }
 
 void PostgreSqlPool::closeSlot(ConnectionSlot& slot) noexcept {
@@ -152,17 +136,6 @@ void PostgreSqlPool::setSlotDeadline(
 
 void PostgreSqlPool::clearSlotDeadline(ConnectionSlot& slot) noexcept {
     (void)slot.deadline.clear();
-}
-
-PostgreSqlPool::SlotGuard::SlotGuard(
-    PostgreSqlPool& client,
-    std::size_t slot) noexcept
-    : client_(&client), slot_(slot) {}
-
-PostgreSqlPool::SlotGuard::~SlotGuard() {
-    if (client_ != nullptr) {
-        client_->releaseSlot(slot_);
-    }
 }
 
 }  // namespace ruvia::detail
