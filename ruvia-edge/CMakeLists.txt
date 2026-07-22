@@ -3,6 +3,11 @@ find_package(OpenSSL REQUIRED)
 
 set(RUVIA_EDGE_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/src/EdgeConfig.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/EdgeHeaderRules.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/EdgeByteRange.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/EdgeHttp1Wire.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/EdgeHttp2ResponseWriter.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/EdgeTlsContext.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/EdgeFreshness.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/EdgeCache.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/DiskCache.cpp

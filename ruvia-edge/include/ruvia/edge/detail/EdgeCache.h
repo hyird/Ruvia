@@ -13,12 +13,13 @@
 #include <vector>
 
 #include "ruvia/edge/EdgeTypes.h"
+#include "ruvia/edge/detail/EdgeHeaderRules.h"
 
 namespace ruvia::edge {
 
 struct CachedResponse final {
     std::uint16_t status{0};
-    std::vector<std::pair<std::string, std::string>> headers;
+    Headers headers;
     std::string body;
     std::time_t storedAt{0};
     std::uint64_t initialAge{0};
@@ -28,6 +29,12 @@ struct CachedResponse final {
 
     [[nodiscard]] std::size_t byteSize() const noexcept;
 };
+
+// The Age a stored response carries now: the age it arrived with plus the time
+// it has since been resident, saturating instead of wrapping.
+[[nodiscard]] std::uint64_t cachedResponseAge(
+    const CachedResponse& entry,
+    std::time_t now) noexcept;
 
 struct EdgeCachedResponseControl;
 

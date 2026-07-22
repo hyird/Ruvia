@@ -4,6 +4,7 @@
 #include <ctime>
 #include <optional>
 
+#include "ruvia/edge/detail/EdgeHeaderRules.h"
 #include "ruvia/http/HttpCache.h"
 
 namespace ruvia::edge {
@@ -45,5 +46,13 @@ struct FreshnessDecision final {
 // rejected rather than stored dead. s-maxage takes precedence over max-age
 // because this is a shared cache.
 [[nodiscard]] FreshnessDecision evaluateFreshness(const FreshnessInput& input) noexcept;
+
+// Assemble the RFC 9111 freshness inputs from a response's status and headers.
+[[nodiscard]] FreshnessInput buildFreshnessInput(
+    std::uint16_t status,
+    const Headers& headers,
+    std::time_t now,
+    std::time_t requestTime,
+    bool requestHasAuthorization);
 
 }  // namespace ruvia::edge

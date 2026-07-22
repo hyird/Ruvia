@@ -1,6 +1,7 @@
 #include "ruvia/edge/detail/EdgeCache.h"
 
 #include <cassert>
+#include <limits>
 #include <memory>
 #include <utility>
 
@@ -44,6 +45,16 @@ std::size_t CachedResponse::byteSize() const noexcept {
         total += name.size() + value.size();
     }
     return total;
+}
+
+std::uint64_t cachedResponseAge(const CachedResponse& entry, std::time_t now) noexcept {
+    const std::uint64_t resident = entry.storedAt <= now
+        ? static_cast<std::uint64_t>(now - entry.storedAt)
+        : std::uint64_t{0};
+    const auto maximum = (std::numeric_limits<std::uint64_t>::max)();
+    return entry.initialAge > maximum - resident
+        ? maximum
+        : entry.initialAge + resident;
 }
 
 CacheEntryLease::CacheEntryLease(EdgeCachedResponseControl* control) noexcept
