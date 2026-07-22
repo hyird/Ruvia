@@ -50,7 +50,8 @@ add_executable(ruvia_unit_tests
     http/http1/http1_chunked_framing.cpp
     http/http1/http1_interim_response.cpp
     http/http1/http1_parser.cpp
-    http/http1/http_parsing.cpp
+    http/http1/chunk_framing.cpp
+    http/http1/multipart_quoting.cpp
     http/http1/http_stream_body_reader.cpp
     http/http1/multipart.cpp
     http/http1/multipart_reader.cpp
@@ -111,6 +112,8 @@ add_executable(ruvia_unit_tests
     http/unit/content_negotiation.cpp
     http/unit/computed_response_headers.cpp
     http/unit/content_codec.cpp
+    http/unit/quoted_field_values.cpp
+    http/unit/zstd_frames.cpp
     http/unit/content_type_match.cpp
     http/unit/date_cache.cpp
     http/unit/error.cpp
@@ -120,7 +123,8 @@ add_executable(ruvia_unit_tests
     http/unit/header_classification.cpp
     http/unit/header_params.cpp
     http/unit/header_tokens.cpp
-    http/unit/http_basics.cpp
+    http/unit/http_field_syntax.cpp
+    http/unit/http_method.cpp
     http/unit/http_byte_range.cpp
     http/unit/http_cache.cpp
     http/unit/http_char_syntax.cpp
@@ -187,6 +191,7 @@ add_executable(ruvia_unit_tests
     web/unit/json_size_hint.cpp
     web/unit/json_writer.cpp
     web/unit/model_list.cpp
+    web/unit/model_last_match.cpp
     web/unit/model_string.cpp
     web/unit/pattern_compiler.cpp
     web/unit/pattern_matcher.cpp
