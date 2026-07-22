@@ -22,6 +22,7 @@ set(RUVIA_WEB_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/src/app/AppConfig.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/app/AppHttpConfig.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/app/AppIntegrationConfig.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/app/ServerConfig.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/app/Testing.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/integration/DataAccess.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/integration/DataAccessServiceState.cpp
