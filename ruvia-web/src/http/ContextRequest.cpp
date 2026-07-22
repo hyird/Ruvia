@@ -16,6 +16,8 @@
 #include "ruvia/web/detail/http/RequestBodyLoader.h"
 #include "ruvia/http/detail/AsciiCase.h"
 #include "ruvia/http/UrlEncoding.h"
+#include "ruvia/web/detail/http/RequestFieldParsing.h"
+#include "ruvia/web/detail/http/RequestFormBodyParse.h"
 #include "ruvia/web/detail/model/Parser.h"
 
 #include <algorithm>
@@ -119,344 +121,6 @@ ScopedOperation<std::optional<JsonValue>> ContextRequest::jsonIf() const {
         context_->operationScope_, jsonIfTask(context_));
 }
 
-namespace {
-
-[[nodiscard]] std::size_t delimitedFieldCount(std::string_view input, char delimiter) noexcept {
-    if (input.empty()) {
-        return 0;
-    }
-
-    std::size_t count = 1;
-    for (const char c : input) {
-        if (c == delimiter) {
-            ++count;
-        }
-    }
-    return count;
-}
-
-// Cap on the up-front reservation for a parsed name/value vector. delimitedFieldCount
-// counts every delimiter, including the empty segments that the parser then skips
-// (visitUrlEncodedPairs / httpVisitSemicolonParameters), so an untrusted input of
-// only delimiters -- e.g. a 16 MiB body of '&' at the buffered-body limit -- would
-// reserve millions of heavy field objects while producing none, amplifying a small
-// body into a huge allocation. Bound the reservation: growth past it is amortized
-// O(1), so a legitimate large input is unaffected while the attacker-controlled
-// over-reservation is capped.
-inline constexpr std::size_t kMaxParsedFieldReserve = 4096;
-
-[[nodiscard]] std::size_t boundedFieldReserve(std::size_t count) noexcept {
-    return count < kMaxParsedFieldReserve ? count : kMaxParsedFieldReserve;
-}
-
-void appendLowerAscii(std::pmr::string& output, std::string_view input) {
-    for (const char ch : input) {
-        output.push_back(static_cast<char>(detail::httpAsciiToLower(static_cast<unsigned char>(ch))));
-    }
-}
-
-[[nodiscard]] bool assignUrlDecodedOrCopy(
-    std::pmr::string& output,
-    std::string_view input,
-    detail::UrlDecodeMode mode) {
-    if (detail::hasUrlEncoding(input, mode)) {
-        auto decoded = detail::decodeUrlComponent(
-            input,
-            mode,
-            output.get_allocator().resource());
-        if (decoded.has_value()) {
-            output = std::move(*decoded);
-            return true;
-        }
-        return false;
-    }
-    output.assign(input.data(), input.size());
-    return true;
-}
-
-[[nodiscard]] bool fieldNameIsArray(std::string_view name) noexcept {
-    return name.ends_with("[]");
-}
-
-[[nodiscard]] bool fieldNameHasProtoObject(std::string_view name) noexcept {
-    std::size_t offset = 0;
-    for (;;) {
-        const auto found = name.find("__proto__.", offset);
-        if (found == std::string_view::npos) {
-            return false;
-        }
-        if (found == 0 || name[found - 1] == '.') {
-            return true;
-        }
-        offset = found + 1;
-    }
-}
-
-void assignDotPath(
-    ContextRequest::RequestFormField& field,
-    std::pmr::memory_resource* resource) {
-    auto& path = detail::RequestFormFieldAccess::path(field);
-    path.clear();
-    std::string_view remaining = field.name();
-    while (!remaining.empty()) {
-        const auto dot = remaining.find('.');
-        const auto segment = dot == std::string_view::npos
-            ? remaining
-            : remaining.substr(0, dot);
-        path.emplace_back(std::pmr::string(segment.data(), segment.size(), resource));
-        if (dot == std::string_view::npos) {
-            break;
-        }
-        remaining.remove_prefix(dot + 1);
-    }
-}
-
-[[nodiscard]] std::string_view storedStringView(const std::pmr::string& value) noexcept {
-    return value;
-}
-
-[[nodiscard]] std::string_view pairNameAt(
-    const std::pmr::vector<std::pmr::string>& storage,
-    std::size_t index) noexcept {
-    return storedStringView(storage[index * 2]);
-}
-
-[[nodiscard]] std::pmr::vector<std::size_t> sortedPairOrder(
-    const std::pmr::vector<std::pmr::string>& storage,
-    std::pmr::memory_resource* resource) {
-    std::pmr::vector<std::size_t> order(resource);
-    const auto count = storage.size() / 2;
-    order.reserve(count);
-    for (std::size_t i = 0; i < count; ++i) {
-        order.push_back(i);
-    }
-    // The original position is an explicit tie-breaker, so an in-place sort has
-    // the same deterministic order as stable_sort without its non-PMR scratch
-    // allocation on the request path.
-    std::ranges::sort(order, [&storage](std::size_t left, std::size_t right) noexcept {
-        const auto leftName = pairNameAt(storage, left);
-        const auto rightName = pairNameAt(storage, right);
-        if (leftName == rightName) {
-            return left < right;
-        }
-        return leftName < rightName;
-    });
-    return order;
-}
-
-[[nodiscard]] std::pmr::vector<std::size_t> sortedFormFieldOrder(
-    const std::pmr::vector<ContextRequest::RequestFormField>& fields,
-    std::pmr::memory_resource* resource) {
-    std::pmr::vector<std::size_t> order(resource);
-    order.reserve(fields.size());
-    for (std::size_t i = 0; i < fields.size(); ++i) {
-        order.push_back(i);
-    }
-    std::ranges::sort(order, [&fields](std::size_t left, std::size_t right) noexcept {
-        const auto leftName = fields[left].name();
-        const auto rightName = fields[right].name();
-        if (leftName == rightName) {
-            return left < right;
-        }
-        return leftName < rightName;
-    });
-    return order;
-}
-
-void appendParsedBodyField(
-    std::pmr::vector<ContextRequest::RequestFormField>& fields,
-    ContextRequest::RequestFormField&& field,
-    ContextRequest::ParseBodyOptions options) {
-    if (options.dottedNames == ContextRequest::DottedNamePolicy::kExpandPath) {
-        if (fieldNameHasProtoObject(field.name())) {
-            return;
-        }
-        assignDotPath(field, fields.get_allocator().resource());
-    }
-
-    // Reject before the field vector (and the sorts over it) can grow without
-    // bound from an attacker-supplied body of many tiny fields.
-    if (fields.size() >= options.maxFields) {
-        detail::throwTooManyFormFields();
-    }
-    fields.emplace_back(std::move(field));
-}
-
-void compactParsedBodyFields(
-    std::pmr::vector<ContextRequest::RequestFormField>& fields,
-    ContextRequest::ParseBodyOptions options) {
-    if (options.repeatedScalars == ContextRequest::RepeatedScalarPolicy::kRetainAll ||
-        fields.size() < 2) {
-        return;
-    }
-
-    auto* const resource = fields.get_allocator().resource();
-    const auto order = sortedFormFieldOrder(fields, resource);
-    std::pmr::vector<unsigned char> keep(resource);
-    keep.resize(fields.size(), 0);
-
-    for (std::size_t offset = 0; offset < order.size();) {
-        const auto name = fields[order[offset]].name();
-        std::optional<std::size_t> lastScalar;
-        do {
-            const auto index = order[offset];
-            // Retain every array ("name[]") field, and every file part: a
-            // standard <input type=file multiple> emits several parts under one
-            // non-"[]" name, and collapsing them as repeated scalars would
-            // silently drop all but the last upload. Only true repeated scalars
-            // (text fields) collapse to their last value.
-            if (fields[index].array() || fields[index].file()) {
-                keep[index] = 1;
-            } else {
-                lastScalar = index;
-            }
-            ++offset;
-        } while (offset < order.size() && fields[order[offset]].name() == name);
-        if (lastScalar.has_value()) {
-            keep[*lastScalar] = 1;
-        }
-    }
-
-    std::size_t write = 0;
-    for (std::size_t read = 0; read < fields.size(); ++read) {
-        if (keep[read] == 0) {
-            continue;
-        }
-        if (write != read) {
-            std::destroy_at(&fields[write]);
-            std::construct_at(&fields[write], std::move(fields[read]));
-        }
-        ++write;
-    }
-    while (fields.size() > write) {
-        fields.pop_back();
-    }
-}
-
-[[nodiscard]] ContextRequest::RequestFormData parseUrlEncodedFormBody(
-    std::string_view requestBody,
-    std::pmr::memory_resource* resource,
-    ContextRequest::ParseBodyOptions options) {
-    std::pmr::vector<ContextRequest::RequestFormField> fields(resource);
-    fields.reserve(boundedFieldReserve(delimitedFieldCount(requestBody, '&')));
-    bool valid = true;
-    const bool ok = detail::visitUrlEncodedPairs(
-        requestBody,
-        [resource, &fields, &valid, options](std::string_view key, std::string_view value) {
-            auto decodedName = detail::decodeUrlComponent(
-                key,
-                detail::UrlDecodeMode::kForm,
-                resource);
-            auto decodedValue = detail::decodeUrlComponent(
-                value,
-                detail::UrlDecodeMode::kForm,
-                resource);
-            if (!decodedName || !decodedValue) {
-                valid = false;
-                return false;
-            }
-
-            const bool array = fieldNameIsArray(std::string_view(decodedName->data(), decodedName->size()));
-            appendParsedBodyField(
-                fields,
-                detail::RequestFormFieldAccess::make(
-                    resource,
-                    std::move(*decodedName),
-                    std::move(*decodedValue),
-                    std::pmr::string(resource),
-                    std::pmr::string(resource),
-                    false,
-                    array),
-                options);
-            return true;
-        });
-    if (!ok || !valid) {
-        throw std::invalid_argument("invalid form body");
-    }
-    compactParsedBodyFields(fields, options);
-    return detail::RequestFormDataAccess::fromFields(std::move(fields));
-}
-
-[[nodiscard]] std::pmr::vector<MultipartPart> parseCompleteMultipartBody(
-    std::string_view requestBody,
-    MultipartBoundary boundary,
-    std::pmr::memory_resource* resource) {
-    auto parsed = parseMultipartBody(requestBody, std::move(boundary), resource);
-    if (const auto* failure = parsed.failure()) {
-        throw failure->protocolError();
-    }
-    auto* body = parsed.body();
-    if (body == nullptr) {
-        throw std::logic_error("unexpected multipart body parse result");
-    }
-    return std::move(*body).takeParts();
-}
-
-[[nodiscard]] ContextRequest::RequestFormData parseMultipartFormBody(
-    std::string_view requestBody,
-    MultipartBoundary boundary,
-    std::pmr::memory_resource* resource,
-    ContextRequest::ParseBodyOptions options) {
-    auto parts = parseCompleteMultipartBody(
-        requestBody, std::move(boundary), resource);
-    std::pmr::vector<ContextRequest::RequestFormField> fields(resource);
-    fields.reserve(parts.size());
-    for (const auto& part : parts) {
-        const auto partName = part.name();
-        const auto partBody = part.body();
-        const auto partFilename = part.filename();
-        const auto partContentType = part.contentType();
-        std::pmr::string name(partName.data(), partName.size(), resource);
-        const bool array = fieldNameIsArray(std::string_view(name));
-        // RFC 7578 section 4.4: a part without a Content-Type defaults to
-        // text/plain. Surface that effective type to the form consumer rather
-        // than an empty string (the raw multipart parts API stays faithful).
-        std::pmr::string contentType = partContentType.empty()
-            ? std::pmr::string("text/plain", resource)
-            : std::pmr::string(partContentType.data(), partContentType.size(), resource);
-        appendParsedBodyField(
-            fields,
-            detail::RequestFormFieldAccess::make(
-                resource,
-                std::move(name),
-                std::pmr::string(partBody.data(), partBody.size(), resource),
-                std::pmr::string(partFilename.data(), partFilename.size(), resource),
-                std::move(contentType),
-                !partFilename.empty(),
-                array),
-            options);
-    }
-    compactParsedBodyFields(fields, options);
-    return detail::RequestFormDataAccess::fromFields(std::move(fields));
-}
-
-[[nodiscard]] ContextRequest::RequestFormData parseFormBodyFromView(
-    std::string_view contentType,
-    std::string_view requestBody,
-    std::pmr::memory_resource* resource,
-    ContextRequest::ParseBodyOptions options) {
-    if (detail::contentTypeMatches(contentType, "application/x-www-form-urlencoded")) {
-        return parseUrlEncodedFormBody(requestBody, resource, options);
-    }
-
-    const auto boundary = detail::httpParseMultipartBoundary(contentType);
-    if (const auto* parsed = boundary.boundary()) {
-        return parseMultipartFormBody(
-            requestBody,
-            *parsed,
-            resource,
-            options);
-    }
-    if (boundary.notApplicable() != nullptr) {
-        return detail::RequestFormDataAccess::empty(resource);
-    }
-    if (const auto* failure = boundary.failure()) {
-        throw failure->protocolError();
-    }
-    throw std::logic_error("unexpected multipart boundary parse result");
-}
-
-}  // namespace
 
 const RequestNameValueList& Context::requestHeaders() const {
     auto& cache = requestStorage().headers;
@@ -469,7 +133,7 @@ const RequestNameValueList& Context::requestHeaders() const {
         for (const auto& rawHeader : rawHeaders) {
             auto& name = names.emplace_back();
             name.reserve(rawHeader.name().size());
-            appendLowerAscii(name, rawHeader.name());
+            detail::appendLowerAscii(name, rawHeader.name());
             detail::RequestNameValueListAccess::pushBack(
                 headers,
                 detail::RequestNameValueViewAccess::make(
@@ -498,17 +162,17 @@ void Context::ensureRequestQuery() const {
         detail::throwInvalidQuery();
     }
 
-    const auto pairCount = delimitedFieldCount(request_.queryString(), '&');
+    const auto pairCount = detail::delimitedFieldCount(request_.queryString(), '&');
     std::pmr::vector<std::pmr::string> storage(resource());
-    storage.reserve(boundedFieldReserve(pairCount * 2));
+    storage.reserve(detail::boundedFieldReserve(pairCount * 2));
     bool valid = true;
     const bool completed = detail::visitUrlEncodedPairs(
         request_.queryString(),
         [this, &storage, &valid](std::string_view key, std::string_view value) {
             std::pmr::string decodedName(resource());
             std::pmr::string decodedValue(resource());
-            if (!assignUrlDecodedOrCopy(decodedName, key, detail::UrlDecodeMode::kForm) ||
-                !assignUrlDecodedOrCopy(decodedValue, value, detail::UrlDecodeMode::kForm)) {
+            if (!detail::assignUrlDecodedOrCopy(decodedName, key, detail::UrlDecodeMode::kForm) ||
+                !detail::assignUrlDecodedOrCopy(decodedValue, value, detail::UrlDecodeMode::kForm)) {
                 valid = false;
                 return false;
             }
@@ -528,16 +192,16 @@ void Context::ensureRequestQuery() const {
         std::size_t end;
     };
 
-    const auto order = sortedPairOrder(storage, resource());
+    const auto order = detail::sortedPairOrder(storage, resource());
     std::pmr::vector<QueryBuild> builds(resource());
     builds.reserve(order.size());
     for (std::size_t offset = 0; offset < order.size();) {
         const auto begin = offset;
         const auto firstIndex = order[offset];
-        const auto name = pairNameAt(storage, firstIndex);
+        const auto name = detail::pairNameAt(storage, firstIndex);
         do {
             ++offset;
-        } while (offset < order.size() && pairNameAt(storage, order[offset]) == name);
+        } while (offset < order.size() && detail::pairNameAt(storage, order[offset]) == name);
         builds.push_back(QueryBuild{.firstIndex = firstIndex, .begin = begin, .end = offset});
     }
     std::ranges::sort(builds, [](const QueryBuild& left, const QueryBuild& right) noexcept {
@@ -561,13 +225,13 @@ void Context::ensureRequestQuery() const {
         detail::RequestNameValueListAccess::pushBack(
             query,
             detail::RequestNameValueViewAccess::make(
-                storedStringView(storage[lastIndex * 2]),
-                storedStringView(storage[lastIndex * 2 + 1])));
+                detail::storedStringView(storage[lastIndex * 2]),
+                detail::storedStringView(storage[lastIndex * 2 + 1])));
 
-        auto& group = groups.append(pairNameAt(storage, build.firstIndex));
+        auto& group = groups.append(detail::pairNameAt(storage, build.firstIndex));
         for (std::size_t i = build.begin; i < build.end; ++i) {
             const auto pairIndex = order[i];
-            group.add(storedStringView(storage[pairIndex * 2 + 1]));
+            group.add(detail::storedStringView(storage[pairIndex * 2 + 1]));
         }
     }
 
@@ -612,12 +276,12 @@ const RequestNameValueList& Context::requestCookies() const {
         std::size_t cookieCount = 0;
         for (const auto& header : request_.headers()) {
             if (detail::httpAsciiEqualsIgnoreCase(header.name(), "Cookie")) {
-                cookieCount += delimitedFieldCount(header.value(), ';');
+                cookieCount += detail::delimitedFieldCount(header.value(), ';');
             }
         }
 
         auto cookies = detail::RequestNameValueListAccess::make(resource());
-        detail::RequestNameValueListAccess::reserve(cookies, boundedFieldReserve(cookieCount));
+        detail::RequestNameValueListAccess::reserve(cookies, detail::boundedFieldReserve(cookieCount));
         for (const auto& header : request_.headers()) {
             if (!detail::httpAsciiEqualsIgnoreCase(header.name(), "Cookie")) {
                 continue;
@@ -674,7 +338,7 @@ void Context::ensureRouteParams() const {
                 detail::throwInvalidParam();
             }
             auto& owned = storage.emplace_back(std::move(*decoded));
-            value = storedStringView(owned);
+            value = detail::storedStringView(owned);
         }
         detail::RequestNameValueListAccess::pushBack(
             params,
@@ -801,13 +465,13 @@ bool Context::requestContentTypeMatches(std::string_view expected) const noexcep
 Task<std::pmr::vector<MultipartPart>> Context::requestMultipart() const {
     const auto boundary = multipartBoundary();
     const auto requestBody = co_await this->requestBody();
-    co_return parseCompleteMultipartBody(requestBody, boundary, resource());
+    co_return detail::parseCompleteMultipartBody(requestBody, boundary, resource());
 }
 
 Task<ContextRequest::RequestFormData> Context::parseRequestBody(
     ContextRequest::ParseBodyOptions options) const {
     const auto requestBody = co_await this->requestBody();
-    co_return parseFormBodyFromView(
+    co_return detail::parseFormBodyFromView(
         detail::requestKnownHeader(request_, detail::RequestKnownHeader::kContentType),
         requestBody,
         resource(),

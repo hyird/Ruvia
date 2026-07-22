@@ -58,6 +58,7 @@ bindValidatedModel(Context&, T&&) = delete;
 [[noreturn]] void throwInvalidJsonBody();
 [[noreturn]] void throwInvalidFormContentType();
 [[noreturn]] void throwInvalidFormBody();
+[[noreturn]] void throwTooManyFormFields();
 [[noreturn]] void throwInvalidQuery();
 [[noreturn]] void throwInvalidParam();
 [[noreturn]] void throwInvalidHeader();

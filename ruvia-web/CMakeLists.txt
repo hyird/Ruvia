@@ -31,6 +31,7 @@ set(RUVIA_WEB_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/src/http/ContextRequest.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/http/ContextRequestFacade.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/http/ContextRequestForm.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/http/ContextRequestFormParse.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/http/ContextResponse.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/http/ContextSessionState.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/http/ContextStorage.cpp
