@@ -1,7 +1,7 @@
 #include "ruvia/web/ServerConfig.h"
 #include "ruvia/web/detail/app/AppConfigMutation.h"
-#include "ruvia/web/detail/ConfigValidation.h"
-#include "ruvia/core/detail/NativePath.h"
+#include "ruvia/web/detail/app/ConfigValidation.h"
+#include "ruvia/core/detail/util/NativePath.h"
 
 #include <stdexcept>
 #include <type_traits>

@@ -1,6 +1,6 @@
 #include "ruvia/http/detail/server/HttpResponseHeadBuffer.h"
 
-#include "ruvia/http/detail/PmrString.h"
+#include "ruvia/http/detail/util/PmrString.h"
 
 #include <algorithm>
 #include <charconv>

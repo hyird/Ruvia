@@ -1,4 +1,4 @@
-#include <ruvia/core/detail/WorkerDispatcher.h>
+#include <ruvia/core/detail/worker/WorkerDispatcher.h>
 
 #include <asio/io_context.hpp>
 

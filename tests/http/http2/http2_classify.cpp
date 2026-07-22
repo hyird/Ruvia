@@ -6,7 +6,7 @@
 
 #include "ruvia/http/detail/http2/Http2HeaderContinuation.h"
 #include "ruvia/http/detail/http2/Http2HeaderDecode.h"
-#include "ruvia/web/detail/server/HttpServerCleartextHttp2.h"
+#include "ruvia/web/detail/http2/CleartextUpgrade.h"
 
 namespace {
 

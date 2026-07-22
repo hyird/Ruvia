@@ -1,4 +1,4 @@
-#include "ruvia/web/detail/db/DbInternal.h"
+#include "ruvia/web/detail/db/DbRegistry.h"
 
 #include "ruvia/web/detail/db/DbPostgreSql.h"
 #include "ruvia/web/detail/db/DbResultAccess.h"

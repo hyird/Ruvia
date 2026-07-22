@@ -1,13 +1,13 @@
 #include "ruvia/web/Csrf.h"
 
-#include "ruvia/web/detail/http/CsrfInternal.h"
+#include "ruvia/web/detail/http/SecureToken.h"
 
 #include <array>
 #include <cstddef>
 
 #include <openssl/rand.h>
 
-#include "ruvia/http/detail/Hex.h"
+#include "ruvia/http/detail/util/Hex.h"
 
 namespace ruvia::detail {
 

@@ -1,6 +1,6 @@
-#include "ruvia/core/detail/ConnectionScanner.h"
+#include "ruvia/core/detail/io/ConnectionScanner.h"
 
-#include "ruvia/core/detail/SocketUtils.h"
+#include "ruvia/core/detail/io/SocketUtils.h"
 
 #include <chrono>
 #include <stdexcept>

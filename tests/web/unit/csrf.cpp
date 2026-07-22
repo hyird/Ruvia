@@ -13,11 +13,11 @@
 #include <asio/detached.hpp>
 #include <asio/io_context.hpp>
 
-#include "ruvia/web/detail/http/CsrfInternal.h"
-#include "ruvia/web/detail/http/ContextInternal.h"
-#include "ruvia/http/detail/HttpRequestInternal.h"
+#include "ruvia/web/detail/http/SecureToken.h"
+#include "ruvia/web/detail/http/ContextAccess.h"
+#include "ruvia/http/detail/request/HttpRequestAccess.h"
 #include "ruvia/web/detail/router/RouteTable.h"
-#include "ruvia/core/detail/AsioAwait.h"
+#include "ruvia/core/detail/io/AsioAwait.h"
 #include "ruvia/web/Context.h"
 #include "ruvia/web/Csrf.h"
 #include "ruvia/http/HttpHeader.h"

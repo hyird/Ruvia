@@ -3,11 +3,11 @@
 #include <stdexcept>
 
 #ifdef RUVIA_ENABLE_DATABASE
-#include "ruvia/web/detail/db/DbInternal.h"
+#include "ruvia/web/detail/db/DbRegistry.h"
 #endif
 
 #ifdef RUVIA_ENABLE_REDIS
-#include "ruvia/web/detail/redis/RedisInternal.h"
+#include "ruvia/web/detail/redis/RedisRegistry.h"
 #endif
 
 namespace ruvia {

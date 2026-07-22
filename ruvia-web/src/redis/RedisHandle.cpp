@@ -2,7 +2,7 @@
 
 #include "ruvia/web/detail/redis/RedisHandleCommandOps.h"
 #include "ruvia/web/detail/redis/RedisHandleHelpers.h"
-#include "ruvia/web/detail/redis/RedisInternal.h"
+#include "ruvia/web/detail/redis/RedisRegistry.h"
 #include "ruvia/web/detail/redis/RedisUtils.h"
 
 #include <memory_resource>

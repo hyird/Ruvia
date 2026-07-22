@@ -1,10 +1,10 @@
-#include "ruvia/web/detail/db/DbInternal.h"
+#include "ruvia/web/detail/db/DbRegistry.h"
 #include "ruvia/web/detail/db/DbConfigValidation.h"
 #include "ruvia/web/detail/db/DbMigrationValidation.h"
 #include "ruvia/web/detail/db/DbUtils.h"
 #include "ruvia/web/db/Db.h"
 
-#include "ruvia/core/detail/AsioAwait.h"
+#include "ruvia/core/detail/io/AsioAwait.h"
 
 #include <asio/bind_executor.hpp>
 

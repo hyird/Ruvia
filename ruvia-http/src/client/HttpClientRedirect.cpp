@@ -1,7 +1,7 @@
 #include "ruvia/http/HttpClientRedirect.h"
 
-#include "ruvia/http/detail/HeaderTokenUtils.h"
-#include "ruvia/http/detail/PmrResource.h"
+#include "ruvia/http/detail/field/HeaderTokenUtils.h"
+#include "ruvia/http/detail/util/PmrResource.h"
 #include "ruvia/http/detail/client/HttpOrigin.h"
 #include "ruvia/http/detail/parser/HttpRequestTarget.h"
 

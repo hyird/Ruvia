@@ -4,7 +4,7 @@
 #include <stdexcept>
 #include <utility>
 
-#include <ruvia/core/detail/WorkerTimer.h>
+#include <ruvia/core/detail/worker/WorkerTimer.h>
 
 namespace ruvia {
 namespace {

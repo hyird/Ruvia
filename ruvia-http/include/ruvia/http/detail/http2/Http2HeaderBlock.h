@@ -5,7 +5,7 @@
 
 #include "ruvia/http/detail/http2/Http2StreamState.h"
 #include "ruvia/http/HttpLimits.h"
-#include "ruvia/http/detail/PmrString.h"
+#include "ruvia/http/detail/util/PmrString.h"
 
 namespace ruvia::detail {
 

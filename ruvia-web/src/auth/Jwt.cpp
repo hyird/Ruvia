@@ -1,6 +1,6 @@
 #include "ruvia/web/auth/Jwt.h"
 
-#include "ruvia/web/detail/auth/JwtInternal.h"
+#include "ruvia/web/detail/auth/JwtPrimitives.h"
 
 #include <algorithm>
 #include <stdexcept>

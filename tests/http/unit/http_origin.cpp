@@ -8,6 +8,7 @@
 
 #include "ruvia/http/detail/client/HttpOrigin.h"
 #include "ruvia/http/detail/parser/HttpRequestTarget.h"
+#include "ruvia/http/detail/parser/HttpSerializedOrigin.h"
 #include "ruvia/http/HttpClient.h"
 
 namespace {

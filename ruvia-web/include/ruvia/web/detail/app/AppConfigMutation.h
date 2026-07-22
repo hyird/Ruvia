@@ -1,7 +1,7 @@
 #pragma once
 
 #include "ruvia/web/detail/app/AppConfigGuards.h"
-#include "ruvia/web/detail/app/AppInternal.h"
+#include "ruvia/web/detail/app/AppState.h"
 
 #include <mutex>
 #include <utility>

@@ -28,13 +28,13 @@
 #include "ruvia/http/detail/http2/Http2Hpack.h"
 #include "ruvia/http/detail/http2/Http2LocalSettings.h"
 #include "ruvia/http/detail/http2/Http2ReceiveWindowCredit.h"
-#include "ruvia/http/detail/HttpResponseFileAccess.h"
+#include "ruvia/http/detail/response/HttpResponseFileAccess.h"
 // The production session header owns every declaration needed by its templates;
 // this test intentionally must not rely on a server-wide include-order umbrella.
-#include "ruvia/web/detail/server/Http2SansIoSession.h"
-#include "ruvia/core/detail/ConnectionScanner.h"
+#include "ruvia/web/detail/http2/Http2SansIoSession.h"
+#include "ruvia/core/detail/io/ConnectionScanner.h"
 #include "ruvia/web/detail/router/RouteTable.h"
-#include "ruvia/core/detail/AsioAwait.h"
+#include "ruvia/core/detail/io/AsioAwait.h"
 #include "ruvia/core/memory/MemoryPool.h"
 
 namespace {

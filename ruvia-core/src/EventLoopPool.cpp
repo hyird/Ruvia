@@ -14,8 +14,8 @@
 #include <asio/execution_context.hpp>
 #include <asio/executor_work_guard.hpp>
 
-#include <ruvia/core/detail/WorkerDispatcher.h>
-#include <ruvia/core/detail/WorkerSelection.h>
+#include <ruvia/core/detail/worker/WorkerDispatcher.h>
+#include <ruvia/core/detail/worker/WorkerSelection.h>
 
 namespace ruvia {
 namespace {

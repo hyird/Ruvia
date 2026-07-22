@@ -6,7 +6,7 @@
 #include <utility>
 
 #include "ruvia/web/StaticFiles.h"
-#include "ruvia/web/detail/StaticFilesInternal.h"
+#include "ruvia/web/detail/http/StaticRootIndex.h"
 
 namespace {
 

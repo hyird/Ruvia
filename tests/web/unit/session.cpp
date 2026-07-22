@@ -3,8 +3,8 @@
 #include <memory_resource>
 #include <string_view>
 
-#include "ruvia/web/detail/http/SessionInternal.h"
-#include "ruvia/web/detail/http/CsrfInternal.h"
+#include "ruvia/web/detail/http/SessionAccess.h"
+#include "ruvia/web/detail/http/SecureToken.h"
 #include "ruvia/http/HttpResponse.h"
 
 namespace {

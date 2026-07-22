@@ -7,7 +7,7 @@
 #include <type_traits>
 #include <variant>
 
-#include "ruvia/http/detail/HttpResponseHeaderState.h"
+#include "ruvia/http/detail/response/HttpResponseHeaderState.h"
 #include "ruvia/http/detail/server/HttpResponseWritePlan.h"
 #include "ruvia/http/HttpResponse.h"
 

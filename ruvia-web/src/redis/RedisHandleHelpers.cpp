@@ -1,7 +1,7 @@
 #include "ruvia/web/detail/redis/RedisHandleHelpers.h"
 
 #include "ruvia/web/detail/redis/RedisUtils.h"
-#include "ruvia/http/detail/AsciiCase.h"
+#include "ruvia/http/detail/util/AsciiCase.h"
 
 #include <stdexcept>
 #include <utility>

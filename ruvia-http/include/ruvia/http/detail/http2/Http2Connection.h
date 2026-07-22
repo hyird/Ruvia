@@ -37,7 +37,7 @@
 #include <variant>
 #include <vector>
 
-#include "ruvia/http/detail/BorrowedView.h"
+#include "ruvia/http/detail/util/BorrowedView.h"
 #include "ruvia/http/detail/http2/Http2ClosedStreams.h"
 #include "ruvia/http/detail/http2/Http2Event.h"
 #include "ruvia/http/detail/http2/Http2FrameTypes.h"

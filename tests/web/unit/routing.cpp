@@ -17,24 +17,24 @@
 #include <string_view>
 #include <vector>
 
-#include "ruvia/web/detail/http/ContextInternal.h"
-#include "ruvia/http/detail/HttpRequestInternal.h"
-#include "ruvia/http/detail/HttpResponseBodyAccess.h"
+#include "ruvia/web/detail/http/ContextAccess.h"
+#include "ruvia/http/detail/request/HttpRequestAccess.h"
+#include "ruvia/http/detail/response/HttpResponseBodyAccess.h"
 #include "ruvia/http/HttpProtocolError.h"
-#include "ruvia/web/detail/http/StreamingInternal.h"
-#include "ruvia/web/detail/server/HttpResponseStreamState.h"
+#include "ruvia/web/detail/http/StreamingAccess.h"
+#include "ruvia/web/detail/server/stream/HttpResponseStreamState.h"
 #include "ruvia/web/Streaming.h"
-#include "ruvia/core/detail/AsioAwait.h"
+#include "ruvia/core/detail/io/AsioAwait.h"
 #include "ruvia/web/Context.h"
 #include "ruvia/web/Controller.h"
 #include "ruvia/web/detail/middleware/MiddlewareRegistration.h"
 #include "ruvia/core/memory/MemoryPool.h"
 #include "ruvia/web/Router.h"
 #include "ruvia/web/RateLimit.h"
-#include "ruvia/web/detail/router/RouterInternal.h"
+#include "ruvia/web/detail/router/RouterImpl.h"
 #include "ruvia/web/detail/router/RouteResolution.h"
 #include "ruvia/web/detail/router/RouteTable.h"
-#include "ruvia/web/detail/websocket/WebSocketInternal.h"
+#include "ruvia/web/detail/websocket/WebSocketAccess.h"
 
 struct ScopedValidationRequest final {
     RUVIA_OPTIONAL_FIELD(value, ruvia::String);

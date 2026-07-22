@@ -1,7 +1,7 @@
 #include "ruvia/web/SecurityHeaders.h"
 
 #include "ruvia/web/ConnInfo.h"
-#include "ruvia/web/detail/http/ContextInternal.h"
+#include "ruvia/web/detail/http/ContextAccess.h"
 
 namespace ruvia {
 namespace {

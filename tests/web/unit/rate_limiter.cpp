@@ -6,7 +6,7 @@
 #include <stdexcept>
 #include <string>
 
-#include "ruvia/web/detail/server/RateLimiter.h"
+#include "ruvia/web/detail/ratelimit/RateLimiter.h"
 #include "ruvia/web/RateLimitRule.h"
 
 namespace {

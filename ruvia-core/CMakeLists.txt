@@ -16,6 +16,7 @@ add_library(ruvia-core
     ${CMAKE_CURRENT_SOURCE_DIR}/src/TaskScope.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/Timer.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/WorkerDispatcher.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/WorkerTimers.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/WorkerHandle.cpp
 )
 add_library(ruvia::core ALIAS ruvia-core)

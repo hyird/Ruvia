@@ -5,7 +5,7 @@
 
 #include "ruvia/http/HttpResponse.h"
 #include "ruvia/http/HttpStatus.h"
-#include "ruvia/http/detail/HttpConnectionFields.h"
+#include "ruvia/http/detail/field/HttpConnectionFields.h"
 #include "ruvia/http/detail/http2/Http2HeaderRules.h"
 
 namespace ruvia::detail {

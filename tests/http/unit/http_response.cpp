@@ -14,8 +14,8 @@
 
 #include "ruvia/http/HttpInterimResponse.h"
 #include "ruvia/http/HttpResponse.h"
-#include "ruvia/http/detail/AsciiCase.h"
-#include "ruvia/http/detail/HttpResponseHeaderAccess.h"
+#include "ruvia/http/detail/util/AsciiCase.h"
+#include "ruvia/http/detail/response/HttpResponseHeaderAccess.h"
 
 namespace {
 

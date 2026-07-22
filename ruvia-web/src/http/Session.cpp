@@ -1,11 +1,11 @@
-#include "ruvia/web/detail/http/SessionInternal.h"
+#include "ruvia/web/detail/http/SessionAccess.h"
 
 #include "ruvia/web/Session.h"
-#include "ruvia/web/detail/http/ContextInternal.h"
+#include "ruvia/web/detail/http/ContextAccess.h"
 
 #ifdef RUVIA_ENABLE_REDIS
 
-#include "ruvia/web/detail/http/CsrfInternal.h"
+#include "ruvia/web/detail/http/SecureToken.h"
 #include "ruvia/web/redis/RedisHandle.h"
 
 #include <array>

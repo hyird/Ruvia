@@ -3,7 +3,7 @@
 #include <optional>
 #include <string_view>
 
-#include "ruvia/http/detail/BorrowedView.h"
+#include "ruvia/http/detail/util/BorrowedView.h"
 #include "ruvia/http/detail/websocket/HttpWebSocketFrameCodec.h"
 #include "ruvia/http/detail/websocket/HttpWebSocketPayloadValidation.h"
 

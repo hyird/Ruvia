@@ -1,6 +1,6 @@
 #pragma once
 
-#include "ruvia/web/detail/BorrowedView.h"
+#include "ruvia/web/detail/util/BorrowedView.h"
 #include "ruvia/http/HttpStatus.h"
 
 #include <cstdint>

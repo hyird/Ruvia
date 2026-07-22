@@ -10,8 +10,8 @@
 #include <asio/io_context.hpp>
 #include <asio/ip/tcp.hpp>
 
-#include "ruvia/core/detail/ConnectionScanner.h"
-#include "ruvia/core/detail/WorkerDispatcher.h"
+#include "ruvia/core/detail/io/ConnectionScanner.h"
+#include "ruvia/core/detail/worker/WorkerDispatcher.h"
 
 namespace {
 

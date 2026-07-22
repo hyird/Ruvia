@@ -1,9 +1,9 @@
 #pragma once
 
-#include "ruvia/http/detail/HeaderTokenUtils.h"
-#include "ruvia/http/detail/HttpResponseHeaderBits.h"
-#include "ruvia/http/detail/HttpHeaderSectionSize.h"
-#include "ruvia/http/detail/HttpResponseKnownHeaders.h"
+#include "ruvia/http/detail/field/HeaderTokenUtils.h"
+#include "ruvia/http/detail/response/HttpResponseHeaderBits.h"
+#include "ruvia/http/detail/field/HttpHeaderSectionSize.h"
+#include "ruvia/http/detail/response/HttpResponseKnownHeaders.h"
 #include "ruvia/http/detail/parser/HttpParserSyntax.h"
 #include "ruvia/http/HttpHeader.h"
 

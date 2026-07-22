@@ -4,8 +4,8 @@
 #include <optional>
 #include <string_view>
 
-#include "ruvia/http/detail/HttpResponseStaticHeaders.h"
-#include "ruvia/http/detail/HttpResponseHeaderBits.h"
+#include "ruvia/http/detail/response/HttpResponseStaticHeaders.h"
+#include "ruvia/http/detail/response/HttpResponseHeaderBits.h"
 
 namespace {
 

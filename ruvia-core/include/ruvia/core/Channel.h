@@ -18,9 +18,9 @@
 #include <ruvia/core/Task.h>
 #include <ruvia/core/WorkerHandle.h>
 #include <ruvia/core/WorkerWaitResult.h>
-#include <ruvia/core/detail/WorkerDispatcher.h>
-#include <ruvia/core/detail/WorkerTimer.h>
-#include <ruvia/core/detail/WorkerWaitAwaiter.h>
+#include <ruvia/core/detail/worker/WorkerDispatcher.h>
+#include <ruvia/core/detail/worker/WorkerTimer.h>
+#include <ruvia/core/detail/worker/WorkerWaitAwaiter.h>
 #include <ruvia/core/memory/PmrResource.h>
 
 namespace ruvia {

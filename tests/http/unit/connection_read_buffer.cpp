@@ -14,7 +14,7 @@
 #include <asio/ip/tcp.hpp>
 
 #include "ruvia/web/detail/server/HttpConnectionState.h"
-#include "ruvia/web/detail/server/Http1SessionRequestCompletion.h"
+#include "ruvia/web/detail/server/http1/Http1SessionRequestCompletion.h"
 #include "ruvia/web/detail/server/HttpServerConnectionGuards.h"
 #include "ruvia/http/detail/http1/Http1ServerRequestParser.h"
 #include "ruvia/http/HttpLimits.h"

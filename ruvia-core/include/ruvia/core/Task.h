@@ -1,6 +1,6 @@
 #pragma once
 
-#include "ruvia/core/detail/TaskPromise.h"
+#include "ruvia/core/detail/task/TaskPromise.h"
 
 #include <coroutine>
 #include <exception>
@@ -132,4 +132,4 @@ private:
 
 }  // namespace ruvia
 
-#include "ruvia/core/detail/TaskAwaiter.h"
+#include "ruvia/core/detail/task/TaskAwaiter.h"

@@ -14,7 +14,7 @@
 #include <utility>
 
 #include "ruvia/web/db/Db.h"
-#include "ruvia/web/detail/db/DbInternal.h"
+#include "ruvia/web/detail/db/DbRegistry.h"
 #include "ruvia/web/detail/db/DbOperationState.h"
 #include "ruvia/web/detail/db/DbResultAccess.h"
 #include "ruvia/web/detail/db/DbValueAccess.h"

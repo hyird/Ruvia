@@ -6,7 +6,7 @@
 #include <utility>
 
 #include "ruvia/http/HttpResponse.h"
-#include "ruvia/http/detail/HttpResponseHeadersAccess.h"
+#include "ruvia/http/detail/response/HttpResponseHeadersAccess.h"
 #include "ruvia/http/detail/server/HttpFinalResponseControlPlan.h"
 
 namespace {

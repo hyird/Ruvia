@@ -10,9 +10,9 @@
 #include <string>
 #include <string_view>
 
-#include "ruvia/web/detail/http/ContextInternal.h"
-#include "ruvia/http/detail/HttpRequestInternal.h"
-#include "ruvia/http/detail/HttpResponseBodyAccess.h"
+#include "ruvia/web/detail/http/ContextAccess.h"
+#include "ruvia/http/detail/request/HttpRequestAccess.h"
+#include "ruvia/http/detail/response/HttpResponseBodyAccess.h"
 #include "ruvia/web/Context.h"
 #include "ruvia/http/HttpHeader.h"
 #include "ruvia/http/HttpKnownMethod.h"

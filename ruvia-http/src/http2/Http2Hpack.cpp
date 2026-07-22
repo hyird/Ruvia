@@ -1,6 +1,6 @@
 #include "ruvia/http/detail/http2/Http2Hpack.h"
-#include "ruvia/http/detail/PmrString.h"
-#include "ruvia/http/detail/PmrResource.h"
+#include "ruvia/http/detail/util/PmrString.h"
+#include "ruvia/http/detail/util/PmrResource.h"
 
 #include <algorithm>
 

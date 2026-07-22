@@ -4,7 +4,7 @@
 
 #include <string_view>
 
-#include "ruvia/http/detail/AsciiCase.h"
+#include "ruvia/http/detail/util/AsciiCase.h"
 #include "ruvia/http/detail/parser/HttpParserSyntax.h"
 
 namespace ruvia::detail {

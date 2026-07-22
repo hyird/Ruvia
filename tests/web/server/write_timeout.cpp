@@ -25,7 +25,7 @@
 #include "ruvia/web/Context.h"
 #include "ruvia/web/Router.h"
 #include "ruvia/web/Streaming.h"
-#include "ruvia/web/detail/router/RouterInternal.h"
+#include "ruvia/web/detail/router/RouterImpl.h"
 #include "ruvia/web/detail/server/HttpServer.h"
 
 using namespace std::chrono_literals;

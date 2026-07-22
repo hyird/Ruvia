@@ -13,7 +13,7 @@
 #include "ruvia/core/StopToken.h"
 #include "ruvia/core/WorkerHandle.h"
 #include "ruvia/web/ScopedOperation.h"
-#include "ruvia/web/detail/WorkerState.h"
+#include "ruvia/web/detail/integration/WorkerState.h"
 
 #ifdef RUVIA_ENABLE_DATABASE
 #include "ruvia/web/db/DbHandle.h"

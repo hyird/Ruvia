@@ -2,9 +2,10 @@
 
 #include "ruvia/web/detail/server/HttpResponseCompression.h"
 #include "ruvia/web/detail/server/HttpServerOptions.h"
-#include "ruvia/http/detail/HeaderAcceptUtils.h"
-#include "ruvia/http/detail/HttpResponseBodyAccess.h"
-#include "ruvia/http/detail/HttpRequestInternal.h"
+#include "ruvia/http/detail/coding/HttpAcceptEncoding.h"
+#include "ruvia/http/detail/coding/HttpContentCoding.h"
+#include "ruvia/http/detail/response/HttpResponseBodyAccess.h"
+#include "ruvia/http/detail/request/HttpRequestAccess.h"
 #include "ruvia/http/detail/server/HttpResponseWritePlan.h"
 #include "ruvia/web/detail/http/HttpCors.h"
 #include "ruvia/http/HttpRequest.h"

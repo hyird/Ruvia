@@ -3,7 +3,7 @@
 #include "ruvia/http/HttpKnownMethod.h"
 #include "ruvia/http/detail/server/HttpResponseHeadPolicy.h"
 #include "ruvia/http/detail/server/HttpResponseWritePlan.h"
-#include "ruvia/http/detail/HttpResponseHeaderState.h"
+#include "ruvia/http/detail/response/HttpResponseHeaderState.h"
 #include "ruvia/http/HttpResponse.h"
 
 #include <cstddef>

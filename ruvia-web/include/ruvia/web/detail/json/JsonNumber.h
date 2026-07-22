@@ -7,7 +7,7 @@
 #include <system_error>
 #include <type_traits>
 
-#include "ruvia/web/detail/DecimalNumber.h"
+#include "ruvia/web/detail/util/DecimalNumber.h"
 #include "ruvia/web/detail/json/JsonLex.h"
 
 namespace ruvia::detail {
