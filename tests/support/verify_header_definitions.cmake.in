@@ -1,0 +1,99 @@
+set(_source_root "@CMAKE_SOURCE_DIR@")
+
+# A function defined in a header at namespace scope, without inline, constexpr
+# or a template parameter list, links only as long as exactly one translation
+# unit includes that header. Nothing says so, and nothing fails until a second
+# includer appears -- which is a change somewhere else entirely, long after the
+# header was written.
+#
+# The build cannot catch it while there is one includer, and compiling a header
+# on its own cannot either: the definition is well-formed, and only the linker
+# ever sees the second copy. So this reads the headers.
+#
+# Definitions inside a class body are implicitly inline and are not flagged;
+# only column-zero definitions are examined.
+
+set(_definition_pattern "^[A-Za-z_][^ \t].*\\(.*\\)[^;]*{[ \t]*$")
+set(_exempt_pattern "(^|[^A-Za-z_])(inline|constexpr|consteval|static|template|if|for|while|switch|catch|else|return)([^A-Za-z_]|$)")
+
+# Self-test: the pattern must match the shape that has actually gone wrong here,
+# and must ignore every spelling that is safe in a header. A pattern that stops
+# matching turns this guard into a no-op that reports success forever.
+set(_probe "Task<void> HttpServer::handleSession(AcceptedConnectionLease connection) {")
+string(REGEX MATCH "${_definition_pattern}" _probe_match "${_probe}")
+if(NOT _probe_match)
+    message(FATAL_ERROR
+        "ruvia_guard_header_definitions self-test failed: the definition pattern lost its probe")
+endif()
+string(REGEX MATCH "${_exempt_pattern}" _probe_exempt "${_probe}")
+if(_probe_exempt)
+    message(FATAL_ERROR
+        "ruvia_guard_header_definitions self-test failed: the probe is treated as exempt")
+endif()
+
+set(_safe_lines
+    "[[nodiscard]] inline bool httpHasToken(std::string_view value) noexcept {"
+    "[[nodiscard]] constexpr bool isPatternMeta(char c) noexcept {"
+    "    void memberDefinedInClassBody() {"
+    "class HttpServer final {"
+    "namespace ruvia::detail {"
+    "struct TlsServerHandshakeInitiator final {")
+foreach(_safe IN LISTS _safe_lines)
+    string(REGEX MATCH "${_definition_pattern}" _safe_shape "${_safe}")
+    string(REGEX MATCH "${_exempt_pattern}" _safe_exempt "${_safe}")
+    if(_safe_shape AND NOT _safe_exempt)
+        string(REGEX MATCH "^(class|struct|namespace|union|enum)" _safe_keyword "${_safe}")
+        if(NOT _safe_keyword)
+            message(FATAL_ERROR
+                "ruvia_guard_header_definitions self-test failed, safe line reported: ${_safe}")
+        endif()
+    endif()
+endforeach()
+
+file(GLOB_RECURSE _headers
+    "${_source_root}/ruvia-core/include/*.h" "${_source_root}/ruvia-core/include/*.inl"
+    "${_source_root}/ruvia-http/include/*.h" "${_source_root}/ruvia-http/include/*.inl"
+    "${_source_root}/ruvia-web/include/*.h" "${_source_root}/ruvia-web/include/*.inl"
+    "${_source_root}/ruvia-edge/include/*.h" "${_source_root}/ruvia-edge/include/*.inl")
+if(_headers STREQUAL "")
+    message(FATAL_ERROR
+        "ruvia_guard_header_definitions found no headers under ${_source_root}")
+endif()
+
+set(_violations "")
+foreach(_header IN LISTS _headers)
+    file(STRINGS "${_header}" _lines)
+    set(_previous "")
+    foreach(_line IN LISTS _lines)
+        string(REGEX MATCH "${_definition_pattern}" _shape "${_line}")
+        if(_shape)
+            string(REGEX MATCH "${_exempt_pattern}" _exempt "${_line}")
+            string(REGEX MATCH "^(class|struct|namespace|union|enum|extern)" _keyword "${_line}")
+            # A signature split across lines carries its specifier on the line
+            # before, and a template parameter list always does.
+            string(REGEX MATCH "${_exempt_pattern}" _previous_exempt "${_previous}")
+            if(NOT _exempt AND NOT _keyword AND NOT _previous_exempt)
+                file(RELATIVE_PATH _relative "${_source_root}" "${_header}")
+                list(APPEND _violations "${_relative}: ${_line}")
+            endif()
+        endif()
+        if(NOT _line STREQUAL "")
+            set(_previous "${_line}")
+        endif()
+    endforeach()
+endforeach()
+
+if(_violations)
+    list(SORT _violations)
+    list(JOIN _violations "\n  " _violation_text)
+    list(LENGTH _violations _violation_count)
+    message(FATAL_ERROR
+        "${_violation_count} header definition(s) link only while one translation "
+        "unit includes them:\n  ${_violation_text}\n"
+        "Mark the definition inline, make it a template, or move it into a source file.")
+endif()
+
+list(LENGTH _headers _header_count)
+message(STATUS
+    "ruvia_guard_header_definitions: ${_header_count} headers, every namespace-scope "
+    "definition is inline, constexpr or a template")
