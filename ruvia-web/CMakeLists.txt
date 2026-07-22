@@ -62,7 +62,6 @@ set(RUVIA_WEB_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/src/server/HttpConnectionState.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/server/HttpServerAccept.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/server/HttpServerLifecycle.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/router/ControllerRegistry.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/router/PathSegments.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/router/RouterBuild.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/router/Router.cpp
@@ -74,6 +73,8 @@ set(RUVIA_WEB_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/src/router/RouterIndex.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/router/RouterIndexBuild.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/router/RouterMiddlewareDispatch.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/controller/ControllerRegistry.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/controller/ControllerRouteBuilder.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/router/RouterRegistration.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/router/RouterUrl.cpp
 )
