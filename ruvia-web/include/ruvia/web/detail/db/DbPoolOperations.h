@@ -1,21 +1,22 @@
 #pragma once
 
-#include <memory_resource>
-#include <stdexcept>
-#include <span>
-#include <string>
-#include <string_view>
-#include <vector>
-
 #include <array>
 #include <charconv>
+#include <exception>
+#include <memory_resource>
+#include <span>
+#include <stdexcept>
+#include <string>
+#include <string_view>
 #include <system_error>
+#include <vector>
 
 #include <asio/ip/tcp.hpp>
 
 #include "ruvia/core/Task.h"
 #include "ruvia/core/detail/io/AsioAwait.h"
 #include "ruvia/core/detail/io/OperationDeadline.h"
+#include "ruvia/core/detail/pool/PoolLeaseScheduler.h"
 #include "ruvia/core/detail/worker/WorkerTimer.h"
 #include "ruvia/web/db/DbQueryResult.h"
 #include "ruvia/web/db/DbTypes.h"
@@ -25,6 +26,63 @@
 // which slot it runs on, and what happens to that slot when it fails.
 
 namespace ruvia::detail {
+
+// A pool slot held for the duration of one operation. Releasing it is the
+// caller's obligation however the operation ends, so the guard owns that: the
+// driver code between acquire and release can throw freely.
+template <typename Pool>
+class DbSlotGuard final {
+public:
+    DbSlotGuard(Pool& pool, std::size_t slot) noexcept
+        : pool_(&pool), slot_(slot) {}
+    DbSlotGuard(const DbSlotGuard&) = delete;
+    DbSlotGuard& operator=(const DbSlotGuard&) = delete;
+    ~DbSlotGuard() {
+        if (pool_ != nullptr) {
+            pool_->releaseSlot(slot_);
+        }
+    }
+
+private:
+    Pool* pool_;
+    std::size_t slot_;
+};
+
+// Taking and giving back a slot is pure lease bookkeeping: no driver is
+// involved, so both pools share these. A release that names no live lease is a
+// bug in the caller, not a runtime condition, and cannot be reported through a
+// noexcept path.
+template <typename Pool>
+Task<std::size_t> acquireDbSlot(Pool& pool) {
+    const auto result = co_await pool.scheduler_.acquire(pool.config_.acquireTimeout);
+    if (const auto* acquired = result.acquired()) {
+        co_return acquired->index();
+    }
+    if (result.timedOut() != nullptr) {
+        throw std::runtime_error("database connection pool acquire timed out");
+    }
+    throw std::runtime_error("database client is closing");
+}
+
+template <typename Pool>
+void releaseDbSlot(Pool& pool, std::size_t slot) noexcept {
+    const auto status = pool.scheduler_.release(slot);
+    if (status == PoolLeaseReleaseStatus::kInvalidSlot ||
+        status == PoolLeaseReleaseStatus::kAlreadyReleased) {
+        std::terminate();
+    }
+}
+
+// Whether any operation on this pool can time out, and therefore whether the
+// pool needs the deadline scanner running at all. Every timeout DbConfig can
+// carry is listed here, so adding one is a single edit.
+[[nodiscard]] inline bool dbConfigHasAnyTimeout(const DbConfig& config) noexcept {
+    return config.connectTimeout.has_value() ||
+        config.queryTimeout.has_value() ||
+        config.readTimeout.has_value() ||
+        config.writeTimeout.has_value() ||
+        config.acquireTimeout.has_value();
+}
 
 // Ending a transaction is the same for every driver: run the control statement
 // on the slot the transaction holds, and release that slot exactly once. A

@@ -38,6 +38,17 @@ function(ruvia_add_test name source)
     endif()
 endfunction()
 
+# Cross-target: it covers whatever this configuration installs, so it lives with
+# the shared support rather than under one target's guards.
+configure_file(
+    ${CMAKE_CURRENT_SOURCE_DIR}/support/verify_install_closure.cmake.in
+    ${CMAKE_CURRENT_BINARY_DIR}/verify_install_closure.cmake
+    @ONLY)
+add_test(
+    NAME ruvia_guard_install_closure
+    COMMAND ${CMAKE_COMMAND}
+        -P ${CMAKE_CURRENT_BINARY_DIR}/verify_install_closure.cmake)
+
 if(RUVIA_BUILD_WEB)
 add_executable(ruvia_unit_tests
     # core

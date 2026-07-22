@@ -151,6 +151,14 @@ function(ruvia_assert_component_header_path component relative_path)
     endif()
 endfunction()
 
+# Every installed header is recorded as "<path under include/>|<file it comes
+# from>". ruvia_guard_install_closure reads the record to prove that an
+# installed header never includes one that stayed behind.
+function(ruvia_record_installed_header install_relative source_file)
+    set_property(GLOBAL APPEND PROPERTY
+        RUVIA_INSTALLED_HEADERS "${install_relative}|${source_file}")
+endfunction()
+
 function(ruvia_install_public_headers component)
     foreach(_ruvia_header ${ARGN})
         ruvia_assert_component_header_path(${component} "${_ruvia_header}")
@@ -166,6 +174,10 @@ function(ruvia_install_public_headers component)
             DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}/${_ruvia_header_install_subdir}"
             COMPONENT ${component}
         )
+        get_filename_component(_ruvia_header_name "${_ruvia_header}" NAME)
+        ruvia_record_installed_header(
+            "${_ruvia_header_install_subdir}/${_ruvia_header_name}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/${_ruvia_header}")
     endforeach()
 endfunction()
 
@@ -186,6 +198,41 @@ function(ruvia_install_public_header_tree component relative_dir)
             PATTERN "*.inl"
             ${ARGN}
     )
+
+    # Mirror the same selection into the record. ARGN carries "PATTERN <p>
+    # EXCLUDE" triples, and install(DIRECTORY) matches a PATTERN against one
+    # path component, so a match anywhere along the path drops the file.
+    set(_ruvia_tree_excludes "")
+    set(_ruvia_expect_pattern FALSE)
+    foreach(_ruvia_tree_argument IN LISTS ARGN)
+        if(_ruvia_expect_pattern)
+            list(APPEND _ruvia_tree_excludes "${_ruvia_tree_argument}")
+            set(_ruvia_expect_pattern FALSE)
+        elseif(_ruvia_tree_argument STREQUAL "PATTERN")
+            set(_ruvia_expect_pattern TRUE)
+        endif()
+    endforeach()
+
+    file(GLOB_RECURSE _ruvia_tree_headers
+        RELATIVE "${CMAKE_CURRENT_SOURCE_DIR}/${relative_dir}"
+        "${CMAKE_CURRENT_SOURCE_DIR}/${relative_dir}/*.h"
+        "${CMAKE_CURRENT_SOURCE_DIR}/${relative_dir}/*.inl")
+    foreach(_ruvia_tree_header IN LISTS _ruvia_tree_headers)
+        set(_ruvia_tree_header_excluded FALSE)
+        string(REPLACE "/" ";" _ruvia_tree_components "${_ruvia_tree_header}")
+        foreach(_ruvia_tree_exclude IN LISTS _ruvia_tree_excludes)
+            foreach(_ruvia_tree_component IN LISTS _ruvia_tree_components)
+                if(_ruvia_tree_component STREQUAL _ruvia_tree_exclude)
+                    set(_ruvia_tree_header_excluded TRUE)
+                endif()
+            endforeach()
+        endforeach()
+        if(NOT _ruvia_tree_header_excluded)
+            ruvia_record_installed_header(
+                "${_ruvia_header_tree_install_dir}/${_ruvia_tree_header}"
+                "${CMAKE_CURRENT_SOURCE_DIR}/${relative_dir}/${_ruvia_tree_header}")
+        endif()
+    endforeach()
 endfunction()
 
 function(ruvia_install_generated_public_header component generated_header relative_path)
@@ -211,6 +258,7 @@ function(ruvia_install_generated_public_header component generated_header relati
         DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}/${_ruvia_header_install_subdir}"
         COMPONENT ${component}
     )
+    ruvia_record_installed_header("${relative_path}" "${generated_header}")
 endfunction()
 
 function(ruvia_assert_target_file_ownership target)
@@ -271,6 +319,14 @@ endforeach()
 if(RUVIA_BUILD_EXAMPLES)
     add_subdirectory(examples)
 endif()
+# Written after every target has declared its installs, and read by
+# ruvia_guard_install_closure at test time.
+get_property(_ruvia_installed_headers GLOBAL PROPERTY RUVIA_INSTALLED_HEADERS)
+list(SORT _ruvia_installed_headers)
+list(JOIN _ruvia_installed_headers "\n" _ruvia_installed_headers_text)
+file(WRITE "${CMAKE_BINARY_DIR}/ruvia_installed_headers.txt"
+    "${_ruvia_installed_headers_text}\n")
+
 if(RUVIA_BUILD_TESTS)
     enable_testing()
     add_subdirectory(tests)
