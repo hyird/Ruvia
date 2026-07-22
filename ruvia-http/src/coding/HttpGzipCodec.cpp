@@ -7,6 +7,7 @@
 
 #include <zlib.h>
 
+#include "ruvia/http/detail/coding/ZlibPmrAllocation.h"
 #include "ruvia/http/detail/util/PmrResource.h"
 
 // gzip (RFC 1952) through zlib, with zlib's allocator routed to the caller's
@@ -16,44 +17,12 @@ namespace ruvia::detail {
 
 namespace {
 
-struct alignas(std::max_align_t) ZlibAllocationHeader final {
-    std::pmr::memory_resource* resource;
-    std::size_t bytes;
-};
-
 voidpf gzipZalloc(voidpf opaque, uInt items, uInt size) noexcept {
-    auto* resource = static_cast<std::pmr::memory_resource*>(opaque);
-    if (resource == nullptr || items == 0 || size == 0) {
-        return nullptr;
-    }
-    const auto itemBytes = static_cast<std::size_t>(items);
-    const auto sizeBytes = static_cast<std::size_t>(size);
-    if (itemBytes > (std::numeric_limits<std::size_t>::max)() / sizeBytes) {
-        return nullptr;
-    }
-    const auto payloadBytes = itemBytes * sizeBytes;
-    if (payloadBytes > (std::numeric_limits<std::size_t>::max)() - sizeof(ZlibAllocationHeader)) {
-        return nullptr;
-    }
-    const auto totalBytes = sizeof(ZlibAllocationHeader) + payloadBytes;
-    try {
-        auto* raw = static_cast<std::byte*>(resource->allocate(totalBytes, alignof(ZlibAllocationHeader)));
-        auto* header = reinterpret_cast<ZlibAllocationHeader*>(raw);
-        header->resource = resource;
-        header->bytes = totalBytes;
-        return raw + sizeof(ZlibAllocationHeader);
-    } catch (...) {
-        return nullptr;
-    }
+    return zlibPmrAllocate(static_cast<std::pmr::memory_resource*>(opaque), items, size);
 }
 
 void gzipZfree(voidpf, voidpf address) noexcept {
-    if (address == nullptr) {
-        return;
-    }
-    auto* raw = static_cast<std::byte*>(address) - sizeof(ZlibAllocationHeader);
-    auto* header = reinterpret_cast<ZlibAllocationHeader*>(raw);
-    header->resource->deallocate(raw, header->bytes, alignof(ZlibAllocationHeader));
+    zlibPmrFree(address);
 }
 
 }  // namespace
