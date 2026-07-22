@@ -1,5 +1,7 @@
 #pragma once
 
+#include "ruvia/web/detail/db/DbTransactionControl.h"
+
 #include "ruvia/web/db/Db.h"
 #include "ruvia/web/detail/db/DbBackend.h"
 
@@ -83,6 +85,9 @@ public:
     [[nodiscard]] bool hasAnyTimeout() const noexcept;
 
 public:
+    template <typename Pool>
+    friend Task<void> finishDbTransaction(
+        Pool&, std::size_t, std::string_view, std::pmr::memory_resource*);
     friend class ::ruvia::DbHandle;
     friend class ::ruvia::DbTransaction;
     friend class ::ruvia::DbStreamResult;
@@ -185,6 +190,9 @@ public:
     [[nodiscard]] bool hasAnyTimeout() const noexcept;
 
 private:
+    template <typename Pool>
+    friend Task<void> finishDbTransaction(
+        Pool&, std::size_t, std::string_view, std::pmr::memory_resource*);
     friend class ::ruvia::DbHandle;
     friend class ::ruvia::DbTransaction;
     friend class ::ruvia::DbStreamResult;
