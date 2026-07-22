@@ -1,5 +1,6 @@
 #pragma once
 
+#include "ruvia/web/detail/model/Traits.h"
 #include "ruvia/web/detail/model/rule/RuleTypes.h"
 
 #include <charconv>

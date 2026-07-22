@@ -9,7 +9,9 @@
 #include <utility>
 #include <variant>
 
+#include <ruvia/core/WorkerHandle.h>
 #include <ruvia/core/WorkerWaitResult.h>
+#include <ruvia/core/detail/worker/WorkerTimer.h>
 
 namespace ruvia::detail {
 
