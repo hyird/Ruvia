@@ -18,12 +18,12 @@
 
 #include "ruvia/http/detail/http1/Http1ServerRequestParser.h"
 #include "ruvia/http/detail/http2/Http2Connection.h"
-#include "ruvia/http/detail/http2/Http2FrameCodec.h"
-#include "ruvia/http/detail/http2/Http2HeaderBlock.h"
-#include "ruvia/http/detail/http2/Http2Hpack.h"
-#include "ruvia/http/detail/http2/Http2HpackHuffmanTables.h"
-#include "ruvia/http/detail/http2/Http2ReceiveWindowCredit.h"
-#include "ruvia/http/detail/http2/Http2WindowUpdate.h"
+#include "ruvia/http/detail/http2/frame/Http2FrameCodec.h"
+#include "ruvia/http/detail/http2/hpack/Http2HeaderBlock.h"
+#include "ruvia/http/detail/http2/hpack/Http2Hpack.h"
+#include "ruvia/http/detail/http2/hpack/Http2HpackHuffmanTables.h"
+#include "ruvia/http/detail/http2/flow/Http2ReceiveWindowCredit.h"
+#include "ruvia/http/detail/http2/flow/Http2WindowUpdate.h"
 #include "ruvia/http/HttpLimits.h"
 
 namespace http2_connection_test {

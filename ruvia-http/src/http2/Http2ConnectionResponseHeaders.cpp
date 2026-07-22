@@ -9,10 +9,10 @@
 #include "ruvia/http/detail/coding/HttpResponseContentSemantics.h"
 #include "ruvia/http/detail/response/HttpResponseHeaderBits.h"
 #include "ruvia/http/detail/response/HttpResponseKnownHeaders.h"
-#include "ruvia/http/detail/http2/Http2HeaderBlock.h"
-#include "ruvia/http/detail/http2/Http2HeaderRules.h"
-#include "ruvia/http/detail/http2/Http2RequestHeaders.h"
-#include "ruvia/http/detail/http2/Http2ResponseHeaders.h"
+#include "ruvia/http/detail/http2/hpack/Http2HeaderBlock.h"
+#include "ruvia/http/detail/http2/message/Http2HeaderRules.h"
+#include "ruvia/http/detail/http2/message/Http2RequestHeaders.h"
+#include "ruvia/http/detail/http2/message/Http2ResponseHeaders.h"
 
 // Decoding a response head as the client: ':status' first and once, the interim
 // (1xx) budget, and which regular headers a decoded head may carry into the

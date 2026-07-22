@@ -8,7 +8,7 @@
 #include "ruvia/web/Context.h"
 #include "ruvia/web/Middleware.h"
 #include "ruvia/web/detail/util/RegistrationResource.h"
-#include "ruvia/web/detail/model/ValidatedValues.h"
+#include "ruvia/web/detail/model/rule/ValidatedValues.h"
 #include "ruvia/web/detail/middleware/MiddlewareDescriptor.h"
 
 namespace ruvia::detail {

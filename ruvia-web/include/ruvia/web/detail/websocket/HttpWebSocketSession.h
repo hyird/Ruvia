@@ -4,7 +4,7 @@
 
 #include "ruvia/web/detail/websocket/HttpWebSocketConnection.h"
 #include "ruvia/core/detail/io/ConnectionScanner.h"
-#include "ruvia/web/detail/http/ContextAccess.h"
+#include "ruvia/web/detail/http/context/ContextAccess.h"
 #include "ruvia/web/detail/util/CallableRef.h"
 #include "ruvia/web/detail/websocket/WebSocketAccess.h"
 #include "ruvia/core/Task.h"

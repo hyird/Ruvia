@@ -4,11 +4,11 @@
 #include <string_view>
 
 #include "ruvia/http/detail/coding/HttpRequestContentSemantics.h"
-#include "ruvia/http/detail/http2/Http2HeaderBlock.h"
-#include "ruvia/http/detail/http2/Http2HeaderRules.h"
-#include "ruvia/http/detail/http2/Http2RemoteReceiveSemantics.h"
-#include "ruvia/http/detail/http2/Http2RequestHeaders.h"
-#include "ruvia/http/detail/http2/Http2ResponseHeaders.h"
+#include "ruvia/http/detail/http2/hpack/Http2HeaderBlock.h"
+#include "ruvia/http/detail/http2/message/Http2HeaderRules.h"
+#include "ruvia/http/detail/http2/message/Http2RemoteReceiveSemantics.h"
+#include "ruvia/http/detail/http2/message/Http2RequestHeaders.h"
+#include "ruvia/http/detail/http2/message/Http2ResponseHeaders.h"
 
 namespace ruvia::detail {
 

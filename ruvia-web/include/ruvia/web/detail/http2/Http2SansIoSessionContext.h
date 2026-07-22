@@ -3,7 +3,7 @@
 #include <cstddef>
 
 #include "ruvia/core/detail/io/ConnectionScanner.h"
-#include "ruvia/web/detail/http/ContextServices.h"
+#include "ruvia/web/detail/http/context/ContextServices.h"
 #include "ruvia/web/detail/server/HttpServerOptions.h"
 #include "ruvia/web/detail/server/HttpServerWorkerState.h"
 

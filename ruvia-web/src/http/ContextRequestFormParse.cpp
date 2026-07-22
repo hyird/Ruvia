@@ -1,4 +1,4 @@
-#include "ruvia/web/detail/http/RequestFormBodyParse.h"
+#include "ruvia/web/detail/http/request/RequestFormBodyParse.h"
 
 #include <algorithm>
 #include <memory_resource>
@@ -9,9 +9,9 @@
 #include <vector>
 
 #include "ruvia/http/detail/parser/MultipartBoundary.h"
-#include "ruvia/web/detail/http/RequestFormAccess.h"
-#include "ruvia/web/detail/http/RequestFieldParsing.h"
-#include "ruvia/web/detail/http/RequestFieldsAccess.h"
+#include "ruvia/web/detail/http/request/RequestFormAccess.h"
+#include "ruvia/web/detail/http/request/RequestFieldParsing.h"
+#include "ruvia/web/detail/http/request/RequestFieldsAccess.h"
 
 namespace ruvia::detail {
 

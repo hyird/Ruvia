@@ -6,7 +6,7 @@
 #include "ruvia/http/detail/response/HttpResponseHeaderAccess.h"
 #include "ruvia/http/detail/response/HttpResponseHeaderState.h"
 #include "ruvia/http/detail/util/AsciiCase.h"
-#include "ruvia/web/detail/http/HttpErrorResponse.h"
+#include "ruvia/web/detail/http/error/HttpErrorResponse.h"
 
 #include <algorithm>
 #include <stdexcept>

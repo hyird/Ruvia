@@ -3,9 +3,9 @@
 #include <utility>
 
 #include "ruvia/http/HttpKnownMethod.h"
-#include "ruvia/http/detail/http2/Http2RequestBuilder.h"
-#include "ruvia/http/detail/http2/Http2StreamState.h"
-#include "ruvia/http/detail/http2/Http2WebSocketHandshake.h"
+#include "ruvia/http/detail/http2/message/Http2RequestBuilder.h"
+#include "ruvia/http/detail/http2/stream/Http2StreamState.h"
+#include "ruvia/http/detail/http2/message/Http2WebSocketHandshake.h"
 #include "ruvia/web/detail/http2/Http2SansIoStreamRuntime.h"
 #include "ruvia/web/detail/router/RouteTable.h"
 

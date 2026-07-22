@@ -6,7 +6,7 @@
 #include <tuple>
 #include <type_traits>
 
-#include "ruvia/web/detail/model/RuleSupport.h"
+#include "ruvia/web/detail/model/rule/RuleSupport.h"
 
 namespace ruvia::detail::model {
 

@@ -3,7 +3,7 @@
 #include "ruvia/core/Task.h"
 #include "ruvia/web/Streaming.h"
 #include "ruvia/web/detail/http/StreamingAccess.h"
-#include "ruvia/web/detail/http/RequestBodyLoader.h"
+#include "ruvia/web/detail/http/request/RequestBodyLoader.h"
 
 #include <optional>
 #include <string_view>

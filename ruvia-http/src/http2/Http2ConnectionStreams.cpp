@@ -2,10 +2,10 @@
 
 #include <utility>
 
-#include "ruvia/http/detail/http2/Http2FrameCodec.h"
-#include "ruvia/http/detail/http2/Http2FramePayload.h"
-#include "ruvia/http/detail/http2/Http2RemoteReceiveSemantics.h"
-#include "ruvia/http/detail/http2/Http2ResponseHeaders.h"
+#include "ruvia/http/detail/http2/frame/Http2FrameCodec.h"
+#include "ruvia/http/detail/http2/frame/Http2FramePayload.h"
+#include "ruvia/http/detail/http2/message/Http2RemoteReceiveSemantics.h"
+#include "ruvia/http/detail/http2/message/Http2ResponseHeaders.h"
 
 // The stream table and a stream's life: creating and finding one, pinning it
 // while the owner still holds a reference, closing it, and the RST_STREAM

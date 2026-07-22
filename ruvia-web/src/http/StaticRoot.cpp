@@ -1,4 +1,4 @@
-#include "ruvia/web/detail/http/StaticRootIndex.h"
+#include "ruvia/web/detail/http/static/StaticRootIndex.h"
 
 #include <algorithm>
 #include <cstddef>
@@ -14,8 +14,8 @@
 #include "ruvia/core/memory/PmrObject.h"
 #include "ruvia/core/memory/ProcessResource.h"
 #include "ruvia/http/detail/field/HttpDate.h"
-#include "ruvia/web/detail/http/StaticFileMetadata.h"
-#include "ruvia/web/detail/http/StaticFileTypes.h"
+#include "ruvia/web/detail/http/static/StaticFileMetadata.h"
+#include "ruvia/web/detail/http/static/StaticFileTypes.h"
 #include "ruvia/web/detail/server/file/HttpNativeFile.h"
 
 // A document root indexed once at construction: the directory is walked, every

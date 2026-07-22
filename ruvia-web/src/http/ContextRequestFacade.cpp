@@ -1,5 +1,5 @@
 #include "ruvia/web/Context.h"
-#include "ruvia/web/detail/http/RequestQueryValues.h"
+#include "ruvia/web/detail/http/request/RequestQueryValues.h"
 
 namespace ruvia {
 

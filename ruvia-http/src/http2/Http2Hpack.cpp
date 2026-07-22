@@ -1,4 +1,4 @@
-#include "ruvia/http/detail/http2/Http2Hpack.h"
+#include "ruvia/http/detail/http2/hpack/Http2Hpack.h"
 #include "ruvia/http/detail/util/PmrString.h"
 #include "ruvia/http/detail/util/PmrResource.h"
 
