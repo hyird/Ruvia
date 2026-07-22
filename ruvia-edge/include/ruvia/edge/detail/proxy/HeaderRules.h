@@ -30,6 +30,10 @@ using Headers = std::vector<std::pair<std::string, std::string>>;
 // only when the edge emits its own computed value.
 [[nodiscard]] bool isConnectionOrFramingField(std::string_view lowerName) noexcept;
 
+// The client's precondition and Range fields. A caching edge answers these
+// itself from the stored response, so it must not also forward them.
+[[nodiscard]] bool isConditionalOrRangeField(std::string_view lowerName) noexcept;
+
 // Whether a Connection header nominates `fieldName` as hop-by-hop.
 [[nodiscard]] bool connectionNominates(
     std::span<const HttpHeaderView> headers,
