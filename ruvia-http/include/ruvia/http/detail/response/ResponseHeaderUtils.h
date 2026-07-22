@@ -1,6 +1,7 @@
 #pragma once
 
 #include <algorithm>
+#include "ruvia/http/detail/response/HttpResponseHeaderBits.h"
 #include <cstddef>
 #include <cstdint>
 #include <span>

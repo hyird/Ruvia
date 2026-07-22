@@ -6,8 +6,6 @@
 #include <cstdint>
 #include <memory_resource>
 #include <string_view>
-
-#include "ruvia/core/memory/PmrResource.h"
 #include "ruvia/http/detail/util/BorrowedView.h"
 
 namespace ruvia::detail {

@@ -13,8 +13,6 @@
 #include "ruvia/http/detail/http2/stream/Http2StreamState.h"
 #include "ruvia/http/detail/parser/HttpRequestTarget.h"
 #include "ruvia/http/detail/parser/HttpParserSyntax.h"
-#include "ruvia/http/HttpLimits.h"
-
 namespace ruvia::detail {
 
 struct Http2HeaderDecodeContext final {

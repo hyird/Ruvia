@@ -202,4 +202,103 @@ Task<HttpResponse> detail::RouteTable::handleException(
     co_return response;
 }
 
+// Which handler answers a failure on a given path: the most specific prefix
+// scope that covers it, or the table-wide fallback. The dispatch above is the
+// only caller.
+
+void detail::RouteTable::setErrorHandler(HttpErrorHandler handler) noexcept {
+    errorHandler_ = handler;
+}
+
+void detail::RouteTable::setNotFoundHandler(HttpNotFoundHandler handler) noexcept {
+    notFoundHandler_ = handler;
+}
+
+namespace {
+
+// Normalizes one prefix registration ("/api/" and "/api" are the same scope)
+// and validates the shape shared by both fallback kinds. "/" stays "/" and
+// scopes every path; plain setErrorHandler/setNotFoundHandler remain the
+// simpler spelling for that.
+[[nodiscard]] std::string_view normalizeFallbackPrefix(std::string_view prefix) {
+    if (prefix.empty() || prefix.front() != '/') {
+        throw std::invalid_argument("fallback prefix must start with '/'");
+    }
+    while (prefix.size() > 1 && prefix.back() == '/') {
+        prefix.remove_suffix(1);
+    }
+    return prefix;
+}
+
+template <typename Stored, typename Registration>
+void replacePrefixHandlers(
+    std::pmr::vector<Stored>& stored,
+    std::pmr::memory_resource* resource,
+    std::span<const Registration> handlers) {
+    std::pmr::vector<Stored> normalized(resource);
+    normalized.reserve(handlers.size());
+    for (const auto& registration : handlers) {
+        if (registration.handler == nullptr) {
+            throw std::invalid_argument("fallback handler must not be null");
+        }
+        const auto prefix = normalizeFallbackPrefix(registration.prefix);
+        for (const auto& existing : normalized) {
+            if (std::string_view(existing.prefix) == prefix) {
+                throw std::invalid_argument("duplicate fallback prefix");
+            }
+        }
+        normalized.emplace_back(resource, prefix, registration.handler);
+    }
+    // Longest prefix first: selection is a first-match scan. Equal lengths
+    // cannot nest, so their relative order is irrelevant; keep it stable.
+    std::ranges::stable_sort(
+        normalized,
+        [](const Stored& left, const Stored& right) noexcept {
+            return left.prefix.size() > right.prefix.size();
+        });
+    stored = std::move(normalized);
+}
+
+// Longest-first stored order: the first hit is the tightest scope. A prefix
+// matches on whole path segments only, so "/api" scopes "/api" and "/api/x"
+// but never "/apix".
+template <typename Stored>
+[[nodiscard]] auto selectPrefixHandler(
+    const std::pmr::vector<Stored>& stored,
+    std::string_view path) noexcept {
+    for (const auto& candidate : stored) {
+        const std::string_view prefix(candidate.prefix);
+        if (prefix == "/" || path == prefix ||
+            (path.size() > prefix.size() && path.starts_with(prefix) &&
+             path[prefix.size()] == '/')) {
+            return candidate.handler;
+        }
+    }
+    return decltype(stored.front().handler){nullptr};
+}
+
+}  // namespace
+
+void detail::RouteTable::setPrefixErrorHandlers(
+    std::span<const HttpPrefixErrorHandler> handlers) {
+    replacePrefixHandlers(prefixErrorHandlers_, resource_, handlers);
+}
+
+void detail::RouteTable::setPrefixNotFoundHandlers(
+    std::span<const HttpPrefixNotFoundHandler> handlers) {
+    replacePrefixHandlers(prefixNotFoundHandlers_, resource_, handlers);
+}
+
+HttpErrorHandler detail::RouteTable::errorHandlerFor(
+    std::string_view path) const noexcept {
+    const auto handler = selectPrefixHandler(prefixErrorHandlers_, path);
+    return handler != nullptr ? handler : errorHandler_;
+}
+
+HttpNotFoundHandler detail::RouteTable::notFoundHandlerFor(
+    std::string_view path) const noexcept {
+    const auto handler = selectPrefixHandler(prefixNotFoundHandlers_, path);
+    return handler != nullptr ? handler : notFoundHandler_;
+}
+
 }  // namespace ruvia

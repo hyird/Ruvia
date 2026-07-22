@@ -1,8 +1,6 @@
 #include "ruvia/web/db/Db.h"
 
 #include <utility>
-
-#include "ruvia/core/memory/MemoryPool.h"
 #include "ruvia/web/detail/db/DbRegistry.h"
 #include "ruvia/web/detail/db/DbPreparedStatement.h"
 #include "ruvia/web/detail/db/DbUtils.h"
@@ -192,31 +190,6 @@ void DbTransaction::reset() noexcept {
     state_.reset([](Lease& lease) noexcept {
         abortPoolTransaction(lease.client, lease.slot);
     });
-}
-
-DbTransaction::OperationGuard::OperationGuard(DbTransaction& owner)
-    : owner_(&owner),
-      lease_(&owner.state_.begin()) {}
-
-DbTransaction::OperationGuard::~OperationGuard() {
-    if (owner_ != nullptr) {
-        owner_->state_.finishFailed();
-    }
-}
-
-void DbTransaction::OperationGuard::finishActive() noexcept {
-    owner_->state_.finishActive();
-    owner_ = nullptr;
-}
-
-void DbTransaction::OperationGuard::finishClosed() noexcept {
-    owner_->state_.finishClosed();
-    owner_ = nullptr;
-}
-
-void DbTransaction::OperationGuard::finishFailed() noexcept {
-    owner_->state_.finishFailed();
-    owner_ = nullptr;
 }
 
 }  // namespace ruvia

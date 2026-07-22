@@ -1,4 +1,5 @@
 #include "test_harness.h"
+#include "ruvia/http/detail/util/Hex.h"
 
 #include <cstddef>
 #include <cstdint>

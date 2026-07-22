@@ -1,6 +1,7 @@
 #pragma once
 
 #include "ruvia/web/detail/body/HttpRequestBodyFacade.h"
+#include "ruvia/web/detail/server/RequestBodyLimit.h"
 #include "ruvia/web/detail/body/HttpStreamBodyReader.h"
 #include "ruvia/core/detail/io/ConnectionScanner.h"
 #include "ruvia/web/detail/server/route/HttpServerBodyRouteCompletion.h"

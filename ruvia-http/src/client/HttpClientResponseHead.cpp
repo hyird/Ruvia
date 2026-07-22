@@ -8,8 +8,6 @@
 #include "ruvia/http/detail/field/HttpInterimResponseValidation.h"
 #include "ruvia/http/detail/field/HttpMediaType.h"
 #include "ruvia/http/detail/coding/HttpResponseContentSemantics.h"
-#include "ruvia/http/detail/client/HttpClientResponseLimits.h"
-#include "ruvia/http/detail/parser/HttpHeaderBlockParser.h"
 #include "ruvia/http/detail/parser/HttpParserSyntax.h"
 
 namespace ruvia::detail {

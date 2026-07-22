@@ -3,8 +3,6 @@
 #include "ruvia/core/detail/io/AsioAwait.h"
 #include "ruvia/web/detail/redis/RedisRegistry.h"
 #include "ruvia/web/detail/redis/RedisProtocol.h"
-#include "ruvia/web/detail/redis/RedisUtils.h"
-
 #include <asio/error.hpp>
 
 #include <system_error>

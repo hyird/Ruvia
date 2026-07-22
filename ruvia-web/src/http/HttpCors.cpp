@@ -3,7 +3,6 @@
 #include "ruvia/http/detail/request/HttpRequestAccess.h"
 #include "ruvia/http/detail/util/AsciiCase.h"
 #include "ruvia/http/detail/field/HttpCorsFields.h"
-#include "ruvia/http/detail/parser/HttpRequestTarget.h"
 #include "ruvia/http/detail/parser/HttpSerializedOrigin.h"
 #include <array>
 #include <cstddef>

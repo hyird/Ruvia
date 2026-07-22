@@ -10,8 +10,6 @@
 #include "ruvia/web/detail/util/CallableRef.h"
 #include "ruvia/http/detail/server/HttpResponseStreamHead.h"
 #include "ruvia/web/detail/router/RouteModes.h"
-#include "ruvia/web/detail/router/RouteStreamState.h"
-
 // What a registered route runs, as one closed set of alternatives. Each
 // alternative carries the handler shape together with the route metadata only
 // that shape may have, so a route cannot claim a streaming or WebSocket mode
