@@ -11,7 +11,7 @@
 #include "ruvia/web/detail/http/ContextRequestInternal.h"
 #include "ruvia/web/detail/http/RequestFieldsAccess.h"
 #include "ruvia/web/detail/http/RequestQueryValues.h"
-#include "ruvia/http/detail/MultipartParsing.h"
+#include "ruvia/http/detail/parser/MultipartBoundary.h"
 #include "ruvia/http/detail/RequestBodyDecoding.h"
 #include "ruvia/web/detail/http/RequestBodyLoader.h"
 #include "ruvia/http/detail/AsciiCase.h"

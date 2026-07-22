@@ -9,7 +9,9 @@
 #include <utility>
 
 #include "ruvia/http/detail/MultipartPartAccess.h"
-#include "ruvia/http/detail/MultipartParsing.h"
+#include "ruvia/http/detail/parser/MultipartBoundary.h"
+#include "ruvia/http/detail/parser/MultipartDelimiter.h"
+#include "ruvia/http/detail/parser/MultipartPartHeaders.h"
 #include "ruvia/http/detail/MultipartReaderInternal.h"
 #include "ruvia/http/MultipartParser.h"
 

@@ -12,7 +12,7 @@
 #include "ruvia/http/detail/HttpEntityTag.h"
 #include "ruvia/http/detail/HttpOws.h"
 #include "ruvia/http/detail/HttpTransferEncoding.h"
-#include "ruvia/http/detail/MultipartParsing.h"
+#include "ruvia/http/detail/parser/MimeFieldGrammar.h"
 #include "ruvia/http/detail/http2/Http2FramePayload.h"
 #include "ruvia/http/detail/websocket/HttpWebSocketHandshakeFields.h"
 
