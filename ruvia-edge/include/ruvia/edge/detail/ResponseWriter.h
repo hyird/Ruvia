@@ -43,4 +43,18 @@ public:
     [[nodiscard]] virtual bool connectionReusable() const noexcept = 0;
 };
 
+// A status-only response: no headers, no body, no age. `cacheResult` is the
+// label the access log records -- "ERROR" for a failure the edge generated,
+// "MISS" for a request the cache could not answer and was forbidden to fetch.
+// Whether the connection survives is the caller's decision, not the status's.
+[[nodiscard]] inline asio::awaitable<bool> respondStatusOnly(
+    ResponseWriter& writer,
+    std::uint16_t status,
+    std::string_view cacheResult,
+    bool keepAlive) {
+    const Headers noHeaders;
+    co_return co_await writer.respond(
+        status, noHeaders, {}, cacheResult, std::nullopt, false, keepAlive);
+}
+
 }  // namespace ruvia::edge

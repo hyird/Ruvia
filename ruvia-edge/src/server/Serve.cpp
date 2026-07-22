@@ -27,7 +27,6 @@ asio::awaitable<bool> EdgeServer::Impl::servePassThrough(
     ResponseWriter& writer,
     const OriginLease& origin,
     RequestOutcome& outcome) {
-    const Headers noHeaders;
     const bool keepAlive = request.keepAlive;
 
     OriginRequest passRequest;
@@ -81,8 +80,7 @@ asio::awaitable<bool> EdgeServer::Impl::servePassThrough(
         const std::uint16_t gatewayStatus =
             passStream.outcome == OriginFetchOutcome::kTimeout ? 504 : 502;
         outcome.status = gatewayStatus;
-        co_await writer.respond(
-            gatewayStatus, noHeaders, {}, "ERROR", std::nullopt, false, false);
+        co_await respondStatusOnly(writer, gatewayStatus, "ERROR", false);
         co_return false;
     }
     if (!co_await writer.respondEnd()) {
@@ -106,7 +104,6 @@ asio::awaitable<bool> EdgeServer::Impl::serveRequest(
     // Per-request accounting: defaults to an error result; success paths set the
     // label/status below, and the byte count comes from the writer.
     RequestOutcome outcome;
-    const Headers noHeaders;
 
     const bool isGet = request.knownMethod == HttpKnownMethod::kGet;
     const bool isHead = request.knownMethod == HttpKnownMethod::kHead;
@@ -136,7 +133,7 @@ asio::awaitable<bool> EdgeServer::Impl::serveRequest(
     // is suspended in origin I/O.
     auto origin = config_.findOrigin(frontHost);
     if (!origin) {
-        co_await writer.respond(502, noHeaders, {}, "ERROR", std::nullopt, false, false);
+        co_await respondStatusOnly(writer, 502, "ERROR", false);
         co_return false;
     }
 
@@ -151,8 +148,7 @@ asio::awaitable<bool> EdgeServer::Impl::serveRequest(
     if (requestCacheControl.onlyIfCached && cannotUseStoredResponse) {
         outcome.status = 504;
         outcome.label = "MISS";
-        co_return co_await writer.respond(
-                   504, noHeaders, {}, "MISS", std::nullopt, false, keepAlive) &&
+        co_return co_await respondStatusOnly(writer, 504, "MISS", keepAlive) &&
             keepAlive;
     }
     if (cannotUseStoredResponse ||
@@ -258,8 +254,7 @@ asio::awaitable<bool> EdgeServer::Impl::serveRequest(
     if (requestCacheControl.onlyIfCached) {
         outcome.status = 504;
         outcome.label = "MISS";
-        co_return co_await writer.respond(
-                   504, noHeaders, {}, "MISS", std::nullopt, false, keepAlive) &&
+        co_return co_await respondStatusOnly(writer, 504, "MISS", keepAlive) &&
             keepAlive;
     }
 
@@ -429,8 +424,7 @@ asio::awaitable<bool> EdgeServer::Impl::serveRequest(
         const std::uint16_t gatewayStatus =
             fetchResult.outcome == OriginFetchOutcome::kTimeout ? 504 : 502;
         outcome.status = gatewayStatus;
-        co_await writer.respond(
-            gatewayStatus, noHeaders, {}, "ERROR", std::nullopt, false, false);
+        co_await respondStatusOnly(writer, gatewayStatus, "ERROR", false);
         co_return false;
     }
 
