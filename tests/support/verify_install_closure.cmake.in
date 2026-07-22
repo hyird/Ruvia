@@ -1,0 +1,122 @@
+set(_manifest "@CMAKE_BINARY_DIR@/ruvia_installed_headers.txt")
+
+# An installed header that includes a header this configuration does not install
+# cannot be compiled by anyone who consumes the package. The build never notices:
+# it compiles against the source tree, where every header is present regardless of
+# which ones are packaged. Only the install set can show the difference, so this
+# guard reads the record CMake wrote of exactly what it installs.
+#
+# This is a path check rather than a compile of the installed headers, which
+# would need an install to a scratch prefix and a translation unit per header.
+# It catches the failure that has actually occurred here — a header added to a
+# target but never added to its install list — at no build cost.
+#
+# Includes inside a RUVIA_ENABLE_* conditional are skipped: a header may include
+# what only a feature build packages, and that is the correct way to depend on a
+# feature. The bug this guard is for is the unconditional include of a
+# conditionally installed header, which no preprocessor can save.
+
+if(NOT EXISTS "${_manifest}")
+    message(FATAL_ERROR
+        "ruvia_guard_install_closure has no installed-header record: ${_manifest}")
+endif()
+
+file(STRINGS "${_manifest}" _entries)
+if(_entries STREQUAL "")
+    message(FATAL_ERROR
+        "ruvia_guard_install_closure record is empty; the install helpers stopped recording")
+endif()
+
+# Self-test: the include pattern must match a real include line and must ignore
+# text that only looks like one. A pattern that silently stops matching turns
+# this guard into a no-op that reports success forever.
+set(_include_pattern "#[ \t]*include[ \t]*\"(ruvia/[^\"]+)\"")
+string(REGEX MATCHALL "${_include_pattern}" _probe_match
+    "#include \"ruvia/core/Task.h\"")
+if(NOT _probe_match)
+    message(FATAL_ERROR
+        "ruvia_guard_install_closure self-test failed: the include pattern lost its probe")
+endif()
+string(REGEX MATCHALL "${_include_pattern}" _benign_match
+    "// #include \"ruvia/gone.h\" in a comment is still an include\nstd::string s = \"ruvia/core/Task.h\";\n#include <ruvia/core/Task.h>")
+list(LENGTH _benign_match _benign_count)
+if(NOT _benign_count EQUAL 1)
+    message(FATAL_ERROR
+        "ruvia_guard_install_closure self-test failed: expected the commented include and "
+        "nothing else from the benign corpus, matched ${_benign_count}")
+endif()
+
+set(_installed "")
+set(_sources "")
+foreach(_entry IN LISTS _entries)
+    string(FIND "${_entry}" "|" _separator)
+    if(_separator EQUAL -1)
+        message(FATAL_ERROR
+            "ruvia_guard_install_closure record has a malformed entry: ${_entry}")
+    endif()
+    string(SUBSTRING "${_entry}" 0 ${_separator} _installed_path)
+    math(EXPR _source_start "${_separator} + 1")
+    string(SUBSTRING "${_entry}" ${_source_start} -1 _source_path)
+    list(APPEND _installed "${_installed_path}")
+    # A set membership test: CMake has no map, and a linear search per include
+    # over every installed header is quadratic on a tree this size.
+    string(MAKE_C_IDENTIFIER "${_installed_path}" _installed_key)
+    set(_have_${_installed_key} TRUE)
+    list(APPEND _sources "${_installed_path}|${_source_path}")
+endforeach()
+
+set(_violations "")
+foreach(_pair IN LISTS _sources)
+    string(FIND "${_pair}" "|" _separator)
+    string(SUBSTRING "${_pair}" 0 ${_separator} _installed_path)
+    math(EXPR _source_start "${_separator} + 1")
+    string(SUBSTRING "${_pair}" ${_source_start} -1 _source_path)
+    if(NOT EXISTS "${_source_path}")
+        # A generated header that this configuration has not produced yet.
+        continue()
+    endif()
+    file(STRINGS "${_source_path}" _lines)
+    set(_includes "")
+    set(_feature_depth 0)
+    set(_conditional_depth 0)
+    foreach(_line IN LISTS _lines)
+        if(_line MATCHES "^[ \t]*#[ \t]*if")
+            math(EXPR _conditional_depth "${_conditional_depth} + 1")
+            if(_feature_depth EQUAL 0 AND _line MATCHES "RUVIA_ENABLE_")
+                set(_feature_depth ${_conditional_depth})
+            endif()
+        elseif(_line MATCHES "^[ \t]*#[ \t]*endif")
+            if(_feature_depth EQUAL ${_conditional_depth})
+                set(_feature_depth 0)
+            endif()
+            math(EXPR _conditional_depth "${_conditional_depth} - 1")
+        elseif(_feature_depth EQUAL 0)
+            string(REGEX MATCHALL "${_include_pattern}" _line_includes "${_line}")
+            list(APPEND _includes ${_line_includes})
+        endif()
+    endforeach()
+    foreach(_include IN LISTS _includes)
+        string(REGEX REPLACE "${_include_pattern}" "\\1" _included "${_include}")
+        string(MAKE_C_IDENTIFIER "${_included}" _included_key)
+        if(NOT _have_${_included_key})
+            list(APPEND _violations "${_installed_path} includes ${_included}")
+        endif()
+    endforeach()
+endforeach()
+
+if(_violations)
+    list(REMOVE_DUPLICATES _violations)
+    list(SORT _violations)
+    list(JOIN _violations "\n  " _violation_text)
+    list(LENGTH _violations _violation_count)
+    message(FATAL_ERROR
+        "${_violation_count} installed header(s) include a header this configuration "
+        "does not install:\n  ${_violation_text}\n"
+        "Either add the included header to its install list, or include only what "
+        "this configuration packages.")
+endif()
+
+list(LENGTH _installed _installed_count)
+message(STATUS
+    "ruvia_guard_install_closure: ${_installed_count} installed headers, every "
+    "ruvia include resolves inside the install set")
