@@ -1,3 +1,4 @@
+#include "test_io_context.h"
 #include "test_harness.h"
 
 #include <asio/co_spawn.hpp>
@@ -441,7 +442,7 @@ RUVIA_TEST(context_request_header_lookup_uses_last_match) {
     HttpRequestAccess::setResource(request, requestMemory.resource());
     auto context = ContextAccess::make(requestMemory, request);
 
-    asio::io_context io;
+    asio::io_context& io = ruvia::test::newTestIoContext();
     std::string header;
     asio::co_spawn(io, readHeaderValue(context, header), asio::detached);
     io.run();
@@ -475,7 +476,7 @@ RUVIA_TEST(context_request_preserves_exact_extension_method_token) {
     HttpRequestAccess::setResource(request, requestMemory.resource());
     auto context = ContextAccess::make(requestMemory, request);
 
-    asio::io_context io;
+    asio::io_context& io = ruvia::test::newTestIoContext();
     MethodObservation observation;
     asio::co_spawn(io, readMethod(context, observation), asio::detached);
     io.run();
@@ -501,7 +502,7 @@ RUVIA_TEST(context_parse_body_drops_prototype_pollution_keys) {
     // With dot-path parsing on, a field whose name traverses "__proto__." is
     // dropped (prototype-pollution defense for the nested-object binding) while a
     // benign sibling survives.
-    asio::io_context io;
+    asio::io_context& io = ruvia::test::newTestIoContext();
     bool safeOk = false;
     bool protoDropped = false;
     asio::co_spawn(io, parseProtoBody(context, safeOk, protoDropped), asio::detached);
@@ -527,7 +528,7 @@ RUVIA_TEST(context_parse_body_groups_arrays_and_compacts_repeated_scalars) {
 
     // With the default (non-.all) options, a "[]" field keeps every value (an
     // array) while a repeated scalar field is compacted to its last value.
-    asio::io_context io;
+    asio::io_context& io = ruvia::test::newTestIoContext();
     std::size_t tagsSize = 0;
     bool tagsArray = false;
     std::size_t xSize = 0;
@@ -562,7 +563,7 @@ RUVIA_TEST(context_parse_body_defaults_absent_part_content_type) {
     HttpRequestAccess::setResource(request, requestMemory.resource());
     auto context = ContextAccess::make(requestMemory, request);
 
-    asio::io_context io;
+    asio::io_context& io = ruvia::test::newTestIoContext();
     std::string contentType;
     asio::co_spawn(
         io, parsePartContentType(context, contentType), asio::detached);
@@ -601,7 +602,7 @@ RUVIA_TEST(context_parse_body_keeps_every_repeated_file_part) {
     HttpRequestAccess::setResource(request, requestMemory.resource());
     auto context = ContextAccess::make(requestMemory, request);
 
-    asio::io_context io;
+    asio::io_context& io = ruvia::test::newTestIoContext();
     std::size_t count = 0;
     std::size_t fileCount = 0;
     bool sawA = false;
@@ -632,7 +633,7 @@ RUVIA_TEST(context_parse_body_rejects_a_flood_of_fields) {
 
     // A body carrying more fields than maxFields is rejected with 413 before the
     // field vector can grow without bound.
-    asio::io_context io;
+    asio::io_context& io = ruvia::test::newTestIoContext();
     bool rejected = false;
     int status = 0;
     asio::co_spawn(io, parseWithFieldCap(context, 3, rejected, status), asio::detached);
@@ -658,7 +659,7 @@ RUVIA_TEST(context_parse_body_all_retains_duplicates_and_selects_last_value) {
 
     std::size_t valueCount = 0;
     std::string selectedValue;
-    asio::io_context io;
+    asio::io_context& io = ruvia::test::newTestIoContext();
     asio::co_spawn(
         io,
         parseAllRepeatedScalar(context, valueCount, selectedValue),
@@ -696,7 +697,7 @@ RUVIA_TEST(context_parse_body_multipart_yields_text_field_and_file_blob) {
 
     // A multipart body parses into a text field plus a file part whose filename,
     // content type, and bytes are all preserved through the RequestBlob.
-    asio::io_context io;
+    asio::io_context& io = ruvia::test::newTestIoContext();
     std::string nameValue, fileName, fileType, fileData;
     asio::co_spawn(io, parseMultipart(context, nameValue, fileName, fileType, fileData), asio::detached);
     io.run();
@@ -723,7 +724,7 @@ RUVIA_TEST(context_parse_body_rejects_malformed_urlencoded) {
 
     // A malformed body must surface as an exception (the handler maps it to a 400)
     // rather than a silently-empty form or a crash.
-    asio::io_context io;
+    asio::io_context& io = ruvia::test::newTestIoContext();
     auto future = asio::co_spawn(io, parseBodyDiscard(context), asio::use_future);
     io.run();
     bool threw = false;
@@ -753,7 +754,7 @@ RUVIA_TEST(context_parse_body_maps_multipart_failure_to_http_protocol_error) {
     HttpRequestAccess::setResource(request, requestMemory.resource());
     auto context = ContextAccess::make(requestMemory, request);
 
-    asio::io_context io;
+    asio::io_context& io = ruvia::test::newTestIoContext();
     auto future = asio::co_spawn(
         io, parseBodyDiscard(context), asio::use_future);
     io.run();
@@ -790,7 +791,7 @@ RUVIA_TEST(context_parse_body_skips_empty_urlencoded_segments) {
     std::string bValue;
     bool aPresent = false;
     bool bPresent = false;
-    asio::io_context io;
+    asio::io_context& io = ruvia::test::newTestIoContext();
     auto future = asio::co_spawn(
         io, parseScalarPair(context, aValue, aPresent, bValue, bPresent), asio::use_future);
     io.run();

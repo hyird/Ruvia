@@ -1,4 +1,4 @@
-#include "ruvia/web/WorkerData.h"
+#include "ruvia/web/DataAccess.h"
 
 #include <atomic>
 #include <exception>
@@ -17,13 +17,13 @@
 #include "ruvia/core/detail/ConnectionScanner.h"
 #include "ruvia/core/memory/MemoryPool.h"
 #include "ruvia/core/memory/PmrResource.h"
-#include "ruvia/web/detail/WorkerDataState.h"
+#include "ruvia/web/detail/DataAccessState.h"
 #include "ruvia/web/detail/db/DbInternal.h"
 #include "ruvia/web/detail/redis/RedisInternal.h"
 
 namespace ruvia::detail {
 
-class WorkerDataState::Impl final {
+class DataAccessState::Impl final {
 public:
     Impl(
         asio::io_context& ioContext,
@@ -57,7 +57,7 @@ public:
     ConnectionScanner::WorkerMaintenanceRegistration redisDeadlineCheck;
 };
 
-WorkerDataState::WorkerDataState(
+DataAccessState::DataAccessState(
     asio::io_context& ioContext,
     std::pmr::memory_resource* resource,
     std::span<const DbDefinition> databases,
@@ -66,9 +66,9 @@ WorkerDataState::WorkerDataState(
     : impl_(std::make_unique<Impl>(
           ioContext, resource, databases, redis, scanner)) {}
 
-WorkerDataState::~WorkerDataState() = default;
+DataAccessState::~DataAccessState() = default;
 
-Task<void> WorkerDataState::connect() {
+Task<void> DataAccessState::connect() {
     try {
         if (!impl_->databases.empty()) {
             co_await impl_->databases.connect();
@@ -82,28 +82,28 @@ Task<void> WorkerDataState::connect() {
     }
 }
 
-void WorkerDataState::closeNow() noexcept {
+void DataAccessState::closeNow() noexcept {
     impl_->redis.closeNow();
     impl_->databases.closeNow();
 }
 
-bool WorkerDataState::hasMaintenance() const noexcept {
+bool DataAccessState::hasMaintenance() const noexcept {
     return impl_->databases.hasAnyTimeout() || impl_->redis.hasAnyTimeout();
 }
 
-DbRegistry& WorkerDataState::databases() noexcept {
+DbRegistry& DataAccessState::databases() noexcept {
     return impl_->databases;
 }
 
-const DbRegistry& WorkerDataState::databases() const noexcept {
+const DbRegistry& DataAccessState::databases() const noexcept {
     return impl_->databases;
 }
 
-RedisRegistry& WorkerDataState::redis() noexcept {
+RedisRegistry& DataAccessState::redis() noexcept {
     return impl_->redis;
 }
 
-const RedisRegistry& WorkerDataState::redis() const noexcept {
+const RedisRegistry& DataAccessState::redis() const noexcept {
     return impl_->redis;
 }
 
@@ -112,7 +112,7 @@ namespace {
 [[nodiscard]] EventLoop requireEventLoop(EventLoop loop) {
     if (!loop.valid()) {
         throw std::invalid_argument(
-            "worker data runtime requires a valid event loop");
+            "data access service requires a valid event loop");
     }
     return loop;
 }
@@ -138,7 +138,7 @@ namespace {
 #endif
 
 [[nodiscard]] std::pmr::vector<DbDefinition> makeDatabaseDefinitions(
-    const WorkerDataOptions& options,
+    const DataAccessOptions& options,
     std::pmr::memory_resource* resource) {
     std::pmr::vector<DbDefinition> definitions(resource);
 #ifdef RUVIA_ENABLE_DATABASE
@@ -177,7 +177,7 @@ namespace {
 #endif
 
 [[nodiscard]] std::pmr::vector<RedisDefinition> makeRedisDefinitions(
-    const WorkerDataOptions& options,
+    const DataAccessOptions& options,
     std::pmr::memory_resource* resource) {
     std::pmr::vector<RedisDefinition> definitions(resource);
 #ifdef RUVIA_ENABLE_REDIS
@@ -195,12 +195,12 @@ namespace {
 
 }  // namespace
 
-class WorkerDataRuntimeState final
-    : public std::enable_shared_from_this<WorkerDataRuntimeState> {
+class DataAccessServiceState final
+    : public std::enable_shared_from_this<DataAccessServiceState> {
 public:
-    using Job = MoveOnlyFunction<Task<void>(WorkerDataContext&)>;
+    using Job = MoveOnlyFunction<Task<void>(DataAccessContext&)>;
 
-    WorkerDataRuntimeState(EventLoop loop, WorkerDataOptions options)
+    DataAccessServiceState(EventLoop loop, DataAccessOptions options)
         : loop_(requireEventLoop(std::move(loop))),
           worker_(loop_.handle()),
           memory_(),
@@ -216,7 +216,7 @@ public:
                   .initialReadTimeout = std::nullopt,
                   .payloadReadTimeout = std::nullopt,
                   .writeTimeout = std::nullopt}),
-          data_(
+          access_(
               loop_.ioContext(),
               memory_.resource(),
               databaseDefinitions_,
@@ -224,7 +224,7 @@ public:
               scanner_),
           failureHandler_(std::move(options.failureHandler)) {}
 
-    ~WorkerDataRuntimeState() {
+    ~DataAccessServiceState() {
         const auto phase = phase_.load(std::memory_order_acquire);
         if (phase == Phase::kConnectScheduled ||
             phase == Phase::kConnecting ||
@@ -235,7 +235,7 @@ public:
     }
 
     void bindStop() {
-        std::weak_ptr<WorkerDataRuntimeState> weak = shared_from_this();
+        std::weak_ptr<DataAccessServiceState> weak = shared_from_this();
         stopRegistration_ = loop_.onStop([weak = std::move(weak)] {
             if (const auto state = weak.lock()) {
                 state->closeOnWorker();
@@ -255,7 +255,7 @@ public:
                 std::memory_order_acquire)) {
             completion->set_exception(std::make_exception_ptr(
                 std::logic_error(
-                    "worker data runtime can only connect once")));
+                    "data access service can only connect once")));
             return future;
         }
         if (!worker_.accepting()) {
@@ -313,7 +313,7 @@ public:
     [[nodiscard]] Task<void> connectOnWorker() {
         if (!worker_.isCurrent()) {
             throw std::logic_error(
-                "worker data runtime must connect on its bound event loop");
+                "data access service must connect on its bound event loop");
         }
         auto expected = Phase::kConnectScheduled;
         if (!phase_.compare_exchange_strong(
@@ -326,10 +326,10 @@ public:
         }
 
         try {
-            if (data_.hasMaintenance()) {
+            if (access_.hasMaintenance()) {
                 scanner_.start();
             }
-            co_await data_.connect();
+            co_await access_.connect();
             expected = Phase::kConnecting;
             if (!phase_.compare_exchange_strong(
                     expected,
@@ -341,27 +341,27 @@ public:
             }
         } catch (...) {
             scanner_.stop();
-            data_.closeNow();
+            access_.closeNow();
             stopSource_.requestStop();
             phase_.store(Phase::kClosed, std::memory_order_release);
             throw;
         }
     }
 
-    [[nodiscard]] WorkerDataPostResult post(Job task) {
+    [[nodiscard]] DataAccessPostResult post(Job task) {
         std::lock_guard lock(submitMutex_);
         if (phase_.load(std::memory_order_acquire) != Phase::kConnected) {
             if (!accepting_) {
                 workerStopping_.fetch_add(1, std::memory_order_relaxed);
-                return WorkerDataPostResult::reject(
+                return DataAccessPostResult::reject(
                     PostStatus::kWorkerStopping, std::move(task));
             }
             throw std::logic_error(
-                "worker data runtime must finish connecting before jobs are posted");
+                "data access service must finish connecting before jobs are posted");
         }
         if (!accepting_) {
             workerStopping_.fetch_add(1, std::memory_order_relaxed);
-            return WorkerDataPostResult::reject(
+            return DataAccessPostResult::reject(
                 PostStatus::kWorkerStopping, std::move(task));
         }
 
@@ -387,8 +387,8 @@ public:
             break;
         }
         return status == PostStatus::kAccepted
-            ? WorkerDataPostResult::accept()
-            : WorkerDataPostResult::reject(status, std::move(task));
+            ? DataAccessPostResult::accept()
+            : DataAccessPostResult::reject(status, std::move(task));
     }
 
     void requestClose() noexcept {
@@ -429,11 +429,11 @@ public:
         }
         stopSource_.requestStop();
         scanner_.stop();
-        data_.closeNow();
+        access_.closeNow();
     }
 
-    [[nodiscard]] WorkerDataStats stats() const noexcept {
-        return WorkerDataStats{
+    [[nodiscard]] DataAccessStats stats() const noexcept {
+        return DataAccessStats{
             .accepted = accepted_.load(std::memory_order_relaxed),
             .queueFull = queueFull_.load(std::memory_order_relaxed),
             .workerStopping = workerStopping_.load(std::memory_order_relaxed),
@@ -446,10 +446,10 @@ public:
     void requireConnectedOnWorker() const {
         if (!worker_.isCurrent()) {
             throw std::logic_error(
-                "worker data context must be created and used on its bound event loop");
+                "data access context must be created and used on its bound event loop");
         }
         if (phase_.load(std::memory_order_acquire) != Phase::kConnected) {
-            throw std::logic_error("worker data runtime is not connected");
+            throw std::logic_error("data access service is not connected");
         }
     }
 
@@ -465,13 +465,13 @@ public:
         return stopSource_.token();
     }
 
-    [[nodiscard]] WorkerDataState& data() noexcept { return data_; }
+    [[nodiscard]] DataAccessState& access() noexcept { return access_; }
 
 private:
     class JobReservation final {
     public:
         explicit JobReservation(
-            std::shared_ptr<WorkerDataRuntimeState> state) noexcept
+            std::shared_ptr<DataAccessServiceState> state) noexcept
             : state_(std::move(state)) {}
 
         ~JobReservation() {
@@ -486,12 +486,12 @@ private:
             : state_(std::move(other.state_)) {}
         JobReservation& operator=(JobReservation&&) = delete;
 
-        [[nodiscard]] std::shared_ptr<WorkerDataRuntimeState> release() noexcept {
+        [[nodiscard]] std::shared_ptr<DataAccessServiceState> release() noexcept {
             return std::exchange(state_, nullptr);
         }
 
     private:
-        std::shared_ptr<WorkerDataRuntimeState> state_;
+        std::shared_ptr<DataAccessServiceState> state_;
     };
 
     void closeSubmissions() noexcept {
@@ -518,8 +518,8 @@ private:
 
     [[nodiscard]] static Task<void> runJob(
         Job task,
-        std::shared_ptr<WorkerDataRuntimeState> state) {
-        WorkerDataContext context(std::move(state));
+        std::shared_ptr<DataAccessServiceState> state) {
+        DataAccessContext context(std::move(state));
         co_await task(context);
     }
 
@@ -567,12 +567,12 @@ private:
     std::pmr::vector<DbDefinition> databaseDefinitions_;
     std::pmr::vector<RedisDefinition> redisDefinitions_;
     ConnectionScanner scanner_;
-    WorkerDataState data_;
+    DataAccessState access_;
     StopSource stopSource_;
     // Published once by bindStop() and retained until state destruction. The
     // listener only weakly references this state, so retaining it forms no
     // cycle; avoiding callback-side reset also closes the register-vs-stop
-    // publication race during WorkerDataRuntime construction.
+    // publication race during DataAccessService construction.
     EventLoopStopRegistration stopRegistration_;
     MoveOnlyFunction<void(std::exception_ptr)> failureHandler_;
     mutable std::mutex submitMutex_;
@@ -590,82 +590,82 @@ private:
 
 namespace ruvia {
 
-WorkerDataContext::WorkerDataContext(
-    std::shared_ptr<detail::WorkerDataRuntimeState> state) noexcept
+DataAccessContext::DataAccessContext(
+    std::shared_ptr<detail::DataAccessServiceState> state) noexcept
     : state_(std::move(state)) {}
 
-const WorkerHandle& WorkerDataContext::worker() const & noexcept {
+const WorkerHandle& DataAccessContext::worker() const & noexcept {
     return state_->worker();
 }
 
-std::pmr::memory_resource* WorkerDataContext::resource() const noexcept {
+std::pmr::memory_resource* DataAccessContext::resource() const noexcept {
     return state_->resource();
 }
 
-StopToken WorkerDataContext::stopToken() const noexcept {
+StopToken DataAccessContext::stopToken() const noexcept {
     return state_->stopToken();
 }
 
 #ifdef RUVIA_ENABLE_DATABASE
-DbHandle WorkerDataContext::db() const {
+DbHandle DataAccessContext::db() const {
     state_->requireConnectedOnWorker();
-    return state_->data().databases().get(resource(), operationScope_);
+    return state_->access().databases().get(resource(), operationScope_);
 }
 
-DbHandle WorkerDataContext::db(std::string_view alias) const {
+DbHandle DataAccessContext::db(std::string_view alias) const {
     state_->requireConnectedOnWorker();
-    return state_->data().databases().get(
+    return state_->access().databases().get(
         alias, resource(), operationScope_);
 }
 #endif
 
 #ifdef RUVIA_ENABLE_REDIS
-RedisHandle WorkerDataContext::redis() const {
+RedisHandle DataAccessContext::redis() const {
     state_->requireConnectedOnWorker();
-    return state_->data().redis().get(resource(), operationScope_);
+    return state_->access().redis().get(resource(), operationScope_);
 }
 
-RedisHandle WorkerDataContext::redis(std::string_view alias) const {
+RedisHandle DataAccessContext::redis(std::string_view alias) const {
     state_->requireConnectedOnWorker();
-    return state_->data().redis().get(
+    return state_->access().redis().get(
         alias, resource(), operationScope_);
 }
 #endif
 
-WorkerDataRuntime::WorkerDataRuntime(
+DataAccessService::DataAccessService(
     EventLoop loop,
-    WorkerDataOptions options)
-    : state_(std::make_shared<detail::WorkerDataRuntimeState>(
+    DataAccessOptions options)
+    : state_(std::make_shared<detail::DataAccessServiceState>(
           std::move(loop), std::move(options))) {
     state_->bindStop();
 }
 
-WorkerDataRuntime::~WorkerDataRuntime() {
+DataAccessService::~DataAccessService() {
     state_->requestClose();
 }
 
-std::future<void> WorkerDataRuntime::connect() {
+std::future<void> DataAccessService::connect() {
     return state_->scheduleConnect();
 }
 
-WorkerDataPostResult WorkerDataRuntime::postTask(
-    MoveOnlyFunction<Task<void>(WorkerDataContext&)> task) {
+DataAccessPostResult DataAccessService::postTask(
+    MoveOnlyFunction<Task<void>(DataAccessContext&)> task) {
     return state_->post(std::move(task));
 }
 
-void WorkerDataRuntime::close() {
+void DataAccessService::close() {
     if (!state_->worker().isCurrent()) {
         throw std::logic_error(
-            "worker data runtime must close on its bound event loop");
+            "data access service must close on its bound event loop");
     }
     state_->closeOnWorker();
 }
 
-WorkerDataStats WorkerDataRuntime::stats() const noexcept {
+DataAccessStats DataAccessService::stats() const noexcept {
     return state_->stats();
 }
 
-const WorkerHandle& WorkerDataRuntime::worker() const & noexcept {
+const WorkerHandle& DataAccessService::worker() const & noexcept {
     return state_->worker();
 }
 

@@ -11,9 +11,16 @@
 #include <system_error>
 #include <utility>
 
+#if defined(_WIN32)
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+#else
 #include <fcntl.h>
 #include <sys/file.h>
 #include <unistd.h>
+#endif
 
 namespace ruvia::edge {
 namespace {
@@ -277,6 +284,7 @@ private:
 }
 
 void syncDirectoryBestEffort(const std::filesystem::path& directory) noexcept {
+#if !defined(_WIN32)
     int flags = O_RDONLY;
 #ifdef O_CLOEXEC
     flags |= O_CLOEXEC;
@@ -290,9 +298,28 @@ void syncDirectoryBestEffort(const std::filesystem::path& directory) noexcept {
     }
     (void)::fsync(descriptor);
     (void)::close(descriptor);
+#else
+    (void)directory;
+#endif
 }
 
 [[nodiscard]] bool flushFileToDisk(const std::filesystem::path& path) noexcept {
+#if defined(_WIN32)
+    const HANDLE file = ::CreateFileW(
+        path.c_str(),
+        GENERIC_WRITE,
+        FILE_SHARE_READ,
+        nullptr,
+        OPEN_EXISTING,
+        FILE_ATTRIBUTE_NORMAL,
+        nullptr);
+    if (file == INVALID_HANDLE_VALUE) {
+        return false;
+    }
+    const bool flushed = ::FlushFileBuffers(file) != FALSE;
+    const bool closed = ::CloseHandle(file) != FALSE;
+    return flushed && closed;
+#else
     int flags = O_RDWR;
 #ifdef O_CLOEXEC
     flags |= O_CLOEXEC;
@@ -304,11 +331,18 @@ void syncDirectoryBestEffort(const std::filesystem::path& directory) noexcept {
     const bool flushed = ::fsync(descriptor) == 0;
     const bool closed = ::close(descriptor) == 0;
     return flushed && closed;
+#endif
 }
 
 [[nodiscard]] bool commitReplacement(
     const std::filesystem::path& temporary,
     const std::filesystem::path& finalPath) noexcept {
+#if defined(_WIN32)
+    return ::MoveFileExW(
+               temporary.c_str(),
+               finalPath.c_str(),
+               MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH) != FALSE;
+#else
     std::error_code ec;
     std::filesystem::rename(temporary, finalPath, ec);
     if (ec) {
@@ -316,6 +350,7 @@ void syncDirectoryBestEffort(const std::filesystem::path& directory) noexcept {
     }
     syncDirectoryBestEffort(finalPath.parent_path());
     return true;
+#endif
 }
 
 void removeOwnedFileBestEffort(const std::filesystem::path& path) noexcept {
@@ -332,6 +367,22 @@ class DiskCache::DirectoryLease final {
 public:
     explicit DirectoryLease(const std::filesystem::path& directory)
         : path_(directory / ".ruvia-cache.lock") {
+#if defined(_WIN32)
+        handle_ = ::CreateFileW(
+            path_.c_str(),
+            GENERIC_READ | GENERIC_WRITE,
+            0,
+            nullptr,
+            OPEN_ALWAYS,
+            FILE_ATTRIBUTE_NORMAL,
+            nullptr);
+        if (handle_ == INVALID_HANDLE_VALUE) {
+            const auto error = std::error_code(
+                static_cast<int>(::GetLastError()), std::system_category());
+            throw std::filesystem::filesystem_error(
+                "failed to acquire disk cache directory lease", path_, error);
+        }
+#else
         int flags = O_RDWR | O_CREAT;
 #ifdef O_CLOEXEC
         flags |= O_CLOEXEC;
@@ -349,13 +400,20 @@ public:
             throw std::filesystem::filesystem_error(
                 "disk cache directory is already in use", path_, error);
         }
+#endif
     }
 
     ~DirectoryLease() {
+#if defined(_WIN32)
+        if (handle_ != INVALID_HANDLE_VALUE) {
+            (void)::CloseHandle(handle_);
+        }
+#else
         if (descriptor_ >= 0) {
             (void)::flock(descriptor_, LOCK_UN);
             (void)::close(descriptor_);
         }
+#endif
     }
 
     DirectoryLease(const DirectoryLease&) = delete;
@@ -363,7 +421,11 @@ public:
 
 private:
     std::filesystem::path path_;
+#if defined(_WIN32)
+    HANDLE handle_{INVALID_HANDLE_VALUE};
+#else
     int descriptor_{-1};
+#endif
 };
 
 std::string DiskCache::fileNameFor(std::string_view key) {

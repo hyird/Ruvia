@@ -5,10 +5,8 @@
 #include <atomic>
 #include <cstddef>
 #include <exception>
-#include <memory_resource>
 #include <mutex>
 #include <optional>
-#include <string>
 #include <utility>
 #include <vector>
 
@@ -17,6 +15,7 @@
 #include "ruvia/web/detail/app/AppLifecycle.h"
 #include "ruvia/web/detail/app/AppResource.h"
 #include "ruvia/web/detail/app/DotenvInternal.h"
+#include "ruvia/core/detail/NativePath.h"
 #include "ruvia/web/detail/controller/ControllerDescriptors.h"
 #include "ruvia/web/detail/db/DbInternal.h"
 #include "ruvia/web/detail/redis/RedisInternal.h"
@@ -67,7 +66,7 @@ struct AppDocumentRootConfig final {
     explicit AppDocumentRootConfig(std::pmr::memory_resource* resource)
         : root(resource) {}
 
-    std::pmr::string root;
+    NativePathString root;
     StaticRootOptions staticOptions;
 };
 

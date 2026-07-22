@@ -4,9 +4,11 @@ set(_ruvia_source_root "@CMAKE_SOURCE_DIR@")
 # network I/O primitive. Only ruvia-http is scanned — core, web, and edge
 # perform real I/O by design, and tests may exercise anything they need.
 set(_forbidden_io_patterns
-    [=[#[ \t]*include[ \t]*<(fstream|cstdio|stdio[.]h|fcntl[.]h|unistd[.]h|sys/[a-z_]+[.]h|asio[/.]|boost/asio|openssl/)]=]
+    [=[#[ \t]*include[ \t]*<(fstream|cstdio|stdio[.]h|fcntl[.]h|unistd[.]h|windows[.]h|winsock2[.]h|sys/[a-z_]+[.]h|asio[/.]|boost/asio|openssl/)]=]
     [=[std::(i|o)?fstream]=]
     [=[::open[ \t]*[(]]=]
+    [=[::CreateFile]=]
+    [=[::ReadFile[ \t]*[(]]=]
     [=[::f?stat[ \t]*[(]]=]
     [=[([^A-Za-z0-9_]|^)fopen[ \t]*[(]]=])
 
@@ -17,6 +19,8 @@ set(_probe_texts
     "#include <fcntl.h>"
     "std::ifstream in"
     "int fd = ::open(path, O_RDONLY)"
+    "HANDLE h = ::CreateFileW(p, GENERIC_READ)"
+    "::ReadFile (h, buf, n, &got, nullptr)"
     "::stat (p, &st)"
     "FILE* f = fopen(p, \"rb\")")
 

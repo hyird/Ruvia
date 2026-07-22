@@ -33,15 +33,15 @@
 namespace ruvia {
 
 namespace detail {
-class WorkerDataRuntimeState;
+class DataAccessServiceState;
 }
 
-class WorkerDataContext;
+class DataAccessContext;
 
-using WorkerDataPostResult =
-    PostOutcome<Task<void>(WorkerDataContext&)>;
+using DataAccessPostResult =
+    PostOutcome<Task<void>(DataAccessContext&)>;
 
-struct WorkerDataStats final {
+struct DataAccessStats final {
     std::uint64_t accepted{0};
     std::uint64_t queueFull{0};
     std::uint64_t workerStopping{0};
@@ -51,27 +51,27 @@ struct WorkerDataStats final {
 };
 
 #ifdef RUVIA_ENABLE_DATABASE
-struct WorkerDatabaseConfig final {
+struct DataAccessDatabaseConfig final {
     std::string alias{"default"};
     DbConfig config;
 };
 #endif
 
 #ifdef RUVIA_ENABLE_REDIS
-struct WorkerRedisConfig final {
+struct DataAccessRedisConfig final {
     std::string alias{"default"};
     RedisConfig config;
 };
 #endif
 
-struct WorkerDataOptions final {
+struct DataAccessOptions final {
     std::chrono::milliseconds maintenanceInterval{
         std::chrono::seconds(1)};
 #ifdef RUVIA_ENABLE_DATABASE
-    std::vector<WorkerDatabaseConfig> databases;
+    std::vector<DataAccessDatabaseConfig> databases;
 #endif
 #ifdef RUVIA_ENABLE_REDIS
-    std::vector<WorkerRedisConfig> redis;
+    std::vector<DataAccessRedisConfig> redis;
 #endif
     // Runs on the bound worker when a posted job lets an exception escape.
     // With no callback, the exception fails the event-loop runner; throwing
@@ -82,12 +82,12 @@ struct WorkerDataOptions final {
 // A short-lived capability scope for one coroutine/job running on the bound
 // event loop. Handles obtained from it expire with the context, so the context
 // and its handles must not escape that job.
-class WorkerDataContext final {
+class DataAccessContext final {
 public:
-    WorkerDataContext(const WorkerDataContext&) = delete;
-    WorkerDataContext& operator=(const WorkerDataContext&) = delete;
-    WorkerDataContext(WorkerDataContext&&) = delete;
-    WorkerDataContext& operator=(WorkerDataContext&&) = delete;
+    DataAccessContext(const DataAccessContext&) = delete;
+    DataAccessContext& operator=(const DataAccessContext&) = delete;
+    DataAccessContext(DataAccessContext&&) = delete;
+    DataAccessContext& operator=(DataAccessContext&&) = delete;
 
     [[nodiscard]] const WorkerHandle& worker() const & noexcept;
     const WorkerHandle& worker() const && = delete;
@@ -107,35 +107,37 @@ public:
 #endif
 
 private:
-    friend class WorkerDataRuntime;
-    friend class detail::WorkerDataRuntimeState;
+    friend class DataAccessService;
+    friend class detail::DataAccessServiceState;
 
-    explicit WorkerDataContext(
-        std::shared_ptr<detail::WorkerDataRuntimeState> state) noexcept;
+    explicit DataAccessContext(
+        std::shared_ptr<detail::DataAccessServiceState> state) noexcept;
 
-    std::shared_ptr<detail::WorkerDataRuntimeState> state_;
+    std::shared_ptr<detail::DataAccessServiceState> state_;
     // Declared last so cold operations and borrowed handles expire while the
-    // worker data state and its memory resource are still alive.
+    // data access state and its memory resource are still alive.
     mutable detail::ScopedOperationScope operationScope_;
 };
 
-// Owns database and Redis pools for one application-created core EventLoop.
+// Attaches database and Redis pools plus job-lifetime tracking to one
+// application-created core EventLoop. It does not create or own the event
+// loop's thread or io_context.
 // connect(), post(), and stats() may be called from any thread. Destruction may
 // also occur on any thread after concurrent calls on this object have ceased;
 // close() is worker-affine. EventLoop shutdown closes the pools on that same
 // worker. post() is the only public operation-scope entry point, so every
 // context and pool lease remains covered by outstanding-job tracking.
-class WorkerDataRuntime final {
+class DataAccessService final {
 public:
-    explicit WorkerDataRuntime(
+    explicit DataAccessService(
         EventLoop loop,
-        WorkerDataOptions options = {});
-    ~WorkerDataRuntime();
+        DataAccessOptions options = {});
+    ~DataAccessService();
 
-    WorkerDataRuntime(const WorkerDataRuntime&) = delete;
-    WorkerDataRuntime& operator=(const WorkerDataRuntime&) = delete;
-    WorkerDataRuntime(WorkerDataRuntime&&) = delete;
-    WorkerDataRuntime& operator=(WorkerDataRuntime&&) = delete;
+    DataAccessService(const DataAccessService&) = delete;
+    DataAccessService& operator=(const DataAccessService&) = delete;
+    DataAccessService(DataAccessService&&) = delete;
+    DataAccessService& operator=(DataAccessService&&) = delete;
 
     // Schedules connection startup on the bound loop. It is valid to call this
     // before EventLoopPool::start(); wait on the returned future only after the
@@ -145,25 +147,25 @@ public:
     [[nodiscard]] std::future<void> connect();
 
     template <typename Fn>
-        requires std::invocable<std::decay_t<Fn>&, WorkerDataContext&> &&
+        requires std::invocable<std::decay_t<Fn>&, DataAccessContext&> &&
                  std::same_as<
-                     std::invoke_result_t<std::decay_t<Fn>&, WorkerDataContext&>,
+                     std::invoke_result_t<std::decay_t<Fn>&, DataAccessContext&>,
                      Task<void>>
-    [[nodiscard]] WorkerDataPostResult post(Fn&& fn) {
-        return postTask(MoveOnlyFunction<Task<void>(WorkerDataContext&)>(
+    [[nodiscard]] DataAccessPostResult post(Fn&& fn) {
+        return postTask(MoveOnlyFunction<Task<void>(DataAccessContext&)>(
             std::forward<Fn>(fn)));
     }
 
     void close();
-    [[nodiscard]] WorkerDataStats stats() const noexcept;
+    [[nodiscard]] DataAccessStats stats() const noexcept;
     [[nodiscard]] const WorkerHandle& worker() const & noexcept;
     const WorkerHandle& worker() const && = delete;
 
 private:
-    [[nodiscard]] WorkerDataPostResult postTask(
-        MoveOnlyFunction<Task<void>(WorkerDataContext&)> task);
+    [[nodiscard]] DataAccessPostResult postTask(
+        MoveOnlyFunction<Task<void>(DataAccessContext&)> task);
 
-    std::shared_ptr<detail::WorkerDataRuntimeState> state_;
+    std::shared_ptr<detail::DataAccessServiceState> state_;
 };
 
 }  // namespace ruvia

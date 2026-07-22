@@ -1,3 +1,4 @@
+#include "test_io_context.h"
 #include "test_harness.h"
 
 #include <array>
@@ -110,7 +111,7 @@ CsrfOutcome runCsrf(HttpKnownMethod method, bool withCookie, std::string_view co
     });
 
     ruvia::CsrfProtection csrf;
-    asio::io_context io;
+    asio::io_context& io = ruvia::test::newTestIoContext();
     asio::co_spawn(io, ruvia::detail::taskAsAwaitable(csrf.handle(context, next)), asio::detached);
     io.run();
 

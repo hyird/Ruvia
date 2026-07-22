@@ -167,6 +167,9 @@ RUVIA_TEST(static_file_replacement_cannot_reuse_indexed_metadata) {
     static_assert(
         std::string_view("old-representation").size() ==
         std::string_view("new-representation").size());
+#if defined(_WIN32)
+    fs::remove(servedPath);
+#endif
     fs::rename(replacementPath, servedPath);
 
     ruvia::WorkerMemory worker;
@@ -229,6 +232,9 @@ RUVIA_TEST(context_file_replacement_cannot_reuse_response_metadata) {
         std::ofstream output(replacementPath, std::ios::binary);
         output << "new-context-body";
     }
+#if defined(_WIN32)
+    fs::remove(servedPath);
+#endif
     fs::rename(replacementPath, servedPath);
 
     const auto file = ruvia::detail::responseBody(response).file();

@@ -128,6 +128,7 @@ int main() {
         check(cache.byteSize() <= 600, "byte budget is respected");
     }
 
+#if !defined(_WIN32)
     // Filesystem failures remain observable and do not lie by dropping the
     // in-memory index entry. Once permissions recover, the same clear succeeds.
     {
@@ -160,6 +161,7 @@ int main() {
         check(!ec, "cache directory permissions are restored");
         check(cache.clear(), "clear succeeds after filesystem recovery");
     }
+#endif
 
     // An entry larger than the whole budget is refused.
     {

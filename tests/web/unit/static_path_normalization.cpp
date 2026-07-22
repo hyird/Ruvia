@@ -10,7 +10,7 @@
 namespace {
 
 using ruvia::HttpError;
-using ruvia::detail::isDriveQualifiedPath;
+using ruvia::detail::isWindowsDrivePath;
 using ruvia::detail::normalizeStaticRelativePath;
 
 std::string normalize(std::string_view input) {
@@ -54,9 +54,9 @@ RUVIA_TEST(static_path_rejects_escape_above_root) {
 
 RUVIA_TEST(static_path_rejects_absolute_and_backslash_forms) {
     RUVIA_CHECK(rejects("/etc/passwd"));          // leading '/'
-    RUVIA_CHECK(rejects("\\absolute\\path"));  // leading '\\'
-    RUVIA_CHECK(rejects("C:\\secret"));        // drive-qualified path
-    RUVIA_CHECK(rejects("c:/secret"));         // lowercase drive prefix
+    RUVIA_CHECK(rejects("\\windows\\system32"));  // leading '\\'
+    RUVIA_CHECK(rejects("C:\\secret"));           // Windows drive (uppercase)
+    RUVIA_CHECK(rejects("c:/secret"));            // Windows drive (lowercase)
     // '\\' is a separator too, so backslash traversal cannot bypass the ".." guard.
     RUVIA_CHECK(rejects("a\\..\\.."));
     // A benign backslash path is normalized with '/' separators.
@@ -78,10 +78,10 @@ RUVIA_TEST(static_path_only_exact_dot_segments_are_special) {
     RUVIA_CHECK_EQ(normalize("a\\b/../c"), std::string("a/c"));
 }
 
-RUVIA_TEST(static_path_drive_qualified_predicate) {
-    RUVIA_CHECK(isDriveQualifiedPath("C:"));
-    RUVIA_CHECK(isDriveQualifiedPath("z:/x"));
-    RUVIA_CHECK(!isDriveQualifiedPath("C"));      // too short to hold a drive spec
-    RUVIA_CHECK(!isDriveQualifiedPath("1:/x"));   // drive letter must be alphabetic
-    RUVIA_CHECK(!isDriveQualifiedPath("ab:/x"));  // ':' must be the second character
+RUVIA_TEST(static_path_windows_drive_predicate) {
+    RUVIA_CHECK(isWindowsDrivePath("C:"));
+    RUVIA_CHECK(isWindowsDrivePath("z:/x"));
+    RUVIA_CHECK(!isWindowsDrivePath("C"));      // too short to hold a drive spec
+    RUVIA_CHECK(!isWindowsDrivePath("1:/x"));   // drive letter must be alphabetic
+    RUVIA_CHECK(!isWindowsDrivePath("ab:/x"));  // ':' must be the second character
 }
