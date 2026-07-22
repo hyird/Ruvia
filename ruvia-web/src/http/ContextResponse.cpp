@@ -1,19 +1,14 @@
 #include "ruvia/web/Context.h"
 
 #include "ruvia/web/detail/router/RouteTable.h"
-#include "ruvia/web/detail/CookieSignature.h"
-#include "ruvia/http/detail/HttpRequestInternal.h"
+
 #include "ruvia/http/detail/HttpResponseBodyAccess.h"
 #include "ruvia/http/detail/HttpResponseHeaderAccess.h"
 #include "ruvia/http/detail/HttpResponseHeaderState.h"
 #include "ruvia/http/detail/AsciiCase.h"
-#include "ruvia/http/detail/CookieValidation.h"
-#include "ruvia/http/detail/SetCookiePlan.h"
-#include "ruvia/http/detail/Hex.h"
 #include "ruvia/web/detail/http/HttpErrorResponse.h"
 
 #include <algorithm>
-#include <chrono>
 #include <stdexcept>
 #include <string_view>
 #include <utility>
@@ -124,85 +119,6 @@ void assignActiveResponseHeaders(HttpResponse& response, const HttpResponse& act
     }
 }
 
-[[nodiscard]] bool redirectLocationNeedsEncoding(std::string_view location) noexcept {
-    return std::ranges::any_of(location, [](char ch) noexcept {
-        return static_cast<unsigned char>(ch) >= 0x80;
-    });
-}
-
-[[nodiscard]] bool encodeUriKeepsByte(unsigned char ch) noexcept {
-    if ((ch >= 'A' && ch <= 'Z') ||
-        (ch >= 'a' && ch <= 'z') ||
-        (ch >= '0' && ch <= '9')) {
-        return true;
-    }
-
-    switch (ch) {
-        case ';':
-        case ',':
-        case '/':
-        case '?':
-        case ':':
-        case '@':
-        case '&':
-        case '=':
-        case '+':
-        case '$':
-        case '-':
-        case '_':
-        case '.':
-        case '!':
-        case '~':
-        case '*':
-        case '\'':
-        case '(':
-        case ')':
-        case '#':
-            return true;
-        default:
-            return false;
-    }
-}
-
-void appendPercentEncodedByte(std::pmr::string& output, unsigned char ch) {
-    output.push_back('%');
-    output.push_back(detail::upperHexDigit(ch >> 4));
-    output.push_back(detail::upperHexDigit(ch & 0x0F));
-}
-
-[[nodiscard]] std::pmr::string encodeRedirectLocation(
-    std::string_view location,
-    std::pmr::memory_resource* resource) {
-    std::pmr::string encoded(resource);
-    encoded.reserve(location.size());
-    for (std::size_t i = 0; i < location.size(); ++i) {
-        const auto ch = static_cast<unsigned char>(location[i]);
-        // Pass an already well-formed percent-escape (%HH) through verbatim. This
-        // pass only runs when the location carries a non-ASCII byte, but it then
-        // rewrites the whole string -- so without this, a location that is already
-        // percent-encoded elsewhere (e.g. "%20") would have its '%' re-encoded to
-        // "%25", double-encoding it to "%2520" and corrupting the redirect target.
-        // RFC 3986 2.4 forbids encoding the same string more than once; the caller
-        // means a valid target, not a literal percent. A lone or malformed '%' is
-        // not a valid escape and is percent-encoded like any other octet below.
-        if (ch == '%' && i + 2 < location.size() &&
-            detail::decodeHexNibble(location[i + 1]) >= 0 &&
-            detail::decodeHexNibble(location[i + 2]) >= 0) {
-            encoded.push_back('%');
-            encoded.push_back(location[i + 1]);
-            encoded.push_back(location[i + 2]);
-            i += 2;
-            continue;
-        }
-        if (encodeUriKeepsByte(ch)) {
-            encoded.push_back(static_cast<char>(ch));
-            continue;
-        }
-        appendPercentEncodedByte(encoded, ch);
-    }
-    return encoded;
-}
-
 }  // namespace
 
 void Context::status(HttpStatusCode statusCode) {
@@ -246,75 +162,6 @@ void Context::header(std::string_view name, std::string_view value, HeaderOption
 
 void Context::header(std::string_view name, std::nullopt_t) {
     removeResponseHeader(name);
-}
-
-namespace {
-
-// The name the client sends back in Cookie is the wire name: an enum prefix
-// becomes part of the name at serialization. Request-side lookups and the MAC
-// of a signed cookie must both use it; the bare name never reaches the client.
-[[nodiscard]] std::string_view cookieWireName(
-    std::pmr::string& storage,
-    std::string_view name,
-    const ruvia::CookieOptions& options) {
-    if (!options.prefix) {
-        return name;
-    }
-    const auto prefix = ruvia::detail::cookiePrefixText(*options.prefix);
-    storage.reserve(prefix.size() + name.size());
-    storage.append(prefix.data(), prefix.size());
-    storage.append(name.data(), name.size());
-    return storage;
-}
-
-[[nodiscard]] std::pmr::string composeSignedCookieValue(
-    std::pmr::memory_resource* resource,
-    std::string_view name,
-    std::string_view value,
-    std::string_view secret) {
-    std::pmr::string signedValue(resource);
-    signedValue.reserve(value.size() + 1 + detail::kCookieSignatureSize);
-    if (!value.empty()) {
-        signedValue.append(value.data(), value.size());
-    }
-    signedValue.push_back('.');
-    char signature[detail::kCookieSignatureSize];
-    detail::writeCookieSignature(signature, secret, name, value);
-    signedValue.append(signature, sizeof(signature));
-    return signedValue;
-}
-
-}  // namespace
-
-void Context::setCookie(std::string_view name, std::string_view value, const CookieOptions& options) {
-    const detail::SetCookiePlan plan(name, value, options);
-    auto& header = detail::upsertResponseSetCookieUninitializedValue(
-        responseState_.activeResponse(),
-        plan.wirePrefix(),
-        plan.name(),
-        plan.size());
-    plan.write(detail::responseHeaderValueBegin(header));
-}
-
-void Context::setSignedCookie(
-    std::string_view name,
-    std::string_view value,
-    std::string_view secret,
-    const CookieOptions& options) {
-    std::pmr::string wireName(resource());
-    setCookie(
-        name,
-        composeSignedCookieValue(
-            resource(),
-            cookieWireName(wireName, name, options),
-            value,
-            secret),
-        options);
-}
-
-void Context::deleteCookie(std::string_view name, CookieOptions options) {
-    options.maxAge = std::chrono::seconds(0);
-    setCookie(name, "", options);
 }
 
 void Context::storeResponse(HttpResponse&& response) {
@@ -422,20 +269,6 @@ HttpResponse Context::htmlStaticView(std::string_view body) const {
     detail::setResponseHeaderStableView(response, "Content-Type", "text/html; charset=UTF-8");
     detail::setResponseBodyStaticView(response, body);
     applyResponseState(response, std::nullopt);
-    return response;
-}
-
-HttpResponse Context::redirect(
-    std::string_view location,
-    HttpStatusCode statusCode) const {
-    HttpResponse response(resource());
-    applyResponseState(response, statusCode);
-    if (redirectLocationNeedsEncoding(location)) {
-        auto encodedLocation = encodeRedirectLocation(location, resource());
-        response.header("Location", encodedLocation);
-    } else {
-        response.header("Location", location);
-    }
     return response;
 }
 
