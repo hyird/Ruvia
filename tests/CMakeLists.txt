@@ -97,7 +97,9 @@ add_executable(ruvia_unit_tests
     http/http2/http2_stream_request_data.cpp
     http/http2/http2_stream_table.cpp
     http/http2/http2_websocket_handshake.cpp
-    http/http2/sansio_driver.cpp
+    http/http2/sansio_driver_session.cpp
+    http/http2/sansio_driver_body.cpp
+    http/http2/sansio_driver_websocket.cpp
     http/http2/sansio_tls.cpp
 
     # http/unit
