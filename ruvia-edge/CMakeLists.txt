@@ -2,24 +2,24 @@
 find_package(OpenSSL REQUIRED)
 
 set(RUVIA_EDGE_SOURCES
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/EdgeConfig.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/EdgeHeaderRules.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/EdgeByteRange.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/EdgeHttp1Wire.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/EdgeHttp2ResponseWriter.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/EdgeTlsContext.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/EdgeFreshness.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/EdgeCache.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/DiskCache.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/DiskCacheRecord.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/DiskCacheFiles.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/EdgeDiskTier.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/OriginFetcher.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/EdgeServer.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/EdgeServerSession.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/EdgeServerServe.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/EdgeRequestDirectives.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/EdgeForwardHeaders.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/cache/DiskCache.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/cache/DiskCacheFiles.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/cache/DiskCacheRecord.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/cache/DiskTier.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/cache/EdgeCache.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/cache/Freshness.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/http1/Http1Wire.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/http2/Http2ResponseWriter.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/proxy/ByteRange.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/proxy/ForwardHeaders.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/proxy/HeaderRules.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/proxy/RequestDirectives.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/server/EdgeConfig.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/server/Serve.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/server/Server.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/server/Session.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/server/TlsContext.cpp
 )
 
 add_library(ruvia-edge ${RUVIA_EDGE_SOURCES})

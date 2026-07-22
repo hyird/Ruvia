@@ -4,7 +4,7 @@
 
 #include <cstdio>
 
-#include "ruvia/edge/detail/EdgeConfig.h"
+#include "ruvia/edge/detail/server/EdgeConfig.h"
 
 namespace {
 
