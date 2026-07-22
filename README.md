@@ -328,7 +328,8 @@ are closed.
 ## Requirements
 
 - CMake 3.24 or newer.
-- A C++20 compiler.
+- A C++20 compiler. CI builds with GCC 13 on Ubuntu 24.04 and with the stock
+  Apple Clang on macOS 26.
 - vcpkg.
 - Supported build platforms: Linux and macOS.
 - Component dependencies: core uses Asio; HTTP uses zlib, Brotli, and zstd;

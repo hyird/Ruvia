@@ -1435,6 +1435,10 @@ int main() {
 
     // HTTP/2: ALPN negotiation, streamed responses, flow control across a body
     // larger than the window, and true multiplexing of concurrent streams.
+    //
+    // This block drives a real h2 client, so it is compiled only where the
+    // build found nghttp and h2load. CMake reports the skip at configure time.
+#if defined(RUVIA_NGHTTP_EXECUTABLE) && defined(RUVIA_H2LOAD_EXECUTABLE)
     {
         ruvia::edge::EdgeServerOptions h2Options;
         h2Options.tls = ruvia::edge::EdgeTlsConfig{
@@ -1524,6 +1528,7 @@ int main() {
         std::filesystem::remove(uploadPath, uploadRemoveError);
         h2Edge.stop();
     }
+#endif
 
     // Conditional revalidation: a short-lived entry goes stale, is revalidated
     // with the origin, comes back 304, and is served from cache without a full

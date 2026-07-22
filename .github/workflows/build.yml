@@ -42,14 +42,16 @@ concurrency:
   group: build-${{ github.workflow }}-${{ github.sha }}
   cancel-in-progress: true
 
-# Linux and macOS use LLVM Clang and enable every optional feature.
+# Linux builds with GCC 13 and macOS with the image's stock Apple Clang.
+# Neither job installs a compiler: both toolchains ship with the runner image.
+# Both enable every optional feature.
 jobs:
-  ubuntu_build:
-    name: Ubuntu build
+  linux_build:
+    name: Linux
     runs-on: ubuntu-24.04
     env:
-      CC: clang-18
-      CXX: clang++-18
+      CC: gcc-13
+      CXX: g++-13
       GIT_CONFIG_COUNT: 1
       GIT_CONFIG_KEY_0: init.defaultBranch
       GIT_CONFIG_VALUE_0: main
@@ -65,19 +67,22 @@ jobs:
 
       - name: Install toolchain
         run: |
+          set -euo pipefail
+          # GCC 13 and Ninja ship with the image; only the nghttp2 client the
+          # conformance tests drive has to be installed.
           sudo apt-get update
-          sudo apt-get install -y clang-18 lld-18 ninja-build nghttp2-client curl zip unzip tar
-          clang-18 --version
-          clang++-18 --version
+          sudo apt-get install -y ninja-build nghttp2-client curl zip unzip tar
+          gcc-13 --version
+          g++-13 --version
 
       - name: Restore vcpkg binary cache
         id: vcpkg-cache
         uses: actions/cache/restore@v6
         with:
           path: ${{ env.VCPKG_DEFAULT_BINARY_CACHE }}
-          key: vcpkg-binaries-${{ runner.os }}-${{ runner.arch }}-clang18-${{ env.VCPKG_COMMIT }}-${{ hashFiles('vcpkg.json', 'triplets/**', 'CMakeLists.txt') }}
+          key: vcpkg-binaries-${{ runner.os }}-${{ runner.arch }}-gcc13-${{ env.VCPKG_COMMIT }}-${{ hashFiles('vcpkg.json', 'triplets/**', 'CMakeLists.txt') }}
           restore-keys: |
-            vcpkg-binaries-${{ runner.os }}-${{ runner.arch }}-clang18-${{ env.VCPKG_COMMIT }}-
+            vcpkg-binaries-${{ runner.os }}-${{ runner.arch }}-gcc13-${{ env.VCPKG_COMMIT }}-
 
       - name: Bootstrap vcpkg
         run: |
@@ -94,7 +99,6 @@ jobs:
           cmake -S . -B build/test -G Ninja \
             -DCMAKE_BUILD_TYPE="$BUILD_TYPE" \
             -DCMAKE_COMPILE_WARNING_AS_ERROR=ON \
-            -DCMAKE_C_COMPILER="$CC" \
             -DCMAKE_CXX_COMPILER="$CXX" \
             -DRUVIA_ENABLE_MARIADB=ON \
             -DRUVIA_ENABLE_POSTGRESQL=ON \
@@ -120,8 +124,8 @@ jobs:
         run: ctest --test-dir build/test --output-on-failure --build-config "$BUILD_TYPE"
 
   macos_build:
-    name: macOS build
-    runs-on: macos-15
+    name: macOS
+    runs-on: macos-26
     env:
       GIT_CONFIG_COUNT: 1
       GIT_CONFIG_KEY_0: init.defaultBranch
@@ -136,24 +140,26 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Install build tools
+      - name: Show toolchain
         run: |
-          brew untap aws/tap
-          brew install llvm ninja nghttp2
-          llvm_prefix="$(brew --prefix llvm)"
-          echo "CC=$llvm_prefix/bin/clang" >> "$GITHUB_ENV"
-          echo "CXX=$llvm_prefix/bin/clang++" >> "$GITHUB_ENV"
-          "$llvm_prefix/bin/clang" --version
-          "$llvm_prefix/bin/clang++" --version
+          set -euo pipefail
+          # Nothing is installed here on purpose: the image already ships
+          # Xcode's Apple Clang, CMake and Ninja. Without the nghttp2 CLI the
+          # edge suite skips its HTTP/2 client checks, which the Linux job
+          # covers.
+          clang --version
+          clang++ --version
+          cmake --version
+          ninja --version
 
       - name: Restore vcpkg binary cache
         id: vcpkg-cache
         uses: actions/cache/restore@v6
         with:
           path: ${{ env.VCPKG_DEFAULT_BINARY_CACHE }}
-          key: vcpkg-binaries-${{ runner.os }}-${{ runner.arch }}-llvm-${{ env.VCPKG_COMMIT }}-${{ hashFiles('vcpkg.json', 'triplets/**', 'CMakeLists.txt') }}
+          key: vcpkg-binaries-${{ runner.os }}-${{ runner.arch }}-appleclang-${{ env.VCPKG_COMMIT }}-${{ hashFiles('vcpkg.json', 'triplets/**', 'CMakeLists.txt') }}
           restore-keys: |
-            vcpkg-binaries-${{ runner.os }}-${{ runner.arch }}-llvm-${{ env.VCPKG_COMMIT }}-
+            vcpkg-binaries-${{ runner.os }}-${{ runner.arch }}-appleclang-${{ env.VCPKG_COMMIT }}-
 
       - name: Bootstrap vcpkg
         run: |
@@ -170,8 +176,6 @@ jobs:
           cmake -S . -B build/test -G Ninja \
             -DCMAKE_BUILD_TYPE="$BUILD_TYPE" \
             -DCMAKE_COMPILE_WARNING_AS_ERROR=ON \
-            -DCMAKE_C_COMPILER="$CC" \
-            -DCMAKE_CXX_COMPILER="$CXX" \
             -DRUVIA_ENABLE_MARIADB=ON \
             -DRUVIA_ENABLE_POSTGRESQL=ON \
             -DRUVIA_ENABLE_REDIS=ON \
@@ -196,7 +200,7 @@ jobs:
 
   cleanup:
     name: Prune old runs
-    needs: [ubuntu_build, macos_build]
+    needs: [linux_build, macos_build]
     # Run after all builds regardless of their result, but never on pull
     # requests (a fork's token is read-only and must not prune main's history).
     if: ${{ always() && github.event_name != 'pull_request' }}
