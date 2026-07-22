@@ -1,5 +1,8 @@
 #include "ruvia/edge/detail/EdgeServerImpl.h"
 
+#include "ruvia/edge/detail/EdgeForwardHeaders.h"
+#include "ruvia/edge/detail/EdgeRequestDirectives.h"
+
 #include <chrono>
 #include <cstdint>
 #include <ctime>
@@ -32,40 +35,11 @@ asio::awaitable<bool> EdgeServer::Impl::serveRequest(
 
     const bool isGet = request.knownMethod == HttpKnownMethod::kGet;
     const bool isHead = request.knownMethod == HttpKnownMethod::kHead;
-    const bool requestHasAuthorization =
-        findRequestHeader(request.headers, "authorization").has_value();
-    const bool requestHasCondition =
-        findRequestHeader(request.headers, "if-match").has_value() ||
-        findRequestHeader(request.headers, "if-none-match").has_value() ||
-        findRequestHeader(request.headers, "if-modified-since").has_value() ||
-        findRequestHeader(request.headers, "if-unmodified-since").has_value() ||
-        findRequestHeader(request.headers, "if-range").has_value();
-    CacheControlFieldParser requestCacheControlParser;
-    bool hasRequestCacheControl = false;
-    for (const auto& field : request.headers) {
-        if (iequals(field.name(), "cache-control")) {
-            hasRequestCacheControl = true;
-            requestCacheControlParser.update(field.value());
-        }
-    }
-    const CacheControl requestCacheControl = requestCacheControlParser.finish();
-    bool legacyPragmaNoCache = false;
-    if (!hasRequestCacheControl) {
-        for (const auto& field : request.headers) {
-            if (iequals(field.name(), "pragma") &&
-                detail::httpHasToken(field.value(), "no-cache")) {
-                legacyPragmaNoCache = true;
-                break;
-            }
-        }
-    }
-    // The edge currently chooses not to calculate request-specific freshness
-    // constraints. Forwarding is conservative and preserves the client's
-    // preference; max-stale merely widens what the client accepts and needs no
-    // forced validation.
-    const bool requestForcesValidation =
-        requestCacheControl.noCache || requestCacheControl.maxAge.has_value() ||
-        requestCacheControl.minFresh.has_value() || legacyPragmaNoCache;
+    const auto directives = edgeRequestDirectives(request.headers);
+    const auto& requestCacheControl = directives.cacheControl;
+    const bool requestHasAuthorization = directives.hasAuthorization;
+    const bool requestHasCondition = directives.hasCondition;
+    const bool requestForcesValidation = directives.forcesValidation;
     const std::string_view frontHost = hostWithoutPort(request.host);
     const std::string_view target = request.target;
     const bool keepAlive = request.keepAlive;
@@ -377,57 +351,15 @@ asio::awaitable<bool> EdgeServer::Impl::serveRequest(
             }
         } leaderGuard{this, &key, becameLeader};
 
-        // 5. Miss (or stale): fetch from the origin. Forward the client's request
-        // headers minus hop-by-hop fields, Host (regenerated for the upstream),
-        // Range plus client conditionals, and client-supplied forwarding headers
-        // (dropped so a client cannot spoof them). Accept-Encoding is forwarded so
-        // the origin may compress; the cache key includes every field line and
-        // weight so variants are stored separately.
-        std::pmr::vector<HttpHeaderView> forwardHeaders(memory_.resource());
-        for (const auto& field : request.headers) {
-            std::pmr::string lower(memory_.resource());
-            lower.reserve(field.name().size());
-            for (const char c : field.name()) {
-                lower.push_back(toLowerAscii(c));
-            }
-            if (isConnectionOrFramingField(lower) ||
-                connectionNominates(request.headers, field.name()) ||
-                lower == "host" ||
-                lower == "range" || lower == "if-none-match" ||
-                lower == "if-modified-since" || lower == "if-match" ||
-                lower == "if-unmodified-since" || lower == "if-range" ||
-                lower == "via" || lower == "forwarded" ||
-                lower.starts_with("x-forwarded-")) {
-                continue;
-            }
-            forwardHeaders.push_back(field);
-        }
-        if (!request.clientAddress.empty()) {
-            forwardHeaders.emplace_back(
-                std::string_view("X-Forwarded-For"),
-                std::string_view(request.clientAddress));
-        }
-        if (!request.host.empty()) {
-            forwardHeaders.emplace_back(
-                std::string_view("X-Forwarded-Host"), request.host);
-        }
-        forwardHeaders.emplace_back(
-            std::string_view("X-Forwarded-Proto"),
-            tlsEnabled_ ? std::string_view("https") : std::string_view("http"));
-        forwardHeaders.emplace_back(
-            std::string_view("Via"), std::string_view("1.1 ruvia-edge"));
-
-        // Revalidate a stale entry with a conditional request when it carries a
-        // validator, so an unchanged resource comes back as a bodyless 304.
-        if (staleEntry) {
-            if (const auto etag = findHeaderValue(staleEntry->headers, "etag")) {
-                forwardHeaders.emplace_back(std::string_view("If-None-Match"), *etag);
-            } else if (const auto lastModified =
-                           findHeaderValue(staleEntry->headers, "last-modified")) {
-                forwardHeaders.emplace_back(
-                    std::string_view("If-Modified-Since"), *lastModified);
-            }
-        }
+        // 5. Miss (or stale): fetch from the origin, forwarding the client's
+        // header section under the proxy rules in EdgeForwardHeaders.h.
+        const auto forwardHeaders = buildOriginForwardHeaders(
+            request.headers,
+            request.clientAddress,
+            request.host,
+            tlsEnabled_,
+            staleEntry ? &*staleEntry : nullptr,
+            memory_.resource());
 
         OriginRequest originRequest;
         originRequest.method = request.method;  // GET or HEAD

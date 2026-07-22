@@ -18,6 +18,8 @@ set(RUVIA_EDGE_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/src/EdgeServer.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/EdgeServerSession.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/EdgeServerServe.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/EdgeRequestDirectives.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/EdgeForwardHeaders.cpp
 )
 
 add_library(ruvia-edge ${RUVIA_EDGE_SOURCES})
