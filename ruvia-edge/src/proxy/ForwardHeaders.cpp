@@ -8,6 +8,7 @@ std::pmr::vector<HttpHeaderView> buildForwardHeaders(
     std::string_view host,
     bool tlsEnabled,
     const CachedResponse* staleEntry,
+    ForwardMode mode,
     std::pmr::memory_resource* resource) {
     std::pmr::vector<HttpHeaderView> forwardHeaders(resource);
     for (const auto& field : requestHeaders) {
@@ -19,9 +20,7 @@ std::pmr::vector<HttpHeaderView> buildForwardHeaders(
         if (isConnectionOrFramingField(lower) ||
             connectionNominates(requestHeaders, field.name()) ||
             lower == "host" ||
-            lower == "range" || lower == "if-none-match" ||
-            lower == "if-modified-since" || lower == "if-match" ||
-            lower == "if-unmodified-since" || lower == "if-range" ||
+            (mode == ForwardMode::kCache && isConditionalOrRangeField(lower)) ||
             lower == "via" || lower == "forwarded" ||
             lower.starts_with("x-forwarded-")) {
             continue;

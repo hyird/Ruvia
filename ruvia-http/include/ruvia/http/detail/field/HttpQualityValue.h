@@ -46,31 +46,16 @@ namespace ruvia::detail {
 
 [[nodiscard]] inline bool httpAcceptParametersHaveStrictEquals(
     std::string_view value) noexcept {
-    auto start = httpFindUnquotedDelimiter(value, 0, ';');
-    if (start >= value.size()) {
-        return true;
-    }
-    ++start;
-    while (start <= value.size()) {
-        const auto end = httpFindUnquotedDelimiter(value, start, ';');
-        const auto part = httpTrimOws(value.substr(start, end - start));
+    return httpAllParameters(value, [](std::string_view part) noexcept {
         const auto equals = part.find('=');
         if (part.empty() || equals == std::string_view::npos) {
             return false;
         }
         const auto rawName = part.substr(0, equals);
         const auto rawValue = part.substr(equals + 1);
-        if (rawName.empty() || rawValue.empty() ||
-            rawName != httpTrimOws(rawName) ||
-            rawValue != httpTrimOws(rawValue)) {
-            return false;
-        }
-        if (end >= value.size()) {
-            return true;
-        }
-        start = end + 1;
-    }
-    return true;
+        return !rawName.empty() && !rawValue.empty() &&
+            rawName == httpTrimOws(rawName) && rawValue == httpTrimOws(rawValue);
+    });
 }
 
 [[nodiscard]] inline int httpQualityParameter(std::string_view value) noexcept {

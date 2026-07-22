@@ -1,6 +1,7 @@
 #include "ruvia/web/detail/db/DbRegistry.h"
 #include "ruvia/core/detail/io/AsioAwait.h"
 #include "ruvia/web/detail/db/DbMysqlRuntime.h"
+#include "ruvia/web/detail/db/DbPoolOperations.h"
 #include "ruvia/web/detail/db/DbSlotSocket.h"
 #include "ruvia/web/detail/db/DbSql.h"
 
@@ -16,66 +17,10 @@
 
 namespace ruvia {
 
-namespace {
-
-[[nodiscard]] std::array<char, 6> formatMariaDbPort(
-    std::uint16_t port) {
-    std::array<char, 6> output{};
-    const auto parsed = std::to_chars(
-        output.data(), output.data() + output.size() - 1, port);
-    if (parsed.ec != std::errc{}) {
-        throw std::runtime_error("failed to format MariaDB port");
-    }
-    *parsed.ptr = '\0';
-    return output;
-}
-
-}  // namespace
-
 Task<detail::DbResolvedAddresses> detail::MariaDbPool::resolveHost(
     ConnectionSlot& slot,
     const OperationTimeout& deadline) {
-    const auto remaining = deadline.remaining();
-    if (remaining.has_value() && remaining->count() <= 0) {
-        throw std::runtime_error("MariaDB host resolve timed out");
-    }
-    if (remaining.has_value()) {
-        setSlotDeadline(
-            slot,
-            *remaining,
-            ConnectionSlot::DeadlineKind::kResolve);
-    } else {
-        slot.deadline.reset();
-    }
-
-    const auto port = formatMariaDbPort(config_.port);
-    try {
-        auto completion =
-            co_await detail::asyncAsio<
-                asio::ip::tcp::resolver::results_type>(
-                [this, &slot, &port](auto handler) mutable {
-                    slot.resolver.async_resolve(
-                        config_.host,
-                        std::string_view(port.data()),
-                        std::move(handler));
-                });
-        const auto resolveError = completion.errorCode();
-        auto results = std::move(completion).takeResult();
-        const auto afterResolve = deadline.remaining();
-        if (slot.deadline.clear() ||
-            (afterResolve.has_value() && afterResolve->count() <= 0)) {
-            throw std::runtime_error("MariaDB host resolve timed out");
-        }
-        if (resolveError) {
-            throw std::system_error(
-                resolveError,
-                "resolving MariaDB host failed");
-        }
-        co_return detail::collectDbResolvedAddresses(results, resource_);
-    } catch (...) {
-        clearSlotDeadline(slot);
-        throw;
-    }
+    return resolveDbHost(*this, slot, deadline, "MariaDB");
 }
 
 Task<void> detail::MariaDbPool::connectUnlocked(ConnectionSlot& slot) {

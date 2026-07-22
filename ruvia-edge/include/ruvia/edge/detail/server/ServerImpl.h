@@ -105,9 +105,23 @@ private:
         TlsContextPtr context);
     template <typename Stream>
     asio::awaitable<void> handleSession(Stream stream);
+    // What one served request reports to the access log. serveRequest starts it
+    // at ERROR, and whichever path terminates the request names itself.
+    struct RequestOutcome final {
+        std::string_view label{"ERROR"};
+        std::uint16_t status{0};
+    };
+
     asio::awaitable<bool> serveRequest(
         const EdgeRequest& request,
         ResponseWriter& writer);
+    // The uncacheable path: unsafe methods, conditional or authenticated
+    // retrievals, and no-store. Nothing here consults or fills the cache.
+    asio::awaitable<bool> servePassThrough(
+        const EdgeRequest& request,
+        ResponseWriter& writer,
+        const OriginLease& origin,
+        RequestOutcome& outcome);
     template <typename Stream>
     asio::awaitable<bool> handleFramedRequest(
         Stream& stream,

@@ -91,6 +91,9 @@ public:
     template <typename Pool>
     friend Task<QueryResult> executeDbQuery(
         Pool&, std::pmr::string, std::pmr::vector<DbValue>, std::pmr::memory_resource*);
+    template <typename Pool, typename Slot>
+    friend Task<DbResolvedAddresses> resolveDbHost(
+        Pool&, Slot&, const OperationTimeout&, std::string_view);
     friend class ::ruvia::DbHandle;
     friend class ::ruvia::DbTransaction;
     friend class ::ruvia::DbStreamResult;
@@ -199,6 +202,9 @@ private:
     template <typename Pool>
     friend Task<QueryResult> executeDbQuery(
         Pool&, std::pmr::string, std::pmr::vector<DbValue>, std::pmr::memory_resource*);
+    template <typename Pool, typename Slot>
+    friend Task<DbResolvedAddresses> resolveDbHost(
+        Pool&, Slot&, const OperationTimeout&, std::string_view);
     friend class ::ruvia::DbHandle;
     friend class ::ruvia::DbTransaction;
     friend class ::ruvia::DbStreamResult;

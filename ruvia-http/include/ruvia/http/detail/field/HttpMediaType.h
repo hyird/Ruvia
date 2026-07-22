@@ -144,53 +144,37 @@ template <typename Visitor>
     // hostile field values; an implausibly parameter-heavy item is invalidated.
     std::array<std::string_view, 64> names{};
     std::size_t nameCount = 0;
-    auto start = httpFindUnquotedDelimiter(value, 0, ';');
-    if (start >= value.size()) {
-        return true;
-    }
-    ++start;
-    while (start <= value.size()) {
-        const auto end = httpFindUnquotedDelimiter(value, start, ';');
-        const auto part = httpTrimOws(value.substr(start, end - start));
-        const auto equals = part.find('=');
-        if (part.empty() || equals == std::string_view::npos) {
-            return false;
-        }
-        const auto name = httpTrimOws(part.substr(0, equals));
-        const auto parameterValue = httpTrimOws(part.substr(equals + 1));
-        if (!httpMediaToken(name)) {
-            return false;
-        }
-        for (std::size_t index = 0; index < nameCount; ++index) {
-            if (httpAsciiEqualsIgnoreCase(names[index], name)) {
+    return httpAllParameters(
+        value,
+        [&](std::string_view part) noexcept {
+            const auto equals = part.find('=');
+            if (part.empty() || equals == std::string_view::npos) {
                 return false;
             }
-        }
-        if (nameCount == names.size()) {
-            return false;
-        }
-        names[nameCount++] = name;
-        if (skipQualityParameter && httpAsciiEqualsIgnoreCase(name, "q")) {
-            // RFC 9110 removed the old accept-ext grammar. q is the weight
-            // wherever it appears, but media-range parameters after it still
-            // participate in matching, so skip q itself and continue scanning.
-            if (end >= value.size()) {
+            const auto name = httpTrimOws(part.substr(0, equals));
+            const auto parameterValue = httpTrimOws(part.substr(equals + 1));
+            if (!httpMediaToken(name)) {
+                return false;
+            }
+            for (std::size_t index = 0; index < nameCount; ++index) {
+                if (httpAsciiEqualsIgnoreCase(names[index], name)) {
+                    return false;
+                }
+            }
+            if (nameCount == names.size()) {
+                return false;
+            }
+            names[nameCount++] = name;
+            if (skipQualityParameter && httpAsciiEqualsIgnoreCase(name, "q")) {
+                // RFC 9110 removed the old accept-ext grammar. q is the weight
+                // wherever it appears, but media-range parameters after it still
+                // participate in matching, so skip q itself and keep scanning.
                 return true;
             }
-            start = end + 1;
-            continue;
-        }
-        // Comparing a value with itself performs syntax validation as well.
-        if (!httpMediaParameterValueEquals(parameterValue, parameterValue) ||
-            !visitor(name, parameterValue)) {
-            return false;
-        }
-        if (end >= value.size()) {
-            return true;
-        }
-        start = end + 1;
-    }
-    return true;
+            // Comparing a value with itself performs syntax validation as well.
+            return httpMediaParameterValueEquals(parameterValue, parameterValue) &&
+                visitor(name, parameterValue);
+        });
 }
 
 [[nodiscard]] inline bool httpOfferedMediaTypeHasParameter(

@@ -143,6 +143,38 @@ inline void httpVisitSemicolonParameters(std::string_view value, Visitor&& visit
     }
 }
 
+// True when `predicate` accepts every ';'-separated parameter that follows a
+// field value's leading token — the media type, coding or extension name, which
+// carries no '=' and is never a parameter itself. The scan is quote-aware, so a
+// ';' inside a quoted parameter value does not split, and each parameter reaches
+// the predicate with its surrounding whitespace trimmed. A value with no ';' has
+// no parameters and trivially satisfies the predicate.
+//
+// Unlike httpVisitSemicolonParametersQuoted this reports rejection: a predicate
+// that returns false stops the walk and fails the whole field value. Use it
+// where a malformed parameter must invalidate the field rather than be skipped.
+template <typename Predicate>
+[[nodiscard]] inline bool httpAllParameters(
+    std::string_view value,
+    Predicate&& predicate) {
+    auto start = httpFindUnquotedDelimiter(value, 0, ';');
+    if (start >= value.size()) {
+        return true;
+    }
+    ++start;
+    while (start <= value.size()) {
+        const auto end = httpFindUnquotedDelimiter(value, start, ';');
+        if (!predicate(httpTrimOws(value.substr(start, end - start)))) {
+            return false;
+        }
+        if (end >= value.size()) {
+            return true;
+        }
+        start = end + 1;
+    }
+    return true;
+}
+
 // Like httpVisitSemicolonParameters, but treats an RFC quoted-string value as
 // opaque so a ';' inside a "..." value does not split the parameter. Use for
 // Content-Type / Content-Disposition parameters (RFC 7231 §3.1.1.1, RFC 6266),
