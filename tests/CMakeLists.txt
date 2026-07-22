@@ -13,7 +13,9 @@ function(ruvia_add_test name source)
     target_link_libraries(${name} PRIVATE ${T_LIB})
     target_include_directories(${name} PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}/support
-        ${CMAKE_CURRENT_SOURCE_DIR}/http/support)
+        ${CMAKE_CURRENT_SOURCE_DIR}/http/support
+        ${CMAKE_CURRENT_SOURCE_DIR}/web/support
+        ${CMAKE_CURRENT_SOURCE_DIR}/edge/support)
     if(MSVC)
         target_compile_options(${name} PRIVATE /bigobj /FS)
     endif()
@@ -48,11 +50,14 @@ add_executable(ruvia_unit_tests
     http/http1/http1_chunked_framing.cpp
     http/http1/http1_interim_response.cpp
     http/http1/http1_parser.cpp
-    http/http1/http_parsing.cpp
+    http/http1/chunk_framing.cpp
+    http/http1/chunk_trailers.cpp
+    http/http1/multipart_quoting.cpp
     http/http1/http_stream_body_reader.cpp
     http/http1/multipart.cpp
     http/http1/multipart_reader.cpp
     http/http1/request_body_decoding.cpp
+    http/http1/transfer_coding_decoding.cpp
     http/http1/request_body_loader.cpp
     http/http1/request_target.cpp
 
@@ -63,7 +68,12 @@ add_executable(ruvia_unit_tests
     http/http2/http2_classify.cpp
     http/http2/http2_closed_streams.cpp
     http/http2/http2_connect.cpp
-    http/http2/http2_connection.cpp
+    http/http2/http2_connection_data.cpp
+    http/http2/http2_connection_flow.cpp
+    http/http2/http2_connection_headers.cpp
+    http/http2/http2_connection_session.cpp
+    http/http2/http2_connection_streams.cpp
+    http/http2/http2_connection_submit.cpp
     http/http2/http2_flow_control.cpp
     http/http2/http2_frame.cpp
     http/http2/http2_frame_codec.cpp
@@ -91,7 +101,9 @@ add_executable(ruvia_unit_tests
     http/http2/http2_stream_request_data.cpp
     http/http2/http2_stream_table.cpp
     http/http2/http2_websocket_handshake.cpp
-    http/http2/sansio_driver.cpp
+    http/http2/sansio_driver_session.cpp
+    http/http2/sansio_driver_body.cpp
+    http/http2/sansio_driver_websocket.cpp
     http/http2/sansio_tls.cpp
 
     # http/unit
@@ -99,7 +111,10 @@ add_executable(ruvia_unit_tests
     http/unit/conditional_request.cpp
     http/unit/connection_read_buffer.cpp
     http/unit/content_negotiation.cpp
-    http/unit/content_range.cpp
+    http/unit/computed_response_headers.cpp
+    http/unit/content_codec.cpp
+    http/unit/quoted_field_values.cpp
+    http/unit/zstd_frames.cpp
     http/unit/content_type_match.cpp
     http/unit/date_cache.cpp
     http/unit/error.cpp
@@ -107,20 +122,31 @@ add_executable(ruvia_unit_tests
     http/unit/final_response_control.cpp
     http/unit/header_block_parser.cpp
     http/unit/header_classification.cpp
-    http/unit/header_params.cpp
+    http/unit/semicolon_parameters.cpp
+    http/unit/connection_fields.cpp
+    http/unit/expectations.cpp
     http/unit/header_tokens.cpp
-    http/unit/http_basics.cpp
+    http/unit/byte_encoding.cpp
+    http/unit/url_encoding.cpp
+    http/unit/number_format.cpp
+    http/unit/http_date_parsing.cpp
+    http/unit/field_value_primitives.cpp
+    http/unit/http_field_syntax.cpp
+    http/unit/http_method.cpp
     http/unit/http_byte_range.cpp
     http/unit/http_cache.cpp
     http/unit/http_char_syntax.cpp
     http/unit/http_client_redirect.cpp
     http/unit/http_client_request.cpp
-    http/unit/http_client_response.cpp
+    http/unit/http_client_response_parser.cpp
+    http/unit/http_client_response_framing.cpp
+    http/unit/http_client_response_exchange.cpp
+    http/unit/http_client_response_coding.cpp
     http/unit/http_origin.cpp
     http/unit/http_response.cpp
     http/unit/http_response_body.cpp
     http/unit/http_response_content_semantics.cpp
-    http/unit/parser_validation.cpp
+    http/unit/parse_error_status.cpp
     http/unit/request_access.cpp
     http/unit/response_compression.cpp
     http/unit/response_head_buffer.cpp
@@ -152,6 +178,8 @@ add_executable(ruvia_unit_tests
     web/unit/conn_info.cpp
     web/unit/context_capabilities.cpp
     web/unit/context_cookie.cpp
+    web/unit/context_request_lookups.cpp
+    web/unit/context_parse_body.cpp
     web/unit/context_redirect.cpp
     web/unit/cookie_signature.cpp
     web/unit/cookie_validation.cpp
@@ -159,8 +187,8 @@ add_executable(ruvia_unit_tests
     web/unit/csrf.cpp
     web/unit/dotenv_parser.cpp
     web/unit/email_like.cpp
-    web/unit/encoding.cpp
-    web/unit/file_response_helpers.cpp
+
+    web/unit/static_file_metadata.cpp
     web/unit/health.cpp
     web/unit/http_server_request_state.cpp
     web/unit/http_server_worker_completion.cpp
@@ -171,6 +199,7 @@ add_executable(ruvia_unit_tests
     web/unit/json_size_hint.cpp
     web/unit/json_writer.cpp
     web/unit/model_list.cpp
+    web/unit/model_last_match.cpp
     web/unit/model_string.cpp
     web/unit/pattern_compiler.cpp
     web/unit/pattern_matcher.cpp
@@ -178,17 +207,23 @@ add_executable(ruvia_unit_tests
     web/unit/pmr_string.cpp
     web/unit/pool_waiter_queue.cpp
     web/unit/rate_limit_decision.cpp
+    web/unit/request_body_limits.cpp
     web/unit/rate_limiter.cpp
     web/unit/regex_matcher.cpp
     web/unit/response_stream_dispatch.cpp
     web/unit/route_resolution.cpp
-    web/unit/routing.cpp
+    web/unit/routing_matching.cpp
+    web/unit/routing_middleware.cpp
+    web/unit/routing_dispatch.cpp
     web/unit/security_headers.cpp
     web/unit/server_options_validation.cpp
     web/unit/session.cpp
+    web/unit/static_file_serving.cpp
     web/unit/static_files.cpp
     web/unit/static_path_normalization.cpp
-    web/unit/streaming.cpp
+    web/unit/response_stream.cpp
+    web/unit/scoped_operation_lifetime.cpp
+    web/unit/sse_writer.cpp
     web/unit/testing_facade.cpp
     web/unit/url_encoding_detect.cpp
     web/unit/validator.cpp
@@ -230,7 +265,8 @@ endif()
 target_link_libraries(ruvia_unit_tests PRIVATE ruvia::web)
 target_include_directories(ruvia_unit_tests PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/support
-    ${CMAKE_CURRENT_SOURCE_DIR}/http/support)
+    ${CMAKE_CURRENT_SOURCE_DIR}/http/support
+    ${CMAKE_CURRENT_SOURCE_DIR}/web/support)
 if(MSVC)
     target_compile_options(ruvia_unit_tests PRIVATE /bigobj /FS)
 endif()

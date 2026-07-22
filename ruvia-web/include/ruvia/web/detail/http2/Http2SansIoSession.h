@@ -49,6 +49,8 @@
 #include "ruvia/http/detail/http2/Http2RequestBuilder.h"
 #include "ruvia/web/detail/http/HttpProtocolErrorInfo.h"
 #include "ruvia/web/detail/http2/Http2SansIoResponseStreamSink.h"
+#include "ruvia/web/detail/http2/Http2SansIoRouteSelection.h"
+#include "ruvia/web/detail/http2/Http2SansIoSessionContext.h"
 #include "ruvia/web/detail/http2/Http2SansIoStreamRuntime.h"
 #include "ruvia/web/detail/http2/Http2SansIoTermination.h"
 #include "ruvia/web/detail/http2/Http2SansIoWsTransport.h"
@@ -81,51 +83,6 @@ namespace ruvia::detail {
 // Complete, non-null connection wiring captured by value in the session coroutine.
 // Optional product integrations remain explicit inside ContextServices, while
 // options, scanner ownership, and shutdown state are mandatory references.
-class Http2SansIoSessionContext final {
-public:
-    Http2SansIoSessionContext(
-        ContextServices services,
-        const HttpServerOptions& options,
-        ConnectionScanner::Entry& scannerEntry,
-        const HttpServerWorkerState& workerState) noexcept
-        : services_(services),
-          options_(&options),
-          scannerEntry_(&scannerEntry),
-          workerState_(&workerState) {}
-
-    [[nodiscard]] const HttpServerOptions& options() const noexcept {
-        return *options_;
-    }
-
-    [[nodiscard]] ConnectionScanner::Entry& scannerEntry() const noexcept {
-        return *scannerEntry_;
-    }
-
-    [[nodiscard]] bool workerRunning() const noexcept {
-        return httpServerWorkerRunning(*workerState_);
-    }
-
-    [[nodiscard]] const ContextServices& services() const noexcept {
-        return services_;
-    }
-
-private:
-    ContextServices services_;
-    const HttpServerOptions* options_;
-    ConnectionScanner::Entry* scannerEntry_;
-    const HttpServerWorkerState* workerState_;
-};
-
-[[nodiscard]] inline ConnectionScanner::Phase http2SansIoInactivityPhase(
-    bool headerBlockInProgress,
-    std::size_t activeRuntimeCount) noexcept {
-    if (headerBlockInProgress) {
-        return ConnectionScanner::Phase::kReadingInitial;
-    }
-    return activeRuntimeCount == 0
-        ? ConnectionScanner::Phase::kIdle
-        : ConnectionScanner::Phase::kReadingPayload;
-}
 
 template <typename Stream>
 Task<void> runHttp2SansIoSession(
@@ -576,30 +533,9 @@ Task<void> runHttp2SansIoSession(
         co_return;
     };
 
-    // Owner-side route policy (1:1 port of the coroutine resolveStreamRoute), run at
-    // kMessageHead so body-mode/tunnel decisions land BEFORE the next feed.
     const auto resolveStreamRoute = [&routes, &streamRuntimes](
         Http2StreamState& streamState) -> Http2SansIoStreamRuntime* {
-        const auto method = Http2RequestBuilder::routeMethod(streamState);
-        const auto path = Http2RequestBuilder::requestPath(streamState);
-        auto& runtime = streamRuntimes.ensureAccepted(streamState);
-        RouteResolution resolution;
-        auto bodyMode = RequestBodyMode::kBuffered;
-        if (method != HttpKnownMethod::kUnknown && !path.empty()) {
-            resolution = routes.resolve(method, path);
-        }
-        const auto* resolved = resolution.resolved();
-        if (resolved != nullptr) {
-            bodyMode = resolved->route().endpoint().requestBodyMode();
-        }
-        if (http2IsPendingWebSocketConnect(streamState) &&
-            resolved != nullptr &&
-            resolved->route().endpoint().webSocket() != nullptr) {
-            bodyMode = RequestBodyMode::kStream;
-        }
-        return runtime.selectRoute(std::move(resolution), bodyMode)
-            ? &runtime
-            : nullptr;
+        return http2SelectStreamRoute(routes, streamRuntimes, streamState);
     };
 
     // Admit a stream for dispatch: EVERY dispatched stream gets a signal, so response
