@@ -43,6 +43,40 @@ add_executable(ruvia_unit_tests
     # core
     core/pool_waiter_queue.cpp
 
+    # http/client
+    http/client/http_client_redirect.cpp
+    http/client/http_client_request.cpp
+    http/client/http_client_response_coding.cpp
+    http/client/http_client_response_exchange.cpp
+    http/client/http_client_response_framing.cpp
+    http/client/http_client_response_parser.cpp
+    http/client/http_origin.cpp
+
+    # http/coding
+    http/coding/content_codec.cpp
+    http/coding/content_negotiation.cpp
+    http/coding/http_response_content_semantics.cpp
+    http/coding/response_compression.cpp
+
+    # http/cookie
+    http/cookie/cookie_validation.cpp
+
+    # http/field
+    http/field/accept_media_type.cpp
+    http/field/conditional_request.cpp
+    http/field/connection_fields.cpp
+    http/field/date_cache.cpp
+    http/field/expectations.cpp
+    http/field/field_value_primitives.cpp
+    http/field/header_tokens.cpp
+    http/field/http_byte_range.cpp
+    http/field/http_cache.cpp
+    http/field/http_date_parsing.cpp
+    http/field/http_field_syntax.cpp
+    http/field/http_method.cpp
+    http/field/quoted_field_values.cpp
+    http/field/semicolon_parameters.cpp
+
     # http/http1
     http/http1/chunk_decoder.cpp
     http/http1/chunk_framing.cpp
@@ -105,57 +139,37 @@ add_executable(ruvia_unit_tests
     http/http2/sansio_driver_websocket.cpp
     http/http2/sansio_tls.cpp
 
-    # http/unit
-    http/unit/accept_media_type.cpp
-    http/unit/byte_encoding.cpp
-    http/unit/computed_response_headers.cpp
-    http/unit/conditional_request.cpp
-    http/unit/connection_fields.cpp
-    http/unit/connection_read_buffer.cpp
-    http/unit/content_codec.cpp
-    http/unit/content_negotiation.cpp
-    http/unit/cookie_validation.cpp
-    http/unit/date_cache.cpp
-    http/unit/error.cpp
-    http/unit/error_response.cpp
-    http/unit/expectations.cpp
-    http/unit/field_value_primitives.cpp
-    http/unit/final_response_control.cpp
-    http/unit/header_block_parser.cpp
-    http/unit/header_classification.cpp
-    http/unit/header_tokens.cpp
-    http/unit/http_byte_range.cpp
-    http/unit/http_cache.cpp
-    http/unit/http_char_syntax.cpp
-    http/unit/http_client_redirect.cpp
-    http/unit/http_client_request.cpp
-    http/unit/http_client_response_coding.cpp
-    http/unit/http_client_response_exchange.cpp
-    http/unit/http_client_response_framing.cpp
-    http/unit/http_client_response_parser.cpp
-    http/unit/http_date_parsing.cpp
-    http/unit/http_field_syntax.cpp
-    http/unit/http_method.cpp
-    http/unit/http_origin.cpp
-    http/unit/http_response.cpp
-    http/unit/http_response_body.cpp
-    http/unit/http_response_content_semantics.cpp
-    http/unit/number_format.cpp
-    http/unit/pmr_string.cpp
-    http/unit/quoted_field_values.cpp
-    http/unit/request_access.cpp
-    http/unit/response_compression.cpp
-    http/unit/response_head_buffer.cpp
-    http/unit/response_head_emit.cpp
-    http/unit/response_head_policy.cpp
-    http/unit/response_header_access.cpp
-    http/unit/response_header_classification.cpp
-    http/unit/response_header_index_cache.cpp
-    http/unit/response_trailers.cpp
-    http/unit/semicolon_parameters.cpp
-    http/unit/static_response_headers.cpp
-    http/unit/url_encoding.cpp
-    http/unit/vary_headers.cpp
+    # http/parser
+    http/parser/error.cpp
+    http/parser/header_block_parser.cpp
+    http/parser/header_classification.cpp
+    http/parser/http_char_syntax.cpp
+
+    # http/request
+    http/request/connection_read_buffer.cpp
+    http/request/request_access.cpp
+
+    # http/response
+    http/response/computed_response_headers.cpp
+    http/response/error_response.cpp
+    http/response/final_response_control.cpp
+    http/response/http_response.cpp
+    http/response/http_response_body.cpp
+    http/response/response_head_buffer.cpp
+    http/response/response_head_emit.cpp
+    http/response/response_head_policy.cpp
+    http/response/response_header_access.cpp
+    http/response/response_header_classification.cpp
+    http/response/response_header_index_cache.cpp
+    http/response/response_trailers.cpp
+    http/response/static_response_headers.cpp
+    http/response/vary_headers.cpp
+
+    # http/util
+    http/util/byte_encoding.cpp
+    http/util/number_format.cpp
+    http/util/pmr_string.cpp
+    http/util/url_encoding.cpp
 
     # http/websocket
     http/websocket/websocket_accept.cpp
@@ -363,7 +377,7 @@ if(RUVIA_BUILD_HTTP)
         COMMAND ${CMAKE_COMMAND}
             -P ${CMAKE_CURRENT_BINARY_DIR}/verify_http_sansio.cmake)
 
-    ruvia_add_test(ruvia_smoke_http_target http/unit/smoke_http_target.cpp LIB ruvia::http)
+    ruvia_add_test(ruvia_smoke_http_target http/smoke_http_target.cpp LIB ruvia::http)
 
     # Compile the exhaustive public/detail HTTP contract once in the normal build.
     if(MSVC)
