@@ -16,22 +16,7 @@ Task<QueryResult> detail::MariaDbPool::execute(
     std::pmr::string sql,
     std::pmr::vector<DbValue> params,
     std::pmr::memory_resource* resource) {
-    if (sql.empty()) {
-        throw std::invalid_argument("SQL must not be empty");
-    }
-
-    const auto slotIndex = co_await acquireSlot();
-    SlotGuard guard(*this, slotIndex);
-    try {
-        co_return co_await executeOnSlot(
-            slots_[slotIndex],
-            std::string_view(sql),
-            std::span<const DbValue>(params),
-            resource);
-    } catch (...) {
-        closeSlot(slots_[slotIndex]);
-        throw;
-    }
+    return executeDbQuery(*this, std::move(sql), std::move(params), resource);
 }
 
 Task<DbStreamResult> detail::MariaDbPool::stream(
