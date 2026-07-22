@@ -1,5 +1,5 @@
 add_executable(ruvia_benchmark_http_hot_paths
-    http_hot_paths.cpp
+    hot_paths.cpp
 )
 target_link_libraries(ruvia_benchmark_http_hot_paths PRIVATE ruvia::http)
 target_compile_definitions(ruvia_benchmark_http_hot_paths PRIVATE

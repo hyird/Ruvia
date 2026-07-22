@@ -55,139 +55,137 @@ add_executable(ruvia_unit_tests
     core/pool_waiter_queue.cpp
 
     # http/client
-    http/client/http_client_redirect.cpp
-    http/client/http_client_request.cpp
-    http/client/http_client_response_coding.cpp
-    http/client/http_client_response_exchange.cpp
-    http/client/http_client_response_framing.cpp
-    http/client/http_client_response_parser.cpp
-    http/client/http_origin.cpp
+    http/client/origin.cpp
+    http/client/redirect.cpp
+    http/client/request.cpp
+    http/client/response_coding.cpp
+    http/client/response_exchange.cpp
+    http/client/response_framing.cpp
+    http/client/response_parser.cpp
 
     # http/coding
     http/coding/content_codec.cpp
     http/coding/content_negotiation.cpp
-    http/coding/http_response_content_semantics.cpp
     http/coding/response_compression.cpp
+    http/coding/response_content_semantics.cpp
 
     # http/cookie
-    http/cookie/cookie_validation.cpp
+    http/cookie/validation.cpp
 
     # http/field
     http/field/accept_media_type.cpp
+    http/field/byte_range.cpp
+    http/field/cache.cpp
     http/field/conditional_request.cpp
     http/field/connection_fields.cpp
     http/field/date_cache.cpp
+    http/field/date_parsing.cpp
     http/field/expectations.cpp
-    http/field/field_value_primitives.cpp
     http/field/header_tokens.cpp
-    http/field/http_byte_range.cpp
-    http/field/http_cache.cpp
-    http/field/http_date_parsing.cpp
-    http/field/http_field_syntax.cpp
-    http/field/http_method.cpp
+    http/field/method.cpp
     http/field/quoted_field_values.cpp
     http/field/semicolon_parameters.cpp
+    http/field/syntax.cpp
+    http/field/value_primitives.cpp
 
     # http/http1
+    http/http1/buffered_response_write.cpp
     http/http1/chunk_decoder.cpp
     http/http1/chunk_framing.cpp
     http/http1/chunk_size.cpp
     http/http1/chunk_trailers.cpp
-    http/http1/http1_buffered_response_write.cpp
-    http/http1/http1_chunked_framing.cpp
-    http/http1/http1_interim_response.cpp
-    http/http1/http1_parser.cpp
-    http/http1/http_stream_body_reader.cpp
+    http/http1/chunked_framing.cpp
+    http/http1/interim_response.cpp
     http/http1/multipart.cpp
     http/http1/multipart_quoting.cpp
     http/http1/multipart_reader.cpp
+    http/http1/parser.cpp
     http/http1/request_body_decoding.cpp
     http/http1/request_body_loader.cpp
     http/http1/request_target.cpp
+    http/http1/stream_body_reader.cpp
     http/http1/transfer_coding_decoding.cpp
 
     # http/http2/connection
-    http/http2/connection/http2_connection_data.cpp
-    http/http2/connection/http2_connection_flow.cpp
-    http/http2/connection/http2_connection_headers.cpp
-    http/http2/connection/http2_connection_session.cpp
-    http/http2/connection/http2_connection_streams.cpp
-    http/http2/connection/http2_connection_submit.cpp
+    http/http2/connection/data.cpp
+    http/http2/connection/flow.cpp
+    http/http2/connection/headers.cpp
+    http/http2/connection/session.cpp
+    http/http2/connection/streams.cpp
+    http/http2/connection/submit.cpp
 
     # http/http2/flow
-    http/http2/flow/http2_flow_control.cpp
-    http/http2/flow/http2_ready_queue.cpp
-    http/http2/flow/http2_server_flow_control.cpp
-    http/http2/flow/http2_stream_flow.cpp
+    http/http2/flow/control.cpp
+    http/http2/flow/ready_queue.cpp
+    http/http2/flow/server_flow_control.cpp
+    http/http2/flow/stream_flow.cpp
 
     # http/http2/frame
-    http/http2/frame/http2_frame.cpp
-    http/http2/frame/http2_frame_codec.cpp
-    http/http2/frame/http2_frame_payload.cpp
-    http/http2/frame/http2_offset_vector.cpp
-    http/http2/frame/http2_output_buffer.cpp
-    http/http2/frame/http2_payload.cpp
-    http/http2/frame/http2_payload_slice.cpp
+    http/http2/frame/codec.cpp
+    http/http2/frame/offset_vector.cpp
+    http/http2/frame/output_buffer.cpp
+    http/http2/frame/payload.cpp
+    http/http2/frame/payload_slice.cpp
 
     # http/http2/hpack
+    http/http2/hpack/header_block.cpp
+    http/http2/hpack/header_list.cpp
     http/http2/hpack/hpack.cpp
-    http/http2/hpack/hpack_static_table.cpp
-    http/http2/hpack/http2_header_block.cpp
-    http/http2/hpack/http2_header_list.cpp
+    http/http2/hpack/static_table.cpp
 
     # http/http2/message
-    http/http2/message/http2_connect.cpp
-    http/http2/message/http2_header_rules.cpp
-    http/http2/message/http2_local_content_state.cpp
-    http/http2/message/http2_remote_content_state.cpp
-    http/http2/message/http2_request_builder.cpp
-    http/http2/message/http2_request_headers.cpp
-    http/http2/message/http2_response_headers.cpp
-    http/http2/message/http2_websocket_handshake.cpp
+    http/http2/message/connect.cpp
+    http/http2/message/header_rules.cpp
+    http/http2/message/local_content_state.cpp
+    http/http2/message/remote_content_state.cpp
+    http/http2/message/request_builder.cpp
+    http/http2/message/request_headers.cpp
+    http/http2/message/response_headers.cpp
+    http/http2/message/websocket_handshake.cpp
 
     # http/http2/session
-    http/http2/session/http2_sansio_stream_runtime.cpp
     http/http2/session/sansio_driver_body.cpp
     http/http2/session/sansio_driver_session.cpp
     http/http2/session/sansio_driver_websocket.cpp
+    http/http2/session/sansio_stream_runtime.cpp
     http/http2/session/sansio_tls.cpp
 
     # http/http2/settings
-    http/http2/settings/http2_local_settings.cpp
-    http/http2/settings/http2_peer_settings.cpp
-    http/http2/settings/http2_settings.cpp
+    http/http2/settings/local_settings.cpp
+    http/http2/settings/peer_settings.cpp
+    http/http2/settings/settings.cpp
 
     # http/http2/stream
-    http/http2/stream/http2_classify.cpp
-    http/http2/stream/http2_closed_streams.cpp
-    http/http2/stream/http2_stream_lifecycle.cpp
-    http/http2/stream/http2_stream_request_data.cpp
-    http/http2/stream/http2_stream_table.cpp
+    http/http2/stream/classify.cpp
+    http/http2/stream/closed_streams.cpp
+    http/http2/stream/lifecycle.cpp
+    http/http2/stream/request_data.cpp
+    http/http2/stream/table.cpp
 
     # http/parser
+    http/parser/char_syntax.cpp
     http/parser/error.cpp
     http/parser/header_block_parser.cpp
     http/parser/header_classification.cpp
-    http/parser/http_char_syntax.cpp
 
     # http/request
+    http/request/access.cpp
     http/request/connection_read_buffer.cpp
-    http/request/request_access.cpp
 
     # http/response
+    http/response/body.cpp
     http/response/computed_response_headers.cpp
     http/response/error_response.cpp
     http/response/final_response_control.cpp
-    http/response/http_response.cpp
-    http/response/http_response_body.cpp
-    http/response/response_head_buffer.cpp
-    http/response/response_head_emit.cpp
-    http/response/response_head_policy.cpp
-    http/response/response_header_access.cpp
-    http/response/response_header_classification.cpp
-    http/response/response_header_index_cache.cpp
-    http/response/response_trailers.cpp
+    http/response/head_buffer.cpp
+    http/response/head_emit.cpp
+    http/response/head_policy.cpp
+    http/response/header_access.cpp
+    http/response/header_classification.cpp
+    http/response/header_index_cache.cpp
+    http/response/response.cpp
     http/response/static_response_headers.cpp
+    http/response/trailers.cpp
     http/response/vary_headers.cpp
 
     # http/util
@@ -198,15 +196,15 @@ add_executable(ruvia_unit_tests
     http/util/url_encoding_detect.cpp
 
     # http/websocket
-    http/websocket/websocket_accept.cpp
-    http/websocket/websocket_assembler.cpp
-    http/websocket/websocket_close.cpp
-    http/websocket/websocket_connection.cpp
-    http/websocket/websocket_deflate.cpp
-    http/websocket/websocket_frame.cpp
-    http/websocket/websocket_handshake.cpp
-    http/websocket/websocket_utils.cpp
-    http/websocket/websocket_validation.cpp
+    http/websocket/accept.cpp
+    http/websocket/assembler.cpp
+    http/websocket/close.cpp
+    http/websocket/connection.cpp
+    http/websocket/deflate.cpp
+    http/websocket/frame.cpp
+    http/websocket/handshake.cpp
+    http/websocket/utils.cpp
+    http/websocket/validation.cpp
     http/websocket/ws_connection.cpp
 
     # support
@@ -243,27 +241,27 @@ add_executable(ruvia_unit_tests
     web/http/static_path_normalization.cpp
 
     # web/http2
-    web/http2/http2_buffered_response_write.cpp
+    web/http2/buffered_response_write.cpp
 
     # web/json
+    web/json/escape.cpp
     web/json/json.cpp
-    web/json/json_escape.cpp
-    web/json/json_lex.cpp
-    web/json/json_object_fields.cpp
-    web/json/json_size_hint.cpp
+    web/json/lex.cpp
+    web/json/object_fields.cpp
+    web/json/size_hint.cpp
 
     # web/model
     web/model/content_type_match.cpp
     web/model/email_like.cpp
     web/model/form_parser.cpp
     web/model/json_writer.cpp
-    web/model/model_last_match.cpp
-    web/model/model_list.cpp
-    web/model/model_string.cpp
+    web/model/last_match.cpp
+    web/model/list.cpp
     web/model/pattern_compiler.cpp
     web/model/pattern_matcher.cpp
     web/model/pattern_types.cpp
     web/model/regex_matcher.cpp
+    web/model/string.cpp
     web/model/validator.cpp
 
     # web/ratelimit
@@ -283,7 +281,7 @@ add_executable(ruvia_unit_tests
     web/server/http_server_worker_completion.cpp
 
     # web/websocket
-    web/websocket/websocket_heartbeat.cpp
+    web/websocket/heartbeat.cpp
 )
 
 # The JWT suite links jwtSign/jwtVerify, which only exist when the optional JWT
@@ -295,23 +293,23 @@ endif()
 # The Redis RESP-protocol suite links appendRespCommand, gated the same way.
 if(RUVIA_ENABLE_REDIS)
     target_sources(ruvia_unit_tests PRIVATE
-        web/redis/redis_api_surface.cpp
-        web/redis/redis_protocol.cpp
+        web/redis/api_surface.cpp
+        web/redis/protocol.cpp
     )
 endif()
 
 # The backend-neutral API suite is present for either database driver.
 if(RUVIA_ENABLE_MARIADB OR RUVIA_ENABLE_POSTGRESQL)
-    target_sources(ruvia_unit_tests PRIVATE web/db/db_api_surface.cpp)
+    target_sources(ruvia_unit_tests PRIVATE web/db/api_surface.cpp)
 endif()
 
 # Driver-specific parameter encoding is tested against the same library that
 # performs it; neither suite pulls the other backend into a single-driver build.
 if(RUVIA_ENABLE_MARIADB)
-    target_sources(ruvia_unit_tests PRIVATE web/db/db_sql.cpp)
+    target_sources(ruvia_unit_tests PRIVATE web/db/sql.cpp)
 endif()
 if(RUVIA_ENABLE_POSTGRESQL)
-    target_sources(ruvia_unit_tests PRIVATE web/db/db_postgresql.cpp)
+    target_sources(ruvia_unit_tests PRIVATE web/db/postgresql.cpp)
 endif()
 
 if(RUVIA_ENABLE_POSTGRESQL_INTEGRATION_TESTS)
@@ -425,10 +423,10 @@ if(RUVIA_BUILD_HTTP)
     # Compile the exhaustive public/detail HTTP contract once in the normal build.
     if(MSVC)
         set(RUVIA_HTTP_API_CONTRACT_SOURCE
-            http/guards/http_msvc_api_contract.cpp)
+            http/guards/msvc_api_contract.cpp)
     else()
         set(RUVIA_HTTP_API_CONTRACT_SOURCE
-            http/guards/http_api_contract_guard.cpp)
+            http/guards/api_contract_guard.cpp)
     endif()
     ruvia_add_test(ruvia_guard_http_api_contract
         ${RUVIA_HTTP_API_CONTRACT_SOURCE} LIB ruvia::http)
@@ -437,7 +435,7 @@ if(RUVIA_BUILD_HTTP)
 endif()
 
 if(RUVIA_BUILD_WEB)
-    ruvia_add_test(ruvia_guard_web_api_surface web/guards/web_api_surface_guard.cpp)
+    ruvia_add_test(ruvia_guard_web_api_surface web/guards/api_surface_guard.cpp)
     ruvia_add_test(ruvia_guard_middleware_next web/guards/middleware_next_guard.cpp)
     ruvia_add_test(ruvia_guard_context_response_state web/guards/context_response_state_guard.cpp)
     ruvia_add_test(ruvia_guard_context_request_header web/guards/context_request_header_guard.cpp)
@@ -458,7 +456,7 @@ if(RUVIA_BUILD_WEB)
     ruvia_add_test(ruvia_server_keepalive_idle_timeout web/server/keepalive_idle_timeout.cpp TIMEOUT 60)
     ruvia_add_test(ruvia_server_write_timeout web/server/write_timeout.cpp TIMEOUT 60)
 
-    ruvia_add_test(ruvia_web_worker web/server/web_worker.cpp TIMEOUT 30)
+    ruvia_add_test(ruvia_web_worker web/server/worker.cpp TIMEOUT 30)
     ruvia_add_test(ruvia_data_access web/server/data_access.cpp TIMEOUT 30)
     ruvia_add_test(ruvia_app_web_worker web/server/app_web_worker.cpp TIMEOUT 30)
     ruvia_add_test(ruvia_app_startup_retry web/server/app_startup_retry.cpp TIMEOUT 30)
