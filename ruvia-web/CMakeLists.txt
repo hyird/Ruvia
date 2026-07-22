@@ -17,6 +17,7 @@ set(RUVIA_WEB_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/src/app/DotenvParser.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/app/DotenvPaths.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/app/App.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/app/AppListenerOptions.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/app/WebWorker.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/app/AppConfig.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/app/AppHttpConfig.cpp

@@ -2,7 +2,6 @@
 
 #include <asio/signal_set.hpp>
 
-#include <algorithm>
 #include <csignal>
 #include <exception>
 #include <memory_resource>
@@ -15,7 +14,7 @@
 
 #include "ruvia/web/detail/controller/ControllerRuntime.h"
 #include "ruvia/web/detail/app/AppConfigGuards.h"
-#include "ruvia/core/detail/NativePath.h"
+#include "ruvia/web/detail/app/AppListenerOptions.h"
 #include "ruvia/core/detail/WorkerSelection.h"
 #include "ruvia/web/detail/server/HttpServer.h"
 #include "ruvia/web/detail/router/RouterInternal.h"
@@ -31,66 +30,6 @@ void addShutdownSignals(asio::signal_set& signals) {
 #endif
 }
 
-[[nodiscard]] detail::HttpServerOptions makeListenerOptions(
-    const detail::HttpServerOptions& base,
-    detail::HttpServerOptions::ListenerTransport transport,
-    const StaticRoot* documentRoot) {
-    auto options = base;
-    options.transport = std::move(transport);
-    options.documentRoot.root = documentRoot;
-    return options;
-}
-
-template <typename NativeChar>
-void assignTlsFileNameFromNative(
-    std::pmr::string& output,
-    std::basic_string_view<NativeChar> native) {
-    if constexpr (std::is_same_v<NativeChar, char>) {
-        output.assign(native.data(), native.size());
-    } else {
-        const auto name = std::filesystem::path(native.begin(), native.end()).string();
-        output.assign(name.data(), name.size());
-    }
-}
-
-void assignTlsFileName(
-    std::pmr::string& output,
-    const std::filesystem::path& path) {
-    assignTlsFileNameFromNative(output, detail::nativePathView(path));
-}
-
-[[nodiscard]] detail::HttpServerOptions::Tls makeTlsOptions(
-    const TlsConfig& config) {
-    detail::HttpServerOptions::Tls tls;
-    assignTlsFileName(
-        tls.identity.certificateChainFile,
-        config.identity().certificateChainFile());
-    assignTlsFileName(
-        tls.identity.privateKeyFile,
-        config.identity().privateKeyFile());
-    tls.identity.privateKeyPassword = config.identity().privateKeyPassword();
-    if (config.clientCertificatePolicy().has_value()) {
-        auto& policy = tls.clientCertificates.emplace(
-            std::pmr::string{},
-            config.clientCertificatePolicy()->requirement());
-        assignTlsFileName(
-            policy.verifyFile,
-            config.clientCertificatePolicy()->verifyFile());
-    }
-    tls.sniIdentities.reserve(config.sniIdentities().size());
-    for (const auto& configured : config.sniIdentities()) {
-        auto& sni = tls.sniIdentities.emplace_back();
-        sni.host = configured.host();
-        assignTlsFileName(
-            sni.identity.certificateChainFile,
-            configured.identity().certificateChainFile());
-        assignTlsFileName(
-            sni.identity.privateKeyFile,
-            configured.identity().privateKeyFile());
-        sni.identity.privateKeyPassword = configured.identity().privateKeyPassword();
-    }
-    return tls;
-}
 
 void invokeStopHooks(detail::AppState& state) noexcept {
     for (auto& hook : state.onStopHooks) {
@@ -266,7 +205,7 @@ void App::run() {
                                     std::uint16_t port,
                                     detail::HttpServerOptions::ListenerTransport transport) {
             const asio::ip::tcp::endpoint endpoint(address, port);
-            auto listenerOptions = makeListenerOptions(
+            auto listenerOptions = detail::makeListenerOptions(
                 preparedOptions,
                 std::move(transport),
                 runtime->documentRoot.get());
@@ -337,7 +276,7 @@ void App::run() {
                     std::is_same_v<Topology, ServerTopology::Https>) {
                     addWorkers(
                         topology.port,
-                        makeTlsOptions(topology.tls));
+                        detail::makeTlsOptions(topology.tls));
                 } else if constexpr (
                     std::is_same_v<Topology, ServerTopology::HttpAndHttps>) {
                     addWorkers(
@@ -345,7 +284,7 @@ void App::run() {
                         detail::HttpServerOptions::PlainHttp{});
                     addWorkers(
                         topology.httpsPort,
-                        makeTlsOptions(topology.tls));
+                        detail::makeTlsOptions(topology.tls));
                 } else {
                     addWorkers(
                         topology.httpPort,
@@ -353,7 +292,7 @@ void App::run() {
                             topology.httpsPort});
                     addWorkers(
                         topology.httpsPort,
-                        makeTlsOptions(topology.tls));
+                        detail::makeTlsOptions(topology.tls));
                 }
             },
             state.topology.topology_);
