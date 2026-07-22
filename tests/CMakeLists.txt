@@ -108,7 +108,7 @@ add_executable(ruvia_unit_tests
     http/unit/conditional_request.cpp
     http/unit/connection_read_buffer.cpp
     http/unit/content_negotiation.cpp
-    http/unit/content_range.cpp
+    http/unit/computed_response_headers.cpp
     http/unit/content_type_match.cpp
     http/unit/date_cache.cpp
     http/unit/error.cpp
@@ -200,6 +200,7 @@ add_executable(ruvia_unit_tests
     web/unit/security_headers.cpp
     web/unit/server_options_validation.cpp
     web/unit/session.cpp
+    web/unit/static_file_serving.cpp
     web/unit/static_files.cpp
     web/unit/static_path_normalization.cpp
     web/unit/streaming.cpp
