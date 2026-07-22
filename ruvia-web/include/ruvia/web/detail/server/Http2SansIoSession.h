@@ -40,7 +40,7 @@
 #include <asio/ip/tcp.hpp>
 #include "ruvia/core/detail/WorkerSignal.h"
 
-#include "ruvia/http/detail/HttpRequestInternal.h"
+#include "ruvia/http/detail/HttpRequestAccess.h"
 #include "ruvia/web/detail/http/ContextServices.h"
 #include "ruvia/web/detail/server/HttpResponseWriter.h"
 #include "ruvia/web/detail/server/RequestMemoryArena.h"

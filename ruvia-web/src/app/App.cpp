@@ -1,4 +1,4 @@
-#include "ruvia/web/detail/app/AppInternal.h"
+#include "ruvia/web/detail/app/AppState.h"
 
 #include <asio/signal_set.hpp>
 
@@ -17,7 +17,7 @@
 #include "ruvia/web/detail/app/AppListenerOptions.h"
 #include "ruvia/core/detail/WorkerSelection.h"
 #include "ruvia/web/detail/server/HttpServer.h"
-#include "ruvia/web/detail/router/RouterInternal.h"
+#include "ruvia/web/detail/router/RouterImpl.h"
 
 namespace ruvia {
 namespace {

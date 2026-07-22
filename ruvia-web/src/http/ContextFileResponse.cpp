@@ -1,6 +1,6 @@
 #include "ruvia/web/Context.h"
 
-#include "ruvia/http/detail/HttpRequestInternal.h"
+#include "ruvia/http/detail/HttpRequestAccess.h"
 #include "ruvia/http/detail/HttpResponseFileAccess.h"
 #include "ruvia/http/detail/HttpResponseHeaderState.h"
 #include "ruvia/http/detail/ResponseHeaderUtils.h"

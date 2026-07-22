@@ -4,7 +4,7 @@
 
 #include "ruvia/web/Context.h"
 #include "ruvia/web/ErrorHandlers.h"
-#include "ruvia/web/detail/http/ContextInternal.h"
+#include "ruvia/web/detail/http/ContextAccess.h"
 #include "ruvia/web/detail/http/ContextServices.h"
 #include "ruvia/web/detail/router/RouteTable.h"
 

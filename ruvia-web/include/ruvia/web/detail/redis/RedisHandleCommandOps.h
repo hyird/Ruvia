@@ -2,7 +2,7 @@
 
 #include "ruvia/web/redis/Redis.h"
 
-#include "ruvia/web/detail/redis/RedisInternal.h"
+#include "ruvia/web/detail/redis/RedisRegistry.h"
 
 #include <memory_resource>
 #include <optional>

@@ -16,10 +16,10 @@
 #include <type_traits>
 #include <utility>
 
-#include "ruvia/web/detail/http/ContextInternal.h"
+#include "ruvia/web/detail/http/ContextAccess.h"
 #include "ruvia/http/detail/HeaderTokenUtils.h"
 #include "ruvia/http/detail/HttpDate.h"
-#include "ruvia/http/detail/HttpRequestInternal.h"
+#include "ruvia/http/detail/HttpRequestAccess.h"
 #include "ruvia/http/detail/HttpResponseBodyAccess.h"
 #include "ruvia/http/detail/HttpResponseHeaderState.h"
 #include "ruvia/http/detail/server/HttpResponseStreamHead.h"

@@ -10,9 +10,9 @@
 #include <utility>
 #include <vector>
 
-#include "ruvia/web/detail/http/ContextInternal.h"
+#include "ruvia/web/detail/http/ContextAccess.h"
 #include "ruvia/web/detail/http/ContextServices.h"
-#include "ruvia/http/detail/HttpRequestInternal.h"
+#include "ruvia/http/detail/HttpRequestAccess.h"
 #include "ruvia/web/Context.h"
 #include "ruvia/http/HttpResponse.h"
 #include "ruvia/web/SecurityHeaders.h"

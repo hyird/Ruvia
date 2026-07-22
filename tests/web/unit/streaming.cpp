@@ -18,10 +18,10 @@
 #include <utility>
 #include <vector>
 
-#include "ruvia/web/detail/http/StreamingInternal.h"
+#include "ruvia/web/detail/http/StreamingAccess.h"
 #include "ruvia/web/detail/body/HttpRequestBodyFacade.h"
 #include "ruvia/web/detail/server/HttpResponseStreamState.h"
-#include "ruvia/web/detail/websocket/WebSocketInternal.h"
+#include "ruvia/web/detail/websocket/WebSocketAccess.h"
 #include "ruvia/core/detail/AsioAwait.h"
 #include "ruvia/core/Task.h"
 #include "ruvia/web/Streaming.h"

@@ -9,9 +9,9 @@
 #include <string_view>
 #include <utility>
 
-#include "ruvia/web/detail/http/ContextInternal.h"
+#include "ruvia/web/detail/http/ContextAccess.h"
 #include "ruvia/web/detail/http/ContextServices.h"
-#include "ruvia/http/detail/HttpRequestInternal.h"
+#include "ruvia/http/detail/HttpRequestAccess.h"
 #include "ruvia/web/detail/server/RateLimitDecision.h"
 #include "ruvia/web/detail/server/Http1ClosingRejection.h"
 #include "ruvia/web/detail/server/RateLimitKey.h"

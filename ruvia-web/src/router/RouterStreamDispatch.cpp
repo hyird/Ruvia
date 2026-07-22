@@ -3,8 +3,8 @@
 #include <optional>
 #include <utility>
 
-#include "ruvia/web/detail/http/ContextInternal.h"
-#include "ruvia/web/detail/http/StreamingInternal.h"
+#include "ruvia/web/detail/http/ContextAccess.h"
+#include "ruvia/web/detail/http/StreamingAccess.h"
 #include "ruvia/web/detail/router/RouteDispatchServices.h"
 #include "ruvia/web/detail/server/HttpResponseStreamState.h"
 

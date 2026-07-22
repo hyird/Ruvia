@@ -6,7 +6,7 @@
 #include <utility>
 
 #include "ruvia/http/detail/MultipartPartAccess.h"
-#include "ruvia/http/detail/MultipartReaderInternal.h"
+#include "ruvia/http/detail/MultipartStreamPartAccess.h"
 #include "ruvia/http/detail/PmrResource.h"
 #include "ruvia/http/detail/PmrString.h"
 #include "ruvia/http/detail/parser/MultipartDelimiter.h"

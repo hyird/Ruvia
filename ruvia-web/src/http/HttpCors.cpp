@@ -1,6 +1,6 @@
 #include "ruvia/web/detail/http/HttpCors.h"
 
-#include "ruvia/http/detail/HttpRequestInternal.h"
+#include "ruvia/http/detail/HttpRequestAccess.h"
 #include "ruvia/http/detail/AsciiCase.h"
 #include "ruvia/http/detail/HttpCorsFields.h"
 #include "ruvia/http/detail/parser/HttpRequestTarget.h"

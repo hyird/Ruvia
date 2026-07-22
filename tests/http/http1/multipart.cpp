@@ -12,7 +12,7 @@
 #include "ruvia/http/detail/parser/MultipartBoundary.h"
 #include "ruvia/http/detail/parser/MultipartDelimiter.h"
 #include "ruvia/http/detail/parser/MultipartPartHeaders.h"
-#include "ruvia/http/detail/MultipartReaderInternal.h"
+#include "ruvia/http/detail/MultipartStreamPartAccess.h"
 #include "ruvia/http/MultipartParser.h"
 
 namespace {

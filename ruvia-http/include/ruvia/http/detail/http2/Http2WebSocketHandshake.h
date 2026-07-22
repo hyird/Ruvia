@@ -8,7 +8,7 @@
 #include "ruvia/http/detail/http2/Http2ResponseHeaders.h"
 #include "ruvia/http/detail/http2/Http2StreamState.h"
 #include "ruvia/http/detail/AsciiCase.h"
-#include "ruvia/http/detail/HttpRequestInternal.h"
+#include "ruvia/http/detail/HttpRequestAccess.h"
 #include "ruvia/http/detail/websocket/HttpWebSocketHandshakeFields.h"
 #include "ruvia/http/detail/websocket/HttpWebSocketHandshakeValidation.h"
 #include "ruvia/http/detail/websocket/WebSocketServerNegotiation.h"

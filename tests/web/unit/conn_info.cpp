@@ -2,10 +2,10 @@
 
 #include "ruvia/core/memory/MemoryPool.h"
 #include "ruvia/http/HttpHeader.h"
-#include "ruvia/http/detail/HttpRequestInternal.h"
+#include "ruvia/http/detail/HttpRequestAccess.h"
 #include "ruvia/web/ConnInfo.h"
 #include "ruvia/web/Context.h"
-#include "ruvia/web/detail/http/ContextInternal.h"
+#include "ruvia/web/detail/http/ContextAccess.h"
 #include "ruvia/web/detail/http/ContextServices.h"
 
 #include <cstddef>

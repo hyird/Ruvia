@@ -13,7 +13,7 @@
 #include "ruvia/core/detail/AsioAwait.h"
 #include "ruvia/core/memory/MemoryPool.h"
 #include "ruvia/http/detail/AsciiCase.h"
-#include "ruvia/http/detail/HttpRequestInternal.h"
+#include "ruvia/http/detail/HttpRequestAccess.h"
 #include "ruvia/http/detail/HttpResponseBodyAccess.h"
 #include "ruvia/http/detail/parser/HttpParserSyntax.h"
 #include "ruvia/http/detail/server/HttpResponseWritePlan.h"
@@ -21,7 +21,7 @@
 #include "ruvia/web/Dotenv.h"
 #include "ruvia/web/detail/controller/ControllerRuntime.h"
 #include "ruvia/web/detail/http/ContextServices.h"
-#include "ruvia/web/detail/router/RouterInternal.h"
+#include "ruvia/web/detail/router/RouterImpl.h"
 
 namespace ruvia {
 

@@ -1,6 +1,6 @@
 #include "ruvia/core/detail/AsioAwait.h"
 #include "ruvia/web/db/Db.h"
-#include "ruvia/web/detail/db/DbInternal.h"
+#include "ruvia/web/detail/db/DbRegistry.h"
 
 #include <asio/bind_executor.hpp>
 #include <asio/io_context.hpp>

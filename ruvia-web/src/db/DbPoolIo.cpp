@@ -1,4 +1,4 @@
-#include "ruvia/web/detail/db/DbInternal.h"
+#include "ruvia/web/detail/db/DbRegistry.h"
 #include "ruvia/core/detail/AsioAwait.h"
 #include "ruvia/web/detail/db/DbMysqlRuntime.h"
 #include "ruvia/web/detail/db/DbSlotSocket.h"

@@ -9,7 +9,7 @@
 #include "ruvia/http/detail/HttpResponseHeaderState.h"
 #include "ruvia/web/Error.h"
 #include "ruvia/web/Validation.h"
-#include "ruvia/web/detail/http/ContextInternal.h"
+#include "ruvia/web/detail/http/ContextAccess.h"
 #include "ruvia/web/detail/http/HttpErrorResponse.h"
 #include "ruvia/web/detail/http/UnsupportedRequestContentCoding.h"
 #include "ruvia/web/detail/router/RouteDispatchServices.h"

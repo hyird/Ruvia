@@ -1,4 +1,4 @@
-#include "ruvia/web/detail/db/DbInternal.h"
+#include "ruvia/web/detail/db/DbRegistry.h"
 #include "ruvia/core/detail/OperationDeadline.h"
 #include "ruvia/web/detail/db/DbSql.h"
 #include "ruvia/web/detail/db/DbUtils.h"

@@ -4,8 +4,8 @@
 #include <utility>
 
 #include "ruvia/core/detail/ConnectionScanner.h"
-#include "ruvia/web/detail/db/DbInternal.h"
-#include "ruvia/web/detail/redis/RedisInternal.h"
+#include "ruvia/web/detail/db/DbRegistry.h"
+#include "ruvia/web/detail/redis/RedisRegistry.h"
 
 // The worker-local owner of the database and Redis registries: one per worker,
 // connected and closed with that worker, and reachable from a Context without

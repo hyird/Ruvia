@@ -1,4 +1,4 @@
-#include "ruvia/web/detail/http/StreamingInternal.h"
+#include "ruvia/web/detail/http/StreamingAccess.h"
 
 #include "ruvia/core/Task.h"
 #include "ruvia/core/memory/PmrResource.h"

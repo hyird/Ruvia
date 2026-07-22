@@ -14,11 +14,11 @@
 #include "ruvia/web/Router.h"
 #include "ruvia/web/detail/app/AppLifecycle.h"
 #include "ruvia/web/detail/app/AppResource.h"
-#include "ruvia/web/detail/app/DotenvInternal.h"
+#include "ruvia/web/detail/app/EnvState.h"
 #include "ruvia/core/detail/NativePath.h"
 #include "ruvia/web/detail/controller/ControllerDescriptors.h"
-#include "ruvia/web/detail/db/DbInternal.h"
-#include "ruvia/web/detail/redis/RedisInternal.h"
+#include "ruvia/web/detail/db/DbRegistry.h"
+#include "ruvia/web/detail/redis/RedisRegistry.h"
 #include "ruvia/web/detail/server/HttpServerOptions.h"
 
 namespace ruvia::detail {

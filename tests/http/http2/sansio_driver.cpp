@@ -27,7 +27,7 @@
 #include <fstream>
 
 #include "ruvia/http/detail/HttpResponseFileAccess.h"
-#include "ruvia/http/detail/HttpRequestInternal.h"
+#include "ruvia/http/detail/HttpRequestAccess.h"
 #include "ruvia/http/detail/HttpResponseBodyAccess.h"
 #include "ruvia/web/detail/http/ContextServices.h"
 #include "ruvia/http/detail/http2/Http2Connection.h"
@@ -38,7 +38,7 @@
 #include "ruvia/http/detail/websocket/HttpWebSocketPermessageDeflate.h"
 #include "ruvia/web/detail/server/Http2SansIoSession.h"
 #include "ruvia/web/detail/router/RouteResolution.h"
-#include "ruvia/web/detail/router/RouterInternal.h"
+#include "ruvia/web/detail/router/RouterImpl.h"
 #include "ruvia/web/detail/router/RouteTable.h"
 #include "ruvia/core/detail/AsioAwait.h"
 #include "ruvia/core/detail/SansIoDriver.h"

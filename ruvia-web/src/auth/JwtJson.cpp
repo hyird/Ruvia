@@ -1,4 +1,4 @@
-#include "ruvia/web/detail/auth/JwtInternal.h"
+#include "ruvia/web/detail/auth/JwtPrimitives.h"
 
 #include "ruvia/http/detail/HttpNumberFormat.h"
 #include "ruvia/web/detail/DecimalNumber.h"

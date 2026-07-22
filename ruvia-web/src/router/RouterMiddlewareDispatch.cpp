@@ -1,6 +1,6 @@
 #include "ruvia/web/detail/router/RouteTable.h"
 
-#include "ruvia/web/detail/http/ContextInternal.h"
+#include "ruvia/web/detail/http/ContextAccess.h"
 #include "ruvia/web/detail/server/HttpResponseStreamState.h"
 #include "ruvia/web/Error.h"
 #include "ruvia/web/detail/http/HttpErrorResponse.h"

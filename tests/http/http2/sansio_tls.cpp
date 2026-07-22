@@ -30,7 +30,7 @@
 #include "ruvia/http/detail/http2/Http2Hpack.h"
 #include "ruvia/web/detail/server/HttpServerAlpn.h"
 #include "ruvia/web/detail/server/Http2SansIoSession.h"
-#include "ruvia/web/detail/router/RouterInternal.h"
+#include "ruvia/web/detail/router/RouterImpl.h"
 #include "ruvia/core/detail/AsioAwait.h"
 #include "ruvia/web/Context.h"
 #include "ruvia/core/memory/MemoryPool.h"

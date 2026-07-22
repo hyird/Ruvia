@@ -9,7 +9,7 @@
 #include <vector>
 
 #include "ruvia/http/detail/parser/MultipartBoundary.h"
-#include "ruvia/web/detail/http/ContextRequestInternal.h"
+#include "ruvia/web/detail/http/RequestFormAccess.h"
 #include "ruvia/web/detail/http/RequestFieldParsing.h"
 #include "ruvia/web/detail/http/RequestFieldsAccess.h"
 

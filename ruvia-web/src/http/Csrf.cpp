@@ -1,6 +1,6 @@
 #include "ruvia/web/Csrf.h"
 
-#include "ruvia/web/detail/http/CsrfInternal.h"
+#include "ruvia/web/detail/http/SecureToken.h"
 
 #include <array>
 #include <cstddef>

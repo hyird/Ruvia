@@ -1,4 +1,4 @@
-#include "ruvia/web/detail/redis/RedisInternal.h"
+#include "ruvia/web/detail/redis/RedisRegistry.h"
 #include "ruvia/web/detail/redis/RedisConfigValidation.h"
 #include "ruvia/web/detail/redis/RedisUtils.h"
 

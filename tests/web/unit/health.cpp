@@ -1,10 +1,10 @@
 #include "test_harness.h"
 
 #include "ruvia/core/memory/MemoryPool.h"
-#include "ruvia/http/detail/HttpRequestInternal.h"
+#include "ruvia/http/detail/HttpRequestAccess.h"
 #include "ruvia/http/detail/HttpResponseBodyAccess.h"
 #include "ruvia/web/Health.h"
-#include "ruvia/web/detail/http/ContextInternal.h"
+#include "ruvia/web/detail/http/ContextAccess.h"
 
 #include <string_view>
 

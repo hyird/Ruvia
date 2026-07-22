@@ -7,7 +7,7 @@
 #include <string_view>
 #include <utility>
 
-#include "ruvia/web/detail/app/DotenvInternal.h"
+#include "ruvia/web/detail/app/EnvState.h"
 
 namespace {
 

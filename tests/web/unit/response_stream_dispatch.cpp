@@ -18,11 +18,11 @@
 
 #include "ruvia/core/detail/AsioAwait.h"
 #include "ruvia/core/memory/MemoryPool.h"
-#include "ruvia/http/detail/HttpRequestInternal.h"
+#include "ruvia/http/detail/HttpRequestAccess.h"
 #include "ruvia/http/detail/server/HttpResponseStreamHead.h"
 #include "ruvia/web/Context.h"
 #include "ruvia/web/Router.h"
-#include "ruvia/web/detail/router/RouterInternal.h"
+#include "ruvia/web/detail/router/RouterImpl.h"
 #include "ruvia/web/detail/router/RouteTable.h"
 #include "ruvia/web/detail/server/HttpResponseStreamDispatch.h"
 #include "ruvia/web/detail/server/HttpResponseStreamSink.h"

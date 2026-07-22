@@ -7,7 +7,7 @@
 #include <cstring>
 #include <optional>
 
-#include "ruvia/http/detail/HttpRequestInternal.h"
+#include "ruvia/http/detail/HttpRequestAccess.h"
 #include "ruvia/http/detail/HttpConnectionFields.h"
 #include "ruvia/http/detail/HeaderTokenUtils.h"
 #include "ruvia/http/detail/http1/Http1RequestBodyPlan.h"

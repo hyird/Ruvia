@@ -26,7 +26,7 @@
 #include "ruvia/core/detail/AsioAwait.h"
 #include "ruvia/core/memory/MemoryPool.h"
 #include "ruvia/http/ProtocolByteLimit.h"
-#include "ruvia/http/detail/HttpRequestInternal.h"
+#include "ruvia/http/detail/HttpRequestAccess.h"
 #include "ruvia/http/detail/RequestBodyDecoding.h"
 #include "ruvia/http/detail/HttpRequestBodyFailure.h"
 #include "ruvia/http/detail/http1/Http1ChunkedBodyDecoder.h"
@@ -35,7 +35,7 @@
 #include "ruvia/http/detail/http1/Http1RequestBodyPlan.h"
 #include "ruvia/web/Context.h"
 #include "ruvia/web/Error.h"
-#include "ruvia/web/detail/http/ContextInternal.h"
+#include "ruvia/web/detail/http/ContextAccess.h"
 #include "ruvia/web/detail/http/ContextServices.h"
 
 namespace {

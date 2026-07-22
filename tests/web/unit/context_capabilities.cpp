@@ -3,15 +3,15 @@
 #include "ruvia/core/Task.h"
 #include "ruvia/core/WorkerHandle.h"
 #include "ruvia/core/memory/MemoryPool.h"
-#include "ruvia/http/detail/HttpRequestInternal.h"
+#include "ruvia/http/detail/HttpRequestAccess.h"
 #include "ruvia/web/Context.h"
 #include "ruvia/web/detail/http/ContextCapabilities.h"
-#include "ruvia/web/detail/http/ContextInternal.h"
+#include "ruvia/web/detail/http/ContextAccess.h"
 #include "ruvia/web/detail/http/ContextServices.h"
 #include "ruvia/web/detail/http/RequestBodyLoader.h"
-#include "ruvia/web/detail/http/StreamingInternal.h"
+#include "ruvia/web/detail/http/StreamingAccess.h"
 #include "ruvia/web/detail/body/HttpRequestBodyFacade.h"
-#include "ruvia/web/detail/websocket/WebSocketInternal.h"
+#include "ruvia/web/detail/websocket/WebSocketAccess.h"
 
 #include <chrono>
 #include <cstdint>

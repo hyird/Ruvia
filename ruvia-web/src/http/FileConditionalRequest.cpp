@@ -4,7 +4,7 @@
 #include "ruvia/http/detail/HttpConditionalRequest.h"
 #include "ruvia/http/detail/HttpDate.h"
 #include "ruvia/http/detail/HttpEntityTag.h"
-#include "ruvia/http/detail/HttpRequestInternal.h"
+#include "ruvia/http/detail/HttpRequestAccess.h"
 
 namespace ruvia {
 

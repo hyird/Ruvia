@@ -12,8 +12,8 @@
 #include "ruvia/core/memory/PmrResource.h"
 #include "ruvia/web/detail/WorkerState.h"
 #include "ruvia/web/detail/app/WebWorkerDispatch.h"
-#include "ruvia/web/detail/db/DbInternal.h"
-#include "ruvia/web/detail/redis/RedisInternal.h"
+#include "ruvia/web/detail/db/DbRegistry.h"
+#include "ruvia/web/detail/redis/RedisRegistry.h"
 
 namespace ruvia {
 

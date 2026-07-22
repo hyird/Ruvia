@@ -17,8 +17,8 @@
 #include "ruvia/core/memory/MemoryPool.h"
 #include "ruvia/web/detail/DataAccessDefinitions.h"
 #include "ruvia/web/detail/DataAccessState.h"
-#include "ruvia/web/detail/db/DbInternal.h"
-#include "ruvia/web/detail/redis/RedisInternal.h"
+#include "ruvia/web/detail/db/DbRegistry.h"
+#include "ruvia/web/detail/redis/RedisRegistry.h"
 
 namespace ruvia::detail {
 

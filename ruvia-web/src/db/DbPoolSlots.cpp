@@ -1,4 +1,4 @@
-#include "ruvia/web/detail/db/DbInternal.h"
+#include "ruvia/web/detail/db/DbRegistry.h"
 
 #include <exception>
 #include <stdexcept>

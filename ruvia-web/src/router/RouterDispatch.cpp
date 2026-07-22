@@ -5,7 +5,7 @@
 #include <utility>
 
 #include "ruvia/web/StaticFiles.h"
-#include "ruvia/web/detail/http/ContextInternal.h"
+#include "ruvia/web/detail/http/ContextAccess.h"
 #include "ruvia/web/detail/router/RouteDispatchServices.h"
 
 // Choosing what answers a request: the matched route, a 405 with Allow, the

@@ -4,9 +4,9 @@
 
 #include "ruvia/web/detail/websocket/HttpWebSocketConnection.h"
 #include "ruvia/core/detail/ConnectionScanner.h"
-#include "ruvia/web/detail/http/ContextInternal.h"
+#include "ruvia/web/detail/http/ContextAccess.h"
 #include "ruvia/web/detail/CallableRef.h"
-#include "ruvia/web/detail/websocket/WebSocketInternal.h"
+#include "ruvia/web/detail/websocket/WebSocketAccess.h"
 #include "ruvia/core/Task.h"
 #include "ruvia/http/HttpRequest.h"
 #include "ruvia/web/WebSocket.h"
