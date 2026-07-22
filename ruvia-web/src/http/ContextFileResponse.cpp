@@ -7,13 +7,12 @@
 #include "ruvia/http/detail/HttpByteRange.h"
 #include "ruvia/http/detail/HttpConditionalRequest.h"
 #include "ruvia/http/detail/HttpDate.h"
-#include "ruvia/http/detail/HttpEntityTag.h"
-#include "ruvia/web/detail/StaticFilesInternal.h"
 #include "ruvia/web/detail/StaticFileMetadata.h"
+#include "ruvia/web/detail/StaticFilesInternal.h"
+#include "ruvia/web/detail/http/FileConditionalRequest.h"
+#include "ruvia/web/detail/http/StaticFileVariant.h"
 #include "ruvia/web/detail/server/HttpNativeFile.h"
 #include "ruvia/web/detail/StaticPathNormalization.h"
-#include "ruvia/http/detail/HttpAcceptEncoding.h"
-#include "ruvia/http/detail/HeaderTokenUtils.h"
 #include "ruvia/http/detail/HttpContentCoding.h"
 #include "ruvia/http/UrlEncoding.h"
 
@@ -27,133 +26,11 @@
 #include <string>
 #include <string_view>
 #include <system_error>
-#include <variant>
 
 namespace ruvia {
 namespace {
 
 inline constexpr std::size_t kFileResponseHeaderReserve = 7;
-
-struct FileConditionalHeaders final {
-    std::string_view ifUnmodifiedSince;
-    std::string_view ifModifiedSince;
-    std::string_view range;
-    std::string_view ifRange;
-    bool hasIfRange;
-};
-
-struct EtagFieldCondition final {
-    bool present{false};
-    bool valid{true};
-    bool matched{false};
-    bool wildcard{false};
-    std::size_t lineCount{0};
-
-    void update(
-        std::string_view value,
-        std::string_view expected,
-        bool strong) noexcept {
-        present = true;
-        ++lineCount;
-        const auto trimmed = detail::httpTrimOws(value);
-        if (trimmed == "*") {
-            wildcard = true;
-            if (lineCount != 1) {
-                valid = false;
-            }
-            return;
-        }
-        if (wildcard) {
-            valid = false;
-        }
-        const auto result = detail::httpParseEtagListMatches(
-            value, expected, strong);
-        valid = valid && result.valid;
-        matched = matched || result.matched;
-    }
-
-    [[nodiscard]] bool matches() const noexcept {
-        return valid && ((wildcard && lineCount == 1) || (!wildcard && matched));
-    }
-};
-
-struct FileEtagConditions final {
-    EtagFieldCondition ifMatch;
-    EtagFieldCondition ifNoneMatch;
-};
-
-[[nodiscard]] FileEtagConditions fileEtagConditions(
-    const HttpRequest& request,
-    std::string_view etag) noexcept {
-    FileEtagConditions result;
-    const bool hasIfMatch = detail::requestHasKnownHeader(
-        request, detail::RequestKnownHeader::kIfMatch);
-    const bool hasIfNoneMatch = detail::requestHasKnownHeader(
-        request, detail::RequestKnownHeader::kIfNoneMatch);
-    if (!hasIfMatch && !hasIfNoneMatch) {
-        return result;
-    }
-
-    // Both conditions are RFC list fields. Multiple field lines are equivalent
-    // to comma-joining their values (RFC 9110 §5.3), but the request keeps
-    // zero-copy views into separate wire lines. Fold them in one header scan and
-    // retain whole-list validity without allocating a joined string.
-    for (const auto& header : request.headers()) {
-        if (hasIfMatch && detail::httpAsciiEqualsIgnoreCase(
-                header.name(), "If-Match")) {
-            result.ifMatch.update(header.value(), etag, true);
-        } else if (hasIfNoneMatch && detail::httpAsciiEqualsIgnoreCase(
-                       header.name(), "If-None-Match")) {
-            result.ifNoneMatch.update(header.value(), etag, false);
-        }
-    }
-    return result;
-}
-
-[[nodiscard]] bool httpDateNotModified(std::string_view header, std::time_t modifiedSeconds) noexcept {
-    const auto date = detail::httpParseHttpDate(detail::httpTrimOws(header));
-    return date.has_value() && modifiedSeconds <= *date;
-}
-
-[[nodiscard]] bool httpDateUnmodified(std::string_view header, std::time_t modifiedSeconds) noexcept {
-    const auto date = detail::httpParseHttpDate(detail::httpTrimOws(header));
-    return !date.has_value() || modifiedSeconds <= *date;
-}
-
-[[nodiscard]] bool ifRangeAllows(
-    std::string_view header,
-    std::string_view etag,
-    std::time_t modifiedSeconds,
-    bool dateValidatorStrong) noexcept {
-    if (header.empty()) {
-        return false;
-    }
-    const auto value = detail::httpTrimOws(header);
-    if (!value.empty() && (value.front() == '"' || value.starts_with("W/"))) {
-        return detail::httpStrongEtagEquals(value, etag);
-    }
-    if (!dateValidatorStrong) {
-        return false;
-    }
-    // An If-Range date requires an EXACT match against Last-Modified (RFC 9110
-    // §13.1.5 / RFC 7233 §3.2: "the comparison ... uses an exact match"), NOT the
-    // "<=" not-modified-since comparison. If-Range's job is to confirm the client
-    // still holds the byte-identical representation before a range is stitched in;
-    // a representation whose Last-Modified is merely older (a rollback or a restore
-    // that moves mtime backwards) is a DIFFERENT entity, and serving a 206 from it
-    // would corrupt the client's reassembled copy. Only equality means "unchanged".
-    const auto date = detail::httpParseHttpDate(value);
-    return date.has_value() && modifiedSeconds == *date;
-}
-
-[[nodiscard]] FileConditionalHeaders fileConditionalHeaders(const HttpRequest& request) noexcept {
-    return FileConditionalHeaders{
-        detail::requestKnownHeader(request, detail::RequestKnownHeader::kIfUnmodifiedSince),
-        detail::requestKnownHeader(request, detail::RequestKnownHeader::kIfModifiedSince),
-        detail::requestKnownHeader(request, detail::RequestKnownHeader::kRange),
-        detail::requestKnownHeader(request, detail::RequestKnownHeader::kIfRange),
-        detail::requestHasKnownHeader(request, detail::RequestKnownHeader::kIfRange)};
-}
 
 // The path travels by value until HttpResponse takes its own copy. StaticRoot is
 // a public value whose lifetime is not coupled to the returned response, so an
@@ -465,88 +342,6 @@ HttpResponse Context::file(
         detail::HttpContentCoding::kIdentity,
         false,  // Context::file serves one path with no Accept-Encoding negotiation
         applyState);
-}
-
-// Selects the best precompressed sidecar (foo.js.br / .gz / .zst) the client
-// accepts and that exists in the index — highest Accept-Encoding q-value wins,
-// ties resolve br > zstd > gzip. The served bytes are the variant's, so its
-// size/etag/modified describe the wire representation; the caller keeps the
-// original Content-Type. Index lookups only (no per-request filesystem stat).
-class StaticFileRepresentation final {
-public:
-    StaticFileRepresentation(
-        detail::StaticRootEntryView entry,
-        detail::HttpContentCoding contentCoding) noexcept
-        : entry_(entry),
-          contentCoding_(contentCoding) {}
-
-    [[nodiscard]] const detail::StaticRootEntryView& entry() const noexcept {
-        return entry_;
-    }
-
-    [[nodiscard]] detail::HttpContentCoding contentCoding() const noexcept {
-        return contentCoding_;
-    }
-
-private:
-    detail::StaticRootEntryView entry_;
-    detail::HttpContentCoding contentCoding_;
-};
-
-[[nodiscard]] StaticFileRepresentation selectStaticFileRepresentation(
-    const StaticRoot& root,
-    std::string_view relative,
-    const HttpRequest& request,
-    std::pmr::memory_resource* resource,
-    detail::StaticRootEntryView identity) {
-    StaticFileRepresentation selected(
-        identity,
-        detail::HttpContentCoding::kIdentity);
-    detail::HttpResponseCodingQualities qualities;
-    for (const auto& header : request.headers()) {
-        if (detail::httpAsciiEqualsIgnoreCase(header.name(), "Accept-Encoding")) {
-            qualities.update(header.value());
-        }
-    }
-
-    struct Candidate final {
-        std::string_view suffix;
-        detail::HttpContentCoding contentCoding;
-        int score;
-    };
-    const Candidate candidates[] = {
-        {".br",
-         detail::HttpContentCoding::kBrotli,
-         detail::httpAcceptedEncodingScore(qualities.brotli)},
-        {".zst",
-         detail::HttpContentCoding::kZstd,
-         detail::httpAcceptedEncodingScore(qualities.zstd)},
-        {".gz",
-         detail::HttpContentCoding::kGzip,
-         detail::httpAcceptedEncodingScore(qualities.gzip)},
-    };
-
-    int best = detail::httpAcceptedIdentityScore(qualities.identity);
-    for (const auto& candidate : candidates) {
-        if (candidate.score < best ||
-            (candidate.score == best &&
-             selected.contentCoding() != detail::HttpContentCoding::kIdentity)) {
-            continue;
-        }
-        std::pmr::string variantPath(resource);
-        variantPath.reserve(relative.size() + candidate.suffix.size());
-        variantPath.assign(relative.data(), relative.size());
-        variantPath.append(candidate.suffix.data(), candidate.suffix.size());
-        if (const auto entry =
-                detail::StaticRootAccess::findVariant(root, variantPath);
-            entry.has_value()) {
-            best = candidate.score;
-            selected = StaticFileRepresentation(
-                *entry,
-                candidate.contentCoding);
-        }
-    }
-    return selected;
 }
 
 HttpResponse Context::staticFile(

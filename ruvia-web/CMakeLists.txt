@@ -29,6 +29,8 @@ set(RUVIA_WEB_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/src/http/Error.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/http/ContextErrorResponse.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/http/ContextFileResponse.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/http/FileConditionalRequest.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/http/StaticFileVariant.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/http/ContextData.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/http/ContextRequest.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/http/ContextRequestFacade.cpp
