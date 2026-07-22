@@ -2,12 +2,7 @@
 
 #include <stdexcept>
 
-#ifdef _WIN32
-#ifndef NOMINMAX
-#define NOMINMAX
-#endif
-#include <windows.h>
-#elif defined(__APPLE__)
+#if defined(__APPLE__)
 #include <mach-o/dyld.h>
 #else
 #include <unistd.h>
@@ -16,20 +11,7 @@
 namespace ruvia::detail {
 
 std::filesystem::path dotenvExecutableDirectory() {
-#ifdef _WIN32
-    std::wstring buffer(260, L'\0');
-    for (;;) {
-        const auto length = ::GetModuleFileNameW(nullptr, buffer.data(), static_cast<DWORD>(buffer.size()));
-        if (length == 0) {
-            throw std::runtime_error("failed to resolve executable path");
-        }
-        if (length < buffer.size()) {
-            buffer.resize(length);
-            return std::filesystem::path(buffer).parent_path();
-        }
-        buffer.resize(buffer.size() * 2);
-    }
-#elif defined(__APPLE__)
+#if defined(__APPLE__)
     uint32_t size = 0;
     (void)::_NSGetExecutablePath(nullptr, &size);
     std::pmr::vector<char> buffer(size, appResource());

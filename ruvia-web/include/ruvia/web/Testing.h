@@ -2,7 +2,7 @@
 
 // In-memory testing facade for applications built on Ruvia -- the actix
 // TestRequest / Hono app.request() analog. TestApp collects every controller
-// linked into the binary (the same registration path app().run() uses),
+// linked into the binary (the same CRTP registration path App::run() uses),
 // finalizes the production route table, and dispatches TestRequests through
 // the real buffered dispatch pipeline: routing, controller/route/global
 // middleware, validators, prefix and app-wide notFound/onError fallbacks,

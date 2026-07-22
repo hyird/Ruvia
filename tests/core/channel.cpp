@@ -94,9 +94,9 @@ ruvia::Task<void> exercise(ruvia::WorkerHandle worker, bool& success) {
     const auto send1 = sender.send(1);
     const auto send2 = sender.send(2);
     const auto send3 = sender.send(99);
-    if (send1 != ruvia::ChannelSendResult::kSent ||
-        send2 != ruvia::ChannelSendResult::kSent ||
-        send3 != ruvia::ChannelSendResult::kFull) {
+    if (!send1.sent() || !send2.sent() ||
+        send3.status() != ruvia::ChannelSendStatus::kFull ||
+        send3.rejected() == nullptr || *send3.rejected() != 99) {
         co_return;
     }
 
@@ -113,12 +113,14 @@ ruvia::Task<void> exercise(ruvia::WorkerHandle worker, bool& success) {
 
     ruvia::TaskScope scope(worker);
     scope.spawn(receiveLast(activeReceiver, success));
-    if (sender.send(3) != ruvia::ChannelSendResult::kSent) {
+    if (!sender.send(3).sent()) {
         co_return;
     }
     sender.close();
     co_await scope.join();
-    if (sender.send(4) != ruvia::ChannelSendResult::kClosed) {
+    const auto closedSend = sender.send(4);
+    if (closedSend.status() != ruvia::ChannelSendStatus::kClosed ||
+        closedSend.rejected() == nullptr || *closedSend.rejected() != 4) {
         success = false;
     }
 }
@@ -158,7 +160,7 @@ int main() {
             std::make_shared<ruvia::detail::WorkerDispatcher>(ioContext, 8);
         const auto worker = ruvia::detail::WorkerHandleAccess::make(dispatcher);
         auto [sender, receiver] = ruvia::makeChannel<int>(worker, 1);
-        if (sender.send(9) != ruvia::ChannelSendResult::kSent) {
+        if (!sender.send(9).sent()) {
             return 1;
         }
         asio::co_spawn(
@@ -169,8 +171,11 @@ int main() {
         asio::post(ioContext, [dispatcher] { dispatcher->close(); });
         ioContext.run();
         sender.close();
+        const auto stoppingResult = sender.send(10);
         stoppingSend =
-            sender.send(10) == ruvia::ChannelSendResult::kWorkerStopping;
+            stoppingResult.status() == ruvia::ChannelSendStatus::kWorkerStopping &&
+            stoppingResult.rejected() != nullptr &&
+            *stoppingResult.rejected() == 10;
         dispatcher->stopTimers();
     }
 
@@ -202,9 +207,7 @@ int main() {
                 moveFailed = true;
             }
             ThrowingMove::throwOnMove.store(false, std::memory_order_relaxed);
-            recoveredSend =
-                sender.send(ThrowingMove(6)) ==
-                ruvia::ChannelSendResult::kSent;
+            recoveredSend = sender.send(ThrowingMove(6)).sent();
         });
         ioContext.run();
         sendingThread.join();

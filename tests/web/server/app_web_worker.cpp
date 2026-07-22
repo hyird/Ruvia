@@ -7,9 +7,53 @@
 #include <asio/ip/tcp.hpp>
 
 #include "ruvia/web/App.h"
+#include "ruvia/web/Controller.h"
 #include "ruvia/core/detail/WorkerSelection.h"
 
 namespace {
+
+int controllerConstructed = 0;
+int controllerDestroyed = 0;
+int middlewareConstructed = 0;
+int middlewareDestroyed = 0;
+
+class InstanceProbeMiddleware final
+    : public ruvia::Middleware<InstanceProbeMiddleware> {
+public:
+    InstanceProbeMiddleware() {
+        ++middlewareConstructed;
+    }
+
+    ~InstanceProbeMiddleware() {
+        ++middlewareDestroyed;
+    }
+
+    ruvia::Task<void> handle(ruvia::Context&, ruvia::Next& next) {
+        co_await next();
+    }
+};
+
+class InstanceProbeController final
+    : public ruvia::Controller<InstanceProbeController> {
+public:
+    InstanceProbeController() {
+        ++controllerConstructed;
+    }
+
+    ~InstanceProbeController() {
+        ++controllerDestroyed;
+    }
+
+    RUVIA_CONTROLLER_GROUP("", InstanceProbeMiddleware)
+    RUVIA_ROUTES_BEGIN
+    RUVIA_GET("/instance-probe", probe);
+    RUVIA_ROUTES_END
+
+private:
+    ruvia::Task<ruvia::HttpResponse> probe(ruvia::Context& context) {
+        co_return context.text("ok");
+    }
+};
 
 std::uint16_t availablePort() {
     asio::io_context context;
@@ -30,6 +74,7 @@ int main() {
         rejectedZeroCapacity = true;
     }
     bool stableSelection = false;
+    bool isolatedInstances = false;
     bool accepted = false;
     bool startHookFinished = false;
     bool stopHookAfterStart = false;
@@ -52,11 +97,13 @@ int main() {
                 app.workerFor(ruvia::detail::workerSelectionHash(key));
             stableSelection = workers.size() == 2 && first.valid() &&
                               first.id() == second.id();
+            isolatedInstances = controllerConstructed == 2 &&
+                                middlewareConstructed == 2;
             accepted = first.post(
                            [](ruvia::WebWorkerContext&) -> ruvia::Task<void> {
                                throw std::runtime_error("app worker task failed");
                                co_return;
-                           }) == ruvia::PostResult::kAccepted;
+                           }) == ruvia::PostStatus::kAccepted;
             app.stop();
             startHookFinished = true;
         });
@@ -72,9 +119,15 @@ int main() {
         !stopHookAfterStart || stopCalls != 1) {
         return 1;
     }
+    if (!isolatedInstances) {
+        return 2;
+    }
+    if (controllerDestroyed != 2 || middlewareDestroyed != 2) {
+        return 3;
+    }
     for (const auto& worker : workers) {
         if (worker.accepting()) {
-            return 2;
+            return 4;
         }
     }
     return 0;

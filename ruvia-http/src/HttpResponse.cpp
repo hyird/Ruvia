@@ -126,17 +126,17 @@ void HttpResponse::setBorrowedFileBody(
 }
 
 void HttpResponse::setBorrowedNativeFileBody(
-    const detail::HttpNativePathChar* file,
+    const char* file,
     std::uint64_t size) {
     setBorrowedNativeFileBody(file, size, 0, size);
 }
 
 void HttpResponse::setBorrowedNativeFileBody(
-    const detail::HttpNativePathChar* file,
+    const char* file,
     std::uint64_t size,
     std::uint64_t offset,
     std::uint64_t length) {
-    if (file == nullptr || *file == detail::HttpNativePathChar{}) {
+    if (file == nullptr || *file == '\0') {
         throw std::invalid_argument("file response path must not be empty");
     }
     if (offset > size || length > size - offset) {

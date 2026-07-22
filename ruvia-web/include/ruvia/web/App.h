@@ -46,6 +46,7 @@ public:
     App& setListenAddress(std::string_view address);
     App& setServerTopology(ServerTopology topology);
     App& setWorkersPerListener(std::size_t workersPerListener);
+    App& setSignalShutdown(bool enabled);
     App& setWorkerMailboxCapacity(std::size_t capacity);
     App& setKeepaliveTimeout(std::optional<std::chrono::milliseconds> timeout);
     App& setConnectionScanInterval(std::chrono::milliseconds interval);
@@ -78,8 +79,9 @@ public:
     // WebWorkerContext::workerState<T>() return that worker's instance.
     // Workers are single-threaded, so the instance needs no synchronization;
     // it must not be shared across workers by the application. One
-    // registration per type; the factory runs once per worker on the startup
-    // thread and a throwing factory fails run() before any request is served.
+    // registration per type; the factory and destructor run while that worker's
+    // WorkerHandle reports isCurrent(), and a throwing factory fails run()
+    // before any request is served.
     template <typename T, typename Factory>
     App& useWorkerState(Factory&& factory) {
         return useWorkerStateDefinition(

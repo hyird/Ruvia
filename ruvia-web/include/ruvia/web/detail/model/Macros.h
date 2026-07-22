@@ -31,16 +31,26 @@ private:                                                                     \
     }                                                                        \
     static ::std::optional<T> ruviaParseJsonBody(                            \
         ::std::string_view body, ::std::pmr::memory_resource* resource) {    \
-        return ruviaParseJsonBodyDepth(body, resource, 0);                   \
+        return ruviaParseJsonBodyDepth(                                      \
+            body, resource, 0,                                               \
+            ::ruvia::detail::ModelStringStorage::kBorrowed);                 \
+    }                                                                        \
+    static ::std::optional<T> ruviaParseJsonBodyOwned(                       \
+        ::std::string_view body, ::std::pmr::memory_resource* resource) {    \
+        return ruviaParseJsonBodyDepth(                                      \
+            body, resource, 0,                                               \
+            ::ruvia::detail::ModelStringStorage::kOwned);                    \
     }                                                                        \
     static ::std::optional<T> ruviaParseJsonBodyDepth(                       \
         ::std::string_view body, ::std::pmr::memory_resource* resource,      \
-        ::std::size_t depth) {                                               \
+        ::std::size_t depth,                                                 \
+        ::ruvia::detail::ModelStringStorage ruviaStringStorage) {            \
         if (depth > ::ruvia::detail::kMaxJsonDepth) return ::std::nullopt;   \
         auto json = ::ruvia::JsonObject::parse(body, resource);              \
         if (!json) return ::std::nullopt;                                    \
         return ruviaMaterializeInput(                                        \
-            ::ruvia::detail::makeJsonModelInput(json->view(), resource));    \
+            ::ruvia::detail::makeJsonModelInput(                             \
+                json->view(), resource, ruviaStringStorage));                \
     }                                                                        \
     static ::std::optional<T> ruviaParseFormBody(                            \
         ::std::string_view body, ::std::pmr::memory_resource* resource) {    \
@@ -63,10 +73,11 @@ private:                                                                     \
     }                                                                        \
     bool ruviaMaterialize(const ::ruvia::detail::ModelInput& ruviaInput) {   \
         auto* const ruviaResource = ruviaResource_;                          \
+        const auto ruviaStringStorage = ruviaInput.stringStorage();          \
         bool ruviaValid = false;                                             \
         if (ruviaInput.kind() == ::ruvia::detail::ModelInputKind::kJson) {   \
             ruviaValid = ::ruvia::detail::visitModelInputJsonFields(         \
-                ruviaInput, [this, ruviaResource](                           \
+                ruviaInput, [this, ruviaResource, ruviaStringStorage](       \
                     ::std::string_view key, ::std::string_view value) {      \
                     RUVIA_MODEL_FOR_EACH(                                    \
                         RUVIA_MODEL_PARSE_JSON_FIELD, T, __VA_ARGS__)        \

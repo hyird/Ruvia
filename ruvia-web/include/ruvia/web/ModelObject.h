@@ -306,10 +306,15 @@ public:
         return resource_;
     }
 
+    [[nodiscard]] ModelStringStorage stringStorage() const noexcept {
+        return stringStorage_;
+    }
+
 private:
     friend ModelInput makeJsonModelInput(
         std::string_view body,
-        std::pmr::memory_resource* resource) noexcept;
+        std::pmr::memory_resource* resource,
+        ModelStringStorage stringStorage) noexcept;
     friend ModelInput makeFormModelInput(
         std::string_view body,
         std::pmr::memory_resource* resource) noexcept;
@@ -320,12 +325,15 @@ private:
     ModelInput(
         ModelInputKind kind,
         std::string_view body,
-        std::pmr::memory_resource* resource = nullptr) noexcept
+        std::pmr::memory_resource* resource = nullptr,
+        ModelStringStorage stringStorage =
+            ModelStringStorage::kBorrowed) noexcept
         : ModelInput(
               ResolvedPmrResourceTag{},
               kind,
               body,
-              pmrResourceOrDefault(resource)) {}
+              pmrResourceOrDefault(resource),
+              stringStorage) {}
 
     ModelInput(
         const RequestNameValueList& fields,
@@ -338,21 +346,26 @@ private:
         ResolvedPmrResourceTag,
         ModelInputKind kind,
         std::string_view body,
-        std::pmr::memory_resource* resource) noexcept
+        std::pmr::memory_resource* resource,
+        ModelStringStorage stringStorage) noexcept
         : kind_(kind),
           body_(body),
-          resource_(resource) {}
+          resource_(resource),
+          stringStorage_(stringStorage) {}
 
     ModelInputKind kind_;
     std::string_view body_;
     const RequestNameValueList* fields_{nullptr};
     std::pmr::memory_resource* resource_;
+    ModelStringStorage stringStorage_{ModelStringStorage::kBorrowed};
 };
 
 [[nodiscard]] inline ModelInput makeJsonModelInput(
     std::string_view body,
-    std::pmr::memory_resource* resource) noexcept {
-    return ModelInput(ModelInputKind::kJson, body, resource);
+    std::pmr::memory_resource* resource,
+    ModelStringStorage stringStorage = ModelStringStorage::kBorrowed) noexcept {
+    return ModelInput(
+        ModelInputKind::kJson, body, resource, stringStorage);
 }
 
 [[nodiscard]] inline ModelInput makeFormModelInput(

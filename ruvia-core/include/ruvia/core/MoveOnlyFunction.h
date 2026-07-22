@@ -72,10 +72,14 @@ public:
 private:
     static constexpr std::size_t kInlineSize = 3 * sizeof(void*);
 
+    // The members are initialized explicitly rather than left to default
+    // construction: the operation tables below are const static aggregates, and
+    // MSVC reports C4268 when such an object is zero-filled by a compiler
+    // generated default constructor. Aggregate initialization is unaffected.
     struct Operations final {
-        Result (*invoke)(void*, Args&&...);
-        void (*destroy)(void*) noexcept;
-        void (*move)(void*, void*) noexcept;
+        Result (*invoke)(void*, Args&&...) = nullptr;
+        void (*destroy)(void*) noexcept = nullptr;
+        void (*move)(void*, void*) noexcept = nullptr;
     };
 
     template <typename Stored>

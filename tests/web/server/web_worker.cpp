@@ -4,6 +4,7 @@
 #include <memory>
 #include <memory_resource>
 #include <stdexcept>
+#include <string_view>
 
 #include <asio/ip/address.hpp>
 #include <asio/ip/tcp.hpp>
@@ -25,12 +26,24 @@ int testQueueFull() {
         {},
         options);
     auto worker = server.webWorker();
-    if (worker.post([](ruvia::WebWorkerContext&) -> ruvia::Task<void> {
+    std::promise<void> firstCompleted;
+    auto firstFuture = firstCompleted.get_future();
+    std::promise<int> retryCompleted;
+    auto retryFuture = retryCompleted.get_future();
+    if (worker.post([&](ruvia::WebWorkerContext&) -> ruvia::Task<void> {
+            firstCompleted.set_value();
             co_return;
-        }) != ruvia::PostResult::kAccepted ||
-        worker.post([](ruvia::WebWorkerContext&) -> ruvia::Task<void> {
+        }) != ruvia::PostStatus::kAccepted) {
+        return 1;
+    }
+    auto rejected = worker.post(
+        [value = std::make_unique<int>(42), &retryCompleted](
+            ruvia::WebWorkerContext&) -> ruvia::Task<void> {
+            retryCompleted.set_value(*value);
             co_return;
-        }) != ruvia::PostResult::kQueueFull) {
+        });
+    if (rejected != ruvia::PostStatus::kQueueFull ||
+        rejected.rejected() == nullptr) {
         return 1;
     }
     const auto queuedStats = worker.stats();
@@ -39,11 +52,24 @@ int testQueueFull() {
         return 2;
     }
     server.start();
+    firstFuture.get();
+    if (worker.post(std::move(rejected).takeRejected()) !=
+        ruvia::PostStatus::kAccepted) {
+        server.stop();
+        server.join();
+        return 3;
+    }
+    if (retryFuture.get() != 42) {
+        server.stop();
+        server.join();
+        return 3;
+    }
     server.stop();
     server.join();
     const auto stoppedStats = worker.stats();
-    if (stoppedStats.completed != 1 || stoppedStats.outstanding != 0) {
-        return 3;
+    if (stoppedStats.accepted != 2 || stoppedStats.queueFull != 1 ||
+        stoppedStats.completed != 2 || stoppedStats.outstanding != 0) {
+        return 4;
     }
     return 0;
 }
@@ -58,7 +84,7 @@ int testFailureStopsWorker() {
     if (worker.post([](ruvia::WebWorkerContext&) -> ruvia::Task<void> {
             throw std::runtime_error("web worker task failed");
             co_return;
-        }) != ruvia::PostResult::kAccepted) {
+        }) != ruvia::PostStatus::kAccepted) {
         server.stop();
         server.join();
         return 1;
@@ -72,6 +98,39 @@ int testFailureStopsWorker() {
         }
     }
     return 2;
+}
+
+int testJoinFromWorkerIsRejectedBeforeWaiting() {
+    ruvia::detail::RouteTable routes(std::pmr::get_default_resource());
+    ruvia::detail::HttpServer server(
+        asio::ip::tcp::endpoint(asio::ip::make_address("127.0.0.1"), 0),
+        routes);
+    auto worker = server.webWorker();
+    server.start();
+
+    std::promise<bool> rejected;
+    auto rejectedFuture = rejected.get_future();
+    if (worker.post([&server, &rejected](
+            ruvia::WebWorkerContext&) -> ruvia::Task<void> {
+            bool sawExpectedFailure = false;
+            try {
+                server.join();
+            } catch (const std::logic_error& error) {
+                sawExpectedFailure = std::string_view(error.what()) ==
+                    "cannot join an HTTP server from its worker";
+            }
+            rejected.set_value(sawExpectedFailure);
+            co_return;
+        }) != ruvia::PostStatus::kAccepted) {
+        server.stop();
+        server.join();
+        return 1;
+    }
+
+    const bool sawExpectedFailure = rejectedFuture.get();
+    server.stop();
+    server.join();
+    return sawExpectedFailure ? 0 : 2;
 }
 
 int testImmediateStopCancelsTimer() {
@@ -88,7 +147,7 @@ int testImmediateStopCancelsTimer() {
             static_cast<void>(
                 co_await ruvia::sleepFor(
                     context.worker(), std::chrono::hours(1)));
-        }) != ruvia::PostResult::kAccepted) {
+        }) != ruvia::PostStatus::kAccepted) {
         server.stop();
         server.join();
         return 1;
@@ -134,7 +193,7 @@ int testImmediateStopSignalsTask() {
                           std::memory_order_release);
             completed.set_value();
         });
-    if (postResult != ruvia::PostResult::kAccepted) {
+    if (postResult != ruvia::PostStatus::kAccepted) {
         server.stop();
         server.join();
         return 2;
@@ -151,7 +210,7 @@ int testImmediateStopSignalsTask() {
     if (webWorker.accepting() ||
         webWorker.post([](ruvia::WebWorkerContext&) -> ruvia::Task<void> {
             co_return;
-        }) != ruvia::PostResult::kWorkerStopping) {
+        }) != ruvia::PostStatus::kWorkerStopping) {
         return 4;
     }
     return 0;
@@ -176,7 +235,7 @@ int testHandleOutlivesServerAsTerminalEndpoint() {
             stats.outstanding == 0 &&
             worker.post([](ruvia::WebWorkerContext&) -> ruvia::Task<void> {
                 co_return;
-            }) == ruvia::PostResult::kWorkerStopping
+            }) == ruvia::PostStatus::kWorkerStopping
         ? 0
         : 1;
 }
@@ -200,12 +259,12 @@ int testAbandonedMailboxTaskReconciledOnThrow() {
 
     if (server.worker().post([] {
             throw std::runtime_error("raw mailbox task threw");
-        }) != ruvia::PostResult::kAccepted) {
+        }) != ruvia::PostStatus::kAccepted) {
         return 1;
     }
     if (worker.post([](ruvia::WebWorkerContext&) -> ruvia::Task<void> {
             co_return;
-        }) != ruvia::PostResult::kAccepted) {
+        }) != ruvia::PostStatus::kAccepted) {
         return 2;
     }
 
@@ -230,6 +289,9 @@ int main() {
     }
     if (testFailureStopsWorker() != 0) {
         return 2;
+    }
+    if (testJoinFromWorkerIsRejectedBeforeWaiting() != 0) {
+        return 7;
     }
     if (testAbandonedMailboxTaskReconciledOnThrow() != 0) {
         return 6;

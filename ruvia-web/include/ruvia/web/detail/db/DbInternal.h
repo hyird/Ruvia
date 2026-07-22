@@ -6,6 +6,7 @@
 #if !defined(RUVIA_ENABLE_MARIADB) && !defined(RUVIA_ENABLE_POSTGRESQL)
 
 #include <asio/io_context.hpp>
+#include <asio/ip/tcp.hpp>
 
 #include <memory_resource>
 #include <span>
@@ -50,7 +51,7 @@ public:
 #include "ruvia/core/detail/OperationDeadline.h"
 #include "ruvia/core/detail/PoolLeaseScheduler.h"
 #include "ruvia/core/memory/PmrObject.h"
-#include "ruvia/web/detail/db/DbPoolDeadline.h"
+#include "ruvia/web/detail/db/DbHostResolution.h"
 
 struct st_mysql;
 struct st_mysql_res;
@@ -99,18 +100,32 @@ public:
     };
 
     struct ConnectionSlot {
-        explicit ConnectionSlot(std::pmr::memory_resource* resource = nullptr) noexcept;
+        ConnectionSlot(
+            asio::io_context& ioContext,
+            std::pmr::memory_resource* resource = nullptr);
         ~ConnectionSlot();
         ConnectionSlot(ConnectionSlot&&) noexcept;
         ConnectionSlot& operator=(ConnectionSlot&&) noexcept;
 
         using SlotSocketDeleter = PmrObjectDeleter<DbSlotSocket>;
 
+        asio::ip::tcp::resolver resolver;
         st_mysql* connection{nullptr};
         std::unique_ptr<DbSlotSocket, SlotSocketDeleter> waitSocket;
         std::coroutine_handle<> deadlineContinuation{};
         bool connected{false};
-        enum class DeadlineKind : std::uint8_t { kSocket, kSleep };
+        // Shutdown may request closure while an async descriptor wait still
+        // borrows both this slot and waitSocket. Keep the transport owner alive
+        // until that wait resumes and the driving coroutine performs the final
+        // close; destroying it immediately would leave the queued Asio handler
+        // with dangling references.
+        bool waitActive{false};
+        bool closeRequested{false};
+        enum class DeadlineKind : std::uint8_t {
+            kResolve,
+            kSocket,
+            kSleep
+        };
         OperationDeadline<DeadlineKind> deadline;
     };
 
@@ -121,10 +136,13 @@ public:
     void closeSlot(ConnectionSlot& slot) noexcept;
     void setSlotDeadline(ConnectionSlot& slot, std::chrono::milliseconds timeout, ConnectionSlot::DeadlineKind kind) noexcept;
     void clearSlotDeadline(ConnectionSlot& slot) noexcept;
+    Task<DbResolvedAddresses> resolveHost(
+        ConnectionSlot& slot,
+        const OperationTimeout& deadline);
     Task<void> connectUnlocked(ConnectionSlot& slot);
-    Task<int> waitForMysql(ConnectionSlot& slot, int status, const DbOperationDeadline& deadline);
-    Task<void> runMysqlQuery(ConnectionSlot& slot, std::string_view sql, const DbOperationDeadline& deadline);
-    Task<st_mysql_res*> storeMysqlResult(ConnectionSlot& slot, const DbOperationDeadline& deadline);
+    Task<int> waitForMysql(ConnectionSlot& slot, int status, const OperationTimeout& deadline);
+    Task<void> runMysqlQuery(ConnectionSlot& slot, std::string_view sql, const OperationTimeout& deadline);
+    Task<st_mysql_res*> storeMysqlResult(ConnectionSlot& slot, const OperationTimeout& deadline);
     Task<QueryResult> executeOnSlot(ConnectionSlot& slot, std::string_view sql, std::span<const DbValue> params, std::pmr::memory_resource* resource);
     Task<void> executeControl(ConnectionSlot& slot, std::string_view sql, std::pmr::memory_resource* resource);
     Task<QueryResult> execute(std::pmr::string sql, std::pmr::vector<DbValue> params, std::pmr::memory_resource* resource);
@@ -184,17 +202,22 @@ private:
     };
 
     struct ConnectionSlot {
-        explicit ConnectionSlot(std::pmr::memory_resource* resource = nullptr) noexcept;
+        ConnectionSlot(
+            asio::io_context& ioContext,
+            std::pmr::memory_resource* resource = nullptr);
         ~ConnectionSlot();
         ConnectionSlot(ConnectionSlot&&) noexcept;
         ConnectionSlot& operator=(ConnectionSlot&&) noexcept;
 
         using SlotSocketDeleter = PmrObjectDeleter<DbSlotSocket>;
 
+        asio::ip::tcp::resolver resolver;
         pg_conn* connection{nullptr};
         std::unique_ptr<DbSlotSocket, SlotSocketDeleter> waitSocket;
         bool connected{false};
-        enum class DeadlineKind : std::uint8_t { kSocket };
+        bool waitActive{false};
+        bool closeRequested{false};
+        enum class DeadlineKind : std::uint8_t { kResolve, kSocket };
         OperationDeadline<DeadlineKind> deadline;
     };
 
@@ -205,11 +228,14 @@ public:
     void closeSlot(ConnectionSlot& slot) noexcept;
     void setSlotDeadline(ConnectionSlot& slot, std::optional<std::chrono::milliseconds> timeout) noexcept;
     void clearSlotDeadline(ConnectionSlot& slot) noexcept;
+    Task<DbResolvedAddresses> resolveHost(
+        ConnectionSlot& slot,
+        const OperationTimeout& deadline);
     Task<void> connectUnlocked(ConnectionSlot& slot);
-    Task<void> waitForPostgreSql(ConnectionSlot& slot, bool read, const DbOperationDeadline& deadline);
-    Task<void> flushOutput(ConnectionSlot& slot, const DbOperationDeadline& deadline);
-    Task<void> waitUntilResultReady(ConnectionSlot& slot, const DbOperationDeadline& deadline);
-    Task<void> sendQuery(ConnectionSlot& slot, const std::pmr::string& sql, std::span<const DbValue> params, const DbOperationDeadline& deadline, bool singleRow);
+    Task<void> waitForPostgreSql(ConnectionSlot& slot, bool read, const OperationTimeout& deadline);
+    Task<void> flushOutput(ConnectionSlot& slot, const OperationTimeout& deadline);
+    Task<void> waitUntilResultReady(ConnectionSlot& slot, const OperationTimeout& deadline);
+    Task<void> sendQuery(ConnectionSlot& slot, const std::pmr::string& sql, std::span<const DbValue> params, const OperationTimeout& deadline, bool singleRow);
     Task<QueryResult> executeOnSlot(ConnectionSlot& slot, const std::pmr::string& sql, std::span<const DbValue> params, std::pmr::memory_resource* resource);
     Task<void> executeControl(ConnectionSlot& slot, std::string_view sql, std::pmr::memory_resource* resource);
     Task<QueryResult> execute(std::pmr::string sql, std::pmr::vector<DbValue> params, std::pmr::memory_resource* resource);

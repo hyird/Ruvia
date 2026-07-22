@@ -37,7 +37,7 @@ void* WebWorkerContext::workerStateInstance(const void* typeKey) const {
         : workerStates_->instance(typeKey);
     if (instance == nullptr) {
         throw std::logic_error(
-            "worker state type is not registered: call app().useWorkerState<T>() before app().run()");
+            "worker state type is not registered: call App::useWorkerState<T>() before App::run()");
     }
     return instance;
 }
@@ -94,11 +94,12 @@ WebWorkerStats WebWorkerHandle::stats() const noexcept {
     return dispatch_ ? dispatch_->stats() : WebWorkerStats{};
 }
 
-PostResult WebWorkerHandle::postTask(
+WebWorkerPostResult WebWorkerHandle::postTask(
     MoveOnlyFunction<Task<void>(WebWorkerContext&)> task) const {
     return dispatch_
         ? dispatch_->post(std::move(task))
-        : PostResult::kWorkerStopping;
+        : WebWorkerPostResult::reject(
+              PostStatus::kWorkerStopping, std::move(task));
 }
 
 }  // namespace ruvia
@@ -157,34 +158,38 @@ WorkerId WebWorkerDispatch::id() const noexcept {
     return worker_.id();
 }
 
-PostResult WebWorkerDispatch::post(Task task) {
+WebWorkerPostResult WebWorkerDispatch::post(Task task) {
     std::lock_guard lock(submitMutex_);
     if (!accepting_) {
         workerStopping_.fetch_add(1, std::memory_order_relaxed);
-        return PostResult::kWorkerStopping;
+        return WebWorkerPostResult::reject(
+            PostStatus::kWorkerStopping, std::move(task));
     }
 
-    outstanding_.fetch_add(1, std::memory_order_acq_rel);
-    AbandonReservation reservation(this);
-    const auto result = worker_.post(
-        [task = std::move(task), reservation = std::move(reservation)]() mutable {
-            WebWorkerDispatch* self = reservation.release();
-            self->start(std::move(task));
+    const auto status = WorkerHandleAccess::postFactory(
+        worker_, [this, &task]() mutable -> MoveOnlyFunction<void()> {
+            outstanding_.fetch_add(1, std::memory_order_acq_rel);
+            AbandonReservation reservation(this);
+            return [task = std::move(task),
+                    reservation = std::move(reservation)]() mutable {
+                WebWorkerDispatch* self = reservation.release();
+                self->start(std::move(task));
+            };
         });
-    // A non-accepted post destroyed the lambda (and its reservation) already, so
-    // the reservation deleter has reconciled outstanding_; do not decrement again.
-    switch (result) {
-    case PostResult::kAccepted:
+    switch (status) {
+    case PostStatus::kAccepted:
         accepted_.fetch_add(1, std::memory_order_relaxed);
         break;
-    case PostResult::kQueueFull:
+    case PostStatus::kQueueFull:
         queueFull_.fetch_add(1, std::memory_order_relaxed);
         break;
-    case PostResult::kWorkerStopping:
+    case PostStatus::kWorkerStopping:
         workerStopping_.fetch_add(1, std::memory_order_relaxed);
         break;
     }
-    return result;
+    return status == PostStatus::kAccepted
+        ? WebWorkerPostResult::accept()
+        : WebWorkerPostResult::reject(status, std::move(task));
 }
 
 void WebWorkerDispatch::close() noexcept {
@@ -234,13 +239,19 @@ void WebWorkerDispatch::start(Task task) {
             asio::bind_executor(
                 executor_,
                 [this](TaskCompletionResult<void> result) {
-                    if (const auto* failure = result.failure()) {
+                    std::exception_ptr failure;
+                    if (const auto* failed = result.failure()) {
                         failedCount_.fetch_add(1, std::memory_order_relaxed);
-                        if (failed_) {
-                            failed_(failure->exception());
-                        }
+                        failure = failed->exception();
                     }
+                    // Reconcile the accepted task before invoking the failure
+                    // sink. The sink normally stops this worker and is allowed
+                    // to trigger arbitrary terminal control flow; no such path
+                    // may leave retire() observing a phantom outstanding job.
                     complete();
+                    if (failure != nullptr && failed_) {
+                        failed_(std::move(failure));
+                    }
                 }));
     } catch (...) {
         complete();
@@ -255,7 +266,7 @@ ruvia::Task<void> WebWorkerDispatch::run(Task task) {
     co_await task(context);
 }
 
-void WebWorkerDispatch::complete() {
+void WebWorkerDispatch::complete() noexcept {
     completed_.fetch_add(1, std::memory_order_relaxed);
     outstanding_.fetch_sub(1, std::memory_order_acq_rel);
 }

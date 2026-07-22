@@ -29,7 +29,7 @@ WorkerId WorkerHandle::id() const noexcept {
 PostResult WorkerHandle::postTask(MoveOnlyFunction<void()> task) const {
     return dispatcher_
         ? dispatcher_->post(std::move(task))
-        : PostResult::kWorkerStopping;
+        : PostResult::reject(PostStatus::kWorkerStopping, std::move(task));
 }
 
 WorkerHandle detail::WorkerHandleAccess::make(
@@ -77,6 +77,15 @@ void detail::WorkerHandleAccess::scheduleTimer(
         throw std::runtime_error("cannot schedule a timer on a stopped worker");
     }
     dispatcher->scheduleTimer(registration, deadline, std::move(completion));
+}
+
+PostStatus detail::WorkerHandleAccess::postFactory(
+    const WorkerHandle& worker,
+    MoveOnlyFunction<MoveOnlyFunction<void()>()> factory) {
+    const auto& dispatcher = worker.dispatcher_;
+    return dispatcher
+        ? dispatcher->postFactory(std::move(factory))
+        : PostStatus::kWorkerStopping;
 }
 
 }

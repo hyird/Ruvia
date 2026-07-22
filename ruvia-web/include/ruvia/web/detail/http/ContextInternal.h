@@ -40,6 +40,7 @@ inline Context::Context(
       db_(services.db()),
       redis_(services.redis()),
       rateLimiter_(services.rateLimiter()),
+      env_(services.env()),
       errorHandler_(services.errorHandler()),
       notFoundHandler_(services.notFoundHandler()),
       routes_(services.routes()),

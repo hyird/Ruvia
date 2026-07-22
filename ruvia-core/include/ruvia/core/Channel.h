@@ -10,6 +10,7 @@
 #include <mutex>
 #include <optional>
 #include <stdexcept>
+#include <type_traits>
 #include <utility>
 #include <variant>
 #include <vector>
@@ -24,7 +25,7 @@
 
 namespace ruvia {
 
-enum class ChannelSendResult : std::uint8_t {
+enum class ChannelSendStatus : std::uint8_t {
     kSent,
     kFull,
     kClosed,
@@ -33,6 +34,64 @@ enum class ChannelSendResult : std::uint8_t {
 
 template <typename T>
 class ChannelSender;
+
+template <typename T>
+class ChannelSendResult final {
+public:
+    ChannelSendResult(const ChannelSendResult&) = delete;
+    ChannelSendResult& operator=(const ChannelSendResult&) = delete;
+    ChannelSendResult(ChannelSendResult&&)
+        noexcept(std::is_nothrow_move_constructible_v<T>) = default;
+    ChannelSendResult& operator=(ChannelSendResult&&)
+        noexcept(std::is_nothrow_move_assignable_v<T>) = default;
+
+    [[nodiscard]] ChannelSendStatus status() const noexcept {
+        return status_;
+    }
+
+    [[nodiscard]] bool sent() const noexcept {
+        return status_ == ChannelSendStatus::kSent;
+    }
+
+    [[nodiscard]] T* rejected() & noexcept {
+        return rejected_ ? &*rejected_ : nullptr;
+    }
+
+    [[nodiscard]] const T* rejected() const & noexcept {
+        return rejected_ ? &*rejected_ : nullptr;
+    }
+
+    T* rejected() && = delete;
+    const T* rejected() const && = delete;
+
+    [[nodiscard]] std::optional<T> takeRejected() &&
+        noexcept(std::is_nothrow_move_constructible_v<T>) {
+        return std::move(rejected_);
+    }
+
+private:
+    friend class ChannelSender<T>;
+
+    explicit ChannelSendResult(ChannelSendStatus status) noexcept
+        : status_(status) {}
+
+    ChannelSendResult(ChannelSendStatus status, T&& rejected)
+        noexcept(std::is_nothrow_move_constructible_v<T>)
+        : status_(status), rejected_(std::move(rejected)) {}
+
+    [[nodiscard]] static ChannelSendResult accepted() noexcept {
+        return ChannelSendResult(ChannelSendStatus::kSent);
+    }
+
+    [[nodiscard]] static ChannelSendResult reject(
+        ChannelSendStatus status,
+        T&& value) noexcept(std::is_nothrow_move_constructible_v<T>) {
+        return ChannelSendResult(status, std::move(value));
+    }
+
+    ChannelSendStatus status_;
+    std::optional<T> rejected_;
+};
 
 template <typename T>
 class ChannelReceiver;
@@ -201,9 +260,10 @@ class ChannelSender final {
 public:
     ChannelSender() noexcept = default;
 
-    [[nodiscard]] ChannelSendResult send(T value) const {
+    [[nodiscard]] ChannelSendResult<T> send(T value) const {
         if (!state_) {
-            return ChannelSendResult::kClosed;
+            return ChannelSendResult<T>::reject(
+                ChannelSendStatus::kClosed, std::move(value));
         }
         detail::ChannelReceiveAwaiter<T>* waiter = nullptr;
         bool wake = false;
@@ -211,15 +271,18 @@ public:
             std::lock_guard lock(state_->mutex);
             if (std::holds_alternative<detail::ChannelClosed>(
                     state_->lifecycle)) {
-                return ChannelSendResult::kClosed;
+                return ChannelSendResult<T>::reject(
+                    ChannelSendStatus::kClosed, std::move(value));
             }
             if (std::holds_alternative<detail::ChannelWorkerStopping>(
                     state_->lifecycle)) {
-                return ChannelSendResult::kWorkerStopping;
+                return ChannelSendResult<T>::reject(
+                    ChannelSendStatus::kWorkerStopping, std::move(value));
             }
             assert(std::holds_alternative<detail::ChannelOpen>(state_->lifecycle));
             if (!state_->worker.accepting()) {
-                return ChannelSendResult::kWorkerStopping;
+                return ChannelSendResult<T>::reject(
+                    ChannelSendStatus::kWorkerStopping, std::move(value));
             }
             if (state_->waiter != nullptr) {
                 waiter = state_->waiter;
@@ -235,14 +298,15 @@ public:
                 }
             } else {
                 if (state_->size == state_->slots.size()) {
-                    return ChannelSendResult::kFull;
+                    return ChannelSendResult<T>::reject(
+                        ChannelSendStatus::kFull, std::move(value));
                 }
                 state_->slots[state_->tail].emplace(std::move(value));
                 state_->tail = (state_->tail + 1) % state_->slots.size();
                 ++state_->size;
             }
         }
-        return ChannelSendResult::kSent;
+        return ChannelSendResult<T>::accepted();
     }
 
     void close() const {

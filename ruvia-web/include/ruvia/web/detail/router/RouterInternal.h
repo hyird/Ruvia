@@ -69,9 +69,8 @@ public:
     Router& setPrefixNotFoundHandlers(
         std::span<const HttpPrefixNotFoundHandler> handlers);
     // App-wide middleware, prepended to every route's chain at finalize. Each
-    // descriptor is materialized exactly once; the single instance serves all
-    // routes, matching the per-route materialization model (one instance per
-    // registration, shared across workers).
+    // descriptor is materialized exactly once per worker route graph; that
+    // worker-local instance serves all routes in the graph.
     void setGlobalMiddlewares(
         std::span<const ControllerMiddlewareDescriptor> descriptors);
     void finalize();

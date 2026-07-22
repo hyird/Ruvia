@@ -49,7 +49,8 @@ Task<RedisValue> RedisPool::executeWithTimeoutImpl(
         const auto argSpan = redisArgSpan(args);
         connection.writeBuffer.reserve(respCommandSerializedSize(argSpan));
         appendRespCommand(connection.writeBuffer, argSpan);
-        const auto writeEc = co_await asyncSocketWrite(connection, timeout);
+        const OperationTimeout deadline(timeout);
+        const auto writeEc = co_await asyncSocketWrite(connection, deadline);
         if (writeEc) {
             if (writeEc == asio::error::timed_out) {
                 throw RedisError(RedisError::Code::kTimeout, "redis command timed out");
@@ -57,7 +58,7 @@ Task<RedisValue> RedisPool::executeWithTimeoutImpl(
             throw RedisError(RedisError::Code::kIoError, writeEc.message());
         }
 
-        co_return co_await readReply(connection, timeout, resource);
+        co_return co_await readReply(connection, deadline, resource);
     } catch (...) {
         guard.discard();
         throw;
@@ -105,7 +106,8 @@ Task<std::pmr::vector<RedisValue>> RedisPool::executePipelineImpl(
                 args);
         }
 
-        const auto writeEc = co_await asyncSocketWrite(connection, config_.commandTimeout);
+        const OperationTimeout deadline(config_.commandTimeout);
+        const auto writeEc = co_await asyncSocketWrite(connection, deadline);
         if (writeEc) {
             if (writeEc == asio::error::timed_out) {
                 throw RedisError(RedisError::Code::kTimeout, "redis command timed out");
@@ -114,7 +116,7 @@ Task<std::pmr::vector<RedisValue>> RedisPool::executePipelineImpl(
         }
 
         while (replies.size() < commands.size()) {
-            replies.emplace_back(co_await readReply(connection, config_.commandTimeout, resolved));
+            replies.emplace_back(co_await readReply(connection, deadline, resolved));
         }
 
         co_return replies;

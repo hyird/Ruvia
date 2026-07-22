@@ -1,27 +1,20 @@
 #include "ruvia/core/memory/MemoryPool.h"
 
 #include "ruvia/core/detail/TaskPromise.h"
+#include "ruvia/core/memory/ProcessResource.h"
 
 #include <array>
 
 namespace ruvia {
 
-namespace {
-
-struct DefaultResourceInstaller final {
-    DefaultResourceInstaller() noexcept {
-        (void)ProcessMemory::instance();
-    }
-};
-
-DefaultResourceInstaller defaultResourceInstaller;
-
-}  // namespace
-
 namespace detail {
 
 std::pmr::memory_resource* processResource() noexcept {
-    return ProcessMemory::instance().upstreamResource();
+    // Explicit process-lifetime storage for startup metadata. It is never
+    // installed as std::pmr's default resource: embedding Ruvia must not alter
+    // unrelated PMR allocations in the host process.
+    static std::pmr::synchronized_pool_resource resource;
+    return &resource;
 }
 
 namespace {
@@ -127,47 +120,7 @@ void taskFrameDeallocateSized(void* pointer, std::size_t bytes) noexcept {
 
 }  // namespace detail
 
-ProcessMemory& ProcessMemory::instance() noexcept {
-    static ProcessMemory processMemory;
-    return processMemory;
-}
-
-ProcessMemory::ProcessMemory() {
-    std::pmr::set_default_resource(&upstream_);
-}
-
-void ProcessMemory::configure(const MemoryPoolConfig& config) {
-    if (frozen_) {
-        throw std::logic_error("process memory configuration is already frozen");
-    }
-    config_ = config;
-}
-
-void ProcessMemory::freeze() noexcept {
-    frozen_ = true;
-}
-
-MemoryPoolConfig ProcessMemory::config() const noexcept {
-    return config_;
-}
-
-bool ProcessMemory::frozen() const noexcept {
-    return frozen_;
-}
-
-std::pmr::memory_resource* ProcessMemory::upstreamResource() noexcept {
-    return &upstream_;
-}
-
 WorkerMemory::WorkerMemory(const MemoryPoolConfig& config)
-    : config_(config),
-      resource_(detail::processResource()) {
-    ProcessMemory::instance().freeze();
-}
-
-WorkerMemory::WorkerMemory(
-    const MemoryPoolConfig& config,
-    detail::DeferProcessMemoryFreeze)
     : config_(config),
       resource_(detail::processResource()) {}
 

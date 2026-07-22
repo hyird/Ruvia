@@ -104,7 +104,7 @@ Task<QueryResult> PostgreSqlPool::executeOnSlot(
     if (!slot.connected) {
         co_await connectUnlocked(slot);
     }
-    DbOperationDeadline deadline(config_.queryTimeout);
+    OperationTimeout deadline(config_.queryTimeout);
     co_await sendQuery(slot, sql, params, deadline, false);
 
     auto output = DbResultAccess::makeResult(resource);
@@ -154,7 +154,7 @@ Task<DbStreamResult> PostgreSqlPool::stream(
         if (!slot.connected) {
             co_await connectUnlocked(slot);
         }
-        DbOperationDeadline deadline(config_.queryTimeout);
+        OperationTimeout deadline(config_.queryTimeout);
         co_await sendQuery(
             slot,
             sql,
@@ -178,7 +178,7 @@ Task<std::optional<DbRow>> PostgreSqlPool::readStreamRow(
     }
     auto& slot = slots_[slotIndex];
     try {
-        DbOperationDeadline deadline(config_.queryTimeout);
+        OperationTimeout deadline(config_.queryTimeout);
         co_await waitUntilResultReady(slot, deadline);
         auto* result = PQgetResult(slot.connection);
         if (result == nullptr) {

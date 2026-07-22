@@ -117,5 +117,5 @@ int main() {
         app.setServerTopology(ruvia::ServerTopology::http(httpPort));
     }
 
-    app.run();
+    app.setSignalShutdown(true).run();
 }

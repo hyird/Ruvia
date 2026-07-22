@@ -53,13 +53,25 @@ examples/web/
 tests/core/
 tests/http/{unit,http1,http2,websocket,guards,support,conformance,benchmarks}/
 tests/web/{unit,server,guards}/
-tests/edge/unit/
-tests/{support,package-consumer}/
+tests/edge/
+tests/support/
 ```
+
+只有需要区分多个测试类别的 target 才分子目录：`http` 和 `web` 分，
+`core` 和 `edge` 只有单元测试，直接平铺。
+
+测试文件名只描述被测对象，不重复所在目录已经表达的信息：
+`http/http2/hpack.cpp`，不是 `http/http2/unit_hpack.cpp`；
+`web/server/write_timeout.cpp`，不是 `web/server/server_write_timeout.cpp`。
+`ruvia_unit_tests` 的源码列表按目录分组、组内字母序，不要往末尾追加。
 
 不要把 HTTP/1、HTTP/2、WebSocket 或 Web server 测试重新散放到 `tests/`
 根目录；target 专属的边界守卫、支撑代码、基准和一致性测试跟随所属
-target，只有跨 target 的通用支撑与 package consumer 保留在独立目录。
+target，只有跨 target 的通用支撑保留在独立目录。
+
+门禁必须是 ctest 条目。不要新增默认不执行的 opt-in 门禁：不跑的门禁
+守不住任何东西，只会随重构不断腐坏。契约优先用编译器验证（消费公开
+头的测试翻译单元），不要用正则匹配已安装文件的字面签名。
 
 仓库根目录不保留源码级 `include/`、`src/`、`fuzz/`、`core/`、`http/`、`web/` 或 `edge/`。
 
@@ -192,7 +204,7 @@ Router/error handler 不得设置 `Connection: close` 或接收 `closeConnection
 - 连接 teardown 必须先显式唤醒或终止挂起 I/O，再 join 所有仍持有连接对象的后台操作；不得只等待某一种操作来源。
 - `App::setWorkersPerListener()` 配置每个 listener 的 worker 数；双 listener topology 的总 worker 数是其两倍，禁止恢复含糊的总线程数命名。
 - `App::run()` 创建 acceptor/server/thread per worker。
-- 非 Windows 平台要求 `SO_REUSEPORT`；Windows 使用 `SO_REUSEADDR`。
+- Linux 和 macOS 要求 `SO_REUSEPORT`。
 - shutdown 只能在各 worker 自己的 `io_context` 上直接关闭 acceptor、活跃 socket 和 worker 资源；不等待请求优雅排空。
 - idle/header/body/write timeout、连接数限制和请求数限制保持 per-worker 所有权。
 - 默认限流规则和限流槽容量都显式保持 per-worker 语义；只有启动期路由元数据或默认规则证明需要限流时才预分配固定表，请求期不得惰性分配。
@@ -267,21 +279,22 @@ Router/error handler 不得设置 `Connection: close` 或接收 `closeConnection
 
 目录、文档、CMake 清理：
 
-```powershell
+```bash
 git diff --check
 rg -n '<stale split terms>' README.md AGENTS.md CMakeLists.txt ruvia-core ruvia-http ruvia-web tests examples
 ```
 
 构建、测试和安装：
 
-```powershell
-cmake -S . -B build `
-  -DCMAKE_TOOLCHAIN_FILE="$env:VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake" `
-  -DRUVIA_BUILD_TESTS=ON `
+```bash
+cmake -S . -B build -G Ninja \
+  -DCMAKE_TOOLCHAIN_FILE="$VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake" \
+  -DCMAKE_BUILD_TYPE=Debug \
+  -DRUVIA_BUILD_TESTS=ON \
   -DRUVIA_BUILD_EXAMPLES=ON
-cmake --build build --config Debug
-ctest --test-dir build -C Debug --output-on-failure
-cmake --install build --config Debug --prefix build/install
+cmake --build build
+ctest --test-dir build --output-on-failure
+cmake --install build --prefix build/install
 ```
 
 不要提交 `build/`、`vcpkg_installed`、本地工具目录或 CodeGraph 索引。

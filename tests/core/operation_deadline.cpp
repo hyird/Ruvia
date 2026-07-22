@@ -38,8 +38,29 @@ bool operationDeadlineTransitionsAreExclusive() {
            !deadline.clear();
 }
 
+bool operationTimeoutUsesOneAbsoluteDeadline() {
+    using Timeout = ruvia::detail::OperationTimeout;
+    const Timeout unlimited(std::nullopt);
+    if (unlimited.remaining().has_value() || unlimited.expired()) {
+        return false;
+    }
+
+    const Timeout expired(std::chrono::milliseconds(0));
+    if (!expired.expired() || expired.remaining() != std::chrono::milliseconds(0)) {
+        return false;
+    }
+
+    const Timeout active(std::chrono::seconds(1));
+    const auto remaining = active.remaining();
+    return remaining.has_value() && remaining->count() > 0 &&
+           *remaining <= std::chrono::seconds(1);
+}
+
 }  // namespace
 
 int main() {
-    return operationDeadlineTransitionsAreExclusive() ? 0 : 1;
+    return operationDeadlineTransitionsAreExclusive() &&
+                   operationTimeoutUsesOneAbsoluteDeadline()
+        ? 0
+        : 1;
 }

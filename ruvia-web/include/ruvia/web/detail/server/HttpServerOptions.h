@@ -16,6 +16,10 @@
 #include "ruvia/web/RateLimitRule.h"
 #include "ruvia/web/ServerConfig.h"
 
+namespace ruvia {
+class Env;
+}
+
 namespace ruvia::detail {
 
 struct AccessLogSink final {
@@ -108,6 +112,7 @@ struct HttpServerOptions final {
     std::optional<CorsConfig> cors;
     DocumentRoot documentRoot;
     AccessLogSink accessLog;
+    const Env* env{nullptr};
     WorkerFailureSink workerFailure;
     std::optional<RateLimitRule> defaultRateLimitPerWorker;
     std::size_t rateLimitSlotsPerWorker{kDefaultRateLimitSlotsPerWorker};

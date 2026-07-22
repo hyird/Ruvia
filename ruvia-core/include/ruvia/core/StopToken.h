@@ -1,10 +1,16 @@
 #pragma once
 
 #include <atomic>
+#include <memory>
+#include <utility>
 
 namespace ruvia {
 
 namespace detail {
+struct StopState final {
+    std::atomic_bool requested{false};
+};
+
 class StopSource;
 }
 
@@ -13,43 +19,43 @@ public:
     StopToken() noexcept = default;
 
     [[nodiscard]] bool stopRequested() const noexcept {
-        return requested_ != nullptr &&
-            requested_->load(std::memory_order_acquire);
+        return state_ != nullptr &&
+            state_->requested.load(std::memory_order_acquire);
     }
 
 private:
     friend class detail::StopSource;
 
-    explicit StopToken(const std::atomic_bool& requested) noexcept
-        : requested_(&requested) {}
+    explicit StopToken(std::shared_ptr<detail::StopState> state) noexcept
+        : state_(std::move(state)) {}
 
-    const std::atomic_bool* requested_{nullptr};
+    std::shared_ptr<const detail::StopState> state_;
 };
 
 namespace detail {
 
 class StopSource final {
 public:
-    StopSource() noexcept = default;
+    StopSource() : state_(std::make_shared<StopState>()) {}
     StopSource(const StopSource&) = delete;
     StopSource& operator=(const StopSource&) = delete;
     StopSource(StopSource&&) = delete;
     StopSource& operator=(StopSource&&) = delete;
 
     void requestStop() noexcept {
-        requested_.store(true, std::memory_order_release);
+        state_->requested.store(true, std::memory_order_release);
     }
 
     [[nodiscard]] bool stopRequested() const noexcept {
-        return requested_.load(std::memory_order_acquire);
+        return state_->requested.load(std::memory_order_acquire);
     }
 
     [[nodiscard]] StopToken token() const noexcept {
-        return StopToken(requested_);
+        return StopToken(state_);
     }
 
 private:
-    std::atomic_bool requested_{false};
+    std::shared_ptr<StopState> state_;
 };
 
 }  // namespace detail

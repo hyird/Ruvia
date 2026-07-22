@@ -131,10 +131,11 @@ int main() {
               ruvia::TlsConfig(ruvia::TlsIdentity::fromFiles(tlsCert, tlsKey)))
         : ruvia::ServerTopology::http(port);
 
-    auto& app = ruvia::app()
-        .setListenAddress("0.0.0.0")
+    auto& app = ruvia::app();
+    app.setListenAddress("0.0.0.0")
         .setServerTopology(topology)
         .setWorkersPerListener(4)
+        .setSignalShutdown(true)
         .setKeepaliveRequests(1u << 30)
         .setMaxConnectionsPerWorker(20000);
 

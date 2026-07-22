@@ -8,7 +8,7 @@
 namespace ruvia::detail {
 
 void ensureMysqlThreadInitialized();
-void setMysqlTimeout(
+[[nodiscard]] bool setMysqlTimeout(
     st_mysql& connection,
     mysql_option option,
     std::optional<std::chrono::milliseconds> timeout) noexcept;

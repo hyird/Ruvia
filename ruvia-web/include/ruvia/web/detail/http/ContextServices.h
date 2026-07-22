@@ -11,6 +11,10 @@
 #include <string_view>
 #include <utility>
 
+namespace ruvia {
+class Env;
+}
+
 namespace ruvia::detail {
 
 class DbRegistry;
@@ -48,6 +52,16 @@ public:
 
     [[nodiscard]] RateLimiter* rateLimiter() const noexcept {
         return rateLimiter_;
+    }
+
+    [[nodiscard]] const Env* env() const noexcept {
+        return env_;
+    }
+
+    [[nodiscard]] ContextServices withEnv(const Env& value) const noexcept {
+        auto services = *this;
+        services.env_ = &value;
+        return services;
     }
 
     [[nodiscard]] constexpr std::size_t maxDecodedBodyBytes() const noexcept {
@@ -185,6 +199,7 @@ private:
     DbRegistry* db_{nullptr};
     RedisRegistry* redis_{nullptr};
     RateLimiter* rateLimiter_{nullptr};
+    const Env* env_{nullptr};
     std::size_t maxDecodedBodyBytes_{kDefaultMaxBufferedBodyBytes};
     // Request/session services borrow the address-stable server-owned handle.
     // Every derived ContextServices value stays inside that server's dispatch.

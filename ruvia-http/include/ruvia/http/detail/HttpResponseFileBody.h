@@ -1,10 +1,8 @@
 #pragma once
 
-#include "ruvia/http/detail/NativePath.h"
-
+#include <array>
 #include <cstdint>
 #include <filesystem>
-#include <array>
 
 namespace ruvia::detail {
 
@@ -55,13 +53,15 @@ class HttpResponseBody;
 // replaced or destroyed.
 class ResponseFileBody final {
 public:
-    [[nodiscard]] constexpr const HttpNativePathChar* nativePathCStr()
+    [[nodiscard]] constexpr const char* nativePathCStr()
         const noexcept {
         return nativePath_;
     }
 
     [[nodiscard]] std::filesystem::path toPath() const {
-        return makePathFromHttpNativePath(nativePath_);
+        return nativePath_ == nullptr
+            ? std::filesystem::path{}
+            : std::filesystem::path(nativePath_);
     }
 
     [[nodiscard]] constexpr std::uint64_t size() const noexcept {
@@ -84,7 +84,7 @@ private:
     friend class HttpResponseBody;
 
     constexpr ResponseFileBody(
-        const HttpNativePathChar* nativePath,
+        const char* nativePath,
         std::uint64_t size,
         std::uint64_t offset,
         std::uint64_t length,
@@ -95,7 +95,7 @@ private:
           length_(length),
           identity_(identity) {}
 
-    const HttpNativePathChar* nativePath_;
+    const char* nativePath_;
     std::uint64_t size_;
     std::uint64_t offset_;
     std::uint64_t length_;

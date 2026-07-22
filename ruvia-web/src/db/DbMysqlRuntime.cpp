@@ -1,25 +1,19 @@
 #include "ruvia/web/detail/db/DbMysqlRuntime.h"
 
-#include <cstdlib>
 #include <limits>
+#include <stdexcept>
 #include <utility>
 
 namespace ruvia::detail {
 namespace {
 
-void configureMariaDbTlsWorkaround() noexcept {
-#if defined(_WIN32)
-    (void)_putenv_s("MARIADB_TLS_DISABLE_PEER_VERIFICATION", "1");
-#else
-    (void)setenv("MARIADB_TLS_DISABLE_PEER_VERIFICATION", "1", 1);
-#endif
-}
-
 class MysqlLibraryEnv final {
 public:
     MysqlLibraryEnv() {
-        configureMariaDbTlsWorkaround();
-        (void)mysql_library_init(0, nullptr, nullptr);
+        if (mysql_library_init(0, nullptr, nullptr) != 0) {
+            throw std::runtime_error(
+                "failed to initialize the MariaDB client library");
+        }
     }
 
     ~MysqlLibraryEnv() {
@@ -30,7 +24,10 @@ public:
 class MysqlThreadEnv final {
 public:
     MysqlThreadEnv() {
-        (void)mysql_thread_init();
+        if (mysql_thread_init() != 0) {
+            throw std::runtime_error(
+                "failed to initialize the MariaDB client thread");
+        }
     }
 
     ~MysqlThreadEnv() {
@@ -58,15 +55,15 @@ void ensureMysqlThreadInitialized() {
     (void)threadEnv;
 }
 
-void setMysqlTimeout(
+bool setMysqlTimeout(
     st_mysql& connection,
     mysql_option option,
     std::optional<std::chrono::milliseconds> timeout) noexcept {
     if (!timeout.has_value()) {
-        return;
+        return true;
     }
     const auto seconds = timeoutSeconds(*timeout);
-    (void)mysql_options(&connection, option, &seconds);
+    return mysql_optionsv(&connection, option, &seconds) == 0;
 }
 
 }  // namespace ruvia::detail

@@ -22,10 +22,12 @@ set(RUVIA_WEB_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/src/app/AppHttpConfig.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/app/AppIntegrationConfig.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/app/Testing.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/integration/WorkerData.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/ruvia.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/http/Error.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/http/ContextErrorResponse.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/http/ContextFileResponse.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/http/ContextData.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/http/ContextRequest.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/http/ContextRequestFacade.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/http/ContextRequestForm.cpp
@@ -67,6 +69,7 @@ set(RUVIA_WEB_SOURCES
 if(RUVIA_ENABLE_MARIADB OR RUVIA_ENABLE_POSTGRESQL)
     list(APPEND RUVIA_WEB_SOURCES
         ${CMAKE_CURRENT_SOURCE_DIR}/src/db/DbHandle.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/db/DbHostResolution.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/src/db/DbMigration.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/src/db/DbRegistry.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/src/db/DbSlotSocket.cpp
@@ -124,10 +127,7 @@ endif()
 add_library(ruvia-web ${RUVIA_WEB_SOURCES})
 add_library(ruvia::web ALIAS ruvia-web)
 
-set_target_properties(ruvia-web PROPERTIES
-    EXPORT_NAME web
-    WINDOWS_EXPORT_ALL_SYMBOLS ON
-)
+set_target_properties(ruvia-web PROPERTIES EXPORT_NAME web)
 
 ruvia_configure_library(ruvia-web)
 ruvia_configure_runtime_library(ruvia-web)
@@ -154,21 +154,6 @@ endif()
 if(RUVIA_ENABLE_POSTGRESQL)
     target_compile_definitions(ruvia-web PUBLIC RUVIA_ENABLE_POSTGRESQL)
     target_link_libraries(ruvia-web PUBLIC PostgreSQL::PostgreSQL)
-    # vcpkg's static MinGW libpq exposes pgcommon and pgport as separate
-    # archives. They contain reverse/cyclic references, so their ordinary
-    # imported-target order can leave pgcommon symbols unresolved when a
-    # downstream executable is linked. Ask GNU ld to rescan the pair.
-    if(MINGW AND PostgreSQL_pgcommon_LIBRARY_DEBUG AND
-       PostgreSQL_pgcommon_LIBRARY_RELEASE AND
-       PostgreSQL_pgport_LIBRARY_DEBUG AND
-       PostgreSQL_pgport_LIBRARY_RELEASE)
-        target_link_libraries(ruvia-web PUBLIC
-            "$<LINK_GROUP:RESCAN,
-                $<$<CONFIG:Debug>:${PostgreSQL_pgcommon_LIBRARY_DEBUG}>
-                $<$<NOT:$<CONFIG:Debug>>:${PostgreSQL_pgcommon_LIBRARY_RELEASE}>,
-                $<$<CONFIG:Debug>:${PostgreSQL_pgport_LIBRARY_DEBUG}>
-                $<$<NOT:$<CONFIG:Debug>>:${PostgreSQL_pgport_LIBRARY_RELEASE}>>")
-    endif()
 endif()
 
 if(RUVIA_ENABLE_MARIADB OR RUVIA_ENABLE_POSTGRESQL)
@@ -203,7 +188,6 @@ if(RUVIA_ENABLE_MARIADB OR RUVIA_ENABLE_POSTGRESQL)
         include/ruvia/web/detail/db/DbInternal.h
         include/ruvia/web/detail/db/DbMigrationValidation.h
         include/ruvia/web/detail/db/DbOperationState.h
-        include/ruvia/web/detail/db/DbPoolDeadline.h
         include/ruvia/web/detail/db/DbResultAccess.h
         include/ruvia/web/detail/db/DbSlotSocket.h
         include/ruvia/web/detail/db/DbUtils.h

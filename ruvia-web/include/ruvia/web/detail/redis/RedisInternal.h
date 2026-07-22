@@ -148,16 +148,18 @@ private:
     void close(Connection& connection) noexcept;
     void configureSocket(Connection& connection) noexcept;
     void ensureReader(Connection& connection);
-    void setDeadline(
+    [[nodiscard]] bool armDeadline(
         Connection& connection,
-        std::optional<std::chrono::milliseconds> timeout,
+        const OperationTimeout& timeout,
         Connection::DeadlineKind kind) noexcept;
     [[nodiscard]] bool clearDeadline(Connection& connection) noexcept;
     Task<void> connect(Connection& connection);
-    Task<void> authenticate(Connection& connection);
+    Task<void> authenticate(
+        Connection& connection,
+        const OperationTimeout& connectTimeout);
     Task<RedisValue> readReply(
         Connection& connection,
-        std::optional<std::chrono::milliseconds> timeout,
+        const OperationTimeout& timeout,
         std::pmr::memory_resource* resource);
     template <typename ArgSource>
     Task<RedisValue> executeWithTimeoutImpl(
@@ -170,11 +172,11 @@ private:
         std::pmr::memory_resource* resource);
     Task<std::error_code> asyncSocketWrite(
         Connection& connection,
-        std::optional<std::chrono::milliseconds> timeout);
+        const OperationTimeout& timeout);
     Task<AsioCompletion<std::size_t>> asyncSocketReadSome(
         Connection& connection,
         std::span<char> buffer,
-        std::optional<std::chrono::milliseconds> timeout);
+        const OperationTimeout& timeout);
     asio::io_context& ioContext_;
     RedisConfig config_;
     std::pmr::memory_resource* resource_;

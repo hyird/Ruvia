@@ -39,7 +39,7 @@ auto stopRegistration = loop.onStop([&socket] {
 });
 ```
 
-`EventLoopPool` 负责应用 event loop 的创建、启动、停止和 join。每个 `EventLoop` 拥有独立 `asio::io_context` 和线程，公开 `ioContext()` 与 `executor()`，供应用创建 TCP、UDP、DNS、TLS 等异步对象。连接创建后固定归属该 loop，不得迁移。
+`EventLoopPool` 负责应用 event loop 的创建、启动、停止和 join。每个 `EventLoop` 拥有独立 `asio::io_context` 和线程，公开 `ioContext()` 与 `executor()`，供应用创建 TCP、UDP、DNS、TLS 等异步对象。连接创建后固定归属该 loop，不得迁移。`start()` 前已经允许注册 stop callback 和投递有界工作；如果此时直接 `stop()` 或 `join()`，`join()` 仍会为每个 loop 建立只用于关闭排空的短生命周期 owner thread，兑现已接受工作、owner-thread stop callback 和首异常传播，不得把它们静默遗留在从未运行的 context 中。`stop()` 可以从任意线程请求；`join()` 只能由 pool 外部的生命周期 owner 调用，从本 pool 任一 worker 调用会在等待任何线程前抛 `std::logic_error`。
 
 `EventLoop::onStop()` 返回 move-only registration。业务资源存活期间必须保留 registration；pool 停止时回调在所属 loop 线程执行，应用在其中 cancel/close acceptor、socket、resolver 和 TLS stream。回调必须尽快返回且不得依赖异常传播；框架会忽略 stop callback 异常并继续关闭。应用不得对 pool-owned `io_context` 调用 `run()`、`stop()` 或 `restart()`。
 
@@ -67,7 +67,9 @@ thread.join();
 `EventLoop::handle()` 返回可复制的 `WorkerHandle`，供 `sleepFor`、`Channel`、`OneShot`、`TaskScope` 等 worker-bound core 原语使用。Web handler 的 `Context::worker()` 也只返回这种受限句柄：
 
 - `post(fn)` 是通用公开 API，语义对应 event-loop 的 queue-in-loop。
-- 返回 `kAccepted`、`kQueueFull` 或 `kWorkerStopping`，调用方必须处理背压。
+- 返回结果对象；`status()` 为 `kAccepted`、`kQueueFull` 或
+  `kWorkerStopping`，被拒绝时 `takeRejected()` 交还未执行的 callable，
+  调用方可以安全重试或转储。
 - 支持 move-only callable。
 - `isCurrent()` 用于断言线程亲和；`id()` 用于诊断。
 - 自身不暴露 executor 或 `io_context`，因此不能借 Web worker 创建任意网络 runtime。
@@ -77,7 +79,7 @@ Web 侧提供普通请求和后台作业两种入口：
 
 ```cpp
 ruvia::WorkerHandle current = c.worker();
-ruvia::WebWorkerHandle target = ruvia::app().workerFor(deviceId);
+ruvia::WebWorkerHandle target = application.workerFor(deviceId);
 
 auto result = target.post(
     [event = std::move(event)](
@@ -87,11 +89,13 @@ auto result = target.post(
     });
 ```
 
-`App::workerFor(uint64_t/string_view)` 按 key 稳定选择 Web worker，`App::workers()` 返回全部 `WebWorkerHandle`。`WebWorkerHandle::post()` 只接受返回 `Task<void>` 的回调，回调收到仅在该作业内有效的 `WebWorkerContext`，可访问目标 worker、PMR resource、shutdown stop token，以及该 worker 自己的 DB/Redis handle。外部 producer 不暴露 core post 逃生口，确保所有已接受 Web 作业都进入 shutdown drain、失败传播和资源生命周期统计；作业内可用 `WebWorkerContext::worker()` 驱动 timer、`TaskScope` 等 worker-bound core 原语。
+`App::workerFor(uint64_t/string_view)` 按 key 稳定选择 Web worker，`App::workers()` 返回全部 `WebWorkerHandle`。`WebWorkerHandle::post()` 只接受返回 `Task<void>` 的回调，回调收到仅在该作业内有效的 `WebWorkerContext`，可访问目标 worker、PMR resource、shutdown stop token，以及该 worker 自己的 DB/Redis handle。外部 producer 不暴露 core post 逃生口，确保所有已接受 Web 作业都进入 shutdown 所有权、失败传播和完成统计；作业内可用 `WebWorkerContext::worker()` 驱动 timer、`TaskScope` 等 worker-bound core 原语。
 
-`App::setWorkerMailboxCapacity()` 在启动前配置每 worker 有界队列，默认 1024；所有 producer 必须处理 `kQueueFull`。`WebWorkerHandle::stats()` 提供 accepted、queue-full、worker-stopping、completed、failed 和 outstanding 计数，供应用接入指标系统。
+`App::useWorkerState<T>()` 的 factory 在 worker identity 建立后、任何请求或后台作业启动前执行；实例在关闭 continuation 全部排空后、identity 撤销前逆序析构。因此 factory、实例析构和请求期访问看到同一个 `WorkerHandle::isCurrent()` 契约，启动失败也不会留下已投递却不应运行的 server coroutine。
 
-外部线程只捕获拥有权数据，禁止跨线程捕获 `Context&`、`WebWorkerContext&`、`DbHandle`、`RedisHandle` 或连接对象。框架持有已接受作业的协程帧；作业完成后才释放。未捕获异常会关闭全部 App workers，并由 `App::run()` 重抛，禁止应用在单 worker 已失败后继续半死运行。shutdown 先停止接受 Web 作业并请求 stop，再等待已接受作业和活跃连接归零，最后关闭 DB/Redis。
+`App::setWorkerMailboxCapacity()` 在启动前配置每 worker 有界队列，默认 1024；所有 producer 必须处理 `kQueueFull`，并从拒绝结果取回原 Web 作业后决定重试或转储。`WebWorkerHandle::stats()` 提供 accepted、queue-full、worker-stopping、completed、failed 和 outstanding 计数，供应用接入指标系统。
+
+外部线程只捕获拥有权数据，禁止跨线程捕获 `Context&`、`WebWorkerContext&`、`DbHandle`、`RedisHandle` 或连接对象。框架持有已接受作业的协程帧；作业完成后才释放。未捕获异常会关闭全部 App workers，并由 `App::run()` 重抛，禁止应用在单 worker 已失败后继续半死运行。shutdown 先停止接受 Web 作业并请求 stop，随后立即关闭连接、timer 与 DB/Redis 以唤醒挂起 I/O，再排空作业和连接的完成 continuation；不得先等待它们自然归零后才关闭其唤醒源。
 
 ## 3. Mailbox
 
@@ -102,6 +106,9 @@ auto result = target.post(
 - 一批任务由单个 drain handler 排空。
 - 不提供 `drop-oldest`；满时只拒绝新任务。
 - 未捕获异常离开 callable 时，worker 记录失败并进入停止流程。
+- 任意 Asio handler 的首个未捕获异常都会在 worker 身份仍有效时触发停机；
+  已接受但尚未启动的 mailbox 闭包在锁外释放，timer/stop continuation 排空后
+  owner 才传播首异常，不得把清理 handler 留在已经退出的 `io_context` 中。
 
 这把锁只存在于显式跨线程投递边界，不进入普通 route dispatch。
 
@@ -111,7 +118,7 @@ auto result = target.post(
 co_await ruvia::sleepFor(c.worker(), 100ms);
 ```
 
-每个 EventLoop/Web worker 只拥有一个框架 deadline queue 底层 `steady_timer`。`sleepFor`、OneShot timeout、连接扫描和 graceful drain 都向同一个 worker deadline queue 注册，不得各自为框架超时创建 Asio timer。应用通过 `ioContext()` 创建的协议 I/O 不改变该约束；业务超时应优先复用 worker-bound core 原语。deadline queue 维护最小截止时间并统一重设唯一 timer。DB/Redis deadline 和遗留 Web stream timeout 将继续迁入该队列。
+每个 EventLoop/Web worker 只拥有一个框架 deadline queue 底层 `steady_timer`。`sleepFor`、OneShot timeout 和连接扫描都向同一个 worker deadline queue 注册，shutdown 再统一取消该队列以唤醒 waiter；不得各自为框架超时创建 Asio timer。应用通过 `ioContext()` 创建的协议 I/O 不改变该约束；业务超时应优先复用 worker-bound core 原语。deadline queue 维护最小截止时间并统一重设唯一 timer。DB/Redis deadline 和遗留 Web stream timeout 将继续迁入该队列。
 
 调用必须发生在目标 worker；duration 小于等于零立即完成。不会增加通用 `withTimeout`：现有 `Task` 没有统一取消协议，输掉超时竞争的任意 Task 不能被安全销毁。
 
@@ -120,11 +127,16 @@ co_await ruvia::sleepFor(c.worker(), 100ms);
 ```cpp
 auto [sender, receiver] = ruvia::makeChannel<Event>(worker, 256, c.resource());
 
-switch (sender.send(std::move(event))) {
-case ruvia::ChannelSendResult::kSent: break;
-case ruvia::ChannelSendResult::kFull: /* 慢消费者策略 */ break;
-case ruvia::ChannelSendResult::kClosed: break;
-case ruvia::ChannelSendResult::kWorkerStopping: break;
+auto sent = sender.send(std::move(event));
+switch (sent.status()) {
+case ruvia::ChannelSendStatus::kSent: break;
+case ruvia::ChannelSendStatus::kFull: {
+    auto rejected = std::move(sent).takeRejected();
+    // 对未发送的 event 执行重试、合流或落盘策略。
+    break;
+}
+case ruvia::ChannelSendStatus::kClosed: break;
+case ruvia::ChannelSendStatus::kWorkerStopping: break;
 }
 
 auto event = co_await receiver.receive();
@@ -141,6 +153,8 @@ if (const auto* value = event.value()) {
 
 - 控制块和 ring 在创建期一次分配，默认使用进程级 PMR pool，也可传请求/业务 PMR。
 - producer 可来自任意线程；receiver 只能在绑定 worker 使用。
+- `send()` 的非 `kSent` 结果拥有未发送的 payload，可通过
+  `rejected()` 检查或 `takeRejected()` 取回；背压不会隐式丢消息。
 - `send()` 不直接恢复协程，而是由 worker continuation 唤醒。
 - receiver close/析构幂等并唤醒 pending receive。
 - Channel 不做按 key 合流；实时设备状态由 `RealtimeAggregator` 的 latest map + dirty set 完成。
@@ -162,7 +176,7 @@ if (const auto* ack = result.value()) {
 ```
 
 - completion 可从任意线程调用。
-- 重复 completion 不覆盖首个结果，返回 already-completed。
+- 重复 completion 不覆盖首个结果，返回 already-completed，并归还未采用的 payload。
 - wait/waitFor 只能在绑定 worker。
 - timeout、completion、close 由控制块状态机保证单胜者。
 - Channel receive 与 OneShot wait 共用封闭的 `WorkerWaitResult<T>`；只有
@@ -204,22 +218,22 @@ co_await scope.join();
 
 1. mailbox 停止接受新的公开 post/send。
 2. 停止 accept，新连接不再进入。
-3. 活跃 handler 通过内部 continuation 完成 close/join。
-4. 排空已接受 mailbox 工作和连接。
-5. 关闭 DB/Redis、销毁 `io_context` 与 worker memory。
+3. 请求 stop，并立即关闭活跃 socket、timer 与 DB/Redis，显式唤醒挂起 I/O。
+4. 已接受 mailbox 作业、活跃 handler 和 TaskScope 通过内部 continuation 完成或失败。
+5. 所有仍持有 worker 对象的 completion 排空后，才销毁 `io_context` 与 worker memory。
 
-第 4 步同时等待已接受的 `WebWorkerHandle::post()` 作业。作业可观察 `WebWorkerContext::stopToken()` 协作退出；grace period 仍是最终上限。
+第 4 步同时收束已接受的 `WebWorkerHandle::post()` 作业。作业可观察 `WebWorkerContext::stopToken()` 协作退出；框架不等待正常业务自然完成，而是依靠第 3 步关闭其 worker 原生 I/O 来促成有限时间退出。
 
 任意 Task 没有强制取消语义，因此作业必须只等待 worker 原生、关闭时可唤醒的操作，或自行观察 stop token。永久挂在不可取消第三方 callback 上属于应用契约错误，框架不会销毁仍被 callback 引用的协程帧。
 
-内部 continuation 与公开 mailbox 分开：graceful drain 期间公开投递已拒绝，但现有 TaskScope 子任务仍能完成并唤醒 join。
+内部 continuation 与公开 mailbox 分开：立即停机期间公开投递已拒绝，但已启动 Task、TaskScope 子任务和 I/O cancellation completion 仍能完成并唤醒 join。
 
 ## 10. 验证门禁
 
 - EventLoop 线程亲和、稳定分片、round-robin、原生 Asio 对象创建与 owner-thread stop callback。
 - move-only post、队列满、停止后 post、过期句柄。
 - posted callable 异常传播。
-- Web worker 稳定选择、队列满、统计、DB/Redis context 编译面、停止后拒绝、异常触发 App 级联停止，以及 shutdown/grace deadline 排空已接受异步作业。
+- Web worker 稳定选择、队列满、统计、DB/Redis context 编译面、停止后拒绝、异常触发 App 级联停止，以及 shutdown 关闭资源后排空已接受异步作业的 completion。
 - TaskScope 完成、首异常、stop token、join。
 - timer continuation 保持 worker 亲和。
 - Channel send-before-receive、receive-before-send、full、close、跨线程 producer。

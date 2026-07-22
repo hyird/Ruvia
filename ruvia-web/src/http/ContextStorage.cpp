@@ -1,11 +1,12 @@
 #include "ruvia/web/Context.h"
 
-#include "ruvia/web/App.h"
+#include "ruvia/web/Dotenv.h"
 
 namespace ruvia {
 
 const Env& Context::env() const noexcept {
-    return app().env();
+    static const Env empty;
+    return env_ != nullptr ? *env_ : empty;
 }
 
 std::pmr::string& Context::decodedBody() const {

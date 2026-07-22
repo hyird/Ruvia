@@ -44,7 +44,8 @@ template <typename T>
     std::string_view body,
     std::pmr::memory_resource* resource = nullptr) {
     static_assert(JsonBody<T>::value, "fromJson<T> requires a RUVIA_MODEL");
-    return JsonBody<T>::parse(body, detail::pmrResourceOrDefault(resource));
+    return JsonBody<T>::parseOwned(
+        body, detail::pmrResourceOrDefault(resource));
 }
 
 template <typename T, typename Traits, typename Allocator>

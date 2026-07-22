@@ -5,15 +5,23 @@
 
 #include <mysql/mysql.h>
 
+#include <exception>
 #include <memory_resource>
 #include <utility>
 
 namespace ruvia {
 
-detail::MariaDbPool::ConnectionSlot::ConnectionSlot(std::pmr::memory_resource* resource) noexcept
-    : waitSocket(nullptr, SlotSocketDeleter{detail::pmrResourceOrDefault(resource)}) {}
+detail::MariaDbPool::ConnectionSlot::ConnectionSlot(
+    asio::io_context& ioContext,
+    std::pmr::memory_resource* resource)
+    : resolver(ioContext),
+      waitSocket(nullptr, SlotSocketDeleter{detail::pmrResourceOrDefault(resource)}) {}
 
-detail::MariaDbPool::ConnectionSlot::~ConnectionSlot() = default;
+detail::MariaDbPool::ConnectionSlot::~ConnectionSlot() {
+    if (waitActive) {
+        std::terminate();
+    }
+}
 detail::MariaDbPool::ConnectionSlot::ConnectionSlot(ConnectionSlot&&) noexcept = default;
 detail::MariaDbPool::ConnectionSlot& detail::MariaDbPool::ConnectionSlot::operator=(ConnectionSlot&&) noexcept = default;
 
@@ -28,7 +36,7 @@ detail::MariaDbPool::MariaDbPool(asio::io_context& ioContext, DbConfig config, s
         throw std::invalid_argument("MariaDB pool requires the MariaDB driver");
     }
     slots_.reserve(1);
-    slots_.emplace_back(resource_);
+    slots_.emplace_back(ioContext_, resource_);
 }
 
 detail::MariaDbPool::~MariaDbPool() {
@@ -42,9 +50,7 @@ Task<void> detail::MariaDbPool::connect() {
 }
 
 void detail::MariaDbPool::closeNow() noexcept {
-    if (!scheduler_.close()) {
-        return;
-    }
+    (void)scheduler_.close();
     for (auto& slot : slots_) {
         closeSlot(slot);
     }
@@ -60,7 +66,9 @@ void detail::MariaDbPool::scanDeadlines(std::chrono::steady_clock::time_point no
         if (!kind.has_value()) {
             continue;
         }
-        if (*kind == ConnectionSlot::DeadlineKind::kSocket) {
+        if (*kind == ConnectionSlot::DeadlineKind::kResolve) {
+            slot.resolver.cancel();
+        } else if (*kind == ConnectionSlot::DeadlineKind::kSocket) {
             if (slot.waitSocket != nullptr) {
                 slot.waitSocket->cancel();
             }
@@ -82,6 +90,27 @@ bool detail::MariaDbPool::hasAnyTimeout() const noexcept {
 }
 
 void detail::MariaDbPool::closeSlot(ConnectionSlot& slot) noexcept {
+    slot.closeRequested = true;
+    slot.resolver.cancel();
+    if (slot.waitActive) {
+        const auto* activeKind = slot.deadline.kind();
+        if (activeKind != nullptr &&
+            *activeKind == ConnectionSlot::DeadlineKind::kSleep) {
+            auto handle = std::exchange(slot.deadlineContinuation, {});
+            if (handle) {
+                handle.resume();
+            }
+        } else if (slot.waitSocket != nullptr) {
+            // Keep the wrapper and native driver connection alive until every
+            // queued wait completion has run. The resumed coroutine observes
+            // closeRequested before calling a MariaDB *_cont function.
+            if (!slot.waitSocket->release()) {
+                std::terminate();
+            }
+        }
+        return;
+    }
+
     const auto* kind = slot.deadline.kind();
     if (kind != nullptr &&
         *kind == ConnectionSlot::DeadlineKind::kSocket &&
@@ -97,7 +126,9 @@ void detail::MariaDbPool::closeSlot(ConnectionSlot& slot) noexcept {
     clearSlotDeadline(slot);
     // Detach the fd from ASIO before mysql_close() closes it.
     if (slot.waitSocket != nullptr) {
-        slot.waitSocket->release();
+        if (!slot.waitSocket->release()) {
+            std::terminate();
+        }
         slot.waitSocket.reset();
     }
     if (slot.connection != nullptr) {
@@ -105,6 +136,7 @@ void detail::MariaDbPool::closeSlot(ConnectionSlot& slot) noexcept {
         slot.connection = nullptr;
     }
     slot.connected = false;
+    slot.closeRequested = false;
 }
 
 void detail::MariaDbPool::setSlotDeadline(
