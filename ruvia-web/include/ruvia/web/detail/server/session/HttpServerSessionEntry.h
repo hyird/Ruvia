@@ -13,6 +13,7 @@
 #include "ruvia/web/detail/server/tls/HttpServerAlpn.h"
 #include "ruvia/web/detail/http2/Http2SansIoSession.h"
 #include "ruvia/web/detail/http2/CleartextUpgrade.h"
+#include "ruvia/web/detail/server/session/HttpServerStreamSession.h"
 #include "ruvia/web/detail/server/HttpServer.h"
 #include "ruvia/web/detail/server/tls/HttpServerTlsHandshake.h"
 
@@ -22,7 +23,9 @@
 
 namespace ruvia::detail {
 
-Task<void> HttpServer::handleSession(AcceptedConnectionLease connection) {
+// Defined inline: this is a header, and a header may be included by more than
+// one translation unit. The member templates below need no such marking.
+inline Task<void> HttpServer::handleSession(AcceptedConnectionLease connection) {
     auto& socket = connection.socket();
     try {
         std::pmr::string remoteAddress(memory_.allocator<char>());

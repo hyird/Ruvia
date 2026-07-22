@@ -1,4 +1,5 @@
 #include "ruvia/web/detail/server/HttpServer.h"
+#include "ruvia/web/detail/server/session/HttpServerSessionEntry.h"
 
 #include "ruvia/core/detail/io/AsioAwait.h"
 #include "ruvia/core/detail/io/SocketUtils.h"
