@@ -2,7 +2,7 @@
 
 #include "ruvia/web/db/DbTypes.h"
 #include "ruvia/core/memory/PmrResource.h"
-#include "ruvia/web/detail/util/BorrowedView.h"
+#include "ruvia/http/detail/util/BorrowedView.h"
 
 #include <chrono>
 #include <memory_resource>
@@ -23,10 +23,10 @@ public:
         std::string_view sql) noexcept
         : id_(id), sql_(sql) {}
 
-    template <detail::RvalueCharBasicString String>
+    template <detail::HttpTemporaryOwningCharString String>
     DbMigration(String&&, std::string_view) = delete;
 
-    template <detail::RvalueCharBasicString String>
+    template <detail::HttpTemporaryOwningCharString String>
     DbMigration(std::string_view, String&&) = delete;
 
     [[nodiscard]] constexpr std::string_view id() const noexcept {

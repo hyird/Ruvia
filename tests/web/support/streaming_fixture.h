@@ -28,7 +28,7 @@
 #include "ruvia/core/Task.h"
 #include "ruvia/web/Streaming.h"
 
-namespace {
+namespace streaming_test {
 
 template <typename Text>
 concept AcceptsSseData = requires(Text&& text) {
@@ -141,19 +141,19 @@ struct ColdFrameProbe final {
     }
 };
 
-ruvia::Task<void> coldFrameTask(ColdFrameProbe) { co_return; }
+inline ruvia::Task<void> coldFrameTask(ColdFrameProbe) { co_return; }
 
 struct CaptureStreamSink final {
     std::vector<std::string> writes;
     std::vector<std::string> trailers;
 };
 
-ruvia::Task<void> writeChunk(void* target, std::string_view chunk) {
+inline ruvia::Task<void> writeChunk(void* target, std::string_view chunk) {
     static_cast<CaptureStreamSink*>(target)->writes.emplace_back(chunk);
     co_return;
 }
 
-ruvia::Task<void> endStream(
+inline ruvia::Task<void> endStream(
     void* target,
     std::span<const ruvia::HttpHeaderView> trailers) {
     auto& captured = static_cast<CaptureStreamSink*>(target)->trailers;
@@ -164,26 +164,26 @@ ruvia::Task<void> endStream(
     co_return;
 }
 
-ruvia::Task<void> sleepStream(void*, std::chrono::milliseconds) {
+inline ruvia::Task<void> sleepStream(void*, std::chrono::milliseconds) {
     co_return;
 }
 
-void bindContext(void*, ruvia::Context*, ruvia::HttpResponse (*)(ruvia::Context&)) noexcept {}
-void releaseContext(void*) noexcept {}
+inline void bindContext(void*, ruvia::Context*, ruvia::HttpResponse (*)(ruvia::Context&)) noexcept {}
+inline void releaseContext(void*) noexcept {}
 
-bool committed(void*) noexcept {
+inline bool committed(void*) noexcept {
     return false;
 }
 
-bool aborted(void*) noexcept {
+inline bool aborted(void*) noexcept {
     return false;
 }
 
-ruvia::HttpResponse unusedStreamingHead(ruvia::Context&) {
+inline ruvia::HttpResponse unusedStreamingHead(ruvia::Context&) {
     return ruvia::HttpResponse(std::pmr::get_default_resource());
 }
 
-ruvia::ResponseStreamWriter makeWriter(CaptureStreamSink& sink) noexcept {
+inline ruvia::ResponseStreamWriter makeWriter(CaptureStreamSink& sink) noexcept {
     return ruvia::detail::StreamingAccess::makeResponseStreamWriter(
         &sink,
         &writeChunk,
@@ -195,24 +195,24 @@ ruvia::ResponseStreamWriter makeWriter(CaptureStreamSink& sink) noexcept {
         &aborted);
 }
 
-ruvia::Task<void> writeLines(ruvia::ResponseStreamWriter& writer) {
+inline ruvia::Task<void> writeLines(ruvia::ResponseStreamWriter& writer) {
     co_await writer.writeln("first");
     co_await writer.writeln("second");
 }
 
-ruvia::Task<void> writeStoredLines(ruvia::ResponseStreamWriter& writer) {
+inline ruvia::Task<void> writeStoredLines(ruvia::ResponseStreamWriter& writer) {
     auto first = writer.writeln(std::string("stored-first"));
     auto second = writer.writeln(std::string("stored-second"));
     co_await std::move(first);
     co_await std::move(second);
 }
 
-ruvia::ScopedOperation<void> makeExpiredWrite(CaptureStreamSink& sink) {
+inline ruvia::ScopedOperation<void> makeExpiredWrite(CaptureStreamSink& sink) {
     auto writer = makeWriter(sink);
     return writer.write(std::string("must-not-run"));
 }
 
-ruvia::Task<void> awaitExpiredWrite(
+inline ruvia::Task<void> awaitExpiredWrite(
     ruvia::ScopedOperation<void>& operation,
     bool& rejected) {
     try {
@@ -226,11 +226,11 @@ struct CaptureWebSocket final {
     std::vector<std::string> writes;
 };
 
-ruvia::Task<std::optional<ruvia::WebSocketMessage>> readSocket(void*) {
+inline ruvia::Task<std::optional<ruvia::WebSocketMessage>> readSocket(void*) {
     co_return std::nullopt;
 }
 
-ruvia::Task<void> writeSocket(
+inline ruvia::Task<void> writeSocket(
     void* target,
     ruvia::WebSocketOpcode,
     std::string_view payload) {
@@ -238,18 +238,18 @@ ruvia::Task<void> writeSocket(
     co_return;
 }
 
-ruvia::Task<void> closeSocket(void*, std::uint16_t, std::string_view) {
+inline ruvia::Task<void> closeSocket(void*, std::uint16_t, std::string_view) {
     co_return;
 }
 
-ruvia::ScopedOperation<void> makeExpiredWebSocketWrite(
+inline ruvia::ScopedOperation<void> makeExpiredWebSocketWrite(
     CaptureWebSocket& capture) {
     auto socket = ruvia::detail::WebSocketAccess::make(
         &capture, &readSocket, &writeSocket, &closeSocket);
     return socket.text(std::string("expired-payload"));
 }
 
-ruvia::Task<void> writeStoredTemporaryWebSocketPayload(
+inline ruvia::Task<void> writeStoredTemporaryWebSocketPayload(
     ruvia::WebSocket& socket) {
     auto operation = socket.text(std::string("owned-payload"));
     co_await std::move(operation);
@@ -261,12 +261,12 @@ struct ImmediateBodySource final {
     }
 };
 
-ruvia::ScopedOperation<std::optional<std::string_view>> makeExpiredBodyRead() {
+inline ruvia::ScopedOperation<std::optional<std::string_view>> makeExpiredBodyRead() {
     ruvia::detail::BodyReaderBinding<ImmediateBodySource> binding;
     return binding.facade().read();
 }
 
-ruvia::Task<void> awaitExpiredBodyRead(
+inline ruvia::Task<void> awaitExpiredBodyRead(
     ruvia::ScopedOperation<std::optional<std::string_view>>& operation,
     bool& rejected) {
     try {
@@ -276,14 +276,14 @@ ruvia::Task<void> awaitExpiredBodyRead(
     }
 }
 
-ruvia::Task<void> endWithTrailers(ruvia::ResponseStreamWriter& writer) {
+inline ruvia::Task<void> endWithTrailers(ruvia::ResponseStreamWriter& writer) {
     const std::array<ruvia::HttpHeaderView, 2> trailers{
         ruvia::HttpHeaderView{"Digest", "sha-256=value"},
         ruvia::HttpHeaderView{"Server-Timing", "db;dur=7"}};
     co_await writer.end(trailers);
 }
 
-ruvia::Task<void> endWithExpiredTrailerSources(
+inline ruvia::Task<void> endWithExpiredTrailerSources(
     ruvia::ResponseStreamWriter& writer) {
     auto operation = [&] {
         std::string name = "X-Owned-Trailer";
@@ -350,7 +350,7 @@ struct SuspendedStreamSink final {
     bool failNextWrite{false};
 };
 
-ruvia::Task<void> writeSuspendedStream(
+inline ruvia::Task<void> writeSuspendedStream(
     void* target,
     std::string_view chunk) {
     auto& sink = *static_cast<SuspendedStreamSink*>(target);
@@ -363,14 +363,14 @@ ruvia::Task<void> writeSuspendedStream(
     }
 }
 
-ruvia::Task<void> endSuspendedStream(
+inline ruvia::Task<void> endSuspendedStream(
     void* target,
     std::span<const ruvia::HttpHeaderView>) {
     ++static_cast<SuspendedStreamSink*>(target)->ends;
     co_return;
 }
 
-ruvia::ResponseStreamWriter makeSuspendedWriter(
+inline ruvia::ResponseStreamWriter makeSuspendedWriter(
     SuspendedStreamSink& sink) noexcept {
     return ruvia::detail::StreamingAccess::makeResponseStreamWriter(
         &sink,
@@ -383,14 +383,14 @@ ruvia::ResponseStreamWriter makeSuspendedWriter(
         &aborted);
 }
 
-ruvia::Task<void> completeBodyRead(
+inline ruvia::Task<void> completeBodyRead(
     ruvia::BodyReader& reader,
     bool& completed) {
     (void)co_await reader.read();
     completed = true;
 }
 
-ruvia::Task<void> rejectConcurrentBodyRead(
+inline ruvia::Task<void> rejectConcurrentBodyRead(
     ruvia::BodyReader& reader,
     bool& rejected) {
     try {
@@ -400,7 +400,7 @@ ruvia::Task<void> rejectConcurrentBodyRead(
     }
 }
 
-ruvia::Task<void> completeStreamWrite(
+inline ruvia::Task<void> completeStreamWrite(
     ruvia::ResponseStreamWriter& writer,
     std::string_view chunk,
     bool& completed) {
@@ -408,7 +408,7 @@ ruvia::Task<void> completeStreamWrite(
     completed = true;
 }
 
-ruvia::Task<void> rejectConcurrentStreamWrite(
+inline ruvia::Task<void> rejectConcurrentStreamWrite(
     ruvia::ResponseStreamWriter& writer,
     bool& rejected) {
     try {
@@ -418,7 +418,7 @@ ruvia::Task<void> rejectConcurrentStreamWrite(
     }
 }
 
-ruvia::Task<void> rejectConcurrentStreamEnd(
+inline ruvia::Task<void> rejectConcurrentStreamEnd(
     ruvia::ResponseStreamWriter& writer,
     bool& rejected) {
     try {
@@ -428,7 +428,7 @@ ruvia::Task<void> rejectConcurrentStreamEnd(
     }
 }
 
-ruvia::Task<void> observeStreamWriteFailure(
+inline ruvia::Task<void> observeStreamWriteFailure(
     ruvia::ResponseStreamWriter& writer,
     bool& failed) {
     try {
@@ -438,12 +438,14 @@ ruvia::Task<void> observeStreamWriteFailure(
     }
 }
 
-}  // namespace
+}  // namespace streaming_test
 
-namespace {
+namespace streaming_test {
 
-ruvia::Task<void> writeOneSse(ruvia::SseWriter& sse, ruvia::SseMessage message) {
+inline ruvia::Task<void> writeOneSse(ruvia::SseWriter& sse, ruvia::SseMessage message) {
     co_await sse.write(message);
 }
 
-}  // namespace
+}  // namespace streaming_test
+
+using namespace streaming_test;  // NOLINT(google-build-using-namespace)

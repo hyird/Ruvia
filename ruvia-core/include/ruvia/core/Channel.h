@@ -175,34 +175,7 @@ struct ChannelReceiveAwaiter final {
     }
 
     bool await_suspend(std::coroutine_handle<> handle) {
-        std::lock_guard lock(state->mutex);
-        if (!completion.suspend(handle)) {
-            return false;
-        }
-        if (timeout) {
-            try {
-                WorkerHandleAccess::scheduleTimer(
-                    state->worker, timer,
-                    workerTimerDeadlineAfter(*timeout),
-                    [this](WorkerTimerOutcome outcome) {
-                        if (outcome == WorkerTimerOutcome::kExpired) {
-                            std::lock_guard stateLock(state->mutex);
-                            if (state->waiter == this) {
-                                state->waiter = nullptr;
-                                (void)completion.complete(
-                                    WorkerWaitResultAccess::timedOut<T>());
-                            }
-                        }
-                        completion.continuation().resume();
-                    });
-            } catch (...) {
-                if (state->waiter == this) {
-                    state->waiter = nullptr;
-                }
-                throw;
-            }
-        }
-        return true;
+        return suspendWorkerWait(*state, this, completion, timer, timeout, handle);
     }
 
     [[nodiscard]] WorkerWaitResult<T> await_resume() {

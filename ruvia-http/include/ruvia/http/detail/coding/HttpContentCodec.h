@@ -22,11 +22,18 @@ using ContentDecodeAttempt =
 
 // Append decoder output while enforcing the ceiling; false means the ceiling
 // would be exceeded and the decode must fail.
-[[nodiscard]] bool appendDecodedBytes(
+[[nodiscard]] inline bool appendDecodedBytes(
     std::pmr::string& output,
     const char* bytes,
     std::size_t size,
-    std::size_t maxDecodedBytes);
+    std::size_t maxDecodedBytes) {
+    if (output.size() > maxDecodedBytes ||
+        size > maxDecodedBytes - output.size()) {
+        return false;
+    }
+    output.append(bytes, size);
+    return true;
+}
 
 [[nodiscard]] ContentDecodeAttempt decodeGzipContent(
     std::string_view input, std::size_t maxDecodedBytes,

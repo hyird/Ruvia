@@ -6,6 +6,7 @@
 #include <cstdint>
 #include <memory_resource>
 #include <span>
+#include <stdexcept>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -66,6 +67,12 @@ inline void appendDbNumber(std::pmr::string& output, double value) {
         output.push_back(cloneDbValueForResource(value, resolved));
     }
     return output;
+}
+
+// Every pool operation dispatches on the configured backend; reaching the end
+// means the build has no driver for it.
+[[noreturn]] inline void throwUnavailableDbBackend() {
+    throw std::logic_error("database backend is not available");
 }
 
 }  // namespace ruvia::detail

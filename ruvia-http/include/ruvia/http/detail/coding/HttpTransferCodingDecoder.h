@@ -1,5 +1,7 @@
 #pragma once
 
+#include "ruvia/http/detail/coding/ZlibPmrAllocation.h"
+
 #include "ruvia/http/detail/coding/HttpTransferCoding.h"
 #include "ruvia/http/HttpProtocolError.h"
 #include "ruvia/http/detail/request/HttpRequestBodyFailure.h"
@@ -225,10 +227,6 @@ private:
         std::size_t consumed,
         TransferCodingDecodeError error) noexcept;
 
-    struct alignas(std::max_align_t) ZlibAllocationHeader {
-        std::pmr::memory_resource* resource;
-        std::size_t bytes;
-    };
 
     static voidpf zallocThunk(voidpf opaque, uInt items, uInt size) noexcept;
     static void zfreeThunk(voidpf opaque, voidpf address) noexcept;

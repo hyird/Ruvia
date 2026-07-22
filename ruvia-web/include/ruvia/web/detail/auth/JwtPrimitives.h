@@ -8,7 +8,7 @@
 #include <string_view>
 
 #include "ruvia/core/memory/PmrResource.h"
-#include "ruvia/web/detail/util/BorrowedView.h"
+#include "ruvia/http/detail/util/BorrowedView.h"
 
 namespace ruvia::detail {
 
@@ -82,7 +82,7 @@ struct JwtTokenParts final {
 
 [[nodiscard]] JwtTokenParts jwtSplitToken(std::string_view token);
 
-template <RvalueCharBasicString Token>
+template <HttpTemporaryOwningCharString Token>
 JwtTokenParts jwtSplitToken(Token&&) = delete;
 
 }  // namespace ruvia::detail

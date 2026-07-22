@@ -5,7 +5,7 @@
 #include <string_view>
 
 #include "ruvia/web/RequestFields.h"
-#include "ruvia/web/detail/util/BorrowedView.h"
+#include "ruvia/http/detail/util/BorrowedView.h"
 
 namespace ruvia::detail {
 
@@ -16,10 +16,10 @@ struct RequestNameValueViewAccess final {
         return RequestNameValueView(name, value);
     }
 
-    template <RvalueCharBasicString Name>
+    template <HttpTemporaryOwningCharString Name>
     static RequestNameValueView make(Name&&, std::string_view) = delete;
 
-    template <RvalueCharBasicString Value>
+    template <HttpTemporaryOwningCharString Value>
     static RequestNameValueView make(std::string_view, Value&&) = delete;
 };
 

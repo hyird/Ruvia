@@ -26,7 +26,7 @@
 #include "ruvia/http/HttpRequest.h"
 #include "ruvia/web/Model.h"
 
-namespace {
+namespace field_parsing_test {
 
 using ruvia::detail::HttpContentCoding;
 using ruvia::detail::HttpChunkScanComplete;
@@ -186,29 +186,8 @@ static_assert(std::same_as<
 static_assert(!ExposesAnyRvalueGeneratedMessageMember<AccessorSurfaceRequest>);
 static_assert(!ExposesAnyRvalueGeneratedMessageMember<AccessorSurfaceResponse>);
 
-std::optional<std::string> zstdRoundTrip(std::string_view plain, std::size_t truncateBy) {
-    const std::size_t bound = ZSTD_compressBound(plain.size());
-    std::string compressed(bound, '\0');
-    const std::size_t written = ZSTD_compress(
-        compressed.data(), compressed.size(), plain.data(), plain.size(), 3);
-    if (ZSTD_isError(written) != 0 || written <= truncateBy) {
-        return std::nullopt;
-    }
-    compressed.resize(written - truncateBy);
 
-    const auto result = ruvia::detail::decodeHttpContent(
-        HttpContentCoding::kZstd,
-        compressed,
-        ruvia::kDefaultMaxBufferedBodyBytes,
-        std::pmr::get_default_resource());
-    const auto* decoded = result.decoded();
-    if (decoded == nullptr) {
-        return std::nullopt;
-    }
-    return std::string(decoded->bytes());
-}
-
-}  // namespace
+}  // namespace field_parsing_test
 
 // --- Semicolon parameters: quoted-string awareness -----------------------
 
@@ -219,3 +198,5 @@ std::optional<std::string> zstdRoundTrip(std::string_view plain, std::size_t tru
 // --- Accept quality parsing shares the quote-aware parameter scanner ------
 
 // --- Chunk extension quoted-pair follows RFC quoted-string grammar -------
+
+using namespace field_parsing_test;  // NOLINT(google-build-using-namespace)
