@@ -1,5 +1,6 @@
 #pragma once
 
+#include "ruvia/web/detail/server/route/Http1RouteDispatch.h"
 #include "ruvia/web/detail/body/HttpLazyBufferedBody.h"
 #include "ruvia/web/detail/body/HttpRequestBodyFacade.h"
 #include "ruvia/core/detail/io/ConnectionScanner.h"
@@ -60,21 +61,16 @@ struct HttpLazyBufferedBodyRouteState final {
 template <typename Stream>
 inline void prepareHttpLazyBufferedBodyRoute(
     HttpLazyBufferedBodyRouteState<Stream>& state,
-    Stream& stream,
-    WorkerMemory& memory,
-    RequestMemory& requestMemory,
-    std::string_view bodyAndPipeline,
-    const Http1ServerRequestParseState& parsed,
-    const HttpServerOptions& options,
-    ConnectionScanner::Entry& scannerEntry) {
+    Http1RouteDispatch<Stream> d,
+    std::string_view bodyAndPipeline) {
     state.emplace(
-        stream,
-        memory.allocator<char>(),
-        requestMemory.resource(),
+        d.stream,
+        d.memory.template allocator<char>(),
+        d.requestMemory.resource(),
         bodyAndPipeline,
-        parsed.bodyPlan,
-        ProtocolByteLimit::limited(options.maxBufferedBodyBytes),
-        scannerEntry);
+        d.parsed.bodyPlan,
+        ProtocolByteLimit::limited(d.options.maxBufferedBodyBytes),
+        d.scannerEntry);
 }
 
 [[nodiscard]] inline std::string_view httpBodyAndPipeline(
