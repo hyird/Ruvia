@@ -4,9 +4,10 @@
 #include <string_view>
 #include <vector>
 
-#include "ruvia/web/detail/http/ContextInternal.h"
-#include "ruvia/http/detail/HeaderAcceptUtils.h"
-#include "ruvia/http/detail/HttpRequestInternal.h"
+#include "ruvia/web/detail/http/ContextAccess.h"
+#include "ruvia/http/detail/field/HttpAcceptMediaType.h"
+#include "ruvia/http/detail/field/HttpQualityValue.h"
+#include "ruvia/http/detail/request/HttpRequestAccess.h"
 #include "ruvia/web/Context.h"
 #include "ruvia/core/memory/MemoryPool.h"
 

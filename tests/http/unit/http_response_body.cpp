@@ -1,10 +1,10 @@
 #include "test_harness.h"
 
 #include "ruvia/http/HttpResponse.h"
-#include "ruvia/http/detail/HttpResponseBody.h"
-#include "ruvia/http/detail/HttpResponseBodyAccess.h"
-#include "ruvia/http/detail/HttpResponseFileAccess.h"
-#include "ruvia/http/detail/HttpResponseFileBody.h"
+#include "ruvia/http/detail/response/HttpResponseBody.h"
+#include "ruvia/http/detail/response/HttpResponseBodyAccess.h"
+#include "ruvia/http/detail/response/HttpResponseFileAccess.h"
+#include "ruvia/http/detail/response/HttpResponseFileBody.h"
 
 #include <cstddef>
 #include <cstdint>

@@ -12,7 +12,7 @@
 
 #include "ruvia/core/Task.h"
 #include "ruvia/web/Context.h"
-#include "ruvia/web/detail/BorrowedView.h"
+#include "ruvia/web/detail/util/BorrowedView.h"
 #include "ruvia/web/Middleware.h"
 #include "ruvia/web/Next.h"
 

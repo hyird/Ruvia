@@ -22,7 +22,7 @@
 #include "ruvia/web/ScopedOperation.h"
 #include "ruvia/web/RequestFields.h"
 #include "ruvia/web/Streaming.h"
-#include "ruvia/web/detail/ValidatedValues.h"
+#include "ruvia/web/detail/model/ValidatedValues.h"
 
 namespace ruvia {
 
@@ -58,6 +58,7 @@ bindValidatedModel(Context&, T&&) = delete;
 [[noreturn]] void throwInvalidJsonBody();
 [[noreturn]] void throwInvalidFormContentType();
 [[noreturn]] void throwInvalidFormBody();
+[[noreturn]] void throwTooManyFormFields();
 [[noreturn]] void throwInvalidQuery();
 [[noreturn]] void throwInvalidParam();
 [[noreturn]] void throwInvalidHeader();

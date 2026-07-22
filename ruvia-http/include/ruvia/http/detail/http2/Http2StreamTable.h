@@ -10,7 +10,7 @@
 
 #include "ruvia/http/detail/http2/Http2LocalSettings.h"
 #include "ruvia/http/detail/http2/Http2StreamState.h"
-#include "ruvia/http/detail/HttpPmrObject.h"
+#include "ruvia/http/detail/util/HttpPmrObject.h"
 
 namespace ruvia::detail {
 

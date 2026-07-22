@@ -1,5 +1,5 @@
-#include <ruvia/core/detail/AsioAwait.h>
-#include <ruvia/core/detail/PoolLeaseScheduler.h>
+#include <ruvia/core/detail/io/AsioAwait.h>
+#include <ruvia/core/detail/pool/PoolLeaseScheduler.h>
 
 #include <asio/co_spawn.hpp>
 #include <asio/detached.hpp>

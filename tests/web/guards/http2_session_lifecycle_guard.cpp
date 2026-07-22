@@ -1,4 +1,4 @@
-#include <ruvia/web/detail/server/Http2SansIoSessionLifecycle.h>
+#include <ruvia/web/detail/http2/Http2SansIoSessionLifecycle.h>
 
 namespace {
 

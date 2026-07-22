@@ -4,8 +4,8 @@
 #include <bit>
 #include <span>
 
-#include "ruvia/http/detail/HttpBase64.h"
-#include "ruvia/http/detail/HeaderTokenUtils.h"
+#include "ruvia/http/detail/util/HttpBase64.h"
+#include "ruvia/http/detail/field/HeaderTokenUtils.h"
 
 namespace ruvia::detail {
 namespace {

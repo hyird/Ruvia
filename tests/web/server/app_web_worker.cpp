@@ -8,7 +8,7 @@
 
 #include "ruvia/web/App.h"
 #include "ruvia/web/Controller.h"
-#include "ruvia/core/detail/WorkerSelection.h"
+#include "ruvia/core/detail/worker/WorkerSelection.h"
 
 namespace {
 

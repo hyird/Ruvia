@@ -17,7 +17,7 @@
 #include "ruvia/http/detail/websocket/HttpWebSocketHandshakeValidation.h"
 #include "ruvia/http/detail/websocket/HttpWebSocketServerHandshake.h"
 #include "ruvia/http/HttpRequest.h"
-#include "ruvia/core/detail/AsioAwait.h"
+#include "ruvia/core/detail/io/AsioAwait.h"
 #include "ruvia/web/detail/websocket/HttpWebSocketHandshake.h"
 
 namespace {

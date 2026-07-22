@@ -6,7 +6,7 @@
 #include <type_traits>
 #include <utility>
 
-#include "ruvia/web/detail/server/Http2BufferedResponseWrite.h"
+#include "ruvia/web/detail/http2/Http2BufferedResponseWrite.h"
 
 namespace {
 

@@ -6,7 +6,7 @@
 
 #include <cstdio>
 
-#include "ruvia/edge/detail/EdgeFreshness.h"
+#include "ruvia/edge/detail/cache/Freshness.h"
 #include "ruvia/http/HttpCache.h"
 #include "ruvia/http/HttpStatus.h"
 

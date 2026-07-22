@@ -1,6 +1,6 @@
 #include <ruvia/core/Task.h>
-#include <ruvia/core/detail/WorkerDispatcher.h>
-#include <ruvia/core/detail/WorkerSignal.h>
+#include <ruvia/core/detail/worker/WorkerDispatcher.h>
+#include <ruvia/core/detail/worker/WorkerSignal.h>
 
 #include <asio/io_context.hpp>
 #include <asio/post.hpp>

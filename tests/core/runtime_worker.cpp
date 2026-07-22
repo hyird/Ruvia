@@ -1,9 +1,9 @@
 #include <ruvia/core/EventLoopPool.h>
-#include <ruvia/core/detail/AsioAwait.h>
+#include <ruvia/core/detail/io/AsioAwait.h>
 #include <ruvia/core/detail/RuntimeLifecycle.h>
-#include <ruvia/core/detail/WorkerDispatcher.h>
-#include <ruvia/core/detail/WorkerSelection.h>
-#include <ruvia/core/detail/WorkerSignal.h>
+#include <ruvia/core/detail/worker/WorkerDispatcher.h>
+#include <ruvia/core/detail/worker/WorkerSelection.h>
+#include <ruvia/core/detail/worker/WorkerSignal.h>
 
 #include <asio/co_spawn.hpp>
 #include <asio/detached.hpp>

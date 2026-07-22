@@ -1,12 +1,12 @@
 #include "ruvia/web/detail/server/HttpResponseCompression.h"
 
 #include "ruvia/http/HttpCache.h"
-#include "ruvia/http/detail/HttpResponseBodyAccess.h"
-#include "ruvia/http/detail/HttpResponseHeaderAccess.h"
-#include "ruvia/http/detail/HeaderTokenUtils.h"
-#include "ruvia/http/detail/HttpContentCoding.h"
-#include "ruvia/http/detail/ResponseHeaderUtils.h"
-#include "ruvia/http/detail/AsciiCase.h"
+#include "ruvia/http/detail/response/HttpResponseBodyAccess.h"
+#include "ruvia/http/detail/response/HttpResponseHeaderAccess.h"
+#include "ruvia/http/detail/field/HeaderTokenUtils.h"
+#include "ruvia/http/detail/coding/HttpContentCoding.h"
+#include "ruvia/http/detail/response/ResponseHeaderUtils.h"
+#include "ruvia/http/detail/util/AsciiCase.h"
 
 #include <cstddef>
 #include <cstdint>

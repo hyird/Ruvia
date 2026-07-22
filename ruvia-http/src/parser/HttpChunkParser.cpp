@@ -1,6 +1,6 @@
 #include "ruvia/http/detail/parser/HttpChunkParser.h"
 
-#include "ruvia/http/detail/HeaderTokenUtils.h"
+#include "ruvia/http/detail/field/HeaderTokenUtils.h"
 #include "ruvia/http/detail/parser/HttpParserSyntax.h"
 #include "ruvia/http/HttpLimits.h"
 

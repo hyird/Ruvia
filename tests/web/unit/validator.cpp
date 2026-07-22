@@ -10,7 +10,7 @@
 
 #include "ruvia/web/Error.h"
 #include "ruvia/web/Validation.h"
-#include "ruvia/web/detail/ValidatedValues.h"
+#include "ruvia/web/detail/model/ValidatedValues.h"
 
 namespace {
 

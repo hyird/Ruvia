@@ -26,15 +26,15 @@
 #include <string>
 #include <string_view>
 
-#include "ruvia/core/detail/AsioAwait.h"
-#include "ruvia/core/detail/WorkerDispatcher.h"
+#include "ruvia/core/detail/io/AsioAwait.h"
+#include "ruvia/core/detail/worker/WorkerDispatcher.h"
 #include "ruvia/core/memory/MemoryPool.h"
 #include "ruvia/http/detail/http2/Http2FrameCodec.h"
 #include "ruvia/http/detail/http2/Http2FrameTypes.h"
 #include "ruvia/http/detail/http2/Http2Hpack.h"
 #include "ruvia/web/StaticFiles.h"
 #include "ruvia/web/detail/router/RouteTable.h"
-#include "ruvia/web/detail/server/Http2SansIoSession.h"
+#include "ruvia/web/detail/http2/Http2SansIoSession.h"
 
 namespace {
 

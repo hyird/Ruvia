@@ -4,7 +4,7 @@
 #include "ruvia/web/detail/json/JsonLimits.h"
 #include "ruvia/web/detail/json/JsonNumber.h"
 #include "ruvia/web/detail/json/JsonString.h"
-#include "ruvia/web/detail/BorrowedView.h"
+#include "ruvia/web/detail/util/BorrowedView.h"
 
 #include <cstddef>
 #include <string_view>

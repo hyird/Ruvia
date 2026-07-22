@@ -10,7 +10,7 @@
 #include <optional>
 #include <string>
 
-#include "ruvia/edge/detail/DiskCache.h"
+#include "ruvia/edge/detail/cache/DiskCache.h"
 #include "ruvia/http/HttpStatus.h"
 
 namespace {

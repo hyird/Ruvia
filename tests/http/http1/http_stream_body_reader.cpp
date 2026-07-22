@@ -17,8 +17,8 @@
 #include <asio.hpp>
 #include <zlib.h>
 
-#include "ruvia/core/detail/AsioAwait.h"
-#include "ruvia/core/detail/ConnectionScanner.h"
+#include "ruvia/core/detail/io/AsioAwait.h"
+#include "ruvia/core/detail/io/ConnectionScanner.h"
 #include "ruvia/http/ProtocolByteLimit.h"
 #include "ruvia/http/HttpProtocolError.h"
 #include "ruvia/http/detail/http1/Http1ServerRequestParser.h"

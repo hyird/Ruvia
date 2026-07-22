@@ -3,7 +3,7 @@
 #include <cstdint>
 #include <type_traits>
 
-#include "ruvia/http/detail/HttpResponseHeaderBits.h"
+#include "ruvia/http/detail/response/HttpResponseHeaderBits.h"
 #include "ruvia/http/HttpStatus.h"
 
 namespace ruvia::detail {

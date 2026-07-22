@@ -5,9 +5,9 @@
 #include <stdexcept>
 #include <string_view>
 
-#include "ruvia/http/detail/HeaderTokenUtils.h"
-#include "ruvia/http/detail/HttpConnectionFields.h"
-#include "ruvia/http/detail/HttpExpectations.h"
+#include "ruvia/http/detail/field/HeaderTokenUtils.h"
+#include "ruvia/http/detail/field/HttpConnectionFields.h"
+#include "ruvia/http/detail/field/HttpExpectations.h"
 
 namespace {
 

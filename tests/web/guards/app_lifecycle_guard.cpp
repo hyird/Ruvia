@@ -2,7 +2,7 @@
 #include <thread>
 
 #include <ruvia/web/detail/app/AppLifecycle.h>
-#include <ruvia/web/detail/app/AppInternal.h>
+#include <ruvia/web/detail/app/AppState.h>
 
 namespace {
 

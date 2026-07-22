@@ -1,6 +1,6 @@
 #include "ruvia/http/detail/server/HttpDateCache.h"
 
-#include "ruvia/http/detail/HttpImfFixdate.h"
+#include "ruvia/http/detail/field/HttpImfFixdate.h"
 
 #include <array>
 #include <ctime>

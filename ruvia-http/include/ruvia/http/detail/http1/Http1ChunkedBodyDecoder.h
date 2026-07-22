@@ -10,8 +10,8 @@
 
 #include "ruvia/http/HttpLimits.h"
 #include "ruvia/http/HttpProtocolError.h"
-#include "ruvia/http/detail/BorrowedView.h"
-#include "ruvia/http/detail/HttpRequestBodyFailure.h"
+#include "ruvia/http/detail/util/BorrowedView.h"
+#include "ruvia/http/detail/request/HttpRequestBodyFailure.h"
 #include "ruvia/http/ProtocolByteLimit.h"
 #include "ruvia/http/detail/parser/HttpChunkParser.h"
 

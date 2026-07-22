@@ -12,7 +12,7 @@
 #include <zlib.h>
 
 #include "ruvia/http/ProtocolByteLimit.h"
-#include "ruvia/http/detail/HeaderTokenUtils.h"
+#include "ruvia/http/detail/field/HeaderTokenUtils.h"
 #include "ruvia/http/detail/websocket/HttpWebSocketHandshakeFields.h"
 #include "ruvia/http/HttpRequest.h"
 

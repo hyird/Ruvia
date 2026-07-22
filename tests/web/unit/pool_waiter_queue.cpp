@@ -8,7 +8,7 @@
 #include <exception>
 #include <utility>
 
-#include "ruvia/core/detail/PoolWaiterQueue.h"
+#include "ruvia/core/detail/pool/PoolWaiterQueue.h"
 
 namespace {
 

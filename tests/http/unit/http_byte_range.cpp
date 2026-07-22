@@ -6,7 +6,7 @@
 #include <type_traits>
 #include <utility>
 
-#include "ruvia/http/detail/HttpByteRange.h"
+#include "ruvia/http/detail/field/HttpByteRange.h"
 
 namespace {
 

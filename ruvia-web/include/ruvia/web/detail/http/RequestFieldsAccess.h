@@ -5,7 +5,7 @@
 #include <string_view>
 
 #include "ruvia/web/RequestFields.h"
-#include "ruvia/web/detail/BorrowedView.h"
+#include "ruvia/web/detail/util/BorrowedView.h"
 
 namespace ruvia::detail {
 

@@ -24,20 +24,20 @@
 #include <utility>
 #include <vector>
 
-#include "ruvia/core/detail/AsioAwait.h"
+#include "ruvia/core/detail/io/AsioAwait.h"
 #include "ruvia/core/memory/MemoryPool.h"
 #include "ruvia/http/HttpResponse.h"
-#include "ruvia/http/detail/HttpResponseBodyAccess.h"
-#include "ruvia/http/detail/HttpResponseFileAccess.h"
+#include "ruvia/http/detail/response/HttpResponseBodyAccess.h"
+#include "ruvia/http/detail/response/HttpResponseFileAccess.h"
 #include "ruvia/http/detail/http1/Http1ResponseHeadPlan.h"
 #include "ruvia/http/detail/http1/Http1ServerConnectionPlan.h"
 #include "ruvia/http/detail/server/HttpResponseHead.h"
 #include "ruvia/http/detail/server/HttpResponseHeadBuffer.h"
 #include "ruvia/http/detail/server/HttpResponseWritePlan.h"
-#include "ruvia/web/detail/server/Http1BufferedResponseWrite.h"
-#include "ruvia/web/detail/server/HttpFileFallback.h"
-#include "ruvia/web/detail/server/HttpFileWrite.h"
-#include "ruvia/web/detail/server/HttpNativeFile.h"
+#include "ruvia/web/detail/server/http1/Http1BufferedResponseWrite.h"
+#include "ruvia/web/detail/server/file/HttpFileFallback.h"
+#include "ruvia/web/detail/server/file/HttpFileWrite.h"
+#include "ruvia/web/detail/server/file/HttpNativeFile.h"
 #include "ruvia/web/detail/server/HttpResponseWriter.h"
 
 namespace {

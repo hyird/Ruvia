@@ -6,7 +6,7 @@
 #include "ruvia/web/detail/server/RequestBodyLimit.h"
 #include "ruvia/http/detail/http1/Http1ServerRequestParser.h"
 #include "ruvia/http/detail/http1/Http1ServerSemantics.h"
-#include "ruvia/http/detail/HttpRequestBodyFailure.h"
+#include "ruvia/http/detail/request/HttpRequestBodyFailure.h"
 
 namespace ruvia::detail {
 

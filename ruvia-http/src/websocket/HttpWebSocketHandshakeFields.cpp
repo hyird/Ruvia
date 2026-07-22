@@ -1,6 +1,6 @@
 #include "ruvia/http/detail/websocket/HttpWebSocketHandshakeFields.h"
 
-#include "ruvia/http/detail/PmrResource.h"
+#include "ruvia/http/detail/util/PmrResource.h"
 #include "ruvia/http/detail/websocket/HttpWebSocketPermessageDeflate.h"
 #include "ruvia/http/detail/websocket/WebSocketServerNegotiation.h"
 
@@ -8,7 +8,7 @@
 #include <array>
 #include <span>
 
-#include "ruvia/http/detail/HeaderTokenUtils.h"
+#include "ruvia/http/detail/field/HeaderTokenUtils.h"
 #include "ruvia/http/detail/parser/HttpParserSyntax.h"
 #include "ruvia/http/HttpRequest.h"
 

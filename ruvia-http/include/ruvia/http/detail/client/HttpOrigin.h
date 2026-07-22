@@ -8,7 +8,7 @@
 #include <system_error>
 
 #include "ruvia/http/HttpClient.h"
-#include "ruvia/http/detail/PmrResource.h"
+#include "ruvia/http/detail/util/PmrResource.h"
 
 namespace ruvia::detail {
 

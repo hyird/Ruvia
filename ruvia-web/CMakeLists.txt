@@ -17,21 +17,29 @@ set(RUVIA_WEB_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/src/app/DotenvParser.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/app/DotenvPaths.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/app/App.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/app/AppListenerOptions.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/app/WebWorker.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/app/AppConfig.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/app/AppHttpConfig.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/app/AppIntegrationConfig.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/app/Testing.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/integration/DataAccess.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/integration/DataAccessState.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/integration/DataAccessDefinitions.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/ruvia.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/http/Error.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/http/ContextErrorResponse.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/http/ContextFileResponse.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/http/FileConditionalRequest.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/http/StaticFileVariant.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/http/ContextData.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/http/ContextRequest.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/http/ContextRequestFacade.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/http/ContextRequestForm.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/http/ContextRequestFormParse.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/http/ContextResponse.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/http/ContextRedirect.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/http/ContextCookies.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/http/ContextSessionState.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/http/ContextStorage.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/http/Csrf.cpp
@@ -41,15 +49,16 @@ set(RUVIA_WEB_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/src/http/MultipartReader.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/http/RateLimit.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/http/Streaming.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/CookieSignature.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/StaticFiles.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/auth/CookieSignature.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/http/StaticRoot.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/http/StaticFileTypes.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/http/HttpCors.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/server/HttpResponseCompression.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/server/Http2BufferedResponseWrite.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/server/Http2SansIoSendWindow.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/http2/Http2BufferedResponseWrite.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/http2/Http2SansIoSendWindow.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/http/SecurityHeaders.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/http/Session.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/server/HttpFileWrite.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/server/file/HttpFileWrite.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/server/HttpConnectionState.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/server/HttpServerAccept.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/server/HttpServer.cpp
@@ -58,6 +67,8 @@ set(RUVIA_WEB_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/src/router/RouterBuild.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/router/Router.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/router/RouterDispatch.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/router/RouterStreamDispatch.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/router/RouterErrorDispatch.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/router/RouterDynamicIndexBuild.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/router/RouterDynamicIndex.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/router/RouterIndex.cpp
@@ -69,6 +80,9 @@ set(RUVIA_WEB_SOURCES
 if(RUVIA_ENABLE_MARIADB OR RUVIA_ENABLE_POSTGRESQL)
     list(APPEND RUVIA_WEB_SOURCES
         ${CMAKE_CURRENT_SOURCE_DIR}/src/db/DbHandle.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/db/DbStreamResult.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/db/DbTransaction.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/db/DbPreparedStatement.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/src/db/DbHostResolution.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/src/db/DbMigration.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/src/db/DbRegistry.cpp
@@ -188,7 +202,7 @@ if(RUVIA_ENABLE_MARIADB OR RUVIA_ENABLE_POSTGRESQL)
     ruvia_install_public_headers(web
         include/ruvia/web/detail/db/DbBackend.h
         include/ruvia/web/detail/db/DbConfigValidation.h
-        include/ruvia/web/detail/db/DbInternal.h
+        include/ruvia/web/detail/db/DbRegistry.h
         include/ruvia/web/detail/db/DbMigrationValidation.h
         include/ruvia/web/detail/db/DbOperationState.h
         include/ruvia/web/detail/db/DbResultAccess.h

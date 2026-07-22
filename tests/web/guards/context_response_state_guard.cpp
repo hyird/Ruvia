@@ -1,4 +1,4 @@
-#include "ruvia/web/detail/http/ContextInternal.h"
+#include "ruvia/web/detail/http/ContextAccess.h"
 #include "ruvia/http/detail/http1/Http1ServerRequestParser.h"
 
 #include "ruvia/core/memory/MemoryPool.h"

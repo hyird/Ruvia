@@ -2,10 +2,10 @@
 
 #include "ruvia/http/HttpKnownMethod.h"
 #include "ruvia/http/HttpProtocolVersion.h"
-#include "ruvia/http/detail/HttpConnectionFields.h"
+#include "ruvia/http/detail/field/HttpConnectionFields.h"
 #include "ruvia/http/detail/http1/Http1ResponseHeadPlan.h"
 #include "ruvia/http/detail/http1/Http1ServerRequestParser.h"
-#include "ruvia/http/detail/HttpResponseHeaderState.h"
+#include "ruvia/http/detail/response/HttpResponseHeaderState.h"
 #include "ruvia/http/detail/http1/Http1ServerConnectionPlan.h"
 #include "ruvia/http/detail/server/HttpFinalResponseControlPlan.h"
 #include "ruvia/http/detail/server/HttpResponseStreamHead.h"

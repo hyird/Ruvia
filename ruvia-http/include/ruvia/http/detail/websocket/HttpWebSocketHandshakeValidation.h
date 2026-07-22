@@ -6,7 +6,7 @@
 #include "ruvia/http/HttpProtocolError.h"
 #include "ruvia/http/HttpRequest.h"
 #include "ruvia/http/HttpResponse.h"
-#include "ruvia/http/detail/HttpResponseHeaderState.h"
+#include "ruvia/http/detail/response/HttpResponseHeaderState.h"
 
 namespace ruvia::detail {
 

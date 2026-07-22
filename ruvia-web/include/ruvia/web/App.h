@@ -17,7 +17,7 @@
 #include "ruvia/core/memory/MemoryPool.h"
 #include "ruvia/web/WebWorker.h"
 #include "ruvia/web/detail/middleware/MiddlewareRegistration.h"
-#include "ruvia/web/detail/WorkerState.h"
+#include "ruvia/web/detail/integration/WorkerState.h"
 
 #ifdef RUVIA_ENABLE_DATABASE
 #include "ruvia/web/db/Db.h"

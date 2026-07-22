@@ -9,7 +9,7 @@
 #include <variant>
 
 #include "ruvia/http/detail/http1/Http1RequestBodyPlan.h"
-#include "ruvia/http/detail/BorrowedView.h"
+#include "ruvia/http/detail/util/BorrowedView.h"
 #include "ruvia/http/HttpParseError.h"
 #include "ruvia/http/HttpRequest.h"
 

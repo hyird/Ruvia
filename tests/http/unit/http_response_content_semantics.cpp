@@ -2,7 +2,7 @@
 
 #include <type_traits>
 
-#include "ruvia/http/detail/HttpResponseContentSemantics.h"
+#include "ruvia/http/detail/coding/HttpResponseContentSemantics.h"
 
 namespace {
 

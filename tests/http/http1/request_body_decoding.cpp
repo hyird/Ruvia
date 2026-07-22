@@ -23,19 +23,19 @@
 #include <zlib.h>
 #include <zstd.h>
 
-#include "ruvia/core/detail/AsioAwait.h"
+#include "ruvia/core/detail/io/AsioAwait.h"
 #include "ruvia/core/memory/MemoryPool.h"
 #include "ruvia/http/ProtocolByteLimit.h"
-#include "ruvia/http/detail/HttpRequestInternal.h"
-#include "ruvia/http/detail/RequestBodyDecoding.h"
-#include "ruvia/http/detail/HttpRequestBodyFailure.h"
+#include "ruvia/http/detail/request/HttpRequestAccess.h"
+#include "ruvia/http/detail/request/RequestBodyDecoding.h"
+#include "ruvia/http/detail/request/HttpRequestBodyFailure.h"
 #include "ruvia/http/detail/http1/Http1ChunkedBodyDecoder.h"
 #include "ruvia/http/detail/http1/Http1ServerRequestParser.h"
-#include "ruvia/http/detail/body/HttpTransferCodingDecoder.h"
+#include "ruvia/http/detail/coding/HttpTransferCodingDecoder.h"
 #include "ruvia/http/detail/http1/Http1RequestBodyPlan.h"
 #include "ruvia/web/Context.h"
 #include "ruvia/web/Error.h"
-#include "ruvia/web/detail/http/ContextInternal.h"
+#include "ruvia/web/detail/http/ContextAccess.h"
 #include "ruvia/web/detail/http/ContextServices.h"
 
 namespace {

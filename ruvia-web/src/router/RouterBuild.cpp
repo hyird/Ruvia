@@ -1,4 +1,4 @@
-#include "ruvia/web/detail/router/RouterInternal.h"
+#include "ruvia/web/detail/router/RouterImpl.h"
 
 #include <memory>
 #include <stdexcept>

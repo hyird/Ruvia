@@ -8,7 +8,7 @@
 #include <string_view>
 
 #include "ruvia/core/memory/PmrResource.h"
-#include "ruvia/http/detail/Hex.h"
+#include "ruvia/http/detail/util/Hex.h"
 #include "ruvia/web/detail/json/JsonLex.h"
 
 namespace ruvia::detail {

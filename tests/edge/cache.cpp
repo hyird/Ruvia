@@ -6,7 +6,7 @@
 #include <cstdio>
 #include <string>
 
-#include "ruvia/edge/detail/EdgeCache.h"
+#include "ruvia/edge/detail/cache/EdgeCache.h"
 #include "ruvia/http/HttpStatus.h"
 
 namespace {

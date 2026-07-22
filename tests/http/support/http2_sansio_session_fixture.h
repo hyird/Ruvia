@@ -3,9 +3,9 @@
 #include <string_view>
 #include <memory>
 
-#include "ruvia/core/detail/WorkerDispatcher.h"
+#include "ruvia/core/detail/worker/WorkerDispatcher.h"
 #include "ruvia/web/detail/http/ContextServices.h"
-#include "ruvia/web/detail/server/Http2SansIoSession.h"
+#include "ruvia/web/detail/http2/Http2SansIoSession.h"
 
 namespace ruvia::test {
 

@@ -4,7 +4,7 @@
 #include <string_view>
 #include <utility>
 
-#include "ruvia/http/detail/BorrowedView.h"
+#include "ruvia/http/detail/util/BorrowedView.h"
 
 namespace ruvia {
 
