@@ -1,4 +1,4 @@
-#include "ruvia/web/detail/CookieSignature.h"
+#include "ruvia/web/detail/auth/CookieSignature.h"
 
 #include "ruvia/core/detail/Base64.h"
 #include "ruvia/core/detail/ConstantTime.h"

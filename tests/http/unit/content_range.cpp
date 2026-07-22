@@ -30,7 +30,7 @@
 #include "ruvia/http/HttpResponse.h"
 #include "ruvia/web/StaticFiles.h"
 #include "ruvia/web/detail/StaticFileMetadata.h"
-#include "ruvia/web/detail/StaticFilesInternal.h"
+#include "ruvia/web/detail/http/StaticRootIndex.h"
 #include "ruvia/web/detail/server/HttpFileOpen.h"
 #include "ruvia/core/memory/MemoryPool.h"
 

@@ -8,7 +8,7 @@
 #include "ruvia/http/detail/HttpConditionalRequest.h"
 #include "ruvia/http/detail/HttpDate.h"
 #include "ruvia/web/detail/StaticFileMetadata.h"
-#include "ruvia/web/detail/StaticFilesInternal.h"
+#include "ruvia/web/detail/http/StaticRootIndex.h"
 #include "ruvia/web/detail/http/FileConditionalRequest.h"
 #include "ruvia/web/detail/http/StaticFileVariant.h"
 #include "ruvia/web/detail/server/HttpNativeFile.h"

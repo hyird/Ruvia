@@ -8,7 +8,7 @@
 #include "ruvia/http/detail/HttpResponseHeaderAccess.h"
 #include "ruvia/http/detail/HttpResponseHeaderState.h"
 #include "ruvia/http/detail/SetCookiePlan.h"
-#include "ruvia/web/detail/CookieSignature.h"
+#include "ruvia/web/detail/auth/CookieSignature.h"
 
 // Setting response cookies, including the two rules that make a cookie's name on
 // the wire differ from the name the application used: a __Host-/__Secure- prefix

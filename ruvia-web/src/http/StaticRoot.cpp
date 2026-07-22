@@ -1,16 +1,9 @@
-#include "ruvia/web/detail/StaticFilesInternal.h"
-
-#include "ruvia/http/detail/HttpDate.h"
-#include "ruvia/web/detail/StaticFileMetadata.h"
-#include "ruvia/web/detail/server/HttpNativeFile.h"
-#include "ruvia/core/memory/PmrObject.h"
-#include "ruvia/core/memory/ProcessResource.h"
+#include "ruvia/web/detail/http/StaticRootIndex.h"
 
 #include <algorithm>
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
-#include <iterator>
 #include <memory>
 #include <memory_resource>
 #include <stdexcept>
@@ -18,16 +11,22 @@
 #include <system_error>
 #include <utility>
 
+#include "ruvia/core/memory/PmrObject.h"
+#include "ruvia/core/memory/ProcessResource.h"
+#include "ruvia/http/detail/HttpDate.h"
+#include "ruvia/web/detail/StaticFileMetadata.h"
+#include "ruvia/web/detail/http/StaticFileTypes.h"
+#include "ruvia/web/detail/server/HttpNativeFile.h"
+
+// A document root indexed once at construction: the directory is walked, every
+// servable file recorded with the metadata a response needs, and lookups after
+// that touch only the index -- a request never stats the filesystem.
+
 namespace ruvia {
 namespace {
 
+// Above this many indexed entries a lookup binary-searches instead of scanning.
 inline constexpr std::size_t kStaticRootLinearLookupLimit = 8;
-
-inline constexpr std::string_view kDefaultStaticFileTypes[] = {
-    "apng", "avif", "bmp", "css", "cur", "eot", "gif", "htm", "html", "ico",
-    "jpeg", "jpg", "js", "json", "map", "mjs", "otf", "png", "svg", "ttf",
-    "txt", "wasm", "webmanifest", "webp", "woff", "woff2", "xml", "xsl",
-};
 
 [[nodiscard]] bool validHeaderValue(std::string_view value) noexcept {
     return std::ranges::none_of(value, [](char c) noexcept {
@@ -53,37 +52,6 @@ void validateOptions(const StaticRootOptions& options) {
     }
 }
 
-void normalizeMimeTypes(std::pmr::vector<StaticMimeType>& mimeTypes) {
-    for (auto& mime : mimeTypes) {
-        if (!mime.extension.starts_with('.')) {
-            mime.extension.insert(mime.extension.begin(), '.');
-        }
-        for (auto& c : mime.extension) {
-            if (c >= 'A' && c <= 'Z') {
-                c = static_cast<char>(c + ('a' - 'A'));
-            }
-        }
-    }
-    std::ranges::sort(mimeTypes, [](const StaticMimeType& left, const StaticMimeType& right) {
-        return left.extension < right.extension;
-    });
-}
-
-void normalizeFileTypes(std::pmr::vector<std::pmr::string>& fileTypes) {
-    for (auto& fileType : fileTypes) {
-        if (fileType.starts_with('.')) {
-            fileType.erase(fileType.begin());
-        }
-        for (auto& c : fileType) {
-            if (c >= 'A' && c <= 'Z') {
-                c = static_cast<char>(c + ('a' - 'A'));
-            }
-        }
-    }
-    std::ranges::sort(fileTypes);
-    fileTypes.erase(std::ranges::unique(fileTypes).begin(), fileTypes.end());
-}
-
 // A relative path (generic '/'-separated form) whose first component or any
 // component after a '/' begins with '.' is hidden. Serving these by default
 // leaks .env, .git/config, .htpasswd and similar secrets that happen to sit
@@ -91,65 +59,6 @@ void normalizeFileTypes(std::pmr::vector<std::pmr::string>& fileTypes) {
 [[nodiscard]] bool hasHiddenPathSegment(std::string_view relativeGeneric) noexcept {
     return relativeGeneric.starts_with('.') ||
         relativeGeneric.find("/.") != std::string_view::npos;
-}
-
-bool fileTypeAllowed(
-    std::string_view extension,
-    const StaticRootOptions& options) {
-    if (options.fileTypes.kind() == StaticFileTypePolicy::Kind::kAll) {
-        return true;
-    }
-
-    if (extension.empty() || extension == ".") {
-        return false;
-    }
-    const auto value = extension.substr(1);
-    if (options.fileTypes.kind() == StaticFileTypePolicy::Kind::kDefaults) {
-        return std::ranges::binary_search(kDefaultStaticFileTypes, value);
-    }
-    const auto extensions = options.fileTypes.extensions();
-    return std::ranges::binary_search(extensions, value);
-}
-
-[[nodiscard]] const StaticMimeType* findStaticMimeType(
-    const std::pmr::vector<StaticMimeType>& mimeTypes,
-    std::string_view extension) noexcept {
-    if (mimeTypes.size() <= kStaticRootLinearLookupLimit) {
-        for (const auto& mime : mimeTypes) {
-            if (mime.extension == extension) {
-                return &mime;
-            }
-        }
-        return nullptr;
-    }
-
-    const auto iter = std::ranges::lower_bound(
-        mimeTypes,
-        extension,
-        std::ranges::less{},
-        [](const StaticMimeType& mime) noexcept {
-            return std::string_view(mime.extension);
-        });
-    if (iter == mimeTypes.end() || std::string_view(iter->extension) != extension) {
-        return nullptr;
-    }
-    return &*iter;
-}
-
-std::pmr::string contentTypeFor(
-    const std::filesystem::path& path,
-    std::string_view extension,
-    const StaticRootOptions& options,
-    std::pmr::memory_resource* resource) {
-    if (const auto* const mime = findStaticMimeType(options.mimeTypes, extension); mime != nullptr) {
-        return std::pmr::string(mime->contentType, resource);
-    }
-
-    const auto guessed = detail::guessStaticFileContentType(path);
-    if (guessed != std::string_view("application/octet-stream") || options.defaultContentType.empty()) {
-        return std::pmr::string(guessed, resource);
-    }
-    return std::pmr::string(options.defaultContentType, resource);
 }
 
 [[nodiscard]] detail::StaticRootState* makeStaticRootState() {
@@ -210,34 +119,6 @@ std::pmr::string contentTypeFor(
 
 }  // namespace
 
-StaticFileTypePolicy StaticFileTypePolicy::defaults() {
-    return StaticFileTypePolicy(Kind::kDefaults);
-}
-
-StaticFileTypePolicy StaticFileTypePolicy::all() {
-    return StaticFileTypePolicy(Kind::kAll);
-}
-
-StaticFileTypePolicy StaticFileTypePolicy::only(
-    std::span<const std::string_view> extensions) {
-    if (extensions.empty()) {
-        throw std::invalid_argument("static file type allow-list must not be empty");
-    }
-    StaticFileTypePolicy result(Kind::kOnly);
-    result.extensions_.reserve(extensions.size());
-    for (const auto extension : extensions) {
-        if (extension.empty() || extension.find('/') != std::string_view::npos || extension.find('\\') != std::string_view::npos) {
-            throw std::invalid_argument("invalid static file type");
-        }
-        result.extensions_.emplace_back(extension);
-    }
-    normalizeFileTypes(result.extensions_);
-    if (result.extensions_.front().empty()) {
-        throw std::invalid_argument("invalid static file type");
-    }
-    return result;
-}
-
 std::string_view detail::StaticRootAccess::indexFile(const StaticRoot& root) noexcept {
     return root.state_->indexFile;
 }
@@ -291,7 +172,7 @@ bool detail::StaticRootAccess::isIndexedDirectory(
 
 StaticRoot::StaticRoot(const std::filesystem::path& root, StaticRootOptions options)
     : state_(makeStaticRootState()) {
-    normalizeMimeTypes(options.mimeTypes);
+    detail::normalizeMimeTypes(options.mimeTypes);
     validateOptions(options);
 
     std::error_code ec;
@@ -346,10 +227,10 @@ StaticRoot::StaticRoot(const std::filesystem::path& root, StaticRootOptions opti
             continue;
         }
         const auto extension = detail::lowerStaticFileExtension(filePath, upstream);
-        const bool directlyServable = fileTypeAllowed(extension, options);
+        const bool directlyServable = detail::fileTypeAllowed(extension, options);
         bool usableAsSidecar = false;
         if (!directlyServable && isPrecompressedSidecarExtension(extension)) {
-            usableAsSidecar = fileTypeAllowed(
+            usableAsSidecar = detail::fileTypeAllowed(
                 detail::lowerStaticFileExtension(filePath.stem(), upstream), options);
         }
         if (!directlyServable && !usableAsSidecar) {
@@ -365,7 +246,7 @@ StaticRoot::StaticRoot(const std::filesystem::path& root, StaticRootOptions opti
         detail::StaticRootEntry entry(upstream);
         entry.relativePath = std::move(relative);
         detail::assignNativePath(entry.filePath, filePath);
-        entry.contentType = contentTypeFor(filePath, extension, options, upstream);
+        entry.contentType = detail::contentTypeFor(filePath, extension, options, upstream);
         entry.size = snapshot.size;
         entry.identity = snapshot.identity;
         entry.modifiedToken = snapshot.modifiedToken;

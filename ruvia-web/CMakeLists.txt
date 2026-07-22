@@ -49,8 +49,9 @@ set(RUVIA_WEB_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/src/http/MultipartReader.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/http/RateLimit.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/http/Streaming.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/CookieSignature.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/StaticFiles.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/auth/CookieSignature.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/http/StaticRoot.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/http/StaticFileTypes.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/http/HttpCors.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/server/HttpResponseCompression.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/server/Http2BufferedResponseWrite.cpp

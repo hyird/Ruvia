@@ -1,7 +1,7 @@
 #include "ruvia/web/Context.h"
 #include "ruvia/web/detail/http/UnsupportedRequestContentCoding.h"
 
-#include "ruvia/web/detail/CookieSignature.h"
+#include "ruvia/web/detail/auth/CookieSignature.h"
 #include "ruvia/web/ModelJson.h"
 #include "ruvia/web/ModelObject.h"
 #include "ruvia/http/detail/HeaderTokenUtils.h"
