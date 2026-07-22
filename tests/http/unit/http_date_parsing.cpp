@@ -23,32 +23,7 @@ std::string_view guess(const char* name) {
 
 }  // namespace
 
-RUVIA_TEST(content_type_guessing) {
-    RUVIA_CHECK_EQ(guess("index.html"), std::string_view("text/html; charset=utf-8"));
-    RUVIA_CHECK_EQ(guess("page.htm"), std::string_view("text/html; charset=utf-8"));
-    RUVIA_CHECK_EQ(guess("style.css"), std::string_view("text/css; charset=utf-8"));
-    RUVIA_CHECK_EQ(guess("app.js"), std::string_view("text/javascript; charset=utf-8"));
-    RUVIA_CHECK_EQ(guess("mod.mjs"), std::string_view("text/javascript; charset=utf-8"));
-    RUVIA_CHECK_EQ(guess("data.json"), std::string_view("application/json; charset=utf-8"));
-    RUVIA_CHECK_EQ(guess("photo.png"), std::string_view("image/png"));
-    RUVIA_CHECK_EQ(guess("photo.jpeg"), std::string_view("image/jpeg"));
-    // ".jpg" is a distinct token in the same branch as ".jpeg" and is the far more
-    // common spelling -- pin it so a regression can't silently serve it as a
-    // download (octet-stream) instead of an image.
-    RUVIA_CHECK_EQ(guess("photo.jpg"), std::string_view("image/jpeg"));
-    RUVIA_CHECK_EQ(guess("anim.gif"), std::string_view("image/gif"));
-    RUVIA_CHECK_EQ(guess("notes.txt"), std::string_view("text/plain; charset=utf-8"));
-    RUVIA_CHECK_EQ(guess("server.log"), std::string_view("text/plain; charset=utf-8"));
-    RUVIA_CHECK_EQ(guess("icon.svg"), std::string_view("image/svg+xml"));
-    RUVIA_CHECK_EQ(guess("mod.wasm"), std::string_view("application/wasm"));
-    // The extension match is case-insensitive end to end, so an uppercase extension
-    // maps just like its lowercase form (not to the octet-stream fallback).
-    RUVIA_CHECK_EQ(guess("PHOTO.PNG"), std::string_view("image/png"));
-    RUVIA_CHECK_EQ(guess("PAGE.HTML"), std::string_view("text/html; charset=utf-8"));
-    // Unknown extension and no extension fall back to a non-executable octet-stream.
-    RUVIA_CHECK_EQ(guess("archive.xyz"), std::string_view("application/octet-stream"));
-    RUVIA_CHECK_EQ(guess("noext"), std::string_view("application/octet-stream"));
-}
+// Reading an HTTP date: IMF-fixdate and the two obsolete formats a recipient must still accept.
 
 RUVIA_TEST(http_month_index_lookup) {
     using ruvia::detail::httpMonthIndex;
@@ -134,39 +109,4 @@ RUVIA_TEST(http_parse_http_date_accepts_all_three_formats) {
     RUVIA_CHECK(!httpParseHttpDate("Sunday, 06-Nov-94 08:49:37 UTC").has_value());  // not GMT (RFC 850)
     RUVIA_CHECK(!httpParseHttpDate("Sun Xxx  6 08:49:37 1994").has_value());        // bad month (asctime)
     RUVIA_CHECK(!httpParseHttpDate("garbage").has_value());
-}
-
-RUVIA_TEST(http_trim_weak_etag_prefix) {
-    using ruvia::detail::httpTrimWeakEtagPrefix;
-    RUVIA_CHECK_EQ(httpTrimWeakEtagPrefix("W/\"abc\""), std::string_view("\"abc\""));
-    RUVIA_CHECK_EQ(httpTrimWeakEtagPrefix("\"abc\""), std::string_view("\"abc\""));  // strong etag unchanged
-    RUVIA_CHECK_EQ(httpTrimWeakEtagPrefix("W/"), std::string_view(""));
-    RUVIA_CHECK_EQ(httpTrimWeakEtagPrefix("W"), std::string_view("W"));  // needs both prefix chars
-}
-
-RUVIA_TEST(http_extension_equals_is_case_insensitive) {
-    using ruvia::detail::staticFileExtensionEquals;
-    RUVIA_CHECK(staticFileExtensionEquals(std::string_view("html"), "html"));
-    RUVIA_CHECK(staticFileExtensionEquals(std::string_view("HTML"), "html"));
-    RUVIA_CHECK(staticFileExtensionEquals(std::string_view("Json"), "json"));
-    RUVIA_CHECK(staticFileExtensionEquals(std::string_view(""), ""));
-    RUVIA_CHECK(!staticFileExtensionEquals(std::string_view("htm"), "html"));
-    RUVIA_CHECK(!staticFileExtensionEquals(std::string_view("jpeg"), "json"));
-}
-
-RUVIA_TEST(http_append_unsigned_decimal) {
-    using ruvia::detail::appendStaticFileUnsigned;
-    std::pmr::string output(std::pmr::get_default_resource());
-    appendStaticFileUnsigned(output, 0);
-    RUVIA_CHECK_EQ(std::string_view(output), std::string_view("0"));
-    output.clear();
-    appendStaticFileUnsigned(output, 12345);
-    RUVIA_CHECK_EQ(std::string_view(output), std::string_view("12345"));
-    // Appends onto existing content rather than replacing it.
-    appendStaticFileUnsigned(output, 67);
-    RUVIA_CHECK_EQ(std::string_view(output), std::string_view("1234567"));
-    // The 64-bit maximum.
-    output.clear();
-    appendStaticFileUnsigned(output, (std::numeric_limits<std::uint64_t>::max)());
-    RUVIA_CHECK_EQ(std::string_view(output), std::string_view("18446744073709551615"));
 }

@@ -51,6 +51,7 @@ add_executable(ruvia_unit_tests
     http/http1/http1_interim_response.cpp
     http/http1/http1_parser.cpp
     http/http1/chunk_framing.cpp
+    http/http1/chunk_trailers.cpp
     http/http1/multipart_quoting.cpp
     http/http1/http_stream_body_reader.cpp
     http/http1/multipart.cpp
@@ -121,8 +122,12 @@ add_executable(ruvia_unit_tests
     http/unit/final_response_control.cpp
     http/unit/header_block_parser.cpp
     http/unit/header_classification.cpp
-    http/unit/header_params.cpp
+    http/unit/semicolon_parameters.cpp
+    http/unit/connection_fields.cpp
+    http/unit/expectations.cpp
     http/unit/header_tokens.cpp
+    http/unit/http_date_parsing.cpp
+    http/unit/field_value_primitives.cpp
     http/unit/http_field_syntax.cpp
     http/unit/http_method.cpp
     http/unit/http_byte_range.cpp
@@ -138,7 +143,7 @@ add_executable(ruvia_unit_tests
     http/unit/http_response.cpp
     http/unit/http_response_body.cpp
     http/unit/http_response_content_semantics.cpp
-    http/unit/parser_validation.cpp
+    http/unit/parse_error_status.cpp
     http/unit/request_access.cpp
     http/unit/response_compression.cpp
     http/unit/response_head_buffer.cpp
@@ -180,7 +185,7 @@ add_executable(ruvia_unit_tests
     web/unit/dotenv_parser.cpp
     web/unit/email_like.cpp
     web/unit/encoding.cpp
-    web/unit/file_response_helpers.cpp
+    web/unit/static_file_metadata.cpp
     web/unit/health.cpp
     web/unit/http_server_request_state.cpp
     web/unit/http_server_worker_completion.cpp
