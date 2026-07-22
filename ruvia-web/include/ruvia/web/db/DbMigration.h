@@ -2,7 +2,7 @@
 
 #include "ruvia/web/db/DbTypes.h"
 #include "ruvia/core/memory/PmrResource.h"
-#include "ruvia/web/detail/BorrowedView.h"
+#include "ruvia/web/detail/util/BorrowedView.h"
 
 #include <chrono>
 #include <memory_resource>

@@ -6,7 +6,7 @@
 #include <utility>
 #include <variant>
 
-#include "ruvia/core/detail/WorkerTimer.h"
+#include "ruvia/core/detail/worker/WorkerTimer.h"
 
 namespace ruvia::detail {
 

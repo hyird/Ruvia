@@ -20,9 +20,9 @@
 #include "ruvia/web/Streaming.h"
 
 #include "ruvia/web/detail/body/HttpRequestBodyFacade.h"
-#include "ruvia/core/detail/AsioAwait.h"
-#include "ruvia/core/detail/WorkerSignal.h"
-#include "ruvia/core/detail/WorkerDispatcher.h"
+#include "ruvia/core/detail/io/AsioAwait.h"
+#include "ruvia/core/detail/worker/WorkerSignal.h"
+#include "ruvia/core/detail/worker/WorkerDispatcher.h"
 
 namespace {
 

@@ -1,7 +1,7 @@
 #include "ruvia/web/detail/auth/JwtPrimitives.h"
 
 #include "ruvia/http/detail/util/HttpNumberFormat.h"
-#include "ruvia/web/detail/DecimalNumber.h"
+#include "ruvia/web/detail/util/DecimalNumber.h"
 #include "ruvia/web/detail/json/JsonObjectFields.h"
 #include "ruvia/web/detail/json/JsonString.h"
 

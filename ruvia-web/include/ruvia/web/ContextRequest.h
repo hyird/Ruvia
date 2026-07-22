@@ -22,7 +22,7 @@
 #include "ruvia/web/ScopedOperation.h"
 #include "ruvia/web/RequestFields.h"
 #include "ruvia/web/Streaming.h"
-#include "ruvia/web/detail/ValidatedValues.h"
+#include "ruvia/web/detail/model/ValidatedValues.h"
 
 namespace ruvia {
 

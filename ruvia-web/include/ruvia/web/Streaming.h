@@ -4,7 +4,7 @@
 #include "ruvia/http/HttpHeader.h"
 #include "ruvia/http/Sse.h"
 #include "ruvia/web/ScopedOperation.h"
-#include "ruvia/web/detail/CallableRef.h"
+#include "ruvia/web/detail/util/CallableRef.h"
 
 #include <chrono>
 #include <memory_resource>

@@ -7,7 +7,7 @@
 #include <asio/ip/tcp.hpp>
 
 #include <ruvia/core/WorkerHandle.h>
-#include <ruvia/core/detail/WorkerTimer.h>
+#include <ruvia/core/detail/worker/WorkerTimer.h>
 
 namespace ruvia::detail {
 

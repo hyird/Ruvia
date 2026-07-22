@@ -7,7 +7,7 @@
 #include "ruvia/web/Context.h"
 #include "ruvia/web/Next.h"
 #include "ruvia/web/WebSocket.h"
-#include "ruvia/web/detail/CallableRef.h"
+#include "ruvia/web/detail/util/CallableRef.h"
 #include "ruvia/http/detail/server/HttpResponseStreamHead.h"
 #include "ruvia/web/detail/router/RouteModes.h"
 #include "ruvia/web/detail/router/RouteStreamState.h"

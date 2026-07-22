@@ -4,7 +4,7 @@
 #include "ruvia/web/detail/db/DbUtils.h"
 #include "ruvia/web/db/Db.h"
 
-#include "ruvia/core/detail/AsioAwait.h"
+#include "ruvia/core/detail/io/AsioAwait.h"
 
 #include <asio/bind_executor.hpp>
 

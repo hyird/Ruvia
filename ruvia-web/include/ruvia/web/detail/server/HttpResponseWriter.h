@@ -14,7 +14,7 @@
 #include "ruvia/http/detail/server/HttpResponseHeadPolicy.h"
 #include "ruvia/http/detail/server/HttpResponseWritePlan.h"
 #include "ruvia/http/detail/response/HttpResponseBodyAccess.h"
-#include "ruvia/core/detail/AsioAwait.h"
+#include "ruvia/core/detail/io/AsioAwait.h"
 #include "ruvia/core/Task.h"
 #include "ruvia/http/HttpResponse.h"
 #include "ruvia/core/memory/MemoryPool.h"

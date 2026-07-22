@@ -48,8 +48,8 @@ public:
 #include <variant>
 #include <vector>
 
-#include "ruvia/core/detail/OperationDeadline.h"
-#include "ruvia/core/detail/PoolLeaseScheduler.h"
+#include "ruvia/core/detail/io/OperationDeadline.h"
+#include "ruvia/core/detail/pool/PoolLeaseScheduler.h"
 #include "ruvia/core/memory/PmrObject.h"
 #include "ruvia/web/detail/db/DbHostResolution.h"
 

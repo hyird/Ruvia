@@ -1,6 +1,6 @@
 #include "ruvia/core/memory/MemoryPool.h"
 
-#include "ruvia/core/detail/TaskPromise.h"
+#include "ruvia/core/detail/task/TaskPromise.h"
 #include "ruvia/core/memory/ProcessResource.h"
 
 #include <array>

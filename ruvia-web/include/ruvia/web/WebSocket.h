@@ -3,7 +3,7 @@
 #include "ruvia/core/Task.h"
 #include "ruvia/http/WebSocketProtocol.h"
 #include "ruvia/web/ScopedOperation.h"
-#include "ruvia/web/detail/BorrowedView.h"
+#include "ruvia/web/detail/util/BorrowedView.h"
 
 #include <chrono>
 #include <cstdint>

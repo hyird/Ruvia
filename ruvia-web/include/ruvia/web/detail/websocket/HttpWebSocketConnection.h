@@ -12,13 +12,13 @@
 
 #include <asio.hpp>
 
-#include "ruvia/core/detail/ConnectionScanner.h"
+#include "ruvia/core/detail/io/ConnectionScanner.h"
 #include "ruvia/http/detail/websocket/HttpWebSocketPermessageDeflate.h"
 #include "ruvia/http/detail/websocket/WsConnection.h"
 #include "ruvia/web/detail/websocket/HttpWebSocketLiveness.h"
 #include "ruvia/web/detail/websocket/WsTransportReadResult.h"
-#include "ruvia/core/detail/AsioAwait.h"
-#include "ruvia/core/detail/WorkerSignal.h"
+#include "ruvia/core/detail/io/AsioAwait.h"
+#include "ruvia/core/detail/worker/WorkerSignal.h"
 #include "ruvia/http/HttpLimits.h"
 #include "ruvia/core/Task.h"
 #include "ruvia/web/WebSocket.h"

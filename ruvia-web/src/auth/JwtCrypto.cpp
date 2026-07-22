@@ -1,6 +1,6 @@
 #include "ruvia/web/detail/auth/JwtPrimitives.h"
 
-#include "ruvia/core/detail/ConstantTime.h"
+#include "ruvia/core/detail/util/ConstantTime.h"
 
 #include <openssl/evp.h>
 #include <openssl/hmac.h>

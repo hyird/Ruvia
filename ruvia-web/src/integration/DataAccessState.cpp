@@ -1,9 +1,9 @@
-#include "ruvia/web/detail/DataAccessState.h"
+#include "ruvia/web/detail/integration/DataAccessState.h"
 
 #include <memory>
 #include <utility>
 
-#include "ruvia/core/detail/ConnectionScanner.h"
+#include "ruvia/core/detail/io/ConnectionScanner.h"
 #include "ruvia/web/detail/db/DbRegistry.h"
 #include "ruvia/web/detail/redis/RedisRegistry.h"
 

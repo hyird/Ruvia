@@ -1,8 +1,8 @@
 #pragma once
 
 #include "ruvia/core/Task.h"
-#include "ruvia/core/detail/PoolWaiterQueue.h"
-#include "ruvia/core/detail/WorkerTimer.h"
+#include "ruvia/core/detail/pool/PoolWaiterQueue.h"
+#include "ruvia/core/detail/worker/WorkerTimer.h"
 #include "ruvia/core/memory/PmrResource.h"
 
 #include <chrono>

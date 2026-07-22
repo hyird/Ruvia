@@ -1,6 +1,6 @@
 #pragma once
 
-#include "ruvia/core/detail/NativePath.h"
+#include "ruvia/core/detail/util/NativePath.h"
 #include "ruvia/http/detail/response/HttpResponseFileBody.h"
 #include "ruvia/web/StaticFiles.h"
 

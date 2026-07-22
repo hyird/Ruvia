@@ -23,7 +23,7 @@
 #include <zlib.h>
 #include <zstd.h>
 
-#include "ruvia/core/detail/AsioAwait.h"
+#include "ruvia/core/detail/io/AsioAwait.h"
 #include "ruvia/core/memory/MemoryPool.h"
 #include "ruvia/http/ProtocolByteLimit.h"
 #include "ruvia/http/detail/request/HttpRequestAccess.h"

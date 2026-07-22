@@ -38,7 +38,7 @@
 #include <asio/detached.hpp>
 #include <asio/recycling_allocator.hpp>
 #include <asio/ip/tcp.hpp>
-#include "ruvia/core/detail/WorkerSignal.h"
+#include "ruvia/core/detail/worker/WorkerSignal.h"
 
 #include "ruvia/http/detail/request/HttpRequestAccess.h"
 #include "ruvia/web/detail/http/ContextServices.h"
@@ -53,7 +53,7 @@
 #include "ruvia/web/detail/http2/Http2SansIoTermination.h"
 #include "ruvia/web/detail/http2/Http2SansIoWsTransport.h"
 #include "ruvia/http/detail/http2/Http2WebSocketHandshake.h"
-#include "ruvia/core/detail/ConnectionScanner.h"
+#include "ruvia/core/detail/io/ConnectionScanner.h"
 #include "ruvia/web/detail/server/HttpBufferedResponse.h"
 #include "ruvia/web/detail/http2/Http2BufferedResponseWrite.h"
 #include "ruvia/web/detail/http2/Http2SansIoSessionLifecycle.h"
@@ -67,7 +67,7 @@
 #include "ruvia/web/detail/websocket/HttpWebSocketSession.h"
 #include "ruvia/web/detail/router/RouteTable.h"
 #include "ruvia/web/detail/router/RouteResolution.h"
-#include "ruvia/core/detail/AsioAwait.h"
+#include "ruvia/core/detail/io/AsioAwait.h"
 #include "ruvia/core/Task.h"
 #include "ruvia/web/Error.h"
 #include "ruvia/http/HttpResponse.h"

@@ -8,7 +8,7 @@
 #include <string>
 #include <string_view>
 
-#include "ruvia/core/detail/ConnectionScanner.h"
+#include "ruvia/core/detail/io/ConnectionScanner.h"
 #include "ruvia/core/memory/PmrObject.h"
 #include "ruvia/http/ProtocolByteLimit.h"
 #include "ruvia/http/HttpProtocolError.h"

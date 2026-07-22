@@ -1,8 +1,8 @@
 #include <ruvia/core/TaskScope.h>
 #include <ruvia/core/Timer.h>
-#include <ruvia/core/detail/AsioAwait.h>
-#include <ruvia/core/detail/WorkerDispatcher.h>
-#include <ruvia/core/detail/WorkerWaitAwaiter.h>
+#include <ruvia/core/detail/io/AsioAwait.h>
+#include <ruvia/core/detail/worker/WorkerDispatcher.h>
+#include <ruvia/core/detail/worker/WorkerWaitAwaiter.h>
 
 #include <asio/co_spawn.hpp>
 #include <asio/detached.hpp>

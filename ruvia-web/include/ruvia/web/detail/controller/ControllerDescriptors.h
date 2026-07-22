@@ -13,8 +13,8 @@
 
 #include "ruvia/core/Task.h"
 #include "ruvia/http/HttpKnownMethod.h"
-#include "ruvia/web/detail/CallableRef.h"
-#include "ruvia/web/detail/RegistrationResource.h"
+#include "ruvia/web/detail/util/CallableRef.h"
+#include "ruvia/web/detail/util/RegistrationResource.h"
 #include "ruvia/http/HttpResponse.h"
 #include "ruvia/web/detail/middleware/MiddlewareDescriptor.h"
 #include "ruvia/web/detail/router/RouteModes.h"

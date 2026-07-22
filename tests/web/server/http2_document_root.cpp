@@ -26,8 +26,8 @@
 #include <string>
 #include <string_view>
 
-#include "ruvia/core/detail/AsioAwait.h"
-#include "ruvia/core/detail/WorkerDispatcher.h"
+#include "ruvia/core/detail/io/AsioAwait.h"
+#include "ruvia/core/detail/worker/WorkerDispatcher.h"
 #include "ruvia/core/memory/MemoryPool.h"
 #include "ruvia/http/detail/http2/Http2FrameCodec.h"
 #include "ruvia/http/detail/http2/Http2FrameTypes.h"

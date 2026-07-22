@@ -15,7 +15,7 @@
 #include "ruvia/web/detail/controller/ControllerRuntime.h"
 #include "ruvia/web/detail/app/AppConfigGuards.h"
 #include "ruvia/web/detail/app/AppListenerOptions.h"
-#include "ruvia/core/detail/WorkerSelection.h"
+#include "ruvia/core/detail/worker/WorkerSelection.h"
 #include "ruvia/web/detail/server/HttpServer.h"
 #include "ruvia/web/detail/router/RouterImpl.h"
 

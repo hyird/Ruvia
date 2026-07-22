@@ -5,7 +5,7 @@
 #include <string_view>
 #include <utility>
 
-#include "ruvia/web/detail/StaticFileMetadata.h"
+#include "ruvia/web/detail/http/StaticFileMetadata.h"
 
 namespace ruvia {
 

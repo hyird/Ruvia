@@ -1,6 +1,6 @@
 #include "ruvia/web/detail/router/RouteTable.h"
 #include "ruvia/web/detail/middleware/MiddlewareRegistration.h"
-#include "ruvia/core/detail/AsioAwait.h"
+#include "ruvia/core/detail/io/AsioAwait.h"
 
 #include <asio/co_spawn.hpp>
 #include <asio/detached.hpp>

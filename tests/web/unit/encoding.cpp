@@ -10,8 +10,8 @@
 #include <string_view>
 #include <vector>
 
-#include "ruvia/core/detail/Base64.h"
-#include "ruvia/core/detail/Base64Url.h"
+#include "ruvia/core/detail/util/Base64.h"
+#include "ruvia/core/detail/util/Base64Url.h"
 #include "ruvia/http/detail/util/HttpNumberFormat.h"
 #include "ruvia/http/UrlEncoding.h"
 #include "ruvia/http/detail/util/Hex.h"

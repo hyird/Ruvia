@@ -15,7 +15,7 @@
 #include "ruvia/web/detail/app/AppLifecycle.h"
 #include "ruvia/web/detail/app/AppResource.h"
 #include "ruvia/web/detail/app/EnvState.h"
-#include "ruvia/core/detail/NativePath.h"
+#include "ruvia/core/detail/util/NativePath.h"
 #include "ruvia/web/detail/controller/ControllerDescriptors.h"
 #include "ruvia/web/detail/db/DbRegistry.h"
 #include "ruvia/web/detail/redis/RedisRegistry.h"

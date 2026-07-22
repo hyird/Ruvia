@@ -8,9 +8,9 @@
 #include <stdexcept>
 #include <utility>
 
-#include "ruvia/core/detail/AsioAwait.h"
+#include "ruvia/core/detail/io/AsioAwait.h"
 #include "ruvia/core/memory/PmrResource.h"
-#include "ruvia/web/detail/WorkerState.h"
+#include "ruvia/web/detail/integration/WorkerState.h"
 #include "ruvia/web/detail/app/WebWorkerDispatch.h"
 #include "ruvia/web/detail/db/DbRegistry.h"
 #include "ruvia/web/detail/redis/RedisRegistry.h"

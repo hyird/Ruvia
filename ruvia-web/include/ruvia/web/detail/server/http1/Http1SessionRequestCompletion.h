@@ -1,7 +1,7 @@
 #pragma once
 
 #include "ruvia/http/detail/http1/Http1ServerConnectionPlan.h"
-#include "ruvia/web/detail/BorrowedView.h"
+#include "ruvia/web/detail/util/BorrowedView.h"
 
 #include <cstddef>
 #include <cstdint>

@@ -17,7 +17,7 @@
 #include <string_view>
 #include <system_error>
 
-#include "ruvia/core/detail/WorkerSignal.h"
+#include "ruvia/core/detail/worker/WorkerSignal.h"
 
 #include "ruvia/http/detail/http2/Http2Connection.h"
 #include "ruvia/http/detail/websocket/WsConnection.h"

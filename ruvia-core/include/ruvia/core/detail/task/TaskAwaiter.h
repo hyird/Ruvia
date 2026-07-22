@@ -1,6 +1,6 @@
 #pragma once
 
-#include "ruvia/core/detail/TaskPromise.h"
+#include "ruvia/core/detail/task/TaskPromise.h"
 
 #include <coroutine>
 #include <stdexcept>

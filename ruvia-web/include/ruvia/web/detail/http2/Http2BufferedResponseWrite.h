@@ -6,7 +6,7 @@
 #include <string_view>
 #include <type_traits>
 
-#include "ruvia/core/detail/WorkerSignal.h"
+#include "ruvia/core/detail/worker/WorkerSignal.h"
 
 #include "ruvia/core/Task.h"
 #include "ruvia/http/detail/http2/Http2Connection.h"

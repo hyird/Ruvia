@@ -11,7 +11,7 @@
 #include "ruvia/http/detail/field/HttpEntityTag.h"
 #include "ruvia/http/detail/field/HttpImfFixdate.h"
 #include "ruvia/http/detail/server/HttpDateCache.h"
-#include "ruvia/web/detail/StaticFileMetadata.h"
+#include "ruvia/web/detail/http/StaticFileMetadata.h"
 
 namespace {
 

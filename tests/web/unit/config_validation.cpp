@@ -5,7 +5,7 @@
 #include <string>
 #include <string_view>
 
-#include "ruvia/web/detail/ConfigValidation.h"
+#include "ruvia/web/detail/app/ConfigValidation.h"
 
 namespace {
 

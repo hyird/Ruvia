@@ -1,6 +1,6 @@
 #include "ruvia/web/detail/auth/JwtPrimitives.h"
 
-#include "ruvia/core/detail/Base64Url.h"
+#include "ruvia/core/detail/util/Base64Url.h"
 
 #include <cstdint>
 #include <stdexcept>

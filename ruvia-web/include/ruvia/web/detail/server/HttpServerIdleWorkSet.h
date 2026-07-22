@@ -1,8 +1,8 @@
 #pragma once
 
-#include "ruvia/core/detail/ConnectionScanner.h"
+#include "ruvia/core/detail/io/ConnectionScanner.h"
 #include "ruvia/web/detail/server/HttpConnectionState.h"
-#include "ruvia/core/detail/AsioAwait.h"
+#include "ruvia/core/detail/io/AsioAwait.h"
 
 #include <asio/ip/tcp.hpp>
 #include <atomic>

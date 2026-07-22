@@ -6,7 +6,7 @@
 #include <type_traits>
 #include <utility>
 
-#include "ruvia/core/detail/NativePath.h"
+#include "ruvia/core/detail/util/NativePath.h"
 #include "ruvia/web/StaticFiles.h"
 
 namespace ruvia::detail {

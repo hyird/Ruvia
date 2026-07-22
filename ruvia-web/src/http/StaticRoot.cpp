@@ -14,7 +14,7 @@
 #include "ruvia/core/memory/PmrObject.h"
 #include "ruvia/core/memory/ProcessResource.h"
 #include "ruvia/http/detail/field/HttpDate.h"
-#include "ruvia/web/detail/StaticFileMetadata.h"
+#include "ruvia/web/detail/http/StaticFileMetadata.h"
 #include "ruvia/web/detail/http/StaticFileTypes.h"
 #include "ruvia/web/detail/server/file/HttpNativeFile.h"
 

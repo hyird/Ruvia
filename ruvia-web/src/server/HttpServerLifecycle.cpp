@@ -1,5 +1,5 @@
 #include "ruvia/web/detail/server/HttpServer.h"
-#include "ruvia/core/detail/WorkerDispatcher.h"
+#include "ruvia/core/detail/worker/WorkerDispatcher.h"
 #include "ruvia/web/detail/app/WebWorkerDispatch.h"
 
 #include "ruvia/web/detail/server/HttpServerTlsVerify.h"
@@ -26,12 +26,12 @@
 #include <sys/socket.h>
 #endif
 
-#include "ruvia/core/detail/ConnectionScanner.h"
+#include "ruvia/core/detail/io/ConnectionScanner.h"
 #include "ruvia/web/detail/server/HttpConnectionState.h"
 #include "ruvia/web/detail/server/HttpServerOptionsValidation.h"
 #include "ruvia/web/detail/router/RouteTable.h"
 #include "ruvia/http/detail/field/HeaderTokenUtils.h"
-#include "ruvia/core/detail/AsioAwait.h"
+#include "ruvia/core/detail/io/AsioAwait.h"
 #include "ruvia/http/detail/util/AsciiCase.h"
 
 namespace ruvia::detail {

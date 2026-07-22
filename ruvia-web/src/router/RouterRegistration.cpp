@@ -1,6 +1,6 @@
 #include "ruvia/web/detail/router/RouterImpl.h"
 
-#include "ruvia/web/detail/RegistrationResource.h"
+#include "ruvia/web/detail/util/RegistrationResource.h"
 
 namespace ruvia {
 

@@ -18,15 +18,15 @@
 #include "ruvia/core/WorkerHandle.h"
 #include "ruvia/core/detail/RuntimeLifecycle.h"
 #include "ruvia/core/memory/MemoryPool.h"
-#include "ruvia/core/detail/ConnectionScanner.h"
+#include "ruvia/core/detail/io/ConnectionScanner.h"
 #include "ruvia/web/WebWorker.h"
-#include "ruvia/web/detail/DataAccessState.h"
+#include "ruvia/web/detail/integration/DataAccessState.h"
 #include "ruvia/web/detail/server/HttpConnectionState.h"
 #include "ruvia/web/detail/ratelimit/RateLimiter.h"
 #include "ruvia/web/detail/server/HttpServerOptions.h"
 #include "ruvia/web/detail/server/HttpServerWorkerState.h"
 #include "ruvia/web/detail/server/HttpServerWorkerCompletion.h"
-#include "ruvia/web/detail/WorkerState.h"
+#include "ruvia/web/detail/integration/WorkerState.h"
 #include "ruvia/web/detail/ratelimit/RateLimitDecision.h"
 
 namespace ruvia::detail {

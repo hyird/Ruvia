@@ -1,4 +1,4 @@
-#include <ruvia/core/detail/WorkerDispatcherImpl.h>
+#include <ruvia/core/detail/worker/WorkerDispatcherImpl.h>
 
 #include <atomic>
 #include <algorithm>

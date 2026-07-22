@@ -24,7 +24,7 @@
 #include "ruvia/web/detail/http/StreamingAccess.h"
 #include "ruvia/web/detail/server/stream/HttpResponseStreamState.h"
 #include "ruvia/web/Streaming.h"
-#include "ruvia/core/detail/AsioAwait.h"
+#include "ruvia/core/detail/io/AsioAwait.h"
 #include "ruvia/web/Context.h"
 #include "ruvia/web/Controller.h"
 #include "ruvia/web/detail/middleware/MiddlewareRegistration.h"

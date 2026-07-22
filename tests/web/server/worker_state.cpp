@@ -22,7 +22,7 @@
 #include "ruvia/web/Context.h"
 #include "ruvia/web/Router.h"
 #include "ruvia/web/WebWorker.h"
-#include "ruvia/web/detail/WorkerState.h"
+#include "ruvia/web/detail/integration/WorkerState.h"
 #include "ruvia/web/detail/router/RouterImpl.h"
 #include "ruvia/web/detail/server/HttpServer.h"
 

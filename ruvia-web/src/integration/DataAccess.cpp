@@ -12,11 +12,11 @@
 
 #include <asio/bind_executor.hpp>
 
-#include "ruvia/core/detail/AsioAwait.h"
-#include "ruvia/core/detail/ConnectionScanner.h"
+#include "ruvia/core/detail/io/AsioAwait.h"
+#include "ruvia/core/detail/io/ConnectionScanner.h"
 #include "ruvia/core/memory/MemoryPool.h"
-#include "ruvia/web/detail/DataAccessDefinitions.h"
-#include "ruvia/web/detail/DataAccessState.h"
+#include "ruvia/web/detail/integration/DataAccessDefinitions.h"
+#include "ruvia/web/detail/integration/DataAccessState.h"
 #include "ruvia/web/detail/db/DbRegistry.h"
 #include "ruvia/web/detail/redis/RedisRegistry.h"
 

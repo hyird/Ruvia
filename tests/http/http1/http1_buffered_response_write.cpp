@@ -24,7 +24,7 @@
 #include <utility>
 #include <vector>
 
-#include "ruvia/core/detail/AsioAwait.h"
+#include "ruvia/core/detail/io/AsioAwait.h"
 #include "ruvia/core/memory/MemoryPool.h"
 #include "ruvia/http/HttpResponse.h"
 #include "ruvia/http/detail/response/HttpResponseBodyAccess.h"

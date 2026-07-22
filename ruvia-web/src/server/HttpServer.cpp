@@ -9,7 +9,7 @@
 #include <stdexcept>
 #include <type_traits>
 
-#include "ruvia/core/detail/ConnectionScanner.h"
+#include "ruvia/core/detail/io/ConnectionScanner.h"
 #include "ruvia/http/detail/request/HttpRequestAccess.h"
 #include "ruvia/web/detail/http/HttpProtocolErrorInfo.h"
 #include "ruvia/web/detail/server/http1/Http1SessionRequestCompletion.h"
@@ -33,8 +33,8 @@
 #include "ruvia/web/Error.h"
 #include "ruvia/http/detail/util/PmrString.h"
 #include "ruvia/web/detail/router/RouteTable.h"
-#include "ruvia/core/detail/AsioAwait.h"
-#include "ruvia/core/detail/SocketUtils.h"
+#include "ruvia/core/detail/io/AsioAwait.h"
+#include "ruvia/core/detail/io/SocketUtils.h"
 
 namespace ruvia::detail {
 

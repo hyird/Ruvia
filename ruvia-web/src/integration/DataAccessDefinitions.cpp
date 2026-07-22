@@ -1,4 +1,4 @@
-#include "ruvia/web/detail/DataAccessDefinitions.h"
+#include "ruvia/web/detail/integration/DataAccessDefinitions.h"
 
 #include <stdexcept>
 #include <utility>

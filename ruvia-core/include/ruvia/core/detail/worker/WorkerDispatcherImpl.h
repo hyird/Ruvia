@@ -12,7 +12,7 @@
 #include <asio/io_context.hpp>
 #include <asio/steady_timer.hpp>
 
-#include <ruvia/core/detail/WorkerDispatcher.h>
+#include <ruvia/core/detail/worker/WorkerDispatcher.h>
 #include <ruvia/core/memory/PmrResource.h>
 
 // The dispatcher's state, declared here because two translation units own parts

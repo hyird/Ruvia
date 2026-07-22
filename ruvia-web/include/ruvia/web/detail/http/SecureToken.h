@@ -4,7 +4,7 @@
 #include <string_view>
 #include <variant>
 
-#include "ruvia/core/detail/ConstantTime.h"
+#include "ruvia/core/detail/util/ConstantTime.h"
 
 namespace ruvia::detail {
 

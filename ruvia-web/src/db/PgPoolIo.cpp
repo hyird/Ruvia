@@ -1,6 +1,6 @@
 #include "ruvia/web/detail/db/DbRegistry.h"
 
-#include "ruvia/core/detail/AsioAwait.h"
+#include "ruvia/core/detail/io/AsioAwait.h"
 #include "ruvia/web/detail/db/DbPostgreSql.h"
 #include "ruvia/web/detail/db/DbSlotSocket.h"
 #include "ruvia/web/detail/db/DbUtils.h"
