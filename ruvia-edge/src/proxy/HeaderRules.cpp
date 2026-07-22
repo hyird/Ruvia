@@ -26,6 +26,12 @@ bool isConnectionOrFramingField(std::string_view lowerName) noexcept {
         lowerName == "content-length";
 }
 
+bool isConditionalOrRangeField(std::string_view lowerName) noexcept {
+    return lowerName == "range" || lowerName == "if-range" ||
+        lowerName == "if-match" || lowerName == "if-none-match" ||
+        lowerName == "if-modified-since" || lowerName == "if-unmodified-since";
+}
+
 bool connectionNominates(
     std::span<const HttpHeaderView> headers,
     std::string_view fieldName) noexcept {

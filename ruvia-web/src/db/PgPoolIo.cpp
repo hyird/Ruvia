@@ -1,6 +1,7 @@
 #include "ruvia/web/detail/db/DbRegistry.h"
 
 #include "ruvia/core/detail/io/AsioAwait.h"
+#include "ruvia/web/detail/db/DbPoolOperations.h"
 #include "ruvia/web/detail/db/DbPostgreSql.h"
 #include "ruvia/web/detail/db/DbSlotSocket.h"
 #include "ruvia/web/detail/db/DbUtils.h"
@@ -16,63 +17,11 @@
 #include <utility>
 
 namespace ruvia::detail {
-namespace {
-
-[[nodiscard]] std::array<char, 6> formatPort(std::uint16_t port) {
-    std::array<char, 6> output{};
-    const auto parsed = std::to_chars(
-        output.data(), output.data() + output.size() - 1, port);
-    if (parsed.ec != std::errc{}) {
-        throw std::runtime_error("failed to format PostgreSQL port");
-    }
-    *parsed.ptr = '\0';
-    return output;
-}
-
-}  // namespace
 
 Task<DbResolvedAddresses> PostgreSqlPool::resolveHost(
     ConnectionSlot& slot,
     const OperationTimeout& deadline) {
-    const auto remaining = deadline.remaining();
-    if (remaining.has_value() && remaining->count() <= 0) {
-        throw std::runtime_error("PostgreSQL host resolve timed out");
-    }
-    if (remaining.has_value()) {
-        slot.deadline.arm(
-            workerTimerDeadlineAfter(*remaining),
-            ConnectionSlot::DeadlineKind::kResolve);
-    } else {
-        slot.deadline.reset();
-    }
-
-    const auto port = formatPort(config_.port);
-    try {
-        auto completion =
-            co_await asyncAsio<asio::ip::tcp::resolver::results_type>(
-                [this, &slot, &port](auto handler) mutable {
-                    slot.resolver.async_resolve(
-                        config_.host,
-                        std::string_view(port.data()),
-                        std::move(handler));
-                });
-        const auto resolveError = completion.errorCode();
-        auto results = std::move(completion).takeResult();
-        const auto afterResolve = deadline.remaining();
-        if (slot.deadline.clear() ||
-            (afterResolve.has_value() && afterResolve->count() <= 0)) {
-            throw std::runtime_error("PostgreSQL host resolve timed out");
-        }
-        if (resolveError) {
-            throw std::system_error(
-                resolveError,
-                "resolving PostgreSQL host failed");
-        }
-        co_return collectDbResolvedAddresses(results, resource_);
-    } catch (...) {
-        clearSlotDeadline(slot);
-        throw;
-    }
+    return resolveDbHost(*this, slot, deadline, "PostgreSQL");
 }
 
 Task<void> PostgreSqlPool::connectUnlocked(ConnectionSlot& slot) {
@@ -86,7 +35,7 @@ Task<void> PostgreSqlPool::connectUnlocked(ConnectionSlot& slot) {
             config_.host,
             addresses,
             resource_);
-        const auto port = formatPort(config_.port);
+        const auto port = formatDbPort(config_.port, "PostgreSQL");
         // Pin the client encoding to UTF-8. Ruvia's strings are UTF-8 throughout,
         // and query parameters are sent in text format; without this the connection
         // inherits the server/database default encoding, so non-ASCII parameters and
