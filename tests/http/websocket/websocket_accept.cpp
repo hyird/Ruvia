@@ -5,7 +5,7 @@
 #include <string>
 #include <string_view>
 
-#include "ruvia/http/detail/websocket/HttpWebSocketUtils.h"
+#include "ruvia/http/detail/websocket/HttpWebSocketAcceptKey.h"
 
 namespace {
 

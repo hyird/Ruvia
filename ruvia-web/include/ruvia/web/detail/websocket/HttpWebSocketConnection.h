@@ -14,7 +14,6 @@
 
 #include "ruvia/core/detail/ConnectionScanner.h"
 #include "ruvia/http/detail/websocket/HttpWebSocketPermessageDeflate.h"
-#include "ruvia/http/detail/websocket/HttpWebSocketUtils.h"
 #include "ruvia/http/detail/websocket/WsConnection.h"
 #include "ruvia/web/detail/websocket/HttpWebSocketLiveness.h"
 #include "ruvia/web/detail/websocket/WsTransportReadResult.h"
