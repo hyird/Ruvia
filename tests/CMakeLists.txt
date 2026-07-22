@@ -63,7 +63,12 @@ add_executable(ruvia_unit_tests
     http/http2/http2_classify.cpp
     http/http2/http2_closed_streams.cpp
     http/http2/http2_connect.cpp
-    http/http2/http2_connection.cpp
+    http/http2/http2_connection_data.cpp
+    http/http2/http2_connection_flow.cpp
+    http/http2/http2_connection_headers.cpp
+    http/http2/http2_connection_session.cpp
+    http/http2/http2_connection_streams.cpp
+    http/http2/http2_connection_submit.cpp
     http/http2/http2_flow_control.cpp
     http/http2/http2_frame.cpp
     http/http2/http2_frame_codec.cpp
