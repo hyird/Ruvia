@@ -63,6 +63,8 @@ set(RUVIA_WEB_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/src/router/RouterBuild.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/router/Router.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/router/RouterDispatch.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/router/RouterStreamDispatch.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/router/RouterErrorDispatch.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/router/RouterDynamicIndexBuild.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/router/RouterDynamicIndex.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/router/RouterIndex.cpp
