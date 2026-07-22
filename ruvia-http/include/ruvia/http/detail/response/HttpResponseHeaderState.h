@@ -35,15 +35,6 @@ struct HttpResponseHeaderStateAccess final {
         response.appendHeaderValidated(key, value, knownBit);
     }
 
-    [[nodiscard]] static HttpResponseHeader& appendUninitializedValue(
-        HttpResponse& response,
-        std::string_view key,
-        std::size_t valueSize,
-        std::uint32_t knownBit) {
-        return response.appendHeaderUninitializedValue(
-            key, valueSize, knownBit);
-    }
-
     [[nodiscard]] static HttpResponseHeader& upsertSetCookieUninitializedValue(
         HttpResponse& response,
         std::string_view wirePrefix,
@@ -85,10 +76,6 @@ struct HttpResponseHeaderStateAccess final {
 
     static void reserve(HttpResponse& response, std::size_t count) {
         response.reserveHeaders(count);
-    }
-
-    [[nodiscard]] static std::uint32_t classifyKnown(std::string_view name) noexcept {
-        return classifyResponseHeaderName(name);
     }
 
     [[nodiscard]] static std::uint32_t knownBits(const HttpResponse& response) noexcept {
@@ -133,15 +120,6 @@ inline void appendResponseHeaderValidated(
     HttpResponseHeaderStateAccess::appendValidated(response, key, value, knownBit);
 }
 
-[[nodiscard]] inline HttpResponseHeader& appendResponseHeaderUninitializedValue(
-    HttpResponse& response,
-    std::string_view key,
-    std::size_t valueSize,
-    std::uint32_t knownBit) {
-    return HttpResponseHeaderStateAccess::appendUninitializedValue(
-        response, key, valueSize, knownBit);
-}
-
 [[nodiscard]] inline HttpResponseHeader& upsertResponseSetCookieUninitializedValue(
     HttpResponse& response,
     std::string_view wirePrefix,
@@ -183,10 +161,6 @@ inline void setResponseContentRangeUnsatisfied(HttpResponse& response, std::uint
 
 inline void reserveResponseHeaders(HttpResponse& response, std::size_t count) {
     HttpResponseHeaderStateAccess::reserve(response, count);
-}
-
-[[nodiscard]] inline std::uint32_t classifyResponseKnownHeader(std::string_view name) noexcept {
-    return HttpResponseHeaderStateAccess::classifyKnown(name);
 }
 
 [[nodiscard]] inline std::uint32_t responseKnownHeaderBits(const HttpResponse& response) noexcept {

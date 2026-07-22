@@ -59,11 +59,6 @@ namespace ruvia::detail {
     return index;
 }
 
-[[nodiscard]] inline std::size_t scanJsonNumberLength(std::string_view input) noexcept {
-    skipJsonWhitespace(input);
-    return scanJsonNumberTokenLength(input);
-}
-
 [[nodiscard]] inline bool skipJsonNumberToken(std::string_view& input) noexcept {
     const auto length = scanJsonNumberTokenLength(input);
     if (length == 0) {
@@ -71,11 +66,6 @@ namespace ruvia::detail {
     }
     input.remove_prefix(length);
     return true;
-}
-
-[[nodiscard]] inline bool skipJsonNumber(std::string_view& input) noexcept {
-    skipJsonWhitespace(input);
-    return skipJsonNumberToken(input);
 }
 
 template <typename NumberT>

@@ -151,10 +151,6 @@ private:
             dynamic_ = dynamic;
         }
 
-        void setMiddlewares(std::pmr::vector<RouteMiddleware> middlewares) {
-            middlewares_ = std::move(middlewares);
-        }
-
     private:
         HttpKnownMethod method_;
         std::pmr::string path_;

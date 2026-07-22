@@ -119,23 +119,4 @@ template <typename T>
     }
 }
 
-template <typename T>
-[[nodiscard]] T makeResponseValue(
-    ResolvedPmrResourceTag,
-    std::pmr::memory_resource* resource) {
-    if constexpr (isRuviaString<T>) {
-        return ModelValueFactory::makeString(resource);
-    } else if constexpr (isRuviaArray<T>) {
-        using ValueT = typename RuviaArrayTraits<std::remove_cvref_t<T>>::value_type;
-        return T(std::pmr::polymorphic_allocator<ValueT>(resource));
-    } else if constexpr (isRuviaList<T>) {
-        return ModelValueFactory::makeList<T>(resource);
-    } else if constexpr (isResponseModel<T>) {
-        return T(resource);
-    } else {
-        (void)resource;
-        return T{};
-    }
-}
-
 }  // namespace ruvia::detail

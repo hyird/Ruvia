@@ -6,10 +6,6 @@
 
 namespace ruvia::detail {
 
-[[nodiscard]] inline constexpr std::size_t httpBase64EncodedSize(std::size_t inputSize) noexcept {
-    return ((inputSize + 2U) / 3U) * 4U;
-}
-
 inline void encodeHttpBase64(char* output, std::span<const std::uint8_t> input) noexcept {
     static constexpr char kAlphabet[] =
         "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";

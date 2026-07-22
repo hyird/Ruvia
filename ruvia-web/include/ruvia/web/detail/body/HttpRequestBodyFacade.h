@@ -61,14 +61,6 @@ Task<void> requestBodyLoaderDiscardThunk(void* target) {
 }
 
 template <typename Loader>
-void emplaceRequestBodyLoaderFacade(std::optional<RequestBodyLoader>& storage, Loader& loader) {
-    storage.emplace(
-        &loader,
-        &requestBodyLoaderReadAllThunk<Loader>,
-        &requestBodyLoaderDiscardThunk<Loader>);
-}
-
-template <typename Loader>
 [[nodiscard]] RequestBodyLoader makeRequestBodyLoaderFacade(
     Loader& loader) noexcept {
     return RequestBodyLoader(
