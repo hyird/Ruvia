@@ -13,7 +13,8 @@ function(ruvia_add_test name source)
     target_link_libraries(${name} PRIVATE ${T_LIB})
     target_include_directories(${name} PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}/support
-        ${CMAKE_CURRENT_SOURCE_DIR}/http/support)
+        ${CMAKE_CURRENT_SOURCE_DIR}/http/support
+        ${CMAKE_CURRENT_SOURCE_DIR}/web/support)
     if(MSVC)
         target_compile_options(${name} PRIVATE /bigobj /FS)
     endif()
@@ -187,7 +188,9 @@ add_executable(ruvia_unit_tests
     web/unit/regex_matcher.cpp
     web/unit/response_stream_dispatch.cpp
     web/unit/route_resolution.cpp
-    web/unit/routing.cpp
+    web/unit/routing_matching.cpp
+    web/unit/routing_middleware.cpp
+    web/unit/routing_dispatch.cpp
     web/unit/security_headers.cpp
     web/unit/server_options_validation.cpp
     web/unit/session.cpp
@@ -235,7 +238,8 @@ endif()
 target_link_libraries(ruvia_unit_tests PRIVATE ruvia::web)
 target_include_directories(ruvia_unit_tests PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/support
-    ${CMAKE_CURRENT_SOURCE_DIR}/http/support)
+    ${CMAKE_CURRENT_SOURCE_DIR}/http/support
+    ${CMAKE_CURRENT_SOURCE_DIR}/web/support)
 if(MSVC)
     target_compile_options(ruvia_unit_tests PRIVATE /bigobj /FS)
 endif()
