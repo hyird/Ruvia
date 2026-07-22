@@ -10,8 +10,8 @@
 
 namespace ruvia::detail {
 
-constexpr std::size_t kResponseHeadStackBytes = 512;
-constexpr std::size_t kResponseHeadRetainedHeapBytes = 4 * 1024;
+inline constexpr std::size_t kResponseHeadStackBytes = 512;
+inline constexpr std::size_t kResponseHeadRetainedHeapBytes = 4 * 1024;
 
 class ResponseHeadBuffer final {
     struct StackState final {

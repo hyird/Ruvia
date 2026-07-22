@@ -237,8 +237,7 @@ asio::awaitable<bool> EdgeServer::Impl::handleFramedRequest(
                 break;
             }
             if (!decodeOk) {
-                const std::vector<std::pair<std::string, std::string>> noHeaders;
-                co_await writer.respond(400, noHeaders, {}, "ERROR", std::nullopt, false, false);
+                co_await respondStatusOnly(writer, 400, "ERROR", false);
                 co_return false;
             }
             edgeRequest.body = decodedBody;

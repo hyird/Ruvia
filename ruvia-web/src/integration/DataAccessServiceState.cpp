@@ -163,7 +163,7 @@ DataAccessPostResult DataAccessServiceState::post(Job task) {
     std::lock_guard lock(submitMutex_);
     if (phase_.load(std::memory_order_acquire) != Phase::kConnected) {
         if (!accepting_) {
-            workerStopping_.fetch_add(1, std::memory_order_relaxed);
+            postCounters_.recordWorkerStopping();
             return DataAccessPostResult::reject(
                 PostStatus::kWorkerStopping, std::move(task));
         }
@@ -171,7 +171,7 @@ DataAccessPostResult DataAccessServiceState::post(Job task) {
             "data access service must finish connecting before jobs are posted");
     }
     if (!accepting_) {
-        workerStopping_.fetch_add(1, std::memory_order_relaxed);
+        postCounters_.recordWorkerStopping();
         return DataAccessPostResult::reject(
             PostStatus::kWorkerStopping, std::move(task));
     }
@@ -186,17 +186,7 @@ DataAccessPostResult DataAccessServiceState::post(Job task) {
                 state->startJob(std::move(task));
             };
         });
-    switch (status) {
-    case PostStatus::kAccepted:
-        accepted_.fetch_add(1, std::memory_order_relaxed);
-        break;
-    case PostStatus::kQueueFull:
-        queueFull_.fetch_add(1, std::memory_order_relaxed);
-        break;
-    case PostStatus::kWorkerStopping:
-        workerStopping_.fetch_add(1, std::memory_order_relaxed);
-        break;
-    }
+    postCounters_.record(status);
     return status == PostStatus::kAccepted
         ? DataAccessPostResult::accept()
         : DataAccessPostResult::reject(status, std::move(task));
@@ -245,9 +235,9 @@ void DataAccessServiceState::closeOnWorker() noexcept {
 
 DataAccessStats DataAccessServiceState::stats() const noexcept {
     return DataAccessStats{
-        .accepted = accepted_.load(std::memory_order_relaxed),
-        .queueFull = queueFull_.load(std::memory_order_relaxed),
-        .workerStopping = workerStopping_.load(std::memory_order_relaxed),
+        .accepted = postCounters_.accepted(),
+        .queueFull = postCounters_.queueFull(),
+        .workerStopping = postCounters_.workerStopping(),
         .completed = completed_.load(std::memory_order_relaxed),
         .failed = failed_.load(std::memory_order_relaxed),
         .outstanding = outstanding_.load(std::memory_order_acquire),

@@ -1,5 +1,5 @@
 #include "test_harness.h"
-#include "ruvia/web/detail/server/RequestBodyLimit.h"
+#include "ruvia/web/detail/server/request/RequestBodyLimit.h"
 
 #include <concepts>
 #include <cstddef>
@@ -16,8 +16,8 @@
 #include "ruvia/http/detail/http1/Http1ServerSemantics.h"
 #include "ruvia/http/detail/server/HttpResponseHead.h"
 #include "ruvia/http/detail/server/HttpResponseHeadBuffer.h"
-#include "ruvia/web/detail/server/HttpServerAutoHttps.h"
-#include "ruvia/web/detail/server/HttpServerRequestState.h"
+#include "ruvia/web/detail/server/tls/HttpServerAutoHttps.h"
+#include "ruvia/web/detail/server/request/HttpServerRequestState.h"
 
 namespace {
 

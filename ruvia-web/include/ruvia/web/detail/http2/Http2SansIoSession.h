@@ -42,8 +42,8 @@
 
 #include "ruvia/http/detail/request/HttpRequestAccess.h"
 #include "ruvia/web/detail/http/context/ContextServices.h"
-#include "ruvia/web/detail/server/HttpResponseWriter.h"
-#include "ruvia/web/detail/server/RequestMemoryArena.h"
+#include "ruvia/web/detail/server/response/HttpResponseWriter.h"
+#include "ruvia/web/detail/server/request/RequestMemoryArena.h"
 #include "ruvia/web/detail/body/HttpRequestBodyFacade.h"
 #include "ruvia/http/detail/http2/Http2Connection.h"
 #include "ruvia/http/detail/http2/message/Http2RequestBuilder.h"
@@ -56,16 +56,16 @@
 #include "ruvia/web/detail/http2/Http2SansIoWsTransport.h"
 #include "ruvia/http/detail/http2/message/Http2WebSocketHandshake.h"
 #include "ruvia/core/detail/io/ConnectionScanner.h"
-#include "ruvia/web/detail/server/HttpBufferedResponse.h"
+#include "ruvia/web/detail/server/response/HttpBufferedResponse.h"
 #include "ruvia/web/detail/http2/Http2BufferedResponseWrite.h"
 #include "ruvia/web/detail/http2/Http2SansIoSessionLifecycle.h"
 #include "ruvia/http/detail/server/HttpResponseHeadPolicy.h"
 #include "ruvia/web/detail/server/stream/HttpResponseStreamDispatch.h"
 #include "ruvia/web/detail/server/HttpServerAccessLog.h"
 #include "ruvia/web/detail/ratelimit/RateLimitDecision.h"
-#include "ruvia/web/detail/server/RequestBodyLimit.h"
+#include "ruvia/web/detail/server/request/RequestBodyLimit.h"
 #include "ruvia/web/detail/websocket/HttpWebSocketConnection.h"
-#include "ruvia/http/detail/websocket/HttpWebSocketPermessageDeflate.h"
+#include "ruvia/http/detail/websocket/message/HttpWebSocketPermessageDeflate.h"
 #include "ruvia/web/detail/websocket/HttpWebSocketSession.h"
 #include "ruvia/web/detail/router/RouteTable.h"
 #include "ruvia/web/detail/router/RouteResolution.h"
@@ -119,19 +119,6 @@ Task<void> runHttp2SansIoSession(
     // handler awaitable and its coroutine frame are actually finished.
     Http2SansIoStreamRuntimeTable streamRuntimes(
         worker.resource(), termination);
-    const auto findStreamRuntime = [&streamRuntimes](
-        std::uint32_t streamId) noexcept {
-        return streamRuntimes.find(streamId);
-    };
-    const auto eraseStreamRuntime = [&streamRuntimes](
-        std::uint32_t streamId) {
-        (void)streamRuntimes.remove(streamId);
-    };
-    const auto findSignal = [&streamRuntimes](
-        std::uint32_t streamId) noexcept -> Http2SansIoStreamSignal* {
-        auto* runtime = streamRuntimes.find(streamId);
-        return runtime != nullptr ? runtime->signal() : nullptr;
-    };
     const auto terminateSession = [&](std::error_code error) noexcept {
         if (!termination.terminate(error)) {
             return;
@@ -229,7 +216,7 @@ Task<void> runHttp2SansIoSession(
         if (streamState == nullptr) {
             co_return;
         }
-        auto* streamRuntime = findStreamRuntime(streamId);
+        auto* streamRuntime = streamRuntimes.find(streamId);
         if (streamRuntime == nullptr) {
             (void)connection.submitReset(
                 streamId,
@@ -525,7 +512,7 @@ Task<void> runHttp2SansIoSession(
                 (void)connection.submitReset(streamId, Http2ErrorCode::kInternalError);
             }
         }
-        eraseStreamRuntime(streamId);
+        (void)streamRuntimes.remove(streamId);
         connection.unpinStream(streamId);
         wakeWriter();
         co_return;
@@ -574,7 +561,7 @@ Task<void> runHttp2SansIoSession(
         } catch (...) {
             --activeHandlerTasks;
             connection.unpinStream(streamId);
-            eraseStreamRuntime(streamId);
+            (void)streamRuntimes.remove(streamId);
             return false;
         }
         return true;
@@ -610,7 +597,7 @@ Task<void> runHttp2SansIoSession(
         const auto resetEventStream = [&](std::uint32_t streamId,
                                           Http2ErrorCode error) {
             unmarkBufferedBodyCopied(streamId);
-            auto* signal = findSignal(streamId);
+            auto* signal = streamRuntimes.signalFor(streamId);
             (void)connection.submitReset(streamId, error);
             if (signal != nullptr) {
                 // A dispatched handler owns the runtime until dispatchOne finishes.
@@ -618,7 +605,7 @@ Task<void> runHttp2SansIoSession(
             } else {
                 // Owner-side reset is intentionally not echoed as kStreamClosed.
                 // An undispatched runtime therefore has to be reclaimed here.
-                eraseStreamRuntime(streamId);
+                (void)streamRuntimes.remove(streamId);
             }
             wakeWriter();
         };
@@ -659,7 +646,7 @@ Task<void> runHttp2SansIoSession(
                         resetEventStream(
                             streamId, Http2ErrorCode::kInternalError);
                     } else {
-                        eraseStreamRuntime(streamId);
+                        (void)streamRuntimes.remove(streamId);
                     }
                     return;
                 }
@@ -686,7 +673,7 @@ Task<void> runHttp2SansIoSession(
         const auto onBodyChunk = [&](const auto* bodyChunk) {
             const auto streamId = bodyChunk->streamId();
             auto* streamState = connection.stream(streamId);
-            auto* streamRuntime = findStreamRuntime(streamId);
+            auto* streamRuntime = streamRuntimes.find(streamId);
             if (streamState == nullptr || streamRuntime == nullptr) {
                 if (streamState != nullptr) {
                     resetEventStream(
@@ -741,7 +728,7 @@ Task<void> runHttp2SansIoSession(
         const auto onTunnelData = [&](const auto* tunnelData) {
             const auto streamId = tunnelData->streamId();
             auto* streamState = connection.stream(streamId);
-            auto* streamRuntime = findStreamRuntime(streamId);
+            auto* streamRuntime = streamRuntimes.find(streamId);
             auto* signal = streamRuntime != nullptr
                 ? streamRuntime->signal()
                 : nullptr;
@@ -766,7 +753,7 @@ Task<void> runHttp2SansIoSession(
             signal->wake();
         };
         const auto onTunnelEnd = [&](const auto* tunnelEnd) {
-            if (auto* signal = findSignal(tunnelEnd->streamId())) {
+            if (auto* signal = streamRuntimes.signalFor(tunnelEnd->streamId())) {
                 signal->wake();
             }
         };
@@ -775,7 +762,7 @@ Task<void> runHttp2SansIoSession(
             if (connection.stream(streamId) == nullptr) {
                 return;
             }
-            auto* streamRuntime = findStreamRuntime(streamId);
+            auto* streamRuntime = streamRuntimes.find(streamId);
             if (streamRuntime == nullptr) {
                 resetEventStream(
                     streamId, Http2ErrorCode::kInternalError);
@@ -791,7 +778,7 @@ Task<void> runHttp2SansIoSession(
         const auto onStreamClosed = [&](const auto* streamClosed) {
             const auto streamId = streamClosed->streamId();
             unmarkBufferedBodyCopied(streamId);
-            auto* streamRuntime = findStreamRuntime(streamId);
+            auto* streamRuntime = streamRuntimes.find(streamId);
             auto* signal = streamRuntime != nullptr
                 ? streamRuntime->signal()
                 : nullptr;
@@ -801,7 +788,7 @@ Task<void> runHttp2SansIoSession(
                 // The protocol core can erase an unpinned reset stream before
                 // this event is drained. Cleanup is keyed by the typed event,
                 // not by a second lookup of already-removed core state.
-                eraseStreamRuntime(streamId);
+                (void)streamRuntimes.remove(streamId);
             }
         };
 
@@ -833,7 +820,7 @@ Task<void> runHttp2SansIoSession(
         // Send-window reopenings drained deferred bodies inside the core; wake the
         // paced response writers so they pull their next chunk.
         for (const auto streamId : connection.takeDrainedDataStreams()) {
-            if (auto* signal = findSignal(streamId)) {
+            if (auto* signal = streamRuntimes.signalFor(streamId)) {
                 signal->wake();
             }
         }

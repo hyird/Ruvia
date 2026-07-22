@@ -6,7 +6,7 @@
 #include <string_view>
 #include <system_error>
 
-#include "ruvia/http/detail/websocket/HttpWebSocketServerHandshake.h"
+#include "ruvia/http/detail/websocket/handshake/HttpWebSocketServerHandshake.h"
 #include "ruvia/core/detail/io/AsioAwait.h"
 #include "ruvia/core/Task.h"
 

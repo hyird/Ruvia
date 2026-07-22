@@ -189,6 +189,14 @@ public:
         return nullptr;
     }
 
+    // The dispatch signal of a stream that has one. A stream with no runtime,
+    // or one admitted but not yet dispatched, has nothing to wake.
+    [[nodiscard]] Http2SansIoStreamSignal* signalFor(
+        std::uint32_t streamId) noexcept {
+        auto* runtime = find(streamId);
+        return runtime != nullptr ? runtime->signal() : nullptr;
+    }
+
     [[nodiscard]] const Http2SansIoStreamRuntime* find(
         std::uint32_t streamId) const noexcept {
         for (const auto& slot : inline_) {

@@ -1,4 +1,31 @@
-Task<void> HttpServer::handleSession(AcceptedConnectionLease connection) {
+#pragma once
+
+#include <memory_resource>
+#include <system_error>
+#include <utility>
+
+#include <asio/ip/tcp.hpp>
+#include <asio/ssl.hpp>
+
+#include "ruvia/core/detail/io/AsioAwait.h"
+#include "ruvia/web/detail/server/session/HttpServerConnectionGuards.h"
+#include "ruvia/web/detail/http/context/ContextServices.h"
+#include "ruvia/web/detail/server/tls/HttpServerAlpn.h"
+#include "ruvia/web/detail/http2/Http2SansIoSession.h"
+#include "ruvia/web/detail/http2/CleartextUpgrade.h"
+#include "ruvia/web/detail/server/session/HttpServerStreamSession.h"
+#include "ruvia/web/detail/server/HttpServer.h"
+#include "ruvia/web/detail/server/tls/HttpServerTlsHandshake.h"
+
+// Member-template definitions for HttpServer, kept out of its header so the
+// class stays readable. Included as an ordinary header: everything used here is
+// included here.
+
+namespace ruvia::detail {
+
+// Defined inline: this is a header, and a header may be included by more than
+// one translation unit. The member templates below need no such marking.
+inline Task<void> HttpServer::handleSession(AcceptedConnectionLease connection) {
     auto& socket = connection.socket();
     try {
         std::pmr::string remoteAddress(memory_.allocator<char>());
@@ -84,13 +111,17 @@ Task<void> HttpServer::handleHttp2Session(
     ConnectionScanner::Guard scannerGuard(&connectionScanner_, scannerEntry, socket);
 
     co_await runHttp2ServerSession(
-        stream,
-        socket,
-        memory_,
-        routes_,
-        options_,
-        scannerEntry,
-        services,
-        workerState_,
+        Http2ServerSessionSetup<Stream>{
+            .stream = stream,
+            .socket = socket,
+            .memory = memory_,
+            .routes = routes_,
+            .options = options_,
+            .scannerEntry = scannerEntry,
+            .services = services,
+            .workerState = workerState_,
+        },
         initialBytes);
 }
+
+}  // namespace ruvia::detail

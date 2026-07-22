@@ -111,6 +111,33 @@ Task<void> finishDbTransaction(
 }
 
 
+// A statement inside an open transaction: it runs on the slot the transaction
+// already holds, so it neither acquires nor releases one. A failure closes the
+// connection and gives the slot back, because a transaction whose statement
+// failed mid-protocol cannot continue on it.
+template <typename Pool>
+Task<QueryResult> executeOnDbTransactionSlot(
+    Pool& pool,
+    std::size_t slot,
+    std::pmr::string sql,
+    std::pmr::vector<DbValue> params,
+    std::pmr::memory_resource* resource) {
+    if (slot >= pool.slots_.size()) {
+        throw std::logic_error("database transaction slot is invalid");
+    }
+    try {
+        co_return co_await pool.executeOnSlot(
+            pool.slots_[slot],
+            sql,
+            std::span<const DbValue>(params),
+            resource);
+    } catch (...) {
+        pool.closeSlot(pool.slots_[slot]);
+        pool.releaseSlot(slot);
+        throw;
+    }
+}
+
 // One buffered statement on a pooled connection. The shape is the same for every
 // driver: refuse empty SQL before taking a slot, hold the slot for the duration,
 // and close the connection if the statement throws -- a slot whose statement

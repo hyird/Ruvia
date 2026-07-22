@@ -4,7 +4,7 @@
 #include <optional>
 #include <string_view>
 
-#include "ruvia/http/detail/websocket/HttpWebSocketFrameCodec.h"
+#include "ruvia/http/detail/websocket/frame/HttpWebSocketFrameCodec.h"
 
 // Whether peer-supplied payload bytes are legal: the Close code registry (RFC
 // 6455 section 7.4), UTF-8 well-formedness for Text messages (section 8.1), and

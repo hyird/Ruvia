@@ -12,6 +12,7 @@
 #include "ruvia/core/EventLoopPool.h"
 #include "ruvia/core/Task.h"
 #include "ruvia/core/detail/io/AsioAwait.h"
+#include "ruvia/core/detail/worker/WorkerPostCounters.h"
 #include "ruvia/core/detail/io/ConnectionScanner.h"
 #include "ruvia/core/memory/MemoryPool.h"
 #include "ruvia/web/DataAccess.h"
@@ -129,9 +130,7 @@ private:
     bool accepting_{true};
     std::atomic<Phase> phase_{Phase::kFresh};
     std::atomic_size_t outstanding_{0};
-    std::atomic_uint64_t accepted_{0};
-    std::atomic_uint64_t queueFull_{0};
-    std::atomic_uint64_t workerStopping_{0};
+    WorkerPostCounters postCounters_;
     std::atomic_uint64_t completed_{0};
     std::atomic_uint64_t failed_{0};
 };

@@ -44,6 +44,15 @@ configure_file(
     ${CMAKE_CURRENT_SOURCE_DIR}/support/verify_install_closure.cmake.in
     ${CMAKE_CURRENT_BINARY_DIR}/verify_install_closure.cmake
     @ONLY)
+configure_file(
+    ${CMAKE_CURRENT_SOURCE_DIR}/support/verify_header_definitions.cmake.in
+    ${CMAKE_CURRENT_BINARY_DIR}/verify_header_definitions.cmake
+    @ONLY)
+add_test(
+    NAME ruvia_guard_header_definitions
+    COMMAND ${CMAKE_COMMAND}
+        -P ${CMAKE_CURRENT_BINARY_DIR}/verify_header_definitions.cmake)
+
 add_test(
     NAME ruvia_guard_install_closure
     COMMAND ${CMAKE_COMMAND}

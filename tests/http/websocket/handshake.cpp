@@ -13,9 +13,9 @@
 #include <asio/use_future.hpp>
 
 #include "ruvia/http/detail/http1/Http1ServerRequestParser.h"
-#include "ruvia/http/detail/websocket/HttpWebSocketHandshakeFields.h"
-#include "ruvia/http/detail/websocket/HttpWebSocketHandshakeValidation.h"
-#include "ruvia/http/detail/websocket/HttpWebSocketServerHandshake.h"
+#include "ruvia/http/detail/websocket/handshake/HttpWebSocketHandshakeFields.h"
+#include "ruvia/http/detail/websocket/handshake/HttpWebSocketHandshakeValidation.h"
+#include "ruvia/http/detail/websocket/handshake/HttpWebSocketServerHandshake.h"
 #include "ruvia/http/HttpRequest.h"
 #include "ruvia/core/detail/io/AsioAwait.h"
 #include "ruvia/web/detail/websocket/HttpWebSocketHandshake.h"

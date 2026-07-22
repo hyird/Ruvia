@@ -8,9 +8,11 @@
 
 namespace ruvia::detail {
 
-// Per-request arena initial block carried on the HTTP/2 dispatch coroutine frame.
-// Sized to the shared kRequestArenaInitialBytes so the HTTP/1 work-set block and
-// the HTTP/2 dispatch block start from one identical initial-block size.
+// Where one request's arena starts. Both session drivers call
+// emplaceRequestMemory: HTTP/1 hands it the work-set block it borrowed for the
+// connection, HTTP/2 hands it a block on the dispatch coroutine's own frame,
+// sized by kRequestArenaStackBytes below. Both start from the same
+// kRequestArenaInitialBytes, so a request costs the same either way.
 inline constexpr std::size_t kRequestArenaStackBytes = kRequestArenaInitialBytes;
 
 inline RequestMemory& emplaceRequestMemory(

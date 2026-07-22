@@ -14,7 +14,7 @@
 #include "ruvia/http/detail/coding/HttpTransferEncoding.h"
 #include "ruvia/http/detail/parser/MimeFieldGrammar.h"
 #include "ruvia/http/detail/http2/frame/Http2FramePayload.h"
-#include "ruvia/http/detail/websocket/HttpWebSocketHandshakeFields.h"
+#include "ruvia/http/detail/websocket/handshake/HttpWebSocketHandshakeFields.h"
 
 namespace {
 

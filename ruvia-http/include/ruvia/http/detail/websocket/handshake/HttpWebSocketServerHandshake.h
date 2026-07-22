@@ -2,8 +2,8 @@
 
 #include "ruvia/http/HttpStatus.h"
 #include "ruvia/http/detail/request/HttpRequestAccess.h"
-#include "ruvia/http/detail/websocket/HttpWebSocketAcceptKey.h"
-#include "ruvia/http/detail/websocket/WebSocketServerNegotiation.h"
+#include "ruvia/http/detail/websocket/handshake/HttpWebSocketAcceptKey.h"
+#include "ruvia/http/detail/websocket/handshake/WebSocketServerNegotiation.h"
 
 #include <memory_resource>
 #include <string_view>

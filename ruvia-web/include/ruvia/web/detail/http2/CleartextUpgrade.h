@@ -2,6 +2,7 @@
 
 #include "ruvia/http/detail/http1/Http1ServerRequestParser.h"
 #include "ruvia/http/detail/http2/frame/Http2FrameTypes.h"
+#include "ruvia/web/detail/http2/Http2ServerSessionSetup.h"
 #include "ruvia/web/detail/http2/Http2SansIoSession.h"
 #include "ruvia/web/detail/server/HttpServerOptions.h"
 #include "ruvia/web/detail/router/RouteTable.h"
@@ -84,61 +85,40 @@ enum class CleartextHttp2DispatchResult {
 // preface). Runs the sans-I/O session (the coroutine Http2ServerSession is replaced).
 template <typename Stream>
 Task<void> runHttp2ServerSession(
-    Stream& stream,
-    asio::ip::tcp::socket& socket,
-    WorkerMemory& memory,
-    const RouteTable& routes,
-    const HttpServerOptions& options,
-    ConnectionScanner::Entry& scannerEntry,
-    ContextServices services,
-    const HttpServerWorkerState& workerState,
+    Http2ServerSessionSetup<Stream> setup,
     std::string_view initialBytes = {}) {
-    (void)socket;  // the sans-I/O session needs only the (possibly TLS) stream
+    (void)setup.socket;  // the sans-I/O session needs only the (possibly TLS) setup.stream
     co_await runHttp2SansIoSession(
-        stream,
-        routes,
-        memory,
+        setup.stream,
+        setup.routes,
+        setup.memory,
         Http2SansIoSessionContext(
-            services,
-            options,
-            scannerEntry,
-            workerState),
+            setup.services,
+            setup.options,
+            setup.scannerEntry,
+            setup.workerState),
         initialBytes);
 }
 
 template <typename Stream>
 Task<CleartextHttp2DispatchResult> dispatchCleartextHttp2Preface(
-    Stream& stream,
-    asio::ip::tcp::socket& socket,
-    WorkerMemory& memory,
-    const RouteTable& routes,
-    const HttpServerOptions& options,
-    ConnectionScanner::Entry& scannerEntry,
-    const ContextServices& services,
+    Http2ServerSessionSetup<Stream> setup,
     std::pmr::string& readBuffer,
-    std::size_t& usedBytes,
-    const HttpServerWorkerState& workerState) {
+    std::size_t& usedBytes) {
     const auto current = std::string_view(readBuffer.data(), usedBytes);
-    switch (probeCleartextHttp2Preface(current, options.redirect() != nullptr)) {
+    switch (probeCleartextHttp2Preface(current, setup.options.redirect() != nullptr)) {
     case CleartextHttp2Probe::kHttp1:
         co_return CleartextHttp2DispatchResult::kContinueHttp1;
     case CleartextHttp2Probe::kCompletePreface:
         co_await runHttp2ServerSession(
-            stream,
-            socket,
-            memory,
-            routes,
-            options,
-            scannerEntry,
-            services,
-            workerState,
+            setup,
             current);
         co_return CleartextHttp2DispatchResult::kSessionFinished;
     case CleartextHttp2Probe::kNeedMorePreface: {
-        scannerEntry.setPhase(ConnectionScanner::Phase::kReadingInitial);
+        setup.scannerEntry.setPhase(ConnectionScanner::Phase::kReadingInitial);
         auto readCompletion = co_await asyncAsio<std::size_t>(
-            [&stream, &readBuffer, usedBytes](auto handler) mutable {
-                stream.async_read_some(
+            [&setup, &readBuffer, usedBytes](auto handler) mutable {
+                setup.stream.async_read_some(
                     asio::buffer(readBuffer.data() + usedBytes, readBuffer.size() - usedBytes),
                     std::move(handler));
             });
@@ -148,7 +128,7 @@ Task<CleartextHttp2DispatchResult> dispatchCleartextHttp2Preface(
             co_return CleartextHttp2DispatchResult::kSessionFinished;
         }
         usedBytes += bytesRead;
-        scannerEntry.touch();
+        setup.scannerEntry.touch();
         co_return CleartextHttp2DispatchResult::kContinueReadLoop;
     }
     case CleartextHttp2Probe::kDropConnection:

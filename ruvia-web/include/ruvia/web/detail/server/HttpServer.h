@@ -21,13 +21,15 @@
 #include "ruvia/core/detail/io/ConnectionScanner.h"
 #include "ruvia/web/WebWorker.h"
 #include "ruvia/web/detail/integration/DataAccessState.h"
-#include "ruvia/web/detail/server/HttpConnectionState.h"
+#include "ruvia/web/detail/server/session/HttpConnectionState.h"
 #include "ruvia/web/detail/ratelimit/RateLimiter.h"
 #include "ruvia/web/detail/server/HttpServerOptions.h"
 #include "ruvia/web/detail/server/HttpServerWorkerState.h"
 #include "ruvia/web/detail/server/HttpServerWorkerCompletion.h"
 #include "ruvia/web/detail/integration/WorkerState.h"
 namespace ruvia::detail {
+
+using TcpSocket = asio::ip::tcp::socket;
 
 class ContextServices;
 class AcceptedConnectionLease;

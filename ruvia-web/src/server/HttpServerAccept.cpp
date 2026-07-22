@@ -1,9 +1,10 @@
 #include "ruvia/web/detail/server/HttpServer.h"
+#include "ruvia/web/detail/server/session/HttpServerSessionEntry.h"
 
 #include "ruvia/core/detail/io/AsioAwait.h"
 #include "ruvia/core/detail/io/SocketUtils.h"
 #include "ruvia/core/Timer.h"
-#include "ruvia/web/detail/server/HttpServerConnectionGuards.h"
+#include "ruvia/web/detail/server/session/HttpServerConnectionGuards.h"
 
 #include <asio/bind_allocator.hpp>
 #include <asio/co_spawn.hpp>

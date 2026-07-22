@@ -1,38 +1,22 @@
-#include "ruvia/web/detail/server/HttpServer.h"
-#include "ruvia/web/detail/server/HttpServerRequestState.h"
-#include "ruvia/web/detail/server/HttpServerAlpn.h"
+#pragma once
 
+#include <memory>
+#include <memory_resource>
+#include <utility>
+
+#include <asio/ip/tcp.hpp>
 #include <asio/ssl.hpp>
 #include <openssl/bio.h>
+#include <openssl/ssl.h>
 #include <openssl/x509.h>
-#include <array>
-#include <cstring>
-#include <memory>
-#include <stdexcept>
-#include <type_traits>
-#include "ruvia/http/detail/request/HttpRequestAccess.h"
-#include "ruvia/web/detail/server/http1/Http1SessionRequestCompletion.h"
-#include "ruvia/web/detail/server/http1/Http1ClosingRejection.h"
-#include "ruvia/web/detail/server/HttpBufferedResponse.h"
-#include "ruvia/web/detail/server/HttpResponseWriter.h"
-#include "ruvia/web/detail/server/HttpServerAccessLog.h"
-#include "ruvia/web/detail/server/HttpServerAutoHttps.h"
-#include "ruvia/web/detail/server/route/HttpServerBodyRouteCompletion.h"
-#include "ruvia/web/detail/http2/CleartextUpgrade.h"
-#include "ruvia/web/detail/server/HttpServerConnectionGuards.h"
-#include "ruvia/web/detail/server/HttpServerIdleWorkSet.h"
-#include "ruvia/web/detail/server/HttpServerResponseState.h"
-#include "ruvia/web/detail/server/stream/HttpServerResponseStreamRoute.h"
-#include "ruvia/web/detail/server/route/HttpServerStreamBodyRoute.h"
-#include "ruvia/web/detail/server/route/HttpServerWebSocketRoute.h"
-#include "ruvia/http/detail/http1/Http1ServerRequestParser.h"
-#include "ruvia/http/detail/util/PmrString.h"
-#include "ruvia/core/detail/io/AsioAwait.h"
-#include "ruvia/core/detail/io/SocketUtils.h"
+
+#include "ruvia/web/detail/server/HttpServer.h"
+
+// The two pieces the TLS half of a session needs: how a server-side handshake
+// is initiated as an async operation, and how the verified peer identity is
+// read off the finished connection.
 
 namespace ruvia::detail {
-
-using TcpSocket = asio::ip::tcp::socket;
 
 // Extracts the verified peer (client) certificate subject DN into `out`, or
 // leaves it empty when no client certificate was presented. Used to surface
@@ -76,8 +60,5 @@ struct TlsServerHandshakeInitiator final {
         stream->async_handshake(asio::ssl::stream_base::server, std::move(handler));
     }
 };
-
-#include "ruvia/web/detail/server/HttpServerSessionEntry.inl"
-#include "ruvia/web/detail/server/HttpServerStreamSession.inl"
 
 }  // namespace ruvia::detail
