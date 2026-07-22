@@ -1,7 +1,7 @@
 #pragma once
 
-#include "ruvia/http/detail/HttpResponseFileBody.h"
-#include "ruvia/http/detail/NativePath.h"
+#include "ruvia/http/detail/response/HttpResponseFileBody.h"
+#include "ruvia/http/detail/util/NativePath.h"
 
 #include <array>
 #include <charconv>

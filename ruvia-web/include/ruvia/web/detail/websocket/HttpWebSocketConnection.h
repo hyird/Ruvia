@@ -22,7 +22,7 @@
 #include "ruvia/http/HttpLimits.h"
 #include "ruvia/core/Task.h"
 #include "ruvia/web/WebSocket.h"
-#include "ruvia/http/detail/PmrString.h"
+#include "ruvia/http/detail/util/PmrString.h"
 #include "ruvia/core/memory/PmrResource.h"
 
 namespace ruvia::detail {

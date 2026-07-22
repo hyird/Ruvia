@@ -2,7 +2,7 @@
 
 #include "ruvia/core/memory/MemoryPool.h"
 #include "ruvia/http/HttpHeader.h"
-#include "ruvia/http/detail/HttpRequestAccess.h"
+#include "ruvia/http/detail/request/HttpRequestAccess.h"
 #include "ruvia/web/ConnInfo.h"
 #include "ruvia/web/Context.h"
 #include "ruvia/web/detail/http/ContextAccess.h"

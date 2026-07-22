@@ -2,8 +2,8 @@
 
 #include <string_view>
 
-#include "ruvia/http/detail/HttpAcceptEncoding.h"
-#include "ruvia/http/detail/HttpContentCoding.h"
+#include "ruvia/http/detail/coding/HttpAcceptEncoding.h"
+#include "ruvia/http/detail/coding/HttpContentCoding.h"
 
 namespace {
 

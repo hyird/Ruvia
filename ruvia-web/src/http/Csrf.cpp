@@ -7,7 +7,7 @@
 
 #include <openssl/rand.h>
 
-#include "ruvia/http/detail/Hex.h"
+#include "ruvia/http/detail/util/Hex.h"
 
 namespace ruvia::detail {
 

@@ -8,7 +8,7 @@
 #include <variant>
 
 #include "ruvia/http/MultipartParser.h"
-#include "ruvia/http/detail/HeaderTokenUtils.h"
+#include "ruvia/http/detail/field/HeaderTokenUtils.h"
 #include "ruvia/http/detail/parser/MimeFieldGrammar.h"
 
 // Extracting the boundary from a multipart Content-Type (RFC 2046 section

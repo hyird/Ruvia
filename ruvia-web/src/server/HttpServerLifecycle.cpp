@@ -30,9 +30,9 @@
 #include "ruvia/web/detail/server/HttpConnectionState.h"
 #include "ruvia/web/detail/server/HttpServerOptionsValidation.h"
 #include "ruvia/web/detail/router/RouteTable.h"
-#include "ruvia/http/detail/HeaderTokenUtils.h"
+#include "ruvia/http/detail/field/HeaderTokenUtils.h"
 #include "ruvia/core/detail/AsioAwait.h"
-#include "ruvia/http/detail/AsciiCase.h"
+#include "ruvia/http/detail/util/AsciiCase.h"
 
 namespace ruvia::detail {
 

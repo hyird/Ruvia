@@ -2,10 +2,10 @@
 
 #include "ruvia/web/detail/router/RouteTable.h"
 
-#include "ruvia/http/detail/HttpResponseBodyAccess.h"
-#include "ruvia/http/detail/HttpResponseHeaderAccess.h"
-#include "ruvia/http/detail/HttpResponseHeaderState.h"
-#include "ruvia/http/detail/AsciiCase.h"
+#include "ruvia/http/detail/response/HttpResponseBodyAccess.h"
+#include "ruvia/http/detail/response/HttpResponseHeaderAccess.h"
+#include "ruvia/http/detail/response/HttpResponseHeaderState.h"
+#include "ruvia/http/detail/util/AsciiCase.h"
 #include "ruvia/web/detail/http/HttpErrorResponse.h"
 
 #include <algorithm>

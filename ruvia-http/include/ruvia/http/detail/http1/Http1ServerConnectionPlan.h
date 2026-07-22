@@ -1,7 +1,7 @@
 #pragma once
 
 #include "ruvia/http/HttpProtocolVersion.h"
-#include "ruvia/http/detail/HttpConnectionFields.h"
+#include "ruvia/http/detail/field/HttpConnectionFields.h"
 
 #include <cstdint>
 

@@ -7,7 +7,7 @@
 #include "ruvia/http/detail/http2/Http2HeaderList.h"
 #include "ruvia/http/HttpKnownMethod.h"
 #include "ruvia/http/HttpLimits.h"
-#include "ruvia/http/detail/PmrResource.h"
+#include "ruvia/http/detail/util/PmrResource.h"
 
 namespace ruvia::detail {
 

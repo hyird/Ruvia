@@ -7,8 +7,8 @@
 #include <utility>
 #include <variant>
 
-#include "ruvia/http/detail/HttpContentCoding.h"
-#include "ruvia/http/detail/HttpRequestAccess.h"
+#include "ruvia/http/detail/coding/HttpContentCoding.h"
+#include "ruvia/http/detail/request/HttpRequestAccess.h"
 #include "ruvia/http/detail/http1/Http1RequestBodyPlan.h"
 #include "ruvia/http/detail/http1/Http1ServerConnectionPlan.h"
 #include "ruvia/http/Http1RequestParser.h"

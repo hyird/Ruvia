@@ -2,7 +2,7 @@
 
 #include <algorithm>
 
-#include "ruvia/http/detail/HttpConnectionFields.h"
+#include "ruvia/http/detail/field/HttpConnectionFields.h"
 
 namespace ruvia::edge {
 

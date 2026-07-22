@@ -10,8 +10,8 @@
 #include <utility>
 
 #include "ruvia/http/Cookies.h"
-#include "ruvia/http/detail/CookieValidation.h"
-#include "ruvia/http/detail/SetCookiePlan.h"
+#include "ruvia/http/detail/cookie/CookieValidation.h"
+#include "ruvia/http/detail/cookie/SetCookiePlan.h"
 
 namespace {
 

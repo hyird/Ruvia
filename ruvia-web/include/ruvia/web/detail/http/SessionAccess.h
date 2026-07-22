@@ -2,7 +2,7 @@
 
 #include "ruvia/web/Context.h"
 #include "ruvia/http/HttpResponse.h"
-#include "ruvia/http/detail/SetCookiePlan.h"
+#include "ruvia/http/detail/cookie/SetCookiePlan.h"
 
 #include <cstddef>
 #include <chrono>

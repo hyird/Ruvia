@@ -3,12 +3,12 @@
 #include <algorithm>
 #include <utility>
 
-#include "ruvia/http/detail/HttpContentCoding.h"
-#include "ruvia/http/detail/HttpCorsFields.h"
-#include "ruvia/http/detail/HttpExpectations.h"
-#include "ruvia/http/detail/HttpHeaderSectionSize.h"
-#include "ruvia/http/detail/HttpMediaType.h"
-#include "ruvia/http/detail/HttpRequestContentSemantics.h"
+#include "ruvia/http/detail/coding/HttpContentCoding.h"
+#include "ruvia/http/detail/field/HttpCorsFields.h"
+#include "ruvia/http/detail/field/HttpExpectations.h"
+#include "ruvia/http/detail/field/HttpHeaderSectionSize.h"
+#include "ruvia/http/detail/field/HttpMediaType.h"
+#include "ruvia/http/detail/coding/HttpRequestContentSemantics.h"
 #include "ruvia/http/detail/http2/Http2HeaderRules.h"
 #include "ruvia/http/detail/http2/Http2RequestHeaders.h"
 #include "ruvia/http/detail/http2/Http2WebSocketHandshake.h"

@@ -34,7 +34,7 @@
 #include "ruvia/core/Task.h"
 #include "ruvia/core/Timer.h"
 #include "ruvia/core/detail/WorkerSignal.h"
-#include "ruvia/http/detail/PmrString.h"
+#include "ruvia/http/detail/util/PmrString.h"
 
 namespace ruvia {
 class Context;  // only forwarded as Context* via the type-erased bindContext thunk

@@ -12,9 +12,9 @@
 
 #include "ruvia/core/detail/Base64.h"
 #include "ruvia/core/detail/Base64Url.h"
-#include "ruvia/http/detail/HttpNumberFormat.h"
+#include "ruvia/http/detail/util/HttpNumberFormat.h"
 #include "ruvia/http/UrlEncoding.h"
-#include "ruvia/http/detail/Hex.h"
+#include "ruvia/http/detail/util/Hex.h"
 
 namespace {
 

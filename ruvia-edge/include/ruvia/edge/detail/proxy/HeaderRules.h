@@ -8,7 +8,7 @@
 #include <vector>
 
 #include "ruvia/http/HttpHeader.h"
-#include "ruvia/http/detail/AsciiCase.h"
+#include "ruvia/http/detail/util/AsciiCase.h"
 
 namespace ruvia::edge {
 

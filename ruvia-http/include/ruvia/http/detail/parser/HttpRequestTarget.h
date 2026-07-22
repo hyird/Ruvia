@@ -1,7 +1,7 @@
 #pragma once
 
 #include "ruvia/http/HttpKnownMethod.h"
-#include "ruvia/http/detail/BorrowedView.h"
+#include "ruvia/http/detail/util/BorrowedView.h"
 #include "ruvia/http/detail/parser/HttpParserSyntax.h"
 
 #include <cstddef>

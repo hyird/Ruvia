@@ -12,12 +12,12 @@
 #include "ruvia/core/memory/PmrObject.h"
 #include "ruvia/http/ProtocolByteLimit.h"
 #include "ruvia/http/HttpProtocolError.h"
-#include "ruvia/http/detail/HttpRequestBodyFailure.h"
-#include "ruvia/http/detail/body/HttpTransferCodingDecoder.h"
+#include "ruvia/http/detail/request/HttpRequestBodyFailure.h"
+#include "ruvia/http/detail/coding/HttpTransferCodingDecoder.h"
 #include "ruvia/http/detail/http1/Http1ChunkedBodyDecoder.h"
 #include "ruvia/http/detail/http1/Http1RequestBodyPlan.h"
 #include "ruvia/http/HttpLimits.h"
-#include "ruvia/http/detail/PmrString.h"
+#include "ruvia/http/detail/util/PmrString.h"
 #include "ruvia/core/Task.h"
 
 namespace ruvia::detail {

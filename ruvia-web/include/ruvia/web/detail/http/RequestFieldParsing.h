@@ -8,7 +8,7 @@
 #include <vector>
 
 #include "ruvia/http/UrlEncoding.h"
-#include "ruvia/http/detail/AsciiCase.h"
+#include "ruvia/http/detail/util/AsciiCase.h"
 
 // Primitives shared by everything that turns a delimited request field list into
 // a parsed name/value vector -- the query string, the Cookie header and the form

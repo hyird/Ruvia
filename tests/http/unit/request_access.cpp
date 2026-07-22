@@ -8,8 +8,8 @@
 #include <type_traits>
 #include <utility>
 
-#include "ruvia/http/detail/HttpRequestAccess.h"
-#include "ruvia/http/detail/RequestBodyDecoding.h"
+#include "ruvia/http/detail/request/HttpRequestAccess.h"
+#include "ruvia/http/detail/request/RequestBodyDecoding.h"
 #include "ruvia/http/HttpHeader.h"
 #include "ruvia/http/HttpKnownMethod.h"
 #include "ruvia/http/HttpRequest.h"

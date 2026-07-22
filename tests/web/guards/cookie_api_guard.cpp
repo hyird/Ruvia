@@ -1,7 +1,7 @@
 #include "ruvia/web/detail/http/ContextAccess.h"
 #include "ruvia/http/detail/http1/Http1ServerRequestParser.h"
-#include "ruvia/http/detail/HttpResponseBodyAccess.h"
-#include "ruvia/http/detail/SetCookiePlan.h"
+#include "ruvia/http/detail/response/HttpResponseBodyAccess.h"
+#include "ruvia/http/detail/cookie/SetCookiePlan.h"
 
 #include "ruvia/http/Http1RequestParser.h"
 #include "ruvia/core/memory/MemoryPool.h"

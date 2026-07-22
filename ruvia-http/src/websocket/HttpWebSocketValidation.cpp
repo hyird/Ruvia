@@ -7,9 +7,9 @@
 #include <cstring>
 #include <optional>
 
-#include "ruvia/http/detail/HttpRequestAccess.h"
-#include "ruvia/http/detail/HttpConnectionFields.h"
-#include "ruvia/http/detail/HeaderTokenUtils.h"
+#include "ruvia/http/detail/request/HttpRequestAccess.h"
+#include "ruvia/http/detail/field/HttpConnectionFields.h"
+#include "ruvia/http/detail/field/HeaderTokenUtils.h"
 #include "ruvia/http/detail/http1/Http1RequestBodyPlan.h"
 #include "ruvia/http/detail/websocket/HttpWebSocketHandshakeValidation.h"
 #include "ruvia/http/HttpRequest.h"

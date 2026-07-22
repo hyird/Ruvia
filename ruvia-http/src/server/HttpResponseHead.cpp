@@ -7,9 +7,9 @@
 #include <stdexcept>
 
 #include "ruvia/http/detail/server/HttpDateCache.h"
-#include "ruvia/http/detail/HttpContentLength.h"
-#include "ruvia/http/detail/HttpResponseHeaderAccess.h"
-#include "ruvia/http/detail/HttpResponseHeaderState.h"
+#include "ruvia/http/detail/coding/HttpContentLength.h"
+#include "ruvia/http/detail/response/HttpResponseHeaderAccess.h"
+#include "ruvia/http/detail/response/HttpResponseHeaderState.h"
 #include "ruvia/http/HttpHeader.h"
 #include "ruvia/http/HttpLimits.h"
 #include "ruvia/http/HttpStatus.h"

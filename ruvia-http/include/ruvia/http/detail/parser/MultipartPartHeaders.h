@@ -5,7 +5,7 @@
 #include <variant>
 
 #include "ruvia/http/MultipartParser.h"
-#include "ruvia/http/detail/HeaderTokenUtils.h"
+#include "ruvia/http/detail/field/HeaderTokenUtils.h"
 #include "ruvia/http/detail/parser/MimeFieldGrammar.h"
 
 // One part's header block: field lookup inside the block, the Content-Disposition

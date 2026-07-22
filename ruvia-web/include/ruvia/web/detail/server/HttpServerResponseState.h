@@ -1,6 +1,6 @@
 #pragma once
 
-#include "ruvia/http/detail/HttpResponseBodyAccess.h"
+#include "ruvia/http/detail/response/HttpResponseBodyAccess.h"
 #include "ruvia/http/detail/http1/Http1ServerSemantics.h"
 #include "ruvia/http/HttpResponse.h"
 #include "ruvia/web/detail/server/http1/Http1RequestSequence.h"

@@ -11,15 +11,15 @@
 
 #include <zstd.h>
 
-#include "ruvia/http/detail/HttpAcceptEncoding.h"
-#include "ruvia/http/detail/HttpAcceptMediaType.h"
-#include "ruvia/http/detail/HttpContentCoding.h"
-#include "ruvia/http/detail/HeaderTokenUtils.h"
+#include "ruvia/http/detail/coding/HttpAcceptEncoding.h"
+#include "ruvia/http/detail/field/HttpAcceptMediaType.h"
+#include "ruvia/http/detail/coding/HttpContentCoding.h"
+#include "ruvia/http/detail/field/HeaderTokenUtils.h"
 #include "ruvia/http/detail/parser/HttpChunkParser.h"
 #include "ruvia/http/detail/parser/MultipartBoundary.h"
 #include "ruvia/http/detail/parser/MultipartDelimiter.h"
 #include "ruvia/http/detail/parser/MultipartPartHeaders.h"
-#include "ruvia/http/detail/RequestBodyDecoding.h"
+#include "ruvia/http/detail/request/RequestBodyDecoding.h"
 #include "ruvia/http/HttpLimits.h"
 #include "ruvia/http/HttpRequest.h"
 #include "ruvia/web/Model.h"

@@ -2,9 +2,9 @@
 
 #include <optional>
 
-#include "ruvia/http/detail/HeaderTokenUtils.h"
-#include "ruvia/http/detail/HttpConnectionFields.h"
-#include "ruvia/http/detail/HttpResponseContentSemantics.h"
+#include "ruvia/http/detail/field/HeaderTokenUtils.h"
+#include "ruvia/http/detail/field/HttpConnectionFields.h"
+#include "ruvia/http/detail/coding/HttpResponseContentSemantics.h"
 
 // Whether a parsed response head lets the exchange continue: may this 101 switch
 // protocols given what the request offered, does the body have a length, and

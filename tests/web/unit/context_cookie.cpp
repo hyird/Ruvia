@@ -12,7 +12,7 @@
 #include <string_view>
 
 #include "ruvia/web/detail/http/ContextAccess.h"
-#include "ruvia/http/detail/HttpRequestAccess.h"
+#include "ruvia/http/detail/request/HttpRequestAccess.h"
 #include "ruvia/core/detail/AsioAwait.h"
 #include "ruvia/web/Context.h"
 #include "ruvia/http/HttpHeader.h"

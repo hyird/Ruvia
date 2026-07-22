@@ -6,7 +6,7 @@
 // owns the ResponseFileBody DESCRIPTOR (path + size/offset) used to frame
 // Content-Length/Range; opening the file is a runtime driver concern.
 
-#include "ruvia/http/detail/HttpResponseFileBody.h"
+#include "ruvia/http/detail/response/HttpResponseFileBody.h"
 
 #include <system_error>
 #include <array>

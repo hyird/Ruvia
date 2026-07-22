@@ -13,8 +13,8 @@
 #include "ruvia/core/memory/PmrObject.h"
 #include "ruvia/core/memory/PmrResource.h"
 #include "ruvia/http/ProtocolByteLimit.h"
-#include "ruvia/http/detail/HttpRequestBodyFailure.h"
-#include "ruvia/http/detail/PmrString.h"
+#include "ruvia/http/detail/request/HttpRequestBodyFailure.h"
+#include "ruvia/http/detail/util/PmrString.h"
 #include "ruvia/web/detail/http2/Http2SansIoStreamSignal.h"
 #include "ruvia/web/detail/router/RouteModes.h"
 

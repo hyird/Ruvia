@@ -1,7 +1,7 @@
 #pragma once
 
 #include "ruvia/core/detail/NativePath.h"
-#include "ruvia/http/detail/HttpResponseFileBody.h"
+#include "ruvia/http/detail/response/HttpResponseFileBody.h"
 #include "ruvia/web/StaticFiles.h"
 
 #include <cstdint>

@@ -4,8 +4,8 @@
 #include <cstdint>
 #include <string_view>
 
-#include "ruvia/http/detail/HttpResponseKnownHeaders.h"
-#include "ruvia/http/detail/HttpResponseHeaderBits.h"
+#include "ruvia/http/detail/response/HttpResponseKnownHeaders.h"
+#include "ruvia/http/detail/response/HttpResponseHeaderBits.h"
 
 namespace {
 

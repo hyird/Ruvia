@@ -8,7 +8,7 @@
 #include <unordered_map>
 
 #include "ruvia/edge/EdgeTypes.h"
-#include "ruvia/http/detail/AsciiCase.h"
+#include "ruvia/http/detail/util/AsciiCase.h"
 
 namespace ruvia::edge {
 

@@ -22,9 +22,9 @@
 
 #include "ruvia/http/HttpHeader.h"
 #include "ruvia/http/HttpStatus.h"
-#include "ruvia/http/detail/BorrowedView.h"
+#include "ruvia/http/detail/util/BorrowedView.h"
 #include "ruvia/http/HttpProtocolVersion.h"
-#include "ruvia/http/detail/PmrResource.h"
+#include "ruvia/http/detail/util/PmrResource.h"
 
 namespace ruvia::detail {
 struct HttpClientResponseHeaderAccess;

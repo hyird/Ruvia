@@ -3,7 +3,7 @@
 #include <cstdint>
 #include <string_view>
 
-#include "ruvia/http/detail/HttpRequestContentSemantics.h"
+#include "ruvia/http/detail/coding/HttpRequestContentSemantics.h"
 #include "ruvia/http/detail/http2/Http2HeaderBlock.h"
 #include "ruvia/http/detail/http2/Http2HeaderRules.h"
 #include "ruvia/http/detail/http2/Http2RemoteReceiveSemantics.h"

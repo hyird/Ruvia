@@ -5,10 +5,10 @@
 #include <stdexcept>
 #include <utility>
 
-#include "ruvia/http/detail/MultipartPartAccess.h"
-#include "ruvia/http/detail/MultipartStreamPartAccess.h"
-#include "ruvia/http/detail/PmrResource.h"
-#include "ruvia/http/detail/PmrString.h"
+#include "ruvia/http/detail/parser/MultipartPartAccess.h"
+#include "ruvia/http/detail/parser/MultipartStreamPartAccess.h"
+#include "ruvia/http/detail/util/PmrResource.h"
+#include "ruvia/http/detail/util/PmrString.h"
 #include "ruvia/http/detail/parser/MultipartDelimiter.h"
 #include "ruvia/http/detail/parser/MultipartPartHeaders.h"
 

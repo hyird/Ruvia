@@ -8,7 +8,7 @@
 
 #include "ruvia/core/Task.h"
 #include "ruvia/core/memory/MemoryPool.h"
-#include "ruvia/http/detail/HttpResponseFileBody.h"
+#include "ruvia/http/detail/response/HttpResponseFileBody.h"
 #include "ruvia/web/detail/server/file/HttpFileFallback.h"
 
 namespace ruvia::detail {

@@ -1,8 +1,8 @@
 #include "ruvia/http/detail/parser/HttpHeaderBlockParser.h"
 
-#include "ruvia/http/detail/HttpContentCoding.h"
-#include "ruvia/http/detail/HttpCorsFields.h"
-#include "ruvia/http/detail/HttpMediaType.h"
+#include "ruvia/http/detail/coding/HttpContentCoding.h"
+#include "ruvia/http/detail/field/HttpCorsFields.h"
+#include "ruvia/http/detail/field/HttpMediaType.h"
 #include "ruvia/http/detail/parser/HttpRequestTarget.h"
 
 #include <algorithm>

@@ -1,10 +1,10 @@
 #pragma once
 
-#include "ruvia/http/detail/HttpConnectionFields.h"
-#include "ruvia/http/detail/HttpContentLength.h"
-#include "ruvia/http/detail/HttpExpectations.h"
-#include "ruvia/http/detail/HttpTransferEncoding.h"
-#include "ruvia/http/detail/HttpAcceptEncoding.h"
+#include "ruvia/http/detail/field/HttpConnectionFields.h"
+#include "ruvia/http/detail/coding/HttpContentLength.h"
+#include "ruvia/http/detail/field/HttpExpectations.h"
+#include "ruvia/http/detail/coding/HttpTransferEncoding.h"
+#include "ruvia/http/detail/coding/HttpAcceptEncoding.h"
 #include "ruvia/http/detail/parser/HttpParserSyntax.h"
 #include "ruvia/http/HttpHeader.h"
 #include "ruvia/http/HttpLimits.h"

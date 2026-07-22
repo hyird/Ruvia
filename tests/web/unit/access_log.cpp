@@ -2,7 +2,7 @@
 
 #include "ruvia/http/HttpProtocolVersion.h"
 #include "ruvia/http/HttpRequest.h"
-#include "ruvia/http/detail/HttpRequestAccess.h"
+#include "ruvia/http/detail/request/HttpRequestAccess.h"
 #include "ruvia/web/ServerConfig.h"
 #include "ruvia/web/detail/server/HttpServerOptions.h"
 #include "ruvia/web/detail/server/HttpServerAccessLog.h"

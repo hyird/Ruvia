@@ -6,7 +6,7 @@
 #include <utility>
 
 #include "ruvia/http/HttpProtocolError.h"
-#include "ruvia/http/detail/HttpResponseHeaderState.h"
+#include "ruvia/http/detail/response/HttpResponseHeaderState.h"
 #include "ruvia/web/Error.h"
 #include "ruvia/web/Validation.h"
 #include "ruvia/web/detail/http/ContextAccess.h"

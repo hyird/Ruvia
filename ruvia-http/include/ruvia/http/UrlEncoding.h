@@ -10,9 +10,9 @@
 #include <string_view>
 #include <utility>
 
-#include "ruvia/http/detail/BorrowedView.h"
-#include "ruvia/http/detail/Hex.h"
-#include "ruvia/http/detail/PmrResource.h"
+#include "ruvia/http/detail/util/BorrowedView.h"
+#include "ruvia/http/detail/util/Hex.h"
+#include "ruvia/http/detail/util/PmrResource.h"
 
 namespace ruvia::detail {
 

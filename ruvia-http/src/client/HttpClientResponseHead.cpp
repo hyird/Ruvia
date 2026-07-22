@@ -3,11 +3,11 @@
 #include <charconv>
 #include <system_error>
 
-#include "ruvia/http/detail/HeaderTokenUtils.h"
-#include "ruvia/http/detail/HttpContentCoding.h"
-#include "ruvia/http/detail/HttpInterimResponseValidation.h"
-#include "ruvia/http/detail/HttpMediaType.h"
-#include "ruvia/http/detail/HttpResponseContentSemantics.h"
+#include "ruvia/http/detail/field/HeaderTokenUtils.h"
+#include "ruvia/http/detail/coding/HttpContentCoding.h"
+#include "ruvia/http/detail/field/HttpInterimResponseValidation.h"
+#include "ruvia/http/detail/field/HttpMediaType.h"
+#include "ruvia/http/detail/coding/HttpResponseContentSemantics.h"
 #include "ruvia/http/detail/client/HttpClientResponseLimits.h"
 #include "ruvia/http/detail/parser/HttpHeaderBlockParser.h"
 #include "ruvia/http/detail/parser/HttpParserSyntax.h"

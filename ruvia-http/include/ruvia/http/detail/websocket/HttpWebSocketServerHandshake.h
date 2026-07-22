@@ -1,7 +1,7 @@
 #pragma once
 
 #include "ruvia/http/HttpStatus.h"
-#include "ruvia/http/detail/HttpRequestAccess.h"
+#include "ruvia/http/detail/request/HttpRequestAccess.h"
 #include "ruvia/http/detail/websocket/HttpWebSocketAcceptKey.h"
 #include "ruvia/http/detail/websocket/WebSocketServerNegotiation.h"
 

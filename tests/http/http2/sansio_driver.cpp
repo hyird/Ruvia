@@ -26,9 +26,9 @@
 #include <filesystem>
 #include <fstream>
 
-#include "ruvia/http/detail/HttpResponseFileAccess.h"
-#include "ruvia/http/detail/HttpRequestAccess.h"
-#include "ruvia/http/detail/HttpResponseBodyAccess.h"
+#include "ruvia/http/detail/response/HttpResponseFileAccess.h"
+#include "ruvia/http/detail/request/HttpRequestAccess.h"
+#include "ruvia/http/detail/response/HttpResponseBodyAccess.h"
 #include "ruvia/web/detail/http/ContextServices.h"
 #include "ruvia/http/detail/http2/Http2Connection.h"
 #include "ruvia/http/detail/http2/Http2FrameCodec.h"

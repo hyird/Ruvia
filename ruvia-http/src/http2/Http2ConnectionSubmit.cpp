@@ -3,10 +3,10 @@
 #include <algorithm>
 #include <utility>
 
-#include "ruvia/http/detail/HttpHeaderSectionSize.h"
-#include "ruvia/http/detail/HttpRequestContentSemantics.h"
-#include "ruvia/http/detail/HttpResponseBodyAccess.h"
-#include "ruvia/http/detail/HttpResponseContentSemantics.h"
+#include "ruvia/http/detail/field/HttpHeaderSectionSize.h"
+#include "ruvia/http/detail/coding/HttpRequestContentSemantics.h"
+#include "ruvia/http/detail/response/HttpResponseBodyAccess.h"
+#include "ruvia/http/detail/coding/HttpResponseContentSemantics.h"
 #include "ruvia/http/detail/http2/Http2FlowControl.h"
 #include "ruvia/http/detail/http2/Http2HeaderRules.h"
 #include "ruvia/http/detail/http2/Http2RemoteReceiveSemantics.h"

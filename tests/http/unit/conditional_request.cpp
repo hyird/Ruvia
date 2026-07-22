@@ -6,10 +6,10 @@
 #include <string>
 #include <string_view>
 
-#include "ruvia/http/detail/HttpConditionalRequest.h"
-#include "ruvia/http/detail/HttpDate.h"
-#include "ruvia/http/detail/HttpEntityTag.h"
-#include "ruvia/http/detail/HttpImfFixdate.h"
+#include "ruvia/http/detail/field/HttpConditionalRequest.h"
+#include "ruvia/http/detail/field/HttpDate.h"
+#include "ruvia/http/detail/field/HttpEntityTag.h"
+#include "ruvia/http/detail/field/HttpImfFixdate.h"
 #include "ruvia/http/detail/server/HttpDateCache.h"
 #include "ruvia/web/detail/StaticFileMetadata.h"
 

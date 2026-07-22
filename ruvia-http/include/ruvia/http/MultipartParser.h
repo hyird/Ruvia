@@ -13,7 +13,7 @@
 #include <vector>
 
 #include "ruvia/http/HttpProtocolError.h"
-#include "ruvia/http/detail/BorrowedView.h"
+#include "ruvia/http/detail/util/BorrowedView.h"
 
 namespace ruvia {
 

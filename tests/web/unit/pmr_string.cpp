@@ -5,7 +5,7 @@
 #include <string>
 #include <string_view>
 
-#include "ruvia/http/detail/PmrString.h"
+#include "ruvia/http/detail/util/PmrString.h"
 
 namespace {
 

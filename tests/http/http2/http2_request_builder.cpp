@@ -4,7 +4,7 @@
 #include <memory_resource>
 #include <string_view>
 
-#include "ruvia/http/detail/HttpRequestAccess.h"
+#include "ruvia/http/detail/request/HttpRequestAccess.h"
 #include "ruvia/http/detail/http2/Http2RequestBuilder.h"
 
 namespace {

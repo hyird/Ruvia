@@ -40,7 +40,7 @@
 #include <asio/ip/tcp.hpp>
 #include "ruvia/core/detail/WorkerSignal.h"
 
-#include "ruvia/http/detail/HttpRequestAccess.h"
+#include "ruvia/http/detail/request/HttpRequestAccess.h"
 #include "ruvia/web/detail/http/ContextServices.h"
 #include "ruvia/web/detail/server/HttpResponseWriter.h"
 #include "ruvia/web/detail/server/RequestMemoryArena.h"
@@ -71,7 +71,7 @@
 #include "ruvia/core/Task.h"
 #include "ruvia/web/Error.h"
 #include "ruvia/http/HttpResponse.h"
-#include "ruvia/http/detail/PmrString.h"
+#include "ruvia/http/detail/util/PmrString.h"
 #include "ruvia/web/detail/server/HttpServerOptions.h"
 #include "ruvia/web/detail/server/HttpServerWorkerState.h"
 #include "ruvia/core/memory/MemoryPool.h"

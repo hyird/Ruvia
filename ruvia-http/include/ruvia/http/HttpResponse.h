@@ -1,7 +1,7 @@
 #pragma once
 
-#include "ruvia/http/detail/PmrResource.h"
-#include "ruvia/http/detail/HttpResponseBody.h"
+#include "ruvia/http/detail/util/PmrResource.h"
+#include "ruvia/http/detail/response/HttpResponseBody.h"
 #include "ruvia/http/HttpStatus.h"
 
 #include <array>

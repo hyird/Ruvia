@@ -18,7 +18,7 @@
 
 #include "ruvia/core/detail/AsioAwait.h"
 #include "ruvia/core/memory/MemoryPool.h"
-#include "ruvia/http/detail/HttpRequestAccess.h"
+#include "ruvia/http/detail/request/HttpRequestAccess.h"
 #include "ruvia/http/detail/server/HttpResponseStreamHead.h"
 #include "ruvia/web/Context.h"
 #include "ruvia/web/Router.h"

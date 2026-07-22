@@ -1,10 +1,10 @@
 #include "ruvia/web/detail/http/FileConditionalRequest.h"
 
-#include "ruvia/http/detail/HeaderTokenUtils.h"
-#include "ruvia/http/detail/HttpConditionalRequest.h"
-#include "ruvia/http/detail/HttpDate.h"
-#include "ruvia/http/detail/HttpEntityTag.h"
-#include "ruvia/http/detail/HttpRequestAccess.h"
+#include "ruvia/http/detail/field/HeaderTokenUtils.h"
+#include "ruvia/http/detail/field/HttpConditionalRequest.h"
+#include "ruvia/http/detail/field/HttpDate.h"
+#include "ruvia/http/detail/field/HttpEntityTag.h"
+#include "ruvia/http/detail/request/HttpRequestAccess.h"
 
 namespace ruvia {
 

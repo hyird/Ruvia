@@ -4,8 +4,8 @@
 #include <cstring>
 #include <utility>
 
-#include "ruvia/http/detail/PmrResource.h"
-#include "ruvia/http/detail/PmrString.h"
+#include "ruvia/http/detail/util/PmrResource.h"
+#include "ruvia/http/detail/util/PmrString.h"
 
 // How a multipart parser's input is held: either a whole borrowed buffer the
 // caller owns, or a streaming buffer the parser appends to and compacts as it

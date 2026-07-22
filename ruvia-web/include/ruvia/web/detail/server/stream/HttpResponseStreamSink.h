@@ -13,7 +13,7 @@
 #include "ruvia/core/Task.h"
 #include "ruvia/core/Timer.h"
 #include "ruvia/web/Context.h"
-#include "ruvia/http/detail/PmrString.h"
+#include "ruvia/http/detail/util/PmrString.h"
 #include "ruvia/core/memory/MemoryPool.h"
 
 #include <array>

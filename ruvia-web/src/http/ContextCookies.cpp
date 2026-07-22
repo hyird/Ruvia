@@ -4,10 +4,10 @@
 #include <string_view>
 #include <utility>
 
-#include "ruvia/http/detail/CookieValidation.h"
-#include "ruvia/http/detail/HttpResponseHeaderAccess.h"
-#include "ruvia/http/detail/HttpResponseHeaderState.h"
-#include "ruvia/http/detail/SetCookiePlan.h"
+#include "ruvia/http/detail/cookie/CookieValidation.h"
+#include "ruvia/http/detail/response/HttpResponseHeaderAccess.h"
+#include "ruvia/http/detail/response/HttpResponseHeaderState.h"
+#include "ruvia/http/detail/cookie/SetCookiePlan.h"
 #include "ruvia/web/detail/auth/CookieSignature.h"
 
 // Setting response cookies, including the two rules that make a cookie's name on

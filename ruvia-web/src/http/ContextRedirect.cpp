@@ -2,8 +2,8 @@
 
 #include <string_view>
 
-#include "ruvia/http/detail/Hex.h"
-#include "ruvia/http/detail/HttpResponseHeaderAccess.h"
+#include "ruvia/http/detail/util/Hex.h"
+#include "ruvia/http/detail/response/HttpResponseHeaderAccess.h"
 
 // A redirect target the application supplies may contain bytes that are not
 // legal in a Location field. Percent-encode exactly those, leaving an already

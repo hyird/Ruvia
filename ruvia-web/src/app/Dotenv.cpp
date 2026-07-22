@@ -8,7 +8,7 @@
 #include <string>
 #include <utility>
 
-#include "ruvia/http/detail/AsciiCase.h"
+#include "ruvia/http/detail/util/AsciiCase.h"
 #include "ruvia/core/memory/PmrObject.h"
 
 namespace ruvia {

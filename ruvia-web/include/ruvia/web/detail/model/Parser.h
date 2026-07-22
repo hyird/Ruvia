@@ -3,9 +3,9 @@
 #include <cstddef>
 #include <string_view>
 
-#include "ruvia/http/detail/AsciiCase.h"
+#include "ruvia/http/detail/util/AsciiCase.h"
 #include "ruvia/web/ModelTypes.h"
-#include "ruvia/http/detail/HttpOws.h"
+#include "ruvia/http/detail/util/HttpOws.h"
 #include "ruvia/web/detail/model/JsonParser.h"
 #include "ruvia/web/detail/model/FormParser.h"
 

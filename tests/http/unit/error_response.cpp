@@ -5,7 +5,7 @@
 #include <string_view>
 
 #include "ruvia/http/HttpResponse.h"
-#include "ruvia/http/detail/HttpResponseBodyAccess.h"
+#include "ruvia/http/detail/response/HttpResponseBodyAccess.h"
 #include "ruvia/web/Error.h"
 #include "ruvia/web/detail/http/HttpErrorResponse.h"
 

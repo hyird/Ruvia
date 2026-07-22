@@ -3,7 +3,7 @@
 #include "ruvia/core/Task.h"
 #include "ruvia/core/WorkerHandle.h"
 #include "ruvia/core/memory/MemoryPool.h"
-#include "ruvia/http/detail/HttpRequestAccess.h"
+#include "ruvia/http/detail/request/HttpRequestAccess.h"
 #include "ruvia/web/Context.h"
 #include "ruvia/web/detail/http/ContextCapabilities.h"
 #include "ruvia/web/detail/http/ContextAccess.h"

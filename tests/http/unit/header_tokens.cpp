@@ -5,13 +5,13 @@
 #include <string_view>
 #include <utility>
 
-#include "ruvia/http/detail/HttpMediaType.h"
-#include "ruvia/http/detail/HttpQualityValue.h"
-#include "ruvia/http/detail/HeaderTokenUtils.h"
-#include "ruvia/http/detail/HttpConnectionFields.h"
-#include "ruvia/http/detail/HttpEntityTag.h"
-#include "ruvia/http/detail/HttpOws.h"
-#include "ruvia/http/detail/HttpTransferEncoding.h"
+#include "ruvia/http/detail/field/HttpMediaType.h"
+#include "ruvia/http/detail/field/HttpQualityValue.h"
+#include "ruvia/http/detail/field/HeaderTokenUtils.h"
+#include "ruvia/http/detail/field/HttpConnectionFields.h"
+#include "ruvia/http/detail/field/HttpEntityTag.h"
+#include "ruvia/http/detail/util/HttpOws.h"
+#include "ruvia/http/detail/coding/HttpTransferEncoding.h"
 #include "ruvia/http/detail/parser/MimeFieldGrammar.h"
 #include "ruvia/http/detail/http2/Http2FramePayload.h"
 #include "ruvia/http/detail/websocket/HttpWebSocketHandshakeFields.h"

@@ -10,7 +10,7 @@
 #include "ruvia/core/detail/AsioAwait.h"
 #include "ruvia/core/detail/SocketUtils.h"
 #include "ruvia/core/Task.h"
-#include "ruvia/http/detail/PmrString.h"
+#include "ruvia/http/detail/util/PmrString.h"
 
 namespace ruvia::detail {
 

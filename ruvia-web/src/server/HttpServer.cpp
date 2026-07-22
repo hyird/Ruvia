@@ -10,7 +10,7 @@
 #include <type_traits>
 
 #include "ruvia/core/detail/ConnectionScanner.h"
-#include "ruvia/http/detail/HttpRequestAccess.h"
+#include "ruvia/http/detail/request/HttpRequestAccess.h"
 #include "ruvia/web/detail/http/HttpProtocolErrorInfo.h"
 #include "ruvia/web/detail/server/http1/Http1SessionRequestCompletion.h"
 #include "ruvia/web/detail/server/http1/Http1ClosingRejection.h"
@@ -31,7 +31,7 @@
 #include "ruvia/web/detail/server/route/HttpServerWebSocketRoute.h"
 #include "ruvia/http/detail/http1/Http1ServerRequestParser.h"
 #include "ruvia/web/Error.h"
-#include "ruvia/http/detail/PmrString.h"
+#include "ruvia/http/detail/util/PmrString.h"
 #include "ruvia/web/detail/router/RouteTable.h"
 #include "ruvia/core/detail/AsioAwait.h"
 #include "ruvia/core/detail/SocketUtils.h"

@@ -3,7 +3,7 @@
 #include <bit>
 #include <stdexcept>
 
-#include "ruvia/http/detail/AsciiCase.h"
+#include "ruvia/http/detail/util/AsciiCase.h"
 #include "ruvia/web/detail/ConfigValidation.h"
 #include "ruvia/web/detail/server/HttpServerOptions.h"
 

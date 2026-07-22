@@ -4,7 +4,7 @@
 // identity is checked on the same native handle that supplies response bytes,
 // closing the stat/open replacement window.
 
-#include "ruvia/http/detail/HttpResponseFileBody.h"
+#include "ruvia/http/detail/response/HttpResponseFileBody.h"
 #include "ruvia/web/detail/server/file/HttpNativeFile.h"
 
 #include <algorithm>

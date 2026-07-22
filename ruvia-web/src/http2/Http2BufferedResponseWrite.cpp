@@ -11,7 +11,7 @@
 
 #include "ruvia/core/memory/MemoryPool.h"
 #include "ruvia/http/HttpResponse.h"
-#include "ruvia/http/detail/HttpResponseBodyAccess.h"
+#include "ruvia/http/detail/response/HttpResponseBodyAccess.h"
 #include "ruvia/http/detail/http2/Http2Connection.h"
 #include "ruvia/http/detail/server/HttpResponseWritePlan.h"
 #include "ruvia/web/detail/http2/Http2SansIoSendWindow.h"

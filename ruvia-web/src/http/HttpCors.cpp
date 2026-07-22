@@ -1,8 +1,8 @@
 #include "ruvia/web/detail/http/HttpCors.h"
 
-#include "ruvia/http/detail/HttpRequestAccess.h"
-#include "ruvia/http/detail/AsciiCase.h"
-#include "ruvia/http/detail/HttpCorsFields.h"
+#include "ruvia/http/detail/request/HttpRequestAccess.h"
+#include "ruvia/http/detail/util/AsciiCase.h"
+#include "ruvia/http/detail/field/HttpCorsFields.h"
 #include "ruvia/http/detail/parser/HttpRequestTarget.h"
 #include "ruvia/http/detail/parser/HttpSerializedOrigin.h"
 #include <array>
@@ -14,7 +14,7 @@
 #include <string_view>
 #include <utility>
 
-#include "ruvia/http/detail/ResponseHeaderUtils.h"
+#include "ruvia/http/detail/response/ResponseHeaderUtils.h"
 
 namespace ruvia::detail {
 namespace {

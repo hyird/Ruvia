@@ -1,6 +1,6 @@
 #include "ruvia/edge/detail/proxy/RequestDirectives.h"
 
-#include "ruvia/http/detail/HeaderTokenUtils.h"
+#include "ruvia/http/detail/field/HeaderTokenUtils.h"
 
 namespace ruvia::edge {
 

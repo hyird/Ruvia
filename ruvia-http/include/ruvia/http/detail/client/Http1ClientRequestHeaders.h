@@ -7,7 +7,7 @@
 
 #include "ruvia/http/Http1ClientRequestWriter.h"
 #include "ruvia/http/HttpHeader.h"
-#include "ruvia/http/detail/HttpConnectionFields.h"
+#include "ruvia/http/detail/field/HttpConnectionFields.h"
 
 // What a caller-supplied request header section must satisfy before the writer
 // will encode it, and the facts the encoder then needs from it: how many wire

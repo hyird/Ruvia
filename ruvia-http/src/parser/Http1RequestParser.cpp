@@ -2,8 +2,8 @@
 
 #include "ruvia/http/Http1RequestParser.h"
 
-#include "ruvia/http/detail/HttpRequestContentSemantics.h"
-#include "ruvia/http/detail/HttpRequestAccess.h"
+#include "ruvia/http/detail/coding/HttpRequestContentSemantics.h"
+#include "ruvia/http/detail/request/HttpRequestAccess.h"
 #include "ruvia/http/detail/parser/HttpChunkParser.h"
 #include "ruvia/http/detail/parser/HttpHeaderBlockParser.h"
 #include "ruvia/http/detail/parser/HttpRequestTarget.h"

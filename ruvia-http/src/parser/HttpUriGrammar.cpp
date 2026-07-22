@@ -6,7 +6,7 @@
 #include <cstddef>
 #include <system_error>
 
-#include "ruvia/http/detail/Hex.h"
+#include "ruvia/http/detail/util/Hex.h"
 
 namespace ruvia::detail {
 
