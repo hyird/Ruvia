@@ -161,7 +161,7 @@ WorkerId WebWorkerDispatch::id() const noexcept {
 WebWorkerPostResult WebWorkerDispatch::post(Task task) {
     std::lock_guard lock(submitMutex_);
     if (!accepting_) {
-        workerStopping_.fetch_add(1, std::memory_order_relaxed);
+        postCounters_.recordWorkerStopping();
         return WebWorkerPostResult::reject(
             PostStatus::kWorkerStopping, std::move(task));
     }
@@ -176,17 +176,7 @@ WebWorkerPostResult WebWorkerDispatch::post(Task task) {
                 self->start(std::move(task));
             };
         });
-    switch (status) {
-    case PostStatus::kAccepted:
-        accepted_.fetch_add(1, std::memory_order_relaxed);
-        break;
-    case PostStatus::kQueueFull:
-        queueFull_.fetch_add(1, std::memory_order_relaxed);
-        break;
-    case PostStatus::kWorkerStopping:
-        workerStopping_.fetch_add(1, std::memory_order_relaxed);
-        break;
-    }
+    postCounters_.record(status);
     return status == PostStatus::kAccepted
         ? WebWorkerPostResult::accept()
         : WebWorkerPostResult::reject(status, std::move(task));
@@ -222,9 +212,9 @@ bool WebWorkerDispatch::accepting() const noexcept {
 
 WebWorkerStats WebWorkerDispatch::stats() const noexcept {
     return WebWorkerStats{
-        .accepted = accepted_.load(std::memory_order_relaxed),
-        .queueFull = queueFull_.load(std::memory_order_relaxed),
-        .workerStopping = workerStopping_.load(std::memory_order_relaxed),
+        .accepted = postCounters_.accepted(),
+        .queueFull = postCounters_.queueFull(),
+        .workerStopping = postCounters_.workerStopping(),
         .completed = completed_.load(std::memory_order_relaxed),
         .failed = failedCount_.load(std::memory_order_relaxed),
         .outstanding = outstanding_.load(std::memory_order_acquire),
