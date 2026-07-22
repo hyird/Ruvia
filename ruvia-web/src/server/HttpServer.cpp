@@ -1,4 +1,6 @@
 #include "ruvia/web/detail/server/HttpServer.h"
+#include "ruvia/web/detail/server/HttpServerRequestState.h"
+#include "ruvia/web/detail/server/HttpServerAlpn.h"
 
 #include <asio/ssl.hpp>
 #include <openssl/bio.h>
@@ -8,31 +10,23 @@
 #include <memory>
 #include <stdexcept>
 #include <type_traits>
-
-#include "ruvia/core/detail/io/ConnectionScanner.h"
 #include "ruvia/http/detail/request/HttpRequestAccess.h"
-#include "ruvia/web/detail/http/error/HttpProtocolErrorInfo.h"
 #include "ruvia/web/detail/server/http1/Http1SessionRequestCompletion.h"
 #include "ruvia/web/detail/server/http1/Http1ClosingRejection.h"
 #include "ruvia/web/detail/server/HttpBufferedResponse.h"
-#include "ruvia/web/detail/server/HttpConnectionState.h"
 #include "ruvia/web/detail/server/HttpResponseWriter.h"
 #include "ruvia/web/detail/server/HttpServerAccessLog.h"
-#include "ruvia/web/detail/server/HttpServerAlpn.h"
 #include "ruvia/web/detail/server/HttpServerAutoHttps.h"
 #include "ruvia/web/detail/server/route/HttpServerBodyRouteCompletion.h"
 #include "ruvia/web/detail/http2/CleartextUpgrade.h"
 #include "ruvia/web/detail/server/HttpServerConnectionGuards.h"
 #include "ruvia/web/detail/server/HttpServerIdleWorkSet.h"
-#include "ruvia/web/detail/server/HttpServerRequestState.h"
 #include "ruvia/web/detail/server/HttpServerResponseState.h"
 #include "ruvia/web/detail/server/stream/HttpServerResponseStreamRoute.h"
 #include "ruvia/web/detail/server/route/HttpServerStreamBodyRoute.h"
 #include "ruvia/web/detail/server/route/HttpServerWebSocketRoute.h"
 #include "ruvia/http/detail/http1/Http1ServerRequestParser.h"
-#include "ruvia/web/Error.h"
 #include "ruvia/http/detail/util/PmrString.h"
-#include "ruvia/web/detail/router/RouteTable.h"
 #include "ruvia/core/detail/io/AsioAwait.h"
 #include "ruvia/core/detail/io/SocketUtils.h"
 

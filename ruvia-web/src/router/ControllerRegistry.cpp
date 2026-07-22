@@ -3,8 +3,6 @@
 #include <memory_resource>
 #include <mutex>
 #include <utility>
-
-#include "ruvia/core/memory/MemoryPool.h"
 #include "ruvia/core/memory/PmrObject.h"
 #include "ruvia/core/memory/ProcessResource.h"
 

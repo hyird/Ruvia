@@ -1,7 +1,5 @@
 #include "ruvia/web/detail/redis/RedisRegistry.h"
 #include "ruvia/web/detail/redis/RedisConfigValidation.h"
-#include "ruvia/web/detail/redis/RedisUtils.h"
-
 #include <hiredis/hiredis.h>
 
 #include <system_error>

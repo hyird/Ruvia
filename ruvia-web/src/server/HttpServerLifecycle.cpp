@@ -27,7 +27,6 @@
 #endif
 
 #include "ruvia/core/detail/io/ConnectionScanner.h"
-#include "ruvia/web/detail/server/HttpConnectionState.h"
 #include "ruvia/web/detail/server/HttpServerOptionsValidation.h"
 #include "ruvia/web/detail/router/RouteTable.h"
 #include "ruvia/http/detail/field/HeaderTokenUtils.h"

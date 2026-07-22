@@ -11,9 +11,6 @@
 
 #include <asio/post.hpp>
 #include <asio/steady_timer.hpp>
-
-#include <ruvia/core/memory/PmrResource.h>
-
 namespace ruvia::detail {
 namespace {
 

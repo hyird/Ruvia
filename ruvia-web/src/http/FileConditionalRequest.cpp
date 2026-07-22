@@ -1,7 +1,6 @@
 #include "ruvia/web/detail/http/static/FileConditionalRequest.h"
 
 #include "ruvia/http/detail/field/HeaderTokenUtils.h"
-#include "ruvia/http/detail/field/HttpConditionalRequest.h"
 #include "ruvia/http/detail/field/HttpDate.h"
 #include "ruvia/http/detail/field/HttpEntityTag.h"
 #include "ruvia/http/detail/request/HttpRequestAccess.h"

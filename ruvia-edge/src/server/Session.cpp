@@ -20,8 +20,6 @@
 #include <asio/write.hpp>
 
 #include <openssl/ssl.h>  // negotiated ALPN read-back
-
-#include "ruvia/edge/detail/proxy/HeaderRules.h"
 #include "ruvia/edge/detail/http1/Http1ResponseWriter.h"
 #include "ruvia/edge/detail/http1/Http1Wire.h"
 #include "ruvia/edge/detail/http2/Http2Session.h"

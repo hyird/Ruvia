@@ -1,8 +1,6 @@
 #include "ruvia/web/redis/Redis.h"
 
 #include "ruvia/core/memory/ProcessResource.h"
-#include "ruvia/web/detail/redis/RedisUtils.h"
-
 #include <stdexcept>
 #include <utility>
 

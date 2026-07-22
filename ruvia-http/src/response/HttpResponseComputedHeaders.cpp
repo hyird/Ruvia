@@ -10,8 +10,6 @@
 #include "ruvia/http/detail/util/HttpNumberFormat.h"
 #include "ruvia/http/detail/response/HttpResponseHeaderAccess.h"
 #include "ruvia/http/detail/response/HttpResponseHeaderBits.h"
-#include "ruvia/http/detail/response/HttpResponseKnownHeaders.h"
-
 // The two response fields Ruvia formats itself rather than taking as a value:
 // Allow, built from the method mask a route matched, and Content-Range in both
 // its satisfied and unsatisfied forms. Each writes straight into the response's

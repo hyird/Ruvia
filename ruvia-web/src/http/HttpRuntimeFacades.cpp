@@ -3,8 +3,6 @@
 #include <stdexcept>
 
 #include "ruvia/core/Task.h"
-#include "ruvia/core/memory/PmrResource.h"
-
 #include <memory_resource>
 #include <utility>
 #include <vector>
