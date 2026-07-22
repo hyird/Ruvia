@@ -76,6 +76,9 @@ set(RUVIA_WEB_SOURCES
 if(RUVIA_ENABLE_MARIADB OR RUVIA_ENABLE_POSTGRESQL)
     list(APPEND RUVIA_WEB_SOURCES
         ${CMAKE_CURRENT_SOURCE_DIR}/src/db/DbHandle.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/db/DbStreamResult.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/db/DbTransaction.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/db/DbPreparedStatement.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/src/db/DbHostResolution.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/src/db/DbMigration.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/src/db/DbRegistry.cpp
