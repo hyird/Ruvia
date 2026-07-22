@@ -57,22 +57,9 @@ private:
     void bindOperationScope(detail::ScopedOperationScope& scope) noexcept;
     static void expireCapability(detail::ScopedCapabilityNode& capability) noexcept;
 
-    class OperationGuard final {
-    public:
-        explicit OperationGuard(DbTransaction& owner);
-        OperationGuard(const OperationGuard&) = delete;
-        OperationGuard& operator=(const OperationGuard&) = delete;
-        ~OperationGuard();
-
-        [[nodiscard]] Lease& lease() noexcept { return *lease_; }
-        void finishActive() noexcept;
-        void finishClosed() noexcept;
-        void finishFailed() noexcept;
-
-    private:
-        DbTransaction* owner_;
-        Lease* lease_;
-    };
+    template <typename Owner>
+    friend class detail::DbOperationGuard;
+    using OperationGuard = detail::DbOperationGuard<DbTransaction>;
 
     detail::DbOperationState<Lease> state_{};
     detail::ScopedOperationScope operationScope_;

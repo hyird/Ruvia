@@ -148,29 +148,4 @@ void DbStreamResult::reset() noexcept {
     });
 }
 
-DbStreamResult::OperationGuard::OperationGuard(DbStreamResult& owner)
-    : owner_(&owner),
-      lease_(&owner.state_.begin()) {}
-
-DbStreamResult::OperationGuard::~OperationGuard() {
-    if (owner_ != nullptr) {
-        owner_->state_.finishFailed();
-    }
-}
-
-void DbStreamResult::OperationGuard::finishActive() noexcept {
-    owner_->state_.finishActive();
-    owner_ = nullptr;
-}
-
-void DbStreamResult::OperationGuard::finishClosed() noexcept {
-    owner_->state_.finishClosed();
-    owner_ = nullptr;
-}
-
-void DbStreamResult::OperationGuard::finishFailed() noexcept {
-    owner_->state_.finishFailed();
-    owner_ = nullptr;
-}
-
 }  // namespace ruvia

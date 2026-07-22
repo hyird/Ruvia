@@ -100,22 +100,9 @@ private:
     Task<std::optional<DbRow>> readTask();
     Task<void> closeTask();
 
-    class OperationGuard final {
-    public:
-        explicit OperationGuard(DbStreamResult& owner);
-        OperationGuard(const OperationGuard&) = delete;
-        OperationGuard& operator=(const OperationGuard&) = delete;
-        ~OperationGuard();
-
-        [[nodiscard]] Lease& lease() noexcept { return *lease_; }
-        void finishActive() noexcept;
-        void finishClosed() noexcept;
-        void finishFailed() noexcept;
-
-    private:
-        DbStreamResult* owner_;
-        Lease* lease_;
-    };
+    template <typename Owner>
+    friend class detail::DbOperationGuard;
+    using OperationGuard = detail::DbOperationGuard<DbStreamResult>;
 
     detail::DbOperationState<Lease> state_{};
     detail::ScopedOperationScope operationScope_;
