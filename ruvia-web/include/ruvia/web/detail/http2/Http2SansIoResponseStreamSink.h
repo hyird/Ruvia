@@ -153,14 +153,9 @@ public:
             co_return;
         }
 
-        const auto trailerResult = httpResponseTrailerSection(trailers);
-        if (const auto* failure = trailerResult.failure()) {
-            throw failure->exception();
-        }
+        const auto trailerResult = validatedResponseTrailerSection(trailers);
         const auto& trailerSection = *trailerResult.section();
-        const auto trailerIntent = trailerSection.empty()
-            ? ResponseTrailerIntent::kNone
-            : ResponseTrailerIntent::kPresent;
+        const auto trailerIntent = responseTrailerIntent(trailerSection);
         // Preflight through the HTTP-owned result before committing the initial
         // response head. The typed section carries that proof to finishResponse.
         co_await commit(trailerIntent);
