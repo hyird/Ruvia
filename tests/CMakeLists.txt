@@ -166,6 +166,8 @@ add_executable(ruvia_unit_tests
     web/unit/conn_info.cpp
     web/unit/context_capabilities.cpp
     web/unit/context_cookie.cpp
+    web/unit/context_request_lookups.cpp
+    web/unit/context_parse_body.cpp
     web/unit/context_redirect.cpp
     web/unit/cookie_signature.cpp
     web/unit/cookie_validation.cpp
