@@ -55,6 +55,7 @@ add_executable(ruvia_unit_tests
     http/http1/multipart.cpp
     http/http1/multipart_reader.cpp
     http/http1/request_body_decoding.cpp
+    http/http1/transfer_coding_decoding.cpp
     http/http1/request_body_loader.cpp
     http/http1/request_target.cpp
 
@@ -109,6 +110,7 @@ add_executable(ruvia_unit_tests
     http/unit/connection_read_buffer.cpp
     http/unit/content_negotiation.cpp
     http/unit/computed_response_headers.cpp
+    http/unit/content_codec.cpp
     http/unit/content_type_match.cpp
     http/unit/date_cache.cpp
     http/unit/error.cpp
@@ -190,6 +192,7 @@ add_executable(ruvia_unit_tests
     web/unit/pmr_string.cpp
     web/unit/pool_waiter_queue.cpp
     web/unit/rate_limit_decision.cpp
+    web/unit/request_body_limits.cpp
     web/unit/rate_limiter.cpp
     web/unit/regex_matcher.cpp
     web/unit/response_stream_dispatch.cpp
