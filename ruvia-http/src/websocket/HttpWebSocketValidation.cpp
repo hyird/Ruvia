@@ -1,4 +1,6 @@
-#include "ruvia/http/detail/websocket/HttpWebSocketUtils.h"
+#include "ruvia/http/detail/websocket/HttpWebSocketClosePayload.h"
+#include "ruvia/http/detail/websocket/HttpWebSocketFrameCodec.h"
+#include "ruvia/http/detail/websocket/HttpWebSocketPayloadValidation.h"
 #include "ruvia/http/detail/websocket/HttpWebSocketHandshakeFields.h"
 
 #include <array>
