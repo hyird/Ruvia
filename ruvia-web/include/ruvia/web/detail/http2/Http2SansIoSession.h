@@ -624,184 +624,206 @@ Task<void> runHttp2SansIoSession(
             }
             wakeWriter();
         };
+        // One handler per event kind. The loop below is the dispatch; each
+        // handler returns when it is done with its event, exactly as the
+        // `continue` it replaced did.
+        const auto onMessageHead = [&](const auto* messageHead) {
+            const auto streamId = messageHead->streamId();
+            ++acceptedRequestHeads;
+            if (!connection.draining() &&
+                options.keepaliveRequests.has_value() &&
+                acceptedRequestHeads >= *options.keepaliveRequests) {
+                // This request still runs; the GOAWAY covers every stream
+                // at or below it, so the peer reopens on a new connection.
+                connection.beginDrain();
+                wakeWriter();
+            }
+            auto* streamState = connection.stream(streamId);
+            if (streamState == nullptr) {
+                return;
+            }
+            auto* streamRuntime = resolveStreamRoute(*streamState);
+            if (streamRuntime == nullptr) {
+                resetEventStream(
+                    streamId, Http2ErrorCode::kInternalError);
+                return;
+            }
+            const auto expectationPlan = streamState->expectationPlan(
+                HttpUnsupportedExpectationPolicy::kReject);
+            if (expectationPlan.sendContinue() != nullptr) {
+                const auto status = connection.submitInterimResponseHead(
+                    streamId,
+                    HttpInterimResponseHead(ruvia::http_status::kContinue));
+                if (status == Http2SubmitStatus::kAccepted) {
+                    wakeWriter();
+                } else {
+                    if (status != Http2SubmitStatus::kClosed) {
+                        resetEventStream(
+                            streamId, Http2ErrorCode::kInternalError);
+                    } else {
+                        eraseStreamRuntime(streamId);
+                    }
+                    return;
+                }
+            }
+            const bool connectRequest =
+                streamState->tunnel().pending() != nullptr;
+            const auto* selectedRoute = streamRuntime->selectedRoute();
+            const bool streamingBody = !connectRequest &&
+                selectedRoute != nullptr &&
+                selectedRoute->body().streaming() != nullptr &&
+                streamState->remoteReceive().contentOpen() != nullptr;
+            if (expectationPlan.rejection() != nullptr ||
+                connectRequest || streamingBody) {
+                // Dispatch NOW; body bytes stream through the Web runtime's queue
+                // while the handler runs. Unsupported expectations also need an
+                // immediate 417: waiting for buffered content would deadlock a
+                // conforming client that is waiting for the expectation decision.
+                if (!admitStream(streamId)) {
+                    resetEventStream(
+                        streamId, Http2ErrorCode::kInternalError);
+                }
+            }
+        };
+        const auto onBodyChunk = [&](const auto* bodyChunk) {
+            const auto streamId = bodyChunk->streamId();
+            auto* streamState = connection.stream(streamId);
+            auto* streamRuntime = findStreamRuntime(streamId);
+            if (streamState == nullptr || streamRuntime == nullptr) {
+                if (streamState != nullptr) {
+                    resetEventStream(
+                        streamId, Http2ErrorCode::kInternalError);
+                }
+                return;
+            }
+            auto* selectedRoute = streamRuntime->selectedRoute();
+            if (selectedRoute == nullptr) {
+                resetEventStream(
+                    streamId, Http2ErrorCode::kInternalError);
+                return;
+            }
+            auto& requestBody = selectedRoute->body();
+            const auto totalLimit = requestBodyByteLimit(
+                requestBody.mode(),
+                options.maxStreamBodyBytes,
+                options.maxBufferedBodyBytes);
+            const auto stored = requestBody.store(
+                bodyChunk->bytes(),
+                totalLimit,
+                options.maxBufferedBodyBytes);
+            if (stored.stored() == nullptr) {
+                const bool knownRejection =
+                    stored.protocolFailure() != nullptr ||
+                    stored.backlogOverflow() != nullptr;
+                resetEventStream(
+                    streamId,
+                    knownRejection
+                        ? Http2ErrorCode::kCancel
+                        : Http2ErrorCode::kInternalError);
+                return;
+            }
+            if (requestBody.streaming() != nullptr) {
+                auto* signal = streamRuntime->signal();
+                if (signal == nullptr) {
+                    resetEventStream(
+                        streamId, Http2ErrorCode::kInternalError);
+                    return;
+                }
+                signal->wake();
+            } else {
+                // Delay acknowledgement until the complete event batch has been
+                // copied. releaseReceivedData() returns all debt currently held
+                // by the stream, including later DATA frames from this feed.
+                if (!markBufferedBodyCopied(streamId)) {
+                    resetEventStream(
+                        streamId, Http2ErrorCode::kInternalError);
+                }
+            }
+        };
+        const auto onTunnelData = [&](const auto* tunnelData) {
+            const auto streamId = tunnelData->streamId();
+            auto* streamState = connection.stream(streamId);
+            auto* streamRuntime = findStreamRuntime(streamId);
+            auto* signal = streamRuntime != nullptr
+                ? streamRuntime->signal()
+                : nullptr;
+            if (streamState == nullptr || streamRuntime == nullptr ||
+                signal == nullptr) {
+                if (streamState != nullptr) {
+                    resetEventStream(
+                        streamId, Http2ErrorCode::kInternalError);
+                }
+                return;
+            }
+            auto* selectedRoute = streamRuntime->selectedRoute();
+            auto* streamingBody = selectedRoute != nullptr
+                ? selectedRoute->body().streaming()
+                : nullptr;
+            if (streamingBody == nullptr) {
+                resetEventStream(
+                    streamId, Http2ErrorCode::kInternalError);
+                return;
+            }
+            streamingBody->queue().enqueue(tunnelData->bytes());
+            signal->wake();
+        };
+        const auto onTunnelEnd = [&](const auto* tunnelEnd) {
+            if (auto* signal = findSignal(tunnelEnd->streamId())) {
+                signal->wake();
+            }
+        };
+        const auto onMessageEnd = [&](const auto* messageEnd) {
+            const auto streamId = messageEnd->streamId();
+            if (connection.stream(streamId) == nullptr) {
+                return;
+            }
+            auto* streamRuntime = findStreamRuntime(streamId);
+            if (streamRuntime == nullptr) {
+                resetEventStream(
+                    streamId, Http2ErrorCode::kInternalError);
+                return;
+            }
+            if (auto* signal = streamRuntime->signal()) {
+                signal->wake();  // remote END_STREAM was committed before this event
+            } else if (!admitStream(streamId)) {
+                resetEventStream(
+                    streamId, Http2ErrorCode::kInternalError);
+            }
+        };
+        const auto onStreamClosed = [&](const auto* streamClosed) {
+            const auto streamId = streamClosed->streamId();
+            unmarkBufferedBodyCopied(streamId);
+            auto* streamRuntime = findStreamRuntime(streamId);
+            auto* signal = streamRuntime != nullptr
+                ? streamRuntime->signal()
+                : nullptr;
+            if (signal != nullptr) {
+                signal->wake();  // stream is reset; blocked readers/writers see it
+            } else {
+                // The protocol core can erase an unpinned reset stream before
+                // this event is drained. Cleanup is keyed by the typed event,
+                // not by a second lookup of already-removed core state.
+                eraseStreamRuntime(streamId);
+            }
+        };
+
         for (;;) {
             const auto event = connection.nextEvent();
             if (!event.has_value()) {
                 break;
             }
             if (const auto* messageHead = event->messageHead()) {
-                const auto streamId = messageHead->streamId();
-                ++acceptedRequestHeads;
-                if (!connection.draining() &&
-                    options.keepaliveRequests.has_value() &&
-                    acceptedRequestHeads >= *options.keepaliveRequests) {
-                    // This request still runs; the GOAWAY covers every stream
-                    // at or below it, so the peer reopens on a new connection.
-                    connection.beginDrain();
-                    wakeWriter();
-                }
-                auto* streamState = connection.stream(streamId);
-                if (streamState == nullptr) {
-                    continue;
-                }
-                auto* streamRuntime = resolveStreamRoute(*streamState);
-                if (streamRuntime == nullptr) {
-                    resetEventStream(
-                        streamId, Http2ErrorCode::kInternalError);
-                    continue;
-                }
-                const auto expectationPlan = streamState->expectationPlan(
-                    HttpUnsupportedExpectationPolicy::kReject);
-                if (expectationPlan.sendContinue() != nullptr) {
-                    const auto status = connection.submitInterimResponseHead(
-                        streamId,
-                        HttpInterimResponseHead(ruvia::http_status::kContinue));
-                    if (status == Http2SubmitStatus::kAccepted) {
-                        wakeWriter();
-                    } else {
-                        if (status != Http2SubmitStatus::kClosed) {
-                            resetEventStream(
-                                streamId, Http2ErrorCode::kInternalError);
-                        } else {
-                            eraseStreamRuntime(streamId);
-                        }
-                        continue;
-                    }
-                }
-                const bool connectRequest =
-                    streamState->tunnel().pending() != nullptr;
-                const auto* selectedRoute = streamRuntime->selectedRoute();
-                const bool streamingBody = !connectRequest &&
-                    selectedRoute != nullptr &&
-                    selectedRoute->body().streaming() != nullptr &&
-                    streamState->remoteReceive().contentOpen() != nullptr;
-                if (expectationPlan.rejection() != nullptr ||
-                    connectRequest || streamingBody) {
-                    // Dispatch NOW; body bytes stream through the Web runtime's queue
-                    // while the handler runs. Unsupported expectations also need an
-                    // immediate 417: waiting for buffered content would deadlock a
-                    // conforming client that is waiting for the expectation decision.
-                    if (!admitStream(streamId)) {
-                        resetEventStream(
-                            streamId, Http2ErrorCode::kInternalError);
-                    }
-                }
+                onMessageHead(messageHead);
             } else if (const auto* bodyChunk = event->messageBodyChunk()) {
-                const auto streamId = bodyChunk->streamId();
-                auto* streamState = connection.stream(streamId);
-                auto* streamRuntime = findStreamRuntime(streamId);
-                if (streamState == nullptr || streamRuntime == nullptr) {
-                    if (streamState != nullptr) {
-                        resetEventStream(
-                            streamId, Http2ErrorCode::kInternalError);
-                    }
-                    continue;
-                }
-                auto* selectedRoute = streamRuntime->selectedRoute();
-                if (selectedRoute == nullptr) {
-                    resetEventStream(
-                        streamId, Http2ErrorCode::kInternalError);
-                    continue;
-                }
-                auto& requestBody = selectedRoute->body();
-                const auto totalLimit = requestBodyByteLimit(
-                    requestBody.mode(),
-                    options.maxStreamBodyBytes,
-                    options.maxBufferedBodyBytes);
-                const auto stored = requestBody.store(
-                    bodyChunk->bytes(),
-                    totalLimit,
-                    options.maxBufferedBodyBytes);
-                if (stored.stored() == nullptr) {
-                    const bool knownRejection =
-                        stored.protocolFailure() != nullptr ||
-                        stored.backlogOverflow() != nullptr;
-                    resetEventStream(
-                        streamId,
-                        knownRejection
-                            ? Http2ErrorCode::kCancel
-                            : Http2ErrorCode::kInternalError);
-                    continue;
-                }
-                if (requestBody.streaming() != nullptr) {
-                    auto* signal = streamRuntime->signal();
-                    if (signal == nullptr) {
-                        resetEventStream(
-                            streamId, Http2ErrorCode::kInternalError);
-                        continue;
-                    }
-                    signal->wake();
-                } else {
-                    // Delay acknowledgement until the complete event batch has been
-                    // copied. releaseReceivedData() returns all debt currently held
-                    // by the stream, including later DATA frames from this feed.
-                    if (!markBufferedBodyCopied(streamId)) {
-                        resetEventStream(
-                            streamId, Http2ErrorCode::kInternalError);
-                    }
-                }
+                onBodyChunk(bodyChunk);
             } else if (const auto* tunnelData = event->tunnelData()) {
-                const auto streamId = tunnelData->streamId();
-                auto* streamState = connection.stream(streamId);
-                auto* streamRuntime = findStreamRuntime(streamId);
-                auto* signal = streamRuntime != nullptr
-                    ? streamRuntime->signal()
-                    : nullptr;
-                if (streamState == nullptr || streamRuntime == nullptr ||
-                    signal == nullptr) {
-                    if (streamState != nullptr) {
-                        resetEventStream(
-                            streamId, Http2ErrorCode::kInternalError);
-                    }
-                    continue;
-                }
-                auto* selectedRoute = streamRuntime->selectedRoute();
-                auto* streamingBody = selectedRoute != nullptr
-                    ? selectedRoute->body().streaming()
-                    : nullptr;
-                if (streamingBody == nullptr) {
-                    resetEventStream(
-                        streamId, Http2ErrorCode::kInternalError);
-                    continue;
-                }
-                streamingBody->queue().enqueue(tunnelData->bytes());
-                signal->wake();
+                onTunnelData(tunnelData);
             } else if (const auto* tunnelEnd = event->tunnelEnd()) {
-                if (auto* signal = findSignal(tunnelEnd->streamId())) {
-                    signal->wake();
-                }
+                onTunnelEnd(tunnelEnd);
             } else if (const auto* messageEnd = event->messageEnd()) {
-                const auto streamId = messageEnd->streamId();
-                if (connection.stream(streamId) == nullptr) {
-                    continue;
-                }
-                auto* streamRuntime = findStreamRuntime(streamId);
-                if (streamRuntime == nullptr) {
-                    resetEventStream(
-                        streamId, Http2ErrorCode::kInternalError);
-                    continue;
-                }
-                if (auto* signal = streamRuntime->signal()) {
-                    signal->wake();  // remote END_STREAM was committed before this event
-                } else if (!admitStream(streamId)) {
-                    resetEventStream(
-                        streamId, Http2ErrorCode::kInternalError);
-                }
+                onMessageEnd(messageEnd);
             } else if (const auto* streamClosed = event->streamClosed()) {
-                const auto streamId = streamClosed->streamId();
-                unmarkBufferedBodyCopied(streamId);
-                auto* streamRuntime = findStreamRuntime(streamId);
-                auto* signal = streamRuntime != nullptr
-                    ? streamRuntime->signal()
-                    : nullptr;
-                if (signal != nullptr) {
-                    signal->wake();  // stream is reset; blocked readers/writers see it
-                } else {
-                    // The protocol core can erase an unpinned reset stream before
-                    // this event is drained. Cleanup is keyed by the typed event,
-                    // not by a second lookup of already-removed core state.
-                    eraseStreamRuntime(streamId);
-                }
+                onStreamClosed(streamClosed);
             }
         }
         for (std::size_t i = 0; i < copiedBodyStreamCount; ++i) {
