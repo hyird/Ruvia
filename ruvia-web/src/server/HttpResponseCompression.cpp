@@ -1,4 +1,5 @@
 #include "ruvia/web/detail/server/HttpResponseCompression.h"
+#include "ruvia/http/detail/server/HttpResponseWritePlan.h"
 
 #include "ruvia/http/HttpCache.h"
 #include "ruvia/http/detail/response/HttpResponseBodyAccess.h"

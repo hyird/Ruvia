@@ -6,9 +6,6 @@
 #include <cstddef>
 #include <cstdint>
 #include <string_view>
-
-#include "ruvia/http/detail/util/Hex.h"
-
 namespace ruvia::detail {
 
 enum class RequestHeaderKind {

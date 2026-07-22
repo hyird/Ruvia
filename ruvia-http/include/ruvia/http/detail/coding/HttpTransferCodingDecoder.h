@@ -1,7 +1,4 @@
 #pragma once
-
-#include "ruvia/http/detail/coding/ZlibPmrAllocation.h"
-
 #include "ruvia/http/detail/coding/HttpTransferCoding.h"
 #include "ruvia/http/HttpProtocolError.h"
 #include "ruvia/http/detail/request/HttpRequestBodyFailure.h"

@@ -1,4 +1,5 @@
 #include "ruvia/web/detail/router/RouteTable.h"
+#include "ruvia/web/detail/router/RouteStreamState.h"
 
 #include <optional>
 #include <utility>

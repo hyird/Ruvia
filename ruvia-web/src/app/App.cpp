@@ -157,6 +157,53 @@ WebWorkerHandle App::workerFor(std::string_view key) const {
     return workerFor(detail::workerSelectionHash(key));
 }
 
+namespace {
+
+// One worker's router: the controllers registered at static-initialization time,
+// then every handler the app was configured with -- error, not-found, their
+// prefix-scoped variants, and the global middlewares -- and finalize. Each worker
+// builds its own so a router is never shared across event loops.
+[[nodiscard]] std::unique_ptr<Router, detail::PmrObjectDeleter<Router>>
+buildWorkerRouter(
+    const detail::AppState& state,
+    std::pmr::memory_resource* runtimeResource,
+    detail::ControllerStore& controllers,
+    std::span<const detail::ControllerRegistrar> controllerRegistrars) {
+    auto router = detail::makePmrObject<Router>(runtimeResource);
+    detail::registerControllers(
+        *router, controllers, controllerRegistrars);
+    auto& routes = detail::RouterImpl::from(*router);
+    routes.setErrorHandler(state.errorHandler);
+    routes.setNotFoundHandler(state.notFoundHandler);
+    if (!state.prefixErrorHandlers.empty()) {
+        std::pmr::vector<detail::HttpPrefixErrorHandler> views(
+            runtimeResource);
+        views.reserve(state.prefixErrorHandlers.size());
+        for (const auto& [prefix, handler] :
+             state.prefixErrorHandlers) {
+            views.push_back({std::string_view(prefix), handler});
+        }
+        routes.setPrefixErrorHandlers(views);
+    }
+    if (!state.prefixNotFoundHandlers.empty()) {
+        std::pmr::vector<detail::HttpPrefixNotFoundHandler> views(
+            runtimeResource);
+        views.reserve(state.prefixNotFoundHandlers.size());
+        for (const auto& [prefix, handler] :
+             state.prefixNotFoundHandlers) {
+            views.push_back({std::string_view(prefix), handler});
+        }
+        routes.setPrefixNotFoundHandlers(views);
+    }
+    if (!state.globalMiddlewares.empty()) {
+        routes.setGlobalMiddlewares(state.globalMiddlewares);
+    }
+    routes.finalize();
+    return router;
+}
+
+}  // namespace
+
 void App::run() {
     auto& state = *state_;
     auto* runtimeResource = detail::appResource();
@@ -214,36 +261,9 @@ void App::run() {
                     ? std::move(listenerOptions)
                     : listenerOptions;  // NOLINT(bugprone-use-after-move): moved only on the final iteration
                 detail::ControllerStore controllers;
-                auto router = detail::makePmrObject<Router>(runtimeResource);
-                detail::registerControllers(
-                    *router, controllers, controllerRegistrars);
+                auto router = buildWorkerRouter(
+                    state, runtimeResource, controllers, controllerRegistrars);
                 auto& routes = detail::RouterImpl::from(*router);
-                routes.setErrorHandler(state.errorHandler);
-                routes.setNotFoundHandler(state.notFoundHandler);
-                if (!state.prefixErrorHandlers.empty()) {
-                    std::pmr::vector<detail::HttpPrefixErrorHandler> views(
-                        runtimeResource);
-                    views.reserve(state.prefixErrorHandlers.size());
-                    for (const auto& [prefix, handler] :
-                         state.prefixErrorHandlers) {
-                        views.push_back({std::string_view(prefix), handler});
-                    }
-                    routes.setPrefixErrorHandlers(views);
-                }
-                if (!state.prefixNotFoundHandlers.empty()) {
-                    std::pmr::vector<detail::HttpPrefixNotFoundHandler> views(
-                        runtimeResource);
-                    views.reserve(state.prefixNotFoundHandlers.size());
-                    for (const auto& [prefix, handler] :
-                         state.prefixNotFoundHandlers) {
-                        views.push_back({std::string_view(prefix), handler});
-                    }
-                    routes.setPrefixNotFoundHandlers(views);
-                }
-                if (!state.globalMiddlewares.empty()) {
-                    routes.setGlobalMiddlewares(state.globalMiddlewares);
-                }
-                routes.finalize();
                 auto worker = detail::makePmrObject<detail::HttpServer>(
                     runtimeResource,
                     endpoint,

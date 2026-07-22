@@ -1,4 +1,5 @@
 #include "test_harness.h"
+#include "ruvia/web/detail/server/RequestBodyLimit.h"
 
 #include <concepts>
 #include <cstddef>

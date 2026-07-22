@@ -1,4 +1,5 @@
 #include "ruvia/web/detail/router/RouterImpl.h"
+#include "ruvia/web/detail/router/PathSegments.h"
 
 #include <memory>
 #include <stdexcept>

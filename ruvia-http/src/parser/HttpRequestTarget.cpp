@@ -1,4 +1,5 @@
 #include "ruvia/http/detail/parser/HttpRequestTarget.h"
+#include "ruvia/http/detail/util/Hex.h"
 
 #include "ruvia/http/detail/parser/HttpUriGrammar.h"
 

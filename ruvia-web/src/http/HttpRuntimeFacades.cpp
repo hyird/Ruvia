@@ -3,8 +3,6 @@
 #include <stdexcept>
 
 #include "ruvia/core/Task.h"
-#include "ruvia/core/memory/PmrResource.h"
-
 #include <memory_resource>
 #include <utility>
 #include <vector>
@@ -86,6 +84,8 @@ ruvia::Task<void> closeWebSocketOwned(
 }
 
 }  // namespace
+
+#include "ruvia/web/detail/http/StreamingAccess.h"
 
 namespace ruvia {
 
@@ -214,6 +214,12 @@ ScopedOperation<void> WebSocket::write(WebSocketOpcode opcode, std::string_view 
     return detail::makeScopedOperation(
         operationScope_,
         writeWebSocketOwned(target_, write_, opcode, std::move(owned)));
+}
+
+ScopedOperation<void> SseWriter::write(const SseMessage& message) {
+    std::pmr::string frame(detail::processResource());
+    detail::formatSseMessage(frame, message);
+    return writer_.writeOwned(std::move(frame));
 }
 
 }  // namespace ruvia

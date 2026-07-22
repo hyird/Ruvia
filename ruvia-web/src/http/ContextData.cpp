@@ -1,13 +1,13 @@
 #include "ruvia/web/Context.h"
+#include "ruvia/web/detail/redis/RedisRegistry.h"
+#include "ruvia/web/detail/db/DbRegistry.h"
 
 #include <stdexcept>
 
 #ifdef RUVIA_ENABLE_DATABASE
-#include "ruvia/web/detail/db/DbRegistry.h"
 #endif
 
 #ifdef RUVIA_ENABLE_REDIS
-#include "ruvia/web/detail/redis/RedisRegistry.h"
 #endif
 
 namespace ruvia {

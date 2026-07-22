@@ -18,12 +18,8 @@
 #include <asio/steady_timer.hpp>
 #include <asio/this_coro.hpp>
 #include <asio/use_awaitable.hpp>
-
-#include "ruvia/edge/detail/proxy/ByteRange.h"
 #include "ruvia/edge/detail/cache/Freshness.h"
 #include "ruvia/edge/detail/proxy/HeaderRules.h"
-#include "ruvia/http/HttpCache.h"
-
 namespace ruvia::edge {
 
 asio::awaitable<bool> EdgeServer::Impl::servePassThrough(

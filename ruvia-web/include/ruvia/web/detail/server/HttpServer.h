@@ -27,8 +27,6 @@
 #include "ruvia/web/detail/server/HttpServerWorkerState.h"
 #include "ruvia/web/detail/server/HttpServerWorkerCompletion.h"
 #include "ruvia/web/detail/integration/WorkerState.h"
-#include "ruvia/web/detail/ratelimit/RateLimitDecision.h"
-
 namespace ruvia::detail {
 
 class ContextServices;

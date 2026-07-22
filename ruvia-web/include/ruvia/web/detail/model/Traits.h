@@ -6,7 +6,6 @@
 #include <vector>
 
 #include "ruvia/web/ModelTypes.h"
-#include "ruvia/web/detail/json/JsonLimits.h"
 #include "ruvia/core/memory/PmrResource.h"
 
 // Internal layer. Users should include ruvia/web/Model.h instead of this file.
@@ -113,25 +112,6 @@ template <typename T>
         isRuviaList<T> ||
         JsonBody<std::remove_cvref_t<T>>::value) {
         return makeRequestValue<T>(ResolvedPmrResourceTag{}, pmrResourceOrDefault(resource));
-    } else {
-        (void)resource;
-        return T{};
-    }
-}
-
-template <typename T>
-[[nodiscard]] T makeResponseValue(
-    ResolvedPmrResourceTag,
-    std::pmr::memory_resource* resource) {
-    if constexpr (isRuviaString<T>) {
-        return ModelValueFactory::makeString(resource);
-    } else if constexpr (isRuviaArray<T>) {
-        using ValueT = typename RuviaArrayTraits<std::remove_cvref_t<T>>::value_type;
-        return T(std::pmr::polymorphic_allocator<ValueT>(resource));
-    } else if constexpr (isRuviaList<T>) {
-        return ModelValueFactory::makeList<T>(resource);
-    } else if constexpr (isResponseModel<T>) {
-        return T(resource);
     } else {
         (void)resource;
         return T{};

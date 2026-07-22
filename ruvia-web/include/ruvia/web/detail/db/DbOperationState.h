@@ -127,4 +127,47 @@ private:
     std::variant<Closed, Active, Operating, Failed> state_{};
 };
 
+// One operation on an owner's DbOperationState. Construction begins the
+// operation and takes the lease; destruction fails it, unless the operation
+// named its own ending first. Whoever owns the state supplies `state_` and a
+// `Lease` payload type, and declares this a friend -- a stream and a
+// transaction guard theirs identically.
+template <typename Owner>
+class DbOperationGuard final {
+public:
+    explicit DbOperationGuard(Owner& owner)
+        : owner_(&owner),
+          lease_(&owner.state_.begin()) {}
+
+    DbOperationGuard(const DbOperationGuard&) = delete;
+    DbOperationGuard& operator=(const DbOperationGuard&) = delete;
+
+    ~DbOperationGuard() {
+        if (owner_ != nullptr) {
+            owner_->state_.finishFailed();
+        }
+    }
+
+    [[nodiscard]] typename Owner::Lease& lease() noexcept { return *lease_; }
+
+    void finishActive() noexcept {
+        owner_->state_.finishActive();
+        owner_ = nullptr;
+    }
+
+    void finishClosed() noexcept {
+        owner_->state_.finishClosed();
+        owner_ = nullptr;
+    }
+
+    void finishFailed() noexcept {
+        owner_->state_.finishFailed();
+        owner_ = nullptr;
+    }
+
+private:
+    Owner* owner_;
+    typename Owner::Lease* lease_;
+};
+
 }  // namespace ruvia::detail

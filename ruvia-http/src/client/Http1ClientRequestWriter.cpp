@@ -8,7 +8,6 @@
 
 #include "ruvia/http/HttpHeader.h"
 #include "ruvia/http/HttpKnownMethod.h"
-#include "ruvia/http/HttpLimits.h"
 #include "ruvia/http/detail/field/HttpExpectations.h"
 #include "ruvia/http/detail/coding/HttpRequestContentSemantics.h"
 #include "ruvia/http/detail/client/Http1ClientRequestHeaders.h"

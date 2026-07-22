@@ -1,7 +1,6 @@
 #include "ruvia/web/Context.h"
-
+#include "ruvia/http/detail/response/HttpResponseHeaderBits.h"
 #include "ruvia/web/detail/router/RouteTable.h"
-
 #include "ruvia/http/detail/response/HttpResponseBodyAccess.h"
 #include "ruvia/http/detail/response/HttpResponseHeaderAccess.h"
 #include "ruvia/http/detail/response/HttpResponseHeaderState.h"
