@@ -1,6 +1,6 @@
 #pragma once
 
-#include "ruvia/web/detail/model/RuleTypes.h"
+#include "ruvia/web/detail/model/rule/RuleTypes.h"
 
 #include <charconv>
 #include <cstddef>

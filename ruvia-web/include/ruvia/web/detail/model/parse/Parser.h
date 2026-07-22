@@ -6,8 +6,8 @@
 #include "ruvia/http/detail/util/AsciiCase.h"
 #include "ruvia/web/ModelTypes.h"
 #include "ruvia/http/detail/util/HttpOws.h"
-#include "ruvia/web/detail/model/JsonParser.h"
-#include "ruvia/web/detail/model/FormParser.h"
+#include "ruvia/web/detail/model/parse/JsonParser.h"
+#include "ruvia/web/detail/model/parse/FormParser.h"
 
 // Internal aggregate parser header. Users should include ruvia/web/Model.h.
 

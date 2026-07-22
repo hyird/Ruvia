@@ -1,6 +1,6 @@
 #pragma once
 
-#include "ruvia/web/detail/model/MacroFieldOps.h"
+#include "ruvia/web/detail/model/macro/MacroFieldOps.h"
 
 // Unified JSON model body for a normal C++ struct. A model owns one PMR
 // resource, parses JSON/form inputs, preserves per-field validation state, and

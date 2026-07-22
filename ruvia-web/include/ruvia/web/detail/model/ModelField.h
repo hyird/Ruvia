@@ -6,7 +6,7 @@
 #include <type_traits>
 #include <utility>
 
-#include "ruvia/web/detail/model/FieldAssign.h"
+#include "ruvia/web/detail/model/parse/FieldAssign.h"
 #include "ruvia/web/detail/model/ModelOptions.h"
 
 namespace ruvia::detail::model {

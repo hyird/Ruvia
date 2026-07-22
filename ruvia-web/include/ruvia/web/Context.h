@@ -29,7 +29,7 @@
 #include "ruvia/web/Streaming.h"
 #include "ruvia/web/ValidationTypes.h"
 #include "ruvia/web/WebSocket.h"
-#include "ruvia/web/detail/model/ValidatedValues.h"
+#include "ruvia/web/detail/model/rule/ValidatedValues.h"
 #include "ruvia/web/detail/integration/WorkerState.h"
 #include "ruvia/web/detail/http/context/ContextCapabilities.h"
 #include "ruvia/web/detail/http/context/ContextResponseState.h"

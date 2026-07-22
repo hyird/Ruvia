@@ -11,7 +11,7 @@
 #include "ruvia/web/detail/json/JsonNumber.h"
 #include "ruvia/web/detail/json/JsonScanner.h"
 #include "ruvia/web/detail/json/JsonString.h"
-#include "ruvia/web/detail/model/JsonWriter.h"
+#include "ruvia/web/detail/model/parse/JsonWriter.h"
 
 // Internal JSON value parser for RUVIA_MODEL.
 

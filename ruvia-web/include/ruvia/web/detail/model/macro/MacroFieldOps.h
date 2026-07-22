@@ -1,6 +1,6 @@
 #pragma once
 
-#include "ruvia/web/detail/model/MacroCore.h"
+#include "ruvia/web/detail/model/macro/MacroCore.h"
 #include "ruvia/web/detail/model/ModelField.h"
 
 // A field declaration lives directly inside a normal struct. The generated

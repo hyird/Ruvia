@@ -6,9 +6,9 @@
 #include <string_view>
 #include <type_traits>
 
-#include "ruvia/web/detail/model/PatternMatcher.h"
-#include "ruvia/web/detail/model/RegexMatcher.h"
-#include "ruvia/web/detail/model/RuleSupport.h"
+#include "ruvia/web/detail/model/pattern/PatternMatcher.h"
+#include "ruvia/web/detail/model/pattern/RegexMatcher.h"
+#include "ruvia/web/detail/model/rule/RuleSupport.h"
 
 namespace ruvia::detail::model {
 

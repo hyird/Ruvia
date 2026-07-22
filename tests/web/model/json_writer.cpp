@@ -5,7 +5,7 @@
 #include <string>
 
 #include "ruvia/web/ModelTypes.h"
-#include "ruvia/web/detail/model/JsonWriter.h"
+#include "ruvia/web/detail/model/parse/JsonWriter.h"
 
 namespace {
 

@@ -11,7 +11,7 @@
 #include "ruvia/web/detail/json/JsonNumber.h"
 #include "ruvia/web/detail/json/JsonSkip.h"
 #include "ruvia/web/detail/json/JsonString.h"
-#include "ruvia/web/detail/model/JsonParser.h"
+#include "ruvia/web/detail/model/parse/JsonParser.h"
 
 namespace {
 

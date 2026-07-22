@@ -3,7 +3,7 @@
 #include <cstddef>
 #include <string_view>
 
-#include "ruvia/web/detail/model/PatternCompiler.h"
+#include "ruvia/web/detail/model/pattern/PatternCompiler.h"
 
 namespace ruvia::detail::model {
 

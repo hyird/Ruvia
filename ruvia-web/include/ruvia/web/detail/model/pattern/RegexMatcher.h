@@ -6,7 +6,7 @@
 #include <string_view>
 
 #include "ruvia/web/ModelTypes.h"
-#include "ruvia/web/detail/model/PatternTypes.h"
+#include "ruvia/web/detail/model/pattern/PatternTypes.h"
 
 namespace ruvia::detail::model {
 

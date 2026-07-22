@@ -5,7 +5,7 @@
 #include <type_traits>
 #include <utility>
 
-#include "ruvia/web/detail/model/RuleValidation.h"
+#include "ruvia/web/detail/model/rule/RuleValidation.h"
 
 namespace ruvia::detail {
 

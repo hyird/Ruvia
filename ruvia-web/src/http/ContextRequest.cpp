@@ -18,7 +18,7 @@
 #include "ruvia/http/UrlEncoding.h"
 #include "ruvia/web/detail/http/request/RequestFieldParsing.h"
 #include "ruvia/web/detail/http/request/RequestFormBodyParse.h"
-#include "ruvia/web/detail/model/Parser.h"
+#include "ruvia/web/detail/model/parse/Parser.h"
 
 #include <algorithm>
 #include <memory>

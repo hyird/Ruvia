@@ -3,7 +3,7 @@
 #include <string_view>
 
 #include "ruvia/web/detail/model/Traits.h"
-#include "ruvia/web/detail/model/RuleSupport.h"
+#include "ruvia/web/detail/model/rule/RuleSupport.h"
 
 namespace {
 

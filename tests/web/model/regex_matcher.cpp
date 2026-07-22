@@ -3,7 +3,7 @@
 #include <cstddef>
 #include <string>
 
-#include "ruvia/web/detail/model/RegexMatcher.h"
+#include "ruvia/web/detail/model/pattern/RegexMatcher.h"
 
 namespace {
 

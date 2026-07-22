@@ -3,7 +3,7 @@
 #include <cstddef>
 #include <string_view>
 
-#include "ruvia/web/detail/model/PatternMatcher.h"
+#include "ruvia/web/detail/model/pattern/PatternMatcher.h"
 
 namespace {
 
