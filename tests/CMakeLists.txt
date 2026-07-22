@@ -126,6 +126,9 @@ add_executable(ruvia_unit_tests
     http/unit/connection_fields.cpp
     http/unit/expectations.cpp
     http/unit/header_tokens.cpp
+    http/unit/byte_encoding.cpp
+    http/unit/url_encoding.cpp
+    http/unit/number_format.cpp
     http/unit/http_date_parsing.cpp
     http/unit/field_value_primitives.cpp
     http/unit/http_field_syntax.cpp
@@ -184,7 +187,7 @@ add_executable(ruvia_unit_tests
     web/unit/csrf.cpp
     web/unit/dotenv_parser.cpp
     web/unit/email_like.cpp
-    web/unit/encoding.cpp
+
     web/unit/static_file_metadata.cpp
     web/unit/health.cpp
     web/unit/http_server_request_state.cpp

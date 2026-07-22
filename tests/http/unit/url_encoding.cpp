@@ -40,66 +40,15 @@ std::optional<std::string> urlDecode(std::string_view in, ruvia::detail::UrlDeco
 }  // namespace
 
 // --- Base64 (RFC 4648 test vectors) --------------------------------------
-RUVIA_TEST(base64_rfc4648_vectors) {
-    RUVIA_CHECK_EQ(b64(""), std::string(""));
-    RUVIA_CHECK_EQ(b64("f"), std::string("Zg=="));
-    RUVIA_CHECK_EQ(b64("fo"), std::string("Zm8="));
-    RUVIA_CHECK_EQ(b64("foo"), std::string("Zm9v"));
-    RUVIA_CHECK_EQ(b64("foob"), std::string("Zm9vYg=="));
-    RUVIA_CHECK_EQ(b64("fooba"), std::string("Zm9vYmE="));
-    RUVIA_CHECK_EQ(b64("foobar"), std::string("Zm9vYmFy"));
-}
-
-RUVIA_TEST(base64_encoded_size) {
-    using ruvia::detail::base64EncodedSize;
-    RUVIA_CHECK_EQ(base64EncodedSize(0), std::size_t(0));
-    RUVIA_CHECK_EQ(base64EncodedSize(1), std::size_t(4));
-    RUVIA_CHECK_EQ(base64EncodedSize(2), std::size_t(4));
-    RUVIA_CHECK_EQ(base64EncodedSize(3), std::size_t(4));
-    RUVIA_CHECK_EQ(base64EncodedSize(4), std::size_t(8));
-    RUVIA_CHECK_EQ(base64EncodedSize(32), std::size_t(44));  // HMAC-SHA256
-}
-
-RUVIA_TEST(base64_binary_high_bytes) {
-    const unsigned char bytes[] = {0xFF, 0x00, 0xFF};
-    std::string out(4, '\0');
-    ruvia::detail::encodeBase64(out.data(),
-                                std::span<const std::uint8_t>(bytes, sizeof(bytes)));
-    RUVIA_CHECK_EQ(out, std::string("/wD/"));
-}
-
-RUVIA_TEST(base64url_alphabet_values) {
-    using ruvia::detail::decodeBase64UrlChar;
-    // RFC 4648 §5: A-Z, a-z, 0-9, '-', '_'.
-    RUVIA_CHECK_EQ(decodeBase64UrlChar('A'), 0);
-    RUVIA_CHECK_EQ(decodeBase64UrlChar('Z'), 25);
-    RUVIA_CHECK_EQ(decodeBase64UrlChar('a'), 26);
-    RUVIA_CHECK_EQ(decodeBase64UrlChar('z'), 51);
-    RUVIA_CHECK_EQ(decodeBase64UrlChar('0'), 52);
-    RUVIA_CHECK_EQ(decodeBase64UrlChar('9'), 61);
-    RUVIA_CHECK_EQ(decodeBase64UrlChar('-'), 62);
-    RUVIA_CHECK_EQ(decodeBase64UrlChar('_'), 63);
-    RUVIA_CHECK_EQ(decodeBase64UrlChar('+'), -1);
-    RUVIA_CHECK_EQ(decodeBase64UrlChar('/'), -1);
-    RUVIA_CHECK_EQ(decodeBase64UrlChar('='), -1);
-}
 
 // --- Hex nibble ----------------------------------------------------------
-RUVIA_TEST(hex_nibble) {
-    using ruvia::detail::decodeHexNibble;
-    RUVIA_CHECK_EQ(decodeHexNibble('0'), 0);
-    RUVIA_CHECK_EQ(decodeHexNibble('9'), 9);
-    RUVIA_CHECK_EQ(decodeHexNibble('a'), 10);
-    RUVIA_CHECK_EQ(decodeHexNibble('f'), 15);
-    RUVIA_CHECK_EQ(decodeHexNibble('A'), 10);
-    RUVIA_CHECK_EQ(decodeHexNibble('F'), 15);
-    RUVIA_CHECK_EQ(decodeHexNibble('g'), -1);
-    RUVIA_CHECK_EQ(decodeHexNibble('G'), -1);
-    RUVIA_CHECK_EQ(decodeHexNibble('/'), -1);
-    RUVIA_CHECK_EQ(decodeHexNibble(':'), -1);
-}
 
 // --- URL decoding --------------------------------------------------------
+
+// --- Number formatting ---------------------------------------------------
+
+// Percent-encoding: decoding a component or a form field, validating one, and walking encoded pairs.
+
 RUVIA_TEST(url_decode_percent) {
     using M = ruvia::detail::UrlDecodeMode;
     RUVIA_CHECK_EQ(urlDecode("hello", M::kPercent).value(), std::string("hello"));
@@ -190,46 +139,4 @@ RUVIA_TEST(url_visit_pairs_skips_empty_segments) {
             kept.emplace_back(std::string(n), std::string(v));
         });
     RUVIA_CHECK_EQ(kept.size(), std::size_t(2));  // "k=" (name k, empty value) and "=v" (empty name, value v)
-}
-
-// --- Number formatting ---------------------------------------------------
-RUVIA_TEST(number_unsigned_decimal_size) {
-    using ruvia::detail::httpUnsignedDecimalSize;
-    RUVIA_CHECK_EQ(httpUnsignedDecimalSize(0), std::size_t(1));
-    RUVIA_CHECK_EQ(httpUnsignedDecimalSize(9), std::size_t(1));
-    RUVIA_CHECK_EQ(httpUnsignedDecimalSize(10), std::size_t(2));
-    RUVIA_CHECK_EQ(httpUnsignedDecimalSize(99), std::size_t(2));
-    RUVIA_CHECK_EQ(httpUnsignedDecimalSize(100), std::size_t(3));
-    RUVIA_CHECK_EQ(httpUnsignedDecimalSize(UINT64_C(18446744073709551615)), std::size_t(20));
-}
-
-RUVIA_TEST(number_append_formatted) {
-    std::pmr::string out(std::pmr::get_default_resource());
-    ruvia::detail::appendHttpFormattedNumber(out, 42, "err");
-    ruvia::detail::appendHttpFormattedNumber(out, -7, "err");
-    RUVIA_CHECK_EQ(std::string(out.c_str()), std::string("42-7"));
-}
-
-RUVIA_TEST(number_append_formatted_finite_rejects_non_finite) {
-    // A finite double formats as usual.
-    std::pmr::string out(std::pmr::get_default_resource());
-    ruvia::detail::appendHttpFormattedFiniteNumber(out, 3.5, "not finite", "bad format");
-    RUVIA_CHECK_EQ(std::string(out.c_str()), std::string("3.5"));
-
-    // NaN and both infinities are rejected rather than emitted as the words
-    // "nan"/"inf", which are not valid SQL/RESP numeric literals and would splice
-    // in unquoted. Nothing is appended on rejection.
-    for (const double bad : {std::numeric_limits<double>::quiet_NaN(),
-                             std::numeric_limits<double>::infinity(),
-                             -std::numeric_limits<double>::infinity()}) {
-        std::pmr::string sink(std::pmr::get_default_resource());
-        bool threw = false;
-        try {
-            ruvia::detail::appendHttpFormattedFiniteNumber(sink, bad, "not finite", "bad format");
-        } catch (const std::invalid_argument&) {
-            threw = true;
-        }
-        RUVIA_CHECK(threw);
-        RUVIA_CHECK(sink.empty());
-    }
 }
