@@ -31,6 +31,8 @@ add_library(ruvia-http
     ${CMAKE_CURRENT_SOURCE_DIR}/src/parser/HttpParseError.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/parser/HttpParserSyntax.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/parser/HttpRequestTarget.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/parser/HttpSerializedOrigin.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/parser/HttpUriGrammar.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/server/Http1InterimResponseWriter.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/server/HttpDateCache.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/server/HttpResponseHead.cpp

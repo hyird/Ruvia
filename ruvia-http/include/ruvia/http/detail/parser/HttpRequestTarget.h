@@ -106,13 +106,6 @@ private:
 // standard bracketed form; IPv6 zone identifiers are not URI syntax (RFC 9844
 // reverted RFC 6874), while IPvFuture remains valid.
 [[nodiscard]] bool isValidHttpHost(std::string_view value) noexcept;
-// WHATWG Fetch `serialized-origin` syntax. Unlike an RFC 3986 uri-host, this
-// wire value requires lowercase scheme/domain bytes and canonical IPv6 groups,
-// a canonical 16-bit decimal port with known defaults omitted, and never
-// contains a path. The opaque-origin literal `null` is deliberately not a
-// serialized origin.
-[[nodiscard]] bool isValidHttpSerializedOrigin(
-    std::string_view value) noexcept;
 [[nodiscard]] std::optional<HttpAuthorityView> parseHttpAuthority(
     std::string_view value) noexcept;
 template <HttpTemporaryOwningCharString Value>

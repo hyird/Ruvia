@@ -5,6 +5,7 @@
 #include "ruvia/http/HttpHeader.h"
 #include "ruvia/http/detail/HttpOws.h"
 #include "ruvia/http/detail/parser/HttpRequestTarget.h"
+#include "ruvia/http/detail/parser/HttpSerializedOrigin.h"
 
 namespace ruvia::detail {
 

@@ -4,6 +4,7 @@
 #include "ruvia/http/detail/AsciiCase.h"
 #include "ruvia/http/detail/HttpCorsFields.h"
 #include "ruvia/http/detail/parser/HttpRequestTarget.h"
+#include "ruvia/http/detail/parser/HttpSerializedOrigin.h"
 #include <array>
 #include <cstddef>
 #include <cstdint>
