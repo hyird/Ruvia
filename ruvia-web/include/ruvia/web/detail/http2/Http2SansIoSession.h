@@ -71,11 +71,9 @@
 #include "ruvia/web/detail/router/RouteResolution.h"
 #include "ruvia/core/detail/io/AsioAwait.h"
 #include "ruvia/core/Task.h"
-#include "ruvia/web/Error.h"
 #include "ruvia/http/HttpResponse.h"
 #include "ruvia/http/detail/util/PmrString.h"
 #include "ruvia/web/detail/server/HttpServerOptions.h"
-#include "ruvia/web/detail/server/HttpServerWorkerState.h"
 #include "ruvia/core/memory/MemoryPool.h"
 
 namespace ruvia::detail {

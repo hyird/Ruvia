@@ -14,9 +14,7 @@
 #include "ruvia/web/Router.h"
 #include "ruvia/web/detail/app/AppLifecycle.h"
 #include "ruvia/web/detail/app/AppResource.h"
-#include "ruvia/web/detail/app/EnvState.h"
 #include "ruvia/core/detail/util/NativePath.h"
-#include "ruvia/web/detail/controller/ControllerDescriptors.h"
 #ifdef RUVIA_ENABLE_DATABASE
 #include "ruvia/web/db/DbTypes.h"
 #endif

@@ -1,4 +1,5 @@
 #include "ruvia/web/detail/router/RouteTable.h"
+#include "ruvia/web/detail/router/RouteStreamState.h"
 
 #include "ruvia/web/detail/http/context/ContextAccess.h"
 #include "ruvia/web/detail/server/stream/HttpResponseStreamState.h"

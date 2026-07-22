@@ -6,7 +6,6 @@
 #include <vector>
 
 #include "ruvia/web/ModelTypes.h"
-#include "ruvia/web/detail/json/JsonLimits.h"
 #include "ruvia/core/memory/PmrResource.h"
 
 // Internal layer. Users should include ruvia/web/Model.h instead of this file.

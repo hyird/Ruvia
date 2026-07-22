@@ -11,8 +11,6 @@
 #include "ruvia/core/detail/io/ConnectionScanner.h"
 #include "ruvia/core/memory/PmrObject.h"
 #include "ruvia/http/ProtocolByteLimit.h"
-#include "ruvia/http/HttpProtocolError.h"
-#include "ruvia/http/detail/request/HttpRequestBodyFailure.h"
 #include "ruvia/http/detail/coding/HttpTransferCodingDecoder.h"
 #include "ruvia/http/detail/http1/Http1ChunkedBodyDecoder.h"
 #include "ruvia/http/detail/http1/Http1RequestBodyPlan.h"

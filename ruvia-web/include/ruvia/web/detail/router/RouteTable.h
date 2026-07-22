@@ -17,7 +17,6 @@
 #include "ruvia/http/HttpKnownMethod.h"
 #include "ruvia/web/detail/http/context/ContextServices.h"
 #include "ruvia/web/Context.h"
-#include "ruvia/web/detail/router/PathSegments.h"
 #include "ruvia/web/detail/router/RouteEntry.h"
 #include "ruvia/web/detail/router/RouteResolution.h"
 #include "ruvia/web/Error.h"

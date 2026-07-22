@@ -1,8 +1,6 @@
 #pragma once
 
 #include "ruvia/web/detail/redis/RedisRegistry.h"
-#include "ruvia/http/detail/util/AsciiCase.h"
-
 #include <chrono>
 #include <initializer_list>
 #include <memory_resource>

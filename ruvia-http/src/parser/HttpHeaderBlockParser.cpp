@@ -1,5 +1,6 @@
 #include "ruvia/http/detail/parser/HttpHeaderBlockParser.h"
 
+#include "ruvia/http/HttpLimits.h"
 #include "ruvia/http/detail/coding/HttpContentCoding.h"
 #include "ruvia/http/detail/field/HttpCorsFields.h"
 #include "ruvia/http/detail/field/HttpMediaType.h"

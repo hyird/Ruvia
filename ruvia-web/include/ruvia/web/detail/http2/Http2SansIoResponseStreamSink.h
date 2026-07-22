@@ -32,7 +32,6 @@
 #include "ruvia/web/detail/server/stream/HttpResponseStreamState.h"
 #include "ruvia/core/detail/io/AsioAwait.h"
 #include "ruvia/core/Task.h"
-#include "ruvia/core/Timer.h"
 #include "ruvia/core/detail/worker/WorkerSignal.h"
 #include "ruvia/http/detail/util/PmrString.h"
 

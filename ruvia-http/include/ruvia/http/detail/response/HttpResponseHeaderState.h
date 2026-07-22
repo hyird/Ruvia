@@ -1,7 +1,4 @@
 #pragma once
-
-#include "ruvia/http/detail/response/HttpResponseHeaderBits.h"
-#include "ruvia/http/detail/response/HttpResponseKnownHeaders.h"
 #include "ruvia/http/HttpResponse.h"
 
 #include <cstddef>

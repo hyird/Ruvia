@@ -19,7 +19,6 @@
 #include "ruvia/web/detail/websocket/WsTransportReadResult.h"
 #include "ruvia/core/detail/io/AsioAwait.h"
 #include "ruvia/core/detail/worker/WorkerSignal.h"
-#include "ruvia/http/HttpLimits.h"
 #include "ruvia/core/Task.h"
 #include "ruvia/web/WebSocket.h"
 #include "ruvia/http/detail/util/PmrString.h"

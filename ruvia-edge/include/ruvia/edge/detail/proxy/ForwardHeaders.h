@@ -6,8 +6,6 @@
 #include <vector>
 
 #include "ruvia/edge/detail/cache/EdgeCache.h"
-#include "ruvia/edge/detail/proxy/HeaderRules.h"
-
 namespace ruvia::edge {
 
 // Who owns revalidation and ranging on this fetch.
