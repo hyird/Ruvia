@@ -40,7 +40,7 @@
 #include "ruvia/web/detail/http/ContextAccess.h"
 #include "ruvia/web/detail/http/ContextServices.h"
 
-namespace {
+namespace content_decoding_test {
 
 using ruvia::ProtocolByteLimit;
 using ruvia::detail::HttpContentCoding;
@@ -142,7 +142,7 @@ static_assert(std::same_as<
         .protocolError()),
     ruvia::HttpProtocolError>);
 
-std::string gzipCompress(std::string_view data) {
+inline std::string gzipCompress(std::string_view data) {
     z_stream stream{};
     if (deflateInit2(&stream, Z_BEST_COMPRESSION, Z_DEFLATED, 15 + 16, 8, Z_DEFAULT_STRATEGY) != Z_OK) {
         return {};
@@ -167,7 +167,7 @@ struct TransferDecodeObservation final {
     std::optional<ruvia::HttpProtocolError> protocolError;
 };
 
-TransferDecodeObservation appendTransferDecoded(
+inline TransferDecodeObservation appendTransferDecoded(
     TransferCodingDecoder& decoder,
     std::string_view input,
     std::pmr::string& output) {
@@ -189,7 +189,7 @@ TransferDecodeObservation appendTransferDecoded(
     }
 }
 
-std::string brotliCompress(std::string_view data) {
+inline std::string brotliCompress(std::string_view data) {
     std::size_t bound = BrotliEncoderMaxCompressedSize(data.size());
     if (bound == 0) {
         bound = data.size() + 1024;
@@ -206,7 +206,7 @@ std::string brotliCompress(std::string_view data) {
     return out;
 }
 
-std::string zstdCompress(std::string_view data) {
+inline std::string zstdCompress(std::string_view data) {
     const std::size_t bound = ZSTD_compressBound(data.size());
     std::string out(bound, '\0');
     const std::size_t size = ZSTD_compress(out.data(), bound, data.data(), data.size(), 3);
@@ -217,7 +217,7 @@ std::string zstdCompress(std::string_view data) {
     return out;
 }
 
-std::string zstdCompressWithWindow(
+inline std::string zstdCompressWithWindow(
     std::string_view data,
     int windowLog) {
     auto* context = ZSTD_createCCtx();
@@ -252,7 +252,7 @@ std::string zstdCompressWithWindow(
     return output;
 }
 
-std::string decoded(HttpContentCoding coding, std::string_view input, std::size_t maxBytes) {
+inline std::string decoded(HttpContentCoding coding, std::string_view input, std::size_t maxBytes) {
     auto result = decodeHttpContent(
         coding,
         input,
@@ -265,7 +265,7 @@ std::string decoded(HttpContentCoding coding, std::string_view input, std::size_
     return std::string(content->bytes());
 }
 
-HttpContentDecodeError decodeError(
+inline HttpContentDecodeError decodeError(
     HttpContentCoding coding,
     std::string_view input,
     std::size_t maxBytes = kDecodedBodyLimit) {
@@ -286,11 +286,11 @@ struct ContextBodyReadObservation final {
     std::optional<ruvia::HttpStatusCode> errorStatus;
 };
 
-ruvia::Task<std::string_view> readContextText(ruvia::Context& context) {
+inline ruvia::Task<std::string_view> readContextText(ruvia::Context& context) {
     co_return co_await context.req().text();
 }
 
-ruvia::ScopedOperation<std::string_view> makeExpiredContextTextRead() {
+inline ruvia::ScopedOperation<std::string_view> makeExpiredContextTextRead() {
     ruvia::WorkerMemory worker;
     ruvia::RequestMemory memory(worker);
     auto request = ruvia::detail::HttpRequestAccess::make();
@@ -304,7 +304,7 @@ ruvia::ScopedOperation<std::string_view> makeExpiredContextTextRead() {
     return context.req().text();
 }
 
-ruvia::Task<void> awaitExpiredContextTextRead(
+inline ruvia::Task<void> awaitExpiredContextTextRead(
     ruvia::ScopedOperation<std::string_view>& operation,
     bool& rejected) {
     try {
@@ -314,7 +314,7 @@ ruvia::Task<void> awaitExpiredContextTextRead(
     }
 }
 
-ContextBodyReadObservation readContextGzipBody(
+inline ContextBodyReadObservation readContextGzipBody(
     std::string_view encoded,
     std::size_t maxDecodedBodyBytes) {
     ruvia::WorkerMemory worker;
@@ -360,7 +360,7 @@ ContextBodyReadObservation readContextGzipBody(
     return observation;
 }
 
-std::string chunked(std::string_view body) {
+inline std::string chunked(std::string_view body) {
     char size[2 * sizeof(std::size_t)];
     const auto [end, ec] = std::to_chars(
         size,
@@ -525,7 +525,7 @@ static_assert(std::same_as<
     HttpContentEncodeResult>);
 
 
-std::optional<std::string> zstdRoundTrip(std::string_view plain, std::size_t truncateBy) {
+inline std::optional<std::string> zstdRoundTrip(std::string_view plain, std::size_t truncateBy) {
     const std::size_t bound = ZSTD_compressBound(plain.size());
     std::string compressed(bound, '\0');
     const std::size_t written = ZSTD_compress(
@@ -547,4 +547,6 @@ std::optional<std::string> zstdRoundTrip(std::string_view plain, std::size_t tru
     return std::string(decoded->bytes());
 }
 
-}  // namespace
+}  // namespace content_decoding_test
+
+using namespace content_decoding_test;  // NOLINT(google-build-using-namespace)

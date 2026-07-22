@@ -26,7 +26,7 @@
 #include "ruvia/http/detail/http2/Http2WindowUpdate.h"
 #include "ruvia/http/HttpLimits.h"
 
-namespace {
+namespace http2_connection_test {
 
 using ruvia::detail::Http2Connection;
 using ruvia::detail::Http2ConnectForm;
@@ -63,7 +63,7 @@ using ruvia::detail::ResponseTrailerIntent;
 using ruvia::detail::HpackDecoder;
 using ruvia::detail::HpackEncoder;
 
-ruvia::detail::HttpResponseTrailerSection validatedTrailers(
+inline ruvia::detail::HttpResponseTrailerSection validatedTrailers(
     std::span<const ruvia::HttpHeaderView> fields) {
     const auto result = ruvia::detail::httpResponseTrailerSection(fields);
     if (result.section() == nullptr) {
@@ -320,7 +320,7 @@ static_assert(!std::constructible_from<
     Http2ResponseHeadSubmitFailure,
     Http2ResponseHeadSubmitError>);
 
-const Http2LocalContentKnownLength& requireLocalKnownLength(
+inline const Http2LocalContentKnownLength& requireLocalKnownLength(
     const Http2StreamState& stream) {
     if (const auto* knownLength = stream.localContent().knownLength()) {
         return *knownLength;
@@ -328,7 +328,7 @@ const Http2LocalContentKnownLength& requireLocalKnownLength(
     throw std::runtime_error("HTTP/2 local content is not known-length");
 }
 
-std::uint32_t submittedRequestStreamId(
+inline std::uint32_t submittedRequestStreamId(
     const Http2RequestHeadSubmitResult& result) {
     if (const auto* submitted = result.submitted()) {
         return submitted->streamId();
@@ -336,7 +336,7 @@ std::uint32_t submittedRequestStreamId(
     throw std::runtime_error("HTTP/2 request head was not submitted");
 }
 
-Http2RequestHeadSubmitError requestHeadSubmitError(
+inline Http2RequestHeadSubmitError requestHeadSubmitError(
     const Http2RequestHeadSubmitResult& result) {
     if (const auto* failure = result.failure()) {
         return failure->error();
@@ -345,12 +345,12 @@ Http2RequestHeadSubmitError requestHeadSubmitError(
 }
 
 template <typename Result>
-bool responseHeadSubmitted(const Result& result) {
+inline bool responseHeadSubmitted(const Result& result) {
     return result.submitted() != nullptr;
 }
 
 template <typename Result>
-std::string_view responseHeadSubmitFailureMessage(
+inline std::string_view responseHeadSubmitFailureMessage(
     const Result& result) {
     if (const auto* failure = result.failure()) {
         return failure->exception().what();
@@ -358,7 +358,7 @@ std::string_view responseHeadSubmitFailureMessage(
     throw std::runtime_error("HTTP/2 response head did not fail");
 }
 
-Http2BufferedResponseHeadSubmitResult submitBufferedResponseHead(
+inline Http2BufferedResponseHeadSubmitResult submitBufferedResponseHead(
     Http2Connection& connection,
     std::uint32_t streamId,
     const ruvia::HttpResponse& response) {
@@ -375,7 +375,7 @@ Http2BufferedResponseHeadSubmitResult submitBufferedResponseHead(
 }
 
 template <typename Result>
-const auto& submittedResponsePlan(const Result& result) {
+inline const auto& submittedResponsePlan(const Result& result) {
     if (const auto* submitted = result.submitted()) {
         return *submitted;
     }
@@ -392,7 +392,7 @@ struct RequestContentLengthObservation final {
     std::string path;
 };
 
-bool observeRequestContentLength(
+inline bool observeRequestContentLength(
     void* target,
     std::string_view name,
     std::string_view value) {
@@ -413,7 +413,7 @@ bool observeRequestContentLength(
 }
 
 // Encode a minimal valid request header block (HPACK literals) into `block`.
-void encodeRequest(
+inline void encodeRequest(
     std::pmr::string& block,
     std::string_view method,
     std::string_view scheme = "https",
@@ -427,12 +427,12 @@ void encodeRequest(
     }
 }
 
-void encodeGetRequest(std::pmr::string& block) {
+inline void encodeGetRequest(std::pmr::string& block) {
     encodeRequest(block, "GET");
 }
 
 // Frame a HEADERS block on `streamId` with the given flags into a fed-ready buffer.
-std::pmr::string headersFrame(
+inline std::pmr::string headersFrame(
     std::pmr::memory_resource* resource, std::uint32_t streamId, std::uint8_t flags,
     std::string_view block) {
     std::pmr::string frame(resource);
@@ -444,7 +444,7 @@ std::pmr::string headersFrame(
     return frame;
 }
 
-std::pmr::string continuationFrame(
+inline std::pmr::string continuationFrame(
     std::pmr::memory_resource* resource,
     std::uint32_t streamId,
     std::uint8_t flags,
@@ -462,7 +462,7 @@ std::pmr::string continuationFrame(
     return frame;
 }
 
-std::pmr::string goawayFrame(
+inline std::pmr::string goawayFrame(
     std::pmr::memory_resource* resource,
     std::uint32_t lastStreamId,
     Http2ErrorCode error) {
@@ -477,7 +477,7 @@ std::pmr::string goawayFrame(
 
 // Test-only HPACK literal with incremental indexing (short, non-Huffman strings).
 // The next block on this connection can reference the inserted entry at index 62.
-void encodeShortDynamicHeader(
+inline void encodeShortDynamicHeader(
     std::pmr::string& block,
     std::string_view name,
     std::string_view value) {
@@ -488,7 +488,7 @@ void encodeShortDynamicHeader(
     block.append(value.data(), value.size());
 }
 
-void appendHpackInteger(
+inline void appendHpackInteger(
     std::pmr::string& block,
     std::size_t value,
     std::uint8_t prefixBits,
@@ -508,7 +508,7 @@ void appendHpackInteger(
     block.push_back(static_cast<char>(value));
 }
 
-void encodeRepeatedHuffmanHeader(
+inline void encodeRepeatedHuffmanHeader(
     std::pmr::string& block,
     std::string_view name,
     unsigned char value,
@@ -547,7 +547,7 @@ void encodeRepeatedHuffmanHeader(
 
 // Start the role-specific preface and leave the connection ready to receive the
 // peer's first frame. Servers must consume the client magic first.
-void beginPeerInput(Http2Connection& conn) {
+inline void beginPeerInput(Http2Connection& conn) {
     conn.beginConnection();
     conn.consumeOutput(conn.pendingOutput().size());
     if (conn.role() == ruvia::detail::Http2Role::kServer) {
@@ -560,7 +560,7 @@ void beginPeerInput(Http2Connection& conn) {
 
 // Feed the peer's empty non-ACK SETTINGS frame and drain the resulting ACK, leaving
 // the connection ready for post-handshake frames.
-void handshake(Http2Connection& conn) {
+inline void handshake(Http2Connection& conn) {
     beginPeerInput(conn);
     char settings[9];
     ruvia::detail::http2EncodeFrameHeader(settings, 0, Http2FrameType::kSettings, 0, 0);
@@ -572,12 +572,12 @@ void handshake(Http2Connection& conn) {
     conn.consumeOutput(conn.pendingOutput().size());
 }
 
-void beginClient(Http2Connection& client) {
+inline void beginClient(Http2Connection& client) {
     client.beginConnection();
     client.consumeOutput(client.pendingOutput().size());
 }
 
-void applyPeerMaxConcurrentStreams(
+inline void applyPeerMaxConcurrentStreams(
     Http2Connection& client,
     std::uint32_t limit) {
     char settings[15];
@@ -592,7 +592,7 @@ void applyPeerMaxConcurrentStreams(
 
 // Handshake but declare a small peer SETTINGS_INITIAL_WINDOW_SIZE so freshly created
 // streams start with a tiny send window (to exercise flow-control backpressure).
-void handshakeWithWindow(Http2Connection& conn, std::uint32_t window) {
+inline void handshakeWithWindow(Http2Connection& conn, std::uint32_t window) {
     beginPeerInput(conn);
     char s[9 + 6];
     ruvia::detail::http2EncodeFrameHeader(s, 6, Http2FrameType::kSettings, 0, 0);
@@ -608,7 +608,7 @@ void handshakeWithWindow(Http2Connection& conn, std::uint32_t window) {
 
 // Feed a complete GET on stream 1, drain its events and any output, leaving stream 1
 // open (half-closed remote) and ready to receive a response.
-void driveGetRequest(Http2Connection& conn, std::pmr::memory_resource* res) {
+inline void driveGetRequest(Http2Connection& conn, std::pmr::memory_resource* res) {
     std::pmr::string block(res);
     encodeGetRequest(block);
     const auto h = headersFrame(
@@ -620,7 +620,7 @@ void driveGetRequest(Http2Connection& conn, std::pmr::memory_resource* res) {
     conn.consumeOutput(conn.pendingOutput().size());
 }
 
-void driveRequest(
+inline void driveRequest(
     Http2Connection& conn,
     std::pmr::memory_resource* res,
     std::string_view method) {
@@ -639,7 +639,7 @@ void driveRequest(
 // Open stream 1 and let the peer reset it. `pinned` retains the aborted stream
 // object to exercise the request-view lifetime branch; the wire state is closed
 // in both cases.
-void openThenPeerReset(
+inline void openThenPeerReset(
     Http2Connection& conn,
     std::pmr::memory_resource* resource,
     bool pinned) {
@@ -672,7 +672,7 @@ void openThenPeerReset(
 // Open stream 1 and let this endpoint reset it. DATA that was already in flight
 // before the peer observes our RST_STREAM can still arrive and must be minimally
 // processed without sending another stream frame.
-void openThenLocalReset(
+inline void openThenLocalReset(
     Http2Connection& conn,
     std::pmr::memory_resource* resource,
     bool pinned = false) {
@@ -698,7 +698,7 @@ using ruvia::detail::Http2Role;
 // `to`, draining `to`'s events into the collectors first would lose them -- so the
 // caller passes a per-hop event sink invoked after every feed.
 template <typename OnEvent>
-void shuttleOnce(Http2Connection& from, Http2Connection& to, OnEvent&& onEvent) {
+inline void shuttleOnce(Http2Connection& from, Http2Connection& to, OnEvent&& onEvent) {
     while (from.wantsWrite()) {
         const auto out = from.pendingOutput();
         std::pmr::string copy(out.data(), out.size(), std::pmr::get_default_resource());
@@ -712,7 +712,7 @@ void shuttleOnce(Http2Connection& from, Http2Connection& to, OnEvent&& onEvent) 
 
 // Walk the outbound buffer frame-by-frame and return the error code of the first GOAWAY,
 // or 0xffffffff if none is present.
-std::uint32_t firstGoawayError(std::string_view out) {
+inline std::uint32_t firstGoawayError(std::string_view out) {
     std::size_t pos = 0;
     while (pos + 9 <= out.size()) {
         const auto h = ruvia::detail::http2ParseFrameHeader(out.substr(pos, 9));
@@ -732,7 +732,7 @@ constexpr std::uint32_t kEnhanceYourCalm =
 
 
 // Build a POST request head (no END_STREAM) with optional content-length; body follows.
-std::pmr::string postHeadFrame(
+inline std::pmr::string postHeadFrame(
     std::pmr::memory_resource* resource, std::string_view contentLength) {
     std::pmr::string block(resource);
     HpackEncoder::encodeHeader(block, ":method", "POST");
@@ -748,7 +748,7 @@ std::pmr::string postHeadFrame(
 }
 
 // Frame a DATA payload on `streamId` with the given flags.
-std::pmr::string dataFrame(
+inline std::pmr::string dataFrame(
     std::pmr::memory_resource* resource, std::uint32_t streamId, std::uint8_t flags,
     std::string_view body) {
     std::pmr::string frame(resource);
@@ -760,4 +760,6 @@ std::pmr::string dataFrame(
     return frame;
 }
 
-}  // namespace
+}  // namespace http2_connection_test
+
+using namespace http2_connection_test;  // NOLINT(google-build-using-namespace)

@@ -23,7 +23,7 @@
 #include "ruvia/web/Error.h"
 #include "ruvia/core/memory/MemoryPool.h"
 
-namespace {
+namespace context_request_test {
 
 using ruvia::Context;
 using ruvia::HttpHeaderView;
@@ -35,7 +35,7 @@ using ruvia::detail::ContextAccess;
 using ruvia::detail::HttpRequestAccess;
 using ruvia::detail::RequestKnownHeader;
 
-asio::awaitable<void> readHeaderValue(ruvia::Context& context, std::string& output) {
+inline asio::awaitable<void> readHeaderValue(ruvia::Context& context, std::string& output) {
     const auto value = context.req().header("X-Trace");
     if (value) {
         output.assign(value->data(), value->size());
@@ -48,13 +48,13 @@ struct MethodObservation final {
     HttpKnownMethod knownMethod{HttpKnownMethod::kGet};
 };
 
-ruvia::Task<ruvia::ContextRequest::RequestFormData> parseRequestBody(
+inline ruvia::Task<ruvia::ContextRequest::RequestFormData> parseRequestBody(
     ruvia::Context& context,
     ruvia::ContextRequest::ParseBodyOptions options) {
     co_return co_await context.req().parseBody(options);
 }
 
-asio::awaitable<void> readMethod(
+inline asio::awaitable<void> readMethod(
     ruvia::Context& context,
     MethodObservation& observation) {
     const auto request = context.req();
@@ -63,7 +63,7 @@ asio::awaitable<void> readMethod(
     co_return;
 }
 
-asio::awaitable<void> parseProtoBody(ruvia::Context& context, bool& safeOk, bool& protoDropped) {
+inline asio::awaitable<void> parseProtoBody(ruvia::Context& context, bool& safeOk, bool& protoDropped) {
     const auto form = co_await ruvia::detail::taskAsAwaitable(
         parseRequestBody(context, {
             .dottedNames = ruvia::ContextRequest::DottedNamePolicy::kExpandPath,
@@ -73,7 +73,7 @@ asio::awaitable<void> parseProtoBody(ruvia::Context& context, bool& safeOk, bool
     protoDropped = !static_cast<bool>(form.get("__proto__"));
 }
 
-asio::awaitable<void> parseArrayForm(
+inline asio::awaitable<void> parseArrayForm(
     ruvia::Context& context,
     std::size_t& tagsSize,
     bool& tagsArray,
@@ -91,7 +91,7 @@ asio::awaitable<void> parseArrayForm(
     }
 }
 
-asio::awaitable<void> parseRepeatedFiles(
+inline asio::awaitable<void> parseRepeatedFiles(
     ruvia::Context& context,
     std::size_t& count,
     std::size_t& fileCount,
@@ -115,7 +115,7 @@ asio::awaitable<void> parseRepeatedFiles(
     }
 }
 
-asio::awaitable<void> parsePartContentType(
+inline asio::awaitable<void> parsePartContentType(
     ruvia::Context& context,
     std::string& contentType) {
     const auto form = co_await ruvia::detail::taskAsAwaitable(
@@ -127,7 +127,7 @@ asio::awaitable<void> parsePartContentType(
     }
 }
 
-asio::awaitable<void> parseWithFieldCap(
+inline asio::awaitable<void> parseWithFieldCap(
     ruvia::Context& context,
     std::size_t maxFields,
     bool& rejected,
@@ -141,7 +141,7 @@ asio::awaitable<void> parseWithFieldCap(
     }
 }
 
-asio::awaitable<void> parseAllRepeatedScalar(
+inline asio::awaitable<void> parseAllRepeatedScalar(
     ruvia::Context& context,
     std::size_t& valueCount,
     std::string& selectedValue) {
@@ -156,7 +156,7 @@ asio::awaitable<void> parseAllRepeatedScalar(
     }
 }
 
-asio::awaitable<void> parseMultipart(
+inline asio::awaitable<void> parseMultipart(
     ruvia::Context& context,
     std::string& nameValue,
     std::string& fileName,
@@ -177,11 +177,11 @@ asio::awaitable<void> parseMultipart(
     }
 }
 
-asio::awaitable<void> parseBodyDiscard(ruvia::Context& context) {
+inline asio::awaitable<void> parseBodyDiscard(ruvia::Context& context) {
     (void)co_await ruvia::detail::taskAsAwaitable(parseRequestBody(context, {}));
 }
 
-asio::awaitable<void> parseScalarPair(
+inline asio::awaitable<void> parseScalarPair(
     ruvia::Context& context,
     std::string& aValue,
     bool& aPresent,
@@ -199,7 +199,7 @@ asio::awaitable<void> parseScalarPair(
     }
 }
 
-}  // namespace
+}  // namespace context_request_test
 
 // A prefixed signed cookie reaches the client under its wire name
 // ("__Host-session"), so that is the only name the read side can pass back.
@@ -208,3 +208,5 @@ asio::awaitable<void> parseScalarPair(
 
 // Request observation stays on req(); deleteCookie only queues the response
 // mutation, including the configured wire-name prefix.
+
+using namespace context_request_test;  // NOLINT(google-build-using-namespace)

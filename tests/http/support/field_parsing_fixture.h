@@ -26,7 +26,7 @@
 #include "ruvia/http/HttpRequest.h"
 #include "ruvia/web/Model.h"
 
-namespace {
+namespace field_parsing_test {
 
 using ruvia::detail::HttpContentCoding;
 using ruvia::detail::HttpChunkScanComplete;
@@ -187,7 +187,7 @@ static_assert(!ExposesAnyRvalueGeneratedMessageMember<AccessorSurfaceRequest>);
 static_assert(!ExposesAnyRvalueGeneratedMessageMember<AccessorSurfaceResponse>);
 
 
-}  // namespace
+}  // namespace field_parsing_test
 
 // --- Semicolon parameters: quoted-string awareness -----------------------
 
@@ -198,3 +198,5 @@ static_assert(!ExposesAnyRvalueGeneratedMessageMember<AccessorSurfaceResponse>);
 // --- Accept quality parsing shares the quote-aware parameter scanner ------
 
 // --- Chunk extension quoted-pair follows RFC quoted-string grammar -------
+
+using namespace field_parsing_test;  // NOLINT(google-build-using-namespace)

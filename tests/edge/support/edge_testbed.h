@@ -38,11 +38,11 @@
 #include "tls_fixture.h"
 #include "ruvia/edge/EdgeServer.h"
 
-namespace {
+namespace edge_testbed {
 
-int failures = 0;
+inline int failures = 0;
 
-void check(bool condition, const char* message) {
+inline void check(bool condition, const char* message) {
     if (!condition) {
         std::fprintf(stderr, "FAIL: %s\n", message);
         ++failures;
@@ -325,7 +325,7 @@ private:
 
 // A synchronous one-shot HTTP/1.1 client: send `request`, read until the server
 // closes, return the raw response bytes.
-std::string httpRaw(std::uint16_t port, const std::string& request) {
+inline std::string httpRaw(std::uint16_t port, const std::string& request) {
     asio::io_context io;
     tcp::socket socket(io);
     socket.connect(tcp::endpoint(asio::ip::make_address("127.0.0.1"), port));
@@ -345,7 +345,7 @@ std::string httpRaw(std::uint16_t port, const std::string& request) {
     return response;
 }
 
-std::string httpGet(std::uint16_t port, std::string_view host, std::string_view target) {
+inline std::string httpGet(std::uint16_t port, std::string_view host, std::string_view target) {
     std::string request = "GET ";
     request.append(target);
     request.append(" HTTP/1.1\r\nHost: ");
@@ -357,7 +357,7 @@ std::string httpGet(std::uint16_t port, std::string_view host, std::string_view 
     return httpRaw(port, request);
 }
 
-std::string httpHead(std::uint16_t port, std::string_view host, std::string_view target) {
+inline std::string httpHead(std::uint16_t port, std::string_view host, std::string_view target) {
     std::string request = "HEAD ";
     request.append(target);
     request.append(" HTTP/1.1\r\nHost: ");
@@ -369,7 +369,7 @@ std::string httpHead(std::uint16_t port, std::string_view host, std::string_view
 }
 
 // GET with a Range header (same Accept-Encoding as httpGet, so it hits that variant).
-std::string httpGetRange(
+inline std::string httpGetRange(
     std::uint16_t port,
     std::string_view host,
     std::string_view target,
@@ -385,7 +385,7 @@ std::string httpGetRange(
 }
 
 // GET with an explicit Accept-Encoding, to exercise variant caching.
-std::string httpGetEnc(
+inline std::string httpGetEnc(
     std::uint16_t port,
     std::string_view host,
     std::string_view target,
@@ -400,7 +400,7 @@ std::string httpGetEnc(
     return httpRaw(port, request);
 }
 
-std::string httpPost(
+inline std::string httpPost(
     std::uint16_t port,
     std::string_view host,
     std::string_view target,
@@ -418,7 +418,7 @@ std::string httpPost(
 
 // Read exactly one HTTP/1.1 response (headers plus its Content-Length body) from
 // a connection that stays open, so a second request can follow.
-std::string readOneResponse(asio::ip::tcp::socket& socket) {
+inline std::string readOneResponse(asio::ip::tcp::socket& socket) {
     std::string response;
     char buffer[4096];
     asio::error_code ec;
@@ -456,7 +456,7 @@ std::string readOneResponse(asio::ip::tcp::socket& socket) {
 
 // Send two GET requests on a single persistent connection (the first keep-alive,
 // the second closing) and return both raw responses.
-std::pair<std::string, std::string> httpKeepAliveTwo(
+inline std::pair<std::string, std::string> httpKeepAliveTwo(
     std::uint16_t port,
     std::string_view host,
     std::string_view target,
@@ -488,7 +488,7 @@ std::pair<std::string, std::string> httpKeepAliveTwo(
 
 // A synchronous one-shot HTTPS client: TLS-handshake (no verification), send one
 // GET, read until the server closes, return the raw response bytes.
-std::string httpsGet(std::uint16_t port, std::string_view host, std::string_view target) {
+inline std::string httpsGet(std::uint16_t port, std::string_view host, std::string_view target) {
     asio::io_context io;
     asio::ssl::context ctx(asio::ssl::context::tls_client);
     ctx.set_verify_mode(asio::ssl::verify_none);
@@ -520,7 +520,7 @@ std::string httpsGet(std::uint16_t port, std::string_view host, std::string_view
 
 // Run a shell command and capture its stdout (used to drive curl as an h2 client).
 #if !defined(_WIN32)
-std::string runShell(const std::string& command) {
+inline std::string runShell(const std::string& command) {
     std::string output;
     FILE* pipe = popen(command.c_str(), "r");
     if (pipe == nullptr) {
@@ -592,4 +592,6 @@ std::string runShell(const std::string& command) {
     return haystack.find(needle) != std::string::npos;
 }
 
-}  // namespace
+}  // namespace edge_testbed
+
+using namespace edge_testbed;  // NOLINT(google-build-using-namespace)
