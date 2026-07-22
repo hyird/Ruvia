@@ -3,7 +3,7 @@
 #include <memory_resource>
 
 #include <ruvia/http/detail/http1/Http1RequestBodyPlan.h>
-#include <ruvia/http/detail/websocket/WebSocketServerNegotiation.h>
+#include <ruvia/http/detail/websocket/handshake/WebSocketServerNegotiation.h>
 #include <ruvia/http/detail/websocket/WsConnection.h>
 
 template <typename T>

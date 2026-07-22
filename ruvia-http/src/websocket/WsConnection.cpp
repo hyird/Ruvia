@@ -1,7 +1,7 @@
 #include "ruvia/http/detail/websocket/WsConnection.h"
-#include "ruvia/http/detail/websocket/HttpWebSocketFrameReader.h"
+#include "ruvia/http/detail/websocket/frame/HttpWebSocketFrameReader.h"
 
-#include "ruvia/http/detail/websocket/HttpWebSocketClosePayload.h"
+#include "ruvia/http/detail/websocket/frame/HttpWebSocketClosePayload.h"
 
 namespace ruvia::detail {
 

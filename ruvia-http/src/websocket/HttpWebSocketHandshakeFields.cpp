@@ -1,8 +1,8 @@
-#include "ruvia/http/detail/websocket/HttpWebSocketHandshakeFields.h"
+#include "ruvia/http/detail/websocket/handshake/HttpWebSocketHandshakeFields.h"
 
 #include "ruvia/http/detail/util/PmrResource.h"
-#include "ruvia/http/detail/websocket/HttpWebSocketPermessageDeflate.h"
-#include "ruvia/http/detail/websocket/WebSocketServerNegotiation.h"
+#include "ruvia/http/detail/websocket/message/HttpWebSocketPermessageDeflate.h"
+#include "ruvia/http/detail/websocket/handshake/WebSocketServerNegotiation.h"
 
 #include <algorithm>
 #include <array>

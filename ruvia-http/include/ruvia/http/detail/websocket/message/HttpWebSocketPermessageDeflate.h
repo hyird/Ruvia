@@ -13,7 +13,7 @@
 
 #include "ruvia/http/ProtocolByteLimit.h"
 #include "ruvia/http/detail/field/HeaderTokenUtils.h"
-#include "ruvia/http/detail/websocket/HttpWebSocketHandshakeFields.h"
+#include "ruvia/http/detail/websocket/handshake/HttpWebSocketHandshakeFields.h"
 #include "ruvia/http/HttpRequest.h"
 
 namespace ruvia::detail {

@@ -9,9 +9,9 @@
 #include "ruvia/http/detail/http2/stream/Http2StreamState.h"
 #include "ruvia/http/detail/util/AsciiCase.h"
 #include "ruvia/http/detail/request/HttpRequestAccess.h"
-#include "ruvia/http/detail/websocket/HttpWebSocketHandshakeFields.h"
-#include "ruvia/http/detail/websocket/HttpWebSocketHandshakeValidation.h"
-#include "ruvia/http/detail/websocket/WebSocketServerNegotiation.h"
+#include "ruvia/http/detail/websocket/handshake/HttpWebSocketHandshakeFields.h"
+#include "ruvia/http/detail/websocket/handshake/HttpWebSocketHandshakeValidation.h"
+#include "ruvia/http/detail/websocket/handshake/WebSocketServerNegotiation.h"
 #include "ruvia/http/HttpRequest.h"
 
 namespace ruvia::detail {

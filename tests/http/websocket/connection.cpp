@@ -19,7 +19,7 @@
 #include "ruvia/core/detail/io/ConnectionScanner.h"
 #include "ruvia/core/detail/worker/WorkerDispatcher.h"
 #include "ruvia/http/ProtocolByteLimit.h"
-#include "ruvia/http/detail/websocket/HttpWebSocketPermessageDeflate.h"
+#include "ruvia/http/detail/websocket/message/HttpWebSocketPermessageDeflate.h"
 #include "ruvia/web/detail/websocket/HttpWebSocketSocketTransport.h"
 #include "ruvia/web/detail/websocket/HttpWebSocketSession.h"
 #include "ruvia/core/detail/io/AsioAwait.h"

@@ -65,7 +65,7 @@
 #include "ruvia/web/detail/ratelimit/RateLimitDecision.h"
 #include "ruvia/web/detail/server/request/RequestBodyLimit.h"
 #include "ruvia/web/detail/websocket/HttpWebSocketConnection.h"
-#include "ruvia/http/detail/websocket/HttpWebSocketPermessageDeflate.h"
+#include "ruvia/http/detail/websocket/message/HttpWebSocketPermessageDeflate.h"
 #include "ruvia/web/detail/websocket/HttpWebSocketSession.h"
 #include "ruvia/web/detail/router/RouteTable.h"
 #include "ruvia/web/detail/router/RouteResolution.h"
