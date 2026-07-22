@@ -3,7 +3,7 @@
 #include "ruvia/core/Task.h"
 #include "ruvia/http/WebSocketProtocol.h"
 #include "ruvia/web/ScopedOperation.h"
-#include "ruvia/web/detail/util/BorrowedView.h"
+#include "ruvia/http/detail/util/BorrowedView.h"
 
 #include <chrono>
 #include <cstdint>
@@ -80,7 +80,7 @@ struct WebSocketRouteOptions final {
             const std::basic_string<char, Traits, Allocator>& value) noexcept
             : value_(value) {}
 
-        template <detail::RvalueCharBasicString String>
+        template <detail::HttpTemporaryOwningCharString String>
         BorrowedText(String&&) = delete;
 
         constexpr BorrowedText& operator=(std::string_view value) noexcept {
@@ -100,7 +100,7 @@ struct WebSocketRouteOptions final {
             return *this;
         }
 
-        template <detail::RvalueCharBasicString String>
+        template <detail::HttpTemporaryOwningCharString String>
         BorrowedText& operator=(String&&) = delete;
 
         [[nodiscard]] constexpr std::string_view view() const noexcept {

@@ -4,7 +4,7 @@
 #include "ruvia/web/detail/json/JsonLimits.h"
 #include "ruvia/web/detail/json/JsonNumber.h"
 #include "ruvia/web/detail/json/JsonString.h"
-#include "ruvia/web/detail/util/BorrowedView.h"
+#include "ruvia/http/detail/util/BorrowedView.h"
 
 #include <cstddef>
 #include <string_view>
@@ -116,7 +116,7 @@ class JsonScanner final {
 public:
     explicit JsonScanner(std::string_view input) noexcept : input_(input) {}
 
-    template <RvalueCharBasicString Input>
+    template <HttpTemporaryOwningCharString Input>
     JsonScanner(Input&&) = delete;
 
     [[nodiscard]] bool consumeObject() noexcept {

@@ -79,21 +79,7 @@ Task<QueryResult> PostgreSqlPool::execute(
     std::pmr::string sql,
     std::pmr::vector<DbValue> params,
     std::pmr::memory_resource* resource) {
-    if (sql.empty()) {
-        throw std::invalid_argument("SQL must not be empty");
-    }
-    const auto slotIndex = co_await acquireSlot();
-    SlotGuard guard(*this, slotIndex);
-    try {
-        co_return co_await executeOnSlot(
-            slots_[slotIndex],
-            sql,
-            std::span<const DbValue>(params),
-            resource);
-    } catch (...) {
-        closeSlot(slots_[slotIndex]);
-        throw;
-    }
+    return executeDbQuery(*this, std::move(sql), std::move(params), resource);
 }
 
 Task<QueryResult> PostgreSqlPool::executeOnSlot(
@@ -287,33 +273,13 @@ Task<DbTransaction> PostgreSqlPool::beginTransaction(
 Task<void> PostgreSqlPool::commitTransaction(
     std::size_t slot,
     std::pmr::memory_resource* resource) {
-    if (slot >= slots_.size()) {
-        throw std::logic_error("database transaction slot is invalid");
-    }
-    try {
-        co_await executeControl(slots_[slot], "COMMIT", resource);
-    } catch (...) {
-        closeSlot(slots_[slot]);
-        releaseSlot(slot);
-        throw;
-    }
-    releaseSlot(slot);
+    return finishDbTransaction(*this, slot, "COMMIT", resource);
 }
 
 Task<void> PostgreSqlPool::rollbackTransaction(
     std::size_t slot,
     std::pmr::memory_resource* resource) {
-    if (slot >= slots_.size()) {
-        throw std::logic_error("database transaction slot is invalid");
-    }
-    try {
-        co_await executeControl(slots_[slot], "ROLLBACK", resource);
-    } catch (...) {
-        closeSlot(slots_[slot]);
-        releaseSlot(slot);
-        throw;
-    }
-    releaseSlot(slot);
+    return finishDbTransaction(*this, slot, "ROLLBACK", resource);
 }
 
 void PostgreSqlPool::abortTransaction(std::size_t slot) noexcept {

@@ -1,6 +1,7 @@
 #include "ruvia/edge/detail/server/ServerImpl.h"
 
 #include "ruvia/edge/detail/proxy/ForwardHeaders.h"
+#include "ruvia/edge/detail/proxy/RangeResponse.h"
 #include "ruvia/edge/detail/proxy/RequestDirectives.h"
 
 #include <chrono>
@@ -209,28 +210,17 @@ asio::awaitable<bool> EdgeServer::Impl::serveRequest(
             const auto age = cachedResponseAge(entry, now);
             if (!isHead) {
                 if (const auto rangeHeader = findRequestHeader(request.headers, "range")) {
-                    const auto range = parseSingleByteRange(*rangeHeader, entry.body.size());
-                    if (range.unsatisfiable) {
-                        recordedStatus = 416;
-                        Headers headers;
-                        headers.emplace_back(
-                            "Content-Range", "bytes */" + std::to_string(entry.body.size()));
+                    if (auto ranged = cachedRangeResponse(entry, *rangeHeader)) {
+                        recordedStatus = ranged->status;
                         co_return co_await writer.respond(
-                                   416, headers, {}, "HIT", std::nullopt, false, keepAlive) &&
-                            keepAlive;
-                    }
-                    if (range.satisfiable) {
-                        recordedStatus = 206;
-                        Headers headers = entry.headers;
-                        headers.emplace_back(
-                            "Content-Range",
-                            "bytes " + std::to_string(range.start) + "-" +
-                                std::to_string(range.end) + "/" +
-                                std::to_string(entry.body.size()));
-                        const std::string_view slice = std::string_view(entry.body).substr(
-                            range.start, range.end - range.start + 1);
-                        co_return co_await writer.respond(
-                                   206, headers, slice, "HIT", age, false, keepAlive) &&
+                                   ranged->status,
+                                   ranged->headers,
+                                   ranged->body,
+                                   "HIT",
+                                   ranged->withAge ? std::optional<std::uint64_t>(age)
+                                                   : std::nullopt,
+                                   false,
+                                   keepAlive) &&
                             keepAlive;
                     }
                 }

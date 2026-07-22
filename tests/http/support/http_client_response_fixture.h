@@ -20,7 +20,7 @@
 #include "ruvia/http/detail/client/HttpClientContentEncoding.h"
 #include "ruvia/http/detail/client/HttpClientResponseLimits.h"
 
-namespace {
+namespace http_client_response_test {
 
 using ruvia::HttpClientResponseHead;
 using ruvia::Http1ClientRequestClosePolicy;
@@ -76,7 +76,7 @@ concept CanMutateHttpClientResponseHeadStatus = requires(
 static_assert(!CanMutateHttpClientResponseHeadStatus<
     ruvia::detail::HttpClientResponseHeadAccess>);
 
-Http1ClientResponseParseResult parseWire(
+inline Http1ClientResponseParseResult parseWire(
     std::string_view method,
     std::string_view wire,
     Http1ClientRequestClosePolicy closePolicy =
@@ -107,7 +107,7 @@ Http1ClientResponseParseResult parseWire(
     return parser.parse(wire);
 }
 
-Http1ClientResponseParseResult parseResult(
+inline Http1ClientResponseParseResult parseResult(
     std::string_view method,
     std::string_view headerSection,
     Http1ClientRequestClosePolicy closePolicy =
@@ -119,7 +119,7 @@ Http1ClientResponseParseResult parseResult(
     return parseWire(method, wire, closePolicy, requestHeaders, resource);
 }
 
-Http1ParsedClientResponseHead parseHead(
+inline Http1ParsedClientResponseHead parseHead(
     std::string_view method,
     std::string_view headerSection,
     Http1ClientRequestClosePolicy closePolicy =
@@ -138,14 +138,14 @@ struct ParsedResponse final {
     HttpClientResponseHead head;
 };
 
-ParsedResponse parseResponse(
+inline ParsedResponse parseResponse(
     std::string_view method,
     std::string_view headerSection) {
     auto head = parseHead(method, headerSection);
     return ParsedResponse{std::move(head).takeHead()};
 }
 
-bool parseFails(
+inline bool parseFails(
     std::string_view method,
     std::string_view headerSection,
     Http1ClientRequestClosePolicy closePolicy =
@@ -156,7 +156,7 @@ bool parseFails(
     return result.failure() != nullptr;
 }
 
-const ruvia::Http1ClientKnownLengthResponse& requireKnownLength(
+inline const ruvia::Http1ClientKnownLengthResponse& requireKnownLength(
     const ruvia::Http1ClientResponsePlan& plan) {
     const auto* knownLength = plan.knownLength();
     if (knownLength == nullptr) {
@@ -165,7 +165,7 @@ const ruvia::Http1ClientKnownLengthResponse& requireKnownLength(
     return *knownLength;
 }
 
-const ruvia::Http1ClientChunkedResponse& requireChunked(
+inline const ruvia::Http1ClientChunkedResponse& requireChunked(
     const ruvia::Http1ClientResponsePlan& plan) {
     const auto* chunked = plan.chunked();
     if (chunked == nullptr) {
@@ -174,7 +174,7 @@ const ruvia::Http1ClientChunkedResponse& requireChunked(
     return *chunked;
 }
 
-const ruvia::Http1ClientCloseDelimitedResponse& requireCloseDelimited(
+inline const ruvia::Http1ClientCloseDelimitedResponse& requireCloseDelimited(
     const ruvia::Http1ClientResponsePlan& plan) {
     const auto* closeDelimited = plan.closeDelimited();
     if (closeDelimited == nullptr) {
@@ -183,7 +183,7 @@ const ruvia::Http1ClientCloseDelimitedResponse& requireCloseDelimited(
     return *closeDelimited;
 }
 
-const ruvia::Http1ClientResponseWithoutContent& requireWithoutContent(
+inline const ruvia::Http1ClientResponseWithoutContent& requireWithoutContent(
     const ruvia::Http1ClientResponsePlan& plan) {
     const auto* withoutContent = plan.withoutContent();
     if (withoutContent == nullptr) {
@@ -192,7 +192,7 @@ const ruvia::Http1ClientResponseWithoutContent& requireWithoutContent(
     return *withoutContent;
 }
 
-const ruvia::Http1ClientResponseWithZeroContent& requireZeroContent(
+inline const ruvia::Http1ClientResponseWithZeroContent& requireZeroContent(
     const ruvia::Http1ClientResponsePlan& plan) {
     const auto* zeroContent = plan.zeroContent();
     if (zeroContent == nullptr) {
@@ -202,7 +202,7 @@ const ruvia::Http1ClientResponseWithZeroContent& requireZeroContent(
     return *zeroContent;
 }
 
-std::size_t activePlanAlternativeCount(
+inline std::size_t activePlanAlternativeCount(
     const ruvia::Http1ClientResponsePlan& plan) noexcept {
     return static_cast<std::size_t>(plan.informational() != nullptr) +
         static_cast<std::size_t>(plan.withoutContent() != nullptr) +
@@ -214,7 +214,7 @@ std::size_t activePlanAlternativeCount(
         static_cast<std::size_t>(plan.protocolUpgrade() != nullptr);
 }
 
-Http1ClientResponseParseError parseFailureError(
+inline Http1ClientResponseParseError parseFailureError(
     std::string_view method,
     std::string_view headerSection,
     std::span<const ruvia::HttpHeaderView> requestHeaders = {}) {
@@ -362,4 +362,6 @@ static_assert(std::same_as<
     decltype(std::declval<const ruvia::Http1ClientResponsePlan&>().protocolUpgrade()),
     const ruvia::Http1ClientProtocolUpgrade*>);
 
-}  // namespace
+}  // namespace http_client_response_test
+
+using namespace http_client_response_test;  // NOLINT(google-build-using-namespace)

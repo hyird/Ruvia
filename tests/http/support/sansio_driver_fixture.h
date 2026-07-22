@@ -49,9 +49,9 @@
 #include "ruvia/core/memory/MemoryPool.h"
 #include "ruvia/web/Router.h"
 
-namespace {
+namespace sansio_driver_test {
 
-ruvia::WorkerHandle testWorker(asio::io_context& io) {
+inline ruvia::WorkerHandle testWorker(asio::io_context& io) {
     return ruvia::detail::WorkerHandleAccess::make(
         std::make_shared<ruvia::detail::WorkerDispatcher>(io, 64));
 }
@@ -72,7 +72,7 @@ constexpr std::string_view kClientPreface = "PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n";
 // stays blocked and io.run() hangs forever (the whole ruvia_unit_tests binary then
 // times out on the first such test). A FIN delivers a clean EOF that terminates the
 // session on every platform -- the same teardown the HTTP/2 server socket tests use.
-void closeClientSocket(tcp::socket& socket) noexcept {
+inline void closeClientSocket(tcp::socket& socket) noexcept {
     asio::error_code ignored;
     socket.shutdown(asio::socket_base::shutdown_both, ignored);
     socket.close(ignored);
@@ -80,13 +80,13 @@ void closeClientSocket(tcp::socket& socket) noexcept {
 
 // A real route handler: returns a distinctive body so the client can confirm the
 // registered handler actually ran through the sans-I/O dispatch pipeline.
-ruvia::Task<ruvia::HttpResponse> echoHandler(void*, ruvia::Context& ctx) {
+inline ruvia::Task<ruvia::HttpResponse> echoHandler(void*, ruvia::Context& ctx) {
     co_return ctx.text("handler-ran");
 }
 
 // A slow handler: suspends on a timer (executor passed via the handler context) before
 // responding, so a concurrently-dispatched fast handler can finish first.
-ruvia::Task<ruvia::HttpResponse> slowHandler(void* context, ruvia::Context& ctx) {
+inline ruvia::Task<ruvia::HttpResponse> slowHandler(void* context, ruvia::Context& ctx) {
     auto* io = static_cast<asio::io_context*>(context);
     asio::steady_timer timer(*io);
     timer.expires_after(std::chrono::milliseconds(30));
@@ -98,18 +98,18 @@ ruvia::Task<ruvia::HttpResponse> slowHandler(void* context, ruvia::Context& ctx)
     co_return ctx.text("slow");
 }
 
-ruvia::Task<ruvia::HttpResponse> fastHandler(void*, ruvia::Context& ctx) {
+inline ruvia::Task<ruvia::HttpResponse> fastHandler(void*, ruvia::Context& ctx) {
     co_return ctx.text("fast");
 }
 
-ruvia::Task<ruvia::HttpResponse> bufferedStatusHandler(
+inline ruvia::Task<ruvia::HttpResponse> bufferedStatusHandler(
     void*,
     ruvia::Context& ctx) {
     ctx.status(ruvia::http_status::kMultiStatus);
     co_return ctx.text("buffered-status");
 }
 
-ruvia::Task<ruvia::HttpResponse> invalidHttp2ResponseHandler(
+inline ruvia::Task<ruvia::HttpResponse> invalidHttp2ResponseHandler(
     void*,
     ruvia::Context& ctx) {
     ctx.header("Connection", "close");
@@ -121,7 +121,7 @@ ruvia::Task<ruvia::HttpResponse> invalidHttp2ResponseHandler(
 // Returns a large BUFFERED body (100 KiB) to exercise the buffered-response send-window
 // pacing path (distinct from the file-body path).
 constexpr std::size_t kLargeBufferedBytes = 100000;
-ruvia::Task<ruvia::HttpResponse> largeBufferedHandler(void*, ruvia::Context&) {
+inline ruvia::Task<ruvia::HttpResponse> largeBufferedHandler(void*, ruvia::Context&) {
     ruvia::HttpResponse response(std::pmr::get_default_resource());
     response.status(ruvia::http_status::kOk);
     std::string body(kLargeBufferedBytes, 'Q');
@@ -129,7 +129,7 @@ ruvia::Task<ruvia::HttpResponse> largeBufferedHandler(void*, ruvia::Context&) {
     co_return response;
 }
 
-ruvia::Task<ruvia::HttpResponse> streamBodyCountHandler(void* ctx, ruvia::Context& c) {
+inline ruvia::Task<ruvia::HttpResponse> streamBodyCountHandler(void* ctx, ruvia::Context& c) {
     auto* out = static_cast<std::size_t*>(ctx);
     std::size_t bytes = 0;
     auto& reader = c.req().bodyReader();
@@ -148,7 +148,7 @@ struct TerminatedBodyObservation final {
     bool sessionReturnedAfterHandler{false};
 };
 
-ruvia::Task<ruvia::HttpResponse> terminatedBodyHandler(
+inline ruvia::Task<ruvia::HttpResponse> terminatedBodyHandler(
     void* raw,
     ruvia::Context& context) {
     auto& observation = *static_cast<TerminatedBodyObservation*>(raw);
@@ -177,7 +177,7 @@ constexpr std::uint64_t kLargeFileBytes = 200000;  // > default send window (655
 
 // A plain (buffered) route returning a FILE body larger than the send window: this is
 // the path that had NO stream signal, so a window block could never be woken.
-ruvia::Task<ruvia::HttpResponse> largeFileHandler(void*, ruvia::Context&) {
+inline ruvia::Task<ruvia::HttpResponse> largeFileHandler(void*, ruvia::Context&) {
     ruvia::HttpResponse response(std::pmr::get_default_resource());
     response.status(ruvia::http_status::kOk);
     ruvia::detail::setResponseFileBody(
@@ -187,7 +187,7 @@ ruvia::Task<ruvia::HttpResponse> largeFileHandler(void*, ruvia::Context&) {
 
 // A WebSocket echo handler: echoes each text message back and finishes when the peer
 // closes (read returns nullopt).
-ruvia::Task<void> wsEchoHandler(void*, ruvia::Context& ctx) {
+inline ruvia::Task<void> wsEchoHandler(void*, ruvia::Context& ctx) {
     auto& ws = ctx.webSocket();
     while (auto message = co_await ws.read()) {
         if (message->text()) {
@@ -198,12 +198,12 @@ ruvia::Task<void> wsEchoHandler(void*, ruvia::Context& ctx) {
 
 // Returns without waiting for peer input so session finalization initiates the
 // server side of the closing handshake.
-ruvia::Task<void> wsServerCloseHandler(void*, ruvia::Context&) {
+inline ruvia::Task<void> wsServerCloseHandler(void*, ruvia::Context&) {
     co_return;
 }
 
 // Build a masked client->server WebSocket frame (RFC 6455 §5.1, short lengths only).
-std::string maskedWsFrame(std::uint8_t opcode, std::string_view payload, bool rsv1 = false) {
+inline std::string maskedWsFrame(std::uint8_t opcode, std::string_view payload, bool rsv1 = false) {
     std::string f;
     f.push_back(static_cast<char>(0x80U | (rsv1 ? 0x40U : 0U) | opcode));  // FIN | RSV1? | opcode
     f.push_back(static_cast<char>(0x80U | static_cast<std::uint8_t>(payload.size())));
@@ -215,7 +215,7 @@ std::string maskedWsFrame(std::uint8_t opcode, std::string_view payload, bool rs
     return f;
 }
 
-std::string frame(std::uint8_t type, std::uint8_t flags, std::uint32_t streamId, std::string_view payload) {
+inline std::string frame(std::uint8_t type, std::uint8_t flags, std::uint32_t streamId, std::string_view payload) {
     std::string bytes(ruvia::detail::kHttp2FrameHeaderBytes, '\0');
     ruvia::detail::http2WriteFrameHeader(
         bytes.data(), static_cast<std::uint32_t>(payload.size()),
@@ -224,7 +224,7 @@ std::string frame(std::uint8_t type, std::uint8_t flags, std::uint32_t streamId,
     return bytes;
 }
 
-}  // namespace
+}  // namespace sansio_driver_test
 
 // End-to-end proof that the generic sans-I/O driver (ruvia-core) can back a real
 // HTTP/2 server over a real socket using ONLY the Http2Connection core: a synthetic
@@ -263,11 +263,11 @@ std::string frame(std::uint8_t type, std::uint8_t flags, std::uint32_t streamId,
 // answered with a buffered error response (HEADERS then DATA+END_STREAM), mirroring
 // the coroutine session's invalid-handshake 400 path.
 
-namespace {
+namespace sansio_driver_test {
 
 // Streaming handler that atomically ends with a trailer section: the h2 stream must
 // end with trailing HEADERS (END_STREAM) instead of an empty DATA frame.
-ruvia::Task<void> streamTrailerHandler(void*, ruvia::Context& c) {
+inline ruvia::Task<void> streamTrailerHandler(void*, ruvia::Context& c) {
     c.status(ruvia::http_status::kMultiStatus);
     auto& stream = c.streamText();
     co_await stream.write("body-part");
@@ -290,7 +290,7 @@ struct StreamAccessObservation final {
 };
 
 // Streaming handler pushing one large chunk; used to exercise send-window pacing.
-ruvia::Task<void> streamBigChunkHandler(void*, ruvia::Context& c) {
+inline ruvia::Task<void> streamBigChunkHandler(void*, ruvia::Context& c) {
     auto& stream = c.streamText();
     co_await stream.write(std::string(64, 'z'));
 }
@@ -304,7 +304,7 @@ struct HpackCollect {
     }
 };
 
-}  // namespace
+}  // namespace sansio_driver_test
 
 // Expect is one cross-version semantic contract. Stream 1 sends a legal repeated/
 // empty-member 100-continue list and withholds DATA until the server's exact interim
@@ -347,3 +347,5 @@ struct HpackCollect {
 // after the configured number of request heads the session drains -- GOAWAY
 // (NO_ERROR) advertising the last accepted stream, the in-flight request still
 // completes, and a stream opened above the advertised id is refused.
+
+using namespace sansio_driver_test;  // NOLINT(google-build-using-namespace)

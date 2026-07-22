@@ -14,6 +14,7 @@ set(RUVIA_EDGE_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/src/proxy/ByteRange.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/proxy/ForwardHeaders.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/proxy/HeaderRules.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/proxy/RangeResponse.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/proxy/RequestDirectives.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/server/EdgeConfig.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/server/Serve.cpp

@@ -2,7 +2,7 @@
 
 #include "ruvia/http/HttpKnownMethod.h"
 #include "ruvia/web/Middleware.h"
-#include "ruvia/web/detail/util/BorrowedView.h"
+#include "ruvia/http/detail/util/BorrowedView.h"
 #include "ruvia/web/detail/controller/ControllerRuntime.h"
 
 #include <array>
@@ -54,7 +54,7 @@ class RuviaPathList final {
 public:
     template <typename... Paths>
         requires ((std::convertible_to<Paths&&, std::string_view> && ...) &&
-                  (!RvalueCharBasicString<Paths> && ...))
+                  (!HttpTemporaryOwningCharString<Paths> && ...))
     constexpr explicit RuviaPathList(Paths&&... paths) noexcept
         : paths_{std::string_view(std::forward<Paths>(paths))...},
           count_(sizeof...(Paths)) {
@@ -63,7 +63,7 @@ public:
 
     template <typename... Paths>
         requires ((std::convertible_to<Paths&&, std::string_view> && ...) &&
-                  (RvalueCharBasicString<Paths> || ...))
+                  (HttpTemporaryOwningCharString<Paths> || ...))
     explicit RuviaPathList(Paths&&...) = delete;
 
     [[nodiscard]] constexpr const std::string_view* begin() const & noexcept {

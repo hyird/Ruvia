@@ -1,6 +1,6 @@
 #pragma once
 
-#include "ruvia/web/detail/util/BorrowedView.h"
+#include "ruvia/http/detail/util/BorrowedView.h"
 #include "ruvia/http/HttpStatus.h"
 
 #include <cstdint>
@@ -29,7 +29,7 @@ public:
           message_(message),
           detailsJson_(detailsJson) {}
 
-    template <detail::RvalueCharBasicString String>
+    template <detail::HttpTemporaryOwningCharString String>
     HttpErrorInfo(
         HttpStatusCode,
         String&&,
@@ -37,7 +37,7 @@ public:
         std::string_view = {},
         std::string_view = {}) = delete;
 
-    template <detail::RvalueCharBasicString String>
+    template <detail::HttpTemporaryOwningCharString String>
     HttpErrorInfo(
         HttpStatusCode,
         std::string_view,
@@ -45,7 +45,7 @@ public:
         std::string_view = {},
         std::string_view = {}) = delete;
 
-    template <detail::RvalueCharBasicString String>
+    template <detail::HttpTemporaryOwningCharString String>
     HttpErrorInfo(
         HttpStatusCode,
         std::string_view,
@@ -53,7 +53,7 @@ public:
         String&&,
         std::string_view = {}) = delete;
 
-    template <detail::RvalueCharBasicString String>
+    template <detail::HttpTemporaryOwningCharString String>
     HttpErrorInfo(
         HttpStatusCode,
         std::string_view,

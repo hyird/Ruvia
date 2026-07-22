@@ -1,5 +1,7 @@
 #pragma once
 
+#include "ruvia/http/detail/server/HttpResponseTrailers.h"
+
 #include "ruvia/http/HttpKnownMethod.h"
 #include "ruvia/http/detail/server/HttpResponseHeadPolicy.h"
 #include "ruvia/http/detail/server/HttpResponseWritePlan.h"
@@ -39,6 +41,15 @@ enum class ResponseTrailerIntent : std::uint8_t {
     kNone,
     kPresent
 };
+
+// Whether a validated trailer section commits the response to sending trailers.
+// An empty section is not "no decision": it is the decision to send none, which
+// the head must state before any body byte goes out.
+[[nodiscard]] inline ResponseTrailerIntent responseTrailerIntent(
+    const HttpResponseTrailerSection& section) noexcept {
+    return section.empty() ? ResponseTrailerIntent::kNone
+                           : ResponseTrailerIntent::kPresent;
+}
 
 enum class ResponseStreamTrailerFraming : std::uint8_t {
     kUnavailable,

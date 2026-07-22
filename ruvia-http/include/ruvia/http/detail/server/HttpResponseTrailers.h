@@ -254,4 +254,15 @@ httpResponseTrailerSection(
         HttpResponseTrailerSection(trailers));
 }
 
+// Validate a caller's trailers, throwing the typed failure. The caller keeps the
+// returned result: the section it exposes borrows from it.
+[[nodiscard]] inline HttpResponseTrailerSectionResult validatedResponseTrailerSection(
+    std::span<const HttpHeaderView> trailers) {
+    auto result = httpResponseTrailerSection(trailers);
+    if (const auto* failure = result.failure()) {
+        throw failure->exception();
+    }
+    return result;
+}
+
 }  // namespace ruvia::detail

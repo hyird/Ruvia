@@ -9,7 +9,7 @@
 #include <vector>
 
 #include "ruvia/core/memory/PmrResource.h"
-#include "ruvia/web/detail/util/BorrowedView.h"
+#include "ruvia/http/detail/util/BorrowedView.h"
 
 namespace ruvia {
 
@@ -131,7 +131,7 @@ private:
     std::pmr::memory_resource* resource = nullptr);
 [[nodiscard]] std::optional<std::string_view> jwtBearerToken(std::string_view authorization) noexcept;
 
-template <detail::RvalueCharBasicString Authorization>
+template <detail::HttpTemporaryOwningCharString Authorization>
 std::optional<std::string_view> jwtBearerToken(Authorization&&) = delete;
 
 }  // namespace ruvia

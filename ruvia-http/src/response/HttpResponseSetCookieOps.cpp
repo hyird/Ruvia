@@ -4,6 +4,7 @@
 
 #include "ruvia/http/HttpHeader.h"
 #include "ruvia/http/detail/response/HttpResponseHeaderAccess.h"
+#include "ruvia/http/detail/response/HttpResponseHeadersAccess.h"
 #include "ruvia/http/detail/response/HttpResponseHeaderBits.h"
 #include "ruvia/http/detail/response/ResponseHeaderIndexCache.h"
 
@@ -125,13 +126,7 @@ void HttpResponse::eraseLaterSetCookieHeaders(
         ++write;
     }
     if (write != end) {
-        if (headers_.spilled_) {
-            headers_.heap_.erase(
-                headers_.heap_.begin() + static_cast<std::ptrdiff_t>(write - begin),
-                headers_.heap_.end());
-        } else {
-            headers_.size_ = static_cast<std::size_t>(write - begin);
-        }
+        detail::HttpResponseHeadersAccess::truncate(headers_, begin, write);
     }
     rebuildKnownHeaderIndex();
 }

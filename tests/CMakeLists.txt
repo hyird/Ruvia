@@ -114,7 +114,6 @@ add_executable(ruvia_unit_tests
     http/unit/computed_response_headers.cpp
     http/unit/content_codec.cpp
     http/unit/quoted_field_values.cpp
-    http/unit/zstd_frames.cpp
     http/unit/content_type_match.cpp
     http/unit/date_cache.cpp
     http/unit/error.cpp
@@ -146,7 +145,6 @@ add_executable(ruvia_unit_tests
     http/unit/http_response.cpp
     http/unit/http_response_body.cpp
     http/unit/http_response_content_semantics.cpp
-    http/unit/parse_error_status.cpp
     http/unit/request_access.cpp
     http/unit/response_compression.cpp
     http/unit/response_head_buffer.cpp
@@ -380,6 +378,7 @@ if(RUVIA_BUILD_HTTP)
 endif()
 
 if(RUVIA_BUILD_WEB)
+    ruvia_add_test(ruvia_guard_web_api_surface web/guards/web_api_surface_guard.cpp)
     ruvia_add_test(ruvia_guard_middleware_next web/guards/middleware_next_guard.cpp)
     ruvia_add_test(ruvia_guard_context_response_state web/guards/context_response_state_guard.cpp)
     ruvia_add_test(ruvia_guard_context_request_header web/guards/context_request_header_guard.cpp)

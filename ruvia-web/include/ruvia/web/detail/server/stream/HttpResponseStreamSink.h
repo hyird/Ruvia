@@ -211,14 +211,9 @@ private:
             co_return;
         }
 
-        const auto trailerResult = httpResponseTrailerSection(trailers);
-        if (const auto* failure = trailerResult.failure()) {
-            throw failure->exception();
-        }
+        const auto trailerResult = validatedResponseTrailerSection(trailers);
         const auto& trailerSection = *trailerResult.section();
-        const auto trailerIntent = trailerSection.empty()
-            ? ResponseTrailerIntent::kNone
-            : ResponseTrailerIntent::kPresent;
+        const auto trailerIntent = responseTrailerIntent(trailerSection);
         if (!trailerSection.empty()) {
             clearPmrStringRetainingSmall(trailers_);
             appendHttp1TrailerSection(trailers_, trailerSection);
