@@ -6,7 +6,6 @@
 #include <memory_resource>
 #include <mutex>
 #include <optional>
-#include <span>
 #include <stdexcept>
 #include <utility>
 #include <vector>
@@ -16,184 +15,12 @@
 #include "ruvia/core/detail/AsioAwait.h"
 #include "ruvia/core/detail/ConnectionScanner.h"
 #include "ruvia/core/memory/MemoryPool.h"
-#include "ruvia/core/memory/PmrResource.h"
+#include "ruvia/web/detail/DataAccessDefinitions.h"
 #include "ruvia/web/detail/DataAccessState.h"
 #include "ruvia/web/detail/db/DbInternal.h"
 #include "ruvia/web/detail/redis/RedisInternal.h"
 
 namespace ruvia::detail {
-
-class DataAccessState::Impl final {
-public:
-    Impl(
-        asio::io_context& ioContext,
-        std::pmr::memory_resource* resource,
-        std::span<const DbDefinition> databaseDefinitions,
-        std::span<const RedisDefinition> redisDefinitions,
-        ConnectionScanner& scanner)
-        : databases(ioContext, resource, databaseDefinitions),
-          redis(ioContext, resource, redisDefinitions) {
-        if (databases.hasAnyTimeout()) {
-            scanner.registerWorkerMaintenance(
-                databaseDeadlineCheck,
-                &databases,
-                [](void* target) noexcept {
-                    static_cast<DbRegistry*>(target)->scanDeadlines();
-                });
-        }
-        if (redis.hasAnyTimeout()) {
-            scanner.registerWorkerMaintenance(
-                redisDeadlineCheck,
-                &redis,
-                [](void* target) noexcept {
-                    static_cast<RedisRegistry*>(target)->scanDeadlines();
-                });
-        }
-    }
-
-    DbRegistry databases;
-    RedisRegistry redis;
-    ConnectionScanner::WorkerMaintenanceRegistration databaseDeadlineCheck;
-    ConnectionScanner::WorkerMaintenanceRegistration redisDeadlineCheck;
-};
-
-DataAccessState::DataAccessState(
-    asio::io_context& ioContext,
-    std::pmr::memory_resource* resource,
-    std::span<const DbDefinition> databases,
-    std::span<const RedisDefinition> redis,
-    ConnectionScanner& scanner)
-    : impl_(std::make_unique<Impl>(
-          ioContext, resource, databases, redis, scanner)) {}
-
-DataAccessState::~DataAccessState() = default;
-
-Task<void> DataAccessState::connect() {
-    try {
-        if (!impl_->databases.empty()) {
-            co_await impl_->databases.connect();
-        }
-        if (!impl_->redis.empty()) {
-            co_await impl_->redis.connect();
-        }
-    } catch (...) {
-        closeNow();
-        throw;
-    }
-}
-
-void DataAccessState::closeNow() noexcept {
-    impl_->redis.closeNow();
-    impl_->databases.closeNow();
-}
-
-bool DataAccessState::hasMaintenance() const noexcept {
-    return impl_->databases.hasAnyTimeout() || impl_->redis.hasAnyTimeout();
-}
-
-DbRegistry& DataAccessState::databases() noexcept {
-    return impl_->databases;
-}
-
-const DbRegistry& DataAccessState::databases() const noexcept {
-    return impl_->databases;
-}
-
-RedisRegistry& DataAccessState::redis() noexcept {
-    return impl_->redis;
-}
-
-const RedisRegistry& DataAccessState::redis() const noexcept {
-    return impl_->redis;
-}
-
-namespace {
-
-[[nodiscard]] EventLoop requireEventLoop(EventLoop loop) {
-    if (!loop.valid()) {
-        throw std::invalid_argument(
-            "data access service requires a valid event loop");
-    }
-    return loop;
-}
-
-#ifdef RUVIA_ENABLE_DATABASE
-[[nodiscard]] DbConfig cloneDbConfig(
-    const DbConfig& source,
-    std::pmr::memory_resource* resource) {
-    return DbConfig{
-        .driver = source.driver,
-        .host = std::pmr::string(source.host, resource),
-        .port = source.port,
-        .username = std::pmr::string(source.username, resource),
-        .password = std::pmr::string(source.password, resource),
-        .database = std::pmr::string(source.database, resource),
-        .connectTimeout = source.connectTimeout,
-        .readTimeout = source.readTimeout,
-        .writeTimeout = source.writeTimeout,
-        .queryTimeout = source.queryTimeout,
-        .acquireTimeout = source.acquireTimeout,
-    };
-}
-#endif
-
-[[nodiscard]] std::pmr::vector<DbDefinition> makeDatabaseDefinitions(
-    const DataAccessOptions& options,
-    std::pmr::memory_resource* resource) {
-    std::pmr::vector<DbDefinition> definitions(resource);
-#ifdef RUVIA_ENABLE_DATABASE
-    definitions.reserve(options.databases.size());
-    for (const auto& database : options.databases) {
-        definitions.push_back(DbDefinition{
-            std::pmr::string(database.alias, resource),
-            cloneDbConfig(database.config, resource)});
-    }
-#else
-    (void)options;
-#endif
-    return definitions;
-}
-
-#ifdef RUVIA_ENABLE_REDIS
-[[nodiscard]] RedisConfig cloneRedisConfig(
-    const RedisConfig& source,
-    std::pmr::memory_resource* resource) {
-    return RedisConfig{
-        .host = std::pmr::string(source.host, resource),
-        .port = source.port,
-        .username = std::pmr::string(source.username, resource),
-        .password = std::pmr::string(source.password, resource),
-        .database = source.database,
-        .poolSizePerWorker = source.poolSizePerWorker,
-        .connectTimeout = source.connectTimeout,
-        .commandTimeout = source.commandTimeout,
-        .acquireTimeout = source.acquireTimeout,
-        .maxReplyBytes = source.maxReplyBytes,
-        .maxArrayDepth = source.maxArrayDepth,
-        .tcpNoDelay = source.tcpNoDelay,
-        .keepAlive = source.keepAlive,
-    };
-}
-#endif
-
-[[nodiscard]] std::pmr::vector<RedisDefinition> makeRedisDefinitions(
-    const DataAccessOptions& options,
-    std::pmr::memory_resource* resource) {
-    std::pmr::vector<RedisDefinition> definitions(resource);
-#ifdef RUVIA_ENABLE_REDIS
-    definitions.reserve(options.redis.size());
-    for (const auto& redis : options.redis) {
-        definitions.push_back(RedisDefinition{
-            std::pmr::string(redis.alias, resource),
-            cloneRedisConfig(redis.config, resource)});
-    }
-#else
-    (void)options;
-#endif
-    return definitions;
-}
-
-}  // namespace
 
 class DataAccessServiceState final
     : public std::enable_shared_from_this<DataAccessServiceState> {
