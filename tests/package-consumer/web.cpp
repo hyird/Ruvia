@@ -38,6 +38,7 @@
 #include <ruvia/web/Validation.h>
 #include <ruvia/web/ValidationTypes.h>
 #include <ruvia/web/WebSocket.h>
+#include <ruvia/web/WorkerData.h>
 #include <ruvia/web/detail/app/AppLifecycle.h>
 #include <ruvia/web/detail/StaticFilesInternal.h>
 #include <ruvia/web/detail/ValidatedValues.h>
@@ -85,6 +86,35 @@
 #endif
 
 static_assert(!std::is_copy_constructible_v<ruvia::MultipartReader>);
+static_assert(!std::is_copy_constructible_v<ruvia::WorkerDataRuntime>);
+static_assert(!std::is_move_constructible_v<ruvia::WorkerDataRuntime>);
+static_assert(!std::is_copy_constructible_v<ruvia::WorkerDataContext>);
+static_assert(!std::is_move_constructible_v<ruvia::WorkerDataContext>);
+template <typename T>
+concept ExposesUntrackedWorkerDataContext = requires(T& runtime) {
+    runtime.context();
+};
+template <typename T>
+concept ExposesInertWorkerDataRequestMemoryTuning = requires(T& options) {
+    options.memory;
+};
+static_assert(
+    !ExposesUntrackedWorkerDataContext<ruvia::WorkerDataRuntime>);
+static_assert(
+    !ExposesInertWorkerDataRequestMemoryTuning<ruvia::WorkerDataOptions>);
+static_assert(std::same_as<
+    decltype(std::declval<ruvia::WorkerDataRuntime&>().connect()),
+    std::future<void>>);
+#ifdef RUVIA_ENABLE_DATABASE
+static_assert(std::same_as<
+    decltype(std::declval<const ruvia::WorkerDataContext&>().db()),
+    ruvia::DbHandle>);
+#endif
+#ifdef RUVIA_ENABLE_REDIS
+static_assert(std::same_as<
+    decltype(std::declval<const ruvia::WorkerDataContext&>().redis()),
+    ruvia::RedisHandle>);
+#endif
 static_assert(std::same_as<
     decltype(ruvia::detail::generateSecureToken(std::declval<std::span<char>>())),
     ruvia::detail::SecureTokenResult>);
@@ -2327,6 +2357,7 @@ std::string_view peerAddress(const ruvia::Context& context) {
 }
 
 int main() {
+    auto& app = ruvia::app();
     const ruvia::HttpErrorInfo error(
         ruvia::http_status::kInternalServerError);
     if (error.status() != ruvia::http_status::kInternalServerError) {
@@ -2535,7 +2566,7 @@ int main() {
     if (malformedModel.has_value()) {
         return 20;
     }
-    const auto unavailableWorker = ruvia::app().workerFor("package-consumer");
+    const auto unavailableWorker = app.workerFor("package-consumer");
     (void)unavailableWorker.stats();
     if (unavailableWorker.valid()) {
         return 21;
@@ -2557,10 +2588,10 @@ int main() {
 #endif
             co_return;
         });
-    if (postResult != ruvia::PostResult::kWorkerStopping) {
+    if (postResult != ruvia::PostStatus::kWorkerStopping) {
         return 22;
     }
-    ruvia::app()
+    app
         .setWorkerMailboxCapacity(1024)
         .setWorkersPerListener(1)
         .setRateLimitSlotsPerWorker(ruvia::kDefaultRateLimitSlotsPerWorker)

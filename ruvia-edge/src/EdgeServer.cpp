@@ -4,14 +4,22 @@
 #include <array>
 #include <charconv>
 #include <chrono>
+#include <condition_variable>
 #include <cstring>
 #include <ctime>
+#include <future>
+#include <limits>
 #include <memory>
 #include <memory_resource>
+#include <mutex>
 #include <optional>
+#include <span>
+#include <stdexcept>
 #include <string>
 #include <string_view>
+#include <thread>
 #include <tuple>
+#include <unordered_map>
 #include <utility>
 #include <vector>
 
@@ -21,19 +29,25 @@
 #include <asio/cancellation_signal.hpp>
 #include <asio/cancellation_type.hpp>
 #include <asio/co_spawn.hpp>
-#include <asio/detached.hpp>
 #include <asio/experimental/awaitable_operators.hpp>
+#include <asio/io_context.hpp>
+#include <asio/ip/tcp.hpp>
 #include <asio/post.hpp>
 #include <asio/ssl.hpp>
 #include <asio/steady_timer.hpp>
 #include <asio/this_coro.hpp>
+#include <asio/thread_pool.hpp>
 #include <asio/use_awaitable.hpp>
 #include <asio/write.hpp>
 
 #include <openssl/ssl.h>  // ALPN selection
 
-#include "ruvia/edge/EdgeFreshness.h"
-#include "ruvia/http/Http1RequestParser.h"
+#include "ruvia/core/memory/MemoryPool.h"
+#include "ruvia/edge/detail/DiskCache.h"
+#include "ruvia/edge/detail/EdgeCache.h"
+#include "ruvia/edge/detail/EdgeConfig.h"
+#include "ruvia/edge/detail/EdgeFreshness.h"
+#include "ruvia/edge/detail/OriginFetcher.h"
 #include "ruvia/http/HttpCache.h"
 #include "ruvia/http/HttpHeader.h"
 #include "ruvia/http/HttpKnownMethod.h"
@@ -41,8 +55,12 @@
 #include "ruvia/http/HttpResponse.h"
 #include "ruvia/http/HttpStatus.h"
 #include "ruvia/http/ProtocolByteLimit.h"
+#include "ruvia/http/detail/AsciiCase.h"
+#include "ruvia/http/detail/HeaderTokenUtils.h"
+#include "ruvia/http/detail/HttpConnectionFields.h"
 #include "ruvia/http/detail/HttpRequestInternal.h"
 #include "ruvia/http/detail/http1/Http1ChunkedBodyDecoder.h"
+#include "ruvia/http/detail/http1/Http1ServerRequestParser.h"
 #include "ruvia/http/detail/http2/Http2Connection.h"
 #include "ruvia/http/detail/server/HttpResponseStreamHead.h"
 #include "ruvia/http/detail/server/HttpResponseTrailers.h"
@@ -55,6 +73,49 @@ namespace ruvia::edge {
 namespace {
 
 using Headers = std::vector<std::pair<std::string, std::string>>;
+
+struct EdgeRequest final {
+    std::string_view method;
+    HttpKnownMethod knownMethod{HttpKnownMethod::kUnknown};
+    std::string_view target;
+    std::string_view host;
+    std::span<const HttpHeaderView> headers;
+    std::optional<std::string_view> body;
+    std::string_view clientAddress;
+    bool keepAlive{true};
+};
+
+class ResponseWriter {
+public:
+    ResponseWriter() = default;
+    virtual ~ResponseWriter() = default;
+    ResponseWriter(const ResponseWriter&) = delete;
+    ResponseWriter& operator=(const ResponseWriter&) = delete;
+
+    virtual asio::awaitable<bool> respond(
+        std::uint16_t status,
+        const Headers& headers,
+        std::string_view body,
+        std::string_view cacheResult,
+        std::optional<std::uint64_t> age,
+        bool omitBody,
+        bool keepAlive) = 0;
+    virtual asio::awaitable<bool> respondHead(
+        std::uint16_t status,
+        const Headers& headers,
+        std::string_view cacheResult,
+        bool hasBody,
+        std::optional<std::size_t> contentLength,
+        bool keepAlive) = 0;
+    virtual asio::awaitable<bool> respondChunk(std::string_view chunk) = 0;
+    virtual asio::awaitable<bool> respondEnd() = 0;
+    [[nodiscard]] virtual std::size_t bytesWritten() const = 0;
+    [[nodiscard]] virtual bool connectionReusable() const noexcept = 0;
+};
+
+[[nodiscard]] asio::ip::tcp::endpoint toAsioEndpoint(const EdgeEndpoint& endpoint) {
+    return {asio::ip::make_address(endpoint.address), endpoint.port};
+}
 
 // Upper bound on a whole buffered client request (head plus any forwarded body).
 constexpr std::size_t kMaxRequestBytes = 1u * 1024u * 1024u;
@@ -89,19 +150,12 @@ extern "C" inline int edgeAlpnSelect(
 }
 
 [[nodiscard]] char toLowerAscii(char c) noexcept {
-    return (c >= 'A' && c <= 'Z') ? static_cast<char>(c - 'A' + 'a') : c;
+    return static_cast<char>(detail::httpAsciiToLower(
+        static_cast<unsigned char>(c)));
 }
 
 [[nodiscard]] bool iequals(std::string_view a, std::string_view b) noexcept {
-    if (a.size() != b.size()) {
-        return false;
-    }
-    for (std::size_t i = 0; i < a.size(); ++i) {
-        if (toLowerAscii(a[i]) != toLowerAscii(b[i])) {
-            return false;
-        }
-    }
-    return true;
+    return detail::httpAsciiEqualsIgnoreCase(a, b);
 }
 
 // Fields a proxy must not forward (RFC 9110 section 7.6.1), plus the framing
@@ -115,34 +169,73 @@ extern "C" inline int edgeAlpnSelect(
         lowerName == "content-length";
 }
 
+[[nodiscard]] bool connectionNominates(
+    std::span<const HttpHeaderView> headers,
+    std::string_view fieldName) noexcept {
+    detail::HttpConnectionOptions options;
+    bool nominated = false;
+    for (const auto& field : headers) {
+        if (!iequals(field.name(), "connection")) {
+            continue;
+        }
+        (void)options.parseField(
+            field.value(),
+            detail::HttpFieldListRole::kRecipient,
+            [&](std::string_view option) noexcept {
+                nominated = nominated || iequals(option, fieldName);
+                return true;
+            });
+    }
+    return nominated;
+}
+
+[[nodiscard]] bool connectionNominates(
+    const Headers& headers,
+    std::string_view fieldName) noexcept {
+    detail::HttpConnectionOptions options;
+    bool nominated = false;
+    for (const auto& [name, value] : headers) {
+        if (!iequals(name, "connection")) {
+            continue;
+        }
+        (void)options.parseField(
+            value,
+            detail::HttpFieldListRole::kRecipient,
+            [&](std::string_view option) noexcept {
+                nominated = nominated || iequals(option, fieldName);
+                return true;
+            });
+    }
+    return nominated;
+}
+
+// Strip the origin hop-by-hop section before it can enter either response
+// serialization or persistent cache metadata. Content-Length is retained as
+// representation metadata; the client writer still owns the actual framing.
+[[nodiscard]] Headers endToEndResponseHeaders(const Headers& headers) {
+    Headers result;
+    result.reserve(headers.size());
+    for (const auto& field : headers) {
+        std::string lower(field.first);
+        for (auto& c : lower) {
+            c = toLowerAscii(c);
+        }
+        const bool standardHopByHop =
+            isConnectionOrFramingField(lower) && lower != "content-length";
+        if (standardHopByHop || connectionNominates(headers, field.first)) {
+            continue;
+        }
+        result.push_back(field);
+    }
+    return result;
+}
+
 void appendDecimal(std::string& out, std::uint64_t value) {
     std::array<char, 20> digits;
     const auto [end, ec] =
         std::to_chars(digits.data(), digits.data() + digits.size(), value);
     (void)ec;
     out.append(digits.data(), static_cast<std::size_t>(end - digits.data()));
-}
-
-// Whether to keep the connection open after this request (RFC 9112 section 9.3):
-// HTTP/1.1 persists unless Connection: close; HTTP/1.0 closes unless
-// Connection: keep-alive.
-[[nodiscard]] bool clientWantsKeepAlive(const HttpRequest& request) {
-    const bool http11 = request.protocolVersion() == HttpProtocolVersion::kHttp11;
-    const auto connection = request.header("connection");
-    if (!connection) {
-        return http11;
-    }
-    std::string lower(*connection);
-    for (auto& c : lower) {
-        c = toLowerAscii(c);
-    }
-    if (lower.find("close") != std::string::npos) {
-        return false;
-    }
-    if (lower.find("keep-alive") != std::string::npos) {
-        return true;
-    }
-    return http11;
 }
 
 // Serialize a response for the client: status line, curated headers, a fresh
@@ -155,6 +248,7 @@ void appendDecimal(std::string& out, std::uint64_t value) {
 // computing it from `body` (which for HEAD is the full representation used only
 // for its size). Transfer-Encoding is still dropped in both modes.
 [[nodiscard]] std::string buildResponseWire(
+    HttpProtocolVersion protocolVersion,
     std::uint16_t status,
     const Headers& headers,
     std::string_view body,
@@ -165,7 +259,10 @@ void appendDecimal(std::string& out, std::uint64_t value) {
     std::string out;
     out.reserve((omitBody ? 0 : body.size()) + 256);
 
-    out.append("HTTP/1.1 ");
+    out.append(
+        protocolVersion == HttpProtocolVersion::kHttp10
+            ? "HTTP/1.0 "
+            : "HTTP/1.1 ");
     appendDecimal(out, status);
     out.push_back(' ');
     if (const auto code = HttpStatusCode::tryFromValue(status)) {
@@ -179,10 +276,11 @@ void appendDecimal(std::string& out, std::uint64_t value) {
         for (auto& c : lower) {
             c = toLowerAscii(c);
         }
-        if (isConnectionOrFramingField(lower)) {
+        const bool nominated = connectionNominates(headers, name);
+        if (isConnectionOrFramingField(lower) || nominated) {
             // For a HEAD response keep the origin's Content-Length; otherwise the
             // edge emits its own from the body length.
-            if (omitBody && lower == "content-length") {
+            if (!nominated && omitBody && lower == "content-length") {
                 keptContentLength = true;
             } else {
                 continue;
@@ -219,8 +317,16 @@ void appendDecimal(std::string& out, std::uint64_t value) {
 }
 
 // A minimal status-only response for edge-generated errors.
-[[nodiscard]] std::string buildStatusWire(std::uint16_t status) {
-    return buildResponseWire(status, Headers{}, {}, "MISS", std::nullopt);
+[[nodiscard]] std::string buildStatusWire(
+    std::uint16_t status,
+    HttpProtocolVersion protocolVersion = HttpProtocolVersion::kHttp11) {
+    return buildResponseWire(
+        protocolVersion,
+        status,
+        Headers{},
+        {},
+        "MISS",
+        std::nullopt);
 }
 
 // How the edge frames a streamed response body to the client.
@@ -228,6 +334,7 @@ enum class ClientFraming : std::uint8_t {
     kNoBody,   // no message body (HEAD keeps the origin Content-Length; 204/304 none)
     kLength,   // exact Content-Length, streamed straight through
     kChunked,  // unknown length re-encoded as Transfer-Encoding: chunked
+    kCloseDelimited,  // HTTP/1.0 unknown length; socket close ends the body
 };
 
 // Wrap one body chunk in HTTP/1 chunked framing.
@@ -248,6 +355,7 @@ enum class ClientFraming : std::uint8_t {
 // headers, the chosen framing header, Connection and X-Cache. No body follows;
 // the caller streams it (raw for kLength, chunk-framed for kChunked).
 [[nodiscard]] std::string buildStreamingHead(
+    HttpProtocolVersion protocolVersion,
     std::uint16_t status,
     const Headers& headers,
     std::string_view xCache,
@@ -255,7 +363,10 @@ enum class ClientFraming : std::uint8_t {
     std::size_t contentLength,
     bool keepAlive) {
     std::string out;
-    out.append("HTTP/1.1 ");
+    out.append(
+        protocolVersion == HttpProtocolVersion::kHttp10
+            ? "HTTP/1.0 "
+            : "HTTP/1.1 ");
     appendDecimal(out, status);
     out.push_back(' ');
     if (const auto code = HttpStatusCode::tryFromValue(status)) {
@@ -268,10 +379,12 @@ enum class ClientFraming : std::uint8_t {
         for (auto& c : lower) {
             c = toLowerAscii(c);
         }
-        if (isConnectionOrFramingField(lower)) {
+        const bool nominated = connectionNominates(headers, name);
+        if (isConnectionOrFramingField(lower) || nominated) {
             // For a bodyless response keep the origin's Content-Length (HEAD);
             // otherwise the edge emits its own framing below.
-            if (framing == ClientFraming::kNoBody && lower == "content-length") {
+            if (!nominated && framing == ClientFraming::kNoBody &&
+                lower == "content-length") {
                 // keep it
             } else {
                 continue;
@@ -330,7 +443,14 @@ enum class ClientFraming : std::uint8_t {
 template <typename Stream>
 class Http1ResponseWriter final : public ResponseWriter {
 public:
-    explicit Http1ResponseWriter(Stream& stream) noexcept : stream_(stream) {}
+    Http1ResponseWriter(
+        Stream& stream,
+        detail::Http1ServerConnectionPlan connectionPlan) noexcept
+        : stream_(stream),
+          protocolVersion_(connectionPlan.protocolVersion()),
+          reusable_(
+              connectionPlan.disposition() ==
+              detail::Http1ConnectionDisposition::kReuse) {}
 
     asio::awaitable<bool> respond(
         std::uint16_t status,
@@ -340,8 +460,17 @@ public:
         std::optional<std::uint64_t> age,
         bool omitBody,
         bool keepAlive) override {
+        reusable_ = reusable_ && keepAlive;
         co_return co_await write(
-            buildResponseWire(status, headers, body, cacheResult, age, omitBody, keepAlive));
+            buildResponseWire(
+                protocolVersion_,
+                status,
+                headers,
+                body,
+                cacheResult,
+                age,
+                omitBody,
+                reusable_));
     }
 
     asio::awaitable<bool> respondHead(
@@ -353,11 +482,25 @@ public:
         bool keepAlive) override {
         ClientFraming framing = ClientFraming::kNoBody;
         if (hasBody) {
-            framing = contentLength ? ClientFraming::kLength : ClientFraming::kChunked;
+            if (contentLength) {
+                framing = ClientFraming::kLength;
+            } else if (protocolVersion_ == HttpProtocolVersion::kHttp11) {
+                framing = ClientFraming::kChunked;
+            } else {
+                framing = ClientFraming::kCloseDelimited;
+            }
         }
+        reusable_ = reusable_ && keepAlive &&
+            framing != ClientFraming::kCloseDelimited;
         chunked_ = framing == ClientFraming::kChunked;
         co_return co_await write(buildStreamingHead(
-            status, headers, cacheResult, framing, contentLength.value_or(0), keepAlive));
+            protocolVersion_,
+            status,
+            headers,
+            cacheResult,
+            framing,
+            contentLength.value_or(0),
+            reusable_));
     }
 
     asio::awaitable<bool> respondChunk(std::string_view chunk) override {
@@ -373,6 +516,10 @@ public:
 
     [[nodiscard]] std::size_t bytesWritten() const override { return bytes_; }
 
+    [[nodiscard]] bool connectionReusable() const noexcept override {
+        return reusable_;
+    }
+
 private:
     asio::awaitable<bool> write(std::string wire) {
         bytes_ += wire.size();
@@ -384,8 +531,10 @@ private:
     }
 
     Stream& stream_;
+    HttpProtocolVersion protocolVersion_;
     std::size_t bytes_{0};
     bool chunked_{false};
+    bool reusable_{false};
 };
 
 // Per-connection coordination shared by the HTTP/2 reader loop, the single writer
@@ -440,7 +589,8 @@ public:
             for (auto& c : lower) {
                 c = toLowerAscii(c);
             }
-            if (isConnectionOrFramingField(lower)) {
+            if (isConnectionOrFramingField(lower) ||
+                connectionNominates(headers, name)) {
                 continue;  // HTTP/2 frames the body itself; drop length/framing fields
             }
             response.header(name, value);
@@ -527,6 +677,10 @@ public:
 
     [[nodiscard]] std::size_t bytesWritten() const override { return bytes_; }
 
+    [[nodiscard]] bool connectionReusable() const noexcept override {
+        return true;
+    }
+
     // Whether the response was fully submitted (so the driver need not reset a
     // dangling stream after the serve core returns).
     [[nodiscard]] bool ended() const noexcept { return ended_; }
@@ -567,8 +721,9 @@ private:
             for (auto& c : lower) {
                 c = toLowerAscii(c);
             }
-            if (isConnectionOrFramingField(lower)) {
-                if (!(omitBody && lower == "content-length")) {
+            const bool nominated = connectionNominates(headers, name);
+            if (isConnectionOrFramingField(lower) || nominated) {
+                if (nominated || !(omitBody && lower == "content-length")) {
                     continue;
                 }
             }
@@ -620,55 +775,28 @@ private:
     return std::nullopt;
 }
 
-// Canonicalize a request Accept-Encoding into a stable cache-key fragment: the
-// sorted set of acceptable encoding names (q=0 tokens dropped), or "identity"
-// when none. Requests with the same acceptable set share one cached variant.
-[[nodiscard]] std::string normalizeAcceptEncoding(std::string_view value) {
-    std::vector<std::string> names;
-    std::size_t start = 0;
-    while (start <= value.size()) {
-        const std::size_t comma = value.find(',', start);
-        const std::string_view token = value.substr(
-            start, comma == std::string_view::npos ? std::string_view::npos : comma - start);
-        start = comma == std::string_view::npos ? value.size() + 1 : comma + 1;
-
-        const std::size_t semi = token.find(';');
-        std::string name;
-        for (const char c : token.substr(0, semi)) {
-            if (c != ' ' && c != '\t') {
-                name.push_back(toLowerAscii(c));
-            }
-        }
-        if (name.empty()) {
+// Combine every field line exactly as RFC 9110 section 5.2 permits a recipient
+// to combine a list field. The raw weights, order and malformed bytes remain in
+// the cache key: interpreting them here could merge requests for which an origin
+// legitimately selects different representations. `nullopt` is distinct from
+// a present empty field because Accept-Encoding assigns those states different
+// semantics (RFC 9110 section 12.5.3).
+[[nodiscard]] std::optional<std::string> combinedRequestFieldValue(
+    std::span<const HttpHeaderView> headers,
+    std::string_view name) {
+    std::optional<std::string> combined;
+    for (const auto& field : headers) {
+        if (!iequals(field.name(), name)) {
             continue;
         }
-        std::string params;
-        if (semi != std::string_view::npos) {
-            for (const char c : token.substr(semi)) {
-                if (c != ' ' && c != '\t') {
-                    params.push_back(toLowerAscii(c));
-                }
-            }
+        if (!combined) {
+            combined.emplace();
+        } else {
+            combined->append(", ");
         }
-        // Drop an encoding the client explicitly refuses (q=0), keeping q=0.x.
-        if (params.find("q=0") != std::string::npos && params.find("q=0.") == std::string::npos) {
-            continue;
-        }
-        names.push_back(std::move(name));
+        combined->append(field.value());
     }
-    std::sort(names.begin(), names.end());
-    names.erase(std::unique(names.begin(), names.end()), names.end());
-    if (names.empty()) {
-        return "identity";
-    }
-    std::string out;
-    for (const auto& name : names) {
-        if (!out.empty()) {
-            out.push_back(',');
-        }
-        out.append(name);
-    }
-    return out;
+    return combined;
 }
 
 [[nodiscard]] std::string_view trimSpace(std::string_view value) {
@@ -794,8 +922,9 @@ struct ByteRange final {
 // 4.3.4): keep the stored fields, but replace any also present in the 304, and
 // ignore the 304's connection/framing fields.
 [[nodiscard]] Headers mergeStoredHeaders(const Headers& stored, const Headers& updates) {
-    Headers merged = stored;
-    for (const auto& [name, value] : updates) {
+    Headers merged = endToEndResponseHeaders(stored);
+    const Headers sanitizedUpdates = endToEndResponseHeaders(updates);
+    for (const auto& [name, value] : sanitizedUpdates) {
         std::string lower(name);
         for (auto& c : lower) {
             c = toLowerAscii(c);
@@ -813,10 +942,14 @@ struct ByteRange final {
 [[nodiscard]] FreshnessInput buildFreshnessInput(
     std::uint16_t status,
     const Headers& headers,
-    std::time_t now) {
+    std::time_t now,
+    std::time_t requestTime,
+    bool requestHasAuthorization) {
     FreshnessInput input;
     input.status = status;
     input.now = now;
+    input.requestTime = requestTime;
+    input.requestHasAuthorization = requestHasAuthorization;
 
     CacheControlFieldParser cacheControl;
     for (const auto& [name, value] : headers) {
@@ -830,8 +963,9 @@ struct ByteRange final {
             std::uint64_t age = 0;
             const char* begin = value.data();
             const char* end = begin + value.size();
-            if (std::from_chars(begin, end, age).ec == std::errc{}) {
-                input.ageHeader = age;
+            const auto parsed = std::from_chars(begin, end, age);
+            if (parsed.ec == std::errc{} && parsed.ptr == end) {
+                input.ageHeader = std::max(input.ageHeader, age);
             }
         }
     }
@@ -839,18 +973,149 @@ struct ByteRange final {
     return input;
 }
 
+[[nodiscard]] std::uint64_t cachedResponseAge(
+    const CachedResponse& entry,
+    std::time_t now) noexcept {
+    const std::uint64_t resident = entry.storedAt <= now
+        ? static_cast<std::uint64_t>(now - entry.storedAt)
+        : std::uint64_t{0};
+    const auto maximum = (std::numeric_limits<std::uint64_t>::max)();
+    return entry.initialAge > maximum - resident
+        ? maximum
+        : entry.initialAge + resident;
+}
+
 }  // namespace
 
-EdgeServer::EdgeServer(const asio::ip::tcp::endpoint& endpoint, EdgeServerOptions options)
-    : acceptor_(ioContext_, endpoint),
+class EdgeServer::Impl final {
+public:
+    Impl(EdgeEndpoint endpoint, EdgeServerOptions options);
+    ~Impl();
+
+    Impl(const Impl&) = delete;
+    Impl& operator=(const Impl&) = delete;
+
+    void start();
+    void stop();
+    void join();
+    [[nodiscard]] EdgeEndpoint localEndpoint() const;
+
+    bool addOrigin(std::string frontHost, OriginSettings settings);
+    bool removeOrigin(std::string_view frontHost);
+    bool setTlsCertificate(const EdgeTlsConfig& tls);
+    bool purge(std::string_view frontHost, std::string_view target);
+    [[nodiscard]] bool clearCache();
+
+private:
+    using TlsContextPtr = std::shared_ptr<asio::ssl::context>;
+
+    enum class Lifecycle : std::uint8_t {
+        kReady,
+        kRunning,
+        kStopping,
+        kStopped,
+    };
+
+    [[nodiscard]] static std::string cacheVariantPrefix(
+        std::string_view method,
+        std::string_view frontHost,
+        std::string_view target);
+
+    [[nodiscard]] TlsContextPtr loadTlsContext() const noexcept;
+    void storeTlsContext(TlsContextPtr context) noexcept;
+    void dispatchControl(std::function<void()> operation);
+    void spawnTracked(asio::awaitable<void> operation);
+    void requestStopOnWorker() noexcept;
+    void stopDiskPool() noexcept;
+
+    asio::awaitable<void> acceptLoop();
+    asio::awaitable<void> handleTlsSession(
+        asio::ip::tcp::socket socket,
+        TlsContextPtr context);
+    template <typename Stream>
+    asio::awaitable<void> handleSession(Stream stream);
+    asio::awaitable<bool> serveRequest(
+        const EdgeRequest& request,
+        ResponseWriter& writer);
+    template <typename Stream>
+    asio::awaitable<bool> handleFramedRequest(
+        Stream& stream,
+        const detail::Http1ServerRequestParseState& parsed,
+        std::string_view wireBody,
+        std::string_view clientAddress);
+    template <typename Stream>
+    asio::awaitable<void> handleHttp2Session(Stream stream, std::string clientAddress);
+
+    void wakeInFlight(const std::string& key);
+    void recordRequest(const AccessLogEntry& entry) noexcept;
+
+    struct RefreshJob final {
+        std::string key;
+        std::string host;
+        std::uint16_t port{0};
+        bool https{false};
+        std::string target;
+        std::optional<std::string> acceptEncoding;
+        CacheEntryLease stored;
+    };
+
+    asio::awaitable<void> backgroundRefresh(RefreshJob job);
+    asio::awaitable<std::optional<CachedResponse>> diskLookup(std::string key);
+    void diskStore(std::string key, CachedResponse entry);
+    void diskPurge(std::string key);
+    void diskPurgePrefix(std::string prefix);
+    [[nodiscard]] DiskCache::PurgeResult diskPurgePrefixSync(std::string prefix);
+    [[nodiscard]] bool diskClearSync();
+
+    mutable std::mutex lifecycleMutex_;
+    std::condition_variable lifecycleChanged_;
+    Lifecycle lifecycle_{Lifecycle::kReady};
+    std::thread::id workerThreadId_{};
+    std::size_t pendingControls_{0};
+    bool diskPoolStopped_{false};
+
+    WorkerMemory memory_;
+    asio::io_context ioContext_;
+    asio::ip::tcp::acceptor acceptor_;
+    EdgeEndpoint localEndpoint_;
+    bool tlsEnabled_{false};
+    asio::steady_timer shutdownSignal_;
+    bool shutdownRequestedOnWorker_{false};
+    // Every detached coroutine that captures Impl is registered here. Shutdown
+    // cancels them and lets io_context drain their completion handlers before
+    // the worker exits, so no frame can outlive the members it references.
+    std::pmr::vector<std::shared_ptr<asio::cancellation_signal>> activeOperations_;
+    TlsContextPtr tlsContext_;
+
+    struct InFlightFetch final {
+        std::vector<asio::steady_timer*> waiters;
+    };
+
+    EdgeConfig config_;
+    EdgeCache cache_;
+    std::optional<DiskCache> disk_;
+    std::optional<asio::thread_pool> diskPool_;
+    OriginFetcher fetcher_;
+    std::size_t maxCacheableBytes_{8u * 1024u * 1024u};
+    std::unordered_map<std::string, InFlightFetch> inFlight_;
+    std::function<void(const AccessLogEntry&)> accessLog_;
+    std::thread worker_;
+};
+
+EdgeServer::Impl::Impl(EdgeEndpoint endpoint, EdgeServerOptions options)
+    : acceptor_(ioContext_, toAsioEndpoint(endpoint)),
       shutdownSignal_(ioContext_),
-      activeSessions_(memory_.resource()),
+      activeOperations_(memory_.resource()),
+      config_(memory_.resource()),
       cache_(options.cache, memory_.resource()),
       fetcher_(options.fetch),
       maxCacheableBytes_(options.maxCacheableBytes),
       accessLog_(std::move(options.accessLog)) {
+    const auto bound = acceptor_.local_endpoint();
+    localEndpoint_ = EdgeEndpoint{bound.address().to_string(), bound.port()};
     shutdownSignal_.expires_at((std::chrono::steady_clock::time_point::max)());
     if (options.tls) {
+        tlsEnabled_ = true;
         storeTlsContext(buildServerTlsContext(*options.tls));
     }
     if (options.cacheDirectory) {
@@ -859,114 +1124,328 @@ EdgeServer::EdgeServer(const asio::ip::tcp::endpoint& endpoint, EdgeServerOption
     }
 }
 
-EdgeServer::~EdgeServer() {
-    ioContext_.stop();
-    if (worker_.joinable()) {
-        worker_.join();
+EdgeServer::Impl::~Impl() {
+    {
+        const std::lock_guard lock(lifecycleMutex_);
+        if (workerThreadId_ == std::this_thread::get_id()) {
+            std::terminate();
+        }
     }
-    if (diskPool_) {
-        diskPool_->stop();
-        diskPool_->join();
-    }
+    stop();
 }
 
-void EdgeServer::start() {
-    asio::co_spawn(ioContext_, acceptLoop(), asio::detached);
-    worker_ = std::thread([this] { ioContext_.run(); });
-}
+void EdgeServer::Impl::start() {
+    std::unique_lock lock(lifecycleMutex_);
+    if (lifecycle_ != Lifecycle::kReady) {
+        throw std::logic_error("EdgeServer::start() may be called only once");
+    }
 
-void EdgeServer::stop() {
-    if (worker_.joinable()) {
-        asio::post(ioContext_, [this] {
-            asio::error_code ignore;
-            acceptor_.close(ignore);
-            shutdownSignal_.cancel();
-            for (const auto& session : activeSessions_) {
-                session->emit(asio::cancellation_type::terminal);
+    std::promise<std::thread::id> identityPromise;
+    auto identity = identityPromise.get_future();
+    std::promise<void> runGatePromise;
+    auto runGate = runGatePromise.get_future();
+
+    worker_ = std::thread(
+        [this, identityPromise = std::move(identityPromise),
+         runGate = std::move(runGate)]() mutable {
+            identityPromise.set_value(std::this_thread::get_id());
+            runGate.wait();
+            ioContext_.run();
+            const std::lock_guard finishedLock(lifecycleMutex_);
+            workerThreadId_ = {};
+            if (lifecycle_ != Lifecycle::kReady) {
+                lifecycle_ = Lifecycle::kStopped;
             }
-            asio::post(ioContext_, [this] { ioContext_.stop(); });
+            lifecycleChanged_.notify_all();
         });
-        worker_.join();
+    workerThreadId_ = identity.get();
+
+    try {
+        spawnTracked(acceptLoop());
+        lifecycle_ = Lifecycle::kRunning;
+        runGatePromise.set_value();
+    } catch (...) {
+        ioContext_.stop();
+        runGatePromise.set_value();
+        std::thread failed = std::move(worker_);
+        lock.unlock();
+        failed.join();
+        ioContext_.restart();
+        throw;
     }
-    if (diskPool_) {
-        diskPool_->stop();
+}
+
+void EdgeServer::Impl::requestStopOnWorker() noexcept {
+    shutdownRequestedOnWorker_ = true;
+    asio::error_code ignore;
+    acceptor_.close(ignore);
+    shutdownSignal_.cancel(ignore);
+    // Moving the registry is allocation-free. Completion callbacks erase from
+    // the now-empty live registry, so even inline cancellation cannot invalidate
+    // this traversal; each callback itself retains its signal until completion.
+    auto operations = std::move(activeOperations_);
+    for (const auto& operation : operations) {
+        operation->emit(asio::cancellation_type::terminal);
+    }
+    // Do not call io_context::stop(): it abandons ready completions and keeps
+    // their coroutine frames until io_context destruction, after several Impl
+    // members captured by those frames have already been destroyed. Closing and
+    // cancelling all roots lets run() return only after structured teardown.
+}
+
+void EdgeServer::Impl::stopDiskPool() noexcept {
+    // Hold the lifecycle lock while the queue drains. A concurrent synchronous
+    // purge/clear either posts before join (and is therefore ordered after all
+    // earlier stores), or observes the fully joined state and operates directly.
+    const std::lock_guard lock(lifecycleMutex_);
+    if (diskPool_ && !diskPoolStopped_) {
+        // join() without stop() drains outstanding work. Calling stop() first is
+        // explicitly allowed to abandon queued persistence operations.
         diskPool_->join();
+        diskPoolStopped_ = true;
     }
 }
 
-void EdgeServer::join() {
-    if (worker_.joinable()) {
-        worker_.join();
+void EdgeServer::Impl::stop() {
+    std::thread worker;
+    {
+        std::unique_lock lock(lifecycleMutex_);
+        for (;;) {
+            const bool onWorker =
+                workerThreadId_ == std::this_thread::get_id();
+
+            if (lifecycle_ == Lifecycle::kReady) {
+                asio::error_code ignore;
+                acceptor_.close(ignore);
+                lifecycle_ = Lifecycle::kStopped;
+                lifecycleChanged_.notify_all();
+                break;
+            }
+            if (lifecycle_ == Lifecycle::kRunning) {
+                lifecycle_ = Lifecycle::kStopping;
+                if (onWorker) {
+                    lock.unlock();
+                    requestStopOnWorker();
+                    return;
+                }
+                lifecycleChanged_.wait(
+                    lock, [this] { return pendingControls_ == 0; });
+                try {
+                    asio::post(ioContext_, [this] { requestStopOnWorker(); });
+                } catch (...) {
+                    // No stop handler was published. Restore the only state in
+                    // which another caller can retry, and wake stop/control
+                    // waiters so none remains parked behind a phantom owner.
+                    lifecycle_ = Lifecycle::kRunning;
+                    lifecycleChanged_.notify_all();
+                    throw;
+                }
+                break;
+            }
+            if (lifecycle_ == Lifecycle::kStopping) {
+                if (onWorker) {
+                    return;
+                }
+                lifecycleChanged_.wait(lock, [this] {
+                    return lifecycle_ != Lifecycle::kStopping;
+                });
+                // A failed publication rolls back to Running. Compete to issue
+                // the stop request again; a successful one reaches Stopped.
+                continue;
+            }
+            break;  // kStopped
+        }
+
+        if (worker_.joinable()) {
+            worker = std::move(worker_);
+        }
+    }
+    if (worker.joinable()) {
+        worker.join();
+    }
+    stopDiskPool();
+}
+
+void EdgeServer::Impl::join() {
+    std::thread worker;
+    {
+        std::unique_lock lock(lifecycleMutex_);
+        if (workerThreadId_ == std::this_thread::get_id()) {
+            throw std::logic_error("EdgeServer::join() cannot join its worker thread");
+        }
+        if (lifecycle_ == Lifecycle::kReady) {
+            // Joining before start is a no-op. In particular, do not permanently
+            // stop the optional disk executor that a later start() will use.
+            return;
+        }
+        lifecycleChanged_.wait(
+            lock, [this] { return lifecycle_ == Lifecycle::kStopped; });
+        if (worker_.joinable()) {
+            worker = std::move(worker_);
+        }
+    }
+    if (worker.joinable()) {
+        worker.join();
+    }
+    stopDiskPool();
+}
+
+EdgeEndpoint EdgeServer::Impl::localEndpoint() const {
+    return localEndpoint_;
+}
+
+EdgeServer::Impl::TlsContextPtr EdgeServer::Impl::loadTlsContext() const noexcept {
+    return tlsContext_;
+}
+
+void EdgeServer::Impl::storeTlsContext(TlsContextPtr context) noexcept {
+    tlsContext_ = std::move(context);
+}
+
+void EdgeServer::Impl::spawnTracked(asio::awaitable<void> operation) {
+    auto cancellation = std::make_shared<asio::cancellation_signal>();
+    activeOperations_.push_back(cancellation);
+    try {
+        asio::co_spawn(
+            ioContext_,
+            std::move(operation),
+            asio::bind_cancellation_slot(
+                cancellation->slot(),
+                [this, cancellation](std::exception_ptr) noexcept {
+                    std::erase(activeOperations_, cancellation);
+                }));
+        if (shutdownRequestedOnWorker_) {
+            cancellation->emit(asio::cancellation_type::terminal);
+        }
+    } catch (...) {
+        std::erase(activeOperations_, cancellation);
+        throw;
     }
 }
 
-asio::ip::tcp::endpoint EdgeServer::localEndpoint() const {
-    return acceptor_.local_endpoint();
+void EdgeServer::Impl::dispatchControl(std::function<void()> operation) {
+    std::unique_lock lock(lifecycleMutex_);
+    for (;;) {
+        if (workerThreadId_ == std::this_thread::get_id()) {
+            lock.unlock();
+            operation();
+            return;
+        }
+
+        if (lifecycle_ == Lifecycle::kReady ||
+            lifecycle_ == Lifecycle::kStopped) {
+            // There is no owner thread in these states, so the lifecycle mutex
+            // is the temporary owner and serializes embedding threads.
+            operation();
+            return;
+        }
+
+        if (lifecycle_ == Lifecycle::kStopping) {
+            lifecycleChanged_.wait(lock, [this] {
+                return lifecycle_ != Lifecycle::kStopping;
+            });
+            // Stop publication may have rolled back. Re-evaluate ownership and
+            // either post to the live worker or run after it has stopped.
+            continue;
+        }
+        break;  // kRunning
+    }
+
+    ++pendingControls_;
+    try {
+        asio::post(ioContext_, [this, operation = std::move(operation)]() mutable {
+            operation();
+            const std::lock_guard completedLock(lifecycleMutex_);
+            --pendingControls_;
+            lifecycleChanged_.notify_all();
+        });
+    } catch (...) {
+        --pendingControls_;
+        lifecycleChanged_.notify_all();
+        throw;
+    }
 }
 
-EdgeServer::TlsContextPtr EdgeServer::loadTlsContext() const noexcept {
-#if defined(__cpp_lib_atomic_shared_ptr)
-    return tlsContext_.load(std::memory_order_acquire);
-#else
-    return std::atomic_load_explicit(&tlsContext_, std::memory_order_acquire);
-#endif
+bool EdgeServer::Impl::addOrigin(std::string frontHost, OriginSettings settings) {
+    auto task = std::make_shared<std::packaged_task<bool()>>(
+        [this, frontHost = std::move(frontHost), settings = std::move(settings)]() mutable {
+            return config_.addOrigin(std::move(frontHost), std::move(settings));
+        });
+    auto result = task->get_future();
+    dispatchControl([task = std::move(task)] { (*task)(); });
+    return result.get();
 }
 
-void EdgeServer::storeTlsContext(TlsContextPtr context) noexcept {
-#if defined(__cpp_lib_atomic_shared_ptr)
-    tlsContext_.store(std::move(context), std::memory_order_release);
-#else
-    std::atomic_store_explicit(
-        &tlsContext_, std::move(context), std::memory_order_release);
-#endif
+bool EdgeServer::Impl::removeOrigin(std::string_view frontHost) {
+    auto task = std::make_shared<std::packaged_task<bool()>>(
+        [this, frontHost = std::string(frontHost)] {
+            return config_.removeOrigin(frontHost);
+        });
+    auto result = task->get_future();
+    dispatchControl([task = std::move(task)] { (*task)(); });
+    return result.get();
 }
 
-bool EdgeServer::addOrigin(std::string frontHost, OriginSettings settings) {
-    return config_.addOrigin(std::move(frontHost), std::move(settings));
-}
-
-bool EdgeServer::removeOrigin(std::string_view frontHost) {
-    return config_.removeOrigin(frontHost);
-}
-
-bool EdgeServer::setTlsCertificate(const EdgeTlsConfig& tls) {
-    if (loadTlsContext() == nullptr) {
+bool EdgeServer::Impl::setTlsCertificate(const EdgeTlsConfig& tls) {
+    if (!tlsEnabled_) {
         return false;  // TLS was not enabled at startup; the listener is plaintext
     }
     try {
-        storeTlsContext(buildServerTlsContext(tls));
-        return true;
+        auto context = buildServerTlsContext(tls);
+        auto task = std::make_shared<std::packaged_task<void()>>(
+            [this, context = std::move(context)]() mutable {
+                storeTlsContext(std::move(context));
+            });
+        auto result = task->get_future();
+        dispatchControl([task = std::move(task)] { (*task)(); });
+        result.get();
     } catch (...) {
         return false;  // invalid PEM
     }
+    return true;
 }
 
-bool EdgeServer::purge(std::string_view frontHost, std::string_view target) {
+bool EdgeServer::Impl::purge(std::string_view frontHost, std::string_view target) {
     // Remove every cached variant of the URL, not just one encoding.
-    const std::string prefix = cacheKey("GET", frontHost, target);
-    const bool removed = cache_.purgePrefix(prefix) > 0;
+    const std::string prefix = cacheVariantPrefix("GET", frontHost, target);
+    auto task = std::make_shared<std::packaged_task<bool()>>(
+        [this, prefix] { return cache_.purgePrefix(prefix) > 0; });
+    auto memoryResult = task->get_future();
+    dispatchControl([task = std::move(task)] { (*task)(); });
+    const bool removed = memoryResult.get();
     if (disk_) {
-        // Direct (thread-safe) call from the control-plane thread; blocks the
-        // caller, never the event loop.
-        return disk_->purgePrefix(prefix) > 0 || removed;
+        const auto diskResult = diskPurgePrefixSync(prefix);
+        return diskResult.complete && (diskResult.removed > 0 || removed);
     }
     return removed;
 }
 
-void EdgeServer::clearCache() {
-    cache_.clear();
+bool EdgeServer::Impl::clearCache() {
+    auto task = std::make_shared<std::packaged_task<void()>>(
+        [this] { cache_.clear(); });
+    auto memoryResult = task->get_future();
+    dispatchControl([task = std::move(task)] { (*task)(); });
+    memoryResult.get();
     if (disk_) {
-        disk_->clear();
+        return diskClearSync();
     }
+    return true;
 }
 
-void EdgeServer::recordRequest(const AccessLogEntry& entry) {
+void EdgeServer::Impl::recordRequest(const AccessLogEntry& entry) noexcept {
     if (accessLog_) {
-        accessLog_(entry);
+        try {
+            accessLog_(entry);
+        } catch (...) {
+            // Observability is not part of response correctness. In particular,
+            // RequestRecord invokes this from its destructor, whose implicit
+            // noexcept contract must never turn a user callback into process
+            // termination.
+        }
     }
 }
 
-void EdgeServer::wakeInFlight(const std::string& key) {
+void EdgeServer::Impl::wakeInFlight(const std::string& key) {
     const auto it = inFlight_.find(key);
     if (it == inFlight_.end()) {
         return;
@@ -977,59 +1456,106 @@ void EdgeServer::wakeInFlight(const std::string& key) {
     inFlight_.erase(it);
 }
 
-asio::awaitable<std::shared_ptr<const CachedResponse>> EdgeServer::diskLookup(std::string key) {
+asio::awaitable<std::optional<CachedResponse>> EdgeServer::Impl::diskLookup(std::string key) {
     if (!disk_ || !diskPool_) {
-        co_return nullptr;
+        co_return std::nullopt;
     }
     // Run the blocking read on the disk pool; use_awaitable resumes this
     // coroutine back on the event loop with the result.
     co_return co_await asio::co_spawn(
         *diskPool_,
         [this, key = std::move(key)]()
-            -> asio::awaitable<std::shared_ptr<const CachedResponse>> {
+            -> asio::awaitable<std::optional<CachedResponse>> {
             co_return disk_->lookup(key);
         },
         asio::use_awaitable);
 }
 
-void EdgeServer::diskStore(std::string key, std::shared_ptr<const CachedResponse> entry) {
-    if (!disk_ || !diskPool_ || !entry) {
+void EdgeServer::Impl::diskStore(std::string key, CachedResponse entry) {
+    if (!disk_ || !diskPool_) {
         return;
     }
     asio::post(*diskPool_, [this, key = std::move(key), entry = std::move(entry)] {
-        disk_->store(key, *entry);
+        disk_->store(key, entry);
     });
 }
 
-void EdgeServer::diskPurge(std::string key) {
+void EdgeServer::Impl::diskPurge(std::string key) {
     if (!disk_ || !diskPool_) {
         return;
     }
     asio::post(*diskPool_, [this, key = std::move(key)] { disk_->purge(key); });
 }
 
-void EdgeServer::diskPurgePrefix(std::string prefix) {
+void EdgeServer::Impl::diskPurgePrefix(std::string prefix) {
     if (!disk_ || !diskPool_) {
         return;
     }
-    asio::post(*diskPool_, [this, prefix = std::move(prefix)] { disk_->purgePrefix(prefix); });
+    asio::post(*diskPool_, [this, prefix = std::move(prefix)] {
+        (void)disk_->purgePrefix(prefix);
+    });
 }
 
-std::string EdgeServer::cacheKey(
+DiskCache::PurgeResult EdgeServer::Impl::diskPurgePrefixSync(std::string prefix) {
+    if (!disk_ || !diskPool_) {
+        return {};
+    }
+
+    std::unique_lock lock(lifecycleMutex_);
+    if (diskPoolStopped_) {
+        lock.unlock();
+        return disk_->purgePrefix(prefix);
+    }
+
+    auto task = std::make_shared<std::packaged_task<DiskCache::PurgeResult()>>(
+        [this, prefix = std::move(prefix)] {
+            return disk_->purgePrefix(prefix);
+        });
+    auto result = task->get_future();
+    asio::post(*diskPool_, [task = std::move(task)] { (*task)(); });
+    lock.unlock();
+    return result.get();
+}
+
+bool EdgeServer::Impl::diskClearSync() {
+    if (!disk_ || !diskPool_) {
+        return true;
+    }
+
+    std::unique_lock lock(lifecycleMutex_);
+    if (diskPoolStopped_) {
+        lock.unlock();
+        return disk_->clear();
+    }
+
+    auto task = std::make_shared<std::packaged_task<bool()>>(
+        [this] { return disk_->clear(); });
+    auto result = task->get_future();
+    asio::post(*diskPool_, [task = std::move(task)] { (*task)(); });
+    lock.unlock();
+    return result.get();
+}
+
+std::string EdgeServer::Impl::cacheVariantPrefix(
     std::string_view method,
     std::string_view frontHost,
     std::string_view target) {
     std::string key;
-    key.reserve(method.size() + frontHost.size() + target.size() + 2);
+    key.reserve(method.size() + frontHost.size() + target.size() + 3);
     key.append(method);
     key.push_back('\n');
-    key.append(frontHost);
+    for (const char c : frontHost) {
+        key.push_back(toLowerAscii(c));
+    }
     key.push_back('\n');
     key.append(target);
+    // This terminal delimiter makes the prefix identify exactly one URI. A
+    // prefix for `/a` must never invalidate `/ab`.
+    key.push_back('\n');
     return key;
 }
 
-asio::awaitable<void> EdgeServer::acceptLoop() {
+asio::awaitable<void> EdgeServer::Impl::acceptLoop() {
     for (;;) {
         auto [ec, socket] =
             co_await acceptor_.async_accept(asio::as_tuple(asio::use_awaitable));
@@ -1040,25 +1566,16 @@ asio::awaitable<void> EdgeServer::acceptLoop() {
             continue;
         }
         auto tlsContext = loadTlsContext();
-        auto cancellation = std::make_shared<asio::cancellation_signal>();
-        activeSessions_.push_back(cancellation);
-        const auto onDone = [this, cancellation](std::exception_ptr) {
-            std::erase(activeSessions_, cancellation);
-        };
         if (tlsContext != nullptr) {
-            asio::co_spawn(
-                ioContext_,
-                handleTlsSession(std::move(socket), std::move(tlsContext)),
-                asio::bind_cancellation_slot(cancellation->slot(), onDone));
+            spawnTracked(
+                handleTlsSession(std::move(socket), std::move(tlsContext)));
         } else {
-            asio::co_spawn(
-                ioContext_, handleSession(std::move(socket)),
-                asio::bind_cancellation_slot(cancellation->slot(), onDone));
+            spawnTracked(handleSession(std::move(socket)));
         }
     }
 }
 
-asio::awaitable<void> EdgeServer::handleTlsSession(
+asio::awaitable<void> EdgeServer::Impl::handleTlsSession(
     asio::ip::tcp::socket socket,
     TlsContextPtr context) {
     // The accept loop pins the context for this session's lifetime; a runtime
@@ -1090,7 +1607,7 @@ asio::awaitable<void> EdgeServer::handleTlsSession(
 }
 
 template <typename Stream>
-asio::awaitable<void> EdgeServer::handleSession(Stream stream) {
+asio::awaitable<void> EdgeServer::Impl::handleSession(Stream stream) {
     using namespace asio::experimental::awaitable_operators;
 
     std::string clientAddress;
@@ -1109,7 +1626,7 @@ asio::awaitable<void> EdgeServer::handleSession(Stream stream) {
 
     std::string inbound;
     std::array<char, 8192> buffer;
-    const Http1RequestParser parser;
+    const detail::Http1ServerRequestParser parser;
     asio::steady_timer idleTimer(ioContext_);
 
     // Serve requests on this connection until one closes it, the client goes
@@ -1119,22 +1636,46 @@ asio::awaitable<void> EdgeServer::handleSession(Stream stream) {
         std::size_t consumed = 0;
         bool framed = false;
         for (;;) {
-            auto parseResult = parser.parse(inbound);
-            if (parseResult.failure() != nullptr) {
-                co_await writeStatus(buildStatusWire(400));
+            auto parseState = parser.parseMessage(inbound);
+            if (const auto* failure = parseState.failure()) {
+                const auto protocolError = failure->protocolError();
+                co_await writeStatus(buildStatusWire(
+                    protocolError.status().value(),
+                    parseState.connectionPlan.protocolVersion()));
                 keepGoing = false;
                 break;
             }
-            if (const auto* parsed = parseResult.parsed(); parsed != nullptr) {
-                consumed = parsed->consumedBytes();
-                const bool keepAlive = clientWantsKeepAlive(parsed->request());
+            const auto* needBody = parseState.needRequestBody();
+            const auto* ready = parseState.messageReady();
+            const bool exceedsEdgeRequestLimit =
+                (needBody != nullptr &&
+                 needBody->requiredTotalBytes().has_value() &&
+                 *needBody->requiredTotalBytes() > kMaxRequestBytes) ||
+                (ready != nullptr &&
+                 ready->messageBytes() > kMaxRequestBytes);
+            if (exceedsEdgeRequestLimit) {
+                // Apply the edge product's tighter buffered-request policy to
+                // parser metadata before waiting for or dispatching the body.
+                // Checking only inbound.size() after messageReady lets the read
+                // that completes an oversized request jump over the limit.
+                co_await writeStatus(buildStatusWire(
+                    413, parseState.connectionPlan.protocolVersion()));
+                keepGoing = false;
+                break;
+            }
+            if (ready != nullptr) {
+                consumed = ready->messageBytes();
+                const auto wireBody = std::string_view(inbound).substr(
+                    ready->headerBytes(),
+                    ready->messageBytes() - ready->headerBytes());
                 keepGoing = co_await handleFramedRequest(
-                    stream, *parsed, clientAddress, keepAlive);
+                    stream, parseState, wireBody, clientAddress);
                 framed = true;
                 break;
             }
             if (inbound.size() > kMaxRequestBytes) {
-                co_await writeStatus(buildStatusWire(413));
+                co_await writeStatus(buildStatusWire(
+                    413, parseState.connectionPlan.protocolVersion()));
                 keepGoing = false;
                 break;
             }
@@ -1170,13 +1711,13 @@ asio::awaitable<void> EdgeServer::handleSession(Stream stream) {
 }
 
 template <typename Stream>
-asio::awaitable<bool> EdgeServer::handleFramedRequest(
+asio::awaitable<bool> EdgeServer::Impl::handleFramedRequest(
     Stream& stream,
-    const Http1ParsedRequest& parsed,
-    std::string_view clientAddress,
-    bool keepAlive) {
-    const auto& request = parsed.request();
-    Http1ResponseWriter<Stream> writer(stream);
+    const detail::Http1ServerRequestParseState& parsed,
+    std::string_view wireBody,
+    std::string_view clientAddress) {
+    const auto& request = parsed.request;
+    Http1ResponseWriter<Stream> writer(stream, parsed.connectionPlan);
 
     EdgeRequest edgeRequest;
     edgeRequest.method = request.method();
@@ -1185,20 +1726,22 @@ asio::awaitable<bool> EdgeServer::handleFramedRequest(
     edgeRequest.host = request.header("host").value_or("");
     edgeRequest.headers = request.headers();
     edgeRequest.clientAddress = clientAddress;
-    edgeRequest.keepAlive = keepAlive;
+    edgeRequest.keepAlive =
+        parsed.connectionPlan.disposition() ==
+        detail::Http1ConnectionDisposition::kReuse;
 
     // Read and decode the request body for methods that carry one, so the serve
     // core can forward it. `decodedBody` backs edgeRequest.body across the serve.
     std::string decodedBody;
     if (edgeRequest.knownMethod != HttpKnownMethod::kGet &&
         edgeRequest.knownMethod != HttpKnownMethod::kHead) {
-        const auto& bodyPlan = parsed.bodyPlan();
+        const auto& bodyPlan = parsed.bodyPlan;
         if (bodyPlan.knownLength() != nullptr) {
-            edgeRequest.body = parsed.wireBody();
+            edgeRequest.body = wireBody;
         } else if (bodyPlan.chunked() != nullptr) {
             ruvia::detail::Http1ChunkedBodyDecoder decoder(
                 ProtocolByteLimit::limited(kMaxRequestBytes));
-            std::string chunkBuffer(parsed.wireBody());
+            std::string chunkBuffer(wireBody);
             bool decodeOk = true;
             for (;;) {
                 const auto decoded = decoder.decode(chunkBuffer);
@@ -1226,10 +1769,11 @@ asio::awaitable<bool> EdgeServer::handleFramedRequest(
         }
     }
 
-    co_return co_await serveRequest(edgeRequest, writer);
+    const bool continueServing = co_await serveRequest(edgeRequest, writer);
+    co_return continueServing && writer.connectionReusable();
 }
 
-asio::awaitable<bool> EdgeServer::serveRequest(
+asio::awaitable<bool> EdgeServer::Impl::serveRequest(
     const EdgeRequest& request, ResponseWriter& writer) {
     // Per-request accounting: defaults to an error result; success paths set the
     // label/status below, and the byte count comes from the writer.
@@ -1239,17 +1783,51 @@ asio::awaitable<bool> EdgeServer::serveRequest(
 
     const bool isGet = request.knownMethod == HttpKnownMethod::kGet;
     const bool isHead = request.knownMethod == HttpKnownMethod::kHead;
+    const bool requestHasAuthorization =
+        findRequestHeader(request.headers, "authorization").has_value();
+    const bool requestHasCondition =
+        findRequestHeader(request.headers, "if-match").has_value() ||
+        findRequestHeader(request.headers, "if-none-match").has_value() ||
+        findRequestHeader(request.headers, "if-modified-since").has_value() ||
+        findRequestHeader(request.headers, "if-unmodified-since").has_value() ||
+        findRequestHeader(request.headers, "if-range").has_value();
+    CacheControlFieldParser requestCacheControlParser;
+    bool hasRequestCacheControl = false;
+    for (const auto& field : request.headers) {
+        if (iequals(field.name(), "cache-control")) {
+            hasRequestCacheControl = true;
+            requestCacheControlParser.update(field.value());
+        }
+    }
+    const CacheControl requestCacheControl = requestCacheControlParser.finish();
+    bool legacyPragmaNoCache = false;
+    if (!hasRequestCacheControl) {
+        for (const auto& field : request.headers) {
+            if (iequals(field.name(), "pragma") &&
+                detail::httpHasToken(field.value(), "no-cache")) {
+                legacyPragmaNoCache = true;
+                break;
+            }
+        }
+    }
+    // The edge currently chooses not to calculate request-specific freshness
+    // constraints. Forwarding is conservative and preserves the client's
+    // preference; max-stale merely widens what the client accepts and needs no
+    // forced validation.
+    const bool requestForcesValidation =
+        requestCacheControl.noCache || requestCacheControl.maxAge.has_value() ||
+        requestCacheControl.minFresh.has_value() || legacyPragmaNoCache;
     const std::string_view frontHost = hostWithoutPort(request.host);
     const std::string_view target = request.target;
     const bool keepAlive = request.keepAlive;
 
     struct RequestRecord final {
-        EdgeServer* self;
+        Impl* self;
         const EdgeRequest* request;
         const ResponseWriter* writer;
         const std::string_view* result;
         const std::uint16_t* status;
-        ~RequestRecord() {
+        ~RequestRecord() noexcept {
             self->recordRequest(AccessLogEntry{
                 request->clientAddress, request->method, request->host, request->target,
                 *status, *result, writer->bytesWritten()});
@@ -1258,18 +1836,33 @@ asio::awaitable<bool> EdgeServer::serveRequest(
     const RequestRecord record{this, &request, &writer, &resultLabel, &recordedStatus};
     (void)record;
 
-        // 3. Resolve the origin from the current published config snapshot.
-        const auto snapshot = config_.snapshot();
-        const OriginSettings* origin = snapshot->findOrigin(frontHost);
-        if (origin == nullptr) {
+        // 3. Resolve one stable owner-thread lease. It remains valid if a later
+        // control operation replaces or removes the mapping while this request
+        // is suspended in origin I/O.
+        auto origin = config_.findOrigin(frontHost);
+        if (!origin) {
             co_await writer.respond(502, noHeaders, {}, "ERROR", std::nullopt, false, false);
             co_return false;
         }
 
-        // Non-GET/HEAD methods bypass the cache: forward the request and its body
-        // to the origin, return the response, and on a successful unsafe method
-        // invalidate any cached GET for this target (RFC 9111 section 4.4).
-        if (!isGet && !isHead) {
+        // Unsafe methods always write through. This MVP also conservatively
+        // forwards conditional and authenticated retrievals instead of trying
+        // to evaluate client validators or authenticated reuse locally; caching
+        // is optional, while changing either request's semantics is forbidden.
+        const bool cacheBypassMethod = !isGet && !isHead;
+        const bool unsafeMethod = !isHttpMethodSafe(request.method);
+        const bool cannotUseStoredResponse =
+            cacheBypassMethod || requestHasCondition || requestHasAuthorization ||
+            requestForcesValidation;
+        if (requestCacheControl.onlyIfCached && cannotUseStoredResponse) {
+            recordedStatus = 504;
+            resultLabel = "MISS";
+            co_return co_await writer.respond(
+                       504, noHeaders, {}, "MISS", std::nullopt, false, keepAlive) &&
+                keepAlive;
+        }
+        if (cannotUseStoredResponse ||
+            (requestCacheControl.noStore && !requestCacheControl.onlyIfCached)) {
             std::pmr::vector<HttpHeaderView> passHeaders(memory_.resource());
             for (const auto& field : request.headers) {
                 std::pmr::string lower(memory_.resource());
@@ -1277,7 +1870,9 @@ asio::awaitable<bool> EdgeServer::serveRequest(
                 for (const char c : field.name()) {
                     lower.push_back(toLowerAscii(c));
                 }
-                if (isConnectionOrFramingField(lower) || lower == "host" ||
+                if (isConnectionOrFramingField(lower) ||
+                    connectionNominates(request.headers, field.name()) ||
+                    lower == "host" ||
                     lower == "via" || lower == "forwarded" ||
                     lower.starts_with("x-forwarded-")) {
                     continue;
@@ -1289,11 +1884,13 @@ asio::awaitable<bool> EdgeServer::serveRequest(
                     std::string_view("X-Forwarded-For"),
                     std::string_view(request.clientAddress));
             }
-            if (!frontHost.empty()) {
-                passHeaders.emplace_back(std::string_view("X-Forwarded-Host"), frontHost);
+            if (!request.host.empty()) {
+                passHeaders.emplace_back(
+                    std::string_view("X-Forwarded-Host"), request.host);
             }
             passHeaders.emplace_back(
-                std::string_view("X-Forwarded-Proto"), std::string_view("http"));
+                std::string_view("X-Forwarded-Proto"),
+                tlsEnabled_ ? std::string_view("https") : std::string_view("http"));
             passHeaders.emplace_back(
                 std::string_view("Via"), std::string_view("1.1 ruvia-edge"));
 
@@ -1311,7 +1908,9 @@ asio::awaitable<bool> EdgeServer::serveRequest(
             ResponseSink passSink;
             passSink.onHead = [&](const OriginResponseHead& head) -> asio::awaitable<bool> {
                 passStatus = head.status;
-                if (!co_await writer.respondHead(head.status, head.headers, "BYPASS",
+                const Headers responseHeaders =
+                    endToEndResponseHeaders(head.headers);
+                if (!co_await writer.respondHead(head.status, responseHeaders, "BYPASS",
                                                  head.hasBody, head.contentLength, keepAlive)) {
                     passAborted = true;
                     co_return false;
@@ -1349,9 +1948,9 @@ asio::awaitable<bool> EdgeServer::serveRequest(
             }
             // A successful unsafe method invalidates every cached variant of this
             // URI (RFC 9111 section 4.4).
-            if (passStatus < 400) {
-                cache_.purgePrefix(cacheKey("GET", frontHost, target));
-                diskPurgePrefix(cacheKey("GET", frontHost, target));
+            if (unsafeMethod && passStatus < 400) {
+                cache_.purgePrefix(cacheVariantPrefix("GET", frontHost, target));
+                diskPurgePrefix(cacheVariantPrefix("GET", frontHost, target));
             }
             resultLabel = "BYPASS";
             recordedStatus = passStatus;
@@ -1359,21 +1958,32 @@ asio::awaitable<bool> EdgeServer::serveRequest(
         }
 
         std::time_t now = std::time(nullptr);
-        // The cache key carries the normalized Accept-Encoding, so a gzip variant
-        // and an identity variant of the same URL are cached separately. bareKey
-        // (without it) is the prefix used to invalidate every variant of a URL.
-        const std::string bareKey = cacheKey("GET", frontHost, target);
-        const std::string normAcceptEncoding = normalizeAcceptEncoding(
-            findRequestHeader(request.headers, "accept-encoding").value_or(""));
-        const std::string key = bareKey + "\n" + normAcceptEncoding;
+        // Preserve the complete Accept-Encoding field value. Dropping weights,
+        // repeated lines, or the absent-vs-empty distinction can make a shared
+        // cache serve a representation selected for a different request.
+        const std::string variantPrefix =
+            cacheVariantPrefix("GET", frontHost, target);
+        const auto acceptEncoding = combinedRequestFieldValue(
+            request.headers, "accept-encoding");
+        std::string key = variantPrefix;
+        // The primary cache key includes the complete request authority. The
+        // mapping host deliberately ignores a port for routing, but two target
+        // URIs with different ports are not the same cache key. ASCII case is
+        // canonicalized because URI hosts are case-insensitive.
+        for (const char byte : request.host) {
+            key.push_back(toLowerAscii(byte));
+        }
+        key.push_back('\n');
+        key.push_back(acceptEncoding ? '1' : '0');
+        if (acceptEncoding) {
+            key.append(*acceptEncoding);
+        }
 
         // Serve a cached entry, honoring a single client byte-range (206, or 416
         // when unsatisfiable) served from the full cached body.
         const auto serveHit = [&](const CachedResponse& entry) -> asio::awaitable<bool> {
             resultLabel = "HIT";
-            const auto age = entry.storedAt <= now
-                ? static_cast<std::uint64_t>(now - entry.storedAt)
-                : std::uint64_t{0};
+            const auto age = cachedResponseAge(entry, now);
             if (!isHead) {
                 if (const auto rangeHeader = findRequestHeader(request.headers, "range")) {
                     const auto range = parseSingleByteRange(*rangeHeader, entry.body.size());
@@ -1414,43 +2024,51 @@ asio::awaitable<bool> EdgeServer::serveRequest(
             // Memory miss: consult the persistent disk tier and, on a hit,
             // promote the entry into the hot memory cache.
             if (auto diskEntry = co_await diskLookup(key)) {
-                cache_.store(key, diskEntry);
-                hit.entry = diskEntry;
-                hit.status = now < diskEntry->expiresAt ? CacheLookupStatus::kFresh
-                                                        : CacheLookupStatus::kStale;
+                cache_.store(key, std::move(*diskEntry));
+                hit = cache_.lookup(key, now);
             }
         }
         if (hit.status == CacheLookupStatus::kFresh) {
             co_return co_await serveHit(*hit.entry);
         }
         // A stale entry may still be revalidated with the origin below.
-        std::shared_ptr<const CachedResponse> staleEntry =
-            hit.status == CacheLookupStatus::kStale ? hit.entry : nullptr;
+        CacheEntryLease staleEntry =
+            hit.status == CacheLookupStatus::kStale ? hit.entry : CacheEntryLease{};
 
         // stale-while-revalidate: a stale entry still inside its stale-while-
         // revalidate window is served immediately while a single background job
         // refreshes it, so the client never waits on the origin.
-        if (isGet && staleEntry != nullptr && staleEntry->staleWhileRevalidate > 0 &&
+        if (isGet && staleEntry && staleEntry->staleWhileRevalidate > 0 &&
             now <= staleEntry->expiresAt +
                        static_cast<std::time_t>(staleEntry->staleWhileRevalidate)) {
             if (inFlight_.find(key) == inFlight_.end()) {
                 inFlight_.try_emplace(key);  // one refresh per key
-                asio::co_spawn(
-                    ioContext_,
-                    backgroundRefresh(RefreshJob{key, std::string(origin->upstreamHost),
-                                                 origin->upstreamPort, origin->https,
-                                                 std::string(target), normAcceptEncoding,
-                                                 staleEntry}),
-                    asio::detached);
+                spawnTracked(backgroundRefresh(RefreshJob{
+                    key,
+                    std::string(origin->upstreamHost),
+                    origin->upstreamPort,
+                    origin->https,
+                    std::string(target),
+                    acceptEncoding,
+                    staleEntry}));
             }
-            const auto age = staleEntry->storedAt <= now
-                ? static_cast<std::uint64_t>(now - staleEntry->storedAt)
-                : std::uint64_t{0};
+            const auto age = cachedResponseAge(*staleEntry, now);
             resultLabel = "STALE";
             recordedStatus = staleEntry->status;
             co_return co_await writer.respond(
                 staleEntry->status, staleEntry->headers, staleEntry->body, "STALE", age,
                 isHead, keepAlive) && keepAlive;
+        }
+
+        // only-if-cached forbids contacting the origin. A fresh hit or an
+        // explicitly reusable stale hit has already returned above; everything
+        // left is a cache miss for this request's constraints.
+        if (requestCacheControl.onlyIfCached) {
+            recordedStatus = 504;
+            resultLabel = "MISS";
+            co_return co_await writer.respond(
+                       504, noHeaders, {}, "MISS", std::nullopt, false, keepAlive) &&
+                keepAlive;
         }
 
         // Request coalescing (GET only): if a fetch for this key is already in
@@ -1494,11 +2112,13 @@ asio::awaitable<bool> EdgeServer::serveRequest(
                     co_return co_await serveHit(*woken.entry);
                 }
                 staleEntry =
-                    woken.status == CacheLookupStatus::kStale ? woken.entry : nullptr;
+                    woken.status == CacheLookupStatus::kStale
+                    ? woken.entry
+                    : CacheEntryLease{};
             }
         }
         struct LeaderGuard final {
-            EdgeServer* self;
+            Impl* self;
             const std::string* key;
             bool active;
             ~LeaderGuard() {
@@ -1512,8 +2132,8 @@ asio::awaitable<bool> EdgeServer::serveRequest(
         // headers minus hop-by-hop fields, Host (regenerated for the upstream),
         // Range plus client conditionals, and client-supplied forwarding headers
         // (dropped so a client cannot spoof them). Accept-Encoding is forwarded so
-        // the origin may compress; the cache key includes the normalized
-        // Accept-Encoding so variants are stored separately.
+        // the origin may compress; the cache key includes every field line and
+        // weight so variants are stored separately.
         std::pmr::vector<HttpHeaderView> forwardHeaders(memory_.resource());
         for (const auto& field : request.headers) {
             std::pmr::string lower(memory_.resource());
@@ -1521,7 +2141,9 @@ asio::awaitable<bool> EdgeServer::serveRequest(
             for (const char c : field.name()) {
                 lower.push_back(toLowerAscii(c));
             }
-            if (isConnectionOrFramingField(lower) || lower == "host" ||
+            if (isConnectionOrFramingField(lower) ||
+                connectionNominates(request.headers, field.name()) ||
+                lower == "host" ||
                 lower == "range" || lower == "if-none-match" ||
                 lower == "if-modified-since" || lower == "if-match" ||
                 lower == "if-unmodified-since" || lower == "if-range" ||
@@ -1536,11 +2158,13 @@ asio::awaitable<bool> EdgeServer::serveRequest(
                 std::string_view("X-Forwarded-For"),
                 std::string_view(request.clientAddress));
         }
-        if (!frontHost.empty()) {
-            forwardHeaders.emplace_back(std::string_view("X-Forwarded-Host"), frontHost);
+        if (!request.host.empty()) {
+            forwardHeaders.emplace_back(
+                std::string_view("X-Forwarded-Host"), request.host);
         }
         forwardHeaders.emplace_back(
-            std::string_view("X-Forwarded-Proto"), std::string_view("http"));
+            std::string_view("X-Forwarded-Proto"),
+            tlsEnabled_ ? std::string_view("https") : std::string_view("http"));
         forwardHeaders.emplace_back(
             std::string_view("Via"), std::string_view("1.1 ruvia-edge"));
 
@@ -1564,14 +2188,12 @@ asio::awaitable<bool> EdgeServer::serveRequest(
         // stale-if-error: a stale copy within its stale-if-error window is served
         // when the origin cannot be reached (or answers 5xx), instead of an error.
         const auto serveStaleOnError = [&]() -> bool {
-            return staleEntry != nullptr && staleEntry->staleIfError > 0 &&
+            return staleEntry && staleEntry->staleIfError > 0 &&
                 now <= staleEntry->expiresAt +
                            static_cast<std::time_t>(staleEntry->staleIfError);
         };
         const auto writeStale = [&]() -> asio::awaitable<bool> {
-            const auto age = staleEntry->storedAt <= now
-                ? static_cast<std::uint64_t>(now - staleEntry->storedAt)
-                : std::uint64_t{0};
+            const auto age = cachedResponseAge(*staleEntry, now);
             co_return co_await writer.respond(
                 staleEntry->status, staleEntry->headers, staleEntry->body, "STALE", age,
                 isHead, keepAlive);
@@ -1588,18 +2210,20 @@ asio::awaitable<bool> EdgeServer::serveRequest(
         bool caching = false;
         std::string cacheBuffer;
         FreshnessDecision cacheDecision;
+        const std::time_t originRequestTime = std::time(nullptr);
 
         ResponseSink sink;
         sink.onHead = [&](const OriginResponseHead& head) -> asio::awaitable<bool> {
+            now = std::time(nullptr);
             respStatus = head.status;
-            respHeaders = head.headers;
-            if (staleEntry != nullptr && head.status == 304) {
+            respHeaders = endToEndResponseHeaders(head.headers);
+            if (staleEntry && head.status == 304) {
                 co_return false;  // revalidation: serve the stored body below
             }
             if (head.status >= 500 && serveStaleOnError()) {
                 co_return false;  // stale-if-error: serve the stored body below
             }
-            if (!co_await writer.respondHead(head.status, head.headers, "MISS",
+            if (!co_await writer.respondHead(head.status, respHeaders, "MISS",
                                              head.hasBody, head.contentLength, keepAlive)) {
                 clientAborted = true;
                 co_return false;
@@ -1607,8 +2231,13 @@ asio::awaitable<bool> EdgeServer::serveRequest(
             headSent = true;
             if (!isHead) {
                 cacheDecision =
-                    evaluateFreshness(buildFreshnessInput(head.status, head.headers, now));
-                caching = cacheDecision.cacheable && cacheableUnderVary(head.headers);
+                    evaluateFreshness(buildFreshnessInput(
+                        head.status,
+                        respHeaders,
+                        now,
+                        originRequestTime,
+                        requestHasAuthorization));
+                caching = cacheDecision.cacheable && cacheableUnderVary(respHeaders);
             }
             co_return true;
         };
@@ -1637,6 +2266,7 @@ asio::awaitable<bool> EdgeServer::serveRequest(
             co_return false;  // the client went away mid-response
         }
         if (fetchResult.outcome != OriginFetchOutcome::kOk) {
+            now = std::time(nullptr);
             if (headSent) {
                 co_return false;  // partial response already sent; close
             }
@@ -1655,32 +2285,38 @@ asio::awaitable<bool> EdgeServer::serveRequest(
 
         // The sink declined to stream (304 revalidation, or a stale-if-error 5xx):
         // serve the stored body instead.
-        if (!headSent && staleEntry != nullptr) {
+        if (!headSent && staleEntry) {
             if (respStatus == 304) {
                 Headers merged = mergeStoredHeaders(staleEntry->headers, respHeaders);
                 const auto decision =
-                    evaluateFreshness(buildFreshnessInput(staleEntry->status, merged, now));
-                auto refreshed = std::make_shared<CachedResponse>();
-                refreshed->status = staleEntry->status;
-                refreshed->body = staleEntry->body;
-                refreshed->headers = std::move(merged);
-                refreshed->storedAt = now;
-                refreshed->expiresAt = decision.cacheable ? decision.expiresAt : now;
-                refreshed->staleWhileRevalidate = decision.staleWhileRevalidate;
-                refreshed->staleIfError = decision.staleIfError;
-                const bool storable = decision.cacheable && cacheableUnderVary(refreshed->headers);
+                    evaluateFreshness(buildFreshnessInput(
+                        staleEntry->status,
+                        merged,
+                        now,
+                        originRequestTime,
+                        requestHasAuthorization));
+                CachedResponse refreshed;
+                refreshed.status = staleEntry->status;
+                refreshed.body = staleEntry->body;
+                refreshed.headers = std::move(merged);
+                refreshed.storedAt = now;
+                refreshed.initialAge = decision.initialAge;
+                refreshed.expiresAt = decision.cacheable ? decision.expiresAt : now;
+                refreshed.staleWhileRevalidate = decision.staleWhileRevalidate;
+                refreshed.staleIfError = decision.staleIfError;
+                const bool storable = decision.cacheable && cacheableUnderVary(refreshed.headers);
                 if (storable) {
                     diskStore(key, refreshed);
-                    cache_.store(key, refreshed);
+                    cache_.store(key, CachedResponse(refreshed));
                 } else {
                     cache_.purge(key);  // no longer has usable freshness
                     diskPurge(key);
                 }
                 resultLabel = "REVALIDATED";
-                recordedStatus = refreshed->status;
+                recordedStatus = refreshed.status;
                 co_return co_await writer.respond(
-                    refreshed->status, refreshed->headers, refreshed->body, "REVALIDATED",
-                    std::uint64_t{0}, isHead, keepAlive) && keepAlive;
+                    refreshed.status, refreshed.headers, refreshed.body, "REVALIDATED",
+                    refreshed.initialAge, isHead, keepAlive) && keepAlive;
             }
             resultLabel = "STALE";  // 5xx covered by stale-if-error
             recordedStatus = staleEntry->status;
@@ -1693,26 +2329,34 @@ asio::awaitable<bool> EdgeServer::serveRequest(
             co_return false;
         }
         if (caching) {
-            auto entry = std::make_shared<CachedResponse>();
-            entry->status = respStatus;
-            entry->headers = std::move(respHeaders);
-            entry->body = std::move(cacheBuffer);
-            entry->storedAt = now;
-            entry->expiresAt = cacheDecision.expiresAt;
-            entry->staleWhileRevalidate = cacheDecision.staleWhileRevalidate;
-            entry->staleIfError = cacheDecision.staleIfError;
+            CachedResponse entry;
+            entry.status = respStatus;
+            entry.headers = std::move(respHeaders);
+            entry.body = std::move(cacheBuffer);
+            entry.storedAt = now;
+            entry.initialAge = cacheDecision.initialAge;
+            entry.expiresAt = cacheDecision.expiresAt;
+            entry.staleWhileRevalidate = cacheDecision.staleWhileRevalidate;
+            entry.staleIfError = cacheDecision.staleIfError;
             diskStore(key, entry);
             cache_.store(key, std::move(entry));
+        } else if (staleEntry && respStatus < 500) {
+            // A successful/full replacement that is no longer storable (for
+            // example no-store/private, unsupported Vary, or an oversized new
+            // representation) supersedes the stale entry. Keeping it would let
+            // a later stale-if-error path resurrect data the origin withdrew.
+            cache_.purge(key);
+            diskPurge(key);
         }
         resultLabel = "MISS";
         recordedStatus = respStatus;
         co_return keepAlive;
 }
 
-asio::awaitable<void> EdgeServer::backgroundRefresh(RefreshJob job) {
+asio::awaitable<void> EdgeServer::Impl::backgroundRefresh(RefreshJob job) {
     // Wake any foreground waiters and drop the in-flight entry however this ends.
     struct Guard final {
-        EdgeServer* self;
+        Impl* self;
         const std::string* key;
         ~Guard() { self->wakeInFlight(*key); }
     } guard{this, &job.key};
@@ -1725,9 +2369,10 @@ asio::awaitable<void> EdgeServer::backgroundRefresh(RefreshJob job) {
                    findHeaderValue(job.stored->headers, "last-modified")) {
         headers.emplace_back(std::string_view("If-Modified-Since"), *lastModified);
     }
-    if (!job.acceptEncoding.empty()) {
+    if (job.acceptEncoding) {
         headers.emplace_back(
-            std::string_view("Accept-Encoding"), std::string_view(job.acceptEncoding));
+            std::string_view("Accept-Encoding"),
+            std::string_view(*job.acceptEncoding));
     }
     headers.emplace_back(std::string_view("Via"), std::string_view("1.1 ruvia-edge"));
 
@@ -1742,17 +2387,20 @@ asio::awaitable<void> EdgeServer::backgroundRefresh(RefreshJob job) {
     std::string body;
     bool caching = false;
     FreshnessDecision decision;
-    const std::time_t now = std::time(nullptr);
+    std::time_t now = std::time(nullptr);
+    const std::time_t originRequestTime = now;
 
     ResponseSink sink;
     sink.onHead = [&](const OriginResponseHead& head) -> asio::awaitable<bool> {
+        now = std::time(nullptr);
         status = head.status;
-        respHeaders = head.headers;
+        respHeaders = endToEndResponseHeaders(head.headers);
         if (head.status == 304) {
             co_return false;  // not modified: refresh freshness below
         }
-        decision = evaluateFreshness(buildFreshnessInput(head.status, head.headers, now));
-        caching = decision.cacheable && cacheableUnderVary(head.headers);
+        decision = evaluateFreshness(buildFreshnessInput(
+            head.status, respHeaders, now, originRequestTime, false));
+        caching = decision.cacheable && cacheableUnderVary(respHeaders);
         co_return caching;  // only download a body we intend to cache
     };
     sink.onBody = [&](std::string_view chunk) -> asio::awaitable<bool> {
@@ -1773,16 +2421,18 @@ asio::awaitable<void> EdgeServer::backgroundRefresh(RefreshJob job) {
     if (status == 304) {
         Headers merged = mergeStoredHeaders(job.stored->headers, respHeaders);
         const auto refreshed =
-            evaluateFreshness(buildFreshnessInput(job.stored->status, merged, now));
+            evaluateFreshness(buildFreshnessInput(
+                job.stored->status, merged, now, originRequestTime, false));
         if (refreshed.cacheable && cacheableUnderVary(merged)) {
-            auto entry = std::make_shared<CachedResponse>();
-            entry->status = job.stored->status;
-            entry->body = job.stored->body;
-            entry->storedAt = now;
-            entry->expiresAt = refreshed.expiresAt;
-            entry->staleWhileRevalidate = refreshed.staleWhileRevalidate;
-            entry->staleIfError = refreshed.staleIfError;
-            entry->headers = std::move(merged);
+            CachedResponse entry;
+            entry.status = job.stored->status;
+            entry.body = job.stored->body;
+            entry.storedAt = now;
+            entry.initialAge = refreshed.initialAge;
+            entry.expiresAt = refreshed.expiresAt;
+            entry.staleWhileRevalidate = refreshed.staleWhileRevalidate;
+            entry.staleIfError = refreshed.staleIfError;
+            entry.headers = std::move(merged);
             diskStore(job.key, entry);
             cache_.store(job.key, std::move(entry));
         }
@@ -1790,21 +2440,28 @@ asio::awaitable<void> EdgeServer::backgroundRefresh(RefreshJob job) {
     }
 
     if (caching) {
-        auto entry = std::make_shared<CachedResponse>();
-        entry->status = status;
-        entry->headers = std::move(respHeaders);
-        entry->body = std::move(body);
-        entry->storedAt = now;
-        entry->expiresAt = decision.expiresAt;
-        entry->staleWhileRevalidate = decision.staleWhileRevalidate;
-        entry->staleIfError = decision.staleIfError;
+        CachedResponse entry;
+        entry.status = status;
+        entry.headers = std::move(respHeaders);
+        entry.body = std::move(body);
+        entry.storedAt = now;
+        entry.initialAge = decision.initialAge;
+        entry.expiresAt = decision.expiresAt;
+        entry.staleWhileRevalidate = decision.staleWhileRevalidate;
+        entry.staleIfError = decision.staleIfError;
         diskStore(job.key, entry);
         cache_.store(job.key, std::move(entry));
+    } else if (status < 500) {
+        // A background 2xx/3xx/4xx full response replaced the old
+        // representation but cannot itself be stored. Drop the stale copy;
+        // 5xx validation failures intentionally leave it available to policy.
+        cache_.purge(job.key);
+        diskPurge(job.key);
     }
 }
 
 template <typename Stream>
-asio::awaitable<void> EdgeServer::handleHttp2Session(Stream stream, std::string clientAddress) {
+asio::awaitable<void> EdgeServer::Impl::handleHttp2Session(Stream stream, std::string clientAddress) {
     using namespace asio::experimental::awaitable_operators;
     const auto tuple = asio::as_tuple(asio::use_awaitable);
     const auto executor = co_await asio::this_coro::executor;
@@ -1941,15 +2598,83 @@ asio::awaitable<void> EdgeServer::handleHttp2Session(Stream stream, std::string 
             (void)connection.feed(std::string_view(readBuffer.data(), readSize));
             writeWake.cancel();  // feed may have queued control frames
 
+            // DATA events borrow the current input span and retain receive-window
+            // debt. Copy the whole event batch first, then return each stream's
+            // accumulated credit exactly once; acknowledging inside the loop
+            // could cover later events whose borrowed bytes are not copied yet.
+            std::array<std::uint32_t,
+                       detail::Http2LocalSettings::kMaxConcurrentStreams>
+                copiedBodyStreams{};
+            std::size_t copiedBodyStreamCount = 0;
+            const auto markBodyCopied = [&](std::uint32_t streamId) {
+                const auto copied = std::span(copiedBodyStreams)
+                                        .first(copiedBodyStreamCount);
+                if (std::ranges::find(copied, streamId) != copied.end()) {
+                    return true;
+                }
+                if (copiedBodyStreamCount == copiedBodyStreams.size()) {
+                    return false;
+                }
+                copiedBodyStreams[copiedBodyStreamCount++] = streamId;
+                return true;
+            };
+            const auto unmarkBodyCopied = [&](std::uint32_t streamId) {
+                auto copied = std::span(copiedBodyStreams)
+                                  .first(copiedBodyStreamCount);
+                const auto found = std::ranges::find(copied, streamId);
+                if (found == copied.end()) {
+                    return;
+                }
+                --copiedBodyStreamCount;
+                *found = copiedBodyStreams[copiedBodyStreamCount];
+            };
+            const auto resetBodyStream = [&](std::uint32_t streamId,
+                                             detail::Http2ErrorCode error) {
+                unmarkBodyCopied(streamId);
+                requestBodies.erase(streamId);
+                (void)connection.submitReset(streamId, error);
+                writeWake.cancel();
+            };
+
             for (;;) {
                 const auto event = connection.nextEvent();
                 if (!event.has_value()) {
                     break;
                 }
                 if (const auto* head = event->messageHead()) {
-                    requestBodies.try_emplace(head->streamId());
+                    const auto streamId = head->streamId();
+                    const auto* streamState = connection.stream(streamId);
+                    const auto* knownLength = streamState == nullptr
+                        ? nullptr
+                        : streamState->remoteContent().allowedKnownLength();
+                    if (knownLength != nullptr &&
+                        knownLength->declaredLength() > kMaxRequestBytes) {
+                        resetBodyStream(
+                            streamId, detail::Http2ErrorCode::kCancel);
+                    } else {
+                        requestBodies.try_emplace(streamId);
+                    }
                 } else if (const auto* chunk = event->messageBodyChunk()) {
-                    requestBodies[chunk->streamId()].append(chunk->bytes());
+                    const auto streamId = chunk->streamId();
+                    const auto body = requestBodies.find(streamId);
+                    if (body == requestBodies.end()) {
+                        resetBodyStream(
+                            streamId,
+                            detail::Http2ErrorCode::kInternalError);
+                        continue;
+                    }
+                    if (chunk->bytes().size() >
+                        kMaxRequestBytes - body->second.size()) {
+                        resetBodyStream(
+                            streamId, detail::Http2ErrorCode::kCancel);
+                        continue;
+                    }
+                    body->second.append(chunk->bytes());
+                    if (!markBodyCopied(streamId)) {
+                        resetBodyStream(
+                            streamId,
+                            detail::Http2ErrorCode::kInternalError);
+                    }
                 } else if (const auto* end = event->messageEnd()) {
                     const auto streamId = end->streamId();
                     auto* streamState = connection.stream(streamId);
@@ -1961,32 +2686,73 @@ asio::awaitable<void> EdgeServer::handleHttp2Session(Stream stream, std::string 
                         body = std::move(it->second);
                         requestBodies.erase(it);
                     }
-                    // Pin so the stream's request/response storage outlives the
-                    // detached handler; unpin on its completion.
-                    connection.pinStream(streamId);
-                    ++activeHandlers;
-                    auto& handlerCancel = handlerCancels[streamId];
-                    asio::co_spawn(
-                        executor, serveStream(streamId, *streamState, std::move(body)),
-                        asio::bind_cancellation_slot(
-                            handlerCancel.slot(),
-                            [&, streamId](std::exception_ptr) {
-                                connection.unpinStream(streamId);
-                                drainWaiters.erase(streamId);
-                                handlerCancels.erase(streamId);
-                                --activeHandlers;
-                                writeWake.cancel();    // let the writer re-check its exit
-                                handlersIdle.cancel();  // wake a draining reader
-                            }));
+                    // Register cancellation before acquiring the stream lease.
+                    // If allocation or co_spawn() fails synchronously, roll back
+                    // every piece of bookkeeping: otherwise the draining loop
+                    // below would wait forever for a handler that never started.
+                    auto [cancelIt, inserted] = handlerCancels.try_emplace(streamId);
+                    if (!inserted) {
+                        throw std::logic_error(
+                            "duplicate HTTP/2 handler for one stream");
+                    }
+                    bool handlerRegistered = false;
+                    try {
+                        // Pin so the stream's request/response storage outlives
+                        // the detached handler; unpin on its completion.
+                        connection.pinStream(streamId);
+                        ++activeHandlers;
+                        handlerRegistered = true;
+                        asio::co_spawn(
+                            executor, serveStream(streamId, *streamState, std::move(body)),
+                            asio::bind_cancellation_slot(
+                                cancelIt->second.slot(),
+                                [&, streamId](std::exception_ptr failure) {
+                                    if (failure != nullptr && !shuttingDown) {
+                                        auto* failedStream = connection.stream(streamId);
+                                        if (failedStream != nullptr &&
+                                            !failedStream->isAborted()) {
+                                            // A handler that unwinds without a
+                                            // terminal response still owes the
+                                            // peer a stream terminal state.
+                                            (void)connection.submitReset(
+                                                streamId,
+                                                detail::Http2ErrorCode::kInternalError);
+                                        }
+                                    }
+                                    connection.unpinStream(streamId);
+                                    drainWaiters.erase(streamId);
+                                    handlerCancels.erase(streamId);
+                                    --activeHandlers;
+                                    writeWake.cancel();  // let the writer re-check its exit
+                                    handlersIdle.cancel();  // wake a draining reader
+                                }));
+                    } catch (...) {
+                        if (handlerRegistered) {
+                            --activeHandlers;
+                            connection.unpinStream(streamId);
+                        }
+                        handlerCancels.erase(cancelIt);
+                        throw;
+                    }
                 } else if (const auto* closed = event->streamClosed()) {
                     // The peer reset/closed the stream: wake its parked handler so
                     // it sees the abort and unwinds.
+                    unmarkBodyCopied(closed->streamId());
                     if (const auto it = drainWaiters.find(closed->streamId());
                         it != drainWaiters.end()) {
                         it->second->cancel();
                     }
                     requestBodies.erase(closed->streamId());
                 }
+            }
+
+            for (std::size_t index = 0;
+                 index < copiedBodyStreamCount;
+                 ++index) {
+                connection.releaseReceivedData(copiedBodyStreams[index]);
+            }
+            if (copiedBodyStreamCount != 0) {
+                writeWake.cancel();
             }
 
             // Resume any handler whose flow-control window just reopened.
@@ -2028,6 +2794,47 @@ asio::awaitable<void> EdgeServer::handleHttp2Session(Stream stream, std::string 
 
     asio::error_code ignore;
     stream.lowest_layer().shutdown(asio::ip::tcp::socket::shutdown_both, ignore);
+}
+
+EdgeServer::EdgeServer(EdgeEndpoint endpoint, EdgeServerOptions options)
+    : impl_(std::make_unique<Impl>(std::move(endpoint), std::move(options))) {}
+
+EdgeServer::~EdgeServer() = default;
+
+void EdgeServer::start() {
+    impl_->start();
+}
+
+void EdgeServer::stop() {
+    impl_->stop();
+}
+
+void EdgeServer::join() {
+    impl_->join();
+}
+
+EdgeEndpoint EdgeServer::localEndpoint() const {
+    return impl_->localEndpoint();
+}
+
+bool EdgeServer::addOrigin(std::string frontHost, OriginSettings settings) {
+    return impl_->addOrigin(std::move(frontHost), std::move(settings));
+}
+
+bool EdgeServer::removeOrigin(std::string_view frontHost) {
+    return impl_->removeOrigin(frontHost);
+}
+
+bool EdgeServer::setTlsCertificate(const EdgeTlsConfig& tls) {
+    return impl_->setTlsCertificate(tls);
+}
+
+bool EdgeServer::purge(std::string_view frontHost, std::string_view target) {
+    return impl_->purge(frontHost, target);
+}
+
+bool EdgeServer::clearCache() {
+    return impl_->clearCache();
 }
 
 }  // namespace ruvia::edge

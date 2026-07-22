@@ -268,6 +268,9 @@ static_assert(std::copy_constructible<ruvia::EventLoop>);
 static_assert(!std::default_initializable<ruvia::EventLoopAttachment>);
 static_assert(!std::copy_constructible<ruvia::EventLoopAttachment>);
 static_assert(std::move_constructible<ruvia::EventLoopAttachment>);
+static_assert(!std::assignable_from<
+    ruvia::EventLoopAttachment&,
+    ruvia::EventLoopAttachment&&>);
 static_assert(!std::copy_constructible<ruvia::EventLoopStopRegistration>);
 static_assert(std::move_constructible<ruvia::EventLoopStopRegistration>);
 static_assert(std::same_as<

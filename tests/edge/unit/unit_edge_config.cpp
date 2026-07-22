@@ -1,11 +1,10 @@
-// EdgeConfig is the edge node's dynamically mutable routing table: reads are the
-// lock-free hot path, writes (add/remove origin) publish a fresh immutable
-// snapshot via copy-on-write. This checks the mutation results and, crucially,
-// that a snapshot captured before a mutation is never disturbed by it.
+// EdgeConfig is single-owner state. Lookups return a move-only lease whose
+// lifetime remains stable across later replacement/removal without atomic
+// shared ownership on the request path.
 
 #include <cstdio>
 
-#include "ruvia/edge/EdgeConfig.h"
+#include "ruvia/edge/detail/EdgeConfig.h"
 
 namespace {
 
@@ -25,66 +24,41 @@ int main() {
     using ruvia::edge::OriginSettings;
 
     EdgeConfig config;
-
-    {
-        const auto snap = config.snapshot();
-        check(snap->originCount() == 0, "initial config is empty");
-        check(snap->findOrigin("example.com") == nullptr,
-              "unmapped host resolves to nullptr");
-    }
+    check(config.originCount() == 0, "initial config is empty");
+    check(!config.findOrigin("example.com"), "unmapped host has no lease");
 
     check(config.addOrigin("example.com", OriginSettings{"backend.internal", 8080, false}),
           "addOrigin returns true for a new mapping");
-    {
-        const auto snap = config.snapshot();
-        check(snap->originCount() == 1, "count is 1 after add");
-        const auto* origin = snap->findOrigin("example.com");
-        check(origin != nullptr, "mapped host resolves");
-        check(origin != nullptr && origin->upstreamHost == "backend.internal",
-              "upstream host stored");
-        check(origin != nullptr && origin->upstreamPort == 8080,
-              "upstream port stored");
-        check(origin != nullptr && !origin->https, "https flag stored");
-    }
+    check(config.originCount() == 1, "count is 1 after add");
 
-    // Copy-on-write: a snapshot taken before a later mutation stays frozen.
-    {
-        const auto oldSnap = config.snapshot();
-        config.addOrigin("second.com", OriginSettings{"other.internal", 443, true});
-        check(oldSnap->originCount() == 1,
-              "old snapshot unchanged after later add (copy-on-write)");
-        check(oldSnap->findOrigin("second.com") == nullptr,
-              "old snapshot does not observe the new host");
-        const auto newSnap = config.snapshot();
-        check(newSnap->originCount() == 2, "new snapshot sees both hosts");
-        const auto* origin = newSnap->findOrigin("second.com");
-        check(origin != nullptr && origin->https, "https origin stored");
-    }
+    auto original = config.findOrigin("example.com");
+    check(static_cast<bool>(original), "mapped host resolves");
+    check(original && original->upstreamHost == "backend.internal",
+          "upstream host stored");
+    check(original && original->upstreamPort == 8080, "upstream port stored");
+    check(original && !original->https, "https flag stored");
+    check(static_cast<bool>(config.findOrigin("EXAMPLE.COM")),
+          "front host lookup is ASCII case-insensitive");
 
-    // Replacing an existing mapping returns false and updates the settings.
-    check(!config.addOrigin("example.com", OriginSettings{"newbackend", 9090, true}),
+    check(!config.addOrigin("Example.Com", OriginSettings{"newbackend", 9090, true}),
           "addOrigin returns false when replacing an existing host");
-    {
-        const auto snap = config.snapshot();
-        check(snap->originCount() == 2, "count unchanged after replace");
-        const auto* origin = snap->findOrigin("example.com");
-        check(origin != nullptr && origin->upstreamHost == "newbackend" &&
-                  origin->upstreamPort == 9090,
-              "replaced origin reflects new settings");
-    }
+    check(config.originCount() == 1, "count unchanged after replace");
+    auto replacement = config.findOrigin("example.com");
+    check(replacement && replacement->upstreamHost == "newbackend" &&
+              replacement->upstreamPort == 9090 && replacement->https,
+          "new lookup sees replacement settings");
+    check(original && original->upstreamHost == "backend.internal" &&
+              original->upstreamPort == 8080 && !original->https,
+          "outstanding lease survives replacement with its original value");
 
-    check(config.removeOrigin("example.com"),
+    check(config.removeOrigin("EXAMPLE.com"),
           "removeOrigin returns true when the host is present");
     check(!config.removeOrigin("example.com"),
           "removeOrigin returns false when the host is absent");
-    {
-        const auto snap = config.snapshot();
-        check(snap->originCount() == 1, "count is 1 after remove");
-        check(snap->findOrigin("example.com") == nullptr,
-              "removed host resolves to nullptr");
-        check(snap->findOrigin("second.com") != nullptr,
-              "unrelated host is still present");
-    }
+    check(config.originCount() == 0, "count is 0 after remove");
+    check(!config.findOrigin("example.com"), "removed host no longer resolves");
+    check(replacement && replacement->upstreamHost == "newbackend",
+          "outstanding lease survives removal");
 
     if (failures == 0) {
         std::fprintf(stderr, "edge config: all checks passed\n");

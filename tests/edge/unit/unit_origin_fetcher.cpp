@@ -26,7 +26,7 @@
 #include <asio/use_awaitable.hpp>
 
 #include "edge_tls_fixture.h"
-#include "ruvia/edge/OriginFetcher.h"
+#include "ruvia/edge/detail/OriginFetcher.h"
 #include "ruvia/http/HttpHeader.h"
 
 namespace {

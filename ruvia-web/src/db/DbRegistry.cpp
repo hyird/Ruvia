@@ -1,7 +1,6 @@
 #include "ruvia/web/detail/db/DbInternal.h"
 #include "ruvia/web/detail/db/DbConfigValidation.h"
 #include "ruvia/web/detail/db/DbUtils.h"
-#include "ruvia/web/Context.h"
 
 #include <chrono>
 #include <memory>
@@ -201,20 +200,6 @@ DbHandle detail::DbRegistry::get(
         }
     }
     throw std::logic_error("database is not configured");
-}
-
-DbHandle Context::db() const {
-    if (db_ == nullptr) {
-        throw std::logic_error("database is not configured");
-    }
-    return db_->get(resource(), operationScope_);
-}
-
-DbHandle Context::db(std::string_view alias) const {
-    if (db_ == nullptr) {
-        throw std::logic_error("database is not configured");
-    }
-    return db_->get(alias, resource(), operationScope_);
 }
 
 }  // namespace ruvia

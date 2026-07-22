@@ -1,4 +1,3 @@
-#include "test_io_context.h"
 #include "test_harness.h"
 
 #include <concepts>
@@ -399,7 +398,7 @@ RUVIA_TEST(ws_handshake_writer_preserves_transport_error) {
     const auto request = parseRequest(validHandshake());
     const auto handshake = ruvia::detail::makeHttpWebSocketServerHandshake(
         request, {});
-    asio::io_context& io = ruvia::test::newTestIoContext();
+    asio::io_context io;
     FailingHandshakeWriteStream stream(io);
     auto result = asio::co_spawn(
         io,

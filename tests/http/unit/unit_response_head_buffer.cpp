@@ -23,13 +23,6 @@ concept ExposesRvalueResponseHeadBufferStorage =
 
 static_assert(!ExposesRvalueResponseHeadBufferStorage<ResponseHeadBuffer>);
 
-#if !defined(_MSC_VER)
-// The MSVC debug pmr::string does not complete this synthetic
-// resource-thrown-bad_alloc growth probe, so the spill guarantee below is
-// unverified on that standard library. Nothing else covers it: the overflow
-// test rejects on the max_size precondition and returns before spillToHeap
-// runs, so only this probe pins spillToHeap's strong guarantee (a throwing
-// reserve must leave the discriminant on StackState).
 class RejectingMemoryResource final : public std::pmr::memory_resource {
 private:
     void* do_allocate(std::size_t, std::size_t) override {
@@ -43,7 +36,6 @@ private:
         return this == &other;
     }
 };
-#endif  // !_MSC_VER
 
 }  // namespace
 
@@ -127,7 +119,6 @@ RUVIA_TEST(head_buffer_reset_and_reuse) {
     RUVIA_CHECK(buffer.canAppendOnStack(1));
 }
 
-#if !defined(_MSC_VER)
 RUVIA_TEST(head_buffer_failed_spill_preserves_stack_state) {
     RejectingMemoryResource resource;
     ResponseHeadBuffer buffer(&resource);
@@ -149,7 +140,6 @@ RUVIA_TEST(head_buffer_failed_spill_preserves_stack_state) {
     RUVIA_CHECK_EQ(buffer.view(), std::string_view("retry"));
     RUVIA_CHECK(buffer.canAppendOnStack(1));
 }
-#endif  // !_MSC_VER
 
 RUVIA_TEST(head_buffer_rejects_overflow_without_changing_storage_state) {
     ResponseHeadBuffer buffer(std::pmr::get_default_resource());

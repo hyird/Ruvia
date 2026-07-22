@@ -145,7 +145,11 @@ RUVIA_TEST(http_trim_weak_etag_prefix) {
 }
 
 RUVIA_TEST(http_extension_equals_is_case_insensitive) {
+    using ruvia::detail::staticFileExtension;
     using ruvia::detail::staticFileExtensionEquals;
+    RUVIA_CHECK_EQ(
+        staticFileExtension(std::string_view("asset.txt\\suffix")),
+        std::string_view(".txt\\suffix"));
     RUVIA_CHECK(staticFileExtensionEquals(std::string_view("html"), "html"));
     RUVIA_CHECK(staticFileExtensionEquals(std::string_view("HTML"), "html"));
     RUVIA_CHECK(staticFileExtensionEquals(std::string_view("Json"), "json"));

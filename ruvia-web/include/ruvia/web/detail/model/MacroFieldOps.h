@@ -67,7 +67,8 @@ public: \
         auto ruviaValueInput = value; \
         using RuviaValueT = typename decltype(ruviaField_##field##_)::value_type; \
         if (auto ruviaValue = ::ruvia::detail::parseJsonValue<RuviaValueT>( \
-                ruviaValueInput, ruviaResource); ruviaValue) { \
+                ruviaValueInput, ruviaResource, 0, \
+                ruviaStringStorage); ruviaValue) { \
             ::ruvia::detail::skipJsonWhitespace(ruviaValueInput); \
             if (ruviaValueInput.empty()) { \
                 ruviaField_##field##_.emplaceParsed(::std::move(*ruviaValue)); \

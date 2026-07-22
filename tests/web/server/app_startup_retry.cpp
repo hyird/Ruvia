@@ -49,8 +49,7 @@ int main() {
     } catch (const std::exception&) {
         preparationFailed = true;
     }
-    if (!preparationFailed || ruvia::ProcessMemory::instance().frozen() ||
-        !app.workers().empty()) {
+    if (!preparationFailed || !app.workers().empty()) {
         return 1;
     }
 
@@ -68,12 +67,5 @@ int main() {
         .onStop([&] { ++stopCalls; });
     app.run();
 
-    return started && stopCalls == 1 &&
-                   ruvia::ProcessMemory::instance().frozen() &&
-                   ruvia::ProcessMemory::instance()
-                           .config()
-                           .requestInitialBufferBytes ==
-                       ruvia::kRequestArenaInitialBytes * 2
-        ? 0
-        : 2;
+    return started && stopCalls == 1 ? 0 : 2;
 }

@@ -16,6 +16,37 @@ RUVIA_TEST(parse_cache_control_flags_and_ages) {
     RUVIA_CHECK_EQ(*cc.staleWhileRevalidate, std::uint64_t{30});
 }
 
+RUVIA_TEST(parse_cache_control_request_directives) {
+    const auto request = ruvia::parseCacheControl(
+        "only-if-cached, max-age=0, min-fresh=15, max-stale=30");
+    RUVIA_CHECK(request.onlyIfCached);
+    RUVIA_CHECK_EQ(request.maxAge.value_or(1), std::uint64_t{0});
+    RUVIA_CHECK_EQ(request.minFresh.value_or(0), std::uint64_t{15});
+    RUVIA_CHECK_EQ(request.maxStale.value_or(0), std::uint64_t{30});
+    RUVIA_CHECK(!request.maxStaleAny);
+
+    const auto anyStale = ruvia::parseCacheControl("max-stale");
+    RUVIA_CHECK(anyStale.maxStaleAny);
+    RUVIA_CHECK(!anyStale.maxStale.has_value());
+
+    const auto invalid = ruvia::parseCacheControl(
+        "only-if-cached=yes, min-fresh=bad, max-stale=bad");
+    RUVIA_CHECK(!invalid.onlyIfCached);
+    RUVIA_CHECK(!invalid.minFresh.has_value());
+    RUVIA_CHECK(!invalid.maxStale.has_value());
+    RUVIA_CHECK(!invalid.maxStaleAny);
+}
+
+RUVIA_TEST(parse_cache_control_request_freshness_uses_first_occurrence) {
+    ruvia::CacheControlFieldParser parser;
+    parser.update("min-fresh=5, max-stale=10");
+    parser.update("min-fresh=50, max-stale");
+    const auto request = parser.finish();
+    RUVIA_CHECK_EQ(request.minFresh.value_or(0), std::uint64_t{5});
+    RUVIA_CHECK_EQ(request.maxStale.value_or(0), std::uint64_t{10});
+    RUVIA_CHECK(!request.maxStaleAny);
+}
+
 RUVIA_TEST(parse_cache_control_no_store_and_private) {
     const auto cc = ruvia::parseCacheControl("no-store, private, must-revalidate");
     RUVIA_CHECK(cc.noStore);

@@ -244,13 +244,16 @@ RUVIA_TEST(model_factory_materializes_before_publication) {
 
 RUVIA_TEST(unified_model_parses_and_serializes_nested_arrays_and_optional_fields) {
     std::pmr::monotonic_buffer_resource resource;
+    std::string input =
+        R"({"primary":{"id":1},"items":[{"id":2,"label":"two"}],"tags":["a","b"]})";
     const auto parsed = ruvia::fromJson<NestedModelEnvelope>(
-        R"({"primary":{"id":1},"items":[{"id":2,"label":"two"}],"tags":["a","b"]})",
+        input,
         &resource);
     RUVIA_CHECK(parsed.has_value());
     if (!parsed) {
         return;
     }
+    input.assign(input.size(), 'x');
 
     RUVIA_CHECK(parsed->primary().has_value());
     RUVIA_CHECK(parsed->items().has_value());
@@ -262,6 +265,16 @@ RUVIA_TEST(unified_model_parses_and_serializes_nested_arrays_and_optional_fields
     if (parsed->items()) {
         RUVIA_CHECK_EQ(parsed->items()->size(), std::size_t{1});
         RUVIA_CHECK((*parsed->items())[0].label().has_value());
+        if ((*parsed->items())[0].label()) {
+            RUVIA_CHECK_EQ(
+                (*parsed->items())[0].label()->view(),
+                std::string_view("two"));
+        }
+    }
+    if (parsed->tags()) {
+        RUVIA_CHECK_EQ(parsed->tags()->size(), std::size_t{2});
+        RUVIA_CHECK_EQ((*parsed->tags())[0].view(), std::string_view("a"));
+        RUVIA_CHECK_EQ((*parsed->tags())[1].view(), std::string_view("b"));
     }
 
     RUVIA_CHECK_EQ(

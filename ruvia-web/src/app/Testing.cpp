@@ -18,6 +18,7 @@
 #include "ruvia/http/detail/parser/HttpParserSyntax.h"
 #include "ruvia/http/detail/server/HttpResponseWritePlan.h"
 #include "ruvia/web/Router.h"
+#include "ruvia/web/Dotenv.h"
 #include "ruvia/web/detail/controller/ControllerRuntime.h"
 #include "ruvia/web/detail/http/ContextServices.h"
 #include "ruvia/web/detail/router/RouterInternal.h"
@@ -28,6 +29,7 @@ struct TestApp::Impl final {
     Router router;
     detail::ControllerStore controllers;
     WorkerMemory memory;
+    Env env;
     std::pmr::vector<detail::ControllerMiddlewareDescriptor> globalMiddlewares{
         detail::registrationResource()};
     std::pmr::vector<detail::WorkerStateDefinition> workerStateDefinitions{
@@ -38,6 +40,12 @@ struct TestApp::Impl final {
     HttpNotFoundHandler notFoundHandler{nullptr};
     std::optional<detail::WorkerStateRegistry> workerStates;
     bool finalized{false};
+
+    ~Impl() {
+        if (workerStates) {
+            workerStates->shutdown();
+        }
+    }
 
     void requireConfigurable() const {
         if (finalized) {
@@ -52,7 +60,10 @@ struct TestApp::Impl final {
         }
         finalized = true;
 
-        detail::registerControllers(router, controllers);
+        const auto controllerRegistrars =
+            detail::snapshotControllerRegistrars();
+        detail::registerControllers(
+            router, controllers, controllerRegistrars);
         auto& routes = detail::RouterImpl::from(router);
         routes.setErrorHandler(errorHandler);
         routes.setNotFoundHandler(notFoundHandler);
@@ -79,6 +90,7 @@ struct TestApp::Impl final {
         }
         routes.finalize();
         workerStates.emplace(memory.resource(), workerStateDefinitions);
+        workerStates->initialize();
     }
 };
 
@@ -180,7 +192,9 @@ TestResponse TestApp::request(const TestRequest& request) {
     detail::HttpRequestAccess::setBody(parsed, request.body_);
 
     detail::ContextServices services =
-        detail::ContextServices{}.withWorkerStates(*impl_->workerStates);
+        detail::ContextServices{}
+            .withEnv(impl_->env)
+            .withWorkerStates(*impl_->workerStates);
 
     const auto& routes = detail::RouterImpl::from(impl_->router).routeTable();
     const auto resolution = routes.resolve(parsed);

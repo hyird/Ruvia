@@ -28,6 +28,11 @@ namespace detail {
 class ModelInput;
 struct ModelValueFactory;
 
+enum class ModelStringStorage : std::uint8_t {
+    kBorrowed,
+    kOwned,
+};
+
 }  // namespace detail
 
 template <typename T, typename = void>
@@ -43,14 +48,27 @@ struct JsonBody<T, void> : std::true_type {
         return T::ruviaParseJsonBody(body, resource);
     }
 
+    static std::optional<T> parseOwned(
+        std::string_view body,
+        std::pmr::memory_resource* resource) {
+        return T::ruviaParseJsonBodyOwned(body, resource);
+    }
+
     static std::optional<T> parseDepth(
         std::string_view body,
         std::pmr::memory_resource* resource,
-        std::size_t depth) {
-        if constexpr (requires { T::ruviaParseJsonBodyDepth(body, resource, depth); }) {
-            return T::ruviaParseJsonBodyDepth(body, resource, depth);
+        std::size_t depth,
+        detail::ModelStringStorage stringStorage =
+            detail::ModelStringStorage::kBorrowed) {
+        if constexpr (requires {
+            T::ruviaParseJsonBodyDepth(
+                body, resource, depth, stringStorage);
+        }) {
+            return T::ruviaParseJsonBodyDepth(
+                body, resource, depth, stringStorage);
         } else {
             (void)depth;
+            (void)stringStorage;
             return T::ruviaParseJsonBody(body, resource);
         }
     }

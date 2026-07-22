@@ -130,13 +130,13 @@ int main() {
         }
         if (!offWorkerRejected ||
             dispatcher->post([&scanner] { scanner.start(); }) !=
-                ruvia::PostResult::kAccepted) {
+                ruvia::PostStatus::kAccepted) {
             return 6;
         }
         ioContext.run_for(std::chrono::milliseconds(20));
         if (retryProbe.ticks == 0 ||
             dispatcher->post([&scanner] { scanner.stop(); }) !=
-                ruvia::PostResult::kAccepted) {
+                ruvia::PostStatus::kAccepted) {
             return 7;
         }
         if (ioContext.stopped()) {
@@ -221,15 +221,14 @@ int main() {
                 entry.setPhase(
                     ruvia::detail::ConnectionScanner::Phase::kLongLived);
             }) !=
-            ruvia::PostResult::kAccepted) {
+            ruvia::PostStatus::kAccepted) {
             return 6;
         }
-        // Windows timer dispatch can occasionally exceed a 10 ms scheduling
-        // window under a parallel Debug build. Give the 1 ms scanner enough
-        // time to complete at least one deterministic pass.
+        // Give the 1 ms scanner enough time to complete a deterministic pass
+        // under a parallel Debug build.
         ioContext.run_for(std::chrono::milliseconds(50));
         if (dispatcher->post([&scanner] { scanner.stop(); }) !=
-            ruvia::PostResult::kAccepted) {
+            ruvia::PostStatus::kAccepted) {
             return 7;
         }
         if (ioContext.stopped()) {

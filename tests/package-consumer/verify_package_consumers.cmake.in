@@ -43,6 +43,34 @@ if(_built_components_csv MATCHES "(^|,)web(,|$)" AND
     message(FATAL_ERROR "web in-memory testing facade was not installed")
 endif()
 
+if(_built_components_csv MATCHES "(^|,)edge(,|$)")
+    set(_installed_edge_server_path
+        "${_install_prefix}/include/ruvia/edge/EdgeServer.h")
+    set(_installed_edge_types_path
+        "${_install_prefix}/include/ruvia/edge/EdgeTypes.h")
+    if(NOT EXISTS "${_installed_edge_server_path}" OR
+       NOT EXISTS "${_installed_edge_types_path}")
+        message(FATAL_ERROR "installed Edge package omitted its product API")
+    endif()
+    foreach(_stale_edge_root_header IN ITEMS
+            EdgeConfig.h EdgeCache.h DiskCache.h EdgeFreshness.h OriginFetcher.h)
+        if(EXISTS "${_install_prefix}/include/ruvia/edge/${_stale_edge_root_header}")
+            message(FATAL_ERROR
+                "installed Edge package exposed implementation header at its public root: ${_stale_edge_root_header}")
+        endif()
+    endforeach()
+    file(READ "${_installed_edge_server_path}" _installed_edge_server)
+    if(NOT _installed_edge_server MATCHES "class EdgeServer final" OR
+       NOT _installed_edge_server MATCHES "class Impl" OR
+       NOT _installed_edge_server MATCHES "std::unique_ptr<Impl> impl_" OR
+       NOT _installed_edge_server MATCHES "EdgeEndpoint localEndpoint" OR
+       _installed_edge_server MATCHES
+           "asio::|#[ \t]*include[ \t]*<asio/|openssl|ResponseWriter|OriginFetcher|class EdgeConfig|class EdgeCache")
+        message(FATAL_ERROR
+            "installed EdgeServer leaked runtime/protocol implementation through its product API")
+    endif()
+endif()
+
 if(_built_components_csv MATCHES "(^|,)core(,|$)")
     set(_installed_operation_deadline_path
         "${_install_prefix}/include/ruvia/core/detail/OperationDeadline.h")
@@ -161,7 +189,7 @@ if(_built_components_csv MATCHES "(^|,)core(,|$)")
        _installed_one_shot MATCHES
            "co_return co_await detail::OneShotAwaiter" OR
        _installed_one_shot MATCHES
-           "std::optional<T>[ \t]+value|bool completed|bool consumed|bool closed|bool workerStopped")
+           "std::optional<T>[ \t]+value_|bool[ \t]+(completed_|consumed_|closed_|workerStopped_)")
         message(FATAL_ERROR
             "installed OneShot restored parallel lifecycle flags or receiver-bound cold tasks")
     endif()
@@ -3209,7 +3237,7 @@ if(_built_components_csv MATCHES "(^|,)web(,|$)")
             "installed model values restored temporary storage borrows")
     endif()
     if(NOT _installed_model_field_ops_contract MATCHES
-           "field[(][)] const &[ 	]*[{]" OR
+           "field[(][)] const &[ 	]+noexcept[ 	]*[{]" OR
        NOT _installed_model_field_ops_contract MATCHES
            "field[(][)] const &&[ 	]*=[ 	]*delete" OR
        NOT _installed_model_field_ops_contract MATCHES
@@ -3932,6 +3960,8 @@ if(_built_components_csv MATCHES "(^|,)web(,|$)")
         "${_install_prefix}/include/ruvia/web/Context.h")
     set(_installed_web_worker_path
         "${_install_prefix}/include/ruvia/web/WebWorker.h")
+    set(_installed_worker_data_path
+        "${_install_prefix}/include/ruvia/web/WorkerData.h")
     set(_installed_validation_target_path
         "${_install_prefix}/include/ruvia/web/ValidationTypes.h")
     set(_installed_context_inline_path
@@ -3953,6 +3983,7 @@ if(_built_components_csv MATCHES "(^|,)web(,|$)")
             "${_installed_context_services_path}"
             "${_installed_context_header_path}"
             "${_installed_web_worker_path}"
+            "${_installed_worker_data_path}"
             "${_installed_validation_target_path}"
             "${_installed_context_inline_path}"
             "${_installed_context_model_path}"

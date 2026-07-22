@@ -54,10 +54,7 @@ add_library(ruvia-http
 )
 add_library(ruvia::http ALIAS ruvia-http)
 
-set_target_properties(ruvia-http PROPERTIES
-    EXPORT_NAME http
-    WINDOWS_EXPORT_ALL_SYMBOLS ON
-)
+set_target_properties(ruvia-http PROPERTIES EXPORT_NAME http)
 
 ruvia_configure_library(ruvia-http)
 

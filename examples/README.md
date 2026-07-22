@@ -22,21 +22,24 @@ These examples are built when `RUVIA_BUILD_EXAMPLES` is enabled and double as co
 
 Build all examples by enabling the examples option:
 
-```powershell
-cmake -S . -B build -DRUVIA_BUILD_EXAMPLES=ON
-cmake --build build --config Debug
+```bash
+cmake -S . -B build -G Ninja \
+  -DCMAKE_BUILD_TYPE=Debug \
+  -DRUVIA_BUILD_EXAMPLES=ON
+cmake --build build
 ```
 
 Build feature examples by enabling the matching feature flags, for example:
 
-```powershell
-cmake -S . -B build `
-  -DRUVIA_BUILD_EXAMPLES=ON `
-  -DRUVIA_ENABLE_MARIADB=ON `
-  -DRUVIA_ENABLE_POSTGRESQL=ON `
-  -DRUVIA_ENABLE_REDIS=ON `
+```bash
+cmake -S . -B build -G Ninja \
+  -DCMAKE_BUILD_TYPE=Debug \
+  -DRUVIA_BUILD_EXAMPLES=ON \
+  -DRUVIA_ENABLE_MARIADB=ON \
+  -DRUVIA_ENABLE_POSTGRESQL=ON \
+  -DRUVIA_ENABLE_REDIS=ON \
   -DRUVIA_ENABLE_JWT=ON
-cmake --build build --config Debug
+cmake --build build
 ```
 
 The database example defaults to MariaDB. Set `RUVIA_DB_DRIVER=postgresql` to
@@ -44,6 +47,6 @@ select PostgreSQL; the default port then changes from `3306` to `5432`.
 
 The default project build keeps examples disabled:
 
-```powershell
-cmake -S . -B build
+```bash
+cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Debug
 ```

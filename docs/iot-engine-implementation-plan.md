@@ -57,7 +57,7 @@
 3. 实现 worker-bound sleep。
 4. 实现创建期预分配、短临界区 mutex 保护的有界 Channel。
 5. 实现 OneShot 和 `waitFor()` 单胜者状态机。
-6. 接入 worker shutdown 注册、关闭和 mailbox drain；停止时拒绝新 Web 作业，等待已接受作业后再关闭 DB/Redis；未捕获作业异常触发 App 全局停止并由 `run()` 重抛。
+6. 接入 worker shutdown 注册、关闭和 mailbox drain；停止时拒绝新 Web 作业，立即关闭连接、timer 与 DB/Redis 以唤醒挂起 I/O，再排空已接受作业的完成 continuation；未捕获作业异常触发 App 全局停止并由 `run()` 重抛。
 7. 开放每 worker mailbox capacity，并提供 accepted/full/stopping/completed/failed/outstanding 统计。
 8. 增加安装包/下游消费者编译测试。
 

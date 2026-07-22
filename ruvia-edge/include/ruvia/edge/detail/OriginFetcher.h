@@ -18,6 +18,7 @@
 
 #include "ruvia/http/HttpHeader.h"
 #include "ruvia/core/MoveOnlyFunction.h"
+#include "ruvia/edge/EdgeTypes.h"
 
 namespace ruvia::edge {
 
@@ -93,21 +94,7 @@ struct StreamOutcome final {
 // must be used only from the one io_context thread whose executor it is given.
 class OriginFetcher final {
 public:
-    struct Limits final {
-        // Upper bound on the decoded response body the edge will hold in memory.
-        std::size_t maxResponseBytes{8u * 1024u * 1024u};
-        // Deadline for resolving and connecting to the origin.
-        std::chrono::milliseconds connectTimeout{5000};
-        // Inactivity deadline for each subsequent read/write step.
-        std::chrono::milliseconds ioTimeout{30000};
-        // How long an idle pooled connection may be reused before it is dropped.
-        std::chrono::milliseconds idleTimeout{15000};
-        // Maximum idle connections kept per origin host:port.
-        std::size_t maxIdlePerHost{8};
-        // Verify the origin's TLS certificate chain against the system trust store
-        // and check its host name. Disable only for trusted/self-signed upstreams.
-        bool verifyOriginCertificate{true};
-    };
+    using Limits = OriginFetchLimits;
 
     explicit OriginFetcher(Limits limits)
         : limits_(limits), originTlsContext_(asio::ssl::context::tls_client) {

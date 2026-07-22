@@ -88,6 +88,9 @@ private:
     mutable detail::ScopedOperationScope operationScope_;
 };
 
+using WebWorkerPostResult =
+    PostOutcome<Task<void>(WebWorkerContext&)>;
+
 struct WebWorkerStats final {
     std::uint64_t accepted{0};
     std::uint64_t queueFull{0};
@@ -111,7 +114,7 @@ public:
                  std::same_as<
                      std::invoke_result_t<std::decay_t<Fn>&, WebWorkerContext&>,
                      Task<void>>
-    [[nodiscard]] PostResult post(Fn&& fn) const {
+    [[nodiscard]] WebWorkerPostResult post(Fn&& fn) const {
         return postTask(MoveOnlyFunction<Task<void>(WebWorkerContext&)>(
             std::forward<Fn>(fn)));
     }
@@ -122,7 +125,7 @@ private:
     WebWorkerHandle(
         std::shared_ptr<detail::WebWorkerDispatch> dispatch) noexcept;
 
-    [[nodiscard]] PostResult postTask(
+    [[nodiscard]] WebWorkerPostResult postTask(
         MoveOnlyFunction<Task<void>(WebWorkerContext&)> task) const;
 
     // The handle owns a stable terminal endpoint. Server shutdown closes it;

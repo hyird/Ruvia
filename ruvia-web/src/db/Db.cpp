@@ -1,5 +1,5 @@
 #include "ruvia/web/detail/db/DbInternal.h"
-#include "ruvia/web/detail/db/DbPoolDeadline.h"
+#include "ruvia/core/detail/OperationDeadline.h"
 #include "ruvia/web/detail/db/DbSql.h"
 #include "ruvia/web/detail/db/DbUtils.h"
 #include "ruvia/web/detail/db/DbResultAccess.h"
@@ -49,7 +49,7 @@ Task<DbStreamResult> detail::MariaDbPool::stream(
             co_await connectUnlocked(slot);
         }
 
-        DbOperationDeadline deadline(config_.queryTimeout);
+        OperationTimeout deadline(config_.queryTimeout);
         std::pmr::string interpolatedSql(detail::pmrResourceOrDefault(resource));
         if (!params.empty()) {
             interpolatedSql = interpolateSql(
@@ -88,7 +88,7 @@ Task<std::optional<DbRow>> detail::MariaDbPool::readStreamRow(
 
     auto* rawResult = static_cast<MYSQL_RES*>(result);
     try {
-        DbOperationDeadline deadline(config_.queryTimeout);
+        OperationTimeout deadline(config_.queryTimeout);
         MYSQL_ROW row = nullptr;
         int status = mysql_fetch_row_start(&row, rawResult);
         while (status != 0) {
@@ -134,7 +134,7 @@ Task<void> detail::MariaDbPool::closeStream(
 
     auto* rawResult = static_cast<MYSQL_RES*>(result);
     try {
-        DbOperationDeadline deadline(config_.queryTimeout);
+        OperationTimeout deadline(config_.queryTimeout);
         int status = mysql_free_result_start(rawResult);
         while (status != 0) {
             status = mysql_free_result_cont(
@@ -189,7 +189,7 @@ Task<QueryResult> detail::MariaDbPool::executeOnSlot(
     if (!slot.connected) {
         co_await connectUnlocked(slot);
     }
-    DbOperationDeadline deadline(config_.queryTimeout);
+    OperationTimeout deadline(config_.queryTimeout);
 
     std::pmr::string interpolatedSql(detail::pmrResourceOrDefault(resource));
     if (!params.empty()) {

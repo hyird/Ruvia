@@ -8,17 +8,19 @@
 
 namespace ruvia::edge {
 
-// What an edge (shared) cache needs to know about one origin response to decide
+// Internal input describing what the shared cache needs to know to decide
 // whether, and for how long, it may be reused. This is the RFC 9111 freshness
 // input assembled from the response's status line and its Cache-Control, Date,
 // Expires and Age header fields; the caller parses those, this applies policy.
 struct FreshnessInput final {
     int status{0};
     ruvia::CacheControl cacheControl;             // parsed response Cache-Control
+    bool requestHasAuthorization{false};          // shared-cache storage gate
     std::optional<std::time_t> dateHeader;        // origin Date, if present and valid
     std::optional<std::time_t> expiresHeader;     // Expires, if present and valid
     std::uint64_t ageHeader{0};                   // Age in seconds (0 if absent)
-    std::time_t now{0};                           // reception time (seconds since epoch)
+    std::time_t requestTime{0};                   // upstream request start
+    std::time_t now{0};                           // response reception time
 };
 
 // The caching decision. When cacheable is false the other fields are unset and
@@ -29,6 +31,7 @@ struct FreshnessInput final {
 struct FreshnessDecision final {
     bool cacheable{false};
     std::time_t expiresAt{0};
+    std::uint64_t initialAge{0};
     std::uint64_t staleWhileRevalidate{0};
     std::uint64_t staleIfError{0};
 };

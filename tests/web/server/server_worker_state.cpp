@@ -11,6 +11,7 @@
 #include <string>
 #include <string_view>
 #include <thread>
+#include <utility>
 
 #include <asio/io_context.hpp>
 #include <asio/ip/tcp.hpp>
@@ -28,14 +29,27 @@
 namespace {
 
 bool g_probeDestroyed = false;
+bool g_probeFactorySawWorkerIdentity = false;
+bool g_probeDestroySawWorkerIdentity = false;
+std::thread::id g_probeFactoryThread;
+std::thread::id g_probeDestroyThread;
 
 struct ProbeState final {
+    explicit ProbeState(ruvia::WorkerHandle owner)
+        : worker(std::move(owner)), counter(0) {
+        g_probeFactoryThread = std::this_thread::get_id();
+        g_probeFactorySawWorkerIdentity = worker.isCurrent();
+    }
+
+    ruvia::WorkerHandle worker;
     int counter{0};
     // Only the worker's live instance ever reaches 14; the factory's moved-from
     // temporaries are destroyed at 0 and must not satisfy the teardown check.
     ~ProbeState() {
         if (counter >= 14) {
             g_probeDestroyed = true;
+            g_probeDestroyThread = std::this_thread::get_id();
+            g_probeDestroySawWorkerIdentity = worker.isCurrent();
         }
     }
 };
@@ -112,6 +126,7 @@ ruvia::Task<ruvia::HttpResponse> missingStateHandler(void*, ruvia::Context& cont
 }  // namespace
 
 int main() {
+    const auto callerThread = std::this_thread::get_id();
     int rc = 0;
     auto fail = [&](int code, const char* message) {
         std::fputs(message, stderr);
@@ -134,9 +149,10 @@ int main() {
             ruvia::detail::RequestBodyMode::kBuffered, {}, {});
         impl.finalize();
 
+        ruvia::WorkerHandle worker;
         ruvia::detail::WorkerStateDefinition workerStates[] = {
             ruvia::detail::WorkerStateDefinition::make<ProbeState>(
-                [] { return ProbeState{}; }),
+                [&worker] { return ProbeState(worker); }),
         };
 
         ruvia::detail::HttpServerOptions options;
@@ -145,6 +161,7 @@ int main() {
             impl.routeTable(), {}, {},
             std::span<const ruvia::detail::WorkerStateDefinition>(workerStates, 1),
             options);
+        worker = server.worker();
         server.start();
         const auto endpoint = server.localEndpoint();
 
@@ -187,7 +204,7 @@ int main() {
                         worker.workerState<ProbeState>().counter += 10;
                         co_return;
                     });
-                if (post != ruvia::PostResult::kAccepted) {
+                if (post != ruvia::PostStatus::kAccepted) {
                     fail(4, "worker dispatch rejected the state mutation task");
                 }
                 for (int i = 0; rc == 0 && i < 200; ++i) {
@@ -222,6 +239,16 @@ int main() {
 
     if (rc == 0 && !g_probeDestroyed) {
         fail(7, "worker state instance was not destroyed with the worker");
+    }
+    if (rc == 0 &&
+        (g_probeFactoryThread == callerThread ||
+         g_probeDestroyThread != g_probeFactoryThread)) {
+        fail(8, "worker state construction/destruction was not worker-affine");
+    }
+    if (rc == 0 &&
+        (!g_probeFactorySawWorkerIdentity ||
+         !g_probeDestroySawWorkerIdentity)) {
+        fail(9, "worker state lifetime ran outside the worker identity window");
     }
     return rc;
 }

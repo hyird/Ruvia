@@ -12,10 +12,16 @@
 namespace ruvia::detail {
 
 PostgreSqlPool::ConnectionSlot::ConnectionSlot(
-    std::pmr::memory_resource* resource) noexcept
-    : waitSocket(nullptr, SlotSocketDeleter{pmrResourceOrDefault(resource)}) {}
+    asio::io_context& ioContext,
+    std::pmr::memory_resource* resource)
+    : resolver(ioContext),
+      waitSocket(nullptr, SlotSocketDeleter{pmrResourceOrDefault(resource)}) {}
 
-PostgreSqlPool::ConnectionSlot::~ConnectionSlot() = default;
+PostgreSqlPool::ConnectionSlot::~ConnectionSlot() {
+    if (waitActive) {
+        std::terminate();
+    }
+}
 PostgreSqlPool::ConnectionSlot::ConnectionSlot(ConnectionSlot&&) noexcept = default;
 PostgreSqlPool::ConnectionSlot& PostgreSqlPool::ConnectionSlot::operator=(ConnectionSlot&&) noexcept = default;
 
@@ -33,7 +39,7 @@ PostgreSqlPool::PostgreSqlPool(
         throw std::invalid_argument("PostgreSQL pool requires the PostgreSQL driver");
     }
     slots_.reserve(1);
-    slots_.emplace_back(resource_);
+    slots_.emplace_back(ioContext_, resource_);
 }
 
 PostgreSqlPool::~PostgreSqlPool() {
@@ -47,9 +53,7 @@ Task<void> PostgreSqlPool::connect() {
 }
 
 void PostgreSqlPool::closeNow() noexcept {
-    if (!scheduler_.close()) {
-        return;
-    }
+    (void)scheduler_.close();
     for (auto& slot : slots_) {
         closeSlot(slot);
     }
@@ -64,7 +68,11 @@ void PostgreSqlPool::scanDeadlines(
         if (!slot.deadline.expire(now).has_value()) {
             continue;
         }
-        if (slot.waitSocket != nullptr) {
+        const auto* kind = slot.deadline.kind();
+        if (kind != nullptr &&
+            *kind == ConnectionSlot::DeadlineKind::kResolve) {
+            slot.resolver.cancel();
+        } else if (slot.waitSocket != nullptr) {
             slot.waitSocket->cancel();
         }
     }
@@ -99,9 +107,26 @@ void PostgreSqlPool::releaseSlot(std::size_t slot) noexcept {
 }
 
 void PostgreSqlPool::closeSlot(ConnectionSlot& slot) noexcept {
+    slot.closeRequested = true;
+    slot.resolver.cancel();
+    if (slot.waitActive) {
+        if (slot.waitSocket != nullptr) {
+            // The wait callback lives in the suspended Task frame and still
+            // refers to this wrapper. Detaching cancels the Asio operation
+            // without closing the driver-owned fd; final disposal is performed
+            // by the coroutine's failure path after the callback.
+            if (!slot.waitSocket->release()) {
+                std::terminate();
+            }
+        }
+        return;
+    }
+
     if (slot.waitSocket != nullptr) {
         slot.waitSocket->cancel();
-        slot.waitSocket->release();
+        if (!slot.waitSocket->release()) {
+            std::terminate();
+        }
         slot.waitSocket.reset();
     }
     clearSlotDeadline(slot);
@@ -110,6 +135,7 @@ void PostgreSqlPool::closeSlot(ConnectionSlot& slot) noexcept {
         slot.connection = nullptr;
     }
     slot.connected = false;
+    slot.closeRequested = false;
 }
 
 void PostgreSqlPool::setSlotDeadline(

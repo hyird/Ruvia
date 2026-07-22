@@ -25,6 +25,11 @@
 
 namespace {
 
+static_assert(std::move_constructible<ruvia::EventLoopAttachment>);
+static_assert(!std::assignable_from<
+    ruvia::EventLoopAttachment&,
+    ruvia::EventLoopAttachment&&>);
+
 ruvia::Task<void> waitForSignal(
     ruvia::detail::WorkerSignal& signal,
     bool& resumed,
@@ -180,7 +185,7 @@ bool testDispatchAndAffinity() {
                     value = std::move(moveOnly),
                     completed = std::move(completed)]() mutable {
             completed.set_value(worker.isCurrent() && *value == 42);
-        }) != ruvia::PostResult::kAccepted) {
+        }) != ruvia::PostStatus::kAccepted) {
         return false;
     }
 
@@ -190,7 +195,7 @@ bool testDispatchAndAffinity() {
     loops.join();
     return success && stopRegistration.valid() && stopCallbackRan &&
            stopCallbackOnLoop &&
-           first.post([] {}) == ruvia::PostResult::kWorkerStopping;
+           first.post([] {}) == ruvia::PostStatus::kWorkerStopping;
 }
 
 bool testBoundedMailbox() {
@@ -199,21 +204,46 @@ bool testBoundedMailbox() {
     std::atomic<int> calls{0};
     std::promise<void> completed;
     auto result = completed.get_future();
+    std::promise<void> retried;
+    auto retriedResult = retried.get_future();
 
-    if (worker.post([&] { ++calls; }) != ruvia::PostResult::kAccepted ||
+    if (worker.post([&] { ++calls; }) != ruvia::PostStatus::kAccepted ||
         worker.post([&] {
             ++calls;
             completed.set_value();
-        }) != ruvia::PostResult::kAccepted ||
-        worker.post([] {}) != ruvia::PostResult::kQueueFull) {
+        }) != ruvia::PostStatus::kAccepted) {
+        return false;
+    }
+    auto rejected = worker.post(
+        [value = std::make_unique<int>(9), &calls, &retried] {
+            calls.fetch_add(*value);
+            retried.set_value();
+        });
+    if (rejected != ruvia::PostStatus::kQueueFull ||
+        rejected.rejected() == nullptr) {
         return false;
     }
 
     loops.start();
     result.get();
+    if (worker.post(std::move(rejected).takeRejected()) !=
+        ruvia::PostStatus::kAccepted) {
+        return false;
+    }
+    retriedResult.get();
     loops.stop();
     loops.join();
-    return calls.load() == 2;
+    bool recoveredAfterStop = false;
+    auto stopped = worker.post([&recoveredAfterStop] {
+        recoveredAfterStop = true;
+    });
+    if (stopped != ruvia::PostStatus::kWorkerStopping ||
+        stopped.rejected() == nullptr) {
+        return false;
+    }
+    auto stoppedTask = std::move(stopped).takeRejected();
+    stoppedTask();
+    return calls.load() == 11 && recoveredAfterStop;
 }
 
 bool testExternalEventLoopAttachment() {
@@ -255,7 +285,7 @@ bool testExternalEventLoopAttachment() {
         });
         if (loop.post([loop, completed = std::move(completed)]() mutable {
                 completed.set_value(loop.isCurrent());
-            }) != ruvia::PostResult::kAccepted) {
+            }) != ruvia::PostStatus::kAccepted) {
             return false;
         }
 
@@ -274,7 +304,7 @@ bool testExternalEventLoopAttachment() {
         }
         if (!dispatchedOnExternalThread || !stopRegistration.valid() ||
             !stopCallbackRan || !stopCallbackOnLoop ||
-            loop.post([] {}) != ruvia::PostResult::kWorkerStopping) {
+            loop.post([] {}) != ruvia::PostStatus::kWorkerStopping) {
             return false;
         }
     }
@@ -314,7 +344,7 @@ bool testFailurePropagation() {
     ruvia::detail::WorkerHandleAccess::registerShutdownListener(
         loop.handle(), listener);
     if (loop.post([] { throw std::runtime_error("posted task failed"); }) !=
-        ruvia::PostResult::kAccepted) {
+        ruvia::PostStatus::kAccepted) {
         return false;
     }
     loops.start();
@@ -328,6 +358,170 @@ bool testFailurePropagation() {
     return false;
 }
 
+bool testJoinBeforeStartDrainsOnOwners() {
+    ruvia::EventLoopPool loops({.loopCount = 2, .mailboxCapacity = 1});
+    const auto first = loops.loop(0);
+    const auto second = loops.loop(1);
+    std::atomic<unsigned> taskCalls{0};
+    std::atomic<unsigned> stopCalls{0};
+    std::atomic_bool tasksOnOwners{true};
+    std::atomic_bool stopsOnOwners{true};
+
+    auto firstStop = first.onStop([&] {
+        if (!first.isCurrent()) {
+            stopsOnOwners.store(false, std::memory_order_relaxed);
+        }
+        stopCalls.fetch_add(1, std::memory_order_relaxed);
+    });
+    auto secondStop = second.onStop([&] {
+        if (!second.isCurrent()) {
+            stopsOnOwners.store(false, std::memory_order_relaxed);
+        }
+        stopCalls.fetch_add(1, std::memory_order_relaxed);
+    });
+    if (first.post([&] {
+            if (!first.isCurrent()) {
+                tasksOnOwners.store(false, std::memory_order_relaxed);
+            }
+            taskCalls.fetch_add(1, std::memory_order_relaxed);
+        }) != ruvia::PostStatus::kAccepted ||
+        second.post([&] {
+            if (!second.isCurrent()) {
+                tasksOnOwners.store(false, std::memory_order_relaxed);
+            }
+            taskCalls.fetch_add(1, std::memory_order_relaxed);
+        }) != ruvia::PostStatus::kAccepted) {
+        return false;
+    }
+
+    loops.join();
+    const bool rejectedAfterJoin =
+        first.post([] {}) == ruvia::PostStatus::kWorkerStopping &&
+        second.post([] {}) == ruvia::PostStatus::kWorkerStopping;
+    return firstStop.valid() && secondStop.valid() && rejectedAfterJoin &&
+           taskCalls.load(std::memory_order_relaxed) == 2 &&
+           stopCalls.load(std::memory_order_relaxed) == 2 &&
+           tasksOnOwners.load(std::memory_order_relaxed) &&
+           stopsOnOwners.load(std::memory_order_relaxed);
+}
+
+bool testStopBeforeStartPropagatesFailure() {
+    ruvia::EventLoopPool loops({.loopCount = 1, .mailboxCapacity = 1});
+    const auto loop = loops.loop(0);
+    std::atomic_bool stopOnOwner{false};
+    auto stopRegistration = loop.onStop([&] {
+        stopOnOwner.store(loop.isCurrent(), std::memory_order_release);
+    });
+    if (loop.post([] {
+            throw std::runtime_error("pre-start task failed");
+        }) != ruvia::PostStatus::kAccepted) {
+        return false;
+    }
+
+    loops.stop();
+    try {
+        loops.join();
+    } catch (const std::runtime_error& error) {
+        return stopRegistration.valid() &&
+               stopOnOwner.load(std::memory_order_acquire) &&
+               std::string_view(error.what()) == "pre-start task failed";
+    }
+    return false;
+}
+
+bool testJoinRejectsPoolWorker() {
+    ruvia::EventLoopPool loops({.loopCount = 1, .mailboxCapacity = 1});
+    const auto loop = loops.loop(0);
+    std::promise<bool> completed;
+    auto result = completed.get_future();
+    if (loop.post([&] {
+            bool rejected = false;
+            try {
+                loops.join();
+            } catch (const std::logic_error& error) {
+                rejected = std::string_view(error.what()) ==
+                    "cannot join an event loop pool from one of its workers";
+            }
+            completed.set_value(rejected && loop.isCurrent());
+        }) != ruvia::PostStatus::kAccepted) {
+        return false;
+    }
+
+    loops.start();
+    const bool rejected = result.get();
+    loops.stop();
+    loops.join();
+    return rejected;
+}
+
+bool testExecutorFailureDrainsShutdownOnOwners() {
+    struct AbandonProbe final {
+        explicit AbandonProbe(std::atomic_bool& destroyed) noexcept
+            : destroyed_(&destroyed) {}
+        ~AbandonProbe() {
+            destroyed_->store(true, std::memory_order_release);
+        }
+        std::atomic_bool* destroyed_;
+    };
+
+    ruvia::EventLoopPool loops({.loopCount = 2, .mailboxCapacity = 2});
+    const auto failedLoop = loops.loop(0);
+    const auto peerLoop = loops.loop(1);
+    std::atomic<unsigned> failedStopCalls{0};
+    std::atomic<unsigned> peerStopCalls{0};
+    std::atomic_bool failedStopOnOwner{false};
+    std::atomic_bool peerStopOnOwner{false};
+    std::atomic_bool shutdownContinuationDrained{false};
+    std::atomic_bool abandonedMailboxRan{false};
+    std::atomic_bool abandonedMailboxDestroyed{false};
+
+    auto failedStop = failedLoop.onStop([&] {
+        failedStopOnOwner.store(
+            failedLoop.isCurrent(), std::memory_order_release);
+        failedStopCalls.fetch_add(1, std::memory_order_relaxed);
+        asio::post(failedLoop.ioContext(), [] {
+            throw std::runtime_error("secondary shutdown handler failed");
+        });
+        asio::post(failedLoop.ioContext(), [&] {
+            shutdownContinuationDrained.store(
+                failedLoop.isCurrent(), std::memory_order_release);
+        });
+    });
+    auto peerStop = peerLoop.onStop([&] {
+        peerStopOnOwner.store(
+            peerLoop.isCurrent(), std::memory_order_release);
+        peerStopCalls.fetch_add(1, std::memory_order_relaxed);
+    });
+
+    asio::post(failedLoop.ioContext(), [] {
+        throw std::runtime_error("executor handler failed");
+    });
+    if (failedLoop.post(
+            [probe = std::make_unique<AbandonProbe>(
+                 abandonedMailboxDestroyed),
+             &abandonedMailboxRan] {
+                abandonedMailboxRan.store(true, std::memory_order_release);
+            }) != ruvia::PostStatus::kAccepted) {
+        return false;
+    }
+
+    loops.start();
+    try {
+        loops.join();
+    } catch (const std::runtime_error& error) {
+        return failedStop.valid() && peerStop.valid() &&
+               std::string_view(error.what()) == "executor handler failed" &&
+               failedStopCalls.load(std::memory_order_relaxed) == 1 &&
+               peerStopCalls.load(std::memory_order_relaxed) == 1 &&
+               failedStopOnOwner.load(std::memory_order_acquire) &&
+               peerStopOnOwner.load(std::memory_order_acquire) &&
+               shutdownContinuationDrained.load(std::memory_order_acquire) &&
+               !abandonedMailboxRan.load(std::memory_order_acquire) &&
+               abandonedMailboxDestroyed.load(std::memory_order_acquire);
+    }
+    return false;
+}
+
 bool testExpiredHandle() {
     ruvia::EventLoop loop;
     {
@@ -335,7 +529,7 @@ bool testExpiredHandle() {
         loop = loops.loop(0);
     }
     return loop.valid() && !loop.accepting() &&
-           loop.post([] {}) == ruvia::PostResult::kWorkerStopping;
+           loop.post([] {}) == ruvia::PostStatus::kWorkerStopping;
 }
 
 bool testEscapedWorkerHandleBecomesDetachedEndpoint() {
@@ -358,11 +552,11 @@ bool testEscapedWorkerHandleBecomesDetachedEndpoint() {
     }
     return !worker.valid() && !worker.accepting() && !worker.isCurrent() &&
            worker.id() == 0 &&
-           worker.post([] {}) == ruvia::PostResult::kWorkerStopping &&
+           worker.post([] {}) == ruvia::PostStatus::kWorkerStopping &&
            internalDeferRejected;
 }
 
-bool testDetachDestroysAbandonedMailboxTasks() {
+bool testFailureDestroysAbandonedMailboxTasks() {
     struct DestructionProbe final {
         explicit DestructionProbe(bool& value) noexcept
             : destroyed(&value) {}
@@ -376,21 +570,52 @@ bool testDetachDestroysAbandonedMailboxTasks() {
     const auto worker = ruvia::detail::WorkerHandleAccess::make(dispatcher);
     bool queuedTaskDestroyed = false;
     if (worker.post([] { throw std::runtime_error("stop mailbox drain"); }) !=
-            ruvia::PostResult::kAccepted ||
+            ruvia::PostStatus::kAccepted ||
         worker.post(
             [probe = std::make_unique<DestructionProbe>(queuedTaskDestroyed)] {}) !=
-            ruvia::PostResult::kAccepted) {
+            ruvia::PostStatus::kAccepted) {
         return false;
     }
     try {
         ioContext.run();
     } catch (const std::runtime_error&) {
     }
-    if (queuedTaskDestroyed) {
+    if (!queuedTaskDestroyed) {
         return false;
     }
     dispatcher->detachContext();
     return queuedTaskDestroyed && !worker.valid();
+}
+
+bool testDispatcherLifecycleHooksAreWorkerAffine() {
+    asio::io_context ioContext;
+    const auto dispatcher =
+        std::make_shared<ruvia::detail::WorkerDispatcher>(ioContext, 1);
+    const auto worker = ruvia::detail::WorkerHandleAccess::make(dispatcher);
+    bool startupOnWorker = false;
+    bool failureOnWorker = false;
+    bool shutdownOnWorker = false;
+    bool receivedStartupFailure = false;
+
+    dispatcher->runContext(
+        [&] {
+            startupOnWorker = worker.isCurrent();
+            throw std::runtime_error("worker startup failed");
+        },
+        [&](std::exception_ptr failure) noexcept {
+            failureOnWorker = worker.isCurrent();
+            try {
+                std::rethrow_exception(failure);
+            } catch (const std::runtime_error& error) {
+                receivedStartupFailure =
+                    std::string_view(error.what()) == "worker startup failed";
+            } catch (...) {
+            }
+        },
+        [&]() noexcept { shutdownOnWorker = worker.isCurrent(); });
+    dispatcher->detachContext();
+    return startupOnWorker && failureOnWorker && shutdownOnWorker &&
+           receivedStartupFailure;
 }
 
 bool testLifecycleTransitionsAreMonotonic() {
@@ -493,13 +718,26 @@ int main() {
                run("bounded_mailbox", testBoundedMailbox) &&
                run("external_event_loop_attachment", testExternalEventLoopAttachment) &&
                run("failure_propagation", testFailurePropagation) &&
+               run(
+                   "join_before_start_drains_on_owners",
+                   testJoinBeforeStartDrainsOnOwners) &&
+               run(
+                   "stop_before_start_propagates_failure",
+                   testStopBeforeStartPropagatesFailure) &&
+               run("join_rejects_pool_worker", testJoinRejectsPoolWorker) &&
+               run(
+                   "executor_failure_drains_shutdown_on_owners",
+                   testExecutorFailureDrainsShutdownOnOwners) &&
                run("expired_handle", testExpiredHandle) &&
                run(
                    "escaped_worker_handle_detaches",
                    testEscapedWorkerHandleBecomesDetachedEndpoint) &&
                run(
-                   "detach_destroys_abandoned_mailbox_tasks",
-                   testDetachDestroysAbandonedMailboxTasks) &&
+                   "failure_destroys_abandoned_mailbox_tasks",
+                   testFailureDestroysAbandonedMailboxTasks) &&
+               run(
+                   "dispatcher_lifecycle_hooks_are_worker_affine",
+                   testDispatcherLifecycleHooksAreWorkerAffine) &&
                run(
                    "lifecycle_transitions_are_monotonic",
                    testLifecycleTransitionsAreMonotonic) &&

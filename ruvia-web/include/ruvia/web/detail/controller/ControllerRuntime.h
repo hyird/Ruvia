@@ -20,8 +20,6 @@ template <typename ControllerT>
 class Controller {
 public:
     using RuviaControllerType = ControllerT;
-
-protected:
     constexpr Controller() noexcept = default;
     ~Controller() = default;
 };
@@ -231,13 +229,18 @@ template <typename ControllerT>
         std::is_base_of_v<Controller<ControllerT>, ControllerT>,
         "controller must derive from ruvia::Controller<ControllerT>");
     static_assert(std::is_final_v<ControllerT>, "controller must be final");
-    static_assert(std::is_default_constructible_v<ControllerT>, "controller must be default constructible");
+    static_assert(
+        std::is_default_constructible_v<ControllerT>,
+        "controller must be default constructible");
 
     return addControllerRegistrar(&registerControllerInstance<ControllerT>);
 }
 
-inline void registerControllers(Router& router, ControllerStore& controllerLifetimes) {
-    runControllerRegistrars(router, controllerLifetimes);
+inline void registerControllers(
+    Router& router,
+    ControllerStore& controllerLifetimes,
+    std::span<const ControllerRegistrar> registrars) {
+    runControllerRegistrars(router, controllerLifetimes, registrars);
 }
 
 }  // namespace detail

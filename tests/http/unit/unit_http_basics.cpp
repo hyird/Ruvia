@@ -75,6 +75,22 @@ RUVIA_TEST(http_method_token_validation_is_separate_from_classification) {
     RUVIA_CHECK(!isValidHttpMethodToken(std::string_view("BAD\x01METHOD", 10)));
 }
 
+RUVIA_TEST(http_method_safety_and_idempotency_follow_wire_semantics) {
+    for (const std::string_view method : {"GET", "HEAD", "OPTIONS", "TRACE"}) {
+        RUVIA_CHECK(ruvia::isHttpMethodSafe(method));
+        RUVIA_CHECK(ruvia::isHttpMethodIdempotent(method));
+    }
+    for (const std::string_view method : {"PUT", "DELETE"}) {
+        RUVIA_CHECK(!ruvia::isHttpMethodSafe(method));
+        RUVIA_CHECK(ruvia::isHttpMethodIdempotent(method));
+    }
+    for (const std::string_view method : {
+             "POST", "PATCH", "CONNECT", "CUSTOM", "get"}) {
+        RUVIA_CHECK(!ruvia::isHttpMethodSafe(method));
+        RUVIA_CHECK(!ruvia::isHttpMethodIdempotent(method));
+    }
+}
+
 RUVIA_TEST(http_known_method_token_round_trips) {
     const HttpKnownMethod methods[] = {
         HttpKnownMethod::kGet, HttpKnownMethod::kPost, HttpKnownMethod::kPut, HttpKnownMethod::kDelete,

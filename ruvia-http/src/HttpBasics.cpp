@@ -108,4 +108,13 @@ bool isValidHttpMethodToken(std::string_view method) noexcept {
     });
 }
 
+bool isHttpMethodSafe(std::string_view method) noexcept {
+    return method == "GET" || method == "HEAD" || method == "OPTIONS" ||
+        method == "TRACE";
+}
+
+bool isHttpMethodIdempotent(std::string_view method) noexcept {
+    return isHttpMethodSafe(method) || method == "PUT" || method == "DELETE";
+}
+
 }  // namespace ruvia

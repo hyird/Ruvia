@@ -1,6 +1,6 @@
 #include "ruvia/web/redis/Redis.h"
 
-#include "ruvia/web/Context.h"
+#include "ruvia/web/detail/redis/RedisConfigValidation.h"
 #include "ruvia/web/detail/redis/RedisInternal.h"
 #include "ruvia/web/detail/redis/RedisUtils.h"
 
@@ -29,6 +29,7 @@ RedisRegistry::RedisRegistry(
                 })) {
             throw std::invalid_argument("duplicate redis alias");
         }
+        validateRedisConfig(definition.config);
         auto pool = makePmrObject<RedisPool>(resource_, ioContext, definition.config, resource_);
         pools_.push_back(Entry{
             std::pmr::string(definition.alias, resource_),
@@ -93,19 +94,4 @@ void RedisRegistry::scanDeadlines() noexcept {
 }
 
 }  // namespace detail
-
-RedisHandle Context::redis() const {
-    if (redis_ == nullptr) {
-        throw RedisError(RedisError::Code::kNotConfigured, "redis is not configured");
-    }
-    return redis_->get(resource(), operationScope_);
-}
-
-RedisHandle Context::redis(std::string_view alias) const {
-    if (redis_ == nullptr) {
-        throw RedisError(RedisError::Code::kNotConfigured, "redis is not configured");
-    }
-    return redis_->get(alias, resource(), operationScope_);
-}
-
 }  // namespace ruvia

@@ -57,6 +57,16 @@ App& App::setWorkersPerListener(std::size_t workersPerListener) {
         });
 }
 
+App& App::setSignalShutdown(bool enabled) {
+    return detail::mutateStoppedApp(
+        *this,
+        *state_,
+        "cannot change signal shutdown while app is running",
+        [enabled](detail::AppState& state) {
+            state.signalShutdown = enabled;
+        });
+}
+
 App& App::setWorkerMailboxCapacity(std::size_t capacity) {
     return detail::mutateStoppedApp(
         *this,

@@ -192,7 +192,7 @@ Router/error handler 不得设置 `Connection: close` 或接收 `closeConnection
 - 连接 teardown 必须先显式唤醒或终止挂起 I/O，再 join 所有仍持有连接对象的后台操作；不得只等待某一种操作来源。
 - `App::setWorkersPerListener()` 配置每个 listener 的 worker 数；双 listener topology 的总 worker 数是其两倍，禁止恢复含糊的总线程数命名。
 - `App::run()` 创建 acceptor/server/thread per worker。
-- 非 Windows 平台要求 `SO_REUSEPORT`；Windows 使用 `SO_REUSEADDR`。
+- Linux 和 macOS 要求 `SO_REUSEPORT`。
 - shutdown 只能在各 worker 自己的 `io_context` 上直接关闭 acceptor、活跃 socket 和 worker 资源；不等待请求优雅排空。
 - idle/header/body/write timeout、连接数限制和请求数限制保持 per-worker 所有权。
 - 默认限流规则和限流槽容量都显式保持 per-worker 语义；只有启动期路由元数据或默认规则证明需要限流时才预分配固定表，请求期不得惰性分配。
@@ -267,21 +267,22 @@ Router/error handler 不得设置 `Connection: close` 或接收 `closeConnection
 
 目录、文档、CMake 清理：
 
-```powershell
+```bash
 git diff --check
 rg -n '<stale split terms>' README.md AGENTS.md CMakeLists.txt ruvia-core ruvia-http ruvia-web tests examples
 ```
 
 构建、测试和安装：
 
-```powershell
-cmake -S . -B build `
-  -DCMAKE_TOOLCHAIN_FILE="$env:VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake" `
-  -DRUVIA_BUILD_TESTS=ON `
+```bash
+cmake -S . -B build -G Ninja \
+  -DCMAKE_TOOLCHAIN_FILE="$VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake" \
+  -DCMAKE_BUILD_TYPE=Debug \
+  -DRUVIA_BUILD_TESTS=ON \
   -DRUVIA_BUILD_EXAMPLES=ON
-cmake --build build --config Debug
-ctest --test-dir build -C Debug --output-on-failure
-cmake --install build --config Debug --prefix build/install
+cmake --build build
+ctest --test-dir build --output-on-failure
+cmake --install build --prefix build/install
 ```
 
 不要提交 `build/`、`vcpkg_installed`、本地工具目录或 CodeGraph 索引。

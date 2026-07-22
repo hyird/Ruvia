@@ -134,6 +134,16 @@ ruvia::Task<void> exercise(ruvia::WorkerHandle worker, bool& success) {
 }
 
 int main() {
+    ruvia::StopToken retainedToken;
+    {
+        ruvia::detail::StopSource source;
+        retainedToken = source.token();
+        source.requestStop();
+    }
+    if (!retainedToken.stopRequested()) {
+        return 1;
+    }
+
     asio::io_context ioContext;
     const auto dispatcher = std::make_shared<ruvia::detail::WorkerDispatcher>(ioContext, 8);
     const auto worker = ruvia::detail::WorkerHandleAccess::make(dispatcher);

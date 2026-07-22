@@ -35,7 +35,11 @@ struct RedisConfig {
     std::uint32_t database{0};
     // Must be greater than zero.
     std::size_t poolSizePerWorker{4};
-    // Absence disables the corresponding timeout.
+    // Absence disables the corresponding timeout. connectTimeout is one
+    // deadline shared by DNS resolution, TCP establishment, AUTH, and SELECT.
+    // commandTimeout bounds a whole logical command or pipeline, including
+    // write and every reply read, rather than restarting for each I/O wait;
+    // startup commands honor the earlier of both deadlines.
     std::optional<std::chrono::milliseconds> connectTimeout;
     std::optional<std::chrono::milliseconds> commandTimeout;
     std::optional<std::chrono::milliseconds> acquireTimeout;

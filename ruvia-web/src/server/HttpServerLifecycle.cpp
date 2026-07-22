@@ -22,9 +22,7 @@
 #include <system_error>
 #include <utility>
 
-#if !defined(_WIN32)
 #include <sys/socket.h>
-#endif
 
 #include "ruvia/core/detail/ConnectionScanner.h"
 #include "ruvia/web/detail/server/HttpConnectionState.h"
@@ -39,20 +37,6 @@ namespace ruvia::detail {
 using TcpEndpoint = asio::ip::tcp::endpoint;
 
 namespace {
-
-void freezeProcessMemoryForWorker(const MemoryPoolConfig& config) {
-    auto& processMemory = ProcessMemory::instance();
-    if (processMemory.frozen()) {
-        if (processMemory.config().requestInitialBufferBytes !=
-            config.requestInitialBufferBytes) {
-            throw std::logic_error(
-                "process memory configuration is already frozen with different values");
-        }
-        return;
-    }
-    processMemory.configure(config);
-    processMemory.freeze();
-}
 
 int selectAlpnProtocol(
     SSL*,
@@ -216,21 +200,24 @@ HttpServer::HttpServer(
       acceptor_(ioContext_),
       endpoint_(std::move(endpoint)),
       routes_(routes),
-      memory_(
-          validatedOptions.memoryConfig,
-          DeferProcessMemoryFreeze{}),
+      memory_(validatedOptions.memoryConfig),
       sniContexts_(memory_.resource()),
       sniLookup_(memory_.resource()),
       options_(std::move(validatedOptions)),
-      databases_(ioContext_, memory_.resource(), databases),
-      redis_(ioContext_, memory_.resource(), redis),
+      connectionScanner_(workerHandle_, makeConnectionScannerOptions(options_)),
+      workerData_(
+          ioContext_,
+          memory_.resource(),
+          databases,
+          redis,
+          connectionScanner_),
       workerStates_(memory_.resource(), workerStates),
       webWorkerDispatch_(std::make_shared<WebWorkerDispatch>(
           ioContext_.get_executor(),
           workerHandle_,
           memory_.resource(),
-          databases_,
-          redis_,
+          workerData_.databases(),
+          workerData_.redis(),
           workerStates_,
           [this](std::exception_ptr failure) {
               failWorker(std::move(failure));
@@ -242,25 +229,7 @@ HttpServer::HttpServer(
               : RouteRateLimitPresence::kAbsent,
           options_.rateLimitSlotsPerWorker,
           memory_.resource()),
-      connectionScanner_(workerHandle_, makeConnectionScannerOptions(options_)),
-      workSetPool_(memory_) {
-    if (databases_.hasAnyTimeout()) {
-        connectionScanner_.registerWorkerMaintenance(
-            databaseDeadlineCheck_,
-            &databases_,
-            [](void* target) noexcept {
-                static_cast<DbRegistry*>(target)->scanDeadlines();
-            });
-    }
-    if (redis_.hasAnyTimeout()) {
-        connectionScanner_.registerWorkerMaintenance(
-            redisDeadlineCheck_,
-            &redis_,
-            [](void* target) noexcept {
-                static_cast<RedisRegistry*>(target)->scanDeadlines();
-            });
-    }
-}
+      workSetPool_(memory_) {}
 
 HttpServer::~HttpServer() {
     stop();
@@ -268,18 +237,17 @@ HttpServer::~HttpServer() {
         join();
     } catch (...) {
     }
-    // Retire the execution context first: destroying the mailbox drops any tasks
-    // the dispatcher abandoned when a mailbox task threw, and each dropped
-    // WebWorker task reconciles its outstanding_ reservation. retire() then sees a
-    // settled count instead of terminating on a phantom in-flight task. Public
-    // worker handles may outlive this server, so this also leaves them a detached
-    // terminal endpoint before ioContext_ and its Asio objects are destroyed.
+    // Retire the execution context first. Failure shutdown already releases
+    // abandoned mailbox tasks on the worker; detach defensively releases any
+    // task left by a context that stopped outside the managed run loop. Each
+    // dropped WebWorker task reconciles its outstanding_ reservation before
+    // retire() checks it. Public handles may outlive this server, so detach also
+    // leaves them a terminal endpoint before Asio objects are destroyed.
     workerDispatcher_->detachContext();
     webWorkerDispatch_->retire();
 }
 
 void HttpServer::start() {
-    freezeProcessMemoryForWorker(options_.memoryConfig);
     if (!lifecycle_.start()) {
         throw std::logic_error("http server worker cannot be restarted");
     }
@@ -288,10 +256,6 @@ void HttpServer::start() {
     try {
         configureAcceptor();
         configureTlsContext();
-        asio::co_spawn(
-            ioContext_,
-            taskAsAwaitable(runWorker()),
-            asio::bind_allocator(asio::recycling_allocator<void>(), asio::detached));
         workerThread_ = std::thread([this] { runIoContext(); });
         workerCompletion_.waitForStartup();
     } catch (...) {
@@ -317,6 +281,10 @@ void HttpServer::stop() {
 }
 
 void HttpServer::join() {
+    if (workerHandle_.isCurrent()) {
+        throw std::logic_error(
+            "cannot join an HTTP server from its worker");
+    }
     if (workerThread_.joinable()) {
         workerThread_.join();
     }
@@ -347,12 +315,12 @@ void HttpServer::configureAcceptor() {
         throw std::runtime_error("failed to enable SO_REUSEADDR: " + ec.message());
     }
 
-#if defined(SO_REUSEPORT) && !defined(_WIN32)
+#if defined(SO_REUSEPORT)
     int enabled = 1;
     if (::setsockopt(acceptor_.native_handle(), SOL_SOCKET, SO_REUSEPORT, &enabled, sizeof(enabled)) != 0) {
         throw std::system_error(errno, std::generic_category(), "failed to enable SO_REUSEPORT");
     }
-#elif !defined(_WIN32)
+#else
     throw std::runtime_error("SO_REUSEPORT is required but not available on this platform/toolchain");
 #endif
 
@@ -454,8 +422,7 @@ void HttpServer::stopOnContext() noexcept {
     acceptor_.close(ignored);
     connectionScanner_.stop();
     connectionScanner_.closeAll();
-    databases_.closeNow();
-    redis_.closeNow();
+    workerData_.closeNow();
     workerDispatcher_->stopTimers();
 }
 
@@ -469,14 +436,34 @@ void HttpServer::failWorker(std::exception_ptr failure) noexcept {
 }
 
 void HttpServer::runIoContext() noexcept {
+    bool workerFailed = false;
     try {
-        workerDispatcher_->runContext();
+        workerDispatcher_->runContext(
+            [this] {
+                workerStates_.initialize();
+                asio::co_spawn(
+                    ioContext_,
+                    taskAsAwaitable(runWorker()),
+                    asio::bind_allocator(
+                        asio::recycling_allocator<void>(), asio::detached));
+            },
+            [this, &workerFailed](std::exception_ptr failure) noexcept {
+                workerFailed = true;
+                (void)workerCompletion_.markStartupFailed(failure);
+                failWorker(std::move(failure));
+                lifecycle_.completeStop();
+                workerState_ = HttpServerWorkerState::kStopped;
+            },
+            [this]() noexcept { workerStates_.shutdown(); });
     } catch (...) {
         const auto failure = std::current_exception();
         (void)workerCompletion_.markStartupFailed(failure);
         failWorker(failure);
         lifecycle_.completeStop();
         workerState_ = HttpServerWorkerState::kStopped;
+        return;
+    }
+    if (workerFailed) {
         return;
     }
 
@@ -487,14 +474,12 @@ void HttpServer::runIoContext() noexcept {
 }
 
 Task<void> HttpServer::runWorker() {
+    if (!httpServerWorkerRunning(workerState_)) {
+        co_return;
+    }
     try {
         connectionScanner_.start();
-        if (!databases_.empty()) {
-            co_await databases_.connect();
-        }
-        if (!redis_.empty()) {
-            co_await redis_.connect();
-        }
+        co_await workerData_.connect();
         (void)workerCompletion_.markStartupReady();
         co_await acceptLoop();
     } catch (...) {

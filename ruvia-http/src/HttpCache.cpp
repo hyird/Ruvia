@@ -148,10 +148,27 @@ void CacheControlFieldParser::update(std::string_view value) noexcept {
             value_.isPublic = true;
         } else if (!hasArgument && detail::httpAsciiEqualsIgnoreCase(name, "immutable")) {
             value_.immutable = true;
+        } else if (!hasArgument &&
+                   detail::httpAsciiEqualsIgnoreCase(name, "only-if-cached")) {
+            value_.onlyIfCached = true;
         } else if (detail::httpAsciiEqualsIgnoreCase(name, "max-age")) {
             if (!maxAgeSeen_) {
                 maxAgeSeen_ = true;
                 value_.maxAge = parseDeltaSeconds(arg);
+            }
+        } else if (detail::httpAsciiEqualsIgnoreCase(name, "max-stale")) {
+            if (!maxStaleSeen_) {
+                maxStaleSeen_ = true;
+                if (!hasArgument) {
+                    value_.maxStaleAny = true;
+                } else {
+                    value_.maxStale = parseDeltaSeconds(arg);
+                }
+            }
+        } else if (detail::httpAsciiEqualsIgnoreCase(name, "min-fresh")) {
+            if (!minFreshSeen_) {
+                minFreshSeen_ = true;
+                value_.minFresh = parseDeltaSeconds(arg);
             }
         } else if (detail::httpAsciiEqualsIgnoreCase(name, "s-maxage")) {
             if (!sMaxAgeSeen_) {

@@ -215,7 +215,7 @@ void* Context::workerStateInstance(const void* typeKey) const {
         : workerStates_->instance(typeKey);
     if (instance == nullptr) {
         throw std::logic_error(
-            "worker state type is not registered: call app().useWorkerState<T>() before app().run()");
+            "worker state type is not registered: call App::useWorkerState<T>() before App::run()");
     }
     return instance;
 }

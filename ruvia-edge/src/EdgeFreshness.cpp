@@ -1,6 +1,7 @@
-#include "ruvia/edge/EdgeFreshness.h"
+#include "ruvia/edge/detail/EdgeFreshness.h"
 
 #include <algorithm>
+#include <limits>
 
 namespace ruvia::edge {
 
@@ -64,6 +65,13 @@ FreshnessDecision evaluateFreshness(const FreshnessInput& input) noexcept {
     if (cc.noStore || cc.isPrivate || cc.noCache) {
         return {};
     }
+    // RFC 9111 section 3.5 permits a shared cache to store/reuse a response to
+    // an authenticated request only when one of these response directives
+    // explicitly opts into shared caching. `proxy-revalidate` alone does not.
+    if (input.requestHasAuthorization &&
+        !cc.mustRevalidate && !cc.isPublic && !cc.sMaxAge) {
+        return {};
+    }
     if (!statusIsStorable(input.status)) {
         return {};
     }
@@ -81,7 +89,16 @@ FreshnessDecision evaluateFreshness(const FreshnessInput& input) noexcept {
     if (input.dateHeader && input.now > *input.dateHeader) {
         apparentAge = static_cast<std::uint64_t>(input.now - *input.dateHeader);
     }
-    const std::uint64_t initialAge = std::max(input.ageHeader, apparentAge);
+    const std::uint64_t responseDelay =
+        input.requestTime > 0 && input.now > input.requestTime
+        ? static_cast<std::uint64_t>(input.now - input.requestTime)
+        : std::uint64_t{0};
+    const auto maximum = (std::numeric_limits<std::uint64_t>::max)();
+    const std::uint64_t correctedAgeValue =
+        input.ageHeader > maximum - responseDelay
+        ? maximum
+        : input.ageHeader + responseDelay;
+    const std::uint64_t initialAge = std::max(correctedAgeValue, apparentAge);
 
     if (initialAge >= *lifetime) {
         return {};  // Already stale on arrival: not worth storing.
@@ -91,6 +108,7 @@ FreshnessDecision evaluateFreshness(const FreshnessInput& input) noexcept {
     FreshnessDecision decision;
     decision.cacheable = true;
     decision.expiresAt = input.now + static_cast<std::time_t>(remaining);
+    decision.initialAge = initialAge;
     decision.staleWhileRevalidate = cc.staleWhileRevalidate.value_or(0);
     decision.staleIfError = cc.staleIfError.value_or(0);
     return decision;

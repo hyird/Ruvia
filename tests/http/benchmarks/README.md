@@ -8,14 +8,14 @@ runner, compiler, architecture, configuration, and flags.
 
 Configure an optimized HTTP-only build and run the aggregate target:
 
-```powershell
-cmake -S . -B build/bench -G Ninja `
-  -DCMAKE_BUILD_TYPE=Release `
-  -DCMAKE_TOOLCHAIN_FILE="$env:VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake" `
-  -DRUVIA_BUILD_CORE=OFF -DRUVIA_BUILD_WEB=OFF `
+```bash
+cmake -S . -B build/bench -G Ninja \
+  -DCMAKE_BUILD_TYPE=Release \
+  -DCMAKE_TOOLCHAIN_FILE="$VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake" \
+  -DRUVIA_BUILD_CORE=OFF -DRUVIA_BUILD_WEB=OFF \
   -DRUVIA_BUILD_BENCHMARKS=ON
 cmake --build build/bench --target ruvia_benchmarks
-& ./build/bench/tests/http/benchmarks/ruvia_benchmark_http_hot_paths `
+./build/bench/tests/http/benchmarks/ruvia_benchmark_http_hot_paths \
   --output build/bench/http-hot-paths.json
 ```
 

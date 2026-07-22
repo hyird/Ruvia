@@ -239,15 +239,6 @@ EventLoopAttachment::~EventLoopAttachment() {
 EventLoopAttachment::EventLoopAttachment(EventLoopAttachment&& other) noexcept
     : state_(std::move(other.state_)) {}
 
-EventLoopAttachment& EventLoopAttachment::operator=(
-    EventLoopAttachment&& other) noexcept {
-    if (this != &other) {
-        stop();
-        state_ = std::move(other.state_);
-    }
-    return *this;
-}
-
 bool EventLoopAttachment::valid() const noexcept {
     return state_ != nullptr;
 }
@@ -301,6 +292,35 @@ struct EventLoopPool::Impl {
         }
     }
 
+    void run(const std::shared_ptr<detail::EventLoopState>& loop) noexcept {
+        try {
+            loop->dispatcher->runContext(
+                [this](std::exception_ptr failure) noexcept {
+                    recordFailure(std::move(failure));
+                    stop();
+                });
+        } catch (...) {
+            recordFailure(std::current_exception());
+            stop();
+        }
+    }
+
+    void launch(const std::shared_ptr<detail::EventLoopState>& loop) {
+        loop->thread = std::thread([this, loop] { run(loop); });
+    }
+
+    void drainUnlaunched() noexcept {
+        // A partial thread-launch failure must not strand work that was
+        // accepted before start(), nor owner-affine stop callbacks queued by
+        // stop(). The caller is not one of this pool's workers, so it can act
+        // as a short-lived owner for every loop that never acquired a thread.
+        for (const auto& loop : loops) {
+            if (!loop->thread.joinable()) {
+                run(loop);
+            }
+        }
+    }
+
     std::vector<std::shared_ptr<detail::EventLoopState>> loops;
     detail::RuntimeLifecycle lifecycle;
     std::atomic<std::size_t> nextIndex{0};
@@ -325,24 +345,19 @@ void EventLoopPool::start() {
     }
     try {
         for (const auto& loop : impl_->loops) {
-            loop->thread = std::thread([this, loop] {
-                try {
-                    loop->dispatcher->runContext();
-                } catch (...) {
-                    impl_->recordFailure(std::current_exception());
-                    impl_->stop();
-                }
-            });
+            impl_->launch(loop);
         }
     } catch (...) {
+        const auto launchFailure = std::current_exception();
         impl_->stop();
+        impl_->drainUnlaunched();
         for (const auto& loop : impl_->loops) {
             if (loop->thread.joinable()) {
                 loop->thread.join();
             }
         }
         impl_->lifecycle.completeStop();
-        throw;
+        std::rethrow_exception(launchFailure);
     }
 }
 
@@ -351,8 +366,29 @@ void EventLoopPool::stop() noexcept {
 }
 
 void EventLoopPool::join() {
+    if (std::ranges::any_of(impl_->loops, [](const auto& loop) {
+            return loop->dispatcher->isCurrent();
+        })) {
+        throw std::logic_error(
+            "cannot join an event loop pool from one of its workers");
+    }
     if (impl_->lifecycle.state() == detail::RuntimeLifecycle::State::kReady) {
         impl_->stop();
+    }
+    if (impl_->lifecycle.state() == detail::RuntimeLifecycle::State::kStopping) {
+        try {
+            // stop() before start() still owes accepted mailbox work and
+            // owner-affine stop callbacks a real execution context. Launch
+            // only the missing worker threads so join performs that drain.
+            for (const auto& loop : impl_->loops) {
+                if (!loop->thread.joinable()) {
+                    impl_->launch(loop);
+                }
+            }
+        } catch (...) {
+            impl_->recordFailure(std::current_exception());
+            impl_->drainUnlaunched();
+        }
     }
     for (const auto& loop : impl_->loops) {
         if (loop->thread.joinable()) {

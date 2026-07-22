@@ -8,8 +8,10 @@
 // ever touched from its worker's thread, so it needs no synchronization.
 
 #include <cstddef>
+#include <exception>
 #include <memory_resource>
 #include <span>
+#include <stdexcept>
 #include <type_traits>
 #include <utility>
 #include <vector>
@@ -30,9 +32,9 @@ template <typename T>
 }
 
 // Startup-registered recipe for one per-worker state type: the erased user
-// factory plus the instance create/destroy pair. The factory runs once per
-// worker; workers are constructed sequentially on the startup thread, so a
-// stateful factory needs no synchronization either.
+// factory plus the instance create/destroy pair. The factory runs once inside
+// each worker's active identity window before that worker begins dispatching
+// callbacks or requests.
 class WorkerStateDefinition final {
 public:
     WorkerStateDefinition(const WorkerStateDefinition&) = delete;
@@ -100,18 +102,36 @@ private:
     DestroyInstance destroyInstance_{nullptr};
 };
 
-// The per-worker instances, built eagerly at worker construction so a throwing
-// factory fails startup instead of the first request. Lookup is a linear scan:
-// the set is small, fixed after construction, and read-only afterwards.
+// The per-worker instances. HttpServer explicitly initializes and destroys the
+// registry inside its active worker identity window; a throwing factory fails
+// startup before the worker dispatches callbacks or requests. Lookup is a
+// linear scan: the set is small, fixed after initialization, and read-only
+// afterwards.
 class WorkerStateRegistry final {
 public:
     WorkerStateRegistry(
         std::pmr::memory_resource* resource,
         std::span<const WorkerStateDefinition> definitions)
-        : resource_(resource), entries_(resource) {
-        entries_.reserve(definitions.size());
+        : resource_(resource), definitions_(definitions), entries_(resource) {}
+
+    WorkerStateRegistry(const WorkerStateRegistry&) = delete;
+    WorkerStateRegistry& operator=(const WorkerStateRegistry&) = delete;
+    WorkerStateRegistry(WorkerStateRegistry&&) = delete;
+    WorkerStateRegistry& operator=(WorkerStateRegistry&&) = delete;
+
+    ~WorkerStateRegistry() {
+        if (initialized_) {
+            std::terminate();
+        }
+    }
+
+    void initialize() {
+        if (initialized_) {
+            throw std::logic_error("worker state registry is already initialized");
+        }
+        entries_.reserve(definitions_.size());
         try {
-            for (const auto& definition : definitions) {
+            for (const auto& definition : definitions_) {
                 entries_.push_back(Entry{
                     definition.typeKey_,
                     definition.createInstance_(definition.factory_, resource_),
@@ -121,15 +141,15 @@ public:
             destroyEntries();
             throw;
         }
+        initialized_ = true;
     }
 
-    WorkerStateRegistry(const WorkerStateRegistry&) = delete;
-    WorkerStateRegistry& operator=(const WorkerStateRegistry&) = delete;
-    WorkerStateRegistry(WorkerStateRegistry&&) = delete;
-    WorkerStateRegistry& operator=(WorkerStateRegistry&&) = delete;
-
-    ~WorkerStateRegistry() {
+    void shutdown() noexcept {
+        if (!initialized_) {
+            return;
+        }
         destroyEntries();
+        initialized_ = false;
     }
 
     [[nodiscard]] void* instance(const void* typeKey) const noexcept {
@@ -159,7 +179,9 @@ private:
     }
 
     std::pmr::memory_resource* resource_;
+    std::span<const WorkerStateDefinition> definitions_;
     std::pmr::vector<Entry> entries_;
+    bool initialized_{false};
 };
 
 }  // namespace ruvia::detail

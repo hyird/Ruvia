@@ -96,8 +96,11 @@ public:
 
     EventLoopAttachment(const EventLoopAttachment&) = delete;
     EventLoopAttachment& operator=(const EventLoopAttachment&) = delete;
+    // Move construction transfers one attachment without touching its context.
+    // Move assignment would have to tear down the target attachment, but only
+    // its external runtime owner can first wait for io_context::run() to return.
     EventLoopAttachment(EventLoopAttachment&& other) noexcept;
-    EventLoopAttachment& operator=(EventLoopAttachment&& other) noexcept;
+    EventLoopAttachment& operator=(EventLoopAttachment&& other) = delete;
 
     [[nodiscard]] bool valid() const noexcept;
     [[nodiscard]] EventLoop loop() const noexcept;
@@ -113,7 +116,7 @@ private:
 };
 
 // Attach a Ruvia worker to a caller-owned io_context. The caller drives the
-// context with run() on one or more threads. See EventLoopAttachment for the
+// context with run() on exactly one thread. See EventLoopAttachment for the
 // teardown ordering the caller must honor before destroying the returned handle.
 [[nodiscard]] EventLoopAttachment attachEventLoop(
     asio::io_context& ioContext,
@@ -136,6 +139,10 @@ public:
 
     void start();
     void stop() noexcept;
+    // Waits for every worker to finish. If stop() happened before start(),
+    // join() creates short-lived owner threads to drain work accepted before
+    // shutdown and to run owner-affine stop callbacks. Calling join() from any
+    // worker owned by this pool is rejected before waiting on another thread.
     void join();
 
     [[nodiscard]] std::size_t loopCount() const noexcept;

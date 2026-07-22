@@ -7,14 +7,17 @@ Task<void> HttpServer::handleSession(AcceptedConnectionLease connection) {
         if (!remoteEc) {
             assignRemoteAddress(remoteAddress, remoteEndpoint.address());
         }
-        const ContextServices baseServices =
+        ContextServices baseServices =
             ContextServices(
-                &databases_,
-                &redis_,
+                &workerData_.databases(),
+                &workerData_.redis(),
                 &rateLimiter_,
                 options_.maxBufferedBodyBytes,
                 &workerHandle_)
                 .withWorkerStates(workerStates_);
+        if (options_.env != nullptr) {
+            baseServices = baseServices.withEnv(*options_.env);
+        }
         if (options_.tls() != nullptr) {
             asio::ssl::stream<TcpSocket&> tlsStream(socket, *tlsContext_);
             {

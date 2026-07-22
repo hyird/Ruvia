@@ -2,6 +2,7 @@
 
 #include <cstddef>
 #include <chrono>
+#include <exception>
 #include <memory>
 #include <vector>
 
@@ -27,6 +28,8 @@ public:
     WorkerDispatcher& operator=(const WorkerDispatcher&) = delete;
 
     [[nodiscard]] PostResult post(MoveOnlyFunction<void()> task);
+    [[nodiscard]] PostStatus postFactory(
+        MoveOnlyFunction<MoveOnlyFunction<void()>()> factory);
     void defer(MoveOnlyFunction<void()> task);
     void deferOrTerminate(MoveOnlyFunction<void()> task) noexcept;
     void registerShutdownListener(const std::shared_ptr<WorkerShutdownListener>& listener);
@@ -43,6 +46,20 @@ public:
     // External owners that run an attached context directly retain the safe
     // executor-based fallback in isCurrent().
     void runContext();
+    // Invokes failureHandler exactly once for the first escaping handler
+    // exception while worker identity is still active, then re-enters run() to
+    // drain shutdown continuations. A successfully returning handler consumes
+    // the failure; a throwing handler is rethrown only after the drain ends.
+    void runContext(
+        MoveOnlyFunction<void(std::exception_ptr)> failureHandler);
+    // Runs startup after worker identity is established and shutdown after the
+    // context has drained but before that identity is cleared. Startup failures
+    // enter the same first-failure path as handler failures. Shutdown is a
+    // terminal cleanup hook and must not throw.
+    void runContext(
+        MoveOnlyFunction<void()> startupHandler,
+        MoveOnlyFunction<void(std::exception_ptr)> failureHandler,
+        MoveOnlyFunction<void()> shutdownHandler);
     void close() noexcept;
     // Called by the execution-context owner after all worker work has joined and
     // before the io_context is destroyed. Handles remain safe terminal endpoints.
@@ -58,6 +75,7 @@ private:
 
     [[nodiscard]] ShutdownListeners beginStopping(bool abandonDrain) noexcept;
     static void notifyStopping(const ShutdownListeners& listeners) noexcept;
+    void abandonQueued() noexcept;
     void drain();
     void armTimer();
     void fireTimers();

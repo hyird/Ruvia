@@ -42,15 +42,14 @@ concurrency:
   group: build-${{ github.workflow }}-${{ github.sha }}
   cancel-in-progress: true
 
-# Linux GCC and macOS AppleClang enable every optional feature and target.
-# Windows uses the MSYS2 UCRT64 GCC toolchain for the portable feature set.
+# Linux and macOS use LLVM Clang and enable every optional feature.
 jobs:
   ubuntu_build:
     name: Ubuntu build
     runs-on: ubuntu-24.04
     env:
-      CC: gcc-13
-      CXX: g++-13
+      CC: clang-18
+      CXX: clang++-18
       GIT_CONFIG_COUNT: 1
       GIT_CONFIG_KEY_0: init.defaultBranch
       GIT_CONFIG_VALUE_0: main
@@ -67,18 +66,18 @@ jobs:
       - name: Install toolchain
         run: |
           sudo apt-get update
-          sudo apt-get install -y gcc-13 g++-13 ninja-build nghttp2-client curl zip unzip tar
-          gcc-13 --version
-          g++-13 --version
+          sudo apt-get install -y clang-18 lld-18 ninja-build nghttp2-client curl zip unzip tar
+          clang-18 --version
+          clang++-18 --version
 
       - name: Restore vcpkg binary cache
         id: vcpkg-cache
         uses: actions/cache/restore@v6
         with:
           path: ${{ env.VCPKG_DEFAULT_BINARY_CACHE }}
-          key: vcpkg-binaries-${{ runner.os }}-${{ runner.arch }}-gcc13-${{ env.VCPKG_COMMIT }}-${{ hashFiles('vcpkg.json', 'triplets/**', 'CMakeLists.txt') }}
+          key: vcpkg-binaries-${{ runner.os }}-${{ runner.arch }}-clang18-${{ env.VCPKG_COMMIT }}-${{ hashFiles('vcpkg.json', 'triplets/**', 'CMakeLists.txt') }}
           restore-keys: |
-            vcpkg-binaries-${{ runner.os }}-${{ runner.arch }}-gcc13-${{ env.VCPKG_COMMIT }}-
+            vcpkg-binaries-${{ runner.os }}-${{ runner.arch }}-clang18-${{ env.VCPKG_COMMIT }}-
 
       - name: Bootstrap vcpkg
         run: |
@@ -95,6 +94,8 @@ jobs:
           cmake -S . -B build/test -G Ninja \
             -DCMAKE_BUILD_TYPE="$BUILD_TYPE" \
             -DCMAKE_COMPILE_WARNING_AS_ERROR=ON \
+            -DCMAKE_C_COMPILER="$CC" \
+            -DCMAKE_CXX_COMPILER="$CXX" \
             -DRUVIA_ENABLE_MARIADB=ON \
             -DRUVIA_ENABLE_POSTGRESQL=ON \
             -DRUVIA_ENABLE_REDIS=ON \
@@ -138,17 +139,21 @@ jobs:
       - name: Install build tools
         run: |
           brew untap aws/tap
-          brew install ninja nghttp2
-          /usr/bin/c++ --version
+          brew install llvm ninja nghttp2
+          llvm_prefix="$(brew --prefix llvm)"
+          echo "CC=$llvm_prefix/bin/clang" >> "$GITHUB_ENV"
+          echo "CXX=$llvm_prefix/bin/clang++" >> "$GITHUB_ENV"
+          "$llvm_prefix/bin/clang" --version
+          "$llvm_prefix/bin/clang++" --version
 
       - name: Restore vcpkg binary cache
         id: vcpkg-cache
         uses: actions/cache/restore@v6
         with:
           path: ${{ env.VCPKG_DEFAULT_BINARY_CACHE }}
-          key: vcpkg-binaries-${{ runner.os }}-${{ runner.arch }}-appleclang-${{ env.VCPKG_COMMIT }}-${{ hashFiles('vcpkg.json', 'triplets/**', 'CMakeLists.txt') }}
+          key: vcpkg-binaries-${{ runner.os }}-${{ runner.arch }}-llvm-${{ env.VCPKG_COMMIT }}-${{ hashFiles('vcpkg.json', 'triplets/**', 'CMakeLists.txt') }}
           restore-keys: |
-            vcpkg-binaries-${{ runner.os }}-${{ runner.arch }}-appleclang-${{ env.VCPKG_COMMIT }}-
+            vcpkg-binaries-${{ runner.os }}-${{ runner.arch }}-llvm-${{ env.VCPKG_COMMIT }}-
 
       - name: Bootstrap vcpkg
         run: |
@@ -165,6 +170,8 @@ jobs:
           cmake -S . -B build/test -G Ninja \
             -DCMAKE_BUILD_TYPE="$BUILD_TYPE" \
             -DCMAKE_COMPILE_WARNING_AS_ERROR=ON \
+            -DCMAKE_C_COMPILER="$CC" \
+            -DCMAKE_CXX_COMPILER="$CXX" \
             -DRUVIA_ENABLE_MARIADB=ON \
             -DRUVIA_ENABLE_POSTGRESQL=ON \
             -DRUVIA_ENABLE_REDIS=ON \
@@ -187,94 +194,9 @@ jobs:
       - name: Test
         run: ctest --test-dir build/test --output-on-failure --build-config "$BUILD_TYPE"
 
-  windows_build:
-    name: Windows build
-    runs-on: windows-2025
-    env:
-      GIT_CONFIG_COUNT: 1
-      GIT_CONFIG_KEY_0: init.defaultBranch
-      GIT_CONFIG_VALUE_0: main
-      VCPKG_ROOT: ${{ github.workspace }}\vcpkg
-      VCPKG_DEFAULT_BINARY_CACHE: ${{ github.workspace }}\.cache\vcpkg\archives
-      VCPKG_COMMIT: 4bca8fd8654e5ba76f92661db7bfe954768ad8ef
-      BUILD_TYPE: Debug
-
-    steps:
-      - name: Checkout ruvia
-        uses: actions/checkout@v6
-        with:
-          persist-credentials: false
-
-      - name: Set up MSYS2 UCRT64 GCC
-        uses: msys2/setup-msys2@v2
-        with:
-          msystem: UCRT64
-          update: true
-          install: git
-          pacboy: >-
-            toolchain:p
-            cmake:p
-            ninja:p
-            nghttp2:p
-
-      - name: Restore vcpkg binary cache
-        id: vcpkg-cache
-        uses: actions/cache/restore@v6
-        with:
-          path: ${{ env.VCPKG_DEFAULT_BINARY_CACHE }}
-          key: vcpkg-binaries-${{ runner.os }}-${{ runner.arch }}-ucrt64-gcc-${{ env.VCPKG_COMMIT }}-${{ hashFiles('vcpkg.json', 'triplets/**', 'CMakeLists.txt') }}
-          restore-keys: |
-            vcpkg-binaries-${{ runner.os }}-${{ runner.arch }}-ucrt64-gcc-${{ env.VCPKG_COMMIT }}-
-
-      - name: Bootstrap vcpkg
-        shell: msys2 {0}
-        run: |
-          set -euo pipefail
-          vcpkg_root_msys="$(cygpath -u "$VCPKG_ROOT")"
-          mkdir -p "$(cygpath -u "$VCPKG_DEFAULT_BINARY_CACHE")"
-          git init "$vcpkg_root_msys"
-          git -C "$vcpkg_root_msys" remote add origin https://github.com/microsoft/vcpkg.git
-          git -C "$vcpkg_root_msys" fetch --depth 1 origin "$VCPKG_COMMIT"
-          git -C "$vcpkg_root_msys" checkout --detach FETCH_HEAD
-          cmd.exe //c "$(cygpath -w "$vcpkg_root_msys/bootstrap-vcpkg.bat") -disableMetrics"
-
-      - name: Configure
-        shell: msys2 {0}
-        run: |
-          vcpkg_root_msys="$(cygpath -u "$VCPKG_ROOT")"
-          gcc --version
-          g++ --version
-          cmake -S . -B build/test -G Ninja \
-            -DCMAKE_BUILD_TYPE="$BUILD_TYPE" \
-            -DCMAKE_COMPILE_WARNING_AS_ERROR=ON \
-            -DCMAKE_CXX_COMPILER=g++ \
-            -DVCPKG_TARGET_TRIPLET=x64-mingw-static \
-            -DRUVIA_ENABLE_MARIADB=ON \
-            -DRUVIA_ENABLE_REDIS=ON \
-            -DRUVIA_ENABLE_JWT=ON \
-            -DRUVIA_BUILD_EXAMPLES=ON \
-            -DRUVIA_BUILD_TESTS=ON \
-            -DRUVIA_BUILD_EDGE=ON \
-            -DCMAKE_TOOLCHAIN_FILE="$vcpkg_root_msys/scripts/buildsystems/vcpkg.cmake"
-
-      - name: Save vcpkg binary cache
-        if: steps.vcpkg-cache.outputs.cache-hit != 'true'
-        uses: actions/cache/save@v6
-        with:
-          path: ${{ env.VCPKG_DEFAULT_BINARY_CACHE }}
-          key: ${{ steps.vcpkg-cache.outputs.cache-primary-key }}
-
-      - name: Build
-        shell: msys2 {0}
-        run: cmake --build build/test --config "$BUILD_TYPE"
-
-      - name: Test
-        shell: msys2 {0}
-        run: ctest --test-dir build/test --output-on-failure --build-config "$BUILD_TYPE"
-
   cleanup:
     name: Prune old runs
-    needs: [ubuntu_build, macos_build, windows_build]
+    needs: [ubuntu_build, macos_build]
     # Run after all builds regardless of their result, but never on pull
     # requests (a fork's token is read-only and must not prune main's history).
     if: ${{ always() && github.event_name != 'pull_request' }}

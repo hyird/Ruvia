@@ -309,5 +309,6 @@ int main() {
         .setListenAddress("0.0.0.0")
         .setServerTopology(ruvia::ServerTopology::http(8081))
         .setWorkersPerListener(2)
+        .setSignalShutdown(true)
         .run();
 }

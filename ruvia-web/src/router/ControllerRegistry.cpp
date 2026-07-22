@@ -54,16 +54,9 @@ struct ControllerLifetime final {
     }
 };
 
-}  // namespace
-
-struct ControllerStoreState final {
-    std::pmr::vector<ControllerLifetime> lifetimes{registrationResource()};
-};
-
-namespace {
-
 std::pmr::vector<ControllerRegistrar>& controllerRegistrars() {
-    static std::pmr::vector<ControllerRegistrar> registrars{registrationResource()};
+    static std::pmr::vector<ControllerRegistrar> registrars{
+        registrationResource()};
     return registrars;
 }
 
@@ -73,6 +66,10 @@ std::mutex& controllerRegistrarsMutex() {
 }
 
 }  // namespace
+
+struct ControllerStoreState final {
+    std::pmr::vector<ControllerLifetime> lifetimes{registrationResource()};
+};
 
 ControllerStore::ControllerStore()
     : state_(constructPmrObject<ControllerStoreState>(registrationResource())) {}
@@ -112,14 +109,19 @@ bool addControllerRegistrar(ControllerRegistrar registrar) {
     return true;
 }
 
-void runControllerRegistrars(Router& router, ControllerStore& controllerLifetimes) {
+std::pmr::vector<ControllerRegistrar> snapshotControllerRegistrars() {
     std::pmr::vector<ControllerRegistrar> registrars{registrationResource()};
-    {
-        std::lock_guard lock(controllerRegistrarsMutex());
-        registrars = controllerRegistrars();
-    }
+    std::lock_guard lock(controllerRegistrarsMutex());
+    registrars = controllerRegistrars();
+    return registrars;
+}
 
-    controllerLifetimes.reserve(controllerLifetimes.size() + registrars.size());
+void runControllerRegistrars(
+    Router& router,
+    ControllerStore& controllerLifetimes,
+    std::span<const ControllerRegistrar> registrars) {
+    controllerLifetimes.reserve(
+        controllerLifetimes.size() + registrars.size());
     for (const auto registrar : registrars) {
         registrar(router, controllerLifetimes);
     }

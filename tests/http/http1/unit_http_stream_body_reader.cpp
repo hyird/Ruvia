@@ -1,4 +1,3 @@
-#include "test_io_context.h"
 #include "test_harness.h"
 
 #include <array>
@@ -131,7 +130,7 @@ KnownLengthObservation readKnownLengthBody(
     std::size_t contentLength,
     std::string initial,
     std::vector<std::string> socketSegments) {
-    asio::io_context& io = ruvia::test::newTestIoContext();
+    asio::io_context io;
     SegmentedBodyStream stream{&io, std::move(socketSegments)};
     ruvia::detail::ConnectionScanner::Entry scannerEntry;
     std::pmr::monotonic_buffer_resource resource;
@@ -262,7 +261,7 @@ struct TransferBodyObservation final {
 TransferBodyObservation readTransferBody(
     std::string initial,
     bool streaming) {
-    asio::io_context& io = ruvia::test::newTestIoContext();
+    asio::io_context io;
     EofBodyStream stream{&io};
     ruvia::detail::ConnectionScanner::Entry scannerEntry;
     std::pmr::monotonic_buffer_resource resource;

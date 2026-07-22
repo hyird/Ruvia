@@ -6,7 +6,7 @@
 
 #include <cstdio>
 
-#include "ruvia/edge/EdgeFreshness.h"
+#include "ruvia/edge/detail/EdgeFreshness.h"
 #include "ruvia/http/HttpCache.h"
 #include "ruvia/http/HttpStatus.h"
 
@@ -76,6 +76,30 @@ int main() {
         check(!d.cacheable, "no freshness signal means not cacheable");
     }
 
+    // A shared cache cannot store an authenticated response merely because it
+    // has max-age. RFC 9111 section 3.5 requires an explicit shared-cache opt-in.
+    {
+        FreshnessInput in;
+        in.status = ruvia::http_status::kOk.value();
+        in.cacheControl = cc("max-age=60");
+        in.requestHasAuthorization = true;
+        in.now = kNow;
+        check(!evaluateFreshness(in).cacheable,
+              "Authorization plus max-age alone is not shared-cacheable");
+
+        for (const char* directive : {
+                 "max-age=60, public",
+                 "max-age=60, must-revalidate",
+                 "s-maxage=60"}) {
+            in.cacheControl = cc(directive);
+            check(evaluateFreshness(in).cacheable,
+                  "explicit Authorization cache opt-in is honored");
+        }
+        in.cacheControl = cc("max-age=60, proxy-revalidate");
+        check(!evaluateFreshness(in).cacheable,
+              "proxy-revalidate alone does not authorize shared storage");
+    }
+
     // A non-storable status is refused even when explicitly fresh.
     {
         FreshnessInput in;
@@ -117,6 +141,24 @@ int main() {
         const auto d = evaluateFreshness(in);
         check(d.cacheable && d.expiresAt == kNow + 60,
               "Age is subtracted from remaining freshness");
+        check(d.initialAge == 40,
+              "corrected initial Age is retained for downstream responses");
+    }
+
+    // Upstream response delay contributes to corrected_age_value rather than
+    // disappearing when the entry is stored.
+    {
+        FreshnessInput in;
+        in.status = ruvia::http_status::kOk.value();
+        in.cacheControl = cc("max-age=100");
+        in.ageHeader = 40;
+        in.requestTime = kNow - 5;
+        in.now = kNow;
+        const auto d = evaluateFreshness(in);
+        check(d.cacheable && d.initialAge == 45,
+              "response delay is included in corrected initial Age");
+        check(d.expiresAt == kNow + 55,
+              "response delay consumes the freshness lifetime");
     }
 
     // A response already older than its lifetime is not stored.

@@ -446,7 +446,6 @@ RUVIA_TEST(http_response_file_writer_preserves_open_failure) {
 }
 
 RUVIA_TEST(http_response_file_native_open_rejects_same_size_replacement) {
-#if defined(__unix__) || defined(__APPLE__) || defined(_WIN32)
     constexpr std::string_view oldContents = "old-native-body";
     constexpr std::string_view newContents = "new-native-body";
     static_assert(oldContents.size() == newContents.size());
@@ -460,10 +459,6 @@ RUVIA_TEST(http_response_file_native_open_rejects_same_size_replacement) {
         original.path().c_str(), error);
     RUVIA_CHECK(!error);
     RUVIA_CHECK(snapshot.identity.requiresValidation());
-#if defined(_WIN32)
-    std::filesystem::remove(original.path(), error);
-    RUVIA_CHECK(!error);
-#endif
     std::filesystem::rename(replacement.path(), original.path(), error);
     RUVIA_CHECK(!error);
 
@@ -484,7 +479,6 @@ RUVIA_TEST(http_response_file_native_open_rejects_same_size_replacement) {
             error,
             std::make_error_code(std::errc::state_not_recoverable));
     }
-#endif
 }
 
 RUVIA_TEST(http1_buffered_file_fallback_completion_owns_status) {

@@ -21,7 +21,8 @@ protocol library do not require the full Web framework.
   models, validation, middleware, streaming, SSE, and WebSocket routes, all
   finalized at startup with no per-request rebuilding.
 - **Bounded, application-owned runtime** — explicit workers, bounded mailboxes,
-  backpressure at every producer, and deterministic shutdown draining.
+  backpressure at every producer, and deterministic shutdown cancellation and
+  completion draining.
 - **TLS out of the box** — server TLS with optional or required client-certificate
   policy, SNI identities, and connection metadata kept separate from the HTTP
   request model.
@@ -65,9 +66,14 @@ public:
 int main() {
     ruvia::app()
         .setServerTopology(ruvia::ServerTopology::http(8080))
+        .setSignalShutdown(true)
         .run();
 }
 ```
+
+`App` does not install process signal handlers by default. Standalone servers
+can opt in with `setSignalShutdown(true)` as above; embedded runtimes retain
+ownership of SIGINT/SIGTERM and call `App::stop()` themselves.
 
 The same route is part of the compiled
 [`basic_http.cpp`](examples/web/basic_http.cpp) example. Configure once with
@@ -106,7 +112,7 @@ if (const auto* tls = info.tls()) {
 | `ruvia-core/` | `ruvia::core` | Coroutine tasks, Asio integration, PMR memory, connection scanning, and runtime helpers. |
 | `ruvia-http/` | `ruvia::http` | Pure sans-I/O HTTP, HTTP/2, WebSocket, multipart, SSE, content-coding, and outbound-client protocol primitives. |
 | `ruvia-web/` | `ruvia::web` | App, Context, Router, middleware, server I/O, TLS, streaming, WebSocket routes, validation, static files, and optional integrations. |
-| `ruvia-edge/` | `ruvia::edge` | Opt-in CDN edge node: a caching reverse proxy with its own event loop, dynamic origin configuration, and an admin API. |
+| `ruvia-edge/` | `ruvia::edge` | Opt-in CDN edge node: a caching reverse proxy with its own event loop and a thread-safe embedding control plane. |
 
 Dependency direction is fixed:
 
@@ -119,6 +125,39 @@ ruvia-edge  ->  ruvia-core + ruvia-http
 an outbound HTTP client provide their own I/O runtime and drive its sans-I/O
 client APIs; `ruvia-web` intentionally does not provide `fetch`, proxy,
 connection-pool, or client TLS runtime APIs.
+
+### Edge Node
+
+`ruvia::edge` exposes a runtime-independent product surface through
+`EdgeServer.h`; Asio sockets, protocol writers, cache storage and origin-fetch
+machinery remain implementation details. The listener and origin configuration
+use owned value types:
+
+```cpp
+#include <ruvia/edge/EdgeServer.h>
+
+ruvia::edge::EdgeServer edge({"0.0.0.0", 8080});
+if (!edge.addOrigin(
+        "www.example.com",
+        ruvia::edge::OriginSettings{"origin.internal", 8443, true})) {
+    throw std::runtime_error("duplicate edge origin");
+}
+edge.start();
+
+// From the embedding application's control thread:
+const bool removed = edge.purge("www.example.com", "/assets/app.js");
+edge.stop();
+```
+
+Runtime `addOrigin`, `removeOrigin`, certificate rotation and cache controls are
+synchronously serialized onto the Edge worker. An in-flight request retains a
+stable origin/cache lease across suspension, so later replacement, purge or
+removal cannot invalidate memory it is still using.
+
+Setting `EdgeServerOptions::cacheDirectory` enables a persistent disk tier. A
+live server exclusively leases that directory; records are checksummed and
+published by atomic replacement, and restart recovery ignores uncommitted or
+corrupt files. Do not point two live edge instances at the same directory.
 
 ## Core Runtime
 
@@ -135,9 +174,10 @@ loops.start();
 
 auto loop = loops.loopFor("device-42");
 asio::ip::tcp::socket socket(loop.ioContext());
-if (loop.post([] { /* runs on the selected event loop */ }) !=
-    ruvia::PostResult::kAccepted) {
-    // Apply application backpressure or shutdown handling.
+auto posted = loop.post([] { /* runs on the selected event loop */ });
+if (!posted.accepted()) {
+    auto rejected = std::move(posted).takeRejected();
+    // Retry or persist the rejected callable.
 }
 
 auto stopRegistration = loop.onStop([&socket] {
@@ -178,13 +218,77 @@ The external `io_context` must outlive the attachment, every returned
 ownership of `run()`, `stop()`, `restart()`, and the thread. The attachment
 never calls `io_context::stop()` because the context may host unrelated work.
 
+Database and Redis integrations remain in `ruvia::web`, but they do not require
+an HTTP `App`, `Context`, or server worker. Bind one `WorkerDataRuntime` to each
+application-owned core event loop that needs its own pools:
+
+```cpp
+#include <future>
+#include <ruvia/core/EventLoopPool.h>
+#include <ruvia/web/WorkerData.h>
+
+ruvia::EventLoopPool loops({.loopCount = 1});
+auto loop = loops.loop(0);
+
+auto pg = ruvia::DbConfig::postgreSql();
+pg.host = "127.0.0.1";
+pg.database = "app";
+
+ruvia::WorkerDataOptions options;
+options.databases.push_back({"default", std::move(pg)});
+options.redis.push_back({"default", ruvia::RedisConfig{}});
+ruvia::WorkerDataRuntime data(loop, std::move(options));
+
+auto ready = data.connect();
+loops.start();
+std::promise<std::exception_ptr> completed;
+auto done = completed.get_future();
+ready.get();
+auto posted = data.post([&completed](
+    ruvia::WorkerDataContext& context) -> ruvia::Task<void> {
+    try {
+        co_await runWorkerJob(context.db(), context.redis());
+        completed.set_value(nullptr);
+    } catch (...) {
+        completed.set_value(std::current_exception());
+    }
+});
+if (!posted.accepted()) {
+    throw std::runtime_error("worker queue is full or stopping");
+}
+
+// Join application-owned jobs before stopping their worker resources.
+auto failure = done.get();
+loops.stop();
+loops.join();
+if (failure != nullptr) {
+    std::rethrow_exception(failure);
+}
+```
+
+`connect()` schedules startup and reports it through a future; `post()` is the
+only public operation-scope entry point, and `close()` is worker-affine. A data
+context is a short-lived operation scope and must not escape its posted
+coroutine. Its handles are job-scoped, while DB/Redis result values allocate
+from that worker's unsynchronized resource; neither may escape the posted
+coroutine or be destroyed from another thread. Database and Redis hostname
+lookup runs asynchronously on the bound event loop, is subject to
+`connectTimeout`, and is canceled during shutdown. Event-loop shutdown requests
+stop and cancels pool I/O so accepted jobs can finish before loop teardown. An
+optional `failureHandler` handles
+uncaught job exceptions on the worker; without one the exception fails the loop
+and is rethrown by `EventLoopPool::join()`. Enable the corresponding
+`RUVIA_ENABLE_POSTGRESQL`, `RUVIA_ENABLE_MARIADB`, and `RUVIA_ENABLE_REDIS`
+features and link `ruvia::web`; `ruvia::core` itself keeps no database or Redis
+dependency.
+
 Web handlers obtain their current core worker with `Context::worker()`; its reference is
 borrowed for the request, so use `auto worker = c.worker()` before capturing it. Background
 components select a stable Web worker with `App::workerFor()` and submit a job with worker-local DB and Redis
 access without exposing the underlying executor:
 
 ```cpp
-auto worker = ruvia::app().workerFor("device-42");
+auto worker = app.workerFor("device-42");
 auto result = worker.post(
     [event = std::move(event)](
         ruvia::WebWorkerContext& workerContext) mutable -> ruvia::Task<void> {
@@ -198,13 +302,16 @@ Web job contract:
   `App::setWorkerMailboxCapacity()` and handle `kQueueFull` at every producer.
 - **Metrics** — `WebWorkerHandle::stats()` exposes accepted, rejected,
   completed, failed, and outstanding counts.
-- **Shutdown draining** — a job accepted before shutdown is drained before that
-  worker closes DB/Redis; new jobs are rejected once shutdown starts.
+- **Shutdown completion** — a job accepted before shutdown remains owned until
+  its coroutine completes. Shutdown rejects new jobs, requests stop, and closes
+  worker I/O plus DB/Redis to wake suspended operations; their completion
+  continuations drain before worker memory is destroyed.
 - **Lifetimes** — captured data must own its lifetime, and `WebWorkerContext`
   must not be stored beyond the callback.
 - **Producers** — `App::workers()` returns all Web worker handles; external
   producers must keep using `WebWorkerHandle::post()` so accepted jobs remain
-  covered by Web shutdown, failure propagation, and resource draining.
+  covered by Web shutdown ownership, failure propagation, and completion
+  tracking.
 - **Failures** — an unhandled job exception stops every App worker and is
   rethrown by `App::run()`; applications should still catch expected DB or
   business failures inside the job.
@@ -214,15 +321,16 @@ Web job contract:
 
 `TaskScope`, worker-bound `sleepFor`, bounded `Channel`, and `OneShot` are also
 provided by `ruvia::core`; their deadlines share the worker's single timer
-queue. `App::onStop()` hooks run once for signal shutdown, direct
-`App::stop()`, and worker failure before the worker-local Web resources are
-closed.
+queue. `App::onStop()` hooks run once for explicitly enabled signal shutdown,
+direct `App::stop()`, and worker failure before the worker-local Web resources
+are closed.
 
 ## Requirements
 
 - CMake 3.24 or newer.
 - A C++20 compiler.
 - vcpkg.
+- Supported build platforms: Linux and macOS.
 - Component dependencies: core uses Asio; HTTP uses zlib, Brotli, and zstd;
   Web adds OpenSSL.
 - Optional vcpkg features: MariaDB, PostgreSQL, Redis, and JWT.
@@ -238,21 +346,11 @@ cmake -S . -B build -G Ninja \
 cmake --build build
 ```
 
-Windows with MSYS2 UCRT64 GCC:
-
-```bash
-cmake -S . -B build -G Ninja \
-  -DCMAKE_TOOLCHAIN_FILE="$VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake" \
-  -DVCPKG_TARGET_TRIPLET=x64-mingw-static \
-  -DCMAKE_BUILD_TYPE=Debug
-cmake --build build
-```
-
 When needed, add `-DRUVIA_BUILD_TESTS=ON` and `-DRUVIA_BUILD_EXAMPLES=ON` to
 the same configuration, rebuild, and run the tests:
 
 ```bash
-ctest --test-dir build --output-on-failure   # add -C Debug on Windows
+ctest --test-dir build --output-on-failure
 ```
 
 ### Build options
@@ -297,14 +395,14 @@ wire-error assertion model follows the proven h2spec approach, but every
 expectation is maintained directly against RFC 9113 instead of filtering
 RFC 7540 results. To reproduce it locally, install Python 3 and configure:
 
-```powershell
-cmake -S . -B build-conformance `
-  -DCMAKE_TOOLCHAIN_FILE="$env:VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake" `
-  -DRUVIA_BUILD_TESTS=ON `
-  -DRUVIA_ENABLE_HTTP2_CONFORMANCE_TESTS=ON `
-  -DPython3_EXECUTABLE="C:/Python312/python.exe"
-cmake --build build-conformance --config Debug --target ruvia_http2_conformance_server
-ctest --test-dir build-conformance -C Debug -R ruvia_http2_conformance --output-on-failure
+```bash
+cmake -S . -B build-conformance -G Ninja \
+  -DCMAKE_TOOLCHAIN_FILE="$VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake" \
+  -DCMAKE_BUILD_TYPE=Debug \
+  -DRUVIA_BUILD_TESTS=ON \
+  -DRUVIA_ENABLE_HTTP2_CONFORMANCE_TESTS=ON
+cmake --build build-conformance --target ruvia_http2_conformance_server
+ctest --test-dir build-conformance -R ruvia_http2_conformance --output-on-failure
 ```
 
 ## Performance Baseline
@@ -316,8 +414,8 @@ sources in [tests/http/benchmarks/README.md](tests/http/benchmarks/README.md).
 
 Install all selected targets:
 
-```powershell
-cmake --install build --config Debug --prefix build/install
+```bash
+cmake --install build --prefix build/install
 ```
 
 Each library has an independent export. Consumers request the component they
@@ -345,7 +443,11 @@ targets. Component-scoped installation uses `core`, `http`, `web`, `edge`, and
 
 ## Web API Shape
 
-Routes and schemas are registered at startup through macros:
+Controllers use CRTP and register themselves at startup when their route macro
+block is declared; applications do not maintain a separate controller list.
+`ruvia::app()` is the process-level configuration and lifecycle entry point,
+while every worker owns its controller instances and finalized route graph.
+Routes and schemas use these macros:
 
 | Concern | Macros |
 | --- | --- |
@@ -357,7 +459,7 @@ Routes and schemas are registered at startup through macros:
 | Models | `RUVIA_MODEL`, `RUVIA_FIELD`, `RUVIA_OPTIONAL_FIELD`, `RUVIA_FIELD_NAME` |
 | Validation | `RUVIA_VALIDATE_JSON`, `RUVIA_VALIDATE_FORM`, `RUVIA_RULE` |
 
-Route tables, middleware chains, and controller factories are finalized before
+Route tables, middleware chains, and controller instances are finalized before
 workers start. The request path does not rebuild them or use a per-request
 virtual dispatcher.
 

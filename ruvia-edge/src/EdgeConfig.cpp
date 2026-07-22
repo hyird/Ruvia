@@ -1,65 +1,109 @@
-#include "ruvia/edge/EdgeConfig.h"
+#include "ruvia/edge/detail/EdgeConfig.h"
 
+#include <cassert>
+#include <memory>
 #include <utility>
+
+#include "ruvia/core/memory/PmrObject.h"
 
 namespace ruvia::edge {
 
-const OriginSettings* EdgeConfigSnapshot::findOrigin(
-    std::string_view frontHost) const noexcept {
+struct EdgeOriginControl final {
+    EdgeOriginControl(OriginSettings source, std::pmr::memory_resource* sourceResource)
+        : settings(std::move(source)), resource(sourceResource) {}
+
+    std::size_t references{1};  // the table owns the initial reference
+    OriginSettings settings;
+    std::pmr::memory_resource* resource;
+};
+
+namespace {
+
+void releaseOrigin(EdgeOriginControl* control) noexcept {
+    if (control == nullptr) {
+        return;
+    }
+    assert(control->references > 0);
+    if (--control->references == 0) {
+        ::ruvia::detail::destroyPmrObject(control, control->resource);
+    }
+}
+
+}  // namespace
+
+OriginLease::OriginLease(EdgeOriginControl* control) noexcept : control_(control) {
+    if (control_ != nullptr) {
+        ++control_->references;
+    }
+}
+
+OriginLease::~OriginLease() {
+    releaseOrigin(control_);
+}
+
+OriginLease::OriginLease(OriginLease&& other) noexcept
+    : control_(std::exchange(other.control_, nullptr)) {}
+
+OriginLease& OriginLease::operator=(OriginLease&& other) noexcept {
+    if (this != &other) {
+        releaseOrigin(control_);
+        control_ = std::exchange(other.control_, nullptr);
+    }
+    return *this;
+}
+
+const OriginSettings* OriginLease::get() const noexcept {
+    return control_ != nullptr ? &control_->settings : nullptr;
+}
+
+const OriginSettings& OriginLease::operator*() const noexcept {
+    assert(control_ != nullptr);
+    return control_->settings;
+}
+
+const OriginSettings* OriginLease::operator->() const noexcept {
+    assert(control_ != nullptr);
+    return &control_->settings;
+}
+
+EdgeConfig::EdgeConfig(std::pmr::memory_resource* resource) noexcept
+    : resource_(::ruvia::detail::pmrResourceOrDefault(resource)), origins_(resource_) {}
+
+EdgeConfig::~EdgeConfig() {
+    for (const auto& [key, control] : origins_) {
+        (void)key;
+        releaseOrigin(control);
+    }
+}
+
+OriginLease EdgeConfig::findOrigin(std::string_view frontHost) noexcept {
     const auto it = origins_.find(frontHost);
-    return it != origins_.end() ? &it->second : nullptr;
-}
-
-EdgeConfig::EdgeConfig()
-    : current_(std::make_shared<const EdgeConfigSnapshot>()) {}
-
-EdgeConfig::SnapshotPtr EdgeConfig::loadSnapshot(
-    std::memory_order order) const noexcept {
-#if defined(__cpp_lib_atomic_shared_ptr)
-    return current_.load(order);
-#else
-    return std::atomic_load_explicit(&current_, order);
-#endif
-}
-
-void EdgeConfig::storeSnapshot(
-    SnapshotPtr snapshot, std::memory_order order) noexcept {
-#if defined(__cpp_lib_atomic_shared_ptr)
-    current_.store(std::move(snapshot), order);
-#else
-    std::atomic_store_explicit(&current_, std::move(snapshot), order);
-#endif
-}
-
-std::shared_ptr<const EdgeConfigSnapshot> EdgeConfig::snapshot() const noexcept {
-    return loadSnapshot(std::memory_order_acquire);
+    return OriginLease(it != origins_.end() ? it->second : nullptr);
 }
 
 bool EdgeConfig::addOrigin(std::string frontHost, OriginSettings settings) {
-    const std::lock_guard<std::mutex> lock(writeMutex_);
-    const auto previous = loadSnapshot(std::memory_order_relaxed);
-    auto next = std::make_shared<EdgeConfigSnapshot>(*previous);
-    const auto inserted =
-        next->origins_.insert_or_assign(
-            std::move(frontHost), std::move(settings)).second;
-    storeSnapshot(
-        std::shared_ptr<const EdgeConfigSnapshot>(std::move(next)),
-        std::memory_order_release);
-    return inserted;
+    auto replacement = ::ruvia::detail::makePmrObject<EdgeOriginControl>(
+        resource_, std::move(settings), resource_);
+    const auto [it, inserted] = origins_.try_emplace(
+        std::pmr::string(std::move(frontHost), resource_), replacement.get());
+    if (inserted) {
+        (void)replacement.release();
+        return true;
+    }
+
+    EdgeOriginControl* previous = std::exchange(it->second, replacement.release());
+    releaseOrigin(previous);
+    return false;
 }
 
-bool EdgeConfig::removeOrigin(std::string_view frontHost) {
-    const std::lock_guard<std::mutex> lock(writeMutex_);
-    const auto previous = loadSnapshot(std::memory_order_relaxed);
-    const auto it = previous->origins_.find(frontHost);
-    if (it == previous->origins_.end()) {
+bool EdgeConfig::removeOrigin(std::string_view frontHost) noexcept {
+    const auto it = origins_.find(frontHost);
+    if (it == origins_.end()) {
         return false;
     }
-    auto next = std::make_shared<EdgeConfigSnapshot>(*previous);
-    next->origins_.erase(next->origins_.find(frontHost));
-    storeSnapshot(
-        std::shared_ptr<const EdgeConfigSnapshot>(std::move(next)),
-        std::memory_order_release);
+    EdgeOriginControl* removed = it->second;
+    origins_.erase(it);
+    releaseOrigin(removed);
     return true;
 }
 

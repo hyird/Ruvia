@@ -1,4 +1,3 @@
-#include "test_io_context.h"
 #include "test_harness.h"
 #include "http2_sansio_session_fixture.h"
 
@@ -62,7 +61,7 @@ std::string frame(std::uint8_t type, std::uint8_t flags, std::uint32_t streamId,
 // connection flow-control window). Returns every connection-level (stream 0)
 // WINDOW_UPDATE increment emitted by the real session.
 std::vector<std::uint32_t> collectConnectionWindowUpdatesForDroppedData(std::uint32_t dataBytes) {
-    asio::io_context& io = ruvia::test::newTestIoContext();
+    asio::io_context io;
     std::vector<std::uint32_t> increments;
 
     tcp::acceptor acceptor(io, tcp::endpoint(asio::ip::make_address("127.0.0.1"), 0));
@@ -168,7 +167,7 @@ std::vector<std::uint32_t> collectConnectionWindowUpdatesForDroppedData(std::uin
 // error code the server sends for stream 1, or std::nullopt if the stream was
 // accepted instead of rejected.
 std::optional<std::uint32_t> rstErrorForBodylessContentLengthRequest() {
-    asio::io_context& io = ruvia::test::newTestIoContext();
+    asio::io_context io;
     std::optional<std::uint32_t> rstError;
 
     tcp::acceptor acceptor(io, tcp::endpoint(asio::ip::make_address("127.0.0.1"), 0));
@@ -252,7 +251,6 @@ std::optional<std::uint32_t> rstErrorForBodylessContentLengthRequest() {
 // A not-found handler whose response carries a header value large enough that the
 // HPACK-encoded response header block exceeds the default 16384-byte max frame size,
 // forcing the server onto its HEADERS + CONTINUATION path.
-#if !defined(_WIN32)
 ruvia::Task<ruvia::HttpResponse> largeHeaderNotFoundHandler(ruvia::Context& context) {
     (void)context;
     ruvia::HttpResponse response(std::pmr::get_default_resource());
@@ -274,7 +272,7 @@ struct EmittedFrame {
 // server emits, so the test can assert RFC 9113 6.10: a stream's HEADERS + CONTINUATION
 // frames must be contiguous on the wire, never interleaved with another stream's frame.
 std::vector<EmittedFrame> framesForConcurrentLargeHeaderResponses() {
-    asio::io_context& io = ruvia::test::newTestIoContext();
+    asio::io_context io;
     std::vector<EmittedFrame> frames;
 
     tcp::acceptor acceptor(io, tcp::endpoint(asio::ip::make_address("127.0.0.1"), 0));
@@ -365,12 +363,10 @@ std::vector<EmittedFrame> framesForConcurrentLargeHeaderResponses() {
     io.run();
     return frames;
 }
-#endif
 
 // The on-disk path of the short file the truncated-file-body handler serves. Set by
 // rstErrorForTruncatedFileBody() before the server runs; the single-threaded io_context
 // makes this static safe.
-#if !defined(_WIN32)
 std::string& truncatedFileBodyPath() {
     static std::string path;
     return path;
@@ -418,7 +414,7 @@ ruvia::Task<ruvia::HttpResponse> missingFileBodyHandler(ruvia::Context& context)
 // (mutation) case fails fast instead of blocking on the read forever.
 std::optional<std::uint32_t> rstErrorForFileBodyHandler(
     ruvia::Task<ruvia::HttpResponse> (*handler)(ruvia::Context&)) {
-    asio::io_context& io = ruvia::test::newTestIoContext();
+    asio::io_context io;
     std::optional<std::uint32_t> rstError;
 
     tcp::acceptor acceptor(io, tcp::endpoint(asio::ip::make_address("127.0.0.1"), 0));
@@ -530,7 +526,6 @@ std::optional<std::uint32_t> rstErrorForMissingFileBody() {
     missingFileBodyPath() = filePath.string();
     return rstErrorForFileBodyHandler(&missingFileBodyHandler);
 }
-#endif
 
 }  // namespace
 
@@ -562,7 +557,6 @@ RUVIA_TEST(http2_dropped_data_credits_connection_flow_window) {
     RUVIA_CHECK(credited);
 }
 
-#if !defined(_WIN32)
 RUVIA_TEST(http2_headers_and_continuation_not_interleaved_across_streams) {
     const auto frames = framesForConcurrentLargeHeaderResponses();
 
@@ -597,9 +591,7 @@ RUVIA_TEST(http2_headers_and_continuation_not_interleaved_across_streams) {
     RUVIA_CHECK(!interleaved);
     RUVIA_CHECK_EQ(openStream, std::uint32_t{0});
 }
-#endif
 
-#if !defined(_WIN32)
 RUVIA_TEST(http2_truncated_file_body_aborts_stream_with_rst) {
     // The response advertises content-length 40000 but the file on disk is 5 bytes, so
     // writeFileBody hits a short read (read<=0) with body bytes still outstanding and
@@ -624,4 +616,3 @@ RUVIA_TEST(http2_missing_file_body_aborts_stream_with_rst) {
     RUVIA_CHECK(rstError.has_value());
     RUVIA_CHECK_EQ(rstError.value_or(0), std::uint32_t{0x2});
 }
-#endif

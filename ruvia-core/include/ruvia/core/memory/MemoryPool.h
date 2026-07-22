@@ -6,10 +6,6 @@
 
 namespace ruvia {
 
-namespace detail {
-struct DeferProcessMemoryFreeze final {};
-}
-
 // Default initial bump-block size for a request arena. Runtime integrations size
 // their connection-private dispatch blocks to this same constant, so configured
 // defaults and compile-time blocks stay in lockstep: a request whose allocations
@@ -25,34 +21,9 @@ struct MemoryPoolConfig {
     std::size_t requestInitialBufferBytes{kRequestArenaInitialBytes};
 };
 
-class ProcessMemory final {
-public:
-    [[nodiscard]] static ProcessMemory& instance() noexcept;
-
-    void configure(const MemoryPoolConfig& config);
-    void freeze() noexcept;
-
-    [[nodiscard]] MemoryPoolConfig config() const noexcept;
-    [[nodiscard]] bool frozen() const noexcept;
-    [[nodiscard]] std::pmr::memory_resource* upstreamResource() noexcept;
-
-    ProcessMemory(const ProcessMemory&) = delete;
-    ProcessMemory& operator=(const ProcessMemory&) = delete;
-
-private:
-    ProcessMemory();
-
-    MemoryPoolConfig config_;
-    std::pmr::synchronized_pool_resource upstream_;
-    bool frozen_{false};
-};
-
 class WorkerMemory final {
 public:
-    explicit WorkerMemory(const MemoryPoolConfig& config = ProcessMemory::instance().config());
-    WorkerMemory(
-        const MemoryPoolConfig& config,
-        detail::DeferProcessMemoryFreeze);
+    explicit WorkerMemory(const MemoryPoolConfig& config = {});
 
     WorkerMemory(const WorkerMemory&) = delete;
     WorkerMemory& operator=(const WorkerMemory&) = delete;

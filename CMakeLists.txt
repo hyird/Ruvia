@@ -37,6 +37,11 @@ file(READ "${CMAKE_CURRENT_SOURCE_DIR}/vcpkg.json" _ruvia_manifest)
 string(JSON _ruvia_version GET "${_ruvia_manifest}" version-string)
 project(ruvia VERSION ${_ruvia_version} LANGUAGES CXX)
 
+if(NOT CMAKE_SYSTEM_NAME STREQUAL "Linux" AND
+   NOT CMAKE_SYSTEM_NAME STREQUAL "Darwin")
+    message(FATAL_ERROR "Ruvia supports only Linux and macOS")
+endif()
+
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
@@ -75,22 +80,7 @@ function(ruvia_configure_library target)
         PRIVATE
             ${CMAKE_CURRENT_SOURCE_DIR}/src
     )
-    if(WIN32)
-        target_compile_definitions(${target} PUBLIC _WIN32_WINNT=0x0A00)
-    endif()
-
-    if(MSVC)
-        target_compile_options(${target} PUBLIC /utf-8 /Zc:preprocessor)
-        target_compile_options(${target} PRIVATE /W4 /permissive- /bigobj /FS)
-        if(CMAKE_MSVC_RUNTIME_LIBRARY MATCHES "^MultiThreaded")
-            target_compile_options(${target}
-                INTERFACE
-                    "$<$<CXX_COMPILER_ID:MSVC>:/MT$<$<CONFIG:Debug>:d>>"
-            )
-        endif()
-    else()
-        target_compile_options(${target} PRIVATE -Wall -Wextra -Wpedantic)
-    endif()
+    target_compile_options(${target} PRIVATE -Wall -Wextra -Wpedantic)
 
     target_link_options(${target}
         INTERFACE

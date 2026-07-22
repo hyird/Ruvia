@@ -4,10 +4,10 @@
 // an existing key, purge/clear, and the refusal of an oversized entry.
 
 #include <cstdio>
-#include <memory>
 #include <string>
 
-#include "ruvia/edge/EdgeCache.h"
+#include "ruvia/edge/detail/EdgeCache.h"
+#include "ruvia/http/HttpStatus.h"
 
 namespace {
 
@@ -23,14 +23,15 @@ void check(bool condition, const char* message) {
 using ruvia::edge::CachedResponse;
 using ruvia::edge::CacheLookupStatus;
 using ruvia::edge::EdgeCache;
+using ruvia::edge::EdgeCacheLimits;
 
 // Build an entry whose body is `size` bytes and whose freshness deadline is
 // `expiresAt`.
-std::shared_ptr<const CachedResponse> makeEntry(std::size_t size, std::time_t expiresAt) {
-    auto entry = std::make_shared<CachedResponse>();
-    entry->status = 200;
-    entry->body.assign(size, 'x');
-    entry->expiresAt = expiresAt;
+CachedResponse makeEntry(std::size_t size, std::time_t expiresAt) {
+    CachedResponse entry;
+    entry.status = ruvia::http_status::kOk.value();
+    entry.body.assign(size, 'x');
+    entry.expiresAt = expiresAt;
     return entry;
 }
 
@@ -41,22 +42,22 @@ int main() {
 
     // Miss, then fresh hit, then stale hit as time passes the deadline.
     {
-        EdgeCache cache(EdgeCache::Limits{});
+        EdgeCache cache(EdgeCacheLimits{});
         check(cache.lookup("a", kNow).status == CacheLookupStatus::kMiss, "unknown key misses");
 
         cache.store("a", makeEntry(10, kNow + 100));
         const auto fresh = cache.lookup("a", kNow);
         check(fresh.status == CacheLookupStatus::kFresh, "stored key hits fresh");
-        check(fresh.entry != nullptr && fresh.entry->body.size() == 10, "entry payload returned");
+        check(fresh.entry && fresh.entry->body.size() == 10, "entry payload returned");
 
         const auto stale = cache.lookup("a", kNow + 200);
         check(stale.status == CacheLookupStatus::kStale, "past the deadline the hit is stale");
-        check(stale.entry != nullptr, "stale hit still returns the entry");
+        check(static_cast<bool>(stale.entry), "stale hit still returns the entry");
     }
 
     // Entry-count cap evicts the least-recently-used key.
     {
-        EdgeCache cache(EdgeCache::Limits{/*maxBytes=*/1u << 20, /*maxEntries=*/2});
+        EdgeCache cache(EdgeCacheLimits{/*maxBytes=*/1u << 20, /*maxEntries=*/2});
         cache.store("a", makeEntry(1, kNow + 100));
         cache.store("b", makeEntry(1, kNow + 100));
         cache.store("c", makeEntry(1, kNow + 100));  // evicts "a"
@@ -68,7 +69,7 @@ int main() {
 
     // A lookup promotes recency, changing which key is evicted next.
     {
-        EdgeCache cache(EdgeCache::Limits{/*maxBytes=*/1u << 20, /*maxEntries=*/2});
+        EdgeCache cache(EdgeCacheLimits{/*maxBytes=*/1u << 20, /*maxEntries=*/2});
         cache.store("a", makeEntry(1, kNow + 100));
         cache.store("b", makeEntry(1, kNow + 100));
         (void)cache.lookup("a", kNow);               // a is now most-recent
@@ -80,7 +81,7 @@ int main() {
 
     // Byte budget evicts until the total footprint fits.
     {
-        EdgeCache cache(EdgeCache::Limits{/*maxBytes=*/100, /*maxEntries=*/1000});
+        EdgeCache cache(EdgeCacheLimits{/*maxBytes=*/100, /*maxEntries=*/1000});
         cache.store("a", makeEntry(60, kNow + 100));
         cache.store("b", makeEntry(60, kNow + 100));  // 120 > 100 -> evict a
         check(cache.byteSize() == 60, "byte total reflects the surviving entry");
@@ -90,18 +91,24 @@ int main() {
 
     // Replacing an existing key updates value and byte accounting, not count.
     {
-        EdgeCache cache(EdgeCache::Limits{});
+        EdgeCache cache(EdgeCacheLimits{});
         cache.store("a", makeEntry(10, kNow + 100));
+        const auto original = cache.lookup("a", kNow).entry;
         cache.store("a", makeEntry(25, kNow + 100));
         check(cache.entryCount() == 1, "replacement keeps a single entry");
         check(cache.byteSize() == 25, "replacement updates accounted bytes");
         const auto hit = cache.lookup("a", kNow);
-        check(hit.entry != nullptr && hit.entry->body.size() == 25, "replacement value served");
+        check(hit.entry && hit.entry->body.size() == 25, "replacement value served");
+        check(original && original->body.size() == 10,
+              "outstanding lease survives replacement");
+        cache.purge("a");
+        check(original && original->body.size() == 10,
+              "outstanding lease survives purge");
     }
 
     // An entry larger than the whole byte budget is refused, leaving the cache untouched.
     {
-        EdgeCache cache(EdgeCache::Limits{/*maxBytes=*/100, /*maxEntries=*/1000});
+        EdgeCache cache(EdgeCacheLimits{/*maxBytes=*/100, /*maxEntries=*/1000});
         cache.store("keep", makeEntry(50, kNow + 100));
         const bool stored = cache.store("huge", makeEntry(200, kNow + 100));
         check(!stored, "oversized entry is refused");
@@ -112,7 +119,7 @@ int main() {
 
     // Purge and clear.
     {
-        EdgeCache cache(EdgeCache::Limits{});
+        EdgeCache cache(EdgeCacheLimits{});
         cache.store("a", makeEntry(10, kNow + 100));
         cache.store("b", makeEntry(10, kNow + 100));
         check(cache.purge("a"), "purge reports removal");

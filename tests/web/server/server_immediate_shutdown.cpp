@@ -105,7 +105,7 @@ int main() {
                     }
                     throw std::runtime_error("worker failed during immediate stop");
                     co_return;
-                }) != ruvia::PostResult::kAccepted) {
+                }) != ruvia::PostStatus::kAccepted) {
             return 3;
         }
 

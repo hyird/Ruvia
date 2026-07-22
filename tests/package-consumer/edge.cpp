@@ -1,11 +1,11 @@
-#include <ruvia/edge/EdgeConfig.h>
+#include <ruvia/edge/EdgeServer.h>
 
 int main() {
-    ruvia::edge::EdgeConfig config;
-    ruvia::edge::OriginSettings settings;
-    settings.upstreamHost = "origin.local";
-    settings.upstreamPort = 8080;
-    config.addOrigin("front.local", settings);
-    const auto snapshot = config.snapshot();
-    return snapshot->findOrigin("front.local") != nullptr ? 0 : 1;
+    ruvia::edge::EdgeServer server({"127.0.0.1", 0});
+    if (!server.addOrigin(
+            "front.local",
+            ruvia::edge::OriginSettings{"origin.local", 8080, false})) {
+        return 2;
+    }
+    return server.localEndpoint().port == 0 ? 1 : 0;
 }

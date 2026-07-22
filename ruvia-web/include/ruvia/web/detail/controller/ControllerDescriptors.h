@@ -37,6 +37,9 @@ struct ControllerStoreStateDeleter final {
     void operator()(ControllerStoreState* state) const noexcept;
 };
 
+class ControllerStore;
+using ControllerRegistrar = void (*)(Router&, ControllerStore&);
+
 class ControllerStore final {
 public:
     ControllerStore();
@@ -50,7 +53,10 @@ public:
 private:
     template <typename ControllerT>
     friend void registerControllerInstance(Router& router, ControllerStore& controllerLifetimes);
-    friend void runControllerRegistrars(Router& router, ControllerStore& controllerLifetimes);
+    friend void runControllerRegistrars(
+        Router& router,
+        ControllerStore& controllerLifetimes,
+        std::span<const ControllerRegistrar> registrars);
 
     template <typename T, typename... Args>
     T& emplace(Args&&... args) {
@@ -143,9 +149,12 @@ private:
     std::unique_ptr<Impl, ImplDeleter> impl_;
 };
 
-using ControllerRegistrar = void (*)(Router&, ControllerStore&);
-
 [[nodiscard]] bool addControllerRegistrar(ControllerRegistrar registrar);
-void runControllerRegistrars(Router& router, ControllerStore& controllerLifetimes);
+[[nodiscard]] std::pmr::vector<ControllerRegistrar>
+snapshotControllerRegistrars();
+void runControllerRegistrars(
+    Router& router,
+    ControllerStore& controllerLifetimes,
+    std::span<const ControllerRegistrar> registrars);
 
 }  // namespace ruvia::detail
