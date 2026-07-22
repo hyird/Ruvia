@@ -378,6 +378,7 @@ if(RUVIA_BUILD_HTTP)
 endif()
 
 if(RUVIA_BUILD_WEB)
+    ruvia_add_test(ruvia_guard_web_api_surface web/guards/web_api_surface_guard.cpp)
     ruvia_add_test(ruvia_guard_middleware_next web/guards/middleware_next_guard.cpp)
     ruvia_add_test(ruvia_guard_context_response_state web/guards/context_response_state_guard.cpp)
     ruvia_add_test(ruvia_guard_context_request_header web/guards/context_request_header_guard.cpp)
