@@ -42,9 +42,8 @@ concurrency:
   group: build-${{ github.workflow }}-${{ github.sha }}
   cancel-in-progress: true
 
-# Linux builds with GCC 13 and macOS with the image's stock Apple Clang.
-# Neither job installs a compiler: both toolchains ship with the runner image.
-# Both enable every optional feature.
+# Linux builds with GCC 13, macOS with the image's stock Apple Clang, and
+# Windows with MSVC. Every job enables all optional features.
 jobs:
   linux_build:
     name: Linux
@@ -198,9 +197,76 @@ jobs:
       - name: Test
         run: ctest --test-dir build/test --output-on-failure --build-config "$BUILD_TYPE"
 
+  windows_build:
+    name: Windows
+    runs-on: windows-2025
+    env:
+      GIT_CONFIG_COUNT: 1
+      GIT_CONFIG_KEY_0: init.defaultBranch
+      GIT_CONFIG_VALUE_0: main
+      VCPKG_ROOT: ${{ github.workspace }}\vcpkg
+      VCPKG_DEFAULT_BINARY_CACHE: ${{ github.workspace }}\.cache\vcpkg\archives
+      VCPKG_DEFAULT_TRIPLET: x64-windows-static
+      VCPKG_DEFAULT_HOST_TRIPLET: x64-windows-static
+      VCPKG_COMMIT: 4bca8fd8654e5ba76f92661db7bfe954768ad8ef
+      BUILD_TYPE: Debug
+    steps:
+      - name: Checkout ruvia
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - name: Restore vcpkg binary cache
+        id: vcpkg-cache
+        uses: actions/cache/restore@v6
+        with:
+          path: ${{ env.VCPKG_DEFAULT_BINARY_CACHE }}
+          key: vcpkg-binaries-${{ runner.os }}-${{ runner.arch }}-msvc-x64-windows-static-${{ env.VCPKG_COMMIT }}-${{ hashFiles('vcpkg.json', 'triplets/**', 'CMakeLists.txt') }}
+          restore-keys: |
+            vcpkg-binaries-${{ runner.os }}-${{ runner.arch }}-msvc-x64-windows-static-${{ env.VCPKG_COMMIT }}-
+
+      - name: Bootstrap vcpkg
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force $env:VCPKG_DEFAULT_BINARY_CACHE | Out-Null
+          git init $env:VCPKG_ROOT
+          git -C $env:VCPKG_ROOT remote add origin https://github.com/microsoft/vcpkg.git
+          git -C $env:VCPKG_ROOT fetch --depth 1 origin $env:VCPKG_COMMIT
+          git -C $env:VCPKG_ROOT checkout --detach FETCH_HEAD
+          & "$env:VCPKG_ROOT\bootstrap-vcpkg.bat" -disableMetrics
+
+      - name: Configure
+        shell: pwsh
+        run: |
+          cmake -S . -B build/test -G "Visual Studio 17 2022" -A x64 `
+            -DCMAKE_COMPILE_WARNING_AS_ERROR=ON `
+            -DRUVIA_ENABLE_MARIADB=ON `
+            -DRUVIA_ENABLE_POSTGRESQL=ON `
+            -DRUVIA_ENABLE_REDIS=ON `
+            -DRUVIA_ENABLE_JWT=ON `
+            -DRUVIA_BUILD_EXAMPLES=ON `
+            -DRUVIA_BUILD_TESTS=ON `
+            -DRUVIA_BUILD_EDGE=ON `
+            -DCMAKE_TOOLCHAIN_FILE="$env:VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake"
+
+      - name: Save vcpkg binary cache
+        if: steps.vcpkg-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v6
+        with:
+          path: ${{ env.VCPKG_DEFAULT_BINARY_CACHE }}
+          key: ${{ steps.vcpkg-cache.outputs.cache-primary-key }}
+
+      - name: Build
+        shell: pwsh
+        run: cmake --build build/test --config $env:BUILD_TYPE --parallel
+
+      - name: Test
+        shell: pwsh
+        run: ctest --test-dir build/test -C $env:BUILD_TYPE --output-on-failure
+
   cleanup:
     name: Prune old runs
-    needs: [linux_build, macos_build]
+    needs: [linux_build, macos_build, windows_build]
     # Run after all builds regardless of their result, but never on pull
     # requests (a fork's token is read-only and must not prune main's history).
     if: ${{ always() && github.event_name != 'pull_request' }}

@@ -9,7 +9,7 @@
 
 namespace ruvia::detail {
 
-[[nodiscard]] inline bool isDriveQualifiedPath(std::string_view path) noexcept {
+[[nodiscard]] inline bool isWindowsDrivePath(std::string_view path) noexcept {
     if (path.size() < 2 || path[1] != ':') {
         return false;
     }
@@ -23,7 +23,7 @@ namespace ruvia::detail {
     std::string_view input,
     std::pmr::polymorphic_allocator<char> allocator) {
     if (!input.empty() &&
-        (input.front() == '/' || input.front() == '\\' || isDriveQualifiedPath(input))) {
+        (input.front() == '/' || input.front() == '\\' || isWindowsDrivePath(input))) {
         throw HttpError(ruvia::http_status::kForbidden, "forbidden", "invalid static file path");
     }
 

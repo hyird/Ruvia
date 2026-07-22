@@ -1,3 +1,4 @@
+#include "test_io_context.h"
 #include "test_harness.h"
 #include "http2_sansio_session_fixture.h"
 
@@ -64,7 +65,11 @@ constexpr std::string_view kClientPreface = "PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n";
 
 // Tear down the synthetic client's transport once it has read the complete
 // response. Uses a graceful shutdown (FIN) instead of a linger-0 abortive close
-// (RST), delivering a clean EOF that terminates the session deterministically.
+// (RST): on Windows IOCP an abortive RST teardown does not reliably complete the
+// server session's pending overlapped async_read, so runHttp2SansIoSession's reader
+// stays blocked and io.run() hangs forever (the whole ruvia_unit_tests binary then
+// times out on the first such test). A FIN delivers a clean EOF that terminates the
+// session on every platform -- the same teardown the HTTP/2 server socket tests use.
 void closeClientSocket(tcp::socket& socket) noexcept {
     asio::error_code ignored;
     socket.shutdown(asio::socket_base::shutdown_both, ignored);
@@ -265,7 +270,7 @@ RUVIA_TEST(sansio_driver_h2_session_context_owns_complete_wiring) {
 // 200 "pong" response, and the pump flushes it back. Validates the driver contract and
 // the core's external usability with zero coroutine sessions.
 RUVIA_TEST(sansio_driver_h2_get_round_trip) {
-    asio::io_context io;
+    asio::io_context& io = ruvia::test::newTestIoContext();
     tcp::acceptor acceptor(io, tcp::endpoint(asio::ip::make_address("127.0.0.1"), 0));
     const std::uint16_t port = acceptor.local_endpoint().port();
     bool gotPong = false;
@@ -384,7 +389,7 @@ RUVIA_TEST(sansio_driver_h2_get_round_trip) {
 // then submits the response. The client verifies a response HEADERS frame comes back --
 // proving request-build -> resolve -> dispatch -> submit works with no coroutine session.
 RUVIA_TEST(sansio_driver_h2_real_dispatch_round_trip) {
-    asio::io_context io;
+    asio::io_context& io = ruvia::test::newTestIoContext();
     tcp::acceptor acceptor(io, tcp::endpoint(asio::ip::make_address("127.0.0.1"), 0));
     const std::uint16_t port = acceptor.local_endpoint().port();
     bool gotResponseHead = false;
@@ -466,7 +471,7 @@ RUVIA_TEST(sansio_driver_h2_real_dispatch_round_trip) {
 // request body: a POST /echo route echoes the body; the buffered helper accumulates the
 // DATA into the stream, dispatches to the handler, and submits the echoed response.
 RUVIA_TEST(sansio_driver_h2_post_echo_real_handler) {
-    asio::io_context io;
+    asio::io_context& io = ruvia::test::newTestIoContext();
     tcp::acceptor acceptor(io, tcp::endpoint(asio::ip::make_address("127.0.0.1"), 0));
     const std::uint16_t port = acceptor.local_endpoint().port();
     std::string echoed;
@@ -555,7 +560,7 @@ RUVIA_TEST(sansio_driver_h2_post_echo_real_handler) {
 // though its request arrived second. That out-of-order completion proves the handlers
 // run concurrently rather than blocking the read/dispatch loop.
 RUVIA_TEST(sansio_driver_h2_concurrent_streams_multiplex) {
-    asio::io_context io;
+    asio::io_context& io = ruvia::test::newTestIoContext();
     tcp::acceptor acceptor(io, tcp::endpoint(asio::ip::make_address("127.0.0.1"), 0));
     const std::uint16_t port = acceptor.local_endpoint().port();
     std::vector<std::pair<std::uint32_t, std::string>> replies;
@@ -652,7 +657,7 @@ RUVIA_TEST(sansio_driver_h2_concurrent_streams_multiplex) {
 // answered with the server's Close carrying END_STREAM. Proves the per-stream inbound
 // pipe + Http2SansIoWsTransport + the shared session finalization over the core.
 RUVIA_TEST(sansio_driver_h2_websocket_echo) {
-    asio::io_context io;
+    asio::io_context& io = ruvia::test::newTestIoContext();
     tcp::acceptor acceptor(io, tcp::endpoint(asio::ip::make_address("127.0.0.1"), 0));
     const std::uint16_t port = acceptor.local_endpoint().port();
     bool gotHandshake = false;
@@ -796,7 +801,7 @@ RUVIA_TEST(sansio_driver_h2_websocket_echo) {
 // This pins the typed WsOutputPlan -> Http2EndStream mapping and prevents a runtime
 // from reconstructing END_STREAM from "we sent a Close" again.
 RUVIA_TEST(sansio_driver_h2_server_close_waits_for_peer_close) {
-    asio::io_context io;
+    asio::io_context& io = ruvia::test::newTestIoContext();
     tcp::acceptor acceptor(io, tcp::endpoint(asio::ip::make_address("127.0.0.1"), 0));
     const std::uint16_t port = acceptor.local_endpoint().port();
     bool gotHandshake = false;
@@ -928,7 +933,7 @@ RUVIA_TEST(sansio_driver_h2_server_close_waits_for_peer_close) {
 // answered with a buffered error response (HEADERS then DATA+END_STREAM), mirroring
 // the coroutine session's invalid-handshake 400 path.
 RUVIA_TEST(sansio_driver_h2_websocket_invalid_version_rejected) {
-    asio::io_context io;
+    asio::io_context& io = ruvia::test::newTestIoContext();
     tcp::acceptor acceptor(io, tcp::endpoint(asio::ip::make_address("127.0.0.1"), 0));
     const std::uint16_t port = acceptor.local_endpoint().port();
     bool gotResponseHead = false;
@@ -1063,7 +1068,7 @@ struct HpackCollect {
 // the Web product must answer 417 immediately instead of the HTTP core rejecting the
 // field block or the buffered dispatcher deadlocking while it waits for content.
 RUVIA_TEST(sansio_driver_h2_expectation_decision_precedes_request_content) {
-    asio::io_context io;
+    asio::io_context& io = ruvia::test::newTestIoContext();
     tcp::acceptor acceptor(io, tcp::endpoint(asio::ip::make_address("127.0.0.1"), 0));
     const std::uint16_t port = acceptor.local_endpoint().port();
     bool gotContinue = false;
@@ -1234,7 +1239,7 @@ RUVIA_TEST(sansio_driver_h2_expectation_decision_precedes_request_content) {
 }
 
 RUVIA_TEST(sansio_driver_h2_buffered_access_uses_only_committed_plan_status) {
-    asio::io_context io;
+    asio::io_context& io = ruvia::test::newTestIoContext();
     tcp::acceptor acceptor(
         io,
         tcp::endpoint(asio::ip::make_address("127.0.0.1"), 0));
@@ -1399,7 +1404,7 @@ RUVIA_TEST(sansio_driver_h2_buffered_access_uses_only_committed_plan_status) {
 }
 
 RUVIA_TEST(sansio_driver_h2_buffered_peer_abort_before_commit_has_no_status) {
-    asio::io_context io;
+    asio::io_context& io = ruvia::test::newTestIoContext();
     tcp::acceptor acceptor(
         io,
         tcp::endpoint(asio::ip::make_address("127.0.0.1"), 0));
@@ -1495,7 +1500,7 @@ RUVIA_TEST(sansio_driver_h2_buffered_peer_abort_before_commit_has_no_status) {
 // Trailers over the sans-I/O h2 streaming path: HEAD(no END_STREAM), DATA body, then a
 // trailing HEADERS frame carrying END_STREAM whose block decodes to the terminal section.
 RUVIA_TEST(sansio_driver_h2_stream_trailers_emitted) {
-    asio::io_context io;
+    asio::io_context& io = ruvia::test::newTestIoContext();
     tcp::acceptor acceptor(io, tcp::endpoint(asio::ip::make_address("127.0.0.1"), 0));
     const std::uint16_t port = acceptor.local_endpoint().port();
     std::string body;
@@ -1613,7 +1618,7 @@ RUVIA_TEST(sansio_driver_h2_stream_trailers_emitted) {
 // extension, and a compressed (RSV1) client frame is inflated before reaching the
 // handler, whose echo round-trips intact.
 RUVIA_TEST(sansio_driver_h2_websocket_permessage_deflate) {
-    asio::io_context io;
+    asio::io_context& io = ruvia::test::newTestIoContext();
     tcp::acceptor acceptor(io, tcp::endpoint(asio::ip::make_address("127.0.0.1"), 0));
     const std::uint16_t port = acceptor.local_endpoint().port();
     std::string handshakeFields;
@@ -1738,7 +1743,7 @@ RUVIA_TEST(sansio_driver_h2_websocket_permessage_deflate) {
 // Send-window pacing: with a tiny stream window the streaming sink must park until the
 // client grants WINDOW_UPDATEs, and every byte must still arrive, ending the stream.
 RUVIA_TEST(sansio_driver_h2_stream_send_window_pacing) {
-    asio::io_context io;
+    asio::io_context& io = ruvia::test::newTestIoContext();
     tcp::acceptor acceptor(io, tcp::endpoint(asio::ip::make_address("127.0.0.1"), 0));
     const std::uint16_t port = acceptor.local_endpoint().port();
     std::size_t received = 0;
@@ -1857,7 +1862,7 @@ RUVIA_TEST(sansio_driver_h2_large_file_body_paces_and_completes) {
         }
     }
 
-    asio::io_context io;
+    asio::io_context& io = ruvia::test::newTestIoContext();
     tcp::acceptor acceptor(io, tcp::endpoint(asio::ip::make_address("127.0.0.1"), 0));
     const std::uint16_t port = acceptor.local_endpoint().port();
     std::uint64_t received = 0;
@@ -1959,7 +1964,7 @@ RUVIA_TEST(sansio_driver_h2_large_file_body_paces_and_completes) {
 // live session to the handler's body reader chunk by chunk. Guards the signal-wake /
 // body-queue handoff -- a regression there would hang a streaming upload forever.
 RUVIA_TEST(sansio_driver_h2_streaming_request_body) {
-    asio::io_context io;
+    asio::io_context& io = ruvia::test::newTestIoContext();
     tcp::acceptor acceptor(io, tcp::endpoint(asio::ip::make_address("127.0.0.1"), 0));
     const std::uint16_t port = acceptor.local_endpoint().port();
     std::size_t receivedBytes = 0;
@@ -2050,7 +2055,7 @@ RUVIA_TEST(sansio_driver_h2_streaming_request_body) {
 }
 
 RUVIA_TEST(sansio_driver_h2_transport_end_is_error_and_joins_handler) {
-    asio::io_context io;
+    asio::io_context& io = ruvia::test::newTestIoContext();
     tcp::acceptor acceptor(
         io, tcp::endpoint(asio::ip::make_address("127.0.0.1"), 0));
     const std::uint16_t port = acceptor.local_endpoint().port();
@@ -2139,7 +2144,7 @@ RUVIA_TEST(sansio_driver_h2_transport_end_is_error_and_joins_handler) {
 // HEADERS with END_STREAM, gRPC-style) must dispatch normally. Guards the
 // processTrailerHeaders server path (client-role trailers were the only coverage).
 RUVIA_TEST(sansio_driver_h2_server_request_trailers_dispatch) {
-    asio::io_context io;
+    asio::io_context& io = ruvia::test::newTestIoContext();
     tcp::acceptor acceptor(io, tcp::endpoint(asio::ip::make_address("127.0.0.1"), 0));
     const std::uint16_t port = acceptor.local_endpoint().port();
     std::string body;
@@ -2228,7 +2233,7 @@ RUVIA_TEST(sansio_driver_h2_server_request_trailers_dispatch) {
 // #14 regression: a large BUFFERED response paced over a small send window must
 // deliver every byte + END_STREAM (and the core never buffers more than one slice).
 RUVIA_TEST(sansio_driver_h2_large_buffered_body_paces_and_completes) {
-    asio::io_context io;
+    asio::io_context& io = ruvia::test::newTestIoContext();
     tcp::acceptor acceptor(io, tcp::endpoint(asio::ip::make_address("127.0.0.1"), 0));
     const std::uint16_t port = acceptor.local_endpoint().port();
     std::uint64_t received = 0;
@@ -2328,7 +2333,7 @@ RUVIA_TEST(sansio_driver_h2_large_buffered_body_paces_and_completes) {
 // shared scanner entry, and both echo. Before the per-tunnel heartbeat-slot fix they
 // clobbered each other's registration; this proves multiplexed tunnels coexist.
 RUVIA_TEST(sansio_driver_h2_two_concurrent_ws_tunnels) {
-    asio::io_context io;
+    asio::io_context& io = ruvia::test::newTestIoContext();
     tcp::acceptor acceptor(io, tcp::endpoint(asio::ip::make_address("127.0.0.1"), 0));
     const std::uint16_t port = acceptor.local_endpoint().port();
     std::string echo1;
@@ -2430,7 +2435,7 @@ RUVIA_TEST(sansio_driver_h2_two_concurrent_ws_tunnels) {
 // (NO_ERROR) advertising the last accepted stream, the in-flight request still
 // completes, and a stream opened above the advertised id is refused.
 RUVIA_TEST(sansio_driver_h2_keepalive_requests_drains_connection) {
-    asio::io_context io;
+    asio::io_context& io = ruvia::test::newTestIoContext();
     tcp::acceptor acceptor(io, tcp::endpoint(asio::ip::make_address("127.0.0.1"), 0));
     const std::uint16_t port = acceptor.local_endpoint().port();
     bool sawGoawayNoError = false;

@@ -22,7 +22,7 @@ set(RUVIA_WEB_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/src/app/AppHttpConfig.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/app/AppIntegrationConfig.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/app/Testing.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/integration/WorkerData.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/integration/DataAccess.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/ruvia.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/http/Error.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/http/ContextErrorResponse.cpp
@@ -127,7 +127,10 @@ endif()
 add_library(ruvia-web ${RUVIA_WEB_SOURCES})
 add_library(ruvia::web ALIAS ruvia-web)
 
-set_target_properties(ruvia-web PROPERTIES EXPORT_NAME web)
+set_target_properties(ruvia-web PROPERTIES
+    EXPORT_NAME web
+    WINDOWS_EXPORT_ALL_SYMBOLS ON
+)
 
 ruvia_configure_library(ruvia-web)
 ruvia_configure_runtime_library(ruvia-web)

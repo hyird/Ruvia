@@ -14,6 +14,13 @@ option(RUVIA_ENABLE_POSTGRESQL "Enable PostgreSQL" OFF)
 option(RUVIA_ENABLE_REDIS "Enable Redis" OFF)
 option(RUVIA_ENABLE_JWT "Enable JWT" OFF)
 
+if(NOT "$ENV{VCPKG_DEFAULT_TRIPLET}" STREQUAL "")
+    set(VCPKG_TARGET_TRIPLET "$ENV{VCPKG_DEFAULT_TRIPLET}" CACHE STRING "")
+endif()
+if(NOT "$ENV{VCPKG_DEFAULT_HOST_TRIPLET}" STREQUAL "")
+    set(VCPKG_HOST_TRIPLET "$ENV{VCPKG_DEFAULT_HOST_TRIPLET}" CACHE STRING "")
+endif()
+
 if(RUVIA_BUILD_WEB AND (NOT RUVIA_BUILD_CORE OR NOT RUVIA_BUILD_HTTP))
     message(FATAL_ERROR "RUVIA_BUILD_WEB requires core and HTTP")
 endif()
@@ -37,9 +44,8 @@ file(READ "${CMAKE_CURRENT_SOURCE_DIR}/vcpkg.json" _ruvia_manifest)
 string(JSON _ruvia_version GET "${_ruvia_manifest}" version-string)
 project(ruvia VERSION ${_ruvia_version} LANGUAGES CXX)
 
-if(NOT CMAKE_SYSTEM_NAME STREQUAL "Linux" AND
-   NOT CMAKE_SYSTEM_NAME STREQUAL "Darwin")
-    message(FATAL_ERROR "Ruvia supports only Linux and macOS")
+if(WIN32 AND NOT MSVC)
+    message(FATAL_ERROR "Ruvia Windows builds require MSVC")
 endif()
 
 set(CMAKE_CXX_STANDARD 20)
@@ -80,7 +86,14 @@ function(ruvia_configure_library target)
         PRIVATE
             ${CMAKE_CURRENT_SOURCE_DIR}/src
     )
-    target_compile_options(${target} PRIVATE -Wall -Wextra -Wpedantic)
+    if(MSVC)
+        target_compile_definitions(${target} PUBLIC _WIN32_WINNT=0x0A00)
+        target_compile_options(${target}
+            PUBLIC /utf-8 /Zc:preprocessor
+            PRIVATE /W4 /permissive- /bigobj /FS)
+    else()
+        target_compile_options(${target} PRIVATE -Wall -Wextra -Wpedantic)
+    endif()
 
     target_link_options(${target}
         INTERFACE

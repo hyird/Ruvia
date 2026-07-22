@@ -37,6 +37,18 @@ template <typename ConstBufferSequence>
     std::size_t totalBytes,
     std::error_code& ec,
     std::size_t& bytesWritten) noexcept {
+#ifdef _WIN32
+    // Windows async sockets use overlapped I/O without making synchronous
+    // send calls non-blocking. A write_some() here can therefore block the
+    // worker indefinitely when the peer's receive window is exhausted.
+    // Keep all writes on the overlapped async path.
+    (void)socket;
+    (void)buffers;
+    (void)totalBytes;
+    ec.clear();
+    bytesWritten = 0;
+    return false;
+#else
     ec.clear();
     bytesWritten = socket.write_some(buffers, ec);
     if (!ec) {
@@ -48,6 +60,7 @@ template <typename ConstBufferSequence>
         return false;
     }
     return true;
+#endif
 }
 
 template <typename Stream>

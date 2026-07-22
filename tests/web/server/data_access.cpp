@@ -15,17 +15,17 @@
 #include <asio/write.hpp>
 
 #include "ruvia/core/EventLoopPool.h"
-#include "ruvia/web/WorkerData.h"
+#include "ruvia/web/DataAccess.h"
 #ifdef RUVIA_ENABLE_DATABASE
 #include "ruvia/web/detail/db/DbHostResolution.h"
 #endif
 
 namespace {
 
-static_assert(!std::is_copy_constructible_v<ruvia::WorkerDataRuntime>);
-static_assert(!std::is_move_constructible_v<ruvia::WorkerDataRuntime>);
-static_assert(!std::is_copy_constructible_v<ruvia::WorkerDataContext>);
-static_assert(!std::is_move_constructible_v<ruvia::WorkerDataContext>);
+static_assert(!std::is_copy_constructible_v<ruvia::DataAccessService>);
+static_assert(!std::is_move_constructible_v<ruvia::DataAccessService>);
+static_assert(!std::is_copy_constructible_v<ruvia::DataAccessContext>);
+static_assert(!std::is_move_constructible_v<ruvia::DataAccessContext>);
 
 template <typename T>
 concept ExposesUntrackedContext = requires(T& runtime) {
@@ -37,8 +37,8 @@ concept ExposesInertRequestMemoryTuning = requires(T& options) {
     options.memory;
 };
 
-static_assert(!ExposesUntrackedContext<ruvia::WorkerDataRuntime>);
-static_assert(!ExposesInertRequestMemoryTuning<ruvia::WorkerDataOptions>);
+static_assert(!ExposesUntrackedContext<ruvia::DataAccessService>);
+static_assert(!ExposesInertRequestMemoryTuning<ruvia::DataAccessOptions>);
 
 #if defined(RUVIA_ENABLE_DATABASE) || defined(RUVIA_ENABLE_REDIS)
 class StalledTcpServer final {
@@ -159,42 +159,42 @@ int testWorkerAffinityAndAutomaticShutdown() {
 
     std::promise<std::exception_ptr> completed;
     auto completedFuture = completed.get_future();
-    auto options = ruvia::WorkerDataOptions{};
+    auto options = ruvia::DataAccessOptions{};
     options.failureHandler = [&completed](std::exception_ptr failure) {
         completed.set_value(std::move(failure));
     };
-    ruvia::WorkerDataRuntime data(loop, std::move(options));
+    ruvia::DataAccessService service(loop, std::move(options));
 
     try {
-        (void)data.post(
-            [](ruvia::WorkerDataContext&) -> ruvia::Task<void> {
+        (void)service.post(
+            [](ruvia::DataAccessContext&) -> ruvia::Task<void> {
                 co_return;
             });
         return 1;
     } catch (const std::logic_error&) {
     }
 
-    auto ready = data.connect();
+    auto ready = service.connect();
     loops.start();
     ready.get();
 
     try {
-        data.connect().get();
+        service.connect().get();
         return 2;
     } catch (const std::logic_error& error) {
         if (std::string_view(error.what()) !=
-            "worker data runtime can only connect once") {
+            "data access service can only connect once") {
             throw;
         }
     }
 
     std::atomic_bool contextRanOnWorker{false};
-    const auto posted = data.post(
-        [&completed, &contextRanOnWorker, &data](
-            ruvia::WorkerDataContext& context) -> ruvia::Task<void> {
+    const auto posted = service.post(
+        [&completed, &contextRanOnWorker, &service](
+            ruvia::DataAccessContext& context) -> ruvia::Task<void> {
             contextRanOnWorker.store(
                 context.worker().isCurrent() &&
-                    context.worker().id() == data.worker().id() &&
+                    context.worker().id() == service.worker().id() &&
                     context.resource() != nullptr &&
                     !context.stopToken().stopRequested(),
                 std::memory_order_release);
@@ -232,7 +232,7 @@ int testWorkerAffinityAndAutomaticShutdown() {
     if (failure != nullptr) {
         std::rethrow_exception(failure);
     }
-    const auto stats = data.stats();
+    const auto stats = service.stats();
     return contextRanOnWorker.load(std::memory_order_acquire) &&
             stats.accepted == 1 && stats.completed == 1 &&
             stats.failed == 0 && stats.outstanding == 0
@@ -245,9 +245,9 @@ int testApplicationOwnedEventLoop() {
     auto attachment = ruvia::attachEventLoop(
         ioContext,
         {.mailboxCapacity = 4});
-    ruvia::WorkerDataRuntime data(attachment.loop());
+    ruvia::DataAccessService service(attachment.loop());
 
-    auto ready = data.connect();
+    auto ready = service.connect();
     std::promise<bool> ranOnAttachedWorker;
     auto ranFuture = ranOnAttachedWorker.get_future();
     std::thread runner([&ioContext] { ioContext.run(); });
@@ -255,8 +255,8 @@ int testApplicationOwnedEventLoop() {
     std::exception_ptr failure;
     try {
         ready.get();
-        if (data.post([&ranOnAttachedWorker](
-                ruvia::WorkerDataContext& context) -> ruvia::Task<void> {
+        if (service.post([&ranOnAttachedWorker](
+                ruvia::DataAccessContext& context) -> ruvia::Task<void> {
                 ranOnAttachedWorker.set_value(
                     context.worker().isCurrent() &&
                     context.resource() != nullptr &&
@@ -264,11 +264,11 @@ int testApplicationOwnedEventLoop() {
                 co_return;
             }) != ruvia::PostStatus::kAccepted) {
             throw std::runtime_error(
-                "attached worker rejected worker data job");
+                "attached event loop rejected data access job");
         }
         if (!ranFuture.get()) {
             throw std::runtime_error(
-                "worker data job did not run on attached event loop");
+                "data access job did not run on attached event loop");
         }
     } catch (...) {
         failure = std::current_exception();
@@ -279,7 +279,7 @@ int testApplicationOwnedEventLoop() {
     if (failure != nullptr) {
         std::rethrow_exception(failure);
     }
-    const auto stats = data.stats();
+    const auto stats = service.stats();
     return stats.accepted == 1 && stats.completed == 1 &&
             stats.outstanding == 0
         ? 0
@@ -292,22 +292,22 @@ int testExplicitClose() {
 
     std::promise<std::exception_ptr> completed;
     auto completedFuture = completed.get_future();
-    auto options = ruvia::WorkerDataOptions{};
+    auto options = ruvia::DataAccessOptions{};
     options.failureHandler = [&completed](std::exception_ptr failure) {
         completed.set_value(std::move(failure));
     };
-    ruvia::WorkerDataRuntime data(loop, std::move(options));
-    auto ready = data.connect();
+    ruvia::DataAccessService service(loop, std::move(options));
+    auto ready = service.connect();
     loops.start();
     ready.get();
 
     std::atomic_bool closed{false};
-    if (data.post(
-            [&data, &completed, &closed](
-                ruvia::WorkerDataContext& context) -> ruvia::Task<void> {
-                data.close();
+    if (service.post(
+            [&service, &completed, &closed](
+                ruvia::DataAccessContext& context) -> ruvia::Task<void> {
+                service.close();
                 closed.store(
-                    data.worker().isCurrent() &&
+                    service.worker().isCurrent() &&
                         context.stopToken().stopRequested(),
                     std::memory_order_release);
                 completed.set_value(nullptr);
@@ -320,7 +320,7 @@ int testExplicitClose() {
     if (failure != nullptr) {
         std::rethrow_exception(failure);
     }
-    if (data.post([](ruvia::WorkerDataContext&) -> ruvia::Task<void> {
+    if (service.post([](ruvia::DataAccessContext&) -> ruvia::Task<void> {
             co_return;
         }) != ruvia::PostStatus::kWorkerStopping) {
         return 2;
@@ -328,7 +328,7 @@ int testExplicitClose() {
 
     loops.stop();
     loops.join();
-    const auto stats = data.stats();
+    const auto stats = service.stats();
     return closed.load(std::memory_order_acquire) &&
             stats.accepted == 1 && stats.workerStopping == 1 &&
             stats.completed == 1 && stats.outstanding == 0
@@ -338,13 +338,13 @@ int testExplicitClose() {
 
 int testFailureReporting() {
     ruvia::EventLoopPool loops({.loopCount = 1, .mailboxCapacity = 4});
-    ruvia::WorkerDataRuntime data(loops.loop(0));
+    ruvia::DataAccessService service(loops.loop(0));
 
-    auto ready = data.connect();
+    auto ready = service.connect();
     loops.start();
     ready.get();
-    if (data.post([](ruvia::WorkerDataContext&) -> ruvia::Task<void> {
-            throw std::runtime_error("worker data job failed");
+    if (service.post([](ruvia::DataAccessContext&) -> ruvia::Task<void> {
+            throw std::runtime_error("data access job failed");
             co_return;
         }) != ruvia::PostStatus::kAccepted) {
         return 1;
@@ -353,8 +353,8 @@ int testFailureReporting() {
     try {
         loops.join();
     } catch (const std::runtime_error& error) {
-        const auto stats = data.stats();
-        return std::string_view(error.what()) == "worker data job failed" &&
+        const auto stats = service.stats();
+        return std::string_view(error.what()) == "data access job failed" &&
                 stats.accepted == 1 && stats.completed == 1 &&
                 stats.failed == 1 && stats.outstanding == 0
             ? 0
@@ -367,17 +367,17 @@ int testHandledFailureKeepsWorkerUsable() {
     ruvia::EventLoopPool loops({.loopCount = 1, .mailboxCapacity = 4});
     std::promise<std::exception_ptr> failed;
     auto failedFuture = failed.get_future();
-    auto options = ruvia::WorkerDataOptions{};
+    auto options = ruvia::DataAccessOptions{};
     options.failureHandler = [&failed](std::exception_ptr failure) {
         failed.set_value(std::move(failure));
     };
-    ruvia::WorkerDataRuntime data(loops.loop(0), std::move(options));
+    ruvia::DataAccessService service(loops.loop(0), std::move(options));
 
-    auto ready = data.connect();
+    auto ready = service.connect();
     loops.start();
     ready.get();
-    if (data.post([](ruvia::WorkerDataContext&) -> ruvia::Task<void> {
-            throw std::runtime_error("handled worker data failure");
+    if (service.post([](ruvia::DataAccessContext&) -> ruvia::Task<void> {
+            throw std::runtime_error("handled data access failure");
             co_return;
         }) != ruvia::PostStatus::kAccepted) {
         return 1;
@@ -387,15 +387,15 @@ int testHandledFailureKeepsWorkerUsable() {
         std::rethrow_exception(failedFuture.get());
     } catch (const std::runtime_error& error) {
         if (std::string_view(error.what()) !=
-            "handled worker data failure") {
+            "handled data access failure") {
             return 2;
         }
     }
 
     std::promise<void> recovered;
     auto recoveredFuture = recovered.get_future();
-    if (data.post([&recovered](
-            ruvia::WorkerDataContext&) -> ruvia::Task<void> {
+    if (service.post([&recovered](
+            ruvia::DataAccessContext&) -> ruvia::Task<void> {
             recovered.set_value();
             co_return;
         }) != ruvia::PostStatus::kAccepted) {
@@ -405,7 +405,7 @@ int testHandledFailureKeepsWorkerUsable() {
     loops.stop();
     loops.join();
 
-    const auto stats = data.stats();
+    const auto stats = service.stats();
     return stats.accepted == 2 && stats.completed == 2 &&
             stats.failed == 1 && stats.outstanding == 0
         ? 0
@@ -414,11 +414,11 @@ int testHandledFailureKeepsWorkerUsable() {
 
 int testStopBeforeConnectPublishesClosedGate() {
     ruvia::EventLoopPool loops({.loopCount = 1, .mailboxCapacity = 2});
-    ruvia::WorkerDataRuntime data(loops.loop(0));
+    ruvia::DataAccessService service(loops.loop(0));
 
     loops.stop();
     try {
-        data.connect().get();
+        service.connect().get();
         return 1;
     } catch (const std::runtime_error& error) {
         if (std::string_view(error.what()) !=
@@ -427,8 +427,8 @@ int testStopBeforeConnectPublishesClosedGate() {
         }
     }
 
-    auto rejected = data.post(
-        [](ruvia::WorkerDataContext&) -> ruvia::Task<void> {
+    auto rejected = service.post(
+        [](ruvia::DataAccessContext&) -> ruvia::Task<void> {
             co_return;
         });
     if (rejected != ruvia::PostStatus::kWorkerStopping ||
@@ -437,7 +437,7 @@ int testStopBeforeConnectPublishesClosedGate() {
     }
 
     loops.join();
-    const auto stats = data.stats();
+    const auto stats = service.stats();
     return stats.accepted == 0 && stats.workerStopping == 1 &&
             stats.outstanding == 0
         ? 0
@@ -451,12 +451,12 @@ int testStopWhileDatabaseConnectWaits(ruvia::DbConfig config) {
     config.port = server.port();
 
     ruvia::EventLoopPool loops({.loopCount = 1, .mailboxCapacity = 2});
-    auto options = ruvia::WorkerDataOptions{};
+    auto options = ruvia::DataAccessOptions{};
     options.databases.push_back(
-        ruvia::WorkerDatabaseConfig{"default", std::move(config)});
-    ruvia::WorkerDataRuntime data(loops.loop(0), std::move(options));
+        ruvia::DataAccessDatabaseConfig{"default", std::move(config)});
+    ruvia::DataAccessService service(loops.loop(0), std::move(options));
 
-    auto ready = data.connect();
+    auto ready = service.connect();
     loops.start();
     server.waitUntilAccepted();
     loops.stop();
@@ -471,7 +471,7 @@ int testStopWhileDatabaseConnectWaits(ruvia::DbConfig config) {
         return 2;
     } catch (const std::exception&) {
     }
-    return data.stats().outstanding == 0 ? 0 : 3;
+    return service.stats().outstanding == 0 ? 0 : 3;
 }
 #endif
 
@@ -610,12 +610,12 @@ int testStopWhileRedisConnectWaits() {
     redis.password = "secret";
 
     ruvia::EventLoopPool loops({.loopCount = 1, .mailboxCapacity = 2});
-    auto options = ruvia::WorkerDataOptions{};
+    auto options = ruvia::DataAccessOptions{};
     options.redis.push_back(
-        ruvia::WorkerRedisConfig{"default", std::move(redis)});
-    ruvia::WorkerDataRuntime data(loops.loop(0), std::move(options));
+        ruvia::DataAccessRedisConfig{"default", std::move(redis)});
+    ruvia::DataAccessService service(loops.loop(0), std::move(options));
 
-    auto ready = data.connect();
+    auto ready = service.connect();
     loops.start();
     server.waitUntilAccepted();
     loops.stop();
@@ -630,7 +630,7 @@ int testStopWhileRedisConnectWaits() {
         return 2;
     } catch (const std::exception&) {
     }
-    return data.stats().outstanding == 0 ? 0 : 3;
+    return service.stats().outstanding == 0 ? 0 : 3;
 }
 
 int testRedisCommandUsesOneAbsoluteTimeout() {
@@ -642,20 +642,20 @@ int testRedisCommandUsesOneAbsoluteTimeout() {
     redis.commandTimeout = std::chrono::milliseconds(250);
 
     ruvia::EventLoopPool loops({.loopCount = 1, .mailboxCapacity = 2});
-    auto options = ruvia::WorkerDataOptions{};
+    auto options = ruvia::DataAccessOptions{};
     options.maintenanceInterval = std::chrono::milliseconds(25);
     options.redis.push_back(
-        ruvia::WorkerRedisConfig{"default", std::move(redis)});
-    ruvia::WorkerDataRuntime data(loops.loop(0), std::move(options));
+        ruvia::DataAccessRedisConfig{"default", std::move(redis)});
+    ruvia::DataAccessService service(loops.loop(0), std::move(options));
 
-    auto ready = data.connect();
+    auto ready = service.connect();
     loops.start();
     ready.get();
 
     std::promise<int> completed;
     auto completedFuture = completed.get_future();
-    const auto posted = data.post(
-        [&completed](ruvia::WorkerDataContext& context) -> ruvia::Task<void> {
+    const auto posted = service.post(
+        [&completed](ruvia::DataAccessContext& context) -> ruvia::Task<void> {
             try {
                 auto redisHandle = context.redis();
                 co_await redisHandle.ping();
@@ -691,13 +691,13 @@ int testRedisConnectTimeoutIncludesStartupCommands() {
     redis.commandTimeout = std::chrono::seconds(1);
 
     ruvia::EventLoopPool loops({.loopCount = 1, .mailboxCapacity = 2});
-    auto options = ruvia::WorkerDataOptions{};
+    auto options = ruvia::DataAccessOptions{};
     options.maintenanceInterval = std::chrono::milliseconds(25);
     options.redis.push_back(
-        ruvia::WorkerRedisConfig{"default", std::move(redis)});
-    ruvia::WorkerDataRuntime data(loops.loop(0), std::move(options));
+        ruvia::DataAccessRedisConfig{"default", std::move(redis)});
+    ruvia::DataAccessService service(loops.loop(0), std::move(options));
 
-    auto ready = data.connect();
+    auto ready = service.connect();
     loops.start();
     auto result = 0;
     try {
@@ -716,29 +716,29 @@ int testRedisConnectTimeoutIncludesStartupCommands() {
 
 int testConfigurationValidation() {
     try {
-        ruvia::WorkerDataRuntime invalid(ruvia::EventLoop{});
+        ruvia::DataAccessService invalid(ruvia::EventLoop{});
         return 1;
     } catch (const std::invalid_argument&) {
     }
 
     ruvia::EventLoopPool loops({.loopCount = 1, .mailboxCapacity = 1});
-    auto invalidInterval = ruvia::WorkerDataOptions{};
+    auto invalidInterval = ruvia::DataAccessOptions{};
     invalidInterval.maintenanceInterval = std::chrono::milliseconds(0);
     try {
-        ruvia::WorkerDataRuntime invalid(
+        ruvia::DataAccessService invalid(
             loops.loop(0), std::move(invalidInterval));
         return 2;
     } catch (const std::invalid_argument&) {
     }
 
 #ifdef RUVIA_ENABLE_DATABASE
-    auto invalidDatabase = ruvia::WorkerDataOptions{};
+    auto invalidDatabase = ruvia::DataAccessOptions{};
     auto database = ruvia::DbConfig::mariaDb();
     database.port = 0;
     invalidDatabase.databases.push_back(
-        ruvia::WorkerDatabaseConfig{"default", std::move(database)});
+        ruvia::DataAccessDatabaseConfig{"default", std::move(database)});
     try {
-        ruvia::WorkerDataRuntime invalid(
+        ruvia::DataAccessService invalid(
             loops.loop(0), std::move(invalidDatabase));
         return 3;
     } catch (const std::invalid_argument&) {
@@ -746,13 +746,13 @@ int testConfigurationValidation() {
 #endif
 
 #ifdef RUVIA_ENABLE_REDIS
-    auto invalidRedis = ruvia::WorkerDataOptions{};
+    auto invalidRedis = ruvia::DataAccessOptions{};
     auto redis = ruvia::RedisConfig{};
     redis.port = 0;
     invalidRedis.redis.push_back(
-        ruvia::WorkerRedisConfig{"default", std::move(redis)});
+        ruvia::DataAccessRedisConfig{"default", std::move(redis)});
     try {
-        ruvia::WorkerDataRuntime invalid(
+        ruvia::DataAccessService invalid(
             loops.loop(0), std::move(invalidRedis));
         return 4;
     } catch (const std::invalid_argument&) {

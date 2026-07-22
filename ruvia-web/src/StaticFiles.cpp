@@ -300,9 +300,7 @@ StaticRoot::StaticRoot(const std::filesystem::path& root, StaticRootOptions opti
     if (ec || !std::filesystem::is_directory(canonicalRoot, ec)) {
         throw std::invalid_argument("static file root not found");
     }
-    const auto& canonicalRootNative = canonicalRoot.native();
-    state.root.assign(
-        canonicalRootNative.data(), canonicalRootNative.size());
+    detail::assignNativePath(state.root, canonicalRoot);
 
     state.cacheControl = std::move(options.cacheControl);
     state.indexFile = std::move(options.indexFile);
@@ -366,8 +364,7 @@ StaticRoot::StaticRoot(const std::filesystem::path& root, StaticRootOptions opti
         const auto enableValidators = state.enableValidators;
         detail::StaticRootEntry entry(upstream);
         entry.relativePath = std::move(relative);
-        const auto& filePathNative = filePath.native();
-        entry.filePath.assign(filePathNative.data(), filePathNative.size());
+        detail::assignNativePath(entry.filePath, filePath);
         entry.contentType = contentTypeFor(filePath, extension, options, upstream);
         entry.size = snapshot.size;
         entry.identity = snapshot.identity;
@@ -400,7 +397,7 @@ void StaticRoot::StateDeleter::operator()(detail::StaticRootState* state) const 
 }
 
 std::filesystem::path StaticRoot::path() const {
-    return std::filesystem::path(state_->root.c_str());
+    return detail::makePathFromNativePath(state_->root);
 }
 
 }  // namespace ruvia

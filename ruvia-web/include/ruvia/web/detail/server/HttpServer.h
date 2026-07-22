@@ -20,7 +20,7 @@
 #include "ruvia/core/memory/MemoryPool.h"
 #include "ruvia/core/detail/ConnectionScanner.h"
 #include "ruvia/web/WebWorker.h"
-#include "ruvia/web/detail/WorkerDataState.h"
+#include "ruvia/web/detail/DataAccessState.h"
 #include "ruvia/web/detail/server/HttpConnectionState.h"
 #include "ruvia/web/detail/server/RateLimiter.h"
 #include "ruvia/web/detail/server/HttpServerOptions.h"
@@ -121,7 +121,7 @@ private:
     SniContextLookup sniLookup_;
     HttpServerOptions options_;
     ConnectionScanner connectionScanner_;
-    WorkerDataState workerData_;
+    DataAccessState dataAccess_;
     WorkerStateRegistry workerStates_;
     std::shared_ptr<WebWorkerDispatch> webWorkerDispatch_;
     RateLimiter rateLimiter_;
