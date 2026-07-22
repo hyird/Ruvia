@@ -14,7 +14,7 @@
 #include <vector>
 
 #include "ruvia/core/memory/PmrResource.h"
-#include "ruvia/web/detail/util/BorrowedView.h"
+#include "ruvia/http/detail/util/BorrowedView.h"
 
 namespace ruvia {
 
@@ -122,7 +122,7 @@ struct RedisScanOptions {
             const std::basic_string<char, Traits, Allocator>& value) noexcept
             : value_(value) {}
 
-        template <detail::RvalueCharBasicString String>
+        template <detail::HttpTemporaryOwningCharString String>
         BorrowedText(String&&) = delete;
 
         constexpr BorrowedText& operator=(std::string_view value) noexcept {
@@ -142,7 +142,7 @@ struct RedisScanOptions {
             return *this;
         }
 
-        template <detail::RvalueCharBasicString String>
+        template <detail::HttpTemporaryOwningCharString String>
         BorrowedText& operator=(String&&) = delete;
 
         [[nodiscard]] constexpr std::string_view view() const noexcept {

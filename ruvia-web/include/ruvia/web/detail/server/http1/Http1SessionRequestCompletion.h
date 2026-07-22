@@ -1,7 +1,7 @@
 #pragma once
 
 #include "ruvia/http/detail/http1/Http1ServerConnectionPlan.h"
-#include "ruvia/web/detail/util/BorrowedView.h"
+#include "ruvia/http/detail/util/BorrowedView.h"
 
 #include <cstddef>
 #include <cstdint>
@@ -170,7 +170,7 @@ public:
                 Http1RequestBufferPipelineRestore(pipeline)));
     }
 
-    template <RvalueCharBasicString Pipeline>
+    template <HttpTemporaryOwningCharString Pipeline>
     static Http1SessionRequestCompletion makeBufferedPipelineRestore(
         Http1ServerConnectionPlan,
         Pipeline&&) = delete;
