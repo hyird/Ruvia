@@ -517,6 +517,7 @@ std::string httpsGet(std::uint16_t port, std::string_view host, std::string_view
 }
 
 // Run a shell command and capture its stdout (used to drive curl as an h2 client).
+#if !defined(_WIN32)
 std::string runShell(const std::string& command) {
     std::string output;
     FILE* pipe = popen(command.c_str(), "r");
@@ -530,6 +531,7 @@ std::string runShell(const std::string& command) {
     pclose(pipe);
     return output;
 }
+#endif
 
 [[nodiscard]] int statusOf(const std::string& raw) {
     // "HTTP/1.1 " is 9 bytes; the status code is the next three digits.
@@ -1438,7 +1440,7 @@ int main() {
     //
     // This block drives a real h2 client, so it is compiled only where the
     // build found nghttp and h2load. CMake reports the skip at configure time.
-#if defined(RUVIA_NGHTTP_EXECUTABLE) && defined(RUVIA_H2LOAD_EXECUTABLE)
+#if !defined(_WIN32) && defined(RUVIA_NGHTTP_EXECUTABLE) && defined(RUVIA_H2LOAD_EXECUTABLE)
     {
         ruvia::edge::EdgeServerOptions h2Options;
         h2Options.tls = ruvia::edge::EdgeTlsConfig{

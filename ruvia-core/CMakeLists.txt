@@ -20,7 +20,10 @@ add_library(ruvia-core
 )
 add_library(ruvia::core ALIAS ruvia-core)
 
-set_target_properties(ruvia-core PROPERTIES EXPORT_NAME core)
+set_target_properties(ruvia-core PROPERTIES
+    EXPORT_NAME core
+    WINDOWS_EXPORT_ALL_SYMBOLS ON
+)
 
 ruvia_configure_library(ruvia-core)
 ruvia_configure_runtime_library(ruvia-core)
@@ -61,6 +64,10 @@ ruvia_install_public_headers(core
 )
 
 ruvia_install_public_header_tree(core include/ruvia/core/detail)
+
+if(WIN32)
+    target_link_libraries(ruvia-core PUBLIC Mswsock Ws2_32)
+endif()
 
 ruvia_install_export(core)
 ruvia_assert_target_file_ownership(ruvia-core)

@@ -9,11 +9,13 @@
 #include <mutex>
 #include <stdexcept>
 #include <thread>
+#include <type_traits>
 #include <utility>
 #include <vector>
 
 #include "ruvia/web/detail/controller/ControllerRuntime.h"
 #include "ruvia/web/detail/app/AppConfigGuards.h"
+#include "ruvia/core/detail/NativePath.h"
 #include "ruvia/core/detail/WorkerSelection.h"
 #include "ruvia/web/detail/server/HttpServer.h"
 #include "ruvia/web/detail/router/RouterInternal.h"
@@ -39,11 +41,22 @@ void addShutdownSignals(asio::signal_set& signals) {
     return options;
 }
 
+template <typename NativeChar>
+void assignTlsFileNameFromNative(
+    std::pmr::string& output,
+    std::basic_string_view<NativeChar> native) {
+    if constexpr (std::is_same_v<NativeChar, char>) {
+        output.assign(native.data(), native.size());
+    } else {
+        const auto name = std::filesystem::path(native.begin(), native.end()).string();
+        output.assign(name.data(), name.size());
+    }
+}
+
 void assignTlsFileName(
     std::pmr::string& output,
     const std::filesystem::path& path) {
-    const auto& native = path.native();
-    output.assign(native.data(), native.size());
+    assignTlsFileNameFromNative(output, detail::nativePathView(path));
 }
 
 [[nodiscard]] detail::HttpServerOptions::Tls makeTlsOptions(
@@ -227,8 +240,7 @@ void App::run() {
         };
 
         if (state.documentRootConfig.has_value()) {
-            const auto documentRootPath =
-                std::filesystem::path(state.documentRootConfig->root.c_str());
+            const auto documentRootPath = detail::makePathFromNativePath(state.documentRootConfig->root);
             runtime->documentRoot = detail::makePmrObject<StaticRoot>(
                 runtimeResource,
                 documentRootPath,

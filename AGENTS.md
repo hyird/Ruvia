@@ -204,7 +204,7 @@ Router/error handler 不得设置 `Connection: close` 或接收 `closeConnection
 - 连接 teardown 必须先显式唤醒或终止挂起 I/O，再 join 所有仍持有连接对象的后台操作；不得只等待某一种操作来源。
 - `App::setWorkersPerListener()` 配置每个 listener 的 worker 数；双 listener topology 的总 worker 数是其两倍，禁止恢复含糊的总线程数命名。
 - `App::run()` 创建 acceptor/server/thread per worker。
-- Linux 和 macOS 要求 `SO_REUSEPORT`。
+- 非 Windows 平台要求 `SO_REUSEPORT`；Windows 使用 `SO_REUSEADDR`。
 - shutdown 只能在各 worker 自己的 `io_context` 上直接关闭 acceptor、活跃 socket 和 worker 资源；不等待请求优雅排空。
 - idle/header/body/write timeout、连接数限制和请求数限制保持 per-worker 所有权。
 - 默认限流规则和限流槽容量都显式保持 per-worker 语义；只有启动期路由元数据或默认规则证明需要限流时才预分配固定表，请求期不得惰性分配。
@@ -269,6 +269,8 @@ Router/error handler 不得设置 `Connection: close` 或接收 `closeConnection
 - `RUVIA_BUILD_CORE`、`RUVIA_BUILD_HTTP`、`RUVIA_BUILD_WEB` 默认均为 `ON`。
 - `RUVIA_BUILD_WEB=ON` 要求 core 与 HTTP 同时启用；core-only/http-only 不得查找或安装未选组件依赖。
 - MariaDB、PostgreSQL、Redis、JWT 是严格 feature：`RUVIA_ENABLE_MARIADB`、`RUVIA_ENABLE_POSTGRESQL`、`RUVIA_ENABLE_REDIS`、`RUVIA_ENABLE_JWT`。
+- Windows 只支持 MSVC，依赖使用 `x64-windows-static`；Windows CI 也必须
+  使用同一 static triplet。项目不覆盖 CMake 的 MSVC runtime 默认值。
 - outbound HTTP client 只保留在 `ruvia-http` 的 sans-I/O API；`ruvia-web` 不提供 client socket/TLS runtime、连接池、`fetch`、`proxy` 或反向代理集成。
 - 安装包暴露 `ruvia::core`、`ruvia::http`、`ruvia::web`，不暴露历史别名。
 - 下游按需请求 `web`、`core` 或 `http` component；消费示例只放在 README。
@@ -295,6 +297,20 @@ cmake -S . -B build -G Ninja \
 cmake --build build
 ctest --test-dir build --output-on-failure
 cmake --install build --prefix build/install
+```
+
+Windows 使用 MSVC static 矩阵：
+
+```powershell
+$env:VCPKG_DEFAULT_TRIPLET = "x64-windows-static"
+$env:VCPKG_DEFAULT_HOST_TRIPLET = "x64-windows-static"
+cmake -S . -B build/msvc -G "Visual Studio 17 2022" -A x64 `
+  -DCMAKE_TOOLCHAIN_FILE="$env:VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake" `
+  -DRUVIA_BUILD_TESTS=ON `
+  -DRUVIA_BUILD_EXAMPLES=ON
+cmake --build build/msvc --config Debug --parallel
+ctest --test-dir build/msvc -C Debug --output-on-failure
+cmake --install build/msvc --config Debug --prefix build/msvc/install
 ```
 
 不要提交 `build/`、`vcpkg_installed`、本地工具目录或 CodeGraph 索引。

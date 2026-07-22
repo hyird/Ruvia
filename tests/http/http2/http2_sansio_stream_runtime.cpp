@@ -1,3 +1,4 @@
+#include "test_io_context.h"
 #include "test_harness.h"
 
 #include <concepts>
@@ -137,7 +138,7 @@ asio::awaitable<void> collectSendWindowResult(
 }  // namespace
 
 RUVIA_TEST(http2_send_window_wait_rejects_missing_stream_or_signal) {
-    asio::io_context io;
+    asio::io_context& io = ruvia::test::newTestIoContext();
     ruvia::detail::Http2Connection connection(std::pmr::get_default_resource());
     std::optional<Http2SendWindowWaitResult> result;
     asio::co_spawn(
@@ -151,7 +152,7 @@ RUVIA_TEST(http2_send_window_wait_rejects_missing_stream_or_signal) {
 }
 
 RUVIA_TEST(http2_session_termination_cancels_stream_sleep_with_exact_error) {
-    asio::io_context io;
+    asio::io_context& io = ruvia::test::newTestIoContext();
     auto dispatcher =
         std::make_shared<ruvia::detail::WorkerDispatcher>(io, 8);
     const auto worker = ruvia::detail::WorkerHandleAccess::make(dispatcher);
@@ -358,7 +359,7 @@ RUVIA_TEST(http2_web_stream_runtime_table_keeps_active_storage_stable) {
 }
 
 RUVIA_TEST(http2_web_stream_runtime_table_owns_dispatch_signal_and_lease) {
-    asio::io_context io;
+    asio::io_context& io = ruvia::test::newTestIoContext();
     auto dispatcher =
         std::make_shared<ruvia::detail::WorkerDispatcher>(io, 8);
     const auto worker = ruvia::detail::WorkerHandleAccess::make(dispatcher);
@@ -410,7 +411,7 @@ RUVIA_TEST(http2_web_stream_runtime_table_owns_dispatch_signal_and_lease) {
 }
 
 RUVIA_TEST(http2_web_stream_signal_wakes_concurrent_waiters_without_self_cancel) {
-    asio::io_context io;
+    asio::io_context& io = ruvia::test::newTestIoContext();
     auto dispatcher =
         std::make_shared<ruvia::detail::WorkerDispatcher>(io, 8);
     const auto worker = ruvia::detail::WorkerHandleAccess::make(dispatcher);
@@ -443,7 +444,7 @@ RUVIA_TEST(http2_web_stream_signal_wakes_concurrent_waiters_without_self_cancel)
 }
 
 RUVIA_TEST(http2_web_stream_runtime_keeps_overflow_signal_reference_stable) {
-    asio::io_context io;
+    asio::io_context& io = ruvia::test::newTestIoContext();
     auto dispatcher =
         std::make_shared<ruvia::detail::WorkerDispatcher>(io, 8);
     const auto worker = ruvia::detail::WorkerHandleAccess::make(dispatcher);

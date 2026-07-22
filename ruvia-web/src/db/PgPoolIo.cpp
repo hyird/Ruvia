@@ -170,10 +170,17 @@ Task<void> PostgreSqlPool::waitForPostgreSql(
         [[nodiscard]] bool await_suspend(
             std::coroutine_handle<> handle) noexcept {
             continuation = handle;
+#if defined(_WIN32)
+            auto& waitable = socket.socket;
+            const auto waitType = read
+                ? asio::ip::tcp::socket::wait_read
+                : asio::ip::tcp::socket::wait_write;
+#else
             auto& waitable = socket.descriptor;
             const auto waitType = read
                 ? asio::posix::stream_descriptor::wait_read
                 : asio::posix::stream_descriptor::wait_write;
+#endif
             try {
                 waitable.async_wait(
                     waitType,

@@ -1,3 +1,4 @@
+#include "test_io_context.h"
 #include "test_harness.h"
 #include "http2_sansio_session_fixture.h"
 
@@ -135,7 +136,7 @@ int serverAlpnSelect(
 RUVIA_TEST(sansio_tls_alpn_h2_round_trip) {
     const auto pem = makeSelfSignedPem();
 
-    asio::io_context io;
+    asio::io_context& io = ruvia::test::newTestIoContext();
     tcp::acceptor acceptor(io, tcp::endpoint(asio::ip::make_address("127.0.0.1"), 0));
     const std::uint16_t port = acceptor.local_endpoint().port();
     bool alpnWasH2 = false;

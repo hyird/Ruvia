@@ -1,3 +1,4 @@
+#include "test_io_context.h"
 #include "test_harness.h"
 
 #include <array>
@@ -155,7 +156,7 @@ asio::awaitable<std::string> readShortServerFrame(tcp::socket& socket) {
 }  // namespace
 
 RUVIA_TEST(websocket_transport_read_failure_preserves_error_and_aborts) {
-    asio::io_context io;
+    asio::io_context& io = ruvia::test::newTestIoContext();
     const auto workerHandle = testWorker(io);
     RecordingTransportState state;
     state.readError = std::make_error_code(std::errc::connection_reset);
@@ -187,7 +188,7 @@ RUVIA_TEST(websocket_transport_read_failure_preserves_error_and_aborts) {
 }
 
 RUVIA_TEST(websocket_session_finish_maps_chain_failure_to_1011) {
-    asio::io_context io;
+    asio::io_context& io = ruvia::test::newTestIoContext();
     const auto workerHandle = testWorker(io);
     RecordingTransportState state;
     ConnectionScanner::Entry scannerEntry;
@@ -228,7 +229,7 @@ RUVIA_TEST(websocket_session_finish_maps_chain_failure_to_1011) {
 // callback has no connection-close return channel; for an RFC 8441 adapter abort
 // means RST_STREAM(CANCEL), so one silent tunnel cannot tear down unrelated streams.
 RUVIA_TEST(websocket_liveness_aborts_transport_not_scanner_owner) {
-    asio::io_context io;
+    asio::io_context& io = ruvia::test::newTestIoContext();
     const auto workerHandle = testWorker(io);
     RecordingTransportState state;
     ConnectionScanner::Entry scannerEntry;
@@ -264,7 +265,7 @@ RUVIA_TEST(websocket_liveness_aborts_transport_not_scanner_owner) {
 }
 
 RUVIA_TEST(websocket_close_timeout_starts_after_close_write_commits) {
-    asio::io_context io;
+    asio::io_context& io = ruvia::test::newTestIoContext();
     const auto workerHandle = testWorker(io);
     RecordingTransportState state;
     ConnectionScanner::Entry scannerEntry;
@@ -298,7 +299,7 @@ RUVIA_TEST(websocket_close_timeout_starts_after_close_write_commits) {
 }
 
 RUVIA_TEST(websocket_runtime_maps_typed_outbound_rejections) {
-    asio::io_context io;
+    asio::io_context& io = ruvia::test::newTestIoContext();
     const auto workerHandle = testWorker(io);
     RecordingTransportState state;
     ConnectionScanner::Entry scannerEntry;
@@ -350,7 +351,7 @@ RUVIA_TEST(websocket_runtime_maps_typed_outbound_rejections) {
 }
 
 RUVIA_TEST(websocket_write_guard_rejects_overlap_and_releases_after_suspend) {
-    asio::io_context io;
+    asio::io_context& io = ruvia::test::newTestIoContext();
     const auto workerHandle = testWorker(io);
     RecordingTransportState state;
     state.suspendNextWrite = true;
@@ -405,7 +406,7 @@ RUVIA_TEST(websocket_write_guard_rejects_overlap_and_releases_after_suspend) {
 }
 
 RUVIA_TEST(websocket_close_guard_rejects_write_until_close_flush_commits) {
-    asio::io_context io;
+    asio::io_context& io = ruvia::test::newTestIoContext();
     const auto workerHandle = testWorker(io);
     RecordingTransportState state;
     state.suspendNextWrite = true;
@@ -451,7 +452,7 @@ RUVIA_TEST(websocket_close_guard_rejects_write_until_close_flush_commits) {
 }
 
 RUVIA_TEST(websocket_teardown_aborts_and_joins_suspended_application_write) {
-    asio::io_context io;
+    asio::io_context& io = ruvia::test::newTestIoContext();
     const auto workerHandle = testWorker(io);
     RecordingTransportState state;
     state.suspendNextWrite = true;
@@ -491,7 +492,7 @@ RUVIA_TEST(websocket_teardown_aborts_and_joins_suspended_application_write) {
 // fragmented Text is reassembled, the application echo is serialized by the
 // same core, and the normal Close is emitted on the socket transport.
 RUVIA_TEST(websocket_socket_bridge_ping_fragment_echo_and_close) {
-    asio::io_context io;
+    asio::io_context& io = ruvia::test::newTestIoContext();
     const auto workerHandle = testWorker(io);
     tcp::acceptor acceptor(io, tcp::endpoint(asio::ip::make_address("127.0.0.1"), 0));
     const auto endpoint = acceptor.local_endpoint();
@@ -562,7 +563,7 @@ RUVIA_TEST(websocket_socket_bridge_ping_fragment_echo_and_close) {
 // Negotiated permessage-deflate crosses the actual socket bridge in both
 // directions: core decode on read, core encode on application write.
 RUVIA_TEST(websocket_socket_bridge_permessage_deflate_round_trip) {
-    asio::io_context io;
+    asio::io_context& io = ruvia::test::newTestIoContext();
     const auto workerHandle = testWorker(io);
     tcp::acceptor acceptor(io, tcp::endpoint(asio::ip::make_address("127.0.0.1"), 0));
     const auto endpoint = acceptor.local_endpoint();
@@ -636,7 +637,7 @@ RUVIA_TEST(websocket_socket_bridge_permessage_deflate_round_trip) {
 // An unmasked client frame is rejected by the core and the HTTP/1 socket bridge
 // flushes the generated 1002 Close instead of rebuilding it in the web layer.
 RUVIA_TEST(websocket_socket_bridge_protocol_error_flushes_core_close) {
-    asio::io_context io;
+    asio::io_context& io = ruvia::test::newTestIoContext();
     const auto workerHandle = testWorker(io);
     tcp::acceptor acceptor(io, tcp::endpoint(asio::ip::make_address("127.0.0.1"), 0));
     const auto endpoint = acceptor.local_endpoint();

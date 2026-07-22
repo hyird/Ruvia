@@ -1,5 +1,6 @@
 #pragma once
 
+#include "ruvia/core/detail/NativePath.h"
 #include "ruvia/http/detail/HttpResponseFileBody.h"
 #include "ruvia/web/StaticFiles.h"
 
@@ -23,7 +24,7 @@ struct StaticRootEntry final {
           lastModified(resource) {}
 
     std::pmr::string relativePath;
-    std::pmr::string filePath;
+    NativePathString filePath;
     std::pmr::string contentType;
     std::uint64_t size{0};
     ResponseFileIdentity identity{ResponseFileIdentity::unchecked()};
@@ -35,7 +36,7 @@ struct StaticRootEntry final {
 };
 
 struct StaticRootState final {
-    std::pmr::string root;
+    NativePathString root;
     std::pmr::string indexFile;
     std::pmr::string cacheControl;
     std::pmr::vector<StaticRootEntry> entries;
@@ -53,7 +54,7 @@ struct StaticRootState final {
 
 class StaticRootEntryView final {
 public:
-    [[nodiscard]] const char* filePath() const noexcept {
+    [[nodiscard]] const NativePathChar* filePath() const noexcept {
         return filePath_;
     }
 
@@ -101,7 +102,7 @@ private:
     friend class StaticRootAccess;
 
     StaticRootEntryView(
-        const char* filePath,
+        const NativePathChar* filePath,
         std::string_view contentType,
         std::string_view cacheControl,
         std::string_view etag,
@@ -126,7 +127,7 @@ private:
           validatorsEnabled_(validatorsEnabled),
           directlyServable_(directlyServable) {}
 
-    const char* filePath_;
+    const NativePathChar* filePath_;
     std::string_view contentType_;
     std::string_view cacheControl_;
     std::string_view etag_;

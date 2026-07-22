@@ -22,7 +22,9 @@
 #include <system_error>
 #include <utility>
 
+#if !defined(_WIN32)
 #include <sys/socket.h>
+#endif
 
 #include "ruvia/core/detail/ConnectionScanner.h"
 #include "ruvia/web/detail/server/HttpConnectionState.h"
@@ -205,7 +207,7 @@ HttpServer::HttpServer(
       sniLookup_(memory_.resource()),
       options_(std::move(validatedOptions)),
       connectionScanner_(workerHandle_, makeConnectionScannerOptions(options_)),
-      workerData_(
+      dataAccess_(
           ioContext_,
           memory_.resource(),
           databases,
@@ -216,8 +218,8 @@ HttpServer::HttpServer(
           ioContext_.get_executor(),
           workerHandle_,
           memory_.resource(),
-          workerData_.databases(),
-          workerData_.redis(),
+          dataAccess_.databases(),
+          dataAccess_.redis(),
           workerStates_,
           [this](std::exception_ptr failure) {
               failWorker(std::move(failure));
@@ -315,12 +317,12 @@ void HttpServer::configureAcceptor() {
         throw std::runtime_error("failed to enable SO_REUSEADDR: " + ec.message());
     }
 
-#if defined(SO_REUSEPORT)
+#if defined(SO_REUSEPORT) && !defined(_WIN32)
     int enabled = 1;
     if (::setsockopt(acceptor_.native_handle(), SOL_SOCKET, SO_REUSEPORT, &enabled, sizeof(enabled)) != 0) {
         throw std::system_error(errno, std::generic_category(), "failed to enable SO_REUSEPORT");
     }
-#else
+#elif !defined(_WIN32)
     throw std::runtime_error("SO_REUSEPORT is required but not available on this platform/toolchain");
 #endif
 
@@ -422,7 +424,7 @@ void HttpServer::stopOnContext() noexcept {
     acceptor_.close(ignored);
     connectionScanner_.stop();
     connectionScanner_.closeAll();
-    workerData_.closeNow();
+    dataAccess_.closeNow();
     workerDispatcher_->stopTimers();
 }
 
@@ -479,7 +481,7 @@ Task<void> HttpServer::runWorker() {
     }
     try {
         connectionScanner_.start();
-        co_await workerData_.connect();
+        co_await dataAccess_.connect();
         (void)workerCompletion_.markStartupReady();
         co_await acceptLoop();
     } catch (...) {

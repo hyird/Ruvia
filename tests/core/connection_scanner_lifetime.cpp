@@ -224,8 +224,9 @@ int main() {
             ruvia::PostStatus::kAccepted) {
             return 6;
         }
-        // Give the 1 ms scanner enough time to complete a deterministic pass
-        // under a parallel Debug build.
+        // Windows timer dispatch can occasionally exceed a 10 ms scheduling
+        // window under a parallel Debug build. Give the 1 ms scanner enough
+        // time to complete at least one deterministic pass.
         ioContext.run_for(std::chrono::milliseconds(50));
         if (dispatcher->post([&scanner] { scanner.stop(); }) !=
             ruvia::PostStatus::kAccepted) {

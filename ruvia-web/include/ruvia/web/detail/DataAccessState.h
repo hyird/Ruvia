@@ -21,18 +21,18 @@ struct RedisDefinition;
 // Common worker-local integration owner used by both HttpServer workers and
 // application-created EventLoops. It has no App, Context, Router, or HTTP
 // server dependency.
-class WorkerDataState final {
+class DataAccessState final {
 public:
-    WorkerDataState(
+    DataAccessState(
         asio::io_context& ioContext,
         std::pmr::memory_resource* resource,
         std::span<const DbDefinition> databases,
         std::span<const RedisDefinition> redis,
         ConnectionScanner& scanner);
-    ~WorkerDataState();
+    ~DataAccessState();
 
-    WorkerDataState(const WorkerDataState&) = delete;
-    WorkerDataState& operator=(const WorkerDataState&) = delete;
+    DataAccessState(const DataAccessState&) = delete;
+    DataAccessState& operator=(const DataAccessState&) = delete;
 
     [[nodiscard]] Task<void> connect();
     void closeNow() noexcept;

@@ -288,10 +288,17 @@ Task<int> detail::MariaDbPool::waitForMysql(
         [[nodiscard]] bool await_suspend(
             std::coroutine_handle<> handle) noexcept {
             continuation = handle;
+#if defined(_WIN32)
+            auto& waitable = slotSocket.socket;
+            constexpr auto readWait = asio::ip::tcp::socket::wait_read;
+            constexpr auto writeWait = asio::ip::tcp::socket::wait_write;
+            constexpr auto errorWait = asio::ip::tcp::socket::wait_error;
+#else
             auto& waitable = slotSocket.descriptor;
             constexpr auto readWait = asio::posix::stream_descriptor::wait_read;
             constexpr auto writeWait = asio::posix::stream_descriptor::wait_write;
             constexpr auto errorWait = asio::posix::stream_descriptor::wait_error;
+#endif
 
             try {
                 // MariaDB returns a bitmask and _cont() accepts the events that

@@ -1,8 +1,8 @@
 # One registration helper for every standalone test executable. It links the
 # requested library (ruvia::web by default), puts this directory on the include
 # path so a test can pull in support/test_harness.h from any subdirectory,
-# registers the ctest and sets the optional TIMEOUT / WILL_FAIL / RUN_SERIAL /
-# LABELS properties. Aggregated
+# applies the MSVC large-object flags uniformly, registers the ctest, and sets
+# the optional TIMEOUT / WILL_FAIL / RUN_SERIAL / LABELS properties. Aggregated
 # suites and the few multi-registration probes below stay explicit.
 function(ruvia_add_test name source)
     cmake_parse_arguments(T "WILL_FAIL;SERIAL" "LIB;TIMEOUT;LABELS" "" ${ARGN})
@@ -14,6 +14,9 @@ function(ruvia_add_test name source)
     target_include_directories(${name} PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}/support
         ${CMAKE_CURRENT_SOURCE_DIR}/http/support)
+    if(MSVC)
+        target_compile_options(${name} PRIVATE /bigobj /FS)
+    endif()
     add_test(NAME ${name} COMMAND ${name})
     set(_props "")
     if(DEFINED T_TIMEOUT)
@@ -228,6 +231,9 @@ target_link_libraries(ruvia_unit_tests PRIVATE ruvia::web)
 target_include_directories(ruvia_unit_tests PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/support
     ${CMAKE_CURRENT_SOURCE_DIR}/http/support)
+if(MSVC)
+    target_compile_options(ruvia_unit_tests PRIVATE /bigobj /FS)
+endif()
 
 add_test(NAME ruvia_unit_tests COMMAND ruvia_unit_tests)
 set_tests_properties(ruvia_unit_tests PROPERTIES TIMEOUT 180)
@@ -235,6 +241,9 @@ set_tests_properties(ruvia_unit_tests PROPERTIES TIMEOUT 180)
 if(RUVIA_ENABLE_HTTP2_CONFORMANCE_TESTS)
     add_executable(ruvia_http2_conformance_server web/server/http2_conformance_server.cpp)
     target_link_libraries(ruvia_http2_conformance_server PRIVATE ruvia::web)
+    if(MSVC)
+        target_compile_options(ruvia_http2_conformance_server PRIVATE /bigobj /FS)
+    endif()
     find_package(Python3 REQUIRED COMPONENTS Interpreter)
     add_test(
         NAME ruvia_http2_conformance
@@ -321,8 +330,15 @@ if(RUVIA_BUILD_HTTP)
     ruvia_add_test(ruvia_smoke_http_target http/unit/smoke_http_target.cpp LIB ruvia::http)
 
     # Compile the exhaustive public/detail HTTP contract once in the normal build.
+    if(MSVC)
+        set(RUVIA_HTTP_API_CONTRACT_SOURCE
+            http/guards/http_msvc_api_contract.cpp)
+    else()
+        set(RUVIA_HTTP_API_CONTRACT_SOURCE
+            http/guards/http_api_contract_guard.cpp)
+    endif()
     ruvia_add_test(ruvia_guard_http_api_contract
-        http/guards/http_api_contract_guard.cpp LIB ruvia::http)
+        ${RUVIA_HTTP_API_CONTRACT_SOURCE} LIB ruvia::http)
     ruvia_add_test(ruvia_guard_http2_stream_table
         http/guards/http2_stream_table_guard.cpp LIB ruvia::http)
 endif()
@@ -349,7 +365,7 @@ if(RUVIA_BUILD_WEB)
     ruvia_add_test(ruvia_server_write_timeout web/server/write_timeout.cpp TIMEOUT 60)
 
     ruvia_add_test(ruvia_web_worker web/server/web_worker.cpp TIMEOUT 30)
-    ruvia_add_test(ruvia_worker_data web/server/worker_data.cpp TIMEOUT 30)
+    ruvia_add_test(ruvia_data_access web/server/data_access.cpp TIMEOUT 30)
     ruvia_add_test(ruvia_app_web_worker web/server/app_web_worker.cpp TIMEOUT 30)
     ruvia_add_test(ruvia_app_startup_retry web/server/app_startup_retry.cpp TIMEOUT 30)
 endif()
@@ -366,16 +382,17 @@ if(RUVIA_BUILD_EDGE)
     # nghttp and h2load drive the edge HTTP/2 checks. They are an external CLI
     # dependency, not a build dependency, so a machine without them configures
     # and runs everything else instead of failing outright.
-    find_program(RUVIA_NGHTTP_EXECUTABLE NAMES nghttp)
-    find_program(RUVIA_H2LOAD_EXECUTABLE NAMES h2load)
-    if(RUVIA_NGHTTP_EXECUTABLE AND RUVIA_H2LOAD_EXECUTABLE)
-        target_compile_definitions(ruvia_edge_server PRIVATE
-            RUVIA_NGHTTP_EXECUTABLE="${RUVIA_NGHTTP_EXECUTABLE}"
-            RUVIA_H2LOAD_EXECUTABLE="${RUVIA_H2LOAD_EXECUTABLE}")
-    else()
-        message(STATUS
-            "nghttp2 CLI tools not found: ruvia_edge_server will skip its "
-            "HTTP/2 client checks. Install nghttp2 to run them.")
+    if(NOT WIN32)
+        find_program(RUVIA_NGHTTP_EXECUTABLE NAMES nghttp)
+        find_program(RUVIA_H2LOAD_EXECUTABLE NAMES h2load)
+        if(RUVIA_NGHTTP_EXECUTABLE AND RUVIA_H2LOAD_EXECUTABLE)
+            target_compile_definitions(ruvia_edge_server PRIVATE
+                RUVIA_NGHTTP_EXECUTABLE="${RUVIA_NGHTTP_EXECUTABLE}"
+                RUVIA_H2LOAD_EXECUTABLE="${RUVIA_H2LOAD_EXECUTABLE}")
+        else()
+            message(STATUS
+                "nghttp2 CLI tools not found: ruvia_edge_server will skip its "
+                "HTTP/2 client checks. Install nghttp2 to run them.")
+        endif()
     endif()
 endif()
-

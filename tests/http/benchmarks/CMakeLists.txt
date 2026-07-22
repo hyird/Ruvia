@@ -9,8 +9,13 @@ target_compile_definitions(ruvia_benchmark_http_hot_paths PRIVATE
     RUVIA_BENCHMARK_PROCESSOR="${CMAKE_SYSTEM_PROCESSOR}"
 )
 
-target_compile_options(ruvia_benchmark_http_hot_paths PRIVATE
-    -Wall -Wextra -Wpedantic)
+if(MSVC)
+    target_compile_options(ruvia_benchmark_http_hot_paths PRIVATE
+        /W4 /permissive- /bigobj /FS)
+else()
+    target_compile_options(ruvia_benchmark_http_hot_paths PRIVATE
+        -Wall -Wextra -Wpedantic)
+endif()
 
 # Benchmarks are deliberately not CTest tests: correctness gates must be stable
 # across hosts, while timing data is recorded and compared per runner/toolchain.

@@ -9,8 +9,8 @@ Task<void> HttpServer::handleSession(AcceptedConnectionLease connection) {
         }
         ContextServices baseServices =
             ContextServices(
-                &workerData_.databases(),
-                &workerData_.redis(),
+                &dataAccess_.databases(),
+                &dataAccess_.redis(),
                 &rateLimiter_,
                 options_.maxBufferedBodyBytes,
                 &workerHandle_)

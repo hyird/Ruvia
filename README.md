@@ -219,13 +219,14 @@ ownership of `run()`, `stop()`, `restart()`, and the thread. The attachment
 never calls `io_context::stop()` because the context may host unrelated work.
 
 Database and Redis integrations remain in `ruvia::web`, but they do not require
-an HTTP `App`, `Context`, or server worker. Bind one `WorkerDataRuntime` to each
-application-owned core event loop that needs its own pools:
+an HTTP `App`, `Context`, or server worker. `DataAccessService` does not create
+a thread or `io_context`; it attaches connection pools and coroutine-job
+lifetime tracking to an existing application-owned core event loop:
 
 ```cpp
 #include <future>
 #include <ruvia/core/EventLoopPool.h>
-#include <ruvia/web/WorkerData.h>
+#include <ruvia/web/DataAccess.h>
 
 ruvia::EventLoopPool loops({.loopCount = 1});
 auto loop = loops.loop(0);
@@ -234,18 +235,18 @@ auto pg = ruvia::DbConfig::postgreSql();
 pg.host = "127.0.0.1";
 pg.database = "app";
 
-ruvia::WorkerDataOptions options;
+ruvia::DataAccessOptions options;
 options.databases.push_back({"default", std::move(pg)});
 options.redis.push_back({"default", ruvia::RedisConfig{}});
-ruvia::WorkerDataRuntime data(loop, std::move(options));
+ruvia::DataAccessService service(loop, std::move(options));
 
-auto ready = data.connect();
+auto ready = service.connect();
 loops.start();
 std::promise<std::exception_ptr> completed;
 auto done = completed.get_future();
 ready.get();
-auto posted = data.post([&completed](
-    ruvia::WorkerDataContext& context) -> ruvia::Task<void> {
+auto posted = service.post([&completed](
+    ruvia::DataAccessContext& context) -> ruvia::Task<void> {
     try {
         co_await runWorkerJob(context.db(), context.redis());
         completed.set_value(nullptr);
@@ -267,8 +268,8 @@ if (failure != nullptr) {
 ```
 
 `connect()` schedules startup and reports it through a future; `post()` is the
-only public operation-scope entry point, and `close()` is worker-affine. A data
-context is a short-lived operation scope and must not escape its posted
+only public operation-scope entry point, and `close()` is worker-affine. A
+`DataAccessContext` is a short-lived operation scope and must not escape its posted
 coroutine. Its handles are job-scoped, while DB/Redis result values allocate
 from that worker's unsynchronized resource; neither may escape the posted
 coroutine or be destroyed from another thread. Database and Redis hostname
@@ -328,10 +329,11 @@ are closed.
 ## Requirements
 
 - CMake 3.24 or newer.
-- A C++20 compiler. CI builds with GCC 13 on Ubuntu 24.04 and with the stock
-  Apple Clang on macOS 26.
+- A C++20 compiler. CI builds with GCC 13 on Ubuntu 24.04, the stock Apple
+  Clang on macOS 26, and MSVC on Windows.
 - vcpkg.
-- Supported build platforms: Linux and macOS.
+- Supported build platforms: Linux, macOS, and Windows 10 or newer. Windows
+  builds require MSVC.
 - Component dependencies: core uses Asio; HTTP uses zlib, Brotli, and zstd;
   Web adds OpenSSL.
 - Optional vcpkg features: MariaDB, PostgreSQL, Redis, and JWT.
@@ -353,6 +355,21 @@ the same configuration, rebuild, and run the tests:
 ```bash
 ctest --test-dir build --output-on-failure
 ```
+
+Windows uses MSVC with static vcpkg libraries. If the two vcpkg defaults are
+already configured in your environment, the first two lines can be omitted:
+
+```powershell
+$env:VCPKG_DEFAULT_TRIPLET = "x64-windows-static"
+$env:VCPKG_DEFAULT_HOST_TRIPLET = "x64-windows-static"
+
+cmake -S . -B build -G "Visual Studio 17 2022" -A x64 `
+  -DCMAKE_TOOLCHAIN_FILE="$env:VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake"
+cmake --build build --config Release --parallel
+```
+
+Add `-DRUVIA_BUILD_TESTS=ON` and `-DRUVIA_BUILD_EXAMPLES=ON` when needed,
+then run `ctest --test-dir build -C Release --output-on-failure`.
 
 ### Build options
 
@@ -418,6 +435,9 @@ Install all selected targets:
 ```bash
 cmake --install build --prefix build/install
 ```
+
+For a Visual Studio build, add the selected configuration, for example
+`cmake --install build --config Release --prefix build/install`.
 
 Each library has an independent export. Consumers request the component they
 use:

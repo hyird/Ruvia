@@ -1,6 +1,7 @@
 #include "ruvia/web/ServerConfig.h"
 #include "ruvia/web/detail/app/AppConfigMutation.h"
 #include "ruvia/web/detail/ConfigValidation.h"
+#include "ruvia/core/detail/NativePath.h"
 
 #include <stdexcept>
 #include <type_traits>
@@ -166,8 +167,7 @@ App& App::setDocumentRoot(DocumentRootConfig config) {
 
             auto& documentRootConfig =
                 state.documentRootConfig.emplace(detail::appResource());
-            const auto& native = config.root.native();
-            documentRootConfig.root.assign(native.data(), native.size());
+            detail::assignNativePath(documentRootConfig.root, config.root);
             documentRootConfig.staticOptions = std::move(config.staticOptions);
         });
 }
