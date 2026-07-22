@@ -58,7 +58,7 @@ set(RUVIA_WEB_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/src/http2/Http2SansIoSendWindow.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/http/SecurityHeaders.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/http/Session.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/server/file/HttpFileWrite.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/server/HttpFileWrite.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/server/HttpConnectionState.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/server/HttpServerAccept.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/server/HttpServer.cpp

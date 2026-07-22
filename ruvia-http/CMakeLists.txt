@@ -38,11 +38,11 @@ add_library(ruvia-http
     ${CMAKE_CURRENT_SOURCE_DIR}/src/http2/Http2ConnectionStreams.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/http2/Http2ConnectionSubmit.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/http2/Http2ConnectionSubmitRequest.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/http2/frame/Http2OutputBuffer.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/http2/hpack/Http2Hpack.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/http2/hpack/Http2HpackDynamic.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/http2/hpack/Http2HpackEncoder.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/http2/hpack/Http2HpackHuffman.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/http2/Http2OutputBuffer.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/http2/Http2Hpack.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/http2/Http2HpackDynamic.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/http2/Http2HpackEncoder.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/http2/Http2HpackHuffman.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/parser/Http1RequestParser.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/parser/HttpChunkParser.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/parser/HttpHeaderBlockParser.cpp
