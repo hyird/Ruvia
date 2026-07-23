@@ -13,11 +13,6 @@
 
 namespace {
 
-std::string formatDate(std::time_t time) {
-    const auto out = ruvia::detail::httpFormatDate(std::pmr::get_default_resource(), time);
-    return std::string(out.data(), out.size());
-}
-
 std::string fileEtag(
     std::uint64_t size,
     std::uint64_t modifiedToken,

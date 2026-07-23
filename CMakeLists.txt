@@ -93,6 +93,18 @@ function(ruvia_configure_library target)
             PRIVATE /W4 /permissive- /bigobj /FS)
     else()
         target_compile_options(${target} PRIVATE -Wall -Wextra -Wpedantic)
+        # Shadowing a local or a parameter hides a rename or a stale variable
+        # behind code that still compiles, so it is worth rejecting outright.
+        # Shadowing a *member* is not the same thing: `field_(field)` in a
+        # constructor and `operator=(span headers)` inside a nested type are the
+        # idiomatic spellings, and renaming them to appease a warning trades
+        # real clarity for none. GCC names exactly the useful subset; Clang's
+        # -Wshadow bundles the member form in with no way to separate it, so it
+        # is left off rather than paid for in worse names. The Linux CI job
+        # builds with GCC, so the check runs on every push either way.
+        if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
+            target_compile_options(${target} PRIVATE -Wshadow=local)
+        endif()
     endif()
 
     target_link_options(${target}

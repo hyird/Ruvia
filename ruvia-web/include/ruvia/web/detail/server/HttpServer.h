@@ -71,6 +71,8 @@ public:
     // before touching std::thread so behavior is deterministic across platforms.
     void join();
     [[nodiscard]] asio::ip::tcp::endpoint localEndpoint() const;
+    // Safe from any thread, at any point in the lifecycle.
+    [[nodiscard]] HttpServerStats stats() const noexcept;
     [[nodiscard]] const WorkerHandle& worker() const & noexcept {
         return workerHandle_;
     }
@@ -126,7 +128,13 @@ private:
     std::shared_ptr<WebWorkerDispatch> webWorkerDispatch_;
     RateLimiter rateLimiter_;
     ConnectionWorkSetPool workSetPool_;
-    std::size_t activeConnectionCount_{0};
+    // Atomic because stats() reads them from the caller's thread while this
+    // worker updates them. Relaxed: they are counters, and publish nothing.
+    std::atomic<std::size_t> activeConnectionCount_{0};
+    std::atomic<std::size_t> connectionsRefused_{0};
+    std::atomic<std::size_t> connectionFailures_{0};
+    std::atomic<std::size_t> acceptFailures_{0};
+    std::atomic<std::size_t> workerFailures_{0};
 
     // lifecycle_ is touched by external start/stop callers. Request coroutines
     // observe workerState_, which is mutated only on this io_context.

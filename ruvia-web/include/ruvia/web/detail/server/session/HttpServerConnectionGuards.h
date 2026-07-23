@@ -20,10 +20,10 @@ class AcceptedConnectionLease final {
 public:
     AcceptedConnectionLease(
         asio::ip::tcp::socket socket,
-        std::size_t& count) noexcept
+        std::atomic<std::size_t>& count) noexcept
         : socket_(std::move(socket)),
           count_(&count) {
-        ++*count_;
+        count_->fetch_add(1, std::memory_order_relaxed);
     }
 
     AcceptedConnectionLease(const AcceptedConnectionLease&) = delete;
@@ -40,10 +40,10 @@ public:
             return;
         }
         closeSocket(socket_);
-        if (*count_ == 0) {
+        if (count_->load(std::memory_order_relaxed) == 0) {
             std::terminate();
         }
-        --*count_;
+        count_->fetch_sub(1, std::memory_order_relaxed);
     }
 
     [[nodiscard]] asio::ip::tcp::socket& socket() & noexcept {
@@ -53,7 +53,7 @@ public:
 
 private:
     asio::ip::tcp::socket socket_;
-    std::size_t* count_;
+    std::atomic<std::size_t>* count_;
 };
 
 // Returns a connection's borrowed work set to the per-worker pool on scope exit.

@@ -86,9 +86,21 @@ static_assert(!CanConstructSetCookiePlan<
     std::string_view,
     std::string_view,
     const ruvia::CookieOptions>);
+// Naming only the two attributes under test is the point of a designated
+// initializer, and every other CookieOptions member has a default member
+// initializer, so nothing is left uninitialized. GCC still reports the omitted
+// ones; suppressed here rather than project-wide so the warning keeps working
+// where a member genuinely has no default.
+#if defined(__GNUC__) && !defined(__clang__)
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wmissing-field-initializers"
+#endif
 constexpr ruvia::CookieOptions kLiteralCookieOptions{
     .path = "/app",
     .domain = "example.com"};
+#if defined(__GNUC__) && !defined(__clang__)
+#pragma GCC diagnostic pop
+#endif
 static_assert(kLiteralCookieOptions.path.view() == "/app");
 static_assert(kLiteralCookieOptions.domain.view() == "example.com");
 static_assert(kLiteralCookieOptions.path == "/app");

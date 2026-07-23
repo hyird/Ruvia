@@ -65,7 +65,7 @@ accept 循环对所有瞬时错误（accept 失败、会话启动失败）都退
 | 陈旧兜底 | `stale-while-revalidate` / `stale-if-error` | 上游不可达时用过期副本应答，而不是网关错误 |
 | 请求级降级链 | handler → onError → 默认响应 | 见 §3 |
 | 上报限流 | `reportUnhandledFailure` | 故障风暴时保证第一条（信息量最大的）失败不被后续后果淹没，也避免阻塞的 stderr 拖慢恢复 |
-| 失败计数 | `EdgeServer::stats()` | 无回调也能被健康检查观测到 |
+| 失败计数 | `EdgeServer::stats()`、`App::httpStats()` | 无回调也能被健康检查观测到 |
 
 熔断只对**传输失败**（连接/超时/读写）计数。畸形、超大、不支持的响应说明上游是活
 着的，对这些跳闸会把一个仅仅是配置错误的上游整个切掉。

@@ -22,20 +22,6 @@ using ruvia::detail::HttpRequestExpectations;
 using ruvia::detail::HttpUnsupportedExpectationPolicy;
 using ruvia::detail::HttpUpgradeProtocols;
 
-// {close, keepAlive, upgrade, te} after recipient-side parsing.
-std::array<bool, 4> connectionOptions(std::string_view value) {
-    HttpConnectionOptions options;
-    if (options.parseField(value, HttpFieldListRole::kRecipient) !=
-        HttpFieldListParseStatus::kOk) {
-        throw std::runtime_error("test expected valid Connection options");
-    }
-    return {
-        options.close(),
-        options.keepAlive(),
-        options.upgrade(),
-        options.te()};
-}
-
 }  // namespace
 
 // Finding a parameter in a semicolon-delimited field value.

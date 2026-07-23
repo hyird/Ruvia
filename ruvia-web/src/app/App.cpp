@@ -138,6 +138,24 @@ const Env& App::env() const noexcept {
     return state_->env;
 }
 
+HttpServerStats App::httpStats() const {
+    auto& state = *state_;
+    std::lock_guard lock(state.mutex);
+    HttpServerStats total;
+    if (!state.runtime) {
+        return total;
+    }
+    for (const auto& worker : state.runtime->workers) {
+        const auto stats = worker->stats();
+        total.activeConnections += stats.activeConnections;
+        total.connectionsRefused += stats.connectionsRefused;
+        total.connectionFailures += stats.connectionFailures;
+        total.acceptFailures += stats.acceptFailures;
+        total.workerFailures += stats.workerFailures;
+    }
+    return total;
+}
+
 std::vector<WebWorkerHandle> App::workers() const {
     auto& state = *state_;
     std::lock_guard lock(state.mutex);

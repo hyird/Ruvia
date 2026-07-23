@@ -26,17 +26,6 @@ std::string b64(std::string_view in) {
     return out;
 }
 
-std::optional<std::string> urlDecode(std::string_view in, ruvia::detail::UrlDecodeMode mode) {
-    auto decoded = ruvia::detail::decodeUrlComponent(
-        in,
-        mode,
-        std::pmr::get_default_resource());
-    if (!decoded.has_value()) {
-        return std::nullopt;
-    }
-    return std::string(*decoded);
-}
-
 }  // namespace
 
 // --- Base64 (RFC 4648 test vectors) --------------------------------------

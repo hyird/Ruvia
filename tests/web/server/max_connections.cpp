@@ -123,6 +123,19 @@ int main() {
         }
     }
 
+    if (result == 0) {
+        // Shedding is a load-management decision the operator has to be able to
+        // see: without a counter it is indistinguishable from a client hangup.
+        const auto stats = server.stats();
+        if (stats.connectionsRefused == 0) {
+            std::fputs("the shed connection was not counted\n", stderr);
+            result = 4;
+        } else if (stats.connectionFailures != 0) {
+            std::fputs("shedding a connection was counted as a failure\n", stderr);
+            result = 5;
+        }
+    }
+
     server.stop();
     server.join();
     return result;

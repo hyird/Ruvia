@@ -306,14 +306,15 @@ struct EventLoopPool::Impl {
             // shutdown) become the pool's first failure, which join() rethrows.
             // The sink holds the record, not the pool: a loop handle may outlive
             // this Impl, and a sink capturing `this` would outlive it too.
-            loops.back()->failureSink = [record = failure](std::exception_ptr failure) {
-                record->record(std::move(failure));
-            };
+            loops.back()->failureSink =
+                [record = failureRecord](std::exception_ptr failure) {
+                    record->record(std::move(failure));
+                };
         }
     }
 
     void recordFailure(std::exception_ptr exception) noexcept {
-        failure->record(std::move(exception));
+        failureRecord->record(std::move(exception));
     }
 
     void stop() noexcept {
@@ -379,7 +380,7 @@ struct EventLoopPool::Impl {
     std::vector<std::shared_ptr<detail::EventLoopState>> loops;
     detail::RuntimeLifecycle lifecycle;
     std::atomic<std::size_t> nextIndex{0};
-    std::shared_ptr<FailureRecord> failure{std::make_shared<FailureRecord>()};
+    std::shared_ptr<FailureRecord> failureRecord{std::make_shared<FailureRecord>()};
 };
 
 EventLoopPool::EventLoopPool(EventLoopPoolOptions options)
@@ -455,7 +456,7 @@ void EventLoopPool::join() {
     }
     impl_->lifecycle.completeStop();
 
-    if (const auto failure = impl_->failure->take()) {
+    if (const auto failure = impl_->failureRecord->take()) {
         std::rethrow_exception(failure);
     }
 }

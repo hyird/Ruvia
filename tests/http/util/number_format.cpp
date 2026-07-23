@@ -16,28 +16,9 @@
 #include "ruvia/http/UrlEncoding.h"
 #include "ruvia/http/detail/util/Hex.h"
 
-namespace {
-
-std::string b64(std::string_view in) {
-    std::string out(ruvia::detail::base64EncodedSize(in.size()), '\0');
-    ruvia::detail::encodeBase64(
-        out.data(),
-        std::span<const std::uint8_t>(reinterpret_cast<const std::uint8_t*>(in.data()), in.size()));
-    return out;
-}
-
-std::optional<std::string> urlDecode(std::string_view in, ruvia::detail::UrlDecodeMode mode) {
-    auto decoded = ruvia::detail::decodeUrlComponent(
-        in,
-        mode,
-        std::pmr::get_default_resource());
-    if (!decoded.has_value()) {
-        return std::nullopt;
-    }
-    return std::string(*decoded);
-}
-
-}  // namespace
+// This file covers number formatting only; the base64 and URL-decode helpers it
+// was split from live with their own tests in byte_encoding.cpp and
+// url_encoding.cpp.
 
 // --- Base64 (RFC 4648 test vectors) --------------------------------------
 

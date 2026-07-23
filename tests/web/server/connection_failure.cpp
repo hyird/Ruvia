@@ -155,5 +155,18 @@ int main() {
             fail(5, "the failure did not carry the peer address");
         }
     }
+
+    // The same failure is counted, so a server with no listener installed is
+    // still observable, and every connection released its slot on the way out.
+    if (rc == 0) {
+        const auto stats = server.stats();
+        if (stats.connectionFailures != 1) {
+            fail(6, "the connection failure was not counted");
+        } else if (stats.activeConnections != 0) {
+            fail(7, "a finished connection kept its slot");
+        } else if (stats.workerFailures != 0) {
+            fail(8, "a single connection failure was escalated to the worker");
+        }
+    }
     return rc;
 }
