@@ -47,7 +47,28 @@
 
 **关键规则：接受循环永不因失败退出。** 监听 socket 开着却不再 accept，是最坏的
 失败模式——进程活着、端口通着、服务实际已死，健康检查发现不了。web 与 edge 的
-accept 循环都对瞬时错误退避后继续（50ms），对 `operation_aborted` 才退出。
+accept 循环对所有瞬时错误（accept 失败、会话启动失败）都退避 50ms 后继续，只有
+`operation_aborted` / 监听器关闭才退出。
+
+退避不是可选的礼貌：描述符耗尽时失败的 accept **立刻**就绪，不退避就是 100% CPU
+的忙循环，而占着 CPU 的正是本该释放描述符的那些会话。
+
+## 2.1 容错机制
+
+隔离只保证失败不扩散，下面这些决定失败发生时服务还能做什么。
+
+| 机制 | 位置 | 作用 |
+| --- | --- | --- |
+| 连接预算 | `HttpServerOptions::maxConnections`、`EdgeServerOptions::maxConnections` | 超出即接受并立即关闭，主动卸载而不是让 backlog 无限增长直到撞上描述符上限 |
+| 瞬时错误退避 | 两侧 accept 循环 | 见上 |
+| 上游熔断 | `OriginFetchLimits::circuitFailureThreshold` / `circuitResetTimeout` | 上游连续传输失败达阈值后停止拨号，直接返回；每个 reset 窗口放行一个探测请求。否则每个请求都要付满 `connectTimeout` 才发现上游已死 |
+| 陈旧兜底 | `stale-while-revalidate` / `stale-if-error` | 上游不可达时用过期副本应答，而不是网关错误 |
+| 请求级降级链 | handler → onError → 默认响应 | 见 §3 |
+| 上报限流 | `reportUnhandledFailure` | 故障风暴时保证第一条（信息量最大的）失败不被后续后果淹没，也避免阻塞的 stderr 拖慢恢复 |
+| 失败计数 | `EdgeServer::stats()` | 无回调也能被健康检查观测到 |
+
+熔断只对**传输失败**（连接/超时/读写）计数。畸形、超大、不支持的响应说明上游是活
+着的，对这些跳闸会把一个仅仅是配置错误的上游整个切掉。
 
 ## 3. 用户回调的三类契约
 

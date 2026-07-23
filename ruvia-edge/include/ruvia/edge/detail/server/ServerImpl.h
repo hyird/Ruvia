@@ -1,5 +1,7 @@
 #pragma once
 
+#include <array>
+#include <atomic>
 #include <condition_variable>
 #include <cstddef>
 #include <cstdint>
@@ -73,6 +75,7 @@ public:
     void stop();
     void join();
     [[nodiscard]] EdgeEndpoint localEndpoint() const;
+    [[nodiscard]] EdgeStats stats() const;
 
     bool addOrigin(std::string frontHost, OriginSettings settings);
     bool removeOrigin(std::string_view frontHost);
@@ -96,8 +99,9 @@ private:
     // unwind. Worker-affine: every slot change happens on the Edge worker.
     class ConnectionLease final {
     public:
-        explicit ConnectionLease(std::size_t& count) noexcept : count_(&count) {
-            ++*count_;
+        explicit ConnectionLease(std::atomic<std::size_t>& count) noexcept
+            : count_(&count) {
+            count_->fetch_add(1, std::memory_order_relaxed);
         }
 
         ConnectionLease(const ConnectionLease&) = delete;
@@ -109,12 +113,12 @@ private:
 
         ~ConnectionLease() {
             if (count_ != nullptr) {
-                --*count_;
+                count_->fetch_sub(1, std::memory_order_relaxed);
             }
         }
 
     private:
-        std::size_t* count_;
+        std::atomic<std::size_t>* count_;
     };
 
     [[nodiscard]] TlsContextPtr loadTlsContext() const noexcept;
@@ -211,7 +215,13 @@ private:
     std::size_t maxCacheableBytes_{8u * 1024u * 1024u};
     // Declared here to match the constructor's initializer order.
     std::optional<std::size_t> maxConnections_;
-    std::size_t activeConnections_{0};
+    // Atomic because stats() reads them from the caller's thread while the
+    // worker is updating them. Relaxed throughout: these are counters, and no
+    // other state is published through them.
+    std::atomic<std::size_t> activeConnections_{0};
+    std::atomic<std::size_t> connectionsRefused_{0};
+    // One counter per EdgeTaskKind, indexed by its value.
+    std::array<std::atomic<std::size_t>, kEdgeTaskKindCount> failureCounts_{};
     std::unordered_map<std::string, InFlightFetch> inFlight_;
     std::function<void(const AccessLogEntry&)> accessLog_;
     std::function<void(const EdgeTaskFailure&)> taskFailure_;

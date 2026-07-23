@@ -159,6 +159,16 @@ live server exclusively leases that directory; records are checksummed and
 published by atomic replacement, and restart recovery ignores uncommitted or
 corrupt files. Do not point two live edge instances at the same directory.
 
+`EdgeServerOptions::maxConnections` bounds concurrent client connections;
+without it the only limit is the process descriptor budget, and reaching that
+turns every accept into an error. `OriginFetchLimits::circuitFailureThreshold`
+and `circuitResetTimeout` add a per-upstream circuit breaker: after that many
+consecutive transport failures the edge stops dialing a dead origin and answers
+immediately instead of paying `connectTimeout` on every request, letting one
+probe through per reset window to detect recovery. `EdgeServer::stats()` reports
+active connections, shed connections, breaker rejections, and cumulative task
+failures by kind, so a node can be monitored without installing any callback.
+
 An Edge task is a detached coroutine with no caller to rethrow into, so an
 exception that escapes one is reported rather than dropped:
 `EdgeServerOptions::taskFailure` receives every failure of an accept, a session,

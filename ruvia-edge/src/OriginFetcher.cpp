@@ -327,6 +327,61 @@ std::size_t OriginFetcher::idleConnectionCount() const noexcept {
     return total;
 }
 
+bool OriginFetcher::admitToOrigin(const std::string& key) noexcept {
+    if (limits_.circuitFailureThreshold == 0) {
+        return true;  // breaker disabled
+    }
+    const auto entry = circuits_.find(key);
+    if (entry == circuits_.end() || !entry->second.open) {
+        return true;
+    }
+    Circuit& circuit = entry->second;
+    if (circuit.probing) {
+        return false;  // a probe is already deciding for everyone
+    }
+    if (std::chrono::steady_clock::now() < circuit.retryAt) {
+        return false;
+    }
+    circuit.probing = true;  // this request is the probe
+    return true;
+}
+
+void OriginFetcher::recordOriginOutcome(
+    const std::string& key,
+    OriginFetchOutcome outcome) noexcept {
+    if (limits_.circuitFailureThreshold == 0) {
+        return;
+    }
+    // Only transport failures say anything about the origin's health. A
+    // malformed, oversized or unsupported response proves it is answering, so
+    // tripping on those would take out an origin that is merely misconfigured.
+    const bool transportFailure =
+        outcome == OriginFetchOutcome::kConnectFailed ||
+        outcome == OriginFetchOutcome::kTimeout ||
+        outcome == OriginFetchOutcome::kWriteFailed ||
+        outcome == OriginFetchOutcome::kReadFailed;
+
+    if (!transportFailure) {
+        if (const auto entry = circuits_.find(key); entry != circuits_.end()) {
+            circuits_.erase(entry);  // healthy again: forget the history
+        }
+        return;
+    }
+
+    // A failure may arrive for a key with no entry yet; try_emplace covers both
+    // that and the probe that just failed.
+    Circuit& circuit = circuits_.try_emplace(key).first->second;
+    circuit.probing = false;
+    if (circuit.failures < limits_.circuitFailureThreshold) {
+        ++circuit.failures;
+    }
+    if (circuit.failures >= limits_.circuitFailureThreshold) {
+        circuit.open = true;
+        circuit.retryAt =
+            std::chrono::steady_clock::now() + limits_.circuitResetTimeout;
+    }
+}
+
 asio::awaitable<StreamOutcome> OriginFetcher::fetch(
     asio::any_io_executor executor,
     std::string_view host,
@@ -334,6 +389,41 @@ asio::awaitable<StreamOutcome> OriginFetcher::fetch(
     bool https,
     const OriginRequest& request,
     ResponseSink& sink) {
+    std::string key(host);
+    key.push_back(':');
+    {
+        std::array<char, 8> portText;
+        const auto [end, ec] =
+            std::to_chars(portText.data(), portText.data() + portText.size(), port);
+        if (ec != std::errc{}) {
+            co_return StreamOutcome{OriginFetchOutcome::kConnectFailed};
+        }
+        key.append(portText.data(), static_cast<std::size_t>(end - portText.data()));
+    }
+
+    // A known-dead origin is answered now instead of after connectTimeout. The
+    // caller turns this into the same gateway error it would have produced, or
+    // serves a stale copy under stale-if-error -- only far sooner, and without
+    // holding the connection open while the outage lasts.
+    if (!admitToOrigin(key)) {
+        circuitRejections_.fetch_add(1, std::memory_order_relaxed);
+        co_return StreamOutcome{OriginFetchOutcome::kCircuitOpen};
+    }
+
+    auto result = co_await fetchFromOrigin(
+        executor, host, port, https, request, sink, key);
+    recordOriginOutcome(key, result.outcome);
+    co_return result;
+}
+
+asio::awaitable<StreamOutcome> OriginFetcher::fetchFromOrigin(
+    asio::any_io_executor executor,
+    std::string_view host,
+    std::uint16_t port,
+    bool https,
+    const OriginRequest& request,
+    ResponseSink& sink,
+    const std::string& key) {
     // Prepare the request head once. kAllowReuse omits Connection: close so the
     // origin may keep the connection open for pooling.
     const HttpOrigin origin = HttpOrigin::http(host, port);
@@ -354,18 +444,6 @@ asio::awaitable<StreamOutcome> OriginFetcher::fetch(
     const auto* prepared = prepareResult.prepared();
     if (prepared == nullptr) {
         co_return StreamOutcome{OriginFetchOutcome::kUnsupported};
-    }
-
-    std::string key(host);
-    key.push_back(':');
-    {
-        std::array<char, 8> portText;
-        const auto [end, ec] =
-            std::to_chars(portText.data(), portText.data() + portText.size(), port);
-        if (ec != std::errc{}) {
-            co_return StreamOutcome{OriginFetchOutcome::kConnectFailed};
-        }
-        key.append(portText.data(), static_cast<std::size_t>(end - portText.data()));
     }
 
     const auto tuple = asio::as_tuple(asio::use_awaitable);

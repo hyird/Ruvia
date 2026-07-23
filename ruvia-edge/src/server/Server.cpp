@@ -268,6 +268,25 @@ EdgeEndpoint EdgeServer::Impl::localEndpoint() const {
     return localEndpoint_;
 }
 
+EdgeStats EdgeServer::Impl::stats() const {
+    const auto count = [this](EdgeTaskKind kind) {
+        return failureCounts_[static_cast<std::size_t>(kind)].load(
+            std::memory_order_relaxed);
+    };
+    EdgeStats stats;
+    stats.activeConnections = activeConnections_.load(std::memory_order_relaxed);
+    stats.connectionsRefused = connectionsRefused_.load(std::memory_order_relaxed);
+    stats.originCircuitRejections = fetcher_.circuitRejectionCount();
+    stats.acceptFailures = count(EdgeTaskKind::kAcceptLoop);
+    stats.sessionFailures = count(EdgeTaskKind::kSession);
+    stats.backgroundRefreshFailures = count(EdgeTaskKind::kBackgroundRefresh);
+    stats.workerFailures = count(EdgeTaskKind::kWorker);
+    stats.accessLogFailures = count(EdgeTaskKind::kAccessLog);
+    stats.diskCacheFailures = count(EdgeTaskKind::kDiskCache);
+    stats.controlFailures = count(EdgeTaskKind::kControl);
+    return stats;
+}
+
 EdgeServer::Impl::TlsContextPtr EdgeServer::Impl::loadTlsContext() const noexcept {
     return tlsContext_;
 }
@@ -302,6 +321,10 @@ void EdgeServer::Impl::reportFailure(
     if (exception == nullptr) {
         return;
     }
+    // Counted before anything that could fail, so a node whose callback throws
+    // (or that has none) still has an accurate failure count.
+    failureCounts_[static_cast<std::size_t>(kind)].fetch_add(
+        1, std::memory_order_relaxed);
     if (!taskFailure_) {
         writeFailureLine(kind, exception);
         return;
@@ -508,6 +531,10 @@ void EdgeServer::join() {
 
 EdgeEndpoint EdgeServer::localEndpoint() const {
     return impl_->localEndpoint();
+}
+
+EdgeStats EdgeServer::stats() const {
+    return impl_->stats();
 }
 
 bool EdgeServer::addOrigin(std::string frontHost, OriginSettings settings) {

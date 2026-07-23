@@ -36,10 +36,37 @@ enum class EdgeTaskKind : std::uint8_t {
     kControl,            // a control operation failed; its caller also got false
 };
 
+// Number of EdgeTaskKind values, for per-kind counter arrays.
+inline constexpr std::size_t kEdgeTaskKindCount =
+    static_cast<std::size_t>(EdgeTaskKind::kControl) + 1;
+
 // A task failure. `exception` is never null and may be rethrown to inspect it.
 struct EdgeTaskFailure final {
     EdgeTaskKind kind{EdgeTaskKind::kSession};
     std::exception_ptr exception;
+};
+
+// A point-in-time view of the node, for health checks and metrics. Counters are
+// cumulative since construction and never reset. Reading them is safe from any
+// thread, but the values are sampled independently rather than as one atomic
+// snapshot, so treat them as a set of gauges and not as a consistent tuple.
+struct EdgeStats final {
+    // Client connections held right now, against EdgeServerOptions::maxConnections.
+    std::size_t activeConnections{0};
+    // Connections closed on accept because that budget was full. A rising
+    // count means the node is shedding load rather than queueing it.
+    std::size_t connectionsRefused{0};
+    // Origin requests answered without dialing because the breaker was open.
+    std::size_t originCircuitRejections{0};
+    // Cumulative task failures, matching the taskFailure callback's kinds. A
+    // node with no failure callback can still be monitored through these.
+    std::size_t acceptFailures{0};
+    std::size_t sessionFailures{0};
+    std::size_t backgroundRefreshFailures{0};
+    std::size_t workerFailures{0};
+    std::size_t accessLogFailures{0};
+    std::size_t diskCacheFailures{0};
+    std::size_t controlFailures{0};
 };
 
 struct EdgeServerOptions final {
@@ -94,6 +121,9 @@ public:
     void join();
 
     [[nodiscard]] EdgeEndpoint localEndpoint() const;
+
+    // Safe from any thread, at any point in the lifecycle.
+    [[nodiscard]] EdgeStats stats() const;
 
     [[nodiscard]] bool addOrigin(std::string frontHost, OriginSettings settings);
     [[nodiscard]] bool removeOrigin(std::string_view frontHost);

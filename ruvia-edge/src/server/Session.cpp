@@ -69,9 +69,11 @@ asio::awaitable<void> EdgeServer::Impl::acceptLoop() {
         // Over budget: accept and close immediately rather than leaving the
         // connection queued in the backlog, so the peer learns now and the
         // listener queue keeps draining.
-        if (maxConnections_.has_value() && activeConnections_ >= *maxConnections_) {
+        if (maxConnections_.has_value() &&
+            activeConnections_.load(std::memory_order_relaxed) >= *maxConnections_) {
             asio::error_code ignore;
             socket.close(ignore);
+            connectionsRefused_.fetch_add(1, std::memory_order_relaxed);
             continue;
         }
 

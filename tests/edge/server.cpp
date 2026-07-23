@@ -674,6 +674,8 @@ int main() {
               "worker remains usable after an access-log exception");
         check(logAttempts.load(std::memory_order_relaxed) == 2,
               "each completed request still attempts access logging");
+        check(logFailureEdge.stats().accessLogFailures == 2,
+              "contained failures are counted as well as reported");
         logFailureEdge.stop();
         {
             // The contained exception is reported, not dropped.
@@ -820,9 +822,14 @@ int main() {
                   "the connection holding the only slot is served normally");
         }
 
+        check(cappedEdge.stats().activeConnections == 1,
+              "the held connection is counted against the budget");
+
         // The budget is full: the next connection is closed without a response.
         check(httpGet(port, "front.local", "/page").empty(),
               "a connection beyond maxConnections is closed immediately");
+        check(cappedEdge.stats().connectionsRefused == 1,
+              "shedding a connection is counted, so it is visible without a callback");
 
         // Releasing the slot lets the next connection through again, proving
         // the lease is returned when the session coroutine ends.
@@ -832,6 +839,8 @@ int main() {
         check(statusOf(httpGet(port, "front.local", "/page")) == 200,
               "closing a connection returns its slot to the budget");
         cappedEdge.stop();
+        check(cappedEdge.stats().activeConnections == 0,
+              "every slot is returned once the node stops");
     }
 
     // Direct shutdown: stop() does not wait for an in-flight origin request.
