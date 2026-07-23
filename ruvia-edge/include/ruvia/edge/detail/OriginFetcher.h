@@ -46,6 +46,7 @@ enum class OriginFetchOutcome : std::uint8_t {
     kTooLarge,        // the response exceeded the configured byte ceiling
     kTimeout,         // the connect or an I/O step exceeded its deadline
     kUnsupported,     // a framing the MVP does not handle (upgrade / CONNECT / TLS origin)
+    kCircuitOpen,     // the origin's breaker is open: not dialed at all
 };
 
 // The head of an origin response, delivered to a sink before the body streams.
@@ -125,15 +126,50 @@ public:
     // Number of idle pooled connections (for observability and tests).
     [[nodiscard]] std::size_t idleConnectionCount() const noexcept;
 
+    // Requests answered without dialing because a breaker was open. Updated on
+    // the Edge worker; read from any thread through EdgeServer::stats().
+    [[nodiscard]] std::size_t circuitRejectionCount() const noexcept {
+        return circuitRejections_.load(std::memory_order_relaxed);
+    }
+
 private:
     struct PooledConnection final {
         asio::ip::tcp::socket socket;
         std::chrono::steady_clock::time_point idleSince;
     };
 
+    // One upstream's breaker. Closed while `failures` is under the threshold;
+    // open once it reaches it, until `retryAt` lets a single probe through.
+    struct Circuit final {
+        std::size_t failures{0};
+        std::chrono::steady_clock::time_point retryAt{};
+        bool open{false};
+        bool probing{false};  // a probe is in flight; hold everyone else back
+    };
+
+    // Whether this request may dial the origin, and if so whether it is the
+    // single probe that reopens a tripped breaker.
+    [[nodiscard]] bool admitToOrigin(const std::string& key) noexcept;
+    // Feeds one completed attempt back into the breaker.
+    void recordOriginOutcome(
+        const std::string& key,
+        OriginFetchOutcome outcome) noexcept;
+
+    // The dial-and-exchange path, with the breaker already consulted.
+    [[nodiscard]] asio::awaitable<StreamOutcome> fetchFromOrigin(
+        asio::any_io_executor executor,
+        std::string_view host,
+        std::uint16_t port,
+        bool https,
+        const OriginRequest& request,
+        ResponseSink& sink,
+        const std::string& key);
+
     Limits limits_;
     asio::ssl::context originTlsContext_;
     std::unordered_map<std::string, std::vector<PooledConnection>> idlePool_;
+    std::unordered_map<std::string, Circuit> circuits_;
+    std::atomic<std::size_t> circuitRejections_{0};
 };
 
 }  // namespace ruvia::edge

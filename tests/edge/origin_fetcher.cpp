@@ -412,6 +412,83 @@ int main() {
               "certificate verification rejects the untrusted origin");
     }
 
+    // Circuit breaker. A dead origin fails every request the same way, and each
+    // one pays the full connect cost before finding out. After the threshold
+    // the fetcher stops dialing and says so immediately, then lets exactly one
+    // request through per reset window to test whether the origin is back.
+    {
+        asio::io_context io;
+        // A port nobody listens on: every dial fails, deterministically.
+        tcp::acceptor probe(io, tcp::endpoint(asio::ip::make_address("127.0.0.1"), 0));
+        const auto deadPort = probe.local_endpoint().port();
+        probe.close();
+
+        ruvia::edge::OriginFetchLimits limits;
+        limits.circuitFailureThreshold = 2;
+        limits.circuitResetTimeout = std::chrono::milliseconds(200);
+        OriginFetcher fetcher(limits);
+
+        std::vector<OriginFetchOutcome> outcomes;
+        asio::co_spawn(
+            io,
+            [&]() -> asio::awaitable<void> {
+                const auto dial = [&]() -> asio::awaitable<OriginFetchOutcome> {
+                    OriginRequest request;
+                    request.method = "GET";
+                    request.target = "/down";
+                    AccumulatingSink acc;
+                    auto sink = acc.make();
+                    auto r = co_await fetcher.fetch(
+                        io.get_executor(), "127.0.0.1", deadPort,
+                        /*https=*/false, request, sink);
+                    co_return r.outcome;
+                };
+
+                // Two real attempts reach the threshold.
+                outcomes.push_back(co_await dial());
+                outcomes.push_back(co_await dial());
+                // The third is refused without dialing.
+                outcomes.push_back(co_await dial());
+
+                // After the reset window one probe is admitted; it fails, so
+                // the breaker trips again and the next is refused once more.
+                asio::steady_timer wait(io);
+                wait.expires_after(std::chrono::milliseconds(250));
+                co_await wait.async_wait(asio::use_awaitable);
+                outcomes.push_back(co_await dial());
+                outcomes.push_back(co_await dial());
+                io.stop();
+                co_return;
+            },
+            asio::detached);
+        io.run();
+
+        check(outcomes.size() == 5, "the breaker sequence ran to completion");
+        if (outcomes.size() == 5) {
+            check(outcomes[0] == OriginFetchOutcome::kConnectFailed &&
+                      outcomes[1] == OriginFetchOutcome::kConnectFailed,
+                  "attempts below the threshold still dial the origin");
+            check(outcomes[2] == OriginFetchOutcome::kCircuitOpen,
+                  "the breaker opens once the failure threshold is reached");
+            check(outcomes[3] == OriginFetchOutcome::kConnectFailed,
+                  "one probe is admitted after the reset window");
+            check(outcomes[4] == OriginFetchOutcome::kCircuitOpen,
+                  "a failed probe re-opens the breaker");
+        }
+    }
+
+    // A responding origin never trips the breaker, even when the edge rejects
+    // its response: only transport failures say anything about its health.
+    {
+        const auto r = runCase(
+            "HTTP/1.1 200 OK\r\n"
+            "Content-Length: 5\r\n"
+            "\r\n"
+            "hello");
+        check(r.outcome == OriginFetchOutcome::kOk,
+              "a healthy origin is unaffected by the breaker");
+    }
+
     if (failures == 0) {
         std::fprintf(stderr, "origin fetcher: all checks passed\n");
     }
