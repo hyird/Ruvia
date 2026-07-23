@@ -27,8 +27,10 @@ namespace ruvia::detail {
 // one translation unit. The member templates below need no such marking.
 inline Task<void> HttpServer::handleSession(AcceptedConnectionLease connection) {
     auto& socket = connection.socket();
+    // Declared outside the try so the failure report below can name the peer.
+    // It stays empty if the failure happened before the address was resolved.
+    std::pmr::string remoteAddress(memory_.allocator<char>());
     try {
-        std::pmr::string remoteAddress(memory_.allocator<char>());
         std::error_code remoteEc;
         const auto remoteEndpoint = socket.remote_endpoint(remoteEc);
         if (!remoteEc) {
@@ -97,7 +99,13 @@ inline Task<void> HttpServer::handleSession(AcceptedConnectionLease connection) 
         // bugs) must not propagate into asio::detached, which terminates.
         // Socket state may be partially written or completely fine; we
         // cannot safely emit anything new, so just drop the connection.
+        //
+        // Dropping the connection must not also drop the reason: this is the
+        // only place that reason exists, so it goes to the connection-failure
+        // sink before the frame unwinds.
+        const auto failure = std::current_exception();
         closeSocket(socket);
+        options_.connectionFailure.invoke(remoteAddress, failure);
     }
 }
 

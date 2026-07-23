@@ -110,6 +110,11 @@ public:
     App& setDefaultRateLimitPerWorker(std::optional<RateLimitRule> rule);
     App& setRateLimitSlotsPerWorker(std::size_t slotsPerWorker);
     App& onAccess(AccessLogCallback callback);
+    // Observes connections lost to an exception that escaped their session --
+    // the failures onError cannot answer because the response is already
+    // committed or the error handler itself failed. Without a listener these
+    // are reported to stderr; they are never silently dropped.
+    App& onConnectionFailure(ConnectionFailureCallback callback);
     App& onStart(AppHook hook);
     App& onStop(AppHook hook);
 #ifdef RUVIA_ENABLE_DATABASE

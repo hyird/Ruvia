@@ -40,7 +40,7 @@
 | 级别 | 边界代码 | 失败后果 | 上报去向 |
 | --- | --- | --- | --- |
 | 请求 | `RouteTable::dispatch` / `handleException` | 返回 5xx，**连接继续** | `Context` 上的 `exception_ptr` → 应用 `onError` |
-| 连接 | `HttpServer::handleSession` 的 catch-all；edge 的 `spawnTracked` 完成回调 | 关闭该连接，**服务继续** | edge：`taskFailure(kSession)`；web：见 §7 待办 |
+| 连接 | `HttpServer::handleSession` 的 catch-all；edge 的 `spawnTracked` 完成回调 | 关闭该连接，**服务继续** | edge：`taskFailure(kSession)`；web：`App::onConnectionFailure` |
 | 任务 | edge `spawnTracked`；`DiskTier::runQueued` | 该任务结束，**节点继续** | `taskFailure(kAcceptLoop/kBackgroundRefresh/kDiskCache)` |
 | worker | `WorkerDispatcher::runContext`；edge 工作线程的 `run()` 循环 | web：停该 worker；edge：上报后继续 | web：`workerFailure`；edge：`taskFailure(kWorker)` |
 | 进程 | `std::terminate` | 进程结束 | 仅用于不变量破坏 |
@@ -134,10 +134,19 @@ stderr: "ruvia: <context> failed: <what>"
 - `ruvia-edge`：五类任务失败全部上报，取消展开已过滤，accept 循环退避续跑，
   磁盘线程任务不再 `terminate`（2026-07-23）。
 - `ruvia-web`：请求级降级链完整（handler → onError → 默认响应），已提交响应后
-  不伪造错误响应而是拆连接。
+  不伪造错误响应而是拆连接；连接级失败经 `App::onConnectionFailure` 上报，
+  包括响应已提交后 handler 抛出的那一类（h1 与 h2 各有端到端测试）（2026-07-23）。
 
-待办：
+## 8. 一个反例：为什么"提交后失败"必须单独有出口
 
-- `ruvia-web` 连接级失败无上报通道。`HttpServer::handleSession` 的 catch-all 关闭
-  连接后丢弃异常内容；`workerFailure` 是 worker 级、语义是"停 worker"，不适合
-  承载单连接失败。需要新增一个连接级 sink。
+响应头一旦上线，状态码就定死了。`dispatchResponseStreamWith` 曾把这种失败折叠成
+`makeFailedAfterCommit(status)` —— 只留下状态码（通常是 200），异常本身就地丢弃。
+结果是：客户端收到一个截断的 200，服务端**什么都没有**。既没有错误日志，也没有
+访问日志异常，因为访问日志记录的正是那个 200。
+
+这类失败恰恰是最需要诊断的：它意味着 handler 在写了一半响应后崩了。修法是让
+`ResponseStreamFailedAfterCommit` 携带 `exception_ptr` 一路传到传输层，由 h1 的
+流式路由与 h2 会话交给连接级 sink——传输层是最后一个还持有它的所有者。
+
+教训：**当一个失败被"降级"成状态码、布尔值或枚举时，检查原始异常是否还有人持有。**
+没有的话，那就是一个静默的吞点，无论中间隔了多少层类型安全的抽象。

@@ -113,20 +113,31 @@ private:
     HttpStatusCode status_;
 };
 
+// The handler failed after its head was already on the wire. The status is what
+// the peer was told; the exception is why it will never receive the rest. The
+// status alone cannot be reported to anyone -- it says 200 -- so the exception
+// travels with it to the transport, which is the last owner able to report it.
 class ResponseStreamFailedAfterCommit final {
 public:
     [[nodiscard]] constexpr HttpStatusCode status() const noexcept {
         return status_;
     }
 
+    // Never null.
+    [[nodiscard]] std::exception_ptr exception() const noexcept {
+        return exception_;
+    }
+
 private:
     friend class ResponseStreamDispatchResult;
 
-    explicit constexpr ResponseStreamFailedAfterCommit(
-        HttpStatusCode status) noexcept
-        : status_(status) {}
+    ResponseStreamFailedAfterCommit(
+        HttpStatusCode status,
+        std::exception_ptr exception) noexcept
+        : status_(status), exception_(std::move(exception)) {}
 
     HttpStatusCode status_;
+    std::exception_ptr exception_;
 };
 
 class ResponseStreamRouteResponse final {
@@ -184,9 +195,11 @@ public:
     }
 
     [[nodiscard]] static ResponseStreamDispatchResult
-    makeFailedAfterCommit(HttpStatusCode status) noexcept {
+    makeFailedAfterCommit(
+        HttpStatusCode status,
+        std::exception_ptr exception) noexcept {
         return ResponseStreamDispatchResult(
-            ResponseStreamFailedAfterCommit(status));
+            ResponseStreamFailedAfterCommit(status, std::move(exception)));
     }
 
     [[nodiscard]] static ResponseStreamDispatchResult makeRouteResponse(
@@ -340,8 +353,11 @@ Task<ResponseStreamDispatchResult> dispatchResponseStreamWith(
             committedResponseStreamStatus(sink));
     }
     if (sink.committed()) {
+        // Past the point of no return: the status cannot be changed and no
+        // error body can be appended, so the exception is handed to the
+        // transport rather than dropped with the connection.
         co_return ResponseStreamDispatchResult::makeFailedAfterCommit(
-            committedResponseStreamStatus(sink));
+            committedResponseStreamStatus(sink), std::move(exception));
     }
     auto response = co_await routes.handleException(
         request, requestMemory, exception, services);

@@ -495,6 +495,16 @@ Route tables, middleware chains, and controller instances are finalized before
 workers start. The request path does not rebuild them or use a per-request
 virtual dispatcher.
 
+Failures inside a request become responses: `onError` receives the exception and
+decides the status, and an error handler that itself throws still yields a
+deterministic 500. A failure past the response's point of no return cannot become
+a response — the head is already on the wire — so it is reported instead:
+`App::onConnectionFailure` receives the exception with the peer address, and
+without a listener it is written to stderr rather than dropped with the
+connection. [`docs/ruvia-exception-policy.md`](docs/ruvia-exception-policy.md)
+is the full contract: what each layer raises, which failures are isolated where,
+and the three kinds of callback contract.
+
 Models are ordinary structs with one schema for JSON parsing, validation, and
 serialization. They support nested models and arrays; `RUVIA_FIELD` is required
 and `RUVIA_OPTIONAL_FIELD` may be absent. Route middleware keeps the Hono-style

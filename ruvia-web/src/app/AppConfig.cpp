@@ -274,4 +274,14 @@ App& App::onAccess(AccessLogCallback callback) {
         });
 }
 
+App& App::onConnectionFailure(ConnectionFailureCallback callback) {
+    return detail::mutateStoppedApp(
+        *this,
+        *state_,
+        "cannot register connection-failure hook while app is running",
+        [callback](detail::AppState& state) {
+            state.options.connectionFailure.callback = callback;
+        });
+}
+
 }  // namespace ruvia

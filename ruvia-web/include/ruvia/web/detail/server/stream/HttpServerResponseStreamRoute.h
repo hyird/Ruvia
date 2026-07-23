@@ -87,6 +87,13 @@ Task<Http1SessionRequestCompletion> dispatchHttpResponseStreamRoute(
     if (result.completed() != nullptr) {
         d.requestSequence.completeCommittedResponse(connectionPlan);
     } else {
+        if (const auto* failed = result.failedAfterCommit()) {
+            // The client only learns of this as a truncated response; this is
+            // the one place the reason for the truncation still exists.
+            d.options.connectionFailure.invoke(
+                d.baseRouteServices.connInfo().remote().address(),
+                failed->exception());
+        }
         connectionPlan = connectionPlan.requireClose();
     }
     co_return Http1SessionRequestCompletion::makeCommittedStream(

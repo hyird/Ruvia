@@ -11,6 +11,7 @@
 #include <variant>
 #include <vector>
 
+#include "ruvia/core/detail/util/FailureReport.h"
 #include "ruvia/core/memory/MemoryPool.h"
 #include "ruvia/http/HttpLimits.h"
 #include "ruvia/web/RateLimitRule.h"
@@ -27,6 +28,36 @@ struct AccessLogSink final {
 
     void invoke(const AccessLogRecord& record) const noexcept {
         callback.invoke(record);
+    }
+};
+
+struct ConnectionFailureRecordAccess final {
+    [[nodiscard]] static ConnectionFailureRecord make(
+        std::string_view remoteAddress,
+        std::exception_ptr exception) noexcept {
+        return ConnectionFailureRecord(remoteAddress, std::move(exception));
+    }
+};
+
+// The connection level's failure outlet. An unset callback still reports: the
+// failure goes to the shared last-resort reporter rather than being dropped
+// with the connection that produced it.
+struct ConnectionFailureSink final {
+    ConnectionFailureCallback callback;
+
+    void invoke(
+        std::string_view remoteAddress,
+        std::exception_ptr exception) const noexcept {
+        if (exception == nullptr) {
+            return;
+        }
+        if (callback) {
+            callback.invoke(
+                ConnectionFailureRecordAccess::make(
+                    remoteAddress, std::move(exception)));
+            return;
+        }
+        reportUnhandledFailure("web connection", std::move(exception));
     }
 };
 
@@ -114,6 +145,7 @@ struct HttpServerOptions final {
     AccessLogSink accessLog;
     const Env* env{nullptr};
     WorkerFailureSink workerFailure;
+    ConnectionFailureSink connectionFailure;
     std::optional<RateLimitRule> defaultRateLimitPerWorker;
     std::size_t rateLimitSlotsPerWorker{kDefaultRateLimitSlotsPerWorker};
 
