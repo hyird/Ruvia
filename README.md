@@ -159,6 +159,16 @@ live server exclusively leases that directory; records are checksummed and
 published by atomic replacement, and restart recovery ignores uncommitted or
 corrupt files. Do not point two live edge instances at the same directory.
 
+An Edge task is a detached coroutine with no caller to rethrow into, so an
+exception that escapes one is reported rather than dropped:
+`EdgeServerOptions::taskFailure` receives every failure of an accept, a session,
+a background refresh, the worker's `io_context::run()`, and the `accessLog`
+callback itself, tagged with an `EdgeTaskKind`. Shutdown, which unwinds tasks by
+cancelling them, is not a failure and is not reported. Without a callback each
+failure is written to stderr; the same line is the fallback when the callback
+itself throws. The node keeps serving in every case: a failed accept pauses
+briefly and resumes accepting instead of leaving the listener open but idle.
+
 ## Core Runtime
 
 `ruvia::EventLoopPool` creates application-owned event loops. Every

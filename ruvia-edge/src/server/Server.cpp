@@ -1,18 +1,23 @@
 #include "ruvia/edge/detail/server/ServerImpl.h"
 
 #include <chrono>
+#include <cstdio>
+#include <exception>
 #include <future>
 #include <memory>
 #include <mutex>
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <system_error>
 #include <thread>
 #include <utility>
 
 #include <asio/bind_cancellation_slot.hpp>
 #include <asio/cancellation_type.hpp>
 #include <asio/co_spawn.hpp>
+#include <asio/error.hpp>
+#include <asio/multiple_exceptions.hpp>
 #include <asio/post.hpp>
 
 #include "ruvia/edge/detail/proxy/HeaderRules.h"
@@ -26,6 +31,63 @@ namespace {
     return {asio::ip::make_address(endpoint.address), endpoint.port};
 }
 
+[[nodiscard]] std::string_view taskKindName(EdgeTaskKind kind) noexcept {
+    switch (kind) {
+        case EdgeTaskKind::kAcceptLoop:
+            return "accept";
+        case EdgeTaskKind::kSession:
+            return "session";
+        case EdgeTaskKind::kBackgroundRefresh:
+            return "background-refresh";
+        case EdgeTaskKind::kWorker:
+            return "worker";
+        case EdgeTaskKind::kAccessLog:
+            return "access-log";
+    }
+    return "unknown";
+}
+
+// Asio unwinds a terminally cancelled coroutine by resuming it with
+// operation_aborted, so shutdown ends every tracked task with that exception.
+// It is how a task stops, not a failure, and reporting it would bury the real
+// failures under one line per live connection at every stop().
+[[nodiscard]] bool isCancellationUnwind(std::exception_ptr exception) noexcept {
+    try {
+        std::rethrow_exception(exception);
+    } catch (const asio::multiple_exceptions& group) {
+        // Cancelling an awaitable group (the HTTP/2 session's reader && writer)
+        // unwinds both sides, and asio reports that as one wrapper.
+        return isCancellationUnwind(group.first_exception());
+    } catch (const std::system_error& error) {
+        return error.code() == asio::error::operation_aborted;
+    } catch (...) {
+    }
+    return false;
+}
+
+// The last resort when there is no taskFailure callback, or when that callback
+// itself threw. Writing the line is best effort -- stderr may be closed or full
+// -- but nothing beyond it can report, so this is where a failure stops.
+void writeFailureLine(EdgeTaskKind kind, std::exception_ptr exception) noexcept {
+    const auto name = taskKindName(kind);
+    try {
+        std::rethrow_exception(exception);
+    } catch (const std::exception& error) {
+        std::fprintf(
+            stderr,
+            "ruvia-edge: %.*s task failed: %s\n",
+            static_cast<int>(name.size()),
+            name.data(),
+            error.what());
+    } catch (...) {
+        std::fprintf(
+            stderr,
+            "ruvia-edge: %.*s task failed: unknown exception\n",
+            static_cast<int>(name.size()),
+            name.data());
+    }
+}
+
 }  // namespace
 
 EdgeServer::Impl::Impl(EdgeEndpoint endpoint, EdgeServerOptions options)
@@ -37,7 +99,8 @@ EdgeServer::Impl::Impl(EdgeEndpoint endpoint, EdgeServerOptions options)
       disk_(options.cacheDirectory, options.maxDiskCacheBytes),
       fetcher_(options.fetch),
       maxCacheableBytes_(options.maxCacheableBytes),
-      accessLog_(std::move(options.accessLog)) {
+      accessLog_(std::move(options.accessLog)),
+      taskFailure_(std::move(options.taskFailure)) {
     const auto bound = acceptor_.local_endpoint();
     localEndpoint_ = EdgeEndpoint{bound.address().to_string(), bound.port()};
     shutdownSignal_.expires_at((std::chrono::steady_clock::time_point::max)());
@@ -73,7 +136,19 @@ void EdgeServer::Impl::start() {
          runGate = std::move(runGate)]() mutable {
             identityPromise.set_value(std::this_thread::get_id());
             runGate.wait();
-            ioContext_.run();
+            // A handler that is not a tracked coroutine's completion (a posted
+            // control operation, a timer callback) can throw straight out of
+            // run(). Letting it leave this thread function would terminate the
+            // process; report it and resume the loop instead, since the
+            // io_context stays runnable and the listener is still open.
+            for (;;) {
+                try {
+                    ioContext_.run();
+                    break;
+                } catch (...) {
+                    reportFailure(EdgeTaskKind::kWorker, std::current_exception());
+                }
+            }
             const std::lock_guard finishedLock(lifecycleMutex_);
             workerThreadId_ = {};
             if (lifecycle_ != Lifecycle::kReady) {
@@ -84,7 +159,7 @@ void EdgeServer::Impl::start() {
     workerThreadId_ = identity.get();
 
     try {
-        spawnTracked(acceptLoop());
+        spawnTracked(acceptLoop(), EdgeTaskKind::kAcceptLoop);
         lifecycle_ = Lifecycle::kRunning;
         runGatePromise.set_value();
     } catch (...) {
@@ -212,7 +287,29 @@ void EdgeServer::Impl::storeTlsContext(TlsContextPtr context) noexcept {
     tlsContext_ = std::move(context);
 }
 
-void EdgeServer::Impl::spawnTracked(asio::awaitable<void> operation) {
+void EdgeServer::Impl::reportFailure(
+    EdgeTaskKind kind,
+    std::exception_ptr exception) noexcept {
+    if (exception == nullptr) {
+        return;
+    }
+    if (!taskFailure_) {
+        writeFailureLine(kind, exception);
+        return;
+    }
+    try {
+        taskFailure_(EdgeTaskFailure{kind, exception});
+    } catch (...) {
+        // The reporting callback is the application's; it must not decide
+        // whether the original failure is observable. Fall back to the line
+        // that needs nothing from the application.
+        writeFailureLine(kind, exception);
+    }
+}
+
+void EdgeServer::Impl::spawnTracked(
+    asio::awaitable<void> operation,
+    EdgeTaskKind kind) {
     auto cancellation = std::make_shared<asio::cancellation_signal>();
     activeOperations_.push_back(cancellation);
     try {
@@ -221,7 +318,15 @@ void EdgeServer::Impl::spawnTracked(asio::awaitable<void> operation) {
             std::move(operation),
             asio::bind_cancellation_slot(
                 cancellation->slot(),
-                [this, cancellation](std::exception_ptr) noexcept {
+                [this, cancellation, kind](std::exception_ptr exception) noexcept {
+                    // A detached coroutine has no caller to rethrow into: this
+                    // completion is the only place its failure can surface.
+                    // Everything except a shutdown unwind is a failure.
+                    if (exception != nullptr &&
+                        !(shutdownRequestedOnWorker_ &&
+                          isCancellationUnwind(exception))) {
+                        reportFailure(kind, std::move(exception));
+                    }
                     std::erase(activeOperations_, cancellation);
                 }));
         if (shutdownRequestedOnWorker_) {
@@ -350,7 +455,9 @@ void EdgeServer::Impl::recordRequest(const AccessLogEntry& entry) noexcept {
             // Observability is not part of response correctness. In particular,
             // RequestRecord invokes this from its destructor, whose implicit
             // noexcept contract must never turn a user callback into process
-            // termination.
+            // termination. The exception is not dropped: it is reported like
+            // any other task failure.
+            reportFailure(EdgeTaskKind::kAccessLog, std::current_exception());
         }
     }
 }

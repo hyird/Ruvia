@@ -4,6 +4,7 @@
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
+#include <exception>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -32,6 +33,12 @@ namespace ruvia::edge {
 
 
 asio::awaitable<void> EdgeServer::Impl::acceptLoop() {
+    // Backoff after a spawn failure. Registering or starting a session
+    // coroutine only fails when memory is exhausted; pausing lets whatever is
+    // holding that memory finish before the next connection is accepted.
+    static constexpr auto kSpawnRetryDelay = std::chrono::milliseconds(50);
+    asio::steady_timer retryTimer(ioContext_);
+
     for (;;) {
         auto [ec, socket] =
             co_await acceptor_.async_accept(asio::as_tuple(asio::use_awaitable));
@@ -42,11 +49,26 @@ asio::awaitable<void> EdgeServer::Impl::acceptLoop() {
             continue;
         }
         auto tlsContext = loadTlsContext();
-        if (tlsContext != nullptr) {
-            spawnTracked(
-                handleTlsSession(std::move(socket), std::move(tlsContext)));
-        } else {
-            spawnTracked(handleSession(std::move(socket)));
+        // Spawning is the one part of accepting that can throw. It must not end
+        // this loop: the listener would stay open while the node silently
+        // stopped serving. Report the failure, drop the connection with it (the
+        // unspawned coroutine frame closes the socket), pause, and keep going.
+        try {
+            if (tlsContext != nullptr) {
+                spawnTracked(
+                    handleTlsSession(std::move(socket), std::move(tlsContext)),
+                    EdgeTaskKind::kSession);
+            } else {
+                spawnTracked(handleSession(std::move(socket)), EdgeTaskKind::kSession);
+            }
+            continue;
+        } catch (...) {
+            reportFailure(EdgeTaskKind::kAcceptLoop, std::current_exception());
+        }
+        retryTimer.expires_after(kSpawnRetryDelay);
+        co_await retryTimer.async_wait(asio::as_tuple(asio::use_awaitable));
+        if (shutdownRequestedOnWorker_) {
+            break;
         }
     }
 }

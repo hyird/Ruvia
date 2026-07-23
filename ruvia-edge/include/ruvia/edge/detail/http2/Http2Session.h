@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <exception>
 #include <memory_resource>
 #include <span>
 #include <string>
@@ -342,6 +343,7 @@ asio::awaitable<void> EdgeServer::Impl::handleHttp2Session(Stream stream, std::s
         beginShutdown();
     };
 
+    std::exception_ptr sessionFailure;
     try {
         co_await (reader() && writer());
     } catch (...) {
@@ -349,7 +351,9 @@ asio::awaitable<void> EdgeServer::Impl::handleHttp2Session(Stream stream, std::s
         // the reader's body accumulation) can escape the group while a detached
         // handler is still awaiting its origin fetch. Signal teardown so every
         // handler unwinds, then fall through to join them before the locals they
-        // captured by reference are destroyed.
+        // captured by reference are destroyed. The failure is held, not
+        // discarded: it is rethrown once the join below makes that safe.
+        sessionFailure = std::current_exception();
         beginShutdown();
     }
 
@@ -366,6 +370,13 @@ asio::awaitable<void> EdgeServer::Impl::handleHttp2Session(Stream stream, std::s
 
     asio::error_code ignore;
     stream.lowest_layer().shutdown(asio::ip::tcp::socket::shutdown_both, ignore);
+
+    // Every handler has been joined and the transport is closed, so unwinding
+    // can no longer strand a coroutine on this frame's locals. Hand the failure
+    // to the session's spawn completion, which reports it.
+    if (sessionFailure != nullptr) {
+        std::rethrow_exception(sessionFailure);
+    }
 }
 
 }  // namespace ruvia::edge

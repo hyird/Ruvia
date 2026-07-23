@@ -2,6 +2,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <exception>
 #include <filesystem>
 #include <functional>
 #include <memory>
@@ -23,6 +24,22 @@ struct AccessLogEntry final {
     std::size_t bytesToClient{0};
 };
 
+// Which detached task an exception escaped from. The node keeps serving in
+// every case; the failure is reported so it cannot pass unobserved.
+enum class EdgeTaskKind : std::uint8_t {
+    kAcceptLoop,         // spawning an accepted connection failed
+    kSession,            // a client connection's coroutine threw
+    kBackgroundRefresh,  // a stale-while-revalidate refresh threw
+    kWorker,             // an exception escaped the worker's io_context::run()
+    kAccessLog,          // the accessLog callback itself threw
+};
+
+// A task failure. `exception` is never null and may be rethrown to inspect it.
+struct EdgeTaskFailure final {
+    EdgeTaskKind kind{EdgeTaskKind::kSession};
+    std::exception_ptr exception;
+};
+
 struct EdgeServerOptions final {
     EdgeCacheLimits cache{};
     OriginFetchLimits fetch{};
@@ -34,8 +51,14 @@ struct EdgeServerOptions final {
     std::optional<std::filesystem::path> cacheDirectory{};
     std::size_t maxDiskCacheBytes{256u * 1024u * 1024u};
     // Runs on the Edge worker. It must not block and must not destroy the server.
-    // An exception is contained and does not change the response or stop the worker.
+    // An exception is contained and does not change the response or stop the
+    // worker; it is reported to taskFailure as kAccessLog.
     std::function<void(const AccessLogEntry&)> accessLog{};
+    // Every exception that escapes a detached Edge task is reported here rather
+    // than discarded. Runs on the Edge worker under the same rules as accessLog.
+    // Without a callback the node writes one line per failure to stderr: a task
+    // failure is never silent. A throwing callback falls back to that same line.
+    std::function<void(const EdgeTaskFailure&)> taskFailure{};
 };
 
 // A caching reverse proxy with one owned event-loop thread. The public surface
