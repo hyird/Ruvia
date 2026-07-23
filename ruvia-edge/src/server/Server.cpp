@@ -87,6 +87,7 @@ EdgeServer::Impl::Impl(EdgeEndpoint endpoint, EdgeServerOptions options)
           }),
       fetcher_(options.fetch),
       maxCacheableBytes_(options.maxCacheableBytes),
+      maxConnections_(options.maxConnections),
       accessLog_(std::move(options.accessLog)),
       taskFailure_(std::move(options.taskFailure)) {
     const auto bound = acceptor_.local_endpoint();

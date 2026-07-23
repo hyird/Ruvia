@@ -90,6 +90,33 @@ private:
         kStopped,
     };
 
+    // Holds one accepted connection's slot in the node's connection budget.
+    // Moved into the session coroutine's frame, so the slot is released exactly
+    // when that frame is destroyed -- however the session ended, including an
+    // unwind. Worker-affine: every slot change happens on the Edge worker.
+    class ConnectionLease final {
+    public:
+        explicit ConnectionLease(std::size_t& count) noexcept : count_(&count) {
+            ++*count_;
+        }
+
+        ConnectionLease(const ConnectionLease&) = delete;
+        ConnectionLease& operator=(const ConnectionLease&) = delete;
+        ConnectionLease& operator=(ConnectionLease&&) = delete;
+
+        ConnectionLease(ConnectionLease&& other) noexcept
+            : count_(std::exchange(other.count_, nullptr)) {}
+
+        ~ConnectionLease() {
+            if (count_ != nullptr) {
+                --*count_;
+            }
+        }
+
+    private:
+        std::size_t* count_;
+    };
+
     [[nodiscard]] TlsContextPtr loadTlsContext() const noexcept;
     void storeTlsContext(TlsContextPtr context) noexcept;
     void dispatchControl(std::function<void()> operation);
@@ -101,9 +128,10 @@ private:
     asio::awaitable<void> acceptLoop();
     asio::awaitable<void> handleTlsSession(
         asio::ip::tcp::socket socket,
-        TlsContextPtr context);
+        TlsContextPtr context,
+        ConnectionLease lease);
     template <typename Stream>
-    asio::awaitable<void> handleSession(Stream stream);
+    asio::awaitable<void> handleSession(Stream stream, ConnectionLease lease);
     // What one served request reports to the access log. serveRequest starts it
     // at ERROR, and whichever path terminates the request names itself.
     struct RequestOutcome final {
@@ -181,6 +209,9 @@ private:
     DiskTier disk_;
     OriginFetcher fetcher_;
     std::size_t maxCacheableBytes_{8u * 1024u * 1024u};
+    // Declared here to match the constructor's initializer order.
+    std::optional<std::size_t> maxConnections_;
+    std::size_t activeConnections_{0};
     std::unordered_map<std::string, InFlightFetch> inFlight_;
     std::function<void(const AccessLogEntry&)> accessLog_;
     std::function<void(const EdgeTaskFailure&)> taskFailure_;

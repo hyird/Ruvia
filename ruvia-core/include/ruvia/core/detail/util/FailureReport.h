@@ -20,6 +20,13 @@ namespace ruvia::detail {
 // `context` names the failing unit ("edge session", "event loop stop callback").
 // Writing is best effort -- stderr may be closed, full, or redirected -- but
 // nothing beyond this point could report the failure either way.
+//
+// Rate limited: a fault that fails every connection at once would otherwise
+// bury the first, informative failure under its consequences, and a blocked
+// stderr would slow the recovery it is describing. Excess reports are counted
+// and the count travels with the next line that gets through, so the volume is
+// bounded without the flood becoming invisible. An application that wants every
+// failure should install its layer's sink instead of relying on this.
 void reportUnhandledFailure(
     std::string_view context,
     std::exception_ptr exception) noexcept;

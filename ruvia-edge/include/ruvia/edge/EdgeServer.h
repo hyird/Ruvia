@@ -46,6 +46,13 @@ struct EdgeServerOptions final {
     EdgeCacheLimits cache{};
     OriginFetchLimits fetch{};
     std::size_t maxCacheableBytes{8u * 1024u * 1024u};
+    // Concurrent client connections the node will hold. Beyond it, further
+    // connections are accepted and immediately closed, which keeps the backlog
+    // draining instead of letting the listener queue grow without bound.
+    // Absence means the only limit is the process file-descriptor budget --
+    // reaching that turns every accept into an error, so prefer a real value on
+    // any public listener.
+    std::optional<std::size_t> maxConnections{};
     std::optional<EdgeTlsConfig> tls{};
     // Enables the persistent second tier. One live EdgeServer exclusively owns
     // a cache directory; construction rejects concurrent reuse so its LRU and

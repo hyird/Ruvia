@@ -33,40 +33,70 @@ namespace ruvia::edge {
 
 
 asio::awaitable<void> EdgeServer::Impl::acceptLoop() {
-    // Backoff after a spawn failure. Registering or starting a session
-    // coroutine only fails when memory is exhausted; pausing lets whatever is
-    // holding that memory finish before the next connection is accepted.
-    static constexpr auto kSpawnRetryDelay = std::chrono::milliseconds(50);
+    // Pause length after an accept that failed for a reason retrying cannot fix
+    // immediately: descriptor exhaustion, or a session that could not be
+    // started because memory is gone. Retrying either at full speed burns the
+    // worker on a failure loop and starves the sessions that would release the
+    // very resource being waited for.
+    static constexpr auto kRetryDelay = std::chrono::milliseconds(50);
     asio::steady_timer retryTimer(ioContext_);
+    const auto pause = [&retryTimer]() -> asio::awaitable<void> {
+        retryTimer.expires_after(kRetryDelay);
+        co_await retryTimer.async_wait(asio::as_tuple(asio::use_awaitable));
+    };
 
     for (;;) {
         auto [ec, socket] =
             co_await acceptor_.async_accept(asio::as_tuple(asio::use_awaitable));
         if (ec) {
-            if (ec == asio::error::operation_aborted) {
+            // Cancelled or closed listener: this is shutdown, not a failure.
+            if (ec == asio::error::operation_aborted ||
+                ec == asio::error::bad_descriptor ||
+                ec == asio::error::invalid_argument) {
+                break;
+            }
+            // Everything else is transient (EMFILE/ENFILE, ECONNABORTED,
+            // ENOBUFS). Under descriptor exhaustion the failing accept stays
+            // instantly ready, so continuing without a pause would spin at
+            // 100% CPU for as long as the condition lasts.
+            co_await pause();
+            if (shutdownRequestedOnWorker_) {
                 break;
             }
             continue;
         }
+
+        // Over budget: accept and close immediately rather than leaving the
+        // connection queued in the backlog, so the peer learns now and the
+        // listener queue keeps draining.
+        if (maxConnections_.has_value() && activeConnections_ >= *maxConnections_) {
+            asio::error_code ignore;
+            socket.close(ignore);
+            continue;
+        }
+
         auto tlsContext = loadTlsContext();
         // Spawning is the one part of accepting that can throw. It must not end
         // this loop: the listener would stay open while the node silently
         // stopped serving. Report the failure, drop the connection with it (the
         // unspawned coroutine frame closes the socket), pause, and keep going.
         try {
+            ConnectionLease lease(activeConnections_);
             if (tlsContext != nullptr) {
                 spawnTracked(
-                    handleTlsSession(std::move(socket), std::move(tlsContext)),
+                    handleTlsSession(
+                        std::move(socket), std::move(tlsContext), std::move(lease)),
                     EdgeTaskKind::kSession);
             } else {
-                spawnTracked(handleSession(std::move(socket)), EdgeTaskKind::kSession);
+                spawnTracked(
+                    handleSession(std::move(socket), std::move(lease)),
+                    EdgeTaskKind::kSession);
             }
             continue;
         } catch (...) {
             reportFailure(EdgeTaskKind::kAcceptLoop, std::current_exception());
         }
-        retryTimer.expires_after(kSpawnRetryDelay);
-        co_await retryTimer.async_wait(asio::as_tuple(asio::use_awaitable));
+        co_await pause();
         if (shutdownRequestedOnWorker_) {
             break;
         }
@@ -75,7 +105,8 @@ asio::awaitable<void> EdgeServer::Impl::acceptLoop() {
 
 asio::awaitable<void> EdgeServer::Impl::handleTlsSession(
     asio::ip::tcp::socket socket,
-    TlsContextPtr context) {
+    TlsContextPtr context,
+    ConnectionLease lease) {
     // The accept loop pins the context for this session's lifetime; a runtime
     // rotation only affects connections accepted afterward.
     asio::ssl::stream<asio::ip::tcp::socket> stream(std::move(socket), *context);
@@ -98,14 +129,18 @@ asio::awaitable<void> EdgeServer::Impl::handleTlsSession(
         if (!addressError) {
             clientAddress = remote.address().to_string();
         }
+        // The lease stays in this frame: it outlives the awaited session and is
+        // released when this coroutine ends, whichever way that happens.
         co_await handleHttp2Session(std::move(stream), std::move(clientAddress));
         co_return;
     }
-    co_await handleSession(std::move(stream));
+    co_await handleSession(std::move(stream), std::move(lease));
 }
 
 template <typename Stream>
-asio::awaitable<void> EdgeServer::Impl::handleSession(Stream stream) {
+asio::awaitable<void> EdgeServer::Impl::handleSession(
+    Stream stream,
+    [[maybe_unused]] ConnectionLease lease) {
     using namespace asio::experimental::awaitable_operators;
 
     std::string clientAddress;

@@ -787,6 +787,53 @@ int main() {
               "setTlsCertificate fails when TLS is not enabled");
     }
 
+    // Connection budget. Without one, concurrent connections are bounded only
+    // by the process descriptor limit, and reaching that turns every accept
+    // into an error. The node holds at most maxConnections and closes anything
+    // beyond it at once, so the peer learns immediately and the listener queue
+    // keeps draining.
+    {
+        ruvia::edge::EdgeServerOptions capOptions;
+        capOptions.maxConnections = 1;
+        EdgeServer cappedEdge(
+            ruvia::edge::EdgeEndpoint{"127.0.0.1", 0}, std::move(capOptions));
+        cappedEdge.start();
+        check(cappedEdge.addOrigin(
+                  "front.local",
+                  OriginSettings{"127.0.0.1", origin.port(), false}),
+              "capped fixture origin is registered");
+        const std::uint16_t port = cappedEdge.localEndpoint().port;
+
+        // Hold the only slot with a keep-alive connection that stays open.
+        asio::io_context io;
+        tcp::socket held(io);
+        held.connect(tcp::endpoint(asio::ip::make_address("127.0.0.1"), port));
+        {
+            const std::string request =
+                "GET /page HTTP/1.1\r\nHost: front.local\r\n\r\n";
+            asio::write(held, asio::buffer(request));
+            char buffer[4096];
+            asio::error_code ec;
+            const std::size_t n = held.read_some(asio::buffer(buffer), ec);
+            check(!ec && n > 0 &&
+                      std::string_view(buffer, n).starts_with("HTTP/1.1 200"),
+                  "the connection holding the only slot is served normally");
+        }
+
+        // The budget is full: the next connection is closed without a response.
+        check(httpGet(port, "front.local", "/page").empty(),
+              "a connection beyond maxConnections is closed immediately");
+
+        // Releasing the slot lets the next connection through again, proving
+        // the lease is returned when the session coroutine ends.
+        asio::error_code ignore;
+        held.close(ignore);
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        check(statusOf(httpGet(port, "front.local", "/page")) == 200,
+              "closing a connection returns its slot to the budget");
+        cappedEdge.stop();
+    }
+
     // Direct shutdown: stop() does not wait for an in-flight origin request.
     {
         EdgeServer stoppingEdge(ruvia::edge::EdgeEndpoint{"0.0.0.0", 0}, {});
