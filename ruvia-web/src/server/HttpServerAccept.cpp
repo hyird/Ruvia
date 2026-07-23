@@ -55,12 +55,30 @@ Task<void> HttpServer::acceptLoop() {
         }
 
         configureAcceptedSocket(socket);
-        AcceptedConnectionLease connection(
-            std::move(socket), activeConnectionCount_);
-        asio::co_spawn(
-            ioContext_,
-            taskAsAwaitable(handleSession(std::move(connection))),
-            asio::bind_allocator(asio::recycling_allocator<void>(), asio::detached));
+        // Starting the session is the one part of accepting that can throw
+        // (coroutine frame allocation). Letting it escape would reach
+        // asio::detached, which rethrows out of io_context::run() and fails the
+        // whole worker -- a transient allocation failure would take down the
+        // application. Treat it like the transient accept errors above: report,
+        // drop this connection, pause, and keep accepting. Destroying the
+        // unspawned lease closes the socket and returns its slot.
+        try {
+            AcceptedConnectionLease connection(
+                std::move(socket), activeConnectionCount_);
+            asio::co_spawn(
+                ioContext_,
+                taskAsAwaitable(handleSession(std::move(connection))),
+                asio::bind_allocator(
+                    asio::recycling_allocator<void>(), asio::detached));
+            continue;
+        } catch (...) {
+            options_.connectionFailure.invoke({}, std::current_exception());
+        }
+        static_cast<void>(
+            co_await sleepFor(workerHandle_, std::chrono::milliseconds(50)));
+        if (!httpServerWorkerRunning(workerState_)) {
+            co_return;
+        }
     }
 }
 

@@ -33,6 +33,16 @@ struct OriginFetchLimits final {
     std::chrono::milliseconds idleTimeout{15000};
     std::size_t maxIdlePerHost{8};
     bool verifyOriginCertificate{true};
+    // Circuit breaker, per upstream host:port. An origin that is down fails
+    // every request only after connectTimeout, so without a breaker the wait
+    // is paid again by each one and the requests pile up for as long as the
+    // outage lasts. After this many consecutive transport failures the edge
+    // stops dialing and answers immediately; 0 disables the breaker.
+    std::size_t circuitFailureThreshold{5};
+    // How long the breaker stays open before letting one request through to
+    // test the origin. That probe closes the breaker if it succeeds, and
+    // restarts this delay if it does not.
+    std::chrono::milliseconds circuitResetTimeout{5000};
 };
 
 // PEM-encoded certificate chain and private key for terminating client TLS.

@@ -1,5 +1,7 @@
 #pragma once
 
+#include <array>
+#include <atomic>
 #include <condition_variable>
 #include <cstddef>
 #include <cstdint>
@@ -73,6 +75,7 @@ public:
     void stop();
     void join();
     [[nodiscard]] EdgeEndpoint localEndpoint() const;
+    [[nodiscard]] EdgeStats stats() const;
 
     bool addOrigin(std::string frontHost, OriginSettings settings);
     bool removeOrigin(std::string_view frontHost);
@@ -90,6 +93,34 @@ private:
         kStopped,
     };
 
+    // Holds one accepted connection's slot in the node's connection budget.
+    // Moved into the session coroutine's frame, so the slot is released exactly
+    // when that frame is destroyed -- however the session ended, including an
+    // unwind. Worker-affine: every slot change happens on the Edge worker.
+    class ConnectionLease final {
+    public:
+        explicit ConnectionLease(std::atomic<std::size_t>& count) noexcept
+            : count_(&count) {
+            count_->fetch_add(1, std::memory_order_relaxed);
+        }
+
+        ConnectionLease(const ConnectionLease&) = delete;
+        ConnectionLease& operator=(const ConnectionLease&) = delete;
+        ConnectionLease& operator=(ConnectionLease&&) = delete;
+
+        ConnectionLease(ConnectionLease&& other) noexcept
+            : count_(std::exchange(other.count_, nullptr)) {}
+
+        ~ConnectionLease() {
+            if (count_ != nullptr) {
+                count_->fetch_sub(1, std::memory_order_relaxed);
+            }
+        }
+
+    private:
+        std::atomic<std::size_t>* count_;
+    };
+
     [[nodiscard]] TlsContextPtr loadTlsContext() const noexcept;
     void storeTlsContext(TlsContextPtr context) noexcept;
     void dispatchControl(std::function<void()> operation);
@@ -101,9 +132,10 @@ private:
     asio::awaitable<void> acceptLoop();
     asio::awaitable<void> handleTlsSession(
         asio::ip::tcp::socket socket,
-        TlsContextPtr context);
+        TlsContextPtr context,
+        ConnectionLease lease);
     template <typename Stream>
-    asio::awaitable<void> handleSession(Stream stream);
+    asio::awaitable<void> handleSession(Stream stream, ConnectionLease lease);
     // What one served request reports to the access log. serveRequest starts it
     // at ERROR, and whichever path terminates the request names itself.
     struct RequestOutcome final {
@@ -181,6 +213,15 @@ private:
     DiskTier disk_;
     OriginFetcher fetcher_;
     std::size_t maxCacheableBytes_{8u * 1024u * 1024u};
+    // Declared here to match the constructor's initializer order.
+    std::optional<std::size_t> maxConnections_;
+    // Atomic because stats() reads them from the caller's thread while the
+    // worker is updating them. Relaxed throughout: these are counters, and no
+    // other state is published through them.
+    std::atomic<std::size_t> activeConnections_{0};
+    std::atomic<std::size_t> connectionsRefused_{0};
+    // One counter per EdgeTaskKind, indexed by its value.
+    std::array<std::atomic<std::size_t>, kEdgeTaskKindCount> failureCounts_{};
     std::unordered_map<std::string, InFlightFetch> inFlight_;
     std::function<void(const AccessLogEntry&)> accessLog_;
     std::function<void(const EdgeTaskFailure&)> taskFailure_;
