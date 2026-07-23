@@ -502,6 +502,29 @@ private:
     std::exception_ptr exception_;
 };
 
+// HTTP serving counters, for health checks and metrics. Cumulative since the
+// worker started and never reset, except activeConnections, which is a gauge.
+// App::httpStats() sums these across every worker; each field is sampled
+// independently, so treat them as a set of gauges rather than one snapshot.
+//
+// These make a server observable without installing any callback: onError sees
+// request failures and onConnectionFailure sees lost connections, but neither
+// answers "how many, since when".
+struct HttpServerStats final {
+    // Connections held right now, against HttpServerOptions::maxConnections.
+    std::size_t activeConnections{0};
+    // Connections closed on accept because that budget was full. A rising
+    // count means the server is shedding load rather than queueing it.
+    std::size_t connectionsRefused{0};
+    // Connections lost to an exception, as delivered to onConnectionFailure.
+    std::size_t connectionFailures{0};
+    // Accepts that failed transiently (descriptor exhaustion, a session that
+    // could not be started). Each cost one connection, not the listener.
+    std::size_t acceptFailures{0};
+    // Failures that escaped to the worker's io_context and stopped it.
+    std::size_t workerFailures{0};
+};
+
 // A non-owning, allocation-free connection-failure listener. The bound object
 // must outlive App::run(). The listener must not throw: it runs on the last
 // line of defense for a connection, where a second failure would have nowhere

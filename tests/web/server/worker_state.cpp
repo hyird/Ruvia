@@ -200,8 +200,8 @@ int main() {
             // The WebWorker dispatch path shares the same instance.
             if (rc == 0) {
                 const auto post = server.webWorker().post(
-                    [](ruvia::WebWorkerContext& worker) -> ruvia::Task<void> {
-                        worker.workerState<ProbeState>().counter += 10;
+                    [](ruvia::WebWorkerContext& workerContext) -> ruvia::Task<void> {
+                        workerContext.workerState<ProbeState>().counter += 10;
                         co_return;
                     });
                 if (post != ruvia::PostStatus::kAccepted) {

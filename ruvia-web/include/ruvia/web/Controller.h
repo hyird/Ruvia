@@ -102,7 +102,7 @@ private: \
             router, \
             RuviaControllerAccess::groupPrefix(), \
             RuviaControllerAccess::groupMiddlewares()); \
-        auto& ruviaRouteScope = ruviaControllerGroup;
+        [[maybe_unused]] auto& ruviaRouteScope = ruviaControllerGroup;
 
 #define RUVIA_ROUTES_END \
     } \

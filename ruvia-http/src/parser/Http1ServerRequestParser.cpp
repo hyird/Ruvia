@@ -209,8 +209,9 @@ void Http1ServerRequestParser::parseMessageBody(
         state.bodyPlan = Http1RequestBodyPlan(HttpRequestExpectations{});
         state.connectionPlan = connectionPlan;
     };
-    const auto needMore = [&state](
-        std::size_t headerBytes,
+    // headerBytes is captured rather than passed: every call site forwards the
+    // same head length, and a parameter of that name would shadow it.
+    const auto needMore = [&state, headerBytes](
         Http1RequestBodyPlan bodyPlan,
         std::optional<std::size_t> requiredTotalBytes) noexcept {
         // The request views borrow `buffer`. A caller must reparse after growing
@@ -231,7 +232,7 @@ void Http1ServerRequestParser::parseMessageBody(
         if (const auto* complete = chunked.complete()) {
             messageBytes = headerBytes + complete->consumedBytes();
         } else if (chunked.needMore() != nullptr) {
-            return needMore(headerBytes, bodyPlan, std::nullopt);
+            return needMore(bodyPlan, std::nullopt);
         } else {
             switch (chunked.failure()->error()) {
                 case HttpChunkScanError::kInvalidSize:
@@ -261,7 +262,7 @@ void Http1ServerRequestParser::parseMessageBody(
         return fail(HttpParseError::kBodyTooLarge);
     }
     if (buffer.size() < messageBytes) {
-        return needMore(headerBytes, bodyPlan, messageBytes);
+        return needMore(bodyPlan, messageBytes);
     }
 
     HttpRequestAccess::setBody(

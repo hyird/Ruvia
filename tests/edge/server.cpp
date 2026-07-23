@@ -246,11 +246,12 @@ int main() {
         check(contains(fill, "X-Cache: MISS"),
               "safe-method invalidation fixture is cached");
         const int before = origin.hits();
-        const auto options = httpRaw(
+        const auto optionsResponse = httpRaw(
             edgePort,
             "OPTIONS /safe-options HTTP/1.1\r\nHost: front.local\r\n"
             "Connection: close\r\n\r\n");
-        check(statusOf(options) == 200 && contains(options, "X-Cache: BYPASS"),
+        check(statusOf(optionsResponse) == 200 &&
+                  contains(optionsResponse, "X-Cache: BYPASS"),
               "OPTIONS writes through to the origin");
         check(origin.hits() == before + 1,
               "OPTIONS contacted the origin exactly once");
@@ -832,11 +833,21 @@ int main() {
               "shedding a connection is counted, so it is visible without a callback");
 
         // Releasing the slot lets the next connection through again, proving
-        // the lease is returned when the session coroutine ends.
+        // the lease is returned when the session coroutine ends. Poll rather
+        // than sleep a fixed span: the worker has to notice the peer's EOF
+        // first, and how long that takes depends on machine load. A leaked
+        // slot still fails, it just takes the full budget of attempts.
         asio::error_code ignore;
         held.close(ignore);
-        std::this_thread::sleep_for(std::chrono::milliseconds(100));
-        check(statusOf(httpGet(port, "front.local", "/page")) == 200,
+        bool servedAfterRelease = false;
+        for (int attempt = 0; attempt < 150 && !servedAfterRelease; ++attempt) {
+            servedAfterRelease =
+                statusOf(httpGet(port, "front.local", "/page")) == 200;
+            if (!servedAfterRelease) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(20));
+            }
+        }
+        check(servedAfterRelease,
               "closing a connection returns its slot to the budget");
         cappedEdge.stop();
         check(cappedEdge.stats().activeConnections == 0,

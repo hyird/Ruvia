@@ -1,5 +1,10 @@
 // Static files: c.file(...), c.staticFile(...), StaticRoot, a document root,
 // validators/ranges and gzip configuration.
+//
+// A StaticRoot indexes the tree once at construction and never rescans it, so
+// editing files under a running server does not take effect: modified and
+// deleted files make their requests fail, and added files answer 404, until the
+// server is restarted. See the contract on StaticRoot in StaticFiles.h.
 
 #include <filesystem>
 #include <memory>

@@ -1,3 +1,29 @@
+# Test code gets a warning set chosen for signal, not the library's full one.
+# Measured against this suite, -Wextra and -Wpedantic are ~80% noise here: a
+# designated initializer that names only the fields under test reads as a
+# missing initializer, and the macro-based test registration leaves a stray
+# semicolon at every use. Those would have to be silenced case by case, and a
+# warning that is routinely silenced stops being read at all.
+#
+# What is left still catches the failures that matter in test code: an unused
+# helper is a check that was written and never run, and a shadowed local is how
+# an assertion quietly starts reading the wrong variable.
+#
+# -Wdangling-reference is excluded deliberately. GCC 13 flags any const-ref
+# binding to a function that took a temporary, with no aliasing analysis, so
+# `const auto& m = context.req().valid<T>()` trips it even though the reference
+# points into the Context and outlives the temporary facade.
+function(ruvia_apply_test_warnings name)
+    if(MSVC)
+        target_compile_options(${name} PRIVATE /W4 /permissive- /bigobj /FS)
+    else()
+        target_compile_options(${name} PRIVATE -Wall)
+        if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
+            target_compile_options(${name} PRIVATE -Wshadow=local -Wno-dangling-reference)
+        endif()
+    endif()
+endfunction()
+
 # One registration helper for every standalone test executable. It links the
 # requested library (ruvia::web by default), puts this directory on the include
 # path so a test can pull in support/test_harness.h from any subdirectory,
@@ -16,9 +42,7 @@ function(ruvia_add_test name source)
         ${CMAKE_CURRENT_SOURCE_DIR}/http/support
         ${CMAKE_CURRENT_SOURCE_DIR}/web/support
         ${CMAKE_CURRENT_SOURCE_DIR}/edge/support)
-    if(MSVC)
-        target_compile_options(${name} PRIVATE /bigobj /FS)
-    endif()
+    ruvia_apply_test_warnings(${name})
     add_test(NAME ${name} COMMAND ${name})
     set(_props "")
     if(DEFINED T_TIMEOUT)
@@ -331,9 +355,7 @@ target_include_directories(ruvia_unit_tests PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/support
     ${CMAKE_CURRENT_SOURCE_DIR}/http/support
     ${CMAKE_CURRENT_SOURCE_DIR}/web/support)
-if(MSVC)
-    target_compile_options(ruvia_unit_tests PRIVATE /bigobj /FS)
-endif()
+ruvia_apply_test_warnings(ruvia_unit_tests)
 
 add_test(NAME ruvia_unit_tests COMMAND ruvia_unit_tests)
 set_tests_properties(ruvia_unit_tests PROPERTIES TIMEOUT 180)
@@ -341,9 +363,7 @@ set_tests_properties(ruvia_unit_tests PROPERTIES TIMEOUT 180)
 if(RUVIA_ENABLE_HTTP2_CONFORMANCE_TESTS)
     add_executable(ruvia_http2_conformance_server web/server/http2_conformance_server.cpp)
     target_link_libraries(ruvia_http2_conformance_server PRIVATE ruvia::web)
-    if(MSVC)
-        target_compile_options(ruvia_http2_conformance_server PRIVATE /bigobj /FS)
-    endif()
+    ruvia_apply_test_warnings(ruvia_http2_conformance_server)
     find_package(Python3 REQUIRED COMPONENTS Interpreter)
     add_test(
         NAME ruvia_http2_conformance

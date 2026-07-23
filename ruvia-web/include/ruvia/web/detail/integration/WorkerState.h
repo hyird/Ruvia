@@ -67,13 +67,15 @@ public:
         definition.typeKey_ = workerStateTypeKey<T>();
         definition.factory_ =
             constructPmrObject<Stored>(processResource(), std::forward<Factory>(factory));
-        definition.destroyFactory_ = [](void* factory) noexcept {
-            destroyPmrObject(static_cast<Stored*>(factory), processResource());
+        // Named apart from the enclosing `factory` parameter: these lambdas are
+        // captureless and receive the erased pointer, not that object.
+        definition.destroyFactory_ = [](void* storedFactory) noexcept {
+            destroyPmrObject(static_cast<Stored*>(storedFactory), processResource());
         };
         definition.createInstance_ =
-            [](void* factory, std::pmr::memory_resource* resource) -> void* {
+            [](void* storedFactory, std::pmr::memory_resource* resource) -> void* {
             return constructPmrObject<T>(
-                resource, (*static_cast<Stored*>(factory))());
+                resource, (*static_cast<Stored*>(storedFactory))());
         };
         definition.destroyInstance_ =
             [](void* instance, std::pmr::memory_resource* resource) noexcept {

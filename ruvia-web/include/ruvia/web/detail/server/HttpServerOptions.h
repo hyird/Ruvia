@@ -1,5 +1,6 @@
 #pragma once
 
+#include <atomic>
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
@@ -44,12 +45,19 @@ struct ConnectionFailureRecordAccess final {
 // with the connection that produced it.
 struct ConnectionFailureSink final {
     ConnectionFailureCallback callback;
+    // Owned by the HttpServer this sink was configured for; null before one
+    // claims it. Counting here rather than at each reporting site keeps the
+    // count and the callback from drifting apart as new sites are added.
+    std::atomic<std::size_t>* counter{nullptr};
 
     void invoke(
         std::string_view remoteAddress,
         std::exception_ptr exception) const noexcept {
         if (exception == nullptr) {
             return;
+        }
+        if (counter != nullptr) {
+            counter->fetch_add(1, std::memory_order_relaxed);
         }
         if (callback) {
             callback.invoke(

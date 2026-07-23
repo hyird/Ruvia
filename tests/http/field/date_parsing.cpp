@@ -33,12 +33,6 @@ std::string formatDate(std::time_t time) {
 
 namespace {
 
-using ruvia::detail::guessStaticFileContentType;
-
-std::string_view guess(const char* name) {
-    return guessStaticFileContentType(std::filesystem::path(name));
-}
-
 }  // namespace
 
 // Reading an HTTP date: IMF-fixdate and the two obsolete formats a recipient must still accept.
