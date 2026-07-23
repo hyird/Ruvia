@@ -32,6 +32,8 @@ enum class EdgeTaskKind : std::uint8_t {
     kBackgroundRefresh,  // a stale-while-revalidate refresh threw
     kWorker,             // an exception escaped the worker's io_context::run()
     kAccessLog,          // the accessLog callback itself threw
+    kDiskCache,          // a queued disk-tier write threw on the disk thread
+    kControl,            // a control operation failed; its caller also got false
 };
 
 // A task failure. `exception` is never null and may be rethrown to inspect it.
@@ -55,9 +57,12 @@ struct EdgeServerOptions final {
     // worker; it is reported to taskFailure as kAccessLog.
     std::function<void(const AccessLogEntry&)> accessLog{};
     // Every exception that escapes a detached Edge task is reported here rather
-    // than discarded. Runs on the Edge worker under the same rules as accessLog.
-    // Without a callback the node writes one line per failure to stderr: a task
-    // failure is never silent. A throwing callback falls back to that same line.
+    // than discarded. Runs on the Edge worker under the same rules as accessLog,
+    // except kDiskCache (the disk thread) and kControl (the thread that called
+    // the control operation); invocations are serialized, so the callback needs
+    // no lock of its own. Without a callback the node writes one line per
+    // failure to stderr: a task failure is never silent. A throwing callback
+    // falls back to that same line.
     std::function<void(const EdgeTaskFailure&)> taskFailure{};
 };
 

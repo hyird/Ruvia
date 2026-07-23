@@ -134,7 +134,12 @@ private:
     void recordRequest(const AccessLogEntry& entry) noexcept;
     // The one place a caught exception may end: it reaches the application's
     // taskFailure callback, or stderr when there is none. Never discards.
+    // Callable from the disk thread as well as the worker, so it serializes.
     void reportFailure(EdgeTaskKind kind, std::exception_ptr exception) noexcept;
+    // Whether an exception is asio unwinding a cancelled coroutine, which is
+    // how a task stops on shutdown rather than a failure to report.
+    [[nodiscard]] static bool isCancellationUnwind(
+        std::exception_ptr exception) noexcept;
 
     struct RefreshJob final {
         std::string key;
@@ -179,6 +184,7 @@ private:
     std::unordered_map<std::string, InFlightFetch> inFlight_;
     std::function<void(const AccessLogEntry&)> accessLog_;
     std::function<void(const EdgeTaskFailure&)> taskFailure_;
+    mutable std::mutex failureMutex_;  // the disk thread reports too
     std::thread worker_;
 };
 

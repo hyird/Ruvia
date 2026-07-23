@@ -32,6 +32,7 @@ namespace {
 }
 
 [[nodiscard]] std::string_view taskKindName(EdgeTaskKind kind) noexcept {
+    // A new kind must name itself here; -Werror catches an unhandled one.
     switch (kind) {
         case EdgeTaskKind::kAcceptLoop:
             return "accept";
@@ -43,26 +44,12 @@ namespace {
             return "worker";
         case EdgeTaskKind::kAccessLog:
             return "access-log";
+        case EdgeTaskKind::kDiskCache:
+            return "disk-cache";
+        case EdgeTaskKind::kControl:
+            return "control";
     }
     return "unknown";
-}
-
-// Asio unwinds a terminally cancelled coroutine by resuming it with
-// operation_aborted, so shutdown ends every tracked task with that exception.
-// It is how a task stops, not a failure, and reporting it would bury the real
-// failures under one line per live connection at every stop().
-[[nodiscard]] bool isCancellationUnwind(std::exception_ptr exception) noexcept {
-    try {
-        std::rethrow_exception(exception);
-    } catch (const asio::multiple_exceptions& group) {
-        // Cancelling an awaitable group (the HTTP/2 session's reader && writer)
-        // unwinds both sides, and asio reports that as one wrapper.
-        return isCancellationUnwind(group.first_exception());
-    } catch (const std::system_error& error) {
-        return error.code() == asio::error::operation_aborted;
-    } catch (...) {
-    }
-    return false;
 }
 
 // The last resort when there is no taskFailure callback, or when that callback
@@ -96,7 +83,12 @@ EdgeServer::Impl::Impl(EdgeEndpoint endpoint, EdgeServerOptions options)
       activeOperations_(memory_.resource()),
       config_(memory_.resource()),
       cache_(options.cache, memory_.resource()),
-      disk_(options.cacheDirectory, options.maxDiskCacheBytes),
+      disk_(
+          options.cacheDirectory,
+          options.maxDiskCacheBytes,
+          [this](std::exception_ptr exception) {
+              reportFailure(EdgeTaskKind::kDiskCache, std::move(exception));
+          }),
       fetcher_(options.fetch),
       maxCacheableBytes_(options.maxCacheableBytes),
       accessLog_(std::move(options.accessLog)),
@@ -287,6 +279,24 @@ void EdgeServer::Impl::storeTlsContext(TlsContextPtr context) noexcept {
     tlsContext_ = std::move(context);
 }
 
+// Asio unwinds a terminally cancelled coroutine by resuming it with
+// operation_aborted, so shutdown ends every tracked task with that exception.
+// It is how a task stops, not a failure, and reporting it would bury the real
+// failures under one line per live connection at every stop().
+bool EdgeServer::Impl::isCancellationUnwind(std::exception_ptr exception) noexcept {
+    try {
+        std::rethrow_exception(exception);
+    } catch (const asio::multiple_exceptions& group) {
+        // Cancelling an awaitable group (the HTTP/2 session's reader && writer)
+        // unwinds both sides, and asio reports that as one wrapper.
+        return isCancellationUnwind(group.first_exception());
+    } catch (const std::system_error& error) {
+        return error.code() == asio::error::operation_aborted;
+    } catch (...) {
+    }
+    return false;
+}
+
 void EdgeServer::Impl::reportFailure(
     EdgeTaskKind kind,
     std::exception_ptr exception) noexcept {
@@ -298,6 +308,9 @@ void EdgeServer::Impl::reportFailure(
         return;
     }
     try {
+        // kDiskCache arrives from the disk thread while the worker may be
+        // reporting its own failure; the callback sees one at a time.
+        const std::lock_guard guard(failureMutex_);
         taskFailure_(EdgeTaskFailure{kind, exception});
     } catch (...) {
         // The reporting callback is the application's; it must not decide
@@ -415,7 +428,11 @@ bool EdgeServer::Impl::setTlsCertificate(const EdgeTlsConfig& tls) {
         dispatchControl([task = std::move(task)] { (*task)(); });
         result.get();
     } catch (...) {
-        return false;  // invalid PEM
+        // The caller learns that the rotation failed from the return value, but
+        // only the exception says why this PEM was rejected. Report it so that
+        // reason is not lost with the exception.
+        reportFailure(EdgeTaskKind::kControl, std::current_exception());
+        return false;
     }
     return true;
 }

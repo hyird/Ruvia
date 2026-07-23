@@ -292,6 +292,12 @@ asio::awaitable<void> EdgeServer::Impl::handleHttp2Session(Stream stream, std::s
                                                 detail::Http2ErrorCode::kInternalError);
                                         }
                                     }
+                                    // Resetting the stream tells the peer, not
+                                    // the operator: report what went wrong too.
+                                    if (failure != nullptr &&
+                                        !isCancellationUnwind(failure)) {
+                                        reportFailure(EdgeTaskKind::kSession, failure);
+                                    }
                                     connection.unpinStream(streamId);
                                     drainWaiters.erase(streamId);
                                     handlerCancels.erase(streamId);

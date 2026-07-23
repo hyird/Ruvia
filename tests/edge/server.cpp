@@ -730,9 +730,23 @@ int main() {
     // Client-side TLS termination: a separate TLS edge in front of the same
     // origin serves an HTTPS request end to end.
     {
+        std::mutex tlsFailureMutex;
+        std::vector<ruvia::edge::EdgeTaskKind> tlsFailures;
+        std::vector<std::string> tlsFailureMessages;
         ruvia::edge::EdgeServerOptions tlsOptions;
         tlsOptions.tls = ruvia::edge::EdgeTlsConfig{
             std::string(edge_test_tls::kCertPem), std::string(edge_test_tls::kKeyPem)};
+        tlsOptions.taskFailure = [&](const ruvia::edge::EdgeTaskFailure& failure) {
+            std::lock_guard<std::mutex> guard(tlsFailureMutex);
+            tlsFailures.push_back(failure.kind);
+            try {
+                std::rethrow_exception(failure.exception);
+            } catch (const std::exception& error) {
+                tlsFailureMessages.emplace_back(error.what());
+            } catch (...) {
+                tlsFailureMessages.emplace_back("<unknown>");
+            }
+        };
         EdgeServer tlsEdge(ruvia::edge::EdgeEndpoint{"0.0.0.0", 0}, std::move(tlsOptions));
         tlsEdge.start();
         check(tlsEdge.addOrigin(
@@ -754,9 +768,18 @@ int main() {
         const auto afterRotate = httpsGet(tlsPort, "front.local", "/page");
         check(statusOf(afterRotate) == 200, "HTTPS still works after rotation");
 
-        // Invalid PEM is rejected.
+        // Invalid PEM is rejected, and the rejection reason -- which lives only
+        // in the exception -- is reported rather than dropped with it.
         check(!tlsEdge.setTlsCertificate(ruvia::edge::EdgeTlsConfig{"not a cert", "not a key"}),
               "setTlsCertificate rejects invalid PEM");
+        {
+            std::lock_guard<std::mutex> guard(tlsFailureMutex);
+            check(tlsFailures.size() == 1 &&
+                      tlsFailures.front() == ruvia::edge::EdgeTaskKind::kControl,
+                  "a rejected certificate is reported as kControl");
+            check(tlsFailureMessages.size() == 1 && !tlsFailureMessages.front().empty(),
+                  "the rejection carries the reason the PEM was refused");
+        }
         tlsEdge.stop();
 
         // A plaintext edge has no certificate to rotate.
