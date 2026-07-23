@@ -618,6 +618,31 @@ bool testDispatcherLifecycleHooksAreWorkerAffine() {
            receivedStartupFailure;
 }
 
+// A stop callback runs after every caller that could have received its
+// exception is gone. Dropping it would make a failed cleanup invisible, so the
+// pool records it as its first failure and join() rethrows it.
+bool testStopCallbackFailureReachesJoin() {
+    ruvia::EventLoopPool loops({.loopCount = 1, .mailboxCapacity = 2});
+    const auto loop = loops.loop(0);
+    std::atomic<unsigned> stopCalls{0};
+    auto stopRegistration = loop.onStop([&] {
+        stopCalls.fetch_add(1, std::memory_order_relaxed);
+        throw std::runtime_error("stop callback failed");
+    });
+
+    loops.start();
+    loops.stop();
+
+    bool rethrown = false;
+    try {
+        loops.join();
+    } catch (const std::runtime_error& error) {
+        rethrown = std::string_view(error.what()) == "stop callback failed";
+    } catch (...) {
+    }
+    return rethrown && stopCalls.load(std::memory_order_relaxed) == 1;
+}
+
 bool testLifecycleTransitionsAreMonotonic() {
     using Lifecycle = ruvia::detail::RuntimeLifecycle;
     Lifecycle lifecycle;
@@ -738,6 +763,9 @@ int main() {
                run(
                    "dispatcher_lifecycle_hooks_are_worker_affine",
                    testDispatcherLifecycleHooksAreWorkerAffine) &&
+               run(
+                   "stop_callback_failure_reaches_join",
+                   testStopCallbackFailureReachesJoin) &&
                run(
                    "lifecycle_transitions_are_monotonic",
                    testLifecycleTransitionsAreMonotonic) &&

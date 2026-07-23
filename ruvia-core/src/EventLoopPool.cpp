@@ -14,6 +14,7 @@
 #include <asio/execution_context.hpp>
 #include <asio/executor_work_guard.hpp>
 
+#include <ruvia/core/detail/util/FailureReport.h>
 #include <ruvia/core/detail/worker/WorkerDispatcher.h>
 #include <ruvia/core/detail/worker/WorkerSelection.h>
 
@@ -74,12 +75,20 @@ private:
     ExternalContextAttachmentService* service_;
 };
 
+// A stop callback runs during shutdown, after the last caller that could have
+// received its exception is gone. Whatever it throws is routed to the loop's
+// failure sink -- the pool's first-failure record, which join() rethrows -- so
+// a failed cleanup is never invisible. Failing to even schedule the callback
+// (the off-worker path) is reported the same way.
 class EventLoopStopListener final : public detail::WorkerShutdownListener {
 public:
     EventLoopStopListener(
         WorkerHandle worker,
-        MoveOnlyFunction<void()> callback)
-        : worker_(std::move(worker)), callback_(std::move(callback)) {}
+        MoveOnlyFunction<void()> callback,
+        detail::EventLoopFailureSink failureSink)
+        : worker_(std::move(worker)),
+          callback_(std::move(callback)),
+          failureSink_(std::move(failureSink)) {}
 
     void workerStopping() noexcept override {
         if (!callback_) {
@@ -87,28 +96,46 @@ public:
         }
         auto callback = std::move(callback_);
         if (worker_.isCurrent()) {
-            try {
-                callback();
-            } catch (...) {
-            }
+            runCallback(callback, failureSink_);
             return;
         }
         try {
             detail::WorkerHandleAccess::defer(
                 worker_,
-                [callback = std::move(callback)]() mutable noexcept {
-                    try {
-                        callback();
-                    } catch (...) {
-                    }
+                [callback = std::move(callback),
+                 failureSink = failureSink_]() mutable noexcept {
+                    runCallback(callback, failureSink);
                 });
         } catch (...) {
+            report(failureSink_, std::current_exception());
         }
     }
 
 private:
+    static void report(
+        const detail::EventLoopFailureSink& sink,
+        std::exception_ptr failure) noexcept {
+        if (sink) {
+            sink(std::move(failure));
+            return;
+        }
+        // An attached loop has no pool to hold the failure for join().
+        detail::reportUnhandledFailure("event loop stop callback", failure);
+    }
+
+    static void runCallback(
+        MoveOnlyFunction<void()>& callback,
+        const detail::EventLoopFailureSink& sink) noexcept {
+        try {
+            callback();
+        } catch (...) {
+            report(sink, std::current_exception());
+        }
+    }
+
     WorkerHandle worker_;
     MoveOnlyFunction<void()> callback_;
+    detail::EventLoopFailureSink failureSink_;
 };
 
 }
@@ -168,6 +195,9 @@ struct EventLoopState final {
     WorkerHandle handle;
     std::thread thread;
     std::atomic_bool stopping{false};
+    // Set by the owning pool; empty for an attached loop. Read only while
+    // registering a stop callback, which the owner does before start().
+    EventLoopFailureSink failureSink;
 };
 
 }
@@ -223,7 +253,8 @@ EventLoopStopRegistration EventLoop::registerStopCallback(
     if (!state_) {
         throw std::logic_error("cannot register a stop callback on an invalid event loop");
     }
-    auto listener = std::make_shared<EventLoopStopListener>(state_->handle, std::move(callback));
+    auto listener = std::make_shared<EventLoopStopListener>(
+        state_->handle, std::move(callback), state_->failureSink);
     detail::WorkerHandleAccess::registerShutdownListener(state_->handle, listener);
     return EventLoopStopRegistration(std::move(listener));
 }
@@ -271,14 +302,18 @@ struct EventLoopPool::Impl {
         loops.reserve(count);
         for (std::size_t i = 0; i < count; ++i) {
             loops.push_back(std::make_shared<detail::EventLoopState>(options.mailboxCapacity));
+            // Failures with no caller left (a stop callback that throws during
+            // shutdown) become the pool's first failure, which join() rethrows.
+            // The sink holds the record, not the pool: a loop handle may outlive
+            // this Impl, and a sink capturing `this` would outlive it too.
+            loops.back()->failureSink = [record = failure](std::exception_ptr failure) {
+                record->record(std::move(failure));
+            };
         }
     }
 
-    void recordFailure(std::exception_ptr failure) noexcept {
-        std::lock_guard lock(failureMutex);
-        if (!firstFailure) {
-            firstFailure = std::move(failure);
-        }
+    void recordFailure(std::exception_ptr exception) noexcept {
+        failure->record(std::move(exception));
     }
 
     void stop() noexcept {
@@ -321,11 +356,30 @@ struct EventLoopPool::Impl {
         }
     }
 
+    // The pool's first failure, shared so a loop's failure sink can outlive the
+    // pool without dangling. Only the first is kept: it is the one that caused
+    // the shutdown, and the ones behind it are usually its consequences.
+    struct FailureRecord final {
+        std::mutex mutex;
+        std::exception_ptr first;
+
+        void record(std::exception_ptr failure) noexcept {
+            const std::lock_guard lock(mutex);
+            if (!first) {
+                first = std::move(failure);
+            }
+        }
+
+        [[nodiscard]] std::exception_ptr take() noexcept {
+            const std::lock_guard lock(mutex);
+            return std::exchange(first, nullptr);
+        }
+    };
+
     std::vector<std::shared_ptr<detail::EventLoopState>> loops;
     detail::RuntimeLifecycle lifecycle;
     std::atomic<std::size_t> nextIndex{0};
-    std::mutex failureMutex;
-    std::exception_ptr firstFailure;
+    std::shared_ptr<FailureRecord> failure{std::make_shared<FailureRecord>()};
 };
 
 EventLoopPool::EventLoopPool(EventLoopPoolOptions options)
@@ -397,12 +451,7 @@ void EventLoopPool::join() {
     }
     impl_->lifecycle.completeStop();
 
-    std::exception_ptr failure;
-    {
-        std::lock_guard lock(impl_->failureMutex);
-        failure = std::exchange(impl_->firstFailure, nullptr);
-    }
-    if (failure) {
+    if (const auto failure = impl_->failure->take()) {
         std::rethrow_exception(failure);
     }
 }

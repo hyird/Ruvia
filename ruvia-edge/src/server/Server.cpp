@@ -1,7 +1,9 @@
 #include "ruvia/edge/detail/server/ServerImpl.h"
 
+#include <algorithm>
+#include <array>
 #include <chrono>
-#include <cstdio>
+#include <cstring>
 #include <exception>
 #include <future>
 #include <memory>
@@ -20,6 +22,7 @@
 #include <asio/multiple_exceptions.hpp>
 #include <asio/post.hpp>
 
+#include "ruvia/core/detail/util/FailureReport.h"
 #include "ruvia/edge/detail/proxy/HeaderRules.h"
 #include "ruvia/edge/detail/server/TlsContext.h"
 
@@ -53,26 +56,19 @@ namespace {
 }
 
 // The last resort when there is no taskFailure callback, or when that callback
-// itself threw. Writing the line is best effort -- stderr may be closed or full
-// -- but nothing beyond it can report, so this is where a failure stops.
+// itself threw: the shared reporter every layer ends an unowned failure at.
 void writeFailureLine(EdgeTaskKind kind, std::exception_ptr exception) noexcept {
+    // "edge session", "edge disk-cache", ... -- one buffer, no allocation on a
+    // path that may be reporting bad_alloc.
+    std::array<char, 48> context{};
     const auto name = taskKindName(kind);
-    try {
-        std::rethrow_exception(exception);
-    } catch (const std::exception& error) {
-        std::fprintf(
-            stderr,
-            "ruvia-edge: %.*s task failed: %s\n",
-            static_cast<int>(name.size()),
-            name.data(),
-            error.what());
-    } catch (...) {
-        std::fprintf(
-            stderr,
-            "ruvia-edge: %.*s task failed: unknown exception\n",
-            static_cast<int>(name.size()),
-            name.data());
-    }
+    static constexpr std::string_view kPrefix = "edge ";
+    const auto length =
+        std::min(name.size(), context.size() - kPrefix.size());
+    std::memcpy(context.data(), kPrefix.data(), kPrefix.size());
+    std::memcpy(context.data() + kPrefix.size(), name.data(), length);
+    ruvia::detail::reportUnhandledFailure(
+        std::string_view(context.data(), kPrefix.size() + length), exception);
 }
 
 }  // namespace
