@@ -390,6 +390,10 @@ EventLoopPool::~EventLoopPool() {
     try {
         join();
     } catch (...) {
+        // Destroying a pool that was never joined explicitly makes this the
+        // only place its first failure is ever rethrown, and a destructor
+        // cannot rethrow it further. Report rather than end here.
+        detail::reportUnhandledFailure("event loop pool", std::current_exception());
     }
 }
 

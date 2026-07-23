@@ -393,7 +393,9 @@ Task<void> runHttp2SansIoSession(
                     if (webSocketConnection.has_value()) {
                         co_await finishWebSocketSession(
                             *webSocketConnection,
-                            exception);
+                            exception,
+                            options.connectionFailure,
+                            remoteAddress);
                         co_return;
                     }
                     if (exception != nullptr) {

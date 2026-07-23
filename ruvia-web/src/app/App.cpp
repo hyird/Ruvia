@@ -1,5 +1,7 @@
 #include "ruvia/web/detail/app/AppState.h"
 
+#include "ruvia/core/detail/util/FailureReport.h"
+
 #include <asio/signal_set.hpp>
 
 #include <csignal>
@@ -36,6 +38,12 @@ void invokeStopHooks(detail::AppState& state) noexcept {
         try {
             hook();
         } catch (...) {
+            // Shutdown must run every remaining hook, so one failure cannot
+            // propagate -- but a hook that failed to release something is
+            // exactly what an operator needs to see, and this runs after the
+            // last caller that could have received it.
+            detail::reportUnhandledFailure(
+                "app stop hook", std::current_exception());
         }
     }
 }

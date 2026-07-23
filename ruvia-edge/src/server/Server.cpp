@@ -289,6 +289,8 @@ bool EdgeServer::Impl::isCancellationUnwind(std::exception_ptr exception) noexce
     } catch (const std::system_error& error) {
         return error.code() == asio::error::operation_aborted;
     } catch (...) {
+        // Classification only: returning false sends the caller straight to
+        // reportFailure, which still owns the exception.
     }
     return false;
 }

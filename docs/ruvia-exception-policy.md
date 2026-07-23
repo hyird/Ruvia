@@ -137,16 +137,45 @@ stderr: "ruvia: <context> failed: <what>"
   不伪造错误响应而是拆连接；连接级失败经 `App::onConnectionFailure` 上报，
   包括响应已提交后 handler 抛出的那一类（h1 与 h2 各有端到端测试）（2026-07-23）。
 
-## 8. 一个反例：为什么"提交后失败"必须单独有出口
+## 8. 反模式：降级即丢弃
 
-响应头一旦上线，状态码就定死了。`dispatchResponseStreamWith` 曾把这种失败折叠成
-`makeFailedAfterCommit(status)` —— 只留下状态码（通常是 200），异常本身就地丢弃。
-结果是：客户端收到一个截断的 200，服务端**什么都没有**。既没有错误日志，也没有
-访问日志异常，因为访问日志记录的正是那个 200。
+最难发现的吞点不是空 `catch`，而是**把异常降级成一个更小的值**之后没人再持有它。
+本项目实际出现过四次，形态各不相同但本质相同：
 
-这类失败恰恰是最需要诊断的：它意味着 handler 在写了一半响应后崩了。修法是让
-`ResponseStreamFailedAfterCommit` 携带 `exception_ptr` 一路传到传输层，由 h1 的
-流式路由与 h2 会话交给连接级 sink——传输层是最后一个还持有它的所有者。
+| 位置 | 降级成 | 后果 |
+| --- | --- | --- |
+| `dispatchResponseStreamWith` | `makeFailedAfterCommit(status)` | 客户端收到截断的 200，服务端连日志都没有——访问日志记的正是那个 200 |
+| `finishWebSocketSession` | close code `1011` | 对端知道"出错了"，运维不知道错在哪 |
+| `EdgeServer::setTlsCertificate` | `return false` | 调用方知道证书被拒，不知道 PEM 哪里坏 |
+| edge `spawnTracked` 完成回调 | 忽略 `exception_ptr` 参数 | 会话与后台任务的失败全部消失 |
 
-教训：**当一个失败被"降级"成状态码、布尔值或枚举时，检查原始异常是否还有人持有。**
-没有的话，那就是一个静默的吞点，无论中间隔了多少层类型安全的抽象。
+前三个都藏在类型安全、设计良好的抽象背后：一个 variant 结果类型、一个 RFC 定义的
+关闭码、一个布尔返回值。类型越干净，越难看出异常已经没了。
+
+**检查方法：每当一个失败被转换成状态码、布尔值、枚举或关闭码，问一句"原始异常
+现在谁持有？"** 答案是"没有人"时，就是一个静默吞点。修法统一为：让降级后的值
+携带 `exception_ptr` 一路传到最后一个能上报的所有者（通常是传输层或任务边界）。
+
+## 9. 清点结果
+
+全树 `catch (...)` 逐个核实后的分布（2026-07-23）：
+
+- **上报**：edge 五类任务、edge 磁盘线程任务、web 连接级（h1/h2/WebSocket）、
+  core stop 回调、App stop hook、两个析构里的 `join()`。
+- **回滚后 `throw;`**：所有资源清理点（`EdgeCache`、`Db`、`PgDb`、`RedisPool`、
+  `PmrObject`、`AsioAwait` 等）。
+- **转成 `exception_ptr` 继续传播**：请求级降级链、`TaskScope`、`DbMigration`。
+- **转成契约内返回值**：`DiskCache` 的 best-effort 查询、`DbSlotSocket` 的探测。
+- **分类判断**（异常仍被调用方持有）：`isCancellationUnwind`、
+  `isUnsupportedRequestContentCoding`、`ResponseStreamHeadOnlyComplete` 识别。
+- **最终兜底自身**：`reportUnhandledFailure` 内部的 `rethrow` 分支。
+
+**丢弃异常的 `catch` 数量：0。**
+
+语法上仍为空的 `catch (...) {}` 只剩三个，全部是分类判断——`isCancellationUnwind`、
+`isUnsupportedRequestContentCoding`、`ResponseStreamHeadOnlyComplete` 的识别。它们
+`rethrow` 一个调用方仍然持有的 `exception_ptr` 只为读出类型，落空分支返回 false 后
+调用方照常处理该异常。三处都加了注释注明这一点，扫描者不必再逐个推断。
+
+新增空 `catch` 时按此判断：**空块合法当且仅当异常的所有权在别处**，并且必须写明
+所有者是谁。

@@ -99,6 +99,8 @@ void assignExceptionError(OwnedHttpErrorInfo& errorInfo, std::exception_ptr exce
     } catch (const detail::UnsupportedRequestContentCoding&) {
         return true;
     } catch (...) {
+        // Classification only: the caller still owns `exception` and answers it
+        // through the error path. Nothing is discarded here.
     }
     return false;
 }

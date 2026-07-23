@@ -90,7 +90,11 @@ Task<std::optional<Http1SessionRequestCompletion>> dispatchHttpWebSocketRoute(
         exception = std::current_exception();
     }
     if (webSocketConnection.has_value()) {
-        co_await finishWebSocketSession(*webSocketConnection, exception);
+        co_await finishWebSocketSession(
+            *webSocketConnection,
+            exception,
+            d.options.connectionFailure,
+            d.baseRouteServices.connInfo().remote().address());
         co_return std::nullopt;
     }
     if (exception != nullptr) {
