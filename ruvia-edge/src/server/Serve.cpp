@@ -220,14 +220,26 @@ asio::awaitable<bool> EdgeServer::Impl::serveRequest(
                    static_cast<std::time_t>(staleEntry->staleWhileRevalidate)) {
         if (inFlight_.find(key) == inFlight_.end()) {
             inFlight_.try_emplace(key);  // one refresh per key
-            spawnTracked(backgroundRefresh(RefreshJob{
-                key,
-                std::string(origin->upstreamHost),
-                origin->upstreamPort,
-                origin->https,
-                std::string(target),
-                acceptEncoding,
-                staleEntry}));
+            // The entry claims this key for a refresh that is only started
+            // below. If starting it throws, nothing would ever wake the
+            // followers that later coalesce on the claim, so release it here
+            // and report; this request still serves its stale copy.
+            try {
+                spawnTracked(
+                    backgroundRefresh(RefreshJob{
+                        key,
+                        std::string(origin->upstreamHost),
+                        origin->upstreamPort,
+                        origin->https,
+                        std::string(target),
+                        acceptEncoding,
+                        staleEntry}),
+                    EdgeTaskKind::kBackgroundRefresh);
+            } catch (...) {
+                wakeInFlight(key);
+                reportFailure(
+                    EdgeTaskKind::kBackgroundRefresh, std::current_exception());
+            }
         }
         const auto age = cachedResponseAge(*staleEntry, now);
         outcome.label = "STALE";

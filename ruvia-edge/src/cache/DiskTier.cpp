@@ -7,7 +7,9 @@ namespace ruvia::edge {
 
 DiskTier::DiskTier(
     const std::optional<std::filesystem::path>& directory,
-    std::size_t maxBytes) {
+    std::size_t maxBytes,
+    FailureSink onFailure)
+    : onFailure_(std::move(onFailure)) {
     if (!directory) {
         return;  // disabled: no cache, no thread
     }
@@ -36,8 +38,8 @@ void DiskTier::store(std::string key, CachedResponse entry) {
     if (!enabled()) {
         return;
     }
-    asio::post(*pool_, [this, key = std::move(key), entry = std::move(entry)] {
-        cache_->store(key, entry);
+    runQueued([this, key = std::move(key), entry = std::move(entry)] {
+        (void)cache_->store(key, entry);
     });
 }
 
@@ -45,14 +47,14 @@ void DiskTier::purge(std::string key) {
     if (!enabled()) {
         return;
     }
-    asio::post(*pool_, [this, key = std::move(key)] { cache_->purge(key); });
+    runQueued([this, key = std::move(key)] { cache_->purge(key); });
 }
 
 void DiskTier::purgePrefix(std::string prefix) {
     if (!enabled()) {
         return;
     }
-    asio::post(*pool_, [this, prefix = std::move(prefix)] {
+    runQueued([this, prefix = std::move(prefix)] {
         (void)cache_->purgePrefix(prefix);
     });
 }

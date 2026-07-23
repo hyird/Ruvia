@@ -12,6 +12,7 @@ configure_file(
 add_library(ruvia-core
     ${CMAKE_CURRENT_SOURCE_DIR}/src/MemoryPool.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/ConnectionScanner.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/FailureReport.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/EventLoopPool.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/TaskScope.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/Timer.cpp

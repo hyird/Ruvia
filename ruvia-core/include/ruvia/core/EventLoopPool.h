@@ -3,6 +3,8 @@
 #include <concepts>
 #include <cstddef>
 #include <cstdint>
+#include <exception>
+#include <functional>
 #include <memory>
 #include <string_view>
 #include <type_traits>
@@ -17,6 +19,11 @@ namespace ruvia {
 namespace detail {
 struct EventLoopState;
 class WorkerShutdownListener;
+
+// Where a loop sends an exception that has no caller left to receive it. A
+// pooled loop records it as the pool's first failure, which join() rethrows;
+// an attached loop has no such owner and leaves the sink empty.
+using EventLoopFailureSink = std::function<void(std::exception_ptr)>;
 }
 
 class EventLoopStopRegistration final {

@@ -3,6 +3,7 @@
 #include <exception>
 
 #include "ruvia/web/detail/websocket/HttpWebSocketConnection.h"
+#include "ruvia/web/detail/server/HttpServerOptions.h"
 #include "ruvia/core/detail/io/ConnectionScanner.h"
 #include "ruvia/web/detail/http/context/ContextAccess.h"
 #include "ruvia/web/detail/util/CallableRef.h"
@@ -62,10 +63,21 @@ Task<void> invokeWebSocketHandler(
 // HTTP/1 and HTTP/2 retain the connection until the complete route middleware
 // chain finishes, then converge here. close() is idempotent through the protocol
 // core's typed close phase, so a handler that already closed itself is safe.
+//
+// A handler that failed is already past the upgrade, so its exception can only
+// become a 1011 close code -- which tells the peer that something went wrong
+// but not what, and is the last thing that references the failure. Both it and
+// a failure to close are reported here, since nothing after this frame holds
+// either one. close() itself signals a dead peer through error codes, so what
+// it throws is a real fault (an invalid code, or exhaustion), not a routine
+// disconnect.
 template <typename Transport>
 Task<void> finishWebSocketSession(
     WebSocketConnection<Transport>& connection,
-    std::exception_ptr exception) {
+    std::exception_ptr exception,
+    const ConnectionFailureSink& connectionFailure,
+    std::string_view remoteAddress) {
+    connectionFailure.invoke(remoteAddress, exception);
     try {
         if (exception != nullptr) {
             co_await connection.close(1011, "internal server error");
@@ -73,6 +85,7 @@ Task<void> finishWebSocketSession(
             co_await connection.close(1000, {});
         }
     } catch (...) {
+        connectionFailure.invoke(remoteAddress, std::current_exception());
     }
     co_await connection.detachAndDrainWrites();
 }

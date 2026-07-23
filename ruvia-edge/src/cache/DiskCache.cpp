@@ -129,16 +129,12 @@ DiskCache::DiskCache(std::filesystem::path directory, std::size_t maxBytes)
                 "failed to inspect disk cache entry", path, ec);
         }
 
-        std::string fileName;
-        try {
-            fileName = path.filename().string();
-        } catch (...) {
-            current.increment(ec);
-            if (ec) {
-                break;
-            }
-            continue;
-        }
+        // Failing to render a name (a non-representable wide filename on
+        // Windows, or exhaustion) leaves this entry unclassifiable: it may be
+        // one of our own records, and skipping it would silently start the tier
+        // with byte accounting that does not match the directory. The scan
+        // failures above already refuse to start; this one does too.
+        const std::string fileName = path.filename().string();
 
         if (std::filesystem::is_regular_file(status) &&
             isOwnedTempName(fileName)) {

@@ -639,11 +639,26 @@ int main() {
     // process), truncate the response, or poison later requests on the worker.
     {
         std::atomic<int> logAttempts{0};
+        std::mutex failureMutex;
+        std::vector<ruvia::edge::EdgeTaskKind> failureKinds;
+        std::vector<std::string> failureMessages;
         ruvia::edge::EdgeServerOptions logFailureOptions;
         logFailureOptions.accessLog = [&](const ruvia::edge::AccessLogEntry&) {
             logAttempts.fetch_add(1, std::memory_order_relaxed);
             throw std::runtime_error("access log failed");
         };
+        logFailureOptions.taskFailure =
+            [&](const ruvia::edge::EdgeTaskFailure& failure) {
+                std::lock_guard<std::mutex> guard(failureMutex);
+                failureKinds.push_back(failure.kind);
+                try {
+                    std::rethrow_exception(failure.exception);
+                } catch (const std::exception& error) {
+                    failureMessages.emplace_back(error.what());
+                } catch (...) {
+                    failureMessages.emplace_back("<unknown>");
+                }
+            };
         EdgeServer logFailureEdge(
             ruvia::edge::EdgeEndpoint{"127.0.0.1", 0},
             std::move(logFailureOptions));
@@ -660,14 +675,78 @@ int main() {
         check(logAttempts.load(std::memory_order_relaxed) == 2,
               "each completed request still attempts access logging");
         logFailureEdge.stop();
+        {
+            // The contained exception is reported, not dropped.
+            std::lock_guard<std::mutex> guard(failureMutex);
+            check(failureKinds.size() == 2,
+                  "each access-log exception reached the failure callback");
+            check(std::ranges::all_of(
+                      failureKinds,
+                      [](ruvia::edge::EdgeTaskKind kind) {
+                          return kind == ruvia::edge::EdgeTaskKind::kAccessLog;
+                      }),
+                  "an access-log exception is reported as kAccessLog");
+            check(std::ranges::all_of(
+                      failureMessages,
+                      [](const std::string& message) {
+                          return message == "access log failed";
+                      }),
+                  "the original exception is delivered intact");
+        }
+    }
+
+    // The failure callback is application code too. When it throws, the node
+    // must keep serving: the report falls back to stderr and nothing unwinds
+    // into the request-record destructor behind it.
+    {
+        std::atomic<int> reportAttempts{0};
+        ruvia::edge::EdgeServerOptions doubleFailureOptions;
+        doubleFailureOptions.accessLog = [](const ruvia::edge::AccessLogEntry&) {
+            throw std::runtime_error("access log failed");
+        };
+        doubleFailureOptions.taskFailure =
+            [&](const ruvia::edge::EdgeTaskFailure&) {
+                reportAttempts.fetch_add(1, std::memory_order_relaxed);
+                throw std::runtime_error("failure callback failed");
+            };
+        EdgeServer doubleFailureEdge(
+            ruvia::edge::EdgeEndpoint{"127.0.0.1", 0},
+            std::move(doubleFailureOptions));
+        doubleFailureEdge.start();
+        check(doubleFailureEdge.addOrigin(
+                  "front.local",
+                  OriginSettings{"127.0.0.1", origin.port(), false}),
+              "throwing-report fixture origin is registered");
+        const auto port = doubleFailureEdge.localEndpoint().port;
+        check(statusOf(httpGet(port, "front.local", "/report-failure-one")) == 200,
+              "a throwing failure callback does not truncate its request");
+        check(statusOf(httpGet(port, "front.local", "/report-failure-two")) == 200,
+              "worker remains usable after a failure-callback exception");
+        check(reportAttempts.load(std::memory_order_relaxed) == 2,
+              "every contained failure still reaches the failure callback");
+        doubleFailureEdge.stop();
     }
 
     // Client-side TLS termination: a separate TLS edge in front of the same
     // origin serves an HTTPS request end to end.
     {
+        std::mutex tlsFailureMutex;
+        std::vector<ruvia::edge::EdgeTaskKind> tlsFailures;
+        std::vector<std::string> tlsFailureMessages;
         ruvia::edge::EdgeServerOptions tlsOptions;
         tlsOptions.tls = ruvia::edge::EdgeTlsConfig{
             std::string(edge_test_tls::kCertPem), std::string(edge_test_tls::kKeyPem)};
+        tlsOptions.taskFailure = [&](const ruvia::edge::EdgeTaskFailure& failure) {
+            std::lock_guard<std::mutex> guard(tlsFailureMutex);
+            tlsFailures.push_back(failure.kind);
+            try {
+                std::rethrow_exception(failure.exception);
+            } catch (const std::exception& error) {
+                tlsFailureMessages.emplace_back(error.what());
+            } catch (...) {
+                tlsFailureMessages.emplace_back("<unknown>");
+            }
+        };
         EdgeServer tlsEdge(ruvia::edge::EdgeEndpoint{"0.0.0.0", 0}, std::move(tlsOptions));
         tlsEdge.start();
         check(tlsEdge.addOrigin(
@@ -689,9 +768,18 @@ int main() {
         const auto afterRotate = httpsGet(tlsPort, "front.local", "/page");
         check(statusOf(afterRotate) == 200, "HTTPS still works after rotation");
 
-        // Invalid PEM is rejected.
+        // Invalid PEM is rejected, and the rejection reason -- which lives only
+        // in the exception -- is reported rather than dropped with it.
         check(!tlsEdge.setTlsCertificate(ruvia::edge::EdgeTlsConfig{"not a cert", "not a key"}),
               "setTlsCertificate rejects invalid PEM");
+        {
+            std::lock_guard<std::mutex> guard(tlsFailureMutex);
+            check(tlsFailures.size() == 1 &&
+                      tlsFailures.front() == ruvia::edge::EdgeTaskKind::kControl,
+                  "a rejected certificate is reported as kControl");
+            check(tlsFailureMessages.size() == 1 && !tlsFailureMessages.front().empty(),
+                  "the rejection carries the reason the PEM was refused");
+        }
         tlsEdge.stop();
 
         // A plaintext edge has no certificate to rotate.

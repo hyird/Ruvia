@@ -393,7 +393,9 @@ Task<void> runHttp2SansIoSession(
                     if (webSocketConnection.has_value()) {
                         co_await finishWebSocketSession(
                             *webSocketConnection,
-                            exception);
+                            exception,
+                            options.connectionFailure,
+                            remoteAddress);
                         co_return;
                     }
                     if (exception != nullptr) {
@@ -445,11 +447,16 @@ Task<void> runHttp2SansIoSession(
                     co_return;
                 }
                 if (const auto committedStatus = result.committedStatus()) {
-                    if (result.failedAfterCommit() != nullptr) {
+                    if (const auto* failed = result.failedAfterCommit()) {
                         (void)connection.submitReset(
                             streamId,
                             Http2ErrorCode::kInternalError);
                         wakeWriter();
+                        // RST_STREAM tells the peer the stream died; it does
+                        // not say why, and nothing downstream still holds the
+                        // reason. Report it before the frame unwinds.
+                        options.connectionFailure.invoke(
+                            remoteAddress, failed->exception());
                     }
                     recordHttpAccess(
                         options.accessLog,

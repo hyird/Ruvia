@@ -201,17 +201,42 @@ RUVIA_TEST(websocket_session_finish_maps_chain_failure_to_1011) {
         ruvia::ProtocolByteLimit::limited(1024),
         memory.resource());
 
+    // The 1011 close code is all the peer learns; the listener is where the
+    // reason survives an already-upgraded connection.
+    struct FailureObservation final {
+        std::size_t calls{0};
+        std::string message;
+
+        void operator()(const ruvia::ConnectionFailureRecord& record) noexcept {
+            ++calls;
+            try {
+                std::rethrow_exception(record.exception());
+            } catch (const std::exception& error) {
+                message.assign(error.what());
+            } catch (...) {
+                message.assign("<unknown>");
+            }
+        }
+    } observation;
+    ruvia::detail::ConnectionFailureSink connectionFailure;
+    connectionFailure.callback =
+        ruvia::ConnectionFailureCallback::bind(observation);
+
     auto future = asio::co_spawn(
         io,
         ruvia::detail::taskAsAwaitable(
             ruvia::detail::finishWebSocketSession(
                 connection,
                 std::make_exception_ptr(
-                    std::runtime_error("middleware post failed")))),
+                    std::runtime_error("middleware post failed")),
+                connectionFailure,
+                "127.0.0.1")),
         asio::use_future);
     io.run();
     future.get();
 
+    RUVIA_CHECK_EQ(observation.calls, std::size_t{1});
+    RUVIA_CHECK_EQ(observation.message, std::string("middleware post failed"));
     RUVIA_CHECK_EQ(state.writes, std::size_t{2});
     RUVIA_CHECK(state.lastNonEmptyBytes.size() >= 4);
     if (state.lastNonEmptyBytes.size() >= 4) {
