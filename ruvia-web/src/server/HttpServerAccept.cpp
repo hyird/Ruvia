@@ -35,6 +35,7 @@ Task<void> HttpServer::acceptLoop() {
             }
             // Transient: fd exhaustion, ECONNABORTED, EINTR, ENOBUFS, ENOMEM,
             // etc. A single bad accept must not stop the worker forever.
+            acceptFailures_.fetch_add(1, std::memory_order_relaxed);
             static_cast<void>(
                 co_await sleepFor(
                     workerHandle_, std::chrono::milliseconds(50)));
@@ -49,8 +50,10 @@ Task<void> HttpServer::acceptLoop() {
             co_return;
         }
         if (options_.maxConnections.has_value() &&
-            activeConnectionCount_ >= *options_.maxConnections) {
+            activeConnectionCount_.load(std::memory_order_relaxed) >=
+                *options_.maxConnections) {
             closeSocket(socket);
+            connectionsRefused_.fetch_add(1, std::memory_order_relaxed);
             continue;
         }
 
@@ -72,6 +75,7 @@ Task<void> HttpServer::acceptLoop() {
                     asio::recycling_allocator<void>(), asio::detached));
             continue;
         } catch (...) {
+            acceptFailures_.fetch_add(1, std::memory_order_relaxed);
             options_.connectionFailure.invoke({}, std::current_exception());
         }
         static_cast<void>(

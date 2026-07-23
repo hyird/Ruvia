@@ -231,7 +231,11 @@ HttpServer::HttpServer(
               : RouteRateLimitPresence::kAbsent,
           options_.rateLimitSlotsPerWorker,
           memory_.resource()),
-      workSetPool_(memory_) {}
+      workSetPool_(memory_) {
+    // Claim the failure sink's counter. Every reporting site shares this one
+    // options_ instance, so the count cannot drift from what the callback saw.
+    options_.connectionFailure.counter = &connectionFailures_;
+}
 
 HttpServer::~HttpServer() {
     stop();
@@ -304,6 +308,19 @@ void HttpServer::join() {
 
 TcpEndpoint HttpServer::localEndpoint() const {
     return endpoint_;
+}
+
+HttpServerStats HttpServer::stats() const noexcept {
+    HttpServerStats stats;
+    stats.activeConnections =
+        activeConnectionCount_.load(std::memory_order_relaxed);
+    stats.connectionsRefused =
+        connectionsRefused_.load(std::memory_order_relaxed);
+    stats.connectionFailures =
+        connectionFailures_.load(std::memory_order_relaxed);
+    stats.acceptFailures = acceptFailures_.load(std::memory_order_relaxed);
+    stats.workerFailures = workerFailures_.load(std::memory_order_relaxed);
+    return stats;
 }
 
 WebWorkerHandle HttpServer::webWorker() const {
@@ -437,6 +454,8 @@ void HttpServer::failWorker(std::exception_ptr failure) noexcept {
     if (!workerCompletion_.recordWorkerFailure(failure)) {
         return;
     }
+    // Counted after the dedupe above, so a worker failing once counts once.
+    workerFailures_.fetch_add(1, std::memory_order_relaxed);
     (void)lifecycle_.requestStop();
     options_.workerFailure.notify(failure);
     stopOnContext();

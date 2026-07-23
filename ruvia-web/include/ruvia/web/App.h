@@ -127,6 +127,10 @@ public:
 #endif
     void run();
     void stop();
+    // HTTP serving counters summed across every worker. All zero before run()
+    // starts them and after it returns. Safe from any thread, including from a
+    // stop hook.
+    [[nodiscard]] HttpServerStats httpStats() const;
     [[nodiscard]] std::vector<WebWorkerHandle> workers() const;
     [[nodiscard]] WebWorkerHandle workerFor(std::uint64_t key) const;
     [[nodiscard]] WebWorkerHandle workerFor(std::string_view key) const;

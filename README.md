@@ -511,7 +511,11 @@ deterministic 500. A failure past the response's point of no return cannot becom
 a response — the head is already on the wire — so it is reported instead:
 `App::onConnectionFailure` receives the exception with the peer address, and
 without a listener it is written to stderr rather than dropped with the
-connection. [`docs/ruvia-exception-policy.md`](docs/ruvia-exception-policy.md)
+connection. `App::httpStats()` sums the same events across every worker as
+counters — active and shed connections, connection failures, transient accept
+failures, worker failures — so a deployment can be monitored by polling instead
+of by installing callbacks.
+[`docs/ruvia-exception-policy.md`](docs/ruvia-exception-policy.md)
 is the full contract: what each layer raises, which failures are isolated where,
 and the three kinds of callback contract.
 

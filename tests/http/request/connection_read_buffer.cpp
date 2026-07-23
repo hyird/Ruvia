@@ -341,7 +341,7 @@ RUVIA_TEST(accepted_connection_lease_acquires_moves_and_releases_once) {
     asio::io_context ioContext;
     asio::ip::tcp::socket socket(ioContext);
     socket.open(asio::ip::tcp::v4());
-    std::size_t count = 0;
+    std::atomic<std::size_t> count{0};
     {
         AcceptedConnectionLease admitted(std::move(socket), count);
         RUVIA_CHECK_EQ(count, std::size_t{1});
@@ -358,7 +358,7 @@ RUVIA_TEST(accepted_connection_lease_rolls_back_throwing_initiation) {
     asio::io_context ioContext;
     asio::ip::tcp::socket socket(ioContext);
     socket.open(asio::ip::tcp::v4());
-    std::size_t count = 0;
+    std::atomic<std::size_t> count{0};
 
     try {
         AcceptedConnectionLease admitted(std::move(socket), count);
