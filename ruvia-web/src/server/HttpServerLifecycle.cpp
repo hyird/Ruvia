@@ -1,4 +1,5 @@
 #include "ruvia/web/detail/server/HttpServer.h"
+#include "ruvia/core/detail/util/FailureReport.h"
 #include "ruvia/core/detail/worker/WorkerDispatcher.h"
 #include "ruvia/web/detail/app/WebWorkerDispatch.h"
 
@@ -237,6 +238,11 @@ HttpServer::~HttpServer() {
     try {
         join();
     } catch (...) {
+        // join() rethrows this worker's failure, and a destructor cannot pass
+        // it on. A server destroyed without an explicit join -- or one whose
+        // failure raced the App's own shutdown -- would otherwise take the
+        // reason with it.
+        reportUnhandledFailure("web server worker", std::current_exception());
     }
     // Retire the execution context first. Failure shutdown already releases
     // abandoned mailbox tasks on the worker; detach defensively releases any

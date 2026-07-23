@@ -4,6 +4,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <concepts>
+#include <exception>
 #include <filesystem>
 #include <initializer_list>
 #include <memory>
@@ -29,6 +30,8 @@ namespace ruvia {
 namespace detail {
 struct AccessLogRecordAccess;
 struct AccessLogSink;
+struct ConnectionFailureRecordAccess;
+struct ConnectionFailureSink;
 }  // namespace detail
 
 class TlsIdentity final {
@@ -459,6 +462,82 @@ private:
           invoke_(invoke) {}
 
     void invoke(const AccessLogRecord& record) const noexcept {
+        invoke_(target_, record);
+    }
+
+    void* target_{nullptr};
+    Invoke invoke_{nullptr};
+};
+
+// One connection lost to an exception that escaped its session: a handler bug
+// past the response's point of no return, an error handler that itself failed,
+// or resource exhaustion. The server closes that connection and keeps serving;
+// this record is how the failure becomes visible instead of vanishing with the
+// connection. A request that fails before its response is committed never gets
+// here -- it is answered with a 5xx through onError.
+//
+// Views and the record itself are valid only for the callback invocation.
+class ConnectionFailureRecord final {
+public:
+    // Empty when the peer address could not be read (the connection was
+    // already gone) or when the failure happened before it was resolved.
+    [[nodiscard]] constexpr std::string_view remoteAddress() const noexcept {
+        return remoteAddress_;
+    }
+
+    // Never null. Rethrow it to inspect the failure.
+    [[nodiscard]] std::exception_ptr exception() const noexcept {
+        return exception_;
+    }
+
+private:
+    friend struct detail::ConnectionFailureRecordAccess;
+
+    ConnectionFailureRecord(
+        std::string_view remoteAddress,
+        std::exception_ptr exception) noexcept
+        : remoteAddress_(remoteAddress), exception_(std::move(exception)) {}
+
+    std::string_view remoteAddress_;
+    std::exception_ptr exception_;
+};
+
+// A non-owning, allocation-free connection-failure listener. The bound object
+// must outlive App::run(). The listener must not throw: it runs on the last
+// line of defense for a connection, where a second failure would have nowhere
+// left to go, so the requirement is enforced at compile time rather than
+// swallowed at runtime.
+class ConnectionFailureCallback final {
+public:
+    constexpr ConnectionFailureCallback() noexcept = default;
+
+    template <typename Listener>
+    requires (!std::is_function_v<Listener> &&
+              std::is_nothrow_invocable_r_v<void, Listener&, const ConnectionFailureRecord&>)
+    [[nodiscard]] static constexpr ConnectionFailureCallback bind(
+        Listener& listener) noexcept {
+        return ConnectionFailureCallback(
+            std::addressof(listener),
+            [](void* target, const ConnectionFailureRecord& record) noexcept {
+                (*static_cast<Listener*>(target))(record);
+            });
+    }
+
+    [[nodiscard]] constexpr explicit operator bool() const noexcept {
+        return invoke_ != nullptr;
+    }
+
+private:
+    friend struct detail::ConnectionFailureRecordAccess;
+    friend struct detail::ConnectionFailureSink;
+
+    using Invoke = void (*)(void*, const ConnectionFailureRecord&) noexcept;
+
+    constexpr ConnectionFailureCallback(void* target, Invoke invoke) noexcept
+        : target_(target),
+          invoke_(invoke) {}
+
+    void invoke(const ConnectionFailureRecord& record) const noexcept {
         invoke_(target_, record);
     }
 

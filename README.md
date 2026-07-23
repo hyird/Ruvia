@@ -159,6 +159,17 @@ live server exclusively leases that directory; records are checksummed and
 published by atomic replacement, and restart recovery ignores uncommitted or
 corrupt files. Do not point two live edge instances at the same directory.
 
+An Edge task is a detached coroutine with no caller to rethrow into, so an
+exception that escapes one is reported rather than dropped:
+`EdgeServerOptions::taskFailure` receives every failure of an accept, a session,
+a background refresh, the worker's `io_context::run()`, a queued disk-tier
+write, a control operation, and the `accessLog` callback itself, tagged with an
+`EdgeTaskKind`. Shutdown, which unwinds tasks by cancelling them, is not a
+failure and is not reported. Without a callback each failure is written to
+stderr; the same line is the fallback when the callback itself throws. The node
+keeps serving in every case: a failed accept pauses briefly and resumes
+accepting instead of leaving the listener open but idle.
+
 ## Core Runtime
 
 `ruvia::EventLoopPool` creates application-owned event loops. Every
@@ -483,6 +494,16 @@ Routes and schemas use these macros:
 Route tables, middleware chains, and controller instances are finalized before
 workers start. The request path does not rebuild them or use a per-request
 virtual dispatcher.
+
+Failures inside a request become responses: `onError` receives the exception and
+decides the status, and an error handler that itself throws still yields a
+deterministic 500. A failure past the response's point of no return cannot become
+a response — the head is already on the wire — so it is reported instead:
+`App::onConnectionFailure` receives the exception with the peer address, and
+without a listener it is written to stderr rather than dropped with the
+connection. [`docs/ruvia-exception-policy.md`](docs/ruvia-exception-policy.md)
+is the full contract: what each layer raises, which failures are isolated where,
+and the three kinds of callback contract.
 
 Models are ordinary structs with one schema for JSON parsing, validation, and
 serialization. They support nested models and arrays; `RUVIA_FIELD` is required

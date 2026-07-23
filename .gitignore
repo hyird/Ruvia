@@ -1,6 +1,8 @@
 # Build outputs
 /build/
 /build-*/
+# CTest scratch state, written when ctest runs from the source directory
+/Testing/
 
 # Dependency/build tool caches
 /vcpkg_installed/

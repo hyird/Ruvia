@@ -113,6 +113,8 @@ Task<std::optional<HttpResponse>> detail::RouteTable::dispatchStreamRoute(
             } catch (const detail::ResponseStreamHeadOnlyComplete&) {
                 headOnlyComplete = true;
             } catch (...) {
+                // Classification only: `exception` still holds this and the
+                // committed-failure path below reports it.
             }
         }
         if (headOnlyComplete) {

@@ -1,7 +1,9 @@
 #pragma once
 
 #include <cstddef>
+#include <exception>
 #include <filesystem>
+#include <functional>
 #include <future>
 #include <mutex>
 #include <optional>
@@ -31,11 +33,16 @@ namespace ruvia::edge {
 // on the calling thread, ordered after everything the pool already drained.
 class DiskTier final {
 public:
+    // What a queued operation reports when it ends by throwing. It runs on the
+    // disk thread, concurrently with the Edge worker.
+    using FailureSink = std::function<void(std::exception_ptr)>;
+
     // Throws std::filesystem::filesystem_error if a directory is given but
     // cannot be created, scanned, or exclusively leased (see DiskCache).
     DiskTier(
         const std::optional<std::filesystem::path>& directory,
-        std::size_t maxBytes);
+        std::size_t maxBytes,
+        FailureSink onFailure = {});
     ~DiskTier();
 
     DiskTier(const DiskTier&) = delete;
@@ -77,8 +84,25 @@ private:
         return result.get();
     }
 
+    // Runs `work` on the disk thread as a queued operation. Nothing awaits the
+    // result, so this wrapper is the only place an exception from it can be
+    // seen; without it the throw would leave the pool's thread and terminate.
+    template <typename Work>
+    void runQueued(Work work) {
+        asio::post(*pool_, [this, work = std::move(work)]() mutable {
+            try {
+                work();
+            } catch (...) {
+                if (onFailure_) {
+                    onFailure_(std::current_exception());
+                }
+            }
+        });
+    }
+
     std::optional<DiskCache> cache_;
     std::optional<asio::thread_pool> pool_;
+    FailureSink onFailure_;
     std::mutex stopMutex_;
     bool stopped_{false};
 };
