@@ -46,10 +46,6 @@ constexpr std::uint32_t methodBit(HttpKnownMethod method) {
     return std::uint32_t{1} << static_cast<std::uint32_t>(method);
 }
 
-HttpResponse makeResponse() {
-    return HttpResponse(std::pmr::new_delete_resource());
-}
-
 }  // namespace
 
 // Serving a file: preconditions, ranges, precompressed variants, type policy

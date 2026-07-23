@@ -13,15 +13,6 @@
 #include "ruvia/http/detail/field/HttpEntityTag.h"
 #include "ruvia/web/detail/http/static/StaticFileMetadata.h"
 
-namespace {
-
-using ruvia::detail::guessStaticFileContentType;
-
-std::string_view guess(const char* name) {
-    return guessStaticFileContentType(std::filesystem::path(name));
-}
-
-}  // namespace
 
 // Small field-value primitives: the weak-etag prefix and unsigned decimal output.
 

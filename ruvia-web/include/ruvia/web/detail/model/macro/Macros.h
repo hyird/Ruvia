@@ -69,7 +69,7 @@ private:                                                                     \
         const ::ruvia::detail::ModelInput& ruviaInput) {                     \
         T model{ruviaInput.resource()};                                      \
         if (!model.ruviaMaterialize(ruviaInput)) return ::std::nullopt;      \
-        return ::std::move(model);                                           \
+        return model;  /* implicitly moved into the optional since C++20 */  \
     }                                                                        \
     bool ruviaMaterialize(const ::ruvia::detail::ModelInput& ruviaInput) {   \
         auto* const ruviaResource = ruviaResource_;                          \
