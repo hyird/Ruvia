@@ -29,10 +29,8 @@ asio::awaitable<bool> EdgeServer::Impl::servePassThrough(
     RequestOutcome& outcome) {
     const bool keepAlive = request.keepAlive;
 
-    OriginRequest passRequest;
-    passRequest.method = request.method;
-    passRequest.target = request.target;
-    passRequest.headers = buildForwardHeaders(
+    // The header vector must outlive passRequest: its `headers` is a span.
+    const auto passHeaders = buildForwardHeaders(
         request.headers,
         request.clientAddress,
         request.host,
@@ -40,6 +38,11 @@ asio::awaitable<bool> EdgeServer::Impl::servePassThrough(
         nullptr,
         ForwardMode::kPassThrough,
         memory_.resource());
+
+    OriginRequest passRequest;
+    passRequest.method = request.method;
+    passRequest.target = request.target;
+    passRequest.headers = passHeaders;
     passRequest.body = request.body;
 
     // Stream the origin response straight through to the client (never
