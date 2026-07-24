@@ -28,6 +28,7 @@ public:
         DbRegistry& databases,
         RedisRegistry& redis,
         const WorkerStateRegistry& workerStates,
+        BlockingPool* blockingPool,
         MoveOnlyFunction<void(std::exception_ptr)> failed);
     ~WebWorkerDispatch();
 
@@ -60,6 +61,7 @@ private:
     DbRegistry* databases_;
     RedisRegistry* redis_;
     const WorkerStateRegistry* workerStates_;
+    BlockingPool* blockingPool_;
     MoveOnlyFunction<void(std::exception_ptr)> failed_;
     mutable std::mutex submitMutex_;
     StopSource stopSource_;

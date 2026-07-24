@@ -5,6 +5,7 @@
 #include <stdexcept>
 #include <utility>
 
+#include "ruvia/core/BlockingPool.h"
 #include "ruvia/http/HttpProtocolError.h"
 #include "ruvia/http/detail/response/HttpResponseHeaderState.h"
 #include "ruvia/web/Error.h"
@@ -73,6 +74,15 @@ void assignExceptionError(OwnedHttpErrorInfo& errorInfo, std::exception_ptr exce
         errorInfo.assign(error.info());
     } catch (const HttpProtocolError& error) {
         errorInfo.assign(HttpErrorInfo(error.status(), {}, error.what()));
+    } catch (const BlockingOperationRejected& error) {
+        // The blocking pool refused the work or the worker is going away. That
+        // is capacity, not a bug in the request: answer it like any other
+        // overload instead of a 500. The message is the framework's own and
+        // names no application internals.
+        errorInfo.assign(HttpErrorInfo(
+            ruvia::http_status::kServiceUnavailable,
+            "blocking_pool_unavailable",
+            error.what()));
     } catch (const std::invalid_argument& error) {
         // invalid_argument is the framework's own request-validation signal (bad
         // cookie/json/form); its message describes the request, so it is safe to

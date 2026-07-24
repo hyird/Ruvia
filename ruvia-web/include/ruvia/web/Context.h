@@ -1,5 +1,6 @@
 #pragma once
 
+#include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <exception>
@@ -11,9 +12,11 @@
 #include <span>
 #include <string>
 #include <string_view>
+#include <type_traits>
 #include <utility>
 #include <vector>
 
+#include "ruvia/core/BlockingPool.h"
 #include "ruvia/core/Task.h"
 #include "ruvia/core/WorkerHandle.h"
 #include "ruvia/http/Cookies.h"
@@ -172,6 +175,45 @@ public:
             workerStateInstance(detail::workerStateTypeKey<T>()));
     }
 
+    // Runs blocking work on App::setBlockingPool()'s threads and resumes this
+    // handler on its own worker with the result, so the worker keeps serving
+    // its other connections meanwhile. Without this, a blocking call inside a
+    // handler freezes every connection the worker owns.
+    //
+    // `fn` runs on a foreign thread and must own everything it touches: capture
+    // by value or move, and never capture the Context, the request, its arena,
+    // or any worker-owned state. The worker does not wait for a task that is
+    // still running when it stops.
+    //
+    // Rethrows whatever `fn` threw. Throws BlockingOperationRejected when the
+    // pool is saturated or stopped, which the default error path answers with
+    // 503; use tryRunBlocking() to shed load yourself instead. Throws
+    // std::logic_error when no pool was configured.
+    template <typename Fn>
+    [[nodiscard]] Task<std::invoke_result_t<Fn&>> runBlocking(Fn fn) const;
+
+    // With a deadline on the wait: a callable that has not returned within
+    // `timeout` stops holding this request, and BlockingOperationRejected is
+    // thrown instead. The callable itself keeps running on its pool thread --
+    // a blocking call cannot be interrupted -- so its captured data must stay
+    // self-owned exactly as above.
+    template <typename Rep, typename Period, typename Fn>
+    [[nodiscard]] Task<std::invoke_result_t<Fn&>> runBlocking(
+        std::chrono::duration<Rep, Period> timeout,
+        Fn fn) const;
+
+    // runBlocking() without the exceptions: the result carries the status, so
+    // an overloaded pool can be answered with a cheaper response instead of an
+    // error. Still throws std::logic_error when no pool was configured -- that
+    // is a missing App::setBlockingPool(), not a runtime condition.
+    template <typename Fn>
+    [[nodiscard]] Task<BlockingResult<std::invoke_result_t<Fn&>>>
+    tryRunBlocking(Fn fn) const;
+
+    template <typename Rep, typename Period, typename Fn>
+    [[nodiscard]] Task<BlockingResult<std::invoke_result_t<Fn&>>>
+    tryRunBlocking(std::chrono::duration<Rep, Period> timeout, Fn fn) const;
+
 #ifdef RUVIA_ENABLE_DATABASE
     [[nodiscard]] DbHandle db() const;
     [[nodiscard]] DbHandle db(std::string_view alias) const;
@@ -324,6 +366,7 @@ private:
     }
     [[nodiscard]] HttpResponse takeResponse();
     [[nodiscard]] void* workerStateInstance(const void* typeKey) const;
+    [[nodiscard]] BlockingPool& blockingPool() const;
 
     RequestMemory& memory_;
     const HttpRequest& request_;
@@ -343,6 +386,7 @@ private:
     HttpNotFoundHandler notFoundHandler_{nullptr};
     const detail::RouteTable* routes_{nullptr};
     const detail::WorkerStateRegistry* workerStates_{nullptr};
+    BlockingPool* blockingPool_{nullptr};
     std::uintptr_t routeRateLimitScope_{0};
     std::size_t maxDecodedBodyBytes_{0};
     detail::ContextRequestBodySource requestBodySource_;

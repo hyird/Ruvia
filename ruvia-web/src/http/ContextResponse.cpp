@@ -135,6 +135,14 @@ void* Context::workerStateInstance(const void* typeKey) const {
     return instance;
 }
 
+BlockingPool& Context::blockingPool() const {
+    if (blockingPool_ == nullptr) {
+        throw std::logic_error(
+            "no blocking pool is configured: call App::setBlockingPool() before App::run()");
+    }
+    return *blockingPool_;
+}
+
 std::pmr::string Context::urlFor(
     std::string_view pattern,
     std::initializer_list<std::string_view> values) const {

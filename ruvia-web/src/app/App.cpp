@@ -55,11 +55,16 @@ namespace detail {
 struct AppRuntimeGraph final {
     explicit AppRuntimeGraph(std::pmr::memory_resource* resource)
         : documentRoot(nullptr, PmrObjectDeleter<StaticRoot>{resource}),
+          blockingPool(nullptr, PmrObjectDeleter<BlockingPool>{resource}),
           controllers(resource),
           routers(resource),
           workers(resource) {}
 
     std::unique_ptr<StaticRoot, PmrObjectDeleter<StaticRoot>> documentRoot;
+    // Declared before the workers so it is destroyed after them: a worker that
+    // is still joining may hold a suspended handler whose task the pool owns.
+    // Destroying the pool stops it and joins its threads.
+    std::unique_ptr<BlockingPool, PmrObjectDeleter<BlockingPool>> blockingPool;
     std::pmr::vector<ControllerStore> controllers;
     std::pmr::vector<std::unique_ptr<Router, PmrObjectDeleter<Router>>> routers;
     std::pmr::vector<std::unique_ptr<HttpServer, PmrObjectDeleter<HttpServer>>> workers;
@@ -154,6 +159,15 @@ HttpServerStats App::httpStats() const {
         total.workerFailures += stats.workerFailures;
     }
     return total;
+}
+
+BlockingPoolStats App::blockingPoolStats() const {
+    auto& state = *state_;
+    std::lock_guard lock(state.mutex);
+    if (!state.runtime || !state.runtime->blockingPool) {
+        return {};
+    }
+    return state.runtime->blockingPool->stats();
 }
 
 std::vector<WebWorkerHandle> App::workers() const {
@@ -257,6 +271,15 @@ void App::run() {
                 runtimeResource,
                 documentRootPath,
                 state.documentRootConfig->staticOptions);
+        }
+
+        if (state.blockingPool.has_value()) {
+            // Starting the threads here keeps them inside the same fallible
+            // startup section as everything else: a pool that cannot start its
+            // threads fails run() before a single connection is accepted.
+            runtime->blockingPool = detail::makePmrObject<BlockingPool>(
+                runtimeResource, *state.blockingPool);
+            preparedOptions.blockingPool = runtime->blockingPool.get();
         }
 
         const auto address = asio::ip::make_address(state.listenAddress);

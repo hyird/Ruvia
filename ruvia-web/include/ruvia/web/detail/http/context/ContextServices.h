@@ -12,6 +12,7 @@
 #include <utility>
 
 namespace ruvia {
+class BlockingPool;
 class Env;
 }
 
@@ -150,6 +151,19 @@ public:
         return services;
     }
 
+    [[nodiscard]] BlockingPool* blockingPool() const noexcept {
+        return blockingPool_;
+    }
+
+    // Process-wide and owned by App::run(), so it outlives every worker that
+    // borrows it here.
+    [[nodiscard]] ContextServices withBlockingPool(
+        BlockingPool* value) const noexcept {
+        auto services = *this;
+        services.blockingPool_ = value;
+        return services;
+    }
+
     [[nodiscard]] const WorkerStateRegistry* workerStates() const noexcept {
         return workerStates_;
     }
@@ -208,6 +222,7 @@ private:
     HttpNotFoundHandler notFoundHandler_{nullptr};
     const RouteTable* routes_{nullptr};
     const WorkerStateRegistry* workerStates_{nullptr};
+    BlockingPool* blockingPool_{nullptr};
 
     ContextRequestBodySource requestBodySource_;
     ContextResponseOutput responseOutput_;

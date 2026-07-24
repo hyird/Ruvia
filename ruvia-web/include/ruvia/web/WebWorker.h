@@ -9,6 +9,7 @@
 #include <type_traits>
 #include <utility>
 
+#include "ruvia/core/BlockingPool.h"
 #include "ruvia/core/Task.h"
 #include "ruvia/core/StopToken.h"
 #include "ruvia/core/WorkerHandle.h"
@@ -55,6 +56,46 @@ public:
             workerStateInstance(detail::workerStateTypeKey<T>()));
     }
 
+    // Offloads blocking work exactly as Context::runBlocking() does for
+    // requests -- same pool, same ownership rule for the callable, same
+    // exceptions. A posted background task blocks its worker just as a handler
+    // would.
+    template <typename Fn>
+    [[nodiscard]] Task<std::invoke_result_t<Fn&>> runBlocking(Fn fn) const {
+        auto result = co_await tryRunBlocking(std::move(fn));
+        if constexpr (std::is_void_v<std::invoke_result_t<Fn&>>) {
+            std::move(result).value();
+            co_return;
+        } else {
+            co_return std::move(result).value();
+        }
+    }
+
+    template <typename Rep, typename Period, typename Fn>
+    [[nodiscard]] Task<std::invoke_result_t<Fn&>> runBlocking(
+        std::chrono::duration<Rep, Period> timeout,
+        Fn fn) const {
+        auto result = co_await tryRunBlocking(timeout, std::move(fn));
+        if constexpr (std::is_void_v<std::invoke_result_t<Fn&>>) {
+            std::move(result).value();
+            co_return;
+        } else {
+            co_return std::move(result).value();
+        }
+    }
+
+    template <typename Fn>
+    [[nodiscard]] Task<BlockingResult<std::invoke_result_t<Fn&>>>
+    tryRunBlocking(Fn fn) const {
+        return ruvia::runBlocking(blockingPool(), worker_, std::move(fn));
+    }
+
+    template <typename Rep, typename Period, typename Fn>
+    [[nodiscard]] Task<BlockingResult<std::invoke_result_t<Fn&>>>
+    tryRunBlocking(std::chrono::duration<Rep, Period> timeout, Fn fn) const {
+        return ruvia::runBlocking(blockingPool(), worker_, timeout, std::move(fn));
+    }
+
 #ifdef RUVIA_ENABLE_DATABASE
     [[nodiscard]] DbHandle db() const;
     [[nodiscard]] DbHandle db(std::string_view alias) const;
@@ -73,15 +114,18 @@ private:
         detail::DbRegistry* databases,
         detail::RedisRegistry* redis,
         const detail::WorkerStateRegistry* workerStates,
+        BlockingPool* blockingPool,
         StopToken stopToken) noexcept;
 
     [[nodiscard]] void* workerStateInstance(const void* typeKey) const;
+    [[nodiscard]] BlockingPool& blockingPool() const;
 
     WorkerHandle worker_;
     std::pmr::memory_resource* resource_;
     [[maybe_unused]] detail::DbRegistry* databases_;
     [[maybe_unused]] detail::RedisRegistry* redis_;
     const detail::WorkerStateRegistry* workerStates_;
+    BlockingPool* blockingPool_;
     StopToken stopToken_;
     // Each posted callback gets an independent operation lifetime. Declared
     // last so cold frames are destroyed before the callback context disappears.

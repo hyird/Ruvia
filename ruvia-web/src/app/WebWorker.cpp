@@ -23,13 +23,23 @@ WebWorkerContext::WebWorkerContext(
     detail::DbRegistry* databases,
     detail::RedisRegistry* redis,
     const detail::WorkerStateRegistry* workerStates,
+    BlockingPool* blockingPool,
     StopToken stopToken) noexcept
     : worker_(std::move(worker)),
       resource_(detail::pmrResourceOrDefault(resource)),
       databases_(databases),
       redis_(redis),
       workerStates_(workerStates),
+      blockingPool_(blockingPool),
       stopToken_(stopToken) {}
+
+BlockingPool& WebWorkerContext::blockingPool() const {
+    if (blockingPool_ == nullptr) {
+        throw std::logic_error(
+            "no blocking pool is configured: call App::setBlockingPool() before App::run()");
+    }
+    return *blockingPool_;
+}
 
 void* WebWorkerContext::workerStateInstance(const void* typeKey) const {
     auto* instance = workerStates_ == nullptr
@@ -131,6 +141,7 @@ WebWorkerDispatch::WebWorkerDispatch(
     DbRegistry& databases,
     RedisRegistry& redis,
     const WorkerStateRegistry& workerStates,
+    BlockingPool* blockingPool,
     MoveOnlyFunction<void(std::exception_ptr)> failed)
     : executor_(std::move(executor)),
       worker_(std::move(worker)),
@@ -138,6 +149,7 @@ WebWorkerDispatch::WebWorkerDispatch(
       databases_(&databases),
       redis_(&redis),
       workerStates_(&workerStates),
+      blockingPool_(blockingPool),
       failed_(std::move(failed)) {}
 
 WebWorkerDispatch::~WebWorkerDispatch() {
@@ -251,7 +263,7 @@ void WebWorkerDispatch::start(Task task) {
 
 ruvia::Task<void> WebWorkerDispatch::run(Task task) {
     WebWorkerContext context(
-        worker_, resource_, databases_, redis_, workerStates_,
+        worker_, resource_, databases_, redis_, workerStates_, blockingPool_,
         stopSource_.token());
     co_await task(context);
 }

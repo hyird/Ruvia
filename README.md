@@ -36,6 +36,7 @@ protocol library do not require the full Web framework.
 - [Quick Start](#quick-start)
 - [Targets](#targets)
 - [Core Runtime](#core-runtime)
+- [Blocking Work](#blocking-work)
 - [Requirements](#requirements)
 - [Build](#build)
 - [Database Drivers](#database-drivers)
@@ -346,6 +347,61 @@ provided by `ruvia::core`; their deadlines share the worker's single timer
 queue. `App::onStop()` hooks run once for explicitly enabled signal shutdown,
 direct `App::stop()`, and worker failure before the worker-local Web resources
 are closed.
+
+## Blocking Work
+
+A worker is one thread serving every connection it accepted, so a handler that
+blocks — password hashing, a synchronous third-party SDK, template rendering, a
+slow file — freezes all of them for as long as it blocks. `BlockingPool` is the
+offload path: a fixed set of long-lived threads with a bounded queue, started
+once by `App::run()` and shared by every worker. Offloading enqueues a task and
+wakes a waiting thread; it never spawns one per call.
+
+```cpp
+ruvia::app().setBlockingPool(ruvia::BlockingPoolOptions{
+    .threadCount = 8,     // 0 selects hardware_concurrency()
+    .queueCapacity = 512, // 0 selects threadCount * 64
+});
+
+ruvia::Task<ruvia::HttpResponse> hash(ruvia::Context& c) {
+    const auto body = co_await c.req().text();   // borrows the request buffer
+    auto digest = co_await c.runBlocking(
+        [input = std::string(body)] {            // ...so copy before offloading
+            return argon2Hash(input);            // blocks a pool thread, not the worker
+        });
+    co_return c.text(std::string_view(digest));
+}
+```
+
+The handler suspends, the worker keeps serving its other connections, and the
+coroutine resumes on that same worker with the result. What the callable throws
+is rethrown at the `co_await`, so `onError` answers it like any other handler
+failure. A pool with no free thread and no free queue slot refuses the work
+rather than queueing it without bound: `runBlocking()` throws
+`BlockingOperationRejected`, which the default error path answers with 503.
+`c.tryRunBlocking(...)` returns a `BlockingResult<T>` with the status instead of
+throwing, for handlers that would rather shed load their own way.
+`WebWorkerContext::runBlocking()` offers the same to posted background jobs.
+
+Both spellings take an optional deadline as their first argument —
+`c.runBlocking(std::chrono::seconds(2), fn)` — which bounds the *wait*, not the
+work: a blocking call cannot be interrupted, so the pool thread stays occupied
+until the callable returns and its result is then discarded. Use it to stop one
+wedged dependency from pinning a request's connection and arena indefinitely.
+
+`App::blockingPoolStats()` reports what the two size knobs should be set from:
+`queued`/`running` depth, `completed`, `rejected` (refused because the pool was
+full — the overload signal), and `discarded` (never ran because the pool was
+stopping — shutdown accounting, deliberately kept out of `rejected`).
+
+The callable runs on a foreign thread: capture by value or move, and never
+capture the `Context`, the request, its arena, or any other worker-owned state.
+Shutdown does not wait for work that is still running — a suspended handler is
+resumed immediately and the pool result is discarded — so a captured reference
+into a request is a use-after-free. `BlockingPool` is a `ruvia::core` type and
+can be used directly with `ruvia::runBlocking(pool, worker, fn)` outside the Web
+framework. `App::setBlockingPool()` is absent by default: an application that
+never offloads should not pay for idle threads.
 
 ## Requirements
 
