@@ -10,6 +10,7 @@ configure_file(
     @ONLY)
 
 add_library(ruvia-core
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/BlockingPool.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/MemoryPool.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/ConnectionScanner.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/FailureReport.cpp
@@ -50,6 +51,7 @@ ruvia_install_generated_public_header(
 
 ruvia_install_public_headers(core
     include/ruvia/core/Task.h
+    include/ruvia/core/BlockingPool.h
     include/ruvia/core/Channel.h
     include/ruvia/core/OneShot.h
     include/ruvia/core/MoveOnlyFunction.h
