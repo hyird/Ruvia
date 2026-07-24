@@ -20,7 +20,6 @@
 
 namespace {
 
-constexpr std::string_view kItemsTable = "ruvia_pg_integration_items";
 constexpr std::string_view kMigrationsTable = "ruvia_pg_integration_migrations";
 
 [[nodiscard]] std::string_view environment(const char* name, std::string_view fallback) noexcept {
