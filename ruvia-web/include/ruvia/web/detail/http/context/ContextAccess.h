@@ -45,6 +45,7 @@ inline Context::Context(
       notFoundHandler_(services.notFoundHandler()),
       routes_(services.routes()),
       workerStates_(services.workerStates()),
+      blockingPool_(services.blockingPool()),
       routeRateLimitScope_(routeRateLimitScope),
       maxDecodedBodyBytes_(services.maxDecodedBodyBytes()),
       requestBodySource_(services.requestBodySource()),

@@ -9,6 +9,7 @@
 #include <string_view>
 #include <vector>
 
+#include "ruvia/core/BlockingPool.h"
 #include "ruvia/web/AppHook.h"
 #include "ruvia/web/Dotenv.h"
 #include "ruvia/web/RateLimitRule.h"
@@ -89,6 +90,14 @@ public:
                 std::forward<Factory>(factory)));
     }
 
+    // Enables Context::runBlocking(): one process-wide pool of ordinary threads
+    // that handlers offload blocking work to, so a blocking call cannot freeze
+    // the single-threaded worker that owns the connection. Absent by default --
+    // an app that never offloads should not pay for idle threads, and one that
+    // does should size the pool for its own workload. run() starts the threads
+    // before the first request and joins them after the last worker.
+    App& setBlockingPool(std::optional<BlockingPoolOptions> options);
+
     template <typename T>
     App& useWorkerState() {
         static_assert(
@@ -131,6 +140,10 @@ public:
     // starts them and after it returns. Safe from any thread, including from a
     // stop hook.
     [[nodiscard]] HttpServerStats httpStats() const;
+    // The blocking pool's counters, or all zero when no pool is configured or
+    // the app is not running. Queue depth and the rejected count are what a
+    // deployment sizes threadCount/queueCapacity from. Safe from any thread.
+    [[nodiscard]] BlockingPoolStats blockingPoolStats() const;
     [[nodiscard]] std::vector<WebWorkerHandle> workers() const;
     [[nodiscard]] WebWorkerHandle workerFor(std::uint64_t key) const;
     [[nodiscard]] WebWorkerHandle workerFor(std::string_view key) const;

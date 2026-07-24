@@ -43,7 +43,8 @@ inline Task<void> HttpServer::handleSession(AcceptedConnectionLease connection) 
                 &rateLimiter_,
                 options_.maxBufferedBodyBytes,
                 &workerHandle_)
-                .withWorkerStates(workerStates_);
+                .withWorkerStates(workerStates_)
+                .withBlockingPool(options_.blockingPool);
         if (options_.env != nullptr) {
             baseServices = baseServices.withEnv(*options_.env);
         }
