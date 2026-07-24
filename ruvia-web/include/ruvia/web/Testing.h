@@ -12,8 +12,8 @@
 //
 // Scope: buffered-response routes (including 404/405/501/OPTIONS fallbacks).
 // Streaming/SSE/WebSocket routes and handlers that await worker-bound
-// services (timers, db(), redis()) need a running server; drive those with a
-// loopback HttpServer instead.
+// services (timers, db(), redis(), runBlocking()) need a running server; drive
+// those with a loopback HttpServer instead.
 
 #include <cstddef>
 #include <memory>
