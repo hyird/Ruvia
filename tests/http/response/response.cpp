@@ -22,9 +22,7 @@ namespace {
 using ruvia::HttpResponse;
 
 template <typename T>
-concept HasCustomReasonPhraseSetter = requires(T& response) {
-    response.status(std::uint16_t{200}, std::string_view{});
-};
+concept HasCustomReasonPhraseSetter = requires(T& response) { response.status(std::uint16_t{200}, std::string_view{}); };
 
 static_assert(!HasCustomReasonPhraseSetter<HttpResponse>);
 static_assert(!std::is_copy_constructible_v<HttpResponse>);
@@ -33,19 +31,11 @@ static_assert(std::is_nothrow_move_constructible_v<HttpResponse>);
 static_assert(std::is_nothrow_move_assignable_v<HttpResponse>);
 
 template <typename T>
-concept ExposesAnyRvalueResponseView =
-    requires(T&& value) { std::move(value).headers(); } ||
-    requires(T&& value) { std::move(value).header(std::string_view{}); } ||
-    requires(T&& value) { std::move(value).begin(); } ||
-    requires(T&& value) { std::move(value).end(); } ||
-    requires(T&& value) { std::move(value).cbegin(); } ||
-    requires(T&& value) { std::move(value).cend(); };
+concept ExposesAnyRvalueResponseView = requires(T&& value) { std::move(value).headers(); } || requires(T&& value) { std::move(value).header(std::string_view{}); } || requires(T&& value) { std::move(value).begin(); } || requires(T&& value) { std::move(value).end(); } || requires(T&& value) { std::move(value).cbegin(); } || requires(T&& value) { std::move(value).cend(); };
 
 static_assert(!ExposesAnyRvalueResponseView<ruvia::HttpResponse>);
 static_assert(!ExposesAnyRvalueResponseView<ruvia::HttpResponseHeaders>);
-static_assert(std::same_as<
-    decltype(std::declval<const HttpResponse&>().header(std::string_view{})),
-    std::optional<std::string_view>>);
+static_assert(std::same_as<decltype(std::declval<const HttpResponse&>().header(std::string_view{})), std::optional<std::string_view>>);
 
 class CountingMemoryResource final : public std::pmr::memory_resource {
 public:
@@ -59,30 +49,20 @@ private:
         return std::pmr::new_delete_resource()->allocate(bytes, alignment);
     }
 
-    void do_deallocate(
-        void* pointer,
-        std::size_t bytes,
-        std::size_t alignment) override {
+    void do_deallocate(void* pointer, std::size_t bytes, std::size_t alignment) override {
         std::pmr::new_delete_resource()->deallocate(pointer, bytes, alignment);
     }
 
-    [[nodiscard]] bool do_is_equal(
-        const std::pmr::memory_resource& other) const noexcept override {
+    [[nodiscard]] bool do_is_equal(const std::pmr::memory_resource& other) const noexcept override {
         return this == &other;
     }
 
     std::size_t allocations_{0};
 };
 
-static_assert(!std::is_constructible_v<
-    ruvia::HttpInterimResponseHead::HeaderInit,
-    std::array<ruvia::HttpHeaderView, 1>&&>);
-static_assert(!std::is_constructible_v<
-    ruvia::HttpInterimResponseHead::HeaderInit,
-    const std::vector<ruvia::HttpHeaderView>&>);
-static_assert(!std::is_constructible_v<
-    ruvia::HttpInterimResponseHead::HeaderInit,
-    std::initializer_list<ruvia::HttpHeaderView>>);
+static_assert(!std::is_constructible_v<ruvia::HttpInterimResponseHead::HeaderInit, std::array<ruvia::HttpHeaderView, 1>&&>);
+static_assert(!std::is_constructible_v<ruvia::HttpInterimResponseHead::HeaderInit, const std::vector<ruvia::HttpHeaderView>&>);
+static_assert(!std::is_constructible_v<ruvia::HttpInterimResponseHead::HeaderInit, std::initializer_list<ruvia::HttpHeaderView>>);
 
 HttpResponse makeResponse() {
     return HttpResponse(std::pmr::new_delete_resource());
@@ -133,9 +113,7 @@ RUVIA_TEST(response_move_assignment_transfers_one_resource_domain) {
 
     target = std::move(source);
 
-    RUVIA_CHECK_EQ(
-        targetResource.allocations(),
-        targetAllocationsBeforeAssignment);
+    RUVIA_CHECK_EQ(targetResource.allocations(), targetAllocationsBeforeAssignment);
 
     // The inline header table spills on the ninth field. Its PMR vector must have
     // moved to the same source resource as the body and owned header bytes.
@@ -150,9 +128,7 @@ RUVIA_TEST(response_move_assignment_transfers_one_resource_domain) {
     target.header("X-Ruvia-8", "8");
 
     RUVIA_CHECK_EQ(target.headers().size(), std::size_t{9});
-    RUVIA_CHECK_EQ(
-        targetResource.allocations(),
-        targetAllocationsBeforeAssignment);
+    RUVIA_CHECK_EQ(targetResource.allocations(), targetAllocationsBeforeAssignment);
     RUVIA_CHECK(sourceResource.allocations() > 0);
 }
 
@@ -160,7 +136,7 @@ RUVIA_TEST(response_status_code_range_validated) {
     auto response = makeResponse();
     RUVIA_CHECK(throwsInvalid([&] { response.status(ruvia::http_status::kContinue); }));
     RUVIA_CHECK(throwsInvalid([&] { response.status(ruvia::HttpStatusCode::fromValue(199)); }));
-    RUVIA_CHECK(!throwsInvalid([&] { response.status(ruvia::http_status::kOk); }));  // lower boundary
+    RUVIA_CHECK(!throwsInvalid([&] { response.status(ruvia::http_status::kOk); }));                // lower boundary
     RUVIA_CHECK(!throwsInvalid([&] { response.status(ruvia::HttpStatusCode::fromValue(599)); }));  // upper boundary
 }
 
@@ -179,13 +155,8 @@ RUVIA_TEST(interim_response_head_owns_the_non_switching_1xx_status_space) {
     RUVIA_CHECK_EQ(earlyHints.headers().size(), std::size_t{1});
     RUVIA_CHECK_EQ(earlyHints.headers()[0].name(), std::string_view("Link"));
 
-    for (const ruvia::HttpStatusCode status : {
-             ruvia::http_status::kSwitchingProtocols,
-             ruvia::http_status::kOk,
-             ruvia::HttpStatusCode::fromValue(599)}) {
-        RUVIA_CHECK(throwsInvalid([&] {
-            (void)ruvia::HttpInterimResponseHead(status);
-        }));
+    for (const ruvia::HttpStatusCode status : {ruvia::http_status::kSwitchingProtocols, ruvia::http_status::kOk, ruvia::HttpStatusCode::fromValue(599)}) {
+        RUVIA_CHECK(throwsInvalid([&] { (void)ruvia::HttpInterimResponseHead(status); }));
     }
 }
 
@@ -217,12 +188,9 @@ RUVIA_TEST(response_header_replace_append_and_remove) {
 RUVIA_TEST(response_set_cookie_append_replaces_same_wire_name) {
     auto response = makeResponse();
     response.header("Set-Cookie", "session=old; Path=/");
-    response.header(
-        "Set-Cookie", "theme=dark; Path=/", HttpResponse::HeaderOptions{true});
-    response.header(
-        "Set-Cookie", "session=new; Path=/", HttpResponse::HeaderOptions{true});
-    response.header(
-        "Set-Cookie", "Session=upper; Path=/", HttpResponse::HeaderOptions{true});
+    response.header("Set-Cookie", "theme=dark; Path=/", HttpResponse::HeaderOptions{true});
+    response.header("Set-Cookie", "session=new; Path=/", HttpResponse::HeaderOptions{true});
+    response.header("Set-Cookie", "Session=upper; Path=/", HttpResponse::HeaderOptions{true});
 
     std::size_t count = 0;
     bool hasOld = false;
@@ -331,95 +299,47 @@ RUVIA_TEST(response_header_remove_known_header_rebuilds_index) {
 RUVIA_TEST(response_header_append_rejects_body_framing_headers) {
     auto response = makeResponse();
 
-    RUVIA_CHECK(throwsInvalid([&] {
-        response.header("Content-Length", "5", HttpResponse::HeaderOptions{true});
-    }));
-    RUVIA_CHECK(throwsInvalid([&] {
-        response.header("Transfer-Encoding", "chunked", HttpResponse::HeaderOptions{true});
-    }));
-    RUVIA_CHECK(throwsInvalid([&] {
-        response.header("Location", "/next", HttpResponse::HeaderOptions{true});
-    }));
+    RUVIA_CHECK(throwsInvalid([&] { response.header("Content-Length", "5", HttpResponse::HeaderOptions{true}); }));
+    RUVIA_CHECK(throwsInvalid([&] { response.header("Transfer-Encoding", "chunked", HttpResponse::HeaderOptions{true}); }));
+    RUVIA_CHECK(throwsInvalid([&] { response.header("Location", "/next", HttpResponse::HeaderOptions{true}); }));
 
-    RUVIA_CHECK(!throwsInvalid([&] {
-        response.header("Content-Length", "5");
-    }));
-    RUVIA_CHECK(!throwsInvalid([&] {
-        response.header("Set-Cookie", "a=1", HttpResponse::HeaderOptions{true});
-    }));
+    RUVIA_CHECK(!throwsInvalid([&] { response.header("Content-Length", "5"); }));
+    RUVIA_CHECK(!throwsInvalid([&] { response.header("Set-Cookie", "a=1", HttpResponse::HeaderOptions{true}); }));
 }
 
 RUVIA_TEST(response_header_append_rejects_single_value_headers) {
     auto response = makeResponse();
 
-    RUVIA_CHECK(throwsInvalid([&] {
-        response.header("Content-Type", "text/plain", HttpResponse::HeaderOptions{true});
-    }));
-    RUVIA_CHECK(throwsInvalid([&] {
-        response.header("ETag", "\"abc\"", HttpResponse::HeaderOptions{true});
-    }));
-    RUVIA_CHECK(throwsInvalid([&] {
-        response.header("Access-Control-Allow-Origin", "https://example.com", HttpResponse::HeaderOptions{true});
-    }));
-    RUVIA_CHECK(throwsInvalid([&] {
-        response.header("Server", "ruvia", HttpResponse::HeaderOptions{true});
-    }));
+    RUVIA_CHECK(throwsInvalid([&] { response.header("Content-Type", "text/plain", HttpResponse::HeaderOptions{true}); }));
+    RUVIA_CHECK(throwsInvalid([&] { response.header("ETag", "\"abc\"", HttpResponse::HeaderOptions{true}); }));
+    RUVIA_CHECK(throwsInvalid([&] { response.header("Access-Control-Allow-Origin", "https://example.com", HttpResponse::HeaderOptions{true}); }));
+    RUVIA_CHECK(throwsInvalid([&] { response.header("Server", "ruvia", HttpResponse::HeaderOptions{true}); }));
 
-    RUVIA_CHECK(!throwsInvalid([&] {
-        response.header("Vary", "Origin", HttpResponse::HeaderOptions{true});
-    }));
-    RUVIA_CHECK(!throwsInvalid([&] {
-        response.header("Cache-Control", "no-store", HttpResponse::HeaderOptions{true});
-    }));
-    RUVIA_CHECK(!throwsInvalid([&] {
-        response.header("Set-Cookie", "a=1", HttpResponse::HeaderOptions{true});
-    }));
+    RUVIA_CHECK(!throwsInvalid([&] { response.header("Vary", "Origin", HttpResponse::HeaderOptions{true}); }));
+    RUVIA_CHECK(!throwsInvalid([&] { response.header("Cache-Control", "no-store", HttpResponse::HeaderOptions{true}); }));
+    RUVIA_CHECK(!throwsInvalid([&] { response.header("Set-Cookie", "a=1", HttpResponse::HeaderOptions{true}); }));
 }
 
 RUVIA_TEST(response_header_rejects_invalid_content_type_syntax) {
     auto response = makeResponse();
 
-    for (const std::string_view invalid : {
-             "not a media type",
-             "text/",
-             "*/plain",
-             "text/plain; charset"}) {
-        RUVIA_CHECK(throwsInvalid([&] {
-            response.header("Content-Type", invalid);
-        }));
+    for (const std::string_view invalid : {"not a media type", "text/", "*/plain", "text/plain; charset"}) {
+        RUVIA_CHECK(throwsInvalid([&] { response.header("Content-Type", invalid); }));
     }
 
-    RUVIA_CHECK(!throwsInvalid([&] {
-        response.header(
-            "Content-Type", "application/json; charset=utf-8");
-    }));
-    RUVIA_CHECK_EQ(
-        response.header("Content-Type").value_or(std::string_view{}),
-        std::string_view("application/json; charset=utf-8"));
+    RUVIA_CHECK(!throwsInvalid([&] { response.header("Content-Type", "application/json; charset=utf-8"); }));
+    RUVIA_CHECK_EQ(response.header("Content-Type").value_or(std::string_view{}), std::string_view("application/json; charset=utf-8"));
 }
 
 RUVIA_TEST(response_header_rejects_invalid_content_encoding_syntax) {
     auto response = makeResponse();
 
-    for (const std::string_view invalid : {
-             "gzip;level=9",
-             "bad coding",
-             "gzip/deflate",
-             "",
-             ",gzip",
-             "gzip,",
-             "gzip,,br"}) {
-        RUVIA_CHECK(throwsInvalid([&] {
-            response.header("Content-Encoding", invalid);
-        }));
+    for (const std::string_view invalid : {"gzip;level=9", "bad coding", "gzip/deflate", "", ",gzip", "gzip,", "gzip,,br"}) {
+        RUVIA_CHECK(throwsInvalid([&] { response.header("Content-Encoding", invalid); }));
     }
 
-    for (const std::string_view valid : {
-             "deflate",
-             "gzip, br"}) {
-        RUVIA_CHECK(!throwsInvalid([&] {
-            response.header("Content-Encoding", valid);
-        }));
+    for (const std::string_view valid : {"deflate", "gzip, br"}) {
+        RUVIA_CHECK(!throwsInvalid([&] { response.header("Content-Encoding", valid); }));
     }
 }
 
@@ -428,9 +348,7 @@ RUVIA_TEST(response_header_rejects_name_and_value_injection) {
     // The developer-facing header setter is the header-injection chokepoint: a CR or
     // LF in the value (the classic response-splitting vector) is rejected rather than
     // written into the response head.
-    RUVIA_CHECK(throwsInvalid([&] {
-        response.header("X-Foo", std::string_view("a\r\nInjected: x", 14));
-    }));
+    RUVIA_CHECK(throwsInvalid([&] { response.header("X-Foo", std::string_view("a\r\nInjected: x", 14)); }));
     RUVIA_CHECK(throwsInvalid([&] { response.header("X-Foo", std::string_view("a\nb", 3)); }));
     RUVIA_CHECK(throwsInvalid([&] { response.header("X-Foo", std::string_view("a\rb", 3)); }));
     RUVIA_CHECK(throwsInvalid([&] { response.header("X-Foo", std::string_view("a\0b", 3)); }));  // NUL
@@ -440,9 +358,7 @@ RUVIA_TEST(response_header_rejects_name_and_value_injection) {
     RUVIA_CHECK(throwsInvalid([&] { response.header("Bad Name", "v"); }));
 
     // The append path funnels through the same validation, not just replace.
-    RUVIA_CHECK(throwsInvalid([&] {
-        response.header("X-Foo", std::string_view("a\r\nb", 4), HttpResponse::HeaderOptions{true});
-    }));
+    RUVIA_CHECK(throwsInvalid([&] { response.header("X-Foo", std::string_view("a\r\nb", 4), HttpResponse::HeaderOptions{true}); }));
 
     // A clean header is accepted.
     RUVIA_CHECK(!throwsInvalid([&] { response.header("X-Clean", "ok"); }));
@@ -452,14 +368,10 @@ RUVIA_TEST(response_header_rejects_name_and_value_injection) {
 RUVIA_TEST(response_header_rejects_invalid_connection_control_lists) {
     auto response = makeResponse();
     for (const auto value : {"close,", ", Upgrade", "close;invalid", ""}) {
-        RUVIA_CHECK(throwsInvalid([&] {
-            response.header("Connection", value);
-        }));
+        RUVIA_CHECK(throwsInvalid([&] { response.header("Connection", value); }));
     }
     for (const auto value : {"websocket/", ", websocket", ""}) {
-        RUVIA_CHECK(throwsInvalid([&] {
-            response.header("Upgrade", value);
-        }));
+        RUVIA_CHECK(throwsInvalid([&] { response.header("Upgrade", value); }));
     }
 
     RUVIA_CHECK(!throwsInvalid([&] {

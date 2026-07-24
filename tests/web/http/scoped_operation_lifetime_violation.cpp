@@ -16,8 +16,7 @@ class ManualOwner final {
 public:
     struct promise_type {
         [[nodiscard]] ManualOwner get_return_object() noexcept {
-            return ManualOwner(
-                std::coroutine_handle<promise_type>::from_promise(*this));
+            return ManualOwner(std::coroutine_handle<promise_type>::from_promise(*this));
         }
         [[nodiscard]] std::suspend_always initial_suspend() const noexcept {
             return {};
@@ -26,7 +25,9 @@ public:
             return {};
         }
         void return_void() const noexcept {}
-        void unhandled_exception() const noexcept { std::terminate(); }
+        void unhandled_exception() const noexcept {
+            std::terminate();
+        }
     };
 
     explicit ManualOwner(std::coroutine_handle<promise_type> handle) noexcept
@@ -40,7 +41,9 @@ public:
     ManualOwner(const ManualOwner&) = delete;
     ManualOwner& operator=(const ManualOwner&) = delete;
 
-    void start() const { handle_.resume(); }
+    void start() const {
+        handle_.resume();
+    }
 
 private:
     std::coroutine_handle<promise_type> handle_;
@@ -55,8 +58,7 @@ ManualOwner startScopedOperation(ruvia::ScopedOperation<void>& operation) {
 int main() {
     std::set_terminate([] { std::_Exit(86); });
     ruvia::detail::ScopedOperationScope scope;
-    auto operation = ruvia::detail::makeScopedOperation(
-        scope, suspendedOperation());
+    auto operation = ruvia::detail::makeScopedOperation(scope, suspendedOperation());
     auto owner = startScopedOperation(operation);
     owner.start();
     scope.close();

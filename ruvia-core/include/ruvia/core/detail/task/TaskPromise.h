@@ -65,8 +65,7 @@ class TaskPromiseValue final {
 public:
     template <typename U>
         requires std::constructible_from<T, U>
-    explicit TaskPromiseValue(U&& value)
-        noexcept(std::is_nothrow_constructible_v<T, U>)
+    explicit TaskPromiseValue(U&& value) noexcept(std::is_nothrow_constructible_v<T, U>)
         : value_(std::forward<U>(value)) {}
 
     [[nodiscard]] T takeValue() && {
@@ -82,10 +81,10 @@ public:
     explicit TaskPromiseFailure(std::exception_ptr exception) noexcept
         : exception_(std::move(exception)) {}
 
-    [[nodiscard]] const std::exception_ptr& exception() const & noexcept {
+    [[nodiscard]] const std::exception_ptr& exception() const& noexcept {
         return exception_;
     }
-    const std::exception_ptr& exception() const && = delete;
+    const std::exception_ptr& exception() const&& = delete;
 
 private:
     std::exception_ptr exception_;
@@ -133,8 +132,7 @@ public:
     }
 
     [[nodiscard]] T result() & {
-        if (const auto* failure = std::get_if<TaskPromiseFailure>(&state_))
-            [[unlikely]] {
+        if (const auto* failure = std::get_if<TaskPromiseFailure>(&state_)) [[unlikely]] {
             std::rethrow_exception(failure->exception());
         }
         auto* value = std::get_if<TaskPromiseValue<T>>(&state_);
@@ -170,16 +168,13 @@ private:
         completion_ = completion;
     }
 
-    using State = std::variant<
-        TaskPromisePending,
-        TaskPromiseValue<T>,
-        TaskPromiseFailure>;
+    using State = std::variant<TaskPromisePending, TaskPromiseValue<T>, TaskPromiseFailure>;
 
     State state_;
     TaskFrameOwnership ownership_{TaskFrameOwnership::kCold};
     std::coroutine_handle<> continuation_{std::noop_coroutine()};
     void* completionState_{nullptr};
-    void (*completion_)(void*) noexcept{nullptr};
+    void (*completion_)(void*) noexcept {nullptr};
 };
 
 template <>
@@ -218,8 +213,7 @@ public:
     }
 
     void result() {
-        if (const auto* failure = std::get_if<TaskPromiseFailure>(&state_))
-            [[unlikely]] {
+        if (const auto* failure = std::get_if<TaskPromiseFailure>(&state_)) [[unlikely]] {
             std::rethrow_exception(failure->exception());
         }
         assert(std::holds_alternative<TaskPromiseCompleted>(state_));
@@ -253,16 +247,13 @@ private:
         completion_ = completion;
     }
 
-    using State = std::variant<
-        TaskPromisePending,
-        TaskPromiseCompleted,
-        TaskPromiseFailure>;
+    using State = std::variant<TaskPromisePending, TaskPromiseCompleted, TaskPromiseFailure>;
 
     State state_;
     TaskFrameOwnership ownership_{TaskFrameOwnership::kCold};
     std::coroutine_handle<> continuation_{std::noop_coroutine()};
     void* completionState_{nullptr};
-    void (*completion_)(void*) noexcept{nullptr};
+    void (*completion_)(void*) noexcept {nullptr};
 };
 
 }  // namespace detail

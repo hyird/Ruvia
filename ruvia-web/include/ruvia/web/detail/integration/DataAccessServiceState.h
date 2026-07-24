@@ -28,8 +28,7 @@ namespace ruvia::detail {
 struct DbDefinition;
 struct RedisDefinition;
 
-class DataAccessServiceState final
-    : public std::enable_shared_from_this<DataAccessServiceState> {
+class DataAccessServiceState final : public std::enable_shared_from_this<DataAccessServiceState> {
 public:
     using Job = MoveOnlyFunction<Task<void>(DataAccessContext&)>;
 
@@ -65,15 +64,16 @@ public:
         return stopSource_.token();
     }
 
-    [[nodiscard]] DataAccessState& access() noexcept { return access_; }
+    [[nodiscard]] DataAccessState& access() noexcept {
+        return access_;
+    }
 
 private:
     // Holds the outstanding-job count taken at submission time, so a post that
     // is accepted but never runs still gives the count back.
     class JobReservation final {
     public:
-        explicit JobReservation(
-            std::shared_ptr<DataAccessServiceState> state) noexcept
+        explicit JobReservation(std::shared_ptr<DataAccessServiceState> state) noexcept
             : state_(std::move(state)) {}
 
         ~JobReservation() {
@@ -98,9 +98,7 @@ private:
 
     void closeSubmissions() noexcept;
     void startJob(Job task);
-    [[nodiscard]] static Task<void> runJob(
-        Job task,
-        std::shared_ptr<DataAccessServiceState> state);
+    [[nodiscard]] static Task<void> runJob(Job task, std::shared_ptr<DataAccessServiceState> state);
     void completeJob(TaskCompletionResult<void> result);
     void abandonJob() noexcept;
 

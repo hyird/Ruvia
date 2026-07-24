@@ -66,7 +66,7 @@ class WorkerStateRegistry;
 struct ContextAccess;
 class ContextServices;
 struct SessionAccess;
-}
+}  // namespace detail
 
 class Context final {
 private:
@@ -79,29 +79,13 @@ private:
     friend ConnInfo getConnInfo(const Context& context) noexcept;
     friend struct detail::SessionAccess;
     template <typename T>
-    friend detail::ValidatedModelBinding<T>
-    detail::bindValidatedModel(Context& context, const T& model);
+    friend detail::ValidatedModelBinding<T> detail::bindValidatedModel(Context& context, const T& model);
     template <typename T>
-    friend detail::ValidatedModelBinding<T>
-    detail::bindValidatedJsonModel(
-        Context& context,
-        const T& model,
-        std::string_view rawJson);
+    friend detail::ValidatedModelBinding<T> detail::bindValidatedJsonModel(Context& context, const T& model, std::string_view rawJson);
 
-    Context(
-        RequestMemory& memory,
-        const HttpRequest& request,
-        detail::ContextServices services) noexcept;
+    Context(RequestMemory& memory, const HttpRequest& request, detail::ContextServices services) noexcept;
 
-    Context(
-        RequestMemory& memory,
-        const HttpRequest& request,
-        std::string_view routePath,
-        const std::string_view* paramNames,
-        const std::string_view* paramValues,
-        std::size_t paramCount,
-        std::uintptr_t routeRateLimitScope,
-        detail::ContextServices services) noexcept;
+    Context(RequestMemory& memory, const HttpRequest& request, std::string_view routePath, const std::string_view* paramNames, const std::string_view* paramValues, std::size_t paramCount, std::uintptr_t routeRateLimitScope, detail::ContextServices services) noexcept;
 
 public:
     using HeaderOptions = HttpResponse::HeaderOptions;
@@ -161,9 +145,7 @@ public:
     // std::invalid_argument for an unregistered pattern or a value-count
     // mismatch, and std::logic_error when the context carries no route table
     // (for example a hand-built test context).
-    [[nodiscard]] std::pmr::string urlFor(
-        std::string_view pattern,
-        std::initializer_list<std::string_view> values = {}) const;
+    [[nodiscard]] std::pmr::string urlFor(std::string_view pattern, std::initializer_list<std::string_view> values = {}) const;
 
     // This worker's instance of an App::useWorkerState<T>() registration.
     // The reference is worker-local: it stays valid for the worker's lifetime
@@ -171,8 +153,7 @@ public:
     // a type that was not registered before App::run().
     template <typename T>
     [[nodiscard]] T& workerState() const {
-        return *static_cast<T*>(
-            workerStateInstance(detail::workerStateTypeKey<T>()));
+        return *static_cast<T*>(workerStateInstance(detail::workerStateTypeKey<T>()));
     }
 
     // Runs blocking work on App::setBlockingPool()'s threads and resumes this
@@ -198,21 +179,17 @@ public:
     // a blocking call cannot be interrupted -- so its captured data must stay
     // self-owned exactly as above.
     template <typename Rep, typename Period, typename Fn>
-    [[nodiscard]] Task<std::invoke_result_t<Fn&>> runBlocking(
-        std::chrono::duration<Rep, Period> timeout,
-        Fn fn) const;
+    [[nodiscard]] Task<std::invoke_result_t<Fn&>> runBlocking(std::chrono::duration<Rep, Period> timeout, Fn fn) const;
 
     // runBlocking() without the exceptions: the result carries the status, so
     // an overloaded pool can be answered with a cheaper response instead of an
     // error. Still throws std::logic_error when no pool was configured -- that
     // is a missing App::setBlockingPool(), not a runtime condition.
     template <typename Fn>
-    [[nodiscard]] Task<BlockingResult<std::invoke_result_t<Fn&>>>
-    tryRunBlocking(Fn fn) const;
+    [[nodiscard]] Task<BlockingResult<std::invoke_result_t<Fn&>>> tryRunBlocking(Fn fn) const;
 
     template <typename Rep, typename Period, typename Fn>
-    [[nodiscard]] Task<BlockingResult<std::invoke_result_t<Fn&>>>
-    tryRunBlocking(std::chrono::duration<Rep, Period> timeout, Fn fn) const;
+    [[nodiscard]] Task<BlockingResult<std::invoke_result_t<Fn&>>> tryRunBlocking(std::chrono::duration<Rep, Period> timeout, Fn fn) const;
 
 #ifdef RUVIA_ENABLE_DATABASE
     [[nodiscard]] DbHandle db() const;
@@ -248,11 +225,7 @@ public:
     void header(std::string_view name, std::nullopt_t);
 
     void setCookie(std::string_view name, std::string_view value, const CookieOptions& options = {});
-    void setSignedCookie(
-        std::string_view name,
-        std::string_view value,
-        std::string_view secret,
-        const CookieOptions& options = {});
+    void setSignedCookie(std::string_view name, std::string_view value, std::string_view secret, const CookieOptions& options = {});
     void deleteCookie(std::string_view name, CookieOptions options = {});
 
     // Observe the final response produced by downstream middleware or a terminal
@@ -294,24 +267,13 @@ public:
     template <std::size_t N>
     [[nodiscard]] HttpResponse html(const char (&body)[N]) const;
 
-    [[nodiscard]] HttpResponse redirect(
-        std::string_view location,
-        HttpStatusCode statusCode = http_status::kFound) const;
+    [[nodiscard]] HttpResponse redirect(std::string_view location, HttpStatusCode statusCode = http_status::kFound) const;
 
-    [[nodiscard]] HttpResponse file(
-        const std::filesystem::path& path,
-        std::string_view contentType = {}) const;
+    [[nodiscard]] HttpResponse file(const std::filesystem::path& path, std::string_view contentType = {}) const;
 
-    [[nodiscard]] HttpResponse staticFile(
-        const StaticRoot& root,
-        std::string_view relativePath,
-        std::string_view contentType = {}) const;
+    [[nodiscard]] HttpResponse staticFile(const StaticRoot& root, std::string_view relativePath, std::string_view contentType = {}) const;
 
-    [[nodiscard]] HttpResponse error(
-        HttpStatusCode statusCode,
-        std::string_view code,
-        std::string_view message,
-        std::string_view statusText = {}) const;
+    [[nodiscard]] HttpResponse error(HttpStatusCode statusCode, std::string_view code, std::string_view message, std::string_view statusText = {}) const;
 
     [[nodiscard]] Task<HttpResponse> notFound();
 
@@ -321,8 +283,7 @@ private:
     [[nodiscard]] Task<std::string_view> requestBody() const;
     Task<void> requestDiscardBody() const;
     [[nodiscard]] Task<std::pmr::vector<MultipartPart>> requestMultipart() const;
-    [[nodiscard]] Task<ContextRequest::RequestFormData> parseRequestBody(
-        ContextRequest::ParseBodyOptions options) const;
+    [[nodiscard]] Task<ContextRequest::RequestFormData> parseRequestBody(ContextRequest::ParseBodyOptions options) const;
     [[nodiscard]] BodyReader& requestBodyReader() const;
     [[nodiscard]] MultipartReader requestMultipartReader() const;
     [[nodiscard]] std::optional<std::string_view> routeParam(std::string_view name) const;
@@ -340,9 +301,7 @@ private:
 
     Context& setStableResponseHeader(std::string_view name, std::string_view value);
     Context& removeResponseHeader(std::string_view name);
-    void applyResponseState(
-        HttpResponse& response,
-        std::optional<HttpStatusCode> statusCode) const;
+    void applyResponseState(HttpResponse& response, std::optional<HttpStatusCode> statusCode) const;
 
     [[nodiscard]] HttpResponse bodyStaticView(std::string_view body) const;
     [[nodiscard]] HttpResponse textStaticView(std::string_view body) const;
@@ -390,9 +349,7 @@ private:
     std::uintptr_t routeRateLimitScope_{0};
     std::size_t maxDecodedBodyBytes_{0};
     detail::ContextRequestBodySource requestBodySource_;
-    using RequestStorageOwner = std::unique_ptr<
-        detail::ContextRequestStorage,
-        detail::PmrObjectDeleter<detail::ContextRequestStorage>>;
+    using RequestStorageOwner = std::unique_ptr<detail::ContextRequestStorage, detail::PmrObjectDeleter<detail::ContextRequestStorage>>;
     // One typed arena allocation owns all lazy request caches. It is destroyed
     // after response/session state borrowers but before RequestMemory releases
     // their backing arena.
@@ -417,10 +374,7 @@ ValidatedModelBinding<T> bindValidatedModel(Context& context, const T& model) {
 }
 
 template <typename T>
-ValidatedModelBinding<T> bindValidatedJsonModel(
-    Context& context,
-    const T& model,
-    std::string_view rawJson) {
+ValidatedModelBinding<T> bindValidatedJsonModel(Context& context, const T& model, std::string_view rawJson) {
     return context.validatedModels_.bind(model, rawJson);
 }
 

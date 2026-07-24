@@ -31,11 +31,7 @@ ScopedOperation<std::pmr::vector<std::optional<std::pmr::string>>> RedisHandle::
 
 ScopedOperation<std::pmr::vector<RedisKeyValue>> RedisHandle::hgetAll(std::string_view key) const {
     requireActive();
-    return scoped(detail::executeRedisKeyValueArray(
-        *pool_,
-        detail::ownRedisArgs({"HGETALL", key}, resource_),
-        "unexpected redis hgetall reply",
-        resource_));
+    return scoped(detail::executeRedisKeyValueArray(*pool_, detail::ownRedisArgs({"HGETALL", key}, resource_), "unexpected redis hgetall reply", resource_));
 }
 
 ScopedOperation<std::int64_t> RedisHandle::hdel(std::string_view key, std::string_view field) const {

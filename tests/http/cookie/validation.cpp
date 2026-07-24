@@ -26,29 +26,13 @@ bool rejects(const ruvia::CookieOptions& options) {
 }
 
 template <typename Text>
-concept CookiePathAccepts = requires(
-    ruvia::CookieOptions& options,
-    Text&& text) {
-    options.path = std::forward<Text>(text);
-};
+concept CookiePathAccepts = requires(ruvia::CookieOptions& options, Text&& text) { options.path = std::forward<Text>(text); };
 
 template <typename Text>
-concept CookieDomainAccepts = requires(
-    ruvia::CookieOptions& options,
-    Text&& text) {
-    options.domain = std::forward<Text>(text);
-};
+concept CookieDomainAccepts = requires(ruvia::CookieOptions& options, Text&& text) { options.domain = std::forward<Text>(text); };
 
 template <typename Name, typename Value, typename Options>
-concept CanConstructSetCookiePlan = requires(
-    Name&& name,
-    Value&& value,
-    Options&& options) {
-    ruvia::detail::SetCookiePlan(
-        std::forward<Name>(name),
-        std::forward<Value>(value),
-        std::forward<Options>(options));
-};
+concept CanConstructSetCookiePlan = requires(Name&& name, Value&& value, Options&& options) { ruvia::detail::SetCookiePlan(std::forward<Name>(name), std::forward<Value>(value), std::forward<Options>(options)); };
 
 }  // namespace
 
@@ -62,30 +46,12 @@ static_assert(!CookieDomainAccepts<std::string>);
 static_assert(!CookieDomainAccepts<const std::string>);
 static_assert(!CookiePathAccepts<std::pmr::string>);
 static_assert(!CookieDomainAccepts<std::pmr::string>);
-static_assert(CanConstructSetCookiePlan<
-    std::string&,
-    const std::string&,
-    ruvia::CookieOptions&>);
-static_assert(!CanConstructSetCookiePlan<
-    std::string,
-    std::string_view,
-    ruvia::CookieOptions&>);
-static_assert(!CanConstructSetCookiePlan<
-    std::string_view,
-    const std::string,
-    ruvia::CookieOptions&>);
-static_assert(!CanConstructSetCookiePlan<
-    std::pmr::string,
-    std::string_view,
-    ruvia::CookieOptions&>);
-static_assert(!CanConstructSetCookiePlan<
-    std::string_view,
-    std::string_view,
-    ruvia::CookieOptions>);
-static_assert(!CanConstructSetCookiePlan<
-    std::string_view,
-    std::string_view,
-    const ruvia::CookieOptions>);
+static_assert(CanConstructSetCookiePlan<std::string&, const std::string&, ruvia::CookieOptions&>);
+static_assert(!CanConstructSetCookiePlan<std::string, std::string_view, ruvia::CookieOptions&>);
+static_assert(!CanConstructSetCookiePlan<std::string_view, const std::string, ruvia::CookieOptions&>);
+static_assert(!CanConstructSetCookiePlan<std::pmr::string, std::string_view, ruvia::CookieOptions&>);
+static_assert(!CanConstructSetCookiePlan<std::string_view, std::string_view, ruvia::CookieOptions>);
+static_assert(!CanConstructSetCookiePlan<std::string_view, std::string_view, const ruvia::CookieOptions>);
 // Naming only the two attributes under test is the point of a designated
 // initializer, and every other CookieOptions member has a default member
 // initializer, so nothing is left uninitialized. GCC still reports the omitted
@@ -95,9 +61,7 @@ static_assert(!CanConstructSetCookiePlan<
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wmissing-field-initializers"
 #endif
-constexpr ruvia::CookieOptions kLiteralCookieOptions{
-    .path = "/app",
-    .domain = "example.com"};
+constexpr ruvia::CookieOptions kLiteralCookieOptions{.path = "/app", .domain = "example.com"};
 #if defined(__GNUC__) && !defined(__clang__)
 #pragma GCC diagnostic pop
 #endif
@@ -106,18 +70,10 @@ static_assert(kLiteralCookieOptions.domain.view() == "example.com");
 static_assert(kLiteralCookieOptions.path == "/app");
 static_assert("example.com" == kLiteralCookieOptions.domain);
 
-static_assert(std::same_as<
-    decltype(ruvia::CookieOptions{}.sameSite),
-    std::optional<ruvia::CookieSameSite>>);
-static_assert(std::same_as<
-    decltype(ruvia::CookieOptions{}.priority),
-    std::optional<ruvia::CookiePriority>>);
-static_assert(std::same_as<
-    decltype(ruvia::CookieOptions{}.prefix),
-    std::optional<ruvia::CookiePrefix>>);
-static_assert(std::same_as<
-    decltype(ruvia::CookieOptions{}.maxAge),
-    std::optional<std::chrono::seconds>>);
+static_assert(std::same_as<decltype(ruvia::CookieOptions{}.sameSite), std::optional<ruvia::CookieSameSite>>);
+static_assert(std::same_as<decltype(ruvia::CookieOptions{}.priority), std::optional<ruvia::CookiePriority>>);
+static_assert(std::same_as<decltype(ruvia::CookieOptions{}.prefix), std::optional<ruvia::CookiePrefix>>);
+static_assert(std::same_as<decltype(ruvia::CookieOptions{}.maxAge), std::optional<std::chrono::seconds>>);
 
 RUVIA_TEST(cookie_borrowed_text_accepts_stable_string_owners) {
     const std::string path = "/account";
@@ -133,9 +89,7 @@ RUVIA_TEST(cookie_borrowed_text_accepts_stable_string_owners) {
     const ruvia::detail::SetCookiePlan plan(name, value, options);
     std::string wire(plan.size(), '\0');
     plan.write(wire.data());
-    RUVIA_CHECK_EQ(
-        wire,
-        std::string("sid=value; Path=/account; Domain=example.com"));
+    RUVIA_CHECK_EQ(wire, std::string("sid=value; Path=/account; Domain=example.com"));
 }
 
 RUVIA_TEST(cookie_samesite_enum_maps_to_wire_tokens) {
@@ -153,15 +107,9 @@ RUVIA_TEST(cookie_samesite_enum_maps_to_wire_tokens) {
     RUVIA_CHECK(!rejects(none));
 
     RUVIA_CHECK(!ruvia::CookieOptions{}.sameSite.has_value());
-    RUVIA_CHECK_EQ(
-        ruvia::detail::cookieSameSiteToken(ruvia::CookieSameSite::kStrict),
-        std::string_view("Strict"));
-    RUVIA_CHECK_EQ(
-        ruvia::detail::cookieSameSiteToken(ruvia::CookieSameSite::kLax),
-        std::string_view("Lax"));
-    RUVIA_CHECK_EQ(
-        ruvia::detail::cookieSameSiteToken(ruvia::CookieSameSite::kNone),
-        std::string_view("None"));
+    RUVIA_CHECK_EQ(ruvia::detail::cookieSameSiteToken(ruvia::CookieSameSite::kStrict), std::string_view("Strict"));
+    RUVIA_CHECK_EQ(ruvia::detail::cookieSameSiteToken(ruvia::CookieSameSite::kLax), std::string_view("Lax"));
+    RUVIA_CHECK_EQ(ruvia::detail::cookieSameSiteToken(ruvia::CookieSameSite::kNone), std::string_view("None"));
 }
 
 RUVIA_TEST(cookie_samesite_none_requires_secure) {
@@ -180,14 +128,17 @@ RUVIA_TEST(cookie_value_char_validation) {
     using ruvia::detail::isValidCookieValue;
     RUVIA_CHECK(isValidCookieValue("abc123"));
     RUVIA_CHECK(isValidCookieValue("a-b_c.d~e"));
-    RUVIA_CHECK(isValidCookieValue(""));  // an empty value is valid
-    RUVIA_CHECK(!isValidCookieValue("a b"));   // space
-    RUVIA_CHECK(!isValidCookieValue("a;b"));   // ';' would inject an attribute
-    RUVIA_CHECK(!isValidCookieValue("a,b"));   // ','
-    RUVIA_CHECK(!isValidCookieValue("a\"b"));  // '"'
-    RUVIA_CHECK(!isValidCookieValue("a\\b"));  // backslash
-    RUVIA_CHECK(!isValidCookieValue(std::string_view("a\rb", 3)));    // CR
-    RUVIA_CHECK(!isValidCookieValue(std::string_view("a\x7f" "b", 3)));  // DEL
+    RUVIA_CHECK(isValidCookieValue(""));                            // an empty value is valid
+    RUVIA_CHECK(!isValidCookieValue("a b"));                        // space
+    RUVIA_CHECK(!isValidCookieValue("a;b"));                        // ';' would inject an attribute
+    RUVIA_CHECK(!isValidCookieValue("a,b"));                        // ','
+    RUVIA_CHECK(!isValidCookieValue("a\"b"));                       // '"'
+    RUVIA_CHECK(!isValidCookieValue("a\\b"));                       // backslash
+    RUVIA_CHECK(!isValidCookieValue(std::string_view("a\rb", 3)));  // CR
+    RUVIA_CHECK(
+        !isValidCookieValue(std::string_view("a\x7f"
+                                             "b",
+            3)));  // DEL
 }
 
 RUVIA_TEST(cookie_path_octets_follow_set_cookie_grammar) {
@@ -195,22 +146,30 @@ RUVIA_TEST(cookie_path_octets_follow_set_cookie_grammar) {
     RUVIA_CHECK(isValidCookieAttribute("/path/to"));
     RUVIA_CHECK(isValidCookieAttribute("example.com"));
     RUVIA_CHECK(isValidCookieAttribute(""));
-    RUVIA_CHECK(!isValidCookieAttribute("a;b"));  // ';' would inject another attribute
+    RUVIA_CHECK(!isValidCookieAttribute("a;b"));                        // ';' would inject another attribute
     RUVIA_CHECK(!isValidCookieAttribute(std::string_view("a\rb", 3)));  // CR (header injection)
     RUVIA_CHECK(!isValidCookieAttribute(std::string_view("a\nb", 3)));  // LF
     RUVIA_CHECK(!isValidCookieAttribute(std::string_view("a\0b", 3)));  // NUL
     // Non-CR/LF control bytes are also forbidden HTTP field-value octets (RFC 9110
     // 5.5) and previously slipped through into the raw Set-Cookie value.
-    RUVIA_CHECK(!isValidCookieAttribute("a\x0b" "b"));  // vertical tab
-    RUVIA_CHECK(!isValidCookieAttribute("a\x0c" "b"));  // form feed
-    RUVIA_CHECK(!isValidCookieAttribute("a\x01" "b"));  // SOH
-    RUVIA_CHECK(!isValidCookieAttribute("a\x7f" "b"));  // DEL
+    RUVIA_CHECK(
+        !isValidCookieAttribute("a\x0b"
+                                "b"));  // vertical tab
+    RUVIA_CHECK(
+        !isValidCookieAttribute("a\x0c"
+                                "b"));  // form feed
+    RUVIA_CHECK(
+        !isValidCookieAttribute("a\x01"
+                                "b"));  // SOH
+    RUVIA_CHECK(
+        !isValidCookieAttribute("a\x7f"
+                                "b"));  // DEL
     // RFC 6265bis av-octet is ASCII %x20-3A / %x3C-7E. SP is
     // valid, but HTAB and obs-text are not cookie Path bytes even though the
     // surrounding HTTP field-value grammar can carry them.
-    RUVIA_CHECK(isValidCookieAttribute("/a path"));          // SP
-    RUVIA_CHECK(!isValidCookieAttribute("a\tb"));            // HTAB
-    RUVIA_CHECK(!isValidCookieAttribute("caf\xc3\xa9/path")); // obs-text
+    RUVIA_CHECK(isValidCookieAttribute("/a path"));            // SP
+    RUVIA_CHECK(!isValidCookieAttribute("a\tb"));              // HTAB
+    RUVIA_CHECK(!isValidCookieAttribute("caf\xc3\xa9/path"));  // obs-text
 }
 
 RUVIA_TEST(cookie_domain_requires_dns_subdomain_syntax) {
@@ -243,34 +202,27 @@ RUVIA_TEST(cookie_domain_requires_dns_subdomain_syntax) {
 RUVIA_TEST(cookie_priority_enum_maps_to_wire_tokens) {
     using ruvia::detail::cookiePriorityToken;
     RUVIA_CHECK(!ruvia::CookieOptions{}.priority.has_value());
-    RUVIA_CHECK_EQ(
-        cookiePriorityToken(ruvia::CookiePriority::kLow),
-        std::string_view("Low"));
-    RUVIA_CHECK_EQ(
-        cookiePriorityToken(ruvia::CookiePriority::kMedium),
-        std::string_view("Medium"));
-    RUVIA_CHECK_EQ(
-        cookiePriorityToken(ruvia::CookiePriority::kHigh),
-        std::string_view("High"));
+    RUVIA_CHECK_EQ(cookiePriorityToken(ruvia::CookiePriority::kLow), std::string_view("Low"));
+    RUVIA_CHECK_EQ(cookiePriorityToken(ruvia::CookiePriority::kMedium), std::string_view("Medium"));
+    RUVIA_CHECK_EQ(cookiePriorityToken(ruvia::CookiePriority::kHigh), std::string_view("High"));
 }
 
 RUVIA_TEST(cookie_validation_rejects_injection_and_bad_options) {
-    const auto rejectsCookie =
-        [](std::string_view name, std::string_view value, const ruvia::CookieOptions& options) {
-            try {
-                ruvia::detail::validateCookie(name, value, options);
-                return false;
-            } catch (const std::invalid_argument&) {
-                return true;
-            }
-        };
+    const auto rejectsCookie = [](std::string_view name, std::string_view value, const ruvia::CookieOptions& options) {
+        try {
+            ruvia::detail::validateCookie(name, value, options);
+            return false;
+        } catch (const std::invalid_argument&) {
+            return true;
+        }
+    };
     const ruvia::CookieOptions clean;
     RUVIA_CHECK(!rejectsCookie("sid", "value", clean));
     RUVIA_CHECK(rejectsCookie("bad name", "value", clean));  // space -> not a token name
     RUVIA_CHECK(rejectsCookie("sid", "a;b", clean));         // ';' in value
     ruvia::CookieOptions badPath;
     badPath.path = "a;b";
-    RUVIA_CHECK(rejectsCookie("sid", "value", badPath));     // ';' in path attribute
+    RUVIA_CHECK(rejectsCookie("sid", "value", badPath));  // ';' in path attribute
     ruvia::CookieOptions badPriority;
     badPriority.priority = static_cast<ruvia::CookiePriority>(255);
     RUVIA_CHECK(rejectsCookie("sid", "value", badPriority));
@@ -330,8 +282,8 @@ RUVIA_TEST(cookie_literal_prefix_name_enforces_requirements) {
     // RFC 6265bis user agents match these prefixes case-insensitively. Reject
     // every spelling the UA would reject instead of emitting a silently dropped
     // cookie.
-    ruvia::CookieOptions insecure;  // secure defaults to false
-    RUVIA_CHECK(rejectsWithName("__Secure-tok", insecure));    // __Secure- requires Secure
+    ruvia::CookieOptions insecure;                           // secure defaults to false
+    RUVIA_CHECK(rejectsWithName("__Secure-tok", insecure));  // __Secure- requires Secure
     RUVIA_CHECK(rejectsWithName("__secure-tok", insecure));
     RUVIA_CHECK(rejectsWithName("__SeCuRe-tok", insecure));
 

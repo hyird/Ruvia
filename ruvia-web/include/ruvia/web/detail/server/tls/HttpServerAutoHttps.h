@@ -49,10 +49,7 @@ inline void appendHttpsPort(std::pmr::string& location, std::uint16_t httpsPort)
     location.append(portBuffer.data(), static_cast<std::size_t>(end - portBuffer.data()));
 }
 
-inline HttpResponse makeAutoHttpsRedirectResponse(
-    const HttpRequest& request,
-    RequestMemory& memory,
-    std::uint16_t httpsPort) {
+inline HttpResponse makeAutoHttpsRedirectResponse(const HttpRequest& request, RequestMemory& memory, std::uint16_t httpsPort) {
     HttpResponse response(memory.resource());
     response.status(ruvia::http_status::kPermanentRedirect);
 
@@ -63,12 +60,7 @@ inline HttpResponse makeAutoHttpsRedirectResponse(
     }
 
     std::pmr::string location(memory.allocator<char>());
-    location.reserve(
-        std::string_view("https://").size() +
-        host.size() +
-        (httpsPort == 443 ? 0U : 6U) +
-        path.size() +
-        (request.queryString().empty() ? 0U : 1U + request.queryString().size()));
+    location.reserve(std::string_view("https://").size() + host.size() + (httpsPort == 443 ? 0U : 6U) + path.size() + (request.queryString().empty() ? 0U : 1U + request.queryString().size()));
     location.append("https://");
     location.append(host.data(), host.size());
     appendHttpsPort(location, httpsPort);

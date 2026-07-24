@@ -20,6 +20,7 @@
 
 namespace {
 
+using ruvia::applySecurityHeaders;
 using ruvia::Context;
 using ruvia::HttpResponse;
 using ruvia::LegacyXssFilterPolicy;
@@ -27,34 +28,27 @@ using ruvia::RequestMemory;
 using ruvia::SecurityHeader;
 using ruvia::SecurityHeadersOptions;
 using ruvia::WorkerMemory;
-using ruvia::applySecurityHeaders;
 using ruvia::detail::ContextAccess;
 using ruvia::detail::ContextServices;
 using ruvia::detail::HttpRequestAccess;
 
 template <typename Target>
-concept HasContextlessSecurityHeaders = requires(
-    Target& target,
-    const SecurityHeadersOptions& options) {
-    ruvia::applySecurityHeaders(target, options);
-};
+concept HasContextlessSecurityHeaders = requires(Target& target, const SecurityHeadersOptions& options) { ruvia::applySecurityHeaders(target, options); };
 
 static_assert(!HasContextlessSecurityHeaders<HttpResponse>);
 
 template <typename Text>
-concept AcceptsAnySecurityHeaderText =
-    requires(Text&& text) {
-        SecurityHeader{
-            .name = std::forward<Text>(text),
-            .value = "value",
-        };
-    } ||
-    requires(Text&& text) {
-        SecurityHeader{
-            .name = "X-Test",
-            .value = std::forward<Text>(text),
-        };
+concept AcceptsAnySecurityHeaderText = requires(Text&& text) {
+    SecurityHeader{
+        .name = std::forward<Text>(text),
+        .value = "value",
     };
+} || requires(Text&& text) {
+    SecurityHeader{
+        .name = "X-Test",
+        .value = std::forward<Text>(text),
+    };
+};
 
 template <typename Text>
 concept AcceptsAllSecurityHeaderText = requires(Text&& text) {
@@ -69,38 +63,28 @@ concept AcceptsAllSecurityHeaderText = requires(Text&& text) {
 };
 
 template <typename Text>
-concept AssignsAnySecurityHeaderText =
-    requires(SecurityHeader& header, Text&& text) {
-        header.name = std::forward<Text>(text);
-    } ||
-    requires(SecurityHeader& header, Text&& text) {
-        header.value = std::forward<Text>(text);
-    };
+concept AssignsAnySecurityHeaderText = requires(SecurityHeader& header, Text&& text) { header.name = std::forward<Text>(text); } || requires(SecurityHeader& header, Text&& text) { header.value = std::forward<Text>(text); };
 
 template <typename Text>
-concept AssignsAllSecurityHeaderText =
-    requires(SecurityHeader& header, Text&& text) {
-        header.name = std::forward<Text>(text);
-        header.value = std::forward<Text>(text);
-    };
+concept AssignsAllSecurityHeaderText = requires(SecurityHeader& header, Text&& text) {
+    header.name = std::forward<Text>(text);
+    header.value = std::forward<Text>(text);
+};
 
 template <typename Text>
-concept AcceptsAnySecurityPolicyText =
-    requires(Text&& text) {
-        SecurityHeadersOptions{
-            .contentSecurityPolicy = std::forward<Text>(text),
-        };
-    } ||
-    requires(Text&& text) {
-        SecurityHeadersOptions{
-            .referrerPolicy = std::forward<Text>(text),
-        };
-    } ||
-    requires(Text&& text) {
-        SecurityHeadersOptions{
-            .permissionsPolicy = std::forward<Text>(text),
-        };
+concept AcceptsAnySecurityPolicyText = requires(Text&& text) {
+    SecurityHeadersOptions{
+        .contentSecurityPolicy = std::forward<Text>(text),
     };
+} || requires(Text&& text) {
+    SecurityHeadersOptions{
+        .referrerPolicy = std::forward<Text>(text),
+    };
+} || requires(Text&& text) {
+    SecurityHeadersOptions{
+        .permissionsPolicy = std::forward<Text>(text),
+    };
+};
 
 template <typename Text>
 concept AcceptsAllSecurityPolicyText = requires(Text&& text) {
@@ -116,24 +100,14 @@ concept AcceptsAllSecurityPolicyText = requires(Text&& text) {
 };
 
 template <typename Text>
-concept AssignsAnySecurityPolicyText =
-    requires(SecurityHeadersOptions& options, Text&& text) {
-        options.contentSecurityPolicy = std::forward<Text>(text);
-    } ||
-    requires(SecurityHeadersOptions& options, Text&& text) {
-        options.referrerPolicy = std::forward<Text>(text);
-    } ||
-    requires(SecurityHeadersOptions& options, Text&& text) {
-        options.permissionsPolicy = std::forward<Text>(text);
-    };
+concept AssignsAnySecurityPolicyText = requires(SecurityHeadersOptions& options, Text&& text) { options.contentSecurityPolicy = std::forward<Text>(text); } || requires(SecurityHeadersOptions& options, Text&& text) { options.referrerPolicy = std::forward<Text>(text); } || requires(SecurityHeadersOptions& options, Text&& text) { options.permissionsPolicy = std::forward<Text>(text); };
 
 template <typename Text>
-concept AssignsAllSecurityPolicyText =
-    requires(SecurityHeadersOptions& options, Text&& text) {
-        options.contentSecurityPolicy = std::forward<Text>(text);
-        options.referrerPolicy = std::forward<Text>(text);
-        options.permissionsPolicy = std::forward<Text>(text);
-    };
+concept AssignsAllSecurityPolicyText = requires(SecurityHeadersOptions& options, Text&& text) {
+    options.contentSecurityPolicy = std::forward<Text>(text);
+    options.referrerPolicy = std::forward<Text>(text);
+    options.permissionsPolicy = std::forward<Text>(text);
+};
 
 template <typename Headers>
 concept AcceptsSecurityCustomHeaders = requires(Headers&& headers) {
@@ -143,11 +117,7 @@ concept AcceptsSecurityCustomHeaders = requires(Headers&& headers) {
 };
 
 template <typename Headers>
-concept AssignsSecurityCustomHeaders = requires(
-    SecurityHeadersOptions& options,
-    Headers&& headers) {
-    options.customHeaders = std::forward<Headers>(headers);
-};
+concept AssignsSecurityCustomHeaders = requires(SecurityHeadersOptions& options, Headers&& headers) { options.customHeaders = std::forward<Headers>(headers); };
 
 using SecurityHeaderArray = std::array<SecurityHeader, 1>;
 using SecurityHeaderVector = std::vector<SecurityHeader>;
@@ -165,9 +135,7 @@ constexpr SecurityHeadersOptions kLiteralSecurityHeaderOptions{
 };
 static_assert(kLiteralSecurityHeader.name.view() == "X-Test");
 static_assert(kLiteralSecurityHeader.value.view() == "value");
-static_assert(
-    kLiteralSecurityHeaderOptions.contentSecurityPolicy.view() ==
-    "default-src 'none'");
+static_assert(kLiteralSecurityHeaderOptions.contentSecurityPolicy.view() == "default-src 'none'");
 static_assert(kLiteralSecurityHeaderOptions.customHeaders.size() == 1);
 static_assert(!AcceptsAnySecurityHeaderText<std::string>);
 static_assert(!AcceptsAnySecurityHeaderText<const std::string>);
@@ -240,44 +208,33 @@ private:
 }  // namespace
 
 RUVIA_TEST(security_headers_default_set) {
-    SecurityContextFixture fixture(
-        ContextServices{}.withTlsTransport("192.0.2.1"));
+    SecurityContextFixture fixture(ContextServices{}.withTlsTransport("192.0.2.1"));
     applySecurityHeaders(fixture.context(), SecurityHeadersOptions{});
     const auto& response = fixture.response();
 
     RUVIA_CHECK_EQ(response.header("X-Content-Type-Options"), std::string_view("nosniff"));
     RUVIA_CHECK_EQ(response.header("X-Frame-Options"), std::string_view("DENY"));
-    RUVIA_CHECK_EQ(response.header("Strict-Transport-Security"),
-                   std::string_view("max-age=31536000; includeSubDomains"));
+    RUVIA_CHECK_EQ(response.header("Strict-Transport-Security"), std::string_view("max-age=31536000; includeSubDomains"));
     // Modern guidance disables the legacy XSS auditor rather than enabling it.
     RUVIA_CHECK_EQ(response.header("X-XSS-Protection"), std::string_view("0"));
     // Secure-by-default policy values ship out of the box.
     RUVIA_CHECK_EQ(response.header("Content-Security-Policy"), std::string_view("default-src 'self'"));
-    RUVIA_CHECK_EQ(response.header("Referrer-Policy"),
-                   std::string_view("strict-origin-when-cross-origin"));
-    RUVIA_CHECK_EQ(response.header("Permissions-Policy"),
-                   std::string_view("geolocation=(), microphone=(), camera=()"));
+    RUVIA_CHECK_EQ(response.header("Referrer-Policy"), std::string_view("strict-origin-when-cross-origin"));
+    RUVIA_CHECK_EQ(response.header("Permissions-Policy"), std::string_view("geolocation=(), microphone=(), camera=()"));
 }
 
 RUVIA_TEST(security_headers_emit_hsts_only_for_tls_contexts) {
-    SecurityContextFixture plain(
-        ContextServices{}.withPlainTransport("192.0.2.1"));
+    SecurityContextFixture plain(ContextServices{}.withPlainTransport("192.0.2.1"));
     applySecurityHeaders(plain.context());
-    RUVIA_CHECK(
-        !plain.response().header("Strict-Transport-Security").has_value());
+    RUVIA_CHECK(!plain.response().header("Strict-Transport-Security").has_value());
 
-    SecurityContextFixture tls(
-        ContextServices{}.withTlsTransport("192.0.2.2"));
+    SecurityContextFixture tls(ContextServices{}.withTlsTransport("192.0.2.2"));
     applySecurityHeaders(tls.context());
-    RUVIA_CHECK_EQ(
-        tls.response().header("Strict-Transport-Security"),
-        std::string_view("max-age=31536000; includeSubDomains"));
+    RUVIA_CHECK_EQ(tls.response().header("Strict-Transport-Security"), std::string_view("max-age=31536000; includeSubDomains"));
 }
 
 RUVIA_TEST(security_headers_legacy_xss_filter_policy_is_explicit) {
-    static_assert(
-        SecurityHeadersOptions{}.legacyXssFilter ==
-        LegacyXssFilterPolicy::kDisable);
+    static_assert(SecurityHeadersOptions{}.legacyXssFilter == LegacyXssFilterPolicy::kDisable);
 
     SecurityContextFixture fixture;
     SecurityHeadersOptions options;
@@ -348,9 +305,7 @@ RUVIA_TEST(security_headers_respect_overwrite_existing_flag) {
     SecurityContextFixture keep;
     keep.context().header("X-Frame-Options", "SAMEORIGIN");
     applySecurityHeaders(keep.context(), SecurityHeadersOptions{});
-    RUVIA_CHECK_EQ(
-        keep.response().header("X-Frame-Options"),
-        std::string_view("SAMEORIGIN"));
+    RUVIA_CHECK_EQ(keep.response().header("X-Frame-Options"), std::string_view("SAMEORIGIN"));
 
     // With overwriteExisting = true, the security default replaces it.
     SecurityContextFixture replace;
@@ -358,7 +313,5 @@ RUVIA_TEST(security_headers_respect_overwrite_existing_flag) {
     SecurityHeadersOptions overwrite;
     overwrite.overwriteExisting = true;
     applySecurityHeaders(replace.context(), overwrite);
-    RUVIA_CHECK_EQ(
-        replace.response().header("X-Frame-Options"),
-        std::string_view("DENY"));
+    RUVIA_CHECK_EQ(replace.response().header("X-Frame-Options"), std::string_view("DENY"));
 }

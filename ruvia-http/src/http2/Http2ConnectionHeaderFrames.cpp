@@ -22,9 +22,7 @@ bool Http2Connection::processHeaders(const Http2FrameHeader& header, std::string
         return false;
     }
     if ((header.streamId & 1U) == 0) {
-        appendGoaway(
-            Http2ErrorCode::kProtocolError,
-            role_ == Http2Role::kClient ? "HEADERS on even stream id" : "invalid client stream id");
+        appendGoaway(Http2ErrorCode::kProtocolError, role_ == Http2Role::kClient ? "HEADERS on even stream id" : "invalid client stream id");
         return false;
     }
 
@@ -39,9 +37,7 @@ bool Http2Connection::processHeaders(const Http2FrameHeader& header, std::string
             // HEADERS carries a field block and can alter HPACK state, so a payload
             // too short for its mandatory fields is a connection FRAME_SIZE_ERROR
             // (RFC 9113 §4.2), unlike the stream-scoped standalone PRIORITY frame.
-            appendGoaway(
-                Http2ErrorCode::kFrameSizeError,
-                "HEADERS priority fields are incomplete");
+            appendGoaway(Http2ErrorCode::kFrameSizeError, "HEADERS priority fields are incomplete");
             return false;
     }
 
@@ -49,8 +45,7 @@ bool Http2Connection::processHeaders(const Http2FrameHeader& header, std::string
     std::optional<DiscardedHeaderAction> discardedAction;
     if (auto* existing = findStream(header.streamId); existing != nullptr) {
         if (existing->isAborted()) {
-            if (existing->localSend().aborted()->source() ==
-                Http2StreamCloseSource::kPeer) {
+            if (existing->localSend().aborted()->source() == Http2StreamCloseSource::kPeer) {
                 // Frames sent after the peer's own RST are not an in-flight race: the
                 // connection byte stream orders them after that terminal signal.
                 appendGoaway(Http2ErrorCode::kStreamClosed, "HEADERS after peer RST_STREAM");
@@ -64,15 +59,11 @@ bool Http2Connection::processHeaders(const Http2FrameHeader& header, std::string
             // protocol halves have closed. Decode for HPACK synchronization,
             // but never make storage retention authorize another stream frame.
             discardedAction = DiscardedHeaderAction::kIgnore;
-        } else if (http2RemoteFinalHeadDecoded(*existing) &&
-                   (existing->tunnel().open() != nullptr ||
-                    (role_ == Http2Role::kServer &&
-                     existing->tunnel().pending() != nullptr))) {
+        } else if (http2RemoteFinalHeadDecoded(*existing) && (existing->tunnel().open() != nullptr || (role_ == Http2Role::kServer && existing->tunnel().pending() != nullptr))) {
             // CONNECT has no request trailers, and an accepted connected stream only
             // permits DATA/RST_STREAM/WINDOW_UPDATE/PRIORITY. Decode the complete
             // field block for HPACK synchronization, then reset this stream.
-            return startDiscardedHeaderBlock(
-                header, fragment, DiscardedHeaderAction::kResetProtocolError);
+            return startDiscardedHeaderBlock(header, fragment, DiscardedHeaderAction::kResetProtocolError);
         } else if (http2RemoteFinalHeadDecoded(*existing)) {
             return processTrailerHeaders(*existing, header, fragment);
         } else if (role_ == Http2Role::kClient) {
@@ -108,9 +99,7 @@ bool Http2Connection::processHeaders(const Http2FrameHeader& header, std::string
                 // a newly established identifier must be greater than every identifier
                 // the peer already opened (RFC 9113 5.1.1). A skipped lower identifier
                 // cannot be reopened as a new request.
-                appendGoaway(
-                    Http2ErrorCode::kProtocolError,
-                    "new peer stream id is not increasing");
+                appendGoaway(Http2ErrorCode::kProtocolError, "new peer stream id is not increasing");
                 return false;
             }
             // A stream explicitly closed by this endpoint can still have an in-flight
@@ -121,10 +110,8 @@ bool Http2Connection::processHeaders(const Http2FrameHeader& header, std::string
             // Record every genuinely new peer stream ID, even when it is malformed or
             // refused, so a later lower ID cannot be reopened as idle.
             lastStreamId_ = header.streamId;
-            const auto* gracefulDrain =
-                localConnectionState_.gracefulDrain();
-            const bool drainRefused = gracefulDrain != nullptr &&
-                header.streamId > gracefulDrain->lastStreamId();
+            const auto* gracefulDrain = localConnectionState_.gracefulDrain();
+            const bool drainRefused = gracefulDrain != nullptr && header.streamId > gracefulDrain->lastStreamId();
             stream = drainRefused ? nullptr : createStream(header.streamId);
             if (stream == nullptr) {
                 discardedAction = DiscardedHeaderAction::kRefuseStream;
@@ -139,10 +126,7 @@ bool Http2Connection::processHeaders(const Http2FrameHeader& header, std::string
     if ((header.flags & kHttp2FlagEndStream) != 0) {
         if (!stream->recordRemoteHeadEndStream()) {
             output_.appendRstStream(header.streamId, Http2ErrorCode::kProtocolError);
-            closeStream(
-                header.streamId,
-                Http2StreamCloseSource::kLocal,
-                Http2ErrorCode::kProtocolError);
+            closeStream(header.streamId, Http2StreamCloseSource::kLocal, Http2ErrorCode::kProtocolError);
             return true;
         }
     }
@@ -169,21 +153,15 @@ bool Http2Connection::processHeaders(const Http2FrameHeader& header, std::string
     return true;
 }
 
-bool Http2Connection::processTrailerHeaders(
-    Http2StreamState& stream,
-    const Http2FrameHeader& header,
-    std::string_view fragment) {
+bool Http2Connection::processTrailerHeaders(Http2StreamState& stream, const Http2FrameHeader& header, std::string_view fragment) {
     if (http2RemotePeerHalfClosed(stream)) {
-        return startDiscardedHeaderBlock(
-            header, fragment, DiscardedHeaderAction::kResetStreamClosed);
+        return startDiscardedHeaderBlock(header, fragment, DiscardedHeaderAction::kResetStreamClosed);
     }
     if (stream.remoteReceive().contentOpen() == nullptr) {
-        return startDiscardedHeaderBlock(
-            header, fragment, DiscardedHeaderAction::kResetProtocolError);
+        return startDiscardedHeaderBlock(header, fragment, DiscardedHeaderAction::kResetProtocolError);
     }
     if ((header.flags & kHttp2FlagEndStream) == 0) {
-        return startDiscardedHeaderBlock(
-            header, fragment, DiscardedHeaderAction::kResetProtocolError);
+        return startDiscardedHeaderBlock(header, fragment, DiscardedHeaderAction::kResetProtocolError);
     }
     if (!http2StartHeaderBlock(stream, fragment)) {
         // Un-bufferable trailer block: same HPACK-consistency reasoning as HEADERS --

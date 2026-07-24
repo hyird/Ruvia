@@ -40,10 +40,8 @@ class ChannelSendResult final {
 public:
     ChannelSendResult(const ChannelSendResult&) = delete;
     ChannelSendResult& operator=(const ChannelSendResult&) = delete;
-    ChannelSendResult(ChannelSendResult&&)
-        noexcept(std::is_nothrow_move_constructible_v<T>) = default;
-    ChannelSendResult& operator=(ChannelSendResult&&)
-        noexcept(std::is_nothrow_move_assignable_v<T>) = default;
+    ChannelSendResult(ChannelSendResult&&) noexcept(std::is_nothrow_move_constructible_v<T>) = default;
+    ChannelSendResult& operator=(ChannelSendResult&&) noexcept(std::is_nothrow_move_assignable_v<T>) = default;
 
     [[nodiscard]] ChannelSendStatus status() const noexcept {
         return status_;
@@ -57,15 +55,14 @@ public:
         return rejected_ ? &*rejected_ : nullptr;
     }
 
-    [[nodiscard]] const T* rejected() const & noexcept {
+    [[nodiscard]] const T* rejected() const& noexcept {
         return rejected_ ? &*rejected_ : nullptr;
     }
 
     T* rejected() && = delete;
-    const T* rejected() const && = delete;
+    const T* rejected() const&& = delete;
 
-    [[nodiscard]] std::optional<T> takeRejected() &&
-        noexcept(std::is_nothrow_move_constructible_v<T>) {
+    [[nodiscard]] std::optional<T> takeRejected() && noexcept(std::is_nothrow_move_constructible_v<T>) {
         return std::move(rejected_);
     }
 
@@ -75,17 +72,15 @@ private:
     explicit ChannelSendResult(ChannelSendStatus status) noexcept
         : status_(status) {}
 
-    ChannelSendResult(ChannelSendStatus status, T&& rejected)
-        noexcept(std::is_nothrow_move_constructible_v<T>)
-        : status_(status), rejected_(std::move(rejected)) {}
+    ChannelSendResult(ChannelSendStatus status, T&& rejected) noexcept(std::is_nothrow_move_constructible_v<T>)
+        : status_(status),
+          rejected_(std::move(rejected)) {}
 
     [[nodiscard]] static ChannelSendResult accepted() noexcept {
         return ChannelSendResult(ChannelSendStatus::kSent);
     }
 
-    [[nodiscard]] static ChannelSendResult reject(
-        ChannelSendStatus status,
-        T&& value) noexcept(std::is_nothrow_move_constructible_v<T>) {
+    [[nodiscard]] static ChannelSendResult reject(ChannelSendStatus status, T&& value) noexcept(std::is_nothrow_move_constructible_v<T>) {
         return ChannelSendResult(status, std::move(value));
     }
 
@@ -107,10 +102,9 @@ struct ChannelWorkerStopping final {};
 
 template <typename T>
 struct ChannelState final : WorkerShutdownListener {
-    ChannelState(WorkerHandle target,
-                 std::size_t requestedCapacity,
-                 std::pmr::memory_resource* resource)
-        : worker(std::move(target)), slots(resource) {
+    ChannelState(WorkerHandle target, std::size_t requestedCapacity, std::pmr::memory_resource* resource)
+        : worker(std::move(target)),
+          slots(resource) {
         if (!worker.valid()) {
             throw std::invalid_argument("channel requires a valid worker");
         }
@@ -126,10 +120,7 @@ struct ChannelState final : WorkerShutdownListener {
     std::size_t head{0};
     std::size_t tail{0};
     std::size_t size{0};
-    using Lifecycle = std::variant<
-        ChannelOpen,
-        ChannelClosed,
-        ChannelWorkerStopping>;
+    using Lifecycle = std::variant<ChannelOpen, ChannelClosed, ChannelWorkerStopping>;
     Lifecycle lifecycle;
     ChannelReceiveAwaiter<T>* waiter{nullptr};
 
@@ -138,24 +129,21 @@ struct ChannelState final : WorkerShutdownListener {
 
 template <typename T>
 struct ChannelReceiveAwaiter final {
-    ChannelReceiveAwaiter(
-        std::shared_ptr<ChannelState<T>> value,
-        std::optional<std::chrono::steady_clock::duration> timeoutValue = std::nullopt)
-        : state(std::move(value)), timeout(timeoutValue) {}
+    ChannelReceiveAwaiter(std::shared_ptr<ChannelState<T>> value, std::optional<std::chrono::steady_clock::duration> timeoutValue = std::nullopt)
+        : state(std::move(value)),
+          timeout(timeoutValue) {}
 
     [[nodiscard]] bool await_ready() {
         std::lock_guard lock(state->mutex);
         if (state->size != 0) {
-            (void)completion.complete(WorkerWaitResultAccess::value(
-                std::move(*state->slots[state->head])));
+            (void)completion.complete(WorkerWaitResultAccess::value(std::move(*state->slots[state->head])));
             state->slots[state->head].reset();
             state->head = (state->head + 1) % state->slots.size();
             --state->size;
             return true;
         }
         if (std::holds_alternative<ChannelWorkerStopping>(state->lifecycle)) {
-            (void)completion.complete(
-                WorkerWaitResultAccess::workerStopping<T>());
+            (void)completion.complete(WorkerWaitResultAccess::workerStopping<T>());
             return true;
         }
         if (std::holds_alternative<ChannelClosed>(state->lifecycle)) {
@@ -189,9 +177,7 @@ struct ChannelReceiveAwaiter final {
 };
 
 template <typename T>
-[[nodiscard]] Task<WorkerWaitResult<T>> receiveChannelState(
-    std::shared_ptr<ChannelState<T>> state,
-    std::optional<std::chrono::steady_clock::duration> timeout) {
+[[nodiscard]] Task<WorkerWaitResult<T>> receiveChannelState(std::shared_ptr<ChannelState<T>> state, std::optional<std::chrono::steady_clock::duration> timeout) {
     if (!state || !state->worker.isCurrent()) {
         throw std::logic_error("channel receive must run on its bound worker");
     }
@@ -204,9 +190,7 @@ void wakeChannelReceiver(ChannelReceiveAwaiter<T>* waiter) {
         waiter->timer.cancel();
         return;
     }
-    WorkerHandleAccess::defer(
-        waiter->state->worker,
-        [waiter] { waiter->completion.continuation().resume(); });
+    WorkerHandleAccess::defer(waiter->state->worker, [waiter] { waiter->completion.continuation().resume(); });
 }
 
 template <typename T>
@@ -214,9 +198,7 @@ void ChannelState<T>::workerStopping() noexcept {
     std::lock_guard lock(mutex);
     lifecycle.template emplace<ChannelWorkerStopping>();
     ChannelReceiveAwaiter<T>* pending = std::exchange(waiter, nullptr);
-    if (pending != nullptr &&
-        pending->completion.complete(
-            WorkerWaitResultAccess::workerStopping<T>())) {
+    if (pending != nullptr && pending->completion.complete(WorkerWaitResultAccess::workerStopping<T>())) {
         // Wake under the mutex (see ChannelSender::send).
         try {
             wakeChannelReceiver(pending);
@@ -226,7 +208,7 @@ void ChannelState<T>::workerStopping() noexcept {
     }
 }
 
-}
+}  // namespace detail
 
 template <typename T>
 class ChannelSender final {
@@ -235,32 +217,25 @@ public:
 
     [[nodiscard]] ChannelSendResult<T> send(T value) const {
         if (!state_) {
-            return ChannelSendResult<T>::reject(
-                ChannelSendStatus::kClosed, std::move(value));
+            return ChannelSendResult<T>::reject(ChannelSendStatus::kClosed, std::move(value));
         }
         detail::ChannelReceiveAwaiter<T>* waiter = nullptr;
         bool wake = false;
         {
             std::lock_guard lock(state_->mutex);
-            if (std::holds_alternative<detail::ChannelClosed>(
-                    state_->lifecycle)) {
-                return ChannelSendResult<T>::reject(
-                    ChannelSendStatus::kClosed, std::move(value));
+            if (std::holds_alternative<detail::ChannelClosed>(state_->lifecycle)) {
+                return ChannelSendResult<T>::reject(ChannelSendStatus::kClosed, std::move(value));
             }
-            if (std::holds_alternative<detail::ChannelWorkerStopping>(
-                    state_->lifecycle)) {
-                return ChannelSendResult<T>::reject(
-                    ChannelSendStatus::kWorkerStopping, std::move(value));
+            if (std::holds_alternative<detail::ChannelWorkerStopping>(state_->lifecycle)) {
+                return ChannelSendResult<T>::reject(ChannelSendStatus::kWorkerStopping, std::move(value));
             }
             assert(std::holds_alternative<detail::ChannelOpen>(state_->lifecycle));
             if (!state_->worker.accepting()) {
-                return ChannelSendResult<T>::reject(
-                    ChannelSendStatus::kWorkerStopping, std::move(value));
+                return ChannelSendResult<T>::reject(ChannelSendStatus::kWorkerStopping, std::move(value));
             }
             if (state_->waiter != nullptr) {
                 waiter = state_->waiter;
-                wake = waiter->completion.complete(
-                    detail::WorkerWaitResultAccess::value(std::move(value)));
+                wake = waiter->completion.complete(detail::WorkerWaitResultAccess::value(std::move(value)));
                 state_->waiter = nullptr;
                 // Wake the receiver while still holding the mutex. Once it is
                 // released, an already-in-flight timer expiry can resume the
@@ -271,8 +246,7 @@ public:
                 }
             } else {
                 if (state_->size == state_->slots.size()) {
-                    return ChannelSendResult<T>::reject(
-                        ChannelSendStatus::kFull, std::move(value));
+                    return ChannelSendResult<T>::reject(ChannelSendStatus::kFull, std::move(value));
                 }
                 state_->slots[state_->tail].emplace(std::move(value));
                 state_->tail = (state_->tail + 1) % state_->slots.size();
@@ -290,15 +264,13 @@ public:
         bool wake = false;
         {
             std::lock_guard lock(state_->mutex);
-            if (!std::holds_alternative<detail::ChannelOpen>(
-                    state_->lifecycle)) {
+            if (!std::holds_alternative<detail::ChannelOpen>(state_->lifecycle)) {
                 return;
             }
             state_->lifecycle.template emplace<detail::ChannelClosed>();
             waiter = std::exchange(state_->waiter, nullptr);
             if (waiter != nullptr) {
-                wake = waiter->completion.complete(
-                    detail::WorkerWaitResultAccess::closed<T>());
+                wake = waiter->completion.complete(detail::WorkerWaitResultAccess::closed<T>());
                 // Wake under the mutex (see ChannelSender::send).
                 if (wake) {
                     detail::wakeChannelReceiver(waiter);
@@ -326,21 +298,22 @@ public:
     ChannelReceiver(ChannelReceiver&&) noexcept = default;
     ChannelReceiver& operator=(ChannelReceiver&&) = delete;
 
-    ~ChannelReceiver() { close(); }
+    ~ChannelReceiver() {
+        close();
+    }
 
     [[nodiscard]] Task<WorkerWaitResult<T>> receive() {
         return detail::receiveChannelState<T>(state_, std::nullopt);
     }
 
     template <typename Rep, typename Period>
-    [[nodiscard]] Task<WorkerWaitResult<T>>
-    receiveFor(std::chrono::duration<Rep, Period> duration) {
-        return detail::receiveChannelState<T>(
-            state_,
-            detail::workerTimerSaturatingDurationCast(duration));
+    [[nodiscard]] Task<WorkerWaitResult<T>> receiveFor(std::chrono::duration<Rep, Period> duration) {
+        return detail::receiveChannelState<T>(state_, detail::workerTimerSaturatingDurationCast(duration));
     }
 
-    void close() const { ChannelSender<T>(state_).close(); }
+    void close() const {
+        ChannelSender<T>(state_).close();
+    }
 
 private:
     explicit ChannelReceiver(std::shared_ptr<detail::ChannelState<T>> state)
@@ -352,15 +325,12 @@ private:
 };
 
 template <typename T>
-[[nodiscard]] auto makeChannel(WorkerHandle worker,
-                               std::size_t capacity,
-                               std::pmr::memory_resource* resource = nullptr) {
+[[nodiscard]] auto makeChannel(WorkerHandle worker, std::size_t capacity, std::pmr::memory_resource* resource = nullptr) {
     auto* resolved = detail::pmrResourceOrDefault(resource);
     std::pmr::polymorphic_allocator<detail::ChannelState<T>> allocator(resolved);
-    auto state = std::allocate_shared<detail::ChannelState<T>>(
-        allocator, std::move(worker), capacity, resolved);
+    auto state = std::allocate_shared<detail::ChannelState<T>>(allocator, std::move(worker), capacity, resolved);
     detail::WorkerHandleAccess::registerShutdownListener(state->worker, state);
     return std::pair(ChannelSender<T>(state), ChannelReceiver<T>(state));
 }
 
-}
+}  // namespace ruvia

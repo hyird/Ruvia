@@ -12,15 +12,14 @@ struct StopState final {
 };
 
 class StopSource;
-}
+}  // namespace detail
 
 class StopToken final {
 public:
     StopToken() noexcept = default;
 
     [[nodiscard]] bool stopRequested() const noexcept {
-        return state_ != nullptr &&
-            state_->requested.load(std::memory_order_acquire);
+        return state_ != nullptr && state_->requested.load(std::memory_order_acquire);
     }
 
 private:
@@ -36,7 +35,8 @@ namespace detail {
 
 class StopSource final {
 public:
-    StopSource() : state_(std::make_shared<StopState>()) {}
+    StopSource()
+        : state_(std::make_shared<StopState>()) {}
     StopSource(const StopSource&) = delete;
     StopSource& operator=(const StopSource&) = delete;
     StopSource(StopSource&&) = delete;

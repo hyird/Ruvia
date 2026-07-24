@@ -30,14 +30,14 @@ void appendU64(std::string& out, std::uint64_t v) {
 // A bounds-checked little-endian reader over a byte buffer.
 class Reader final {
 public:
-    explicit Reader(std::string_view data) noexcept : data_(data) {}
+    explicit Reader(std::string_view data) noexcept
+        : data_(data) {}
 
     [[nodiscard]] bool readU16(std::uint16_t& out) noexcept {
         if (remaining() < 2) {
             return false;
         }
-        out = static_cast<std::uint16_t>(byte(0)) |
-              static_cast<std::uint16_t>(byte(1) << 8);
+        out = static_cast<std::uint16_t>(byte(0)) | static_cast<std::uint16_t>(byte(1) << 8);
         pos_ += 2;
         return true;
     }
@@ -103,9 +103,7 @@ std::uint64_t diskRecordHash(std::string_view data) noexcept {
     return h;
 }
 
-std::optional<std::string> encodeDiskRecord(
-    std::string_view key,
-    const CachedResponse& entry) {
+std::optional<std::string> encodeDiskRecord(std::string_view key, const CachedResponse& entry) {
     constexpr auto kMaxU32 = (std::numeric_limits<std::uint32_t>::max)();
     if (key.size() > kMaxU32 || entry.headers.size() > kMaxU32) {
         return std::nullopt;
@@ -152,8 +150,7 @@ bool decodeDiskRecord(std::string_view data, std::string& key, CachedResponse* e
     }
     std::uint64_t expectedChecksum = 0;
     Reader trailer(data.substr(data.size() - 8));
-    if (!trailer.readU64(expectedChecksum) ||
-        expectedChecksum != diskRecordHash(data.substr(0, data.size() - 8))) {
+    if (!trailer.readU64(expectedChecksum) || expectedChecksum != diskRecordHash(data.substr(0, data.size() - 8))) {
         return false;
     }
 
@@ -174,9 +171,7 @@ bool decodeDiskRecord(std::string_view data, std::string& key, CachedResponse* e
     std::uint64_t swr = 0;
     std::uint64_t sie = 0;
     std::uint32_t headerCount = 0;
-    if (!reader.readU16(status) || !reader.readU64(storedAt) ||
-        !reader.readU64(initialAge) || !reader.readU64(expiresAt) ||
-        !reader.readU64(swr) || !reader.readU64(sie) || !reader.readU32(headerCount)) {
+    if (!reader.readU16(status) || !reader.readU64(storedAt) || !reader.readU64(initialAge) || !reader.readU64(expiresAt) || !reader.readU64(swr) || !reader.readU64(sie) || !reader.readU32(headerCount)) {
         return false;
     }
     if (headerCount > reader.remaining() / 8) {
@@ -198,8 +193,7 @@ bool decodeDiskRecord(std::string_view data, std::string& key, CachedResponse* e
         std::string_view name;
         std::uint32_t valueLen = 0;
         std::string_view value;
-        if (!reader.readU32(nameLen) || !reader.readBytes(nameLen, name) ||
-            !reader.readU32(valueLen) || !reader.readBytes(valueLen, value)) {
+        if (!reader.readU32(nameLen) || !reader.readBytes(nameLen, name) || !reader.readU32(valueLen) || !reader.readBytes(valueLen, value)) {
             return false;
         }
         if (entry != nullptr) {
@@ -212,8 +206,7 @@ bool decodeDiskRecord(std::string_view data, std::string& key, CachedResponse* e
         return false;
     }
     std::uint64_t checksum = 0;
-    if (!reader.readU64(checksum) || reader.remaining() != 0 ||
-        checksum != expectedChecksum) {
+    if (!reader.readU64(checksum) || reader.remaining() != 0 || checksum != expectedChecksum) {
         return false;
     }
 

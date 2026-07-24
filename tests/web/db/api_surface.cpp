@@ -56,40 +56,20 @@ static_assert(!std::is_copy_assignable_v<ruvia::DbValue>);
 static_assert(!std::is_move_assignable_v<ruvia::DbValue>);
 
 template <typename String>
-concept AcceptsTemporaryDbValueText = requires(String&& value) {
-    ruvia::DbValue(std::forward<String>(value));
-};
+concept AcceptsTemporaryDbValueText = requires(String&& value) { ruvia::DbValue(std::forward<String>(value)); };
 
 template <typename String>
-concept AcceptsLvalueDbValueText = requires(String& value) {
-    ruvia::DbValue(value);
-};
+concept AcceptsLvalueDbValueText = requires(String& value) { ruvia::DbValue(value); };
 
 static_assert(!AcceptsTemporaryDbValueText<std::string>);
 static_assert(!AcceptsTemporaryDbValueText<const std::string>);
 static_assert(AcceptsLvalueDbValueText<std::string>);
 
 template <typename String, typename Migration = ruvia::DbMigration>
-concept AcceptsAnyTemporaryDbMigrationText =
-    requires(String&& value) {
-        Migration{
-            std::forward<String>(value), "SELECT 1"};
-    } ||
-    requires(String&& value) {
-        Migration{
-            "migration", std::forward<String>(value)};
-    } ||
-    requires(Migration& migration, String&& value) {
-        migration.id = std::forward<String>(value);
-    } ||
-    requires(Migration& migration, String&& value) {
-        migration.sql = std::forward<String>(value);
-    };
+concept AcceptsAnyTemporaryDbMigrationText = requires(String&& value) { Migration{std::forward<String>(value), "SELECT 1"}; } || requires(String&& value) { Migration{"migration", std::forward<String>(value)}; } || requires(Migration& migration, String&& value) { migration.id = std::forward<String>(value); } || requires(Migration& migration, String&& value) { migration.sql = std::forward<String>(value); };
 
 template <typename String, typename Migration = ruvia::DbMigration>
-concept AcceptsLvalueDbMigrationText = requires(String& value) {
-    Migration{value, value};
-};
+concept AcceptsLvalueDbMigrationText = requires(String& value) { Migration{value, value}; };
 
 template <typename T>
 concept HasDbMigrationTextAccessors = requires(const T& migration) {
@@ -102,8 +82,7 @@ static_assert(!AcceptsAnyTemporaryDbMigrationText<const std::string>);
 static_assert(!AcceptsAnyTemporaryDbMigrationText<std::pmr::string>);
 static_assert(AcceptsLvalueDbMigrationText<std::string>);
 static_assert(HasDbMigrationTextAccessors<ruvia::DbMigration>);
-constexpr ruvia::DbMigration kCompileTimeMigration(
-    "migration", "SELECT 1");
+constexpr ruvia::DbMigration kCompileTimeMigration("migration", "SELECT 1");
 static_assert(kCompileTimeMigration.id() == "migration");
 static_assert(kCompileTimeMigration.sql() == "SELECT 1");
 
@@ -128,14 +107,7 @@ static_assert(std::is_move_constructible_v<ruvia::DbTransaction>);
 static_assert(!std::is_move_assignable_v<ruvia::DbTransaction>);
 
 template <typename T>
-concept ExposesAnyRvalueDbOwnedView =
-    requires(T&& value) { std::move(value).text(); } ||
-    requires(T&& value) { std::move(value)[std::size_t{}]; } ||
-    requires(T&& value) { std::move(value).begin(); } ||
-    requires(T&& value) { std::move(value).end(); } ||
-    requires(T&& value) { std::move(value).rows(); } ||
-    requires(T&& value) { std::move(value).applied(); } ||
-    requires(T&& value) { std::move(value).skipped(); };
+concept ExposesAnyRvalueDbOwnedView = requires(T&& value) { std::move(value).text(); } || requires(T&& value) { std::move(value)[std::size_t{}]; } || requires(T&& value) { std::move(value).begin(); } || requires(T&& value) { std::move(value).end(); } || requires(T&& value) { std::move(value).rows(); } || requires(T&& value) { std::move(value).applied(); } || requires(T&& value) { std::move(value).skipped(); };
 
 static_assert(!ExposesAnyRvalueDbOwnedView<ruvia::DbValue>);
 static_assert(!ExposesAnyRvalueDbOwnedView<ruvia::DbField>);
@@ -151,18 +123,14 @@ concept HasDbHandleDefaultParams = requires(const T& handle) {
 };
 
 template <typename T>
-concept HasDbHandleSpanParams = requires(
-    const T& handle,
-    std::span<const ruvia::DbValue> params) {
+concept HasDbHandleSpanParams = requires(const T& handle, std::span<const ruvia::DbValue> params) {
     handle.query(std::string_view{}, params);
     handle.execute(std::string_view{}, params);
     handle.queryStream(std::string_view{}, params);
 };
 
 template <typename T>
-concept HasDbHandleInitializerListParams = requires(
-    const T& handle,
-    std::initializer_list<ruvia::DbValue> params) {
+concept HasDbHandleInitializerListParams = requires(const T& handle, std::initializer_list<ruvia::DbValue> params) {
     handle.query(std::string_view{}, params);
     handle.execute(std::string_view{}, params);
     handle.queryStream(std::string_view{}, params);
@@ -175,17 +143,13 @@ concept HasDbTransactionDefaultParams = requires(T& transaction) {
 };
 
 template <typename T>
-concept HasDbTransactionSpanParams = requires(
-    T& transaction,
-    std::span<const ruvia::DbValue> params) {
+concept HasDbTransactionSpanParams = requires(T& transaction, std::span<const ruvia::DbValue> params) {
     transaction.query(std::string_view{}, params);
     transaction.execute(std::string_view{}, params);
 };
 
 template <typename T>
-concept HasDbTransactionInitializerListParams = requires(
-    T& transaction,
-    std::initializer_list<ruvia::DbValue> params) {
+concept HasDbTransactionInitializerListParams = requires(T& transaction, std::initializer_list<ruvia::DbValue> params) {
     transaction.query(std::string_view{}, params);
     transaction.execute(std::string_view{}, params);
 };
@@ -218,8 +182,7 @@ RUVIA_TEST(database_operation_state_rejects_overlap_and_failed_reuse) {
     try {
         (void)state.begin();
     } catch (const std::logic_error& error) {
-        overlapRejected = std::string_view(error.what()) ==
-            "database operation is already in progress";
+        overlapRejected = std::string_view(error.what()) == "database operation is already in progress";
     }
     RUVIA_CHECK(overlapRejected);
 
@@ -228,8 +191,7 @@ RUVIA_TEST(database_operation_state_rejects_overlap_and_failed_reuse) {
     try {
         (void)state.begin();
     } catch (const std::logic_error& error) {
-        failedReuseRejected = std::string_view(error.what()) ==
-            "database resource is not active";
+        failedReuseRejected = std::string_view(error.what()) == "database resource is not active";
     }
     RUVIA_CHECK(failedReuseRejected);
 }
@@ -238,8 +200,7 @@ RUVIA_TEST(database_cold_operations_do_not_consume_pool_lease) {
     struct Lease final {
         int value;
     };
-    auto operate = [](ruvia::detail::DbOperationState<Lease>& state)
-        -> ruvia::Task<void> {
+    auto operate = [](ruvia::detail::DbOperationState<Lease>& state) -> ruvia::Task<void> {
         (void)state.begin();
         state.finishActive();
         co_return;
@@ -262,30 +223,21 @@ RUVIA_TEST(db_value_and_result_storage_have_one_live_alternative) {
     const ruvia::DbValue doubleValue(1.5);
     const ruvia::DbValue boolValue(true);
     using ValueAccess = ruvia::detail::DbValueAccess;
-    RUVIA_CHECK(
-        ValueAccess::type(nullValue) == ruvia::detail::DbValueType::kNull);
-    RUVIA_CHECK(
-        ValueAccess::type(textValue) == ruvia::detail::DbValueType::kString);
+    RUVIA_CHECK(ValueAccess::type(nullValue) == ruvia::detail::DbValueType::kNull);
+    RUVIA_CHECK(ValueAccess::type(textValue) == ruvia::detail::DbValueType::kString);
     RUVIA_CHECK_EQ(ValueAccess::text(textValue), std::string_view("value"));
-    RUVIA_CHECK(
-        ValueAccess::type(signedValue) == ruvia::detail::DbValueType::kSigned);
+    RUVIA_CHECK(ValueAccess::type(signedValue) == ruvia::detail::DbValueType::kSigned);
     RUVIA_CHECK_EQ(ValueAccess::signedValue(signedValue), std::int64_t{-7});
-    RUVIA_CHECK(
-        ValueAccess::type(unsignedValue) ==
-        ruvia::detail::DbValueType::kUnsigned);
-    RUVIA_CHECK_EQ(
-        ValueAccess::unsignedValue(unsignedValue), std::uint64_t{9});
-    RUVIA_CHECK(
-        ValueAccess::type(doubleValue) == ruvia::detail::DbValueType::kDouble);
+    RUVIA_CHECK(ValueAccess::type(unsignedValue) == ruvia::detail::DbValueType::kUnsigned);
+    RUVIA_CHECK_EQ(ValueAccess::unsignedValue(unsignedValue), std::uint64_t{9});
+    RUVIA_CHECK(ValueAccess::type(doubleValue) == ruvia::detail::DbValueType::kDouble);
     RUVIA_CHECK_EQ(ValueAccess::doubleValue(doubleValue), 1.5);
-    RUVIA_CHECK(
-        ValueAccess::type(boolValue) == ruvia::detail::DbValueType::kBool);
+    RUVIA_CHECK(ValueAccess::type(boolValue) == ruvia::detail::DbValueType::kBool);
     RUVIA_CHECK(ValueAccess::boolValue(boolValue));
 
     auto ownedRow = ruvia::detail::DbResultAccess::ownedRow(nullptr);
     auto& fields = ruvia::detail::DbResultAccess::ownedFields(ownedRow);
-    fields.push_back(
-        ruvia::detail::DbResultAccess::ownedField("owned", nullptr));
+    fields.push_back(ruvia::detail::DbResultAccess::ownedField("owned", nullptr));
     RUVIA_CHECK_EQ(ownedRow.size(), std::size_t{1});
     RUVIA_CHECK_EQ(ownedRow[0].text(), std::string_view("owned"));
 
@@ -293,10 +245,8 @@ RUVIA_TEST(db_value_and_result_storage_have_one_live_alternative) {
     RUVIA_CHECK(ownedRow.empty());
     RUVIA_CHECK_EQ(movedRow.size(), std::size_t{1});
 
-    auto borrowedField =
-        ruvia::detail::DbResultAccess::borrowedField("borrowed", nullptr);
-    auto borrowedRow = ruvia::detail::DbResultAccess::borrowedRow(
-        &borrowedField, 1, nullptr);
+    auto borrowedField = ruvia::detail::DbResultAccess::borrowedField("borrowed", nullptr);
+    auto borrowedRow = ruvia::detail::DbResultAccess::borrowedRow(&borrowedField, 1, nullptr);
     RUVIA_CHECK_EQ(borrowedRow[0].text(), std::string_view("borrowed"));
 
     auto movedField = std::move(borrowedField);
@@ -309,12 +259,7 @@ RUVIA_TEST(db_query_result_move_transfers_direct_raii_ownership) {
     {
         auto result = ruvia::detail::DbResultAccess::makeResult(nullptr);
         ruvia::detail::DbResultAccess::setAffectedRows(result, 7);
-        ruvia::detail::DbResultAccess::ownRawResult(
-            result,
-            &releases,
-            [](void* value) noexcept {
-                ++*static_cast<int*>(value);
-            });
+        ruvia::detail::DbResultAccess::ownRawResult(result, &releases, [](void* value) noexcept { ++*static_cast<int*>(value); });
 
         auto moved = std::move(result);
         RUVIA_CHECK_EQ(moved.affectedRows(), std::uint64_t{7});
@@ -334,10 +279,7 @@ RUVIA_TEST(db_registry_derives_default_pool_from_owned_entry_index) {
         {std::pmr::string("analytics"), config},
         {std::pmr::string("default"), config},
     }};
-    ruvia::detail::DbRegistry registry(
-        ioContext,
-        std::pmr::get_default_resource(),
-        definitions);
+    ruvia::detail::DbRegistry registry(ioContext, std::pmr::get_default_resource(), definitions);
     ruvia::detail::ScopedOperationScope operationScope;
 
     bool defaultResolved = true;
@@ -348,8 +290,7 @@ RUVIA_TEST(db_registry_derives_default_pool_from_owned_entry_index) {
         defaultResolved = false;
     }
     try {
-        (void)registry.get(
-            "analytics", std::pmr::get_default_resource(), operationScope);
+        (void)registry.get("analytics", std::pmr::get_default_resource(), operationScope);
     } catch (...) {
         aliasResolved = false;
     }
@@ -364,13 +305,10 @@ RUVIA_TEST(db_handle_copy_rejects_after_parent_scope_closes) {
 #else
     const auto config = ruvia::DbConfig::postgreSql();
 #endif
-    const std::array definitions{
-        ruvia::detail::DbDefinition{std::pmr::string("default"), config}};
-    ruvia::detail::DbRegistry registry(
-        ioContext, std::pmr::get_default_resource(), definitions);
+    const std::array definitions{ruvia::detail::DbDefinition{std::pmr::string("default"), config}};
+    ruvia::detail::DbRegistry registry(ioContext, std::pmr::get_default_resource(), definitions);
     ruvia::detail::ScopedOperationScope operationScope;
-    auto handle = registry.get(
-        std::pmr::get_default_resource(), operationScope);
+    auto handle = registry.get(std::pmr::get_default_resource(), operationScope);
     auto copiedHandle = handle;
     operationScope.close();
 
@@ -397,12 +335,9 @@ RUVIA_TEST(db_migrator_validates_before_opening_connection) {
     }};
     bool rejected = false;
     try {
-        (void)ruvia::DbMigrator::migrate(
-            ruvia::DbConfig{},
-            std::span<const ruvia::DbMigration>(migrations));
+        (void)ruvia::DbMigrator::migrate(ruvia::DbConfig{}, std::span<const ruvia::DbMigration>(migrations));
     } catch (const std::invalid_argument& error) {
-        rejected = std::string_view(error.what()) ==
-            "database migration ids must be unique";
+        rejected = std::string_view(error.what()) == "database migration ids must be unique";
     }
     RUVIA_CHECK(rejected);
 }
@@ -410,9 +345,7 @@ RUVIA_TEST(db_migrator_validates_before_opening_connection) {
 RUVIA_TEST(db_result_value_move_assignment_propagates_allocator_failure) {
     RejectingMemoryResource rejecting;
     auto destination = ruvia::detail::DbResultAccess::ownedField({}, &rejecting);
-    auto source = ruvia::detail::DbResultAccess::ownedField(
-        std::string_view("database field large enough to require an allocation"),
-        std::pmr::get_default_resource());
+    auto source = ruvia::detail::DbResultAccess::ownedField(std::string_view("database field large enough to require an allocation"), std::pmr::get_default_resource());
     rejecting.rejectAllocations();
 
     bool allocationFailure = false;
@@ -425,12 +358,8 @@ RUVIA_TEST(db_result_value_move_assignment_propagates_allocator_failure) {
 
     rejecting.rejectAllocations(false);
     auto destinationRow = ruvia::detail::DbResultAccess::ownedRow(&rejecting);
-    auto sourceRow = ruvia::detail::DbResultAccess::ownedRow(
-        std::pmr::get_default_resource());
-    ruvia::detail::DbResultAccess::ownedFields(sourceRow).emplace_back(
-        ruvia::detail::DbResultAccess::ownedField(
-            "row field",
-            std::pmr::get_default_resource()));
+    auto sourceRow = ruvia::detail::DbResultAccess::ownedRow(std::pmr::get_default_resource());
+    ruvia::detail::DbResultAccess::ownedFields(sourceRow).emplace_back(ruvia::detail::DbResultAccess::ownedField("row field", std::pmr::get_default_resource()));
     rejecting.rejectAllocations();
 
     allocationFailure = false;

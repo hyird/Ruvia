@@ -16,8 +16,7 @@
 namespace ruvia::detail {
 
 template <typename Char>
-[[nodiscard]] inline std::basic_string_view<Char> staticFileExtension(
-    std::basic_string_view<Char> path) noexcept {
+[[nodiscard]] inline std::basic_string_view<Char> staticFileExtension(std::basic_string_view<Char> path) noexcept {
     for (std::size_t i = path.size(); i > 0; --i) {
         const auto c = path[i - 1];
         if (c == static_cast<Char>('/') || c == static_cast<Char>('\\')) {
@@ -31,9 +30,7 @@ template <typename Char>
 }
 
 template <typename Char>
-[[nodiscard]] inline bool staticFileExtensionEquals(
-    std::basic_string_view<Char> extension,
-    std::string_view expected) noexcept {
+[[nodiscard]] inline bool staticFileExtensionEquals(std::basic_string_view<Char> extension, std::string_view expected) noexcept {
     if (extension.size() != expected.size()) {
         return false;
     }
@@ -49,17 +46,14 @@ template <typename Char>
     return true;
 }
 
-[[nodiscard]] inline std::pmr::string lowerStaticFileExtension(
-    const std::filesystem::path& path,
-    std::pmr::memory_resource* resource) {
+[[nodiscard]] inline std::pmr::string lowerStaticFileExtension(const std::filesystem::path& path, std::pmr::memory_resource* resource) {
     // On Windows the native path uses wchar_t. Narrowing those code units one
     // by one can alias unrelated Unicode extensions to an ASCII allow-listed
     // type (for example U+0168 has the same low byte as 'h'). Convert the full
     // path to UTF-8 first so extension policy and MIME lookup compare the
     // actual filename bytes on every platform.
     const auto utf8Path = path.generic_u8string();
-    const auto source = staticFileExtension(
-        std::u8string_view(utf8Path.data(), utf8Path.size()));
+    const auto source = staticFileExtension(std::u8string_view(utf8Path.data(), utf8Path.size()));
     if (source.empty()) {
         return std::pmr::string(resource);
     }
@@ -67,10 +61,8 @@ template <typename Char>
     extension.reserve(source.size());
     for (const auto c : source) {
         auto out = c;
-        if (out >= static_cast<char8_t>('A') &&
-            out <= static_cast<char8_t>('Z')) {
-            out = static_cast<char8_t>(
-                out + static_cast<char8_t>('a' - 'A'));
+        if (out >= static_cast<char8_t>('A') && out <= static_cast<char8_t>('Z')) {
+            out = static_cast<char8_t>(out + static_cast<char8_t>('a' - 'A'));
         }
         extension.push_back(static_cast<char>(out));
     }
@@ -78,32 +70,27 @@ template <typename Char>
 }
 
 template <typename Char>
-[[nodiscard]] inline std::string_view guessStaticFileContentTypeFromPathView(
-    std::basic_string_view<Char> path) noexcept {
+[[nodiscard]] inline std::string_view guessStaticFileContentTypeFromPathView(std::basic_string_view<Char> path) noexcept {
     const auto extension = staticFileExtension(path);
-    if (staticFileExtensionEquals(extension, ".html") ||
-        staticFileExtensionEquals(extension, ".htm")) {
+    if (staticFileExtensionEquals(extension, ".html") || staticFileExtensionEquals(extension, ".htm")) {
         return "text/html; charset=utf-8";
     }
     if (staticFileExtensionEquals(extension, ".css")) {
         return "text/css; charset=utf-8";
     }
-    if (staticFileExtensionEquals(extension, ".js") ||
-        staticFileExtensionEquals(extension, ".mjs")) {
+    if (staticFileExtensionEquals(extension, ".js") || staticFileExtensionEquals(extension, ".mjs")) {
         return "text/javascript; charset=utf-8";
     }
     if (staticFileExtensionEquals(extension, ".json")) {
         return "application/json; charset=utf-8";
     }
-    if (staticFileExtensionEquals(extension, ".txt") ||
-        staticFileExtensionEquals(extension, ".log")) {
+    if (staticFileExtensionEquals(extension, ".txt") || staticFileExtensionEquals(extension, ".log")) {
         return "text/plain; charset=utf-8";
     }
     if (staticFileExtensionEquals(extension, ".png")) {
         return "image/png";
     }
-    if (staticFileExtensionEquals(extension, ".jpg") ||
-        staticFileExtensionEquals(extension, ".jpeg")) {
+    if (staticFileExtensionEquals(extension, ".jpg") || staticFileExtensionEquals(extension, ".jpeg")) {
         return "image/jpeg";
     }
     if (staticFileExtensionEquals(extension, ".gif")) {
@@ -118,8 +105,7 @@ template <typename Char>
     return "application/octet-stream";
 }
 
-[[nodiscard]] inline std::string_view guessStaticFileContentType(
-    const std::filesystem::path& path) noexcept {
+[[nodiscard]] inline std::string_view guessStaticFileContentType(const std::filesystem::path& path) noexcept {
     return guessStaticFileContentTypeFromPathView(httpNativePathView(path));
 }
 
@@ -131,11 +117,7 @@ inline void appendStaticFileUnsigned(std::pmr::string& output, std::uint64_t val
     }
 }
 
-[[nodiscard]] inline std::pmr::string makeStaticFileSnapshotEtag(
-    std::pmr::memory_resource* resource,
-    std::uint64_t size,
-    std::uint64_t modifiedToken,
-    ResponseFileIdentity identity) {
+[[nodiscard]] inline std::pmr::string makeStaticFileSnapshotEtag(std::pmr::memory_resource* resource, std::uint64_t size, std::uint64_t modifiedToken, ResponseFileIdentity identity) {
     std::pmr::string output(resource);
     output.reserve(128);
     output.push_back('"');

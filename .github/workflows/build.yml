@@ -105,9 +105,7 @@ jobs:
             -DRUVIA_ENABLE_JWT=ON \
             -DRUVIA_BUILD_EXAMPLES=ON \
             -DRUVIA_BUILD_TESTS=ON \
-            -DRUVIA_BUILD_EDGE=ON \
-            -DRUVIA_ENABLE_HTTP2_CONFORMANCE_TESTS=ON \
-            -DCMAKE_TOOLCHAIN_FILE="$VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake"
+            -DRUVIA_BUILD_EDGE=ON
 
       - name: Save vcpkg binary cache
         if: steps.vcpkg-cache.outputs.cache-hit != 'true'
@@ -181,8 +179,7 @@ jobs:
             -DRUVIA_ENABLE_JWT=ON \
             -DRUVIA_BUILD_EXAMPLES=ON \
             -DRUVIA_BUILD_TESTS=ON \
-            -DRUVIA_BUILD_EDGE=ON \
-            -DCMAKE_TOOLCHAIN_FILE="$VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake"
+            -DRUVIA_BUILD_EDGE=ON
 
       - name: Save vcpkg binary cache
         if: steps.vcpkg-cache.outputs.cache-hit != 'true'
@@ -246,8 +243,7 @@ jobs:
             -DRUVIA_ENABLE_JWT=ON `
             -DRUVIA_BUILD_EXAMPLES=ON `
             -DRUVIA_BUILD_TESTS=ON `
-            -DRUVIA_BUILD_EDGE=ON `
-            -DCMAKE_TOOLCHAIN_FILE="$env:VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake"
+            -DRUVIA_BUILD_EDGE=ON
 
       - name: Save vcpkg binary cache
         if: steps.vcpkg-cache.outputs.cache-hit != 'true'

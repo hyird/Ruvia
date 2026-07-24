@@ -8,8 +8,7 @@
 #include "ruvia/web/App.h"
 #include "ruvia/web/Controller.h"
 
-class StartupRetryController final
-    : public ruvia::Controller<StartupRetryController> {
+class StartupRetryController final : public ruvia::Controller<StartupRetryController> {
 public:
     RUVIA_CONTROLLER_GROUP("")
 
@@ -27,9 +26,7 @@ namespace {
 
 std::uint16_t availablePort() {
     asio::io_context context;
-    asio::ip::tcp::acceptor acceptor(
-        context,
-        asio::ip::tcp::endpoint(asio::ip::make_address("127.0.0.1"), 0));
+    asio::ip::tcp::acceptor acceptor(context, asio::ip::tcp::endpoint(asio::ip::make_address("127.0.0.1"), 0));
     return acceptor.local_endpoint().port();
 }
 
@@ -37,11 +34,7 @@ std::uint16_t availablePort() {
 
 int main() {
     auto& app = ruvia::app();
-    app.setListenAddress("not-an-ip-address")
-        .setWorkersPerListener(1)
-        .setMemoryPoolConfig(
-            {.requestInitialBufferBytes =
-                 ruvia::kRequestArenaInitialBytes});
+    app.setListenAddress("not-an-ip-address").setWorkersPerListener(1).setMemoryPoolConfig({.requestInitialBufferBytes = ruvia::kRequestArenaInitialBytes});
 
     bool preparationFailed = false;
     try {
@@ -57,9 +50,7 @@ int main() {
     std::size_t stopCalls = 0;
     app.setListenAddress("127.0.0.1")
         .setServerTopology(ruvia::ServerTopology::http(availablePort()))
-        .setMemoryPoolConfig(
-            {.requestInitialBufferBytes =
-                 ruvia::kRequestArenaInitialBytes * 2})
+        .setMemoryPoolConfig({.requestInitialBufferBytes = ruvia::kRequestArenaInitialBytes * 2})
         .onStart([&] {
             started = true;
             app.stop();

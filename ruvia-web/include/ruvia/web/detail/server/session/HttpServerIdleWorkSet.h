@@ -16,8 +16,7 @@ namespace ruvia::detail {
 // is re-acquired.
 inline constexpr std::size_t kIdleResidentReadBytes = 256;
 
-[[nodiscard]] inline bool plainTcpShouldWaitForNextRequest(
-    std::size_t usedBytes) noexcept {
+[[nodiscard]] inline bool plainTcpShouldWaitForNextRequest(std::size_t usedBytes) noexcept {
     // No available() probe here: FIONREAD costs a syscall per keep-alive
     // request, while a readiness wait on a socket that already has bytes
     // completes inline in the reactor without one. Bytes already parsed into
@@ -25,9 +24,7 @@ inline constexpr std::size_t kIdleResidentReadBytes = 256;
     return usedBytes == 0;
 }
 
-inline void releaseIdleWorkSet(
-    ConnectionWorkSetPool& pool,
-    ConnectionWorkSet*& workSet) {
+inline void releaseIdleWorkSet(ConnectionWorkSetPool& pool, ConnectionWorkSet*& workSet) {
     if (workSet != nullptr) {
         pool.release(workSet);
         workSet = nullptr;

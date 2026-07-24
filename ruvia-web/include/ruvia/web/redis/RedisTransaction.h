@@ -71,11 +71,7 @@ private:
     friend class RedisHandle;
 
     explicit RedisTransaction(RedisPipeline pipeline) noexcept;
-    [[nodiscard]] static Task<std::pmr::vector<RedisValue>> executeOwned(
-        detail::RedisPool& pool,
-        std::pmr::memory_resource* resource,
-        std::pmr::vector<RedisPipeline::Command> watches,
-        std::pmr::vector<RedisPipeline::Command> commands);
+    [[nodiscard]] static Task<std::pmr::vector<RedisValue>> executeOwned(detail::RedisPool& pool, std::pmr::memory_resource* resource, std::pmr::vector<RedisPipeline::Command> watches, std::pmr::vector<RedisPipeline::Command> commands);
 
     RedisPipeline pipeline_;
     std::pmr::vector<RedisPipeline::Command> watches_;

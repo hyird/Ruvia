@@ -40,47 +40,35 @@ private:
 // policy, not an HTTP message-model setting.
 class Http1ClientRequestWirePolicy final {
 private:
-    using Expectation = std::variant<
-        Http1ClientNoRequestExpectation,
-        Http1ClientContinueExpectation>;
+    using Expectation = std::variant<Http1ClientNoRequestExpectation, Http1ClientContinueExpectation>;
 
     template <typename ExpectationAlternative>
-    constexpr Http1ClientRequestWirePolicy(
-        Http1ClientRequestClosePolicy closePolicy,
-        ExpectationAlternative expectation) noexcept
-        : closePolicy_(closePolicy), expectation_(expectation) {}
+    constexpr Http1ClientRequestWirePolicy(Http1ClientRequestClosePolicy closePolicy, ExpectationAlternative expectation) noexcept
+        : closePolicy_(closePolicy),
+          expectation_(expectation) {}
 
 public:
-    [[nodiscard]] static constexpr Http1ClientRequestWirePolicy withoutExpectation(
-        Http1ClientRequestClosePolicy closePolicy =
-            Http1ClientRequestClosePolicy::kAllowReuse) noexcept {
-        return Http1ClientRequestWirePolicy(
-            closePolicy, Http1ClientNoRequestExpectation());
+    [[nodiscard]] static constexpr Http1ClientRequestWirePolicy withoutExpectation(Http1ClientRequestClosePolicy closePolicy = Http1ClientRequestClosePolicy::kAllowReuse) noexcept {
+        return Http1ClientRequestWirePolicy(closePolicy, Http1ClientNoRequestExpectation());
     }
 
-    [[nodiscard]] static constexpr Http1ClientRequestWirePolicy expectContinue(
-        Http1ClientRequestClosePolicy closePolicy =
-            Http1ClientRequestClosePolicy::kAllowReuse) noexcept {
-        return Http1ClientRequestWirePolicy(
-            closePolicy, Http1ClientContinueExpectation());
+    [[nodiscard]] static constexpr Http1ClientRequestWirePolicy expectContinue(Http1ClientRequestClosePolicy closePolicy = Http1ClientRequestClosePolicy::kAllowReuse) noexcept {
+        return Http1ClientRequestWirePolicy(closePolicy, Http1ClientContinueExpectation());
     }
 
     [[nodiscard]] constexpr Http1ClientRequestClosePolicy closePolicy() const noexcept {
         return closePolicy_;
     }
 
-    [[nodiscard]] constexpr const Http1ClientNoRequestExpectation*
-    noExpectation() const & noexcept {
+    [[nodiscard]] constexpr const Http1ClientNoRequestExpectation* noExpectation() const& noexcept {
         return std::get_if<Http1ClientNoRequestExpectation>(&expectation_);
     }
-    const Http1ClientNoRequestExpectation* noExpectation() const && = delete;
+    const Http1ClientNoRequestExpectation* noExpectation() const&& = delete;
 
-    [[nodiscard]] constexpr const Http1ClientContinueExpectation*
-    continueExpectation() const & noexcept {
+    [[nodiscard]] constexpr const Http1ClientContinueExpectation* continueExpectation() const& noexcept {
         return std::get_if<Http1ClientContinueExpectation>(&expectation_);
     }
-    const Http1ClientContinueExpectation*
-    continueExpectation() const && = delete;
+    const Http1ClientContinueExpectation* continueExpectation() const&& = delete;
 
 private:
     Http1ClientRequestClosePolicy closePolicy_;
@@ -92,13 +80,7 @@ namespace detail {
 struct Http1ClientRequestPrepareResultAccess;
 
 template <typename Range>
-concept HttpTemporaryOwningHeaderRange =
-    !std::is_lvalue_reference_v<Range&&> &&
-    std::ranges::contiguous_range<Range> &&
-    !std::ranges::borrowed_range<Range> &&
-    std::same_as<
-        std::remove_cv_t<std::ranges::range_value_t<Range>>,
-        HttpHeaderView>;
+concept HttpTemporaryOwningHeaderRange = !std::is_lvalue_reference_v<Range&&> && std::ranges::contiguous_range<Range> && !std::ranges::borrowed_range<Range> && std::same_as<std::remove_cv_t<std::ranges::range_value_t<Range>>, HttpHeaderView>;
 
 // Exact sent-request facts needed to interpret the corresponding HTTP/1
 // response. Only a successfully prepared request can create this context, so
@@ -125,11 +107,7 @@ public:
 private:
     friend struct Http1ClientRequestPrepareResultAccess;
 
-    constexpr Http1ClientRequestContext(
-        std::string_view method,
-        std::span<const HttpHeaderView> headers,
-        HttpConnectionOptions connectionOptions,
-        Http1ClientRequestClosePolicy closePolicy) noexcept
+    constexpr Http1ClientRequestContext(std::string_view method, std::span<const HttpHeaderView> headers, HttpConnectionOptions connectionOptions, Http1ClientRequestClosePolicy closePolicy) noexcept
         : method_(method),
           headers_(headers),
           connectionOptions_(connectionOptions),
@@ -159,8 +137,7 @@ public:
 private:
     friend struct detail::Http1ClientRequestPrepareResultAccess;
 
-    explicit constexpr Http1ClientImmediateRequestContent(
-        std::string_view bytes) noexcept
+    explicit constexpr Http1ClientImmediateRequestContent(std::string_view bytes) noexcept
         : bytes_(bytes) {}
 
     std::string_view bytes_;
@@ -175,8 +152,7 @@ public:
 private:
     friend struct detail::Http1ClientRequestPrepareResultAccess;
 
-    explicit constexpr Http1ClientContinueGatedRequestContent(
-        std::string_view bytes) noexcept
+    explicit constexpr Http1ClientContinueGatedRequestContent(std::string_view bytes) noexcept
         : bytes_(bytes) {}
 
     std::string_view bytes_;
@@ -189,43 +165,33 @@ private:
 // Payload exists only on the two alternatives that actually send content.
 class Http1ClientRequestContentPlan final {
 public:
-    [[nodiscard]] constexpr const Http1ClientRequestWithoutContent*
-    withoutContent() const & noexcept {
+    [[nodiscard]] constexpr const Http1ClientRequestWithoutContent* withoutContent() const& noexcept {
         return std::get_if<Http1ClientRequestWithoutContent>(&content_);
     }
-    const Http1ClientRequestWithoutContent* withoutContent() const && = delete;
+    const Http1ClientRequestWithoutContent* withoutContent() const&& = delete;
 
-    [[nodiscard]] constexpr const Http1ClientImmediateRequestContent*
-    immediate() const & noexcept {
+    [[nodiscard]] constexpr const Http1ClientImmediateRequestContent* immediate() const& noexcept {
         return std::get_if<Http1ClientImmediateRequestContent>(&content_);
     }
-    const Http1ClientImmediateRequestContent* immediate() const && = delete;
+    const Http1ClientImmediateRequestContent* immediate() const&& = delete;
 
-    [[nodiscard]] constexpr const Http1ClientContinueGatedRequestContent*
-    continueGated() const & noexcept {
+    [[nodiscard]] constexpr const Http1ClientContinueGatedRequestContent* continueGated() const& noexcept {
         return std::get_if<Http1ClientContinueGatedRequestContent>(&content_);
     }
-    const Http1ClientContinueGatedRequestContent*
-    continueGated() const && = delete;
+    const Http1ClientContinueGatedRequestContent* continueGated() const&& = delete;
 
 private:
     friend struct detail::Http1ClientRequestPrepareResultAccess;
 
-    using Content = std::variant<
-        Http1ClientRequestWithoutContent,
-        Http1ClientImmediateRequestContent,
-        Http1ClientContinueGatedRequestContent>;
+    using Content = std::variant<Http1ClientRequestWithoutContent, Http1ClientImmediateRequestContent, Http1ClientContinueGatedRequestContent>;
 
-    explicit constexpr Http1ClientRequestContentPlan(
-        Http1ClientRequestWithoutContent content) noexcept
+    explicit constexpr Http1ClientRequestContentPlan(Http1ClientRequestWithoutContent content) noexcept
         : content_(content) {}
 
-    explicit constexpr Http1ClientRequestContentPlan(
-        Http1ClientImmediateRequestContent content) noexcept
+    explicit constexpr Http1ClientRequestContentPlan(Http1ClientImmediateRequestContent content) noexcept
         : content_(content) {}
 
-    explicit constexpr Http1ClientRequestContentPlan(
-        Http1ClientContinueGatedRequestContent content) noexcept
+    explicit constexpr Http1ClientRequestContentPlan(Http1ClientContinueGatedRequestContent content) noexcept
         : content_(content) {}
 
     Content content_;
@@ -253,8 +219,7 @@ enum class Http1ClientRequestPrepareError : std::uint8_t {
     kHeaderTooLarge,
 };
 
-[[nodiscard]] std::string_view http1ClientRequestPrepareErrorMessage(
-    Http1ClientRequestPrepareError error) noexcept;
+[[nodiscard]] std::string_view http1ClientRequestPrepareErrorMessage(Http1ClientRequestPrepareError error) noexcept;
 
 class Http1ClientRequestBufferTooSmall final {
 public:
@@ -265,8 +230,7 @@ public:
 private:
     friend struct detail::Http1ClientRequestPrepareResultAccess;
 
-    explicit constexpr Http1ClientRequestBufferTooSmall(
-        std::size_t requiredHeadBytes) noexcept
+    explicit constexpr Http1ClientRequestBufferTooSmall(std::size_t requiredHeadBytes) noexcept
         : requiredHeadBytes_(requiredHeadBytes) {}
 
     std::size_t requiredHeadBytes_;
@@ -281,26 +245,21 @@ private:
 // protocol-switch decision has been parsed.
 class PreparedHttp1ClientRequest final {
 public:
-    [[nodiscard]] constexpr std::string_view head() const & noexcept {
+    [[nodiscard]] constexpr std::string_view head() const& noexcept {
         return head_;
     }
-    [[nodiscard]] constexpr std::string_view head() const && = delete;
+    [[nodiscard]] constexpr std::string_view head() const&& = delete;
 
-    [[nodiscard]] constexpr const Http1ClientRequestContentPlan&
-    contentPlan() const & noexcept {
+    [[nodiscard]] constexpr const Http1ClientRequestContentPlan& contentPlan() const& noexcept {
         return contentPlan_;
     }
-    [[nodiscard]] constexpr const Http1ClientRequestContentPlan&
-    contentPlan() const && = delete;
+    [[nodiscard]] constexpr const Http1ClientRequestContentPlan& contentPlan() const&& = delete;
 
 private:
     friend struct detail::Http1ClientRequestPrepareResultAccess;
     friend class Http1ClientResponseParser;
 
-    constexpr PreparedHttp1ClientRequest(
-        std::string_view head,
-        Http1ClientRequestContentPlan contentPlan,
-        detail::Http1ClientRequestContext responseContext) noexcept
+    constexpr PreparedHttp1ClientRequest(std::string_view head, Http1ClientRequestContentPlan contentPlan, detail::Http1ClientRequestContext responseContext) noexcept
         : head_(head),
           contentPlan_(contentPlan),
           responseContext_(responseContext) {}
@@ -319,8 +278,7 @@ public:
 private:
     friend struct detail::Http1ClientRequestPrepareResultAccess;
 
-    explicit constexpr Http1ClientRequestPrepareFailure(
-        Http1ClientRequestPrepareError error) noexcept
+    explicit constexpr Http1ClientRequestPrepareFailure(Http1ClientRequestPrepareError error) noexcept
         : error_(error) {}
 
     Http1ClientRequestPrepareError error_;
@@ -328,43 +286,34 @@ private:
 
 class Http1ClientRequestPrepareResult final {
 public:
-    [[nodiscard]] constexpr const Http1ClientRequestBufferTooSmall*
-    bufferTooSmall() const & noexcept {
+    [[nodiscard]] constexpr const Http1ClientRequestBufferTooSmall* bufferTooSmall() const& noexcept {
         return std::get_if<Http1ClientRequestBufferTooSmall>(&state_);
     }
-    const Http1ClientRequestBufferTooSmall* bufferTooSmall() const && = delete;
+    const Http1ClientRequestBufferTooSmall* bufferTooSmall() const&& = delete;
 
-    [[nodiscard]] constexpr const PreparedHttp1ClientRequest*
-    prepared() const & noexcept {
+    [[nodiscard]] constexpr const PreparedHttp1ClientRequest* prepared() const& noexcept {
         return std::get_if<PreparedHttp1ClientRequest>(&state_);
     }
-    const PreparedHttp1ClientRequest* prepared() const && = delete;
+    const PreparedHttp1ClientRequest* prepared() const&& = delete;
 
-    [[nodiscard]] constexpr const Http1ClientRequestPrepareFailure*
-    failure() const & noexcept {
+    [[nodiscard]] constexpr const Http1ClientRequestPrepareFailure* failure() const& noexcept {
         return std::get_if<Http1ClientRequestPrepareFailure>(&state_);
     }
-    const Http1ClientRequestPrepareFailure* failure() const && = delete;
+    const Http1ClientRequestPrepareFailure* failure() const&& = delete;
 
 private:
     friend struct detail::Http1ClientRequestPrepareResultAccess;
 
-    explicit constexpr Http1ClientRequestPrepareResult(
-        Http1ClientRequestBufferTooSmall state) noexcept
+    explicit constexpr Http1ClientRequestPrepareResult(Http1ClientRequestBufferTooSmall state) noexcept
         : state_(state) {}
 
-    explicit constexpr Http1ClientRequestPrepareResult(
-        PreparedHttp1ClientRequest state) noexcept
+    explicit constexpr Http1ClientRequestPrepareResult(PreparedHttp1ClientRequest state) noexcept
         : state_(state) {}
 
-    explicit constexpr Http1ClientRequestPrepareResult(
-        Http1ClientRequestPrepareFailure state) noexcept
+    explicit constexpr Http1ClientRequestPrepareResult(Http1ClientRequestPrepareFailure state) noexcept
         : state_(state) {}
 
-    std::variant<
-        Http1ClientRequestBufferTooSmall,
-        PreparedHttp1ClientRequest,
-        Http1ClientRequestPrepareFailure> state_;
+    std::variant<Http1ClientRequestBufferTooSmall, PreparedHttp1ClientRequest, Http1ClientRequestPrepareFailure> state_;
 };
 
 // Allocation-free HTTP/1.1 direct-origin request writer. It validates the
@@ -374,31 +323,16 @@ private:
 // authority-form target cannot be confused with an origin-form path.
 class Http1ClientRequestWriter final {
 public:
-    [[nodiscard]] Http1ClientRequestPrepareResult prepare(
-        const HttpOrigin& origin,
-        const HttpClientRequest& request,
-        std::span<char> headBuffer,
-        Http1ClientRequestWirePolicy policy =
-            Http1ClientRequestWirePolicy::withoutExpectation()) const noexcept;
+    [[nodiscard]] Http1ClientRequestPrepareResult prepare(const HttpOrigin& origin, const HttpClientRequest& request, std::span<char> headBuffer, Http1ClientRequestWirePolicy policy = Http1ClientRequestWirePolicy::withoutExpectation()) const noexcept;
 
-    [[nodiscard]] Http1ClientRequestPrepareResult prepareConnect(
-        const HttpOrigin& tunnelOrigin,
-        std::span<const HttpHeaderView> headers,
-        std::span<char> headBuffer,
-        Http1ClientRequestWirePolicy policy =
-            Http1ClientRequestWirePolicy::withoutExpectation()) const noexcept;
+    [[nodiscard]] Http1ClientRequestPrepareResult prepareConnect(const HttpOrigin& tunnelOrigin, std::span<const HttpHeaderView> headers, std::span<char> headBuffer, Http1ClientRequestWirePolicy policy = Http1ClientRequestWirePolicy::withoutExpectation()) const noexcept;
 
     // The prepared response context retains the header table through the final
     // response or protocol-switch decision. A temporary owning contiguous
     // range would be destroyed as prepareConnect() returns; borrowed ranges
     // such as std::span remain valid inputs.
     template <detail::HttpTemporaryOwningHeaderRange Headers>
-    Http1ClientRequestPrepareResult prepareConnect(
-        const HttpOrigin&,
-        Headers&&,
-        std::span<char>,
-        Http1ClientRequestWirePolicy =
-            Http1ClientRequestWirePolicy::withoutExpectation()) const = delete;
+    Http1ClientRequestPrepareResult prepareConnect(const HttpOrigin&, Headers&&, std::span<char>, Http1ClientRequestWirePolicy = Http1ClientRequestWirePolicy::withoutExpectation()) const = delete;
 };
 
 }  // namespace ruvia

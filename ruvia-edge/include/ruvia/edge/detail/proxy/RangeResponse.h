@@ -25,8 +25,6 @@ struct CachedRangeResponse final {
 // which RFC 9110 section 14.2 says to ignore and serve in full.
 //
 // The returned body borrows `entry`, which must outlive the response.
-[[nodiscard]] std::optional<CachedRangeResponse> cachedRangeResponse(
-    const CachedResponse& entry,
-    std::string_view rangeHeader);
+[[nodiscard]] std::optional<CachedRangeResponse> cachedRangeResponse(const CachedResponse& entry, std::string_view rangeHeader);
 
 }  // namespace ruvia::edge

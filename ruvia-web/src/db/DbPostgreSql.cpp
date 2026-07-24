@@ -11,31 +11,23 @@
 
 namespace ruvia::detail {
 
-std::runtime_error postgreSqlError(
-    const pg_conn& connection,
-    std::string_view operation,
-    const pg_result* result) {
+std::runtime_error postgreSqlError(const pg_conn& connection, std::string_view operation, const pg_result* result) {
     std::pmr::string error(operation, processResource());
     error.append(" failed");
-    const char* state = result == nullptr
-        ? nullptr
-        : PQresultErrorField(const_cast<PGresult*>(result), PG_DIAG_SQLSTATE);
+    const char* state = result == nullptr ? nullptr : PQresultErrorField(const_cast<PGresult*>(result), PG_DIAG_SQLSTATE);
     if (state != nullptr && state[0] != '\0') {
         error.append(" [sqlstate=");
         error.append(state);
         error.push_back(']');
     }
-    const char* message = result == nullptr
-        ? PQerrorMessage(const_cast<PGconn*>(&connection))
-        : PQresultErrorMessage(const_cast<PGresult*>(result));
+    const char* message = result == nullptr ? PQerrorMessage(const_cast<PGconn*>(&connection)) : PQresultErrorMessage(const_cast<PGresult*>(result));
     if (message != nullptr && message[0] != '\0') {
         while (*message == ' ' || *message == '\r' || *message == '\n') {
             ++message;
         }
         error.append(": ");
         error.append(message);
-        while (!error.empty() &&
-               (error.back() == '\r' || error.back() == '\n')) {
+        while (!error.empty() && (error.back() == '\r' || error.back() == '\n')) {
             error.pop_back();
         }
     }
@@ -46,9 +38,7 @@ PostgreSqlParams::PostgreSqlParams(std::pmr::memory_resource* resource)
     : encoded(pmrResourceOrDefault(resource)),
       values(pmrResourceOrDefault(resource)) {}
 
-PostgreSqlParams encodePostgreSqlParams(
-    std::span<const DbValue> params,
-    std::pmr::memory_resource* resource) {
+PostgreSqlParams encodePostgreSqlParams(std::span<const DbValue> params, std::pmr::memory_resource* resource) {
     auto* resolved = pmrResourceOrDefault(resource);
     PostgreSqlParams output(resolved);
     output.encoded.reserve(params.size());
@@ -74,8 +64,7 @@ PostgreSqlParams encodePostgreSqlParams(
                 appendDbNumber(value, DbValueAccess::doubleValue(param));
                 break;
             case DbValueType::kBool:
-                value.assign(
-                    DbValueAccess::boolValue(param) ? "true" : "false");
+                value.assign(DbValueAccess::boolValue(param) ? "true" : "false");
                 break;
         }
         output.values.push_back(value.c_str());

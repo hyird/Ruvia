@@ -38,61 +38,47 @@ private:
 
 class HttpMultipartBoundaryParseResult final {
 public:
-    [[nodiscard]] constexpr const MultipartBoundary*
-    boundary() const & noexcept {
+    [[nodiscard]] constexpr const MultipartBoundary* boundary() const& noexcept {
         return std::get_if<MultipartBoundary>(&value_);
     }
-    const MultipartBoundary* boundary() const && = delete;
+    const MultipartBoundary* boundary() const&& = delete;
 
-    [[nodiscard]] constexpr const HttpMultipartBoundaryNotApplicable*
-    notApplicable() const & noexcept {
+    [[nodiscard]] constexpr const HttpMultipartBoundaryNotApplicable* notApplicable() const& noexcept {
         return std::get_if<HttpMultipartBoundaryNotApplicable>(&value_);
     }
-    const HttpMultipartBoundaryNotApplicable*
-    notApplicable() const && = delete;
+    const HttpMultipartBoundaryNotApplicable* notApplicable() const&& = delete;
 
-    [[nodiscard]] constexpr const HttpMultipartBoundaryParseFailure*
-    failure() const & noexcept {
+    [[nodiscard]] constexpr const HttpMultipartBoundaryParseFailure* failure() const& noexcept {
         return std::get_if<HttpMultipartBoundaryParseFailure>(&value_);
     }
-    const HttpMultipartBoundaryParseFailure* failure() const && = delete;
+    const HttpMultipartBoundaryParseFailure* failure() const&& = delete;
 
 private:
     friend HttpMultipartBoundaryParseResult httpParseMultipartBoundary(std::string_view);
 
-    using Value = std::variant<
-        MultipartBoundary,
-        HttpMultipartBoundaryNotApplicable,
-        HttpMultipartBoundaryParseFailure>;
+    using Value = std::variant<MultipartBoundary, HttpMultipartBoundaryNotApplicable, HttpMultipartBoundaryParseFailure>;
 
     explicit HttpMultipartBoundaryParseResult(MultipartBoundary boundary)
         : value_(std::move(boundary)) {}
 
-    [[nodiscard]] static constexpr HttpMultipartBoundaryParseResult
-    makeNotApplicable() noexcept {
-        return HttpMultipartBoundaryParseResult(
-            HttpMultipartBoundaryNotApplicable());
+    [[nodiscard]] static constexpr HttpMultipartBoundaryParseResult makeNotApplicable() noexcept {
+        return HttpMultipartBoundaryParseResult(HttpMultipartBoundaryNotApplicable());
     }
 
-    [[nodiscard]] static constexpr HttpMultipartBoundaryParseResult
-    makeFailure() noexcept {
-        return HttpMultipartBoundaryParseResult(
-            HttpMultipartBoundaryParseFailure());
+    [[nodiscard]] static constexpr HttpMultipartBoundaryParseResult makeFailure() noexcept {
+        return HttpMultipartBoundaryParseResult(HttpMultipartBoundaryParseFailure());
     }
 
-    explicit constexpr HttpMultipartBoundaryParseResult(
-        HttpMultipartBoundaryNotApplicable notApplicable) noexcept
+    explicit constexpr HttpMultipartBoundaryParseResult(HttpMultipartBoundaryNotApplicable notApplicable) noexcept
         : value_(notApplicable) {}
 
-    explicit constexpr HttpMultipartBoundaryParseResult(
-        HttpMultipartBoundaryParseFailure failure) noexcept
+    explicit constexpr HttpMultipartBoundaryParseResult(HttpMultipartBoundaryParseFailure failure) noexcept
         : value_(failure) {}
 
     Value value_;
 };
 
-[[nodiscard]] inline std::optional<MultipartBoundary>
-httpDecodeMultipartBoundaryParameter(std::string_view parameter) {
+[[nodiscard]] inline std::optional<MultipartBoundary> httpDecodeMultipartBoundaryParameter(std::string_view parameter) {
     std::array<char, 70> decoded{};
     std::size_t size = 0;
     if (!parameter.empty() && parameter.front() == '"') {
@@ -135,11 +121,9 @@ httpDecodeMultipartBoundaryParameter(std::string_view parameter) {
     }
 }
 
-[[nodiscard]] inline HttpMultipartBoundaryParseResult httpParseMultipartBoundary(
-    std::string_view contentType) {
+[[nodiscard]] inline HttpMultipartBoundaryParseResult httpParseMultipartBoundary(std::string_view contentType) {
     const auto mediaEnd = contentType.find(';');
-    const auto mediaType = httpTrimOws(
-        mediaEnd == std::string_view::npos ? contentType : contentType.substr(0, mediaEnd));
+    const auto mediaType = httpTrimOws(mediaEnd == std::string_view::npos ? contentType : contentType.substr(0, mediaEnd));
     if (!httpAsciiEqualsIgnoreCase(mediaType, "multipart/form-data")) {
         return HttpMultipartBoundaryParseResult::makeNotApplicable();
     }
@@ -156,8 +140,7 @@ httpDecodeMultipartBoundaryParameter(std::string_view parameter) {
         const auto parameter = httpTrimOws(parameters.substr(start, end - start));
         std::string_view key;
         std::string_view value;
-        if (!httpParseMimeParameter(parameter, key, value) ||
-            !parameterNames.record(key)) {
+        if (!httpParseMimeParameter(parameter, key, value) || !parameterNames.record(key)) {
             return HttpMultipartBoundaryParseResult::makeFailure();
         }
         if (httpAsciiEqualsIgnoreCase(key, "boundary")) {

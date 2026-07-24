@@ -24,10 +24,8 @@ int main() {
         ++visited;
         if (!removedDuringIteration && stream.id() == 33) {
             removedDuringIteration = true;
-            (void)abortedStream->abort(
-                ruvia::detail::Http2StreamCloseSource::kLocal);
-            streams.removeAborted(
-                [](const ruvia::detail::Http2StreamState&) noexcept {});
+            (void)abortedStream->abort(ruvia::detail::Http2StreamCloseSource::kLocal);
+            streams.removeAborted([](const ruvia::detail::Http2StreamState&) noexcept {});
         }
     });
 

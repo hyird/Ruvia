@@ -33,14 +33,11 @@ namespace ruvia {
 
 Task<void> CsrfProtection::handle(Context& c, Next& next) {
     const auto method = c.req().knownMethod();
-    const bool safe = method == HttpKnownMethod::kGet ||
-        method == HttpKnownMethod::kHead ||
-        method == HttpKnownMethod::kOptions;
+    const bool safe = method == HttpKnownMethod::kGet || method == HttpKnownMethod::kHead || method == HttpKnownMethod::kOptions;
     const auto cookie = c.req().cookie("XSRF-TOKEN");
     if (!safe) {
         const auto header = c.req().header("X-XSRF-TOKEN");
-        if (!cookie || cookie->empty() || !header || header->empty() ||
-            !detail::csrfTokensEqual(*cookie, *header)) {
+        if (!cookie || cookie->empty() || !header || header->empty() || !detail::csrfTokensEqual(*cookie, *header)) {
             c.respond(c.error(ruvia::http_status::kForbidden, "csrf_token_mismatch", "CSRF token missing or invalid"));
             co_return;
         }

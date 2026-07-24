@@ -3,7 +3,7 @@
 #include <algorithm>
 #include <limits>
 
-#include "ruvia/http/detail/field/HeaderTokenUtils.h"       // httpTrimOws, httpAsciiEqualsIgnoreCase
+#include "ruvia/http/detail/field/HeaderTokenUtils.h"  // httpTrimOws, httpAsciiEqualsIgnoreCase
 #include "ruvia/http/detail/field/HttpDate.h"
 #include "ruvia/http/detail/parser/HttpParserSyntax.h"
 
@@ -58,9 +58,7 @@ namespace {
         return false;
     }
     if (value.front() != '"') {
-        return std::ranges::all_of(value, [](char ch) noexcept {
-            return detail::isHttpTokenChar(static_cast<unsigned char>(ch));
-        });
+        return std::ranges::all_of(value, [](char ch) noexcept { return detail::isHttpTokenChar(static_cast<unsigned char>(ch)); });
     }
     if (value.size() < 2 || value.back() != '"') {
         return false;
@@ -72,23 +70,17 @@ namespace {
                 return false;
             }
             const auto escaped = static_cast<unsigned char>(value[cursor]);
-            if (escaped != '\t' && escaped != ' ' &&
-                (escaped < 0x21 || escaped > 0x7e) && escaped < 0x80) {
+            if (escaped != '\t' && escaped != ' ' && (escaped < 0x21 || escaped > 0x7e) && escaped < 0x80) {
                 return false;
             }
-        } else if (ch == '"' ||
-                   (ch != '\t' && ch != ' ' && ch != 0x21 &&
-                    (ch < 0x23 || ch > 0x5b) &&
-                    (ch < 0x5d || ch > 0x7e) && ch < 0x80)) {
+        } else if (ch == '"' || (ch != '\t' && ch != ' ' && ch != 0x21 && (ch < 0x23 || ch > 0x5b) && (ch < 0x5d || ch > 0x7e) && ch < 0x80)) {
             return false;
         }
     }
     return true;
 }
 
-[[nodiscard]] std::size_t cacheDirectiveEnd(
-    std::string_view value,
-    std::size_t begin) noexcept {
+[[nodiscard]] std::size_t cacheDirectiveEnd(std::string_view value, std::size_t begin) noexcept {
     bool quoted = false;
     bool escaped = false;
     for (std::size_t cursor = begin; cursor < value.size(); ++cursor) {
@@ -132,8 +124,7 @@ void CacheControlFieldParser::update(std::string_view value) noexcept {
 
         if (!hasArgument && detail::httpAsciiEqualsIgnoreCase(name, "no-store")) {
             value_.noStore = true;
-        } else if ((!hasArgument || isValidCacheDirectiveArgument(arg)) &&
-                   detail::httpAsciiEqualsIgnoreCase(name, "no-cache")) {
+        } else if ((!hasArgument || isValidCacheDirectiveArgument(arg)) && detail::httpAsciiEqualsIgnoreCase(name, "no-cache")) {
             value_.noCache = true;
         } else if (!hasArgument && detail::httpAsciiEqualsIgnoreCase(name, "no-transform")) {
             value_.noTransform = true;
@@ -141,15 +132,13 @@ void CacheControlFieldParser::update(std::string_view value) noexcept {
             value_.mustRevalidate = true;
         } else if (!hasArgument && detail::httpAsciiEqualsIgnoreCase(name, "proxy-revalidate")) {
             value_.proxyRevalidate = true;
-        } else if ((!hasArgument || isValidCacheDirectiveArgument(arg)) &&
-                   detail::httpAsciiEqualsIgnoreCase(name, "private")) {
+        } else if ((!hasArgument || isValidCacheDirectiveArgument(arg)) && detail::httpAsciiEqualsIgnoreCase(name, "private")) {
             value_.isPrivate = true;
         } else if (!hasArgument && detail::httpAsciiEqualsIgnoreCase(name, "public")) {
             value_.isPublic = true;
         } else if (!hasArgument && detail::httpAsciiEqualsIgnoreCase(name, "immutable")) {
             value_.immutable = true;
-        } else if (!hasArgument &&
-                   detail::httpAsciiEqualsIgnoreCase(name, "only-if-cached")) {
+        } else if (!hasArgument && detail::httpAsciiEqualsIgnoreCase(name, "only-if-cached")) {
             value_.onlyIfCached = true;
         } else if (detail::httpAsciiEqualsIgnoreCase(name, "max-age")) {
             if (!maxAgeSeen_) {

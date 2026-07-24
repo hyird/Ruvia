@@ -31,9 +31,7 @@ constexpr auto kHeaderTimeout = std::chrono::seconds(4);
 // the header timeout; this bound separates the two outcomes with wide margin.
 constexpr auto kRejectionBound = std::chrono::seconds(1);
 
-void connectAndHold(
-    asio::ip::tcp::socket& socket,
-    const asio::ip::tcp::endpoint& endpoint) {
+void connectAndHold(asio::ip::tcp::socket& socket, const asio::ip::tcp::endpoint& endpoint) {
     std::error_code ec;
     socket.connect(endpoint, ec);
     // Partial head: no terminating CRLF CRLF, so the server keeps the session
@@ -51,11 +49,7 @@ int main() {
     options.maxConnections = 1;
     options.clientHeaderTimeout = kHeaderTimeout;
 
-    ruvia::detail::HttpServer server(
-        asio::ip::tcp::endpoint(asio::ip::make_address("127.0.0.1"), 0),
-        routes,
-        {},
-        options);
+    ruvia::detail::HttpServer server(asio::ip::tcp::endpoint(asio::ip::make_address("127.0.0.1"), 0), routes, {}, options);
     server.start();
     const auto endpoint = server.localEndpoint();
 
@@ -101,8 +95,7 @@ int main() {
             std::error_code ec;
             third.connect(endpoint, ec);
             if (!ec) {
-                asio::write(third, asio::buffer(
-                    std::string_view("GET / HTTP/1.1\r\nHost: localhost\r\n\r\n")), ec);
+                asio::write(third, asio::buffer(std::string_view("GET / HTTP/1.1\r\nHost: localhost\r\n\r\n")), ec);
                 asio::streambuf response;
                 if (!ec) {
                     asio::read_until(third, response, "\r\n\r\n", ec);

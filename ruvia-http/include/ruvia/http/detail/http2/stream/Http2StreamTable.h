@@ -39,8 +39,7 @@ public:
     }
     [[nodiscard]] Http2StreamState* find(std::uint32_t) && = delete;
 
-    [[nodiscard]] const Http2StreamState* find(
-        std::uint32_t streamId) const & noexcept {
+    [[nodiscard]] const Http2StreamState* find(std::uint32_t streamId) const& noexcept {
         for (const auto& slot : inline_) {
             if (slot && slot->id() == streamId) {
                 return &*slot;
@@ -53,7 +52,7 @@ public:
         }
         return nullptr;
     }
-    [[nodiscard]] const Http2StreamState* find(std::uint32_t) const && = delete;
+    [[nodiscard]] const Http2StreamState* find(std::uint32_t) const&& = delete;
 
     // NOTE on slot reuse: a closed stream's Http2StreamState is destroyed here (inline
     // slot .reset() / overflow erase), freeing its per-stream pmr strings. We do NOT
@@ -62,9 +61,7 @@ public:
     // single missed field would leak one request's decoded headers / routing / body
     // into the next reused slot -- a cross-request data-disclosure risk not worth taking
     // for a micro-optimisation off the measured hot path.
-    [[nodiscard]] Http2StreamState* create(
-        std::uint32_t streamId,
-        std::int32_t peerInitialWindowSize) & {
+    [[nodiscard]] Http2StreamState* create(std::uint32_t streamId, std::int32_t peerInitialWindowSize) & {
         if (auto* existing = find(streamId); existing != nullptr) {
             return existing;
         }
@@ -86,8 +83,7 @@ public:
         ++size_;
         return result;
     }
-    [[nodiscard]] Http2StreamState* create(
-        std::uint32_t, std::int32_t) && = delete;
+    [[nodiscard]] Http2StreamState* create(std::uint32_t, std::int32_t) && = delete;
 
     bool remove(std::uint32_t streamId) noexcept {
         for (auto& slot : inline_) {

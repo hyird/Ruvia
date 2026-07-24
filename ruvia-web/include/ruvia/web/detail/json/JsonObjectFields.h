@@ -13,11 +13,10 @@
 namespace ruvia::detail {
 
 template <typename Visitor>
-[[nodiscard]] bool dispatchJsonObjectFieldVisitor(
-    Visitor& visitor,
-    std::string_view key,
-    std::string_view value) {
-    if constexpr (requires { { visitor(key, value) } -> std::convertible_to<bool>; }) {
+[[nodiscard]] bool dispatchJsonObjectFieldVisitor(Visitor& visitor, std::string_view key, std::string_view value) {
+    if constexpr (requires {
+                      { visitor(key, value) } -> std::convertible_to<bool>;
+                  }) {
         return static_cast<bool>(visitor(key, value));
     } else {
         visitor(key, value);
@@ -26,11 +25,7 @@ template <typename Visitor>
 }
 
 template <typename Visitor>
-[[nodiscard]] bool visitJsonObjectFields(
-    ResolvedPmrResourceTag,
-    std::string_view body,
-    std::pmr::memory_resource* resource,
-    Visitor&& visitor) {
+[[nodiscard]] bool visitJsonObjectFields(ResolvedPmrResourceTag, std::string_view body, std::pmr::memory_resource* resource, Visitor&& visitor) {
     auto input = body;
     if (!consumeJsonChar(input, '{')) {
         return false;
@@ -45,8 +40,7 @@ template <typename Visitor>
     auto& visitorRef = visitor;
     while (true) {
         const auto key = parseJsonString(input);
-        if (!key.has_value() ||
-            !consumeJsonChar(input, ':')) {
+        if (!key.has_value() || !consumeJsonChar(input, ':')) {
             return false;
         }
 
@@ -81,15 +75,8 @@ template <typename Visitor>
 }
 
 template <typename Visitor>
-[[nodiscard]] bool visitJsonObjectFields(
-    std::string_view body,
-    std::pmr::memory_resource* resource,
-    Visitor&& visitor) {
-    return visitJsonObjectFields(
-        ResolvedPmrResourceTag{},
-        body,
-        pmrResourceOrDefault(resource),
-        std::forward<Visitor>(visitor));
+[[nodiscard]] bool visitJsonObjectFields(std::string_view body, std::pmr::memory_resource* resource, Visitor&& visitor) {
+    return visitJsonObjectFields(ResolvedPmrResourceTag{}, body, pmrResourceOrDefault(resource), std::forward<Visitor>(visitor));
 }
 
 }  // namespace ruvia::detail

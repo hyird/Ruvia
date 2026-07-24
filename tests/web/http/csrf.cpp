@@ -47,22 +47,14 @@ using ruvia::detail::RequestKnownHeader;
 // through the private SecureTokenReady constructor.
 #if defined(__GNUC__) && !defined(__clang__)
 template <typename Value>
-concept CanForgeSecureTokenResult = requires(Value&& value) {
-    ruvia::detail::SecureTokenResult::makeReady(
-        std::forward<Value>(value));
-};
+concept CanForgeSecureTokenResult = requires(Value&& value) { ruvia::detail::SecureTokenResult::makeReady(std::forward<Value>(value)); };
 #endif
 
 template <typename Result>
-concept ExposesRvalueSecureTokenAlternative =
-    requires(Result&& result) { std::move(result).ready(); } ||
-    requires(Result&& result) { std::move(result).failure(); };
+concept ExposesRvalueSecureTokenAlternative = requires(Result&& result) { std::move(result).ready(); } || requires(Result&& result) { std::move(result).failure(); };
 
-static_assert(!ExposesRvalueSecureTokenAlternative<
-    ruvia::detail::SecureTokenResult>);
-static_assert(!std::constructible_from<
-    ruvia::detail::SecureTokenReady,
-    std::string_view>);
+static_assert(!ExposesRvalueSecureTokenAlternative<ruvia::detail::SecureTokenResult>);
+static_assert(!std::constructible_from<ruvia::detail::SecureTokenReady, std::string_view>);
 #if defined(__GNUC__) && !defined(__clang__)
 static_assert(!CanForgeSecureTokenResult<std::string_view>);
 #endif
@@ -80,8 +72,7 @@ struct CsrfOutcome final {
 
 // Runs CsrfProtection::handle over a synthesized request and reports whether the
 // chain continued (next called) or was short-circuited with a response.
-CsrfOutcome runCsrf(HttpKnownMethod method, bool withCookie, std::string_view cookieToken,
-                    bool withHeader, std::string_view headerToken) {
+CsrfOutcome runCsrf(HttpKnownMethod method, bool withCookie, std::string_view cookieToken, bool withHeader, std::string_view headerToken) {
     WorkerMemory worker;
     RequestMemory memory(worker);
     HttpRequest request = HttpRequestAccess::make();
@@ -92,9 +83,7 @@ CsrfOutcome runCsrf(HttpKnownMethod method, bool withCookie, std::string_view co
     std::string cookie = "XSRF-TOKEN=";
     cookie.append(cookieToken.data(), cookieToken.size());
     if (withCookie) {
-        HttpRequestAccess::addHeader(
-            request, HttpHeaderView{"Cookie", cookie},
-            HttpRequestAccess::knownHeaderSlot(RequestKnownHeader::kCookie));
+        HttpRequestAccess::addHeader(request, HttpHeaderView{"Cookie", cookie}, HttpRequestAccess::knownHeaderSlot(RequestKnownHeader::kCookie));
     }
     if (withHeader) {
         HttpRequestAccess::addHeader(request, HttpHeaderView{"X-XSRF-TOKEN", headerToken});
@@ -106,9 +95,7 @@ CsrfOutcome runCsrf(HttpKnownMethod method, bool withCookie, std::string_view co
     ruvia::detail::NextState state{};
     state.context = &context;
     state.control = &control;
-    Next next = NextAccess::make(state, [](ruvia::detail::NextState) -> ruvia::Task<void> {
-        co_return;
-    });
+    Next next = NextAccess::make(state, [](ruvia::detail::NextState) -> ruvia::Task<void> { co_return; });
 
     ruvia::CsrfProtection csrf;
     asio::io_context& io = ruvia::test::newTestIoContext();
@@ -116,8 +103,7 @@ CsrfOutcome runCsrf(HttpKnownMethod method, bool withCookie, std::string_view co
     io.run();
 
     CsrfOutcome out;
-    out.nextInvoked =
-        control.phase() == ruvia::detail::NextState::Control::Phase::kInvoked;
+    out.nextInvoked = control.phase() == ruvia::detail::NextState::Control::Phase::kInvoked;
     out.reseeded = ContextAccess::hasPendingSetCookie(context, "XSRF-TOKEN=");
     out.hasResponse = ContextAccess::hasResponse(context);
     if (out.hasResponse) {
@@ -166,8 +152,8 @@ RUVIA_TEST(csrf_token_is_unpredictable) {
 
 RUVIA_TEST(csrf_tokens_equal_is_length_checked_and_exact) {
     RUVIA_CHECK(csrfTokensEqual("abc123", "abc123"));
-    RUVIA_CHECK(!csrfTokensEqual("abc123", "abc124"));   // last byte differs
-    RUVIA_CHECK(!csrfTokensEqual("Xbc123", "abc123"));   // first byte differs
+    RUVIA_CHECK(!csrfTokensEqual("abc123", "abc124"));  // last byte differs
+    RUVIA_CHECK(!csrfTokensEqual("Xbc123", "abc123"));  // first byte differs
     // A length mismatch is never equal (and must not read past the shorter view).
     RUVIA_CHECK(!csrfTokensEqual("abc", "abc123"));
     RUVIA_CHECK(!csrfTokensEqual("abc123", "abc"));

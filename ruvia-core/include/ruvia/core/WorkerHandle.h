@@ -40,12 +40,12 @@ public:
         return rejected_ ? &rejected_ : nullptr;
     }
 
-    [[nodiscard]] const Task* rejected() const & noexcept {
+    [[nodiscard]] const Task* rejected() const& noexcept {
         return rejected_ ? &rejected_ : nullptr;
     }
 
     Task* rejected() && = delete;
-    const Task* rejected() const && = delete;
+    const Task* rejected() const&& = delete;
 
     [[nodiscard]] Task takeRejected() && noexcept {
         return std::move(rejected_);
@@ -55,9 +55,7 @@ public:
         return PostOutcome(PostStatus::kAccepted);
     }
 
-    [[nodiscard]] static PostOutcome reject(
-        PostStatus status,
-        Task task) noexcept {
+    [[nodiscard]] static PostOutcome reject(PostStatus status, Task task) noexcept {
         return PostOutcome(status, std::move(task));
     }
 
@@ -70,10 +68,12 @@ public:
     }
 
 private:
-    explicit PostOutcome(PostStatus status) noexcept : status_(status) {}
+    explicit PostOutcome(PostStatus status) noexcept
+        : status_(status) {}
 
     PostOutcome(PostStatus status, Task task) noexcept
-        : status_(status), rejected_(std::move(task)) {}
+        : status_(status),
+          rejected_(std::move(task)) {}
 
     PostStatus status_;
     Task rejected_;
@@ -87,7 +87,7 @@ class WorkerShutdownListener;
 class WorkerTimerRegistration;
 enum class WorkerTimerOutcome : std::uint8_t;
 struct WorkerHandleAccess;
-}
+}  // namespace detail
 
 class WorkerHandle {
 public:
@@ -117,25 +117,14 @@ private:
 namespace detail {
 
 struct WorkerHandleAccess {
-    [[nodiscard]] static WorkerHandle
-    make(const std::shared_ptr<WorkerDispatcher>& dispatcher) noexcept;
+    [[nodiscard]] static WorkerHandle make(const std::shared_ptr<WorkerDispatcher>& dispatcher) noexcept;
     static void defer(const WorkerHandle& worker, MoveOnlyFunction<void()> task);
-    static void deferOrTerminate(
-        const WorkerHandle& worker,
-        MoveOnlyFunction<void()> task) noexcept;
-    static void registerShutdownListener(
-        const WorkerHandle& worker,
-        const std::shared_ptr<WorkerShutdownListener>& listener);
-    static void scheduleTimer(
-        const WorkerHandle& worker,
-        WorkerTimerRegistration& registration,
-        std::chrono::steady_clock::time_point deadline,
-        MoveOnlyFunction<void(WorkerTimerOutcome)> completion);
-    [[nodiscard]] static PostStatus postFactory(
-        const WorkerHandle& worker,
-        MoveOnlyFunction<MoveOnlyFunction<void()>()> factory);
+    static void deferOrTerminate(const WorkerHandle& worker, MoveOnlyFunction<void()> task) noexcept;
+    static void registerShutdownListener(const WorkerHandle& worker, const std::shared_ptr<WorkerShutdownListener>& listener);
+    static void scheduleTimer(const WorkerHandle& worker, WorkerTimerRegistration& registration, std::chrono::steady_clock::time_point deadline, MoveOnlyFunction<void(WorkerTimerOutcome)> completion);
+    [[nodiscard]] static PostStatus postFactory(const WorkerHandle& worker, MoveOnlyFunction<MoveOnlyFunction<void()>()> factory);
 };
 
-}
+}  // namespace detail
 
-}
+}  // namespace ruvia

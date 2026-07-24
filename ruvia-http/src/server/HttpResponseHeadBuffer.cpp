@@ -29,8 +29,7 @@ void ResponseHeadBuffer::spillToHeap(std::size_t minCapacity) {
 void ResponseHeadBuffer::append(std::string_view value) {
     if (auto* const stackState = std::get_if<StackState>(&state_)) {
         if (value.size() <= stack_.size() - stackState->used) {
-            std::memcpy(
-                stack_.data() + stackState->used, value.data(), value.size());
+            std::memcpy(stack_.data() + stackState->used, value.data(), value.size());
             stackState->used += value.size();
             return;
         }
@@ -76,7 +75,7 @@ void ResponseHeadBuffer::reserveAdditional(std::size_t size) {
     spillToHeap(used + size);
 }
 
-std::string_view ResponseHeadBuffer::view() const & noexcept {
+std::string_view ResponseHeadBuffer::view() const& noexcept {
     if (const auto* const stackState = std::get_if<StackState>(&state_)) {
         return std::string_view(stack_.data(), stackState->used);
     }
@@ -85,8 +84,7 @@ std::string_view ResponseHeadBuffer::view() const & noexcept {
 
 bool ResponseHeadBuffer::canAppendOnStack(std::size_t size) const noexcept {
     const auto* const stackState = std::get_if<StackState>(&state_);
-    return stackState != nullptr &&
-        size <= stack_.size() - stackState->used;
+    return stackState != nullptr && size <= stack_.size() - stackState->used;
 }
 
 }  // namespace ruvia::detail

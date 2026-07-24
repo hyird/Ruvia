@@ -28,10 +28,7 @@ double parseRedisDouble(std::string_view value, std::string_view context) {
     return output;
 }
 
-std::pmr::vector<RedisKeyValue> parseRedisKeyValueArray(
-    const RedisValue& value,
-    std::pmr::memory_resource* resource,
-    std::string_view context) {
+std::pmr::vector<RedisKeyValue> parseRedisKeyValueArray(const RedisValue& value, std::pmr::memory_resource* resource, std::string_view context) {
     throwIfRedisError(value);
     const auto values = redisValueArray(value);
     if (values.size() % 2 != 0) {
@@ -47,9 +44,7 @@ std::pmr::vector<RedisKeyValue> parseRedisKeyValueArray(
     return result;
 }
 
-std::pmr::vector<RedisScoredValue> parseRedisScoredArray(
-    const RedisValue& value,
-    std::pmr::memory_resource* resource) {
+std::pmr::vector<RedisScoredValue> parseRedisScoredArray(const RedisValue& value, std::pmr::memory_resource* resource) {
     throwIfRedisError(value);
     const auto values = redisValueArray(value);
     if (values.size() % 2 != 0) {
@@ -60,8 +55,7 @@ std::pmr::vector<RedisScoredValue> parseRedisScoredArray(
     for (std::size_t i = 0; i < values.size(); i += 2) {
         const auto member = redisValueString(values[i]);
         const auto scoreText = redisValueString(values[i + 1]);
-        result.push_back(
-            RedisTypesAccess::scoredValue(member, parseRedisDouble(scoreText, "invalid redis score"), resource));
+        result.push_back(RedisTypesAccess::scoredValue(member, parseRedisDouble(scoreText, "invalid redis score"), resource));
     }
     return result;
 }
@@ -126,15 +120,12 @@ RedisZScanResult parseRedisZScanResult(const RedisValue& value, std::pmr::memory
     for (std::size_t i = 0; i < values.size(); i += 2) {
         const auto member = redisValueString(values[i]);
         const auto scoreText = redisValueString(values[i + 1]);
-        outputEntries.push_back(
-            RedisTypesAccess::scoredValue(member, parseRedisDouble(scoreText, "invalid redis zscan score"), resource));
+        outputEntries.push_back(RedisTypesAccess::scoredValue(member, parseRedisDouble(scoreText, "invalid redis zscan score"), resource));
     }
     return result;
 }
 
-std::optional<RedisKeyValue> parseRedisBlockingPopReply(
-    const RedisValue& value,
-    std::pmr::memory_resource* resource) {
+std::optional<RedisKeyValue> parseRedisBlockingPopReply(const RedisValue& value, std::pmr::memory_resource* resource) {
     throwIfRedisError(value);
     if (value.null()) {
         return std::nullopt;

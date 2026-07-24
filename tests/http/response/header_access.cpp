@@ -36,8 +36,7 @@ RUVIA_TEST(response_header_value_range_points_into_blob) {
     RUVIA_CHECK(begin != nullptr);
     RUVIA_CHECK(end - begin == 5);
     RUVIA_CHECK(begin == blob + 5);  // in-place editable value region
-    RUVIA_CHECK_EQ(std::string_view(begin, static_cast<std::size_t>(end - begin)),
-                   std::string_view("abcde"));
+    RUVIA_CHECK_EQ(std::string_view(begin, static_cast<std::size_t>(end - begin)), std::string_view("abcde"));
 }
 
 RUVIA_TEST(response_header_null_bytes_yield_null_ranges) {

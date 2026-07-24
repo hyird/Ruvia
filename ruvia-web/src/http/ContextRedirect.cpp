@@ -14,15 +14,11 @@ namespace ruvia {
 namespace {
 
 [[nodiscard]] bool redirectLocationNeedsEncoding(std::string_view location) noexcept {
-    return std::ranges::any_of(location, [](char ch) noexcept {
-        return static_cast<unsigned char>(ch) >= 0x80;
-    });
+    return std::ranges::any_of(location, [](char ch) noexcept { return static_cast<unsigned char>(ch) >= 0x80; });
 }
 
 [[nodiscard]] bool encodeUriKeepsByte(unsigned char ch) noexcept {
-    if ((ch >= 'A' && ch <= 'Z') ||
-        (ch >= 'a' && ch <= 'z') ||
-        (ch >= '0' && ch <= '9')) {
+    if ((ch >= 'A' && ch <= 'Z') || (ch >= 'a' && ch <= 'z') || (ch >= '0' && ch <= '9')) {
         return true;
     }
 
@@ -59,9 +55,7 @@ void appendPercentEncodedByte(std::pmr::string& output, unsigned char ch) {
     output.push_back(detail::upperHexDigit(ch & 0x0F));
 }
 
-[[nodiscard]] std::pmr::string encodeRedirectLocation(
-    std::string_view location,
-    std::pmr::memory_resource* resource) {
+[[nodiscard]] std::pmr::string encodeRedirectLocation(std::string_view location, std::pmr::memory_resource* resource) {
     std::pmr::string encoded(resource);
     encoded.reserve(location.size());
     for (std::size_t i = 0; i < location.size(); ++i) {
@@ -74,9 +68,7 @@ void appendPercentEncodedByte(std::pmr::string& output, unsigned char ch) {
         // RFC 3986 2.4 forbids encoding the same string more than once; the caller
         // means a valid target, not a literal percent. A lone or malformed '%' is
         // not a valid escape and is percent-encoded like any other octet below.
-        if (ch == '%' && i + 2 < location.size() &&
-            detail::decodeHexNibble(location[i + 1]) >= 0 &&
-            detail::decodeHexNibble(location[i + 2]) >= 0) {
+        if (ch == '%' && i + 2 < location.size() && detail::decodeHexNibble(location[i + 1]) >= 0 && detail::decodeHexNibble(location[i + 2]) >= 0) {
             encoded.push_back('%');
             encoded.push_back(location[i + 1]);
             encoded.push_back(location[i + 2]);
@@ -94,9 +86,7 @@ void appendPercentEncodedByte(std::pmr::string& output, unsigned char ch) {
 
 }  // namespace
 
-HttpResponse Context::redirect(
-    std::string_view location,
-    HttpStatusCode statusCode) const {
+HttpResponse Context::redirect(std::string_view location, HttpStatusCode statusCode) const {
     HttpResponse response(resource());
     applyResponseState(response, statusCode);
     if (redirectLocationNeedsEncoding(location)) {

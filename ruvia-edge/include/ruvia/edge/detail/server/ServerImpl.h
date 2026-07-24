@@ -130,10 +130,7 @@ private:
     void requestStopOnWorker() noexcept;
 
     asio::awaitable<void> acceptLoop();
-    asio::awaitable<void> handleTlsSession(
-        asio::ip::tcp::socket socket,
-        TlsContextPtr context,
-        ConnectionLease lease);
+    asio::awaitable<void> handleTlsSession(asio::ip::tcp::socket socket, TlsContextPtr context, ConnectionLease lease);
     template <typename Stream>
     asio::awaitable<void> handleSession(Stream stream, ConnectionLease lease);
     // What one served request reports to the access log. serveRequest starts it
@@ -143,22 +140,12 @@ private:
         std::uint16_t status{0};
     };
 
-    asio::awaitable<bool> serveRequest(
-        const EdgeRequest& request,
-        ResponseWriter& writer);
+    asio::awaitable<bool> serveRequest(const EdgeRequest& request, ResponseWriter& writer);
     // The uncacheable path: unsafe methods, conditional or authenticated
     // retrievals, and no-store. Nothing here consults or fills the cache.
-    asio::awaitable<bool> servePassThrough(
-        const EdgeRequest& request,
-        ResponseWriter& writer,
-        const OriginLease& origin,
-        RequestOutcome& outcome);
+    asio::awaitable<bool> servePassThrough(const EdgeRequest& request, ResponseWriter& writer, const OriginLease& origin, RequestOutcome& outcome);
     template <typename Stream>
-    asio::awaitable<bool> handleFramedRequest(
-        Stream& stream,
-        const ruvia::detail::Http1ServerRequestParseState& parsed,
-        std::string_view wireBody,
-        std::string_view clientAddress);
+    asio::awaitable<bool> handleFramedRequest(Stream& stream, const ruvia::detail::Http1ServerRequestParseState& parsed, std::string_view wireBody, std::string_view clientAddress);
     template <typename Stream>
     asio::awaitable<void> handleHttp2Session(Stream stream, std::string clientAddress);
 
@@ -170,8 +157,7 @@ private:
     void reportFailure(EdgeTaskKind kind, std::exception_ptr exception) noexcept;
     // Whether an exception is asio unwinding a cancelled coroutine, which is
     // how a task stops on shutdown rather than a failure to report.
-    [[nodiscard]] static bool isCancellationUnwind(
-        std::exception_ptr exception) noexcept;
+    [[nodiscard]] static bool isCancellationUnwind(std::exception_ptr exception) noexcept;
 
     struct RefreshJob final {
         std::string key;

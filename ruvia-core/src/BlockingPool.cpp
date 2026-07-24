@@ -25,9 +25,7 @@ namespace {
     return std::max(std::size_t{1}, std::size_t{std::thread::hardware_concurrency()});
 }
 
-[[nodiscard]] std::size_t resolveQueueCapacity(
-    std::size_t requested,
-    std::size_t threadCount) noexcept {
+[[nodiscard]] std::size_t resolveQueueCapacity(std::size_t requested, std::size_t threadCount) noexcept {
     if (requested != 0) {
         return requested;
     }
@@ -58,9 +56,7 @@ BlockingOperationRejected::BlockingOperationRejected(BlockingStatus status)
 
 struct BlockingPool::Impl final {
     explicit Impl(const BlockingPoolOptions& options)
-        : queueCapacity(resolveQueueCapacity(
-              options.queueCapacity,
-              resolveThreadCount(options.threadCount))),
+        : queueCapacity(resolveQueueCapacity(options.queueCapacity, resolveThreadCount(options.threadCount))),
           queue(detail::processResource()),
           threads(detail::processResource()) {
         const auto count = resolveThreadCount(options.threadCount);
@@ -99,8 +95,7 @@ struct BlockingPool::Impl final {
                 // runBlocking()'s wrapper catches the callable's exceptions and
                 // hands them back to the waiter, so reaching this is a raw
                 // submit() whose task threw with nobody to receive it.
-                detail::reportUnhandledFailure(
-                    "blocking pool task", std::current_exception());
+                detail::reportUnhandledFailure("blocking pool task", std::current_exception());
             }
             // The task owns the completion it answered; destroy it here rather
             // than under the lock the next iteration takes.

@@ -48,8 +48,7 @@ public:
             // Moving its owner would invalidate that structured lifetime.
             std::terminate();
         }
-        if (auto* active = std::get_if<Active>(&other.state_);
-            active != nullptr) {
+        if (auto* active = std::get_if<Active>(&other.state_); active != nullptr) {
             Payload payload(std::move(active->payload));
             state_.template emplace<Active>(std::move(payload));
         } else if (std::holds_alternative<Failed>(other.state_)) {
@@ -148,7 +147,9 @@ public:
         }
     }
 
-    [[nodiscard]] typename Owner::Lease& lease() noexcept { return *lease_; }
+    [[nodiscard]] typename Owner::Lease& lease() noexcept {
+        return *lease_;
+    }
 
     void finishActive() noexcept {
         owner_->state_.finishActive();

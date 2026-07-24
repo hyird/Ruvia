@@ -17,8 +17,7 @@ namespace ruvia::edge {
 using Headers = std::vector<std::pair<std::string, std::string>>;
 
 [[nodiscard]] inline char toLowerAscii(char c) noexcept {
-    return static_cast<char>(
-        ruvia::detail::httpAsciiToLower(static_cast<unsigned char>(c)));
+    return static_cast<char>(ruvia::detail::httpAsciiToLower(static_cast<unsigned char>(c)));
 }
 
 [[nodiscard]] inline bool iequals(std::string_view a, std::string_view b) noexcept {
@@ -35,13 +34,9 @@ using Headers = std::vector<std::pair<std::string, std::string>>;
 [[nodiscard]] bool isConditionalOrRangeField(std::string_view lowerName) noexcept;
 
 // Whether a Connection header nominates `fieldName` as hop-by-hop.
-[[nodiscard]] bool connectionNominates(
-    std::span<const HttpHeaderView> headers,
-    std::string_view fieldName) noexcept;
+[[nodiscard]] bool connectionNominates(std::span<const HttpHeaderView> headers, std::string_view fieldName) noexcept;
 
-[[nodiscard]] bool connectionNominates(
-    const Headers& headers,
-    std::string_view fieldName) noexcept;
+[[nodiscard]] bool connectionNominates(const Headers& headers, std::string_view fieldName) noexcept;
 
 // Strip the origin hop-by-hop section before it can enter either response
 // serialization or persistent cache metadata. Content-Length is retained as
@@ -58,14 +53,10 @@ using Headers = std::vector<std::pair<std::string, std::string>>;
 // or any other varying field is not (this MVP keys only on Accept-Encoding).
 [[nodiscard]] bool cacheableUnderVary(const Headers& headers);
 
-[[nodiscard]] std::optional<std::string_view> findHeaderValue(
-    const Headers& headers,
-    std::string_view name);
+[[nodiscard]] std::optional<std::string_view> findHeaderValue(const Headers& headers, std::string_view name);
 
 // Look up a request header (case-insensitive) in a borrowed header span.
-[[nodiscard]] std::optional<std::string_view> findRequestHeader(
-    std::span<const HttpHeaderView> headers,
-    std::string_view name);
+[[nodiscard]] std::optional<std::string_view> findRequestHeader(std::span<const HttpHeaderView> headers, std::string_view name);
 
 // Combine every field line exactly as RFC 9110 section 5.2 permits a recipient
 // to combine a list field. The raw weights, order and malformed bytes remain in
@@ -73,9 +64,7 @@ using Headers = std::vector<std::pair<std::string, std::string>>;
 // legitimately selects different representations. `nullopt` is distinct from
 // a present empty field because Accept-Encoding assigns those states different
 // semantics (RFC 9110 section 12.5.3).
-[[nodiscard]] std::optional<std::string> combinedRequestFieldValue(
-    std::span<const HttpHeaderView> headers,
-    std::string_view name);
+[[nodiscard]] std::optional<std::string> combinedRequestFieldValue(std::span<const HttpHeaderView> headers, std::string_view name);
 
 // The host without its optional :port, for origin lookup and cache keys. An IPv6
 // literal keeps its brackets ("[::1]:443" -> "[::1]").

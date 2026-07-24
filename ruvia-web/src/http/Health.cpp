@@ -8,10 +8,7 @@
 namespace ruvia {
 namespace {
 
-[[nodiscard]] HttpResponse makeJsonResponse(
-    Context& context,
-    std::pmr::string& body,
-    HttpStatusCode statusCode = http_status::kOk) {
+[[nodiscard]] HttpResponse makeJsonResponse(Context& context, std::pmr::string& body, HttpStatusCode statusCode = http_status::kOk) {
     context.status(statusCode);
     context.header("Content-Type", "application/json");
     return context.body(std::move(body));

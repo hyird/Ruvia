@@ -11,14 +11,11 @@ namespace ruvia {
 namespace {
 
 [[nodiscard]] bool isHttpClientUriScheme(std::string_view value) noexcept {
-    if (value.empty() ||
-        !((value.front() >= 'A' && value.front() <= 'Z') ||
-          (value.front() >= 'a' && value.front() <= 'z'))) {
+    if (value.empty() || !((value.front() >= 'A' && value.front() <= 'Z') || (value.front() >= 'a' && value.front() <= 'z'))) {
         return false;
     }
     for (const char ch : value.substr(1)) {
-        if ((ch >= 'A' && ch <= 'Z') || (ch >= 'a' && ch <= 'z') ||
-            (ch >= '0' && ch <= '9') || ch == '+' || ch == '-' || ch == '.') {
+        if ((ch >= 'A' && ch <= 'Z') || (ch >= 'a' && ch <= 'z') || (ch >= '0' && ch <= '9') || ch == '+' || ch == '-' || ch == '.') {
             continue;
         }
         return false;
@@ -26,16 +23,14 @@ namespace {
     return true;
 }
 
-[[nodiscard]] bool isValidHttpClientUriFragment(
-    std::string_view fragment) noexcept {
+[[nodiscard]] bool isValidHttpClientUriFragment(std::string_view fragment) noexcept {
     if (fragment.empty()) {
         return true;
     }
     // RFC 3986 section 3.5 permits pchar, '/', and '?'. The shared
     // request-target byte validator covers that grammar and percent encoding,
     // except that its authority union also admits IP-literal brackets.
-    return fragment.find_first_of("[]") == std::string_view::npos &&
-        detail::isValidRequestTargetBytes(fragment);
+    return fragment.find_first_of("[]") == std::string_view::npos && detail::isValidRequestTargetBytes(fragment);
 }
 
 void removeHttpClientLastPathSegment(std::pmr::string& path) noexcept {
@@ -47,9 +42,7 @@ void removeHttpClientLastPathSegment(std::pmr::string& path) noexcept {
     path.erase(slash);
 }
 
-[[nodiscard]] bool normalizeHttpClientAbsolutePath(
-    std::string_view path,
-    std::pmr::string& normalized) {
+[[nodiscard]] bool normalizeHttpClientAbsolutePath(std::string_view path, std::pmr::string& normalized) {
     if (path.empty() || path.front() != '/') {
         return false;
     }
@@ -79,12 +72,8 @@ void removeHttpClientLastPathSegment(std::pmr::string& path) noexcept {
         } else if (remaining == "." || remaining == "..") {
             remaining = {};
         } else {
-            const auto nextSlash = remaining.front() == '/'
-                ? remaining.find('/', 1)
-                : remaining.find('/');
-            const auto segmentBytes = nextSlash == std::string_view::npos
-                ? remaining.size()
-                : nextSlash;
+            const auto nextSlash = remaining.front() == '/' ? remaining.find('/', 1) : remaining.find('/');
+            const auto segmentBytes = nextSlash == std::string_view::npos ? remaining.size() : nextSlash;
             normalized.append(remaining.substr(0, segmentBytes));
             remaining.remove_prefix(segmentBytes);
         }
@@ -101,20 +90,11 @@ void removeHttpClientLastPathSegment(std::pmr::string& path) noexcept {
 // false when the location's path or the merged product is not a valid target.
 // `reference` is the URI-reference with any scheme/authority prefix and the
 // fragment already removed.
-[[nodiscard]] bool resolveHttpClientRedirectPathAndQuery(
-    bool hasAuthority,
-    std::string_view reference,
-    std::string_view currentTarget,
-    std::pmr::memory_resource* targetResource,
-    std::pmr::string& resolved) {
+[[nodiscard]] bool resolveHttpClientRedirectPathAndQuery(bool hasAuthority, std::string_view reference, std::string_view currentTarget, std::pmr::memory_resource* targetResource, std::pmr::string& resolved) {
     const auto queryAt = reference.find('?');
     const bool hasReferenceQuery = queryAt != std::string_view::npos;
-    const auto referencePath = hasReferenceQuery
-        ? reference.substr(0, queryAt)
-        : reference;
-    const auto referenceQuery = hasReferenceQuery
-        ? reference.substr(queryAt + 1)
-        : std::string_view{};
+    const auto referencePath = hasReferenceQuery ? reference.substr(0, queryAt) : reference;
+    const auto referenceQuery = hasReferenceQuery ? reference.substr(queryAt + 1) : std::string_view{};
 
     std::pmr::string mergedPath(targetResource);
     std::string_view selectedQuery;
@@ -129,12 +109,8 @@ void removeHttpClientLastPathSegment(std::pmr::string& path) noexcept {
     } else {
         const auto baseQueryAt = currentTarget.find('?');
         const bool hasBaseQuery = baseQueryAt != std::string_view::npos;
-        const auto basePath = hasBaseQuery
-            ? currentTarget.substr(0, baseQueryAt)
-            : currentTarget;
-        const auto baseQuery = hasBaseQuery
-            ? currentTarget.substr(baseQueryAt + 1)
-            : std::string_view{};
+        const auto basePath = hasBaseQuery ? currentTarget.substr(0, baseQueryAt) : currentTarget;
+        const auto baseQuery = hasBaseQuery ? currentTarget.substr(baseQueryAt + 1) : std::string_view{};
 
         if (referencePath.empty()) {
             mergedPath.assign(basePath);
@@ -172,16 +148,10 @@ bool isValidHttpClientOriginTarget(std::string_view target) noexcept {
 }
 
 bool isHttpClientRedirectStatus(HttpStatusCode status) noexcept {
-    return status == http_status::kMovedPermanently ||
-        status == http_status::kFound ||
-        status == http_status::kSeeOther ||
-        status == http_status::kTemporaryRedirect ||
-        status == http_status::kPermanentRedirect;
+    return status == http_status::kMovedPermanently || status == http_status::kFound || status == http_status::kSeeOther || status == http_status::kTemporaryRedirect || status == http_status::kPermanentRedirect;
 }
 
-HttpClientResponseHeaderLookupResult lookupUniqueHttpClientResponseHeader(
-    const HttpClientResponseHead& head,
-    std::string_view name) noexcept {
+HttpClientResponseHeaderLookupResult lookupUniqueHttpClientResponseHeader(const HttpClientResponseHead& head, std::string_view name) noexcept {
     std::string_view found;
     bool seen = false;
     for (const auto& header : head.headers()) {
@@ -194,47 +164,24 @@ HttpClientResponseHeaderLookupResult lookupUniqueHttpClientResponseHeader(
         seen = true;
         found = header.value();
     }
-    return seen
-        ? HttpClientResponseHeaderLookupResult::makeFound(found)
-        : HttpClientResponseHeaderLookupResult::makeAbsent();
+    return seen ? HttpClientResponseHeaderLookupResult::makeFound(found) : HttpClientResponseHeaderLookupResult::makeAbsent();
 }
 
-HttpClientRedirectRequestPlan::HttpClientRedirectRequestPlan(
-    std::string_view method,
-    HttpClientRedirectContentDisposition contentDisposition,
-    std::pmr::memory_resource* resource)
+HttpClientRedirectRequestPlan::HttpClientRedirectRequestPlan(std::string_view method, HttpClientRedirectContentDisposition contentDisposition, std::pmr::memory_resource* resource)
     : method_(method, detail::httpPmrResourceOrDefault(resource)),
       contentDisposition_(contentDisposition) {}
 
-HttpClientRedirectRequestPlan planHttpClientRedirectRequest(
-    const HttpClientRequest& request,
-    HttpStatusCode status,
-    std::pmr::memory_resource* resource) {
+HttpClientRedirectRequestPlan planHttpClientRedirectRequest(const HttpClientRequest& request, HttpStatusCode status, std::pmr::memory_resource* resource) {
     if (status == http_status::kSeeOther) {
-        return HttpClientRedirectRequestPlan(
-            request.method == "HEAD"
-                ? request.method.view()
-                : std::string_view("GET"),
-            HttpClientRedirectContentDisposition::kDrop,
-            resource);
+        return HttpClientRedirectRequestPlan(request.method == "HEAD" ? request.method.view() : std::string_view("GET"), HttpClientRedirectContentDisposition::kDrop, resource);
     }
-    if ((status == http_status::kMovedPermanently ||
-         status == http_status::kFound) &&
-        request.method == "POST") {
-        return HttpClientRedirectRequestPlan(
-            "GET",
-            HttpClientRedirectContentDisposition::kDrop,
-            resource);
+    if ((status == http_status::kMovedPermanently || status == http_status::kFound) && request.method == "POST") {
+        return HttpClientRedirectRequestPlan("GET", HttpClientRedirectContentDisposition::kDrop, resource);
     }
-    return HttpClientRedirectRequestPlan(
-        request.method.view(),
-        HttpClientRedirectContentDisposition::kPreserve,
-        resource);
+    return HttpClientRedirectRequestPlan(request.method.view(), HttpClientRedirectContentDisposition::kPreserve, resource);
 }
 
-HttpClientOriginAuthorityStatus classifyHttpClientOriginAuthority(
-    const HttpOrigin& origin,
-    std::string_view authority) noexcept {
+HttpClientOriginAuthorityStatus classifyHttpClientOriginAuthority(const HttpOrigin& origin, std::string_view authority) noexcept {
     if (authority.find('@') != std::string_view::npos) {
         return HttpClientOriginAuthorityStatus::kInvalidAuthority;
     }
@@ -242,29 +189,18 @@ HttpClientOriginAuthorityStatus classifyHttpClientOriginAuthority(
     if (!parsed) {
         return HttpClientOriginAuthorityStatus::kInvalidAuthority;
     }
-    return parsed->effectivePort(detail::httpSchemeDefaultPort(origin.scheme())) ==
-                origin.port() &&
-            detail::httpUriHostEquals(parsed->host(), origin.host())
-        ? HttpClientOriginAuthorityStatus::kSameOrigin
-        : HttpClientOriginAuthorityStatus::kDifferentOrigin;
+    return parsed->effectivePort(detail::httpSchemeDefaultPort(origin.scheme())) == origin.port() && detail::httpUriHostEquals(parsed->host(), origin.host()) ? HttpClientOriginAuthorityStatus::kSameOrigin : HttpClientOriginAuthorityStatus::kDifferentOrigin;
 }
 
-HttpClientRedirectTargetResult resolveHttpClientSameOriginRedirectTarget(
-    const HttpOrigin& origin,
-    std::string_view currentTarget,
-    std::string_view location,
-    std::pmr::memory_resource* resource) {
-    if (currentTarget.empty() || currentTarget.front() != '/' ||
-        !isValidHttpClientOriginTarget(currentTarget)) {
-        return HttpClientRedirectTargetResult::makeFailure(
-            HttpClientRedirectTargetError::kInvalidCurrentTarget);
+HttpClientRedirectTargetResult resolveHttpClientSameOriginRedirectTarget(const HttpOrigin& origin, std::string_view currentTarget, std::string_view location, std::pmr::memory_resource* resource) {
+    if (currentTarget.empty() || currentTarget.front() != '/' || !isValidHttpClientOriginTarget(currentTarget)) {
+        return HttpClientRedirectTargetResult::makeFailure(HttpClientRedirectTargetError::kInvalidCurrentTarget);
     }
 
     location = detail::httpTrimOws(location);
     if (const auto hash = location.find('#'); hash != std::string_view::npos) {
         if (!isValidHttpClientUriFragment(location.substr(hash + 1))) {
-            return HttpClientRedirectTargetResult::makeFailure(
-                HttpClientRedirectTargetError::kInvalidLocation);
+            return HttpClientRedirectTargetResult::makeFailure(HttpClientRedirectTargetError::kInvalidLocation);
         }
         location = location.substr(0, hash);
     }
@@ -274,24 +210,20 @@ HttpClientRedirectTargetResult resolveHttpClientSameOriginRedirectTarget(
     std::string_view reference = location;
     const auto colon = reference.find(':');
     const auto firstPathOrQuery = reference.find_first_of("/?");
-    if (colon != std::string_view::npos &&
-        (firstPathOrQuery == std::string_view::npos || colon < firstPathOrQuery)) {
+    if (colon != std::string_view::npos && (firstPathOrQuery == std::string_view::npos || colon < firstPathOrQuery)) {
         const auto scheme = reference.substr(0, colon);
         if (!isHttpClientUriScheme(scheme)) {
-            return HttpClientRedirectTargetResult::makeFailure(
-                HttpClientRedirectTargetError::kInvalidLocation);
+            return HttpClientRedirectTargetResult::makeFailure(HttpClientRedirectTargetError::kInvalidLocation);
         }
         const bool isHttps = detail::httpAsciiEqualsIgnoreCase(scheme, "https");
         if (!isHttps && !detail::httpAsciiEqualsIgnoreCase(scheme, "http")) {
-            return HttpClientRedirectTargetResult::makeFailure(
-                HttpClientRedirectTargetError::kNotSameOrigin);
+            return HttpClientRedirectTargetResult::makeFailure(HttpClientRedirectTargetError::kNotSameOrigin);
         }
         const auto locationScheme = isHttps ? HttpScheme::kHttps : HttpScheme::kHttp;
         schemeMatchesOrigin = locationScheme == origin.scheme();
         reference.remove_prefix(colon + 1);
         if (!reference.starts_with("//")) {
-            return HttpClientRedirectTargetResult::makeFailure(
-                HttpClientRedirectTargetError::kInvalidLocation);
+            return HttpClientRedirectTargetResult::makeFailure(HttpClientRedirectTargetError::kInvalidLocation);
         }
         reference.remove_prefix(2);
         hasAuthority = true;
@@ -302,64 +234,44 @@ HttpClientRedirectTargetResult resolveHttpClientSameOriginRedirectTarget(
 
     if (hasAuthority) {
         const auto authorityEnd = reference.find_first_of("/?");
-        const auto authority = authorityEnd == std::string_view::npos
-            ? reference
-            : reference.substr(0, authorityEnd);
+        const auto authority = authorityEnd == std::string_view::npos ? reference : reference.substr(0, authorityEnd);
         const auto authorityStatus = classifyHttpClientOriginAuthority(origin, authority);
         if (!schemeMatchesOrigin) {
-            return HttpClientRedirectTargetResult::makeFailure(
-                authorityStatus == HttpClientOriginAuthorityStatus::kInvalidAuthority
-                    ? HttpClientRedirectTargetError::kInvalidLocation
-                    : HttpClientRedirectTargetError::kNotSameOrigin);
+            return HttpClientRedirectTargetResult::makeFailure(authorityStatus == HttpClientOriginAuthorityStatus::kInvalidAuthority ? HttpClientRedirectTargetError::kInvalidLocation : HttpClientRedirectTargetError::kNotSameOrigin);
         }
         switch (authorityStatus) {
             case HttpClientOriginAuthorityStatus::kSameOrigin:
                 break;
             case HttpClientOriginAuthorityStatus::kDifferentOrigin:
-                return HttpClientRedirectTargetResult::makeFailure(
-                    HttpClientRedirectTargetError::kNotSameOrigin);
+                return HttpClientRedirectTargetResult::makeFailure(HttpClientRedirectTargetError::kNotSameOrigin);
             case HttpClientOriginAuthorityStatus::kInvalidAuthority:
-                return HttpClientRedirectTargetResult::makeFailure(
-                    HttpClientRedirectTargetError::kInvalidLocation);
+                return HttpClientRedirectTargetResult::makeFailure(HttpClientRedirectTargetError::kInvalidLocation);
         }
-        reference = authorityEnd == std::string_view::npos
-            ? std::string_view{}
-            : reference.substr(authorityEnd);
+        reference = authorityEnd == std::string_view::npos ? std::string_view{} : reference.substr(authorityEnd);
     }
 
     auto* const targetResource = detail::httpPmrResourceOrDefault(resource);
     std::pmr::string resolved(targetResource);
-    if (!resolveHttpClientRedirectPathAndQuery(
-            hasAuthority, reference, currentTarget, targetResource, resolved)) {
-        return HttpClientRedirectTargetResult::makeFailure(
-            HttpClientRedirectTargetError::kInvalidLocation);
+    if (!resolveHttpClientRedirectPathAndQuery(hasAuthority, reference, currentTarget, targetResource, resolved)) {
+        return HttpClientRedirectTargetResult::makeFailure(HttpClientRedirectTargetError::kInvalidLocation);
     }
 
     return HttpClientRedirectTargetResult::makeTarget(std::move(resolved));
 }
 
-HttpOrigin HttpClientResolvedRedirect::origin() const & {
-    return scheme_ == HttpScheme::kHttps
-        ? HttpOrigin::https(host(), port_)
-        : HttpOrigin::http(host(), port_);
+HttpOrigin HttpClientResolvedRedirect::origin() const& {
+    return scheme_ == HttpScheme::kHttps ? HttpOrigin::https(host(), port_) : HttpOrigin::http(host(), port_);
 }
 
-HttpClientRedirectResolutionResult resolveHttpClientRedirectTarget(
-    const HttpOrigin& origin,
-    std::string_view currentTarget,
-    std::string_view location,
-    std::pmr::memory_resource* resource) {
-    if (currentTarget.empty() || currentTarget.front() != '/' ||
-        !isValidHttpClientOriginTarget(currentTarget)) {
-        return HttpClientRedirectResolutionResult::makeFailure(
-            HttpClientRedirectResolutionError::kInvalidCurrentTarget);
+HttpClientRedirectResolutionResult resolveHttpClientRedirectTarget(const HttpOrigin& origin, std::string_view currentTarget, std::string_view location, std::pmr::memory_resource* resource) {
+    if (currentTarget.empty() || currentTarget.front() != '/' || !isValidHttpClientOriginTarget(currentTarget)) {
+        return HttpClientRedirectResolutionResult::makeFailure(HttpClientRedirectResolutionError::kInvalidCurrentTarget);
     }
 
     location = detail::httpTrimOws(location);
     if (const auto hash = location.find('#'); hash != std::string_view::npos) {
         if (!isValidHttpClientUriFragment(location.substr(hash + 1))) {
-            return HttpClientRedirectResolutionResult::makeFailure(
-                HttpClientRedirectResolutionError::kInvalidLocation);
+            return HttpClientRedirectResolutionResult::makeFailure(HttpClientRedirectResolutionError::kInvalidLocation);
         }
         location = location.substr(0, hash);
     }
@@ -369,23 +281,19 @@ HttpClientRedirectResolutionResult resolveHttpClientRedirectTarget(
     std::string_view reference = location;
     const auto colon = reference.find(':');
     const auto firstPathOrQuery = reference.find_first_of("/?");
-    if (colon != std::string_view::npos &&
-        (firstPathOrQuery == std::string_view::npos || colon < firstPathOrQuery)) {
+    if (colon != std::string_view::npos && (firstPathOrQuery == std::string_view::npos || colon < firstPathOrQuery)) {
         const auto scheme = reference.substr(0, colon);
         if (!isHttpClientUriScheme(scheme)) {
-            return HttpClientRedirectResolutionResult::makeFailure(
-                HttpClientRedirectResolutionError::kInvalidLocation);
+            return HttpClientRedirectResolutionResult::makeFailure(HttpClientRedirectResolutionError::kInvalidLocation);
         }
         const bool isHttps = detail::httpAsciiEqualsIgnoreCase(scheme, "https");
         if (!isHttps && !detail::httpAsciiEqualsIgnoreCase(scheme, "http")) {
-            return HttpClientRedirectResolutionResult::makeFailure(
-                HttpClientRedirectResolutionError::kUnsupportedScheme);
+            return HttpClientRedirectResolutionResult::makeFailure(HttpClientRedirectResolutionError::kUnsupportedScheme);
         }
         targetScheme = isHttps ? HttpScheme::kHttps : HttpScheme::kHttp;
         reference.remove_prefix(colon + 1);
         if (!reference.starts_with("//")) {
-            return HttpClientRedirectResolutionResult::makeFailure(
-                HttpClientRedirectResolutionError::kInvalidLocation);
+            return HttpClientRedirectResolutionResult::makeFailure(HttpClientRedirectResolutionError::kInvalidLocation);
         }
         reference.remove_prefix(2);
         hasAuthority = true;
@@ -400,43 +308,28 @@ HttpClientRedirectResolutionResult resolveHttpClientRedirectTarget(
     bool crossOrigin = targetScheme != origin.scheme();
     if (hasAuthority) {
         const auto authorityEnd = reference.find_first_of("/?");
-        const auto authority = authorityEnd == std::string_view::npos
-            ? reference
-            : reference.substr(0, authorityEnd);
+        const auto authority = authorityEnd == std::string_view::npos ? reference : reference.substr(0, authorityEnd);
         if (authority.find('@') != std::string_view::npos) {
-            return HttpClientRedirectResolutionResult::makeFailure(
-                HttpClientRedirectResolutionError::kInvalidLocation);
+            return HttpClientRedirectResolutionResult::makeFailure(HttpClientRedirectResolutionError::kInvalidLocation);
         }
         const auto parsed = detail::parseHttpAuthority(authority);
         if (!parsed) {
-            return HttpClientRedirectResolutionResult::makeFailure(
-                HttpClientRedirectResolutionError::kInvalidLocation);
+            return HttpClientRedirectResolutionResult::makeFailure(HttpClientRedirectResolutionError::kInvalidLocation);
         }
         host.assign(parsed->host().data(), parsed->host().size());
-        port = parsed->effectivePort(
-            detail::httpSchemeDefaultPort(targetScheme));
-        crossOrigin = crossOrigin || port != origin.port() ||
-            !detail::httpUriHostEquals(parsed->host(), origin.host());
-        reference = authorityEnd == std::string_view::npos
-            ? std::string_view{}
-            : reference.substr(authorityEnd);
+        port = parsed->effectivePort(detail::httpSchemeDefaultPort(targetScheme));
+        crossOrigin = crossOrigin || port != origin.port() || !detail::httpUriHostEquals(parsed->host(), origin.host());
+        reference = authorityEnd == std::string_view::npos ? std::string_view{} : reference.substr(authorityEnd);
     } else {
         host.assign(origin.host().data(), origin.host().size());
     }
 
     std::pmr::string resolved(targetResource);
-    if (!resolveHttpClientRedirectPathAndQuery(
-            hasAuthority, reference, currentTarget, targetResource, resolved)) {
-        return HttpClientRedirectResolutionResult::makeFailure(
-            HttpClientRedirectResolutionError::kInvalidLocation);
+    if (!resolveHttpClientRedirectPathAndQuery(hasAuthority, reference, currentTarget, targetResource, resolved)) {
+        return HttpClientRedirectResolutionResult::makeFailure(HttpClientRedirectResolutionError::kInvalidLocation);
     }
 
-    return HttpClientRedirectResolutionResult::makeResolved(
-        targetScheme,
-        std::move(host),
-        port,
-        std::move(resolved),
-        crossOrigin);
+    return HttpClientRedirectResolutionResult::makeResolved(targetScheme, std::move(host), port, std::move(resolved), crossOrigin);
 }
 
 }  // namespace ruvia

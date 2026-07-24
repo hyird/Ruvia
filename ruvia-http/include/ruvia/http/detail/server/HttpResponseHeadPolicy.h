@@ -39,29 +39,25 @@ private:
 // booleans that could describe contradictory products.
 class ResponseWritePolicy final {
 public:
-    [[nodiscard]] constexpr const ResponseNormalWrite*
-    normal() const & noexcept {
+    [[nodiscard]] constexpr const ResponseNormalWrite* normal() const& noexcept {
         return state_ == State::kNormal ? &kNormal : nullptr;
     }
-    const ResponseNormalWrite* normal() const && = delete;
+    const ResponseNormalWrite* normal() const&& = delete;
 
-    [[nodiscard]] constexpr const ResponseBodyForbiddenWrite*
-    bodyForbidden() const & noexcept {
+    [[nodiscard]] constexpr const ResponseBodyForbiddenWrite* bodyForbidden() const& noexcept {
         return state_ == State::kBodyForbidden ? &kBodyForbidden : nullptr;
     }
-    const ResponseBodyForbiddenWrite* bodyForbidden() const && = delete;
+    const ResponseBodyForbiddenWrite* bodyForbidden() const&& = delete;
 
-    [[nodiscard]] constexpr const ResponseZeroLengthWrite*
-    zeroLength() const & noexcept {
+    [[nodiscard]] constexpr const ResponseZeroLengthWrite* zeroLength() const& noexcept {
         return state_ == State::kZeroLength ? &kZeroLength : nullptr;
     }
-    const ResponseZeroLengthWrite* zeroLength() const && = delete;
+    const ResponseZeroLengthWrite* zeroLength() const&& = delete;
 
-    [[nodiscard]] constexpr const ResponseNotModifiedWrite*
-    notModified() const & noexcept {
+    [[nodiscard]] constexpr const ResponseNotModifiedWrite* notModified() const& noexcept {
         return state_ == State::kNotModified ? &kNotModified : nullptr;
     }
-    const ResponseNotModifiedWrite* notModified() const && = delete;
+    const ResponseNotModifiedWrite* notModified() const&& = delete;
 
     [[nodiscard]] constexpr bool bodyAllowed() const noexcept {
         return normal() != nullptr;
@@ -82,12 +78,7 @@ public:
 private:
     friend ResponseWritePolicy responseWritePolicy(HttpStatusCode) noexcept;
 
-    enum class State : std::uint8_t {
-        kNormal,
-        kBodyForbidden,
-        kZeroLength,
-        kNotModified
-    };
+    enum class State : std::uint8_t { kNormal, kBodyForbidden, kZeroLength, kNotModified };
 
     explicit constexpr ResponseWritePolicy(State state) noexcept
         : state_(state) {}
@@ -96,18 +87,15 @@ private:
         return ResponseWritePolicy(State::kNormal);
     }
 
-    [[nodiscard]] static constexpr ResponseWritePolicy
-    makeBodyForbidden() noexcept {
+    [[nodiscard]] static constexpr ResponseWritePolicy makeBodyForbidden() noexcept {
         return ResponseWritePolicy(State::kBodyForbidden);
     }
 
-    [[nodiscard]] static constexpr ResponseWritePolicy
-    makeZeroLength() noexcept {
+    [[nodiscard]] static constexpr ResponseWritePolicy makeZeroLength() noexcept {
         return ResponseWritePolicy(State::kZeroLength);
     }
 
-    [[nodiscard]] static constexpr ResponseWritePolicy
-    makeNotModified() noexcept {
+    [[nodiscard]] static constexpr ResponseWritePolicy makeNotModified() noexcept {
         return ResponseWritePolicy(State::kNotModified);
     }
 
@@ -122,8 +110,7 @@ private:
 static_assert(std::is_trivially_copyable_v<ResponseWritePolicy>);
 static_assert(sizeof(ResponseWritePolicy) <= 2);
 
-[[nodiscard]] inline ResponseWritePolicy responseWritePolicy(
-    HttpStatusCode statusCode) noexcept {
+[[nodiscard]] inline ResponseWritePolicy responseWritePolicy(HttpStatusCode statusCode) noexcept {
     if (statusCode.isInformational()) {
         return ResponseWritePolicy::makeBodyForbidden();
     }

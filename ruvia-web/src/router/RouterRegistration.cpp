@@ -26,78 +26,24 @@ detail::RouterImpl::PendingRoute::PendingRoute(std::pmr::memory_resource* resour
     }
 }
 
-void detail::RouterImpl::registerRoute(
-    HttpKnownMethod method,
-    std::pmr::string path,
-    RouteHandler handler,
-    RequestBodyMode bodyMode,
-    std::span<const ControllerMiddlewareDescriptor> controllerMiddlewares,
-    std::span<const ControllerMiddlewareDescriptor> routeMiddlewares) {
-    registerEndpoint(
-        method,
-        std::move(path),
-        RouteEndpoint::buffered(handler, bodyMode),
-        controllerMiddlewares,
-        routeMiddlewares);
+void detail::RouterImpl::registerRoute(HttpKnownMethod method, std::pmr::string path, RouteHandler handler, RequestBodyMode bodyMode, std::span<const ControllerMiddlewareDescriptor> controllerMiddlewares, std::span<const ControllerMiddlewareDescriptor> routeMiddlewares) {
+    registerEndpoint(method, std::move(path), RouteEndpoint::buffered(handler, bodyMode), controllerMiddlewares, routeMiddlewares);
 }
 
-void detail::RouterImpl::registerResponseStreamRoute(
-    HttpKnownMethod method,
-    std::pmr::string path,
-    RouteStreamHandler handler,
-    std::span<const ControllerMiddlewareDescriptor> controllerMiddlewares,
-    std::span<const ControllerMiddlewareDescriptor> routeMiddlewares) {
-    registerEndpoint(
-        method,
-        std::move(path),
-        RouteEndpoint::responseStream(
-            handler, ResponseStreamKind::kGeneric),
-        controllerMiddlewares,
-        routeMiddlewares);
+void detail::RouterImpl::registerResponseStreamRoute(HttpKnownMethod method, std::pmr::string path, RouteStreamHandler handler, std::span<const ControllerMiddlewareDescriptor> controllerMiddlewares, std::span<const ControllerMiddlewareDescriptor> routeMiddlewares) {
+    registerEndpoint(method, std::move(path), RouteEndpoint::responseStream(handler, ResponseStreamKind::kGeneric), controllerMiddlewares, routeMiddlewares);
 }
 
-void detail::RouterImpl::registerSseRoute(
-    HttpKnownMethod method,
-    std::pmr::string path,
-    RouteStreamHandler handler,
-    std::span<const ControllerMiddlewareDescriptor> controllerMiddlewares,
-    std::span<const ControllerMiddlewareDescriptor> routeMiddlewares) {
-    registerEndpoint(
-        method,
-        std::move(path),
-        RouteEndpoint::responseStream(handler, ResponseStreamKind::kSse),
-        controllerMiddlewares,
-        routeMiddlewares);
+void detail::RouterImpl::registerSseRoute(HttpKnownMethod method, std::pmr::string path, RouteStreamHandler handler, std::span<const ControllerMiddlewareDescriptor> controllerMiddlewares, std::span<const ControllerMiddlewareDescriptor> routeMiddlewares) {
+    registerEndpoint(method, std::move(path), RouteEndpoint::responseStream(handler, ResponseStreamKind::kSse), controllerMiddlewares, routeMiddlewares);
 }
 
-void detail::RouterImpl::registerWebSocketRoute(
-    HttpKnownMethod method,
-    std::pmr::string path,
-    RouteStreamHandler handler,
-    std::span<const ControllerMiddlewareDescriptor> controllerMiddlewares,
-    std::span<const ControllerMiddlewareDescriptor> routeMiddlewares,
-    WebSocketRouteOptions webSocketOptions) {
-    registerEndpoint(
-        method,
-        std::move(path),
-        RouteEndpoint::webSocket(resource_, handler, webSocketOptions),
-        controllerMiddlewares,
-        routeMiddlewares);
+void detail::RouterImpl::registerWebSocketRoute(HttpKnownMethod method, std::pmr::string path, RouteStreamHandler handler, std::span<const ControllerMiddlewareDescriptor> controllerMiddlewares, std::span<const ControllerMiddlewareDescriptor> routeMiddlewares, WebSocketRouteOptions webSocketOptions) {
+    registerEndpoint(method, std::move(path), RouteEndpoint::webSocket(resource_, handler, webSocketOptions), controllerMiddlewares, routeMiddlewares);
 }
 
-void detail::RouterImpl::registerEndpoint(
-    HttpKnownMethod method,
-    std::pmr::string path,
-    RouteEndpoint endpoint,
-    std::span<const ControllerMiddlewareDescriptor> controllerMiddlewares,
-    std::span<const ControllerMiddlewareDescriptor> routeMiddlewares) {
-    appendPendingRoute(PendingRoute(resource_, PendingRoute::Init{
-        .method = method,
-        .path = std::move(path),
-        .endpoint = std::move(endpoint),
-        .dynamic = false,
-        .middlewares = materializeMiddlewares(
-            controllerMiddlewares, routeMiddlewares)}));
+void detail::RouterImpl::registerEndpoint(HttpKnownMethod method, std::pmr::string path, RouteEndpoint endpoint, std::span<const ControllerMiddlewareDescriptor> controllerMiddlewares, std::span<const ControllerMiddlewareDescriptor> routeMiddlewares) {
+    appendPendingRoute(PendingRoute(resource_, PendingRoute::Init{.method = method, .path = std::move(path), .endpoint = std::move(endpoint), .dynamic = false, .middlewares = materializeMiddlewares(controllerMiddlewares, routeMiddlewares)}));
 }
 
 void detail::RouterImpl::appendPendingRoute(PendingRoute route) {

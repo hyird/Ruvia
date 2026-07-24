@@ -5,10 +5,7 @@
 
 namespace ruvia::edge {
 
-DiskTier::DiskTier(
-    const std::optional<std::filesystem::path>& directory,
-    std::size_t maxBytes,
-    FailureSink onFailure)
+DiskTier::DiskTier(const std::optional<std::filesystem::path>& directory, std::size_t maxBytes, FailureSink onFailure)
     : onFailure_(std::move(onFailure)) {
     if (!directory) {
         return;  // disabled: no cache, no thread
@@ -25,22 +22,14 @@ asio::awaitable<std::optional<CachedResponse>> DiskTier::lookup(std::string key)
     }
     // Run the blocking read on the disk pool; use_awaitable resumes this
     // coroutine back on the event loop with the result.
-    co_return co_await asio::co_spawn(
-        *pool_,
-        [this, key = std::move(key)]()
-            -> asio::awaitable<std::optional<CachedResponse>> {
-            co_return cache_->lookup(key);
-        },
-        asio::use_awaitable);
+    co_return co_await asio::co_spawn(*pool_, [this, key = std::move(key)]() -> asio::awaitable<std::optional<CachedResponse>> { co_return cache_->lookup(key); }, asio::use_awaitable);
 }
 
 void DiskTier::store(std::string key, CachedResponse entry) {
     if (!enabled()) {
         return;
     }
-    runQueued([this, key = std::move(key), entry = std::move(entry)] {
-        (void)cache_->store(key, entry);
-    });
+    runQueued([this, key = std::move(key), entry = std::move(entry)] { (void)cache_->store(key, entry); });
 }
 
 void DiskTier::purge(std::string key) {
@@ -54,18 +43,14 @@ void DiskTier::purgePrefix(std::string prefix) {
     if (!enabled()) {
         return;
     }
-    runQueued([this, prefix = std::move(prefix)] {
-        (void)cache_->purgePrefix(prefix);
-    });
+    runQueued([this, prefix = std::move(prefix)] { (void)cache_->purgePrefix(prefix); });
 }
 
 DiskCache::PurgeResult DiskTier::purgePrefixSync(std::string prefix) {
     if (!enabled()) {
         return {};
     }
-    return runSync([this, prefix = std::move(prefix)] {
-        return cache_->purgePrefix(prefix);
-    });
+    return runSync([this, prefix = std::move(prefix)] { return cache_->purgePrefix(prefix); });
 }
 
 bool DiskTier::clearSync() {

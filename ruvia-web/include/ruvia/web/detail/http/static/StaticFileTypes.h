@@ -17,14 +17,8 @@ namespace ruvia::detail {
 void normalizeMimeTypes(std::pmr::vector<StaticMimeType>& mimeTypes);
 void normalizeFileTypes(std::pmr::vector<std::pmr::string>& fileTypes);
 
-[[nodiscard]] bool fileTypeAllowed(
-    std::string_view extension,
-    const StaticRootOptions& options);
+[[nodiscard]] bool fileTypeAllowed(std::string_view extension, const StaticRootOptions& options);
 
-[[nodiscard]] std::pmr::string contentTypeFor(
-    const std::filesystem::path& path,
-    std::string_view extension,
-    const StaticRootOptions& options,
-    std::pmr::memory_resource* resource);
+[[nodiscard]] std::pmr::string contentTypeFor(const std::filesystem::path& path, std::string_view extension, const StaticRootOptions& options, std::pmr::memory_resource* resource);
 
 }  // namespace ruvia::detail

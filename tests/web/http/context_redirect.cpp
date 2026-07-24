@@ -33,12 +33,12 @@ using ruvia::detail::responseBody;
 
 // The Context holds the request by reference, so keep it in the test's scope
 // (this macro-free setup avoids a returning helper that would dangle).
-#define RUVIA_MAKE_CONTEXT(worker, memory, request, context)              \
-    WorkerMemory worker;                                                  \
-    RequestMemory memory(worker);                                         \
-    HttpRequest request = HttpRequestAccess::make();                      \
-    HttpRequestAccess::reset(request);                                    \
-    HttpRequestAccess::setResource(request, memory.resource());           \
+#define RUVIA_MAKE_CONTEXT(worker, memory, request, context)    \
+    WorkerMemory worker;                                        \
+    RequestMemory memory(worker);                               \
+    HttpRequest request = HttpRequestAccess::make();            \
+    HttpRequestAccess::reset(request);                          \
+    HttpRequestAccess::setResource(request, memory.resource()); \
     auto context = ContextAccess::make(memory, request)
 
 }  // namespace
@@ -51,29 +51,21 @@ RUVIA_TEST(context_connection_info_is_adapter_owned) {
     HttpRequestAccess::setResource(request, memory.resource());
     HttpRequestAccess::setTarget(request, "/secure");
     HttpRequestAccess::setPath(request, "/secure");
-    RUVIA_CHECK(HttpRequestAccess::addHeader(
-        request,
-        HttpHeaderView{"Host", "example.test"},
-        HttpRequestAccess::knownHeaderSlot(ruvia::detail::RequestKnownHeader::kHost)));
+    RUVIA_CHECK(HttpRequestAccess::addHeader(request, HttpHeaderView{"Host", "example.test"}, HttpRequestAccess::knownHeaderSlot(ruvia::detail::RequestKnownHeader::kHost)));
 
-    const auto services = ContextServices{}.withTlsTransport(
-        "203.0.113.7",
-        "/CN=client");
+    const auto services = ContextServices{}.withTlsTransport("203.0.113.7", "/CN=client");
     auto context = ContextAccess::make(memory, request, services);
     const auto info = ruvia::getConnInfo(context);
 
     RUVIA_CHECK_EQ(info.remote().address(), std::string_view("203.0.113.7"));
     RUVIA_CHECK(info.plain() == nullptr);
     RUVIA_CHECK(info.tls() != nullptr);
-    RUVIA_CHECK_EQ(
-        info.tls()->clientCertificateSubject(),
-        std::string_view("/CN=client"));
+    RUVIA_CHECK_EQ(info.tls()->clientCertificateSubject(), std::string_view("/CN=client"));
 }
 
 RUVIA_TEST(context_redirect_sets_verbatim_ascii_location_and_status) {
     RUVIA_MAKE_CONTEXT(worker, memory, request, context);
-    const auto response = context.redirect(
-        "https://example.com/path?q=1", ruvia::http_status::kFound);
+    const auto response = context.redirect("https://example.com/path?q=1", ruvia::http_status::kFound);
     RUVIA_CHECK_EQ(response.status(), ruvia::http_status::kFound);
     RUVIA_CHECK_EQ(response.header("Location"), std::string_view("https://example.com/path?q=1"));
 }
@@ -82,12 +74,9 @@ RUVIA_TEST(context_redirect_percent_encodes_non_ascii_location) {
     RUVIA_MAKE_CONTEXT(worker, memory, request, context);
     // A UTF-8 'é' (0xC3 0xA9) is percent-encoded while the URI structure
     // (scheme, host, path separators) is preserved.
-    const auto response = context.redirect(
-        std::string_view("https://example.com/caf\xC3\xA9"),
-        ruvia::http_status::kTemporaryRedirect);
+    const auto response = context.redirect(std::string_view("https://example.com/caf\xC3\xA9"), ruvia::http_status::kTemporaryRedirect);
     RUVIA_CHECK_EQ(response.status(), ruvia::http_status::kTemporaryRedirect);
-    RUVIA_CHECK_EQ(response.header("Location"),
-                   std::string_view("https://example.com/caf%C3%A9"));
+    RUVIA_CHECK_EQ(response.header("Location"), std::string_view("https://example.com/caf%C3%A9"));
 }
 
 RUVIA_TEST(context_redirect_preserves_existing_percent_escapes_when_encoding) {
@@ -96,19 +85,13 @@ RUVIA_TEST(context_redirect_preserves_existing_percent_escapes_when_encoding) {
     // 'é' (0xC3 0xA9) that triggers the whole-string encoding pass. The 'é' must
     // become %C3%A9, but the existing escapes must survive intact -- not be
     // double-encoded to "%2520"/"%252F", which would corrupt the target.
-    const auto response = context.redirect(
-        std::string_view("https://example.com/a%20b/caf\xC3\xA9?x=%2F"),
-        ruvia::http_status::kFound);
-    RUVIA_CHECK_EQ(response.header("Location"),
-                   std::string_view("https://example.com/a%20b/caf%C3%A9?x=%2F"));
+    const auto response = context.redirect(std::string_view("https://example.com/a%20b/caf\xC3\xA9?x=%2F"), ruvia::http_status::kFound);
+    RUVIA_CHECK_EQ(response.header("Location"), std::string_view("https://example.com/a%20b/caf%C3%A9?x=%2F"));
 
     // A lone or malformed '%' (not followed by two hex digits) is not a valid
     // escape, so it IS percent-encoded to %25 -- the trailing 'é' forces the pass.
-    const auto malformed = context.redirect(
-        std::string_view("https://example.com/100%off/caf\xC3\xA9"),
-        ruvia::http_status::kFound);
-    RUVIA_CHECK_EQ(malformed.header("Location"),
-                   std::string_view("https://example.com/100%25off/caf%C3%A9"));
+    const auto malformed = context.redirect(std::string_view("https://example.com/100%off/caf\xC3\xA9"), ruvia::http_status::kFound);
+    RUVIA_CHECK_EQ(malformed.header("Location"), std::string_view("https://example.com/100%25off/caf%C3%A9"));
 }
 
 RUVIA_TEST(context_redirect_rejects_crlf_header_injection) {
@@ -118,9 +101,7 @@ RUVIA_TEST(context_redirect_rejects_crlf_header_injection) {
     // path straight into the validated header setter).
     bool threw = false;
     try {
-        (void)context.redirect(
-            std::string_view("https://example.com/\r\nX-Injected: y"),
-            ruvia::http_status::kFound);
+        (void)context.redirect(std::string_view("https://example.com/\r\nX-Injected: y"), ruvia::http_status::kFound);
     } catch (const std::exception&) {
         threw = true;
     }
@@ -183,9 +164,7 @@ RUVIA_TEST(context_rejects_informational_and_non_http_final_statuses) {
 }
 
 RUVIA_TEST(context_response_metadata_uses_http_response_validation) {
-    static_assert(std::same_as<
-        Context::HeaderOptions,
-        ruvia::HttpResponse::HeaderOptions>);
+    static_assert(std::same_as<Context::HeaderOptions, ruvia::HttpResponse::HeaderOptions>);
     RUVIA_MAKE_CONTEXT(worker, memory, request, context);
 
     bool threw = false;
@@ -279,9 +258,7 @@ RUVIA_TEST(context_param_lookup_handles_unencoded_and_missing) {
     const std::string_view values[] = {"hello", "42"};
     RequestMemory memory(worker);
     HttpRequestAccess::setResource(request, memory.resource());
-    auto context = ContextAccess::make(
-        memory, request, "/p/:slug/:id", names, values, std::size(names),
-        0);
+    auto context = ContextAccess::make(memory, request, "/p/:slug/:id", names, values, std::size(names), 0);
 
     const auto slug = context.req().param("slug");
     RUVIA_CHECK(slug.has_value());

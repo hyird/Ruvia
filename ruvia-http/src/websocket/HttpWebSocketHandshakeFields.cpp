@@ -20,10 +20,7 @@ public:
     [[nodiscard]] bool appendList(std::string_view value) noexcept {
         while (true) {
             const auto comma = value.find(',');
-            const auto token = httpTrimOws(
-                comma == std::string_view::npos
-                    ? value
-                    : value.substr(0, comma));
+            const auto token = httpTrimOws(comma == std::string_view::npos ? value : value.substr(0, comma));
             if (!token.empty() && !append(token)) {
                 return false;
             }
@@ -64,13 +61,9 @@ private:
     std::size_t size_{0};
 };
 
-[[nodiscard]] bool appendWebSocketSubprotocolOffers(
-    std::span<const HttpHeaderView> headers,
-    WebSocketSubprotocolSet& protocols,
-    bool& present) noexcept {
+[[nodiscard]] bool appendWebSocketSubprotocolOffers(std::span<const HttpHeaderView> headers, WebSocketSubprotocolSet& protocols, bool& present) noexcept {
     for (const auto& header : headers) {
-        if (!httpAsciiEqualsIgnoreCase(
-                header.name(), "Sec-WebSocket-Protocol")) {
+        if (!httpAsciiEqualsIgnoreCase(header.name(), "Sec-WebSocket-Protocol")) {
             continue;
         }
         present = true;
@@ -81,48 +74,34 @@ private:
     return true;
 }
 
-[[nodiscard]] bool webSocketSubprotocolHeaderOffersValid(
-    std::span<const HttpHeaderView> headers) noexcept {
+[[nodiscard]] bool webSocketSubprotocolHeaderOffersValid(std::span<const HttpHeaderView> headers) noexcept {
     WebSocketSubprotocolSet protocols;
     bool present = false;
-    return appendWebSocketSubprotocolOffers(headers, protocols, present) &&
-        (!present || !protocols.empty());
+    return appendWebSocketSubprotocolOffers(headers, protocols, present) && (!present || !protocols.empty());
 }
 
-[[nodiscard]] bool webSocketProtocolTokenValid(
-    std::string_view protocol) noexcept {
+[[nodiscard]] bool webSocketProtocolTokenValid(std::string_view protocol) noexcept {
     if (protocol.empty()) {
         return false;
     }
-    return std::ranges::all_of(protocol, [](char ch) noexcept {
-        return isHttpTokenChar(static_cast<unsigned char>(ch));
-    });
+    return std::ranges::all_of(protocol, [](char ch) noexcept { return isHttpTokenChar(static_cast<unsigned char>(ch)); });
 }
 
-void skipWebSocketExtensionOws(
-    std::string_view value,
-    std::size_t& cursor) noexcept {
-    while (cursor < value.size() &&
-           (value[cursor] == ' ' || value[cursor] == '\t')) {
+void skipWebSocketExtensionOws(std::string_view value, std::size_t& cursor) noexcept {
+    while (cursor < value.size() && (value[cursor] == ' ' || value[cursor] == '\t')) {
         ++cursor;
     }
 }
 
-[[nodiscard]] bool consumeWebSocketExtensionToken(
-    std::string_view value,
-    std::size_t& cursor) noexcept {
+[[nodiscard]] bool consumeWebSocketExtensionToken(std::string_view value, std::size_t& cursor) noexcept {
     const auto start = cursor;
-    while (cursor < value.size() &&
-           isHttpTokenChar(
-               static_cast<unsigned char>(value[cursor]))) {
+    while (cursor < value.size() && isHttpTokenChar(static_cast<unsigned char>(value[cursor]))) {
         ++cursor;
     }
     return cursor != start;
 }
 
-[[nodiscard]] bool consumeWebSocketExtensionQuotedToken(
-    std::string_view value,
-    std::size_t& cursor) noexcept {
+[[nodiscard]] bool consumeWebSocketExtensionQuotedToken(std::string_view value, std::size_t& cursor) noexcept {
     if (cursor == value.size() || value[cursor] != '"') {
         return false;
     }
@@ -149,9 +128,7 @@ void skipWebSocketExtensionOws(
     return false;
 }
 
-[[nodiscard]] bool appendWebSocketExtensionList(
-    std::string_view value,
-    bool& hasExtension) noexcept {
+[[nodiscard]] bool appendWebSocketExtensionList(std::string_view value, bool& hasExtension) noexcept {
     std::size_t cursor = 0;
     while (true) {
         skipWebSocketExtensionOws(value, cursor);
@@ -206,18 +183,15 @@ void skipWebSocketExtensionOws(
     }
 }
 
-[[nodiscard]] bool webSocketExtensionHeaderOffersValid(
-    std::span<const HttpHeaderView> headers) noexcept {
+[[nodiscard]] bool webSocketExtensionHeaderOffersValid(std::span<const HttpHeaderView> headers) noexcept {
     bool present = false;
     bool hasExtension = false;
     for (const auto& header : headers) {
-        if (!httpAsciiEqualsIgnoreCase(
-                header.name(), "Sec-WebSocket-Extensions")) {
+        if (!httpAsciiEqualsIgnoreCase(header.name(), "Sec-WebSocket-Extensions")) {
             continue;
         }
         present = true;
-        if (!appendWebSocketExtensionList(
-                header.value(), hasExtension)) {
+        if (!appendWebSocketExtensionList(header.value(), hasExtension)) {
             return false;
         }
     }
@@ -239,10 +213,8 @@ bool webSocketExtensionOffersValid(const HttpRequest& request) noexcept {
     return webSocketExtensionHeaderOffersValid(request.headers());
 }
 
-bool webSocketClientOfferHeadersValid(
-    std::span<const HttpHeaderView> headers) noexcept {
-    return webSocketSubprotocolHeaderOffersValid(headers) &&
-        webSocketExtensionHeaderOffersValid(headers);
+bool webSocketClientOfferHeadersValid(std::span<const HttpHeaderView> headers) noexcept {
+    return webSocketSubprotocolHeaderOffersValid(headers) && webSocketExtensionHeaderOffersValid(headers);
 }
 
 bool webSocketProtocolOffered(const HttpRequest& request, std::string_view protocol) noexcept {
@@ -251,44 +223,24 @@ bool webSocketProtocolOffered(const HttpRequest& request, std::string_view proto
     }
     WebSocketSubprotocolSet protocols;
     bool present = false;
-    return appendWebSocketSubprotocolOffers(
-               request.headers(), protocols, present) &&
-        present && !protocols.empty() && protocols.contains(protocol);
+    return appendWebSocketSubprotocolOffers(request.headers(), protocols, present) && present && !protocols.empty() && protocols.contains(protocol);
 }
 
-std::string_view chooseWebSocketSubprotocol(
-    const HttpRequest& request,
-    std::string_view supported) noexcept {
+std::string_view chooseWebSocketSubprotocol(const HttpRequest& request, std::string_view supported) noexcept {
     WebSocketSubprotocolSet offered;
     bool present = false;
-    if (!appendWebSocketSubprotocolOffers(
-            request.headers(), offered, present) ||
-        !present || offered.empty() ||
-        !isValidWebSocketSubprotocolList(supported)) {
+    if (!appendWebSocketSubprotocolOffers(request.headers(), offered, present) || !present || offered.empty() || !isValidWebSocketSubprotocolList(supported)) {
         return {};
     }
-    return httpFindHeaderToken(
-        supported,
-        [&offered](std::string_view token) noexcept {
-            return offered.contains(token);
-        });
+    return httpFindHeaderToken(supported, [&offered](std::string_view token) noexcept { return offered.contains(token); });
 }
 
-WebSocketServerNegotiation::WebSocketServerNegotiation(
-    std::string_view subprotocol,
-    WebSocketDeflateNegotiation deflate,
-    std::pmr::memory_resource* resource)
+WebSocketServerNegotiation::WebSocketServerNegotiation(std::string_view subprotocol, WebSocketDeflateNegotiation deflate, std::pmr::memory_resource* resource)
     : subprotocol_(subprotocol, httpPmrResourceOrDefault(resource)),
       deflate_(deflate) {}
 
-WebSocketServerNegotiation makeWebSocketServerNegotiation(
-    const HttpRequest& request,
-    std::string_view supportedSubprotocols,
-    std::pmr::memory_resource* resource) {
-    return WebSocketServerNegotiation(
-        chooseWebSocketSubprotocol(request, supportedSubprotocols),
-        webSocketNegotiatePermessageDeflate(request),
-        resource);
+WebSocketServerNegotiation makeWebSocketServerNegotiation(const HttpRequest& request, std::string_view supportedSubprotocols, std::pmr::memory_resource* resource) {
+    return WebSocketServerNegotiation(chooseWebSocketSubprotocol(request, supportedSubprotocols), webSocketNegotiatePermessageDeflate(request), resource);
 }
 
 }  // namespace ruvia::detail

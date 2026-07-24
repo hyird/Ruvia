@@ -14,9 +14,7 @@ namespace ruvia {
 // precompressed sidecar the client accepts.
 class StaticFileRepresentation final {
 public:
-    StaticFileRepresentation(
-        detail::StaticRootEntryView entry,
-        detail::HttpContentCoding contentCoding) noexcept
+    StaticFileRepresentation(detail::StaticRootEntryView entry, detail::HttpContentCoding contentCoding) noexcept
         : entry_(entry),
           contentCoding_(contentCoding) {}
 
@@ -38,11 +36,6 @@ private:
 // ties resolve br > zstd > gzip. The served bytes are the variant's, so its
 // size/etag/modified describe the wire representation; the caller keeps the
 // original Content-Type. Index lookups only (no per-request filesystem stat).
-[[nodiscard]] StaticFileRepresentation selectStaticFileRepresentation(
-    const StaticRoot& root,
-    std::string_view relative,
-    const HttpRequest& request,
-    std::pmr::memory_resource* resource,
-    detail::StaticRootEntryView identity);
+[[nodiscard]] StaticFileRepresentation selectStaticFileRepresentation(const StaticRoot& root, std::string_view relative, const HttpRequest& request, std::pmr::memory_resource* resource, detail::StaticRootEntryView identity);
 
 }  // namespace ruvia

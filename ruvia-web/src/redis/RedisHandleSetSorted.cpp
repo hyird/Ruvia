@@ -73,29 +73,19 @@ ScopedOperation<std::pmr::vector<std::pmr::string>> RedisHandle::zrange(std::str
     requireActive();
     auto startValue = detail::redisIntString(start, resource_);
     auto stopValue = detail::redisIntString(stop, resource_);
-    return scoped(detail::redisStringArrayCommand(
-        *pool_,
-        detail::ownRedisArgs({"ZRANGE", key, std::string_view(startValue), std::string_view(stopValue)}, resource_),
-        resource_));
+    return scoped(detail::redisStringArrayCommand(*pool_, detail::ownRedisArgs({"ZRANGE", key, std::string_view(startValue), std::string_view(stopValue)}, resource_), resource_));
 }
 
 ScopedOperation<std::pmr::vector<RedisScoredValue>> RedisHandle::zrangeWithScores(std::string_view key, std::int64_t start, std::int64_t stop) const {
     requireActive();
     auto startValue = detail::redisIntString(start, resource_);
     auto stopValue = detail::redisIntString(stop, resource_);
-    return scoped(detail::executeRedisScoredArray(
-        *pool_,
-        detail::ownRedisArgs({"ZRANGE", key, std::string_view(startValue), std::string_view(stopValue), "WITHSCORES"}, resource_),
-        resource_));
+    return scoped(detail::executeRedisScoredArray(*pool_, detail::ownRedisArgs({"ZRANGE", key, std::string_view(startValue), std::string_view(stopValue), "WITHSCORES"}, resource_), resource_));
 }
 
 ScopedOperation<std::optional<double>> RedisHandle::zscore(std::string_view key, std::string_view member) const {
     requireActive();
-    return scoped(detail::executeRedisOptionalDouble(
-        *pool_,
-        detail::ownRedisArgs({"ZSCORE", key, member}, resource_),
-        "invalid redis zscore reply",
-        resource_));
+    return scoped(detail::executeRedisOptionalDouble(*pool_, detail::ownRedisArgs({"ZSCORE", key, member}, resource_), "invalid redis zscore reply", resource_));
 }
 
 ScopedOperation<std::int64_t> RedisHandle::zcard(std::string_view key) const {

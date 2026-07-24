@@ -13,36 +13,20 @@ struct Http2PayloadSlice final {
     std::string_view second;
 };
 
-[[nodiscard]] inline Http2PayloadSlice http2SliceTwoPartPayload(
-    std::string_view first,
-    std::string_view second,
-    std::size_t offset,
-    std::size_t size) noexcept {
+[[nodiscard]] inline Http2PayloadSlice http2SliceTwoPartPayload(std::string_view first, std::string_view second, std::size_t offset, std::size_t size) noexcept {
     if (offset < first.size()) {
         const auto firstSize = std::min(size, first.size() - offset);
         const auto firstSlice = first.substr(offset, firstSize);
         size -= firstSize;
-        return Http2PayloadSlice{
-            .first = firstSlice,
-            .second = size == 0 ? std::string_view{} : second.substr(0, size)};
+        return Http2PayloadSlice{.first = firstSlice, .second = size == 0 ? std::string_view{} : second.substr(0, size)};
     }
-    return Http2PayloadSlice{
-        .first = second.substr(offset - first.size(), size),
-        .second = {}};
+    return Http2PayloadSlice{.first = second.substr(offset - first.size(), size), .second = {}};
 }
 
 template <HttpTemporaryOwningCharString First>
-Http2PayloadSlice http2SliceTwoPartPayload(
-    First&&,
-    std::string_view,
-    std::size_t,
-    std::size_t) = delete;
+Http2PayloadSlice http2SliceTwoPartPayload(First&&, std::string_view, std::size_t, std::size_t) = delete;
 
 template <HttpTemporaryOwningCharString Second>
-Http2PayloadSlice http2SliceTwoPartPayload(
-    std::string_view,
-    Second&&,
-    std::size_t,
-    std::size_t) = delete;
+Http2PayloadSlice http2SliceTwoPartPayload(std::string_view, Second&&, std::size_t, std::size_t) = delete;
 
 }  // namespace ruvia::detail

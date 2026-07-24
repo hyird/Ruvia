@@ -11,10 +11,7 @@
 
 namespace {
 
-ruvia::Task<void> exerciseLeaseAndClose(
-    ruvia::detail::PoolLeaseScheduler& scheduler,
-    asio::io_context& ioContext,
-    bool& success) {
+ruvia::Task<void> exerciseLeaseAndClose(ruvia::detail::PoolLeaseScheduler& scheduler, asio::io_context& ioContext, bool& success) {
     {
         auto discardedColdAcquire = scheduler.acquire(std::nullopt);
         static_cast<void>(discardedColdAcquire);
@@ -25,72 +22,46 @@ ruvia::Task<void> exerciseLeaseAndClose(
         co_return;
     }
     const auto index = firstLease->index();
-    if (scheduler.release(index) !=
-            ruvia::detail::PoolLeaseReleaseStatus::kReleased ||
-        scheduler.release(index) !=
-            ruvia::detail::PoolLeaseReleaseStatus::kAlreadyReleased ||
-        scheduler.release(index + 1) !=
-            ruvia::detail::PoolLeaseReleaseStatus::kInvalidSlot) {
+    if (scheduler.release(index) != ruvia::detail::PoolLeaseReleaseStatus::kReleased || scheduler.release(index) != ruvia::detail::PoolLeaseReleaseStatus::kAlreadyReleased || scheduler.release(index + 1) != ruvia::detail::PoolLeaseReleaseStatus::kInvalidSlot) {
         co_return;
     }
 
     const auto reacquired = co_await scheduler.acquire(std::nullopt);
-    if (reacquired.acquired() == nullptr ||
-        reacquired.acquired()->index() != index) {
+    if (reacquired.acquired() == nullptr || reacquired.acquired()->index() != index) {
         co_return;
     }
 
     auto handoffStatus = ruvia::detail::PoolLeaseReleaseStatus::kInvalidSlot;
-    asio::post(ioContext, [&scheduler, &handoffStatus, index] {
-        handoffStatus = scheduler.release(index);
-    });
+    asio::post(ioContext, [&scheduler, &handoffStatus, index] { handoffStatus = scheduler.release(index); });
     const auto handedOff = co_await scheduler.acquire(std::nullopt);
-    if (handedOff.acquired() == nullptr ||
-        handedOff.acquired()->index() != index) {
+    if (handedOff.acquired() == nullptr || handedOff.acquired()->index() != index) {
         co_return;
     }
 
-    asio::post(ioContext, [&scheduler] {
-        (void)scheduler.close();
-    });
+    asio::post(ioContext, [&scheduler] { (void)scheduler.close(); });
     const auto waitingAtClose = co_await scheduler.acquire(std::nullopt);
-    if (handoffStatus !=
-            ruvia::detail::PoolLeaseReleaseStatus::kTransferredToWaiter ||
-        waitingAtClose.closed() == nullptr || !scheduler.closing() ||
-        scheduler.close()) {
+    if (handoffStatus != ruvia::detail::PoolLeaseReleaseStatus::kTransferredToWaiter || waitingAtClose.closed() == nullptr || !scheduler.closing() || scheduler.close()) {
         co_return;
     }
-    if (scheduler.release(index) !=
-        ruvia::detail::PoolLeaseReleaseStatus::kReleased) {
+    if (scheduler.release(index) != ruvia::detail::PoolLeaseReleaseStatus::kReleased) {
         co_return;
     }
     const auto afterClose = co_await scheduler.acquire(std::nullopt);
     success = afterClose.closed() != nullptr;
 }
 
-ruvia::Task<void> exerciseAcquireTimeout(
-    ruvia::detail::PoolLeaseScheduler& scheduler,
-    asio::io_context& ioContext,
-    bool& success) {
-    asio::post(ioContext, [&scheduler] {
-        scheduler.scanDeadlines(
-            std::chrono::steady_clock::time_point::max());
-    });
-    const auto result = co_await scheduler.acquire(
-        std::chrono::milliseconds(1));
+ruvia::Task<void> exerciseAcquireTimeout(ruvia::detail::PoolLeaseScheduler& scheduler, asio::io_context& ioContext, bool& success) {
+    asio::post(ioContext, [&scheduler] { scheduler.scanDeadlines(std::chrono::steady_clock::time_point::max()); });
+    const auto result = co_await scheduler.acquire(std::chrono::milliseconds(1));
     success = result.timedOut() != nullptr;
 }
 
-ruvia::Task<void> exerciseSaturatedAcquireTimeout(
-    ruvia::detail::PoolLeaseScheduler& scheduler,
-    asio::io_context& ioContext,
-    bool& success) {
+ruvia::Task<void> exerciseSaturatedAcquireTimeout(ruvia::detail::PoolLeaseScheduler& scheduler, asio::io_context& ioContext, bool& success) {
     asio::post(ioContext, [&scheduler] {
         scheduler.scanDeadlines(std::chrono::steady_clock::now());
         (void)scheduler.close();
     });
-    const auto result = co_await scheduler.acquire(
-        std::chrono::milliseconds::max());
+    const auto result = co_await scheduler.acquire(std::chrono::milliseconds::max());
     // A maximum positive timeout is effectively unbounded. Direct deadline
     // addition used to wrap it into the past, making the deadline scan win
     // with a false timeout instead of the subsequent close notification.
@@ -107,26 +78,9 @@ int main() {
     bool leaseSuccess = false;
     bool timeoutSuccess = false;
     bool saturatedTimeoutSuccess = false;
-    asio::co_spawn(
-        ioContext,
-        ruvia::detail::taskAsAwaitable(
-            exerciseLeaseAndClose(
-                leaseScheduler, ioContext, leaseSuccess)),
-        asio::detached);
-    asio::co_spawn(
-        ioContext,
-        ruvia::detail::taskAsAwaitable(
-            exerciseAcquireTimeout(
-                timeoutScheduler, ioContext, timeoutSuccess)),
-        asio::detached);
-    asio::co_spawn(
-        ioContext,
-        ruvia::detail::taskAsAwaitable(
-            exerciseSaturatedAcquireTimeout(
-                saturatedTimeoutScheduler,
-                ioContext,
-                saturatedTimeoutSuccess)),
-        asio::detached);
+    asio::co_spawn(ioContext, ruvia::detail::taskAsAwaitable(exerciseLeaseAndClose(leaseScheduler, ioContext, leaseSuccess)), asio::detached);
+    asio::co_spawn(ioContext, ruvia::detail::taskAsAwaitable(exerciseAcquireTimeout(timeoutScheduler, ioContext, timeoutSuccess)), asio::detached);
+    asio::co_spawn(ioContext, ruvia::detail::taskAsAwaitable(exerciseSaturatedAcquireTimeout(saturatedTimeoutScheduler, ioContext, saturatedTimeoutSuccess)), asio::detached);
     ioContext.run();
     return leaseSuccess && timeoutSuccess && saturatedTimeoutSuccess ? 0 : 1;
 }

@@ -45,17 +45,14 @@ namespace {
         case 7:
             return httpAsciiEqualsIgnoreCase(name, "Trailer");
         case 10:
-            return httpAsciiEqualsIgnoreCase(name, "Keep-Alive") ||
-                httpAsciiEqualsIgnoreCase(name, "Set-Cookie");
+            return httpAsciiEqualsIgnoreCase(name, "Keep-Alive") || httpAsciiEqualsIgnoreCase(name, "Set-Cookie");
         case 12:
             return httpAsciiEqualsIgnoreCase(name, "Max-Forwards");
         case 13:
             // The common classified forbidden fields are caught above; keep the
             // less common trailer-forbidden names here without growing the hot
             // request known-header table.
-            return httpAsciiEqualsIgnoreCase(name, "Cache-Control") ||
-                httpAsciiEqualsIgnoreCase(name, "Accept-Ranges") ||
-                httpAsciiEqualsIgnoreCase(name, "Content-Range");
+            return httpAsciiEqualsIgnoreCase(name, "Cache-Control") || httpAsciiEqualsIgnoreCase(name, "Accept-Ranges") || httpAsciiEqualsIgnoreCase(name, "Content-Range");
         case 16:
             // Proxy-Connection completes the connection-specific set that must not
             // arrive late in a trailer (Connection / Keep-Alive / Transfer-Encoding
@@ -64,8 +61,7 @@ namespace {
             // exactly as for Upgrade; the HTTP/2 path already bans it as a
             // connection-specific header. Content-Encoding is also caught by the
             // classified path above and is repeated here only defensively.
-            return httpAsciiEqualsIgnoreCase(name, "Content-Encoding") ||
-                httpAsciiEqualsIgnoreCase(name, "Proxy-Connection");
+            return httpAsciiEqualsIgnoreCase(name, "Content-Encoding") || httpAsciiEqualsIgnoreCase(name, "Proxy-Connection");
         case 18:
             return httpAsciiEqualsIgnoreCase(name, "Proxy-Authenticate");
         case 19:
@@ -77,8 +73,7 @@ namespace {
 
 }  // namespace
 
-std::optional<HttpChunkScanError> validateHttpChunkTrailers(
-    std::string_view trailers) noexcept {
+std::optional<HttpChunkScanError> validateHttpChunkTrailers(std::string_view trailers) noexcept {
     if (trailers.empty()) {
         return std::nullopt;
     }
@@ -94,9 +89,7 @@ std::optional<HttpChunkScanError> validateHttpChunkTrailers(
         }
         ++fieldCount;
         const auto lineEnd = trailers.find("\r\n", cursor);
-        const auto line = lineEnd == std::string_view::npos
-            ? trailers.substr(cursor)
-            : trailers.substr(cursor, lineEnd - cursor);
+        const auto line = lineEnd == std::string_view::npos ? trailers.substr(cursor) : trailers.substr(cursor, lineEnd - cursor);
         if (line.empty() || line.front() == ' ' || line.front() == '\t') {
             return HttpChunkScanError::kInvalidTrailer;
         }
@@ -106,9 +99,7 @@ std::optional<HttpChunkScanError> validateHttpChunkTrailers(
         }
         const auto name = line.substr(0, colon);
         const auto value = httpTrimOws(line.substr(colon + 1));
-        if (!isValidHttpHeaderName(name) ||
-            !isValidHttpHeaderValue(value) ||
-            isForbiddenChunkTrailer(name)) {
+        if (!isValidHttpHeaderName(name) || !isValidHttpHeaderValue(value) || isForbiddenChunkTrailer(name)) {
             return HttpChunkScanError::kInvalidTrailer;
         }
         if (lineEnd == std::string_view::npos) {
@@ -141,14 +132,12 @@ HttpChunkScanResult scanHttpChunkedBody(std::string_view body) noexcept {
             // Once the unterminated line itself reaches the framing-line byte
             // limit, no completion can make this a bounded chunk-size line.
             if (body.size() - cursor >= kMaxHttpHeaderBytes) {
-                return HttpChunkScanResult::makeFailure(
-                    HttpChunkScanError::kTooLarge);
+                return HttpChunkScanResult::makeFailure(HttpChunkScanError::kTooLarge);
             }
             return HttpChunkScanResult::makeNeedMore();
         }
         if (lineEnd - cursor + 2 > kMaxHttpHeaderBytes) {
-            return HttpChunkScanResult::makeFailure(
-                HttpChunkScanError::kTooLarge);
+            return HttpChunkScanResult::makeFailure(HttpChunkScanError::kTooLarge);
         }
 
         std::size_t chunkSize = 0;
@@ -156,43 +145,34 @@ HttpChunkScanResult scanHttpChunkedBody(std::string_view body) noexcept {
             case ChunkSizeLineStatus::kOk:
                 break;
             case ChunkSizeLineStatus::kInvalidSize:
-                return HttpChunkScanResult::makeFailure(
-                    HttpChunkScanError::kInvalidSize);
+                return HttpChunkScanResult::makeFailure(HttpChunkScanError::kInvalidSize);
             case ChunkSizeLineStatus::kOverflow:
-                return HttpChunkScanResult::makeFailure(
-                    HttpChunkScanError::kSizeOverflow);
+                return HttpChunkScanResult::makeFailure(HttpChunkScanError::kSizeOverflow);
             case ChunkSizeLineStatus::kInvalidExtension:
-                return HttpChunkScanResult::makeFailure(
-                    HttpChunkScanError::kInvalidExtension);
+                return HttpChunkScanResult::makeFailure(HttpChunkScanError::kInvalidExtension);
         }
         if (!addOverhead(lineEnd - cursor + 2)) {
-            return HttpChunkScanResult::makeFailure(
-                HttpChunkScanError::kTooLarge);
+            return HttpChunkScanResult::makeFailure(HttpChunkScanError::kTooLarge);
         }
         cursor = lineEnd + 2;
 
         if (chunkSize == 0) {
             if (body.substr(cursor, 2) == "\r\n") {
                 if (!addOverhead(2)) {
-                    return HttpChunkScanResult::makeFailure(
-                        HttpChunkScanError::kTooLarge);
+                    return HttpChunkScanResult::makeFailure(HttpChunkScanError::kTooLarge);
                 }
                 return HttpChunkScanResult::makeComplete(cursor + 2);
             }
             const auto trailerEnd = body.find("\r\n\r\n", cursor);
             if (trailerEnd != std::string_view::npos) {
                 if (trailerEnd - cursor > kMaxHttpHeaderBytes - 4) {
-                    return HttpChunkScanResult::makeFailure(
-                        HttpChunkScanError::kTooLarge);
+                    return HttpChunkScanResult::makeFailure(HttpChunkScanError::kTooLarge);
                 }
-                if (const auto trailerError = validateHttpChunkTrailers(
-                        body.substr(cursor, trailerEnd - cursor));
-                    trailerError.has_value()) {
+                if (const auto trailerError = validateHttpChunkTrailers(body.substr(cursor, trailerEnd - cursor)); trailerError.has_value()) {
                     return HttpChunkScanResult::makeFailure(*trailerError);
                 }
                 if (!addOverhead(trailerEnd - cursor + 4)) {
-                    return HttpChunkScanResult::makeFailure(
-                        HttpChunkScanError::kTooLarge);
+                    return HttpChunkScanResult::makeFailure(HttpChunkScanError::kTooLarge);
                 }
                 return HttpChunkScanResult::makeComplete(trailerEnd + 4);
             }
@@ -200,26 +180,22 @@ HttpChunkScanResult scanHttpChunkedBody(std::string_view body) noexcept {
             // At kMaxHttpHeaderBytes available bytes, even the earliest future
             // CRLFCRLF would exceed the complete trailer-section limit.
             if (body.size() - cursor >= kMaxHttpHeaderBytes) {
-                return HttpChunkScanResult::makeFailure(
-                    HttpChunkScanError::kTooLarge);
+                return HttpChunkScanResult::makeFailure(HttpChunkScanError::kTooLarge);
             }
             return HttpChunkScanResult::makeNeedMore();
         }
 
         if (chunkSize > kMaxHttpBodyBytes || decoded > kMaxHttpBodyBytes - chunkSize) {
-            return HttpChunkScanResult::makeFailure(
-                HttpChunkScanError::kTooLarge);
+            return HttpChunkScanResult::makeFailure(HttpChunkScanError::kTooLarge);
         }
         if (body.size() < cursor + chunkSize + 2) {
             return HttpChunkScanResult::makeNeedMore();
         }
         if (body.substr(cursor + chunkSize, 2) != "\r\n") {
-            return HttpChunkScanResult::makeFailure(
-                HttpChunkScanError::kInvalidCrlf);
+            return HttpChunkScanResult::makeFailure(HttpChunkScanError::kInvalidCrlf);
         }
         if (!addOverhead(2)) {
-            return HttpChunkScanResult::makeFailure(
-                HttpChunkScanError::kTooLarge);
+            return HttpChunkScanResult::makeFailure(HttpChunkScanError::kTooLarge);
         }
 
         decoded += chunkSize;

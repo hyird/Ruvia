@@ -29,51 +29,17 @@ struct MatchAnyHeaderToken final {
 };
 
 template <typename Input>
-concept AcceptsAnyBorrowedHttpSubviewInput =
-    requires(Input&& input) {
-        ruvia::detail::httpTrimOws(std::forward<Input>(input));
-    } ||
-    requires(Input&& input) {
-        ruvia::detail::httpTrimQuotes(std::forward<Input>(input));
-    } ||
-    requires(Input&& input) {
-        ruvia::detail::httpFindHeaderToken(
-            std::forward<Input>(input),
-            MatchAnyHeaderToken{});
-    } ||
-    requires(Input&& input) {
-        ruvia::detail::httpHeaderTokenBeforeParameters(
-            std::forward<Input>(input));
-    } ||
-    requires(Input&& input) {
-        ruvia::detail::httpMediaTypeOnly(std::forward<Input>(input));
-    } ||
-    requires(Input&& input) {
-        ruvia::detail::httpTrimWeakEtagPrefix(
-            std::forward<Input>(input));
-    } ||
-    requires(const ruvia::HttpRequest& request, Input&& input) {
-        ruvia::detail::chooseWebSocketSubprotocol(
-            request,
-            std::forward<Input>(input));
-    };
+concept AcceptsAnyBorrowedHttpSubviewInput = requires(Input&& input) { ruvia::detail::httpTrimOws(std::forward<Input>(input)); } || requires(Input&& input) { ruvia::detail::httpTrimQuotes(std::forward<Input>(input)); } || requires(Input&& input) { ruvia::detail::httpFindHeaderToken(std::forward<Input>(input), MatchAnyHeaderToken{}); } || requires(Input&& input) { ruvia::detail::httpHeaderTokenBeforeParameters(std::forward<Input>(input)); } || requires(Input&& input) { ruvia::detail::httpMediaTypeOnly(std::forward<Input>(input)); } || requires(Input&& input) { ruvia::detail::httpTrimWeakEtagPrefix(std::forward<Input>(input)); } || requires(const ruvia::HttpRequest& request, Input&& input) { ruvia::detail::chooseWebSocketSubprotocol(request, std::forward<Input>(input)); };
 
 template <typename Input>
-concept AcceptsAllBorrowedHttpSubviewInputs = requires(
-    const ruvia::HttpRequest& request,
-    Input&& input) {
+concept AcceptsAllBorrowedHttpSubviewInputs = requires(const ruvia::HttpRequest& request, Input&& input) {
     ruvia::detail::httpTrimOws(std::forward<Input>(input));
     ruvia::detail::httpTrimQuotes(std::forward<Input>(input));
-    ruvia::detail::httpFindHeaderToken(
-        std::forward<Input>(input),
-        MatchAnyHeaderToken{});
-    ruvia::detail::httpHeaderTokenBeforeParameters(
-        std::forward<Input>(input));
+    ruvia::detail::httpFindHeaderToken(std::forward<Input>(input), MatchAnyHeaderToken{});
+    ruvia::detail::httpHeaderTokenBeforeParameters(std::forward<Input>(input));
     ruvia::detail::httpMediaTypeOnly(std::forward<Input>(input));
     ruvia::detail::httpTrimWeakEtagPrefix(std::forward<Input>(input));
-    ruvia::detail::chooseWebSocketSubprotocol(
-        request,
-        std::forward<Input>(input));
+    ruvia::detail::chooseWebSocketSubprotocol(request, std::forward<Input>(input));
 };
 
 static_assert(!AcceptsAnyBorrowedHttpSubviewInput<std::string>);
@@ -84,83 +50,18 @@ static_assert(AcceptsAllBorrowedHttpSubviewInputs<std::pmr::string&>);
 static_assert(AcceptsAllBorrowedHttpSubviewInputs<std::string_view>);
 
 template <typename Input>
-concept AcceptsAnyBorrowedHttpParserOutputInput =
-    requires(
-        Input&& input,
-        ruvia::detail::HttpMediaTypeParts& mediaType,
-        std::string_view& first,
-        std::string_view& second,
-        bool& flag,
-        ruvia::detail::HttpUpgradeProtocol& protocol,
-        const ruvia::detail::Http2FrameHeader& frame) {
-        ruvia::detail::httpParseMediaTypeParts(
-            std::forward<Input>(input), false, mediaType);
-    } ||
-    requires(
-        Input&& input,
-        ruvia::detail::HttpMediaTypeParts& mediaType) {
-        ruvia::detail::httpParseMediaType(
-            std::forward<Input>(input), false, mediaType);
-    } ||
-    requires(Input&& input, std::string_view& first, std::string_view& second) {
-        ruvia::detail::httpParseMimeParameter(
-            std::forward<Input>(input), first, second);
-    } ||
-    requires(Input&& input, std::string_view& first, bool& flag) {
-        ruvia::detail::httpParseTransferCodingSyntax(
-            std::forward<Input>(input), first, flag);
-    } ||
-    requires(Input&& input, ruvia::detail::HttpUpgradeProtocol& protocol) {
-        ruvia::detail::httpParseUpgradeProtocol(
-            std::forward<Input>(input), protocol);
-    } ||
-    requires(
-        Input&& input,
-        const ruvia::detail::Http2FrameHeader& frame,
-        std::string_view& first) {
-        ruvia::detail::http2StripPadAndPriority(
-            frame, std::forward<Input>(input), false, first);
-    } ||
-    requires(
-        Input&& input,
-        const ruvia::detail::Http2FrameHeader& frame,
-        std::string_view& first) {
-        ruvia::detail::http2DecodeHeadersPayload(
-            frame, std::forward<Input>(input), first);
-    } ||
-    requires(
-        Input&& input,
-        const ruvia::detail::Http2FrameHeader& frame,
-        std::string_view& first) {
-        ruvia::detail::http2DecodeDataPayload(
-            frame, std::forward<Input>(input), first);
-    };
+concept AcceptsAnyBorrowedHttpParserOutputInput = requires(Input&& input, ruvia::detail::HttpMediaTypeParts& mediaType, std::string_view& first, std::string_view& second, bool& flag, ruvia::detail::HttpUpgradeProtocol& protocol, const ruvia::detail::Http2FrameHeader& frame) { ruvia::detail::httpParseMediaTypeParts(std::forward<Input>(input), false, mediaType); } || requires(Input&& input, ruvia::detail::HttpMediaTypeParts& mediaType) { ruvia::detail::httpParseMediaType(std::forward<Input>(input), false, mediaType); } || requires(Input&& input, std::string_view& first, std::string_view& second) { ruvia::detail::httpParseMimeParameter(std::forward<Input>(input), first, second); } || requires(Input&& input, std::string_view& first, bool& flag) { ruvia::detail::httpParseTransferCodingSyntax(std::forward<Input>(input), first, flag); } || requires(Input&& input, ruvia::detail::HttpUpgradeProtocol& protocol) { ruvia::detail::httpParseUpgradeProtocol(std::forward<Input>(input), protocol); } || requires(Input&& input, const ruvia::detail::Http2FrameHeader& frame, std::string_view& first) { ruvia::detail::http2StripPadAndPriority(frame, std::forward<Input>(input), false, first); } || requires(Input&& input, const ruvia::detail::Http2FrameHeader& frame, std::string_view& first) { ruvia::detail::http2DecodeHeadersPayload(frame, std::forward<Input>(input), first); } || requires(Input&& input, const ruvia::detail::Http2FrameHeader& frame, std::string_view& first) { ruvia::detail::http2DecodeDataPayload(frame, std::forward<Input>(input), first); };
 
 template <typename Input>
-concept AcceptsAllBorrowedHttpParserOutputInputs = requires(
-    Input&& input,
-    ruvia::detail::HttpMediaTypeParts& mediaType,
-    std::string_view& first,
-    std::string_view& second,
-    bool& flag,
-    ruvia::detail::HttpUpgradeProtocol& protocol,
-    const ruvia::detail::Http2FrameHeader& frame) {
-    ruvia::detail::httpParseMediaTypeParts(
-        std::forward<Input>(input), false, mediaType);
-    ruvia::detail::httpParseMediaType(
-        std::forward<Input>(input), false, mediaType);
-    ruvia::detail::httpParseMimeParameter(
-        std::forward<Input>(input), first, second);
-    ruvia::detail::httpParseTransferCodingSyntax(
-        std::forward<Input>(input), first, flag);
-    ruvia::detail::httpParseUpgradeProtocol(
-        std::forward<Input>(input), protocol);
-    ruvia::detail::http2StripPadAndPriority(
-        frame, std::forward<Input>(input), false, first);
-    ruvia::detail::http2DecodeHeadersPayload(
-        frame, std::forward<Input>(input), first);
-    ruvia::detail::http2DecodeDataPayload(
-        frame, std::forward<Input>(input), first);
+concept AcceptsAllBorrowedHttpParserOutputInputs = requires(Input&& input, ruvia::detail::HttpMediaTypeParts& mediaType, std::string_view& first, std::string_view& second, bool& flag, ruvia::detail::HttpUpgradeProtocol& protocol, const ruvia::detail::Http2FrameHeader& frame) {
+    ruvia::detail::httpParseMediaTypeParts(std::forward<Input>(input), false, mediaType);
+    ruvia::detail::httpParseMediaType(std::forward<Input>(input), false, mediaType);
+    ruvia::detail::httpParseMimeParameter(std::forward<Input>(input), first, second);
+    ruvia::detail::httpParseTransferCodingSyntax(std::forward<Input>(input), first, flag);
+    ruvia::detail::httpParseUpgradeProtocol(std::forward<Input>(input), protocol);
+    ruvia::detail::http2StripPadAndPriority(frame, std::forward<Input>(input), false, first);
+    ruvia::detail::http2DecodeHeadersPayload(frame, std::forward<Input>(input), first);
+    ruvia::detail::http2DecodeDataPayload(frame, std::forward<Input>(input), first);
 };
 
 static_assert(!AcceptsAnyBorrowedHttpParserOutputInput<std::string>);
@@ -174,14 +75,14 @@ static_assert(AcceptsAllBorrowedHttpParserOutputInputs<std::string_view>);
 
 RUVIA_TEST(header_has_token_case_insensitive) {
     RUVIA_CHECK(httpHasToken("gzip, deflate", "deflate"));
-    RUVIA_CHECK(httpHasToken("gzip, deflate", "GZIP"));            // case-insensitive
+    RUVIA_CHECK(httpHasToken("gzip, deflate", "GZIP"));  // case-insensitive
     RUVIA_CHECK(httpHasToken("keep-alive, Upgrade", "upgrade"));
-    RUVIA_CHECK(httpHasToken("  gzip  ,  deflate ", "deflate"));   // surrounding OWS tolerated
-    RUVIA_CHECK(httpHasToken("gzip", "gzip"));                     // a single token
+    RUVIA_CHECK(httpHasToken("  gzip  ,  deflate ", "deflate"));  // surrounding OWS tolerated
+    RUVIA_CHECK(httpHasToken("gzip", "gzip"));                    // a single token
     RUVIA_CHECK(!httpHasToken("gzip, deflate", "br"));
-    RUVIA_CHECK(!httpHasToken("gzipx", "gzip"));                   // a substring is not a token
-    RUVIA_CHECK(!httpHasToken("gzip", ""));                        // empty expected
-    RUVIA_CHECK(!httpHasToken("", "gzip"));                        // empty value
+    RUVIA_CHECK(!httpHasToken("gzipx", "gzip"));  // a substring is not a token
+    RUVIA_CHECK(!httpHasToken("gzip", ""));       // empty expected
+    RUVIA_CHECK(!httpHasToken("", "gzip"));       // empty value
 }
 
 RUVIA_TEST(header_has_token_skips_empty_list_items) {
@@ -198,7 +99,7 @@ RUVIA_TEST(header_has_token_skips_empty_list_items) {
 
 RUVIA_TEST(header_has_exact_token_case_sensitive) {
     RUVIA_CHECK(httpHasExactToken("gzip, deflate", "deflate"));
-    RUVIA_CHECK(!httpHasExactToken("gzip, DEFLATE", "deflate"));   // case-sensitive
+    RUVIA_CHECK(!httpHasExactToken("gzip, DEFLATE", "deflate"));  // case-sensitive
     RUVIA_CHECK(httpHasExactToken("a, b, c", "b"));
     RUVIA_CHECK(!httpHasExactToken("a, b, c", "d"));
 }
@@ -206,9 +107,9 @@ RUVIA_TEST(header_has_exact_token_case_sensitive) {
 RUVIA_TEST(header_trim_quotes) {
     RUVIA_CHECK_EQ(httpTrimQuotes("\"abc\""), std::string_view("abc"));
     RUVIA_CHECK_EQ(httpTrimQuotes("abc"), std::string_view("abc"));      // no quotes
-    RUVIA_CHECK_EQ(httpTrimQuotes("\"\""), std::string_view(""));         // empty quoted
-    RUVIA_CHECK_EQ(httpTrimQuotes("\""), std::string_view("\""));         // one quote is too short
-    RUVIA_CHECK_EQ(httpTrimQuotes("\"abc"), std::string_view("\"abc"));   // only a leading quote
+    RUVIA_CHECK_EQ(httpTrimQuotes("\"\""), std::string_view(""));        // empty quoted
+    RUVIA_CHECK_EQ(httpTrimQuotes("\""), std::string_view("\""));        // one quote is too short
+    RUVIA_CHECK_EQ(httpTrimQuotes("\"abc"), std::string_view("\"abc"));  // only a leading quote
 }
 
 RUVIA_TEST(header_decode_quoted_pairs) {
@@ -221,9 +122,9 @@ RUVIA_TEST(header_decode_quoted_pairs) {
         ruvia::detail::httpAppendDecodedQuotedPairs(out, value);
         return std::string(out.data(), out.size());
     };
-    RUVIA_CHECK_EQ(decode("plain"), std::string("plain"));      // no escapes -> unchanged
-    RUVIA_CHECK_EQ(decode("a\\\"b"), std::string("a\"b"));      // \" -> "
-    RUVIA_CHECK_EQ(decode("x\\\\y"), std::string("x\\y"));      // two backslashes -> one
-    RUVIA_CHECK_EQ(decode("\\a\\b\\c"), std::string("abc"));    // each pair unescaped
-    RUVIA_CHECK_EQ(decode("end\\"), std::string("end\\"));      // trailing lone '\' kept verbatim
+    RUVIA_CHECK_EQ(decode("plain"), std::string("plain"));    // no escapes -> unchanged
+    RUVIA_CHECK_EQ(decode("a\\\"b"), std::string("a\"b"));    // \" -> "
+    RUVIA_CHECK_EQ(decode("x\\\\y"), std::string("x\\y"));    // two backslashes -> one
+    RUVIA_CHECK_EQ(decode("\\a\\b\\c"), std::string("abc"));  // each pair unescaped
+    RUVIA_CHECK_EQ(decode("end\\"), std::string("end\\"));    // trailing lone '\' kept verbatim
 }

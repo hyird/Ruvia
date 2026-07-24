@@ -21,7 +21,7 @@ RUVIA_TEST(http2_stream_send_window_bounds) {
     fc.setSendWindow(0);
     RUVIA_CHECK(fc.addSendWindow(kMax));  // reaching exactly 2^31-1 is allowed
     RUVIA_CHECK_EQ(fc.sendWindow(), kMax);
-    RUVIA_CHECK(!fc.addSendWindow(1));    // one more overflows -> refused (RFC 7540 6.9.1)
+    RUVIA_CHECK(!fc.addSendWindow(1));      // one more overflows -> refused (RFC 7540 6.9.1)
     RUVIA_CHECK_EQ(fc.sendWindow(), kMax);  // and leaves the window unchanged
 }
 

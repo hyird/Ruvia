@@ -27,37 +27,17 @@ bool throwsInvalid(Fn&& fn) {
 }  // namespace
 
 RUVIA_TEST(validate_server_options_accepts_defaults) {
-    static_assert(std::same_as<
-                  decltype(HttpServerOptions{}.keepaliveTimeout),
-                  std::optional<std::chrono::milliseconds>>);
-    static_assert(std::same_as<
-                  decltype(HttpServerOptions{}.clientHeaderTimeout),
-                  std::optional<std::chrono::milliseconds>>);
-    static_assert(std::same_as<
-                  decltype(HttpServerOptions{}.clientBodyTimeout),
-                  std::optional<std::chrono::milliseconds>>);
-    static_assert(std::same_as<
-                  decltype(HttpServerOptions{}.sendTimeout),
-                  std::optional<std::chrono::milliseconds>>);
-    static_assert(std::same_as<
-                  decltype(HttpServerOptions{}.maxConnections),
-                  std::optional<std::size_t>>);
-    static_assert(std::same_as<
-                  decltype(HttpServerOptions{}.keepaliveRequests),
-                  std::optional<std::size_t>>);
-    static_assert(std::same_as<
-                  decltype(HttpServerOptions{}.maxStreamBodyBytes),
-                  std::optional<std::size_t>>);
-    static_assert(std::same_as<
-                  decltype(HttpServerOptions{}.defaultRateLimitPerWorker),
-                  std::optional<ruvia::RateLimitRule>>);
-    static_assert(std::same_as<
-                  decltype(HttpServerOptions{}.rateLimitSlotsPerWorker),
-                  std::size_t>);
+    static_assert(std::same_as<decltype(HttpServerOptions{}.keepaliveTimeout), std::optional<std::chrono::milliseconds>>);
+    static_assert(std::same_as<decltype(HttpServerOptions{}.clientHeaderTimeout), std::optional<std::chrono::milliseconds>>);
+    static_assert(std::same_as<decltype(HttpServerOptions{}.clientBodyTimeout), std::optional<std::chrono::milliseconds>>);
+    static_assert(std::same_as<decltype(HttpServerOptions{}.sendTimeout), std::optional<std::chrono::milliseconds>>);
+    static_assert(std::same_as<decltype(HttpServerOptions{}.maxConnections), std::optional<std::size_t>>);
+    static_assert(std::same_as<decltype(HttpServerOptions{}.keepaliveRequests), std::optional<std::size_t>>);
+    static_assert(std::same_as<decltype(HttpServerOptions{}.maxStreamBodyBytes), std::optional<std::size_t>>);
+    static_assert(std::same_as<decltype(HttpServerOptions{}.defaultRateLimitPerWorker), std::optional<ruvia::RateLimitRule>>);
+    static_assert(std::same_as<decltype(HttpServerOptions{}.rateLimitSlotsPerWorker), std::size_t>);
     RUVIA_CHECK(!HttpServerOptions{}.maxStreamBodyBytes.has_value());
-    RUVIA_CHECK_EQ(
-        HttpServerOptions{}.rateLimitSlotsPerWorker,
-        ruvia::kDefaultRateLimitSlotsPerWorker);
+    RUVIA_CHECK_EQ(HttpServerOptions{}.rateLimitSlotsPerWorker, ruvia::kDefaultRateLimitSlotsPerWorker);
     // An unconfigured server is bounded by default against connection floods.
     RUVIA_CHECK(HttpServerOptions{}.maxConnections.has_value());
     RUVIA_CHECK_EQ(*HttpServerOptions{}.maxConnections, std::size_t{1024});
@@ -191,9 +171,7 @@ RUVIA_TEST(validate_server_options_enforces_nested_tls_material) {
     {
         HttpServerOptions options;
         auto tls = validTls();
-        tls.clientCertificates.emplace(
-            std::pmr::string{},
-            ruvia::TlsClientCertificateRequirement::kOptional);
+        tls.clientCertificates.emplace(std::pmr::string{}, ruvia::TlsClientCertificateRequirement::kOptional);
         options.transport = std::move(tls);
         RUVIA_CHECK(throwsInvalid([&] { validateHttpServerOptions(options); }));
     }
@@ -240,39 +218,19 @@ RUVIA_TEST(server_topology_rejects_invalid_listener_and_tls_states_at_constructi
     static_assert(!std::is_default_constructible_v<ruvia::TlsConfig>);
     static_assert(!std::is_aggregate_v<ruvia::ServerTopology>);
 
+    RUVIA_CHECK(throwsInvalid([] { (void)ruvia::TlsIdentity::fromFiles({}, "key.pem"); }));
+    RUVIA_CHECK(throwsInvalid([] { (void)ruvia::TlsIdentity::fromFiles("cert.pem", {}); }));
+    RUVIA_CHECK(throwsInvalid([] { (void)ruvia::TlsClientCertificatePolicy::required({}); }));
+    RUVIA_CHECK(throwsInvalid([] { (void)ruvia::ServerTopology::http(0); }));
     RUVIA_CHECK(throwsInvalid([] {
-        (void)ruvia::TlsIdentity::fromFiles({}, "key.pem");
-    }));
-    RUVIA_CHECK(throwsInvalid([] {
-        (void)ruvia::TlsIdentity::fromFiles("cert.pem", {});
-    }));
-    RUVIA_CHECK(throwsInvalid([] {
-        (void)ruvia::TlsClientCertificatePolicy::required({});
-    }));
-    RUVIA_CHECK(throwsInvalid([] {
-        (void)ruvia::ServerTopology::http(0);
-    }));
-    RUVIA_CHECK(throwsInvalid([] {
-        auto tls = ruvia::TlsConfig(
-            ruvia::TlsIdentity::fromFiles("cert.pem", "key.pem"));
+        auto tls = ruvia::TlsConfig(ruvia::TlsIdentity::fromFiles("cert.pem", "key.pem"));
         (void)ruvia::ServerTopology::httpAndHttps(8443, 8443, std::move(tls));
     }));
 }
 
 RUVIA_TEST(tls_config_rejects_empty_or_duplicate_sni_identity) {
-    auto tls = ruvia::TlsConfig(
-        ruvia::TlsIdentity::fromFiles("cert.pem", "key.pem"));
-    RUVIA_CHECK(throwsInvalid([&] {
-        tls.addSniIdentity(
-            {},
-            ruvia::TlsIdentity::fromFiles("other.pem", "other.key"));
-    }));
-    tls.addSniIdentity(
-        "Example.com",
-        ruvia::TlsIdentity::fromFiles("other.pem", "other.key"));
-    RUVIA_CHECK(throwsInvalid([&] {
-        tls.addSniIdentity(
-            "example.COM",
-            ruvia::TlsIdentity::fromFiles("third.pem", "third.key"));
-    }));
+    auto tls = ruvia::TlsConfig(ruvia::TlsIdentity::fromFiles("cert.pem", "key.pem"));
+    RUVIA_CHECK(throwsInvalid([&] { tls.addSniIdentity({}, ruvia::TlsIdentity::fromFiles("other.pem", "other.key")); }));
+    tls.addSniIdentity("Example.com", ruvia::TlsIdentity::fromFiles("other.pem", "other.key"));
+    RUVIA_CHECK(throwsInvalid([&] { tls.addSniIdentity("example.COM", ruvia::TlsIdentity::fromFiles("third.pem", "third.key")); }));
 }

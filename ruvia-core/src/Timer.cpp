@@ -12,7 +12,8 @@ namespace {
 class SleepAwaiter final {
 public:
     SleepAwaiter(WorkerHandle worker, std::chrono::steady_clock::duration duration)
-        : worker_(std::move(worker)), duration_(duration) {}
+        : worker_(std::move(worker)),
+          duration_(duration) {}
 
     [[nodiscard]] bool await_ready() const noexcept {
         return duration_ <= std::chrono::steady_clock::duration::zero();
@@ -20,13 +21,10 @@ public:
 
     bool await_suspend(std::coroutine_handle<> continuation) {
         continuation_ = continuation;
-        detail::WorkerHandleAccess::scheduleTimer(
-            worker_, registration_,
-            detail::workerTimerDeadlineAfter(duration_),
-            [this](detail::WorkerTimerOutcome outcome) {
-                outcome_ = outcome;
-                continuation_.resume();
-            });
+        detail::WorkerHandleAccess::scheduleTimer(worker_, registration_, detail::workerTimerDeadlineAfter(duration_), [this](detail::WorkerTimerOutcome outcome) {
+            outcome_ = outcome;
+            continuation_.resume();
+        });
         return true;
     }
 
@@ -45,7 +43,7 @@ private:
     detail::WorkerTimerOutcome outcome_{detail::WorkerTimerOutcome::kExpired};
 };
 
-}
+}  // namespace
 
 Task<bool> sleepFor(WorkerHandle worker, std::chrono::steady_clock::duration duration) {
     if (!worker.isCurrent()) {
@@ -54,4 +52,4 @@ Task<bool> sleepFor(WorkerHandle worker, std::chrono::steady_clock::duration dur
     co_return co_await SleepAwaiter(std::move(worker), duration);
 }
 
-}
+}  // namespace ruvia

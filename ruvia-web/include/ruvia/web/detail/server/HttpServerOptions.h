@@ -34,9 +34,7 @@ struct AccessLogSink final {
 };
 
 struct ConnectionFailureRecordAccess final {
-    [[nodiscard]] static ConnectionFailureRecord make(
-        std::string_view remoteAddress,
-        std::exception_ptr exception) noexcept {
+    [[nodiscard]] static ConnectionFailureRecord make(std::string_view remoteAddress, std::exception_ptr exception) noexcept {
         return ConnectionFailureRecord(remoteAddress, std::move(exception));
     }
 };
@@ -51,9 +49,7 @@ struct ConnectionFailureSink final {
     // count and the callback from drifting apart as new sites are added.
     std::atomic<std::size_t>* counter{nullptr};
 
-    void invoke(
-        std::string_view remoteAddress,
-        std::exception_ptr exception) const noexcept {
+    void invoke(std::string_view remoteAddress, std::exception_ptr exception) const noexcept {
         if (exception == nullptr) {
             return;
         }
@@ -61,9 +57,7 @@ struct ConnectionFailureSink final {
             counter->fetch_add(1, std::memory_order_relaxed);
         }
         if (callback) {
-            callback.invoke(
-                ConnectionFailureRecordAccess::make(
-                    remoteAddress, std::move(exception)));
+            callback.invoke(ConnectionFailureRecordAccess::make(remoteAddress, std::move(exception)));
             return;
         }
         reportUnhandledFailure("web connection", std::move(exception));
@@ -94,8 +88,7 @@ struct HttpServerOptions final {
 
     struct TlsClientCertificatePolicy final {
         std::pmr::string verifyFile;
-        ruvia::TlsClientCertificateRequirement requirement{
-            ruvia::TlsClientCertificateRequirement::kOptional};
+        ruvia::TlsClientCertificateRequirement requirement{ruvia::TlsClientCertificateRequirement::kOptional};
     };
 
     struct Tls final {
@@ -162,15 +155,15 @@ struct HttpServerOptions final {
     std::optional<RateLimitRule> defaultRateLimitPerWorker;
     std::size_t rateLimitSlotsPerWorker{kDefaultRateLimitSlotsPerWorker};
 
-    [[nodiscard]] const Tls* tls() const & noexcept {
+    [[nodiscard]] const Tls* tls() const& noexcept {
         return std::get_if<Tls>(&transport);
     }
-    const Tls* tls() const && = delete;
+    const Tls* tls() const&& = delete;
 
-    [[nodiscard]] const RedirectHttpToHttps* redirect() const & noexcept {
+    [[nodiscard]] const RedirectHttpToHttps* redirect() const& noexcept {
         return std::get_if<RedirectHttpToHttps>(&transport);
     }
-    const RedirectHttpToHttps* redirect() const && = delete;
+    const RedirectHttpToHttps* redirect() const&& = delete;
 };
 
 }  // namespace ruvia::detail

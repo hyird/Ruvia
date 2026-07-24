@@ -21,16 +21,11 @@ namespace ruvia::edge {
 [[nodiscard]] std::uint64_t diskRecordHash(std::string_view data) noexcept;
 
 // Encode one entry, or nullopt when a field exceeds what the format can express.
-[[nodiscard]] std::optional<std::string> encodeDiskRecord(
-    std::string_view key,
-    const CachedResponse& entry);
+[[nodiscard]] std::optional<std::string> encodeDiskRecord(std::string_view key, const CachedResponse& entry);
 
 // Parse a serialized entry. On success fills `key` and, if `entry` is non-null,
 // the full payload; when `entry` is null only the key is decoded (used by the
 // startup scan, which does not need to materialize bodies).
-[[nodiscard]] bool decodeDiskRecord(
-    std::string_view data,
-    std::string& key,
-    CachedResponse* entry);
+[[nodiscard]] bool decodeDiskRecord(std::string_view data, std::string& key, CachedResponse* entry);
 
 }  // namespace ruvia::edge

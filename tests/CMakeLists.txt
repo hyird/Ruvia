@@ -487,31 +487,30 @@ if(RUVIA_ENABLE_POSTGRESQL)
         web/db/postgresql.cpp)
 endif()
 
-if(RUVIA_ENABLE_POSTGRESQL_INTEGRATION_TESTS)
+if(RUVIA_ENABLE_POSTGRESQL)
     ruvia_add_test(ruvia_postgresql_integration web/server/postgresql_integration.cpp
         LIB ruvia::web TIMEOUT 60 SERIAL LABELS "database;postgresql;integration")
+    set_tests_properties(ruvia_postgresql_integration PROPERTIES SKIP_RETURN_CODE 77)
 endif()
 
-if(RUVIA_ENABLE_HTTP2_CONFORMANCE_TESTS)
-    ruvia_validate_test_sources(ruvia_http2_conformance_server ruvia::web
-        web/server/http2_conformance_server.cpp)
-    add_executable(ruvia_http2_conformance_server web/server/http2_conformance_server.cpp)
-    target_link_libraries(ruvia_http2_conformance_server PRIVATE ruvia::web)
-    ruvia_apply_test_warnings(ruvia_http2_conformance_server)
-    find_package(Python3 REQUIRED COMPONENTS Interpreter)
-    add_test(
-        NAME ruvia_http2_conformance
-        COMMAND
-            ${Python3_EXECUTABLE}
-            ${CMAKE_CURRENT_SOURCE_DIR}/http/conformance/http2_wire_conformance.py
-            --server $<TARGET_FILE:ruvia_http2_conformance_server>
-    )
-    set_tests_properties(ruvia_http2_conformance PROPERTIES
-        LABELS "protocol;http2;conformance"
-        RUN_SERIAL TRUE
-        TIMEOUT 120
-    )
-endif()
+ruvia_validate_test_sources(ruvia_http2_conformance_server ruvia::web
+    web/server/http2_conformance_server.cpp)
+add_executable(ruvia_http2_conformance_server web/server/http2_conformance_server.cpp)
+target_link_libraries(ruvia_http2_conformance_server PRIVATE ruvia::web)
+ruvia_apply_test_warnings(ruvia_http2_conformance_server)
+find_package(Python3 REQUIRED COMPONENTS Interpreter)
+add_test(
+    NAME ruvia_http2_conformance
+    COMMAND
+        ${Python3_EXECUTABLE}
+        ${CMAKE_CURRENT_SOURCE_DIR}/http/conformance/http2_wire_conformance.py
+        --server $<TARGET_FILE:ruvia_http2_conformance_server>
+)
+set_tests_properties(ruvia_http2_conformance PROPERTIES
+    LABELS "protocol;http2;conformance"
+    RUN_SERIAL TRUE
+    TIMEOUT 120
+)
 endif()
 
 if(RUVIA_BUILD_CORE)

@@ -51,8 +51,7 @@ int main() {
         in.cacheControl = cc("max-age=60, s-maxage=600");
         in.now = kNow;
         const auto d = evaluateFreshness(in);
-        check(d.cacheable && d.expiresAt == kNow + 600,
-              "s-maxage wins over max-age in a shared cache");
+        check(d.cacheable && d.expiresAt == kNow + 600, "s-maxage wins over max-age in a shared cache");
     }
 
     // no-store, private, and no-cache are all refused by a shared cache.
@@ -84,20 +83,14 @@ int main() {
         in.cacheControl = cc("max-age=60");
         in.requestHasAuthorization = true;
         in.now = kNow;
-        check(!evaluateFreshness(in).cacheable,
-              "Authorization plus max-age alone is not shared-cacheable");
+        check(!evaluateFreshness(in).cacheable, "Authorization plus max-age alone is not shared-cacheable");
 
-        for (const char* directive : {
-                 "max-age=60, public",
-                 "max-age=60, must-revalidate",
-                 "s-maxage=60"}) {
+        for (const char* directive : {"max-age=60, public", "max-age=60, must-revalidate", "s-maxage=60"}) {
             in.cacheControl = cc(directive);
-            check(evaluateFreshness(in).cacheable,
-                  "explicit Authorization cache opt-in is honored");
+            check(evaluateFreshness(in).cacheable, "explicit Authorization cache opt-in is honored");
         }
         in.cacheControl = cc("max-age=60, proxy-revalidate");
-        check(!evaluateFreshness(in).cacheable,
-              "proxy-revalidate alone does not authorize shared storage");
+        check(!evaluateFreshness(in).cacheable, "proxy-revalidate alone does not authorize shared storage");
     }
 
     // A non-storable status is refused even when explicitly fresh.
@@ -139,10 +132,8 @@ int main() {
         in.ageHeader = 40;
         in.now = kNow;
         const auto d = evaluateFreshness(in);
-        check(d.cacheable && d.expiresAt == kNow + 60,
-              "Age is subtracted from remaining freshness");
-        check(d.initialAge == 40,
-              "corrected initial Age is retained for downstream responses");
+        check(d.cacheable && d.expiresAt == kNow + 60, "Age is subtracted from remaining freshness");
+        check(d.initialAge == 40, "corrected initial Age is retained for downstream responses");
     }
 
     // Upstream response delay contributes to corrected_age_value rather than
@@ -155,10 +146,8 @@ int main() {
         in.requestTime = kNow - 5;
         in.now = kNow;
         const auto d = evaluateFreshness(in);
-        check(d.cacheable && d.initialAge == 45,
-              "response delay is included in corrected initial Age");
-        check(d.expiresAt == kNow + 55,
-              "response delay consumes the freshness lifetime");
+        check(d.cacheable && d.initialAge == 45, "response delay is included in corrected initial Age");
+        check(d.expiresAt == kNow + 55, "response delay consumes the freshness lifetime");
     }
 
     // A response already older than its lifetime is not stored.
@@ -179,8 +168,7 @@ int main() {
         in.cacheControl = cc("max-age=60, stale-while-revalidate=30, stale-if-error=120");
         in.now = kNow;
         const auto d = evaluateFreshness(in);
-        check(d.cacheable && d.staleWhileRevalidate == 30 && d.staleIfError == 120,
-              "stale-* windows are preserved");
+        check(d.cacheable && d.staleWhileRevalidate == 30 && d.staleIfError == 120, "stale-* windows are preserved");
     }
 
     if (failures == 0) {

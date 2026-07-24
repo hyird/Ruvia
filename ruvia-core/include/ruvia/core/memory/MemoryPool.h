@@ -60,9 +60,9 @@ public:
     [[nodiscard]] std::pmr::polymorphic_allocator<T> allocator() && = delete;
 
     [[nodiscard]] std::pmr::memory_resource* resource() & noexcept;
-    [[nodiscard]] std::pmr::memory_resource* resource() const & noexcept;
+    [[nodiscard]] std::pmr::memory_resource* resource() const& noexcept;
     [[nodiscard]] std::pmr::memory_resource* resource() && = delete;
-    [[nodiscard]] std::pmr::memory_resource* resource() const && = delete;
+    [[nodiscard]] std::pmr::memory_resource* resource() const&& = delete;
 
 private:
     std::pmr::monotonic_buffer_resource arena_;

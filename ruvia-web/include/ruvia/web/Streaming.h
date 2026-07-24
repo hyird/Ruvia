@@ -92,15 +92,7 @@ private:
     using Committed = bool (*)(void*) noexcept;
     using Aborted = bool (*)(void*) noexcept;
 
-    ResponseStreamWriter(
-        void* target,
-        Write write,
-        End end,
-        Sleep sleep,
-        BindContext bindContext,
-        ReleaseContext releaseContext,
-        Committed committed,
-        Aborted aborted) noexcept
+    ResponseStreamWriter(void* target, Write write, End end, Sleep sleep, BindContext bindContext, ReleaseContext releaseContext, Committed committed, Aborted aborted) noexcept
         : target_(target),
           write_(write),
           end_(end),
@@ -154,7 +146,8 @@ private:
     friend class Context;
     friend struct detail::StreamingAccess;
 
-    explicit SseWriter(ResponseStreamWriter& writer) noexcept : writer_(writer) {}
+    explicit SseWriter(ResponseStreamWriter& writer) noexcept
+        : writer_(writer) {}
 
     ResponseStreamWriter& writer_;
 };

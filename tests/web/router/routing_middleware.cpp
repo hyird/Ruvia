@@ -11,16 +11,8 @@ RUVIA_TEST(validated_model_binding_spans_next_and_unwinds_before_upstream_resume
 
         ruvia::Router router;
         auto& impl = ruvia::detail::RouterImpl::from(router);
-        const std::array middlewares{
-            ruvia::detail::makeMiddlewareDescriptor<ValidationScopeProbe>(),
-            ruvia::detail::makeMiddlewareDescriptor<ScopedValidationValidator>()};
-        impl.registerRoute(
-            HttpKnownMethod::kPost,
-            path("/validated-scope"),
-            RouteHandler(nullptr, &scopedValidationHandler),
-            RequestBodyMode::kBuffered,
-            std::span<const ControllerMiddlewareDescriptor>{},
-            std::span(middlewares));
+        const std::array middlewares{ruvia::detail::makeMiddlewareDescriptor<ValidationScopeProbe>(), ruvia::detail::makeMiddlewareDescriptor<ScopedValidationValidator>()};
+        impl.registerRoute(HttpKnownMethod::kPost, path("/validated-scope"), RouteHandler(nullptr, &scopedValidationHandler), RequestBodyMode::kBuffered, std::span<const ControllerMiddlewareDescriptor>{}, std::span(middlewares));
         impl.finalize();
 
         ruvia::WorkerMemory worker;
@@ -30,28 +22,15 @@ RUVIA_TEST(validated_model_binding_spans_next_and_unwinds_before_upstream_resume
         ruvia::detail::HttpRequestAccess::setMethod(request, "POST");
         ruvia::detail::HttpRequestAccess::setPath(request, "/validated-scope");
         ruvia::detail::HttpRequestAccess::setResource(request, memory.resource());
-        const auto contentTypeSlot =
-            ruvia::detail::HttpRequestAccess::knownHeaderSlot(
-                ruvia::detail::RequestKnownHeader::kContentType);
-        (void)ruvia::detail::HttpRequestAccess::addHeader(
-            request,
-            ruvia::HttpHeaderView{"Content-Type", "application/json"},
-            contentTypeSlot);
-        ruvia::detail::HttpRequestAccess::setBody(
-            request, R"({"value":"ok"})");
+        const auto contentTypeSlot = ruvia::detail::HttpRequestAccess::knownHeaderSlot(ruvia::detail::RequestKnownHeader::kContentType);
+        (void)ruvia::detail::HttpRequestAccess::addHeader(request, ruvia::HttpHeaderView{"Content-Type", "application/json"}, contentTypeSlot);
+        ruvia::detail::HttpRequestAccess::setBody(request, R"({"value":"ok"})");
 
         asio::io_context ioContext(1);
-        auto future = asio::co_spawn(
-            ioContext,
-            ruvia::detail::taskAsAwaitable(
-                impl.routeTable().dispatch(request, memory, {})),
-            asio::use_future);
+        auto future = asio::co_spawn(ioContext, ruvia::detail::taskAsAwaitable(impl.routeTable().dispatch(request, memory, {})), asio::use_future);
         ioContext.run();
         const auto response = future.get();
-        RUVIA_CHECK_EQ(
-            response.status(),
-            handlerThrows ? ruvia::http_status::kInternalServerError
-                          : ruvia::http_status::kOk);
+        RUVIA_CHECK_EQ(response.status(), handlerThrows ? ruvia::http_status::kInternalServerError : ruvia::http_status::kOk);
         RUVIA_CHECK(scopedValidationHandlerRead);
         RUVIA_CHECK(scopedValidationRawRead);
         RUVIA_CHECK(ValidationScopeProbe::releasedAfterNext);
@@ -64,8 +43,7 @@ RUVIA_TEST(head_only_stream_completion_unwinds_middleware_as_success) {
     const ControllerMiddlewareDescriptor mws[] = {
         ruvia::detail::makeMiddlewareDescriptor<ChainMwA>(),
     };
-    const auto observation = dispatchHeadOnlyStream(
-        std::span<const ControllerMiddlewareDescriptor>(mws, 1));
+    const auto observation = dispatchHeadOnlyStream(std::span<const ControllerMiddlewareDescriptor>(mws, 1));
     RUVIA_CHECK(observation.handled);
     RUVIA_CHECK(!observation.threw);
     RUVIA_CHECK(observation.ended);
@@ -131,12 +109,8 @@ RUVIA_TEST(global_middleware_prepends_to_every_route_chain) {
     const ControllerMiddlewareDescriptor routeMws[] = {
         ruvia::detail::makeMiddlewareDescriptor<ChainMwB>(),
     };
-    impl.registerRoute(
-        HttpKnownMethod::kGet, path("/with-route-mw"), RouteHandler(nullptr, &chainHandler),
-        RequestBodyMode::kBuffered, {}, std::span<const ControllerMiddlewareDescriptor>(routeMws, 1));
-    impl.registerRoute(
-        HttpKnownMethod::kGet, path("/bare"), RouteHandler(nullptr, &chainHandler),
-        RequestBodyMode::kBuffered, {}, {});
+    impl.registerRoute(HttpKnownMethod::kGet, path("/with-route-mw"), RouteHandler(nullptr, &chainHandler), RequestBodyMode::kBuffered, {}, std::span<const ControllerMiddlewareDescriptor>(routeMws, 1));
+    impl.registerRoute(HttpKnownMethod::kGet, path("/bare"), RouteHandler(nullptr, &chainHandler), RequestBodyMode::kBuffered, {}, {});
     const ControllerMiddlewareDescriptor globals[] = {
         ruvia::detail::makeMiddlewareDescriptor<ChainMwA>(),
     };
@@ -154,9 +128,7 @@ RUVIA_TEST(global_middleware_prepends_to_every_route_chain) {
         ruvia::detail::HttpRequestAccess::setResource(request, memory.resource());
 
         asio::io_context ctx(1);
-        auto future = asio::co_spawn(
-            ctx, ruvia::detail::taskAsAwaitable(table.dispatch(request, memory, {})),
-            asio::use_future);
+        auto future = asio::co_spawn(ctx, ruvia::detail::taskAsAwaitable(table.dispatch(request, memory, {})), asio::use_future);
         ctx.run();
         auto response = future.get();
         const auto body = ruvia::detail::responseBody(response).bytes();
@@ -179,9 +151,7 @@ RUVIA_TEST(global_middleware_prepends_to_every_route_chain) {
 RUVIA_TEST(global_middleware_registration_rejected_after_finalize) {
     ruvia::Router router;
     auto& impl = ruvia::detail::RouterImpl::from(router);
-    impl.registerRoute(
-        HttpKnownMethod::kGet, path("/sealed"), RouteHandler(nullptr, &chainHandler),
-        RequestBodyMode::kBuffered, {}, {});
+    impl.registerRoute(HttpKnownMethod::kGet, path("/sealed"), RouteHandler(nullptr, &chainHandler), RequestBodyMode::kBuffered, {}, {});
     const ControllerMiddlewareDescriptor globals[] = {
         ruvia::detail::makeMiddlewareDescriptor<ChainMwA>(),
     };
@@ -217,11 +187,7 @@ RUVIA_TEST(stream_route_middleware_mid_stream_failure_propagates_like_no_middlew
     const ControllerMiddlewareDescriptor mws[] = {
         ruvia::detail::makeMiddlewareDescriptor<ChainMwA>(),
     };
-    impl.registerResponseStreamRoute(
-        HttpKnownMethod::kGet, path("/s"),
-        ruvia::detail::RouteStreamHandler(nullptr, &streamCommitThenThrow),
-        std::span<const ControllerMiddlewareDescriptor>{},
-        std::span<const ControllerMiddlewareDescriptor>(mws, 1));
+    impl.registerResponseStreamRoute(HttpKnownMethod::kGet, path("/s"), ruvia::detail::RouteStreamHandler(nullptr, &streamCommitThenThrow), std::span<const ControllerMiddlewareDescriptor>{}, std::span<const ControllerMiddlewareDescriptor>(mws, 1));
     impl.finalize();
     const auto& table = impl.routeTable();
 
@@ -248,9 +214,7 @@ RUVIA_TEST(stream_route_middleware_mid_stream_failure_propagates_like_no_middlew
         ctx,
         [&]() -> asio::awaitable<void> {
             try {
-                (void)co_await ruvia::detail::taskAsAwaitable(
-                    table.dispatchResponseStream(
-                        request, *resolved, memory, writer, {}));
+                (void)co_await ruvia::detail::taskAsAwaitable(table.dispatchResponseStream(request, *resolved, memory, writer, {}));
             } catch (const std::exception&) {
                 threw = true;
             }
@@ -266,8 +230,7 @@ RUVIA_TEST(stream_route_middleware_mid_stream_failure_propagates_like_no_middlew
 
 RUVIA_TEST(stream_route_middleware_propagates_empty_handler_completion) {
     g_chainOrder.clear();
-    const auto middleware =
-        ruvia::detail::makeMiddlewareDescriptor<ChainMwA>();
+    const auto middleware = ruvia::detail::makeMiddlewareDescriptor<ChainMwA>();
     const auto observation = dispatchEmptyStreamWith(middleware);
     RUVIA_CHECK(!observation.threw);
     RUVIA_CHECK(observation.handled);
@@ -280,9 +243,7 @@ RUVIA_TEST(stream_route_middleware_propagates_empty_handler_completion) {
 }
 
 RUVIA_TEST(stream_route_uncommitted_handler_allows_middleware_override) {
-    const auto middleware =
-        ruvia::detail::makeMiddlewareDescriptor<
-            ChainMwOverrideAfterNext>();
+    const auto middleware = ruvia::detail::makeMiddlewareDescriptor<ChainMwOverrideAfterNext>();
     const auto observation = dispatchEmptyStreamWith(middleware);
     RUVIA_CHECK(!observation.threw);
     RUVIA_CHECK(!observation.handled);
@@ -295,8 +256,7 @@ RUVIA_TEST(stream_route_uncommitted_handler_allows_middleware_override) {
 
 RUVIA_TEST(websocket_middleware_short_circuits_before_upgrade_terminal) {
     g_chainOrder.clear();
-    const auto middleware =
-        ruvia::detail::makeMiddlewareDescriptor<ChainMwStop>();
+    const auto middleware = ruvia::detail::makeMiddlewareDescriptor<ChainMwStop>();
     const auto observation = dispatchWebSocketWith(middleware);
     RUVIA_CHECK(!observation.terminalInvoked);
     RUVIA_CHECK(observation.buffered);
@@ -306,8 +266,7 @@ RUVIA_TEST(websocket_middleware_short_circuits_before_upgrade_terminal) {
 }
 
 RUVIA_TEST(websocket_middleware_pre_upgrade_failure_stays_http_buffered) {
-    const auto middleware =
-        ruvia::detail::makeMiddlewareDescriptor<ChainMwThrows>();
+    const auto middleware = ruvia::detail::makeMiddlewareDescriptor<ChainMwThrows>();
     const auto observation = dispatchWebSocketWith(middleware);
     RUVIA_CHECK(!observation.terminalInvoked);
     RUVIA_CHECK(observation.buffered);
@@ -316,8 +275,7 @@ RUVIA_TEST(websocket_middleware_pre_upgrade_failure_stays_http_buffered) {
 
 RUVIA_TEST(websocket_middleware_wraps_upgrade_and_session_terminal) {
     g_chainOrder.clear();
-    const auto middleware =
-        ruvia::detail::makeMiddlewareDescriptor<ChainMwA>();
+    const auto middleware = ruvia::detail::makeMiddlewareDescriptor<ChainMwA>();
     const auto observation = dispatchWebSocketWith(middleware);
     RUVIA_CHECK(observation.terminalInvoked);
     RUVIA_CHECK(observation.capabilityAvailableInTerminal);
@@ -329,8 +287,7 @@ RUVIA_TEST(websocket_middleware_wraps_upgrade_and_session_terminal) {
 RUVIA_TEST(websocket_capability_expires_before_middleware_post_processing) {
     g_chainOrder.clear();
     g_webSocketUnavailableAfterNext = false;
-    const auto middleware = ruvia::detail::makeMiddlewareDescriptor<
-        ChainMwProbeWebSocketAfterNext>();
+    const auto middleware = ruvia::detail::makeMiddlewareDescriptor<ChainMwProbeWebSocketAfterNext>();
     const auto observation = dispatchWebSocketWith(middleware);
     RUVIA_CHECK(observation.terminalInvoked);
     RUVIA_CHECK(observation.capabilityAvailableInTerminal);
@@ -340,8 +297,7 @@ RUVIA_TEST(websocket_capability_expires_before_middleware_post_processing) {
 }
 
 RUVIA_TEST(websocket_middleware_post_failure_escapes_for_session_close) {
-    const auto middleware = ruvia::detail::makeMiddlewareDescriptor<
-        ChainMwThrowsAfterNext>();
+    const auto middleware = ruvia::detail::makeMiddlewareDescriptor<ChainMwThrowsAfterNext>();
     bool threw = false;
     try {
         (void)dispatchWebSocketWith(middleware);
@@ -376,9 +332,7 @@ RUVIA_TEST(middleware_chain_controller_middleware_wraps_route_middleware) {
     const ControllerMiddlewareDescriptor routeMws[] = {
         ruvia::detail::makeMiddlewareDescriptor<ChainMwB>(),
     };
-    const auto body = dispatchChain(
-        std::span<const ControllerMiddlewareDescriptor>(controllerMws, 1),
-        std::span<const ControllerMiddlewareDescriptor>(routeMws, 1));
+    const auto body = dispatchChain(std::span<const ControllerMiddlewareDescriptor>(controllerMws, 1), std::span<const ControllerMiddlewareDescriptor>(routeMws, 1));
     RUVIA_CHECK_EQ(body, std::string("ok"));
     // A(controller) pre, B(route) pre, handler, B post, A post. A regression that
     // swapped the two spans would run route middleware outside controller middleware.

@@ -33,8 +33,7 @@ struct SecurityHeader final {
             : value_(value) {}
 
         template <typename Traits, typename Allocator>
-        constexpr BorrowedText(
-            const std::basic_string<char, Traits, Allocator>& value) noexcept
+        constexpr BorrowedText(const std::basic_string<char, Traits, Allocator>& value) noexcept
             : value_(value) {}
 
         template <detail::HttpTemporaryOwningCharString String>
@@ -51,8 +50,7 @@ struct SecurityHeader final {
         }
 
         template <typename Traits, typename Allocator>
-        constexpr BorrowedText& operator=(
-            const std::basic_string<char, Traits, Allocator>& value) noexcept {
+        constexpr BorrowedText& operator=(const std::basic_string<char, Traits, Allocator>& value) noexcept {
             value_ = std::string_view(value);
             return *this;
         }
@@ -80,28 +78,20 @@ struct SecurityHeader final {
             return value_.size();
         }
 
-        friend constexpr bool operator==(
-            BorrowedText left,
-            BorrowedText right) noexcept {
+        friend constexpr bool operator==(BorrowedText left, BorrowedText right) noexcept {
             return left.value_ == right.value_;
         }
 
-        friend constexpr bool operator==(
-            BorrowedText left,
-            std::string_view right) noexcept {
+        friend constexpr bool operator==(BorrowedText left, std::string_view right) noexcept {
             return left.value_ == right;
         }
 
-        friend constexpr bool operator==(
-            BorrowedText left,
-            const char* right) noexcept {
+        friend constexpr bool operator==(BorrowedText left, const char* right) noexcept {
             return left.value_ == right;
         }
 
         template <typename Traits, typename Allocator>
-        friend constexpr bool operator==(
-            BorrowedText left,
-            const std::basic_string<char, Traits, Allocator>& right) noexcept {
+        friend constexpr bool operator==(BorrowedText left, const std::basic_string<char, Traits, Allocator>& right) noexcept {
             return left.value_ == std::string_view(right);
         }
 
@@ -118,11 +108,7 @@ static_assert(sizeof(SecurityHeader::BorrowedText) == sizeof(std::string_view));
 namespace detail {
 
 template <typename Range>
-concept SecurityHeaderRange =
-    std::ranges::contiguous_range<Range> &&
-    std::same_as<
-        std::remove_cv_t<std::ranges::range_value_t<Range>>,
-        SecurityHeader>;
+concept SecurityHeaderRange = std::ranges::contiguous_range<Range> && std::same_as<std::remove_cv_t<std::ranges::range_value_t<Range>>, SecurityHeader>;
 
 }  // namespace detail
 
@@ -144,43 +130,30 @@ struct SecurityHeadersOptions final {
         constexpr HeaderInit() noexcept = default;
 
         template <detail::SecurityHeaderRange Range>
-            requires(
-                std::is_lvalue_reference_v<Range&&> ||
-                std::ranges::borrowed_range<Range>)
+            requires(std::is_lvalue_reference_v<Range &&> || std::ranges::borrowed_range<Range>)
         constexpr HeaderInit(Range&& headers) noexcept
-            : headers_(
-                  std::ranges::data(headers),
-                  std::ranges::size(headers)) {}
+            : headers_(std::ranges::data(headers), std::ranges::size(headers)) {}
 
         template <detail::SecurityHeaderRange Range>
-            requires(
-                !std::is_lvalue_reference_v<Range&&> &&
-                !std::ranges::borrowed_range<Range>)
+            requires(!std::is_lvalue_reference_v<Range &&> && !std::ranges::borrowed_range<Range>)
         HeaderInit(Range&&) = delete;
 
         constexpr HeaderInit(std::initializer_list<SecurityHeader>) = delete;
 
         template <detail::SecurityHeaderRange Range>
-            requires(
-                std::is_lvalue_reference_v<Range&&> ||
-                std::ranges::borrowed_range<Range>)
+            requires(std::is_lvalue_reference_v<Range &&> || std::ranges::borrowed_range<Range>)
         constexpr HeaderInit& operator=(Range&& headers) noexcept {
-            headers_ = std::span<const SecurityHeader>(
-                std::ranges::data(headers),
-                std::ranges::size(headers));
+            headers_ = std::span<const SecurityHeader>(std::ranges::data(headers), std::ranges::size(headers));
             return *this;
         }
 
         template <detail::SecurityHeaderRange Range>
-            requires(
-                !std::is_lvalue_reference_v<Range&&> &&
-                !std::ranges::borrowed_range<Range>)
+            requires(!std::is_lvalue_reference_v<Range &&> && !std::ranges::borrowed_range<Range>)
         HeaderInit& operator=(Range&&) = delete;
 
         HeaderInit& operator=(std::initializer_list<SecurityHeader>) = delete;
 
-        [[nodiscard]] constexpr operator
-        std::span<const SecurityHeader>() const noexcept {
+        [[nodiscard]] constexpr operator std::span<const SecurityHeader>() const noexcept {
             return headers_;
         }
 
@@ -209,22 +182,17 @@ struct SecurityHeadersOptions final {
     // Emitted only for requests received over TLS. Plain HTTP responses must
     // never carry Strict-Transport-Security.
     bool strictTransportSecurity = true;
-    LegacyXssFilterPolicy legacyXssFilter =
-        LegacyXssFilterPolicy::kDisable;
+    LegacyXssFilterPolicy legacyXssFilter = LegacyXssFilterPolicy::kDisable;
 
     SecurityHeader::BorrowedText contentSecurityPolicy = "default-src 'self'";
-    SecurityHeader::BorrowedText referrerPolicy =
-        "strict-origin-when-cross-origin";
-    SecurityHeader::BorrowedText permissionsPolicy =
-        "geolocation=(), microphone=(), camera=()";
+    SecurityHeader::BorrowedText referrerPolicy = "strict-origin-when-cross-origin";
+    SecurityHeader::BorrowedText permissionsPolicy = "geolocation=(), microphone=(), camera=()";
 
     HeaderInit customHeaders{};
     bool overwriteExisting = false;
 };
 
-static_assert(
-    sizeof(SecurityHeadersOptions::HeaderInit) ==
-    sizeof(std::span<const SecurityHeader>));
+static_assert(sizeof(SecurityHeadersOptions::HeaderInit) == sizeof(std::span<const SecurityHeader>));
 
 void applySecurityHeaders(Context& context, const SecurityHeadersOptions& options = {});
 

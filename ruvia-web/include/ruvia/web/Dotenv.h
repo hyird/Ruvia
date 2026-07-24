@@ -58,18 +58,14 @@ public:
     Env(Env&&) = delete;
     Env& operator=(Env&&) = delete;
 
-    [[nodiscard]] std::optional<std::string_view> get(
-        std::string_view name) const & noexcept;
-    [[nodiscard]] std::optional<std::string_view> get(
-        std::string_view) const && = delete;
+    [[nodiscard]] std::optional<std::string_view> get(std::string_view name) const& noexcept;
+    [[nodiscard]] std::optional<std::string_view> get(std::string_view) const&& = delete;
 
     template <typename T>
-    [[nodiscard]] std::optional<std::remove_cvref_t<T>> get(
-        std::string_view name) const & noexcept;
+    [[nodiscard]] std::optional<std::remove_cvref_t<T>> get(std::string_view name) const& noexcept;
 
     template <typename T>
-    [[nodiscard]] std::optional<std::remove_cvref_t<T>> get(
-        std::string_view) const && = delete;
+    [[nodiscard]] std::optional<std::remove_cvref_t<T>> get(std::string_view) const&& = delete;
 
     [[nodiscard]] bool loaded() const noexcept;
     [[nodiscard]] std::size_t size() const noexcept;
@@ -96,8 +92,7 @@ private:
 };
 
 template <typename T>
-std::optional<std::remove_cvref_t<T>> Env::get(
-    std::string_view name) const & noexcept {
+std::optional<std::remove_cvref_t<T>> Env::get(std::string_view name) const& noexcept {
     const auto value = get(name);
     if (!value.has_value()) {
         return std::nullopt;

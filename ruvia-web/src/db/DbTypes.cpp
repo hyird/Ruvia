@@ -10,9 +10,7 @@ DbValue::DbValue(std::nullptr_t)
     : storage_(std::monostate{}) {}
 
 DbValue::DbValue(const char* value)
-    : storage_(value == nullptr
-          ? Storage(std::monostate{})
-          : Storage(std::in_place_type<BorrowedText>, value)) {}
+    : storage_(value == nullptr ? Storage(std::monostate{}) : Storage(std::in_place_type<BorrowedText>, value)) {}
 
 DbValue::DbValue(std::string_view value)
     : storage_(std::in_place_type<BorrowedText>, value) {}
@@ -24,27 +22,27 @@ DbValue::DbValue(bool value)
     : storage_(std::in_place_type<bool>, value) {}
 
 detail::DbValueType DbValue::type() const noexcept {
-    return std::visit([](const auto& value) noexcept {
-        using Value = std::remove_cvref_t<decltype(value)>;
-        if constexpr (std::is_same_v<Value, std::monostate>) {
-            return detail::DbValueType::kNull;
-        } else if constexpr (
-            std::is_same_v<Value, BorrowedText> ||
-            std::is_same_v<Value, std::pmr::string>) {
-            return detail::DbValueType::kString;
-        } else if constexpr (std::is_same_v<Value, std::int64_t>) {
-            return detail::DbValueType::kSigned;
-        } else if constexpr (std::is_same_v<Value, std::uint64_t>) {
-            return detail::DbValueType::kUnsigned;
-        } else if constexpr (std::is_same_v<Value, double>) {
-            return detail::DbValueType::kDouble;
-        } else {
-            return detail::DbValueType::kBool;
-        }
-    }, storage_);
+    return std::visit(
+        [](const auto& value) noexcept {
+            using Value = std::remove_cvref_t<decltype(value)>;
+            if constexpr (std::is_same_v<Value, std::monostate>) {
+                return detail::DbValueType::kNull;
+            } else if constexpr (std::is_same_v<Value, BorrowedText> || std::is_same_v<Value, std::pmr::string>) {
+                return detail::DbValueType::kString;
+            } else if constexpr (std::is_same_v<Value, std::int64_t>) {
+                return detail::DbValueType::kSigned;
+            } else if constexpr (std::is_same_v<Value, std::uint64_t>) {
+                return detail::DbValueType::kUnsigned;
+            } else if constexpr (std::is_same_v<Value, double>) {
+                return detail::DbValueType::kDouble;
+            } else {
+                return detail::DbValueType::kBool;
+            }
+        },
+        storage_);
 }
 
-std::string_view DbValue::text() const & noexcept {
+std::string_view DbValue::text() const& noexcept {
     if (const auto* borrowed = std::get_if<BorrowedText>(&storage_)) {
         return borrowed->value;
     }
@@ -110,8 +108,7 @@ DbField& DbField::operator=(DbField&& other) {
             std::pmr::string replacement(std::move(*owned), resource_);
             storage_.emplace<std::pmr::string>(std::move(replacement));
         }
-    } else if (const auto* borrowed =
-                   std::get_if<BorrowedText>(&other.storage_)) {
+    } else if (const auto* borrowed = std::get_if<BorrowedText>(&other.storage_)) {
         storage_.emplace<BorrowedText>(*borrowed);
     } else {
         storage_.emplace<std::monostate>();
@@ -124,7 +121,7 @@ bool DbField::isNull() const noexcept {
     return std::holds_alternative<std::monostate>(storage_);
 }
 
-std::string_view DbField::text() const & noexcept {
+std::string_view DbField::text() const& noexcept {
     if (const auto* owned = std::get_if<std::pmr::string>(&storage_)) {
         return *owned;
     }
@@ -146,12 +143,9 @@ DbRow::DbRow(DbRow&& other) noexcept
     : resource_(other.resource_),
       storage_([&other]() noexcept -> Storage {
           if (auto* owned = std::get_if<OwnedFields>(&other.storage_)) {
-              return Storage(
-                  std::in_place_type<OwnedFields>, std::move(*owned));
+              return Storage(std::in_place_type<OwnedFields>, std::move(*owned));
           }
-          return Storage(
-              std::in_place_type<BorrowedFields>,
-              std::get<BorrowedFields>(other.storage_));
+          return Storage(std::in_place_type<BorrowedFields>, std::get<BorrowedFields>(other.storage_));
       }()) {
     other.storage_.emplace<OwnedFields>(other.resource_);
 }
@@ -168,8 +162,7 @@ DbRow& DbRow::operator=(DbRow&& other) {
             storage_.emplace<OwnedFields>(std::move(replacement));
         }
     } else {
-        storage_.emplace<BorrowedFields>(
-            std::get<BorrowedFields>(other.storage_));
+        storage_.emplace<BorrowedFields>(std::get<BorrowedFields>(other.storage_));
     }
     other.storage_.emplace<OwnedFields>(other.resource_);
     return *this;
@@ -186,21 +179,21 @@ std::size_t DbRow::size() const noexcept {
     return std::get<BorrowedFields>(storage_).size();
 }
 
-const DbField& DbRow::operator[](std::size_t index) const & noexcept {
+const DbField& DbRow::operator[](std::size_t index) const& noexcept {
     if (const auto* owned = std::get_if<OwnedFields>(&storage_)) {
         return (*owned)[index];
     }
     return std::get<BorrowedFields>(storage_)[index];
 }
 
-const DbField* DbRow::begin() const & noexcept {
+const DbField* DbRow::begin() const& noexcept {
     if (const auto* owned = std::get_if<OwnedFields>(&storage_)) {
         return owned->data();
     }
     return std::get<BorrowedFields>(storage_).data();
 }
 
-const DbField* DbRow::end() const & noexcept {
+const DbField* DbRow::end() const& noexcept {
     const auto* first = begin();
     const auto count = size();
     return count == 0 ? first : first + count;
@@ -232,7 +225,7 @@ QueryResult::~QueryResult() {
     }
 }
 
-std::span<const DbRow> QueryResult::rows() const & noexcept {
+std::span<const DbRow> QueryResult::rows() const& noexcept {
     return rows_;
 }
 
@@ -251,13 +244,11 @@ DbMigrationReport::DbMigrationReport(detail::ResolvedPmrResourceTag, std::pmr::m
     : applied_(resource),
       skipped_(resource) {}
 
-std::span<const std::pmr::string>
-DbMigrationReport::applied() const & noexcept {
+std::span<const std::pmr::string> DbMigrationReport::applied() const& noexcept {
     return applied_;
 }
 
-std::span<const std::pmr::string>
-DbMigrationReport::skipped() const & noexcept {
+std::span<const std::pmr::string> DbMigrationReport::skipped() const& noexcept {
     return skipped_;
 }
 

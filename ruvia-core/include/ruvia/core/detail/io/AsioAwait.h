@@ -50,10 +50,10 @@ private:
 
 class TaskCompletionFailure final {
 public:
-    [[nodiscard]] const std::exception_ptr& exception() const & noexcept {
+    [[nodiscard]] const std::exception_ptr& exception() const& noexcept {
         return exception_;
     }
-    const std::exception_ptr& exception() const && = delete;
+    const std::exception_ptr& exception() const&& = delete;
 
 private:
     template <typename>
@@ -77,10 +77,10 @@ public:
     }
     TaskCompletionSuccess<T>* success() && = delete;
 
-    [[nodiscard]] const TaskCompletionFailure* failure() const & noexcept {
+    [[nodiscard]] const TaskCompletionFailure* failure() const& noexcept {
         return std::get_if<TaskCompletionFailure>(&value_);
     }
-    const TaskCompletionFailure* failure() const && = delete;
+    const TaskCompletionFailure* failure() const&& = delete;
 
 private:
     template <typename, typename>
@@ -96,8 +96,7 @@ private:
         return TaskCompletionResult(TaskCompletionSuccess<T>(std::move(value)));
     }
 
-    [[nodiscard]] static TaskCompletionResult makeFailure(
-        std::exception_ptr exception) noexcept {
+    [[nodiscard]] static TaskCompletionResult makeFailure(std::exception_ptr exception) noexcept {
         return TaskCompletionResult(TaskCompletionFailure(std::move(exception)));
     }
 
@@ -107,24 +106,21 @@ private:
 template <>
 class TaskCompletionResult<void> final {
 public:
-    [[nodiscard]] const TaskCompletionSuccess<void>*
-    success() const & noexcept {
+    [[nodiscard]] const TaskCompletionSuccess<void>* success() const& noexcept {
         return std::get_if<TaskCompletionSuccess<void>>(&value_);
     }
-    const TaskCompletionSuccess<void>* success() const && = delete;
+    const TaskCompletionSuccess<void>* success() const&& = delete;
 
-    [[nodiscard]] const TaskCompletionFailure* failure() const & noexcept {
+    [[nodiscard]] const TaskCompletionFailure* failure() const& noexcept {
         return std::get_if<TaskCompletionFailure>(&value_);
     }
-    const TaskCompletionFailure* failure() const && = delete;
+    const TaskCompletionFailure* failure() const&& = delete;
 
 private:
     template <typename, typename>
     friend class TaskCompletionState;
 
-    using Value = std::variant<
-        TaskCompletionSuccess<void>,
-        TaskCompletionFailure>;
+    using Value = std::variant<TaskCompletionSuccess<void>, TaskCompletionFailure>;
 
     template <typename Alternative>
     explicit TaskCompletionResult(Alternative alternative) noexcept
@@ -134,8 +130,7 @@ private:
         return TaskCompletionResult(TaskCompletionSuccess<void>());
     }
 
-    [[nodiscard]] static TaskCompletionResult makeFailure(
-        std::exception_ptr exception) noexcept {
+    [[nodiscard]] static TaskCompletionResult makeFailure(std::exception_ptr exception) noexcept {
         return TaskCompletionResult(TaskCompletionFailure(std::move(exception)));
     }
 
@@ -146,24 +141,15 @@ template <typename T, typename Handler>
 class TaskCompletionState final {
 public:
     using HandlerAllocator = asio::associated_allocator_t<Handler>;
-    using StateAllocator = typename std::allocator_traits<
-        HandlerAllocator>::template rebind_alloc<TaskCompletionState>;
+    using StateAllocator = typename std::allocator_traits<HandlerAllocator>::template rebind_alloc<TaskCompletionState>;
     using StateAllocatorTraits = std::allocator_traits<StateAllocator>;
 
-    static TaskCompletionState* create(
-        Task<T>&& taskValue,
-        Handler&& handlerValue) {
-        HandlerAllocator handlerAllocator(
-            asio::get_associated_allocator(handlerValue));
+    static TaskCompletionState* create(Task<T>&& taskValue, Handler&& handlerValue) {
+        HandlerAllocator handlerAllocator(asio::get_associated_allocator(handlerValue));
         StateAllocator stateAllocator(handlerAllocator);
         auto* state = StateAllocatorTraits::allocate(stateAllocator, 1);
         try {
-            StateAllocatorTraits::construct(
-                stateAllocator,
-                state,
-                std::move(taskValue),
-                std::forward<Handler>(handlerValue),
-                std::move(handlerAllocator));
+            StateAllocatorTraits::construct(stateAllocator, state, std::move(taskValue), std::forward<Handler>(handlerValue), std::move(handlerAllocator));
         } catch (...) {
             StateAllocatorTraits::deallocate(stateAllocator, state, 1);
             throw;
@@ -171,10 +157,7 @@ public:
         return state;
     }
 
-    TaskCompletionState(
-        Task<T>&& taskValue,
-        Handler&& handlerValue,
-        HandlerAllocator allocatorValue)
+    TaskCompletionState(Task<T>&& taskValue, Handler&& handlerValue, HandlerAllocator allocatorValue)
         : task_(std::move(taskValue)),
           handler_(std::forward<Handler>(handlerValue)),
           allocator_(std::move(allocatorValue)) {}
@@ -188,19 +171,13 @@ public:
         auto* state = static_cast<TaskCompletionState*>(raw);
         auto executor = asio::get_associated_executor(state->handler_);
         auto completionAllocator = state->allocator_;
-        StateOwner owner(
-            state,
-            StateDeleter{StateAllocator(state->allocator_)});
-        asio::post(
-            executor,
-            asio::bind_allocator(
-                std::move(completionAllocator),
-                [owner = std::move(owner)]() mutable {
-                    // Own the state before invoking user code. If the completion
-                    // handler throws through the Asio executor, stack unwinding
-                    // still destroys both this state and its completed Task frame.
-                    owner->deliver();
-                }));
+        StateOwner owner(state, StateDeleter{StateAllocator(state->allocator_)});
+        asio::post(executor, asio::bind_allocator(std::move(completionAllocator), [owner = std::move(owner)]() mutable {
+            // Own the state before invoking user code. If the completion
+            // handler throws through the Asio executor, stack unwinding
+            // still destroys both this state and its completed Task frame.
+            owner->deliver();
+        }));
     }
 
 private:
@@ -222,19 +199,16 @@ private:
                     task_.handle_.promise().result();
                     return TaskCompletionResult<void>::makeSuccess();
                 } catch (...) {
-                    return TaskCompletionResult<void>::makeFailure(
-                        std::current_exception());
+                    return TaskCompletionResult<void>::makeFailure(std::current_exception());
                 }
             }();
             std::move(handler_)(std::move(result));
         } else {
             auto result = [this]() {
                 try {
-                    return TaskCompletionResult<T>::makeSuccess(
-                        task_.handle_.promise().result());
+                    return TaskCompletionResult<T>::makeSuccess(task_.handle_.promise().result());
                 } catch (...) {
-                    return TaskCompletionResult<T>::makeFailure(
-                        std::current_exception());
+                    return TaskCompletionResult<T>::makeFailure(std::current_exception());
                 }
             }();
             std::move(handler_)(std::move(result));
@@ -255,24 +229,18 @@ auto asyncStartTask(Task<T>&& task, CompletionToken&& token) {
         return asio::async_initiate<CompletionToken, void(TaskCompletionResult<void>)>(
             [](auto&& handler, Task<T> taskValue) {
                 using Handler = std::decay_t<decltype(handler)>;
-                auto* state = TaskCompletionState<T, Handler>::create(
-                    std::move(taskValue),
-                    std::forward<decltype(handler)>(handler));
+                auto* state = TaskCompletionState<T, Handler>::create(std::move(taskValue), std::forward<decltype(handler)>(handler));
                 state->start();
             },
-            token,
-            std::move(task));
+            token, std::move(task));
     } else {
         return asio::async_initiate<CompletionToken, void(TaskCompletionResult<T>)>(
             [](auto&& handler, Task<T> taskValue) {
                 using Handler = std::decay_t<decltype(handler)>;
-                auto* state = TaskCompletionState<T, Handler>::create(
-                    std::move(taskValue),
-                    std::forward<decltype(handler)>(handler));
+                auto* state = TaskCompletionState<T, Handler>::create(std::move(taskValue), std::forward<decltype(handler)>(handler));
                 state->start();
             },
-            token,
-            std::move(task));
+            token, std::move(task));
     }
 }
 
@@ -301,9 +269,7 @@ class AsioCompletionAwaiter;
 template <typename Result>
 class AsioCompletion final {
 public:
-    [[nodiscard]] static AsioCompletion completed(
-        std::error_code errorCode,
-        Result result) {
+    [[nodiscard]] static AsioCompletion completed(std::error_code errorCode, Result result) {
         return AsioCompletion(errorCode, std::move(result));
     }
 
@@ -311,10 +277,10 @@ public:
         return errorCode_;
     }
 
-    [[nodiscard]] const Result& result() const & noexcept {
+    [[nodiscard]] const Result& result() const& noexcept {
         return result_;
     }
-    const Result& result() const && = delete;
+    const Result& result() const&& = delete;
 
     [[nodiscard]] Result& result() & noexcept {
         return result_;
@@ -329,9 +295,9 @@ private:
     template <typename, typename>
     friend class AsioCompletionAwaiter;
 
-    AsioCompletion(std::error_code errorCode, Result&& result)
-        noexcept(std::is_nothrow_move_constructible_v<Result>)
-        : errorCode_(errorCode), result_(std::move(result)) {}
+    AsioCompletion(std::error_code errorCode, Result&& result) noexcept(std::is_nothrow_move_constructible_v<Result>)
+        : errorCode_(errorCode),
+          result_(std::move(result)) {}
 
     std::error_code errorCode_;
     Result result_;
@@ -340,8 +306,7 @@ private:
 template <>
 class AsioCompletion<void> final {
 public:
-    [[nodiscard]] static AsioCompletion completed(
-        std::error_code errorCode) noexcept {
+    [[nodiscard]] static AsioCompletion completed(std::error_code errorCode) noexcept {
         return AsioCompletion(errorCode);
     }
 
@@ -378,15 +343,12 @@ public:
     [[nodiscard]] bool await_suspend(std::coroutine_handle<> handle) {
         if constexpr (std::is_void_v<Result>) {
             initiate_([this, handle](std::error_code ec, auto&&...) mutable {
-                state_.template emplace<AsioCompletion<void>>(
-                    AsioCompletion<void>::completed(ec));
+                state_.template emplace<AsioCompletion<void>>(AsioCompletion<void>::completed(ec));
                 handle.resume();
             });
         } else {
             initiate_([this, handle](std::error_code ec, Result result) mutable {
-                state_.template emplace<AsioCompletion<Result>>(
-                    AsioCompletion<Result>::completed(
-                        ec, std::move(result)));
+                state_.template emplace<AsioCompletion<Result>>(AsioCompletion<Result>::completed(ec, std::move(result)));
                 handle.resume();
             });
         }
@@ -402,9 +364,7 @@ public:
     }
 
 private:
-    using State = std::variant<
-        AsioCompletionPending,
-        AsioCompletion<Result>>;
+    using State = std::variant<AsioCompletionPending, AsioCompletion<Result>>;
 
     Initiate initiate_;
     State state_;
@@ -412,8 +372,7 @@ private:
 
 template <typename Result = void, typename Initiate>
 [[nodiscard]] auto asyncAsio(Initiate&& initiate) {
-    return AsioCompletionAwaiter<Result, std::decay_t<Initiate>>(
-        std::forward<Initiate>(initiate));
+    return AsioCompletionAwaiter<Result, std::decay_t<Initiate>>(std::forward<Initiate>(initiate));
 }
 
 }  // namespace ruvia::detail

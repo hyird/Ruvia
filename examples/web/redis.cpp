@@ -36,8 +36,7 @@ ruvia::RedisConfig redisConfig(const ruvia::Env& env) {
     if (const auto database = env.get<std::uint32_t>("RUVIA_REDIS_DATABASE")) {
         config.database = *database;
     }
-    if (const auto poolSize =
-            env.get<std::uint32_t>("RUVIA_REDIS_POOL_SIZE_PER_WORKER")) {
+    if (const auto poolSize = env.get<std::uint32_t>("RUVIA_REDIS_POOL_SIZE_PER_WORKER")) {
         config.poolSizePerWorker = *poolSize;
     }
     return config;
@@ -359,15 +358,7 @@ public:
     ruvia::Task<ruvia::HttpResponse> pipeline(ruvia::Context& c) {
         const std::array<std::string_view, 2> typeCommand{"TYPE", "ruvia:example:pipeline"};
         auto pipeline = c.redis().pipeline();
-        pipeline.set("ruvia:example:pipeline", "1")
-            .get("ruvia:example:pipeline")
-            .incr("ruvia:example:pipeline")
-            .hset("ruvia:example:pipeline:hash", "field", "value")
-            .hget("ruvia:example:pipeline:hash", "field")
-            .lpush("ruvia:example:pipeline:list", "item")
-            .sadd("ruvia:example:pipeline:set", "member")
-            .zadd("ruvia:example:pipeline:zset", 1.0, "member")
-            .command(typeCommand);
+        pipeline.set("ruvia:example:pipeline", "1").get("ruvia:example:pipeline").incr("ruvia:example:pipeline").hset("ruvia:example:pipeline:hash", "field", "value").hget("ruvia:example:pipeline:hash", "field").lpush("ruvia:example:pipeline:list", "item").sadd("ruvia:example:pipeline:set", "member").zadd("ruvia:example:pipeline:zset", 1.0, "member").command(typeCommand);
         auto results = co_await std::move(pipeline).exec();
 
         std::pmr::string body(c.allocator<char>());
@@ -380,10 +371,7 @@ public:
     ruvia::Task<ruvia::HttpResponse> transaction(ruvia::Context& c) {
         const std::array<std::string_view, 1> watched{"ruvia:example:tx"};
         auto tx = c.redis().transaction();
-        tx.watch(watched)
-            .set("ruvia:example:tx", "1")
-            .incr("ruvia:example:tx")
-            .get("ruvia:example:tx");
+        tx.watch(watched).set("ruvia:example:tx", "1").incr("ruvia:example:tx").get("ruvia:example:tx");
         auto results = co_await std::move(tx).exec();
 
         std::pmr::string body(c.allocator<char>());
@@ -443,14 +431,5 @@ int main() {
     auto& app = ruvia::app();
     app.loadDotenv();
     auto config = redisConfig(app.env());
-    app
-        .useRedis(config)
-        .useRedis("cache", std::move(config))
-        .setListenAddress("0.0.0.0")
-        .setServerTopology(ruvia::ServerTopology::http(
-            app.env().get<std::uint16_t>("RUVIA_PORT").value_or(8090)))
-        .setWorkersPerListener(
-            app.env().get<std::uint32_t>("RUVIA_WORKERS_PER_LISTENER").value_or(2))
-        .setSignalShutdown(true)
-        .run();
+    app.useRedis(config).useRedis("cache", std::move(config)).setListenAddress("0.0.0.0").setServerTopology(ruvia::ServerTopology::http(app.env().get<std::uint16_t>("RUVIA_PORT").value_or(8090))).setWorkersPerListener(app.env().get<std::uint32_t>("RUVIA_WORKERS_PER_LISTENER").value_or(2)).setSignalShutdown(true).run();
 }

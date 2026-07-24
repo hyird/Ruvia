@@ -8,37 +8,9 @@
 #include <string_view>
 namespace ruvia::detail {
 
-enum class RequestHeaderKind {
-    kOther,
-    kAccept,
-    kAcceptEncoding,
-    kAccessControlRequestHeaders,
-    kAccessControlRequestMethod,
-    kAuthorization,
-    kConnection,
-    kContentEncoding,
-    kContentLength,
-    kContentType,
-    kCookie,
-    kExpect,
-    kHost,
-    kIfMatch,
-    kIfModifiedSince,
-    kIfNoneMatch,
-    kIfRange,
-    kIfUnmodifiedSince,
-    kOrigin,
-    kRange,
-    kSecWebSocketKey,
-    kSecWebSocketProtocol,
-    kSecWebSocketVersion,
-    kTransferEncoding,
-    kUpgrade,
-    kUserAgent
-};
+enum class RequestHeaderKind { kOther, kAccept, kAcceptEncoding, kAccessControlRequestHeaders, kAccessControlRequestMethod, kAuthorization, kConnection, kContentEncoding, kContentLength, kContentType, kCookie, kExpect, kHost, kIfMatch, kIfModifiedSince, kIfNoneMatch, kIfRange, kIfUnmodifiedSince, kOrigin, kRange, kSecWebSocketKey, kSecWebSocketProtocol, kSecWebSocketVersion, kTransferEncoding, kUpgrade, kUserAgent };
 
-inline constexpr std::size_t kRequestHeaderKindCount =
-    static_cast<std::size_t>(RequestHeaderKind::kUserAgent) + 1;
+inline constexpr std::size_t kRequestHeaderKindCount = static_cast<std::size_t>(RequestHeaderKind::kUserAgent) + 1;
 
 [[nodiscard]] inline constexpr std::size_t requestHeaderKindKnownSlot(RequestHeaderKind kind) noexcept {
     const auto index = static_cast<std::size_t>(kind);
@@ -79,12 +51,7 @@ inline constexpr std::size_t kRequestHeaderKindCount =
     return 0;
 }
 
-enum class ChunkSizeLineStatus {
-    kOk,
-    kInvalidSize,
-    kOverflow,
-    kInvalidExtension
-};
+enum class ChunkSizeLineStatus { kOk, kInvalidSize, kOverflow, kInvalidExtension };
 
 // 256-entry character class tables (picohttpparser/llhttp style): one load
 // replaces multi-comparison chains and lets scan loops validate as they move.

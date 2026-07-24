@@ -11,14 +11,11 @@ constexpr std::uint64_t kFnvPrime = 1099511628211ULL;
 
 }  // namespace
 
-detail::RouteResolution detail::RouteTable::resolve(
-    const HttpRequest& request) const noexcept {
+detail::RouteResolution detail::RouteTable::resolve(const HttpRequest& request) const noexcept {
     return resolve(request.knownMethod(), request.path());
 }
 
-detail::RouteResolution detail::RouteTable::resolve(
-    HttpKnownMethod method,
-    std::string_view path) const noexcept {
+detail::RouteResolution detail::RouteTable::resolve(HttpKnownMethod method, std::string_view path) const noexcept {
     // RFC 9110 7.1 / 9.3.7: the asterisk-form target ("OPTIONS *") applies to the
     // server as a whole, not any resource, so it must not bind to a route -- a
     // catch-all such as RUVIA_ALL("/*") would otherwise capture it through the
@@ -79,9 +76,7 @@ std::size_t detail::RouteTable::commonPrefixLength(std::string_view left, std::s
     return index;
 }
 
-const detail::RouteEntry* detail::RouteTable::findRadixNode(
-    const RadixNode& root,
-    std::string_view path) noexcept {
+const detail::RouteEntry* detail::RouteTable::findRadixNode(const RadixNode& root, std::string_view path) noexcept {
     const auto* node = &root;
     while (!path.empty()) {
         const RadixNode* next = nullptr;
@@ -102,9 +97,7 @@ const detail::RouteEntry* detail::RouteTable::findRadixNode(
     return node->route;
 }
 
-const detail::RouteEntry* detail::RouteTable::findStaticRoute(
-    HttpKnownMethod method,
-    std::string_view path) const noexcept {
+const detail::RouteEntry* detail::RouteTable::findStaticRoute(HttpKnownMethod method, std::string_view path) const noexcept {
     if (!isRoutableMethod(method)) {
         return nullptr;
     }
@@ -165,9 +158,7 @@ std::uint32_t detail::RouteTable::allowedMethods(std::string_view path, HttpKnow
         // was cleared from the candidate mask above.
         const bool hasStaticRoutes = (staticMethodMask_ & methodBit) != 0;
         const auto* const staticRoute = hasStaticRoutes ? findStaticRoute(method, path) : nullptr;
-        const auto* const dynamicRoute = (dynamicMethodMask_ & methodBit) != 0
-            ? findDynamicNodeNoParams(dynamicRoots_[i], path)
-            : nullptr;
+        const auto* const dynamicRoute = (dynamicMethodMask_ & methodBit) != 0 ? findDynamicNodeNoParams(dynamicRoots_[i], path) : nullptr;
         if (staticRoute != nullptr || dynamicRoute != nullptr) {
             mask |= 1U << i;
         }

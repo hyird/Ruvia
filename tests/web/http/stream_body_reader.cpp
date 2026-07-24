@@ -39,21 +39,13 @@ struct EofBodyStream final {
 
     template <typename Buffer, typename Handler>
     void async_read_some(const Buffer&, Handler handler) {
-        asio::post(
-            *io,
-            [handler = std::move(handler)]() mutable {
-                handler(asio::error::eof, std::size_t{0});
-            });
+        asio::post(*io, [handler = std::move(handler)]() mutable { handler(asio::error::eof, std::size_t{0}); });
     }
 
     template <typename Buffer, typename Handler>
     void async_write_some(const Buffer& buffer, Handler handler) {
         const auto bytes = asio::buffer_size(buffer);
-        asio::post(
-            *io,
-            [handler = std::move(handler), bytes]() mutable {
-                handler(std::error_code{}, bytes);
-            });
+        asio::post(*io, [handler = std::move(handler), bytes]() mutable { handler(std::error_code{}, bytes); });
     }
 };
 
@@ -77,38 +69,25 @@ struct SegmentedBodyStream final {
     void async_read_some(const Buffer& buffer, Handler handler) {
         const auto capacity = asio::buffer_size(buffer);
         if (index >= segments.size() || capacity == 0) {
-            asio::post(
-                *io,
-                [handler = std::move(handler)]() mutable {
-                    handler(asio::error::eof, std::size_t{0});
-                });
+            asio::post(*io, [handler = std::move(handler)]() mutable { handler(asio::error::eof, std::size_t{0}); });
             return;
         }
         auto& segment = segments[index];
         const auto available = segment.size() - offset;
         const auto count = std::min(capacity, available);
-        std::memcpy(
-            asio::buffer_cast<void*>(buffer), segment.data() + offset, count);
+        std::memcpy(asio::buffer_cast<void*>(buffer), segment.data() + offset, count);
         offset += count;
         if (offset >= segment.size()) {
             ++index;
             offset = 0;
         }
-        asio::post(
-            *io,
-            [handler = std::move(handler), count]() mutable {
-                handler(std::error_code{}, count);
-            });
+        asio::post(*io, [handler = std::move(handler), count]() mutable { handler(std::error_code{}, count); });
     }
 
     template <typename Buffer, typename Handler>
     void async_write_some(const Buffer& buffer, Handler handler) {
         const auto bytes = asio::buffer_size(buffer);
-        asio::post(
-            *io,
-            [handler = std::move(handler), bytes]() mutable {
-                handler(std::error_code{}, bytes);
-            });
+        asio::post(*io, [handler = std::move(handler), bytes]() mutable { handler(std::error_code{}, bytes); });
     }
 };
 
@@ -119,40 +98,27 @@ ruvia::detail::Http1RequestBodyPlan parseBodyPlan(std::string_view wire) {
 struct KnownLengthObservation final {
     std::string body;
     std::string pipeline;
-    ruvia::detail::Http1RequestBodyConsumption consumption{
-        ruvia::detail::Http1RequestBodyConsumption::kIncomplete};
+    ruvia::detail::Http1RequestBodyConsumption consumption{ruvia::detail::Http1RequestBodyConsumption::kIncomplete};
     std::optional<ruvia::HttpStatusCode> errorStatus;
 };
 
 // Streams a Content-Length body whose bytes are split as: an initial segment
 // carried alongside the request head (partial body prefix, plus any pipelined
 // trailer) followed by `socketSegments` delivered over the socket.
-KnownLengthObservation readKnownLengthBody(
-    std::size_t contentLength,
-    std::string initial,
-    std::vector<std::string> socketSegments) {
+KnownLengthObservation readKnownLengthBody(std::size_t contentLength, std::string initial, std::vector<std::string> socketSegments) {
     asio::io_context& io = ruvia::test::newTestIoContext();
     SegmentedBodyStream stream{&io, std::move(socketSegments)};
     ruvia::detail::ConnectionScanner::Entry scannerEntry;
     std::pmr::monotonic_buffer_resource resource;
-    auto plan = parseBodyPlan(
-        "POST / HTTP/1.1\r\nHost: x\r\nContent-Length: " +
-        std::to_string(contentLength) + "\r\n\r\n");
-    ruvia::detail::StreamBodyReader<SegmentedBodyStream> reader(
-        stream,
-        std::pmr::polymorphic_allocator<char>(&resource),
-        initial,
-        plan,
-        ruvia::ProtocolByteLimit::limited(1u << 20),
-        scannerEntry);
+    auto plan = parseBodyPlan("POST / HTTP/1.1\r\nHost: x\r\nContent-Length: " + std::to_string(contentLength) + "\r\n\r\n");
+    ruvia::detail::StreamBodyReader<SegmentedBodyStream> reader(stream, std::pmr::polymorphic_allocator<char>(&resource), initial, plan, ruvia::ProtocolByteLimit::limited(1u << 20), scannerEntry);
     KnownLengthObservation observation;
 
     auto future = asio::co_spawn(
         io,
         [&]() -> asio::awaitable<void> {
             try {
-                while (const auto part = co_await ruvia::detail::taskAsAwaitable(
-                           reader.read())) {
+                while (const auto part = co_await ruvia::detail::taskAsAwaitable(reader.read())) {
                     observation.body.append(*part);
                 }
             } catch (const ruvia::HttpProtocolError& error) {
@@ -181,17 +147,10 @@ std::string distinctBytes(std::size_t count) {
 
 std::string gzipCompress(std::string_view input) {
     z_stream stream{};
-    if (deflateInit2(
-            &stream,
-            Z_BEST_SPEED,
-            Z_DEFLATED,
-            15 + 16,
-            8,
-            Z_DEFAULT_STRATEGY) != Z_OK) {
+    if (deflateInit2(&stream, Z_BEST_SPEED, Z_DEFLATED, 15 + 16, 8, Z_DEFAULT_STRATEGY) != Z_OK) {
         return {};
     }
-    stream.next_in = reinterpret_cast<Bytef*>(
-        const_cast<char*>(input.data()));
+    stream.next_in = reinterpret_cast<Bytef*>(const_cast<char*>(input.data()));
     stream.avail_in = static_cast<uInt>(input.size());
     std::string output;
     std::array<char, 1024> window{};
@@ -208,11 +167,7 @@ std::string gzipCompress(std::string_view input) {
 
 std::string chunked(std::string_view input) {
     std::array<char, 2 * sizeof(std::size_t)> sizeBytes{};
-    const auto [end, ec] = std::to_chars(
-        sizeBytes.data(),
-        sizeBytes.data() + sizeBytes.size(),
-        input.size(),
-        16);
+    const auto [end, ec] = std::to_chars(sizeBytes.data(), sizeBytes.data() + sizeBytes.size(), input.size(), 16);
     if (ec != std::errc{}) {
         return {};
     }
@@ -223,16 +178,10 @@ std::string chunked(std::string_view input) {
     return wire;
 }
 
-std::string chunkedParts(
-    std::string_view first,
-    std::string_view second) {
+std::string chunkedParts(std::string_view first, std::string_view second) {
     const auto appendWireChunk = [](std::string& wire, std::string_view input) {
         std::array<char, 2 * sizeof(std::size_t)> sizeBytes{};
-        const auto [end, ec] = std::to_chars(
-            sizeBytes.data(),
-            sizeBytes.data() + sizeBytes.size(),
-            input.size(),
-            16);
+        const auto [end, ec] = std::to_chars(sizeBytes.data(), sizeBytes.data() + sizeBytes.size(), input.size(), 16);
         if (ec != std::errc{}) {
             return false;
         }
@@ -254,14 +203,11 @@ std::string chunkedParts(
 struct TransferBodyObservation final {
     std::string body;
     std::string pipeline;
-    ruvia::detail::Http1RequestBodyConsumption consumption{
-        ruvia::detail::Http1RequestBodyConsumption::kIncomplete};
+    ruvia::detail::Http1RequestBodyConsumption consumption{ruvia::detail::Http1RequestBodyConsumption::kIncomplete};
     std::optional<ruvia::HttpStatusCode> errorStatus;
 };
 
-TransferBodyObservation readTransferBody(
-    std::string initial,
-    bool streaming) {
+TransferBodyObservation readTransferBody(std::string initial, bool streaming) {
     asio::io_context& io = ruvia::test::newTestIoContext();
     EofBodyStream stream{&io};
     ruvia::detail::ConnectionScanner::Entry scannerEntry;
@@ -269,13 +215,7 @@ TransferBodyObservation readTransferBody(
     auto plan = parseBodyPlan(
         "POST / HTTP/1.1\r\nHost: x\r\n"
         "Transfer-Encoding: gzip, chunked\r\n\r\n");
-    ruvia::detail::StreamBodyReader<EofBodyStream> reader(
-        stream,
-        std::pmr::polymorphic_allocator<char>(&resource),
-        initial,
-        plan,
-        ruvia::ProtocolByteLimit::limited(1u << 20),
-        scannerEntry);
+    ruvia::detail::StreamBodyReader<EofBodyStream> reader(stream, std::pmr::polymorphic_allocator<char>(&resource), initial, plan, ruvia::ProtocolByteLimit::limited(1u << 20), scannerEntry);
     TransferBodyObservation observation;
 
     auto future = asio::co_spawn(
@@ -283,14 +223,12 @@ TransferBodyObservation readTransferBody(
         [&]() -> asio::awaitable<void> {
             try {
                 if (streaming) {
-                    while (const auto part = co_await ruvia::detail::taskAsAwaitable(
-                               reader.read())) {
+                    while (const auto part = co_await ruvia::detail::taskAsAwaitable(reader.read())) {
                         observation.body.append(*part);
                     }
                 } else {
                     std::pmr::string body(&resource);
-                    const auto decoded = co_await ruvia::detail::taskAsAwaitable(
-                        reader.readAll(body));
+                    const auto decoded = co_await ruvia::detail::taskAsAwaitable(reader.readAll(body));
                     observation.body.assign(decoded);
                 }
             } catch (const ruvia::HttpProtocolError& error) {
@@ -311,36 +249,23 @@ TransferBodyObservation readTransferBody(
 }  // namespace
 
 RUVIA_TEST(http1_without_body_plan_preserves_the_entire_pipeline) {
-    const auto plan = parseBodyPlan(
-        "GET / HTTP/1.1\r\nHost: x\r\n\r\n");
+    const auto plan = parseBodyPlan("GET / HTTP/1.1\r\nHost: x\r\n\r\n");
     RUVIA_CHECK(plan.withoutBody() != nullptr);
 
     UnusedBodyStream stream;
     ruvia::detail::ConnectionScanner::Entry scannerEntry;
     std::pmr::monotonic_buffer_resource resource;
-    ruvia::detail::StreamBodyReader<UnusedBodyStream> reader(
-        stream,
-        std::pmr::polymorphic_allocator<char>(&resource),
-        "GET /next HTTP/1.1\r\nHost: x\r\n\r\n",
-        plan,
-        ruvia::ProtocolByteLimit::limited(1024),
-        scannerEntry);
-    RUVIA_CHECK(
-        reader.consumption() ==
-        ruvia::detail::Http1RequestBodyConsumption::kComplete);
+    ruvia::detail::StreamBodyReader<UnusedBodyStream> reader(stream, std::pmr::polymorphic_allocator<char>(&resource), "GET /next HTTP/1.1\r\nHost: x\r\n\r\n", plan, ruvia::ProtocolByteLimit::limited(1024), scannerEntry);
+    RUVIA_CHECK(reader.consumption() == ruvia::detail::Http1RequestBodyConsumption::kComplete);
 
     std::pmr::string taken(&resource);
     reader.takePipeline(taken);
-    RUVIA_CHECK_EQ(
-        std::string_view(taken.data(), taken.size()),
-        std::string_view("GET /next HTTP/1.1\r\nHost: x\r\n\r\n"));
+    RUVIA_CHECK_EQ(std::string_view(taken.data(), taken.size()), std::string_view("GET /next HTTP/1.1\r\nHost: x\r\n\r\n"));
 }
 
 RUVIA_TEST(http1_transfer_coding_uses_one_decoder_for_streaming_and_buffered_reads) {
-    constexpr std::string_view plain =
-        "transfer coding output shared by both body reader surfaces";
-    constexpr std::string_view pipeline =
-        "GET /next HTTP/1.1\r\nHost: x\r\n\r\n";
+    constexpr std::string_view plain = "transfer coding output shared by both body reader surfaces";
+    constexpr std::string_view pipeline = "GET /next HTTP/1.1\r\nHost: x\r\n\r\n";
     const auto encoded = gzipCompress(plain);
     const auto initial = chunked(encoded) + std::string(pipeline);
 
@@ -349,18 +274,15 @@ RUVIA_TEST(http1_transfer_coding_uses_one_decoder_for_streaming_and_buffered_rea
         RUVIA_CHECK(!observation.errorStatus.has_value());
         RUVIA_CHECK_EQ(observation.body, std::string(plain));
         RUVIA_CHECK_EQ(observation.pipeline, std::string(pipeline));
-        RUVIA_CHECK(observation.consumption ==
-            ruvia::detail::Http1RequestBodyConsumption::kComplete);
+        RUVIA_CHECK(observation.consumption == ruvia::detail::Http1RequestBodyConsumption::kComplete);
     }
 }
 
 RUVIA_TEST(http1_transfer_coding_preserves_gzip_members_across_chunks) {
-    constexpr std::string_view pipeline =
-        "GET /next HTTP/1.1\r\nHost: x\r\n\r\n";
+    constexpr std::string_view pipeline = "GET /next HTTP/1.1\r\nHost: x\r\n\r\n";
     const auto first = gzipCompress("first-");
     const auto second = gzipCompress("second");
-    const auto initial =
-        chunkedParts(first, second) + std::string(pipeline);
+    const auto initial = chunkedParts(first, second) + std::string(pipeline);
     RUVIA_CHECK(!first.empty());
     RUVIA_CHECK(!second.empty());
 
@@ -369,8 +291,7 @@ RUVIA_TEST(http1_transfer_coding_preserves_gzip_members_across_chunks) {
         RUVIA_CHECK(!observation.errorStatus.has_value());
         RUVIA_CHECK_EQ(observation.body, std::string("first-second"));
         RUVIA_CHECK_EQ(observation.pipeline, std::string(pipeline));
-        RUVIA_CHECK(observation.consumption ==
-            ruvia::detail::Http1RequestBodyConsumption::kComplete);
+        RUVIA_CHECK(observation.consumption == ruvia::detail::Http1RequestBodyConsumption::kComplete);
     }
 }
 
@@ -378,10 +299,8 @@ RUVIA_TEST(http1_transfer_coding_failure_maps_once_for_both_read_surfaces) {
     const auto initial = chunked("not-gzip");
     for (const bool streaming : {false, true}) {
         const auto observation = readTransferBody(initial, streaming);
-        RUVIA_CHECK_EQ(
-            observation.errorStatus, ruvia::http_status::kBadRequest);
-        RUVIA_CHECK(observation.consumption ==
-            ruvia::detail::Http1RequestBodyConsumption::kIncomplete);
+        RUVIA_CHECK_EQ(observation.errorStatus, ruvia::http_status::kBadRequest);
+        RUVIA_CHECK(observation.consumption == ruvia::detail::Http1RequestBodyConsumption::kIncomplete);
     }
 }
 
@@ -391,33 +310,24 @@ RUVIA_TEST(http1_streaming_content_length_body_split_across_socket_reads) {
     // buffer_-relative compaction offset while the initial view was still live,
     // so the next read re-exposed already-delivered bytes and dropped the tail.
     const auto body = distinctBytes(100);
-    const auto observation = readKnownLengthBody(
-        100,
-        body.substr(0, 30),
-        {body.substr(30, 40), body.substr(70, 30)});
+    const auto observation = readKnownLengthBody(100, body.substr(0, 30), {body.substr(30, 40), body.substr(70, 30)});
     RUVIA_CHECK(!observation.errorStatus.has_value());
     RUVIA_CHECK_EQ(observation.body, body);
     RUVIA_CHECK(observation.pipeline.empty());
-    RUVIA_CHECK(observation.consumption ==
-        ruvia::detail::Http1RequestBodyConsumption::kComplete);
+    RUVIA_CHECK(observation.consumption == ruvia::detail::Http1RequestBodyConsumption::kComplete);
 }
 
 RUVIA_TEST(http1_streaming_content_length_keeps_pipelined_request_out_of_body) {
     // The final socket read carries the last body bytes immediately followed by
     // a pipelined request. The leftover must reach the pipeline stash verbatim,
     // never prepended with body bytes (which would desync the next request).
-    constexpr std::string_view pipeline =
-        "GET /next HTTP/1.1\r\nHost: x\r\n\r\n";
+    constexpr std::string_view pipeline = "GET /next HTTP/1.1\r\nHost: x\r\n\r\n";
     const auto body = distinctBytes(100);
-    const auto observation = readKnownLengthBody(
-        100,
-        body.substr(0, 30),
-        {body.substr(30, 70) + std::string(pipeline)});
+    const auto observation = readKnownLengthBody(100, body.substr(0, 30), {body.substr(30, 70) + std::string(pipeline)});
     RUVIA_CHECK(!observation.errorStatus.has_value());
     RUVIA_CHECK_EQ(observation.body, body);
     RUVIA_CHECK_EQ(observation.pipeline, std::string(pipeline));
-    RUVIA_CHECK(observation.consumption ==
-        ruvia::detail::Http1RequestBodyConsumption::kComplete);
+    RUVIA_CHECK(observation.consumption == ruvia::detail::Http1RequestBodyConsumption::kComplete);
 }
 
 RUVIA_TEST(http1_transfer_coding_eof_commits_only_the_complete_decode_pipeline) {
@@ -426,9 +336,7 @@ RUVIA_TEST(http1_transfer_coding_eof_commits_only_the_complete_decode_pipeline) 
     const auto initial = chunked(incomplete);
     for (const bool streaming : {false, true}) {
         const auto observation = readTransferBody(initial, streaming);
-        RUVIA_CHECK_EQ(
-            observation.errorStatus, ruvia::http_status::kBadRequest);
-        RUVIA_CHECK(observation.consumption ==
-            ruvia::detail::Http1RequestBodyConsumption::kIncomplete);
+        RUVIA_CHECK_EQ(observation.errorStatus, ruvia::http_status::kBadRequest);
+        RUVIA_CHECK(observation.consumption == ruvia::detail::Http1RequestBodyConsumption::kIncomplete);
     }
 }

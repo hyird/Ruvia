@@ -7,12 +7,7 @@
 namespace ruvia::detail {
 
 struct HttpResponseHeaderAccess final {
-    [[nodiscard]] static HttpResponseHeader make(
-        const char* bytes,
-        std::uint32_t nameSize,
-        std::uint32_t valueSize,
-        std::uint32_t knownBit,
-        bool owned) noexcept {
+    [[nodiscard]] static HttpResponseHeader make(const char* bytes, std::uint32_t nameSize, std::uint32_t valueSize, std::uint32_t knownBit, bool owned) noexcept {
         HttpResponseHeader header;
         header.bytes = bytes;
         header.nameSize = nameSize;
@@ -48,12 +43,7 @@ struct HttpResponseHeaderAccess final {
     }
 };
 
-[[nodiscard]] inline HttpResponseHeader makeResponseHeader(
-    const char* bytes,
-    std::uint32_t nameSize,
-    std::uint32_t valueSize,
-    std::uint32_t knownBit,
-    bool owned) noexcept {
+[[nodiscard]] inline HttpResponseHeader makeResponseHeader(const char* bytes, std::uint32_t nameSize, std::uint32_t valueSize, std::uint32_t knownBit, bool owned) noexcept {
     return HttpResponseHeaderAccess::make(bytes, nameSize, valueSize, knownBit, owned);
 }
 

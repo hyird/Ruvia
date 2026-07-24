@@ -39,11 +39,8 @@ inline constexpr std::int64_t kMaxCookieAgeSeconds = 34560000;
     return true;
 }
 
-[[nodiscard]] inline bool cookieNameStartsWithIgnoreCase(
-    std::string_view name,
-    std::string_view prefix) noexcept {
-    return name.size() >= prefix.size() &&
-        httpAsciiEqualsIgnoreCase(name.substr(0, prefix.size()), prefix);
+[[nodiscard]] inline bool cookieNameStartsWithIgnoreCase(std::string_view name, std::string_view prefix) noexcept {
+    return name.size() >= prefix.size() && httpAsciiEqualsIgnoreCase(name.substr(0, prefix.size()), prefix);
 }
 
 [[nodiscard]] inline bool isValidCookieDomain(std::string_view value) noexcept {
@@ -63,9 +60,7 @@ inline constexpr std::int64_t kMaxCookieAgeSeconds = 34560000;
     bool labelEndsWithAlnum = false;
     for (const auto c : value) {
         const auto byte = static_cast<unsigned char>(c);
-        const bool alnum = (byte >= 'a' && byte <= 'z') ||
-            (byte >= 'A' && byte <= 'Z') ||
-            (byte >= '0' && byte <= '9');
+        const bool alnum = (byte >= 'a' && byte <= 'z') || (byte >= 'A' && byte <= 'Z') || (byte >= '0' && byte <= '9');
         if (c == '.') {
             if (labelLength == 0 || !labelEndsWithAlnum) {
                 return false;
@@ -74,8 +69,7 @@ inline constexpr std::int64_t kMaxCookieAgeSeconds = 34560000;
             labelEndsWithAlnum = false;
             continue;
         }
-        if ((!alnum && c != '-') || labelLength == 63 ||
-            (labelLength == 0 && !alnum)) {
+        if ((!alnum && c != '-') || labelLength == 63 || (labelLength == 0 && !alnum)) {
             return false;
         }
         ++labelLength;
@@ -86,26 +80,34 @@ inline constexpr std::int64_t kMaxCookieAgeSeconds = 34560000;
 
 [[nodiscard]] inline std::string_view cookiePriorityToken(CookiePriority priority) noexcept {
     switch (priority) {
-        case CookiePriority::kLow: return "Low";
-        case CookiePriority::kMedium: return "Medium";
-        case CookiePriority::kHigh: return "High";
+        case CookiePriority::kLow:
+            return "Low";
+        case CookiePriority::kMedium:
+            return "Medium";
+        case CookiePriority::kHigh:
+            return "High";
     }
     return {};
 }
 
 [[nodiscard]] inline std::string_view cookieSameSiteToken(CookieSameSite sameSite) noexcept {
     switch (sameSite) {
-        case CookieSameSite::kStrict: return "Strict";
-        case CookieSameSite::kLax: return "Lax";
-        case CookieSameSite::kNone: return "None";
+        case CookieSameSite::kStrict:
+            return "Strict";
+        case CookieSameSite::kLax:
+            return "Lax";
+        case CookieSameSite::kNone:
+            return "None";
     }
     return {};
 }
 
 [[nodiscard]] inline std::string_view cookiePrefixText(CookiePrefix prefix) noexcept {
     switch (prefix) {
-        case CookiePrefix::kSecure: return "__Secure-";
-        case CookiePrefix::kHost: return "__Host-";
+        case CookiePrefix::kSecure:
+            return "__Secure-";
+        case CookiePrefix::kHost:
+            return "__Host-";
     }
     return {};
 }
@@ -131,8 +133,7 @@ inline void validateCookie(std::string_view name, std::string_view value, const 
             throw std::invalid_argument("cookie Max-Age must not exceed 400 days");
         }
     }
-    if (options.expires.has_value() &&
-        *options.expires > std::chrono::system_clock::now() + std::chrono::seconds(kMaxCookieAgeSeconds)) {
+    if (options.expires.has_value() && *options.expires > std::chrono::system_clock::now() + std::chrono::seconds(kMaxCookieAgeSeconds)) {
         throw std::invalid_argument("cookie Expires must not exceed 400 days ahead");
     }
     if (options.priority && cookiePriorityToken(*options.priority).empty()) {
@@ -154,12 +155,8 @@ inline void validateCookie(std::string_view name, std::string_view value, const 
     // that receive-side rule for literal wire names so every cookie emitted by
     // this sender can actually be stored. A typed prefix is canonical and is the
     // outermost wire prefix, so it takes precedence over bytes in `name`.
-    const bool hostPrefixed = options.prefix == CookiePrefix::kHost ||
-        (!options.prefix &&
-         cookieNameStartsWithIgnoreCase(name, "__Host-"));
-    const bool securePrefixed = options.prefix == CookiePrefix::kSecure ||
-        (!options.prefix &&
-         cookieNameStartsWithIgnoreCase(name, "__Secure-"));
+    const bool hostPrefixed = options.prefix == CookiePrefix::kHost || (!options.prefix && cookieNameStartsWithIgnoreCase(name, "__Host-"));
+    const bool securePrefixed = options.prefix == CookiePrefix::kSecure || (!options.prefix && cookieNameStartsWithIgnoreCase(name, "__Secure-"));
     if (hostPrefixed) {
         if (!options.secure || options.path != "/" || !options.domain.empty()) {
             throw std::invalid_argument("__Host- cookie requires Secure, Path=/, and no Domain");

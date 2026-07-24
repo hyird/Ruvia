@@ -16,10 +16,7 @@
 namespace ruvia {
 namespace {
 
-[[nodiscard]] bool setCookieValueHasWireName(
-    std::string_view value,
-    std::string_view wirePrefix,
-    std::string_view cookieName) noexcept {
+[[nodiscard]] bool setCookieValueHasWireName(std::string_view value, std::string_view wirePrefix, std::string_view cookieName) noexcept {
     while (!value.empty() && (value.front() == ' ' || value.front() == '\t')) {
         value.remove_prefix(1);
     }
@@ -54,18 +51,13 @@ namespace {
 
 }  // namespace
 
-HttpResponseHeader& HttpResponse::upsertSetCookieHeaderUninitializedValue(
-    std::string_view wirePrefix,
-    std::string_view cookieName,
-    std::size_t valueSize) {
+HttpResponseHeader& HttpResponse::upsertSetCookieHeaderUninitializedValue(std::string_view wirePrefix, std::string_view cookieName, std::size_t valueSize) {
     auto* retained = findSetCookieHeader(wirePrefix, cookieName);
     if (retained == nullptr) {
-        return appendHeaderUninitializedValue(
-            "Set-Cookie", valueSize, detail::kResponseHeaderSetCookie);
+        return appendHeaderUninitializedValue("Set-Cookie", valueSize, detail::kResponseHeaderSetCookie);
     }
 
-    headers_.assignUninitializedValue(
-        *retained, "Set-Cookie", valueSize, detail::kResponseHeaderSetCookie);
+    headers_.assignUninitializedValue(*retained, "Set-Cookie", valueSize, detail::kResponseHeaderSetCookie);
     detail::setResponseHeaderAppend(*retained, true);
     eraseLaterSetCookieHeaders(*retained, wirePrefix, cookieName);
     return *retained;
@@ -74,40 +66,31 @@ HttpResponseHeader& HttpResponse::upsertSetCookieHeaderUninitializedValue(
 void HttpResponse::upsertSetCookieHeaderValidated(std::string_view value) {
     const auto cookieName = setCookieWireName(value);
     if (cookieName.empty()) {
-        appendHeaderValidated(
-            "Set-Cookie", value, detail::kResponseHeaderSetCookie);
+        appendHeaderValidated("Set-Cookie", value, detail::kResponseHeaderSetCookie);
         return;
     }
 
     auto* retained = findSetCookieHeader({}, cookieName);
     if (retained == nullptr) {
-        appendHeaderValidated(
-            "Set-Cookie", value, detail::kResponseHeaderSetCookie);
+        appendHeaderValidated("Set-Cookie", value, detail::kResponseHeaderSetCookie);
         return;
     }
 
-    headers_.assign(
-        *retained, "Set-Cookie", value, detail::kResponseHeaderSetCookie);
+    headers_.assign(*retained, "Set-Cookie", value, detail::kResponseHeaderSetCookie);
     detail::setResponseHeaderAppend(*retained, true);
     eraseLaterSetCookieHeaders(*retained, {}, cookieName);
 }
 
-HttpResponseHeader* HttpResponse::findSetCookieHeader(
-    std::string_view wirePrefix,
-    std::string_view cookieName) noexcept {
+HttpResponseHeader* HttpResponse::findSetCookieHeader(std::string_view wirePrefix, std::string_view cookieName) noexcept {
     for (auto& header : headers_) {
-        if (detail::responseHeaderKnownBit(header) == detail::kResponseHeaderSetCookie &&
-            setCookieValueHasWireName(header.value(), wirePrefix, cookieName)) {
+        if (detail::responseHeaderKnownBit(header) == detail::kResponseHeaderSetCookie && setCookieValueHasWireName(header.value(), wirePrefix, cookieName)) {
             return &header;
         }
     }
     return nullptr;
 }
 
-void HttpResponse::eraseLaterSetCookieHeaders(
-    HttpResponseHeader& retained,
-    std::string_view wirePrefix,
-    std::string_view cookieName) noexcept {
+void HttpResponse::eraseLaterSetCookieHeaders(HttpResponseHeader& retained, std::string_view wirePrefix, std::string_view cookieName) noexcept {
     // A response might already contain duplicates introduced through the raw
     // header API. Once an authoritative cookie path owns this name, collapse
     // every later occurrence so the final response has one value.
@@ -115,8 +98,7 @@ void HttpResponse::eraseLaterSetCookieHeaders(
     auto* const end = headers_.end();
     auto* write = &retained + 1;
     for (auto* read = &retained + 1; read != end; ++read) {
-        if (detail::responseHeaderKnownBit(*read) == detail::kResponseHeaderSetCookie &&
-            setCookieValueHasWireName(read->value(), wirePrefix, cookieName)) {
+        if (detail::responseHeaderKnownBit(*read) == detail::kResponseHeaderSetCookie && setCookieValueHasWireName(read->value(), wirePrefix, cookieName)) {
             headers_.releaseHeader(*read);
             continue;
         }

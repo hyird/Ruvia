@@ -49,56 +49,49 @@ public:
     void clear();
     void regenerate();
 
-    [[nodiscard]] std::string_view data() const & noexcept;
-    [[nodiscard]] std::string_view data() const && = delete;
+    [[nodiscard]] std::string_view data() const& noexcept;
+    [[nodiscard]] std::string_view data() const&& = delete;
 
-    [[nodiscard]] const SessionUntouched* untouched() const & noexcept {
+    [[nodiscard]] const SessionUntouched* untouched() const& noexcept {
         return std::get_if<SessionUntouched>(&value_);
     }
-    [[nodiscard]] const SessionUntouched* untouched() const && = delete;
+    [[nodiscard]] const SessionUntouched* untouched() const&& = delete;
 
-    [[nodiscard]] const SessionUnrecognized* unrecognized() const & noexcept {
+    [[nodiscard]] const SessionUnrecognized* unrecognized() const& noexcept {
         return std::get_if<SessionUnrecognized>(&value_);
     }
-    [[nodiscard]] const SessionUnrecognized* unrecognized() const && = delete;
+    [[nodiscard]] const SessionUnrecognized* unrecognized() const&& = delete;
 
-    [[nodiscard]] const SessionLoaded* loaded() const & noexcept {
+    [[nodiscard]] const SessionLoaded* loaded() const& noexcept {
         return std::get_if<SessionLoaded>(&value_);
     }
-    [[nodiscard]] const SessionLoaded* loaded() const && = delete;
+    [[nodiscard]] const SessionLoaded* loaded() const&& = delete;
 
-    [[nodiscard]] const SessionPersistNew* persistNew() const & noexcept {
+    [[nodiscard]] const SessionPersistNew* persistNew() const& noexcept {
         return std::get_if<SessionPersistNew>(&value_);
     }
-    [[nodiscard]] const SessionPersistNew* persistNew() const && = delete;
+    [[nodiscard]] const SessionPersistNew* persistNew() const&& = delete;
 
-    [[nodiscard]] const SessionPersistExisting* persistExisting() const & noexcept {
+    [[nodiscard]] const SessionPersistExisting* persistExisting() const& noexcept {
         return std::get_if<SessionPersistExisting>(&value_);
     }
-    [[nodiscard]] const SessionPersistExisting* persistExisting() const && = delete;
+    [[nodiscard]] const SessionPersistExisting* persistExisting() const&& = delete;
 
-    [[nodiscard]] const SessionRotate* rotate() const & noexcept {
+    [[nodiscard]] const SessionRotate* rotate() const& noexcept {
         return std::get_if<SessionRotate>(&value_);
     }
-    [[nodiscard]] const SessionRotate* rotate() const && = delete;
+    [[nodiscard]] const SessionRotate* rotate() const&& = delete;
 
-    [[nodiscard]] const SessionClear* cleared() const & noexcept {
+    [[nodiscard]] const SessionClear* cleared() const& noexcept {
         return std::get_if<SessionClear>(&value_);
     }
-    [[nodiscard]] const SessionClear* cleared() const && = delete;
+    [[nodiscard]] const SessionClear* cleared() const&& = delete;
 
 private:
     [[nodiscard]] std::pmr::string copy(std::string_view value) const;
 
     std::pmr::memory_resource* resource_;
-    std::variant<
-        SessionUntouched,
-        SessionUnrecognized,
-        SessionLoaded,
-        SessionPersistNew,
-        SessionPersistExisting,
-        SessionRotate,
-        SessionClear> value_;
+    std::variant<SessionUntouched, SessionUnrecognized, SessionLoaded, SessionPersistNew, SessionPersistExisting, SessionRotate, SessionClear> value_;
 };
 
 }  // namespace ruvia::detail

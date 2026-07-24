@@ -30,13 +30,6 @@ enum class ForwardMode : unsigned char {
 //
 // The returned views borrow from `request*` and from `staleEntry`, both of
 // which must outlive the fetch.
-[[nodiscard]] std::pmr::vector<HttpHeaderView> buildForwardHeaders(
-    std::span<const HttpHeaderView> requestHeaders,
-    std::string_view clientAddress,
-    std::string_view host,
-    bool tlsEnabled,
-    const CachedResponse* staleEntry,
-    ForwardMode mode,
-    std::pmr::memory_resource* resource);
+[[nodiscard]] std::pmr::vector<HttpHeaderView> buildForwardHeaders(std::span<const HttpHeaderView> requestHeaders, std::string_view clientAddress, std::string_view host, bool tlsEnabled, const CachedResponse* staleEntry, ForwardMode mode, std::pmr::memory_resource* resource);
 
 }  // namespace ruvia::edge

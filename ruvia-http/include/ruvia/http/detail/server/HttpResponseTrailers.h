@@ -22,9 +22,7 @@ namespace ruvia::detail {
     if (name.empty()) {
         return false;
     }
-    return std::ranges::all_of(name, [](char ch) noexcept {
-        return isHttpTokenChar(static_cast<unsigned char>(ch));
-    });
+    return std::ranges::all_of(name, [](char ch) noexcept { return isHttpTokenChar(static_cast<unsigned char>(ch)); });
 }
 
 // A trailer value must be a valid HTTP field value (RFC 9110 §5.5): field-vchar
@@ -34,9 +32,7 @@ namespace ruvia::detail {
 // field-value. Enforce the shared field-value rule so this matches the request
 // trailer path and every other header-value check (isHttpFieldValueChar).
 [[nodiscard]] inline bool isValidResponseTrailerValue(std::string_view value) noexcept {
-    return std::ranges::all_of(value, [](char ch) noexcept {
-        return isHttpFieldValueChar(static_cast<unsigned char>(ch));
-    });
+    return std::ranges::all_of(value, [](char ch) noexcept { return isHttpFieldValueChar(static_cast<unsigned char>(ch)); });
 }
 
 // Fields that must never appear in a trailer section because they govern message
@@ -48,10 +44,7 @@ namespace ruvia::detail {
     // 8.8.3) and Accept-Ranges (section 14.3) from that set in trailers; every
     // other known field lacks trailer permission or controls framing,
     // representation handling, caching, routing, cookies, methods, or CORS.
-    if (const auto known = classifyResponseHeaderName(name);
-        known != 0 &&
-        known != kResponseHeaderEtag &&
-        known != kResponseHeaderAcceptRanges) {
+    if (const auto known = classifyResponseHeaderName(name); known != 0 && known != kResponseHeaderEtag && known != kResponseHeaderAcceptRanges) {
         return true;
     }
 
@@ -93,40 +86,29 @@ namespace ruvia::detail {
             // Response control data (RFC 9110 §7.4).
             return httpAsciiEqualsIgnoreCase(name, "Age");
         case 4:
-            return httpAsciiEqualsIgnoreCase(name, "Date") ||
-                httpAsciiEqualsIgnoreCase(name, "Vary");
+            return httpAsciiEqualsIgnoreCase(name, "Date") || httpAsciiEqualsIgnoreCase(name, "Vary");
         case 6:
             return httpAsciiEqualsIgnoreCase(name, "Pragma");
         case 7:
-            return httpAsciiEqualsIgnoreCase(name, "Trailer") ||
-                httpAsciiEqualsIgnoreCase(name, "Expires") ||
-                httpAsciiEqualsIgnoreCase(name, "Warning");
+            return httpAsciiEqualsIgnoreCase(name, "Trailer") || httpAsciiEqualsIgnoreCase(name, "Expires") || httpAsciiEqualsIgnoreCase(name, "Warning");
         case 8:
             return httpAsciiEqualsIgnoreCase(name, "Location");
         case 10:
-            return httpAsciiEqualsIgnoreCase(name, "Keep-Alive") ||
-                httpAsciiEqualsIgnoreCase(name, "Set-Cookie");
+            return httpAsciiEqualsIgnoreCase(name, "Keep-Alive") || httpAsciiEqualsIgnoreCase(name, "Set-Cookie");
         case 11:
             return httpAsciiEqualsIgnoreCase(name, "Retry-After");
         case 12:
             return httpAsciiEqualsIgnoreCase(name, "Max-Forwards");
         case 13:
-            return httpAsciiEqualsIgnoreCase(name, "Cache-Control") ||
-                httpAsciiEqualsIgnoreCase(name, "Content-Range");
+            return httpAsciiEqualsIgnoreCase(name, "Cache-Control") || httpAsciiEqualsIgnoreCase(name, "Content-Range");
         case 15:
-            return httpAsciiEqualsIgnoreCase(name, "X-Frame-Options") ||
-                httpAsciiEqualsIgnoreCase(name, "Referrer-Policy") ||
-                httpAsciiEqualsIgnoreCase(name, "Clear-Site-Data");
+            return httpAsciiEqualsIgnoreCase(name, "X-Frame-Options") || httpAsciiEqualsIgnoreCase(name, "Referrer-Policy") || httpAsciiEqualsIgnoreCase(name, "Clear-Site-Data");
         case 16:
-            return httpAsciiEqualsIgnoreCase(name, "X-XSS-Protection") ||
-                httpAsciiEqualsIgnoreCase(name, "WWW-Authenticate") ||
-                httpAsciiEqualsIgnoreCase(name, "Proxy-Connection");
+            return httpAsciiEqualsIgnoreCase(name, "X-XSS-Protection") || httpAsciiEqualsIgnoreCase(name, "WWW-Authenticate") || httpAsciiEqualsIgnoreCase(name, "Proxy-Connection");
         case 18:
-            return httpAsciiEqualsIgnoreCase(name, "Proxy-Authenticate") ||
-                httpAsciiEqualsIgnoreCase(name, "Permissions-Policy");
+            return httpAsciiEqualsIgnoreCase(name, "Proxy-Authenticate") || httpAsciiEqualsIgnoreCase(name, "Permissions-Policy");
         case 19:
-            return httpAsciiEqualsIgnoreCase(name, "Proxy-Authorization") ||
-                httpAsciiEqualsIgnoreCase(name, "Content-Disposition");
+            return httpAsciiEqualsIgnoreCase(name, "Proxy-Authorization") || httpAsciiEqualsIgnoreCase(name, "Content-Disposition");
         case 22:
             return httpAsciiEqualsIgnoreCase(name, "X-Content-Type-Options");
         case 23:
@@ -134,9 +116,7 @@ namespace ruvia::detail {
         case 25:
             return httpAsciiEqualsIgnoreCase(name, "Strict-Transport-Security");
         case 35:
-            return httpAsciiEqualsIgnoreCase(
-                name,
-                "Content-Security-Policy-Report-Only");
+            return httpAsciiEqualsIgnoreCase(name, "Content-Security-Policy-Report-Only");
         default:
             return false;
     }
@@ -146,9 +126,7 @@ namespace ruvia::detail {
 // HTTP/1.1 chunked-trailer and HTTP/2 trailing-HEADERS sinks so both transports
 // enforce the same rules.
 [[nodiscard]] inline bool responseTrailerFieldValid(std::string_view name, std::string_view value) noexcept {
-    return isValidResponseTrailerName(name) &&
-        !isForbiddenResponseTrailerName(name) &&
-        isValidResponseTrailerValue(value);
+    return isValidResponseTrailerName(name) && !isForbiddenResponseTrailerName(name) && isValidResponseTrailerValue(value);
 }
 
 class HttpResponseTrailerSectionResult;
@@ -181,11 +159,9 @@ public:
 
 private:
     friend class HttpResponseTrailerSectionResult;
-    friend HttpResponseTrailerSectionResult httpResponseTrailerSection(
-        std::span<const HttpHeaderView>) noexcept;
+    friend HttpResponseTrailerSectionResult httpResponseTrailerSection(std::span<const HttpHeaderView>) noexcept;
 
-    explicit HttpResponseTrailerSection(
-        std::span<const HttpHeaderView> fields) noexcept
+    explicit HttpResponseTrailerSection(std::span<const HttpHeaderView> fields) noexcept
         : fields_(fields) {}
 
     std::span<const HttpHeaderView> fields_;
@@ -199,33 +175,27 @@ public:
 
 private:
     friend class HttpResponseTrailerSectionResult;
-    friend HttpResponseTrailerSectionResult httpResponseTrailerSection(
-        std::span<const HttpHeaderView>) noexcept;
+    friend HttpResponseTrailerSectionResult httpResponseTrailerSection(std::span<const HttpHeaderView>) noexcept;
 
     HttpResponseTrailerSectionFailure() noexcept = default;
 };
 
 class HttpResponseTrailerSectionResult final {
 public:
-    [[nodiscard]] const HttpResponseTrailerSection* section() const & noexcept {
+    [[nodiscard]] const HttpResponseTrailerSection* section() const& noexcept {
         return std::get_if<HttpResponseTrailerSection>(&value_);
     }
-    [[nodiscard]] const HttpResponseTrailerSection* section() const && = delete;
+    [[nodiscard]] const HttpResponseTrailerSection* section() const&& = delete;
 
-    [[nodiscard]] const HttpResponseTrailerSectionFailure*
-    failure() const & noexcept {
+    [[nodiscard]] const HttpResponseTrailerSectionFailure* failure() const& noexcept {
         return std::get_if<HttpResponseTrailerSectionFailure>(&value_);
     }
-    [[nodiscard]] const HttpResponseTrailerSectionFailure*
-    failure() const && = delete;
+    [[nodiscard]] const HttpResponseTrailerSectionFailure* failure() const&& = delete;
 
 private:
-    friend HttpResponseTrailerSectionResult httpResponseTrailerSection(
-        std::span<const HttpHeaderView>) noexcept;
+    friend HttpResponseTrailerSectionResult httpResponseTrailerSection(std::span<const HttpHeaderView>) noexcept;
 
-    using Value = std::variant<
-        HttpResponseTrailerSection,
-        HttpResponseTrailerSectionFailure>;
+    using Value = std::variant<HttpResponseTrailerSection, HttpResponseTrailerSectionFailure>;
 
     template <typename Alternative>
     explicit HttpResponseTrailerSectionResult(Alternative alternative) noexcept
@@ -235,29 +205,22 @@ private:
 };
 
 // Validate the whole section before head, encoder, output, or stream mutation.
-[[nodiscard]] inline HttpResponseTrailerSectionResult
-httpResponseTrailerSection(
-    std::span<const HttpHeaderView> trailers) noexcept {
+[[nodiscard]] inline HttpResponseTrailerSectionResult httpResponseTrailerSection(std::span<const HttpHeaderView> trailers) noexcept {
     if (trailers.size() > kMaxHttpHeaderFields) {
-        return HttpResponseTrailerSectionResult(
-            HttpResponseTrailerSectionFailure());
+        return HttpResponseTrailerSectionResult(HttpResponseTrailerSectionFailure());
     }
     HttpHeaderSectionSize sectionSize;
     for (const auto& trailer : trailers) {
-        if (!responseTrailerFieldValid(trailer.name(), trailer.value()) ||
-            !sectionSize.add(trailer.name(), trailer.value())) {
-            return HttpResponseTrailerSectionResult(
-                HttpResponseTrailerSectionFailure());
+        if (!responseTrailerFieldValid(trailer.name(), trailer.value()) || !sectionSize.add(trailer.name(), trailer.value())) {
+            return HttpResponseTrailerSectionResult(HttpResponseTrailerSectionFailure());
         }
     }
-    return HttpResponseTrailerSectionResult(
-        HttpResponseTrailerSection(trailers));
+    return HttpResponseTrailerSectionResult(HttpResponseTrailerSection(trailers));
 }
 
 // Validate a caller's trailers, throwing the typed failure. The caller keeps the
 // returned result: the section it exposes borrows from it.
-[[nodiscard]] inline HttpResponseTrailerSectionResult validatedResponseTrailerSection(
-    std::span<const HttpHeaderView> trailers) {
+[[nodiscard]] inline HttpResponseTrailerSectionResult validatedResponseTrailerSection(std::span<const HttpHeaderView> trailers) {
     auto result = httpResponseTrailerSection(trailers);
     if (const auto* failure = result.failure()) {
         throw failure->exception();

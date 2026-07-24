@@ -8,7 +8,9 @@
 namespace ruvia {
 
 struct TaskScope::Node {
-    Node(TaskScope& owner, Task<void> child) : scope(owner), task(std::move(child)) {}
+    Node(TaskScope& owner, Task<void> child)
+        : scope(owner),
+          task(std::move(child)) {}
 
     TaskScope& scope;
     Task<void> task;
@@ -17,17 +19,15 @@ struct TaskScope::Node {
 };
 
 TaskScope::TaskScope(WorkerHandle worker, std::pmr::memory_resource* resource)
-    : worker_(std::move(worker)), resource_(detail::pmrResourceOrDefault(resource)) {
+    : worker_(std::move(worker)),
+      resource_(detail::pmrResourceOrDefault(resource)) {
     if (!worker_.valid()) {
         throw std::invalid_argument("task scope requires a valid worker");
     }
 }
 
 TaskScope::~TaskScope() {
-    if (active_ != 0 ||
-        std::holds_alternative<TaskScopeOpen>(lifecycle_) ||
-        std::holds_alternative<TaskScopeJoinReserved>(lifecycle_) ||
-        std::holds_alternative<TaskScopeJoining>(lifecycle_)) {
+    if (active_ != 0 || std::holds_alternative<TaskScopeOpen>(lifecycle_) || std::holds_alternative<TaskScopeJoinReserved>(lifecycle_) || std::holds_alternative<TaskScopeJoining>(lifecycle_)) {
         std::terminate();
     }
 }
@@ -36,9 +36,7 @@ void TaskScope::spawn(Task<void> task) {
     if (!worker_.isCurrent()) {
         throw std::logic_error("task scope spawn must run on its bound worker");
     }
-    if (std::holds_alternative<TaskScopeJoinReserved>(lifecycle_) ||
-        std::holds_alternative<TaskScopeJoining>(lifecycle_) ||
-        std::holds_alternative<TaskScopeJoined>(lifecycle_)) {
+    if (std::holds_alternative<TaskScopeJoinReserved>(lifecycle_) || std::holds_alternative<TaskScopeJoining>(lifecycle_) || std::holds_alternative<TaskScopeJoined>(lifecycle_)) {
         throw std::logic_error("cannot spawn a task after task scope join started");
     }
     if (task.handle_ == nullptr) {
@@ -79,9 +77,7 @@ Task<void> TaskScope::join() {
     if (!worker_.isCurrent()) {
         throw std::logic_error("task scope join must run on its bound worker");
     }
-    if (std::holds_alternative<TaskScopeJoinReserved>(lifecycle_) ||
-        std::holds_alternative<TaskScopeJoining>(lifecycle_) ||
-        std::holds_alternative<TaskScopeJoined>(lifecycle_)) {
+    if (std::holds_alternative<TaskScopeJoinReserved>(lifecycle_) || std::holds_alternative<TaskScopeJoining>(lifecycle_) || std::holds_alternative<TaskScopeJoined>(lifecycle_)) {
         throw std::logic_error("task scope can only be joined once");
     }
     lifecycle_.template emplace<TaskScopeJoinReserved>();
@@ -118,9 +114,7 @@ bool TaskScope::JoinAwaiter::await_ready() const noexcept {
 }
 
 bool TaskScope::JoinAwaiter::await_suspend(std::coroutine_handle<> continuation) {
-    if (!std::holds_alternative<TaskScopeJoinReserved>(scope.lifecycle_) ||
-        std::holds_alternative<TaskScopeJoining>(scope.lifecycle_) ||
-        std::holds_alternative<TaskScopeJoined>(scope.lifecycle_)) {
+    if (!std::holds_alternative<TaskScopeJoinReserved>(scope.lifecycle_) || std::holds_alternative<TaskScopeJoining>(scope.lifecycle_) || std::holds_alternative<TaskScopeJoined>(scope.lifecycle_)) {
         throw std::logic_error("task scope can only be joined once");
     }
     scope.lifecycle_.template emplace<TaskScopeJoining>(continuation);
@@ -139,8 +133,7 @@ void TaskScope::JoinAwaiter::await_resume() {
 void TaskScope::childComplete(void* raw) noexcept {
     auto* node = static_cast<Node*>(raw);
     try {
-        detail::WorkerHandleAccess::defer(
-            node->scope.worker_, [node] { node->scope.finish(node); });
+        detail::WorkerHandleAccess::defer(node->scope.worker_, [node] { node->scope.finish(node); });
     } catch (...) {
         std::terminate();
     }
@@ -151,8 +144,7 @@ void TaskScope::finish(Node* node) noexcept {
         node->task.handle_.promise().result();
     } catch (...) {
         if (std::holds_alternative<TaskScopeSuccess>(outcome_)) {
-            outcome_.template emplace<TaskScopeFailure>(
-                std::current_exception());
+            outcome_.template emplace<TaskScopeFailure>(std::current_exception());
             requestStop();
         }
     }
@@ -186,4 +178,4 @@ void TaskScope::rethrowFailure() {
     }
 }
 
-}
+}  // namespace ruvia

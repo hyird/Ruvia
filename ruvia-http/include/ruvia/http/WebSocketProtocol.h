@@ -5,13 +5,7 @@
 
 namespace ruvia {
 
-enum class WebSocketOpcode : std::uint8_t {
-    kText = 0x1,
-    kBinary = 0x2,
-    kClose = 0x8,
-    kPing = 0x9,
-    kPong = 0xA
-};
+enum class WebSocketOpcode : std::uint8_t { kText = 0x1, kBinary = 0x2, kClose = 0x8, kPing = 0x9, kPong = 0xA };
 
 namespace detail {
 struct WebSocketMessageAccess;
@@ -46,7 +40,8 @@ private:
     constexpr WebSocketMessage() noexcept = default;
 
     constexpr WebSocketMessage(WebSocketOpcode opcode, std::string_view payload) noexcept
-        : opcode_(opcode), payload_(payload) {}
+        : opcode_(opcode),
+          payload_(payload) {}
 
     WebSocketOpcode opcode_{WebSocketOpcode::kText};
     std::string_view payload_;

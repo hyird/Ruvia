@@ -15,10 +15,7 @@ namespace ruvia::detail {
 // kRequestArenaInitialBytes, so a request costs the same either way.
 inline constexpr std::size_t kRequestArenaStackBytes = kRequestArenaInitialBytes;
 
-inline RequestMemory& emplaceRequestMemory(
-    std::optional<RequestMemory>& storage,
-    WorkerMemory& memory,
-    std::span<std::byte> initialBuffer) {
+inline RequestMemory& emplaceRequestMemory(std::optional<RequestMemory>& storage, WorkerMemory& memory, std::span<std::byte> initialBuffer) {
     const auto initialBytes = memory.requestInitialBufferBytes();
     if (initialBytes <= initialBuffer.size()) {
         storage.emplace(memory, initialBuffer.first(initialBytes));

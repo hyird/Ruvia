@@ -10,7 +10,6 @@ namespace ruvia::edge {
 
 // Build a server TLS context from PEM, advertising ALPN in server-preference
 // order (h2, then http/1.1). Throws asio::system_error on invalid PEM.
-[[nodiscard]] std::shared_ptr<asio::ssl::context> makeTlsContext(
-    const EdgeTlsConfig& config);
+[[nodiscard]] std::shared_ptr<asio::ssl::context> makeTlsContext(const EdgeTlsConfig& config);
 
 }  // namespace ruvia::edge

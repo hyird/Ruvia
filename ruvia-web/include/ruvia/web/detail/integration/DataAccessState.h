@@ -23,12 +23,7 @@ struct RedisDefinition;
 // server dependency.
 class DataAccessState final {
 public:
-    DataAccessState(
-        asio::io_context& ioContext,
-        std::pmr::memory_resource* resource,
-        std::span<const DbDefinition> databases,
-        std::span<const RedisDefinition> redis,
-        ConnectionScanner& scanner);
+    DataAccessState(asio::io_context& ioContext, std::pmr::memory_resource* resource, std::span<const DbDefinition> databases, std::span<const RedisDefinition> redis, ConnectionScanner& scanner);
     ~DataAccessState();
 
     DataAccessState(const DataAccessState&) = delete;

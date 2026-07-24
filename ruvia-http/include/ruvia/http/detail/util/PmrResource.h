@@ -13,8 +13,7 @@ struct HttpResolvedPmrResourceTag final {};
 // resource() because ruvia-http must stay core-independent, while the core
 // version falls back to processResource(). Keep this for HTTP-internal use only;
 // Web/Core callers use the Core adapter.
-[[nodiscard]] inline std::pmr::memory_resource* httpPmrResourceOrDefault(
-    std::pmr::memory_resource* resource) noexcept {
+[[nodiscard]] inline std::pmr::memory_resource* httpPmrResourceOrDefault(std::pmr::memory_resource* resource) noexcept {
     return resource == nullptr ? std::pmr::get_default_resource() : resource;
 }
 

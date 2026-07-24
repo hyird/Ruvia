@@ -24,8 +24,8 @@ RUVIA_TEST(cookie_signature_is_deterministic) {
 
 RUVIA_TEST(cookie_signature_depends_on_name_value_and_secret) {
     const std::string base = sign("secret", "sid", "user=42");
-    RUVIA_CHECK(base != sign("secret", "sid", "user=43"));   // value change
-    RUVIA_CHECK(base != sign("secret2", "sid", "user=42"));  // secret change
+    RUVIA_CHECK(base != sign("secret", "sid", "user=43"));    // value change
+    RUVIA_CHECK(base != sign("secret2", "sid", "user=42"));   // secret change
     RUVIA_CHECK(base != sign("secret", "other", "user=42"));  // name change
 }
 
@@ -46,7 +46,7 @@ RUVIA_TEST(cookie_signature_equals_constant_time) {
     using ruvia::detail::cookieSignatureEquals;
     RUVIA_CHECK(cookieSignatureEquals("abcdef", "abcdef"));
     RUVIA_CHECK(!cookieSignatureEquals("abcdef", "abcdeg"));
-    RUVIA_CHECK(!cookieSignatureEquals("abc", "abcd"));   // length mismatch
+    RUVIA_CHECK(!cookieSignatureEquals("abc", "abcd"));  // length mismatch
     RUVIA_CHECK(!cookieSignatureEquals("", "x"));
     RUVIA_CHECK(cookieSignatureEquals("", ""));
 }
@@ -60,7 +60,7 @@ RUVIA_TEST(cookie_signature_large_value_spills_past_stack_arena) {
     mutated.back() = 'y';
     const std::string a = sign("secret", "big", big);
     RUVIA_CHECK_EQ(a.size(), ruvia::detail::kCookieSignatureSize);
-    RUVIA_CHECK_EQ(a, sign("secret", "big", big));   // deterministic across the fallback
+    RUVIA_CHECK_EQ(a, sign("secret", "big", big));     // deterministic across the fallback
     RUVIA_CHECK(a != sign("secret", "big", mutated));  // change beyond the stack arena matters
 }
 

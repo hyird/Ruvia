@@ -417,11 +417,13 @@ never offloads should not pay for idle threads.
 
 ## Build
 
+Set `VCPKG_ROOT` to the root of your vcpkg checkout. Ruvia automatically uses
+its toolchain unless `CMAKE_TOOLCHAIN_FILE` was set explicitly.
+
 Linux / macOS:
 
 ```bash
 cmake -S . -B build -G Ninja \
-  -DCMAKE_TOOLCHAIN_FILE="$VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake" \
   -DCMAKE_BUILD_TYPE=Release
 cmake --build build
 ```
@@ -440,8 +442,7 @@ already configured in your environment, the first two lines can be omitted:
 $env:VCPKG_DEFAULT_TRIPLET = "x64-windows-static"
 $env:VCPKG_DEFAULT_HOST_TRIPLET = "x64-windows-static"
 
-cmake -S . -B build -G "Visual Studio 17 2022" -A x64 `
-  -DCMAKE_TOOLCHAIN_FILE="$env:VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake"
+cmake -S . -B build -G "Visual Studio 17 2022" -A x64
 cmake --build build --config Release --parallel
 ```
 
@@ -456,11 +457,9 @@ then run `ctest --test-dir build -C Release --output-on-failure`.
 | `RUVIA_BUILD_HTTP` | `ON` | Build standalone `ruvia::http`. |
 | `RUVIA_BUILD_WEB` | `ON` | Build `ruvia::web`; requires core and HTTP. |
 | `RUVIA_BUILD_EDGE` | `OFF` | Build the `ruvia::edge` CDN edge node; requires core and HTTP. |
-| `RUVIA_BUILD_TESTS` | `OFF` | Build the unit and guard tests. |
+| `RUVIA_BUILD_TESTS` | `OFF` | Build tests for every selected target and enabled feature. |
 | `RUVIA_BUILD_BENCHMARKS` | `OFF` | Build Release-oriented HTTP hot-path benchmarks; requires HTTP. |
-| `RUVIA_ENABLE_HTTP2_CONFORMANCE_TESTS` | `OFF` | Add the repository-owned RFC 9113 wire conformance suite against a real Ruvia h2c server; requires tests, Web, and Python 3. |
-| `RUVIA_ENABLE_POSTGRESQL_INTEGRATION_TESTS` | `OFF` | Add live PostgreSQL driver tests; requires tests and PostgreSQL support. |
-| `RUVIA_BUILD_EXAMPLES` | `OFF` | Build examples; requires Web. |
+| `RUVIA_BUILD_EXAMPLES` | `OFF` | Build examples for every enabled Web feature; requires Web. |
 | `RUVIA_ENABLE_MARIADB` | `OFF` | Enable MariaDB integration in Web. |
 | `RUVIA_ENABLE_POSTGRESQL` | `OFF` | Enable PostgreSQL integration in Web. |
 | `RUVIA_ENABLE_REDIS` | `OFF` | Enable Redis integration in Web. |
@@ -482,6 +481,10 @@ Enable its matching CMake feature first. PostgreSQL parameters use `$1`, `$2`,
 and so on; MariaDB parameters use `?`. For generated PostgreSQL keys, use
 `INSERT ... RETURNING id` and read the returned row.
 
+With tests and PostgreSQL enabled, the live driver test is compiled
+automatically. Set `RUVIA_RUN_POSTGRESQL_INTEGRATION=1` when running CTest to
+execute it; without that environment variable CTest reports it as skipped.
+
 ## Conformance
 
 The regular Linux CI runs a repository-owned wire-level suite against Ruvia's
@@ -492,10 +495,8 @@ RFC 7540 results. To reproduce it locally, install Python 3 and configure:
 
 ```bash
 cmake -S . -B build-conformance -G Ninja \
-  -DCMAKE_TOOLCHAIN_FILE="$VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake" \
   -DCMAKE_BUILD_TYPE=Debug \
-  -DRUVIA_BUILD_TESTS=ON \
-  -DRUVIA_ENABLE_HTTP2_CONFORMANCE_TESTS=ON
+  -DRUVIA_BUILD_TESTS=ON
 cmake --build build-conformance --target ruvia_http2_conformance_server
 ctest --test-dir build-conformance -R ruvia_http2_conformance --output-on-failure
 ```

@@ -16,18 +16,14 @@ namespace ruvia {
 
 class WebSocketHeartbeatPolicy final {
 public:
-    [[nodiscard]] static WebSocketHeartbeatPolicy periodic(
-        std::chrono::milliseconds pingInterval,
-        std::chrono::milliseconds pongTimeout) {
+    [[nodiscard]] static WebSocketHeartbeatPolicy periodic(std::chrono::milliseconds pingInterval, std::chrono::milliseconds pongTimeout) {
         if (pingInterval.count() <= 0 || pongTimeout.count() <= 0) {
-            throw std::invalid_argument(
-                "websocket heartbeat intervals must be greater than zero");
+            throw std::invalid_argument("websocket heartbeat intervals must be greater than zero");
         }
         return WebSocketHeartbeatPolicy(pingInterval, pongTimeout);
     }
 
-    [[nodiscard]] static WebSocketHeartbeatPolicy periodic(
-        std::chrono::milliseconds interval) {
+    [[nodiscard]] static WebSocketHeartbeatPolicy periodic(std::chrono::milliseconds interval) {
         return periodic(interval, interval);
     }
 
@@ -40,9 +36,7 @@ public:
     }
 
 private:
-    WebSocketHeartbeatPolicy(
-        std::chrono::milliseconds pingInterval,
-        std::chrono::milliseconds pongTimeout) noexcept
+    WebSocketHeartbeatPolicy(std::chrono::milliseconds pingInterval, std::chrono::milliseconds pongTimeout) noexcept
         : pingInterval_(pingInterval),
           pongTimeout_(pongTimeout) {}
 
@@ -56,8 +50,7 @@ struct WebSocketLifecycleOptions final {
     std::optional<WebSocketHeartbeatPolicy> heartbeat;
     // A locally initiated Close waits for the peer Close before the underlying
     // transport is ended. nullopt disables this guard.
-    std::optional<std::chrono::milliseconds> closeHandshakeTimeout{
-        std::chrono::seconds(5)};
+    std::optional<std::chrono::milliseconds> closeHandshakeTimeout{std::chrono::seconds(5)};
 };
 
 struct WebSocketRouteOptions final {
@@ -76,8 +69,7 @@ struct WebSocketRouteOptions final {
             : value_(value) {}
 
         template <typename Traits, typename Allocator>
-        constexpr BorrowedText(
-            const std::basic_string<char, Traits, Allocator>& value) noexcept
+        constexpr BorrowedText(const std::basic_string<char, Traits, Allocator>& value) noexcept
             : value_(value) {}
 
         template <detail::HttpTemporaryOwningCharString String>
@@ -94,8 +86,7 @@ struct WebSocketRouteOptions final {
         }
 
         template <typename Traits, typename Allocator>
-        constexpr BorrowedText& operator=(
-            const std::basic_string<char, Traits, Allocator>& value) noexcept {
+        constexpr BorrowedText& operator=(const std::basic_string<char, Traits, Allocator>& value) noexcept {
             value_ = std::string_view(value);
             return *this;
         }
@@ -115,21 +106,15 @@ struct WebSocketRouteOptions final {
             return value_.empty();
         }
 
-        friend constexpr bool operator==(
-            BorrowedText left,
-            BorrowedText right) noexcept {
+        friend constexpr bool operator==(BorrowedText left, BorrowedText right) noexcept {
             return left.value_ == right.value_;
         }
 
-        friend constexpr bool operator==(
-            BorrowedText left,
-            std::string_view right) noexcept {
+        friend constexpr bool operator==(BorrowedText left, std::string_view right) noexcept {
             return left.value_ == right;
         }
 
-        friend constexpr bool operator==(
-            BorrowedText left,
-            const char* right) noexcept {
+        friend constexpr bool operator==(BorrowedText left, const char* right) noexcept {
             return left.value_ == right;
         }
 
@@ -141,8 +126,7 @@ struct WebSocketRouteOptions final {
     WebSocketLifecycleOptions lifecycle{};
 };
 
-static_assert(
-    sizeof(WebSocketRouteOptions::BorrowedText) == sizeof(std::string_view));
+static_assert(sizeof(WebSocketRouteOptions::BorrowedText) == sizeof(std::string_view));
 
 namespace detail {
 struct WebSocketAccess;
@@ -175,7 +159,11 @@ private:
     using Abort = void (*)(void*) noexcept;
 
     WebSocket(void* target, Read read, Write write, Close close, Abort abort) noexcept
-        : target_(target), read_(read), write_(write), close_(close), abort_(abort) {}
+        : target_(target),
+          read_(read),
+          write_(write),
+          close_(close),
+          abort_(abort) {}
 
     ScopedOperation<void> write(WebSocketOpcode opcode, std::string_view payload);
 

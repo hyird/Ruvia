@@ -80,9 +80,7 @@ void RedisPool::scanDeadlines(std::chrono::steady_clock::time_point now) noexcep
 }
 
 bool RedisPool::hasAnyTimeout() const noexcept {
-    return config_.connectTimeout.has_value() ||
-        config_.commandTimeout.has_value() ||
-        config_.acquireTimeout.has_value();
+    return config_.connectTimeout.has_value() || config_.commandTimeout.has_value() || config_.acquireTimeout.has_value();
 }
 
 }  // namespace ruvia::detail

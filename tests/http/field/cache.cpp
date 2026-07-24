@@ -5,8 +5,7 @@
 #include "ruvia/http/HttpCache.h"
 
 RUVIA_TEST(parse_cache_control_flags_and_ages) {
-    const auto cc = ruvia::parseCacheControl(
-        "public, max-age=60, s-maxage=120, stale-while-revalidate=30, immutable");
+    const auto cc = ruvia::parseCacheControl("public, max-age=60, s-maxage=120, stale-while-revalidate=30, immutable");
     RUVIA_CHECK(cc.isPublic);
     RUVIA_CHECK(!cc.noStore);
     RUVIA_CHECK(cc.immutable);
@@ -17,8 +16,7 @@ RUVIA_TEST(parse_cache_control_flags_and_ages) {
 }
 
 RUVIA_TEST(parse_cache_control_request_directives) {
-    const auto request = ruvia::parseCacheControl(
-        "only-if-cached, max-age=0, min-fresh=15, max-stale=30");
+    const auto request = ruvia::parseCacheControl("only-if-cached, max-age=0, min-fresh=15, max-stale=30");
     RUVIA_CHECK(request.onlyIfCached);
     RUVIA_CHECK_EQ(request.maxAge.value_or(1), std::uint64_t{0});
     RUVIA_CHECK_EQ(request.minFresh.value_or(0), std::uint64_t{15});
@@ -29,8 +27,7 @@ RUVIA_TEST(parse_cache_control_request_directives) {
     RUVIA_CHECK(anyStale.maxStaleAny);
     RUVIA_CHECK(!anyStale.maxStale.has_value());
 
-    const auto invalid = ruvia::parseCacheControl(
-        "only-if-cached=yes, min-fresh=bad, max-stale=bad");
+    const auto invalid = ruvia::parseCacheControl("only-if-cached=yes, min-fresh=bad, max-stale=bad");
     RUVIA_CHECK(!invalid.onlyIfCached);
     RUVIA_CHECK(!invalid.minFresh.has_value());
     RUVIA_CHECK(!invalid.maxStale.has_value());
@@ -59,8 +56,7 @@ RUVIA_TEST(parse_cache_control_no_transform_is_bare_and_quote_aware) {
     const auto present = ruvia::parseCacheControl("NO-TRANSFORM");
     RUVIA_CHECK(present.noTransform);
 
-    const auto quoted = ruvia::parseCacheControl(
-        R"(extension="a, no-transform, b")");
+    const auto quoted = ruvia::parseCacheControl(R"(extension="a, no-transform, b")");
     RUVIA_CHECK(!quoted.noTransform);
 
     const auto qualified = ruvia::parseCacheControl("no-transform=ignored");
@@ -76,8 +72,7 @@ RUVIA_TEST(parse_cache_control_quoted_and_case_insensitive_and_unknown) {
 }
 
 RUVIA_TEST(parse_cache_control_decodes_quoted_pairs_in_delta_seconds) {
-    const auto cc = ruvia::parseCacheControl(
-        R"(max-age="6\0", s-maxage="1\20", stale-while-revalidate="\30", stale-if-error="4\5")");
+    const auto cc = ruvia::parseCacheControl(R"(max-age="6\0", s-maxage="1\20", stale-while-revalidate="\30", stale-if-error="4\5")");
     RUVIA_CHECK_EQ(cc.maxAge.value_or(0), std::uint64_t{60});
     RUVIA_CHECK_EQ(cc.sMaxAge.value_or(0), std::uint64_t{120});
     RUVIA_CHECK_EQ(cc.staleWhileRevalidate.value_or(0), std::uint64_t{30});
@@ -103,8 +98,7 @@ RUVIA_TEST(parse_cache_control_rejects_whitespace_around_equals) {
     RUVIA_CHECK(!cc.isPrivate);
 
     // OWS around comma separators remains valid list framing.
-    const auto separated = ruvia::parseCacheControl(
-        " max-age=60 \t,\t no-store ");
+    const auto separated = ruvia::parseCacheControl(" max-age=60 \t,\t no-store ");
     RUVIA_CHECK_EQ(separated.maxAge.value_or(0), std::uint64_t{60});
     RUVIA_CHECK(separated.noStore);
 }
@@ -116,14 +110,12 @@ RUVIA_TEST(parse_cache_control_freshness_uses_first_occurrence) {
         "stale-if-error=45, stale-if-error=450");
     RUVIA_CHECK_EQ(duplicated.maxAge.value_or(0), std::uint64_t{60});
     RUVIA_CHECK_EQ(duplicated.sMaxAge.value_or(0), std::uint64_t{120});
-    RUVIA_CHECK_EQ(
-        duplicated.staleWhileRevalidate.value_or(0), std::uint64_t{30});
+    RUVIA_CHECK_EQ(duplicated.staleWhileRevalidate.value_or(0), std::uint64_t{30});
     RUVIA_CHECK_EQ(duplicated.staleIfError.value_or(0), std::uint64_t{45});
 
     // An invalid first occurrence cannot be repaired by a later value; caches
     // must not accidentally turn invalid freshness information into freshness.
-    const auto invalidFirst = ruvia::parseCacheControl(
-        "max-age=invalid, max-age=3600, s-maxage=, s-maxage=7200");
+    const auto invalidFirst = ruvia::parseCacheControl("max-age=invalid, max-age=3600, s-maxage=, s-maxage=7200");
     RUVIA_CHECK(!invalidFirst.maxAge.has_value());
     RUVIA_CHECK(!invalidFirst.sMaxAge.has_value());
 }
@@ -131,8 +123,7 @@ RUVIA_TEST(parse_cache_control_freshness_uses_first_occurrence) {
 RUVIA_TEST(cache_control_field_parser_combines_repeated_lines) {
     ruvia::CacheControlFieldParser parser;
     parser.update("public, max-age=invalid, s-maxage=120");
-    parser.update(
-        R"(extension="a, no-transform, b", no-transform, max-age=3600, s-maxage=7200)");
+    parser.update(R"(extension="a, no-transform, b", no-transform, max-age=3600, s-maxage=7200)");
 
     const auto cc = parser.finish();
     RUVIA_CHECK(cc.isPublic);
@@ -145,30 +136,25 @@ RUVIA_TEST(parse_cache_control_delta_seconds_overflow_saturates) {
     const auto cc = ruvia::parseCacheControl(
         "max-age=184467440737095516150, "
         "s-maxage=\"184467440737095516150\"");
-    RUVIA_CHECK_EQ(
-        cc.maxAge.value_or(0), (std::numeric_limits<std::uint64_t>::max)());
-    RUVIA_CHECK_EQ(
-        cc.sMaxAge.value_or(0), (std::numeric_limits<std::uint64_t>::max)());
+    RUVIA_CHECK_EQ(cc.maxAge.value_or(0), (std::numeric_limits<std::uint64_t>::max)());
+    RUVIA_CHECK_EQ(cc.sMaxAge.value_or(0), (std::numeric_limits<std::uint64_t>::max)());
 }
 
 RUVIA_TEST(parse_cache_control_does_not_split_quoted_extension_values) {
-    const auto cc = ruvia::parseCacheControl(
-        "extension=\"a, public, max-age=999, b\", private");
+    const auto cc = ruvia::parseCacheControl("extension=\"a, public, max-age=999, b\", private");
     RUVIA_CHECK(!cc.isPublic);
     RUVIA_CHECK(!cc.maxAge.has_value());
     RUVIA_CHECK(cc.isPrivate);
 
     // A quoted-pair keeps the escaped quote inside the extension value; its
     // commas likewise cannot introduce directives.
-    const auto escaped = ruvia::parseCacheControl(
-        "extension=\"a\\\", no-store, b\", immutable");
+    const auto escaped = ruvia::parseCacheControl("extension=\"a\\\", no-store, b\", immutable");
     RUVIA_CHECK(!escaped.noStore);
     RUVIA_CHECK(escaped.immutable);
 
     // An unterminated quoted value is malformed through the end of the field,
     // so a comma within it must not accidentally enable caching directives.
-    const auto unterminated = ruvia::parseCacheControl(
-        "extension=\"a, public, max-age=3600");
+    const auto unterminated = ruvia::parseCacheControl("extension=\"a, public, max-age=3600");
     RUVIA_CHECK(!unterminated.isPublic);
     RUVIA_CHECK(!unterminated.maxAge.has_value());
 }
@@ -186,8 +172,7 @@ RUVIA_TEST(parse_cache_control_ignores_arguments_on_bare_directives) {
 
     // no-cache and private are different: their response forms can carry a
     // field-name list, so an argument does not invalidate the directive.
-    const auto qualified = ruvia::parseCacheControl(
-        "no-cache=\"Set-Cookie\", private=\"Authorization\"");
+    const auto qualified = ruvia::parseCacheControl("no-cache=\"Set-Cookie\", private=\"Authorization\"");
     RUVIA_CHECK(qualified.noCache);
     RUVIA_CHECK(qualified.isPrivate);
 }

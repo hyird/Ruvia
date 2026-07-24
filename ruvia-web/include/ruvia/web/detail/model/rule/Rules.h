@@ -16,10 +16,7 @@ struct ModelValidationAccess final {
     }
 
     template <typename ModelT, typename ValidatorT>
-    static void validateRequired(
-        const ModelT& model,
-        std::string_view prefix,
-        ValidatorT& validator) {
+    static void validateRequired(const ModelT& model, std::string_view prefix, ValidatorT& validator) {
         model.ruviaValidateRequired(prefix, validator);
     }
 };
@@ -31,9 +28,11 @@ namespace ruvia::detail::model {
 template <typename... RuleTs>
 class Rules final {
 public:
-    constexpr explicit Rules(RuleTs... rules) noexcept : rules_(rules...) {
+    constexpr explicit Rules(RuleTs... rules) noexcept
+        : rules_(rules...) {
         static_assert((isValidationRule<RuleTs>() && ...),
-            "RUVIA_RULE accepts only validation rules such as RUVIA_REQUIRED, RUVIA_MIN, RUVIA_MAX, "
+            "RUVIA_RULE accepts only validation rules such as RUVIA_REQUIRED, RUVIA_MIN, "
+            "RUVIA_MAX, "
             "RUVIA_ONE_OF, RUVIA_EMAIL, RUVIA_PATTERN, RUVIA_REGEX, RUVIA_MATCH, RUVIA_CUSTOM, "
             "RUVIA_NESTED, and RUVIA_EACH.");
     }
@@ -44,20 +43,12 @@ public:
 
     [[nodiscard]] constexpr std::string_view requiredMessage() const noexcept {
         std::string_view result{"is required"};
-        std::apply(
-            [&result](const auto&... rules) {
-                (setRequiredMessage(result, rules), ...);
-            },
-            rules_);
+        std::apply([&result](const auto&... rules) { (setRequiredMessage(result, rules), ...); }, rules_);
         return result;
     }
 
     template <typename OptionalT, typename ValidatorT>
-    void validate(
-        ModelFieldState state,
-        const OptionalT& value,
-        std::string_view path,
-        ValidatorT& validator) const {
+    void validate(ModelFieldState state, const OptionalT& value, std::string_view path, ValidatorT& validator) const {
         if (state == ModelFieldState::kDuplicate) {
             validator.add(path, "duplicate", "is duplicated");
             return;
@@ -89,11 +80,7 @@ private:
 
     template <typename ValueT, typename ValidatorT>
     void validatePresent(const ValueT& value, std::string_view path, ValidatorT& validator) const {
-        std::apply(
-            [&value, path, &validator](const auto&... rules) {
-                (validateRule(value, path, validator, rules), ...);
-            },
-            rules_);
+        std::apply([&value, path, &validator](const auto&... rules) { (validateRule(value, path, validator, rules), ...); }, rules_);
     }
 
     std::tuple<RuleTs...> rules_;

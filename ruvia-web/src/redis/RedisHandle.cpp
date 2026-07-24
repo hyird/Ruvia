@@ -11,10 +11,7 @@
 
 namespace ruvia {
 
-RedisHandle::RedisHandle(
-    detail::RedisPool& pool,
-    std::pmr::memory_resource* resource,
-    detail::ScopedOperationScope& operationScope) noexcept
+RedisHandle::RedisHandle(detail::RedisPool& pool, std::pmr::memory_resource* resource, detail::ScopedOperationScope& operationScope) noexcept
     : detail::ScopedCapabilityNode(operationScope, &RedisHandle::expireCapability),
       pool_(&pool),
       resource_(detail::pmrResourceOrDefault(resource)) {}
@@ -29,7 +26,6 @@ void RedisHandle::expireCapability(detail::ScopedCapabilityNode& capability) noe
     handle.pool_ = nullptr;
     handle.resource_ = nullptr;
 }
-
 
 ScopedOperation<RedisValue> RedisHandle::command(std::span<const std::string_view> args) const {
     requireActive();
@@ -56,7 +52,6 @@ ScopedOperation<std::pmr::vector<std::optional<std::pmr::string>>> RedisHandle::
     return scoped(detail::redisOptionalStringArrayCommand(*pool_, detail::redisCommandWithKeys("MGET", keys, resource_), resource_));
 }
 
-
 ScopedOperation<void> RedisHandle::set(std::string_view key, std::string_view value) const {
     requireActive();
     return scoped(detail::redisOkCommand(*pool_, detail::ownRedisArgs({"SET", key, value}, resource_), resource_));
@@ -65,18 +60,13 @@ ScopedOperation<void> RedisHandle::set(std::string_view key, std::string_view va
 ScopedOperation<std::optional<std::pmr::string>> RedisHandle::set(std::string_view key, std::string_view value, RedisSetOptions options) const {
     requireActive();
     auto args = detail::redisSetArgs(key, value, options, resource_);
-    return scoped(detail::executeRedisSetWithOptions(
-        *pool_,
-        std::move(args),
-        options.returnPrevious,
-        resource_));
+    return scoped(detail::executeRedisSetWithOptions(*pool_, std::move(args), options.returnPrevious, resource_));
 }
 
 ScopedOperation<void> RedisHandle::mset(std::span<const std::pair<std::string_view, std::string_view>> items) const {
     requireActive();
     return scoped(detail::redisOkCommand(*pool_, detail::redisMsetArgs(items, resource_), resource_));
 }
-
 
 ScopedOperation<void> RedisHandle::setEx(std::string_view key, std::chrono::seconds ttl, std::string_view value) const {
     requireActive();

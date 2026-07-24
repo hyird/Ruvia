@@ -10,18 +10,11 @@
 
 namespace {
 
-using ruvia::detail::Http2StreamTable;
 using ruvia::detail::Http2LocalSettings;
+using ruvia::detail::Http2StreamTable;
 
 template <typename T>
-concept ExposesRvalueHttp2StreamTableStorage =
-    requires(T&& table) { std::move(table).find(std::uint32_t{}); } ||
-    requires(const T&& table) {
-        std::move(table).find(std::uint32_t{});
-    } ||
-    requires(T&& table) {
-        std::move(table).create(std::uint32_t{}, std::int32_t{});
-    };
+concept ExposesRvalueHttp2StreamTableStorage = requires(T&& table) { std::move(table).find(std::uint32_t{}); } || requires(const T&& table) { std::move(table).find(std::uint32_t{}); } || requires(T&& table) { std::move(table).create(std::uint32_t{}, std::int32_t{}); };
 
 static_assert(!ExposesRvalueHttp2StreamTableStorage<Http2StreamTable>);
 
@@ -116,23 +109,19 @@ RUVIA_TEST(stream_table_remove_aborted_drops_aborted_streams_across_storage) {
 
     // An aborted stream in inline storage, plus TWO CONSECUTIVE aborted streams in
     // overflow (18, 19): the in-place overflow erase must not skip the neighbour.
-    RUVIA_CHECK(table.find(2)->abort(
-        ruvia::detail::Http2StreamCloseSource::kLocal));
-    RUVIA_CHECK(table.find(18)->abort(
-        ruvia::detail::Http2StreamCloseSource::kPeer));
-    RUVIA_CHECK(table.find(19)->abort(
-        ruvia::detail::Http2StreamCloseSource::kPeerGoaway));
+    RUVIA_CHECK(table.find(2)->abort(ruvia::detail::Http2StreamCloseSource::kLocal));
+    RUVIA_CHECK(table.find(18)->abort(ruvia::detail::Http2StreamCloseSource::kPeer));
+    RUVIA_CHECK(table.find(19)->abort(ruvia::detail::Http2StreamCloseSource::kPeerGoaway));
 
     std::vector<std::uint32_t> removed;
-    table.removeAborted(
-        [&removed](const auto& stream) { removed.push_back(stream.id()); });
+    table.removeAborted([&removed](const auto& stream) { removed.push_back(stream.id()); });
 
     RUVIA_CHECK_EQ(removed.size(), std::size_t{3});  // callback fired once per aborted stream
-    RUVIA_CHECK_EQ(table.size(), std::size_t{17});    // 20 - 3
+    RUVIA_CHECK_EQ(table.size(), std::size_t{17});   // 20 - 3
 
     RUVIA_CHECK(table.find(2) == nullptr);
     RUVIA_CHECK(table.find(18) == nullptr);
-    RUVIA_CHECK(table.find(19) == nullptr);           // the consecutive overflow reset was not skipped
+    RUVIA_CHECK(table.find(19) == nullptr);  // the consecutive overflow reset was not skipped
     RUVIA_CHECK(table.find(1) != nullptr);
     RUVIA_CHECK(table.find(17) != nullptr);
     RUVIA_CHECK(table.find(20) != nullptr);

@@ -14,39 +14,29 @@
 namespace ruvia::detail {
 
 template <typename MiddlewareT>
-concept VoidHandleMiddleware = requires {
-    static_cast<Task<void> (MiddlewareT::*)(Context&, Next&)>(&MiddlewareT::handle);
-};
+concept VoidHandleMiddleware = requires { static_cast<Task<void> (MiddlewareT::*)(Context&, Next&)>(&MiddlewareT::handle); };
 
 template <typename MiddlewareT>
-concept ResponseHandleMiddleware = requires {
-    static_cast<Task<HttpResponse> (MiddlewareT::*)(Context&, Next&)>(&MiddlewareT::handle);
-};
+concept ResponseHandleMiddleware = requires { static_cast<Task<HttpResponse> (MiddlewareT::*)(Context&, Next&)>(&MiddlewareT::handle); };
 
 template <typename MiddlewareT>
-[[nodiscard]] Task<void> invokeResponseMiddleware(
-    void* target,
-    Context& context,
-    Next& next) {
+[[nodiscard]] Task<void> invokeResponseMiddleware(void* target, Context& context, Next& next) {
     auto* middleware = static_cast<MiddlewareT*>(target);
     auto response = co_await middleware->handle(context, next);
     context.respond(std::move(response));
 }
 
 template <typename MiddlewareT>
-[[nodiscard]] Task<void> invokeMiddleware(
-    void* target,
-    Context& context,
-    Next& next) {
+[[nodiscard]] Task<void> invokeMiddleware(void* target, Context& context, Next& next) {
     auto* middleware = static_cast<MiddlewareT*>(target);
     if constexpr (VoidHandleMiddleware<MiddlewareT>) {
         return middleware->handle(context, next);
     } else if constexpr (ResponseHandleMiddleware<MiddlewareT>) {
         return invokeResponseMiddleware<MiddlewareT>(target, context, next);
     } else {
-        static_assert(
-            VoidHandleMiddleware<MiddlewareT> || ResponseHandleMiddleware<MiddlewareT>,
-            "middleware must implement async Task<void> or Task<HttpResponse> handle(Context&, ruvia::Next&)");
+        static_assert(VoidHandleMiddleware<MiddlewareT> || ResponseHandleMiddleware<MiddlewareT>,
+            "middleware must implement async Task<void> or Task<HttpResponse> handle(Context&, "
+            "ruvia::Next&)");
     }
 }
 
@@ -80,18 +70,11 @@ template <typename MiddlewareT>
 
 template <typename MiddlewareT>
 [[nodiscard]] ControllerMiddlewareDescriptor makeMiddlewareDescriptor() {
-    static_assert(
-        std::is_base_of_v<Middleware<MiddlewareT>, MiddlewareT>,
-        "middleware must derive from ruvia::Middleware<MiddlewareT>");
+    static_assert(std::is_base_of_v<Middleware<MiddlewareT>, MiddlewareT>, "middleware must derive from ruvia::Middleware<MiddlewareT>");
     static_assert(std::is_final_v<MiddlewareT>, "middleware must be final");
     static_assert(std::is_default_constructible_v<MiddlewareT>, "middleware must be default constructible");
 
-    return ControllerMiddlewareDescriptor(
-        &invokeMiddleware<MiddlewareT>,
-        &createMiddleware<MiddlewareT>,
-        &destroyMiddleware<MiddlewareT>,
-        middlewareValidatedModelTypeKey<MiddlewareT>(),
-        middlewareUsesRouteRateLimit<MiddlewareT>());
+    return ControllerMiddlewareDescriptor(&invokeMiddleware<MiddlewareT>, &createMiddleware<MiddlewareT>, &destroyMiddleware<MiddlewareT>, middlewareValidatedModelTypeKey<MiddlewareT>(), middlewareUsesRouteRateLimit<MiddlewareT>());
 }
 
 }  // namespace ruvia::detail

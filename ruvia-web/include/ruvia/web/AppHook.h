@@ -17,9 +17,7 @@ public:
     AppHook(std::nullptr_t) noexcept {}
 
     template <typename Callable, typename Stored = std::decay_t<Callable>>
-        requires (!std::is_same_v<Stored, AppHook> &&
-                  std::is_copy_constructible_v<Stored> &&
-                  std::is_invocable_r_v<void, Stored&>)
+        requires(!std::is_same_v<Stored, AppHook> && std::is_copy_constructible_v<Stored> && std::is_invocable_r_v<void, Stored&>)
     AppHook(Callable&& callable)
         : resource_(detail::processResource()) {
         emplace<Stored>(std::forward<Callable>(callable));
@@ -72,17 +70,9 @@ private:
     template <typename Stored, typename Callable>
     void emplace(Callable&& callable) {
         target_ = detail::constructPmrObject<Stored>(resource_, std::forward<Callable>(callable));
-        invoke_ = [](void* target) {
-            (*static_cast<Stored*>(target))();
-        };
-        destroy_ = [](void* target, std::pmr::memory_resource* resource) noexcept {
-            detail::destroyPmrObject(static_cast<Stored*>(target), resource);
-        };
-        clone_ = [](const void* target, std::pmr::memory_resource* resource) -> void* {
-            return detail::constructPmrObject<Stored>(
-                resource,
-                *static_cast<const Stored*>(target));
-        };
+        invoke_ = [](void* target) { (*static_cast<Stored*>(target))(); };
+        destroy_ = [](void* target, std::pmr::memory_resource* resource) noexcept { detail::destroyPmrObject(static_cast<Stored*>(target), resource); };
+        clone_ = [](const void* target, std::pmr::memory_resource* resource) -> void* { return detail::constructPmrObject<Stored>(resource, *static_cast<const Stored*>(target)); };
     }
 
     void copyFrom(const AppHook& other) {

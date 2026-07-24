@@ -18,10 +18,9 @@ namespace ruvia {
 // owning-string rvalues are rejected before an async run can retain them.
 class DbMigration final {
 public:
-    constexpr DbMigration(
-        std::string_view id,
-        std::string_view sql) noexcept
-        : id_(id), sql_(sql) {}
+    constexpr DbMigration(std::string_view id, std::string_view sql) noexcept
+        : id_(id),
+          sql_(sql) {}
 
     template <detail::HttpTemporaryOwningCharString String>
     DbMigration(String&&, std::string_view) = delete;
@@ -54,10 +53,10 @@ public:
     DbMigrationReport(DbMigrationReport&&) noexcept = default;
     DbMigrationReport& operator=(DbMigrationReport&&) = delete;
 
-    [[nodiscard]] std::span<const std::pmr::string> applied() const & noexcept;
-    [[nodiscard]] std::span<const std::pmr::string> applied() const && = delete;
-    [[nodiscard]] std::span<const std::pmr::string> skipped() const & noexcept;
-    [[nodiscard]] std::span<const std::pmr::string> skipped() const && = delete;
+    [[nodiscard]] std::span<const std::pmr::string> applied() const& noexcept;
+    [[nodiscard]] std::span<const std::pmr::string> applied() const&& = delete;
+    [[nodiscard]] std::span<const std::pmr::string> skipped() const& noexcept;
+    [[nodiscard]] std::span<const std::pmr::string> skipped() const&& = delete;
     [[nodiscard]] bool changed() const noexcept;
 
 private:
@@ -73,18 +72,11 @@ private:
 
 class DbMigrator final {
 public:
-    explicit DbMigrator(
-        DbConfig config,
-        DbMigrationOptions options = {},
-        std::pmr::memory_resource* resource = nullptr);
+    explicit DbMigrator(DbConfig config, DbMigrationOptions options = {}, std::pmr::memory_resource* resource = nullptr);
 
     [[nodiscard]] DbMigrationReport migrate(std::span<const DbMigration> migrations) const;
 
-    [[nodiscard]] static DbMigrationReport migrate(
-        DbConfig config,
-        std::span<const DbMigration> migrations,
-        DbMigrationOptions options = {},
-        std::pmr::memory_resource* resource = nullptr);
+    [[nodiscard]] static DbMigrationReport migrate(DbConfig config, std::span<const DbMigration> migrations, DbMigrationOptions options = {}, std::pmr::memory_resource* resource = nullptr);
 
 private:
     DbConfig config_;

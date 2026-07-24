@@ -18,10 +18,7 @@ inline constexpr std::size_t kRetainedPmrStringBytes = 4096;
 //
 // Shared by every offset-tracked read buffer (HTTP/2 frame input, multipart
 // parsing) so the compaction policy lives in exactly one place.
-inline void compactConsumedPrefix(
-    std::pmr::string& buffer,
-    std::size_t& offset,
-    std::size_t compactThreshold) {
+inline void compactConsumedPrefix(std::pmr::string& buffer, std::size_t& offset, std::size_t compactThreshold) {
     if (offset >= buffer.size()) {
         buffer.clear();
         offset = 0;
@@ -40,9 +37,7 @@ inline void resizePmrStringForOverwrite(std::pmr::string& target, std::size_t si
     target.resize(size);
 }
 
-inline void clearPmrStringRetainingSmall(
-    std::pmr::string& target,
-    std::size_t retainedBytes = kRetainedPmrStringBytes) {
+inline void clearPmrStringRetainingSmall(std::pmr::string& target, std::size_t retainedBytes = kRetainedPmrStringBytes) {
     target.clear();
     if (target.capacity() <= retainedBytes) {
         return;

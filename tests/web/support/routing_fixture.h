@@ -47,19 +47,15 @@ namespace routing_test {
 
 using ruvia::HttpKnownMethod;
 using ruvia::detail::ControllerMiddlewareDescriptor;
+using ruvia::detail::RequestBodyMode;
 using ruvia::detail::RouteHandler;
 using ruvia::detail::RouteMatch;
-using ruvia::detail::RequestBodyMode;
 
 template <typename T>
-concept ExposesRvalueRouteListIterator =
-    requires(T&& list) { std::move(list).begin(); } ||
-    requires(T&& list) { std::move(list).end(); };
+concept ExposesRvalueRouteListIterator = requires(T&& list) { std::move(list).begin(); } || requires(T&& list) { std::move(list).end(); };
 
 template <typename String>
-concept AcceptsTemporaryRoutePath = requires(String&& path) {
-    ruvia::detail::RuviaPathList(std::forward<String>(path));
-};
+concept AcceptsTemporaryRoutePath = requires(String&& path) { ruvia::detail::RuviaPathList(std::forward<String>(path)); };
 
 static_assert(!ExposesRvalueRouteListIterator<ruvia::detail::RuviaMethodList>);
 static_assert(!ExposesRvalueRouteListIterator<ruvia::detail::RuviaPathList>);
@@ -85,15 +81,12 @@ public:
     }
 };
 
-class ScopedValidationValidator final
-    : public ruvia::Middleware<ScopedValidationValidator> {
+class ScopedValidationValidator final : public ruvia::Middleware<ScopedValidationValidator> {
 public:
-    RUVIA_VALIDATE_JSON(ScopedValidationRequest,
-        RUVIA_RULE(value, RUVIA_REQUIRED("value is required")))
+    RUVIA_VALIDATE_JSON(ScopedValidationRequest, RUVIA_RULE(value, RUVIA_REQUIRED("value is required")))
 };
 
-class ValidationScopeProbe final
-    : public ruvia::Middleware<ValidationScopeProbe> {
+class ValidationScopeProbe final : public ruvia::Middleware<ValidationScopeProbe> {
 public:
     ruvia::Task<void> handle(ruvia::Context& context, ruvia::Next& next) {
         co_await next();
@@ -111,15 +104,11 @@ inline bool scopedValidationHandlerRead{false};
 inline bool scopedValidationRawRead{false};
 inline bool scopedValidationHandlerThrows{false};
 
-inline ruvia::Task<ruvia::HttpResponse> scopedValidationHandler(
-    void*,
-    ruvia::Context& context) {
+inline ruvia::Task<ruvia::HttpResponse> scopedValidationHandler(void*, ruvia::Context& context) {
     const auto& model = context.req().valid<ScopedValidationRequest>();
     const auto json = context.req().validJson<ScopedValidationRequest>();
-    scopedValidationHandlerRead =
-        model.value().has_value() && model.value()->view() == "ok";
-    scopedValidationRawRead =
-        &json.value() == &model && json.raw() == R"({"value":"ok"})";
+    scopedValidationHandlerRead = model.value().has_value() && model.value()->view() == "ok";
+    scopedValidationRawRead = &json.value() == &model && json.raw() == R"({"value":"ok"})";
     if (scopedValidationHandlerThrows) {
         throw std::runtime_error("validated handler failure");
     }
@@ -140,13 +129,7 @@ inline std::pmr::string path(std::string_view value) {
 }
 
 inline void addRoute(ruvia::detail::RouterImpl& impl, HttpKnownMethod method, std::string_view route) {
-    impl.registerRoute(
-        method,
-        path(route),
-        RouteHandler(nullptr, &dummyHandler),
-        RequestBodyMode::kBuffered,
-        std::span<const ControllerMiddlewareDescriptor>{},
-        std::span<const ControllerMiddlewareDescriptor>{});
+    impl.registerRoute(method, path(route), RouteHandler(nullptr, &dummyHandler), RequestBodyMode::kBuffered, std::span<const ControllerMiddlewareDescriptor>{}, std::span<const ControllerMiddlewareDescriptor>{});
 }
 
 inline void addRoute(ruvia::detail::RouterImpl& impl, std::string_view route) {
@@ -173,11 +156,12 @@ struct Router final {
     ruvia::Router router;
     ruvia::detail::RouterImpl& impl = ruvia::detail::RouterImpl::from(router);
 
-    void finalize() { impl.finalize(); }
+    void finalize() {
+        impl.finalize();
+    }
 
     bool matches(std::string_view p) {
-        const auto resolution = impl.routeTable().resolve(
-            HttpKnownMethod::kGet, p);
+        const auto resolution = impl.routeTable().resolve(HttpKnownMethod::kGet, p);
         return resolution.resolved() != nullptr;
     }
 
@@ -228,8 +212,7 @@ public:
     }
 };
 
-class ChainMwOverrideAfterNext final
-    : public ruvia::Middleware<ChainMwOverrideAfterNext> {
+class ChainMwOverrideAfterNext final : public ruvia::Middleware<ChainMwOverrideAfterNext> {
 public:
     ruvia::Task<void> handle(ruvia::Context& context, ruvia::Next& next) {
         co_await next();
@@ -260,8 +243,7 @@ public:
 
 inline bool g_webSocketUnavailableAfterNext = false;
 
-class ChainMwProbeWebSocketAfterNext final
-    : public ruvia::Middleware<ChainMwProbeWebSocketAfterNext> {
+class ChainMwProbeWebSocketAfterNext final : public ruvia::Middleware<ChainMwProbeWebSocketAfterNext> {
 public:
     ruvia::Task<void> handle(ruvia::Context& context, ruvia::Next& next) {
         co_await next();
@@ -273,8 +255,7 @@ public:
     }
 };
 
-class ChainMwThrowsAfterNext final
-    : public ruvia::Middleware<ChainMwThrowsAfterNext> {
+class ChainMwThrowsAfterNext final : public ruvia::Middleware<ChainMwThrowsAfterNext> {
 public:
     ruvia::Task<void> handle(ruvia::Context&, ruvia::Next& next) {
         co_await next();
@@ -297,14 +278,10 @@ inline ruvia::Task<ruvia::HttpResponse> chainHandler(void*, ruvia::Context& cont
     co_return context.body("ok");
 }
 
-inline std::string dispatchChain(
-    std::span<const ControllerMiddlewareDescriptor> controllerMiddlewares,
-    std::span<const ControllerMiddlewareDescriptor> routeMiddlewares = {}) {
+inline std::string dispatchChain(std::span<const ControllerMiddlewareDescriptor> controllerMiddlewares, std::span<const ControllerMiddlewareDescriptor> routeMiddlewares = {}) {
     ruvia::Router router;
     auto& impl = ruvia::detail::RouterImpl::from(router);
-    impl.registerRoute(
-        HttpKnownMethod::kGet, path("/chain"), RouteHandler(nullptr, &chainHandler),
-        RequestBodyMode::kBuffered, controllerMiddlewares, routeMiddlewares);
+    impl.registerRoute(HttpKnownMethod::kGet, path("/chain"), RouteHandler(nullptr, &chainHandler), RequestBodyMode::kBuffered, controllerMiddlewares, routeMiddlewares);
     impl.finalize();
     const auto& table = impl.routeTable();
 
@@ -317,9 +294,7 @@ inline std::string dispatchChain(
     ruvia::detail::HttpRequestAccess::setResource(request, memory.resource());
 
     asio::io_context ctx(1);
-    auto future = asio::co_spawn(
-        ctx, ruvia::detail::taskAsAwaitable(table.dispatch(request, memory, {})),
-        asio::use_future);
+    auto future = asio::co_spawn(ctx, ruvia::detail::taskAsAwaitable(table.dispatch(request, memory, {})), asio::use_future);
     ctx.run();
     auto response = future.get();
     const auto body = ruvia::detail::responseBody(response).bytes();
@@ -342,15 +317,15 @@ inline ruvia::Task<void> scWrite(void* target, std::string_view chunk) {
     sink->writes.emplace_back(chunk);
     co_return;
 }
-inline ruvia::Task<void> scEnd(
-    void* target,
-    std::span<const ruvia::HttpHeaderView>) {
+inline ruvia::Task<void> scEnd(void* target, std::span<const ruvia::HttpHeaderView>) {
     auto* sink = static_cast<StreamCaptureSink*>(target);
     sink->committedFlag = true;
     sink->endedFlag = true;
     co_return;
 }
-inline ruvia::Task<void> scSleep(void*, std::chrono::milliseconds) { co_return; }
+inline ruvia::Task<void> scSleep(void*, std::chrono::milliseconds) {
+    co_return;
+}
 inline void scBind(void*, ruvia::Context*, ruvia::HttpResponse (*)(ruvia::Context&)) noexcept {}
 inline void scReleaseContext(void* target) noexcept {
     static_cast<StreamCaptureSink*>(target)->contextReleased = true;
@@ -358,12 +333,12 @@ inline void scReleaseContext(void* target) noexcept {
 inline bool scCommitted(void* target) noexcept {
     return static_cast<StreamCaptureSink*>(target)->committedFlag;
 }
-inline bool scAborted(void*) noexcept { return false; }
+inline bool scAborted(void*) noexcept {
+    return false;
+}
 
 inline ruvia::ResponseStreamWriter scMakeWriter(StreamCaptureSink& sink) noexcept {
-    return ruvia::detail::StreamingAccess::makeResponseStreamWriter(
-        &sink, &scWrite, &scEnd, &scSleep, &scBind, &scReleaseContext,
-        &scCommitted, &scAborted);
+    return ruvia::detail::StreamingAccess::makeResponseStreamWriter(&sink, &scWrite, &scEnd, &scSleep, &scBind, &scReleaseContext, &scCommitted, &scAborted);
 }
 
 struct EmptyStreamDispatchObservation final {
@@ -376,16 +351,10 @@ struct EmptyStreamDispatchObservation final {
     std::string bufferedBody;
 };
 
-inline EmptyStreamDispatchObservation dispatchEmptyStreamWith(
-    const ControllerMiddlewareDescriptor& middleware) {
+inline EmptyStreamDispatchObservation dispatchEmptyStreamWith(const ControllerMiddlewareDescriptor& middleware) {
     ruvia::Router router;
     auto& impl = ruvia::detail::RouterImpl::from(router);
-    impl.registerResponseStreamRoute(
-        HttpKnownMethod::kGet,
-        path("/empty-stream"),
-        ruvia::detail::RouteStreamHandler(nullptr, &dummyStreamHandler),
-        std::span<const ControllerMiddlewareDescriptor>{},
-        std::span<const ControllerMiddlewareDescriptor>(&middleware, 1));
+    impl.registerResponseStreamRoute(HttpKnownMethod::kGet, path("/empty-stream"), ruvia::detail::RouteStreamHandler(nullptr, &dummyStreamHandler), std::span<const ControllerMiddlewareDescriptor>{}, std::span<const ControllerMiddlewareDescriptor>(&middleware, 1));
     impl.finalize();
     const auto& table = impl.routeTable();
 
@@ -395,13 +364,9 @@ inline EmptyStreamDispatchObservation dispatchEmptyStreamWith(
     ruvia::detail::HttpRequestAccess::reset(request);
     ruvia::detail::HttpRequestAccess::setMethod(request, "GET");
     ruvia::detail::HttpRequestAccess::setPath(request, "/empty-stream");
-    ruvia::detail::HttpRequestAccess::setResource(
-        request,
-        memory.resource());
+    ruvia::detail::HttpRequestAccess::setResource(request, memory.resource());
 
-    const auto resolution = table.resolve(
-        HttpKnownMethod::kGet,
-        "/empty-stream");
+    const auto resolution = table.resolve(HttpKnownMethod::kGet, "/empty-stream");
     const auto* resolved = resolution.resolved();
     if (resolved == nullptr) {
         throw std::logic_error("empty stream test route did not resolve");
@@ -415,22 +380,13 @@ inline EmptyStreamDispatchObservation dispatchEmptyStreamWith(
         context,
         [&]() -> asio::awaitable<void> {
             try {
-                auto result = co_await ruvia::detail::taskAsAwaitable(
-                    table.dispatchResponseStream(
-                        request,
-                        *resolved,
-                        memory,
-                        writer,
-                        {}));
+                auto result = co_await ruvia::detail::taskAsAwaitable(table.dispatchResponseStream(request, *resolved, memory, writer, {}));
                 observation.handled = !result.has_value();
                 if (result.has_value()) {
                     observation.buffered = true;
                     auto response = std::move(*result);
-                    const auto body =
-                        ruvia::detail::responseBody(response).bytes();
-                    observation.bufferedBody.assign(
-                        body.data(),
-                        body.size());
+                    const auto body = ruvia::detail::responseBody(response).bytes();
+                    observation.bufferedBody.assign(body.data(), body.size());
                 }
             } catch (...) {
                 observation.threw = true;
@@ -456,31 +412,19 @@ struct WebSocketTerminalTarget final {
     ruvia::WebSocket* webSocket;
 };
 
-inline ruvia::Task<void> webSocketTerminal(
-    void* target,
-    ruvia::Context& context) {
+inline ruvia::Task<void> webSocketTerminal(void* target, ruvia::Context& context) {
     auto& terminal = *static_cast<WebSocketTerminalTarget*>(target);
     terminal.observation->terminalInvoked = true;
-    ruvia::detail::ContextWebSocketBinding binding(
-        context,
-        *terminal.webSocket);
-    terminal.observation->capabilityAvailableInTerminal =
-        &context.webSocket() == terminal.webSocket;
+    ruvia::detail::ContextWebSocketBinding binding(context, *terminal.webSocket);
+    terminal.observation->capabilityAvailableInTerminal = &context.webSocket() == terminal.webSocket;
     g_chainOrder.push_back(0);
     co_return;
 }
 
-inline WebSocketDispatchObservation dispatchWebSocketWith(
-    const ControllerMiddlewareDescriptor& middleware) {
+inline WebSocketDispatchObservation dispatchWebSocketWith(const ControllerMiddlewareDescriptor& middleware) {
     ruvia::Router router;
     auto& impl = ruvia::detail::RouterImpl::from(router);
-    impl.registerWebSocketRoute(
-        HttpKnownMethod::kGet,
-        path("/ws-middleware"),
-        ruvia::detail::RouteStreamHandler(nullptr, &dummyStreamHandler),
-        std::span<const ControllerMiddlewareDescriptor>{},
-        std::span<const ControllerMiddlewareDescriptor>(&middleware, 1),
-        {});
+    impl.registerWebSocketRoute(HttpKnownMethod::kGet, path("/ws-middleware"), ruvia::detail::RouteStreamHandler(nullptr, &dummyStreamHandler), std::span<const ControllerMiddlewareDescriptor>{}, std::span<const ControllerMiddlewareDescriptor>(&middleware, 1), {});
     impl.finalize();
     const auto& table = impl.routeTable();
 
@@ -491,34 +435,18 @@ inline WebSocketDispatchObservation dispatchWebSocketWith(
     ruvia::detail::HttpRequestAccess::setMethod(request, "GET");
     ruvia::detail::HttpRequestAccess::setPath(request, "/ws-middleware");
     ruvia::detail::HttpRequestAccess::setResource(request, memory.resource());
-    const auto resolution = table.resolve(
-        HttpKnownMethod::kGet,
-        "/ws-middleware");
+    const auto resolution = table.resolve(HttpKnownMethod::kGet, "/ws-middleware");
     const auto* resolved = resolution.resolved();
     if (resolved == nullptr) {
         throw std::logic_error("websocket middleware test route did not resolve");
     }
 
     WebSocketDispatchObservation observation;
-    auto webSocket = ruvia::detail::WebSocketAccess::make(
-        nullptr,
-        nullptr,
-        nullptr,
-        nullptr);
+    auto webSocket = ruvia::detail::WebSocketAccess::make(nullptr, nullptr, nullptr, nullptr);
     WebSocketTerminalTarget terminalTarget{&observation, &webSocket};
-    const auto terminal = ruvia::detail::RouteStreamHandler(
-        &terminalTarget,
-        &webSocketTerminal);
+    const auto terminal = ruvia::detail::RouteStreamHandler(&terminalTarget, &webSocketTerminal);
     asio::io_context context(1);
-    auto future = asio::co_spawn(
-        context,
-        ruvia::detail::taskAsAwaitable(table.dispatchWebSocket(
-            request,
-            *resolved,
-            memory,
-            terminal,
-            {})),
-        asio::use_future);
+    auto future = asio::co_spawn(context, ruvia::detail::taskAsAwaitable(table.dispatchWebSocket(request, *resolved, memory, terminal, {})), asio::use_future);
     context.run();
     auto response = future.get();
     if (response.has_value()) {
@@ -551,9 +479,7 @@ inline ruvia::Task<void> headOnlyWrite(void* target, std::string_view) {
 }
 
 inline ruvia::ResponseStreamWriter makeHeadOnlyWriter(StreamCaptureSink& sink) noexcept {
-    return ruvia::detail::StreamingAccess::makeResponseStreamWriter(
-        &sink, &headOnlyWrite, &scEnd, &scSleep, &scBind, &scReleaseContext,
-        &scCommitted, &scAborted);
+    return ruvia::detail::StreamingAccess::makeResponseStreamWriter(&sink, &headOnlyWrite, &scEnd, &scSleep, &scBind, &scReleaseContext, &scCommitted, &scAborted);
 }
 
 inline ruvia::Task<void> headOnlyProbeStreamHandler(void*, ruvia::Context& context) {
@@ -570,16 +496,10 @@ struct HeadOnlyDispatchObservation final {
     bool ended{false};
 };
 
-inline HeadOnlyDispatchObservation dispatchHeadOnlyStream(
-    std::span<const ControllerMiddlewareDescriptor> middlewares) {
+inline HeadOnlyDispatchObservation dispatchHeadOnlyStream(std::span<const ControllerMiddlewareDescriptor> middlewares) {
     ruvia::Router router;
     auto& impl = ruvia::detail::RouterImpl::from(router);
-    impl.registerResponseStreamRoute(
-        HttpKnownMethod::kGet,
-        path("/head-only-stream"),
-        ruvia::detail::RouteStreamHandler(nullptr, &headOnlyProbeStreamHandler),
-        std::span<const ControllerMiddlewareDescriptor>{},
-        middlewares);
+    impl.registerResponseStreamRoute(HttpKnownMethod::kGet, path("/head-only-stream"), ruvia::detail::RouteStreamHandler(nullptr, &headOnlyProbeStreamHandler), std::span<const ControllerMiddlewareDescriptor>{}, middlewares);
     impl.finalize();
     const auto& table = impl.routeTable();
 
@@ -605,9 +525,7 @@ inline HeadOnlyDispatchObservation dispatchHeadOnlyStream(
         context,
         [&]() -> asio::awaitable<void> {
             try {
-                auto result = co_await ruvia::detail::taskAsAwaitable(
-                    table.dispatchResponseStream(
-                        request, *resolved, memory, writer, {}));
+                auto result = co_await ruvia::detail::taskAsAwaitable(table.dispatchResponseStream(request, *resolved, memory, writer, {}));
                 observation.handled = !result.has_value();
                 observation.buffered = result.has_value();
             } catch (...) {
@@ -635,9 +553,7 @@ inline ruvia::Task<ruvia::HttpResponse> throwsGenericHandler(void*, ruvia::Conte
 }
 
 inline ruvia::Task<ruvia::HttpResponse> throwsProtocolErrorHandler(void*, ruvia::Context&) {
-    throw ruvia::HttpProtocolError(
-        ruvia::http_status::kContentTooLarge,
-        "request body is too large");
+    throw ruvia::HttpProtocolError(ruvia::http_status::kContentTooLarge, "request body is too large");
     co_return ruvia::HttpResponse(std::pmr::get_default_resource());  // unreachable
 }
 
@@ -645,9 +561,7 @@ inline ruvia::Task<ruvia::HttpResponse> okHandler(void*, ruvia::Context& context
     co_return context.body("ok");
 }
 
-inline ruvia::Task<ruvia::HttpResponse> readsRequestBodyHandler(
-    void*,
-    ruvia::Context& context) {
+inline ruvia::Task<ruvia::HttpResponse> readsRequestBodyHandler(void*, ruvia::Context& context) {
     (void)co_await context.req().text();
     co_return context.body("ok");
 }
@@ -679,17 +593,10 @@ inline DispatchResult extractDispatchResult(const ruvia::HttpResponse& response)
 
 // Registers GET /x with `handler`, dispatches the exact wire method token and
 // path, then returns the rendered result.
-inline DispatchResult dispatchOneToken(
-    RouteHandler handler,
-    std::string_view method,
-    std::string_view p,
-    std::string_view contentEncoding = {},
-    std::string_view body = {}) {
+inline DispatchResult dispatchOneToken(RouteHandler handler, std::string_view method, std::string_view p, std::string_view contentEncoding = {}, std::string_view body = {}) {
     ruvia::Router router;
     auto& impl = ruvia::detail::RouterImpl::from(router);
-    impl.registerRoute(HttpKnownMethod::kGet, path("/x"), handler, RequestBodyMode::kBuffered,
-                       std::span<const ControllerMiddlewareDescriptor>{},
-                       std::span<const ControllerMiddlewareDescriptor>{});
+    impl.registerRoute(HttpKnownMethod::kGet, path("/x"), handler, RequestBodyMode::kBuffered, std::span<const ControllerMiddlewareDescriptor>{}, std::span<const ControllerMiddlewareDescriptor>{});
     impl.finalize();
     const auto& table = impl.routeTable();
 
@@ -701,19 +608,13 @@ inline DispatchResult dispatchOneToken(
     ruvia::detail::HttpRequestAccess::setPath(request, p);
     ruvia::detail::HttpRequestAccess::setResource(request, memory.resource());
     if (!contentEncoding.empty()) {
-        const auto slot = ruvia::detail::HttpRequestAccess::knownHeaderSlot(
-            ruvia::detail::RequestKnownHeader::kContentEncoding);
-        (void)ruvia::detail::HttpRequestAccess::addHeader(
-            request,
-            ruvia::HttpHeaderView{"Content-Encoding", contentEncoding},
-            slot);
+        const auto slot = ruvia::detail::HttpRequestAccess::knownHeaderSlot(ruvia::detail::RequestKnownHeader::kContentEncoding);
+        (void)ruvia::detail::HttpRequestAccess::addHeader(request, ruvia::HttpHeaderView{"Content-Encoding", contentEncoding}, slot);
     }
     ruvia::detail::HttpRequestAccess::setBody(request, body);
 
     asio::io_context ctx(1);
-    auto future = asio::co_spawn(
-        ctx, ruvia::detail::taskAsAwaitable(table.dispatch(request, memory, {})),
-        asio::use_future);
+    auto future = asio::co_spawn(ctx, ruvia::detail::taskAsAwaitable(table.dispatch(request, memory, {})), asio::use_future);
     ctx.run();
     return extractDispatchResult(future.get());  // arena still alive here
 }
@@ -740,11 +641,7 @@ inline ruvia::Task<ruvia::HttpResponse> customError(ruvia::Context& context, Htt
     co_return context.body("custom-error");
 }
 
-inline DispatchResult dispatchWithHandlersToken(
-    RouteHandler handler, HttpErrorHandler errorH, HttpNotFoundHandler notFoundH,
-    std::string_view method, std::string_view p,
-    std::string_view contentEncoding = {},
-    std::string_view body = {}) {
+inline DispatchResult dispatchWithHandlersToken(RouteHandler handler, HttpErrorHandler errorH, HttpNotFoundHandler notFoundH, std::string_view method, std::string_view p, std::string_view contentEncoding = {}, std::string_view body = {}) {
     ruvia::Router router;
     auto& impl = ruvia::detail::RouterImpl::from(router);
     if (errorH != nullptr) {
@@ -753,9 +650,7 @@ inline DispatchResult dispatchWithHandlersToken(
     if (notFoundH != nullptr) {
         impl.setNotFoundHandler(notFoundH);
     }
-    impl.registerRoute(HttpKnownMethod::kGet, path("/x"), handler, RequestBodyMode::kBuffered,
-                       std::span<const ControllerMiddlewareDescriptor>{},
-                       std::span<const ControllerMiddlewareDescriptor>{});
+    impl.registerRoute(HttpKnownMethod::kGet, path("/x"), handler, RequestBodyMode::kBuffered, std::span<const ControllerMiddlewareDescriptor>{}, std::span<const ControllerMiddlewareDescriptor>{});
     impl.finalize();
     const auto& table = impl.routeTable();
 
@@ -767,31 +662,19 @@ inline DispatchResult dispatchWithHandlersToken(
     ruvia::detail::HttpRequestAccess::setPath(request, p);
     ruvia::detail::HttpRequestAccess::setResource(request, memory.resource());
     if (!contentEncoding.empty()) {
-        const auto slot = ruvia::detail::HttpRequestAccess::knownHeaderSlot(
-            ruvia::detail::RequestKnownHeader::kContentEncoding);
-        (void)ruvia::detail::HttpRequestAccess::addHeader(
-            request,
-            ruvia::HttpHeaderView{"Content-Encoding", contentEncoding},
-            slot);
+        const auto slot = ruvia::detail::HttpRequestAccess::knownHeaderSlot(ruvia::detail::RequestKnownHeader::kContentEncoding);
+        (void)ruvia::detail::HttpRequestAccess::addHeader(request, ruvia::HttpHeaderView{"Content-Encoding", contentEncoding}, slot);
     }
     ruvia::detail::HttpRequestAccess::setBody(request, body);
 
     asio::io_context ctx(1);
-    auto future = asio::co_spawn(
-        ctx, ruvia::detail::taskAsAwaitable(table.dispatch(request, memory, {})),
-        asio::use_future);
+    auto future = asio::co_spawn(ctx, ruvia::detail::taskAsAwaitable(table.dispatch(request, memory, {})), asio::use_future);
     ctx.run();
     return extractDispatchResult(future.get());  // arena still alive here
 }
 
-inline DispatchResult dispatchWithHandlers(
-    RouteHandler handler,
-    HttpErrorHandler errorH,
-    HttpNotFoundHandler notFoundH,
-    HttpKnownMethod method,
-    std::string_view p) {
-    return dispatchWithHandlersToken(
-        handler, errorH, notFoundH, ruvia::knownHttpMethodToken(method), p);
+inline DispatchResult dispatchWithHandlers(RouteHandler handler, HttpErrorHandler errorH, HttpNotFoundHandler notFoundH, HttpKnownMethod method, std::string_view p) {
+    return dispatchWithHandlersToken(handler, errorH, notFoundH, ruvia::knownHttpMethodToken(method), p);
 }
 
 }  // namespace routing_test
@@ -808,17 +691,12 @@ inline ruvia::Task<ruvia::HttpResponse> v2ScopedNotFound(ruvia::Context& context
     co_return context.body("v2-scope-404");
 }
 
-inline ruvia::Task<ruvia::HttpResponse> apiScopedError(
-    ruvia::Context& context,
-    HttpErrorInfo info) {
+inline ruvia::Task<ruvia::HttpResponse> apiScopedError(ruvia::Context& context, HttpErrorInfo info) {
     context.status(info.status());
     co_return context.body("api-scope-error");
 }
 
-inline DispatchResult dispatchOn(
-    const ruvia::detail::RouteTable& table,
-    std::string_view method,
-    std::string_view p) {
+inline DispatchResult dispatchOn(const ruvia::detail::RouteTable& table, std::string_view method, std::string_view p) {
     ruvia::WorkerMemory worker;
     ruvia::RequestMemory memory(worker);
     ruvia::HttpRequest request = ruvia::detail::HttpRequestAccess::make();
@@ -828,9 +706,7 @@ inline DispatchResult dispatchOn(
     ruvia::detail::HttpRequestAccess::setResource(request, memory.resource());
 
     asio::io_context ctx(1);
-    auto future = asio::co_spawn(
-        ctx, ruvia::detail::taskAsAwaitable(table.dispatch(request, memory, {})),
-        asio::use_future);
+    auto future = asio::co_spawn(ctx, ruvia::detail::taskAsAwaitable(table.dispatch(request, memory, {})), asio::use_future);
     ctx.run();
     return extractDispatchResult(future.get());  // arena still alive here
 }
@@ -845,30 +721,22 @@ inline ruvia::Task<ruvia::HttpResponse> urlForEchoHandler(void*, ruvia::Context&
 
 inline ruvia::Task<ruvia::HttpResponse> jsonModelEchoHandler(void*, ruvia::Context& context) {
     const auto body = co_await context.req().json<ScopedValidationRequest>();
-    co_return context.body(
-        body.value().has_value() ? body.value()->view() : "missing");
+    co_return context.body(body.value().has_value() ? body.value()->view() : "missing");
 }
 
 inline ruvia::Task<ruvia::HttpResponse> formModelEchoHandler(void*, ruvia::Context& context) {
     const auto body = co_await context.req().form<ScopedValidationRequest>();
-    co_return context.body(
-        body.value().has_value() ? body.value()->view() : "missing");
+    co_return context.body(body.value().has_value() ? body.value()->view() : "missing");
 }
 
 inline ruvia::Task<ruvia::HttpResponse> jsonIfEchoHandler(void*, ruvia::Context& context) {
     const auto body = co_await context.req().jsonIf<ScopedValidationRequest>();
-    co_return context.body(
-        body.has_value() && body->value().has_value()
-            ? body->value()->view()
-            : "no-json");
+    co_return context.body(body.has_value() && body->value().has_value() ? body->value()->view() : "no-json");
 }
 
 inline ruvia::Task<ruvia::HttpResponse> formIfEchoHandler(void*, ruvia::Context& context) {
     const auto body = co_await context.req().formIf<ScopedValidationRequest>();
-    co_return context.body(
-        body.has_value() && body->value().has_value()
-            ? body->value()->view()
-            : "no-form");
+    co_return context.body(body.has_value() && body->value().has_value() ? body->value()->view() : "no-form");
 }
 
 inline ruvia::Task<ruvia::HttpResponse> jsonValueIfEchoHandler(void*, ruvia::Context& context) {
@@ -877,15 +745,10 @@ inline ruvia::Task<ruvia::HttpResponse> jsonValueIfEchoHandler(void*, ruvia::Con
 }
 
 // Dispatches one GET /x with an optional Content-Type header and body.
-inline DispatchResult dispatchBodyRequest(
-    RouteHandler handler,
-    std::string_view contentType,
-    std::string_view body) {
+inline DispatchResult dispatchBodyRequest(RouteHandler handler, std::string_view contentType, std::string_view body) {
     ruvia::Router router;
     auto& impl = ruvia::detail::RouterImpl::from(router);
-    impl.registerRoute(HttpKnownMethod::kGet, path("/x"), handler, RequestBodyMode::kBuffered,
-                       std::span<const ControllerMiddlewareDescriptor>{},
-                       std::span<const ControllerMiddlewareDescriptor>{});
+    impl.registerRoute(HttpKnownMethod::kGet, path("/x"), handler, RequestBodyMode::kBuffered, std::span<const ControllerMiddlewareDescriptor>{}, std::span<const ControllerMiddlewareDescriptor>{});
     impl.finalize();
     const auto& table = impl.routeTable();
 
@@ -897,19 +760,13 @@ inline DispatchResult dispatchBodyRequest(
     ruvia::detail::HttpRequestAccess::setPath(request, "/x");
     ruvia::detail::HttpRequestAccess::setResource(request, memory.resource());
     if (!contentType.empty()) {
-        const auto slot = ruvia::detail::HttpRequestAccess::knownHeaderSlot(
-            ruvia::detail::RequestKnownHeader::kContentType);
-        (void)ruvia::detail::HttpRequestAccess::addHeader(
-            request,
-            ruvia::HttpHeaderView{"Content-Type", contentType},
-            slot);
+        const auto slot = ruvia::detail::HttpRequestAccess::knownHeaderSlot(ruvia::detail::RequestKnownHeader::kContentType);
+        (void)ruvia::detail::HttpRequestAccess::addHeader(request, ruvia::HttpHeaderView{"Content-Type", contentType}, slot);
     }
     ruvia::detail::HttpRequestAccess::setBody(request, body);
 
     asio::io_context ctx(1);
-    auto future = asio::co_spawn(
-        ctx, ruvia::detail::taskAsAwaitable(table.dispatch(request, memory, {})),
-        asio::use_future);
+    auto future = asio::co_spawn(ctx, ruvia::detail::taskAsAwaitable(table.dispatch(request, memory, {})), asio::use_future);
     ctx.run();
     return extractDispatchResult(future.get());
 }

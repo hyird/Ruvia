@@ -30,10 +30,8 @@ struct TestApp::Impl final {
     detail::ControllerStore controllers;
     WorkerMemory memory;
     Env env;
-    std::pmr::vector<detail::ControllerMiddlewareDescriptor> globalMiddlewares{
-        detail::registrationResource()};
-    std::pmr::vector<detail::WorkerStateDefinition> workerStateDefinitions{
-        detail::registrationResource()};
+    std::pmr::vector<detail::ControllerMiddlewareDescriptor> globalMiddlewares{detail::registrationResource()};
+    std::pmr::vector<detail::WorkerStateDefinition> workerStateDefinitions{detail::registrationResource()};
     std::vector<std::pair<std::string, HttpErrorHandler>> prefixErrorHandlers;
     std::vector<std::pair<std::string, HttpNotFoundHandler>> prefixNotFoundHandlers;
     HttpErrorHandler errorHandler{nullptr};
@@ -49,8 +47,7 @@ struct TestApp::Impl final {
 
     void requireConfigurable() const {
         if (finalized) {
-            throw std::logic_error(
-                "TestApp must be configured before its first request()");
+            throw std::logic_error("TestApp must be configured before its first request()");
         }
     }
 
@@ -60,16 +57,13 @@ struct TestApp::Impl final {
         }
         finalized = true;
 
-        const auto controllerRegistrars =
-            detail::snapshotControllerRegistrars();
-        detail::registerControllers(
-            router, controllers, controllerRegistrars);
+        const auto controllerRegistrars = detail::snapshotControllerRegistrars();
+        detail::registerControllers(router, controllers, controllerRegistrars);
         auto& routes = detail::RouterImpl::from(router);
         routes.setErrorHandler(errorHandler);
         routes.setNotFoundHandler(notFoundHandler);
         if (!prefixErrorHandlers.empty()) {
-            std::pmr::vector<detail::HttpPrefixErrorHandler> views(
-                detail::registrationResource());
+            std::pmr::vector<detail::HttpPrefixErrorHandler> views(detail::registrationResource());
             views.reserve(prefixErrorHandlers.size());
             for (const auto& [prefix, handler] : prefixErrorHandlers) {
                 views.push_back({std::string_view(prefix), handler});
@@ -77,8 +71,7 @@ struct TestApp::Impl final {
             routes.setPrefixErrorHandlers(views);
         }
         if (!prefixNotFoundHandlers.empty()) {
-            std::pmr::vector<detail::HttpPrefixNotFoundHandler> views(
-                detail::registrationResource());
+            std::pmr::vector<detail::HttpPrefixNotFoundHandler> views(detail::registrationResource());
             views.reserve(prefixNotFoundHandlers.size());
             for (const auto& [prefix, handler] : prefixNotFoundHandlers) {
                 views.push_back({std::string_view(prefix), handler});
@@ -94,7 +87,8 @@ struct TestApp::Impl final {
     }
 };
 
-TestApp::TestApp() : impl_(std::make_unique<Impl>()) {}
+TestApp::TestApp()
+    : impl_(std::make_unique<Impl>()) {}
 
 TestApp::~TestApp() = default;
 
@@ -162,12 +156,9 @@ TestResponse TestApp::request(const TestRequest& request) {
     detail::HttpRequestAccess::setTarget(parsed, request.target_);
     const std::string_view target(request.target_);
     const auto queryAt = target.find('?');
-    detail::HttpRequestAccess::setPath(
-        parsed,
-        queryAt == std::string_view::npos ? target : target.substr(0, queryAt));
+    detail::HttpRequestAccess::setPath(parsed, queryAt == std::string_view::npos ? target : target.substr(0, queryAt));
     if (queryAt != std::string_view::npos) {
-        detail::HttpRequestAccess::setQueryString(
-            parsed, target.substr(queryAt + 1));
+        detail::HttpRequestAccess::setQueryString(parsed, target.substr(queryAt + 1));
     }
 
     // Route each header through the parser's own classifier so known-header
@@ -191,20 +182,13 @@ TestResponse TestApp::request(const TestRequest& request) {
     }
     detail::HttpRequestAccess::setBody(parsed, request.body_);
 
-    detail::ContextServices services =
-        detail::ContextServices{}
-            .withEnv(impl_->env)
-            .withWorkerStates(*impl_->workerStates);
+    detail::ContextServices services = detail::ContextServices{}.withEnv(impl_->env).withWorkerStates(*impl_->workerStates);
 
     const auto& routes = detail::RouterImpl::from(impl_->router).routeTable();
     const auto resolution = routes.resolve(parsed);
 
     asio::io_context context(1);
-    auto future = asio::co_spawn(
-        context,
-        detail::taskAsAwaitable(routes.dispatchBufferedResponse(
-            parsed, resolution, requestMemory, nullptr, services)),
-        asio::use_future);
+    auto future = asio::co_spawn(context, detail::taskAsAwaitable(routes.dispatchBufferedResponse(parsed, resolution, requestMemory, nullptr, services)), asio::use_future);
     context.run();
     auto response = future.get();
 
@@ -212,15 +196,13 @@ TestResponse TestApp::request(const TestRequest& request) {
     TestResponse result(response.status());
     result.headers_.reserve(response.headers().size());
     for (const auto& header : response.headers()) {
-        result.headers_.emplace_back(
-            std::string(header.name()), std::string(header.value()));
+        result.headers_.emplace_back(std::string(header.name()), std::string(header.value()));
     }
     // Mirror wire semantics: the response writers suppress the body for HEAD
     // and content-forbidden statuses, so the facade must not surface one
     // either. Writer-synthesized fields (Content-Length, Date, Connection)
     // are framing concerns and stay absent here.
-    const auto bodyPlan =
-        detail::httpResponseBodyPlan(parsed.knownMethod(), response.status());
+    const auto bodyPlan = detail::httpResponseBodyPlan(parsed.knownMethod(), response.status());
     if (!bodyPlan.bodySuppressed()) {
         const auto body = detail::responseBody(response).bytes();
         result.body_.assign(body.data(), body.size());
@@ -228,8 +210,7 @@ TestResponse TestApp::request(const TestRequest& request) {
     return result;
 }
 
-std::optional<std::string_view> TestResponse::header(
-    std::string_view name) const & noexcept {
+std::optional<std::string_view> TestResponse::header(std::string_view name) const& noexcept {
     for (const auto& [headerName, value] : headers_) {
         if (detail::httpAsciiEqualsIgnoreCase(headerName, name)) {
             return std::string_view(value);

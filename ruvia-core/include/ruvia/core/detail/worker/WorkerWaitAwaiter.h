@@ -19,8 +19,7 @@ struct WorkerWaitAwaitPreparing final {};
 
 class WorkerWaitAwaitSuspended final {
 public:
-    explicit WorkerWaitAwaitSuspended(
-        std::coroutine_handle<> continuation) noexcept
+    explicit WorkerWaitAwaitSuspended(std::coroutine_handle<> continuation) noexcept
         : continuation_(continuation) {}
 
     [[nodiscard]] std::coroutine_handle<> continuation() const noexcept {
@@ -34,12 +33,10 @@ private:
 template <typename T>
 class WorkerWaitAwaitReadyBeforeSuspend final {
 public:
-    explicit WorkerWaitAwaitReadyBeforeSuspend(WorkerWaitResult<T>&& result)
-        noexcept(std::is_nothrow_move_constructible_v<WorkerWaitResult<T>>)
+    explicit WorkerWaitAwaitReadyBeforeSuspend(WorkerWaitResult<T>&& result) noexcept(std::is_nothrow_move_constructible_v<WorkerWaitResult<T>>)
         : result_(std::move(result)) {}
 
-    [[nodiscard]] WorkerWaitResult<T> takeResult() &&
-        noexcept(std::is_nothrow_move_constructible_v<WorkerWaitResult<T>>) {
+    [[nodiscard]] WorkerWaitResult<T> takeResult() && noexcept(std::is_nothrow_move_constructible_v<WorkerWaitResult<T>>) {
         return std::move(result_);
     }
 
@@ -50,18 +47,15 @@ private:
 template <typename T>
 class WorkerWaitAwaitReadyAfterSuspend final {
 public:
-    WorkerWaitAwaitReadyAfterSuspend(
-        WorkerWaitResult<T>&& result,
-        std::coroutine_handle<> continuation)
-        noexcept(std::is_nothrow_move_constructible_v<WorkerWaitResult<T>>)
-        : result_(std::move(result)), continuation_(continuation) {}
+    WorkerWaitAwaitReadyAfterSuspend(WorkerWaitResult<T>&& result, std::coroutine_handle<> continuation) noexcept(std::is_nothrow_move_constructible_v<WorkerWaitResult<T>>)
+        : result_(std::move(result)),
+          continuation_(continuation) {}
 
     [[nodiscard]] std::coroutine_handle<> continuation() const noexcept {
         return continuation_;
     }
 
-    [[nodiscard]] WorkerWaitResult<T> takeResult() &&
-        noexcept(std::is_nothrow_move_constructible_v<WorkerWaitResult<T>>) {
+    [[nodiscard]] WorkerWaitResult<T> takeResult() && noexcept(std::is_nothrow_move_constructible_v<WorkerWaitResult<T>>) {
         return std::move(result_);
     }
 
@@ -82,8 +76,7 @@ public:
     WorkerWaitAwaitState(WorkerWaitAwaitState&&) = delete;
     WorkerWaitAwaitState& operator=(WorkerWaitAwaitState&&) = delete;
 
-    [[nodiscard]] bool suspend(
-        std::coroutine_handle<> continuation) noexcept {
+    [[nodiscard]] bool suspend(std::coroutine_handle<> continuation) noexcept {
         if (std::holds_alternative<WorkerWaitAwaitPreparing>(state_)) {
             state_.template emplace<WorkerWaitAwaitSuspended>(continuation);
             return true;
@@ -99,20 +92,17 @@ public:
     [[nodiscard]] bool complete(WorkerWaitResult<T>&& result) {
         if (std::holds_alternative<WorkerWaitAwaitPreparing>(state_)) {
             try {
-                state_.template emplace<WorkerWaitAwaitReadyBeforeSuspend<T>>(
-                    std::move(result));
+                state_.template emplace<WorkerWaitAwaitReadyBeforeSuspend<T>>(std::move(result));
             } catch (...) {
                 state_.template emplace<WorkerWaitAwaitPreparing>();
                 throw;
             }
             return false;
         }
-        if (auto* suspended =
-                std::get_if<WorkerWaitAwaitSuspended>(&state_)) {
+        if (auto* suspended = std::get_if<WorkerWaitAwaitSuspended>(&state_)) {
             const auto continuation = suspended->continuation();
             try {
-                state_.template emplace<WorkerWaitAwaitReadyAfterSuspend<T>>(
-                    std::move(result), continuation);
+                state_.template emplace<WorkerWaitAwaitReadyAfterSuspend<T>>(std::move(result), continuation);
             } catch (...) {
                 state_.template emplace<WorkerWaitAwaitSuspended>(continuation);
                 throw;
@@ -123,37 +113,28 @@ public:
     }
 
     [[nodiscard]] std::coroutine_handle<> continuation() const noexcept {
-        const auto* ready =
-            std::get_if<WorkerWaitAwaitReadyAfterSuspend<T>>(&state_);
+        const auto* ready = std::get_if<WorkerWaitAwaitReadyAfterSuspend<T>>(&state_);
         if (ready == nullptr) {
             std::terminate();
         }
         return ready->continuation();
     }
 
-    [[nodiscard]] WorkerWaitResult<T> takeResult()
-        noexcept(std::is_nothrow_move_constructible_v<WorkerWaitResult<T>>) {
-        if (auto* ready =
-                std::get_if<WorkerWaitAwaitReadyBeforeSuspend<T>>(&state_)) {
+    [[nodiscard]] WorkerWaitResult<T> takeResult() noexcept(std::is_nothrow_move_constructible_v<WorkerWaitResult<T>>) {
+        if (auto* ready = std::get_if<WorkerWaitAwaitReadyBeforeSuspend<T>>(&state_)) {
             return std::move(*ready).takeResult();
         }
-        if (auto* ready =
-                std::get_if<WorkerWaitAwaitReadyAfterSuspend<T>>(&state_)) {
+        if (auto* ready = std::get_if<WorkerWaitAwaitReadyAfterSuspend<T>>(&state_)) {
             return std::move(*ready).takeResult();
         }
         std::terminate();
     }
 
 private:
-    using State = std::variant<
-        WorkerWaitAwaitPreparing,
-        WorkerWaitAwaitSuspended,
-        WorkerWaitAwaitReadyBeforeSuspend<T>,
-        WorkerWaitAwaitReadyAfterSuspend<T>>;
+    using State = std::variant<WorkerWaitAwaitPreparing, WorkerWaitAwaitSuspended, WorkerWaitAwaitReadyBeforeSuspend<T>, WorkerWaitAwaitReadyAfterSuspend<T>>;
 
     State state_;
 };
-
 
 // The suspend half both worker waits share: publish the continuation under the
 // state's mutex, then arm the optional timeout. On expiry the waiter detaches
@@ -164,33 +145,23 @@ private:
 // `State` must expose `mutex`, `worker` and a `waiter` pointer comparable to
 // `self` -- the contract ChannelState and OneShotState both satisfy.
 template <typename T, typename State, typename Waiter>
-[[nodiscard]] bool suspendWorkerWait(
-    State& state,
-    Waiter* self,
-    WorkerWaitAwaitState<T>& completion,
-    WorkerTimerRegistration& timer,
-    const std::optional<std::chrono::steady_clock::duration>& timeout,
-    std::coroutine_handle<> handle) {
+[[nodiscard]] bool suspendWorkerWait(State& state, Waiter* self, WorkerWaitAwaitState<T>& completion, WorkerTimerRegistration& timer, const std::optional<std::chrono::steady_clock::duration>& timeout, std::coroutine_handle<> handle) {
     std::lock_guard lock(state.mutex);
     if (!completion.suspend(handle)) {
         return false;
     }
     if (timeout) {
         try {
-            WorkerHandleAccess::scheduleTimer(
-                state.worker, timer,
-                workerTimerDeadlineAfter(*timeout),
-                [&state, self, &completion](WorkerTimerOutcome outcome) {
-                    if (outcome == WorkerTimerOutcome::kExpired) {
-                        std::lock_guard stateLock(state.mutex);
-                        if (state.waiter == self) {
-                            state.waiter = nullptr;
-                            (void)completion.complete(
-                                WorkerWaitResultAccess::timedOut<T>());
-                        }
+            WorkerHandleAccess::scheduleTimer(state.worker, timer, workerTimerDeadlineAfter(*timeout), [&state, self, &completion](WorkerTimerOutcome outcome) {
+                if (outcome == WorkerTimerOutcome::kExpired) {
+                    std::lock_guard stateLock(state.mutex);
+                    if (state.waiter == self) {
+                        state.waiter = nullptr;
+                        (void)completion.complete(WorkerWaitResultAccess::timedOut<T>());
                     }
-                    completion.continuation().resume();
-                });
+                }
+                completion.continuation().resume();
+            });
         } catch (...) {
             if (state.waiter == self) {
                 state.waiter = nullptr;

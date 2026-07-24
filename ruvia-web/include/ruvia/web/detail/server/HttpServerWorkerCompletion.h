@@ -25,8 +25,7 @@ public:
         return true;
     }
 
-    [[nodiscard]] bool markStartupFailed(
-        std::exception_ptr failure) noexcept {
+    [[nodiscard]] bool markStartupFailed(std::exception_ptr failure) noexcept {
         if (failure == nullptr) {
             std::terminate();
         }
@@ -45,12 +44,8 @@ public:
         std::exception_ptr failure;
         {
             std::unique_lock lock(mutex_);
-            startupCv_.wait(lock, [this] {
-                return !std::holds_alternative<StartupPending>(
-                    startup_);
-            });
-            if (const auto* failed =
-                    std::get_if<StartupFailed>(&startup_)) {
+            startupCv_.wait(lock, [this] { return !std::holds_alternative<StartupPending>(startup_); });
+            if (const auto* failed = std::get_if<StartupFailed>(&startup_)) {
                 failure = failed->failure();
             }
         }
@@ -59,8 +54,7 @@ public:
         }
     }
 
-    [[nodiscard]] bool recordWorkerFailure(
-        std::exception_ptr failure) noexcept {
+    [[nodiscard]] bool recordWorkerFailure(std::exception_ptr failure) noexcept {
         if (failure == nullptr) {
             return false;
         }
@@ -98,10 +92,7 @@ private:
         std::exception_ptr failure_;
     };
 
-    using Startup = std::variant<
-        StartupPending,
-        StartupReady,
-        StartupFailed>;
+    using Startup = std::variant<StartupPending, StartupReady, StartupFailed>;
 
     mutable std::mutex mutex_;
     std::condition_variable startupCv_;

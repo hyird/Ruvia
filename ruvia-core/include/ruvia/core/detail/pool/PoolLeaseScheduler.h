@@ -29,9 +29,7 @@ enum class PoolLeaseReleaseStatus : std::uint8_t {
 // timeout queueing, handoff, double-release rejection, and closure live here.
 class PoolLeaseScheduler final {
 public:
-    PoolLeaseScheduler(
-        std::size_t poolSize,
-        std::pmr::memory_resource* resource = nullptr)
+    PoolLeaseScheduler(std::size_t poolSize, std::pmr::memory_resource* resource = nullptr)
         : freeSlots_(pmrResourceOrDefault(resource)),
           busy_(pmrResourceOrDefault(resource)) {
         freeSlots_.reserve(poolSize);
@@ -50,8 +48,7 @@ public:
         }
     }
 
-    [[nodiscard]] Task<PoolWaiterResult> acquire(
-        std::optional<std::chrono::milliseconds> timeout) {
+    [[nodiscard]] Task<PoolWaiterResult> acquire(std::optional<std::chrono::milliseconds> timeout) {
         return acquireReserved(AcquireReservation(*this), timeout);
     }
 
@@ -82,9 +79,7 @@ private:
         PoolLeaseScheduler* scheduler_;
     };
 
-    [[nodiscard]] static Task<PoolWaiterResult> acquireReserved(
-        AcquireReservation reservation,
-        std::optional<std::chrono::milliseconds> timeout) {
+    [[nodiscard]] static Task<PoolWaiterResult> acquireReserved(AcquireReservation reservation, std::optional<std::chrono::milliseconds> timeout) {
         auto& scheduler = reservation.scheduler();
         if (scheduler.closing_) {
             co_return PoolWaiterResult::makeClosed();
@@ -96,9 +91,7 @@ private:
             co_return PoolWaiterResult::makeAcquired(slot);
         }
 
-        const auto deadline = timeout.has_value()
-            ? workerTimerDeadlineAfter(*timeout)
-            : std::chrono::steady_clock::time_point::max();
+        const auto deadline = timeout.has_value() ? workerTimerDeadlineAfter(*timeout) : std::chrono::steady_clock::time_point::max();
         PoolWaiter waiter(deadline);
         scheduler.waiters_.enqueue(waiter);
         struct WaiterGuard final {
@@ -138,8 +131,7 @@ public:
         return true;
     }
 
-    void scanDeadlines(
-        std::chrono::steady_clock::time_point now) noexcept {
+    void scanDeadlines(std::chrono::steady_clock::time_point now) noexcept {
         waiters_.expireDeadlines(now);
     }
 

@@ -39,9 +39,7 @@ void appendUnsigned(std::pmr::string& frame, std::uint32_t value) {
 }  // namespace
 
 void formatSseMessage(std::pmr::string& frame, const SseMessage& message) {
-    if (message.event.find_first_of("\r\n") != std::string_view::npos ||
-        (message.id.has_value() &&
-         message.id->find_first_of("\r\n") != std::string_view::npos)) {
+    if (message.event.find_first_of("\r\n") != std::string_view::npos || (message.id.has_value() && message.id->find_first_of("\r\n") != std::string_view::npos)) {
         throw std::invalid_argument("SSE event and id must not contain CR or LF");
     }
     if (message.id.has_value() && message.id->find('\0') != std::string_view::npos) {

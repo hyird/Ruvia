@@ -29,8 +29,7 @@ Task<void> SessionMiddleware::handle(Context& c, Next& next) {
     co_await next();
 
     const auto& state = detail::SessionAccess::state(c);
-    if (state.untouched() != nullptr || state.unrecognized() != nullptr ||
-        state.loaded() != nullptr) {
+    if (state.untouched() != nullptr || state.unrecognized() != nullptr || state.loaded() != nullptr) {
         co_return;
     }
 

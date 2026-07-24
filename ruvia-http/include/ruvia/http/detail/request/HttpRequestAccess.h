@@ -48,29 +48,20 @@ struct HttpRequestAccess final {
 
     [[nodiscard]] static constexpr std::size_t knownHeaderSlot(RequestKnownHeader name) noexcept {
         const auto slot = static_cast<std::size_t>(name);
-        return slot < kCachedHeaderSlots
-            ? slot
-            : kCachedHeaderSlots;
+        return slot < kCachedHeaderSlots ? slot : kCachedHeaderSlots;
     }
 
-    [[nodiscard]] static std::string_view knownHeader(
-        const HttpRequest& request,
-        RequestKnownHeader name) noexcept {
+    [[nodiscard]] static std::string_view knownHeader(const HttpRequest& request, RequestKnownHeader name) noexcept {
         const auto slot = knownHeaderSlot(name);
         if (slot >= kCachedHeaderSlots) {
             return {};
         }
-        return (request.cachedHeaderBits_ & cachedHeaderBit(slot)) != 0
-            ? request.cachedHeaders_[slot]
-            : std::string_view{};
+        return (request.cachedHeaderBits_ & cachedHeaderBit(slot)) != 0 ? request.cachedHeaders_[slot] : std::string_view{};
     }
 
-    [[nodiscard]] static bool hasKnownHeader(
-        const HttpRequest& request,
-        RequestKnownHeader name) noexcept {
+    [[nodiscard]] static bool hasKnownHeader(const HttpRequest& request, RequestKnownHeader name) noexcept {
         const auto slot = knownHeaderSlot(name);
-        return slot < kCachedHeaderSlots &&
-            (request.cachedHeaderBits_ & cachedHeaderBit(slot)) != 0;
+        return slot < kCachedHeaderSlots && (request.cachedHeaderBits_ & cachedHeaderBit(slot)) != 0;
     }
 
     [[nodiscard]] static std::string_view bodyBytes(const HttpRequest& request) noexcept {
@@ -111,9 +102,7 @@ struct HttpRequestAccess final {
         request.queryString_ = queryString;
     }
 
-    static void setProtocolVersion(
-        HttpRequest& request,
-        HttpProtocolVersion protocolVersion) noexcept {
+    static void setProtocolVersion(HttpRequest& request, HttpProtocolVersion protocolVersion) noexcept {
         request.protocolVersion_ = protocolVersion;
     }
 
@@ -133,10 +122,7 @@ struct HttpRequestAccess final {
         return true;
     }
 
-    static void setKnownHeaderSlot(
-        HttpRequest& request,
-        std::size_t slot,
-        std::string_view value) noexcept {
+    static void setKnownHeaderSlot(HttpRequest& request, std::size_t slot, std::string_view value) noexcept {
         if (slot >= kCachedHeaderSlots) {
             return;
         }
@@ -154,19 +140,13 @@ private:
     }
 };
 
-static_assert(
-    static_cast<std::size_t>(RequestKnownHeader::kUserAgent) + 1 ==
-    HttpRequestAccess::kCachedHeaderSlots);
+static_assert(static_cast<std::size_t>(RequestKnownHeader::kUserAgent) + 1 == HttpRequestAccess::kCachedHeaderSlots);
 
-[[nodiscard]] inline std::string_view requestKnownHeader(
-    const HttpRequest& request,
-    RequestKnownHeader name) noexcept {
+[[nodiscard]] inline std::string_view requestKnownHeader(const HttpRequest& request, RequestKnownHeader name) noexcept {
     return HttpRequestAccess::knownHeader(request, name);
 }
 
-[[nodiscard]] inline bool requestHasKnownHeader(
-    const HttpRequest& request,
-    RequestKnownHeader name) noexcept {
+[[nodiscard]] inline bool requestHasKnownHeader(const HttpRequest& request, RequestKnownHeader name) noexcept {
     return HttpRequestAccess::hasKnownHeader(request, name);
 }
 

@@ -26,8 +26,7 @@ struct SseMessage final {
             : value_(value) {}
 
         template <typename Traits, typename Allocator>
-        constexpr BorrowedText(
-            const std::basic_string<char, Traits, Allocator>& value) noexcept
+        constexpr BorrowedText(const std::basic_string<char, Traits, Allocator>& value) noexcept
             : value_(value) {}
 
         template <detail::HttpTemporaryOwningCharString String>
@@ -44,8 +43,7 @@ struct SseMessage final {
         }
 
         template <typename Traits, typename Allocator>
-        constexpr BorrowedText& operator=(
-            const std::basic_string<char, Traits, Allocator>& value) noexcept {
+        constexpr BorrowedText& operator=(const std::basic_string<char, Traits, Allocator>& value) noexcept {
             value_ = std::string_view(value);
             return *this;
         }
@@ -73,40 +71,28 @@ struct SseMessage final {
             return value_.size();
         }
 
-        [[nodiscard]] constexpr std::size_t find(
-            char value,
-            std::size_t offset = 0) const noexcept {
+        [[nodiscard]] constexpr std::size_t find(char value, std::size_t offset = 0) const noexcept {
             return value_.find(value, offset);
         }
 
-        [[nodiscard]] constexpr std::size_t find_first_of(
-            std::string_view values,
-            std::size_t offset = 0) const noexcept {
+        [[nodiscard]] constexpr std::size_t find_first_of(std::string_view values, std::size_t offset = 0) const noexcept {
             return value_.find_first_of(values, offset);
         }
 
-        friend constexpr bool operator==(
-            BorrowedText left,
-            BorrowedText right) noexcept {
+        friend constexpr bool operator==(BorrowedText left, BorrowedText right) noexcept {
             return left.value_ == right.value_;
         }
 
-        friend constexpr bool operator==(
-            BorrowedText left,
-            std::string_view right) noexcept {
+        friend constexpr bool operator==(BorrowedText left, std::string_view right) noexcept {
             return left.value_ == right;
         }
 
-        friend constexpr bool operator==(
-            BorrowedText left,
-            const char* right) noexcept {
+        friend constexpr bool operator==(BorrowedText left, const char* right) noexcept {
             return left.value_ == right;
         }
 
         template <typename Traits, typename Allocator>
-        friend constexpr bool operator==(
-            BorrowedText left,
-            const std::basic_string<char, Traits, Allocator>& right) noexcept {
+        friend constexpr bool operator==(BorrowedText left, const std::basic_string<char, Traits, Allocator>& right) noexcept {
             return left.value_ == std::string_view(right);
         }
 

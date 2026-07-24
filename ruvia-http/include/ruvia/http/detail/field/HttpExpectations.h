@@ -11,35 +11,25 @@ namespace ruvia::detail {
 
 // The standardized Expect field member is defined once so parsers and writers
 // cannot drift on its wire spelling.
-inline constexpr std::string_view kHttpContinueExpectationToken =
-    "100-continue";
+inline constexpr std::string_view kHttpContinueExpectationToken = "100-continue";
 
 // Whether the framing/lifecycle owner has established that request content will
 // follow the initial head. Keep this typed: HTTP/1 derives it from its body plan,
 // while HTTP/2 combines its receive-half and remaining-content states so an open
 // metadata-only or known-empty stream cannot masquerade as pending content.
-enum class HttpRequestContentIndication : std::uint8_t {
-    kNoContent,
-    kWillFollow
-};
+enum class HttpRequestContentIndication : std::uint8_t { kNoContent, kWillFollow };
 
 // RFC 9110 Section 10.1.1 forbids a client from generating 100-continue when
 // the request has no content. Keep this sender check next to the recipient-side
 // expectation state so HTTP/1 and HTTP/2 cannot derive different answers.
-[[nodiscard]] constexpr bool httpClientExpectationIsValid(
-    bool hasContinue,
-    HttpRequestContentIndication content) noexcept {
-    return !hasContinue ||
-        content == HttpRequestContentIndication::kWillFollow;
+[[nodiscard]] constexpr bool httpClientExpectationIsValid(bool hasContinue, HttpRequestContentIndication content) noexcept {
+    return !hasContinue || content == HttpRequestContentIndication::kWillFollow;
 }
 
 // Whether the product accepts unknown expectation extensions. Expect remains
 // valid syntax either way; the HTTP contract owns the protocol response chosen
 // by the explicit rejection policy.
-enum class HttpUnsupportedExpectationPolicy : std::uint8_t {
-    kIgnore,
-    kReject
-};
+enum class HttpUnsupportedExpectationPolicy : std::uint8_t { kIgnore, kReject };
 
 class HttpServerExpectationPlan;
 
@@ -71,48 +61,38 @@ private:
 // and then reconstruct the required status themselves.
 class HttpServerExpectationPlan final {
 public:
-    [[nodiscard]] constexpr const HttpNoServerExpectationAction*
-    noAction() const & noexcept {
+    [[nodiscard]] constexpr const HttpNoServerExpectationAction* noAction() const& noexcept {
         return state_ == State::kNoAction ? &kNoAction : nullptr;
     }
-    const HttpNoServerExpectationAction* noAction() const && = delete;
+    const HttpNoServerExpectationAction* noAction() const&& = delete;
 
-    [[nodiscard]] constexpr const HttpSendContinue*
-    sendContinue() const & noexcept {
+    [[nodiscard]] constexpr const HttpSendContinue* sendContinue() const& noexcept {
         return state_ == State::kSendContinue ? &kSendContinue : nullptr;
     }
-    const HttpSendContinue* sendContinue() const && = delete;
+    const HttpSendContinue* sendContinue() const&& = delete;
 
-    [[nodiscard]] constexpr const HttpUnsupportedExpectationRejection*
-    rejection() const & noexcept {
+    [[nodiscard]] constexpr const HttpUnsupportedExpectationRejection* rejection() const& noexcept {
         return state_ == State::kRejection ? &kRejection : nullptr;
     }
-    const HttpUnsupportedExpectationRejection* rejection() const && = delete;
+    const HttpUnsupportedExpectationRejection* rejection() const&& = delete;
 
 private:
     friend class HttpRequestExpectations;
 
-    enum class State : std::uint8_t {
-        kNoAction,
-        kSendContinue,
-        kRejection
-    };
+    enum class State : std::uint8_t { kNoAction, kSendContinue, kRejection };
 
     explicit constexpr HttpServerExpectationPlan(State state) noexcept
         : state_(state) {}
 
-    [[nodiscard]] static constexpr HttpServerExpectationPlan noActionPlan()
-        noexcept {
+    [[nodiscard]] static constexpr HttpServerExpectationPlan noActionPlan() noexcept {
         return HttpServerExpectationPlan(State::kNoAction);
     }
 
-    [[nodiscard]] static constexpr HttpServerExpectationPlan continuePlan()
-        noexcept {
+    [[nodiscard]] static constexpr HttpServerExpectationPlan continuePlan() noexcept {
         return HttpServerExpectationPlan(State::kSendContinue);
     }
 
-    [[nodiscard]] static constexpr HttpServerExpectationPlan rejectionPlan()
-        noexcept {
+    [[nodiscard]] static constexpr HttpServerExpectationPlan rejectionPlan() noexcept {
         return HttpServerExpectationPlan(State::kRejection);
     }
 
@@ -130,17 +110,14 @@ private:
 class HttpRequestExpectations final {
 public:
     void parseField(std::string_view value) noexcept {
-        httpVisitCommaSeparatedQuoted(
-            value,
-            [this](std::string_view member) noexcept {
-                if (httpAsciiEqualsIgnoreCase(
-                        member, kHttpContinueExpectationToken)) {
-                    flags_ |= kContinue;
-                } else {
-                    flags_ |= kUnsupported;
-                }
-                return true;
-            });
+        httpVisitCommaSeparatedQuoted(value, [this](std::string_view member) noexcept {
+            if (httpAsciiEqualsIgnoreCase(member, kHttpContinueExpectationToken)) {
+                flags_ |= kContinue;
+            } else {
+                flags_ |= kUnsupported;
+            }
+            return true;
+        });
     }
 
     [[nodiscard]] bool hasContinue() const noexcept {
@@ -158,15 +135,11 @@ public:
         flags_ &= static_cast<std::uint8_t>(~kContinue);
     }
 
-    [[nodiscard]] HttpServerExpectationPlan serverPlan(
-        HttpRequestContentIndication content,
-        HttpUnsupportedExpectationPolicy unsupportedPolicy) const noexcept {
-        if (hasUnsupported() &&
-            unsupportedPolicy == HttpUnsupportedExpectationPolicy::kReject) {
+    [[nodiscard]] HttpServerExpectationPlan serverPlan(HttpRequestContentIndication content, HttpUnsupportedExpectationPolicy unsupportedPolicy) const noexcept {
+        if (hasUnsupported() && unsupportedPolicy == HttpUnsupportedExpectationPolicy::kReject) {
             return HttpServerExpectationPlan::rejectionPlan();
         }
-        if (hasContinue() &&
-            content == HttpRequestContentIndication::kWillFollow) {
+        if (hasContinue() && content == HttpRequestContentIndication::kWillFollow) {
             return HttpServerExpectationPlan::continuePlan();
         }
         return HttpServerExpectationPlan::noActionPlan();

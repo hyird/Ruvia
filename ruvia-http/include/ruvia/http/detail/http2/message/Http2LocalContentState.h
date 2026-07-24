@@ -42,20 +42,13 @@ public:
 private:
     friend class Http2LocalContentState;
 
-    explicit constexpr Http2LocalContentKnownLength(
-        std::uint64_t declaredLength) noexcept
+    explicit constexpr Http2LocalContentKnownLength(std::uint64_t declaredLength) noexcept
         : declaredLength_(declaredLength) {}
 
     std::uint64_t declaredLength_;
 };
 
-enum class Http2LocalContentCheck : std::uint8_t {
-    kAccepted,
-    kNotStarted,
-    kForbidden,
-    kLengthExceeded,
-    kLengthIncomplete
-};
+enum class Http2LocalContentCheck : std::uint8_t { kAccepted, kNotStarted, kForbidden, kLengthExceeded, kLengthIncomplete };
 
 class Http2LocalContentState final {
 public:
@@ -74,33 +67,25 @@ public:
         reset(Content(Http2LocalContentKnownLength(length)));
     }
 
-    [[nodiscard]] constexpr const Http2LocalContentUnset*
-    unset() const & noexcept {
+    [[nodiscard]] constexpr const Http2LocalContentUnset* unset() const& noexcept {
         return std::get_if<Http2LocalContentUnset>(&content_);
     }
-    [[nodiscard]] constexpr const Http2LocalContentUnset*
-    unset() const && = delete;
+    [[nodiscard]] constexpr const Http2LocalContentUnset* unset() const&& = delete;
 
-    [[nodiscard]] constexpr const Http2LocalContentForbidden*
-    forbidden() const & noexcept {
+    [[nodiscard]] constexpr const Http2LocalContentForbidden* forbidden() const& noexcept {
         return std::get_if<Http2LocalContentForbidden>(&content_);
     }
-    [[nodiscard]] constexpr const Http2LocalContentForbidden*
-    forbidden() const && = delete;
+    [[nodiscard]] constexpr const Http2LocalContentForbidden* forbidden() const&& = delete;
 
-    [[nodiscard]] constexpr const Http2LocalContentUnbounded*
-    unbounded() const & noexcept {
+    [[nodiscard]] constexpr const Http2LocalContentUnbounded* unbounded() const& noexcept {
         return std::get_if<Http2LocalContentUnbounded>(&content_);
     }
-    [[nodiscard]] constexpr const Http2LocalContentUnbounded*
-    unbounded() const && = delete;
+    [[nodiscard]] constexpr const Http2LocalContentUnbounded* unbounded() const&& = delete;
 
-    [[nodiscard]] constexpr const Http2LocalContentKnownLength*
-    knownLength() const & noexcept {
+    [[nodiscard]] constexpr const Http2LocalContentKnownLength* knownLength() const& noexcept {
         return std::get_if<Http2LocalContentKnownLength>(&content_);
     }
-    [[nodiscard]] constexpr const Http2LocalContentKnownLength*
-    knownLength() const && = delete;
+    [[nodiscard]] constexpr const Http2LocalContentKnownLength* knownLength() const&& = delete;
 
     [[nodiscard]] std::uint64_t acceptedBytes() const noexcept {
         return acceptedBytes_;
@@ -113,9 +98,7 @@ public:
     // Transactional preflight for one submitData input. No counters change here.
     // A terminal known-length submission must complete the declared length exactly;
     // callers can retry a rejected input with a corrected terminal flag or size.
-    [[nodiscard]] Http2LocalContentCheck checkAccept(
-        std::size_t bytes,
-        bool terminal) const noexcept {
+    [[nodiscard]] Http2LocalContentCheck checkAccept(std::size_t bytes, bool terminal) const noexcept {
         if (unset() != nullptr) {
             return Http2LocalContentCheck::kNotStarted;
         }
@@ -132,8 +115,7 @@ public:
             return Http2LocalContentCheck::kAccepted;
         }
         const auto declaredLength = knownLengthContent->declaredLength();
-        if (acceptedBytes_ > declaredLength ||
-            amount > declaredLength - acceptedBytes_) {
+        if (acceptedBytes_ > declaredLength || amount > declaredLength - acceptedBytes_) {
             return Http2LocalContentCheck::kLengthExceeded;
         }
         if (terminal && acceptedBytes_ + amount != declaredLength) {
@@ -158,16 +140,11 @@ public:
             return false;
         }
         const auto* knownLengthContent = knownLength();
-        return knownLengthContent == nullptr ||
-            acceptedBytes_ == knownLengthContent->declaredLength();
+        return knownLengthContent == nullptr || acceptedBytes_ == knownLengthContent->declaredLength();
     }
 
 private:
-    using Content = std::variant<
-        Http2LocalContentUnset,
-        Http2LocalContentForbidden,
-        Http2LocalContentUnbounded,
-        Http2LocalContentKnownLength>;
+    using Content = std::variant<Http2LocalContentUnset, Http2LocalContentForbidden, Http2LocalContentUnbounded, Http2LocalContentKnownLength>;
 
     void reset(Content content) noexcept {
         content_ = content;

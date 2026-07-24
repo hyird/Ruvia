@@ -14,12 +14,9 @@ namespace ruvia::detail {
 // kMaxHttpHeaderFields by the protocol state that owns them.
 class HttpHeaderSectionSize final {
 public:
-    [[nodiscard]] bool add(
-        std::string_view name,
-        std::string_view value) noexcept {
+    [[nodiscard]] bool add(std::string_view name, std::string_view value) noexcept {
         constexpr std::size_t kFieldMetadataBytes = 32;
-        if (name.size() > kMaxHttpHeaderBytes ||
-            value.size() > kMaxHttpHeaderBytes - name.size()) {
+        if (name.size() > kMaxHttpHeaderBytes || value.size() > kMaxHttpHeaderBytes - name.size()) {
             return false;
         }
         auto fieldBytes = name.size() + value.size();

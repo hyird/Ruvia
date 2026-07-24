@@ -17,9 +17,7 @@ using ruvia::detail::kResponseHeadStackBytes;
 using ruvia::detail::ResponseHeadBuffer;
 
 template <typename T>
-concept ExposesRvalueResponseHeadBufferStorage =
-    requires(T&& buffer) { std::move(buffer).view(); } ||
-    requires(T&& buffer) { std::move(buffer).stackCursor(std::size_t{}); };
+concept ExposesRvalueResponseHeadBufferStorage = requires(T&& buffer) { std::move(buffer).view(); } || requires(T&& buffer) { std::move(buffer).stackCursor(std::size_t{}); };
 
 static_assert(!ExposesRvalueResponseHeadBufferStorage<ResponseHeadBuffer>);
 
@@ -38,8 +36,7 @@ private:
 
     void do_deallocate(void*, std::size_t, std::size_t) override {}
 
-    [[nodiscard]] bool do_is_equal(
-        const std::pmr::memory_resource& other) const noexcept override {
+    [[nodiscard]] bool do_is_equal(const std::pmr::memory_resource& other) const noexcept override {
         return this == &other;
     }
 };
@@ -107,7 +104,7 @@ RUVIA_TEST(head_buffer_char_append_spill_boundary) {
     for (std::size_t i = 0; i < kResponseHeadStackBytes; ++i) {
         buffer.append('a');
     }
-    RUVIA_CHECK(buffer.canAppendOnStack(0));   // exactly full still fits a zero-byte append
+    RUVIA_CHECK(buffer.canAppendOnStack(0));  // exactly full still fits a zero-byte append
     RUVIA_CHECK(!buffer.canAppendOnStack(1));
     buffer.append('b');  // one more spills to heap
     RUVIA_CHECK_EQ(buffer.view().size(), kResponseHeadStackBytes + 1);

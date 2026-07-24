@@ -15,9 +15,7 @@
 
 namespace ruvia::detail {
 
-[[nodiscard]] inline std::optional<std::string_view> httpHeaderValueInBlock(
-    std::string_view headers,
-    std::string_view name) noexcept {
+[[nodiscard]] inline std::optional<std::string_view> httpHeaderValueInBlock(std::string_view headers, std::string_view name) noexcept {
     std::optional<std::string_view> result;
     while (!headers.empty()) {
         const auto lineEnd = headers.find("\r\n");
@@ -40,13 +38,9 @@ namespace ruvia::detail {
 }
 
 template <HttpTemporaryOwningCharString Headers>
-std::optional<std::string_view> httpHeaderValueInBlock(
-    Headers&&,
-    std::string_view) = delete;
+std::optional<std::string_view> httpHeaderValueInBlock(Headers&&, std::string_view) = delete;
 
-[[nodiscard]] inline std::optional<std::string_view> httpDispositionParameter(
-    std::string_view disposition,
-    std::string_view name) noexcept {
+[[nodiscard]] inline std::optional<std::string_view> httpDispositionParameter(std::string_view disposition, std::string_view name) noexcept {
     // Content-Disposition parameter names are case-insensitive (RFC 6266 section 4.1 /
     // RFC 2183), matching how httpParseMultipartBoundary treats the Content-Type
     // "boundary" parameter. Match "name"/"filename" the same way so a part using
@@ -56,9 +50,7 @@ std::optional<std::string_view> httpHeaderValueInBlock(
 }
 
 template <HttpTemporaryOwningCharString Disposition>
-std::optional<std::string_view> httpDispositionParameter(
-    Disposition&&,
-    std::string_view) = delete;
+std::optional<std::string_view> httpDispositionParameter(Disposition&&, std::string_view) = delete;
 
 [[nodiscard]] inline bool httpIsFormDataDisposition(std::string_view disposition) noexcept {
     const auto value = httpTrimOws(disposition);
@@ -86,11 +78,10 @@ public:
 private:
     friend class HttpMultipartPartHeaderParseResult;
 
-    constexpr HttpMultipartPartHeaders(
-        std::string_view name,
-        std::string_view filename,
-        std::string_view contentType) noexcept
-        : name_(name), filename_(filename), contentType_(contentType) {}
+    constexpr HttpMultipartPartHeaders(std::string_view name, std::string_view filename, std::string_view contentType) noexcept
+        : name_(name),
+          filename_(filename),
+          contentType_(contentType) {}
 
     std::string_view name_;
     std::string_view filename_;
@@ -106,8 +97,7 @@ public:
 private:
     friend class HttpMultipartPartHeaderParseResult;
 
-    explicit constexpr HttpMultipartPartHeaderParseFailure(
-        MultipartParseError error) noexcept
+    explicit constexpr HttpMultipartPartHeaderParseFailure(MultipartParseError error) noexcept
         : error_(error) {}
 
     MultipartParseError error_;
@@ -115,81 +105,59 @@ private:
 
 class HttpMultipartPartHeaderParseResult final {
 public:
-    [[nodiscard]] constexpr const HttpMultipartPartHeaders*
-    headers() const & noexcept {
+    [[nodiscard]] constexpr const HttpMultipartPartHeaders* headers() const& noexcept {
         return std::get_if<HttpMultipartPartHeaders>(&value_);
     }
-    const HttpMultipartPartHeaders* headers() const && = delete;
+    const HttpMultipartPartHeaders* headers() const&& = delete;
 
-    [[nodiscard]] constexpr const HttpMultipartPartHeaderParseFailure*
-    failure() const & noexcept {
+    [[nodiscard]] constexpr const HttpMultipartPartHeaderParseFailure* failure() const& noexcept {
         return std::get_if<HttpMultipartPartHeaderParseFailure>(&value_);
     }
-    const HttpMultipartPartHeaderParseFailure* failure() const && = delete;
+    const HttpMultipartPartHeaderParseFailure* failure() const&& = delete;
 
 private:
-    friend HttpMultipartPartHeaderParseResult httpParseMultipartPartHeaders(
-        std::string_view) noexcept;
+    friend HttpMultipartPartHeaderParseResult httpParseMultipartPartHeaders(std::string_view) noexcept;
 
-    using Value = std::variant<
-        HttpMultipartPartHeaders,
-        HttpMultipartPartHeaderParseFailure>;
+    using Value = std::variant<HttpMultipartPartHeaders, HttpMultipartPartHeaderParseFailure>;
 
-    explicit constexpr HttpMultipartPartHeaderParseResult(
-        HttpMultipartPartHeaders headers) noexcept
+    explicit constexpr HttpMultipartPartHeaderParseResult(HttpMultipartPartHeaders headers) noexcept
         : value_(headers) {}
 
-    explicit constexpr HttpMultipartPartHeaderParseResult(
-        HttpMultipartPartHeaderParseFailure failure) noexcept
+    explicit constexpr HttpMultipartPartHeaderParseResult(HttpMultipartPartHeaderParseFailure failure) noexcept
         : value_(failure) {}
 
-    [[nodiscard]] static constexpr HttpMultipartPartHeaderParseResult
-    makeHeaders(
-        std::string_view name,
-        std::string_view filename,
-        std::string_view contentType) noexcept {
-        return HttpMultipartPartHeaderParseResult(
-            HttpMultipartPartHeaders(name, filename, contentType));
+    [[nodiscard]] static constexpr HttpMultipartPartHeaderParseResult makeHeaders(std::string_view name, std::string_view filename, std::string_view contentType) noexcept {
+        return HttpMultipartPartHeaderParseResult(HttpMultipartPartHeaders(name, filename, contentType));
     }
 
-    [[nodiscard]] static constexpr HttpMultipartPartHeaderParseResult
-    makeFailure(MultipartParseError error) noexcept {
-        return HttpMultipartPartHeaderParseResult(
-            HttpMultipartPartHeaderParseFailure(error));
+    [[nodiscard]] static constexpr HttpMultipartPartHeaderParseResult makeFailure(MultipartParseError error) noexcept {
+        return HttpMultipartPartHeaderParseResult(HttpMultipartPartHeaderParseFailure(error));
     }
 
     Value value_;
 };
 
-[[nodiscard]] inline HttpMultipartPartHeaderParseResult
-httpParseMultipartPartHeaders(std::string_view headers) noexcept {
+[[nodiscard]] inline HttpMultipartPartHeaderParseResult httpParseMultipartPartHeaders(std::string_view headers) noexcept {
     std::optional<std::string_view> disposition;
     std::optional<std::string_view> contentType;
     auto remainingHeaders = headers;
     while (!remainingHeaders.empty()) {
         const auto lineEnd = remainingHeaders.find("\r\n");
-        const auto line = lineEnd == std::string_view::npos
-            ? remainingHeaders
-            : remainingHeaders.substr(0, lineEnd);
+        const auto line = lineEnd == std::string_view::npos ? remainingHeaders : remainingHeaders.substr(0, lineEnd);
         const auto colon = line.find(':');
-        if (colon == std::string_view::npos ||
-            !httpValidMimeFieldName(line.substr(0, colon)) ||
-            !httpValidMimeFieldBody(line.substr(colon + 1))) {
-            return HttpMultipartPartHeaderParseResult::makeFailure(
-                MultipartParseError::kInvalidPartHeaders);
+        if (colon == std::string_view::npos || !httpValidMimeFieldName(line.substr(0, colon)) || !httpValidMimeFieldBody(line.substr(colon + 1))) {
+            return HttpMultipartPartHeaderParseResult::makeFailure(MultipartParseError::kInvalidPartHeaders);
         }
         const auto key = line.substr(0, colon);
         const auto value = httpTrimOws(line.substr(colon + 1));
         if (httpAsciiEqualsIgnoreCase(key, "Content-Disposition")) {
             if (disposition) {
-                return HttpMultipartPartHeaderParseResult::makeFailure(
-                    MultipartParseError::kInvalidContentDisposition);
+                return HttpMultipartPartHeaderParseResult::makeFailure(MultipartParseError::kInvalidContentDisposition);
             }
             disposition = value;
         } else if (httpAsciiEqualsIgnoreCase(key, "Content-Type")) {
             if (contentType || !httpValidMimeMediaType(value)) {
-                return HttpMultipartPartHeaderParseResult::makeFailure(
-                    MultipartParseError::kInvalidPartHeaders);
+                return HttpMultipartPartHeaderParseResult::makeFailure(MultipartParseError::kInvalidPartHeaders);
             }
             contentType = value;
         }
@@ -200,14 +168,12 @@ httpParseMultipartPartHeaders(std::string_view headers) noexcept {
     }
 
     if (!disposition || !httpIsFormDataDisposition(*disposition)) {
-        return HttpMultipartPartHeaderParseResult::makeFailure(
-            MultipartParseError::kInvalidContentDisposition);
+        return HttpMultipartPartHeaderParseResult::makeFailure(MultipartParseError::kInvalidContentDisposition);
     }
 
     const auto parameters = disposition->find(';');
     if (parameters == std::string_view::npos) {
-        return HttpMultipartPartHeaderParseResult::makeFailure(
-            MultipartParseError::kMissingFieldName);
+        return HttpMultipartPartHeaderParseResult::makeFailure(MultipartParseError::kMissingFieldName);
     }
 
     std::optional<std::string_view> name;
@@ -220,16 +186,13 @@ httpParseMultipartPartHeaders(std::string_view headers) noexcept {
         const auto parameter = httpTrimOws(remaining.substr(start, end - start));
         std::string_view key;
         std::string_view value;
-        if (!httpParseMimeParameter(parameter, key, value, false) ||
-            !parameterNames.record(key)) {
-            return HttpMultipartPartHeaderParseResult::makeFailure(
-                MultipartParseError::kInvalidContentDisposition);
+        if (!httpParseMimeParameter(parameter, key, value, false) || !parameterNames.record(key)) {
+            return HttpMultipartPartHeaderParseResult::makeFailure(MultipartParseError::kInvalidContentDisposition);
         }
         // RFC 7578 section 4.2 forbids RFC 5987's filename* parameter in
         // multipart/form-data; accepting and ignoring it loses the filename.
         if (httpAsciiEqualsIgnoreCase(key, "filename*")) {
-            return HttpMultipartPartHeaderParseResult::makeFailure(
-                MultipartParseError::kInvalidContentDisposition);
+            return HttpMultipartPartHeaderParseResult::makeFailure(MultipartParseError::kInvalidContentDisposition);
         }
 
         const auto decoded = httpTrimQuotes(value);
@@ -246,14 +209,10 @@ httpParseMultipartPartHeaders(std::string_view headers) noexcept {
     }
 
     if (!name) {
-        return HttpMultipartPartHeaderParseResult::makeFailure(
-            MultipartParseError::kMissingFieldName);
+        return HttpMultipartPartHeaderParseResult::makeFailure(MultipartParseError::kMissingFieldName);
     }
 
-    return HttpMultipartPartHeaderParseResult::makeHeaders(
-        *name,
-        filename.value_or(std::string_view{}),
-        contentType.value_or(std::string_view{}));
+    return HttpMultipartPartHeaderParseResult::makeHeaders(*name, filename.value_or(std::string_view{}), contentType.value_or(std::string_view{}));
 }
 
 }  // namespace ruvia::detail

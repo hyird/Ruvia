@@ -13,19 +13,10 @@ namespace {
 
 // RFC 3986 pchar minus pct-encoded: bytes a path segment may carry verbatim.
 [[nodiscard]] constexpr bool isUrlForSegmentByte(char value) noexcept {
-    return (value >= 'A' && value <= 'Z') || (value >= 'a' && value <= 'z') ||
-        (value >= '0' && value <= '9') ||
-        value == '-' || value == '.' || value == '_' || value == '~' ||
-        value == '!' || value == '$' || value == '&' || value == '\'' ||
-        value == '(' || value == ')' || value == '*' || value == '+' ||
-        value == ',' || value == ';' || value == '=' || value == ':' ||
-        value == '@';
+    return (value >= 'A' && value <= 'Z') || (value >= 'a' && value <= 'z') || (value >= '0' && value <= '9') || value == '-' || value == '.' || value == '_' || value == '~' || value == '!' || value == '$' || value == '&' || value == '\'' || value == '(' || value == ')' || value == '*' || value == '+' || value == ',' || value == ';' || value == '=' || value == ':' || value == '@';
 }
 
-void appendUrlForValue(
-    std::pmr::string& output,
-    std::string_view value,
-    bool keepSlashes) {
+void appendUrlForValue(std::pmr::string& output, std::string_view value, bool keepSlashes) {
     static constexpr char kHexDigits[] = "0123456789ABCDEF";
     for (const char byte : value) {
         if (isUrlForSegmentByte(byte) || (keepSlashes && byte == '/')) {
@@ -41,10 +32,7 @@ void appendUrlForValue(
 
 }  // namespace
 
-std::pmr::string detail::RouteTable::urlFor(
-    std::string_view pattern,
-    std::span<const std::string_view> values,
-    std::pmr::memory_resource* resource) const {
+std::pmr::string detail::RouteTable::urlFor(std::string_view pattern, std::span<const std::string_view> values, std::pmr::memory_resource* resource) const {
     bool registered = false;
     for (const auto& route : routes_) {
         if (route.path() == pattern) {
@@ -70,12 +58,8 @@ std::pmr::string detail::RouteTable::urlFor(
     }
     while (!remaining.empty()) {
         const auto slash = remaining.find('/');
-        const auto segment = slash == std::string_view::npos
-            ? remaining
-            : remaining.substr(0, slash);
-        remaining = slash == std::string_view::npos
-            ? std::string_view{}
-            : remaining.substr(slash + 1);
+        const auto segment = slash == std::string_view::npos ? remaining : remaining.substr(0, slash);
+        remaining = slash == std::string_view::npos ? std::string_view{} : remaining.substr(slash + 1);
 
         if (segment == "*" && remaining.empty()) {
             if (nextValue >= values.size()) {

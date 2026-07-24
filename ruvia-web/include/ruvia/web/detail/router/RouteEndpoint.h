@@ -36,10 +36,9 @@ public:
 private:
     friend class RouteEndpoint;
 
-    BufferedRouteEndpoint(
-        RouteHandler handler,
-        RequestBodyMode requestBodyMode) noexcept
-        : handler_(handler), requestBodyMode_(requestBodyMode) {}
+    BufferedRouteEndpoint(RouteHandler handler, RequestBodyMode requestBodyMode) noexcept
+        : handler_(handler),
+          requestBodyMode_(requestBodyMode) {}
 
     RouteHandler handler_;
     RequestBodyMode requestBodyMode_;
@@ -58,10 +57,9 @@ public:
 private:
     friend class RouteEndpoint;
 
-    ResponseStreamRouteEndpoint(
-        RouteStreamHandler handler,
-        ResponseStreamKind kind) noexcept
-        : handler_(handler), kind_(kind) {}
+    ResponseStreamRouteEndpoint(RouteStreamHandler handler, ResponseStreamKind kind) noexcept
+        : handler_(handler),
+          kind_(kind) {}
 
     RouteStreamHandler handler_;
     ResponseStreamKind kind_;
@@ -84,10 +82,7 @@ public:
 private:
     friend class RouteEndpoint;
 
-    WebSocketRouteEndpoint(
-        std::pmr::memory_resource* resource,
-        RouteStreamHandler handler,
-        WebSocketRouteOptions options)
+    WebSocketRouteEndpoint(std::pmr::memory_resource* resource, RouteStreamHandler handler, WebSocketRouteOptions options)
         : handler_(handler),
           subprotocols_(options.subprotocols, resource),
           lifecycle_(options.lifecycle) {}
@@ -107,101 +102,74 @@ public:
     RouteEndpoint(RouteEndpoint&&) noexcept = default;
     RouteEndpoint& operator=(RouteEndpoint&&) = delete;
 
-    [[nodiscard]] static RouteEndpoint buffered(
-        RouteHandler handler,
-        RequestBodyMode requestBodyMode) {
+    [[nodiscard]] static RouteEndpoint buffered(RouteHandler handler, RequestBodyMode requestBodyMode) {
         if (!handler.valid()) {
             throw std::invalid_argument("route handler must not be empty");
         }
-        if (requestBodyMode != RequestBodyMode::kBuffered &&
-            requestBodyMode != RequestBodyMode::kStream) {
+        if (requestBodyMode != RequestBodyMode::kBuffered && requestBodyMode != RequestBodyMode::kStream) {
             throw std::invalid_argument("invalid route request-body mode");
         }
         return RouteEndpoint(BufferedRouteEndpoint(handler, requestBodyMode));
     }
 
-    [[nodiscard]] static RouteEndpoint responseStream(
-        RouteStreamHandler handler,
-        ResponseStreamKind kind) {
+    [[nodiscard]] static RouteEndpoint responseStream(RouteStreamHandler handler, ResponseStreamKind kind) {
         if (!handler.valid()) {
             throw std::invalid_argument("route stream handler must not be empty");
         }
-        if (kind != ResponseStreamKind::kGeneric &&
-            kind != ResponseStreamKind::kSse) {
+        if (kind != ResponseStreamKind::kGeneric && kind != ResponseStreamKind::kSse) {
             throw std::invalid_argument("invalid response-stream kind");
         }
         return RouteEndpoint(ResponseStreamRouteEndpoint(handler, kind));
     }
 
-    [[nodiscard]] static RouteEndpoint webSocket(
-        std::pmr::memory_resource* resource,
-        RouteStreamHandler handler,
-        WebSocketRouteOptions options = {}) {
+    [[nodiscard]] static RouteEndpoint webSocket(std::pmr::memory_resource* resource, RouteStreamHandler handler, WebSocketRouteOptions options = {}) {
         if (!handler.valid()) {
             throw std::invalid_argument("websocket route handler must not be empty");
         }
-        if (options.lifecycle.closeHandshakeTimeout.has_value() &&
-            options.lifecycle.closeHandshakeTimeout->count() <= 0) {
-            throw std::invalid_argument(
-                "websocket close-handshake timeout must be greater than zero");
+        if (options.lifecycle.closeHandshakeTimeout.has_value() && options.lifecycle.closeHandshakeTimeout->count() <= 0) {
+            throw std::invalid_argument("websocket close-handshake timeout must be greater than zero");
         }
-        if (!options.subprotocols.empty() &&
-            !isValidWebSocketSubprotocolList(options.subprotocols)) {
-            throw std::invalid_argument(
-                "websocket subprotocols must be a list of at most 64 unique HTTP tokens");
+        if (!options.subprotocols.empty() && !isValidWebSocketSubprotocolList(options.subprotocols)) {
+            throw std::invalid_argument("websocket subprotocols must be a list of at most 64 unique HTTP tokens");
         }
-        return RouteEndpoint(WebSocketRouteEndpoint(
-            pmrResourceOrDefault(resource), handler, options));
+        return RouteEndpoint(WebSocketRouteEndpoint(pmrResourceOrDefault(resource), handler, options));
     }
 
-    [[nodiscard]] RouteEndpoint clone(
-        std::pmr::memory_resource* resource) const {
+    [[nodiscard]] RouteEndpoint clone(std::pmr::memory_resource* resource) const {
         if (const auto* endpoint = buffered()) {
-            return RouteEndpoint::buffered(
-                endpoint->handler(), endpoint->requestBodyMode());
+            return RouteEndpoint::buffered(endpoint->handler(), endpoint->requestBodyMode());
         }
         if (const auto* endpoint = responseStream()) {
-            return RouteEndpoint::responseStream(
-                endpoint->handler(), endpoint->kind());
+            return RouteEndpoint::responseStream(endpoint->handler(), endpoint->kind());
         }
         const auto& endpoint = *webSocket();
-        return RouteEndpoint::webSocket(
-            resource,
-            endpoint.handler(),
-            WebSocketRouteOptions{endpoint.subprotocols(), endpoint.lifecycle()});
+        return RouteEndpoint::webSocket(resource, endpoint.handler(), WebSocketRouteOptions{endpoint.subprotocols(), endpoint.lifecycle()});
     }
 
-    [[nodiscard]] const BufferedRouteEndpoint* buffered() const & noexcept {
+    [[nodiscard]] const BufferedRouteEndpoint* buffered() const& noexcept {
         return std::get_if<BufferedRouteEndpoint>(&value_);
     }
-    [[nodiscard]] const BufferedRouteEndpoint* buffered() const && = delete;
+    [[nodiscard]] const BufferedRouteEndpoint* buffered() const&& = delete;
 
-    [[nodiscard]] const ResponseStreamRouteEndpoint*
-    responseStream() const & noexcept {
+    [[nodiscard]] const ResponseStreamRouteEndpoint* responseStream() const& noexcept {
         return std::get_if<ResponseStreamRouteEndpoint>(&value_);
     }
-    [[nodiscard]] const ResponseStreamRouteEndpoint*
-    responseStream() const && = delete;
+    [[nodiscard]] const ResponseStreamRouteEndpoint* responseStream() const&& = delete;
 
-    [[nodiscard]] const WebSocketRouteEndpoint* webSocket() const & noexcept {
+    [[nodiscard]] const WebSocketRouteEndpoint* webSocket() const& noexcept {
         return std::get_if<WebSocketRouteEndpoint>(&value_);
     }
-    [[nodiscard]] const WebSocketRouteEndpoint* webSocket() const && = delete;
+    [[nodiscard]] const WebSocketRouteEndpoint* webSocket() const&& = delete;
 
     // Every non-buffered endpoint has a buffered request body contract. Only a
     // buffered-response endpoint may opt into the explicit stream-body route.
     [[nodiscard]] RequestBodyMode requestBodyMode() const noexcept {
         const auto* endpoint = buffered();
-        return endpoint == nullptr
-            ? RequestBodyMode::kBuffered
-            : endpoint->requestBodyMode();
+        return endpoint == nullptr ? RequestBodyMode::kBuffered : endpoint->requestBodyMode();
     }
 
 private:
-    using Value = std::variant<
-        BufferedRouteEndpoint,
-        ResponseStreamRouteEndpoint,
-        WebSocketRouteEndpoint>;
+    using Value = std::variant<BufferedRouteEndpoint, ResponseStreamRouteEndpoint, WebSocketRouteEndpoint>;
 
     template <typename Endpoint>
     explicit RouteEndpoint(Endpoint endpoint) noexcept

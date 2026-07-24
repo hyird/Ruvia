@@ -11,7 +11,8 @@ namespace ruvia::edge {
 
 struct EdgeCachedResponseControl final {
     EdgeCachedResponseControl(CachedResponse source, std::pmr::memory_resource* sourceResource)
-        : value(std::move(source)), resource(sourceResource) {}
+        : value(std::move(source)),
+          resource(sourceResource) {}
 
     std::size_t references{1};  // the cache owns the initial reference
     CachedResponse value;
@@ -48,13 +49,9 @@ std::size_t CachedResponse::byteSize() const noexcept {
 }
 
 std::uint64_t cachedResponseAge(const CachedResponse& entry, std::time_t now) noexcept {
-    const std::uint64_t resident = entry.storedAt <= now
-        ? static_cast<std::uint64_t>(now - entry.storedAt)
-        : std::uint64_t{0};
+    const std::uint64_t resident = entry.storedAt <= now ? static_cast<std::uint64_t>(now - entry.storedAt) : std::uint64_t{0};
     const auto maximum = (std::numeric_limits<std::uint64_t>::max)();
-    return entry.initialAge > maximum - resident
-        ? maximum
-        : entry.initialAge + resident;
+    return entry.initialAge > maximum - resident ? maximum : entry.initialAge + resident;
 }
 
 CacheEntryLease::CacheEntryLease(EdgeCachedResponseControl* control) noexcept
@@ -122,9 +119,7 @@ CacheLookupResult EdgeCache::lookup(std::string_view key, std::time_t now) noexc
     }
     recency_.splice(recency_.begin(), recency_, it->second);
     EdgeCachedResponseControl* value = it->second->value;
-    const CacheLookupStatus status = now < value->value.expiresAt
-        ? CacheLookupStatus::kFresh
-        : CacheLookupStatus::kStale;
+    const CacheLookupStatus status = now < value->value.expiresAt ? CacheLookupStatus::kFresh : CacheLookupStatus::kStale;
     return {status, CacheEntryLease(value)};
 }
 
@@ -134,13 +129,11 @@ bool EdgeCache::store(std::string key, CachedResponse entry) {
         return false;
     }
 
-    auto replacement = ::ruvia::detail::makePmrObject<EdgeCachedResponseControl>(
-        resource_, std::move(entry), resource_);
+    auto replacement = ::ruvia::detail::makePmrObject<EdgeCachedResponseControl>(resource_, std::move(entry), resource_);
     if (const auto existing = index_.find(key); existing != index_.end()) {
         Node& node = *existing->second;
         totalBytes_ -= node.bytes;
-        EdgeCachedResponseControl* previous =
-            std::exchange(node.value, replacement.release());
+        EdgeCachedResponseControl* previous = std::exchange(node.value, replacement.release());
         node.bytes = bytes;
         totalBytes_ += bytes;
         recency_.splice(recency_.begin(), recency_, existing->second);
@@ -204,8 +197,7 @@ void EdgeCache::clear() noexcept {
 }
 
 void EdgeCache::evictWhileOverBudget() noexcept {
-    while (!recency_.empty() &&
-           (totalBytes_ > limits_.maxBytes || index_.size() > limits_.maxEntries)) {
+    while (!recency_.empty() && (totalBytes_ > limits_.maxBytes || index_.size() > limits_.maxEntries)) {
         erase(index_.find(recency_.back().key));
     }
 }

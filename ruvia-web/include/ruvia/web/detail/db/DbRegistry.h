@@ -17,19 +17,22 @@ namespace ruvia::detail {
 
 class DbRegistry final {
 public:
-    DbRegistry(
-        asio::io_context&,
-        std::pmr::memory_resource*,
-        std::span<const DbDefinition>) {}
+    DbRegistry(asio::io_context&, std::pmr::memory_resource*, std::span<const DbDefinition>) {}
 
     DbRegistry(const DbRegistry&) = delete;
     DbRegistry& operator=(const DbRegistry&) = delete;
 
-    [[nodiscard]] Task<void> connect() { co_return; }
+    [[nodiscard]] Task<void> connect() {
+        co_return;
+    }
     void closeNow() noexcept {}
-    [[nodiscard]] bool empty() const noexcept { return true; }
+    [[nodiscard]] bool empty() const noexcept {
+        return true;
+    }
     void scanDeadlines() noexcept {}
-    [[nodiscard]] bool hasAnyTimeout() const noexcept { return false; }
+    [[nodiscard]] bool hasAnyTimeout() const noexcept {
+        return false;
+    }
 };
 
 }  // namespace ruvia::detail
@@ -70,10 +73,7 @@ struct DbSlotSocket;
 
 class MariaDbPool final {
 public:
-    MariaDbPool(
-        asio::io_context& ioContext,
-        DbConfig config,
-        std::pmr::memory_resource* resource = nullptr);
+    MariaDbPool(asio::io_context& ioContext, DbConfig config, std::pmr::memory_resource* resource = nullptr);
     ~MariaDbPool();
 
     MariaDbPool(const MariaDbPool&) = delete;
@@ -86,18 +86,13 @@ public:
 
 public:
     template <typename Pool>
-    friend Task<void> finishDbTransaction(
-        Pool&, std::size_t, std::string_view, std::pmr::memory_resource*);
+    friend Task<void> finishDbTransaction(Pool&, std::size_t, std::string_view, std::pmr::memory_resource*);
     template <typename Pool>
-    friend Task<QueryResult> executeDbQuery(
-        Pool&, std::pmr::string, std::pmr::vector<DbValue>, std::pmr::memory_resource*);
+    friend Task<QueryResult> executeDbQuery(Pool&, std::pmr::string, std::pmr::vector<DbValue>, std::pmr::memory_resource*);
     template <typename Pool, typename Slot>
-    friend Task<DbResolvedAddresses> resolveDbHost(
-        Pool&, Slot&, const OperationTimeout&, std::string_view);
+    friend Task<DbResolvedAddresses> resolveDbHost(Pool&, Slot&, const OperationTimeout&, std::string_view);
     template <typename Pool>
-    friend Task<QueryResult> executeOnDbTransactionSlot(
-        Pool&, std::size_t, std::pmr::string, std::pmr::vector<DbValue>,
-        std::pmr::memory_resource*);
+    friend Task<QueryResult> executeOnDbTransactionSlot(Pool&, std::size_t, std::pmr::string, std::pmr::vector<DbValue>, std::pmr::memory_resource*);
     template <typename Pool>
     friend Task<std::size_t> acquireDbSlot(Pool&);
     template <typename Pool>
@@ -109,9 +104,7 @@ public:
     using SlotGuard = DbSlotGuard<MariaDbPool>;
 
     struct ConnectionSlot {
-        ConnectionSlot(
-            asio::io_context& ioContext,
-            std::pmr::memory_resource* resource = nullptr);
+        ConnectionSlot(asio::io_context& ioContext, std::pmr::memory_resource* resource = nullptr);
         ~ConnectionSlot();
         ConnectionSlot(ConnectionSlot&&) noexcept;
         ConnectionSlot& operator=(ConnectionSlot&&) noexcept;
@@ -130,11 +123,7 @@ public:
         // with dangling references.
         bool waitActive{false};
         bool closeRequested{false};
-        enum class DeadlineKind : std::uint8_t {
-            kResolve,
-            kSocket,
-            kSleep
-        };
+        enum class DeadlineKind : std::uint8_t { kResolve, kSocket, kSleep };
         OperationDeadline<DeadlineKind> deadline;
     };
 
@@ -145,9 +134,7 @@ public:
     void closeSlot(ConnectionSlot& slot) noexcept;
     void setSlotDeadline(ConnectionSlot& slot, std::chrono::milliseconds timeout, ConnectionSlot::DeadlineKind kind) noexcept;
     void clearSlotDeadline(ConnectionSlot& slot) noexcept;
-    Task<DbResolvedAddresses> resolveHost(
-        ConnectionSlot& slot,
-        const OperationTimeout& deadline);
+    Task<DbResolvedAddresses> resolveHost(ConnectionSlot& slot, const OperationTimeout& deadline);
     Task<void> connectUnlocked(ConnectionSlot& slot);
     Task<int> waitForMysql(ConnectionSlot& slot, int status, const OperationTimeout& deadline);
     Task<void> runMysqlQuery(ConnectionSlot& slot, std::string_view sql, const OperationTimeout& deadline);
@@ -179,10 +166,7 @@ private:
 
 class PostgreSqlPool final {
 public:
-    PostgreSqlPool(
-        asio::io_context& ioContext,
-        DbConfig config,
-        std::pmr::memory_resource* resource = nullptr);
+    PostgreSqlPool(asio::io_context& ioContext, DbConfig config, std::pmr::memory_resource* resource = nullptr);
     ~PostgreSqlPool();
 
     PostgreSqlPool(const PostgreSqlPool&) = delete;
@@ -195,18 +179,13 @@ public:
 
 private:
     template <typename Pool>
-    friend Task<void> finishDbTransaction(
-        Pool&, std::size_t, std::string_view, std::pmr::memory_resource*);
+    friend Task<void> finishDbTransaction(Pool&, std::size_t, std::string_view, std::pmr::memory_resource*);
     template <typename Pool>
-    friend Task<QueryResult> executeDbQuery(
-        Pool&, std::pmr::string, std::pmr::vector<DbValue>, std::pmr::memory_resource*);
+    friend Task<QueryResult> executeDbQuery(Pool&, std::pmr::string, std::pmr::vector<DbValue>, std::pmr::memory_resource*);
     template <typename Pool, typename Slot>
-    friend Task<DbResolvedAddresses> resolveDbHost(
-        Pool&, Slot&, const OperationTimeout&, std::string_view);
+    friend Task<DbResolvedAddresses> resolveDbHost(Pool&, Slot&, const OperationTimeout&, std::string_view);
     template <typename Pool>
-    friend Task<QueryResult> executeOnDbTransactionSlot(
-        Pool&, std::size_t, std::pmr::string, std::pmr::vector<DbValue>,
-        std::pmr::memory_resource*);
+    friend Task<QueryResult> executeOnDbTransactionSlot(Pool&, std::size_t, std::pmr::string, std::pmr::vector<DbValue>, std::pmr::memory_resource*);
     template <typename Pool>
     friend Task<std::size_t> acquireDbSlot(Pool&);
     template <typename Pool>
@@ -218,9 +197,7 @@ private:
     using SlotGuard = DbSlotGuard<PostgreSqlPool>;
 
     struct ConnectionSlot {
-        ConnectionSlot(
-            asio::io_context& ioContext,
-            std::pmr::memory_resource* resource = nullptr);
+        ConnectionSlot(asio::io_context& ioContext, std::pmr::memory_resource* resource = nullptr);
         ~ConnectionSlot();
         ConnectionSlot(ConnectionSlot&&) noexcept;
         ConnectionSlot& operator=(ConnectionSlot&&) noexcept;
@@ -244,9 +221,7 @@ public:
     void closeSlot(ConnectionSlot& slot) noexcept;
     void setSlotDeadline(ConnectionSlot& slot, std::optional<std::chrono::milliseconds> timeout) noexcept;
     void clearSlotDeadline(ConnectionSlot& slot) noexcept;
-    Task<DbResolvedAddresses> resolveHost(
-        ConnectionSlot& slot,
-        const OperationTimeout& deadline);
+    Task<DbResolvedAddresses> resolveHost(ConnectionSlot& slot, const OperationTimeout& deadline);
     Task<void> connectUnlocked(ConnectionSlot& slot);
     Task<void> waitForPostgreSql(ConnectionSlot& slot, bool read, const OperationTimeout& deadline);
     Task<void> flushOutput(ConnectionSlot& slot, const OperationTimeout& deadline);
@@ -288,13 +263,8 @@ public:
     void scanDeadlines() noexcept;
     [[nodiscard]] bool empty() const noexcept;
     [[nodiscard]] bool hasAnyTimeout() const noexcept;
-    [[nodiscard]] DbHandle get(
-        std::pmr::memory_resource* resource,
-        ScopedOperationScope& operationScope) const;
-    [[nodiscard]] DbHandle get(
-        std::string_view alias,
-        std::pmr::memory_resource* resource,
-        ScopedOperationScope& operationScope) const;
+    [[nodiscard]] DbHandle get(std::pmr::memory_resource* resource, ScopedOperationScope& operationScope) const;
+    [[nodiscard]] DbHandle get(std::string_view alias, std::pmr::memory_resource* resource, ScopedOperationScope& operationScope) const;
 
 public:
 #ifdef RUVIA_ENABLE_MARIADB

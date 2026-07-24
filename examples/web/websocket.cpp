@@ -13,12 +13,11 @@ public:
     RUVIA_ROUTES_BEGIN
     const auto chatOptions = ruvia::WebSocketRouteOptions{
         .subprotocols = "chat.v1",
-        .lifecycle = {
-            .heartbeat = ruvia::WebSocketHeartbeatPolicy::periodic(
-                std::chrono::seconds(30),
-                std::chrono::seconds(10)),
-            .closeHandshakeTimeout = std::chrono::seconds(5),
-        },
+        .lifecycle =
+            {
+                .heartbeat = ruvia::WebSocketHeartbeatPolicy::periodic(std::chrono::seconds(30), std::chrono::seconds(10)),
+                .closeHandshakeTimeout = std::chrono::seconds(5),
+            },
     };
     RUVIA_GET_WS("/echo", echo);
     RUVIA_GET_WS_OPTIONS("/chat", chat, chatOptions);
@@ -49,11 +48,5 @@ private:
 };
 
 int main() {
-    ruvia::app()
-        .setListenAddress("0.0.0.0")
-        .setServerTopology(ruvia::ServerTopology::http(8084))
-        .setWorkersPerListener(2)
-        .setSignalShutdown(true)
-        .setMaxWebSocketMessageBytes(16 * 1024 * 1024)
-        .run();
+    ruvia::app().setListenAddress("0.0.0.0").setServerTopology(ruvia::ServerTopology::http(8084)).setWorkersPerListener(2).setSignalShutdown(true).setMaxWebSocketMessageBytes(16 * 1024 * 1024).run();
 }

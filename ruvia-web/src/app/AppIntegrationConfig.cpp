@@ -15,11 +15,7 @@ namespace ruvia {
 namespace {
 
 template <typename Definition, typename Config, typename MakeDefinition>
-void upsertDefinition(
-    std::pmr::vector<Definition>& definitions,
-    std::string_view alias,
-    Config& config,
-    MakeDefinition&& makeDefinition) {
+void upsertDefinition(std::pmr::vector<Definition>& definitions, std::string_view alias, Config& config, MakeDefinition&& makeDefinition) {
     for (auto& definition : definitions) {
         if (std::string_view(definition.alias) == alias) {
             definition.config = std::move(config);
@@ -38,27 +34,17 @@ App& App::useDb(DbConfig config) {
 }
 
 App& App::useDb(std::string_view alias, DbConfig config) {
-    return detail::mutateStoppedApp(
-        *this,
-        *state_,
-        "cannot configure database while app is running",
-        [&](detail::AppState& state) {
-            if (alias.empty()) {
-                throw std::invalid_argument("database alias must not be empty");
-            }
-            detail::validateDbConfig(config);
+    return detail::mutateStoppedApp(*this, *state_, "cannot configure database while app is running", [&](detail::AppState& state) {
+        if (alias.empty()) {
+            throw std::invalid_argument("database alias must not be empty");
+        }
+        detail::validateDbConfig(config);
 
-            upsertDefinition(
-                state.databases,
-                alias,
-                config,
-                [](std::string_view storedAlias, DbConfig&& storedConfig) {
-                    auto* resource = detail::appResource();
-                    return detail::DbDefinition{
-                        std::pmr::string(storedAlias, resource),
-                        std::move(storedConfig)};
-                });
+        upsertDefinition(state.databases, alias, config, [](std::string_view storedAlias, DbConfig&& storedConfig) {
+            auto* resource = detail::appResource();
+            return detail::DbDefinition{std::pmr::string(storedAlias, resource), std::move(storedConfig)};
         });
+    });
 }
 #endif
 
@@ -68,27 +54,17 @@ App& App::useRedis(RedisConfig config) {
 }
 
 App& App::useRedis(std::string_view alias, RedisConfig config) {
-    return detail::mutateStoppedApp(
-        *this,
-        *state_,
-        "cannot configure redis while app is running",
-        [&](detail::AppState& state) {
-            if (alias.empty()) {
-                throw std::invalid_argument("redis alias must not be empty");
-            }
-            detail::validateRedisConfig(config);
+    return detail::mutateStoppedApp(*this, *state_, "cannot configure redis while app is running", [&](detail::AppState& state) {
+        if (alias.empty()) {
+            throw std::invalid_argument("redis alias must not be empty");
+        }
+        detail::validateRedisConfig(config);
 
-            upsertDefinition(
-                state.redis,
-                alias,
-                config,
-                [](std::string_view storedAlias, RedisConfig&& storedConfig) {
-                    auto* resource = detail::appResource();
-                    return detail::RedisDefinition{
-                        std::pmr::string(storedAlias, resource),
-                        std::move(storedConfig)};
-                });
+        upsertDefinition(state.redis, alias, config, [](std::string_view storedAlias, RedisConfig&& storedConfig) {
+            auto* resource = detail::appResource();
+            return detail::RedisDefinition{std::pmr::string(storedAlias, resource), std::move(storedConfig)};
         });
+    });
 }
 #endif
 }  // namespace ruvia

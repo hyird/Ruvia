@@ -82,40 +82,27 @@ RUVIA_TEST(vary_existing_wildcard_is_not_combined_with_field_names) {
 RUVIA_TEST(vary_add_preserves_repeated_field_lines_in_combined_order) {
     auto response = makeResponse();
     response.header("Vary", "Origin");
-    response.header(
-        "Vary",
-        "Accept-Language",
-        HttpResponse::HeaderOptions{.append = true});
+    response.header("Vary", "Accept-Language", HttpResponse::HeaderOptions{.append = true});
 
     addVaryToken(response, "Accept-Encoding");
-    RUVIA_CHECK_EQ(
-        response.header("Vary"),
-        std::string_view("Origin, Accept-Language, Accept-Encoding"));
+    RUVIA_CHECK_EQ(response.header("Vary"), std::string_view("Origin, Accept-Language, Accept-Encoding"));
 }
 
 RUVIA_TEST(vary_add_dedups_against_later_repeated_field_line) {
     auto response = makeResponse();
     response.header("Vary", "Origin");
-    response.header(
-        "Vary",
-        "Accept-Encoding",
-        HttpResponse::HeaderOptions{.append = true});
+    response.header("Vary", "Accept-Encoding", HttpResponse::HeaderOptions{.append = true});
 
     addVaryToken(response, "accept-encoding");
     RUVIA_CHECK_EQ(response.headers().size(), std::size_t{2});
     RUVIA_CHECK_EQ(response.headers().begin()[0].value(), std::string_view("Origin"));
-    RUVIA_CHECK_EQ(
-        response.headers().begin()[1].value(),
-        std::string_view("Accept-Encoding"));
+    RUVIA_CHECK_EQ(response.headers().begin()[1].value(), std::string_view("Accept-Encoding"));
 }
 
 RUVIA_TEST(vary_wildcard_in_later_repeated_field_line_dominates) {
     auto response = makeResponse();
     response.header("Vary", "Origin");
-    response.header(
-        "Vary",
-        "*",
-        HttpResponse::HeaderOptions{.append = true});
+    response.header("Vary", "*", HttpResponse::HeaderOptions{.append = true});
 
     addVaryToken(response, "Accept-Encoding");
     RUVIA_CHECK_EQ(response.headers().size(), std::size_t{2});
@@ -125,8 +112,7 @@ RUVIA_TEST(vary_wildcard_in_later_repeated_field_line_dominates) {
 
 RUVIA_TEST(vary_wildcard_in_batch_dominates_field_names) {
     auto response = makeResponse();
-    const std::string_view batch[] = {
-        "Origin", " * ", "Accept-Encoding"};
+    const std::string_view batch[] = {"Origin", " * ", "Accept-Encoding"};
 
     addVaryTokens(response, batch, 3);
     RUVIA_CHECK_EQ(response.header("Vary"), std::string_view("*"));

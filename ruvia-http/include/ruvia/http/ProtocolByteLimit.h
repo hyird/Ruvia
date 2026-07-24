@@ -19,8 +19,7 @@ public:
 
     [[nodiscard]] static ProtocolByteLimit limited(std::size_t bytes) {
         if (bytes == 0) {
-            throw std::invalid_argument(
-                "protocol byte limit must be greater than zero");
+            throw std::invalid_argument("protocol byte limit must be greater than zero");
         }
         return ProtocolByteLimit(bytes);
     }
@@ -37,14 +36,11 @@ public:
         return maximum_.has_value() && bytes > *maximum_;
     }
 
-    [[nodiscard]] bool additionExceeds(
-        std::size_t current,
-        std::size_t added) const noexcept {
+    [[nodiscard]] bool additionExceeds(std::size_t current, std::size_t added) const noexcept {
         if (added > (std::numeric_limits<std::size_t>::max)() - current) {
             return true;
         }
-        return maximum_.has_value() &&
-            (current > *maximum_ || added > *maximum_ - current);
+        return maximum_.has_value() && (current > *maximum_ || added > *maximum_ - current);
     }
 
     [[nodiscard]] std::size_t readCeiling() const noexcept {

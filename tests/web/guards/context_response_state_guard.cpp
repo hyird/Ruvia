@@ -25,10 +25,7 @@ void check(bool condition) {
     return count;
 }
 
-[[nodiscard]] bool hasHeaderValue(
-    ruvia::HttpResponse& response,
-    std::string_view name,
-    std::string_view value) {
+[[nodiscard]] bool hasHeaderValue(ruvia::HttpResponse& response, std::string_view name, std::string_view value) {
     for (const auto& header : response.headers()) {
         if (header.name() == name && header.value() == value) {
             return true;
@@ -91,18 +88,13 @@ void exerciseSetCookieReplacement(ruvia::RequestMemory& memory, const ruvia::Htt
     check(hasHeaderValue(finalResponse, "Set-Cookie", "theme=dark; Path=/"));
 }
 
-void exercisePendingCookieReplacesRawResponseCookie(
-    ruvia::RequestMemory& memory,
-    const ruvia::HttpRequest& request) {
+void exercisePendingCookieReplacesRawResponseCookie(ruvia::RequestMemory& memory, const ruvia::HttpRequest& request) {
     auto context = ruvia::detail::ContextAccess::make(memory, request);
     context.setCookie("session", "typed", ruvia::CookieOptions{});
 
     ruvia::HttpResponse raw(memory.resource());
     raw.header("Set-Cookie", "session=raw; Path=/");
-    raw.header(
-        "Set-Cookie",
-        "theme=light; Path=/",
-        ruvia::HttpResponse::HeaderOptions{.append = true});
+    raw.header("Set-Cookie", "theme=light; Path=/", ruvia::HttpResponse::HeaderOptions{.append = true});
     ruvia::detail::ContextAccess::setResponse(context, std::move(raw));
     auto response = ruvia::detail::ContextAccess::takeResponse(context);
 
@@ -111,9 +103,7 @@ void exercisePendingCookieReplacesRawResponseCookie(
     check(hasHeaderValue(response, "Set-Cookie", "theme=light; Path=/"));
 }
 
-void exerciseCookieReplacementUsesWireName(
-    ruvia::RequestMemory& memory,
-    const ruvia::HttpRequest& request) {
+void exerciseCookieReplacementUsesWireName(ruvia::RequestMemory& memory, const ruvia::HttpRequest& request) {
     auto context = ruvia::detail::ContextAccess::make(memory, request);
     context.setCookie("session", "bare", ruvia::CookieOptions{});
 
@@ -126,30 +116,21 @@ void exerciseCookieReplacementUsesWireName(
 
     check(countHeaders(response, "Set-Cookie") == 2);
     check(hasHeaderValue(response, "Set-Cookie", "session=bare; Path=/"));
-    check(hasHeaderValue(
-        response,
-        "Set-Cookie",
-        "__Host-session=host-second; Path=/; Secure"));
+    check(hasHeaderValue(response, "Set-Cookie", "__Host-session=host-second; Path=/; Secure"));
 }
 
-void exercisePendingStateMergesIntoRawResponse(
-    ruvia::RequestMemory& memory,
-    const ruvia::HttpRequest& request) {
+void exercisePendingStateMergesIntoRawResponse(ruvia::RequestMemory& memory, const ruvia::HttpRequest& request) {
     auto context = ruvia::detail::ContextAccess::make(memory, request);
     context.status(ruvia::http_status::kNotFound);
     context.header("X-Pending", "yes");
-    ruvia::detail::ContextAccess::setResponse(
-        context,
-        ruvia::HttpResponse(context.resource()));
+    ruvia::detail::ContextAccess::setResponse(context, ruvia::HttpResponse(context.resource()));
     auto response = ruvia::detail::ContextAccess::takeResponse(context);
     // A raw response owns its status, while pending headers still decorate it.
     check(response.status() == ruvia::http_status::kOk);
     check(response.header("X-Pending") == "yes");
 }
 
-void exerciseProvisionalStateMergesIntoAssignedResponse(
-    ruvia::RequestMemory& memory,
-    const ruvia::HttpRequest& request) {
+void exerciseProvisionalStateMergesIntoAssignedResponse(ruvia::RequestMemory& memory, const ruvia::HttpRequest& request) {
     auto context = ruvia::detail::ContextAccess::make(memory, request);
     auto& provisional = ruvia::detail::ContextAccess::responseStorage(context);
     provisional.header("X-Middleware", "yes");
@@ -158,9 +139,7 @@ void exerciseProvisionalStateMergesIntoAssignedResponse(
     check(response != nullptr && response->header("X-Middleware") == "yes");
 }
 
-void exerciseActiveStorageCanFinalizeInPlace(
-    ruvia::RequestMemory& memory,
-    const ruvia::HttpRequest& request) {
+void exerciseActiveStorageCanFinalizeInPlace(ruvia::RequestMemory& memory, const ruvia::HttpRequest& request) {
     auto context = ruvia::detail::ContextAccess::make(memory, request);
     auto& provisional = ruvia::detail::ContextAccess::responseStorage(context);
     provisional.header("X-In-Place", "yes");
@@ -198,21 +177,15 @@ void exerciseRedirectLocationWins(ruvia::RequestMemory& memory, const ruvia::Htt
 void exerciseContextStatusAppliesAsDefault(ruvia::RequestMemory& memory, const ruvia::HttpRequest& request) {
     auto context = ruvia::detail::ContextAccess::make(memory, request);
     context.status(ruvia::http_status::kNotFound);
-    ruvia::detail::ContextAccess::setResponse(
-        context,
-        context.text("not found"));
+    ruvia::detail::ContextAccess::setResponse(context, context.text("not found"));
     auto response = ruvia::detail::ContextAccess::takeResponse(context);
     check(response.status() == ruvia::http_status::kNotFound);
 }
 
-void exerciseRawResponseStatusIsNotReinterpreted(
-    ruvia::RequestMemory& memory,
-    const ruvia::HttpRequest& request) {
+void exerciseRawResponseStatusIsNotReinterpreted(ruvia::RequestMemory& memory, const ruvia::HttpRequest& request) {
     auto context = ruvia::detail::ContextAccess::make(memory, request);
     context.status(ruvia::http_status::kNotFound);
-    ruvia::detail::ContextAccess::setResponse(
-        context,
-        ruvia::HttpResponse(context.resource()));
+    ruvia::detail::ContextAccess::setResponse(context, ruvia::HttpResponse(context.resource()));
     auto response = ruvia::detail::ContextAccess::takeResponse(context);
     check(response.status() == ruvia::http_status::kOk);
 }

@@ -20,10 +20,10 @@ class RouteEntry;
 
 class RouteMatch final {
 public:
-    [[nodiscard]] std::span<const std::string_view> values() const & noexcept {
+    [[nodiscard]] std::span<const std::string_view> values() const& noexcept {
         return std::span<const std::string_view>(paramValues_.data(), paramCount_);
     }
-    [[nodiscard]] std::span<const std::string_view> values() const && = delete;
+    [[nodiscard]] std::span<const std::string_view> values() const&& = delete;
 
     [[nodiscard]] std::size_t size() const noexcept {
         return paramCount_;
@@ -66,8 +66,7 @@ public:
 private:
     friend class RouteResolution;
 
-    explicit constexpr RouteMethodNotAllowed(
-        std::uint32_t allowedMethods) noexcept
+    explicit constexpr RouteMethodNotAllowed(std::uint32_t allowedMethods) noexcept
         : allowedMethods_(allowedMethods) {}
 
     std::uint32_t allowedMethods_;
@@ -82,16 +81,17 @@ public:
     // Static routes carry an empty match; dynamic routes carry their captured
     // values in the same value object. Callers never need a nullable match side
     // channel.
-    [[nodiscard]] const RouteMatch& match() const & noexcept {
+    [[nodiscard]] const RouteMatch& match() const& noexcept {
         return match_;
     }
-    [[nodiscard]] const RouteMatch& match() const && = delete;
+    [[nodiscard]] const RouteMatch& match() const&& = delete;
 
 private:
     friend class RouteResolution;
 
     ResolvedRoute(const RouteEntry& route, RouteMatch match) noexcept
-        : route_(&route), match_(std::move(match)) {}
+        : route_(&route),
+          match_(std::move(match)) {}
 
     const RouteEntry* route_;
     RouteMatch match_;
@@ -102,42 +102,34 @@ public:
     RouteResolution() noexcept
         : value_(RouteNotFound{}) {}
 
-    [[nodiscard]] static RouteResolution resolved(
-        const RouteEntry& route,
-        RouteMatch match = {}) noexcept {
+    [[nodiscard]] static RouteResolution resolved(const RouteEntry& route, RouteMatch match = {}) noexcept {
         return RouteResolution(ResolvedRoute(route, std::move(match)));
     }
 
-    [[nodiscard]] static RouteResolution methodNotAllowed(
-        std::uint32_t allowedMethods) noexcept {
+    [[nodiscard]] static RouteResolution methodNotAllowed(std::uint32_t allowedMethods) noexcept {
         if (allowedMethods == 0) {
             return RouteResolution();
         }
         return RouteResolution(RouteMethodNotAllowed(allowedMethods));
     }
 
-    [[nodiscard]] const ResolvedRoute* resolved() const & noexcept {
+    [[nodiscard]] const ResolvedRoute* resolved() const& noexcept {
         return std::get_if<ResolvedRoute>(&value_);
     }
-    [[nodiscard]] const ResolvedRoute* resolved() const && = delete;
+    [[nodiscard]] const ResolvedRoute* resolved() const&& = delete;
 
-    [[nodiscard]] const RouteMethodNotAllowed*
-    methodNotAllowed() const & noexcept {
+    [[nodiscard]] const RouteMethodNotAllowed* methodNotAllowed() const& noexcept {
         return std::get_if<RouteMethodNotAllowed>(&value_);
     }
-    [[nodiscard]] const RouteMethodNotAllowed*
-    methodNotAllowed() const && = delete;
+    [[nodiscard]] const RouteMethodNotAllowed* methodNotAllowed() const&& = delete;
 
-    [[nodiscard]] const RouteNotFound* notFound() const & noexcept {
+    [[nodiscard]] const RouteNotFound* notFound() const& noexcept {
         return std::get_if<RouteNotFound>(&value_);
     }
-    [[nodiscard]] const RouteNotFound* notFound() const && = delete;
+    [[nodiscard]] const RouteNotFound* notFound() const&& = delete;
 
 private:
-    using Value = std::variant<
-        RouteNotFound,
-        RouteMethodNotAllowed,
-        ResolvedRoute>;
+    using Value = std::variant<RouteNotFound, RouteMethodNotAllowed, ResolvedRoute>;
 
     template <typename Alternative>
     explicit RouteResolution(Alternative alternative) noexcept

@@ -29,10 +29,8 @@ public:
 
     [[nodiscard]] static StaticFileTypePolicy defaults();
     [[nodiscard]] static StaticFileTypePolicy all();
-    [[nodiscard]] static StaticFileTypePolicy only(
-        std::span<const std::string_view> extensions);
-    [[nodiscard]] static StaticFileTypePolicy only(
-        std::initializer_list<std::string_view> extensions) {
+    [[nodiscard]] static StaticFileTypePolicy only(std::span<const std::string_view> extensions);
+    [[nodiscard]] static StaticFileTypePolicy only(std::initializer_list<std::string_view> extensions) {
         return only(std::span<const std::string_view>(extensions.begin(), extensions.size()));
     }
 
@@ -40,13 +38,14 @@ public:
         return kind_;
     }
 
-    [[nodiscard]] constexpr std::span<const std::pmr::string> extensions() const & noexcept {
+    [[nodiscard]] constexpr std::span<const std::pmr::string> extensions() const& noexcept {
         return extensions_;
     }
-    std::span<const std::pmr::string> extensions() const && = delete;
+    std::span<const std::pmr::string> extensions() const&& = delete;
 
 private:
-    explicit StaticFileTypePolicy(Kind kind) : kind_(kind) {}
+    explicit StaticFileTypePolicy(Kind kind)
+        : kind_(kind) {}
 
     Kind kind_;
     std::pmr::vector<std::pmr::string> extensions_;

@@ -24,7 +24,7 @@ class WorkerShutdownListener;
 // pooled loop records it as the pool's first failure, which join() rethrows;
 // an attached loop has no such owner and leaves the sink empty.
 using EventLoopFailureSink = std::function<void(std::exception_ptr)>;
-}
+}  // namespace detail
 
 class EventLoopStopRegistration final {
 public:
@@ -40,8 +40,7 @@ public:
     void reset() noexcept;
 
 private:
-    explicit EventLoopStopRegistration(
-        std::shared_ptr<detail::WorkerShutdownListener> listener) noexcept;
+    explicit EventLoopStopRegistration(std::shared_ptr<detail::WorkerShutdownListener> listener) noexcept;
 
     std::shared_ptr<detail::WorkerShutdownListener> listener_;
     friend class EventLoop;
@@ -69,14 +68,12 @@ public:
     template <typename Fn>
         requires std::invocable<std::decay_t<Fn>&>
     [[nodiscard]] EventLoopStopRegistration onStop(Fn&& fn) const {
-        return registerStopCallback(
-            MoveOnlyFunction<void()>(std::forward<Fn>(fn)));
+        return registerStopCallback(MoveOnlyFunction<void()>(std::forward<Fn>(fn)));
     }
 
 private:
     explicit EventLoop(std::shared_ptr<detail::EventLoopState> state) noexcept;
-    [[nodiscard]] EventLoopStopRegistration registerStopCallback(
-        MoveOnlyFunction<void()> callback) const;
+    [[nodiscard]] EventLoopStopRegistration registerStopCallback(MoveOnlyFunction<void()> callback) const;
 
     std::shared_ptr<detail::EventLoopState> state_;
     friend class EventLoopPool;
@@ -114,20 +111,16 @@ public:
     void stop() noexcept;
 
 private:
-    explicit EventLoopAttachment(
-        std::shared_ptr<detail::EventLoopState> state) noexcept;
+    explicit EventLoopAttachment(std::shared_ptr<detail::EventLoopState> state) noexcept;
 
     std::shared_ptr<detail::EventLoopState> state_;
-    friend EventLoopAttachment attachEventLoop(
-        asio::io_context&, EventLoopAttachmentOptions);
+    friend EventLoopAttachment attachEventLoop(asio::io_context&, EventLoopAttachmentOptions);
 };
 
 // Attach a Ruvia worker to a caller-owned io_context. The caller drives the
 // context with run() on exactly one thread. See EventLoopAttachment for the
 // teardown ordering the caller must honor before destroying the returned handle.
-[[nodiscard]] EventLoopAttachment attachEventLoop(
-    asio::io_context& ioContext,
-    EventLoopAttachmentOptions options = {});
+[[nodiscard]] EventLoopAttachment attachEventLoop(asio::io_context& ioContext, EventLoopAttachmentOptions options = {});
 
 struct EventLoopPoolOptions final {
     std::size_t loopCount{0};
@@ -163,4 +156,4 @@ private:
     std::unique_ptr<Impl> impl_;
 };
 
-}
+}  // namespace ruvia

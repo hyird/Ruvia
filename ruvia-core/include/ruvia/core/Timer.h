@@ -12,7 +12,6 @@ namespace ruvia {
 // shutdown (stopTimers). A periodic loop should check the result and stop on
 // false: calling sleepFor again after the worker's timer queue is stopping
 // throws std::runtime_error from the scheduler.
-[[nodiscard]] Task<bool>
-sleepFor(WorkerHandle worker, std::chrono::steady_clock::duration duration);
+[[nodiscard]] Task<bool> sleepFor(WorkerHandle worker, std::chrono::steady_clock::duration duration);
 
-}
+}  // namespace ruvia

@@ -48,24 +48,20 @@ public:
     }
 
     [[nodiscard]] constexpr std::optional<std::uint16_t> port() const noexcept {
-        return portKind_ == HttpAuthorityPortKind::kValue
-            ? std::optional<std::uint16_t>(port_)
-            : std::nullopt;
+        return portKind_ == HttpAuthorityPortKind::kValue ? std::optional<std::uint16_t>(port_) : std::nullopt;
     }
 
-    [[nodiscard]] constexpr std::uint16_t effectivePort(
-        std::uint16_t defaultPort) const noexcept {
+    [[nodiscard]] constexpr std::uint16_t effectivePort(std::uint16_t defaultPort) const noexcept {
         return portKind_ == HttpAuthorityPortKind::kValue ? port_ : defaultPort;
     }
 
 private:
     friend struct HttpAuthorityViewAccess;
 
-    constexpr HttpAuthorityView(
-        std::string_view host,
-        HttpAuthorityPortKind portKind,
-        std::uint16_t port) noexcept
-        : host_(host), port_(port), portKind_(portKind) {}
+    constexpr HttpAuthorityView(std::string_view host, HttpAuthorityPortKind portKind, std::uint16_t port) noexcept
+        : host_(host),
+          port_(port),
+          portKind_(portKind) {}
 
     std::string_view host_;
     std::uint16_t port_{0};
@@ -82,17 +78,13 @@ private:
 [[nodiscard]] bool isValidUriScheme(std::string_view value) noexcept;
 // Returns the HTTP-defined default for http/https (case-insensitively), or 0
 // when the framework does not know a default port for the valid URI scheme.
-[[nodiscard]] std::uint16_t httpUriSchemeDefaultPort(
-    std::string_view scheme) noexcept;
+[[nodiscard]] std::uint16_t httpUriSchemeDefaultPort(std::string_view scheme) noexcept;
 
 // Strict origin-form starts with '/'. Asterisk-form is a separate target form
 // and is exposed explicitly so callers cannot lose its OPTIONS-only contract.
 [[nodiscard]] bool isValidOriginFormTarget(std::string_view target) noexcept;
-[[nodiscard]] bool isValidOriginOrAsteriskFormTarget(
-    std::string_view target) noexcept;
-[[nodiscard]] bool isValidOriginOrAsteriskFormTarget(
-    HttpKnownMethod method,
-    std::string_view target) noexcept;
+[[nodiscard]] bool isValidOriginOrAsteriskFormTarget(std::string_view target) noexcept;
+[[nodiscard]] bool isValidOriginOrAsteriskFormTarget(HttpKnownMethod method, std::string_view target) noexcept;
 
 // Host field syntax. An empty field is valid when the target URI has no
 // authority (RFC 9112 section 3.2); callers that require a usable HTTP origin
@@ -106,25 +98,13 @@ private:
 // standard bracketed form; IPv6 zone identifiers are not URI syntax (RFC 9844
 // reverted RFC 6874), while IPvFuture remains valid.
 [[nodiscard]] bool isValidHttpHost(std::string_view value) noexcept;
-[[nodiscard]] std::optional<HttpAuthorityView> parseHttpAuthority(
-    std::string_view value) noexcept;
+[[nodiscard]] std::optional<HttpAuthorityView> parseHttpAuthority(std::string_view value) noexcept;
 template <HttpTemporaryOwningCharString Value>
 std::optional<HttpAuthorityView> parseHttpAuthority(Value&&) = delete;
-[[nodiscard]] bool httpUriHostEquals(
-    std::string_view left,
-    std::string_view right) noexcept;
-[[nodiscard]] bool parseRequestTarget(
-    HttpKnownMethod method,
-    std::string_view target,
-    RequestTargetView& output) noexcept;
+[[nodiscard]] bool httpUriHostEquals(std::string_view left, std::string_view right) noexcept;
+[[nodiscard]] bool parseRequestTarget(HttpKnownMethod method, std::string_view target, RequestTargetView& output) noexcept;
 template <HttpTemporaryOwningCharString Target>
-bool parseRequestTarget(
-    HttpKnownMethod,
-    Target&&,
-    RequestTargetView&) = delete;
-[[nodiscard]] bool authorityMatchesHost(
-    std::string_view authority,
-    std::string_view host,
-    std::uint16_t defaultPort) noexcept;
+bool parseRequestTarget(HttpKnownMethod, Target&&, RequestTargetView&) = delete;
+[[nodiscard]] bool authorityMatchesHost(std::string_view authority, std::string_view host, std::uint16_t defaultPort) noexcept;
 
 }  // namespace ruvia::detail

@@ -24,8 +24,7 @@ class ManualOwner final {
 public:
     struct promise_type {
         [[nodiscard]] ManualOwner get_return_object() noexcept {
-            return ManualOwner(
-                std::coroutine_handle<promise_type>::from_promise(*this));
+            return ManualOwner(std::coroutine_handle<promise_type>::from_promise(*this));
         }
         [[nodiscard]] std::suspend_always initial_suspend() const noexcept {
             return {};

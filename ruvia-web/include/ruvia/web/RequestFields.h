@@ -50,25 +50,25 @@ public:
     RequestNameValueList(RequestNameValueList&&) noexcept = default;
     RequestNameValueList& operator=(RequestNameValueList&&) = delete;
 
-    [[nodiscard]] const_iterator begin() const & noexcept {
+    [[nodiscard]] const_iterator begin() const& noexcept {
         return items_.data();
     }
-    [[nodiscard]] const_iterator begin() const && = delete;
+    [[nodiscard]] const_iterator begin() const&& = delete;
 
-    [[nodiscard]] const_iterator cbegin() const & noexcept {
+    [[nodiscard]] const_iterator cbegin() const& noexcept {
         return begin();
     }
-    [[nodiscard]] const_iterator cbegin() const && = delete;
+    [[nodiscard]] const_iterator cbegin() const&& = delete;
 
-    [[nodiscard]] const_iterator end() const & noexcept {
+    [[nodiscard]] const_iterator end() const& noexcept {
         return items_.data() + items_.size();
     }
-    [[nodiscard]] const_iterator end() const && = delete;
+    [[nodiscard]] const_iterator end() const&& = delete;
 
-    [[nodiscard]] const_iterator cend() const & noexcept {
+    [[nodiscard]] const_iterator cend() const& noexcept {
         return end();
     }
-    [[nodiscard]] const_iterator cend() const && = delete;
+    [[nodiscard]] const_iterator cend() const&& = delete;
 
     [[nodiscard]] std::size_t size() const noexcept {
         return items_.size();
@@ -78,17 +78,15 @@ public:
         return items_.empty();
     }
 
-    [[nodiscard]] const RequestNameValueView* data() const & noexcept {
+    [[nodiscard]] const RequestNameValueView* data() const& noexcept {
         return items_.data();
     }
-    [[nodiscard]] const RequestNameValueView* data() const && = delete;
+    [[nodiscard]] const RequestNameValueView* data() const&& = delete;
 
-    [[nodiscard]] const RequestNameValueView&
-    operator[](std::size_t index) const & noexcept {
+    [[nodiscard]] const RequestNameValueView& operator[](std::size_t index) const& noexcept {
         return items_[index];
     }
-    [[nodiscard]] const RequestNameValueView&
-    operator[](std::size_t) const && = delete;
+    [[nodiscard]] const RequestNameValueView& operator[](std::size_t) const&& = delete;
 
     // Duplicate fields are preserved in materialization order; scalar lookup uses
     // the last occurrence, matching Context request parsing semantics.
@@ -111,10 +109,10 @@ public:
         return result;
     }
 
-    [[nodiscard]] std::span<const RequestNameValueView> entries() const & noexcept {
+    [[nodiscard]] std::span<const RequestNameValueView> entries() const& noexcept {
         return items_;
     }
-    [[nodiscard]] std::span<const RequestNameValueView> entries() const && = delete;
+    [[nodiscard]] std::span<const RequestNameValueView> entries() const&& = delete;
 
 private:
     friend struct detail::RequestNameValueListAccess;

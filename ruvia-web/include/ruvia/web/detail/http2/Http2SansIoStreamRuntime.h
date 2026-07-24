@@ -22,24 +22,22 @@
 
 namespace ruvia::detail {
 
-
-
 class Http2SansIoSelectedRoute final {
 public:
-    [[nodiscard]] const RouteResolution& resolution() const & noexcept {
+    [[nodiscard]] const RouteResolution& resolution() const& noexcept {
         return resolution_;
     }
-    const RouteResolution& resolution() const && = delete;
+    const RouteResolution& resolution() const&& = delete;
 
     [[nodiscard]] Http2RequestBodyRuntime& body() & noexcept {
         return body_;
     }
     Http2RequestBodyRuntime& body() && = delete;
 
-    [[nodiscard]] const Http2RequestBodyRuntime& body() const & noexcept {
+    [[nodiscard]] const Http2RequestBodyRuntime& body() const& noexcept {
         return body_;
     }
-    const Http2RequestBodyRuntime& body() const && = delete;
+    const Http2RequestBodyRuntime& body() const&& = delete;
 
     [[nodiscard]] bool dispatched() const noexcept {
         return signal() != nullptr;
@@ -50,10 +48,10 @@ public:
     }
     [[nodiscard]] Http2SansIoStreamSignal* signal() && = delete;
 
-    [[nodiscard]] const Http2SansIoStreamSignal* signal() const & noexcept {
+    [[nodiscard]] const Http2SansIoStreamSignal* signal() const& noexcept {
         return std::get_if<Http2SansIoStreamSignal>(&dispatch_);
     }
-    [[nodiscard]] const Http2SansIoStreamSignal* signal() const && = delete;
+    [[nodiscard]] const Http2SansIoStreamSignal* signal() const&& = delete;
 
 private:
     friend class Http2SansIoStreamRuntime;
@@ -63,23 +61,15 @@ private:
     struct Token final {};
     struct AwaitingDispatch final {};
 
-    using DispatchState = std::variant<
-        AwaitingDispatch,
-        Http2SansIoStreamSignal>;
+    using DispatchState = std::variant<AwaitingDispatch, Http2SansIoStreamSignal>;
 
 public:
-    Http2SansIoSelectedRoute(
-        Token,
-        RouteResolution resolution,
-        RequestBodyMode bodyMode,
-        std::pmr::memory_resource* resource) noexcept
+    Http2SansIoSelectedRoute(Token, RouteResolution resolution, RequestBodyMode bodyMode, std::pmr::memory_resource* resource) noexcept
         : resolution_(std::move(resolution)),
           body_(bodyMode, resource) {}
 
 private:
-    [[nodiscard]] Http2SansIoStreamSignal* beginDispatch(
-        const WorkerHandle& worker,
-        Http2SansIoTermination& termination) {
+    [[nodiscard]] Http2SansIoStreamSignal* beginDispatch(const WorkerHandle& worker, Http2SansIoTermination& termination) {
         if (dispatched()) {
             return nullptr;
         }
@@ -94,26 +84,19 @@ private:
 
 class Http2SansIoStreamRuntime final {
 public:
-    Http2SansIoStreamRuntime(
-        std::uint32_t streamId,
-        std::pmr::memory_resource* resource)
-        : streamId_(streamId), resource_(pmrResourceOrDefault(resource)) {}
+    Http2SansIoStreamRuntime(std::uint32_t streamId, std::pmr::memory_resource* resource)
+        : streamId_(streamId),
+          resource_(pmrResourceOrDefault(resource)) {}
 
     [[nodiscard]] std::uint32_t streamId() const noexcept {
         return streamId_;
     }
 
-    [[nodiscard]] bool selectRoute(
-        RouteResolution resolution,
-        RequestBodyMode bodyMode) noexcept {
+    [[nodiscard]] bool selectRoute(RouteResolution resolution, RequestBodyMode bodyMode) noexcept {
         if (selectedRoute_) {
             return false;
         }
-        selectedRoute_.emplace(
-            Http2SansIoSelectedRoute::Token{},
-            std::move(resolution),
-            bodyMode,
-            resource_);
+        selectedRoute_.emplace(Http2SansIoSelectedRoute::Token{}, std::move(resolution), bodyMode, resource_);
         return true;
     }
 
@@ -122,11 +105,10 @@ public:
     }
     Http2SansIoSelectedRoute* selectedRoute() && = delete;
 
-    [[nodiscard]] const Http2SansIoSelectedRoute*
-    selectedRoute() const & noexcept {
+    [[nodiscard]] const Http2SansIoSelectedRoute* selectedRoute() const& noexcept {
         return selectedRoute_ ? &*selectedRoute_ : nullptr;
     }
-    const Http2SansIoSelectedRoute* selectedRoute() const && = delete;
+    const Http2SansIoSelectedRoute* selectedRoute() const&& = delete;
 
     [[nodiscard]] bool dispatched() const noexcept {
         const auto* selected = selectedRoute();
@@ -146,13 +128,9 @@ public:
 private:
     friend class Http2SansIoStreamRuntimeTable;
 
-    [[nodiscard]] Http2SansIoStreamSignal* beginDispatch(
-        const WorkerHandle& worker,
-        Http2SansIoTermination& termination) {
+    [[nodiscard]] Http2SansIoStreamSignal* beginDispatch(const WorkerHandle& worker, Http2SansIoTermination& termination) {
         auto* selected = selectedRoute();
-        return selected != nullptr
-            ? selected->beginDispatch(worker, termination)
-            : nullptr;
+        return selected != nullptr ? selected->beginDispatch(worker, termination) : nullptr;
     }
 
     std::uint32_t streamId_;
@@ -167,15 +145,12 @@ private:
 // handler is scheduled and released only when that same runtime is removed.
 class Http2SansIoStreamRuntimeTable final {
 public:
-    explicit Http2SansIoStreamRuntimeTable(
-        std::pmr::memory_resource* resource,
-        Http2SansIoTermination& termination)
+    explicit Http2SansIoStreamRuntimeTable(std::pmr::memory_resource* resource, Http2SansIoTermination& termination)
         : resource_(pmrResourceOrDefault(resource)),
           termination_(termination),
           overflow_(resource_) {}
 
-    [[nodiscard]] Http2SansIoStreamRuntime* find(
-        std::uint32_t streamId) noexcept {
+    [[nodiscard]] Http2SansIoStreamRuntime* find(std::uint32_t streamId) noexcept {
         for (auto& slot : inline_) {
             if (slot && slot->streamId() == streamId) {
                 return &*slot;
@@ -191,14 +166,12 @@ public:
 
     // The dispatch signal of a stream that has one. A stream with no runtime,
     // or one admitted but not yet dispatched, has nothing to wake.
-    [[nodiscard]] Http2SansIoStreamSignal* signalFor(
-        std::uint32_t streamId) noexcept {
+    [[nodiscard]] Http2SansIoStreamSignal* signalFor(std::uint32_t streamId) noexcept {
         auto* runtime = find(streamId);
         return runtime != nullptr ? runtime->signal() : nullptr;
     }
 
-    [[nodiscard]] const Http2SansIoStreamRuntime* find(
-        std::uint32_t streamId) const noexcept {
+    [[nodiscard]] const Http2SansIoStreamRuntime* find(std::uint32_t streamId) const noexcept {
         for (const auto& slot : inline_) {
             if (slot && slot->streamId() == streamId) {
                 return &*slot;
@@ -216,8 +189,7 @@ public:
     // Http2StreamState. This table only attaches application runtime state; it
     // must not reapply the protocol's concurrent-stream limit or manufacture a
     // nullable second admission result.
-    [[nodiscard]] Http2SansIoStreamRuntime& ensureAccepted(
-        const Http2StreamState& acceptedStream) {
+    [[nodiscard]] Http2SansIoStreamRuntime& ensureAccepted(const Http2StreamState& acceptedStream) {
         const auto streamId = acceptedStream.id();
         if (auto* existing = find(streamId)) {
             return *existing;
@@ -229,17 +201,14 @@ public:
                 return *slot;
             }
         }
-        auto runtime = makePmrObject<Http2SansIoStreamRuntime>(
-            resource_, streamId, resource_);
+        auto runtime = makePmrObject<Http2SansIoStreamRuntime>(resource_, streamId, resource_);
         auto* result = runtime.get();
         overflow_.push_back(std::move(runtime));
         ++size_;
         return *result;
     }
 
-    [[nodiscard]] Http2SansIoStreamSignal* beginDispatch(
-        std::uint32_t streamId,
-        const WorkerHandle& worker) {
+    [[nodiscard]] Http2SansIoStreamSignal* beginDispatch(std::uint32_t streamId, const WorkerHandle& worker) {
         auto* runtime = find(streamId);
         if (runtime == nullptr) {
             return nullptr;
@@ -250,9 +219,7 @@ public:
         }
         return signal;
     }
-    Http2SansIoStreamSignal* beginDispatch(
-        std::uint32_t,
-        WorkerHandle&&) = delete;
+    Http2SansIoStreamSignal* beginDispatch(std::uint32_t, WorkerHandle&&) = delete;
 
     [[nodiscard]] bool remove(std::uint32_t streamId) noexcept {
         for (auto& slot : inline_) {
@@ -264,8 +231,7 @@ public:
             }
         }
         for (std::size_t i = 0; i < overflow_.size(); ++i) {
-            if (overflow_[i] == nullptr ||
-                overflow_[i]->streamId() != streamId) {
+            if (overflow_[i] == nullptr || overflow_[i]->streamId() != streamId) {
                 continue;
             }
             accountRemoval(*overflow_[i]);
@@ -306,12 +272,9 @@ private:
     // typical cadence, pmr overflow for deeper multiplexing, so the table's
     // resident footprint stays small in every connection.
     static constexpr std::size_t kInlineCapacity = 2;
-    using OverflowRuntime = std::unique_ptr<
-        Http2SansIoStreamRuntime,
-        PmrObjectDeleter<Http2SansIoStreamRuntime>>;
+    using OverflowRuntime = std::unique_ptr<Http2SansIoStreamRuntime, PmrObjectDeleter<Http2SansIoStreamRuntime>>;
 
-    void accountRemoval(
-        const Http2SansIoStreamRuntime& runtime) noexcept {
+    void accountRemoval(const Http2SansIoStreamRuntime& runtime) noexcept {
         if (runtime.dispatched()) {
             --dispatchedCount_;
         }
@@ -319,8 +282,7 @@ private:
 
     std::pmr::memory_resource* resource_;
     Http2SansIoTermination& termination_;
-    std::array<std::optional<Http2SansIoStreamRuntime>,
-               kInlineCapacity> inline_{};
+    std::array<std::optional<Http2SansIoStreamRuntime>, kInlineCapacity> inline_{};
     std::pmr::vector<OverflowRuntime> overflow_;
     std::size_t size_{0};
     std::size_t dispatchedCount_{0};

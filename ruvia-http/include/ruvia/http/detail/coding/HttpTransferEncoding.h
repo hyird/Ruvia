@@ -12,15 +12,12 @@
 
 namespace ruvia::detail {
 
-[[nodiscard]] inline bool httpValidTransferParameterValue(
-    std::string_view value) noexcept {
+[[nodiscard]] inline bool httpValidTransferParameterValue(std::string_view value) noexcept {
     if (value.empty()) {
         return false;
     }
     if (value.front() != '"') {
-        return std::ranges::all_of(value, [](char byte) noexcept {
-            return isHttpTokenChar(static_cast<unsigned char>(byte));
-        });
+        return std::ranges::all_of(value, [](char byte) noexcept { return isHttpTokenChar(static_cast<unsigned char>(byte)); });
     }
     if (value.size() < 2 || value.back() != '"') {
         return false;
@@ -33,24 +30,17 @@ namespace ruvia::detail {
                 return false;
             }
             byte = static_cast<unsigned char>(value[cursor]);
-            if (byte != '\t' && byte != ' ' &&
-                (byte < 0x21 || byte > 0x7e) && byte < 0x80) {
+            if (byte != '\t' && byte != ' ' && (byte < 0x21 || byte > 0x7e) && byte < 0x80) {
                 return false;
             }
-        } else if (byte == '"' ||
-                   (byte != '\t' && byte != ' ' && byte != 0x21 &&
-                    (byte < 0x23 || byte > 0x5b) &&
-                    (byte < 0x5d || byte > 0x7e) && byte < 0x80)) {
+        } else if (byte == '"' || (byte != '\t' && byte != ' ' && byte != 0x21 && (byte < 0x23 || byte > 0x5b) && (byte < 0x5d || byte > 0x7e) && byte < 0x80)) {
             return false;
         }
     }
     return true;
 }
 
-[[nodiscard]] inline bool httpParseTransferCodingSyntax(
-    std::string_view item,
-    std::string_view& coding,
-    bool& hasParameters) noexcept {
+[[nodiscard]] inline bool httpParseTransferCodingSyntax(std::string_view item, std::string_view& coding, bool& hasParameters) noexcept {
     const auto firstSemicolon = httpFindUnquotedDelimiter(item, 0, ';');
     coding = httpTrimOws(item.substr(0, firstSemicolon));
     if (coding.empty()) {
@@ -93,11 +83,7 @@ namespace ruvia::detail {
 template <HttpTemporaryOwningCharString Item>
 bool httpParseTransferCodingSyntax(Item&&, std::string_view&, bool&) = delete;
 
-enum class HttpTransferEncodingParseStatus : std::uint8_t {
-    kOk,
-    kMalformed,
-    kUnsupported
-};
+enum class HttpTransferEncodingParseStatus : std::uint8_t { kOk, kMalformed, kUnsupported };
 
 class HttpNonChunkedTransferEncoding final {
 public:
@@ -108,8 +94,7 @@ public:
 private:
     friend class HttpTransferEncodingValue;
 
-    explicit HttpNonChunkedTransferEncoding(
-        HttpTransferCodings transferCodings) noexcept
+    explicit HttpNonChunkedTransferEncoding(HttpTransferCodings transferCodings) noexcept
         : transferCodings_(transferCodings) {}
 
     HttpTransferCodings transferCodings_;
@@ -124,8 +109,7 @@ public:
 private:
     friend class HttpTransferEncodingValue;
 
-    explicit HttpFinalChunkedTransferEncoding(
-        HttpTransferCodings transferCodings) noexcept
+    explicit HttpFinalChunkedTransferEncoding(HttpTransferCodings transferCodings) noexcept
         : transferCodings_(transferCodings) {}
 
     HttpTransferCodings transferCodings_;
@@ -133,43 +117,33 @@ private:
 
 class HttpTransferEncodingValue final {
 public:
-    [[nodiscard]] const HttpNonChunkedTransferEncoding*
-    nonChunked() const & noexcept {
+    [[nodiscard]] const HttpNonChunkedTransferEncoding* nonChunked() const& noexcept {
         return std::get_if<HttpNonChunkedTransferEncoding>(&value_);
     }
-    const HttpNonChunkedTransferEncoding* nonChunked() const && = delete;
+    const HttpNonChunkedTransferEncoding* nonChunked() const&& = delete;
 
-    [[nodiscard]] const HttpFinalChunkedTransferEncoding*
-    finalChunked() const & noexcept {
+    [[nodiscard]] const HttpFinalChunkedTransferEncoding* finalChunked() const& noexcept {
         return std::get_if<HttpFinalChunkedTransferEncoding>(&value_);
     }
-    const HttpFinalChunkedTransferEncoding* finalChunked() const && = delete;
+    const HttpFinalChunkedTransferEncoding* finalChunked() const&& = delete;
 
 private:
     friend class HttpTransferEncodingState;
 
-    using Value = std::variant<
-        HttpNonChunkedTransferEncoding,
-        HttpFinalChunkedTransferEncoding>;
+    using Value = std::variant<HttpNonChunkedTransferEncoding, HttpFinalChunkedTransferEncoding>;
 
-    [[nodiscard]] static HttpTransferEncodingValue makeNonChunked(
-        HttpTransferCodings transferCodings) noexcept {
-        return HttpTransferEncodingValue(
-            HttpNonChunkedTransferEncoding(transferCodings));
+    [[nodiscard]] static HttpTransferEncodingValue makeNonChunked(HttpTransferCodings transferCodings) noexcept {
+        return HttpTransferEncodingValue(HttpNonChunkedTransferEncoding(transferCodings));
     }
 
-    [[nodiscard]] static HttpTransferEncodingValue makeFinalChunked(
-        HttpTransferCodings transferCodings) noexcept {
-        return HttpTransferEncodingValue(
-            HttpFinalChunkedTransferEncoding(transferCodings));
+    [[nodiscard]] static HttpTransferEncodingValue makeFinalChunked(HttpTransferCodings transferCodings) noexcept {
+        return HttpTransferEncodingValue(HttpFinalChunkedTransferEncoding(transferCodings));
     }
 
-    explicit HttpTransferEncodingValue(
-        HttpNonChunkedTransferEncoding value) noexcept
+    explicit HttpTransferEncodingValue(HttpNonChunkedTransferEncoding value) noexcept
         : value_(value) {}
 
-    explicit HttpTransferEncodingValue(
-        HttpFinalChunkedTransferEncoding value) noexcept
+    explicit HttpTransferEncodingValue(HttpFinalChunkedTransferEncoding value) noexcept
         : value_(value) {}
 
     Value value_;
@@ -182,8 +156,7 @@ private:
 // absent field, a non-chunked coding sequence, and a final-chunked sequence.
 class HttpTransferEncodingState final {
 public:
-    [[nodiscard]] HttpTransferEncodingParseStatus parseField(
-        std::string_view fieldValue) noexcept {
+    [[nodiscard]] HttpTransferEncodingParseStatus parseField(std::string_view fieldValue) noexcept {
         auto next = value_;
         HttpTransferCodings codings;
         bool finalChunked = false;
@@ -198,66 +171,58 @@ public:
 
         auto status = HttpTransferEncodingParseStatus::kOk;
         bool sawItem = false;
-        httpVisitCommaSeparatedQuotedItems(
-            fieldValue,
-            [&codings, &finalChunked, &status, &sawItem](
-                std::string_view item) noexcept {
-                sawItem = true;
-                std::string_view coding;
-                bool hasParameters = false;
-                if (finalChunked ||
-                    !httpParseTransferCodingSyntax(item, coding, hasParameters)) {
+        httpVisitCommaSeparatedQuotedItems(fieldValue, [&codings, &finalChunked, &status, &sawItem](std::string_view item) noexcept {
+            sawItem = true;
+            std::string_view coding;
+            bool hasParameters = false;
+            if (finalChunked || !httpParseTransferCodingSyntax(item, coding, hasParameters)) {
+                status = HttpTransferEncodingParseStatus::kMalformed;
+                return false;
+            }
+            // RFC 9112 section 7.2: chunked and the compression transfer
+            // codings define no parameters. Unknown codings can define them,
+            // so valid extension syntax remains "unsupported", not malformed.
+            if (httpAsciiEqualsIgnoreCase(coding, "chunked")) {
+                if (hasParameters) {
                     status = HttpTransferEncodingParseStatus::kMalformed;
                     return false;
                 }
-                // RFC 9112 section 7.2: chunked and the compression transfer
-                // codings define no parameters. Unknown codings can define them,
-                // so valid extension syntax remains "unsupported", not malformed.
-                if (httpAsciiEqualsIgnoreCase(coding, "chunked")) {
-                    if (hasParameters) {
-                        status = HttpTransferEncodingParseStatus::kMalformed;
-                        return false;
-                    }
-                    finalChunked = true;
-                    return true;
-                }
-                if (codings.count == kMaxTransferCodings) {
-                    status = HttpTransferEncodingParseStatus::kUnsupported;
-                    return false;
-                }
-                if (httpAsciiEqualsIgnoreCase(coding, "gzip") ||
-                    httpAsciiEqualsIgnoreCase(coding, "x-gzip")) {
-                    if (hasParameters) {
-                        status = HttpTransferEncodingParseStatus::kMalformed;
-                        return false;
-                    }
-                    codings.values[codings.count++] = HttpTransferCoding::kGzip;
-                    return true;
-                }
-                if (httpAsciiEqualsIgnoreCase(coding, "deflate")) {
-                    if (hasParameters) {
-                        status = HttpTransferEncodingParseStatus::kMalformed;
-                        return false;
-                    }
-                    codings.values[codings.count++] = HttpTransferCoding::kDeflate;
-                    return true;
-                }
+                finalChunked = true;
+                return true;
+            }
+            if (codings.count == kMaxTransferCodings) {
                 status = HttpTransferEncodingParseStatus::kUnsupported;
                 return false;
-            });
+            }
+            if (httpAsciiEqualsIgnoreCase(coding, "gzip") || httpAsciiEqualsIgnoreCase(coding, "x-gzip")) {
+                if (hasParameters) {
+                    status = HttpTransferEncodingParseStatus::kMalformed;
+                    return false;
+                }
+                codings.values[codings.count++] = HttpTransferCoding::kGzip;
+                return true;
+            }
+            if (httpAsciiEqualsIgnoreCase(coding, "deflate")) {
+                if (hasParameters) {
+                    status = HttpTransferEncodingParseStatus::kMalformed;
+                    return false;
+                }
+                codings.values[codings.count++] = HttpTransferCoding::kDeflate;
+                return true;
+            }
+            status = HttpTransferEncodingParseStatus::kUnsupported;
+            return false;
+        });
         if (status == HttpTransferEncodingParseStatus::kOk && !sawItem) {
             return HttpTransferEncodingParseStatus::kMalformed;
         }
         if (status == HttpTransferEncodingParseStatus::kOk) {
-            value_ = finalChunked
-                ? HttpTransferEncodingValue::makeFinalChunked(codings)
-                : HttpTransferEncodingValue::makeNonChunked(codings);
+            value_ = finalChunked ? HttpTransferEncodingValue::makeFinalChunked(codings) : HttpTransferEncodingValue::makeNonChunked(codings);
         }
         return status;
     }
 
-    [[nodiscard]] std::optional<HttpTransferEncodingValue>
-    value() const noexcept {
+    [[nodiscard]] std::optional<HttpTransferEncodingValue> value() const noexcept {
         return value_;
     }
 

@@ -12,17 +12,13 @@ RUVIA_TEST(http_server_worker_completion_is_monotonic) {
 
     RUVIA_CHECK(completion.markStartupReady());
     RUVIA_CHECK(!completion.markStartupReady());
-    RUVIA_CHECK(!completion.markStartupFailed(
-        std::make_exception_ptr(std::runtime_error("late failure"))));
+    RUVIA_CHECK(!completion.markStartupFailed(std::make_exception_ptr(std::runtime_error("late failure"))));
     completion.waitForStartup();
 }
 
 RUVIA_TEST(http_server_worker_completion_propagates_startup_failure) {
     ruvia::detail::HttpServerWorkerCompletion completion;
-    std::thread worker([&completion] {
-        (void)completion.markStartupFailed(
-            std::make_exception_ptr(std::runtime_error("startup failed")));
-    });
+    std::thread worker([&completion] { (void)completion.markStartupFailed(std::make_exception_ptr(std::runtime_error("startup failed"))); });
 
     try {
         completion.waitForStartup();
@@ -35,10 +31,8 @@ RUVIA_TEST(http_server_worker_completion_propagates_startup_failure) {
 
 RUVIA_TEST(http_server_worker_completion_keeps_first_terminal_failure) {
     ruvia::detail::HttpServerWorkerCompletion completion;
-    const auto first =
-        std::make_exception_ptr(std::runtime_error("first failure"));
-    const auto second =
-        std::make_exception_ptr(std::runtime_error("second failure"));
+    const auto first = std::make_exception_ptr(std::runtime_error("first failure"));
+    const auto second = std::make_exception_ptr(std::runtime_error("second failure"));
 
     RUVIA_CHECK(completion.recordWorkerFailure(first));
     RUVIA_CHECK(!completion.recordWorkerFailure(second));

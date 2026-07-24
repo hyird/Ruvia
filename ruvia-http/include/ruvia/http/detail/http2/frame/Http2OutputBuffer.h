@@ -15,11 +15,7 @@ namespace ruvia::detail {
 // Output acknowledgement is transactional. A transport can distinguish a valid
 // partial write from a complete drain, while an impossible over-consumption leaves
 // both the pending view and its cursor unchanged.
-enum class Http2OutputConsumeStatus : std::uint8_t {
-    kPending,
-    kDrained,
-    kOutOfRange
-};
+enum class Http2OutputConsumeStatus : std::uint8_t { kPending, kDrained, kOutOfRange };
 
 // Sole owner of HTTP/2 outbound bytes and their consumed prefix. Connection logic
 // selects protocol actions; this component owns contiguous frame serialization and
@@ -29,17 +25,16 @@ public:
     explicit Http2OutputBuffer(std::pmr::memory_resource* resource)
         : bytes_(resource) {}
 
-    [[nodiscard]] std::string_view pending() const & noexcept {
+    [[nodiscard]] std::string_view pending() const& noexcept {
         return std::string_view(bytes_).substr(consumed_);
     }
-    [[nodiscard]] std::string_view pending() const && = delete;
+    [[nodiscard]] std::string_view pending() const&& = delete;
 
     [[nodiscard]] bool wantsWrite() const noexcept {
         return consumed_ < bytes_.size();
     }
 
-    [[nodiscard]] Http2OutputConsumeStatus consume(
-        std::size_t bytes) noexcept {
+    [[nodiscard]] Http2OutputConsumeStatus consume(std::size_t bytes) noexcept {
         const auto remaining = bytes_.size() - consumed_;
         if (bytes > remaining) {
             return Http2OutputConsumeStatus::kOutOfRange;
@@ -64,32 +59,18 @@ public:
         }
     }
 
-    void appendFrame(
-        Http2FrameType type,
-        std::uint8_t flags,
-        std::uint32_t streamId,
-        std::string_view first,
-        std::string_view second = {}) {
-        if (first.size() > kHttp2MaxFrameSizeLimit ||
-            second.size() > kHttp2MaxFrameSizeLimit - first.size()) {
+    void appendFrame(Http2FrameType type, std::uint8_t flags, std::uint32_t streamId, std::string_view first, std::string_view second = {}) {
+        if (first.size() > kHttp2MaxFrameSizeLimit || second.size() > kHttp2MaxFrameSizeLimit - first.size()) {
             std::terminate();
         }
 
         std::array<char, kHttp2FrameHeaderBytes> header;
-        http2EncodeFrameHeader(
-            header.data(),
-            static_cast<std::uint32_t>(first.size() + second.size()),
-            type,
-            flags,
-            streamId);
+        http2EncodeFrameHeader(header.data(), static_cast<std::uint32_t>(first.size() + second.size()), type, flags, streamId);
         appendBytes(std::string_view(header.data(), header.size()));
         appendBytes(first);
         appendBytes(second);
     }
-    void appendGoawayFrame(
-        std::uint32_t lastStreamId,
-        Http2ErrorCode error,
-        std::string_view debug = {});
+    void appendGoawayFrame(std::uint32_t lastStreamId, Http2ErrorCode error, std::string_view debug = {});
     void appendRstStream(std::uint32_t streamId, Http2ErrorCode error);
 
 private:

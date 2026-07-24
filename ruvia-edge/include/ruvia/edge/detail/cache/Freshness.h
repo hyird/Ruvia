@@ -15,13 +15,13 @@ namespace ruvia::edge {
 // Expires and Age header fields; the caller parses those, this applies policy.
 struct FreshnessInput final {
     int status{0};
-    ruvia::CacheControl cacheControl;             // parsed response Cache-Control
-    bool requestHasAuthorization{false};          // shared-cache storage gate
-    std::optional<std::time_t> dateHeader;        // origin Date, if present and valid
-    std::optional<std::time_t> expiresHeader;     // Expires, if present and valid
-    std::uint64_t ageHeader{0};                   // Age in seconds (0 if absent)
-    std::time_t requestTime{0};                   // upstream request start
-    std::time_t now{0};                           // response reception time
+    ruvia::CacheControl cacheControl;          // parsed response Cache-Control
+    bool requestHasAuthorization{false};       // shared-cache storage gate
+    std::optional<std::time_t> dateHeader;     // origin Date, if present and valid
+    std::optional<std::time_t> expiresHeader;  // Expires, if present and valid
+    std::uint64_t ageHeader{0};                // Age in seconds (0 if absent)
+    std::time_t requestTime{0};                // upstream request start
+    std::time_t now{0};                        // response reception time
 };
 
 // The caching decision. When cacheable is false the other fields are unset and
@@ -48,11 +48,6 @@ struct FreshnessDecision final {
 [[nodiscard]] FreshnessDecision evaluateFreshness(const FreshnessInput& input) noexcept;
 
 // Assemble the RFC 9111 freshness inputs from a response's status and headers.
-[[nodiscard]] FreshnessInput buildFreshnessInput(
-    std::uint16_t status,
-    const Headers& headers,
-    std::time_t now,
-    std::time_t requestTime,
-    bool requestHasAuthorization);
+[[nodiscard]] FreshnessInput buildFreshnessInput(std::uint16_t status, const Headers& headers, std::time_t now, std::time_t requestTime, bool requestHasAuthorization);
 
 }  // namespace ruvia::edge

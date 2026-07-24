@@ -102,14 +102,8 @@ public:
     ScopedOperation<RedisHashScanResult> hscan(std::string_view key, RedisScanOptions options = {}) const;
     ScopedOperation<RedisScanResult> sscan(std::string_view key, RedisScanOptions options = {}) const;
     ScopedOperation<RedisZScanResult> zscan(std::string_view key, RedisScanOptions options = {}) const;
-    ScopedOperation<RedisValue> eval(
-        std::string_view script,
-        std::span<const std::string_view> keys = {},
-        std::span<const std::string_view> args = {}) const;
-    ScopedOperation<RedisValue> evalSha(
-        std::string_view sha1,
-        std::span<const std::string_view> keys = {},
-        std::span<const std::string_view> args = {}) const;
+    ScopedOperation<RedisValue> eval(std::string_view script, std::span<const std::string_view> keys = {}, std::span<const std::string_view> args = {}) const;
+    ScopedOperation<RedisValue> evalSha(std::string_view sha1, std::span<const std::string_view> keys = {}, std::span<const std::string_view> args = {}) const;
     ScopedOperation<std::pmr::string> scriptLoad(std::string_view script) const;
     ScopedOperation<std::pmr::vector<bool>> scriptExists(std::span<const std::string_view> sha1s) const;
     ScopedOperation<std::pmr::vector<bool>> scriptExists(std::initializer_list<std::string_view> sha1s) const = delete;
@@ -122,10 +116,7 @@ public:
 private:
     friend class detail::RedisRegistry;
 
-    RedisHandle(
-        detail::RedisPool& pool,
-        std::pmr::memory_resource* resource,
-        detail::ScopedOperationScope& operationScope) noexcept;
+    RedisHandle(detail::RedisPool& pool, std::pmr::memory_resource* resource, detail::ScopedOperationScope& operationScope) noexcept;
 
     template <typename T>
     [[nodiscard]] ScopedOperation<T> scoped(ruvia::Task<T> task) const {

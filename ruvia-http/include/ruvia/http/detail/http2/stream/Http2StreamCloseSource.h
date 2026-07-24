@@ -14,11 +14,8 @@ enum class Http2StreamCloseSource : std::uint8_t {
     kPeerGoaway
 };
 
-[[nodiscard]] constexpr bool http2IsValidStreamCloseSource(
-    Http2StreamCloseSource source) noexcept {
-    return source == Http2StreamCloseSource::kLocal ||
-        source == Http2StreamCloseSource::kPeer ||
-        source == Http2StreamCloseSource::kPeerGoaway;
+[[nodiscard]] constexpr bool http2IsValidStreamCloseSource(Http2StreamCloseSource source) noexcept {
+    return source == Http2StreamCloseSource::kLocal || source == Http2StreamCloseSource::kPeer || source == Http2StreamCloseSource::kPeerGoaway;
 }
 
 }  // namespace ruvia::detail

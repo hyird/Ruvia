@@ -5,10 +5,7 @@
 
 namespace ruvia::detail {
 
-voidpf zlibPmrAllocate(
-    std::pmr::memory_resource* resource,
-    uInt items,
-    uInt size) noexcept {
+voidpf zlibPmrAllocate(std::pmr::memory_resource* resource, uInt items, uInt size) noexcept {
     if (resource == nullptr || items == 0 || size == 0) {
         return nullptr;
     }
@@ -23,8 +20,7 @@ voidpf zlibPmrAllocate(
     }
     const auto totalBytes = sizeof(ZlibAllocationHeader) + payloadBytes;
     try {
-        auto* raw = static_cast<std::byte*>(
-            resource->allocate(totalBytes, alignof(ZlibAllocationHeader)));
+        auto* raw = static_cast<std::byte*>(resource->allocate(totalBytes, alignof(ZlibAllocationHeader)));
         auto* header = reinterpret_cast<ZlibAllocationHeader*>(raw);
         header->resource = resource;
         header->bytes = totalBytes;

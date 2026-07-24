@@ -27,10 +27,7 @@
 
 namespace ruvia::detail {
 
-enum class Http2InterimResponseHeaderEncodeStatus : std::uint8_t {
-    kOk,
-    kInvalidHeader
-};
+enum class Http2InterimResponseHeaderEncodeStatus : std::uint8_t { kOk, kInvalidHeader };
 
 struct Http2KnownHeaderEncoding final {
     std::string_view name;
@@ -58,9 +55,7 @@ inline constexpr std::size_t kHttp2LowerHeaderStackBytes = 64;
         case kResponseHeaderAllow:
             return {.name = "allow", .hpackNameIndex = HpackStaticIndex::kAllow};
         case kResponseHeaderAccessControlAllowOrigin:
-            return {
-                .name = "access-control-allow-origin",
-                .hpackNameIndex = HpackStaticIndex::kAccessControlAllowOrigin};
+            return {.name = "access-control-allow-origin", .hpackNameIndex = HpackStaticIndex::kAccessControlAllowOrigin};
         case kResponseHeaderAccessControlAllowCredentials:
             return {.name = "access-control-allow-credentials"};
         case kResponseHeaderAccessControlAllowMethods:
@@ -88,10 +83,7 @@ inline constexpr std::size_t kHttp2LowerHeaderStackBytes = 64;
     }
 }
 
-[[nodiscard]] inline std::string_view http2LowerHeaderName(
-    std::string_view name,
-    std::array<char, kHttp2LowerHeaderStackBytes>& stack,
-    std::pmr::string& scratch) {
+[[nodiscard]] inline std::string_view http2LowerHeaderName(std::string_view name, std::array<char, kHttp2LowerHeaderStackBytes>& stack, std::pmr::string& scratch) {
     const auto writeLower = [](std::string_view source, char* target) noexcept {
         for (std::size_t i = 0; i < source.size(); ++i) {
             target[i] = static_cast<char>(httpAsciiToLower(static_cast<unsigned char>(source[i])));
@@ -114,66 +106,41 @@ inline constexpr std::size_t kHttp2LowerHeaderStackBytes = 64;
     return name;
 }
 
-inline void appendHttp2EncodedResponseHeader(
-    std::pmr::string& headerBlock,
-    std::string_view name,
-    std::string_view value,
-    std::uint32_t knownBit,
-    std::array<char, kHttp2LowerHeaderStackBytes>& lowerNameStack,
-    std::pmr::string& lowerNameScratch) {
+inline void appendHttp2EncodedResponseHeader(std::pmr::string& headerBlock, std::string_view name, std::string_view value, std::uint32_t knownBit, std::array<char, kHttp2LowerHeaderStackBytes>& lowerNameStack, std::pmr::string& lowerNameScratch) {
     const auto known = http2KnownHeaderEncoding(knownBit);
     if (known.hpackNameIndex != 0) {
-        HpackEncoder::encodeHeaderWithNameIndex(
-            headerBlock,
-            known.hpackNameIndex,
-            value,
-            hpackHeaderNameIsSensitive(known.name));
+        HpackEncoder::encodeHeaderWithNameIndex(headerBlock, known.hpackNameIndex, value, hpackHeaderNameIsSensitive(known.name));
         return;
     }
-    HpackEncoder::encodeHeader(
-        headerBlock,
-        known.name.empty()
-            ? http2LowerHeaderName(name, lowerNameStack, lowerNameScratch)
-            : known.name,
-        value);
+    HpackEncoder::encodeHeader(headerBlock, known.name.empty() ? http2LowerHeaderName(name, lowerNameStack, lowerNameScratch) : known.name, value);
 }
 
-[[nodiscard]] inline Http2InterimResponseHeaderEncodeStatus
-validateHttp2InterimResponseHeaders(
-    const HttpInterimResponseHead& response) noexcept {
+[[nodiscard]] inline Http2InterimResponseHeaderEncodeStatus validateHttp2InterimResponseHeaders(const HttpInterimResponseHead& response) noexcept {
     if (response.headers().size() > kMaxHttpHeaderFields) {
         return Http2InterimResponseHeaderEncodeStatus::kInvalidHeader;
     }
     const auto commonValidation = validateHttpInterimResponseHeaders(response);
-    if (commonValidation !=
-        HttpInterimResponseHeaderValidationStatus::kOk) {
+    if (commonValidation != HttpInterimResponseHeaderValidationStatus::kOk) {
         return Http2InterimResponseHeaderEncodeStatus::kInvalidHeader;
     }
     const auto statusToken = httpStatusCodeToken(response.status());
     HttpHeaderSectionSize sectionSize;
-    if (!sectionSize.add(
-            ":status",
-            httpStatusCodeTokenView(statusToken))) {
+    if (!sectionSize.add(":status", httpStatusCodeTokenView(statusToken))) {
         return Http2InterimResponseHeaderEncodeStatus::kInvalidHeader;
     }
     for (const auto& header : response.headers()) {
         const auto name = header.name();
         // RFC 9113 forbids connection-specific fields in HTTP/2. Common 1xx
         // content/framing and singleton validation has already run above.
-        if (http2IsForbiddenResponseConnectionField(name) ||
-            !sectionSize.add(name, header.value())) {
+        if (http2IsForbiddenResponseConnectionField(name) || !sectionSize.add(name, header.value())) {
             return Http2InterimResponseHeaderEncodeStatus::kInvalidHeader;
         }
     }
     return Http2InterimResponseHeaderEncodeStatus::kOk;
 }
 
-[[nodiscard]] inline Http2InterimResponseHeaderEncodeStatus
-appendHttp2InterimResponseHeaders(
-    Http2StreamState& stream,
-    const HttpInterimResponseHead& response) {
-    if (const auto status = validateHttp2InterimResponseHeaders(response);
-        status != Http2InterimResponseHeaderEncodeStatus::kOk) {
+[[nodiscard]] inline Http2InterimResponseHeaderEncodeStatus appendHttp2InterimResponseHeaders(Http2StreamState& stream, const HttpInterimResponseHead& response) {
+    if (const auto status = validateHttp2InterimResponseHeaders(response); status != Http2InterimResponseHeaderEncodeStatus::kOk) {
         return status;
     }
 
@@ -183,34 +150,21 @@ appendHttp2InterimResponseHeaders(
     std::array<char, kHttp2LowerHeaderStackBytes> lowerNameStack{};
     std::pmr::string lowerNameScratch(headerBlock.get_allocator());
     for (const auto& header : response.headers()) {
-        appendHttp2EncodedResponseHeader(
-            headerBlock,
-            header.name(),
-            header.value(),
-            classifyResponseHeaderName(header.name()),
-            lowerNameStack,
-            lowerNameScratch);
+        appendHttp2EncodedResponseHeader(headerBlock, header.name(), header.value(), classifyResponseHeaderName(header.name()), lowerNameStack, lowerNameScratch);
     }
     return Http2InterimResponseHeaderEncodeStatus::kOk;
 }
 
-[[nodiscard]] inline bool appendHttp2ResponseHeaders(
-    Http2StreamState& stream,
-    const HttpResponse& response,
-    const Http2ResponseHeadPlan& plan,
-    const Http2FinalResponseControl& control) {
+[[nodiscard]] inline bool appendHttp2ResponseHeaders(Http2StreamState& stream, const HttpResponse& response, const Http2ResponseHeadPlan& plan, const Http2FinalResponseControl& control) {
     // The unforgeable control alternative proves that the same submission path
     // rejected all HTTP/2 connection-specific fields before this function can
     // touch HPACK state. The encoder therefore has no silent filtering branch.
     (void)control;
     const auto knownBits = responseKnownHeaderBits(response);
 
-    const auto statusToken =
-        httpStatusCodeToken(plan.bodyPlan().responseStatus());
+    const auto statusToken = httpStatusCodeToken(plan.bodyPlan().responseStatus());
     HttpHeaderSectionSize sectionSize;
-    if (!sectionSize.add(
-            ":status",
-            httpStatusCodeTokenView(statusToken))) {
+    if (!sectionSize.add(":status", httpStatusCodeTokenView(statusToken))) {
         return false;
     }
     std::size_t fieldCount = 0;
@@ -219,43 +173,33 @@ appendHttp2InterimResponseHeaders(
             continue;
         }
         ++fieldCount;
-        if (fieldCount > kMaxHttpHeaderFields ||
-            !sectionSize.add(header.name(), header.value())) {
+        if (fieldCount > kMaxHttpHeaderFields || !sectionSize.add(header.name(), header.value())) {
             return false;
         }
     }
     if ((knownBits & kResponseHeaderDate) == 0) {
         ++fieldCount;
-        if (fieldCount > kMaxHttpHeaderFields ||
-            !sectionSize.add("date", cachedDateValue())) {
+        if (fieldCount > kMaxHttpHeaderFields || !sectionSize.add("date", cachedDateValue())) {
             return false;
         }
     }
     std::array<char, 20> contentLengthBytes{};
     std::string_view contentLengthValue;
     if (const auto contentLength = plan.contentLength()) {
-        const auto [end, error] = std::to_chars(
-            contentLengthBytes.data(),
-            contentLengthBytes.data() + contentLengthBytes.size(),
-            *contentLength);
+        const auto [end, error] = std::to_chars(contentLengthBytes.data(), contentLengthBytes.data() + contentLengthBytes.size(), *contentLength);
         if (error != std::errc{}) {
             return false;
         }
-        contentLengthValue = std::string_view(
-            contentLengthBytes.data(),
-            static_cast<std::size_t>(end - contentLengthBytes.data()));
+        contentLengthValue = std::string_view(contentLengthBytes.data(), static_cast<std::size_t>(end - contentLengthBytes.data()));
         ++fieldCount;
-        if (fieldCount > kMaxHttpHeaderFields ||
-            !sectionSize.add("content-length", contentLengthValue)) {
+        if (fieldCount > kMaxHttpHeaderFields || !sectionSize.add("content-length", contentLengthValue)) {
             return false;
         }
     }
 
     auto& headerBlock = stream.responseHeaderBlock();
     headerBlock.clear();
-    HpackEncoder::encodeStatus(
-        headerBlock,
-        plan.bodyPlan().responseStatus());
+    HpackEncoder::encodeStatus(headerBlock, plan.bodyPlan().responseStatus());
     std::array<char, kHttp2LowerHeaderStackBytes> lowerNameStack{};
     std::pmr::string lowerNameScratch(headerBlock.get_allocator());
     for (const auto& header : response.headers()) {
@@ -265,25 +209,13 @@ appendHttp2InterimResponseHeaders(
             // HPACK cannot reinterpret raw application framing independently.
             continue;
         }
-        appendHttp2EncodedResponseHeader(
-            headerBlock,
-            header.name(),
-            header.value(),
-            knownBit,
-            lowerNameStack,
-            lowerNameScratch);
+        appendHttp2EncodedResponseHeader(headerBlock, header.name(), header.value(), knownBit, lowerNameStack, lowerNameScratch);
     }
     if ((knownBits & kResponseHeaderDate) == 0) {
-        HpackEncoder::encodeHeaderWithNameIndex(
-            headerBlock,
-            HpackStaticIndex::kDate,
-            cachedDateValue());
+        HpackEncoder::encodeHeaderWithNameIndex(headerBlock, HpackStaticIndex::kDate, cachedDateValue());
     }
     if (!contentLengthValue.empty()) {
-        HpackEncoder::encodeHeaderWithNameIndex(
-            headerBlock,
-            HpackStaticIndex::kContentLength,
-            contentLengthValue);
+        HpackEncoder::encodeHeaderWithNameIndex(headerBlock, HpackStaticIndex::kContentLength, contentLengthValue);
     }
     return true;
 }
@@ -292,26 +224,17 @@ inline void http2ReleaseResponseHeaderBlock(Http2StreamState& stream) {
     clearPmrStringRetainingSmall(stream.responseHeaderBlock());
 }
 
-inline void appendHttp2ResponseTrailers(
-    std::pmr::string& trailerBlock,
-    const HttpResponseTrailerSection& section) {
+inline void appendHttp2ResponseTrailers(std::pmr::string& trailerBlock, const HttpResponseTrailerSection& section) {
     for (const auto& trailer : section.fields()) {
         std::array<char, kHttp2LowerHeaderStackBytes> lowerNameStack{};
         std::pmr::string lowerNameScratch(trailerBlock.get_allocator());
-        HpackEncoder::encodeHeader(
-            trailerBlock,
-            http2LowerHeaderName(
-                trailer.name(), lowerNameStack, lowerNameScratch),
-            trailer.value());
+        HpackEncoder::encodeHeader(trailerBlock, http2LowerHeaderName(trailer.name(), lowerNameStack, lowerNameScratch), trailer.value());
     }
 }
 
 // The HPACK decode callback for a client-role response trailer section, the
 // counterpart of http2OnDecodedRequestTrailer. Defined by the connection's
 // response-header decoding, which owns what a decoded response may carry.
-[[nodiscard]] bool http2OnDecodedResponseTrailer(
-    void* target,
-    std::string_view name,
-    std::string_view value);
+[[nodiscard]] bool http2OnDecodedResponseTrailer(void* target, std::string_view name, std::string_view value);
 
 }  // namespace ruvia::detail

@@ -7,9 +7,7 @@
 #include <utility>
 
 template <typename T>
-concept HasStorableNextAwaiter = requires(T& next) {
-    requires std::is_move_constructible_v<decltype(next().operator co_await())>;
-};
+concept HasStorableNextAwaiter = requires(T& next) { requires std::is_move_constructible_v<decltype(next().operator co_await())>; };
 
 static_assert(!std::is_copy_constructible_v<ruvia::Next>);
 static_assert(!std::is_copy_assignable_v<ruvia::Next>);
@@ -53,10 +51,5 @@ private:
 };
 
 int main() {
-    ruvia::app()
-        .setListenAddress("0.0.0.0")
-        .setServerTopology(ruvia::ServerTopology::http(8089))
-        .setWorkersPerListener(1)
-        .setSignalShutdown(true)
-        .run();
+    ruvia::app().setListenAddress("0.0.0.0").setServerTopology(ruvia::ServerTopology::http(8089)).setWorkersPerListener(1).setSignalShutdown(true).run();
 }

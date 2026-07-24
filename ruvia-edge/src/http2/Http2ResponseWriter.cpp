@@ -17,28 +17,22 @@
 
 namespace ruvia::edge {
 
-asio::awaitable<bool> Http2ResponseWriter::respond(
-    std::uint16_t status, const Headers& headers, std::string_view body,
-    std::string_view cacheResult, std::optional<std::uint64_t> age, bool omitBody, bool) {
+asio::awaitable<bool> Http2ResponseWriter::respond(std::uint16_t status, const Headers& headers, std::string_view body, std::string_view cacheResult, std::optional<std::uint64_t> age, bool omitBody, bool) {
     submitBuffered(status, headers, body, cacheResult, age, omitBody);
     poke();
     ended_ = true;
     co_return true;
 }
 
-asio::awaitable<bool> Http2ResponseWriter::respondHead(
-    std::uint16_t status, const Headers& headers, std::string_view cacheResult,
-    bool hasBody, std::optional<std::size_t>, bool) {
+asio::awaitable<bool> Http2ResponseWriter::respondHead(std::uint16_t status, const Headers& headers, std::string_view cacheResult, bool hasBody, std::optional<std::size_t>, bool) {
     HttpResponse response(resource_);
-    response.status(
-        HttpStatusCode::tryFromValue(status).value_or(http_status::kInternalServerError));
+    response.status(HttpStatusCode::tryFromValue(status).value_or(http_status::kInternalServerError));
     for (const auto& [name, value] : headers) {
         std::string lower(name);
         for (auto& c : lower) {
             c = toLowerAscii(c);
         }
-        if (isConnectionOrFramingField(lower) ||
-            connectionNominates(headers, name)) {
+        if (isConnectionOrFramingField(lower) || connectionNominates(headers, name)) {
             continue;  // HTTP/2 frames the body itself; drop length/framing fields
         }
         response.header(name, value);
@@ -46,13 +40,10 @@ asio::awaitable<bool> Http2ResponseWriter::respondHead(
     response.header("X-Cache", cacheResult);
     // No body and no Content-Length on the head: the body streams as DATA and
     // the length is unknown (this path serves chunked/close-delimited origins).
-    const auto result = shared_.connection.submitStreamingResponseHead(
-        streamId_, std::move(response), ruvia::detail::ResponseStreamKind::kGeneric,
-        ruvia::detail::ResponseTrailerIntent::kNone);
+    const auto result = shared_.connection.submitStreamingResponseHead(streamId_, std::move(response), ruvia::detail::ResponseStreamKind::kGeneric, ruvia::detail::ResponseTrailerIntent::kNone);
     poke();
     if (result.submitted() == nullptr) {
-        (void)shared_.connection.submitReset(
-            streamId_, ruvia::detail::Http2ErrorCode::kInternalError);
+        (void)shared_.connection.submitReset(streamId_, ruvia::detail::Http2ErrorCode::kInternalError);
         ended_ = true;
         co_return false;
     }
@@ -80,11 +71,9 @@ asio::awaitable<bool> Http2ResponseWriter::respondChunk(std::string_view chunk) 
             }
             continue;
         }
-        const auto status = shared_.connection.submitData(
-            streamId_, chunk, ruvia::detail::Http2EndStream::kKeepOpen);
+        const auto status = shared_.connection.submitData(streamId_, chunk, ruvia::detail::Http2EndStream::kKeepOpen);
         poke();
-        if (status == ruvia::detail::Http2DataSubmitStatus::kAccepted ||
-            status == ruvia::detail::Http2DataSubmitStatus::kQueued) {
+        if (status == ruvia::detail::Http2DataSubmitStatus::kAccepted || status == ruvia::detail::Http2DataSubmitStatus::kQueued) {
             bytes_ += chunk.size();
             co_return true;
         }
@@ -107,12 +96,10 @@ asio::awaitable<bool> Http2ResponseWriter::respondEnd() {
     if (streamState == nullptr || streamState->isAborted()) {
         co_return false;
     }
-    const auto trailerResult =
-        ruvia::detail::httpResponseTrailerSection(std::span<const HttpHeaderView>{});
+    const auto trailerResult = ruvia::detail::httpResponseTrailerSection(std::span<const HttpHeaderView>{});
     const auto* section = trailerResult.section();
     if (section == nullptr) {
-        (void)shared_.connection.submitReset(
-            streamId_, ruvia::detail::Http2ErrorCode::kInternalError);
+        (void)shared_.connection.submitReset(streamId_, ruvia::detail::Http2ErrorCode::kInternalError);
         poke();
         co_return false;
     }
@@ -121,11 +108,12 @@ asio::awaitable<bool> Http2ResponseWriter::respondEnd() {
     // draining body when flow-control-blocked).
     const auto status = shared_.connection.finishResponse(streamId_, *section);
     poke();
-    co_return status == ruvia::detail::Http2FinishSubmitStatus::kAccepted ||
-        status == ruvia::detail::Http2FinishSubmitStatus::kQueued;
+    co_return status == ruvia::detail::Http2FinishSubmitStatus::kAccepted || status == ruvia::detail::Http2FinishSubmitStatus::kQueued;
 }
 
-void Http2ResponseWriter::poke() noexcept { shared_.writeWake.cancel(); }
+void Http2ResponseWriter::poke() noexcept {
+    shared_.writeWake.cancel();
+}
 
 asio::awaitable<bool> Http2ResponseWriter::waitForWindow() {
     // Once the session is tearing down there is no reader to reopen the window
@@ -146,12 +134,9 @@ asio::awaitable<bool> Http2ResponseWriter::waitForWindow() {
     co_return streamState != nullptr && !streamState->isAborted();
 }
 
-void Http2ResponseWriter::submitBuffered(
-    std::uint16_t status, const Headers& headers, std::string_view body,
-    std::string_view cacheResult, std::optional<std::uint64_t> age, bool omitBody) {
+void Http2ResponseWriter::submitBuffered(std::uint16_t status, const Headers& headers, std::string_view body, std::string_view cacheResult, std::optional<std::uint64_t> age, bool omitBody) {
     HttpResponse response(resource_);
-    response.status(
-        HttpStatusCode::tryFromValue(status).value_or(http_status::kInternalServerError));
+    response.status(HttpStatusCode::tryFromValue(status).value_or(http_status::kInternalServerError));
     for (const auto& [name, value] : headers) {
         std::string lower(name);
         for (auto& c : lower) {
@@ -180,14 +165,12 @@ void Http2ResponseWriter::submitBuffered(
     const auto plan = ruvia::detail::httpBufferedResponseWritePlan(method_, response);
     const auto submitted = shared_.connection.submitResponseHead(streamId_, response, plan);
     if (submitted.submitted() == nullptr) {
-        (void)shared_.connection.submitReset(
-            streamId_, ruvia::detail::Http2ErrorCode::kInternalError);
+        (void)shared_.connection.submitReset(streamId_, ruvia::detail::Http2ErrorCode::kInternalError);
         return;
     }
     // A body larger than the flow-control window is accepted whole here: the
     // core copies the unsent suffix and dribbles it out as windows reopen.
-    (void)shared_.connection.submitData(streamId_, omitBody ? std::string_view{} : body,
-                                        ruvia::detail::Http2EndStream::kEndStream);
+    (void)shared_.connection.submitData(streamId_, omitBody ? std::string_view{} : body, ruvia::detail::Http2EndStream::kEndStream);
     bytes_ += omitBody ? 0 : body.size();
 }
 

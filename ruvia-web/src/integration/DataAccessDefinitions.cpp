@@ -7,16 +7,13 @@ namespace ruvia::detail {
 
 EventLoop requireEventLoop(EventLoop loop) {
     if (!loop.valid()) {
-        throw std::invalid_argument(
-            "data access service requires a valid event loop");
+        throw std::invalid_argument("data access service requires a valid event loop");
     }
     return loop;
 }
 
 #ifdef RUVIA_ENABLE_DATABASE
-[[nodiscard]] DbConfig cloneDbConfig(
-    const DbConfig& source,
-    std::pmr::memory_resource* resource) {
+[[nodiscard]] DbConfig cloneDbConfig(const DbConfig& source, std::pmr::memory_resource* resource) {
     return DbConfig{
         .driver = source.driver,
         .host = std::pmr::string(source.host, resource),
@@ -33,16 +30,12 @@ EventLoop requireEventLoop(EventLoop loop) {
 }
 #endif
 
-std::pmr::vector<DbDefinition> makeDatabaseDefinitions(
-    const DataAccessOptions& options,
-    std::pmr::memory_resource* resource) {
+std::pmr::vector<DbDefinition> makeDatabaseDefinitions(const DataAccessOptions& options, std::pmr::memory_resource* resource) {
     std::pmr::vector<DbDefinition> definitions(resource);
 #ifdef RUVIA_ENABLE_DATABASE
     definitions.reserve(options.databases.size());
     for (const auto& database : options.databases) {
-        definitions.push_back(DbDefinition{
-            std::pmr::string(database.alias, resource),
-            cloneDbConfig(database.config, resource)});
+        definitions.push_back(DbDefinition{std::pmr::string(database.alias, resource), cloneDbConfig(database.config, resource)});
     }
 #else
     (void)options;
@@ -51,9 +44,7 @@ std::pmr::vector<DbDefinition> makeDatabaseDefinitions(
 }
 
 #ifdef RUVIA_ENABLE_REDIS
-[[nodiscard]] RedisConfig cloneRedisConfig(
-    const RedisConfig& source,
-    std::pmr::memory_resource* resource) {
+[[nodiscard]] RedisConfig cloneRedisConfig(const RedisConfig& source, std::pmr::memory_resource* resource) {
     return RedisConfig{
         .host = std::pmr::string(source.host, resource),
         .port = source.port,
@@ -72,16 +63,12 @@ std::pmr::vector<DbDefinition> makeDatabaseDefinitions(
 }
 #endif
 
-std::pmr::vector<RedisDefinition> makeRedisDefinitions(
-    const DataAccessOptions& options,
-    std::pmr::memory_resource* resource) {
+std::pmr::vector<RedisDefinition> makeRedisDefinitions(const DataAccessOptions& options, std::pmr::memory_resource* resource) {
     std::pmr::vector<RedisDefinition> definitions(resource);
 #ifdef RUVIA_ENABLE_REDIS
     definitions.reserve(options.redis.size());
     for (const auto& redis : options.redis) {
-        definitions.push_back(RedisDefinition{
-            std::pmr::string(redis.alias, resource),
-            cloneRedisConfig(redis.config, resource)});
+        definitions.push_back(RedisDefinition{std::pmr::string(redis.alias, resource), cloneRedisConfig(redis.config, resource)});
     }
 #else
     (void)options;

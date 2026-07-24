@@ -31,11 +31,8 @@ bool Http2Connection::processData(const Http2FrameHeader& header, std::string_vi
         return false;
     }
     const auto flowBytes = static_cast<std::int32_t>(payload.size());
-    if (http2DebitConnectionReceiveWindow(connectionReceiveWindow_, flowBytes) ==
-        Http2ReceiveWindowDebitStatus::kExceeded) {
-        appendGoaway(
-            Http2ErrorCode::kFlowControlError,
-            "connection flow-control window exceeded");
+    if (http2DebitConnectionReceiveWindow(connectionReceiveWindow_, flowBytes) == Http2ReceiveWindowDebitStatus::kExceeded) {
+        appendGoaway(Http2ErrorCode::kFlowControlError, "connection flow-control window exceeded");
         return false;
     }
 
@@ -46,9 +43,7 @@ bool Http2Connection::processData(const Http2FrameHeader& header, std::string_vi
         // reset, this cannot be a state-view race. Do not answer with another
         // stream frame; use the same strict closed-state verdict for retained
         // (pinned) and already-released storage.
-        appendGoaway(
-            Http2ErrorCode::kStreamClosed,
-            "DATA after peer RST_STREAM");
+        appendGoaway(Http2ErrorCode::kStreamClosed, "DATA after peer RST_STREAM");
         return false;
     }
     if (stream == nullptr) {
@@ -74,55 +69,36 @@ bool Http2Connection::processData(const Http2FrameHeader& header, std::string_vi
         return true;
     }
     const auto& remote = stream->remoteReceive();
-    if (remote.headPending() != nullptr ||
-        remote.headEndStreamPending() != nullptr) {
+    if (remote.headPending() != nullptr || remote.headEndStreamPending() != nullptr) {
         output_.appendRstStream(header.streamId, Http2ErrorCode::kProtocolError);
-        closeStream(
-            header.streamId,
-            Http2StreamCloseSource::kLocal,
-            Http2ErrorCode::kProtocolError);
+        closeStream(header.streamId, Http2StreamCloseSource::kLocal, Http2ErrorCode::kProtocolError);
         releaseDroppedDataConnectionWindow(flowBytes);
         return true;
     }
-    if (remote.endStream() != nullptr ||
-        remote.connectPendingEndStream() != nullptr) {
+    if (remote.endStream() != nullptr || remote.connectPendingEndStream() != nullptr) {
         // END_STREAM closes only the peer's send half. The opposite half of an
         // accepted CONNECT tunnel remains usable, but another DATA frame from this
         // peer is a frame on a half-closed (remote) stream (RFC 9113 5.1/8.5).
         output_.appendRstStream(header.streamId, Http2ErrorCode::kStreamClosed);
-        closeStream(
-            header.streamId,
-            Http2StreamCloseSource::kLocal,
-            Http2ErrorCode::kStreamClosed);
+        closeStream(header.streamId, Http2StreamCloseSource::kLocal, Http2ErrorCode::kStreamClosed);
         releaseDroppedDataConnectionWindow(flowBytes);
         return true;
     }
     const bool pendingConnectControl = remote.connectPending() != nullptr;
-    const bool rejectedConnectTerminal =
-        remote.connectRejectedAwaitingEndStream() != nullptr;
+    const bool rejectedConnectTerminal = remote.connectRejectedAwaitingEndStream() != nullptr;
     const bool tunnelData = remote.tunnelOpen() != nullptr;
     const bool contentData = remote.contentOpen() != nullptr;
-    const bool metadataOnlyContent = contentData &&
-        (stream->remoteContent().metadataOnlyWithoutLength() != nullptr ||
-         stream->remoteContent().metadataOnlyKnownLength() != nullptr);
-    if (!pendingConnectControl && !rejectedConnectTerminal &&
-        !tunnelData && !contentData) {
+    const bool metadataOnlyContent = contentData && (stream->remoteContent().metadataOnlyWithoutLength() != nullptr || stream->remoteContent().metadataOnlyKnownLength() != nullptr);
+    if (!pendingConnectControl && !rejectedConnectTerminal && !tunnelData && !contentData) {
         output_.appendRstStream(header.streamId, Http2ErrorCode::kStreamClosed);
-        closeStream(
-            header.streamId,
-            Http2StreamCloseSource::kLocal,
-            Http2ErrorCode::kStreamClosed);
+        closeStream(header.streamId, Http2StreamCloseSource::kLocal, Http2ErrorCode::kStreamClosed);
         releaseDroppedDataConnectionWindow(flowBytes);
         return true;
     }
 
-    if (http2DebitStreamReceiveWindow(*stream, flowBytes) ==
-        Http2ReceiveWindowDebitStatus::kExceeded) {
+    if (http2DebitStreamReceiveWindow(*stream, flowBytes) == Http2ReceiveWindowDebitStatus::kExceeded) {
         output_.appendRstStream(header.streamId, Http2ErrorCode::kFlowControlError);
-        closeStream(
-            header.streamId,
-            Http2StreamCloseSource::kLocal,
-            Http2ErrorCode::kFlowControlError);
+        closeStream(header.streamId, Http2StreamCloseSource::kLocal, Http2ErrorCode::kFlowControlError);
         releaseDroppedDataConnectionWindow(flowBytes);
         return true;
     }
@@ -134,32 +110,20 @@ bool Http2Connection::processData(const Http2FrameHeader& header, std::string_vi
         // as tunnel/content bytes. Padding remains flow-controlled.
         if (!data.empty()) {
             output_.appendRstStream(header.streamId, Http2ErrorCode::kProtocolError);
-            closeStream(
-                header.streamId,
-                Http2StreamCloseSource::kLocal,
-                Http2ErrorCode::kProtocolError);
+            closeStream(header.streamId, Http2StreamCloseSource::kLocal, Http2ErrorCode::kProtocolError);
             releaseDroppedDataConnectionWindow(flowBytes);
             return true;
         }
         if (flowBytes > 0) {
-            queueConsumedDataCredit(
-                (header.flags & kHttp2FlagEndStream) == 0
-                    ? stream
-                    : nullptr,
-                static_cast<std::uint32_t>(flowBytes));
+            queueConsumedDataCredit((header.flags & kHttp2FlagEndStream) == 0 ? stream : nullptr, static_cast<std::uint32_t>(flowBytes));
         }
         if ((header.flags & kHttp2FlagEndStream) == 0) {
             return true;
         }
-        const bool remoteFinished = pendingConnectControl
-            ? stream->finishRemotePendingConnect()
-            : stream->finishRemoteRejectedConnect();
+        const bool remoteFinished = pendingConnectControl ? stream->finishRemotePendingConnect() : stream->finishRemoteRejectedConnect();
         if (!remoteFinished) {
             output_.appendRstStream(header.streamId, Http2ErrorCode::kProtocolError);
-            closeStream(
-                header.streamId,
-                Http2StreamCloseSource::kLocal,
-                Http2ErrorCode::kProtocolError);
+            closeStream(header.streamId, Http2StreamCloseSource::kLocal, Http2ErrorCode::kProtocolError);
             return true;
         }
         releaseLocalRequestStreamIfClosed(*stream);
@@ -172,19 +136,13 @@ bool Http2Connection::processData(const Http2FrameHeader& header, std::string_vi
                 break;
             case Http2RemoteContentAccountingResult::kCounterOverflow:
                 output_.appendRstStream(header.streamId, Http2ErrorCode::kCancel);
-                closeStream(
-                    header.streamId,
-                    Http2StreamCloseSource::kLocal,
-                    Http2ErrorCode::kCancel);
+                closeStream(header.streamId, Http2StreamCloseSource::kLocal, Http2ErrorCode::kCancel);
                 releaseDroppedDataConnectionWindow(flowBytes);
                 return true;
             case Http2RemoteContentAccountingResult::kDeclaredLengthExceeded:
             case Http2RemoteContentAccountingResult::kContentForbidden:
                 output_.appendRstStream(header.streamId, Http2ErrorCode::kProtocolError);
-                closeStream(
-                    header.streamId,
-                    Http2StreamCloseSource::kLocal,
-                    Http2ErrorCode::kProtocolError);
+                closeStream(header.streamId, Http2StreamCloseSource::kLocal, Http2ErrorCode::kProtocolError);
                 releaseDroppedDataConnectionWindow(flowBytes);
                 return true;
         }
@@ -201,11 +159,7 @@ bool Http2Connection::processData(const Http2FrameHeader& header, std::string_vi
             // Empty DATA (including padding-only DATA) gives the owner no content to
             // retain. Metadata-only empty frames likewise need no application ack,
             // but their credit is still batched to prevent per-frame amplification.
-            queueConsumedDataCredit(
-                (header.flags & kHttp2FlagEndStream) == 0
-                    ? stream
-                    : nullptr,
-                static_cast<std::uint32_t>(flowBytes));
+            queueConsumedDataCredit((header.flags & kHttp2FlagEndStream) == 0 ? stream : nullptr, static_cast<std::uint32_t>(flowBytes));
         }
     }
 
@@ -215,34 +169,21 @@ bool Http2Connection::processData(const Http2FrameHeader& header, std::string_vi
     // a frame flood allocate one application event per nine wire octets.
     // Buffered vs streaming delivery and product size limits remain owner policy.
     if (deliverData) {
-        events_.push_back(tunnelData
-            ? Http2Event::tunnelData(header.streamId, data)
-            : Http2Event::messageBodyChunk(header.streamId, data));
+        events_.push_back(tunnelData ? Http2Event::tunnelData(header.streamId, data) : Http2Event::messageBodyChunk(header.streamId, data));
     }
     if ((header.flags & kHttp2FlagEndStream) != 0) {
-        if (contentData &&
-            !stream->remoteContent().terminalLengthValid()) {
+        if (contentData && !stream->remoteContent().terminalLengthValid()) {
             output_.appendRstStream(header.streamId, Http2ErrorCode::kProtocolError);
-            closeStream(
-                header.streamId,
-                Http2StreamCloseSource::kLocal,
-                Http2ErrorCode::kProtocolError);
+            closeStream(header.streamId, Http2StreamCloseSource::kLocal, Http2ErrorCode::kProtocolError);
             return true;
         }
-        const bool remoteFinished = tunnelData
-            ? stream->finishRemoteTunnel()
-            : stream->finishRemoteContent();
+        const bool remoteFinished = tunnelData ? stream->finishRemoteTunnel() : stream->finishRemoteContent();
         if (!remoteFinished) {
             output_.appendRstStream(header.streamId, Http2ErrorCode::kProtocolError);
-            closeStream(
-                header.streamId,
-                Http2StreamCloseSource::kLocal,
-                Http2ErrorCode::kProtocolError);
+            closeStream(header.streamId, Http2StreamCloseSource::kLocal, Http2ErrorCode::kProtocolError);
             return true;
         }
-        events_.push_back(tunnelData
-            ? Http2Event::tunnelEnd(header.streamId)
-            : Http2Event::messageEnd(header.streamId));
+        events_.push_back(tunnelData ? Http2Event::tunnelEnd(header.streamId) : Http2Event::messageEnd(header.streamId));
         releaseLocalRequestStreamIfClosed(*stream);
     }
     return true;

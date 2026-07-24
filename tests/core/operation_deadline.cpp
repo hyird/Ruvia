@@ -5,10 +5,7 @@
 
 namespace {
 
-enum class DeadlineKind : std::uint8_t {
-    kRead,
-    kWrite
-};
+enum class DeadlineKind : std::uint8_t { kRead, kWrite };
 
 bool operationDeadlineTransitionsAreExclusive() {
     using Deadline = ruvia::detail::OperationDeadline<DeadlineKind>;
@@ -19,23 +16,18 @@ bool operationDeadlineTransitionsAreExclusive() {
     }
 
     deadline.arm(now + std::chrono::seconds(1), DeadlineKind::kRead);
-    if (deadline.kind() == nullptr ||
-        *deadline.kind() != DeadlineKind::kRead ||
-        deadline.expire(now).has_value() || deadline.expired()) {
+    if (deadline.kind() == nullptr || *deadline.kind() != DeadlineKind::kRead || deadline.expire(now).has_value() || deadline.expired()) {
         return false;
     }
 
     const auto expiredKind = deadline.expire(now + std::chrono::seconds(1));
-    if (expiredKind != DeadlineKind::kRead || !deadline.expired() ||
-        deadline.kind() == nullptr ||
-        *deadline.kind() != DeadlineKind::kRead || !deadline.clear()) {
+    if (expiredKind != DeadlineKind::kRead || !deadline.expired() || deadline.kind() == nullptr || *deadline.kind() != DeadlineKind::kRead || !deadline.clear()) {
         return false;
     }
 
     deadline.arm(now, DeadlineKind::kWrite);
     deadline.reset();
-    return deadline.kind() == nullptr && !deadline.expired() &&
-           !deadline.clear();
+    return deadline.kind() == nullptr && !deadline.expired() && !deadline.clear();
 }
 
 bool operationTimeoutUsesOneAbsoluteDeadline() {
@@ -52,15 +44,11 @@ bool operationTimeoutUsesOneAbsoluteDeadline() {
 
     const Timeout active(std::chrono::seconds(1));
     const auto remaining = active.remaining();
-    return remaining.has_value() && remaining->count() > 0 &&
-           *remaining <= std::chrono::seconds(1);
+    return remaining.has_value() && remaining->count() > 0 && *remaining <= std::chrono::seconds(1);
 }
 
 }  // namespace
 
 int main() {
-    return operationDeadlineTransitionsAreExclusive() &&
-                   operationTimeoutUsesOneAbsoluteDeadline()
-        ? 0
-        : 1;
+    return operationDeadlineTransitionsAreExclusive() && operationTimeoutUsesOneAbsoluteDeadline() ? 0 : 1;
 }

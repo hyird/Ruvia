@@ -96,13 +96,9 @@ void detail::RouteTable::appendDynamicParamName(RouteEntry& route, std::string_v
         throw std::invalid_argument("route has too many parameters");
     }
 
-    const auto offset = names.empty()
-        ? dynamicParamNames_.size()
-        : static_cast<std::size_t>(names.data() - dynamicParamNames_.data());
+    const auto offset = names.empty() ? dynamicParamNames_.size() : static_cast<std::size_t>(names.data() - dynamicParamNames_.data());
     dynamicParamNames_.push_back(name);
-    route.setParamNames(std::span<const std::string_view>(
-        dynamicParamNames_.data() + offset,
-        names.size() + 1));
+    route.setParamNames(std::span<const std::string_view>(dynamicParamNames_.data() + offset, names.size() + 1));
 }
 
 void detail::RouteTable::insertDynamic(DynamicNode& root, RouteEntry& route) {
@@ -165,11 +161,7 @@ void detail::RouteTable::insertDynamic(DynamicNode& root, RouteEntry& route) {
 }
 
 void detail::RouteTable::sortDynamicNode(DynamicNode& node) {
-    std::ranges::sort(
-        node.staticChildren,
-        [](const DynamicStaticChild& left, const DynamicStaticChild& right) {
-            return std::string_view(left.segment) < std::string_view(right.segment);
-        });
+    std::ranges::sort(node.staticChildren, [](const DynamicStaticChild& left, const DynamicStaticChild& right) { return std::string_view(left.segment) < std::string_view(right.segment); });
     for (auto& child : node.staticChildren) {
         sortDynamicNode(*child.node);
     }
@@ -179,11 +171,7 @@ void detail::RouteTable::sortDynamicNode(DynamicNode& node) {
 }
 
 bool detail::RouteTable::sameDynamicShape(std::string_view left, std::string_view right) noexcept {
-    enum class ForkPriority : std::uint8_t {
-        kShared,
-        kLeftStatic,
-        kRightStatic
-    };
+    enum class ForkPriority : std::uint8_t { kShared, kLeftStatic, kRightStatic };
 
     // Tracks the first static-vs-param fork. After that fork, the static side has runtime priority
     // for overlapping paths because findDynamicNode tries static children before param children.
@@ -206,14 +194,13 @@ bool detail::RouteTable::sameDynamicShape(std::string_view left, std::string_vie
 
             if (priority == ForkPriority::kShared) {
                 // At a shared node a wildcard is distinguished by a STATIC sibling (findDynamicNode
-                // tries the static child before the wildcard), so it is not a conflict — unless both
-                // sides are dynamic, in which case the wildcard shadows the sibling param. This holds
-                // at any depth, not just the root: e.g. "/files/*" + "/files/public/:id" is fine, but
+                // tries the static child before the wildcard), so it is not a conflict — unless
+                // both sides are dynamic, in which case the wildcard shadows the sibling param.
+                // This holds at any depth, not just the root: e.g. "/files/*" + "/files/public/:id"
+                // is fine, but
                 // "/a/*" + "/a/:x" conflicts.
-                const auto leftDynamic =
-                    leftSegment == "*" || (!leftSegment.empty() && leftSegment.front() == ':');
-                const auto rightDynamic =
-                    rightSegment == "*" || (!rightSegment.empty() && rightSegment.front() == ':');
+                const auto leftDynamic = leftSegment == "*" || (!leftSegment.empty() && leftSegment.front() == ':');
+                const auto rightDynamic = rightSegment == "*" || (!rightSegment.empty() && rightSegment.front() == ':');
                 if (!(leftDynamic && rightDynamic)) {
                     return false;
                 }

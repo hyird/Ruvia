@@ -68,9 +68,7 @@ SelfSignedPem makeSelfSignedPem() {
     X509_gmtime_adj(X509_getm_notAfter(x509), 60 * 60);
     X509_set_pubkey(x509, pkey);
     X509_NAME* name = X509_get_subject_name(x509);
-    X509_NAME_add_entry_by_txt(
-        name, "CN", MBSTRING_ASC,
-        reinterpret_cast<const unsigned char*>("localhost"), -1, -1, 0);
+    X509_NAME_add_entry_by_txt(name, "CN", MBSTRING_ASC, reinterpret_cast<const unsigned char*>("localhost"), -1, -1, 0);
     X509_set_issuer_name(x509, name);
     X509_sign(x509, pkey, EVP_sha256());
 
@@ -163,31 +161,19 @@ int main() {
         const auto body = co_await context.req().text();
         co_return context.text(body);
     };
-    routerImpl.registerRoute(
-        ruvia::HttpKnownMethod::kPost,
-        std::pmr::string("/", std::pmr::get_default_resource()),
-        ruvia::detail::makeCallableRef<ruvia::HttpResponse, ruvia::Context&>(handler),
-        ruvia::detail::RequestBodyMode::kBuffered,
-        {},
-        {});
+    routerImpl.registerRoute(ruvia::HttpKnownMethod::kPost, std::pmr::string("/", std::pmr::get_default_resource()), ruvia::detail::makeCallableRef<ruvia::HttpResponse, ruvia::Context&>(handler), ruvia::detail::RequestBodyMode::kBuffered, {}, {});
     routerImpl.finalize();
 
     ruvia::detail::HttpServerOptions options;
     ruvia::detail::HttpServerOptions::Tls tls;
-    tls.identity.certificateChainFile =
-        std::pmr::string(certPath.string(), std::pmr::get_default_resource());
-    tls.identity.privateKeyFile =
-        std::pmr::string(keyPath.string(), std::pmr::get_default_resource());
+    tls.identity.certificateChainFile = std::pmr::string(certPath.string(), std::pmr::get_default_resource());
+    tls.identity.privateKeyFile = std::pmr::string(keyPath.string(), std::pmr::get_default_resource());
     options.transport = std::move(tls);
     options.clientHeaderTimeout = kClientHeaderTimeout;
     options.clientBodyTimeout = kClientBodyTimeout;
     options.scanInterval = 50ms;  // fire a leaked handshake deadline promptly
 
-    ruvia::detail::HttpServer server(
-        asio::ip::tcp::endpoint(asio::ip::make_address("127.0.0.1"), 0),
-        routerImpl.routeTable(),
-        {},
-        std::move(options));
+    ruvia::detail::HttpServer server(asio::ip::tcp::endpoint(asio::ip::make_address("127.0.0.1"), 0), routerImpl.routeTable(), {}, std::move(options));
     server.start();
     const auto endpoint = server.localEndpoint();
 
@@ -209,9 +195,7 @@ int main() {
         }
 
         if (result == 0) {
-            const std::string head =
-                "POST / HTTP/1.1\r\nHost: localhost\r\nContent-Length: " +
-                std::to_string(kBodyChunks) + "\r\n\r\n";
+            const std::string head = "POST / HTTP/1.1\r\nHost: localhost\r\nContent-Length: " + std::to_string(kBodyChunks) + "\r\n\r\n";
             asio::write(stream, asio::buffer(head), ec);
 
             // Trickle the body across several clientHeaderTimeouts. A leaked

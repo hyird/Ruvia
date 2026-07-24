@@ -17,14 +17,10 @@ using ruvia::detail::HttpResolvedByteRange;
 using ruvia::detail::resolveHttpByteRange;
 
 template <typename T>
-concept HasByteRangeOutcomeField = requires(const T& value) {
-    value.outcome;
-};
+concept HasByteRangeOutcomeField = requires(const T& value) { value.outcome; };
 
 template <typename T>
-concept HasByteRangePayloadField = requires(const T& value) {
-    value.range;
-};
+concept HasByteRangePayloadField = requires(const T& value) { value.range; };
 
 template <typename T>
 concept HasByteRangeOffsetAccessor = requires(const T& value) {
@@ -37,37 +33,23 @@ concept HasByteRangeLengthAccessor = requires(const T& value) {
 };
 
 template <typename T>
-concept HasAnyRvalueByteRangeResolutionAccessor =
-    requires(T&& value) { std::move(value).ignored(); } ||
-    requires(T&& value) { std::move(value).unsatisfiable(); } ||
-    requires(T&& value) { std::move(value).resolved(); };
+concept HasAnyRvalueByteRangeResolutionAccessor = requires(T&& value) { std::move(value).ignored(); } || requires(T&& value) { std::move(value).unsatisfiable(); } || requires(T&& value) { std::move(value).resolved(); };
 
-[[nodiscard]] bool isIgnoredRange(
-    std::string_view value,
-    std::uint64_t representationLength) {
+[[nodiscard]] bool isIgnoredRange(std::string_view value, std::uint64_t representationLength) {
     const auto resolution = resolveHttpByteRange(value, representationLength);
     return resolution.ignored() != nullptr;
 }
 
-[[nodiscard]] bool isUnsatisfiableRange(
-    std::string_view value,
-    std::uint64_t representationLength) {
+[[nodiscard]] bool isUnsatisfiableRange(std::string_view value, std::uint64_t representationLength) {
     const auto resolution = resolveHttpByteRange(value, representationLength);
     return resolution.unsatisfiable() != nullptr;
 }
 
 static_assert(!std::default_initializable<HttpByteRangeResolution>);
-static_assert(!HasAnyRvalueByteRangeResolutionAccessor<
-    HttpByteRangeResolution>);
-static_assert(std::same_as<
-    decltype(std::declval<const HttpByteRangeResolution&>().ignored()),
-    const HttpByteRangeIgnored*>);
-static_assert(std::same_as<
-    decltype(std::declval<const HttpByteRangeResolution&>().unsatisfiable()),
-    const HttpByteRangeUnsatisfiable*>);
-static_assert(std::same_as<
-    decltype(std::declval<const HttpByteRangeResolution&>().resolved()),
-    const HttpResolvedByteRange*>);
+static_assert(!HasAnyRvalueByteRangeResolutionAccessor<HttpByteRangeResolution>);
+static_assert(std::same_as<decltype(std::declval<const HttpByteRangeResolution&>().ignored()), const HttpByteRangeIgnored*>);
+static_assert(std::same_as<decltype(std::declval<const HttpByteRangeResolution&>().unsatisfiable()), const HttpByteRangeUnsatisfiable*>);
+static_assert(std::same_as<decltype(std::declval<const HttpByteRangeResolution&>().resolved()), const HttpResolvedByteRange*>);
 static_assert(!HasByteRangeOutcomeField<HttpByteRangeResolution>);
 static_assert(!HasByteRangePayloadField<HttpByteRangeResolution>);
 static_assert(!HasByteRangeOffsetAccessor<HttpByteRangeResolution>);
@@ -81,10 +63,7 @@ static_assert(HasByteRangeLengthAccessor<HttpResolvedByteRange>);
 static_assert(!std::default_initializable<HttpByteRangeIgnored>);
 static_assert(!std::default_initializable<HttpByteRangeUnsatisfiable>);
 static_assert(!std::default_initializable<HttpResolvedByteRange>);
-static_assert(!std::constructible_from<
-    HttpResolvedByteRange,
-    std::uint64_t,
-    std::uint64_t>);
+static_assert(!std::constructible_from<HttpResolvedByteRange, std::uint64_t, std::uint64_t>);
 
 }  // namespace
 
@@ -207,12 +186,10 @@ RUVIA_TEST(byte_range_huge_decimal_numerals_preserve_semantics) {
     // RFC 9110 §14.1.2 requires recipients to prevent conversion overflow.
     // Numerals beyond uint64_t still have obvious semantics against a uint64_t
     // representation: a huge start is outside it, while huge ends/suffixes clamp.
-    const auto hugeStart = resolveHttpByteRange(
-        "bytes=184467440737095516160-", 1000);
+    const auto hugeStart = resolveHttpByteRange("bytes=184467440737095516160-", 1000);
     RUVIA_CHECK(hugeStart.unsatisfiable() != nullptr);
 
-    const auto hugeEnd = resolveHttpByteRange(
-        "bytes=0-184467440737095516160", 1000);
+    const auto hugeEnd = resolveHttpByteRange("bytes=0-184467440737095516160", 1000);
     const auto* hugeEndRange = hugeEnd.resolved();
     RUVIA_CHECK(hugeEndRange != nullptr);
     if (hugeEndRange != nullptr) {
@@ -220,8 +197,7 @@ RUVIA_TEST(byte_range_huge_decimal_numerals_preserve_semantics) {
         RUVIA_CHECK_EQ(hugeEndRange->length(), std::uint64_t{1000});
     }
 
-    const auto hugeSuffix = resolveHttpByteRange(
-        "bytes=-184467440737095516160", 1000);
+    const auto hugeSuffix = resolveHttpByteRange("bytes=-184467440737095516160", 1000);
     const auto* hugeSuffixRange = hugeSuffix.resolved();
     RUVIA_CHECK(hugeSuffixRange != nullptr);
     if (hugeSuffixRange != nullptr) {
@@ -229,13 +205,11 @@ RUVIA_TEST(byte_range_huge_decimal_numerals_preserve_semantics) {
         RUVIA_CHECK_EQ(hugeSuffixRange->length(), std::uint64_t{1000});
     }
 
-    RUVIA_CHECK(isIgnoredRange(
-        "bytes=184467440737095516160x-", 1000));
+    RUVIA_CHECK(isIgnoredRange("bytes=184467440737095516160x-", 1000));
 
     // Saturating both numerals must not erase their relative order. This is an
     // invalid int-range (last-pos < first-pos), not a valid unsatisfiable range.
-    RUVIA_CHECK(isIgnoredRange(
-        "bytes=184467440737095516160-184467440737095516159", 1000));
+    RUVIA_CHECK(isIgnoredRange("bytes=184467440737095516160-184467440737095516159", 1000));
 }
 
 RUVIA_TEST(byte_range_empty_representation_uses_ignore_policy) {

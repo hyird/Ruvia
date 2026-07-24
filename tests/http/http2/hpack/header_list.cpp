@@ -19,9 +19,7 @@ std::pmr::memory_resource* resource() noexcept {
 }
 
 template <typename T>
-concept ExposesRvalueHttp2HeaderListStorage = requires(T&& list) {
-    std::move(list).at(std::size_t{});
-};
+concept ExposesRvalueHttp2HeaderListStorage = requires(T&& list) { std::move(list).at(std::size_t{}); };
 
 static_assert(!ExposesRvalueHttp2HeaderListStorage<Http2HeaderList>);
 
@@ -64,9 +62,7 @@ RUVIA_TEST(header_list_spills_both_fields_and_bytes_preserving_prior_views) {
         values.push_back(std::to_string(i) + std::string(30, static_cast<char>('a' + (i % 26))));
     }
     for (int i = 0; i < kCount; ++i) {
-        RUVIA_CHECK(list.append(names[static_cast<std::size_t>(i)],
-                                values[static_cast<std::size_t>(i)],
-                                RequestHeaderKind::kOther));
+        RUVIA_CHECK(list.append(names[static_cast<std::size_t>(i)], values[static_cast<std::size_t>(i)], RequestHeaderKind::kOther));
     }
     RUVIA_CHECK_EQ(list.size(), std::size_t{kCount});
     for (int i = 0; i < kCount; ++i) {

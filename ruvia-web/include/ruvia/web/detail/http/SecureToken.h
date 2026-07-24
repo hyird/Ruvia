@@ -10,12 +10,15 @@ namespace ruvia::detail {
 
 class SecureTokenReady final {
 public:
-    [[nodiscard]] std::string_view value() const noexcept { return value_; }
+    [[nodiscard]] std::string_view value() const noexcept {
+        return value_;
+    }
 
 private:
     friend class SecureTokenResult;
 
-    explicit SecureTokenReady(std::string_view value) noexcept : value_(value) {}
+    explicit SecureTokenReady(std::string_view value) noexcept
+        : value_(value) {}
 
     std::string_view value_;
 };
@@ -24,30 +27,30 @@ struct SecureTokenFailure final {};
 
 class SecureTokenResult final {
 public:
-    [[nodiscard]] const SecureTokenReady* ready() const & noexcept {
+    [[nodiscard]] const SecureTokenReady* ready() const& noexcept {
         return std::get_if<SecureTokenReady>(&value_);
     }
-    [[nodiscard]] const SecureTokenReady* ready() const && = delete;
+    [[nodiscard]] const SecureTokenReady* ready() const&& = delete;
 
-    [[nodiscard]] const SecureTokenFailure* failure() const & noexcept {
+    [[nodiscard]] const SecureTokenFailure* failure() const& noexcept {
         return std::get_if<SecureTokenFailure>(&value_);
     }
-    [[nodiscard]] const SecureTokenFailure* failure() const && = delete;
+    [[nodiscard]] const SecureTokenFailure* failure() const&& = delete;
 
 private:
-    friend SecureTokenResult generateSecureToken(
-        std::span<char> buffer) noexcept;
+    friend SecureTokenResult generateSecureToken(std::span<char> buffer) noexcept;
 
-    [[nodiscard]] static SecureTokenResult makeReady(
-        std::string_view value) noexcept {
+    [[nodiscard]] static SecureTokenResult makeReady(std::string_view value) noexcept {
         return SecureTokenResult(SecureTokenReady(value));
     }
     [[nodiscard]] static SecureTokenResult makeFailure() noexcept {
         return SecureTokenResult(SecureTokenFailure{});
     }
 
-    explicit SecureTokenResult(SecureTokenReady value) noexcept : value_(value) {}
-    explicit SecureTokenResult(SecureTokenFailure value) noexcept : value_(value) {}
+    explicit SecureTokenResult(SecureTokenReady value) noexcept
+        : value_(value) {}
+    explicit SecureTokenResult(SecureTokenFailure value) noexcept
+        : value_(value) {}
     std::variant<SecureTokenReady, SecureTokenFailure> value_;
 };
 

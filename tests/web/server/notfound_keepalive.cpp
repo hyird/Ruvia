@@ -29,45 +29,24 @@
 namespace {
 
 template <typename Handler>
-void registerRoute(
-    ruvia::detail::RouterImpl& router,
-    ruvia::HttpKnownMethod method,
-    std::string_view path,
-    Handler& handler) {
-    router.registerRoute(
-        method,
-        std::pmr::string(path, std::pmr::get_default_resource()),
-        ruvia::detail::makeCallableRef<ruvia::HttpResponse, ruvia::Context&>(
-            handler),
-        ruvia::detail::RequestBodyMode::kBuffered,
-        {},
-        {});
+void registerRoute(ruvia::detail::RouterImpl& router, ruvia::HttpKnownMethod method, std::string_view path, Handler& handler) {
+    router.registerRoute(method, std::pmr::string(path, std::pmr::get_default_resource()), ruvia::detail::makeCallableRef<ruvia::HttpResponse, ruvia::Context&>(handler), ruvia::detail::RequestBodyMode::kBuffered, {}, {});
 }
 
 // Read one response head and return its start line (e.g. "HTTP/1.1 404 ...").
-[[nodiscard]] std::string readResponseHead(
-    asio::ip::tcp::socket& socket, std::error_code& ec) {
+[[nodiscard]] std::string readResponseHead(asio::ip::tcp::socket& socket, std::error_code& ec) {
     asio::streambuf buffer;
     asio::read_until(socket, buffer, "\r\n\r\n", ec);
     if (ec) {
         return {};
     }
-    return std::string(
-        asio::buffers_begin(buffer.data()),
-        asio::buffers_begin(buffer.data()) +
-            std::min<std::size_t>(buffer.size(), 15));
+    return std::string(asio::buffers_begin(buffer.data()), asio::buffers_begin(buffer.data()) + std::min<std::size_t>(buffer.size(), 15));
 }
 
 // Send one bodyless request, then a second on the same connection, and require
 // both to be answered with the expected status -- i.e. the connection was kept
 // alive across the first response.
-[[nodiscard]] int expectKeepAlive(
-    asio::io_context& ctx,
-    const asio::ip::tcp::endpoint& endpoint,
-    std::string_view firstRequest,
-    std::string_view secondRequest,
-    std::string_view status,
-    int errBase) {
+[[nodiscard]] int expectKeepAlive(asio::io_context& ctx, const asio::ip::tcp::endpoint& endpoint, std::string_view firstRequest, std::string_view secondRequest, std::string_view status, int errBase) {
     asio::ip::tcp::socket sock(ctx);
     std::error_code ec;
     sock.connect(endpoint, ec);
@@ -91,27 +70,19 @@ void registerRoute(
 int main() {
     ruvia::Router router;
     auto& routerImpl = ruvia::detail::RouterImpl::from(router);
-    auto handler = [](ruvia::Context& c) -> ruvia::Task<ruvia::HttpResponse> {
-        co_return c.text("ok");
-    };
+    auto handler = [](ruvia::Context& c) -> ruvia::Task<ruvia::HttpResponse> { co_return c.text("ok"); };
     registerRoute(routerImpl, ruvia::HttpKnownMethod::kGet, "/only", handler);
     routerImpl.finalize();
 
     ruvia::detail::HttpServerOptions options;
 
-    ruvia::detail::HttpServer server(
-        asio::ip::tcp::endpoint(asio::ip::make_address("127.0.0.1"), 0),
-        routerImpl.routeTable(), {}, options);
+    ruvia::detail::HttpServer server(asio::ip::tcp::endpoint(asio::ip::make_address("127.0.0.1"), 0), routerImpl.routeTable(), {}, options);
     server.start();
     const auto endpoint = server.localEndpoint();
     asio::io_context ctx;
 
     // 404 (no such path) keeps a bodyless connection alive.
-    if (const int rc = expectKeepAlive(
-            ctx, endpoint,
-            "GET /missing-one HTTP/1.1\r\nHost: localhost\r\n\r\n",
-            "GET /missing-two HTTP/1.1\r\nHost: localhost\r\n\r\n",
-            "HTTP/1.1 404", 1)) {
+    if (const int rc = expectKeepAlive(ctx, endpoint, "GET /missing-one HTTP/1.1\r\nHost: localhost\r\n\r\n", "GET /missing-two HTTP/1.1\r\nHost: localhost\r\n\r\n", "HTTP/1.1 404", 1)) {
         std::fputs("bodyless 404 did not keep the connection alive\n", stderr);
         server.stop();
         server.join();
@@ -119,11 +90,7 @@ int main() {
     }
 
     // 405 (path exists, wrong method) does the same.
-    if (const int rc = expectKeepAlive(
-            ctx, endpoint,
-            "DELETE /only HTTP/1.1\r\nHost: localhost\r\n\r\n",
-            "PUT /only HTTP/1.1\r\nHost: localhost\r\n\r\n",
-            "HTTP/1.1 405", 4)) {
+    if (const int rc = expectKeepAlive(ctx, endpoint, "DELETE /only HTTP/1.1\r\nHost: localhost\r\n\r\n", "PUT /only HTTP/1.1\r\nHost: localhost\r\n\r\n", "HTTP/1.1 405", 4)) {
         std::fputs("bodyless 405 did not keep the connection alive\n", stderr);
         server.stop();
         server.join();
@@ -135,9 +102,10 @@ int main() {
         asio::ip::tcp::socket sock(ctx);
         std::error_code ec;
         sock.connect(endpoint, ec);
-        asio::write(sock, asio::buffer(std::string_view(
-            "POST /missing HTTP/1.1\r\nHost: localhost\r\n"
-            "Content-Length: 8\r\n\r\n")), ec);
+        asio::write(sock,
+            asio::buffer(std::string_view("POST /missing HTTP/1.1\r\nHost: localhost\r\n"
+                                          "Content-Length: 8\r\n\r\n")),
+            ec);
         if (!readResponseHead(sock, ec).starts_with("HTTP/1.1 404")) {
             std::fputs("bodied not-found did not get a 404\n", stderr);
             server.stop();

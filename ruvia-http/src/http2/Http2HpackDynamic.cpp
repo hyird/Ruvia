@@ -50,9 +50,7 @@ void HpackDecoder::addDynamic(std::string_view name, std::string_view value) {
     // move-assigns survivors over the evicted front slots (or clears the vector on
     // full eviction), freeing the referenced buffer; copying `name` afterwards
     // would then read freed memory. Materializing first makes the insert safe.
-    Entry entry{
-        std::pmr::string(name, resource_),
-        std::pmr::string(value, resource_)};
+    Entry entry{std::pmr::string(name, resource_), std::pmr::string(value, resource_)};
     evictDynamicToFit(size);
     dynamic_.push_back(std::move(entry));
     dynamicSize_ += size;

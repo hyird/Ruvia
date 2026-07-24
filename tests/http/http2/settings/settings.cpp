@@ -10,10 +10,10 @@ namespace {
 
 using ruvia::detail::Http2ErrorCode;
 using ruvia::detail::Http2PeerSettingError;
+using ruvia::detail::http2PeerSettingErrorCode;
 using ruvia::detail::Http2PeerSettings;
 using ruvia::detail::Http2Role;
 using ruvia::detail::Http2SettingId;
-using ruvia::detail::http2PeerSettingErrorCode;
 using ruvia::detail::http2SettingsPayloadSizeValid;
 
 }  // namespace
@@ -40,11 +40,9 @@ RUVIA_TEST(http2_settings_initial_window_size) {
     const auto invalid = settings.apply(Http2SettingId::kInitialWindowSize, 0x80000000U);
     RUVIA_CHECK(invalid.failure() != nullptr);
     RUVIA_CHECK(invalid.failure()->error() == Http2PeerSettingError::kInvalidInitialWindow);
-    RUVIA_CHECK(http2PeerSettingErrorCode(Http2PeerSettingError::kInvalidInitialWindow) ==
-                Http2ErrorCode::kFlowControlError);
+    RUVIA_CHECK(http2PeerSettingErrorCode(Http2PeerSettingError::kInvalidInitialWindow) == Http2ErrorCode::kFlowControlError);
     // A non-flow error maps to PROTOCOL_ERROR.
-    RUVIA_CHECK(http2PeerSettingErrorCode(Http2PeerSettingError::kInvalidEnablePush) ==
-                Http2ErrorCode::kProtocolError);
+    RUVIA_CHECK(http2PeerSettingErrorCode(Http2PeerSettingError::kInvalidEnablePush) == Http2ErrorCode::kProtocolError);
 }
 
 RUVIA_TEST(http2_settings_max_frame_size_bounds) {
@@ -65,12 +63,11 @@ RUVIA_TEST(http2_settings_max_frame_size_bounds) {
 RUVIA_TEST(http2_settings_unknown_ignored_and_payload_size) {
     Http2PeerSettings settings(Http2Role::kServer);
     // An unknown setting identifier must be ignored (RFC 9113 Section 6.5.2).
-    const auto unknown =
-        settings.apply(static_cast<Http2SettingId>(0xABCD), 999);
+    const auto unknown = settings.apply(static_cast<Http2SettingId>(0xABCD), 999);
     RUVIA_CHECK(unknown.applied() != nullptr);
     // A SETTINGS payload length must be a multiple of six.
-    RUVIA_CHECK(http2SettingsPayloadSizeValid(std::string_view()));       // empty
-    RUVIA_CHECK(http2SettingsPayloadSizeValid(std::string(12, 'x')));     // two entries
+    RUVIA_CHECK(http2SettingsPayloadSizeValid(std::string_view()));    // empty
+    RUVIA_CHECK(http2SettingsPayloadSizeValid(std::string(12, 'x')));  // two entries
     RUVIA_CHECK(!http2SettingsPayloadSizeValid(std::string(5, 'x')));
     RUVIA_CHECK(!http2SettingsPayloadSizeValid(std::string(7, 'x')));
 }
@@ -78,18 +75,15 @@ RUVIA_TEST(http2_settings_unknown_ignored_and_payload_size) {
 RUVIA_TEST(http2_settings_enable_connect_protocol) {
     Http2PeerSettings settings(Http2Role::kServer);
     RUVIA_CHECK(!settings.enableConnectProtocol());
-    const auto enabled =
-        settings.apply(Http2SettingId::kEnableConnectProtocol, 1);
+    const auto enabled = settings.apply(Http2SettingId::kEnableConnectProtocol, 1);
     RUVIA_CHECK(enabled.applied() != nullptr);
     RUVIA_CHECK(settings.enableConnectProtocol());
     // Once enabled it must not be turned off (RFC 8441).
     const auto disabled = settings.apply(Http2SettingId::kEnableConnectProtocol, 0);
     RUVIA_CHECK(disabled.failure() != nullptr);
-    RUVIA_CHECK(disabled.failure()->error() ==
-                Http2PeerSettingError::kInvalidEnableConnectProtocolTransition);
+    RUVIA_CHECK(disabled.failure()->error() == Http2PeerSettingError::kInvalidEnableConnectProtocolTransition);
     // A value other than 0/1 is invalid.
     const auto invalid = settings.apply(Http2SettingId::kEnableConnectProtocol, 2);
     RUVIA_CHECK(invalid.failure() != nullptr);
-    RUVIA_CHECK(invalid.failure()->error() ==
-                Http2PeerSettingError::kInvalidEnableConnectProtocol);
+    RUVIA_CHECK(invalid.failure()->error() == Http2PeerSettingError::kInvalidEnableConnectProtocol);
 }

@@ -19,11 +19,8 @@ namespace ruvia::detail {
 
 // Web static-file path policy: normalize a client path relative to the configured
 // document root and reject every attempt to ascend above it.
-[[nodiscard]] inline std::pmr::string normalizeStaticRelativePath(
-    std::string_view input,
-    std::pmr::polymorphic_allocator<char> allocator) {
-    if (!input.empty() &&
-        (input.front() == '/' || input.front() == '\\' || isWindowsDrivePath(input))) {
+[[nodiscard]] inline std::pmr::string normalizeStaticRelativePath(std::string_view input, std::pmr::polymorphic_allocator<char> allocator) {
+    if (!input.empty() && (input.front() == '/' || input.front() == '\\' || isWindowsDrivePath(input))) {
         throw HttpError(ruvia::http_status::kForbidden, "forbidden", "invalid static file path");
     }
 

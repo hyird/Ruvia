@@ -18,9 +18,9 @@ public:
     static constexpr bool required = Required;
 
     constexpr ModelField(std::string_view wireName, OptionsT options) noexcept
-        : wireName_(wireName), options_(std::move(options)) {
-        static_assert(detail::isRequestModelField<ValueT>,
-            "RUVIA_FIELD type must be a Ruvia value type or nested RUVIA_MODEL");
+        : wireName_(wireName),
+          options_(std::move(options)) {
+        static_assert(detail::isRequestModelField<ValueT>, "RUVIA_FIELD type must be a Ruvia value type or nested RUVIA_MODEL");
     }
 
     [[nodiscard]] constexpr std::string_view wireName() const noexcept {
@@ -31,16 +31,15 @@ public:
         return state_;
     }
 
-    [[nodiscard]] const std::optional<ValueT>& value() const & noexcept {
+    [[nodiscard]] const std::optional<ValueT>& value() const& noexcept {
         return value_;
     }
 
-    [[nodiscard]] const std::optional<ValueT>& value() const && = delete;
+    [[nodiscard]] const std::optional<ValueT>& value() const&& = delete;
 
     [[nodiscard]] ValueT& ensure(std::pmr::memory_resource* resource) {
         if (!value_) {
-            value_.emplace(detail::makeRequestValue<ValueT>(
-                detail::ResolvedPmrResourceTag{}, resource));
+            value_.emplace(detail::makeRequestValue<ValueT>(detail::ResolvedPmrResourceTag{}, resource));
         }
         state_ = detail::ModelFieldState::kParsed;
         return *value_;

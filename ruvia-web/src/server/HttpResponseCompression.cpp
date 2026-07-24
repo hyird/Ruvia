@@ -18,16 +18,11 @@ namespace ruvia::detail {
 namespace {
 
 void setCompressedContentLength(HttpResponse& response, std::size_t size) {
-    setResponseHeaderUnsigned(
-        response,
-        "Content-Length",
-        static_cast<std::uint64_t>(size),
-        kResponseHeaderContentLength);
+    setResponseHeaderUnsigned(response, "Content-Length", static_cast<std::uint64_t>(size), kResponseHeaderContentLength);
 }
 
 [[nodiscard]] bool mediaTypeStartsWith(std::string_view mediaType, std::string_view prefix) noexcept {
-    return mediaType.size() >= prefix.size() &&
-        httpAsciiEqualsIgnoreCase(mediaType.substr(0, prefix.size()), prefix);
+    return mediaType.size() >= prefix.size() && httpAsciiEqualsIgnoreCase(mediaType.substr(0, prefix.size()), prefix);
 }
 
 [[nodiscard]] bool responseContentTypeSkipsCompression(std::string_view contentType) noexcept {
@@ -35,32 +30,21 @@ void setCompressedContentLength(HttpResponse& response, std::size_t size) {
         return false;
     }
     const auto semicolon = contentType.find(';');
-    const auto mediaType = httpTrimOws(
-        semicolon == std::string_view::npos ? contentType : contentType.substr(0, semicolon));
+    const auto mediaType = httpTrimOws(semicolon == std::string_view::npos ? contentType : contentType.substr(0, semicolon));
     if (mediaType.empty()) {
         return false;
     }
     // Dominant compressible types short-circuit the skip list below.
-    if (mediaTypeStartsWith(mediaType, "text/") ||
-        httpAsciiEqualsIgnoreCase(mediaType, "application/json")) {
+    if (mediaTypeStartsWith(mediaType, "text/") || httpAsciiEqualsIgnoreCase(mediaType, "application/json")) {
         return false;
     }
     if (httpAsciiEqualsIgnoreCase(mediaType, "image/svg+xml")) {
         return false;
     }
-    return mediaTypeStartsWith(mediaType, "image/") ||
-        mediaTypeStartsWith(mediaType, "video/") ||
-        mediaTypeStartsWith(mediaType, "audio/") ||
-        httpAsciiEqualsIgnoreCase(mediaType, "application/gzip") ||
-        httpAsciiEqualsIgnoreCase(mediaType, "application/x-gzip") ||
-        httpAsciiEqualsIgnoreCase(mediaType, "application/zip") ||
-        httpAsciiEqualsIgnoreCase(mediaType, "application/zstd") ||
-        httpAsciiEqualsIgnoreCase(mediaType, "application/pdf") ||
-        httpAsciiEqualsIgnoreCase(mediaType, "application/octet-stream");
+    return mediaTypeStartsWith(mediaType, "image/") || mediaTypeStartsWith(mediaType, "video/") || mediaTypeStartsWith(mediaType, "audio/") || httpAsciiEqualsIgnoreCase(mediaType, "application/gzip") || httpAsciiEqualsIgnoreCase(mediaType, "application/x-gzip") || httpAsciiEqualsIgnoreCase(mediaType, "application/zip") || httpAsciiEqualsIgnoreCase(mediaType, "application/zstd") || httpAsciiEqualsIgnoreCase(mediaType, "application/pdf") || httpAsciiEqualsIgnoreCase(mediaType, "application/octet-stream");
 }
 
-[[nodiscard]] CacheControl responseCacheControl(
-    const HttpResponse& response) noexcept {
+[[nodiscard]] CacheControl responseCacheControl(const HttpResponse& response) noexcept {
     CacheControlFieldParser parser;
     if (!responseHasKnownHeader(response, kResponseHeaderCacheControl)) {
         return parser.finish();
@@ -102,21 +86,14 @@ void weakenStrongResponseEtag(HttpResponse& response) {
 
 }  // namespace
 
-void applyResponseCompression(
-    HttpContentCoding coding,
-    HttpKnownMethod requestMethod,
-    HttpResponse& response,
-    const CompressionConfig& options) {
-    const auto bodyPlan = httpResponseBodyPlan(
-        requestMethod,
-        response.status());
+void applyResponseCompression(HttpContentCoding coding, HttpKnownMethod requestMethod, HttpResponse& response, const CompressionConfig& options) {
+    const auto bodyPlan = httpResponseBodyPlan(requestMethod, response.status());
     if (!bodyPlan.statusAllowsBody()) {
         return;
     }
 
     const auto statusCode = response.status();
-    if (statusCode == http_status::kPartialContent ||
-        statusCode == http_status::kResetContent) {
+    if (statusCode == http_status::kPartialContent || statusCode == http_status::kResetContent) {
         return;
     }
 
@@ -127,11 +104,7 @@ void applyResponseCompression(
     // the representation): a file body (framed and Vary'd by the static-file path),
     // an already-chosen Content-Encoding, a Content-Range, an incompressible media
     // type, or an explicit no-transform.
-    if (responseContent.file().has_value() ||
-        responseHasKnownHeader(response, kResponseHeaderContentEncoding) ||
-        responseHasKnownHeader(response, kResponseHeaderContentRange) ||
-        responseContentTypeSkipsCompression(responseKnownHeader(response, kResponseHeaderContentType)) ||
-        responseCacheControl(response).noTransform) {
+    if (responseContent.file().has_value() || responseHasKnownHeader(response, kResponseHeaderContentEncoding) || responseHasKnownHeader(response, kResponseHeaderContentRange) || responseContentTypeSkipsCompression(responseKnownHeader(response, kResponseHeaderContentType)) || responseCacheControl(response).noTransform) {
         return;
     }
 
@@ -143,17 +116,12 @@ void applyResponseCompression(
     // previously lived only on the compress-success path.
     addVaryToken(response, "Accept-Encoding");
 
-    if (coding == HttpContentCoding::kIdentity ||
-        responseContent.size() < options.minBytes) {
+    if (coding == HttpContentCoding::kIdentity || responseContent.size() < options.minBytes) {
         return;
     }
     const auto body = responseContent.bytes();
     const auto maxEncodedBytes = body.empty() ? 0 : body.size() - 1;
-    auto encoding = encodeHttpContent(
-        coding,
-        body,
-        maxEncodedBytes,
-        responseResource(response));
+    auto encoding = encodeHttpContent(coding, body, maxEncodedBytes, responseResource(response));
     auto* encoded = encoding.encoded();
     if (encoded == nullptr) {
         return;

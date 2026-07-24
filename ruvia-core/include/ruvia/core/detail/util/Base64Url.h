@@ -4,8 +4,7 @@
 
 namespace ruvia::detail {
 
-inline constexpr std::string_view kBase64UrlAlphabet =
-    "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
+inline constexpr std::string_view kBase64UrlAlphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
 
 [[nodiscard]] inline int decodeBase64UrlChar(char ch) noexcept {
     if (ch >= 'A' && ch <= 'Z') {

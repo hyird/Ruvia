@@ -29,25 +29,10 @@ public:
 private:
     friend class detail::DbRegistry;
 
-    DbHandle(
-        detail::DbPoolRef client,
-        std::pmr::memory_resource* resource,
-        detail::ScopedOperationScope& operationScope) noexcept;
-    static Task<QueryResult> executePrepared(
-        detail::DbPoolRef client,
-        std::pmr::string sql,
-        std::pmr::vector<DbValue> params,
-        std::pmr::memory_resource* resource);
-    static Task<DbStreamResult> queryStreamPrepared(
-        detail::DbPoolRef client,
-        std::pmr::string sql,
-        std::pmr::vector<DbValue> params,
-        std::pmr::memory_resource* resource,
-        detail::ScopedOperationScope& operationScope);
-    static Task<DbTransaction> beginTransactionPrepared(
-        detail::DbPoolRef client,
-        std::pmr::memory_resource* resource,
-        detail::ScopedOperationScope& operationScope);
+    DbHandle(detail::DbPoolRef client, std::pmr::memory_resource* resource, detail::ScopedOperationScope& operationScope) noexcept;
+    static Task<QueryResult> executePrepared(detail::DbPoolRef client, std::pmr::string sql, std::pmr::vector<DbValue> params, std::pmr::memory_resource* resource);
+    static Task<DbStreamResult> queryStreamPrepared(detail::DbPoolRef client, std::pmr::string sql, std::pmr::vector<DbValue> params, std::pmr::memory_resource* resource, detail::ScopedOperationScope& operationScope);
+    static Task<DbTransaction> beginTransactionPrepared(detail::DbPoolRef client, std::pmr::memory_resource* resource, detail::ScopedOperationScope& operationScope);
 
     detail::DbPoolRef client_;
     std::pmr::memory_resource* resource_;

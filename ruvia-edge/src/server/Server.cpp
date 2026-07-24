@@ -63,12 +63,10 @@ void writeFailureLine(EdgeTaskKind kind, std::exception_ptr exception) noexcept 
     std::array<char, 48> context{};
     const auto name = taskKindName(kind);
     static constexpr std::string_view kPrefix = "edge ";
-    const auto length =
-        std::min(name.size(), context.size() - kPrefix.size());
+    const auto length = std::min(name.size(), context.size() - kPrefix.size());
     std::memcpy(context.data(), kPrefix.data(), kPrefix.size());
     std::memcpy(context.data() + kPrefix.size(), name.data(), length);
-    ruvia::detail::reportUnhandledFailure(
-        std::string_view(context.data(), kPrefix.size() + length), exception);
+    ruvia::detail::reportUnhandledFailure(std::string_view(context.data(), kPrefix.size() + length), exception);
 }
 
 }  // namespace
@@ -79,12 +77,7 @@ EdgeServer::Impl::Impl(EdgeEndpoint endpoint, EdgeServerOptions options)
       activeOperations_(memory_.resource()),
       config_(memory_.resource()),
       cache_(options.cache, memory_.resource()),
-      disk_(
-          options.cacheDirectory,
-          options.maxDiskCacheBytes,
-          [this](std::exception_ptr exception) {
-              reportFailure(EdgeTaskKind::kDiskCache, std::move(exception));
-          }),
+      disk_(options.cacheDirectory, options.maxDiskCacheBytes, [this](std::exception_ptr exception) { reportFailure(EdgeTaskKind::kDiskCache, std::move(exception)); }),
       fetcher_(options.fetch),
       maxCacheableBytes_(options.maxCacheableBytes),
       maxConnections_(options.maxConnections),
@@ -120,31 +113,29 @@ void EdgeServer::Impl::start() {
     std::promise<void> runGatePromise;
     auto runGate = runGatePromise.get_future();
 
-    worker_ = std::thread(
-        [this, identityPromise = std::move(identityPromise),
-         runGate = std::move(runGate)]() mutable {
-            identityPromise.set_value(std::this_thread::get_id());
-            runGate.wait();
-            // A handler that is not a tracked coroutine's completion (a posted
-            // control operation, a timer callback) can throw straight out of
-            // run(). Letting it leave this thread function would terminate the
-            // process; report it and resume the loop instead, since the
-            // io_context stays runnable and the listener is still open.
-            for (;;) {
-                try {
-                    ioContext_.run();
-                    break;
-                } catch (...) {
-                    reportFailure(EdgeTaskKind::kWorker, std::current_exception());
-                }
+    worker_ = std::thread([this, identityPromise = std::move(identityPromise), runGate = std::move(runGate)]() mutable {
+        identityPromise.set_value(std::this_thread::get_id());
+        runGate.wait();
+        // A handler that is not a tracked coroutine's completion (a posted
+        // control operation, a timer callback) can throw straight out of
+        // run(). Letting it leave this thread function would terminate the
+        // process; report it and resume the loop instead, since the
+        // io_context stays runnable and the listener is still open.
+        for (;;) {
+            try {
+                ioContext_.run();
+                break;
+            } catch (...) {
+                reportFailure(EdgeTaskKind::kWorker, std::current_exception());
             }
-            const std::lock_guard finishedLock(lifecycleMutex_);
-            workerThreadId_ = {};
-            if (lifecycle_ != Lifecycle::kReady) {
-                lifecycle_ = Lifecycle::kStopped;
-            }
-            lifecycleChanged_.notify_all();
-        });
+        }
+        const std::lock_guard finishedLock(lifecycleMutex_);
+        workerThreadId_ = {};
+        if (lifecycle_ != Lifecycle::kReady) {
+            lifecycle_ = Lifecycle::kStopped;
+        }
+        lifecycleChanged_.notify_all();
+    });
     workerThreadId_ = identity.get();
 
     try {
@@ -185,8 +176,7 @@ void EdgeServer::Impl::stop() {
     {
         std::unique_lock lock(lifecycleMutex_);
         for (;;) {
-            const bool onWorker =
-                workerThreadId_ == std::this_thread::get_id();
+            const bool onWorker = workerThreadId_ == std::this_thread::get_id();
 
             if (lifecycle_ == Lifecycle::kReady) {
                 asio::error_code ignore;
@@ -202,8 +192,7 @@ void EdgeServer::Impl::stop() {
                     requestStopOnWorker();
                     return;
                 }
-                lifecycleChanged_.wait(
-                    lock, [this] { return pendingControls_ == 0; });
+                lifecycleChanged_.wait(lock, [this] { return pendingControls_ == 0; });
                 try {
                     asio::post(ioContext_, [this] { requestStopOnWorker(); });
                 } catch (...) {
@@ -220,9 +209,7 @@ void EdgeServer::Impl::stop() {
                 if (onWorker) {
                     return;
                 }
-                lifecycleChanged_.wait(lock, [this] {
-                    return lifecycle_ != Lifecycle::kStopping;
-                });
+                lifecycleChanged_.wait(lock, [this] { return lifecycle_ != Lifecycle::kStopping; });
                 // A failed publication rolls back to Running. Compete to issue
                 // the stop request again; a successful one reaches Stopped.
                 continue;
@@ -252,8 +239,7 @@ void EdgeServer::Impl::join() {
             // stop the optional disk executor that a later start() will use.
             return;
         }
-        lifecycleChanged_.wait(
-            lock, [this] { return lifecycle_ == Lifecycle::kStopped; });
+        lifecycleChanged_.wait(lock, [this] { return lifecycle_ == Lifecycle::kStopped; });
         if (worker_.joinable()) {
             worker = std::move(worker_);
         }
@@ -269,10 +255,7 @@ EdgeEndpoint EdgeServer::Impl::localEndpoint() const {
 }
 
 EdgeStats EdgeServer::Impl::stats() const {
-    const auto count = [this](EdgeTaskKind kind) {
-        return failureCounts_[static_cast<std::size_t>(kind)].load(
-            std::memory_order_relaxed);
-    };
+    const auto count = [this](EdgeTaskKind kind) { return failureCounts_[static_cast<std::size_t>(kind)].load(std::memory_order_relaxed); };
     EdgeStats stats;
     stats.activeConnections = activeConnections_.load(std::memory_order_relaxed);
     stats.connectionsRefused = connectionsRefused_.load(std::memory_order_relaxed);
@@ -315,16 +298,13 @@ bool EdgeServer::Impl::isCancellationUnwind(std::exception_ptr exception) noexce
     return false;
 }
 
-void EdgeServer::Impl::reportFailure(
-    EdgeTaskKind kind,
-    std::exception_ptr exception) noexcept {
+void EdgeServer::Impl::reportFailure(EdgeTaskKind kind, std::exception_ptr exception) noexcept {
     if (exception == nullptr) {
         return;
     }
     // Counted before anything that could fail, so a node whose callback throws
     // (or that has none) still has an accurate failure count.
-    failureCounts_[static_cast<std::size_t>(kind)].fetch_add(
-        1, std::memory_order_relaxed);
+    failureCounts_[static_cast<std::size_t>(kind)].fetch_add(1, std::memory_order_relaxed);
     if (!taskFailure_) {
         writeFailureLine(kind, exception);
         return;
@@ -342,28 +322,19 @@ void EdgeServer::Impl::reportFailure(
     }
 }
 
-void EdgeServer::Impl::spawnTracked(
-    asio::awaitable<void> operation,
-    EdgeTaskKind kind) {
+void EdgeServer::Impl::spawnTracked(asio::awaitable<void> operation, EdgeTaskKind kind) {
     auto cancellation = std::make_shared<asio::cancellation_signal>();
     activeOperations_.push_back(cancellation);
     try {
-        asio::co_spawn(
-            ioContext_,
-            std::move(operation),
-            asio::bind_cancellation_slot(
-                cancellation->slot(),
-                [this, cancellation, kind](std::exception_ptr exception) noexcept {
-                    // A detached coroutine has no caller to rethrow into: this
-                    // completion is the only place its failure can surface.
-                    // Everything except a shutdown unwind is a failure.
-                    if (exception != nullptr &&
-                        !(shutdownRequestedOnWorker_ &&
-                          isCancellationUnwind(exception))) {
-                        reportFailure(kind, std::move(exception));
-                    }
-                    std::erase(activeOperations_, cancellation);
-                }));
+        asio::co_spawn(ioContext_, std::move(operation), asio::bind_cancellation_slot(cancellation->slot(), [this, cancellation, kind](std::exception_ptr exception) noexcept {
+            // A detached coroutine has no caller to rethrow into: this
+            // completion is the only place its failure can surface.
+            // Everything except a shutdown unwind is a failure.
+            if (exception != nullptr && !(shutdownRequestedOnWorker_ && isCancellationUnwind(exception))) {
+                reportFailure(kind, std::move(exception));
+            }
+            std::erase(activeOperations_, cancellation);
+        }));
         if (shutdownRequestedOnWorker_) {
             cancellation->emit(asio::cancellation_type::terminal);
         }
@@ -382,8 +353,7 @@ void EdgeServer::Impl::dispatchControl(std::function<void()> operation) {
             return;
         }
 
-        if (lifecycle_ == Lifecycle::kReady ||
-            lifecycle_ == Lifecycle::kStopped) {
+        if (lifecycle_ == Lifecycle::kReady || lifecycle_ == Lifecycle::kStopped) {
             // There is no owner thread in these states, so the lifecycle mutex
             // is the temporary owner and serializes embedding threads.
             operation();
@@ -391,9 +361,7 @@ void EdgeServer::Impl::dispatchControl(std::function<void()> operation) {
         }
 
         if (lifecycle_ == Lifecycle::kStopping) {
-            lifecycleChanged_.wait(lock, [this] {
-                return lifecycle_ != Lifecycle::kStopping;
-            });
+            lifecycleChanged_.wait(lock, [this] { return lifecycle_ != Lifecycle::kStopping; });
             // Stop publication may have rolled back. Re-evaluate ownership and
             // either post to the live worker or run after it has stopped.
             continue;
@@ -417,20 +385,14 @@ void EdgeServer::Impl::dispatchControl(std::function<void()> operation) {
 }
 
 bool EdgeServer::Impl::addOrigin(std::string frontHost, OriginSettings settings) {
-    auto task = std::make_shared<std::packaged_task<bool()>>(
-        [this, frontHost = std::move(frontHost), settings = std::move(settings)]() mutable {
-            return config_.addOrigin(std::move(frontHost), std::move(settings));
-        });
+    auto task = std::make_shared<std::packaged_task<bool()>>([this, frontHost = std::move(frontHost), settings = std::move(settings)]() mutable { return config_.addOrigin(std::move(frontHost), std::move(settings)); });
     auto result = task->get_future();
     dispatchControl([task = std::move(task)] { (*task)(); });
     return result.get();
 }
 
 bool EdgeServer::Impl::removeOrigin(std::string_view frontHost) {
-    auto task = std::make_shared<std::packaged_task<bool()>>(
-        [this, frontHost = std::string(frontHost)] {
-            return config_.removeOrigin(frontHost);
-        });
+    auto task = std::make_shared<std::packaged_task<bool()>>([this, frontHost = std::string(frontHost)] { return config_.removeOrigin(frontHost); });
     auto result = task->get_future();
     dispatchControl([task = std::move(task)] { (*task)(); });
     return result.get();
@@ -442,10 +404,7 @@ bool EdgeServer::Impl::setTlsCertificate(const EdgeTlsConfig& tls) {
     }
     try {
         auto context = makeTlsContext(tls);
-        auto task = std::make_shared<std::packaged_task<void()>>(
-            [this, context = std::move(context)]() mutable {
-                storeTlsContext(std::move(context));
-            });
+        auto task = std::make_shared<std::packaged_task<void()>>([this, context = std::move(context)]() mutable { storeTlsContext(std::move(context)); });
         auto result = task->get_future();
         dispatchControl([task = std::move(task)] { (*task)(); });
         result.get();
@@ -462,8 +421,7 @@ bool EdgeServer::Impl::setTlsCertificate(const EdgeTlsConfig& tls) {
 bool EdgeServer::Impl::purge(std::string_view frontHost, std::string_view target) {
     // Remove every cached variant of the URL, not just one encoding.
     const std::string prefix = cacheVariantPrefix("GET", frontHost, target);
-    auto task = std::make_shared<std::packaged_task<bool()>>(
-        [this, prefix] { return cache_.purgePrefix(prefix) > 0; });
+    auto task = std::make_shared<std::packaged_task<bool()>>([this, prefix] { return cache_.purgePrefix(prefix) > 0; });
     auto memoryResult = task->get_future();
     dispatchControl([task = std::move(task)] { (*task)(); });
     const bool removed = memoryResult.get();
@@ -475,8 +433,7 @@ bool EdgeServer::Impl::purge(std::string_view frontHost, std::string_view target
 }
 
 bool EdgeServer::Impl::clearCache() {
-    auto task = std::make_shared<std::packaged_task<void()>>(
-        [this] { cache_.clear(); });
+    auto task = std::make_shared<std::packaged_task<void()>>([this] { cache_.clear(); });
     auto memoryResult = task->get_future();
     dispatchControl([task = std::move(task)] { (*task)(); });
     memoryResult.get();

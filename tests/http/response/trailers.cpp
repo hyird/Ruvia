@@ -13,36 +13,27 @@
 
 namespace {
 
-using ruvia::detail::isForbiddenResponseTrailerName;
-using ruvia::detail::isValidResponseTrailerName;
-using ruvia::detail::isValidResponseTrailerValue;
-using ruvia::detail::responseTrailerFieldValid;
 using ruvia::detail::httpResponseTrailerSection;
 using ruvia::detail::HttpResponseTrailerSectionError;
 using ruvia::detail::HttpResponseTrailerSectionFailure;
 using ruvia::detail::HttpResponseTrailerSectionResult;
+using ruvia::detail::isForbiddenResponseTrailerName;
+using ruvia::detail::isValidResponseTrailerName;
+using ruvia::detail::isValidResponseTrailerValue;
+using ruvia::detail::responseTrailerFieldValid;
 
 template <typename T>
-concept HasAnyRvalueTrailerSectionAccessor =
-    requires(T&& result) { std::move(result).section(); } ||
-    requires(T&& result) { std::move(result).failure(); };
+concept HasAnyRvalueTrailerSectionAccessor = requires(T&& result) { std::move(result).section(); } || requires(T&& result) { std::move(result).failure(); };
 
-static_assert(!HasAnyRvalueTrailerSectionAccessor<
-    HttpResponseTrailerSectionResult>);
-static_assert(std::derived_from<
-    HttpResponseTrailerSectionError,
-    std::exception>);
-static_assert(std::is_trivially_copyable_v<
-    HttpResponseTrailerSectionResult>);
+static_assert(!HasAnyRvalueTrailerSectionAccessor<HttpResponseTrailerSectionResult>);
+static_assert(std::derived_from<HttpResponseTrailerSectionError, std::exception>);
+static_assert(std::is_trivially_copyable_v<HttpResponseTrailerSectionResult>);
 static_assert(sizeof(HttpResponseTrailerSectionResult) <= 24);
 
 template <typename T>
-concept HasRawTrailerSectionError = requires(const T& failure) {
-    failure.error();
-};
+concept HasRawTrailerSectionError = requires(const T& failure) { failure.error(); };
 
-static_assert(!HasRawTrailerSectionError<
-    HttpResponseTrailerSectionFailure>);
+static_assert(!HasRawTrailerSectionError<HttpResponseTrailerSectionFailure>);
 
 }  // namespace
 
@@ -72,10 +63,22 @@ RUVIA_TEST(response_trailer_value_rejects_splitting_bytes) {
     // The other control bytes are not field-vchar either (RFC 9110 §5.5), so a
     // non-splitting control like 0x01, VT (0x0B), FF (0x0C), or DEL (0x7F) must
     // also be rejected -- matching the request-trailer and header-value checks.
-    RUVIA_CHECK(!isValidResponseTrailerValue(std::string_view("a\x01" "b", 3)));
-    RUVIA_CHECK(!isValidResponseTrailerValue(std::string_view("a\x0b" "b", 3)));
-    RUVIA_CHECK(!isValidResponseTrailerValue(std::string_view("a\x0c" "b", 3)));
-    RUVIA_CHECK(!isValidResponseTrailerValue(std::string_view("a\x7f" "b", 3)));
+    RUVIA_CHECK(
+        !isValidResponseTrailerValue(std::string_view("a\x01"
+                                                      "b",
+            3)));
+    RUVIA_CHECK(
+        !isValidResponseTrailerValue(std::string_view("a\x0b"
+                                                      "b",
+            3)));
+    RUVIA_CHECK(
+        !isValidResponseTrailerValue(std::string_view("a\x0c"
+                                                      "b",
+            3)));
+    RUVIA_CHECK(
+        !isValidResponseTrailerValue(std::string_view("a\x7f"
+                                                      "b",
+            3)));
 }
 
 RUVIA_TEST(response_trailer_forbidden_names) {
@@ -103,18 +106,7 @@ RUVIA_TEST(response_trailer_forbidden_names) {
     RUVIA_CHECK(isForbiddenResponseTrailerName("Access-Control-Allow-Headers"));
     RUVIA_CHECK(isForbiddenResponseTrailerName("Access-Control-Max-Age"));
     RUVIA_CHECK(isForbiddenResponseTrailerName("Access-Control-Expose-Headers"));
-    for (const auto name : {
-             "X-Content-Type-Options",
-             "X-Frame-Options",
-             "Strict-Transport-Security",
-             "X-XSS-Protection",
-             "Content-Security-Policy",
-             "Content-Security-Policy-Report-Only",
-             "Referrer-Policy",
-             "Permissions-Policy",
-             "Clear-Site-Data",
-             "WWW-Authenticate",
-             "Content-Disposition"}) {
+    for (const auto name : {"X-Content-Type-Options", "X-Frame-Options", "Strict-Transport-Security", "X-XSS-Protection", "Content-Security-Policy", "Content-Security-Policy-Report-Only", "Referrer-Policy", "Permissions-Policy", "Clear-Site-Data", "WWW-Authenticate", "Content-Disposition"}) {
         RUVIA_CHECK(isForbiddenResponseTrailerName(name));
     }
     // Response control data (RFC 9110 §6.5.1) must be processed before the content
@@ -150,37 +142,27 @@ RUVIA_TEST(response_trailer_field_combined_rule) {
     // Forbidden name.
     RUVIA_CHECK(!responseTrailerFieldValid("Content-Length", "5"));
     RUVIA_CHECK(!responseTrailerFieldValid("transfer-encoding", "chunked"));
-    RUVIA_CHECK(!responseTrailerFieldValid(
-        "Proxy-Connection",
-        "keep-alive"));
+    RUVIA_CHECK(!responseTrailerFieldValid("Proxy-Connection", "keep-alive"));
     RUVIA_CHECK(!responseTrailerFieldValid("Content-Type", "text/plain"));
     RUVIA_CHECK(!responseTrailerFieldValid("Set-Cookie", "a=b"));
     RUVIA_CHECK(!responseTrailerFieldValid("Allow", "GET, POST"));
-    RUVIA_CHECK(!responseTrailerFieldValid(
-        "Access-Control-Allow-Origin",
-        "*"));
+    RUVIA_CHECK(!responseTrailerFieldValid("Access-Control-Allow-Origin", "*"));
     RUVIA_CHECK(responseTrailerFieldValid("Accept-Ranges", "bytes"));
     // Invalid value.
     RUVIA_CHECK(!responseTrailerFieldValid("X-Trace-Id", std::string_view("a\r\nb", 4)));
 }
 
 RUVIA_TEST(response_trailer_section_validation_is_all_fields_or_none) {
-    const std::array<ruvia::HttpHeaderView, 2> valid{
-        ruvia::HttpHeaderView{"X-Trace-Id", "abc"},
-        ruvia::HttpHeaderView{"Server-Timing", "db;dur=5"}};
+    const std::array<ruvia::HttpHeaderView, 2> valid{ruvia::HttpHeaderView{"X-Trace-Id", "abc"}, ruvia::HttpHeaderView{"Server-Timing", "db;dur=5"}};
     const auto validResult = httpResponseTrailerSection(valid);
     RUVIA_CHECK(validResult.section() != nullptr);
     RUVIA_CHECK(validResult.failure() == nullptr);
 
-    const std::array<ruvia::HttpHeaderView, 2> mixed{
-        ruvia::HttpHeaderView{"X-Trace-Id", "abc"},
-        ruvia::HttpHeaderView{"Content-Length", "5"}};
+    const std::array<ruvia::HttpHeaderView, 2> mixed{ruvia::HttpHeaderView{"X-Trace-Id", "abc"}, ruvia::HttpHeaderView{"Content-Length", "5"}};
     const auto mixedResult = httpResponseTrailerSection(mixed);
     RUVIA_CHECK(mixedResult.section() == nullptr);
     RUVIA_CHECK(mixedResult.failure() != nullptr);
-    RUVIA_CHECK_EQ(
-        std::string_view(mixedResult.failure()->exception().what()),
-        std::string_view("invalid HTTP response trailer section"));
+    RUVIA_CHECK_EQ(std::string_view(mixedResult.failure()->exception().what()), std::string_view("invalid HTTP response trailer section"));
     // An empty field sequence is the valid absence of a trailer section; the
     // submission API reports kEmpty separately when asked to submit one.
     const auto emptyResult = httpResponseTrailerSection({});
@@ -196,9 +178,7 @@ RUVIA_TEST(response_trailer_section_enforces_field_limits) {
     RUVIA_CHECK(oversizedResult.section() == nullptr);
     RUVIA_CHECK(oversizedResult.failure() != nullptr);
 
-    std::array<
-        ruvia::HttpHeaderView,
-        ruvia::kMaxHttpHeaderFields + 1> tooMany{};
+    std::array<ruvia::HttpHeaderView, ruvia::kMaxHttpHeaderFields + 1> tooMany{};
     for (auto& header : tooMany) {
         header = {"X-Many", "value"};
     }

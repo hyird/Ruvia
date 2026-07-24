@@ -74,8 +74,7 @@ int main() {
         cache.store("b", makeEntry(1, kNow + 100));
         (void)cache.lookup("a", kNow);               // a is now most-recent
         cache.store("c", makeEntry(1, kNow + 100));  // evicts b, not a
-        check(cache.lookup("a", kNow).status == CacheLookupStatus::kFresh,
-              "recently used a survives");
+        check(cache.lookup("a", kNow).status == CacheLookupStatus::kFresh, "recently used a survives");
         check(cache.lookup("b", kNow).status == CacheLookupStatus::kMiss, "now-LRU b evicted");
     }
 
@@ -99,11 +98,9 @@ int main() {
         check(cache.byteSize() == 25, "replacement updates accounted bytes");
         const auto hit = cache.lookup("a", kNow);
         check(hit.entry && hit.entry->body.size() == 25, "replacement value served");
-        check(original && original->body.size() == 10,
-              "outstanding lease survives replacement");
+        check(original && original->body.size() == 10, "outstanding lease survives replacement");
         cache.purge("a");
-        check(original && original->body.size() == 10,
-              "outstanding lease survives purge");
+        check(original && original->body.size() == 10, "outstanding lease survives purge");
     }
 
     // An entry larger than the whole byte budget is refused, leaving the cache untouched.
@@ -113,8 +110,7 @@ int main() {
         const bool stored = cache.store("huge", makeEntry(200, kNow + 100));
         check(!stored, "oversized entry is refused");
         check(cache.lookup("huge", kNow).status == CacheLookupStatus::kMiss, "oversized not stored");
-        check(cache.lookup("keep", kNow).status == CacheLookupStatus::kFresh,
-              "refusing oversized does not disturb existing entries");
+        check(cache.lookup("keep", kNow).status == CacheLookupStatus::kFresh, "refusing oversized does not disturb existing entries");
     }
 
     // Purge and clear.

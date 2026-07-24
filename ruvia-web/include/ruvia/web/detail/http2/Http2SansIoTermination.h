@@ -20,15 +20,12 @@ class Http2SansIoTerminationObserver final {
 public:
     using Notify = void (*)(void*) noexcept;
 
-    Http2SansIoTerminationObserver(
-        void* target,
-        Notify notify) noexcept
-        : target_(target), notify_(notify) {}
+    Http2SansIoTerminationObserver(void* target, Notify notify) noexcept
+        : target_(target),
+          notify_(notify) {}
 
-    Http2SansIoTerminationObserver(
-        const Http2SansIoTerminationObserver&) = delete;
-    Http2SansIoTerminationObserver& operator=(
-        const Http2SansIoTerminationObserver&) = delete;
+    Http2SansIoTerminationObserver(const Http2SansIoTerminationObserver&) = delete;
+    Http2SansIoTerminationObserver& operator=(const Http2SansIoTerminationObserver&) = delete;
 
 private:
     friend class Http2SansIoTermination;
@@ -68,8 +65,7 @@ public:
         if (terminated()) {
             return false;
         }
-        error_ = error ? error
-                       : std::make_error_code(std::errc::connection_aborted);
+        error_ = error ? error : std::make_error_code(std::errc::connection_aborted);
         for (auto* observer = head_; observer != nullptr;) {
             auto* next = observer->next_;
             observer->notify_(observer->target_);
@@ -78,8 +74,7 @@ public:
         return true;
     }
 
-    [[nodiscard]] bool attach(
-        Http2SansIoTerminationObserver& observer) noexcept {
+    [[nodiscard]] bool attach(Http2SansIoTerminationObserver& observer) noexcept {
         if (terminated()) {
             return false;
         }
@@ -122,18 +117,14 @@ private:
 // continuation owner and a terminal event cannot double-resume the coroutine.
 class Http2SansIoSleepAwaiter final {
 public:
-    Http2SansIoSleepAwaiter(
-        const WorkerHandle& worker,
-        Http2SansIoTermination& termination,
-        std::chrono::steady_clock::duration duration) noexcept
+    Http2SansIoSleepAwaiter(const WorkerHandle& worker, Http2SansIoTermination& termination, std::chrono::steady_clock::duration duration) noexcept
         : worker_(worker),
           termination_(termination),
           duration_(duration),
           observer_(this, &Http2SansIoSleepAwaiter::notifyTermination) {}
 
     [[nodiscard]] bool await_ready() const noexcept {
-        return duration_ <= std::chrono::steady_clock::duration::zero() ||
-            termination_.terminated();
+        return duration_ <= std::chrono::steady_clock::duration::zero() || termination_.terminated();
     }
 
     bool await_suspend(std::coroutine_handle<> continuation) {
@@ -142,14 +133,11 @@ public:
             return false;
         }
         try {
-            WorkerHandleAccess::scheduleTimer(
-                worker_, timer_,
-                workerTimerDeadlineAfter(duration_),
-                [this](WorkerTimerOutcome outcome) noexcept {
-                    timerOutcome_ = outcome;
-                    termination_.detach(observer_);
-                    continuation_.resume();
-                });
+            WorkerHandleAccess::scheduleTimer(worker_, timer_, workerTimerDeadlineAfter(duration_), [this](WorkerTimerOutcome outcome) noexcept {
+                timerOutcome_ = outcome;
+                termination_.detach(observer_);
+                continuation_.resume();
+            });
         } catch (...) {
             termination_.detach(observer_);
             throw;
@@ -162,8 +150,7 @@ public:
             throw std::system_error(termination_.error());
         }
         if (timerOutcome_ == WorkerTimerOutcome::kCancelled) {
-            throw std::system_error(
-                std::make_error_code(std::errc::operation_canceled));
+            throw std::system_error(std::make_error_code(std::errc::operation_canceled));
         }
     }
 
