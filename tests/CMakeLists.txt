@@ -498,6 +498,7 @@ endif()
 # Edge tests only need ruvia::edge; keep them outside the web gate so a
 # web-off edge build still runs them.
 if(RUVIA_BUILD_EDGE)
+    ruvia_add_test(ruvia_smoke_edge_target edge/smoke_edge_target.cpp LIB ruvia::edge)
     ruvia_add_test(ruvia_edge_config edge/config.cpp LIB ruvia::edge TIMEOUT 30)
     ruvia_add_test(ruvia_edge_freshness edge/freshness.cpp LIB ruvia::edge TIMEOUT 30)
     ruvia_add_test(ruvia_edge_cache edge/cache.cpp LIB ruvia::edge TIMEOUT 30)
