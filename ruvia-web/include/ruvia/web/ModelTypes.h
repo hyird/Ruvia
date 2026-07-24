@@ -41,31 +41,17 @@ struct JsonBody : std::false_type {};
 template <typename T>
     requires requires { typename T::RuviaModelSchema; }
 struct JsonBody<T, void> : std::true_type {
-
-    static std::optional<T> parse(
-        std::string_view body,
-        std::pmr::memory_resource* resource) {
+    static std::optional<T> parse(std::string_view body, std::pmr::memory_resource* resource) {
         return T::ruviaParseJsonBody(body, resource);
     }
 
-    static std::optional<T> parseOwned(
-        std::string_view body,
-        std::pmr::memory_resource* resource) {
+    static std::optional<T> parseOwned(std::string_view body, std::pmr::memory_resource* resource) {
         return T::ruviaParseJsonBodyOwned(body, resource);
     }
 
-    static std::optional<T> parseDepth(
-        std::string_view body,
-        std::pmr::memory_resource* resource,
-        std::size_t depth,
-        detail::ModelStringStorage stringStorage =
-            detail::ModelStringStorage::kBorrowed) {
-        if constexpr (requires {
-            T::ruviaParseJsonBodyDepth(
-                body, resource, depth, stringStorage);
-        }) {
-            return T::ruviaParseJsonBodyDepth(
-                body, resource, depth, stringStorage);
+    static std::optional<T> parseDepth(std::string_view body, std::pmr::memory_resource* resource, std::size_t depth, detail::ModelStringStorage stringStorage = detail::ModelStringStorage::kBorrowed) {
+        if constexpr (requires { T::ruviaParseJsonBodyDepth(body, resource, depth, stringStorage); }) {
+            return T::ruviaParseJsonBodyDepth(body, resource, depth, stringStorage);
         } else {
             (void)depth;
             (void)stringStorage;
@@ -80,16 +66,11 @@ struct FormBody : std::false_type {};
 template <typename T>
     requires requires { typename T::RuviaModelSchema; }
 struct FormBody<T, void> : std::true_type {
-
-    static std::optional<T> parse(
-        std::string_view body,
-        std::pmr::memory_resource* resource) {
+    static std::optional<T> parse(std::string_view body, std::pmr::memory_resource* resource) {
         return T::ruviaParseFormBody(body, resource);
     }
 
-    static std::optional<T> parseFields(
-        const RequestNameValueList& fields,
-        std::pmr::memory_resource* resource) {
+    static std::optional<T> parseFields(const RequestNameValueList& fields, std::pmr::memory_resource* resource) {
         if constexpr (requires { T::ruviaParseFormFields(fields, resource); }) {
             return T::ruviaParseFormFields(fields, resource);
         } else {
@@ -110,19 +91,17 @@ struct FixedString {
         }
     }
 
-    [[nodiscard]] constexpr std::string_view view() const & noexcept {
+    [[nodiscard]] constexpr std::string_view view() const& noexcept {
         return std::string_view(value, N - 1);
     }
-    [[nodiscard]] constexpr std::string_view view() const && = delete;
+    [[nodiscard]] constexpr std::string_view view() const&& = delete;
 };
 
 template <std::size_t N>
 FixedString(const char (&)[N]) -> FixedString<N>;
 
 template <std::size_t LeftN, std::size_t RightN>
-[[nodiscard]] constexpr bool operator==(
-    const FixedString<LeftN>& left,
-    const FixedString<RightN>& right) noexcept {
+[[nodiscard]] constexpr bool operator==(const FixedString<LeftN>& left, const FixedString<RightN>& right) noexcept {
     if constexpr (LeftN != RightN) {
         return false;
     } else {
@@ -135,14 +114,9 @@ public:
     explicit String(std::pmr::memory_resource* resource = nullptr)
         : String(detail::ResolvedPmrResourceTag{}, detail::pmrResourceOrDefault(resource)) {}
 
-    String(
-        std::string_view value,
-        std::pmr::memory_resource* resource = nullptr)
+    String(std::string_view value, std::pmr::memory_resource* resource = nullptr)
         : resource_(detail::pmrResourceOrDefault(resource)),
-          storage_(
-              std::in_place_type<std::pmr::string>,
-              value,
-              resource_) {}
+          storage_(std::in_place_type<std::pmr::string>, value, resource_) {}
 
     String(const String&) = delete;
     String& operator=(const String&) = delete;
@@ -162,19 +136,19 @@ public:
         return *this;
     }
 
-    [[nodiscard]] std::string_view view() const & noexcept {
+    [[nodiscard]] std::string_view view() const& noexcept {
         if (const auto* borrowed = std::get_if<std::string_view>(&storage_)) {
             return *borrowed;
         }
         const auto& owned = std::get<std::pmr::string>(storage_);
         return std::string_view(owned);
     }
-    [[nodiscard]] std::string_view view() const && = delete;
+    [[nodiscard]] std::string_view view() const&& = delete;
 
-    [[nodiscard]] const char* data() const & noexcept {
+    [[nodiscard]] const char* data() const& noexcept {
         return view().data();
     }
-    [[nodiscard]] const char* data() const && = delete;
+    [[nodiscard]] const char* data() const&& = delete;
 
     [[nodiscard]] std::size_t size() const noexcept {
         return view().size();
@@ -184,10 +158,10 @@ public:
         return view().empty();
     }
 
-    operator std::string_view() const & noexcept {
+    operator std::string_view() const& noexcept {
         return view();
     }
-    operator std::string_view() const && = delete;
+    operator std::string_view() const&& = delete;
 
     [[nodiscard]] std::pmr::memory_resource* resource() const noexcept {
         return resource_;
@@ -208,16 +182,11 @@ private:
 
     using Storage = std::variant<std::string_view, std::pmr::string>;
 
-    String(
-        detail::ResolvedPmrResourceTag,
-        std::pmr::memory_resource* resource)
+    String(detail::ResolvedPmrResourceTag, std::pmr::memory_resource* resource)
         : resource_(resource),
           storage_(std::in_place_type<std::string_view>) {}
 
-    String(
-        detail::ResolvedPmrResourceTag,
-        std::string_view value,
-        std::pmr::memory_resource* resource)
+    String(detail::ResolvedPmrResourceTag, std::string_view value, std::pmr::memory_resource* resource)
         : resource_(resource),
           storage_(std::in_place_type<std::string_view>, value) {}
 
@@ -228,50 +197,71 @@ private:
 struct Bool final {
     bool value{false};
     constexpr Bool() noexcept = default;
-    constexpr Bool(bool input) noexcept : value(input) {}
-    [[nodiscard]] constexpr operator bool() const noexcept { return value; }
+    constexpr Bool(bool input) noexcept
+        : value(input) {}
+    [[nodiscard]] constexpr operator bool() const noexcept {
+        return value;
+    }
 };
 
 struct Float final {
     float value{0};
     constexpr Float() noexcept = default;
-    constexpr Float(float input) noexcept : value(input) {}
-    [[nodiscard]] constexpr operator float() const noexcept { return value; }
+    constexpr Float(float input) noexcept
+        : value(input) {}
+    [[nodiscard]] constexpr operator float() const noexcept {
+        return value;
+    }
 };
 
 struct Double final {
     double value{0};
     constexpr Double() noexcept = default;
-    constexpr Double(double input) noexcept : value(input) {}
-    [[nodiscard]] constexpr operator double() const noexcept { return value; }
+    constexpr Double(double input) noexcept
+        : value(input) {}
+    [[nodiscard]] constexpr operator double() const noexcept {
+        return value;
+    }
 };
 
 struct Int32 final {
     std::int32_t value{0};
     constexpr Int32() noexcept = default;
-    constexpr Int32(std::int32_t input) noexcept : value(input) {}
-    [[nodiscard]] constexpr operator std::int32_t() const noexcept { return value; }
+    constexpr Int32(std::int32_t input) noexcept
+        : value(input) {}
+    [[nodiscard]] constexpr operator std::int32_t() const noexcept {
+        return value;
+    }
 };
 
 struct UInt32 final {
     std::uint32_t value{0};
     constexpr UInt32() noexcept = default;
-    constexpr UInt32(std::uint32_t input) noexcept : value(input) {}
-    [[nodiscard]] constexpr operator std::uint32_t() const noexcept { return value; }
+    constexpr UInt32(std::uint32_t input) noexcept
+        : value(input) {}
+    [[nodiscard]] constexpr operator std::uint32_t() const noexcept {
+        return value;
+    }
 };
 
 struct Int64 final {
     std::int64_t value{0};
     constexpr Int64() noexcept = default;
-    constexpr Int64(std::int64_t input) noexcept : value(input) {}
-    [[nodiscard]] constexpr operator std::int64_t() const noexcept { return value; }
+    constexpr Int64(std::int64_t input) noexcept
+        : value(input) {}
+    [[nodiscard]] constexpr operator std::int64_t() const noexcept {
+        return value;
+    }
 };
 
 struct UInt64 final {
     std::uint64_t value{0};
     constexpr UInt64() noexcept = default;
-    constexpr UInt64(std::uint64_t input) noexcept : value(input) {}
-    [[nodiscard]] constexpr operator std::uint64_t() const noexcept { return value; }
+    constexpr UInt64(std::uint64_t input) noexcept
+        : value(input) {}
+    [[nodiscard]] constexpr operator std::uint64_t() const noexcept {
+        return value;
+    }
 };
 
 template <typename T>
@@ -319,32 +309,29 @@ public:
         return items_.size();
     }
 
-    [[nodiscard]] const T& operator[](std::size_t index) const & noexcept {
+    [[nodiscard]] const T& operator[](std::size_t index) const& noexcept {
         return *items_[index];
     }
-    [[nodiscard]] const T& operator[](std::size_t) const && = delete;
+    [[nodiscard]] const T& operator[](std::size_t) const&& = delete;
 
-    [[nodiscard]] const T& front() const & noexcept {
+    [[nodiscard]] const T& front() const& noexcept {
         return *items_.front();
     }
-    [[nodiscard]] const T& front() const && = delete;
+    [[nodiscard]] const T& front() const&& = delete;
 
-    [[nodiscard]] auto begin() const & noexcept {
+    [[nodiscard]] auto begin() const& noexcept {
         return Iterator(items_.begin());
     }
-    void begin() const && = delete;
+    void begin() const&& = delete;
 
-    [[nodiscard]] auto end() const & noexcept {
+    [[nodiscard]] auto end() const& noexcept {
         return Iterator(items_.end());
     }
-    void end() const && = delete;
+    void end() const&& = delete;
 
     void clear() noexcept {
         for (auto* value : items_) {
-            detail::destroyPmrObject(
-                detail::ResolvedPmrResourceTag{},
-                value,
-                resource_);
+            detail::destroyPmrObject(detail::ResolvedPmrResourceTag{}, value, resource_);
         }
         items_.clear();
     }
@@ -353,15 +340,9 @@ public:
     T& emplace(Args&&... args) & {
         T* value = nullptr;
         if constexpr (sizeof...(Args) == 0 && std::constructible_from<T, std::pmr::memory_resource*>) {
-            value = detail::constructPmrObject<T>(
-                detail::ResolvedPmrResourceTag{},
-                resource_,
-                resource_);
+            value = detail::constructPmrObject<T>(detail::ResolvedPmrResourceTag{}, resource_, resource_);
         } else {
-            value = detail::constructPmrObject<T>(
-                detail::ResolvedPmrResourceTag{},
-                resource_,
-                std::forward<Args>(args)...);
+            value = detail::constructPmrObject<T>(detail::ResolvedPmrResourceTag{}, resource_, std::forward<Args>(args)...);
         }
         try {
             items_.push_back(value);
@@ -396,7 +377,8 @@ private:
         using pointer = const T*;
         using iterator_category = std::forward_iterator_tag;
 
-        explicit Iterator(InnerIterator current) noexcept : current_(current) {}
+        explicit Iterator(InnerIterator current) noexcept
+            : current_(current) {}
 
         reference operator*() const noexcept {
             return **current_;
@@ -436,9 +418,7 @@ struct ModelValueFactory final {
         return String(ResolvedPmrResourceTag{}, resource);
     }
 
-    [[nodiscard]] static String makeString(
-        std::string_view value,
-        std::pmr::memory_resource* resource) {
+    [[nodiscard]] static String makeString(std::string_view value, std::pmr::memory_resource* resource) {
         return String(ResolvedPmrResourceTag{}, value, resource);
     }
 

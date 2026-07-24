@@ -20,7 +20,7 @@ RUVIA_TEST(pattern_match_plan_quantifiers_and_anchoring) {
     RUVIA_CHECK(matchPatternPlan<ruvia::FixedString{"^a*$"}>(""));
     RUVIA_CHECK(matchPatternPlan<ruvia::FixedString{"^a*$"}>("a"));
     RUVIA_CHECK(matchPatternPlan<ruvia::FixedString{"^a*$"}>("aaa"));
-    RUVIA_CHECK(!matchPatternPlan<ruvia::FixedString{"^a*$"}>("b"));    // trailing byte unconsumed
+    RUVIA_CHECK(!matchPatternPlan<ruvia::FixedString{"^a*$"}>("b"));  // trailing byte unconsumed
     RUVIA_CHECK(!matchPatternPlan<ruvia::FixedString{"^a*$"}>("aab"));
 
     // '+' (one or more).
@@ -53,21 +53,21 @@ RUVIA_TEST(pattern_match_multiple_quantifiers_backtrack_correctly) {
     // the matcher's search (e.g. memoization to bound worst-case backtracking).
 
     // Two adjacent greedy stars.
-    RUVIA_CHECK(matchPatternPlan<ruvia::FixedString{"^a*b*$"}>(""));      // both take zero
-    RUVIA_CHECK(matchPatternPlan<ruvia::FixedString{"^a*b*$"}>("aaa"));   // b* takes zero
-    RUVIA_CHECK(matchPatternPlan<ruvia::FixedString{"^a*b*$"}>("bbb"));   // a* takes zero
+    RUVIA_CHECK(matchPatternPlan<ruvia::FixedString{"^a*b*$"}>(""));     // both take zero
+    RUVIA_CHECK(matchPatternPlan<ruvia::FixedString{"^a*b*$"}>("aaa"));  // b* takes zero
+    RUVIA_CHECK(matchPatternPlan<ruvia::FixedString{"^a*b*$"}>("bbb"));  // a* takes zero
     RUVIA_CHECK(matchPatternPlan<ruvia::FixedString{"^a*b*$"}>("aabb"));
     RUVIA_CHECK(!matchPatternPlan<ruvia::FixedString{"^a*b*$"}>("aba"));  // 'a' after b cannot match
     RUVIA_CHECK(!matchPatternPlan<ruvia::FixedString{"^a*b*$"}>("ba"));   // wrong order
 
     // Overlapping quantifiers on the same atom: a* must give a byte back to a+.
-    RUVIA_CHECK(matchPatternPlan<ruvia::FixedString{"^a*a+$"}>("a"));     // a* zero, a+ one
+    RUVIA_CHECK(matchPatternPlan<ruvia::FixedString{"^a*a+$"}>("a"));  // a* zero, a+ one
     RUVIA_CHECK(matchPatternPlan<ruvia::FixedString{"^a*a+$"}>("aaaa"));
-    RUVIA_CHECK(!matchPatternPlan<ruvia::FixedString{"^a*a+$"}>(""));     // a+ needs >= 1
+    RUVIA_CHECK(!matchPatternPlan<ruvia::FixedString{"^a*a+$"}>(""));  // a+ needs >= 1
 
     // A separator between two digit runs -- a realistic multi-quantifier pattern.
     RUVIA_CHECK(matchPatternPlan<ruvia::FixedString{"^\\d*-\\d*$"}>("12-34"));
-    RUVIA_CHECK(matchPatternPlan<ruvia::FixedString{"^\\d*-\\d*$"}>("-"));     // both runs empty
+    RUVIA_CHECK(matchPatternPlan<ruvia::FixedString{"^\\d*-\\d*$"}>("-"));  // both runs empty
     RUVIA_CHECK(matchPatternPlan<ruvia::FixedString{"^\\d*-\\d*$"}>("12-"));
     RUVIA_CHECK(!matchPatternPlan<ruvia::FixedString{"^\\d*-\\d*$"}>("12-3a"));  // trailing non-digit
     RUVIA_CHECK(!matchPatternPlan<ruvia::FixedString{"^\\d*-\\d*$"}>("1234"));   // no separator
@@ -76,7 +76,7 @@ RUVIA_TEST(pattern_match_multiple_quantifiers_backtrack_correctly) {
 RUVIA_TEST(pattern_match_escape_classes) {
     RUVIA_CHECK(matchPatternEscape('d', '5'));
     RUVIA_CHECK(!matchPatternEscape('d', 'a'));
-    RUVIA_CHECK(matchPatternEscape('w', '_'));   // word includes underscore
+    RUVIA_CHECK(matchPatternEscape('w', '_'));  // word includes underscore
     RUVIA_CHECK(matchPatternEscape('w', 'A'));
     RUVIA_CHECK(!matchPatternEscape('w', '-'));
     RUVIA_CHECK(matchPatternEscape('s', ' '));
@@ -119,11 +119,11 @@ RUVIA_TEST(pattern_match_negated_class_with_caret_member) {
     // consumed by the compiler (which sets the atom's negate flag); a SECOND '^'
     // is an ordinary literal member. So [^^] means "any char except '^'" and must
     // not be double-negated into "matches nothing".
-    RUVIA_CHECK(matchPatternPlan<ruvia::FixedString{"^[^^]$"}>("x"));   // 'x' is not '^'
-    RUVIA_CHECK(!matchPatternPlan<ruvia::FixedString{"^[^^]$"}>("^"));  // '^' is excluded
-    RUVIA_CHECK(matchPatternPlan<ruvia::FixedString{"^[^^a]$"}>("b"));  // not '^' and not 'a'
-    RUVIA_CHECK(!matchPatternPlan<ruvia::FixedString{"^[^^a]$"}>("a")); // 'a' is excluded
-    RUVIA_CHECK(!matchPatternPlan<ruvia::FixedString{"^[^^a]$"}>("^")); // '^' is excluded
+    RUVIA_CHECK(matchPatternPlan<ruvia::FixedString{"^[^^]$"}>("x"));    // 'x' is not '^'
+    RUVIA_CHECK(!matchPatternPlan<ruvia::FixedString{"^[^^]$"}>("^"));   // '^' is excluded
+    RUVIA_CHECK(matchPatternPlan<ruvia::FixedString{"^[^^a]$"}>("b"));   // not '^' and not 'a'
+    RUVIA_CHECK(!matchPatternPlan<ruvia::FixedString{"^[^^a]$"}>("a"));  // 'a' is excluded
+    RUVIA_CHECK(!matchPatternPlan<ruvia::FixedString{"^[^^a]$"}>("^"));  // '^' is excluded
 
     // A caret as a non-first literal member of a positive class stays literal.
     RUVIA_CHECK(matchPatternPlan<ruvia::FixedString{"^[a^]$"}>("^"));

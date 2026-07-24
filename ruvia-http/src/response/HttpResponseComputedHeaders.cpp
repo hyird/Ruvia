@@ -33,11 +33,7 @@ void appendHeaderValueUnsigned(char*& cursor, char* end, std::uint64_t value) {
     cursor = ptr;
 }
 
-void writeContentRangeHeaderValue(
-    HttpResponseHeader& header,
-    std::uint64_t offset,
-    std::uint64_t length,
-    std::uint64_t size) {
+void writeContentRangeHeaderValue(HttpResponseHeader& header, std::uint64_t offset, std::uint64_t length, std::uint64_t size) {
     if (length == 0) {
         throw std::logic_error("file response byte range length must not be zero");
     }
@@ -112,12 +108,7 @@ void HttpResponse::setContentRange(std::uint64_t offset, std::uint64_t length, s
         throw std::logic_error("file response byte range is outside the representation");
     }
     const auto endOffset = offset + length - 1;
-    const auto valueSize = std::string_view("bytes ").size() +
-        detail::httpUnsignedDecimalSize(offset) +
-        1 +
-        detail::httpUnsignedDecimalSize(endOffset) +
-        1 +
-        detail::httpUnsignedDecimalSize(size);
+    const auto valueSize = std::string_view("bytes ").size() + detail::httpUnsignedDecimalSize(offset) + 1 + detail::httpUnsignedDecimalSize(endOffset) + 1 + detail::httpUnsignedDecimalSize(size);
     auto& header = prepareHeaderValueStorage("Content-Range", valueSize, detail::kResponseHeaderContentRange);
     writeContentRangeHeaderValue(header, offset, length, size);
 }

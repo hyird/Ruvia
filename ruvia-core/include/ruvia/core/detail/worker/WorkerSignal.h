@@ -46,8 +46,7 @@ private:
         kScheduled,
     };
 
-    [[nodiscard]] static const WorkerHandle* requireWorker(
-        const WorkerHandle& worker) {
+    [[nodiscard]] static const WorkerHandle* requireWorker(const WorkerHandle& worker) {
         if (!worker.valid()) {
             throw std::invalid_argument("worker signal requires a valid worker");
         }
@@ -60,13 +59,12 @@ private:
         }
     }
 
-    void resumeScheduled(
-        Awaiter* waiter,
-        std::coroutine_handle<> continuation) noexcept;
+    void resumeScheduled(Awaiter* waiter, std::coroutine_handle<> continuation) noexcept;
 
     class WaitReservation final {
     public:
-        explicit WaitReservation(WorkerSignal& signal) noexcept : signal_(&signal) {
+        explicit WaitReservation(WorkerSignal& signal) noexcept
+            : signal_(&signal) {
             ++signal_->reservedWaits_;
         }
         ~WaitReservation() {
@@ -81,7 +79,9 @@ private:
             : signal_(std::exchange(other.signal_, nullptr)) {}
         WaitReservation& operator=(WaitReservation&&) = delete;
 
-        [[nodiscard]] WorkerSignal& signal() const noexcept { return *signal_; }
+        [[nodiscard]] WorkerSignal& signal() const noexcept {
+            return *signal_;
+        }
 
     private:
         WorkerSignal* signal_;
@@ -97,7 +97,8 @@ private:
     }
 
     struct Awaiter final {
-        explicit Awaiter(WorkerSignal& owner) noexcept : signal(owner) {}
+        explicit Awaiter(WorkerSignal& owner) noexcept
+            : signal(owner) {}
 
         ~Awaiter() {
             if (state != AwaitState::kIdle) {
@@ -160,21 +161,13 @@ inline void WorkerSignal::notify() noexcept {
         ++scheduledWaiters_;
         // A detached intrusive node has no recoverable owner. Dispatch failure
         // is terminal instead of silently stranding the continuation.
-        WorkerHandleAccess::deferOrTerminate(
-            *worker_,
-            [this, waiter, continuation] {
-                resumeScheduled(waiter, continuation);
-            });
+        WorkerHandleAccess::deferOrTerminate(*worker_, [this, waiter, continuation] { resumeScheduled(waiter, continuation); });
         waiter = next;
     }
 }
 
-inline void WorkerSignal::resumeScheduled(
-    Awaiter* waiter,
-    std::coroutine_handle<> continuation) noexcept {
-    if (!worker_->isCurrent() || waiter == nullptr ||
-        waiter->state != AwaitState::kScheduled ||
-        waiter->continuation != continuation || scheduledWaiters_ == 0) {
+inline void WorkerSignal::resumeScheduled(Awaiter* waiter, std::coroutine_handle<> continuation) noexcept {
+    if (!worker_->isCurrent() || waiter == nullptr || waiter->state != AwaitState::kScheduled || waiter->continuation != continuation || scheduledWaiters_ == 0) {
         std::terminate();
     }
     --scheduledWaiters_;
@@ -183,4 +176,4 @@ inline void WorkerSignal::resumeScheduled(
     continuation.resume();
 }
 
-}
+}  // namespace ruvia::detail

@@ -26,34 +26,19 @@ namespace ruvia::detail {
 // This returns the one HTTP-owned snapshot both protocol drivers must consume;
 // neither driver may re-plan after Web compression/CORS has finalized the
 // response representation.
-[[nodiscard]] inline HttpBufferedResponseWritePlan prepareBufferedHttpResponse(
-    const HttpRequest& request,
-    HttpContentCoding coding,
-    HttpResponse& response,
-    const HttpServerOptions& options) {
+[[nodiscard]] inline HttpBufferedResponseWritePlan prepareBufferedHttpResponse(const HttpRequest& request, HttpContentCoding coding, HttpResponse& response, const HttpServerOptions& options) {
     materializeResponseBody(response);
     if (options.cors.has_value()) {
         applyCorsHeaders(request, response, *options.cors);
     }
     if (options.compression.has_value()) {
-        applyResponseCompression(
-            coding,
-            request.knownMethod(),
-            response,
-            *options.compression);
+        applyResponseCompression(coding, request.knownMethod(), response, *options.compression);
     }
     return httpBufferedResponseWritePlan(request.knownMethod(), response);
 }
 
-[[nodiscard]] inline HttpBufferedResponseWritePlan prepareBufferedHttpResponse(
-    const HttpRequest& request,
-    HttpResponse& response,
-    const HttpServerOptions& options) {
-    return prepareBufferedHttpResponse(
-        request,
-        httpResponseCodingFor(request),
-        response,
-        options);
+[[nodiscard]] inline HttpBufferedResponseWritePlan prepareBufferedHttpResponse(const HttpRequest& request, HttpResponse& response, const HttpServerOptions& options) {
+    return prepareBufferedHttpResponse(request, httpResponseCodingFor(request), response, options);
 }
 
 }  // namespace ruvia::detail

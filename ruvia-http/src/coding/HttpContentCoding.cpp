@@ -36,11 +36,7 @@ void HttpContentCodingFieldParser::update(std::string_view value) noexcept {
     std::size_t begin = 0;
     while (begin <= value.size()) {
         const auto comma = value.find(',', begin);
-        const auto token = httpTrimOws(value.substr(
-            begin,
-            comma == std::string_view::npos
-                ? std::string_view::npos
-                : comma - begin));
+        const auto token = httpTrimOws(value.substr(begin, comma == std::string_view::npos ? std::string_view::npos : comma - begin));
         if (token.empty()) {
             if (role_ == HttpFieldListRole::kSender) {
                 state_.template emplace<HttpInvalidContentCodingField>();
@@ -55,8 +51,7 @@ void HttpContentCodingFieldParser::update(std::string_view value) noexcept {
                 state_.template emplace<HttpUnsupportedContentCoding>();
             } else if (httpAsciiEqualsIgnoreCase(token, "identity")) {
                 supported->coding = HttpContentCoding::kIdentity;
-            } else if (httpAsciiEqualsIgnoreCase(token, "gzip") ||
-                       httpAsciiEqualsIgnoreCase(token, "x-gzip")) {
+            } else if (httpAsciiEqualsIgnoreCase(token, "gzip") || httpAsciiEqualsIgnoreCase(token, "x-gzip")) {
                 supported->coding = HttpContentCoding::kGzip;
             } else if (httpAsciiEqualsIgnoreCase(token, "br")) {
                 supported->coding = HttpContentCoding::kBrotli;
@@ -83,54 +78,36 @@ HttpContentCodingFieldResult HttpContentCodingFieldParser::finish() const noexce
     return HttpContentCodingFieldResult(std::get<Supported>(state_).coding);
 }
 
-bool isValidHttpContentEncodingFieldValue(
-    std::string_view value,
-    HttpFieldListRole role) noexcept {
+bool isValidHttpContentEncodingFieldValue(std::string_view value, HttpFieldListRole role) noexcept {
     HttpContentCodingFieldParser parser(role);
     parser.update(value);
     const auto result = parser.finish();
     return result.invalid() == nullptr;
 }
 
-HttpContentCodingFieldResult httpContentCodingFromFieldValue(
-    std::string_view value) noexcept {
+HttpContentCodingFieldResult httpContentCodingFromFieldValue(std::string_view value) noexcept {
     HttpContentCodingFieldParser parser;
     parser.update(value);
     return parser.finish();
 }
 
-HttpContentDecodeResult decodeHttpContent(
-    HttpContentCoding coding,
-    std::string_view input,
-    std::size_t maxDecodedBytes,
-    std::pmr::memory_resource* resource) {
+HttpContentDecodeResult decodeHttpContent(HttpContentCoding coding, std::string_view input, std::size_t maxDecodedBytes, std::pmr::memory_resource* resource) {
     ContentDecodeAttempt attempt = HttpContentDecodeError::kUnsupportedCoding;
     switch (coding) {
         case HttpContentCoding::kGzip:
-            attempt = decodeGzipContent(
-                input,
-                maxDecodedBytes,
-                resource);
+            attempt = decodeGzipContent(input, maxDecodedBytes, resource);
             break;
         case HttpContentCoding::kBrotli:
-            attempt = decodeBrotliContent(
-                input,
-                maxDecodedBytes,
-                resource);
+            attempt = decodeBrotliContent(input, maxDecodedBytes, resource);
             break;
         case HttpContentCoding::kZstd:
-            attempt = decodeZstdContent(
-                input,
-                maxDecodedBytes,
-                resource);
+            attempt = decodeZstdContent(input, maxDecodedBytes, resource);
             break;
         case HttpContentCoding::kIdentity: {
             if (input.size() > maxDecodedBytes) {
                 attempt = HttpContentDecodeError::kDecodedSizeExceeded;
             } else {
-                attempt = std::pmr::string(
-                    input,
-                    httpPmrResourceOrDefault(resource));
+                attempt = std::pmr::string(input, httpPmrResourceOrDefault(resource));
             }
             break;
         }
@@ -138,42 +115,26 @@ HttpContentDecodeResult decodeHttpContent(
     if (auto* decoded = std::get_if<std::pmr::string>(&attempt)) {
         return HttpContentDecodeResult::makeDecoded(std::move(*decoded));
     }
-    return HttpContentDecodeResult::makeFailure(
-        std::get<HttpContentDecodeError>(attempt));
+    return HttpContentDecodeResult::makeFailure(std::get<HttpContentDecodeError>(attempt));
 }
 
-HttpContentEncodeResult encodeHttpContent(
-    HttpContentCoding coding,
-    std::string_view input,
-    std::size_t maxEncodedBytes,
-    std::pmr::memory_resource* resource) {
+HttpContentEncodeResult encodeHttpContent(HttpContentCoding coding, std::string_view input, std::size_t maxEncodedBytes, std::pmr::memory_resource* resource) {
     ContentEncodeAttempt attempt = HttpContentEncodeError::kEncoderFailure;
     switch (coding) {
         case HttpContentCoding::kBrotli:
-            attempt = encodeBrotliContent(
-                input,
-                maxEncodedBytes,
-                resource);
+            attempt = encodeBrotliContent(input, maxEncodedBytes, resource);
             break;
         case HttpContentCoding::kZstd:
-            attempt = encodeZstdContent(
-                input,
-                maxEncodedBytes,
-                resource);
+            attempt = encodeZstdContent(input, maxEncodedBytes, resource);
             break;
         case HttpContentCoding::kGzip:
-            attempt = encodeGzipContent(
-                input,
-                maxEncodedBytes,
-                resource);
+            attempt = encodeGzipContent(input, maxEncodedBytes, resource);
             break;
         case HttpContentCoding::kIdentity: {
             if (input.size() > maxEncodedBytes) {
                 attempt = HttpContentEncodeError::kEncodedSizeExceeded;
             } else {
-                attempt = std::pmr::string(
-                    input,
-                    httpPmrResourceOrDefault(resource));
+                attempt = std::pmr::string(input, httpPmrResourceOrDefault(resource));
             }
             break;
         }
@@ -181,8 +142,7 @@ HttpContentEncodeResult encodeHttpContent(
     if (auto* encoded = std::get_if<std::pmr::string>(&attempt)) {
         return HttpContentEncodeResult::makeEncoded(std::move(*encoded));
     }
-    return HttpContentEncodeResult::makeFailure(
-        std::get<HttpContentEncodeError>(attempt));
+    return HttpContentEncodeResult::makeFailure(std::get<HttpContentEncodeError>(attempt));
 }
 
 }  // namespace ruvia::detail

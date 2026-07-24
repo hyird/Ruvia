@@ -17,11 +17,7 @@ void appendStringLiteral(st_mysql& connection, std::pmr::string& output, std::st
     output.push_back('\'');
     const auto offset = output.size();
     output.resize(offset + value.size() * 2 + 1);
-    const auto length = mysql_real_escape_string(
-        &connection,
-        output.data() + offset,
-        value.empty() ? "" : value.data(),
-        static_cast<unsigned long>(value.size()));
+    const auto length = mysql_real_escape_string(&connection, output.data() + offset, value.empty() ? "" : value.data(), static_cast<unsigned long>(value.size()));
     output.resize(offset + length);
     output.push_back('\'');
 }
@@ -49,8 +45,7 @@ void appendValueLiteral(st_mysql& connection, std::pmr::string& output, const Db
             output.append("NULL");
             break;
         case DbValueType::kString:
-            appendStringLiteral(
-                connection, output, DbValueAccess::text(value));
+            appendStringLiteral(connection, output, DbValueAccess::text(value));
             break;
         case DbValueType::kSigned:
             appendDbNumber(output, DbValueAccess::signedValue(value));
@@ -97,11 +92,7 @@ void freeStoredResult(void* result) noexcept {
     mysql_free_result(static_cast<st_mysql_res*>(result));
 }
 
-std::pmr::string interpolateSql(
-    st_mysql& connection,
-    std::string_view sql,
-    std::span<const DbValue> params,
-    std::pmr::memory_resource* resource) {
+std::pmr::string interpolateSql(st_mysql& connection, std::string_view sql, std::span<const DbValue> params, std::pmr::memory_resource* resource) {
     std::pmr::string output(pmrResourceOrDefault(resource));
     std::size_t sizeHint = sql.size();
     for (const auto& param : params) {

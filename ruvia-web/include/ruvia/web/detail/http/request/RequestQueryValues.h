@@ -52,8 +52,7 @@ public:
         return groups_.emplace_back(groups_.get_allocator().resource(), name);
     }
 
-    [[nodiscard]] std::span<const std::string_view> values(
-        std::string_view name) const noexcept {
+    [[nodiscard]] std::span<const std::string_view> values(std::string_view name) const noexcept {
         for (auto it = groups_.rbegin(); it != groups_.rend(); ++it) {
             if (it->name() == name) {
                 return it->values();
@@ -70,23 +69,20 @@ private:
 // One owner prevents Context from representing a half-built query cache.
 class RequestQueryCache final {
 public:
-    RequestQueryCache(
-        std::pmr::vector<std::pmr::string>&& storage,
-        RequestNameValueList&& fields,
-        RequestQueryValues&& values) noexcept
+    RequestQueryCache(std::pmr::vector<std::pmr::string>&& storage, RequestNameValueList&& fields, RequestQueryValues&& values) noexcept
         : storage_(std::move(storage)),
           fields_(std::move(fields)),
           values_(std::move(values)) {}
 
-    [[nodiscard]] const RequestNameValueList& fields() const & noexcept {
+    [[nodiscard]] const RequestNameValueList& fields() const& noexcept {
         return fields_;
     }
-    const RequestNameValueList& fields() const && = delete;
+    const RequestNameValueList& fields() const&& = delete;
 
-    [[nodiscard]] const RequestQueryValues& values() const & noexcept {
+    [[nodiscard]] const RequestQueryValues& values() const& noexcept {
         return values_;
     }
-    const RequestQueryValues& values() const && = delete;
+    const RequestQueryValues& values() const&& = delete;
 
 private:
     // The public fields and multivalue groups borrow these decoded strings.

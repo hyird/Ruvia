@@ -45,42 +45,32 @@ private:
 // slot index; timeout and pool closure can never expose a plausible sentinel.
 class PoolWaiterResult final {
 public:
-    [[nodiscard]] constexpr const PoolWaiterAcquired*
-    acquired() const & noexcept {
+    [[nodiscard]] constexpr const PoolWaiterAcquired* acquired() const& noexcept {
         return std::get_if<PoolWaiterAcquired>(&value_);
     }
-    [[nodiscard]] constexpr const PoolWaiterAcquired*
-    acquired() const && = delete;
+    [[nodiscard]] constexpr const PoolWaiterAcquired* acquired() const&& = delete;
 
-    [[nodiscard]] constexpr const PoolWaiterTimedOut*
-    timedOut() const & noexcept {
+    [[nodiscard]] constexpr const PoolWaiterTimedOut* timedOut() const& noexcept {
         return std::get_if<PoolWaiterTimedOut>(&value_);
     }
-    [[nodiscard]] constexpr const PoolWaiterTimedOut*
-    timedOut() const && = delete;
+    [[nodiscard]] constexpr const PoolWaiterTimedOut* timedOut() const&& = delete;
 
-    [[nodiscard]] constexpr const PoolWaiterClosed*
-    closed() const & noexcept {
+    [[nodiscard]] constexpr const PoolWaiterClosed* closed() const& noexcept {
         return std::get_if<PoolWaiterClosed>(&value_);
     }
-    [[nodiscard]] constexpr const PoolWaiterClosed*
-    closed() const && = delete;
+    [[nodiscard]] constexpr const PoolWaiterClosed* closed() const&& = delete;
 
 private:
     friend class PoolWaiter;
     friend class PoolLeaseScheduler;
 
-    using Value = std::variant<
-        PoolWaiterAcquired,
-        PoolWaiterTimedOut,
-        PoolWaiterClosed>;
+    using Value = std::variant<PoolWaiterAcquired, PoolWaiterTimedOut, PoolWaiterClosed>;
 
     template <typename Alternative>
     explicit constexpr PoolWaiterResult(Alternative alternative) noexcept
         : value_(std::move(alternative)) {}
 
-    [[nodiscard]] static constexpr PoolWaiterResult
-    makeAcquired(std::size_t index) noexcept {
+    [[nodiscard]] static constexpr PoolWaiterResult makeAcquired(std::size_t index) noexcept {
         return PoolWaiterResult(PoolWaiterAcquired(index));
     }
 
@@ -105,8 +95,7 @@ struct PoolWaiterQueued final {};
 // resumes the coroutine, so callers never coordinate external readiness flags.
 class PoolWaiter final {
 public:
-    explicit PoolWaiter(
-        std::chrono::steady_clock::time_point deadline) noexcept
+    explicit PoolWaiter(std::chrono::steady_clock::time_point deadline) noexcept
         : deadline_(deadline) {}
 
     PoolWaiter(const PoolWaiter&) = delete;
@@ -157,10 +146,7 @@ private:
         }
     }
 
-    using State = std::variant<
-        PoolWaiterIdle,
-        PoolWaiterQueued,
-        PoolWaiterResult>;
+    using State = std::variant<PoolWaiterIdle, PoolWaiterQueued, PoolWaiterResult>;
 
     State state_;
     std::chrono::steady_clock::time_point deadline_{};

@@ -42,24 +42,9 @@ using SniContextLookup = std::pmr::vector<std::pair<std::pmr::string, asio::ssl:
 
 class HttpServer final {
 public:
-    HttpServer(
-        asio::ip::tcp::endpoint endpoint,
-        const RouteTable& routes,
-        std::span<const DbDefinition> databases = {},
-        HttpServerOptions options = {});
-    HttpServer(
-        asio::ip::tcp::endpoint endpoint,
-        const RouteTable& routes,
-        std::span<const DbDefinition> databases,
-        std::span<const RedisDefinition> redis,
-        HttpServerOptions options = {});
-    HttpServer(
-        asio::ip::tcp::endpoint endpoint,
-        const RouteTable& routes,
-        std::span<const DbDefinition> databases,
-        std::span<const RedisDefinition> redis,
-        std::span<const WorkerStateDefinition> workerStates,
-        HttpServerOptions options = {});
+    HttpServer(asio::ip::tcp::endpoint endpoint, const RouteTable& routes, std::span<const DbDefinition> databases = {}, HttpServerOptions options = {});
+    HttpServer(asio::ip::tcp::endpoint endpoint, const RouteTable& routes, std::span<const DbDefinition> databases, std::span<const RedisDefinition> redis, HttpServerOptions options = {});
+    HttpServer(asio::ip::tcp::endpoint endpoint, const RouteTable& routes, std::span<const DbDefinition> databases, std::span<const RedisDefinition> redis, std::span<const WorkerStateDefinition> workerStates, HttpServerOptions options = {});
     ~HttpServer();
 
     HttpServer(const HttpServer&) = delete;
@@ -73,22 +58,16 @@ public:
     [[nodiscard]] asio::ip::tcp::endpoint localEndpoint() const;
     // Safe from any thread, at any point in the lifecycle.
     [[nodiscard]] HttpServerStats stats() const noexcept;
-    [[nodiscard]] const WorkerHandle& worker() const & noexcept {
+    [[nodiscard]] const WorkerHandle& worker() const& noexcept {
         return workerHandle_;
     }
-    WorkerHandle worker() const && = delete;
+    WorkerHandle worker() const&& = delete;
     [[nodiscard]] WebWorkerHandle webWorker() const;
+
 private:
     struct ValidatedOptionsTag final {};
 
-    HttpServer(
-        ValidatedOptionsTag,
-        asio::ip::tcp::endpoint endpoint,
-        const RouteTable& routes,
-        std::span<const DbDefinition> databases,
-        std::span<const RedisDefinition> redis,
-        std::span<const WorkerStateDefinition> workerStates,
-        HttpServerOptions validatedOptions);
+    HttpServer(ValidatedOptionsTag, asio::ip::tcp::endpoint endpoint, const RouteTable& routes, std::span<const DbDefinition> databases, std::span<const RedisDefinition> redis, std::span<const WorkerStateDefinition> workerStates, HttpServerOptions validatedOptions);
 
     void configureAcceptor();
     void configureTlsContext();
@@ -99,16 +78,9 @@ private:
     Task<void> acceptLoop();
     Task<void> handleSession(AcceptedConnectionLease connection);
     template <typename Stream>
-    Task<void> handleStreamSession(
-        Stream& stream,
-        asio::ip::tcp::socket& socket,
-        ContextServices services);
+    Task<void> handleStreamSession(Stream& stream, asio::ip::tcp::socket& socket, ContextServices services);
     template <typename Stream>
-    Task<void> handleHttp2Session(
-        Stream& stream,
-        asio::ip::tcp::socket& socket,
-        ContextServices services,
-        std::string_view initialBytes = {});
+    Task<void> handleHttp2Session(Stream& stream, asio::ip::tcp::socket& socket, ContextServices services, std::string_view initialBytes = {});
     asio::io_context ioContext_;
     std::shared_ptr<WorkerDispatcher> workerDispatcher_;
     WorkerHandle workerHandle_;

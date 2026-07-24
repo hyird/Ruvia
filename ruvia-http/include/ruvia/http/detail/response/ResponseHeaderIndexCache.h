@@ -32,10 +32,7 @@ using ResponseHeaderIndexCache = std::array<ResponseHeaderIndexSlot, Count>;
 }
 
 template <std::size_t Count>
-inline void recordResponseHeaderIndex(
-    ResponseHeaderIndexCache<Count>& cache,
-    std::size_t slot,
-    std::size_t index) noexcept {
+inline void recordResponseHeaderIndex(ResponseHeaderIndexCache<Count>& cache, std::size_t slot, std::size_t index) noexcept {
     if (slot >= cache.size()) {
         return;
     }
@@ -50,13 +47,7 @@ inline void recordResponseHeaderIndex(
 }
 
 template <typename HeaderPointer, std::size_t Count>
-[[nodiscard]] inline HeaderPointer findResponseHeaderIndexed(
-    HeaderPointer begin,
-    HeaderPointer end,
-    const ResponseHeaderIndexCache<Count>& cache,
-    std::size_t slot,
-    std::string_view name,
-    std::uint32_t knownBit) noexcept {
+[[nodiscard]] inline HeaderPointer findResponseHeaderIndexed(HeaderPointer begin, HeaderPointer end, const ResponseHeaderIndexCache<Count>& cache, std::size_t slot, std::string_view name, std::uint32_t knownBit) noexcept {
     if (slot < cache.size()) {
         const auto index = cache[slot];
         if (responseHeaderIndexSlotHasValue(index)) {
@@ -69,8 +60,7 @@ template <typename HeaderPointer, std::size_t Count>
 
     for (auto cursor = begin; cursor != end; ++cursor) {
         const auto headerKnownBit = responseHeaderKnownBit(*cursor);
-        if ((knownBit != 0 && headerKnownBit == knownBit) ||
-            (knownBit == 0 && httpAsciiEqualsIgnoreCase(cursor->name(), name))) {
+        if ((knownBit != 0 && headerKnownBit == knownBit) || (knownBit == 0 && httpAsciiEqualsIgnoreCase(cursor->name(), name))) {
             return cursor;
         }
     }

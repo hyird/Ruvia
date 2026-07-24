@@ -20,8 +20,7 @@ public:
     MoveOnlyFunction(std::nullptr_t) noexcept {}
 
     template <typename Fn>
-        requires (!std::same_as<std::remove_cvref_t<Fn>, MoveOnlyFunction>) &&
-                 std::is_invocable_r_v<Result, std::decay_t<Fn>&, Args...>
+        requires(!std::same_as<std::remove_cvref_t<Fn>, MoveOnlyFunction>) && std::is_invocable_r_v<Result, std::decay_t<Fn>&, Args...>
     MoveOnlyFunction(Fn&& fn) {
         using Stored = std::decay_t<Fn>;
         if constexpr (fitsInline<Stored>) {
@@ -83,15 +82,11 @@ private:
     };
 
     template <typename Stored>
-    static constexpr bool fitsInline =
-        sizeof(Stored) <= kInlineSize &&
-        alignof(Stored) <= alignof(std::max_align_t) &&
-        std::is_nothrow_move_constructible_v<Stored>;
+    static constexpr bool fitsInline = sizeof(Stored) <= kInlineSize && alignof(Stored) <= alignof(std::max_align_t) && std::is_nothrow_move_constructible_v<Stored>;
 
     template <typename Stored>
     static Result invoke(void* object, Args&&... args) {
-        return std::invoke(
-            *static_cast<Stored*>(object), std::forward<Args>(args)...);
+        return std::invoke(*static_cast<Stored*>(object), std::forward<Args>(args)...);
     }
 
     template <typename Stored>
@@ -114,12 +109,10 @@ private:
     static void moveHeap(void*, void*) noexcept {}
 
     template <typename Stored>
-    static inline constexpr Operations inlineOperations{
-        &invoke<Stored>, &destroyInline<Stored>, &moveInline<Stored>};
+    static inline constexpr Operations inlineOperations{&invoke<Stored>, &destroyInline<Stored>, &moveInline<Stored>};
 
     template <typename Stored>
-    static inline constexpr Operations heapOperations{
-        &invoke<Stored>, &destroyHeap<Stored>, &moveHeap};
+    static inline constexpr Operations heapOperations{&invoke<Stored>, &destroyHeap<Stored>, &moveHeap};
 
     [[nodiscard]] bool isInline() const noexcept {
         return object_ == static_cast<const void*>(storage_);

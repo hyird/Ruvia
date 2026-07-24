@@ -16,65 +16,42 @@
 namespace ruvia::detail {
 
 inline bool setKnownStaticVaryToken(HttpResponse& response, std::string_view token) {
-    if (token == "Accept-Encoding" ||
-        token == "Origin" ||
-        token == "Access-Control-Request-Headers" ||
-        token == "Access-Control-Request-Method") {
+    if (token == "Accept-Encoding" || token == "Origin" || token == "Access-Control-Request-Headers" || token == "Access-Control-Request-Method") {
         setResponseHeaderStableView(response, "Vary", token);
         return true;
     }
     return false;
 }
 
-inline bool varyTokenRepeatedInBatch(
-    const std::string_view* tokens,
-    std::size_t current) noexcept {
-    return std::ranges::any_of(
-        std::span(tokens, current),
-        [candidate = tokens[current]](std::string_view token) noexcept {
-            return httpAsciiEqualsIgnoreCase(token, candidate);
-        });
+inline bool varyTokenRepeatedInBatch(const std::string_view* tokens, std::size_t current) noexcept {
+    return std::ranges::any_of(std::span(tokens, current), [candidate = tokens[current]](std::string_view token) noexcept { return httpAsciiEqualsIgnoreCase(token, candidate); });
 }
 
-[[nodiscard]] inline bool responseVaryHasToken(
-    const HttpResponse& response,
-    std::string_view token) noexcept {
+[[nodiscard]] inline bool responseVaryHasToken(const HttpResponse& response, std::string_view token) noexcept {
     if (!responseHasKnownHeader(response, kResponseHeaderVary)) {
         return false;
     }
     for (const auto& header : response.headers()) {
-        if (responseHeaderKnownBit(header) == kResponseHeaderVary &&
-            httpHasToken(header.value(), token)) {
+        if (responseHeaderKnownBit(header) == kResponseHeaderVary && httpHasToken(header.value(), token)) {
             return true;
         }
     }
     return false;
 }
 
-inline void setResponseHeaderIfMissing(
-    HttpResponse& response,
-    std::uint32_t bit,
-    std::string_view name,
-    std::string_view value) {
+inline void setResponseHeaderIfMissing(HttpResponse& response, std::uint32_t bit, std::string_view name, std::string_view value) {
     if (!responseHasKnownHeader(response, bit)) {
         response.header(name, value);
     }
 }
 
-inline void setStableResponseHeaderIfMissing(
-    HttpResponse& response,
-    std::uint32_t bit,
-    std::string_view name,
-    std::string_view value) {
+inline void setStableResponseHeaderIfMissing(HttpResponse& response, std::uint32_t bit, std::string_view name, std::string_view value) {
     if (!responseHasKnownHeader(response, bit)) {
         setResponseHeaderStableView(response, name, value);
     }
 }
 
-inline void addVaryTokens(
-    HttpResponse& response,
-    const std::string_view* tokens,
-    std::size_t tokenCount) {
+inline void addVaryTokens(HttpResponse& response, const std::string_view* tokens, std::size_t tokenCount) {
     if (tokens == nullptr || tokenCount == 0) {
         return;
     }
@@ -99,9 +76,7 @@ inline void addVaryTokens(
     std::string_view firstAdded;
     for (std::size_t i = 0; i < tokenCount; ++i) {
         const auto token = tokens[i];
-        if (token.empty() ||
-            responseVaryHasToken(response, token) ||
-            varyTokenRepeatedInBatch(tokens, i)) {
+        if (token.empty() || responseVaryHasToken(response, token) || varyTokenRepeatedInBatch(tokens, i)) {
             continue;
         }
         if (addedCount == 0) {
@@ -121,8 +96,7 @@ inline void addVaryTokens(
     std::size_t existingBytes = 0;
     if (responseHasKnownHeader(response, kResponseHeaderVary)) {
         for (const auto& header : response.headers()) {
-            if (responseHeaderKnownBit(header) != kResponseHeaderVary ||
-                httpTrimOws(header.value()).empty()) {
+            if (responseHeaderKnownBit(header) != kResponseHeaderVary || httpTrimOws(header.value()).empty()) {
                 continue;
             }
             ++existingValueCount;
@@ -138,13 +112,10 @@ inline void addVaryTokens(
 
     std::pmr::string updated(responseResource(response));
     const auto partCount = existingValueCount + addedCount;
-    updated.reserve(
-        existingBytes + addedBytes +
-        (partCount == 0 ? 0 : (partCount - 1) * 2));
+    updated.reserve(existingBytes + addedBytes + (partCount == 0 ? 0 : (partCount - 1) * 2));
     if (existingValueCount != 0) {
         for (const auto& header : response.headers()) {
-            if (responseHeaderKnownBit(header) != kResponseHeaderVary ||
-                httpTrimOws(header.value()).empty()) {
+            if (responseHeaderKnownBit(header) != kResponseHeaderVary || httpTrimOws(header.value()).empty()) {
                 continue;
             }
             if (!updated.empty()) {
@@ -160,9 +131,7 @@ inline void addVaryTokens(
                 continue;
             }
         } else {
-            if (token.empty() ||
-                responseVaryHasToken(response, token) ||
-                varyTokenRepeatedInBatch(tokens, i)) {
+            if (token.empty() || responseVaryHasToken(response, token) || varyTokenRepeatedInBatch(tokens, i)) {
                 continue;
             }
         }

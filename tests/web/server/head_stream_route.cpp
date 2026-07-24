@@ -35,24 +35,19 @@ ruvia::Task<void> tickStreamHandler(void*, ruvia::Context& context) {
     co_await context.stream().end();
 }
 
-[[nodiscard]] std::string readHead(
-    asio::ip::tcp::socket& socket, asio::streambuf& buffer, std::error_code& ec) {
+[[nodiscard]] std::string readHead(asio::ip::tcp::socket& socket, asio::streambuf& buffer, std::error_code& ec) {
     const std::size_t n = asio::read_until(socket, buffer, "\r\n\r\n", ec);
     if (ec) {
         return {};
     }
-    std::string head(
-        asio::buffers_begin(buffer.data()),
-        asio::buffers_begin(buffer.data()) + n);
+    std::string head(asio::buffers_begin(buffer.data()), asio::buffers_begin(buffer.data()) + n);
     buffer.consume(n);
     return head;
 }
 
 [[nodiscard]] std::string lowered(std::string_view text) {
     std::string result(text);
-    std::transform(result.begin(), result.end(), result.begin(), [](unsigned char c) {
-        return static_cast<char>(std::tolower(c));
-    });
+    std::transform(result.begin(), result.end(), result.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
     return result;
 }
 
@@ -63,18 +58,12 @@ int main() {
     auto& impl = ruvia::detail::RouterImpl::from(router);
     std::pmr::string eventsPath("/events", std::pmr::get_default_resource());
     std::pmr::string ssePath("/sse", std::pmr::get_default_resource());
-    impl.registerResponseStreamRoute(
-        ruvia::HttpKnownMethod::kGet, std::move(eventsPath),
-        ruvia::detail::RouteStreamHandler(nullptr, &tickStreamHandler), {}, {});
-    impl.registerSseRoute(
-        ruvia::HttpKnownMethod::kGet, std::move(ssePath),
-        ruvia::detail::RouteStreamHandler(nullptr, &tickStreamHandler), {}, {});
+    impl.registerResponseStreamRoute(ruvia::HttpKnownMethod::kGet, std::move(eventsPath), ruvia::detail::RouteStreamHandler(nullptr, &tickStreamHandler), {}, {});
+    impl.registerSseRoute(ruvia::HttpKnownMethod::kGet, std::move(ssePath), ruvia::detail::RouteStreamHandler(nullptr, &tickStreamHandler), {}, {});
     impl.finalize();
 
     ruvia::detail::HttpServerOptions options;
-    ruvia::detail::HttpServer server(
-        asio::ip::tcp::endpoint(asio::ip::make_address("127.0.0.1"), 0),
-        impl.routeTable(), {}, options);
+    ruvia::detail::HttpServer server(asio::ip::tcp::endpoint(asio::ip::make_address("127.0.0.1"), 0), impl.routeTable(), {}, options);
     server.start();
     const auto endpoint = server.localEndpoint();
 
@@ -92,8 +81,7 @@ int main() {
     asio::streambuf buffer;
 
     // HEAD of the generic streaming route: the streaming head, no body bytes.
-    asio::write(sock, asio::buffer(std::string_view(
-        "HEAD /events HTTP/1.1\r\nHost: localhost\r\n\r\n")), ec);
+    asio::write(sock, asio::buffer(std::string_view("HEAD /events HTTP/1.1\r\nHost: localhost\r\n\r\n")), ec);
     const auto eventsHead = lowered(readHead(sock, buffer, ec));
     if (!eventsHead.starts_with("http/1.1 200")) {
         fail(1, "HEAD of a streaming route was not 200");
@@ -105,8 +93,7 @@ int main() {
 
     // HEAD of the SSE route mirrors the GET head, content type included.
     if (rc == 0) {
-        asio::write(sock, asio::buffer(std::string_view(
-            "HEAD /sse HTTP/1.1\r\nHost: localhost\r\n\r\n")), ec);
+        asio::write(sock, asio::buffer(std::string_view("HEAD /sse HTTP/1.1\r\nHost: localhost\r\n\r\n")), ec);
         const auto sseHead = lowered(readHead(sock, buffer, ec));
         if (!sseHead.starts_with("http/1.1 200")) {
             fail(4, "HEAD of an SSE route was not 200");
@@ -120,8 +107,7 @@ int main() {
     // The connection stayed alive and correctly framed: a pipelined GET on the
     // same socket must still stream the full chunked body.
     if (rc == 0) {
-        asio::write(sock, asio::buffer(std::string_view(
-            "GET /events HTTP/1.1\r\nHost: localhost\r\n\r\n")), ec);
+        asio::write(sock, asio::buffer(std::string_view("GET /events HTTP/1.1\r\nHost: localhost\r\n\r\n")), ec);
         const auto getHead = lowered(readHead(sock, buffer, ec));
         if (!getHead.starts_with("http/1.1 200")) {
             fail(7, "GET after HEAD did not parse as a clean 200 response");
@@ -129,11 +115,8 @@ int main() {
             fail(8, "streaming GET after HEAD was not chunked");
         } else {
             asio::read_until(sock, buffer, "0\r\n\r\n", ec);
-            const std::string body(
-                asio::buffers_begin(buffer.data()),
-                asio::buffers_begin(buffer.data()) + buffer.size());
-            if (body.find("tick-1") == std::string_view::npos ||
-                body.find("tick-2") == std::string_view::npos) {
+            const std::string body(asio::buffers_begin(buffer.data()), asio::buffers_begin(buffer.data()) + buffer.size());
+            if (body.find("tick-1") == std::string_view::npos || body.find("tick-2") == std::string_view::npos) {
                 fail(9, "streaming GET body after HEAD was incomplete");
             }
         }

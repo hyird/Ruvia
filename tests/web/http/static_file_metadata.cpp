@@ -21,12 +21,8 @@ std::string_view guess(const char* name) {
     return guessStaticFileContentType(std::filesystem::path(name));
 }
 
-std::string fileEtag(
-    std::uint64_t size,
-    std::uint64_t modifiedToken,
-    ruvia::detail::ResponseFileIdentity identity) {
-    const auto out = ruvia::detail::makeStaticFileSnapshotEtag(
-        std::pmr::get_default_resource(), size, modifiedToken, identity);
+std::string fileEtag(std::uint64_t size, std::uint64_t modifiedToken, ruvia::detail::ResponseFileIdentity identity) {
+    const auto out = ruvia::detail::makeStaticFileSnapshotEtag(std::pmr::get_default_resource(), size, modifiedToken, identity);
     return std::string(out.data(), out.size());
 }
 
@@ -89,10 +85,8 @@ RUVIA_TEST(static_file_append_unsigned_decimal) {
 }
 
 RUVIA_TEST(static_file_etag_deterministic_and_sensitive) {
-    const auto identity = ruvia::detail::ResponseFileIdentity::checked(
-        {1, 2, 3, 4});
-    const auto replacement = ruvia::detail::ResponseFileIdentity::checked(
-        {1, 2, 3, 5});
+    const auto identity = ruvia::detail::ResponseFileIdentity::checked({1, 2, 3, 4});
+    const auto replacement = ruvia::detail::ResponseFileIdentity::checked({1, 2, 3, 5});
     const auto base = fileEtag(100, 123456, identity);
     // The strong validator binds framing metadata and the exact indexed file.
     RUVIA_CHECK_EQ(base, std::string("\"100-123456-1-2-3-4\""));

@@ -18,11 +18,7 @@
 namespace ruvia::detail {
 
 template <typename T>
-[[nodiscard]] std::optional<T> parseJsonValue(
-    std::string_view& input,
-    std::pmr::memory_resource* resource,
-    std::size_t depth = 0,
-    ModelStringStorage stringStorage = ModelStringStorage::kBorrowed);
+[[nodiscard]] std::optional<T> parseJsonValue(std::string_view& input, std::pmr::memory_resource* resource, std::size_t depth = 0, ModelStringStorage stringStorage = ModelStringStorage::kBorrowed);
 
 template <typename SequenceT>
 struct JsonSequenceValueTraits;
@@ -46,11 +42,7 @@ struct JsonSequenceValueTraits<List<ValueT>> {
 };
 
 template <typename SequenceT>
-[[nodiscard]] std::optional<SequenceT> parseJsonSequenceValue(
-    std::string_view& input,
-    std::pmr::memory_resource* resource,
-    std::size_t depth,
-    ModelStringStorage stringStorage) {
+[[nodiscard]] std::optional<SequenceT> parseJsonSequenceValue(std::string_view& input, std::pmr::memory_resource* resource, std::size_t depth, ModelStringStorage stringStorage) {
     using Traits = JsonSequenceValueTraits<std::remove_cvref_t<SequenceT>>;
     using ElementT = typename Traits::value_type;
 
@@ -71,8 +63,7 @@ template <typename SequenceT>
     }
 
     for (;;) {
-        auto element = parseJsonValue<ElementT>(
-            remaining, resource, depth + 1, stringStorage);
+        auto element = parseJsonValue<ElementT>(remaining, resource, depth + 1, stringStorage);
         if (!element.has_value()) {
             return std::nullopt;
         }
@@ -91,11 +82,7 @@ template <typename SequenceT>
 }
 
 template <typename T>
-[[nodiscard]] std::optional<T> parseJsonValue(
-    std::string_view& input,
-    std::pmr::memory_resource* resource,
-    std::size_t depth,
-    ModelStringStorage stringStorage) {
+[[nodiscard]] std::optional<T> parseJsonValue(std::string_view& input, std::pmr::memory_resource* resource, std::size_t depth, ModelStringStorage stringStorage) {
     using FieldT = std::remove_cvref_t<T>;
     if (depth > kMaxJsonDepth) {
         return std::nullopt;
@@ -123,15 +110,13 @@ template <typename T>
         return value;
     } else if constexpr (std::is_same_v<FieldT, std::string_view>) {
         const auto parsed = parseJsonString(remaining);
-        if (!parsed.has_value() ||
-            parsed->encoding() != JsonStringEncoding::kLiteral) {
+        if (!parsed.has_value() || parsed->encoding() != JsonStringEncoding::kLiteral) {
             return std::nullopt;
         }
         input = remaining;
         return parsed->raw();
     } else if constexpr (isRuviaArray<FieldT> || isRuviaList<FieldT>) {
-        auto parsed = parseJsonSequenceValue<FieldT>(
-            remaining, resource, depth, stringStorage);
+        auto parsed = parseJsonSequenceValue<FieldT>(remaining, resource, depth, stringStorage);
         if (!parsed.has_value()) {
             return std::nullopt;
         }
@@ -160,14 +145,8 @@ template <typename T>
         if (!skipJsonObject(remaining, depth + 1)) {
             return std::nullopt;
         }
-        const auto object = objectStart.substr(
-            0,
-            objectStart.size() - remaining.size());
-        auto nested = JsonBody<FieldT>::parseDepth(
-            object,
-            resource,
-            depth + 1,
-            stringStorage);
+        const auto object = objectStart.substr(0, objectStart.size() - remaining.size());
+        auto nested = JsonBody<FieldT>::parseDepth(object, resource, depth + 1, stringStorage);
         if (!nested.has_value()) {
             return std::nullopt;
         }

@@ -77,8 +77,7 @@ private:
 
     ruvia::Task<ruvia::HttpResponse> echo(ruvia::Context& c) {
         const auto body = co_await c.req().json<TestingFacadeEcho>();
-        co_return c.body(
-            body.value().has_value() ? body.value()->view() : "missing");
+        co_return c.body(body.value().has_value() ? body.value()->view() : "missing");
     }
 };
 
@@ -104,8 +103,7 @@ RUVIA_TEST(testing_facade_dispatches_routes_params_query_and_cookies) {
     const auto user = app.request(ruvia::TestRequest::get("/t/users/42"));
     RUVIA_CHECK_EQ(user.body(), std::string_view("42"));
 
-    const auto greet = app.request(
-        ruvia::TestRequest::get("/t/greet?name=ada").cookie("sid", "s-1"));
+    const auto greet = app.request(ruvia::TestRequest::get("/t/greet?name=ada").cookie("sid", "s-1"));
     RUVIA_CHECK_EQ(greet.body(), std::string_view("ada/s-1"));
 
     const auto link = app.request(ruvia::TestRequest::get("/t/link"));
@@ -122,25 +120,20 @@ RUVIA_TEST(testing_facade_dispatches_routes_params_query_and_cookies) {
 RUVIA_TEST(testing_facade_runs_model_bodies_with_media_type_split) {
     ruvia::TestApp app;
 
-    const auto ok = app.request(
-        ruvia::TestRequest::post("/t/echo").json(R"({"value":"hi"})"));
+    const auto ok = app.request(ruvia::TestRequest::post("/t/echo").json(R"({"value":"hi"})"));
     RUVIA_CHECK(ok.status() == ruvia::http_status::kOk);
     RUVIA_CHECK_EQ(ok.body(), std::string_view("hi"));
 
-    const auto wrongType = app.request(
-        ruvia::TestRequest::post("/t/echo").body(R"({"value":"hi"})", "text/plain"));
+    const auto wrongType = app.request(ruvia::TestRequest::post("/t/echo").body(R"({"value":"hi"})", "text/plain"));
     RUVIA_CHECK(wrongType.status() == ruvia::http_status::kUnsupportedMediaType);
 
-    const auto badBody = app.request(
-        ruvia::TestRequest::post("/t/echo").json("{not-json"));
+    const auto badBody = app.request(ruvia::TestRequest::post("/t/echo").json("{not-json"));
     RUVIA_CHECK(badBody.status() == ruvia::http_status::kBadRequest);
 }
 
 RUVIA_TEST(testing_facade_applies_app_level_configuration) {
     ruvia::TestApp app;
-    app.use<TestingFacadeStamp>()
-        .notFound(&facadeNotFound)
-        .notFound("/api", &apiScopedMiss);
+    app.use<TestingFacadeStamp>().notFound(&facadeNotFound).notFound("/api", &apiScopedMiss);
     app.useWorkerState<TestingFacadeCounter>();
 
     // Global middleware wraps every matched route.

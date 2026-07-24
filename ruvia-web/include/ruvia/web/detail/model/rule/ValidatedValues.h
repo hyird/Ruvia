@@ -44,10 +44,7 @@ public:
 private:
     friend class ValidatedModelBindings;
 
-    ValidatedModelBinding(
-        ValidatedModelBindings& bindings,
-        const T& value,
-        std::string_view rawJson) noexcept;
+    ValidatedModelBinding(ValidatedModelBindings& bindings, const T& value, std::string_view rawJson) noexcept;
 
     ValidatedModelBindings* bindings_;
     ValidatedModelBindingNode node_;
@@ -87,22 +84,19 @@ public:
         const auto* key = validatedValueTypeKey<ModelT>();
         for (auto* node = head_; node != nullptr; node = node->previous) {
             if (node->typeKey == key && !node->rawJson.empty()) {
-                return ValidatedJson<ModelT>(
-                    *static_cast<const ModelT*>(node->value), node->rawJson);
+                return ValidatedJson<ModelT>(*static_cast<const ModelT*>(node->value), node->rawJson);
             }
         }
         throw std::logic_error("validated JSON request model is not available");
     }
 
     template <typename T>
-    [[nodiscard]] ValidatedModelBinding<T> bind(
-        const T& value,
-        std::string_view rawJson = {}) {
+    [[nodiscard]] ValidatedModelBinding<T> bind(const T& value, std::string_view rawJson = {}) {
         return ValidatedModelBinding<T>(*this, value, rawJson);
     }
 
     template <typename T>
-        requires (!std::is_lvalue_reference_v<T>)
+        requires(!std::is_lvalue_reference_v<T>)
     [[nodiscard]] ValidatedModelBinding<std::remove_cvref_t<T>> bind(T&&) = delete;
 
 private:
@@ -125,10 +119,7 @@ private:
 };
 
 template <typename T>
-ValidatedModelBinding<T>::ValidatedModelBinding(
-    ValidatedModelBindings& bindings,
-    const T& value,
-    std::string_view rawJson) noexcept
+ValidatedModelBinding<T>::ValidatedModelBinding(ValidatedModelBindings& bindings, const T& value, std::string_view rawJson) noexcept
     : bindings_(&bindings),
       node_{validatedValueTypeKey<T>(), &value, rawJson, nullptr} {
     bindings_->push(node_);

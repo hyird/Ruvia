@@ -18,47 +18,23 @@ struct StreamingAccess final {
     using StreamCommitted = ResponseStreamWriter::Committed;
     using StreamAborted = ResponseStreamWriter::Aborted;
 
-    static void emplaceBodyReader(
-        std::optional<BodyReader>& storage,
-        void* target,
-        BodyRead read) {
+    static void emplaceBodyReader(std::optional<BodyReader>& storage, void* target, BodyRead read) {
         storage.emplace(BodyReader::Token{}, target, read);
     }
 
-    [[nodiscard]] static BodyReader makeBodyReader(
-        void* target,
-        BodyRead read) noexcept {
+    [[nodiscard]] static BodyReader makeBodyReader(void* target, BodyRead read) noexcept {
         return BodyReader(BodyReader::Token{}, target, read);
     }
 
-    [[nodiscard]] static ResponseStreamWriter makeResponseStreamWriter(
-        void* target,
-        StreamWrite write,
-        StreamEnd end,
-        StreamSleep sleep,
-        StreamBindContext bindContext,
-        StreamReleaseContext releaseContext,
-        StreamCommitted committed,
-        StreamAborted aborted) noexcept {
-        return ResponseStreamWriter(
-            target,
-            write,
-            end,
-            sleep,
-            bindContext,
-            releaseContext,
-            committed,
-            aborted);
+    [[nodiscard]] static ResponseStreamWriter makeResponseStreamWriter(void* target, StreamWrite write, StreamEnd end, StreamSleep sleep, StreamBindContext bindContext, StreamReleaseContext releaseContext, StreamCommitted committed, StreamAborted aborted) noexcept {
+        return ResponseStreamWriter(target, write, end, sleep, bindContext, releaseContext, committed, aborted);
     }
 
     [[nodiscard]] static SseWriter makeSseWriter(ResponseStreamWriter& writer) noexcept {
         return SseWriter(writer);
     }
 
-    static void bindContext(
-        ResponseStreamWriter& writer,
-        Context& context,
-        ResponseStreamWriter::StreamingHeadThunk streamingHead) {
+    static void bindContext(ResponseStreamWriter& writer, Context& context, ResponseStreamWriter::StreamingHeadThunk streamingHead) {
         writer.bindContext(context, streamingHead);
     }
 

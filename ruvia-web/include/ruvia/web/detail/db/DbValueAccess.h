@@ -17,18 +17,15 @@ struct DbValueAccess final {
         return value.type();
     }
 
-    [[nodiscard]] static std::string_view text(
-        const DbValue& value) noexcept {
+    [[nodiscard]] static std::string_view text(const DbValue& value) noexcept {
         return value.text();
     }
 
-    [[nodiscard]] static std::int64_t signedValue(
-        const DbValue& value) noexcept {
+    [[nodiscard]] static std::int64_t signedValue(const DbValue& value) noexcept {
         return value.signedValue();
     }
 
-    [[nodiscard]] static std::uint64_t unsignedValue(
-        const DbValue& value) noexcept {
+    [[nodiscard]] static std::uint64_t unsignedValue(const DbValue& value) noexcept {
         return value.unsignedValue();
     }
 

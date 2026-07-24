@@ -52,20 +52,14 @@ ruvia::Task<void> writeUntilBlocked(void*, ruvia::Context& context) {
 int main() {
     ruvia::Router router;
     auto& routerImpl = ruvia::detail::RouterImpl::from(router);
-    routerImpl.registerResponseStreamRoute(
-        ruvia::HttpKnownMethod::kGet,
-        std::pmr::string("/big", std::pmr::get_default_resource()),
-        ruvia::detail::RouteStreamHandler(nullptr, &writeUntilBlocked),
-        {}, {});
+    routerImpl.registerResponseStreamRoute(ruvia::HttpKnownMethod::kGet, std::pmr::string("/big", std::pmr::get_default_resource()), ruvia::detail::RouteStreamHandler(nullptr, &writeUntilBlocked), {}, {});
     routerImpl.finalize();
 
     ruvia::detail::HttpServerOptions options;
     options.sendTimeout = kSendTimeout;
     options.scanInterval = 50ms;
 
-    ruvia::detail::HttpServer server(
-        asio::ip::tcp::endpoint(asio::ip::make_address("127.0.0.1"), 0),
-        routerImpl.routeTable(), {}, std::move(options));
+    ruvia::detail::HttpServer server(asio::ip::tcp::endpoint(asio::ip::make_address("127.0.0.1"), 0), routerImpl.routeTable(), {}, std::move(options));
     server.start();
     const auto endpoint = server.localEndpoint();
 
@@ -81,9 +75,7 @@ int main() {
         }
 
         if (result == 0) {
-            socket.set_option(
-                asio::socket_base::receive_buffer_size(kClientReceiveBufferBytes),
-                ec);
+            socket.set_option(asio::socket_base::receive_buffer_size(kClientReceiveBufferBytes), ec);
             if (ec) {
                 std::fputs("receive buffer setup failed\n", stderr);
                 result = 1;
@@ -99,8 +91,7 @@ int main() {
         }
 
         if (result == 0) {
-            asio::write(socket, asio::buffer(std::string_view(
-                "GET /big HTTP/1.1\r\nHost: localhost\r\n\r\n")), ec);
+            asio::write(socket, asio::buffer(std::string_view("GET /big HTTP/1.1\r\nHost: localhost\r\n\r\n")), ec);
             if (ec) {
                 std::fputs("request write failed\n", stderr);
                 result = 2;
@@ -116,18 +107,19 @@ int main() {
             // the read would stall until the safety timer.
             bool closed = false;
             asio::steady_timer safety(ctx, 2000ms);
-            safety.async_wait([&](const std::error_code& e) { if (!e) socket.cancel(); });
+            safety.async_wait([&](const std::error_code& e) {
+                if (!e) socket.cancel();
+            });
             std::function<void()> readMore;
             readMore = [&]() {
-                socket.async_read_some(asio::buffer(drainBuf),
-                    [&](const std::error_code& e, std::size_t) {
-                        if (e) {
-                            if (e != asio::error::operation_aborted) closed = true;
-                            safety.cancel();
-                            return;
-                        }
-                        readMore();
-                    });
+                socket.async_read_some(asio::buffer(drainBuf), [&](const std::error_code& e, std::size_t) {
+                    if (e) {
+                        if (e != asio::error::operation_aborted) closed = true;
+                        safety.cancel();
+                        return;
+                    }
+                    readMore();
+                });
             };
             readMore();
             ctx.run();

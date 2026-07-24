@@ -38,8 +38,7 @@ class DataAccessServiceState;
 
 class DataAccessContext;
 
-using DataAccessPostResult =
-    PostOutcome<Task<void>(DataAccessContext&)>;
+using DataAccessPostResult = PostOutcome<Task<void>(DataAccessContext&)>;
 
 struct DataAccessStats final {
     std::uint64_t accepted{0};
@@ -65,8 +64,7 @@ struct DataAccessRedisConfig final {
 #endif
 
 struct DataAccessOptions final {
-    std::chrono::milliseconds maintenanceInterval{
-        std::chrono::seconds(1)};
+    std::chrono::milliseconds maintenanceInterval{std::chrono::seconds(1)};
 #ifdef RUVIA_ENABLE_DATABASE
     std::vector<DataAccessDatabaseConfig> databases;
 #endif
@@ -89,8 +87,8 @@ public:
     DataAccessContext(DataAccessContext&&) = delete;
     DataAccessContext& operator=(DataAccessContext&&) = delete;
 
-    [[nodiscard]] const WorkerHandle& worker() const & noexcept;
-    const WorkerHandle& worker() const && = delete;
+    [[nodiscard]] const WorkerHandle& worker() const& noexcept;
+    const WorkerHandle& worker() const&& = delete;
     // Borrowed job-local allocation domain. Objects using this resource,
     // including DB/Redis results, must be destroyed before the posted job
     // returns.
@@ -110,8 +108,7 @@ private:
     friend class DataAccessService;
     friend class detail::DataAccessServiceState;
 
-    explicit DataAccessContext(
-        std::shared_ptr<detail::DataAccessServiceState> state) noexcept;
+    explicit DataAccessContext(std::shared_ptr<detail::DataAccessServiceState> state) noexcept;
 
     std::shared_ptr<detail::DataAccessServiceState> state_;
     // Declared last so cold operations and borrowed handles expire while the
@@ -129,9 +126,7 @@ private:
 // context and pool lease remains covered by outstanding-job tracking.
 class DataAccessService final {
 public:
-    explicit DataAccessService(
-        EventLoop loop,
-        DataAccessOptions options = {});
+    explicit DataAccessService(EventLoop loop, DataAccessOptions options = {});
     ~DataAccessService();
 
     DataAccessService(const DataAccessService&) = delete;
@@ -147,23 +142,18 @@ public:
     [[nodiscard]] std::future<void> connect();
 
     template <typename Fn>
-        requires std::invocable<std::decay_t<Fn>&, DataAccessContext&> &&
-                 std::same_as<
-                     std::invoke_result_t<std::decay_t<Fn>&, DataAccessContext&>,
-                     Task<void>>
+        requires std::invocable<std::decay_t<Fn>&, DataAccessContext&> && std::same_as<std::invoke_result_t<std::decay_t<Fn>&, DataAccessContext&>, Task<void>>
     [[nodiscard]] DataAccessPostResult post(Fn&& fn) {
-        return postTask(MoveOnlyFunction<Task<void>(DataAccessContext&)>(
-            std::forward<Fn>(fn)));
+        return postTask(MoveOnlyFunction<Task<void>(DataAccessContext&)>(std::forward<Fn>(fn)));
     }
 
     void close();
     [[nodiscard]] DataAccessStats stats() const noexcept;
-    [[nodiscard]] const WorkerHandle& worker() const & noexcept;
-    const WorkerHandle& worker() const && = delete;
+    [[nodiscard]] const WorkerHandle& worker() const& noexcept;
+    const WorkerHandle& worker() const&& = delete;
 
 private:
-    [[nodiscard]] DataAccessPostResult postTask(
-        MoveOnlyFunction<Task<void>(DataAccessContext&)> task);
+    [[nodiscard]] DataAccessPostResult postTask(MoveOnlyFunction<Task<void>(DataAccessContext&)> task);
 
     std::shared_ptr<detail::DataAccessServiceState> state_;
 };

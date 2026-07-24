@@ -12,10 +12,9 @@ namespace ruvia::detail {
 // readiness after wakeup, so cancellation is only a level-change notification.
 class Http2SansIoStreamSignal final {
 public:
-    Http2SansIoStreamSignal(
-        const WorkerHandle& worker,
-        Http2SansIoTermination& termination)
-        : signal_(worker), termination_(termination) {}
+    Http2SansIoStreamSignal(const WorkerHandle& worker, Http2SansIoTermination& termination)
+        : signal_(worker),
+          termination_(termination) {}
     Http2SansIoStreamSignal(WorkerHandle&&) = delete;
 
     void wake() noexcept {

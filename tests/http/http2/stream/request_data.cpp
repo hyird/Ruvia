@@ -19,17 +19,9 @@ Http2StreamRequestData makeData() {
 }
 
 template <typename T>
-concept ExposesRvalueHttp2StreamRequestDataStorage =
-    requires(T&& data) { std::move(data).method(); } ||
-    requires(T&& data) { std::move(data).scheme(); } ||
-    requires(T&& data) { std::move(data).authority(); } ||
-    requires(T&& data) { std::move(data).path(); } ||
-    requires(T&& data) { std::move(data).protocol(); } ||
-    requires(T&& data) { std::move(data).cookie(); } ||
-    requires(T&& data) { std::move(data).headerAt(std::size_t{}); };
+concept ExposesRvalueHttp2StreamRequestDataStorage = requires(T&& data) { std::move(data).method(); } || requires(T&& data) { std::move(data).scheme(); } || requires(T&& data) { std::move(data).authority(); } || requires(T&& data) { std::move(data).path(); } || requires(T&& data) { std::move(data).protocol(); } || requires(T&& data) { std::move(data).cookie(); } || requires(T&& data) { std::move(data).headerAt(std::size_t{}); };
 
-static_assert(!ExposesRvalueHttp2StreamRequestDataStorage<
-    Http2StreamRequestData>);
+static_assert(!ExposesRvalueHttp2StreamRequestDataStorage<Http2StreamRequestData>);
 
 }  // namespace
 
@@ -61,11 +53,11 @@ RUVIA_TEST(stream_request_data_cookie_accumulation_overflow_rejected) {
     // accumulated value is left exactly as it was (no partial append).
     auto data = makeData();
     const std::string chunk(30000, 'a');
-    RUVIA_CHECK(data.appendCookieHeaderValue(chunk, false));         // 30000
-    RUVIA_CHECK(data.appendCookieHeaderValue(chunk, true));          // + "; " + 30000 = 60002
+    RUVIA_CHECK(data.appendCookieHeaderValue(chunk, false));  // 30000
+    RUVIA_CHECK(data.appendCookieHeaderValue(chunk, true));   // + "; " + 30000 = 60002
     const std::string before(data.cookie());
-    RUVIA_CHECK(!data.appendCookieHeaderValue(chunk, true));         // would reach ~90004 > 64 KiB
-    RUVIA_CHECK_EQ(std::string(data.cookie()), before);             // unchanged, not partially grown
+    RUVIA_CHECK(!data.appendCookieHeaderValue(chunk, true));  // would reach ~90004 > 64 KiB
+    RUVIA_CHECK_EQ(std::string(data.cookie()), before);       // unchanged, not partially grown
 }
 
 RUVIA_TEST(stream_request_data_scalar_fields) {

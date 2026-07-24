@@ -16,15 +16,15 @@ class WorkerPostCounters final {
 public:
     void record(PostStatus status) noexcept {
         switch (status) {
-        case PostStatus::kAccepted:
-            accepted_.fetch_add(1, std::memory_order_relaxed);
-            break;
-        case PostStatus::kQueueFull:
-            queueFull_.fetch_add(1, std::memory_order_relaxed);
-            break;
-        case PostStatus::kWorkerStopping:
-            workerStopping_.fetch_add(1, std::memory_order_relaxed);
-            break;
+            case PostStatus::kAccepted:
+                accepted_.fetch_add(1, std::memory_order_relaxed);
+                break;
+            case PostStatus::kQueueFull:
+                queueFull_.fetch_add(1, std::memory_order_relaxed);
+                break;
+            case PostStatus::kWorkerStopping:
+                workerStopping_.fetch_add(1, std::memory_order_relaxed);
+                break;
         }
     }
 

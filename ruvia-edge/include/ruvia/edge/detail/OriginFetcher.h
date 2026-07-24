@@ -39,14 +39,14 @@ struct OriginRequest final {
 // the edge could not obtain one and should surface a gateway error to the client.
 enum class OriginFetchOutcome : std::uint8_t {
     kOk,
-    kConnectFailed,   // resolve or connect failed
-    kWriteFailed,     // sending the request failed
-    kReadFailed,      // reading the response failed (including premature EOF)
-    kProtocolError,   // the origin's response was malformed
-    kTooLarge,        // the response exceeded the configured byte ceiling
-    kTimeout,         // the connect or an I/O step exceeded its deadline
-    kUnsupported,     // a framing the MVP does not handle (upgrade / CONNECT / TLS origin)
-    kCircuitOpen,     // the origin's breaker is open: not dialed at all
+    kConnectFailed,  // resolve or connect failed
+    kWriteFailed,    // sending the request failed
+    kReadFailed,     // reading the response failed (including premature EOF)
+    kProtocolError,  // the origin's response was malformed
+    kTooLarge,       // the response exceeded the configured byte ceiling
+    kTimeout,        // the connect or an I/O step exceeded its deadline
+    kUnsupported,    // a framing the MVP does not handle (upgrade / CONNECT / TLS origin)
+    kCircuitOpen,    // the origin's breaker is open: not dialed at all
 };
 
 // The head of an origin response, delivered to a sink before the body streams.
@@ -98,7 +98,8 @@ public:
     using Limits = OriginFetchLimits;
 
     explicit OriginFetcher(Limits limits)
-        : limits_(limits), originTlsContext_(asio::ssl::context::tls_client) {
+        : limits_(limits),
+          originTlsContext_(asio::ssl::context::tls_client) {
         if (limits_.verifyOriginCertificate) {
             originTlsContext_.set_verify_mode(asio::ssl::verify_peer);
             originTlsContext_.set_default_verify_paths();
@@ -115,13 +116,7 @@ public:
     // pooled. The body is never buffered whole here: each decoded chunk is handed
     // to the sink as it arrives. A pooled connection is only reused when the whole
     // response was consumed and the sink did not abort.
-    [[nodiscard]] asio::awaitable<StreamOutcome> fetch(
-        asio::any_io_executor executor,
-        std::string_view host,
-        std::uint16_t port,
-        bool https,
-        const OriginRequest& request,
-        ResponseSink& sink);
+    [[nodiscard]] asio::awaitable<StreamOutcome> fetch(asio::any_io_executor executor, std::string_view host, std::uint16_t port, bool https, const OriginRequest& request, ResponseSink& sink);
 
     // Number of idle pooled connections (for observability and tests).
     [[nodiscard]] std::size_t idleConnectionCount() const noexcept;
@@ -151,19 +146,10 @@ private:
     // single probe that reopens a tripped breaker.
     [[nodiscard]] bool admitToOrigin(const std::string& key) noexcept;
     // Feeds one completed attempt back into the breaker.
-    void recordOriginOutcome(
-        const std::string& key,
-        OriginFetchOutcome outcome) noexcept;
+    void recordOriginOutcome(const std::string& key, OriginFetchOutcome outcome) noexcept;
 
     // The dial-and-exchange path, with the breaker already consulted.
-    [[nodiscard]] asio::awaitable<StreamOutcome> fetchFromOrigin(
-        asio::any_io_executor executor,
-        std::string_view host,
-        std::uint16_t port,
-        bool https,
-        const OriginRequest& request,
-        ResponseSink& sink,
-        const std::string& key);
+    [[nodiscard]] asio::awaitable<StreamOutcome> fetchFromOrigin(asio::any_io_executor executor, std::string_view host, std::uint16_t port, bool https, const OriginRequest& request, ResponseSink& sink, const std::string& key);
 
     Limits limits_;
     asio::ssl::context originTlsContext_;

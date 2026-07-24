@@ -14,25 +14,19 @@
 namespace {
 
 using ruvia::HttpRequest;
-using ruvia::detail::Http2StreamState;
-using ruvia::detail::Http1ServerRequestParser;
 using ruvia::detail::HpackDecoder;
+using ruvia::detail::Http1ServerRequestParser;
 using ruvia::detail::http2EncodeWebSocketHandshakeHeaders;
+using ruvia::detail::Http2StreamState;
 using ruvia::detail::makeWebSocketServerNegotiation;
 using ruvia::detail::validateHttp2WebSocketHandshake;
 
 template <typename T>
-concept ExposesRvalueWebSocketServerSubprotocol =
-    requires(T&& negotiation) {
-        std::move(negotiation).subprotocol();
-    };
+concept ExposesRvalueWebSocketServerSubprotocol = requires(T&& negotiation) { std::move(negotiation).subprotocol(); };
 
-static_assert(!ExposesRvalueWebSocketServerSubprotocol<
-    ruvia::detail::WebSocketServerNegotiation>);
-static_assert(!std::copy_constructible<
-    ruvia::detail::WebSocketServerNegotiation>);
-static_assert(std::move_constructible<
-    ruvia::detail::WebSocketServerNegotiation>);
+static_assert(!ExposesRvalueWebSocketServerSubprotocol<ruvia::detail::WebSocketServerNegotiation>);
+static_assert(!std::copy_constructible<ruvia::detail::WebSocketServerNegotiation>);
+static_assert(std::move_constructible<ruvia::detail::WebSocketServerNegotiation>);
 
 struct Collector final {
     std::vector<std::pair<std::string, std::string>> headers;
@@ -95,16 +89,12 @@ Http2StreamState makeStream() {
     return Http2StreamState(1, std::pmr::new_delete_resource());
 }
 
-[[nodiscard]] bool acceptsWebSocketHandshake(
-    const Http2StreamState& stream,
-    const HttpRequest& request) {
+[[nodiscard]] bool acceptsWebSocketHandshake(const Http2StreamState& stream, const HttpRequest& request) {
     const auto result = validateHttp2WebSocketHandshake(stream, request);
     return result.accepted() != nullptr;
 }
 
-[[nodiscard]] bool rejectsWebSocketHandshake(
-    const Http2StreamState& stream,
-    const HttpRequest& request) {
+[[nodiscard]] bool rejectsWebSocketHandshake(const Http2StreamState& stream, const HttpRequest& request) {
     const auto result = validateHttp2WebSocketHandshake(stream, request);
     return result.failure() != nullptr;
 }
@@ -114,14 +104,12 @@ Http2StreamState makeStream() {
 RUVIA_TEST(websocket_subprotocol_negotiation) {
     const auto request = requestWithProtocol();
     // Server preference wins: the first supported token the client also offered.
-    const auto preferred =
-        makeWebSocketServerNegotiation(request, "superchat, chat");
+    const auto preferred = makeWebSocketServerNegotiation(request, "superchat, chat");
     RUVIA_CHECK_EQ(preferred.subprotocol(), std::string_view("superchat"));
     const auto chat = makeWebSocketServerNegotiation(request, "chat");
     RUVIA_CHECK_EQ(chat.subprotocol(), std::string_view("chat"));
     // No overlap yields no subprotocol.
-    const auto noOverlap =
-        makeWebSocketServerNegotiation(request, "binary");
+    const auto noOverlap = makeWebSocketServerNegotiation(request, "binary");
     RUVIA_CHECK(noOverlap.subprotocol().empty());
 
     // A request offering nothing yields no subprotocol.
@@ -133,8 +121,7 @@ RUVIA_TEST(websocket_subprotocol_negotiation) {
 RUVIA_TEST(websocket_server_negotiation_owns_selected_subprotocol) {
     const auto request = requestWithProtocol();
     std::string supported = "chat";
-    const auto negotiation =
-        makeWebSocketServerNegotiation(request, supported);
+    const auto negotiation = makeWebSocketServerNegotiation(request, supported);
 
     supported.front() = 'X';
 
@@ -173,20 +160,15 @@ RUVIA_TEST(websocket_request_validity_requires_all_conditions) {
     auto stream = makeStream();
     stream.setProtocol("websocket");
     RUVIA_CHECK(stream.beginExtendedConnect());
-    const auto unsupportedVersion =
-        validateHttp2WebSocketHandshake(stream, badVersion);
+    const auto unsupportedVersion = validateHttp2WebSocketHandshake(stream, badVersion);
     RUVIA_CHECK(unsupportedVersion.failure() != nullptr);
     if (const auto* failure = unsupportedVersion.failure()) {
         const auto error = failure->protocolError();
         RUVIA_CHECK_EQ(error.status(), ruvia::http_status::kBadRequest);
-        RUVIA_CHECK_EQ(
-            std::string_view(error.what()),
-            std::string_view("unsupported WebSocket version"));
+        RUVIA_CHECK_EQ(std::string_view(error.what()), std::string_view("unsupported WebSocket version"));
         ruvia::HttpResponse response;
         failure->applyRequiredResponseHeaders(response);
-        RUVIA_CHECK_EQ(
-            response.header("Sec-WebSocket-Version"),
-            std::string_view("13"));
+        RUVIA_CHECK_EQ(response.header("Sec-WebSocket-Version"), std::string_view("13"));
     }
 }
 
@@ -237,8 +219,7 @@ RUVIA_TEST(http2_websocket_handshake_does_not_invent_server_product) {
         "\r\n");
     const auto negotiation = makeWebSocketServerNegotiation(request, "chat");
     std::pmr::string block(std::pmr::get_default_resource());
-    http2EncodeWebSocketHandshakeHeaders(
-        block, negotiation);
+    http2EncodeWebSocketHandshakeHeaders(block, negotiation);
 
     Collector fields;
     HpackDecoder decoder(std::pmr::get_default_resource());
@@ -246,10 +227,7 @@ RUVIA_TEST(http2_websocket_handshake_does_not_invent_server_product) {
     RUVIA_CHECK(decodeResult.decoded() != nullptr);
     RUVIA_CHECK(hasHeader(fields, ":status", "200"));
     RUVIA_CHECK(hasHeader(fields, "sec-websocket-protocol", "chat"));
-    RUVIA_CHECK(hasHeader(
-        fields,
-        "sec-websocket-extensions",
-        ruvia::detail::kWebSocketDeflateResponseExtensions));
+    RUVIA_CHECK(hasHeader(fields, "sec-websocket-extensions", ruvia::detail::kWebSocketDeflateResponseExtensions));
     RUVIA_CHECK(hasHeaderName(fields, "date"));
     RUVIA_CHECK(!hasHeaderName(fields, "server"));
 }

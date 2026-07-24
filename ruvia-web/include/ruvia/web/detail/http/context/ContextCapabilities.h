@@ -32,8 +32,7 @@ public:
 private:
     friend class ContextRequestBodySource;
 
-    explicit constexpr ContextLazyRequestBodySource(
-        RequestBodyLoader& loader) noexcept
+    explicit constexpr ContextLazyRequestBodySource(RequestBodyLoader& loader) noexcept
         : loader_(&loader) {}
 
     RequestBodyLoader* loader_;
@@ -48,8 +47,7 @@ public:
 private:
     friend class ContextRequestBodySource;
 
-    explicit constexpr ContextStreamingRequestBodySource(
-        BodyReader& reader) noexcept
+    explicit constexpr ContextStreamingRequestBodySource(BodyReader& reader) noexcept
         : reader_(&reader) {}
 
     BodyReader* reader_;
@@ -60,44 +58,31 @@ public:
     constexpr ContextRequestBodySource() noexcept
         : value_(ContextBufferedRequestBodySource{}) {}
 
-    [[nodiscard]] static constexpr ContextRequestBodySource lazy(
-        RequestBodyLoader& loader) noexcept {
-        return ContextRequestBodySource(
-            ContextLazyRequestBodySource(loader));
+    [[nodiscard]] static constexpr ContextRequestBodySource lazy(RequestBodyLoader& loader) noexcept {
+        return ContextRequestBodySource(ContextLazyRequestBodySource(loader));
     }
 
-    [[nodiscard]] static constexpr ContextRequestBodySource streaming(
-        BodyReader& reader) noexcept {
-        return ContextRequestBodySource(
-            ContextStreamingRequestBodySource(reader));
+    [[nodiscard]] static constexpr ContextRequestBodySource streaming(BodyReader& reader) noexcept {
+        return ContextRequestBodySource(ContextStreamingRequestBodySource(reader));
     }
 
-    [[nodiscard]] constexpr const ContextBufferedRequestBodySource* buffered()
-        const & noexcept {
+    [[nodiscard]] constexpr const ContextBufferedRequestBodySource* buffered() const& noexcept {
         return std::get_if<ContextBufferedRequestBodySource>(&value_);
     }
-    [[nodiscard]] constexpr const ContextBufferedRequestBodySource* buffered()
-        const && = delete;
+    [[nodiscard]] constexpr const ContextBufferedRequestBodySource* buffered() const&& = delete;
 
-    [[nodiscard]] constexpr const ContextLazyRequestBodySource* lazy()
-        const & noexcept {
+    [[nodiscard]] constexpr const ContextLazyRequestBodySource* lazy() const& noexcept {
         return std::get_if<ContextLazyRequestBodySource>(&value_);
     }
-    [[nodiscard]] constexpr const ContextLazyRequestBodySource* lazy()
-        const && = delete;
+    [[nodiscard]] constexpr const ContextLazyRequestBodySource* lazy() const&& = delete;
 
-    [[nodiscard]] constexpr const ContextStreamingRequestBodySource* streaming()
-        const & noexcept {
+    [[nodiscard]] constexpr const ContextStreamingRequestBodySource* streaming() const& noexcept {
         return std::get_if<ContextStreamingRequestBodySource>(&value_);
     }
-    [[nodiscard]] constexpr const ContextStreamingRequestBodySource* streaming()
-        const && = delete;
+    [[nodiscard]] constexpr const ContextStreamingRequestBodySource* streaming() const&& = delete;
 
 private:
-    using Value = std::variant<
-        ContextBufferedRequestBodySource,
-        ContextLazyRequestBodySource,
-        ContextStreamingRequestBodySource>;
+    using Value = std::variant<ContextBufferedRequestBodySource, ContextLazyRequestBodySource, ContextStreamingRequestBodySource>;
 
     template <typename Source>
     explicit constexpr ContextRequestBodySource(Source source) noexcept
@@ -124,8 +109,7 @@ public:
 private:
     friend class ContextResponseOutput;
 
-    explicit constexpr ContextResponseStreamOutput(
-        ResponseStreamWriter& writer) noexcept
+    explicit constexpr ContextResponseStreamOutput(ResponseStreamWriter& writer) noexcept
         : writer_(&writer) {}
 
     ResponseStreamWriter* writer_;
@@ -151,42 +135,31 @@ public:
     constexpr ContextResponseOutput() noexcept
         : value_(ContextBufferedResponseOutput{}) {}
 
-    [[nodiscard]] static constexpr ContextResponseOutput responseStream(
-        ResponseStreamWriter& writer) noexcept {
+    [[nodiscard]] static constexpr ContextResponseOutput responseStream(ResponseStreamWriter& writer) noexcept {
         return ContextResponseOutput(ContextResponseStreamOutput(writer));
     }
 
-    [[nodiscard]] static constexpr ContextResponseOutput webSocket(
-        WebSocket& webSocket) noexcept {
+    [[nodiscard]] static constexpr ContextResponseOutput webSocket(WebSocket& webSocket) noexcept {
         return ContextResponseOutput(ContextWebSocketOutput(webSocket));
     }
 
-    [[nodiscard]] constexpr const ContextBufferedResponseOutput* buffered()
-        const & noexcept {
+    [[nodiscard]] constexpr const ContextBufferedResponseOutput* buffered() const& noexcept {
         return std::get_if<ContextBufferedResponseOutput>(&value_);
     }
-    [[nodiscard]] constexpr const ContextBufferedResponseOutput* buffered()
-        const && = delete;
+    [[nodiscard]] constexpr const ContextBufferedResponseOutput* buffered() const&& = delete;
 
-    [[nodiscard]] constexpr const ContextResponseStreamOutput* responseStream()
-        const & noexcept {
+    [[nodiscard]] constexpr const ContextResponseStreamOutput* responseStream() const& noexcept {
         return std::get_if<ContextResponseStreamOutput>(&value_);
     }
-    [[nodiscard]] constexpr const ContextResponseStreamOutput* responseStream()
-        const && = delete;
+    [[nodiscard]] constexpr const ContextResponseStreamOutput* responseStream() const&& = delete;
 
-    [[nodiscard]] constexpr const ContextWebSocketOutput* webSocket()
-        const & noexcept {
+    [[nodiscard]] constexpr const ContextWebSocketOutput* webSocket() const& noexcept {
         return std::get_if<ContextWebSocketOutput>(&value_);
     }
-    [[nodiscard]] constexpr const ContextWebSocketOutput* webSocket()
-        const && = delete;
+    [[nodiscard]] constexpr const ContextWebSocketOutput* webSocket() const&& = delete;
 
 private:
-    using Value = std::variant<
-        ContextBufferedResponseOutput,
-        ContextResponseStreamOutput,
-        ContextWebSocketOutput>;
+    using Value = std::variant<ContextBufferedResponseOutput, ContextResponseStreamOutput, ContextWebSocketOutput>;
 
     template <typename Output>
     explicit constexpr ContextResponseOutput(Output output) noexcept

@@ -88,27 +88,22 @@ public:
     }
     [[nodiscard]] std::pmr::string& requestHeaderBlock() && = delete;
 
-    [[nodiscard]] const std::pmr::string&
-    requestHeaderBlock() const & noexcept {
+    [[nodiscard]] const std::pmr::string& requestHeaderBlock() const& noexcept {
         return headerBlocks_.request();
     }
-    [[nodiscard]] const std::pmr::string&
-    requestHeaderBlock() const && = delete;
+    [[nodiscard]] const std::pmr::string& requestHeaderBlock() const&& = delete;
 
     [[nodiscard]] std::pmr::string& responseHeaderBlock() & noexcept {
         return headerBlocks_.response();
     }
     [[nodiscard]] std::pmr::string& responseHeaderBlock() && = delete;
 
-    [[nodiscard]] const std::pmr::string&
-    responseHeaderBlock() const & noexcept {
+    [[nodiscard]] const std::pmr::string& responseHeaderBlock() const& noexcept {
         return headerBlocks_.response();
     }
-    [[nodiscard]] const std::pmr::string&
-    responseHeaderBlock() const && = delete;
+    [[nodiscard]] const std::pmr::string& responseHeaderBlock() const&& = delete;
 
-    [[nodiscard]] bool declareRemoteContentLength(
-        std::size_t value) noexcept {
+    [[nodiscard]] bool declareRemoteContentLength(std::size_t value) noexcept {
         return remoteContent_.declareKnownLength(value);
     }
 
@@ -116,17 +111,14 @@ public:
         return remoteContent_.selectMetadataOnly();
     }
 
-    [[nodiscard]] Http2RemoteContentAccountingResult accountRemoteContent(
-        std::size_t bytes) noexcept {
+    [[nodiscard]] Http2RemoteContentAccountingResult accountRemoteContent(std::size_t bytes) noexcept {
         return remoteContent_.account(bytes);
     }
 
-    [[nodiscard]] const Http2RemoteContentState&
-    remoteContent() const & noexcept {
+    [[nodiscard]] const Http2RemoteContentState& remoteContent() const& noexcept {
         return remoteContent_;
     }
-    [[nodiscard]] const Http2RemoteContentState&
-    remoteContent() const && = delete;
+    [[nodiscard]] const Http2RemoteContentState& remoteContent() const&& = delete;
 
     void beginLocalContentForbidden() noexcept {
         localContent_.beginForbidden();
@@ -140,9 +132,7 @@ public:
         localContent_.beginKnownLength(length);
     }
 
-    [[nodiscard]] Http2LocalContentCheck checkLocalContentAccept(
-        std::size_t bytes,
-        bool terminal) const noexcept {
+    [[nodiscard]] Http2LocalContentCheck checkLocalContentAccept(std::size_t bytes, bool terminal) const noexcept {
         return localContent_.checkAccept(bytes, terminal);
     }
 
@@ -154,28 +144,24 @@ public:
         localContent_.commit(bytes);
     }
 
-    [[nodiscard]] const Http2LocalContentState&
-    localContent() const & noexcept {
+    [[nodiscard]] const Http2LocalContentState& localContent() const& noexcept {
         return localContent_;
     }
-    [[nodiscard]] const Http2LocalContentState&
-    localContent() const && = delete;
+    [[nodiscard]] const Http2LocalContentState& localContent() const&& = delete;
 
     [[nodiscard]] bool isAborted() const noexcept {
         return lifecycle_.aborted();
     }
 
-    [[nodiscard]] const Http2LocalSendState& localSend() const & noexcept {
+    [[nodiscard]] const Http2LocalSendState& localSend() const& noexcept {
         return lifecycle_.localSend();
     }
-    [[nodiscard]] const Http2LocalSendState& localSend() const && = delete;
+    [[nodiscard]] const Http2LocalSendState& localSend() const&& = delete;
 
-    [[nodiscard]] const Http2RemoteReceiveState&
-    remoteReceive() const & noexcept {
+    [[nodiscard]] const Http2RemoteReceiveState& remoteReceive() const& noexcept {
         return lifecycle_.remoteReceive();
     }
-    [[nodiscard]] const Http2RemoteReceiveState&
-    remoteReceive() const && = delete;
+    [[nodiscard]] const Http2RemoteReceiveState& remoteReceive() const&& = delete;
 
     [[nodiscard]] bool queued() const noexcept {
         return lifecycle_.queued();
@@ -305,28 +291,19 @@ public:
         return expectations_;
     }
 
-    [[nodiscard]] HttpServerExpectationPlan expectationPlan(
-        HttpUnsupportedExpectationPolicy unsupportedPolicy) const noexcept {
+    [[nodiscard]] HttpServerExpectationPlan expectationPlan(HttpUnsupportedExpectationPolicy unsupportedPolicy) const noexcept {
         const auto* knownLength = remoteContent_.allowedKnownLength();
         // An open HTTP/2 receive half can still be metadata-only, known-empty,
         // or awaiting only an empty END_STREAM frame. None of those states may
         // invite request content with a 100 response.
-        const bool contentCanFollow =
-            lifecycle_.remoteReceive().contentOpen() != nullptr &&
-            (remoteContent_.allowedWithoutLength() != nullptr ||
-             (knownLength != nullptr &&
-              knownLength->receivedBytes() < knownLength->declaredLength()));
-        return expectations_.serverPlan(
-            contentCanFollow
-                ? HttpRequestContentIndication::kWillFollow
-                : HttpRequestContentIndication::kNoContent,
-            unsupportedPolicy);
+        const bool contentCanFollow = lifecycle_.remoteReceive().contentOpen() != nullptr && (remoteContent_.allowedWithoutLength() != nullptr || (knownLength != nullptr && knownLength->receivedBytes() < knownLength->declaredLength()));
+        return expectations_.serverPlan(contentCanFollow ? HttpRequestContentIndication::kWillFollow : HttpRequestContentIndication::kNoContent, unsupportedPolicy);
     }
 
-    [[nodiscard]] std::string_view requestMethod() const & noexcept {
+    [[nodiscard]] std::string_view requestMethod() const& noexcept {
         return requestData_.method();
     }
-    [[nodiscard]] std::string_view requestMethod() const && = delete;
+    [[nodiscard]] std::string_view requestMethod() const&& = delete;
 
     [[nodiscard]] HttpKnownMethod requestKnownMethod() const noexcept {
         return requestData_.knownMethod();
@@ -336,37 +313,35 @@ public:
         requestData_.assignMethod(method);
     }
 
-    [[nodiscard]] std::string_view requestAuthority() const & noexcept {
+    [[nodiscard]] std::string_view requestAuthority() const& noexcept {
         return requestData_.authority();
     }
-    [[nodiscard]] std::string_view requestAuthority() const && = delete;
+    [[nodiscard]] std::string_view requestAuthority() const&& = delete;
 
     void assignRequestAuthority(std::string_view value) {
         requestData_.assignAuthority(value);
     }
 
-    [[nodiscard]] std::string_view requestPath() const & noexcept {
+    [[nodiscard]] std::string_view requestPath() const& noexcept {
         return requestData_.path();
     }
-    [[nodiscard]] std::string_view requestPath() const && = delete;
+    [[nodiscard]] std::string_view requestPath() const&& = delete;
 
     void assignRequestPath(std::string_view value) {
         requestData_.assignPath(value);
     }
 
-    [[nodiscard]] std::string_view requestProtocol() const & noexcept {
+    [[nodiscard]] std::string_view requestProtocol() const& noexcept {
         return requestData_.protocol();
     }
-    [[nodiscard]] std::string_view requestProtocol() const && = delete;
+    [[nodiscard]] std::string_view requestProtocol() const&& = delete;
 
-    [[nodiscard]] std::string_view requestCookie() const & noexcept {
+    [[nodiscard]] std::string_view requestCookie() const& noexcept {
         return requestData_.cookie();
     }
-    [[nodiscard]] std::string_view requestCookie() const && = delete;
+    [[nodiscard]] std::string_view requestCookie() const&& = delete;
 
-    [[nodiscard]] bool appendRequestCookieHeaderValue(
-        std::string_view value,
-        bool hasExistingCookie) {
+    [[nodiscard]] bool appendRequestCookieHeaderValue(std::string_view value, bool hasExistingCookie) {
         return requestData_.appendCookieHeaderValue(value, hasExistingCookie);
     }
 
@@ -378,17 +353,12 @@ public:
         return requestData_.headerCount();
     }
 
-    [[nodiscard]] Http2StoredHeaderView requestHeaderAt(
-        std::size_t index) const & noexcept {
+    [[nodiscard]] Http2StoredHeaderView requestHeaderAt(std::size_t index) const& noexcept {
         return requestData_.headerAt(index);
     }
-    [[nodiscard]] Http2StoredHeaderView
-    requestHeaderAt(std::size_t) const && = delete;
+    [[nodiscard]] Http2StoredHeaderView requestHeaderAt(std::size_t) const&& = delete;
 
-    [[nodiscard]] bool appendRequestHeader(
-        std::string_view name,
-        std::string_view value,
-        RequestHeaderKind kind) {
+    [[nodiscard]] bool appendRequestHeader(std::string_view name, std::string_view value, RequestHeaderKind kind) {
         return requestData_.appendHeader(name, value, kind);
     }
 
@@ -413,10 +383,10 @@ public:
         return requestState_.hasScheme();
     }
 
-    [[nodiscard]] std::string_view requestScheme() const & noexcept {
+    [[nodiscard]] std::string_view requestScheme() const& noexcept {
         return requestData_.scheme();
     }
-    [[nodiscard]] std::string_view requestScheme() const && = delete;
+    [[nodiscard]] std::string_view requestScheme() const&& = delete;
 
     void assignRequestScheme(std::string_view value) {
         requestData_.assignScheme(value);
@@ -474,13 +444,11 @@ public:
         return requestState_.markSingletonHeader(bit);
     }
 
-    [[nodiscard]] bool hasSingletonRequestHeader(
-        std::uint32_t bit) const noexcept {
+    [[nodiscard]] bool hasSingletonRequestHeader(std::uint32_t bit) const noexcept {
         return requestState_.hasSingletonHeader(bit);
     }
 
-    [[nodiscard]] bool markSingletonResponseHeader(
-        std::uint32_t bit) noexcept {
+    [[nodiscard]] bool markSingletonResponseHeader(std::uint32_t bit) noexcept {
         return requestState_.markSingletonHeader(bit);
     }
 
@@ -493,8 +461,7 @@ public:
     }
 
     [[nodiscard]] bool acceptConnect() noexcept {
-        if (tunnelState_.pending() == nullptr ||
-            !lifecycle_.canAcceptRemoteConnect()) {
+        if (tunnelState_.pending() == nullptr || !lifecycle_.canAcceptRemoteConnect()) {
             return false;
         }
         if (!tunnelState_.accept()) {
@@ -504,8 +471,7 @@ public:
     }
 
     [[nodiscard]] bool rejectConnect() noexcept {
-        if (tunnelState_.pending() == nullptr ||
-            !lifecycle_.canRejectRemoteConnect()) {
+        if (tunnelState_.pending() == nullptr || !lifecycle_.canRejectRemoteConnect()) {
             return false;
         }
         if (!tunnelState_.reject()) {
@@ -514,15 +480,15 @@ public:
         return lifecycle_.rejectRemoteConnect();
     }
 
-    [[nodiscard]] const Http2TunnelState& tunnel() const & noexcept {
+    [[nodiscard]] const Http2TunnelState& tunnel() const& noexcept {
         return tunnelState_;
     }
-    [[nodiscard]] const Http2TunnelState& tunnel() const && = delete;
+    [[nodiscard]] const Http2TunnelState& tunnel() const&& = delete;
 
-    [[nodiscard]] const HttpStatusCode* responseStatus() const & noexcept {
+    [[nodiscard]] const HttpStatusCode* responseStatus() const& noexcept {
         return requestState_.responseStatus();
     }
-    [[nodiscard]] const HttpStatusCode* responseStatus() const && = delete;
+    [[nodiscard]] const HttpStatusCode* responseStatus() const&& = delete;
 
     [[nodiscard]] bool setResponseStatus(HttpStatusCode status) noexcept {
         return requestState_.setResponseStatus(status);
@@ -535,7 +501,6 @@ public:
     void countInterimResponse() noexcept {
         requestState_.countInterimResponse();
     }
-
 };
 
 }  // namespace ruvia::detail

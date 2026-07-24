@@ -30,17 +30,13 @@ private:
         return storage;
     }
 
-    void do_deallocate(
-        void* pointer,
-        std::size_t bytes,
-        std::size_t alignment) override {
+    void do_deallocate(void* pointer, std::size_t bytes, std::size_t alignment) override {
         upstream_->deallocate(pointer, bytes, alignment);
         --liveAllocations_;
         ++deallocations_;
     }
 
-    [[nodiscard]] bool do_is_equal(
-        const std::pmr::memory_resource& other) const noexcept override {
+    [[nodiscard]] bool do_is_equal(const std::pmr::memory_resource& other) const noexcept override {
         return this == &other;
     }
 
@@ -52,14 +48,16 @@ private:
 
 class TrackedValue final {
 public:
-    explicit TrackedValue(int value) noexcept : value_(value) {
+    explicit TrackedValue(int value) noexcept
+        : value_(value) {
         ++alive_;
     }
 
     TrackedValue(const TrackedValue&) = delete;
     TrackedValue& operator=(const TrackedValue&) = delete;
 
-    TrackedValue(TrackedValue&& other) noexcept : value_(other.value_) {
+    TrackedValue(TrackedValue&& other) noexcept
+        : value_(other.value_) {
         other.value_ = -1;
         ++alive_;
     }
@@ -86,15 +84,7 @@ private:
 }  // namespace
 
 template <typename T>
-concept ExposesAnyRvalueModelListBorrow =
-    requires { std::declval<const T&&>()[std::size_t{}]; } ||
-    requires { std::declval<const T&&>().front(); } ||
-    requires { std::declval<const T&&>().begin(); } ||
-    requires { std::declval<const T&&>().end(); } ||
-    requires { std::declval<T&&>().emplace(1); } ||
-    requires {
-        std::declval<T&&>().emplaceMove(typename T::value_type{});
-    };
+concept ExposesAnyRvalueModelListBorrow = requires { std::declval<const T&&>()[std::size_t{}]; } || requires { std::declval<const T&&>().front(); } || requires { std::declval<const T&&>().begin(); } || requires { std::declval<const T&&>().end(); } || requires { std::declval<T&&>().emplace(1); } || requires { std::declval<T&&>().emplaceMove(typename T::value_type{}); };
 
 static_assert(!ExposesAnyRvalueModelListBorrow<ruvia::List<ruvia::Int32>>);
 

@@ -23,9 +23,7 @@ using ruvia::DbValue;
 using ruvia::detail::interpolateSql;
 
 std::string interp(st_mysql& conn, std::string_view sql, const std::vector<DbValue>& params) {
-    auto out = interpolateSql(
-        conn, sql, std::span<const DbValue>(params.data(), params.size()),
-        std::pmr::get_default_resource());
+    auto out = interpolateSql(conn, sql, std::span<const DbValue>(params.data(), params.size()), std::pmr::get_default_resource());
     return std::string(out.data(), out.size());
 }
 
@@ -61,10 +59,7 @@ RUVIA_TEST(db_interpolate_sql_renders_typed_literals) {
 
     // Numbers and booleans are emitted as typed literals (never string-quoted),
     // null becomes the SQL keyword, and strings are quoted.
-    RUVIA_CHECK_EQ(
-        interp(mysql, "VALUES (?, ?, ?, ?)",
-               {DbValue(42), DbValue(true), DbValue(nullptr), DbValue(std::string_view("x"))}),
-        std::string("VALUES (42, 1, NULL, 'x')"));
+    RUVIA_CHECK_EQ(interp(mysql, "VALUES (?, ?, ?, ?)", {DbValue(42), DbValue(true), DbValue(nullptr), DbValue(std::string_view("x"))}), std::string("VALUES (42, 1, NULL, 'x')"));
 
     mysql_close(&mysql);
 }
@@ -80,15 +75,9 @@ RUVIA_TEST(db_interpolate_sql_double_finite_renders_nonfinite_rejected) {
     // A non-finite double must be REJECTED, not spliced as the bare words "inf"/"nan"
     // that std::to_chars produces -- those are not valid SQL numerics and would land
     // UNQUOTED in the statement. Positive/negative infinity and NaN all throw.
-    RUVIA_CHECK(throwsOn([&] {
-        (void)interp(mysql, "VALUES (?)", {DbValue(std::numeric_limits<double>::infinity())});
-    }));
-    RUVIA_CHECK(throwsOn([&] {
-        (void)interp(mysql, "VALUES (?)", {DbValue(-std::numeric_limits<double>::infinity())});
-    }));
-    RUVIA_CHECK(throwsOn([&] {
-        (void)interp(mysql, "VALUES (?)", {DbValue(std::numeric_limits<double>::quiet_NaN())});
-    }));
+    RUVIA_CHECK(throwsOn([&] { (void)interp(mysql, "VALUES (?)", {DbValue(std::numeric_limits<double>::infinity())}); }));
+    RUVIA_CHECK(throwsOn([&] { (void)interp(mysql, "VALUES (?)", {DbValue(-std::numeric_limits<double>::infinity())}); }));
+    RUVIA_CHECK(throwsOn([&] { (void)interp(mysql, "VALUES (?)", {DbValue(std::numeric_limits<double>::quiet_NaN())}); }));
 
     mysql_close(&mysql);
 }
@@ -101,21 +90,17 @@ RUVIA_TEST(db_interpolate_sql_escapes_backslash_and_injection_payloads) {
     // otherwise a value ending in '\' would consume the closing quote and break out
     // of the literal. This is a distinct escape path from the single-quote case and
     // is the classic backslash-breakout bypass.
-    RUVIA_CHECK_EQ(interp(mysql, "WHERE p = ?", {DbValue(std::string_view("a\\b"))}),
-                   std::string("WHERE p = 'a\\\\b'"));
-    RUVIA_CHECK_EQ(interp(mysql, "WHERE p = ?", {DbValue(std::string_view("x\\"))}),
-                   std::string("WHERE p = 'x\\\\'"));
+    RUVIA_CHECK_EQ(interp(mysql, "WHERE p = ?", {DbValue(std::string_view("a\\b"))}), std::string("WHERE p = 'a\\\\b'"));
+    RUVIA_CHECK_EQ(interp(mysql, "WHERE p = ?", {DbValue(std::string_view("x\\"))}), std::string("WHERE p = 'x\\\\'"));
 
     // A full injection payload: every quote is escaped so it can neither terminate
     // the literal nor append a clause.
-    RUVIA_CHECK_EQ(interp(mysql, "WHERE p = ?", {DbValue(std::string_view("' OR '1'='1"))}),
-                   std::string("WHERE p = '\\' OR \\'1\\'=\\'1'"));
+    RUVIA_CHECK_EQ(interp(mysql, "WHERE p = ?", {DbValue(std::string_view("' OR '1'='1"))}), std::string("WHERE p = '\\' OR \\'1\\'=\\'1'"));
 
     // A '?' inside a PARAMETER VALUE is data, not a placeholder: it is escaped as an
     // ordinary character and never consumes a parameter slot (the placeholder scan
     // walks the SQL template, not the substituted values).
-    RUVIA_CHECK_EQ(interp(mysql, "WHERE p = ?", {DbValue(std::string_view("a?b"))}),
-                   std::string("WHERE p = 'a?b'"));
+    RUVIA_CHECK_EQ(interp(mysql, "WHERE p = ?", {DbValue(std::string_view("a?b"))}), std::string("WHERE p = 'a?b'"));
 
     mysql_close(&mysql);
 }
@@ -156,9 +141,7 @@ RUVIA_TEST(db_migration_table_name_rejects_injection) {
 RUVIA_TEST(db_migration_list_validation_enforces_integrity) {
     using ruvia::DbMigration;
     using ruvia::detail::validateMigrationList;
-    const DbMigration ok[] = {
-        {"001_init", "CREATE TABLE a(id INT)"},
-        {"002_more", "ALTER TABLE a ADD b INT"}};
+    const DbMigration ok[] = {{"001_init", "CREATE TABLE a(id INT)"}, {"002_more", "ALTER TABLE a ADD b INT"}};
     RUVIA_CHECK(!throwsOn([&] { validateMigrationList(std::span<const DbMigration>(ok, 2)); }));
     // An empty list is valid: nothing to apply.
     RUVIA_CHECK(!throwsOn([&] { validateMigrationList(std::span<const DbMigration>()); }));
@@ -181,39 +164,77 @@ RUVIA_TEST(db_config_validation_checks_every_field) {
     using ruvia::detail::validateDbConfig;
     using std::chrono::milliseconds;
 
-    static_assert(std::same_as<
-                  decltype(DbConfig{}.connectTimeout),
-                  std::optional<milliseconds>>);
-    static_assert(std::same_as<
-                  decltype(DbConfig{}.readTimeout),
-                  std::optional<milliseconds>>);
-    static_assert(std::same_as<
-                  decltype(DbConfig{}.writeTimeout),
-                  std::optional<milliseconds>>);
-    static_assert(std::same_as<
-                  decltype(DbConfig{}.queryTimeout),
-                  std::optional<milliseconds>>);
-    static_assert(std::same_as<
-                  decltype(DbConfig{}.acquireTimeout),
-                  std::optional<milliseconds>>);
+    static_assert(std::same_as<decltype(DbConfig{}.connectTimeout), std::optional<milliseconds>>);
+    static_assert(std::same_as<decltype(DbConfig{}.readTimeout), std::optional<milliseconds>>);
+    static_assert(std::same_as<decltype(DbConfig{}.writeTimeout), std::optional<milliseconds>>);
+    static_assert(std::same_as<decltype(DbConfig{}.queryTimeout), std::optional<milliseconds>>);
+    static_assert(std::same_as<decltype(DbConfig{}.acquireTimeout), std::optional<milliseconds>>);
 
     // A default config is valid; absent timeouts are disabled explicitly.
     RUVIA_CHECK(!throwsOn([] { validateDbConfig(DbConfig{}); }));
 
     // Host and port each have a required-value guard.
-    RUVIA_CHECK(throwsOn([] { DbConfig c; c.host.clear(); validateDbConfig(c); }));
-    RUVIA_CHECK(throwsOn([] { DbConfig c; c.port = 0; validateDbConfig(c); }));
+    RUVIA_CHECK(throwsOn([] {
+        DbConfig c;
+        c.host.clear();
+        validateDbConfig(c);
+    }));
+    RUVIA_CHECK(throwsOn([] {
+        DbConfig c;
+        c.port = 0;
+        validateDbConfig(c);
+    }));
 
     // Every configured timeout must be positive. Zero cannot silently recover the
     // former sentinel convention, and the whole fold must validate every field.
-    RUVIA_CHECK(throwsOn([] { DbConfig c; c.connectTimeout = milliseconds(0); validateDbConfig(c); }));
-    RUVIA_CHECK(throwsOn([] { DbConfig c; c.readTimeout = milliseconds(0); validateDbConfig(c); }));
-    RUVIA_CHECK(throwsOn([] { DbConfig c; c.writeTimeout = milliseconds(0); validateDbConfig(c); }));
-    RUVIA_CHECK(throwsOn([] { DbConfig c; c.queryTimeout = milliseconds(0); validateDbConfig(c); }));
-    RUVIA_CHECK(throwsOn([] { DbConfig c; c.acquireTimeout = milliseconds(0); validateDbConfig(c); }));
-    RUVIA_CHECK(throwsOn([] { DbConfig c; c.connectTimeout = milliseconds(-1); validateDbConfig(c); }));
-    RUVIA_CHECK(throwsOn([] { DbConfig c; c.readTimeout = milliseconds(-1); validateDbConfig(c); }));
-    RUVIA_CHECK(throwsOn([] { DbConfig c; c.writeTimeout = milliseconds(-1); validateDbConfig(c); }));
-    RUVIA_CHECK(throwsOn([] { DbConfig c; c.queryTimeout = milliseconds(-1); validateDbConfig(c); }));
-    RUVIA_CHECK(throwsOn([] { DbConfig c; c.acquireTimeout = milliseconds(-1); validateDbConfig(c); }));
+    RUVIA_CHECK(throwsOn([] {
+        DbConfig c;
+        c.connectTimeout = milliseconds(0);
+        validateDbConfig(c);
+    }));
+    RUVIA_CHECK(throwsOn([] {
+        DbConfig c;
+        c.readTimeout = milliseconds(0);
+        validateDbConfig(c);
+    }));
+    RUVIA_CHECK(throwsOn([] {
+        DbConfig c;
+        c.writeTimeout = milliseconds(0);
+        validateDbConfig(c);
+    }));
+    RUVIA_CHECK(throwsOn([] {
+        DbConfig c;
+        c.queryTimeout = milliseconds(0);
+        validateDbConfig(c);
+    }));
+    RUVIA_CHECK(throwsOn([] {
+        DbConfig c;
+        c.acquireTimeout = milliseconds(0);
+        validateDbConfig(c);
+    }));
+    RUVIA_CHECK(throwsOn([] {
+        DbConfig c;
+        c.connectTimeout = milliseconds(-1);
+        validateDbConfig(c);
+    }));
+    RUVIA_CHECK(throwsOn([] {
+        DbConfig c;
+        c.readTimeout = milliseconds(-1);
+        validateDbConfig(c);
+    }));
+    RUVIA_CHECK(throwsOn([] {
+        DbConfig c;
+        c.writeTimeout = milliseconds(-1);
+        validateDbConfig(c);
+    }));
+    RUVIA_CHECK(throwsOn([] {
+        DbConfig c;
+        c.queryTimeout = milliseconds(-1);
+        validateDbConfig(c);
+    }));
+    RUVIA_CHECK(throwsOn([] {
+        DbConfig c;
+        c.acquireTimeout = milliseconds(-1);
+        validateDbConfig(c);
+    }));
 }

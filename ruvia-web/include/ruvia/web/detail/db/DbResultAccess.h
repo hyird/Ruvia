@@ -32,33 +32,22 @@ struct DbResultAccess final {
         return result.fields_;
     }
 
-    static void ownRawResult(
-        QueryResult& result,
-        void* raw,
-        void (*release)(void*) noexcept) noexcept {
-        if (raw == nullptr || release == nullptr ||
-            std::holds_alternative<QueryResult::OwnedRawResult>(
-                result.rawResult_)) {
+    static void ownRawResult(QueryResult& result, void* raw, void (*release)(void*) noexcept) noexcept {
+        if (raw == nullptr || release == nullptr || std::holds_alternative<QueryResult::OwnedRawResult>(result.rawResult_)) {
             std::terminate();
         }
-        result.rawResult_.template emplace<QueryResult::OwnedRawResult>(
-            raw,
-            release);
+        result.rawResult_.template emplace<QueryResult::OwnedRawResult>(raw, release);
     }
 
     [[nodiscard]] static DbField nullField(std::pmr::memory_resource* resource) {
         return DbField(nullptr, resource);
     }
 
-    [[nodiscard]] static DbField ownedField(
-        std::string_view value,
-        std::pmr::memory_resource* resource) {
+    [[nodiscard]] static DbField ownedField(std::string_view value, std::pmr::memory_resource* resource) {
         return DbField(value, resource);
     }
 
-    [[nodiscard]] static DbField borrowedField(
-        std::string_view value,
-        std::pmr::memory_resource* resource) {
+    [[nodiscard]] static DbField borrowedField(std::string_view value, std::pmr::memory_resource* resource) {
         return DbField::borrowed(value, resource);
     }
 
@@ -70,13 +59,9 @@ struct DbResultAccess final {
         return row.ownedFields();
     }
 
-    [[nodiscard]] static DbRow borrowedRow(
-        const DbField* fields,
-        std::size_t size,
-        std::pmr::memory_resource* resource) {
+    [[nodiscard]] static DbRow borrowedRow(const DbField* fields, std::size_t size, std::pmr::memory_resource* resource) {
         return DbRow(fields, size, resource);
     }
-
 };
 
 }  // namespace ruvia::detail

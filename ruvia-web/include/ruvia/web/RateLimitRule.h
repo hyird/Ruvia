@@ -23,18 +23,12 @@ enum class RateLimitOverflowPolicy : std::uint8_t {
 // cannot represent or allocate a key in its fixed table.
 class RateLimitRule final {
 public:
-    [[nodiscard]] static constexpr RateLimitRule fixedWindow(
-        std::size_t maxRequests,
-        std::chrono::milliseconds window,
-        RateLimitOverflowPolicy overflowPolicy =
-            RateLimitOverflowPolicy::kDeny) {
+    [[nodiscard]] static constexpr RateLimitRule fixedWindow(std::size_t maxRequests, std::chrono::milliseconds window, RateLimitOverflowPolicy overflowPolicy = RateLimitOverflowPolicy::kDeny) {
         if (maxRequests == 0) {
-            throw std::invalid_argument(
-                "rate limit max requests must be greater than zero");
+            throw std::invalid_argument("rate limit max requests must be greater than zero");
         }
         if (window.count() <= 0) {
-            throw std::invalid_argument(
-                "rate limit window must be greater than zero");
+            throw std::invalid_argument("rate limit window must be greater than zero");
         }
         return RateLimitRule(maxRequests, window, overflowPolicy);
     }
@@ -52,10 +46,7 @@ public:
     }
 
 private:
-    constexpr RateLimitRule(
-        std::size_t maxRequests,
-        std::chrono::milliseconds window,
-        RateLimitOverflowPolicy overflowPolicy) noexcept
+    constexpr RateLimitRule(std::size_t maxRequests, std::chrono::milliseconds window, RateLimitOverflowPolicy overflowPolicy) noexcept
         : maxRequests_(maxRequests),
           window_(window),
           overflowPolicy_(overflowPolicy) {}

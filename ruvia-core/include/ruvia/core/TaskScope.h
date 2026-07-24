@@ -38,8 +38,7 @@ private:
     struct TaskScopeJoinReserved final {};
     class TaskScopeJoining final {
     public:
-        explicit TaskScopeJoining(
-            std::coroutine_handle<> continuation) noexcept
+        explicit TaskScopeJoining(std::coroutine_handle<> continuation) noexcept
             : continuation_(continuation) {}
 
         [[nodiscard]] std::coroutine_handle<> continuation() const noexcept {
@@ -57,10 +56,10 @@ private:
         explicit TaskScopeFailure(std::exception_ptr exception) noexcept
             : exception_(std::move(exception)) {}
 
-        [[nodiscard]] const std::exception_ptr& exception() const & noexcept {
+        [[nodiscard]] const std::exception_ptr& exception() const& noexcept {
             return exception_;
         }
-        const std::exception_ptr& exception() const && = delete;
+        const std::exception_ptr& exception() const&& = delete;
 
     private:
         std::exception_ptr exception_;
@@ -75,7 +74,8 @@ private:
 
     class JoinReservation final {
     public:
-        explicit JoinReservation(TaskScope& scope) noexcept : scope_(&scope) {}
+        explicit JoinReservation(TaskScope& scope) noexcept
+            : scope_(&scope) {}
         ~JoinReservation();
 
         JoinReservation(const JoinReservation&) = delete;
@@ -84,7 +84,9 @@ private:
             : scope_(std::exchange(other.scope_, nullptr)) {}
         JoinReservation& operator=(JoinReservation&&) = delete;
 
-        [[nodiscard]] TaskScope& scope() const noexcept { return *scope_; }
+        [[nodiscard]] TaskScope& scope() const noexcept {
+            return *scope_;
+        }
 
     private:
         TaskScope* scope_;
@@ -96,12 +98,7 @@ private:
     void finish(Node* node) noexcept;
     void rethrowFailure();
 
-    using Lifecycle = std::variant<
-        TaskScopeEmpty,
-        TaskScopeOpen,
-        TaskScopeJoinReserved,
-        TaskScopeJoining,
-        TaskScopeJoined>;
+    using Lifecycle = std::variant<TaskScopeEmpty, TaskScopeOpen, TaskScopeJoinReserved, TaskScopeJoining, TaskScopeJoined>;
     using Outcome = std::variant<TaskScopeSuccess, TaskScopeFailure>;
 
     WorkerHandle worker_;
@@ -113,4 +110,4 @@ private:
     Outcome outcome_;
 };
 
-}
+}  // namespace ruvia

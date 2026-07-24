@@ -21,16 +21,14 @@ class TlsConnectionTransport final {
 public:
     // The verified peer certificate subject DN for mutual TLS, or empty when
     // no client certificate was presented.
-    [[nodiscard]] constexpr std::string_view clientCertificateSubject()
-        const noexcept {
+    [[nodiscard]] constexpr std::string_view clientCertificateSubject() const noexcept {
         return clientCertificateSubject_;
     }
 
 private:
     friend class ConnInfo;
 
-    explicit constexpr TlsConnectionTransport(
-        std::string_view clientCertificateSubject) noexcept
+    explicit constexpr TlsConnectionTransport(std::string_view clientCertificateSubject) noexcept
         : clientCertificateSubject_(clientCertificateSubject) {}
 
     std::string_view clientCertificateSubject_;
@@ -60,45 +58,34 @@ public:
         return remote_;
     }
 
-    [[nodiscard]] constexpr const PlainConnectionTransport* plain()
-        const & noexcept {
+    [[nodiscard]] constexpr const PlainConnectionTransport* plain() const& noexcept {
         return std::get_if<PlainConnectionTransport>(&transport_);
     }
-    const PlainConnectionTransport* plain() const && = delete;
+    const PlainConnectionTransport* plain() const&& = delete;
 
-    [[nodiscard]] constexpr const TlsConnectionTransport* tls()
-        const & noexcept {
+    [[nodiscard]] constexpr const TlsConnectionTransport* tls() const& noexcept {
         return std::get_if<TlsConnectionTransport>(&transport_);
     }
-    const TlsConnectionTransport* tls() const && = delete;
+    const TlsConnectionTransport* tls() const&& = delete;
 
 private:
     friend class detail::ContextServices;
     friend ConnInfo getConnInfo(const Context& context) noexcept;
 
-    constexpr ConnInfo(
-        std::string_view remoteAddress,
-        PlainConnectionTransport transport) noexcept
+    constexpr ConnInfo(std::string_view remoteAddress, PlainConnectionTransport transport) noexcept
         : remote_(remoteAddress),
           transport_(transport) {}
 
-    constexpr ConnInfo(
-        std::string_view remoteAddress,
-        TlsConnectionTransport transport) noexcept
+    constexpr ConnInfo(std::string_view remoteAddress, TlsConnectionTransport transport) noexcept
         : remote_(remoteAddress),
           transport_(transport) {}
 
-    [[nodiscard]] static constexpr ConnInfo plain(
-        std::string_view remoteAddress) noexcept {
+    [[nodiscard]] static constexpr ConnInfo plain(std::string_view remoteAddress) noexcept {
         return ConnInfo(remoteAddress, PlainConnectionTransport{});
     }
 
-    [[nodiscard]] static constexpr ConnInfo tls(
-        std::string_view remoteAddress,
-        std::string_view clientCertificateSubject) noexcept {
-        return ConnInfo(
-            remoteAddress,
-            TlsConnectionTransport(clientCertificateSubject));
+    [[nodiscard]] static constexpr ConnInfo tls(std::string_view remoteAddress, std::string_view clientCertificateSubject) noexcept {
+        return ConnInfo(remoteAddress, TlsConnectionTransport(clientCertificateSubject));
     }
 
     Address remote_;

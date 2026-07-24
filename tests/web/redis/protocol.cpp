@@ -23,19 +23,19 @@
 namespace {
 
 using ruvia::RedisValue;
-using ruvia::detail::appendRespCommand;
 using ruvia::detail::appendRedisScanOptions;
+using ruvia::detail::appendRespCommand;
 using ruvia::detail::hiredisReplyToValue;
-using ruvia::detail::RedisTypesAccess;
 using ruvia::detail::parseRedisBlockingPopReply;
 using ruvia::detail::parseRedisHashScanResult;
 using ruvia::detail::parseRedisKeyValueArray;
 using ruvia::detail::parseRedisScanResult;
 using ruvia::detail::parseRedisScoredArray;
-using ruvia::detail::respCommandSerializedSize;
+using ruvia::detail::RedisTypesAccess;
 using ruvia::detail::redisValueArray;
 using ruvia::detail::redisValueInteger;
 using ruvia::detail::redisValueString;
+using ruvia::detail::respCommandSerializedSize;
 
 RedisValue toNilValue() {
     return RedisTypesAccess::nullValue(std::pmr::get_default_resource());
@@ -104,8 +104,7 @@ std::string encode(const std::vector<std::string_view>& args) {
 
 RUVIA_TEST(resp_command_encodes_multibulk_form) {
     // RESP2 multi-bulk: *<n> then $<len>\r\n<arg>\r\n per argument.
-    RUVIA_CHECK_EQ(encode({"SET", "key", "val"}),
-                   std::string("*3\r\n$3\r\nSET\r\n$3\r\nkey\r\n$3\r\nval\r\n"));
+    RUVIA_CHECK_EQ(encode({"SET", "key", "val"}), std::string("*3\r\n$3\r\nSET\r\n$3\r\nkey\r\n$3\r\nval\r\n"));
     // A single-argument command and a zero-length argument.
     RUVIA_CHECK_EQ(encode({"PING"}), std::string("*1\r\n$4\r\nPING\r\n"));
     RUVIA_CHECK_EQ(encode({"GET", ""}), std::string("*2\r\n$3\r\nGET\r\n$0\r\n\r\n"));
@@ -114,8 +113,7 @@ RUVIA_TEST(resp_command_encodes_multibulk_form) {
 RUVIA_TEST(redis_set_options_build_one_valid_command_shape) {
     auto* resource = std::pmr::get_default_resource();
 
-    const auto plain = ruvia::detail::redisSetArgs(
-        "key", "value", ruvia::RedisSetOptions{}, resource);
+    const auto plain = ruvia::detail::redisSetArgs("key", "value", ruvia::RedisSetOptions{}, resource);
     RUVIA_CHECK_EQ(plain.size(), std::size_t{3});
     RUVIA_CHECK_EQ(std::string_view(plain[0]), std::string_view("SET"));
     RUVIA_CHECK_EQ(std::string_view(plain[1]), std::string_view("key"));
@@ -123,32 +121,23 @@ RUVIA_TEST(redis_set_options_build_one_valid_command_shape) {
 
     ruvia::RedisSetOptions expiring;
     expiring.condition = ruvia::RedisSetCondition::kIfAbsent;
-    expiring.expiration = ruvia::RedisSetExpiration::expiresAfter(
-        std::chrono::milliseconds(1500));
+    expiring.expiration = ruvia::RedisSetExpiration::expiresAfter(std::chrono::milliseconds(1500));
     expiring.returnPrevious = true;
-    const auto expiringArgs = ruvia::detail::redisSetArgs(
-        "key", "value", expiring, resource);
-    constexpr std::array<std::string_view, 7> expectedExpiring{
-        "SET", "key", "value", "PX", "1500", "NX", "GET"};
+    const auto expiringArgs = ruvia::detail::redisSetArgs("key", "value", expiring, resource);
+    constexpr std::array<std::string_view, 7> expectedExpiring{"SET", "key", "value", "PX", "1500", "NX", "GET"};
     RUVIA_CHECK_EQ(expiringArgs.size(), std::size_t{7});
     for (std::size_t i = 0; i < expiringArgs.size(); ++i) {
-        RUVIA_CHECK_EQ(
-            std::string_view(expiringArgs[i]),
-            expectedExpiring[i]);
+        RUVIA_CHECK_EQ(std::string_view(expiringArgs[i]), expectedExpiring[i]);
     }
 
     ruvia::RedisSetOptions preserving;
     preserving.condition = ruvia::RedisSetCondition::kIfPresent;
     preserving.expiration = ruvia::RedisSetExpiration::keepExisting();
-    const auto preservingArgs = ruvia::detail::redisSetArgs(
-        "key", "value", preserving, resource);
-    constexpr std::array<std::string_view, 5> expectedPreserving{
-        "SET", "key", "value", "XX", "KEEPTTL"};
+    const auto preservingArgs = ruvia::detail::redisSetArgs("key", "value", preserving, resource);
+    constexpr std::array<std::string_view, 5> expectedPreserving{"SET", "key", "value", "XX", "KEEPTTL"};
     RUVIA_CHECK_EQ(preservingArgs.size(), expectedPreserving.size());
     for (std::size_t i = 0; i < preservingArgs.size(); ++i) {
-        RUVIA_CHECK_EQ(
-            std::string_view(preservingArgs[i]),
-            expectedPreserving[i]);
+        RUVIA_CHECK_EQ(std::string_view(preservingArgs[i]), expectedPreserving[i]);
     }
 }
 
@@ -156,8 +145,8 @@ RUVIA_TEST(resp_serialized_size_matches_written_output) {
     // The size hint is used to reserve buffer space, so it must exactly equal the
     // bytes appendRespCommand writes -- including multi-digit length prefixes and
     // the empty-argument case.
-    const std::string mid(42, 'y');    // two-digit bulk length
-    const std::string big(150, 'x');   // three-digit bulk length
+    const std::string mid(42, 'y');   // two-digit bulk length
+    const std::string big(150, 'x');  // three-digit bulk length
     const std::vector<std::vector<std::string_view>> cases = {
         {"PING"},
         {"SET", "key", "value"},
@@ -229,8 +218,7 @@ RUVIA_TEST(redis_parse_scan_result_reads_cursor_and_values) {
     redisReply cursor = stringReply("10");
     redisReply* root[] = {&cursor, &inner};
     const auto reply = arrayReply(root, 2);
-    const auto scan = parseRedisScanResult(
-        hiredisReplyToValue(reply, 0, 32, resource), resource);
+    const auto scan = parseRedisScanResult(hiredisReplyToValue(reply, 0, 32, resource), resource);
     RUVIA_CHECK_EQ(scan.cursor(), std::uint64_t{10});
     RUVIA_CHECK_EQ(scan.values().size(), std::size_t{2});
     RUVIA_CHECK_EQ(scan.values()[0], std::string_view("key1"));
@@ -240,9 +228,7 @@ RUVIA_TEST(redis_parse_scan_result_reads_cursor_and_values) {
     redisReply badCursor = stringReply("notacursor");
     redisReply* badRoot[] = {&badCursor, &inner};
     const auto badReply = arrayReply(badRoot, 2);
-    RUVIA_CHECK(throwsOn([&] {
-        (void)parseRedisScanResult(hiredisReplyToValue(badReply, 0, 32, resource), resource);
-    }));
+    RUVIA_CHECK(throwsOn([&] { (void)parseRedisScanResult(hiredisReplyToValue(badReply, 0, 32, resource), resource); }));
 
     // A root array that is not exactly two elements is rejected.
     redisReply* shortRoot[] = {&cursor};
@@ -262,8 +248,7 @@ RUVIA_TEST(redis_parse_hash_scan_result_reads_field_value_pairs) {
     redisReply cursor = stringReply("7");
     redisReply* root[] = {&cursor, &inner};
     const auto reply = arrayReply(root, 2);
-    const auto hscan = parseRedisHashScanResult(
-        hiredisReplyToValue(reply, 0, 32, resource), resource);
+    const auto hscan = parseRedisHashScanResult(hiredisReplyToValue(reply, 0, 32, resource), resource);
     RUVIA_CHECK_EQ(hscan.cursor(), std::uint64_t{7});
     RUVIA_CHECK_EQ(hscan.entries().size(), std::size_t{2});
     RUVIA_CHECK_EQ(hscan.entries()[0].key(), std::string_view("field1"));
@@ -275,9 +260,7 @@ RUVIA_TEST(redis_parse_hash_scan_result_reads_field_value_pairs) {
     redisReply oddArr = arrayReply(oddInner, 3);
     redisReply* oddRoot[] = {&cursor, &oddArr};
     const auto oddReply = arrayReply(oddRoot, 2);
-    RUVIA_CHECK(throwsOn([&] {
-        (void)parseRedisHashScanResult(hiredisReplyToValue(oddReply, 0, 32, resource), resource);
-    }));
+    RUVIA_CHECK(throwsOn([&] { (void)parseRedisHashScanResult(hiredisReplyToValue(oddReply, 0, 32, resource), resource); }));
 }
 
 RUVIA_TEST(redis_parse_blocking_pop_reply_handles_timeout_and_pair) {
@@ -338,37 +321,73 @@ RUVIA_TEST(redis_config_validation_checks_every_field) {
     using ruvia::detail::validateRedisConfig;
     using std::chrono::milliseconds;
 
-    static_assert(std::same_as<
-                  decltype(RedisConfig{}.connectTimeout),
-                  std::optional<milliseconds>>);
-    static_assert(std::same_as<
-                  decltype(RedisConfig{}.commandTimeout),
-                  std::optional<milliseconds>>);
-    static_assert(std::same_as<
-                  decltype(RedisConfig{}.acquireTimeout),
-                  std::optional<milliseconds>>);
-    static_assert(std::same_as<
-                  decltype(RedisConfig{}.maxReplyBytes),
-                  std::optional<std::size_t>>);
+    static_assert(std::same_as<decltype(RedisConfig{}.connectTimeout), std::optional<milliseconds>>);
+    static_assert(std::same_as<decltype(RedisConfig{}.commandTimeout), std::optional<milliseconds>>);
+    static_assert(std::same_as<decltype(RedisConfig{}.acquireTimeout), std::optional<milliseconds>>);
+    static_assert(std::same_as<decltype(RedisConfig{}.maxReplyBytes), std::optional<std::size_t>>);
 
     // A default config is valid; absent timeouts are disabled explicitly.
     RUVIA_CHECK(!throwsOn([] { validateRedisConfig(RedisConfig{}); }));
 
     // Host, port, pool size and max array depth each have a required-value guard.
-    RUVIA_CHECK(throwsOn([] { RedisConfig c; c.host.clear(); validateRedisConfig(c); }));
-    RUVIA_CHECK(throwsOn([] { RedisConfig c; c.port = 0; validateRedisConfig(c); }));
-    RUVIA_CHECK(throwsOn([] { RedisConfig c; c.poolSizePerWorker = 0; validateRedisConfig(c); }));
-    RUVIA_CHECK(throwsOn([] { RedisConfig c; c.maxArrayDepth = 0; validateRedisConfig(c); }));
-    RUVIA_CHECK(throwsOn([] { RedisConfig c; c.maxReplyBytes = 0; validateRedisConfig(c); }));
+    RUVIA_CHECK(throwsOn([] {
+        RedisConfig c;
+        c.host.clear();
+        validateRedisConfig(c);
+    }));
+    RUVIA_CHECK(throwsOn([] {
+        RedisConfig c;
+        c.port = 0;
+        validateRedisConfig(c);
+    }));
+    RUVIA_CHECK(throwsOn([] {
+        RedisConfig c;
+        c.poolSizePerWorker = 0;
+        validateRedisConfig(c);
+    }));
+    RUVIA_CHECK(throwsOn([] {
+        RedisConfig c;
+        c.maxArrayDepth = 0;
+        validateRedisConfig(c);
+    }));
+    RUVIA_CHECK(throwsOn([] {
+        RedisConfig c;
+        c.maxReplyBytes = 0;
+        validateRedisConfig(c);
+    }));
 
     // Every configured timeout must be positive. Zero cannot silently recover the
     // former sentinel convention, and the whole fold must validate every field.
-    RUVIA_CHECK(throwsOn([] { RedisConfig c; c.connectTimeout = milliseconds(0); validateRedisConfig(c); }));
-    RUVIA_CHECK(throwsOn([] { RedisConfig c; c.commandTimeout = milliseconds(0); validateRedisConfig(c); }));
-    RUVIA_CHECK(throwsOn([] { RedisConfig c; c.acquireTimeout = milliseconds(0); validateRedisConfig(c); }));
-    RUVIA_CHECK(throwsOn([] { RedisConfig c; c.connectTimeout = milliseconds(-1); validateRedisConfig(c); }));
-    RUVIA_CHECK(throwsOn([] { RedisConfig c; c.commandTimeout = milliseconds(-1); validateRedisConfig(c); }));
-    RUVIA_CHECK(throwsOn([] { RedisConfig c; c.acquireTimeout = milliseconds(-1); validateRedisConfig(c); }));
+    RUVIA_CHECK(throwsOn([] {
+        RedisConfig c;
+        c.connectTimeout = milliseconds(0);
+        validateRedisConfig(c);
+    }));
+    RUVIA_CHECK(throwsOn([] {
+        RedisConfig c;
+        c.commandTimeout = milliseconds(0);
+        validateRedisConfig(c);
+    }));
+    RUVIA_CHECK(throwsOn([] {
+        RedisConfig c;
+        c.acquireTimeout = milliseconds(0);
+        validateRedisConfig(c);
+    }));
+    RUVIA_CHECK(throwsOn([] {
+        RedisConfig c;
+        c.connectTimeout = milliseconds(-1);
+        validateRedisConfig(c);
+    }));
+    RUVIA_CHECK(throwsOn([] {
+        RedisConfig c;
+        c.commandTimeout = milliseconds(-1);
+        validateRedisConfig(c);
+    }));
+    RUVIA_CHECK(throwsOn([] {
+        RedisConfig c;
+        c.acquireTimeout = milliseconds(-1);
+        validateRedisConfig(c);
+    }));
 }
 
 RUVIA_TEST(resp_command_bulk_strings_are_binary_safe) {
@@ -376,11 +395,9 @@ RUVIA_TEST(resp_command_bulk_strings_are_binary_safe) {
     // argument containing CRLF is carried verbatim inside its byte count -- it cannot
     // terminate the bulk early or inject a second command. This is the RESP
     // command-injection defense for attacker-influenced keys and values.
-    RUVIA_CHECK_EQ(encode({"SET", "k", "a\r\nb"}),
-                   std::string("*3\r\n$3\r\nSET\r\n$1\r\nk\r\n$4\r\na\r\nb\r\n"));
+    RUVIA_CHECK_EQ(encode({"SET", "k", "a\r\nb"}), std::string("*3\r\n$3\r\nSET\r\n$1\r\nk\r\n$4\r\na\r\nb\r\n"));
     // An embedded NUL is likewise just another length-counted byte.
-    RUVIA_CHECK_EQ(encode({"SET", "k", std::string_view("a\0b", 3)}),
-                   std::string("*3\r\n$3\r\nSET\r\n$1\r\nk\r\n$3\r\na\0b\r\n", 29));
+    RUVIA_CHECK_EQ(encode({"SET", "k", std::string_view("a\0b", 3)}), std::string("*3\r\n$3\r\nSET\r\n$1\r\nk\r\n$3\r\na\0b\r\n", 29));
 }
 
 RUVIA_TEST(redis_wrong_reply_type_throws_RedisError_not_logic_error) {

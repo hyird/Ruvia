@@ -13,15 +13,15 @@ namespace {
 
 using ruvia::HttpResponse;
 using ruvia::detail::Http1FinalResponseControl;
+using ruvia::detail::http1FinalResponseControlPlan;
 using ruvia::detail::Http1FinalResponseControlPlanError;
 using ruvia::detail::Http1FinalResponseControlPlanFailure;
 using ruvia::detail::Http1FinalResponseControlPlanResult;
 using ruvia::detail::Http2FinalResponseControl;
+using ruvia::detail::http2FinalResponseControlPlan;
 using ruvia::detail::Http2FinalResponseControlPlanError;
 using ruvia::detail::Http2FinalResponseControlPlanFailure;
 using ruvia::detail::Http2FinalResponseControlPlanResult;
-using ruvia::detail::http1FinalResponseControlPlan;
-using ruvia::detail::http2FinalResponseControlPlan;
 
 static_assert(!std::default_initializable<Http1FinalResponseControl>);
 static_assert(!std::default_initializable<Http2FinalResponseControl>);
@@ -29,52 +29,24 @@ static_assert(!std::default_initializable<Http1FinalResponseControlPlanFailure>)
 static_assert(!std::default_initializable<Http2FinalResponseControlPlanFailure>);
 static_assert(!std::default_initializable<Http1FinalResponseControlPlanResult>);
 static_assert(!std::default_initializable<Http2FinalResponseControlPlanResult>);
-static_assert(std::same_as<
-    decltype(std::declval<const Http1FinalResponseControl&>()
-        .connectionOptions()),
-    ruvia::detail::HttpConnectionOptions>);
-static_assert(std::same_as<
-    decltype(std::declval<const Http1FinalResponseControl&&>()
-        .connectionOptions()),
-    ruvia::detail::HttpConnectionOptions>);
-static_assert(std::same_as<
-    decltype(std::declval<const Http1FinalResponseControl&>()
-        .upgradeProtocols()),
-    ruvia::detail::HttpUpgradeProtocols>);
-static_assert(std::same_as<
-    decltype(std::declval<const Http1FinalResponseControl&&>()
-        .upgradeProtocols()),
-    ruvia::detail::HttpUpgradeProtocols>);
+static_assert(std::same_as<decltype(std::declval<const Http1FinalResponseControl&>().connectionOptions()), ruvia::detail::HttpConnectionOptions>);
+static_assert(std::same_as<decltype(std::declval<const Http1FinalResponseControl&&>().connectionOptions()), ruvia::detail::HttpConnectionOptions>);
+static_assert(std::same_as<decltype(std::declval<const Http1FinalResponseControl&>().upgradeProtocols()), ruvia::detail::HttpUpgradeProtocols>);
+static_assert(std::same_as<decltype(std::declval<const Http1FinalResponseControl&&>().upgradeProtocols()), ruvia::detail::HttpUpgradeProtocols>);
 
-bool isHttp1Failure(
-    const HttpResponse& response,
-    Http1FinalResponseControlPlanError error) {
+bool isHttp1Failure(const HttpResponse& response, Http1FinalResponseControlPlanError error) {
     const auto result = http1FinalResponseControlPlan(response);
-    return result.control() == nullptr &&
-        result.failure() != nullptr &&
-        result.failure()->error() == error;
+    return result.control() == nullptr && result.failure() != nullptr && result.failure()->error() == error;
 }
 
-bool isHttp2Failure(
-    const HttpResponse& response,
-    Http2FinalResponseControlPlanError error) {
+bool isHttp2Failure(const HttpResponse& response, Http2FinalResponseControlPlanError error) {
     const auto result = http2FinalResponseControlPlan(response);
-    return result.control() == nullptr &&
-        result.failure() != nullptr &&
-        result.failure()->error() == error;
+    return result.control() == nullptr && result.failure() != nullptr && result.failure()->error() == error;
 }
 
-void addUncheckedHeader(
-    HttpResponse& response,
-    std::string_view name,
-    std::string_view value) {
-    auto& headers = const_cast<ruvia::HttpResponseHeaders&>(
-        response.headers());
-    (void)ruvia::detail::HttpResponseHeadersAccess::add(
-        headers,
-        name,
-        value,
-        0);
+void addUncheckedHeader(HttpResponse& response, std::string_view name, std::string_view value) {
+    auto& headers = const_cast<ruvia::HttpResponseHeaders&>(response.headers());
+    (void)ruvia::detail::HttpResponseHeadersAccess::add(headers, name, value, 0);
 }
 
 }  // namespace
@@ -82,14 +54,8 @@ void addUncheckedHeader(
 RUVIA_TEST(final_response_control_entry_points_own_only_their_protocol) {
     HttpResponse http1(std::pmr::get_default_resource());
     http1.header("Connection", "close");
-    http1.header(
-        "Connection",
-        "Upgrade",
-        HttpResponse::HeaderOptions{.append = true});
-    http1.header(
-        "Connection",
-        "X-Hop",
-        HttpResponse::HeaderOptions{.append = true});
+    http1.header("Connection", "Upgrade", HttpResponse::HeaderOptions{.append = true});
+    http1.header("Connection", "X-Hop", HttpResponse::HeaderOptions{.append = true});
     http1.header("Upgrade", "websocket");
     http1.header("X-Hop", "value");
 
@@ -114,34 +80,23 @@ RUVIA_TEST(final_response_control_entry_points_own_only_their_protocol) {
 RUVIA_TEST(final_response_control_failure_never_exposes_protocol_alternative) {
     HttpResponse invalidConnection(std::pmr::get_default_resource());
     addUncheckedHeader(invalidConnection, "Connection", ", close");
-    RUVIA_CHECK(isHttp1Failure(
-        invalidConnection,
-        Http1FinalResponseControlPlanError::kInvalidConnectionField));
+    RUVIA_CHECK(isHttp1Failure(invalidConnection, Http1FinalResponseControlPlanError::kInvalidConnectionField));
 
     HttpResponse invalidUpgrade(std::pmr::get_default_resource());
     addUncheckedHeader(invalidUpgrade, "Upgrade", "web socket");
-    RUVIA_CHECK(isHttp1Failure(
-        invalidUpgrade,
-        Http1FinalResponseControlPlanError::kInvalidUpgradeField));
+    RUVIA_CHECK(isHttp1Failure(invalidUpgrade, Http1FinalResponseControlPlanError::kInvalidUpgradeField));
 
     HttpResponse missingUpgrade(std::pmr::get_default_resource());
     missingUpgrade.status(ruvia::http_status::kUpgradeRequired);
-    RUVIA_CHECK(isHttp1Failure(
-        missingUpgrade,
-        Http1FinalResponseControlPlanError::kUpgradeRequired));
-    RUVIA_CHECK(isHttp2Failure(
-        missingUpgrade,
-        Http2FinalResponseControlPlanError::kUpgradeUnavailable));
+    RUVIA_CHECK(isHttp1Failure(missingUpgrade, Http1FinalResponseControlPlanError::kUpgradeRequired));
+    RUVIA_CHECK(isHttp2Failure(missingUpgrade, Http2FinalResponseControlPlanError::kUpgradeUnavailable));
 }
 
 RUVIA_TEST(final_response_control_rejects_end_to_end_connection_options) {
-    for (const std::string_view option : {
-             "content-length", "DATE", "Set-Cookie"}) {
+    for (const std::string_view option : {"content-length", "DATE", "Set-Cookie"}) {
         HttpResponse response(std::pmr::get_default_resource());
         response.header("Connection", option);
-        RUVIA_CHECK(isHttp1Failure(
-            response,
-            Http1FinalResponseControlPlanError::kInvalidConnectionField));
+        RUVIA_CHECK(isHttp1Failure(response, Http1FinalResponseControlPlanError::kInvalidConnectionField));
     }
 }
 
@@ -157,9 +112,6 @@ RUVIA_TEST(final_response_control_rejects_every_http2_connection_specific_field)
     for (const auto& [name, value] : fields) {
         HttpResponse response(std::pmr::get_default_resource());
         response.header(name, value);
-        RUVIA_CHECK(isHttp2Failure(
-            response,
-            Http2FinalResponseControlPlanError::
-                kConnectionSpecificFieldForbidden));
+        RUVIA_CHECK(isHttp2Failure(response, Http2FinalResponseControlPlanError::kConnectionSpecificFieldForbidden));
     }
 }

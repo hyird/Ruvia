@@ -54,9 +54,12 @@ using asio::ip::tcp;
 // A loopback origin that replies with a fixed cacheable body and counts requests.
 class OriginServer final {
 public:
-    OriginServer() : acceptor_(io_, tcp::endpoint(tcp::v4(), 0)) {}
+    OriginServer()
+        : acceptor_(io_, tcp::endpoint(tcp::v4(), 0)) {}
 
-    ~OriginServer() { stop(); }
+    ~OriginServer() {
+        stop();
+    }
 
     void start() {
         asio::co_spawn(io_, acceptLoop(), asio::detached);
@@ -74,9 +77,15 @@ public:
         acceptor_.close(ignore);
     }
 
-    [[nodiscard]] std::uint16_t port() const { return acceptor_.local_endpoint().port(); }
-    [[nodiscard]] int hits() const { return hits_.load(); }              // full 200s served
-    [[nodiscard]] int notModified() const { return notModified_.load(); }  // 304s served
+    [[nodiscard]] std::uint16_t port() const {
+        return acceptor_.local_endpoint().port();
+    }
+    [[nodiscard]] int hits() const {
+        return hits_.load();
+    }  // full 200s served
+    [[nodiscard]] int notModified() const {
+        return notModified_.load();
+    }  // 304s served
     [[nodiscard]] int slowRevalidations() const {
         return slowRevalidations_.load();
     }
@@ -88,8 +97,7 @@ public:
 private:
     asio::awaitable<void> acceptLoop() {
         for (;;) {
-            auto [ec, socket] =
-                co_await acceptor_.async_accept(asio::as_tuple(asio::use_awaitable));
+            auto [ec, socket] = co_await acceptor_.async_accept(asio::as_tuple(asio::use_awaitable));
             if (ec) {
                 break;
             }
@@ -101,8 +109,7 @@ private:
         std::string request;
         char buffer[1024];
         while (request.find("\r\n\r\n") == std::string::npos) {
-            auto [ec, n] = co_await socket.async_read_some(
-                asio::buffer(buffer), asio::as_tuple(asio::use_awaitable));
+            auto [ec, n] = co_await socket.async_read_some(asio::buffer(buffer), asio::as_tuple(asio::use_awaitable));
             if (n > 0) {
                 request.append(buffer, n);
             }
@@ -121,8 +128,7 @@ private:
             }
         }
         while (request.size() - headEnd < contentLength) {
-            auto [ec, n] = co_await socket.async_read_some(
-                asio::buffer(buffer), asio::as_tuple(asio::use_awaitable));
+            auto [ec, n] = co_await socket.async_read_some(asio::buffer(buffer), asio::as_tuple(asio::use_awaitable));
             if (n > 0) {
                 request.append(buffer, n);
             }
@@ -162,8 +168,7 @@ private:
                     "Content-Length: 0\r\n"
                     "\r\n";
             }
-        } else if (request.find("GET /swrslow ") != std::string::npos &&
-            request.find("If-None-Match: \"v1\"") != std::string::npos) {
+        } else if (request.find("GET /swrslow ") != std::string::npos && request.find("If-None-Match: \"v1\"") != std::string::npos) {
             // Keep a background refresh suspended long enough to stop the edge
             // while this detached operation still owns cache/config leases.
             slowRevalidations_.fetch_add(1);
@@ -187,8 +192,7 @@ private:
                 "ETag: \"v1\"\r\n"
                 "Cache-Control: max-age=60\r\n"
                 "\r\n";
-        } else if (request.find("GET /chunked ") != std::string::npos ||
-                   request.find("GET /chunked10 ") != std::string::npos) {
+        } else if (request.find("GET /chunked ") != std::string::npos || request.find("GET /chunked10 ") != std::string::npos) {
             // An unknown-length (chunked) origin response.
             hits_.fetch_add(1);
             response =
@@ -215,10 +219,7 @@ private:
                 response += "\r\n";
             }
             response += "0\r\n\r\n";
-        } else if (request.find("GET /vary ") != std::string::npos ||
-                   request.find("GET /vary-q ") != std::string::npos ||
-                   request.find("GET /vary-repeat ") != std::string::npos ||
-                   request.find("GET /vary-empty ") != std::string::npos) {
+        } else if (request.find("GET /vary ") != std::string::npos || request.find("GET /vary-q ") != std::string::npos || request.find("GET /vary-repeat ") != std::string::npos || request.find("GET /vary-empty ") != std::string::npos) {
             // Varies on Accept-Encoding: the edge caches a variant per encoding.
             hits_.fetch_add(1);
             response =
@@ -264,8 +265,7 @@ private:
                 "Cache-Control: max-age=100\r\n"
                 "\r\n"
                 "hello";
-        } else if (request.find("GET /swr ") != std::string::npos ||
-                   request.find("GET /swrslow ") != std::string::npos) {
+        } else if (request.find("GET /swr ") != std::string::npos || request.find("GET /swrslow ") != std::string::npos) {
             // Short freshness with a stale-while-revalidate window and a validator.
             hits_.fetch_add(1);
             response =
@@ -291,8 +291,7 @@ private:
                 "hello";
         } else {
             hits_.fetch_add(1);
-            const bool shortLived = request.find("GET /rev ") != std::string::npos ||
-                request.find("GET /sie ") != std::string::npos;
+            const bool shortLived = request.find("GET /rev ") != std::string::npos || request.find("GET /sie ") != std::string::npos;
             const bool staleIfError = request.find("GET /sie ") != std::string::npos;
             response =
                 "HTTP/1.1 200 OK\r\n"
@@ -306,8 +305,7 @@ private:
             }
             response += "\r\n\r\nhello";
         }
-        co_await asio::async_write(
-            socket, asio::buffer(response), asio::as_tuple(asio::use_awaitable));
+        co_await asio::async_write(socket, asio::buffer(response), asio::as_tuple(asio::use_awaitable));
         asio::error_code ignore;
         socket.shutdown(tcp::socket::shutdown_both, ignore);
     }
@@ -369,11 +367,7 @@ inline std::string httpHead(std::uint16_t port, std::string_view host, std::stri
 }
 
 // GET with a Range header (same Accept-Encoding as httpGet, so it hits that variant).
-inline std::string httpGetRange(
-    std::uint16_t port,
-    std::string_view host,
-    std::string_view target,
-    std::string_view range) {
+inline std::string httpGetRange(std::uint16_t port, std::string_view host, std::string_view target, std::string_view range) {
     std::string request = "GET ";
     request.append(target);
     request.append(" HTTP/1.1\r\nHost: ");
@@ -385,11 +379,7 @@ inline std::string httpGetRange(
 }
 
 // GET with an explicit Accept-Encoding, to exercise variant caching.
-inline std::string httpGetEnc(
-    std::uint16_t port,
-    std::string_view host,
-    std::string_view target,
-    std::string_view acceptEncoding) {
+inline std::string httpGetEnc(std::uint16_t port, std::string_view host, std::string_view target, std::string_view acceptEncoding) {
     std::string request = "GET ";
     request.append(target);
     request.append(" HTTP/1.1\r\nHost: ");
@@ -400,11 +390,7 @@ inline std::string httpGetEnc(
     return httpRaw(port, request);
 }
 
-inline std::string httpPost(
-    std::uint16_t port,
-    std::string_view host,
-    std::string_view target,
-    std::string_view body) {
+inline std::string httpPost(std::uint16_t port, std::string_view host, std::string_view target, std::string_view body) {
     std::string request = "POST ";
     request.append(target);
     request.append(" HTTP/1.1\r\nHost: ");
@@ -456,12 +442,7 @@ inline std::string readOneResponse(asio::ip::tcp::socket& socket) {
 
 // Send two GET requests on a single persistent connection (the first keep-alive,
 // the second closing) and return both raw responses.
-inline std::pair<std::string, std::string> httpKeepAliveTwo(
-    std::uint16_t port,
-    std::string_view host,
-    std::string_view target,
-    std::string_view version = "HTTP/1.1",
-    std::string_view firstConnection = "keep-alive") {
+inline std::pair<std::string, std::string> httpKeepAliveTwo(std::uint16_t port, std::string_view host, std::string_view target, std::string_view version = "HTTP/1.1", std::string_view firstConnection = "keep-alive") {
     asio::io_context io;
     tcp::socket socket(io);
     socket.connect(tcp::endpoint(asio::ip::make_address("127.0.0.1"), port));
@@ -576,8 +557,7 @@ inline std::string runShell(const std::string& command) {
         if (crlf == std::string::npos) {
             break;
         }
-        const std::size_t size =
-            static_cast<std::size_t>(std::stoul(framed.substr(pos, crlf - pos), nullptr, 16));
+        const std::size_t size = static_cast<std::size_t>(std::stoul(framed.substr(pos, crlf - pos), nullptr, 16));
         if (size == 0) {
             break;
         }

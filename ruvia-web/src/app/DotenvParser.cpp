@@ -41,22 +41,15 @@ namespace {
     // locale-dependent (a non-"C" LC_CTYPE set by the host app could admit high
     // bytes into a key). This also matches how the rest of the codebase validates
     // identifiers (isValidSessionId, isValidConfigHost, ...).
-    const auto isAsciiAlpha = [](char value) noexcept {
-        return (value >= 'a' && value <= 'z') || (value >= 'A' && value <= 'Z');
-    };
+    const auto isAsciiAlpha = [](char value) noexcept { return (value >= 'a' && value <= 'z') || (value >= 'A' && value <= 'Z'); };
     if (!(isAsciiAlpha(key.front()) || key.front() == '_')) {
         return false;
     }
 
-    return std::ranges::all_of(key.substr(1), [&isAsciiAlpha](char value) {
-        return isAsciiAlpha(value) || (value >= '0' && value <= '9') || value == '_';
-    });
+    return std::ranges::all_of(key.substr(1), [&isAsciiAlpha](char value) { return isAsciiAlpha(value) || (value >= '0' && value <= '9') || value == '_'; });
 }
 
-[[nodiscard]] std::pmr::string locationMessage(
-    const std::filesystem::path& path,
-    std::size_t lineNumber,
-    std::string_view message) {
+[[nodiscard]] std::pmr::string locationMessage(const std::filesystem::path& path, std::size_t lineNumber, std::string_view message) {
     std::pmr::string result("invalid dotenv entry in ", appResource());
     result += path.string();
     result += ':';
@@ -66,11 +59,7 @@ namespace {
     return result;
 }
 
-[[nodiscard]] std::pmr::string parseDoubleQuotedValue(
-    std::string_view value,
-    const std::filesystem::path& path,
-    std::size_t lineNumber,
-    std::size_t& consumed) {
+[[nodiscard]] std::pmr::string parseDoubleQuotedValue(std::string_view value, const std::filesystem::path& path, std::size_t lineNumber, std::size_t& consumed) {
     std::pmr::string result(appResource());
     result.reserve(value.size());
 
@@ -116,11 +105,7 @@ namespace {
     throw std::invalid_argument(locationMessage(path, lineNumber, "unterminated double-quoted value").c_str());
 }
 
-[[nodiscard]] std::pmr::string parseSingleQuotedValue(
-    std::string_view value,
-    const std::filesystem::path& path,
-    std::size_t lineNumber,
-    std::size_t& consumed) {
+[[nodiscard]] std::pmr::string parseSingleQuotedValue(std::string_view value, const std::filesystem::path& path, std::size_t lineNumber, std::size_t& consumed) {
     const auto close = value.find('\'', 1);
     if (close == std::string_view::npos) {
         throw std::invalid_argument(locationMessage(path, lineNumber, "unterminated single-quoted value").c_str());
@@ -130,10 +115,7 @@ namespace {
     return std::pmr::string(value.substr(1, close - 1), appResource());
 }
 
-void validateQuotedRemainder(
-    std::string_view value,
-    const std::filesystem::path& path,
-    std::size_t lineNumber) {
+void validateQuotedRemainder(std::string_view value, const std::filesystem::path& path, std::size_t lineNumber) {
     value = trimLeft(value);
     if (!value.empty() && value.front() != '#') {
         throw std::invalid_argument(locationMessage(path, lineNumber, "unexpected characters after quoted value").c_str());
@@ -152,10 +134,7 @@ void validateQuotedRemainder(
     return std::pmr::string(trim(value.substr(0, end)), appResource());
 }
 
-[[nodiscard]] std::pmr::string parseValue(
-    std::string_view value,
-    const std::filesystem::path& path,
-    std::size_t lineNumber) {
+[[nodiscard]] std::pmr::string parseValue(std::string_view value, const std::filesystem::path& path, std::size_t lineNumber) {
     value = trimLeft(value);
     if (value.empty()) {
         return {};
@@ -180,18 +159,12 @@ void validateQuotedRemainder(
 
 void stripUtf8Bom(std::string_view& line) noexcept {
     constexpr unsigned char bom[] = {0xEF, 0xBB, 0xBF};
-    if (line.size() >= 3 &&
-        static_cast<unsigned char>(line[0]) == bom[0] &&
-        static_cast<unsigned char>(line[1]) == bom[1] &&
-        static_cast<unsigned char>(line[2]) == bom[2]) {
+    if (line.size() >= 3 && static_cast<unsigned char>(line[0]) == bom[0] && static_cast<unsigned char>(line[1]) == bom[1] && static_cast<unsigned char>(line[2]) == bom[2]) {
         line.remove_prefix(3);
     }
 }
 
-[[nodiscard]] DotenvEntry parseEntry(
-    std::string_view line,
-    const std::filesystem::path& path,
-    std::size_t lineNumber) {
+[[nodiscard]] DotenvEntry parseEntry(std::string_view line, const std::filesystem::path& path, std::size_t lineNumber) {
     line = trim(line);
     if (line.starts_with("export") && line.size() > 6 && isSpace(line[6])) {
         line = trim(line.substr(6));

@@ -67,25 +67,25 @@ public:
 
     ~HttpResponseHeaders();
 
-    [[nodiscard]] const_iterator begin() const & noexcept {
+    [[nodiscard]] const_iterator begin() const& noexcept {
         return data();
     }
-    [[nodiscard]] const_iterator begin() const && = delete;
+    [[nodiscard]] const_iterator begin() const&& = delete;
 
-    [[nodiscard]] const_iterator end() const & noexcept {
+    [[nodiscard]] const_iterator end() const& noexcept {
         return data() + size();
     }
-    [[nodiscard]] const_iterator end() const && = delete;
+    [[nodiscard]] const_iterator end() const&& = delete;
 
-    [[nodiscard]] const_iterator cbegin() const & noexcept {
+    [[nodiscard]] const_iterator cbegin() const& noexcept {
         return begin();
     }
-    [[nodiscard]] const_iterator cbegin() const && = delete;
+    [[nodiscard]] const_iterator cbegin() const&& = delete;
 
-    [[nodiscard]] const_iterator cend() const & noexcept {
+    [[nodiscard]] const_iterator cend() const& noexcept {
         return end();
     }
-    [[nodiscard]] const_iterator cend() const && = delete;
+    [[nodiscard]] const_iterator cend() const&& = delete;
 
     [[nodiscard]] std::size_t size() const noexcept {
         return spilled_ ? heap_.size() : size_;
@@ -163,12 +163,10 @@ public:
     HttpResponse& operator=(HttpResponse&& other) noexcept;
 
     [[nodiscard]] HttpStatusCode status() const noexcept;
-    [[nodiscard]] const HttpResponseHeaders& headers() const & noexcept;
-    [[nodiscard]] const HttpResponseHeaders& headers() const && = delete;
-    [[nodiscard]] std::optional<std::string_view> header(
-        std::string_view name) const & noexcept;
-    [[nodiscard]] std::optional<std::string_view> header(
-        std::string_view name) const && = delete;
+    [[nodiscard]] const HttpResponseHeaders& headers() const& noexcept;
+    [[nodiscard]] const HttpResponseHeaders& headers() const&& = delete;
+    [[nodiscard]] std::optional<std::string_view> header(std::string_view name) const& noexcept;
+    [[nodiscard]] std::optional<std::string_view> header(std::string_view name) const&& = delete;
     // A generic HttpResponse is always final (200..599). Interim 1xx progress
     // messages use HttpInterimResponseHead; 101 uses a dedicated protocol driver.
     void status(HttpStatusCode statusCode);
@@ -195,46 +193,23 @@ private:
     void setContentRangeUnsatisfied(std::uint64_t size);
     void setHeaderValidated(std::string_view key, std::string_view value, std::uint32_t knownBit);
     void appendHeaderValidated(std::string_view key, std::string_view value, std::uint32_t knownBit);
-    HttpResponseHeader& appendHeaderUninitializedValue(
-        std::string_view key,
-        std::size_t valueSize,
-        std::uint32_t knownBit);
-    HttpResponseHeader& upsertSetCookieHeaderUninitializedValue(
-        std::string_view wirePrefix,
-        std::string_view cookieName,
-        std::size_t valueSize);
+    HttpResponseHeader& appendHeaderUninitializedValue(std::string_view key, std::size_t valueSize, std::uint32_t knownBit);
+    HttpResponseHeader& upsertSetCookieHeaderUninitializedValue(std::string_view wirePrefix, std::string_view cookieName, std::size_t valueSize);
     void upsertSetCookieHeaderValidated(std::string_view value);
-    [[nodiscard]] HttpResponseHeader* findSetCookieHeader(
-        std::string_view wirePrefix,
-        std::string_view cookieName) noexcept;
-    void eraseLaterSetCookieHeaders(
-        HttpResponseHeader& retained,
-        std::string_view wirePrefix,
-        std::string_view cookieName) noexcept;
-    [[nodiscard]] HttpResponseHeader& collapseResponseHeaders(
-        HttpResponseHeader& retained,
-        std::string_view key,
-        std::uint32_t knownBit) noexcept;
+    [[nodiscard]] HttpResponseHeader* findSetCookieHeader(std::string_view wirePrefix, std::string_view cookieName) noexcept;
+    void eraseLaterSetCookieHeaders(HttpResponseHeader& retained, std::string_view wirePrefix, std::string_view cookieName) noexcept;
+    [[nodiscard]] HttpResponseHeader& collapseResponseHeaders(HttpResponseHeader& retained, std::string_view key, std::uint32_t knownBit) noexcept;
     bool removeHeaderValidated(std::string_view key, std::uint32_t knownBit) noexcept;
     void rebuildKnownHeaderIndex() noexcept;
     void reserveHeaders(std::size_t count);
     HttpResponse(detail::HttpResolvedPmrResourceTag, std::pmr::memory_resource* resource);
     void setFileBody(std::filesystem::path file, std::uint64_t size);
     void setFileBody(std::filesystem::path file, std::uint64_t size, std::uint64_t offset, std::uint64_t length);
-    void setFileBody(
-        std::filesystem::path file,
-        std::uint64_t size,
-        std::uint64_t offset,
-        std::uint64_t length,
-        detail::ResponseFileIdentity identity);
+    void setFileBody(std::filesystem::path file, std::uint64_t size, std::uint64_t offset, std::uint64_t length, detail::ResponseFileIdentity identity);
     void setBorrowedFileBody(const std::filesystem::path& file, std::uint64_t size);
     void setBorrowedFileBody(const std::filesystem::path& file, std::uint64_t size, std::uint64_t offset, std::uint64_t length);
     void setBorrowedNativeFileBody(const detail::HttpNativePathChar* file, std::uint64_t size);
-    void setBorrowedNativeFileBody(
-        const detail::HttpNativePathChar* file,
-        std::uint64_t size,
-        std::uint64_t offset,
-        std::uint64_t length);
+    void setBorrowedNativeFileBody(const detail::HttpNativePathChar* file, std::uint64_t size, std::uint64_t offset, std::uint64_t length);
     [[nodiscard]] std::pmr::memory_resource* resource() const noexcept;
     [[nodiscard]] std::string_view knownHeaderValue(std::uint32_t bit) const noexcept;
     [[nodiscard]] HttpResponseHeader* findHeaderForUpdate(std::string_view key, std::uint32_t knownBit) noexcept;

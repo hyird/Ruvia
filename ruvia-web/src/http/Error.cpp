@@ -16,14 +16,7 @@ namespace ruvia {
 namespace {
 
 void appendErrorBody(std::pmr::string& body, HttpErrorInfo error) {
-    std::size_t size =
-        std::string_view("{\"error\":").size() +
-        detail::jsonStringSizeHint(error.statusText()) +
-        std::string_view(",\"code\":").size() +
-        detail::jsonStringSizeHint(error.code()) +
-        std::string_view(",\"message\":").size() +
-        detail::jsonStringSizeHint(error.message()) +
-        1;
+    std::size_t size = std::string_view("{\"error\":").size() + detail::jsonStringSizeHint(error.statusText()) + std::string_view(",\"code\":").size() + detail::jsonStringSizeHint(error.code()) + std::string_view(",\"message\":").size() + detail::jsonStringSizeHint(error.message()) + 1;
     if (!error.detailsJson().empty()) {
         size += std::string_view(",\"details\":").size() + error.detailsJson().size();
     }
@@ -47,126 +40,100 @@ struct DefaultErrorPresentation final {
     std::string_view body;
 };
 
-[[nodiscard]] DefaultErrorPresentation defaultErrorPresentation(
-    HttpStatusCode status) noexcept {
+[[nodiscard]] DefaultErrorPresentation defaultErrorPresentation(HttpStatusCode status) noexcept {
     switch (status.value()) {
         case http_status::kBadRequest.value():
-            return {
-                "bad_request",
+            return {"bad_request",
                 "{\"error\":\"Bad Request\",\"code\":\"bad_request\","
                 "\"message\":\"Bad Request\"}"};
         case http_status::kUnauthorized.value():
-            return {
-                "unauthorized",
+            return {"unauthorized",
                 "{\"error\":\"Unauthorized\",\"code\":\"unauthorized\","
                 "\"message\":\"Unauthorized\"}"};
         case http_status::kForbidden.value():
-            return {
-                "forbidden",
+            return {"forbidden",
                 "{\"error\":\"Forbidden\",\"code\":\"forbidden\","
                 "\"message\":\"Forbidden\"}"};
         case http_status::kNotFound.value():
-            return {
-                "not_found",
+            return {"not_found",
                 "{\"error\":\"Not Found\",\"code\":\"not_found\","
                 "\"message\":\"Not Found\"}"};
         case http_status::kMethodNotAllowed.value():
-            return {
-                "method_not_allowed",
+            return {"method_not_allowed",
                 "{\"error\":\"Method Not Allowed\","
                 "\"code\":\"method_not_allowed\","
                 "\"message\":\"Method Not Allowed\"}"};
         case http_status::kConflict.value():
-            return {
-                "conflict",
+            return {"conflict",
                 "{\"error\":\"Conflict\",\"code\":\"conflict\","
                 "\"message\":\"Conflict\"}"};
         case http_status::kPreconditionFailed.value():
-            return {
-                "precondition_failed",
+            return {"precondition_failed",
                 "{\"error\":\"Precondition Failed\","
                 "\"code\":\"precondition_failed\","
                 "\"message\":\"Precondition Failed\"}"};
         case http_status::kContentTooLarge.value():
-            return {
-                "content_too_large",
+            return {"content_too_large",
                 "{\"error\":\"Content Too Large\","
                 "\"code\":\"content_too_large\","
                 "\"message\":\"Content Too Large\"}"};
         case http_status::kRangeNotSatisfiable.value():
-            return {
-                "range_not_satisfiable",
+            return {"range_not_satisfiable",
                 "{\"error\":\"Range Not Satisfiable\","
                 "\"code\":\"range_not_satisfiable\","
                 "\"message\":\"Range Not Satisfiable\"}"};
         case http_status::kExpectationFailed.value():
-            return {
-                "expectation_failed",
+            return {"expectation_failed",
                 "{\"error\":\"Expectation Failed\","
                 "\"code\":\"expectation_failed\","
                 "\"message\":\"Expectation Failed\"}"};
         case http_status::kUnprocessableContent.value():
-            return {
-                "unprocessable_content",
+            return {"unprocessable_content",
                 "{\"error\":\"Unprocessable Content\","
                 "\"code\":\"unprocessable_content\","
                 "\"message\":\"Unprocessable Content\"}"};
         case http_status::kTooManyRequests.value():
-            return {
-                "too_many_requests",
+            return {"too_many_requests",
                 "{\"error\":\"Too Many Requests\","
                 "\"code\":\"too_many_requests\","
                 "\"message\":\"Too Many Requests\"}"};
         case http_status::kRequestHeaderFieldsTooLarge.value():
-            return {
-                "request_header_fields_too_large",
+            return {"request_header_fields_too_large",
                 "{\"error\":\"Request Header Fields Too Large\","
                 "\"code\":\"request_header_fields_too_large\","
                 "\"message\":\"Request Header Fields Too Large\"}"};
         case http_status::kInternalServerError.value():
-            return {
-                "internal_error",
+            return {"internal_error",
                 "{\"error\":\"Internal Server Error\","
                 "\"code\":\"internal_error\","
                 "\"message\":\"Internal Server Error\"}"};
         case http_status::kNotImplemented.value():
-            return {
-                "not_implemented",
+            return {"not_implemented",
                 "{\"error\":\"Not Implemented\","
                 "\"code\":\"not_implemented\","
                 "\"message\":\"Not Implemented\"}"};
         case http_status::kServiceUnavailable.value():
-            return {
-                "service_unavailable",
+            return {"service_unavailable",
                 "{\"error\":\"Service Unavailable\","
                 "\"code\":\"service_unavailable\","
                 "\"message\":\"Service Unavailable\"}"};
         case http_status::kHttpVersionNotSupported.value():
-            return {
-                "http_version_not_supported",
+            return {"http_version_not_supported",
                 "{\"error\":\"HTTP Version Not Supported\","
                 "\"code\":\"http_version_not_supported\","
                 "\"message\":\"HTTP Version Not Supported\"}"};
-        default: return {
-            status.isServerError() ? "internal_error" : "bad_request", {}};
+        default:
+            return {status.isServerError() ? "internal_error" : "bad_request", {}};
     }
 }
 
 [[nodiscard]] bool isDefaultErrorBodyCandidate(HttpErrorInfo error) noexcept {
-    return error.detailsJson().empty() &&
-        !httpReasonPhrase(error.status()).empty() &&
-        error.statusText() == httpReasonPhrase(error.status()) &&
-        error.code() == defaultErrorCode(error.status()) &&
-        error.message() == error.statusText();
+    return error.detailsJson().empty() && !httpReasonPhrase(error.status()).empty() && error.statusText() == httpReasonPhrase(error.status()) && error.code() == defaultErrorCode(error.status()) && error.message() == error.statusText();
 }
 
 }  // namespace
 
-HttpError::HttpError(
-    HttpStatusCode status,
-    std::string_view code,
-    std::string_view message,
-    std::string_view statusText)
+HttpError::HttpError(HttpStatusCode status, std::string_view code, std::string_view message, std::string_view statusText)
     : status_(status),
       statusText_(statusText, detail::processResource()),
       code_(code, detail::processResource()),
@@ -192,7 +159,7 @@ const char* HttpError::what() const noexcept {
     return message_.c_str();
 }
 
-HttpErrorInfo HttpError::info() const & noexcept {
+HttpErrorInfo HttpError::info() const& noexcept {
     return HttpErrorInfo(status_, code_, message_, statusText_);
 }
 
@@ -200,9 +167,7 @@ std::string_view defaultErrorCode(HttpStatusCode status) noexcept {
     return defaultErrorPresentation(status).code;
 }
 
-HttpResponse detail::makeDefaultErrorResponse(
-    std::pmr::memory_resource* resource,
-    HttpErrorInfo error) {
+HttpResponse detail::makeDefaultErrorResponse(std::pmr::memory_resource* resource, HttpErrorInfo error) {
     error = normalizeHttpErrorInfo(error);
 
     HttpResponse response(resource);
@@ -211,8 +176,7 @@ HttpResponse detail::makeDefaultErrorResponse(
     setResponseHeaderStableView(response, "Content-Type", "application/json");
 
     if (isDefaultErrorBodyCandidate(error)) {
-        if (const auto body = defaultErrorPresentation(error.status()).body;
-            !body.empty()) {
+        if (const auto body = defaultErrorPresentation(error.status()).body; !body.empty()) {
             setResponseBodyStaticView(response, body);
             return response;
         }
@@ -228,10 +192,7 @@ HttpResponse detail::makeDefaultErrorResponse(
 // is none. A handler that throws is answered with the default response too:
 // transport output stays deterministic and no exception detail reaches the
 // client.
-Task<HttpResponse> detail::invokeErrorHandler(
-    Context& context,
-    HttpErrorInfo error,
-    HttpErrorHandler handler) {
+Task<HttpResponse> detail::invokeErrorHandler(Context& context, HttpErrorInfo error, HttpErrorHandler handler) {
     error = normalizeHttpErrorInfo(error);
 
     if (handler != nullptr) {
@@ -242,13 +203,9 @@ Task<HttpResponse> detail::invokeErrorHandler(
         } catch (const std::exception&) {
             // The error handler itself threw; keep transport output deterministic
             // and avoid echoing exception detail to the client.
-            co_return makeDefaultErrorResponse(
-                context.resource(),
-                HttpErrorInfo(ruvia::http_status::kInternalServerError, "error_handler_failed", "error handler failed"));
+            co_return makeDefaultErrorResponse(context.resource(), HttpErrorInfo(ruvia::http_status::kInternalServerError, "error_handler_failed", "error handler failed"));
         } catch (...) {
-            co_return makeDefaultErrorResponse(
-                context.resource(),
-                HttpErrorInfo(ruvia::http_status::kInternalServerError, "error_handler_failed", "error handler failed"));
+            co_return makeDefaultErrorResponse(context.resource(), HttpErrorInfo(ruvia::http_status::kInternalServerError, "error_handler_failed", "error handler failed"));
         }
     }
 

@@ -31,20 +31,11 @@ concept HasLegacyHttp2Flag = requires(const Record& record) {
     { record.http2() } -> std::same_as<bool>;
 };
 
-using RecordHttpAccessFunction = void (*)(
-    const AccessLogSink&,
-    const HttpRequest&,
-    std::string_view,
-    ruvia::HttpStatusCode,
-    std::chrono::steady_clock::time_point) noexcept;
+using RecordHttpAccessFunction = void (*)(const AccessLogSink&, const HttpRequest&, std::string_view, ruvia::HttpStatusCode, std::chrono::steady_clock::time_point) noexcept;
 
-static_assert(std::is_same_v<
-    decltype(std::declval<const AccessLogRecord&>().protocolVersion()),
-    HttpProtocolVersion>);
+static_assert(std::is_same_v<decltype(std::declval<const AccessLogRecord&>().protocolVersion()), HttpProtocolVersion>);
 static_assert(!HasLegacyHttp2Flag<AccessLogRecord>);
-static_assert(std::is_same_v<
-    decltype(&recordHttpAccess),
-    RecordHttpAccessFunction>);
+static_assert(std::is_same_v<decltype(&recordHttpAccess), RecordHttpAccessFunction>);
 static_assert(!std::is_default_constructible_v<AccessLogRecord>);
 static_assert(std::is_nothrow_copy_constructible_v<AccessLogRecord>);
 static_assert(!std::is_copy_assignable_v<AccessLogRecord>);
@@ -73,10 +64,7 @@ struct AccessLogObservation final {
     }
 };
 
-[[nodiscard]] HttpRequest makeRequest(
-    std::string_view method,
-    std::string_view path,
-    HttpProtocolVersion protocolVersion) noexcept {
+[[nodiscard]] HttpRequest makeRequest(std::string_view method, std::string_view path, HttpProtocolVersion protocolVersion) noexcept {
     auto request = HttpRequestAccess::make();
     HttpRequestAccess::reset(request);
     HttpRequestAccess::setMethod(request, method);
@@ -89,50 +77,31 @@ struct AccessLogObservation final {
 }  // namespace
 
 RUVIA_TEST(access_log_record_borrows_one_typed_request) {
-    auto request = makeRequest(
-        "PROPFIND",
-        "/collection",
-        HttpProtocolVersion::kHttp10);
+    auto request = makeRequest("PROPFIND", "/collection", HttpProtocolVersion::kHttp10);
     AccessLogObservation observation;
     AccessLogSink accessLog;
     accessLog.callback = ruvia::AccessLogCallback::bind(observation);
 
-    recordHttpAccess(
-        accessLog,
-        request,
-        "192.0.2.80",
-        ruvia::http_status::kMultiStatus,
-        std::chrono::steady_clock::now());
+    recordHttpAccess(accessLog, request, "192.0.2.80", ruvia::http_status::kMultiStatus, std::chrono::steady_clock::now());
 
     RUVIA_CHECK_EQ(observation.calls, std::size_t{1});
     RUVIA_CHECK_EQ(observation.method, std::string_view("PROPFIND"));
     RUVIA_CHECK(observation.knownMethod == HttpKnownMethod::kUnknown);
     RUVIA_CHECK_EQ(observation.path, std::string_view("/collection"));
-    RUVIA_CHECK_EQ(
-        observation.remoteAddress,
-        std::string_view("192.0.2.80"));
+    RUVIA_CHECK_EQ(observation.remoteAddress, std::string_view("192.0.2.80"));
     RUVIA_CHECK_EQ(observation.status, ruvia::http_status::kMultiStatus);
-    RUVIA_CHECK(
-        observation.versions[0] == HttpProtocolVersion::kHttp10);
+    RUVIA_CHECK(observation.versions[0] == HttpProtocolVersion::kHttp10);
 }
 
 RUVIA_TEST(access_log_preserves_all_protocol_versions_without_transport_bool) {
     AccessLogObservation observation;
     AccessLogSink accessLog;
     accessLog.callback = ruvia::AccessLogCallback::bind(observation);
-    constexpr std::array versions{
-        HttpProtocolVersion::kHttp10,
-        HttpProtocolVersion::kHttp11,
-        HttpProtocolVersion::kHttp2};
+    constexpr std::array versions{HttpProtocolVersion::kHttp10, HttpProtocolVersion::kHttp11, HttpProtocolVersion::kHttp2};
 
     for (const auto version : versions) {
         auto request = makeRequest("GET", "/version", version);
-        recordHttpAccess(
-            accessLog,
-            request,
-            "198.51.100.81",
-            ruvia::http_status::kOk,
-            std::chrono::steady_clock::now());
+        recordHttpAccess(accessLog, request, "198.51.100.81", ruvia::http_status::kOk, std::chrono::steady_clock::now());
     }
 
     RUVIA_CHECK_EQ(observation.calls, versions.size());

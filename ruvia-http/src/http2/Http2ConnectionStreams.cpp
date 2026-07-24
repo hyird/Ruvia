@@ -89,29 +89,19 @@ void Http2Connection::unpinStream(std::uint32_t streamId) {
     // Releasing the last owner while either protocol half is still open must not
     // silently erase the stream. Abort it explicitly so the peer observes a legal
     // terminal transition and the table cannot leak an ownerless half-open stream.
-    const auto error = stream->localSend().endStreamCommitted() != nullptr
-        ? Http2ErrorCode::kNoError
-        : Http2ErrorCode::kCancel;
+    const auto error = stream->localSend().endStreamCommitted() != nullptr ? Http2ErrorCode::kNoError : Http2ErrorCode::kCancel;
     (void)submitReset(streamId, error);
 }
 
 void Http2Connection::discardDeferredStreamState(std::uint32_t streamId) {
-    std::erase_if(
-        pendingSends_,
-        [streamId](const Http2PendingSend& pending) {
-            return pending.streamId == streamId;
-        });
+    std::erase_if(pendingSends_, [streamId](const Http2PendingSend& pending) { return pending.streamId == streamId; });
     std::erase(drainedDataStreams_, streamId);
     if (auto* stream = streams_.find(streamId); stream != nullptr) {
         http2ReleaseResponseHeaderBlock(*stream);
     }
 }
 
-bool Http2Connection::closeStreamImpl(
-    std::uint32_t streamId,
-    Http2StreamCloseSource source,
-    Http2ErrorCode error,
-    CloseNotification notification) {
+bool Http2Connection::closeStreamImpl(std::uint32_t streamId, Http2StreamCloseSource source, Http2ErrorCode error, CloseNotification notification) {
     auto* stream = streams_.find(streamId);
     if (stream != nullptr && !stream->isAborted()) {
         detachActiveHeaderBlock(*stream);
@@ -137,32 +127,19 @@ bool Http2Connection::closeStreamImpl(
     return true;
 }
 
-bool Http2Connection::closeStream(
-    std::uint32_t streamId,
-    Http2StreamCloseSource source,
-    Http2ErrorCode error) {
-    return closeStreamImpl(
-        streamId, source, error, CloseNotification::kEmitEvent);
+bool Http2Connection::closeStream(std::uint32_t streamId, Http2StreamCloseSource source, Http2ErrorCode error) {
+    return closeStreamImpl(streamId, source, error, CloseNotification::kEmitEvent);
 }
 
 bool Http2Connection::closeStreamByOwner(std::uint32_t streamId) {
-    return closeStreamImpl(
-        streamId,
-        Http2StreamCloseSource::kLocal,
-        Http2ErrorCode::kNoError,
-        CloseNotification::kOwnerAlreadyKnows);
+    return closeStreamImpl(streamId, Http2StreamCloseSource::kLocal, Http2ErrorCode::kNoError, CloseNotification::kOwnerAlreadyKnows);
 }
 
-bool Http2Connection::wasClosedByPeerReset(
-    std::uint32_t streamId,
-    const Http2StreamState* retainedStream) const noexcept {
+bool Http2Connection::wasClosedByPeerReset(std::uint32_t streamId, const Http2StreamState* retainedStream) const noexcept {
     if (retainedStream != nullptr) {
-        return retainedStream->isAborted() &&
-            retainedStream->localSend().aborted()->source() ==
-                Http2StreamCloseSource::kPeer;
+        return retainedStream->isAborted() && retainedStream->localSend().aborted()->source() == Http2StreamCloseSource::kPeer;
     }
-    return closedStreams_.source(streamId) ==
-        Http2StreamCloseSource::kPeer;
+    return closedStreams_.source(streamId) == Http2StreamCloseSource::kPeer;
 }
 
 bool Http2Connection::processRstStream(const Http2FrameHeader& header, std::string_view payload) {
@@ -175,8 +152,7 @@ bool Http2Connection::processRstStream(const Http2FrameHeader& header, std::stri
         return false;
     }
     auto* const stream = streams_.find(header.streamId);
-    if (stream == nullptr &&
-        isIdleStreamId(header.streamId)) {
+    if (stream == nullptr && isIdleStreamId(header.streamId)) {
         appendGoaway(Http2ErrorCode::kProtocolError, "RST_STREAM on idle stream");
         return false;
     }
@@ -185,9 +161,7 @@ bool Http2Connection::processRstStream(const Http2FrameHeader& header, std::stri
         // second cannot have been sent before it knew that it had terminated
         // the stream. Enforce the same peer-reset finality as DATA/HEADERS and
         // avoid counting a duplicate as another rapid-reset lifecycle.
-        appendGoaway(
-            Http2ErrorCode::kStreamClosed,
-            "RST_STREAM after peer RST_STREAM");
+        appendGoaway(Http2ErrorCode::kStreamClosed, "RST_STREAM after peer RST_STREAM");
         return false;
     }
     if (stream != nullptr && http2StreamIsClosed(*stream)) {
@@ -196,14 +170,12 @@ bool Http2Connection::processRstStream(const Http2FrameHeader& header, std::stri
         // another peer-reset lifecycle.
         return true;
     }
-    if (closedStreams_.source(header.streamId) ==
-        Http2StreamCloseSource::kPeerGoaway) {
+    if (closedStreams_.source(header.streamId) == Http2StreamCloseSource::kPeerGoaway) {
         // The peer already declared this request unprocessed. A trailing reset has no
         // stream lifecycle left to mutate and must not consume the rapid-reset budget.
         return true;
     }
-    const auto error = static_cast<Http2ErrorCode>(http2Read32(
-        reinterpret_cast<const unsigned char*>(payload.data())));
+    const auto error = static_cast<Http2ErrorCode>(http2Read32(reinterpret_cast<const unsigned char*>(payload.data())));
     if (!closeStream(header.streamId, Http2StreamCloseSource::kPeer, error)) {
         // A reset can race with one sent by this endpoint. RFC 9113 requires
         // minimal processing in that state, but the no-op neither opened a
@@ -229,16 +201,14 @@ Http2StreamState* Http2Connection::createStream(std::uint32_t streamId) {
     return streams_.create(streamId, peerSettings_.initialWindowSize());
 }
 
-std::optional<Http2RequestHeadSubmitError>
-Http2Connection::localRequestAdmissionError() const noexcept {
+std::optional<Http2RequestHeadSubmitError> Http2Connection::localRequestAdmissionError() const noexcept {
     if (role_ != Http2Role::kClient) {
         return Http2RequestHeadSubmitError::kInvalidState;
     }
     if (prefacePhase_ == PrefacePhase::kNotStarted) {
         return Http2RequestHeadSubmitError::kConnectionNotStarted;
     }
-    if (localConnectionState_.fatalFailure() != nullptr ||
-        peerGoaway_.has_value() || nextLocalStreamId_ > 0x7fffffffU) {
+    if (localConnectionState_.fatalFailure() != nullptr || peerGoaway_.has_value() || nextLocalStreamId_ > 0x7fffffffU) {
         return Http2RequestHeadSubmitError::kConnectionUnavailable;
     }
     if (activeLocalRequestStreams_ >= peerSettings_.maxConcurrentStreams()) {
@@ -282,8 +252,7 @@ bool Http2Connection::isIdleStreamId(std::uint32_t streamId) const noexcept {
     return http2IsIdleStream(streamId, lastStreamId_);
 }
 
-Http2StreamState* Http2Connection::stream(
-    std::uint32_t streamId) & noexcept {
+Http2StreamState* Http2Connection::stream(std::uint32_t streamId) & noexcept {
     return streams_.find(streamId);
 }
 

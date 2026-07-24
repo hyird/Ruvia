@@ -6,12 +6,13 @@ namespace ruvia::detail {
 
 DbSlotSocket::DbSlotSocket(asio::io_context& ioContext)
 #if defined(_WIN32)
-    : socket(ioContext) {}
+    : socket(ioContext){}
 #else
-    : descriptor(ioContext) {}
+    : descriptor(ioContext) {
+}
 #endif
 
-bool DbSlotSocket::ensureAssigned(NativeSocket fd) noexcept {
+      bool DbSlotSocket::ensureAssigned(NativeSocket fd) noexcept {
     if (fd == kInvalidSocket) {
         return false;
     }
@@ -25,10 +26,7 @@ bool DbSlotSocket::ensureAssigned(NativeSocket fd) noexcept {
             return false;
         }
     }
-    socket.assign(
-        asio::ip::tcp::v4(),
-        static_cast<asio::ip::tcp::socket::native_handle_type>(fd),
-        ec);
+    socket.assign(asio::ip::tcp::v4(), static_cast<asio::ip::tcp::socket::native_handle_type>(fd), ec);
 #else
     if (descriptor.is_open()) {
         if (native == fd) {

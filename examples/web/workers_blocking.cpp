@@ -65,10 +65,7 @@ private:
     // throws BlockingOperationRejected at the co_await, which the default error
     // path answers with 503.
     ruvia::Task<ruvia::HttpResponse> offload(ruvia::Context& c) {
-        const auto checksum = co_await c.runBlocking(
-            [input = std::string(c.req().query("input").value_or("default"))] {
-                return slowChecksum(input);
-            });
+        const auto checksum = co_await c.runBlocking([input = std::string(c.req().query("input").value_or("default"))] { return slowChecksum(input); });
         std::pmr::string body(c.resource());
         body.append("checksum=");
         body.append(std::to_string(checksum));
@@ -80,16 +77,9 @@ private:
     // the error path, and a deadline so one wedged call cannot pin the request
     // forever.
     ruvia::Task<ruvia::HttpResponse> offloadOrShed(ruvia::Context& c) {
-        auto result = co_await c.tryRunBlocking(
-            std::chrono::seconds(2),
-            [input = std::string("expensive input")] {
-                return slowChecksum(input);
-            });
+        auto result = co_await c.tryRunBlocking(std::chrono::seconds(2), [input = std::string("expensive input")] { return slowChecksum(input); });
         if (!result.completed()) {
-            co_return c.error(
-                ruvia::http_status::kServiceUnavailable,
-                "busy",
-                ruvia::describeBlockingStatus(result.status()));
+            co_return c.error(ruvia::http_status::kServiceUnavailable, "busy", ruvia::describeBlockingStatus(result.status()));
         }
         std::pmr::string body(c.resource());
         body.append("checksum=");
@@ -104,11 +94,10 @@ private:
     ruvia::Task<ruvia::HttpResponse> fanout(ruvia::Context& c) {
         std::size_t accepted = 0;
         for (const auto& worker : ruvia::app().workers()) {
-            const auto posted = worker.post(
-                [](ruvia::WebWorkerContext& ctx) -> ruvia::Task<void> {
-                    ++ctx.workerState<WorkerStats>().dispatched;
-                    co_return;
-                });
+            const auto posted = worker.post([](ruvia::WebWorkerContext& ctx) -> ruvia::Task<void> {
+                ++ctx.workerState<WorkerStats>().dispatched;
+                co_return;
+            });
             if (posted == ruvia::PostStatus::kAccepted) {
                 ++accepted;
             }

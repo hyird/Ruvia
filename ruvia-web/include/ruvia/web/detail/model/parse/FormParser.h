@@ -29,13 +29,9 @@ namespace ruvia::detail {
     return validateUrlEncoding(body);
 }
 
-enum class FormValueEncoding : std::uint8_t {
-    kUrlEncoded,
-    kDecoded
-};
+enum class FormValueEncoding : std::uint8_t { kUrlEncoded, kDecoded };
 
-[[nodiscard]] inline std::optional<bool> parseFormBool(
-    std::string_view decoded) noexcept {
+[[nodiscard]] inline std::optional<bool> parseFormBool(std::string_view decoded) noexcept {
     if (decoded == "true" || decoded == "1") {
         return true;
     }
@@ -46,8 +42,7 @@ enum class FormValueEncoding : std::uint8_t {
 }
 
 template <typename NumberT>
-[[nodiscard]] std::optional<NumberT> parseFormNumber(
-    std::string_view decoded) {
+[[nodiscard]] std::optional<NumberT> parseFormNumber(std::string_view decoded) {
     if (decoded.empty()) {
         return std::nullopt;
     }
@@ -68,10 +63,7 @@ template <typename NumberT>
             return std::nullopt;
         }
     } else {
-        const auto [ptr, ec] = std::from_chars(
-            decoded.data(),
-            decoded.data() + decoded.size(),
-            parsed);
+        const auto [ptr, ec] = std::from_chars(decoded.data(), decoded.data() + decoded.size(), parsed);
         if (ec != std::errc{} || ptr != decoded.data() + decoded.size()) {
             return std::nullopt;
         }
@@ -80,20 +72,13 @@ template <typename NumberT>
 }
 
 template <typename T>
-[[nodiscard]] std::optional<T> parseFormValue(
-    ResolvedPmrResourceTag,
-    std::string_view input,
-    FormValueEncoding encoding,
-    std::pmr::memory_resource* resource) {
+[[nodiscard]] std::optional<T> parseFormValue(ResolvedPmrResourceTag, std::string_view input, FormValueEncoding encoding, std::pmr::memory_resource* resource) {
     using FieldT = std::remove_cvref_t<T>;
 
     std::optional<std::pmr::string> decodedStorage;
     auto decoded = input;
     if (encoding == FormValueEncoding::kUrlEncoded && hasFormEncoding(input)) {
-        decodedStorage = decodeUrlComponent(
-            input,
-            UrlDecodeMode::kForm,
-            resource);
+        decodedStorage = decodeUrlComponent(input, UrlDecodeMode::kForm, resource);
         if (!decodedStorage.has_value()) {
             return std::nullopt;
         }
@@ -104,9 +89,7 @@ template <typename T>
         if (!decodedStorage.has_value()) {
             return ModelValueFactory::makeString(decoded, resource);
         }
-        FieldT value = makeRequestValue<FieldT>(
-            ResolvedPmrResourceTag{},
-            resource);
+        FieldT value = makeRequestValue<FieldT>(ResolvedPmrResourceTag{}, resource);
         value.assignOwned(std::move(*decodedStorage));
         return value;
     } else if constexpr (std::is_same_v<FieldT, std::string_view>) {
@@ -135,15 +118,8 @@ template <typename T>
 }
 
 template <typename T>
-[[nodiscard]] std::optional<T> parseFormValue(
-    std::string_view input,
-    FormValueEncoding encoding,
-    std::pmr::memory_resource* resource) {
-    return parseFormValue<T>(
-        ResolvedPmrResourceTag{},
-        input,
-        encoding,
-        pmrResourceOrDefault(resource));
+[[nodiscard]] std::optional<T> parseFormValue(std::string_view input, FormValueEncoding encoding, std::pmr::memory_resource* resource) {
+    return parseFormValue<T>(ResolvedPmrResourceTag{}, input, encoding, pmrResourceOrDefault(resource));
 }
 
 }  // namespace ruvia::detail

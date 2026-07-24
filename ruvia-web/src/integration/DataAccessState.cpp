@@ -15,29 +15,14 @@ namespace ruvia::detail {
 
 class DataAccessState::Impl final {
 public:
-    Impl(
-        asio::io_context& ioContext,
-        std::pmr::memory_resource* resource,
-        std::span<const DbDefinition> databaseDefinitions,
-        std::span<const RedisDefinition> redisDefinitions,
-        ConnectionScanner& scanner)
+    Impl(asio::io_context& ioContext, std::pmr::memory_resource* resource, std::span<const DbDefinition> databaseDefinitions, std::span<const RedisDefinition> redisDefinitions, ConnectionScanner& scanner)
         : databases(ioContext, resource, databaseDefinitions),
           redis(ioContext, resource, redisDefinitions) {
         if (databases.hasAnyTimeout()) {
-            scanner.registerWorkerMaintenance(
-                databaseDeadlineCheck,
-                &databases,
-                [](void* target) noexcept {
-                    static_cast<DbRegistry*>(target)->scanDeadlines();
-                });
+            scanner.registerWorkerMaintenance(databaseDeadlineCheck, &databases, [](void* target) noexcept { static_cast<DbRegistry*>(target)->scanDeadlines(); });
         }
         if (redis.hasAnyTimeout()) {
-            scanner.registerWorkerMaintenance(
-                redisDeadlineCheck,
-                &redis,
-                [](void* target) noexcept {
-                    static_cast<RedisRegistry*>(target)->scanDeadlines();
-                });
+            scanner.registerWorkerMaintenance(redisDeadlineCheck, &redis, [](void* target) noexcept { static_cast<RedisRegistry*>(target)->scanDeadlines(); });
         }
     }
 
@@ -47,14 +32,8 @@ public:
     ConnectionScanner::WorkerMaintenanceRegistration redisDeadlineCheck;
 };
 
-DataAccessState::DataAccessState(
-    asio::io_context& ioContext,
-    std::pmr::memory_resource* resource,
-    std::span<const DbDefinition> databases,
-    std::span<const RedisDefinition> redis,
-    ConnectionScanner& scanner)
-    : impl_(std::make_unique<Impl>(
-          ioContext, resource, databases, redis, scanner)) {}
+DataAccessState::DataAccessState(asio::io_context& ioContext, std::pmr::memory_resource* resource, std::span<const DbDefinition> databases, std::span<const RedisDefinition> redis, ConnectionScanner& scanner)
+    : impl_(std::make_unique<Impl>(ioContext, resource, databases, redis, scanner)) {}
 
 DataAccessState::~DataAccessState() = default;
 

@@ -32,9 +32,7 @@ struct CachedResponse final {
 
 // The Age a stored response carries now: the age it arrived with plus the time
 // it has since been resident, saturating instead of wrapping.
-[[nodiscard]] std::uint64_t cachedResponseAge(
-    const CachedResponse& entry,
-    std::time_t now) noexcept;
+[[nodiscard]] std::uint64_t cachedResponseAge(const CachedResponse& entry, std::time_t now) noexcept;
 
 struct EdgeCachedResponseControl;
 
@@ -82,9 +80,7 @@ struct CacheLookupResult final {
 // atomic shared ownership on the request path.
 class EdgeCache final {
 public:
-    explicit EdgeCache(
-        EdgeCacheLimits limits,
-        std::pmr::memory_resource* resource = std::pmr::get_default_resource()) noexcept;
+    explicit EdgeCache(EdgeCacheLimits limits, std::pmr::memory_resource* resource = std::pmr::get_default_resource()) noexcept;
     ~EdgeCache();
 
     EdgeCache(const EdgeCache&) = delete;
@@ -113,11 +109,7 @@ private:
         EdgeCachedResponseControl* value;
         std::size_t bytes{0};
 
-        Node(
-            std::string sourceKey,
-            EdgeCachedResponseControl* sourceValue,
-            std::size_t sourceBytes,
-            std::pmr::memory_resource* resource)
+        Node(std::string sourceKey, EdgeCachedResponseControl* sourceValue, std::size_t sourceBytes, std::pmr::memory_resource* resource)
             : key(std::move(sourceKey), resource),
               value(sourceValue),
               bytes(sourceBytes) {}
@@ -138,11 +130,7 @@ private:
     };
 
     using RecencyList = std::pmr::list<Node>;
-    using Index = std::pmr::unordered_map<
-        std::pmr::string,
-        RecencyList::iterator,
-        TransparentHash,
-        TransparentEqual>;
+    using Index = std::pmr::unordered_map<std::pmr::string, RecencyList::iterator, TransparentHash, TransparentEqual>;
 
     void erase(Index::iterator it) noexcept;
     void evictWhileOverBudget() noexcept;

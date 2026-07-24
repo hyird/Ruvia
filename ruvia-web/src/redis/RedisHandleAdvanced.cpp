@@ -16,10 +16,7 @@
 namespace ruvia {
 namespace {
 
-[[nodiscard]] std::pmr::vector<std::pmr::string> redisScanArgs(
-    std::string_view command,
-    const RedisScanOptions& options,
-    std::pmr::memory_resource* resource) {
+[[nodiscard]] std::pmr::vector<std::pmr::string> redisScanArgs(std::string_view command, const RedisScanOptions& options, std::pmr::memory_resource* resource) {
     auto cursor = detail::redisCursorString(options.cursor, resource);
     std::pmr::vector<std::pmr::string> args(resource);
     args.reserve(6);
@@ -29,11 +26,7 @@ namespace {
     return args;
 }
 
-[[nodiscard]] std::pmr::vector<std::pmr::string> redisKeyScanArgs(
-    std::string_view command,
-    std::string_view key,
-    const RedisScanOptions& options,
-    std::pmr::memory_resource* resource) {
+[[nodiscard]] std::pmr::vector<std::pmr::string> redisKeyScanArgs(std::string_view command, std::string_view key, const RedisScanOptions& options, std::pmr::memory_resource* resource) {
     auto cursor = detail::redisCursorString(options.cursor, resource);
     std::pmr::vector<std::pmr::string> args(resource);
     args.reserve(7);
@@ -44,47 +37,30 @@ namespace {
     return args;
 }
 
-Task<RedisScanResult> executeRedisScan(
-    detail::RedisPool& pool,
-    std::pmr::vector<std::pmr::string> args,
-    std::pmr::memory_resource* resource) {
+Task<RedisScanResult> executeRedisScan(detail::RedisPool& pool, std::pmr::vector<std::pmr::string> args, std::pmr::memory_resource* resource) {
     auto value = co_await detail::executeOwnedRedisCommand(pool, std::move(args), resource);
     co_return detail::parseRedisScanResult(value, resource);
 }
 
-Task<RedisHashScanResult> executeRedisHashScan(
-    detail::RedisPool& pool,
-    std::pmr::vector<std::pmr::string> args,
-    std::pmr::memory_resource* resource) {
+Task<RedisHashScanResult> executeRedisHashScan(detail::RedisPool& pool, std::pmr::vector<std::pmr::string> args, std::pmr::memory_resource* resource) {
     auto value = co_await detail::executeOwnedRedisCommand(pool, std::move(args), resource);
     co_return detail::parseRedisHashScanResult(value, resource);
 }
 
-Task<RedisZScanResult> executeRedisZScan(
-    detail::RedisPool& pool,
-    std::pmr::vector<std::pmr::string> args,
-    std::pmr::memory_resource* resource) {
+Task<RedisZScanResult> executeRedisZScan(detail::RedisPool& pool, std::pmr::vector<std::pmr::string> args, std::pmr::memory_resource* resource) {
     auto value = co_await detail::executeOwnedRedisCommand(pool, std::move(args), resource);
     co_return detail::parseRedisZScanResult(value, resource);
 }
 
-[[nodiscard]] std::optional<std::chrono::milliseconds>
-redisBlockingPopClientTimeout(std::chrono::seconds timeout) noexcept {
+[[nodiscard]] std::optional<std::chrono::milliseconds> redisBlockingPopClientTimeout(std::chrono::seconds timeout) noexcept {
     if (timeout <= std::chrono::seconds(0)) {
         return std::nullopt;
     }
     return std::chrono::duration_cast<std::chrono::milliseconds>(timeout) + std::chrono::seconds(1);
 }
 
-Task<std::optional<RedisKeyValue>> executeRedisBlockingPop(
-    detail::RedisPool& pool,
-    std::pmr::vector<std::pmr::string> args,
-    std::chrono::seconds timeout,
-    std::pmr::memory_resource* resource) {
-    auto reply = co_await pool.executeWithTimeout(
-        std::span<const std::pmr::string>(args),
-        redisBlockingPopClientTimeout(timeout),
-        resource);
+Task<std::optional<RedisKeyValue>> executeRedisBlockingPop(detail::RedisPool& pool, std::pmr::vector<std::pmr::string> args, std::chrono::seconds timeout, std::pmr::memory_resource* resource) {
+    auto reply = co_await pool.executeWithTimeout(std::span<const std::pmr::string>(args), redisBlockingPopClientTimeout(timeout), resource);
     co_return detail::parseRedisBlockingPopReply(reply, resource);
 }
 
@@ -110,18 +86,12 @@ ScopedOperation<RedisZScanResult> RedisHandle::zscan(std::string_view key, Redis
     return scoped(executeRedisZScan(*pool_, redisKeyScanArgs("ZSCAN", key, options, resource_), resource_));
 }
 
-ScopedOperation<RedisValue> RedisHandle::eval(
-    std::string_view script,
-    std::span<const std::string_view> keys,
-    std::span<const std::string_view> args) const {
+ScopedOperation<RedisValue> RedisHandle::eval(std::string_view script, std::span<const std::string_view> keys, std::span<const std::string_view> args) const {
     requireActive();
     return scoped(detail::executeOwnedRedisCommand(*pool_, detail::redisEvalArgs("EVAL", script, keys, args, resource_), resource_));
 }
 
-ScopedOperation<RedisValue> RedisHandle::evalSha(
-    std::string_view sha1,
-    std::span<const std::string_view> keys,
-    std::span<const std::string_view> args) const {
+ScopedOperation<RedisValue> RedisHandle::evalSha(std::string_view sha1, std::span<const std::string_view> keys, std::span<const std::string_view> args) const {
     requireActive();
     return scoped(detail::executeOwnedRedisCommand(*pool_, detail::redisEvalArgs("EVALSHA", sha1, keys, args, resource_), resource_));
 }
@@ -146,26 +116,14 @@ ScopedOperation<std::pmr::vector<bool>> RedisHandle::scriptExists(std::span<cons
     return scoped(detail::redisBoolArrayCommand(*pool_, std::move(args), resource_));
 }
 
-ScopedOperation<std::optional<RedisKeyValue>> RedisHandle::blpop(
-    std::span<const std::string_view> keys,
-    std::chrono::seconds timeout) const {
+ScopedOperation<std::optional<RedisKeyValue>> RedisHandle::blpop(std::span<const std::string_view> keys, std::chrono::seconds timeout) const {
     requireActive();
-    return scoped(executeRedisBlockingPop(
-        *pool_,
-        detail::redisBlockingPopArgs("BLPOP", keys, timeout, resource_),
-        timeout,
-        resource_));
+    return scoped(executeRedisBlockingPop(*pool_, detail::redisBlockingPopArgs("BLPOP", keys, timeout, resource_), timeout, resource_));
 }
 
-ScopedOperation<std::optional<RedisKeyValue>> RedisHandle::brpop(
-    std::span<const std::string_view> keys,
-    std::chrono::seconds timeout) const {
+ScopedOperation<std::optional<RedisKeyValue>> RedisHandle::brpop(std::span<const std::string_view> keys, std::chrono::seconds timeout) const {
     requireActive();
-    return scoped(executeRedisBlockingPop(
-        *pool_,
-        detail::redisBlockingPopArgs("BRPOP", keys, timeout, resource_),
-        timeout,
-        resource_));
+    return scoped(executeRedisBlockingPop(*pool_, detail::redisBlockingPopArgs("BRPOP", keys, timeout, resource_), timeout, resource_));
 }
 
 RedisPipeline RedisHandle::pipeline() const {

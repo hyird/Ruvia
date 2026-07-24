@@ -26,15 +26,9 @@
 namespace {
 
 static_assert(std::move_constructible<ruvia::EventLoopAttachment>);
-static_assert(!std::assignable_from<
-    ruvia::EventLoopAttachment&,
-    ruvia::EventLoopAttachment&&>);
+static_assert(!std::assignable_from<ruvia::EventLoopAttachment&, ruvia::EventLoopAttachment&&>);
 
-ruvia::Task<void> waitForSignal(
-    ruvia::detail::WorkerSignal& signal,
-    bool& resumed,
-    std::size_t& remaining,
-    ruvia::EventLoopAttachment& attachment) {
+ruvia::Task<void> waitForSignal(ruvia::detail::WorkerSignal& signal, bool& resumed, std::size_t& remaining, ruvia::EventLoopAttachment& attachment) {
     {
         auto discardedColdWait = signal.wait();
         static_cast<void>(discardedColdWait);
@@ -63,16 +57,8 @@ bool testWorkerSignalIsWorkerAffine() {
     bool firstResumed = false;
     bool secondResumed = false;
     std::size_t remaining = 2;
-    asio::co_spawn(
-        ioContext,
-        ruvia::detail::taskAsAwaitable(
-            waitForSignal(firstSignal, firstResumed, remaining, attachment)),
-        asio::detached);
-    asio::co_spawn(
-        ioContext,
-        ruvia::detail::taskAsAwaitable(
-            waitForSignal(secondSignal, secondResumed, remaining, attachment)),
-        asio::detached);
+    asio::co_spawn(ioContext, ruvia::detail::taskAsAwaitable(waitForSignal(firstSignal, firstResumed, remaining, attachment)), asio::detached);
+    asio::co_spawn(ioContext, ruvia::detail::taskAsAwaitable(waitForSignal(secondSignal, secondResumed, remaining, attachment)), asio::detached);
     asio::post(ioContext, [&] {
         firstSignal.notify();
         secondSignal.notify();
@@ -90,16 +76,10 @@ bool testWorkerSignalHasNoArbitraryWaiterLimit() {
     std::array<bool, kWaiterCount> resumed{};
     std::size_t remaining = kWaiterCount;
     for (std::size_t index = 0; index < resumed.size(); ++index) {
-        asio::co_spawn(
-            ioContext,
-            ruvia::detail::taskAsAwaitable(
-                waitForSignal(signal, resumed[index], remaining, attachment)),
-            asio::detached);
+        asio::co_spawn(ioContext, ruvia::detail::taskAsAwaitable(waitForSignal(signal, resumed[index], remaining, attachment)), asio::detached);
     }
 
-    asio::post(ioContext, [&] {
-        signal.notify();
-    });
+    asio::post(ioContext, [&] { signal.notify(); });
     ioContext.run();
     for (const bool value : resumed) {
         if (!value) {
@@ -109,9 +89,7 @@ bool testWorkerSignalHasNoArbitraryWaiterLimit() {
     return true;
 }
 
-ruvia::Task<void> startColdSignalWait(
-    ruvia::Task<void> coldWait,
-    bool& rejected) {
+ruvia::Task<void> startColdSignalWait(ruvia::Task<void> coldWait, bool& rejected) {
     try {
         co_await std::move(coldWait);
     } catch (const std::logic_error&) {
@@ -138,11 +116,7 @@ bool testWorkerSignalRechecksAffinityWhenColdWaitStarts() {
     }
 
     bool rejected = false;
-    asio::co_spawn(
-        otherContext,
-        ruvia::detail::taskAsAwaitable(startColdSignalWait(
-            std::move(*coldWait), rejected)),
-        asio::detached);
+    asio::co_spawn(otherContext, ruvia::detail::taskAsAwaitable(startColdSignalWait(std::move(*coldWait), rejected)), asio::detached);
     asio::post(otherContext, [&] { otherAttachment.stop(); });
     otherContext.run();
     coldWait.reset();
@@ -157,18 +131,15 @@ bool testDispatchAndAffinity() {
         return false;
     }
     constexpr std::string_view key = "device-42";
-    if (loops.loopFor(key).id() !=
-        loops.loopFor(ruvia::detail::workerSelectionHash(key)).id()) {
+    if (loops.loopFor(key).id() != loops.loopFor(ruvia::detail::workerSelectionHash(key)).id()) {
         return false;
     }
-    if (&first.ioContext() != &first.executor().context() ||
-        first.handle().id() != first.id()) {
+    if (&first.ioContext() != &first.executor().context() || first.handle().id() != first.id()) {
         return false;
     }
     asio::ip::tcp::socket tcp(first.ioContext());
     asio::ip::udp::socket udp(first.ioContext());
-    if (&tcp.get_executor().context() != &first.ioContext() ||
-        &udp.get_executor().context() != &first.ioContext()) {
+    if (&tcp.get_executor().context() != &first.ioContext() || &udp.get_executor().context() != &first.ioContext()) {
         return false;
     }
 
@@ -181,11 +152,7 @@ bool testDispatchAndAffinity() {
         stopCallbackRan = true;
     });
     auto moveOnly = std::make_unique<int>(42);
-    if (first.post([worker = first,
-                    value = std::move(moveOnly),
-                    completed = std::move(completed)]() mutable {
-            completed.set_value(worker.isCurrent() && *value == 42);
-        }) != ruvia::PostStatus::kAccepted) {
+    if (first.post([worker = first, value = std::move(moveOnly), completed = std::move(completed)]() mutable { completed.set_value(worker.isCurrent() && *value == 42); }) != ruvia::PostStatus::kAccepted) {
         return false;
     }
 
@@ -193,9 +160,7 @@ bool testDispatchAndAffinity() {
     const bool success = result.get();
     loops.stop();
     loops.join();
-    return success && stopRegistration.valid() && stopCallbackRan &&
-           stopCallbackOnLoop &&
-           first.post([] {}) == ruvia::PostStatus::kWorkerStopping;
+    return success && stopRegistration.valid() && stopCallbackRan && stopCallbackOnLoop && first.post([] {}) == ruvia::PostStatus::kWorkerStopping;
 }
 
 bool testBoundedMailbox() {
@@ -207,38 +172,31 @@ bool testBoundedMailbox() {
     std::promise<void> retried;
     auto retriedResult = retried.get_future();
 
-    if (worker.post([&] { ++calls; }) != ruvia::PostStatus::kAccepted ||
-        worker.post([&] {
+    if (worker.post([&] { ++calls; }) != ruvia::PostStatus::kAccepted || worker.post([&] {
             ++calls;
             completed.set_value();
         }) != ruvia::PostStatus::kAccepted) {
         return false;
     }
-    auto rejected = worker.post(
-        [value = std::make_unique<int>(9), &calls, &retried] {
-            calls.fetch_add(*value);
-            retried.set_value();
-        });
-    if (rejected != ruvia::PostStatus::kQueueFull ||
-        rejected.rejected() == nullptr) {
+    auto rejected = worker.post([value = std::make_unique<int>(9), &calls, &retried] {
+        calls.fetch_add(*value);
+        retried.set_value();
+    });
+    if (rejected != ruvia::PostStatus::kQueueFull || rejected.rejected() == nullptr) {
         return false;
     }
 
     loops.start();
     result.get();
-    if (worker.post(std::move(rejected).takeRejected()) !=
-        ruvia::PostStatus::kAccepted) {
+    if (worker.post(std::move(rejected).takeRejected()) != ruvia::PostStatus::kAccepted) {
         return false;
     }
     retriedResult.get();
     loops.stop();
     loops.join();
     bool recoveredAfterStop = false;
-    auto stopped = worker.post([&recoveredAfterStop] {
-        recoveredAfterStop = true;
-    });
-    if (stopped != ruvia::PostStatus::kWorkerStopping ||
-        stopped.rejected() == nullptr) {
+    auto stopped = worker.post([&recoveredAfterStop] { recoveredAfterStop = true; });
+    if (stopped != ruvia::PostStatus::kWorkerStopping || stopped.rejected() == nullptr) {
         return false;
     }
     auto stoppedTask = std::move(stopped).takeRejected();
@@ -249,19 +207,15 @@ bool testBoundedMailbox() {
 bool testExternalEventLoopAttachment() {
     asio::io_context ioContext;
     {
-        auto attachment = ruvia::attachEventLoop(
-            ioContext,
-            {.mailboxCapacity = 4});
+        auto attachment = ruvia::attachEventLoop(ioContext, {.mailboxCapacity = 4});
         const auto loop = attachment.loop();
-        if (!attachment.valid() || !loop.valid() ||
-            &loop.ioContext() != &ioContext) {
+        if (!attachment.valid() || !loop.valid() || &loop.ioContext() != &ioContext) {
             return false;
         }
 
         asio::ip::tcp::socket tcp(loop.executor());
         asio::ip::udp::socket udp(loop.executor());
-        if (&tcp.get_executor().context() != &ioContext ||
-            &udp.get_executor().context() != &ioContext) {
+        if (&tcp.get_executor().context() != &ioContext || &udp.get_executor().context() != &ioContext) {
             return false;
         }
 
@@ -283,9 +237,7 @@ bool testExternalEventLoopAttachment() {
             stopCallbackOnLoop = loop.isCurrent();
             stopCallbackRan = true;
         });
-        if (loop.post([loop, completed = std::move(completed)]() mutable {
-                completed.set_value(loop.isCurrent());
-            }) != ruvia::PostStatus::kAccepted) {
+        if (loop.post([loop, completed = std::move(completed)]() mutable { completed.set_value(loop.isCurrent()); }) != ruvia::PostStatus::kAccepted) {
             return false;
         }
 
@@ -302,9 +254,7 @@ bool testExternalEventLoopAttachment() {
             }
             throw;
         }
-        if (!dispatchedOnExternalThread || !stopRegistration.valid() ||
-            !stopCallbackRan || !stopCallbackOnLoop ||
-            loop.post([] {}) != ruvia::PostStatus::kWorkerStopping) {
+        if (!dispatchedOnExternalThread || !stopRegistration.valid() || !stopCallbackRan || !stopCallbackOnLoop || loop.post([] {}) != ruvia::PostStatus::kWorkerStopping) {
             return false;
         }
     }
@@ -318,9 +268,7 @@ bool testExternalEventLoopAttachment() {
 
     ioContext.restart();
     try {
-        auto invalid = ruvia::attachEventLoop(
-            ioContext,
-            {.mailboxCapacity = 0});
+        auto invalid = ruvia::attachEventLoop(ioContext, {.mailboxCapacity = 0});
     } catch (const std::invalid_argument&) {
         return true;
     }
@@ -337,23 +285,21 @@ bool testFailurePropagation() {
         stopCallbackRan = true;
     });
     struct Listener final : ruvia::detail::WorkerShutdownListener {
-        void workerStopping() noexcept override { notified = true; }
+        void workerStopping() noexcept override {
+            notified = true;
+        }
         bool notified{false};
     };
     const auto listener = std::make_shared<Listener>();
-    ruvia::detail::WorkerHandleAccess::registerShutdownListener(
-        loop.handle(), listener);
-    if (loop.post([] { throw std::runtime_error("posted task failed"); }) !=
-        ruvia::PostStatus::kAccepted) {
+    ruvia::detail::WorkerHandleAccess::registerShutdownListener(loop.handle(), listener);
+    if (loop.post([] { throw std::runtime_error("posted task failed"); }) != ruvia::PostStatus::kAccepted) {
         return false;
     }
     loops.start();
     try {
         loops.join();
     } catch (const std::runtime_error& error) {
-        return stopRegistration.valid() && stopCallbackRan &&
-               stopCallbackOnLoop && listener->notified &&
-               std::string_view(error.what()) == "posted task failed";
+        return stopRegistration.valid() && stopCallbackRan && stopCallbackOnLoop && listener->notified && std::string_view(error.what()) == "posted task failed";
     }
     return false;
 }
@@ -395,26 +341,16 @@ bool testJoinBeforeStartDrainsOnOwners() {
     }
 
     loops.join();
-    const bool rejectedAfterJoin =
-        first.post([] {}) == ruvia::PostStatus::kWorkerStopping &&
-        second.post([] {}) == ruvia::PostStatus::kWorkerStopping;
-    return firstStop.valid() && secondStop.valid() && rejectedAfterJoin &&
-           taskCalls.load(std::memory_order_relaxed) == 2 &&
-           stopCalls.load(std::memory_order_relaxed) == 2 &&
-           tasksOnOwners.load(std::memory_order_relaxed) &&
-           stopsOnOwners.load(std::memory_order_relaxed);
+    const bool rejectedAfterJoin = first.post([] {}) == ruvia::PostStatus::kWorkerStopping && second.post([] {}) == ruvia::PostStatus::kWorkerStopping;
+    return firstStop.valid() && secondStop.valid() && rejectedAfterJoin && taskCalls.load(std::memory_order_relaxed) == 2 && stopCalls.load(std::memory_order_relaxed) == 2 && tasksOnOwners.load(std::memory_order_relaxed) && stopsOnOwners.load(std::memory_order_relaxed);
 }
 
 bool testStopBeforeStartPropagatesFailure() {
     ruvia::EventLoopPool loops({.loopCount = 1, .mailboxCapacity = 1});
     const auto loop = loops.loop(0);
     std::atomic_bool stopOnOwner{false};
-    auto stopRegistration = loop.onStop([&] {
-        stopOnOwner.store(loop.isCurrent(), std::memory_order_release);
-    });
-    if (loop.post([] {
-            throw std::runtime_error("pre-start task failed");
-        }) != ruvia::PostStatus::kAccepted) {
+    auto stopRegistration = loop.onStop([&] { stopOnOwner.store(loop.isCurrent(), std::memory_order_release); });
+    if (loop.post([] { throw std::runtime_error("pre-start task failed"); }) != ruvia::PostStatus::kAccepted) {
         return false;
     }
 
@@ -422,9 +358,7 @@ bool testStopBeforeStartPropagatesFailure() {
     try {
         loops.join();
     } catch (const std::runtime_error& error) {
-        return stopRegistration.valid() &&
-               stopOnOwner.load(std::memory_order_acquire) &&
-               std::string_view(error.what()) == "pre-start task failed";
+        return stopRegistration.valid() && stopOnOwner.load(std::memory_order_acquire) && std::string_view(error.what()) == "pre-start task failed";
     }
     return false;
 }
@@ -439,8 +373,7 @@ bool testJoinRejectsPoolWorker() {
             try {
                 loops.join();
             } catch (const std::logic_error& error) {
-                rejected = std::string_view(error.what()) ==
-                    "cannot join an event loop pool from one of its workers";
+                rejected = std::string_view(error.what()) == "cannot join an event loop pool from one of its workers";
             }
             completed.set_value(rejected && loop.isCurrent());
         }) != ruvia::PostStatus::kAccepted) {
@@ -476,32 +409,18 @@ bool testExecutorFailureDrainsShutdownOnOwners() {
     std::atomic_bool abandonedMailboxDestroyed{false};
 
     auto failedStop = failedLoop.onStop([&] {
-        failedStopOnOwner.store(
-            failedLoop.isCurrent(), std::memory_order_release);
+        failedStopOnOwner.store(failedLoop.isCurrent(), std::memory_order_release);
         failedStopCalls.fetch_add(1, std::memory_order_relaxed);
-        asio::post(failedLoop.ioContext(), [] {
-            throw std::runtime_error("secondary shutdown handler failed");
-        });
-        asio::post(failedLoop.ioContext(), [&] {
-            shutdownContinuationDrained.store(
-                failedLoop.isCurrent(), std::memory_order_release);
-        });
+        asio::post(failedLoop.ioContext(), [] { throw std::runtime_error("secondary shutdown handler failed"); });
+        asio::post(failedLoop.ioContext(), [&] { shutdownContinuationDrained.store(failedLoop.isCurrent(), std::memory_order_release); });
     });
     auto peerStop = peerLoop.onStop([&] {
-        peerStopOnOwner.store(
-            peerLoop.isCurrent(), std::memory_order_release);
+        peerStopOnOwner.store(peerLoop.isCurrent(), std::memory_order_release);
         peerStopCalls.fetch_add(1, std::memory_order_relaxed);
     });
 
-    asio::post(failedLoop.ioContext(), [] {
-        throw std::runtime_error("executor handler failed");
-    });
-    if (failedLoop.post(
-            [probe = std::make_unique<AbandonProbe>(
-                 abandonedMailboxDestroyed),
-             &abandonedMailboxRan] {
-                abandonedMailboxRan.store(true, std::memory_order_release);
-            }) != ruvia::PostStatus::kAccepted) {
+    asio::post(failedLoop.ioContext(), [] { throw std::runtime_error("executor handler failed"); });
+    if (failedLoop.post([probe = std::make_unique<AbandonProbe>(abandonedMailboxDestroyed), &abandonedMailboxRan] { abandonedMailboxRan.store(true, std::memory_order_release); }) != ruvia::PostStatus::kAccepted) {
         return false;
     }
 
@@ -509,15 +428,7 @@ bool testExecutorFailureDrainsShutdownOnOwners() {
     try {
         loops.join();
     } catch (const std::runtime_error& error) {
-        return failedStop.valid() && peerStop.valid() &&
-               std::string_view(error.what()) == "executor handler failed" &&
-               failedStopCalls.load(std::memory_order_relaxed) == 1 &&
-               peerStopCalls.load(std::memory_order_relaxed) == 1 &&
-               failedStopOnOwner.load(std::memory_order_acquire) &&
-               peerStopOnOwner.load(std::memory_order_acquire) &&
-               shutdownContinuationDrained.load(std::memory_order_acquire) &&
-               !abandonedMailboxRan.load(std::memory_order_acquire) &&
-               abandonedMailboxDestroyed.load(std::memory_order_acquire);
+        return failedStop.valid() && peerStop.valid() && std::string_view(error.what()) == "executor handler failed" && failedStopCalls.load(std::memory_order_relaxed) == 1 && peerStopCalls.load(std::memory_order_relaxed) == 1 && failedStopOnOwner.load(std::memory_order_acquire) && peerStopOnOwner.load(std::memory_order_acquire) && shutdownContinuationDrained.load(std::memory_order_acquire) && !abandonedMailboxRan.load(std::memory_order_acquire) && abandonedMailboxDestroyed.load(std::memory_order_acquire);
     }
     return false;
 }
@@ -528,8 +439,7 @@ bool testExpiredHandle() {
         ruvia::EventLoopPool loops({.loopCount = 1, .mailboxCapacity = 1});
         loop = loops.loop(0);
     }
-    return loop.valid() && !loop.accepting() &&
-           loop.post([] {}) == ruvia::PostStatus::kWorkerStopping;
+    return loop.valid() && !loop.accepting() && loop.post([] {}) == ruvia::PostStatus::kWorkerStopping;
 }
 
 bool testEscapedWorkerHandleBecomesDetachedEndpoint() {
@@ -550,10 +460,7 @@ bool testEscapedWorkerHandleBecomesDetachedEndpoint() {
     } catch (const std::runtime_error&) {
         internalDeferRejected = true;
     }
-    return !worker.valid() && !worker.accepting() && !worker.isCurrent() &&
-           worker.id() == 0 &&
-           worker.post([] {}) == ruvia::PostStatus::kWorkerStopping &&
-           internalDeferRejected;
+    return !worker.valid() && !worker.accepting() && !worker.isCurrent() && worker.id() == 0 && worker.post([] {}) == ruvia::PostStatus::kWorkerStopping && internalDeferRejected;
 }
 
 bool testFailureDestroysAbandonedMailboxTasks() {
@@ -561,19 +468,16 @@ bool testFailureDestroysAbandonedMailboxTasks() {
         explicit DestructionProbe(bool& value) noexcept
             : destroyed(&value) {}
         bool* destroyed;
-        ~DestructionProbe() { *destroyed = true; }
+        ~DestructionProbe() {
+            *destroyed = true;
+        }
     };
 
     asio::io_context ioContext;
-    const auto dispatcher =
-        std::make_shared<ruvia::detail::WorkerDispatcher>(ioContext, 2);
+    const auto dispatcher = std::make_shared<ruvia::detail::WorkerDispatcher>(ioContext, 2);
     const auto worker = ruvia::detail::WorkerHandleAccess::make(dispatcher);
     bool queuedTaskDestroyed = false;
-    if (worker.post([] { throw std::runtime_error("stop mailbox drain"); }) !=
-            ruvia::PostStatus::kAccepted ||
-        worker.post(
-            [probe = std::make_unique<DestructionProbe>(queuedTaskDestroyed)] {}) !=
-            ruvia::PostStatus::kAccepted) {
+    if (worker.post([] { throw std::runtime_error("stop mailbox drain"); }) != ruvia::PostStatus::kAccepted || worker.post([probe = std::make_unique<DestructionProbe>(queuedTaskDestroyed)] {}) != ruvia::PostStatus::kAccepted) {
         return false;
     }
     try {
@@ -589,8 +493,7 @@ bool testFailureDestroysAbandonedMailboxTasks() {
 
 bool testDispatcherLifecycleHooksAreWorkerAffine() {
     asio::io_context ioContext;
-    const auto dispatcher =
-        std::make_shared<ruvia::detail::WorkerDispatcher>(ioContext, 1);
+    const auto dispatcher = std::make_shared<ruvia::detail::WorkerDispatcher>(ioContext, 1);
     const auto worker = ruvia::detail::WorkerHandleAccess::make(dispatcher);
     bool startupOnWorker = false;
     bool failureOnWorker = false;
@@ -607,15 +510,13 @@ bool testDispatcherLifecycleHooksAreWorkerAffine() {
             try {
                 std::rethrow_exception(failure);
             } catch (const std::runtime_error& error) {
-                receivedStartupFailure =
-                    std::string_view(error.what()) == "worker startup failed";
+                receivedStartupFailure = std::string_view(error.what()) == "worker startup failed";
             } catch (...) {
             }
         },
         [&]() noexcept { shutdownOnWorker = worker.isCurrent(); });
     dispatcher->detachContext();
-    return startupOnWorker && failureOnWorker && shutdownOnWorker &&
-           receivedStartupFailure;
+    return startupOnWorker && failureOnWorker && shutdownOnWorker && receivedStartupFailure;
 }
 
 // A stop callback runs after every caller that could have received its
@@ -647,24 +548,16 @@ bool testLifecycleTransitionsAreMonotonic() {
     using Lifecycle = ruvia::detail::RuntimeLifecycle;
     Lifecycle lifecycle;
     lifecycle.completeStop();
-    if (lifecycle.state() != Lifecycle::State::kReady ||
-        !lifecycle.start()) {
+    if (lifecycle.state() != Lifecycle::State::kReady || !lifecycle.start()) {
         return false;
     }
     lifecycle.completeStop();
-    if (lifecycle.state() != Lifecycle::State::kRunning ||
-        lifecycle.start() ||
-        !lifecycle.requestStop() ||
-        lifecycle.state() != Lifecycle::State::kStopping ||
-        lifecycle.requestStop()) {
+    if (lifecycle.state() != Lifecycle::State::kRunning || lifecycle.start() || !lifecycle.requestStop() || lifecycle.state() != Lifecycle::State::kStopping || lifecycle.requestStop()) {
         return false;
     }
 
     lifecycle.completeStop();
-    return lifecycle.state() == Lifecycle::State::kStopped &&
-           !lifecycle.requestStop() &&
-           lifecycle.state() == Lifecycle::State::kStopped &&
-           !lifecycle.start();
+    return lifecycle.state() == Lifecycle::State::kStopped && !lifecycle.requestStop() && lifecycle.state() == Lifecycle::State::kStopped && !lifecycle.start();
 }
 
 bool testConcurrentStopHasOneInitiator() {
@@ -716,12 +609,10 @@ bool testConcurrentStopHasOneInitiator() {
     }
 
     lifecycle.completeStop();
-    return initiators.load(std::memory_order_relaxed) == 1 &&
-           lifecycle.state() == Lifecycle::State::kStopped &&
-           !lifecycle.requestStop();
+    return initiators.load(std::memory_order_relaxed) == 1 && lifecycle.state() == Lifecycle::State::kStopped && !lifecycle.requestStop();
 }
 
-}
+}  // namespace
 
 int main() {
     const auto run = [](const char* name, bool (*test)()) {
@@ -732,46 +623,5 @@ int main() {
         std::fflush(stdout);
         return passed;
     };
-    return run("worker_signal_is_worker_affine", testWorkerSignalIsWorkerAffine) &&
-               run(
-                   "worker_signal_has_no_waiter_limit",
-                   testWorkerSignalHasNoArbitraryWaiterLimit) &&
-               run(
-                   "worker_signal_rechecks_cold_wait_affinity",
-                   testWorkerSignalRechecksAffinityWhenColdWaitStarts) &&
-               run("dispatch_and_affinity", testDispatchAndAffinity) &&
-               run("bounded_mailbox", testBoundedMailbox) &&
-               run("external_event_loop_attachment", testExternalEventLoopAttachment) &&
-               run("failure_propagation", testFailurePropagation) &&
-               run(
-                   "join_before_start_drains_on_owners",
-                   testJoinBeforeStartDrainsOnOwners) &&
-               run(
-                   "stop_before_start_propagates_failure",
-                   testStopBeforeStartPropagatesFailure) &&
-               run("join_rejects_pool_worker", testJoinRejectsPoolWorker) &&
-               run(
-                   "executor_failure_drains_shutdown_on_owners",
-                   testExecutorFailureDrainsShutdownOnOwners) &&
-               run("expired_handle", testExpiredHandle) &&
-               run(
-                   "escaped_worker_handle_detaches",
-                   testEscapedWorkerHandleBecomesDetachedEndpoint) &&
-               run(
-                   "failure_destroys_abandoned_mailbox_tasks",
-                   testFailureDestroysAbandonedMailboxTasks) &&
-               run(
-                   "dispatcher_lifecycle_hooks_are_worker_affine",
-                   testDispatcherLifecycleHooksAreWorkerAffine) &&
-               run(
-                   "stop_callback_failure_reaches_join",
-                   testStopCallbackFailureReachesJoin) &&
-               run(
-                   "lifecycle_transitions_are_monotonic",
-                   testLifecycleTransitionsAreMonotonic) &&
-               run(
-                   "concurrent_stop_has_one_initiator",
-                   testConcurrentStopHasOneInitiator)
-        ? 0
-        : 1;
+    return run("worker_signal_is_worker_affine", testWorkerSignalIsWorkerAffine) && run("worker_signal_has_no_waiter_limit", testWorkerSignalHasNoArbitraryWaiterLimit) && run("worker_signal_rechecks_cold_wait_affinity", testWorkerSignalRechecksAffinityWhenColdWaitStarts) && run("dispatch_and_affinity", testDispatchAndAffinity) && run("bounded_mailbox", testBoundedMailbox) && run("external_event_loop_attachment", testExternalEventLoopAttachment) && run("failure_propagation", testFailurePropagation) && run("join_before_start_drains_on_owners", testJoinBeforeStartDrainsOnOwners) && run("stop_before_start_propagates_failure", testStopBeforeStartPropagatesFailure) && run("join_rejects_pool_worker", testJoinRejectsPoolWorker) && run("executor_failure_drains_shutdown_on_owners", testExecutorFailureDrainsShutdownOnOwners) && run("expired_handle", testExpiredHandle) && run("escaped_worker_handle_detaches", testEscapedWorkerHandleBecomesDetachedEndpoint) && run("failure_destroys_abandoned_mailbox_tasks", testFailureDestroysAbandonedMailboxTasks) && run("dispatcher_lifecycle_hooks_are_worker_affine", testDispatcherLifecycleHooksAreWorkerAffine) && run("stop_callback_failure_reaches_join", testStopCallbackFailureReachesJoin) && run("lifecycle_transitions_are_monotonic", testLifecycleTransitionsAreMonotonic) && run("concurrent_stop_has_one_initiator", testConcurrentStopHasOneInitiator) ? 0 : 1;
 }

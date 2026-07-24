@@ -13,15 +13,13 @@
 
 namespace {
 
-using ruvia::detail::HpackDecoder;
 using ruvia::detail::HpackDecodeError;
+using ruvia::detail::HpackDecoder;
 using ruvia::detail::HpackDecodeResult;
 using ruvia::detail::HpackEncoder;
 
 template <typename T>
-concept HasAnyRvalueHpackDecodeAccessor =
-    requires(T&& result) { std::move(result).decoded(); } ||
-    requires(T&& result) { std::move(result).failure(); };
+concept HasAnyRvalueHpackDecodeAccessor = requires(T&& result) { std::move(result).decoded(); } || requires(T&& result) { std::move(result).failure(); };
 
 static_assert(!HasAnyRvalueHpackDecodeAccessor<HpackDecodeResult>);
 
@@ -64,29 +62,21 @@ RUVIA_TEST(hpack_indexed_static_header) {
 RUVIA_TEST(hpack_request_literal_no_huffman) {
     // RFC 7541 C.3.1: indexed :method/:scheme/:path plus a literal :authority.
     Collector out;
-    RUVIA_CHECK(decodeBlock(
-        bytes({0x82, 0x86, 0x84, 0x41, 0x0f, 0x77, 0x77, 0x77, 0x2e, 0x65,
-               0x78, 0x61, 0x6d, 0x70, 0x6c, 0x65, 0x2e, 0x63, 0x6f, 0x6d}),
-        out));
+    RUVIA_CHECK(decodeBlock(bytes({0x82, 0x86, 0x84, 0x41, 0x0f, 0x77, 0x77, 0x77, 0x2e, 0x65, 0x78, 0x61, 0x6d, 0x70, 0x6c, 0x65, 0x2e, 0x63, 0x6f, 0x6d}), out));
     RUVIA_CHECK_EQ(out.headers.size(), std::size_t{4});
     RUVIA_CHECK_EQ(out.headers[0], std::make_pair(std::string(":method"), std::string("GET")));
     RUVIA_CHECK_EQ(out.headers[1], std::make_pair(std::string(":scheme"), std::string("http")));
     RUVIA_CHECK_EQ(out.headers[2], std::make_pair(std::string(":path"), std::string("/")));
-    RUVIA_CHECK_EQ(out.headers[3],
-                   std::make_pair(std::string(":authority"), std::string("www.example.com")));
+    RUVIA_CHECK_EQ(out.headers[3], std::make_pair(std::string(":authority"), std::string("www.example.com")));
 }
 
 RUVIA_TEST(hpack_request_literal_huffman) {
     // RFC 7541 C.4.1: same request but :authority is Huffman-encoded. This
     // exercises the Huffman decoder against a known-answer vector.
     Collector out;
-    RUVIA_CHECK(decodeBlock(
-        bytes({0x82, 0x86, 0x84, 0x41, 0x8c, 0xf1, 0xe3, 0xc2, 0xe5, 0xf2,
-               0x3a, 0x6b, 0xa0, 0xab, 0x90, 0xf4, 0xff}),
-        out));
+    RUVIA_CHECK(decodeBlock(bytes({0x82, 0x86, 0x84, 0x41, 0x8c, 0xf1, 0xe3, 0xc2, 0xe5, 0xf2, 0x3a, 0x6b, 0xa0, 0xab, 0x90, 0xf4, 0xff}), out));
     RUVIA_CHECK_EQ(out.headers.size(), std::size_t{4});
-    RUVIA_CHECK_EQ(out.headers[3],
-                   std::make_pair(std::string(":authority"), std::string("www.example.com")));
+    RUVIA_CHECK_EQ(out.headers[3], std::make_pair(std::string(":authority"), std::string("www.example.com")));
 }
 
 RUVIA_TEST(hpack_encode_decode_round_trip) {
@@ -95,8 +85,7 @@ RUVIA_TEST(hpack_encode_decode_round_trip) {
     Collector out;
     RUVIA_CHECK(decodeBlock(std::string_view(encoded.data(), encoded.size()), out));
     RUVIA_CHECK_EQ(out.headers.size(), std::size_t{1});
-    RUVIA_CHECK_EQ(out.headers[0],
-                   std::make_pair(std::string("x-custom-header"), std::string("custom value")));
+    RUVIA_CHECK_EQ(out.headers[0], std::make_pair(std::string("x-custom-header"), std::string("custom value")));
 }
 
 RUVIA_TEST(hpack_encoder_uses_without_indexing_representation) {
@@ -230,12 +219,12 @@ RUVIA_TEST(hpack_dynamic_table_add_then_reference) {
     // custom-value" to the dynamic table; a following index 62 (static size 61 + 1)
     // references that newest dynamic entry.
     std::string block;
-    block += static_cast<char>(0x40);                 // literal, incremental indexing, literal name
-    block += static_cast<char>(0x0A);                 // name length 10
+    block += static_cast<char>(0x40);  // literal, incremental indexing, literal name
+    block += static_cast<char>(0x0A);  // name length 10
     block += "custom-key";
-    block += static_cast<char>(0x0C);                 // value length 12
+    block += static_cast<char>(0x0C);  // value length 12
     block += "custom-value";
-    block += static_cast<char>(0xBE);                 // indexed field, index 62 (0x80 | 62)
+    block += static_cast<char>(0xBE);  // indexed field, index 62 (0x80 | 62)
 
     Collector out;
     RUVIA_CHECK(decodeBlock(block, out));
@@ -256,14 +245,14 @@ RUVIA_TEST(hpack_indexed_name_referencing_the_evicted_entry_is_safe) {
     // newly inserted entry resolves to the correct (uncorrupted) name.
     const std::string name(20, 'a');
     std::string block;
-    block += bytes({0x3f, 0x16});          // dynamic table size update -> 53 (fits exactly one entry)
-    block += bytes({0x40, 0x14});          // literal, incremental indexing, new name, name length 20
-    block += name;                          // 20-byte name -> heap allocation
-    block += bytes({0x01, 0x76});          // value length 1, "v"
+    block += bytes({0x3f, 0x16});  // dynamic table size update -> 53 (fits exactly one entry)
+    block += bytes({0x40, 0x14});  // literal, incremental indexing, new name, name length 20
+    block += name;                 // 20-byte name -> heap allocation
+    block += bytes({0x01, 0x76});  // value length 1, "v"
     // Literal, incremental indexing, indexed name = 62 (the entry just added).
     // Its size (20 + 1 + 32 = 53) forces evicting that very entry before insert.
-    block += bytes({0x7e, 0x01, 0x77});    // indexed name 62, value length 1, "w"
-    block += bytes({0xbe});                 // indexed field, index 62 (the new entry)
+    block += bytes({0x7e, 0x01, 0x77});  // indexed name 62, value length 1, "w"
+    block += bytes({0xbe});              // indexed field, index 62 (the new entry)
 
     Collector out;
     RUVIA_CHECK(decodeBlock(block, out));
@@ -293,8 +282,7 @@ RUVIA_TEST(hpack_rejects_more_than_two_size_updates_at_block_start) {
     // that the peer is forbidden to generate.
     HpackDecoder decoder(std::pmr::get_default_resource());
     Collector out;
-    const auto result = decoder.decode(
-        bytes({0x20, 0x21, 0x22, 0x82}), &out, &collect);
+    const auto result = decoder.decode(bytes({0x20, 0x21, 0x22, 0x82}), &out, &collect);
     const auto* failure = result.failure();
     RUVIA_CHECK(failure != nullptr);
     if (failure != nullptr) {
@@ -334,9 +322,7 @@ RUVIA_TEST(hpack_encoder_dynamic_table_size_update_uses_five_bit_integer) {
 
     encoded.clear();
     HpackEncoder::encodeDynamicTableSizeUpdate(encoded, 4096);
-    RUVIA_CHECK_EQ(
-        std::string_view(encoded),
-        std::string_view(bytes({0x3f, 0xe1, 0x1f})));
+    RUVIA_CHECK_EQ(std::string_view(encoded), std::string_view(bytes({0x3f, 0xe1, 0x1f})));
 }
 
 RUVIA_TEST(hpack_size_update_exceeding_settings_max_is_rejected) {
@@ -346,7 +332,7 @@ RUVIA_TEST(hpack_size_update_exceeding_settings_max_is_rejected) {
     // vector). A size update to exactly the ceiling is allowed; one byte over is not.
     // Encoding: 0x20 | 5-bit-prefix(31), then the HPACK varint remainder.
     Collector atCeiling;
-    RUVIA_CHECK(decodeBlock(bytes({0x3f, 0xe1, 0x1f}), atCeiling));     // 31 + 97 + 31*128 = 4096
+    RUVIA_CHECK(decodeBlock(bytes({0x3f, 0xe1, 0x1f}), atCeiling));  // 31 + 97 + 31*128 = 4096
     Collector overCeiling;
     RUVIA_CHECK(!decodeBlock(bytes({0x3f, 0xe2, 0x1f}), overCeiling));  // 4097 > 4096 -> rejected
 }
@@ -368,15 +354,13 @@ RUVIA_TEST(hpack_size_update_to_zero_evicts_dynamic_table) {
 
     // Index 62 (static 61 + newest dynamic) resolves to the entry just added.
     Collector referenced;
-    const auto referencedResult =
-        decoder.decode(bytes({0xBE}), &referenced, &collect);
+    const auto referencedResult = decoder.decode(bytes({0xBE}), &referenced, &collect);
     RUVIA_CHECK(referencedResult.decoded() != nullptr);
     RUVIA_CHECK_EQ(referenced.headers.size(), std::size_t{1});
 
     // A size update to 0 (0x20) must evict every dynamic entry (RFC 7541 4.3).
     Collector evicted;
-    const auto evictionResult =
-        decoder.decode(bytes({0x20}), &evicted, &collect);
+    const auto evictionResult = decoder.decode(bytes({0x20}), &evicted, &collect);
     RUVIA_CHECK(evictionResult.decoded() != nullptr);
 
     // The evicted entry is no longer in the table: index 62 is now out of range.
@@ -422,15 +406,14 @@ RUVIA_TEST(hpack_callback_rejection_keeps_dynamic_table_consistent) {
     // SECOND; all three must nonetheless be inserted.
     const auto litIncremental = [](std::string_view name, std::string_view value) {
         std::string out;
-        out.push_back(static_cast<char>(0x40));                  // literal, incremental, new name
-        out.push_back(static_cast<char>(name.size()));           // name len (no huffman)
+        out.push_back(static_cast<char>(0x40));         // literal, incremental, new name
+        out.push_back(static_cast<char>(name.size()));  // name len (no huffman)
         out.append(name);
-        out.push_back(static_cast<char>(value.size()));          // value len (no huffman)
+        out.push_back(static_cast<char>(value.size()));  // value len (no huffman)
         out.append(value);
         return out;
     };
-    const std::string blockA =
-        litIncremental("a-one", "1") + litIncremental("b-two", "2") + litIncremental("c-three", "3");
+    const std::string blockA = litIncremental("a-one", "1") + litIncremental("b-two", "2") + litIncremental("c-three", "3");
 
     RejectAt rejectAt{.rejectIndex = 1};
     const auto resultA = decoder.decode(blockA, &rejectAt, &rejectAtCallback);

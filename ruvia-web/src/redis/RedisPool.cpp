@@ -12,29 +12,22 @@ namespace ruvia {
 namespace detail {
 namespace {
 
-[[nodiscard]] std::span<const std::pmr::string> redisArgSpan(
-    std::span<const std::pmr::string> args) noexcept {
+[[nodiscard]] std::span<const std::pmr::string> redisArgSpan(std::span<const std::pmr::string> args) noexcept {
     return args;
 }
 
-[[nodiscard]] std::span<const std::pmr::string> redisArgSpan(
-    const std::pmr::vector<std::pmr::string>& args) noexcept {
+[[nodiscard]] std::span<const std::pmr::string> redisArgSpan(const std::pmr::vector<std::pmr::string>& args) noexcept {
     return args;
 }
 
 }  // namespace
 
-Task<RedisValue> RedisPool::executeOwned(
-    std::pmr::vector<std::pmr::string> args,
-    std::pmr::memory_resource* resource) {
+Task<RedisValue> RedisPool::executeOwned(std::pmr::vector<std::pmr::string> args, std::pmr::memory_resource* resource) {
     return executeWithTimeoutImpl(std::move(args), config_.commandTimeout, resource);
 }
 
 template <typename ArgSource>
-Task<RedisValue> RedisPool::executeWithTimeoutImpl(
-    ArgSource args,
-    std::optional<std::chrono::milliseconds> timeout,
-    std::pmr::memory_resource* resource) {
+Task<RedisValue> RedisPool::executeWithTimeoutImpl(ArgSource args, std::optional<std::chrono::milliseconds> timeout, std::pmr::memory_resource* resource) {
     const auto index = co_await acquire();
     ConnectionGuard guard(*this, index);
     auto& connection = guard.connection();
@@ -63,17 +56,12 @@ Task<RedisValue> RedisPool::executeWithTimeoutImpl(
     }
 }
 
-Task<RedisValue> RedisPool::executeWithTimeout(
-    std::span<const std::pmr::string> args,
-    std::optional<std::chrono::milliseconds> timeout,
-    std::pmr::memory_resource* resource) {
+Task<RedisValue> RedisPool::executeWithTimeout(std::span<const std::pmr::string> args, std::optional<std::chrono::milliseconds> timeout, std::pmr::memory_resource* resource) {
     return executeWithTimeoutImpl(args, timeout, resource);
 }
 
 template <typename CommandSource>
-Task<std::pmr::vector<RedisValue>> RedisPool::executePipelineImpl(
-    CommandSource commands,
-    std::pmr::memory_resource* resource) {
+Task<std::pmr::vector<RedisValue>> RedisPool::executePipelineImpl(CommandSource commands, std::pmr::memory_resource* resource) {
     const auto resolved = detail::pmrResourceOrDefault(resource);
     std::pmr::vector<RedisValue> replies(resolved);
     replies.reserve(commands.size());
@@ -93,15 +81,12 @@ Task<std::pmr::vector<RedisValue>> RedisPool::executePipelineImpl(
         std::size_t serializedBytes = 0;
         for (const auto& command : commands) {
             const std::span<const std::pmr::string> args = command.args;
-            serializedBytes += respCommandSerializedSize(
-                args);
+            serializedBytes += respCommandSerializedSize(args);
         }
         connection.writeBuffer.reserve(serializedBytes);
         for (const auto& command : commands) {
             const std::span<const std::pmr::string> args = command.args;
-            appendRespCommand(
-                connection.writeBuffer,
-                args);
+            appendRespCommand(connection.writeBuffer, args);
         }
 
         const OperationTimeout deadline(config_.commandTimeout);
@@ -124,15 +109,11 @@ Task<std::pmr::vector<RedisValue>> RedisPool::executePipelineImpl(
     }
 }
 
-Task<std::pmr::vector<RedisValue>> RedisPool::executePipeline(
-    std::span<const RedisPipeline::Command> commands,
-    std::pmr::memory_resource* resource) {
+Task<std::pmr::vector<RedisValue>> RedisPool::executePipeline(std::span<const RedisPipeline::Command> commands, std::pmr::memory_resource* resource) {
     return executePipelineImpl(commands, resource);
 }
 
-Task<std::pmr::vector<RedisValue>> RedisPool::executePipeline(
-    std::span<const RedisCommandArgsView> commands,
-    std::pmr::memory_resource* resource) {
+Task<std::pmr::vector<RedisValue>> RedisPool::executePipeline(std::span<const RedisCommandArgsView> commands, std::pmr::memory_resource* resource) {
     return executePipelineImpl(commands, resource);
 }
 

@@ -21,12 +21,7 @@ enum class Http2FramePayloadStatus : std::uint8_t {
 // stream dependency. Keep malformed padding distinct from missing mandatory
 // priority fields: both are connection errors for HEADERS, but RFC 9113 requires
 // PROTOCOL_ERROR for the former and FRAME_SIZE_ERROR for the latter.
-[[nodiscard]] inline Http2FramePayloadStatus http2StripPadAndPriority(
-    const Http2FrameHeader& header,
-    std::string_view payload,
-    bool allowPriority,
-    std::string_view& content,
-    std::uint32_t* dependency = nullptr) noexcept {
+[[nodiscard]] inline Http2FramePayloadStatus http2StripPadAndPriority(const Http2FrameHeader& header, std::string_view payload, bool allowPriority, std::string_view& content, std::uint32_t* dependency = nullptr) noexcept {
     std::size_t offset = 0;
     std::size_t padding = 0;
     if ((header.flags & kHttp2FlagPadded) != 0) {
@@ -53,47 +48,26 @@ enum class Http2FramePayloadStatus : std::uint8_t {
 }
 
 template <HttpTemporaryOwningCharString Payload>
-Http2FramePayloadStatus http2StripPadAndPriority(
-    const Http2FrameHeader&,
-    Payload&&,
-    bool,
-    std::string_view&,
-    std::uint32_t* = nullptr) = delete;
+Http2FramePayloadStatus http2StripPadAndPriority(const Http2FrameHeader&, Payload&&, bool, std::string_view&, std::uint32_t* = nullptr) = delete;
 
-[[nodiscard]] inline Http2FramePayloadStatus http2DecodeHeadersPayload(
-    const Http2FrameHeader& header,
-    std::string_view payload,
-    std::string_view& fragment) noexcept {
+[[nodiscard]] inline Http2FramePayloadStatus http2DecodeHeadersPayload(const Http2FrameHeader& header, std::string_view payload, std::string_view& fragment) noexcept {
     return http2StripPadAndPriority(header, payload, true, fragment);
 }
 
 template <HttpTemporaryOwningCharString Payload>
-Http2FramePayloadStatus http2DecodeHeadersPayload(
-    const Http2FrameHeader&,
-    Payload&&,
-    std::string_view&) = delete;
+Http2FramePayloadStatus http2DecodeHeadersPayload(const Http2FrameHeader&, Payload&&, std::string_view&) = delete;
 
-[[nodiscard]] inline Http2FramePayloadStatus http2HeadersPriorityDependency(
-    const Http2FrameHeader& header,
-    std::string_view payload,
-    std::uint32_t& dependency) noexcept {
+[[nodiscard]] inline Http2FramePayloadStatus http2HeadersPriorityDependency(const Http2FrameHeader& header, std::string_view payload, std::uint32_t& dependency) noexcept {
     dependency = 0;
     std::string_view content;
     return http2StripPadAndPriority(header, payload, true, content, &dependency);
 }
 
-[[nodiscard]] inline bool http2DecodeDataPayload(
-    const Http2FrameHeader& header,
-    std::string_view payload,
-    std::string_view& data) noexcept {
-    return http2StripPadAndPriority(header, payload, false, data) ==
-           Http2FramePayloadStatus::kDecoded;
+[[nodiscard]] inline bool http2DecodeDataPayload(const Http2FrameHeader& header, std::string_view payload, std::string_view& data) noexcept {
+    return http2StripPadAndPriority(header, payload, false, data) == Http2FramePayloadStatus::kDecoded;
 }
 
 template <HttpTemporaryOwningCharString Payload>
-bool http2DecodeDataPayload(
-    const Http2FrameHeader&,
-    Payload&&,
-    std::string_view&) = delete;
+bool http2DecodeDataPayload(const Http2FrameHeader&, Payload&&, std::string_view&) = delete;
 
 }  // namespace ruvia::detail

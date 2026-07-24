@@ -50,8 +50,7 @@ ruvia::Task<ruvia::HttpResponse> exampleErrorHandler(ruvia::Context& c, ruvia::H
 // outside every prefix keep using the app-wide handlers above.
 ruvia::Task<ruvia::HttpResponse> apiNotFound(ruvia::Context& c) {
     c.status(ruvia::http_status::kNotFound);
-    co_return c.error(
-        ruvia::http_status::kNotFound, "api_not_found", "no such API endpoint");
+    co_return c.error(ruvia::http_status::kNotFound, "api_not_found", "no such API endpoint");
 }
 
 ruvia::Task<ruvia::HttpResponse> apiError(ruvia::Context& c, ruvia::HttpErrorInfo error) {
@@ -90,7 +89,7 @@ public:
     RUVIA_HEAD("/health", health);
     RUVIA_OPTIONS("/health", options);
     RUVIA_GROUP_BEGIN("/admin", AdminAuthMiddleware)
-        RUVIA_GET("/status", adminStatus);
+    RUVIA_GET("/status", adminStatus);
     RUVIA_GROUP_END
     RUVIA_ROUTES_END
 
@@ -101,10 +100,7 @@ private:
 
     ruvia::Task<ruvia::HttpResponse> user(ruvia::Context& c) {
         UserResponse response(c);
-        response
-            .id(c.req().param("id").value_or("unknown"))
-            .name("example-user")
-            .active(ruvia::Bool{true});
+        response.id(c.req().param("id").value_or("unknown")).name("example-user").active(ruvia::Bool{true});
         co_return c.json(response);
     }
 
@@ -164,10 +160,7 @@ private:
     }
 
     ruvia::Task<ruvia::HttpResponse> fail(ruvia::Context&) {
-        throw ruvia::HttpError(
-            ruvia::http_status::kBadRequest,
-            "example_error",
-            "the example handler threw an HttpError");
+        throw ruvia::HttpError(ruvia::http_status::kBadRequest, "example_error", "the example handler threw an HttpError");
     }
 
     ruvia::Task<ruvia::HttpResponse> health(ruvia::Context& c) {
@@ -189,20 +182,5 @@ int main() {
     ruvia::MemoryPoolConfig memory;
     memory.requestInitialBufferBytes = 4096;
 
-    ruvia::app()
-        .setListenAddress("0.0.0.0")
-        .setServerTopology(ruvia::ServerTopology::http(8080))
-        .setWorkersPerListener(2)
-        .setSignalShutdown(true)
-        .setKeepaliveTimeout(std::chrono::seconds(75))
-        .setClientHeaderTimeout(std::chrono::seconds(60))
-        .setClientBodyTimeout(std::chrono::seconds(60))
-        .setSendTimeout(std::chrono::seconds(60))
-        .setMaxConnectionsPerWorker(10000)
-        .setKeepaliveRequests(1000)
-        .setMemoryPoolConfig(memory)
-        .onError(&exampleErrorHandler)
-        .onError("/api", &apiError)
-        .notFound("/api", &apiNotFound)
-        .run();
+    ruvia::app().setListenAddress("0.0.0.0").setServerTopology(ruvia::ServerTopology::http(8080)).setWorkersPerListener(2).setSignalShutdown(true).setKeepaliveTimeout(std::chrono::seconds(75)).setClientHeaderTimeout(std::chrono::seconds(60)).setClientBodyTimeout(std::chrono::seconds(60)).setSendTimeout(std::chrono::seconds(60)).setMaxConnectionsPerWorker(10000).setKeepaliveRequests(1000).setMemoryPoolConfig(memory).onError(&exampleErrorHandler).onError("/api", &apiError).notFound("/api", &apiNotFound).run();
 }

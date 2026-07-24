@@ -23,9 +23,7 @@ namespace ruvia::detail {
 // mutual-TLS identity to handlers via getConnInfo(context).
 inline void extractTlsClientCertificate(SSL* ssl, std::pmr::string& out) {
     out.clear();
-    const auto certificate = std::unique_ptr<X509, decltype(&X509_free)>(
-        SSL_get_peer_certificate(ssl),
-        &X509_free);
+    const auto certificate = std::unique_ptr<X509, decltype(&X509_free)>(SSL_get_peer_certificate(ssl), &X509_free);
     if (certificate == nullptr) {
         return;
     }
@@ -37,8 +35,7 @@ inline void extractTlsClientCertificate(SSL* ssl, std::pmr::string& out) {
     // X509_NAME_oneline into a fixed 256-byte buffer, this captures the full
     // subject without silent truncation and produces the unambiguous,
     // standard-parseable form recommended for authorization.
-    const auto bio = std::unique_ptr<BIO, decltype(&BIO_free)>(
-        BIO_new(BIO_s_mem()), &BIO_free);
+    const auto bio = std::unique_ptr<BIO, decltype(&BIO_free)>(BIO_new(BIO_s_mem()), &BIO_free);
     if (bio == nullptr) {
         return;
     }

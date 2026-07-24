@@ -32,7 +32,7 @@ class HttpServer;
 class RedisRegistry;
 class WebWorkerDispatch;
 class WorkerStateRegistry;
-}
+}  // namespace detail
 
 class WebWorkerContext final {
 public:
@@ -41,8 +41,8 @@ public:
     WebWorkerContext(WebWorkerContext&&) = delete;
     WebWorkerContext& operator=(WebWorkerContext&&) = delete;
 
-    [[nodiscard]] const WorkerHandle& worker() const & noexcept;
-    const WorkerHandle& worker() const && = delete;
+    [[nodiscard]] const WorkerHandle& worker() const& noexcept;
+    const WorkerHandle& worker() const&& = delete;
     [[nodiscard]] std::pmr::memory_resource* resource() const noexcept;
     [[nodiscard]] StopToken stopToken() const noexcept;
 
@@ -52,8 +52,7 @@ public:
     // type.
     template <typename T>
     [[nodiscard]] T& workerState() const {
-        return *static_cast<T*>(
-            workerStateInstance(detail::workerStateTypeKey<T>()));
+        return *static_cast<T*>(workerStateInstance(detail::workerStateTypeKey<T>()));
     }
 
     // Offloads blocking work exactly as Context::runBlocking() does for
@@ -72,9 +71,7 @@ public:
     }
 
     template <typename Rep, typename Period, typename Fn>
-    [[nodiscard]] Task<std::invoke_result_t<Fn&>> runBlocking(
-        std::chrono::duration<Rep, Period> timeout,
-        Fn fn) const {
+    [[nodiscard]] Task<std::invoke_result_t<Fn&>> runBlocking(std::chrono::duration<Rep, Period> timeout, Fn fn) const {
         auto result = co_await tryRunBlocking(timeout, std::move(fn));
         if constexpr (std::is_void_v<std::invoke_result_t<Fn&>>) {
             std::move(result).value();
@@ -85,14 +82,12 @@ public:
     }
 
     template <typename Fn>
-    [[nodiscard]] Task<BlockingResult<std::invoke_result_t<Fn&>>>
-    tryRunBlocking(Fn fn) const {
+    [[nodiscard]] Task<BlockingResult<std::invoke_result_t<Fn&>>> tryRunBlocking(Fn fn) const {
         return ruvia::runBlocking(blockingPool(), worker_, std::move(fn));
     }
 
     template <typename Rep, typename Period, typename Fn>
-    [[nodiscard]] Task<BlockingResult<std::invoke_result_t<Fn&>>>
-    tryRunBlocking(std::chrono::duration<Rep, Period> timeout, Fn fn) const {
+    [[nodiscard]] Task<BlockingResult<std::invoke_result_t<Fn&>>> tryRunBlocking(std::chrono::duration<Rep, Period> timeout, Fn fn) const {
         return ruvia::runBlocking(blockingPool(), worker_, timeout, std::move(fn));
     }
 
@@ -108,14 +103,7 @@ public:
 private:
     friend class detail::WebWorkerDispatch;
 
-    WebWorkerContext(
-        WorkerHandle worker,
-        std::pmr::memory_resource* resource,
-        detail::DbRegistry* databases,
-        detail::RedisRegistry* redis,
-        const detail::WorkerStateRegistry* workerStates,
-        BlockingPool* blockingPool,
-        StopToken stopToken) noexcept;
+    WebWorkerContext(WorkerHandle worker, std::pmr::memory_resource* resource, detail::DbRegistry* databases, detail::RedisRegistry* redis, const detail::WorkerStateRegistry* workerStates, BlockingPool* blockingPool, StopToken stopToken) noexcept;
 
     [[nodiscard]] void* workerStateInstance(const void* typeKey) const;
     [[nodiscard]] BlockingPool& blockingPool() const;
@@ -132,8 +120,7 @@ private:
     mutable detail::ScopedOperationScope operationScope_;
 };
 
-using WebWorkerPostResult =
-    PostOutcome<Task<void>(WebWorkerContext&)>;
+using WebWorkerPostResult = PostOutcome<Task<void>(WebWorkerContext&)>;
 
 struct WebWorkerStats final {
     std::uint64_t accepted{0};
@@ -154,23 +141,17 @@ public:
     [[nodiscard]] WebWorkerStats stats() const noexcept;
 
     template <typename Fn>
-        requires std::invocable<std::decay_t<Fn>&, WebWorkerContext&> &&
-                 std::same_as<
-                     std::invoke_result_t<std::decay_t<Fn>&, WebWorkerContext&>,
-                     Task<void>>
+        requires std::invocable<std::decay_t<Fn>&, WebWorkerContext&> && std::same_as<std::invoke_result_t<std::decay_t<Fn>&, WebWorkerContext&>, Task<void>>
     [[nodiscard]] WebWorkerPostResult post(Fn&& fn) const {
-        return postTask(MoveOnlyFunction<Task<void>(WebWorkerContext&)>(
-            std::forward<Fn>(fn)));
+        return postTask(MoveOnlyFunction<Task<void>(WebWorkerContext&)>(std::forward<Fn>(fn)));
     }
 
 private:
     friend class detail::WebWorkerDispatch;
 
-    WebWorkerHandle(
-        std::shared_ptr<detail::WebWorkerDispatch> dispatch) noexcept;
+    WebWorkerHandle(std::shared_ptr<detail::WebWorkerDispatch> dispatch) noexcept;
 
-    [[nodiscard]] WebWorkerPostResult postTask(
-        MoveOnlyFunction<Task<void>(WebWorkerContext&)> task) const;
+    [[nodiscard]] WebWorkerPostResult postTask(MoveOnlyFunction<Task<void>(WebWorkerContext&)> task) const;
 
     // The handle owns a stable terminal endpoint. Server shutdown closes it;
     // retaining a handle cannot retain the server or its io_context.

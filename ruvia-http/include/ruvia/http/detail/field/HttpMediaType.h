@@ -26,9 +26,7 @@ std::string_view httpMediaTypeOnly(Value&&) = delete;
     if (token.empty()) {
         return false;
     }
-    return std::ranges::all_of(token, [](char ch) noexcept {
-        return isHttpTokenChar(static_cast<unsigned char>(ch));
-    });
+    return std::ranges::all_of(token, [](char ch) noexcept { return isHttpTokenChar(static_cast<unsigned char>(ch)); });
 }
 
 struct HttpMediaTypeParts final {
@@ -41,10 +39,7 @@ struct HttpMediaTypeParts final {
 // equal (for example, utf-8 and "utf-8") without allocating temporary strings.
 // Parameter values are otherwise case-sensitive; individual media-type
 // registrations define any value-specific case folding.
-[[nodiscard]] inline bool httpMediaParameterValueEquals(
-    std::string_view left,
-    std::string_view right,
-    bool asciiCaseInsensitive = false) noexcept {
+[[nodiscard]] inline bool httpMediaParameterValueEquals(std::string_view left, std::string_view right, bool asciiCaseInsensitive = false) noexcept {
     struct Cursor final {
         std::string_view value;
         std::size_t position{0};
@@ -52,7 +47,8 @@ struct HttpMediaTypeParts final {
         bool quoted{false};
         bool valid{true};
 
-        explicit Cursor(std::string_view input) noexcept : value(httpTrimOws(input)) {
+        explicit Cursor(std::string_view input) noexcept
+            : value(httpTrimOws(input)) {
             if (value.empty()) {
                 valid = false;
                 return;
@@ -132,10 +128,7 @@ struct HttpMediaTypeParts final {
 }
 
 template <typename Visitor>
-[[nodiscard]] inline bool httpVisitMediaTypeParameters(
-    std::string_view value,
-    bool skipQualityParameter,
-    Visitor&& visitor) noexcept {
+[[nodiscard]] inline bool httpVisitMediaTypeParameters(std::string_view value, bool skipQualityParameter, Visitor&& visitor) noexcept {
     if (!httpAcceptParametersHaveStrictEquals(value)) {
         return false;
     }
@@ -144,66 +137,48 @@ template <typename Visitor>
     // hostile field values; an implausibly parameter-heavy item is invalidated.
     std::array<std::string_view, 64> names{};
     std::size_t nameCount = 0;
-    return httpAllParameters(
-        value,
-        [&](std::string_view part) noexcept {
-            const auto equals = part.find('=');
-            if (part.empty() || equals == std::string_view::npos) {
+    return httpAllParameters(value, [&](std::string_view part) noexcept {
+        const auto equals = part.find('=');
+        if (part.empty() || equals == std::string_view::npos) {
+            return false;
+        }
+        const auto name = httpTrimOws(part.substr(0, equals));
+        const auto parameterValue = httpTrimOws(part.substr(equals + 1));
+        if (!httpMediaToken(name)) {
+            return false;
+        }
+        for (std::size_t index = 0; index < nameCount; ++index) {
+            if (httpAsciiEqualsIgnoreCase(names[index], name)) {
                 return false;
             }
-            const auto name = httpTrimOws(part.substr(0, equals));
-            const auto parameterValue = httpTrimOws(part.substr(equals + 1));
-            if (!httpMediaToken(name)) {
-                return false;
-            }
-            for (std::size_t index = 0; index < nameCount; ++index) {
-                if (httpAsciiEqualsIgnoreCase(names[index], name)) {
-                    return false;
-                }
-            }
-            if (nameCount == names.size()) {
-                return false;
-            }
-            names[nameCount++] = name;
-            if (skipQualityParameter && httpAsciiEqualsIgnoreCase(name, "q")) {
-                // RFC 9110 removed the old accept-ext grammar. q is the weight
-                // wherever it appears, but media-range parameters after it still
-                // participate in matching, so skip q itself and keep scanning.
-                return true;
-            }
-            // Comparing a value with itself performs syntax validation as well.
-            return httpMediaParameterValueEquals(parameterValue, parameterValue) &&
-                visitor(name, parameterValue);
-        });
+        }
+        if (nameCount == names.size()) {
+            return false;
+        }
+        names[nameCount++] = name;
+        if (skipQualityParameter && httpAsciiEqualsIgnoreCase(name, "q")) {
+            // RFC 9110 removed the old accept-ext grammar. q is the weight
+            // wherever it appears, but media-range parameters after it still
+            // participate in matching, so skip q itself and keep scanning.
+            return true;
+        }
+        // Comparing a value with itself performs syntax validation as well.
+        return httpMediaParameterValueEquals(parameterValue, parameterValue) && visitor(name, parameterValue);
+    });
 }
 
-[[nodiscard]] inline bool httpOfferedMediaTypeHasParameter(
-    std::string_view offered,
-    std::string_view expectedName,
-    std::string_view expectedValue) noexcept {
+[[nodiscard]] inline bool httpOfferedMediaTypeHasParameter(std::string_view offered, std::string_view expectedName, std::string_view expectedValue) noexcept {
     bool found = false;
-    const bool valid = httpVisitMediaTypeParameters(
-        offered,
-        false,
-        [expectedName, expectedValue, &found](
-            std::string_view name,
-            std::string_view value) noexcept {
-            if (httpAsciiEqualsIgnoreCase(name, expectedName) &&
-                httpMediaParameterValueEquals(
-                    value,
-                    expectedValue,
-                    httpAsciiEqualsIgnoreCase(name, "charset"))) {
-                found = true;
-            }
-            return true;
-        });
+    const bool valid = httpVisitMediaTypeParameters(offered, false, [expectedName, expectedValue, &found](std::string_view name, std::string_view value) noexcept {
+        if (httpAsciiEqualsIgnoreCase(name, expectedName) && httpMediaParameterValueEquals(value, expectedValue, httpAsciiEqualsIgnoreCase(name, "charset"))) {
+            found = true;
+        }
+        return true;
+    });
     return valid && found;
 }
 
-[[nodiscard]] inline bool httpParseMediaTypeParts(
-    std::string_view value,
-    bool allowWildcard,
-    HttpMediaTypeParts& parts) noexcept {
+[[nodiscard]] inline bool httpParseMediaTypeParts(std::string_view value, bool allowWildcard, HttpMediaTypeParts& parts) noexcept {
     value = httpMediaTypeOnly(value);
     const auto slash = value.find('/');
     if (slash == std::string_view::npos) {
@@ -220,31 +195,20 @@ template <typename Visitor>
     if (typeWildcard && !subtypeWildcard) {
         return false;
     }
-    return (typeWildcard || httpMediaToken(parts.type)) &&
-        (subtypeWildcard || httpMediaToken(parts.subtype));
+    return (typeWildcard || httpMediaToken(parts.type)) && (subtypeWildcard || httpMediaToken(parts.subtype));
 }
 
 template <HttpTemporaryOwningCharString Value>
 bool httpParseMediaTypeParts(Value&&, bool, HttpMediaTypeParts&) = delete;
 
-[[nodiscard]] inline bool httpParseMediaType(
-    std::string_view value,
-    bool allowWildcard,
-    HttpMediaTypeParts& parts) noexcept {
-    return httpParseMediaTypeParts(value, allowWildcard, parts) &&
-        httpVisitMediaTypeParameters(
-            value,
-            false,
-            [](std::string_view, std::string_view) noexcept {
-                return true;
-            });
+[[nodiscard]] inline bool httpParseMediaType(std::string_view value, bool allowWildcard, HttpMediaTypeParts& parts) noexcept {
+    return httpParseMediaTypeParts(value, allowWildcard, parts) && httpVisitMediaTypeParameters(value, false, [](std::string_view, std::string_view) noexcept { return true; });
 }
 
 template <HttpTemporaryOwningCharString Value>
 bool httpParseMediaType(Value&&, bool, HttpMediaTypeParts&) = delete;
 
-[[nodiscard]] inline bool isValidHttpContentTypeFieldValue(
-    std::string_view value) noexcept {
+[[nodiscard]] inline bool isValidHttpContentTypeFieldValue(std::string_view value) noexcept {
     HttpMediaTypeParts parts;
     return httpParseMediaType(value, false, parts);
 }

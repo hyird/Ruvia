@@ -6,9 +6,7 @@
 
 namespace ruvia::detail {
 
-std::pmr::vector<std::pmr::string> ownRedisArgs(
-    std::span<const std::string_view> args,
-    std::pmr::memory_resource* resource) {
+std::pmr::vector<std::pmr::string> ownRedisArgs(std::span<const std::string_view> args, std::pmr::memory_resource* resource) {
     std::pmr::vector<std::pmr::string> owned(resource);
     owned.reserve(args.size());
     for (const auto arg : args) {
@@ -17,9 +15,7 @@ std::pmr::vector<std::pmr::string> ownRedisArgs(
     return owned;
 }
 
-std::pmr::vector<std::pmr::string> ownRedisArgs(
-    std::initializer_list<std::string_view> args,
-    std::pmr::memory_resource* resource) {
+std::pmr::vector<std::pmr::string> ownRedisArgs(std::initializer_list<std::string_view> args, std::pmr::memory_resource* resource) {
     return ownRedisArgs(std::span<const std::string_view>(args.begin(), args.size()), resource);
 }
 
@@ -41,10 +37,7 @@ std::pmr::string redisCursorString(std::uint64_t cursor, std::pmr::memory_resour
     return output;
 }
 
-std::pmr::vector<std::pmr::string> redisCommandWithKeys(
-    std::string_view command,
-    std::span<const std::string_view> keys,
-    std::pmr::memory_resource* resource) {
+std::pmr::vector<std::pmr::string> redisCommandWithKeys(std::string_view command, std::span<const std::string_view> keys, std::pmr::memory_resource* resource) {
     std::pmr::vector<std::pmr::string> args(resource);
     args.reserve(keys.size() + 1);
     emplaceRedisString(args, command);
@@ -54,9 +47,7 @@ std::pmr::vector<std::pmr::string> redisCommandWithKeys(
     return args;
 }
 
-std::pmr::vector<std::pmr::string> redisMsetArgs(
-    std::span<const std::pair<std::string_view, std::string_view>> items,
-    std::pmr::memory_resource* resource) {
+std::pmr::vector<std::pmr::string> redisMsetArgs(std::span<const std::pair<std::string_view, std::string_view>> items, std::pmr::memory_resource* resource) {
     if (items.empty()) {
         throw std::invalid_argument("redis mset requires at least one item");
     }
@@ -70,11 +61,7 @@ std::pmr::vector<std::pmr::string> redisMsetArgs(
     return args;
 }
 
-std::pmr::vector<std::pmr::string> redisSetArgs(
-    std::string_view key,
-    std::string_view value,
-    const RedisSetOptions& options,
-    std::pmr::memory_resource* resource) {
+std::pmr::vector<std::pmr::string> redisSetArgs(std::string_view key, std::string_view value, const RedisSetOptions& options, std::pmr::memory_resource* resource) {
     std::pmr::vector<std::pmr::string> args(resource);
     args.reserve(8);
     emplaceRedisString(args, "SET");
@@ -88,12 +75,12 @@ std::pmr::vector<std::pmr::string> redisSetArgs(
     }
     if (options.condition) {
         switch (*options.condition) {
-        case RedisSetCondition::kIfAbsent:
-            emplaceRedisString(args, "NX");
-            break;
-        case RedisSetCondition::kIfPresent:
-            emplaceRedisString(args, "XX");
-            break;
+            case RedisSetCondition::kIfAbsent:
+                emplaceRedisString(args, "NX");
+                break;
+            case RedisSetCondition::kIfPresent:
+                emplaceRedisString(args, "XX");
+                break;
         }
     }
     if (options.returnPrevious) {
@@ -105,10 +92,7 @@ std::pmr::vector<std::pmr::string> redisSetArgs(
     return args;
 }
 
-std::pmr::vector<std::pmr::string> redisHsetFieldsArgs(
-    std::string_view key,
-    std::span<const std::pair<std::string_view, std::string_view>> fields,
-    std::pmr::memory_resource* resource) {
+std::pmr::vector<std::pmr::string> redisHsetFieldsArgs(std::string_view key, std::span<const std::pair<std::string_view, std::string_view>> fields, std::pmr::memory_resource* resource) {
     if (fields.empty()) {
         throw std::invalid_argument("redis hset requires at least one field");
     }
@@ -123,11 +107,7 @@ std::pmr::vector<std::pmr::string> redisHsetFieldsArgs(
     return args;
 }
 
-std::pmr::vector<std::pmr::string> redisCommandWithKeyFields(
-    std::string_view command,
-    std::string_view key,
-    std::span<const std::string_view> fields,
-    std::pmr::memory_resource* resource) {
+std::pmr::vector<std::pmr::string> redisCommandWithKeyFields(std::string_view command, std::string_view key, std::span<const std::string_view> fields, std::pmr::memory_resource* resource) {
     if (fields.empty()) {
         throw std::invalid_argument("redis command requires at least one field");
     }
@@ -141,13 +121,9 @@ std::pmr::vector<std::pmr::string> redisCommandWithKeyFields(
     return args;
 }
 
-void appendRedisScanOptions(
-    std::pmr::vector<std::pmr::string>& args,
-    const RedisScanOptions& options,
-    std::pmr::memory_resource* resource) {
+void appendRedisScanOptions(std::pmr::vector<std::pmr::string>& args, const RedisScanOptions& options, std::pmr::memory_resource* resource) {
     if (options.count.has_value() && *options.count == 0) {
-        throw std::invalid_argument(
-            "configured redis scan count must be greater than zero");
+        throw std::invalid_argument("configured redis scan count must be greater than zero");
     }
     if (!options.match.empty()) {
         emplaceRedisString(args, "MATCH");
@@ -161,12 +137,7 @@ void appendRedisScanOptions(
     }
 }
 
-std::pmr::vector<std::pmr::string> redisEvalArgs(
-    std::string_view command,
-    std::string_view script,
-    std::span<const std::string_view> keys,
-    std::span<const std::string_view> argv,
-    std::pmr::memory_resource* resource) {
+std::pmr::vector<std::pmr::string> redisEvalArgs(std::string_view command, std::string_view script, std::span<const std::string_view> keys, std::span<const std::string_view> argv, std::pmr::memory_resource* resource) {
     std::pmr::vector<std::pmr::string> args(resource);
     args.reserve(3 + keys.size() + argv.size());
     emplaceRedisString(args, command);
@@ -181,11 +152,7 @@ std::pmr::vector<std::pmr::string> redisEvalArgs(
     return args;
 }
 
-std::pmr::vector<std::pmr::string> redisBlockingPopArgs(
-    std::string_view command,
-    std::span<const std::string_view> keys,
-    std::chrono::seconds timeout,
-    std::pmr::memory_resource* resource) {
+std::pmr::vector<std::pmr::string> redisBlockingPopArgs(std::string_view command, std::span<const std::string_view> keys, std::chrono::seconds timeout, std::pmr::memory_resource* resource) {
     if (keys.empty()) {
         throw std::invalid_argument("redis blocking pop requires at least one key");
     }

@@ -36,20 +36,14 @@ private:
     friend class detail::PostgreSqlPool;
 
     struct Lease final {
-        Lease(
-            detail::DbPoolRef client,
-            std::size_t slot,
-            std::pmr::memory_resource* resource) noexcept;
+        Lease(detail::DbPoolRef client, std::size_t slot, std::pmr::memory_resource* resource) noexcept;
 
         detail::DbPoolRef client;
         std::size_t slot;
         std::pmr::memory_resource* resource;
     };
 
-    DbTransaction(
-        detail::DbPoolRef client,
-        std::size_t slot,
-        std::pmr::memory_resource* resource) noexcept;
+    DbTransaction(detail::DbPoolRef client, std::size_t slot, std::pmr::memory_resource* resource) noexcept;
     Task<QueryResult> executePrepared(std::pmr::string sql, std::pmr::vector<DbValue> params);
     Task<void> commitTask();
     Task<void> rollbackTask();

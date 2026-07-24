@@ -17,10 +17,7 @@ namespace ruvia::detail {
 // RFC 3986 section 2.3 unreserved. Percent-encoding one of these octets is
 // equivalent to spelling it literally, which host comparison relies on.
 [[nodiscard]] inline bool isUnreservedByte(unsigned char byte) noexcept {
-    return (byte >= '0' && byte <= '9') ||
-        (byte >= 'A' && byte <= 'Z') ||
-        (byte >= 'a' && byte <= 'z') ||
-        byte == '-' || byte == '.' || byte == '_' || byte == '~';
+    return (byte >= '0' && byte <= '9') || (byte >= 'A' && byte <= 'Z') || (byte >= 'a' && byte <= 'z') || byte == '-' || byte == '.' || byte == '_' || byte == '~';
 }
 
 // Parse a decimal port, rejecting anything that does not fit 16 bits.
@@ -32,10 +29,7 @@ namespace ruvia::detail {
 
 // Validate a percent-encoded component: unreserved / sub-delims / pct-encoded,
 // plus ':' and '@', with '/' and '?' admitted only where the component allows them.
-[[nodiscard]] bool isValidUriComponent(
-    std::string_view value,
-    bool allowSlash,
-    bool allowQuestion) noexcept;
+[[nodiscard]] bool isValidUriComponent(std::string_view value, bool allowSlash, bool allowQuestion) noexcept;
 [[nodiscard]] bool isValidUriUserinfo(std::string_view value) noexcept;
 [[nodiscard]] bool isValidUriPort(std::string_view value) noexcept;
 

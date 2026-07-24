@@ -21,23 +21,23 @@ class ResponseHeadBuffer final {
     struct HeapState final {};
 
 public:
-    explicit ResponseHeadBuffer(std::pmr::polymorphic_allocator<char> allocator) : heap_(allocator) {}
+    explicit ResponseHeadBuffer(std::pmr::polymorphic_allocator<char> allocator)
+        : heap_(allocator) {}
 
     void reset() noexcept;
     void append(std::string_view value);
     void append(char value);
     void appendUnsigned(std::uint64_t value);
     void reserveAdditional(std::size_t size);
-    [[nodiscard]] std::string_view view() const & noexcept;
-    [[nodiscard]] std::string_view view() const && = delete;
+    [[nodiscard]] std::string_view view() const& noexcept;
+    [[nodiscard]] std::string_view view() const&& = delete;
     [[nodiscard]] bool canAppendOnStack(std::size_t size) const noexcept;
 
     // Bulk fast path: returns a raw cursor when `bound` bytes are guaranteed to
     // fit in the stack buffer, so callers can emit without per-append checks.
     [[nodiscard]] char* stackCursor(std::size_t bound) & noexcept {
         auto* const stackState = std::get_if<StackState>(&state_);
-        if (stackState == nullptr ||
-            bound > stack_.size() - stackState->used) {
+        if (stackState == nullptr || bound > stack_.size() - stackState->used) {
             return nullptr;
         }
         return stack_.data() + stackState->used;
@@ -45,8 +45,7 @@ public:
     [[nodiscard]] char* stackCursor(std::size_t) && = delete;
 
     void commitStack(const char* end) noexcept {
-        std::get<StackState>(state_).used =
-            static_cast<std::size_t>(end - stack_.data());
+        std::get<StackState>(state_).used = static_cast<std::size_t>(end - stack_.data());
     }
 
 private:

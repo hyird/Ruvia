@@ -39,16 +39,15 @@ public:
 
     // Throws std::filesystem::filesystem_error if a directory is given but
     // cannot be created, scanned, or exclusively leased (see DiskCache).
-    DiskTier(
-        const std::optional<std::filesystem::path>& directory,
-        std::size_t maxBytes,
-        FailureSink onFailure = {});
+    DiskTier(const std::optional<std::filesystem::path>& directory, std::size_t maxBytes, FailureSink onFailure = {});
     ~DiskTier();
 
     DiskTier(const DiskTier&) = delete;
     DiskTier& operator=(const DiskTier&) = delete;
 
-    [[nodiscard]] bool enabled() const noexcept { return cache_.has_value(); }
+    [[nodiscard]] bool enabled() const noexcept {
+        return cache_.has_value();
+    }
 
     // Reads the entry off the loop and resumes the caller with the result.
     [[nodiscard]] asio::awaitable<std::optional<CachedResponse>> lookup(std::string key);

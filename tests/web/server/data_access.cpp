@@ -28,14 +28,10 @@ static_assert(!std::is_copy_constructible_v<ruvia::DataAccessContext>);
 static_assert(!std::is_move_constructible_v<ruvia::DataAccessContext>);
 
 template <typename T>
-concept ExposesUntrackedContext = requires(T& runtime) {
-    runtime.context();
-};
+concept ExposesUntrackedContext = requires(T& runtime) { runtime.context(); };
 
 template <typename T>
-concept ExposesInertRequestMemoryTuning = requires(T& options) {
-    options.memory;
-};
+concept ExposesInertRequestMemoryTuning = requires(T& options) { options.memory; };
 
 static_assert(!ExposesUntrackedContext<ruvia::DataAccessService>);
 static_assert(!ExposesInertRequestMemoryTuning<ruvia::DataAccessOptions>);
@@ -44,9 +40,7 @@ static_assert(!ExposesInertRequestMemoryTuning<ruvia::DataAccessOptions>);
 class StalledTcpServer final {
 public:
     StalledTcpServer()
-        : acceptor_(
-              ioContext_,
-              asio::ip::tcp::endpoint(asio::ip::tcp::v4(), 0)),
+        : acceptor_(ioContext_, asio::ip::tcp::endpoint(asio::ip::tcp::v4(), 0)),
           acceptedFuture_(accepted_.get_future()),
           releaseFuture_(release_.get_future()),
           thread_([this] { run(); }) {}
@@ -104,52 +98,24 @@ private:
 #ifdef RUVIA_ENABLE_DATABASE
 int testResolvedDatabaseHostLists() {
     std::pmr::monotonic_buffer_resource memory;
-    const std::array endpoints{
-        asio::ip::tcp::endpoint(
-            asio::ip::make_address("127.0.0.1"),
-            3306),
-        asio::ip::tcp::endpoint(
-            asio::ip::make_address("::1"),
-            3306),
-        asio::ip::tcp::endpoint(
-            asio::ip::make_address("127.0.0.1"),
-            3306)};
-    const auto results = asio::ip::tcp::resolver::results_type::create(
-        endpoints.begin(),
-        endpoints.end(),
-        "database.internal",
-        "3306");
-    const auto addresses = ruvia::detail::collectDbResolvedAddresses(
-        results,
-        &memory);
-    if (addresses.size() != 2 || addresses[0] != "127.0.0.1" ||
-        addresses[1] != "::1") {
+    const std::array endpoints{asio::ip::tcp::endpoint(asio::ip::make_address("127.0.0.1"), 3306), asio::ip::tcp::endpoint(asio::ip::make_address("::1"), 3306), asio::ip::tcp::endpoint(asio::ip::make_address("127.0.0.1"), 3306)};
+    const auto results = asio::ip::tcp::resolver::results_type::create(endpoints.begin(), endpoints.end(), "database.internal", "3306");
+    const auto addresses = ruvia::detail::collectDbResolvedAddresses(results, &memory);
+    if (addresses.size() != 2 || addresses[0] != "127.0.0.1" || addresses[1] != "::1") {
         return 1;
     }
 
-    const auto mariaHosts =
-        ruvia::detail::makeMariaDbResolvedHostList(addresses, &memory);
+    const auto mariaHosts = ruvia::detail::makeMariaDbResolvedHostList(addresses, &memory);
     if (mariaHosts != "127.0.0.1,[::1]") {
         return 2;
     }
-    const auto singleMariaIpv6 =
-        ruvia::detail::makeMariaDbResolvedHostList(
-            std::span(addresses).subspan(1, 1),
-            &memory);
+    const auto singleMariaIpv6 = ruvia::detail::makeMariaDbResolvedHostList(std::span(addresses).subspan(1, 1), &memory);
     if (singleMariaIpv6 != "::1") {
         return 3;
     }
 
-    const auto postgresHosts =
-        ruvia::detail::makePostgreSqlResolvedHostList(
-            "database.internal",
-            addresses,
-            &memory);
-    return postgresHosts.hosts ==
-               "database.internal,database.internal" &&
-            postgresHosts.addresses == "127.0.0.1,::1"
-        ? 0
-        : 4;
+    const auto postgresHosts = ruvia::detail::makePostgreSqlResolvedHostList("database.internal", addresses, &memory);
+    return postgresHosts.hosts == "database.internal,database.internal" && postgresHosts.addresses == "127.0.0.1,::1" ? 0 : 4;
 }
 #endif
 
@@ -160,16 +126,11 @@ int testWorkerAffinityAndAutomaticShutdown() {
     std::promise<std::exception_ptr> completed;
     auto completedFuture = completed.get_future();
     auto options = ruvia::DataAccessOptions{};
-    options.failureHandler = [&completed](std::exception_ptr failure) {
-        completed.set_value(std::move(failure));
-    };
+    options.failureHandler = [&completed](std::exception_ptr failure) { completed.set_value(std::move(failure)); };
     ruvia::DataAccessService service(loop, std::move(options));
 
     try {
-        (void)service.post(
-            [](ruvia::DataAccessContext&) -> ruvia::Task<void> {
-                co_return;
-            });
+        (void)service.post([](ruvia::DataAccessContext&) -> ruvia::Task<void> { co_return; });
         return 1;
     } catch (const std::logic_error&) {
     }
@@ -182,46 +143,36 @@ int testWorkerAffinityAndAutomaticShutdown() {
         service.connect().get();
         return 2;
     } catch (const std::logic_error& error) {
-        if (std::string_view(error.what()) !=
-            "data access service can only connect once") {
+        if (std::string_view(error.what()) != "data access service can only connect once") {
             throw;
         }
     }
 
     std::atomic_bool contextRanOnWorker{false};
-    const auto posted = service.post(
-        [&completed, &contextRanOnWorker, &service](
-            ruvia::DataAccessContext& context) -> ruvia::Task<void> {
-            contextRanOnWorker.store(
-                context.worker().isCurrent() &&
-                    context.worker().id() == service.worker().id() &&
-                    context.resource() != nullptr &&
-                    !context.stopToken().stopRequested(),
-                std::memory_order_release);
+    const auto posted = service.post([&completed, &contextRanOnWorker, &service](ruvia::DataAccessContext& context) -> ruvia::Task<void> {
+        contextRanOnWorker.store(context.worker().isCurrent() && context.worker().id() == service.worker().id() && context.resource() != nullptr && !context.stopToken().stopRequested(), std::memory_order_release);
 
 #ifdef RUVIA_ENABLE_DATABASE
-            try {
-                (void)context.db();
-                throw std::runtime_error(
-                    "an unconfigured worker database unexpectedly resolved");
-            } catch (const std::logic_error&) {
-            }
+        try {
+            (void)context.db();
+            throw std::runtime_error("an unconfigured worker database unexpectedly resolved");
+        } catch (const std::logic_error&) {
+        }
 #endif
 #ifdef RUVIA_ENABLE_REDIS
-            try {
-                (void)context.redis();
-                throw std::runtime_error(
-                    "an unconfigured worker redis pool unexpectedly resolved");
-            } catch (const ruvia::RedisError& error) {
-                if (error.code() != ruvia::RedisError::Code::kNotConfigured) {
-                    throw;
-                }
+        try {
+            (void)context.redis();
+            throw std::runtime_error("an unconfigured worker redis pool unexpectedly resolved");
+        } catch (const ruvia::RedisError& error) {
+            if (error.code() != ruvia::RedisError::Code::kNotConfigured) {
+                throw;
             }
+        }
 #endif
 
-            completed.set_value(nullptr);
-            co_return;
-        });
+        completed.set_value(nullptr);
+        co_return;
+    });
     if (!posted.accepted()) {
         return 3;
     }
@@ -233,18 +184,12 @@ int testWorkerAffinityAndAutomaticShutdown() {
         std::rethrow_exception(failure);
     }
     const auto stats = service.stats();
-    return contextRanOnWorker.load(std::memory_order_acquire) &&
-            stats.accepted == 1 && stats.completed == 1 &&
-            stats.failed == 0 && stats.outstanding == 0
-        ? 0
-        : 4;
+    return contextRanOnWorker.load(std::memory_order_acquire) && stats.accepted == 1 && stats.completed == 1 && stats.failed == 0 && stats.outstanding == 0 ? 0 : 4;
 }
 
 int testApplicationOwnedEventLoop() {
     asio::io_context ioContext;
-    auto attachment = ruvia::attachEventLoop(
-        ioContext,
-        {.mailboxCapacity = 4});
+    auto attachment = ruvia::attachEventLoop(ioContext, {.mailboxCapacity = 4});
     ruvia::DataAccessService service(attachment.loop());
 
     auto ready = service.connect();
@@ -255,20 +200,14 @@ int testApplicationOwnedEventLoop() {
     std::exception_ptr failure;
     try {
         ready.get();
-        if (service.post([&ranOnAttachedWorker](
-                ruvia::DataAccessContext& context) -> ruvia::Task<void> {
-                ranOnAttachedWorker.set_value(
-                    context.worker().isCurrent() &&
-                    context.resource() != nullptr &&
-                    !context.stopToken().stopRequested());
+        if (service.post([&ranOnAttachedWorker](ruvia::DataAccessContext& context) -> ruvia::Task<void> {
+                ranOnAttachedWorker.set_value(context.worker().isCurrent() && context.resource() != nullptr && !context.stopToken().stopRequested());
                 co_return;
             }) != ruvia::PostStatus::kAccepted) {
-            throw std::runtime_error(
-                "attached event loop rejected data access job");
+            throw std::runtime_error("attached event loop rejected data access job");
         }
         if (!ranFuture.get()) {
-            throw std::runtime_error(
-                "data access job did not run on attached event loop");
+            throw std::runtime_error("data access job did not run on attached event loop");
         }
     } catch (...) {
         failure = std::current_exception();
@@ -280,10 +219,7 @@ int testApplicationOwnedEventLoop() {
         std::rethrow_exception(failure);
     }
     const auto stats = service.stats();
-    return stats.accepted == 1 && stats.completed == 1 &&
-            stats.outstanding == 0
-        ? 0
-        : 1;
+    return stats.accepted == 1 && stats.completed == 1 && stats.outstanding == 0 ? 0 : 1;
 }
 
 int testExplicitClose() {
@@ -293,26 +229,19 @@ int testExplicitClose() {
     std::promise<std::exception_ptr> completed;
     auto completedFuture = completed.get_future();
     auto options = ruvia::DataAccessOptions{};
-    options.failureHandler = [&completed](std::exception_ptr failure) {
-        completed.set_value(std::move(failure));
-    };
+    options.failureHandler = [&completed](std::exception_ptr failure) { completed.set_value(std::move(failure)); };
     ruvia::DataAccessService service(loop, std::move(options));
     auto ready = service.connect();
     loops.start();
     ready.get();
 
     std::atomic_bool closed{false};
-    if (service.post(
-            [&service, &completed, &closed](
-                ruvia::DataAccessContext& context) -> ruvia::Task<void> {
-                service.close();
-                closed.store(
-                    service.worker().isCurrent() &&
-                        context.stopToken().stopRequested(),
-                    std::memory_order_release);
-                completed.set_value(nullptr);
-                co_return;
-            }) != ruvia::PostStatus::kAccepted) {
+    if (service.post([&service, &completed, &closed](ruvia::DataAccessContext& context) -> ruvia::Task<void> {
+            service.close();
+            closed.store(service.worker().isCurrent() && context.stopToken().stopRequested(), std::memory_order_release);
+            completed.set_value(nullptr);
+            co_return;
+        }) != ruvia::PostStatus::kAccepted) {
         return 1;
     }
 
@@ -320,20 +249,14 @@ int testExplicitClose() {
     if (failure != nullptr) {
         std::rethrow_exception(failure);
     }
-    if (service.post([](ruvia::DataAccessContext&) -> ruvia::Task<void> {
-            co_return;
-        }) != ruvia::PostStatus::kWorkerStopping) {
+    if (service.post([](ruvia::DataAccessContext&) -> ruvia::Task<void> { co_return; }) != ruvia::PostStatus::kWorkerStopping) {
         return 2;
     }
 
     loops.stop();
     loops.join();
     const auto stats = service.stats();
-    return closed.load(std::memory_order_acquire) &&
-            stats.accepted == 1 && stats.workerStopping == 1 &&
-            stats.completed == 1 && stats.outstanding == 0
-        ? 0
-        : 3;
+    return closed.load(std::memory_order_acquire) && stats.accepted == 1 && stats.workerStopping == 1 && stats.completed == 1 && stats.outstanding == 0 ? 0 : 3;
 }
 
 int testFailureReporting() {
@@ -354,11 +277,7 @@ int testFailureReporting() {
         loops.join();
     } catch (const std::runtime_error& error) {
         const auto stats = service.stats();
-        return std::string_view(error.what()) == "data access job failed" &&
-                stats.accepted == 1 && stats.completed == 1 &&
-                stats.failed == 1 && stats.outstanding == 0
-            ? 0
-            : 2;
+        return std::string_view(error.what()) == "data access job failed" && stats.accepted == 1 && stats.completed == 1 && stats.failed == 1 && stats.outstanding == 0 ? 0 : 2;
     }
     return 3;
 }
@@ -368,9 +287,7 @@ int testHandledFailureKeepsWorkerUsable() {
     std::promise<std::exception_ptr> failed;
     auto failedFuture = failed.get_future();
     auto options = ruvia::DataAccessOptions{};
-    options.failureHandler = [&failed](std::exception_ptr failure) {
-        failed.set_value(std::move(failure));
-    };
+    options.failureHandler = [&failed](std::exception_ptr failure) { failed.set_value(std::move(failure)); };
     ruvia::DataAccessService service(loops.loop(0), std::move(options));
 
     auto ready = service.connect();
@@ -386,16 +303,14 @@ int testHandledFailureKeepsWorkerUsable() {
     try {
         std::rethrow_exception(failedFuture.get());
     } catch (const std::runtime_error& error) {
-        if (std::string_view(error.what()) !=
-            "handled data access failure") {
+        if (std::string_view(error.what()) != "handled data access failure") {
             return 2;
         }
     }
 
     std::promise<void> recovered;
     auto recoveredFuture = recovered.get_future();
-    if (service.post([&recovered](
-            ruvia::DataAccessContext&) -> ruvia::Task<void> {
+    if (service.post([&recovered](ruvia::DataAccessContext&) -> ruvia::Task<void> {
             recovered.set_value();
             co_return;
         }) != ruvia::PostStatus::kAccepted) {
@@ -406,10 +321,7 @@ int testHandledFailureKeepsWorkerUsable() {
     loops.join();
 
     const auto stats = service.stats();
-    return stats.accepted == 2 && stats.completed == 2 &&
-            stats.failed == 1 && stats.outstanding == 0
-        ? 0
-        : 4;
+    return stats.accepted == 2 && stats.completed == 2 && stats.failed == 1 && stats.outstanding == 0 ? 0 : 4;
 }
 
 int testStopBeforeConnectPublishesClosedGate() {
@@ -421,27 +333,19 @@ int testStopBeforeConnectPublishesClosedGate() {
         service.connect().get();
         return 1;
     } catch (const std::runtime_error& error) {
-        if (std::string_view(error.what()) !=
-            "worker stopped before data integrations connected") {
+        if (std::string_view(error.what()) != "worker stopped before data integrations connected") {
             throw;
         }
     }
 
-    auto rejected = service.post(
-        [](ruvia::DataAccessContext&) -> ruvia::Task<void> {
-            co_return;
-        });
-    if (rejected != ruvia::PostStatus::kWorkerStopping ||
-        rejected.rejected() == nullptr) {
+    auto rejected = service.post([](ruvia::DataAccessContext&) -> ruvia::Task<void> { co_return; });
+    if (rejected != ruvia::PostStatus::kWorkerStopping || rejected.rejected() == nullptr) {
         return 2;
     }
 
     loops.join();
     const auto stats = service.stats();
-    return stats.accepted == 0 && stats.workerStopping == 1 &&
-            stats.outstanding == 0
-        ? 0
-        : 3;
+    return stats.accepted == 0 && stats.workerStopping == 1 && stats.outstanding == 0 ? 0 : 3;
 }
 
 #ifdef RUVIA_ENABLE_DATABASE
@@ -452,8 +356,7 @@ int testStopWhileDatabaseConnectWaits(ruvia::DbConfig config) {
 
     ruvia::EventLoopPool loops({.loopCount = 1, .mailboxCapacity = 2});
     auto options = ruvia::DataAccessOptions{};
-    options.databases.push_back(
-        ruvia::DataAccessDatabaseConfig{"default", std::move(config)});
+    options.databases.push_back(ruvia::DataAccessDatabaseConfig{"default", std::move(config)});
     ruvia::DataAccessService service(loops.loop(0), std::move(options));
 
     auto ready = service.connect();
@@ -462,8 +365,7 @@ int testStopWhileDatabaseConnectWaits(ruvia::DbConfig config) {
     loops.stop();
     loops.join();
 
-    if (ready.wait_for(std::chrono::seconds(0)) !=
-        std::future_status::ready) {
+    if (ready.wait_for(std::chrono::seconds(0)) != std::future_status::ready) {
         return 1;
     }
     try {
@@ -479,9 +381,7 @@ int testStopWhileDatabaseConnectWaits(ruvia::DbConfig config) {
 class SlowRedisReplyServer final {
 public:
     SlowRedisReplyServer()
-        : acceptor_(
-              ioContext_,
-              asio::ip::tcp::endpoint(asio::ip::tcp::v4(), 0)),
+        : acceptor_(ioContext_, asio::ip::tcp::endpoint(asio::ip::tcp::v4(), 0)),
           thread_([this] { run(); }) {}
 
     ~SlowRedisReplyServer() {
@@ -532,9 +432,7 @@ private:
 class DelayedRedisStartupServer final {
 public:
     DelayedRedisStartupServer()
-        : acceptor_(
-              ioContext_,
-              asio::ip::tcp::endpoint(asio::ip::tcp::v4(), 0)),
+        : acceptor_(ioContext_, asio::ip::tcp::endpoint(asio::ip::tcp::v4(), 0)),
           thread_([this] { run(); }) {}
 
     ~DelayedRedisStartupServer() {
@@ -546,28 +444,21 @@ public:
     }
 
     DelayedRedisStartupServer(const DelayedRedisStartupServer&) = delete;
-    DelayedRedisStartupServer& operator=(
-        const DelayedRedisStartupServer&) = delete;
+    DelayedRedisStartupServer& operator=(const DelayedRedisStartupServer&) = delete;
 
     [[nodiscard]] std::uint16_t port() const {
         return acceptor_.local_endpoint().port();
     }
 
 private:
-    [[nodiscard]] static bool readCommand(
-        asio::ip::tcp::socket& socket,
-        std::size_t bytes) noexcept {
+    [[nodiscard]] static bool readCommand(asio::ip::tcp::socket& socket, std::size_t bytes) noexcept {
         std::array<char, 64> command{};
         std::error_code error;
-        (void)asio::read(
-            socket,
-            asio::buffer(command.data(), bytes),
-            error);
+        (void)asio::read(socket, asio::buffer(command.data(), bytes), error);
         return !error;
     }
 
-    [[nodiscard]] static bool writeOk(
-        asio::ip::tcp::socket& socket) noexcept {
+    [[nodiscard]] static bool writeOk(asio::ip::tcp::socket& socket) noexcept {
         constexpr std::string_view response = "+OK\r\n";
         std::error_code error;
         (void)asio::write(socket, asio::buffer(response), error);
@@ -578,10 +469,8 @@ private:
         try {
             asio::ip::tcp::socket socket(ioContext_);
             acceptor_.accept(socket);
-            constexpr std::string_view auth =
-                "*2\r\n$4\r\nAUTH\r\n$6\r\nsecret\r\n";
-            constexpr std::string_view select =
-                "*2\r\n$6\r\nSELECT\r\n$1\r\n1\r\n";
+            constexpr std::string_view auth = "*2\r\n$4\r\nAUTH\r\n$6\r\nsecret\r\n";
+            constexpr std::string_view select = "*2\r\n$6\r\nSELECT\r\n$1\r\n1\r\n";
 
             if (!readCommand(socket, auth.size())) {
                 return;
@@ -611,8 +500,7 @@ int testStopWhileRedisConnectWaits() {
 
     ruvia::EventLoopPool loops({.loopCount = 1, .mailboxCapacity = 2});
     auto options = ruvia::DataAccessOptions{};
-    options.redis.push_back(
-        ruvia::DataAccessRedisConfig{"default", std::move(redis)});
+    options.redis.push_back(ruvia::DataAccessRedisConfig{"default", std::move(redis)});
     ruvia::DataAccessService service(loops.loop(0), std::move(options));
 
     auto ready = service.connect();
@@ -621,8 +509,7 @@ int testStopWhileRedisConnectWaits() {
     loops.stop();
     loops.join();
 
-    if (ready.wait_for(std::chrono::seconds(0)) !=
-        std::future_status::ready) {
+    if (ready.wait_for(std::chrono::seconds(0)) != std::future_status::ready) {
         return 1;
     }
     try {
@@ -644,8 +531,7 @@ int testRedisCommandUsesOneAbsoluteTimeout() {
     ruvia::EventLoopPool loops({.loopCount = 1, .mailboxCapacity = 2});
     auto options = ruvia::DataAccessOptions{};
     options.maintenanceInterval = std::chrono::milliseconds(25);
-    options.redis.push_back(
-        ruvia::DataAccessRedisConfig{"default", std::move(redis)});
+    options.redis.push_back(ruvia::DataAccessRedisConfig{"default", std::move(redis)});
     ruvia::DataAccessService service(loops.loop(0), std::move(options));
 
     auto ready = service.connect();
@@ -654,19 +540,15 @@ int testRedisCommandUsesOneAbsoluteTimeout() {
 
     std::promise<int> completed;
     auto completedFuture = completed.get_future();
-    const auto posted = service.post(
-        [&completed](ruvia::DataAccessContext& context) -> ruvia::Task<void> {
-            try {
-                auto redisHandle = context.redis();
-                co_await redisHandle.ping();
-                completed.set_value(1);
-            } catch (const ruvia::RedisError& error) {
-                completed.set_value(
-                    error.code() == ruvia::RedisError::Code::kTimeout
-                    ? 0
-                    : 2);
-            }
-        });
+    const auto posted = service.post([&completed](ruvia::DataAccessContext& context) -> ruvia::Task<void> {
+        try {
+            auto redisHandle = context.redis();
+            co_await redisHandle.ping();
+            completed.set_value(1);
+        } catch (const ruvia::RedisError& error) {
+            completed.set_value(error.code() == ruvia::RedisError::Code::kTimeout ? 0 : 2);
+        }
+    });
     if (!posted.accepted()) {
         loops.stop();
         loops.join();
@@ -693,8 +575,7 @@ int testRedisConnectTimeoutIncludesStartupCommands() {
     ruvia::EventLoopPool loops({.loopCount = 1, .mailboxCapacity = 2});
     auto options = ruvia::DataAccessOptions{};
     options.maintenanceInterval = std::chrono::milliseconds(25);
-    options.redis.push_back(
-        ruvia::DataAccessRedisConfig{"default", std::move(redis)});
+    options.redis.push_back(ruvia::DataAccessRedisConfig{"default", std::move(redis)});
     ruvia::DataAccessService service(loops.loop(0), std::move(options));
 
     auto ready = service.connect();
@@ -725,8 +606,7 @@ int testConfigurationValidation() {
     auto invalidInterval = ruvia::DataAccessOptions{};
     invalidInterval.maintenanceInterval = std::chrono::milliseconds(0);
     try {
-        ruvia::DataAccessService invalid(
-            loops.loop(0), std::move(invalidInterval));
+        ruvia::DataAccessService invalid(loops.loop(0), std::move(invalidInterval));
         return 2;
     } catch (const std::invalid_argument&) {
     }
@@ -735,11 +615,9 @@ int testConfigurationValidation() {
     auto invalidDatabase = ruvia::DataAccessOptions{};
     auto database = ruvia::DbConfig::mariaDb();
     database.port = 0;
-    invalidDatabase.databases.push_back(
-        ruvia::DataAccessDatabaseConfig{"default", std::move(database)});
+    invalidDatabase.databases.push_back(ruvia::DataAccessDatabaseConfig{"default", std::move(database)});
     try {
-        ruvia::DataAccessService invalid(
-            loops.loop(0), std::move(invalidDatabase));
+        ruvia::DataAccessService invalid(loops.loop(0), std::move(invalidDatabase));
         return 3;
     } catch (const std::invalid_argument&) {
     }
@@ -749,11 +627,9 @@ int testConfigurationValidation() {
     auto invalidRedis = ruvia::DataAccessOptions{};
     auto redis = ruvia::RedisConfig{};
     redis.port = 0;
-    invalidRedis.redis.push_back(
-        ruvia::DataAccessRedisConfig{"default", std::move(redis)});
+    invalidRedis.redis.push_back(ruvia::DataAccessRedisConfig{"default", std::move(redis)});
     try {
-        ruvia::DataAccessService invalid(
-            loops.loop(0), std::move(invalidRedis));
+        ruvia::DataAccessService invalid(loops.loop(0), std::move(invalidRedis));
         return 4;
     } catch (const std::invalid_argument&) {
     }
@@ -774,8 +650,7 @@ int main() {
         if (const auto result = testConfigurationValidation(); result != 0) {
             return 10 + result;
         }
-        if (const auto result = testWorkerAffinityAndAutomaticShutdown();
-            result != 0) {
+        if (const auto result = testWorkerAffinityAndAutomaticShutdown(); result != 0) {
             return 20 + result;
         }
         if (const auto result = testApplicationOwnedEventLoop(); result != 0) {
@@ -787,23 +662,19 @@ int main() {
         if (const auto result = testFailureReporting(); result != 0) {
             return 40 + result;
         }
-        if (const auto result = testHandledFailureKeepsWorkerUsable();
-            result != 0) {
+        if (const auto result = testHandledFailureKeepsWorkerUsable(); result != 0) {
             return 50 + result;
         }
-        if (const auto result = testStopBeforeConnectPublishesClosedGate();
-            result != 0) {
+        if (const auto result = testStopBeforeConnectPublishesClosedGate(); result != 0) {
             return 60 + result;
         }
 #ifdef RUVIA_ENABLE_MARIADB
-        if (const auto result = testStopWhileDatabaseConnectWaits(
-                ruvia::DbConfig::mariaDb()); result != 0) {
+        if (const auto result = testStopWhileDatabaseConnectWaits(ruvia::DbConfig::mariaDb()); result != 0) {
             return 70 + result;
         }
 #endif
 #ifdef RUVIA_ENABLE_POSTGRESQL
-        if (const auto result = testStopWhileDatabaseConnectWaits(
-                ruvia::DbConfig::postgreSql()); result != 0) {
+        if (const auto result = testStopWhileDatabaseConnectWaits(ruvia::DbConfig::postgreSql()); result != 0) {
             return 80 + result;
         }
 #endif
@@ -811,13 +682,10 @@ int main() {
         if (const auto result = testStopWhileRedisConnectWaits(); result != 0) {
             return 90 + result;
         }
-        if (const auto result = testRedisCommandUsesOneAbsoluteTimeout();
-            result != 0) {
+        if (const auto result = testRedisCommandUsesOneAbsoluteTimeout(); result != 0) {
             return 95 + result;
         }
-        if (const auto result =
-                testRedisConnectTimeoutIncludesStartupCommands();
-            result != 0) {
+        if (const auto result = testRedisConnectTimeoutIncludesStartupCommands(); result != 0) {
             return 97 + result;
         }
 #endif

@@ -8,6 +8,7 @@
 
 namespace {
 
+using ruvia::classifyHttpMethod;
 using ruvia::HttpKnownMethod;
 using ruvia::HttpParseError;
 using ruvia::httpParseProtocolError;
@@ -16,7 +17,6 @@ using ruvia::isValidHttpHeaderValue;
 using ruvia::isValidHttpMethodToken;
 using ruvia::isValidHttpStatusText;
 using ruvia::knownHttpMethodToken;
-using ruvia::classifyHttpMethod;
 
 }  // namespace
 
@@ -60,17 +60,14 @@ RUVIA_TEST(http_method_safety_and_idempotency_follow_wire_semantics) {
         RUVIA_CHECK(!ruvia::isHttpMethodSafe(method));
         RUVIA_CHECK(ruvia::isHttpMethodIdempotent(method));
     }
-    for (const std::string_view method : {
-             "POST", "PATCH", "CONNECT", "CUSTOM", "get"}) {
+    for (const std::string_view method : {"POST", "PATCH", "CONNECT", "CUSTOM", "get"}) {
         RUVIA_CHECK(!ruvia::isHttpMethodSafe(method));
         RUVIA_CHECK(!ruvia::isHttpMethodIdempotent(method));
     }
 }
 
 RUVIA_TEST(http_known_method_token_round_trips) {
-    const HttpKnownMethod methods[] = {
-        HttpKnownMethod::kGet, HttpKnownMethod::kPost, HttpKnownMethod::kPut, HttpKnownMethod::kDelete,
-        HttpKnownMethod::kPatch, HttpKnownMethod::kHead, HttpKnownMethod::kOptions, HttpKnownMethod::kConnect};
+    const HttpKnownMethod methods[] = {HttpKnownMethod::kGet, HttpKnownMethod::kPost, HttpKnownMethod::kPut, HttpKnownMethod::kDelete, HttpKnownMethod::kPatch, HttpKnownMethod::kHead, HttpKnownMethod::kOptions, HttpKnownMethod::kConnect};
     for (const auto method : methods) {
         RUVIA_CHECK(classifyHttpMethod(knownHttpMethodToken(method)) == method);
     }

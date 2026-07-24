@@ -56,12 +56,5 @@ int main() {
     documentRoot.staticOptions.indexFile = "index.html";
     documentRoot.staticOptions.cacheControl = "public, max-age=3600";
 
-    ruvia::app()
-        .setListenAddress("0.0.0.0")
-        .setServerTopology(ruvia::ServerTopology::http(8083))
-        .setWorkersPerListener(2)
-        .setSignalShutdown(true)
-        .setCompression(ruvia::CompressionConfig{.minBytes = 128})
-        .setDocumentRoot(std::move(documentRoot))
-        .run();
+    ruvia::app().setListenAddress("0.0.0.0").setServerTopology(ruvia::ServerTopology::http(8083)).setWorkersPerListener(2).setSignalShutdown(true).setCompression(ruvia::CompressionConfig{.minBytes = 128}).setDocumentRoot(std::move(documentRoot)).run();
 }

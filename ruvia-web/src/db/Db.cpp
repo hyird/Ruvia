@@ -12,17 +12,11 @@
 
 namespace ruvia {
 
-Task<QueryResult> detail::MariaDbPool::execute(
-    std::pmr::string sql,
-    std::pmr::vector<DbValue> params,
-    std::pmr::memory_resource* resource) {
+Task<QueryResult> detail::MariaDbPool::execute(std::pmr::string sql, std::pmr::vector<DbValue> params, std::pmr::memory_resource* resource) {
     return executeDbQuery(*this, std::move(sql), std::move(params), resource);
 }
 
-Task<DbStreamResult> detail::MariaDbPool::stream(
-    std::pmr::string sql,
-    std::pmr::vector<DbValue> params,
-    std::pmr::memory_resource* resource) {
+Task<DbStreamResult> detail::MariaDbPool::stream(std::pmr::string sql, std::pmr::vector<DbValue> params, std::pmr::memory_resource* resource) {
     if (sql.empty()) {
         throw std::invalid_argument("SQL must not be empty");
     }
@@ -37,11 +31,7 @@ Task<DbStreamResult> detail::MariaDbPool::stream(
         OperationTimeout deadline(config_.queryTimeout);
         std::pmr::string interpolatedSql(detail::pmrResourceOrDefault(resource));
         if (!params.empty()) {
-            interpolatedSql = interpolateSql(
-                *slot.connection,
-                std::string_view(sql),
-                std::span<const DbValue>(params),
-                resource);
+            interpolatedSql = interpolateSql(*slot.connection, std::string_view(sql), std::span<const DbValue>(params), resource);
             sql = std::move(interpolatedSql);
         }
 
@@ -63,10 +53,7 @@ Task<DbStreamResult> detail::MariaDbPool::stream(
     }
 }
 
-Task<std::optional<DbRow>> detail::MariaDbPool::readStreamRow(
-    std::size_t slot,
-    void* result,
-    std::pmr::memory_resource* resource) {
+Task<std::optional<DbRow>> detail::MariaDbPool::readStreamRow(std::size_t slot, void* result, std::pmr::memory_resource* resource) {
     if (slot >= slots_.size() || result == nullptr) {
         co_return std::nullopt;
     }
@@ -77,10 +64,7 @@ Task<std::optional<DbRow>> detail::MariaDbPool::readStreamRow(
         MYSQL_ROW row = nullptr;
         int status = mysql_fetch_row_start(&row, rawResult);
         while (status != 0) {
-            status = mysql_fetch_row_cont(
-                &row,
-                rawResult,
-                co_await waitForMysql(slots_[slot], status, deadline));
+            status = mysql_fetch_row_cont(&row, rawResult, co_await waitForMysql(slots_[slot], status, deadline));
         }
 
         if (row == nullptr) {
@@ -98,8 +82,7 @@ Task<std::optional<DbRow>> detail::MariaDbPool::readStreamRow(
                 outputFields.push_back(DbResultAccess::nullField(resource));
                 continue;
             }
-            outputFields.push_back(
-                DbResultAccess::ownedField(std::string_view(row[i], lengths[i]), resource));
+            outputFields.push_back(DbResultAccess::ownedField(std::string_view(row[i], lengths[i]), resource));
         }
         co_return outputRow;
     } catch (...) {
@@ -109,10 +92,7 @@ Task<std::optional<DbRow>> detail::MariaDbPool::readStreamRow(
     }
 }
 
-Task<void> detail::MariaDbPool::closeStream(
-    std::size_t slot,
-    void* result,
-    std::pmr::memory_resource*) {
+Task<void> detail::MariaDbPool::closeStream(std::size_t slot, void* result, std::pmr::memory_resource*) {
     if (slot >= slots_.size() || result == nullptr) {
         co_return;
     }
@@ -122,9 +102,7 @@ Task<void> detail::MariaDbPool::closeStream(
         OperationTimeout deadline(config_.queryTimeout);
         int status = mysql_free_result_start(rawResult);
         while (status != 0) {
-            status = mysql_free_result_cont(
-                rawResult,
-                co_await waitForMysql(slots_[slot], status, deadline));
+            status = mysql_free_result_cont(rawResult, co_await waitForMysql(slots_[slot], status, deadline));
         }
         releaseSlot(slot);
     } catch (...) {
@@ -142,20 +120,11 @@ void detail::MariaDbPool::abortStream(std::size_t slot, void*) noexcept {
     releaseSlot(slot);
 }
 
-Task<QueryResult> detail::MariaDbPool::executeOnTransactionSlot(
-    std::size_t slot,
-    std::pmr::string sql,
-    std::pmr::vector<DbValue> params,
-    std::pmr::memory_resource* resource) {
-    return detail::executeOnDbTransactionSlot(
-        *this, slot, std::move(sql), std::move(params), resource);
+Task<QueryResult> detail::MariaDbPool::executeOnTransactionSlot(std::size_t slot, std::pmr::string sql, std::pmr::vector<DbValue> params, std::pmr::memory_resource* resource) {
+    return detail::executeOnDbTransactionSlot(*this, slot, std::move(sql), std::move(params), resource);
 }
 
-Task<QueryResult> detail::MariaDbPool::executeOnSlot(
-    ConnectionSlot& slot,
-    std::string_view sql,
-    std::span<const DbValue> params,
-    std::pmr::memory_resource* resource) {
+Task<QueryResult> detail::MariaDbPool::executeOnSlot(ConnectionSlot& slot, std::string_view sql, std::span<const DbValue> params, std::pmr::memory_resource* resource) {
     if (sql.empty()) {
         throw std::invalid_argument("SQL must not be empty");
     }
@@ -166,11 +135,7 @@ Task<QueryResult> detail::MariaDbPool::executeOnSlot(
 
     std::pmr::string interpolatedSql(detail::pmrResourceOrDefault(resource));
     if (!params.empty()) {
-        interpolatedSql = interpolateSql(
-            *slot.connection,
-            sql,
-            params,
-            resource);
+        interpolatedSql = interpolateSql(*slot.connection, sql, params, resource);
         sql = interpolatedSql;
     }
 
@@ -178,12 +143,8 @@ Task<QueryResult> detail::MariaDbPool::executeOnSlot(
     co_await runMysqlQuery(slot, sql, deadline);
 
     auto result = DbResultAccess::makeResult(resource);
-    DbResultAccess::setAffectedRows(
-        result,
-        static_cast<std::uint64_t>(mysql_affected_rows(&connection)));
-    DbResultAccess::setLastInsertId(
-        result,
-        static_cast<std::uint64_t>(mysql_insert_id(&connection)));
+    DbResultAccess::setAffectedRows(result, static_cast<std::uint64_t>(mysql_affected_rows(&connection)));
+    DbResultAccess::setLastInsertId(result, static_cast<std::uint64_t>(mysql_insert_id(&connection)));
 
     auto* rawResult = co_await storeMysqlResult(slot, deadline);
     if (rawResult == nullptr) {
@@ -208,26 +169,20 @@ Task<QueryResult> detail::MariaDbPool::executeOnSlot(
                 resultFields.push_back(DbResultAccess::nullField(resource));
                 continue;
             }
-            resultFields.push_back(
-                DbResultAccess::borrowedField(std::string_view(row[i], lengths[i]), resource));
+            resultFields.push_back(DbResultAccess::borrowedField(std::string_view(row[i], lengths[i]), resource));
         }
-        resultRows.push_back(
-            DbResultAccess::borrowedRow(resultFields.data() + rowStart, fieldCount, resource));
+        resultRows.push_back(DbResultAccess::borrowedRow(resultFields.data() + rowStart, fieldCount, resource));
     }
 
     co_return result;
 }
 
-Task<void> detail::MariaDbPool::executeControl(
-    ConnectionSlot& slot,
-    std::string_view sql,
-    std::pmr::memory_resource* resource) {
+Task<void> detail::MariaDbPool::executeControl(ConnectionSlot& slot, std::string_view sql, std::pmr::memory_resource* resource) {
     (void)co_await executeOnSlot(slot, sql, std::span<const DbValue>(), resource);
     co_return;
 }
 
-Task<DbTransaction> detail::MariaDbPool::beginTransaction(
-    std::pmr::memory_resource* resource) {
+Task<DbTransaction> detail::MariaDbPool::beginTransaction(std::pmr::memory_resource* resource) {
     const auto slotIndex = co_await acquireSlot();
     try {
         auto& slot = slots_[slotIndex];

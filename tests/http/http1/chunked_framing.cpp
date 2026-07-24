@@ -11,12 +11,9 @@
 #include <utility>
 
 template <typename T>
-concept ExposesRvalueHttp1ChunkHeaderView = requires(T&& header) {
-    std::move(header).view();
-};
+concept ExposesRvalueHttp1ChunkHeaderView = requires(T&& header) { std::move(header).view(); };
 
-static_assert(!ExposesRvalueHttp1ChunkHeaderView<
-    ruvia::detail::Http1ChunkHeader>);
+static_assert(!ExposesRvalueHttp1ChunkHeaderView<ruvia::detail::Http1ChunkHeader>);
 
 RUVIA_TEST(http1_chunk_header_encodes_lowercase_hex_and_crlf) {
     const ruvia::detail::Http1ChunkHeader zero(0);
@@ -38,33 +35,25 @@ RUVIA_TEST(http1_chunk_header_buffer_covers_size_t_max) {
 
 RUVIA_TEST(http1_chunk_trailer_serialization_is_protocol_owned) {
     std::pmr::string trailers(std::pmr::get_default_resource());
-    const std::array<ruvia::HttpHeaderView, 2> fields{{
-        {"Digest", "sha-256=value"},
-        {"X-Trace", "abc"}}};
+    const std::array<ruvia::HttpHeaderView, 2> fields{{{"Digest", "sha-256=value"}, {"X-Trace", "abc"}}};
     const auto result = ruvia::detail::httpResponseTrailerSection(fields);
     RUVIA_CHECK(result.section() != nullptr);
     ruvia::detail::appendHttp1TrailerSection(trailers, *result.section());
-    RUVIA_CHECK_EQ(
-        std::string_view(trailers),
-        std::string_view("Digest: sha-256=value\r\nX-Trace: abc\r\n"));
+    RUVIA_CHECK_EQ(std::string_view(trailers), std::string_view("Digest: sha-256=value\r\nX-Trace: abc\r\n"));
     RUVIA_CHECK_EQ(ruvia::detail::kHttp1LastChunkPrefix, std::string_view("0\r\n"));
     RUVIA_CHECK_EQ(ruvia::detail::kHttp1TrailerSectionTerminator, std::string_view("\r\n"));
 }
 
 RUVIA_TEST(http1_chunk_trailer_serializer_requires_validated_section) {
     std::pmr::string trailers(std::pmr::get_default_resource());
-    const std::array<ruvia::HttpHeaderView, 1> forbidden{{
-        {"Content-Length", "5"}}};
-    const auto forbiddenResult =
-        ruvia::detail::httpResponseTrailerSection(forbidden);
+    const std::array<ruvia::HttpHeaderView, 1> forbidden{{{"Content-Length", "5"}}};
+    const auto forbiddenResult = ruvia::detail::httpResponseTrailerSection(forbidden);
     RUVIA_CHECK(forbiddenResult.section() == nullptr);
     RUVIA_CHECK(forbiddenResult.failure() != nullptr);
     RUVIA_CHECK(trailers.empty());
 
-    const std::array<ruvia::HttpHeaderView, 1> invalid{{
-        {"X-Trace", std::string_view("a\r\nb", 4)}}};
-    const auto invalidResult =
-        ruvia::detail::httpResponseTrailerSection(invalid);
+    const std::array<ruvia::HttpHeaderView, 1> invalid{{{"X-Trace", std::string_view("a\r\nb", 4)}}};
+    const auto invalidResult = ruvia::detail::httpResponseTrailerSection(invalid);
     RUVIA_CHECK(invalidResult.section() == nullptr);
     RUVIA_CHECK(invalidResult.failure() != nullptr);
     RUVIA_CHECK(trailers.empty());

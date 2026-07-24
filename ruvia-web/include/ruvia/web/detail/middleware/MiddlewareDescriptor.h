@@ -51,12 +51,7 @@ private:
     friend ControllerMiddlewareDescriptor makeMiddlewareDescriptor();
 
     constexpr ControllerMiddlewareDescriptor() noexcept = default;
-    constexpr ControllerMiddlewareDescriptor(
-        Invoke invoke,
-        Create create,
-        Destroy destroy,
-        const void* validatedModelTypeKey,
-        bool usesRouteRateLimit) noexcept
+    constexpr ControllerMiddlewareDescriptor(Invoke invoke, Create create, Destroy destroy, const void* validatedModelTypeKey, bool usesRouteRateLimit) noexcept
         : invoke_(invoke),
           create_(create),
           destroy_(destroy),

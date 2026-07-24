@@ -11,11 +11,10 @@
 
 namespace ruvia {
 
-DataAccessContext::DataAccessContext(
-    std::shared_ptr<detail::DataAccessServiceState> state) noexcept
+DataAccessContext::DataAccessContext(std::shared_ptr<detail::DataAccessServiceState> state) noexcept
     : state_(std::move(state)) {}
 
-const WorkerHandle& DataAccessContext::worker() const & noexcept {
+const WorkerHandle& DataAccessContext::worker() const& noexcept {
     return state_->worker();
 }
 
@@ -35,8 +34,7 @@ DbHandle DataAccessContext::db() const {
 
 DbHandle DataAccessContext::db(std::string_view alias) const {
     state_->requireConnectedOnWorker();
-    return state_->access().databases().get(
-        alias, resource(), operationScope_);
+    return state_->access().databases().get(alias, resource(), operationScope_);
 }
 #endif
 
@@ -48,16 +46,12 @@ RedisHandle DataAccessContext::redis() const {
 
 RedisHandle DataAccessContext::redis(std::string_view alias) const {
     state_->requireConnectedOnWorker();
-    return state_->access().redis().get(
-        alias, resource(), operationScope_);
+    return state_->access().redis().get(alias, resource(), operationScope_);
 }
 #endif
 
-DataAccessService::DataAccessService(
-    EventLoop loop,
-    DataAccessOptions options)
-    : state_(std::make_shared<detail::DataAccessServiceState>(
-          std::move(loop), std::move(options))) {
+DataAccessService::DataAccessService(EventLoop loop, DataAccessOptions options)
+    : state_(std::make_shared<detail::DataAccessServiceState>(std::move(loop), std::move(options))) {
     state_->bindStop();
 }
 
@@ -69,15 +63,13 @@ std::future<void> DataAccessService::connect() {
     return state_->scheduleConnect();
 }
 
-DataAccessPostResult DataAccessService::postTask(
-    MoveOnlyFunction<Task<void>(DataAccessContext&)> task) {
+DataAccessPostResult DataAccessService::postTask(MoveOnlyFunction<Task<void>(DataAccessContext&)> task) {
     return state_->post(std::move(task));
 }
 
 void DataAccessService::close() {
     if (!state_->worker().isCurrent()) {
-        throw std::logic_error(
-            "data access service must close on its bound event loop");
+        throw std::logic_error("data access service must close on its bound event loop");
     }
     state_->closeOnWorker();
 }
@@ -86,7 +78,7 @@ DataAccessStats DataAccessService::stats() const noexcept {
     return state_->stats();
 }
 
-const WorkerHandle& DataAccessService::worker() const & noexcept {
+const WorkerHandle& DataAccessService::worker() const& noexcept {
     return state_->worker();
 }
 

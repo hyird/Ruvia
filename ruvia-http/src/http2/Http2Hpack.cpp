@@ -18,11 +18,7 @@ void HpackDecoder::setMaxDynamicTableSize(std::size_t bytes) {
     evictDynamic();
 }
 
-HpackDecoder::StepResult HpackDecoder::decodeInteger(
-    const unsigned char*& cursor,
-    const unsigned char* end,
-    std::uint8_t prefixBits,
-    std::uint32_t& value) const noexcept {
+HpackDecoder::StepResult HpackDecoder::decodeInteger(const unsigned char*& cursor, const unsigned char* end, std::uint8_t prefixBits, std::uint32_t& value) const noexcept {
     if (cursor == end || prefixBits == 0 || prefixBits > 8) {
         return HpackDecodeError::kNeedMore;
     }
@@ -61,11 +57,7 @@ HpackDecoder::StepResult HpackDecoder::decodeInteger(
     }
 }
 
-HpackDecoder::StepResult HpackDecoder::decodeString(
-    const unsigned char*& cursor,
-    const unsigned char* end,
-    std::pmr::string& scratch,
-    std::string_view& value) {
+HpackDecoder::StepResult HpackDecoder::decodeString(const unsigned char*& cursor, const unsigned char* end, std::pmr::string& scratch, std::string_view& value) {
     if (cursor == end) {
         return HpackDecodeError::kNeedMore;
     }
@@ -92,14 +84,7 @@ HpackDecoder::StepResult HpackDecoder::decodeString(
     return std::nullopt;
 }
 
-HpackDecoder::StepResult HpackDecoder::decodeLiteralHeader(
-    const unsigned char*& cursor,
-    const unsigned char* end,
-    std::uint8_t nameIndexPrefixBits,
-    bool indexIntoDynamic,
-    void* target,
-    HeaderCallback callback,
-    bool& rejected) {
+HpackDecoder::StepResult HpackDecoder::decodeLiteralHeader(const unsigned char*& cursor, const unsigned char* end, std::uint8_t nameIndexPrefixBits, bool indexIntoDynamic, void* target, HeaderCallback callback, bool& rejected) {
     std::uint32_t nameIndex = 0;
     if (const auto error = decodeInteger(cursor, end, nameIndexPrefixBits, nameIndex); error.has_value()) {
         return error;
@@ -176,8 +161,7 @@ HpackDecodeResult HpackDecoder::decode(std::string_view block, void* target, Hea
         }
 
         if ((first & 0x40U) != 0) {
-            if (const auto error = decodeLiteralHeader(cursor, end, 6, true, target, callback, rejected);
-                error.has_value()) {
+            if (const auto error = decodeLiteralHeader(cursor, end, 6, true, target, callback, rejected); error.has_value()) {
                 return HpackDecodeResult(*error);
             }
             sawHeader = true;
@@ -196,8 +180,7 @@ HpackDecodeResult HpackDecoder::decode(std::string_view block, void* target, Hea
             // of a field block. When two are present, the first is the
             // smallest intervening maximum and the second is the final
             // maximum, so the second value cannot be lower than the first.
-            if (size > allowedDynamicSize_ ||
-                (sizeUpdateCount == 1 && size < firstSizeUpdate)) {
+            if (size > allowedDynamicSize_ || (sizeUpdateCount == 1 && size < firstSizeUpdate)) {
                 return HpackDecodeResult(HpackDecodeError::kDynamicTableSize);
             }
             if (sizeUpdateCount == 0) {
@@ -210,8 +193,7 @@ HpackDecodeResult HpackDecoder::decode(std::string_view block, void* target, Hea
         }
 
         if ((first & 0xf0U) == 0x00U || (first & 0xf0U) == 0x10U) {
-            if (const auto error = decodeLiteralHeader(cursor, end, 4, false, target, callback, rejected);
-                error.has_value()) {
+            if (const auto error = decodeLiteralHeader(cursor, end, 4, false, target, callback, rejected); error.has_value()) {
                 return HpackDecodeResult(*error);
             }
             sawHeader = true;
@@ -223,9 +205,7 @@ HpackDecodeResult HpackDecoder::decode(std::string_view block, void* target, Hea
 
     // The whole block decoded and the dynamic table is consistent; surface a late
     // callback rejection now so the owner RST_STREAMs without desyncing the connection.
-    return rejected
-        ? HpackDecodeResult(HpackDecodeError::kCallbackRejected)
-        : HpackDecodeResult();
+    return rejected ? HpackDecodeResult(HpackDecodeError::kCallbackRejected) : HpackDecodeResult();
 }
 
 }  // namespace ruvia::detail

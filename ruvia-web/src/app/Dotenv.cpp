@@ -16,13 +16,7 @@ namespace {
 
 template <typename Variables>
 [[nodiscard]] auto findVariableSlot(Variables& variables, std::string_view name) noexcept {
-    return std::ranges::lower_bound(
-        variables,
-        name,
-        std::ranges::less{},
-        [](const detail::EnvVariable& variable) noexcept {
-            return std::string_view(variable.name);
-        });
+    return std::ranges::lower_bound(variables, name, std::ranges::less{}, [](const detail::EnvVariable& variable) noexcept { return std::string_view(variable.name); });
 }
 
 }  // namespace
@@ -36,8 +30,7 @@ void Env::StateDeleter::operator()(detail::EnvState* state) const noexcept {
     detail::destroyPmrObject(state, detail::appResource());
 }
 
-std::optional<std::string_view> Env::get(
-    std::string_view name) const & noexcept {
+std::optional<std::string_view> Env::get(std::string_view name) const& noexcept {
     const auto& variables = state_->variables;
     const auto it = findVariableSlot(variables, name);
     if (it == variables.end() || std::string_view(it->name) != name) {
@@ -58,14 +51,10 @@ std::optional<bool> Env::parseBoolValue(std::string_view value) noexcept {
     // ASCII-only case fold via the shared owner: the boolean tokens are ASCII, and
     // std::tolower is locale-dependent (a non-"C" LC_CTYPE set by the host app could
     // fold bytes unexpectedly).
-    if (detail::httpAsciiEqualsIgnoreCase(value, "true") ||
-        detail::httpAsciiEqualsIgnoreCase(value, "yes") ||
-        detail::httpAsciiEqualsIgnoreCase(value, "on")) {
+    if (detail::httpAsciiEqualsIgnoreCase(value, "true") || detail::httpAsciiEqualsIgnoreCase(value, "yes") || detail::httpAsciiEqualsIgnoreCase(value, "on")) {
         return true;
     }
-    if (detail::httpAsciiEqualsIgnoreCase(value, "false") ||
-        detail::httpAsciiEqualsIgnoreCase(value, "no") ||
-        detail::httpAsciiEqualsIgnoreCase(value, "off")) {
+    if (detail::httpAsciiEqualsIgnoreCase(value, "false") || detail::httpAsciiEqualsIgnoreCase(value, "no") || detail::httpAsciiEqualsIgnoreCase(value, "off")) {
         return false;
     }
 

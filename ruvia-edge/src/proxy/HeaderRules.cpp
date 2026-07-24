@@ -19,55 +19,39 @@ namespace {
 }  // namespace
 
 bool isConnectionOrFramingField(std::string_view lowerName) noexcept {
-    return lowerName == "connection" || lowerName == "keep-alive" ||
-        lowerName == "proxy-authenticate" || lowerName == "proxy-authorization" ||
-        lowerName == "te" || lowerName == "trailer" ||
-        lowerName == "transfer-encoding" || lowerName == "upgrade" ||
-        lowerName == "content-length";
+    return lowerName == "connection" || lowerName == "keep-alive" || lowerName == "proxy-authenticate" || lowerName == "proxy-authorization" || lowerName == "te" || lowerName == "trailer" || lowerName == "transfer-encoding" || lowerName == "upgrade" || lowerName == "content-length";
 }
 
 bool isConditionalOrRangeField(std::string_view lowerName) noexcept {
-    return lowerName == "range" || lowerName == "if-range" ||
-        lowerName == "if-match" || lowerName == "if-none-match" ||
-        lowerName == "if-modified-since" || lowerName == "if-unmodified-since";
+    return lowerName == "range" || lowerName == "if-range" || lowerName == "if-match" || lowerName == "if-none-match" || lowerName == "if-modified-since" || lowerName == "if-unmodified-since";
 }
 
-bool connectionNominates(
-    std::span<const HttpHeaderView> headers,
-    std::string_view fieldName) noexcept {
+bool connectionNominates(std::span<const HttpHeaderView> headers, std::string_view fieldName) noexcept {
     ruvia::detail::HttpConnectionOptions options;
     bool nominated = false;
     for (const auto& field : headers) {
         if (!iequals(field.name(), "connection")) {
             continue;
         }
-        (void)options.parseField(
-            field.value(),
-            ruvia::detail::HttpFieldListRole::kRecipient,
-            [&](std::string_view option) noexcept {
-                nominated = nominated || iequals(option, fieldName);
-                return true;
-            });
+        (void)options.parseField(field.value(), ruvia::detail::HttpFieldListRole::kRecipient, [&](std::string_view option) noexcept {
+            nominated = nominated || iequals(option, fieldName);
+            return true;
+        });
     }
     return nominated;
 }
 
-bool connectionNominates(
-    const Headers& headers,
-    std::string_view fieldName) noexcept {
+bool connectionNominates(const Headers& headers, std::string_view fieldName) noexcept {
     ruvia::detail::HttpConnectionOptions options;
     bool nominated = false;
     for (const auto& [name, value] : headers) {
         if (!iequals(name, "connection")) {
             continue;
         }
-        (void)options.parseField(
-            value,
-            ruvia::detail::HttpFieldListRole::kRecipient,
-            [&](std::string_view option) noexcept {
-                nominated = nominated || iequals(option, fieldName);
-                return true;
-            });
+        (void)options.parseField(value, ruvia::detail::HttpFieldListRole::kRecipient, [&](std::string_view option) noexcept {
+            nominated = nominated || iequals(option, fieldName);
+            return true;
+        });
     }
     return nominated;
 }
@@ -77,8 +61,7 @@ Headers endToEndResponseHeaders(const Headers& headers) {
     result.reserve(headers.size());
     for (const auto& field : headers) {
         const std::string lower = lowerCopy(field.first);
-        const bool standardHopByHop =
-            isConnectionOrFramingField(lower) && lower != "content-length";
+        const bool standardHopByHop = isConnectionOrFramingField(lower) && lower != "content-length";
         if (standardHopByHop || connectionNominates(headers, field.first)) {
             continue;
         }
@@ -109,8 +92,7 @@ bool cacheableUnderVary(const Headers& headers) {
         std::size_t start = 0;
         while (start <= vary.size()) {
             const std::size_t comma = vary.find(',', start);
-            const std::string_view token = vary.substr(
-                start, comma == std::string_view::npos ? std::string_view::npos : comma - start);
+            const std::string_view token = vary.substr(start, comma == std::string_view::npos ? std::string_view::npos : comma - start);
             start = comma == std::string_view::npos ? vary.size() + 1 : comma + 1;
             std::string field;
             for (const char c : token) {
@@ -129,9 +111,7 @@ bool cacheableUnderVary(const Headers& headers) {
     return true;
 }
 
-std::optional<std::string_view> findHeaderValue(
-    const Headers& headers,
-    std::string_view name) {
+std::optional<std::string_view> findHeaderValue(const Headers& headers, std::string_view name) {
     for (const auto& [n, v] : headers) {
         if (iequals(n, name)) {
             return std::string_view(v);
@@ -140,9 +120,7 @@ std::optional<std::string_view> findHeaderValue(
     return std::nullopt;
 }
 
-std::optional<std::string_view> findRequestHeader(
-    std::span<const HttpHeaderView> headers,
-    std::string_view name) {
+std::optional<std::string_view> findRequestHeader(std::span<const HttpHeaderView> headers, std::string_view name) {
     for (const auto& field : headers) {
         if (iequals(field.name(), name)) {
             return field.value();
@@ -151,9 +129,7 @@ std::optional<std::string_view> findRequestHeader(
     return std::nullopt;
 }
 
-std::optional<std::string> combinedRequestFieldValue(
-    std::span<const HttpHeaderView> headers,
-    std::string_view name) {
+std::optional<std::string> combinedRequestFieldValue(std::span<const HttpHeaderView> headers, std::string_view name) {
     std::optional<std::string> combined;
     for (const auto& field : headers) {
         if (!iequals(field.name(), name)) {

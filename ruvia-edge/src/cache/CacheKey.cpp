@@ -4,10 +4,7 @@
 
 namespace ruvia::edge {
 
-std::string cacheVariantPrefix(
-    std::string_view method,
-    std::string_view frontHost,
-    std::string_view target) {
+std::string cacheVariantPrefix(std::string_view method, std::string_view frontHost, std::string_view target) {
     std::string key;
     key.reserve(method.size() + frontHost.size() + target.size() + 3);
     key.append(method);
@@ -21,10 +18,7 @@ std::string cacheVariantPrefix(
     return key;
 }
 
-std::string cacheKeyFor(
-    std::string_view variantPrefix,
-    std::string_view host,
-    const std::optional<std::string>& acceptEncoding) {
+std::string cacheKeyFor(std::string_view variantPrefix, std::string_view host, const std::optional<std::string>& acceptEncoding) {
     std::string key(variantPrefix);
     for (const char byte : host) {
         key.push_back(toLowerAscii(byte));

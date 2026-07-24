@@ -10,7 +10,8 @@ namespace ruvia::edge {
 
 struct EdgeOriginControl final {
     EdgeOriginControl(OriginSettings source, std::pmr::memory_resource* sourceResource)
-        : settings(std::move(source)), resource(sourceResource) {}
+        : settings(std::move(source)),
+          resource(sourceResource) {}
 
     std::size_t references{1};  // the table owns the initial reference
     OriginSettings settings;
@@ -31,7 +32,8 @@ void releaseOrigin(EdgeOriginControl* control) noexcept {
 
 }  // namespace
 
-OriginLease::OriginLease(EdgeOriginControl* control) noexcept : control_(control) {
+OriginLease::OriginLease(EdgeOriginControl* control) noexcept
+    : control_(control) {
     if (control_ != nullptr) {
         ++control_->references;
     }
@@ -67,7 +69,8 @@ const OriginSettings* OriginLease::operator->() const noexcept {
 }
 
 EdgeConfig::EdgeConfig(std::pmr::memory_resource* resource) noexcept
-    : resource_(::ruvia::detail::pmrResourceOrDefault(resource)), origins_(resource_) {}
+    : resource_(::ruvia::detail::pmrResourceOrDefault(resource)),
+      origins_(resource_) {}
 
 EdgeConfig::~EdgeConfig() {
     for (const auto& [key, control] : origins_) {
@@ -82,10 +85,8 @@ OriginLease EdgeConfig::findOrigin(std::string_view frontHost) noexcept {
 }
 
 bool EdgeConfig::addOrigin(std::string frontHost, OriginSettings settings) {
-    auto replacement = ::ruvia::detail::makePmrObject<EdgeOriginControl>(
-        resource_, std::move(settings), resource_);
-    const auto [it, inserted] = origins_.try_emplace(
-        std::pmr::string(std::move(frontHost), resource_), replacement.get());
+    auto replacement = ::ruvia::detail::makePmrObject<EdgeOriginControl>(resource_, std::move(settings), resource_);
+    const auto [it, inserted] = origins_.try_emplace(std::pmr::string(std::move(frontHost), resource_), replacement.get());
     if (inserted) {
         (void)replacement.release();
         return true;

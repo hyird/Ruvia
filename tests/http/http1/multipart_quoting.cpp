@@ -28,8 +28,7 @@ RUVIA_TEST(multipart_boundary_prefix_requires_delimiter_terminator) {
     // "abc" appears as a substring of "abcXYZ" in the body; that is NOT a delimiter (a delimiter
     // must be followed by CRLF or "--"). The scan must skip the false match and find the real one.
     const std::string_view body = "data\r\n--abcXYZ tail\r\n--abc\r\n";
-    const auto match = httpFindMultipartBodyDelimiter(
-        body, ruvia::MultipartBoundary("abc"), true);
+    const auto match = httpFindMultipartBodyDelimiter(body, ruvia::MultipartBoundary("abc"), true);
     const auto* part = match.part();
     RUVIA_CHECK(part != nullptr);
     if (part != nullptr) {
@@ -42,8 +41,7 @@ RUVIA_TEST(multipart_boundary_line_requires_delimiter_terminator) {
     // Same for the opening delimiter. The real candidate begins a new line;
     // the matching bytes embedded in preamble text are not eligible.
     const std::string_view body = "--abcXYZ junk--abc\r\n\r\n--abc\r\nrest";
-    const auto match = httpFindInitialMultipartDelimiter(
-        body, ruvia::MultipartBoundary("abc"), true);
+    const auto match = httpFindInitialMultipartDelimiter(body, ruvia::MultipartBoundary("abc"), true);
     const auto* part = match.part();
     RUVIA_CHECK(part != nullptr);
     if (part != nullptr) {
@@ -51,7 +49,6 @@ RUVIA_TEST(multipart_boundary_line_requires_delimiter_terminator) {
     }
     // A close delimiter ("--abc--") is a valid terminator too.
     const std::string_view closing = "--abc--\r\n";
-    const auto closeMatch = httpFindInitialMultipartDelimiter(
-        closing, ruvia::MultipartBoundary("abc"), true);
+    const auto closeMatch = httpFindInitialMultipartDelimiter(closing, ruvia::MultipartBoundary("abc"), true);
     RUVIA_CHECK(closeMatch.close() != nullptr);
 }

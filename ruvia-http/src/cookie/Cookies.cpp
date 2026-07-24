@@ -12,23 +12,14 @@
 
 namespace ruvia::detail {
 
-SetCookiePlan::SetCookiePlan(
-    std::string_view name,
-    std::string_view value,
-    const CookieOptions& options)
+SetCookiePlan::SetCookiePlan(std::string_view name, std::string_view value, const CookieOptions& options)
     : name_(name),
       value_(value),
       path_(options.path),
       domain_(options.domain),
-      prefixText_(options.prefix
-          ? cookiePrefixText(*options.prefix)
-          : std::string_view{}),
-      priorityText_(options.priority
-          ? cookiePriorityToken(*options.priority)
-          : std::string_view{}),
-      sameSiteText_(options.sameSite
-          ? cookieSameSiteToken(*options.sameSite)
-          : std::string_view{}),
+      prefixText_(options.prefix ? cookiePrefixText(*options.prefix) : std::string_view{}),
+      priorityText_(options.priority ? cookiePriorityToken(*options.priority) : std::string_view{}),
+      sameSiteText_(options.sameSite ? cookieSameSiteToken(*options.sameSite) : std::string_view{}),
       hasMaxAge_(options.maxAge.has_value()),
       httpOnly_(options.httpOnly),
       secure_(options.secure),

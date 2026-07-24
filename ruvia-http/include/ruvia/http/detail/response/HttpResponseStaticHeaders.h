@@ -11,21 +11,11 @@
 namespace ruvia::detail {
 
 template <std::size_t N>
-[[nodiscard]] constexpr HttpResponseHeader staticResponseHeader(
-    const char (&bytes)[N],
-    std::uint32_t nameSize,
-    std::uint32_t knownBit) noexcept {
-    return makeResponseHeader(
-        bytes,
-        nameSize,
-        static_cast<std::uint32_t>(N - 1 - nameSize),
-        knownBit,
-        false);
+[[nodiscard]] constexpr HttpResponseHeader staticResponseHeader(const char (&bytes)[N], std::uint32_t nameSize, std::uint32_t knownBit) noexcept {
+    return makeResponseHeader(bytes, nameSize, static_cast<std::uint32_t>(N - 1 - nameSize), knownBit, false);
 }
 
-[[nodiscard]] inline std::optional<HttpResponseHeader> builtinStaticResponseHeader(
-    std::uint32_t knownBit,
-    std::string_view value) noexcept {
+[[nodiscard]] inline std::optional<HttpResponseHeader> builtinStaticResponseHeader(std::uint32_t knownBit, std::string_view value) noexcept {
     static constexpr char kTextContentType[] = "Content-Typetext/plain; charset=UTF-8";
     static constexpr char kJsonContentType[] = "Content-Typeapplication/json";
     static constexpr char kHtmlContentType[] = "Content-Typetext/html; charset=UTF-8";

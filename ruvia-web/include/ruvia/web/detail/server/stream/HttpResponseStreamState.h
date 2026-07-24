@@ -38,8 +38,7 @@ public:
     }
 
     [[nodiscard]] bool aborted() const noexcept {
-        return std::holds_alternative<AbortedBeforeCommit>(state_) ||
-            std::holds_alternative<AbortedAfterCommit>(state_);
+        return std::holds_alternative<AbortedBeforeCommit>(state_) || std::holds_alternative<AbortedAfterCommit>(state_);
     }
 
     // True once a body-suppressed head (HEAD / 304 semantics) has completed the
@@ -56,8 +55,7 @@ public:
         return plan != nullptr && plan->bodyPlan().bodySuppressed();
     }
 
-    [[nodiscard]] const ResponseStreamCommitPlan*
-    commitPlan() const & noexcept {
+    [[nodiscard]] const ResponseStreamCommitPlan* commitPlan() const& noexcept {
         if (const auto* value = std::get_if<BodyOpen>(&state_)) {
             return &value->plan;
         }
@@ -72,7 +70,7 @@ public:
         }
         return nullptr;
     }
-    const ResponseStreamCommitPlan* commitPlan() const && = delete;
+    const ResponseStreamCommitPlan* commitPlan() const&& = delete;
 
     using StreamingHeadThunk = HttpResponse (*)(Context&);
 
@@ -197,7 +195,8 @@ private:
 
     struct Bound final {
         Bound(Context* boundContext, StreamingHeadThunk head) noexcept
-            : context(boundContext), streamingHead(head) {}
+            : context(boundContext),
+              streamingHead(head) {}
 
         Context* context;
         StreamingHeadThunk streamingHead;
@@ -233,15 +232,7 @@ private:
         ResponseStreamCommitPlan plan;
     };
 
-    using State = std::variant<
-        Unbound,
-        Bound,
-        Detached,
-        BodyOpen,
-        TrailersOnly,
-        Ended,
-        AbortedBeforeCommit,
-        AbortedAfterCommit>;
+    using State = std::variant<Unbound, Bound, Detached, BodyOpen, TrailersOnly, Ended, AbortedBeforeCommit, AbortedAfterCommit>;
 
     State state_;
 };

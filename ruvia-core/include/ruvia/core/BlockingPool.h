@@ -224,8 +224,7 @@ public:
 
     // True when the callable ran and returned normally.
     [[nodiscard]] bool completed() const noexcept {
-        return payload_.status == BlockingStatus::kCompleted &&
-            payload_.error == nullptr;
+        return payload_.status == BlockingStatus::kCompleted && payload_.error == nullptr;
     }
 
     // The callable ran and threw. The exception is rethrown by value().
@@ -258,16 +257,10 @@ private:
 namespace detail {
 
 template <typename Fn>
-[[nodiscard]] auto runBlockingUntil(
-    BlockingPool& pool,
-    WorkerHandle worker,
-    std::optional<std::chrono::steady_clock::duration> timeout,
-    Fn fn) -> Task<BlockingResult<std::invoke_result_t<Fn&>>> {
+[[nodiscard]] auto runBlockingUntil(BlockingPool& pool, WorkerHandle worker, std::optional<std::chrono::steady_clock::duration> timeout, Fn fn) -> Task<BlockingResult<std::invoke_result_t<Fn&>>> {
     using Result = std::invoke_result_t<Fn&>;
     using Payload = BlockingPayload<Result>;
-    static_assert(
-        std::is_void_v<Result> || std::is_move_constructible_v<Result>,
-        "a blocking callable's result travels back to the worker by move");
+    static_assert(std::is_void_v<Result> || std::is_move_constructible_v<Result>, "a blocking callable's result travels back to the worker by move");
 
     // The one-shot outlives the request that started it: a worker that stops
     // resumes the waiter immediately while the pool thread is still running, so
@@ -277,39 +270,31 @@ template <typename Fn>
     // shutdown race, not a failure of this call, so it becomes the status a
     // shutdown always produces -- an offload must never turn into an exception
     // the caller did not ask for.
-    std::optional<std::pair<OneShotCompletion<Payload>, OneShotReceiver<Payload>>>
-        channel;
+    std::optional<std::pair<OneShotCompletion<Payload>, OneShotReceiver<Payload>>> channel;
     try {
         channel.emplace(makeOneShot<Payload>(std::move(worker), processResource()));
     } catch (const std::runtime_error&) {
         co_return BlockingResult<Result>(BlockingStatus::kWorkerStopping);
     }
     auto& [completion, receiver] = *channel;
-    const auto submitted = pool.submit(
-        [guard = BlockingCompletionGuard<Result>(std::move(completion)),
-         call = std::move(fn)]() mutable {
-            Payload payload;
-            try {
-                if constexpr (std::is_void_v<Result>) {
-                    call();
-                } else {
-                    payload.value.emplace(call());
-                }
-            } catch (...) {
-                payload.error = std::current_exception();
+    const auto submitted = pool.submit([guard = BlockingCompletionGuard<Result>(std::move(completion)), call = std::move(fn)]() mutable {
+        Payload payload;
+        try {
+            if constexpr (std::is_void_v<Result>) {
+                call();
+            } else {
+                payload.value.emplace(call());
             }
-            guard.answer(std::move(payload));
-        });
+        } catch (...) {
+            payload.error = std::current_exception();
+        }
+        guard.answer(std::move(payload));
+    });
     if (submitted != BlockingSubmitStatus::kAccepted) {
-        co_return BlockingResult<Result>(
-            submitted == BlockingSubmitStatus::kQueueFull
-                ? BlockingStatus::kQueueFull
-                : BlockingStatus::kPoolStopped);
+        co_return BlockingResult<Result>(submitted == BlockingSubmitStatus::kQueueFull ? BlockingStatus::kQueueFull : BlockingStatus::kPoolStopped);
     }
 
-    auto waited = timeout.has_value()
-        ? co_await receiver.waitFor(*timeout)
-        : co_await receiver.wait();
+    auto waited = timeout.has_value() ? co_await receiver.waitFor(*timeout) : co_await receiver.wait();
     if (auto* payload = waited.value(); payload != nullptr) {
         co_return BlockingResult<Result>(std::move(*payload));
     }
@@ -333,10 +318,8 @@ template <typename Fn>
 // Never throws for a rejection; the status says what happened. Use .value() to
 // turn a rejection into an exception and to rethrow the callable's own.
 template <typename Fn>
-[[nodiscard]] auto runBlocking(BlockingPool& pool, WorkerHandle worker, Fn fn)
-    -> Task<BlockingResult<std::invoke_result_t<Fn&>>> {
-    return detail::runBlockingUntil(
-        pool, std::move(worker), std::nullopt, std::move(fn));
+[[nodiscard]] auto runBlocking(BlockingPool& pool, WorkerHandle worker, Fn fn) -> Task<BlockingResult<std::invoke_result_t<Fn&>>> {
+    return detail::runBlockingUntil(pool, std::move(worker), std::nullopt, std::move(fn));
 }
 
 // The same, but the caller stops waiting after `timeout` and gets kTimedOut.
@@ -345,16 +328,8 @@ template <typename Fn>
 // wedged dependency from pinning a request -- its connection, its arena, its
 // leases -- indefinitely.
 template <typename Rep, typename Period, typename Fn>
-[[nodiscard]] auto runBlocking(
-    BlockingPool& pool,
-    WorkerHandle worker,
-    std::chrono::duration<Rep, Period> timeout,
-    Fn fn) -> Task<BlockingResult<std::invoke_result_t<Fn&>>> {
-    return detail::runBlockingUntil(
-        pool,
-        std::move(worker),
-        std::chrono::duration_cast<std::chrono::steady_clock::duration>(timeout),
-        std::move(fn));
+[[nodiscard]] auto runBlocking(BlockingPool& pool, WorkerHandle worker, std::chrono::duration<Rep, Period> timeout, Fn fn) -> Task<BlockingResult<std::invoke_result_t<Fn&>>> {
+    return detail::runBlockingUntil(pool, std::move(worker), std::chrono::duration_cast<std::chrono::steady_clock::duration>(timeout), std::move(fn));
 }
 
 }  // namespace ruvia

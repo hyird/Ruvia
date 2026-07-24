@@ -33,15 +33,12 @@ constexpr std::string_view kFileBody = "hello-static-file";  // 17 bytes
 // Read one response head (up to and including the blank line) and drop it from
 // the buffer, leaving any following bytes (a body, or a pipelined response) for
 // the caller to inspect.
-[[nodiscard]] std::string readHead(
-    asio::ip::tcp::socket& socket, asio::streambuf& buffer, std::error_code& ec) {
+[[nodiscard]] std::string readHead(asio::ip::tcp::socket& socket, asio::streambuf& buffer, std::error_code& ec) {
     const std::size_t n = asio::read_until(socket, buffer, "\r\n\r\n", ec);
     if (ec) {
         return {};
     }
-    std::string head(
-        asio::buffers_begin(buffer.data()),
-        asio::buffers_begin(buffer.data()) + n);
+    std::string head(asio::buffers_begin(buffer.data()), asio::buffers_begin(buffer.data()) + n);
     buffer.consume(n);
     return head;
 }
@@ -95,9 +92,7 @@ int main() {
     ruvia::detail::HttpServerOptions options;
     options.documentRoot.root = &root;
 
-    ruvia::detail::HttpServer server(
-        asio::ip::tcp::endpoint(asio::ip::make_address("127.0.0.1"), 0),
-        routes, {}, options);
+    ruvia::detail::HttpServer server(asio::ip::tcp::endpoint(asio::ip::make_address("127.0.0.1"), 0), routes, {}, options);
     server.start();
     const auto endpoint = server.localEndpoint();
 
@@ -115,8 +110,7 @@ int main() {
     asio::streambuf buffer;
 
     // HEAD of the file: 200, Content-Length of the whole representation, no body.
-    asio::write(sock, asio::buffer(std::string_view(
-        "HEAD /asset.txt HTTP/1.1\r\nHost: localhost\r\n\r\n")), ec);
+    asio::write(sock, asio::buffer(std::string_view("HEAD /asset.txt HTTP/1.1\r\nHost: localhost\r\n\r\n")), ec);
     const std::string headHead = readHead(sock, buffer, ec);
     if (!headHead.starts_with("HTTP/1.1 200")) {
         fail(1, "HEAD of a document-root file was not 200");
@@ -130,8 +124,7 @@ int main() {
     // Pipeline a GET on the same connection. If HEAD had leaked a body, these
     // bytes would be misframed and this head would not start with a status line.
     if (rc == 0) {
-        asio::write(sock, asio::buffer(std::string_view(
-            "GET /asset.txt HTTP/1.1\r\nHost: localhost\r\n\r\n")), ec);
+        asio::write(sock, asio::buffer(std::string_view("GET /asset.txt HTTP/1.1\r\nHost: localhost\r\n\r\n")), ec);
         const std::string getHead = readHead(sock, buffer, ec);
         if (!getHead.starts_with("HTTP/1.1 200")) {
             fail(4, "GET after HEAD did not parse as a clean 200 response");
@@ -144,13 +137,11 @@ int main() {
                 std::size_t have = buffer.size();
                 if (have > 0) {
                     const std::size_t take = std::min(have, length);
-                    asio::buffer_copy(
-                        asio::buffer(body.data(), take), buffer.data());
+                    asio::buffer_copy(asio::buffer(body.data(), take), buffer.data());
                     buffer.consume(take);
                 }
                 if (have < length) {
-                    asio::read(
-                        sock, asio::buffer(body.data() + have, length - have), ec);
+                    asio::read(sock, asio::buffer(body.data() + have, length - have), ec);
                 }
                 if (body != kFileBody) {
                     fail(6, "GET body after HEAD did not match the file");

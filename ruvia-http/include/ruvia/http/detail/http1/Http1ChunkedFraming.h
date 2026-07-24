@@ -28,19 +28,17 @@ public:
         offset_ = static_cast<std::size_t>(cursor - storage_.data());
     }
 
-    [[nodiscard]] std::string_view view() const & noexcept {
+    [[nodiscard]] std::string_view view() const& noexcept {
         return std::string_view(storage_.data() + offset_, storage_.size() - offset_);
     }
-    [[nodiscard]] std::string_view view() const && = delete;
+    [[nodiscard]] std::string_view view() const&& = delete;
 
 private:
     std::array<char, sizeof(std::size_t) * 2 + 2> storage_{};
     std::size_t offset_{storage_.size()};
 };
 
-inline void appendHttp1TrailerSection(
-    std::pmr::string& output,
-    const HttpResponseTrailerSection& section) {
+inline void appendHttp1TrailerSection(std::pmr::string& output, const HttpResponseTrailerSection& section) {
     for (const auto& trailer : section.fields()) {
         output.append(trailer.name().data(), trailer.name().size());
         output.append(": ");

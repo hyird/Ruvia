@@ -51,8 +51,7 @@ private:
 // operation onto that owner; EdgeServer does so for its public control plane.
 class EdgeConfig final {
 public:
-    explicit EdgeConfig(
-        std::pmr::memory_resource* resource = std::pmr::get_default_resource()) noexcept;
+    explicit EdgeConfig(std::pmr::memory_resource* resource = std::pmr::get_default_resource()) noexcept;
     ~EdgeConfig();
 
     EdgeConfig(const EdgeConfig&) = delete;
@@ -91,18 +90,12 @@ private:
         using is_transparent = void;
         template <typename Left, typename Right>
         [[nodiscard]] bool operator()(const Left& left, const Right& right) const noexcept {
-            return ::ruvia::detail::httpAsciiEqualsIgnoreCase(
-                std::string_view(left), std::string_view(right));
+            return ::ruvia::detail::httpAsciiEqualsIgnoreCase(std::string_view(left), std::string_view(right));
         }
     };
 
     std::pmr::memory_resource* resource_;
-    std::pmr::unordered_map<
-        std::pmr::string,
-        EdgeOriginControl*,
-        TransparentHash,
-        TransparentEqual>
-        origins_;
+    std::pmr::unordered_map<std::pmr::string, EdgeOriginControl*, TransparentHash, TransparentEqual> origins_;
 };
 
 }  // namespace ruvia::edge

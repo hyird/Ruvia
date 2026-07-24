@@ -89,8 +89,7 @@ private:
     // The on-disk file name for a key (a hash, stable across runs).
     [[nodiscard]] static std::string fileNameFor(std::string_view key);
     [[nodiscard]] bool evictWhileOverBudget() noexcept;  // caller holds mutex_
-    [[nodiscard]] bool removeLocked(
-        std::unordered_map<std::string, Entry>::iterator it) noexcept;
+    [[nodiscard]] bool removeLocked(std::unordered_map<std::string, Entry>::iterator it) noexcept;
     void eraseIndexLocked(std::unordered_map<std::string, Entry>::iterator it) noexcept;
 
     std::filesystem::path directory_;

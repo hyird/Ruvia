@@ -16,9 +16,7 @@
 namespace {
 
 template <typename Input>
-concept ConstructsJsonScanner = requires(Input&& input) {
-    ruvia::detail::JsonScanner(std::forward<Input>(input));
-};
+concept ConstructsJsonScanner = requires(Input&& input) { ruvia::detail::JsonScanner(std::forward<Input>(input)); };
 
 static_assert(!ConstructsJsonScanner<std::string>);
 static_assert(!ConstructsJsonScanner<const std::string>);
@@ -26,15 +24,10 @@ static_assert(!ConstructsJsonScanner<std::pmr::string>);
 static_assert(ConstructsJsonScanner<std::string&>);
 static_assert(ConstructsJsonScanner<std::pmr::string&>);
 static_assert(ConstructsJsonScanner<std::string_view>);
-static_assert(!std::constructible_from<
-    ruvia::detail::JsonStringToken,
-    std::string_view,
-    ruvia::detail::JsonStringEncoding>);
+static_assert(!std::constructible_from<ruvia::detail::JsonStringToken, std::string_view, ruvia::detail::JsonStringEncoding>);
 
 std::optional<std::pmr::string> decodeJson(std::string_view raw) {
-    return ruvia::detail::decodeJsonString(
-        raw,
-        std::pmr::get_default_resource());
+    return ruvia::detail::decodeJsonString(raw, std::pmr::get_default_resource());
 }
 
 }  // namespace
@@ -58,14 +51,14 @@ RUVIA_TEST(json_number_scan_invalid) {
     using ruvia::detail::scanJsonNumberTokenLength;
     RUVIA_CHECK_EQ(scanJsonNumberTokenLength(""), std::size_t(0));
     RUVIA_CHECK_EQ(scanJsonNumberTokenLength("-"), std::size_t(0));
-    RUVIA_CHECK_EQ(scanJsonNumberTokenLength("01"), std::size_t(0));   // leading zero
+    RUVIA_CHECK_EQ(scanJsonNumberTokenLength("01"), std::size_t(0));  // leading zero
     RUVIA_CHECK_EQ(scanJsonNumberTokenLength("00"), std::size_t(0));
-    RUVIA_CHECK_EQ(scanJsonNumberTokenLength("1."), std::size_t(0));   // no fraction digits
-    RUVIA_CHECK_EQ(scanJsonNumberTokenLength("1e"), std::size_t(0));   // no exponent digits
+    RUVIA_CHECK_EQ(scanJsonNumberTokenLength("1."), std::size_t(0));  // no fraction digits
+    RUVIA_CHECK_EQ(scanJsonNumberTokenLength("1e"), std::size_t(0));  // no exponent digits
     RUVIA_CHECK_EQ(scanJsonNumberTokenLength("1e+"), std::size_t(0));
-    RUVIA_CHECK_EQ(scanJsonNumberTokenLength(".5"), std::size_t(0));   // no integer part
+    RUVIA_CHECK_EQ(scanJsonNumberTokenLength(".5"), std::size_t(0));  // no integer part
     RUVIA_CHECK_EQ(scanJsonNumberTokenLength("abc"), std::size_t(0));
-    RUVIA_CHECK_EQ(scanJsonNumberTokenLength("+1"), std::size_t(0));   // leading plus not allowed
+    RUVIA_CHECK_EQ(scanJsonNumberTokenLength("+1"), std::size_t(0));  // leading plus not allowed
 }
 
 RUVIA_TEST(json_number_parse_values) {
@@ -162,7 +155,10 @@ RUVIA_TEST(json_string_token_carries_escape_encoding) {
 
 RUVIA_TEST(json_string_scan_failure_preserves_input_cursor) {
     {
-        std::string_view in = std::string_view("\"a\x01""b\"", 5);  // raw control char
+        std::string_view in = std::string_view(
+            "\"a\x01"
+            "b\"",
+            5);  // raw control char
         const auto original = in;
         RUVIA_CHECK(!ruvia::detail::parseJsonString(in).has_value());
         RUVIA_CHECK_EQ(in, original);
@@ -259,17 +255,17 @@ RUVIA_TEST(json_decode_surrogate_pair) {
 }
 
 RUVIA_TEST(json_decode_invalid_surrogates) {
-    RUVIA_CHECK(!decodeJson("\\ud83d").has_value());          // lone high surrogate
-    RUVIA_CHECK(!decodeJson("\\ude00").has_value());          // lone low surrogate
-    RUVIA_CHECK(!decodeJson("\\ud83dx").has_value());         // high not followed by \u
-    RUVIA_CHECK(!decodeJson("\\ud83d\\ud83d").has_value()); // high followed by high
+    RUVIA_CHECK(!decodeJson("\\ud83d").has_value());         // lone high surrogate
+    RUVIA_CHECK(!decodeJson("\\ude00").has_value());         // lone low surrogate
+    RUVIA_CHECK(!decodeJson("\\ud83dx").has_value());        // high not followed by \u
+    RUVIA_CHECK(!decodeJson("\\ud83d\\ud83d").has_value());  // high followed by high
 }
 
 RUVIA_TEST(json_decode_rejects_bad_escapes) {
-    RUVIA_CHECK(!decodeJson("\\x").has_value());        // unknown escape
-    RUVIA_CHECK(!decodeJson("\\u12").has_value());      // truncated \u
-    RUVIA_CHECK(!decodeJson("\\u12zz").has_value());    // non-hex in \u
-    RUVIA_CHECK(!decodeJson("trailing\\").has_value()); // dangling backslash
+    RUVIA_CHECK(!decodeJson("\\x").has_value());         // unknown escape
+    RUVIA_CHECK(!decodeJson("\\u12").has_value());       // truncated \u
+    RUVIA_CHECK(!decodeJson("\\u12zz").has_value());     // non-hex in \u
+    RUVIA_CHECK(!decodeJson("trailing\\").has_value());  // dangling backslash
 }
 
 RUVIA_TEST(json_string_value_failure_preserves_input_cursor) {
@@ -277,16 +273,12 @@ RUVIA_TEST(json_string_value_failure_preserves_input_cursor) {
 
     std::string_view malformed = R"("prefix\ud83d")";
     const auto original = malformed;
-    const auto rejected = ruvia::detail::parseJsonValue<ruvia::String>(
-        malformed,
-        resource);
+    const auto rejected = ruvia::detail::parseJsonValue<ruvia::String>(malformed, resource);
     RUVIA_CHECK(!rejected.has_value());
     RUVIA_CHECK_EQ(malformed, original);
 
     std::string_view valid = R"("decoded\u0020value")";
-    const auto parsed = ruvia::detail::parseJsonValue<ruvia::String>(
-        valid,
-        resource);
+    const auto parsed = ruvia::detail::parseJsonValue<ruvia::String>(valid, resource);
     RUVIA_CHECK(parsed.has_value());
     RUVIA_CHECK_EQ(parsed->view(), std::string_view("decoded value"));
 }
@@ -298,16 +290,12 @@ RUVIA_TEST(json_sequence_failure_preserves_input_cursor) {
 
     std::string_view malformedArray = R"([1,2,"bad"] tail)";
     const auto originalArray = malformedArray;
-    const auto rejectedArray = ruvia::detail::parseJsonValue<ArrayT>(
-        malformedArray,
-        resource);
+    const auto rejectedArray = ruvia::detail::parseJsonValue<ArrayT>(malformedArray, resource);
     RUVIA_CHECK(!rejectedArray.has_value());
     RUVIA_CHECK_EQ(malformedArray, originalArray);
 
     std::string_view validArray = "[1,2,3] tail";
-    const auto parsedArray = ruvia::detail::parseJsonValue<ArrayT>(
-        validArray,
-        resource);
+    const auto parsedArray = ruvia::detail::parseJsonValue<ArrayT>(validArray, resource);
     RUVIA_CHECK(parsedArray.has_value());
     RUVIA_CHECK_EQ(parsedArray->size(), std::size_t{3});
     RUVIA_CHECK_EQ(static_cast<std::int32_t>((*parsedArray)[2]), 3);
@@ -315,16 +303,12 @@ RUVIA_TEST(json_sequence_failure_preserves_input_cursor) {
 
     std::string_view malformedList = "[4,false] tail";
     const auto originalList = malformedList;
-    const auto rejectedList = ruvia::detail::parseJsonValue<ListT>(
-        malformedList,
-        resource);
+    const auto rejectedList = ruvia::detail::parseJsonValue<ListT>(malformedList, resource);
     RUVIA_CHECK(!rejectedList.has_value());
     RUVIA_CHECK_EQ(malformedList, originalList);
 
     std::string_view validList = "[4,5] tail";
-    const auto parsedList = ruvia::detail::parseJsonValue<ListT>(
-        validList,
-        resource);
+    const auto parsedList = ruvia::detail::parseJsonValue<ListT>(validList, resource);
     RUVIA_CHECK(parsedList.has_value());
     RUVIA_CHECK_EQ(parsedList->size(), std::size_t{2});
     RUVIA_CHECK_EQ(static_cast<std::int32_t>((*parsedList)[1]), 5);
@@ -334,13 +318,13 @@ RUVIA_TEST(json_sequence_failure_preserves_input_cursor) {
 RUVIA_TEST(json_appendUtf8_boundaries) {
     using ruvia::detail::appendUtf8;
     std::string s;
-    appendUtf8(s, 0x24);      // $
+    appendUtf8(s, 0x24);  // $
     RUVIA_CHECK_EQ(s, std::string("\x24"));
     s.clear();
-    appendUtf8(s, 0x7FF);     // 2-byte max
+    appendUtf8(s, 0x7FF);  // 2-byte max
     RUVIA_CHECK_EQ(s, std::string("\xDF\xBF"));
     s.clear();
-    appendUtf8(s, 0xFFFF);    // 3-byte max
+    appendUtf8(s, 0xFFFF);  // 3-byte max
     RUVIA_CHECK_EQ(s, std::string("\xEF\xBF\xBF"));
     s.clear();
     appendUtf8(s, 0x10FFFF);  // 4-byte max

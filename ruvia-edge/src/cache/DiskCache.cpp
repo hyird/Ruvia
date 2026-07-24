@@ -35,19 +35,10 @@ public:
     explicit DirectoryLease(const std::filesystem::path& directory)
         : path_(directory / ".ruvia-cache.lock") {
 #if defined(_WIN32)
-        handle_ = ::CreateFileW(
-            path_.c_str(),
-            GENERIC_READ | GENERIC_WRITE,
-            0,
-            nullptr,
-            OPEN_ALWAYS,
-            FILE_ATTRIBUTE_NORMAL,
-            nullptr);
+        handle_ = ::CreateFileW(path_.c_str(), GENERIC_READ | GENERIC_WRITE, 0, nullptr, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
         if (handle_ == INVALID_HANDLE_VALUE) {
-            const auto error = std::error_code(
-                static_cast<int>(::GetLastError()), std::system_category());
-            throw std::filesystem::filesystem_error(
-                "failed to acquire disk cache directory lease", path_, error);
+            const auto error = std::error_code(static_cast<int>(::GetLastError()), std::system_category());
+            throw std::filesystem::filesystem_error("failed to acquire disk cache directory lease", path_, error);
         }
 #else
         int flags = O_RDWR | O_CREAT;
@@ -57,15 +48,13 @@ public:
         descriptor_ = ::open(path_.c_str(), flags, 0600);
         if (descriptor_ < 0) {
             const auto error = std::error_code(errno, std::generic_category());
-            throw std::filesystem::filesystem_error(
-                "failed to open disk cache directory lease", path_, error);
+            throw std::filesystem::filesystem_error("failed to open disk cache directory lease", path_, error);
         }
         if (::flock(descriptor_, LOCK_EX | LOCK_NB) != 0) {
             const auto error = std::error_code(errno, std::generic_category());
             (void)::close(descriptor_);
             descriptor_ = -1;
-            throw std::filesystem::filesystem_error(
-                "disk cache directory is already in use", path_, error);
+            throw std::filesystem::filesystem_error("disk cache directory is already in use", path_, error);
         }
 #endif
     }
@@ -107,7 +96,8 @@ std::string DiskCache::fileNameFor(std::string_view key) {
 }
 
 DiskCache::DiskCache(std::filesystem::path directory, std::size_t maxBytes)
-    : directory_(std::move(directory)), maxBytes_(maxBytes) {
+    : directory_(std::move(directory)),
+      maxBytes_(maxBytes) {
     std::filesystem::create_directories(directory_);
     directoryLease_ = std::make_unique<DirectoryLease>(directory_);
 
@@ -118,15 +108,13 @@ DiskCache::DiskCache(std::filesystem::path directory, std::size_t maxBytes)
     std::filesystem::directory_iterator current(directory_, ec);
     const std::filesystem::directory_iterator end;
     if (ec) {
-        throw std::filesystem::filesystem_error(
-            "failed to scan disk cache directory", directory_, ec);
+        throw std::filesystem::filesystem_error("failed to scan disk cache directory", directory_, ec);
     }
     while (current != end) {
         const auto path = current->path();
         const auto status = current->symlink_status(ec);
         if (ec) {
-            throw std::filesystem::filesystem_error(
-                "failed to inspect disk cache entry", path, ec);
+            throw std::filesystem::filesystem_error("failed to inspect disk cache entry", path, ec);
         }
 
         // Failing to render a name (a non-representable wide filename on
@@ -136,8 +124,7 @@ DiskCache::DiskCache(std::filesystem::path directory, std::size_t maxBytes)
         // failures above already refuse to start; this one does too.
         const std::string fileName = path.filename().string();
 
-        if (std::filesystem::is_regular_file(status) &&
-            isOwnedTempName(fileName)) {
+        if (std::filesystem::is_regular_file(status) && isOwnedTempName(fileName)) {
             removeOwnedFileBestEffort(path);
             current.increment(ec);
             if (ec) {
@@ -145,8 +132,7 @@ DiskCache::DiskCache(std::filesystem::path directory, std::size_t maxBytes)
             }
             continue;
         }
-        if (!std::filesystem::is_regular_file(status) ||
-            !isCommittedEntryName(fileName)) {
+        if (!std::filesystem::is_regular_file(status) || !isCommittedEntryName(fileName)) {
             current.increment(ec);
             if (ec) {
                 break;
@@ -173,8 +159,7 @@ DiskCache::DiskCache(std::filesystem::path directory, std::size_t maxBytes)
             continue;
         }
         const std::size_t bytes = data.size();
-        const bool inserted =
-            index_.try_emplace(key, Entry{fileName, bytes}).second;
+        const bool inserted = index_.try_emplace(key, Entry{fileName, bytes}).second;
         if (!inserted) {
             removeOwnedFileBestEffort(path);
         } else {
@@ -189,12 +174,10 @@ DiskCache::DiskCache(std::filesystem::path directory, std::size_t maxBytes)
         }
     }
     if (ec) {
-        throw std::filesystem::filesystem_error(
-            "failed to scan disk cache directory", directory_, ec);
+        throw std::filesystem::filesystem_error("failed to scan disk cache directory", directory_, ec);
     }
     if (!evictWhileOverBudget()) {
-        throw std::runtime_error(
-            "failed to enforce disk cache byte budget during startup");
+        throw std::runtime_error("failed to enforce disk cache byte budget during startup");
     }
 }
 
@@ -238,8 +221,7 @@ bool DiskCache::store(std::string_view key, const CachedResponse& entry) {
     // FNV-1a file names can theoretically collide. Delete the previous logical
     // owner before committing this value; a collision is a miss for the old
     // key, never an alias to another response.
-    if (const auto owner = fileOwners_.find(fileName);
-        owner != fileOwners_.end() && owner->second != keyStr) {
+    if (const auto owner = fileOwners_.find(fileName); owner != fileOwners_.end() && owner->second != keyStr) {
         const auto collided = index_.find(owner->second);
         if (collided != index_.end()) {
             if (!removeLocked(collided)) {
@@ -251,17 +233,10 @@ bool DiskCache::store(std::string_view key, const CachedResponse& entry) {
     }
 
     const auto existing = index_.find(keyStr);
-    const std::size_t replacedBytes =
-        existing == index_.end() ? 0 : existing->second.bytes;
-    const std::size_t availableWithoutReplacement =
-        maxBytes_ - serialized->size();
+    const std::size_t replacedBytes = existing == index_.end() ? 0 : existing->second.bytes;
+    const std::size_t availableWithoutReplacement = maxBytes_ - serialized->size();
     while (totalBytes_ - replacedBytes > availableWithoutReplacement) {
-        const auto victim = std::find_if(
-            recency_.rbegin(),
-            recency_.rend(),
-            [&keyStr](const std::string& candidate) {
-                return candidate != keyStr;
-            });
+        const auto victim = std::find_if(recency_.rbegin(), recency_.rend(), [&keyStr](const std::string& candidate) { return candidate != keyStr; });
         if (victim == recency_.rend()) {
             return false;
         }
@@ -275,14 +250,10 @@ bool DiskCache::store(std::string_view key, const CachedResponse& entry) {
         }
     }
 
-    const std::filesystem::path tempPath =
-        directory_ / (fileName + ".tmp" + std::to_string(tempCounter_++));
+    const std::filesystem::path tempPath = directory_ / (fileName + ".tmp" + std::to_string(tempCounter_++));
     {
         std::ofstream out(tempPath, std::ios::binary | std::ios::trunc);
-        if (!out ||
-            !out.write(
-                serialized->data(),
-                static_cast<std::streamsize>(serialized->size()))) {
+        if (!out || !out.write(serialized->data(), static_cast<std::streamsize>(serialized->size()))) {
             removeOwnedFileBestEffort(tempPath);
             return false;
         }
@@ -366,8 +337,7 @@ std::size_t DiskCache::byteSize() const {
     return totalBytes_;
 }
 
-bool DiskCache::removeLocked(
-    std::unordered_map<std::string, Entry>::iterator it) noexcept {
+bool DiskCache::removeLocked(std::unordered_map<std::string, Entry>::iterator it) noexcept {
     std::error_code ec;
     const auto path = directory_ / it->second.fileName;
     (void)std::filesystem::remove(path, ec);
@@ -379,15 +349,13 @@ bool DiskCache::removeLocked(
     return true;
 }
 
-void DiskCache::eraseIndexLocked(
-    std::unordered_map<std::string, Entry>::iterator it) noexcept {
+void DiskCache::eraseIndexLocked(std::unordered_map<std::string, Entry>::iterator it) noexcept {
     if (totalBytes_ >= it->second.bytes) {
         totalBytes_ -= it->second.bytes;
     } else {
         totalBytes_ = 0;
     }
-    if (const auto owner = fileOwners_.find(it->second.fileName);
-        owner != fileOwners_.end() && owner->second == it->first) {
+    if (const auto owner = fileOwners_.find(it->second.fileName); owner != fileOwners_.end() && owner->second == it->first) {
         fileOwners_.erase(owner);
     }
     if (const auto lruIt = lru_.find(it->first); lruIt != lru_.end()) {

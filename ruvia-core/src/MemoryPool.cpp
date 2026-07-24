@@ -29,8 +29,7 @@ namespace {
 constexpr std::size_t kTaskFrameCacheGranularity = 128;
 constexpr std::size_t kTaskFrameCacheMaxBlockBytes = 8 * 1024;
 constexpr std::size_t kTaskFrameCacheBudgetBytes = 128 * 1024;
-constexpr std::size_t kTaskFrameCacheBinCount =
-    kTaskFrameCacheMaxBlockBytes / kTaskFrameCacheGranularity;
+constexpr std::size_t kTaskFrameCacheBinCount = kTaskFrameCacheMaxBlockBytes / kTaskFrameCacheGranularity;
 
 [[nodiscard]] constexpr std::size_t taskFrameClassBytes(std::size_t bytes) noexcept {
     return (bytes + kTaskFrameCacheGranularity - 1) & ~(kTaskFrameCacheGranularity - 1);
@@ -111,8 +110,7 @@ void taskFrameDeallocate(void* pointer) noexcept {
 
 void taskFrameDeallocateSized(void* pointer, std::size_t bytes) noexcept {
     const std::size_t classBytes = taskFrameClassBytes(bytes == 0 ? 1 : bytes);
-    if (!taskFrameCacheDestroyed && classBytes <= kTaskFrameCacheMaxBlockBytes
-        && taskFrameCache.storeBlock(pointer, classBytes)) {
+    if (!taskFrameCacheDestroyed && classBytes <= kTaskFrameCacheMaxBlockBytes && taskFrameCache.storeBlock(pointer, classBytes)) {
         return;
     }
     ::operator delete(pointer);
@@ -146,7 +144,7 @@ std::pmr::memory_resource* RequestMemory::resource() & noexcept {
     return &arena_;
 }
 
-std::pmr::memory_resource* RequestMemory::resource() const & noexcept {
+std::pmr::memory_resource* RequestMemory::resource() const& noexcept {
     return const_cast<std::pmr::monotonic_buffer_resource*>(&arena_);
 }
 

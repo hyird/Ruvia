@@ -40,27 +40,26 @@ RUVIA_TEST(utf8_accepts_valid_sequences) {
 }
 
 RUVIA_TEST(utf8_rejects_invalid_sequences) {
-    RUVIA_CHECK(!isValidUtf8(bytes({0x80})));                   // stray continuation byte
-    RUVIA_CHECK(!isValidUtf8(bytes({0xFF})));                   // invalid lead byte
-    RUVIA_CHECK(!isValidUtf8(bytes({0xC0, 0x80})));            // overlong NUL (C0 lead)
-    RUVIA_CHECK(!isValidUtf8(bytes({0xC1, 0xBF})));            // overlong (C1 lead)
-    RUVIA_CHECK(!isValidUtf8(bytes({0xE0, 0x80, 0x80})));      // overlong 3-byte
-    RUVIA_CHECK(!isValidUtf8(bytes({0xE0, 0x9F, 0xBF})));      // overlong encoding of U+07FF
-    RUVIA_CHECK(!isValidUtf8(bytes({0xED, 0xA0, 0x80})));      // surrogate U+D800
-    RUVIA_CHECK(!isValidUtf8(bytes({0xED, 0xBF, 0xBF})));      // surrogate U+DFFF
+    RUVIA_CHECK(!isValidUtf8(bytes({0x80})));                    // stray continuation byte
+    RUVIA_CHECK(!isValidUtf8(bytes({0xFF})));                    // invalid lead byte
+    RUVIA_CHECK(!isValidUtf8(bytes({0xC0, 0x80})));              // overlong NUL (C0 lead)
+    RUVIA_CHECK(!isValidUtf8(bytes({0xC1, 0xBF})));              // overlong (C1 lead)
+    RUVIA_CHECK(!isValidUtf8(bytes({0xE0, 0x80, 0x80})));        // overlong 3-byte
+    RUVIA_CHECK(!isValidUtf8(bytes({0xE0, 0x9F, 0xBF})));        // overlong encoding of U+07FF
+    RUVIA_CHECK(!isValidUtf8(bytes({0xED, 0xA0, 0x80})));        // surrogate U+D800
+    RUVIA_CHECK(!isValidUtf8(bytes({0xED, 0xBF, 0xBF})));        // surrogate U+DFFF
     RUVIA_CHECK(!isValidUtf8(bytes({0xF0, 0x80, 0x80, 0x80})));  // overlong 4-byte
     RUVIA_CHECK(!isValidUtf8(bytes({0xF4, 0x90, 0x80, 0x80})));  // U+110000, past the maximum
     RUVIA_CHECK(!isValidUtf8(bytes({0xF5, 0x80, 0x80, 0x80})));  // F5 lead, out of range
-    RUVIA_CHECK(!isValidUtf8(bytes({0xC2})));                  // truncated 2-byte
-    RUVIA_CHECK(!isValidUtf8(bytes({0xE2, 0x82})));            // truncated 3-byte
-    RUVIA_CHECK(!isValidUtf8(bytes({0xC2, 0xC2})));            // lead byte where a continuation was due
+    RUVIA_CHECK(!isValidUtf8(bytes({0xC2})));                    // truncated 2-byte
+    RUVIA_CHECK(!isValidUtf8(bytes({0xE2, 0x82})));              // truncated 3-byte
+    RUVIA_CHECK(!isValidUtf8(bytes({0xC2, 0xC2})));              // lead byte where a continuation was due
 }
 
 RUVIA_TEST(websocket_close_code_validity) {
     // RFC 6455 §7.4.1 plus the IANA-registered 1012-1014
     // (service restart / try again later / bad gateway).
-    for (const int code :
-         {1000, 1001, 1002, 1003, 1007, 1008, 1009, 1010, 1011, 1012, 1013, 1014}) {
+    for (const int code : {1000, 1001, 1002, 1003, 1007, 1008, 1009, 1010, 1011, 1012, 1013, 1014}) {
         RUVIA_CHECK(closeCodeValid(code));
     }
     RUVIA_CHECK(closeCodeValid(3000));  // registered range

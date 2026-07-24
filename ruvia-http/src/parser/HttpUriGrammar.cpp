@@ -23,24 +23,18 @@ inline constexpr std::array<bool, 256> kRegNameCharTable = [] {
     for (unsigned c = 'a'; c <= 'z'; ++c) {
         table[c] = true;
     }
-    for (const unsigned char c :
-         {'-', '.', '_', '~', '!', '$', '&', '\'', '(', ')', '*', '+', ',', ';', '='}) {
+    for (const unsigned char c : {'-', '.', '_', '~', '!', '$', '&', '\'', '(', ')', '*', '+', ',', ';', '='}) {
         table[c] = true;
     }
     return table;
 }();
 
 [[nodiscard]] bool isHexDigit(char c) noexcept {
-    return (c >= '0' && c <= '9') ||
-        (c >= 'A' && c <= 'F') ||
-        (c >= 'a' && c <= 'f');
+    return (c >= '0' && c <= '9') || (c >= 'A' && c <= 'F') || (c >= 'a' && c <= 'f');
 }
 
 [[nodiscard]] bool isUriUnreserved(unsigned char byte) noexcept {
-    return (byte >= '0' && byte <= '9') ||
-        (byte >= 'A' && byte <= 'Z') ||
-        (byte >= 'a' && byte <= 'z') ||
-        byte == '-' || byte == '.' || byte == '_' || byte == '~';
+    return (byte >= '0' && byte <= '9') || (byte >= 'A' && byte <= 'Z') || (byte >= 'a' && byte <= 'z') || byte == '-' || byte == '.' || byte == '_' || byte == '~';
 }
 
 [[nodiscard]] bool isUriSubDelimiter(unsigned char byte) noexcept {
@@ -62,7 +56,6 @@ inline constexpr std::array<bool, 256> kRegNameCharTable = [] {
     }
 }
 
-
 [[nodiscard]] bool parseIpv6HexGroup(std::string_view literal, std::size_t& offset) noexcept {
     std::size_t digits = 0;
     while (offset < literal.size() && digits < 4 && isHexDigit(literal[offset])) {
@@ -75,8 +68,7 @@ inline constexpr std::array<bool, 256> kRegNameCharTable = [] {
 }  // namespace
 
 [[nodiscard]] bool isUriPchar(unsigned char byte) noexcept {
-    return isUriUnreserved(byte) || isUriSubDelimiter(byte) ||
-        byte == ':' || byte == '@';
+    return isUriUnreserved(byte) || isUriSubDelimiter(byte) || byte == ':' || byte == '@';
 }
 
 [[nodiscard]] bool parsePortValue(std::string_view value, std::uint16_t& port) noexcept {
@@ -95,24 +87,17 @@ inline constexpr std::array<bool, 256> kRegNameCharTable = [] {
     return true;
 }
 
-[[nodiscard]] bool isValidUriComponent(
-    std::string_view value,
-    bool allowSlash,
-    bool allowQuestion) noexcept {
+[[nodiscard]] bool isValidUriComponent(std::string_view value, bool allowSlash, bool allowQuestion) noexcept {
     for (std::size_t i = 0; i < value.size(); ++i) {
         const auto byte = static_cast<unsigned char>(value[i]);
         if (byte == '%') {
-            if (i + 2 >= value.size() ||
-                decodeHexNibble(value[i + 1]) < 0 ||
-                decodeHexNibble(value[i + 2]) < 0) {
+            if (i + 2 >= value.size() || decodeHexNibble(value[i + 1]) < 0 || decodeHexNibble(value[i + 2]) < 0) {
                 return false;
             }
             i += 2;
             continue;
         }
-        if (!isUriPchar(byte) &&
-            !(allowSlash && byte == '/') &&
-            !(allowQuestion && byte == '?')) {
+        if (!isUriPchar(byte) && !(allowSlash && byte == '/') && !(allowQuestion && byte == '?')) {
             return false;
         }
     }
@@ -123,16 +108,13 @@ inline constexpr std::array<bool, 256> kRegNameCharTable = [] {
     for (std::size_t i = 0; i < value.size(); ++i) {
         const auto byte = static_cast<unsigned char>(value[i]);
         if (byte == '%') {
-            if (i + 2 >= value.size() ||
-                decodeHexNibble(value[i + 1]) < 0 ||
-                decodeHexNibble(value[i + 2]) < 0) {
+            if (i + 2 >= value.size() || decodeHexNibble(value[i + 1]) < 0 || decodeHexNibble(value[i + 2]) < 0) {
                 return false;
             }
             i += 2;
             continue;
         }
-        if (!isUriUnreserved(byte) && !isUriSubDelimiter(byte) &&
-            byte != ':') {
+        if (!isUriUnreserved(byte) && !isUriSubDelimiter(byte) && byte != ':') {
             return false;
         }
     }
@@ -198,9 +180,7 @@ inline constexpr std::array<bool, 256> kRegNameCharTable = [] {
 
         const auto nextDot = literal.find('.', offset);
         const auto nextColon = literal.find(':', offset);
-        if (isDecimalDigit(literal[offset]) &&
-            nextDot != std::string_view::npos &&
-            (nextColon == std::string_view::npos || nextDot < nextColon)) {
+        if (isDecimalDigit(literal[offset]) && nextDot != std::string_view::npos && (nextColon == std::string_view::npos || nextDot < nextColon)) {
             if (!parseIpv4Address(literal.substr(offset))) {
                 return false;
             }
@@ -276,9 +256,7 @@ inline constexpr std::array<bool, 256> kRegNameCharTable = [] {
     for (std::size_t index = 0; index < value.size(); ++index) {
         const auto byte = static_cast<unsigned char>(value[index]);
         if (byte == '%') {
-            if (index + 2 >= value.size() ||
-                decodeHexNibble(value[index + 1]) < 0 ||
-                decodeHexNibble(value[index + 2]) < 0) {
+            if (index + 2 >= value.size() || decodeHexNibble(value[index + 1]) < 0 || decodeHexNibble(value[index + 2]) < 0) {
                 return false;
             }
             index += 2;

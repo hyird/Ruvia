@@ -15,14 +15,8 @@ namespace {
 }
 
 template <typename Target>
-void applySecurityHeadersTo(
-    Target& target,
-    const SecurityHeadersOptions& options,
-    bool secureTransport) {
-    const auto setHeader = [&target, &options](
-                               std::string_view name,
-                               std::string_view value,
-                               bool skipEmpty) {
+void applySecurityHeadersTo(Target& target, const SecurityHeadersOptions& options, bool secureTransport) {
+    const auto setHeader = [&target, &options](std::string_view name, std::string_view value, bool skipEmpty) {
         if (skipEmpty && value.empty()) {
             return;
         }
@@ -64,10 +58,7 @@ void applySecurityHeadersTo(
 
 void applySecurityHeaders(Context& context, const SecurityHeadersOptions& options) {
     const auto connection = getConnInfo(context);
-    applySecurityHeadersTo(
-        context,
-        options,
-        connection.tls() != nullptr);
+    applySecurityHeadersTo(context, options, connection.tls() != nullptr);
 }
 
 Task<void> SecurityHeadersMiddleware::handle(Context& context, Next& next) {
@@ -75,10 +66,7 @@ Task<void> SecurityHeadersMiddleware::handle(Context& context, Next& next) {
     const bool secureTransport = connection.tls() != nullptr;
     applySecurityHeadersTo(context, SecurityHeadersOptions{}, secureTransport);
     co_await next();
-    applySecurityHeadersTo(
-        detail::ContextAccess::responseStorage(context),
-        SecurityHeadersOptions{},
-        secureTransport);
+    applySecurityHeadersTo(detail::ContextAccess::responseStorage(context), SecurityHeadersOptions{}, secureTransport);
 }
 
 }  // namespace ruvia

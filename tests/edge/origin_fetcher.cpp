@@ -78,10 +78,7 @@ struct CaseResult final {
 // Run one fetch against a loopback origin. When `silent`, the origin accepts and
 // reads the request but never replies, holding the connection open so the fetch
 // hits its read deadline.
-CaseResult runCase(
-    std::string responseBytes,
-    bool silent = false,
-    OriginFetcher::Limits limits = {}) {
+CaseResult runCase(std::string responseBytes, bool silent = false, OriginFetcher::Limits limits = {}) {
     asio::io_context io;
     tcp::acceptor acceptor(io, tcp::endpoint(tcp::v4(), 0));
     const std::uint16_t port = acceptor.local_endpoint().port();
@@ -90,16 +87,14 @@ CaseResult runCase(
     asio::co_spawn(
         io,
         [&]() -> asio::awaitable<void> {
-            auto [acceptEc, socket] =
-                co_await acceptor.async_accept(asio::as_tuple(asio::use_awaitable));
+            auto [acceptEc, socket] = co_await acceptor.async_accept(asio::as_tuple(asio::use_awaitable));
             if (acceptEc) {
                 co_return;
             }
             std::string request;
             char buffer[1024];
             while (request.find("\r\n\r\n") == std::string::npos) {
-                auto [ec, n] = co_await socket.async_read_some(
-                    asio::buffer(buffer), asio::as_tuple(asio::use_awaitable));
+                auto [ec, n] = co_await socket.async_read_some(asio::buffer(buffer), asio::as_tuple(asio::use_awaitable));
                 if (n > 0) {
                     request.append(buffer, n);
                 }
@@ -115,10 +110,7 @@ CaseResult runCase(
                 co_await hold.async_wait(asio::as_tuple(asio::use_awaitable));
                 co_return;
             }
-            co_await asio::async_write(
-                socket,
-                asio::buffer(responseBytes),
-                asio::as_tuple(asio::use_awaitable));
+            co_await asio::async_write(socket, asio::buffer(responseBytes), asio::as_tuple(asio::use_awaitable));
             asio::error_code ignore;
             socket.shutdown(tcp::socket::shutdown_send, ignore);
             co_return;
@@ -136,8 +128,7 @@ CaseResult runCase(
             request.headers = std::span<const HttpHeaderView>(headers);
             AccumulatingSink acc;
             auto sink = acc.make();
-            auto result = co_await fetcher.fetch(
-                io.get_executor(), "127.0.0.1", port, false, request, sink);
+            auto result = co_await fetcher.fetch(io.get_executor(), "127.0.0.1", port, false, request, sink);
             out.outcome = result.outcome;
             out.status = acc.head.status;
             out.body = std::move(acc.body);
@@ -151,10 +142,7 @@ CaseResult runCase(
     return out;
 }
 
-[[nodiscard]] bool hasHeader(
-    const std::vector<std::pair<std::string, std::string>>& headers,
-    std::string_view name,
-    std::string_view value) {
+[[nodiscard]] bool hasHeader(const std::vector<std::pair<std::string, std::string>>& headers, std::string_view name, std::string_view value) {
     for (const auto& [n, v] : headers) {
         if (n == name && v == value) {
             return true;
@@ -178,14 +166,10 @@ int main() {
         check(r.outcome == OriginFetchOutcome::kOk, "known-length fetch succeeds");
         check(r.status == 200, "known-length status is 200");
         check(r.body == "hello", "known-length body decoded");
-        check(hasHeader(r.headers, "Cache-Control", "max-age=60"),
-              "response headers are captured verbatim");
-        check(r.requestSeenByOrigin.starts_with("GET /thing HTTP/1.1\r\n"),
-              "origin sees the request line");
-        check(r.requestSeenByOrigin.find("Host: 127.0.0.1:") != std::string::npos,
-              "writer generated a Host header");
-        check(r.requestSeenByOrigin.find("accept: */*") != std::string::npos,
-              "forwarded request header reached the origin");
+        check(hasHeader(r.headers, "Cache-Control", "max-age=60"), "response headers are captured verbatim");
+        check(r.requestSeenByOrigin.starts_with("GET /thing HTTP/1.1\r\n"), "origin sees the request line");
+        check(r.requestSeenByOrigin.find("Host: 127.0.0.1:") != std::string::npos, "writer generated a Host header");
+        check(r.requestSeenByOrigin.find("accept: */*") != std::string::npos, "forwarded request header reached the origin");
     }
 
     // Chunked transfer-coding is de-chunked into a contiguous body.
@@ -230,8 +214,7 @@ int main() {
         limits.connectTimeout = std::chrono::milliseconds(200);
         limits.ioTimeout = std::chrono::milliseconds(200);
         const auto r = runCase("", /*silent=*/true, limits);
-        check(r.outcome == OriginFetchOutcome::kTimeout,
-              "a non-responding origin times out");
+        check(r.outcome == OriginFetchOutcome::kTimeout, "a non-responding origin times out");
     }
 
     // Connection pooling: two sequential fetches to a keep-alive origin reuse one
@@ -246,8 +229,7 @@ int main() {
             io,
             [&]() -> asio::awaitable<void> {
                 for (;;) {
-                    auto [aec, socket] =
-                        co_await acceptor.async_accept(asio::as_tuple(asio::use_awaitable));
+                    auto [aec, socket] = co_await acceptor.async_accept(asio::as_tuple(asio::use_awaitable));
                     if (aec) {
                         co_return;
                     }
@@ -260,9 +242,7 @@ int main() {
                             char buffer[1024];
                             for (;;) {
                                 while (request.find("\r\n\r\n") == std::string::npos) {
-                                    auto [ec, n] = co_await sock.async_read_some(
-                                        asio::buffer(buffer),
-                                        asio::as_tuple(asio::use_awaitable));
+                                    auto [ec, n] = co_await sock.async_read_some(asio::buffer(buffer), asio::as_tuple(asio::use_awaitable));
                                     if (n > 0) {
                                         request.append(buffer, n);
                                     }
@@ -270,11 +250,8 @@ int main() {
                                         co_return;
                                     }
                                 }
-                                static constexpr std::string_view kResponse =
-                                    "HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nhi";
-                                co_await asio::async_write(
-                                    sock, asio::buffer(kResponse),
-                                    asio::as_tuple(asio::use_awaitable));
+                                static constexpr std::string_view kResponse = "HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nhi";
+                                co_await asio::async_write(sock, asio::buffer(kResponse), asio::as_tuple(asio::use_awaitable));
                                 request.erase(0, request.find("\r\n\r\n") + 4);
                             }
                         },
@@ -299,16 +276,14 @@ int main() {
                 request.target = "/first";
                 AccumulatingSink acc1;
                 auto sink1 = acc1.make();
-                auto r1 = co_await fetcher.fetch(
-                    io.get_executor(), "127.0.0.1", port, false, request, sink1);
+                auto r1 = co_await fetcher.fetch(io.get_executor(), "127.0.0.1", port, false, request, sink1);
                 outcome1 = r1.outcome;
                 idleAfterFirst = fetcher.idleConnectionCount();
 
                 request.target = "/second";
                 AccumulatingSink acc2;
                 auto sink2 = acc2.make();
-                auto r2 = co_await fetcher.fetch(
-                    io.get_executor(), "127.0.0.1", port, false, request, sink2);
+                auto r2 = co_await fetcher.fetch(io.get_executor(), "127.0.0.1", port, false, request, sink2);
                 outcome2 = r2.outcome;
 
                 io.stop();
@@ -338,28 +313,24 @@ int main() {
 
             asio::ssl::context serverContext(asio::ssl::context::tls_server);
             serverContext.use_certificate_chain(asio::buffer(edge_test_tls::kCertPem));
-            serverContext.use_private_key(
-                asio::buffer(edge_test_tls::kKeyPem), asio::ssl::context::pem);
+            serverContext.use_private_key(asio::buffer(edge_test_tls::kKeyPem), asio::ssl::context::pem);
 
             asio::co_spawn(
                 io,
                 [&]() -> asio::awaitable<void> {
-                    auto [aec, socket] =
-                        co_await acceptor.async_accept(asio::as_tuple(asio::use_awaitable));
+                    auto [aec, socket] = co_await acceptor.async_accept(asio::as_tuple(asio::use_awaitable));
                     if (aec) {
                         co_return;
                     }
                     asio::ssl::stream<tcp::socket> tls(std::move(socket), serverContext);
-                    auto [hec] = co_await tls.async_handshake(
-                        asio::ssl::stream_base::server, asio::as_tuple(asio::use_awaitable));
+                    auto [hec] = co_await tls.async_handshake(asio::ssl::stream_base::server, asio::as_tuple(asio::use_awaitable));
                     if (hec) {
                         co_return;  // client rejected the certificate
                     }
                     std::string request;
                     char buffer[1024];
                     while (request.find("\r\n\r\n") == std::string::npos) {
-                        auto [ec, n] = co_await tls.async_read_some(
-                            asio::buffer(buffer), asio::as_tuple(asio::use_awaitable));
+                        auto [ec, n] = co_await tls.async_read_some(asio::buffer(buffer), asio::as_tuple(asio::use_awaitable));
                         if (n > 0) {
                             request.append(buffer, n);
                         }
@@ -367,10 +338,8 @@ int main() {
                             co_return;
                         }
                     }
-                    static constexpr std::string_view kResponse =
-                        "HTTP/1.1 200 OK\r\nContent-Length: 6\r\nConnection: close\r\n\r\nsecure";
-                    co_await asio::async_write(
-                        tls, asio::buffer(kResponse), asio::as_tuple(asio::use_awaitable));
+                    static constexpr std::string_view kResponse = "HTTP/1.1 200 OK\r\nContent-Length: 6\r\nConnection: close\r\n\r\nsecure";
+                    co_await asio::async_write(tls, asio::buffer(kResponse), asio::as_tuple(asio::use_awaitable));
                     co_return;
                 },
                 asio::detached);
@@ -389,8 +358,7 @@ int main() {
                     request.headers = std::span<const HttpHeaderView>(headers);
                     AccumulatingSink acc;
                     auto sink = acc.make();
-                    auto r = co_await fetcher.fetch(
-                        io.get_executor(), "127.0.0.1", port, /*https=*/true, request, sink);
+                    auto r = co_await fetcher.fetch(io.get_executor(), "127.0.0.1", port, /*https=*/true, request, sink);
                     out.outcome = r.outcome;
                     out.body = std::move(acc.body);
                     io.stop();
@@ -403,13 +371,11 @@ int main() {
         };
 
         const auto trusting = runTlsFetch(/*verify=*/false);
-        check(trusting.outcome == OriginFetchOutcome::kOk,
-              "https origin fetch succeeds with verification off");
+        check(trusting.outcome == OriginFetchOutcome::kOk, "https origin fetch succeeds with verification off");
         check(trusting.body == "secure", "https origin body decoded over TLS");
 
         const auto verifying = runTlsFetch(/*verify=*/true);
-        check(verifying.outcome == OriginFetchOutcome::kConnectFailed,
-              "certificate verification rejects the untrusted origin");
+        check(verifying.outcome == OriginFetchOutcome::kConnectFailed, "certificate verification rejects the untrusted origin");
     }
 
     // Circuit breaker. A dead origin fails every request the same way, and each
@@ -438,8 +404,7 @@ int main() {
                     request.target = "/down";
                     AccumulatingSink acc;
                     auto sink = acc.make();
-                    auto r = co_await fetcher.fetch(
-                        io.get_executor(), "127.0.0.1", deadPort,
+                    auto r = co_await fetcher.fetch(io.get_executor(), "127.0.0.1", deadPort,
                         /*https=*/false, request, sink);
                     co_return r.outcome;
                 };
@@ -465,15 +430,10 @@ int main() {
 
         check(outcomes.size() == 5, "the breaker sequence ran to completion");
         if (outcomes.size() == 5) {
-            check(outcomes[0] == OriginFetchOutcome::kConnectFailed &&
-                      outcomes[1] == OriginFetchOutcome::kConnectFailed,
-                  "attempts below the threshold still dial the origin");
-            check(outcomes[2] == OriginFetchOutcome::kCircuitOpen,
-                  "the breaker opens once the failure threshold is reached");
-            check(outcomes[3] == OriginFetchOutcome::kConnectFailed,
-                  "one probe is admitted after the reset window");
-            check(outcomes[4] == OriginFetchOutcome::kCircuitOpen,
-                  "a failed probe re-opens the breaker");
+            check(outcomes[0] == OriginFetchOutcome::kConnectFailed && outcomes[1] == OriginFetchOutcome::kConnectFailed, "attempts below the threshold still dial the origin");
+            check(outcomes[2] == OriginFetchOutcome::kCircuitOpen, "the breaker opens once the failure threshold is reached");
+            check(outcomes[3] == OriginFetchOutcome::kConnectFailed, "one probe is admitted after the reset window");
+            check(outcomes[4] == OriginFetchOutcome::kCircuitOpen, "a failed probe re-opens the breaker");
         }
     }
 
@@ -485,8 +445,7 @@ int main() {
             "Content-Length: 5\r\n"
             "\r\n"
             "hello");
-        check(r.outcome == OriginFetchOutcome::kOk,
-              "a healthy origin is unaffected by the breaker");
+        check(r.outcome == OriginFetchOutcome::kOk, "a healthy origin is unaffected by the breaker");
     }
 
     if (failures == 0) {

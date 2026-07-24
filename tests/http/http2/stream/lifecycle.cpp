@@ -50,34 +50,22 @@ concept HasStaleLocalSendProduct = requires(const T& value) {
 };
 
 template <typename T>
-concept HasStaleResetAccessor = requires(const T& value) {
-    value.reset();
-};
+concept HasStaleResetAccessor = requires(const T& value) { value.reset(); };
 
 template <typename T>
-concept HasStaleMarkReset = requires(T& value) {
-    value.markReset(Http2StreamCloseSource::kLocal);
-};
+concept HasStaleMarkReset = requires(T& value) { value.markReset(Http2StreamCloseSource::kLocal); };
 
 template <typename T>
-concept HasStaleMarkClosed = requires(T& value) {
-    value.markClosed(Http2StreamCloseSource::kLocal);
-};
+concept HasStaleMarkClosed = requires(T& value) { value.markClosed(Http2StreamCloseSource::kLocal); };
 
 template <typename T>
-concept HasStaleBodyEnded = requires(const T& value) {
-    value.bodyEnded();
-};
+concept HasStaleBodyEnded = requires(const T& value) { value.bodyEnded(); };
 
 template <typename T>
-concept HasStalePeerEndStream = requires(const T& value) {
-    value.peerEndStream();
-};
+concept HasStalePeerEndStream = requires(const T& value) { value.peerEndStream(); };
 
 template <typename T>
-concept HasStaleHeadersDecoded = requires(const T& value) {
-    value.headersDecoded();
-};
+concept HasStaleHeadersDecoded = requires(const T& value) { value.headersDecoded(); };
 
 static_assert(!std::default_initializable<Http2LocalSendState>);
 static_assert(!std::default_initializable<Http2LocalHeadPending>);
@@ -95,14 +83,11 @@ static_assert(!std::default_initializable<Http2RemoteHeadEndStreamPending>);
 static_assert(!std::default_initializable<Http2RemoteContentOpen>);
 static_assert(!std::default_initializable<Http2RemoteConnectPending>);
 static_assert(!std::default_initializable<Http2RemoteConnectPendingEndStream>);
-static_assert(!std::default_initializable<
-    Http2RemoteConnectRejectedAwaitingEndStream>);
+static_assert(!std::default_initializable<Http2RemoteConnectRejectedAwaitingEndStream>);
 static_assert(!std::default_initializable<Http2RemoteTunnelOpen>);
 static_assert(!std::default_initializable<Http2RemoteEndStream>);
 static_assert(!std::default_initializable<Http2RemoteAborted>);
-static_assert(!std::constructible_from<
-    Http2StreamAborted,
-    Http2StreamCloseSource>);
+static_assert(!std::constructible_from<Http2StreamAborted, Http2StreamCloseSource>);
 static_assert(!HasCloseSource<Http2LocalSendState>);
 static_assert(!HasCloseSource<Http2LocalHeadPending>);
 static_assert(!HasCloseSource<Http2LocalEndStreamCommitted>);
@@ -113,12 +98,8 @@ static_assert(!HasStaleResetAccessor<Http2LocalSendState>);
 static_assert(!HasStaleResetAccessor<Http2StreamLifecycle>);
 static_assert(!HasStaleMarkReset<Http2StreamLifecycle>);
 static_assert(!HasStaleMarkClosed<Http2StreamLifecycle>);
-static_assert(std::same_as<
-    decltype(std::declval<const Http2StreamLifecycle&>().localSend()),
-    const Http2LocalSendState&>);
-static_assert(std::same_as<
-    decltype(std::declval<const Http2StreamLifecycle&>().remoteReceive()),
-    const Http2RemoteReceiveState&>);
+static_assert(std::same_as<decltype(std::declval<const Http2StreamLifecycle&>().localSend()), const Http2LocalSendState&>);
+static_assert(std::same_as<decltype(std::declval<const Http2StreamLifecycle&>().remoteReceive()), const Http2RemoteReceiveState&>);
 static_assert(!HasStaleBodyEnded<Http2StreamLifecycle>);
 static_assert(!HasStalePeerEndStream<Http2StreamLifecycle>);
 static_assert(!HasStaleBodyEnded<Http2StreamState>);
@@ -126,12 +107,9 @@ static_assert(!HasStalePeerEndStream<Http2StreamState>);
 static_assert(!HasStaleHeadersDecoded<Http2StreamState>);
 
 template <typename T>
-concept ExposesRvalueHttp2StreamLifecycleStorage =
-    requires(T&& lifecycle) { std::move(lifecycle).localSend(); } ||
-    requires(T&& lifecycle) { std::move(lifecycle).remoteReceive(); };
+concept ExposesRvalueHttp2StreamLifecycleStorage = requires(T&& lifecycle) { std::move(lifecycle).localSend(); } || requires(T&& lifecycle) { std::move(lifecycle).remoteReceive(); };
 
-static_assert(!ExposesRvalueHttp2StreamLifecycleStorage<
-    Http2StreamLifecycle>);
+static_assert(!ExposesRvalueHttp2StreamLifecycleStorage<Http2StreamLifecycle>);
 
 }  // namespace
 
@@ -243,11 +221,9 @@ RUVIA_TEST(http2_local_send_state_abort_owns_immutable_close_source) {
     RUVIA_CHECK(stream.abort(Http2StreamCloseSource::kLocal));
     const auto* aborted = state.aborted();
     RUVIA_CHECK(aborted != nullptr);
-    RUVIA_CHECK(aborted != nullptr &&
-        aborted->source() == Http2StreamCloseSource::kLocal);
+    RUVIA_CHECK(aborted != nullptr && aborted->source() == Http2StreamCloseSource::kLocal);
     RUVIA_CHECK(!stream.abort(Http2StreamCloseSource::kPeer));
-    RUVIA_CHECK(state.aborted() != nullptr &&
-        state.aborted()->source() == Http2StreamCloseSource::kLocal);
+    RUVIA_CHECK(state.aborted() != nullptr && state.aborted()->source() == Http2StreamCloseSource::kLocal);
     RUVIA_CHECK(!stream.beginLocalRequestContent());
     RUVIA_CHECK(!stream.commitLocalEndStream());
 }
@@ -306,8 +282,7 @@ RUVIA_TEST(stream_lifecycle_abort_sets_all_terminal_state) {
     RUVIA_CHECK(!stream.isAborted());
     RUVIA_CHECK(stream.remoteReceive().headPending() != nullptr);
     RUVIA_CHECK(stream.localSend().headPending() != nullptr);
-    RUVIA_CHECK(!stream.abort(
-        static_cast<Http2StreamCloseSource>(0xFF)));
+    RUVIA_CHECK(!stream.abort(static_cast<Http2StreamCloseSource>(0xFF)));
     RUVIA_CHECK(stream.localSend().headPending() != nullptr);
 
     RUVIA_CHECK(stream.abort(Http2StreamCloseSource::kPeer));
@@ -315,11 +290,9 @@ RUVIA_TEST(stream_lifecycle_abort_sets_all_terminal_state) {
     RUVIA_CHECK(stream.remoteReceive().aborted() != nullptr);
     const auto* aborted = stream.localSend().aborted();
     RUVIA_CHECK(aborted != nullptr);
-    RUVIA_CHECK(aborted != nullptr &&
-        aborted->source() == Http2StreamCloseSource::kPeer);
+    RUVIA_CHECK(aborted != nullptr && aborted->source() == Http2StreamCloseSource::kPeer);
     RUVIA_CHECK(!stream.abort(Http2StreamCloseSource::kPeerGoaway));
-    RUVIA_CHECK(stream.localSend().aborted()->source() ==
-        Http2StreamCloseSource::kPeer);
+    RUVIA_CHECK(stream.localSend().aborted()->source() == Http2StreamCloseSource::kPeer);
 }
 
 RUVIA_TEST(stream_lifecycle_abort_blocks_queue_and_dispatch) {

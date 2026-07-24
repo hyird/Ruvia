@@ -8,11 +8,7 @@ RUVIA_TEST(response_stream_cold_operation_rejects_after_capability_teardown) {
     bool rejected = false;
 
     asio::io_context ctx(1);
-    auto future = asio::co_spawn(
-        ctx,
-        ruvia::detail::taskAsAwaitable(
-            awaitExpiredWrite(operation, rejected)),
-        asio::use_future);
+    auto future = asio::co_spawn(ctx, ruvia::detail::taskAsAwaitable(awaitExpiredWrite(operation, rejected)), asio::use_future);
     ctx.run();
     future.get();
 
@@ -25,11 +21,7 @@ RUVIA_TEST(websocket_cold_operation_rejects_after_facade_teardown) {
     auto operation = makeExpiredWebSocketWrite(capture);
     bool rejected = false;
     asio::io_context ctx(1);
-    auto future = asio::co_spawn(
-        ctx,
-        ruvia::detail::taskAsAwaitable(
-            awaitExpiredWrite(operation, rejected)),
-        asio::use_future);
+    auto future = asio::co_spawn(ctx, ruvia::detail::taskAsAwaitable(awaitExpiredWrite(operation, rejected)), asio::use_future);
     ctx.run();
     future.get();
     RUVIA_CHECK(rejected);
@@ -40,11 +32,7 @@ RUVIA_TEST(body_reader_cold_operation_rejects_after_facade_teardown) {
     auto operation = makeExpiredBodyRead();
     bool rejected = false;
     asio::io_context ctx(1);
-    auto future = asio::co_spawn(
-        ctx,
-        ruvia::detail::taskAsAwaitable(
-            awaitExpiredBodyRead(operation, rejected)),
-        asio::use_future);
+    auto future = asio::co_spawn(ctx, ruvia::detail::taskAsAwaitable(awaitExpiredBodyRead(operation, rejected)), asio::use_future);
     ctx.run();
     future.get();
     RUVIA_CHECK(rejected);
@@ -91,8 +79,7 @@ RUVIA_TEST(scoped_capability_copy_relinks_and_early_destruction_unlinks) {
 RUVIA_TEST(scoped_operation_parent_close_destroys_cold_frame_immediately) {
     ruvia::detail::ScopedOperationScope scope;
     bool destroyed = false;
-    auto operation = ruvia::detail::makeScopedOperation(
-        scope, coldFrameTask(ColdFrameProbe(destroyed)));
+    auto operation = ruvia::detail::makeScopedOperation(scope, coldFrameTask(ColdFrameProbe(destroyed)));
     RUVIA_CHECK(!destroyed);
     scope.close();
     RUVIA_CHECK(destroyed);

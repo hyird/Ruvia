@@ -11,9 +11,7 @@
 
 namespace ruvia {
 
-detail::MariaDbPool::ConnectionSlot::ConnectionSlot(
-    asio::io_context& ioContext,
-    std::pmr::memory_resource* resource)
+detail::MariaDbPool::ConnectionSlot::ConnectionSlot(asio::io_context& ioContext, std::pmr::memory_resource* resource)
     : resolver(ioContext),
       waitSocket(nullptr, SlotSocketDeleter{detail::pmrResourceOrDefault(resource)}) {}
 
@@ -98,8 +96,7 @@ void detail::MariaDbPool::closeSlot(ConnectionSlot& slot) noexcept {
     slot.resolver.cancel();
     if (slot.waitActive) {
         const auto* activeKind = slot.deadline.kind();
-        if (activeKind != nullptr &&
-            *activeKind == ConnectionSlot::DeadlineKind::kSleep) {
+        if (activeKind != nullptr && *activeKind == ConnectionSlot::DeadlineKind::kSleep) {
             auto handle = std::exchange(slot.deadlineContinuation, {});
             if (handle) {
                 handle.resume();
@@ -116,12 +113,9 @@ void detail::MariaDbPool::closeSlot(ConnectionSlot& slot) noexcept {
     }
 
     const auto* kind = slot.deadline.kind();
-    if (kind != nullptr &&
-        *kind == ConnectionSlot::DeadlineKind::kSocket &&
-        slot.waitSocket != nullptr) {
+    if (kind != nullptr && *kind == ConnectionSlot::DeadlineKind::kSocket && slot.waitSocket != nullptr) {
         slot.waitSocket->cancel();
-    } else if (kind != nullptr &&
-               *kind == ConnectionSlot::DeadlineKind::kSleep) {
+    } else if (kind != nullptr && *kind == ConnectionSlot::DeadlineKind::kSleep) {
         auto handle = std::exchange(slot.deadlineContinuation, {});
         if (handle) {
             handle.resume();
@@ -143,17 +137,12 @@ void detail::MariaDbPool::closeSlot(ConnectionSlot& slot) noexcept {
     slot.closeRequested = false;
 }
 
-void detail::MariaDbPool::setSlotDeadline(
-    ConnectionSlot& slot,
-    std::chrono::milliseconds timeout,
-    ConnectionSlot::DeadlineKind kind) noexcept {
+void detail::MariaDbPool::setSlotDeadline(ConnectionSlot& slot, std::chrono::milliseconds timeout, ConnectionSlot::DeadlineKind kind) noexcept {
     if (timeout.count() <= 0) {
         slot.deadline.reset();
         return;
     }
-    slot.deadline.arm(
-        detail::workerTimerDeadlineAfter(timeout),
-        kind);
+    slot.deadline.arm(detail::workerTimerDeadlineAfter(timeout), kind);
 }
 
 void detail::MariaDbPool::clearSlotDeadline(ConnectionSlot& slot) noexcept {

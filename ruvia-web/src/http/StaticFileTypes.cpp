@@ -14,14 +14,37 @@ namespace {
 inline constexpr std::size_t kStaticRootLinearLookupLimit = 8;
 
 inline constexpr std::string_view kDefaultStaticFileTypes[] = {
-    "apng", "avif", "bmp", "css", "cur", "eot", "gif", "htm", "html", "ico",
-    "jpeg", "jpg", "js", "json", "map", "mjs", "otf", "png", "svg", "ttf",
-    "txt", "wasm", "webmanifest", "webp", "woff", "woff2", "xml", "xsl",
+    "apng",
+    "avif",
+    "bmp",
+    "css",
+    "cur",
+    "eot",
+    "gif",
+    "htm",
+    "html",
+    "ico",
+    "jpeg",
+    "jpg",
+    "js",
+    "json",
+    "map",
+    "mjs",
+    "otf",
+    "png",
+    "svg",
+    "ttf",
+    "txt",
+    "wasm",
+    "webmanifest",
+    "webp",
+    "woff",
+    "woff2",
+    "xml",
+    "xsl",
 };
 
-const StaticMimeType* findStaticMimeType(
-    const std::pmr::vector<StaticMimeType>& mimeTypes,
-    std::string_view extension) noexcept {
+const StaticMimeType* findStaticMimeType(const std::pmr::vector<StaticMimeType>& mimeTypes, std::string_view extension) noexcept {
     if (mimeTypes.size() <= kStaticRootLinearLookupLimit) {
         for (const auto& mime : mimeTypes) {
             if (mime.extension == extension) {
@@ -31,13 +54,7 @@ const StaticMimeType* findStaticMimeType(
         return nullptr;
     }
 
-    const auto iter = std::ranges::lower_bound(
-        mimeTypes,
-        extension,
-        std::ranges::less{},
-        [](const StaticMimeType& mime) noexcept {
-            return std::string_view(mime.extension);
-        });
+    const auto iter = std::ranges::lower_bound(mimeTypes, extension, std::ranges::less{}, [](const StaticMimeType& mime) noexcept { return std::string_view(mime.extension); });
     if (iter == mimeTypes.end() || std::string_view(iter->extension) != extension) {
         return nullptr;
     }
@@ -54,8 +71,7 @@ StaticFileTypePolicy StaticFileTypePolicy::all() {
     return StaticFileTypePolicy(Kind::kAll);
 }
 
-StaticFileTypePolicy StaticFileTypePolicy::only(
-    std::span<const std::string_view> extensions) {
+StaticFileTypePolicy StaticFileTypePolicy::only(std::span<const std::string_view> extensions) {
     if (extensions.empty()) {
         throw std::invalid_argument("static file type allow-list must not be empty");
     }
@@ -87,9 +103,7 @@ void normalizeMimeTypes(std::pmr::vector<StaticMimeType>& mimeTypes) {
             }
         }
     }
-    std::ranges::sort(mimeTypes, [](const StaticMimeType& left, const StaticMimeType& right) {
-        return left.extension < right.extension;
-    });
+    std::ranges::sort(mimeTypes, [](const StaticMimeType& left, const StaticMimeType& right) { return left.extension < right.extension; });
 }
 
 void normalizeFileTypes(std::pmr::vector<std::pmr::string>& fileTypes) {
@@ -107,9 +121,7 @@ void normalizeFileTypes(std::pmr::vector<std::pmr::string>& fileTypes) {
     fileTypes.erase(std::ranges::unique(fileTypes).begin(), fileTypes.end());
 }
 
-bool fileTypeAllowed(
-    std::string_view extension,
-    const StaticRootOptions& options) {
+bool fileTypeAllowed(std::string_view extension, const StaticRootOptions& options) {
     if (options.fileTypes.kind() == StaticFileTypePolicy::Kind::kAll) {
         return true;
     }
@@ -125,11 +137,7 @@ bool fileTypeAllowed(
     return std::ranges::binary_search(extensions, value);
 }
 
-std::pmr::string contentTypeFor(
-    const std::filesystem::path& path,
-    std::string_view extension,
-    const StaticRootOptions& options,
-    std::pmr::memory_resource* resource) {
+std::pmr::string contentTypeFor(const std::filesystem::path& path, std::string_view extension, const StaticRootOptions& options, std::pmr::memory_resource* resource) {
     if (const auto* const mime = findStaticMimeType(options.mimeTypes, extension); mime != nullptr) {
         return std::pmr::string(mime->contentType, resource);
     }

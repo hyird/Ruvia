@@ -32,7 +32,8 @@ Task<std::optional<MultipartStreamPart>> MultipartReader::readTask() {
             // RFC 2046 permits an epilogue after the closing delimiter. It is
             // semantically ignored but the HTTP body still has to be consumed
             // before the connection can be reused.
-            while (co_await bodyReader_.read()) {}
+            while (co_await bodyReader_.read()) {
+            }
             readGuard.commit(State::kFinished);
             co_return std::nullopt;
         }

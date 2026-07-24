@@ -101,19 +101,7 @@ public:
 private:
     friend class StaticRootAccess;
 
-    StaticRootEntryView(
-        const NativePathChar* filePath,
-        std::string_view contentType,
-        std::string_view cacheControl,
-        std::string_view etag,
-        std::string_view lastModified,
-        std::uint64_t size,
-        ResponseFileIdentity identity,
-        std::uint64_t modifiedToken,
-        std::time_t modifiedSeconds,
-        bool rangesEnabled,
-        bool validatorsEnabled,
-        bool directlyServable) noexcept
+    StaticRootEntryView(const NativePathChar* filePath, std::string_view contentType, std::string_view cacheControl, std::string_view etag, std::string_view lastModified, std::uint64_t size, ResponseFileIdentity identity, std::uint64_t modifiedToken, std::time_t modifiedSeconds, bool rangesEnabled, bool validatorsEnabled, bool directlyServable) noexcept
         : filePath_(filePath),
           contentType_(contentType),
           cacheControl_(cacheControl),
@@ -145,12 +133,8 @@ class StaticRootAccess final {
 public:
     [[nodiscard]] static std::string_view indexFile(const StaticRoot& root) noexcept;
     [[nodiscard]] static bool hasDirectoryIndex(const StaticRoot& root) noexcept;
-    [[nodiscard]] static std::optional<StaticRootEntryView> find(
-        const StaticRoot& root,
-        std::string_view relativePath) noexcept;
-    [[nodiscard]] static std::optional<StaticRootEntryView> findVariant(
-        const StaticRoot& root,
-        std::string_view relativePath) noexcept;
+    [[nodiscard]] static std::optional<StaticRootEntryView> find(const StaticRoot& root, std::string_view relativePath) noexcept;
+    [[nodiscard]] static std::optional<StaticRootEntryView> findVariant(const StaticRoot& root, std::string_view relativePath) noexcept;
     [[nodiscard]] static bool isIndexedDirectory(const StaticRoot& root, std::string_view relativePath) noexcept;
 };
 

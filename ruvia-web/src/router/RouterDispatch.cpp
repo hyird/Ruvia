@@ -27,14 +27,8 @@ HttpResponse makeAllowNoContentResponse(RequestMemory& memory, std::uint32_t met
     return response;
 }
 
-
-[[nodiscard]] std::optional<HttpResponse> selectDocumentRootFallback(
-    const StaticRoot* root,
-    const HttpRequest& request,
-    RequestMemory& memory) {
-    if (root == nullptr ||
-        (request.knownMethod() != HttpKnownMethod::kGet &&
-         request.knownMethod() != HttpKnownMethod::kHead)) {
+[[nodiscard]] std::optional<HttpResponse> selectDocumentRootFallback(const StaticRoot* root, const HttpRequest& request, RequestMemory& memory) {
+    if (root == nullptr || (request.knownMethod() != HttpKnownMethod::kGet && request.knownMethod() != HttpKnownMethod::kHead)) {
         return std::nullopt;
     }
 
@@ -53,70 +47,35 @@ HttpResponse makeAllowNoContentResponse(RequestMemory& memory, std::uint32_t met
 
 }  // namespace
 
-Task<HttpResponse> detail::RouteTable::dispatch(
-    const HttpRequest& request,
-    RequestMemory& memory,
-    ContextServices services) const {
+Task<HttpResponse> detail::RouteTable::dispatch(const HttpRequest& request, RequestMemory& memory, ContextServices services) const {
     const auto resolution = resolve(request);
     co_return co_await dispatch(request, resolution, memory, services);
 }
 
-Task<std::optional<HttpResponse>> detail::RouteTable::dispatchResponseStream(
-    const HttpRequest& request,
-    const ResolvedRoute& resolved,
-    RequestMemory& memory,
-    ResponseStreamWriter& responseStream,
-    ContextServices services) const {
+Task<std::optional<HttpResponse>> detail::RouteTable::dispatchResponseStream(const HttpRequest& request, const ResolvedRoute& resolved, RequestMemory& memory, ResponseStreamWriter& responseStream, ContextServices services) const {
     if (resolved.route().endpoint().responseStream() == nullptr) {
         throw std::logic_error("route is not a response stream route");
     }
-    return dispatchStreamRoute(
-        request,
-        resolved,
-        memory,
-        resolved.route().endpoint().responseStream()->handler(),
-        services.withResponseStream(responseStream));
+    return dispatchStreamRoute(request, resolved, memory, resolved.route().endpoint().responseStream()->handler(), services.withResponseStream(responseStream));
 }
 
-Task<std::optional<HttpResponse>> detail::RouteTable::dispatchWebSocket(
-    const HttpRequest& request,
-    const ResolvedRoute& resolved,
-    RequestMemory& memory,
-    const RouteStreamHandler& handler,
-    ContextServices services) const {
+Task<std::optional<HttpResponse>> detail::RouteTable::dispatchWebSocket(const HttpRequest& request, const ResolvedRoute& resolved, RequestMemory& memory, const RouteStreamHandler& handler, ContextServices services) const {
     if (resolved.route().endpoint().webSocket() == nullptr) {
         throw std::logic_error("route is not a websocket route");
     }
     return dispatchStreamRoute(request, resolved, memory, handler, services);
 }
 
-Task<HttpResponse> detail::RouteTable::dispatch(
-    const HttpRequest& request,
-    const RouteResolution& resolution,
-    RequestMemory& memory,
-    ContextServices services) const {
-    return dispatchRequest(
-        request,
-        resolution,
-        memory,
-        services,
-        nullptr,
-        DispatchFailure::kPropagate);
+Task<HttpResponse> detail::RouteTable::dispatch(const HttpRequest& request, const RouteResolution& resolution, RequestMemory& memory, ContextServices services) const {
+    return dispatchRequest(request, resolution, memory, services, nullptr, DispatchFailure::kPropagate);
 }
 
-Task<HttpResponse> detail::RouteTable::dispatchRequest(
-    const HttpRequest& request,
-    const RouteResolution& resolution,
-    RequestMemory& memory,
-    ContextServices services,
-    const StaticRoot* documentRoot,
-    DispatchFailure failure) const {
+Task<HttpResponse> detail::RouteTable::dispatchRequest(const HttpRequest& request, const RouteResolution& resolution, RequestMemory& memory, ContextServices services, const StaticRoot* documentRoot, DispatchFailure failure) const {
     std::exception_ptr dispatchException;
     try {
         const auto* resolved = resolution.resolved();
         if (resolved == nullptr) {
-            if (auto documentResponse = selectDocumentRootFallback(
-                    documentRoot, request, memory)) {
+            if (auto documentResponse = selectDocumentRootFallback(documentRoot, request, memory)) {
                 co_return std::move(*documentResponse);
             }
             // One handleError co_await serves both rejection kinds: each
@@ -131,8 +90,7 @@ Task<HttpResponse> detail::RouteTable::dispatchRequest(
                 co_return makeAllowNoContentResponse(memory, allowedMethodsForServer());
             } else if (const auto* methodNotAllowed = resolution.methodNotAllowed()) {
                 if (request.knownMethod() == HttpKnownMethod::kOptions) {
-                    co_return makeAllowNoContentResponse(
-                        memory, methodNotAllowed->allowedMethods());
+                    co_return makeAllowNoContentResponse(memory, methodNotAllowed->allowedMethods());
                 }
                 error = HttpErrorInfo(ruvia::http_status::kMethodNotAllowed, {}, "method not allowed");
                 allowedMethods = methodNotAllowed->allowedMethods();
@@ -149,21 +107,12 @@ Task<HttpResponse> detail::RouteTable::dispatchRequest(
             co_return co_await handleNotFound(request, memory, services);
         }
 
-        auto context = makeRouteContext(
-            memory,
-            request,
-            *resolved,
-            withRouteHandlers(
-                services,
-                *this,
-                errorHandlerFor(request.path()),
-                notFoundHandlerFor(request.path())));
+        auto context = makeRouteContext(memory, request, *resolved, withRouteHandlers(services, *this, errorHandlerFor(request.path()), notFoundHandlerFor(request.path())));
         std::exception_ptr exception;
         try {
             const auto& route = resolved->route();
             if (route.endpoint().buffered() == nullptr) {
-                throw std::logic_error(
-                    "streaming route requires its dedicated dispatch path");
+                throw std::logic_error("streaming route requires its dedicated dispatch path");
             }
             co_return co_await invokeRoute(route, context);
         } catch (...) {
@@ -179,22 +128,11 @@ Task<HttpResponse> detail::RouteTable::dispatchRequest(
     co_return co_await handleException(request, memory, dispatchException, services);
 }
 
-Task<HttpResponse> detail::RouteTable::dispatchBufferedResponse(
-    const HttpRequest& request,
-    const RouteResolution& resolution,
-    RequestMemory& memory,
-    const StaticRoot* documentRoot,
-    ContextServices services) const {
+Task<HttpResponse> detail::RouteTable::dispatchBufferedResponse(const HttpRequest& request, const RouteResolution& resolution, RequestMemory& memory, const StaticRoot* documentRoot, ContextServices services) const {
     // Plain forwarding, not a coroutine: document-root selection and the
     // failure policy live in the existing dispatch frame, so the unified
     // application entry adds no request-path allocation.
-    return dispatchRequest(
-        request,
-        resolution,
-        memory,
-        services,
-        documentRoot,
-        DispatchFailure::kRespond);
+    return dispatchRequest(request, resolution, memory, services, documentRoot, DispatchFailure::kRespond);
 }
 
 }  // namespace ruvia

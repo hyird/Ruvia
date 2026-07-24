@@ -17,10 +17,6 @@ namespace ruvia::detail {
 
 void freeStoredResult(void* result) noexcept;
 
-[[nodiscard]] std::pmr::string interpolateSql(
-    st_mysql& connection,
-    std::string_view sql,
-    std::span<const DbValue> params,
-    std::pmr::memory_resource* resource);
+[[nodiscard]] std::pmr::string interpolateSql(st_mysql& connection, std::string_view sql, std::span<const DbValue> params, std::pmr::memory_resource* resource);
 
 }  // namespace ruvia::detail

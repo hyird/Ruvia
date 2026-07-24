@@ -27,9 +27,9 @@ RUVIA_TEST(json_needs_escape) {
     RUVIA_CHECK(jsonNeedsEscape('\t'));
     RUVIA_CHECK(jsonNeedsEscape(0x1f));
     // Space and printable ASCII do not need escaping.
-    RUVIA_CHECK(!jsonNeedsEscape(' '));   // 0x20
+    RUVIA_CHECK(!jsonNeedsEscape(' '));  // 0x20
     RUVIA_CHECK(!jsonNeedsEscape('a'));
-    RUVIA_CHECK(!jsonNeedsEscape('/'));   // forward slash is not required to be escaped
+    RUVIA_CHECK(!jsonNeedsEscape('/'));  // forward slash is not required to be escaped
     // DEL and high (UTF-8) bytes pass through unescaped.
     RUVIA_CHECK(!jsonNeedsEscape(0x7f));
     RUVIA_CHECK(!jsonNeedsEscape(0x80));

@@ -111,10 +111,7 @@ template <typename T>
     }
 }
 
-inline void appendPath(
-    std::pmr::string& output,
-    std::string_view prefix,
-    std::string_view field) {
+inline void appendPath(std::pmr::string& output, std::string_view prefix, std::string_view field) {
     output.clear();
     output.reserve(prefix.size() + (prefix.empty() ? 0 : 1) + field.size());
     if (!prefix.empty()) {
@@ -124,10 +121,7 @@ inline void appendPath(
     output.append(field.data(), field.size());
 }
 
-inline void appendIndexPath(
-    std::pmr::string& output,
-    std::string_view prefix,
-    std::size_t index) {
+inline void appendIndexPath(std::pmr::string& output, std::string_view prefix, std::size_t index) {
     output.clear();
     output.reserve(prefix.size() + 2 + 20);
     output.append(prefix.data(), prefix.size());

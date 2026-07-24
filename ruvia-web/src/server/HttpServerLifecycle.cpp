@@ -40,25 +40,11 @@ using TcpEndpoint = asio::ip::tcp::endpoint;
 
 namespace {
 
-int selectAlpnProtocol(
-    SSL*,
-    const unsigned char** out,
-    unsigned char* outLength,
-    const unsigned char* in,
-    unsigned int inLength,
-    void*) noexcept {
+int selectAlpnProtocol(SSL*, const unsigned char** out, unsigned char* outLength, const unsigned char* in, unsigned int inLength, void*) noexcept {
     // Only h2 and http/1.1 are offered. HTTP/3 / QUIC is explicitly not supported (no "h3"
     // token, no UDP/QUIC listener); a peer offering only h3 falls back to http/1.1 or fails ALPN.
-    static constexpr unsigned char protocols[] = {
-        2, 'h', '2',
-        8, 'h', 't', 't', 'p', '/', '1', '.', '1'};
-    if (SSL_select_next_proto(
-            const_cast<unsigned char**>(out),
-            outLength,
-            protocols,
-            static_cast<unsigned int>(sizeof(protocols)),
-            in,
-            inLength) == OPENSSL_NPN_NEGOTIATED) {
+    static constexpr unsigned char protocols[] = {2, 'h', '2', 8, 'h', 't', 't', 'p', '/', '1', '.', '1'};
+    if (SSL_select_next_proto(const_cast<unsigned char**>(out), outLength, protocols, static_cast<unsigned int>(sizeof(protocols)), in, inLength) == OPENSSL_NPN_NEGOTIATED) {
         return SSL_TLSEXT_ERR_OK;
     }
     return SSL_TLSEXT_ERR_NOACK;
@@ -103,9 +89,7 @@ int copyPrivateKeyPassword(char* buffer, int bufferSize, int, void* userData) no
 [[nodiscard]] asio::error_code translateOpenSslError(unsigned long error) {
 #if (OPENSSL_VERSION_NUMBER >= 0x30000000L)
     if (ERR_SYSTEM_ERROR(error)) {
-        return asio::error_code(
-            static_cast<int>(ERR_GET_REASON(error)),
-            asio::error::get_system_category());
+        return asio::error_code(static_cast<int>(ERR_GET_REASON(error)), asio::error::get_system_category());
     }
 #endif
     return asio::error_code(static_cast<int>(error), asio::error::get_ssl_category());
@@ -137,67 +121,26 @@ void loadVerifyFile(asio::ssl::context& context, const std::pmr::string& filenam
 }
 
 [[nodiscard]] ConnectionScannerOptions makeConnectionScannerOptions(const HttpServerOptions& options) noexcept {
-    return ConnectionScannerOptions{
-        .scanInterval = options.scanInterval,
-        .idleTimeout = options.keepaliveTimeout,
-        .initialReadTimeout = options.clientHeaderTimeout,
-        .payloadReadTimeout = options.clientBodyTimeout,
-        .writeTimeout = options.sendTimeout};
+    return ConnectionScannerOptions{.scanInterval = options.scanInterval, .idleTimeout = options.keepaliveTimeout, .initialReadTimeout = options.clientHeaderTimeout, .payloadReadTimeout = options.clientBodyTimeout, .writeTimeout = options.sendTimeout};
 }
 
 }  // namespace
 
-HttpServer::HttpServer(
-    TcpEndpoint endpoint,
-    const RouteTable& routes,
-    std::span<const DbDefinition> databases,
-    HttpServerOptions options)
-    : HttpServer(
-          std::move(endpoint), routes, databases,
-          std::span<const RedisDefinition>{},
-          std::move(options)) {}
+HttpServer::HttpServer(TcpEndpoint endpoint, const RouteTable& routes, std::span<const DbDefinition> databases, HttpServerOptions options)
+    : HttpServer(std::move(endpoint), routes, databases, std::span<const RedisDefinition>{}, std::move(options)) {}
 
-HttpServer::HttpServer(
-    TcpEndpoint endpoint,
-    const RouteTable& routes,
-    std::span<const DbDefinition> databases,
-    std::span<const RedisDefinition> redis,
-    HttpServerOptions options)
-    : HttpServer(
-          std::move(endpoint), routes, databases, redis,
-          std::span<const WorkerStateDefinition>{},
-          std::move(options)) {}
+HttpServer::HttpServer(TcpEndpoint endpoint, const RouteTable& routes, std::span<const DbDefinition> databases, std::span<const RedisDefinition> redis, HttpServerOptions options)
+    : HttpServer(std::move(endpoint), routes, databases, redis, std::span<const WorkerStateDefinition>{}, std::move(options)) {}
 
-HttpServer::HttpServer(
-    TcpEndpoint endpoint,
-    const RouteTable& routes,
-    std::span<const DbDefinition> databases,
-    std::span<const RedisDefinition> redis,
-    std::span<const WorkerStateDefinition> workerStates,
-    HttpServerOptions options)
-    : HttpServer(
-          ValidatedOptionsTag{},
-          std::move(endpoint),
-          routes,
-          databases,
-          redis,
-          workerStates,
-          validatedHttpServerOptions(std::move(options))) {}
+HttpServer::HttpServer(TcpEndpoint endpoint, const RouteTable& routes, std::span<const DbDefinition> databases, std::span<const RedisDefinition> redis, std::span<const WorkerStateDefinition> workerStates, HttpServerOptions options)
+    : HttpServer(ValidatedOptionsTag{}, std::move(endpoint), routes, databases, redis, workerStates, validatedHttpServerOptions(std::move(options))) {}
 
-HttpServer::HttpServer(
-    ValidatedOptionsTag,
-    TcpEndpoint endpoint,
-    const RouteTable& routes,
-    std::span<const DbDefinition> databases,
-    std::span<const RedisDefinition> redis,
-    std::span<const WorkerStateDefinition> workerStates,
-    HttpServerOptions validatedOptions)
+HttpServer::HttpServer(ValidatedOptionsTag, TcpEndpoint endpoint, const RouteTable& routes, std::span<const DbDefinition> databases, std::span<const RedisDefinition> redis, std::span<const WorkerStateDefinition> workerStates, HttpServerOptions validatedOptions)
     // One worker thread runs all I/O on this context; cross-thread access is
     // limited to stop()'s asio::post, which UNSAFE_IO keeps locked. Only the
     // reactor's per-descriptor I/O locking is elided.
     : ioContext_(ASIO_CONCURRENCY_HINT_UNSAFE_IO),
-      workerDispatcher_(std::make_shared<WorkerDispatcher>(
-          ioContext_, validatedOptions.workerMailboxCapacity)),
+      workerDispatcher_(std::make_shared<WorkerDispatcher>(ioContext_, validatedOptions.workerMailboxCapacity)),
       workerHandle_(WorkerHandleAccess::make(workerDispatcher_)),
       acceptor_(ioContext_),
       endpoint_(std::move(endpoint)),
@@ -207,31 +150,10 @@ HttpServer::HttpServer(
       sniLookup_(memory_.resource()),
       options_(std::move(validatedOptions)),
       connectionScanner_(workerHandle_, makeConnectionScannerOptions(options_)),
-      dataAccess_(
-          ioContext_,
-          memory_.resource(),
-          databases,
-          redis,
-          connectionScanner_),
+      dataAccess_(ioContext_, memory_.resource(), databases, redis, connectionScanner_),
       workerStates_(memory_.resource(), workerStates),
-      webWorkerDispatch_(std::make_shared<WebWorkerDispatch>(
-          ioContext_.get_executor(),
-          workerHandle_,
-          memory_.resource(),
-          dataAccess_.databases(),
-          dataAccess_.redis(),
-          workerStates_,
-          options_.blockingPool,
-          [this](std::exception_ptr failure) {
-              failWorker(std::move(failure));
-          })),
-      rateLimiter_(
-          options_.defaultRateLimitPerWorker,
-          routes_.hasRouteRateLimit()
-              ? RouteRateLimitPresence::kPresent
-              : RouteRateLimitPresence::kAbsent,
-          options_.rateLimitSlotsPerWorker,
-          memory_.resource()),
+      webWorkerDispatch_(std::make_shared<WebWorkerDispatch>(ioContext_.get_executor(), workerHandle_, memory_.resource(), dataAccess_.databases(), dataAccess_.redis(), workerStates_, options_.blockingPool, [this](std::exception_ptr failure) { failWorker(std::move(failure)); })),
+      rateLimiter_(options_.defaultRateLimitPerWorker, routes_.hasRouteRateLimit() ? RouteRateLimitPresence::kPresent : RouteRateLimitPresence::kAbsent, options_.rateLimitSlotsPerWorker, memory_.resource()),
       workSetPool_(memory_) {
     // Claim the failure sink's counter. Every reporting site shares this one
     // options_ instance, so the count cannot drift from what the callback saw.
@@ -294,8 +216,7 @@ void HttpServer::stop() {
 
 void HttpServer::join() {
     if (workerHandle_.isCurrent()) {
-        throw std::logic_error(
-            "cannot join an HTTP server from its worker");
+        throw std::logic_error("cannot join an HTTP server from its worker");
     }
     if (workerThread_.joinable()) {
         workerThread_.join();
@@ -313,12 +234,9 @@ TcpEndpoint HttpServer::localEndpoint() const {
 
 HttpServerStats HttpServer::stats() const noexcept {
     HttpServerStats stats;
-    stats.activeConnections =
-        activeConnectionCount_.load(std::memory_order_relaxed);
-    stats.connectionsRefused =
-        connectionsRefused_.load(std::memory_order_relaxed);
-    stats.connectionFailures =
-        connectionFailures_.load(std::memory_order_relaxed);
+    stats.activeConnections = activeConnectionCount_.load(std::memory_order_relaxed);
+    stats.connectionsRefused = connectionsRefused_.load(std::memory_order_relaxed);
+    stats.connectionFailures = connectionFailures_.load(std::memory_order_relaxed);
     stats.acceptFailures = acceptFailures_.load(std::memory_order_relaxed);
     stats.workerFailures = workerFailures_.load(std::memory_order_relaxed);
     return stats;
@@ -373,36 +291,23 @@ void HttpServer::configureTlsContext() {
         tlsContext_.reset();
         return;
     }
-    if (tls->identity.certificateChainFile.empty() ||
-        tls->identity.privateKeyFile.empty()) {
+    if (tls->identity.certificateChainFile.empty() || tls->identity.privateKeyFile.empty()) {
         throw std::invalid_argument("TLS requires certificate chain and private key files");
     }
 
-    const auto configure = [tls](
-                               asio::ssl::context& context,
-                               const std::pmr::string& certificateChainFile,
-                               const std::pmr::string& privateKeyFile,
-                               const std::pmr::string& privateKeyPassword) {
-        context.set_options(
-            asio::ssl::context::default_workarounds |
-            asio::ssl::context::no_sslv2 |
-            asio::ssl::context::no_sslv3 |
-            asio::ssl::context::no_tlsv1 |
-            asio::ssl::context::no_tlsv1_1 |
-            asio::ssl::context::single_dh_use);
+    const auto configure = [tls](asio::ssl::context& context, const std::pmr::string& certificateChainFile, const std::pmr::string& privateKeyFile, const std::pmr::string& privateKeyPassword) {
+        context.set_options(asio::ssl::context::default_workarounds | asio::ssl::context::no_sslv2 | asio::ssl::context::no_sslv3 | asio::ssl::context::no_tlsv1 | asio::ssl::context::no_tlsv1_1 | asio::ssl::context::single_dh_use);
         SSL_CTX_set_options(context.native_handle(), SSL_OP_NO_COMPRESSION);
         SSL_CTX_set_alpn_select_cb(context.native_handle(), selectAlpnProtocol, nullptr);
         if (!privateKeyPassword.empty()) {
             SSL_CTX_set_default_passwd_cb(context.native_handle(), copyPrivateKeyPassword);
-            SSL_CTX_set_default_passwd_cb_userdata(
-                context.native_handle(), const_cast<std::pmr::string*>(&privateKeyPassword));
+            SSL_CTX_set_default_passwd_cb_userdata(context.native_handle(), const_cast<std::pmr::string*>(&privateKeyPassword));
         }
         useCertificateChainFile(context, certificateChainFile);
         usePrivateKeyFile(context, privateKeyFile);
         if (tls->clientCertificates.has_value()) {
             loadVerifyFile(context, tls->clientCertificates->verifyFile);
-            context.set_verify_mode(
-                httpServerTlsVerifyMode(tls->clientCertificates->requirement));
+            context.set_verify_mode(httpServerTlsVerifyMode(tls->clientCertificates->requirement));
         }
     };
 
@@ -410,11 +315,7 @@ void HttpServer::configureTlsContext() {
     sniContexts_.reserve(tls->sniIdentities.size());
     for (const auto& sni : tls->sniIdentities) {
         auto& context = sniContexts_.emplace_back(asio::ssl::context::tls_server);
-        configure(
-            context,
-            sni.identity.certificateChainFile,
-            sni.identity.privateKeyFile,
-            sni.identity.privateKeyPassword);
+        configure(context, sni.identity.certificateChainFile, sni.identity.privateKeyFile, sni.identity.privateKeyPassword);
     }
     sniLookup_.reserve(tls->sniIdentities.size());
     for (std::size_t i = 0; i < tls->sniIdentities.size(); ++i) {
@@ -423,11 +324,7 @@ void HttpServer::configureTlsContext() {
 
     tlsContext_.emplace(asio::ssl::context::tls_server);
     auto& context = *tlsContext_;
-    configure(
-        context,
-        tls->identity.certificateChainFile,
-        tls->identity.privateKeyFile,
-        tls->identity.privateKeyPassword);
+    configure(context, tls->identity.certificateChainFile, tls->identity.privateKeyFile, tls->identity.privateKeyPassword);
     if (!sniLookup_.empty()) {
         SSL_CTX_set_tlsext_servername_callback(context.native_handle(), &selectSniContext);
         SSL_CTX_set_tlsext_servername_arg(context.native_handle(), &sniLookup_);
@@ -468,11 +365,7 @@ void HttpServer::runIoContext() noexcept {
         workerDispatcher_->runContext(
             [this] {
                 workerStates_.initialize();
-                asio::co_spawn(
-                    ioContext_,
-                    taskAsAwaitable(runWorker()),
-                    asio::bind_allocator(
-                        asio::recycling_allocator<void>(), asio::detached));
+                asio::co_spawn(ioContext_, taskAsAwaitable(runWorker()), asio::bind_allocator(asio::recycling_allocator<void>(), asio::detached));
             },
             [this, &workerFailed](std::exception_ptr failure) noexcept {
                 workerFailed = true;
@@ -496,8 +389,7 @@ void HttpServer::runIoContext() noexcept {
 
     lifecycle_.completeStop();
     workerState_ = HttpServerWorkerState::kStopped;
-    (void)workerCompletion_.markStartupFailed(std::make_exception_ptr(
-        std::runtime_error("http server worker stopped before startup completed")));
+    (void)workerCompletion_.markStartupFailed(std::make_exception_ptr(std::runtime_error("http server worker stopped before startup completed")));
 }
 
 Task<void> HttpServer::runWorker() {

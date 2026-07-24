@@ -11,14 +11,11 @@ namespace {
 
 struct ControllerLifetime final {
     void* target{nullptr};
-    void (*destroy)(void*, std::pmr::memory_resource*) noexcept{nullptr};
+    void (*destroy)(void*, std::pmr::memory_resource*) noexcept {nullptr};
     std::pmr::memory_resource* resource{nullptr};
 
     ControllerLifetime() noexcept = default;
-    ControllerLifetime(
-        void* targetValue,
-        void (*destroyValue)(void*, std::pmr::memory_resource*) noexcept,
-        std::pmr::memory_resource* resourceValue) noexcept
+    ControllerLifetime(void* targetValue, void (*destroyValue)(void*, std::pmr::memory_resource*) noexcept, std::pmr::memory_resource* resourceValue) noexcept
         : target(targetValue),
           destroy(destroyValue),
           resource(resourceValue) {}
@@ -53,8 +50,7 @@ struct ControllerLifetime final {
 };
 
 std::pmr::vector<ControllerRegistrar>& controllerRegistrars() {
-    static std::pmr::vector<ControllerRegistrar> registrars{
-        registrationResource()};
+    static std::pmr::vector<ControllerRegistrar> registrars{registrationResource()};
     return registrars;
 }
 
@@ -94,10 +90,7 @@ std::size_t ControllerStore::size() const noexcept {
     return state_->lifetimes.size();
 }
 
-void ControllerStore::addLifetime(
-    void* target,
-    Destroy destroy,
-    std::pmr::memory_resource* resource) {
+void ControllerStore::addLifetime(void* target, Destroy destroy, std::pmr::memory_resource* resource) {
     state_->lifetimes.emplace_back(target, destroy, resource);
 }
 
@@ -114,12 +107,8 @@ std::pmr::vector<ControllerRegistrar> snapshotControllerRegistrars() {
     return registrars;
 }
 
-void runControllerRegistrars(
-    Router& router,
-    ControllerStore& controllerLifetimes,
-    std::span<const ControllerRegistrar> registrars) {
-    controllerLifetimes.reserve(
-        controllerLifetimes.size() + registrars.size());
+void runControllerRegistrars(Router& router, ControllerStore& controllerLifetimes, std::span<const ControllerRegistrar> registrars) {
+    controllerLifetimes.reserve(controllerLifetimes.size() + registrars.size());
     for (const auto registrar : registrars) {
         registrar(router, controllerLifetimes);
     }

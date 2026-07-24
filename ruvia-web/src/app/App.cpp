@@ -32,7 +32,6 @@ void addShutdownSignals(asio::signal_set& signals) {
 #endif
 }
 
-
 void invokeStopHooks(detail::AppState& state) noexcept {
     for (auto& hook : state.onStopHooks) {
         try {
@@ -42,8 +41,7 @@ void invokeStopHooks(detail::AppState& state) noexcept {
             // propagate -- but a hook that failed to release something is
             // exactly what an operator needs to see, and this runs after the
             // last caller that could have received it.
-            detail::reportUnhandledFailure(
-                "app stop hook", std::current_exception());
+            detail::reportUnhandledFailure("app stop hook", std::current_exception());
         }
     }
 }
@@ -84,9 +82,7 @@ namespace {
 
 class AppRuntimeBorrow final {
 public:
-    AppRuntimeBorrow(
-        detail::AppState& state,
-        detail::AppRuntimeGraph* runtime) noexcept
+    AppRuntimeBorrow(detail::AppState& state, detail::AppRuntimeGraph* runtime) noexcept
         : gate_(runtime == nullptr ? nullptr : &state.runtimeBorrows),
           runtime_(runtime) {}
 
@@ -203,34 +199,24 @@ namespace {
 // then every handler the app was configured with -- error, not-found, their
 // prefix-scoped variants, and the global middlewares -- and finalize. Each worker
 // builds its own so a router is never shared across event loops.
-[[nodiscard]] std::unique_ptr<Router, detail::PmrObjectDeleter<Router>>
-buildWorkerRouter(
-    const detail::AppState& state,
-    std::pmr::memory_resource* runtimeResource,
-    detail::ControllerStore& controllers,
-    std::span<const detail::ControllerRegistrar> controllerRegistrars) {
+[[nodiscard]] std::unique_ptr<Router, detail::PmrObjectDeleter<Router>> buildWorkerRouter(const detail::AppState& state, std::pmr::memory_resource* runtimeResource, detail::ControllerStore& controllers, std::span<const detail::ControllerRegistrar> controllerRegistrars) {
     auto router = detail::makePmrObject<Router>(runtimeResource);
-    detail::registerControllers(
-        *router, controllers, controllerRegistrars);
+    detail::registerControllers(*router, controllers, controllerRegistrars);
     auto& routes = detail::RouterImpl::from(*router);
     routes.setErrorHandler(state.errorHandler);
     routes.setNotFoundHandler(state.notFoundHandler);
     if (!state.prefixErrorHandlers.empty()) {
-        std::pmr::vector<detail::HttpPrefixErrorHandler> views(
-            runtimeResource);
+        std::pmr::vector<detail::HttpPrefixErrorHandler> views(runtimeResource);
         views.reserve(state.prefixErrorHandlers.size());
-        for (const auto& [prefix, handler] :
-             state.prefixErrorHandlers) {
+        for (const auto& [prefix, handler] : state.prefixErrorHandlers) {
             views.push_back({std::string_view(prefix), handler});
         }
         routes.setPrefixErrorHandlers(views);
     }
     if (!state.prefixNotFoundHandlers.empty()) {
-        std::pmr::vector<detail::HttpPrefixNotFoundHandler> views(
-            runtimeResource);
+        std::pmr::vector<detail::HttpPrefixNotFoundHandler> views(runtimeResource);
         views.reserve(state.prefixNotFoundHandlers.size());
-        for (const auto& [prefix, handler] :
-             state.prefixNotFoundHandlers) {
+        for (const auto& [prefix, handler] : state.prefixNotFoundHandlers) {
             views.push_back({std::string_view(prefix), handler});
         }
         routes.setPrefixNotFoundHandlers(views);
@@ -247,8 +233,7 @@ buildWorkerRouter(
 void App::run() {
     auto& state = *state_;
     auto* runtimeResource = detail::appResource();
-    const auto controllerRegistrars =
-        detail::snapshotControllerRegistrars();
+    const auto controllerRegistrars = detail::snapshotControllerRegistrars();
     std::pmr::vector<detail::HttpServer*> startedWorkers(runtimeResource);
     auto runtime = detail::makePmrObject<detail::AppRuntimeGraph>(runtimeResource, runtimeResource);
 
@@ -260,63 +245,39 @@ void App::run() {
         preparedOptions.env = &state.env;
         preparedOptions.workerFailure = detail::WorkerFailureSink{
             .target = this,
-            .invoke = [](void* target, std::exception_ptr) noexcept {
-                static_cast<App*>(target)->stop();
-            },
+            .invoke = [](void* target, std::exception_ptr) noexcept { static_cast<App*>(target)->stop(); },
         };
 
         if (state.documentRootConfig.has_value()) {
             const auto documentRootPath = detail::makePathFromNativePath(state.documentRootConfig->root);
-            runtime->documentRoot = detail::makePmrObject<StaticRoot>(
-                runtimeResource,
-                documentRootPath,
-                state.documentRootConfig->staticOptions);
+            runtime->documentRoot = detail::makePmrObject<StaticRoot>(runtimeResource, documentRootPath, state.documentRootConfig->staticOptions);
         }
 
         if (state.blockingPool.has_value()) {
             // Starting the threads here keeps them inside the same fallible
             // startup section as everything else: a pool that cannot start its
             // threads fails run() before a single connection is accepted.
-            runtime->blockingPool = detail::makePmrObject<BlockingPool>(
-                runtimeResource, *state.blockingPool);
+            runtime->blockingPool = detail::makePmrObject<BlockingPool>(runtimeResource, *state.blockingPool);
             preparedOptions.blockingPool = runtime->blockingPool.get();
         }
 
         const auto address = asio::ip::make_address(state.listenAddress);
-        const auto hasTwoListeners = std::visit(
-            []<typename Topology>(const Topology&) {
-                return std::is_same_v<Topology, ServerTopology::HttpAndHttps> ||
-                       std::is_same_v<Topology, ServerTopology::RedirectHttpToHttps>;
-            },
-            state.topology.topology_);
-        const auto workerCount =
-            state.workersPerListener * (hasTwoListeners ? 2 : 1);
+        const auto hasTwoListeners = std::visit([]<typename Topology>(const Topology&) { return std::is_same_v<Topology, ServerTopology::HttpAndHttps> || std::is_same_v<Topology, ServerTopology::RedirectHttpToHttps>; }, state.topology.topology_);
+        const auto workerCount = state.workersPerListener * (hasTwoListeners ? 2 : 1);
         runtime->controllers.reserve(workerCount);
         runtime->routers.reserve(workerCount);
         runtime->workers.reserve(workerCount);
 
-        const auto addWorkers = [&state, &address, &runtime,
-                                 &controllerRegistrars,
-                                 &preparedOptions, runtimeResource](
-                                    std::uint16_t port,
-                                    detail::HttpServerOptions::ListenerTransport transport) {
+        const auto addWorkers = [&state, &address, &runtime, &controllerRegistrars, &preparedOptions, runtimeResource](std::uint16_t port, detail::HttpServerOptions::ListenerTransport transport) {
             const asio::ip::tcp::endpoint endpoint(address, port);
-            auto listenerOptions = detail::makeListenerOptions(
-                preparedOptions,
-                std::move(transport),
-                runtime->documentRoot.get());
+            auto listenerOptions = detail::makeListenerOptions(preparedOptions, std::move(transport), runtime->documentRoot.get());
             for (std::size_t i = 0; i < state.workersPerListener; ++i) {
-                auto workerOptions = i + 1 == state.workersPerListener
-                    ? std::move(listenerOptions)
-                    : listenerOptions;  // NOLINT(bugprone-use-after-move): moved only on the final iteration
+                auto workerOptions = i + 1 == state.workersPerListener ? std::move(listenerOptions) : listenerOptions;  // NOLINT(bugprone-use-after-move): moved only on
+                                                                                                                        // the final iteration
                 detail::ControllerStore controllers;
-                auto router = buildWorkerRouter(
-                    state, runtimeResource, controllers, controllerRegistrars);
+                auto router = buildWorkerRouter(state, runtimeResource, controllers, controllerRegistrars);
                 auto& routes = detail::RouterImpl::from(*router);
-                auto worker = detail::makePmrObject<detail::HttpServer>(
-                    runtimeResource,
-                    endpoint,
-                    routes.routeTable(),
+                auto worker = detail::makePmrObject<detail::HttpServer>(runtimeResource, endpoint, routes.routeTable(),
                     std::span<const detail::DbDefinition>{
 #ifdef RUVIA_ENABLE_DATABASE
                         state.databases
@@ -327,8 +288,7 @@ void App::run() {
                         state.redis
 #endif
                     },
-                    state.workerStates,
-                    std::move(workerOptions));
+                    state.workerStates, std::move(workerOptions));
                 runtime->controllers.push_back(std::move(controllers));
                 runtime->routers.push_back(std::move(router));
                 runtime->workers.push_back(std::move(worker));
@@ -338,30 +298,15 @@ void App::run() {
         std::visit(
             [&]<typename Topology>(const Topology& topology) {
                 if constexpr (std::is_same_v<Topology, ServerTopology::Http>) {
-                    addWorkers(
-                        topology.port,
-                        detail::HttpServerOptions::PlainHttp{});
-                } else if constexpr (
-                    std::is_same_v<Topology, ServerTopology::Https>) {
-                    addWorkers(
-                        topology.port,
-                        detail::makeTlsOptions(topology.tls));
-                } else if constexpr (
-                    std::is_same_v<Topology, ServerTopology::HttpAndHttps>) {
-                    addWorkers(
-                        topology.httpPort,
-                        detail::HttpServerOptions::PlainHttp{});
-                    addWorkers(
-                        topology.httpsPort,
-                        detail::makeTlsOptions(topology.tls));
+                    addWorkers(topology.port, detail::HttpServerOptions::PlainHttp{});
+                } else if constexpr (std::is_same_v<Topology, ServerTopology::Https>) {
+                    addWorkers(topology.port, detail::makeTlsOptions(topology.tls));
+                } else if constexpr (std::is_same_v<Topology, ServerTopology::HttpAndHttps>) {
+                    addWorkers(topology.httpPort, detail::HttpServerOptions::PlainHttp{});
+                    addWorkers(topology.httpsPort, detail::makeTlsOptions(topology.tls));
                 } else {
-                    addWorkers(
-                        topology.httpPort,
-                        detail::HttpServerOptions::RedirectHttpToHttps{
-                            topology.httpsPort});
-                    addWorkers(
-                        topology.httpsPort,
-                        detail::makeTlsOptions(topology.tls));
+                    addWorkers(topology.httpPort, detail::HttpServerOptions::RedirectHttpToHttps{topology.httpsPort});
+                    addWorkers(topology.httpsPort, detail::makeTlsOptions(topology.tls));
                 }
             },
             state.topology.topology_);
@@ -386,8 +331,7 @@ void App::run() {
                     stop();
                 }
             });
-            signalThread =
-                std::thread([&signalContext] { signalContext.run(); });
+            signalThread = std::thread([&signalContext] { signalContext.run(); });
         }
 
         for (const auto& worker : state.runtime->workers) {
@@ -441,8 +385,7 @@ void App::run() {
         {
             std::lock_guard lock(state.mutex);
             if (runStartHooks) {
-                runDeferredStopHooks = state.lifecycle.completeStartHooks() ==
-                    detail::AppStartHooksCompletion::kRunDeferredStopHooks;
+                runDeferredStopHooks = state.lifecycle.completeStartHooks() == detail::AppStartHooksCompletion::kRunDeferredStopHooks;
             }
         }
         if (runDeferredStopHooks) {

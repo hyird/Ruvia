@@ -52,8 +52,7 @@ namespace ruvia::detail {
         if (!isCont(b2)) {
             return 0;
         }
-        if (b0 == 0xE0 ? (b1 < 0xA0 || b1 > 0xBF)
-                       : b0 == 0xED ? (b1 < 0x80 || b1 > 0x9F) : !isCont(b1)) {
+        if (b0 == 0xE0 ? (b1 < 0xA0 || b1 > 0xBF) : b0 == 0xED ? (b1 < 0x80 || b1 > 0x9F) : !isCont(b1)) {
             return 0;
         }
         return 3;
@@ -68,8 +67,7 @@ namespace ruvia::detail {
         if (!isCont(b2) || !isCont(b3)) {
             return 0;
         }
-        if (b0 == 0xF0 ? (b1 < 0x90 || b1 > 0xBF)
-                       : b0 == 0xF4 ? (b1 < 0x80 || b1 > 0x8F) : !isCont(b1)) {
+        if (b0 == 0xF0 ? (b1 < 0x90 || b1 > 0xBF) : b0 == 0xF4 ? (b1 < 0x80 || b1 > 0x8F) : !isCont(b1)) {
             return 0;
         }
         return 4;
@@ -77,10 +75,7 @@ namespace ruvia::detail {
     return 0;  // 0x80-0xC1 (bare continuation / overlong lead) or 0xF5-0xFF
 }
 
-enum class JsonStringEncoding : std::uint8_t {
-    kLiteral,
-    kEscaped
-};
+enum class JsonStringEncoding : std::uint8_t { kLiteral, kEscaped };
 
 class JsonStringToken final {
 public:
@@ -93,13 +88,11 @@ public:
     }
 
 private:
-    friend std::optional<JsonStringToken> parseJsonString(
-        std::string_view& input) noexcept;
+    friend std::optional<JsonStringToken> parseJsonString(std::string_view& input) noexcept;
 
-    JsonStringToken(
-        std::string_view raw,
-        JsonStringEncoding encoding) noexcept
-        : raw_(raw), encoding_(encoding) {}
+    JsonStringToken(std::string_view raw, JsonStringEncoding encoding) noexcept
+        : raw_(raw),
+          encoding_(encoding) {}
 
     std::string_view raw_;
     JsonStringEncoding encoding_;
@@ -108,8 +101,7 @@ private:
 // Scans one JSON string and commits the input cursor only after the closing
 // quote and all encoded bytes have been validated. The token owns both pieces
 // of scan state, so callers cannot observe a raw view without its encoding.
-[[nodiscard]] inline std::optional<JsonStringToken> parseJsonString(
-    std::string_view& input) noexcept {
+[[nodiscard]] inline std::optional<JsonStringToken> parseJsonString(std::string_view& input) noexcept {
     auto remaining = input;
     skipJsonWhitespace(remaining);
     if (remaining.empty() || remaining.front() != '"') {
@@ -127,8 +119,7 @@ private:
                 return std::nullopt;
             }
             const char escape = remaining[i + 1];
-            if (escape == '"' || escape == '\\' || escape == '/' || escape == 'b' || escape == 'f' ||
-                escape == 'n' || escape == 'r' || escape == 't') {
+            if (escape == '"' || escape == '\\' || escape == '/' || escape == 'b' || escape == 'f' || escape == 'n' || escape == 'r' || escape == 't') {
                 ++i;
                 continue;
             }
@@ -186,9 +177,7 @@ void appendUtf8(OutputT& output, std::uint32_t codePoint) {
 // Returns the complete decoded string or no value for malformed escape/UTF-8
 // input. Mutable caller storage is intentionally not accepted: a failure must
 // never expose the prefix produced before the malformed byte sequence.
-[[nodiscard]] inline std::optional<std::pmr::string> decodeJsonString(
-    std::string_view input,
-    std::pmr::memory_resource* resource) {
+[[nodiscard]] inline std::optional<std::pmr::string> decodeJsonString(std::string_view input, std::pmr::memory_resource* resource) {
     std::pmr::string output(pmrResourceOrDefault(resource));
     output.reserve(input.size());
     for (std::size_t i = 0; i < input.size(); ++i) {

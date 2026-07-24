@@ -37,9 +37,7 @@ class TestApp;
 // TestRequest may be built from temporaries and reused across dispatches.
 class TestRequest final {
 public:
-    [[nodiscard]] static TestRequest method(
-        std::string_view methodToken,
-        std::string_view target) {
+    [[nodiscard]] static TestRequest method(std::string_view methodToken, std::string_view target) {
         return TestRequest(methodToken, target);
     }
 
@@ -110,7 +108,8 @@ private:
     friend class TestApp;
 
     TestRequest(std::string_view methodToken, std::string_view target)
-        : method_(methodToken), target_(target) {}
+        : method_(methodToken),
+          target_(target) {}
 
     std::string method_;
     std::string target_;
@@ -127,28 +126,26 @@ public:
         return status_;
     }
 
-    [[nodiscard]] std::string_view body() const & noexcept {
+    [[nodiscard]] std::string_view body() const& noexcept {
         return body_;
     }
-    std::string_view body() const && = delete;
+    std::string_view body() const&& = delete;
 
     // First header with this name (ASCII case-insensitive). Repeatable fields
     // such as Set-Cookie keep every occurrence in headers().
-    [[nodiscard]] std::optional<std::string_view> header(
-        std::string_view name) const & noexcept;
-    std::optional<std::string_view> header(std::string_view) const && = delete;
+    [[nodiscard]] std::optional<std::string_view> header(std::string_view name) const& noexcept;
+    std::optional<std::string_view> header(std::string_view) const&& = delete;
 
-    [[nodiscard]] const std::vector<std::pair<std::string, std::string>>&
-    headers() const & noexcept {
+    [[nodiscard]] const std::vector<std::pair<std::string, std::string>>& headers() const& noexcept {
         return headers_;
     }
-    const std::vector<std::pair<std::string, std::string>>&
-    headers() const && = delete;
+    const std::vector<std::pair<std::string, std::string>>& headers() const&& = delete;
 
 private:
     friend class TestApp;
 
-    explicit TestResponse(HttpStatusCode status) noexcept : status_(status) {}
+    explicit TestResponse(HttpStatusCode status) noexcept
+        : status_(status) {}
 
     HttpStatusCode status_;
     std::vector<std::pair<std::string, std::string>> headers_;
@@ -184,15 +181,12 @@ public:
 
     template <typename T, typename Factory>
     TestApp& useWorkerState(Factory&& factory) {
-        return useWorkerStateDefinition(
-            detail::WorkerStateDefinition::make<T>(
-                std::forward<Factory>(factory)));
+        return useWorkerStateDefinition(detail::WorkerStateDefinition::make<T>(std::forward<Factory>(factory)));
     }
 
     template <typename T>
     TestApp& useWorkerState() {
-        static_assert(
-            std::is_default_constructible_v<T>,
+        static_assert(std::is_default_constructible_v<T>,
             "useWorkerState<T>() without a factory requires T to be default "
             "constructible; pass a factory otherwise");
         return useWorkerState<T>([] { return T(); });

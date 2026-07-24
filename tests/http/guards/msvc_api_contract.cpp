@@ -13,27 +13,14 @@ concept HasPublicHttp1RequestBodyPlanFactories = requires {
     T::makeChunked(ruvia::detail::HttpTransferCodings{});
 };
 
-static_assert(!HasPublicHttp1RequestBodyPlanFactories<
-    ruvia::detail::Http1RequestBodyPlan>);
-static_assert(!std::default_initializable<
-    ruvia::detail::Http1RequestWithoutBody>);
-static_assert(!std::default_initializable<
-    ruvia::detail::Http1KnownLengthRequestBody>);
-static_assert(!std::default_initializable<
-    ruvia::detail::Http1ChunkedRequestBody>);
-static_assert(!std::default_initializable<
-    ruvia::detail::WebSocketServerNegotiation>);
-static_assert(!std::copy_constructible<
-    ruvia::detail::WebSocketServerNegotiation>);
-static_assert(std::move_constructible<
-    ruvia::detail::WebSocketServerNegotiation>);
-static_assert(!std::constructible_from<
-    ruvia::detail::WebSocketDeflateNegotiation,
-    bool>);
-static_assert(!std::constructible_from<
-    ruvia::detail::WsConnection,
-    std::pmr::string&,
-    std::size_t,
-    bool>);
+static_assert(!HasPublicHttp1RequestBodyPlanFactories<ruvia::detail::Http1RequestBodyPlan>);
+static_assert(!std::default_initializable<ruvia::detail::Http1RequestWithoutBody>);
+static_assert(!std::default_initializable<ruvia::detail::Http1KnownLengthRequestBody>);
+static_assert(!std::default_initializable<ruvia::detail::Http1ChunkedRequestBody>);
+static_assert(!std::default_initializable<ruvia::detail::WebSocketServerNegotiation>);
+static_assert(!std::copy_constructible<ruvia::detail::WebSocketServerNegotiation>);
+static_assert(std::move_constructible<ruvia::detail::WebSocketServerNegotiation>);
+static_assert(!std::constructible_from<ruvia::detail::WebSocketDeflateNegotiation, bool>);
+static_assert(!std::constructible_from<ruvia::detail::WsConnection, std::pmr::string&, std::size_t, bool>);
 
 int main() {}

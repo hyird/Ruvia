@@ -87,8 +87,7 @@ template <typename NumberT>
             return false;
         }
     } else {
-        const auto [ptr, ec] =
-            std::from_chars(number.data(), number.data() + number.size(), value);
+        const auto [ptr, ec] = std::from_chars(number.data(), number.data() + number.size(), value);
         if (ec != std::errc{} || ptr != number.data() + number.size()) {
             return false;
         }

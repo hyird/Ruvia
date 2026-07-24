@@ -27,10 +27,7 @@ void gzipZfree(voidpf, voidpf address) noexcept {
 
 }  // namespace
 
-ContentDecodeAttempt decodeGzipContent(
-    std::string_view input,
-    std::size_t maxDecodedBytes,
-    std::pmr::memory_resource* resource) {
+ContentDecodeAttempt decodeGzipContent(std::string_view input, std::size_t maxDecodedBytes, std::pmr::memory_resource* resource) {
     std::pmr::string output(httpPmrResourceOrDefault(resource));
     z_stream stream{};
     if (inflateInit2(&stream, 15 + 16) != Z_OK) {
@@ -38,7 +35,9 @@ ContentDecodeAttempt decodeGzipContent(
     }
     struct Guard final {
         z_stream* stream;
-        ~Guard() { (void)inflateEnd(stream); }
+        ~Guard() {
+            (void)inflateEnd(stream);
+        }
     } guard{&stream};
 
     std::size_t supplied = 0;
@@ -46,11 +45,8 @@ ContentDecodeAttempt decodeGzipContent(
         if (stream.avail_in != 0 || supplied == input.size()) {
             return;
         }
-        const auto count = static_cast<uInt>(std::min<std::size_t>(
-            input.size() - supplied,
-            (std::numeric_limits<uInt>::max)()));
-        stream.next_in = reinterpret_cast<Bytef*>(
-            const_cast<char*>(input.data() + supplied));
+        const auto count = static_cast<uInt>(std::min<std::size_t>(input.size() - supplied, (std::numeric_limits<uInt>::max)()));
+        stream.next_in = reinterpret_cast<Bytef*>(const_cast<char*>(input.data() + supplied));
         stream.avail_in = count;
         supplied += count;
     };
@@ -63,11 +59,7 @@ ContentDecodeAttempt decodeGzipContent(
         stream.avail_out = static_cast<uInt>(sizeof(buffer));
         const int status = inflate(&stream, Z_NO_FLUSH);
         const auto produced = sizeof(buffer) - stream.avail_out;
-        if (!appendDecodedBytes(
-                output,
-                buffer,
-                produced,
-                maxDecodedBytes)) {
+        if (!appendDecodedBytes(output, buffer, produced, maxDecodedBytes)) {
             return HttpContentDecodeError::kDecodedSizeExceeded;
         }
 
@@ -96,8 +88,7 @@ ContentDecodeAttempt decodeGzipContent(
             return HttpContentDecodeError::kInvalidContent;
         }
 
-        const bool progressed =
-            produced != 0 || stream.avail_in != beforeInput;
+        const bool progressed = produced != 0 || stream.avail_in != beforeInput;
         if (!progressed) {
             if (stream.avail_in == 0 && supplied < input.size()) {
                 continue;
@@ -107,10 +98,7 @@ ContentDecodeAttempt decodeGzipContent(
     }
 }
 
-ContentEncodeAttempt encodeGzipContent(
-    std::string_view input,
-    std::size_t maxEncodedBytes,
-    std::pmr::memory_resource* resource) {
+ContentEncodeAttempt encodeGzipContent(std::string_view input, std::size_t maxEncodedBytes, std::pmr::memory_resource* resource) {
     std::pmr::string output(httpPmrResourceOrDefault(resource));
     z_stream stream{};
     stream.zalloc = &gzipZalloc;
@@ -121,7 +109,9 @@ ContentEncodeAttempt encodeGzipContent(
     }
     struct Guard final {
         z_stream* stream;
-        ~Guard() { (void)deflateEnd(stream); }
+        ~Guard() {
+            (void)deflateEnd(stream);
+        }
     } guard{&stream};
 
     std::size_t supplied = 0;
@@ -129,11 +119,8 @@ ContentEncodeAttempt encodeGzipContent(
         if (stream.avail_in != 0 || supplied == input.size()) {
             return;
         }
-        const auto count = static_cast<uInt>(std::min<std::size_t>(
-            input.size() - supplied,
-            (std::numeric_limits<uInt>::max)()));
-        stream.next_in = reinterpret_cast<Bytef*>(
-            const_cast<char*>(input.data() + supplied));
+        const auto count = static_cast<uInt>(std::min<std::size_t>(input.size() - supplied, (std::numeric_limits<uInt>::max)()));
+        stream.next_in = reinterpret_cast<Bytef*>(const_cast<char*>(input.data() + supplied));
         stream.avail_in = count;
         supplied += count;
     };
@@ -156,16 +143,12 @@ ContentEncodeAttempt encodeGzipContent(
             return HttpContentEncodeError::kEncodedSizeExceeded;
         }
         const auto offset = output.size();
-        const auto writable = std::min<std::size_t>(
-            8192,
-            maxEncodedBytes - offset);
+        const auto writable = std::min<std::size_t>(8192, maxEncodedBytes - offset);
         const auto beforeInput = stream.avail_in;
         output.resize(offset + writable);
         stream.next_out = reinterpret_cast<Bytef*>(output.data() + offset);
         stream.avail_out = static_cast<uInt>(writable);
-        const auto status = deflate(
-            &stream,
-            stream.avail_in == 0 ? Z_FINISH : Z_NO_FLUSH);
+        const auto status = deflate(&stream, stream.avail_in == 0 ? Z_FINISH : Z_NO_FLUSH);
         output.resize(offset + (writable - stream.avail_out));
         if (status == Z_STREAM_END) {
             return output;
@@ -173,8 +156,7 @@ ContentEncodeAttempt encodeGzipContent(
         if (status == Z_MEM_ERROR) {
             return HttpContentEncodeError::kEncoderFailure;
         }
-        if (status != Z_OK ||
-            (output.size() == offset && stream.avail_in == beforeInput)) {
+        if (status != Z_OK || (output.size() == offset && stream.avail_in == beforeInput)) {
             return HttpContentEncodeError::kEncoderFailure;
         }
     }

@@ -4,13 +4,6 @@
 
 namespace ruvia {
 
-enum class ValidationTarget : std::uint8_t {
-    kJson,
-    kForm,
-    kQuery,
-    kParam,
-    kHeader,
-    kCookie
-};
+enum class ValidationTarget : std::uint8_t { kJson, kForm, kQuery, kParam, kHeader, kCookie };
 
 }  // namespace ruvia

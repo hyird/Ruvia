@@ -1,5 +1,20 @@
 cmake_minimum_required(VERSION 3.24)
 
+if(NOT DEFINED CMAKE_TOOLCHAIN_FILE
+   AND DEFINED ENV{VCPKG_ROOT}
+   AND NOT "$ENV{VCPKG_ROOT}" STREQUAL "")
+    file(TO_CMAKE_PATH "$ENV{VCPKG_ROOT}" _ruvia_vcpkg_root)
+    set(_ruvia_vcpkg_toolchain
+        "${_ruvia_vcpkg_root}/scripts/buildsystems/vcpkg.cmake")
+    if(NOT EXISTS "${_ruvia_vcpkg_toolchain}")
+        message(FATAL_ERROR
+            "VCPKG_ROOT does not contain scripts/buildsystems/vcpkg.cmake: "
+            "$ENV{VCPKG_ROOT}")
+    endif()
+    set(CMAKE_TOOLCHAIN_FILE "${_ruvia_vcpkg_toolchain}" CACHE FILEPATH
+        "Toolchain file selected from VCPKG_ROOT")
+endif()
+
 option(RUVIA_BUILD_CORE "Build ruvia-core" ON)
 option(RUVIA_BUILD_HTTP "Build ruvia-http" ON)
 option(RUVIA_BUILD_WEB "Build ruvia-web" ON)
@@ -7,8 +22,6 @@ option(RUVIA_BUILD_EDGE "Build ruvia-edge" OFF)
 option(RUVIA_BUILD_EXAMPLES "Build examples" OFF)
 option(RUVIA_BUILD_TESTS "Build tests" OFF)
 option(RUVIA_BUILD_BENCHMARKS "Build benchmarks" OFF)
-option(RUVIA_ENABLE_HTTP2_CONFORMANCE_TESTS "Run HTTP/2 conformance tests" OFF)
-option(RUVIA_ENABLE_POSTGRESQL_INTEGRATION_TESTS "Run PostgreSQL integration tests" OFF)
 option(RUVIA_ENABLE_MARIADB "Enable MariaDB" OFF)
 option(RUVIA_ENABLE_POSTGRESQL "Enable PostgreSQL" OFF)
 option(RUVIA_ENABLE_REDIS "Enable Redis" OFF)
@@ -26,6 +39,9 @@ if(RUVIA_BUILD_WEB AND (NOT RUVIA_BUILD_CORE OR NOT RUVIA_BUILD_HTTP))
 endif()
 if(RUVIA_BUILD_EDGE AND (NOT RUVIA_BUILD_CORE OR NOT RUVIA_BUILD_HTTP))
     message(FATAL_ERROR "RUVIA_BUILD_EDGE requires core and HTTP")
+endif()
+if(RUVIA_BUILD_EXAMPLES AND NOT RUVIA_BUILD_WEB)
+    message(FATAL_ERROR "RUVIA_BUILD_EXAMPLES requires Web")
 endif()
 
 set(_ruvia_options RUVIA_BUILD_CORE RUVIA_BUILD_HTTP RUVIA_BUILD_WEB RUVIA_BUILD_EDGE
@@ -328,9 +344,6 @@ foreach(_ruvia_component IN ITEMS core http web edge)
     endif()
 endforeach()
 
-if(RUVIA_BUILD_EXAMPLES)
-    add_subdirectory(examples)
-endif()
 # Written after every target has declared its installs, and read by
 # ruvia_guard_install_closure at test time.
 get_property(_ruvia_installed_headers GLOBAL PROPERTY RUVIA_INSTALLED_HEADERS)
@@ -339,6 +352,9 @@ list(JOIN _ruvia_installed_headers "\n" _ruvia_installed_headers_text)
 file(WRITE "${CMAKE_BINARY_DIR}/ruvia_installed_headers.txt"
     "${_ruvia_installed_headers_text}\n")
 
+if(RUVIA_BUILD_EXAMPLES)
+    add_subdirectory(examples)
+endif()
 if(RUVIA_BUILD_TESTS)
     enable_testing()
     add_subdirectory(tests)

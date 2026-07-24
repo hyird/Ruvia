@@ -34,8 +34,7 @@ public:
 private:
     friend class TransferCodingDecodeResult;
     friend class TransferCodingDecoder;
-    explicit constexpr TransferCodingDecodeNeedInput(
-        std::size_t consumedBytes) noexcept
+    explicit constexpr TransferCodingDecodeNeedInput(std::size_t consumedBytes) noexcept
         : consumedBytes_(consumedBytes) {}
     std::size_t consumedBytes_;
 };
@@ -53,10 +52,9 @@ public:
 private:
     friend class TransferCodingDecodeResult;
     friend class TransferCodingDecoder;
-    constexpr TransferCodingDecodeOutput(
-        std::size_t consumedBytes,
-        std::string_view bytes) noexcept
-        : consumedBytes_(consumedBytes), bytes_(bytes) {}
+    constexpr TransferCodingDecodeOutput(std::size_t consumedBytes, std::string_view bytes) noexcept
+        : consumedBytes_(consumedBytes),
+          bytes_(bytes) {}
     std::size_t consumedBytes_;
     std::string_view bytes_;
 };
@@ -70,8 +68,7 @@ public:
 private:
     friend class TransferCodingDecodeResult;
     friend class TransferCodingDecoder;
-    explicit constexpr TransferCodingDecodeComplete(
-        std::size_t consumedBytes) noexcept
+    explicit constexpr TransferCodingDecodeComplete(std::size_t consumedBytes) noexcept
         : consumedBytes_(consumedBytes) {}
     std::size_t consumedBytes_;
 };
@@ -97,10 +94,9 @@ public:
 private:
     friend class TransferCodingDecodeResult;
     friend class TransferCodingDecoder;
-    constexpr TransferCodingDecodeProtocolFailure(
-        std::size_t consumedBytes,
-        TransferCodingDecodeError error) noexcept
-        : consumedBytes_(consumedBytes), error_(error) {}
+    constexpr TransferCodingDecodeProtocolFailure(std::size_t consumedBytes, TransferCodingDecodeError error) noexcept
+        : consumedBytes_(consumedBytes),
+          error_(error) {}
     std::size_t consumedBytes_;
     TransferCodingDecodeError error_;
 };
@@ -114,8 +110,7 @@ public:
 private:
     friend class TransferCodingDecodeResult;
     friend class TransferCodingDecoder;
-    explicit constexpr TransferCodingDecoderFailure(
-        std::size_t consumedBytes) noexcept
+    explicit constexpr TransferCodingDecoderFailure(std::size_t consumedBytes) noexcept
         : consumedBytes_(consumedBytes) {}
     std::size_t consumedBytes_;
 };
@@ -127,47 +122,37 @@ private:
 class TransferCodingDecodeResult final {
 public:
     [[nodiscard]] std::size_t consumedBytes() const noexcept {
-        return std::visit(
-            [](const auto& result) { return result.consumedBytes(); },
-            value_);
+        return std::visit([](const auto& result) { return result.consumedBytes(); }, value_);
     }
 
-    [[nodiscard]] const TransferCodingDecodeNeedInput* needInput() const & noexcept {
+    [[nodiscard]] const TransferCodingDecodeNeedInput* needInput() const& noexcept {
         return std::get_if<TransferCodingDecodeNeedInput>(&value_);
     }
-    const TransferCodingDecodeNeedInput* needInput() const && = delete;
+    const TransferCodingDecodeNeedInput* needInput() const&& = delete;
 
-    [[nodiscard]] const TransferCodingDecodeOutput* output() const & noexcept {
+    [[nodiscard]] const TransferCodingDecodeOutput* output() const& noexcept {
         return std::get_if<TransferCodingDecodeOutput>(&value_);
     }
-    const TransferCodingDecodeOutput* output() const && = delete;
+    const TransferCodingDecodeOutput* output() const&& = delete;
 
-    [[nodiscard]] const TransferCodingDecodeComplete* complete() const & noexcept {
+    [[nodiscard]] const TransferCodingDecodeComplete* complete() const& noexcept {
         return std::get_if<TransferCodingDecodeComplete>(&value_);
     }
-    const TransferCodingDecodeComplete* complete() const && = delete;
+    const TransferCodingDecodeComplete* complete() const&& = delete;
 
-    [[nodiscard]] const TransferCodingDecodeProtocolFailure*
-    protocolFailure() const & noexcept {
+    [[nodiscard]] const TransferCodingDecodeProtocolFailure* protocolFailure() const& noexcept {
         return std::get_if<TransferCodingDecodeProtocolFailure>(&value_);
     }
-    const TransferCodingDecodeProtocolFailure*
-    protocolFailure() const && = delete;
+    const TransferCodingDecodeProtocolFailure* protocolFailure() const&& = delete;
 
-    [[nodiscard]] const TransferCodingDecoderFailure*
-    decoderFailure() const & noexcept {
+    [[nodiscard]] const TransferCodingDecoderFailure* decoderFailure() const& noexcept {
         return std::get_if<TransferCodingDecoderFailure>(&value_);
     }
-    const TransferCodingDecoderFailure* decoderFailure() const && = delete;
+    const TransferCodingDecoderFailure* decoderFailure() const&& = delete;
 
 private:
     friend class TransferCodingDecoder;
-    using Value = std::variant<
-        TransferCodingDecodeNeedInput,
-        TransferCodingDecodeOutput,
-        TransferCodingDecodeComplete,
-        TransferCodingDecodeProtocolFailure,
-        TransferCodingDecoderFailure>;
+    using Value = std::variant<TransferCodingDecodeNeedInput, TransferCodingDecodeOutput, TransferCodingDecodeComplete, TransferCodingDecodeProtocolFailure, TransferCodingDecoderFailure>;
 
     template <typename Result>
     explicit TransferCodingDecodeResult(Result result) noexcept
@@ -178,18 +163,13 @@ private:
 
 class TransferCodingDecoder final {
 public:
-    TransferCodingDecoder(
-        HttpTransferCoding coding,
-        std::pmr::memory_resource* resource,
-        ProtocolByteLimit bodyLimit);
+    TransferCodingDecoder(HttpTransferCoding coding, std::pmr::memory_resource* resource, ProtocolByteLimit bodyLimit);
     ~TransferCodingDecoder();
 
     TransferCodingDecoder(const TransferCodingDecoder&) = delete;
     TransferCodingDecoder& operator=(const TransferCodingDecoder&) = delete;
 
-    [[nodiscard]] TransferCodingDecodeResult decode(
-        std::string_view input,
-        std::span<char> output) noexcept;
+    [[nodiscard]] TransferCodingDecodeResult decode(std::string_view input, std::span<char> output) noexcept;
     // EOF is a decoder step, not a second status channel. It returns the same
     // exclusive complete/failure result as decode(), with zero consumed bytes.
     [[nodiscard]] TransferCodingDecodeResult finishInput() noexcept;
@@ -204,26 +184,13 @@ private:
     struct Active final {};
     struct GzipMemberBoundary final {};
     struct Complete final {};
-    using State = std::variant<
-        Active,
-        GzipMemberBoundary,
-        Complete,
-        TransferCodingDecodeError>;
+    using State = std::variant<Active, GzipMemberBoundary, Complete, TransferCodingDecodeError>;
 
-    [[nodiscard]] InflateStep inflateStep(
-        std::string_view input,
-        std::span<char> output) noexcept;
-    [[nodiscard]] static TransferCodingDecodeResult needInput(
-        std::size_t consumed) noexcept;
-    [[nodiscard]] static TransferCodingDecodeResult output(
-        std::size_t consumed,
-        std::string_view bytes) noexcept;
-    [[nodiscard]] static TransferCodingDecodeResult complete(
-        std::size_t consumed) noexcept;
-    [[nodiscard]] TransferCodingDecodeResult fail(
-        std::size_t consumed,
-        TransferCodingDecodeError error) noexcept;
-
+    [[nodiscard]] InflateStep inflateStep(std::string_view input, std::span<char> output) noexcept;
+    [[nodiscard]] static TransferCodingDecodeResult needInput(std::size_t consumed) noexcept;
+    [[nodiscard]] static TransferCodingDecodeResult output(std::size_t consumed, std::string_view bytes) noexcept;
+    [[nodiscard]] static TransferCodingDecodeResult complete(std::size_t consumed) noexcept;
+    [[nodiscard]] TransferCodingDecodeResult fail(std::size_t consumed, TransferCodingDecodeError error) noexcept;
 
     static voidpf zallocThunk(voidpf opaque, uInt items, uInt size) noexcept;
     static void zfreeThunk(voidpf opaque, voidpf address) noexcept;

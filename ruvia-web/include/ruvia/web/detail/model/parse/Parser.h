@@ -18,8 +18,7 @@ namespace ruvia::detail {
         return false;
     }
     const auto semicolon = contentType.find(';');
-    const auto mediaType = httpTrimOws(
-        semicolon == std::string_view::npos ? contentType : contentType.substr(0, semicolon));
+    const auto mediaType = httpTrimOws(semicolon == std::string_view::npos ? contentType : contentType.substr(0, semicolon));
     return httpAsciiEqualsIgnoreCase(mediaType, expected);
 }
 

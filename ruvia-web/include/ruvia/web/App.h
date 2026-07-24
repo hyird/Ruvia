@@ -30,7 +30,6 @@
 
 namespace ruvia {
 
-
 namespace detail {
 
 struct AppState;
@@ -85,9 +84,7 @@ public:
     // before any request is served.
     template <typename T, typename Factory>
     App& useWorkerState(Factory&& factory) {
-        return useWorkerStateDefinition(
-            detail::WorkerStateDefinition::make<T>(
-                std::forward<Factory>(factory)));
+        return useWorkerStateDefinition(detail::WorkerStateDefinition::make<T>(std::forward<Factory>(factory)));
     }
 
     // Enables Context::runBlocking(): one process-wide pool of ordinary threads
@@ -100,8 +97,7 @@ public:
 
     template <typename T>
     App& useWorkerState() {
-        static_assert(
-            std::is_default_constructible_v<T>,
+        static_assert(std::is_default_constructible_v<T>,
             "useWorkerState<T>() without a factory requires T to be default "
             "constructible; pass a factory otherwise");
         return useWorkerState<T>([] { return T(); });

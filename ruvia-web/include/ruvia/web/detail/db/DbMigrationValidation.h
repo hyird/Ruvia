@@ -13,19 +13,14 @@ namespace ruvia::detail {
 // is restricted to the selected backend's identifier byte limit and
 // [A-Za-z0-9_] before being quoted -- the sole defense against SQL injection
 // via a misconfigured table name.
-[[nodiscard]] inline bool isValidMigrationTableName(
-    std::string_view name,
-    DbDriver driver) noexcept {
+[[nodiscard]] inline bool isValidMigrationTableName(std::string_view name, DbDriver driver) noexcept {
     const auto maxBytes = driver == DbDriver::kPostgreSql ? 63U : 64U;
     if (name.empty() || name.size() > maxBytes) {
         return false;
     }
     for (const auto ch : name) {
         const auto c = static_cast<unsigned char>(ch);
-        if ((c >= 'a' && c <= 'z') ||
-            (c >= 'A' && c <= 'Z') ||
-            (c >= '0' && c <= '9') ||
-            c == '_') {
+        if ((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '_') {
             continue;
         }
         return false;

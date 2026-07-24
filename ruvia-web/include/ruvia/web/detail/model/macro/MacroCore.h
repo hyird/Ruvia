@@ -9,17 +9,8 @@
 // Field counter. A model with 1..64 fields resolves to that count.
 #define RUVIA_MODEL_NARG(...) RUVIA_MODEL_NARG_(__VA_ARGS__, RUVIA_MODEL_RSEQ())
 #define RUVIA_MODEL_NARG_(...) RUVIA_MODEL_EXPAND(RUVIA_MODEL_ARG_N(__VA_ARGS__))
-#define RUVIA_MODEL_ARG_N( \
-    _1,_2,_3,_4,_5,_6,_7,_8,_9,_10,_11,_12,_13,_14,_15,_16, \
-    _17,_18,_19,_20,_21,_22,_23,_24,_25,_26,_27,_28,_29,_30,_31,_32, \
-    _33,_34,_35,_36,_37,_38,_39,_40,_41,_42,_43,_44,_45,_46,_47,_48, \
-    _49,_50,_51,_52,_53,_54,_55,_56,_57,_58,_59,_60,_61,_62,_63,_64, \
-    N,...) N
-#define RUVIA_MODEL_RSEQ() \
-    64,63,62,61,60,59,58,57,56,55,54,53,52,51,50,49, \
-    48,47,46,45,44,43,42,41,40,39,38,37,36,35,34,33, \
-    32,31,30,29,28,27,26,25,24,23,22,21,20,19,18,17, \
-    16,15,14,13,12,11,10,9,8,7,6,5,4,3,2,1,0
+#define RUVIA_MODEL_ARG_N(_1, _2, _3, _4, _5, _6, _7, _8, _9, _10, _11, _12, _13, _14, _15, _16, _17, _18, _19, _20, _21, _22, _23, _24, _25, _26, _27, _28, _29, _30, _31, _32, _33, _34, _35, _36, _37, _38, _39, _40, _41, _42, _43, _44, _45, _46, _47, _48, _49, _50, _51, _52, _53, _54, _55, _56, _57, _58, _59, _60, _61, _62, _63, _64, N, ...) N
+#define RUVIA_MODEL_RSEQ() 64, 63, 62, 61, 60, 59, 58, 57, 56, 55, 54, 53, 52, 51, 50, 49, 48, 47, 46, 45, 44, 43, 42, 41, 40, 39, 38, 37, 36, 35, 34, 33, 32, 31, 30, 29, 28, 27, 26, 25, 24, 23, 22, 21, 20, 19, 18, 17, 16, 15, 14, 13, 12, 11, 10, 9, 8, 7, 6, 5, 4, 3, 2, 1, 0
 
 #define RUVIA_MODEL_CAT(a, b) RUVIA_MODEL_CAT_(a, b)
 #define RUVIA_MODEL_CAT_(a, b) a##b
@@ -91,27 +82,29 @@
 #define RUVIA_MODEL_GUARD_62
 #define RUVIA_MODEL_GUARD_63
 #define RUVIA_MODEL_GUARD_64
-#define RUVIA_MODEL_GUARD_OVERFLOW \
-    static_assert(false, \
-        "Ruvia models support at most 64 fields; split large models into nested models");
-#define RUVIA_MODEL_FIELD_COUNT_GUARD(...) \
-    RUVIA_MODEL_CAT(RUVIA_MODEL_GUARD_, RUVIA_MODEL_NARG(__VA_ARGS__))
+#define RUVIA_MODEL_GUARD_OVERFLOW static_assert(false, "Ruvia models support at most 64 fields; split large models into nested models");
+#define RUVIA_MODEL_FIELD_COUNT_GUARD(...) RUVIA_MODEL_CAT(RUVIA_MODEL_GUARD_, RUVIA_MODEL_NARG(__VA_ARGS__))
 // Sink for the FOR_EACH dispatch on an overflowing model: emit nothing so the single
 // guard static_assert above is the only diagnostic (no cryptic FE_OVERFLOW error).
 #define RUVIA_MODEL_FE_OVERFLOW(m, T, ...)
 
-#define RUVIA_DEFAULT(value) ::ruvia::detail::model::Default{value}
-#define RUVIA_OMIT_EMPTY ::ruvia::detail::model::OmitEmpty{}
-#define RUVIA_EMIT_NULL ::ruvia::detail::model::EmitNull{}
-#define RUVIA_MODEL_FE_1(m, T, x)       m(T, x)
-#define RUVIA_MODEL_FE_2(m, T, x, ...)  m(T, x) RUVIA_MODEL_EXPAND(RUVIA_MODEL_FE_1(m, T, __VA_ARGS__))
-#define RUVIA_MODEL_FE_3(m, T, x, ...)  m(T, x) RUVIA_MODEL_EXPAND(RUVIA_MODEL_FE_2(m, T, __VA_ARGS__))
-#define RUVIA_MODEL_FE_4(m, T, x, ...)  m(T, x) RUVIA_MODEL_EXPAND(RUVIA_MODEL_FE_3(m, T, __VA_ARGS__))
-#define RUVIA_MODEL_FE_5(m, T, x, ...)  m(T, x) RUVIA_MODEL_EXPAND(RUVIA_MODEL_FE_4(m, T, __VA_ARGS__))
-#define RUVIA_MODEL_FE_6(m, T, x, ...)  m(T, x) RUVIA_MODEL_EXPAND(RUVIA_MODEL_FE_5(m, T, __VA_ARGS__))
-#define RUVIA_MODEL_FE_7(m, T, x, ...)  m(T, x) RUVIA_MODEL_EXPAND(RUVIA_MODEL_FE_6(m, T, __VA_ARGS__))
-#define RUVIA_MODEL_FE_8(m, T, x, ...)  m(T, x) RUVIA_MODEL_EXPAND(RUVIA_MODEL_FE_7(m, T, __VA_ARGS__))
-#define RUVIA_MODEL_FE_9(m, T, x, ...)  m(T, x) RUVIA_MODEL_EXPAND(RUVIA_MODEL_FE_8(m, T, __VA_ARGS__))
+#define RUVIA_DEFAULT(value)          \
+    ::ruvia::detail::model::Default { \
+        value                         \
+    }
+#define RUVIA_OMIT_EMPTY \
+    ::ruvia::detail::model::OmitEmpty {}
+#define RUVIA_EMIT_NULL \
+    ::ruvia::detail::model::EmitNull {}
+#define RUVIA_MODEL_FE_1(m, T, x) m(T, x)
+#define RUVIA_MODEL_FE_2(m, T, x, ...) m(T, x) RUVIA_MODEL_EXPAND(RUVIA_MODEL_FE_1(m, T, __VA_ARGS__))
+#define RUVIA_MODEL_FE_3(m, T, x, ...) m(T, x) RUVIA_MODEL_EXPAND(RUVIA_MODEL_FE_2(m, T, __VA_ARGS__))
+#define RUVIA_MODEL_FE_4(m, T, x, ...) m(T, x) RUVIA_MODEL_EXPAND(RUVIA_MODEL_FE_3(m, T, __VA_ARGS__))
+#define RUVIA_MODEL_FE_5(m, T, x, ...) m(T, x) RUVIA_MODEL_EXPAND(RUVIA_MODEL_FE_4(m, T, __VA_ARGS__))
+#define RUVIA_MODEL_FE_6(m, T, x, ...) m(T, x) RUVIA_MODEL_EXPAND(RUVIA_MODEL_FE_5(m, T, __VA_ARGS__))
+#define RUVIA_MODEL_FE_7(m, T, x, ...) m(T, x) RUVIA_MODEL_EXPAND(RUVIA_MODEL_FE_6(m, T, __VA_ARGS__))
+#define RUVIA_MODEL_FE_8(m, T, x, ...) m(T, x) RUVIA_MODEL_EXPAND(RUVIA_MODEL_FE_7(m, T, __VA_ARGS__))
+#define RUVIA_MODEL_FE_9(m, T, x, ...) m(T, x) RUVIA_MODEL_EXPAND(RUVIA_MODEL_FE_8(m, T, __VA_ARGS__))
 #define RUVIA_MODEL_FE_10(m, T, x, ...) m(T, x) RUVIA_MODEL_EXPAND(RUVIA_MODEL_FE_9(m, T, __VA_ARGS__))
 #define RUVIA_MODEL_FE_11(m, T, x, ...) m(T, x) RUVIA_MODEL_EXPAND(RUVIA_MODEL_FE_10(m, T, __VA_ARGS__))
 #define RUVIA_MODEL_FE_12(m, T, x, ...) m(T, x) RUVIA_MODEL_EXPAND(RUVIA_MODEL_FE_11(m, T, __VA_ARGS__))
@@ -168,7 +161,6 @@
 #define RUVIA_MODEL_FE_63(m, T, x, ...) m(T, x) RUVIA_MODEL_EXPAND(RUVIA_MODEL_FE_62(m, T, __VA_ARGS__))
 #define RUVIA_MODEL_FE_64(m, T, x, ...) m(T, x) RUVIA_MODEL_EXPAND(RUVIA_MODEL_FE_63(m, T, __VA_ARGS__))
 
-#define RUVIA_MODEL_FOR_EACH(m, T, ...) \
-    RUVIA_MODEL_EXPAND(RUVIA_MODEL_CAT(RUVIA_MODEL_FE_, RUVIA_MODEL_NARG(__VA_ARGS__))(m, T, __VA_ARGS__))
+#define RUVIA_MODEL_FOR_EACH(m, T, ...) RUVIA_MODEL_EXPAND(RUVIA_MODEL_CAT(RUVIA_MODEL_FE_, RUVIA_MODEL_NARG(__VA_ARGS__))(m, T, __VA_ARGS__))
 
 #define RUVIA_MODEL_UNPAREN(...) __VA_ARGS__

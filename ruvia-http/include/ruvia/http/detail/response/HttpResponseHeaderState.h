@@ -9,49 +9,27 @@
 namespace ruvia::detail {
 
 struct HttpResponseHeaderStateAccess final {
-    static void setStableView(
-        HttpResponse& response,
-        std::string_view key,
-        std::string_view value) {
+    static void setStableView(HttpResponse& response, std::string_view key, std::string_view value) {
         response.setHeaderStableView(key, value);
     }
 
-    static void setValidated(
-        HttpResponse& response,
-        std::string_view key,
-        std::string_view value,
-        std::uint32_t knownBit) {
+    static void setValidated(HttpResponse& response, std::string_view key, std::string_view value, std::uint32_t knownBit) {
         response.setHeaderValidated(key, value, knownBit);
     }
 
-    static void appendValidated(
-        HttpResponse& response,
-        std::string_view key,
-        std::string_view value,
-        std::uint32_t knownBit) {
+    static void appendValidated(HttpResponse& response, std::string_view key, std::string_view value, std::uint32_t knownBit) {
         response.appendHeaderValidated(key, value, knownBit);
     }
 
-    [[nodiscard]] static HttpResponseHeader& upsertSetCookieUninitializedValue(
-        HttpResponse& response,
-        std::string_view wirePrefix,
-        std::string_view cookieName,
-        std::size_t valueSize) {
-        return response.upsertSetCookieHeaderUninitializedValue(
-            wirePrefix, cookieName, valueSize);
+    [[nodiscard]] static HttpResponseHeader& upsertSetCookieUninitializedValue(HttpResponse& response, std::string_view wirePrefix, std::string_view cookieName, std::size_t valueSize) {
+        return response.upsertSetCookieHeaderUninitializedValue(wirePrefix, cookieName, valueSize);
     }
 
-    static void upsertSetCookieValidated(
-        HttpResponse& response,
-        std::string_view value) {
+    static void upsertSetCookieValidated(HttpResponse& response, std::string_view value) {
         response.upsertSetCookieHeaderValidated(value);
     }
 
-    static void setUnsigned(
-        HttpResponse& response,
-        std::string_view key,
-        std::uint64_t value,
-        std::uint32_t knownBit) {
+    static void setUnsigned(HttpResponse& response, std::string_view key, std::uint64_t value, std::uint32_t knownBit) {
         response.setHeaderUnsigned(key, value, knownBit);
     }
 
@@ -59,11 +37,7 @@ struct HttpResponseHeaderStateAccess final {
         response.setAllowHeader(methodMask);
     }
 
-    static void setContentRange(
-        HttpResponse& response,
-        std::uint64_t offset,
-        std::uint64_t length,
-        std::uint64_t size) {
+    static void setContentRange(HttpResponse& response, std::uint64_t offset, std::uint64_t length, std::uint64_t size) {
         response.setContentRange(offset, length, size);
     }
 
@@ -83,9 +57,7 @@ struct HttpResponseHeaderStateAccess final {
         return (response.knownHeaderBits_ & bit) != 0;
     }
 
-    [[nodiscard]] static std::string_view knownValue(
-        const HttpResponse& response,
-        std::uint32_t bit) noexcept {
+    [[nodiscard]] static std::string_view knownValue(const HttpResponse& response, std::uint32_t bit) noexcept {
         return response.knownHeaderValue(bit);
     }
 
@@ -94,49 +66,27 @@ struct HttpResponseHeaderStateAccess final {
     }
 };
 
-inline void setResponseHeaderStableView(
-    HttpResponse& response,
-    std::string_view key,
-    std::string_view value) {
+inline void setResponseHeaderStableView(HttpResponse& response, std::string_view key, std::string_view value) {
     HttpResponseHeaderStateAccess::setStableView(response, key, value);
 }
 
-inline void setResponseHeaderValidated(
-    HttpResponse& response,
-    std::string_view key,
-    std::string_view value,
-    std::uint32_t knownBit) {
+inline void setResponseHeaderValidated(HttpResponse& response, std::string_view key, std::string_view value, std::uint32_t knownBit) {
     HttpResponseHeaderStateAccess::setValidated(response, key, value, knownBit);
 }
 
-inline void appendResponseHeaderValidated(
-    HttpResponse& response,
-    std::string_view key,
-    std::string_view value,
-    std::uint32_t knownBit) {
+inline void appendResponseHeaderValidated(HttpResponse& response, std::string_view key, std::string_view value, std::uint32_t knownBit) {
     HttpResponseHeaderStateAccess::appendValidated(response, key, value, knownBit);
 }
 
-[[nodiscard]] inline HttpResponseHeader& upsertResponseSetCookieUninitializedValue(
-    HttpResponse& response,
-    std::string_view wirePrefix,
-    std::string_view cookieName,
-    std::size_t valueSize) {
-    return HttpResponseHeaderStateAccess::upsertSetCookieUninitializedValue(
-        response, wirePrefix, cookieName, valueSize);
+[[nodiscard]] inline HttpResponseHeader& upsertResponseSetCookieUninitializedValue(HttpResponse& response, std::string_view wirePrefix, std::string_view cookieName, std::size_t valueSize) {
+    return HttpResponseHeaderStateAccess::upsertSetCookieUninitializedValue(response, wirePrefix, cookieName, valueSize);
 }
 
-inline void upsertResponseSetCookieValidated(
-    HttpResponse& response,
-    std::string_view value) {
+inline void upsertResponseSetCookieValidated(HttpResponse& response, std::string_view value) {
     HttpResponseHeaderStateAccess::upsertSetCookieValidated(response, value);
 }
 
-inline void setResponseHeaderUnsigned(
-    HttpResponse& response,
-    std::string_view key,
-    std::uint64_t value,
-    std::uint32_t knownBit) {
+inline void setResponseHeaderUnsigned(HttpResponse& response, std::string_view key, std::uint64_t value, std::uint32_t knownBit) {
     HttpResponseHeaderStateAccess::setUnsigned(response, key, value, knownBit);
 }
 
@@ -144,11 +94,7 @@ inline void setResponseAllowHeader(HttpResponse& response, std::uint32_t methodM
     HttpResponseHeaderStateAccess::setAllow(response, methodMask);
 }
 
-inline void setResponseContentRange(
-    HttpResponse& response,
-    std::uint64_t offset,
-    std::uint64_t length,
-    std::uint64_t size) {
+inline void setResponseContentRange(HttpResponse& response, std::uint64_t offset, std::uint64_t length, std::uint64_t size) {
     HttpResponseHeaderStateAccess::setContentRange(response, offset, length, size);
 }
 
@@ -168,9 +114,7 @@ inline void reserveResponseHeaders(HttpResponse& response, std::size_t count) {
     return HttpResponseHeaderStateAccess::hasKnown(response, bit);
 }
 
-[[nodiscard]] inline std::string_view responseKnownHeader(
-    const HttpResponse& response,
-    std::uint32_t bit) noexcept {
+[[nodiscard]] inline std::string_view responseKnownHeader(const HttpResponse& response, std::uint32_t bit) noexcept {
     return HttpResponseHeaderStateAccess::knownValue(response, bit);
 }
 

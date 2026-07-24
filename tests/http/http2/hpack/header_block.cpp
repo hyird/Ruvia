@@ -10,13 +10,13 @@
 
 namespace {
 
-using ruvia::detail::Http2FrameType;
-using ruvia::detail::Http2HeaderContinuation;
-using ruvia::detail::Http2HeaderBlockKind;
-using ruvia::detail::Http2StreamState;
 using ruvia::detail::http2AppendHeaderBlock;
+using ruvia::detail::Http2FrameType;
+using ruvia::detail::Http2HeaderBlockKind;
+using ruvia::detail::Http2HeaderContinuation;
 using ruvia::detail::http2ResetHeaderBlock;
 using ruvia::detail::http2StartHeaderBlock;
+using ruvia::detail::Http2StreamState;
 using ruvia::detail::kMaxHttp2EncodedHeaderBlockBytes;
 
 constexpr std::uint8_t frameType(Http2FrameType type) noexcept {
@@ -48,14 +48,10 @@ RUVIA_TEST(header_block_size_limit_guards_continuation_flood) {
     auto stream = makeStream();
     const std::string atLimit(kMaxHttp2EncodedHeaderBlockBytes, 'a');
     RUVIA_CHECK(http2StartHeaderBlock(stream, atLimit));
-    RUVIA_CHECK_EQ(
-        stream.requestHeaderBlock().size(),
-        kMaxHttp2EncodedHeaderBlockBytes);
+    RUVIA_CHECK_EQ(stream.requestHeaderBlock().size(), kMaxHttp2EncodedHeaderBlockBytes);
     // One more byte would exceed the cap: rejected, block left untouched.
     RUVIA_CHECK(!http2AppendHeaderBlock(stream, "x"));
-    RUVIA_CHECK_EQ(
-        stream.requestHeaderBlock().size(),
-        kMaxHttp2EncodedHeaderBlockBytes);
+    RUVIA_CHECK_EQ(stream.requestHeaderBlock().size(), kMaxHttp2EncodedHeaderBlockBytes);
 
     // A single oversized fragment is rejected outright.
     auto fresh = makeStream();

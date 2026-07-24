@@ -21,7 +21,8 @@ inline Task<void> TaskPromise<void>::get_return_object() noexcept {
 template <typename T>
 class TaskAwaiter final {
 public:
-    explicit TaskAwaiter(Task<T>&& task) : task_(std::move(task)) {
+    explicit TaskAwaiter(Task<T>&& task)
+        : task_(std::move(task)) {
         if (task_.handle_ == nullptr) {
             throw std::logic_error("cannot await an empty ruvia::Task");
         }
@@ -48,7 +49,8 @@ private:
 template <>
 class TaskAwaiter<void> final {
 public:
-    explicit TaskAwaiter(Task<void>&& task) : task_(std::move(task)) {
+    explicit TaskAwaiter(Task<void>&& task)
+        : task_(std::move(task)) {
         if (task_.handle_ == nullptr) {
             throw std::logic_error("cannot await an empty ruvia::Task");
         }

@@ -14,13 +14,9 @@ struct ConfigHostRules final {
     bool rejectSingleColon{false};
 };
 
-inline constexpr ConfigHostRules kSeparatedPortHostRules{
-    .rejectBrackets = true,
-    .rejectSingleColon = true};
+inline constexpr ConfigHostRules kSeparatedPortHostRules{.rejectBrackets = true, .rejectSingleColon = true};
 
-[[nodiscard]] inline bool isValidConfigHost(
-    std::string_view host,
-    ConfigHostRules rules = {}) noexcept {
+[[nodiscard]] inline bool isValidConfigHost(std::string_view host, ConfigHostRules rules = {}) noexcept {
     if (host.empty()) {
         return false;
     }
@@ -28,9 +24,7 @@ inline constexpr ConfigHostRules kSeparatedPortHostRules{
     std::size_t colonCount = 0;
     for (const auto ch : host) {
         const auto byte = static_cast<unsigned char>(ch);
-        if (byte <= 0x20 || byte == 0x7F ||
-            byte == '/' || byte == '\\' ||
-            (rules.rejectBrackets && (byte == '[' || byte == ']'))) {
+        if (byte <= 0x20 || byte == 0x7F || byte == '/' || byte == '\\' || (rules.rejectBrackets && (byte == '[' || byte == ']'))) {
             return false;
         }
         colonCount += byte == ':' ? 1 : 0;
@@ -39,11 +33,7 @@ inline constexpr ConfigHostRules kSeparatedPortHostRules{
     return !(rules.rejectSingleColon && colonCount == 1);
 }
 
-inline void ensureConfigHost(
-    std::string_view host,
-    const char* emptyMessage,
-    const char* invalidMessage,
-    ConfigHostRules rules = {}) {
+inline void ensureConfigHost(std::string_view host, const char* emptyMessage, const char* invalidMessage, ConfigHostRules rules = {}) {
     if (host.empty()) {
         throw std::invalid_argument(emptyMessage);
     }
@@ -58,9 +48,7 @@ inline void ensurePositiveSize(std::size_t value, const char* message) {
     }
 }
 
-inline void ensurePositiveOptionalSize(
-    const std::optional<std::size_t>& value,
-    const char* message) {
+inline void ensurePositiveOptionalSize(const std::optional<std::size_t>& value, const char* message) {
     if (value.has_value() && *value == 0) {
         throw std::invalid_argument(message);
     }
@@ -73,28 +61,21 @@ inline void ensureNonZeroPort(std::uint16_t port, const char* message) {
 }
 
 template <typename Rep, typename Period>
-void ensurePositiveDuration(
-    std::chrono::duration<Rep, Period> value,
-    const char* message) {
+void ensurePositiveDuration(std::chrono::duration<Rep, Period> value, const char* message) {
     if (value.count() <= 0) {
         throw std::invalid_argument(message);
     }
 }
 
 template <typename Rep, typename Period>
-void ensurePositiveOptionalDuration(
-    const std::optional<std::chrono::duration<Rep, Period>>& value,
-    const char* message) {
+void ensurePositiveOptionalDuration(const std::optional<std::chrono::duration<Rep, Period>>& value, const char* message) {
     if (value.has_value() && value->count() <= 0) {
         throw std::invalid_argument(message);
     }
 }
 
 template <typename FirstDuration, typename... RestDurations>
-void ensurePositiveOptionalDurations(
-    const char* message,
-    const FirstDuration& first,
-    const RestDurations&... rest) {
+void ensurePositiveOptionalDurations(const char* message, const FirstDuration& first, const RestDurations&... rest) {
     ensurePositiveOptionalDuration(first, message);
     (ensurePositiveOptionalDuration(rest, message), ...);
 }

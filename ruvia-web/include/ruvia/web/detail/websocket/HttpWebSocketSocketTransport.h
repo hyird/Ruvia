@@ -19,7 +19,8 @@ namespace ruvia::detail {
 template <typename Stream>
 class WebSocketSocketTransport final {
 public:
-    explicit WebSocketSocketTransport(Stream& stream) noexcept : stream_(stream) {}
+    explicit WebSocketSocketTransport(Stream& stream) noexcept
+        : stream_(stream) {}
 
     [[nodiscard]] auto executor() const noexcept {
         return stream_.get_executor();
@@ -28,12 +29,7 @@ public:
     [[nodiscard]] Task<WsTransportReadResult> readMore(std::pmr::string& buffer) {
         const auto oldSize = buffer.size();
         resizePmrStringForOverwrite(buffer, oldSize + 4096);
-        auto readCompletion = co_await asyncAsio<std::size_t>(
-            [this, oldSize, &buffer](auto handler) mutable {
-                stream_.async_read_some(
-                    asio::buffer(buffer.data() + oldSize, buffer.size() - oldSize),
-                    std::move(handler));
-            });
+        auto readCompletion = co_await asyncAsio<std::size_t>([this, oldSize, &buffer](auto handler) mutable { stream_.async_read_some(asio::buffer(buffer.data() + oldSize, buffer.size() - oldSize), std::move(handler)); });
         const auto ec = readCompletion.errorCode();
         const auto bytesRead = readCompletion.result();
         if (ec) {
@@ -48,17 +44,12 @@ public:
         co_return WsTransportReadResult::makeData();
     }
 
-    [[nodiscard]] Task<std::error_code> writeBytes(
-        std::string_view bytes,
-        WsTransportDisposition /*disposition*/) {
+    [[nodiscard]] Task<std::error_code> writeBytes(std::string_view bytes, WsTransportDisposition /*disposition*/) {
         if (bytes.empty()) {
             co_return std::error_code{};
         }
         const auto buffer = asio::buffer(bytes.data(), bytes.size());
-        const auto writeCompletion = co_await asyncAsio(
-            [this, buffer](auto handler) mutable {
-                asio::async_write(stream_, buffer, std::move(handler));
-            });
+        const auto writeCompletion = co_await asyncAsio([this, buffer](auto handler) mutable { asio::async_write(stream_, buffer, std::move(handler)); });
         co_return writeCompletion.errorCode();
     }
 

@@ -41,8 +41,7 @@ namespace ruvia::detail {
     }
 }
 
-[[nodiscard]] inline bool httpValidMimeFieldName(
-    std::string_view value) noexcept {
+[[nodiscard]] inline bool httpValidMimeFieldName(std::string_view value) noexcept {
     if (value.empty()) {
         return false;
     }
@@ -52,17 +51,14 @@ namespace ruvia::detail {
     });
 }
 
-[[nodiscard]] inline bool httpValidMimeFieldBody(
-    std::string_view value) noexcept {
+[[nodiscard]] inline bool httpValidMimeFieldBody(std::string_view value) noexcept {
     return std::ranges::all_of(value, [](char byte) {
         const auto character = static_cast<unsigned char>(byte);
-        return character == '\t' ||
-            (character >= 0x20 && character != 0x7F);
+        return character == '\t' || (character >= 0x20 && character != 0x7F);
     });
 }
 
-[[nodiscard]] inline bool httpValidMimeParameterValue(
-    std::string_view value) noexcept {
+[[nodiscard]] inline bool httpValidMimeParameterValue(std::string_view value) noexcept {
     if (value.empty()) {
         return false;
     }
@@ -86,19 +82,14 @@ namespace ruvia::detail {
             }
             continue;
         }
-        if (value[index] == '"' || byte == 0 || byte == '\r' ||
-            byte == '\n' || byte == 0x7F || (byte < 0x20 && byte != '\t')) {
+        if (value[index] == '"' || byte == 0 || byte == '\r' || byte == '\n' || byte == 0x7F || (byte < 0x20 && byte != '\t')) {
             return false;
         }
     }
     return true;
 }
 
-[[nodiscard]] inline bool httpParseMimeParameter(
-    std::string_view parameter,
-    std::string_view& name,
-    std::string_view& value,
-    bool strictEquals = true) noexcept {
+[[nodiscard]] inline bool httpParseMimeParameter(std::string_view parameter, std::string_view& name, std::string_view& value, bool strictEquals = true) noexcept {
     const auto equals = parameter.find('=');
     if (parameter.empty() || equals == std::string_view::npos) {
         return false;
@@ -111,19 +102,11 @@ namespace ruvia::detail {
     // Top-level HTTP media-type parameters forbid OWS around '=' (RFC 9110
     // section 5.6.6). MIME body-part structured fields retain RFC 822's
     // separator whitespace and opt out while sharing the remaining checks.
-    return (!strictEquals ||
-            (name.size() == rawName.size() && value.size() == rawValue.size())) &&
-        !name.empty() &&
-        std::ranges::all_of(name, httpMimeTokenChar) &&
-        httpValidMimeParameterValue(value);
+    return (!strictEquals || (name.size() == rawName.size() && value.size() == rawValue.size())) && !name.empty() && std::ranges::all_of(name, httpMimeTokenChar) && httpValidMimeParameterValue(value);
 }
 
 template <HttpTemporaryOwningCharString Parameter>
-bool httpParseMimeParameter(
-    Parameter&&,
-    std::string_view&,
-    std::string_view&,
-    bool = true) = delete;
+bool httpParseMimeParameter(Parameter&&, std::string_view&, std::string_view&, bool = true) = delete;
 
 class HttpMimeParameterNames final {
 public:
@@ -147,33 +130,24 @@ private:
     std::size_t size_ = 0;
 };
 
-[[nodiscard]] inline bool httpValidMimeMediaType(
-    std::string_view value) noexcept {
+[[nodiscard]] inline bool httpValidMimeMediaType(std::string_view value) noexcept {
     const auto parameters = httpFindUnquotedDelimiter(value, 0, ';');
     const auto mediaType = httpTrimOws(value.substr(0, parameters));
     const auto slash = mediaType.find('/');
-    if (slash == std::string_view::npos ||
-        mediaType.find('/', slash + 1) != std::string_view::npos) {
+    if (slash == std::string_view::npos || mediaType.find('/', slash + 1) != std::string_view::npos) {
         return false;
     }
     const auto type = mediaType.substr(0, slash);
     const auto subtype = mediaType.substr(slash + 1);
-    if (type == "*" || subtype == "*" ||
-        !std::ranges::all_of(type, httpMimeTokenChar) ||
-        !std::ranges::all_of(subtype, httpMimeTokenChar) ||
-        type.empty() || subtype.empty()) {
+    if (type == "*" || subtype == "*" || !std::ranges::all_of(type, httpMimeTokenChar) || !std::ranges::all_of(subtype, httpMimeTokenChar) || type.empty() || subtype.empty()) {
         return false;
     }
     HttpMimeParameterNames parameterNames;
-    return httpAllParameters(
-        value,
-        [&parameterNames](std::string_view parameter) noexcept {
-            std::string_view name;
-            std::string_view parameterValue;
-            return httpParseMimeParameter(
-                       parameter, name, parameterValue, false) &&
-                parameterNames.record(name);
-        });
+    return httpAllParameters(value, [&parameterNames](std::string_view parameter) noexcept {
+        std::string_view name;
+        std::string_view parameterValue;
+        return httpParseMimeParameter(parameter, name, parameterValue, false) && parameterNames.record(name);
+    });
 }
 
 }  // namespace ruvia::detail

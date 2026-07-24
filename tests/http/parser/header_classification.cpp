@@ -7,8 +7,8 @@
 namespace {
 
 using ruvia::detail::classifyRequestHeader;
-using ruvia::detail::singletonRequestHeaderBit;
 using ruvia::detail::RequestHeaderKind;
+using ruvia::detail::singletonRequestHeaderBit;
 
 struct Case final {
     std::string_view name;

@@ -47,8 +47,7 @@ asio::awaitable<void> EdgeServer::Impl::handleHttp2Session(Stream stream, std::s
     // Woken when a handler finishes, so the draining reader can notice the last
     // in-flight stream completed even while it is blocked awaiting client frames.
     asio::steady_timer handlersIdle(executor);
-    std::pmr::unordered_map<std::uint32_t, asio::steady_timer*> drainWaiters(
-        memory_.resource());
+    std::pmr::unordered_map<std::uint32_t, asio::steady_timer*> drainWaiters(memory_.resource());
     bool shuttingDown = false;
     int activeHandlers = 0;
     // Per-stream cancellation signals for the detached response handlers. On
@@ -57,8 +56,7 @@ asio::awaitable<void> EdgeServer::Impl::handleHttp2Session(Stream stream, std::s
     // coalescing wait, or an in-flight origin fetch -- is released and unwinds.
     // Node-based storage: cancellation_signal is not movable, and the slot a
     // spawned handler binds must stay valid until that handler completes.
-    std::pmr::unordered_map<std::uint32_t, asio::cancellation_signal> handlerCancels(
-        memory_.resource());
+    std::pmr::unordered_map<std::uint32_t, asio::cancellation_signal> handlerCancels(memory_.resource());
     Http2SessionShared shared{connection, writeWake, drainWaiters, shuttingDown};
 
     // Wake the writer and, once tearing down, release every parked handler so it
@@ -82,13 +80,9 @@ asio::awaitable<void> EdgeServer::Impl::handleHttp2Session(Stream stream, std::s
     // One stream's response handler: build the logical request from the pinned
     // stream and drive the serve core with an HTTP/2 writer. Named-local so its
     // closure outlives the coroutines co_spawn()ed from it.
-    auto serveStream =
-        [this, &shared, resource = &resource, clientAddress = std::string_view(clientAddress)](
-            std::uint32_t streamId, detail::Http2StreamState& streamState,
-            std::pmr::string requestBody) -> asio::awaitable<void> {
+    auto serveStream = [this, &shared, resource = &resource, clientAddress = std::string_view(clientAddress)](std::uint32_t streamId, detail::Http2StreamState& streamState, std::pmr::string requestBody) -> asio::awaitable<void> {
         HttpRequest httpRequest = detail::HttpRequestAccess::make();
-        const auto buildResult =
-            detail::Http2RequestBuilder::build(streamState, httpRequest, resource, requestBody);
+        const auto buildResult = detail::Http2RequestBuilder::build(streamState, httpRequest, resource, requestBody);
         if (buildResult.built() == nullptr) {
             (void)shared.connection.submitReset(streamId, detail::Http2ErrorCode::kProtocolError);
             shared.writeWake.cancel();
@@ -103,8 +97,7 @@ asio::awaitable<void> EdgeServer::Impl::handleHttp2Session(Stream stream, std::s
         edgeRequest.headers = httpRequest.headers();
         edgeRequest.clientAddress = clientAddress;
         edgeRequest.keepAlive = true;
-        if (edgeRequest.knownMethod != HttpKnownMethod::kGet &&
-            edgeRequest.knownMethod != HttpKnownMethod::kHead && !requestBody.empty()) {
+        if (edgeRequest.knownMethod != HttpKnownMethod::kGet && edgeRequest.knownMethod != HttpKnownMethod::kHead && !requestBody.empty()) {
             edgeRequest.body = std::string_view(requestBody);
         }
 
@@ -115,8 +108,7 @@ asio::awaitable<void> EdgeServer::Impl::handleHttp2Session(Stream stream, std::s
         if (!writer.ended()) {
             auto* s = shared.connection.stream(streamId);
             if (s != nullptr && !s->isAborted()) {
-                (void)shared.connection.submitReset(streamId,
-                                                    detail::Http2ErrorCode::kInternalError);
+                (void)shared.connection.submitReset(streamId, detail::Http2ErrorCode::kInternalError);
             }
         }
         shared.writeWake.cancel();
@@ -131,16 +123,14 @@ asio::awaitable<void> EdgeServer::Impl::handleHttp2Session(Stream stream, std::s
             while (connection.wantsWrite()) {
                 std::pmr::string out(&resource);
                 connection.takeOutput(out);
-                auto [ec, n] = co_await asio::async_write(
-                    stream, asio::buffer(out.data(), out.size()), tuple);
+                auto [ec, n] = co_await asio::async_write(stream, asio::buffer(out.data(), out.size()), tuple);
                 (void)n;
                 if (ec) {
                     beginShutdown();
                     co_return;
                 }
             }
-            if (connection.connectionError().has_value() ||
-                (shuttingDown && activeHandlers == 0)) {
+            if (connection.connectionError().has_value() || (shuttingDown && activeHandlers == 0)) {
                 co_return;
             }
             writeWake.expires_at((std::chrono::steady_clock::time_point::max)());
@@ -151,16 +141,13 @@ asio::awaitable<void> EdgeServer::Impl::handleHttp2Session(Stream stream, std::s
     // Reader loop: read, feed, dispatch each completed request to its own handler
     // coroutine so a slow origin on one stream never blocks the others.
     std::array<char, 16384> readBuffer;
-    std::pmr::unordered_map<std::uint32_t, std::pmr::string> requestBodies(
-        memory_.resource());
+    std::pmr::unordered_map<std::uint32_t, std::pmr::string> requestBodies(memory_.resource());
 
     auto reader = [&]() -> asio::awaitable<void> {
         for (;;) {
             std::size_t readSize = 0;
             asio::error_code readError;
-            auto raced = co_await (
-                stream.async_read_some(asio::buffer(readBuffer), tuple) ||
-                shutdownSignal_.async_wait(tuple));
+            auto raced = co_await (stream.async_read_some(asio::buffer(readBuffer), tuple) || shutdownSignal_.async_wait(tuple));
             if (raced.index() == 1) {
                 break;
             }
@@ -175,13 +162,10 @@ asio::awaitable<void> EdgeServer::Impl::handleHttp2Session(Stream stream, std::s
             // debt. Copy the whole event batch first, then return each stream's
             // accumulated credit exactly once; acknowledging inside the loop
             // could cover later events whose borrowed bytes are not copied yet.
-            std::array<std::uint32_t,
-                       detail::Http2LocalSettings::kMaxConcurrentStreams>
-                copiedBodyStreams{};
+            std::array<std::uint32_t, detail::Http2LocalSettings::kMaxConcurrentStreams> copiedBodyStreams{};
             std::size_t copiedBodyStreamCount = 0;
             const auto markBodyCopied = [&](std::uint32_t streamId) {
-                const auto copied = std::span(copiedBodyStreams)
-                                        .first(copiedBodyStreamCount);
+                const auto copied = std::span(copiedBodyStreams).first(copiedBodyStreamCount);
                 if (std::ranges::find(copied, streamId) != copied.end()) {
                     return true;
                 }
@@ -192,8 +176,7 @@ asio::awaitable<void> EdgeServer::Impl::handleHttp2Session(Stream stream, std::s
                 return true;
             };
             const auto unmarkBodyCopied = [&](std::uint32_t streamId) {
-                auto copied = std::span(copiedBodyStreams)
-                                  .first(copiedBodyStreamCount);
+                auto copied = std::span(copiedBodyStreams).first(copiedBodyStreamCount);
                 const auto found = std::ranges::find(copied, streamId);
                 if (found == copied.end()) {
                     return;
@@ -201,8 +184,7 @@ asio::awaitable<void> EdgeServer::Impl::handleHttp2Session(Stream stream, std::s
                 --copiedBodyStreamCount;
                 *found = copiedBodyStreams[copiedBodyStreamCount];
             };
-            const auto resetBodyStream = [&](std::uint32_t streamId,
-                                             detail::Http2ErrorCode error) {
+            const auto resetBodyStream = [&](std::uint32_t streamId, detail::Http2ErrorCode error) {
                 unmarkBodyCopied(streamId);
                 requestBodies.erase(streamId);
                 (void)connection.submitReset(streamId, error);
@@ -217,13 +199,9 @@ asio::awaitable<void> EdgeServer::Impl::handleHttp2Session(Stream stream, std::s
                 if (const auto* head = event->messageHead()) {
                     const auto streamId = head->streamId();
                     const auto* streamState = connection.stream(streamId);
-                    const auto* knownLength = streamState == nullptr
-                        ? nullptr
-                        : streamState->remoteContent().allowedKnownLength();
-                    if (knownLength != nullptr &&
-                        knownLength->declaredLength() > kMaxRequestBytes) {
-                        resetBodyStream(
-                            streamId, detail::Http2ErrorCode::kCancel);
+                    const auto* knownLength = streamState == nullptr ? nullptr : streamState->remoteContent().allowedKnownLength();
+                    if (knownLength != nullptr && knownLength->declaredLength() > kMaxRequestBytes) {
+                        resetBodyStream(streamId, detail::Http2ErrorCode::kCancel);
                     } else {
                         requestBodies.try_emplace(streamId);
                     }
@@ -231,22 +209,16 @@ asio::awaitable<void> EdgeServer::Impl::handleHttp2Session(Stream stream, std::s
                     const auto streamId = chunk->streamId();
                     const auto body = requestBodies.find(streamId);
                     if (body == requestBodies.end()) {
-                        resetBodyStream(
-                            streamId,
-                            detail::Http2ErrorCode::kInternalError);
+                        resetBodyStream(streamId, detail::Http2ErrorCode::kInternalError);
                         continue;
                     }
-                    if (chunk->bytes().size() >
-                        kMaxRequestBytes - body->second.size()) {
-                        resetBodyStream(
-                            streamId, detail::Http2ErrorCode::kCancel);
+                    if (chunk->bytes().size() > kMaxRequestBytes - body->second.size()) {
+                        resetBodyStream(streamId, detail::Http2ErrorCode::kCancel);
                         continue;
                     }
                     body->second.append(chunk->bytes());
                     if (!markBodyCopied(streamId)) {
-                        resetBodyStream(
-                            streamId,
-                            detail::Http2ErrorCode::kInternalError);
+                        resetBodyStream(streamId, detail::Http2ErrorCode::kInternalError);
                     }
                 } else if (const auto* end = event->messageEnd()) {
                     const auto streamId = end->streamId();
@@ -265,8 +237,7 @@ asio::awaitable<void> EdgeServer::Impl::handleHttp2Session(Stream stream, std::s
                     // below would wait forever for a handler that never started.
                     auto [cancelIt, inserted] = handlerCancels.try_emplace(streamId);
                     if (!inserted) {
-                        throw std::logic_error(
-                            "duplicate HTTP/2 handler for one stream");
+                        throw std::logic_error("duplicate HTTP/2 handler for one stream");
                     }
                     bool handlerRegistered = false;
                     try {
@@ -275,36 +246,28 @@ asio::awaitable<void> EdgeServer::Impl::handleHttp2Session(Stream stream, std::s
                         connection.pinStream(streamId);
                         ++activeHandlers;
                         handlerRegistered = true;
-                        asio::co_spawn(
-                            executor, serveStream(streamId, *streamState, std::move(body)),
-                            asio::bind_cancellation_slot(
-                                cancelIt->second.slot(),
-                                [&, streamId](std::exception_ptr failure) {
-                                    if (failure != nullptr && !shuttingDown) {
-                                        auto* failedStream = connection.stream(streamId);
-                                        if (failedStream != nullptr &&
-                                            !failedStream->isAborted()) {
-                                            // A handler that unwinds without a
-                                            // terminal response still owes the
-                                            // peer a stream terminal state.
-                                            (void)connection.submitReset(
-                                                streamId,
-                                                detail::Http2ErrorCode::kInternalError);
-                                        }
-                                    }
-                                    // Resetting the stream tells the peer, not
-                                    // the operator: report what went wrong too.
-                                    if (failure != nullptr &&
-                                        !isCancellationUnwind(failure)) {
-                                        reportFailure(EdgeTaskKind::kSession, failure);
-                                    }
-                                    connection.unpinStream(streamId);
-                                    drainWaiters.erase(streamId);
-                                    handlerCancels.erase(streamId);
-                                    --activeHandlers;
-                                    writeWake.cancel();  // let the writer re-check its exit
-                                    handlersIdle.cancel();  // wake a draining reader
-                                }));
+                        asio::co_spawn(executor, serveStream(streamId, *streamState, std::move(body)), asio::bind_cancellation_slot(cancelIt->second.slot(), [&, streamId](std::exception_ptr failure) {
+                            if (failure != nullptr && !shuttingDown) {
+                                auto* failedStream = connection.stream(streamId);
+                                if (failedStream != nullptr && !failedStream->isAborted()) {
+                                    // A handler that unwinds without a
+                                    // terminal response still owes the
+                                    // peer a stream terminal state.
+                                    (void)connection.submitReset(streamId, detail::Http2ErrorCode::kInternalError);
+                                }
+                            }
+                            // Resetting the stream tells the peer, not
+                            // the operator: report what went wrong too.
+                            if (failure != nullptr && !isCancellationUnwind(failure)) {
+                                reportFailure(EdgeTaskKind::kSession, failure);
+                            }
+                            connection.unpinStream(streamId);
+                            drainWaiters.erase(streamId);
+                            handlerCancels.erase(streamId);
+                            --activeHandlers;
+                            writeWake.cancel();     // let the writer re-check its exit
+                            handlersIdle.cancel();  // wake a draining reader
+                        }));
                     } catch (...) {
                         if (handlerRegistered) {
                             --activeHandlers;
@@ -317,17 +280,14 @@ asio::awaitable<void> EdgeServer::Impl::handleHttp2Session(Stream stream, std::s
                     // The peer reset/closed the stream: wake its parked handler so
                     // it sees the abort and unwinds.
                     unmarkBodyCopied(closed->streamId());
-                    if (const auto it = drainWaiters.find(closed->streamId());
-                        it != drainWaiters.end()) {
+                    if (const auto it = drainWaiters.find(closed->streamId()); it != drainWaiters.end()) {
                         it->second->cancel();
                     }
                     requestBodies.erase(closed->streamId());
                 }
             }
 
-            for (std::size_t index = 0;
-                 index < copiedBodyStreamCount;
-                 ++index) {
+            for (std::size_t index = 0; index < copiedBodyStreamCount; ++index) {
                 connection.releaseReceivedData(copiedBodyStreams[index]);
             }
             if (copiedBodyStreamCount != 0) {

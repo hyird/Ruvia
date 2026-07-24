@@ -20,10 +20,7 @@ public:
             // never spuriously rejected (which would stall it) while the queue is
             // not logically full.
             const auto remaining = size_ - offset_;
-            std::memmove(
-                streamIds_.data(),
-                streamIds_.data() + offset_,
-                remaining * sizeof(std::uint32_t));
+            std::memmove(streamIds_.data(), streamIds_.data() + offset_, remaining * sizeof(std::uint32_t));
             offset_ = 0;
             size_ = remaining;
         }

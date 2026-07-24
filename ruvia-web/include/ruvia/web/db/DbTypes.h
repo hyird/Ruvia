@@ -64,14 +64,7 @@ class DbMigrationRunner;
 struct DbValueAccess;
 struct DbResultAccess;
 
-enum class DbValueType : std::uint8_t {
-    kNull,
-    kString,
-    kSigned,
-    kUnsigned,
-    kDouble,
-    kBool
-};
+enum class DbValueType : std::uint8_t { kNull, kString, kSigned, kUnsigned, kDouble, kBool };
 
 }  // namespace detail
 
@@ -81,14 +74,7 @@ private:
         std::string_view value;
     };
 
-    using Storage = std::variant<
-        std::monostate,
-        BorrowedText,
-        std::pmr::string,
-        std::int64_t,
-        std::uint64_t,
-        double,
-        bool>;
+    using Storage = std::variant<std::monostate, BorrowedText, std::pmr::string, std::int64_t, std::uint64_t, double, bool>;
 
 public:
     DbValue(std::nullptr_t);
@@ -112,8 +98,7 @@ public:
     DbValue& operator=(DbValue&&) = delete;
 
     template <typename T>
-        requires (std::is_integral_v<std::remove_cvref_t<T>> &&
-                  !std::is_same_v<std::remove_cvref_t<T>, bool>)
+        requires(std::is_integral_v<std::remove_cvref_t<T>> && !std::is_same_v<std::remove_cvref_t<T>, bool>)
     DbValue(T value)
         : storage_(makeIntegerStorage(value)) {}
 
@@ -128,8 +113,8 @@ private:
     explicit DbValue(std::pmr::string value);
 
     [[nodiscard]] detail::DbValueType type() const noexcept;
-    [[nodiscard]] std::string_view text() const & noexcept;
-    [[nodiscard]] std::string_view text() const && = delete;
+    [[nodiscard]] std::string_view text() const& noexcept;
+    [[nodiscard]] std::string_view text() const&& = delete;
     [[nodiscard]] std::int64_t signedValue() const noexcept;
     [[nodiscard]] std::uint64_t unsignedValue() const noexcept;
     [[nodiscard]] double doubleValue() const noexcept;
@@ -138,13 +123,9 @@ private:
     template <typename T>
     [[nodiscard]] static Storage makeIntegerStorage(T value) {
         if constexpr (std::is_signed_v<std::remove_cvref_t<T>>) {
-            return Storage(
-                std::in_place_type<std::int64_t>,
-                static_cast<std::int64_t>(value));
+            return Storage(std::in_place_type<std::int64_t>, static_cast<std::int64_t>(value));
         } else {
-            return Storage(
-                std::in_place_type<std::uint64_t>,
-                static_cast<std::uint64_t>(value));
+            return Storage(std::in_place_type<std::uint64_t>, static_cast<std::uint64_t>(value));
         }
     }
 
@@ -157,10 +138,7 @@ private:
         std::string_view value;
     };
 
-    using Storage = std::variant<
-        std::monostate,
-        std::pmr::string,
-        BorrowedText>;
+    using Storage = std::variant<std::monostate, std::pmr::string, BorrowedText>;
 
 public:
     DbField(DbField&& other) noexcept;
@@ -170,8 +148,8 @@ public:
     DbField& operator=(const DbField&) = delete;
 
     [[nodiscard]] bool isNull() const noexcept;
-    [[nodiscard]] std::string_view text() const & noexcept;
-    [[nodiscard]] std::string_view text() const && = delete;
+    [[nodiscard]] std::string_view text() const& noexcept;
+    [[nodiscard]] std::string_view text() const&& = delete;
 
 private:
     friend struct detail::DbResultAccess;
@@ -203,14 +181,12 @@ public:
 
     [[nodiscard]] bool empty() const noexcept;
     [[nodiscard]] std::size_t size() const noexcept;
-    [[nodiscard]] const DbField& operator[](
-        std::size_t index) const & noexcept;
-    [[nodiscard]] const DbField& operator[](
-        std::size_t index) const && = delete;
-    [[nodiscard]] const DbField* begin() const & noexcept;
-    [[nodiscard]] const DbField* begin() const && = delete;
-    [[nodiscard]] const DbField* end() const & noexcept;
-    [[nodiscard]] const DbField* end() const && = delete;
+    [[nodiscard]] const DbField& operator[](std::size_t index) const& noexcept;
+    [[nodiscard]] const DbField& operator[](std::size_t index) const&& = delete;
+    [[nodiscard]] const DbField* begin() const& noexcept;
+    [[nodiscard]] const DbField* begin() const&& = delete;
+    [[nodiscard]] const DbField* end() const& noexcept;
+    [[nodiscard]] const DbField* end() const&& = delete;
 
 private:
     friend struct detail::DbResultAccess;

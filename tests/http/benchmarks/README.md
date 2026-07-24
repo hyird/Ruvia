@@ -11,7 +11,6 @@ Configure an optimized HTTP-only build and run the aggregate target:
 ```bash
 cmake -S . -B build/bench -G Ninja \
   -DCMAKE_BUILD_TYPE=Release \
-  -DCMAKE_TOOLCHAIN_FILE="$VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake" \
   -DRUVIA_BUILD_CORE=OFF -DRUVIA_BUILD_WEB=OFF \
   -DRUVIA_BUILD_BENCHMARKS=ON
 cmake --build build/bench --target ruvia_benchmarks

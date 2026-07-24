@@ -17,14 +17,7 @@
 
 namespace ruvia {
 
-WebWorkerContext::WebWorkerContext(
-    WorkerHandle worker,
-    std::pmr::memory_resource* resource,
-    detail::DbRegistry* databases,
-    detail::RedisRegistry* redis,
-    const detail::WorkerStateRegistry* workerStates,
-    BlockingPool* blockingPool,
-    StopToken stopToken) noexcept
+WebWorkerContext::WebWorkerContext(WorkerHandle worker, std::pmr::memory_resource* resource, detail::DbRegistry* databases, detail::RedisRegistry* redis, const detail::WorkerStateRegistry* workerStates, BlockingPool* blockingPool, StopToken stopToken) noexcept
     : worker_(std::move(worker)),
       resource_(detail::pmrResourceOrDefault(resource)),
       databases_(databases),
@@ -35,24 +28,20 @@ WebWorkerContext::WebWorkerContext(
 
 BlockingPool& WebWorkerContext::blockingPool() const {
     if (blockingPool_ == nullptr) {
-        throw std::logic_error(
-            "no blocking pool is configured: call App::setBlockingPool() before App::run()");
+        throw std::logic_error("no blocking pool is configured: call App::setBlockingPool() before App::run()");
     }
     return *blockingPool_;
 }
 
 void* WebWorkerContext::workerStateInstance(const void* typeKey) const {
-    auto* instance = workerStates_ == nullptr
-        ? nullptr
-        : workerStates_->instance(typeKey);
+    auto* instance = workerStates_ == nullptr ? nullptr : workerStates_->instance(typeKey);
     if (instance == nullptr) {
-        throw std::logic_error(
-            "worker state type is not registered: call App::useWorkerState<T>() before App::run()");
+        throw std::logic_error("worker state type is not registered: call App::useWorkerState<T>() before App::run()");
     }
     return instance;
 }
 
-const WorkerHandle& WebWorkerContext::worker() const & noexcept {
+const WorkerHandle& WebWorkerContext::worker() const& noexcept {
     return worker_;
 }
 
@@ -84,8 +73,7 @@ RedisHandle WebWorkerContext::redis(std::string_view alias) const {
 }
 #endif
 
-WebWorkerHandle::WebWorkerHandle(
-    std::shared_ptr<detail::WebWorkerDispatch> dispatch) noexcept
+WebWorkerHandle::WebWorkerHandle(std::shared_ptr<detail::WebWorkerDispatch> dispatch) noexcept
     : dispatch_(std::move(dispatch)) {}
 
 bool WebWorkerHandle::valid() const noexcept {
@@ -104,12 +92,8 @@ WebWorkerStats WebWorkerHandle::stats() const noexcept {
     return dispatch_ ? dispatch_->stats() : WebWorkerStats{};
 }
 
-WebWorkerPostResult WebWorkerHandle::postTask(
-    MoveOnlyFunction<Task<void>(WebWorkerContext&)> task) const {
-    return dispatch_
-        ? dispatch_->post(std::move(task))
-        : WebWorkerPostResult::reject(
-              PostStatus::kWorkerStopping, std::move(task));
+WebWorkerPostResult WebWorkerHandle::postTask(MoveOnlyFunction<Task<void>(WebWorkerContext&)> task) const {
+    return dispatch_ ? dispatch_->post(std::move(task)) : WebWorkerPostResult::reject(PostStatus::kWorkerStopping, std::move(task));
 }
 
 }  // namespace ruvia
@@ -129,20 +113,11 @@ struct AbandonReservationDeleter {
         dispatch->abandon();
     }
 };
-using AbandonReservation =
-    std::unique_ptr<WebWorkerDispatch, AbandonReservationDeleter>;
+using AbandonReservation = std::unique_ptr<WebWorkerDispatch, AbandonReservationDeleter>;
 
 }  // namespace
 
-WebWorkerDispatch::WebWorkerDispatch(
-    asio::any_io_executor executor,
-    WorkerHandle worker,
-    std::pmr::memory_resource* resource,
-    DbRegistry& databases,
-    RedisRegistry& redis,
-    const WorkerStateRegistry& workerStates,
-    BlockingPool* blockingPool,
-    MoveOnlyFunction<void(std::exception_ptr)> failed)
+WebWorkerDispatch::WebWorkerDispatch(asio::any_io_executor executor, WorkerHandle worker, std::pmr::memory_resource* resource, DbRegistry& databases, RedisRegistry& redis, const WorkerStateRegistry& workerStates, BlockingPool* blockingPool, MoveOnlyFunction<void(std::exception_ptr)> failed)
     : executor_(std::move(executor)),
       worker_(std::move(worker)),
       resource_(pmrResourceOrDefault(resource)),
@@ -174,24 +149,19 @@ WebWorkerPostResult WebWorkerDispatch::post(Task task) {
     std::lock_guard lock(submitMutex_);
     if (!accepting_) {
         postCounters_.recordWorkerStopping();
-        return WebWorkerPostResult::reject(
-            PostStatus::kWorkerStopping, std::move(task));
+        return WebWorkerPostResult::reject(PostStatus::kWorkerStopping, std::move(task));
     }
 
-    const auto status = WorkerHandleAccess::postFactory(
-        worker_, [this, &task]() mutable -> MoveOnlyFunction<void()> {
-            outstanding_.fetch_add(1, std::memory_order_acq_rel);
-            AbandonReservation reservation(this);
-            return [task = std::move(task),
-                    reservation = std::move(reservation)]() mutable {
-                WebWorkerDispatch* self = reservation.release();
-                self->start(std::move(task));
-            };
-        });
+    const auto status = WorkerHandleAccess::postFactory(worker_, [this, &task]() mutable -> MoveOnlyFunction<void()> {
+        outstanding_.fetch_add(1, std::memory_order_acq_rel);
+        AbandonReservation reservation(this);
+        return [task = std::move(task), reservation = std::move(reservation)]() mutable {
+            WebWorkerDispatch* self = reservation.release();
+            self->start(std::move(task));
+        };
+    });
     postCounters_.record(status);
-    return status == PostStatus::kAccepted
-        ? WebWorkerPostResult::accept()
-        : WebWorkerPostResult::reject(status, std::move(task));
+    return status == PostStatus::kAccepted ? WebWorkerPostResult::accept() : WebWorkerPostResult::reject(status, std::move(task));
 }
 
 void WebWorkerDispatch::close() noexcept {
@@ -236,25 +206,21 @@ WebWorkerStats WebWorkerDispatch::stats() const noexcept {
 void WebWorkerDispatch::start(Task task) {
     try {
         auto operation = run(std::move(task));
-        asyncStartTask(
-            std::move(operation),
-            asio::bind_executor(
-                executor_,
-                [this](TaskCompletionResult<void> result) {
-                    std::exception_ptr failure;
-                    if (const auto* failed = result.failure()) {
-                        failedCount_.fetch_add(1, std::memory_order_relaxed);
-                        failure = failed->exception();
-                    }
-                    // Reconcile the accepted task before invoking the failure
-                    // sink. The sink normally stops this worker and is allowed
-                    // to trigger arbitrary terminal control flow; no such path
-                    // may leave retire() observing a phantom outstanding job.
-                    complete();
-                    if (failure != nullptr && failed_) {
-                        failed_(std::move(failure));
-                    }
-                }));
+        asyncStartTask(std::move(operation), asio::bind_executor(executor_, [this](TaskCompletionResult<void> result) {
+            std::exception_ptr failure;
+            if (const auto* failed = result.failure()) {
+                failedCount_.fetch_add(1, std::memory_order_relaxed);
+                failure = failed->exception();
+            }
+            // Reconcile the accepted task before invoking the failure
+            // sink. The sink normally stops this worker and is allowed
+            // to trigger arbitrary terminal control flow; no such path
+            // may leave retire() observing a phantom outstanding job.
+            complete();
+            if (failure != nullptr && failed_) {
+                failed_(std::move(failure));
+            }
+        }));
     } catch (...) {
         complete();
         throw;
@@ -262,9 +228,7 @@ void WebWorkerDispatch::start(Task task) {
 }
 
 ruvia::Task<void> WebWorkerDispatch::run(Task task) {
-    WebWorkerContext context(
-        worker_, resource_, databases_, redis_, workerStates_, blockingPool_,
-        stopSource_.token());
+    WebWorkerContext context(worker_, resource_, databases_, redis_, workerStates_, blockingPool_, stopSource_.token());
     co_await task(context);
 }
 

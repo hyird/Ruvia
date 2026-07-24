@@ -27,8 +27,6 @@ namespace ruvia::detail {
 // and the count travels with the next line that gets through, so the volume is
 // bounded without the flood becoming invisible. An application that wants every
 // failure should install its layer's sink instead of relying on this.
-void reportUnhandledFailure(
-    std::string_view context,
-    std::exception_ptr exception) noexcept;
+void reportUnhandledFailure(std::string_view context, std::exception_ptr exception) noexcept;
 
 }  // namespace ruvia::detail

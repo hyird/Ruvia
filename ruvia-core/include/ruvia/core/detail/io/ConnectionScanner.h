@@ -31,13 +31,7 @@ public:
     using PeriodicCheck = void (*)(void*, std::int64_t) noexcept;
     using WorkerMaintenanceCheck = void (*)(void*) noexcept;
 
-    enum class Phase {
-        kIdle,
-        kReadingInitial,
-        kReadingPayload,
-        kLongLived,
-        kWriting
-    };
+    enum class Phase { kIdle, kReadingInitial, kReadingPayload, kLongLived, kWriting };
 
     class Entry;
 
@@ -49,14 +43,10 @@ public:
         WorkerMaintenanceRegistration() noexcept = default;
         ~WorkerMaintenanceRegistration() noexcept;
 
-        WorkerMaintenanceRegistration(
-            const WorkerMaintenanceRegistration&) = delete;
-        WorkerMaintenanceRegistration& operator=(
-            const WorkerMaintenanceRegistration&) = delete;
-        WorkerMaintenanceRegistration(
-            WorkerMaintenanceRegistration&&) = delete;
-        WorkerMaintenanceRegistration& operator=(
-            WorkerMaintenanceRegistration&&) = delete;
+        WorkerMaintenanceRegistration(const WorkerMaintenanceRegistration&) = delete;
+        WorkerMaintenanceRegistration& operator=(const WorkerMaintenanceRegistration&) = delete;
+        WorkerMaintenanceRegistration(WorkerMaintenanceRegistration&&) = delete;
+        WorkerMaintenanceRegistration& operator=(WorkerMaintenanceRegistration&&) = delete;
 
         void reset() noexcept;
 
@@ -79,11 +69,9 @@ public:
         ~PeriodicCheckRegistration() noexcept;
 
         PeriodicCheckRegistration(const PeriodicCheckRegistration&) = delete;
-        PeriodicCheckRegistration& operator=(
-            const PeriodicCheckRegistration&) = delete;
+        PeriodicCheckRegistration& operator=(const PeriodicCheckRegistration&) = delete;
         PeriodicCheckRegistration(PeriodicCheckRegistration&&) = delete;
-        PeriodicCheckRegistration& operator=(
-            PeriodicCheckRegistration&&) = delete;
+        PeriodicCheckRegistration& operator=(PeriodicCheckRegistration&&) = delete;
 
         void reset() noexcept;
 
@@ -111,10 +99,7 @@ public:
         void touch() noexcept;
         void setPhase(Phase nextPhase) noexcept;
         [[nodiscard]] std::int64_t lastActiveMs() const noexcept;
-        void registerPeriodicCheck(
-            PeriodicCheckRegistration& registration,
-            void* target,
-            PeriodicCheck tick) noexcept;
+        void registerPeriodicCheck(PeriodicCheckRegistration& registration, void* target, PeriodicCheck tick) noexcept;
 
     private:
         friend class ConnectionScanner;
@@ -122,8 +107,7 @@ public:
 
         [[nodiscard]] bool linked() const noexcept;
         void runPeriodicChecks(std::int64_t now) noexcept;
-        void removePeriodicCheck(
-            PeriodicCheckRegistration& registration) noexcept;
+        void removePeriodicCheck(PeriodicCheckRegistration& registration) noexcept;
         void detachPeriodicChecks() noexcept;
 
         asio::ip::tcp::socket* socket_{nullptr};
@@ -159,10 +143,7 @@ public:
 
     void start();
     void stop() noexcept;
-    void registerWorkerMaintenance(
-        WorkerMaintenanceRegistration& registration,
-        void* target,
-        WorkerMaintenanceCheck check) noexcept;
+    void registerWorkerMaintenance(WorkerMaintenanceRegistration& registration, void* target, WorkerMaintenanceCheck check) noexcept;
     void registerEntry(Entry& entry, asio::ip::tcp::socket& socket) noexcept;
     void unregisterEntry(Entry& entry) noexcept;
     void closeAll() noexcept;
@@ -172,8 +153,7 @@ private:
     void detachAllEntries() noexcept;
     void periodicCheckAdded() noexcept;
     void periodicCheckRemoved() noexcept;
-    void removeWorkerMaintenance(
-        WorkerMaintenanceRegistration& registration) noexcept;
+    void removeWorkerMaintenance(WorkerMaintenanceRegistration& registration) noexcept;
     void detachWorkerMaintenance() noexcept;
     [[nodiscard]] bool hasScanningWork() const noexcept;
     void schedule();

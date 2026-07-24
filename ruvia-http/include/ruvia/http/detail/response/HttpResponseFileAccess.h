@@ -13,52 +13,27 @@ struct HttpResponseFileAccess final {
         response.setFileBody(std::move(file), size);
     }
 
-    static void setFile(
-        HttpResponse& response,
-        std::filesystem::path file,
-        std::uint64_t size,
-        std::uint64_t offset,
-        std::uint64_t length) {
+    static void setFile(HttpResponse& response, std::filesystem::path file, std::uint64_t size, std::uint64_t offset, std::uint64_t length) {
         response.setFileBody(std::move(file), size, offset, length);
     }
 
-    static void setFile(
-        HttpResponse& response,
-        std::filesystem::path file,
-        std::uint64_t size,
-        std::uint64_t offset,
-        std::uint64_t length,
-        ResponseFileIdentity identity) {
-        response.setFileBody(
-            std::move(file), size, offset, length, identity);
+    static void setFile(HttpResponse& response, std::filesystem::path file, std::uint64_t size, std::uint64_t offset, std::uint64_t length, ResponseFileIdentity identity) {
+        response.setFileBody(std::move(file), size, offset, length, identity);
     }
 
     static void setBorrowedFile(HttpResponse& response, const std::filesystem::path& file, std::uint64_t size) {
         response.setBorrowedFileBody(file, size);
     }
 
-    static void setBorrowedNativeFile(
-        HttpResponse& response,
-        const HttpNativePathChar* file,
-        std::uint64_t size) {
+    static void setBorrowedNativeFile(HttpResponse& response, const HttpNativePathChar* file, std::uint64_t size) {
         response.setBorrowedNativeFileBody(file, size);
     }
 
-    static void setBorrowedFile(
-        HttpResponse& response,
-        const std::filesystem::path& file,
-        std::uint64_t size,
-        std::uint64_t offset,
-        std::uint64_t length) {
+    static void setBorrowedFile(HttpResponse& response, const std::filesystem::path& file, std::uint64_t size, std::uint64_t offset, std::uint64_t length) {
         response.setBorrowedFileBody(file, size, offset, length);
     }
 
-    static void setBorrowedNativeFile(
-        HttpResponse& response,
-        const HttpNativePathChar* file,
-        std::uint64_t size,
-        std::uint64_t offset,
-        std::uint64_t length) {
+    static void setBorrowedNativeFile(HttpResponse& response, const HttpNativePathChar* file, std::uint64_t size, std::uint64_t offset, std::uint64_t length) {
         response.setBorrowedNativeFileBody(file, size, offset, length);
     }
 };
@@ -67,55 +42,27 @@ inline void setResponseFileBody(HttpResponse& response, std::filesystem::path fi
     HttpResponseFileAccess::setFile(response, std::move(file), size);
 }
 
-inline void setResponseFileBody(
-    HttpResponse& response,
-    std::filesystem::path file,
-    std::uint64_t size,
-    std::uint64_t offset,
-    std::uint64_t length) {
+inline void setResponseFileBody(HttpResponse& response, std::filesystem::path file, std::uint64_t size, std::uint64_t offset, std::uint64_t length) {
     HttpResponseFileAccess::setFile(response, std::move(file), size, offset, length);
 }
 
-inline void setResponseFileBody(
-    HttpResponse& response,
-    std::filesystem::path file,
-    std::uint64_t size,
-    std::uint64_t offset,
-    std::uint64_t length,
-    ResponseFileIdentity identity) {
-    HttpResponseFileAccess::setFile(
-        response, std::move(file), size, offset, length, identity);
+inline void setResponseFileBody(HttpResponse& response, std::filesystem::path file, std::uint64_t size, std::uint64_t offset, std::uint64_t length, ResponseFileIdentity identity) {
+    HttpResponseFileAccess::setFile(response, std::move(file), size, offset, length, identity);
 }
 
-inline void setResponseBorrowedFileBody(
-    HttpResponse& response,
-    const std::filesystem::path& file,
-    std::uint64_t size) {
+inline void setResponseBorrowedFileBody(HttpResponse& response, const std::filesystem::path& file, std::uint64_t size) {
     HttpResponseFileAccess::setBorrowedFile(response, file, size);
 }
 
-inline void setResponseBorrowedFileBody(
-    HttpResponse& response,
-    const std::filesystem::path& file,
-    std::uint64_t size,
-    std::uint64_t offset,
-    std::uint64_t length) {
+inline void setResponseBorrowedFileBody(HttpResponse& response, const std::filesystem::path& file, std::uint64_t size, std::uint64_t offset, std::uint64_t length) {
     HttpResponseFileAccess::setBorrowedFile(response, file, size, offset, length);
 }
 
-inline void setResponseBorrowedNativeFileBody(
-    HttpResponse& response,
-    const HttpNativePathChar* file,
-    std::uint64_t size) {
+inline void setResponseBorrowedNativeFileBody(HttpResponse& response, const HttpNativePathChar* file, std::uint64_t size) {
     HttpResponseFileAccess::setBorrowedNativeFile(response, file, size);
 }
 
-inline void setResponseBorrowedNativeFileBody(
-    HttpResponse& response,
-    const HttpNativePathChar* file,
-    std::uint64_t size,
-    std::uint64_t offset,
-    std::uint64_t length) {
+inline void setResponseBorrowedNativeFileBody(HttpResponse& response, const HttpNativePathChar* file, std::uint64_t size, std::uint64_t offset, std::uint64_t length) {
     HttpResponseFileAccess::setBorrowedNativeFile(response, file, size, offset, length);
 }
 

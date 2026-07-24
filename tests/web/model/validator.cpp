@@ -25,52 +25,25 @@ struct RequiredOptionalModel final {
 }  // namespace
 
 template <typename T>
-concept ExposesAnyRvalueValidationIssueBorrow =
-    requires { std::declval<const T&&>().field(); } ||
-    requires { std::declval<const T&&>().code(); } ||
-    requires { std::declval<const T&&>().message(); };
+concept ExposesAnyRvalueValidationIssueBorrow = requires { std::declval<const T&&>().field(); } || requires { std::declval<const T&&>().code(); } || requires { std::declval<const T&&>().message(); };
 
 template <typename T>
-concept ExposesAnyRvalueValidationErrorBorrow =
-    requires { std::declval<const T&&>().issues(); } ||
-    requires { std::declval<const T&&>().info(); };
+concept ExposesAnyRvalueValidationErrorBorrow = requires { std::declval<const T&&>().issues(); } || requires { std::declval<const T&&>().info(); };
 
 template <typename T>
-concept ExposesRvalueValidatorIssues = requires {
-    std::declval<const T&&>().issues();
-};
+concept ExposesRvalueValidatorIssues = requires { std::declval<const T&&>().issues(); };
 
 template <typename T>
-concept AcceptsAnyRvalueValidatorMutation =
-    requires { std::declval<T&&>().add("field", "code", "message"); } ||
-    requires(const std::optional<std::string>& value) {
-        std::declval<T&&>().required(value, "field");
-    } ||
-    requires(const std::optional<std::string>& value) {
-        std::declval<T&&>().minLength(value, "field", std::size_t{1});
-    } ||
-    requires(const std::optional<std::string>& value) {
-        std::declval<T&&>().maxLength(value, "field", std::size_t{1});
-    } ||
-    requires(const std::optional<int>& value) {
-        std::declval<T&&>().range(value, "field", 0, 1);
-    } ||
-    requires(const std::optional<std::string>& value) {
-        std::declval<T&&>().oneOf(value, "field", {"value"});
-    };
+concept AcceptsAnyRvalueValidatorMutation = requires { std::declval<T&&>().add("field", "code", "message"); } || requires(const std::optional<std::string>& value) { std::declval<T&&>().required(value, "field"); } || requires(const std::optional<std::string>& value) { std::declval<T&&>().minLength(value, "field", std::size_t{1}); } || requires(const std::optional<std::string>& value) { std::declval<T&&>().maxLength(value, "field", std::size_t{1}); } || requires(const std::optional<int>& value) { std::declval<T&&>().range(value, "field", 0, 1); } || requires(const std::optional<std::string>& value) { std::declval<T&&>().oneOf(value, "field", {"value"}); };
 
 static_assert(!ExposesAnyRvalueValidationIssueBorrow<ruvia::ValidationIssue>);
 static_assert(!ExposesAnyRvalueValidationErrorBorrow<ruvia::ValidationError>);
 static_assert(!ExposesRvalueValidatorIssues<ruvia::Validator>);
 static_assert(!AcceptsAnyRvalueValidatorMutation<ruvia::Validator>);
-static_assert(
-    sizeof(ruvia::detail::ValidatedModelBindings) == sizeof(void*));
+static_assert(sizeof(ruvia::detail::ValidatedModelBindings) == sizeof(void*));
 template <typename Bindings>
-concept AcceptsRvalueValidatedModel = requires(Bindings& bindings) {
-    bindings.bind(int{1});
-};
-static_assert(!AcceptsRvalueValidatedModel<
-    ruvia::detail::ValidatedModelBindings>);
+concept AcceptsRvalueValidatedModel = requires(Bindings& bindings) { bindings.bind(int{1}); };
+static_assert(!AcceptsRvalueValidatedModel<ruvia::detail::ValidatedModelBindings>);
 
 RUVIA_TEST(unified_model_required_and_optional_fields_are_structural) {
     auto parsed = ruvia::fromJson<RequiredOptionalModel>("{}");
@@ -80,11 +53,9 @@ RUVIA_TEST(unified_model_required_and_optional_fields_are_structural) {
     }
 
     Validator validator;
-    ruvia::detail::ModelValidationAccess::validateRequired(
-        *parsed, {}, validator);
+    ruvia::detail::ModelValidationAccess::validateRequired(*parsed, {}, validator);
     RUVIA_CHECK_EQ(validator.issues().size(), std::size_t{1});
-    RUVIA_CHECK_EQ(
-        validator.issues()[0].field(), std::string_view("requiredValue"));
+    RUVIA_CHECK_EQ(validator.issues()[0].field(), std::string_view("requiredValue"));
 }
 
 RUVIA_TEST(validator_required_flags_absent_values) {
@@ -165,12 +136,12 @@ RUVIA_TEST(validator_one_of_absent_skips_and_range_accepts_doubles) {
     // range validates floating-point values, not just integers (a distinct template
     // instantiation and comparison path from the int cases above).
     std::optional<double> inRange = 0.5;
-    v.range(inRange, "d", 0.0, 1.0);   // 0.0 <= 0.5 <= 1.0, ok
+    v.range(inRange, "d", 0.0, 1.0);  // 0.0 <= 0.5 <= 1.0, ok
     RUVIA_CHECK(v.ok());
     std::optional<double> low = -0.1;
-    v.range(low, "d", 0.0, 1.0);       // -0.1 < 0.0 -> range
+    v.range(low, "d", 0.0, 1.0);  // -0.1 < 0.0 -> range
     std::optional<double> high = 1.1;
-    v.range(high, "d", 0.0, 1.0);      // 1.1 > 1.0 -> range
+    v.range(high, "d", 0.0, 1.0);  // 1.1 > 1.0 -> range
     RUVIA_CHECK_EQ(v.issues().size(), std::size_t{2});
     RUVIA_CHECK_EQ(v.issues()[0].code(), std::string_view("range"));
     RUVIA_CHECK_EQ(v.issues()[1].code(), std::string_view("range"));
@@ -194,11 +165,8 @@ RUVIA_TEST(validation_error_serializes_issues_to_json) {
         v.throwIfInvalid();
         RUVIA_CHECK(false);  // must have thrown
     } catch (const ruvia::ValidationError& error) {
-        RUVIA_CHECK_EQ(
-            error.info().detailsJson(),
-            std::string_view(
-                R"([{"field":"email","code":"required","message":"email is required"},)"
-                R"({"field":"name","code":"min_length","message":"too short"}])"));
+        RUVIA_CHECK_EQ(error.info().detailsJson(), std::string_view(R"([{"field":"email","code":"required","message":"email is required"},)"
+                                                                    R"({"field":"name","code":"min_length","message":"too short"}])"));
     }
 }
 

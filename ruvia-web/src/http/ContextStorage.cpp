@@ -19,8 +19,7 @@ std::pmr::string& Context::decodedBody() const {
 
 detail::ContextRequestStorage& Context::requestStorage() const {
     if (!requestStorage_) {
-        requestStorage_ = detail::makePmrObject<detail::ContextRequestStorage>(
-            resource());
+        requestStorage_ = detail::makePmrObject<detail::ContextRequestStorage>(resource());
     }
     return *requestStorage_;
 }

@@ -8,8 +8,7 @@
 #include <string_view>
 #include <system_error>
 
-class Http2ConformanceController final
-    : public ruvia::Controller<Http2ConformanceController> {
+class Http2ConformanceController final : public ruvia::Controller<Http2ConformanceController> {
 public:
     RUVIA_CONTROLLER_GROUP("")
 
@@ -31,17 +30,10 @@ int main(int argc, char** argv) {
 
     std::uint16_t port{};
     const std::string_view text(argv[1]);
-    const auto [end, error] = std::from_chars(
-        text.data(), text.data() + text.size(), port);
+    const auto [end, error] = std::from_chars(text.data(), text.data() + text.size(), port);
     if (error != std::errc{} || end != text.data() + text.size() || port == 0) {
         return EXIT_FAILURE;
     }
 
-    ruvia::app()
-        .setListenAddress("127.0.0.1")
-        .setServerTopology(ruvia::ServerTopology::http(port))
-        .setWorkersPerListener(1)
-        .setSignalShutdown(true)
-        .setCompression(std::nullopt)
-        .run();
+    ruvia::app().setListenAddress("127.0.0.1").setServerTopology(ruvia::ServerTopology::http(port)).setWorkersPerListener(1).setSignalShutdown(true).setCompression(std::nullopt).run();
 }

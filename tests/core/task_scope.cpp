@@ -22,8 +22,7 @@ static_assert(!std::is_move_assignable_v<ruvia::Task<int>>);
 namespace {
 
 ruvia::Task<void> increment(ruvia::WorkerHandle worker, int& value) {
-    static_cast<void>(
-        co_await ruvia::sleepFor(worker, std::chrono::milliseconds(1)));
+    static_cast<void>(co_await ruvia::sleepFor(worker, std::chrono::milliseconds(1)));
     ++value;
     co_return;
 }
@@ -98,8 +97,7 @@ ruvia::Task<void> exercise(ruvia::WorkerHandle worker, bool& success) {
     {
         ruvia::TaskScope completedFailureScope(worker);
         completedFailureScope.spawn(fail());
-        static_cast<void>(
-            co_await ruvia::sleepFor(worker, std::chrono::milliseconds(1)));
+        static_cast<void>(co_await ruvia::sleepFor(worker, std::chrono::milliseconds(1)));
         if (completedFailureScope.size() != 0) {
             co_return;
         }
@@ -107,8 +105,7 @@ ruvia::Task<void> exercise(ruvia::WorkerHandle worker, bool& success) {
         try {
             co_await completedFailureScope.join();
         } catch (const std::runtime_error& error) {
-            completedFailureObserved =
-                std::string_view(error.what()) == "child failed";
+            completedFailureObserved = std::string_view(error.what()) == "child failed";
         }
         if (!completedFailureObserved) {
             co_return;
@@ -126,12 +123,11 @@ ruvia::Task<void> exercise(ruvia::WorkerHandle worker, bool& success) {
     try {
         co_await scope.join();
     } catch (const std::runtime_error& error) {
-        success = calls == 1 && scope.size() == 0 && scope.stopRequested() &&
-                  std::string_view(error.what()) == "child failed";
+        success = calls == 1 && scope.size() == 0 && scope.stopRequested() && std::string_view(error.what()) == "child failed";
     }
 }
 
-}
+}  // namespace
 
 int main() {
     ruvia::StopToken retainedToken;
@@ -149,9 +145,7 @@ int main() {
     const auto worker = ruvia::detail::WorkerHandleAccess::make(dispatcher);
     bool success = false;
 
-    asio::co_spawn(ioContext,
-                   ruvia::detail::taskAsAwaitable(exercise(worker, success)),
-                   asio::detached);
+    asio::co_spawn(ioContext, ruvia::detail::taskAsAwaitable(exercise(worker, success)), asio::detached);
     ioContext.run();
     dispatcher->close();
     return success ? 0 : 1;

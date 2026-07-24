@@ -43,13 +43,7 @@ namespace ruvia::detail {
 
 class Http2SansIoResponseStreamSink final {
 public:
-    Http2SansIoResponseStreamSink(
-        Http2Connection& connection,
-        std::uint32_t streamId,
-        ResponseStreamKind kind,
-        const WorkerHandle& worker,
-        WorkerSignal& writeSignal,
-        Http2SansIoStreamSignal& streamSignal) noexcept
+    Http2SansIoResponseStreamSink(Http2Connection& connection, std::uint32_t streamId, ResponseStreamKind kind, const WorkerHandle& worker, WorkerSignal& writeSignal, Http2SansIoStreamSignal& streamSignal) noexcept
         : connection_(connection),
           streamId_(streamId),
           kind_(kind),
@@ -57,35 +51,29 @@ public:
           writeSignal_(writeSignal),
           streamSignal_(streamSignal) {}
 
-    Http2SansIoResponseStreamSink(
-        Http2Connection&,
-        std::uint32_t,
-        ResponseStreamKind,
-        WorkerHandle&&,
-        WorkerSignal&,
-        Http2SansIoStreamSignal&) = delete;
+    Http2SansIoResponseStreamSink(Http2Connection&, std::uint32_t, ResponseStreamKind, WorkerHandle&&, WorkerSignal&, Http2SansIoStreamSignal&) = delete;
 
-    [[nodiscard]] bool committed() const noexcept { return state_.committed(); }
+    [[nodiscard]] bool committed() const noexcept {
+        return state_.committed();
+    }
 
-    [[nodiscard]] const ResponseStreamCommitPlan*
-    commitPlan() const & noexcept {
+    [[nodiscard]] const ResponseStreamCommitPlan* commitPlan() const& noexcept {
         return state_.commitPlan();
     }
-    const ResponseStreamCommitPlan* commitPlan() const && = delete;
+    const ResponseStreamCommitPlan* commitPlan() const&& = delete;
 
     [[nodiscard]] bool aborted() const noexcept {
         auto* stream = connection_.stream(streamId_);
-        return stream == nullptr || stream->isAborted() ||
-            streamSignal_.terminated();
+        return stream == nullptr || stream->isAborted() || streamSignal_.terminated();
     }
 
-    void bindContext(
-        Context* context,
-        ResponseStreamState::StreamingHeadThunk streamingHead) {
+    void bindContext(Context* context, ResponseStreamState::StreamingHeadThunk streamingHead) {
         state_.bindContext(context, streamingHead);
     }
 
-    void releaseContext() noexcept { state_.releaseContext(); }
+    void releaseContext() noexcept {
+        state_.releaseContext();
+    }
 
     Task<void> write(std::string_view chunk) {
         throwIfTerminated();
@@ -100,14 +88,11 @@ public:
             // rather than hard-spinning the event loop. A zero duration is
             // await_ready, so the minimal positive tick is what forces the
             // suspension (termination short-circuits it back to ready).
-            co_await Http2SansIoSleepAwaiter(
-                *worker_, streamSignal_.termination(),
-                std::chrono::steady_clock::duration(1));
+            co_await Http2SansIoSleepAwaiter(*worker_, streamSignal_.termination(), std::chrono::steady_clock::duration(1));
         }
         state_.ensureBodyAllowed();
         for (;;) {
-            const auto result = connection_.submitData(
-                streamId_, chunk, Http2EndStream::kKeepOpen);
+            const auto result = connection_.submitData(streamId_, chunk, Http2EndStream::kKeepOpen);
             wakeWriter();
             if (result == Http2DataSubmitStatus::kAccepted) {
                 co_return;
@@ -124,12 +109,9 @@ public:
             if (result == Http2DataSubmitStatus::kContentLengthIncomplete) {
                 throw std::length_error("HTTP/2 response ended before Content-Length");
             }
-            const auto waitResult = co_await awaitHttp2SendWindow(
-                connection_, streamId_, &streamSignal_);
+            const auto waitResult = co_await awaitHttp2SendWindow(connection_, streamId_, &streamSignal_);
             if (waitResult.aborted() != nullptr) {
-                throw std::system_error(streamSignal_.terminated()
-                    ? streamSignal_.terminalError()
-                    : std::make_error_code(std::errc::connection_reset));
+                throw std::system_error(streamSignal_.terminated() ? streamSignal_.terminalError() : std::make_error_code(std::errc::connection_reset));
             }
             if (result == Http2DataSubmitStatus::kQueued) {
                 co_return;  // the core already owned and drained this input
@@ -139,8 +121,7 @@ public:
     }
 
     Task<void> sleep(std::chrono::milliseconds duration) {
-        co_await Http2SansIoSleepAwaiter(
-            *worker_, streamSignal_.termination(), duration);
+        co_await Http2SansIoSleepAwaiter(*worker_, streamSignal_.termination(), duration);
     }
 
     Task<void> end(std::span<const HttpHeaderView> trailers) {
@@ -162,11 +143,9 @@ public:
             co_return;
         }
         if (!trailerSection.empty()) {
-            state_.ensureTrailersAllowed(
-                ResponseStreamTrailerFraming::kHttp2TrailingHeaders);
+            state_.ensureTrailersAllowed(ResponseStreamTrailerFraming::kHttp2TrailingHeaders);
         }
-        const auto result = connection_.finishResponse(
-            streamId_, trailerSection);
+        const auto result = connection_.finishResponse(streamId_, trailerSection);
         wakeWriter();
         if (result == Http2FinishSubmitStatus::kClosed) {
             throw std::system_error(std::make_error_code(std::errc::connection_reset));
@@ -178,12 +157,9 @@ public:
             throw std::length_error("HTTP/2 response ended before Content-Length");
         }
         if (result == Http2FinishSubmitStatus::kQueued) {
-            const auto waitResult = co_await awaitHttp2SendWindow(
-                connection_, streamId_, &streamSignal_);
+            const auto waitResult = co_await awaitHttp2SendWindow(connection_, streamId_, &streamSignal_);
             if (waitResult.aborted() != nullptr) {
-                throw std::system_error(streamSignal_.terminated()
-                    ? streamSignal_.terminalError()
-                    : std::make_error_code(std::errc::connection_reset));
+                throw std::system_error(streamSignal_.terminated() ? streamSignal_.terminalError() : std::make_error_code(std::errc::connection_reset));
             }
         }
         state_.markEnded();
@@ -194,21 +170,15 @@ private:
         throwIfTerminated();
         if (state_.committed()) {
             if (trailerIntent == ResponseTrailerIntent::kPresent) {
-                state_.ensureTrailersAllowed(
-                    ResponseStreamTrailerFraming::kHttp2TrailingHeaders);
+                state_.ensureTrailersAllowed(ResponseStreamTrailerFraming::kHttp2TrailingHeaders);
             }
             co_return;
         }
-        const auto headResult = connection_.submitStreamingResponseHead(
-            streamId_,
-            state_.streamingHead(),
-            kind_,
-            trailerIntent);
+        const auto headResult = connection_.submitStreamingResponseHead(streamId_, state_.streamingHead(), kind_, trailerIntent);
         const auto* submittedHead = headResult.submitted();
         if (submittedHead == nullptr) {
             if (headResult.failure()->peerClosed()) {
-                throw std::system_error(
-                    std::make_error_code(std::errc::connection_reset));
+                throw std::system_error(std::make_error_code(std::errc::connection_reset));
             }
             throw headResult.failure()->exception();
         }

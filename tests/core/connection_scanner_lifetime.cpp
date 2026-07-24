@@ -43,8 +43,7 @@ struct WorkerMaintenanceProbe final {
 };
 
 struct WorkerMaintenanceResetProbe final {
-    ruvia::detail::ConnectionScanner::WorkerMaintenanceRegistration*
-        registration;
+    ruvia::detail::ConnectionScanner::WorkerMaintenanceRegistration* registration;
     std::size_t ticks{0};
 
     static void check(void* target) noexcept {
@@ -60,12 +59,9 @@ int main() {
     asio::io_context ioContext;
     auto dispatcher = std::make_shared<ruvia::detail::WorkerDispatcher>(ioContext, 16);
     auto worker = ruvia::detail::WorkerHandleAccess::make(dispatcher);
-    const auto rejects = [&worker](
-                             ruvia::detail::ConnectionScannerOptions options) {
+    const auto rejects = [&worker](ruvia::detail::ConnectionScannerOptions options) {
         try {
-            ruvia::detail::ConnectionScanner scanner(
-                worker,
-                std::move(options));
+            ruvia::detail::ConnectionScanner scanner(worker, std::move(options));
             return false;
         } catch (const std::invalid_argument&) {
             return true;
@@ -116,27 +112,19 @@ int main() {
         options.scanInterval = std::chrono::milliseconds(1);
         ruvia::detail::ConnectionScanner scanner(worker, std::move(options));
         WorkerMaintenanceProbe retryProbe;
-        ruvia::detail::ConnectionScanner::WorkerMaintenanceRegistration
-            retryRegistration;
-        scanner.registerWorkerMaintenance(
-            retryRegistration,
-            &retryProbe,
-            &WorkerMaintenanceProbe::check);
+        ruvia::detail::ConnectionScanner::WorkerMaintenanceRegistration retryRegistration;
+        scanner.registerWorkerMaintenance(retryRegistration, &retryProbe, &WorkerMaintenanceProbe::check);
         bool offWorkerRejected = false;
         try {
             scanner.start();
         } catch (const std::logic_error&) {
             offWorkerRejected = true;
         }
-        if (!offWorkerRejected ||
-            dispatcher->post([&scanner] { scanner.start(); }) !=
-                ruvia::PostStatus::kAccepted) {
+        if (!offWorkerRejected || dispatcher->post([&scanner] { scanner.start(); }) != ruvia::PostStatus::kAccepted) {
             return 6;
         }
         ioContext.run_for(std::chrono::milliseconds(20));
-        if (retryProbe.ticks == 0 ||
-            dispatcher->post([&scanner] { scanner.stop(); }) !=
-                ruvia::PostStatus::kAccepted) {
+        if (retryProbe.ticks == 0 || dispatcher->post([&scanner] { scanner.stop(); }) != ruvia::PostStatus::kAccepted) {
             return 7;
         }
         if (ioContext.stopped()) {
@@ -152,9 +140,7 @@ int main() {
     std::optional<ruvia::detail::ConnectionScanner::Guard> secondGuard;
 
     {
-        ruvia::detail::ConnectionScanner scanner(
-            worker,
-            ruvia::detail::ConnectionScannerOptions{});
+        ruvia::detail::ConnectionScanner scanner(worker, ruvia::detail::ConnectionScannerOptions{});
         firstGuard.emplace(&scanner, firstEntry, socket);
         secondGuard.emplace(&scanner, secondEntry, socket);
     }
@@ -180,56 +166,34 @@ int main() {
         ruvia::detail::ConnectionScanner::Entry entry;
         ruvia::detail::ConnectionScanner::Guard guard(&scanner, entry, socket);
         std::array<PeriodicProbe, 12> probes{};
-        std::array<
-            ruvia::detail::ConnectionScanner::PeriodicCheckRegistration,
-            12> registrations{};
+        std::array<ruvia::detail::ConnectionScanner::PeriodicCheckRegistration, 12> registrations{};
         PeriodicResetProbe resetProbe{&registrations[11]};
-        ruvia::detail::ConnectionScanner::PeriodicCheckRegistration
-            resetRegistration;
+        ruvia::detail::ConnectionScanner::PeriodicCheckRegistration resetRegistration;
         std::array<WorkerMaintenanceProbe, 8> workerProbes{};
-        std::array<
-            ruvia::detail::ConnectionScanner::WorkerMaintenanceRegistration,
-            8> workerRegistrations{};
-        WorkerMaintenanceResetProbe workerResetProbe{
-            &workerRegistrations[7]};
-        ruvia::detail::ConnectionScanner::WorkerMaintenanceRegistration
-            workerResetRegistration;
+        std::array<ruvia::detail::ConnectionScanner::WorkerMaintenanceRegistration, 8> workerRegistrations{};
+        WorkerMaintenanceResetProbe workerResetProbe{&workerRegistrations[7]};
+        ruvia::detail::ConnectionScanner::WorkerMaintenanceRegistration workerResetRegistration;
         if (dispatcher->post([&] {
                 // start() initially has no work. Registrations added afterward
                 // must become visible without any coarse timeout being enabled.
                 scanner.start();
                 for (std::size_t i = 0; i < registrations.size(); ++i) {
-                    entry.registerPeriodicCheck(
-                        registrations[i],
-                        &probes[i],
-                        &PeriodicProbe::tick);
+                    entry.registerPeriodicCheck(registrations[i], &probes[i], &PeriodicProbe::tick);
                 }
-                entry.registerPeriodicCheck(
-                    resetRegistration,
-                    &resetProbe,
-                    &PeriodicResetProbe::tick);
+                entry.registerPeriodicCheck(resetRegistration, &resetProbe, &PeriodicResetProbe::tick);
                 for (std::size_t i = 0; i < workerRegistrations.size(); ++i) {
-                    scanner.registerWorkerMaintenance(
-                        workerRegistrations[i],
-                        &workerProbes[i],
-                        &WorkerMaintenanceProbe::check);
+                    scanner.registerWorkerMaintenance(workerRegistrations[i], &workerProbes[i], &WorkerMaintenanceProbe::check);
                 }
-                scanner.registerWorkerMaintenance(
-                    workerResetRegistration,
-                    &workerResetProbe,
-                    &WorkerMaintenanceResetProbe::check);
-                entry.setPhase(
-                    ruvia::detail::ConnectionScanner::Phase::kLongLived);
-            }) !=
-            ruvia::PostStatus::kAccepted) {
+                scanner.registerWorkerMaintenance(workerResetRegistration, &workerResetProbe, &WorkerMaintenanceResetProbe::check);
+                entry.setPhase(ruvia::detail::ConnectionScanner::Phase::kLongLived);
+            }) != ruvia::PostStatus::kAccepted) {
             return 6;
         }
         // Windows timer dispatch can occasionally exceed a 10 ms scheduling
         // window under a parallel Debug build. Give the 1 ms scanner enough
         // time to complete at least one deterministic pass.
         ioContext.run_for(std::chrono::milliseconds(50));
-        if (dispatcher->post([&scanner] { scanner.stop(); }) !=
-            ruvia::PostStatus::kAccepted) {
+        if (dispatcher->post([&scanner] { scanner.stop(); }) != ruvia::PostStatus::kAccepted) {
             return 7;
         }
         if (ioContext.stopped()) {
@@ -237,8 +201,7 @@ int main() {
         }
         ioContext.run_for(std::chrono::milliseconds(5));
         for (std::size_t i = 0; i < probes.size(); ++i) {
-            if ((i == 11 && probes[i].ticks != 0) ||
-                (i != 11 && probes[i].ticks == 0)) {
+            if ((i == 11 && probes[i].ticks != 0) || (i != 11 && probes[i].ticks == 0)) {
                 return 8;
             }
         }
@@ -246,8 +209,7 @@ int main() {
             return 9;
         }
         for (std::size_t i = 0; i < workerProbes.size(); ++i) {
-            if ((i == 7 && workerProbes[i].ticks != 0) ||
-                (i != 7 && workerProbes[i].ticks == 0)) {
+            if ((i == 7 && workerProbes[i].ticks != 0) || (i != 7 && workerProbes[i].ticks == 0)) {
                 return 10;
             }
         }
@@ -262,25 +224,16 @@ int main() {
     PeriodicProbe probe;
     {
         ruvia::detail::ConnectionScanner::Entry entry;
-        entry.registerPeriodicCheck(
-            registration,
-            &probe,
-            &PeriodicProbe::tick);
+        entry.registerPeriodicCheck(registration, &probe, &PeriodicProbe::tick);
     }
     registration.reset();
 
     // Scanner teardown likewise invalidates startup-owned maintenance nodes.
-    ruvia::detail::ConnectionScanner::WorkerMaintenanceRegistration
-        maintenanceRegistration;
+    ruvia::detail::ConnectionScanner::WorkerMaintenanceRegistration maintenanceRegistration;
     WorkerMaintenanceProbe maintenanceProbe;
     {
-        ruvia::detail::ConnectionScanner scanner(
-            worker,
-            ruvia::detail::ConnectionScannerOptions{});
-        scanner.registerWorkerMaintenance(
-            maintenanceRegistration,
-            &maintenanceProbe,
-            &WorkerMaintenanceProbe::check);
+        ruvia::detail::ConnectionScanner scanner(worker, ruvia::detail::ConnectionScannerOptions{});
+        scanner.registerWorkerMaintenance(maintenanceRegistration, &maintenanceProbe, &WorkerMaintenanceProbe::check);
     }
     maintenanceRegistration.reset();
 }

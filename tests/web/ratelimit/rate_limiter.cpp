@@ -11,8 +11,8 @@
 
 namespace {
 
-using ruvia::RateLimitRule;
 using ruvia::RateLimitOverflowPolicy;
+using ruvia::RateLimitRule;
 using ruvia::detail::BasicRateLimiter;
 using ruvia::detail::RateLimitDecision;
 using ruvia::detail::RateLimiter;
@@ -42,12 +42,7 @@ using ManualRateLimiter = BasicRateLimiter<ManualRateLimiterClock>;
 
 // A window long enough that no reset happens during a test.
 RateLimitRule ruleWith(std::size_t maxRequests, bool failClosed = true) {
-    return RateLimitRule::fixedWindow(
-        maxRequests,
-        std::chrono::seconds(60),
-        failClosed
-            ? RateLimitOverflowPolicy::kDeny
-            : RateLimitOverflowPolicy::kAllow);
+    return RateLimitRule::fixedWindow(maxRequests, std::chrono::seconds(60), failClosed ? RateLimitOverflowPolicy::kDeny : RateLimitOverflowPolicy::kAllow);
 }
 
 }  // namespace
@@ -80,10 +75,7 @@ RUVIA_TEST(rate_limiter_disabled_allows_everything) {
 }
 
 RUVIA_TEST(rate_limiter_skips_table_when_startup_metadata_has_no_rules) {
-    RateLimiter limiter(
-        std::nullopt,
-        kNoRouteRules,
-        ruvia::kDefaultRateLimitSlotsPerWorker);
+    RateLimiter limiter(std::nullopt, kNoRouteRules, ruvia::kDefaultRateLimitSlotsPerWorker);
     RUVIA_CHECK(!limiter.hasDefaultRule());
     RUVIA_CHECK_EQ(limiter.slotCapacity(), std::size_t{0});
 }
@@ -97,8 +89,7 @@ RUVIA_TEST(rate_limiter_allocates_table_for_route_metadata_without_default_rule)
 }
 
 RUVIA_TEST(rate_limiter_resets_after_window) {
-    const auto rule = RateLimitRule::fixedWindow(
-        1, std::chrono::milliseconds(20));
+    const auto rule = RateLimitRule::fixedWindow(1, std::chrono::milliseconds(20));
     ManualRateLimiterClock::set(1'000);
     ManualRateLimiter limiter(rule, kNoRouteRules, kSlots);
     RUVIA_CHECK(rateLimitAllowed(limiter.allowDefault("k")));
@@ -137,7 +128,7 @@ RUVIA_TEST(rate_limiter_route_enforced_when_default_rule_disabled) {
     // explicitly records route-rule presence instead of inferring it from the default.
     RateLimiter limiter(std::nullopt, kHasRouteRules, kSlots);
     RUVIA_CHECK(!limiter.hasDefaultRule());
-    RUVIA_CHECK(rateLimitAllowed(limiter.allowDefault("ip")));   // default off -> always allowed
+    RUVIA_CHECK(rateLimitAllowed(limiter.allowDefault("ip")));  // default off -> always allowed
     RUVIA_CHECK(rateLimitAllowed(limiter.allowDefault("ip")));
     const RateLimitRule routeRule = ruleWith(1);
     RUVIA_CHECK(rateLimitAllowed(limiter.allowRoute(0x1234, "ip", routeRule)));   // route budget: 1
@@ -180,8 +171,7 @@ RUVIA_TEST(rate_limiter_full_worker_table_honors_fail_policy) {
 }
 
 RUVIA_TEST(rate_limiter_reclaims_expired_worker_slot) {
-    const auto rule = RateLimitRule::fixedWindow(
-        1, std::chrono::milliseconds(10));
+    const auto rule = RateLimitRule::fixedWindow(1, std::chrono::milliseconds(10));
     ManualRateLimiterClock::set(1'000);
     ManualRateLimiter limiter(rule, kNoRouteRules, 1);
 

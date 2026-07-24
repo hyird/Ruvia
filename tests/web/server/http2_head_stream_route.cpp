@@ -50,13 +50,9 @@ ruvia::Task<void> tickStreamHandler(void*, ruvia::Context& context) {
     co_await context.stream().end();
 }
 
-std::string frame(
-    std::uint8_t type, std::uint8_t flags, std::uint32_t streamId,
-    std::string_view payload) {
+std::string frame(std::uint8_t type, std::uint8_t flags, std::uint32_t streamId, std::string_view payload) {
     std::string bytes(kHttp2FrameHeaderBytes, '\0');
-    http2WriteFrameHeader(
-        bytes.data(), static_cast<std::uint32_t>(payload.size()),
-        static_cast<Http2FrameType>(type), flags, streamId);
+    http2WriteFrameHeader(bytes.data(), static_cast<std::uint32_t>(payload.size()), static_cast<Http2FrameType>(type), flags, streamId);
     bytes.append(payload);
     return bytes;
 }
@@ -74,9 +70,7 @@ int main() {
     ruvia::Router router;
     auto& impl = ruvia::detail::RouterImpl::from(router);
     std::pmr::string eventsPath("/events", std::pmr::get_default_resource());
-    impl.registerResponseStreamRoute(
-        ruvia::HttpKnownMethod::kGet, std::move(eventsPath),
-        ruvia::detail::RouteStreamHandler(nullptr, &tickStreamHandler), {}, {});
+    impl.registerResponseStreamRoute(ruvia::HttpKnownMethod::kGet, std::move(eventsPath), ruvia::detail::RouteStreamHandler(nullptr, &tickStreamHandler), {}, {});
     impl.finalize();
     const auto& routes = impl.routeTable();
 
@@ -92,11 +86,7 @@ int main() {
             ruvia::test::Http2SansIoSessionFixture fixture;
             auto dispatcher = std::make_shared<WorkerDispatcher>(io, 64);
             const auto workerHandle = WorkerHandleAccess::make(dispatcher);
-            co_await taskAsAwaitable(runHttp2SansIoSession(
-                sock, routes, worker,
-                fixture.context(ContextServices{}
-                                    .withPlainTransport("127.0.0.1")
-                                    .withWorker(workerHandle))));
+            co_await taskAsAwaitable(runHttp2SansIoSession(sock, routes, worker, fixture.context(ContextServices{}.withPlainTransport("127.0.0.1").withWorker(workerHandle))));
         },
         asio::detached);
 
@@ -107,35 +97,24 @@ int main() {
         io,
         [&]() -> asio::awaitable<void> {
             tcp::socket sock(io);
-            co_await sock.async_connect(
-                tcp::endpoint(asio::ip::make_address("127.0.0.1"), port),
-                asio::use_awaitable);
+            co_await sock.async_connect(tcp::endpoint(asio::ip::make_address("127.0.0.1"), port), asio::use_awaitable);
 
             auto writeAll = [&sock](std::string_view bytes) -> asio::awaitable<bool> {
-                auto [ec, n] = co_await asio::async_write(
-                    sock, asio::buffer(bytes.data(), bytes.size()),
-                    asio::as_tuple(asio::use_awaitable));
+                auto [ec, n] = co_await asio::async_write(sock, asio::buffer(bytes.data(), bytes.size()), asio::as_tuple(asio::use_awaitable));
                 (void)n;
                 co_return !ec;
             };
             auto readExact = [&sock](void* data, std::size_t size) -> asio::awaitable<bool> {
-                auto [ec, n] = co_await asio::async_read(
-                    sock, asio::buffer(data, size),
-                    asio::as_tuple(asio::use_awaitable));
+                auto [ec, n] = co_await asio::async_read(sock, asio::buffer(data, size), asio::as_tuple(asio::use_awaitable));
                 co_return !ec && n == size;
             };
-            auto requestHeaders =
-                [&writeAll](std::string_view method,
-                            std::uint32_t streamId) -> asio::awaitable<bool> {
+            auto requestHeaders = [&writeAll](std::string_view method, std::uint32_t streamId) -> asio::awaitable<bool> {
                 std::pmr::string headerBlock(std::pmr::get_default_resource());
                 HpackEncoder::encodeHeader(headerBlock, ":method", method);
                 HpackEncoder::encodeHeader(headerBlock, ":path", "/events");
                 HpackEncoder::encodeHeader(headerBlock, ":scheme", "http");
                 HpackEncoder::encodeHeader(headerBlock, ":authority", "localhost");
-                co_return co_await writeAll(frame(
-                    0x1 /*HEADERS*/,
-                    kHttp2FlagEndStream | kHttp2FlagEndHeaders, streamId,
-                    std::string_view(headerBlock.data(), headerBlock.size())));
+                co_return co_await writeAll(frame(0x1 /*HEADERS*/, kHttp2FlagEndStream | kHttp2FlagEndHeaders, streamId, std::string_view(headerBlock.data(), headerBlock.size())));
             };
 
             if (!co_await writeAll(kClientPreface)) co_return;
@@ -147,37 +126,27 @@ int main() {
             while (!getStream.ended || !headStream.ended) {
                 char headerBytes[kHttp2FrameHeaderBytes];
                 if (!co_await readExact(headerBytes, sizeof(headerBytes))) break;
-                const auto header = http2ParseFrameHeader(
-                    std::string_view(headerBytes, sizeof(headerBytes)));
+                const auto header = http2ParseFrameHeader(std::string_view(headerBytes, sizeof(headerBytes)));
                 std::string payload(header.length, '\0');
-                if (header.length != 0 &&
-                    !co_await readExact(payload.data(), payload.size())) {
+                if (header.length != 0 && !co_await readExact(payload.data(), payload.size())) {
                     break;
                 }
-                StreamResult* stream = header.streamId == 1 ? &getStream
-                    : header.streamId == 3                  ? &headStream
-                                                            : nullptr;
+                StreamResult* stream = header.streamId == 1 ? &getStream : header.streamId == 3 ? &headStream : nullptr;
                 if (stream == nullptr) {
                     continue;
                 }
                 if (header.type == 0x1 /*HEADERS*/) {
-                    (void)decoder.decode(
-                        std::string_view(payload.data(), payload.size()),
-                        stream,
-                        [](void* target, std::string_view name,
-                           std::string_view value) {
-                            if (name == ":status") {
-                                static_cast<StreamResult*>(target)->status =
-                                    std::string(value);
-                            }
-                            return true;
-                        });
+                    (void)decoder.decode(std::string_view(payload.data(), payload.size()), stream, [](void* target, std::string_view name, std::string_view value) {
+                        if (name == ":status") {
+                            static_cast<StreamResult*>(target)->status = std::string(value);
+                        }
+                        return true;
+                    });
                 } else if (header.type == 0x0 /*DATA*/) {
                     stream->sawData = true;
                     stream->body.append(payload);
                 }
-                if ((header.flags & kHttp2FlagEndStream) != 0 &&
-                    (header.type == 0x0 || header.type == 0x1)) {
+                if ((header.flags & kHttp2FlagEndStream) != 0 && (header.type == 0x0 || header.type == 0x1)) {
                     stream->ended = true;
                 }
             }
@@ -189,31 +158,19 @@ int main() {
     io.run();
 
     if (getStream.status != "200") {
-        std::fprintf(
-            stderr,
-            "streaming GET over HTTP/2 was not 200: status='%s'\n",
-            getStream.status.c_str());
+        std::fprintf(stderr, "streaming GET over HTTP/2 was not 200: status='%s'\n", getStream.status.c_str());
         return 1;
     }
     if (getStream.body != "tick-1tick-2") {
-        std::fprintf(
-            stderr,
-            "streaming GET body mismatch over HTTP/2: '%s'\n",
-            getStream.body.c_str());
+        std::fprintf(stderr, "streaming GET body mismatch over HTTP/2: '%s'\n", getStream.body.c_str());
         return 2;
     }
     if (headStream.status != "200") {
-        std::fprintf(
-            stderr,
-            "HEAD of a streaming route over HTTP/2 was not 200: status='%s'\n",
-            headStream.status.c_str());
+        std::fprintf(stderr, "HEAD of a streaming route over HTTP/2 was not 200: status='%s'\n", headStream.status.c_str());
         return 3;
     }
     if (headStream.sawData || !headStream.body.empty()) {
-        std::fprintf(
-            stderr,
-            "HEAD of a streaming route over HTTP/2 must send no DATA, got '%s'\n",
-            headStream.body.c_str());
+        std::fprintf(stderr, "HEAD of a streaming route over HTTP/2 must send no DATA, got '%s'\n", headStream.body.c_str());
         return 4;
     }
     return 0;

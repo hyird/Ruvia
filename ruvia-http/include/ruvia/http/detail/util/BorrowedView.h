@@ -13,12 +13,9 @@ template <typename T>
 inline constexpr bool kIsHttpOwningCharString = false;
 
 template <typename Traits, typename Allocator>
-inline constexpr bool kIsHttpOwningCharString<
-    std::basic_string<char, Traits, Allocator>> = true;
+inline constexpr bool kIsHttpOwningCharString<std::basic_string<char, Traits, Allocator>> = true;
 
 template <typename T>
-concept HttpTemporaryOwningCharString =
-    kIsHttpOwningCharString<std::remove_cvref_t<T>> &&
-    !std::is_lvalue_reference_v<T&&>;
+concept HttpTemporaryOwningCharString = kIsHttpOwningCharString<std::remove_cvref_t<T>> && !std::is_lvalue_reference_v<T&&>;
 
 }  // namespace ruvia::detail

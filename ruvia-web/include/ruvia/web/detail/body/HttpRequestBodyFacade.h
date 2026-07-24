@@ -23,9 +23,7 @@ void emplaceBodyReaderFacade(std::optional<BodyReader>& storage, Reader& reader)
 
 template <typename Reader>
 [[nodiscard]] BodyReader makeBodyReaderFacade(Reader& reader) noexcept {
-    return StreamingAccess::makeBodyReader(
-        &reader,
-        &bodyReaderReadThunk<Reader>);
+    return StreamingAccess::makeBodyReader(&reader, &bodyReaderReadThunk<Reader>);
 }
 
 template <typename Reader>
@@ -41,9 +39,15 @@ public:
     BodyReaderBinding(BodyReaderBinding&&) = delete;
     BodyReaderBinding& operator=(BodyReaderBinding&&) = delete;
 
-    [[nodiscard]] Reader& reader() noexcept { return reader_; }
-    [[nodiscard]] const Reader& reader() const noexcept { return reader_; }
-    [[nodiscard]] BodyReader& facade() noexcept { return facade_; }
+    [[nodiscard]] Reader& reader() noexcept {
+        return reader_;
+    }
+    [[nodiscard]] const Reader& reader() const noexcept {
+        return reader_;
+    }
+    [[nodiscard]] BodyReader& facade() noexcept {
+        return facade_;
+    }
 
 private:
     Reader reader_;
@@ -61,12 +65,8 @@ Task<void> requestBodyLoaderDiscardThunk(void* target) {
 }
 
 template <typename Loader>
-[[nodiscard]] RequestBodyLoader makeRequestBodyLoaderFacade(
-    Loader& loader) noexcept {
-    return RequestBodyLoader(
-        &loader,
-        &requestBodyLoaderReadAllThunk<Loader>,
-        &requestBodyLoaderDiscardThunk<Loader>);
+[[nodiscard]] RequestBodyLoader makeRequestBodyLoaderFacade(Loader& loader) noexcept {
+    return RequestBodyLoader(&loader, &requestBodyLoaderReadAllThunk<Loader>, &requestBodyLoaderDiscardThunk<Loader>);
 }
 
 template <typename Loader>
@@ -82,9 +82,15 @@ public:
     RequestBodyLoaderBinding(RequestBodyLoaderBinding&&) = delete;
     RequestBodyLoaderBinding& operator=(RequestBodyLoaderBinding&&) = delete;
 
-    [[nodiscard]] Loader& loader() noexcept { return loader_; }
-    [[nodiscard]] const Loader& loader() const noexcept { return loader_; }
-    [[nodiscard]] RequestBodyLoader& facade() noexcept { return facade_; }
+    [[nodiscard]] Loader& loader() noexcept {
+        return loader_;
+    }
+    [[nodiscard]] const Loader& loader() const noexcept {
+        return loader_;
+    }
+    [[nodiscard]] RequestBodyLoader& facade() noexcept {
+        return facade_;
+    }
 
 private:
     Loader loader_;

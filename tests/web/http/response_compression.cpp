@@ -20,17 +20,19 @@
 
 namespace {
 
-using ruvia::HttpResponse;
 using ruvia::HttpKnownMethod;
-using ruvia::detail::HttpContentCoding;
+using ruvia::HttpResponse;
 using ruvia::detail::applyResponseCompression;
+using ruvia::detail::HttpContentCoding;
 using ruvia::detail::responseBody;
 
 using Compression = ruvia::CompressionConfig;
 
 // Reference decompressors. Each returns "\x01decompress-failed" on error, a
 // sentinel no real body equals, so a failure is a visible mismatch not a match.
-const std::string kDecompressFailed = "\x01" "decompress-failed";
+const std::string kDecompressFailed =
+    "\x01"
+    "decompress-failed";
 
 std::string gzipDecompress(std::string_view data) {
     z_stream stream{};
@@ -60,9 +62,7 @@ std::string gzipDecompress(std::string_view data) {
 std::string brotliDecompress(std::string_view data) {
     std::string out(64 * 1024, '\0');
     std::size_t outSize = out.size();
-    const auto result = BrotliDecoderDecompress(
-        data.size(), reinterpret_cast<const std::uint8_t*>(data.data()),
-        &outSize, reinterpret_cast<std::uint8_t*>(out.data()));
+    const auto result = BrotliDecoderDecompress(data.size(), reinterpret_cast<const std::uint8_t*>(data.data()), &outSize, reinterpret_cast<std::uint8_t*>(out.data()));
     if (result != BROTLI_DECODER_RESULT_SUCCESS) {
         return kDecompressFailed;
     }
@@ -89,16 +89,10 @@ HttpResponse responseWithBody(std::string_view body) {
     return response;
 }
 
-bool tryCompress(
-    HttpResponse& response,
-    Compression options,
-    HttpContentCoding coding = HttpContentCoding::kGzip,
-    HttpKnownMethod method = HttpKnownMethod::kGet) {
-    const bool alreadyEncoded =
-        response.header("Content-Encoding").has_value();
+bool tryCompress(HttpResponse& response, Compression options, HttpContentCoding coding = HttpContentCoding::kGzip, HttpKnownMethod method = HttpKnownMethod::kGet) {
+    const bool alreadyEncoded = response.header("Content-Encoding").has_value();
     applyResponseCompression(coding, method, response, options);
-    return !alreadyEncoded &&
-        response.header("Content-Encoding").has_value();
+    return !alreadyEncoded && response.header("Content-Encoding").has_value();
 }
 
 }  // namespace
@@ -117,11 +111,7 @@ RUVIA_TEST(compress_output_round_trips_for_each_coding) {
 
     {
         auto response = responseWithBody(original);
-        applyResponseCompression(
-            HttpContentCoding::kGzip,
-            HttpKnownMethod::kGet,
-            response,
-            Compression{.minBytes = 16});
+        applyResponseCompression(HttpContentCoding::kGzip, HttpKnownMethod::kGet, response, Compression{.minBytes = 16});
         RUVIA_CHECK_EQ(response.header("Content-Encoding"), std::string_view("gzip"));
         RUVIA_CHECK(responseBody(response).ownedBytes() != nullptr);
         RUVIA_CHECK(responseBody(response).size() < original.size());  // actually shrank
@@ -129,22 +119,14 @@ RUVIA_TEST(compress_output_round_trips_for_each_coding) {
     }
     {
         auto response = responseWithBody(original);
-        applyResponseCompression(
-            HttpContentCoding::kBrotli,
-            HttpKnownMethod::kGet,
-            response,
-            Compression{.minBytes = 16});
+        applyResponseCompression(HttpContentCoding::kBrotli, HttpKnownMethod::kGet, response, Compression{.minBytes = 16});
         RUVIA_CHECK_EQ(response.header("Content-Encoding"), std::string_view("br"));
         RUVIA_CHECK(responseBody(response).ownedBytes() != nullptr);
         RUVIA_CHECK_EQ(brotliDecompress(responseBody(response).bytes()), original);
     }
     {
         auto response = responseWithBody(original);
-        applyResponseCompression(
-            HttpContentCoding::kZstd,
-            HttpKnownMethod::kGet,
-            response,
-            Compression{.minBytes = 16});
+        applyResponseCompression(HttpContentCoding::kZstd, HttpKnownMethod::kGet, response, Compression{.minBytes = 16});
         RUVIA_CHECK_EQ(response.header("Content-Encoding"), std::string_view("zstd"));
         RUVIA_CHECK(responseBody(response).ownedBytes() != nullptr);
         RUVIA_CHECK_EQ(zstdDecompress(responseBody(response).bytes()), original);
@@ -156,9 +138,7 @@ RUVIA_TEST(compress_happy_path_sets_encoding_and_vary) {
     RUVIA_CHECK(tryCompress(response, Compression{.minBytes = 16}));
     RUVIA_CHECK_EQ(response.header("Content-Encoding"), std::string_view("gzip"));
     // Compressing on Accept-Encoding must advertise the variance.
-    RUVIA_CHECK(
-        response.header("Vary").value_or(std::string_view{}).find("Accept-Encoding") !=
-            std::string_view::npos);
+    RUVIA_CHECK(response.header("Vary").value_or(std::string_view{}).find("Accept-Encoding") != std::string_view::npos);
 }
 
 RUVIA_TEST(compress_weakens_strong_etag_but_leaves_weak_and_absent) {
@@ -204,9 +184,7 @@ RUVIA_TEST(compress_brotli_and_zstd_emit_their_content_encoding) {
         auto response = responseWithBody(kCompressibleBody);
         RUVIA_CHECK(tryCompress(response, Compression{.minBytes = 16}, HttpContentCoding::kBrotli));
         RUVIA_CHECK_EQ(response.header("Content-Encoding"), std::string_view("br"));
-        RUVIA_CHECK(
-            response.header("Vary").value_or(std::string_view{}).find("Accept-Encoding") !=
-                std::string_view::npos);
+        RUVIA_CHECK(response.header("Vary").value_or(std::string_view{}).find("Accept-Encoding") != std::string_view::npos);
     }
     {
         auto response = responseWithBody(kCompressibleBody);
@@ -225,14 +203,9 @@ RUVIA_TEST(buffered_response_absent_policies_skip_cors_and_compression) {
     options.compression.reset();
     RUVIA_CHECK(!options.cors.has_value());
 
-    const auto writePlan = ruvia::detail::prepareBufferedHttpResponse(
-        parsed.request,
-        HttpContentCoding::kGzip,
-        response,
-        options);
+    const auto writePlan = ruvia::detail::prepareBufferedHttpResponse(parsed.request, HttpContentCoding::kGzip, response, options);
     RUVIA_CHECK(writePlan.matchesResponse(response));
-    RUVIA_CHECK(
-        writePlan.requestMethod() == ruvia::HttpKnownMethod::kGet);
+    RUVIA_CHECK(writePlan.requestMethod() == ruvia::HttpKnownMethod::kGet);
     RUVIA_CHECK(!response.header("Access-Control-Allow-Origin").has_value());
     RUVIA_CHECK(!response.header("Content-Encoding").has_value());
     RUVIA_CHECK(!response.header("Vary").has_value());
@@ -245,9 +218,7 @@ RUVIA_TEST(buffered_response_coding_folds_repeated_accept_encoding_fields) {
         "Accept-Encoding: identity;q=0, gzip;q=0.2\r\n"
         "Accept-Encoding: br;q=0.8\r\n\r\n");
     RUVIA_CHECK(parsed.messageReady() != nullptr);
-    RUVIA_CHECK(
-        ruvia::detail::httpResponseCodingFor(parsed.request) ==
-        HttpContentCoding::kBrotli);
+    RUVIA_CHECK(ruvia::detail::httpResponseCodingFor(parsed.request) == HttpContentCoding::kBrotli);
 }
 
 RUVIA_TEST(compress_skips_when_no_coding_but_preserves_head_metadata) {
@@ -257,29 +228,18 @@ RUVIA_TEST(compress_skips_when_no_coding_but_preserves_head_metadata) {
     }
     {
         auto response = responseWithBody(kCompressibleBody);
-        RUVIA_CHECK(tryCompress(
-            response,
-            Compression{.minBytes = 16},
-            HttpContentCoding::kGzip,
-            HttpKnownMethod::kHead));
-        const auto writePlan = ruvia::detail::httpBufferedResponseWritePlan(
-            HttpKnownMethod::kHead, response);
+        RUVIA_CHECK(tryCompress(response, Compression{.minBytes = 16}, HttpContentCoding::kGzip, HttpKnownMethod::kHead));
+        const auto writePlan = ruvia::detail::httpBufferedResponseWritePlan(HttpKnownMethod::kHead, response);
         RUVIA_CHECK(writePlan.bodySuppressed());
         RUVIA_CHECK(!writePlan.sendBody());
         RUVIA_CHECK_EQ(response.header("Content-Encoding"), std::string_view("gzip"));
-        RUVIA_CHECK(
-            response.header("Vary").value_or(std::string_view{}).find("Accept-Encoding") !=
-                std::string_view::npos);
+        RUVIA_CHECK(response.header("Vary").value_or(std::string_view{}).find("Accept-Encoding") != std::string_view::npos);
     }
 }
 
 RUVIA_TEST(compress_skips_non_compressible_status_codes) {
     // 206/204/205/304 and any 1xx must never carry a compressed representation.
-    for (const ruvia::HttpStatusCode status : {
-             ruvia::http_status::kPartialContent,
-             ruvia::http_status::kNoContent,
-             ruvia::http_status::kResetContent,
-             ruvia::http_status::kNotModified}) {
+    for (const ruvia::HttpStatusCode status : {ruvia::http_status::kPartialContent, ruvia::http_status::kNoContent, ruvia::http_status::kResetContent, ruvia::http_status::kNotModified}) {
         auto response = responseWithBody(kCompressibleBody);
         response.status(status);
         RUVIA_CHECK(!tryCompress(response, Compression{.minBytes = 16}));
@@ -300,18 +260,13 @@ RUVIA_TEST(compress_respects_no_transform) {
 RUVIA_TEST(compress_respects_no_transform_in_later_cache_control_field) {
     auto response = responseWithBody(kCompressibleBody);
     response.header("Cache-Control", "public");
-    response.header(
-        "Cache-Control",
-        "no-transform",
-        HttpResponse::HeaderOptions{.append = true});
+    response.header("Cache-Control", "no-transform", HttpResponse::HeaderOptions{.append = true});
     RUVIA_CHECK(!tryCompress(response, Compression{.minBytes = 16}));
 }
 
 RUVIA_TEST(compress_ignores_no_transform_inside_quoted_extension) {
     auto response = responseWithBody(kCompressibleBody);
-    response.header(
-        "Cache-Control",
-        R"(extension="a, no-transform, b")");
+    response.header("Cache-Control", R"(extension="a, no-transform, b")");
     RUVIA_CHECK(tryCompress(response, Compression{.minBytes = 16}));
     RUVIA_CHECK_EQ(response.header("Content-Encoding"), std::string_view("gzip"));
 }
@@ -323,10 +278,7 @@ RUVIA_TEST(compress_skips_already_encoded_body) {
 }
 
 RUVIA_TEST(compress_declares_vary_for_negotiated_but_uncompressed_responses) {
-    const auto varies = [](HttpResponse& r) {
-        return r.header("Vary").value_or(std::string_view{}).find("Accept-Encoding") !=
-            std::string_view::npos;
-    };
+    const auto varies = [](HttpResponse& r) { return r.header("Vary").value_or(std::string_view{}).find("Accept-Encoding") != std::string_view::npos; };
 
     // A compressible representation is selected by Accept-Encoding, so it must carry
     // Vary even when THIS response is left identity: below the size threshold, or the
@@ -411,9 +363,7 @@ RUVIA_TEST(compress_skips_video_audio_and_container_media_types) {
     // Beyond image/*, the full already-compressed set is video/*, audio/*, and the
     // specific container application types. Compressing these wastes CPU for no size
     // win, so each family and each exact container type must be left uncompressed.
-    for (const char* type : {"video/mp4", "audio/mpeg", "application/gzip",
-                             "application/x-gzip", "application/zip", "application/zstd",
-                             "application/pdf", "application/octet-stream"}) {
+    for (const char* type : {"video/mp4", "audio/mpeg", "application/gzip", "application/x-gzip", "application/zip", "application/zstd", "application/pdf", "application/octet-stream"}) {
         auto response = responseWithBody(kCompressibleBody);
         response.header("Content-Type", type);
         RUVIA_CHECK(!tryCompress(response, Compression{.minBytes = 16}));

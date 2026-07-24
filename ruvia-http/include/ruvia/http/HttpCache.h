@@ -12,15 +12,15 @@ namespace ruvia {
 // This type reports wire directives only; cache freshness and reuse policy belong to the caller.
 struct CacheControl {
     bool noStore{false};
-    bool noCache{false};            // bare or field-name form -- both require revalidation
-    bool noTransform{false};        // intermediaries must not transform the content
+    bool noCache{false};      // bare or field-name form -- both require revalidation
+    bool noTransform{false};  // intermediaries must not transform the content
     bool mustRevalidate{false};
     bool proxyRevalidate{false};
-    bool isPrivate{false};          // "private" (not for a shared cache)
+    bool isPrivate{false};  // "private" (not for a shared cache)
     bool isPublic{false};
     bool immutable{false};
-    bool onlyIfCached{false};       // request directive
-    bool maxStaleAny{false};        // bare request max-stale
+    bool onlyIfCached{false};  // request directive
+    bool maxStaleAny{false};   // bare request max-stale
     std::optional<std::uint64_t> maxAge;
     std::optional<std::uint64_t> maxStale;
     std::optional<std::uint64_t> minFresh;

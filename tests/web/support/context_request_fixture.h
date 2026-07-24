@@ -48,15 +48,11 @@ struct MethodObservation final {
     HttpKnownMethod knownMethod{HttpKnownMethod::kGet};
 };
 
-inline ruvia::Task<ruvia::ContextRequest::RequestFormData> parseRequestBody(
-    ruvia::Context& context,
-    ruvia::ContextRequest::ParseBodyOptions options) {
+inline ruvia::Task<ruvia::ContextRequest::RequestFormData> parseRequestBody(ruvia::Context& context, ruvia::ContextRequest::ParseBodyOptions options) {
     co_return co_await context.req().parseBody(options);
 }
 
-inline asio::awaitable<void> readMethod(
-    ruvia::Context& context,
-    MethodObservation& observation) {
+inline asio::awaitable<void> readMethod(ruvia::Context& context, MethodObservation& observation) {
     const auto request = context.req();
     observation.method.assign(request.method().data(), request.method().size());
     observation.knownMethod = request.knownMethod();
@@ -64,23 +60,16 @@ inline asio::awaitable<void> readMethod(
 }
 
 inline asio::awaitable<void> parseProtoBody(ruvia::Context& context, bool& safeOk, bool& protoDropped) {
-    const auto form = co_await ruvia::detail::taskAsAwaitable(
-        parseRequestBody(context, {
-            .dottedNames = ruvia::ContextRequest::DottedNamePolicy::kExpandPath,
-        }));
+    const auto form = co_await ruvia::detail::taskAsAwaitable(parseRequestBody(context, {
+                                                                                            .dottedNames = ruvia::ContextRequest::DottedNamePolicy::kExpandPath,
+                                                                                        }));
     const auto safe = form.get("safe").value();
     safeOk = safe.has_value() && *safe == std::string_view("ok");
     protoDropped = !static_cast<bool>(form.get("__proto__"));
 }
 
-inline asio::awaitable<void> parseArrayForm(
-    ruvia::Context& context,
-    std::size_t& tagsSize,
-    bool& tagsArray,
-    std::size_t& xSize,
-    std::string& xValue) {
-    const auto form = co_await ruvia::detail::taskAsAwaitable(
-        parseRequestBody(context, {}));
+inline asio::awaitable<void> parseArrayForm(ruvia::Context& context, std::size_t& tagsSize, bool& tagsArray, std::size_t& xSize, std::string& xValue) {
+    const auto form = co_await ruvia::detail::taskAsAwaitable(parseRequestBody(context, {}));
     const auto tags = form.get("tags[]");
     tagsSize = tags.size();
     tagsArray = tags.array();
@@ -91,14 +80,8 @@ inline asio::awaitable<void> parseArrayForm(
     }
 }
 
-inline asio::awaitable<void> parseRepeatedFiles(
-    ruvia::Context& context,
-    std::size_t& count,
-    std::size_t& fileCount,
-    bool& sawA,
-    bool& sawB) {
-    const auto form = co_await ruvia::detail::taskAsAwaitable(
-        parseRequestBody(context, {}));
+inline asio::awaitable<void> parseRepeatedFiles(ruvia::Context& context, std::size_t& count, std::size_t& fileCount, bool& sawA, bool& sawB) {
+    const auto form = co_await ruvia::detail::taskAsAwaitable(parseRequestBody(context, {}));
     const auto photos = form.get("photos");
     count = photos.size();
     for (const auto* field : photos.fields()) {
@@ -115,11 +98,8 @@ inline asio::awaitable<void> parseRepeatedFiles(
     }
 }
 
-inline asio::awaitable<void> parsePartContentType(
-    ruvia::Context& context,
-    std::string& contentType) {
-    const auto form = co_await ruvia::detail::taskAsAwaitable(
-        parseRequestBody(context, {}));
+inline asio::awaitable<void> parsePartContentType(ruvia::Context& context, std::string& contentType) {
+    const auto form = co_await ruvia::detail::taskAsAwaitable(parseRequestBody(context, {}));
     const auto upload = form.get("upload");
     if (const auto* field = upload.field(); field != nullptr) {
         const auto value = field->contentType();
@@ -127,28 +107,19 @@ inline asio::awaitable<void> parsePartContentType(
     }
 }
 
-inline asio::awaitable<void> parseWithFieldCap(
-    ruvia::Context& context,
-    std::size_t maxFields,
-    bool& rejected,
-    int& status) {
+inline asio::awaitable<void> parseWithFieldCap(ruvia::Context& context, std::size_t maxFields, bool& rejected, int& status) {
     try {
-        (void)co_await ruvia::detail::taskAsAwaitable(parseRequestBody(
-            context, {.maxFields = maxFields}));
+        (void)co_await ruvia::detail::taskAsAwaitable(parseRequestBody(context, {.maxFields = maxFields}));
     } catch (const ruvia::HttpError& error) {
         rejected = true;
         status = error.info().status().value();
     }
 }
 
-inline asio::awaitable<void> parseAllRepeatedScalar(
-    ruvia::Context& context,
-    std::size_t& valueCount,
-    std::string& selectedValue) {
-    const auto form = co_await ruvia::detail::taskAsAwaitable(
-        parseRequestBody(context, {
-            .repeatedScalars = ruvia::ContextRequest::RepeatedScalarPolicy::kRetainAll,
-        }));
+inline asio::awaitable<void> parseAllRepeatedScalar(ruvia::Context& context, std::size_t& valueCount, std::string& selectedValue) {
+    const auto form = co_await ruvia::detail::taskAsAwaitable(parseRequestBody(context, {
+                                                                                            .repeatedScalars = ruvia::ContextRequest::RepeatedScalarPolicy::kRetainAll,
+                                                                                        }));
     const auto value = form.get("x");
     valueCount = value.size();
     if (const auto selected = value.value()) {
@@ -156,14 +127,8 @@ inline asio::awaitable<void> parseAllRepeatedScalar(
     }
 }
 
-inline asio::awaitable<void> parseMultipart(
-    ruvia::Context& context,
-    std::string& nameValue,
-    std::string& fileName,
-    std::string& fileType,
-    std::string& fileData) {
-    const auto form = co_await ruvia::detail::taskAsAwaitable(
-        parseRequestBody(context, {}));
+inline asio::awaitable<void> parseMultipart(ruvia::Context& context, std::string& nameValue, std::string& fileName, std::string& fileType, std::string& fileData) {
+    const auto form = co_await ruvia::detail::taskAsAwaitable(parseRequestBody(context, {}));
     if (const auto nv = form.get("name").value(); nv.has_value()) {
         nameValue.assign(nv->data(), nv->size());
     }
@@ -181,14 +146,8 @@ inline asio::awaitable<void> parseBodyDiscard(ruvia::Context& context) {
     (void)co_await ruvia::detail::taskAsAwaitable(parseRequestBody(context, {}));
 }
 
-inline asio::awaitable<void> parseScalarPair(
-    ruvia::Context& context,
-    std::string& aValue,
-    bool& aPresent,
-    std::string& bValue,
-    bool& bPresent) {
-    const auto form = co_await ruvia::detail::taskAsAwaitable(
-        parseRequestBody(context, {}));
+inline asio::awaitable<void> parseScalarPair(ruvia::Context& context, std::string& aValue, bool& aPresent, std::string& bValue, bool& bPresent) {
+    const auto form = co_await ruvia::detail::taskAsAwaitable(parseRequestBody(context, {}));
     if (const auto v = form.get("a").value(); v.has_value()) {
         aValue.assign(v->data(), v->size());
         aPresent = true;
