@@ -412,6 +412,7 @@ if(RUVIA_BUILD_CORE)
             core/scoped_operation_lifetime_violation.cpp WILL_FAIL)
     endif()
 
+    ruvia_add_test(ruvia_blocking_pool core/blocking_pool.cpp LIB ruvia::core)
     ruvia_add_test(ruvia_channel core/channel.cpp LIB ruvia::core)
     ruvia_add_test(ruvia_one_shot core/one_shot.cpp LIB ruvia::core)
     ruvia_add_test(ruvia_worker_timer core/worker_timer.cpp LIB ruvia::core)
