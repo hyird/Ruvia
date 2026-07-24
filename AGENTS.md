@@ -63,7 +63,7 @@ tests/support/
 测试文件名只描述被测对象，不重复所在目录已经表达的信息：
 `http/http2/hpack.cpp`，不是 `http/http2/unit_hpack.cpp`；
 `web/server/write_timeout.cpp`，不是 `web/server/server_write_timeout.cpp`。
-`ruvia_unit_tests` 的源码列表按目录分组、组内字母序，不要往末尾追加。
+单元测试 target 的源码列表按目录分组、组内字母序，不要往末尾追加。
 
 不要把 HTTP/1、HTTP/2、WebSocket 或 Web server 测试重新散放到 `tests/`
 根目录；target 专属的边界守卫、支撑代码、基准和一致性测试跟随所属
@@ -276,8 +276,8 @@ Router/error handler 不得设置 `Connection: close` 或接收 `closeConnection
 - Windows 只支持 MSVC，依赖使用 `x64-windows-static`；Windows CI 也必须
   使用同一 static triplet。项目不覆盖 CMake 的 MSVC runtime 默认值。
 - outbound HTTP client 只保留在 `ruvia-http` 的 sans-I/O API；`ruvia-web` 不提供 client socket/TLS runtime、连接池、`fetch`、`proxy` 或反向代理集成。
-- 安装包暴露 `ruvia::core`、`ruvia::http`、`ruvia::web`，不暴露历史别名。
-- 下游按需请求 `web`、`core` 或 `http` component；消费示例只放在 README。
+- 安装包暴露 `ruvia::core`、`ruvia::http`、`ruvia::web`、`ruvia::edge`，不暴露历史别名。
+- 下游按需请求 `core`、`http`、`web` 或 `edge` component；消费示例只放在 README。
 
 ## 验证要求
 

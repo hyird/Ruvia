@@ -412,7 +412,7 @@ never offloads should not pay for idle threads.
 - Supported build platforms: Linux, macOS, and Windows 10 or newer. Windows
   builds require MSVC.
 - Component dependencies: core uses Asio; HTTP uses zlib, Brotli, and zstd;
-  Web adds OpenSSL.
+  Web and Edge add OpenSSL.
 - Optional vcpkg features: MariaDB, PostgreSQL, Redis, and JWT.
 
 ## Build
@@ -516,8 +516,8 @@ cmake --install build --prefix build/install
 For a Visual Studio build, add the selected configuration, for example
 `cmake --install build --config Release --prefix build/install`.
 
-Each library has an independent export. Consumers request the component they
-use:
+Each library has an independent export. Consumers must request the component
+they use:
 
 ```cmake
 find_package(ruvia CONFIG REQUIRED COMPONENTS web)
