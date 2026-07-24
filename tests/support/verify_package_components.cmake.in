@@ -1,0 +1,45 @@
+set(_generated_config "@CMAKE_BINARY_DIR@/ruviaConfig.cmake")
+set(_config_template "@CMAKE_SOURCE_DIR@/cmake/ruviaConfig.cmake.in")
+
+# Package imports must be explicit. A component-less find_package used to import
+# every installed target, which silently pulled Web/Edge dependencies into
+# consumers that had not opted into those products.
+if(NOT EXISTS "${_generated_config}")
+    message(FATAL_ERROR
+        "ruvia_guard_package_components has no generated package config: "
+        "${_generated_config}")
+endif()
+
+set(ruvia_FIND_COMPONENTS)
+include("${_generated_config}")
+
+if(NOT DEFINED ruvia_FOUND OR NOT ruvia_FOUND STREQUAL "FALSE")
+    message(FATAL_ERROR
+        "ruvia_guard_package_components: component-less package import must "
+        "set ruvia_FOUND to FALSE")
+endif()
+
+if(NOT DEFINED ruvia_NOT_FOUND_MESSAGE OR
+   NOT ruvia_NOT_FOUND_MESSAGE MATCHES "requires at least one explicit component")
+    message(FATAL_ERROR
+        "ruvia_guard_package_components: component-less package import must "
+        "explain that a component is required")
+endif()
+
+file(READ "${_config_template}" _template)
+if(_template MATCHES
+   "set\\([ \t]*_ruvia_requested[ \t]+\\$\\{ruvia_AVAILABLE_COMPONENTS\\}[ \t]*\\)")
+    message(FATAL_ERROR
+        "ruvia_guard_package_components: package config still defaults a "
+        "component-less request to every available component")
+endif()
+
+if(_template MATCHES "\\bIN_LIST\\b")
+    message(FATAL_ERROR
+        "ruvia_guard_package_components: package config must not depend on the "
+        "consumer's CMP0057 policy for IN_LIST")
+endif()
+
+message(STATUS
+    "ruvia_guard_package_components: find_package(ruvia) requires explicit "
+    "components")

@@ -69,9 +69,10 @@ constexpr std::string_view kClientPreface = "PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n";
 // response. Uses a graceful shutdown (FIN) instead of a linger-0 abortive close
 // (RST): on Windows IOCP an abortive RST teardown does not reliably complete the
 // server session's pending overlapped async_read, so runHttp2SansIoSession's reader
-// stays blocked and io.run() hangs forever (the whole ruvia_unit_tests binary then
-// times out on the first such test). A FIN delivers a clean EOF that terminates the
-// session on every platform -- the same teardown the HTTP/2 server socket tests use.
+// stays blocked and io.run() hangs forever (the whole ruvia_web_unit_tests
+// binary then times out on the first such test). A FIN delivers a clean EOF that
+// terminates the session on every platform -- the same teardown the HTTP/2
+// server socket tests use.
 inline void closeClientSocket(tcp::socket& socket) noexcept {
     asio::error_code ignored;
     socket.shutdown(asio::socket_base::shutdown_both, ignored);

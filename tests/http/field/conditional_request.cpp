@@ -1,28 +1,9 @@
 #include "test_harness.h"
 
-#include <cstddef>
-#include <ctime>
-#include <memory_resource>
-#include <string>
 #include <string_view>
 
 #include "ruvia/http/detail/field/HttpConditionalRequest.h"
-#include "ruvia/http/detail/field/HttpDate.h"
 #include "ruvia/http/detail/field/HttpEntityTag.h"
-#include "ruvia/web/detail/http/static/StaticFileMetadata.h"
-
-namespace {
-
-std::string fileEtag(
-    std::uint64_t size,
-    std::uint64_t modifiedToken,
-    ruvia::detail::ResponseFileIdentity identity) {
-    const auto out = ruvia::detail::makeStaticFileSnapshotEtag(
-        std::pmr::get_default_resource(), size, modifiedToken, identity);
-    return std::string(out.data(), out.size());
-}
-
-}  // namespace
 
 // ETag comparison and IMF-fixdate parsing back the conditional-request handling
 // (If-Match / If-None-Match / If-Range, RFC 9110) for static file responses.
@@ -115,19 +96,4 @@ RUVIA_TEST(etag_list_parses_opaque_commas_and_rejects_malformed_suffixes) {
         R"("current", malformed)", R"("current")", true);
     RUVIA_CHECK(!malformedAfterMatch.valid);
     RUVIA_CHECK(!malformedAfterMatch.matched);
-}
-
-RUVIA_TEST(file_etag_deterministic_and_sensitive) {
-    const auto identity = ruvia::detail::ResponseFileIdentity::checked(
-        {1, 2, 3, 4});
-    const auto replacement = ruvia::detail::ResponseFileIdentity::checked(
-        {1, 2, 3, 5});
-    const auto base = fileEtag(100, 123456, identity);
-    // The strong validator binds framing metadata and the exact indexed file.
-    RUVIA_CHECK_EQ(base, std::string("\"100-123456-1-2-3-4\""));
-    RUVIA_CHECK_EQ(base, fileEtag(100, 123456, identity));
-    RUVIA_CHECK(base != fileEtag(101, 123456, identity));
-    RUVIA_CHECK(base != fileEtag(100, 123457, identity));
-    RUVIA_CHECK(base != fileEtag(100, 123456, replacement));
-    RUVIA_CHECK(base.size() >= 2 && base.front() == '"' && base.back() == '"');  // quoted-string
 }

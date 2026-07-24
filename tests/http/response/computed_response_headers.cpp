@@ -2,31 +2,14 @@
 
 #include <array>
 #include <cstdint>
-#include <concepts>
 #include <memory_resource>
 #include <limits>
 #include <stdexcept>
-#include <string>
 #include <string_view>
-#include <tuple>
-#include <type_traits>
-#include <utility>
 
-#include "ruvia/http/detail/field/HeaderTokenUtils.h"
-#include "ruvia/http/detail/request/HttpRequestAccess.h"
-#include "ruvia/http/detail/response/HttpResponseBodyAccess.h"
 #include "ruvia/http/detail/response/HttpResponseHeaderState.h"
-#include "ruvia/http/detail/server/HttpResponseStreamHead.h"
-#include "ruvia/web/Context.h"
-#include "ruvia/web/Error.h"
-#include "ruvia/http/HttpHeader.h"
 #include "ruvia/http/HttpKnownMethod.h"
 #include "ruvia/http/HttpResponse.h"
-#include "ruvia/web/StaticFiles.h"
-#include "ruvia/web/detail/http/static/StaticFileMetadata.h"
-#include "ruvia/web/detail/http/static/StaticRootIndex.h"
-#include "ruvia/web/detail/server/file/HttpFileOpen.h"
-#include "ruvia/core/memory/MemoryPool.h"
 
 namespace {
 

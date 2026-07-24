@@ -37,13 +37,6 @@ using ruvia::detail::redisValueArray;
 using ruvia::detail::redisValueInteger;
 using ruvia::detail::redisValueString;
 
-// Build a nil hiredis reply (e.g. a BLPOP timeout).
-redisReply nilReply() {
-    redisReply reply{};
-    reply.type = REDIS_REPLY_NIL;
-    return reply;
-}
-
 RedisValue toNilValue() {
     return RedisTypesAccess::nullValue(std::pmr::get_default_resource());
 }

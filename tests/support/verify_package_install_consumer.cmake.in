@@ -1,0 +1,281 @@
+set(_build_dir [=[@CMAKE_BINARY_DIR@]=])
+set(_scratch_root [=[@CMAKE_CURRENT_BINARY_DIR@/package_install_consumer]=])
+set(_prefix "${_scratch_root}/prefix")
+set(_consumer_root "${_scratch_root}/consumers")
+set(_package_dir "${_prefix}/@CMAKE_INSTALL_LIBDIR@/cmake/ruvia")
+
+# This guard performs the missing installed-package check: consumers do not read
+# the build tree's source targets; they read the installed config and export
+# files. A component request must import only that component's dependency
+# closure, while component-less and unavailable requests must fail.
+file(REMOVE_RECURSE "${_scratch_root}")
+file(MAKE_DIRECTORY "${_consumer_root}")
+
+set(_install_args --install "${_build_dir}" --prefix "${_prefix}")
+if(DEFINED RUVIA_TEST_CONFIG AND NOT RUVIA_TEST_CONFIG STREQUAL "")
+    list(APPEND _install_args --config "${RUVIA_TEST_CONFIG}")
+endif()
+
+execute_process(
+    COMMAND "@CMAKE_COMMAND@" ${_install_args}
+    RESULT_VARIABLE _install_result
+    OUTPUT_VARIABLE _install_output
+    ERROR_VARIABLE _install_error)
+if(NOT _install_result EQUAL 0)
+    message(FATAL_ERROR
+        "ruvia_guard_package_install_consumer: failed to install the current "
+        "build to ${_prefix}. Build the selected Ruvia targets before running "
+        "this guard.\n${_install_output}${_install_error}")
+endif()
+
+if(NOT EXISTS "${_package_dir}/ruviaConfig.cmake")
+    message(FATAL_ERROR
+        "ruvia_guard_package_install_consumer: installed prefix has no package "
+        "config at ${_package_dir}/ruviaConfig.cmake")
+endif()
+
+set(_generator_args -G "@CMAKE_GENERATOR@")
+if(NOT "@CMAKE_GENERATOR_PLATFORM@" STREQUAL "")
+    list(APPEND _generator_args -A "@CMAKE_GENERATOR_PLATFORM@")
+endif()
+if(NOT "@CMAKE_GENERATOR_TOOLSET@" STREQUAL "")
+    list(APPEND _generator_args -T "@CMAKE_GENERATOR_TOOLSET@")
+endif()
+
+set(_toolchain_file [=[@CMAKE_TOOLCHAIN_FILE@]=])
+set(_vcpkg_installed_dir [=[@VCPKG_INSTALLED_DIR@]=])
+set(_vcpkg_target_triplet [=[@VCPKG_TARGET_TRIPLET@]=])
+set(_vcpkg_host_triplet [=[@VCPKG_HOST_TRIPLET@]=])
+
+function(ruvia_consumer_common_args out package_prefix)
+    set(_consumer_prefix_path "${package_prefix}")
+    if(NOT _vcpkg_installed_dir STREQUAL "" AND
+       NOT _vcpkg_target_triplet STREQUAL "" AND
+       EXISTS "${_vcpkg_installed_dir}/${_vcpkg_target_triplet}")
+        string(APPEND _consumer_prefix_path
+            "\\;${_vcpkg_installed_dir}/${_vcpkg_target_triplet}")
+    endif()
+
+    set(_args
+        ${_generator_args}
+        "-DCMAKE_PREFIX_PATH=${_consumer_prefix_path}")
+    if(NOT _toolchain_file STREQUAL "")
+        list(APPEND _args "-DCMAKE_TOOLCHAIN_FILE=${_toolchain_file}")
+    endif()
+    if(NOT _vcpkg_installed_dir STREQUAL "")
+        list(APPEND _args "-DVCPKG_INSTALLED_DIR=${_vcpkg_installed_dir}")
+    endif()
+    if(NOT _vcpkg_target_triplet STREQUAL "")
+        list(APPEND _args "-DVCPKG_TARGET_TRIPLET=${_vcpkg_target_triplet}")
+    endif()
+    if(NOT _vcpkg_host_triplet STREQUAL "")
+        list(APPEND _args "-DVCPKG_HOST_TRIPLET=${_vcpkg_host_triplet}")
+    endif()
+    if(NOT "@CMAKE_BUILD_TYPE@" STREQUAL "")
+        list(APPEND _args "-DCMAKE_BUILD_TYPE=@CMAKE_BUILD_TYPE@")
+    endif()
+    set(${out} "${_args}" PARENT_SCOPE)
+endfunction()
+
+function(ruvia_install_components component_prefix)
+    file(REMOVE_RECURSE "${component_prefix}")
+    foreach(_component IN LISTS ARGN)
+        set(_component_install_args
+            --install "${_build_dir}"
+            --prefix "${component_prefix}"
+            --component "${_component}")
+        if(DEFINED RUVIA_TEST_CONFIG AND NOT RUVIA_TEST_CONFIG STREQUAL "")
+            list(APPEND _component_install_args --config "${RUVIA_TEST_CONFIG}")
+        endif()
+
+        execute_process(
+            COMMAND "@CMAKE_COMMAND@" ${_component_install_args}
+            RESULT_VARIABLE _component_install_result
+            OUTPUT_VARIABLE _component_install_output
+            ERROR_VARIABLE _component_install_error)
+        if(NOT _component_install_result EQUAL 0)
+            message(FATAL_ERROR
+                "ruvia_guard_package_install_consumer: failed to install "
+                "component ${_component} to ${component_prefix}. Build the "
+                "selected Ruvia targets before running this guard.\n"
+                "${_component_install_output}${_component_install_error}")
+        endif()
+    endforeach()
+endfunction()
+
+function(ruvia_run_consumer name expected_result expected_message)
+    set(_package_prefix "${_prefix}")
+    if(ARGC GREATER 3)
+        set(_package_prefix "${ARGV3}")
+    endif()
+    ruvia_consumer_common_args(_consumer_common_args "${_package_prefix}")
+
+    set(_source_dir "${_consumer_root}/${name}")
+    set(_consumer_build_dir "${_consumer_root}/${name}-build")
+    execute_process(
+        COMMAND "@CMAKE_COMMAND@"
+            -S "${_source_dir}"
+            -B "${_consumer_build_dir}"
+            ${_consumer_common_args}
+        RESULT_VARIABLE _result
+        OUTPUT_VARIABLE _output
+        ERROR_VARIABLE _error)
+    set(_combined_output "${_output}${_error}")
+
+    if("${expected_result}" STREQUAL "PASS")
+        if(NOT _result EQUAL 0)
+            message(FATAL_ERROR
+                "ruvia_guard_package_install_consumer: consumer ${name} "
+                "should configure successfully.\n${_combined_output}")
+        endif()
+    elseif("${expected_result}" STREQUAL "FAIL")
+        if(_result EQUAL 0)
+            message(FATAL_ERROR
+                "ruvia_guard_package_install_consumer: consumer ${name} "
+                "should fail but configured successfully")
+        endif()
+        if(NOT "${expected_message}" STREQUAL "" AND
+           NOT _combined_output MATCHES "${expected_message}")
+            message(FATAL_ERROR
+                "ruvia_guard_package_install_consumer: consumer ${name} "
+                "failed for the wrong reason; expected message pattern "
+                "'${expected_message}'.\n${_combined_output}")
+        endif()
+    else()
+        message(FATAL_ERROR
+            "ruvia_guard_package_install_consumer: unknown expected result "
+            "${expected_result}")
+    endif()
+endfunction()
+
+function(ruvia_write_consumer name content)
+    set(_source_dir "${_consumer_root}/${name}")
+    file(MAKE_DIRECTORY "${_source_dir}")
+    file(WRITE "${_source_dir}/CMakeLists.txt" "${content}")
+endfunction()
+
+function(ruvia_component_expectations requested_component out)
+    set(_content "")
+    foreach(_component IN ITEMS core http web edge)
+        set(_should_exist FALSE)
+        if("${_component}" STREQUAL "${requested_component}")
+            set(_should_exist TRUE)
+        elseif("${requested_component}" STREQUAL "web" AND
+               ("${_component}" STREQUAL "core" OR "${_component}" STREQUAL "http"))
+            set(_should_exist TRUE)
+        elseif("${requested_component}" STREQUAL "edge" AND
+               ("${_component}" STREQUAL "core" OR "${_component}" STREQUAL "http"))
+            set(_should_exist TRUE)
+        endif()
+
+        if(_should_exist)
+            string(APPEND _content
+                "if(NOT TARGET ruvia::${_component})\n"
+                "    message(FATAL_ERROR \"missing expected imported target ruvia::${_component}\")\n"
+                "endif()\n")
+        else()
+            string(APPEND _content
+                "if(TARGET ruvia::${_component})\n"
+                "    message(FATAL_ERROR \"unexpected imported target ruvia::${_component}\")\n"
+                "endif()\n")
+        endif()
+    endforeach()
+    set(${out} "${_content}" PARENT_SCOPE)
+endfunction()
+
+ruvia_write_consumer(no_components [=[
+cmake_minimum_required(VERSION 3.24)
+project(ruvia_no_component_consumer LANGUAGES CXX)
+find_package(ruvia CONFIG REQUIRED)
+]=])
+ruvia_run_consumer(
+    no_components FAIL "requires at least one explicit component")
+
+ruvia_write_consumer(unknown_component [=[
+cmake_minimum_required(VERSION 3.24)
+project(ruvia_unknown_component_consumer LANGUAGES CXX)
+find_package(ruvia CONFIG REQUIRED COMPONENTS not_a_component)
+]=])
+ruvia_run_consumer(unknown_component FAIL "")
+
+set(_available_components "")
+foreach(_component IN ITEMS core http web edge)
+    set(_component_available_${_component} FALSE)
+    if(EXISTS "${_package_dir}/ruvia-${_component}-targets.cmake")
+        set(_component_available_${_component} TRUE)
+        list(APPEND _available_components "${_component}")
+    endif()
+endforeach()
+
+if(_available_components STREQUAL "")
+    message(FATAL_ERROR
+        "ruvia_guard_package_install_consumer: installed package exposes no "
+        "Ruvia component export files")
+endif()
+
+foreach(_component IN LISTS _available_components)
+    ruvia_component_expectations("${_component}" _expectations)
+    ruvia_write_consumer("component_${_component}" "
+cmake_minimum_required(VERSION 3.24)
+project(ruvia_${_component}_consumer LANGUAGES CXX)
+find_package(ruvia CONFIG REQUIRED COMPONENTS ${_component})
+${_expectations}
+add_library(consumer INTERFACE)
+target_link_libraries(consumer INTERFACE ruvia::${_component})
+")
+    ruvia_run_consumer("component_${_component}" PASS "")
+endforeach()
+
+foreach(_component IN LISTS _available_components)
+    set(_component_prefix "${_scratch_root}/component-prefix-${_component}")
+    if("${_component}" STREQUAL "core" OR "${_component}" STREQUAL "http")
+        ruvia_install_components("${_component_prefix}" Development "${_component}")
+        ruvia_component_expectations("${_component}" _expectations)
+        ruvia_write_consumer("component_${_component}_slice" "
+cmake_minimum_required(VERSION 3.24)
+project(ruvia_${_component}_slice_consumer LANGUAGES CXX)
+find_package(ruvia CONFIG REQUIRED COMPONENTS ${_component})
+${_expectations}
+")
+        ruvia_run_consumer("component_${_component}_slice" PASS "" "${_component_prefix}")
+    elseif("${_component}" STREQUAL "web" OR "${_component}" STREQUAL "edge")
+        ruvia_install_components("${_component_prefix}" Development "${_component}")
+        ruvia_write_consumer("component_${_component}_incomplete_slice" "
+cmake_minimum_required(VERSION 3.24)
+project(ruvia_${_component}_incomplete_slice_consumer LANGUAGES CXX)
+find_package(ruvia CONFIG REQUIRED COMPONENTS ${_component})
+")
+        ruvia_run_consumer(
+            "component_${_component}_incomplete_slice" FAIL "" "${_component_prefix}")
+
+        set(_component_closure_prefix
+            "${_scratch_root}/component-prefix-${_component}-closure")
+        ruvia_install_components(
+            "${_component_closure_prefix}" Development core http "${_component}")
+        ruvia_component_expectations("${_component}" _expectations)
+        ruvia_write_consumer("component_${_component}_closure_slice" "
+cmake_minimum_required(VERSION 3.24)
+project(ruvia_${_component}_closure_slice_consumer LANGUAGES CXX)
+find_package(ruvia CONFIG REQUIRED COMPONENTS ${_component})
+${_expectations}
+")
+        ruvia_run_consumer(
+            "component_${_component}_closure_slice" PASS "" "${_component_closure_prefix}")
+    endif()
+endforeach()
+
+foreach(_component IN ITEMS core http web edge)
+    if(NOT _component_available_${_component})
+        ruvia_write_consumer("missing_${_component}" "
+cmake_minimum_required(VERSION 3.24)
+project(ruvia_missing_${_component}_consumer LANGUAGES CXX)
+find_package(ruvia CONFIG REQUIRED COMPONENTS ${_component})
+")
+        ruvia_run_consumer("missing_${_component}" FAIL "")
+    endif()
+endforeach()
+
+list(JOIN _available_components ", " _available_text)
+message(STATUS
+    "ruvia_guard_package_install_consumer: installed consumers verified for "
+    "components: ${_available_text}")

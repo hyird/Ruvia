@@ -1,20 +1,12 @@
 #include "test_harness.h"
 
-#include <cstdint>
-#include <limits>
 #include <memory_resource>
 #include <optional>
-#include <span>
-#include <stdexcept>
 #include <string>
 #include <string_view>
 #include <vector>
 
-#include "ruvia/core/detail/util/Base64.h"
-#include "ruvia/core/detail/util/Base64Url.h"
-#include "ruvia/http/detail/util/HttpNumberFormat.h"
 #include "ruvia/http/UrlEncoding.h"
-#include "ruvia/http/detail/util/Hex.h"
 
 namespace {
 
@@ -30,14 +22,6 @@ std::optional<std::string> urlDecode(std::string_view in, ruvia::detail::UrlDeco
 }
 
 }  // namespace
-
-// --- Base64 (RFC 4648 test vectors) --------------------------------------
-
-// --- Hex nibble ----------------------------------------------------------
-
-// --- URL decoding --------------------------------------------------------
-
-// --- Number formatting ---------------------------------------------------
 
 // Percent-encoding: decoding a component or a form field, validating one, and walking encoded pairs.
 

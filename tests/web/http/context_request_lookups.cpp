@@ -1,5 +1,7 @@
 #include "context_request_fixture.h"
 
+#include <vector>
+
 // Reading a request through Context: cookies, query, route params and headers, and the caches each lookup shares.
 
 RUVIA_TEST(context_request_cookie_single_lookup_does_not_materialize_cookie_list) {
@@ -232,6 +234,47 @@ RUVIA_TEST(context_request_param_rejects_and_remembers_malformed_percent_encodin
     RUVIA_CHECK(storage != nullptr);
     RUVIA_CHECK(storage->routeParamsInvalid);
     RUVIA_CHECK(!storage->routeParams.has_value());
+}
+
+RUVIA_TEST(context_request_accepts_merges_multiple_accept_field_lines) {
+    const auto accepts = [](std::vector<std::string_view> acceptLines, std::string_view mediaType) {
+        WorkerMemory worker;
+        RequestMemory memory(worker);
+        HttpRequest request = HttpRequestAccess::make();
+        HttpRequestAccess::reset(request);
+        HttpRequestAccess::setMethod(request, "GET");
+        HttpRequestAccess::setResource(request, memory.resource());
+        const auto slot = HttpRequestAccess::knownHeaderSlot(RequestKnownHeader::kAccept);
+        for (const auto line : acceptLines) {
+            HttpRequestAccess::addHeader(request, HttpHeaderView{"Accept", line}, slot);
+        }
+        auto context = ContextAccess::make(memory, request);
+        return context.req().accepts(mediaType);
+    };
+
+    // No Accept header -> the client accepts anything.
+    RUVIA_CHECK(accepts({}, "text/html"));
+    // A present but empty Accept list is distinct from an absent field: it has
+    // no matching media range. Empty members remain harmless when another field
+    // line supplies an actual range.
+    RUVIA_CHECK(!accepts({""}, "text/html"));
+    RUVIA_CHECK(accepts({"", "text/html"}, "text/html"));
+    // A single line behaves as before.
+    RUVIA_CHECK(accepts({"text/html"}, "text/html"));
+    RUVIA_CHECK(!accepts({"text/html"}, "application/json"));
+
+    // RFC 9110 5.3: two Accept lines are equivalent to their comma-join. A type
+    // offered only on the SECOND line must be accepted -- previously the stored
+    // known-header slot held one line and the other was ignored.
+    RUVIA_CHECK(accepts({"text/html", "application/json"}, "application/json"));
+    RUVIA_CHECK(accepts({"text/html", "application/json"}, "text/html"));
+    RUVIA_CHECK(!accepts({"text/html", "application/json"}, "image/png"));
+
+    // A q=0 exclusion whose range is more specific than an accepting range on
+    // another line must win, exactly as if joined "text/*, text/html;q=0" -- which
+    // a naive per-line OR would get wrong.
+    RUVIA_CHECK(!accepts({"text/*", "text/html;q=0"}, "text/html"));
+    RUVIA_CHECK(accepts({"text/*", "text/html;q=0"}, "text/plain"));
 }
 
 RUVIA_TEST(context_request_header_lookup_uses_last_match) {

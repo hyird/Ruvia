@@ -1,34 +1,14 @@
 #include "test_harness.h"
 
-#include <cstdint>
 #include <limits>
 #include <memory_resource>
-#include <optional>
-#include <span>
 #include <stdexcept>
 #include <string>
-#include <string_view>
-#include <vector>
 
-#include "ruvia/core/detail/util/Base64.h"
-#include "ruvia/core/detail/util/Base64Url.h"
 #include "ruvia/http/detail/util/HttpNumberFormat.h"
-#include "ruvia/http/UrlEncoding.h"
-#include "ruvia/http/detail/util/Hex.h"
 
-// This file covers number formatting only; the base64 and URL-decode helpers it
-// was split from live with their own tests in byte_encoding.cpp and
-// url_encoding.cpp.
-
-// --- Base64 (RFC 4648 test vectors) --------------------------------------
-
-// --- Hex nibble ----------------------------------------------------------
-
-// --- URL decoding --------------------------------------------------------
-
-// --- Number formatting ---------------------------------------------------
-
-// Writing numbers into a field value, including the finite check a formatted double must pass.
+// Writing numbers into HTTP field values, including the finite check a
+// formatted double must pass.
 
 RUVIA_TEST(number_unsigned_decimal_size) {
     using ruvia::detail::httpUnsignedDecimalSize;

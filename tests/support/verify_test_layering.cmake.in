@@ -1,0 +1,265 @@
+set(_ruvia_source_root "@CMAKE_SOURCE_DIR@")
+
+# Test directories mirror product target ownership. A target test may use
+# neutral test infrastructure and declared dependency targets, but it must not
+# directly include APIs or support fixtures outside that target's allowed
+# dependency set. This keeps misplaced runtime tests from slowly re-entering
+# tests/http or tests/core after refactors.
+
+function(_ruvia_assert_matches _label _pattern _probe)
+    string(REGEX MATCH "${_pattern}" _match "${_probe}")
+    if(NOT _match)
+        message(FATAL_ERROR
+            "ruvia_guard_test_layering self-test failed, pattern lost probe "
+            "${_label}: ${_pattern}")
+    endif()
+endfunction()
+
+function(_ruvia_assert_ignores _label _pattern _probe)
+    string(REGEX MATCH "${_pattern}" _match "${_probe}")
+    if(_match)
+        message(FATAL_ERROR
+            "ruvia_guard_test_layering self-test failed, pattern matched benign "
+            "${_label}: ${_match}")
+    endif()
+endfunction()
+
+function(_ruvia_scan_forbidden_test_includes _label)
+    cmake_parse_arguments(C "" "" "ROOTS;PATTERNS" ${ARGN})
+    set(_source_files)
+    foreach(_source_root IN LISTS C_ROOTS)
+        file(GLOB_RECURSE _root_files LIST_DIRECTORIES FALSE
+            "${_source_root}/*.h"
+            "${_source_root}/*.cpp"
+            "${_source_root}/*.inl")
+        list(APPEND _source_files ${_root_files})
+    endforeach()
+
+    foreach(_source_file IN LISTS _source_files)
+        file(READ "${_source_file}" _source_text)
+        foreach(_pattern IN LISTS C_PATTERNS)
+            string(REGEX MATCH "${_pattern}" _match "${_source_text}")
+            if(_match)
+                file(RELATIVE_PATH _relative_source
+                    "${_ruvia_source_root}" "${_source_file}")
+                string(REPLACE "\n" "\\n" _printable_match "${_match}")
+                message(FATAL_ERROR
+                    "forbidden cross-layer include in ${_label}: "
+                    "${_relative_source}: ${_printable_match}")
+            endif()
+        endforeach()
+    endforeach()
+endfunction()
+
+function(_ruvia_collect_support_header_names _out)
+    set(_names)
+    foreach(_support_root ${ARGN})
+        file(GLOB _support_headers LIST_DIRECTORIES FALSE
+            "${_support_root}/*.h"
+            "${_support_root}/*.hpp"
+            "${_support_root}/*.inl")
+        foreach(_support_header IN LISTS _support_headers)
+            get_filename_component(_support_name "${_support_header}" NAME)
+            list(APPEND _names "${_support_name}")
+        endforeach()
+    endforeach()
+    if(_names)
+        list(REMOVE_DUPLICATES _names)
+        list(SORT _names)
+    endif()
+    set(${_out} "${_names}" PARENT_SCOPE)
+endfunction()
+
+function(_ruvia_scan_forbidden_support_headers _label)
+    cmake_parse_arguments(C "" "" "ROOTS;FORBIDDEN_NAMES" ${ARGN})
+    set(_source_files)
+    foreach(_source_root IN LISTS C_ROOTS)
+        file(GLOB_RECURSE _root_files LIST_DIRECTORIES FALSE
+            "${_source_root}/*.h"
+            "${_source_root}/*.cpp"
+            "${_source_root}/*.inl")
+        list(APPEND _source_files ${_root_files})
+    endforeach()
+
+    foreach(_source_file IN LISTS _source_files)
+        file(STRINGS "${_source_file}" _source_lines)
+        foreach(_source_line IN LISTS _source_lines)
+            string(REGEX MATCH
+                [=[^[ \t]*#[ \t]*include[ \t]*"([^"]+)"]=]
+                _include_match
+                "${_source_line}")
+            if(NOT _include_match)
+                continue()
+            endif()
+            set(_include_path "${CMAKE_MATCH_1}")
+            get_filename_component(_include_name "${_include_path}" NAME)
+            list(FIND C_FORBIDDEN_NAMES "${_include_name}" _forbidden_name_index)
+            if(NOT _forbidden_name_index EQUAL -1)
+                file(RELATIVE_PATH _relative_source
+                    "${_ruvia_source_root}" "${_source_file}")
+                message(FATAL_ERROR
+                    "forbidden cross-layer support include in ${_label}: "
+                    "${_relative_source}: ${_source_line}")
+            endif()
+        endforeach()
+    endforeach()
+endfunction()
+
+set(_core_product_include_pattern
+    [=[(^|\n)[ \t]*#[ \t]*include[ \t]*[<"][^>"]*ruvia/(http|web|edge)/]=])
+set(_http_product_include_pattern
+    [=[(^|\n)[ \t]*#[ \t]*include[ \t]*[<"][^>"]*ruvia/(core|web|edge)/]=])
+set(_web_product_include_pattern
+    [=[(^|\n)[ \t]*#[ \t]*include[ \t]*[<"][^>"]*ruvia/edge/]=])
+set(_edge_product_include_pattern
+    [=[(^|\n)[ \t]*#[ \t]*include[ \t]*[<"][^>"]*ruvia/web/]=])
+
+set(_core_local_include_pattern
+    [=[(^|\n)[ \t]*#[ \t]*include[ \t]*"([^"]*/)?(http|web|edge)/]=])
+set(_http_local_include_pattern
+    [=[(^|\n)[ \t]*#[ \t]*include[ \t]*"([^"]*/)?(core|web|edge)/]=])
+set(_web_local_include_pattern
+    [=[(^|\n)[ \t]*#[ \t]*include[ \t]*"([^"]*/)?edge/]=])
+set(_edge_local_include_pattern
+    [=[(^|\n)[ \t]*#[ \t]*include[ \t]*"([^"]*/)?web/]=])
+
+_ruvia_assert_matches(
+    core_product
+    "${_core_product_include_pattern}"
+    "#include <ruvia/http/HttpResponse.h>")
+_ruvia_assert_matches(
+    http_product
+    "${_http_product_include_pattern}"
+    "#include \"ruvia/core/Task.h\"")
+_ruvia_assert_matches(
+    http_web_product
+    "${_http_product_include_pattern}"
+    "#include \"ruvia/web/Context.h\"")
+_ruvia_assert_matches(
+    web_product
+    "${_web_product_include_pattern}"
+    "#include <ruvia/edge/EdgeServer.h>")
+_ruvia_assert_matches(
+    edge_product
+    "${_edge_product_include_pattern}"
+    "#include <ruvia/web/App.h>")
+_ruvia_assert_matches(
+    http_local
+    "${_http_local_include_pattern}"
+    "#include \"../core/support/runtime_fixture.h\"")
+_ruvia_assert_matches(
+    http_web_local
+    "${_http_local_include_pattern}"
+    "#include \"../web/support/http2_sansio_session_fixture.h\"")
+_ruvia_assert_matches(
+    core_local
+    "${_core_local_include_pattern}"
+    "#include \"../http/support/content_decoding_fixture.h\"")
+_ruvia_assert_matches(
+    web_local
+    "${_web_local_include_pattern}"
+    "#include \"../edge/edge_testbed.h\"")
+_ruvia_assert_matches(
+    edge_local
+    "${_edge_local_include_pattern}"
+    "#include \"../web/support/context_request_fixture.h\"")
+
+_ruvia_assert_ignores(
+    commented_include
+    "${_http_product_include_pattern}"
+    "// #include \"ruvia/web/Context.h\"")
+_ruvia_assert_ignores(
+    similarly_named_directory
+    "${_http_local_include_pattern}"
+    "#include \"websocket/connection_fixture.h\"")
+
+set(_support_probe_names "context_request_fixture.h")
+list(FIND _support_probe_names "context_request_fixture.h" _support_probe_index)
+if(_support_probe_index EQUAL -1)
+    message(FATAL_ERROR
+        "ruvia_guard_test_layering self-test failed, support-name probe missing")
+endif()
+string(REGEX MATCH
+    [=[^[ \t]*#[ \t]*include[ \t]*"([^"]+)"]=]
+    _support_probe_match
+    "#include \"context_request_fixture.h\"")
+if(NOT _support_probe_match)
+    message(FATAL_ERROR
+        "ruvia_guard_test_layering self-test failed, local include parser lost probe")
+endif()
+get_filename_component(_support_probe_name "${CMAKE_MATCH_1}" NAME)
+list(FIND _support_probe_names "${_support_probe_name}" _support_probe_index)
+if(_support_probe_index EQUAL -1)
+    message(FATAL_ERROR
+        "ruvia_guard_test_layering self-test failed, support basename was not detected")
+endif()
+
+_ruvia_collect_support_header_names(_http_support_header_names
+    "${_ruvia_source_root}/tests/http/support")
+_ruvia_collect_support_header_names(_web_support_header_names
+    "${_ruvia_source_root}/tests/web/support")
+_ruvia_collect_support_header_names(_edge_support_header_names
+    "${_ruvia_source_root}/tests/edge")
+
+set(_core_forbidden_support_headers
+    ${_http_support_header_names}
+    ${_web_support_header_names}
+    ${_edge_support_header_names})
+set(_http_forbidden_support_headers
+    ${_web_support_header_names}
+    ${_edge_support_header_names})
+set(_web_forbidden_support_headers
+    ${_edge_support_header_names})
+set(_edge_forbidden_support_headers
+    ${_web_support_header_names})
+
+_ruvia_scan_forbidden_test_includes(core-tests
+    ROOTS
+        "${_ruvia_source_root}/tests/core"
+    PATTERNS
+        "${_core_product_include_pattern}"
+        "${_core_local_include_pattern}")
+_ruvia_scan_forbidden_support_headers(core-tests
+    ROOTS
+        "${_ruvia_source_root}/tests/core"
+    FORBIDDEN_NAMES
+        ${_core_forbidden_support_headers})
+
+_ruvia_scan_forbidden_test_includes(http-tests
+    ROOTS
+        "${_ruvia_source_root}/tests/http"
+    PATTERNS
+        "${_http_product_include_pattern}"
+        "${_http_local_include_pattern}")
+_ruvia_scan_forbidden_support_headers(http-tests
+    ROOTS
+        "${_ruvia_source_root}/tests/http"
+    FORBIDDEN_NAMES
+        ${_http_forbidden_support_headers})
+
+_ruvia_scan_forbidden_test_includes(web-tests
+    ROOTS
+        "${_ruvia_source_root}/tests/web"
+    PATTERNS
+        "${_web_product_include_pattern}"
+        "${_web_local_include_pattern}")
+_ruvia_scan_forbidden_support_headers(web-tests
+    ROOTS
+        "${_ruvia_source_root}/tests/web"
+    FORBIDDEN_NAMES
+        ${_web_forbidden_support_headers})
+
+_ruvia_scan_forbidden_test_includes(edge-tests
+    ROOTS
+        "${_ruvia_source_root}/tests/edge"
+    PATTERNS
+        "${_edge_product_include_pattern}"
+        "${_edge_local_include_pattern}")
+_ruvia_scan_forbidden_support_headers(edge-tests
+    ROOTS
+        "${_ruvia_source_root}/tests/edge"
+    FORBIDDEN_NAMES
+        ${_edge_forbidden_support_headers})
+
+message(STATUS
+    "ruvia_guard_test_layering: tests/core,http,web,edge include boundaries hold")

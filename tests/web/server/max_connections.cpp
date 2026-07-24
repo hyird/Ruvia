@@ -32,7 +32,6 @@ constexpr auto kHeaderTimeout = std::chrono::seconds(4);
 constexpr auto kRejectionBound = std::chrono::seconds(1);
 
 void connectAndHold(
-    asio::io_context& context,
     asio::ip::tcp::socket& socket,
     const asio::ip::tcp::endpoint& endpoint) {
     std::error_code ec;
@@ -66,7 +65,7 @@ int main() {
     {
         // Fill the single slot.
         asio::ip::tcp::socket first(clientContext);
-        connectAndHold(clientContext, first, endpoint);
+        connectAndHold(first, endpoint);
         // Let the accept loop admit and count the first connection before the
         // second races in (generous for a loaded CI runner).
         std::this_thread::sleep_for(std::chrono::milliseconds(500));
