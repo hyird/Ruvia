@@ -1,16 +1,17 @@
 // Worker-local state and blocking work: useWorkerState<T> per-worker
 // instances shared by the HTTP and dispatch paths, cross-worker task posting
-// via App::workerFor / WebWorkerHandle::post, and the sanctioned pattern for
-// blocking calls -- run them on your own thread (or pool) and hand the result
-// back to the request coroutine through a OneShot, keeping the worker free.
+// via App::workerFor / WebWorkerHandle::post, and Context::runBlocking() --
+// the escape hatch for calls that block, which run on App::setBlockingPool()'s
+// threads so the worker stays free to serve its other connections.
 
 #include <chrono>
 #include <cstdint>
+#include <string>
 #include <string_view>
 #include <thread>
 #include <utility>
 
-#include "ruvia/core/OneShot.h"
+#include "ruvia/core/BlockingPool.h"
 #include "ruvia/web/App.h"
 #include "ruvia/web/Controller.h"
 
@@ -40,6 +41,7 @@ public:
     RUVIA_ROUTES_BEGIN
     RUVIA_GET("/stats", stats);
     RUVIA_GET("/offload", offload);
+    RUVIA_GET("/offload-or-shed", offloadOrShed);
     RUVIA_GET("/fanout", fanout);
     RUVIA_ROUTES_END
 
@@ -56,32 +58,44 @@ private:
         co_return c.text(std::move(body));
     }
 
-    // Blocking escape hatch: the framework never runs blocking code for you.
-    // Run it on a thread you own and complete a OneShot bound to this
-    // request's worker; complete() is safe from any thread and the coroutine
-    // resumes on its worker, which stayed free to serve other requests.
+    // Blocking escape hatch. The callable runs on a pool thread, so it must own
+    // what it touches: the query value is copied into the lambda, never
+    // borrowed from the request. The handler suspends and resumes on its own
+    // worker, which kept serving other connections meanwhile. A saturated pool
+    // throws BlockingOperationRejected at the co_await, which the default error
+    // path answers with 503.
     ruvia::Task<ruvia::HttpResponse> offload(ruvia::Context& c) {
-        auto [completion, receiver] =
-            ruvia::makeOneShot<std::uint64_t>(c.worker());
-        // A real application submits to a long-lived pool instead of
-        // spawning a thread per request.
-        std::thread([completion = std::move(completion)]() mutable {
-            (void)completion.complete(slowChecksum("expensive input"));
-        }).detach();
+        const auto checksum = co_await c.runBlocking(
+            [input = std::string(c.req().query("input").value_or("default"))] {
+                return slowChecksum(input);
+            });
+        std::pmr::string body(c.resource());
+        body.append("checksum=");
+        body.append(std::to_string(checksum));
+        body.push_back('\n');
+        co_return c.text(std::move(body));
+    }
 
-        const auto result = co_await receiver.wait();
-        if (const auto* value = result.value()) {
-            std::pmr::string body(c.resource());
-            body.append("checksum=");
-            body.append(std::to_string(*value));
-            body.push_back('\n');
-            co_return c.text(std::move(body));
+    // The same work, with the overload answered by this handler instead of by
+    // the error path, and a deadline so one wedged call cannot pin the request
+    // forever.
+    ruvia::Task<ruvia::HttpResponse> offloadOrShed(ruvia::Context& c) {
+        auto result = co_await c.tryRunBlocking(
+            std::chrono::seconds(2),
+            [input = std::string("expensive input")] {
+                return slowChecksum(input);
+            });
+        if (!result.completed()) {
+            co_return c.error(
+                ruvia::http_status::kServiceUnavailable,
+                "busy",
+                ruvia::describeBlockingStatus(result.status()));
         }
-        // closed()/stopping(): the worker is shutting down mid-wait.
-        co_return c.error(
-            ruvia::http_status::kServiceUnavailable,
-            "shutting_down",
-            "worker is stopping");
+        std::pmr::string body(c.resource());
+        body.append("checksum=");
+        body.append(std::to_string(std::move(result).value()));
+        body.push_back('\n');
+        co_return c.text(std::move(body));
     }
 
     // Cross-worker dispatch: pick a worker by key and post a job onto its
@@ -115,5 +129,13 @@ int main() {
         // Each worker builds its own WorkerStats before serving; the factory
         // form (useWorkerState<T>(fn)) covers non-default-constructible types.
         .useWorkerState<WorkerStats>()
+        // One pool for the whole process, shared by every worker. Without it,
+        // runBlocking() reports the missing configuration instead of blocking
+        // a worker. App::blockingPoolStats() reports queue depth and rejections
+        // to size these two numbers from.
+        .setBlockingPool(ruvia::BlockingPoolOptions{
+            .threadCount = 4,
+            .queueCapacity = 128,
+        })
         .run();
 }
