@@ -51,9 +51,7 @@ public:
         std::span<const HttpHeaderView> headers_;
     };
 
-    explicit HttpInterimResponseHead(
-        HttpStatusCode statusCode,
-        HeaderInit headers = {});
+    explicit HttpInterimResponseHead(HttpStatusCode statusCode, HeaderInit headers = {});
 
     [[nodiscard]] constexpr HttpStatusCode status() const noexcept {
         return statusCode_;

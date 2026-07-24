@@ -6,13 +6,9 @@
 
 namespace ruvia::detail {
 
-inline std::optional<HttpRequestBodyFailure> contentLengthLimitFailure(
-    const Http1RequestBodyPlan& bodyPlan,
-    ProtocolByteLimit limit) noexcept {
+inline std::optional<HttpRequestBodyFailure> contentLengthLimitFailure(const Http1RequestBodyPlan& bodyPlan, ProtocolByteLimit limit) noexcept {
     const auto* knownLength = bodyPlan.knownLength();
-    return knownLength == nullptr
-        ? std::nullopt
-        : httpRequestBodySizeFailure(knownLength->contentLength(), limit);
+    return knownLength == nullptr ? std::nullopt : httpRequestBodySizeFailure(knownLength->contentLength(), limit);
 }
 
 }  // namespace ruvia::detail

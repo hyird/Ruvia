@@ -5,10 +5,7 @@
 
 namespace ruvia::detail {
 
-enum class Http2ConnectForm : std::uint8_t {
-    kStandard,
-    kExtended
-};
+enum class Http2ConnectForm : std::uint8_t { kStandard, kExtended };
 
 class Http2TunnelState;
 
@@ -61,9 +58,7 @@ public:
         : state_(Http2NotConnect()) {}
 
     [[nodiscard]] bool begin(Http2ConnectForm form) noexcept {
-        if ((form != Http2ConnectForm::kStandard &&
-             form != Http2ConnectForm::kExtended) ||
-            notConnect() == nullptr) {
+        if ((form != Http2ConnectForm::kStandard && form != Http2ConnectForm::kExtended) || notConnect() == nullptr) {
             return false;
         }
         state_ = State(Http2ConnectPending(form));
@@ -86,40 +81,28 @@ public:
         return true;
     }
 
-    [[nodiscard]] constexpr const Http2NotConnect*
-    notConnect() const & noexcept {
+    [[nodiscard]] constexpr const Http2NotConnect* notConnect() const& noexcept {
         return std::get_if<Http2NotConnect>(&state_);
     }
-    [[nodiscard]] constexpr const Http2NotConnect*
-    notConnect() const && = delete;
+    [[nodiscard]] constexpr const Http2NotConnect* notConnect() const&& = delete;
 
-    [[nodiscard]] constexpr const Http2ConnectPending*
-    pending() const & noexcept {
+    [[nodiscard]] constexpr const Http2ConnectPending* pending() const& noexcept {
         return std::get_if<Http2ConnectPending>(&state_);
     }
-    [[nodiscard]] constexpr const Http2ConnectPending*
-    pending() const && = delete;
+    [[nodiscard]] constexpr const Http2ConnectPending* pending() const&& = delete;
 
-    [[nodiscard]] constexpr const Http2TunnelOpen*
-    open() const & noexcept {
+    [[nodiscard]] constexpr const Http2TunnelOpen* open() const& noexcept {
         return std::get_if<Http2TunnelOpen>(&state_);
     }
-    [[nodiscard]] constexpr const Http2TunnelOpen*
-    open() const && = delete;
+    [[nodiscard]] constexpr const Http2TunnelOpen* open() const&& = delete;
 
-    [[nodiscard]] constexpr const Http2ConnectRejected*
-    rejected() const & noexcept {
+    [[nodiscard]] constexpr const Http2ConnectRejected* rejected() const& noexcept {
         return std::get_if<Http2ConnectRejected>(&state_);
     }
-    [[nodiscard]] constexpr const Http2ConnectRejected*
-    rejected() const && = delete;
+    [[nodiscard]] constexpr const Http2ConnectRejected* rejected() const&& = delete;
 
 private:
-    using State = std::variant<
-        Http2NotConnect,
-        Http2ConnectPending,
-        Http2TunnelOpen,
-        Http2ConnectRejected>;
+    using State = std::variant<Http2NotConnect, Http2ConnectPending, Http2TunnelOpen, Http2ConnectRejected>;
 
     State state_;
 };

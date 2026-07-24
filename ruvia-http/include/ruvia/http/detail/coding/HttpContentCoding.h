@@ -43,8 +43,7 @@ public:
     }
 };
 
-[[nodiscard]] inline constexpr std::string_view
-httpSupportedRequestContentCodings() noexcept {
+[[nodiscard]] inline constexpr std::string_view httpSupportedRequestContentCodings() noexcept {
     return "gzip, br, zstd";
 }
 
@@ -57,34 +56,29 @@ public:
     explicit HttpContentCodingFieldResult(HttpContentCoding coding) noexcept
         : value_(coding) {}
 
-    explicit HttpContentCodingFieldResult(
-        HttpUnsupportedContentCoding unsupported) noexcept
+    explicit HttpContentCodingFieldResult(HttpUnsupportedContentCoding unsupported) noexcept
         : value_(unsupported) {}
 
-    explicit HttpContentCodingFieldResult(
-        HttpInvalidContentCodingField invalid) noexcept
+    explicit HttpContentCodingFieldResult(HttpInvalidContentCodingField invalid) noexcept
         : value_(invalid) {}
 
-    [[nodiscard]] const HttpContentCoding* coding() const & noexcept {
+    [[nodiscard]] const HttpContentCoding* coding() const& noexcept {
         return std::get_if<HttpContentCoding>(&value_);
     }
-    const HttpContentCoding* coding() const && = delete;
+    const HttpContentCoding* coding() const&& = delete;
 
-    [[nodiscard]] const HttpUnsupportedContentCoding* unsupported() const & noexcept {
+    [[nodiscard]] const HttpUnsupportedContentCoding* unsupported() const& noexcept {
         return std::get_if<HttpUnsupportedContentCoding>(&value_);
     }
-    const HttpUnsupportedContentCoding* unsupported() const && = delete;
+    const HttpUnsupportedContentCoding* unsupported() const&& = delete;
 
-    [[nodiscard]] const HttpInvalidContentCodingField* invalid() const & noexcept {
+    [[nodiscard]] const HttpInvalidContentCodingField* invalid() const& noexcept {
         return std::get_if<HttpInvalidContentCodingField>(&value_);
     }
-    const HttpInvalidContentCodingField* invalid() const && = delete;
+    const HttpInvalidContentCodingField* invalid() const&& = delete;
 
 private:
-    std::variant<
-        HttpContentCoding,
-        HttpUnsupportedContentCoding,
-        HttpInvalidContentCodingField> value_;
+    std::variant<HttpContentCoding, HttpUnsupportedContentCoding, HttpInvalidContentCodingField> value_;
 };
 
 // Accumulates the list grammar across every Content-Encoding field line (RFC
@@ -94,9 +88,9 @@ private:
 // explicit unsupported metadata, not malformed syntax.
 class HttpContentCodingFieldParser final {
 public:
-    explicit HttpContentCodingFieldParser(
-        HttpFieldListRole role = HttpFieldListRole::kRecipient) noexcept
-        : role_(role), state_(std::in_place_type<Supported>) {}
+    explicit HttpContentCodingFieldParser(HttpFieldListRole role = HttpFieldListRole::kRecipient) noexcept
+        : role_(role),
+          state_(std::in_place_type<Supported>) {}
 
     void update(std::string_view value) noexcept;
 
@@ -109,22 +103,15 @@ private:
     };
 
     HttpFieldListRole role_;
-    std::variant<
-        Supported,
-        HttpUnsupportedContentCoding,
-        HttpInvalidContentCodingField> state_;
+    std::variant<Supported, HttpUnsupportedContentCoding, HttpInvalidContentCodingField> state_;
 };
 
-[[nodiscard]] bool isValidHttpContentEncodingFieldValue(
-    std::string_view value,
-    HttpFieldListRole role) noexcept;
+[[nodiscard]] bool isValidHttpContentEncodingFieldValue(std::string_view value, HttpFieldListRole role) noexcept;
 
-[[nodiscard]] HttpContentCodingFieldResult httpContentCodingFromFieldValue(
-    std::string_view value) noexcept;
+[[nodiscard]] HttpContentCodingFieldResult httpContentCodingFromFieldValue(std::string_view value) noexcept;
 
 template <typename Headers>
-[[nodiscard]] inline HttpContentCodingFieldResult httpContentCodingFromHeaders(
-    const Headers& headers) noexcept {
+[[nodiscard]] inline HttpContentCodingFieldResult httpContentCodingFromHeaders(const Headers& headers) noexcept {
     HttpContentCodingFieldParser parser;
     for (const auto& header : headers) {
         if (httpAsciiEqualsIgnoreCase(header.name(), "Content-Encoding")) {
@@ -134,10 +121,7 @@ template <typename Headers>
     return parser.finish();
 }
 
-enum class HttpContentEncodeError : std::uint8_t {
-    kEncodedSizeExceeded,
-    kEncoderFailure
-};
+enum class HttpContentEncodeError : std::uint8_t { kEncodedSizeExceeded, kEncoderFailure };
 
 class HttpEncodedContent final {
 public:
@@ -146,10 +130,10 @@ public:
     HttpEncodedContent(HttpEncodedContent&&) noexcept = default;
     HttpEncodedContent& operator=(HttpEncodedContent&&) = delete;
 
-    [[nodiscard]] std::string_view bytes() const & noexcept {
+    [[nodiscard]] std::string_view bytes() const& noexcept {
         return bytes_;
     }
-    std::string_view bytes() const && = delete;
+    std::string_view bytes() const&& = delete;
 
     [[nodiscard]] std::pmr::string takeBytes() && noexcept {
         return std::move(bytes_);
@@ -173,8 +157,7 @@ public:
 private:
     friend class HttpContentEncodeResult;
 
-    explicit constexpr HttpContentEncodeFailure(
-        HttpContentEncodeError error) noexcept
+    explicit constexpr HttpContentEncodeFailure(HttpContentEncodeError error) noexcept
         : error_(error) {}
 
     HttpContentEncodeError error_;
@@ -195,41 +178,34 @@ public:
         return std::get_if<HttpEncodedContent>(&value_);
     }
 
-    [[nodiscard]] const HttpEncodedContent* encoded() const & noexcept {
+    [[nodiscard]] const HttpEncodedContent* encoded() const& noexcept {
         return std::get_if<HttpEncodedContent>(&value_);
     }
     HttpEncodedContent* encoded() && = delete;
-    const HttpEncodedContent* encoded() const && = delete;
+    const HttpEncodedContent* encoded() const&& = delete;
 
-    [[nodiscard]] const HttpContentEncodeFailure* failure() const & noexcept {
+    [[nodiscard]] const HttpContentEncodeFailure* failure() const& noexcept {
         return std::get_if<HttpContentEncodeFailure>(&value_);
     }
-    const HttpContentEncodeFailure* failure() const && = delete;
+    const HttpContentEncodeFailure* failure() const&& = delete;
 
 private:
-    friend HttpContentEncodeResult encodeHttpContent(
-        HttpContentCoding,
-        std::string_view,
-        std::size_t,
-        std::pmr::memory_resource*);
+    friend HttpContentEncodeResult encodeHttpContent(HttpContentCoding, std::string_view, std::size_t, std::pmr::memory_resource*);
 
     using Value = std::variant<HttpEncodedContent, HttpContentEncodeFailure>;
 
-    [[nodiscard]] static HttpContentEncodeResult makeEncoded(
-        std::pmr::string bytes) noexcept {
+    [[nodiscard]] static HttpContentEncodeResult makeEncoded(std::pmr::string bytes) noexcept {
         return HttpContentEncodeResult(HttpEncodedContent(std::move(bytes)));
     }
 
-    [[nodiscard]] static HttpContentEncodeResult makeFailure(
-        HttpContentEncodeError error) noexcept {
+    [[nodiscard]] static HttpContentEncodeResult makeFailure(HttpContentEncodeError error) noexcept {
         return HttpContentEncodeResult(HttpContentEncodeFailure(error));
     }
 
     explicit HttpContentEncodeResult(HttpEncodedContent encoded) noexcept
         : value_(std::move(encoded)) {}
 
-    explicit HttpContentEncodeResult(
-        HttpContentEncodeFailure failure) noexcept
+    explicit HttpContentEncodeResult(HttpContentEncodeFailure failure) noexcept
         : value_(failure) {}
 
     Value value_;
@@ -238,18 +214,9 @@ private:
 // Produces one complete content-coded representation within the exact output
 // cap (zero means only a zero-byte encoding could succeed). HTTP zstd output is
 // constrained to RFC 9659's 8 MiB window limit.
-[[nodiscard]] HttpContentEncodeResult encodeHttpContent(
-    HttpContentCoding coding,
-    std::string_view input,
-    std::size_t maxEncodedBytes,
-    std::pmr::memory_resource* resource);
+[[nodiscard]] HttpContentEncodeResult encodeHttpContent(HttpContentCoding coding, std::string_view input, std::size_t maxEncodedBytes, std::pmr::memory_resource* resource);
 
-enum class HttpContentDecodeError : std::uint8_t {
-    kUnsupportedCoding,
-    kInvalidContent,
-    kDecodedSizeExceeded,
-    kDecoderFailure
-};
+enum class HttpContentDecodeError : std::uint8_t { kUnsupportedCoding, kInvalidContent, kDecodedSizeExceeded, kDecoderFailure };
 
 class HttpDecodedContent final {
 public:
@@ -258,10 +225,10 @@ public:
     HttpDecodedContent(HttpDecodedContent&&) noexcept = default;
     HttpDecodedContent& operator=(HttpDecodedContent&&) = delete;
 
-    [[nodiscard]] std::string_view bytes() const & noexcept {
+    [[nodiscard]] std::string_view bytes() const& noexcept {
         return bytes_;
     }
-    std::string_view bytes() const && = delete;
+    std::string_view bytes() const&& = delete;
 
     [[nodiscard]] std::pmr::string takeBytes() && noexcept {
         return std::move(bytes_);
@@ -285,8 +252,7 @@ public:
 private:
     friend class HttpContentDecodeResult;
 
-    explicit constexpr HttpContentDecodeFailure(
-        HttpContentDecodeError error) noexcept
+    explicit constexpr HttpContentDecodeFailure(HttpContentDecodeError error) noexcept
         : error_(error) {}
 
     HttpContentDecodeError error_;
@@ -306,46 +272,35 @@ public:
         return std::get_if<HttpDecodedContent>(&value_);
     }
 
-    [[nodiscard]] const HttpDecodedContent* decoded() const & noexcept {
+    [[nodiscard]] const HttpDecodedContent* decoded() const& noexcept {
         return std::get_if<HttpDecodedContent>(&value_);
     }
     HttpDecodedContent* decoded() && = delete;
-    const HttpDecodedContent* decoded() const && = delete;
+    const HttpDecodedContent* decoded() const&& = delete;
 
-    [[nodiscard]] const HttpContentDecodeFailure* failure() const & noexcept {
+    [[nodiscard]] const HttpContentDecodeFailure* failure() const& noexcept {
         return std::get_if<HttpContentDecodeFailure>(&value_);
     }
-    const HttpContentDecodeFailure* failure() const && = delete;
+    const HttpContentDecodeFailure* failure() const&& = delete;
 
 private:
-    friend HttpContentDecodeResult decodeHttpClientResponseContentEncoding(
-        const HttpClientResponseHead&,
-        std::string_view,
-        std::size_t,
-        std::pmr::memory_resource*);
-    friend HttpContentDecodeResult decodeHttpContent(
-        HttpContentCoding,
-        std::string_view,
-        std::size_t,
-        std::pmr::memory_resource*);
+    friend HttpContentDecodeResult decodeHttpClientResponseContentEncoding(const HttpClientResponseHead&, std::string_view, std::size_t, std::pmr::memory_resource*);
+    friend HttpContentDecodeResult decodeHttpContent(HttpContentCoding, std::string_view, std::size_t, std::pmr::memory_resource*);
 
     using Value = std::variant<HttpDecodedContent, HttpContentDecodeFailure>;
 
-    [[nodiscard]] static HttpContentDecodeResult makeDecoded(
-        std::pmr::string bytes) noexcept {
+    [[nodiscard]] static HttpContentDecodeResult makeDecoded(std::pmr::string bytes) noexcept {
         return HttpContentDecodeResult(HttpDecodedContent(std::move(bytes)));
     }
 
-    [[nodiscard]] static HttpContentDecodeResult makeFailure(
-        HttpContentDecodeError error) noexcept {
+    [[nodiscard]] static HttpContentDecodeResult makeFailure(HttpContentDecodeError error) noexcept {
         return HttpContentDecodeResult(HttpContentDecodeFailure(error));
     }
 
     explicit HttpContentDecodeResult(HttpDecodedContent decoded) noexcept
         : value_(std::move(decoded)) {}
 
-    explicit HttpContentDecodeResult(
-        HttpContentDecodeFailure failure) noexcept
+    explicit HttpContentDecodeResult(HttpContentDecodeFailure failure) noexcept
         : value_(failure) {}
 
     Value value_;
@@ -357,10 +312,6 @@ private:
 // terminal meta-block are rejected. The exact decoded-size cap is enforced
 // across every member/frame (zero means only an empty decoded representation is
 // allowed).
-[[nodiscard]] HttpContentDecodeResult decodeHttpContent(
-    HttpContentCoding coding,
-    std::string_view input,
-    std::size_t maxDecodedBytes,
-    std::pmr::memory_resource* resource);
+[[nodiscard]] HttpContentDecodeResult decodeHttpContent(HttpContentCoding coding, std::string_view input, std::size_t maxDecodedBytes, std::pmr::memory_resource* resource);
 
 }  // namespace ruvia::detail

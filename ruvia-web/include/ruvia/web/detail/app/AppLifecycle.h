@@ -27,15 +27,16 @@ enum class AppStartHooksCompletion {
 // independently mutable flag.
 class AppLifecycle final {
 public:
-    [[nodiscard]] AppLifecycleState state() const noexcept { return state_; }
+    [[nodiscard]] AppLifecycleState state() const noexcept {
+        return state_;
+    }
 
     [[nodiscard]] bool active() const noexcept {
         return state_ != AppLifecycleState::kStopped;
     }
 
     [[nodiscard]] bool stopRequested() const noexcept {
-        return state_ == AppLifecycleState::kStopRequestedDuringStartHooks ||
-               state_ == AppLifecycleState::kStopping;
+        return state_ == AppLifecycleState::kStopRequestedDuringStartHooks || state_ == AppLifecycleState::kStopping;
     }
 
     [[nodiscard]] bool beginRun() noexcept {
@@ -80,7 +81,9 @@ public:
         return AppStopRequest::kIgnored;
     }
 
-    void completeRun() noexcept { state_ = AppLifecycleState::kStopped; }
+    void completeRun() noexcept {
+        state_ = AppLifecycleState::kStopped;
+    }
 
 private:
     AppLifecycleState state_{AppLifecycleState::kStopped};

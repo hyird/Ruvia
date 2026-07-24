@@ -31,7 +31,6 @@
 
 namespace ruvia::edge {
 
-
 asio::awaitable<void> EdgeServer::Impl::acceptLoop() {
     // Pause length after an accept that failed for a reason retrying cannot fix
     // immediately: descriptor exhaustion, or a session that could not be
@@ -46,13 +45,10 @@ asio::awaitable<void> EdgeServer::Impl::acceptLoop() {
     };
 
     for (;;) {
-        auto [ec, socket] =
-            co_await acceptor_.async_accept(asio::as_tuple(asio::use_awaitable));
+        auto [ec, socket] = co_await acceptor_.async_accept(asio::as_tuple(asio::use_awaitable));
         if (ec) {
             // Cancelled or closed listener: this is shutdown, not a failure.
-            if (ec == asio::error::operation_aborted ||
-                ec == asio::error::bad_descriptor ||
-                ec == asio::error::invalid_argument) {
+            if (ec == asio::error::operation_aborted || ec == asio::error::bad_descriptor || ec == asio::error::invalid_argument) {
                 break;
             }
             // Everything else is transient (EMFILE/ENFILE, ECONNABORTED,
@@ -69,8 +65,7 @@ asio::awaitable<void> EdgeServer::Impl::acceptLoop() {
         // Over budget: accept and close immediately rather than leaving the
         // connection queued in the backlog, so the peer learns now and the
         // listener queue keeps draining.
-        if (maxConnections_.has_value() &&
-            activeConnections_.load(std::memory_order_relaxed) >= *maxConnections_) {
+        if (maxConnections_.has_value() && activeConnections_.load(std::memory_order_relaxed) >= *maxConnections_) {
             asio::error_code ignore;
             socket.close(ignore);
             connectionsRefused_.fetch_add(1, std::memory_order_relaxed);
@@ -85,14 +80,9 @@ asio::awaitable<void> EdgeServer::Impl::acceptLoop() {
         try {
             ConnectionLease lease(activeConnections_);
             if (tlsContext != nullptr) {
-                spawnTracked(
-                    handleTlsSession(
-                        std::move(socket), std::move(tlsContext), std::move(lease)),
-                    EdgeTaskKind::kSession);
+                spawnTracked(handleTlsSession(std::move(socket), std::move(tlsContext), std::move(lease)), EdgeTaskKind::kSession);
             } else {
-                spawnTracked(
-                    handleSession(std::move(socket), std::move(lease)),
-                    EdgeTaskKind::kSession);
+                spawnTracked(handleSession(std::move(socket), std::move(lease)), EdgeTaskKind::kSession);
             }
             continue;
         } catch (...) {
@@ -105,15 +95,11 @@ asio::awaitable<void> EdgeServer::Impl::acceptLoop() {
     }
 }
 
-asio::awaitable<void> EdgeServer::Impl::handleTlsSession(
-    asio::ip::tcp::socket socket,
-    TlsContextPtr context,
-    ConnectionLease lease) {
+asio::awaitable<void> EdgeServer::Impl::handleTlsSession(asio::ip::tcp::socket socket, TlsContextPtr context, ConnectionLease lease) {
     // The accept loop pins the context for this session's lifetime; a runtime
     // rotation only affects connections accepted afterward.
     asio::ssl::stream<asio::ip::tcp::socket> stream(std::move(socket), *context);
-    auto [ec] = co_await stream.async_handshake(
-        asio::ssl::stream_base::server, asio::as_tuple(asio::use_awaitable));
+    auto [ec] = co_await stream.async_handshake(asio::ssl::stream_base::server, asio::as_tuple(asio::use_awaitable));
     if (ec) {
         asio::error_code ignore;
         stream.lowest_layer().close(ignore);
@@ -140,9 +126,7 @@ asio::awaitable<void> EdgeServer::Impl::handleTlsSession(
 }
 
 template <typename Stream>
-asio::awaitable<void> EdgeServer::Impl::handleSession(
-    Stream stream,
-    [[maybe_unused]] ConnectionLease lease) {
+asio::awaitable<void> EdgeServer::Impl::handleSession(Stream stream, [[maybe_unused]] ConnectionLease lease) {
     using namespace asio::experimental::awaitable_operators;
 
     std::string clientAddress;
@@ -155,9 +139,7 @@ asio::awaitable<void> EdgeServer::Impl::handleSession(
     }
 
     const auto tuple = asio::as_tuple(asio::use_awaitable);
-    const auto writeStatus = [&stream, tuple](std::string wire) -> asio::awaitable<void> {
-        co_await asio::async_write(stream, asio::buffer(wire.data(), wire.size()), tuple);
-    };
+    const auto writeStatus = [&stream, tuple](std::string wire) -> asio::awaitable<void> { co_await asio::async_write(stream, asio::buffer(wire.data(), wire.size()), tuple); };
 
     std::string inbound;
     std::array<char, 8192> buffer;
@@ -174,51 +156,36 @@ asio::awaitable<void> EdgeServer::Impl::handleSession(
             auto parseState = parser.parseMessage(inbound);
             if (const auto* failure = parseState.failure()) {
                 const auto protocolError = failure->protocolError();
-                co_await writeStatus(encodeStatusResponse(
-                    protocolError.status().value(),
-                    parseState.connectionPlan.protocolVersion()));
+                co_await writeStatus(encodeStatusResponse(protocolError.status().value(), parseState.connectionPlan.protocolVersion()));
                 keepGoing = false;
                 break;
             }
             const auto* needBody = parseState.needRequestBody();
             const auto* ready = parseState.messageReady();
-            const bool exceedsEdgeRequestLimit =
-                (needBody != nullptr &&
-                 needBody->requiredTotalBytes().has_value() &&
-                 *needBody->requiredTotalBytes() > kMaxRequestBytes) ||
-                (ready != nullptr &&
-                 ready->messageBytes() > kMaxRequestBytes);
+            const bool exceedsEdgeRequestLimit = (needBody != nullptr && needBody->requiredTotalBytes().has_value() && *needBody->requiredTotalBytes() > kMaxRequestBytes) || (ready != nullptr && ready->messageBytes() > kMaxRequestBytes);
             if (exceedsEdgeRequestLimit) {
                 // Apply the edge product's tighter buffered-request policy to
                 // parser metadata before waiting for or dispatching the body.
                 // Checking only inbound.size() after messageReady lets the read
                 // that completes an oversized request jump over the limit.
-                co_await writeStatus(encodeStatusResponse(
-                    413, parseState.connectionPlan.protocolVersion()));
+                co_await writeStatus(encodeStatusResponse(413, parseState.connectionPlan.protocolVersion()));
                 keepGoing = false;
                 break;
             }
             if (ready != nullptr) {
                 consumed = ready->messageBytes();
-                const auto wireBody = std::string_view(inbound).substr(
-                    ready->headerBytes(),
-                    ready->messageBytes() - ready->headerBytes());
-                keepGoing = co_await handleFramedRequest(
-                    stream, parseState, wireBody, clientAddress);
+                const auto wireBody = std::string_view(inbound).substr(ready->headerBytes(), ready->messageBytes() - ready->headerBytes());
+                keepGoing = co_await handleFramedRequest(stream, parseState, wireBody, clientAddress);
                 framed = true;
                 break;
             }
             if (inbound.size() > kMaxRequestBytes) {
-                co_await writeStatus(encodeStatusResponse(
-                    413, parseState.connectionPlan.protocolVersion()));
+                co_await writeStatus(encodeStatusResponse(413, parseState.connectionPlan.protocolVersion()));
                 keepGoing = false;
                 break;
             }
             idleTimer.expires_after(kKeepAliveIdleTimeout);
-            auto raced = co_await (
-                stream.async_read_some(asio::buffer(buffer), tuple) ||
-                idleTimer.async_wait(tuple) ||
-                shutdownSignal_.async_wait(tuple));
+            auto raced = co_await (stream.async_read_some(asio::buffer(buffer), tuple) || idleTimer.async_wait(tuple) || shutdownSignal_.async_wait(tuple));
             if (raced.index() == 1) {
                 keepGoing = false;  // idle too long
                 break;
@@ -246,11 +213,7 @@ asio::awaitable<void> EdgeServer::Impl::handleSession(
 }
 
 template <typename Stream>
-asio::awaitable<bool> EdgeServer::Impl::handleFramedRequest(
-    Stream& stream,
-    const detail::Http1ServerRequestParseState& parsed,
-    std::string_view wireBody,
-    std::string_view clientAddress) {
+asio::awaitable<bool> EdgeServer::Impl::handleFramedRequest(Stream& stream, const detail::Http1ServerRequestParseState& parsed, std::string_view wireBody, std::string_view clientAddress) {
     const auto& request = parsed.request;
     Http1ResponseWriter<Stream> writer(stream, parsed.connectionPlan);
 
@@ -261,21 +224,17 @@ asio::awaitable<bool> EdgeServer::Impl::handleFramedRequest(
     edgeRequest.host = request.header("host").value_or("");
     edgeRequest.headers = request.headers();
     edgeRequest.clientAddress = clientAddress;
-    edgeRequest.keepAlive =
-        parsed.connectionPlan.disposition() ==
-        detail::Http1ConnectionDisposition::kReuse;
+    edgeRequest.keepAlive = parsed.connectionPlan.disposition() == detail::Http1ConnectionDisposition::kReuse;
 
     // Read and decode the request body for methods that carry one, so the serve
     // core can forward it. `decodedBody` backs edgeRequest.body across the serve.
     std::string decodedBody;
-    if (edgeRequest.knownMethod != HttpKnownMethod::kGet &&
-        edgeRequest.knownMethod != HttpKnownMethod::kHead) {
+    if (edgeRequest.knownMethod != HttpKnownMethod::kGet && edgeRequest.knownMethod != HttpKnownMethod::kHead) {
         const auto& bodyPlan = parsed.bodyPlan;
         if (bodyPlan.knownLength() != nullptr) {
             edgeRequest.body = wireBody;
         } else if (bodyPlan.chunked() != nullptr) {
-            ruvia::detail::Http1ChunkedBodyDecoder decoder(
-                ProtocolByteLimit::limited(kMaxRequestBytes));
+            ruvia::detail::Http1ChunkedBodyDecoder decoder(ProtocolByteLimit::limited(kMaxRequestBytes));
             std::string chunkBuffer(wireBody);
             bool decodeOk = true;
             for (;;) {
@@ -304,7 +263,7 @@ asio::awaitable<bool> EdgeServer::Impl::handleFramedRequest(
     }
 
     const bool continueServing = co_await serveRequest(edgeRequest, writer);
-    co_return continueServing && writer.connectionReusable();
+    co_return continueServing&& writer.connectionReusable();
 }
 
 }  // namespace ruvia::edge

@@ -15,44 +15,28 @@
 namespace {
 
 using ruvia::JwtAlgorithm;
-using ruvia::JwtClaim;
-using ruvia::JwtSignOptions;
-using ruvia::JwtVerifyOptions;
 using ruvia::jwtBearerToken;
+using ruvia::JwtClaim;
 using ruvia::jwtSign;
+using ruvia::JwtSignOptions;
 using ruvia::jwtVerify;
+using ruvia::JwtVerifyOptions;
 
 static_assert(std::is_empty_v<ruvia::detail::JwtPayloadAccess>);
-static_assert(std::is_same_v<
-    decltype(JwtSignOptions{}.expiresIn),
-    std::optional<std::chrono::seconds>>);
-static_assert(std::is_same_v<
-    decltype(JwtSignOptions{}.notBeforeDelay),
-    std::optional<std::chrono::seconds>>);
+static_assert(std::is_same_v<decltype(JwtSignOptions{}.expiresIn), std::optional<std::chrono::seconds>>);
+static_assert(std::is_same_v<decltype(JwtSignOptions{}.notBeforeDelay), std::optional<std::chrono::seconds>>);
 
 template <typename T>
-concept ExposesAnyRvalueJwtOwnedView =
-    requires(T&& value) { std::move(value).name(); } ||
-    requires(T&& value) { std::move(value).value(); } ||
-    requires(T&& value) { std::move(value).issuer(); } ||
-    requires(T&& value) { std::move(value).subject(); } ||
-    requires(T&& value) { std::move(value).audience(); } ||
-    requires(T&& value) { std::move(value).id(); } ||
-    requires(T&& value) { std::move(value).claims(); } ||
-    requires(T&& value) { std::move(value).claim(std::string_view{}); };
+concept ExposesAnyRvalueJwtOwnedView = requires(T&& value) { std::move(value).name(); } || requires(T&& value) { std::move(value).value(); } || requires(T&& value) { std::move(value).issuer(); } || requires(T&& value) { std::move(value).subject(); } || requires(T&& value) { std::move(value).audience(); } || requires(T&& value) { std::move(value).id(); } || requires(T&& value) { std::move(value).claims(); } || requires(T&& value) { std::move(value).claim(std::string_view{}); };
 
 static_assert(!ExposesAnyRvalueJwtOwnedView<ruvia::JwtClaim>);
 static_assert(!ExposesAnyRvalueJwtOwnedView<ruvia::JwtPayload>);
 
 template <typename Token>
-concept AcceptsJwtTokenSplit = requires(Token&& token) {
-    ruvia::detail::jwtSplitToken(std::forward<Token>(token));
-};
+concept AcceptsJwtTokenSplit = requires(Token&& token) { ruvia::detail::jwtSplitToken(std::forward<Token>(token)); };
 
 template <typename Authorization>
-concept AcceptsJwtBearerToken = requires(Authorization&& authorization) {
-    ruvia::jwtBearerToken(std::forward<Authorization>(authorization));
-};
+concept AcceptsJwtBearerToken = requires(Authorization&& authorization) { ruvia::jwtBearerToken(std::forward<Authorization>(authorization)); };
 
 static_assert(!AcceptsJwtTokenSplit<std::string>);
 static_assert(!AcceptsJwtTokenSplit<const std::string>);
@@ -86,10 +70,7 @@ std::string sign(const JwtSignOptions& options) {
     return std::string(token.data(), token.size());
 }
 
-std::string signedTokenWithHeaderAndPayload(
-    std::string_view secret,
-    std::string_view headerJson,
-    std::string_view payloadJson) {
+std::string signedTokenWithHeaderAndPayload(std::string_view secret, std::string_view headerJson, std::string_view payloadJson) {
     auto* const resource = std::pmr::get_default_resource();
     const auto header = ruvia::detail::jwtBase64UrlEncode(headerJson, resource);
     const auto payload = ruvia::detail::jwtBase64UrlEncode(payloadJson, resource);
@@ -97,21 +78,14 @@ std::string signedTokenWithHeaderAndPayload(
     signingInput.append(header);
     signingInput.push_back('.');
     signingInput.append(payload);
-    const auto signature = ruvia::detail::jwtHmacSign(
-        JwtAlgorithm::kHs256,
-        secret,
-        std::string_view(signingInput.data(), signingInput.size()),
-        resource);
+    const auto signature = ruvia::detail::jwtHmacSign(JwtAlgorithm::kHs256, secret, std::string_view(signingInput.data(), signingInput.size()), resource);
     signingInput.push_back('.');
     signingInput.append(signature);
     return std::string(signingInput.data(), signingInput.size());
 }
 
 std::string signedTokenWithPayload(std::string_view secret, std::string_view payloadJson) {
-    return signedTokenWithHeaderAndPayload(
-        secret,
-        R"({"alg":"HS256","typ":"JWT"})",
-        payloadJson);
+    return signedTokenWithHeaderAndPayload(secret, R"({"alg":"HS256","typ":"JWT"})", payloadJson);
 }
 
 template <typename Fn>
@@ -178,66 +152,29 @@ RUVIA_TEST(jwt_verify_rejects_algorithm_mismatch) {
 }
 
 RUVIA_TEST(jwt_verify_requires_unique_complete_json_objects) {
-    const auto duplicateAlgorithm = signedTokenWithHeaderAndPayload(
-        "secret",
-        R"({"alg":"HS256","alg":"HS256","typ":"JWT"})",
-        R"({"sub":"user-1","exp":4102444800})");
-    RUVIA_CHECK(throwsOn([&] {
-        (void)jwtVerify(duplicateAlgorithm, verifyOptions("secret"));
-    }));
+    const auto duplicateAlgorithm = signedTokenWithHeaderAndPayload("secret", R"({"alg":"HS256","alg":"HS256","typ":"JWT"})", R"({"sub":"user-1","exp":4102444800})");
+    RUVIA_CHECK(throwsOn([&] { (void)jwtVerify(duplicateAlgorithm, verifyOptions("secret")); }));
 
-    const auto duplicateUnknownHeader = signedTokenWithHeaderAndPayload(
-        "secret",
-        R"({"alg":"HS256","kid":"a","kid":"b"})",
-        R"({"sub":"user-1","exp":4102444800})");
-    RUVIA_CHECK(throwsOn([&] {
-        (void)jwtVerify(duplicateUnknownHeader, verifyOptions("secret"));
-    }));
+    const auto duplicateUnknownHeader = signedTokenWithHeaderAndPayload("secret", R"({"alg":"HS256","kid":"a","kid":"b"})", R"({"sub":"user-1","exp":4102444800})");
+    RUVIA_CHECK(throwsOn([&] { (void)jwtVerify(duplicateUnknownHeader, verifyOptions("secret")); }));
 
-    const auto trailingHeader = signedTokenWithHeaderAndPayload(
-        "secret",
-        R"({"alg":"HS256"}junk)",
-        R"({"sub":"user-1","exp":4102444800})");
-    RUVIA_CHECK(throwsOn([&] {
-        (void)jwtVerify(trailingHeader, verifyOptions("secret"));
-    }));
+    const auto trailingHeader = signedTokenWithHeaderAndPayload("secret", R"({"alg":"HS256"}junk)", R"({"sub":"user-1","exp":4102444800})");
+    RUVIA_CHECK(throwsOn([&] { (void)jwtVerify(trailingHeader, verifyOptions("secret")); }));
 
-    const auto unsupportedCriticalHeader = signedTokenWithHeaderAndPayload(
-        "secret",
-        R"({"alg":"HS256","crit":["custom"],"custom":true})",
-        R"({"sub":"user-1","exp":4102444800})");
-    RUVIA_CHECK(throwsOn([&] {
-        (void)jwtVerify(unsupportedCriticalHeader, verifyOptions("secret"));
-    }));
+    const auto unsupportedCriticalHeader = signedTokenWithHeaderAndPayload("secret", R"({"alg":"HS256","crit":["custom"],"custom":true})", R"({"sub":"user-1","exp":4102444800})");
+    RUVIA_CHECK(throwsOn([&] { (void)jwtVerify(unsupportedCriticalHeader, verifyOptions("secret")); }));
 
-    for (const auto* payload : {
-             R"({"sub":"first","sub":"second","exp":4102444800})",
-             R"({"role":"first","role":"second","exp":4102444800})",
-             R"({"role":"first","\u0072ole":"second","exp":4102444800})",
-             R"({"sub":"user-1","exp":4102444800}junk)"}) {
+    for (const auto* payload : {R"({"sub":"first","sub":"second","exp":4102444800})", R"({"role":"first","role":"second","exp":4102444800})", R"({"role":"first","\u0072ole":"second","exp":4102444800})", R"({"sub":"user-1","exp":4102444800}junk)"}) {
         const auto token = signedTokenWithPayload("secret", payload);
-        RUVIA_CHECK(throwsOn([&] {
-            (void)jwtVerify(token, verifyOptions("secret"));
-        }));
-        RUVIA_CHECK(throwsOn([&] {
-            (void)ruvia::jwtDecodeUnverified(token);
-        }));
+        RUVIA_CHECK(throwsOn([&] { (void)jwtVerify(token, verifyOptions("secret")); }));
+        RUVIA_CHECK(throwsOn([&] { (void)ruvia::jwtDecodeUnverified(token); }));
     }
 }
 
 RUVIA_TEST(jwt_verify_rejects_malformed_registered_claim_values) {
-    for (const auto* payload : {
-             R"({"iss":1,"exp":4102444800})",
-             R"({"sub":false,"exp":4102444800})",
-             R"({"jti":{},"exp":4102444800})",
-             R"({"aud":["api",2],"exp":4102444800})",
-             R"({"exp":"4102444800"})",
-             R"({"nbf":"0","exp":4102444800})",
-             R"({"iat":null,"exp":4102444800})"}) {
+    for (const auto* payload : {R"({"iss":1,"exp":4102444800})", R"({"sub":false,"exp":4102444800})", R"({"jti":{},"exp":4102444800})", R"({"aud":["api",2],"exp":4102444800})", R"({"exp":"4102444800"})", R"({"nbf":"0","exp":4102444800})", R"({"iat":null,"exp":4102444800})"}) {
         const auto token = signedTokenWithPayload("secret", payload);
-        RUVIA_CHECK(throwsOn([&] {
-            (void)jwtVerify(token, verifyOptions("secret"));
-        }));
+        RUVIA_CHECK(throwsOn([&] { (void)jwtVerify(token, verifyOptions("secret")); }));
     }
 }
 
@@ -256,9 +193,7 @@ RUVIA_TEST(jwt_verify_enforces_time_claims) {
     auto expiresNow = signOptions("secret");
     expiresNow.expiresIn = std::chrono::seconds(0);
     const auto tokenExpiresNow = sign(expiresNow);
-    RUVIA_CHECK(throwsOn([&] {
-        (void)jwtVerify(tokenExpiresNow, verifyOptions("secret"));
-    }));
+    RUVIA_CHECK(throwsOn([&] { (void)jwtVerify(tokenExpiresNow, verifyOptions("secret")); }));
 
     auto validNow = signOptions("secret");
     validNow.notBeforeDelay = std::chrono::seconds(0);
@@ -318,8 +253,7 @@ RUVIA_TEST(jwt_verify_enforces_registered_claims) {
 RUVIA_TEST(jwt_verify_supports_audience_array) {
     // RFC 7519 §4.1.3: aud may be a single string OR an array of strings. A
     // configured audience must be accepted iff it is one of the token's values.
-    const auto multi = signedTokenWithPayload(
-        "secret", R"({"sub":"u","exp":4102444800,"aud":["api","web"]})");
+    const auto multi = signedTokenWithPayload("secret", R"({"sub":"u","exp":4102444800,"aud":["api","web"]})");
 
     auto forApi = verifyOptions("secret");
     forApi.audience.assign("api");
@@ -329,8 +263,7 @@ RUVIA_TEST(jwt_verify_supports_audience_array) {
     forWeb.audience.assign("web");
     RUVIA_CHECK(jwtVerify(multi, forWeb).hasAudience("web"));
 
-    const auto spaced = signedTokenWithPayload(
-        "secret", R"({"sub":"u","exp":4102444800,"aud":[ "api" , "web" ]})");
+    const auto spaced = signedTokenWithPayload("secret", R"({"sub":"u","exp":4102444800,"aud":[ "api" , "web" ]})");
     RUVIA_CHECK(jwtVerify(spaced, forWeb).hasAudience("web"));
 
     // The critical negative: an audience NOT in the array must be rejected --
@@ -347,17 +280,13 @@ RUVIA_TEST(jwt_verify_supports_audience_array) {
     RUVIA_CHECK(!decoded.hasAudience("mobile"));
 
     // An escaped array element is decoded before matching.
-    const auto escaped = signedTokenWithPayload(
-        "secret", R"({"sub":"u","exp":4102444800,"aud":["a\"b"]})");
+    const auto escaped = signedTokenWithPayload("secret", R"({"sub":"u","exp":4102444800,"aud":["a\"b"]})");
     auto forEscaped = verifyOptions("secret");
     forEscaped.audience.assign("a\"b");
     RUVIA_CHECK(jwtVerify(escaped, forEscaped).hasAudience("a\"b"));
 
     // Malformed / non-string members yield an empty set -> fail closed.
-    for (const auto* payload : {
-             R"({"sub":"u","exp":4102444800,"aud":[]})",
-             R"({"sub":"u","exp":4102444800,"aud":[1]})",
-             R"({"sub":"u","exp":4102444800,"aud":["api",2]})"}) {
+    for (const auto* payload : {R"({"sub":"u","exp":4102444800,"aud":[]})", R"({"sub":"u","exp":4102444800,"aud":[1]})", R"({"sub":"u","exp":4102444800,"aud":["api",2]})"}) {
         const auto bad = signedTokenWithPayload("secret", payload);
         auto wantApi = verifyOptions("secret");
         wantApi.audience.assign("api");
@@ -365,8 +294,7 @@ RUVIA_TEST(jwt_verify_supports_audience_array) {
     }
 
     // The single-string form is unchanged (regression guard).
-    const auto single = signedTokenWithPayload(
-        "secret", R"({"sub":"u","exp":4102444800,"aud":"api"})");
+    const auto single = signedTokenWithPayload("secret", R"({"sub":"u","exp":4102444800,"aud":"api"})");
     auto wantApiSingle = verifyOptions("secret");
     wantApiSingle.audience.assign("api");
     const auto singlePayload = jwtVerify(single, wantApiSingle);
@@ -386,27 +314,18 @@ RUVIA_TEST(jwt_epoch_seconds_saturates_instead_of_overflowing) {
     RUVIA_CHECK_EQ(farExpPayload.subject(), std::string_view("u"));
 
     // int64 max must not overflow the saturating conversion either.
-    const auto maxExp = signedTokenWithPayload(
-        "secret", R"({"sub":"u","exp":9223372036854775807})");
+    const auto maxExp = signedTokenWithPayload("secret", R"({"sub":"u","exp":9223372036854775807})");
     const auto maxExpPayload = jwtVerify(maxExp, verifyOptions("secret"));
     RUVIA_CHECK_EQ(maxExpPayload.subject(), std::string_view("u"));
 
     using Clock = std::chrono::system_clock;
-    RUVIA_CHECK(
-        ruvia::detail::jwtTimeWithOffset(
-            Clock::time_point::max(), std::chrono::seconds(1)) ==
-        Clock::time_point::max());
-    RUVIA_CHECK(
-        ruvia::detail::jwtTimeWithOffset(
-            Clock::time_point::min(), std::chrono::seconds(-1)) ==
-        Clock::time_point::min());
+    RUVIA_CHECK(ruvia::detail::jwtTimeWithOffset(Clock::time_point::max(), std::chrono::seconds(1)) == Clock::time_point::max());
+    RUVIA_CHECK(ruvia::detail::jwtTimeWithOffset(Clock::time_point::min(), std::chrono::seconds(-1)) == Clock::time_point::min());
 
-    const auto fractional = signedTokenWithPayload(
-        "secret", R"({"sub":"u","iat":1.5,"exp":4102444800.5})");
+    const auto fractional = signedTokenWithPayload("secret", R"({"sub":"u","iat":1.5,"exp":4102444800.5})");
     const auto fractionalPayload = jwtVerify(fractional, verifyOptions("secret"));
     RUVIA_CHECK(fractionalPayload.issuedAt().has_value());
-    const auto issuedSeconds = std::chrono::duration<long double>(
-        fractionalPayload.issuedAt()->time_since_epoch()).count();
+    const auto issuedSeconds = std::chrono::duration<long double>(fractionalPayload.issuedAt()->time_since_epoch()).count();
     RUVIA_CHECK(issuedSeconds > 1.49L && issuedSeconds < 1.51L);
 
     auto allowNoExp = verifyOptions("secret");
@@ -424,10 +343,8 @@ RUVIA_TEST(jwt_verify_rejects_expired_token) {
 
     // leeway applies to exp as well as nbf: a token that expired a few seconds
     // ago is rejected by default but accepted when leeway covers the gap.
-    const auto nowSeconds = std::chrono::duration_cast<std::chrono::seconds>(
-        std::chrono::system_clock::now().time_since_epoch()).count();
-    const std::string recentPayload =
-        R"({"sub":"user-1","exp":)" + std::to_string(nowSeconds - 10) + "}";
+    const auto nowSeconds = std::chrono::duration_cast<std::chrono::seconds>(std::chrono::system_clock::now().time_since_epoch()).count();
+    const std::string recentPayload = R"({"sub":"user-1","exp":)" + std::to_string(nowSeconds - 10) + "}";
     const auto recentlyExpired = signedTokenWithPayload("secret", recentPayload);
     RUVIA_CHECK(throwsOn([&] { (void)jwtVerify(recentlyExpired, verifyOptions("secret")); }));
     auto lenient = verifyOptions("secret");
@@ -450,9 +367,9 @@ RUVIA_TEST(jwt_exp_nbf_boundaries_follow_rfc7519) {
     RUVIA_CHECK(!ruvia::detail::jwtTokenExpired(t + seconds{5}, t, seconds{10}));  // inside leeway grace
     RUVIA_CHECK(ruvia::detail::jwtTokenExpired(t + seconds{10}, t, seconds{10}));  // now == exp+leeway -> expired
 
-    RUVIA_CHECK(!ruvia::detail::jwtTokenNotYetValid(t, t, seconds{0}));            // now == nbf -> valid
-    RUVIA_CHECK(ruvia::detail::jwtTokenNotYetValid(t - seconds{1}, t, seconds{0}));   // before nbf
-    RUVIA_CHECK(!ruvia::detail::jwtTokenNotYetValid(t + seconds{1}, t, seconds{0}));  // after nbf
+    RUVIA_CHECK(!ruvia::detail::jwtTokenNotYetValid(t, t, seconds{0}));                // now == nbf -> valid
+    RUVIA_CHECK(ruvia::detail::jwtTokenNotYetValid(t - seconds{1}, t, seconds{0}));    // before nbf
+    RUVIA_CHECK(!ruvia::detail::jwtTokenNotYetValid(t + seconds{1}, t, seconds{0}));   // after nbf
     RUVIA_CHECK(!ruvia::detail::jwtTokenNotYetValid(t - seconds{5}, t, seconds{10}));  // inside leeway grace
     RUVIA_CHECK(ruvia::detail::jwtTokenNotYetValid(t - seconds{11}, t, seconds{10}));  // before nbf-leeway
 }
@@ -475,8 +392,8 @@ RUVIA_TEST(jwt_decode_unverified_reads_claims_without_authenticating) {
 RUVIA_TEST(jwt_verify_rejects_malformed_token) {
     const auto verify = verifyOptions("secret");
     RUVIA_CHECK(throwsOn([&] { (void)jwtVerify("not-a-jwt", verify); }));
-    RUVIA_CHECK(throwsOn([&] { (void)jwtVerify("only.two", verify); }));       // two sections
-    RUVIA_CHECK(throwsOn([&] { (void)jwtVerify("a.b.c.d", verify); }));        // four sections
+    RUVIA_CHECK(throwsOn([&] { (void)jwtVerify("only.two", verify); }));  // two sections
+    RUVIA_CHECK(throwsOn([&] { (void)jwtVerify("a.b.c.d", verify); }));   // four sections
 }
 
 RUVIA_TEST(jwt_verify_rejects_none_algorithm_downgrade) {
@@ -522,9 +439,7 @@ RUVIA_TEST(jwt_base64url_round_trip_and_strict_decode) {
 
     // Round trip over every remainder length, including bytes that need the -/_
     // alphabet (0xFB 0xFF 0xBF -> "-_-_").
-    for (const std::string_view sample : {std::string_view(""), std::string_view("f"),
-                                          std::string_view("fo"), std::string_view("foo"),
-                                          std::string_view("\xfb\xff\xbf")}) {
+    for (const std::string_view sample : {std::string_view(""), std::string_view("f"), std::string_view("fo"), std::string_view("foo"), std::string_view("\xfb\xff\xbf")}) {
         const auto encoded = jwtBase64UrlEncode(sample, res);
         const auto decoded = jwtBase64UrlDecode(std::string_view(encoded.data(), encoded.size()), res);
         RUVIA_CHECK_EQ(std::string_view(decoded.data(), decoded.size()), sample);

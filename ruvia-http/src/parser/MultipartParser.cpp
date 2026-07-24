@@ -24,8 +24,7 @@ constexpr std::size_t kMaxMultipartPreambleBytes = 64 * 1024;
 constexpr std::size_t kMaxMultipartHeaderBytes = 64 * 1024;
 constexpr std::size_t kMaxMultipartDelimiterLineBytes = 64 * 1024;
 
-[[nodiscard]] std::string_view multipartParseErrorMessage(
-    MultipartParseError error) noexcept {
+[[nodiscard]] std::string_view multipartParseErrorMessage(MultipartParseError error) noexcept {
     switch (error) {
         case MultipartParseError::kIncompleteBody:
             return "incomplete multipart body";
@@ -47,8 +46,7 @@ constexpr std::size_t kMaxMultipartDelimiterLineBytes = 64 * 1024;
     return "invalid multipart body";
 }
 
-[[nodiscard]] HttpProtocolError multipartProtocolError(
-    MultipartParseError error) noexcept {
+[[nodiscard]] HttpProtocolError multipartProtocolError(MultipartParseError error) noexcept {
     switch (error) {
         case MultipartParseError::kPreambleTooLarge:
         case MultipartParseError::kPartHeadersTooLarge:
@@ -82,11 +80,7 @@ MultipartParser::MultipartParser(MultipartBoundary boundary, std::pmr::memory_re
       currentFilename_(resource_),
       currentContentType_(resource_) {}
 
-MultipartParser::MultipartParser(
-    std::string_view completeBody,
-    MultipartBoundary boundary,
-    std::pmr::memory_resource* resource,
-    CompleteInputTag)
+MultipartParser::MultipartParser(std::string_view completeBody, MultipartBoundary boundary, std::pmr::memory_resource* resource, CompleteInputTag)
     : resource_(detail::httpPmrResourceOrDefault(resource)),
       boundary_(std::move(boundary)),
       input_(detail::MultipartBorrowedInput{completeBody}),
@@ -94,23 +88,14 @@ MultipartParser::MultipartParser(
       currentFilename_(resource_),
       currentContentType_(resource_) {}
 
-MultipartBodyParseResult parseMultipartBody(
-    std::string_view body,
-    MultipartBoundary boundary,
-    std::pmr::memory_resource* resource) {
+MultipartBodyParseResult parseMultipartBody(std::string_view body, MultipartBoundary boundary, std::pmr::memory_resource* resource) {
     resource = detail::httpPmrResourceOrDefault(resource);
-    MultipartParser parser(
-        body, std::move(boundary), resource, MultipartParser::CompleteInputTag{});
+    MultipartParser parser(body, std::move(boundary), resource, MultipartParser::CompleteInputTag{});
     std::pmr::vector<MultipartPart> parts(resource);
     for (;;) {
         auto result = parser.poll();
         if (const auto* part = result.part()) {
-            parts.push_back(detail::MultipartPartAccess::makeDecoded(
-                part->name(),
-                part->filename(),
-                part->contentType(),
-                part->body(),
-                resource));
+            parts.push_back(detail::MultipartPartAccess::makeDecoded(part->name(), part->filename(), part->contentType(), part->body(), resource));
             continue;
         }
         if (result.done() != nullptr) {
@@ -141,10 +126,8 @@ void MultipartParser::compactPending() {
 
 void MultipartParser::feed(std::string_view chunk) {
     const auto* progress = std::get_if<ProgressState>(&state_);
-    if (input_.streamingOpen() == nullptr || progress == nullptr ||
-        *progress == ProgressState::kDone) {
-        throw std::logic_error(
-            "multipart parser cannot accept input in a terminal state");
+    if (input_.streamingOpen() == nullptr || progress == nullptr || *progress == ProgressState::kDone) {
+        throw std::logic_error("multipart parser cannot accept input in a terminal state");
     }
     input_.feed(chunk);
 }
@@ -153,8 +136,7 @@ void MultipartParser::finishInput() noexcept {
     input_.finishInput();
 }
 
-MultipartPollResult MultipartParser::fail(
-    MultipartParseError error) noexcept {
+MultipartPollResult MultipartParser::fail(MultipartParseError error) noexcept {
     auto result = MultipartPollResult::makeFailure(error);
     state_ = error;
     return result;
@@ -175,8 +157,7 @@ MultipartPollResult MultipartParser::poll() {
                 const auto progress = std::get<StepProgress>(step);
                 if (progress == StepProgress::kNeedInput) {
                     if (input_.eof()) {
-                        return fail(
-                            MultipartParseError::kIncompleteBody);
+                        return fail(MultipartParseError::kIncompleteBody);
                     }
                     return MultipartPollResult::makeNeedInput();
                 }
@@ -193,8 +174,7 @@ MultipartPollResult MultipartParser::poll() {
                 const auto progress = std::get<StepProgress>(step);
                 if (progress == StepProgress::kNeedInput) {
                     if (input_.eof()) {
-                        return fail(
-                            MultipartParseError::kIncompleteBody);
+                        return fail(MultipartParseError::kIncompleteBody);
                     }
                     return MultipartPollResult::makeNeedInput();
                 }
@@ -203,8 +183,7 @@ MultipartPollResult MultipartParser::poll() {
             case ProgressState::kBody: {
                 auto result = readBodyChunk();
                 if (result.needInput() != nullptr && input_.eof()) {
-                    return fail(
-                        MultipartParseError::kIncompleteBody);
+                    return fail(MultipartParseError::kIncompleteBody);
                 }
                 return result;
             }
@@ -220,8 +199,7 @@ MultipartParser::StepResult MultipartParser::processBoundary() {
     // the streaming and buffered paths accept exactly the same bodies.
     for (;;) {
         if (firstBoundary_) {
-            const auto delimiter = detail::httpFindInitialMultipartDelimiter(
-                bufferView(), boundary_, input_.eof());
+            const auto delimiter = detail::httpFindInitialMultipartDelimiter(bufferView(), boundary_, input_.eof());
             if (delimiter.noMatch() != nullptr) {
                 if (bufferView().size() > kMaxMultipartPreambleBytes) {
                     return MultipartParseError::kPreambleTooLarge;
@@ -233,8 +211,7 @@ MultipartParser::StepResult MultipartParser::processBoundary() {
                 if (needInput->offset() > kMaxMultipartPreambleBytes) {
                     return MultipartParseError::kPreambleTooLarge;
                 }
-                if (bufferBytes - needInput->offset() >
-                    kMaxMultipartDelimiterLineBytes) {
+                if (bufferBytes - needInput->offset() > kMaxMultipartDelimiterLineBytes) {
                     return MultipartParseError::kDelimiterLineTooLarge;
                 }
                 return StepProgress::kNeedInput;
@@ -244,9 +221,7 @@ MultipartParser::StepResult MultipartParser::processBoundary() {
             if (part == nullptr && close == nullptr) {
                 return MultipartParseError::kInvalidDelimiter;
             }
-            const auto preambleBytes = part != nullptr
-                ? part->offset()
-                : close->offset();
+            const auto preambleBytes = part != nullptr ? part->offset() : close->offset();
             if (preambleBytes > kMaxMultipartPreambleBytes) {
                 return MultipartParseError::kPreambleTooLarge;
             }
@@ -256,8 +231,7 @@ MultipartParser::StepResult MultipartParser::processBoundary() {
             consume(2);
         }
 
-        const auto delimiter = detail::httpMatchMultipartDelimiterLine(
-            bufferView(), boundary_, input_.eof());
+        const auto delimiter = detail::httpMatchMultipartDelimiterLine(bufferView(), boundary_, input_.eof());
         if (delimiter.needInput() != nullptr) {
             return StepProgress::kNeedInput;
         }
@@ -315,16 +289,13 @@ MultipartParser::StepResult MultipartParser::processHeaders() {
         currentContentType_.clear();
         currentContentTypeView_ = {};
         if (!partHeaders->filename().empty()) {
-            detail::httpAppendDecodedQuotedPairs(
-                currentFilename_, partHeaders->filename());
+            detail::httpAppendDecodedQuotedPairs(currentFilename_, partHeaders->filename());
         }
         if (!partHeaders->contentType().empty()) {
             if (input_.borrowed() != nullptr) {
                 currentContentTypeView_ = partHeaders->contentType();
             } else {
-                currentContentType_.assign(
-                    partHeaders->contentType().data(),
-                    partHeaders->contentType().size());
+                currentContentType_.assign(partHeaders->contentType().data(), partHeaders->contentType().size());
                 currentContentTypeView_ = currentContentType_;
             }
         }
@@ -336,15 +307,8 @@ MultipartParser::StepResult MultipartParser::processHeaders() {
 }
 
 MultipartStreamPart MultipartParser::makePart(std::string_view body, bool partEnd) {
-    const auto phase = nextChunkIsFirst_
-        ? (partEnd ? MultipartChunkPhase::kComplete : MultipartChunkPhase::kFirst)
-        : (partEnd ? MultipartChunkPhase::kLast : MultipartChunkPhase::kMiddle);
-    auto part = detail::MultipartStreamPartAccess::make(
-        currentName_,
-        currentFilename_,
-        currentContentTypeView_,
-        body,
-        phase);
+    const auto phase = nextChunkIsFirst_ ? (partEnd ? MultipartChunkPhase::kComplete : MultipartChunkPhase::kFirst) : (partEnd ? MultipartChunkPhase::kLast : MultipartChunkPhase::kMiddle);
+    auto part = detail::MultipartStreamPartAccess::make(currentName_, currentFilename_, currentContentTypeView_, body, phase);
     nextChunkIsFirst_ = false;
     return part;
 }
@@ -352,35 +316,26 @@ MultipartStreamPart MultipartParser::makePart(std::string_view body, bool partEn
 MultipartPollResult MultipartParser::readBodyChunk() {
     for (;;) {
         const auto buffer = bufferView();
-        const auto delimiter = detail::httpFindMultipartBodyDelimiter(
-            buffer, boundary_, input_.eof());
+        const auto delimiter = detail::httpFindMultipartBodyDelimiter(buffer, boundary_, input_.eof());
         const auto* partDelimiter = delimiter.part();
         const auto* closeDelimiter = delimiter.close();
         if (partDelimiter != nullptr || closeDelimiter != nullptr) {
-            const auto delimiterLineBytes = partDelimiter != nullptr
-                ? partDelimiter->lineBytes()
-                : closeDelimiter->lineBytes();
+            const auto delimiterLineBytes = partDelimiter != nullptr ? partDelimiter->lineBytes() : closeDelimiter->lineBytes();
             if (delimiterLineBytes > kMaxMultipartDelimiterLineBytes) {
-                return fail(
-                    MultipartParseError::kDelimiterLineTooLarge);
+                return fail(MultipartParseError::kDelimiterLineTooLarge);
             }
-            const auto delimiterOffset = partDelimiter != nullptr
-                ? partDelimiter->offset()
-                : closeDelimiter->offset();
+            const auto delimiterOffset = partDelimiter != nullptr ? partDelimiter->offset() : closeDelimiter->offset();
             auto part = makePart(buffer.substr(0, delimiterOffset), true);
             pendingEraseBytes_ = delimiterOffset;
             state_ = ProgressState::kBoundary;
             return MultipartPollResult::makePart(part);
         }
         if (const auto* needInput = delimiter.needInput()) {
-            if (buffer.size() - needInput->offset() >
-                kMaxMultipartDelimiterLineBytes + 2) {
-                return fail(
-                    MultipartParseError::kDelimiterLineTooLarge);
+            if (buffer.size() - needInput->offset() > kMaxMultipartDelimiterLineBytes + 2) {
+                return fail(MultipartParseError::kDelimiterLineTooLarge);
             }
             if (needInput->offset() > 0) {
-                auto part = makePart(
-                    buffer.substr(0, needInput->offset()), false);
+                auto part = makePart(buffer.substr(0, needInput->offset()), false);
                 pendingEraseBytes_ = needInput->offset();
                 return MultipartPollResult::makePart(part);
             }

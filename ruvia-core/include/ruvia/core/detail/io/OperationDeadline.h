@@ -31,7 +31,7 @@ public:
         return std::holds_alternative<Expired>(state_);
     }
 
-    [[nodiscard]] const Kind* kind() const & noexcept {
+    [[nodiscard]] const Kind* kind() const& noexcept {
         if (const auto* active = std::get_if<Active>(&state_)) {
             return &active->kind;
         }
@@ -40,7 +40,7 @@ public:
         }
         return nullptr;
     }
-    const Kind* kind() const && = delete;
+    const Kind* kind() const&& = delete;
 
     [[nodiscard]] std::optional<Kind> expire(Clock::time_point now) noexcept {
         const auto* active = std::get_if<Active>(&state_);
@@ -63,7 +63,8 @@ private:
 
     struct Active final {
         Active(Clock::time_point armedDeadline, Kind armedKind) noexcept
-            : deadline(armedDeadline), kind(std::move(armedKind)) {}
+            : deadline(armedDeadline),
+              kind(std::move(armedKind)) {}
 
         Clock::time_point deadline;
         Kind kind;
@@ -88,15 +89,13 @@ class OperationTimeout final {
 public:
     using Clock = std::chrono::steady_clock;
 
-    explicit OperationTimeout(
-        std::optional<std::chrono::milliseconds> timeout) noexcept {
+    explicit OperationTimeout(std::optional<std::chrono::milliseconds> timeout) noexcept {
         if (timeout.has_value()) {
             deadline_ = workerTimerDeadlineAfter(*timeout);
         }
     }
 
-    [[nodiscard]] std::optional<std::chrono::milliseconds>
-    remaining() const noexcept {
+    [[nodiscard]] std::optional<std::chrono::milliseconds> remaining() const noexcept {
         if (!deadline_.has_value()) {
             return std::nullopt;
         }
@@ -104,8 +103,7 @@ public:
         if (now >= *deadline_) {
             return std::chrono::milliseconds(0);
         }
-        return std::chrono::duration_cast<std::chrono::milliseconds>(
-            *deadline_ - now);
+        return std::chrono::duration_cast<std::chrono::milliseconds>(*deadline_ - now);
     }
 
     [[nodiscard]] bool expired() const noexcept {
@@ -116,14 +114,12 @@ public:
     // Apply an additional relative limit without losing an existing absolute
     // deadline. This lets a sub-operation honor both its own timeout and the
     // total timeout of its parent operation.
-    [[nodiscard]] OperationTimeout constrainedBy(
-        std::optional<std::chrono::milliseconds> timeout) const noexcept {
+    [[nodiscard]] OperationTimeout constrainedBy(std::optional<std::chrono::milliseconds> timeout) const noexcept {
         OperationTimeout constrained(timeout);
         if (!deadline_.has_value()) {
             return constrained;
         }
-        if (!constrained.deadline_.has_value() ||
-            *deadline_ < *constrained.deadline_) {
+        if (!constrained.deadline_.has_value() || *deadline_ < *constrained.deadline_) {
             constrained.deadline_ = deadline_;
         }
         return constrained;

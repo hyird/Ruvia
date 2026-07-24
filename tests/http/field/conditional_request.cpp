@@ -36,11 +36,7 @@ RUVIA_TEST(conditional_method_plan_follows_precondition_and_range_semantics) {
     RUVIA_CHECK(head.evaluatesIfModifiedSince);
     RUVIA_CHECK(!head.evaluatesRange);
 
-    for (const auto method : {
-             ruvia::HttpKnownMethod::kPost,
-             ruvia::HttpKnownMethod::kPut,
-             ruvia::HttpKnownMethod::kDelete,
-             ruvia::HttpKnownMethod::kPatch}) {
+    for (const auto method : {ruvia::HttpKnownMethod::kPost, ruvia::HttpKnownMethod::kPut, ruvia::HttpKnownMethod::kDelete, ruvia::HttpKnownMethod::kPatch}) {
         const auto plan = httpConditionalMethodPlan(method);
         RUVIA_CHECK(plan.evaluatesPreconditions);
         RUVIA_CHECK(!plan.usesNotModifiedResponse);
@@ -48,10 +44,7 @@ RUVIA_TEST(conditional_method_plan_follows_precondition_and_range_semantics) {
         RUVIA_CHECK(!plan.evaluatesRange);
     }
 
-    for (const auto method : {
-             ruvia::HttpKnownMethod::kOptions,
-             ruvia::HttpKnownMethod::kConnect,
-             ruvia::HttpKnownMethod::kUnknown}) {
+    for (const auto method : {ruvia::HttpKnownMethod::kOptions, ruvia::HttpKnownMethod::kConnect, ruvia::HttpKnownMethod::kUnknown}) {
         const auto plan = httpConditionalMethodPlan(method);
         RUVIA_CHECK(!plan.evaluatesPreconditions);
         RUVIA_CHECK(!plan.usesNotModifiedResponse);
@@ -64,9 +57,9 @@ RUVIA_TEST(etag_strong_comparison) {
     using ruvia::detail::httpStrongEtagEquals;
     // Strong compare: both must be strong (no "W/") and octet-equal.
     RUVIA_CHECK(httpStrongEtagEquals(R"("abc")", R"("abc")"));
-    RUVIA_CHECK(!httpStrongEtagEquals(R"("abc")", R"("abd")"));       // different tag
-    RUVIA_CHECK(!httpStrongEtagEquals(R"(W/"abc")", R"("abc")"));     // one weak -> never strong-equal
-    RUVIA_CHECK(!httpStrongEtagEquals(R"(W/"abc")", R"(W/"abc")"));   // both weak -> not a strong match
+    RUVIA_CHECK(!httpStrongEtagEquals(R"("abc")", R"("abd")"));      // different tag
+    RUVIA_CHECK(!httpStrongEtagEquals(R"(W/"abc")", R"("abc")"));    // one weak -> never strong-equal
+    RUVIA_CHECK(!httpStrongEtagEquals(R"(W/"abc")", R"(W/"abc")"));  // both weak -> not a strong match
 }
 
 RUVIA_TEST(etag_weak_comparison) {
@@ -75,7 +68,7 @@ RUVIA_TEST(etag_weak_comparison) {
     RUVIA_CHECK(httpWeakEtagEquals(R"(W/"abc")", R"("abc")"));
     RUVIA_CHECK(httpWeakEtagEquals(R"(W/"abc")", R"(W/"abc")"));
     RUVIA_CHECK(httpWeakEtagEquals(R"("abc")", R"("abc")"));
-    RUVIA_CHECK(!httpWeakEtagEquals(R"(W/"abc")", R"(W/"abd")"));     // different opaque tags
+    RUVIA_CHECK(!httpWeakEtagEquals(R"(W/"abc")", R"(W/"abd")"));  // different opaque tags
 }
 
 RUVIA_TEST(etag_weak_prefix_detection) {
@@ -92,8 +85,7 @@ RUVIA_TEST(etag_list_parses_opaque_commas_and_rejects_malformed_suffixes) {
     RUVIA_CHECK(httpEtagListMatches(R"("stale", W/"current")", R"("current")", false));
     RUVIA_CHECK(!httpEtagListMatches(R"("stale, "current")", R"("current")", true));
     RUVIA_CHECK(!httpEtagListMatches(R"("current" trailing)", R"("current")", false));
-    const auto malformedAfterMatch = httpParseEtagListMatches(
-        R"("current", malformed)", R"("current")", true);
+    const auto malformedAfterMatch = httpParseEtagListMatches(R"("current", malformed)", R"("current")", true);
     RUVIA_CHECK(!malformedAfterMatch.valid);
     RUVIA_CHECK(!malformedAfterMatch.matched);
 }

@@ -24,16 +24,12 @@ private:
         return storage;
     }
 
-    void do_deallocate(
-        void* pointer,
-        std::size_t bytes,
-        std::size_t alignment) override {
+    void do_deallocate(void* pointer, std::size_t bytes, std::size_t alignment) override {
         upstream_->deallocate(pointer, bytes, alignment);
         --liveAllocations_;
     }
 
-    [[nodiscard]] bool do_is_equal(
-        const std::pmr::memory_resource& other) const noexcept override {
+    [[nodiscard]] bool do_is_equal(const std::pmr::memory_resource& other) const noexcept override {
         return this == &other;
     }
 
@@ -44,17 +40,10 @@ private:
 }  // namespace
 
 template <typename T>
-concept ExposesAnyRvalueModelStringBorrow =
-    requires { std::declval<const T&&>().view(); } ||
-    requires { std::declval<const T&&>().data(); } ||
-    requires {
-        static_cast<std::string_view>(std::declval<const T&&>());
-    };
+concept ExposesAnyRvalueModelStringBorrow = requires { std::declval<const T&&>().view(); } || requires { std::declval<const T&&>().data(); } || requires { static_cast<std::string_view>(std::declval<const T&&>()); };
 
 template <typename T>
-concept ExposesRvalueFixedStringView = requires {
-    std::declval<const T&&>().view();
-};
+concept ExposesRvalueFixedStringView = requires { std::declval<const T&&>().view(); };
 
 static_assert(!std::is_copy_constructible_v<ruvia::String>);
 static_assert(!std::is_copy_assignable_v<ruvia::String>);
@@ -78,9 +67,7 @@ RUVIA_TEST(model_string_public_construction_owns_input) {
 RUVIA_TEST(model_string_parser_factory_can_borrow_input) {
     CountingMemoryResource resource;
     const std::string input(128, 'c');
-    const auto value = ruvia::detail::ModelValueFactory::makeString(
-        input,
-        &resource);
+    const auto value = ruvia::detail::ModelValueFactory::makeString(input, &resource);
 
     RUVIA_CHECK_EQ(value.view(), std::string_view(input));
     RUVIA_CHECK_EQ(value.data(), input.data());

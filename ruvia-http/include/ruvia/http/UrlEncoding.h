@@ -16,15 +16,10 @@
 
 namespace ruvia::detail {
 
-enum class UrlDecodeMode : std::uint8_t {
-    kPercent,
-    kForm
-};
+enum class UrlDecodeMode : std::uint8_t { kPercent, kForm };
 
 [[nodiscard]] inline bool hasUrlEncoding(std::string_view value, UrlDecodeMode mode) noexcept {
-    return std::ranges::any_of(value, [mode](char c) noexcept {
-        return c == '%' || (mode == UrlDecodeMode::kForm && c == '+');
-    });
+    return std::ranges::any_of(value, [mode](char c) noexcept { return c == '%' || (mode == UrlDecodeMode::kForm && c == '+'); });
 }
 
 // Decode the percent-escape at position i, where input[i] == '%'. Returns the
@@ -60,10 +55,7 @@ enum class UrlDecodeMode : std::uint8_t {
 // Returns the complete decoded component or no value for malformed percent
 // encoding. The caller never supplies mutable storage, so a failure cannot
 // expose the prefix decoded before the bad escape.
-[[nodiscard]] inline std::optional<std::pmr::string> decodeUrlComponent(
-    std::string_view input,
-    UrlDecodeMode mode,
-    std::pmr::memory_resource* resource) {
+[[nodiscard]] inline std::optional<std::pmr::string> decodeUrlComponent(std::string_view input, UrlDecodeMode mode, std::pmr::memory_resource* resource) {
     std::pmr::string output(httpPmrResourceOrDefault(resource));
     output.reserve(input.size());
     for (std::size_t i = 0; i < input.size(); ++i) {
@@ -85,10 +77,7 @@ enum class UrlDecodeMode : std::uint8_t {
     return output;
 }
 
-[[nodiscard]] inline bool urlComponentEquals(
-    std::string_view encoded,
-    std::string_view decoded,
-    UrlDecodeMode mode) noexcept {
+[[nodiscard]] inline bool urlComponentEquals(std::string_view encoded, std::string_view decoded, UrlDecodeMode mode) noexcept {
     if (encoded.size() < decoded.size()) {
         return false;
     }
@@ -114,11 +103,10 @@ enum class UrlDecodeMode : std::uint8_t {
 }
 
 template <typename Visitor>
-[[nodiscard]] bool dispatchUrlEncodedPairVisitor(
-    Visitor& visitor,
-    std::string_view name,
-    std::string_view value) {
-    if constexpr (requires { { visitor(name, value) } -> std::convertible_to<bool>; }) {
+[[nodiscard]] bool dispatchUrlEncodedPairVisitor(Visitor& visitor, std::string_view name, std::string_view value) {
+    if constexpr (requires {
+                      { visitor(name, value) } -> std::convertible_to<bool>;
+                  }) {
         return static_cast<bool>(visitor(name, value));
     } else {
         visitor(name, value);
@@ -152,10 +140,7 @@ template <typename Visitor>
     return true;
 }
 
-[[nodiscard]] inline std::optional<std::string_view> findUrlEncodedValue(
-    std::string_view input,
-    std::string_view decodedName,
-    UrlDecodeMode mode) {
+[[nodiscard]] inline std::optional<std::string_view> findUrlEncodedValue(std::string_view input, std::string_view decodedName, UrlDecodeMode mode) {
     std::optional<std::string_view> result;
     (void)visitUrlEncodedPairs(input, [&](std::string_view name, std::string_view value) {
         if (urlComponentEquals(name, decodedName, mode)) {
@@ -167,9 +152,6 @@ template <typename Visitor>
 }
 
 template <HttpTemporaryOwningCharString Input>
-std::optional<std::string_view> findUrlEncodedValue(
-    Input&&,
-    std::string_view,
-    UrlDecodeMode) = delete;
+std::optional<std::string_view> findUrlEncodedValue(Input&&, std::string_view, UrlDecodeMode) = delete;
 
 }  // namespace ruvia::detail

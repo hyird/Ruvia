@@ -20,9 +20,7 @@ namespace ruvia::detail {
     return origin.port() == httpSchemeDefaultPort(origin.scheme());
 }
 
-[[nodiscard]] inline std::pmr::string makeHttpOriginAuthority(
-    const HttpOrigin& origin,
-    std::pmr::memory_resource* resource) {
+[[nodiscard]] inline std::pmr::string makeHttpOriginAuthority(const HttpOrigin& origin, std::pmr::memory_resource* resource) {
     auto* const targetResource = httpPmrResourceOrDefault(resource);
     const auto host = origin.host();
     const bool includePort = !httpOriginUsesDefaultPort(origin);
@@ -31,10 +29,7 @@ namespace ruvia::detail {
     header.append(host.data(), host.size());
     if (includePort) {
         std::array<char, 5> portBuffer;
-        const auto [end, ec] = std::to_chars(
-            portBuffer.data(),
-            portBuffer.data() + portBuffer.size(),
-            origin.port());
+        const auto [end, ec] = std::to_chars(portBuffer.data(), portBuffer.data() + portBuffer.size(), origin.port());
         if (ec != std::errc{}) {
             throw std::logic_error("http client: failed to format Host port");
         }

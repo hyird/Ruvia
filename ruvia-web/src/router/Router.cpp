@@ -16,8 +16,7 @@ Task<void> ignoreExpiredNext(NextState) {
     co_return;
 }
 
-void validateUniqueValidatedModelTypes(
-    std::span<const ControllerMiddlewareDescriptor> descriptors) {
+void validateUniqueValidatedModelTypes(std::span<const ControllerMiddlewareDescriptor> descriptors) {
     for (std::size_t i = 0; i < descriptors.size(); ++i) {
         const auto* const key = descriptors[i].validatedModelTypeKey();
         if (key == nullptr) {
@@ -31,9 +30,7 @@ void validateUniqueValidatedModelTypes(
     }
 }
 
-void validateUniqueValidatedModelTypes(
-    std::span<const ControllerMiddlewareDescriptor> first,
-    std::span<const ControllerMiddlewareDescriptor> second) {
+void validateUniqueValidatedModelTypes(std::span<const ControllerMiddlewareDescriptor> first, std::span<const ControllerMiddlewareDescriptor> second) {
     validateUniqueValidatedModelTypes(first);
     validateUniqueValidatedModelTypes(second);
     for (const auto& left : first) {
@@ -49,11 +46,8 @@ void validateUniqueValidatedModelTypes(
     }
 }
 
-[[nodiscard]] bool usesRouteRateLimit(
-    std::span<const ControllerMiddlewareDescriptor> descriptors) noexcept {
-    return std::ranges::any_of(descriptors, [](const auto& descriptor) noexcept {
-        return descriptor.usesRouteRateLimit();
-    });
+[[nodiscard]] bool usesRouteRateLimit(std::span<const ControllerMiddlewareDescriptor> descriptors) noexcept {
+    return std::ranges::any_of(descriptors, [](const auto& descriptor) noexcept { return descriptor.usesRouteRateLimit(); });
 }
 
 }  // namespace
@@ -61,9 +55,7 @@ void validateUniqueValidatedModelTypes(
 Next::Awaitable Next::operator()() & {
     auto state = state_;
     auto* control = state.control;
-    state.invocation = control == nullptr
-        ? detail::NextState::Invocation::kExpired
-        : control->beginInvocation();
+    state.invocation = control == nullptr ? detail::NextState::Invocation::kExpired : control->beginInvocation();
     if (state.invocation == detail::NextState::Invocation::kExpired) {
         return Awaitable(state, &ignoreExpiredNext);
     }
@@ -88,8 +80,7 @@ void detail::RouterImpl::RouteTableDeleter::operator()(RouteTable* table) const 
 }
 
 Router::Router()
-    : impl_(
-          constructPmrObject<detail::RouterImpl>(registrationResource(), *this)) {}
+    : impl_(constructPmrObject<detail::RouterImpl>(registrationResource(), *this)) {}
 
 Router::~Router() = default;
 
@@ -109,45 +100,39 @@ Router& detail::RouterImpl::setNotFoundHandler(HttpNotFoundHandler handler) noex
     return owner;
 }
 
-Router& detail::RouterImpl::setPrefixErrorHandlers(
-    std::span<const HttpPrefixErrorHandler> handlers) {
+Router& detail::RouterImpl::setPrefixErrorHandlers(std::span<const HttpPrefixErrorHandler> handlers) {
     if (routeTable_) {
         routeTable_->setPrefixErrorHandlers(handlers);
     }
     prefixErrorHandlers_.clear();
     prefixErrorHandlers_.reserve(handlers.size());
     for (const auto& handler : handlers) {
-        prefixErrorHandlers_.emplace_back(
-            std::pmr::string(handler.prefix, resource_), handler.handler);
+        prefixErrorHandlers_.emplace_back(std::pmr::string(handler.prefix, resource_), handler.handler);
     }
     return owner;
 }
 
-Router& detail::RouterImpl::setPrefixNotFoundHandlers(
-    std::span<const HttpPrefixNotFoundHandler> handlers) {
+Router& detail::RouterImpl::setPrefixNotFoundHandlers(std::span<const HttpPrefixNotFoundHandler> handlers) {
     if (routeTable_) {
         routeTable_->setPrefixNotFoundHandlers(handlers);
     }
     prefixNotFoundHandlers_.clear();
     prefixNotFoundHandlers_.reserve(handlers.size());
     for (const auto& handler : handlers) {
-        prefixNotFoundHandlers_.emplace_back(
-            std::pmr::string(handler.prefix, resource_), handler.handler);
+        prefixNotFoundHandlers_.emplace_back(std::pmr::string(handler.prefix, resource_), handler.handler);
     }
     return owner;
 }
 
-detail::RouterImpl::MiddlewareLifetime::MiddlewareLifetime(
-    void* targetValue,
-    ControllerMiddlewareDescriptor::Destroy destroyValue) noexcept
-    : target_(targetValue), destroy_(destroyValue) {}
+detail::RouterImpl::MiddlewareLifetime::MiddlewareLifetime(void* targetValue, ControllerMiddlewareDescriptor::Destroy destroyValue) noexcept
+    : target_(targetValue),
+      destroy_(destroyValue) {}
 
 detail::RouterImpl::MiddlewareLifetime::MiddlewareLifetime(MiddlewareLifetime&& other) noexcept
     : target_(std::exchange(other.target_, nullptr)),
       destroy_(std::exchange(other.destroy_, nullptr)) {}
 
-detail::RouterImpl::MiddlewareLifetime& detail::RouterImpl::MiddlewareLifetime::operator=(
-    MiddlewareLifetime&& other) noexcept {
+detail::RouterImpl::MiddlewareLifetime& detail::RouterImpl::MiddlewareLifetime::operator=(MiddlewareLifetime&& other) noexcept {
     if (this == &other) {
         return *this;
     }
@@ -183,20 +168,15 @@ detail::RouteMiddleware detail::RouterImpl::materializeMiddleware(ControllerMidd
     return RouteMiddleware(target, middleware.invoke());
 }
 
-void detail::RouterImpl::appendMaterializedMiddlewares(
-    std::pmr::vector<RouteMiddleware>& frames,
-    std::span<const ControllerMiddlewareDescriptor> descriptors) {
+void detail::RouterImpl::appendMaterializedMiddlewares(std::pmr::vector<RouteMiddleware>& frames, std::span<const ControllerMiddlewareDescriptor> descriptors) {
     for (const auto& middleware : descriptors) {
         frames.push_back(materializeMiddleware(middleware));
     }
 }
 
-std::pmr::vector<detail::RouteMiddleware> detail::RouterImpl::materializeMiddlewares(
-    std::span<const ControllerMiddlewareDescriptor> first,
-    std::span<const ControllerMiddlewareDescriptor> second) {
+std::pmr::vector<detail::RouteMiddleware> detail::RouterImpl::materializeMiddlewares(std::span<const ControllerMiddlewareDescriptor> first, std::span<const ControllerMiddlewareDescriptor> second) {
     validateUniqueValidatedModelTypes(first, second);
-    hasRouteRateLimit_ = hasRouteRateLimit_ ||
-        usesRouteRateLimit(first) || usesRouteRateLimit(second);
+    hasRouteRateLimit_ = hasRouteRateLimit_ || usesRouteRateLimit(first) || usesRouteRateLimit(second);
     std::pmr::vector<RouteMiddleware> frames(resource_);
     frames.reserve(first.size() + second.size());
     appendMaterializedMiddlewares(frames, first);
@@ -216,22 +196,12 @@ void detail::RouterImpl::validateRouteTarget(HttpKnownMethod method, std::string
     }
 }
 
-void detail::RouterImpl::setGlobalMiddlewares(
-    std::span<const ControllerMiddlewareDescriptor> descriptors) {
+void detail::RouterImpl::setGlobalMiddlewares(std::span<const ControllerMiddlewareDescriptor> descriptors) {
     if (routeTable_) {
         // A finalized table's middleware ranges are immutable. Re-applying the
         // identical set (an app stop()/run() cycle) is a no-op; changing it
         // requires a fresh router.
-        const bool unchanged =
-            descriptors.size() == globalMiddlewareDescriptors_.size() &&
-            std::ranges::equal(
-                descriptors,
-                globalMiddlewareDescriptors_,
-                [](const auto& left, const auto& right) noexcept {
-                    return left.invoke() == right.invoke() &&
-                        left.create() == right.create() &&
-                        left.destroy() == right.destroy();
-                });
+        const bool unchanged = descriptors.size() == globalMiddlewareDescriptors_.size() && std::ranges::equal(descriptors, globalMiddlewareDescriptors_, [](const auto& left, const auto& right) noexcept { return left.invoke() == right.invoke() && left.create() == right.create() && left.destroy() == right.destroy(); });
         if (unchanged) {
             return;
         }
@@ -247,9 +217,7 @@ void detail::RouterImpl::finalize() {
 
     globalMiddlewareFrames_ = materializeMiddlewares(globalMiddlewareDescriptors_);
     validateNoDynamicRouteConflict(pendingRoutes_);
-    std::unique_ptr<RouteTable, RouteTableDeleter> table(
-        constructPmrObject<RouteTable>(resource_, resource_),
-        RouteTableDeleter{resource_});
+    std::unique_ptr<RouteTable, RouteTableDeleter> table(constructPmrObject<RouteTable>(resource_, resource_), RouteTableDeleter{resource_});
     buildRouteTable(*table);
     table->hasRouteRateLimit_ = hasRouteRateLimit_;
     table->setErrorHandler(errorHandler_);

@@ -56,12 +56,8 @@ public:
     RUVIA_POST("/api/echo", echo);
     RUVIA_GET("/users/:id", user);
     RUVIA_GET("/middleware/0", middleware0);
-    RUVIA_GET("/middleware/3", middleware3,
-              Passthrough<0>, Passthrough<1>, Passthrough<2>);
-    RUVIA_GET("/middleware/10", middleware10,
-              Passthrough<0>, Passthrough<1>, Passthrough<2>, Passthrough<3>,
-              Passthrough<4>, Passthrough<5>, Passthrough<6>, Passthrough<7>,
-              Passthrough<8>, Passthrough<9>);
+    RUVIA_GET("/middleware/3", middleware3, Passthrough<0>, Passthrough<1>, Passthrough<2>);
+    RUVIA_GET("/middleware/10", middleware10, Passthrough<0>, Passthrough<1>, Passthrough<2>, Passthrough<3>, Passthrough<4>, Passthrough<5>, Passthrough<6>, Passthrough<7>, Passthrough<8>, Passthrough<9>);
     RUVIA_ROUTES_END
 
 private:
@@ -125,25 +121,15 @@ int main() {
 
     const char* tlsCert = std::getenv("TLS_CERT");
     const char* tlsKey = std::getenv("TLS_KEY");
-    const auto topology = (tlsCert != nullptr && tlsKey != nullptr)
-        ? ruvia::ServerTopology::https(
-              port,
-              ruvia::TlsConfig(ruvia::TlsIdentity::fromFiles(tlsCert, tlsKey)))
-        : ruvia::ServerTopology::http(port);
+    const auto topology = (tlsCert != nullptr && tlsKey != nullptr) ? ruvia::ServerTopology::https(port, ruvia::TlsConfig(ruvia::TlsIdentity::fromFiles(tlsCert, tlsKey))) : ruvia::ServerTopology::http(port);
 
     auto& app = ruvia::app();
-    app.setListenAddress("0.0.0.0")
-        .setServerTopology(topology)
-        .setWorkersPerListener(4)
-        .setSignalShutdown(true)
-        .setKeepaliveRequests(1u << 30)
-        .setMaxConnectionsPerWorker(20000);
+    app.setListenAddress("0.0.0.0").setServerTopology(topology).setWorkersPerListener(4).setSignalShutdown(true).setKeepaliveRequests(1u << 30).setMaxConnectionsPerWorker(20000);
 
     // Response compression is on by default. Set NO_COMPRESSION=1 for an
     // apples-to-apples comparison against servers that ship it off (so the
     // per-response Accept-Encoding negotiation is not counted against Ruvia).
-    if (const char* noCompression = std::getenv("NO_COMPRESSION");
-        noCompression != nullptr && noCompression[0] == '1') {
+    if (const char* noCompression = std::getenv("NO_COMPRESSION"); noCompression != nullptr && noCompression[0] == '1') {
         app.setCompression(std::nullopt);
     }
 

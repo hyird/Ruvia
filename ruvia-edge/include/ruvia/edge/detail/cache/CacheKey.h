@@ -15,10 +15,7 @@ namespace ruvia::edge {
 // terminal delimiter makes this an exact prefix -- purging `/a` must never
 // invalidate `/ab`. The host is case-folded because URI hosts are
 // case-insensitive.
-[[nodiscard]] std::string cacheVariantPrefix(
-    std::string_view method,
-    std::string_view frontHost,
-    std::string_view target);
+[[nodiscard]] std::string cacheVariantPrefix(std::string_view method, std::string_view frontHost, std::string_view target);
 
 // The key one stored representation lives under: the variant prefix, then the
 // complete request authority, then the client's Accept-Encoding verbatim.
@@ -28,9 +25,6 @@ namespace ruvia::edge {
 // same cache key. Accept-Encoding is kept whole -- dropping weights, repeated
 // lines, or the absent-versus-empty distinction would let a shared cache serve
 // a representation selected for a different request.
-[[nodiscard]] std::string cacheKeyFor(
-    std::string_view variantPrefix,
-    std::string_view host,
-    const std::optional<std::string>& acceptEncoding);
+[[nodiscard]] std::string cacheKeyFor(std::string_view variantPrefix, std::string_view host, const std::optional<std::string>& acceptEncoding);
 
 }  // namespace ruvia::edge

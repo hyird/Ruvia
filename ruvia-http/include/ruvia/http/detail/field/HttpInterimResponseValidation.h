@@ -29,44 +29,32 @@ enum class HttpInterimResponseHeaderValidationStatus : std::uint8_t {
 // field and singleton rules with subtly different wire acceptance.
 class HttpInterimResponseHeaderValidator final {
 public:
-    explicit HttpInterimResponseHeaderValidator(
-        HttpFieldListRole role) noexcept
+    explicit HttpInterimResponseHeaderValidator(HttpFieldListRole role) noexcept
         : role_(role) {}
 
-    [[nodiscard]] HttpInterimResponseHeaderValidationStatus validate(
-        std::string_view name,
-        std::string_view value) noexcept {
-        if (!isValidHttpHeaderName(name) ||
-            !isValidHttpHeaderValue(value)) {
+    [[nodiscard]] HttpInterimResponseHeaderValidationStatus validate(std::string_view name, std::string_view value) noexcept {
+        if (!isValidHttpHeaderName(name) || !isValidHttpHeaderValue(value)) {
             return HttpInterimResponseHeaderValidationStatus::kInvalidHeader;
         }
 
         const auto knownBit = classifyResponseHeaderName(name);
-        if (knownBit == kResponseHeaderContentEncoding &&
-            !isValidHttpContentEncodingFieldValue(value, role_)) {
+        if (knownBit == kResponseHeaderContentEncoding && !isValidHttpContentEncodingFieldValue(value, role_)) {
             return HttpInterimResponseHeaderValidationStatus::kInvalidHeader;
         }
-        if (knownBit == kResponseHeaderContentType &&
-            !isValidHttpContentTypeFieldValue(value)) {
+        if (knownBit == kResponseHeaderContentType && !isValidHttpContentTypeFieldValue(value)) {
             return HttpInterimResponseHeaderValidationStatus::kInvalidHeader;
         }
         if (knownBit == kResponseHeaderContentLength) {
-            return HttpInterimResponseHeaderValidationStatus::
-                kContentLengthForbidden;
+            return HttpInterimResponseHeaderValidationStatus::kContentLengthForbidden;
         }
         if (knownBit == kResponseHeaderTransferEncoding) {
-            return HttpInterimResponseHeaderValidationStatus::
-                kTransferEncodingForbidden;
+            return HttpInterimResponseHeaderValidationStatus::kTransferEncodingForbidden;
         }
         if (httpAsciiEqualsIgnoreCase(name, "Trailer")) {
-            return HttpInterimResponseHeaderValidationStatus::
-                kTrailerForbidden;
+            return HttpInterimResponseHeaderValidationStatus::kTrailerForbidden;
         }
-        if (knownBit != 0 &&
-            (knownBits_ & knownBit) != 0 &&
-            responseHeaderAppendForbidden(knownBit)) {
-            return HttpInterimResponseHeaderValidationStatus::
-                kRepeatedSingleton;
+        if (knownBit != 0 && (knownBits_ & knownBit) != 0 && responseHeaderAppendForbidden(knownBit)) {
+            return HttpInterimResponseHeaderValidationStatus::kRepeatedSingleton;
         }
         knownBits_ |= knownBit;
         return HttpInterimResponseHeaderValidationStatus::kOk;
@@ -82,14 +70,10 @@ private:
 // an interim response also cannot have the trailer section advertised by
 // Trailer. Version-specific connection fields are checked by the HTTP/1 and
 // HTTP/2 writers after this common pass.
-[[nodiscard]] inline HttpInterimResponseHeaderValidationStatus
-validateHttpInterimResponseHeaders(
-    const HttpInterimResponseHead& response) noexcept {
-    HttpInterimResponseHeaderValidator validator(
-        HttpFieldListRole::kSender);
+[[nodiscard]] inline HttpInterimResponseHeaderValidationStatus validateHttpInterimResponseHeaders(const HttpInterimResponseHead& response) noexcept {
+    HttpInterimResponseHeaderValidator validator(HttpFieldListRole::kSender);
     for (const auto& header : response.headers()) {
-        const auto status = validator.validate(
-            header.name(), header.value());
+        const auto status = validator.validate(header.name(), header.value());
         if (status != HttpInterimResponseHeaderValidationStatus::kOk) {
             return status;
         }

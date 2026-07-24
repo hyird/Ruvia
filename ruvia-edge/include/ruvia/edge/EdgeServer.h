@@ -37,8 +37,7 @@ enum class EdgeTaskKind : std::uint8_t {
 };
 
 // Number of EdgeTaskKind values, for per-kind counter arrays.
-inline constexpr std::size_t kEdgeTaskKindCount =
-    static_cast<std::size_t>(EdgeTaskKind::kControl) + 1;
+inline constexpr std::size_t kEdgeTaskKindCount = static_cast<std::size_t>(EdgeTaskKind::kControl) + 1;
 
 // A task failure. `exception` is never null and may be rethrown to inspect it.
 struct EdgeTaskFailure final {
@@ -128,9 +127,7 @@ public:
     [[nodiscard]] bool addOrigin(std::string frontHost, OriginSettings settings);
     [[nodiscard]] bool removeOrigin(std::string_view frontHost);
     [[nodiscard]] bool setTlsCertificate(const EdgeTlsConfig& tls);
-    [[nodiscard]] bool purge(
-        std::string_view frontHost,
-        std::string_view target);
+    [[nodiscard]] bool purge(std::string_view frontHost, std::string_view target);
     // Clears memory and disk tiers synchronously. Returns false if any
     // committed disk entry could not be removed and therefore remains usable.
     [[nodiscard]] bool clearCache();

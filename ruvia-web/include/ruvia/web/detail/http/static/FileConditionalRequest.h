@@ -33,10 +33,7 @@ struct EtagFieldCondition final {
     bool wildcard{false};
     std::size_t lineCount{0};
 
-    void update(
-        std::string_view value,
-        std::string_view expected,
-        bool strong) noexcept;
+    void update(std::string_view value, std::string_view expected, bool strong) noexcept;
 
     [[nodiscard]] bool matches() const noexcept {
         return valid && ((wildcard && lineCount == 1) || (!wildcard && matched));
@@ -48,28 +45,17 @@ struct FileEtagConditions final {
     EtagFieldCondition ifNoneMatch;
 };
 
-[[nodiscard]] FileConditionalHeaders fileConditionalHeaders(
-    const HttpRequest& request) noexcept;
+[[nodiscard]] FileConditionalHeaders fileConditionalHeaders(const HttpRequest& request) noexcept;
 
-[[nodiscard]] FileEtagConditions fileEtagConditions(
-    const HttpRequest& request,
-    std::string_view etag) noexcept;
+[[nodiscard]] FileEtagConditions fileEtagConditions(const HttpRequest& request, std::string_view etag) noexcept;
 
 // If-Modified-Since / If-Unmodified-Since: the "<=" comparisons of RFC 9110
 // section 13.1.3 and 13.1.4.
-[[nodiscard]] bool httpDateNotModified(
-    std::string_view header,
-    std::time_t modifiedSeconds) noexcept;
-[[nodiscard]] bool httpDateUnmodified(
-    std::string_view header,
-    std::time_t modifiedSeconds) noexcept;
+[[nodiscard]] bool httpDateNotModified(std::string_view header, std::time_t modifiedSeconds) noexcept;
+[[nodiscard]] bool httpDateUnmodified(std::string_view header, std::time_t modifiedSeconds) noexcept;
 
 // Whether an If-Range still authorises a range response. A date validator here
 // must match EXACTLY, unlike If-Modified-Since -- see the definition.
-[[nodiscard]] bool ifRangeAllows(
-    std::string_view header,
-    std::string_view etag,
-    std::time_t modifiedSeconds,
-    bool dateValidatorStrong) noexcept;
+[[nodiscard]] bool ifRangeAllows(std::string_view header, std::string_view etag, std::time_t modifiedSeconds, bool dateValidatorStrong) noexcept;
 
 }  // namespace ruvia

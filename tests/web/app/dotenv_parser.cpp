@@ -14,9 +14,7 @@ namespace {
 using ruvia::detail::readDotenvEntries;
 
 template <typename T>
-concept ExposesAnyRvalueEnvBorrow =
-    requires { std::declval<const T&&>().get("NAME"); } ||
-    requires { std::declval<const T&&>().template get<std::string_view>("NAME"); };
+concept ExposesAnyRvalueEnvBorrow = requires { std::declval<const T&&>().get("NAME"); } || requires { std::declval<const T&&>().template get<std::string_view>("NAME"); };
 
 static_assert(!ExposesAnyRvalueEnvBorrow<ruvia::Env>);
 
@@ -163,10 +161,10 @@ RUVIA_TEST(dotenv_hash_is_literal_unless_space_preceded) {
     // test only covers the space-preceded (comment) case, so a regression dropping
     // the "preceded by space" guard would pass it while corrupting these values.
     const auto path = writeTempEnv("ruvia_dotenv_hash.env",
-        "MIDHASH=a#b\n"                          // '#' not space-preceded -> literal
-        "URL=http://host/path#frag\n"            // a URL fragment must survive
-        "HASHSTART=# rest\n"                     // '#' at value start -> whole value commented (empty)
-        "QUOTEDNOTE=\"kept\" # trailing note\n"); // a comment after a quoted value is allowed
+        "MIDHASH=a#b\n"                            // '#' not space-preceded -> literal
+        "URL=http://host/path#frag\n"              // a URL fragment must survive
+        "HASHSTART=# rest\n"                       // '#' at value start -> whole value commented (empty)
+        "QUOTEDNOTE=\"kept\" # trailing note\n");  // a comment after a quoted value is allowed
     const auto entries = readDotenvEntries(path);
     std::filesystem::remove(path);
 

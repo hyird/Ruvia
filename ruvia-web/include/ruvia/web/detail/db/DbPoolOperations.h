@@ -34,7 +34,8 @@ template <typename Pool>
 class DbSlotGuard final {
 public:
     DbSlotGuard(Pool& pool, std::size_t slot) noexcept
-        : pool_(&pool), slot_(slot) {}
+        : pool_(&pool),
+          slot_(slot) {}
     DbSlotGuard(const DbSlotGuard&) = delete;
     DbSlotGuard& operator=(const DbSlotGuard&) = delete;
     ~DbSlotGuard() {
@@ -67,8 +68,7 @@ Task<std::size_t> acquireDbSlot(Pool& pool) {
 template <typename Pool>
 void releaseDbSlot(Pool& pool, std::size_t slot) noexcept {
     const auto status = pool.scheduler_.release(slot);
-    if (status == PoolLeaseReleaseStatus::kInvalidSlot ||
-        status == PoolLeaseReleaseStatus::kAlreadyReleased) {
+    if (status == PoolLeaseReleaseStatus::kInvalidSlot || status == PoolLeaseReleaseStatus::kAlreadyReleased) {
         std::terminate();
     }
 }
@@ -77,11 +77,7 @@ void releaseDbSlot(Pool& pool, std::size_t slot) noexcept {
 // pool needs the deadline scanner running at all. Every timeout DbConfig can
 // carry is listed here, so adding one is a single edit.
 [[nodiscard]] inline bool dbConfigHasAnyTimeout(const DbConfig& config) noexcept {
-    return config.connectTimeout.has_value() ||
-        config.queryTimeout.has_value() ||
-        config.readTimeout.has_value() ||
-        config.writeTimeout.has_value() ||
-        config.acquireTimeout.has_value();
+    return config.connectTimeout.has_value() || config.queryTimeout.has_value() || config.readTimeout.has_value() || config.writeTimeout.has_value() || config.acquireTimeout.has_value();
 }
 
 // Ending a transaction is the same for every driver: run the control statement
@@ -92,11 +88,7 @@ void releaseDbSlot(Pool& pool, std::size_t slot) noexcept {
 // `Pool` supplies slots_, executeControl(), closeSlot() and releaseSlot(); it
 // declares this a friend so the shared rule stays out of the drivers.
 template <typename Pool>
-Task<void> finishDbTransaction(
-    Pool& pool,
-    std::size_t slot,
-    std::string_view command,
-    std::pmr::memory_resource* resource) {
+Task<void> finishDbTransaction(Pool& pool, std::size_t slot, std::string_view command, std::pmr::memory_resource* resource) {
     if (slot >= pool.slots_.size()) {
         throw std::logic_error("database transaction slot is invalid");
     }
@@ -110,27 +102,17 @@ Task<void> finishDbTransaction(
     pool.releaseSlot(slot);
 }
 
-
 // A statement inside an open transaction: it runs on the slot the transaction
 // already holds, so it neither acquires nor releases one. A failure closes the
 // connection and gives the slot back, because a transaction whose statement
 // failed mid-protocol cannot continue on it.
 template <typename Pool>
-Task<QueryResult> executeOnDbTransactionSlot(
-    Pool& pool,
-    std::size_t slot,
-    std::pmr::string sql,
-    std::pmr::vector<DbValue> params,
-    std::pmr::memory_resource* resource) {
+Task<QueryResult> executeOnDbTransactionSlot(Pool& pool, std::size_t slot, std::pmr::string sql, std::pmr::vector<DbValue> params, std::pmr::memory_resource* resource) {
     if (slot >= pool.slots_.size()) {
         throw std::logic_error("database transaction slot is invalid");
     }
     try {
-        co_return co_await pool.executeOnSlot(
-            pool.slots_[slot],
-            sql,
-            std::span<const DbValue>(params),
-            resource);
+        co_return co_await pool.executeOnSlot(pool.slots_[slot], sql, std::span<const DbValue>(params), resource);
     } catch (...) {
         pool.closeSlot(pool.slots_[slot]);
         pool.releaseSlot(slot);
@@ -143,11 +125,7 @@ Task<QueryResult> executeOnDbTransactionSlot(
 // and close the connection if the statement throws -- a slot whose statement
 // failed mid-protocol cannot be reused. The guard releases the slot either way.
 template <typename Pool>
-Task<QueryResult> executeDbQuery(
-    Pool& pool,
-    std::pmr::string sql,
-    std::pmr::vector<DbValue> params,
-    std::pmr::memory_resource* resource) {
+Task<QueryResult> executeDbQuery(Pool& pool, std::pmr::string sql, std::pmr::vector<DbValue> params, std::pmr::memory_resource* resource) {
     if (sql.empty()) {
         throw std::invalid_argument("SQL must not be empty");
     }
@@ -155,29 +133,20 @@ Task<QueryResult> executeDbQuery(
     const auto slotIndex = co_await pool.acquireSlot();
     typename Pool::SlotGuard guard(pool, slotIndex);
     try {
-        co_return co_await pool.executeOnSlot(
-            pool.slots_[slotIndex],
-            sql,
-            std::span<const DbValue>(params),
-            resource);
+        co_return co_await pool.executeOnSlot(pool.slots_[slotIndex], sql, std::span<const DbValue>(params), resource);
     } catch (...) {
         pool.closeSlot(pool.slots_[slotIndex]);
         throw;
     }
 }
 
-
 // The pool's configured port as a NUL-terminated buffer, the form asio's
 // resolver takes it in.
-[[nodiscard]] inline std::array<char, 6> formatDbPort(
-    std::uint16_t port,
-    std::string_view backend) {
+[[nodiscard]] inline std::array<char, 6> formatDbPort(std::uint16_t port, std::string_view backend) {
     std::array<char, 6> output{};
-    const auto parsed = std::to_chars(
-        output.data(), output.data() + output.size() - 1, port);
+    const auto parsed = std::to_chars(output.data(), output.data() + output.size() - 1, port);
     if (parsed.ec != std::errc{}) {
-        throw std::runtime_error(
-            std::string("failed to format ").append(backend).append(" port"));
+        throw std::runtime_error(std::string("failed to format ").append(backend).append(" port"));
     }
     *parsed.ptr = '\0';
     return output;
@@ -193,49 +162,30 @@ Task<QueryResult> executeDbQuery(
 // `Pool` supplies config_, resource_ and clearSlotDeadline(); it declares this
 // a friend so the shared rule stays out of the drivers.
 template <typename Pool, typename Slot>
-Task<DbResolvedAddresses> resolveDbHost(
-    Pool& pool,
-    Slot& slot,
-    const OperationTimeout& deadline,
-    std::string_view backend) {
-    const auto timedOut = [backend] {
-        return std::runtime_error(
-            std::string(backend).append(" host resolve timed out"));
-    };
+Task<DbResolvedAddresses> resolveDbHost(Pool& pool, Slot& slot, const OperationTimeout& deadline, std::string_view backend) {
+    const auto timedOut = [backend] { return std::runtime_error(std::string(backend).append(" host resolve timed out")); };
 
     const auto remaining = deadline.remaining();
     if (remaining.has_value() && remaining->count() <= 0) {
         throw timedOut();
     }
     if (remaining.has_value()) {
-        slot.deadline.arm(
-            workerTimerDeadlineAfter(*remaining),
-            Slot::DeadlineKind::kResolve);
+        slot.deadline.arm(workerTimerDeadlineAfter(*remaining), Slot::DeadlineKind::kResolve);
     } else {
         slot.deadline.reset();
     }
 
     const auto port = formatDbPort(pool.config_.port, backend);
     try {
-        auto completion =
-            co_await asyncAsio<asio::ip::tcp::resolver::results_type>(
-                [&pool, &slot, &port](auto handler) mutable {
-                    slot.resolver.async_resolve(
-                        pool.config_.host,
-                        std::string_view(port.data()),
-                        std::move(handler));
-                });
+        auto completion = co_await asyncAsio<asio::ip::tcp::resolver::results_type>([&pool, &slot, &port](auto handler) mutable { slot.resolver.async_resolve(pool.config_.host, std::string_view(port.data()), std::move(handler)); });
         const auto resolveError = completion.errorCode();
         auto results = std::move(completion).takeResult();
         const auto afterResolve = deadline.remaining();
-        if (slot.deadline.clear() ||
-            (afterResolve.has_value() && afterResolve->count() <= 0)) {
+        if (slot.deadline.clear() || (afterResolve.has_value() && afterResolve->count() <= 0)) {
             throw timedOut();
         }
         if (resolveError) {
-            throw std::system_error(
-                resolveError,
-                std::string("resolving ").append(backend).append(" host failed"));
+            throw std::system_error(resolveError, std::string("resolving ").append(backend).append(" host failed"));
         }
         co_return collectDbResolvedAddresses(results, pool.resource_);
     } catch (...) {

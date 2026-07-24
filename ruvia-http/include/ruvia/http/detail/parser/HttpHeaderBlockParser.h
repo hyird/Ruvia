@@ -58,9 +58,6 @@ struct ParsedRequestHeaderBlock {
 };
 
 [[nodiscard]] std::size_t findHttpHeaderEnd(std::string_view buffer, std::size_t searchOffset) noexcept;
-[[nodiscard]] std::optional<HttpParseError> parseHttpHeaderBlock(
-    std::string_view buffer,
-    std::size_t headerBytes,
-    ParsedRequestHeaderBlock& block) noexcept;
+[[nodiscard]] std::optional<HttpParseError> parseHttpHeaderBlock(std::string_view buffer, std::size_t headerBytes, ParsedRequestHeaderBlock& block) noexcept;
 
 }  // namespace ruvia::detail

@@ -18,76 +18,52 @@ class WebSocketFrameReadResult;
 // Close payload validation before publishing the same type.
 class WebSocketFrameView final {
 public:
-    [[nodiscard]] static constexpr WebSocketFrameView text(
-        std::string_view payload,
-        bool final,
-        bool compressed = false) noexcept {
-        return WebSocketFrameView(
-            WebSocketFrameKind::kText, payload, final, compressed);
+    [[nodiscard]] static constexpr WebSocketFrameView text(std::string_view payload, bool final, bool compressed = false) noexcept {
+        return WebSocketFrameView(WebSocketFrameKind::kText, payload, final, compressed);
     }
 
     template <HttpTemporaryOwningCharString String>
-    static WebSocketFrameView text(
-        String&&,
-        bool,
-        bool = false) = delete;
+    static WebSocketFrameView text(String&&, bool, bool = false) = delete;
 
-    [[nodiscard]] static constexpr WebSocketFrameView binary(
-        std::string_view payload,
-        bool final,
-        bool compressed = false) noexcept {
-        return WebSocketFrameView(
-            WebSocketFrameKind::kBinary, payload, final, compressed);
+    [[nodiscard]] static constexpr WebSocketFrameView binary(std::string_view payload, bool final, bool compressed = false) noexcept {
+        return WebSocketFrameView(WebSocketFrameKind::kBinary, payload, final, compressed);
     }
 
     template <HttpTemporaryOwningCharString String>
-    static WebSocketFrameView binary(
-        String&&,
-        bool,
-        bool = false) = delete;
+    static WebSocketFrameView binary(String&&, bool, bool = false) = delete;
 
-    [[nodiscard]] static constexpr WebSocketFrameView continuation(
-        std::string_view payload,
-        bool final) noexcept {
-        return WebSocketFrameView(
-            WebSocketFrameKind::kContinuation, payload, final, false);
+    [[nodiscard]] static constexpr WebSocketFrameView continuation(std::string_view payload, bool final) noexcept {
+        return WebSocketFrameView(WebSocketFrameKind::kContinuation, payload, final, false);
     }
 
     template <HttpTemporaryOwningCharString String>
     static WebSocketFrameView continuation(String&&, bool) = delete;
 
-    [[nodiscard]] static std::optional<WebSocketFrameView> close(
-        std::string_view payload) noexcept {
-        if (payload.size() > 125 ||
-            webSocketClosePayloadFailure(payload).has_value()) {
+    [[nodiscard]] static std::optional<WebSocketFrameView> close(std::string_view payload) noexcept {
+        if (payload.size() > 125 || webSocketClosePayloadFailure(payload).has_value()) {
             return std::nullopt;
         }
-        return WebSocketFrameView(
-            WebSocketFrameKind::kClose, payload, true, false);
+        return WebSocketFrameView(WebSocketFrameKind::kClose, payload, true, false);
     }
 
     template <HttpTemporaryOwningCharString String>
     static std::optional<WebSocketFrameView> close(String&&) = delete;
 
-    [[nodiscard]] static constexpr std::optional<WebSocketFrameView> ping(
-        std::string_view payload) noexcept {
+    [[nodiscard]] static constexpr std::optional<WebSocketFrameView> ping(std::string_view payload) noexcept {
         if (payload.size() > 125) {
             return std::nullopt;
         }
-        return WebSocketFrameView(
-            WebSocketFrameKind::kPing, payload, true, false);
+        return WebSocketFrameView(WebSocketFrameKind::kPing, payload, true, false);
     }
 
     template <HttpTemporaryOwningCharString String>
     static std::optional<WebSocketFrameView> ping(String&&) = delete;
 
-    [[nodiscard]] static constexpr std::optional<WebSocketFrameView> pong(
-        std::string_view payload) noexcept {
+    [[nodiscard]] static constexpr std::optional<WebSocketFrameView> pong(std::string_view payload) noexcept {
         if (payload.size() > 125) {
             return std::nullopt;
         }
-        return WebSocketFrameView(
-            WebSocketFrameKind::kPong, payload, true, false);
+        return WebSocketFrameView(WebSocketFrameKind::kPong, payload, true, false);
     }
 
     template <HttpTemporaryOwningCharString String>
@@ -112,17 +88,10 @@ public:
 private:
     friend class WebSocketFrameReadResult;
 
-    constexpr WebSocketFrameView(
-        const WebSocketFrameStart& start,
-        std::string_view payload) noexcept
-        : WebSocketFrameView(
-              start.kind(), payload, start.final(), start.compressed()) {}
+    constexpr WebSocketFrameView(const WebSocketFrameStart& start, std::string_view payload) noexcept
+        : WebSocketFrameView(start.kind(), payload, start.final(), start.compressed()) {}
 
-    constexpr WebSocketFrameView(
-        WebSocketFrameKind kind,
-        std::string_view payload,
-        bool final,
-        bool compressed) noexcept
+    constexpr WebSocketFrameView(WebSocketFrameKind kind, std::string_view payload, bool final, bool compressed) noexcept
         : kind_(kind),
           payload_(payload),
           final_(final),

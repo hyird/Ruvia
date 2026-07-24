@@ -15,16 +15,13 @@ namespace {
 [[nodiscard]] bool isValidClientTeItem(std::string_view item) noexcept {
     std::size_t cursor = 0;
     const auto skipOws = [&item, &cursor]() noexcept {
-        while (cursor < item.size() &&
-               (item[cursor] == ' ' || item[cursor] == '\t')) {
+        while (cursor < item.size() && (item[cursor] == ' ' || item[cursor] == '\t')) {
             ++cursor;
         }
     };
     const auto parseToken = [&item, &cursor]() noexcept {
         const auto begin = cursor;
-        while (cursor < item.size() &&
-               detail::isHttpTokenChar(
-                   static_cast<unsigned char>(item[cursor]))) {
+        while (cursor < item.size() && detail::isHttpTokenChar(static_cast<unsigned char>(item[cursor]))) {
             ++cursor;
         }
         return item.substr(begin, cursor - begin);
@@ -34,12 +31,8 @@ namespace {
     if (coding.empty()) {
         return false;
     }
-    const bool trailers =
-        detail::httpAsciiEqualsIgnoreCase(coding, "trailers");
-    const bool supportedCoding =
-        detail::httpAsciiEqualsIgnoreCase(coding, "gzip") ||
-        detail::httpAsciiEqualsIgnoreCase(coding, "x-gzip") ||
-        detail::httpAsciiEqualsIgnoreCase(coding, "deflate");
+    const bool trailers = detail::httpAsciiEqualsIgnoreCase(coding, "trailers");
+    const bool supportedCoding = detail::httpAsciiEqualsIgnoreCase(coding, "gzip") || detail::httpAsciiEqualsIgnoreCase(coding, "x-gzip") || detail::httpAsciiEqualsIgnoreCase(coding, "deflate");
     if (!trailers && !supportedCoding) {
         // The paired response parser cannot represent any other transfer
         // coding. Advertising one here would make the client claim a decoding
@@ -60,9 +53,7 @@ namespace {
     // RFC 9110 section 12.4.2 defines weight with the exact `q=` literal.
     // BWS around '=' belongs to transfer-parameter syntax instead; treating
     // `q =` as a weight would emit an undefined gzip/deflate parameter.
-    if (cursor + 2 > item.size() ||
-        detail::httpAsciiToLower(static_cast<unsigned char>(item[cursor])) != 'q' ||
-        item[cursor + 1] != '=') {
+    if (cursor + 2 > item.size() || detail::httpAsciiToLower(static_cast<unsigned char>(item[cursor])) != 'q' || item[cursor + 1] != '=') {
         return false;
     }
     cursor += 2;
@@ -76,9 +67,7 @@ namespace {
 
 }  // namespace
 
-bool addHeadBytes(
-    std::size_t& total,
-    std::size_t bytes) noexcept {
+bool addHeadBytes(std::size_t& total, std::size_t bytes) noexcept {
     if (bytes > kMaxHttpHeaderBytes - total) {
         return false;
     }
@@ -94,23 +83,18 @@ bool isValidClientTeField(std::string_view value) noexcept {
     }
     bool valid = true;
     bool sawItem = false;
-    detail::httpVisitCommaSeparatedQuotedItems(
-        value,
-        [&valid, &sawItem](std::string_view item) noexcept {
-            sawItem = true;
-            if (!isValidClientTeItem(item)) {
-                valid = false;
-                return false;
-            }
-            return true;
-        });
+    detail::httpVisitCommaSeparatedQuotedItems(value, [&valid, &sawItem](std::string_view item) noexcept {
+        sawItem = true;
+        if (!isValidClientTeItem(item)) {
+            valid = false;
+            return false;
+        }
+        return true;
+    });
     return valid && sawItem;
 }
 
-bool analyzeHeaders(
-    std::span<const HttpHeaderView> headers,
-    RequestHeaderFacts& facts,
-    Http1ClientRequestPrepareError& error) noexcept {
+bool analyzeHeaders(std::span<const HttpHeaderView> headers, RequestHeaderFacts& facts, Http1ClientRequestPrepareError& error) noexcept {
     for (const auto& header : headers) {
         const auto name = header.name();
         const auto value = header.value();
@@ -139,12 +123,7 @@ bool analyzeHeaders(
             error = Http1ClientRequestPrepareError::kExpectHeaderManagedByWriter;
             return false;
         }
-        if ((kind == detail::RequestHeaderKind::kOrigin &&
-             !detail::isValidHttpOriginFieldValue(value)) ||
-            (kind == detail::RequestHeaderKind::kAccessControlRequestMethod &&
-             !detail::isValidHttpCorsRequestMethod(value)) ||
-            (kind == detail::RequestHeaderKind::kAccessControlRequestHeaders &&
-             !detail::isValidHttpCorsRequestHeaderNames(value))) {
+        if ((kind == detail::RequestHeaderKind::kOrigin && !detail::isValidHttpOriginFieldValue(value)) || (kind == detail::RequestHeaderKind::kAccessControlRequestMethod && !detail::isValidHttpCorsRequestMethod(value)) || (kind == detail::RequestHeaderKind::kAccessControlRequestHeaders && !detail::isValidHttpCorsRequestHeaderNames(value))) {
             error = Http1ClientRequestPrepareError::kInvalidHeader;
             return false;
         }
@@ -156,23 +135,12 @@ bool analyzeHeaders(
             facts.singletonHeaders |= bit;
         }
         if (detail::httpAsciiEqualsIgnoreCase(name, "Connection")) {
-            if (facts.connectionOptions.parseField(
-                    value,
-                    detail::HttpFieldListRole::kSender,
-                    [](std::string_view option) noexcept {
-                        return !detail::httpConnectionOptionConflictsWithManagedField(
-                            option);
-                    }) != detail::HttpFieldListParseStatus::kOk) {
+            if (facts.connectionOptions.parseField(value, detail::HttpFieldListRole::kSender, [](std::string_view option) noexcept { return !detail::httpConnectionOptionConflictsWithManagedField(option); }) != detail::HttpFieldListParseStatus::kOk) {
                 error = Http1ClientRequestPrepareError::kInvalidConnection;
                 return false;
             }
         } else if (detail::httpAsciiEqualsIgnoreCase(name, "Upgrade")) {
-            if (facts.upgradeProtocols.parseField(
-                    value,
-                    detail::HttpFieldListRole::kSender,
-                    [](const detail::HttpUpgradeProtocol&) noexcept {
-                        return true;
-                    }) != detail::HttpFieldListParseStatus::kOk) {
+            if (facts.upgradeProtocols.parseField(value, detail::HttpFieldListRole::kSender, [](const detail::HttpUpgradeProtocol&) noexcept { return true; }) != detail::HttpFieldListParseStatus::kOk) {
                 error = Http1ClientRequestPrepareError::kInvalidUpgrade;
                 return false;
             }
@@ -188,27 +156,20 @@ bool analyzeHeaders(
                 return false;
             }
             facts.hasContentType = true;
-        } else if (detail::httpAsciiEqualsIgnoreCase(
-                       name, "Content-Encoding")) {
-            if (!detail::isValidHttpContentEncodingFieldValue(
-                    value, detail::HttpFieldListRole::kSender)) {
+        } else if (detail::httpAsciiEqualsIgnoreCase(name, "Content-Encoding")) {
+            if (!detail::isValidHttpContentEncodingFieldValue(value, detail::HttpFieldListRole::kSender)) {
                 error = Http1ClientRequestPrepareError::kInvalidHeader;
                 return false;
             }
         }
 
-        if (!addHeadBytes(facts.wireBytes, name.size()) ||
-            !addHeadBytes(facts.wireBytes, 2) ||
-            !addHeadBytes(facts.wireBytes, value.size()) ||
-            !addHeadBytes(facts.wireBytes, kCrlf.size())) {
+        if (!addHeadBytes(facts.wireBytes, name.size()) || !addHeadBytes(facts.wireBytes, 2) || !addHeadBytes(facts.wireBytes, value.size()) || !addHeadBytes(facts.wireBytes, kCrlf.size())) {
             error = Http1ClientRequestPrepareError::kHeaderTooLarge;
             return false;
         }
     }
-    if (facts.upgradeProtocols.hasField() &&
-        !facts.connectionOptions.upgrade()) {
-        error =
-            Http1ClientRequestPrepareError::kUpgradeConnectionOptionRequired;
+    if (facts.upgradeProtocols.hasField() && !facts.connectionOptions.upgrade()) {
+        error = Http1ClientRequestPrepareError::kUpgradeConnectionOptionRequired;
         return false;
     }
     if (facts.hasTe && !facts.connectionOptions.te()) {

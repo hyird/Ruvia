@@ -18,9 +18,7 @@ namespace ruvia::detail {
 // socket first and releases the count second.
 class AcceptedConnectionLease final {
 public:
-    AcceptedConnectionLease(
-        asio::ip::tcp::socket socket,
-        std::atomic<std::size_t>& count) noexcept
+    AcceptedConnectionLease(asio::ip::tcp::socket socket, std::atomic<std::size_t>& count) noexcept
         : socket_(std::move(socket)),
           count_(&count) {
         count_->fetch_add(1, std::memory_order_relaxed);
@@ -62,7 +60,8 @@ private:
 class WorkSetReturn final {
 public:
     WorkSetReturn(ConnectionWorkSetPool& pool, ConnectionWorkSet*& workSet) noexcept
-        : pool_(&pool), workSet_(&workSet) {}
+        : pool_(&pool),
+          workSet_(&workSet) {}
 
     WorkSetReturn(const WorkSetReturn&) = delete;
     WorkSetReturn& operator=(const WorkSetReturn&) = delete;

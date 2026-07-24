@@ -55,8 +55,7 @@ private:
         const auto note = co_await c.req().json<NoteRequest>();
         ++c.workerState<NoteCounter>().stored;
         c.status(ruvia::http_status::kCreated);
-        co_return c.body(
-            note.text().has_value() ? note.text()->view() : "empty");
+        co_return c.body(note.text().has_value() ? note.text()->view() : "empty");
     }
 
     ruvia::Task<ruvia::HttpResponse> stats(ruvia::Context& c) {
@@ -85,27 +84,22 @@ void expect(bool condition, const char* what) {
 
 int main() {
     ruvia::TestApp app;
-    app.use<AuditMiddleware>()
-        .notFound("/notes", &notesMissing);
+    app.use<AuditMiddleware>().notFound("/notes", &notesMissing);
     app.useWorkerState<NoteCounter>();
 
     // Routing, params and urlFor.
     const auto note = app.request(ruvia::TestRequest::get("/notes/7"));
     expect(note.status() == ruvia::http_status::kOk, "GET /notes/7 is 200");
     expect(note.body() == "note 7 self=/notes/7", "urlFor builds the note link");
-    expect(note.header("X-Audited").value_or("") == "yes",
-           "global middleware stamped the response");
+    expect(note.header("X-Audited").value_or("") == "yes", "global middleware stamped the response");
 
     // Model bodies keep their production status split: 415 for the wrong
     // media type, 400 for a malformed body of the right type.
-    const auto created = app.request(
-        ruvia::TestRequest::post("/notes").json(R"({"text":"remember"})"));
+    const auto created = app.request(ruvia::TestRequest::post("/notes").json(R"({"text":"remember"})"));
     expect(created.status() == ruvia::http_status::kCreated, "valid JSON is 201");
     expect(created.body() == "remember", "created body echoes the model field");
-    const auto wrongType = app.request(
-        ruvia::TestRequest::post("/notes").body("text", "text/plain"));
-    expect(wrongType.status() == ruvia::http_status::kUnsupportedMediaType,
-           "wrong media type is 415");
+    const auto wrongType = app.request(ruvia::TestRequest::post("/notes").body("text", "text/plain"));
+    expect(wrongType.status() == ruvia::http_status::kUnsupportedMediaType, "wrong media type is 415");
 
     // Worker state persisted across the requests above.
     const auto stats = app.request(ruvia::TestRequest::get("/notes"));

@@ -12,9 +12,7 @@ namespace {
 
 std::string b64(std::string_view in) {
     std::string out(ruvia::detail::base64EncodedSize(in.size()), '\0');
-    ruvia::detail::encodeBase64(
-        out.data(),
-        std::span<const std::uint8_t>(reinterpret_cast<const std::uint8_t*>(in.data()), in.size()));
+    ruvia::detail::encodeBase64(out.data(), std::span<const std::uint8_t>(reinterpret_cast<const std::uint8_t*>(in.data()), in.size()));
     return out;
 }
 
@@ -47,8 +45,7 @@ RUVIA_TEST(base64_encoded_size) {
 RUVIA_TEST(base64_binary_high_bytes) {
     const unsigned char bytes[] = {0xFF, 0x00, 0xFF};
     std::string out(4, '\0');
-    ruvia::detail::encodeBase64(out.data(),
-                                std::span<const std::uint8_t>(bytes, sizeof(bytes)));
+    ruvia::detail::encodeBase64(out.data(), std::span<const std::uint8_t>(bytes, sizeof(bytes)));
     RUVIA_CHECK_EQ(out, std::string("/wD/"));
 }
 

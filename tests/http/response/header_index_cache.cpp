@@ -80,8 +80,7 @@ RUVIA_TEST(find_response_header_indexed_cache_hit) {
     ResponseHeaderIndexCache<8> cache{};
     cache[5] = 1;  // slot 5 -> header index 0 (stored as index + 1)
     // The fast path returns the cached header without scanning (name/bit ignored).
-    const auto* found = findResponseHeaderIndexed(
-        headers.data(), headers.data() + headers.size(), cache, 5, "", 0);
+    const auto* found = findResponseHeaderIndexed(headers.data(), headers.data() + headers.size(), cache, 5, "", 0);
     RUVIA_CHECK(found == headers.data());
 }
 
@@ -90,9 +89,7 @@ RUVIA_TEST(find_response_header_indexed_cache_miss_is_authoritative) {
     ResponseHeaderIndexCache<8> cache{};  // slot 5 == 0 (missing, not overflow)
     // A missing (non-overflow) slot means "not recorded": end, no scan, even
     // though the header is present in the list.
-    const auto* found = findResponseHeaderIndexed(
-        headers.data(), headers.data() + headers.size(), cache, 5, "location",
-        ruvia::detail::kResponseHeaderLocation);
+    const auto* found = findResponseHeaderIndexed(headers.data(), headers.data() + headers.size(), cache, 5, "location", ruvia::detail::kResponseHeaderLocation);
     RUVIA_CHECK(found == headers.data() + headers.size());
 }
 
@@ -100,9 +97,7 @@ RUVIA_TEST(find_response_header_indexed_overflow_scans_by_bit) {
     const auto headers = sampleHeaders();
     ResponseHeaderIndexCache<8> cache{};
     cache[5] = kOverflowResponseHeaderIndexSlot;  // -1 -> fall back to a linear scan
-    const auto* found = findResponseHeaderIndexed(
-        headers.data(), headers.data() + headers.size(), cache, 5, "",
-        ruvia::detail::kResponseHeaderLocation);
+    const auto* found = findResponseHeaderIndexed(headers.data(), headers.data() + headers.size(), cache, 5, "", ruvia::detail::kResponseHeaderLocation);
     RUVIA_CHECK(found == headers.data() + 2);
 }
 
@@ -110,11 +105,9 @@ RUVIA_TEST(find_response_header_indexed_out_of_range_scans_by_name) {
     const auto headers = sampleHeaders();
     ResponseHeaderIndexCache<8> cache{};
     // A slot beyond the cache skips it and scans by case-insensitive name.
-    const auto* found = findResponseHeaderIndexed(
-        headers.data(), headers.data() + headers.size(), cache, 100, "X-Custom", 0);
+    const auto* found = findResponseHeaderIndexed(headers.data(), headers.data() + headers.size(), cache, 100, "X-Custom", 0);
     RUVIA_CHECK(found == headers.data() + 1);
     // An absent name yields end.
-    const auto* absent = findResponseHeaderIndexed(
-        headers.data(), headers.data() + headers.size(), cache, 100, "x-absent", 0);
+    const auto* absent = findResponseHeaderIndexed(headers.data(), headers.data() + headers.size(), cache, 100, "x-absent", 0);
     RUVIA_CHECK(absent == headers.data() + headers.size());
 }

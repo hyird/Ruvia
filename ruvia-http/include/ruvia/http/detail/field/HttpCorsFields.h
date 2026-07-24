@@ -12,8 +12,7 @@ namespace ruvia::detail {
 // RFC 6454 section 7.1 permits either `null` or a space-delimited list of
 // serialized origins. Fetch-generated CORS requests currently send one item,
 // but the HTTP protocol primitive must retain the complete field grammar.
-[[nodiscard]] inline bool isValidHttpOriginFieldValue(
-    std::string_view value) noexcept {
+[[nodiscard]] inline bool isValidHttpOriginFieldValue(std::string_view value) noexcept {
     value = httpTrimOws(value);
     if (value == "null") {
         return true;
@@ -21,11 +20,8 @@ namespace ruvia::detail {
     std::size_t offset = 0;
     for (;;) {
         const auto separator = value.find(' ', offset);
-        const auto end = separator == std::string_view::npos
-            ? value.size()
-            : separator;
-        if (!isValidHttpSerializedOrigin(
-                value.substr(offset, end - offset))) {
+        const auto end = separator == std::string_view::npos ? value.size() : separator;
+        if (!isValidHttpSerializedOrigin(value.substr(offset, end - offset))) {
             return false;
         }
         if (separator == std::string_view::npos) {
@@ -35,29 +31,22 @@ namespace ruvia::detail {
     }
 }
 
-[[nodiscard]] inline bool isValidHttpCorsRequestMethod(
-    std::string_view value) noexcept {
+[[nodiscard]] inline bool isValidHttpCorsRequestMethod(std::string_view value) noexcept {
     return isValidHttpMethodToken(value);
 }
 
 template <typename Visitor>
-[[nodiscard]] inline bool visitHttpCorsRequestHeaderNames(
-    std::string_view value,
-    Visitor&& visitor) {
+[[nodiscard]] inline bool visitHttpCorsRequestHeaderNames(std::string_view value, Visitor&& visitor) {
     bool sawName = false;
     std::size_t offset = 0;
     for (;;) {
         const auto separator = value.find(',', offset);
-        const auto end = separator == std::string_view::npos
-            ? value.size()
-            : separator;
+        const auto end = separator == std::string_view::npos ? value.size() : separator;
         auto name = value.substr(offset, end - offset);
-        while (!name.empty() &&
-               (name.front() == ' ' || name.front() == '\t')) {
+        while (!name.empty() && (name.front() == ' ' || name.front() == '\t')) {
             name.remove_prefix(1);
         }
-        while (!name.empty() &&
-               (name.back() == ' ' || name.back() == '\t')) {
+        while (!name.empty() && (name.back() == ' ' || name.back() == '\t')) {
             name.remove_suffix(1);
         }
         if (!name.empty()) {
@@ -73,11 +62,8 @@ template <typename Visitor>
     }
 }
 
-[[nodiscard]] inline bool isValidHttpCorsRequestHeaderNames(
-    std::string_view value) noexcept {
-    return visitHttpCorsRequestHeaderNames(
-        value,
-        [](std::string_view) noexcept { return true; });
+[[nodiscard]] inline bool isValidHttpCorsRequestHeaderNames(std::string_view value) noexcept {
+    return visitHttpCorsRequestHeaderNames(value, [](std::string_view) noexcept { return true; });
 }
 
 }  // namespace ruvia::detail

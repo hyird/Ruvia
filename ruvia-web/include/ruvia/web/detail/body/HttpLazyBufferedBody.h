@@ -8,21 +8,8 @@ namespace ruvia::detail {
 template <typename Stream>
 class LazyBufferedBody final {
 public:
-    LazyBufferedBody(
-        Stream& stream,
-        std::pmr::polymorphic_allocator<char> workerAllocator,
-        std::pmr::memory_resource* requestResource,
-        std::string_view initialBodyAndPipeline,
-        Http1RequestBodyPlan bodyPlan,
-        ProtocolByteLimit bodyLimit,
-        ConnectionScanner::Entry& scannerEntry)
-        : reader_(
-              stream,
-              workerAllocator,
-              initialBodyAndPipeline,
-              bodyPlan,
-              bodyLimit,
-              scannerEntry),
+    LazyBufferedBody(Stream& stream, std::pmr::polymorphic_allocator<char> workerAllocator, std::pmr::memory_resource* requestResource, std::string_view initialBodyAndPipeline, Http1RequestBodyPlan bodyPlan, ProtocolByteLimit bodyLimit, ConnectionScanner::Entry& scannerEntry)
+        : reader_(stream, workerAllocator, initialBodyAndPipeline, bodyPlan, bodyLimit, scannerEntry),
           body_(pmrResourceOrDefault(requestResource)) {}
 
     [[nodiscard]] Http1RequestBodyConsumption consumption() const noexcept {
@@ -38,7 +25,8 @@ public:
     }
 
     Task<void> discard() {
-        while (co_await reader_.read()) {}
+        while (co_await reader_.read()) {
+        }
     }
 
 private:

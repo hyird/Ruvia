@@ -47,15 +47,9 @@ namespace {
 }  // namespace
 
 detail::RouteEntry::RouteEntry(std::pmr::memory_resource* resource, Init init)
-    : RouteEntry(
-          detail::ResolvedPmrResourceTag{},
-          detail::pmrResourceOrDefault(resource),
-          std::move(init)) {}
+    : RouteEntry(detail::ResolvedPmrResourceTag{}, detail::pmrResourceOrDefault(resource), std::move(init)) {}
 
-detail::RouteEntry::RouteEntry(
-    detail::ResolvedPmrResourceTag,
-    std::pmr::memory_resource* resource,
-    Init init)
+detail::RouteEntry::RouteEntry(detail::ResolvedPmrResourceTag, std::pmr::memory_resource* resource, Init init)
     : method_(init.method),
       path_(init.path, resource),
       endpoint_(std::move(init.endpoint)),
@@ -68,22 +62,8 @@ detail::RouteTable::RouteTable(std::pmr::memory_resource* resource)
       routes_(resource_),
       middlewareFrames_(resource_),
       exactSlots_(resource_),
-      radixRoots_{
-          RadixNode(detail::ResolvedPmrResourceTag{}, resource_),
-          RadixNode(detail::ResolvedPmrResourceTag{}, resource_),
-          RadixNode(detail::ResolvedPmrResourceTag{}, resource_),
-          RadixNode(detail::ResolvedPmrResourceTag{}, resource_),
-          RadixNode(detail::ResolvedPmrResourceTag{}, resource_),
-          RadixNode(detail::ResolvedPmrResourceTag{}, resource_),
-          RadixNode(detail::ResolvedPmrResourceTag{}, resource_)},
-      dynamicRoots_{
-          DynamicNode(detail::ResolvedPmrResourceTag{}, resource_),
-          DynamicNode(detail::ResolvedPmrResourceTag{}, resource_),
-          DynamicNode(detail::ResolvedPmrResourceTag{}, resource_),
-          DynamicNode(detail::ResolvedPmrResourceTag{}, resource_),
-          DynamicNode(detail::ResolvedPmrResourceTag{}, resource_),
-          DynamicNode(detail::ResolvedPmrResourceTag{}, resource_),
-          DynamicNode(detail::ResolvedPmrResourceTag{}, resource_)},
+      radixRoots_{RadixNode(detail::ResolvedPmrResourceTag{}, resource_), RadixNode(detail::ResolvedPmrResourceTag{}, resource_), RadixNode(detail::ResolvedPmrResourceTag{}, resource_), RadixNode(detail::ResolvedPmrResourceTag{}, resource_), RadixNode(detail::ResolvedPmrResourceTag{}, resource_), RadixNode(detail::ResolvedPmrResourceTag{}, resource_), RadixNode(detail::ResolvedPmrResourceTag{}, resource_)},
+      dynamicRoots_{DynamicNode(detail::ResolvedPmrResourceTag{}, resource_), DynamicNode(detail::ResolvedPmrResourceTag{}, resource_), DynamicNode(detail::ResolvedPmrResourceTag{}, resource_), DynamicNode(detail::ResolvedPmrResourceTag{}, resource_), DynamicNode(detail::ResolvedPmrResourceTag{}, resource_), DynamicNode(detail::ResolvedPmrResourceTag{}, resource_), DynamicNode(detail::ResolvedPmrResourceTag{}, resource_)},
       dynamicNodeArena_(resource_),
       dynamicParamNames_(resource_) {}
 
@@ -118,39 +98,23 @@ void detail::RouterImpl::buildRouteTable(RouteTable& table) const {
     std::size_t headShadowCandidateCount = 0;
     std::size_t middlewareCount = 0;
     for (const auto& route : pendingRoutes_) {
-        if (route.method() == HttpKnownMethod::kGet &&
-            eligibleForHeadShadow(route.endpoint())) {
+        if (route.method() == HttpKnownMethod::kGet && eligibleForHeadShadow(route.endpoint())) {
             ++headShadowCandidateCount;
         }
-        middlewareCount +=
-            globalMiddlewareFrames_.size() + route.middlewares().size();
+        middlewareCount += globalMiddlewareFrames_.size() + route.middlewares().size();
     }
     table.routes_.reserve(pendingRoutes_.size() + headShadowCandidateCount);
     table.middlewareFrames_.reserve(middlewareCount);
 
     for (const auto& pending : pendingRoutes_) {
         const auto pendingMiddlewares = pending.middlewares();
-        RouteEntry route(detail::ResolvedPmrResourceTag{}, table.resource_, RouteEntry::Init{
-            .method = pending.method(),
-            .path = pending.path(),
-            .endpoint = pending.endpoint().clone(table.resource_),
-            .dynamic = pending.dynamic(),
-            .middlewareOffset = 0,
-            .middlewareCount = 0});
+        RouteEntry route(detail::ResolvedPmrResourceTag{}, table.resource_, RouteEntry::Init{.method = pending.method(), .path = pending.path(), .endpoint = pending.endpoint().clone(table.resource_), .dynamic = pending.dynamic(), .middlewareOffset = 0, .middlewareCount = 0});
         // App-wide middleware runs before controller/route middleware on every
         // matched route: each route's contiguous frame range starts with the
         // shared global instances.
-        route.setMiddlewareRange(
-            table.middlewareFrames_.size(),
-            globalMiddlewareFrames_.size() + pendingMiddlewares.size());
-        table.middlewareFrames_.insert(
-            table.middlewareFrames_.end(),
-            globalMiddlewareFrames_.begin(),
-            globalMiddlewareFrames_.end());
-        table.middlewareFrames_.insert(
-            table.middlewareFrames_.end(),
-            pendingMiddlewares.begin(),
-            pendingMiddlewares.end());
+        route.setMiddlewareRange(table.middlewareFrames_.size(), globalMiddlewareFrames_.size() + pendingMiddlewares.size());
+        table.middlewareFrames_.insert(table.middlewareFrames_.end(), globalMiddlewareFrames_.begin(), globalMiddlewareFrames_.end());
+        table.middlewareFrames_.insert(table.middlewareFrames_.end(), pendingMiddlewares.begin(), pendingMiddlewares.end());
         table.routes_.push_back(std::move(route));
     }
 
@@ -177,8 +141,7 @@ void detail::RouterImpl::buildRouteTable(RouteTable& table) const {
 
     for (std::size_t i = 0; i < originalRouteCount; ++i) {
         const auto& source = table.routes_[i];
-        if (source.method() != HttpKnownMethod::kGet ||
-            !eligibleForHeadShadow(source.endpoint())) {
+        if (source.method() != HttpKnownMethod::kGet || !eligibleForHeadShadow(source.endpoint())) {
             continue;
         }
         bool conflictsWithExistingHead = false;
@@ -191,13 +154,7 @@ void detail::RouterImpl::buildRouteTable(RouteTable& table) const {
         if (conflictsWithExistingHead) {
             continue;
         }
-        RouteEntry shadow(detail::ResolvedPmrResourceTag{}, table.resource_, RouteEntry::Init{
-            .method = HttpKnownMethod::kHead,
-            .path = source.path(),
-            .endpoint = source.endpoint().clone(table.resource_),
-            .dynamic = source.dynamic(),
-            .middlewareOffset = source.middlewareOffset(),
-            .middlewareCount = source.middlewareCount()});
+        RouteEntry shadow(detail::ResolvedPmrResourceTag{}, table.resource_, RouteEntry::Init{.method = HttpKnownMethod::kHead, .path = source.path(), .endpoint = source.endpoint().clone(table.resource_), .dynamic = source.dynamic(), .middlewareOffset = source.middlewareOffset(), .middlewareCount = source.middlewareCount()});
         table.routes_.push_back(std::move(shadow));
     }
 

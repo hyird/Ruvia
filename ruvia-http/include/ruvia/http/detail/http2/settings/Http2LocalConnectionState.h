@@ -18,8 +18,7 @@ public:
 private:
     friend class Http2LocalConnectionState;
 
-    explicit constexpr Http2LocalConnectionGracefulDrain(
-        std::uint32_t lastStreamId) noexcept
+    explicit constexpr Http2LocalConnectionGracefulDrain(std::uint32_t lastStreamId) noexcept
         : lastStreamId_(lastStreamId) {}
 
     std::uint32_t lastStreamId_;
@@ -34,8 +33,7 @@ public:
 private:
     friend class Http2LocalConnectionState;
 
-    explicit constexpr Http2LocalConnectionFatalFailure(
-        Http2ErrorCode error) noexcept
+    explicit constexpr Http2LocalConnectionFatalFailure(Http2ErrorCode error) noexcept
         : error_(error) {}
 
     Http2ErrorCode error_;
@@ -47,26 +45,22 @@ private:
 // Peer GOAWAY and preface progress are directional/orthogonal state elsewhere.
 class Http2LocalConnectionState final {
 public:
-    [[nodiscard]] constexpr const Http2LocalConnectionOpen*
-    open() const & noexcept {
+    [[nodiscard]] constexpr const Http2LocalConnectionOpen* open() const& noexcept {
         return std::get_if<Http2LocalConnectionOpen>(&state_);
     }
-    const Http2LocalConnectionOpen* open() const && = delete;
+    const Http2LocalConnectionOpen* open() const&& = delete;
 
-    [[nodiscard]] constexpr const Http2LocalConnectionGracefulDrain*
-    gracefulDrain() const & noexcept {
+    [[nodiscard]] constexpr const Http2LocalConnectionGracefulDrain* gracefulDrain() const& noexcept {
         return std::get_if<Http2LocalConnectionGracefulDrain>(&state_);
     }
-    const Http2LocalConnectionGracefulDrain* gracefulDrain() const && = delete;
+    const Http2LocalConnectionGracefulDrain* gracefulDrain() const&& = delete;
 
-    [[nodiscard]] constexpr const Http2LocalConnectionFatalFailure*
-    fatalFailure() const & noexcept {
+    [[nodiscard]] constexpr const Http2LocalConnectionFatalFailure* fatalFailure() const& noexcept {
         return std::get_if<Http2LocalConnectionFatalFailure>(&state_);
     }
-    const Http2LocalConnectionFatalFailure* fatalFailure() const && = delete;
+    const Http2LocalConnectionFatalFailure* fatalFailure() const&& = delete;
 
-    [[nodiscard]] bool beginGracefulDrain(
-        std::uint32_t lastStreamId) noexcept {
+    [[nodiscard]] bool beginGracefulDrain(std::uint32_t lastStreamId) noexcept {
         if (open() == nullptr) {
             return false;
         }
@@ -79,10 +73,7 @@ public:
     }
 
 private:
-    using State = std::variant<
-        Http2LocalConnectionOpen,
-        Http2LocalConnectionGracefulDrain,
-        Http2LocalConnectionFatalFailure>;
+    using State = std::variant<Http2LocalConnectionOpen, Http2LocalConnectionGracefulDrain, Http2LocalConnectionFatalFailure>;
 
     State state_;
 };

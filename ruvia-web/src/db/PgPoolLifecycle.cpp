@@ -11,9 +11,7 @@
 
 namespace ruvia::detail {
 
-PostgreSqlPool::ConnectionSlot::ConnectionSlot(
-    asio::io_context& ioContext,
-    std::pmr::memory_resource* resource)
+PostgreSqlPool::ConnectionSlot::ConnectionSlot(asio::io_context& ioContext, std::pmr::memory_resource* resource)
     : resolver(ioContext),
       waitSocket(nullptr, SlotSocketDeleter{pmrResourceOrDefault(resource)}) {}
 
@@ -25,10 +23,7 @@ PostgreSqlPool::ConnectionSlot::~ConnectionSlot() {
 PostgreSqlPool::ConnectionSlot::ConnectionSlot(ConnectionSlot&&) noexcept = default;
 PostgreSqlPool::ConnectionSlot& PostgreSqlPool::ConnectionSlot::operator=(ConnectionSlot&&) noexcept = default;
 
-PostgreSqlPool::PostgreSqlPool(
-    asio::io_context& ioContext,
-    DbConfig config,
-    std::pmr::memory_resource* resource)
+PostgreSqlPool::PostgreSqlPool(asio::io_context& ioContext, DbConfig config, std::pmr::memory_resource* resource)
     : ioContext_(ioContext),
       config_(std::move(config)),
       resource_(pmrResourceOrDefault(resource)),
@@ -59,8 +54,7 @@ void PostgreSqlPool::closeNow() noexcept {
     }
 }
 
-void PostgreSqlPool::scanDeadlines(
-    std::chrono::steady_clock::time_point now) noexcept {
+void PostgreSqlPool::scanDeadlines(std::chrono::steady_clock::time_point now) noexcept {
     if (config_.acquireTimeout.has_value()) {
         scheduler_.scanDeadlines(now);
     }
@@ -69,8 +63,7 @@ void PostgreSqlPool::scanDeadlines(
             continue;
         }
         const auto* kind = slot.deadline.kind();
-        if (kind != nullptr &&
-            *kind == ConnectionSlot::DeadlineKind::kResolve) {
+        if (kind != nullptr && *kind == ConnectionSlot::DeadlineKind::kResolve) {
             slot.resolver.cancel();
         } else if (slot.waitSocket != nullptr) {
             slot.waitSocket->cancel();
@@ -122,16 +115,12 @@ void PostgreSqlPool::closeSlot(ConnectionSlot& slot) noexcept {
     slot.closeRequested = false;
 }
 
-void PostgreSqlPool::setSlotDeadline(
-    ConnectionSlot& slot,
-    std::optional<std::chrono::milliseconds> timeout) noexcept {
+void PostgreSqlPool::setSlotDeadline(ConnectionSlot& slot, std::optional<std::chrono::milliseconds> timeout) noexcept {
     if (!timeout.has_value() || timeout->count() <= 0) {
         slot.deadline.reset();
         return;
     }
-    slot.deadline.arm(
-        workerTimerDeadlineAfter(*timeout),
-        ConnectionSlot::DeadlineKind::kSocket);
+    slot.deadline.arm(workerTimerDeadlineAfter(*timeout), ConnectionSlot::DeadlineKind::kSocket);
 }
 
 void PostgreSqlPool::clearSlotDeadline(ConnectionSlot& slot) noexcept {

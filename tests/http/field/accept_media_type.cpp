@@ -68,23 +68,18 @@ RUVIA_TEST(media_range_matches_type_subtype_and_wildcards) {
     RUVIA_CHECK(httpMediaRangeMatches("text/html", "text/html"));
     RUVIA_CHECK(httpMediaRangeMatches("text/*", "text/html"));
     RUVIA_CHECK(httpMediaRangeMatches("*/*", "application/json"));
-    RUVIA_CHECK(httpMediaRangeMatches("TEXT/HTML", "text/html"));                 // case-insensitive
-    RUVIA_CHECK(httpMediaRangeMatches(
-        "text/html;charset=utf-8", "text/html;charset=\"utf-8\""));
+    RUVIA_CHECK(httpMediaRangeMatches("TEXT/HTML", "text/html"));  // case-insensitive
+    RUVIA_CHECK(httpMediaRangeMatches("text/html;charset=utf-8", "text/html;charset=\"utf-8\""));
     // Charset names are registered case-insensitively; quoted-string syntax
     // does not change that comparison rule.
-    RUVIA_CHECK(httpMediaRangeMatches(
-        "text/html;charset=\"UTF-8\"", "text/html;CHARSET=utf-8"));
-    RUVIA_CHECK(!httpMediaRangeMatches(
-        "text/html;charset=utf-8", "text/html"));
-    RUVIA_CHECK(!httpMediaRangeMatches(
-        "text/html;charset=utf-8", "text/html;charset=iso-8859-1"));
+    RUVIA_CHECK(httpMediaRangeMatches("text/html;charset=\"UTF-8\"", "text/html;CHARSET=utf-8"));
+    RUVIA_CHECK(!httpMediaRangeMatches("text/html;charset=utf-8", "text/html"));
+    RUVIA_CHECK(!httpMediaRangeMatches("text/html;charset=utf-8", "text/html;charset=iso-8859-1"));
     // Other parameter values retain their registered case-sensitive semantics.
-    RUVIA_CHECK(!httpMediaRangeMatches(
-        "application/json;profile=Example", "application/json;profile=example"));
-    RUVIA_CHECK(!httpMediaRangeMatches("text/*", "application/json"));            // type mismatch
-    RUVIA_CHECK(!httpMediaRangeMatches("text/plain", "text/html"));              // subtype mismatch
-    RUVIA_CHECK(!httpMediaRangeMatches("text", "text/html"));                    // no slash -> invalid
+    RUVIA_CHECK(!httpMediaRangeMatches("application/json;profile=Example", "application/json;profile=example"));
+    RUVIA_CHECK(!httpMediaRangeMatches("text/*", "application/json"));  // type mismatch
+    RUVIA_CHECK(!httpMediaRangeMatches("text/plain", "text/html"));     // subtype mismatch
+    RUVIA_CHECK(!httpMediaRangeMatches("text", "text/html"));           // no slash -> invalid
 }
 
 RUVIA_TEST(media_range_specificity_ordering) {
@@ -107,32 +102,21 @@ RUVIA_TEST(media_range_rejects_invalid_tokens) {
 
 RUVIA_TEST(media_range_rejects_whitespace_around_parameter_equals) {
     RUVIA_CHECK(!httpAcceptsMediaType("text/html;q =1", "text/html"));
-    RUVIA_CHECK(!httpAcceptsMediaType(
-        "text/html;level =1", "text/html;level=1"));
-    RUVIA_CHECK(!httpAcceptsMediaType(
-        "text/html;charset=utf-8", "text/html;charset =utf-8"));
+    RUVIA_CHECK(!httpAcceptsMediaType("text/html;level =1", "text/html;level=1"));
+    RUVIA_CHECK(!httpAcceptsMediaType("text/html;charset=utf-8", "text/html;charset =utf-8"));
 
     // OWS around the semicolon delimiter remains legal.
-    RUVIA_CHECK(httpAcceptsMediaType(
-        "text/html \t; \tq=0.5", "text/html"));
+    RUVIA_CHECK(httpAcceptsMediaType("text/html \t; \tq=0.5", "text/html"));
 }
 
 RUVIA_TEST(media_range_rejects_duplicate_parameter_names) {
-    RUVIA_CHECK(!httpAcceptsMediaType(
-        "text/html;level=1;LEVEL=1", "text/html;level=1"));
-    RUVIA_CHECK(!httpAcceptsMediaType(
-        "text/html;q=1;Q=0", "text/html"));
-    RUVIA_CHECK(!httpAcceptsMediaType(
-        "text/html;level=1", "text/html;level=1;LEVEL=2"));
+    RUVIA_CHECK(!httpAcceptsMediaType("text/html;level=1;LEVEL=1", "text/html;level=1"));
+    RUVIA_CHECK(!httpAcceptsMediaType("text/html;q=1;Q=0", "text/html"));
+    RUVIA_CHECK(!httpAcceptsMediaType("text/html;level=1", "text/html;level=1;LEVEL=2"));
 }
 
 RUVIA_TEST(media_range_rejects_invalid_offered_parameters) {
-    for (const std::string_view offered : {
-             "text/plain; charset",
-             "text/plain; charset=",
-             "text/plain; charset =utf-8",
-             "text/plain; charset=utf-8; CHARSET=latin1",
-             "text/plain; charset=\"unterminated"}) {
+    for (const std::string_view offered : {"text/plain; charset", "text/plain; charset=", "text/plain; charset =utf-8", "text/plain; charset=utf-8; CHARSET=latin1", "text/plain; charset=\"unterminated"}) {
         RUVIA_CHECK(!httpMediaRangeMatches("*/*", offered));
         RUVIA_CHECK(!httpAcceptsMediaType("*/*", offered));
         RUVIA_CHECK(!httpAcceptsMediaType("", offered));
@@ -140,7 +124,7 @@ RUVIA_TEST(media_range_rejects_invalid_offered_parameters) {
 }
 
 RUVIA_TEST(accepts_media_type_basic) {
-    RUVIA_CHECK(httpAcceptsMediaType("", "text/html"));                // absent Accept -> accept anything
+    RUVIA_CHECK(httpAcceptsMediaType("", "text/html"));  // absent Accept -> accept anything
     RUVIA_CHECK(httpAcceptsMediaType("text/html", "text/html"));
     RUVIA_CHECK(httpAcceptsMediaType("text/*", "text/html"));
     RUVIA_CHECK(httpAcceptsMediaType("*/*", "application/json"));
@@ -164,29 +148,17 @@ RUVIA_TEST(accepts_media_type_specificity_beats_quality) {
 RUVIA_TEST(accepts_media_type_parameters_participate_in_matching_and_precedence) {
     // A parameterized range must not match a representation with a different
     // parameter. The generic q=0 range therefore remains the winning match.
-    RUVIA_CHECK(!httpAcceptsMediaType(
-        "application/json;profile=v2;q=1, application/json;q=0",
-        "application/json;profile=v1"));
+    RUVIA_CHECK(!httpAcceptsMediaType("application/json;profile=v2;q=1, application/json;q=0", "application/json;profile=v1"));
 
     // When the parameter does match, that range is more specific than the bare
     // media type and its quality controls acceptance.
-    RUVIA_CHECK(httpAcceptsMediaType(
-        "application/json;profile=v1;q=0.7, application/json;q=0",
-        "application/json;profile=v1"));
-    RUVIA_CHECK(!httpAcceptsMediaType(
-        "application/json;profile=v1;q=0, application/json;q=1",
-        "application/json;profile=v1"));
+    RUVIA_CHECK(httpAcceptsMediaType("application/json;profile=v1;q=0.7, application/json;q=0", "application/json;profile=v1"));
+    RUVIA_CHECK(!httpAcceptsMediaType("application/json;profile=v1;q=0, application/json;q=1", "application/json;profile=v1"));
 
     // Media-type parameter names are case-insensitive and quoted token-equivalent
     // values compare after quoted-pair decoding. RFC 9110 removed accept-ext, so
     // parameters after q still constrain the media range.
-    RUVIA_CHECK(httpAcceptsMediaType(
-        R"(text/plain;FORMAT="flowed";q=0.5;extension=ignored)",
-        "text/plain;format=flowed;extension=ignored"));
-    RUVIA_CHECK(!httpAcceptsMediaType(
-        R"(text/plain;q=0.5;format="flowed")",
-        "text/plain"));
-    RUVIA_CHECK(httpAcceptsMediaType(
-        R"(text/plain;q=0.5;format="flowed")",
-        "text/plain;format=flowed"));
+    RUVIA_CHECK(httpAcceptsMediaType(R"(text/plain;FORMAT="flowed";q=0.5;extension=ignored)", "text/plain;format=flowed;extension=ignored"));
+    RUVIA_CHECK(!httpAcceptsMediaType(R"(text/plain;q=0.5;format="flowed")", "text/plain"));
+    RUVIA_CHECK(httpAcceptsMediaType(R"(text/plain;q=0.5;format="flowed")", "text/plain;format=flowed"));
 }

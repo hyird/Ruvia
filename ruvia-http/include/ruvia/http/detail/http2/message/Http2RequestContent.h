@@ -26,8 +26,7 @@ public:
 private:
     friend class Http2RequestContent;
 
-    explicit constexpr Http2KnownLengthRequestContent(
-        std::uint64_t length) noexcept
+    explicit constexpr Http2KnownLengthRequestContent(std::uint64_t length) noexcept
         : length_(length) {}
 
     std::uint64_t length_;
@@ -46,8 +45,7 @@ public:
         return Http2RequestContent(Http2RequestWithoutContent());
     }
 
-    [[nodiscard]] static constexpr Http2RequestContent knownLength(
-        std::uint64_t length) noexcept {
+    [[nodiscard]] static constexpr Http2RequestContent knownLength(std::uint64_t length) noexcept {
         return Http2RequestContent(Http2KnownLengthRequestContent(length));
     }
 
@@ -55,43 +53,31 @@ public:
         return Http2RequestContent(Http2StreamingRequestContent());
     }
 
-    [[nodiscard]] constexpr const Http2RequestWithoutContent*
-    withoutContent() const & noexcept {
+    [[nodiscard]] constexpr const Http2RequestWithoutContent* withoutContent() const& noexcept {
         return std::get_if<Http2RequestWithoutContent>(&content_);
     }
-    [[nodiscard]] constexpr const Http2RequestWithoutContent*
-    withoutContent() const && = delete;
+    [[nodiscard]] constexpr const Http2RequestWithoutContent* withoutContent() const&& = delete;
 
-    [[nodiscard]] constexpr const Http2KnownLengthRequestContent*
-    knownLengthContent() const & noexcept {
+    [[nodiscard]] constexpr const Http2KnownLengthRequestContent* knownLengthContent() const& noexcept {
         return std::get_if<Http2KnownLengthRequestContent>(&content_);
     }
-    [[nodiscard]] constexpr const Http2KnownLengthRequestContent*
-    knownLengthContent() const && = delete;
+    [[nodiscard]] constexpr const Http2KnownLengthRequestContent* knownLengthContent() const&& = delete;
 
-    [[nodiscard]] constexpr const Http2StreamingRequestContent*
-    streamingContent() const & noexcept {
+    [[nodiscard]] constexpr const Http2StreamingRequestContent* streamingContent() const& noexcept {
         return std::get_if<Http2StreamingRequestContent>(&content_);
     }
-    [[nodiscard]] constexpr const Http2StreamingRequestContent*
-    streamingContent() const && = delete;
+    [[nodiscard]] constexpr const Http2StreamingRequestContent* streamingContent() const&& = delete;
 
 private:
-    using Content = std::variant<
-        Http2RequestWithoutContent,
-        Http2KnownLengthRequestContent,
-        Http2StreamingRequestContent>;
+    using Content = std::variant<Http2RequestWithoutContent, Http2KnownLengthRequestContent, Http2StreamingRequestContent>;
 
-    explicit constexpr Http2RequestContent(
-        Http2RequestWithoutContent content) noexcept
+    explicit constexpr Http2RequestContent(Http2RequestWithoutContent content) noexcept
         : content_(content) {}
 
-    explicit constexpr Http2RequestContent(
-        Http2KnownLengthRequestContent content) noexcept
+    explicit constexpr Http2RequestContent(Http2KnownLengthRequestContent content) noexcept
         : content_(content) {}
 
-    explicit constexpr Http2RequestContent(
-        Http2StreamingRequestContent content) noexcept
+    explicit constexpr Http2RequestContent(Http2StreamingRequestContent content) noexcept
         : content_(content) {}
 
     Content content_;

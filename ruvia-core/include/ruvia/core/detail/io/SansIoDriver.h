@@ -33,11 +33,7 @@
 namespace ruvia::detail {
 
 template <typename Connection, typename Stream, typename ShouldStop, typename OnReadable>
-Task<void> pumpSansIoConnection(
-    Connection& connection,
-    Stream& stream,
-    ShouldStop shouldStop,
-    OnReadable onReadable) {
+Task<void> pumpSansIoConnection(Connection& connection, Stream& stream, ShouldStop shouldStop, OnReadable onReadable) {
     std::array<char, 16384> readBuffer;
     for (;;) {
         // Flush everything the core has queued before blocking on the next read, so a
@@ -45,13 +41,7 @@ Task<void> pumpSansIoConnection(
         // synchronously, so this drains the pending output completely.
         while (connection.wantsWrite()) {
             const auto out = connection.pendingOutput();
-            const auto writeCompletion = co_await asyncAsio(
-                [&stream, out](auto handler) mutable {
-                    asio::async_write(
-                        stream,
-                        asio::buffer(out.data(), out.size()),
-                        std::move(handler));
-                });
+            const auto writeCompletion = co_await asyncAsio([&stream, out](auto handler) mutable { asio::async_write(stream, asio::buffer(out.data(), out.size()), std::move(handler)); });
             const auto ec = writeCompletion.errorCode();
             if (ec) {
                 co_return;
@@ -63,11 +53,7 @@ Task<void> pumpSansIoConnection(
         if (shouldStop(connection)) {
             co_return;
         }
-        auto readCompletion = co_await asyncAsio<std::size_t>(
-            [&stream, &readBuffer](auto handler) mutable {
-                stream.async_read_some(
-                    asio::buffer(readBuffer.data(), readBuffer.size()), std::move(handler));
-            });
+        auto readCompletion = co_await asyncAsio<std::size_t>([&stream, &readBuffer](auto handler) mutable { stream.async_read_some(asio::buffer(readBuffer.data(), readBuffer.size()), std::move(handler)); });
         const auto ec = readCompletion.errorCode();
         const auto bytesRead = readCompletion.result();
         if (ec || bytesRead == 0) {

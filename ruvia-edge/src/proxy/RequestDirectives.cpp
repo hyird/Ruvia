@@ -4,17 +4,10 @@
 
 namespace ruvia::edge {
 
-RequestDirectives requestDirectives(
-    std::span<const HttpHeaderView> headers) noexcept {
+RequestDirectives requestDirectives(std::span<const HttpHeaderView> headers) noexcept {
     RequestDirectives directives;
-    directives.hasAuthorization =
-        findRequestHeader(headers, "authorization").has_value();
-    directives.hasCondition =
-        findRequestHeader(headers, "if-match").has_value() ||
-        findRequestHeader(headers, "if-none-match").has_value() ||
-        findRequestHeader(headers, "if-modified-since").has_value() ||
-        findRequestHeader(headers, "if-unmodified-since").has_value() ||
-        findRequestHeader(headers, "if-range").has_value();
+    directives.hasAuthorization = findRequestHeader(headers, "authorization").has_value();
+    directives.hasCondition = findRequestHeader(headers, "if-match").has_value() || findRequestHeader(headers, "if-none-match").has_value() || findRequestHeader(headers, "if-modified-since").has_value() || findRequestHeader(headers, "if-unmodified-since").has_value() || findRequestHeader(headers, "if-range").has_value();
 
     CacheControlFieldParser parser;
     bool hasCacheControl = false;
@@ -29,8 +22,7 @@ RequestDirectives requestDirectives(
     bool legacyPragmaNoCache = false;
     if (!hasCacheControl) {
         for (const auto& field : headers) {
-            if (iequals(field.name(), "pragma") &&
-                ruvia::detail::httpHasToken(field.value(), "no-cache")) {
+            if (iequals(field.name(), "pragma") && ruvia::detail::httpHasToken(field.value(), "no-cache")) {
                 legacyPragmaNoCache = true;
                 break;
             }
@@ -40,10 +32,7 @@ RequestDirectives requestDirectives(
     // constraints. Forwarding is conservative and preserves the client's
     // preference; max-stale merely widens what the client accepts and needs no
     // forced validation.
-    directives.forcesValidation =
-        directives.cacheControl.noCache ||
-        directives.cacheControl.maxAge.has_value() ||
-        directives.cacheControl.minFresh.has_value() || legacyPragmaNoCache;
+    directives.forcesValidation = directives.cacheControl.noCache || directives.cacheControl.maxAge.has_value() || directives.cacheControl.minFresh.has_value() || legacyPragmaNoCache;
     return directives;
 }
 

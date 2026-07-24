@@ -30,7 +30,8 @@ RUVIA_TEST(chunk_trailers_reject_malformed) {
     RUVIA_CHECK(validateHttpChunkTrailers("no-colon\r\n") == HttpChunkScanError::kInvalidTrailer);
     RUVIA_CHECK(validateHttpChunkTrailers(":value\r\n") == HttpChunkScanError::kInvalidTrailer);
     // A control byte in the value is rejected.
-    RUVIA_CHECK(validateHttpChunkTrailers("X: a\x01" "b\r\n") == HttpChunkScanError::kInvalidTrailer);
+    RUVIA_CHECK(validateHttpChunkTrailers("X: a\x01"
+                                          "b\r\n") == HttpChunkScanError::kInvalidTrailer);
 }
 
 RUVIA_TEST(chunk_trailers_reject_forbidden_fields) {

@@ -83,10 +83,9 @@ public:
 private:
     friend class WsConnection;
 
-    constexpr WsOutputPlan(
-        std::string_view bytes,
-        WsTransportDisposition disposition) noexcept
-        : bytes_(bytes), disposition_(disposition) {}
+    constexpr WsOutputPlan(std::string_view bytes, WsTransportDisposition disposition) noexcept
+        : bytes_(bytes),
+          disposition_(disposition) {}
 
     std::string_view bytes_;
     WsTransportDisposition disposition_;
@@ -94,11 +93,7 @@ private:
 
 class WsConnection final {
 public:
-    explicit WsConnection(
-        std::pmr::string& input,
-        ProtocolByteLimit messageLimit = ProtocolByteLimit::unlimited(),
-        WebSocketDeflateNegotiation deflate =
-            WebSocketDeflateNegotiation::kDisabled);
+    explicit WsConnection(std::pmr::string& input, ProtocolByteLimit messageLimit = ProtocolByteLimit::unlimited(), WebSocketDeflateNegotiation deflate = WebSocketDeflateNegotiation::kDisabled);
 
     // Parse buffered transport bytes until one protocol event is available or
     // more input is required (nullopt). Every materialized event contains one
@@ -107,8 +102,8 @@ public:
     [[nodiscard]] std::optional<WsEvent> poll() &;
     [[nodiscard]] std::optional<WsEvent> poll() && = delete;
 
-    [[nodiscard]] WsOutputPlan outputPlan() const & noexcept;
-    [[nodiscard]] WsOutputPlan outputPlan() const && = delete;
+    [[nodiscard]] WsOutputPlan outputPlan() const& noexcept;
+    [[nodiscard]] WsOutputPlan outputPlan() const&& = delete;
     [[nodiscard]] WsOutputConsumeStatus consumeOutput(std::size_t n) noexcept;
     void commitTransportEnd() noexcept;
     void notifyTransportEof() noexcept;
@@ -120,12 +115,8 @@ public:
     // wire header encoding stay inside the core.
     // Close has a separate typed entry because it owns code/reason validation
     // and close-handshake state rather than accepting a pre-encoded payload.
-    [[nodiscard]] WsFrameSubmitStatus submitFrame(
-        WebSocketOpcode opcode,
-        std::string_view payload);
-    [[nodiscard]] WsCloseSubmitStatus submitClose(
-        std::uint16_t code,
-        std::string_view reason);
+    [[nodiscard]] WsFrameSubmitStatus submitFrame(WebSocketOpcode opcode, std::string_view payload);
+    [[nodiscard]] WsCloseSubmitStatus submitClose(std::uint16_t code, std::string_view reason);
 
 private:
     enum class ClosePhase : std::uint8_t {

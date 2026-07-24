@@ -5,21 +5,9 @@
 
 namespace ruvia::detail::model {
 
-enum class PatternAtomKind : unsigned char {
-    kLiteral,
-    kAny,
-    kDigit,
-    kWord,
-    kSpace,
-    kClass
-};
+enum class PatternAtomKind : unsigned char { kLiteral, kAny, kDigit, kWord, kSpace, kClass };
 
-enum class PatternQuantifier : unsigned char {
-    kOne,
-    kZeroOrOne,
-    kZeroOrMore,
-    kOneOrMore
-};
+enum class PatternQuantifier : unsigned char { kOne, kZeroOrOne, kZeroOrMore, kOneOrMore };
 
 struct PatternAtom final {
     PatternAtomKind kind{PatternAtomKind::kLiteral};
@@ -39,23 +27,23 @@ struct PatternPlan final {
 
 [[nodiscard]] constexpr bool isPatternMeta(char c) noexcept {
     switch (c) {
-    case '^':
-    case '$':
-    case '[':
-    case ']':
-    case '(':
-    case ')':
-    case '{':
-    case '}':
-    case '|':
-    case '+':
-    case '*':
-    case '?':
-    case '.':
-    case '\\':
-        return true;
-    default:
-        return false;
+        case '^':
+        case '$':
+        case '[':
+        case ']':
+        case '(':
+        case ')':
+        case '{':
+        case '}':
+        case '|':
+        case '+':
+        case '*':
+        case '?':
+        case '.':
+        case '\\':
+            return true;
+        default:
+            return false;
     }
 }
 
@@ -64,8 +52,7 @@ struct PatternPlan final {
 }
 
 [[nodiscard]] constexpr bool isPatternWord(char c) noexcept {
-    return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
-           (c >= '0' && c <= '9') || c == '_';
+    return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '_';
 }
 
 [[nodiscard]] constexpr bool isPatternSpace(char c) noexcept {

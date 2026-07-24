@@ -84,10 +84,10 @@ public:
 
     // Client role: nullptr until the final response :status is committed once for
     // a stream this endpoint opened. The owner bounds preceding 1xx heads.
-    [[nodiscard]] const HttpStatusCode* responseStatus() const & noexcept {
+    [[nodiscard]] const HttpStatusCode* responseStatus() const& noexcept {
         return responseStatus_ ? &*responseStatus_ : nullptr;
     }
-    [[nodiscard]] const HttpStatusCode* responseStatus() const && = delete;
+    [[nodiscard]] const HttpStatusCode* responseStatus() const&& = delete;
 
     [[nodiscard]] bool setResponseStatus(HttpStatusCode status) noexcept {
         if (responseStatus_) {

@@ -28,7 +28,8 @@ public:
     Task(const Task&) = delete;
     Task& operator=(const Task&) = delete;
 
-    Task(Task&& other) noexcept : handle_(std::exchange(other.handle_, {})) {}
+    Task(Task&& other) noexcept
+        : handle_(std::exchange(other.handle_, {})) {}
     Task& operator=(Task&&) = delete;
 
     ~Task() {
@@ -51,7 +52,8 @@ private:
     friend auto detail::asyncStartTask(Task<U>&&, CompletionToken&&);
     friend class TaskScope;
 
-    explicit Task(handle_type handle) noexcept : handle_(handle) {}
+    explicit Task(handle_type handle) noexcept
+        : handle_(handle) {}
 
     void start() noexcept {
         if (handle_ != nullptr) {
@@ -85,7 +87,8 @@ public:
     Task(const Task&) = delete;
     Task& operator=(const Task&) = delete;
 
-    Task(Task&& other) noexcept : handle_(std::exchange(other.handle_, {})) {}
+    Task(Task&& other) noexcept
+        : handle_(std::exchange(other.handle_, {})) {}
     Task& operator=(Task&&) = delete;
 
     ~Task() {
@@ -108,7 +111,8 @@ private:
     friend auto detail::asyncStartTask(Task<U>&&, CompletionToken&&);
     friend class TaskScope;
 
-    explicit Task(handle_type handle) noexcept : handle_(handle) {}
+    explicit Task(handle_type handle) noexcept
+        : handle_(handle) {}
 
     void start() noexcept {
         if (handle_ != nullptr) {

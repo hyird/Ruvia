@@ -13,8 +13,12 @@ public:
     explicit ContextPendingResponse(std::pmr::memory_resource* resource)
         : response_(resource) {}
 
-    [[nodiscard]] HttpResponse& response() noexcept { return response_; }
-    [[nodiscard]] const HttpResponse& response() const noexcept { return response_; }
+    [[nodiscard]] HttpResponse& response() noexcept {
+        return response_;
+    }
+    [[nodiscard]] const HttpResponse& response() const noexcept {
+        return response_;
+    }
 
 private:
     HttpResponse response_;
@@ -25,8 +29,12 @@ public:
     explicit ContextProvisionalResponse(HttpResponse&& response)
         : response_(std::move(response)) {}
 
-    [[nodiscard]] HttpResponse& response() noexcept { return response_; }
-    [[nodiscard]] const HttpResponse& response() const noexcept { return response_; }
+    [[nodiscard]] HttpResponse& response() noexcept {
+        return response_;
+    }
+    [[nodiscard]] const HttpResponse& response() const noexcept {
+        return response_;
+    }
 
 private:
     HttpResponse response_;
@@ -37,8 +45,12 @@ public:
     explicit ContextFinalResponse(HttpResponse&& response)
         : response_(std::move(response)) {}
 
-    [[nodiscard]] HttpResponse& response() noexcept { return response_; }
-    [[nodiscard]] const HttpResponse& response() const noexcept { return response_; }
+    [[nodiscard]] HttpResponse& response() noexcept {
+        return response_;
+    }
+    [[nodiscard]] const HttpResponse& response() const noexcept {
+        return response_;
+    }
 
 private:
     HttpResponse response_;
@@ -49,34 +61,33 @@ private:
 class ContextResponseState final {
 public:
     explicit ContextResponseState(std::pmr::memory_resource* resource)
-        : resource_(resource), value_(std::in_place_type<ContextPendingResponse>, resource) {}
+        : resource_(resource),
+          value_(std::in_place_type<ContextPendingResponse>, resource) {}
 
-    [[nodiscard]] const ContextPendingResponse* pending() const & noexcept {
+    [[nodiscard]] const ContextPendingResponse* pending() const& noexcept {
         return std::get_if<ContextPendingResponse>(&value_);
     }
-    const ContextPendingResponse* pending() const && = delete;
+    const ContextPendingResponse* pending() const&& = delete;
 
-    [[nodiscard]] const ContextProvisionalResponse* provisional() const & noexcept {
+    [[nodiscard]] const ContextProvisionalResponse* provisional() const& noexcept {
         return std::get_if<ContextProvisionalResponse>(&value_);
     }
-    const ContextProvisionalResponse* provisional() const && = delete;
+    const ContextProvisionalResponse* provisional() const&& = delete;
 
-    [[nodiscard]] const ContextFinalResponse* final() const & noexcept {
+    [[nodiscard]] const ContextFinalResponse* final() const& noexcept {
         return std::get_if<ContextFinalResponse>(&value_);
     }
-    const ContextFinalResponse* final() const && = delete;
+    const ContextFinalResponse* final() const&& = delete;
 
     [[nodiscard]] HttpResponse& activeResponse() & noexcept {
         return std::visit([](auto& state) -> HttpResponse& { return state.response(); }, value_);
     }
     HttpResponse& activeResponse() && = delete;
 
-    [[nodiscard]] const HttpResponse& activeResponse() const & noexcept {
-        return std::visit(
-            [](const auto& state) -> const HttpResponse& { return state.response(); },
-            value_);
+    [[nodiscard]] const HttpResponse& activeResponse() const& noexcept {
+        return std::visit([](const auto& state) -> const HttpResponse& { return state.response(); }, value_);
     }
-    const HttpResponse& activeResponse() const && = delete;
+    const HttpResponse& activeResponse() const&& = delete;
 
     [[nodiscard]] HttpResponse& materializeProvisional() {
         if (auto* pendingState = std::get_if<ContextPendingResponse>(&value_)) {
@@ -106,8 +117,7 @@ public:
 
 private:
     std::pmr::memory_resource* resource_;
-    std::variant<ContextPendingResponse, ContextProvisionalResponse,
-                 ContextFinalResponse> value_;
+    std::variant<ContextPendingResponse, ContextProvisionalResponse, ContextFinalResponse> value_;
 };
 
 }  // namespace ruvia::detail

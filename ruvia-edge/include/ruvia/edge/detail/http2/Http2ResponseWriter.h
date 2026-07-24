@@ -43,35 +43,34 @@ struct Http2SessionShared final {
 // submits frames and pokes the session's writer coroutine, which owns all I/O.
 class Http2ResponseWriter final : public ResponseWriter {
 public:
-    Http2ResponseWriter(Http2SessionShared& shared, std::uint32_t streamId,
-                        HttpKnownMethod method, std::pmr::memory_resource* resource)
+    Http2ResponseWriter(Http2SessionShared& shared, std::uint32_t streamId, HttpKnownMethod method, std::pmr::memory_resource* resource)
         : shared_(shared),
           streamId_(streamId),
           method_(method),
           resource_(resource),
           drainTimer_(shared.writeWake.get_executor()) {}
 
-    asio::awaitable<bool> respond(std::uint16_t status, const Headers& headers,
-                                  std::string_view body, std::string_view cacheResult,
-                                  std::optional<std::uint64_t> age, bool omitBody,
-                                  bool keepAlive) override;
+    asio::awaitable<bool> respond(std::uint16_t status, const Headers& headers, std::string_view body, std::string_view cacheResult, std::optional<std::uint64_t> age, bool omitBody, bool keepAlive) override;
 
-    asio::awaitable<bool> respondHead(std::uint16_t status, const Headers& headers,
-                                      std::string_view cacheResult, bool hasBody,
-                                      std::optional<std::size_t> contentLength,
-                                      bool keepAlive) override;
+    asio::awaitable<bool> respondHead(std::uint16_t status, const Headers& headers, std::string_view cacheResult, bool hasBody, std::optional<std::size_t> contentLength, bool keepAlive) override;
 
     asio::awaitable<bool> respondChunk(std::string_view chunk) override;
 
     asio::awaitable<bool> respondEnd() override;
 
-    [[nodiscard]] std::size_t bytesWritten() const override { return bytes_; }
+    [[nodiscard]] std::size_t bytesWritten() const override {
+        return bytes_;
+    }
 
-    [[nodiscard]] bool connectionReusable() const noexcept override { return true; }
+    [[nodiscard]] bool connectionReusable() const noexcept override {
+        return true;
+    }
 
     // Whether the response was fully submitted (so the driver need not reset a
     // dangling stream after the serve core returns).
-    [[nodiscard]] bool ended() const noexcept { return ended_; }
+    [[nodiscard]] bool ended() const noexcept {
+        return ended_;
+    }
 
 private:
     void poke() noexcept;
@@ -81,9 +80,7 @@ private:
     // stream can no longer be written.
     asio::awaitable<bool> waitForWindow();
 
-    void submitBuffered(std::uint16_t status, const Headers& headers, std::string_view body,
-                        std::string_view cacheResult, std::optional<std::uint64_t> age,
-                        bool omitBody);
+    void submitBuffered(std::uint16_t status, const Headers& headers, std::string_view body, std::string_view cacheResult, std::optional<std::uint64_t> age, bool omitBody);
 
     Http2SessionShared& shared_;
     std::uint32_t streamId_;

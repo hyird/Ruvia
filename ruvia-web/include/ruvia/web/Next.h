@@ -38,14 +38,16 @@ struct NextState final {
                 phase_ = Phase::kInvoked;
                 return Invocation::kReady;
             }
-            return phase_ == Phase::kInvoked
-                ? Invocation::kRepeated
-                : Invocation::kExpired;
+            return phase_ == Phase::kInvoked ? Invocation::kRepeated : Invocation::kExpired;
         }
 
-        void expire() noexcept { phase_ = Phase::kExpired; }
+        void expire() noexcept {
+            phase_ = Phase::kExpired;
+        }
 
-        [[nodiscard]] Phase phase() const noexcept { return phase_; }
+        [[nodiscard]] Phase phase() const noexcept {
+            return phase_;
+        }
 
     private:
         Phase phase_{Phase::kFresh};
@@ -78,8 +80,7 @@ public:
                 return awaiter_.await_ready();
             }
 
-            [[nodiscard]] std::coroutine_handle<> await_suspend(
-                std::coroutine_handle<> continuation) noexcept {
+            [[nodiscard]] std::coroutine_handle<> await_suspend(std::coroutine_handle<> continuation) noexcept {
                 return awaiter_.await_suspend(continuation);
             }
 

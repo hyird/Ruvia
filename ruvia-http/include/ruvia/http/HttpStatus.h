@@ -15,24 +15,21 @@ namespace ruvia {
 // representable, while arbitrary integers cannot leak into protocol APIs.
 class HttpStatusCode final {
 public:
-    [[nodiscard]] static constexpr HttpStatusCode fromValue(
-        std::uint16_t value) {
+    [[nodiscard]] static constexpr HttpStatusCode fromValue(std::uint16_t value) {
         if (!isValidValue(value)) {
             throw std::invalid_argument("HTTP status code must be in 100..599");
         }
         return HttpStatusCode(value, ValidatedTag{});
     }
 
-    [[nodiscard]] static constexpr std::optional<HttpStatusCode> tryFromValue(
-        std::uint16_t value) noexcept {
+    [[nodiscard]] static constexpr std::optional<HttpStatusCode> tryFromValue(std::uint16_t value) noexcept {
         if (!isValidValue(value)) {
             return std::nullopt;
         }
         return HttpStatusCode(value, ValidatedTag{});
     }
 
-    [[nodiscard]] static constexpr bool isValidValue(
-        std::uint16_t value) noexcept {
+    [[nodiscard]] static constexpr bool isValidValue(std::uint16_t value) noexcept {
         return value >= 100 && value <= 599;
     }
 
@@ -73,9 +70,7 @@ public:
 private:
     struct ValidatedTag {};
 
-    constexpr HttpStatusCode(
-        std::uint16_t value,
-        ValidatedTag) noexcept
+    constexpr HttpStatusCode(std::uint16_t value, ValidatedTag) noexcept
         : value_(value) {}
 
     std::uint16_t value_;
@@ -87,25 +82,18 @@ static_assert(sizeof(HttpStatusCode) == sizeof(std::uint16_t));
 namespace detail {
 
 inline constexpr std::size_t kHttpStatusCodeTokenSize = 3;
-using HttpStatusCodeToken =
-    std::array<char, kHttpStatusCodeTokenSize>;
+using HttpStatusCodeToken = std::array<char, kHttpStatusCodeTokenSize>;
 
-[[nodiscard]] inline constexpr HttpStatusCodeToken httpStatusCodeToken(
-    HttpStatusCode status) noexcept {
+[[nodiscard]] inline constexpr HttpStatusCodeToken httpStatusCodeToken(HttpStatusCode status) noexcept {
     const auto value = status.value();
-    return {
-        static_cast<char>('0' + value / 100),
-        static_cast<char>('0' + (value / 10) % 10),
-        static_cast<char>('0' + value % 10)};
+    return {static_cast<char>('0' + value / 100), static_cast<char>('0' + (value / 10) % 10), static_cast<char>('0' + value % 10)};
 }
 
-[[nodiscard]] inline constexpr std::string_view httpStatusCodeTokenView(
-    const HttpStatusCodeToken& token) noexcept {
+[[nodiscard]] inline constexpr std::string_view httpStatusCodeTokenView(const HttpStatusCodeToken& token) noexcept {
     return std::string_view(token.data(), token.size());
 }
 
-[[nodiscard]] std::string_view httpStatusCodeTokenView(
-    HttpStatusCodeToken&&) = delete;
+[[nodiscard]] std::string_view httpStatusCodeTokenView(HttpStatusCodeToken&&) = delete;
 
 }  // namespace detail
 
@@ -122,8 +110,7 @@ inline constexpr auto kEarlyHints = HttpStatusCode::fromValue(103);
 inline constexpr auto kOk = HttpStatusCode::fromValue(200);
 inline constexpr auto kCreated = HttpStatusCode::fromValue(201);
 inline constexpr auto kAccepted = HttpStatusCode::fromValue(202);
-inline constexpr auto kNonAuthoritativeInformation =
-    HttpStatusCode::fromValue(203);
+inline constexpr auto kNonAuthoritativeInformation = HttpStatusCode::fromValue(203);
 inline constexpr auto kNoContent = HttpStatusCode::fromValue(204);
 inline constexpr auto kResetContent = HttpStatusCode::fromValue(205);
 inline constexpr auto kPartialContent = HttpStatusCode::fromValue(206);
@@ -147,8 +134,7 @@ inline constexpr auto kForbidden = HttpStatusCode::fromValue(403);
 inline constexpr auto kNotFound = HttpStatusCode::fromValue(404);
 inline constexpr auto kMethodNotAllowed = HttpStatusCode::fromValue(405);
 inline constexpr auto kNotAcceptable = HttpStatusCode::fromValue(406);
-inline constexpr auto kProxyAuthenticationRequired =
-    HttpStatusCode::fromValue(407);
+inline constexpr auto kProxyAuthenticationRequired = HttpStatusCode::fromValue(407);
 inline constexpr auto kRequestTimeout = HttpStatusCode::fromValue(408);
 inline constexpr auto kConflict = HttpStatusCode::fromValue(409);
 inline constexpr auto kGone = HttpStatusCode::fromValue(410);
@@ -167,32 +153,27 @@ inline constexpr auto kTooEarly = HttpStatusCode::fromValue(425);
 inline constexpr auto kUpgradeRequired = HttpStatusCode::fromValue(426);
 inline constexpr auto kPreconditionRequired = HttpStatusCode::fromValue(428);
 inline constexpr auto kTooManyRequests = HttpStatusCode::fromValue(429);
-inline constexpr auto kRequestHeaderFieldsTooLarge =
-    HttpStatusCode::fromValue(431);
-inline constexpr auto kUnavailableForLegalReasons =
-    HttpStatusCode::fromValue(451);
+inline constexpr auto kRequestHeaderFieldsTooLarge = HttpStatusCode::fromValue(431);
+inline constexpr auto kUnavailableForLegalReasons = HttpStatusCode::fromValue(451);
 
 inline constexpr auto kInternalServerError = HttpStatusCode::fromValue(500);
 inline constexpr auto kNotImplemented = HttpStatusCode::fromValue(501);
 inline constexpr auto kBadGateway = HttpStatusCode::fromValue(502);
 inline constexpr auto kServiceUnavailable = HttpStatusCode::fromValue(503);
 inline constexpr auto kGatewayTimeout = HttpStatusCode::fromValue(504);
-inline constexpr auto kHttpVersionNotSupported =
-    HttpStatusCode::fromValue(505);
+inline constexpr auto kHttpVersionNotSupported = HttpStatusCode::fromValue(505);
 inline constexpr auto kVariantAlsoNegotiates = HttpStatusCode::fromValue(506);
 inline constexpr auto kInsufficientStorage = HttpStatusCode::fromValue(507);
 inline constexpr auto kLoopDetected = HttpStatusCode::fromValue(508);
 inline constexpr auto kNotExtended = HttpStatusCode::fromValue(510);
-inline constexpr auto kNetworkAuthenticationRequired =
-    HttpStatusCode::fromValue(511);
+inline constexpr auto kNetworkAuthenticationRequired = HttpStatusCode::fromValue(511);
 
 }  // namespace http_status
 
 // RFC 9112 reason-phrase is optional HTTP/1 presentation text, not response
 // semantics. Stable RFC-assigned codes get a conventional phrase; temporary,
 // extension, and unassigned codes deliberately get an empty phrase.
-[[nodiscard]] inline constexpr std::string_view httpReasonPhrase(
-    HttpStatusCode status) noexcept {
+[[nodiscard]] inline constexpr std::string_view httpReasonPhrase(HttpStatusCode status) noexcept {
     switch (status.value()) {
         case http_status::kContinue.value():
             return "Continue";
@@ -316,24 +297,22 @@ inline constexpr auto kNetworkAuthenticationRequired =
             return "Not Extended";
         case http_status::kNetworkAuthenticationRequired.value():
             return "Network Authentication Required";
-        default: return {};
+        default:
+            return {};
     }
 }
 
 namespace detail {
 
-[[nodiscard]] inline constexpr bool httpFinalStatusCodeValid(
-    HttpStatusCode status) noexcept {
+[[nodiscard]] inline constexpr bool httpFinalStatusCodeValid(HttpStatusCode status) noexcept {
     return status.isFinal();
 }
 
 // 101 is a protocol transition rather than an interim progress head. It is
 // intentionally owned by a dedicated Upgrade driver instead of either generic
 // response-head type.
-[[nodiscard]] inline constexpr bool httpInterimStatusCodeValid(
-    HttpStatusCode status) noexcept {
-    return status.isInformational() &&
-        status != http_status::kSwitchingProtocols;
+[[nodiscard]] inline constexpr bool httpInterimStatusCodeValid(HttpStatusCode status) noexcept {
+    return status.isInformational() && status != http_status::kSwitchingProtocols;
 }
 
 }  // namespace detail

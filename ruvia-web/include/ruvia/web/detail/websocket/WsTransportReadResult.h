@@ -42,25 +42,24 @@ public:
         return WsTransportReadResult(WsTransportReadEnd{});
     }
 
-    [[nodiscard]] static WsTransportReadResult makeFailure(
-        std::error_code errorCode) noexcept {
+    [[nodiscard]] static WsTransportReadResult makeFailure(std::error_code errorCode) noexcept {
         return WsTransportReadResult(WsTransportReadFailure(errorCode));
     }
 
-    [[nodiscard]] const WsTransportReadData* data() const & noexcept {
+    [[nodiscard]] const WsTransportReadData* data() const& noexcept {
         return std::get_if<WsTransportReadData>(&value_);
     }
-    const WsTransportReadData* data() const && = delete;
+    const WsTransportReadData* data() const&& = delete;
 
-    [[nodiscard]] const WsTransportReadEnd* end() const & noexcept {
+    [[nodiscard]] const WsTransportReadEnd* end() const& noexcept {
         return std::get_if<WsTransportReadEnd>(&value_);
     }
-    const WsTransportReadEnd* end() const && = delete;
+    const WsTransportReadEnd* end() const&& = delete;
 
-    [[nodiscard]] const WsTransportReadFailure* failure() const & noexcept {
+    [[nodiscard]] const WsTransportReadFailure* failure() const& noexcept {
         return std::get_if<WsTransportReadFailure>(&value_);
     }
-    const WsTransportReadFailure* failure() const && = delete;
+    const WsTransportReadFailure* failure() const&& = delete;
 
 private:
     explicit constexpr WsTransportReadResult(WsTransportReadData data) noexcept
@@ -72,8 +71,7 @@ private:
     explicit WsTransportReadResult(WsTransportReadFailure failure) noexcept
         : value_(std::move(failure)) {}
 
-    std::variant<WsTransportReadData, WsTransportReadEnd,
-                 WsTransportReadFailure> value_;
+    std::variant<WsTransportReadData, WsTransportReadEnd, WsTransportReadFailure> value_;
 };
 
 }  // namespace ruvia::detail

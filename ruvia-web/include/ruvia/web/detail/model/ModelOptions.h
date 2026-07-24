@@ -13,9 +13,11 @@ namespace ruvia::detail::model {
 template <typename... OptionTs>
 class ModelOptions final {
 public:
-    constexpr explicit ModelOptions(OptionTs... options) noexcept : options_(options...) {
+    constexpr explicit ModelOptions(OptionTs... options) noexcept
+        : options_(options...) {
         static_assert((isModelOption<OptionTs>() && ...),
-            "RUVIA_FIELD accepts only model options: RUVIA_DEFAULT, RUVIA_OMIT_EMPTY, RUVIA_EMIT_NULL. "
+            "RUVIA_FIELD accepts only model options: RUVIA_DEFAULT, RUVIA_OMIT_EMPTY, "
+            "RUVIA_EMIT_NULL. "
             "Move validation rules to RUVIA_VALIDATE_* with RUVIA_RULE.");
     }
 
@@ -36,11 +38,7 @@ public:
         if (value) {
             return;
         }
-        std::apply(
-            [&value, resource](const auto&... options) {
-                (applyDefaultOption(value, resource, options), ...);
-            },
-            options_);
+        std::apply([&value, resource](const auto&... options) { (applyDefaultOption(value, resource, options), ...); }, options_);
     }
 
 private:
@@ -66,10 +64,7 @@ private:
     }
 
     template <typename FieldT, typename ValueT>
-    static void assignDefaultValue(
-        std::optional<FieldT>& target,
-        const ValueT& value,
-        std::pmr::memory_resource* resource) {
+    static void assignDefaultValue(std::optional<FieldT>& target, const ValueT& value, std::pmr::memory_resource* resource) {
         if constexpr (detail::isRuviaString<FieldT> && std::is_convertible_v<const ValueT&, std::string_view>) {
             target.emplace(std::string_view(value), resource);
         } else {

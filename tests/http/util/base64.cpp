@@ -11,11 +11,7 @@ namespace {
 
 std::string httpBase64(std::string_view in) {
     std::string out(4 * ((in.size() + 2) / 3), '\0');
-    ruvia::detail::encodeHttpBase64(
-        out.data(),
-        std::span<const std::uint8_t>(
-            reinterpret_cast<const std::uint8_t*>(in.data()),
-            in.size()));
+    ruvia::detail::encodeHttpBase64(out.data(), std::span<const std::uint8_t>(reinterpret_cast<const std::uint8_t*>(in.data()), in.size()));
     return out;
 }
 
@@ -34,8 +30,6 @@ RUVIA_TEST(http_base64_rfc4648_vectors) {
 RUVIA_TEST(http_base64_binary_high_bytes) {
     const unsigned char bytes[] = {0xFF, 0x00, 0xFF};
     std::string out(4, '\0');
-    ruvia::detail::encodeHttpBase64(
-        out.data(),
-        std::span<const std::uint8_t>(bytes, sizeof(bytes)));
+    ruvia::detail::encodeHttpBase64(out.data(), std::span<const std::uint8_t>(bytes, sizeof(bytes)));
     RUVIA_CHECK_EQ(out, std::string("/wD/"));
 }

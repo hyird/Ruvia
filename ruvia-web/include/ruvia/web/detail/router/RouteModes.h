@@ -2,9 +2,6 @@
 
 namespace ruvia::detail {
 
-enum class RequestBodyMode {
-    kBuffered,
-    kStream
-};
+enum class RequestBodyMode { kBuffered, kStream };
 
 }  // namespace ruvia::detail

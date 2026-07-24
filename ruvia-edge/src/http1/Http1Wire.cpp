@@ -11,20 +11,13 @@ namespace {
 
 void appendDecimal(std::string& out, std::uint64_t value) {
     std::array<char, 20> digits;
-    const auto [end, ec] =
-        std::to_chars(digits.data(), digits.data() + digits.size(), value);
+    const auto [end, ec] = std::to_chars(digits.data(), digits.data() + digits.size(), value);
     (void)ec;
     out.append(digits.data(), static_cast<std::size_t>(end - digits.data()));
 }
 
-void appendStatusLine(
-    std::string& out,
-    HttpProtocolVersion protocolVersion,
-    std::uint16_t status) {
-    out.append(
-        protocolVersion == HttpProtocolVersion::kHttp10
-            ? "HTTP/1.0 "
-            : "HTTP/1.1 ");
+void appendStatusLine(std::string& out, HttpProtocolVersion protocolVersion, std::uint16_t status) {
+    out.append(protocolVersion == HttpProtocolVersion::kHttp10 ? "HTTP/1.0 " : "HTTP/1.1 ");
     appendDecimal(out, status);
     out.push_back(' ');
     if (const auto code = HttpStatusCode::tryFromValue(status)) {
@@ -35,15 +28,7 @@ void appendStatusLine(
 
 }  // namespace
 
-std::string encodeResponse(
-    HttpProtocolVersion protocolVersion,
-    std::uint16_t status,
-    const Headers& headers,
-    std::string_view body,
-    std::string_view xCache,
-    std::optional<std::uint64_t> ageOverride,
-    bool omitBody,
-    bool keepAlive) {
+std::string encodeResponse(HttpProtocolVersion protocolVersion, std::uint16_t status, const Headers& headers, std::string_view body, std::string_view xCache, std::optional<std::uint64_t> ageOverride, bool omitBody, bool keepAlive) {
     std::string out;
     out.reserve((omitBody ? 0 : body.size()) + 256);
 
@@ -96,23 +81,10 @@ std::string encodeResponse(
 }
 
 std::string encodeStatusResponse(std::uint16_t status, HttpProtocolVersion protocolVersion) {
-    return encodeResponse(
-        protocolVersion,
-        status,
-        Headers{},
-        {},
-        "MISS",
-        std::nullopt);
+    return encodeResponse(protocolVersion, status, Headers{}, {}, "MISS", std::nullopt);
 }
 
-std::string encodeStreamingHead(
-    HttpProtocolVersion protocolVersion,
-    std::uint16_t status,
-    const Headers& headers,
-    std::string_view xCache,
-    ClientFraming framing,
-    std::size_t contentLength,
-    bool keepAlive) {
+std::string encodeStreamingHead(HttpProtocolVersion protocolVersion, std::uint16_t status, const Headers& headers, std::string_view xCache, ClientFraming framing, std::size_t contentLength, bool keepAlive) {
     std::string out;
     appendStatusLine(out, protocolVersion, status);
 
@@ -125,8 +97,7 @@ std::string encodeStreamingHead(
         if (isConnectionOrFramingField(lower) || nominated) {
             // For a bodyless response keep the origin's Content-Length (HEAD);
             // otherwise the edge emits its own framing below.
-            if (!nominated && framing == ClientFraming::kNoBody &&
-                lower == "content-length") {
+            if (!nominated && framing == ClientFraming::kNoBody && lower == "content-length") {
                 // keep it
             } else {
                 continue;
@@ -156,8 +127,7 @@ std::string encodeStreamingHead(
 std::string encodeChunk(std::string_view chunk) {
     std::string out;
     std::array<char, 16> hex;
-    const auto [end, ec] =
-        std::to_chars(hex.data(), hex.data() + hex.size(), chunk.size(), 16);
+    const auto [end, ec] = std::to_chars(hex.data(), hex.data() + hex.size(), chunk.size(), 16);
     (void)ec;
     out.append(hex.data(), static_cast<std::size_t>(end - hex.data()));
     out.append("\r\n");

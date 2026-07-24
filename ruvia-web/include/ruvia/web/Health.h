@@ -9,9 +9,6 @@ namespace ruvia {
 
 [[nodiscard]] HttpResponse makeHealthResponse(Context& context);
 
-[[nodiscard]] HttpResponse makeReadyResponse(
-    Context& context,
-    bool ready,
-    std::string_view reason = "service is not ready");
+[[nodiscard]] HttpResponse makeReadyResponse(Context& context, bool ready, std::string_view reason = "service is not ready");
 
 }  // namespace ruvia

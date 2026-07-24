@@ -27,16 +27,14 @@ struct Http1RequestParseResultAccess;
 // "consumed" field with two unrelated meanings.
 class Http1RequestNeedMore final {
 public:
-    [[nodiscard]] constexpr std::optional<std::size_t>
-    requiredTotalBytes() const noexcept {
+    [[nodiscard]] constexpr std::optional<std::size_t> requiredTotalBytes() const noexcept {
         return requiredTotalBytes_;
     }
 
 private:
     friend struct detail::Http1RequestParseResultAccess;
 
-    explicit constexpr Http1RequestNeedMore(
-        std::optional<std::size_t> requiredTotalBytes) noexcept
+    explicit constexpr Http1RequestNeedMore(std::optional<std::size_t> requiredTotalBytes) noexcept
         : requiredTotalBytes_(requiredTotalBytes) {
         if (requiredTotalBytes_ && *requiredTotalBytes_ == 0) {
             std::terminate();
@@ -51,15 +49,15 @@ private:
 // alive and unmoved.
 class Http1ParsedRequest final {
 public:
-    [[nodiscard]] const HttpRequest& request() const & noexcept {
+    [[nodiscard]] const HttpRequest& request() const& noexcept {
         return request_;
     }
-    [[nodiscard]] const HttpRequest& request() const && = delete;
+    [[nodiscard]] const HttpRequest& request() const&& = delete;
 
-    [[nodiscard]] const detail::Http1RequestBodyPlan& bodyPlan() const & noexcept {
+    [[nodiscard]] const detail::Http1RequestBodyPlan& bodyPlan() const& noexcept {
         return bodyPlan_;
     }
-    [[nodiscard]] const detail::Http1RequestBodyPlan& bodyPlan() const && = delete;
+    [[nodiscard]] const detail::Http1RequestBodyPlan& bodyPlan() const&& = delete;
 
     // Exact wire bytes after the header section and before the next message.
     // For Content-Length this is the payload. For chunked framing it retains
@@ -76,11 +74,7 @@ public:
 private:
     friend struct detail::Http1RequestParseResultAccess;
 
-    Http1ParsedRequest(
-        HttpRequest request,
-        detail::Http1RequestBodyPlan bodyPlan,
-        std::string_view wireBody,
-        std::size_t consumedBytes) noexcept
+    Http1ParsedRequest(HttpRequest request, detail::Http1RequestBodyPlan bodyPlan, std::string_view wireBody, std::size_t consumedBytes) noexcept
         : request_(std::move(request)),
           bodyPlan_(bodyPlan),
           wireBody_(wireBody),
@@ -114,20 +108,20 @@ private:
 // required buffer size for bytes already consumed.
 class Http1RequestParseResult final {
 public:
-    [[nodiscard]] const Http1RequestNeedMore* needMore() const & noexcept {
+    [[nodiscard]] const Http1RequestNeedMore* needMore() const& noexcept {
         return std::get_if<Http1RequestNeedMore>(&state_);
     }
-    const Http1RequestNeedMore* needMore() const && = delete;
+    const Http1RequestNeedMore* needMore() const&& = delete;
 
-    [[nodiscard]] const Http1ParsedRequest* parsed() const & noexcept {
+    [[nodiscard]] const Http1ParsedRequest* parsed() const& noexcept {
         return std::get_if<Http1ParsedRequest>(&state_);
     }
-    const Http1ParsedRequest* parsed() const && = delete;
+    const Http1ParsedRequest* parsed() const&& = delete;
 
-    [[nodiscard]] const Http1RequestParseFailure* failure() const & noexcept {
+    [[nodiscard]] const Http1RequestParseFailure* failure() const& noexcept {
         return std::get_if<Http1RequestParseFailure>(&state_);
     }
-    const Http1RequestParseFailure* failure() const && = delete;
+    const Http1RequestParseFailure* failure() const&& = delete;
 
 private:
     friend struct detail::Http1RequestParseResultAccess;
@@ -141,10 +135,7 @@ private:
     explicit Http1RequestParseResult(Http1RequestParseFailure state) noexcept
         : state_(std::move(state)) {}
 
-    std::variant<
-        Http1RequestNeedMore,
-        Http1ParsedRequest,
-        Http1RequestParseFailure> state_;
+    std::variant<Http1RequestNeedMore, Http1ParsedRequest, Http1RequestParseFailure> state_;
 };
 
 // Stateless, zero-copy whole-message scanner for HTTP/1 requests. It validates
@@ -152,8 +143,7 @@ private:
 // it does not perform transfer decoding or mutate the caller's bytes.
 class Http1RequestParser final {
 public:
-    [[nodiscard]] Http1RequestParseResult parse(
-        std::string_view buffer) const noexcept;
+    [[nodiscard]] Http1RequestParseResult parse(std::string_view buffer) const noexcept;
 
     template <detail::HttpTemporaryOwningCharString Buffer>
     Http1RequestParseResult parse(Buffer&&) const = delete;

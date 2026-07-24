@@ -10,8 +10,7 @@ enum class HttpServerWorkerState : std::uint8_t {
     kStopped,
 };
 
-[[nodiscard]] inline bool httpServerWorkerRunning(
-    HttpServerWorkerState state) noexcept {
+[[nodiscard]] inline bool httpServerWorkerRunning(HttpServerWorkerState state) noexcept {
     return state == HttpServerWorkerState::kRunning;
 }
 

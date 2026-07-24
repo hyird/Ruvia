@@ -12,7 +12,7 @@ namespace {
     std::_Exit(EXIT_SUCCESS);
 }
 
-}
+}  // namespace
 
 int main() {
     asio::io_context ioContext;

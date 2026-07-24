@@ -17,25 +17,14 @@ namespace ruvia::detail {
 // rejected at construction.
 class SetCookiePlan final {
 public:
-    SetCookiePlan(
-        std::string_view name,
-        std::string_view value,
-        const CookieOptions& options);
+    SetCookiePlan(std::string_view name, std::string_view value, const CookieOptions& options);
 
     template <typename Name, typename Value>
-        requires(
-            HttpTemporaryOwningCharString<Name> ||
-            HttpTemporaryOwningCharString<Value>)
+        requires(HttpTemporaryOwningCharString<Name> || HttpTemporaryOwningCharString<Value>)
     SetCookiePlan(Name&&, Value&&, const CookieOptions&) = delete;
 
-    SetCookiePlan(
-        std::string_view,
-        std::string_view,
-        CookieOptions&&) = delete;
-    SetCookiePlan(
-        std::string_view,
-        std::string_view,
-        const CookieOptions&&) = delete;
+    SetCookiePlan(std::string_view, std::string_view, CookieOptions&&) = delete;
+    SetCookiePlan(std::string_view, std::string_view, const CookieOptions&&) = delete;
 
     [[nodiscard]] std::size_t size() const noexcept {
         return size_;

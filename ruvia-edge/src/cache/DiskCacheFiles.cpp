@@ -29,15 +29,10 @@ namespace {
 
 }  // namespace
 
-[[nodiscard]] bool readEntryFile(
-    const std::filesystem::path& path,
-    std::size_t maxBytes,
-    std::string& out) {
+[[nodiscard]] bool readEntryFile(const std::filesystem::path& path, std::size_t maxBytes, std::string& out) {
     std::error_code ec;
     const auto fileBytes = std::filesystem::file_size(path, ec);
-    if (ec || fileBytes > maxBytes ||
-        fileBytes > static_cast<std::uintmax_t>(
-            (std::numeric_limits<std::streamsize>::max)())) {
+    if (ec || fileBytes > maxBytes || fileBytes > static_cast<std::uintmax_t>((std::numeric_limits<std::streamsize>::max)())) {
         return false;
     }
     std::ifstream in(path, std::ios::binary);
@@ -55,16 +50,11 @@ namespace {
 }
 
 [[nodiscard]] bool isCommittedEntryName(std::string_view name) noexcept {
-    return name.size() == 20 &&
-        std::all_of(name.begin(), name.begin() + 16, isLowerHex) &&
-        name.substr(16) == ".rvc";
+    return name.size() == 20 && std::all_of(name.begin(), name.begin() + 16, isLowerHex) && name.substr(16) == ".rvc";
 }
 
 [[nodiscard]] bool isOwnedTempName(std::string_view name) noexcept {
-    return name.size() > 24 &&
-        std::all_of(name.begin(), name.begin() + 16, isLowerHex) &&
-        (name.substr(16).starts_with(".rvc.tmp") ||
-         name.substr(16).starts_with(".rvc.delete"));
+    return name.size() > 24 && std::all_of(name.begin(), name.begin() + 16, isLowerHex) && (name.substr(16).starts_with(".rvc.tmp") || name.substr(16).starts_with(".rvc.delete"));
 }
 
 void syncDirectoryBestEffort(const std::filesystem::path& directory) noexcept {
@@ -89,14 +79,7 @@ void syncDirectoryBestEffort(const std::filesystem::path& directory) noexcept {
 
 [[nodiscard]] bool flushFileToDisk(const std::filesystem::path& path) noexcept {
 #if defined(_WIN32)
-    const HANDLE file = ::CreateFileW(
-        path.c_str(),
-        GENERIC_WRITE,
-        FILE_SHARE_READ,
-        nullptr,
-        OPEN_EXISTING,
-        FILE_ATTRIBUTE_NORMAL,
-        nullptr);
+    const HANDLE file = ::CreateFileW(path.c_str(), GENERIC_WRITE, FILE_SHARE_READ, nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
     if (file == INVALID_HANDLE_VALUE) {
         return false;
     }
@@ -118,14 +101,9 @@ void syncDirectoryBestEffort(const std::filesystem::path& directory) noexcept {
 #endif
 }
 
-[[nodiscard]] bool commitReplacement(
-    const std::filesystem::path& temporary,
-    const std::filesystem::path& finalPath) noexcept {
+[[nodiscard]] bool commitReplacement(const std::filesystem::path& temporary, const std::filesystem::path& finalPath) noexcept {
 #if defined(_WIN32)
-    return ::MoveFileExW(
-               temporary.c_str(),
-               finalPath.c_str(),
-               MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH) != FALSE;
+    return ::MoveFileExW(temporary.c_str(), finalPath.c_str(), MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH) != FALSE;
 #else
     std::error_code ec;
     std::filesystem::rename(temporary, finalPath, ec);

@@ -20,10 +20,7 @@ namespace {
 // The name the client sends back in Cookie is the wire name: an enum prefix
 // becomes part of the name at serialization. Request-side lookups and the MAC
 // of a signed cookie must both use it; the bare name never reaches the client.
-[[nodiscard]] std::string_view cookieWireName(
-    std::pmr::string& storage,
-    std::string_view name,
-    const ruvia::CookieOptions& options) {
+[[nodiscard]] std::string_view cookieWireName(std::pmr::string& storage, std::string_view name, const ruvia::CookieOptions& options) {
     if (!options.prefix) {
         return name;
     }
@@ -34,11 +31,7 @@ namespace {
     return storage;
 }
 
-[[nodiscard]] std::pmr::string composeSignedCookieValue(
-    std::pmr::memory_resource* resource,
-    std::string_view name,
-    std::string_view value,
-    std::string_view secret) {
+[[nodiscard]] std::pmr::string composeSignedCookieValue(std::pmr::memory_resource* resource, std::string_view name, std::string_view value, std::string_view secret) {
     std::pmr::string signedValue(resource);
     signedValue.reserve(value.size() + 1 + detail::kCookieSignatureSize);
     if (!value.empty()) {
@@ -55,28 +48,13 @@ namespace {
 
 void Context::setCookie(std::string_view name, std::string_view value, const CookieOptions& options) {
     const detail::SetCookiePlan plan(name, value, options);
-    auto& header = detail::upsertResponseSetCookieUninitializedValue(
-        responseState_.activeResponse(),
-        plan.wirePrefix(),
-        plan.name(),
-        plan.size());
+    auto& header = detail::upsertResponseSetCookieUninitializedValue(responseState_.activeResponse(), plan.wirePrefix(), plan.name(), plan.size());
     plan.write(detail::responseHeaderValueBegin(header));
 }
 
-void Context::setSignedCookie(
-    std::string_view name,
-    std::string_view value,
-    std::string_view secret,
-    const CookieOptions& options) {
+void Context::setSignedCookie(std::string_view name, std::string_view value, std::string_view secret, const CookieOptions& options) {
     std::pmr::string wireName(resource());
-    setCookie(
-        name,
-        composeSignedCookieValue(
-            resource(),
-            cookieWireName(wireName, name, options),
-            value,
-            secret),
-        options);
+    setCookie(name, composeSignedCookieValue(resource(), cookieWireName(wireName, name, options), value, secret), options);
 }
 
 void Context::deleteCookie(std::string_view name, CookieOptions options) {

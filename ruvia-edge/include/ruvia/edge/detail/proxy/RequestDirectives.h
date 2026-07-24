@@ -22,7 +22,6 @@ struct RequestDirectives final {
     bool forcesValidation{false};
 };
 
-[[nodiscard]] RequestDirectives requestDirectives(
-    std::span<const HttpHeaderView> headers) noexcept;
+[[nodiscard]] RequestDirectives requestDirectives(std::span<const HttpHeaderView> headers) noexcept;
 
 }  // namespace ruvia::edge

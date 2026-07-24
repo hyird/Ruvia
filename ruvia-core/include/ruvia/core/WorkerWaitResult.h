@@ -10,13 +10,12 @@ struct WorkerWaitResultAccess;
 template <typename T>
 class WorkerWaitValue final {
 public:
-    explicit WorkerWaitValue(T value)
-        noexcept(std::is_nothrow_move_constructible_v<T>)
+    explicit WorkerWaitValue(T value) noexcept(std::is_nothrow_move_constructible_v<T>)
         : value_(std::move(value)) {}
 
     T value_;
 };
-}
+}  // namespace ruvia::detail
 
 namespace ruvia {
 
@@ -44,12 +43,11 @@ private:
 template <typename T>
 class WorkerWaitResult final {
 public:
-    [[nodiscard]] const T* value() const & noexcept {
-        const auto* result =
-            std::get_if<detail::WorkerWaitValue<T>>(&result_);
+    [[nodiscard]] const T* value() const& noexcept {
+        const auto* result = std::get_if<detail::WorkerWaitValue<T>>(&result_);
         return result == nullptr ? nullptr : &result->value_;
     }
-    [[nodiscard]] const T* value() const && = delete;
+    [[nodiscard]] const T* value() const&& = delete;
 
     [[nodiscard]] T* value() & noexcept {
         auto* result = std::get_if<detail::WorkerWaitValue<T>>(&result_);
@@ -57,33 +55,28 @@ public:
     }
     [[nodiscard]] T* value() && = delete;
 
-    [[nodiscard]] const WorkerWaitClosed* closed() const & noexcept {
+    [[nodiscard]] const WorkerWaitClosed* closed() const& noexcept {
         return std::get_if<WorkerWaitClosed>(&result_);
     }
-    [[nodiscard]] const WorkerWaitClosed* closed() const && = delete;
+    [[nodiscard]] const WorkerWaitClosed* closed() const&& = delete;
 
-    [[nodiscard]] const WorkerWaitStopping* workerStopping() const & noexcept {
+    [[nodiscard]] const WorkerWaitStopping* workerStopping() const& noexcept {
         return std::get_if<WorkerWaitStopping>(&result_);
     }
-    [[nodiscard]] const WorkerWaitStopping* workerStopping() const && = delete;
+    [[nodiscard]] const WorkerWaitStopping* workerStopping() const&& = delete;
 
-    [[nodiscard]] const WorkerWaitTimedOut* timedOut() const & noexcept {
+    [[nodiscard]] const WorkerWaitTimedOut* timedOut() const& noexcept {
         return std::get_if<WorkerWaitTimedOut>(&result_);
     }
-    [[nodiscard]] const WorkerWaitTimedOut* timedOut() const && = delete;
+    [[nodiscard]] const WorkerWaitTimedOut* timedOut() const&& = delete;
 
 private:
     friend struct detail::WorkerWaitResultAccess;
 
-    using Result = std::variant<
-        detail::WorkerWaitValue<T>,
-        WorkerWaitClosed,
-        WorkerWaitStopping,
-        WorkerWaitTimedOut>;
+    using Result = std::variant<detail::WorkerWaitValue<T>, WorkerWaitClosed, WorkerWaitStopping, WorkerWaitTimedOut>;
 
     template <typename Alternative>
-    explicit WorkerWaitResult(Alternative alternative)
-        noexcept(std::is_nothrow_constructible_v<Result, Alternative&&>)
+    explicit WorkerWaitResult(Alternative alternative) noexcept(std::is_nothrow_constructible_v<Result, Alternative&&>)
         : result_(std::move(alternative)) {}
 
     Result result_;
@@ -95,8 +88,7 @@ namespace ruvia::detail {
 
 struct WorkerWaitResultAccess final {
     template <typename T>
-    [[nodiscard]] static WorkerWaitResult<T> value(T value)
-        noexcept(std::is_nothrow_move_constructible_v<T>) {
+    [[nodiscard]] static WorkerWaitResult<T> value(T value) noexcept(std::is_nothrow_move_constructible_v<T>) {
         return WorkerWaitResult<T>(WorkerWaitValue<T>(std::move(value)));
     }
 

@@ -40,11 +40,7 @@ struct SessionAccess final {
     return true;
 }
 
-inline void appendSessionCookieHeader(
-    HttpResponse& response,
-    std::pmr::memory_resource* resource,
-    std::string_view id,
-    bool secure) {
+inline void appendSessionCookieHeader(HttpResponse& response, std::pmr::memory_resource* resource, std::string_view id, bool secure) {
     CookieOptions options;
     options.httpOnly = true;
     options.secure = secure;
@@ -56,10 +52,7 @@ inline void appendSessionCookieHeader(
     response.header("Set-Cookie", setCookie, {.append = true});
 }
 
-inline void appendExpiredSessionCookieHeader(
-    HttpResponse& response,
-    std::pmr::memory_resource* resource,
-    bool secure) {
+inline void appendExpiredSessionCookieHeader(HttpResponse& response, std::pmr::memory_resource* resource, bool secure) {
     CookieOptions options;
     options.httpOnly = true;
     options.secure = secure;

@@ -47,10 +47,10 @@ public:
         return protocolVersion_;
     }
 
-    [[nodiscard]] std::span<const HttpHeaderView> headers() const & noexcept {
+    [[nodiscard]] std::span<const HttpHeaderView> headers() const& noexcept {
         return std::span<const HttpHeaderView>(headers_.data(), headerCount_);
     }
-    [[nodiscard]] std::span<const HttpHeaderView> headers() const && = delete;
+    [[nodiscard]] std::span<const HttpHeaderView> headers() const&& = delete;
 
     [[nodiscard]] std::optional<std::string_view> header(std::string_view name) const noexcept;
     [[nodiscard]] std::optional<std::string_view> query(std::string_view name) const noexcept;

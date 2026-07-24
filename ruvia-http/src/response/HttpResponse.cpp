@@ -10,13 +10,9 @@
 namespace ruvia {
 
 HttpResponse::HttpResponse(std::pmr::memory_resource* resource)
-    : HttpResponse(
-          detail::HttpResolvedPmrResourceTag{},
-          detail::httpPmrResourceOrDefault(resource)) {}
+    : HttpResponse(detail::HttpResolvedPmrResourceTag{}, detail::httpPmrResourceOrDefault(resource)) {}
 
-HttpResponse::HttpResponse(
-    detail::HttpResolvedPmrResourceTag,
-    std::pmr::memory_resource* resource)
+HttpResponse::HttpResponse(detail::HttpResolvedPmrResourceTag, std::pmr::memory_resource* resource)
     : headers_(detail::HttpResolvedPmrResourceTag{}, resource) {}
 
 HttpResponse& HttpResponse::operator=(HttpResponse&& other) noexcept {
@@ -42,14 +38,13 @@ HttpStatusCode HttpResponse::status() const noexcept {
     return statusCode_;
 }
 
-const HttpResponseHeaders& HttpResponse::headers() const & noexcept {
+const HttpResponseHeaders& HttpResponse::headers() const& noexcept {
     return headers_;
 }
 
 void HttpResponse::status(HttpStatusCode statusCode) {
     if (statusCode == http_status::kSwitchingProtocols) {
-        throw std::invalid_argument(
-            "Switching Protocols requires a dedicated protocol driver");
+        throw std::invalid_argument("Switching Protocols requires a dedicated protocol driver");
     }
     if (!detail::httpFinalStatusCodeValid(statusCode)) {
         throw std::invalid_argument("invalid final HTTP status code");
@@ -82,20 +77,10 @@ void HttpResponse::setFileBody(std::filesystem::path file, std::uint64_t size) {
 }
 
 void HttpResponse::setFileBody(std::filesystem::path file, std::uint64_t size, std::uint64_t offset, std::uint64_t length) {
-    setFileBody(
-        std::move(file),
-        size,
-        offset,
-        length,
-        detail::ResponseFileIdentity::unchecked());
+    setFileBody(std::move(file), size, offset, length, detail::ResponseFileIdentity::unchecked());
 }
 
-void HttpResponse::setFileBody(
-    std::filesystem::path file,
-    std::uint64_t size,
-    std::uint64_t offset,
-    std::uint64_t length,
-    detail::ResponseFileIdentity identity) {
+void HttpResponse::setFileBody(std::filesystem::path file, std::uint64_t size, std::uint64_t offset, std::uint64_t length, detail::ResponseFileIdentity identity) {
     if (file.empty()) {
         throw std::invalid_argument("file response path must not be empty");
     }
@@ -110,11 +95,7 @@ void HttpResponse::setBorrowedFileBody(const std::filesystem::path& file, std::u
     setBorrowedFileBody(file, size, 0, size);
 }
 
-void HttpResponse::setBorrowedFileBody(
-    const std::filesystem::path& file,
-    std::uint64_t size,
-    std::uint64_t offset,
-    std::uint64_t length) {
+void HttpResponse::setBorrowedFileBody(const std::filesystem::path& file, std::uint64_t size, std::uint64_t offset, std::uint64_t length) {
     if (file.empty()) {
         throw std::invalid_argument("file response path must not be empty");
     }
@@ -125,17 +106,11 @@ void HttpResponse::setBorrowedFileBody(
     body_.setBorrowedFile(file.c_str(), size, offset, length);
 }
 
-void HttpResponse::setBorrowedNativeFileBody(
-    const detail::HttpNativePathChar* file,
-    std::uint64_t size) {
+void HttpResponse::setBorrowedNativeFileBody(const detail::HttpNativePathChar* file, std::uint64_t size) {
     setBorrowedNativeFileBody(file, size, 0, size);
 }
 
-void HttpResponse::setBorrowedNativeFileBody(
-    const detail::HttpNativePathChar* file,
-    std::uint64_t size,
-    std::uint64_t offset,
-    std::uint64_t length) {
+void HttpResponse::setBorrowedNativeFileBody(const detail::HttpNativePathChar* file, std::uint64_t size, std::uint64_t offset, std::uint64_t length) {
     if (file == nullptr || *file == detail::HttpNativePathChar{}) {
         throw std::invalid_argument("file response path must not be empty");
     }

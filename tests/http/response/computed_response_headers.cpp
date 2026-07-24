@@ -49,25 +49,18 @@ RUVIA_TEST(content_range_formats_satisfied_range) {
     constexpr auto maximum = (std::numeric_limits<std::uint64_t>::max)();
     auto boundary = makeResponse();
     setResponseContentRange(boundary, maximum - 1, 1, maximum);
-    RUVIA_CHECK_EQ(
-        boundary.header("Content-Range").value_or(""),
-        std::string_view(
-            "bytes 18446744073709551614-18446744073709551614/"
-            "18446744073709551615"));
+    RUVIA_CHECK_EQ(boundary.header("Content-Range").value_or(""), std::string_view("bytes 18446744073709551614-18446744073709551614/"
+                                                                                   "18446744073709551615"));
 }
 
 RUVIA_TEST(content_range_rejects_out_of_bounds_and_overflow) {
     constexpr auto maximum = (std::numeric_limits<std::uint64_t>::max)();
 
-    for (const auto values : {
-             std::array<std::uint64_t, 3>{maximum, 2, maximum},
-             std::array<std::uint64_t, 3>{10, 1, 10},
-             std::array<std::uint64_t, 3>{11, 1, 10}}) {
+    for (const auto values : {std::array<std::uint64_t, 3>{maximum, 2, maximum}, std::array<std::uint64_t, 3>{10, 1, 10}, std::array<std::uint64_t, 3>{11, 1, 10}}) {
         auto response = makeResponse();
         bool rejected = false;
         try {
-            setResponseContentRange(
-                response, values[0], values[1], values[2]);
+            setResponseContentRange(response, values[0], values[1], values[2]);
         } catch (const std::logic_error&) {
             rejected = true;
         }
@@ -87,8 +80,7 @@ RUVIA_TEST(allow_header_lists_methods_in_canonical_order) {
     // The Allow header (405/OPTIONS) lists the mask's methods in method-enum
     // order, comma-separated.
     auto many = makeResponse();
-    setResponseAllowHeader(many, methodBit(HttpKnownMethod::kGet) | methodBit(HttpKnownMethod::kPost) |
-                                     methodBit(HttpKnownMethod::kHead));
+    setResponseAllowHeader(many, methodBit(HttpKnownMethod::kGet) | methodBit(HttpKnownMethod::kPost) | methodBit(HttpKnownMethod::kHead));
     RUVIA_CHECK_EQ(many.header("Allow").value_or(""), std::string_view("GET, POST, HEAD"));
 
     // A single method has no separator.

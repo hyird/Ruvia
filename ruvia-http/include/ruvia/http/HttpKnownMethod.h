@@ -4,17 +4,7 @@
 
 namespace ruvia {
 
-enum class HttpKnownMethod {
-    kGet,
-    kPost,
-    kPut,
-    kDelete,
-    kPatch,
-    kHead,
-    kOptions,
-    kConnect,
-    kUnknown
-};
+enum class HttpKnownMethod { kGet, kPost, kPut, kDelete, kPatch, kHead, kOptions, kConnect, kUnknown };
 
 // HTTP methods are an extensible, case-sensitive token space. HttpKnownMethod is
 // only the framework's fixed semantic classification; it is never the wire value.

@@ -41,8 +41,7 @@ CachedResponse makeEntry(std::size_t size, char fill, std::time_t expiresAt) {
     return entry;
 }
 
-std::optional<std::filesystem::path> committedFile(
-    const std::filesystem::path& directory) {
+std::optional<std::filesystem::path> committedFile(const std::filesystem::path& directory) {
     std::error_code ec;
     for (const auto& entry : std::filesystem::directory_iterator(directory, ec)) {
         if (!ec && entry.is_regular_file(ec) && entry.path().extension() == ".rvc") {
@@ -55,8 +54,7 @@ std::optional<std::filesystem::path> committedFile(
 }  // namespace
 
 int main() {
-    const std::filesystem::path dir =
-        std::filesystem::temp_directory_path() / "ruvia_disk_cache_test";
+    const std::filesystem::path dir = std::filesystem::temp_directory_path() / "ruvia_disk_cache_test";
     std::error_code ec;
     std::filesystem::remove_all(dir, ec);
 
@@ -75,9 +73,7 @@ int main() {
         check(got && got->staleWhileRevalidate == 30, "swr preserved");
         check(got && got->staleIfError == 90, "sie preserved");
         check(got && got->headers.size() == 2, "header count preserved");
-        check(got && got->headers.size() == 2 && got->headers[0].first == "Content-Type" &&
-                  got->headers[0].second == "text/plain",
-              "header name/value preserved");
+        check(got && got->headers.size() == 2 && got->headers[0].first == "Content-Type" && got->headers[0].second == "text/plain", "header name/value preserved");
         check(cache.entryCount() == 1, "one entry accounted");
     }
 
@@ -107,8 +103,7 @@ int main() {
         const auto purge = cache.purgePrefix("GET\nhost\n");
         check(purge.complete, "prefix purge reports complete filesystem removal");
         check(purge.removed == 1, "prefix purge removes only the matching prefix");
-        check(static_cast<bool>(cache.lookup("GET\nother\n/c")),
-              "non-matching entry survives prefix purge");
+        check(static_cast<bool>(cache.lookup("GET\nother\n/c")), "non-matching entry survives prefix purge");
         check(cache.entryCount() == 1, "one entry remains after purges");
     }
 
@@ -121,7 +116,7 @@ int main() {
         cache.store("a", makeEntry(100, 'a', 1));
         cache.store("b", makeEntry(100, 'b', 1));
         check(static_cast<bool>(cache.lookup("a")), "a present before pressure");  // a now MRU
-        cache.store("c", makeEntry(100, 'c', 1));  // evicts LRU (b)
+        cache.store("c", makeEntry(100, 'c', 1));                                  // evicts LRU (b)
         check(static_cast<bool>(cache.lookup("a")), "recently-used a survives eviction");
         check(static_cast<bool>(cache.lookup("c")), "newest c present");
         check(!cache.lookup("b"), "least-recently-used b was evicted");
@@ -134,30 +129,18 @@ int main() {
     {
         std::filesystem::remove_all(dir, ec);
         DiskCache cache(dir, 1u << 20);
-        check(cache.store("undeletable", makeEntry(8, 'd', 1)),
-              "delete-failure fixture is stored");
-        std::filesystem::permissions(
-            dir,
-            std::filesystem::perms::owner_read |
-                std::filesystem::perms::owner_exec,
-            std::filesystem::perm_options::replace,
-            ec);
+        check(cache.store("undeletable", makeEntry(8, 'd', 1)), "delete-failure fixture is stored");
+        std::filesystem::permissions(dir, std::filesystem::perms::owner_read | std::filesystem::perms::owner_exec, std::filesystem::perm_options::replace, ec);
         check(!ec, "cache directory can be made read-only for failure injection");
 
         const auto purge = cache.purgePrefix("undeletable");
         check(!purge.complete, "prefix purge reports a filesystem failure");
         check(purge.removed == 0, "failed prefix purge reports no removal");
-        check(cache.entryCount() == 1,
-              "failed prefix purge keeps the entry indexed");
+        check(cache.entryCount() == 1, "failed prefix purge keeps the entry indexed");
         check(!cache.clear(), "clear reports a filesystem failure");
-        check(cache.entryCount() == 1,
-              "failed clear keeps the entry indexed");
+        check(cache.entryCount() == 1, "failed clear keeps the entry indexed");
 
-        std::filesystem::permissions(
-            dir,
-            std::filesystem::perms::owner_all,
-            std::filesystem::perm_options::replace,
-            ec);
+        std::filesystem::permissions(dir, std::filesystem::perms::owner_all, std::filesystem::perm_options::replace, ec);
         check(!ec, "cache directory permissions are restored");
         check(cache.clear(), "clear succeeds after filesystem recovery");
     }
@@ -182,8 +165,7 @@ int main() {
         DiskCache reopened(dir, 1u << 20);
         check(reopened.entryCount() == 1, "reopened cache adopts the on-disk entry");
         const auto got = reopened.lookup("persist");
-        check(got && got->body == std::string(64, 'p'),
-              "persisted entry is readable after restart");
+        check(got && got->body == std::string(64, 'p'), "persisted entry is readable after restart");
         check(got && got->expiresAt == 42, "persisted freshness survives restart");
     }
 
@@ -207,8 +189,7 @@ int main() {
         std::filesystem::remove_all(dir, ec);
         {
             DiskCache cache(dir, 1u << 20);
-            check(cache.store("uncommitted", makeEntry(16, 'u', 1)),
-                  "record for temporary-file recovery is stored");
+            check(cache.store("uncommitted", makeEntry(16, 'u', 1)), "record for temporary-file recovery is stored");
         }
         const auto committed = committedFile(dir);
         check(static_cast<bool>(committed), "committed cache file is discoverable");
@@ -218,10 +199,8 @@ int main() {
             std::filesystem::copy_file(*committed, temporary, ec);
             std::filesystem::remove(*committed, ec);
             DiskCache reopened(dir, 1u << 20);
-            check(!reopened.lookup("uncommitted"),
-                  "uncommitted temporary record is not adopted");
-            check(!std::filesystem::exists(temporary),
-                  "orphaned temporary record is cleaned");
+            check(!reopened.lookup("uncommitted"), "uncommitted temporary record is not adopted");
+            check(!std::filesystem::exists(temporary), "orphaned temporary record is cleaned");
         }
     }
 
@@ -231,15 +210,12 @@ int main() {
         std::filesystem::remove_all(dir, ec);
         {
             DiskCache cache(dir, 1u << 20);
-            check(cache.store("corrupt", makeEntry(16, 'c', 1)),
-                  "record for corruption recovery is stored");
+            check(cache.store("corrupt", makeEntry(16, 'c', 1)), "record for corruption recovery is stored");
         }
         const auto committed = committedFile(dir);
         check(static_cast<bool>(committed), "corruption fixture file is discoverable");
         if (committed) {
-            std::fstream file(
-                *committed,
-                std::ios::binary | std::ios::in | std::ios::out);
+            std::fstream file(*committed, std::ios::binary | std::ios::in | std::ios::out);
             file.seekg(-1, std::ios::end);
             char byte = 0;
             file.read(&byte, 1);
@@ -249,10 +225,8 @@ int main() {
             file.close();
 
             DiskCache reopened(dir, 1u << 20);
-            check(reopened.entryCount() == 0,
-                  "checksum-invalid record is excluded from the rebuilt index");
-            check(!reopened.lookup("corrupt"),
-                  "checksum-invalid record cannot be served");
+            check(reopened.entryCount() == 0, "checksum-invalid record is excluded from the rebuilt index");
+            check(!reopened.lookup("corrupt"), "checksum-invalid record cannot be served");
         }
     }
 

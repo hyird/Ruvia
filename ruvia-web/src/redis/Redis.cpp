@@ -8,10 +8,7 @@
 namespace ruvia {
 namespace detail {
 
-RedisRegistry::RedisRegistry(
-    asio::io_context& ioContext,
-    std::pmr::memory_resource* resource,
-    std::span<const RedisDefinition> redis)
+RedisRegistry::RedisRegistry(asio::io_context& ioContext, std::pmr::memory_resource* resource, std::span<const RedisDefinition> redis)
     : resource_(detail::pmrResourceOrDefault(resource)),
       pools_(resource_) {
     pools_.reserve(redis.size());
@@ -19,19 +16,12 @@ RedisRegistry::RedisRegistry(
         if (definition.alias.empty()) {
             throw std::invalid_argument("redis alias must not be empty");
         }
-        if (std::ranges::any_of(
-                pools_,
-                [&definition](const Entry& entry) {
-                    return std::string_view(entry.alias) ==
-                        std::string_view(definition.alias);
-                })) {
+        if (std::ranges::any_of(pools_, [&definition](const Entry& entry) { return std::string_view(entry.alias) == std::string_view(definition.alias); })) {
             throw std::invalid_argument("duplicate redis alias");
         }
         validateRedisConfig(definition.config);
         auto pool = makePmrObject<RedisPool>(resource_, ioContext, definition.config, resource_);
-        pools_.push_back(Entry{
-            std::pmr::string(definition.alias, resource_),
-            std::move(pool)});
+        pools_.push_back(Entry{std::pmr::string(definition.alias, resource_), std::move(pool)});
         if (std::string_view(pools_.back().alias) == kDefaultRedisAlias) {
             defaultPoolIndex_ = pools_.size() - 1;
         }
@@ -58,24 +48,17 @@ bool RedisRegistry::empty() const noexcept {
 }
 
 bool RedisRegistry::hasAnyTimeout() const noexcept {
-    return std::ranges::any_of(pools_, [](const Entry& entry) {
-        return entry.pool->hasAnyTimeout();
-    });
+    return std::ranges::any_of(pools_, [](const Entry& entry) { return entry.pool->hasAnyTimeout(); });
 }
 
-RedisHandle RedisRegistry::get(
-    std::pmr::memory_resource* resource,
-    ScopedOperationScope& operationScope) const {
+RedisHandle RedisRegistry::get(std::pmr::memory_resource* resource, ScopedOperationScope& operationScope) const {
     if (!defaultPoolIndex_.has_value()) {
         throw RedisError(RedisError::Code::kNotConfigured, "default redis is not configured");
     }
     return RedisHandle(*pools_[*defaultPoolIndex_].pool, resource, operationScope);
 }
 
-RedisHandle RedisRegistry::get(
-    std::string_view alias,
-    std::pmr::memory_resource* resource,
-    ScopedOperationScope& operationScope) const {
+RedisHandle RedisRegistry::get(std::string_view alias, std::pmr::memory_resource* resource, ScopedOperationScope& operationScope) const {
     for (const auto& entry : pools_) {
         if (std::string_view(entry.alias) == alias) {
             return RedisHandle(*entry.pool, resource, operationScope);

@@ -3,11 +3,7 @@
 
 namespace ruvia::detail {
 
-void HpackEncoder::encodeInteger(
-    std::pmr::string& out,
-    std::uint8_t firstByteMask,
-    std::uint8_t prefixBits,
-    std::uint32_t value) {
+void HpackEncoder::encodeInteger(std::pmr::string& out, std::uint8_t firstByteMask, std::uint8_t prefixBits, std::uint32_t value) {
     const auto prefixMax = static_cast<std::uint32_t>((1U << prefixBits) - 1U);
     if (value < prefixMax) {
         out.push_back(static_cast<char>(firstByteMask | static_cast<std::uint8_t>(value)));
@@ -32,9 +28,7 @@ void HpackEncoder::encodeIndexed(std::pmr::string& out, std::uint32_t index) {
     encodeInteger(out, 0x80, 7, index);
 }
 
-void HpackEncoder::encodeDynamicTableSizeUpdate(
-    std::pmr::string& out,
-    std::uint32_t maximum) {
+void HpackEncoder::encodeDynamicTableSizeUpdate(std::pmr::string& out, std::uint32_t maximum) {
     // RFC 7541 §6.3: 001xxxxx followed by an HPACK integer with a 5-bit prefix.
     encodeInteger(out, 0x20, 5, maximum);
 }
@@ -60,11 +54,7 @@ void HpackEncoder::encodeHeader(std::pmr::string& out, std::string_view name, st
     encodeString(out, value);
 }
 
-void HpackEncoder::encodeHeaderWithNameIndex(
-    std::pmr::string& out,
-    std::uint32_t nameIndex,
-    std::string_view value,
-    bool neverIndexed) {
+void HpackEncoder::encodeHeaderWithNameIndex(std::pmr::string& out, std::uint32_t nameIndex, std::string_view value, bool neverIndexed) {
     encodeInteger(out, neverIndexed ? kHpackLiteralNeverIndexed : kHpackLiteralWithoutIndexing, 4, nameIndex);
     encodeString(out, value);
 }
@@ -97,10 +87,7 @@ void HpackEncoder::encodeStatus(std::pmr::string& out, HttpStatusCode status) {
     }
 
     const auto token = httpStatusCodeToken(status);
-    encodeHeaderWithNameIndex(
-        out,
-        HpackStaticIndex::kStatusOk,
-        httpStatusCodeTokenView(token));
+    encodeHeaderWithNameIndex(out, HpackStaticIndex::kStatusOk, httpStatusCodeTokenView(token));
 }
 
 }  // namespace ruvia::detail

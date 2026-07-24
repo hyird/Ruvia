@@ -58,11 +58,8 @@ ruvia::Task<ruvia::HttpResponse> fastHandler(void*, ruvia::Context& context) {
 }
 
 ruvia::Task<ruvia::HttpResponse> throwingHandler(void*, ruvia::Context& context) {
-    const auto value = co_await context.runBlocking([]() -> int {
-        throw std::runtime_error("blocking work failed");
-    });
-    co_return context.text(
-        value == 0 ? std::string_view("zero") : std::string_view("nonzero"));
+    const auto value = co_await context.runBlocking([]() -> int { throw std::runtime_error("blocking work failed"); });
+    co_return context.text(value == 0 ? std::string_view("zero") : std::string_view("nonzero"));
 }
 
 // The non-throwing spelling: an overloaded pool is a status to act on, not an
@@ -72,19 +69,15 @@ ruvia::Task<ruvia::HttpResponse> tryHandler(void*, ruvia::Context& context) {
     if (result.completed()) {
         co_return context.text("try-completed");
     }
-    co_return context.text(
-        std::string_view(ruvia::describeBlockingStatus(result.status())));
+    co_return context.text(std::string_view(ruvia::describeBlockingStatus(result.status())));
 }
 
-[[nodiscard]] std::string readResponse(
-    asio::ip::tcp::socket& socket, asio::streambuf& buffer, std::error_code& ec) {
+[[nodiscard]] std::string readResponse(asio::ip::tcp::socket& socket, asio::streambuf& buffer, std::error_code& ec) {
     const std::size_t n = asio::read_until(socket, buffer, "\r\n\r\n", ec);
     if (ec) {
         return {};
     }
-    std::string head(
-        asio::buffers_begin(buffer.data()),
-        asio::buffers_begin(buffer.data()) + n);
+    std::string head(asio::buffers_begin(buffer.data()), asio::buffers_begin(buffer.data()) + n);
     buffer.consume(n);
 
     std::size_t length = 0;
@@ -120,30 +113,16 @@ ruvia::Task<ruvia::HttpResponse> tryHandler(void*, ruvia::Context& context) {
             break;
         }
     }
-    std::string body(
-        asio::buffers_begin(buffer.data()),
-        asio::buffers_begin(buffer.data()) + std::min(buffer.size(), length));
+    std::string body(asio::buffers_begin(buffer.data()), asio::buffers_begin(buffer.data()) + std::min(buffer.size(), length));
     buffer.consume(std::min(buffer.size(), length));
     return head + body;
 }
 
-void registerRoute(
-    ruvia::detail::RouterImpl& impl,
-    std::string_view path,
-    ruvia::Task<ruvia::HttpResponse> (*handler)(void*, ruvia::Context&)) {
-    impl.registerRoute(
-        ruvia::HttpKnownMethod::kGet,
-        std::pmr::string(path, std::pmr::get_default_resource()),
-        ruvia::detail::RouteHandler(nullptr, handler),
-        ruvia::detail::RequestBodyMode::kBuffered,
-        {},
-        {});
+void registerRoute(ruvia::detail::RouterImpl& impl, std::string_view path, ruvia::Task<ruvia::HttpResponse> (*handler)(void*, ruvia::Context&)) {
+    impl.registerRoute(ruvia::HttpKnownMethod::kGet, std::pmr::string(path, std::pmr::get_default_resource()), ruvia::detail::RouteHandler(nullptr, handler), ruvia::detail::RequestBodyMode::kBuffered, {}, {});
 }
 
-void writeRequest(
-    asio::ip::tcp::socket& socket,
-    std::string_view path,
-    std::error_code& ec) {
+void writeRequest(asio::ip::tcp::socket& socket, std::string_view path, std::error_code& ec) {
     std::string request("GET ");
     request.append(path);
     request.append(" HTTP/1.1\r\nHost: localhost\r\n\r\n");
@@ -175,11 +154,7 @@ int main() {
         ruvia::BlockingPool pool(ruvia::BlockingPoolOptions{.threadCount = 2});
         ruvia::detail::HttpServerOptions options;
         options.blockingPool = &pool;
-        ruvia::detail::HttpServer server(
-            asio::ip::tcp::endpoint(asio::ip::make_address("127.0.0.1"), 0),
-            impl.routeTable(), {}, {},
-            std::span<const ruvia::detail::WorkerStateDefinition>{},
-            options);
+        ruvia::detail::HttpServer server(asio::ip::tcp::endpoint(asio::ip::make_address("127.0.0.1"), 0), impl.routeTable(), {}, {}, std::span<const ruvia::detail::WorkerStateDefinition>{}, options);
         server.start();
         const auto endpoint = server.localEndpoint();
 
@@ -219,8 +194,7 @@ int main() {
         }
         if (rc == 0) {
             writeRequest(fastSocket, "/try", ec);
-            if (readResponse(fastSocket, fastBuffer, ec).find("try-completed") ==
-                std::string::npos) {
+            if (readResponse(fastSocket, fastBuffer, ec).find("try-completed") == std::string::npos) {
                 fail(5, "tryRunBlocking did not report a completed operation");
             }
         }
@@ -234,15 +208,10 @@ int main() {
     // A saturated pool is capacity, not a bug: 503 for runBlocking(), a status
     // for tryRunBlocking().
     if (rc == 0) {
-        ruvia::BlockingPool pool(
-            ruvia::BlockingPoolOptions{.threadCount = 1, .queueCapacity = 1});
+        ruvia::BlockingPool pool(ruvia::BlockingPoolOptions{.threadCount = 1, .queueCapacity = 1});
         ruvia::detail::HttpServerOptions options;
         options.blockingPool = &pool;
-        ruvia::detail::HttpServer server(
-            asio::ip::tcp::endpoint(asio::ip::make_address("127.0.0.1"), 0),
-            impl.routeTable(), {}, {},
-            std::span<const ruvia::detail::WorkerStateDefinition>{},
-            options);
+        ruvia::detail::HttpServer server(asio::ip::tcp::endpoint(asio::ip::make_address("127.0.0.1"), 0), impl.routeTable(), {}, {}, std::span<const ruvia::detail::WorkerStateDefinition>{}, options);
         server.start();
         const auto endpoint = server.localEndpoint();
 
@@ -276,29 +245,23 @@ int main() {
 
         if (rc == 0) {
             writeRequest(refusedSocket, "/slow", ec);
-            if (!readResponse(refusedSocket, refusedBuffer, ec)
-                     .starts_with("HTTP/1.1 503")) {
+            if (!readResponse(refusedSocket, refusedBuffer, ec).starts_with("HTTP/1.1 503")) {
                 fail(7, "a saturated pool did not answer with 503");
             }
         }
         if (rc == 0) {
             writeRequest(refusedSocket, "/try", ec);
             const auto response = readResponse(refusedSocket, refusedBuffer, ec);
-            if (!response.starts_with("HTTP/1.1 200") ||
-                response.find("queue is full") == std::string::npos) {
+            if (!response.starts_with("HTTP/1.1 200") || response.find("queue is full") == std::string::npos) {
                 fail(8, "tryRunBlocking did not report the saturated pool");
             }
         }
 
         g_hold.release(2);
-        if (rc == 0 &&
-            readResponse(runningSocket, runningBuffer, ec).find("held") ==
-                std::string::npos) {
+        if (rc == 0 && readResponse(runningSocket, runningBuffer, ec).find("held") == std::string::npos) {
             fail(9, "the running offload did not complete after release");
         }
-        if (rc == 0 &&
-            readResponse(queuedSocket, queuedBuffer, ec).find("held") ==
-                std::string::npos) {
+        if (rc == 0 && readResponse(queuedSocket, queuedBuffer, ec).find("held") == std::string::npos) {
             fail(10, "the queued offload did not complete after release");
         }
 
@@ -312,11 +275,7 @@ int main() {
     // No pool configured: a loud failure, never a blocked worker.
     if (rc == 0) {
         ruvia::detail::HttpServerOptions options;
-        ruvia::detail::HttpServer server(
-            asio::ip::tcp::endpoint(asio::ip::make_address("127.0.0.1"), 0),
-            impl.routeTable(), {}, {},
-            std::span<const ruvia::detail::WorkerStateDefinition>{},
-            options);
+        ruvia::detail::HttpServer server(asio::ip::tcp::endpoint(asio::ip::make_address("127.0.0.1"), 0), impl.routeTable(), {}, {}, std::span<const ruvia::detail::WorkerStateDefinition>{}, options);
         server.start();
         const auto endpoint = server.localEndpoint();
 

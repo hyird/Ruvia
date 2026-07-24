@@ -47,8 +47,8 @@ RUVIA_TEST(websocket_control_opcode_classification) {
 }
 
 RUVIA_TEST(websocket_frame_message_limit_exempts_control_frames) {
-    using ruvia::detail::WebSocketFrameKind;
     using ruvia::detail::webSocketFrameExceedsMessageLimit;
+    using ruvia::detail::WebSocketFrameKind;
     // Data frames are measured against the per-message size limit.
     const auto limit = ProtocolByteLimit::limited(64);
     RUVIA_CHECK(webSocketFrameExceedsMessageLimit(WebSocketFrameKind::kText, 100, limit));
@@ -61,18 +61,14 @@ RUVIA_TEST(websocket_frame_message_limit_exempts_control_frames) {
     RUVIA_CHECK(!webSocketFrameExceedsMessageLimit(WebSocketFrameKind::kPing, 100, limit));
     RUVIA_CHECK(!webSocketFrameExceedsMessageLimit(WebSocketFrameKind::kPong, 100, limit));
     RUVIA_CHECK(!webSocketFrameExceedsMessageLimit(WebSocketFrameKind::kClose, 100, limit));
-    RUVIA_CHECK(!webSocketFrameExceedsMessageLimit(
-        WebSocketFrameKind::kText,
-        1'000'000,
-        ProtocolByteLimit::unlimited()));
+    RUVIA_CHECK(!webSocketFrameExceedsMessageLimit(WebSocketFrameKind::kText, 1'000'000, ProtocolByteLimit::unlimited()));
 }
 
 RUVIA_TEST(websocket_message_size_limits) {
     using ruvia::detail::webSocketAppendExceedsLimit;
     using ruvia::detail::webSocketMessageExceedsLimit;
     const auto limit = ProtocolByteLimit::limited(100);
-    RUVIA_CHECK(!webSocketMessageExceedsLimit(
-        1'000'000, ProtocolByteLimit::unlimited()));
+    RUVIA_CHECK(!webSocketMessageExceedsLimit(1'000'000, ProtocolByteLimit::unlimited()));
     RUVIA_CHECK(!webSocketMessageExceedsLimit(100, limit));  // exact fit is allowed
     RUVIA_CHECK(webSocketMessageExceedsLimit(101, limit));
 
@@ -80,8 +76,7 @@ RUVIA_TEST(websocket_message_size_limits) {
     RUVIA_CHECK(!webSocketAppendExceedsLimit(70, 30, limit));  // 70+30 == 100 ok
     RUVIA_CHECK(webSocketAppendExceedsLimit(71, 30, limit));   // 71+30 > 100
     RUVIA_CHECK(webSocketAppendExceedsLimit(0, 101, limit));   // single append over limit
-    RUVIA_CHECK(!webSocketAppendExceedsLimit(
-        1'000'000, 1, ProtocolByteLimit::unlimited()));
+    RUVIA_CHECK(!webSocketAppendExceedsLimit(1'000'000, 1, ProtocolByteLimit::unlimited()));
     constexpr auto kMax = (std::numeric_limits<std::size_t>::max)();
     RUVIA_CHECK(webSocketAppendExceedsLimit(kMax - 10, 20, limit));  // no wraparound
 }
@@ -94,8 +89,7 @@ RUVIA_TEST(websocket_frame_length_and_read_overflow_guards) {
     const auto limit = ProtocolByteLimit::limited(1000);
     RUVIA_CHECK(!webSocketFrameLengthExceedsLimit(100, limit));
     RUVIA_CHECK(webSocketFrameLengthExceedsLimit(2000, limit));
-    RUVIA_CHECK(!webSocketFrameLengthExceedsLimit(
-        2000, ProtocolByteLimit::unlimited()));
+    RUVIA_CHECK(!webSocketFrameLengthExceedsLimit(2000, ProtocolByteLimit::unlimited()));
     // A declared 64-bit length beyond any addressable size is over the limit.
     RUVIA_CHECK(webSocketFrameLengthExceedsLimit(kU64Max, limit));
 

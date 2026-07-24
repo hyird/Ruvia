@@ -14,11 +14,7 @@ using ruvia::detail::builtinStaticResponseHeader;
 // Assert that an interned (name, value) pair round-trips: both the name and the
 // value substrings must match, which is what guards the hardcoded nameSize used
 // to split the concatenated static byte blob.
-void checkInterned(
-    ruvia::testing::TestContext& ruvia_ctx,
-    std::uint32_t knownBit,
-    std::string_view value,
-    std::string_view expectedName) {
+void checkInterned(ruvia::testing::TestContext& ruvia_ctx, std::uint32_t knownBit, std::string_view value, std::string_view expectedName) {
     const auto header = builtinStaticResponseHeader(knownBit, value);
     RUVIA_CHECK(header.has_value());
     RUVIA_CHECK_EQ(header->name(), expectedName);
@@ -51,9 +47,7 @@ RUVIA_TEST(static_header_vary_and_credentials) {
     checkInterned(ruvia_ctx, ruvia::detail::kResponseHeaderVary, "Access-Control-Request-Headers", "Vary");
     checkInterned(ruvia_ctx, ruvia::detail::kResponseHeaderVary, "Access-Control-Request-Method", "Vary");
     // Longest interned name (32 bytes) split from a short value.
-    checkInterned(
-        ruvia_ctx, ruvia::detail::kResponseHeaderAccessControlAllowCredentials, "true",
-        "Access-Control-Allow-Credentials");
+    checkInterned(ruvia_ctx, ruvia::detail::kResponseHeaderAccessControlAllowCredentials, "true", "Access-Control-Allow-Credentials");
 }
 
 RUVIA_TEST(static_header_unknown_value_or_bit_is_nullopt) {
@@ -76,9 +70,6 @@ RUVIA_TEST(response_known_header_slot_maps_single_bits) {
 
     // Zero, multi-bit, and out-of-range values return the sentinel (count).
     RUVIA_CHECK_EQ(responseKnownHeaderSlot(0), kResponseKnownHeaderCount);
-    RUVIA_CHECK_EQ(responseKnownHeaderSlot(
-                       ruvia::detail::kResponseHeaderContentType |
-                       ruvia::detail::kResponseHeaderConnection),
-                   kResponseKnownHeaderCount);
+    RUVIA_CHECK_EQ(responseKnownHeaderSlot(ruvia::detail::kResponseHeaderContentType | ruvia::detail::kResponseHeaderConnection), kResponseKnownHeaderCount);
     RUVIA_CHECK_EQ(responseKnownHeaderSlot(1U << 25), kResponseKnownHeaderCount);
 }

@@ -45,8 +45,7 @@ public:
 
 private:
     std::int32_t sendWindow_{kHttp2DefaultInitialWindowSize};
-    std::int32_t receiveWindow_{
-        static_cast<std::int32_t>(Http2LocalSettings::kInitialWindowSize)};
+    std::int32_t receiveWindow_{static_cast<std::int32_t>(Http2LocalSettings::kInitialWindowSize)};
 };
 
 }  // namespace ruvia::detail

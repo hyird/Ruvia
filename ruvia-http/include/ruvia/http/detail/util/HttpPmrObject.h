@@ -9,10 +9,7 @@
 namespace ruvia::detail {
 
 template <typename T, typename... Args>
-[[nodiscard]] T* constructHttpPmrObject(
-    HttpResolvedPmrResourceTag,
-    std::pmr::memory_resource* resource,
-    Args&&... args) {
+[[nodiscard]] T* constructHttpPmrObject(HttpResolvedPmrResourceTag, std::pmr::memory_resource* resource, Args&&... args) {
     auto* storage = resource->allocate(sizeof(T), alignof(T));
     try {
         return std::construct_at(static_cast<T*>(storage), std::forward<Args>(args)...);
@@ -24,17 +21,11 @@ template <typename T, typename... Args>
 
 template <typename T, typename... Args>
 [[nodiscard]] T* constructHttpPmrObject(std::pmr::memory_resource* resource, Args&&... args) {
-    return constructHttpPmrObject<T>(
-        HttpResolvedPmrResourceTag{},
-        httpPmrResourceOrDefault(resource),
-        std::forward<Args>(args)...);
+    return constructHttpPmrObject<T>(HttpResolvedPmrResourceTag{}, httpPmrResourceOrDefault(resource), std::forward<Args>(args)...);
 }
 
 template <typename T>
-void destroyHttpPmrObject(
-    HttpResolvedPmrResourceTag,
-    T* value,
-    std::pmr::memory_resource* resource) noexcept {
+void destroyHttpPmrObject(HttpResolvedPmrResourceTag, T* value, std::pmr::memory_resource* resource) noexcept {
     if (value == nullptr) {
         return;
     }
@@ -57,16 +48,9 @@ struct HttpPmrObjectDeleter final {
 };
 
 template <typename T, typename... Args>
-[[nodiscard]] std::unique_ptr<T, HttpPmrObjectDeleter<T>> makeHttpPmrObject(
-    std::pmr::memory_resource* resource,
-    Args&&... args) {
+[[nodiscard]] std::unique_ptr<T, HttpPmrObjectDeleter<T>> makeHttpPmrObject(std::pmr::memory_resource* resource, Args&&... args) {
     auto* memoryResource = httpPmrResourceOrDefault(resource);
-    return std::unique_ptr<T, HttpPmrObjectDeleter<T>>(
-        constructHttpPmrObject<T>(
-            HttpResolvedPmrResourceTag{},
-            memoryResource,
-            std::forward<Args>(args)...),
-        HttpPmrObjectDeleter<T>{memoryResource});
+    return std::unique_ptr<T, HttpPmrObjectDeleter<T>>(constructHttpPmrObject<T>(HttpResolvedPmrResourceTag{}, memoryResource, std::forward<Args>(args)...), HttpPmrObjectDeleter<T>{memoryResource});
 }
 
 }  // namespace ruvia::detail

@@ -17,12 +17,7 @@ namespace ruvia {
 // concern, not an HTTP protocol primitive, so this type belongs to ruvia-web.
 class HttpErrorInfo final {
 public:
-    constexpr HttpErrorInfo(
-        HttpStatusCode status = http_status::kInternalServerError,
-        std::string_view code = {},
-        std::string_view message = {},
-        std::string_view statusText = {},
-        std::string_view detailsJson = {}) noexcept
+    constexpr HttpErrorInfo(HttpStatusCode status = http_status::kInternalServerError, std::string_view code = {}, std::string_view message = {}, std::string_view statusText = {}, std::string_view detailsJson = {}) noexcept
         : status_(status),
           statusText_(statusText),
           code_(code),
@@ -30,36 +25,16 @@ public:
           detailsJson_(detailsJson) {}
 
     template <detail::HttpTemporaryOwningCharString String>
-    HttpErrorInfo(
-        HttpStatusCode,
-        String&&,
-        std::string_view = {},
-        std::string_view = {},
-        std::string_view = {}) = delete;
+    HttpErrorInfo(HttpStatusCode, String&&, std::string_view = {}, std::string_view = {}, std::string_view = {}) = delete;
 
     template <detail::HttpTemporaryOwningCharString String>
-    HttpErrorInfo(
-        HttpStatusCode,
-        std::string_view,
-        String&&,
-        std::string_view = {},
-        std::string_view = {}) = delete;
+    HttpErrorInfo(HttpStatusCode, std::string_view, String&&, std::string_view = {}, std::string_view = {}) = delete;
 
     template <detail::HttpTemporaryOwningCharString String>
-    HttpErrorInfo(
-        HttpStatusCode,
-        std::string_view,
-        std::string_view,
-        String&&,
-        std::string_view = {}) = delete;
+    HttpErrorInfo(HttpStatusCode, std::string_view, std::string_view, String&&, std::string_view = {}) = delete;
 
     template <detail::HttpTemporaryOwningCharString String>
-    HttpErrorInfo(
-        HttpStatusCode,
-        std::string_view,
-        std::string_view,
-        std::string_view,
-        String&&) = delete;
+    HttpErrorInfo(HttpStatusCode, std::string_view, std::string_view, std::string_view, String&&) = delete;
 
     [[nodiscard]] constexpr HttpStatusCode status() const noexcept {
         return status_;
@@ -91,19 +66,15 @@ private:
 
 class HttpError final : public std::exception {
 public:
-    HttpError(
-        HttpStatusCode status,
-        std::string_view code,
-        std::string_view message,
-        std::string_view statusText = {});
+    HttpError(HttpStatusCode status, std::string_view code, std::string_view message, std::string_view statusText = {});
     HttpError(const HttpError& other);
     HttpError& operator=(const HttpError& other);
     HttpError(HttpError&&) noexcept = default;
     HttpError& operator=(HttpError&&) noexcept = default;
 
     [[nodiscard]] const char* what() const noexcept override;
-    [[nodiscard]] HttpErrorInfo info() const & noexcept;
-    [[nodiscard]] HttpErrorInfo info() const && = delete;
+    [[nodiscard]] HttpErrorInfo info() const& noexcept;
+    [[nodiscard]] HttpErrorInfo info() const&& = delete;
 
 private:
     HttpStatusCode status_{http_status::kInternalServerError};

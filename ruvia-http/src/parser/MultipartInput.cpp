@@ -14,28 +14,21 @@
 
 namespace ruvia::detail {
 
-MultipartInputLifecycle::MultipartInputLifecycle(
-    std::pmr::memory_resource* resource)
-    : value_(
-          std::in_place_type<MultipartStreamingInputOpen>,
-          httpPmrResourceOrDefault(resource)) {}
+MultipartInputLifecycle::MultipartInputLifecycle(std::pmr::memory_resource* resource)
+    : value_(std::in_place_type<MultipartStreamingInputOpen>, httpPmrResourceOrDefault(resource)) {}
 
-MultipartInputLifecycle::MultipartInputLifecycle(
-    MultipartBorrowedInput input) noexcept
+MultipartInputLifecycle::MultipartInputLifecycle(MultipartBorrowedInput input) noexcept
     : value_(input) {}
 
-const detail::MultipartBorrowedInput*
-MultipartInputLifecycle::borrowed() const & noexcept {
+const detail::MultipartBorrowedInput* MultipartInputLifecycle::borrowed() const& noexcept {
     return std::get_if<MultipartBorrowedInput>(&value_);
 }
 
-const detail::MultipartStreamingInputOpen*
-MultipartInputLifecycle::streamingOpen() const & noexcept {
+const detail::MultipartStreamingInputOpen* MultipartInputLifecycle::streamingOpen() const& noexcept {
     return std::get_if<MultipartStreamingInputOpen>(&value_);
 }
 
-const detail::MultipartStreamingInputEof*
-MultipartInputLifecycle::streamingEof() const & noexcept {
+const detail::MultipartStreamingInputEof* MultipartInputLifecycle::streamingEof() const& noexcept {
     return std::get_if<MultipartStreamingInputEof>(&value_);
 }
 
@@ -63,10 +56,8 @@ const std::pmr::string* MultipartInputLifecycle::ownedBytes() const noexcept {
     return nullptr;
 }
 
-std::string_view MultipartInputLifecycle::view() const & noexcept {
-    const auto source = borrowed() != nullptr
-        ? borrowed()->bytes
-        : std::string_view(ownedBytes()->data(), ownedBytes()->size());
+std::string_view MultipartInputLifecycle::view() const& noexcept {
+    const auto source = borrowed() != nullptr ? borrowed()->bytes : std::string_view(ownedBytes()->data(), ownedBytes()->size());
     return offset_ >= source.size() ? std::string_view{} : source.substr(offset_);
 }
 

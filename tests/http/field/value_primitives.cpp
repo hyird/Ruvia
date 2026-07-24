@@ -4,7 +4,6 @@
 
 #include "ruvia/http/detail/field/HttpEntityTag.h"
 
-
 // Small field-value primitives: the weak-etag prefix.
 
 RUVIA_TEST(http_trim_weak_etag_prefix) {

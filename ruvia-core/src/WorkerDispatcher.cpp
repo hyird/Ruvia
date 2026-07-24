@@ -23,8 +23,7 @@ public:
         : previous_(std::exchange(gCurrentWorker, &worker)) {
         if (previous_ != nullptr && previous_ != &worker) {
             gCurrentWorker = previous_;
-            throw std::logic_error(
-                "one thread cannot run multiple Ruvia workers concurrently");
+            throw std::logic_error("one thread cannot run multiple Ruvia workers concurrently");
         }
     }
 
@@ -57,16 +56,13 @@ WorkerDispatcher::~WorkerDispatcher() = default;
 PostResult WorkerDispatcher::post(MoveOnlyFunction<void()> task) {
     std::lock_guard lock(impl_->mutex);
     if (!impl_->contextAttached || !impl_->accepting) {
-        return PostResult::reject(
-            PostStatus::kWorkerStopping, std::move(task));
+        return PostResult::reject(PostStatus::kWorkerStopping, std::move(task));
     }
     if (impl_->size == impl_->slots.size()) {
         return PostResult::reject(PostStatus::kQueueFull, std::move(task));
     }
     if (!impl_->drainScheduled) {
-        asio::post(
-            impl_->ioContext,
-            [self = shared_from_this()] { self->drain(); });
+        asio::post(impl_->ioContext, [self = shared_from_this()] { self->drain(); });
         impl_->drainScheduled = true;
     }
     impl_->slots[impl_->tail].emplace(std::move(task));
@@ -75,8 +71,7 @@ PostResult WorkerDispatcher::post(MoveOnlyFunction<void()> task) {
     return PostResult::accept();
 }
 
-PostStatus WorkerDispatcher::postFactory(
-    MoveOnlyFunction<MoveOnlyFunction<void()>()> factory) {
+PostStatus WorkerDispatcher::postFactory(MoveOnlyFunction<MoveOnlyFunction<void()>()> factory) {
     std::lock_guard lock(impl_->mutex);
     if (!impl_->contextAttached || !impl_->accepting) {
         return PostStatus::kWorkerStopping;
@@ -85,9 +80,7 @@ PostStatus WorkerDispatcher::postFactory(
         return PostStatus::kQueueFull;
     }
     if (!impl_->drainScheduled) {
-        asio::post(
-            impl_->ioContext,
-            [self = shared_from_this()] { self->drain(); });
+        asio::post(impl_->ioContext, [self = shared_from_this()] { self->drain(); });
         impl_->drainScheduled = true;
     }
     impl_->slots[impl_->tail].emplace(factory());
@@ -101,12 +94,10 @@ void WorkerDispatcher::defer(MoveOnlyFunction<void()> task) {
     if (!impl_->contextAttached) {
         throw std::runtime_error("worker execution context is detached");
     }
-    asio::post(impl_->ioContext,
-               [self = shared_from_this(), task = std::move(task)]() mutable { task(); });
+    asio::post(impl_->ioContext, [self = shared_from_this(), task = std::move(task)]() mutable { task(); });
 }
 
-void WorkerDispatcher::deferOrTerminate(
-    MoveOnlyFunction<void()> task) noexcept {
+void WorkerDispatcher::deferOrTerminate(MoveOnlyFunction<void()> task) noexcept {
     try {
         defer(std::move(task));
     } catch (...) {
@@ -114,8 +105,7 @@ void WorkerDispatcher::deferOrTerminate(
     }
 }
 
-void WorkerDispatcher::registerShutdownListener(
-    const std::shared_ptr<WorkerShutdownListener>& listener) {
+void WorkerDispatcher::registerShutdownListener(const std::shared_ptr<WorkerShutdownListener>& listener) {
     std::lock_guard lock(impl_->mutex);
     if (!impl_->accepting) {
         throw std::runtime_error("cannot register state on a stopping worker");
@@ -126,28 +116,21 @@ void WorkerDispatcher::registerShutdownListener(
 
 void WorkerDispatcher::runContext() {
     std::exception_ptr failure;
-    runContext([&failure](std::exception_ptr value) noexcept {
-        failure = std::move(value);
-    });
+    runContext([&failure](std::exception_ptr value) noexcept { failure = std::move(value); });
     if (failure != nullptr) {
         std::rethrow_exception(failure);
     }
 }
 
-void WorkerDispatcher::runContext(
-    MoveOnlyFunction<void(std::exception_ptr)> failureHandler) {
+void WorkerDispatcher::runContext(MoveOnlyFunction<void(std::exception_ptr)> failureHandler) {
     runContext({}, std::move(failureHandler), {});
 }
 
-void WorkerDispatcher::runContext(
-    MoveOnlyFunction<void()> startupHandler,
-    MoveOnlyFunction<void(std::exception_ptr)> failureHandler,
-    MoveOnlyFunction<void()> shutdownHandler) {
+void WorkerDispatcher::runContext(MoveOnlyFunction<void()> startupHandler, MoveOnlyFunction<void(std::exception_ptr)> failureHandler, MoveOnlyFunction<void()> shutdownHandler) {
     CurrentWorkerGuard current(*this);
     bool failureDelivered = false;
     std::exception_ptr deferredFailure;
-    const auto handleFailure = [this, &failureDelivered, &deferredFailure,
-                                &failureHandler](std::exception_ptr failure) {
+    const auto handleFailure = [this, &failureDelivered, &deferredFailure, &failureHandler](std::exception_ptr failure) {
         notifyStopping(beginStopping(true));
         abandonQueued();
         if (!failureDelivered) {
@@ -200,8 +183,7 @@ void WorkerDispatcher::detachContext() noexcept {
     std::vector<std::optional<MoveOnlyFunction<void()>>> abandonedSlots;
     ShutdownListeners abandonedListeners;
     std::pmr::vector<TimerEntry> abandonedTimers(impl_->timers.get_allocator());
-    std::pmr::vector<TimerSlot> abandonedTimerSlots(
-        impl_->timerSlots.get_allocator());
+    std::pmr::vector<TimerSlot> abandonedTimerSlots(impl_->timerSlots.get_allocator());
     std::unique_ptr<asio::steady_timer> detachedTimer;
     {
         std::lock_guard lock(impl_->mutex);
@@ -240,8 +222,7 @@ bool WorkerDispatcher::attached() const noexcept {
     return impl_->contextAttached;
 }
 
-WorkerDispatcher::ShutdownListeners WorkerDispatcher::beginStopping(
-    bool abandonDrain) noexcept {
+WorkerDispatcher::ShutdownListeners WorkerDispatcher::beginStopping(bool abandonDrain) noexcept {
     ShutdownListeners listeners;
     {
         std::lock_guard lock(impl_->mutex);
@@ -258,8 +239,7 @@ WorkerDispatcher::ShutdownListeners WorkerDispatcher::beginStopping(
     return listeners;
 }
 
-void WorkerDispatcher::notifyStopping(
-    const ShutdownListeners& listeners) noexcept {
+void WorkerDispatcher::notifyStopping(const ShutdownListeners& listeners) noexcept {
     for (const auto& entry : listeners) {
         if (const auto listener = entry.lock()) {
             listener->workerStopping();
@@ -292,8 +272,7 @@ bool WorkerDispatcher::isCurrent() const noexcept {
         return true;
     }
     std::lock_guard lock(impl_->mutex);
-    return impl_->contextAttached &&
-           impl_->ioContext.get_executor().running_in_this_thread();
+    return impl_->contextAttached && impl_->ioContext.get_executor().running_in_this_thread();
 }
 
 bool WorkerDispatcher::accepting() const noexcept {

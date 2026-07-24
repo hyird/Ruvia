@@ -114,7 +114,8 @@ namespace ruvia::detail {
 
 class JsonScanner final {
 public:
-    explicit JsonScanner(std::string_view input) noexcept : input_(input) {}
+    explicit JsonScanner(std::string_view input) noexcept
+        : input_(input) {}
 
     template <HttpTemporaryOwningCharString Input>
     JsonScanner(Input&&) = delete;

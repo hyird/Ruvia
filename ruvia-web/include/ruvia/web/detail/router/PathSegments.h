@@ -10,10 +10,7 @@ namespace ruvia::detail {
 
 // Build-time split: a leading '/' is dropped and an empty path ends the walk, so
 // "/a/b" and "a/b" register the same route.
-[[nodiscard]] bool splitRoutePathSegment(
-    std::string_view path,
-    std::string_view& segment,
-    std::string_view& rest) noexcept;
+[[nodiscard]] bool splitRoutePathSegment(std::string_view path, std::string_view& segment, std::string_view& rest) noexcept;
 
 // Request-time split. Unlike the build-time one it preserves empty segments and
 // a trailing slash so dynamic matching is byte-exact like static matching:
@@ -21,9 +18,6 @@ namespace ruvia::detail {
 // expected to start with '/' at each level; each returned `rest` keeps its
 // leading '/'. Returns false only at true end-of-path (empty `path`); a lone "/"
 // yields an empty segment that fails to match a param child.
-[[nodiscard]] bool splitRequestPathSegment(
-    std::string_view path,
-    std::string_view& segment,
-    std::string_view& rest) noexcept;
+[[nodiscard]] bool splitRequestPathSegment(std::string_view path, std::string_view& segment, std::string_view& rest) noexcept;
 
 }  // namespace ruvia::detail

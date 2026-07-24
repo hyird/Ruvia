@@ -12,8 +12,7 @@ inline constexpr std::size_t kCookieSignatureSize = 44;
 // is bound into the MAC (length-framed together with `value`) so a value signed
 // for one cookie is not a valid signature for another under the same secret.
 // Throws std::invalid_argument on an empty secret.
-void writeCookieSignature(
-    char* output, std::string_view secret, std::string_view name, std::string_view value);
+void writeCookieSignature(char* output, std::string_view secret, std::string_view name, std::string_view value);
 
 // Constant-time comparison; signature strings are attacker-controlled.
 [[nodiscard]] bool cookieSignatureEquals(std::string_view left, std::string_view right) noexcept;

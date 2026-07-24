@@ -27,8 +27,8 @@ public:
     QueryResult& operator=(QueryResult&&) = delete;
     ~QueryResult();
 
-    [[nodiscard]] std::span<const DbRow> rows() const & noexcept;
-    [[nodiscard]] std::span<const DbRow> rows() const && = delete;
+    [[nodiscard]] std::span<const DbRow> rows() const& noexcept;
+    [[nodiscard]] std::span<const DbRow> rows() const&& = delete;
     [[nodiscard]] std::uint64_t affectedRows() const noexcept;
     [[nodiscard]] std::uint64_t lastInsertId() const noexcept;
 
@@ -38,9 +38,7 @@ private:
     struct NoRawResult final {};
 
     struct OwnedRawResult final {
-        OwnedRawResult(
-            void* ownedValue,
-            void (*ownedRelease)(void*) noexcept) noexcept
+        OwnedRawResult(void* ownedValue, void (*ownedRelease)(void*) noexcept) noexcept
             : value(ownedValue),
               release(ownedRelease) {}
 
@@ -76,11 +74,7 @@ private:
     friend class detail::PostgreSqlPool;
 
     struct Lease final {
-        Lease(
-            detail::DbPoolRef client,
-            std::size_t slot,
-            void* result,
-            std::pmr::memory_resource* resource) noexcept;
+        Lease(detail::DbPoolRef client, std::size_t slot, void* result, std::pmr::memory_resource* resource) noexcept;
 
         detail::DbPoolRef client;
         std::size_t slot;
@@ -89,11 +83,7 @@ private:
     };
 
     DbStreamResult() noexcept = default;
-    DbStreamResult(
-        detail::DbPoolRef client,
-        std::size_t slot,
-        void* result,
-        std::pmr::memory_resource* resource) noexcept;
+    DbStreamResult(detail::DbPoolRef client, std::size_t slot, void* result, std::pmr::memory_resource* resource) noexcept;
     void reset() noexcept;
     void bindOperationScope(detail::ScopedOperationScope& scope) noexcept;
     static void expireCapability(detail::ScopedCapabilityNode& capability) noexcept;

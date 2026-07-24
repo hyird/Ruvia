@@ -14,49 +14,29 @@ namespace ruvia::detail {
 
 namespace {
 
-[[nodiscard]] bool requestOffersProtocol(
-    const Http1ClientRequestContext& request,
-    const HttpUpgradeProtocol& selected) noexcept {
+[[nodiscard]] bool requestOffersProtocol(const Http1ClientRequestContext& request, const HttpUpgradeProtocol& selected) noexcept {
     bool offered = false;
     HttpUpgradeProtocols protocols;
     for (const auto& header : request.headers()) {
         if (!httpAsciiEqualsIgnoreCase(header.name(), "Upgrade")) {
             continue;
         }
-        if (protocols.parseField(
-                header.value(),
-                HttpFieldListRole::kSender,
-                [&selected, &offered](
-                    const HttpUpgradeProtocol& candidate) noexcept {
-                    offered = offered ||
-                        httpUpgradeProtocolEquals(candidate, selected);
-                    return true;
-                }) != HttpFieldListParseStatus::kOk) {
+        if (protocols.parseField(header.value(), HttpFieldListRole::kSender, [&selected, &offered](const HttpUpgradeProtocol& candidate) noexcept {
+                offered = offered || httpUpgradeProtocolEquals(candidate, selected);
+                return true;
+            }) != HttpFieldListParseStatus::kOk) {
             return false;
         }
     }
     return protocols.hasProtocol() && offered;
 }
 
-[[nodiscard]] bool requestAllowsProtocolSwitch(
-    const Http1ClientRequestContext& request,
-    const Http1ClientParsedResponseHead& response,
-    Http1ClientRequestContentPhase requestContentPhase) noexcept {
-    const bool requestContentAllowsSwitch =
-        requestContentPhase ==
-            Http1ClientRequestContentPhase::kContentComplete ||
-        requestContentPhase ==
-            Http1ClientRequestContentPhase::
-                kContinueReceivedContentComplete;
-    if (request.closePolicy() ==
-            Http1ClientRequestClosePolicy::kCloseAfterResponse ||
-        !requestContentAllowsSwitch) {
+[[nodiscard]] bool requestAllowsProtocolSwitch(const Http1ClientRequestContext& request, const Http1ClientParsedResponseHead& response, Http1ClientRequestContentPhase requestContentPhase) noexcept {
+    const bool requestContentAllowsSwitch = requestContentPhase == Http1ClientRequestContentPhase::kContentComplete || requestContentPhase == Http1ClientRequestContentPhase::kContinueReceivedContentComplete;
+    if (request.closePolicy() == Http1ClientRequestClosePolicy::kCloseAfterResponse || !requestContentAllowsSwitch) {
         return false;
     }
-    if (!request.connectionOptions().upgrade() ||
-        response.connectionOptions.close() ||
-        !response.connectionOptions.upgrade() ||
-        !response.upgradeProtocols.hasProtocol()) {
+    if (!request.connectionOptions().upgrade() || response.connectionOptions.close() || !response.connectionOptions.upgrade() || !response.upgradeProtocols.hasProtocol()) {
         return false;
     }
 
@@ -66,38 +46,19 @@ namespace {
         if (!httpAsciiEqualsIgnoreCase(header.name(), "Upgrade")) {
             continue;
         }
-        if (selectedProtocols.parseField(
-                header.value(),
-                HttpFieldListRole::kRecipient,
-                [&request](
-                    const HttpUpgradeProtocol& selected) noexcept {
-                    return requestOffersProtocol(request, selected);
-                }) != HttpFieldListParseStatus::kOk) {
+        if (selectedProtocols.parseField(header.value(), HttpFieldListRole::kRecipient, [&request](const HttpUpgradeProtocol& selected) noexcept { return requestOffersProtocol(request, selected); }) != HttpFieldListParseStatus::kOk) {
             return false;
         }
     }
     return selectedProtocols.hasProtocol();
 }
 
-[[nodiscard]] std::optional<Http1ClientRequestContentSignal>
-requestContentSignal(
-    Http1ClientRequestContentPhase phase,
-    HttpStatusCode statusCode,
-    bool responseWillClose) noexcept {
-    if (responseWillClose &&
-        (phase ==
-             Http1ClientRequestContentPhase::kAwaitingContinue ||
-         phase == Http1ClientRequestContentPhase::kContentPending ||
-         phase ==
-             Http1ClientRequestContentPhase::kContinueReceived)) {
+[[nodiscard]] std::optional<Http1ClientRequestContentSignal> requestContentSignal(Http1ClientRequestContentPhase phase, HttpStatusCode statusCode, bool responseWillClose) noexcept {
+    if (responseWillClose && (phase == Http1ClientRequestContentPhase::kAwaitingContinue || phase == Http1ClientRequestContentPhase::kContentPending || phase == Http1ClientRequestContentPhase::kContinueReceived)) {
         return Http1ClientRequestContentSignal::kExchangeComplete;
     }
     if (statusCode == http_status::kContinue) {
-        return phase ==
-                Http1ClientRequestContentPhase::kAwaitingContinue
-            ? std::optional<Http1ClientRequestContentSignal>(
-                  Http1ClientRequestContentSignal::kContinue)
-            : std::nullopt;
+        return phase == Http1ClientRequestContentPhase::kAwaitingContinue ? std::optional<Http1ClientRequestContentSignal>(Http1ClientRequestContentSignal::kContinue) : std::nullopt;
     }
     if (statusCode.isFinal()) {
         // A final response cancels content only while Expect still gates it.
@@ -106,37 +67,25 @@ requestContentSignal(
         // indicates otherwise. RFC 9112 section 9.5 makes a closing final
         // response that explicit signal, including after Continue released the
         // body writer.
-        if (phase ==
-                Http1ClientRequestContentPhase::kAwaitingContinue ||
-            (responseWillClose &&
-             (phase ==
-                  Http1ClientRequestContentPhase::kContentPending ||
-              phase ==
-                  Http1ClientRequestContentPhase::kContinueReceived))) {
+        if (phase == Http1ClientRequestContentPhase::kAwaitingContinue || (responseWillClose && (phase == Http1ClientRequestContentPhase::kContentPending || phase == Http1ClientRequestContentPhase::kContinueReceived))) {
             return Http1ClientRequestContentSignal::kExchangeComplete;
         }
     }
     return std::nullopt;
 }
 
-
-[[nodiscard]] Http1ClientResponsePersistence responsePersistence(
-    const Http1ClientParsedResponseHead& response) noexcept {
+[[nodiscard]] Http1ClientResponsePersistence responsePersistence(const Http1ClientParsedResponseHead& response) noexcept {
     if (response.connectionOptions.close()) {
         return Http1ClientResponsePersistence::kClose;
     }
-    if (response.protocolVersion == HttpProtocolVersion::kHttp11 ||
-        response.connectionOptions.keepAlive()) {
+    if (response.protocolVersion == HttpProtocolVersion::kHttp11 || response.connectionOptions.keepAlive()) {
         return Http1ClientResponsePersistence::kReuse;
     }
     return Http1ClientResponsePersistence::kClose;
 }
 
-[[nodiscard]] Http1ClientResponsePersistence finalResponsePersistence(
-    const Http1ClientRequestContext& request,
-    const Http1ClientParsedResponseHead& response) noexcept {
-    if (request.closePolicy() ==
-        Http1ClientRequestClosePolicy::kCloseAfterResponse) {
+[[nodiscard]] Http1ClientResponsePersistence finalResponsePersistence(const Http1ClientRequestContext& request, const Http1ClientParsedResponseHead& response) noexcept {
+    if (request.closePolicy() == Http1ClientRequestClosePolicy::kCloseAfterResponse) {
         return Http1ClientResponsePersistence::kClose;
     }
     return responsePersistence(response);
@@ -145,223 +94,111 @@ requestContentSignal(
 }  // namespace
 
 struct Http1ClientResponsePlanAccess final {
-    using RequestContentSignal =
-        std::optional<Http1ClientRequestContentSignal>;
+    using RequestContentSignal = std::optional<Http1ClientRequestContentSignal>;
 
-    [[nodiscard]] static Http1ClientResponsePlan informational(
-        Http1ClientResponsePersistence persistence,
-        RequestContentSignal requestContentSignal) noexcept {
-        return Http1ClientResponsePlan(
-            Http1ClientResponsePlan::State(
-                Http1ClientInformationalResponse(persistence)),
-            requestContentSignal);
+    [[nodiscard]] static Http1ClientResponsePlan informational(Http1ClientResponsePersistence persistence, RequestContentSignal requestContentSignal) noexcept {
+        return Http1ClientResponsePlan(Http1ClientResponsePlan::State(Http1ClientInformationalResponse(persistence)), requestContentSignal);
     }
 
-    [[nodiscard]] static Http1ClientResponsePlan withoutContent(
-        Http1ClientResponsePersistence persistence,
-        RequestContentSignal requestContentSignal) noexcept {
-        return Http1ClientResponsePlan(
-            Http1ClientResponsePlan::State(
-                Http1ClientResponseWithoutContent(persistence)),
-            requestContentSignal);
+    [[nodiscard]] static Http1ClientResponsePlan withoutContent(Http1ClientResponsePersistence persistence, RequestContentSignal requestContentSignal) noexcept {
+        return Http1ClientResponsePlan(Http1ClientResponsePlan::State(Http1ClientResponseWithoutContent(persistence)), requestContentSignal);
     }
 
-    [[nodiscard]] static Http1ClientResponsePlan zeroContentKnownLength(
-        Http1ClientResponsePersistence persistence,
-        RequestContentSignal requestContentSignal) noexcept {
-        return Http1ClientResponsePlan(
-            Http1ClientResponsePlan::State(
-                Http1ClientResponseWithZeroContent(
-                    Http1ClientResponseWithZeroContent::Framing(
-                        Http1ClientKnownLengthResponse(0, persistence)))),
-            requestContentSignal);
+    [[nodiscard]] static Http1ClientResponsePlan zeroContentKnownLength(Http1ClientResponsePersistence persistence, RequestContentSignal requestContentSignal) noexcept {
+        return Http1ClientResponsePlan(Http1ClientResponsePlan::State(Http1ClientResponseWithZeroContent(Http1ClientResponseWithZeroContent::Framing(Http1ClientKnownLengthResponse(0, persistence)))), requestContentSignal);
     }
 
-    [[nodiscard]] static Http1ClientResponsePlan zeroContentChunked(
-        HttpTransferCodings transferCodings,
-        Http1ClientResponsePersistence persistence,
-        RequestContentSignal requestContentSignal) noexcept {
-        return Http1ClientResponsePlan(
-            Http1ClientResponsePlan::State(
-                Http1ClientResponseWithZeroContent(
-                    Http1ClientResponseWithZeroContent::Framing(
-                        Http1ClientChunkedResponse(
-                            transferCodings, persistence)))),
-            requestContentSignal);
+    [[nodiscard]] static Http1ClientResponsePlan zeroContentChunked(HttpTransferCodings transferCodings, Http1ClientResponsePersistence persistence, RequestContentSignal requestContentSignal) noexcept {
+        return Http1ClientResponsePlan(Http1ClientResponsePlan::State(Http1ClientResponseWithZeroContent(Http1ClientResponseWithZeroContent::Framing(Http1ClientChunkedResponse(transferCodings, persistence)))), requestContentSignal);
     }
 
-    [[nodiscard]] static Http1ClientResponsePlan zeroContentCloseDelimited(
-        HttpTransferCodings transferCodings,
-        RequestContentSignal requestContentSignal) noexcept {
-        return Http1ClientResponsePlan(
-            Http1ClientResponsePlan::State(
-                Http1ClientResponseWithZeroContent(
-                    Http1ClientResponseWithZeroContent::Framing(
-                        Http1ClientCloseDelimitedResponse(transferCodings)))),
-            requestContentSignal);
+    [[nodiscard]] static Http1ClientResponsePlan zeroContentCloseDelimited(HttpTransferCodings transferCodings, RequestContentSignal requestContentSignal) noexcept {
+        return Http1ClientResponsePlan(Http1ClientResponsePlan::State(Http1ClientResponseWithZeroContent(Http1ClientResponseWithZeroContent::Framing(Http1ClientCloseDelimitedResponse(transferCodings)))), requestContentSignal);
     }
 
-    [[nodiscard]] static Http1ClientResponsePlan knownLength(
-        std::size_t contentLength,
-        Http1ClientResponsePersistence persistence,
-        RequestContentSignal requestContentSignal) noexcept {
-        return Http1ClientResponsePlan(
-            Http1ClientResponsePlan::State(
-                Http1ClientKnownLengthResponse(contentLength, persistence)),
-            requestContentSignal);
+    [[nodiscard]] static Http1ClientResponsePlan knownLength(std::size_t contentLength, Http1ClientResponsePersistence persistence, RequestContentSignal requestContentSignal) noexcept {
+        return Http1ClientResponsePlan(Http1ClientResponsePlan::State(Http1ClientKnownLengthResponse(contentLength, persistence)), requestContentSignal);
     }
 
-    [[nodiscard]] static Http1ClientResponsePlan chunked(
-        HttpTransferCodings transferCodings,
-        Http1ClientResponsePersistence persistence,
-        RequestContentSignal requestContentSignal) noexcept {
-        return Http1ClientResponsePlan(
-            Http1ClientResponsePlan::State(
-                Http1ClientChunkedResponse(transferCodings, persistence)),
-            requestContentSignal);
+    [[nodiscard]] static Http1ClientResponsePlan chunked(HttpTransferCodings transferCodings, Http1ClientResponsePersistence persistence, RequestContentSignal requestContentSignal) noexcept {
+        return Http1ClientResponsePlan(Http1ClientResponsePlan::State(Http1ClientChunkedResponse(transferCodings, persistence)), requestContentSignal);
     }
 
-    [[nodiscard]] static Http1ClientResponsePlan closeDelimited(
-        HttpTransferCodings transferCodings,
-        RequestContentSignal requestContentSignal) noexcept {
-        return Http1ClientResponsePlan(
-            Http1ClientResponsePlan::State(
-                Http1ClientCloseDelimitedResponse(transferCodings)),
-            requestContentSignal);
+    [[nodiscard]] static Http1ClientResponsePlan closeDelimited(HttpTransferCodings transferCodings, RequestContentSignal requestContentSignal) noexcept {
+        return Http1ClientResponsePlan(Http1ClientResponsePlan::State(Http1ClientCloseDelimitedResponse(transferCodings)), requestContentSignal);
     }
 
-    [[nodiscard]] static Http1ClientResponsePlan connectTunnel(
-        RequestContentSignal requestContentSignal) noexcept {
-        return Http1ClientResponsePlan(
-            Http1ClientResponsePlan::State(Http1ClientConnectTunnel()),
-            requestContentSignal);
+    [[nodiscard]] static Http1ClientResponsePlan connectTunnel(RequestContentSignal requestContentSignal) noexcept {
+        return Http1ClientResponsePlan(Http1ClientResponsePlan::State(Http1ClientConnectTunnel()), requestContentSignal);
     }
 
-    [[nodiscard]] static Http1ClientResponsePlan protocolUpgrade(
-        RequestContentSignal requestContentSignal) noexcept {
-        return Http1ClientResponsePlan(
-            Http1ClientResponsePlan::State(Http1ClientProtocolUpgrade()),
-            requestContentSignal);
+    [[nodiscard]] static Http1ClientResponsePlan protocolUpgrade(RequestContentSignal requestContentSignal) noexcept {
+        return Http1ClientResponsePlan(Http1ClientResponsePlan::State(Http1ClientProtocolUpgrade()), requestContentSignal);
     }
 };
 
-Http1ClientResponsePlanningResult planHttp1ClientResponse(
-    const Http1ClientRequestContext& request,
-    const Http1ClientParsedResponseHead& response,
-    Http1ClientRequestContentPhase requestContentPhase) noexcept {
-    const auto contentSemantics = httpResponseContentSemantics(
-        request.method(), response.statusCode);
+Http1ClientResponsePlanningResult planHttp1ClientResponse(const Http1ClientRequestContext& request, const Http1ClientParsedResponseHead& response, Http1ClientRequestContentPhase requestContentPhase) noexcept {
+    const auto contentSemantics = httpResponseContentSemantics(request.method(), response.statusCode);
 
-    if (contentSemantics ==
-        HttpResponseContentSemantics::kProtocolSwitch) {
-        if (response.protocolVersion != HttpProtocolVersion::kHttp11 ||
-            response.contentLengthFieldPresent ||
-            response.sawTransferEncoding ||
-            !requestAllowsProtocolSwitch(
-                request,
-                response,
-                requestContentPhase)) {
+    if (contentSemantics == HttpResponseContentSemantics::kProtocolSwitch) {
+        if (response.protocolVersion != HttpProtocolVersion::kHttp11 || response.contentLengthFieldPresent || response.sawTransferEncoding || !requestAllowsProtocolSwitch(request, response, requestContentPhase)) {
             return Http1ClientResponseParseError::kInvalidProtocolSwitch;
         }
-        return Http1ClientResponsePlanAccess::protocolUpgrade(
-            std::nullopt);
+        return Http1ClientResponsePlanAccess::protocolUpgrade(std::nullopt);
     }
-    if (contentSemantics ==
-        HttpResponseContentSemantics::kInformational) {
+    if (contentSemantics == HttpResponseContentSemantics::kInformational) {
         const auto persistence = responsePersistence(response);
-        return Http1ClientResponsePlanAccess::informational(
-            persistence,
-            requestContentSignal(
-                requestContentPhase,
-                response.statusCode,
-                persistence == Http1ClientResponsePersistence::kClose));
+        return Http1ClientResponsePlanAccess::informational(persistence, requestContentSignal(requestContentPhase, response.statusCode, persistence == Http1ClientResponsePersistence::kClose));
     }
-    if (contentSemantics ==
-        HttpResponseContentSemantics::kConnectTunnel) {
-        return Http1ClientResponsePlanAccess::connectTunnel(
-            std::nullopt);
+    if (contentSemantics == HttpResponseContentSemantics::kConnectTunnel) {
+        return Http1ClientResponsePlanAccess::connectTunnel(std::nullopt);
     }
 
-    const bool resetContentRequiresEmpty =
-        response.statusCode == http_status::kResetContent;
+    const bool resetContentRequiresEmpty = response.statusCode == http_status::kResetContent;
     const auto contentLength = response.contentLength.value();
-    if (resetContentRequiresEmpty &&
-        contentLength.has_value() && *contentLength != 0) {
+    if (resetContentRequiresEmpty && contentLength.has_value() && *contentLength != 0) {
         return Http1ClientResponseParseError::kInvalidContentLength;
     }
 
     const auto persistence = finalResponsePersistence(request, response);
-    const auto persistentContentSignal = requestContentSignal(
-        requestContentPhase,
-        response.statusCode,
-        persistence == Http1ClientResponsePersistence::kClose);
-    if (contentSemantics ==
-        HttpResponseContentSemantics::kWithoutContent) {
-        return Http1ClientResponsePlanAccess::withoutContent(
-            persistence,
-            persistentContentSignal);
+    const auto persistentContentSignal = requestContentSignal(requestContentPhase, response.statusCode, persistence == Http1ClientResponsePersistence::kClose);
+    if (contentSemantics == HttpResponseContentSemantics::kWithoutContent) {
+        return Http1ClientResponsePlanAccess::withoutContent(persistence, persistentContentSignal);
     }
 
     const auto transferEncoding = response.transferEncoding.value();
     if (response.sawTransferEncoding) {
         if (contentLength.has_value()) {
-            return Http1ClientResponseParseError::
-                kContentLengthAndTransferEncoding;
+            return Http1ClientResponseParseError::kContentLengthAndTransferEncoding;
         }
         if (!transferEncoding.has_value()) {
             return Http1ClientResponseParseError::kInvalidTransferEncoding;
         }
         if (const auto* finalChunked = transferEncoding->finalChunked()) {
             if (resetContentRequiresEmpty) {
-                return Http1ClientResponsePlanAccess::
-                    zeroContentChunked(
-                        finalChunked->transferCodings(),
-                        persistence,
-                        persistentContentSignal);
+                return Http1ClientResponsePlanAccess::zeroContentChunked(finalChunked->transferCodings(), persistence, persistentContentSignal);
             }
-            return Http1ClientResponsePlanAccess::chunked(
-                finalChunked->transferCodings(),
-                persistence,
-                persistentContentSignal);
+            return Http1ClientResponsePlanAccess::chunked(finalChunked->transferCodings(), persistence, persistentContentSignal);
         }
         if (resetContentRequiresEmpty) {
-            return Http1ClientResponsePlanAccess::
-                zeroContentCloseDelimited(
-                    transferEncoding->nonChunked()->transferCodings(),
-                    requestContentSignal(
-                        requestContentPhase, response.statusCode, true));
+            return Http1ClientResponsePlanAccess::zeroContentCloseDelimited(transferEncoding->nonChunked()->transferCodings(), requestContentSignal(requestContentPhase, response.statusCode, true));
         }
-        return Http1ClientResponsePlanAccess::closeDelimited(
-            transferEncoding->nonChunked()->transferCodings(),
-            requestContentSignal(
-                requestContentPhase, response.statusCode, true));
+        return Http1ClientResponsePlanAccess::closeDelimited(transferEncoding->nonChunked()->transferCodings(), requestContentSignal(requestContentPhase, response.statusCode, true));
     }
 
     if (contentLength.has_value()) {
         if (resetContentRequiresEmpty) {
-            return Http1ClientResponsePlanAccess::
-                zeroContentKnownLength(
-                    persistence, persistentContentSignal);
+            return Http1ClientResponsePlanAccess::zeroContentKnownLength(persistence, persistentContentSignal);
         }
-        return Http1ClientResponsePlanAccess::knownLength(
-            *contentLength,
-            persistence,
-            persistentContentSignal);
+        return Http1ClientResponsePlanAccess::knownLength(*contentLength, persistence, persistentContentSignal);
     }
 
     // RFC 9112 section 6.3: a body-allowed response with no declared
     // length is delimited by server close and cannot return to a pool.
     if (resetContentRequiresEmpty) {
-        return Http1ClientResponsePlanAccess::
-            zeroContentCloseDelimited(
-                {},
-                requestContentSignal(
-                    requestContentPhase, response.statusCode, true));
+        return Http1ClientResponsePlanAccess::zeroContentCloseDelimited({}, requestContentSignal(requestContentPhase, response.statusCode, true));
     }
-    return Http1ClientResponsePlanAccess::closeDelimited(
-        {},
-        requestContentSignal(
-            requestContentPhase, response.statusCode, true));
+    return Http1ClientResponsePlanAccess::closeDelimited({}, requestContentSignal(requestContentPhase, response.statusCode, true));
 }
 
 }  // namespace ruvia::detail

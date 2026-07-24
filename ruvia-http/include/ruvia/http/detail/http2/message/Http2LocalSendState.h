@@ -182,87 +182,57 @@ private:
     }
 
 public:
-    [[nodiscard]] constexpr const Http2LocalHeadPending*
-    headPending() const & noexcept {
+    [[nodiscard]] constexpr const Http2LocalHeadPending* headPending() const& noexcept {
         return std::get_if<Http2LocalHeadPending>(&state_);
     }
-    [[nodiscard]] constexpr const Http2LocalHeadPending*
-    headPending() const && = delete;
+    [[nodiscard]] constexpr const Http2LocalHeadPending* headPending() const&& = delete;
 
-    [[nodiscard]] constexpr const Http2LocalRequestContentOpen*
-    requestContentOpen() const & noexcept {
+    [[nodiscard]] constexpr const Http2LocalRequestContentOpen* requestContentOpen() const& noexcept {
         return std::get_if<Http2LocalRequestContentOpen>(&state_);
     }
-    [[nodiscard]] constexpr const Http2LocalRequestContentOpen*
-    requestContentOpen() const && = delete;
+    [[nodiscard]] constexpr const Http2LocalRequestContentOpen* requestContentOpen() const&& = delete;
 
-    [[nodiscard]] constexpr const Http2LocalResponseContentOpen*
-    responseContentOpen() const & noexcept {
+    [[nodiscard]] constexpr const Http2LocalResponseContentOpen* responseContentOpen() const& noexcept {
         return std::get_if<Http2LocalResponseContentOpen>(&state_);
     }
-    [[nodiscard]] constexpr const Http2LocalResponseContentOpen*
-    responseContentOpen() const && = delete;
+    [[nodiscard]] constexpr const Http2LocalResponseContentOpen* responseContentOpen() const&& = delete;
 
-    [[nodiscard]] constexpr const Http2LocalResponseTrailersOnly*
-    responseTrailersOnly() const & noexcept {
+    [[nodiscard]] constexpr const Http2LocalResponseTrailersOnly* responseTrailersOnly() const& noexcept {
         return std::get_if<Http2LocalResponseTrailersOnly>(&state_);
     }
-    [[nodiscard]] constexpr const Http2LocalResponseTrailersOnly*
-    responseTrailersOnly() const && = delete;
+    [[nodiscard]] constexpr const Http2LocalResponseTrailersOnly* responseTrailersOnly() const&& = delete;
 
-    [[nodiscard]] constexpr const Http2LocalConnectPending*
-    connectPending() const & noexcept {
+    [[nodiscard]] constexpr const Http2LocalConnectPending* connectPending() const& noexcept {
         return std::get_if<Http2LocalConnectPending>(&state_);
     }
-    [[nodiscard]] constexpr const Http2LocalConnectPending*
-    connectPending() const && = delete;
+    [[nodiscard]] constexpr const Http2LocalConnectPending* connectPending() const&& = delete;
 
-    [[nodiscard]] constexpr const Http2LocalTunnelOpen*
-    tunnelOpen() const & noexcept {
+    [[nodiscard]] constexpr const Http2LocalTunnelOpen* tunnelOpen() const& noexcept {
         return std::get_if<Http2LocalTunnelOpen>(&state_);
     }
-    [[nodiscard]] constexpr const Http2LocalTunnelOpen*
-    tunnelOpen() const && = delete;
+    [[nodiscard]] constexpr const Http2LocalTunnelOpen* tunnelOpen() const&& = delete;
 
-    [[nodiscard]] constexpr const Http2LocalEndStreamQueued*
-    endStreamQueued() const & noexcept {
+    [[nodiscard]] constexpr const Http2LocalEndStreamQueued* endStreamQueued() const& noexcept {
         return std::get_if<Http2LocalEndStreamQueued>(&state_);
     }
-    [[nodiscard]] constexpr const Http2LocalEndStreamQueued*
-    endStreamQueued() const && = delete;
+    [[nodiscard]] constexpr const Http2LocalEndStreamQueued* endStreamQueued() const&& = delete;
 
-    [[nodiscard]] constexpr const Http2LocalEndStreamCommitted*
-    endStreamCommitted() const & noexcept {
+    [[nodiscard]] constexpr const Http2LocalEndStreamCommitted* endStreamCommitted() const& noexcept {
         return std::get_if<Http2LocalEndStreamCommitted>(&state_);
     }
-    [[nodiscard]] constexpr const Http2LocalEndStreamCommitted*
-    endStreamCommitted() const && = delete;
+    [[nodiscard]] constexpr const Http2LocalEndStreamCommitted* endStreamCommitted() const&& = delete;
 
-    [[nodiscard]] constexpr const Http2StreamAborted*
-    aborted() const & noexcept {
+    [[nodiscard]] constexpr const Http2StreamAborted* aborted() const& noexcept {
         return std::get_if<Http2StreamAborted>(&state_);
     }
-    [[nodiscard]] constexpr const Http2StreamAborted*
-    aborted() const && = delete;
+    [[nodiscard]] constexpr const Http2StreamAborted* aborted() const&& = delete;
 
 private:
     [[nodiscard]] bool contentOrTrailersOpen() const noexcept {
-        return requestContentOpen() != nullptr ||
-            responseContentOpen() != nullptr ||
-            responseTrailersOnly() != nullptr ||
-            tunnelOpen() != nullptr;
+        return requestContentOpen() != nullptr || responseContentOpen() != nullptr || responseTrailersOnly() != nullptr || tunnelOpen() != nullptr;
     }
 
-    using State = std::variant<
-        Http2LocalHeadPending,
-        Http2LocalRequestContentOpen,
-        Http2LocalResponseContentOpen,
-        Http2LocalResponseTrailersOnly,
-        Http2LocalConnectPending,
-        Http2LocalTunnelOpen,
-        Http2LocalEndStreamQueued,
-        Http2LocalEndStreamCommitted,
-        Http2StreamAborted>;
+    using State = std::variant<Http2LocalHeadPending, Http2LocalRequestContentOpen, Http2LocalResponseContentOpen, Http2LocalResponseTrailersOnly, Http2LocalConnectPending, Http2LocalTunnelOpen, Http2LocalEndStreamQueued, Http2LocalEndStreamCommitted, Http2StreamAborted>;
 
     State state_;
 };

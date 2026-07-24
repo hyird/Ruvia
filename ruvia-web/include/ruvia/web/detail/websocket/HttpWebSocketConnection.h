@@ -37,16 +37,7 @@ namespace ruvia::detail {
 template <typename Transport>
 class WebSocketConnection final {
 public:
-    WebSocketConnection(
-        Transport transport,
-        const WorkerHandle& worker,
-        ConnectionScanner::Entry& scannerEntry,
-        WebSocketLifecycleOptions lifecycleOptions,
-        ProtocolByteLimit messageLimit,
-        std::pmr::memory_resource* resource,
-        std::string_view initialBytes = {},
-        WebSocketDeflateNegotiation deflate =
-            WebSocketDeflateNegotiation::kDisabled)
+    WebSocketConnection(Transport transport, const WorkerHandle& worker, ConnectionScanner::Entry& scannerEntry, WebSocketLifecycleOptions lifecycleOptions, ProtocolByteLimit messageLimit, std::pmr::memory_resource* resource, std::string_view initialBytes = {}, WebSocketDeflateNegotiation deflate = WebSocketDeflateNegotiation::kDisabled)
         : transport_(std::move(transport)),
           scannerEntry_(scannerEntry),
           lifecycleOptions_(lifecycleOptions),
@@ -55,22 +46,10 @@ public:
           backgroundWriteSignal_(worker),
           readerDoneSignal_(worker) {
         buffer_.append(initialBytes.data(), initialBytes.size());
-        scannerEntry_.registerPeriodicCheck(
-            periodicCheck_,
-            this,
-            &WebSocketConnection::heartbeatTickThunk);
+        scannerEntry_.registerPeriodicCheck(periodicCheck_, this, &WebSocketConnection::heartbeatTickThunk);
     }
 
-    WebSocketConnection(
-        Transport,
-        WorkerHandle&&,
-        ConnectionScanner::Entry&,
-        WebSocketLifecycleOptions,
-        ProtocolByteLimit,
-        std::pmr::memory_resource*,
-        std::string_view = {},
-        WebSocketDeflateNegotiation =
-            WebSocketDeflateNegotiation::kDisabled) = delete;
+    WebSocketConnection(Transport, WorkerHandle&&, ConnectionScanner::Entry&, WebSocketLifecycleOptions, ProtocolByteLimit, std::pmr::memory_resource*, std::string_view = {}, WebSocketDeflateNegotiation = WebSocketDeflateNegotiation::kDisabled) = delete;
 
     ~WebSocketConnection() = default;
 
@@ -84,7 +63,9 @@ public:
     [[nodiscard]] Task<std::optional<WebSocketMessage>> read();
     Task<void> write(WebSocketOpcode opcode, std::string_view payload);
     Task<void> close(std::uint16_t code, std::string_view reason);
-    void abort() noexcept { abortTransport(); }
+    void abort() noexcept {
+        abortTransport();
+    }
     Task<void> detachAndDrainWrites();
 
 private:
@@ -101,18 +82,15 @@ private:
 
     class WriteGuard final {
     public:
-        WriteGuard(
-            WebSocketConnection& connection,
-            WritePhase phase,
-            WriteClaim claim = WriteClaim::kAcquire)
-            : connection_(connection), phase_(phase) {
+        WriteGuard(WebSocketConnection& connection, WritePhase phase, WriteClaim claim = WriteClaim::kAcquire)
+            : connection_(connection),
+              phase_(phase) {
             if (phase_ == WritePhase::kIdle) {
                 std::terminate();
             }
             if (claim == WriteClaim::kAcquire) {
                 if (connection_.writePhase_ != WritePhase::kIdle) {
-                    throw std::logic_error(
-                        "concurrent websocket writes are not supported");
+                    throw std::logic_error("concurrent websocket writes are not supported");
                 }
                 connection_.writePhase_ = phase_;
             } else if (connection_.writePhase_ != phase_) {
@@ -134,7 +112,8 @@ private:
 
     class ReadGuard final {
     public:
-        explicit ReadGuard(WebSocketConnection& connection) : connection_(connection) {
+        explicit ReadGuard(WebSocketConnection& connection)
+            : connection_(connection) {
             if (connection_.readActive_) {
                 throw std::logic_error("concurrent websocket reads are not supported");
             }

@@ -46,9 +46,9 @@ RUVIA_TEST(response_coding_single_pass_matches_per_coding_scans) {
         "  gzip ,  br ",
         "GZIP, Br, ZSTD",  // token match is case-insensitive
         "",
-        "deflate;q=0.2",   // unknown coding: leaves all three untouched
+        "deflate;q=0.2",  // unknown coding: leaves all three untouched
         "gzip;q=0, gzip;q=0.9",
-        ", gzip, , br,",         // empty items are skipped
+        ", gzip, , br,",  // empty items are skipped
         "gzip;q=1.0, br;q=0.500",
         R"(gzip;note="a,b";q=0, br;q=0.5)",
     };
@@ -71,8 +71,7 @@ RUVIA_TEST(response_coding_selection_end_to_end) {
     // Explicit q ordering wins over the tie-break.
     RUVIA_CHECK(httpSelectResponseCoding("identity;q=0, gzip;q=0.9, br;q=0.1") == HttpContentCoding::kGzip);
     // A coding at q=0 is excluded even under a permissive wildcard.
-    RUVIA_CHECK(httpSelectResponseCoding(
-        "identity;q=0, br;q=0, *;q=0.5") == HttpContentCoding::kZstd);
+    RUVIA_CHECK(httpSelectResponseCoding("identity;q=0, br;q=0, *;q=0.5") == HttpContentCoding::kZstd);
     // identity is implicitly q=1, so a lower-quality coding must not override it.
     RUVIA_CHECK(httpSelectResponseCoding("gzip;q=0.9") == HttpContentCoding::kIdentity);
     // A positive wildcard does not lower identity's implicit quality, while an
@@ -81,13 +80,10 @@ RUVIA_TEST(response_coding_selection_end_to_end) {
     RUVIA_CHECK(httpSelectResponseCoding("identity;q=0.1, gzip;q=0.5") == HttpContentCoding::kGzip);
     // Repeating the same coding is equivalent to multiple matching alternatives:
     // the highest qvalue wins, independently of list order.
-    RUVIA_CHECK(httpSelectResponseCoding(
-        "identity;q=0.5, gzip;q=0.9, gzip;q=0.1") == HttpContentCoding::kGzip);
-    RUVIA_CHECK(httpSelectResponseCoding(
-        "identity;q=0.5, gzip;q=0.1, gzip;q=0.9") == HttpContentCoding::kGzip);
+    RUVIA_CHECK(httpSelectResponseCoding("identity;q=0.5, gzip;q=0.9, gzip;q=0.1") == HttpContentCoding::kGzip);
+    RUVIA_CHECK(httpSelectResponseCoding("identity;q=0.5, gzip;q=0.1, gzip;q=0.9") == HttpContentCoding::kGzip);
     // The same rule applies to repeated wildcard entries for an unlisted coding.
-    RUVIA_CHECK(httpSelectResponseCoding(
-        "identity;q=0, *;q=0.8, *;q=0.1") == HttpContentCoding::kBrotli);
+    RUVIA_CHECK(httpSelectResponseCoding("identity;q=0, *;q=0.8, *;q=0.1") == HttpContentCoding::kBrotli);
     HttpResponseCodingQualities repeated;
     repeated.update("gzip;q=0.9, gzip;q=0.1, *;q=0.8, *;q=0.2");
     RUVIA_CHECK_EQ(repeated.gzip.explicitQuality, 900);
@@ -100,15 +96,11 @@ RUVIA_TEST(response_coding_selection_end_to_end) {
     // Accept-Encoding allows only an optional weight after a coding. Unknown
     // parameters and whitespace around q's '=' make the item invalid; they must
     // not inherit the default q=1 and outrank identity.
-    RUVIA_CHECK(httpSelectResponseCoding(
-        "identity;q=0.5, gzip;level=9") == HttpContentCoding::kIdentity);
-    RUVIA_CHECK(httpSelectResponseCoding(
-        "identity;q=0.5, gzip;q =1") == HttpContentCoding::kIdentity);
-    RUVIA_CHECK(httpSelectResponseCoding(
-        "identity;q=0.5, gzip;q= 1") == HttpContentCoding::kIdentity);
+    RUVIA_CHECK(httpSelectResponseCoding("identity;q=0.5, gzip;level=9") == HttpContentCoding::kIdentity);
+    RUVIA_CHECK(httpSelectResponseCoding("identity;q=0.5, gzip;q =1") == HttpContentCoding::kIdentity);
+    RUVIA_CHECK(httpSelectResponseCoding("identity;q=0.5, gzip;q= 1") == HttpContentCoding::kIdentity);
     // OWS around the weight delimiter itself is explicitly allowed.
-    RUVIA_CHECK(httpSelectResponseCoding(
-        "identity;q=0.5, gzip \t; \tq=0.8") == HttpContentCoding::kGzip);
+    RUVIA_CHECK(httpSelectResponseCoding("identity;q=0.5, gzip \t; \tq=0.8") == HttpContentCoding::kGzip);
     // No acceptable coding.
     RUVIA_CHECK(httpSelectResponseCoding("identity") == HttpContentCoding::kIdentity);
     RUVIA_CHECK(httpSelectResponseCoding("") == HttpContentCoding::kIdentity);

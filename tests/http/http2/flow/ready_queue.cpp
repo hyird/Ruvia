@@ -6,8 +6,8 @@
 
 namespace {
 
-using ruvia::detail::Http2ReadyQueue;
 using ruvia::detail::Http2LocalSettings;
+using ruvia::detail::Http2ReadyQueue;
 
 }  // namespace
 

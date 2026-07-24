@@ -16,20 +16,11 @@ class DbRegistry;
 class RedisRegistry;
 class WorkerStateRegistry;
 
-class WebWorkerDispatch final
-    : public std::enable_shared_from_this<WebWorkerDispatch> {
+class WebWorkerDispatch final : public std::enable_shared_from_this<WebWorkerDispatch> {
 public:
     using Task = MoveOnlyFunction<ruvia::Task<void>(WebWorkerContext&)>;
 
-    WebWorkerDispatch(
-        asio::any_io_executor executor,
-        WorkerHandle worker,
-        std::pmr::memory_resource* resource,
-        DbRegistry& databases,
-        RedisRegistry& redis,
-        const WorkerStateRegistry& workerStates,
-        BlockingPool* blockingPool,
-        MoveOnlyFunction<void(std::exception_ptr)> failed);
+    WebWorkerDispatch(asio::any_io_executor executor, WorkerHandle worker, std::pmr::memory_resource* resource, DbRegistry& databases, RedisRegistry& redis, const WorkerStateRegistry& workerStates, BlockingPool* blockingPool, MoveOnlyFunction<void(std::exception_ptr)> failed);
     ~WebWorkerDispatch();
 
     WebWorkerDispatch(const WebWorkerDispatch&) = delete;

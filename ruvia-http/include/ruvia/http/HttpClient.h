@@ -44,33 +44,21 @@ public:
     // value and its bytes must remain unchanged. IP literals therefore include
     // brackets (for example, "[::1]"). Factories reject an empty or malformed
     // host before an origin can be observed.
-    [[nodiscard]] static HttpOrigin http(
-        std::string_view host,
-        std::uint16_t port = 80);
+    [[nodiscard]] static HttpOrigin http(std::string_view host, std::uint16_t port = 80);
 
     template <typename Traits, typename Allocator>
-    static HttpOrigin http(
-        std::basic_string<char, Traits, Allocator>&&,
-        std::uint16_t = 80) = delete;
+    static HttpOrigin http(std::basic_string<char, Traits, Allocator>&&, std::uint16_t = 80) = delete;
 
     template <typename Traits, typename Allocator>
-    static HttpOrigin http(
-        const std::basic_string<char, Traits, Allocator>&&,
-        std::uint16_t = 80) = delete;
+    static HttpOrigin http(const std::basic_string<char, Traits, Allocator>&&, std::uint16_t = 80) = delete;
 
-    [[nodiscard]] static HttpOrigin https(
-        std::string_view host,
-        std::uint16_t port = 443);
+    [[nodiscard]] static HttpOrigin https(std::string_view host, std::uint16_t port = 443);
 
     template <typename Traits, typename Allocator>
-    static HttpOrigin https(
-        std::basic_string<char, Traits, Allocator>&&,
-        std::uint16_t = 443) = delete;
+    static HttpOrigin https(std::basic_string<char, Traits, Allocator>&&, std::uint16_t = 443) = delete;
 
     template <typename Traits, typename Allocator>
-    static HttpOrigin https(
-        const std::basic_string<char, Traits, Allocator>&&,
-        std::uint16_t = 443) = delete;
+    static HttpOrigin https(const std::basic_string<char, Traits, Allocator>&&, std::uint16_t = 443) = delete;
 
     [[nodiscard]] constexpr HttpScheme scheme() const noexcept {
         return scheme_;
@@ -86,11 +74,10 @@ public:
     }
 
 private:
-    constexpr HttpOrigin(
-        HttpScheme scheme,
-        std::string_view host,
-        std::uint16_t port) noexcept
-        : host_(host), port_(port), scheme_(scheme) {}
+    constexpr HttpOrigin(HttpScheme scheme, std::string_view host, std::uint16_t port) noexcept
+        : host_(host),
+          port_(port),
+          scheme_(scheme) {}
 
     std::string_view host_;
     std::uint16_t port_;
@@ -99,27 +86,24 @@ private:
 
 class HttpClientResponseHeader final {
 public:
-    [[nodiscard]] std::string_view name() const & noexcept {
+    [[nodiscard]] std::string_view name() const& noexcept {
         return name_;
     }
-    [[nodiscard]] std::string_view name() const && = delete;
+    [[nodiscard]] std::string_view name() const&& = delete;
 
-    [[nodiscard]] std::string_view value() const & noexcept {
+    [[nodiscard]] std::string_view value() const& noexcept {
         return value_;
     }
-    [[nodiscard]] std::string_view value() const && = delete;
+    [[nodiscard]] std::string_view value() const&& = delete;
 
 private:
     friend struct detail::HttpClientResponseHeaderAccess;
 
     HttpClientResponseHeader(std::pmr::string name, std::pmr::string value)
-        : name_(std::move(name)), value_(std::move(value)) {}
+        : name_(std::move(name)),
+          value_(std::move(value)) {}
 
-    HttpClientResponseHeader(
-        detail::HttpResolvedPmrResourceTag,
-        std::string_view name,
-        std::string_view value,
-        std::pmr::memory_resource* resource)
+    HttpClientResponseHeader(detail::HttpResolvedPmrResourceTag, std::string_view name, std::string_view value, std::pmr::memory_resource* resource)
         : name_(name.data(), name.size(), resource),
           value_(value.data(), value.size(), resource) {}
 
@@ -162,42 +146,33 @@ public:
         return HttpClientRequestContent(HttpClientRequestWithoutContent());
     }
 
-    [[nodiscard]] static constexpr HttpClientRequestContent bytes(
-        std::string_view value) noexcept {
+    [[nodiscard]] static constexpr HttpClientRequestContent bytes(std::string_view value) noexcept {
         return HttpClientRequestContent(HttpClientRequestBytes(value));
     }
 
     template <typename Traits, typename Allocator>
-    static HttpClientRequestContent bytes(
-        std::basic_string<char, Traits, Allocator>&&) = delete;
+    static HttpClientRequestContent bytes(std::basic_string<char, Traits, Allocator>&&) = delete;
 
     template <typename Traits, typename Allocator>
-    static HttpClientRequestContent bytes(
-        const std::basic_string<char, Traits, Allocator>&&) = delete;
+    static HttpClientRequestContent bytes(const std::basic_string<char, Traits, Allocator>&&) = delete;
 
-    [[nodiscard]] constexpr const HttpClientRequestWithoutContent*
-    withoutContent() const & noexcept {
+    [[nodiscard]] constexpr const HttpClientRequestWithoutContent* withoutContent() const& noexcept {
         return std::get_if<HttpClientRequestWithoutContent>(&content_);
     }
-    const HttpClientRequestWithoutContent* withoutContent() const && = delete;
+    const HttpClientRequestWithoutContent* withoutContent() const&& = delete;
 
-    [[nodiscard]] constexpr const HttpClientRequestBytes*
-    borrowedBytes() const & noexcept {
+    [[nodiscard]] constexpr const HttpClientRequestBytes* borrowedBytes() const& noexcept {
         return std::get_if<HttpClientRequestBytes>(&content_);
     }
-    const HttpClientRequestBytes* borrowedBytes() const && = delete;
+    const HttpClientRequestBytes* borrowedBytes() const&& = delete;
 
 private:
-    using Content = std::variant<
-        HttpClientRequestWithoutContent,
-        HttpClientRequestBytes>;
+    using Content = std::variant<HttpClientRequestWithoutContent, HttpClientRequestBytes>;
 
-    explicit constexpr HttpClientRequestContent(
-        HttpClientRequestWithoutContent content) noexcept
+    explicit constexpr HttpClientRequestContent(HttpClientRequestWithoutContent content) noexcept
         : content_(content) {}
 
-    explicit constexpr HttpClientRequestContent(
-        HttpClientRequestBytes content) noexcept
+    explicit constexpr HttpClientRequestContent(HttpClientRequestBytes content) noexcept
         : content_(content) {}
 
     Content content_;
@@ -219,8 +194,7 @@ struct HttpClientRequest {
             : value_(value) {}
 
         template <typename Traits, typename Allocator>
-        constexpr BorrowedText(
-            const std::basic_string<char, Traits, Allocator>& value) noexcept
+        constexpr BorrowedText(const std::basic_string<char, Traits, Allocator>& value) noexcept
             : value_(value) {}
 
         template <detail::HttpTemporaryOwningCharString String>
@@ -237,8 +211,7 @@ struct HttpClientRequest {
         }
 
         template <typename Traits, typename Allocator>
-        constexpr BorrowedText& operator=(
-            const std::basic_string<char, Traits, Allocator>& value) noexcept {
+        constexpr BorrowedText& operator=(const std::basic_string<char, Traits, Allocator>& value) noexcept {
             value_ = std::string_view(value);
             return *this;
         }
@@ -254,21 +227,15 @@ struct HttpClientRequest {
             return value_;
         }
 
-        friend constexpr bool operator==(
-            BorrowedText lhs,
-            BorrowedText rhs) noexcept {
+        friend constexpr bool operator==(BorrowedText lhs, BorrowedText rhs) noexcept {
             return lhs.value_ == rhs.value_;
         }
 
-        friend constexpr bool operator==(
-            BorrowedText lhs,
-            std::string_view rhs) noexcept {
+        friend constexpr bool operator==(BorrowedText lhs, std::string_view rhs) noexcept {
             return lhs.value_ == rhs;
         }
 
-        friend constexpr bool operator==(
-            BorrowedText lhs,
-            const char* rhs) noexcept {
+        friend constexpr bool operator==(BorrowedText lhs, const char* rhs) noexcept {
             return lhs.value_ == rhs;
         }
 
@@ -357,8 +324,7 @@ struct HttpClientRequest {
     HttpClientRequestContent content{HttpClientRequestContent::none()};
 };
 
-static_assert(
-    sizeof(HttpClientRequest::BorrowedText) == sizeof(std::string_view));
+static_assert(sizeof(HttpClientRequest::BorrowedText) == sizeof(std::string_view));
 
 class HttpClientResponseHead final {
 public:
@@ -375,31 +341,18 @@ public:
         return protocolVersion_;
     }
 
-    [[nodiscard]] std::span<const HttpClientResponseHeader>
-    headers() const & noexcept {
+    [[nodiscard]] std::span<const HttpClientResponseHeader> headers() const& noexcept {
         return headers_;
     }
-    [[nodiscard]] std::span<const HttpClientResponseHeader>
-    headers() const && = delete;
+    [[nodiscard]] std::span<const HttpClientResponseHeader> headers() const&& = delete;
 
 private:
     friend struct detail::HttpClientResponseHeadAccess;
 
-    HttpClientResponseHead(
-        HttpStatusCode status,
-        HttpProtocolVersion protocolVersion,
-        std::pmr::memory_resource* resource)
-        : HttpClientResponseHead(
-              detail::HttpResolvedPmrResourceTag{},
-              status,
-              protocolVersion,
-              detail::httpPmrResourceOrDefault(resource)) {}
+    HttpClientResponseHead(HttpStatusCode status, HttpProtocolVersion protocolVersion, std::pmr::memory_resource* resource)
+        : HttpClientResponseHead(detail::HttpResolvedPmrResourceTag{}, status, protocolVersion, detail::httpPmrResourceOrDefault(resource)) {}
 
-    HttpClientResponseHead(
-        detail::HttpResolvedPmrResourceTag,
-        HttpStatusCode status,
-        HttpProtocolVersion protocolVersion,
-        std::pmr::memory_resource* resource)
+    HttpClientResponseHead(detail::HttpResolvedPmrResourceTag, HttpStatusCode status, HttpProtocolVersion protocolVersion, std::pmr::memory_resource* resource)
         : status_(status),
           protocolVersion_(protocolVersion),
           headers_(resource) {}

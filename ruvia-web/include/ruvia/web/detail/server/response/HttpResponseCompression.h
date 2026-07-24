@@ -7,10 +7,6 @@
 
 namespace ruvia::detail {
 
-void applyResponseCompression(
-    HttpContentCoding coding,
-    HttpKnownMethod requestMethod,
-    HttpResponse& response,
-    const CompressionConfig& options);
+void applyResponseCompression(HttpContentCoding coding, HttpKnownMethod requestMethod, HttpResponse& response, const CompressionConfig& options);
 
 }  // namespace ruvia::detail

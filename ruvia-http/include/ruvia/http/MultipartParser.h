@@ -26,15 +26,15 @@ struct MultipartStreamPartAccess;
 // content type and body remain borrowed views into the caller-owned request body.
 class MultipartPart final {
 public:
-    [[nodiscard]] std::string_view name() const & noexcept {
+    [[nodiscard]] std::string_view name() const& noexcept {
         return name_;
     }
-    [[nodiscard]] std::string_view name() const && = delete;
+    [[nodiscard]] std::string_view name() const&& = delete;
 
-    [[nodiscard]] std::string_view filename() const & noexcept {
+    [[nodiscard]] std::string_view filename() const& noexcept {
         return filename_;
     }
-    [[nodiscard]] std::string_view filename() const && = delete;
+    [[nodiscard]] std::string_view filename() const&& = delete;
 
     [[nodiscard]] std::string_view contentType() const noexcept {
         return contentType_;
@@ -47,11 +47,7 @@ public:
 private:
     friend struct detail::MultipartPartAccess;
 
-    MultipartPart(
-        std::pmr::string name,
-        std::pmr::string filename,
-        std::string_view contentType,
-        std::string_view body) noexcept
+    MultipartPart(std::pmr::string name, std::pmr::string filename, std::string_view contentType, std::string_view body) noexcept
         : name_(std::move(name)),
           filename_(std::move(filename)),
           contentType_(contentType),
@@ -75,30 +71,23 @@ public:
         assign(value);
     }
 
-    [[nodiscard]] constexpr std::string_view value() const & noexcept {
+    [[nodiscard]] constexpr std::string_view value() const& noexcept {
         return std::string_view(bytes_.data(), size_);
     }
-    [[nodiscard]] std::string_view value() const && = delete;
+    [[nodiscard]] std::string_view value() const&& = delete;
 
 private:
     static constexpr std::size_t kMaxSize = 70;
 
     [[nodiscard]] static constexpr bool nonSpaceChar(char value) noexcept {
-        return (value >= '0' && value <= '9') ||
-            (value >= 'A' && value <= 'Z') ||
-            (value >= 'a' && value <= 'z') ||
-            value == '\'' || value == '(' || value == ')' || value == '+' ||
-            value == '_' || value == ',' || value == '-' || value == '.' ||
-            value == '/' || value == ':' || value == '=' || value == '?';
+        return (value >= '0' && value <= '9') || (value >= 'A' && value <= 'Z') || (value >= 'a' && value <= 'z') || value == '\'' || value == '(' || value == ')' || value == '+' || value == '_' || value == ',' || value == '-' || value == '.' || value == '/' || value == ':' || value == '=' || value == '?';
     }
 
     [[nodiscard]] static constexpr bool valid(std::string_view value) noexcept {
         if (value.empty() || value.size() > kMaxSize || value.back() == ' ') {
             return false;
         }
-        return std::ranges::all_of(value, [](char byte) noexcept {
-            return byte == ' ' || nonSpaceChar(byte);
-        });
+        return std::ranges::all_of(value, [](char byte) noexcept { return byte == ' ' || nonSpaceChar(byte); });
     }
 
     constexpr void assign(std::string_view value) noexcept {
@@ -144,12 +133,7 @@ public:
 private:
     friend struct detail::MultipartStreamPartAccess;
 
-    constexpr MultipartStreamPart(
-        std::string_view name,
-        std::string_view filename,
-        std::string_view contentType,
-        std::string_view body,
-        MultipartChunkPhase phase) noexcept
+    constexpr MultipartStreamPart(std::string_view name, std::string_view filename, std::string_view contentType, std::string_view body, MultipartChunkPhase phase) noexcept
         : name_(name),
           filename_(filename),
           contentType_(contentType),
@@ -207,36 +191,30 @@ private:
 // feed(), finishInput(), or poll() call.
 class MultipartPollResult final {
 public:
-    [[nodiscard]] constexpr const MultipartPollNeedInput*
-    needInput() const & noexcept {
+    [[nodiscard]] constexpr const MultipartPollNeedInput* needInput() const& noexcept {
         return std::get_if<MultipartPollNeedInput>(&value_);
     }
-    const MultipartPollNeedInput* needInput() const && = delete;
+    const MultipartPollNeedInput* needInput() const&& = delete;
 
-    [[nodiscard]] constexpr const MultipartStreamPart* part() const & noexcept {
+    [[nodiscard]] constexpr const MultipartStreamPart* part() const& noexcept {
         return std::get_if<MultipartStreamPart>(&value_);
     }
-    const MultipartStreamPart* part() const && = delete;
+    const MultipartStreamPart* part() const&& = delete;
 
-    [[nodiscard]] constexpr const MultipartPollDone* done() const & noexcept {
+    [[nodiscard]] constexpr const MultipartPollDone* done() const& noexcept {
         return std::get_if<MultipartPollDone>(&value_);
     }
-    const MultipartPollDone* done() const && = delete;
+    const MultipartPollDone* done() const&& = delete;
 
-    [[nodiscard]] constexpr const MultipartPollFailure*
-    failure() const & noexcept {
+    [[nodiscard]] constexpr const MultipartPollFailure* failure() const& noexcept {
         return std::get_if<MultipartPollFailure>(&value_);
     }
-    const MultipartPollFailure* failure() const && = delete;
+    const MultipartPollFailure* failure() const&& = delete;
 
 private:
     friend class MultipartParser;
 
-    using Value = std::variant<
-        MultipartPollNeedInput,
-        MultipartStreamPart,
-        MultipartPollDone,
-        MultipartPollFailure>;
+    using Value = std::variant<MultipartPollNeedInput, MultipartStreamPart, MultipartPollDone, MultipartPollFailure>;
 
     explicit constexpr MultipartPollResult(MultipartPollNeedInput value) noexcept
         : value_(value) {}
@@ -254,8 +232,7 @@ private:
         return MultipartPollResult(MultipartPollNeedInput());
     }
 
-    [[nodiscard]] static constexpr MultipartPollResult makePart(
-        MultipartStreamPart part) noexcept {
+    [[nodiscard]] static constexpr MultipartPollResult makePart(MultipartStreamPart part) noexcept {
         return MultipartPollResult(part);
     }
 
@@ -263,8 +240,7 @@ private:
         return MultipartPollResult(MultipartPollDone());
     }
 
-    [[nodiscard]] static constexpr MultipartPollResult makeFailure(
-        MultipartParseError error) noexcept {
+    [[nodiscard]] static constexpr MultipartPollResult makeFailure(MultipartParseError error) noexcept {
         return MultipartPollResult(MultipartPollFailure(error));
     }
 
@@ -278,10 +254,10 @@ public:
     MultipartBody(MultipartBody&&) noexcept = default;
     MultipartBody& operator=(MultipartBody&&) = delete;
 
-    [[nodiscard]] const std::pmr::vector<MultipartPart>& parts() const & noexcept {
+    [[nodiscard]] const std::pmr::vector<MultipartPart>& parts() const& noexcept {
         return parts_;
     }
-    const std::pmr::vector<MultipartPart>& parts() const && = delete;
+    const std::pmr::vector<MultipartPart>& parts() const&& = delete;
 
     [[nodiscard]] std::pmr::vector<MultipartPart> takeParts() && noexcept {
         return std::move(parts_);
@@ -303,8 +279,7 @@ public:
 private:
     friend class MultipartBodyParseResult;
 
-    explicit constexpr MultipartBodyParseFailure(
-        MultipartParseError error) noexcept
+    explicit constexpr MultipartBodyParseFailure(MultipartParseError error) noexcept
         : error_(error) {}
 
     MultipartParseError error_;
@@ -321,34 +296,29 @@ public:
         return std::get_if<MultipartBody>(&value_);
     }
 
-    [[nodiscard]] const MultipartBody* body() const & noexcept {
+    [[nodiscard]] const MultipartBody* body() const& noexcept {
         return std::get_if<MultipartBody>(&value_);
     }
     MultipartBody* body() && = delete;
-    const MultipartBody* body() const && = delete;
+    const MultipartBody* body() const&& = delete;
 
-    [[nodiscard]] const MultipartBodyParseFailure* failure() const & noexcept {
+    [[nodiscard]] const MultipartBodyParseFailure* failure() const& noexcept {
         return std::get_if<MultipartBodyParseFailure>(&value_);
     }
-    const MultipartBodyParseFailure* failure() const && = delete;
+    const MultipartBodyParseFailure* failure() const&& = delete;
 
 private:
-    friend MultipartBodyParseResult parseMultipartBody(
-        std::string_view,
-        MultipartBoundary,
-        std::pmr::memory_resource*);
+    friend MultipartBodyParseResult parseMultipartBody(std::string_view, MultipartBoundary, std::pmr::memory_resource*);
 
     using Value = std::variant<MultipartBody, MultipartBodyParseFailure>;
 
     explicit MultipartBodyParseResult(std::pmr::vector<MultipartPart> parts) noexcept
         : value_(MultipartBody(std::move(parts))) {}
 
-    explicit MultipartBodyParseResult(
-        MultipartParseError error) noexcept
+    explicit MultipartBodyParseResult(MultipartParseError error) noexcept
         : value_(MultipartBodyParseFailure(error)) {}
 
-    explicit MultipartBodyParseResult(
-        const MultipartPollFailure& failure) noexcept
+    explicit MultipartBodyParseResult(const MultipartPollFailure& failure) noexcept
         : value_(MultipartBodyParseFailure(failure.error_)) {}
 
     Value value_;
@@ -379,19 +349,15 @@ public:
     explicit MultipartInputLifecycle(std::pmr::memory_resource* resource);
     explicit MultipartInputLifecycle(MultipartBorrowedInput input) noexcept;
 
-    [[nodiscard]] const MultipartBorrowedInput* borrowed() const & noexcept;
-    [[nodiscard]] const MultipartBorrowedInput* borrowed() const && = delete;
-    [[nodiscard]] const MultipartStreamingInputOpen*
-    streamingOpen() const & noexcept;
-    [[nodiscard]] const MultipartStreamingInputOpen*
-    streamingOpen() const && = delete;
-    [[nodiscard]] const MultipartStreamingInputEof*
-    streamingEof() const & noexcept;
-    [[nodiscard]] const MultipartStreamingInputEof*
-    streamingEof() const && = delete;
+    [[nodiscard]] const MultipartBorrowedInput* borrowed() const& noexcept;
+    [[nodiscard]] const MultipartBorrowedInput* borrowed() const&& = delete;
+    [[nodiscard]] const MultipartStreamingInputOpen* streamingOpen() const& noexcept;
+    [[nodiscard]] const MultipartStreamingInputOpen* streamingOpen() const&& = delete;
+    [[nodiscard]] const MultipartStreamingInputEof* streamingEof() const& noexcept;
+    [[nodiscard]] const MultipartStreamingInputEof* streamingEof() const&& = delete;
     [[nodiscard]] bool eof() const noexcept;
-    [[nodiscard]] std::string_view view() const & noexcept;
-    [[nodiscard]] std::string_view view() const && = delete;
+    [[nodiscard]] std::string_view view() const& noexcept;
+    [[nodiscard]] std::string_view view() const&& = delete;
 
     void feed(std::string_view chunk);
     void finishInput() noexcept;
@@ -400,10 +366,7 @@ public:
 
 private:
     static constexpr std::size_t kCompactConsumedPrefixBytes = 64 * 1024;
-    using Value = std::variant<
-        MultipartBorrowedInput,
-        MultipartStreamingInputOpen,
-        MultipartStreamingInputEof>;
+    using Value = std::variant<MultipartBorrowedInput, MultipartStreamingInputOpen, MultipartStreamingInputEof>;
 
     [[nodiscard]] std::pmr::string* ownedBytes() noexcept;
     [[nodiscard]] const std::pmr::string* ownedBytes() const noexcept;
@@ -436,23 +399,11 @@ public:
 private:
     struct CompleteInputTag final {};
 
-    friend MultipartBodyParseResult parseMultipartBody(
-        std::string_view,
-        MultipartBoundary,
-        std::pmr::memory_resource*);
+    friend MultipartBodyParseResult parseMultipartBody(std::string_view, MultipartBoundary, std::pmr::memory_resource*);
 
-    MultipartParser(
-        std::string_view completeBody,
-        MultipartBoundary boundary,
-        std::pmr::memory_resource* resource,
-        CompleteInputTag);
+    MultipartParser(std::string_view completeBody, MultipartBoundary boundary, std::pmr::memory_resource* resource, CompleteInputTag);
 
-    enum class ProgressState : std::uint8_t {
-        kBoundary,
-        kHeaders,
-        kBody,
-        kDone
-    };
+    enum class ProgressState : std::uint8_t { kBoundary, kHeaders, kBody, kDone };
 
     using State = std::variant<ProgressState, MultipartParseError>;
 
@@ -467,8 +418,7 @@ private:
     [[nodiscard]] std::string_view bufferView() const noexcept;
     void consume(std::size_t bytes) noexcept;
     void compactPending();
-    [[nodiscard]] MultipartPollResult fail(
-        MultipartParseError error) noexcept;
+    [[nodiscard]] MultipartPollResult fail(MultipartParseError error) noexcept;
     [[nodiscard]] StepResult processBoundary();
     [[nodiscard]] StepResult processHeaders();
     [[nodiscard]] MultipartStreamPart makePart(std::string_view body, bool partEnd);
@@ -489,15 +439,9 @@ private:
 
 // Parses a complete multipart/form-data body without I/O. Returned part bodies
 // and content types borrow `body`; decoded name/filename values own PMR storage.
-[[nodiscard]] MultipartBodyParseResult parseMultipartBody(
-    std::string_view body,
-    MultipartBoundary boundary,
-    std::pmr::memory_resource* resource = nullptr);
+[[nodiscard]] MultipartBodyParseResult parseMultipartBody(std::string_view body, MultipartBoundary boundary, std::pmr::memory_resource* resource = nullptr);
 
 template <detail::HttpTemporaryOwningCharString Body>
-MultipartBodyParseResult parseMultipartBody(
-    Body&&,
-    MultipartBoundary,
-    std::pmr::memory_resource* = nullptr) = delete;
+MultipartBodyParseResult parseMultipartBody(Body&&, MultipartBoundary, std::pmr::memory_resource* = nullptr) = delete;
 
 }  // namespace ruvia

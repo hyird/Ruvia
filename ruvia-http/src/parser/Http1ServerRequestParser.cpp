@@ -15,17 +15,14 @@ namespace {
 using ruvia::detail::findHttpHeaderEnd;
 using ruvia::detail::HttpRequestAccess;
 using ruvia::detail::HttpRequestTargetForm;
+using ruvia::detail::ParsedRequestHeaderBlock;
 using ruvia::detail::parseHttpHeaderBlock;
 using ruvia::detail::parseRequestTarget;
-using ruvia::detail::ParsedRequestHeaderBlock;
 using ruvia::detail::RequestTargetView;
 
 }  // namespace
 
-void Http1ServerRequestParser::parseRequestHead(
-    std::string_view buffer,
-    std::size_t headerSearchOffset,
-    Http1ServerRequestParseState& state) noexcept {
+void Http1ServerRequestParser::parseRequestHead(std::string_view buffer, std::size_t headerSearchOffset, Http1ServerRequestParseState& state) noexcept {
     // Reset only the small progress value and reachable request state; the
     // result object is reused across read iterations and requests, so a full
     // value-initialization here would re-zero the 2KB header table.
@@ -69,11 +66,7 @@ void Http1ServerRequestParser::parseRequestHead(
     const auto version = block.version.bind(buffer);
     HttpRequestAccess::setTarget(state.request, target);
 
-    if (version.size() != 8 ||
-        !version.starts_with("HTTP/") ||
-        version[5] < '0' ||
-        version[5] > '9' ||
-        version[6] != '.') {
+    if (version.size() != 8 || !version.starts_with("HTTP/") || version[5] < '0' || version[5] > '9' || version[6] != '.') {
         return fail(HttpParseError::kInvalidRequestLine);
     }
     if (version[7] < '0' || version[7] > '9') {
@@ -82,9 +75,7 @@ void Http1ServerRequestParser::parseRequestHead(
     if (version[5] != '1' || (version[7] != '0' && version[7] != '1')) {
         return fail(HttpParseError::kUnsupportedHttpVersion);
     }
-    const auto protocolVersion = version[7] == '1'
-        ? HttpProtocolVersion::kHttp11
-        : HttpProtocolVersion::kHttp10;
+    const auto protocolVersion = version[7] == '1' ? HttpProtocolVersion::kHttp11 : HttpProtocolVersion::kHttp10;
     HttpRequestAccess::setProtocolVersion(state.request, protocolVersion);
 
     RequestTargetView targetView;
@@ -94,8 +85,7 @@ void Http1ServerRequestParser::parseRequestHead(
     HttpRequestAccess::setPath(state.request, targetView.path);
     HttpRequestAccess::setQueryString(state.request, targetView.query);
 
-    if (protocolVersion == HttpProtocolVersion::kHttp11 &&
-        block.hostHeaderIndex < 0) {
+    if (protocolVersion == HttpProtocolVersion::kHttp11 && block.hostHeaderIndex < 0) {
         return fail(HttpParseError::kMissingHost);
     }
     const auto hostHeaderIndex = block.hostHeaderIndex;
@@ -106,8 +96,7 @@ void Http1ServerRequestParser::parseRequestHead(
         return fail(HttpParseError::kInvalidTransferEncoding);
     }
 
-    if (httpRequestContentSemantics(method) ==
-        HttpRequestContentSemantics::kForbidden) {
+    if (httpRequestContentSemantics(method) == HttpRequestContentSemantics::kForbidden) {
         // CONNECT has no request content, and TRACE explicitly forbids it
         // (RFC 9110 sections 9.3.6 and 9.3.8). Content-Length is an explicit
         // content signal even at zero; accepting either framing field would
@@ -120,25 +109,18 @@ void Http1ServerRequestParser::parseRequestHead(
         }
     }
 
-    const auto* finalChunked = transferEncoding.has_value()
-        ? transferEncoding->finalChunked()
-        : nullptr;
+    const auto* finalChunked = transferEncoding.has_value() ? transferEncoding->finalChunked() : nullptr;
     if (transferEncoding.has_value() && finalChunked == nullptr) {
         return fail(HttpParseError::kInvalidTransferEncoding);
     }
 
     // RFC 9112 section 6.1: Transfer-Encoding in an HTTP/1.0 request must be treated
     // as faulty framing; the error path closes the connection after replying.
-    if (transferEncoding.has_value() &&
-        protocolVersion == HttpProtocolVersion::kHttp10) {
+    if (transferEncoding.has_value() && protocolVersion == HttpProtocolVersion::kHttp10) {
         return fail(HttpParseError::kInvalidTransferEncoding);
     }
 
-    if (httpRequestContentSemantics(method) ==
-            HttpRequestContentSemantics::kContentTypeRequired &&
-        (contentLength.has_value() || transferEncoding.has_value()) &&
-        (block.seenHeaderBits & singletonRequestHeaderBit(
-             RequestHeaderKind::kContentType)) == 0) {
+    if (httpRequestContentSemantics(method) == HttpRequestContentSemantics::kContentTypeRequired && (contentLength.has_value() || transferEncoding.has_value()) && (block.seenHeaderBits & singletonRequestHeaderBit(RequestHeaderKind::kContentType)) == 0) {
         // RFC 9110 section 9.3.7 requires a valid Content-Type when OPTIONS
         // explicitly carries content. A zero Content-Length still declares an
         // empty representation and therefore retains this metadata contract.
@@ -152,49 +134,33 @@ void Http1ServerRequestParser::parseRequestHead(
         // for absolute-form and authority-form. Rebind both headers() and the
         // known-header cache so application code cannot observe a conflicting
         // Host value as a second routing truth.
-        if ((targetView.form == HttpRequestTargetForm::kAbsolute ||
-             targetView.form == HttpRequestTargetForm::kAuthority) &&
-            hostHeaderIndex >= 0 &&
-            i == static_cast<std::size_t>(hostHeaderIndex)) {
+        if ((targetView.form == HttpRequestTargetForm::kAbsolute || targetView.form == HttpRequestTargetForm::kAuthority) && hostHeaderIndex >= 0 && i == static_cast<std::size_t>(hostHeaderIndex)) {
             value = targetView.authority;
         }
-        (void)HttpRequestAccess::addHeader(
-            state.request,
-            HttpHeaderView{header.name.bind(buffer), value},
-            requestHeaderKindKnownSlot(header.kind));
+        (void)HttpRequestAccess::addHeader(state.request, HttpHeaderView{header.name.bind(buffer), value}, requestHeaderKindKnownSlot(header.kind));
     }
 
-    state.responseCoding =
-        httpSelectResponseCodingFromQualities(block.responseCodingQualities);
+    state.responseCoding = httpSelectResponseCodingFromQualities(block.responseCodingQualities);
     auto expectations = block.expectations;
     if (protocolVersion == HttpProtocolVersion::kHttp10) {
         expectations.ignoreContinue();
     }
     if (finalChunked != nullptr) {
-        state.bodyPlan = Http1RequestBodyPlan(
-            finalChunked->transferCodings(), expectations);
+        state.bodyPlan = Http1RequestBodyPlan(finalChunked->transferCodings(), expectations);
     } else if (contentLength.has_value()) {
-        state.bodyPlan = Http1RequestBodyPlan(
-            *contentLength, expectations);
+        state.bodyPlan = Http1RequestBodyPlan(*contentLength, expectations);
     } else {
         state.bodyPlan = Http1RequestBodyPlan(expectations);
     }
-    state.connectionPlan = protocolVersion == HttpProtocolVersion::kHttp11
-        ? http1PlanHttp11RequestConnection(block.connectionOptions)
-        : http1PlanHttp10RequestConnection(block.connectionOptions);
+    state.connectionPlan = protocolVersion == HttpProtocolVersion::kHttp11 ? http1PlanHttp11RequestConnection(block.connectionOptions) : http1PlanHttp10RequestConnection(block.connectionOptions);
     state.progress_ = Http1ServerRequestHeadReady(headerBytes);
 }
 
-void Http1ServerRequestParser::parseHead(
-    std::string_view buffer,
-    Http1ServerRequestParseState& state,
-    std::size_t headerSearchOffset) const noexcept {
+void Http1ServerRequestParser::parseHead(std::string_view buffer, Http1ServerRequestParseState& state, std::size_t headerSearchOffset) const noexcept {
     parseRequestHead(buffer, headerSearchOffset, state);
 }
 
-void Http1ServerRequestParser::parseMessageBody(
-    std::string_view buffer,
-    Http1ServerRequestParseState& state) noexcept {
+void Http1ServerRequestParser::parseMessageBody(std::string_view buffer, Http1ServerRequestParseState& state) noexcept {
     const auto* requestHead = state.headReady();
     if (requestHead == nullptr) {
         return;
@@ -211,15 +177,12 @@ void Http1ServerRequestParser::parseMessageBody(
     };
     // headerBytes is captured rather than passed: every call site forwards the
     // same head length, and a parameter of that name would shadow it.
-    const auto needMore = [&state, headerBytes](
-        Http1RequestBodyPlan bodyPlan,
-        std::optional<std::size_t> requiredTotalBytes) noexcept {
+    const auto needMore = [&state, headerBytes](Http1RequestBodyPlan bodyPlan, std::optional<std::size_t> requiredTotalBytes) noexcept {
         // The request views borrow `buffer`. A caller must reparse after growing
         // or moving that buffer, so an incomplete message intentionally exposes
         // no apparently reusable request head.
         HttpRequestAccess::reset(state.request);
-        state.progress_ = Http1ServerNeedRequestBody(
-            headerBytes, requiredTotalBytes);
+        state.progress_ = Http1ServerNeedRequestBody(headerBytes, requiredTotalBytes);
         state.bodyPlan = bodyPlan;
     };
 
@@ -265,17 +228,11 @@ void Http1ServerRequestParser::parseMessageBody(
         return needMore(bodyPlan, messageBytes);
     }
 
-    HttpRequestAccess::setBody(
-        state.request,
-        knownLengthBody != nullptr
-            ? buffer.substr(headerBytes, knownLengthBody->contentLength())
-            : std::string_view{});
-    state.progress_ = Http1ServerRequestMessageReady(
-        headerBytes, messageBytes);
+    HttpRequestAccess::setBody(state.request, knownLengthBody != nullptr ? buffer.substr(headerBytes, knownLengthBody->contentLength()) : std::string_view{});
+    state.progress_ = Http1ServerRequestMessageReady(headerBytes, messageBytes);
 }
 
-Http1ServerRequestParseState Http1ServerRequestParser::parseMessage(
-    std::string_view buffer) const noexcept {
+Http1ServerRequestParseState Http1ServerRequestParser::parseMessage(std::string_view buffer) const noexcept {
     Http1ServerRequestParseState state;
     parseRequestHead(buffer, 0, state);
     parseMessageBody(buffer, state);
@@ -293,8 +250,7 @@ Http1RequestParseResult Http1RequestParser::parse(std::string_view buffer) const
         return detail::Http1RequestParseResultAccess::needMore(std::nullopt);
     }
     if (const auto* needBody = parsed.needRequestBody()) {
-        return detail::Http1RequestParseResultAccess::needMore(
-            needBody->requiredTotalBytes());
+        return detail::Http1RequestParseResultAccess::needMore(needBody->requiredTotalBytes());
     }
     if (const auto* failure = parsed.failure()) {
         return detail::Http1RequestParseResultAccess::failure(*failure);
@@ -304,14 +260,8 @@ Http1RequestParseResult Http1RequestParser::parse(std::string_view buffer) const
         std::terminate();
     }
 
-    const auto wireBody = buffer.substr(
-        message->headerBytes(),
-        message->messageBytes() - message->headerBytes());
-    return detail::Http1RequestParseResultAccess::parsed(
-        std::move(parsed.request),
-        parsed.bodyPlan,
-        wireBody,
-        message->messageBytes());
+    const auto wireBody = buffer.substr(message->headerBytes(), message->messageBytes() - message->headerBytes());
+    return detail::Http1RequestParseResultAccess::parsed(std::move(parsed.request), parsed.bodyPlan, wireBody, message->messageBytes());
 }
 
 }  // namespace ruvia

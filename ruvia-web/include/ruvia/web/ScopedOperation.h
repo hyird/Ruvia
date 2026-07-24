@@ -22,7 +22,9 @@ class ScopedCapabilityNode;
 class ScopedOperationScope final {
 public:
     ScopedOperationScope() noexcept = default;
-    ~ScopedOperationScope() { close(); }
+    ~ScopedOperationScope() {
+        close();
+    }
 
     ScopedOperationScope(const ScopedOperationScope&) = delete;
     ScopedOperationScope& operator=(const ScopedOperationScope&) = delete;
@@ -30,7 +32,9 @@ public:
     ScopedOperationScope& operator=(ScopedOperationScope&&) = delete;
 
     void close() noexcept;
-    [[nodiscard]] bool active() const noexcept { return active_; }
+    [[nodiscard]] bool active() const noexcept {
+        return active_;
+    }
 
 private:
     friend class ScopedOperationNode;
@@ -55,15 +59,12 @@ public:
     ~ScopedCapabilityNode();
 
 protected:
-    ScopedCapabilityNode() noexcept : active_(false) {}
-    ScopedCapabilityNode(
-        ScopedOperationScope& scope,
-        void (*expire)(ScopedCapabilityNode&) noexcept) noexcept;
+    ScopedCapabilityNode() noexcept
+        : active_(false) {}
+    ScopedCapabilityNode(ScopedOperationScope& scope, void (*expire)(ScopedCapabilityNode&) noexcept) noexcept;
     void requireActive() const;
     [[nodiscard]] ScopedOperationScope& operationScope() const;
-    void bind(
-        ScopedOperationScope& scope,
-        void (*expire)(ScopedCapabilityNode&) noexcept) noexcept;
+    void bind(ScopedOperationScope& scope, void (*expire)(ScopedCapabilityNode&) noexcept) noexcept;
 
 private:
     friend class ScopedOperationScope;
@@ -74,7 +75,7 @@ private:
     ScopedOperationScope* scope_{nullptr};
     ScopedCapabilityNode* previous_{nullptr};
     ScopedCapabilityNode* next_{nullptr};
-    void (*expire_)(ScopedCapabilityNode&) noexcept{nullptr};
+    void (*expire_)(ScopedCapabilityNode&) noexcept {nullptr};
     bool active_{true};
 };
 
@@ -103,13 +104,11 @@ private:
     ScopedOperationNode* previous_{nullptr};
     ScopedOperationNode* next_{nullptr};
     Phase phase_{Phase::kCold};
-    void (*expireCold_)(ScopedOperationNode&) noexcept{nullptr};
+    void (*expireCold_)(ScopedOperationNode&) noexcept {nullptr};
 };
 
 template <typename T>
-[[nodiscard]] ScopedOperation<T> makeScopedOperation(
-    ScopedOperationScope& scope,
-    Task<T> task);
+[[nodiscard]] ScopedOperation<T> makeScopedOperation(ScopedOperationScope& scope, Task<T> task);
 
 }  // namespace detail
 
@@ -122,15 +121,18 @@ class [[nodiscard]] ScopedOperation final : private detail::ScopedOperationNode 
         Awaiter(Awaiter&&) = delete;
         Awaiter& operator=(Awaiter&&) = delete;
 
-        [[nodiscard]] bool await_ready() const noexcept { return awaiter_.await_ready(); }
-        [[nodiscard]] std::coroutine_handle<> await_suspend(
-            std::coroutine_handle<> continuation) {
+        [[nodiscard]] bool await_ready() const noexcept {
+            return awaiter_.await_ready();
+        }
+        [[nodiscard]] std::coroutine_handle<> await_suspend(std::coroutine_handle<> continuation) {
             return awaiter_.await_suspend(continuation);
         }
         T await_resume() {
             struct Complete final {
                 ScopedOperation* owner;
-                ~Complete() { owner->complete(); }
+                ~Complete() {
+                    owner->complete();
+                }
             } complete{owner_};
             if constexpr (std::is_void_v<T>) {
                 awaiter_.await_resume();
@@ -162,7 +164,9 @@ public:
     ScopedOperation(ScopedOperation&&) = delete;
     ScopedOperation& operator=(ScopedOperation&&) = delete;
 
-    [[nodiscard]] Awaiter operator co_await() && { return Awaiter(*this); }
+    [[nodiscard]] Awaiter operator co_await() && {
+        return Awaiter(*this);
+    }
     [[nodiscard]] auto operator co_await() & = delete;
     [[nodiscard]] auto operator co_await() const& = delete;
     [[nodiscard]] auto operator co_await() const&& = delete;
@@ -171,14 +175,12 @@ public:
 
 private:
     template <typename U>
-    friend ScopedOperation<U> detail::makeScopedOperation(
-        detail::ScopedOperationScope&, Task<U>);
+    friend ScopedOperation<U> detail::makeScopedOperation(detail::ScopedOperationScope&, Task<U>);
 
     ScopedOperation(detail::ScopedOperationScope& scope, Task<T> task)
-        : detail::ScopedOperationNode(scope), task_(std::move(task)) {
-        setExpireCold([](detail::ScopedOperationNode& node) noexcept {
-            static_cast<ScopedOperation&>(node).task_.reset();
-        });
+        : detail::ScopedOperationNode(scope),
+          task_(std::move(task)) {
+        setExpireCold([](detail::ScopedOperationNode& node) noexcept { static_cast<ScopedOperation&>(node).task_.reset(); });
     }
 
     std::optional<Task<T>> task_;
@@ -187,9 +189,7 @@ private:
 namespace detail {
 
 template <typename T>
-[[nodiscard]] ScopedOperation<T> makeScopedOperation(
-    ScopedOperationScope& scope,
-    Task<T> task) {
+[[nodiscard]] ScopedOperation<T> makeScopedOperation(ScopedOperationScope& scope, Task<T> task) {
     return ScopedOperation<T>(scope, std::move(task));
 }
 

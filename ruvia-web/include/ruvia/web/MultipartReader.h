@@ -15,10 +15,7 @@ namespace ruvia {
 
 class MultipartReader final {
 public:
-    MultipartReader(
-        BodyReader& bodyReader,
-        MultipartBoundary boundary,
-        std::pmr::memory_resource* resource)
+    MultipartReader(BodyReader& bodyReader, MultipartBoundary boundary, std::pmr::memory_resource* resource)
         : bodyReader_(bodyReader),
           parser_(std::move(boundary), resource) {}
 
@@ -41,7 +38,8 @@ private:
 
     class ReadGuard final {
     public:
-        explicit ReadGuard(State& state) noexcept : state_(state) {}
+        explicit ReadGuard(State& state) noexcept
+            : state_(state) {}
 
         ~ReadGuard() {
             if (!committed_) {

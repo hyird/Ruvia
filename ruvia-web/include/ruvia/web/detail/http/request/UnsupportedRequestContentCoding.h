@@ -11,8 +11,7 @@ namespace ruvia::detail {
 // mapping and the RFC 9110 Accept-Encoding response advertisement.
 class UnsupportedRequestContentCoding final : public std::exception {
 public:
-    explicit UnsupportedRequestContentCoding(
-        const HttpUnsupportedContentCoding&) noexcept {}
+    explicit UnsupportedRequestContentCoding(const HttpUnsupportedContentCoding&) noexcept {}
 
     [[nodiscard]] const char* what() const noexcept override {
         return "request Content-Encoding is not supported";

@@ -2,16 +2,14 @@
 
 #include <vector>
 
-// Reading a request through Context: cookies, query, route params and headers, and the caches each lookup shares.
+// Reading a request through Context: cookies, query, route params and headers, and the caches each
+// lookup shares.
 
 RUVIA_TEST(context_request_cookie_single_lookup_does_not_materialize_cookie_list) {
     WorkerMemory worker;
     HttpRequest request = HttpRequestAccess::make();
     HttpRequestAccess::reset(request);
-    RUVIA_CHECK(HttpRequestAccess::addHeader(
-        request,
-        HttpHeaderView{"Cookie", "a=1; b=2; a=3"},
-        HttpRequestAccess::knownHeaderSlot(RequestKnownHeader::kCookie)));
+    RUVIA_CHECK(HttpRequestAccess::addHeader(request, HttpHeaderView{"Cookie", "a=1; b=2; a=3"}, HttpRequestAccess::knownHeaderSlot(RequestKnownHeader::kCookie)));
 
     RequestMemory requestMemory(worker);
     HttpRequestAccess::setResource(request, requestMemory.resource());
@@ -156,14 +154,7 @@ RUVIA_TEST(context_request_param_single_lookup_materializes_one_shared_cache) {
     const std::string_view values[] = {"skip", "one%20two"};
     RequestMemory requestMemory(worker);
     HttpRequestAccess::setResource(request, requestMemory.resource());
-    auto context = ContextAccess::make(
-        requestMemory,
-        request,
-        "/items/:id",
-        names,
-        values,
-        std::size(names),
-        0);
+    auto context = ContextAccess::make(requestMemory, request, "/items/:id", names, values, std::size(names), 0);
 
     const auto param = context.req().param("id");
     RUVIA_CHECK(param.has_value());
@@ -212,14 +203,7 @@ RUVIA_TEST(context_request_param_rejects_and_remembers_malformed_percent_encodin
 
     RequestMemory requestMemory(worker);
     HttpRequestAccess::setResource(request, requestMemory.resource());
-    auto context = ContextAccess::make(
-        requestMemory,
-        request,
-        "/items/:id",
-        names,
-        values,
-        std::size(names),
-        0);
+    auto context = ContextAccess::make(requestMemory, request, "/items/:id", names, values, std::size(names), 0);
 
     for (int attempt = 0; attempt < 2; ++attempt) {
         bool threw = false;

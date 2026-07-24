@@ -16,25 +16,16 @@ template <typename Stream>
 Task<void> writeHttp1Continue(Stream& stream) {
     std::array<char, 32> headBuffer{};
     const HttpInterimResponseHead response(http_status::kContinue);
-    const auto result = Http1InterimResponseWriter().prepare(
-        response, headBuffer);
+    const auto result = Http1InterimResponseWriter().prepare(response, headBuffer);
     const auto* const prepared = result.prepared();
     if (prepared == nullptr) {
-        throw std::logic_error(
-            "failed to prepare HTTP/1 interim Continue response");
+        throw std::logic_error("failed to prepare HTTP/1 interim Continue response");
     }
 
-    const auto writeCompletion = co_await asyncAsio(
-        [&stream, head = prepared->head()](auto handler) mutable {
-            asio::async_write(
-                stream,
-                asio::buffer(head),
-                std::move(handler));
-        });
+    const auto writeCompletion = co_await asyncAsio([&stream, head = prepared->head()](auto handler) mutable { asio::async_write(stream, asio::buffer(head), std::move(handler)); });
     const auto ec = writeCompletion.errorCode();
     if (ec) {
-        throw std::system_error(
-            ec, "failed to write HTTP/1 interim Continue response");
+        throw std::system_error(ec, "failed to write HTTP/1 interim Continue response");
     }
 }
 

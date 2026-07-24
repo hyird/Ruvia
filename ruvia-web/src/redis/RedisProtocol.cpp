@@ -68,11 +68,7 @@ std::size_t respCommandSerializedSize(std::span<const std::pmr::string> args) no
     return respSerializedSize(args);
 }
 
-RedisValue hiredisReplyToValue(
-    const redisReply& reply,
-    std::size_t depth,
-    std::size_t maxDepth,
-    std::pmr::memory_resource* resource) {
+RedisValue hiredisReplyToValue(const redisReply& reply, std::size_t depth, std::size_t maxDepth, std::pmr::memory_resource* resource) {
     if (maxDepth > 0 && depth > maxDepth) {
         throw RedisError(RedisError::Code::kProtocolError, "redis array nesting is too deep");
     }

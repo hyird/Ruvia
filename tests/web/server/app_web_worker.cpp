@@ -17,8 +17,7 @@ int controllerDestroyed = 0;
 int middlewareConstructed = 0;
 int middlewareDestroyed = 0;
 
-class InstanceProbeMiddleware final
-    : public ruvia::Middleware<InstanceProbeMiddleware> {
+class InstanceProbeMiddleware final : public ruvia::Middleware<InstanceProbeMiddleware> {
 public:
     InstanceProbeMiddleware() {
         ++middlewareConstructed;
@@ -33,8 +32,7 @@ public:
     }
 };
 
-class InstanceProbeController final
-    : public ruvia::Controller<InstanceProbeController> {
+class InstanceProbeController final : public ruvia::Controller<InstanceProbeController> {
 public:
     InstanceProbeController() {
         ++controllerConstructed;
@@ -57,9 +55,7 @@ private:
 
 std::uint16_t availablePort() {
     asio::io_context context;
-    asio::ip::tcp::acceptor acceptor(
-        context,
-        asio::ip::tcp::endpoint(asio::ip::make_address("127.0.0.1"), 0));
+    asio::ip::tcp::acceptor acceptor(context, asio::ip::tcp::endpoint(asio::ip::make_address("127.0.0.1"), 0));
     return acceptor.local_endpoint().port();
 }
 
@@ -93,17 +89,13 @@ int main() {
             workers = app.workers();
             constexpr std::string_view key = "device-42";
             const auto first = app.workerFor(key);
-            const auto second =
-                app.workerFor(ruvia::detail::workerSelectionHash(key));
-            stableSelection = workers.size() == 2 && first.valid() &&
-                              first.id() == second.id();
-            isolatedInstances = controllerConstructed == 2 &&
-                                middlewareConstructed == 2;
-            accepted = first.post(
-                           [](ruvia::WebWorkerContext&) -> ruvia::Task<void> {
-                               throw std::runtime_error("app worker task failed");
-                               co_return;
-                           }) == ruvia::PostStatus::kAccepted;
+            const auto second = app.workerFor(ruvia::detail::workerSelectionHash(key));
+            stableSelection = workers.size() == 2 && first.valid() && first.id() == second.id();
+            isolatedInstances = controllerConstructed == 2 && middlewareConstructed == 2;
+            accepted = first.post([](ruvia::WebWorkerContext&) -> ruvia::Task<void> {
+                throw std::runtime_error("app worker task failed");
+                co_return;
+            }) == ruvia::PostStatus::kAccepted;
             app.stop();
             startHookFinished = true;
         });
@@ -115,8 +107,7 @@ int main() {
         propagated = std::string_view(error.what()) == "app worker task failed";
     }
 
-    if (!rejectedZeroCapacity || !stableSelection || !accepted || !propagated ||
-        !stopHookAfterStart || stopCalls != 1) {
+    if (!rejectedZeroCapacity || !stableSelection || !accepted || !propagated || !stopHookAfterStart || stopCalls != 1) {
         return 1;
     }
     if (!isolatedInstances) {

@@ -70,9 +70,7 @@ void ConnectionWorkSetPool::release(ConnectionWorkSet* workSet) noexcept {
     if (workSet == nullptr) {
         return;
     }
-    const auto destroy = [this](ConnectionWorkSet* victim) noexcept {
-        destroyPmrObject(victim, memory_->resource());
-    };
+    const auto destroy = [this](ConnectionWorkSet* victim) noexcept { destroyPmrObject(victim, memory_->resource()); };
     if (freeCount_ >= kMaxPooledWorkSets) {
         destroy(workSet);
         return;
@@ -90,10 +88,7 @@ void ConnectionWorkSetPool::release(ConnectionWorkSet* workSet) noexcept {
     ++freeCount_;
 }
 
-void compactConnectionReadBuffer(
-    std::pmr::string& readBuffer,
-    std::size_t& usedBytes,
-    std::size_t consumedBytes) noexcept {
+void compactConnectionReadBuffer(std::pmr::string& readBuffer, std::size_t& usedBytes, std::size_t consumedBytes) noexcept {
     const auto remainingBytes = usedBytes - consumedBytes;
     if (remainingBytes > 0) {
         std::memmove(readBuffer.data(), readBuffer.data() + consumedBytes, remainingBytes);
@@ -101,10 +96,7 @@ void compactConnectionReadBuffer(
     usedBytes = remainingBytes;
 }
 
-void installConnectionReadBufferPipeline(
-    std::pmr::string& readBuffer,
-    std::size_t& usedBytes,
-    std::string_view pipeline) {
+void installConnectionReadBufferPipeline(std::pmr::string& readBuffer, std::size_t& usedBytes, std::string_view pipeline) {
     // `pipeline` is request-scoped storage handed over by a body runtime, never
     // an alias of readBuffer, so this copies rather than shifts in place.
     if (pipeline.size() > readBuffer.size()) {
@@ -116,25 +108,16 @@ void installConnectionReadBufferPipeline(
     usedBytes = pipeline.size();
 }
 
-void applyReusableHttp1RequestBufferCompletion(
-    const Http1RequestBufferCompletion& completion,
-    std::pmr::string& readBuffer,
-    std::size_t& usedBytes) {
+void applyReusableHttp1RequestBufferCompletion(const Http1RequestBufferCompletion& completion, std::pmr::string& readBuffer, std::size_t& usedBytes) {
     if (const auto* compaction = completion.compaction()) {
         if (compaction->consumedBytes() > usedBytes) {
             std::terminate();
         }
-        compactConnectionReadBuffer(
-            readBuffer,
-            usedBytes,
-            compaction->consumedBytes());
+        compactConnectionReadBuffer(readBuffer, usedBytes, compaction->consumedBytes());
         return;
     }
     if (const auto* restore = completion.pipelineRestore()) {
-        installConnectionReadBufferPipeline(
-            readBuffer,
-            usedBytes,
-            restore->pipeline());
+        installConnectionReadBufferPipeline(readBuffer, usedBytes, restore->pipeline());
         return;
     }
     // A discarded buffer is valid only when the connection plan closes. The

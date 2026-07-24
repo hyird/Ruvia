@@ -21,29 +21,13 @@ namespace {
 int failures = 0;
 
 template <typename Text>
-concept CookiePathAccepts = requires(
-    ruvia::CookieOptions& options,
-    Text&& text) {
-    options.path = std::forward<Text>(text);
-};
+concept CookiePathAccepts = requires(ruvia::CookieOptions& options, Text&& text) { options.path = std::forward<Text>(text); };
 
 template <typename Text>
-concept CookieDomainAccepts = requires(
-    ruvia::CookieOptions& options,
-    Text&& text) {
-    options.domain = std::forward<Text>(text);
-};
+concept CookieDomainAccepts = requires(ruvia::CookieOptions& options, Text&& text) { options.domain = std::forward<Text>(text); };
 
 template <typename Name, typename Value, typename Options>
-concept CanConstructSetCookiePlan = requires(
-    Name&& name,
-    Value&& value,
-    Options&& options) {
-    ruvia::detail::SetCookiePlan(
-        std::forward<Name>(name),
-        std::forward<Value>(value),
-        std::forward<Options>(options));
-};
+concept CanConstructSetCookiePlan = requires(Name&& name, Value&& value, Options&& options) { ruvia::detail::SetCookiePlan(std::forward<Name>(name), std::forward<Value>(value), std::forward<Options>(options)); };
 
 static_assert(CookiePathAccepts<std::string&>);
 static_assert(CookieDomainAccepts<const std::string&>);
@@ -55,30 +39,12 @@ static_assert(!CookieDomainAccepts<std::string>);
 static_assert(!CookieDomainAccepts<const std::string>);
 static_assert(!CookiePathAccepts<std::pmr::string>);
 static_assert(!CookieDomainAccepts<std::pmr::string>);
-static_assert(CanConstructSetCookiePlan<
-    std::string&,
-    const std::string&,
-    ruvia::CookieOptions&>);
-static_assert(!CanConstructSetCookiePlan<
-    std::string,
-    std::string_view,
-    ruvia::CookieOptions&>);
-static_assert(!CanConstructSetCookiePlan<
-    std::string_view,
-    const std::string,
-    ruvia::CookieOptions&>);
-static_assert(!CanConstructSetCookiePlan<
-    std::pmr::string,
-    std::string_view,
-    ruvia::CookieOptions&>);
-static_assert(!CanConstructSetCookiePlan<
-    std::string_view,
-    std::string_view,
-    ruvia::CookieOptions>);
-static_assert(!CanConstructSetCookiePlan<
-    std::string_view,
-    std::string_view,
-    const ruvia::CookieOptions>);
+static_assert(CanConstructSetCookiePlan<std::string&, const std::string&, ruvia::CookieOptions&>);
+static_assert(!CanConstructSetCookiePlan<std::string, std::string_view, ruvia::CookieOptions&>);
+static_assert(!CanConstructSetCookiePlan<std::string_view, const std::string, ruvia::CookieOptions&>);
+static_assert(!CanConstructSetCookiePlan<std::pmr::string, std::string_view, ruvia::CookieOptions&>);
+static_assert(!CanConstructSetCookiePlan<std::string_view, std::string_view, ruvia::CookieOptions>);
+static_assert(!CanConstructSetCookiePlan<std::string_view, std::string_view, const ruvia::CookieOptions>);
 
 void check(bool condition) {
     if (!condition) {
@@ -128,8 +94,8 @@ void exerciseSetCookieSerialization(ruvia::RequestMemory& memory, const ruvia::H
     context.setCookie("chip", "value", options);
     const auto response = context.text("ok");
     check(response.header("Set-Cookie") ==
-        "__Host-chip=value; Path=/; Max-Age=3600; Expires=Sun, 04 Jan 1970 00:00:00 GMT; "
-        "HttpOnly; Secure; SameSite=None; Priority=High; Partitioned");
+          "__Host-chip=value; Path=/; Max-Age=3600; Expires=Sun, 04 Jan 1970 00:00:00 GMT; "
+          "HttpOnly; Secure; SameSite=None; Priority=High; Partitioned");
 }
 
 void exerciseSetCookieWritesResponseHeader(ruvia::RequestMemory& memory, const ruvia::HttpRequest& request) {
@@ -139,8 +105,7 @@ void exerciseSetCookieWritesResponseHeader(ruvia::RequestMemory& memory, const r
     options.sameSite = ruvia::CookieSameSite::kLax;
     context.setCookie("session", "id", options);
     auto response = context.text("hi");
-    check(response.header("Set-Cookie") ==
-        "session=id; Path=/; HttpOnly; SameSite=Lax");
+    check(response.header("Set-Cookie") == "session=id; Path=/; HttpOnly; SameSite=Lax");
 }
 
 void exerciseCookieValidationThrows(ruvia::RequestMemory& memory, const ruvia::HttpRequest& request) {
@@ -186,8 +151,7 @@ void exerciseSignedCookieRoundtrip(ruvia::RequestMemory& memory, const ruvia::Ht
     auto writer = ruvia::detail::ContextAccess::make(memory, request);
     writer.setSignedCookie("sid", "hello", kSecret);
     auto response = writer.text("x");
-    const std::string generated(
-        response.header("Set-Cookie").value_or(std::string_view{}));
+    const std::string generated(response.header("Set-Cookie").value_or(std::string_view{}));
     const auto generatedView = std::string_view(generated);
     const auto cookiePair = generatedView.substr(0, generatedView.find(';'));
 
@@ -235,10 +199,7 @@ void exerciseDeleteCookieUsesRequestFacadeForPreviousValue(ruvia::RequestMemory&
 
 void exerciseByteSpanBody(ruvia::RequestMemory& memory, const ruvia::HttpRequest& request) {
     auto context = ruvia::detail::ContextAccess::make(memory, request);
-    static constexpr std::array<std::byte, 3> bytes{
-        std::byte{0x00},
-        std::byte{0x41},
-        std::byte{0xff}};
+    static constexpr std::array<std::byte, 3> bytes{std::byte{0x00}, std::byte{0x41}, std::byte{0xff}};
     context.status(ruvia::http_status::kPartialContent);
     context.header("X-Bin", "1");
     auto response = context.body(std::span<const std::byte>(bytes));
@@ -247,8 +208,7 @@ void exerciseByteSpanBody(ruvia::RequestMemory& memory, const ruvia::HttpRequest
     check(!response.header("Content-Type").has_value());
     const auto body = ruvia::detail::responseBody(response).bytes();
     check(body.size() == 3);
-    check(body.size() == 3 && body[0] == '\0' && body[1] == 'A' &&
-        static_cast<unsigned char>(body[2]) == 0xff);
+    check(body.size() == 3 && body[0] == '\0' && body[1] == 'A' && static_cast<unsigned char>(body[2]) == 0xff);
 }
 
 }  // namespace

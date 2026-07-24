@@ -17,9 +17,7 @@ namespace ruvia::detail {
 
 class HttpByteRangeResolution;
 
-[[nodiscard]] inline HttpByteRangeResolution resolveHttpByteRange(
-    std::string_view fieldValue,
-    std::uint64_t representationLength) noexcept;
+[[nodiscard]] inline HttpByteRangeResolution resolveHttpByteRange(std::string_view fieldValue, std::uint64_t representationLength) noexcept;
 
 class HttpByteRangeIgnored final {
 private:
@@ -50,12 +48,10 @@ public:
 private:
     friend class HttpByteRangeResolution;
 
-    constexpr HttpResolvedByteRange(
-        std::uint64_t offset,
-        std::uint64_t length) noexcept
-        : offset_(offset), length_(length) {
-        if (length_ == 0 ||
-            offset_ > (std::numeric_limits<std::uint64_t>::max)() - length_) {
+    constexpr HttpResolvedByteRange(std::uint64_t offset, std::uint64_t length) noexcept
+        : offset_(offset),
+          length_(length) {
+        if (length_ == 0 || offset_ > (std::numeric_limits<std::uint64_t>::max)() - length_) {
             std::terminate();
         }
     }
@@ -69,32 +65,25 @@ private:
 // No status can be paired with default offset/length coordinates.
 class HttpByteRangeResolution final {
 public:
-    [[nodiscard]] constexpr const HttpByteRangeIgnored* ignored() const & noexcept {
+    [[nodiscard]] constexpr const HttpByteRangeIgnored* ignored() const& noexcept {
         return std::get_if<HttpByteRangeIgnored>(&value_);
     }
-    [[nodiscard]] constexpr const HttpByteRangeIgnored* ignored() const && = delete;
+    [[nodiscard]] constexpr const HttpByteRangeIgnored* ignored() const&& = delete;
 
-    [[nodiscard]] constexpr const HttpByteRangeUnsatisfiable*
-    unsatisfiable() const & noexcept {
+    [[nodiscard]] constexpr const HttpByteRangeUnsatisfiable* unsatisfiable() const& noexcept {
         return std::get_if<HttpByteRangeUnsatisfiable>(&value_);
     }
-    [[nodiscard]] constexpr const HttpByteRangeUnsatisfiable*
-    unsatisfiable() const && = delete;
+    [[nodiscard]] constexpr const HttpByteRangeUnsatisfiable* unsatisfiable() const&& = delete;
 
-    [[nodiscard]] constexpr const HttpResolvedByteRange* resolved() const & noexcept {
+    [[nodiscard]] constexpr const HttpResolvedByteRange* resolved() const& noexcept {
         return std::get_if<HttpResolvedByteRange>(&value_);
     }
-    [[nodiscard]] constexpr const HttpResolvedByteRange* resolved() const && = delete;
+    [[nodiscard]] constexpr const HttpResolvedByteRange* resolved() const&& = delete;
 
 private:
-    friend HttpByteRangeResolution resolveHttpByteRange(
-        std::string_view,
-        std::uint64_t) noexcept;
+    friend HttpByteRangeResolution resolveHttpByteRange(std::string_view, std::uint64_t) noexcept;
 
-    using Value = std::variant<
-        HttpByteRangeIgnored,
-        HttpByteRangeUnsatisfiable,
-        HttpResolvedByteRange>;
+    using Value = std::variant<HttpByteRangeIgnored, HttpByteRangeUnsatisfiable, HttpResolvedByteRange>;
 
     template <typename Alternative>
     explicit constexpr HttpByteRangeResolution(Alternative alternative) noexcept
@@ -104,28 +93,21 @@ private:
         return HttpByteRangeResolution(HttpByteRangeIgnored());
     }
 
-    [[nodiscard]] static constexpr HttpByteRangeResolution
-    makeUnsatisfiable() noexcept {
+    [[nodiscard]] static constexpr HttpByteRangeResolution makeUnsatisfiable() noexcept {
         return HttpByteRangeResolution(HttpByteRangeUnsatisfiable());
     }
 
-    [[nodiscard]] static constexpr HttpByteRangeResolution makeResolved(
-        std::uint64_t offset,
-        std::uint64_t length) noexcept {
+    [[nodiscard]] static constexpr HttpByteRangeResolution makeResolved(std::uint64_t offset, std::uint64_t length) noexcept {
         return HttpByteRangeResolution(HttpResolvedByteRange(offset, length));
     }
 
     Value value_;
 };
 
-[[nodiscard]] inline HttpByteRangeResolution resolveHttpByteRange(
-    std::string_view fieldValue,
-    std::uint64_t representationLength) noexcept {
+[[nodiscard]] inline HttpByteRangeResolution resolveHttpByteRange(std::string_view fieldValue, std::uint64_t representationLength) noexcept {
     constexpr std::string_view unit = "bytes";
     constexpr std::size_t separatorOffset = unit.size();
-    if (fieldValue.size() <= separatorOffset + 1 ||
-        fieldValue[separatorOffset] != '=' ||
-        !httpAsciiEqualsIgnoreCase(fieldValue.substr(0, separatorOffset), unit)) {
+    if (fieldValue.size() <= separatorOffset + 1 || fieldValue[separatorOffset] != '=' || !httpAsciiEqualsIgnoreCase(fieldValue.substr(0, separatorOffset), unit)) {
         return HttpByteRangeResolution::makeIgnored();
     }
 
@@ -136,14 +118,12 @@ private:
         return HttpByteRangeResolution::makeIgnored();
     }
 
-    const auto parseDecimal = [](std::string_view value) noexcept
-        -> std::optional<std::uint64_t> {
+    const auto parseDecimal = [](std::string_view value) noexcept -> std::optional<std::uint64_t> {
         if (value.empty()) {
             return std::nullopt;
         }
         std::uint64_t parsed = 0;
-        const auto [ptr, ec] = std::from_chars(
-            value.data(), value.data() + value.size(), parsed);
+        const auto [ptr, ec] = std::from_chars(value.data(), value.data() + value.size(), parsed);
         if (ptr != value.data() + value.size()) {
             return std::nullopt;
         }
@@ -153,9 +133,7 @@ private:
             // huge starts are unsatisfiable; huge ends/suffixes clamp to the end.
             return (std::numeric_limits<std::uint64_t>::max)();
         }
-        return ec == std::errc{}
-            ? std::optional<std::uint64_t>(parsed)
-            : std::nullopt;
+        return ec == std::errc{} ? std::optional<std::uint64_t>(parsed) : std::nullopt;
     };
 
     auto spec = fieldValue.substr(separatorOffset + 1);
@@ -184,9 +162,7 @@ private:
         while (right.size() > 1 && right.front() == '0') {
             right.remove_prefix(1);
         }
-        return left.size() != right.size()
-            ? left.size() < right.size()
-            : left < right;
+        return left.size() != right.size() ? left.size() < right.size() : left < right;
     };
     if (first.empty()) {
         const auto suffix = parseDecimal(last);
@@ -197,8 +173,7 @@ private:
             return HttpByteRangeResolution::makeUnsatisfiable();
         }
         const auto length = std::min(*suffix, representationLength);
-        return HttpByteRangeResolution::makeResolved(
-            representationLength - length, length);
+        return HttpByteRangeResolution::makeResolved(representationLength - length, length);
     }
 
     const auto start = parseDecimal(first);
@@ -217,11 +192,8 @@ private:
     if (*start >= representationLength) {
         return HttpByteRangeResolution::makeUnsatisfiable();
     }
-    const auto clampedEnd = last.empty()
-        ? representationLength - 1
-        : std::min(end, representationLength - 1);
-    return HttpByteRangeResolution::makeResolved(
-        *start, clampedEnd - *start + 1);
+    const auto clampedEnd = last.empty() ? representationLength - 1 : std::min(end, representationLength - 1);
+    return HttpByteRangeResolution::makeResolved(*start, clampedEnd - *start + 1);
 }
 
 }  // namespace ruvia::detail

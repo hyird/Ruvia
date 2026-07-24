@@ -15,9 +15,7 @@ enum class WorkerTimerOutcome : std::uint8_t {
 };
 
 template <typename Rep, typename Period>
-[[nodiscard]] inline std::chrono::steady_clock::duration
-workerTimerSaturatingDurationCast(
-    std::chrono::duration<Rep, Period> value) {
+[[nodiscard]] inline std::chrono::steady_clock::duration workerTimerSaturatingDurationCast(std::chrono::duration<Rep, Period> value) {
     using Target = std::chrono::steady_clock::duration;
     using Wide = std::chrono::duration<long double, typename Target::period>;
     const auto count = std::chrono::duration_cast<Wide>(value).count();
@@ -35,34 +33,24 @@ workerTimerSaturatingDurationCast(
     return Target(static_cast<typename Target::rep>(count));
 }
 
-[[nodiscard]] inline std::chrono::steady_clock::time_point
-workerTimerSaturatingDeadline(
-    std::chrono::steady_clock::time_point now,
-    std::chrono::steady_clock::duration delay) noexcept {
+[[nodiscard]] inline std::chrono::steady_clock::time_point workerTimerSaturatingDeadline(std::chrono::steady_clock::time_point now, std::chrono::steady_clock::duration delay) noexcept {
     if (delay <= std::chrono::steady_clock::duration::zero()) {
         return now;
     }
-    constexpr auto maximum =
-        std::chrono::steady_clock::time_point::max();
+    constexpr auto maximum = std::chrono::steady_clock::time_point::max();
     if (now > maximum - delay) {
         return maximum;
     }
     return now + delay;
 }
 
-[[nodiscard]] inline std::chrono::steady_clock::time_point
-workerTimerDeadlineAfter(
-    std::chrono::steady_clock::duration delay) noexcept {
-    return workerTimerSaturatingDeadline(
-        std::chrono::steady_clock::now(), delay);
+[[nodiscard]] inline std::chrono::steady_clock::time_point workerTimerDeadlineAfter(std::chrono::steady_clock::duration delay) noexcept {
+    return workerTimerSaturatingDeadline(std::chrono::steady_clock::now(), delay);
 }
 
 template <typename Rep, typename Period>
-[[nodiscard]] inline std::chrono::steady_clock::time_point
-workerTimerDeadlineAfter(std::chrono::duration<Rep, Period> delay) {
-    return workerTimerSaturatingDeadline(
-        std::chrono::steady_clock::now(),
-        workerTimerSaturatingDurationCast(delay));
+[[nodiscard]] inline std::chrono::steady_clock::time_point workerTimerDeadlineAfter(std::chrono::duration<Rep, Period> delay) {
+    return workerTimerSaturatingDeadline(std::chrono::steady_clock::now(), workerTimerSaturatingDurationCast(delay));
 }
 
 class WorkerTimerRegistration final {
@@ -82,9 +70,7 @@ public:
     [[nodiscard]] bool registered() const noexcept;
 
 private:
-    void bind(WorkerDispatcher& dispatcher,
-              std::size_t slot,
-              std::uint64_t generation) noexcept;
+    void bind(WorkerDispatcher& dispatcher, std::size_t slot, std::uint64_t generation) noexcept;
     void release() noexcept;
 
     // The handle supplied to scheduleTimer() must outlive this registration.
@@ -96,4 +82,4 @@ private:
     friend class WorkerDispatcher;
 };
 
-}
+}  // namespace ruvia::detail

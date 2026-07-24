@@ -14,12 +14,7 @@ namespace ruvia::detail {
 
 // Shared model traits used by parser, validation rules, and generated macros.
 
-enum class ModelFieldState : std::uint8_t {
-    kMissing,
-    kParsed,
-    kInvalidType,
-    kDuplicate
-};
+enum class ModelFieldState : std::uint8_t { kMissing, kParsed, kInvalidType, kDuplicate };
 
 template <typename>
 inline constexpr bool alwaysFalse = false;
@@ -52,43 +47,55 @@ inline constexpr bool isRuviaList = RuviaListTraits<std::remove_cvref_t<T>>::val
 template <typename T>
 struct RuviaScalarTraits : std::false_type {};
 
-template <> struct RuviaScalarTraits<Bool> : std::true_type { using value_type = bool; };
-template <> struct RuviaScalarTraits<Float> : std::true_type { using value_type = float; };
-template <> struct RuviaScalarTraits<Double> : std::true_type { using value_type = double; };
-template <> struct RuviaScalarTraits<Int32> : std::true_type { using value_type = std::int32_t; };
-template <> struct RuviaScalarTraits<UInt32> : std::true_type { using value_type = std::uint32_t; };
-template <> struct RuviaScalarTraits<Int64> : std::true_type { using value_type = std::int64_t; };
-template <> struct RuviaScalarTraits<UInt64> : std::true_type { using value_type = std::uint64_t; };
+template <>
+struct RuviaScalarTraits<Bool> : std::true_type {
+    using value_type = bool;
+};
+template <>
+struct RuviaScalarTraits<Float> : std::true_type {
+    using value_type = float;
+};
+template <>
+struct RuviaScalarTraits<Double> : std::true_type {
+    using value_type = double;
+};
+template <>
+struct RuviaScalarTraits<Int32> : std::true_type {
+    using value_type = std::int32_t;
+};
+template <>
+struct RuviaScalarTraits<UInt32> : std::true_type {
+    using value_type = std::uint32_t;
+};
+template <>
+struct RuviaScalarTraits<Int64> : std::true_type {
+    using value_type = std::int64_t;
+};
+template <>
+struct RuviaScalarTraits<UInt64> : std::true_type {
+    using value_type = std::uint64_t;
+};
 
 template <typename T>
 inline constexpr bool isRuviaScalar = RuviaScalarTraits<std::remove_cvref_t<T>>::value;
 
 template <typename T>
-inline constexpr bool isFormField =
-    isRuviaString<T> || isRuviaScalar<T>;
+inline constexpr bool isFormField = isRuviaString<T> || isRuviaScalar<T>;
 
 template <typename T>
-inline constexpr bool isRequestModelField =
-    isRuviaString<T> || isRuviaArray<T> || isRuviaList<T> || JsonBody<std::remove_cvref_t<T>>::value ||
-    isRuviaScalar<T>;
+inline constexpr bool isRequestModelField = isRuviaString<T> || isRuviaArray<T> || isRuviaList<T> || JsonBody<std::remove_cvref_t<T>>::value || isRuviaScalar<T>;
 
 template <typename T>
-inline constexpr bool isRequestModel =
-    JsonBody<std::remove_cvref_t<T>>::value;
+inline constexpr bool isRequestModel = JsonBody<std::remove_cvref_t<T>>::value;
 
 template <typename T>
-inline constexpr bool isResponseModel =
-    JsonBody<std::remove_cvref_t<T>>::value;
+inline constexpr bool isResponseModel = JsonBody<std::remove_cvref_t<T>>::value;
 
 template <typename T>
-inline constexpr bool isResponseModelField =
-    isRuviaString<T> || isRuviaArray<T> || isRuviaList<T> || isResponseModel<T> ||
-    isRuviaScalar<T>;
+inline constexpr bool isResponseModelField = isRuviaString<T> || isRuviaArray<T> || isRuviaList<T> || isResponseModel<T> || isRuviaScalar<T>;
 
 template <typename T>
-[[nodiscard]] T makeRequestValue(
-    ResolvedPmrResourceTag,
-    std::pmr::memory_resource* resource) {
+[[nodiscard]] T makeRequestValue(ResolvedPmrResourceTag, std::pmr::memory_resource* resource) {
     if constexpr (isRuviaString<T>) {
         return ModelValueFactory::makeString(resource);
     } else if constexpr (isRuviaArray<T>) {
@@ -106,11 +113,7 @@ template <typename T>
 
 template <typename T>
 [[nodiscard]] T makeRequestValue(std::pmr::memory_resource* resource) {
-    if constexpr (
-        isRuviaString<T> ||
-        isRuviaArray<T> ||
-        isRuviaList<T> ||
-        JsonBody<std::remove_cvref_t<T>>::value) {
+    if constexpr (isRuviaString<T> || isRuviaArray<T> || isRuviaList<T> || JsonBody<std::remove_cvref_t<T>>::value) {
         return makeRequestValue<T>(ResolvedPmrResourceTag{}, pmrResourceOrDefault(resource));
     } else {
         (void)resource;

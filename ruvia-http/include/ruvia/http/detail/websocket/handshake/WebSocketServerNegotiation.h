@@ -19,16 +19,14 @@ namespace ruvia::detail {
 class WebSocketServerNegotiation final {
 public:
     WebSocketServerNegotiation(const WebSocketServerNegotiation&) = delete;
-    WebSocketServerNegotiation& operator=(
-        const WebSocketServerNegotiation&) = delete;
+    WebSocketServerNegotiation& operator=(const WebSocketServerNegotiation&) = delete;
     WebSocketServerNegotiation(WebSocketServerNegotiation&&) noexcept = default;
-    WebSocketServerNegotiation& operator=(
-        WebSocketServerNegotiation&&) = delete;
+    WebSocketServerNegotiation& operator=(WebSocketServerNegotiation&&) = delete;
 
-    [[nodiscard]] std::string_view subprotocol() const & noexcept {
+    [[nodiscard]] std::string_view subprotocol() const& noexcept {
         return subprotocol_;
     }
-    std::string_view subprotocol() const && = delete;
+    std::string_view subprotocol() const&& = delete;
 
     [[nodiscard]] WebSocketDeflateNegotiation deflate() const noexcept {
         return deflate_;
@@ -39,24 +37,14 @@ public:
     }
 
 private:
-    friend WebSocketServerNegotiation makeWebSocketServerNegotiation(
-        const HttpRequest&,
-        std::string_view,
-        std::pmr::memory_resource*);
+    friend WebSocketServerNegotiation makeWebSocketServerNegotiation(const HttpRequest&, std::string_view, std::pmr::memory_resource*);
 
-    WebSocketServerNegotiation(
-        std::string_view subprotocol,
-        WebSocketDeflateNegotiation deflate,
-        std::pmr::memory_resource* resource);
+    WebSocketServerNegotiation(std::string_view subprotocol, WebSocketDeflateNegotiation deflate, std::pmr::memory_resource* resource);
 
     std::pmr::string subprotocol_;
     WebSocketDeflateNegotiation deflate_;
 };
 
-[[nodiscard]] WebSocketServerNegotiation
-makeWebSocketServerNegotiation(
-    const HttpRequest& request,
-    std::string_view supportedSubprotocols,
-    std::pmr::memory_resource* resource = nullptr);
+[[nodiscard]] WebSocketServerNegotiation makeWebSocketServerNegotiation(const HttpRequest& request, std::string_view supportedSubprotocols, std::pmr::memory_resource* resource = nullptr);
 
 }  // namespace ruvia::detail

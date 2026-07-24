@@ -34,34 +34,26 @@ struct Registrar {
 
 inline void reportFailure(TestContext& ctx, const char* file, int line, std::string_view expr) {
     ++ctx.failures;
-    std::fprintf(
-        stderr,
-        "  [FAIL] %s\n    at %s:%d\n    check: %.*s\n",
-        ctx.current,
-        file,
-        line,
-        static_cast<int>(expr.size()),
-        expr.data());
+    std::fprintf(stderr, "  [FAIL] %s\n    at %s:%d\n    check: %.*s\n", ctx.current, file, line, static_cast<int>(expr.size()), expr.data());
 }
 
 }  // namespace ruvia::testing
 
-#define RUVIA_TEST(name)                                                            \
-    static void name(ruvia::testing::TestContext&);                                 \
-    static const ruvia::testing::Registrar ruvia_reg_##name{#name, &name};          \
+#define RUVIA_TEST(name)                                                   \
+    static void name(ruvia::testing::TestContext&);                        \
+    static const ruvia::testing::Registrar ruvia_reg_##name{#name, &name}; \
     static void name([[maybe_unused]] ruvia::testing::TestContext& ruvia_ctx)
 
-#define RUVIA_CHECK(cond)                                                           \
-    do {                                                                            \
-        if (!(cond)) {                                                              \
-            ruvia::testing::reportFailure(ruvia_ctx, __FILE__, __LINE__, #cond);    \
-        }                                                                           \
+#define RUVIA_CHECK(cond)                                                        \
+    do {                                                                         \
+        if (!(cond)) {                                                           \
+            ruvia::testing::reportFailure(ruvia_ctx, __FILE__, __LINE__, #cond); \
+        }                                                                        \
     } while (0)
 
-#define RUVIA_CHECK_EQ(a, b)                                                        \
-    do {                                                                            \
-        if (!((a) == (b))) {                                                        \
-            ruvia::testing::reportFailure(ruvia_ctx, __FILE__, __LINE__,            \
-                                          #a " == " #b);                            \
-        }                                                                           \
+#define RUVIA_CHECK_EQ(a, b)                                                            \
+    do {                                                                                \
+        if (!((a) == (b))) {                                                            \
+            ruvia::testing::reportFailure(ruvia_ctx, __FILE__, __LINE__, #a " == " #b); \
+        }                                                                               \
     } while (0)

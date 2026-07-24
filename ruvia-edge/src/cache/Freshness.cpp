@@ -70,8 +70,7 @@ FreshnessDecision evaluateFreshness(const FreshnessInput& input) noexcept {
     // RFC 9111 section 3.5 permits a shared cache to store/reuse a response to
     // an authenticated request only when one of these response directives
     // explicitly opts into shared caching. `proxy-revalidate` alone does not.
-    if (input.requestHasAuthorization &&
-        !cc.mustRevalidate && !cc.isPublic && !cc.sMaxAge) {
+    if (input.requestHasAuthorization && !cc.mustRevalidate && !cc.isPublic && !cc.sMaxAge) {
         return {};
     }
     if (!statusIsStorable(input.status)) {
@@ -91,15 +90,9 @@ FreshnessDecision evaluateFreshness(const FreshnessInput& input) noexcept {
     if (input.dateHeader && input.now > *input.dateHeader) {
         apparentAge = static_cast<std::uint64_t>(input.now - *input.dateHeader);
     }
-    const std::uint64_t responseDelay =
-        input.requestTime > 0 && input.now > input.requestTime
-        ? static_cast<std::uint64_t>(input.now - input.requestTime)
-        : std::uint64_t{0};
+    const std::uint64_t responseDelay = input.requestTime > 0 && input.now > input.requestTime ? static_cast<std::uint64_t>(input.now - input.requestTime) : std::uint64_t{0};
     const auto maximum = (std::numeric_limits<std::uint64_t>::max)();
-    const std::uint64_t correctedAgeValue =
-        input.ageHeader > maximum - responseDelay
-        ? maximum
-        : input.ageHeader + responseDelay;
+    const std::uint64_t correctedAgeValue = input.ageHeader > maximum - responseDelay ? maximum : input.ageHeader + responseDelay;
     const std::uint64_t initialAge = std::max(correctedAgeValue, apparentAge);
 
     if (initialAge >= *lifetime) {
@@ -116,12 +109,7 @@ FreshnessDecision evaluateFreshness(const FreshnessInput& input) noexcept {
     return decision;
 }
 
-FreshnessInput buildFreshnessInput(
-    std::uint16_t status,
-    const Headers& headers,
-    std::time_t now,
-    std::time_t requestTime,
-    bool requestHasAuthorization) {
+FreshnessInput buildFreshnessInput(std::uint16_t status, const Headers& headers, std::time_t now, std::time_t requestTime, bool requestHasAuthorization) {
     FreshnessInput input;
     input.status = status;
     input.now = now;

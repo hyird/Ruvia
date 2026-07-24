@@ -44,10 +44,8 @@ public:
 #else
         LARGE_INTEGER position;
         position.QuadPart = static_cast<LONGLONG>(offset);
-        if (::SetFilePointerEx(
-                handle_.get(), position, nullptr, FILE_BEGIN) == 0) {
-            error_ = std::error_code(
-                static_cast<int>(::GetLastError()), std::system_category());
+        if (::SetFilePointerEx(handle_.get(), position, nullptr, FILE_BEGIN) == 0) {
+            error_ = std::error_code(static_cast<int>(::GetLastError()), std::system_category());
         }
 #endif
     }
@@ -59,24 +57,17 @@ public:
             return;
         }
 #if defined(__unix__) || defined(__APPLE__)
-        const auto result = ::read(
-            handle_.get(), output, static_cast<std::size_t>(size));
+        const auto result = ::read(handle_.get(), output, static_cast<std::size_t>(size));
         if (result < 0) {
             error_ = std::error_code(errno, std::system_category());
             return;
         }
         lastRead_ = static_cast<std::streamsize>(result);
 #else
-        const auto requested = static_cast<DWORD>(
-            std::min<std::uint64_t>(
-                static_cast<std::uint64_t>(size),
-                static_cast<std::uint64_t>(
-                    (std::numeric_limits<DWORD>::max)())));
+        const auto requested = static_cast<DWORD>(std::min<std::uint64_t>(static_cast<std::uint64_t>(size), static_cast<std::uint64_t>((std::numeric_limits<DWORD>::max)())));
         DWORD result = 0;
-        if (::ReadFile(
-                handle_.get(), output, requested, &result, nullptr) == 0) {
-            error_ = std::error_code(
-                static_cast<int>(::GetLastError()), std::system_category());
+        if (::ReadFile(handle_.get(), output, requested, &result, nullptr) == 0) {
+            error_ = std::error_code(static_cast<int>(::GetLastError()), std::system_category());
             return;
         }
         lastRead_ = static_cast<std::streamsize>(result);
@@ -127,8 +118,7 @@ private:
 };
 #endif
 
-[[nodiscard]] inline ResponseFileInput openResponseFileInput(
-    ResponseFileBody file) {
+[[nodiscard]] inline ResponseFileInput openResponseFileInput(ResponseFileBody file) {
     return ResponseFileInput(file);
 }
 

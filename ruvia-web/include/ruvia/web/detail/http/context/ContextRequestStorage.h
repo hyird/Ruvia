@@ -16,9 +16,7 @@ namespace ruvia::detail {
 // explicit alternatives and require neither erased cleanup callbacks nor one
 // arena allocation per C++ object.
 struct RequestFieldCache final {
-    RequestFieldCache(
-        std::pmr::vector<std::pmr::string>&& ownedStorage,
-        RequestNameValueList&& ownedFields) noexcept
+    RequestFieldCache(std::pmr::vector<std::pmr::string>&& ownedStorage, RequestNameValueList&& ownedFields) noexcept
         : storage(std::move(ownedStorage)),
           fields(std::move(ownedFields)) {}
 

@@ -31,28 +31,35 @@ JwtPayload::JwtPayload(std::pmr::memory_resource* resource)
       id_(issuer_.get_allocator().resource()),
       claims_(issuer_.get_allocator().resource()) {}
 
-std::string_view JwtPayload::issuer() const & noexcept { return issuer_; }
-std::string_view JwtPayload::subject() const & noexcept { return subject_; }
-std::string_view JwtPayload::audience() const & noexcept {
+std::string_view JwtPayload::issuer() const& noexcept {
+    return issuer_;
+}
+std::string_view JwtPayload::subject() const& noexcept {
+    return subject_;
+}
+std::string_view JwtPayload::audience() const& noexcept {
     return audiences_.empty() ? std::string_view{} : std::string_view(audiences_.front());
 }
 bool JwtPayload::hasAudience(std::string_view audience) const noexcept {
-    return std::ranges::find(
-               audiences_,
-               audience,
-               [](const auto& value) noexcept { return std::string_view(value); }) !=
-        audiences_.end();
+    return std::ranges::find(audiences_, audience, [](const auto& value) noexcept { return std::string_view(value); }) != audiences_.end();
 }
-std::string_view JwtPayload::id() const & noexcept { return id_; }
-std::optional<std::chrono::system_clock::time_point> JwtPayload::expiresAt() const noexcept { return expiresAt_; }
-std::optional<std::chrono::system_clock::time_point> JwtPayload::notBefore() const noexcept { return notBefore_; }
-std::optional<std::chrono::system_clock::time_point> JwtPayload::issuedAt() const noexcept { return issuedAt_; }
-std::span<const JwtClaim> JwtPayload::claims() const & noexcept {
+std::string_view JwtPayload::id() const& noexcept {
+    return id_;
+}
+std::optional<std::chrono::system_clock::time_point> JwtPayload::expiresAt() const noexcept {
+    return expiresAt_;
+}
+std::optional<std::chrono::system_clock::time_point> JwtPayload::notBefore() const noexcept {
+    return notBefore_;
+}
+std::optional<std::chrono::system_clock::time_point> JwtPayload::issuedAt() const noexcept {
+    return issuedAt_;
+}
+std::span<const JwtClaim> JwtPayload::claims() const& noexcept {
     return claims_;
 }
 
-std::optional<std::string_view>
-JwtPayload::claim(std::string_view name) const & noexcept {
+std::optional<std::string_view> JwtPayload::claim(std::string_view name) const& noexcept {
     for (const auto& item : claims_) {
         if (item.name() == name) {
             return item.value();
@@ -63,9 +70,7 @@ JwtPayload::claim(std::string_view name) const & noexcept {
 
 std::pmr::string jwtSign(const JwtSignOptions& options, std::pmr::memory_resource* resource) {
     validateJwtCustomClaims(options.claims);
-    if ((options.expiresIn.has_value() && options.expiresIn->count() < 0) ||
-        (options.notBeforeDelay.has_value() &&
-         options.notBeforeDelay->count() < 0)) {
+    if ((options.expiresIn.has_value() && options.expiresIn->count() < 0) || (options.notBeforeDelay.has_value() && options.notBeforeDelay->count() < 0)) {
         throw std::invalid_argument("JWT signing time offsets must not be negative");
     }
     auto* resolved = detail::pmrResourceOrDefault(resource);
@@ -78,18 +83,24 @@ std::pmr::string jwtSign(const JwtSignOptions& options, std::pmr::memory_resourc
     std::pmr::string payload(resolved);
     payload.push_back('{');
     bool first = true;
-    if (!options.issuer.empty()) { detail::jwtAppendJsonMember(payload, first, "iss", options.issuer); }
-    if (!options.subject.empty()) { detail::jwtAppendJsonMember(payload, first, "sub", options.subject); }
-    if (!options.audience.empty()) { detail::jwtAppendJsonMember(payload, first, "aud", options.audience); }
-    if (!options.id.empty()) { detail::jwtAppendJsonMember(payload, first, "jti", options.id); }
+    if (!options.issuer.empty()) {
+        detail::jwtAppendJsonMember(payload, first, "iss", options.issuer);
+    }
+    if (!options.subject.empty()) {
+        detail::jwtAppendJsonMember(payload, first, "sub", options.subject);
+    }
+    if (!options.audience.empty()) {
+        detail::jwtAppendJsonMember(payload, first, "aud", options.audience);
+    }
+    if (!options.id.empty()) {
+        detail::jwtAppendJsonMember(payload, first, "jti", options.id);
+    }
     detail::jwtAppendJsonMember(payload, first, "iat", detail::jwtEpochSeconds(now));
     if (options.expiresIn.has_value()) {
-        detail::jwtAppendJsonMember(payload, first, "exp", detail::jwtEpochSeconds(
-            detail::jwtTimeWithOffset(now, *options.expiresIn)));
+        detail::jwtAppendJsonMember(payload, first, "exp", detail::jwtEpochSeconds(detail::jwtTimeWithOffset(now, *options.expiresIn)));
     }
     if (options.notBeforeDelay.has_value()) {
-        detail::jwtAppendJsonMember(payload, first, "nbf", detail::jwtEpochSeconds(
-            detail::jwtTimeWithOffset(now, *options.notBeforeDelay)));
+        detail::jwtAppendJsonMember(payload, first, "nbf", detail::jwtEpochSeconds(detail::jwtTimeWithOffset(now, *options.notBeforeDelay)));
     }
     for (const auto& claim : options.claims) {
         detail::jwtAppendJsonMember(payload, first, claim.name(), claim.value());
@@ -114,17 +125,12 @@ JwtPayload jwtVerify(std::string_view token, const JwtVerifyOptions& options, st
     }
     auto* resolved = detail::pmrResourceOrDefault(resource);
     const auto parts = detail::jwtSplitToken(token);
-    const auto expected = detail::jwtHmacSign(
-        options.algorithm,
-        options.secret,
-        parts.signingInput,
-        resolved);
+    const auto expected = detail::jwtHmacSign(options.algorithm, options.secret, parts.signingInput, resolved);
     if (!detail::jwtConstantTimeEquals(expected, parts.signature)) {
         throw std::runtime_error("JWT signature verification failed");
     }
     const auto header = detail::jwtBase64UrlDecode(parts.header, resolved);
-    if (detail::jwtParseJoseAlgorithm(header, resolved) !=
-        detail::jwtAlgorithmName(options.algorithm)) {
+    if (detail::jwtParseJoseAlgorithm(header, resolved) != detail::jwtAlgorithmName(options.algorithm)) {
         throw std::runtime_error("JWT algorithm mismatch");
     }
     const auto payloadJson = detail::jwtBase64UrlDecode(parts.payload, resolved);

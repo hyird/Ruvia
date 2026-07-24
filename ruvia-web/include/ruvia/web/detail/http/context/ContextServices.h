@@ -14,7 +14,7 @@
 namespace ruvia {
 class BlockingPool;
 class Env;
-}
+}  // namespace ruvia
 
 namespace ruvia::detail {
 
@@ -29,13 +29,7 @@ public:
     ContextServices() noexcept
         : connInfo_(ConnInfo::plain({})) {}
 
-    ContextServices(
-        DbRegistry* db,
-        RedisRegistry* redis,
-        RateLimiter* rateLimiter = nullptr,
-        std::size_t maxDecodedBodyBytes =
-            kDefaultMaxBufferedBodyBytes,
-        const WorkerHandle* worker = nullptr) noexcept
+    ContextServices(DbRegistry* db, RedisRegistry* redis, RateLimiter* rateLimiter = nullptr, std::size_t maxDecodedBodyBytes = kDefaultMaxBufferedBodyBytes, const WorkerHandle* worker = nullptr) noexcept
         : db_(db),
           redis_(redis),
           rateLimiter_(rateLimiter),
@@ -78,8 +72,7 @@ public:
     }
 
     // The handle is connection-owned and outlives every ContextServices copy.
-    [[nodiscard]] ContextServices withWorker(
-        const WorkerHandle& value) const noexcept {
+    [[nodiscard]] ContextServices withWorker(const WorkerHandle& value) const noexcept {
         auto services = *this;
         services.worker_ = &value;
         return services;
@@ -94,13 +87,11 @@ public:
         return notFoundHandler_;
     }
 
-    [[nodiscard]] constexpr const ContextRequestBodySource& requestBodySource()
-        const noexcept {
+    [[nodiscard]] constexpr const ContextRequestBodySource& requestBodySource() const noexcept {
         return requestBodySource_;
     }
 
-    [[nodiscard]] constexpr const ContextResponseOutput& responseOutput()
-        const noexcept {
+    [[nodiscard]] constexpr const ContextResponseOutput& responseOutput() const noexcept {
         return responseOutput_;
     }
 
@@ -108,15 +99,13 @@ public:
         return connInfo_;
     }
 
-    [[nodiscard]] ContextServices withStreamingRequestBody(
-        BodyReader& value) const noexcept {
+    [[nodiscard]] ContextServices withStreamingRequestBody(BodyReader& value) const noexcept {
         auto services = *this;
         services.requestBodySource_ = ContextRequestBodySource::streaming(value);
         return services;
     }
 
-    [[nodiscard]] ContextServices withLazyRequestBody(
-        RequestBodyLoader& value) const noexcept {
+    [[nodiscard]] ContextServices withLazyRequestBody(RequestBodyLoader& value) const noexcept {
         auto services = *this;
         services.requestBodySource_ = ContextRequestBodySource::lazy(value);
         return services;
@@ -157,8 +146,7 @@ public:
 
     // Process-wide and owned by App::run(), so it outlives every worker that
     // borrows it here.
-    [[nodiscard]] ContextServices withBlockingPool(
-        BlockingPool* value) const noexcept {
+    [[nodiscard]] ContextServices withBlockingPool(BlockingPool* value) const noexcept {
         auto services = *this;
         services.blockingPool_ = value;
         return services;
@@ -169,8 +157,7 @@ public:
     }
 
     // The registry is worker-owned and outlives every dispatched request.
-    [[nodiscard]] ContextServices withWorkerStates(
-        const WorkerStateRegistry& value) const noexcept {
+    [[nodiscard]] ContextServices withWorkerStates(const WorkerStateRegistry& value) const noexcept {
         auto services = *this;
         services.workerStates_ = &value;
         return services;
@@ -178,36 +165,26 @@ public:
 
     // Views borrow connection-owned storage and remain valid for every Context
     // created while that connection is dispatched.
-    [[nodiscard]] ContextServices withPlainTransport(
-        std::string_view remoteAddress) const noexcept {
+    [[nodiscard]] ContextServices withPlainTransport(std::string_view remoteAddress) const noexcept {
         auto services = *this;
         services.connInfo_ = ConnInfo::plain(remoteAddress);
         return services;
     }
 
     template <typename Traits, typename Allocator>
-    ContextServices withPlainTransport(
-        std::basic_string<char, Traits, Allocator>&&) const = delete;
+    ContextServices withPlainTransport(std::basic_string<char, Traits, Allocator>&&) const = delete;
 
-    [[nodiscard]] ContextServices withTlsTransport(
-        std::string_view remoteAddress,
-        std::string_view clientCertificateSubject = {}) const noexcept {
+    [[nodiscard]] ContextServices withTlsTransport(std::string_view remoteAddress, std::string_view clientCertificateSubject = {}) const noexcept {
         auto services = *this;
-        services.connInfo_ = ConnInfo::tls(
-            remoteAddress,
-            clientCertificateSubject);
+        services.connInfo_ = ConnInfo::tls(remoteAddress, clientCertificateSubject);
         return services;
     }
 
     template <typename Traits, typename Allocator>
-    ContextServices withTlsTransport(
-        std::basic_string<char, Traits, Allocator>&&,
-        std::string_view = {}) const = delete;
+    ContextServices withTlsTransport(std::basic_string<char, Traits, Allocator>&&, std::string_view = {}) const = delete;
 
     template <typename Traits, typename Allocator>
-    ContextServices withTlsTransport(
-        std::string_view,
-        std::basic_string<char, Traits, Allocator>&&) const = delete;
+    ContextServices withTlsTransport(std::string_view, std::basic_string<char, Traits, Allocator>&&) const = delete;
 
 private:
     DbRegistry* db_{nullptr};

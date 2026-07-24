@@ -29,9 +29,7 @@ namespace {
 inline constexpr std::size_t kStaticRootLinearLookupLimit = 8;
 
 [[nodiscard]] bool validHeaderValue(std::string_view value) noexcept {
-    return std::ranges::none_of(value, [](char c) noexcept {
-        return c == '\r' || c == '\n' || c == '\0';
-    });
+    return std::ranges::none_of(value, [](char c) noexcept { return c == '\r' || c == '\n' || c == '\0'; });
 }
 
 void validateOptions(const StaticRootOptions& options) {
@@ -39,15 +37,11 @@ void validateOptions(const StaticRootOptions& options) {
         throw std::invalid_argument("invalid static file header value");
     }
     for (const auto& mime : options.mimeTypes) {
-        if (mime.extension.empty() || mime.contentType.empty() ||
-            !validHeaderValue(mime.contentType)) {
+        if (mime.extension.empty() || mime.contentType.empty() || !validHeaderValue(mime.contentType)) {
             throw std::invalid_argument("invalid static file mime type");
         }
     }
-    if (options.indexFile.find('/') != std::string_view::npos ||
-        options.indexFile.find('\\') != std::string_view::npos ||
-        options.indexFile == "." ||
-        options.indexFile == "..") {
+    if (options.indexFile.find('/') != std::string_view::npos || options.indexFile.find('\\') != std::string_view::npos || options.indexFile == "." || options.indexFile == "..") {
         throw std::invalid_argument("invalid static file index name");
     }
 }
@@ -57,8 +51,7 @@ void validateOptions(const StaticRootOptions& options) {
 // leaks .env, .git/config, .htpasswd and similar secrets that happen to sit
 // under a document root.
 [[nodiscard]] bool hasHiddenPathSegment(std::string_view relativeGeneric) noexcept {
-    return relativeGeneric.starts_with('.') ||
-        relativeGeneric.find("/.") != std::string_view::npos;
+    return relativeGeneric.starts_with('.') || relativeGeneric.find("/.") != std::string_view::npos;
 }
 
 [[nodiscard]] detail::StaticRootState* makeStaticRootState() {
@@ -66,9 +59,7 @@ void validateOptions(const StaticRootOptions& options) {
     return detail::constructPmrObject<detail::StaticRootState>(resource, resource);
 }
 
-[[nodiscard]] const detail::StaticRootEntry* findStaticRootEntry(
-    const std::pmr::vector<detail::StaticRootEntry>& entries,
-    std::string_view relativePath) noexcept {
+[[nodiscard]] const detail::StaticRootEntry* findStaticRootEntry(const std::pmr::vector<detail::StaticRootEntry>& entries, std::string_view relativePath) noexcept {
     if (entries.size() <= kStaticRootLinearLookupLimit) {
         for (const auto& entry : entries) {
             if (entry.relativePath == relativePath) {
@@ -78,37 +69,19 @@ void validateOptions(const StaticRootOptions& options) {
         return nullptr;
     }
 
-    const auto iter = std::ranges::lower_bound(
-        entries,
-        relativePath,
-        std::ranges::less{},
-        [](const detail::StaticRootEntry& entry) noexcept {
-            return std::string_view(entry.relativePath);
-        });
+    const auto iter = std::ranges::lower_bound(entries, relativePath, std::ranges::less{}, [](const detail::StaticRootEntry& entry) noexcept { return std::string_view(entry.relativePath); });
     if (iter == entries.end() || std::string_view(iter->relativePath) != relativePath) {
         return nullptr;
     }
     return &*iter;
 }
 
-[[nodiscard]] bool containsStaticDirectory(
-    const std::pmr::vector<std::pmr::string>& directories,
-    std::string_view relativePath) noexcept {
+[[nodiscard]] bool containsStaticDirectory(const std::pmr::vector<std::pmr::string>& directories, std::string_view relativePath) noexcept {
     if (directories.size() <= kStaticRootLinearLookupLimit) {
-        return std::ranges::find(
-                   directories,
-                   relativePath,
-                   [](const auto& directory) noexcept {
-                       return std::string_view(directory);
-                   }) != directories.end();
+        return std::ranges::find(directories, relativePath, [](const auto& directory) noexcept { return std::string_view(directory); }) != directories.end();
     }
 
-    return std::ranges::binary_search(
-        directories,
-        relativePath,
-        [](const auto& left, const auto& right) {
-            return std::string_view(left) < std::string_view(right);
-        });
+    return std::ranges::binary_search(directories, relativePath, [](const auto& left, const auto& right) { return std::string_view(left) < std::string_view(right); });
 }
 
 // A precompressed sidecar (foo.js.br / .gz / .zst) is indexed when its base
@@ -127,9 +100,7 @@ bool detail::StaticRootAccess::hasDirectoryIndex(const StaticRoot& root) noexcep
     return !root.state_->indexFile.empty();
 }
 
-std::optional<detail::StaticRootEntryView> detail::StaticRootAccess::find(
-    const StaticRoot& root,
-    std::string_view relativePath) noexcept {
+std::optional<detail::StaticRootEntryView> detail::StaticRootAccess::find(const StaticRoot& root, std::string_view relativePath) noexcept {
     auto entry = findVariant(root, relativePath);
     if (!entry.has_value() || !entry->directlyServable_) {
         return std::nullopt;
@@ -137,33 +108,17 @@ std::optional<detail::StaticRootEntryView> detail::StaticRootAccess::find(
     return entry;
 }
 
-std::optional<detail::StaticRootEntryView> detail::StaticRootAccess::findVariant(
-    const StaticRoot& root,
-    std::string_view relativePath) noexcept {
+std::optional<detail::StaticRootEntryView> detail::StaticRootAccess::findVariant(const StaticRoot& root, std::string_view relativePath) noexcept {
     const auto& state = *root.state_;
     const auto& entries = state.entries;
     const auto* const entry = findStaticRootEntry(entries, relativePath);
     if (entry == nullptr) {
         return std::nullopt;
     }
-    return detail::StaticRootEntryView(
-        entry->filePath.c_str(),
-        entry->contentType,
-        state.cacheControl,
-        entry->etag,
-        entry->lastModified,
-        entry->size,
-        entry->identity,
-        entry->modifiedToken,
-        entry->modifiedSeconds,
-        state.enableRanges,
-        state.enableValidators,
-        entry->directlyServable);
+    return detail::StaticRootEntryView(entry->filePath.c_str(), entry->contentType, state.cacheControl, entry->etag, entry->lastModified, entry->size, entry->identity, entry->modifiedToken, entry->modifiedSeconds, state.enableRanges, state.enableValidators, entry->directlyServable);
 }
 
-bool detail::StaticRootAccess::isIndexedDirectory(
-    const StaticRoot& root,
-    std::string_view relativePath) noexcept {
+bool detail::StaticRootAccess::isIndexedDirectory(const StaticRoot& root, std::string_view relativePath) noexcept {
     if (!hasDirectoryIndex(root)) {
         return false;
     }
@@ -202,10 +157,7 @@ StaticRoot::StaticRoot(const std::filesystem::path& root, StaticRootOptions opti
         if (std::filesystem::is_symlink(status)) {
             continue;
         }
-        auto relative = filePath
-            .lexically_relative(canonicalRoot)
-            .generic_string<char, std::char_traits<char>, std::pmr::polymorphic_allocator<char>>(
-                std::pmr::polymorphic_allocator<char>(upstream));
+        auto relative = filePath.lexically_relative(canonicalRoot).generic_string<char, std::char_traits<char>, std::pmr::polymorphic_allocator<char>>(std::pmr::polymorphic_allocator<char>(upstream));
         if (relative.empty() || relative.starts_with("../")) {
             continue;
         }
@@ -230,14 +182,12 @@ StaticRoot::StaticRoot(const std::filesystem::path& root, StaticRootOptions opti
         const bool directlyServable = detail::fileTypeAllowed(extension, options);
         bool usableAsSidecar = false;
         if (!directlyServable && isPrecompressedSidecarExtension(extension)) {
-            usableAsSidecar = detail::fileTypeAllowed(
-                detail::lowerStaticFileExtension(filePath.stem(), upstream), options);
+            usableAsSidecar = detail::fileTypeAllowed(detail::lowerStaticFileExtension(filePath.stem(), upstream), options);
         }
         if (!directlyServable && !usableAsSidecar) {
             continue;
         }
-        const auto snapshot = detail::snapshotResponseFile(
-            filePath.c_str(), ec);
+        const auto snapshot = detail::snapshotResponseFile(filePath.c_str(), ec);
         if (ec) {
             ec.clear();
             continue;
@@ -253,20 +203,12 @@ StaticRoot::StaticRoot(const std::filesystem::path& root, StaticRootOptions opti
         entry.modifiedSeconds = snapshot.modifiedSeconds;
         entry.directlyServable = directlyServable;
         if (enableValidators) {
-            entry.etag = detail::makeStaticFileSnapshotEtag(
-                upstream,
-                snapshot.size,
-                snapshot.modifiedToken,
-                snapshot.identity);
-            entry.lastModified = detail::httpFormatDate(
-                upstream,
-                snapshot.modifiedSeconds);
+            entry.etag = detail::makeStaticFileSnapshotEtag(upstream, snapshot.size, snapshot.modifiedToken, snapshot.identity);
+            entry.lastModified = detail::httpFormatDate(upstream, snapshot.modifiedSeconds);
         }
         state.entries.push_back(std::move(entry));
     }
-    std::ranges::sort(state.entries, [](const detail::StaticRootEntry& left, const detail::StaticRootEntry& right) {
-        return left.relativePath < right.relativePath;
-    });
+    std::ranges::sort(state.entries, [](const detail::StaticRootEntry& left, const detail::StaticRootEntry& right) { return left.relativePath < right.relativePath; });
     std::ranges::sort(state.directories);
     state.directories.erase(std::ranges::unique(state.directories).begin(), state.directories.end());
 }

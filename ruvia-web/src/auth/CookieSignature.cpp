@@ -22,8 +22,7 @@ static_assert(kCookieSignatureSize == base64EncodedSize(kHmacSha256Size));
 
 }  // namespace
 
-void writeCookieSignature(
-    char* output, std::string_view secret, std::string_view name, std::string_view value) {
+void writeCookieSignature(char* output, std::string_view secret, std::string_view name, std::string_view value) {
     if (secret.empty()) {
         throw std::invalid_argument("signed cookie secret must not be empty");
     }
@@ -49,15 +48,7 @@ void writeCookieSignature(
 
     std::array<unsigned char, EVP_MAX_MD_SIZE> digest{};
     unsigned int digestSize = 0;
-    if (HMAC(
-            EVP_sha256(),
-            secret.data(),
-            static_cast<int>(secret.size()),
-            reinterpret_cast<const unsigned char*>(message.data()),
-            message.size(),
-            digest.data(),
-            &digestSize) == nullptr ||
-        digestSize != kHmacSha256Size) {
+    if (HMAC(EVP_sha256(), secret.data(), static_cast<int>(secret.size()), reinterpret_cast<const unsigned char*>(message.data()), message.size(), digest.data(), &digestSize) == nullptr || digestSize != kHmacSha256Size) {
         throw std::runtime_error("signed cookie HMAC failed");
     }
     encodeBase64(output, std::span<const std::uint8_t>(digest.data(), digestSize));

@@ -18,8 +18,7 @@ public:
         return ResponseFileIdentity({}, false);
     }
 
-    [[nodiscard]] static constexpr ResponseFileIdentity checked(
-        std::array<std::uint64_t, 4> words) noexcept {
+    [[nodiscard]] static constexpr ResponseFileIdentity checked(std::array<std::uint64_t, 4> words) noexcept {
         return ResponseFileIdentity(words, true);
     }
 
@@ -27,22 +26,17 @@ public:
         return checked_;
     }
 
-    [[nodiscard]] constexpr const std::array<std::uint64_t, 4>& words()
-        const & noexcept {
+    [[nodiscard]] constexpr const std::array<std::uint64_t, 4>& words() const& noexcept {
         return words_;
     }
-    [[nodiscard]] constexpr const std::array<std::uint64_t, 4>& words()
-        const && = delete;
+    [[nodiscard]] constexpr const std::array<std::uint64_t, 4>& words() const&& = delete;
 
-    friend constexpr bool operator==(
-        const ResponseFileIdentity&,
-        const ResponseFileIdentity&) noexcept = default;
+    friend constexpr bool operator==(const ResponseFileIdentity&, const ResponseFileIdentity&) noexcept = default;
 
 private:
-    constexpr ResponseFileIdentity(
-        std::array<std::uint64_t, 4> words,
-        bool checked) noexcept
-        : words_(words), checked_(checked) {}
+    constexpr ResponseFileIdentity(std::array<std::uint64_t, 4> words, bool checked) noexcept
+        : words_(words),
+          checked_(checked) {}
 
     std::array<std::uint64_t, 4> words_{};
     bool checked_{false};
@@ -55,8 +49,7 @@ class HttpResponseBody;
 // replaced or destroyed.
 class ResponseFileBody final {
 public:
-    [[nodiscard]] constexpr const HttpNativePathChar* nativePathCStr()
-        const noexcept {
+    [[nodiscard]] constexpr const HttpNativePathChar* nativePathCStr() const noexcept {
         return nativePath_;
     }
 
@@ -83,12 +76,7 @@ public:
 private:
     friend class HttpResponseBody;
 
-    constexpr ResponseFileBody(
-        const HttpNativePathChar* nativePath,
-        std::uint64_t size,
-        std::uint64_t offset,
-        std::uint64_t length,
-        ResponseFileIdentity identity) noexcept
+    constexpr ResponseFileBody(const HttpNativePathChar* nativePath, std::uint64_t size, std::uint64_t offset, std::uint64_t length, ResponseFileIdentity identity) noexcept
         : nativePath_(nativePath),
           size_(size),
           offset_(offset),

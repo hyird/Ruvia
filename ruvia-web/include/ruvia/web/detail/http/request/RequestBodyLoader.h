@@ -14,7 +14,9 @@ public:
     using Discard = Task<void> (*)(void*);
 
     constexpr RequestBodyLoader(void* target, ReadAll readAll, Discard discard) noexcept
-        : target_(target), readAll_(readAll), discard_(discard) {}
+        : target_(target),
+          readAll_(readAll),
+          discard_(discard) {}
 
     RequestBodyLoader(const RequestBodyLoader&) = delete;
     RequestBodyLoader& operator=(const RequestBodyLoader&) = delete;
@@ -71,7 +73,8 @@ private:
 
     class OperationGuard final {
     public:
-        explicit OperationGuard(State& state) noexcept : state_(state) {}
+        explicit OperationGuard(State& state) noexcept
+            : state_(state) {}
 
         ~OperationGuard() {
             if (!committed_) {

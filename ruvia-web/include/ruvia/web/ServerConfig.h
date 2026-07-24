@@ -36,31 +36,25 @@ struct ConnectionFailureSink;
 
 class TlsIdentity final {
 public:
-    [[nodiscard]] static TlsIdentity fromFiles(
-        std::filesystem::path certificateChainFile,
-        std::filesystem::path privateKeyFile,
-        std::pmr::string privateKeyPassword = {});
+    [[nodiscard]] static TlsIdentity fromFiles(std::filesystem::path certificateChainFile, std::filesystem::path privateKeyFile, std::pmr::string privateKeyPassword = {});
 
-    [[nodiscard]] const std::filesystem::path& certificateChainFile() const & noexcept {
+    [[nodiscard]] const std::filesystem::path& certificateChainFile() const& noexcept {
         return certificateChainFile_;
     }
-    const std::filesystem::path& certificateChainFile() const && = delete;
+    const std::filesystem::path& certificateChainFile() const&& = delete;
 
-    [[nodiscard]] const std::filesystem::path& privateKeyFile() const & noexcept {
+    [[nodiscard]] const std::filesystem::path& privateKeyFile() const& noexcept {
         return privateKeyFile_;
     }
-    const std::filesystem::path& privateKeyFile() const && = delete;
+    const std::filesystem::path& privateKeyFile() const&& = delete;
 
-    [[nodiscard]] const std::pmr::string& privateKeyPassword() const & noexcept {
+    [[nodiscard]] const std::pmr::string& privateKeyPassword() const& noexcept {
         return privateKeyPassword_;
     }
-    const std::pmr::string& privateKeyPassword() const && = delete;
+    const std::pmr::string& privateKeyPassword() const&& = delete;
 
 private:
-    TlsIdentity(
-        std::filesystem::path certificateChainFile,
-        std::filesystem::path privateKeyFile,
-        std::pmr::string privateKeyPassword) noexcept
+    TlsIdentity(std::filesystem::path certificateChainFile, std::filesystem::path privateKeyFile, std::pmr::string privateKeyPassword) noexcept
         : certificateChainFile_(std::move(certificateChainFile)),
           privateKeyFile_(std::move(privateKeyFile)),
           privateKeyPassword_(std::move(privateKeyPassword)) {}
@@ -79,26 +73,22 @@ class TlsClientCertificatePolicy final {
 public:
     // A CA bundle used to verify presented client certificates. Optional mode
     // admits a client without a certificate; required mode rejects it.
-    [[nodiscard]] static TlsClientCertificatePolicy optional(
-        std::filesystem::path verifyFile);
-    [[nodiscard]] static TlsClientCertificatePolicy required(
-        std::filesystem::path verifyFile);
+    [[nodiscard]] static TlsClientCertificatePolicy optional(std::filesystem::path verifyFile);
+    [[nodiscard]] static TlsClientCertificatePolicy required(std::filesystem::path verifyFile);
 
-    [[nodiscard]] const std::filesystem::path& verifyFile() const & noexcept {
+    [[nodiscard]] const std::filesystem::path& verifyFile() const& noexcept {
         return verifyFile_;
     }
-    const std::filesystem::path& verifyFile() const && = delete;
+    const std::filesystem::path& verifyFile() const&& = delete;
 
-    [[nodiscard]] constexpr TlsClientCertificateRequirement requirement()
-        const noexcept {
+    [[nodiscard]] constexpr TlsClientCertificateRequirement requirement() const noexcept {
         return requirement_;
     }
 
 private:
-    TlsClientCertificatePolicy(
-        std::filesystem::path verifyFile,
-        TlsClientCertificateRequirement requirement) noexcept
-        : verifyFile_(std::move(verifyFile)), requirement_(requirement) {}
+    TlsClientCertificatePolicy(std::filesystem::path verifyFile, TlsClientCertificateRequirement requirement) noexcept
+        : verifyFile_(std::move(verifyFile)),
+          requirement_(requirement) {}
 
     std::filesystem::path verifyFile_;
     TlsClientCertificateRequirement requirement_;
@@ -106,16 +96,21 @@ private:
 
 class TlsSniIdentity final {
 public:
-    [[nodiscard]] std::string_view host() const & noexcept { return host_; }
-    std::string_view host() const && = delete;
-    [[nodiscard]] const TlsIdentity& identity() const & noexcept { return identity_; }
-    const TlsIdentity& identity() const && = delete;
+    [[nodiscard]] std::string_view host() const& noexcept {
+        return host_;
+    }
+    std::string_view host() const&& = delete;
+    [[nodiscard]] const TlsIdentity& identity() const& noexcept {
+        return identity_;
+    }
+    const TlsIdentity& identity() const&& = delete;
 
 private:
     friend class TlsConfig;
 
     TlsSniIdentity(std::pmr::string host, TlsIdentity identity) noexcept
-        : host_(std::move(host)), identity_(std::move(identity)) {}
+        : host_(std::move(host)),
+          identity_(std::move(identity)) {}
 
     std::pmr::string host_;
     TlsIdentity identity_;
@@ -129,21 +124,20 @@ public:
     TlsConfig& setClientCertificatePolicy(TlsClientCertificatePolicy policy);
     TlsConfig& addSniIdentity(std::string_view host, TlsIdentity identity);
 
-    [[nodiscard]] const TlsIdentity& identity() const & noexcept { return identity_; }
-    const TlsIdentity& identity() const && = delete;
+    [[nodiscard]] const TlsIdentity& identity() const& noexcept {
+        return identity_;
+    }
+    const TlsIdentity& identity() const&& = delete;
 
-    [[nodiscard]] const std::optional<TlsClientCertificatePolicy>&
-    clientCertificatePolicy() const & noexcept {
+    [[nodiscard]] const std::optional<TlsClientCertificatePolicy>& clientCertificatePolicy() const& noexcept {
         return clientCertificatePolicy_;
     }
-    const std::optional<TlsClientCertificatePolicy>&
-    clientCertificatePolicy() const && = delete;
+    const std::optional<TlsClientCertificatePolicy>& clientCertificatePolicy() const&& = delete;
 
-    [[nodiscard]] const std::pmr::vector<TlsSniIdentity>& sniIdentities()
-        const & noexcept {
+    [[nodiscard]] const std::pmr::vector<TlsSniIdentity>& sniIdentities() const& noexcept {
         return sniIdentities_;
     }
-    const std::pmr::vector<TlsSniIdentity>& sniIdentities() const && = delete;
+    const std::pmr::vector<TlsSniIdentity>& sniIdentities() const&& = delete;
 
 private:
     TlsIdentity identity_;
@@ -159,17 +153,9 @@ public:
     ServerTopology() noexcept = default;
 
     [[nodiscard]] static ServerTopology http(std::uint16_t port = 8080);
-    [[nodiscard]] static ServerTopology https(
-        std::uint16_t port,
-        TlsConfig tls);
-    [[nodiscard]] static ServerTopology httpAndHttps(
-        std::uint16_t httpPort,
-        std::uint16_t httpsPort,
-        TlsConfig tls);
-    [[nodiscard]] static ServerTopology redirectHttpToHttps(
-        std::uint16_t httpPort,
-        std::uint16_t httpsPort,
-        TlsConfig tls);
+    [[nodiscard]] static ServerTopology https(std::uint16_t port, TlsConfig tls);
+    [[nodiscard]] static ServerTopology httpAndHttps(std::uint16_t httpPort, std::uint16_t httpsPort, TlsConfig tls);
+    [[nodiscard]] static ServerTopology redirectHttpToHttps(std::uint16_t httpPort, std::uint16_t httpsPort, TlsConfig tls);
 
 private:
     friend class App;
@@ -195,11 +181,7 @@ private:
         TlsConfig tls;
     };
 
-    using Topology = std::variant<
-        Http,
-        Https,
-        HttpAndHttps,
-        RedirectHttpToHttps>;
+    using Topology = std::variant<Http, Https, HttpAndHttps, RedirectHttpToHttps>;
 
     explicit ServerTopology(Topology topology) noexcept
         : topology_(std::move(topology)) {}
@@ -218,10 +200,10 @@ public:
     [[nodiscard]] static CorsOrigin serialized(std::string_view value);
     [[nodiscard]] static CorsOrigin opaque();
 
-    [[nodiscard]] std::string_view value() const & noexcept {
+    [[nodiscard]] std::string_view value() const& noexcept {
         return value_;
     }
-    std::string_view value() const && = delete;
+    std::string_view value() const&& = delete;
 
 private:
     friend class CorsOriginPolicy;
@@ -249,23 +231,22 @@ public:
     }
 
     [[nodiscard]] static CorsOriginPolicy credentialed(CorsOrigin origin) {
-        return CorsOriginPolicy(
-            Kind::kCredentialedExact,
-            std::move(origin.value_));
+        return CorsOriginPolicy(Kind::kCredentialedExact, std::move(origin.value_));
     }
 
     [[nodiscard]] constexpr Kind kind() const noexcept {
         return kind_;
     }
 
-    [[nodiscard]] constexpr std::string_view origin() const & noexcept {
+    [[nodiscard]] constexpr std::string_view origin() const& noexcept {
         return value_;
     }
-    std::string_view origin() const && = delete;
+    std::string_view origin() const&& = delete;
 
 private:
     CorsOriginPolicy(Kind kind, std::pmr::string value) noexcept
-        : kind_(kind), value_(std::move(value)) {}
+        : kind_(kind),
+          value_(std::move(value)) {}
 
     Kind kind_;
     std::pmr::string value_;
@@ -275,17 +256,15 @@ class CorsHeaderNames final {
 public:
     CorsHeaderNames() noexcept = default;
 
-    [[nodiscard]] static CorsHeaderNames of(
-        std::span<const std::string_view> names);
-    [[nodiscard]] static CorsHeaderNames of(
-        std::initializer_list<std::string_view> names) {
+    [[nodiscard]] static CorsHeaderNames of(std::span<const std::string_view> names);
+    [[nodiscard]] static CorsHeaderNames of(std::initializer_list<std::string_view> names) {
         return of(std::span<const std::string_view>(names.begin(), names.size()));
     }
 
-    [[nodiscard]] std::string_view value() const & noexcept {
+    [[nodiscard]] std::string_view value() const& noexcept {
         return value_;
     }
-    std::string_view value() const && = delete;
+    std::string_view value() const&& = delete;
 
     [[nodiscard]] bool empty() const noexcept {
         return value_.empty();
@@ -309,39 +288,34 @@ public:
         return CorsRequestHeadersPolicy(Kind::kReflect, CorsHeaderNames{});
     }
 
-    [[nodiscard]] static CorsRequestHeadersPolicy fixed(
-        CorsHeaderNames headers) {
+    [[nodiscard]] static CorsRequestHeadersPolicy fixed(CorsHeaderNames headers) {
         if (headers.empty()) {
-            throw std::invalid_argument(
-                "CORS fixed request headers must not be empty");
+            throw std::invalid_argument("CORS fixed request headers must not be empty");
         }
         return CorsRequestHeadersPolicy(Kind::kFixed, std::move(headers));
     }
 
-    [[nodiscard]] static CorsRequestHeadersPolicy fixed(
-        std::span<const std::string_view> headers) {
+    [[nodiscard]] static CorsRequestHeadersPolicy fixed(std::span<const std::string_view> headers) {
         return fixed(CorsHeaderNames::of(headers));
     }
 
-    [[nodiscard]] static CorsRequestHeadersPolicy fixed(
-        std::initializer_list<std::string_view> headers) {
-        return fixed(std::span<const std::string_view>(
-            headers.begin(),
-            headers.size()));
+    [[nodiscard]] static CorsRequestHeadersPolicy fixed(std::initializer_list<std::string_view> headers) {
+        return fixed(std::span<const std::string_view>(headers.begin(), headers.size()));
     }
 
     [[nodiscard]] constexpr Kind kind() const noexcept {
         return kind_;
     }
 
-    [[nodiscard]] std::string_view headers() const & noexcept {
+    [[nodiscard]] std::string_view headers() const& noexcept {
         return headers_.value();
     }
-    std::string_view headers() const && = delete;
+    std::string_view headers() const&& = delete;
 
 private:
     CorsRequestHeadersPolicy(Kind kind, CorsHeaderNames headers) noexcept
-        : kind_(kind), headers_(std::move(headers)) {}
+        : kind_(kind),
+          headers_(std::move(headers)) {}
 
     Kind kind_;
     CorsHeaderNames headers_;
@@ -349,7 +323,8 @@ private:
 
 class CorsMaxAge final {
 public:
-    explicit CorsMaxAge(std::chrono::seconds value) : value_(value) {
+    explicit CorsMaxAge(std::chrono::seconds value)
+        : value_(value) {
         if (value.count() < 0) {
             throw std::invalid_argument("CORS max age must not be negative");
         }
@@ -413,11 +388,7 @@ public:
 private:
     friend struct detail::AccessLogRecordAccess;
 
-    constexpr AccessLogRecord(
-        const HttpRequest& request,
-        std::string_view remoteAddress,
-        HttpStatusCode status,
-        std::uint64_t durationMicros) noexcept
+    constexpr AccessLogRecord(const HttpRequest& request, std::string_view remoteAddress, HttpStatusCode status, std::uint64_t durationMicros) noexcept
         : request_(request),
           remoteAddress_(remoteAddress),
           status_(status),
@@ -437,14 +408,9 @@ public:
     constexpr AccessLogCallback() noexcept = default;
 
     template <typename Listener>
-    requires (!std::is_function_v<Listener> &&
-              std::is_nothrow_invocable_r_v<void, Listener&, const AccessLogRecord&>)
+        requires(!std::is_function_v<Listener> && std::is_nothrow_invocable_r_v<void, Listener&, const AccessLogRecord&>)
     [[nodiscard]] static constexpr AccessLogCallback bind(Listener& listener) noexcept {
-        return AccessLogCallback(
-            std::addressof(listener),
-            [](void* target, const AccessLogRecord& record) noexcept {
-                (*static_cast<Listener*>(target))(record);
-            });
+        return AccessLogCallback(std::addressof(listener), [](void* target, const AccessLogRecord& record) noexcept { (*static_cast<Listener*>(target))(record); });
     }
 
     [[nodiscard]] constexpr explicit operator bool() const noexcept {
@@ -493,10 +459,9 @@ public:
 private:
     friend struct detail::ConnectionFailureRecordAccess;
 
-    ConnectionFailureRecord(
-        std::string_view remoteAddress,
-        std::exception_ptr exception) noexcept
-        : remoteAddress_(remoteAddress), exception_(std::move(exception)) {}
+    ConnectionFailureRecord(std::string_view remoteAddress, std::exception_ptr exception) noexcept
+        : remoteAddress_(remoteAddress),
+          exception_(std::move(exception)) {}
 
     std::string_view remoteAddress_;
     std::exception_ptr exception_;
@@ -535,15 +500,9 @@ public:
     constexpr ConnectionFailureCallback() noexcept = default;
 
     template <typename Listener>
-    requires (!std::is_function_v<Listener> &&
-              std::is_nothrow_invocable_r_v<void, Listener&, const ConnectionFailureRecord&>)
-    [[nodiscard]] static constexpr ConnectionFailureCallback bind(
-        Listener& listener) noexcept {
-        return ConnectionFailureCallback(
-            std::addressof(listener),
-            [](void* target, const ConnectionFailureRecord& record) noexcept {
-                (*static_cast<Listener*>(target))(record);
-            });
+        requires(!std::is_function_v<Listener> && std::is_nothrow_invocable_r_v<void, Listener&, const ConnectionFailureRecord&>)
+    [[nodiscard]] static constexpr ConnectionFailureCallback bind(Listener& listener) noexcept {
+        return ConnectionFailureCallback(std::addressof(listener), [](void* target, const ConnectionFailureRecord& record) noexcept { (*static_cast<Listener*>(target))(record); });
     }
 
     [[nodiscard]] constexpr explicit operator bool() const noexcept {

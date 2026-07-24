@@ -18,9 +18,7 @@ void ScopedOperationScope::close() noexcept {
     }
 }
 
-ScopedCapabilityNode::ScopedCapabilityNode(
-    ScopedOperationScope& scope,
-    void (*expire)(ScopedCapabilityNode&) noexcept) noexcept
+ScopedCapabilityNode::ScopedCapabilityNode(ScopedOperationScope& scope, void (*expire)(ScopedCapabilityNode&) noexcept) noexcept
     : expire_(expire) {
     if (scope.active()) {
         link(scope);
@@ -29,9 +27,9 @@ ScopedCapabilityNode::ScopedCapabilityNode(
     }
 }
 
-ScopedCapabilityNode::ScopedCapabilityNode(
-    const ScopedCapabilityNode& other) noexcept
-    : expire_(other.expire_), active_(other.active_) {
+ScopedCapabilityNode::ScopedCapabilityNode(const ScopedCapabilityNode& other) noexcept
+    : expire_(other.expire_),
+      active_(other.active_) {
     if (active_ && other.scope_ != nullptr) {
         link(*other.scope_);
     }
@@ -59,7 +57,9 @@ ScopedCapabilityNode::ScopedCapabilityNode(ScopedCapabilityNode&& other) noexcep
     other.active_ = false;
 }
 
-ScopedCapabilityNode::~ScopedCapabilityNode() { unlink(); }
+ScopedCapabilityNode::~ScopedCapabilityNode() {
+    unlink();
+}
 
 void ScopedCapabilityNode::requireActive() const {
     if (!active_) {
@@ -72,9 +72,7 @@ ScopedOperationScope& ScopedCapabilityNode::operationScope() const {
     return *scope_;
 }
 
-void ScopedCapabilityNode::bind(
-    ScopedOperationScope& scope,
-    void (*expire)(ScopedCapabilityNode&) noexcept) noexcept {
+void ScopedCapabilityNode::bind(ScopedOperationScope& scope, void (*expire)(ScopedCapabilityNode&) noexcept) noexcept {
     if (scope_ != nullptr || active_) {
         std::terminate();
     }

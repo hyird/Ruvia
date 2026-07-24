@@ -5,8 +5,7 @@
 
 namespace ruvia::detail {
 
-[[nodiscard]] constexpr std::uint64_t workerSelectionHash(
-    std::string_view key) noexcept {
+[[nodiscard]] constexpr std::uint64_t workerSelectionHash(std::string_view key) noexcept {
     std::uint64_t hash = 14695981039346656037ull;
     for (const unsigned char ch : key) {
         hash ^= ch;

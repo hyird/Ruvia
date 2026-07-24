@@ -39,20 +39,7 @@ inline constexpr std::size_t kResponseKnownHeaderCount = 22;
 }
 
 [[nodiscard]] inline bool responseHeaderAppendForbidden(std::uint32_t bit) noexcept {
-    return bit == kResponseHeaderContentLength ||
-        bit == kResponseHeaderContentType ||
-        bit == kResponseHeaderDate ||
-        bit == kResponseHeaderServer ||
-        bit == kResponseHeaderTransferEncoding ||
-        bit == kResponseHeaderAllow ||
-        bit == kResponseHeaderAccessControlAllowOrigin ||
-        bit == kResponseHeaderAccessControlAllowCredentials ||
-        bit == kResponseHeaderAccessControlMaxAge ||
-        bit == kResponseHeaderAcceptRanges ||
-        bit == kResponseHeaderContentRange ||
-        bit == kResponseHeaderEtag ||
-        bit == kResponseHeaderLastModified ||
-        bit == kResponseHeaderLocation;
+    return bit == kResponseHeaderContentLength || bit == kResponseHeaderContentType || bit == kResponseHeaderDate || bit == kResponseHeaderServer || bit == kResponseHeaderTransferEncoding || bit == kResponseHeaderAllow || bit == kResponseHeaderAccessControlAllowOrigin || bit == kResponseHeaderAccessControlAllowCredentials || bit == kResponseHeaderAccessControlMaxAge || bit == kResponseHeaderAcceptRanges || bit == kResponseHeaderContentRange || bit == kResponseHeaderEtag || bit == kResponseHeaderLastModified || bit == kResponseHeaderLocation;
 }
 
 }  // namespace ruvia::detail

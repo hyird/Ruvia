@@ -11,17 +11,11 @@
 namespace ruvia::detail {
 
 struct RedisTypesAccess final {
-    [[nodiscard]] static RedisKeyValue keyValue(
-        std::string_view key,
-        std::string_view value,
-        std::pmr::memory_resource* resource) {
+    [[nodiscard]] static RedisKeyValue keyValue(std::string_view key, std::string_view value, std::pmr::memory_resource* resource) {
         return RedisKeyValue(key, value, resource);
     }
 
-    [[nodiscard]] static RedisScoredValue scoredValue(
-        std::string_view value,
-        double score,
-        std::pmr::memory_resource* resource) {
+    [[nodiscard]] static RedisScoredValue scoredValue(std::string_view value, double score, std::pmr::memory_resource* resource) {
         return RedisScoredValue(value, score, resource);
     }
 
@@ -77,9 +71,7 @@ struct RedisTypesAccess final {
         return RedisValue::integerValue(value, resource);
     }
 
-    [[nodiscard]] static RedisValue arrayValue(
-        std::pmr::vector<RedisValue> values,
-        std::pmr::memory_resource* resource) {
+    [[nodiscard]] static RedisValue arrayValue(std::pmr::vector<RedisValue> values, std::pmr::memory_resource* resource) {
         return RedisValue::arrayValue(std::move(values), resource);
     }
 };

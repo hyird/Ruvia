@@ -23,8 +23,7 @@ struct DbSlotSocket final {
 #if defined(_WIN32)
     using NativeSocket = std::uintptr_t;
     asio::ip::tcp::socket socket;
-    static constexpr NativeSocket kInvalidSocket =
-        std::numeric_limits<NativeSocket>::max();
+    static constexpr NativeSocket kInvalidSocket = std::numeric_limits<NativeSocket>::max();
 #else
     using NativeSocket = asio::posix::stream_descriptor::native_handle_type;
     asio::posix::stream_descriptor descriptor;

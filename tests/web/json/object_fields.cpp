@@ -14,11 +14,7 @@ using Field = std::pair<std::string, std::string>;
 
 // Collect (decoded key, raw value) pairs; returns whether parsing succeeded.
 bool collect(std::string_view body, std::vector<Field>& out) {
-    return ruvia::detail::visitJsonObjectFields(
-        body, std::pmr::get_default_resource(),
-        [&out](std::string_view key, std::string_view value) {
-            out.emplace_back(std::string(key), std::string(value));
-        });
+    return ruvia::detail::visitJsonObjectFields(body, std::pmr::get_default_resource(), [&out](std::string_view key, std::string_view value) { out.emplace_back(std::string(key), std::string(value)); });
 }
 
 }  // namespace
@@ -58,8 +54,8 @@ RUVIA_TEST(json_object_fields_captures_nested_values) {
     std::vector<Field> fields;
     RUVIA_CHECK(collect(R"({"obj":{"x":1},"arr":[1,2,3]})", fields));
     RUVIA_CHECK_EQ(fields.size(), std::size_t{2});
-    RUVIA_CHECK_EQ(fields[0].second, std::string(R"({"x":1})"));   // whole nested object
-    RUVIA_CHECK_EQ(fields[1].second, std::string("[1,2,3]"));      // whole array
+    RUVIA_CHECK_EQ(fields[0].second, std::string(R"({"x":1})"));  // whole nested object
+    RUVIA_CHECK_EQ(fields[1].second, std::string("[1,2,3]"));     // whole array
 }
 
 RUVIA_TEST(json_object_fields_decodes_escaped_key) {
@@ -72,27 +68,25 @@ RUVIA_TEST(json_object_fields_decodes_escaped_key) {
 
 RUVIA_TEST(json_object_fields_rejects_malformed) {
     std::vector<Field> fields;
-    RUVIA_CHECK(!collect("", fields));            // not an object
-    RUVIA_CHECK(!collect("[]", fields));          // array, not object
-    RUVIA_CHECK(!collect("{", fields));           // unterminated
-    RUVIA_CHECK(!collect(R"({"a"})", fields));    // missing ':'
-    RUVIA_CHECK(!collect(R"({"a":})", fields));   // missing value
-    RUVIA_CHECK(!collect(R"({"a":1,})", fields)); // trailing comma -> expects another key
-    RUVIA_CHECK(!collect(R"({1:2})", fields));    // non-string key (keys must be strings)
-    RUVIA_CHECK(!collect(R"({"a":1 "b":2})", fields)); // missing ',' between fields
-    RUVIA_CHECK(!collect("{}junk", fields));       // trailing significant bytes
+    RUVIA_CHECK(!collect("", fields));                  // not an object
+    RUVIA_CHECK(!collect("[]", fields));                // array, not object
+    RUVIA_CHECK(!collect("{", fields));                 // unterminated
+    RUVIA_CHECK(!collect(R"({"a"})", fields));          // missing ':'
+    RUVIA_CHECK(!collect(R"({"a":})", fields));         // missing value
+    RUVIA_CHECK(!collect(R"({"a":1,})", fields));       // trailing comma -> expects another key
+    RUVIA_CHECK(!collect(R"({1:2})", fields));          // non-string key (keys must be strings)
+    RUVIA_CHECK(!collect(R"({"a":1 "b":2})", fields));  // missing ',' between fields
+    RUVIA_CHECK(!collect("{}junk", fields));            // trailing significant bytes
     RUVIA_CHECK(!collect(R"({"a":1}junk)", fields));
     RUVIA_CHECK(collect("{\"a\":1} \r\n\t", fields));  // trailing JSON whitespace is allowed
 }
 
 RUVIA_TEST(json_object_fields_visitor_can_stop_early) {
     int visited = 0;
-    const bool ok = ruvia::detail::visitJsonObjectFields(
-        R"({"a":1,"b":2,"c":3})", std::pmr::get_default_resource(),
-        [&visited](std::string_view, std::string_view) {
-            ++visited;
-            return false;  // stop after the first field
-        });
-    RUVIA_CHECK(ok);           // an early stop is a success, not a parse error
+    const bool ok = ruvia::detail::visitJsonObjectFields(R"({"a":1,"b":2,"c":3})", std::pmr::get_default_resource(), [&visited](std::string_view, std::string_view) {
+        ++visited;
+        return false;  // stop after the first field
+    });
+    RUVIA_CHECK(ok);  // an early stop is a success, not a parse error
     RUVIA_CHECK_EQ(visited, 1);
 }

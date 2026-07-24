@@ -37,8 +37,7 @@ public:
 private:
     friend class HttpResponseBody;
 
-    explicit constexpr HttpBorrowedResponseBytes(
-        std::string_view bytes) noexcept
+    explicit constexpr HttpBorrowedResponseBytes(std::string_view bytes) noexcept
         : bytes_(bytes) {}
 
     std::string_view bytes_;
@@ -53,8 +52,7 @@ public:
 private:
     friend class HttpResponseBody;
 
-    explicit constexpr HttpStaticResponseBytes(
-        std::string_view bytes) noexcept
+    explicit constexpr HttpStaticResponseBytes(std::string_view bytes) noexcept
         : bytes_(bytes) {}
 
     std::string_view bytes_;
@@ -62,22 +60,18 @@ private:
 
 class HttpOwnedResponseBytes final {
 public:
-    [[nodiscard]] std::string_view bytes() const & noexcept {
+    [[nodiscard]] std::string_view bytes() const& noexcept {
         return bytes_;
     }
-    [[nodiscard]] std::string_view bytes() const && = delete;
+    [[nodiscard]] std::string_view bytes() const&& = delete;
 
 private:
     friend class HttpResponseBody;
 
-    HttpOwnedResponseBytes(
-        std::pmr::memory_resource* resource,
-        std::string_view bytes)
+    HttpOwnedResponseBytes(std::pmr::memory_resource* resource, std::string_view bytes)
         : bytes_(bytes.data(), bytes.size(), resource) {}
 
-    HttpOwnedResponseBytes(
-        std::pmr::memory_resource* resource,
-        std::pmr::string&& bytes)
+    HttpOwnedResponseBytes(std::pmr::memory_resource* resource, std::pmr::string&& bytes)
         : bytes_(resource) {
         bytes_ = std::move(bytes);
     }
@@ -87,12 +81,10 @@ private:
 
 class HttpOwnedResponseFile final {
 public:
-    [[nodiscard]] const HttpNativePathChar*
-    nativePathCStr() const & noexcept {
+    [[nodiscard]] const HttpNativePathChar* nativePathCStr() const& noexcept {
         return nativePath_.c_str();
     }
-    [[nodiscard]] const HttpNativePathChar*
-    nativePathCStr() const && = delete;
+    [[nodiscard]] const HttpNativePathChar* nativePathCStr() const&& = delete;
 
     [[nodiscard]] constexpr std::uint64_t size() const noexcept {
         return size_;
@@ -113,13 +105,7 @@ public:
 private:
     friend class HttpResponseBody;
 
-    HttpOwnedResponseFile(
-        std::pmr::memory_resource* resource,
-        const std::filesystem::path& file,
-        std::uint64_t size,
-        std::uint64_t offset,
-        std::uint64_t length,
-        ResponseFileIdentity identity)
+    HttpOwnedResponseFile(std::pmr::memory_resource* resource, const std::filesystem::path& file, std::uint64_t size, std::uint64_t offset, std::uint64_t length, ResponseFileIdentity identity)
         : nativePath_(resource),
           size_(size),
           offset_(offset),
@@ -137,8 +123,7 @@ private:
 
 class HttpBorrowedResponseFile final {
 public:
-    [[nodiscard]] constexpr const HttpNativePathChar* nativePathCStr()
-        const noexcept {
+    [[nodiscard]] constexpr const HttpNativePathChar* nativePathCStr() const noexcept {
         return nativePath_;
     }
 
@@ -161,12 +146,7 @@ public:
 private:
     friend class HttpResponseBody;
 
-    constexpr HttpBorrowedResponseFile(
-        const HttpNativePathChar* nativePath,
-        std::uint64_t size,
-        std::uint64_t offset,
-        std::uint64_t length,
-        ResponseFileIdentity identity) noexcept
+    constexpr HttpBorrowedResponseFile(const HttpNativePathChar* nativePath, std::uint64_t size, std::uint64_t offset, std::uint64_t length, ResponseFileIdentity identity) noexcept
         : nativePath_(nativePath),
           size_(size),
           offset_(offset),
@@ -193,45 +173,37 @@ public:
     HttpResponseBody(HttpResponseBody&&) = default;
     HttpResponseBody& operator=(HttpResponseBody&&) = delete;
 
-    [[nodiscard]] const HttpEmptyResponseBody* empty() const & noexcept {
+    [[nodiscard]] const HttpEmptyResponseBody* empty() const& noexcept {
         return std::get_if<HttpEmptyResponseBody>(&value_);
     }
-    [[nodiscard]] const HttpEmptyResponseBody* empty() const && = delete;
+    [[nodiscard]] const HttpEmptyResponseBody* empty() const&& = delete;
 
-    [[nodiscard]] const HttpBorrowedResponseBytes* borrowedBytes()
-        const & noexcept {
+    [[nodiscard]] const HttpBorrowedResponseBytes* borrowedBytes() const& noexcept {
         return std::get_if<HttpBorrowedResponseBytes>(&value_);
     }
-    [[nodiscard]] const HttpBorrowedResponseBytes*
-    borrowedBytes() const && = delete;
+    [[nodiscard]] const HttpBorrowedResponseBytes* borrowedBytes() const&& = delete;
 
-    [[nodiscard]] const HttpStaticResponseBytes* staticBytes()
-        const & noexcept {
+    [[nodiscard]] const HttpStaticResponseBytes* staticBytes() const& noexcept {
         return std::get_if<HttpStaticResponseBytes>(&value_);
     }
-    [[nodiscard]] const HttpStaticResponseBytes*
-    staticBytes() const && = delete;
+    [[nodiscard]] const HttpStaticResponseBytes* staticBytes() const&& = delete;
 
-    [[nodiscard]] const HttpOwnedResponseBytes*
-    ownedBytes() const & noexcept {
+    [[nodiscard]] const HttpOwnedResponseBytes* ownedBytes() const& noexcept {
         return std::get_if<HttpOwnedResponseBytes>(&value_);
     }
-    [[nodiscard]] const HttpOwnedResponseBytes*
-    ownedBytes() const && = delete;
+    [[nodiscard]] const HttpOwnedResponseBytes* ownedBytes() const&& = delete;
 
-    [[nodiscard]] const HttpOwnedResponseFile* ownedFile() const & noexcept {
+    [[nodiscard]] const HttpOwnedResponseFile* ownedFile() const& noexcept {
         return std::get_if<HttpOwnedResponseFile>(&value_);
     }
-    [[nodiscard]] const HttpOwnedResponseFile* ownedFile() const && = delete;
+    [[nodiscard]] const HttpOwnedResponseFile* ownedFile() const&& = delete;
 
-    [[nodiscard]] const HttpBorrowedResponseFile* borrowedFile()
-        const & noexcept {
+    [[nodiscard]] const HttpBorrowedResponseFile* borrowedFile() const& noexcept {
         return std::get_if<HttpBorrowedResponseFile>(&value_);
     }
-    [[nodiscard]] const HttpBorrowedResponseFile*
-    borrowedFile() const && = delete;
+    [[nodiscard]] const HttpBorrowedResponseFile* borrowedFile() const&& = delete;
 
-    [[nodiscard]] std::string_view bytes() const & noexcept {
+    [[nodiscard]] std::string_view bytes() const& noexcept {
         if (const auto* body = borrowedBytes()) {
             return body->bytes();
         }
@@ -243,28 +215,18 @@ public:
         }
         return {};
     }
-    [[nodiscard]] std::string_view bytes() const && = delete;
+    [[nodiscard]] std::string_view bytes() const&& = delete;
 
-    [[nodiscard]] std::optional<ResponseFileBody> file() const & noexcept {
+    [[nodiscard]] std::optional<ResponseFileBody> file() const& noexcept {
         if (const auto* body = ownedFile()) {
-            return ResponseFileBody(
-                body->nativePathCStr(),
-                body->size(),
-                body->offset(),
-                body->length(),
-                body->identity());
+            return ResponseFileBody(body->nativePathCStr(), body->size(), body->offset(), body->length(), body->identity());
         }
         if (const auto* body = borrowedFile()) {
-            return ResponseFileBody(
-                body->nativePathCStr(),
-                body->size(),
-                body->offset(),
-                body->length(),
-                body->identity());
+            return ResponseFileBody(body->nativePathCStr(), body->size(), body->offset(), body->length(), body->identity());
         }
         return std::nullopt;
     }
-    [[nodiscard]] std::optional<ResponseFileBody> file() const && = delete;
+    [[nodiscard]] std::optional<ResponseFileBody> file() const&& = delete;
 
     [[nodiscard]] std::size_t size() const noexcept {
         if (const auto* body = ownedFile()) {
@@ -279,21 +241,13 @@ public:
 private:
     friend class ::ruvia::HttpResponse;
 
-    using Value = std::variant<
-        HttpEmptyResponseBody,
-        HttpBorrowedResponseBytes,
-        HttpStaticResponseBytes,
-        HttpOwnedResponseBytes,
-        HttpOwnedResponseFile,
-        HttpBorrowedResponseFile>;
+    using Value = std::variant<HttpEmptyResponseBody, HttpBorrowedResponseBytes, HttpStaticResponseBytes, HttpOwnedResponseBytes, HttpOwnedResponseFile, HttpBorrowedResponseFile>;
 
     void setEmpty() noexcept {
         value_.emplace<HttpEmptyResponseBody>(HttpEmptyResponseBody{});
     }
 
-    void setCopy(
-        std::pmr::memory_resource* resource,
-        std::string_view bytes) {
+    void setCopy(std::pmr::memory_resource* resource, std::string_view bytes) {
         if (bytes.empty()) {
             setEmpty();
             return;
@@ -307,8 +261,7 @@ private:
             setEmpty();
             return;
         }
-        value_.emplace<HttpBorrowedResponseBytes>(
-            HttpBorrowedResponseBytes(bytes));
+        value_.emplace<HttpBorrowedResponseBytes>(HttpBorrowedResponseBytes(bytes));
     }
 
     void setStatic(std::string_view bytes) noexcept {
@@ -316,13 +269,10 @@ private:
             setEmpty();
             return;
         }
-        value_.emplace<HttpStaticResponseBytes>(
-            HttpStaticResponseBytes(bytes));
+        value_.emplace<HttpStaticResponseBytes>(HttpStaticResponseBytes(bytes));
     }
 
-    void setOwned(
-        std::pmr::memory_resource* resource,
-        std::pmr::string&& bytes) {
+    void setOwned(std::pmr::memory_resource* resource, std::pmr::string&& bytes) {
         if (bytes.empty()) {
             setEmpty();
             return;
@@ -340,26 +290,13 @@ private:
         value_.emplace<HttpOwnedResponseBytes>(std::move(body));
     }
 
-    void setOwnedFile(
-        std::pmr::memory_resource* resource,
-        const std::filesystem::path& file,
-        std::uint64_t size,
-        std::uint64_t offset,
-        std::uint64_t length,
-        ResponseFileIdentity identity = ResponseFileIdentity::unchecked()) {
-        HttpOwnedResponseFile body(
-            resource, file, size, offset, length, identity);
+    void setOwnedFile(std::pmr::memory_resource* resource, const std::filesystem::path& file, std::uint64_t size, std::uint64_t offset, std::uint64_t length, ResponseFileIdentity identity = ResponseFileIdentity::unchecked()) {
+        HttpOwnedResponseFile body(resource, file, size, offset, length, identity);
         value_.emplace<HttpOwnedResponseFile>(std::move(body));
     }
 
-    void setBorrowedFile(
-        const HttpNativePathChar* file,
-        std::uint64_t size,
-        std::uint64_t offset,
-        std::uint64_t length,
-        ResponseFileIdentity identity = ResponseFileIdentity::unchecked()) noexcept {
-        value_.emplace<HttpBorrowedResponseFile>(
-            HttpBorrowedResponseFile(file, size, offset, length, identity));
+    void setBorrowedFile(const HttpNativePathChar* file, std::uint64_t size, std::uint64_t offset, std::uint64_t length, ResponseFileIdentity identity = ResponseFileIdentity::unchecked()) noexcept {
+        value_.emplace<HttpBorrowedResponseFile>(HttpBorrowedResponseFile(file, size, offset, length, identity));
     }
 
     Value value_;

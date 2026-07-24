@@ -31,18 +31,14 @@ DbHandle Context::db(std::string_view alias) const {
 #ifdef RUVIA_ENABLE_REDIS
 RedisHandle Context::redis() const {
     if (redis_ == nullptr) {
-        throw RedisError(
-            RedisError::Code::kNotConfigured,
-            "redis is not configured");
+        throw RedisError(RedisError::Code::kNotConfigured, "redis is not configured");
     }
     return redis_->get(resource(), operationScope_);
 }
 
 RedisHandle Context::redis(std::string_view alias) const {
     if (redis_ == nullptr) {
-        throw RedisError(
-            RedisError::Code::kNotConfigured,
-            "redis is not configured");
+        throw RedisError(RedisError::Code::kNotConfigured, "redis is not configured");
     }
     return redis_->get(alias, resource(), operationScope_);
 }

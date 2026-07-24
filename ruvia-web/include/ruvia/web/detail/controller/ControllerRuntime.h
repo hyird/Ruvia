@@ -51,69 +51,28 @@ class ControllerRegistrationAccess final {
         }
     }
 
-    [[nodiscard]] static ControllerRouteBuilder createRouteGroup(
-        Router& router,
-        std::string_view prefix,
-        MiddlewareList middlewares) {
+    [[nodiscard]] static ControllerRouteBuilder createRouteGroup(Router& router, std::string_view prefix, MiddlewareList middlewares) {
         return ControllerRouteBuilder(router, prefix, std::move(middlewares));
     }
 
-    [[nodiscard]] static ControllerRouteBuilder createRouteGroup(
-        const ControllerRouteBuilder& scope,
-        std::string_view prefix,
-        MiddlewareList middlewares) {
+    [[nodiscard]] static ControllerRouteBuilder createRouteGroup(const ControllerRouteBuilder& scope, std::string_view prefix, MiddlewareList middlewares) {
         return scope.createScope(prefix, std::move(middlewares));
     }
 
-    static void addRoute(
-        const ControllerRouteBuilder& scope,
-        HttpKnownMethod method,
-        std::string_view path,
-        ControllerRouteHandler handler,
-        RequestBodyMode bodyMode,
-        std::span<const ControllerMiddlewareDescriptor> middlewares) {
+    static void addRoute(const ControllerRouteBuilder& scope, HttpKnownMethod method, std::string_view path, ControllerRouteHandler handler, RequestBodyMode bodyMode, std::span<const ControllerMiddlewareDescriptor> middlewares) {
         scope.registerRoute(method, path, std::move(handler), bodyMode, middlewares);
     }
 
-    static void addResponseStreamRoute(
-        const ControllerRouteBuilder& scope,
-        HttpKnownMethod method,
-        std::string_view path,
-        ControllerRouteStreamHandler handler,
-        std::span<const ControllerMiddlewareDescriptor> middlewares) {
-        scope.registerResponseStreamRoute(
-            method,
-            path,
-            std::move(handler),
-            middlewares);
+    static void addResponseStreamRoute(const ControllerRouteBuilder& scope, HttpKnownMethod method, std::string_view path, ControllerRouteStreamHandler handler, std::span<const ControllerMiddlewareDescriptor> middlewares) {
+        scope.registerResponseStreamRoute(method, path, std::move(handler), middlewares);
     }
 
-    static void addSseRoute(
-        const ControllerRouteBuilder& scope,
-        HttpKnownMethod method,
-        std::string_view path,
-        ControllerRouteStreamHandler handler,
-        std::span<const ControllerMiddlewareDescriptor> middlewares) {
-        scope.registerSseRoute(
-            method,
-            path,
-            std::move(handler),
-            middlewares);
+    static void addSseRoute(const ControllerRouteBuilder& scope, HttpKnownMethod method, std::string_view path, ControllerRouteStreamHandler handler, std::span<const ControllerMiddlewareDescriptor> middlewares) {
+        scope.registerSseRoute(method, path, std::move(handler), middlewares);
     }
 
-    static void addWebSocketRoute(
-        const ControllerRouteBuilder& scope,
-        HttpKnownMethod method,
-        std::string_view path,
-        ControllerRouteStreamHandler handler,
-        std::span<const ControllerMiddlewareDescriptor> middlewares,
-        WebSocketRouteOptions webSocketOptions = {}) {
-        scope.registerWebSocketRoute(
-            method,
-            path,
-            std::move(handler),
-            middlewares,
-            webSocketOptions);
+    static void addWebSocketRoute(const ControllerRouteBuilder& scope, HttpKnownMethod method, std::string_view path, ControllerRouteStreamHandler handler, std::span<const ControllerMiddlewareDescriptor> middlewares, WebSocketRouteOptions webSocketOptions = {}) {
+        scope.registerWebSocketRoute(method, path, std::move(handler), middlewares, webSocketOptions);
     }
 
     template <Task<HttpResponse> (ControllerT::*Handler)(Context&)>
@@ -201,10 +160,7 @@ template <ValidationTarget Target, typename BodyT>
 }
 
 template <ValidationTarget Target, typename BodyT, typename ValidatorT>
-Task<void> invokeModelValidator(
-    const ValidatorT& validatorMiddleware,
-    Context& c,
-    Next& next) {
+Task<void> invokeModelValidator(const ValidatorT& validatorMiddleware, Context& c, Next& next) {
     BodyT body = co_await parseValidatedBody<Target, BodyT>(c);
     Validator validator(c.resource());
     validatorMiddleware.validate(body, validator);
@@ -227,21 +183,14 @@ void registerControllerInstance(Router& router, ControllerStore& controllerLifet
 
 template <typename ControllerT>
 [[nodiscard]] bool registerController() {
-    static_assert(
-        std::is_base_of_v<Controller<ControllerT>, ControllerT>,
-        "controller must derive from ruvia::Controller<ControllerT>");
+    static_assert(std::is_base_of_v<Controller<ControllerT>, ControllerT>, "controller must derive from ruvia::Controller<ControllerT>");
     static_assert(std::is_final_v<ControllerT>, "controller must be final");
-    static_assert(
-        std::is_default_constructible_v<ControllerT>,
-        "controller must be default constructible");
+    static_assert(std::is_default_constructible_v<ControllerT>, "controller must be default constructible");
 
     return addControllerRegistrar(&registerControllerInstance<ControllerT>);
 }
 
-inline void registerControllers(
-    Router& router,
-    ControllerStore& controllerLifetimes,
-    std::span<const ControllerRegistrar> registrars) {
+inline void registerControllers(Router& router, ControllerStore& controllerLifetimes, std::span<const ControllerRegistrar> registrars) {
     runControllerRegistrars(router, controllerLifetimes, registrars);
 }
 

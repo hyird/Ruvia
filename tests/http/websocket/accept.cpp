@@ -47,15 +47,15 @@ RUVIA_TEST(websocket_accept_sha1_block_boundary_vectors) {
     // spills to an extra block (total 56), an exactly-full block (total 64), and
     // multi-block inputs (total 66, 128). Expected values are base64(SHA1(key +
     // GUID)) computed independently with a reference implementation.
-    RUVIA_CHECK_EQ(accept("aaaaaaaaaaaaaaaaaaa"),                      // total 55 (rem 55)
-                   std::string("yzaGyu0mcUukN7CdsSwa30tnCpc="));
-    RUVIA_CHECK_EQ(accept("aaaaaaaaaaaaaaaaaaaa"),                     // total 56 (extra pad block)
-                   std::string("dUYRM7bOMwDmbriNIPr11x+r3E0="));
-    RUVIA_CHECK_EQ(accept("aaaaaaaaaaaaaaaaaaaaaaaaaaaa"),             // total 64 (exact block)
-                   std::string("xMWmCBqYJY4uXzUs8PNU1t+Pzro="));
-    RUVIA_CHECK_EQ(accept("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),           // total 66 (multi-block)
-                   std::string("NP2xQF2DW4Tsrh7mEQTDSUbA8rI="));
-    RUVIA_CHECK_EQ(
-        accept("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),
-        std::string("QozTWdJkJ6Mr6+QwqAHt8yNpBdc="));               // total 128 (two full blocks)
+    RUVIA_CHECK_EQ(accept("aaaaaaaaaaaaaaaaaaa"),  // total 55 (rem 55)
+        std::string("yzaGyu0mcUukN7CdsSwa30tnCpc="));
+    RUVIA_CHECK_EQ(accept("aaaaaaaaaaaaaaaaaaaa"),  // total 56 (extra pad block)
+        std::string("dUYRM7bOMwDmbriNIPr11x+r3E0="));
+    RUVIA_CHECK_EQ(accept("aaaaaaaaaaaaaaaaaaaaaaaaaaaa"),  // total 64 (exact block)
+        std::string("xMWmCBqYJY4uXzUs8PNU1t+Pzro="));
+    RUVIA_CHECK_EQ(accept("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),  // total 66 (multi-block)
+        std::string("NP2xQF2DW4Tsrh7mEQTDSUbA8rI="));
+    RUVIA_CHECK_EQ(accept("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+                          "aaaaaaaaaaaaaaaaaaaa"),
+        std::string("QozTWdJkJ6Mr6+QwqAHt8yNpBdc="));  // total 128 (two full blocks)
 }

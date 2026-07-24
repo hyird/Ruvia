@@ -15,8 +15,7 @@
 
 namespace ruvia::detail {
 
-[[nodiscard]] inline HttpContentCodingFieldResult requestContentCoding(
-    const HttpRequest& request) noexcept {
+[[nodiscard]] inline HttpContentCodingFieldResult requestContentCoding(const HttpRequest& request) noexcept {
     return httpContentCodingFromHeaders(request.headers());
 }
 
@@ -39,8 +38,7 @@ public:
 private:
     friend class HttpRequestContentDecodeResult;
 
-    explicit constexpr HttpRequestContentDecodeProtocolFailure(
-        HttpContentDecodeError error) noexcept
+    explicit constexpr HttpRequestContentDecodeProtocolFailure(HttpContentDecodeError error) noexcept
         : error_(error) {}
 
     HttpContentDecodeError error_;
@@ -58,77 +56,53 @@ private:
 // response decoding keeps using the role-neutral HttpContentDecodeResult.
 class HttpRequestContentDecodeResult final {
 public:
-    HttpRequestContentDecodeResult(
-        const HttpRequestContentDecodeResult&) = delete;
-    HttpRequestContentDecodeResult& operator=(
-        const HttpRequestContentDecodeResult&) = delete;
-    HttpRequestContentDecodeResult(
-        HttpRequestContentDecodeResult&&) noexcept = default;
-    HttpRequestContentDecodeResult& operator=(
-        HttpRequestContentDecodeResult&&) = delete;
+    HttpRequestContentDecodeResult(const HttpRequestContentDecodeResult&) = delete;
+    HttpRequestContentDecodeResult& operator=(const HttpRequestContentDecodeResult&) = delete;
+    HttpRequestContentDecodeResult(HttpRequestContentDecodeResult&&) noexcept = default;
+    HttpRequestContentDecodeResult& operator=(HttpRequestContentDecodeResult&&) = delete;
 
     [[nodiscard]] HttpDecodedContent* decoded() & noexcept {
         return std::get_if<HttpDecodedContent>(&value_);
     }
-    [[nodiscard]] const HttpDecodedContent* decoded() const & noexcept {
+    [[nodiscard]] const HttpDecodedContent* decoded() const& noexcept {
         return std::get_if<HttpDecodedContent>(&value_);
     }
     HttpDecodedContent* decoded() && = delete;
-    const HttpDecodedContent* decoded() const && = delete;
+    const HttpDecodedContent* decoded() const&& = delete;
 
-    [[nodiscard]] const HttpRequestContentDecodeProtocolFailure*
-    protocolFailure() const & noexcept {
+    [[nodiscard]] const HttpRequestContentDecodeProtocolFailure* protocolFailure() const& noexcept {
         return std::get_if<HttpRequestContentDecodeProtocolFailure>(&value_);
     }
-    const HttpRequestContentDecodeProtocolFailure*
-    protocolFailure() const && = delete;
+    const HttpRequestContentDecodeProtocolFailure* protocolFailure() const&& = delete;
 
-    [[nodiscard]] const HttpRequestContentDecoderFailure*
-    decoderFailure() const & noexcept {
+    [[nodiscard]] const HttpRequestContentDecoderFailure* decoderFailure() const& noexcept {
         return std::get_if<HttpRequestContentDecoderFailure>(&value_);
     }
-    const HttpRequestContentDecoderFailure* decoderFailure() const && = delete;
+    const HttpRequestContentDecoderFailure* decoderFailure() const&& = delete;
 
 private:
-    friend HttpRequestContentDecodeResult decodeHttpRequestContent(
-        HttpContentCoding,
-        std::string_view,
-        std::size_t,
-        std::pmr::memory_resource*);
+    friend HttpRequestContentDecodeResult decodeHttpRequestContent(HttpContentCoding, std::string_view, std::size_t, std::pmr::memory_resource*);
 
-    using Value = std::variant<
-        HttpDecodedContent,
-        HttpRequestContentDecodeProtocolFailure,
-        HttpRequestContentDecoderFailure>;
+    using Value = std::variant<HttpDecodedContent, HttpRequestContentDecodeProtocolFailure, HttpRequestContentDecoderFailure>;
 
-    explicit HttpRequestContentDecodeResult(
-        HttpDecodedContent decoded) noexcept
+    explicit HttpRequestContentDecodeResult(HttpDecodedContent decoded) noexcept
         : value_(std::move(decoded)) {}
 
-    explicit HttpRequestContentDecodeResult(
-        HttpContentDecodeError error) noexcept
+    explicit HttpRequestContentDecodeResult(HttpContentDecodeError error) noexcept
         : value_(HttpRequestContentDecodeProtocolFailure(error)) {}
 
-    explicit constexpr HttpRequestContentDecodeResult(
-        HttpRequestContentDecoderFailure failure) noexcept
+    explicit constexpr HttpRequestContentDecodeResult(HttpRequestContentDecoderFailure failure) noexcept
         : value_(failure) {}
 
-    [[nodiscard]] static constexpr HttpRequestContentDecodeResult
-    makeDecoderFailure() noexcept {
-        return HttpRequestContentDecodeResult(
-            HttpRequestContentDecoderFailure());
+    [[nodiscard]] static constexpr HttpRequestContentDecodeResult makeDecoderFailure() noexcept {
+        return HttpRequestContentDecodeResult(HttpRequestContentDecoderFailure());
     }
 
     Value value_;
 };
 
-[[nodiscard]] inline HttpRequestContentDecodeResult decodeHttpRequestContent(
-    HttpContentCoding coding,
-    std::string_view input,
-    std::size_t maxDecodedBytes,
-    std::pmr::memory_resource* resource) {
-    auto result = decodeHttpContent(
-        coding, input, maxDecodedBytes, resource);
+[[nodiscard]] inline HttpRequestContentDecodeResult decodeHttpRequestContent(HttpContentCoding coding, std::string_view input, std::size_t maxDecodedBytes, std::pmr::memory_resource* resource) {
+    auto result = decodeHttpContent(coding, input, maxDecodedBytes, resource);
     if (auto* decoded = result.decoded()) {
         return HttpRequestContentDecodeResult(std::move(*decoded));
     }

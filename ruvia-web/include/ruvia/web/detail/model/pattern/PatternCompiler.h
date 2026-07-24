@@ -9,11 +9,7 @@
 namespace ruvia::detail::model {
 
 template <std::size_t Capacity>
-[[nodiscard]] constexpr bool appendPatternAtom(
-    std::string_view pattern,
-    std::size_t end,
-    std::size_t& cursor,
-    PatternPlan<Capacity>& plan) noexcept {
+[[nodiscard]] constexpr bool appendPatternAtom(std::string_view pattern, std::size_t end, std::size_t& cursor, PatternPlan<Capacity>& plan) noexcept {
     if (cursor >= end || plan.count >= Capacity) {
         return false;
     }
@@ -48,19 +44,19 @@ template <std::size_t Capacity>
         }
         const char escaped = pattern[++cursor];
         switch (escaped) {
-        case 'd':
-            atom.kind = PatternAtomKind::kDigit;
-            break;
-        case 'w':
-            atom.kind = PatternAtomKind::kWord;
-            break;
-        case 's':
-            atom.kind = PatternAtomKind::kSpace;
-            break;
-        default:
-            atom.kind = PatternAtomKind::kLiteral;
-            atom.literal = escaped;
-            break;
+            case 'd':
+                atom.kind = PatternAtomKind::kDigit;
+                break;
+            case 'w':
+                atom.kind = PatternAtomKind::kWord;
+                break;
+            case 's':
+                atom.kind = PatternAtomKind::kSpace;
+                break;
+            default:
+                atom.kind = PatternAtomKind::kLiteral;
+                atom.literal = escaped;
+                break;
         }
         ++cursor;
         plan.atoms[plan.count++] = atom;
@@ -96,20 +92,19 @@ template <std::size_t Capacity>
             return {};
         }
 
-        if (cursor < patternEnd &&
-            (pattern[cursor] == '*' || pattern[cursor] == '+' || pattern[cursor] == '?')) {
+        if (cursor < patternEnd && (pattern[cursor] == '*' || pattern[cursor] == '+' || pattern[cursor] == '?')) {
             switch (pattern[cursor++]) {
-            case '*':
-                plan.atoms[index].quantifier = PatternQuantifier::kZeroOrMore;
-                break;
-            case '+':
-                plan.atoms[index].quantifier = PatternQuantifier::kOneOrMore;
-                break;
-            case '?':
-                plan.atoms[index].quantifier = PatternQuantifier::kZeroOrOne;
-                break;
-            default:
-                return {};
+                case '*':
+                    plan.atoms[index].quantifier = PatternQuantifier::kZeroOrMore;
+                    break;
+                case '+':
+                    plan.atoms[index].quantifier = PatternQuantifier::kOneOrMore;
+                    break;
+                case '?':
+                    plan.atoms[index].quantifier = PatternQuantifier::kZeroOrOne;
+                    break;
+                default:
+                    return {};
             }
         }
     }

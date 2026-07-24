@@ -38,10 +38,10 @@ RUVIA_TEST(static_path_normalizes_plain_and_dot_segments) {
 }
 
 RUVIA_TEST(static_path_applies_dotdot_within_root) {
-    RUVIA_CHECK_EQ(normalize("a/b/../c"), std::string("a/c"));        // pop one segment
-    RUVIA_CHECK_EQ(normalize("a/../b"), std::string("b"));            // pop to root, then descend
+    RUVIA_CHECK_EQ(normalize("a/b/../c"), std::string("a/c"));       // pop one segment
+    RUVIA_CHECK_EQ(normalize("a/../b"), std::string("b"));           // pop to root, then descend
     RUVIA_CHECK_EQ(normalize("a/.."), std::string(""));              // pop back to the root
-    RUVIA_CHECK_EQ(normalize("a/b/../../c/d"), std::string("c/d"));   // pop two segments
+    RUVIA_CHECK_EQ(normalize("a/b/../../c/d"), std::string("c/d"));  // pop two segments
 }
 
 RUVIA_TEST(static_path_rejects_escape_above_root) {
@@ -69,11 +69,11 @@ RUVIA_TEST(static_path_only_exact_dot_segments_are_special) {
     // filename and must be preserved verbatim. This guards against a regression to
     // substring-based ".." detection, which a "...."-style payload could exploit to
     // either smuggle traversal or wrongly 403 a legitimate file.
-    RUVIA_CHECK_EQ(normalize("..."), std::string("..."));         // three dots: a literal name
-    RUVIA_CHECK_EQ(normalize("...."), std::string("...."));       // four dots
-    RUVIA_CHECK_EQ(normalize("..a"), std::string("..a"));         // leading dots, not ".."
-    RUVIA_CHECK_EQ(normalize("a.."), std::string("a.."));         // trailing dots, not ".."
-    RUVIA_CHECK_EQ(normalize("a/.../b"), std::string("a/.../b")); // "..." between real segments
+    RUVIA_CHECK_EQ(normalize("..."), std::string("..."));          // three dots: a literal name
+    RUVIA_CHECK_EQ(normalize("...."), std::string("...."));        // four dots
+    RUVIA_CHECK_EQ(normalize("..a"), std::string("..a"));          // leading dots, not ".."
+    RUVIA_CHECK_EQ(normalize("a.."), std::string("a.."));          // trailing dots, not ".."
+    RUVIA_CHECK_EQ(normalize("a/.../b"), std::string("a/.../b"));  // "..." between real segments
     // A real ".." still traverses even when separators are mixed around it.
     RUVIA_CHECK_EQ(normalize("a\\b/../c"), std::string("a/c"));
 }
