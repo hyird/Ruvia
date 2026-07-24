@@ -221,6 +221,7 @@ HttpServer::HttpServer(
           dataAccess_.databases(),
           dataAccess_.redis(),
           workerStates_,
+          options_.blockingPool,
           [this](std::exception_ptr failure) {
               failWorker(std::move(failure));
           })),

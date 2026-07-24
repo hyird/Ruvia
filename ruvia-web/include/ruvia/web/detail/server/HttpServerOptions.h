@@ -12,6 +12,7 @@
 #include <variant>
 #include <vector>
 
+#include "ruvia/core/BlockingPool.h"
 #include "ruvia/core/detail/util/FailureReport.h"
 #include "ruvia/core/memory/MemoryPool.h"
 #include "ruvia/http/HttpLimits.h"
@@ -152,6 +153,10 @@ struct HttpServerOptions final {
     DocumentRoot documentRoot;
     AccessLogSink accessLog;
     const Env* env{nullptr};
+    // Process-wide, owned by App::run() and shared by every worker. Null when
+    // the app configured no pool; Context::runBlocking() then reports the
+    // missing configuration instead of blocking the worker.
+    BlockingPool* blockingPool{nullptr};
     WorkerFailureSink workerFailure;
     ConnectionFailureSink connectionFailure;
     std::optional<RateLimitRule> defaultRateLimitPerWorker;

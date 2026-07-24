@@ -68,6 +68,16 @@ App& App::useMiddleware(detail::ControllerMiddlewareDescriptor descriptor) {
         });
 }
 
+App& App::setBlockingPool(std::optional<BlockingPoolOptions> options) {
+    return detail::mutateStoppedApp(
+        *this,
+        *state_,
+        "cannot change the blocking pool while app is running",
+        [&options](detail::AppState& state) {
+            state.blockingPool = options;
+        });
+}
+
 App& App::useWorkerStateDefinition(detail::WorkerStateDefinition definition) {
     return detail::mutateStoppedApp(
         *this,

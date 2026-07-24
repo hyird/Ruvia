@@ -90,6 +90,7 @@ struct AppState final {
         prefixNotFoundHandlers{appResource()};
     std::pmr::vector<ControllerMiddlewareDescriptor> globalMiddlewares{appResource()};
     std::pmr::vector<WorkerStateDefinition> workerStates{appResource()};
+    std::optional<BlockingPoolOptions> blockingPool;
     std::pmr::vector<AppHook> onStartHooks{appResource()};
     std::pmr::vector<AppHook> onStopHooks{appResource()};
 #ifdef RUVIA_ENABLE_DATABASE
