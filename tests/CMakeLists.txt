@@ -473,6 +473,7 @@ if(RUVIA_BUILD_WEB)
     ruvia_add_test(ruvia_guard_app_lifecycle web/guards/app_lifecycle_guard.cpp)
     ruvia_add_test(ruvia_guard_http2_session_lifecycle web/guards/http2_session_lifecycle_guard.cpp)
 
+    ruvia_add_test(ruvia_server_blocking_pool web/server/blocking_pool.cpp TIMEOUT 60)
     ruvia_add_test(ruvia_server_immediate_shutdown web/server/immediate_shutdown.cpp TIMEOUT 30)
     ruvia_add_test(ruvia_server_max_connections web/server/max_connections.cpp TIMEOUT 60)
     ruvia_add_test(ruvia_server_notfound_keepalive web/server/notfound_keepalive.cpp TIMEOUT 60)
